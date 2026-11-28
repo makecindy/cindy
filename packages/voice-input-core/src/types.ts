@@ -195,6 +195,13 @@ export type DictationRefinementContext = {
   selectedText?: string;
   /** Dynamic cursor-local text after the insertion range. Refiner keeps at most the leading 1200 chars. */
   selectionAfter?: string;
+  /**
+   * Sanitized foreground application label (name + optional coarse category,
+   * never window titles, URLs, or file paths) for global desktop dictation.
+   * Omitted completely when absent or when a managed server does not advertise
+   * support for `activeApp` in its strict refinement payload schema.
+   */
+  activeApp?: string;
 };
 
 /**

@@ -9,6 +9,7 @@ import { useSidebarFilter } from '../../../src/renderer/features/cc-agent/hooks/
 import { filterSidebarTasks } from '../../../src/renderer/features/cc-agent/lib/sidebarTaskFilters';
 import { groupSessions } from '../../../src/renderer/features/cc-agent/lib/projectGrouping';
 import { TaskInbox } from '../../../src/renderer/features/cc-agent/sidebar/TaskInbox';
+import type { EnvironmentHealthAlert } from '../../../src/renderer/features/cc-agent/sidebar/environmentHealth';
 import { useInboxUnread } from '../../../src/renderer/features/cc-agent/sidebar/useInboxUnread';
 import { TaskListModeToggle } from '../../../src/renderer/components/sidebar/TaskListModeToggle';
 import type { Session } from '../../../src/renderer/lib/ccAgent.types';
@@ -349,6 +350,85 @@ function PinnedInboxSpecimen() {
     </div>
   );
 }
+/** Environment health strip at top of Inbox: single-alert card and multi-alert collapsible aggregation. */
+function HealthSpecimen({ multi }: { multi: boolean }) {
+  const initialAlerts: EnvironmentHealthAlert[] = multi
+    ? [
+        {
+          id: 'provider-auth',
+          kind: 'provider-auth',
+          severity: 'error',
+          fingerprint: 'provider-auth:openai',
+          titleKey: 'ccAgent.sidebar.inbox.health.providerAuthSingleTitle',
+          titleParams: { name: 'Codex' },
+          descriptionKey: 'ccAgent.sidebar.inbox.health.providerAuthSingleDesc',
+          actionLabelKey: 'ccAgent.sidebar.inbox.health.actions.reconnect',
+          action: { type: 'navigate', path: '/settings?tab=providers&connect=openai' },
+        },
+        {
+          id: 'github-auth',
+          kind: 'github-auth',
+          severity: 'warning',
+          fingerprint: 'github-auth:gh-not-logged-in:3',
+          titleKey: 'ccAgent.sidebar.inbox.health.githubNotLoggedInTitle',
+          descriptionKey: 'ccAgent.sidebar.inbox.health.prAffectedDesc',
+          descriptionParams: { count: 3 },
+          actionLabelKey: 'ccAgent.sidebar.inbox.health.actions.connectGithub',
+          action: { type: 'open-github-connect' },
+        },
+        {
+          id: 'automation-stalled',
+          kind: 'automation-stalled',
+          severity: 'warning',
+          fingerprint: 'automation-stalled:pr-patrol:run-9',
+          titleKey: 'ccAgent.sidebar.inbox.health.automationSingleTitle',
+          titleParams: { name: 'PR 每日巡检' },
+          descriptionKey: 'ccAgent.sidebar.inbox.health.automationMissingPluginDesc',
+          descriptionParams: { plugin: 'GitHub' },
+          actionLabelKey: 'ccAgent.sidebar.inbox.health.actions.inspectAutomation',
+          action: { type: 'navigate', path: '/cc-agent/scheduled?focus=pr-patrol' },
+        },
+      ]
+    : [
+        {
+          id: 'github-auth',
+          kind: 'github-auth',
+          severity: 'warning',
+          fingerprint: 'github-auth:gh-not-logged-in:3',
+          titleKey: 'ccAgent.sidebar.inbox.health.githubNotLoggedInTitle',
+          descriptionKey: 'ccAgent.sidebar.inbox.health.prAffectedDesc',
+          descriptionParams: { count: 3 },
+          actionLabelKey: 'ccAgent.sidebar.inbox.health.actions.connectGithub',
+          action: { type: 'open-github-connect' },
+        },
+      ];
+  const [dismissed, setDismissed] = useState<ReadonlySet<string>>(() => new Set());
+  const [lastAction, setLastAction] = useState<string>('');
+  const visibleAlerts = initialAlerts.filter((a) => !dismissed.has(a.fingerprint));
+  return (
+    <div data-inbox-scroller="" data-last-health-action={lastAction} className="min-h-screen bg-sidebar text-foreground p-2">
+      <TaskInbox
+        sessionVariant="text"
+        sessions={sessions}
+        priorityContext={priorityContext}
+        runningSessionIds={runningSessionIds}
+        attachedSessionIds={new Set()}
+        notifications={new Set(['ready'])}
+        onSessionClick={noop}
+        onAction={noop}
+        onRename={noop}
+        onTogglePin={noop}
+        onScheduleAction={noop}
+        healthAlerts={visibleAlerts}
+        onHealthAlertAction={(action) =>
+          setLastAction(action.type === 'navigate' ? action.path : 'github:connect')
+        }
+        onDismissHealthAlert={(fp) => setDismissed((prev) => new Set(prev).add(fp))}
+      />
+    </div>
+  );
+}
+
 if (ctx.case !== 'intro') localStorage.setItem('featureIntro.taskInbox.seen', '1');
 if (ctx.case === 'pinned') localStorage.setItem('sidebar.cardMode', 'list');
 
@@ -442,7 +522,13 @@ void mountPage({
           ? <StructureSpecimen />
           : ctx.case === 'offline'
             ? <OfflineSpecimen />
-            : ctx.case === 'pinned' ? <PinnedInboxSpecimen /> : <Specimen />}
+            : ctx.case === 'pinned'
+              ? <PinnedInboxSpecimen />
+              : ctx.case === 'health-single'
+                ? <HealthSpecimen multi={false} />
+                : ctx.case === 'health-multi'
+                  ? <HealthSpecimen multi />
+                  : <Specimen />}
     </WorktreeProvider>
   ),
 });

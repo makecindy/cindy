@@ -10,12 +10,15 @@ import { useTranslation } from 'react-i18next';
 import { redactSensitiveText } from '@cindy/maker-shared/error-redaction';
 import { cn } from '@/lib/utils';
 import { Button } from './button';
+import { NoticeExplainPopover, type NoticeExplainContent } from './notice-explain-popover';
 import { Tip } from './tooltip';
 
 interface ErrorNoticeProps extends Omit<ComponentPropsWithoutRef<'div'>, 'children'> {
   message: ReactNode;
   description?: ReactNode;
   actions?: ReactNode;
+  /** 面向用户的「了解原因」结构化说明；与排障向的原始 `details` 分工展示。 */
+  explain?: NoticeExplainContent;
   details?: string;
   /** Offered only after the user expands details; the caller decides where diagnosis happens. */
   onDiagnose?: () => void;
@@ -31,6 +34,7 @@ export const ErrorNotice = forwardRef<HTMLDivElement, ErrorNoticeProps>(function
     message,
     description,
     actions,
+    explain,
     details,
     onDiagnose,
     icon,
@@ -68,6 +72,7 @@ export const ErrorNotice = forwardRef<HTMLDivElement, ErrorNoticeProps>(function
         {children}
         <div className="mt-2 flex flex-wrap items-center gap-2 empty:hidden">
           {actions}
+          {explain && <NoticeExplainPopover content={explain} variant="action" />}
           {details && (
             <Button
               size="sm"

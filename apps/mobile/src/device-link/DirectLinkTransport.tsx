@@ -33,10 +33,12 @@ export function DirectLinkTransport({ bridge, enabled, owner }: {
   activeRef.current = active;
   const release = () => { detach.current?.(); detach.current = undefined; };
   useEffect(() => {
+    // The WebView can suspend before a JS grace timer runs. Detach synchronously
+    // so pending business frames use the relay. Inactive keeps the direct path.
     const unsubscribe = observeTransportAppState((available) => {
       if (!available) { activeRef.current = false; release(); setLifecycle(n => n + 1); }
       setForeground(available);
-    });
+    }, 0);
     return () => { activeRef.current = false; live.current = 'disposed'; unsubscribe(); release(); };
   }, []);
   useEffect(() => () => release(), [key, active, bridge]);

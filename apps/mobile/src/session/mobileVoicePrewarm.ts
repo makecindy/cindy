@@ -1,8 +1,14 @@
-import type { AsrProvider } from '@cindy/voice-input-core';
+import {
+  buildAsrRecognitionHints,
+  hasAsrRecognitionHints,
+  type AsrProvider,
+} from '@cindy/voice-input-core';
 import type { ApiFetchOptions } from '@/api/client';
 import type { StoredMobileVoiceCredential } from '@/session/mobileVoiceCredentialStore';
 import { createMobileAsrProvider } from '@/session/mobileRealtimeAsrProvider';
 import { prewarmMobileRealtimeAudio } from '@/session/mobileRealtimeAudio';
+import { readCachedMobileVoiceDictionary } from '@/session/mobileVoiceDictionaryCache';
+import { getMobileVoiceInputHistoryForHost } from '@/session/mobileVoiceHistoryStore';
 import { isMobileVoiceRateLimited } from '@/session/mobileVoiceInput';
 import {
   CINDY_MANAGED_REFINER_PROVIDER,
@@ -124,8 +130,18 @@ async function buildPrewarm(
       credential.settings?.language,
       CINDY_MANAGED_REFINER_PROVIDER,
     );
+    const recentHistory = await getMobileVoiceInputHistoryForHost(
+      deviceId,
+      credential.settings?.voiceInputHistory,
+    ).catch(() => undefined);
+    const rawHints = buildAsrRecognitionHints({
+      dictionaryEntries: readCachedMobileVoiceDictionary(deviceId),
+      recentHistory,
+      recentHistoryOrder: 'newest-first',
+    });
     const provider = createMobileAsrProvider(credential, {
       connectionProvider: (providerId) => voiceContext.createAsrConnection(providerId),
+      recognitionHints: hasAsrRecognitionHints(rawHints) ? rawHints : undefined,
     });
     const startPromise = provider.start();
     // Parked until claimed: don't let a failed speculative connect become an

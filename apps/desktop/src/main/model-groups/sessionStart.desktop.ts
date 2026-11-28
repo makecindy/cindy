@@ -12,9 +12,9 @@ import { getDbClient } from '../localDb/client/current.js';
 import { createMessage } from '../localDb/ipc/messages.js';
 import { messages } from '../localDb/schema.js';
 import { isSubscriptionProvider } from '../../shared/subscriptionAccounts.js';
-import { readProviderGroupBinding } from '../provider-group/bindings.desktop.js';
+import { markProviderGroupReleased, readProviderGroupBinding } from '../provider-group/bindings.desktop.js';
 import { readProviderGroup } from '../provider-group/store.js';
-import { readSubscriptionSessionAccount } from '../subscription-accounts/runtime.js';
+import { bindSessionSubscriptionAccount, readSubscriptionSessionAccount } from '../subscription-accounts/runtime.js';
 import { localProviderView, refreshAutoModelGroupRoutes, resolver } from './desktopResolver.js';
 import { bindModelGroupSession } from './sessionBindings.js';
 import { createModelGroupSessionStart } from './sessionStart.js';
@@ -41,6 +41,14 @@ export const modelGroupSessionStart = createModelGroupSessionStart({
     }
   },
   bind: (sessionId, selection, pickedKey) => bindModelGroupSession(sessionId, selection, pickedKey),
+  pinLocalSource: async (sessionId, { providerId, accountId }) => {
+    if (accountId) {
+      await bindSessionSubscriptionAccount(sessionId, providerId, accountId).catch(() => undefined);
+    }
+    if (readProviderGroup(providerId)) {
+      await markProviderGroupReleased(sessionId, { providerId }).catch(() => undefined);
+    }
+  },
   // 派发钩子在那条用户消息落库之后才调，直接按 clientId 找。
   writeNote: (sessionId, note, { clientId, anchorClientId }) => {
     void (async () => {

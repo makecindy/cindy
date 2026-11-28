@@ -2310,3 +2310,63 @@ describe('multi-PR single-session advisory', () => {
     expect(listFailed.data.multiPrSessionWarning).toBeUndefined();
   });
 });
+
+// 依据：绑定任务因目标会话长时忙碌连续顺延时，schedule_get 需暴露运行期 deferral 状态供 Agent 与插件诊断；
+// 既有 schedule_get 用例只覆盖静态字段与 webhookStatus；
+// 最小失败输入：getRuntimeSnapshot() 返回含当前 id 的 deferredSchedules 时附带 deferral，未顺延时省略。tier: unit。
+describe('schedule_get deferral visibility', () => {
+  it('includes live deferral metadata when the schedule is consecutively deferred and omits it otherwise', async () => {
+    const h = await makeHarness();
+    try {
+      const call = async (name: string, args: Record<string, unknown> = {}) => {
+        const res = await h.client.callTool({ name: 'call_tool', arguments: { name, args } });
+        const parsed = parseToolResult(res as { content: unknown[] }).envelope;
+        expect(parsed.ok).toBe(true);
+        if (!parsed.ok) throw new Error(parsed.code);
+        return parsed.data as Record<string, unknown>;
+      };
+      const created = await call('schedule_create', {
+        name: 'PR #122 follow',
+        prompt: 'follow PR #122',
+        cronExpr: '*/5 * * * *',
+        timezone: 'UTC',
+        recurring: true,
+        agentKind: 'claude-code',
+        targetSessionId: 'sess-busy',
+        notify: { desktop: true, feishu: false },
+      });
+      const id = String(created.id);
+
+      const before = await call('schedule_get', { id });
+      expect(before.deferral).toBeUndefined();
+
+      vi.spyOn(h.scheduler, 'getRuntimeSnapshot').mockReturnValue({
+        schedulerInstanceId: 'inst-1',
+        inFlight: 0,
+        slotsInUse: 0,
+        maxConcurrentRuns: 4,
+        inFlightRuns: [],
+        waitingSchedules: [],
+        deferredSchedules: [
+          {
+            scheduleId: id,
+            scheduleName: 'PR #122 follow',
+            targetSessionId: 'sess-busy',
+            count: 4,
+            firstAt: 1_700_000_000_000,
+            lastReason: 'session-running',
+          },
+        ],
+      });
+
+      const during = await call('schedule_get', { id });
+      expect(during.deferral).toEqual({
+        count: 4,
+        firstAt: 1_700_000_000_000,
+        lastReason: 'session-running',
+      });
+    } finally {
+      await h.cleanup();
+    }
+  });
+});
