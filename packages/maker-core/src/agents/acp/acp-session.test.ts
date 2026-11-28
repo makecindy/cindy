@@ -1218,7 +1218,8 @@ describe('AcpSession model and effort', () => {
       configOptions,
       handlers: { 'session/set_config_option': () => choice.promise },
     });
-    const { session, ended } = await open(agent);
+    const observeContextWindow = vi.fn();
+    const { session, ended } = await open(agent, { observeContextWindow });
     const report = vi.fn();
     session.observeReportedModelDetails(report);
     expect(report).toHaveBeenLastCalledWith({ modelId: 'v4-flash', imageInput: false });
@@ -1234,6 +1235,12 @@ describe('AcpSession model and effort', () => {
     expect(report).toHaveBeenLastCalledWith({ modelId: 'v4-pro', imageInput: false });
     agent.update({ sessionUpdate: 'usage_update', size: 256000, used: 130 });
     expect(report).toHaveBeenLastCalledWith({ modelId: 'v4-pro', imageInput: false, contextWindow: 256000 });
+    agent.update({ sessionUpdate: 'usage_update', size: 0, used: 0 });
+    agent.update({ sessionUpdate: 'usage_update', size: -1, used: 0 });
+    agent.update({ sessionUpdate: 'usage_update', size: Infinity, used: 0 });
+    expect(observeContextWindow.mock.calls).toEqual([
+      ['v4-flash', 524288], ['v4-flash', 524288], ['v4-pro', 256000],
+    ]);
     agent.exit();
     await ended;
     expect(report).toHaveBeenLastCalledWith(undefined);
