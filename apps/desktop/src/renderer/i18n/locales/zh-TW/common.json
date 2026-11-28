@@ -15244,6 +15244,7 @@
       },
       "credentialSwitchDeferred": "模型來源已切換，將在當前任務結束後生效。",
       "effortRuntimeDirty": "推理強度還在更新，稍等一下再傳送",
+      "tooManyTaskReferences": "一則訊息最多可包含 {{max}} 個任務引用，請移除多餘的任務連結",
       "steerNotSent": "未傳送，暫時無法插話，草稿已保留",
       "credentialSwitchApplied": "模型來源切換已生效。",
       "credentialSwitchFailed": "模型來源切換失敗，請重新選擇。",
