@@ -213,6 +213,32 @@ describe('trusted-only SSH connections (#8403)', () => {
       expect(store.set).not.toHaveBeenCalled();
     } finally { await host.disconnect(); }
   });
+  // #8403 / #12236, unit: connect() must enforce trusted-only for callers
+  // joining an automatic retry, beyond the initial-handshake coverage above.
+  // Start from a ready host and remove its fingerprint before the retry.
+  it('does not let a trusted-only caller consume a reconnect that creates first trust', async () => {
+    vi.useFakeTimers();
+    let value: string | null = matching;
+    const store = { reload: vi.fn(), get: vi.fn(async () => value), set: vi.fn() };
+    const host = new RemoteHost(config, { logger, hostKeys: store });
+    try {
+      await host.connect();
+      value = null;
+      clients[0].emit('close');
+      const active = host.connect();
+      const automatic = host.connect({ allowFirstTrust: false });
+      const results = Promise.allSettled([active, automatic]);
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(await results).toEqual([
+        { status: 'fulfilled', value: undefined },
+        { status: 'rejected', reason: expect.objectContaining({ code: 'SSH_HOST_UNVERIFIED' }) },
+      ]);
+      expect(clients).toHaveLength(2);
+      expect(store.set).toHaveBeenCalledTimes(1);
+      expect(host.getStatus()).toBe('ready');
+    } finally { await host.disconnect(); }
+  });
+
   it('keeps trusted-only policy on automatic reconnect after trust removal', async () => {
     vi.useFakeTimers();
     let value: string | null = matching;
@@ -224,7 +250,15 @@ describe('trusted-only SSH connections (#8403)', () => {
       await host.connect({ allowFirstTrust: false });
       value = null;
       clients[0].emit('close');
+      const results = Promise.allSettled([
+        host.connect(),
+        host.connect({ allowFirstTrust: false }),
+      ]);
       await vi.advanceTimersByTimeAsync(1000);
+      expect(await results).toEqual([
+        { status: 'rejected', reason: expect.objectContaining({ code: 'SSH_HOST_UNVERIFIED' }) },
+        { status: 'rejected', reason: expect.objectContaining({ code: 'SSH_HOST_UNVERIFIED' }) },
+      ]);
       expect(host.getStatus()).toBe('failed');
       expect(host.snapshot().lastError).toContain('SSH_HOST_UNVERIFIED');
       expect(onStatus).toHaveBeenCalledWith(

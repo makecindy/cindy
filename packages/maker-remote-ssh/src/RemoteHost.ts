@@ -425,6 +425,8 @@ export class RemoteHost {
   private statusChangedAt = Date.now();
   private client: Client | null = null;
   private reconnectAttempts = 0;
+  private reconnectFailure: Error | undefined;
+  private reconnectRound?: { promise: Promise<Error | undefined>; finish: (error?: Error) => void };
   private reconnectTimer: NodeJS.Timeout | null = null;
   /**
    * Monotonic connection-attempt generation. disconnect() advances it before
@@ -518,12 +520,45 @@ export class RemoteHost {
     return () => this.events.off('status', listener);
   }
 
+  /** Wait for the current automatic round. A failed individual attempt is not its terminal result. */
+  waitForReconnect(previousReadyAt: number, signal: AbortSignal): Promise<void> {
+    return new Promise<void>((resolve, reject) => {
+      const settle = (error?: unknown) => {
+        offStatus();
+        this.events.off('reconnect-failed', failed);
+        signal.removeEventListener('abort', abort);
+        if (error === undefined) resolve();
+        else reject(error);
+      };
+      const failed = (error: Error) => settle(error);
+      const abort = () => settle(signal.reason);
+      const check = ({ status, statusChangedAt }: HostSnapshot) => {
+        if (status === 'ready' && statusChangedAt > previousReadyAt) settle();
+        else if (status === 'disconnected') settle(new Error('SSH host was disconnected'));
+        else if (this.reconnectFailure) settle(this.reconnectFailure);
+      };
+      const offStatus = this.onStatus(check);
+      this.events.on('reconnect-failed', failed);
+      signal.addEventListener('abort', abort, { once: true });
+      if (signal.aborted) abort();
+      else check(this.snapshot());
+    });
+  }
+
   /**
-   * Open the connection. Idempotent — if already ready/connecting, returns
-   * the in-flight promise. Throws on definitive failure (auth, network).
+   * Open the connection or join its in-flight attempt or automatic reconnect round.
+   * Throws on definitive failure.
    */
   async connect(options: ConnectOpts = {}): Promise<void> {
     if (this.status === 'ready') return;
+    // The round spans retry delays, handshakes, and intermediate failed statuses.
+    if (this.reconnectRound) {
+      const error = await this.reconnectRound.promise;
+      if (error) throw error;
+      if (this.getStatus() !== 'ready') throw new Error(this.lastError ?? 'SSH host was disconnected');
+      if (options.allowFirstTrust === false && this.connectionTrust.trustedOnFirstUse) throw unverifiedHostError();
+      return;
+    }
     if (this.status === 'connecting' || this.status === 'authenticating') {
       // Share the actual in-flight attempt instead of waiting only for a
       // future status event. A disconnect can invalidate an attempt after it
@@ -557,15 +592,11 @@ export class RemoteHost {
       throw new Error(this.lastError ?? 'connect failed');
     }
 
-    // 'reconnecting' / 'disconnected' / 'failed' 都走立即新建连接路径。
-    // 关键: 'reconnecting' 状态下 reconnectTimer 仍在跑, 它稍后还会再调一次
-    // doConnect() 覆盖我们刚建好的 SSH client, 产生泄漏的旧连接 + 乱序的
-    // status/channel 事件。必须在 doConnect() 前显式清掉 timer 才安全。
-    this.clearReconnectTimer();
     this.userDisconnected = false;
     this.networkRecoveryArmed = false;
     this.readySinceConnect = false;
     this.reconnectAttempts = 0;
+    this.reconnectFailure = undefined;
     await this.startConnectAttempt(options.allowFirstTrust !== false);
   }
 
@@ -595,6 +626,7 @@ export class RemoteHost {
     this.networkRecoveryArmed = false;
     this.connectionEpoch += 1;
     this.clearReconnectTimer();
+    this.finishReconnectRound(new Error('SSH host was disconnected'));
     this.markForwardsDisarmed();
     if (this.client) {
       try {
@@ -1428,7 +1460,7 @@ export class RemoteHost {
 
     await new Promise<void>((resolve, reject) => {
       let settled = false;
-      let agentError: Error | undefined;
+      let reachedReady = false;
 
       const onReady = () => {
         if (settled) return;
@@ -1441,9 +1473,12 @@ export class RemoteHost {
         settled = true;
         this.lastError = undefined;
         this.lastAuthLabel = auth.label;
+        reachedReady = true;
+        this.reconnectFailure = undefined;
         this.reconnectAttempts = 0;
         this.networkRecoveryArmed = false;
         this.readySinceConnect = true;
+        this.finishReconnectRound();
         this.setStatus('ready');
         this.log.info('ssh ready', { id: this.id, auth: auth.label });
         // 后台重挂已登记的 remote forwards; 不阻塞 connect 返回 (session
@@ -1461,9 +1496,8 @@ export class RemoteHost {
           return;
         }
         if (settled) {
-          // ssh2 may emit a generic authentication failure after its local
-          // agent error. Keep the actionable diagnosis for this failed attempt.
-          if (agentError) return;
+          // Late errors from a failed attempt must not overwrite its diagnosis.
+          if (!reachedReady) return;
           // Post-ready error — feed into reconnect path, not the connect promise.
           this.handlePostReadyError(err);
           return;
@@ -1476,7 +1510,7 @@ export class RemoteHost {
         // subtitle + connect-failure toast both surface this verbatim.
         // ssh2 tags local agent initialization/signing errors itself. Do not
         // infer this from message text, which may also come from the server.
-        agentError = !this.hostKeyError && (err as Error & { level?: string }).level === 'agent'
+        const agentError = !this.hostKeyError && (err as Error & { level?: string }).level === 'agent'
           ? agentUnavailableError(err, this.formatAgentUnavailableError,
             attemptConfig.sshAuthentication?.identityAgent !== undefined ? 'endpoint-unavailable' : undefined)
           : undefined;
@@ -1515,10 +1549,10 @@ export class RemoteHost {
           reject(new Error(msg));
           return;
         }
-        // Post-ready close — schedule reconnect unless user-initiated.
-        // A local agent failure has already failed this connect attempt; do
-        // not treat its subsequent close as a lost established connection.
-        if (agentError) return;
+        // A failed attempt can emit both error and close. Its rejection
+        // already advances the reconnect round; only a ready connection's
+        // close can start a new one.
+        if (!reachedReady) return;
         this.handlePostReadyClose();
       };
 
@@ -1574,7 +1608,7 @@ export class RemoteHost {
     }
     if (this.hostKeyError) {
       this.clearReconnectTimer();
-      this.setStatus('failed');
+      this.finishReconnectFailure(this.hostKeyRejection() ?? new Error(this.hostKeyError));
       return;
     }
     // Auth failures are deterministic — retrying with the same agent / key
@@ -1586,12 +1620,12 @@ export class RemoteHost {
       this.log.info('ssh skipping reconnect (auth failure is deterministic)', {
         id: this.id,
       });
-      this.setStatus('failed');
+      this.finishReconnectFailure(new Error('SSH reauthentication failed'));
       return;
     }
     if (this.reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
       this.networkRecoveryArmed = this.readySinceConnect;
-      this.setStatus('failed');
+      this.finishReconnectFailure(new Error('SSH automatic reconnect attempts exhausted'));
       return;
     }
     this.scheduleReconnect();
@@ -1599,13 +1633,19 @@ export class RemoteHost {
 
   private scheduleReconnect(): void {
     this.clearReconnectTimer();
+    this.reconnectFailure = undefined;
+    if (!this.reconnectRound) {
+      // A round may have no connect() callers. Resolve with its failure, if any.
+      let finish!: (error?: Error) => void;
+      const promise = new Promise<Error | undefined>((resolve) => { finish = resolve; });
+      this.reconnectRound = { promise, finish };
+    }
     this.reconnectAttempts += 1;
     // Exponential backoff capped at 30s. attempt=1 → 1s, 2 → 2s, 3 → 4s, ...
     const delay = Math.min(
       RECONNECT_BASE_DELAY_MS * 2 ** (this.reconnectAttempts - 1),
       30_000,
     );
-    this.setStatus('reconnecting');
     this.log.info('ssh scheduling reconnect', {
       id: this.id,
       attempt: this.reconnectAttempts,
@@ -1613,26 +1653,44 @@ export class RemoteHost {
     });
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;
+      const attemptEpoch = this.connectionEpoch + 1;
       void this.startConnectAttempt().catch((err) => {
         // doConnect already set status=failed and recorded lastError.
-        // If we still have attempts left, schedule again.
-        if (this.userDisconnected || this.hostKeyError) return;
+        // A later explicit connection owns the host now.
+        if (this.connectionEpoch !== attemptEpoch || this.userDisconnected) return;
+        if (this.hostKeyError) {
+          this.finishReconnectFailure(this.hostKeyRejection() ?? new Error(this.hostKeyError));
+          return;
+        }
         if (this.reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
           this.scheduleReconnect();
-        } else if (!(this.lastError && isAuthFailure(this.lastError))) {
-          // Stay failed without a background loop; the next use, a network
-          // change or wake gets one more bounded round.
-          this.networkRecoveryArmed = this.readySinceConnect;
-          this.log.warn('ssh reconnect exhausted', {
-            id: this.id,
-            error: (err as Error).message,
-            ...connectFailureHint(err),
-          });
-        } else {
-          this.log.warn('ssh reconnect exhausted', { id: this.id, error: (err as Error).message });
+          return;
         }
+        // Stay failed without a background loop. Network-change handling can
+        // start a separate round without reviving finished task recovery.
+        if (!(this.lastError && isAuthFailure(this.lastError))) this.networkRecoveryArmed = this.readySinceConnect;
+        this.log.warn('ssh reconnect exhausted', {
+          id: this.id, error: (err as Error).message, ...connectFailureHint(err),
+        });
+        this.finishReconnectFailure(err instanceof Error ? err : new Error(String(err)));
       });
     }, delay);
+    this.setStatus('reconnecting');
+  }
+
+  private finishReconnectRound(error?: Error): void {
+    const round = this.reconnectRound;
+    this.reconnectRound = undefined;
+    round?.finish(error);
+  }
+
+  private finishReconnectFailure(error: Error): void {
+    this.reconnectFailure = error;
+    this.finishReconnectRound(error);
+    this.setStatus('failed');
+    // The last attempt may already have emitted failed, so status alone
+    // cannot tell task recovery when the round actually ends.
+    this.events.emit('reconnect-failed', error);
   }
 
   private clearReconnectTimer(): void {

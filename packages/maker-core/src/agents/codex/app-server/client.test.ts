@@ -7,7 +7,7 @@ import {
   type OversizedNotification,
 } from './client.js';
 import type { Logger } from '../../../interfaces/logger.js';
-import type { Transport, LineHandler, StderrHandler, CloseHandler } from './transport.js';
+import type { Transport, LineHandler, StderrHandler, CloseHandler, TransportCloseInfo } from './transport.js';
 import { Method } from './protocol.js';
 import { readAccountRateLimitsWithRefresh } from './account-rate-limits.js';
 
@@ -39,7 +39,11 @@ class FakeTransport implements Transport {
   }
 
   async close(reason = 'test close'): Promise<void> {
-    for (const handler of this.closeHandlers) handler({ reason });
+    this.emitClose({ reason });
+  }
+
+  emitClose(info: TransportCloseInfo): void {
+    for (const handler of this.closeHandlers) handler(info);
   }
 
   emitLine(value: unknown): void {
@@ -793,6 +797,302 @@ describe('AppServerClient oversized lines', () => {
     expect(onTransportError).toHaveBeenCalledTimes(1);
     expect(onTransportError.mock.calls[0]?.[0]).toBeInstanceOf(Error);
     expect((onTransportError.mock.calls[0]?.[0] as Error).message).toMatch(/exceeds maxLineBytes/);
+  });
+});
+
+// Unit regression for #7393: an acknowledged turn lost its transport and Cindy
+// emitted a terminal failure. Drive AppServerClient with only the close frame
+// and a daemon snapshot; assert the original turn and delivery are preserved.
+describe('AppServerClient SSH recovery', () => {
+  const threadId = 'remote-thread';
+  const turnId = 'original-turn';
+  const item = { id: 'assistant-item', type: 'agentMessage', text: 'Complete output' };
+
+  class RespondingTransport extends FakeTransport {
+    constructor(private readonly results: Record<string, unknown>) { super(); }
+
+    async writeLine(line: string): Promise<void> {
+      await super.writeLine(line);
+      const { id, method, params } = JSON.parse(line) as { id?: number; method?: string; params?: { threadId: string } };
+      if (id !== undefined && method && Object.hasOwn(this.results, method)) {
+        const result = this.results[method];
+        this.emitLine({ id, result: typeof result === 'function' ? result(params) : result });
+      }
+    }
+  }
+
+  async function startCase(
+    snapshotStatus: 'inProgress' | 'completed',
+    { waitingOnApproval = false, withChild = false, withSecondRoot = false, missingSecondTurn = false, items = [item] }: {
+      waitingOnApproval?: boolean; withChild?: boolean; withSecondRoot?: boolean;
+      missingSecondTurn?: boolean; items?: Array<{ id: string; type: string; text?: string; server?: string; tool?: string }>;
+    } = {},
+  ) {
+    const initialize = { userAgent: 'test', platformFamily: 'unix', platformOs: 'linux', codexHome: '/tmp' };
+    const replacement = new RespondingTransport({
+      [Method.Initialize]: initialize,
+      [Method.ThreadResume]: (params: { threadId: string }) => ({
+        thread: { id: params.threadId, status: { type: 'active', activeFlags: waitingOnApproval ? ['waitingOnApproval'] : [] } },
+      }),
+      [Method.ThreadTurnsList]: (params: { threadId: string }) => ({
+        data: missingSecondTurn && params.threadId === 'second-root' ? [] : [{
+          id: params.threadId === threadId ? turnId : params.threadId === 'second-root' ? 'second-turn' : 'child-turn',
+          status: snapshotStatus, items,
+        }],
+      }),
+      [Method.TurnInterrupt]: {},
+    });
+    const transport = Object.assign(
+      new RespondingTransport({ [Method.Initialize]: initialize, [Method.TurnStart]: { turn: { id: turnId } } }),
+      { reconnect: vi.fn(async () => replacement) },
+    );
+    const fail = vi.fn();
+    const client = new AppServerClient({
+      createTransport: () => transport, logger, onTransportError: fail,
+      getSubscribedThreadIds: () => withSecondRoot ? [threadId, 'second-root'] : [threadId],
+      getRecoveryRootThreadId: (id) => withChild && id === 'owned-child' ? threadId : undefined,
+    });
+    const received: string[] = [];
+    const completedThreads: string[] = [];
+    client.onNotification('item/completed', () => { received.push('item'); });
+    client.onNotification('turn/completed', (params) => {
+      completedThreads.push((params as { threadId: string }).threadId);
+      received.push('turn');
+    });
+    client.start();
+    await client.initialize({ name: 'test', version: '1' });
+    await client.request(Method.TurnStart, { threadId, input: [] });
+    transport.emitLine({ method: 'turn/started', params: { threadId, turn: { id: turnId } } });
+    if (withSecondRoot) {
+      transport.emitLine({ method: 'turn/started', params: { threadId: 'second-root', turn: { id: 'second-turn' } } });
+    }
+    if (withChild) {
+      transport.emitLine({ method: 'turn/started', params: { threadId: 'owned-child', turn: { id: 'child-turn' } } });
+      transport.emitLine({ method: 'turn/started', params: { threadId: 'unowned-thread', turn: { id: 'unowned-turn' } } });
+    }
+    return { client, transport, replacement, fail, received, completedThreads };
+  }
+
+  it.each(['inProgress', 'completed'] as const)('preserves the original %s turn without replaying input', async (status) => {
+    const { client, transport, replacement, fail, received } = await startCase(status);
+    try {
+      transport.emitClose({ reason: 'proxy channel closed (exit code=null)', reconnectable: true });
+      await vi.waitFor(() => expect(received[0]).toBe('item'));
+      if (status === 'inProgress') {
+        replacement.emitLine({ method: 'item/completed', params: { threadId, turnId, item } });
+      }
+      replacement.emitLine({ method: 'turn/completed', params: { threadId, turn: { id: turnId, status: 'completed' } } });
+      expect(received).toEqual(['item', 'turn']);
+      expect(fail).not.toHaveBeenCalled();
+      const requests = replacement.lines.map((line) => JSON.parse(line));
+      expect(requests.map(({ method }) => method)).toEqual([Method.Initialize, Method.ThreadResume, Method.ThreadTurnsList]);
+      expect(requests[1].params).toEqual({ threadId, excludeTurns: true });
+    } finally {
+      await client.close();
+    }
+  });
+
+  it('restores persisted items in order when the first item also arrives live', async () => {
+    const second = { ...item, id: 'second-item' };
+    const { client, transport, replacement, fail } = await startCase('completed', { items: [item, second] });
+    const order: string[] = [];
+    client.onNotification('item/completed', (params) => {
+      order.push((params as { item: { id: string } }).item.id);
+    });
+    client.onNotification('turn/completed', () => { order.push('terminal'); });
+    const write = replacement.writeLine.bind(replacement);
+    replacement.writeLine = async (line) => {
+      if (JSON.parse(line).method === Method.ThreadTurnsList) {
+        replacement.emitLine({ method: 'item/completed', params: { threadId, turnId, item } });
+      }
+      await write(line);
+    };
+    try {
+      transport.emitClose({ reason: 'SSH dropped', reconnectable: true });
+      await vi.waitFor(() => expect(order).toEqual([item.id, second.id, 'terminal']));
+      expect(fail).not.toHaveBeenCalled();
+    } finally {
+      await client.close();
+    }
+  });
+
+  it('uses legacy snapshot order to deduplicate an already delivered message and preserve a repeated reply', async () => {
+    const { client, transport, fail } = await startCase('completed', {
+      items: [{ ...item, id: 'item-2' }, { ...item, id: 'item-3' }],
+    });
+    const delivered: string[] = [];
+    client.onNotification('item/completed', (params) => {
+      delivered.push((params as { item: { id: string } }).item.id);
+    });
+    client.onNotification('turn/completed', () => { delivered.push('terminal'); });
+    try {
+      transport.emitLine({ method: 'item/completed', params: { threadId, turnId, item } });
+      transport.emitClose({ reason: 'SSH dropped', reconnectable: true });
+      await vi.waitFor(() => expect(delivered).toEqual([item.id, 'item-3', 'terminal']));
+      expect(fail).not.toHaveBeenCalled();
+    } finally {
+      await client.close();
+    }
+  });
+
+  it.each([false, true])('delivers one MCP anchor before the recovered result (start seen: %s)', async (startSeen) => {
+    const mcp = { id: 'mcp-call', type: 'mcpToolCall', server: 'fixture', tool: 'lookup' };
+    const { client, transport, fail } = await startCase('completed', { items: [mcp] });
+    const events: string[] = [];
+    client.onNotification('item/started', () => { events.push('start'); });
+    client.onNotification('item/completed', () => { events.push('complete'); });
+    client.onNotification('turn/completed', () => { events.push('terminal'); });
+    try {
+      if (startSeen) transport.emitLine({ method: 'item/started', params: { threadId, turnId, item: mcp } });
+      transport.emitClose({ reason: 'SSH dropped', reconnectable: true });
+      await vi.waitFor(() => expect(events).toEqual(['start', 'complete', 'terminal']));
+      expect(fail).not.toHaveBeenCalled();
+    } finally {
+      await client.close();
+    }
+  });
+
+  it('delivers a verified completed turn before failing recovery of an unconfirmed sibling task', async () => {
+    const { client, transport, fail, completedThreads, received } = await startCase('completed', {
+      withSecondRoot: true, missingSecondTurn: true,
+    });
+    fail.mockImplementation(() => { received.push('failure'); });
+    try {
+      transport.emitClose({ reason: 'SSH dropped', reconnectable: true });
+      await vi.waitFor(() => expect(fail).toHaveBeenCalledTimes(1));
+      expect(received).toEqual(['item', 'turn', 'failure']);
+      expect(completedThreads).toEqual([threadId]);
+    } finally {
+      await client.close();
+    }
+  });
+
+  it('uses the existing terminal error when the resumed thread is awaiting approval', async () => {
+    const { client, transport, replacement, fail, received } = await startCase('inProgress', { waitingOnApproval: true });
+    try {
+      transport.emitClose({ reason: 'proxy channel closed (exit code=null)', reconnectable: true });
+      await vi.waitFor(() => expect(fail).toHaveBeenCalledTimes(1));
+      expect(received).toEqual([]);
+      expect(replacement.lines.map((line) => JSON.parse(line).method)).toEqual([Method.Initialize, Method.ThreadResume]);
+    } finally {
+      await client.close();
+    }
+  });
+
+  it.each(['inProgress', 'completed'] as const)('settles the user Stop for the original %s turn', async (status) => {
+    const { client, transport, replacement, fail, received } = await startCase(status);
+    const deliveryOrder: string[] = [];
+    const write = replacement.writeLine.bind(replacement);
+    replacement.writeLine = async (line) => {
+      if (JSON.parse(line).method === Method.TurnInterrupt) deliveryOrder.push('interrupt sent');
+      await write(line);
+    };
+    client.onNotification('item/completed', () => { deliveryOrder.push('item delivered'); });
+    try {
+      transport.emitClose({ reason: 'SSH dropped', reconnectable: true });
+      const stop = client.request(Method.TurnInterrupt, { threadId, turnId });
+      const duplicateStop = client.request(Method.TurnInterrupt, { threadId, turnId });
+      await Promise.all([stop, duplicateStop]);
+      expect(stop).toBe(duplicateStop);
+      const writes = replacement.lines
+        .map((line) => JSON.parse(line))
+        .filter(({ method }) => method === Method.TurnInterrupt);
+      if (status === 'inProgress') {
+        expect(writes).toEqual([expect.objectContaining({ params: { threadId, turnId } })]);
+      } else {
+        expect(writes).toEqual([]);
+        expect(received).toContain('turn');
+      }
+      expect(deliveryOrder).toEqual(status === 'inProgress' ? ['interrupt sent', 'item delivered'] : ['item delivered']);
+      expect(fail).not.toHaveBeenCalled();
+    } finally {
+      await client.close();
+    }
+  });
+
+  it('stops only the requested turn when two tasks share the recovered connection', async () => {
+    const { client, transport, replacement, fail, completedThreads } = await startCase('inProgress', { withSecondRoot: true });
+    try {
+      transport.emitClose({ reason: 'SSH dropped', reconnectable: true });
+      await client.request(Method.TurnInterrupt, { threadId, turnId });
+      const interrupts = replacement.lines.map((line) => JSON.parse(line))
+        .filter(({ method }) => method === Method.TurnInterrupt)
+        .map(({ params }) => params);
+      expect(interrupts).toEqual([{ threadId, turnId }]);
+      replacement.emitLine({
+        method: 'turn/completed',
+        params: { threadId: 'second-root', turn: { id: 'second-turn', status: 'completed' } },
+      });
+      expect(completedThreads).toEqual(['second-root']);
+      expect(fail).not.toHaveBeenCalled();
+    } finally {
+      await client.close();
+    }
+  });
+
+  it('ends recovery without acknowledging Stop when the host exhausts its retries', async () => {
+    const { client, transport, replacement, fail, completedThreads } = await startCase('inProgress');
+    const sshError = Object.assign(new Error('SSH agent is unavailable'), { code: 'SSH_AGENT_UNAVAILABLE' });
+    transport.reconnect.mockRejectedValueOnce(sshError);
+    try {
+      transport.emitClose({ reason: 'SSH dropped', reconnectable: true });
+      await expect(client.request(Method.TurnInterrupt, { threadId, turnId }))
+        .rejects.toThrow('remote turn status could not be confirmed');
+      expect(fail).toHaveBeenCalledTimes(1);
+      expect(fail).toHaveBeenCalledWith(expect.objectContaining({
+        message: expect.stringContaining(sshError.message),
+        cause: sshError,
+      }));
+      expect(replacement.lines).toEqual([]);
+      expect(completedThreads).toEqual([]);
+    } finally {
+      await client.close();
+    }
+  });
+
+  // PR #12236 P2. Going through request() with the replacement blocked by
+  // an outstanding interaction verifies a queued start never reaches either transport.
+  it('rejects a waiting task without dispatching it when recovery fails', async () => {
+    const { client, transport, replacement, fail } = await startCase('inProgress', { waitingOnApproval: true });
+    const beforeDispatch = vi.fn();
+    try {
+      transport.emitClose({ reason: 'SSH dropped', reconnectable: true });
+      const queued = client.request(Method.ThreadStart, {}, { beforeDispatch });
+      await expect(queued).rejects.toThrow('transport failure');
+      expect(fail).toHaveBeenCalledTimes(1);
+      expect(beforeDispatch).not.toHaveBeenCalled();
+      expect(replacement.lines.map((line) => JSON.parse(line).method))
+        .toEqual([Method.Initialize, Method.ThreadResume]);
+    } finally {
+      await client.close();
+    }
+  });
+
+  it('reattaches owned descendants and skips unrelated native threads', async () => {
+    const { client, transport, replacement, fail, completedThreads } = await startCase('completed', { withChild: true });
+    try {
+      transport.emitClose({ reason: 'SSH dropped', reconnectable: true });
+      await vi.waitFor(() => expect(completedThreads).toEqual([threadId, 'owned-child']));
+      const resumed = replacement.lines.map((line) => JSON.parse(line))
+        .filter(({ method }) => method === Method.ThreadResume)
+        .map(({ params }) => params.threadId);
+      expect(resumed).toEqual([threadId, 'owned-child']);
+      expect(fail).not.toHaveBeenCalled();
+    } finally {
+      await client.close();
+    }
+  });
+
+  it('does not reattach while the outcome of a write is unknown', async () => {
+    const { client, transport, fail } = await startCase('inProgress');
+    // The old channel has not acknowledged an interrupt.
+    const unknown = client.request(Method.TurnInterrupt, { threadId, turnId });
+    const rejected = expect(unknown).rejects.toThrow('transport failure');
+    transport.emitClose({ reason: 'proxy channel closed (exit code=null)', reconnectable: true });
+    await rejected;
+    expect(fail).toHaveBeenCalledTimes(1);
+    expect(transport.reconnect).not.toHaveBeenCalled();
+    await client.close();
   });
 });
 

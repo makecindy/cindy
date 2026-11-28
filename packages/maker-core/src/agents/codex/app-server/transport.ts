@@ -35,6 +35,8 @@ export type StderrHandler = (line: string) => void;
 export interface TransportCloseInfo {
   /** 人类可读的关闭原因, 上层 toast / 日志 用。 */
   reason: string;
+  /** An SSH stream ended without a remote process exit or a WebSocket close frame. */
+  reconnectable?: boolean;
 }
 
 export type CloseHandler = (info: TransportCloseInfo) => void;
@@ -43,6 +45,8 @@ export type CloseHandler = (info: TransportCloseInfo) => void;
  * 字节流双向 transport。一个 transport 实例只服务一个 client (1:1)。
  */
 export interface Transport {
+  /** Restore the path to the same daemon without starting or replacing it. */
+  reconnect?(signal: AbortSignal): Promise<Transport>;
   /** Bounded diagnostic of the local child before retiring a stalled resume. */
   sampleResumeStack?(): Promise<string[]>;
   /** Local native SQLite bootstrap failed before any stdout, with a confirmed natural exit. */

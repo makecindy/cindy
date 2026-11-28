@@ -270,13 +270,28 @@ describe('RemoteHost arm/disconnect race', () => {
       const before = h.client;
       for (let i = 0; i < 20 && h.client === before; i += 1) await vi.advanceTimersByTimeAsync(1000);
       const client = h.client!;
+      expect(client).not.toBe(before);
       client.emit('error', unreachable());
       client.emit('close');
       await vi.advanceTimersByTimeAsync(0);
     };
     try {
+      const previousReadyAt = host.snapshot().statusChangedAt;
       h.client!.emit('close');
-      for (let attempt = 0; attempt < 5; attempt += 1) await failEachAttempt();
+      const onRecovered = vi.fn();
+      const onExhausted = vi.fn();
+      const waiting = host.waitForReconnect(previousReadyAt, new AbortController().signal).then(onRecovered, onExhausted);
+      for (let attempt = 0; attempt < 4; attempt += 1) {
+        await failEachAttempt();
+        expect(onExhausted).not.toHaveBeenCalled();
+      }
+      await failEachAttempt();
+      await waiting;
+      expect(onExhausted).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+        message: 'connect EHOSTUNREACH 10.0.0.1:22',
+        cause: expect.objectContaining({ code: 'EHOSTUNREACH' }),
+      }));
+      expect(onRecovered).not.toHaveBeenCalled();
       expect(host.getStatus()).toBe('failed');
       const exhausted = h.client;
       await vi.advanceTimersByTimeAsync(10 * 60_000);
@@ -311,6 +326,81 @@ describe('RemoteHost arm/disconnect race', () => {
       vi.useRealTimers();
     }
   });
+
+  // Unit regression for PR #12236: a second connect during backoff used to
+  // replace the automatic round and orphan the original task's waiter.
+  it.each(['success', 'exhaustion', 'disconnect'] as const)(
+    'shares an automatic reconnect round with a new task until %s', async (outcome) => {
+      vi.useFakeTimers();
+      const host = new RemoteHost(HOST_CONFIG, { logger: noopLogger });
+      try {
+        const connecting = host.connect();
+        await vi.advanceTimersByTimeAsync(0);
+        const original = h.client!;
+        original.emit('ready');
+        await connecting;
+        const previousReadyAt = host.snapshot().statusChangedAt;
+        const connectionCount = h.createClient.mock.calls.length;
+        original.emit('close');
+        expect(host.getStatus()).toBe('reconnecting');
+
+        const originalResult = vi.fn();
+        const newTaskResult = vi.fn();
+        const originalWait = host.waitForReconnect(previousReadyAt, new AbortController().signal)
+          .then(() => originalResult('ready'), (error: Error) => originalResult(error.message));
+        const newTask = host.connect()
+          .then(() => newTaskResult('ready'), (error: Error) => newTaskResult(error.message));
+        await vi.advanceTimersByTimeAsync(0);
+        expect(h.createClient).toHaveBeenCalledTimes(connectionCount);
+        expect(host.getStatus()).toBe('reconnecting');
+
+        if (outcome === 'disconnect') {
+          await host.disconnect();
+          await Promise.all([originalWait, newTask]);
+          expect(originalResult).toHaveBeenCalledExactlyOnceWith('SSH host was disconnected');
+          expect(newTaskResult).toHaveBeenCalledExactlyOnceWith('SSH host was disconnected');
+          await vi.advanceTimersByTimeAsync(60_000);
+          expect(h.createClient).toHaveBeenCalledTimes(connectionCount);
+          return;
+        }
+
+        // A task joining inside the transient failed notification must also
+        // share the round, before the next backoff is scheduled.
+        let lateJoiner: Promise<void> | undefined;
+        const duringFailureResult = vi.fn();
+        host.onStatus(({ status }) => {
+          if (status === 'failed' && !lateJoiner) {
+            lateJoiner = host.connect()
+              .then(() => duringFailureResult('ready'), (error: Error) => duringFailureResult(error.message));
+          }
+        });
+        const backoffs = outcome === 'success' ? [1000, 2000] : [1000, 2000, 4000, 8000, 16000];
+        for (const [index, backoff] of backoffs.entries()) {
+          await vi.advanceTimersByTimeAsync(backoff);
+          expect(h.createClient).toHaveBeenCalledTimes(connectionCount + index + 1);
+          expect(originalResult).not.toHaveBeenCalled();
+          expect(newTaskResult).not.toHaveBeenCalled();
+          if (outcome === 'success' && index === backoffs.length - 1) {
+            h.client!.emit('ready');
+          } else {
+            h.client!.emit('error', new Error('connect ECONNREFUSED'));
+            h.client!.emit('close');
+          }
+          await vi.advanceTimersByTimeAsync(0);
+        }
+        await Promise.all([originalWait, newTask, lateJoiner]);
+        const expected = outcome === 'success' ? 'ready' : 'connect ECONNREFUSED';
+        expect(originalResult).toHaveBeenCalledExactlyOnceWith(expected);
+        expect(newTaskResult).toHaveBeenCalledExactlyOnceWith(expected);
+        expect(duringFailureResult).toHaveBeenCalledExactlyOnceWith(expected);
+        await vi.advanceTimersByTimeAsync(60_000);
+        expect(h.createClient).toHaveBeenCalledTimes(connectionCount + backoffs.length);
+      } finally {
+        await host.disconnect();
+        vi.useRealTimers();
+      }
+    },
+  );
 
   it('a stale host verifier cannot persist trust or write errors for a replacement endpoint', async () => {
     let finishGet!: (fingerprint: string | null) => void;

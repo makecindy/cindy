@@ -7545,7 +7545,7 @@ assertRouteCurrent();
       const resp = await withMcpDiscoveryContext(() => {
           assertCurrentHost('thread/start dispatch');
           return host.request<ThreadStartResponse>(Method.ThreadStart, params, {
-            ...criticalThreadRpcOptions(), threadOwner,
+            ...criticalThreadRpcOptions(), threadOwner, signal: startup.signal,
             beforeDispatch: () => {
               assertCurrentHost('thread/start write');
               startup.threadDispatched = true;
@@ -7707,6 +7707,7 @@ assertRouteCurrent();
           const requestOptions = {
             ...criticalThreadRpcOptions(),
             threadOwner,
+            signal: startup.signal,
             beforeDispatch: () => {
               assertCurrentHost('thread/resume write');
               startup.threadDispatched = true;
@@ -14858,7 +14859,7 @@ assertRouteCurrent();
               // 且无人可解（review #844 codex P1）。与正常 turn/start 同款边界。
               const resp = await host.request<TurnStartResponse>(Method.TurnStart,
                 { ...turnParams, threadId, ...(continueNativeHistory ? { input: [] } : {}) }, {
-                ...criticalThreadRpcOptions(),
+                ...criticalThreadRpcOptions(), signal: sendOpts?.signal,
               });
               // **发出后再复检**：RPC 在途期间 Stop / close / 撤单都拦不住它——
               // 计时器早已清空，cancelOverloadRetry 无从取消；abort() 又因为
@@ -14959,7 +14960,7 @@ assertRouteCurrent();
         let initialStartSettledByCancel = false;
         try {
           const resp = await host.request<TurnStartResponse>(Method.TurnStart, turnParams, {
-            ...criticalThreadRpcOptions(),
+            ...criticalThreadRpcOptions(), signal: sendSignal,
           });
           markTurnConfigAccepted();
           adoptUnidentifiedDeadTurn(resp, initialStartSeq);
@@ -15004,7 +15005,7 @@ assertRouteCurrent();
                 ...(developerInstructions && !useProxyChannel ? { developerInstructions } : {}),
               };
               const resumeResp = await host.request<ThreadResumeResponse>(Method.ThreadResume, resumeParams, {
-                ...criticalThreadRpcOptions(),
+                ...criticalThreadRpcOptions(), signal: sendSignal,
                 threadOwner,
               });
               if (mutableModel === resumeModel && resumeModel === 'gpt-5' && resumeResp.model) {
@@ -15064,7 +15065,7 @@ assertRouteCurrent();
               }
               log.info('thread/resume after stale daemon ok, retrying turn/start', { threadId });
               const resp = await host.request<TurnStartResponse>(Method.TurnStart, turnParams, {
-                ...criticalThreadRpcOptions(),
+                ...criticalThreadRpcOptions(), signal: sendSignal,
               });
               markTurnConfigAccepted();
               adoptUnidentifiedDeadTurn(resp, initialStartSeq);
