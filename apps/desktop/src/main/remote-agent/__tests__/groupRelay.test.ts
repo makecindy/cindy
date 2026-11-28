@@ -16,6 +16,8 @@ import { isProviderSharePeer, parseRemoteAgentPollResult, parseRemoteAgentStream
 import { AgentStartupStoppedError, TurnDispatchRejectedError, TurnDispatchUnconfirmedError, TurnPermissionPolicyUnsupportedError, type AgentEvent, type AgentSessionHandle } from '@cindy/maker-core';
 import type { ProviderView } from '@cindy/model-providers';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { installExecutionReporting } from '../../usage/companyTokenFacts';
+import { createCompanyReportingRenewal } from '../controller/companyReportingRenewal';
 import { createProviderGroupGuestRelay } from '../../provider-group/guestRelay';
 import { createProviderGroupExternalLoad } from '../../provider-group/externalLoad';
 import type { ProviderGroupRouter } from '../../provider-group/router';
@@ -39,6 +41,7 @@ import {
   type HostedStartInput,
   type RemoteAgentGroupRelayDeps,
 } from '../host/runHost';
+import { createGuestUsageMeter, type GuestUsageSample } from '../host/guestUsage';
 import { managedSkillDigest } from '../managedSkillDigest';
 
 const GUEST_A = 'share-guest-a';
@@ -61,6 +64,7 @@ interface Started {
 }
 
 function fakeAgentHost(name: string, started: Started[], options: {
+  recordGuestUsage?: Parameters<typeof createRemoteAgentHost>[0]['recordGuestUsage'];
   trust: (controller: string) => 'guest' | 'owner';
   guestRelayCapable?: boolean;
   purge?: (hostSessionIds: readonly string[], nativeIds: readonly string[]) => Promise<void>;
@@ -88,6 +92,7 @@ function fakeAgentHost(name: string, started: Started[], options: {
   log?: Parameters<typeof createRemoteAgentHost>[0]['log'];
 }) {
   return createRemoteAgentHost({
+    recordGuestUsage: options.recordGuestUsage,
     ...(options.managedSkills ? { managedSkills: options.managedSkills } : {}),
     forkHosted: async (_kind, opts) => ({ newSdkSessionId: `${opts.sourceSdkSessionId}-fork`, uuidMap: new Map([['old', 'new']]) }),
     prepareImageEvent: options.prepareImageEvent,
@@ -118,10 +123,11 @@ function fakeAgentHost(name: string, started: Started[], options: {
         },
       };
       started.push(record);
+      let currentModel = input.options.model;
       const handle: AgentSessionHandle = {
         id: `sdk-${name}-${input.hostSessionId}`,
         agentKind: input.kind,
-        model: input.options.model,
+        get model() { return currentModel; },
         validateSendOptions: options.validateSendOptions,
         async send(message, opts) {
           if (opts) options.validateSendOptions?.(opts);
@@ -129,7 +135,10 @@ function fakeAgentHost(name: string, started: Started[], options: {
           await options.onSend?.(record);
         },
         async steer() {},
-        async setModel(...args: unknown[]) { record.modelChanges.push(args); },
+        async setModel(...args: unknown[]) {
+          record.modelChanges.push(args);
+          if (typeof args[0] === 'string') currentModel = args[0];
+        },
         async abort() {},
         isTurnRunning: () => record.running,
         async close() {},
@@ -266,12 +275,14 @@ function setup(options: {
   switchWorthy?: (failure: RelayRunFailure) => boolean;
   /** mini 这台的 Agent 表现。 */
   mini?: { failStart?: boolean; endImmediately?: boolean; onSend?: (record: Started) => void | Promise<void>;
+    recordGuestUsage?: Parameters<typeof createRemoteAgentHost>[0]['recordGuestUsage'];
     validateSendOptions?: AgentSessionHandle['validateSendOptions'];
     isAgentAvailable?: Parameters<typeof createRemoteAgentHost>[0]['isAgentAvailable'] };
     log?: Parameters<typeof createRemoteAgentHost>[0]['log'];
   memberBinder?: Parameters<typeof createRemoteAgentHost>[0]['bindGuestProviderRoute'];
   /** 组所在电脑本机的 Agent 表现(组选中本机这一台时)。 */
   owner?: { failStart?: boolean; onSend?: (record: Started) => void | Promise<void>;
+    recordGuestUsage?: Parameters<typeof createRemoteAgentHost>[0]['recordGuestUsage'];
     beforeStart?: (input: HostedStartInput) => Promise<void>;
     canSwitchLocalAccount?: (input: { providerId: string; hostSessionId: string; model: string }) => Promise<boolean>;
     validateSendOptions?: AgentSessionHandle['validateSendOptions'];
@@ -348,7 +359,7 @@ function runId(): string {
   return `11111111-1111-4111-8111-${String(runSeq).padStart(12, '0')}`;
 }
 
-async function openAsGuest(env: ReturnType<typeof setup>, guest: string, payload: Record<string, unknown>, observer?: Partial<RemoteAgentRunHandlers>) {
+async function openAsGuest(env: ReturnType<typeof setup>, guest: string, payload: Record<string, unknown>, observer?: Partial<RemoteAgentRunHandlers>, agentKind: 'claude-code' | 'codex' = 'claude-code') {
   const poller = new RemoteAgentPoller(async (args) => jsonRoundTrip(await env.owner.handle(guest, jsonRoundTrip(args[0]))));
   let counter = 0;
   /** 受邀者按顺序收到的事件与状态。 */
@@ -370,7 +381,7 @@ async function openAsGuest(env: ReturnType<typeof setup>, guest: string, payload
     },
   }, () => `22222222-2222-4222-8222-${String(++counter + runSeq * 100).padStart(12, '0')}`);
   let closedReason: string | null = null;
-  const started = await client.open('claude-code', payload);
+  const started = await client.open(agentKind, payload);
   return { client, started, stream, isClosed: () => closedReason !== null, closedReason: () => closedReason };
 }
 
@@ -2905,6 +2916,183 @@ describe('provider group "switch to another computer" for shared users', () => {
     );
   });
 
+  it.each((['local', 'member'] as const).flatMap(placement =>
+    (['failed', 'completed'] as const).map(status => ({ placement, status }))))(
+    'keeps an accepted Codex send eligible for failover after a prior $status completion on $placement', async ({ placement, status }) => {
+      const env = setup({ plans: [placement === 'local' ? { kind: 'local' } : { kind: 'member', ...MEMBER_MINI },
+        { kind: 'member', ...MEMBER_STUDIO }], switchWorthy: failure => failure.reason === 'remote_agent_closed' });
+      const guest = await openAsGuest(env, GUEST_A, openPayload(SESSION, { acceptsGroupSwitch: true }), undefined, 'codex');
+      try {
+        await guest.client.call('send', [{ content: 'first', attachments: [] }, {}]);
+        const record = placement === 'local' ? env.ownerStarted[0] : env.memberStarted.mini[0];
+        const done = { type: 'done', source: 'codex', data: { type: 'codex/event/task_complete', raw: { id: 'prior', status } } } as AgentEvent;
+        const terminal = status === 'completed' ? done : { type: 'error', source: 'codex',
+          data: { isTerminal: true, reason: 'turn-failed' } } as AgentEvent;
+        record.emit(terminal);
+        await waitFor(() => guest.stream.some(item => item.t === 'event' && item.event.type === terminal.type));
+        await guest.client.call('send', [{ content: 'second', attachments: [] }, {}]);
+        record.emit(done);
+        record.emit(done);
+        record.end(); // The second send has produced no output.
+        await waitFor(() => guest.isClosed());
+        expect(switchTokenIn(guest.stream)).toBeDefined();
+        expect(env.relay.noteRunFailure.mock.calls.filter(call => call[2].reason === 'remote_agent_closed')).toHaveLength(1);
+      } finally { await env.owner.dispose(); await env.members.mini.dispose(); await env.members.studio.dispose(); }
+    });
+
+  // Exercise an older member at the poll boundary: its duplicate does not pass through the new member event pump.
+  it.each(['completed', 'failed'] as const)('handles a legacy member replaying a prior %s Codex receipt before disconnect', async status => {
+    const done = { type: 'done', source: 'codex', data: { raw: { id: 'first', status },
+      usage: { promptTokens: 40, completionTokens: 7 } } } as AgentEvent;
+    const ownerUsage = vi.fn();
+    let replay = false;
+    const env = setup({ plans: [{ kind: 'member', ...MEMBER_MINI }, { kind: 'member', ...MEMBER_STUDIO }],
+      owner: { recordGuestUsage: ownerUsage }, switchWorthy: failure => failure.reason === 'remote_agent_closed',
+      intercept: async (device, request, forward) => {
+        const result = await forward();
+        if (!replay || device !== 'mini' || request.op !== 'poll') return result;
+        replay = false;
+        const data = Buffer.from((JSON.stringify({ t: 'event', event: done }) + '\n').repeat(2));
+        return { runs: (request.runs as Array<{ runId: string; cursor: number }>).map(run => ({
+          ...run, cursor: run.cursor + data.length, data: data.toString('base64'), done: true,
+        })) };
+      },
+    });
+    const guest = await openAsGuest(env, GUEST_A, openPayload(SESSION, { acceptsGroupSwitch: true }), undefined, 'codex');
+    try {
+      await guest.client.call('send', [{ content: 'first' }, {}]);
+      const record = env.memberStarted.mini[0];
+      const terminal = status === 'completed' ? done : { type: 'error', source: 'codex',
+        data: { isTerminal: true, reason: 'turn-failed' } } as AgentEvent;
+      record.emit(terminal);
+      await waitFor(() => guest.stream.some(item => item.t === 'event' && item.event.type === terminal.type));
+      await guest.client.call('send', [{ content: 'second' }, {}]);
+      replay = true;
+      record.emit({ type: 'status', source: 'codex', data: {} } as AgentEvent);
+      await waitFor(() => guest.isClosed());
+      expect(switchTokenIn(guest.stream)).toBeDefined();
+      expect(ownerUsage).toHaveBeenCalledTimes(1);
+      expect(guest.stream.filter(item => item.t === 'event' && item.event.type === 'done'))
+        .toHaveLength(status === 'completed' ? 1 : 0);
+    } finally { await env.owner.dispose(); await env.members.mini.dispose(); await env.members.studio.dispose(); }
+  });
+
+  it('delivers one late failed receipt to a legacy group owner through its ordinary event handler', async () => {
+    const env = setup({});
+    // Legacy owners only consume ordinary events and do not advertise dedicated receipt support.
+    const meter = createGuestUsageMeter('codex');
+    const samples: GuestUsageSample[] = [];
+    let lastReportedModel = '';
+    const peer = await openAsGuest({ ...env, owner: env.members.mini }, OWNER_DEVICE,
+      openPayload(SESSION, { groupAssigned: true, relay: relayKeyFor(GUEST_A), options: { model: 'codex-a' } }), {
+        onState: state => { if (typeof state.model === 'string') lastReportedModel = state.model; },
+        onEvent: event => samples.push(...meter.observe(event as AgentEvent, lastReportedModel)),
+      }, 'codex');
+    try {
+      await peer.client.call('send', [{ content: 'first' }, {}]);
+      const record = env.memberStarted.mini[0];
+      record.emit({ type: 'error', source: 'codex', data: { isTerminal: true, reason: 'turn-failed' } } as AgentEvent);
+      await waitFor(() => peer.stream.some(item => item.t === 'event' && item.event.type === 'error'));
+      await peer.client.call('send', [{ content: 'second' }, {}]);
+      const receipt = { type: 'done', source: 'codex', data: { raw: { id: 'first', status: 'failed' },
+        usage: { promptTokens: 40, completionTokens: 7 }, result: 'private fixture' } } as AgentEvent;
+      record.emit(receipt);
+      record.emit(receipt);
+      record.end();
+      await waitFor(() => peer.isClosed());
+      expect(samples).toMatchObject([{ model: 'codex-a', inputTokens: 40, outputTokens: 7, turns: 1 }]);
+      const done = peer.stream.filter(item => item.t === 'event' && item.event.type === 'done');
+      expect(done).toMatchObject([{ event: { turnScope: 'background' } }]);
+      expect(JSON.stringify(done)).not.toContain('private fixture');
+    } finally { await env.owner.dispose(); await env.members.mini.dispose(); await env.members.studio.dispose(); }
+  });
+
+  it.each([
+    { cumulative: false, switchBeforeError: false }, { cumulative: true, switchBeforeError: false },
+    { cumulative: false, switchBeforeError: true }, { cumulative: true, switchBeforeError: true },
+  ])('meters a late failed Codex receipt once at both relay endpoints (cumulative=$cumulative, switchBeforeError=$switchBeforeError)', async ({ cumulative, switchBeforeError }) => {
+    const ownerUsage = vi.fn(), memberUsage = vi.fn();
+    const env = setup({ plans: [{ kind: 'member', ...MEMBER_MINI }, { kind: 'member', ...MEMBER_STUDIO }],
+      owner: { recordGuestUsage: ownerUsage }, mini: { recordGuestUsage: memberUsage },
+      switchWorthy: failure => failure.reason === 'remote_agent_closed' });
+    const guest = await openAsGuest(env, GUEST_A, openPayload(SESSION, { acceptsGroupSwitch: true, options: { model: 'codex-a' } }), undefined, 'codex');
+    try {
+      await guest.client.call('send', [{ content: 'first' }, {}]);
+      const record = env.memberStarted.mini[0];
+      if (switchBeforeError) await guest.client.call('setModel', ['codex-b']);
+      record.emit({ type: 'error', source: 'codex', data: { isTerminal: true, reason: 'turn-failed' } } as AgentEvent);
+      await waitFor(() => guest.stream.some(item => item.t === 'event' && item.event.type === 'error'));
+      if (!switchBeforeError) await guest.client.call('setModel', ['codex-b']);
+      await guest.client.call('send', [{ content: 'second' }, {}]);
+      const snapshot = { epoch: 'fixture', models: [{ model: 'codex-a', inputTokens: 40, outputTokens: 7 }] };
+      const done = { type: 'done', source: 'codex', data: { raw: { id: 'first', status: 'failed' },
+        ...(cumulative && { requestUsage: snapshot }),
+        usage: { promptTokens: 40, completionTokens: 7 } } } as AgentEvent;
+      record.emit(done);
+      record.emit(done);
+      if (cumulative) record.emit({ type: 'status', source: 'codex', data: { requestUsage: snapshot } });
+      record.end();
+      await waitFor(() => guest.isClosed());
+      for (const meter of [memberUsage, ownerUsage]) {
+        expect(meter).toHaveBeenCalledTimes(1);
+        const samples = meter.mock.calls[0][1].samples as GuestUsageSample[];
+        expect(samples.reduce((n, s) => n + s.inputTokens, 0)).toBe(40);
+        expect(samples.reduce((n, s) => n + s.outputTokens, 0)).toBe(7);
+        expect(samples.reduce((n, s) => n + s.turns, 0)).toBe(1);
+        expect(new Set(samples.map(s => s.model))).toEqual(new Set(['codex-a']));
+      }
+      expect(ownerUsage.mock.calls[0]).toMatchObject([GUEST_A, { memberKey: MEMBER_MINI.memberKey }, SESSION]);
+      expect(switchTokenIn(guest.stream)).toBeDefined();
+      expect(guest.stream.some(item => item.t === 'event' && item.event.type === 'done')).toBe(false);
+    } finally { await env.owner.dispose(); await env.members.mini.dispose(); await env.members.studio.dispose(); }
+  });
+
+  it.each([
+    { cumulative: false, reject: true }, { cumulative: true, reject: true },
+    { cumulative: false, reject: false }, { cumulative: true, reject: false },
+  ])('meters the prior Codex completion during a second dispatch (cumulative=$cumulative, reject=$reject)', async ({ cumulative, reject }) => {
+    const ownerUsage = vi.fn(), memberUsage = vi.fn();
+    let sends = 0;
+    let allowResult!: () => void;
+    const resultGate = new Promise<void>(resolve => { allowResult = resolve; });
+    const env = setup({
+      owner: { recordGuestUsage: ownerUsage }, mini: { recordGuestUsage: memberUsage, onSend: async () => {
+        if (++sends === 2 && reject) {
+          await resultGate;
+          throw new TurnDispatchRejectedError('second dispatch rejected');
+        }
+      } },
+    });
+    const guest = await openAsGuest(env, GUEST_A, openPayload(SESSION, { options: { model: 'codex-a' } }), undefined, 'codex');
+    try {
+      await guest.client.call('send', [{ content: 'first' }, {}]);
+      await guest.client.call('setModel', ['codex-b']);
+      const second = guest.client.call('send', [{ content: 'second' }, {}]).then(() => null, error => error);
+      await waitFor(() => sends === 2);
+      if (!reject) expect(await second).toBeNull();
+      const done = { type: 'done', source: 'codex', data: { raw: { id: 'first', status: 'completed' },
+        ...(cumulative && { requestUsage: { epoch: 'fixture', models: [{ model: 'codex-a', inputTokens: 40, outputTokens: 7 }] } }),
+        usage: { promptTokens: 40, completionTokens: 7 } } } as AgentEvent;
+      const member = env.memberStarted.mini[0];
+      member.emit(done);
+      member.emit(done);
+      await waitFor(() => ownerUsage.mock.calls.length > 0);
+      allowResult();
+      if (reject) expect(await second).toMatchObject({ message: expect.stringContaining('second dispatch rejected') });
+      for (const meter of [memberUsage, ownerUsage]) {
+        expect(meter).toHaveBeenCalledTimes(1);
+        const samples = meter.mock.calls[0][1].samples as GuestUsageSample[];
+        expect(new Set(samples.map(sample => sample.model))).toEqual(new Set(['codex-a']));
+        expect(samples.reduce((sum, sample) => sum + sample.inputTokens, 0)).toBe(40);
+        expect(samples.reduce((sum, sample) => sum + sample.outputTokens, 0)).toBe(7);
+        expect(samples.reduce((sum, sample) => sum + sample.turns, 0)).toBe(1);
+      }
+    } finally {
+      allowResult();
+      await env.owner.dispose(); await env.members.mini.dispose(); await env.members.studio.dispose();
+    }
+  });
+
   it('offers another computer when the computer’s task ends unexpectedly in the middle of a turn', async () => {
     const env = setup({ plans: [{ kind: 'member', ...MEMBER_MINI }, { kind: 'member', ...MEMBER_STUDIO }] });
     const guest = await openAsGuest(env, GUEST_A, openPayload(SESSION, { acceptsGroupSwitch: true }));
@@ -3716,4 +3904,43 @@ it('does not acknowledge a repeated direct fork whose native index write failed'
     await expect(fork()).resolves.toMatchObject({ newSdkSessionId: 'native-old-fork' });
     expect(JSON.parse(fs.readFileSync(file, 'utf8'))[digest].nativeIds).toEqual(['native-old', 'native-old-fork']);
   } finally { spy.mockRestore(); await host.dispose(); }
+});
+
+it('pins the reporting grant to the selected execution device and records a relayed turn once', async () => {
+  const record = vi.fn();
+  const route: string[] = [];
+  const env = setup({ intercept: async (device, command, forward) => {
+    if (command.op === 'company-reporting-challenge' || command.op === 'company-reporting-grant') {
+      route.push(device + ':' + command.op);
+    }
+    return forward();
+  } });
+  const issue = vi.fn(async ({ nonce }: { nonce: string }) => 'fixture-' + nonce);
+  installExecutionReporting({
+    available: () => true, captureBoundary: () => () => true, direct: () => true, issue,
+    challenge: nonce => ({ nonce, recipient: 'a'.repeat(64) }),
+    redeem: async (nonce, grant) => grant === 'fixture-' + nonce ? { receipt: 'synthetic-receipt', current: () => true, record } : undefined,
+  });
+  const guest = await openAsGuest(env, GUEST_A, openPayload(SESSION));
+  try {
+    const run = guest.client.runId;
+    const renew = createCompanyReportingRenewal(([request]) => env.owner.handle(GUEST_A, request));
+    await renew(run, () => true);
+    await renew(run, () => true);
+    expect(await env.owner.handle(GUEST_B, { op: 'company-reporting-grant', runId: run, grant: 'unrelated' })).toEqual({});
+    await guest.client.call('send', [{ content: 'test turn' }, {}]);
+    env.memberStarted.mini[0]!.emit({ type: 'status', data: { isRunning: true, providerInitiatedTurn: true } } as AgentEvent);
+    env.memberStarted.mini[0]!.emit({ type: 'done', source: 'claude-code', data: { modelUsageCumulativeStartsAtZero: true,
+      modelUsage: { 'claude-opus-4-6': { inputTokens: 12, outputTokens: 3, costUSD: 0 } } } } as AgentEvent);
+    await waitFor(() => guest.stream.some(item => item.t === 'event' && item.event.type === 'done'));
+    expect(route).toEqual(['mini:company-reporting-challenge', 'mini:company-reporting-grant']);
+    expect(issue).toHaveBeenCalledTimes(1);
+    expect(issue).toHaveBeenCalledWith({ nonce: expect.any(String), recipient: 'a'.repeat(64) });
+    expect(record.mock.calls).toEqual([[[{ model: 'claude-opus-4-6', input: 12, output: 3, cacheRead: 0, cacheWrite: 0 }]]]);
+  } finally {
+    await guest.client.close('close', 'navigation').catch(() => {});
+    await env.owner.dispose();
+    await Promise.all(Object.values(env.members).map(member => member.dispose()));
+    installExecutionReporting(undefined);
+  }
 });

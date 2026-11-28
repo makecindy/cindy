@@ -14,18 +14,19 @@ import { createCredentialStore } from './store.mjs';
 
 /**
  * @param {{read(key: string): string | null}} store
- * @returns {{authenticated: boolean, realm: 'cn' | 'global' | null}}
+ * @returns {{authenticated: boolean, realm: 'cn' | 'global' | null, recordMissing?: true}}
  */
 export function projectAdoptedSession(store) {
-  const record = parseAuthSessionRecord(store.read(AUTH_SESSION_KEY));
+  const raw = store.read(AUTH_SESSION_KEY);
+  const record = parseAuthSessionRecord(raw);
   return record
     ? { authenticated: true, realm: record.realm }
-    : { authenticated: false, realm: null };
+    : { authenticated: false, realm: null, ...(raw === null && { recordMissing: true }) };
 }
 
 /**
  * @param {{userDataDir: string, keyringApplication?: string}} options
- * @returns {Promise<{authenticated: boolean, realm: 'cn' | 'global' | null}>}
+ * @returns {Promise<ReturnType<typeof projectAdoptedSession>>}
  */
 export async function readAdoptedSessionState(options) {
   return projectAdoptedSession(await createCredentialStore(options));

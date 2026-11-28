@@ -24,6 +24,13 @@ Desktop 与 Node Host 的共同发送事务在既有 user 行的 `agentMeta.disp
 `resets_at: <unix ms>` 文本格式，控制端只在 Agent 未启动的错误边界恢复额度等待。旧端仍可将其展示为启动失败。
 只传组级结论和已知的恢复时间，作用域为本次任务。中继转发原有信封，自建中转无需改动。
 
+组主在发给执行机的 `open` 中声明 `acceptsRelayUsageReceipts: true`。组内执行机仅在对端
+明确接受时，才通过原有 `poll` 流发送 `relay-usage`，交付上一轮 Codex 已报错后的迟到用量。
+组主按原发送请求消费一次。未声明能力时，执行机使用旧组主已识别的 `event` 行，发送仅含计量
+字段、标记 `turnScope: 'background'` 的 `done`。打开时给旧组主发送一次初始模型状态，让首次状态尚未变化的任务也能按模型记账。旧组主继续等待前台新轮的输出。
+新版组主仍对旧成员重发的普通完成事件去重。
+官方和自建中转均透传原来的 `poll` 响应，无需额外 RPC、协议协商或补发模型调用。
+
 桌面端在换来源后续发原消息时，经现有 `maker:input:retry-last-error` 传
 `expectedQueueHeadClientId` 与本次切换回执的 `pendingSwitchRevision`（作为 `expectedSwitchRevision`）。
 任务所在电脑匹配恢复项及实际队首，并在发送锁内重新核对待应用的切换修订号。另一控制端改选后，

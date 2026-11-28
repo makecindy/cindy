@@ -12,14 +12,14 @@ import { AuthApiError, CindyAuthClient as RealAuthClient, parseAuthSessionRecord
 import { assertHostSessionRegion } from './auth/region-policy.ts';
 import { HostRefreshDeferredError, HostSessionMissingError, refreshHostSession as realRefreshHostSession } from './auth/refresh.mjs';
 import { AuthRefreshBackoff } from '../../desktop/src/main/authRefreshBackoff.ts';
-import { isDefinitiveRefreshError } from '../../desktop/src/main/authRefreshError.ts';
-import { HostCrossRegionPersonalAccountError } from './auth/region-policy.ts';
 import { projectAdoptedSession } from './credentials/session.mjs';
+import { bindHostCompanyReporting } from './company-token-reporting.ts';
+import { CompanyTokenQueue } from '../../desktop/src/main/usage/companyTokenQueue.ts';
 import { OwnerDatabaseError } from '../../desktop/src/main/localDb/startupCore.ts';
 import { createDesktopScanner, HostProfileInUseError, nodeProfileScanPorts } from './agent/profile-coexistence.ts';
 import { spawn } from 'node:child_process';
 import { request as httpRequest } from 'node:http';
-import { classifyHostStartFailure, HostAccountMismatchError, HostSignInRequiredError } from './start-failure.ts';
+import { classifyHostStartFailure, endsHostSession, HostAccountMismatchError, HostSignInRequiredError } from './start-failure.ts';
 import { projectHostAuthState } from './auth-state.ts';
 import { createHostServer } from './server.mjs';
 import { once } from 'node:events';
@@ -62,7 +62,7 @@ test('owner storage closes only after retained auxiliary usage has settled', asy
 });
 const functions = [];
 function visit(node) {
-  if (ts.isFunctionDeclaration(node) && ['ensureRuntime', 'resolveAccountUser'].includes(node.name?.text)) {
+  if (ts.isFunctionDeclaration(node) && ['ensureRuntime', 'resolveAccountUser', 'readStartupSession'].includes(node.name?.text)) {
     functions.push(node.getText(source).replaceAll('import.meta.url', "'file:///test/main.ts'"));
   } else ts.forEachChild(node, visit);
 }
@@ -89,7 +89,7 @@ function setup(overrides = {}) {
     acquireHostRuntimeLease: () => ({ held: true, release() {} }),
     // No desktop on the profile (coexistence plan A); the refusal below scans a real one.
     createDesktopScanner: () => async () => [], hostLog: { info() {} }, OwnerDatabaseError, HostProfileInUseError,
-    HostAccountMismatchError, HostSignInRequiredError,
+    HostAccountMismatchError, HostSignInRequiredError, companyReporting: { discardMember() {} },
     readAdoptedSessionState: async () => ({ authenticated: true, realm: 'global' }),
     openOwnerDatabase: async (args) => { opens.push(args); steps.push('open'); throw new Error('database opened'); },
     path: { join: (...parts) => parts.join('/') }, layout: { packaged: false, drizzleDir: 'desktop/drizzle', sqliteVecPath: 'desktop/vec0' }, process,
@@ -126,11 +126,92 @@ test('matching owner authentication proceeds to its own database', async () => {
   assert.deepEqual(h.steps, ['owner:account-b', 'boundary:account-b', 'open']);
 });
 
+test('verified membership mismatch discards only the expected member batches before that member returns', async t => {
+  const root = mkdtempSync(path.join(os.tmpdir(), 'host-membership-outboxes-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const memberA = 'account-a', memberB = 'account-b';
+  const scope = member => ({ owner: JSON.stringify(['global', 'fixture-org', member]), orgRevision: 1, memberRevision: 1 });
+  for (const directMember of [memberA, memberB]) {
+    const profile = path.join(root, directMember);
+    const dir = path.join(profile, 'company-token-host');
+    const delegated = path.join(dir, 'company-token-executor');
+    mkdirSync(delegated, { recursive: true });
+    const files = [
+      [path.join(dir, 'company-token-outbox.json'), directMember],
+      [path.join(delegated, '11111111-1111-4111-8111-111111111111'), memberA],
+      [path.join(delegated, '22222222-2222-4222-8222-222222222222'), memberB],
+    ];
+    const batches = files.map(([file, member]) => {
+      const queue = new CompanyTokenQueue(file);
+      queue.add(scope(member), [{ day: '2020-01-01', model: 'test', input: 5, output: 0, cacheRead: 0, cacheWrite: 0 }]);
+      queue.next(scope(member), '2020-01-02'); // Includes a persisted, unacknowledged batch.
+      return { file, member, queue, original: readFileSync(file) };
+    });
+    const reporter = bindHostCompanyReporting({
+      directory: profile, reportBuild: true, identity: () => null, canWrite: () => false,
+      definitivelyInactive: () => false, gatewayEndpoint: () => null, fetch: () => assert.fail('unexpected request'),
+    });
+    try {
+      let member = memberB;
+      const harness = () => setup({ companyReporting: reporter,
+        CindyAuthClient: class { async getMe() { return { membership: { id: member, kind: 'org', orgId: 'fixture-org' } }; } },
+      });
+      await assert.rejects(harness().start(memberA), HostAccountMismatchError);
+      for (const { file, member: owner, original } of batches) {
+        if (owner === memberA) assert.equal(existsSync(file), false);
+        else assert.deepEqual(readFileSync(file), original);
+      }
+      member = memberA;
+      await assert.rejects(harness().start(memberA), /database opened/);
+      for (const { member: owner, queue } of batches) {
+        if (owner === memberA) assert.equal(queue.next(scope(memberA), '2020-01-02'), null);
+      }
+    } finally { reporter.dispose(); }
+  }
+});
+
 test('an explicit owner cannot open private data without a verified login', async () => {
   const h = setup({ readAdoptedSessionState: async () => ({ authenticated: false, realm: 'global' }) });
   await assert.rejects(h.start('account-b'), /Sign in/);
   assert.deepEqual(h.opens, []);
   assert.equal(h.token(), null);
+});
+
+// The production startup functions above, a restarted reporter and real outbox files in a
+// temporary profile. Neither a transient vault failure nor a failed refresh proves logout.
+test('Host startup purges both outboxes only on confirmed sign-out', async t => {
+  const root = mkdtempSync(path.join(os.tmpdir(), 'cindy-host-start-usage-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  for (const mode of ['signed-out', 'locked', 'malformed', 'offline']) {
+    const profile = path.join(root, mode);
+    const dir = path.join(profile, 'company-token-host');
+    const delegated = path.join(dir, 'company-token-executor');
+    mkdirSync(delegated, { recursive: true });
+    const files = [path.join(dir, 'company-token-outbox.json'), path.join(delegated, '11111111-1111-4111-8111-111111111111')];
+    for (const file of files) writeFileSync(file, 'previous synthetic batch');
+    const reporter = bindHostCompanyReporting({
+      directory: profile, reportBuild: true, identity: () => null, canWrite: () => false,
+      definitivelyInactive: () => false, gatewayEndpoint: () => null, fetch: () => assert.fail('unexpected request'),
+    });
+    const store = { read() {
+      if (mode === 'locked') throw new Error('fixture vault unavailable');
+      if (mode === 'malformed') return 'unreadable record';
+      return mode === 'signed-out' ? null : serializeAuthSessionRecord('global', 'fixture-refresh');
+    } };
+    const h = setup({
+      companyReporting: reporter,
+      readAdoptedSessionState: async () => projectAdoptedSession(store),
+      refreshHostSession: async () => { throw new Error('fixture offline'); },
+    });
+    try {
+      await assert.rejects(h.start('account-b'), mode === 'locked' ? /vault unavailable/ : mode === 'offline' ? /offline/ : /Sign in/);
+      assert.deepEqual(h.opens, []);
+      for (const file of files) {
+        if (mode === 'signed-out') assert.equal(existsSync(file), false, mode);
+        else assert.equal(readFileSync(file, 'utf8'), 'previous synthetic batch', mode);
+      }
+    } finally { reporter.dispose(); }
+  }
 });
 
 /*
@@ -439,8 +520,7 @@ function renewalHarness(t, server) {
     createCredentialStore: async () => store, createRequire: () => () => ({ machineIdSync: () => 'test-device' }),
     CindyAuthClient: class { refresh(token) { return server.refresh(token); } async getMe() { return { membership: server.membership, passportId: 'passport-a' }; } },
     refreshHostSession: realRefreshHostSession, hostAccountVaultLock: () => task => task(),
-    AuthRefreshBackoff, accessTokenRefreshDelayMs, isDefinitiveRefreshError, HostSessionMissingError, HostRefreshDeferredError,
-    HostCrossRegionPersonalAccountError,
+    AuthRefreshBackoff, accessTokenRefreshDelayMs, endsHostSession, HostRefreshDeferredError,
     eventHub: { publish() {} }, projectAuthState: () => ({}),
     invalidateHostSession: async (reason) => { invalidated.push(reason); },
   };
@@ -694,10 +774,14 @@ test('source serve keeps health responsive and refreshes an empty native profile
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const { host, electron } = createSourceElectronTree(root);
   const profile = path.join(root, 'profile');
+  const reportingDir = path.join(profile, 'company-token-host');
+  const previousBatch = path.join(reportingDir, 'company-token-outbox.json');
+  mkdirSync(reportingDir, { recursive: true });
+  writeFileSync(previousBatch, 'previous synthetic batch');
   const launches = path.join(root, 'child-launches');
   writeFileSync(launches, '');
   const env = isolatedServeEnv(root, path.join(root, 'bin'), {
-    CINDY_HOST_DATA_DIR: profile, CINDY_HOST_PORT: '0', XDT_DEVICE_ID_OVERRIDE: 'synthetic-host',
+    CINDY_HOST_DATA_DIR: profile, CINDY_HOST_PORT: '0', XDT_DEVICE_ID_OVERRIDE: 'synthetic-host', XDT_TAPDB_DEV: '1',
     HTTP_PROXY: 'http://127.0.0.1:9', HTTPS_PROXY: 'http://127.0.0.1:9', NO_PROXY: '127.0.0.1,localhost',
   });
   const preload = path.join(host, 'monitor.mjs');
@@ -751,6 +835,13 @@ test('source serve keeps health responsive and refreshes an empty native profile
   const elapsed = performance.now() - start;
   assert.ok(elapsed < 1000, `/health took ${elapsed} ms`);
   t.diagnostic(`First /health response including its body: ${Math.ceil(elapsed)} ms`);
+  // The real serve entry also checks logout when it cannot discover a database owner.
+  // Verify startup itself purges the persisted batch, before a later /refresh can do so.
+  const startupDeadline = AbortSignal.timeout(5000);
+  while (existsSync(previousBatch)) {
+    startupDeadline.throwIfAborted();
+    await new Promise(resolve => setTimeout(resolve, 20));
+  }
   const refresh = await fetch(baseUrl + '/api/auth/refresh', { method: 'POST',
     headers: { ...headers, 'content-type': 'application/json' }, body: '{}' });
   assert.equal(readFileSync(launches, 'utf8'), '');

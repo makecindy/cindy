@@ -68,6 +68,15 @@ test('missing Secret Service fails explicitly instead of degrading to plaintext'
   assert.equal(fs.existsSync(path.join(userDataDir, 'safe-storage', 'session.enc')), false);
 });
 
+test('an unavailable decoder cannot turn an existing login into a missing record', async t => {
+  const unavailable = Object.assign(new Error('fixture decoder unavailable'), { code: 'ENOENT' });
+  const store = await createCredentialStore({ userDataDir: tempProfile(t),
+    codec: { encrypt: value => value, decrypt() { throw unavailable; } } });
+  assert.equal(store.read('session'), null);
+  store.write('session', 'fixture ciphertext');
+  assert.throws(() => store.read('session'), error => error === unavailable);
+});
+
 test('payload produced here decodes with the measured Desktop parameters', () => {
   // Guards the constants that were verified against real ciphertext: 16-byte
   // AES-128 key from one PBKDF2-SHA1 round, 16-space IV, "v11" prefix.
@@ -90,7 +99,7 @@ test('projects an adopted Desktop login without exposing the refresh token', asy
   assert.deepEqual(state, { authenticated: true, realm: 'cn' });
   assert.equal(JSON.stringify(state).includes('refreshToken'), false);
 
-  assert.deepEqual(projectAdoptedSession({ read: () => null }), { authenticated: false, realm: null });
+  assert.deepEqual(projectAdoptedSession({ read: () => null }), { authenticated: false, realm: null, recordMissing: true });
   assert.deepEqual(
     projectAdoptedSession({ read: () => JSON.stringify({ version: 1, realm: 'global' }) }),
     { authenticated: false, realm: null },

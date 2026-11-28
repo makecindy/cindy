@@ -19,6 +19,21 @@ afterEach(() => vi.useRealTimers());
 // chunk-count ceiling. The link below models 16 KiB/s + 1s RTT without waiting;
 // gzip, request parsing and complete payload reconstruction remain real.
 describe('RemoteAgentRunClient slow payload delivery', () => {
+  it('signals an executor change only on a second started event for the same run', async () => {
+    const started = (id: string) => Buffer.from(JSON.stringify({ t: 'started', handle: { id } }) + '\n');
+    const onExecutorReplaced = vi.fn();
+    const poller = { invoke: async () => ({}), unregister() {},
+      register(run: RemoteAgentRunClient) { run.onData(started('first'), false); } } as unknown as RemoteAgentPoller;
+    const client = new RemoteAgentRunClient(randomUUID(), poller, {
+      onEvent() {}, onState() {}, onWs() {}, onClosed() {}, onExecutorReplaced,
+      onRequest: async () => ({ type: 'callback', value: null }),
+    }, randomUUID);
+    await expect(client.open('claude-code', {})).resolves.toEqual({ id: 'first' });
+    expect(onExecutorReplaced).not.toHaveBeenCalled();
+    client.onData(started('replacement'), false);
+    expect(onExecutorReplaced).toHaveBeenCalledTimes(1);
+  });
+
   it('delivers a send while company reporting authorization is unresolved', async () => {
     let finish!: () => void;
     const authorization = new Promise<void>(resolve => { finish = resolve; });

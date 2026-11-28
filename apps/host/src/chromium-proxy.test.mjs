@@ -27,6 +27,7 @@ import test, { mock } from 'node:test';
 import { promisify } from 'node:util';
 import ts from 'typescript';
 import { createHostServer } from './server.mjs';
+import { classifyHostStartFailure, endsHostSession } from './start-failure.ts';
 
 import {
   ANSWER_WAIT_MS, FIRST_BACKOFF_MS, START_TIMEOUT_MS, STOP_TIMEOUT_MS, WARMUP_WAIT_MS, createChromiumProxyHelper, helperEnv, helperUrl,
@@ -326,6 +327,9 @@ test('the first login reaches the PAC proxy after a three-second cold start', as
 // exercise the real loopback /health handler, proxy helper protocol and login transport.
 function launchServe(t, { startHostSystemProxySettings, resolveAccountUser, warn }) {
   const server = createHostServer({ token: 'fixture-token' });
+  const runtime = {};
+  const noOwner = 'fixture-no-owner';
+  t.after(() => assert.equal(runtime.detail, noOwner, 'the proxy startup fixture must finish the no-owner path'));
   // Let early rejections surface before the listener's startup callback runs.
   const listen = server.listen.bind(server);
   server.listen = (port, host, onListening) => listen(port, host, () => setImmediate(() => {
@@ -337,12 +341,13 @@ function launchServe(t, { startHostSystemProxySettings, resolveAccountUser, warn
   const preparation = source.slice(source.indexOf('const command ='), source.indexOf("if (command === '--help'"));
   const listener = source.slice(source.indexOf("server.on('error'"), source.indexOf('let shuttingDown ='));
   const ports = {
-    server, PORT: 0, profileDir, instanceId: 'fixture', account: {}, runtime: {}, shuttingDown: false,
+    server, PORT: 0, profileDir, instanceId: 'fixture', account: {}, runtime, shuttingDown: false,
     process: { argv: ['node', 'main.ts', 'serve'], env: {}, stdout: { write() {} } },
     console: { log() {}, warn, error() {} }, resolveHostRegion() {}, publishHostEndpoint() {}, resolveHostDataDir: () => profileDir,
-    discoverHostOwner: () => ({}), readAdoptedSessionState: async () => ({ authenticated: true }),
+    discoverHostOwner: () => ({ reason: noOwner }), readStartupSession: async () => ({ authenticated: true }),
+    harnessBinaries: { status: () => ({}) }, warnIfNoAgentBinaries() {},
     startHostSystemProxySettings, resolveAccountUser,
-    disposeOwnerRuntime() {}, commitVolatileAppSession() {}, classifyHostStartFailure() {},
+    disposeOwnerRuntime() {}, commitVolatileAppSession() {}, classifyHostStartFailure, endsHostSession,
   };
   const body = ts.transpileModule(`return async () => {
     let startup, removeEndpoint;

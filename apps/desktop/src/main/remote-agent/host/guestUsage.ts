@@ -31,6 +31,33 @@ function empty(model: string): GuestUsageSample {
   return { model, turns: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreateTokens: 0, sdkCostUsd: 0 };
 }
 
+/** Only meter inputs cross this relay boundary. Native results and execution/account metadata stay out. */
+export function codexRelayUsageReceipt(event: AgentEvent, turnId: unknown) {
+  const data = record(event.data);
+  const usage = record(data?.usage);
+  const cumulative = record(data?.requestUsage);
+  return {
+    turnId: typeof turnId === 'string' ? turnId : undefined,
+    usage: {
+      promptTokens: count(usage?.promptTokens) || count(usage?.inputTokens),
+      completionTokens: count(usage?.completionTokens) || count(usage?.outputTokens),
+      cachedTokens: count(usage?.cachedTokens) || count(usage?.cacheReadTokens),
+      cacheCreationTokens: count(usage?.cacheCreationTokens),
+    },
+    ...(typeof cumulative?.epoch === 'string' && Array.isArray(cumulative.models) && {
+      requestUsage: {
+        epoch: cumulative.epoch,
+        models: cumulative.models.slice(0, 4096).flatMap(value => {
+          const row = record(value);
+          return row ? [{ model: typeof row.model === 'string' ? row.model : 'unknown',
+            inputTokens: count(row.inputTokens), outputTokens: count(row.outputTokens),
+            cacheReadTokens: count(row.cacheReadTokens), cacheCreateTokens: count(row.cacheCreateTokens) }] : [];
+        }),
+      },
+    }),
+  };
+}
+
 /** 一个任务实例一个计量器(Claude 的累计基线跟着 SDK 进程走)。 */
 export function createGuestUsageMeter(kind: string) {
   let receiptEpoch: string | null = null;

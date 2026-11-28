@@ -28,6 +28,15 @@ interface Stored extends CompanyPolicy {
 }
 
 const counters = ['input', 'output', 'cacheRead', 'cacheWrite'] as const;
+export function hasCompanyTokens(counts: CompanyTokenCounts): boolean {
+  return counters.every(k => Number.isSafeInteger(counts[k]) && counts[k] >= 0) &&
+    counters.some(k => counts[k] > 0);
+}
+export function addCompanyTokens(target: CompanyTokenCounts, delta: CompanyTokenCounts) {
+  if (counters.every(k => Number.isSafeInteger(target[k] + delta[k]))) {
+    for (const k of counters) target[k] += delta[k];
+  }
+}
 export function projectUsage(
   models: ReadonlySet<string>,
   day: string,
@@ -37,8 +46,7 @@ export function projectUsage(
   if (
     !models.has(model) ||
     !/^\d{4}-\d{2}-\d{2}$/.test(day) ||
-    !counters.every((k) => Number.isSafeInteger(counts[k]) && counts[k] >= 0) ||
-    counters.every((k) => counts[k] === 0)
+    !hasCompanyTokens(counts)
   )
     return null;
   return {
@@ -95,8 +103,7 @@ export class CompanyTokenQueue {
       const key = row.day + row.model;
       const previous = byBucket.get(key);
       if (previous) {
-        if (!counters.every(k => Number.isSafeInteger(previous[k] + row[k]))) continue;
-        for (const k of counters) previous[k] += row[k];
+        addCompanyTokens(previous, row);
       } else {
         const aggregate = { ...row };
         data.rows.push(aggregate);

@@ -1,11 +1,23 @@
 import { describe, expect, it } from 'vitest';
 import type { AgentEvent } from '@cindy/maker-core';
 
-import { createGuestUsageMeter } from '../host/guestUsage';
+import { codexRelayUsageReceipt, createGuestUsageMeter } from '../host/guestUsage';
 
 const done = (data: Record<string, unknown>): AgentEvent => ({ type: 'done', data } as unknown as AgentEvent);
 
 describe('guest usage meter', () => {
+  it('projects only metering fields for a failed Codex turn sent back to the group owner', () => {
+    const receipt = codexRelayUsageReceipt(done({
+      result: 'private result', raw: { id: 'native', detail: 'private detail' },
+      usage: { promptTokens: 4, completionTokens: 2, execution: { providerId: 'private account' } },
+      requestUsage: { epoch: 'epoch', models: [{ model: 'model', cachedInfo: 'private', inputTokens: 4 }] },
+    }), 'native');
+    expect(receipt).toEqual({
+      turnId: 'native', usage: { promptTokens: 4, completionTokens: 2, cachedTokens: 0, cacheCreationTokens: 0 },
+      requestUsage: { epoch: 'epoch', models: [{ model: 'model', inputTokens: 4, outputTokens: 0,
+        cacheReadTokens: 0, cacheCreateTokens: 0 }] },
+    });
+  });
   it('turns cumulative Claude modelUsage into per-turn deltas and counts one turn per done', () => {
     const meter = createGuestUsageMeter('claude-code');
     const first = meter.observe(done({
