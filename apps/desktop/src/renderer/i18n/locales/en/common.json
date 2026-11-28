@@ -4908,68 +4908,7 @@
         "hint": "Sends a private message via the linked Feishu or Lark bot; only when the window is unfocused.",
         "disabledHint": "First set up the bot and DM it once to complete binding."
       },
-      "bind": "Bind",
-      "groups": {
-        "title": "Group chats",
-        "description": "Give a group the bot is in its own project, model and permissions.",
-        "rules": "Anything you don’t set: a group with a project follows that project in Projects and models; a group without one follows New Conversation Configuration and Permission mode for new group tasks above. A group’s main chat and its topics share one setting.",
-        "expand": "Expand",
-        "collapse": "Collapse",
-        "groupCount_one": "{{count}} group",
-        "groupCount_other": "{{count}} groups",
-        "customCount_one": "{{count}} customized",
-        "customCount_other": "{{count}} customized",
-        "refresh": "Refresh",
-        "loading": "Loading groups…",
-        "loadFailed": "Couldn’t load groups. Try Refresh in a moment.",
-        "saveFailed": "Couldn’t save group settings",
-        "notConnected": "Groups are listed once the bot is connected. Only groups with their own settings are shown below.",
-        "empty": "The bot isn’t in any group yet. Add it to a group, then come back here.",
-        "listPermission": "Can’t read the bot’s groups. In the Feishu Open Platform, give this app permission to read group information. Groups the bot has already been used in are listed below.",
-        "listUnavailable": "Can’t read the bot’s groups right now. Groups the bot has already been used in are listed below.",
-        "unnamed": "Unnamed group ({{id}})",
-        "summaryModel": "Own model",
-        "summaryPermission": "Own permissions",
-        "expandAria": "Settings for {{name}}",
-        "searchLabel": "Search groups",
-        "searchPlaceholder": "Search by group name",
-        "customHeading": "Own settings",
-        "followHeading": "Following channel settings",
-        "showMore": "Show {{count}} more",
-        "showLess": "Show less",
-        "noMatch": "No groups match “{{query}}”",
-        "project": {
-          "label": "Project",
-          "follow": "Chat",
-          "missing": "{{name}} (no longer in the sidebar)",
-          "hint": "Applies when the bot is first @mentioned in the group, a topic starts, or someone sends /new. Tasks in progress aren’t moved. With a project, the model and permissions follow that project in Projects and models; with Chat, tasks stay in the bot’s conversation folder and follow New Conversation Configuration above. Only projects in this computer’s sidebar can be chosen."
-        },
-        "model": {
-          "label": "Model and reasoning effort",
-          "hintFollow": "Follows New Conversation Configuration. Changing the model or reasoning effort here applies to this group only.",
-          "hintFollowProject": "Follows the project “{{project}}” in Projects and models. Changing the model or reasoning effort here applies to this group only.",
-          "hintProjectUnavailable": "The model set for “{{project}}” in Projects and models isn’t available right now. Choose another one there, or pick one for this group here.",
-          "hintFixed": "This group has its own model. Tasks in this group whose model hasn’t been changed switch on their next message; new tasks use this model."
-        },
-        "permission": {
-          "label": "Permissions",
-          "hintFollow": "Follows Permission mode for new group tasks. Only affects tasks created in this group from now on; switch an existing task with /permission in the group.",
-          "hintFollowProject": "Follows the permissions of “{{project}}” in Projects and models. Only affects tasks created in this group from now on; switch an existing task with /permission in the group.",
-          "hintFixed": "This group has its own permission mode. Only affects tasks created in this group from now on; switch an existing task with /permission in the group."
-        },
-        "fullAccessConfirm": {
-          "title": "Use Full access in {{name}}?",
-          "description": "New tasks in this group will run without per-step confirmation, no matter who @mentions the bot. Group messages are controlled by its members, so only do this if you trust everyone in the group.",
-          "confirm": "Use Full access",
-          "cancel": "Cancel"
-        },
-        "widerConfirm": {
-          "title": "Loosen permissions in {{name}}?",
-          "description": "New tasks in this group will go from {{current}} to {{next}}, no matter who @mentions the bot. Group messages are controlled by its members, so only do this if you trust everyone in the group.",
-          "confirm": "Change anyway",
-          "cancel": "Cancel"
-        }
-      }
+      "bind": "Bind"
     },
     "wechatBot": {
       "title": "Personal WeChat",
@@ -7438,7 +7377,7 @@
     "tina": {
       "chat": {
         "title": "Chat",
-        "description": "Plain conversations without any repository; select “chat” from Slack, Telegram, X, or Feishu / Lark, one session per conversation lane."
+        "description": "Plain conversations without a project folder. Used when a chat app does not target a specific project."
       },
       "prefs": {
         "agentLabel": "Agent",
@@ -7569,7 +7508,8 @@
       "groups": {
         "cindy": "Official",
         "personal": "Personal",
-        "plugins": "Plugins"
+        "plugins": "Plugins",
+        "shared": "Shared"
       },
       "tips": {
         "cindy": "Provided and maintained by Cindy. No need to create a bot or supply credentials—follow the connection steps to get started.",
@@ -7610,6 +7550,190 @@
       "plugins": {
         "rowHint": "Sign-in, linking and per-chat settings are on the plugin's page.",
         "open": "Open plugin"
+      },
+      "replyTarget": {
+        "label": "Who replies",
+        "cindy": "Ordinary tasks",
+        "cindyHint": "Handled as ordinary tasks in the sidebar using the project and model below. You can also assign a buddy to use their memory and settings.",
+        "companionHint": "Direct messages go to your chat with {{name}}, and each group runs separately under {{name}}. Model, permissions, and memory follow {{name}}.",
+        "openCompanion": "{{name}}’s settings",
+        "summary": "{{name}} replies",
+        "missingCompanion": "Unavailable buddy",
+        "busy": "This bot still has queued messages or a running task. Switch once they finish.",
+        "updateFailed": "Couldn’t switch. Make sure the buddy is still available and try again.",
+        "companionSettingsHint": "Model, permissions and memory"
+      },
+      "nav": {
+        "back": "Back",
+        "backTo": "Back to {{page}}"
+      },
+      "pageDescription": "Message Cindy or your buddies from chat apps like WeChat, Feishu and Telegram.",
+      "list": {
+        "connected": "Connected",
+        "available": "More apps",
+        "choose": "Choose a chat app",
+        "cindyReplies": "Ordinary tasks",
+        "official": "Official bot: {{status}}",
+        "projects": "Projects and models",
+        "projectsHint": "Model and permissions for each project when a chat app or plugin starts a task in it",
+        "hint": {
+          "both": "Official bot, or a bot you create",
+          "slack": "Use the Cindy official bot. Sign in to Slack and you’re set",
+          "x": "Use the Cindy official account. Authorize it to reply to you on X",
+          "wechat": "Scan a QR code to connect your WeChat",
+          "personal": "Use a bot you create"
+        },
+        "companionDedicated": "Buddy’s own: {{names}}"
+      },
+      "apps": {
+        "telegram": "Telegram",
+        "slack": "Slack",
+        "discord": "Discord",
+        "x": "X",
+        "wechat": "WeChat",
+        "feishu": "Feishu / Lark",
+        "wecom": "WeCom",
+        "dingtalk": "DingTalk"
+      },
+      "ways": {
+        "official": "Cindy official bot",
+        "personal": "Your own bot",
+        "personalHint": "A bot you create on the platform, with your own name and avatar.",
+        "personalSetupTitle": "Use your own bot",
+        "setUp": "Set up",
+        "personalSetupHint": {
+          "telegram": "Create a bot with BotFather, then enter its token and your user ID.",
+          "discord": "Create a bot in the Discord Developer Portal, then enter its token.",
+          "feishu": "Create an app on the Feishu or Lark open platform, then enter its App ID and App Secret."
+        },
+        "officialHint": "No app setup required — connects directly to your Cindy account."
+      },
+      "rows": {
+        "model": "Model",
+        "groupReply": "When to reply in groups",
+        "persona": "Name and personality",
+        "behavior": "Reactions and quotes",
+        "receiveHere": "Receive messages on this computer",
+        "receiveHereHint": "Turn off to take the bot offline here. Credentials stay saved, so you can turn it back on anytime.",
+        "unbind": "Unbind this bot",
+        "ownerId": "My user ID {{id}}",
+        "discordChannels": "Server channels",
+        "discordChannelsHint": "Which server channels the bot can work in",
+        "notifications": "Notifications",
+        "on": "On",
+        "off": "Off",
+        "project": "Project",
+        "projectDialogue": "Chat (no project)",
+        "projectMissing": "Project no longer in the sidebar",
+        "projectHint": "New tasks go into this project and use its model and permissions from Projects and models.",
+        "projectDialogueHint": "New tasks go into the bot’s own chat folder and use the model below.",
+        "officialProjectHint": "New tasks go into this project and use its model and permissions from Projects and models. Shared by all Cindy official bots.",
+        "officialProjectDialogueHint": "New tasks stay in the chat folder and use the Chat row in Projects and models. Shared by all Cindy official bots.",
+        "projectFullAccessTitle": "Use {{name}}’s permissions?",
+        "projectFullAccessDescription": "{{name}} has full access in Projects and models: new tasks from {{app}} will run without asking for each step. You can change it to Auto or Ask in Projects and models first.",
+        "projectFullAccessConfirm": "Use anyway",
+        "projectFullAccessCancel": "Cancel",
+        "projectUpdateFailed": "Couldn’t switch the project. Make sure it’s still in the sidebar and try again.",
+        "chats": "Group chats",
+        "channels": "Channels",
+        "projectModel": "Model and permissions",
+        "projectModelHint": "Managed in Projects and models",
+        "projectModelFollow": "Follows “{{name}}”",
+        "groupReplyHint": "Choose whether the bot replies only when mentioned or to all group messages"
+      },
+      "chats": {
+        "title": "Group chats",
+        "description": "Give a group the bot is in its own project, model and permissions, and choose whether other members can ask.",
+        "rules": "Anything you don’t set: a group with a project follows that project in Projects and models; a group without one follows the bot’s Project, or the bot’s Model settings when it has none. A group’s main chat and its topics share one setting.",
+        "expand": "Expand",
+        "collapse": "Collapse",
+        "groupCount_one": "{{count}} group",
+        "groupCount_other": "{{count}} groups",
+        "customCount_one": "{{count}} customized",
+        "customCount_other": "{{count}} customized",
+        "refresh": "Refresh",
+        "loading": "Loading groups…",
+        "loadFailed": "Couldn’t load groups. Try Refresh in a moment.",
+        "saveFailed": "Couldn’t save group settings",
+        "notConnected": "Groups are listed once the bot is connected. Only groups with their own settings are shown below.",
+        "empty": "The bot isn’t in any group yet. Add it to a group, then come back here.",
+        "listPermission": "Can’t read the bot’s groups. In the Feishu Open Platform, give this app permission to read group information. Groups the bot has already been used in are listed below.",
+        "listUnavailable": "Can’t read the bot’s groups right now. Groups the bot has already been used in are listed below.",
+        "unnamed": "Unnamed group ({{id}})",
+        "summaryModel": "Own model",
+        "summaryPermission": "Own permissions",
+        "expandAria": "Settings for {{name}}",
+        "searchLabel": "Search groups",
+        "searchPlaceholder": "Search by group name",
+        "customHeading": "Own settings",
+        "followHeading": "Following channel settings",
+        "showMore": "Show {{count}} more",
+        "showLess": "Show less",
+        "noMatch": "No groups match “{{query}}”",
+        "project": {
+          "label": "Project",
+          "follow": "Follow the bot",
+          "missing": "{{name}} (no longer in the sidebar)",
+          "hint": "Applies when the bot is first @mentioned in the group, a topic starts, or someone sends /new. Tasks in progress aren’t moved. With a project, the model and permissions follow that project in Projects and models; with Follow the bot, the group uses the bot’s Project, or the bot’s conversation folder and Model settings when it has none. Only projects in this computer’s sidebar can be chosen.",
+          "followWith": "Follow the bot ({{project}})"
+        },
+        "model": {
+          "label": "Model and reasoning effort",
+          "hintFollow": "Follows New Conversation Configuration. Changing the model or reasoning effort here applies to this group only.",
+          "hintFollowProject": "Follows the project “{{project}}” in Projects and models. Changing the model or reasoning effort here applies to this group only.",
+          "hintProjectUnavailable": "The model set for “{{project}}” in Projects and models isn’t available right now. Choose another one there, or pick one for this group here.",
+          "hintFixed": "This group has its own model. Tasks in this group whose model hasn’t been changed switch on their next message; new tasks use this model.",
+          "reset": "Follow the default model again"
+        },
+        "permission": {
+          "label": "Permissions",
+          "hintFollow": "Follows Permission mode for new group tasks. Only affects tasks created in this group from now on; switch an existing task with /permission in the group.",
+          "hintFollowProject": "Follows the permissions of “{{project}}” in Projects and models. Only affects tasks created in this group from now on; switch an existing task with /permission in the group.",
+          "hintFixed": "This group has its own permission mode. Only affects tasks created in this group from now on; switch an existing task with /permission in the group.",
+          "hintFollowBot": "Follows the bot’s own permissions. Only affects tasks created in this group from now on; switch an existing task with /permission in the group.",
+          "followWith": "Follow · {{mode}}"
+        },
+        "fullAccessConfirm": {
+          "title": "Use Full access in {{name}}?",
+          "description": "New tasks in this group will run without per-step confirmation, no matter who @mentions the bot. Group messages are controlled by its members, so only do this if you trust everyone in the group.",
+          "confirm": "Use Full access",
+          "cancel": "Cancel"
+        },
+        "widerConfirm": {
+          "title": "Loosen permissions in {{name}}?",
+          "description": "New tasks in this group will go from {{current}} to {{next}}, no matter who @mentions the bot. Group messages are controlled by its members, so only do this if you trust everyone in the group.",
+          "confirm": "Change anyway",
+          "cancel": "Cancel"
+        },
+        "descriptionChannels": "Give a channel the bot works in its own project, model and permissions, and choose whether other members can ask.",
+        "kindGroup": "Group",
+        "kindChannel": "Channel",
+        "channelCount_one": "{{count}} channel",
+        "channelCount_other": "{{count}} channels",
+        "membersCount_one": "{{count}} open to members",
+        "membersCount_other": "{{count}} open to members",
+        "unnamedChannel": "Unnamed channel ({{id}})",
+        "searchPlaceholderChannels": "Search by channel name",
+        "emptyLocal": "No groups recorded yet. @mention the bot once in a group and it will show up here.",
+        "emptyChannels": "No channels are open yet. Turn on the channels the bot works in under Server channels first.",
+        "members": {
+          "label": "Members can ask too",
+          "hint": "When on, other members who @mention the bot also get answers, using this group’s project and model. Their questions run at Auto review at most, so actions still need your approval; your own questions use this group’s permissions.",
+          "guard": "If you don’t speak in the group, members are paused after {{limit}} questions in a row until you @mention the bot there or click Resume. Commands only work for you.",
+          "paused": "Paused for members: they asked {{limit}} times in a row while you were away.",
+          "resume": "Resume",
+          "chip": "Members can ask",
+          "pausedChip": "Members paused",
+          "resumeFailed": "Couldn’t resume. Try again later."
+        },
+        "statusCustom": "Own settings",
+        "shownHint": "Showing {{shown}} of {{total}}. Type a name to filter.",
+        "fieldsNote": "Project, model and permission changes apply when the next task starts in this group; tasks in progress aren’t moved."
+      },
+      "companionBots": {
+        "title": "Buddy-specific bots",
+        "description": "Configured individually in buddy settings. Existing setups keep working after upgrades.",
+        "manage": "Manage"
       }
     },
     "shortcuts": {
@@ -12133,6 +12257,17 @@
       "memberCount_other": "{{count}} members",
       "nameLabel": "Group Name",
       "waitingConfirm": "{{name}} is waiting for your go-ahead",
+      "assistantDevice": {
+        "title": "Group Cindy is waiting for you to choose a computer",
+        "onlyYou": "Only you can see this",
+        "request": "“{{request}}” starts once you choose a computer.",
+        "requestUnknown": "Your request starts once you choose a computer.",
+        "requests_one": "{{count}} request is waiting and starts once you choose a computer.",
+        "requests_other": "{{count}} requests are waiting and start once you choose a computer.",
+        "remember": "Your later requests in this group use the same computer. You can change it in Group Settings.",
+        "cancel": "Cancel Request",
+        "continue": "Continue"
+      },
       "loadFailedTitle": "Couldn’t Load This Group Chat",
       "loadFailedDescription": "Cindy can’t read this group chat right now. Try again, or go back to Buddies.",
       "unavailableTitle": "This Group Chat Is No Longer Available",
@@ -12756,7 +12891,19 @@
         "failed": "Could not complete this action. Try again.",
         "lastOwner": "Transfer ownership or dissolve this group before leaving."
       },
-      "externalBadge": "External"
+      "externalBadge": "External",
+      "links": {
+        "kind": {
+          "pull": "Pull request",
+          "issue": "Issue",
+          "discussion": "Discussion",
+          "commit": "Commit",
+          "file": "File",
+          "folder": "Folder",
+          "release": "Release",
+          "repo": "Repository"
+        }
+      }
     },
     "joined": {
       "today": "Joined today",
@@ -13304,7 +13451,11 @@
         "save": "Save and reconnect",
         "loadFailed": "Couldn’t load the connection settings. Try again.",
         "failed": "Couldn’t save the connection. Check the settings and try again."
-      }
+      },
+      "handedOver": "{{apps}}: handed to {{name}} in Settings.",
+      "handedOverSeparator": ", ",
+      "manageInSettings": "Manage in Settings",
+      "handedOverHint": "Bots added below belong exclusively to {{name}} and stay separate from the bots in Settings."
     },
     "voiceMode": {
       "realtime": {
@@ -14005,7 +14156,8 @@
         },
         "companion": {
           "retryLater": "try again later"
-        }
+        },
+        "membersPaused": "Pausing questions from members until the owner is back 🙈"
       },
       "hook": {
         "interaction": {

@@ -67,7 +67,7 @@ export function parseCardAction(input: ParseCardActionInput): IMCardActionEvent 
 
   const id = typeof value.id === 'string' ? value.id : '';
   if (!id) return null;
-  if (id.startsWith('aq:') ? (!canAnswerQuestion(messageId, senderId) || (!inWhitelist(senderId) && !getScope().guests)) : !inWhitelist(senderId)) return null;
+  if (id.startsWith('aq:') ? (!canAnswerQuestion(messageId, senderId) || (!inWhitelist(senderId) && !getScope().guestsFor(chatId))) : !inWhitelist(senderId)) return null;
 
   const { id: _id, ...payload } = value;
   void _id; // silence unused

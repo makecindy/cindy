@@ -23,6 +23,7 @@ type：feat / fix / refactor / perf / chore / docs / test / revert / build / ci
 ### 范围
 
 - 关联 Issue / 需求：
+  <!-- 来自社区反馈时按 CONTRIBUTING.md「给反馈者署名」添加本 PR 的署名记录，触发共同作者校验与发版贡献墙。仅记录本人同意公开的信息。 -->
 - 本 PR 包含：
 - 明确不包含：
 - 用户可见变化：

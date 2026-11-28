@@ -435,7 +435,7 @@ export function createImSessionRepo(
       }
       // 渠道可按 userId 覆写新会话权限档(telegram guest lane → 只读探索;
       // feishu 群 lane → 这个群单独设置的 > 绑定项目的 > 渠道「群聊新建任务权限档」)。
-      const overridden = ns.permissionModeFor?.(userId, laneProject?.permissionMode ?? null) ?? null;
+      const overridden = ns.permissionModeFor?.(userId, laneProject?.permissionMode ?? null, botContextId) ?? null;
       if (overridden) row.permissionMode = overridden;
       preparedAccounts.set(row, assertAccount);
       return row;

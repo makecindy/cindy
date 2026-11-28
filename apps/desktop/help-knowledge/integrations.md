@@ -7,22 +7,21 @@ At a glance, Cindy integrates with the services below.
 
 **Chat apps (Settings > IM bots):**
 
-The IM bots page has two sections:
+The IM bots page lists one chat app per row: the ones you've connected first, then the rest. Click an app to open its own page; **Back** returns to the list.
 
-- **Official** — Cindy's own bots. You don't create a bot or enter credentials; just turn on the channel's switch and follow the linking steps. This section isn't available in local mode.
-  - **Slack** — bind one or more Slack workspaces and send tasks to Cindy from Slack. Each workspace can also turn on **Slack Communications on This Device** where supported (see the Connections topic).
-  - **Telegram** — link your Telegram account to the official Cindy bot with **Link Telegram**. No bot token is required.
-  - **X** — link your X (Twitter) account and send tasks by mentioning the Cindy bot on X (shown when the server offers it).
-  - Official channels share this computer's project list and sessions, while each channel keeps its own account and project / model preferences.
-- **Personal** — bots you create and manage yourself, each with its own credentials and settings:
-  - **Personal WeChat** — scan to connect and use Cindy from a private chat.
-  - **WeCom Intelligent Bot** — Bot ID + Secret. Also hosts **WeCom group notifications** (a group-bot webhook for automation completion alerts).
-  - **Feishu / Lark Bot** — App ID + App Secret. See the Feishu bot topic.
-  - **DingTalk Bot** — Client ID + Client Secret (Stream mode), for DMs and group chats.
-  - **Discord Bot** — your own bot token + your Discord user ID, for Discord DMs.
-  - **Telegram Bot** — your own BotFather token + your Telegram user ID, for DMs and group chats.
-- Each channel has a **New Conversation Configuration** that picks the Agent and model for new conversations from that channel.
-- Buddies can also have their own bots on their **Messaging platforms** page. A bot can be connected in only one place.
+- **WeChat** — scan to connect and use Cindy from a private chat.
+- **Feishu / Lark** — the Cindy official bot, or your own bot (App ID + App Secret). See the Feishu bot topic.
+- **WeCom** — your own intelligent bot (Bot ID + Secret). Also hosts **WeCom group notifications** (a group-bot webhook for automation completion alerts).
+- **DingTalk** — your own bot (Client ID + Client Secret, Stream mode), for DMs and group chats.
+- **Telegram** — the Cindy official bot (**Link Telegram**, no token needed), or your own BotFather token + your Telegram user ID.
+- **Slack** — the Cindy official bot: bind one or more Slack workspaces. Each workspace can also turn on **Slack Communications on This Device** where supported (see the Connections topic).
+- **Discord** — the Cindy official bot, or your own bot token + your Discord user ID.
+- **X** — link your X (Twitter) account and send tasks by mentioning the Cindy bot on X (shown when the server offers it).
+- The Cindy official bots need a Cindy account and aren't available in local mode. Each official bot is bound to you and this computer, so only your own messages reach it.
+- On each app's page, **Who replies** picks Cindy or one of your buddies. With Cindy, **Project** chooses where new tasks go (they then follow that project in **Projects and models**), and **Model** picks the Agent and model when no project is chosen. With a buddy, the buddy's own model, permissions and memory apply.
+- **Group chats** (on Discord, **Channels**) on each app's page lists the groups the bot is in. Open a group to give it its own project, model and permissions, or tick **Members can ask too** so other members who @mention the bot get answers. Their questions run at Auto review at most, and if you don't speak in the group they pause after 10 questions in a row until you @mention the bot there or click **Resume**. Commands only work for you.
+- **Projects and models** at the bottom of the list sets the model and permissions for each project, shared by official bots, personal bots and plugins.
+- Buddies can also bring their own separate bots from their **Messaging platforms** page. A bot can be connected in only one place.
 
 **Accounts and tools (Plugins):**
 

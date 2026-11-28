@@ -109,6 +109,18 @@ describe('extractAgentIslandPromptText', () => {
     ).toBe('hello');
     expect(extractAgentIslandPromptText({ text: 'hello', images: [], files: [] })).toBe('hello');
   });
+
+  // 测试价值
+  // - 生产入口与可观察结果：extractAgentIslandPromptText 的灵动岛预览正文；合成触发指令不得透出到岛上。
+  // - Bug 依据：群聊唤醒伙伴的 [UI_ACTION_TRIGGER] 英文提示直接进入灵动岛并被截断展示。
+  // - 缺口：既有测试只测普通文本与 JSON 信封，未覆盖合成触发前缀过滤。
+  // - 最小失败输入：带 [UI_ACTION_TRIGGER] 前缀的纯文本和 stringifyUserContent 信封；tier=unit。
+  it('suppresses synthetic trigger prompts in plain strings and user content envelopes', () => {
+    const trigger = '[UI_ACTION_TRIGGER]You are participating as yourself in a Cindy group chat.';
+    expect(extractAgentIslandPromptText(trigger)).toBeNull();
+    expect(extractAgentIslandPromptText(JSON.stringify({ text: trigger, images: [], files: [] }))).toBeNull();
+    expect(extractAgentIslandPromptText({ text: trigger, images: [], files: [] })).toBeNull();
+  });
 });
 
 describe('buildHandoffText', () => {

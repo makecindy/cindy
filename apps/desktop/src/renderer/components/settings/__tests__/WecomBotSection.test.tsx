@@ -6,7 +6,10 @@ import { expect, it, vi } from 'vitest';
 
 import { WecomBotSection } from '../WecomBotSection';
 
-vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
+vi.mock('react-i18next', () => ({
+  useTranslation: () => ({ t: (key: string) => key }),
+  initReactI18next: { type: '3rdParty', init: () => {} },
+}));
 vi.mock('@/hooks/useReducedMotion', () => ({ useReducedMotion: () => true }));
 vi.mock('@/components/ui/confirm-dialog-provider', () => ({
   useConfirmDialog: () => ({ confirm: vi.fn() }),

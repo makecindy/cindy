@@ -4865,68 +4865,7 @@
         "hint": "通过已绑定的飞书或 Lark 机器人，向你私聊发送一条消息；仅在窗口失焦时发送。",
         "disabledHint": "需要先配置 Bot 并向它发送一条消息以完成绑定。"
       },
-      "bind": "绑定",
-      "groups": {
-        "title": "群聊",
-        "description": "给机器人所在的某个群单独指定项目、模型和权限。",
-        "rules": "没单独设置的项：绑定了项目的群跟随「项目与模型」里那个项目的设置，没绑项目的群跟随上面的「新对话配置」和「群聊新建任务权限档」。群主线和群里的话题共用一个群的设置。",
-        "expand": "展开",
-        "collapse": "收起",
-        "groupCount_one": "{{count}} 个群",
-        "groupCount_other": "{{count}} 个群",
-        "customCount_one": "{{count}} 个单独设置",
-        "customCount_other": "{{count}} 个单独设置",
-        "refresh": "刷新",
-        "loading": "正在读取群列表…",
-        "loadFailed": "读取群列表失败，请稍后点「刷新」重试。",
-        "saveFailed": "保存群设置失败",
-        "notConnected": "机器人连上后才能列出它所在的群。下面只列出已经单独设置过的群。",
-        "empty": "机器人还没有加入任何群。把机器人拉进群后，再来这里设置。",
-        "listPermission": "读不到机器人所在的群：请在飞书开放平台给这个应用开通「获取群组信息」权限。下面先列出机器人用过的群。",
-        "listUnavailable": "暂时读不到机器人所在的群，下面先列出机器人用过的群。",
-        "unnamed": "未命名的群（{{id}}）",
-        "summaryModel": "单独设置了模型",
-        "summaryPermission": "单独设置了权限",
-        "expandAria": "设置「{{name}}」",
-        "searchLabel": "搜索群",
-        "searchPlaceholder": "按群名搜索",
-        "customHeading": "单独设置",
-        "followHeading": "跟随渠道设置",
-        "showMore": "再显示 {{count}} 个",
-        "showLess": "收起",
-        "noMatch": "没有找到名字包含「{{query}}」的群",
-        "project": {
-          "label": "项目",
-          "follow": "对话",
-          "missing": "{{name}}（已不在侧栏）",
-          "hint": "在群里第一次 @ 机器人、开新话题或发 /new 时生效，进行中的任务不会被挪走。选项目时，模型和权限默认跟随这个项目在「项目与模型」里的设置；选「对话」时任务放在机器人的对话目录里，跟随上面的「新对话配置」。只能选侧栏里的本机项目。"
-        },
-        "model": {
-          "label": "模型和推理强度",
-          "hintFollow": "跟随「新对话配置」。在这里换模型或推理强度，就只对这个群生效。",
-          "hintFollowProject": "跟随项目「{{project}}」在「项目与模型」里的设置。在这里换模型或推理强度，就只对这个群生效。",
-          "hintProjectUnavailable": "项目「{{project}}」在「项目与模型」里设置的模型现在不可用。可以到那里重新选，或在这里给这个群单独选一个。",
-          "hintFixed": "这个群单独设置了模型。群里没单独改过模型的任务，收到下一条消息时会换过去；新任务直接用它。"
-        },
-        "permission": {
-          "label": "权限",
-          "hintFollow": "当前跟随「群聊新建任务权限档」。只影响之后在这个群新建的任务，已有任务在群里用 /permission 切换。",
-          "hintFollowProject": "当前跟随项目「{{project}}」在「项目与模型」里的权限。只影响之后在这个群新建的任务，已有任务在群里用 /permission 切换。",
-          "hintFixed": "这个群单独设置了权限。只影响之后在这个群新建的任务，已有任务在群里用 /permission 切换。"
-        },
-        "fullAccessConfirm": {
-          "title": "让「{{name}}」以完全访问执行？",
-          "description": "之后在这个群新建的任务都会直接执行、不再逐条确认，群里任何人 @ 机器人都一样。群聊内容由成员控制，请确认群里的人都可信。",
-          "confirm": "改为完全访问",
-          "cancel": "取消"
-        },
-        "widerConfirm": {
-          "title": "放宽「{{name}}」的权限？",
-          "description": "之后在这个群新建的任务会从「{{current}}」变成「{{next}}」，群里任何人 @ 机器人都一样。群聊内容由成员控制，请确认群里的人都可信。",
-          "confirm": "仍然更改",
-          "cancel": "取消"
-        }
-      }
+      "bind": "绑定"
     },
     "wechatBot": {
       "title": "个人微信",
@@ -7395,7 +7334,7 @@
     "tina": {
       "chat": {
         "title": "对话",
-        "description": "不落任何仓库的纯对话；在 Slack、Telegram、X 或飞书 / Lark 里选择 chat 即可使用，每条对话 lane 独立对应一个任务。"
+        "description": "不关联具体项目文件夹的纯对话；各消息应用未指定项目时默认使用这里的模型和权限。"
       },
       "prefs": {
         "agentLabel": "Agent",
@@ -7526,7 +7465,8 @@
       "groups": {
         "cindy": "官方",
         "personal": "个人",
-        "plugins": "插件"
+        "plugins": "插件",
+        "shared": "通用设置"
       },
       "tips": {
         "cindy": "由 Cindy 提供并维护。无需自行创建机器人或准备凭证，按引导连接后即可使用。",
@@ -7567,6 +7507,190 @@
       "plugins": {
         "rowHint": "登录、绑定和每个群聊、私聊的单独设置都在插件页面里。",
         "open": "打开插件"
+      },
+      "replyTarget": {
+        "label": "谁来回复",
+        "cindy": "普通任务",
+        "cindyHint": "在侧栏任务列表里处理，使用下面的项目和模型。也可以交给伙伴，按伙伴的记忆和设定回复。",
+        "companionHint": "私聊进 {{name}} 的对话，群聊由 {{name}} 独立跟进。模型、权限和记忆均跟随 {{name}}。",
+        "openCompanion": "{{name}} 的设置",
+        "summary": "由 {{name}} 回复",
+        "missingCompanion": "已不可用的伙伴",
+        "busy": "这个机器人还有消息在排队或任务在运行，结束后再切换。",
+        "updateFailed": "未能切换。请确认伙伴仍可用后重试。",
+        "companionSettingsHint": "模型、权限和记忆"
+      },
+      "nav": {
+        "back": "返回",
+        "backTo": "返回 {{page}}"
+      },
+      "pageDescription": "在微信、飞书、Telegram 这些消息应用里，给 Cindy 或你的伙伴发消息。",
+      "list": {
+        "connected": "已连接",
+        "available": "还可以连接",
+        "choose": "选一个消息应用",
+        "cindyReplies": "普通任务",
+        "official": "官方机器人：{{status}}",
+        "projects": "项目与模型",
+        "projectsHint": "消息应用或插件在项目里开新任务时，每个项目用的模型与权限",
+        "hint": {
+          "both": "官方机器人，或你自己创建的机器人",
+          "slack": "用 Cindy 官方机器人，登录 Slack 就能用",
+          "x": "用 Cindy 官方账号，授权后在 X 上回复你",
+          "wechat": "扫码连接你的个人微信",
+          "personal": "用你自己创建的机器人"
+        },
+        "companionDedicated": "伙伴专属：{{names}}"
+      },
+      "apps": {
+        "telegram": "Telegram",
+        "slack": "Slack",
+        "discord": "Discord",
+        "x": "X",
+        "wechat": "微信",
+        "feishu": "飞书 / Lark",
+        "wecom": "企业微信",
+        "dingtalk": "钉钉"
+      },
+      "ways": {
+        "official": "Cindy 官方机器人",
+        "personal": "你自己的机器人",
+        "personalHint": "用你在平台上创建的机器人，名字和头像由你定。",
+        "personalSetupTitle": "用你自己的机器人",
+        "setUp": "设置",
+        "personalSetupHint": {
+          "telegram": "在 BotFather 创建机器人，填入令牌和你的用户 ID。",
+          "discord": "在 Discord 开发者后台创建机器人，填入令牌。",
+          "feishu": "在飞书或 Lark 开放平台创建应用，填入 App ID 和 App Secret。"
+        },
+        "officialHint": "无需自建应用，直接与你的 Cindy 账号绑定。"
+      },
+      "rows": {
+        "model": "模型",
+        "groupReply": "群聊里什么时候回复",
+        "persona": "名字和性格",
+        "behavior": "表情回应和引用",
+        "receiveHere": "在这台电脑上接收消息",
+        "receiveHereHint": "关掉后机器人在这台电脑上下线，凭证保留，随时可以再打开。",
+        "unbind": "解绑这个机器人",
+        "ownerId": "我的用户 ID {{id}}",
+        "discordChannels": "服务器频道",
+        "discordChannelsHint": "机器人可以在哪些服务器频道里工作",
+        "notifications": "通知",
+        "on": "已开启",
+        "off": "未开启",
+        "project": "项目",
+        "projectDialogue": "对话（不选项目）",
+        "projectMissing": "已不在侧栏的项目",
+        "projectHint": "新任务放进这个项目，模型和权限跟随它在「项目与模型」里的设置。",
+        "projectDialogueHint": "新任务放在机器人自己的对话目录，用下面的模型。",
+        "officialProjectHint": "新任务放进这个项目，模型和权限跟随它在「项目与模型」里的设置。所有 Cindy 官方机器人共用这一项。",
+        "officialProjectDialogueHint": "新任务放在对话目录，模型和权限跟随「项目与模型」里「对话」那一行。所有 Cindy 官方机器人共用这一项。",
+        "projectFullAccessTitle": "改用「{{name}}」的权限？",
+        "projectFullAccessDescription": "「{{name}}」在「项目与模型」里是完全访问：之后在{{app}}里新建的任务会直接执行，不再逐条确认。可以先到「项目与模型」把它改成 Auto 或 Ask。",
+        "projectFullAccessConfirm": "仍然使用",
+        "projectFullAccessCancel": "取消",
+        "projectUpdateFailed": "没能切换项目，请确认它还在侧栏里后重试。",
+        "chats": "群聊",
+        "channels": "频道",
+        "projectModel": "模型与权限",
+        "projectModelHint": "在「项目与模型」里统一修改",
+        "projectModelFollow": "跟随「{{name}}」",
+        "groupReplyHint": "控制机器人在群里仅 @ 时回复还是全响应"
+      },
+      "chats": {
+        "title": "群聊",
+        "description": "给机器人所在的某个群单独指定项目、模型和权限，以及群里其他成员能不能提问。",
+        "rules": "没单独设置的项：绑定了项目的群跟随「项目与模型」里那个项目的设置，没绑项目的群跟随机器人的「项目」，机器人也没选项目时跟随机器人的「模型」设置。群主线和群里的话题共用一个群的设置。",
+        "expand": "展开",
+        "collapse": "收起",
+        "groupCount_one": "{{count}} 个群",
+        "groupCount_other": "{{count}} 个群",
+        "customCount_one": "{{count}} 个单独设置",
+        "customCount_other": "{{count}} 个单独设置",
+        "refresh": "刷新",
+        "loading": "正在读取群列表…",
+        "loadFailed": "读取群列表失败，请稍后点「刷新」重试。",
+        "saveFailed": "保存群设置失败",
+        "notConnected": "机器人连上后才能列出它所在的群。下面只列出已经单独设置过的群。",
+        "empty": "机器人还没有加入任何群。把机器人拉进群后，再来这里设置。",
+        "listPermission": "读不到机器人所在的群：请在飞书开放平台给这个应用开通「获取群组信息」权限。下面先列出机器人用过的群。",
+        "listUnavailable": "暂时读不到机器人所在的群，下面先列出机器人用过的群。",
+        "unnamed": "未命名的群（{{id}}）",
+        "summaryModel": "单独设置了模型",
+        "summaryPermission": "单独设置了权限",
+        "expandAria": "设置「{{name}}」",
+        "searchLabel": "搜索群",
+        "searchPlaceholder": "按群名搜索",
+        "customHeading": "单独设置",
+        "followHeading": "跟随渠道设置",
+        "showMore": "再显示 {{count}} 个",
+        "showLess": "收起",
+        "noMatch": "没有找到名字包含「{{query}}」的群",
+        "project": {
+          "label": "项目",
+          "follow": "跟随机器人",
+          "missing": "{{name}}（已不在侧栏）",
+          "hint": "在群里第一次 @ 机器人、开新话题或发 /new 时生效，进行中的任务不会被挪走。选项目时，模型和权限默认跟随这个项目在「项目与模型」里的设置；选「跟随机器人」时用这个机器人的「项目」设置，机器人没选项目就放在对话目录、用机器人的「模型」设置。只能选侧栏里的本机项目。",
+          "followWith": "跟随机器人（{{project}}）"
+        },
+        "model": {
+          "label": "模型和推理强度",
+          "hintFollow": "跟随「新对话配置」。在这里换模型或推理强度，就只对这个群生效。",
+          "hintFollowProject": "跟随项目「{{project}}」在「项目与模型」里的设置。在这里换模型或推理强度，就只对这个群生效。",
+          "hintProjectUnavailable": "项目「{{project}}」在「项目与模型」里设置的模型现在不可用。可以到那里重新选，或在这里给这个群单独选一个。",
+          "hintFixed": "这个群单独设置了模型。群里没单独改过模型的任务，收到下一条消息时会换过去；新任务直接用它。",
+          "reset": "模型改回跟随"
+        },
+        "permission": {
+          "label": "权限",
+          "hintFollow": "当前跟随「群聊新建任务权限档」。只影响之后在这个群新建的任务，已有任务在群里用 /permission 切换。",
+          "hintFollowProject": "当前跟随项目「{{project}}」在「项目与模型」里的权限。只影响之后在这个群新建的任务，已有任务在群里用 /permission 切换。",
+          "hintFixed": "这个群单独设置了权限。只影响之后在这个群新建的任务，已有任务在群里用 /permission 切换。",
+          "hintFollowBot": "当前跟随机器人自己的权限。只影响之后在这个群新建的任务，已有任务在群里用 /permission 切换。",
+          "followWith": "跟随 · {{mode}}"
+        },
+        "fullAccessConfirm": {
+          "title": "让「{{name}}」以完全访问执行？",
+          "description": "之后在这个群新建的任务都会直接执行、不再逐条确认，群里任何人 @ 机器人都一样。群聊内容由成员控制，请确认群里的人都可信。",
+          "confirm": "改为完全访问",
+          "cancel": "取消"
+        },
+        "widerConfirm": {
+          "title": "放宽「{{name}}」的权限？",
+          "description": "之后在这个群新建的任务会从「{{current}}」变成「{{next}}」，群里任何人 @ 机器人都一样。群聊内容由成员控制，请确认群里的人都可信。",
+          "confirm": "仍然更改",
+          "cancel": "取消"
+        },
+        "descriptionChannels": "给机器人工作的某个频道单独指定项目、模型和权限，以及频道里其他成员能不能提问。",
+        "kindGroup": "群聊",
+        "kindChannel": "频道",
+        "channelCount_one": "{{count}} 个频道",
+        "channelCount_other": "{{count}} 个频道",
+        "membersCount_one": "{{count}} 个群成员可提问",
+        "membersCount_other": "{{count}} 个群成员可提问",
+        "unnamedChannel": "未命名的频道（{{id}}）",
+        "searchPlaceholderChannels": "按频道名搜索",
+        "emptyLocal": "还没有记录到机器人所在的群。在群里 @ 机器人说一句话后，这里就会列出这个群。",
+        "emptyChannels": "还没有开放的频道。先在「服务器频道」里打开机器人要工作的频道。",
+        "members": {
+          "label": "群成员也能提问",
+          "hint": "开启后，群里其他成员 @ 机器人也会得到回答，用这个群的项目和模型。他们的提问最高按「自动审批」执行，要动手的操作仍要你确认；你自己的提问照这个群的权限。",
+          "guard": "你不在群里说话时，群成员连续问满 {{limit}} 次就先暂停，等你在群里 @ 机器人说句话或点「恢复」。命令只听你的。",
+          "paused": "已暂停回答群成员：他们连续问了 {{limit}} 次，你都没在群里说话。",
+          "resume": "恢复",
+          "chip": "群成员可提问",
+          "pausedChip": "群成员已暂停",
+          "resumeFailed": "恢复失败，请稍后再试"
+        },
+        "statusCustom": "已单独设置",
+        "shownHint": "已显示前 {{shown}} / {{total}} 个，输入名字可筛选。",
+        "fieldsNote": "换项目、模型或权限后，群里下一次新建任务时生效，进行中的任务不会被挪走。"
+      },
+      "companionBots": {
+        "title": "伙伴专属机器人",
+        "description": "这些机器人在伙伴设置里单独配置，升级前已配好的会继续正常运行。",
+        "manage": "去管理"
       }
     },
     "shortcuts": {
@@ -12087,6 +12211,17 @@
       "memberCount_other": "{{count}} 位成员",
       "nameLabel": "群名称",
       "waitingConfirm": "{{name}}在等你确认",
+      "assistantDevice": {
+        "title": "群里的 Cindy 在等你选电脑",
+        "onlyYou": "只有你能看到",
+        "request": "「{{request}}」选好电脑后就开始做。",
+        "requestUnknown": "选好电脑后就开始做这条请求。",
+        "requests_one": "你有 {{count}} 条请求在等，选好电脑后就开始做。",
+        "requests_other": "你有 {{count}} 条请求在等，选好电脑后就开始做。",
+        "remember": "以后你在本群的请求都用这台电脑，可在群设置里更换。",
+        "cancel": "取消请求",
+        "continue": "继续"
+      },
       "loadFailedTitle": "无法加载这个群聊",
       "loadFailedDescription": "Cindy 暂时读不到这个群的消息。你可以重试，或返回伙伴页。",
       "unavailableTitle": "这个群聊已不可用",
@@ -12710,7 +12845,19 @@
         "failed": "操作未完成，请重试。",
         "lastOwner": "请先转让群主或解散群聊，再退出。"
       },
-      "externalBadge": "外部"
+      "externalBadge": "外部",
+      "links": {
+        "kind": {
+          "pull": "PR",
+          "issue": "Issue",
+          "discussion": "讨论",
+          "commit": "提交",
+          "file": "文件",
+          "folder": "文件夹",
+          "release": "发行版",
+          "repo": "仓库"
+        }
+      }
     },
     "joined": {
       "today": "今天加入",
@@ -13257,7 +13404,11 @@
         "save": "保存并重连",
         "loadFailed": "读取连接设置失败，请重试。",
         "failed": "保存连接失败，请检查参数后重试。"
-      }
+      },
+      "handedOver": "{{apps}} 在设置里交给了 {{name}} 回复。",
+      "handedOverSeparator": "、",
+      "manageInSettings": "去设置里管理",
+      "handedOverHint": "下方添加的是 {{name}} 单独使用的机器人，与设置里的机器人互不冲突。"
     },
     "voiceMode": {
       "realtime": {
@@ -13951,7 +14102,8 @@
         },
         "companion": {
           "retryLater": "请稍后再试"
-        }
+        },
+        "membersPaused": "群成员的提问先暂停啦，等主人回来再继续 🙈"
       },
       "hook": {
         "interaction": {
