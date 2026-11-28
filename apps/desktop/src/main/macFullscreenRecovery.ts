@@ -237,6 +237,7 @@ export function installMacFullscreenDesyncRecovery(
   let inNativeFullscreen = false;
   let settled = false;
   let recovering = false;
+  let pendingRecoveryFinalization = false;
   let recoveryAttempts = 0;
   let lastRecoveryAt: number | null = null;
 
@@ -329,6 +330,7 @@ export function installMacFullscreenDesyncRecovery(
     appBounds: Rectangle,
   ): void => {
     recovering = true;
+    pendingRecoveryFinalization = true;
     recoveryAttempts += 1;
     lastRecoveryAt = now();
     stopPolling();
@@ -350,6 +352,7 @@ export function installMacFullscreenDesyncRecovery(
       win.setFullScreen(false);
     } catch (error: unknown) {
       recovering = false;
+      pendingRecoveryFinalization = false;
       log.warn('Failed to call setFullScreen(false) during macOS fullscreen recovery', {
         windowLabel,
         attempt: recoveryAttempts,
@@ -369,12 +372,15 @@ export function installMacFullscreenDesyncRecovery(
       if (!win.isFullScreen()) {
         inNativeFullscreen = false;
         settled = false;
+        pendingRecoveryFinalization = false;
         recoveryAttempts = 0;
         stopPolling();
         finalizeWindowedRecovery(true);
         return;
       }
 
+      // Keep pendingRecoveryFinalization armed: a slow native exit that emits
+      // leave-full-screen after the timeout still needs button/bounds recovery.
       log.warn('macOS fullscreen desync recovery attempt did not exit fullscreen', {
         windowLabel,
         attempt: recoveryAttempts,
@@ -436,6 +442,7 @@ export function installMacFullscreenDesyncRecovery(
     inNativeFullscreen = true;
     settled = false;
     recovering = false;
+    pendingRecoveryFinalization = false;
     recoveryAttempts = 0;
 
     settleTimer = setTimer(() => {
@@ -457,13 +464,14 @@ export function installMacFullscreenDesyncRecovery(
     recoveryTimer = clearHandle(recoveryTimer, clearTimer);
     stopPolling();
 
-    const wasRecovering = recovering;
+    const shouldFinalize = recovering || pendingRecoveryFinalization;
     inNativeFullscreen = false;
     settled = false;
     recovering = false;
+    pendingRecoveryFinalization = false;
     recoveryAttempts = 0;
 
-    if (wasRecovering) {
+    if (shouldFinalize) {
       finalizeWindowedRecovery(false);
     }
   };
@@ -514,6 +522,7 @@ export function installMacFullscreenDesyncRecovery(
   const dispose = (): void => {
     if (disposed) return;
     disposed = true;
+    pendingRecoveryFinalization = false;
     settleTimer = clearHandle(settleTimer, clearTimer);
     cancelConfirmation();
     recoveryTimer = clearHandle(recoveryTimer, clearTimer);

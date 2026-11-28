@@ -183,7 +183,7 @@ describe('classifyMacFullscreenDesync', () => {
     ).toBeNull();
   });
 
-  it('falls back to WindowServer bounds divergence only when CGS space SPIs are unavailable', () => {
+  it('falls back to WindowServer bounds divergence only when CGS space query is unavailable or fails', () => {
     const diverged = createHealthyInspection({
       spaceTypes: null,
       cgOnScreen: true,
@@ -192,6 +192,17 @@ describe('classifyMacFullscreenDesync', () => {
     expect(classifyMacFullscreenDesync(diverged, NOTCH_FULLSCREEN_BOUNDS)).toBe(
       'cg-bounds-mismatch',
     );
+
+    // An explicit empty list ([]) means WindowServer reported zero spaces
+    // (ordered-out/transitioning) and must not fall back to cgBounds.
+    const emptySpacesWithDivergedBounds = createHealthyInspection({
+      spaceTypes: [],
+      cgOnScreen: true,
+      cgBounds: { x: 33, y: 0, width: 1736, height: 1088 },
+    });
+    expect(
+      classifyMacFullscreenDesync(emptySpacesWithDivergedBounds, NOTCH_FULLSCREEN_BOUNDS),
+    ).toBeNull();
 
     const withinTolerance = createHealthyInspection({
       spaceTypes: null,
@@ -392,6 +403,47 @@ describe('installMacFullscreenDesyncRecovery', () => {
     expect(fake.setWindowButtonPosition).toHaveBeenCalledWith({ x: 12, y: 16 });
     expect(fake.setBounds).toHaveBeenCalledWith({ x: 0, y: 45, width: 1736, height: 1010 });
     expect(fake.send).toHaveBeenCalledWith('fullscreen-change', false);
+  });
+
+  it('still finalizes traffic lights and bounds when leave-full-screen arrives after the 1.5s timeout', () => {
+    vi.useFakeTimers();
+    const fake = createFakeWindow({ fullScreen: true });
+    // Simulate a slow native fullscreen exit where isFullScreen() stays true past 1.5s.
+    fake.setFullScreen.mockImplementation(() => {});
+    const env = createEnv();
+    const inspect = vi.fn(() => createHealthyInspection({ spaceTypes: [CGS_SPACE_TYPE_USER] }));
+    const log = { info: vi.fn(), warn: vi.fn() };
+
+    installMacFullscreenDesyncRecovery(fake.win, {
+      platform: 'darwin',
+      trafficLightPosition: { x: 12, y: 16 },
+      minSize: { width: 800, height: 600 },
+      screen: env.screenApi,
+      powerMonitor: env.powerMonitorApi,
+      app: env.appApi,
+      inspect,
+      log,
+    });
+
+    // Confirmation triggers setFullScreen(false) at t = 3s.
+    vi.advanceTimersByTime(3_000);
+    expect(fake.setFullScreen).toHaveBeenCalledTimes(1);
+
+    // Timeout elapses at t = 4.5s while AppKit is still exiting.
+    vi.advanceTimersByTime(1_500);
+    expect(fake.setWindowButtonVisibility).not.toHaveBeenCalled();
+
+    // Delayed leave-full-screen finally arrives at t = 5.2s with off-screen bounds.
+    vi.advanceTimersByTime(700);
+    fake.setFullScreenState(false);
+    fake.setBoundsState({ x: 96, y: 112, width: 1736, height: 1088 });
+    fake.emitter.emit('leave-full-screen');
+
+    expect(fake.setWindowButtonVisibility).toHaveBeenCalledWith(true);
+    expect(fake.setWindowButtonPosition).toHaveBeenCalledWith({ x: 12, y: 16 });
+    expect(fake.setBounds).toHaveBeenCalledWith({ x: 0, y: 45, width: 1736, height: 1010 });
+    expect(fake.send).not.toHaveBeenCalled();
+    expect(log.info).toHaveBeenCalledOnce();
   });
 
   it('bounds retries with cooldown when setFullScreen(false) fails to clear fullscreen', () => {

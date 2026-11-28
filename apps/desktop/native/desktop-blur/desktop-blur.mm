@@ -260,19 +260,28 @@ static napi_value InspectFullscreen(napi_env env, napi_callback_info info) {
 
     napi_value spaceTypesVal;
     if (connection && copySpaces && spaceGetType) {
-      napi_create_array(env, &spaceTypesVal);
-      if (winNum > 0) {
+      if (winNum <= 0) {
+        // Window is not realized by WindowServer yet; treat as empty, not a failed query.
+        napi_create_array(env, &spaceTypesVal);
+      } else {
         uint32_t cid = connection();
-        NSArray *wids = @[@((uint64_t)winNum)];
-        CFArrayRef rawSpaces = copySpaces(cid, kCGSAllSpacesMask, (__bridge CFArrayRef)wids);
-        NSArray *spaces = rawSpaces ? CFBridgingRelease(rawSpaces) : nil;
-        uint32_t index = 0;
-        for (id item in spaces) {
-          if (![item isKindOfClass:[NSNumber class]]) continue;
-          int32_t spaceType = spaceGetType(cid, [(NSNumber *)item unsignedLongLongValue]);
-          napi_value numVal;
-          napi_create_int32(env, spaceType, &numVal);
-          napi_set_element(env, spaceTypesVal, index++, numVal);
+        CFArrayRef rawSpaces = cid != 0
+          ? copySpaces(cid, kCGSAllSpacesMask, (__bridge CFArrayRef)@[@((uint64_t)winNum)])
+          : nullptr;
+        if (!rawSpaces) {
+          // Query failed: return null so the caller falls back to public CGWindowBounds.
+          napi_get_null(env, &spaceTypesVal);
+        } else {
+          NSArray *spaces = CFBridgingRelease(rawSpaces);
+          napi_create_array(env, &spaceTypesVal);
+          uint32_t index = 0;
+          for (id item in spaces) {
+            if (![item isKindOfClass:[NSNumber class]]) continue;
+            int32_t spaceType = spaceGetType(cid, [(NSNumber *)item unsignedLongLongValue]);
+            napi_value numVal;
+            napi_create_int32(env, spaceType, &numVal);
+            napi_set_element(env, spaceTypesVal, index++, numVal);
+          }
         }
       }
     } else {
