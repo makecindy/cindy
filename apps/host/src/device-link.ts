@@ -1159,11 +1159,14 @@ export function createHostDeviceLink(deps: HostDeviceLinkPorts) {
   });
   const offStatus = client.onStatusChange(status => {
     if (status !== 'online') {
-      onlinePeers.clear();
       // Like the Desktop: while Agent-Net is on, controllers carried by another connection (phones and older Desktops on the
       // Device Link relay, cross-account peers on their own) are outside the main connection's fault; 2026-11-17 review: an
       // Agent-Net drop logged every phone out of this Host. Off, every controller as before.
       const keepController = agentNet?.active() ? (id: string) => client.connectionFor(id) !== client : undefined;
+      // SSH announcements still target desktop peers carried by another live connection.
+      for (const id of onlinePeers.keys()) {
+        if (!keepController?.(id)) onlinePeers.delete(id);
+      }
       for (const id of offlineControllers.keys()) {
         if (!keepController?.(id)) offlineControllers.delete(id);
       }
