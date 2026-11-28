@@ -69,6 +69,7 @@ export const ORCA_TASK_ACTION_TOOLS: ReadonlySet<string> = new Set([
   'merge_queued_messages',
   'steer_queued_message',
   'move_queued_message',
+  'acknowledge_queued_message',
   'idle_worker',
   'end_team',
   'archive_worker',

@@ -78,38 +78,39 @@ function queueOwner() {
 function assertQueueOwner(owner: CurrentDbClientSnapshot) {
   if (getCurrentDbClientSnapshot()?.clientEpoch !== owner.clientEpoch) throw new Error('DbClient not ready');
 }
-const pendingCancellations = new Map<string, Set<string>>();
-// Keep successful cancellations in memory too: a concurrent enqueue's final SELECT may
-// have completed just before the tombstone committed, while its continuation is still queued.
-// This is a replay fence, not evidence that cancellation beat an existing user row.
-const cancelledDeliveryIds = new Map<string, Set<string>>();
+const ACKNOWLEDGED_ORCA_REPORT = '"orca-report-acknowledged"';
+type DeliveryTombstone = 'null' | typeof ACKNOWLEDGED_ORCA_REPORT;
+const pendingDeliveryTombstones = new Map<string, Map<string, DeliveryTombstone>>();
+// Keep terminal intents in memory too: a concurrent enqueue's final SELECT may have completed
+// before the tombstone committed. This fences replay; the actual receipt is read from SQLite.
+const retiredDeliveryIds = new Map<string, Set<string>>();
 const queueKey = (owner: CurrentDbClientSnapshot, sid: string) => `${owner.clientEpoch}:${sid}`;
-async function flushCancellations(owner: CurrentDbClientSnapshot, sessionId: string) {
+async function flushDeliveryTombstones(owner: CurrentDbClientSnapshot, sessionId: string) {
   const key = queueKey(owner, sessionId);
-  const intents = pendingCancellations.get(key);
+  const intents = pendingDeliveryTombstones.get(key);
   if (!intents) return;
-  for (const clientId of intents) {
+  for (const [clientId, content] of intents) {
     assertQueueOwner(owner);
     const now = Date.now();
     await owner.client.drizzle.insert(messages).values({
       id: randomUUID(), sessionId, clientId, role: 'message_tombstone',
-      content: 'null', createdAt: now, rewindAt: now,
+      content, createdAt: now, rewindAt: now,
     }).onConflictDoNothing();
     intents.delete(clientId);
   }
-  if (!intents.size) pendingCancellations.delete(key);
+  if (!intents.size) pendingDeliveryTombstones.delete(key);
 }
 export function hasInputDeliveryCancellation(sessionId: string, clientId: string): boolean {
-  return cancelledDeliveryIds.get(queueKey(queueOwner(), sessionId))?.has(clientId) === true;
+  return retiredDeliveryIds.get(queueKey(queueOwner(), sessionId))?.has(clientId) === true;
 }
-async function chainWrite(sessionId: string, kind: 'snapshot' | 'cancellation', op: (owner: CurrentDbClientSnapshot) => Promise<void>): Promise<void> {
+async function chainWrite(sessionId: string, kind: 'snapshot' | 'delivery-tombstone', op: (owner: CurrentDbClientSnapshot) => Promise<void>): Promise<void> {
   const owner = queueOwner();
   const sid = sessionId;
   sessionId = queueKey(owner, sid);
   const prev = _writeChains.get(sessionId) ?? Promise.resolve();
   const opResult = prev.then(async () => {
     assertQueueOwner(owner);
-    if (pendingCancellations.has(queueKey(owner, sid))) await flushCancellations(owner, sid);
+    if (pendingDeliveryTombstones.has(queueKey(owner, sid))) await flushDeliveryTombstones(owner, sid);
     await op(owner);
     assertQueueOwner(owner);
   });
@@ -153,23 +154,43 @@ export async function awaitAgentInputQueueSnapshotPersistence(sessionId: string)
 }
 
 /** Seal cancellation before the following queue snapshot can forget its delivery ID. */
-export async function saveCancelledInputDelivery(sessionId: string, clientId: string): Promise<boolean> {
+export function saveCancelledInputDelivery(sessionId: string, clientId: string): Promise<boolean> {
+  return saveDeliveryTombstone(sessionId, clientId, 'null');
+}
+
+/** Accepted by the Lead via queue inspection, without creating a visible history message. */
+export function saveAcknowledgedOrcaReportDelivery(
+  sessionId: string, clientId: string, mergedClientIds: readonly string[] = [],
+): Promise<boolean> {
+  return saveDeliveryTombstone(sessionId, clientId, ACKNOWLEDGED_ORCA_REPORT, mergedClientIds);
+}
+
+async function saveDeliveryTombstone(
+  sessionId: string, clientId: string, content: DeliveryTombstone, mergedClientIds: readonly string[] = [],
+): Promise<boolean> {
   const owner = queueOwner();
   const key = queueKey(owner, sessionId);
-  const intents = pendingCancellations.get(key) ?? new Set<string>();
-  intents.add(clientId);
-  pendingCancellations.set(key, intents);
-  const cancelled = cancelledDeliveryIds.get(key) ?? new Set<string>();
-  cancelled.add(clientId);
-  cancelledDeliveryIds.set(key, cancelled);
-  await chainWrite(sessionId, 'cancellation', async () => undefined);
+  const intents = pendingDeliveryTombstones.get(key) ?? new Map<string, DeliveryTombstone>();
+  const retired = retiredDeliveryIds.get(key) ?? new Set<string>();
+  // The snapshot of a just-merged report may not have retired its aliases yet.
+  // Seal them before the survivor, preserving any alias tombstone already written.
+  for (const id of [...mergedClientIds.filter(id => id !== clientId), clientId]) {
+    if (!intents.has(id)) intents.set(id, content);
+    retired.add(id);
+  }
+  pendingDeliveryTombstones.set(key, intents);
+  retiredDeliveryIds.set(key, retired);
+  await chainWrite(sessionId, 'delivery-tombstone', async () => undefined);
   // After restart this namespace may already belong to executed history. INSERT
   // ... ON CONFLICT DO NOTHING succeeding does not prove cancellation won.
-  const rows = await owner.client.drizzle.select({ role: messages.role }).from(messages)
-    .where(and(eq(messages.sessionId, sessionId), eq(messages.clientId, clientId)));
+  const rows = await owner.client.drizzle.select({
+    role: messages.role,
+    acknowledged: sql<number>`case when ${messages.role} = 'message_tombstone' and ${messages.content} = ${ACKNOWLEDGED_ORCA_REPORT} then 1 else 0 end`,
+  }).from(messages).where(and(eq(messages.sessionId, sessionId), eq(messages.clientId, clientId)));
   assertQueueOwner(owner);
-  if (!rows[0]) throw new Error('Input delivery cancellation unavailable');
-  return rows[0].role === 'message_tombstone';
+  if (!rows[0]) throw new Error('Input delivery tombstone unavailable');
+  return rows[0].role === 'message_tombstone'
+    && (rows[0].acknowledged === 1) === (content === ACKNOWLEDGED_ORCA_REPORT);
 }
 
 /** Queue ownership and terminal history share the existing durable clientId namespace. */
@@ -178,8 +199,8 @@ export async function readInputDeliveryReceipts(
 ): Promise<InputDeliveryReceipt[]> {
   const owner = queueOwner();
   // Retrying a failed cancellation must precede observing absence or advancing a snapshot.
-  if (pendingCancellations.has(queueKey(owner, sessionId))) {
-    await chainWrite(sessionId, 'cancellation', async () => undefined);
+  if (pendingDeliveryTombstones.has(queueKey(owner, sessionId))) {
+    await chainWrite(sessionId, 'delivery-tombstone', async () => undefined);
   }
   await awaitAgentInputQueueSnapshotPersistence(sessionId);
   assertQueueOwner(owner);
@@ -196,6 +217,7 @@ export async function readInputDeliveryReceipts(
     [item.clientId, ...(Array.isArray(item.mergedDeliveryClientIds) ? item.mergedDeliveryClientIds.filter(id => typeof id === 'string') : [])]));
   const rows = await owner.client.drizzle.select({
     clientId: messages.clientId, role: messages.role, rewindAt: messages.rewindAt,
+    acknowledged: sql<number>`case when ${messages.role} = 'message_tombstone' and ${messages.content} = ${ACKNOWLEDGED_ORCA_REPORT} then 1 else 0 end`,
     // /clear hides history without deleting rows. Read the boundary with the row
     // so even old controllers without a saved boundary receive terminal evidence.
     cleared: sql<number>`coalesce(${messages.createdAt} <= (
@@ -209,7 +231,9 @@ export async function readInputDeliveryReceipts(
     return {
       clientId,
       state: row
-        ? row.role === 'message_tombstone' || row.rewindAt !== null || row.cleared === 1 ? 'removed' : 'accepted'
+        ? row.role === 'message_tombstone'
+          ? row.acknowledged === 1 && row.cleared !== 1 ? 'accepted' : 'removed'
+          : row.rewindAt !== null || row.cleared === 1 ? 'removed' : 'accepted'
         : pending.has(clientId) ? 'pending' : 'unknown',
     };
   });

@@ -24,6 +24,7 @@ export interface WorkerQueuedMessageEntry {
   source: 'lead' | 'user' | 'scheduler' | 'worker';
   content: string;
   consuming: boolean;
+  acknowledgementToken?: string;
 }
 
 export interface GetWorkerQueueStatusDeps {
@@ -54,6 +55,7 @@ export interface GetWorkerQueueStatusDeps {
 
 const DESCRIPTION =
   '读取指定 worker 当前工作态、下一条消息是否会排队,以及完整待处理队列。' +
+  '只读，不消费消息。处理完自己队列中带 acknowledgement_token 的 Worker 回报后，可用 acknowledge_queued_message 确认，不再投递。' +
   '省略 worker_id 时读取你自己的队列(source=worker 为发给你的协同消息)。' +
   'source=lead 的条目是你自己发的(send_to_worker / initial_task 排队产生),' +
   '可用 update_queued_message / cancel_queued_message 修改或撤回,或用 merge_queued_messages 原子合并连续的 Lead 消息;' +
@@ -103,6 +105,7 @@ export function registerGetWorkerQueueStatusTool(
           source: entry.source,
           content: entry.content,
           consuming: entry.consuming,
+          ...(entry.acknowledgementToken ? { acknowledgement_token: entry.acknowledgementToken } : {}),
         })),
       });
     },

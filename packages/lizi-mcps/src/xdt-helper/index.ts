@@ -87,6 +87,10 @@ export {
   type WorkerQueuedMessageEntry,
 } from './get_worker_queue_status.js';
 export {
+  registerAcknowledgeQueuedMessageTool,
+  type AcknowledgeQueuedMessageDeps,
+} from './acknowledge_queued_message.js';
+export {
   registerUpdateQueuedMessageTool,
   type QueuedMessageControlErrorCode,
   type UpdateQueuedMessageDeps,

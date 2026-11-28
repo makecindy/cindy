@@ -21,6 +21,8 @@ import {
   listQueuedOrcaReportSessionIds,
   saveAgentInputQueueSnapshot,
   saveCancelledInputDelivery,
+  saveAcknowledgedOrcaReportDelivery,
+  getPersistedInputClientIds,
   hasInputDeliveryCancellation,
   readInputDeliveryReceipts,
 } from '../agentInputQueueSnapshots.js';
@@ -116,13 +118,39 @@ describe('agent input queue snapshot durability boundary', () => {
     } finally { sqlite.close(); }
   });
 
+  // DB tier: an earlier merge snapshot can fail before alias retirement. A
+  // handled batch must fence all original IDs even if its old snapshot survives.
+  it('seals handled reports and their aliases without recording a withdrawal', async () => {
+    const sqlite = new Database(':memory:');
+    sqlite.exec(`
+      CREATE TABLE agent_input_queue_snapshots (session_id TEXT PRIMARY KEY, payload TEXT NOT NULL, updated_at INTEGER);
+      CREATE TABLE messages (id TEXT, session_id TEXT, client_id TEXT, role TEXT, content TEXT,
+        tool_use_id TEXT, agent_meta TEXT, agent_kind TEXT, rewind_at INTEGER, created_at INTEGER, UNIQUE(session_id, client_id));
+      CREATE TABLE sessions (id TEXT PRIMARY KEY, cleared_at INTEGER);
+    `);
+    const sid = 'handled-report';
+    const ids = ['handled', 'alias', 'withdrawn'];
+    mocks.getDbClient.mockReturnValue({ drizzle: drizzle(sqlite) });
+    try {
+      await saveAgentInputQueueSnapshot(sid, ids.map(id => queued(id, id)));
+      await expect(saveAcknowledgedOrcaReportDelivery(sid, 'handled', ['alias'])).resolves.toBe(true);
+      await expect(saveCancelledInputDelivery(sid, 'withdrawn')).resolves.toBe(true);
+      await expect(saveAcknowledgedOrcaReportDelivery(sid, 'withdrawn')).resolves.toBe(false);
+      mocks.epoch += 1;
+      expect(await getPersistedInputClientIds(sid, ids)).toEqual(new Set(ids));
+      expect((await readInputDeliveryReceipts(sid, ids)).map(row => row.state)).toEqual(['accepted', 'accepted', 'removed']);
+      sqlite.prepare('INSERT INTO sessions VALUES (?, ?)').run(sid, Date.now());
+      expect((await readInputDeliveryReceipts(sid, ids)).map(row => row.state)).toEqual(['removed', 'removed', 'removed']);
+    } finally { sqlite.close(); }
+  });
+
   // #9346, db tier: an empty-queue Stop had no durable representation. Exercise
   // the real writer/readers, discovery, counts and receipts without creating a message.
   it('persists an empty report Stop separately from queued messages and clears it on resume', async () => {
     const sqlite = new Database(':memory:');
     sqlite.exec(`
       CREATE TABLE agent_input_queue_snapshots (session_id TEXT PRIMARY KEY, payload TEXT NOT NULL, updated_at INTEGER);
-      CREATE TABLE messages (session_id TEXT, client_id TEXT, role TEXT, rewind_at INTEGER, created_at INTEGER DEFAULT 1);
+      CREATE TABLE messages (session_id TEXT, client_id TEXT, role TEXT, rewind_at INTEGER, created_at INTEGER DEFAULT 1, content TEXT);
       CREATE TABLE sessions (id TEXT PRIMARY KEY, cleared_at INTEGER);
       INSERT INTO sessions VALUES ('stopped-lead', NULL);
     `);
@@ -175,7 +203,7 @@ describe('agent input queue snapshot durability boundary', () => {
     const sqlite = new Database(':memory:');
     sqlite.exec(`
       CREATE TABLE agent_input_queue_snapshots (session_id TEXT PRIMARY KEY, payload TEXT NOT NULL, updated_at INTEGER);
-      CREATE TABLE messages (session_id TEXT, client_id TEXT, role TEXT, rewind_at INTEGER, created_at INTEGER DEFAULT 1);
+      CREATE TABLE messages (session_id TEXT, client_id TEXT, role TEXT, rewind_at INTEGER, created_at INTEGER DEFAULT 1, content TEXT);
       CREATE TABLE sessions (id TEXT PRIMARY KEY, cleared_at INTEGER);
     `);
     const sid = `receipt-malformed-${allMalformed}`;
@@ -202,13 +230,13 @@ describe('agent input queue snapshot durability boundary', () => {
     const sqlite = new Database(':memory:');
     sqlite.exec(`
       CREATE TABLE agent_input_queue_snapshots (session_id TEXT PRIMARY KEY, payload TEXT NOT NULL, updated_at INTEGER);
-      CREATE TABLE messages (session_id TEXT, client_id TEXT, role TEXT, rewind_at INTEGER, created_at INTEGER);
+      CREATE TABLE messages (session_id TEXT, client_id TEXT, role TEXT, rewind_at INTEGER, created_at INTEGER, content TEXT);
       CREATE TABLE sessions (id TEXT PRIMARY KEY, cleared_at INTEGER);
       INSERT INTO sessions VALUES ('clear-receipts', NULL);
       INSERT INTO sessions VALUES ('other-task', 999);
-      INSERT INTO messages VALUES ('clear-receipts', 'before', 'user', NULL, 99);
-      INSERT INTO messages VALUES ('clear-receipts', 'at', 'user', NULL, 100);
-      INSERT INTO messages VALUES ('clear-receipts', 'after', 'user', NULL, 101);
+      INSERT INTO messages (session_id, client_id, role, rewind_at, created_at) VALUES ('clear-receipts', 'before', 'user', NULL, 99);
+      INSERT INTO messages (session_id, client_id, role, rewind_at, created_at) VALUES ('clear-receipts', 'at', 'user', NULL, 100);
+      INSERT INTO messages (session_id, client_id, role, rewind_at, created_at) VALUES ('clear-receipts', 'after', 'user', NULL, 101);
     `);
     sqlite.prepare('INSERT INTO agent_input_queue_snapshots VALUES (?, ?, ?)')
       .run('clear-receipts', JSON.stringify([queued('pending', 'pending')]), 1);

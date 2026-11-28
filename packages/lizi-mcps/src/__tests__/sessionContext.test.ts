@@ -132,6 +132,10 @@ function createOrcaDeps(overrides: Partial<OrcaMcpDeps> = {}): OrcaMcpDeps {
       queuedMessageId: 'queued-1',
       position: 0,
     })),
+    acknowledgeWorkerQueuedMessage: vi.fn(async () => ({
+      ok: true as const,
+      queuedMessageId: 'queued-1',
+    })),
     idleWorker: vi.fn(async () => ({ ok: true as const, workerId: 'worker-1' })),
     endTeam: vi.fn(async () => ({ ok: true as const })),
     archiveWorker: vi.fn(async () => ({ ok: true as const, workerId: 'worker-1' })),
@@ -187,7 +191,7 @@ function createOrcaDeps(overrides: Partial<OrcaMcpDeps> = {}): OrcaMcpDeps {
 }
 
 describe('dynamic lizi MCP session context', () => {
-  it('keeps the 22-tool Orca manifest order stable across server construction', () => {
+  it('keeps the 23-tool Orca manifest order stable across server construction', () => {
     const context = {
       agentKind: 'codex' as const,
       workingDir: 'C:\\repo',
@@ -197,8 +201,8 @@ describe('dynamic lizi MCP session context', () => {
     const first = Object.keys(tools(createOrcaMcpServer(createOrcaDeps(), context)));
     const second = Object.keys(tools(createOrcaMcpServer(createOrcaDeps(), context)));
 
-    // 19 个 team 工具 + 3 个只读诊断工具。
-    expect(first).toHaveLength(22);
+    // 20 个 team 工具 + 3 个只读诊断工具。
+    expect(first).toHaveLength(23);
     expect(first).toEqual(second);
     expect(first).toContain('create_worker');
     expect(first).toContain('create_workers');
@@ -207,6 +211,7 @@ describe('dynamic lizi MCP session context', () => {
     expect(first).toContain('merge_queued_messages');
     expect(first).toContain('steer_queued_message');
     expect(first).toContain('move_queued_message');
+    expect(first).toContain('acknowledge_queued_message');
     expect(first).toContain('update_worker');
     expect(first).toContain('set_worker_runtime');
     expect(first).not.toContain('list_worker_queue');
@@ -582,6 +587,30 @@ describe('dynamic lizi MCP session context', () => {
       'queued_message_id',
       'position',
     ]);
+  });
+
+  // Unit: the public round trip must preserve the read version and bind the
+  // mutation to the current Lead, not the server's fallback session or a worker id.
+  it('passes the inspected report version to the Lead-only acknowledgement', async () => {
+    const deps = createOrcaDeps();
+    vi.mocked(deps.listWorkerQueuedMessages).mockResolvedValue({ ok: true, workerId: null,
+      workerSessionId: 'lead-1', status: 'lead', isWorking: true, willQueue: true, queuePaused: false,
+      messages: [{ queuedMessageId: 'queued-1', position: 0, source: 'worker', content: 'report',
+        consuming: false, acknowledgementToken: 'report-version' }],
+    });
+    const context = { agentKind: 'codex' as const, workingDir: '/repo', sessionId: 'lead-1' };
+    const handlers = tools(createOrcaMcpServer(deps, context));
+    expect(parse(await handlers.get_worker_queue_status.handler({}) as never)).toMatchObject({
+      queue: [{ queued_message_id: 'queued-1', acknowledgement_token: 'report-version' }],
+    });
+    const args = { queued_message_id: 'queued-1', acknowledgement_token: 'report-version' };
+    const worker = tools(createOrcaMcpServer(deps, { ...context, sessionId: 'worker-session-1', vendorOptions: { orcaRole: 'worker' } }));
+    expect(parse(await worker.acknowledge_queued_message.handler(args) as never)).toMatchObject({ ok: false, errorCode: 'LEAD_NOT_SUPPORTED' });
+    expect(deps.acknowledgeWorkerQueuedMessage).not.toHaveBeenCalled();
+    expect(parse(await handlers.acknowledge_queued_message.handler(args) as never)).toMatchObject({ ok: true, acknowledged: true });
+    expect(deps.acknowledgeWorkerQueuedMessage).toHaveBeenCalledExactlyOnceWith({
+      callerLeadSessionId: 'lead-1', queuedMessageId: 'queued-1', acknowledgementToken: 'report-version',
+    });
   });
 
   it('exposes interrupt_worker as the sole interrupt contract', async () => {
