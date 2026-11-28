@@ -11,7 +11,7 @@ import {
   type InterruptedTurnErrorSignals,
 } from './interruptedTurnAutoResume.js';
 import {
-  BOT_SUBSCRIPTION_STARTUP_ADMISSION_REASON, MODEL_GROUP_SAME_SOURCE_RETRIES, canResumeAfterRuntimeFallback, isBotCandidateUnavailable,
+  MODEL_GROUP_SAME_SOURCE_RETRIES, canResumeAfterRuntimeFallback, isBotCandidateUnavailable, isStartupTakeoverReason,
   modelGroupFailureScope, modelGroupSwitchCause, type ModelGroupRecovery, type ModelGroupSwitchCause, type RuntimeFallbackResult,
 } from './botCandidateRecovery.js';
 import { isProviderSafetyRefusalError, PROVIDER_SAFETY_REFUSAL_REASON } from '@cindy/maker-shared/error-redaction';
@@ -140,7 +140,8 @@ export function createInterruptedTurnAutoResumeHooks<RuntimeSession extends obje
       const groupSwitchesNow = groupScope === 'model' || groupScope === 'connection';
       const reportPreparation = signals.reason === 'orca-report-preparation';
       const localPreparation = signals.reason === 'scheduler-snapshot-preparation';
-      const startupAdmission = signals.reason === BOT_SUBSCRIPTION_STARTUP_ADMISSION_REASON;
+      // A refused startup (a Bot's admission or a routed source that would not start) retries its original queue head.
+      const startupAdmission = isStartupTakeoverReason(signals.reason);
       const sameRouteRetryable = reportPreparation || localPreparation || isInterruptedTurnError(signals) || groupScope === 'transient';
       const erroredAt = Date.now();
       const ordinaryReconnect = groupScope === null && signals.reason === 'codex_reconnect_stalled';

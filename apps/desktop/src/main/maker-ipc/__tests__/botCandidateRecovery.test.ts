@@ -476,6 +476,18 @@ describe('model group failure handling', () => {
     ['an OpenAI account pool with no account left', { message: 'No subscription account is available' }, 'connection'],
     ['every pooled account limited for this model', { message: '[SUBSCRIPTION_POOL_MODEL_LIMITED] Subscription usage limit for this model' }, 'connection'],
     ['every pooled account busy', { message: '[SUBSCRIPTION_ACCOUNTS_FULL] every available subscription account has reached its concurrency limit' }, 'connection'],
+    // 2026-11-29: a shared Antigravity whose account had to sign in again kept a routed task on the error.
+    ['a task account that must sign in again', { message: '[SUBSCRIPTION_ACCOUNT_LOGIN_REQUIRED] The plugin engine account requires login' }, 'connection'],
+    ['a task account still signing in', { message: '[SUBSCRIPTION_ACCOUNT_SIGNING_IN] The task subscription account is signing in' }, 'connection'],
+    ['a startup refused for a login', { reason: 'LAZY_CREATE_FAILED', message: '[SUBSCRIPTION_ACCOUNT_LOGIN_REQUIRED] The task subscription account requires login' }, 'connection'],
+    ['a startup refused for quota', { reason: 'REHYDRATE_FAILED', message: '[SUBSCRIPTION_ACCOUNT_LIMITED] The plugin engine account has reached its usage limit' }, 'connection'],
+    ['a source that would not start for another reason', { reason: 'LAZY_CREATE_FAILED', message: 'spawn antigravity ENOENT' }, 'model'],
+    // The coordinator hands a startup failure on as `<host code>: <message>` (sendFailureMessage).
+    ['a resume the host asks to retry shortly', { reason: 'REHYDRATE_FAILED', message: "REHYDRATE_FAILED: [CODEX_RESUME_NOT_READY] Codex can't resume this task right now. Try again shortly." }, 'transient'],
+    ['a prefixed startup refused for a login', { reason: 'LAZY_CREATE_FAILED', message: 'LAZY_CREATE_FAILED: [SUBSCRIPTION_ACCOUNT_LOGIN_REQUIRED] The task subscription account requires login' }, 'connection'],
+    ['a startup with a prompt too long for any source', { reason: 'LAZY_CREATE_FAILED', message: 'prompt too long' }, null],
+    ['a missing working directory', { reason: 'WORKDIR_MISSING', message: 'working directory is missing' }, null],
+    ['a busy credential switch', { reason: 'CREDENTIAL_SWITCH_BUSY', message: 'another Codex task is running' }, null],
     ['a removed model', { reason: 'model_unavailable' }, 'model'],
     ['Pi giving up after its own retries', { reason: 'pi-gateway-drop' }, 'model'],
     ['an engine that would not start', { reason: 'agent-start-failed' }, 'model'],
@@ -698,6 +710,8 @@ describe('model group failure handling', () => {
     ['a dead login', { reason: 'provider_auth_or_access' }, 'auth'],
     ['a removed model', { reason: 'model_unavailable' }, 'unavailable'],
     ['a dead key reported only as text', { message: '401: {"message":"Invalid token"}' }, 'auth'],
+    ['a task account that must sign in again', { reason: 'LAZY_CREATE_FAILED', message: '[SUBSCRIPTION_ACCOUNT_LOGIN_REQUIRED] requires login' }, 'auth'],
+    ['a task account at its limit', { reason: 'REHYDRATE_FAILED', message: '[SUBSCRIPTION_ACCOUNT_LIMITED] usage limit' }, 'usage-limit'],
   ] as const)('says on the continuation which source it moved to after %s', async (_name, signals, cause) => {
     const h = groupHarness();
     h.fallback.mockResolvedValueOnce({ session: null, outcome: 'switched', sourceSwitch: { from: 'Claude · A', to: 'GPT · B' } });

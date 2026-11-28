@@ -93,6 +93,28 @@ function leadingHttpStatus(text: string): number | undefined {
   return match ? Number(match[1]) : undefined;
 }
 
+/**
+ * Host send codes for a source whose agent never started this turn (model-groups.md §4.4「启动失败」). The input
+ * coordinator hands them on as the reason of a startup failure; other host codes (missing workdir, a running
+ * session, a busy credential switch, a blocked plugin turn) are local and keep their own handling.
+ */
+const MODEL_GROUP_STARTUP_FAILURE_REASONS = new Set(['LAZY_CREATE_FAILED', 'REHYDRATE_FAILED']);
+
+/**
+ * The takeover owns a queue head whose startup was refused before dispatch, so the input coordinator resends that
+ * same queued input instead of a continuation: a Bot's subscription admission, or a routed task's source that
+ * would not start (only model-group recovery takes these host codes, see modelGroupFailureScope).
+ */
+export function isStartupTakeoverReason(reason: string | undefined): boolean {
+  return reason === BOT_SUBSCRIPTION_STARTUP_ADMISSION_REASON || MODEL_GROUP_STARTUP_FAILURE_REASONS.has(reason ?? '');
+}
+/**
+ * The host could not resume the task yet and says to try again shortly: retry in place, not a source problem.
+ * Not anchored: the coordinator hands the failure on as `<host code>: <message>`.
+ */
+const STARTUP_RETRY_SHORTLY_TEXT = /\[CODEX_RESUME_NOT_READY\]/;
+/** The task's subscription account must sign in again, or is signing in now: that source can't take this turn. */
+const SUBSCRIPTION_LOGIN_TEXT = /\[SUBSCRIPTION_ACCOUNT_(?:LOGIN_REQUIRED|SIGNING_IN)\]/;
 const MODEL_GROUP_AUTH_TEXT = /invalid (?:api[ _-]?key|token|x-api-key|access token)|unauthori[sz]ed|authentication (?:failed|error)|incorrect api key/i;
 const MODEL_GROUP_REJECTED_REQUEST_TEXT = /user (?:denied|rejected|cancelled|canceled)|approval (?:denied|required)|prompt too long|context.{0,20}(?:overflow|too long)|content[_ -](?:filter(?:ed)?|policy[_ -]violation)|invalid[_ -]request|request[_ -]too[_ -]large/i;
 const MODEL_GROUP_UNAVAILABLE_TEXT = /model.{0,80}(?:not found|does not exist|unavailable)|(?:failed to (?:start|spawn)|could not start) (?:the )?(?:agent|pi|codex|claude)/i;
@@ -140,7 +162,11 @@ export function modelGroupFailureScope(input: InterruptedTurnErrorSignals): Mode
   if (reason === UPSTREAM_STREAM_INTERRUPTED_REASON || isAcceptedTurnContinuationOnlyReason(reason)) return 'transient';
   // Only provider/agent failure envelopes can use the unknown-error default.
   // A distinct host/control reason (Stop, tool loop, preparation, etc.) keeps its existing owner.
-  if (reason && !PROVIDER_TURN_FAILURE_REASONS.has(reason)) return null;
+  // A source that failed to start is a provider failure too: before 2026-11-29 its host code fell out here, so a
+  // routed task whose source was refused at startup (a shared Antigravity whose account needed signing in) never
+  // switched and stayed on the error.
+  const startupFailure = MODEL_GROUP_STARTUP_FAILURE_REASONS.has(reason);
+  if (reason && !startupFailure && !PROVIDER_TURN_FAILURE_REASONS.has(reason)) return null;
   const message = input.message ?? tag;
   const status = input.errorStatus ?? leadingHttpStatus(message);
   if ([400, 413, 422].includes(status ?? 0) ||
@@ -158,7 +184,9 @@ export function modelGroupFailureScope(input: InterruptedTurnErrorSignals): Mode
     || /missing bearer token|no available oauth accounts|\byou['’]ve hit your session limit\b/i.test(message)
     // 供应商里的账号池没有能接的账号(都撞了额度、都不可用或都满了)：换账号已经轮不到，交给路由换来源(§4.1)。
     // OpenAI 的账号池只给一句普通的话，原来落到「原地再试」，同一个来源白试两次才换(2026-11-26 排查)。
-    || /\[SUBSCRIPTION_(?:ACCOUNT_LIMITED|POOL_MODEL_LIMITED|ACCOUNT_UNAVAILABLE|ACCOUNTS_FULL)\]|\bno subscription account is available\b/i.test(message)) {
+    || /\[SUBSCRIPTION_(?:ACCOUNT_LIMITED|POOL_MODEL_LIMITED|ACCOUNT_UNAVAILABLE|ACCOUNTS_FULL)\]|\bno subscription account is available\b/i.test(message)
+    // 任务绑定的订阅账号要重新登录或正在登录：账号池没能换号才会报到这里，换来源(§4.1)，不在原来源白试两次。
+    || SUBSCRIPTION_LOGIN_TEXT.test(message)) {
     return 'connection';
   }
   if (['model_unavailable', 'user_model_access_denied', 'agent-start-failed', 'acp-agent-exited', 'pi-gateway-drop',
@@ -167,6 +195,8 @@ export function modelGroupFailureScope(input: InterruptedTurnErrorSignals): Mode
     status === 403 || extractNonSecretErrorSignals(message).errorStatus === 403 ||
     /\bthe caller does not have permission\b/i.test(message) || MODEL_GROUP_UNAVAILABLE_TEXT.test(message)) return 'model';
   if (tag === 'permission_error' || /\bpermission denied\b/i.test(message)) return null;
+  // §4.4: an engine that would not start switches to the next source at once, unless the host asked to retry shortly.
+  if (startupFailure && !STARTUP_RETRY_SHORTLY_TEXT.test(message)) return 'model';
   return 'transient';
 }
 
@@ -190,9 +220,11 @@ export function modelGroupSwitchCause(signals: InterruptedTurnErrorSignals, scop
   const accountUsageLimit = signals.usageLimit === true && !isTransientRateLimitOnly(signals, text);
   if (accountUsageLimit || signals.codexErrorInfo === 'usageLimitExceeded' || reason === 'acp-usage-limit'
     || reason === 'provider_quota_limit' || matchesDeterministicUsageExhaustionText(signals.message ?? '')
+    || /\[SUBSCRIPTION_(?:ACCOUNT|POOL_MODEL)_LIMITED\]/.test(text)
     || isModelGroupConnectionOutOfCredit(signals)) return 'usage-limit';
   if (['provider_auth_or_access', 'acp-auth-required'].includes(reason) || ['authentication_failed', 'authentication_error'].includes(tag)
-    || (signals.errorStatus ?? leadingHttpStatus(text)) === 401 || MODEL_GROUP_AUTH_TEXT.test(text)) return 'auth';
+    || (signals.errorStatus ?? leadingHttpStatus(text)) === 401 || MODEL_GROUP_AUTH_TEXT.test(text)
+    || SUBSCRIPTION_LOGIN_TEXT.test(text)) return 'auth';
   if (scope === 'transient' &&
     (signals.codexErrorInfo === 'rateLimitExceeded' ||
       ['upstream-overload', 'provider_rate_limit', 'provider_server_error'].includes(reason) ||
