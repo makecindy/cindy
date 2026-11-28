@@ -81,8 +81,10 @@ export default {
   notCovered:
     'Real CIS/authentication, the device-link directory, the relay/SSH panels and instance mutations (all forbidden here); navigation, search and the dialog draft guard have unit coverage',
   stubs: {
-    'src/renderer/contexts/AuthContext':
-      'export const useAuth=()=>({mode:"cloud",isAuthenticated:true,isInitializing:false,canEnterApp:true,dataOwnerId:"fixture-owner",dataOwnerGeneration:1});',
+    'src/renderer/contexts/AuthContext': {
+      partial:
+        'export const useAuth=()=>({mode:"cloud",isAuthenticated:true,isInitializing:false,canEnterApp:true,dataOwnerId:"fixture-owner",dataOwnerGeneration:1});',
+    },
     'src/renderer/features/device-link/useDeviceLinkDeviceList':
       'export const useDeviceLinkDeviceList=()=>[];',
     // The device directory as the device-link service reports it: this Mac, the cloud

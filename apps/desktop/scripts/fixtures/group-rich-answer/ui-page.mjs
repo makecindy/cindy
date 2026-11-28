@@ -4,7 +4,10 @@ export default {
   real: 'Production group message row, MarkdownRenderer, rich chart/SVG/image, controls, state and explicit submit',
   notCovered: 'Host/network execution and native Mobile rendering; PDF preview and account authentication are outside this scenario',
   stubs: {
-    'src/renderer/contexts/AuthContext': 'export const useAuth = () => ({ user: { id: "group-rich-fixture" } }); export const useOptionalAuthDeviceId = () => undefined;',
+    'src/renderer/contexts/AuthContext': {
+      partial: `export const useAuth = () => ({ user: { id: "group-rich-fixture" } });
+        export const useOptionalAuthDeviceId = () => undefined;`,
+    },
     'src/renderer/features/cc-agent/workdir-browse/DrawioPreview': 'export const DrawioPreview = () => null;',
     'src/renderer/features/cc-agent/workdir-browse/PdfPreview': 'export const PdfPreview = () => null;',
   },

@@ -93,7 +93,11 @@ export default {
   real: 'PluginUiProvider, navigation controls, collapsible plugin sections, McpAppCard, titlebar controls/ContentHeaderSlot, SessionTaskMenu, SettingsSidebarNav, PluginSettingsFields, completion bridge/AtMentionPanel, attachment hook and tray',
   notCovered: 'Live MCP App sandbox transport, editor selection, real file handoff, installation/approval and persistence; IPC state is supplied in memory',
   stubs: {
-    'src/renderer/contexts/AuthContext': 'export const useAuth = () => ({ dataOwnerId: null }); export const useOptionalAuthDeviceId = () => null;',
+    // This fixture also replaces makerChatStore, which the real AuthContext imports.
+    'src/renderer/contexts/AuthContext': `export const useAuth = () => ({ dataOwnerId: null });
+      export const useOptionalAuthDeviceId = () => null;
+      export const useOptionalAuthUser = () => null;
+      export const useOptionalDataOwnerGeneration = () => 0;`,
     'src/renderer/lib/makerChatStore': 'export const makerChatStore = { subscribe: () => () => {}, getSnapshot: () => ({}) };',
     'src/renderer/features/device-link/stickySessionOrigin': 'export const getStickySessionDeviceId = () => undefined;',
     'src/renderer/features/device-link/remoteProjectsStore': { partial: 'export const getSessionDeviceId = () => undefined;' },

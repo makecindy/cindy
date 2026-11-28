@@ -5,7 +5,11 @@ export default {
   real: 'ScheduleFormDialog, form state, Webhook fields, Collapse, segmented controls, dialog positioning and theme',
   notCovered: 'Fixture catalogs/account; model and project picker buttons are placeholders. No server writes.',
   stubs: {
-    'src/renderer/contexts/AuthContext': { partial: 'export const useOptionalDataOwnerGeneration = () => 0; export const useOptionalAuthUser = () => null;' },
+    'src/renderer/contexts/AuthContext': {
+      partial: `export const useAuth = () => ({ mode: 'local', isAuthenticated: false, user: null, dataOwnerId: null });
+        export const useOptionalDataOwnerGeneration = () => 0;
+        export const useOptionalAuthUser = () => null;`,
+    },
     'src/renderer/hooks/useAgentCapabilities': {
       partial: `export { getCachedCapabilities, evictDeviceCapabilities, prefetchDeviceCapabilities,
         refreshLocalCapabilities, useAgentCapabilities } from './scripts/fixtures/scheduler-trigger/catalog-hooks';`,
@@ -148,9 +152,12 @@ export default {
         const sample = () => {
           const box = document.querySelector('[role="dialog"]').getBoundingClientRect();
           const trigger = [...document.querySelectorAll('[role="radiogroup"]')]
-            .find(el => el.getAttribute('aria-label') === triggerLabel).getBoundingClientRect();
+            .find(el => el.getAttribute('aria-label') === triggerLabel);
+          // Timed controls are taller than the segmented control and center it
+          // within the row. Measure the row to detect scroll movement.
+          const triggerRow = trigger.parentElement.getBoundingClientRect();
           const prompt = promptElement.getBoundingClientRect();
-          frames.push({y: box.y, height: box.height, triggerY: trigger.y, triggerX: trigger.x, promptY: prompt.y});
+          frames.push({y: box.y, height: box.height, triggerY: triggerRow.y, triggerX: trigger.getBoundingClientRect().x, promptY: prompt.y});
         };
         sample();
         element.addEventListener('click', () => {
