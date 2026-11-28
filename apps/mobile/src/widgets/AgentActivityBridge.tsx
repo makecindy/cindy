@@ -142,6 +142,7 @@ export function AgentActivityBridge() {
     };
   }, [registered, scope, registrationKey, status, link.connectionEpoch, link.rosterVersion, isAuthenticated, t]);
   useEffect(() => refreshRoster.current(), [link.lastPresenceSnapshot]);
+  const refreshLocal = useRef<() => void>(() => {});
   useEffect(() => {
     if (
       !native ||
@@ -157,6 +158,7 @@ export function AgentActivityBridge() {
       // DeviceLinkProvider clears this store and its subscription ACKs on account
       // changes. Desktop rows carry userId: '' because their database is scoped
       // to the account already; that compatibility field is not an owner ID.
+      const { status, getConnectionState, getPresenceAvailability, getSubscriptionIdentity } = linkRef.current;
       const sessions = remoteSessionStore.getHomeSessions();
       const online = sessions.filter(
         (session) =>
@@ -219,6 +221,7 @@ export function AgentActivityBridge() {
       controller.sync(true);
       heartbeat = setInterval(() => controller.sync(), 60_000);
     };
+    refreshLocal.current = () => controller.sync();
     resume();
     const listener = AppState.addEventListener("change", (state) => {
       if (state === "active") resume();
@@ -228,6 +231,7 @@ export function AgentActivityBridge() {
       }
     });
     return () => {
+      refreshLocal.current = () => {};
       controller.dispose();
       clearInterval(heartbeat);
       unsubscribe();
@@ -241,12 +245,10 @@ export function AgentActivityBridge() {
     scope,
     registered,
     registrationKey,
-    status,
-    getConnectionState,
-    getPresenceAvailability,
-    getSubscriptionIdentity,
-    presenceVersion,
     t,
+  ]);
+  useEffect(() => refreshLocal.current(), [
+    status, getConnectionState, getPresenceAvailability, getSubscriptionIdentity, presenceVersion,
   ]);
   return null;
 }

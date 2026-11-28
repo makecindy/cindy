@@ -15,7 +15,7 @@ const fixture = vi.hoisted(() => ({
     configureAccount: vi.fn(async () => {}),
     setState: vi.fn(),
     markStale: vi.fn(),
-    addListener: vi.fn(() => ({ remove: vi.fn() })),
+    addListener: vi.fn((_event: string, _notify: () => void) => ({ remove: vi.fn() })),
   },
 }));
 vi.mock("react-native", () => ({ Platform: { OS: "ios" }, AppState: fixture.appState }));
@@ -259,6 +259,13 @@ it("refreshes a stale registered activity on resume without publishing local dia
     await sync.sync(true);
     expect(fetchMock).toHaveBeenCalledTimes(3);
     expect(opts.onRegistered).not.toHaveBeenCalledWith(false);
+    fetchMock.mockResolvedValue({ ok: true, status: 200 } as Response);
+    await sync.sync(true);
+    await vi.advanceTimersByTimeAsync(29_999);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(fetchMock).toHaveBeenCalledTimes(4);
+    expect(JSON.parse(fetchMock.mock.calls[3][1]!.body as string).refreshStale).toBe(true);
   } finally { sync.dispose(); vi.useRealTimers(); }
 });
 
@@ -425,5 +432,95 @@ it.each(["recovered", "rotated"])("starts a new expiry window after %s registrat
     expect(fixture.native.setState).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(1);
     expect(fixture.native.setState).toHaveBeenCalledExactlyOnceWith(null);
+  } finally { sync.dispose(); vi.useRealTimers(); }
+});
+
+// Unit, #13216: events during a failed PUT used to queue a complete registration
+// for every notification. Check native reads and the actual latest PUT on retry.
+it.each([false, true])("coalesces native events and backs off subsequent failures (background=%s)", async background => {
+  vi.useFakeTimers();
+  const opts = options();
+  const sync = startActivityPushSync(opts);
+  try {
+    await sync.sync();
+    let reject!: (reason: Error) => void;
+    fetchMock.mockImplementationOnce(() => new Promise((_resolve, fail) => { reject = fail; }));
+    fixture.native.getPushRegistration.mockResolvedValue({ ...registration(), startToken: "intermediate" });
+    const attempt = sync.sync();
+    await vi.advanceTimersByTimeAsync(0);
+    const before = fixture.native.getPushRegistration.mock.calls.length;
+    fixture.native.getPushRegistration.mockResolvedValue({ ...registration(), startToken: "latest" });
+    const notify = fixture.native.addListener.mock.calls.at(-1)![1];
+    for (let i = 0; i < 100; i++) notify();
+    reject(new TypeError("offline"));
+    await attempt;
+    expect(fixture.native.getPushRegistration.mock.calls.length - before).toBe(1);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    fetchMock.mockResolvedValueOnce(new Response(null, { status: 429, headers: { "Retry-After": "5" } }));
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    // No subsequent event: the newest token is still owed to the service.
+    await vi.advanceTimersByTimeAsync(4_999);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    if (background) fixture.appState.currentState = "background";
+    await vi.advanceTimersByTimeAsync(1);
+    if (background) {
+      expect(fetchMock).toHaveBeenCalledTimes(3);
+      fixture.appState.currentState = "active";
+      await sync.sync(true);
+    }
+    expect(fetchMock).toHaveBeenCalledTimes(4);
+    expect(JSON.parse(fetchMock.mock.calls[3][1]!.body as string).startToken).toBe("latest");
+  } finally { sync.dispose(); vi.useRealTimers(); }
+});
+
+// Unit, #13216: the stale transition and the retry can refer to the last
+// accepted token even though a different token's PUT started the backoff.
+it.each(["stale", "rotated", "cooldown"])("retains a deferred activity refresh through %s", async scenario => {
+  const recent = scenario !== "stale";
+  vi.useFakeTimers();
+  const live = { ...registration(), activityId: "live", updateToken: "accepted", isStale: false };
+  fixture.native.getPushRegistration.mockResolvedValue({ ...live, isStale: recent ? undefined : false });
+  const sync = startActivityPushSync(options());
+  try {
+    await sync.sync();
+    if (recent) await vi.advanceTimersByTimeAsync(28_000);
+    fixture.native.getPushRegistration.mockResolvedValue({ ...live, startToken: "changed" });
+    fetchMock.mockRejectedValueOnce(new TypeError("offline"));
+    await sync.sync();
+    fixture.native.getPushRegistration.mockResolvedValue({ ...live, isStale: true });
+    await sync.sync(recent);
+    if (scenario === "rotated") fixture.native.getPushRegistration.mockResolvedValue({ ...live, updateToken: "new", isStale: undefined });
+    await vi.advanceTimersByTimeAsync(1_000);
+    if (scenario === "cooldown") {
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      await vi.advanceTimersByTimeAsync(1_000);
+    }
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(JSON.parse(fetchMock.mock.calls[2][1]!.body as string)).toMatchObject({
+      updateToken: scenario === "rotated" ? "new" : "accepted", refreshStale: true,
+    });
+  } finally { sync.dispose(); vi.useRealTimers(); }
+});
+
+// Unit, #13216: a real token change may outlive the foreground, but must not
+// start a background retry loop when the service stays unavailable.
+it("delivers one deferred native token change after lock and resumes on foreground", async () => {
+  vi.useFakeTimers();
+  const sync = startActivityPushSync(options());
+  try {
+    await sync.sync();
+    fixture.native.getPushRegistration.mockResolvedValue({ ...registration(), updateToken: "new" });
+    fetchMock.mockRejectedValue(new TypeError("offline"));
+    fixture.native.addListener.mock.calls.at(-1)![1]();
+    await vi.advanceTimersByTimeAsync(0);
+    fixture.appState.currentState = "background";
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    fixture.appState.currentState = "active";
+    fetchMock.mockResolvedValue({ ok: true } as Response);
+    await sync.sync(true);
+    expect(fetchMock).toHaveBeenCalledTimes(4);
+    expect(JSON.parse(fetchMock.mock.calls[3][1]!.body as string).updateToken).toBe("new");
   } finally { sync.dispose(); vi.useRealTimers(); }
 });

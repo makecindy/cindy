@@ -196,6 +196,22 @@ it.each(['connection', 'presence', 'subscription'] as const)(
     expect(mock.native.markStale).toHaveBeenCalledTimes(1);
     expect(mock.native.setState).not.toHaveBeenCalled();
 
+    // Unit regression for #13216: presence churn used to remount the bridge
+    // and force a native write on every short recovery, even at the same clock tick.
+    const available = mock.link.getConnectionState.getMockImplementation()!;
+    const presence = mock.link.getPresenceAvailability.getMockImplementation()!;
+    const subscription = mock.link.getSubscriptionIdentity.getMockImplementation()!;
+    for (let i = 0; i < 6; i++) {
+      mock.link.getConnectionState.mockImplementation(i % 2 ? available : () => ({ status: 'online' }));
+      mock.link.getPresenceAvailability.mockImplementation(i % 2 ? presence : () => true);
+      mock.link.getSubscriptionIdentity.mockImplementation(i % 2 ? subscription : () => 'acknowledged');
+      mock.link.presenceVersion++;
+      await act(() => root.render(createElement(AgentActivityBridge)));
+    }
+    expect(mock.native.setState).toHaveBeenCalledTimes(1);
+    mock.native.setState.mockClear();
+    await act(() => vi.advanceTimersByTime(1_000));
+
     // A displayable live peer still supersedes stale content from A.
     remoteSessionStore.applyRemotePush('b', SESSION_ACTIVITY_CHANNEL, {
       sessionId: 'task-b', phase: 'running', attention: false,

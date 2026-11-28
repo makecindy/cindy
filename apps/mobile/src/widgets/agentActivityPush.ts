@@ -1,3 +1,4 @@
+import { retryAfterDeadline } from "@cindy/auth-client";
 import { AppState, Platform } from "react-native";
 import { requireOptionalNativeModule } from "expo-modules-core";
 import type { ClientEndpointRegion } from "@cindy/maker-shared/client-endpoints";
@@ -31,6 +32,8 @@ export interface ActivityPushRegistration {
 }
 /** In-memory continuity owned by the bridge, never persisted or sent. */
 export interface ActivityRecoveryState {
+  failure?: { enabled: boolean; until: number; delay: number };
+  pendingRefreshActivity?: string | null;
   identity?: string;
   lastRefreshAt?: number;
   wasStale?: boolean;
@@ -80,6 +83,7 @@ function sendRegistration(
       if (!response.ok)
         throw Object.assign(new Error("activity-registration-failed"), {
           status: response.status,
+          retryAt: response.status === 429 || response.status === 503 ? retryAfterDeadline(response) : undefined,
         });
     } finally {
       clearTimeout(timeout);
@@ -126,7 +130,13 @@ export function startActivityPushSync(options: {
   const realm = getActiveMobileSessionRealm();
   const baseUrl = getMobileEndpointForRealm(realm, "deviceLinkApiBaseUrl");
   const controller = new AbortController();
-  let tail = Promise.resolve();
+  let running: Promise<void> | undefined;
+  let pending = false;
+  let pendingRefresh = false;
+  type Trigger = "event" | "deferred-event" | "retry";
+  let pendingTrigger: Trigger = "retry";
+  let deferredRegistration = false;
+  let retry: ReturnType<typeof setTimeout> | undefined;
   let last: string | undefined;
   let accepted = options.initiallyRegistered === true;
   let unsupported = false;
@@ -176,83 +186,112 @@ export function startActivityPushSync(options: {
     )
       throw new Error("stale-activity-owner");
   };
-  const sync = (refresh = false) => {
-    tail = tail
-      .then(async () => {
-        assertCurrent();
-        if (unsupported) return;
-        const registration = await native.getPushRegistration!();
-        assertCurrent();
-        if (registration.accountScope !== options.accountScope) return;
-        // Release builds can carry development provisioning. Read the signed
-        // native environment, as ordinary APNs registration already does.
-        const environment = registration.enabled
-          ? await readIosPushEnvironment()
-          : null;
-        assertCurrent();
-        if (registration.enabled &&
-            environment !== "development" && environment !== "production") {
-          throw new Error("Unknown ActivityKit APNs signing environment");
-        }
-        // A native token is not evidence that the service received it. The
-        // bridge keeps its initial discovery pending until this attempt settles.
-        const { isStale, confirmedAt, staleAt, ...wireRegistration } = registration;
-        const identity = JSON.stringify([captured, owner.generation, options.accountScope,
-          registration.activityId, registration.updateToken]);
-        if (recovery.identity !== identity) {
-          watchExpiry(registration.activityId, false);
-          recovery.identity = identity;
-          recovery.lastRefreshAt = -Infinity;
-          recovery.wasStale = false;
-          recovery.contentKey = undefined;
-        }
-        const becameStale = isStale === true && !recovery.wasStale;
-        if (becameStale) mobileDebugLog("info", "lifecycle", "activity-stale");
-        if (isStale === false && recovery.wasStale)
-          mobileDebugLog("info", "lifecycle", "activity-recovered");
-        recovery.wasStale = isStale === true;
-        watchExpiry(registration.activityId, isStale === true && !!registration.updateToken);
-        const times = {
-          confirmedAt: typeof confirmedAt === "number" && Number.isFinite(confirmedAt) ? confirmedAt : null,
-          staleAt: typeof staleAt === "number" && Number.isFinite(staleAt) ? staleAt : null,
-        };
-        const contentKey = JSON.stringify([isStale, times]);
-        if (contentKey !== recovery.contentKey) {
-          recovery.contentKey = contentKey;
-          mobileDebugLog("debug", "lifecycle", "activity-content", { ...times, stale: isStale === true });
-        }
-        const shouldRefresh = (refresh || becameStale) && isStale !== false &&
-          registration.enabled && !registration.dismissed && !!registration.updateToken &&
-          AppState.currentState === "active" && Date.now() - (recovery.lastRefreshAt ?? -Infinity) >= 30_000;
-        const body = {
-          ...wireRegistration,
-          schemaVersion: 1,
-          labels: options.labels,
-          urlScheme: options.urlScheme,
-          appVariant: resolvePushAppVariant(AUTH_REGION),
-          apnsEnv: environment === "development" ? "sandbox" : "prod",
-        };
-        const key = JSON.stringify(body);
-        if (key === last && !shouldRefresh) return;
-        if (
-          registration.enabled &&
-          !registration.startToken &&
-          !registration.updateToken
-        ) {
-          options.onRegistered(false);
-          return;
-        }
-        const token = await options.getAccessToken();
-        assertCurrent();
-        if (!token) {
-          if (!accepted) options.onRegistered(false);
-          return;
-        }
-        // Auth acquisition may span backgrounding; don't send a recovery that
-        // was only eligible while foreground. Token changes still register normally.
-        const refreshStale = shouldRefresh && AppState.currentState === "active";
-        if (key === last && !refreshStale) return;
-        if (refreshStale) recovery.lastRefreshAt = Date.now();
+  let backgroundDemand = false;
+  const retryAfter = (delay: number) => {
+    retry ??= setTimeout(() => {
+      retry = undefined;
+      const trigger = backgroundDemand ? "deferred-event" : "retry";
+      backgroundDemand = false;
+      void sync(false, trigger);
+    }, Math.min(delay, 2_147_483_647));
+  };
+  const attempt = async (refresh: boolean, trigger: Trigger) => {
+    try {
+      assertCurrent();
+      if (unsupported || (trigger === "retry" && AppState.currentState !== "active")) return;
+      const registration = await native.getPushRegistration!();
+      assertCurrent();
+      if (registration.accountScope !== options.accountScope) return;
+      // Release builds can carry development provisioning. Read the signed
+      // native environment, as ordinary APNs registration already does.
+      const environment = registration.enabled
+        ? await readIosPushEnvironment()
+        : null;
+      assertCurrent();
+      if (registration.enabled &&
+          environment !== "development" && environment !== "production") {
+        throw new Error("Unknown ActivityKit APNs signing environment");
+      }
+      // A native token is not evidence that the service received it. The
+      // bridge keeps its initial discovery pending until this attempt settles.
+      const { isStale, confirmedAt, staleAt, ...wireRegistration } = registration;
+      const identity = JSON.stringify([captured, owner.generation, options.accountScope,
+        registration.activityId, registration.updateToken]);
+      if (recovery.identity !== identity) {
+        watchExpiry(registration.activityId, false);
+        recovery.identity = identity;
+        recovery.lastRefreshAt = -Infinity;
+        recovery.wasStale = false;
+        recovery.contentKey = undefined;
+      }
+      const becameStale = isStale === true && !recovery.wasStale;
+      if (becameStale) mobileDebugLog("info", "lifecycle", "activity-stale");
+      if (isStale === false && recovery.wasStale)
+        mobileDebugLog("info", "lifecycle", "activity-recovered");
+      recovery.wasStale = isStale === true;
+      watchExpiry(registration.activityId, isStale === true && !!registration.updateToken);
+      const times = {
+        confirmedAt: typeof confirmedAt === "number" && Number.isFinite(confirmedAt) ? confirmedAt : null,
+        staleAt: typeof staleAt === "number" && Number.isFinite(staleAt) ? staleAt : null,
+      };
+      const contentKey = JSON.stringify([isStale, times]);
+      if (contentKey !== recovery.contentKey) {
+        recovery.contentKey = contentKey;
+        mobileDebugLog("debug", "lifecycle", "activity-content", { ...times, stale: isStale === true });
+      }
+      const failure = recovery.failure;
+      if (recovery.pendingRefreshActivity !== registration.activityId || isStale === false ||
+          registration.dismissed || !registration.enabled || !registration.updateToken) {
+        recovery.pendingRefreshActivity = undefined;
+      }
+      const wantsRefresh = (refresh || becameStale || recovery.pendingRefreshActivity !== undefined) && isStale !== false &&
+        registration.enabled && !registration.dismissed && !!registration.updateToken &&
+        AppState.currentState === "active";
+      const refreshAt = (recovery.lastRefreshAt ?? -Infinity) + 30_000;
+      const shouldRefresh = wantsRefresh && Date.now() >= refreshAt;
+      if (failure && wantsRefresh) recovery.pendingRefreshActivity = registration.activityId;
+      const body = {
+        ...wireRegistration,
+        schemaVersion: 1,
+        labels: options.labels,
+        urlScheme: options.urlScheme,
+        appVariant: resolvePushAppVariant(AUTH_REGION),
+        apnsEnv: environment === "development" ? "sandbox" : "prod",
+      };
+      const key = JSON.stringify(body);
+      if (
+        registration.enabled &&
+        !registration.startToken &&
+        !registration.updateToken
+      ) {
+        options.onRegistered(false);
+        return;
+      }
+      if (failure?.enabled === registration.enabled && Date.now() < failure.until && (key !== last || wantsRefresh)) {
+        deferredRegistration ||= key !== last;
+        // A newly observed token still needs one registration if the phone locks.
+        backgroundDemand ||= trigger !== "retry" && key !== last;
+        retryAfter(failure.until - Date.now());
+        if (!accepted) options.onRegistered(false);
+        return;
+      }
+      if (key === last && !shouldRefresh) {
+        if (wantsRefresh && recovery.pendingRefreshActivity !== undefined) retryAfter(refreshAt - Date.now());
+        return;
+      }
+      const token = await options.getAccessToken();
+      assertCurrent();
+      if (!token) {
+        if (!accepted) options.onRegistered(false);
+        return;
+      }
+      // Auth acquisition may span backgrounding; don't send a recovery that
+      // was only eligible while foreground. Token changes still register normally.
+      if (trigger === "retry" && AppState.currentState !== "active") return;
+      const refreshStale = shouldRefresh && AppState.currentState === "active";
+      if (key === last && !refreshStale) return;
+      const refreshedAt = Date.now();
+      try {
         await sendRegistration(
           baseUrl,
           token,
@@ -265,44 +304,88 @@ export function startActivityPushSync(options: {
             ...(refreshStale ? { refreshStale: true } : {}),
           } : undefined,
         );
+      } catch (error) {
         assertCurrent();
-        last = key;
-        accepted = true;
-        mobileDebugLog("info", "lifecycle", "activity-registration", {
-          outcome: "accepted", refresh: refreshStale, hasActivity: !!registration.updateToken,
-        });
-        // A start token is permission to try, not proof that APNs created an
-        // activity. Keep foreground creation until an actual update token exists.
-        options.onRegistered(
-          registration.enabled && !!registration.updateToken,
-        );
-      })
-      .catch((error: unknown) => {
-        // Old official services have no endpoint; self-hosted relays are skipped
-        // above. A new login/reconnect creates a fresh capability attempt.
-        if (
-          error &&
-          typeof error === "object" &&
-          "status" in error &&
-          [404, 405].includes(Number(error.status))
-        )
-          unsupported = true;
-        try {
-          assertCurrent();
-          mobileDebugLog("warn", "lifecycle", "activity-registration", {
-            outcome: "failed",
-            category: error instanceof TypeError ? "network" : error instanceof Error && error.name === "AbortError" ? "timeout" : "request",
-            status: error && typeof error === "object" && "status" in error && typeof error.status === "number"
-              ? error.status : undefined,
-          });
-          // A failed refresh of an already registered activity must not transfer
-          // ownership to the partial Home projection. Initial discovery still falls back.
-          if (!accepted) options.onRegistered(false);
-        } catch {
-          /* disposed or previous account */
+        const delay = Math.min(Math.max((failure?.delay ?? 500) * 2, refreshStale ? 30_000 : 1_000), 60_000);
+        const retryAt = error && typeof error === "object" && "retryAt" in error && typeof error.retryAt === "number"
+          ? error.retryAt : 0;
+        const until = Math.max(Date.now() + delay, retryAt);
+        recovery.failure = { enabled: registration.enabled, until, delay };
+        if (refreshStale) recovery.pendingRefreshActivity = registration.activityId;
+        const status = error && typeof error === "object" && "status" in error ? Number(error.status) : undefined;
+        if ((accepted || deferredRegistration) && key !== last &&
+            (trigger === "event" || AppState.currentState === "active") &&
+            (status === undefined || status === 408 || status === 429 || status >= 500)) {
+          backgroundDemand ||= trigger === "event";
+          retryAfter(until - Date.now());
         }
+        throw error;
+      }
+      assertCurrent();
+      if (refreshStale) {
+        recovery.lastRefreshAt = refreshedAt;
+        recovery.pendingRefreshActivity = undefined;
+      }
+      recovery.failure = undefined;
+      deferredRegistration = false;
+      backgroundDemand = false;
+      clearTimeout(retry);
+      retry = undefined;
+      if (wantsRefresh && recovery.pendingRefreshActivity !== undefined) retryAfter(Math.max(0, refreshAt - Date.now()));
+      last = key;
+      accepted = true;
+      mobileDebugLog("info", "lifecycle", "activity-registration", {
+        outcome: "accepted", refresh: refreshStale, hasActivity: !!registration.updateToken,
       });
-    return tail;
+      // A start token is permission to try, not proof that APNs created an
+      // activity. Keep foreground creation until an actual update token exists.
+      options.onRegistered(
+        registration.enabled && !!registration.updateToken,
+      );
+    } catch (error) {
+      // Old official services have no endpoint; self-hosted relays are skipped
+      // above. A new login/reconnect creates a fresh capability attempt.
+      if (
+        error &&
+        typeof error === "object" &&
+        "status" in error &&
+        [404, 405].includes(Number(error.status))
+      )
+        unsupported = true;
+      try {
+        assertCurrent();
+        mobileDebugLog("warn", "lifecycle", "activity-registration", {
+          outcome: "failed",
+          category: error instanceof TypeError ? "network" : error instanceof Error && error.name === "AbortError" ? "timeout" : "request",
+          status: error && typeof error === "object" && "status" in error && typeof error.status === "number"
+            ? error.status : undefined,
+        });
+        // A failed refresh of an already registered activity must not transfer
+        // ownership to the partial Home projection. Initial discovery still falls back.
+        if (!accepted) options.onRegistered(false);
+      } catch {
+        /* disposed or previous account */
+      }
+    }
+  };
+  const sync = (refresh = false, trigger: Trigger = "event") => {
+    if (trigger === "event" || pendingTrigger === "retry") pendingTrigger = trigger;
+    pending = true;
+    pendingRefresh ||= refresh;
+    running ??= Promise.resolve().then(async () => {
+      try {
+        while (pending && !controller.signal.aborted) {
+          const refreshNow = pendingRefresh;
+          const triggerNow = pendingTrigger;
+          pendingTrigger = "retry";
+          pending = pendingRefresh = false;
+          await attempt(refreshNow, triggerNow);
+        }
+      } finally {
+        running = undefined;
+      }
+    });
+    return running;
   };
   const listener = native.addListener?.("pushRegistrationChanged", () => { void sync(); });
   sync(true);
@@ -310,6 +393,7 @@ export function startActivityPushSync(options: {
     sync,
     dispose() {
       controller.abort();
+      clearTimeout(retry);
       listener?.remove();
       if (expiry) clearTimeout(expiry.timer);
       expiry = undefined;
