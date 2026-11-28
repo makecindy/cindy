@@ -190,7 +190,8 @@ describe('durable Auto authority projection', () => {
     expect(restarted.prepare('SELECT version FROM auto_review_projections').get()).toEqual({ version: 3 });
     add(restarted, 'reset', 'worker', 4, '');
     add(restarted, 'resume-again', 'worker', 5, 'allow', 'user', { delivery: 'steer', ...meta });
-    expect(read(restarted)).toMatchObject({ sessionIntent: '', reviewIntent: '' });
+    expect(read(restarted).sessionIntent).toMatchObject({ currentUserMessage: '', earlierUserMessages: ['allow', 'never publish'] });
+    expect(read(restarted).reviewIntent).toEqual(read(restarted).sessionIntent);
   });
   it('rejects a stale projection when durable invalidation is missing', () => {
     const db = open();
@@ -214,7 +215,7 @@ describe('durable Auto authority projection', () => {
     expect(stored(db).revision).toBe(stored(db).projected_revision);
   });
 
-  it('incremental appends exactly match complete replay across budget cycles and resource resets', () => {
+  it('incremental appends exactly match complete replay across budget cycles and resource changes', () => {
     const db = open();
     const projector = createAutoReviewIntentProjection();
     read(db);
@@ -355,7 +356,7 @@ describe('durable Auto authority projection', () => {
     expect(read(db).reviewIntent).toMatchObject({ historyOmitted: true });
   });
 
-  it('rebuilds clear, rewind, receipt removal, delete and attachment reset from current evidence', () => {
+  it('rebuilds clear, rewind, receipt removal, delete and attachment history from current evidence', () => {
     const db = open();
     add(db, 'l', 'lead', 1, 'lead restriction');
     add(db, 'w', 'worker', 2, 'worker restriction');
@@ -367,7 +368,7 @@ describe('durable Auto authority projection', () => {
       JSON.stringify({ text: 'new resource', files: [{}] }),
       'attachment',
     );
-    expect(read(db).sessionIntent).toBe('new resource');
+    expect(read(db).sessionIntent).toEqual({ earlierUserMessages: ['worker restriction'], currentUserMessage: 'new resource' });
     db.prepare('UPDATE messages SET rewind_at=4 WHERE id=?').run('attachment');
     expect(read(db).sessionIntent).toBe('worker restriction');
     db.prepare('UPDATE messages SET agent_meta=? WHERE id=?').run('{}', 'w');
@@ -386,9 +387,9 @@ describe('durable Auto authority projection', () => {
     });
     expect(read(db).sessionIntent).toBe(before.sessionIntent);
     add(db, 'reset', 'worker', 3, '');
-    expect(read(db).sessionIntent).toBe('');
+    expect(read(db).sessionIntent).toEqual({ earlierUserMessages: [before.sessionIntent], currentUserMessage: '' });
     add(db, 'again', 'worker', 4);
-    expect(read(db).sessionIntent).toBe(before.sessionIntent);
+    expect(read(db).sessionIntent).toEqual({ earlierUserMessages: [before.sessionIntent, ''], currentUserMessage: before.sessionIntent });
     expect(read(db).revision).toBeGreaterThan(before.revision);
   });
 
@@ -408,6 +409,22 @@ describe('durable Auto authority projection', () => {
       currentUserMessage: 'deny',
     });
     expect(stored(restarted).revision).toBe(stored(restarted).projected_revision);
+  });
+
+  // Regression / db: old cache payloads silently lost standing grants on file-only turns.
+  // Re-read must rebuild current evidence even when revision/version still look synchronized.
+  it('rebuilds legacy attachment-reset caches and retains an empty authored file input', () => {
+    const db = open();
+    add(db, 'grant', 'worker', 1, 'Always forward my files.');
+    read(db);
+    add(db, 'file', 'worker', 2, '');
+    db.prepare('UPDATE messages SET content=? WHERE id=?').run(JSON.stringify({ text: '', files: [{ name: 'new.7z' }] }), 'file');
+    const expected = { earlierUserMessages: ['Always forward my files.'], currentUserMessage: '' };
+    expect(read(db).sessionIntent).toEqual(expected);
+    const legacy = JSON.parse(stored(db).payload);
+    delete legacy.historyPolicy;
+    db.prepare('UPDATE auto_review_projections SET payload=?').run(JSON.stringify({ ...legacy, sessionIntent: '', reviewIntent: '' }));
+    expect(read(db)).toMatchObject({ sessionIntent: expected, reviewIntent: expected });
   });
 
   it('rebuilds an empty malformed summary from current evidence', () => {

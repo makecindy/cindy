@@ -355,7 +355,7 @@ export function createAutoReviewIntentProjection() {
     text: string,
   ): AutoReviewUserIntent {
     const latest = text.trim();
-    if (!latest || previous === undefined || previous === "")
+    if (previous === undefined || previous === "")
       return compactCurrentUserIntent(latest);
     const earlierUserMessages =
       typeof previous === "string"
@@ -494,11 +494,11 @@ export function createAutoReviewIntentProjection() {
         intent = "";
         continue;
       }
-      if (readAutoReviewUserText(message.content) === null) intent = "";
+      // The Host receipt contains authored text; attachments are not a revocation.
       intent = appendAutoReviewUserIntent(intent, text);
     }
     if (replayed || !current) return withOmission(intent, omitted);
-    if (readAutoReviewUserText(current.content) === null) intent = "";
+    if (current.authoredText === undefined && readAutoReviewUserText(current.content) === null) intent = "";
     return withOmission(latest !== null ? appendAutoReviewUserIntent(intent, latest) : "", omitted);
   }
   function reviewState(
@@ -525,7 +525,7 @@ export function createAutoReviewIntentProjection() {
     const times = new Set<number>();
     for (const m of [...history].sort((a, b) => eventTime(a) - eventTime(b))) {
       const receipt = m.agentMeta?.autoReviewUserText;
-      // Empty authored receipts reset earlier resource consent and need ordering too.
+      // Empty authored receipts are new inputs and need ordering too.
       const authored =
         typeof receipt === "string" ||
         verifiedOwnerRequestText(receipt) !== undefined ||
@@ -566,7 +566,7 @@ export function createAutoReviewIntentProjection() {
           (typeof receipt === "string" || relayed !== undefined) &&
           ["turn", "steer"].includes(String(m.agentMeta?.delivery))
         ) {
-          if (readAutoReviewUserText(m.content) === null) intent = "";
+          // Preserve earlier restrictions and grants beside this new authored input.
           intent = appendAutoReviewUserIntent(intent, typeof receipt === "string" ? receipt : relayed!);
         } else {
           omitted = true;
