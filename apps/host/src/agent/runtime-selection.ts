@@ -410,6 +410,10 @@ export function createHostRuntimeSelection(deps: HostRuntimeSelectionDeps) {
 
   const projectCredentialSwitch = (sessionId: string) =>
     projectDeferredCredentialSwitchIntent(getPendingCredentialSwitchTargetWith(accessPorts(), sessionId));
+  const describePluginEngine = (providerId: string | null): string | null => {
+    const key = pluginEngineKeyFromProviderId(providerId);
+    return key ? listPluginEngineViews().find((engine) => engine.key === key)?.name ?? null : null;
+  };
   const agentSwitchDeps: MakerSessionAgentSwitchHandlerDeps = explicitPorts<MakerSessionAgentSwitchHandlerDeps>({
     // Ports for moving a task to or between other computers (release table, B5): the Host refuses a
     // switch with a non-empty agentDeviceId at its entry and refuses tasks running elsewhere at send,
@@ -424,10 +428,7 @@ export function createHostRuntimeSelection(deps: HostRuntimeSelectionDeps) {
     canSwitchCompletedAutomationSession: undefined,
     admitPluginEngineTarget: (target) => admitPluginEngineSwitchTarget(target, listPluginEngineViews()),
     admitRemotePluginEngineTarget: undefined,
-    describePluginEngine: (providerId) => {
-      const key = pluginEngineKeyFromProviderId(providerId);
-      return key ? listPluginEngineViews().find((engine) => engine.key === key)?.name ?? null : null;
-    },
+    describePluginEngine,
     resolveHandoffWindow: async ({ sessionId, agent, model, providerId, agentDeviceId }) => {
       if (agentDeviceId) return null;
       const budget = await deps.readStoredSessionContextWindowBudget(sessionId);
@@ -941,15 +942,31 @@ export function createHostRuntimeSelection(deps: HostRuntimeSelectionDeps) {
     /** The intent of a task as clients see it (session_changed, the task snapshot). */
     projectIntent: (sessionId: string) =>
       projectPendingAgentSwitchIntent(pendingSwitches.get(sessionId)) ?? projectCredentialSwitch(sessionId),
-    /** Freeze the actual executor and pending target at the shared send's acceptance boundary. */
+    /** Freeze the actual executor and pending target at the shared send's acceptance boundary on mismatch. */
     readDispatchRoute: (session: Pick<Session, 'id' | 'agentKind' | 'agentDeviceId'> & { readonly model?: string }) => {
-      const actual = { agentKind: session.agentKind, model: session.model ?? '',
-        providerId: getSessionProvider(session.id), agentDeviceId: session.agentDeviceId ?? null };
       const intent = pendingSwitches.get(session.id);
-      return captureMessageDispatchRoute(actual, intent ? {
-        agentKind: intent.targetAgentKind, model: intent.model, providerId: intent.providerId ?? null,
-        agentDeviceId: intent.targetAgentDeviceId === undefined ? actual.agentDeviceId : intent.targetAgentDeviceId,
-      } : undefined, intent?.preparationError);
+      if (!intent) return undefined;
+      const actualProviderId = getSessionProvider(session.id);
+      const actualDeviceId = session.agentDeviceId ?? null;
+      const targetProviderId = intent.providerId ?? null;
+      const targetDeviceId = intent.targetAgentDeviceId === undefined ? actualDeviceId : intent.targetAgentDeviceId;
+      return captureMessageDispatchRoute(
+        {
+          agentKind: session.agentKind,
+          model: session.model ?? '',
+          providerId: actualProviderId,
+          agentDeviceId: actualDeviceId,
+          ...(session.agentKind === 'acp' && !actualDeviceId ? { engineName: describePluginEngine(actualProviderId) ?? undefined } : {}),
+        },
+        {
+          agentKind: intent.targetAgentKind,
+          model: intent.model,
+          providerId: targetProviderId,
+          agentDeviceId: targetDeviceId,
+          ...(intent.targetAgentKind === 'acp' && !targetDeviceId ? { engineName: describePluginEngine(targetProviderId) ?? undefined } : {}),
+        },
+        intent.preparationError,
+      );
     },
     /** The desktop's set-effort (an effort change of a task, live or staged into a pending pick). */
     setEffort: (sessionId: unknown, effort: unknown) => setSessionEffort(sessionId, effort),

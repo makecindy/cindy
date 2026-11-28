@@ -589,6 +589,23 @@ describe('companionCloudStore', () => {
 });
 
 describe('CompanionShadowBanner', () => {
+  // #13642, unit: a background model diagnosis arrives after an unsuccessful manual take-over.
+  it('replaces the previous take-over error when the local home needs a model', async () => {
+    const { CompanionShadowBanner } = await import('../CompanionShadowBanner');
+    const cloud = snapshot('desk');
+    cloud.demotedBotIds = ['mia'];
+    resetCompanionCloudStoreForTests(cloud);
+    maker.getCompanionCloudState.mockResolvedValue(cloud);
+    maker.takeOverCompanion.mockResolvedValue({ ok: false, code: 'OFFLINE' });
+    render(<CompanionShadowBanner botId="mia" name="Mia" />);
+    fireEvent.click(screen.getByText('bots.cloud.continueHere'));
+    expect(await screen.findByText('bots.cloud.takeOverOffline:{"name":"Mia"}')).toBeTruthy();
+    act(() => resetCompanionCloudStoreForTests({ ...cloud, actors: cloud.actors.map(actor => ({ ...actor, needsModelSetup: true })) }));
+    expect(screen.getByText('bots.cloud.modelSetupHint')).toBeTruthy();
+    act(() => resetCompanionCloudStoreForTests(cloud));
+    expect(screen.getByText('bots.cloud.shadowHint')).toBeTruthy();
+  });
+
   it('explains the local Cindy conflict on the shadowed copy', async () => {
     const { CompanionShadowBanner } = await import('../CompanionShadowBanner');
     resetCompanionCloudStoreForTests(snapshot('laptop'));
