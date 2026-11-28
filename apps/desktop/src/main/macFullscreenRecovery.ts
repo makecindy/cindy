@@ -201,6 +201,14 @@ export function fitBoundsInsideWorkArea(
  * transition animation and strictly ignores simpleFullScreen, hidden/minimized
  * windows, and mid-transition windows to avoid false positives.
  */
+function readOptionalElectronExport<T>(reader: () => T | undefined): T | null {
+  try {
+    return reader() ?? null;
+  } catch {
+    return null;
+  }
+}
+
 export function installMacFullscreenDesyncRecovery(
   win: MacFullscreenRecoveryWindow,
   options: MacFullscreenRecoveryOptions = {},
@@ -208,9 +216,9 @@ export function installMacFullscreenDesyncRecovery(
   const platform = options.platform ?? process.platform;
   if (platform !== 'darwin') return () => {};
 
-  const screenApi = options.screen ?? screen;
-  const powerMonitorApi = options.powerMonitor ?? powerMonitor;
-  const appApi = options.app ?? app;
+  const screenApi = options.screen ?? readOptionalElectronExport(() => screen);
+  const powerMonitorApi = options.powerMonitor ?? readOptionalElectronExport(() => powerMonitor);
+  const appApi = options.app ?? readOptionalElectronExport(() => app);
   const inspect =
     options.inspect ??
     ((target) => inspectMacWindowFullscreen(target as unknown as BrowserWindow));
@@ -297,19 +305,21 @@ export function installMacFullscreenDesyncRecovery(
     }
 
     let adjustedBounds: Rectangle | null = null;
-    try {
-      const bounds = win.getBounds();
-      const workArea = screenApi.getDisplayMatching(bounds).workArea;
-      const fitted = fitBoundsInsideWorkArea(bounds, workArea, options.minSize);
-      if (fitted) {
-        win.setBounds(fitted);
-        adjustedBounds = fitted;
+    if (screenApi && typeof screenApi.getDisplayMatching === 'function') {
+      try {
+        const bounds = win.getBounds();
+        const workArea = screenApi.getDisplayMatching(bounds).workArea;
+        const fitted = fitBoundsInsideWorkArea(bounds, workArea, options.minSize);
+        if (fitted) {
+          win.setBounds(fitted);
+          adjustedBounds = fitted;
+        }
+      } catch (error: unknown) {
+        log.warn('Failed to clamp recovered macOS window bounds', {
+          windowLabel,
+          error: error instanceof Error ? error.message : String(error),
+        });
       }
-    } catch (error: unknown) {
-      log.warn('Failed to clamp recovered macOS window bounds', {
-        windowLabel,
-        error: error instanceof Error ? error.message : String(error),
-      });
     }
 
     if (forceSyncRenderer && !win.webContents.isDestroyed?.()) {
@@ -508,14 +518,26 @@ export function installMacFullscreenDesyncRecovery(
   win.on('move', onMove);
   win.on('resize', onResize);
 
-  screenApi.on('display-added', onDisplayChanged);
-  screenApi.on('display-removed', onDisplayChanged);
-  screenApi.on('display-metrics-changed', onDisplayChanged);
-  powerMonitorApi.on('resume', onResume);
-  powerMonitorApi.on('unlock-screen', onUnlockScreen);
-  appApi.on('activate', onAppActivate);
+  if (screenApi && typeof screenApi.on === 'function') {
+    screenApi.on('display-added', onDisplayChanged);
+    screenApi.on('display-removed', onDisplayChanged);
+    screenApi.on('display-metrics-changed', onDisplayChanged);
+  }
+  if (powerMonitorApi && typeof powerMonitorApi.on === 'function') {
+    powerMonitorApi.on('resume', onResume);
+    powerMonitorApi.on('unlock-screen', onUnlockScreen);
+  }
+  if (appApi && typeof appApi.on === 'function') {
+    appApi.on('activate', onAppActivate);
+  }
 
-  if (!win.isDestroyed() && win.isFullScreen() && !win.isSimpleFullScreen()) {
+  if (
+    !win.isDestroyed() &&
+    typeof win.isFullScreen === 'function' &&
+    win.isFullScreen() &&
+    typeof win.isSimpleFullScreen === 'function' &&
+    !win.isSimpleFullScreen()
+  ) {
     armFullscreenTracking();
   }
 
@@ -528,12 +550,18 @@ export function installMacFullscreenDesyncRecovery(
     recoveryTimer = clearHandle(recoveryTimer, clearTimer);
     stopPolling();
 
-    screenApi.removeListener('display-added', onDisplayChanged);
-    screenApi.removeListener('display-removed', onDisplayChanged);
-    screenApi.removeListener('display-metrics-changed', onDisplayChanged);
-    powerMonitorApi.removeListener('resume', onResume);
-    powerMonitorApi.removeListener('unlock-screen', onUnlockScreen);
-    appApi.removeListener('activate', onAppActivate);
+    if (screenApi && typeof screenApi.removeListener === 'function') {
+      screenApi.removeListener('display-added', onDisplayChanged);
+      screenApi.removeListener('display-removed', onDisplayChanged);
+      screenApi.removeListener('display-metrics-changed', onDisplayChanged);
+    }
+    if (powerMonitorApi && typeof powerMonitorApi.removeListener === 'function') {
+      powerMonitorApi.removeListener('resume', onResume);
+      powerMonitorApi.removeListener('unlock-screen', onUnlockScreen);
+    }
+    if (appApi && typeof appApi.removeListener === 'function') {
+      appApi.removeListener('activate', onAppActivate);
+    }
 
     if (!win.isDestroyed()) {
       win.removeListener('enter-full-screen', onEnterFullScreen);
