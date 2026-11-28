@@ -184,7 +184,7 @@ type ProgrammaticScrollEndDecision =
 type ChipJumpTarget = {
   generation: number;
   clientId: string;
-  selector: 'message' | 'user-message';
+  selector: 'message' | 'user-message' | 'visible-message';
   topOffset: number;
 };
 
@@ -1310,6 +1310,13 @@ function queryVisibleAggregateContainer(root: ParentNode, clientId: string): HTM
     if (element.getBoundingClientRect().height > 0) return element;
   }
   return null;
+}
+
+function queryVisibleMessageAnchor(root: ParentNode, clientId: string): HTMLElement | null {
+  const exact = queryMessageElement(root, clientId);
+  return exact && exact.getBoundingClientRect().height > 0
+    ? exact
+    : queryVisibleAggregateContainer(root, clientId);
 }
 
 /** 精确 id 优先；否则取 data-message-client-ids 的第一个 token（折叠工具块 focus 回退）。 */
@@ -5075,6 +5082,8 @@ export function MessageStream({
     setFirstVisibleItemKey(null);
   }, []);
 
+  const railJumpSeqRef = useRef(0);
+
   // 滚动条拖拽:只记按下时的 scrollTop。单纯 mousedown 不解除;上移过死区才 unpin。
   // 按下期间停掉流式 pin,避免 programmatic 窗口把拖拽 scroll 吞掉后再钉回。
   const scrollbarDragStartTopRef = useRef<number | null>(null);
@@ -5183,9 +5192,9 @@ export function MessageStream({
       if (root && target?.generation === generation) {
         const selectorAttribute =
           target.selector === 'user-message' ? 'data-user-msg-id' : 'data-message-client-id';
-        const element = root.querySelector<HTMLElement>(
-          `[${selectorAttribute}="${CSS.escape(target.clientId)}"]`,
-        );
+        const element = target.selector === 'visible-message'
+          ? queryVisibleMessageAnchor(root, target.clientId)
+          : root.querySelector<HTMLElement>(`[${selectorAttribute}="${CSS.escape(target.clientId)}"]`);
         if (element) {
           const correctedScrollTop = resolveChipJumpTargetScrollTop({
             scrollTop: root.scrollTop,
@@ -5411,6 +5420,8 @@ export function MessageStream({
           clientWidth: root.clientWidth,
         })
       ) {
+        // A pending history jump can resolve after the thumb is pressed but before it moves.
+        railJumpSeqRef.current += 1;
         scrollbarDragStartTopRef.current = root.scrollTop;
       }
     };
@@ -5475,12 +5486,18 @@ export function MessageStream({
     const onHistoryNavigationKey = (event: KeyboardEvent) => {
       if (!ownsHardwareScrollActions) return;
       if (event.defaultPrevented) return;
+      const root = scrollRef.current;
+      if (!event.isComposing && isScrollNavigationKey(event.key) &&
+        !editableTargetConsumesKey(event.target, event.key) &&
+        (event.target === document.body ||
+          (event.target instanceof Node && root?.contains(event.target)))) {
+        railJumpSeqRef.current += 1;
+      }
       if (event.key === 'Tab') {
         clearChipJumpSuppression();
         return;
       }
       if (event.key === 'End') {
-        const root = scrollRef.current;
         // At a disclosure's reserved tail, End may produce no scroll event.
         // Restore the existing down-intent state only for this list's input.
         if (root && event.target instanceof Node && root.contains(event.target)
@@ -5567,6 +5584,7 @@ export function MessageStream({
   //   - 原生 smooth 由浏览器接管（~300ms），不手写 rAF
   //   - 动画期间 ResizeObserver 仍可正常 pinToBottom，auto-follow 无缝接入
   const scrollToBottomSmooth = useCallback(() => {
+    railJumpSeqRef.current += 1;
     const el = scrollRef.current;
     if (!el) return;
     if (contentRef.current) contentRef.current.style.minHeight = '';
@@ -6306,7 +6324,12 @@ export function MessageStream({
     const distanceFromBottom = el.scrollHeight - currentScrollTop - el.clientHeight;
     const threshold = 100;
 
-    const draggingScrollbar = scrollbarDragStartTopRef.current != null;
+    const scrollbarDragStartTop = scrollbarDragStartTopRef.current;
+    const draggingScrollbar = scrollbarDragStartTop !== null;
+    if (draggingScrollbar && !programmaticScrollRef.current &&
+      Math.abs(currentScrollTop - scrollbarDragStartTop) > SCROLL_DIRECTION_DEAD_ZONE_PX) {
+      railJumpSeqRef.current += 1;
+    }
     if (restoringRef.current && !draggingScrollbar) {
       if (isRestoredScrollTakeover(
         el, restoredScrollGeometryRef.current,
@@ -6635,7 +6658,7 @@ export function MessageStream({
     runAutomaticLoad,
   ]);
 
-  const railJumpSeqRef = useRef(0);
+  const [jumpingToStart, setJumpingToStart] = useState(false);
   const [railJumpRequest, setRailJumpRequest] = useState<{ id: string; seq: number } | null>(null);
   const lastAppliedRailJumpRef = useRef(0);
   const handleNavRailJump = useCallback(
@@ -6656,6 +6679,30 @@ export function MessageStream({
     [cancelFocusJump],
   );
 
+  const handleNavRailJumpToStart = useCallback(() => {
+    if (!sessionId || jumpingToStart) return;
+    const sequence = railJumpSeqRef.current;
+    // Task transitions can leave the previous stream mounted until the new history paints.
+    const route = window.location.hash.split('?')[0];
+    const owner = getDataOwnerGeneration();
+    const root = scrollRef.current;
+    if (!root) return;
+    const input = new AbortController();
+    const cancel = () => { railJumpSeqRef.current += 1; };
+    root.addEventListener('wheel', cancel, { passive: true, once: true, signal: input.signal });
+    root.addEventListener('touchstart', cancel, { passive: true, once: true, signal: input.signal });
+    setJumpingToStart(true);
+    void makerChatStore.loadConversationStart(sessionId).then((id) => {
+      if (id && root === scrollRef.current && route === window.location.hash.split('?')[0] &&
+        railJumpSeqRef.current === sequence && owner === getDataOwnerGeneration()) {
+        handleNavRailJump(id);
+      }
+    }, () => undefined).finally(() => {
+      input.abort();
+      if (root === scrollRef.current) setJumpingToStart(false);
+    });
+  }, [handleNavRailJump, jumpingToStart, sessionId]);
+
   useLayoutEffect(() => {
     if (!railJumpRequest) return;
     if (lastAppliedRailJumpRef.current === railJumpRequest.seq) return;
@@ -6674,9 +6721,7 @@ export function MessageStream({
     }
     const root = scrollRef.current;
     if (!root) return;
-    const el = root.querySelector(
-      `[data-message-client-id="${CSS.escape(railJumpRequest.id)}"]`,
-    ) as HTMLElement | null;
+    const el = queryVisibleMessageAnchor(root, railJumpRequest.id);
     if (!el) return;
     lastAppliedRailJumpRef.current = railJumpRequest.seq;
     // auto-follow 已由点击处理器在 request 进入 render 前解除，避免本轮更早的
@@ -6685,7 +6730,7 @@ export function MessageStream({
     // 解抑靠用户 wheel/touch/keydown + 安全兜底 timer)。
     beginChipJump({
       clientId: railJumpRequest.id,
-      selector: 'message',
+      selector: 'visible-message',
       topOffset: NAV_RAIL_JUMP_TOP_OFFSET_PX,
     });
     // 落点手动计算,不走 scrollIntoView:轮次跳转要让视口恰好框住
@@ -7353,6 +7398,11 @@ export function MessageStream({
                 getContentMaxWidth={getContentWidth}
                 bottomOffset={resolvedBottomPadding}
                 onJump={handleNavRailJump}
+                onJumpToStart={sessionId && !ownerDeviceId && !remoteHostId &&
+                  historyVisibleAfter === undefined &&
+                  (hasMoreMessages || historyWindowHasIsland || allRenderItems.length > RENDER_WINDOW_FIRST_PAINT_ITEMS)
+                  ? handleNavRailJumpToStart : undefined}
+                jumpingToStart={jumpingToStart}
                 onNavCoverageChange={setNavRailCoversNav}
                 sessionId={sessionId}
                 resetKey={sessionId}

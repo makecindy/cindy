@@ -5778,7 +5778,7 @@ interface ElectronAPI {
       >;
       list: (
         sessionId: string,
-        opts?: { limit?: number; before?: string; beforeTs?: number },
+        opts?: { limit?: number; before?: string; beforeTs?: number; fromStart?: boolean },
       ) => Promise<import('@/lib/ccAgent.types').Message[]>;
       estimatedSessionValue: (sessionId: string, options?: { includeBreakdown?: boolean; clientId?: string }) => Promise<{
         costBreakdown?: import('@cindy/maker-shared/usage-cost-details').UsageCostRow[];

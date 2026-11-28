@@ -284,8 +284,13 @@ export function registerMessageIpc(
   readRunning: (sessionId: string) => boolean = () => false,
   readLive: (sessionId: string) => Message[] = () => [],
 ): void {
-  ipcMain.handle('local-db:messages:list', (_e, sessionId: unknown, opts: unknown) =>
-    readMessagesList(sessionId, opts));
+  ipcMain.handle('local-db:messages:list', (event, sessionId: unknown, opts: unknown) => {
+    if ((opts as { fromStart?: unknown } | null)?.fromStart === true && !isDeviceLinkInvoke()) {
+      assertTrustedAppRendererEvent(event);
+      return readMessagesList(sessionId, undefined, true, false, true);
+    }
+    return readMessagesList(sessionId, opts);
+  });
 
   const historyView = createLocalHistoryViewReader({
     running: readRunning,
