@@ -3103,6 +3103,11 @@ export async function listSshCodexProviders(hostId: string) {
     assertCurrent();
     if (_codexAgent !== agent) throw new Error('Codex runtime changed');
     return [remoteCodexProvider(models)];
+  } catch (err) {
+    // A closed transport rejects pending install or RPC work with a plain Error. Report a
+    // connection or owner change as such; otherwise keep the original failure.
+    assertCurrent();
+    throw err;
   } finally {
     stop();
   }
