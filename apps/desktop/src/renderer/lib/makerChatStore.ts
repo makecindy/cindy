@@ -813,7 +813,7 @@ export interface ChatMessage {
    * modelUsage 时挂到该轮收尾 assistant 上(agentMeta.modelMismatch 持久化 +
    * usage:message-model-mismatch 实时推送)。AssistantMessage 渲染降级提示行。
    */
-  modelMismatch?: { selected: string; actual: string };
+  modelMismatch?: { selected: string; actual: string; providerName?: string };
   /** 历史行由 device-link 压缩过;merge 时不能覆盖控制端已有的完整实时内容。 */
   remoteContentTruncated?: boolean;
   /** 历史页由 device-link 裁掉过部分行;分页状态需保持可继续加载。 */
@@ -10151,7 +10151,7 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
     const p = raw as {
       sessionId?: string;
       clientId?: string;
-      modelMismatch?: { selected?: unknown; actual?: unknown } | null;
+      modelMismatch?: { selected?: unknown; actual?: unknown; providerName?: unknown } | null;
     } | null;
     if (!p?.sessionId || !p.clientId) return;
     const mm = p.modelMismatch;
@@ -10164,7 +10164,15 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
     )
       return;
     const { sessionId, clientId } = p;
-    const modelMismatch = { selected: mm.selected, actual: mm.actual };
+    const providerName =
+      typeof mm.providerName === 'string' && mm.providerName.trim()
+        ? mm.providerName.trim()
+        : undefined;
+    const modelMismatch = {
+      selected: mm.selected,
+      actual: mm.actual,
+      ...(providerName ? { providerName } : {}),
+    };
     setState(sessionId, (s) => {
       const idx = s.messages.findIndex((m) => m.clientId === clientId);
       if (idx < 0) return s;
@@ -21623,13 +21631,22 @@ export function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
             };
           })()
         : {}),
-      // assistant 上挂的模型降级标记(main turn 结束检测命中时 patch 进 agent_meta)
+      // assistant 上挂的模型改派标记(main turn 结束检测命中时 patch 进 agent_meta)
       ...(m.role === 'assistant' &&
       typeof m.agentMeta?.modelMismatch?.selected === 'string' &&
       m.agentMeta.modelMismatch.selected &&
       typeof m.agentMeta.modelMismatch.actual === 'string' &&
       m.agentMeta.modelMismatch.actual
-        ? { modelMismatch: m.agentMeta.modelMismatch }
+        ? {
+            modelMismatch: {
+              selected: m.agentMeta.modelMismatch.selected,
+              actual: m.agentMeta.modelMismatch.actual,
+              ...(typeof m.agentMeta.modelMismatch.providerName === 'string' &&
+              m.agentMeta.modelMismatch.providerName.trim()
+                ? { providerName: m.agentMeta.modelMismatch.providerName.trim() }
+                : {}),
+            },
+          }
         : {}),
       // subagent-model-chip: 历史重载时,纯文本子代理(全程不调工具)的子消息是
       // assistant/thinking 而非 tool_use,模型只在它们的 agentMeta 上。这里和

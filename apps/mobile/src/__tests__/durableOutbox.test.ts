@@ -8,6 +8,7 @@ import { cindyMakeOutboxPolicy } from '../session/cindyMakeOutboxPolicy';
 import { beginOutboxBackgroundSend, hasOutboxBackgroundSend, isPendingPlainText } from '../session/outboxBackgroundSend';
 import {
   createDurableOutbox,
+  hasUncreatedHostSession,
   isDurableOutboxUnsent,
   observeDurableOutboxSending,
   type DurableOutboxRecord,
@@ -18,8 +19,8 @@ import {
   createDurableOutboxDelivery,
   type DeliveryProjection,
 } from "../session/durableOutboxDelivery";
+import type { QueuedRemoteMessage, RemoteMessage, RemoteSession } from "../session/types";
 import { remoteSessionStore } from "../session/remoteSessionStore";
-import type { QueuedRemoteMessage, RemoteMessage } from "../session/types";
 import { appendOptimisticUserMessage, projectOptimisticUserMessages, type OptimisticUserMessage } from '../session/optimisticUserMessages';
 
 function deferred<T>() {
@@ -196,6 +197,71 @@ async function setup(storage = disk()) {
     },
   };
 }
+
+// Unit: a killed phone can have a submitted first input but no host task.
+// Existing receipt tests start with the task present. Restart from the persisted record
+// and distinguish a missing host task, a lost create ACK and a deletion tombstone.
+it.each(['missing', 'existing', 'deleted'] as const)('resumes an interrupted dialogue after restart: %s', async state => {
+  const { store, storage, deps } = await setup();
+  const record = message();
+  record.creation = {
+    draft: { workspaceKind: 'dialogue' } as NonNullable<DurableOutboxRecord['creation']>['draft'],
+    deviceName: 'PC', needsHostCreation: true, planModeArm: false, restorePermissionMode: null,
+  };
+  await store.add(record);
+  const cold = createDurableOutbox(storage);
+  await cold.activate('alice');
+  const createMissingDialogue = vi.fn(async () => true);
+  const onHostSessionReady = vi.fn();
+  await createDurableOutboxDelivery({
+    ...deps, store: cold, createMissingDialogue, onHostSessionReady,
+    session: async () => {
+      if (state === 'missing') throw Object.assign(new Error('Session absent'), { code: 'NOT_FOUND' });
+      return { id: record.item.sessionId, status: state === 'deleted' ? 'deleted' : 'active' };
+    },
+  }).run();
+  expect(createMissingDialogue).toHaveBeenCalledTimes(state === 'missing' ? 1 : 0);
+  expect(onHostSessionReady).toHaveBeenCalledTimes(state === 'existing' ? 1 : 0);
+  if (state === 'deleted') {
+    expect(deps.enqueue).not.toHaveBeenCalled();
+    expect(cold.getSnapshot()).toEqual([]);
+  } else {
+    expect(deps.enqueue).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+      item: record.item,
+      creation: expect.objectContaining({ hostCreated: true }),
+    }));
+    expect(deps.enqueue.mock.calls[0]?.[0].creation?.needsHostCreation).toBeUndefined();
+  }
+});
+
+// Unit: if host creation succeeds via outbox recovery and a later
+// projection/prepare step fails permanently before `prepared` is written, the record
+// must be recognized as already having a host task (never routed back to /sessions/new).
+it('marks hostCreated after createMissingDialogue so a later pre-prepare failure stays on the existing task', async () => {
+  const { store, deps } = await setup();
+  const record = message();
+  record.creation = {
+    draft: { workspaceKind: 'dialogue' } as NonNullable<DurableOutboxRecord['creation']>['draft'],
+    deviceName: 'PC', needsHostCreation: true, planModeArm: false, restorePermissionMode: null,
+  };
+  await store.add(record);
+  deps.projection.mockRejectedValueOnce(new Error('ACCESS_REVOKED'));
+  await createDurableOutboxDelivery({
+    ...deps,
+    createMissingDialogue: vi.fn(async () => true),
+    session: async () => { throw Object.assign(new Error('Session absent'), { code: 'NOT_FOUND' }); },
+    retryable: () => false,
+  }).run();
+  const [failed] = store.getSnapshot();
+  expect(failed).toMatchObject({
+    state: 'failed',
+    creation: expect.objectContaining({ hostCreated: true }),
+  });
+  expect(failed?.creation?.needsHostCreation).toBeUndefined();
+  expect(failed?.prepared).toBeUndefined();
+  expect(failed?.template).toBeUndefined();
+  expect(hasUncreatedHostSession(failed!)).toBe(false);
+});
 
 // Unit coverage for the legacy decision at the production runner. An untyped
 // message and unrelated wire refusals must never open a second history route.
@@ -682,6 +748,60 @@ describe("durable mobile outbox ownership", () => {
     expect(deps.enqueue).toHaveBeenCalledOnce();
     expect(deps.enqueue.mock.calls[0]?.[0].item.clientId).toBe('other');
     expect(store.getSnapshot().find((r) => r.item.clientId === 'id-1')?.draftHandoff).toBeDefined();
+  });
+  // Unit: restart from the actual ledger on either side of a follow-up send.
+  // A rejected write tests error recovery but does not reproduce losing the process before its receipt.
+  it.each(['writing-send-marker', 'awaiting-receipt'] as const)('recovers a follow-up interrupted while %s', async phase => {
+    const first = await setup();
+    const id = 'follow-up';
+    await first.store.add(message(id));
+    const reached = deferred<void>();
+    const resume = deferred<void>();
+    const delivered: string[] = [];
+    if (phase === 'writing-send-marker') {
+      const write = first.storage.setItem;
+      first.storage.setItem = async (key, value) => {
+        if (JSON.parse(value).state === 'sending') {
+          reached.resolve();
+          await resume.promise;
+          throw new Error('process stopped before the send marker was committed');
+        }
+        await write(key, value);
+      };
+    }
+    first.deps.enqueue.mockImplementation(async r => {
+      delivered.push(r.item.clientId);
+      reached.resolve();
+      await resume.promise;
+      return projection(id, 'accepted');
+    });
+    const attempt = first.runner.run();
+    await reached.promise;
+    first.runner.stop();
+    resume.resolve();
+    await attempt;
+    const recovered = await setup(first.storage);
+    const [row] = recovered.store.getSnapshot();
+    expect(isDurableOutboxUnsent(row!)).toBe(phase === 'writing-send-marker');
+    if (phase === 'writing-send-marker') {
+      // As in the offline cancel action, settle the unsent row locally and restart.
+      await recovered.store.update(row!, { state: 'host-owned', cleanupOutcome: 'cancelled', cancelRequested: true });
+    } else {
+      recovered.deps.projection.mockImplementation(async r =>
+        projection(r.item.clientId, delivered.includes(r.item.clientId) ? 'accepted' : 'unknown'));
+    }
+    await recovered.runner.run();
+    if (phase === 'awaiting-receipt') {
+      // Only the host receipt is available on this first reconnect.
+      expect(recovered.store.getSnapshot()[0]).toMatchObject({ state: 'host-owned', item: { clientId: id } });
+      recovered.deps.history.mockResolvedValue(true);
+      recovered.runner.wake();
+      await recovered.runner.run();
+    }
+    expect(delivered).toEqual(phase === 'writing-send-marker' ? [] : [id]);
+    expect(recovered.deps.enqueue).not.toHaveBeenCalled();
+    expect(recovered.store.getSnapshot()).toEqual([]);
+    expect(recovered.deps.cleanup).toHaveBeenCalledWith(expect.objectContaining({ item: expect.objectContaining({ clientId: id }) }), phase === 'writing-send-marker');
   });
   it('keeps preparation explicitly unsent if the sending write fails before a crash', async () => {
     const { store, runner, deps, storage } = await setup();
@@ -1553,10 +1673,10 @@ it('persists companion identity across restart and refuses a changed resource be
   await store.add({ ...message(), resourceRef });
   const restarted = createDurableOutbox(storage); await restarted.activate('alice');
   expect(restarted.getSnapshot()[0].resourceRef).toEqual(resourceRef);
-  const beforeEnqueue = vi.fn(async () => { throw new Error('ACCESS_REVOKED'); });
-  const guarded = createDurableOutboxDelivery({ ...deps, store: restarted, beforeEnqueue, retryable: () => false });
+  const validateResource = vi.fn(async () => { throw new Error('ACCESS_REVOKED'); });
+  const guarded = createDurableOutboxDelivery({ ...deps, store: restarted, validateResource, retryable: () => false });
   await guarded.run();
-  expect(beforeEnqueue).toHaveBeenCalledTimes(1); expect(deps.enqueue).not.toHaveBeenCalled();
+  expect(validateResource).toHaveBeenCalledTimes(1); expect(deps.enqueue).not.toHaveBeenCalled();
   expect(restarted.getSnapshot()[0]).toMatchObject({ state: 'failed', enqueueStarted: false, resourceRef });
   expect(restarted.getSnapshot()[0].item.clientId).toBe('id-1');
 });
@@ -1573,13 +1693,14 @@ it('does not drop the resource gate when its persisted identity is corrupt', asy
 });
 
 it('cancels an enqueue if its page-independent resource check spans an account or foreground change', async () => {
-  const { store, deps, deactivate } = await setup(); await store.add(message());
+  const { store, deps, deactivate } = await setup();
+  await store.add({ ...message(), resourceRef: { collectionId: 'teammates', kind: 'bot', id: 'writer' } });
   const check = deferred<void>();
-  const beforeEnqueue = vi.fn(() => check.promise);
-  const guarded = createDurableOutboxDelivery({ ...deps, beforeEnqueue });
+  const validateResource = vi.fn(() => check.promise);
+  const guarded = createDurableOutboxDelivery({ ...deps, validateResource });
   const run = guarded.run();
-  for (let n = 0; n < 40 && !beforeEnqueue.mock.calls.length; n++) await Promise.resolve();
-  expect(beforeEnqueue).toHaveBeenCalledTimes(1);
+  for (let n = 0; n < 40 && !validateResource.mock.calls.length; n++) await Promise.resolve();
+  expect(validateResource).toHaveBeenCalledTimes(1);
   deactivate(); check.resolve(); await run;
   expect(deps.enqueue).not.toHaveBeenCalled(); expect(store.getSnapshot()[0].enqueueStarted).toBe(false);
 });
@@ -1591,7 +1712,18 @@ describe('known projection first send', () => {
   it('makes the enqueue the only round trip for a never-sent message', async () => {
     const { store, deps } = await setup();
     await store.add(message());
-    await createDurableOutboxDelivery({ ...deps, knownProjection: known }).run();
+    // Unit: a plain first send commits its prepared payload and send marker together.
+    const update = vi.spyOn(store, 'update');
+    const events: string[] = [];
+    await createDurableOutboxDelivery({
+      ...deps, knownProjection: known,
+      trace: event => events.push(event),
+      onHandedOff: record => events.push(record.state),
+    }).run();
+    expect(events.slice(-2)).toEqual(['send accepted', 'host-owned']);
+    expect(update.mock.calls.find(([, patch]) => patch.prepared)?.[1]).toMatchObject({
+      state: 'sending', enqueueStarted: true,
+    });
     expect(deps.projection).not.toHaveBeenCalled();
     expect(deps.enqueue).toHaveBeenCalledOnce();
     expect(store.getSnapshot()[0]).toMatchObject({
@@ -1655,6 +1787,35 @@ describe('known projection first send', () => {
     expect(deps.enqueue.mock.calls[1]?.[0]).toMatchObject({ clearBoundaryMs: 9, enqueueStarted: true });
     await vi.waitFor(() => expect(store.getSnapshot()[0]).toMatchObject({ state: 'host-owned' }));
   });
+});
+
+// Unit: the first-send path previously waited for the projection before reading
+// the session. Hold the projection reply to verify the reads overlap, while the
+// existing ownership and clear-boundary checks still gate the actual enqueue.
+it.each([false, true])('overlaps first-send reads and respects owner loss (owner lost: %s)', async (ownerLost) => {
+  const { store, deps, deactivate } = await setup();
+  await store.add(message());
+  const pendingProjection = deferred<DeliveryProjection>();
+  deps.projection.mockReturnValueOnce(pendingProjection.promise);
+  const session = { id: 'session', workingDir: '/dialogue' } as RemoteSession;
+  const read = vi.fn(async () => session);
+  const run = createDurableOutboxDelivery({ ...deps, readSessionForPreparation: read }).run();
+  for (let n = 0; n < 40 && !deps.projection.mock.calls.length; n++) await Promise.resolve();
+  try {
+    expect(deps.projection).toHaveBeenCalledOnce();
+    expect(read).toHaveBeenCalledOnce();
+    expect(deps.enqueue).not.toHaveBeenCalled();
+  } finally {
+    if (ownerLost) deactivate();
+    pendingProjection.resolve({ ...projection('id-1'), clearBoundaryMs: 9 });
+    await run;
+  }
+  if (ownerLost) {
+    expect(deps.enqueue).not.toHaveBeenCalled();
+  } else {
+    expect(deps.prepare).toHaveBeenCalledWith(expect.anything(), session);
+    expect(deps.enqueue).toHaveBeenCalledWith(expect.objectContaining({ clearBoundaryMs: 9, enqueueStarted: true }));
+  }
 });
 
 describe('outbox projection authority', () => {

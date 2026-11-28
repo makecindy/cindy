@@ -124,7 +124,7 @@ export function CindyMakeTabBody({ ctx }: TabKindBodyProps<CindyMakeState>) {
             <VoiceInputButton {...voice.buttonProps} testId="cindy-make-tab-voice" tipSide="top" />
           </div>
         </div>
-        <FieldVoiceInputNotice error={voice.lastError} speakerFiltered={voice.speakerFiltered} className="mt-1.5" />
+        <FieldVoiceInputNotice {...voice.noticeProps} className="mt-1.5" />
         <div className="mt-2 flex items-center justify-end gap-2">
           <Button
             type="submit"

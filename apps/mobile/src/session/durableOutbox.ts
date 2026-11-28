@@ -74,6 +74,10 @@ export interface DurableOutboxRecord {
   failedUploadSlot?: number;
   creation?: {
     draft: NewSessionDraft;
+    /** Explicit first-send intent, saved after the form accepted this plain dialogue. */
+    needsHostCreation?: true;
+    /** Host task creation was confirmed by outbox recovery before the first input was prepared. */
+    hostCreated?: true;
     originalWorkingDir?: string;
     cancelled?: true;
     /** Creation was handed back to the editor; restore its entry after restart. */
@@ -103,8 +107,21 @@ export function isDurableOutboxSettled(record: DurableOutboxRecord): boolean {
 export function isDurableCreationDraft(record: DurableOutboxRecord): boolean {
   return record.suspended === true && record.state === 'failed'
     && !!(record.creation?.editReady || record.creation?.cancelled)
+    && !record.creation?.hostCreated
     && !record.prepared && !record.template && !record.enqueueStarted && record.sendAtMs === undefined
     && !record.cancelRequested && !isDurableOutboxSettled(record);
+}
+
+/** True while a creation record still owns an unconfirmed host task, including after a failed create attempt. */
+export function hasUncreatedHostSession(record: DurableOutboxRecord): boolean {
+  return !!record.creation && !record.creation.hostCreated
+    && !record.prepared && !record.template
+    && !isDurableOutboxSettled(record);
+}
+
+/** True while a submitted dialogue creation record still has no confirmed host task (queued or failed). */
+export function isPendingHostDialogueCreation(record: DurableOutboxRecord): boolean {
+  return record.creation?.needsHostCreation === true && hasUncreatedHostSession(record);
 }
 
 /**
@@ -122,6 +139,17 @@ export function isDurableOutboxHandedOff(record: Pick<DurableOutboxRecord, 'stat
 export function isDurableOutboxUnsent(record: DurableOutboxRecord): boolean {
   return record.enqueueStarted === false || (record.enqueueStarted === undefined
     && !record.prepared && record.sendAtMs === undefined);
+}
+
+export function needsHostCreation(record: DurableOutboxRecord): boolean {
+  const creation = record.creation;
+  return creation?.needsHostCreation === true && !creation.hostCreated && creation.draft?.workspaceKind === 'dialogue'
+    && !creation.draft.pluginEngine && !creation.draft.agentDeviceId && !creation.originalWorkingDir
+    && !record.chat && !record.resourceRef && !record.uploads.length && !record.item.attachmentSlots.length
+    && record.state === 'queued'
+    && !record.suspended && !record.creation!.cancelled && !record.creation!.editReady
+    && !record.cancelRequested && !record.template && !record.prepared
+    && !isDurableOutboxSettled(record) && isDurableOutboxUnsent(record);
 }
 
 export const DURABLE_OUTBOX_PREFIX = "cindy.mobile.outbox.v1.";

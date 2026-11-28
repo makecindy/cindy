@@ -4402,7 +4402,7 @@ test('model change at send: an engine pick that cannot land lets the send go on,
   assert.equal(r.selection.projectIntent('cross') ?? null, null);
   assert.equal(r.userRows('cross').length, 2);
   assert.deepEqual(routes()[0], firstRoute, 'later successful selection does not change the first input');
-  assert.deepEqual(routes()[1], { agentKind: 'codex', model: 'gpt-x', providerId: 'prov-b', agentDeviceId: null });
+  assert.equal(routes()[1], undefined, 'a normal send without fallback does not attach dispatchRoute');
 });
 
 // The runtime start admission (register.ts bootstrapSession's admitLocalRoute, shared as

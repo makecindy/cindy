@@ -28,13 +28,13 @@ describe('turn model attribution', () => {
     insert.run('m2', 'second', 's1', 'user', 'again', null, 2);
     state.db = drizzle(sqlite, { schema: { messages, sessions } });
     let current = true;
-    const choices: { model: string; automatic: boolean }[] = [];
+    const choices: { model: string; harness?: string; automatic: boolean }[] = [];
     const patches: unknown[] = [];
     const cards: unknown[] = [];
     const writes: Promise<void>[] = [];
     const attribute = createTurnModelAttribution({
       maker: { getSession: () => live },
-      captureModelChoice: model => async (automatic = false) => { choices.push({ model, automatic }); },
+      captureModelChoice: (model, harness) => async (automatic = false) => { choices.push({ model, harness, automatic }); },
       getSessionProvider: () => live.providerId,
       captureDataOwnerBroadcastScope: () => 'owner',
       isDataOwnerBroadcastScopeCurrent: () => current,
@@ -54,7 +54,7 @@ describe('turn model attribution', () => {
     const f = fixture();
     f.attribute('s1', 'second');
     await f.settle();
-    expect(f.choices).toEqual([{ model: 'gpt-b', automatic: false }]);
+    expect(f.choices).toEqual([{ model: 'gpt-b', harness: 'codex', automatic: false }]);
     expect(f.patches).toEqual([{ clientId: 'second', executionModel: { agentKind: 'codex', model: 'gpt-b', providerId: 'p' } }]);
     expect(f.cards).toEqual([expect.objectContaining({
       clientId: 'model-change:second', role: 'assistant', agentKind: 'codex',
@@ -94,7 +94,7 @@ describe('turn model attribution', () => {
     }));
     f.attribute('s1', 'second');
     await f.settle();
-    expect(f.choices).toEqual([{ model: 'gpt-b', automatic: true }]);
+    expect(f.choices).toEqual([{ model: 'gpt-b', harness: 'codex', automatic: true }]);
     f.sqlite.close();
   });
 

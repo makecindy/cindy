@@ -7,6 +7,7 @@ export interface MobileMarkdownTableColumnWidthInput {
   availableWidth?: number;
   minWidth: number;
   maxWidth?: number;
+  linkText?: (link: Extract<MobileMarkdownInline, { type: 'link' }>) => string;
 }
 
 const DEFAULT_MAX_COLUMN_WIDTH = 220;
@@ -21,6 +22,7 @@ export function buildMobileMarkdownTableColumnWidths({
   availableWidth,
   minWidth,
   maxWidth = DEFAULT_MAX_COLUMN_WIDTH,
+  linkText,
 }: MobileMarkdownTableColumnWidthInput): number[] {
   const columnCount = Math.max(
     header.length,
@@ -30,8 +32,8 @@ export function buildMobileMarkdownTableColumnWidths({
   const normalizedMaxWidth = Math.max(minWidth, maxWidth);
   const widths = Array.from({ length: columnCount }, (_, columnIndex) => {
     const contentWidth = Math.max(
-      estimateInlineWidth(header[columnIndex] ?? []),
-      ...rows.map((row) => estimateInlineWidth(row.cells[columnIndex] ?? [])),
+      estimateInlineWidth(header[columnIndex] ?? [], linkText),
+      ...rows.map((row) => estimateInlineWidth(row.cells[columnIndex] ?? [], linkText)),
     );
     return clampWidth(
       Math.ceil(contentWidth + CELL_HORIZONTAL_PADDING),
@@ -60,11 +62,11 @@ function expandColumnWidthsToAvailableSpace(
   return widths.map((width, index) => width + share + (index < remainder ? 1 : 0));
 }
 
-function estimateInlineWidth(inlines: readonly MobileMarkdownInline[]): number {
+function estimateInlineWidth(inlines: readonly MobileMarkdownInline[], linkText: MobileMarkdownTableColumnWidthInput['linkText']): number {
   return inlines.reduce((total, inline) => (
     inline.type === 'image'
       ? total + (inline.width ?? DEFAULT_IMAGE_INLINE_WIDTH)
-      : total + estimateTextWidth(inline.text)
+      : total + estimateTextWidth(inline.type === 'link' && linkText ? linkText(inline) : inline.text)
   ), 0);
 }
 

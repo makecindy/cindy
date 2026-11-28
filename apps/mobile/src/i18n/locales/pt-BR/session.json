@@ -673,7 +673,20 @@
     "toolUseLoopDetectedRotationWithCount": "O modelo continuou revezando chamadas de ferramenta, então o Cindy interrompeu este turno após detectar {{count}} chamadas no loop. Envie uma nova mensagem para continuar.",
     "codexThreadLost": "O modo de autenticação do Codex mudou, então esta sessão não pode continuar. Inicie uma nova sessão.",
     "remoteCompactEncryptedContent": "A compactação do contexto falhou porque o modelo não conseguiu ler o histórico criptografado. A continuação automática não foi concluída. Tente novamente para recuperar.",
-    "encryptedContentInvalid": "A troca de provedores tornou a criptografia indisponível, então esta sessão só funciona com o provedor original. Resolva isso no computador (use “Iniciar nova sessão a partir daqui” para descartar o conteúdo criptografado do protocolo e continuar em uma nova sessão)."
+    "encryptedContentInvalid": "A troca de provedores tornou a criptografia indisponível, então esta sessão só funciona com o provedor original. Resolva isso no computador (use “Iniciar nova sessão a partir daqui” para descartar o conteúdo criptografado do protocolo e continuar em uma nova sessão).",
+    "providerSafetyRefusal": "A política de segurança do provedor de modelos bloqueou esta resposta. Ajuste sua solicitação e tente enviar novamente.",
+    "providerSafetyRefusalWithProvider": "A política de segurança de {{provider}} bloqueou esta resposta. Ajuste sua solicitação e tente enviar novamente.",
+    "overloadBusy": "O provedor de modelos está temporariamente sobrecarregado e sem capacidade disponível. Tente mais tarde ou troque de modelo.",
+    "overloadBusyWithProvider": "{{provider}} está temporariamente sobrecarregado e sem capacidade disponível. Tente mais tarde ou troque de modelo.",
+    "streamInterrupted": "A resposta do provedor de modelos foi interrompida no meio da transmissão. Tente novamente mais tarde.",
+    "streamInterruptedWithProvider": "A resposta de {{provider}} foi interrompida no meio da transmissão. Tente novamente mais tarde.",
+    "upstreamStatusError": "O serviço do provedor de modelos retornou um erro (HTTP {{status}}). Esta resposta não foi concluída.",
+    "upstreamStatusErrorWithProvider": "O serviço de {{provider}} retornou um erro (HTTP {{status}}). Esta resposta não foi concluída.",
+    "modelAccessDenied": "Sua conta atual do provedor de modelos não tem acesso a este modelo. Troque de modelo ou confirme as permissões.",
+    "modelAccessDeniedWithProvider": "Sua conta {{provider}} não tem acesso a este modelo. Troque de modelo ou confirme as permissões de acesso.",
+    "providerQuotaExhausted": "Cota ou saldo insuficiente na conta do provedor de modelos. Verifique a conta do provedor.",
+    "providerQuotaExhaustedWithProvider": "Sua conta {{provider}} está sem cota ou saldo suficiente. Verifique o status da conta.",
+    "usageLimitReachedWithProvider": "Sua conta {{provider}} atingiu o limite de uso"
   },
   "row": {
     "markRead": "Marcar como lida",
