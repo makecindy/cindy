@@ -12,6 +12,7 @@ import {
   parseDeepSeekAccountUsage,
   parseZhipuCodingPlanQuota,
   readProviderAccountUsage,
+  recordProviderAccountActivity,
   resetProviderAccountUsageForTest,
   resolveProviderAccountUsage,
   setAccountUsageFetch,
@@ -647,7 +648,7 @@ describe('readProviderAccountUsage', () => {
     setAccountUsageFetch(fetchMock as unknown as typeof fetch);
     await readProviderAccountUsage({ providerId: 'deepseek' });
     expect(calls).toBe(1);
-    nowMs += 6 * 60_000; // TTL 过期，触发第二次拉取 → 429 + Retry-After。
+    nowMs += 31 * 60_000; // 空闲 TTL 过期，触发第二次拉取 → 429 + Retry-After。
     await readProviderAccountUsage({ providerId: 'deepseek' });
     expect(calls).toBe(2);
     // 429 失败后重置时间未到：不再发请求，回 stale 快照。
@@ -656,15 +657,31 @@ describe('readProviderAccountUsage', () => {
     expect(third).toMatchObject({ status: 'ready', stale: true, error: 'rate-limited' });
   });
 
-  it('serves the cached snapshot inside the TTL and refetches after expiry', async () => {
+  it('serves the cached snapshot for 30m while idle and shortens to 2m after turn activity', async () => {
     const fetchMock = vi.fn(async () => jsonRes(DEEPSEEK_BALANCE));
     setAccountUsageFetch(fetchMock as unknown as typeof fetch);
     await readProviderAccountUsage({ providerId: 'deepseek' });
     await readProviderAccountUsage({ providerId: 'deepseek' });
     expect(fetchMock).toHaveBeenCalledTimes(1);
+    // Idle reads stay cached past 2m until 30m.
     nowMs += 6 * 60_000;
     await readProviderAccountUsage({ providerId: 'deepseek' });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    nowMs += 24 * 60_000;
+    await readProviderAccountUsage({ providerId: 'deepseek' });
     expect(fetchMock).toHaveBeenCalledTimes(2);
+    // Real turn activity switches to the 2m active cadence.
+    recordProviderAccountActivity('deepseek');
+    nowMs += 60_000;
+    await readProviderAccountUsage({ providerId: 'deepseek' });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    nowMs += 60_000;
+    await readProviderAccountUsage({ providerId: 'deepseek' });
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    // Without further turns, returns to the 30m idle cadence.
+    nowMs += 6 * 60_000;
+    await readProviderAccountUsage({ providerId: 'deepseek' });
+    expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 
   it('maps upstream failures to error codes and keeps stale snapshots', async () => {
@@ -677,7 +694,7 @@ describe('readProviderAccountUsage', () => {
     setAccountUsageFetch(fetchMock as unknown as typeof fetch);
     const first = await readProviderAccountUsage({ providerId: 'deepseek' });
     expect(first.status).toBe('ready');
-    nowMs += 6 * 60_000;
+    nowMs += 31 * 60_000;
     const second = await readProviderAccountUsage({ providerId: 'deepseek' });
     expect(second).toMatchObject({ status: 'ready', stale: true, error: 'auth' });
     expect((second as { snapshot: { balances: unknown[] } }).snapshot.balances).toHaveLength(1);
@@ -816,7 +833,7 @@ describe('Kimi Code subscription quota', () => {
   it('keeps missing, zero-use and fully-used windows distinct, without inventing totals or dates', async () => {
     fetcher.mockResolvedValueOnce(jsonRes({ usages: { limit_5h: null, limit_7d: { used_ratio: 0 }, limit_month_code: { used_ratio: 1.2, reset_time: 'bad' } } }));
     expect(await read()).toMatchObject({ snapshot: { windows: [{ id: 'limit_7d', usedPercent: 0, resetsAt: null }, { id: 'limit_month_code', usedPercent: 100, resetsAt: null }] } });
-    nowMs += 300_001;
+    nowMs += 30 * 60_000 + 1;
     fetcher.mockResolvedValueOnce(jsonRes({ usages: {} }));
     expect(await read()).toMatchObject({ snapshot: { windows: [] } });
   });
@@ -828,7 +845,7 @@ describe('Kimi Code subscription quota', () => {
 
   it.each([401, 403])('revokes a cached quota on HTTP %s', async status => {
     await read();
-    nowMs += 300_001;
+    nowMs += 30 * 60_000 + 1;
     fetcher.mockResolvedValueOnce(jsonRes({}, status));
     expect(await read()).toMatchObject({ status: 'unavailable', error: 'auth' });
     expect(await read()).toMatchObject({ status: 'unavailable', error: 'auth' });
@@ -837,7 +854,7 @@ describe('Kimi Code subscription quota', () => {
 
   it.each([500, 503])('marks last known data stale on HTTP %s, instead of zero remaining', async status => {
     await read();
-    nowMs += 300_001;
+    nowMs += 30 * 60_000 + 1;
     fetcher.mockResolvedValueOnce(jsonRes({}, status));
     expect(await read()).toMatchObject({ status: 'ready', stale: true, error: 'server', snapshot: { windows: [{ usedPercent: 23 }] } });
   });

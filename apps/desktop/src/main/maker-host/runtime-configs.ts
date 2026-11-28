@@ -13,6 +13,7 @@ import { app } from 'electron';
 import path from 'node:path';
 import { getCachedBinaryStatus } from '../agent-binaries/index.js';
 import { withCloudPluginOauthPrompt } from '../plugin-oauth/prompt.js';
+import { localRouteCandidatesInPickOrder } from '../utility-model/auxiliaryRouteRefs.js';
 
 export { claudeUpstreamEndpoint } from './runtimeConfigsCore.js';
 
@@ -35,6 +36,10 @@ export const desktopRuntimeConfigs = createAgentRuntimeConfigs({
   userDataPath: () => app.getPath('userData'),
   ripgrepCandidates: desktopRipgrepCandidates,
   codexBinaryPath: () => getCachedBinaryStatus('codex').binaryPath,
+  // Subagent 选了智能路由：路由里本机的 Claude Code 来源，与辅助模型同一个先后。
+  subagentRouteMembers: (routeId) => localRouteCandidatesInPickOrder(routeId)
+    .filter((candidate) => candidate.agentKind === 'cc')
+    .map(({ providerId, model }) => ({ providerId, model })),
 });
 
 /** Bundled ripgrep executable; throws when missing (see runtimeConfigsCore.ts). */

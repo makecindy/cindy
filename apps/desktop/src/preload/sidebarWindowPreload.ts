@@ -242,6 +242,18 @@ contextBridge.exposeInMainWorld('electronAPI', {
       clear: (deviceId: string): Promise<{ ok: true }> =>
         ipcRenderer.invoke(DEVICE_LINK_INVOKE.MIRROR_CACHE_CLEAR, { deviceId }),
     },
+    offlineInboxIntents: {
+      list: (): Promise<unknown> =>
+        ipcRenderer.invoke(DEVICE_LINK_INVOKE.OFFLINE_INBOX_INTENTS_LIST),
+      upsert: (intent: unknown): Promise<unknown> =>
+        ipcRenderer.invoke(DEVICE_LINK_INVOKE.OFFLINE_INBOX_INTENTS_UPSERT, { intent }),
+      remove: (deviceId: string, sessionId: string): Promise<unknown> =>
+        ipcRenderer.invoke(DEVICE_LINK_INVOKE.OFFLINE_INBOX_INTENTS_REMOVE, { deviceId, sessionId }),
+      clearDevice: (deviceId: string): Promise<unknown> =>
+        ipcRenderer.invoke(DEVICE_LINK_INVOKE.OFFLINE_INBOX_INTENTS_CLEAR_DEVICE, { deviceId }),
+      onChanged: (cb: (payload: unknown) => void): (() => void) =>
+        onPayload(DEVICE_LINK_PUSH.OFFLINE_INBOX_INTENTS_CHANGED, cb),
+    },
   },
 
   // Right-sidebar plugin capabilities. These are intentionally limited to the

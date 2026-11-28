@@ -42,6 +42,8 @@ export function buildDesktopBlur(output, arch = process.arch) {
         '-framework',
         'Cocoa',
         '-framework',
+        'CoreGraphics',
+        '-framework',
         'QuartzCore',
         '-I',
         headers,

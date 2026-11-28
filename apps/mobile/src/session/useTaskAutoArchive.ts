@@ -163,7 +163,13 @@ async function autoArchiveLeftTask({ session, deviceId, invoke, patchSession, t,
   if (!cards.length || !ok()) return;
   // 先核对完再归档:放进列表的归档事务里核对,首页会先移走这一行、核对失败再放回来。
   if (!await hostStillAllowsAutoArchive(invoke, deviceId, sessionId, cards) || !ok()) return;
-  const bound = await loadConfirmedActiveBoundScheduleNames({ deviceId, invoke, sessionId, source: session.source });
+  const bound = await loadConfirmedActiveBoundScheduleNames({
+    deviceId,
+    invoke,
+    sessionId,
+    source: session.source,
+    orcaRole: session.orcaRole,
+  });
   if (!bound || bound.length > 0 || !ok()) return;
   if (await hasComposerDraft(sessionId) || !ok()) return;
   if (!await worktreeConfirmedClean(invoke, deviceId, sessionId) || !ok()) return;

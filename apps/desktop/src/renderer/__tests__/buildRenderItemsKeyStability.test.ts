@@ -1035,6 +1035,26 @@ describe('buildRenderItems — key stability', () => {
     expect(secondCard).toBe(firstCard);
   });
 
+  // 性能回归：历史产物的时间戳可能乱序；按轮次切分时仍需保留输入顺序，
+  // 且不能逐轮对整份产物数组做 Date.parse（2026-11-27 主线程长任务）。
+  it('keeps history artifacts in input order when their timestamps are not sorted', () => {
+    const messages = [
+      { clientId: 'u1', role: 'user', content: '...', createdAt: '2026-01-01T10:00:00Z' },
+      { clientId: 'a1', role: 'assistant', content: 'ok', createdAt: '2026-01-01T11:00:00Z' },
+      { clientId: 'u2', role: 'user', content: '...', createdAt: '2026-01-01T12:00:00Z' },
+    ] satisfies ChatMessage[];
+    const card = buildRenderItems(messages, undefined, undefined, {
+      workingDir: 'C:/work',
+      historyArtifacts: [
+        { path: 'C:/work/late.md', source: 'tool', createdAt: '2026-01-01T10:50:00Z' },
+        { path: 'C:/work/early.md', source: 'tool', createdAt: '2026-01-01T10:05:00Z' },
+        { path: 'C:/work/invalid.md', source: 'tool', createdAt: 'not-a-date' },
+        { path: 'C:/work/next.md', source: 'tool', createdAt: '2026-01-01T12:00:00Z' },
+      ],
+    }).items.find((item): item is Extract<RenderItem, { type: 'generated_files' }> => item.type === 'generated_files');
+    expect(card?.files.map((file) => file.name)).toEqual(['late.md', 'early.md', 'invalid.md']);
+  });
+
   it('unseals generated files when the same visible turn auto-continues after turnCompleted', () => {
     const workingDir = 'C:/work';
     const firstWrite = mkTool('write-1', 'Write', { file_path: 'C:/work/a.md', content: 'x' });

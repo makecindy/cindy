@@ -54,7 +54,8 @@ describe('provider group store', () => {
     expect(withLocalProviderGroupAccounts(reopened, id).members
       .filter(member => member.kind === 'local').map(({ paused, limit, limitSet }) => [paused, limit, limitSet]))
       .toEqual([[true, 1, true], [false, 2, true], [false, 4, undefined]]);
-    expect(publicProviderGroupConfig(reopened)).toEqual({ ...publicProviderGroupConfig(initial), strategy: 'weight' });
+    // 旧名字「weight」读取时换成统一选法里的「weighted」。
+    expect(publicProviderGroupConfig(reopened)).toEqual({ ...publicProviderGroupConfig(initial), strategy: 'weighted' });
     const removed = (await store.writeProviderGroup(id, { ...reopened, localAccountIds: ['lab-key'] }, reopened))!;
     expect(removed.localAccountSettings).toEqual({ order: [id, 'lab-key'], weights: { [id]: 2 }, limits: { [id]: 2 } });
     const rejoined = (await store.writeProviderGroup(id, { ...removed, localAccountIds: ['lab-key', 'work-key'] }, removed))!;
@@ -65,8 +66,8 @@ describe('provider group store', () => {
   it('persists two independent subscription members on one device without merging their identities', async () => {
     const a = { kind: 'device', agentDeviceId: 'one-host', providerId: 'openai-sub-12345678', providerName: 'Codex A' };
     const b = { ...a, providerId: 'openai-sub-abcdef01', providerName: 'Codex B' };
-    const first = await store.writeProviderGroup('openai', { strategy: 'round', members: [a] });
-    await store.writeProviderGroup('openai', { strategy: 'round', members: [a, b] }, first);
+    const first = await store.writeProviderGroup('openai', { strategy: 'rotate', members: [a] });
+    await store.writeProviderGroup('openai', { strategy: 'rotate', members: [a, b] }, first);
     const disk = JSON.parse(fs.readFileSync(path.join(tmpDir, 'provider-group-prefs.json'), 'utf8'));
     const reloaded = store.__testing.normalize(disk).groups.openai;
     expect(reloaded.members.map((m) => [m.key, m.providerId, m.providerName])).toEqual([
@@ -135,14 +136,14 @@ describe('provider group store', () => {
   it('drops invalid groups and empty groups when reading', () => {
     expect(store.__testing.normalize({
       groups: {
-        anthropic: { strategy: 'least', members: [{ kind: 'local' }] },
+        anthropic: { strategy: 'expiring', members: [{ kind: 'local' }] },
         'bad id': { members: [{ kind: 'local' }] },
         empty: { members: [] },
       },
     })).toEqual({
       groups: {
         anthropic: {
-          strategy: 'least',
+          strategy: 'expiring',
           autoSwitch: true,
           members: [{ key: 'local', kind: 'local', agentDeviceId: null, providerId: 'anthropic', limit: 4, weight: 1, paused: false }],
         },
@@ -178,7 +179,7 @@ describe('provider group store', () => {
 
   it('compares under the file lock so only one of two concurrent edits can use the same snapshot', async () => {
     const initial = (await store.writeProviderGroup('concurrent', { members: [{ kind: 'local' }] }))!;
-    const edits = [{ ...initial, autoSwitch: false }, { ...initial, strategy: 'round' as const }];
+    const edits = [{ ...initial, autoSwitch: false }, { ...initial, strategy: 'rotate' as const }];
     const results = await Promise.allSettled(edits.map((config) => store.writeProviderGroup('concurrent', config, initial)));
     expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
     expect(results.filter((result) => result.status === 'rejected')).toEqual([
@@ -199,7 +200,7 @@ describe('provider group store', () => {
   });
 
   it('persists cleanup with group removal and retains it through restart, rejoin, and stale acknowledgements', async () => {
-    const config = { strategy: 'least', members: [{ kind: 'local' }, { kind: 'share', agentDeviceId: 'share:a1', providerId: 'anthropic' }] };
+    const config = { strategy: 'expiring', members: [{ kind: 'local' }, { kind: 'share', agentDeviceId: 'share:a1', providerId: 'anthropic' }] };
     await store.writeProviderGroup('anthropic', config);
     await store.writeProviderGroup('anthropic', null);
     const token = store.listProviderGroupReshareCleanups()['share:a1'];

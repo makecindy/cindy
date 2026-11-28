@@ -1,7 +1,9 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { PluginTaskPrefs } from '../PluginTaskPrefs';
+import { getDataOwnerGeneration, setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
+import { modelCatalogKey } from '../../../shared/controlledModelCatalog';
 
 const state = vi.hoisted(() => ({
   config: {} as Record<string, unknown>,
@@ -9,6 +11,7 @@ const state = vi.hoisted(() => ({
   save: vi.fn(),
 }));
 vi.mock('react-i18next', () => ({
+  initReactI18next: { type: '3rdParty', init: vi.fn() },
   useTranslation: () => ({
     t: (key: string, values?: Record<string, string>) =>
       values?.model ? `${key}:${values.model}` : key,
@@ -16,7 +19,12 @@ vi.mock('react-i18next', () => ({
 }));
 vi.mock('@/hooks/useAvailableAgents', () => ({ useModelPickerAgents: () => [] }));
 vi.mock('@/hooks/useModelRouteDevices', () => ({
-  useModelRouteDevices: () => ({ leadAgentDeviceId: null, devices: [{ deviceId: 'share:abc', name: 'Shared' }] }),
+  // Like the real hook: a controlled computer that lists its own sources reads them through itself.
+  useModelRouteDevices: ({ controlledDeviceId }: { controlledDeviceId: string | null }) => ({
+    leadAgentDeviceId: null,
+    devices: [{ deviceId: 'share:abc', name: 'Shared' }],
+    ...(controlledDeviceId ? { catalogHostDeviceId: controlledDeviceId } : {}),
+  }),
 }));
 vi.mock('@/state/newMakerDraft', () => ({
   getEffortForModel: () => undefined, getFastModeForModel: () => false,
@@ -31,6 +39,15 @@ vi.mock('@/components/new-chat/ModelSelector', () => ({ ModelSelector: (props: a
     providerId: 'openai', modelId: 'chosen', effort: 'high', fast: false,
     agentDevice: { deviceId: props.remoteAgent.devices[0].deviceId, name: 'Shared' } })}>remote</button> : null}
   <button data-testid="fast" onClick={() => props.onFastModeChange(true)}>Fast</button>
+  {props.pluginEngines ? <button data-testid="acp-engine" onClick={() => props.pluginEngines.onSelect({
+    providerId: 'acp-plugin:antigravity:agy', modelId: 'gemini-4-neon', effort: 'high',
+  })}>acp</button> : null}
+  <span data-testid="trigger-catalog">{props.deviceId ?? 'local'}</span>
+  {props.deviceId ? (
+    <button onClick={props.readModelGroupDevices}>
+      {props.modelGroups?.config.routes[0]?.name ?? 'Open model picker'}
+    </button>
+  ) : null}
   </>
 ) }));
 vi.mock('@/components/new-chat/PermissionSelector', () => ({ PermissionSelector: (props: any) => (
@@ -107,6 +124,64 @@ it('saves a remote row together with its run location and explains the quick-ans
   }));
   expect(screen.getByText('settings.ghosts.detail.errandPrefs.remoteQuickAnswerHint')).toBeTruthy();
 });
+// Production entry: the real PluginTaskPrefs hands the saved route's catalog to the model field
+// (ModelSelector's deviceId contract: non-empty = resolve the trigger on that catalog).
+// Bug: a model saved from another computer or a received share was saved, but the field resolved it
+// on the plugin computer's own catalog and showed "model info unavailable". Gap: the case above
+// checks only the save, not how the saved route is shown again. Minimal failing input: a saved
+// agentDeviceId 'share:abc', locally or on a controlled plugin computer. tier: unit (jsdom).
+it.each([
+  ['a saved share on this computer resolves on its own catalog', 'share:abc', false, true, 'share:abc'],
+  ['a saved share of a controlled computer is read through that computer', 'share:abc', true, true,
+    modelCatalogKey('share:abc', 'host')],
+  ['a local route stays on the local catalog', null, false, true, 'local'],
+  ['the controlled computer itself stays on its catalog', null, true, true, 'host'],
+  ['a quick-answer-only plugin stays local', 'share:abc', false, false, 'local'],
+] as const)('model field: %s', (_name, agentDeviceId, controlled, showTaskRows, expected) => {
+  const config = { agentKind: 'codex' as const, providerId: 'openai', model: 'chosen', agentDeviceId };
+  state.config = config;
+  render(<PluginTaskPrefs ghostId="plugin" showTaskRows={showTaskRows} {...(controlled ? { remote: {
+    deviceId: 'host',
+    value: { revision: '1', config, permissionModes: ['ask'], defaultPermissionMode: 'ask', remoteRoutes: true },
+    auxiliaryModelLabel: null,
+    onChange: vi.fn(),
+  } } : {})} />);
+  expect(screen.getByTestId('trigger-catalog').textContent).toBe(expected);
+});
+// Test value (unit/jsdom): model-groups.md §6.3 requires reopening to fetch the remote
+// snapshot. The existing panel test covers mounting the selector, but not the settings
+// caller's wiring. A transient failure in the first GET must still allow a successful
+// GET from the model field. The picker double only exposes the read and returned routes.
+it('reloads remote plugin routes from the model field after the initial read fails', async () => {
+  const owner = getDataOwnerGeneration();
+  setDataOwnerGeneration('plugin-prefs-test', owner.generation + 1);
+  const invoke = vi.fn(async (_deviceId: string, channel: string) => {
+    if (channel !== 'model-groups:get') return {};
+    return { routes: [{ id: 'fallback', name: 'Remote fallback', strategy: 'order', candidates: [] }] };
+  });
+  invoke.mockRejectedValueOnce(new Error('Temporary model-groups read failure'));
+  Object.assign(window.electronAPI, { deviceLink: { invoke } });
+  const reads = () => invoke.mock.calls.filter(([, channel]) => channel === 'model-groups:get');
+
+  try {
+    await act(async () => {
+      render(<PluginTaskPrefs ghostId="plugin" remote={{
+        deviceId: 'host',
+        value: { revision: '1', config: {}, permissionModes: ['ask'], defaultPermissionMode: 'ask' },
+        auxiliaryModelLabel: null,
+        onChange: vi.fn(),
+      }} />);
+    });
+    expect(reads()).toHaveLength(1);
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Open model picker' })));
+    expect(reads()).toHaveLength(2);
+    expect(screen.getByRole('button', { name: 'Remote fallback' })).toBeTruthy();
+  } finally {
+    cleanup();
+    setDataOwnerGeneration(owner.dataOwnerId, owner.generation);
+  }
+});
+
 it('quick-answer-only plugins show just the model row', () => {
   render(<PluginTaskPrefs ghostId="plugin" showTaskRows={false} />);
   expect(screen.queryByTestId('remote-row')).toBeNull();
@@ -148,4 +223,23 @@ it('shows actionable host validation errors and restores the saved selection', a
   await waitFor(() => expect(screen.getByRole('alert').textContent).toContain('修复连接'));
   expect(screen.getByTestId('model').textContent).toBe('settings.ghosts.detail.errandPrefs.followAuxiliary:Grok 4.6');
   expect((screen.getByTestId('model') as HTMLButtonElement).disabled).toBe(false);
+});
+it('saves a plugin-engine (acp) selection with fastMode false for task-capable plugins', async () => {
+  state.config = {
+    agentKind: 'acp',
+    providerId: 'acp-plugin:antigravity:agy',
+    model: 'gemini-4-neon',
+    effort: 'low',
+    fastMode: false,
+  };
+  render(<PluginTaskPrefs ghostId="plugin" />);
+  fireEvent.click(screen.getByTestId('acp-engine'));
+  await waitFor(() => expect(state.save).toHaveBeenCalledWith('plugin', {
+    agentKind: 'acp',
+    providerId: 'acp-plugin:antigravity:agy',
+    model: 'gemini-4-neon',
+    agentDeviceId: null,
+    effort: 'high',
+    fastMode: false,
+  }));
 });

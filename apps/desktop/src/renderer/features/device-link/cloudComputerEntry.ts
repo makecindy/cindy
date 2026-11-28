@@ -1,9 +1,9 @@
 /**
- * 云主机入口 —— 侧栏机器范围菜单与「远程连接 → 我的设备」共用的一份读取与打开逻辑。
+ * 云主机入口 —— 「远程连接 → 我的设备」(CloudComputerRow) 的读取与打开逻辑。
  * ---------------------------------------------------------------------------
  * Model Access 告诉本账号能做什么(没有云主机可添加 / 正在准备 / 可管理,以及能否再添加一台),
- * 并给出本 realm 的账号中心云主机页地址;界面只决定在哪里展示。两处都在挂载时读一次:
- * 菜单只在展开时挂载,设置页只在打开「远程连接」时挂载,不轮询。
+ * 并给出本 realm 的账号中心云主机页地址;界面只决定在哪里展示。在打开「远程连接」挂载时读一次,
+ * 不轮询。
  */
 
 import { useEffect, useState } from 'react';
@@ -52,7 +52,7 @@ export function cloudComputerActions(entry: CloudComputerEntry): CloudComputerAc
 /**
  * 在浏览器里打开账号中心的云主机页;「添加云主机」直接打开下单表单。
  * 主进程把打不开写在返回值里(success: false)而不是让调用失败,这里统一转成拒绝,
- * 侧栏菜单和设置页各自在 catch 里提示用户。
+ * 由调用方在 catch 里提示用户。
  */
 export async function openCloudComputerPage(entry: CloudComputerEntry, action: CloudComputerAction): Promise<void> {
   const url = new URL(entry.url);

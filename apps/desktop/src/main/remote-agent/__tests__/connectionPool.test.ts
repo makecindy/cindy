@@ -1704,6 +1704,187 @@ describe('remote connection pool with a real host', () => {
     expect(scenario.started).toHaveLength(3);
   });
 
+  // Reconnect-upgrade/downgrade regression (unit): real Session + beforeTurn +
+  // startRemoteAgentSession + createRemoteAgentHost across idle release and
+  // reconnect when the peer gains or loses setWritableDirs.
+  it('keeps beforeTurn writableDirs working after idle reconnect to an upgraded peer and skips removed methods on downgrade', async () => {
+    limits = { perDevice: 16, total: 64 };
+    const pool = newPool();
+    let peerSupportsWritableDirs = false;
+    const baseCapabilities = {
+      switchModel: { supported: false, reason: 'sdk-missing' as const },
+      availableModels: [],
+      hasFastMode: false,
+      effort: { supported: false, reason: 'sdk-missing' as const },
+      effortLevels: [],
+      reasoningDisplay: [],
+      permissionModes: [],
+      setPermissionModeMidSession: { supported: true as const },
+      multimodal: { text: { supported: true as const }, image: { supported: false as const, reason: 'sdk-missing' as const }, file: { supported: true as const } },
+      fork: { supported: false as const, reason: 'sdk-missing' as const },
+      rewind: { supported: false as const, reason: 'sdk-missing' as const },
+      abort: { supported: true as const },
+      sameTurnSteer: { supported: false as const, reason: 'sdk-missing' as const },
+      memory: { supported: { supported: false as const, reason: 'sdk-missing' as const } },
+      extraDirs: { supported: false as const, reason: 'not-implemented' as const },
+      writableDirs: { supported: false as const, reason: 'not-implemented' as const },
+    };
+    const hostWithUpgrade = createRemoteAgentHost({
+      readLimits: () => limits,
+      isAgentAvailable: () => true,
+      isControllerAuthorized: () => true,
+      captureOwner: () => 'owner',
+      isOwnerCurrent: () => true,
+      runsRoot: hostRoot,
+      startHosted: async (input) => fakeAgent(input),
+      pluginEngines: {
+        isOffered: (providerId) => providerId === 'acp-plugin:p:h',
+        start: async (input) => {
+          const inner = fakeAgent({ ...input, kind: 'pi' });
+          const caps = {
+            ...baseCapabilities,
+            writableDirs: peerSupportsWritableDirs
+              ? { supported: true as const }
+              : { supported: false as const, reason: 'not-implemented' as const },
+          };
+          return {
+            ...inner,
+            agentKind: 'acp' as const,
+            get negotiatedCapabilities() {
+              return caps;
+            },
+            ...(peerSupportsWritableDirs
+              ? {
+                  async setWritableDirs(dirs: string[]) {
+                    scenario.calls.push({ method: 'setWritableDirs', args: [dirs] });
+                  },
+                }
+              : {}),
+          };
+        },
+      },
+    });
+    const prevHost = host;
+    host = hostWithUpgrade;
+    const logger = { trace() {}, debug() {}, info() {}, warn() {}, error() {}, fatal() {}, child() { return logger; } };
+    const extraWritable = path.join(root, 'writable-extra');
+    fs.mkdirSync(extraWritable, { recursive: true });
+    let appliedWritableDirs: string[] = [];
+    const handle = await startRemoteAgentSession('acp', {
+      sessionId: randomUUID(),
+      workingDir: project,
+      model: 'gemini-4-neon',
+      providerId: 'acp-plugin:p:h',
+    } as StartSessionOptions, deps(pool));
+    opened.push(handle);
+    const session = new Session({
+      id: 'acp-upgrade-reconnect',
+      agentKind: 'acp',
+      agentDeviceId: 'provider-device',
+      workDir: project,
+      handle,
+      capabilities: baseCapabilities,
+      logger,
+      turnStallMs: 0,
+      beforeTurn: async (sess) => {
+        if (sess.capabilities.writableDirs?.supported) {
+          await sess.setWritableDirs(appliedWritableDirs);
+        }
+      },
+    });
+    try {
+      // Turn 1: old peer without setWritableDirs.
+      expect(session.capabilities.writableDirs?.supported).toBe(false);
+      expect(await session.send('turn-1')).toMatchObject({ accepted: true });
+      await vi.waitFor(() => expect(session.getObservedCurrentTurnTerminal()).toMatchObject({ kind: 'done' }));
+
+      // Idle release, then peer upgrades to advertise writableDirs + setWritableDirs.
+      await sleep(5);
+      expect(await pool.releaseForRetry(member('other', 0, false))).toBe(true);
+      peerSupportsWritableDirs = true;
+
+      // Turn 2 triggers reconnect and updates capabilities + handle methods.
+      expect(await session.send('turn-2')).toMatchObject({ accepted: true });
+      await vi.waitFor(() => expect(session.getObservedCurrentTurnTerminal()).toMatchObject({ kind: 'done' }));
+      expect(session.capabilities.writableDirs?.supported).toBe(true);
+
+      // Turn 3: beforeTurn sees writableDirs.supported === true and must succeed.
+      appliedWritableDirs = [extraWritable];
+      expect(await session.send('turn-3')).toMatchObject({ accepted: true });
+      await vi.waitFor(() => expect(session.getObservedCurrentTurnTerminal()).toMatchObject({ kind: 'done' }));
+      expect(scenario.calls.filter((call) => call.method === 'setWritableDirs')).toHaveLength(1);
+
+      // Idle release again, then peer downgrades (loses setWritableDirs):
+      // capability flips back to false so beforeTurn skips setWritableDirs.
+      await sleep(5);
+      expect(await pool.releaseForRetry(member('other', 0, false))).toBe(true);
+      peerSupportsWritableDirs = false;
+      expect(await session.send('turn-4')).toMatchObject({ accepted: true });
+      await vi.waitFor(() => expect(session.getObservedCurrentTurnTerminal()).toMatchObject({ kind: 'done' }));
+      expect(session.capabilities.writableDirs?.supported).toBe(false);
+      expect(scenario.calls.filter((call) => call.method === 'setWritableDirs')).toHaveLength(1);
+    } finally {
+      await session.close();
+      await hostWithUpgrade.dispose();
+      host = prevHost;
+    }
+  });
+
+  // PR #13354 review (unit): when the initial connection advertised
+  // setWritableDirs (firstStarted.methods contains it), updating writableDirs
+  // and reconnecting to a downgraded peer lacking setWritableDirs must use the
+  // reconnected peer's methods in reapply() instead of calling setWritableDirs
+  // on the older peer and failing reconnect.
+  it('skips setWritableDirs in reapply when initial peer supported it but reconnected peer does not', async () => {
+    limits = { perDevice: 16, total: 64 };
+    const pool = newPool();
+    let peerSupportsWritableDirs = true;
+    const hostWithDowngrade = createRemoteAgentHost({
+      readLimits: () => limits,
+      isAgentAvailable: () => true,
+      isControllerAuthorized: () => true,
+      captureOwner: () => 'owner',
+      isOwnerCurrent: () => true,
+      runsRoot: hostRoot,
+      startHosted: async (input) => {
+        const inner = fakeAgent(input);
+        return {
+          ...inner,
+          ...(peerSupportsWritableDirs
+            ? {
+                async setWritableDirs(dirs: string[]) {
+                  scenario.calls.push({ method: 'setWritableDirs', args: [dirs] });
+                },
+              }
+            : {}),
+        };
+      },
+    });
+    const prevHost = host;
+    host = hostWithDowngrade;
+    const extraWritable = path.join(root, 'writable-downgrade');
+    fs.mkdirSync(extraWritable, { recursive: true });
+    try {
+      const a = await start(pool);
+      const events = watch(a);
+      await ask(a, events, 'first');
+      // Mutate writableDirs while connected so writableDirs !== openedDirs.writableDirs.
+      await a.setWritableDirs!([extraWritable]);
+      expect(scenario.calls.filter((call) => call.method === 'setWritableDirs')).toHaveLength(1);
+
+      // Idle release, then reconnect to a downgraded peer without setWritableDirs.
+      await sleep(5);
+      expect(await pool.releaseForRetry(member('other', 0, false))).toBe(true);
+      peerSupportsWritableDirs = false;
+      expect(await ask(a, events, 'after-downgrade')).toBe('ok:after-downgrade');
+      expect(a.setWritableDirs).toBeUndefined();
+      expect(scenario.calls.filter((call) => call.method === 'setWritableDirs')).toHaveLength(1);
+    } finally {
+      await hostWithDowngrade.dispose();
+      host = prevHost;
+    }
+  });
+
   // #12552: real controller + host admission, unit. #6483 covered a lost
   // close but expected the old host's limit rejection. A new host can finish
   // this exact idle session before replacing it, even if every close RPC drops.
@@ -1911,18 +2092,31 @@ describe('remote connection pool with a real host', () => {
     await sleep(5);
     // 连回的 open 在路上时关掉任务。
     let openGate: (() => void) | null = null;
+    const cleanupGate: { release?: () => void } = {};
+    let openDelivered = false;
     intercept = (request) => {
+      if (request.op === 'close' && openDelivered) return new Promise(resolve => {
+        cleanupGate.release = () => resolve(host.handle(CONTROLLER, request).then(value => value ?? null));
+      });
       if (request.op !== 'open' || openGate) return undefined;
       return new Promise((resolve) => {
-        openGate = () => resolve(host.handle(CONTROLLER, request).then((value) => value ?? null));
+        openGate = () => { openDelivered = true; resolve(host.handle(CONTROLLER, request).then((value) => value ?? null)); };
       });
     };
     const sending = a.send({ type: 'user', content: 'late' });
     await vi.waitFor(() => expect(openGate).not.toBeNull());
-    const closing = a.close({ reason: 'navigation' });
+    let sendSettled = false;
+    const result = sending.then(() => { sendSettled = true; return 'sent'; }, () => { sendSettled = true; return 'rejected'; });
+    await a.close({ reason: 'navigation' });
     openGate!();
-    await closing;
-    await expect(sending).rejects.toThrow();
+    try {
+      await vi.waitFor(() => expect(cleanupGate.release).toBeTypeOf('function'));
+      // One event-loop boundary drains promise handlers without a timing threshold.
+      await new Promise<void>(resolve => setImmediate(resolve));
+      expect(host.limitUsage().total).toBe(1);
+      expect(sendSettled).toBe(false);
+    } finally { cleanupGate.release?.(); }
+    await expect(result).resolves.toBe('rejected');
     // b 为 a 让了位；a 连回途中被关掉，对方不能留下 a 的进程。
     await vi.waitFor(() => expect(host.limitUsage().total).toBe(0));
     expect(pool.size).toBe(1);

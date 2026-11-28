@@ -12,7 +12,7 @@
 import type { OutputLimitDetails } from '@cindy/maker-shared';
 import { NATIVE_SUBSCRIPTION_ACCOUNT, type NativeSubscriptionAccount } from '../interfaces/auth-adapter.js';
 
-import type { WorkflowProgressEntry } from '@cindy/maker-shared/agent-task';
+import type { SubagentRecentActivity, WorkflowProgressEntry } from '@cindy/maker-shared/agent-task';
 import type { TokenSpeedSnapshot } from '@cindy/maker-shared/usage-format';
 import type { SubagentObservation } from '@cindy/maker-shared/subagent-observation';
 import {
@@ -136,6 +136,8 @@ export interface AgentTaskUpdateEventData {
   outputFile?: string;
   usage?: AgentTaskUsage;
   lastToolName?: string;
+  lastToolSummary?: string;
+  recentActivities?: SubagentRecentActivity[];
   taskType?: string;
   /**
    * 后台命令（taskType=local_bash）是会自己结束的工作，还是长驻服务。宿主按启动它的
@@ -336,7 +338,7 @@ export interface AskUserQuestionItem {
   id?: string;
   question: string;
   header?: string;
-  options?: Array<{ label: string; description?: string }>;
+  options?: Array<{ label: string; description?: string; preview?: string }>;
   multiSelect?: boolean;
   answerConstraints?: import('@cindy/maker-shared').AskAnswerConstraints;
 }

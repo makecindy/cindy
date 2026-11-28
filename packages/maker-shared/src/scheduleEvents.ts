@@ -1,7 +1,7 @@
 export type SchedulerEvent =
   | { type: 'fired'; scheduleId: string; runId: string }
   | { type: 'completed'; scheduleId: string; runId: string; sessionId: string }
-  | { type: 'failed'; scheduleId: string; runId: string; error: string; sessionId?: string }
+  | { type: 'failed'; scheduleId: string; runId: string; error: string; sessionId?: string; silenced?: boolean }
   | { type: 'deferred'; scheduleId: string; runId: string }
   /** 前置检查脚本(preRunHook)exit 2 拦截:run 记 'skipped' 生而已读;sessionId 为留痕会话 id,可为空串。新主机会附带排期时间戳与检查恢复标记。 */
   | {
@@ -88,9 +88,15 @@ export function normalizeSchedulerEvent(value: unknown): NormalizedSchedulerEven
       const runId = readString(value.runId);
       if (!scheduleId || !runId) return unknownEvent(type);
       const sessionId = readString(value.sessionId);
-      return sessionId
-        ? { type, scheduleId, runId, error: readString(value.error) ?? '', sessionId }
-        : { type, scheduleId, runId, error: readString(value.error) ?? '' };
+      const silenced = value.silenced === true;
+      return {
+        type,
+        scheduleId,
+        runId,
+        error: readString(value.error) ?? '',
+        ...(sessionId ? { sessionId } : {}),
+        ...(silenced ? { silenced: true } : {}),
+      };
     }
     case 'skipped': {
       // sessionId 与 completed 不同**允许空串**:desktop engine 在留痕会话创建失败或
@@ -202,13 +208,15 @@ export function projectNormalizedScheduleEvent(event: NormalizedSchedulerEvent):
         unreadSummary: !patchable && event.preRunCheckSucceeded === true,
       }, 'none', runPatch(event.scheduleId, event.runId, event.sessionId || null, 'terminal'));
     }
-    case 'failed':
+    case 'failed': {
+      const silenced = event.silenced === true;
       return projection(event, {
         runRefresh: { mode: 'schedule', scheduleId: event.scheduleId },
         scheduleList: false,
         sessionIndex: true,
-        unreadSummary: true,
-      }, 'may-increase', runPatch(event.scheduleId, event.runId, event.sessionId ?? null, 'terminal'));
+        unreadSummary: !silenced,
+      }, silenced ? 'none' : 'may-increase', runPatch(event.scheduleId, event.runId, event.sessionId ?? null, 'terminal'));
+    }
     case 'session-bound':
       return projection(event, {
         runRefresh: { mode: 'schedule', scheduleId: event.scheduleId },

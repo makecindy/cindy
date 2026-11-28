@@ -6,6 +6,7 @@ mod media;
 mod media_http;
 mod notification;
 mod udp_paths;
+mod wait;
 
 use std::{ffi::{c_char, CString}, panic::{AssertUnwindSafe, catch_unwind}};
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
@@ -28,17 +29,28 @@ pub(crate) fn text<'a>(value: &'a Value, key: &str) -> Result<&'a str, &'static 
 }
 pub(crate) fn encoded(bytes: &[u8]) -> String { URL_SAFE_NO_PAD.encode(bytes) }
 
+/// `seed` and `context` derive the identity's keys (`identityFromSeed`); `keys` gives them as they are, for identities stored
+/// that way (the Desktop's): `transport`, the X25519 secret, and `signing`, the Ed25519 seed, both base64url.
 pub fn create(options: &Value) -> Result<NativeEngine, &'static str> {
-    let seed = Zeroizing::new(bytes(&options["seed"])?);
-    let seed: &[u8; 32] = seed.as_slice().try_into().map_err(|_| "INVALID_IDENTITY_SEED")?;
-    let context = text(options, "context")?;
-    if context.is_empty() || context.len() > 256 { return Err("INVALID_IDENTITY_CONTEXT"); }
+    let stored = options.get("keys").filter(|keys| !keys.is_null());
+    let key = |value: &Value, error: &'static str| -> Result<Zeroizing<[u8; 32]>, &'static str> {
+        let bytes = Zeroizing::new(bytes(value)?);
+        Ok(Zeroizing::new(bytes.as_slice().try_into().map_err(|_| error)?))
+    };
+    let crypto = match stored {
+        Some(keys) => NativeCrypto::from_keys(&*key(&keys["transport"], "INVALID_TRANSPORT_KEY")?, &*key(&keys["signing"], "INVALID_SIGNING_KEY")?)?,
+        None => {
+            let seed = key(&options["seed"], "INVALID_IDENTITY_SEED")?;
+            let context = text(options, "context")?;
+            if context.is_empty() || context.len() > 256 { return Err("INVALID_IDENTITY_CONTEXT"); }
+            NativeCrypto::from_seed(context, &*seed, options["legacySigning"] == true)?
+        },
+    };
     let device_id = text(options, "deviceId")?;
     if device_id.is_empty() || device_id.len() > 128
         || !device_id.as_bytes()[0].is_ascii_alphanumeric()
         || !device_id.bytes().all(|b| b.is_ascii_alphanumeric() || b"._:@/-".contains(&b))
     { return Err("INVALID_DEVICE_ID"); }
-    let crypto = NativeCrypto::from_seed(context, seed, options["legacySigning"] == true)?;
     NativeEngine::new(crypto, device_id.to_owned(), options["udp"].as_bool().unwrap_or(true), options["enhancedTransport"].as_bool().unwrap_or(false))
 }
 

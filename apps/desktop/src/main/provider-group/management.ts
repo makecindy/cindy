@@ -7,6 +7,14 @@ import { throwIpcError } from '../utils/ipcValidate.js';
 import { createProviderGroupCommandDeps, executeProviderGroupCommand, parseProviderGroupCommand } from './ipc.js';
 import { captureProviderManagementScope } from './managementScope.js';
 import { publicProviderGroupConfig, type ProviderGroupView } from '../../shared/providerGroup.js';
+import { runReportedRemoteChange } from '../instance-runtime/maintenance.js';
+
+// 只读的管理操作。其余都会改状态，以后加进管理范围的操作没登记在这里也按改动处理。
+const GROUP_READS = new Set<ProviderGroupManagementCommand['action']>(['get', 'candidates']);
+const SHARE_READS = new Set<ProviderShareManagementCommand['action']>([
+  'owned', 'shared-provider-ids', 'own-usage', 'usage-history', 'get-run-limits', 'get-visibility',
+  'quota-account', 'get-model-access', 'get-fast-policy',
+]);
 
 export function parseProviderManagementRequest(raw: unknown): ProviderManagementRequest {
   if (!isProviderManagementRequest(raw)) throwIpcError('INVALID_PARAMS', 'Invalid provider management request');
@@ -33,9 +41,15 @@ export async function handleProviderManagementRequest(
 ): Promise<ProviderManagementReply> {
   const assertCurrent = captureProviderManagementScope();
   const request = parseProviderManagementRequest(raw);
-  const result = request.action === 'manage-group'
-    ? await executeProviderGroupCommand(createProviderGroupCommandDeps(options), request.command)
-    : await executeProviderShareManagementCommand(request.command);
+  const execute = async (): Promise<unknown> => request.action === 'manage-group'
+    ? executeProviderGroupCommand(createProviderGroupCommandDeps(options), request.command)
+    : executeProviderShareManagementCommand(request.command);
+  const reads = request.action === 'manage-group'
+    ? GROUP_READS.has(request.command.action)
+    : SHARE_READS.has(request.command.action);
+  // 同账号电脑经 DeviceLink、云服务网页经中转都走到这里。云实例上，改动计入维护在途直到落定，
+  // 维护开始后可重试地拒绝；读取照常回答。普通电脑没有维护门，直接执行。
+  const result = reads ? await execute() : await runReportedRemoteChange(execute);
   assertCurrent();
   if (request.action === 'manage-group' && request.command.action !== 'candidates') {
     const view = result as ProviderGroupView;
