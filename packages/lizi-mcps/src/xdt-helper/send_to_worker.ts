@@ -49,7 +49,7 @@ export interface SendToWorkerDeps {
         steerFallbackReason?: SteerFallbackReason;
         supersededFailureNotices?: SupersededFailureNotice[];
       },
-      'NOT_FOUND' | 'ARCHIVED' | 'DELETED' | 'BUSY' | 'AGENT_NOT_READY' | 'INVALID_ARGS'
+      'NOT_FOUND' | 'ARCHIVED' | 'DELETED' | 'BUSY' | 'AGENT_NOT_READY' | 'INVALID_ARGS' | 'DELIVERY_UNKNOWN'
     >
   >;
   interruptWorker: (params: {
@@ -70,7 +70,7 @@ export interface SendToWorkerDeps {
         queuePaused: boolean;
         supersededFailureNotices?: SupersededFailureNotice[];
       },
-      'NOT_FOUND' | 'ARCHIVED' | 'DELETED' | 'BUSY' | 'AGENT_NOT_READY' | 'INVALID_ARGS'
+      'NOT_FOUND' | 'ARCHIVED' | 'DELETED' | 'BUSY' | 'AGENT_NOT_READY' | 'INVALID_ARGS' | 'DELIVERY_UNKNOWN'
     >
   >;
 }
@@ -100,6 +100,8 @@ function describeSupersededFailureNotices(
   };
 }
 
+const DELIVERY_UNKNOWN_HINT = '跨设备投递返回 DELIVERY_UNKNOWN 时，消息可能已经送达。系统会按原消息核对，请勿重派。';
+
 const DESCRIPTION =
   '向指定 worker 投递消息(派活/追问)。' +
   '消息正文要自包含:worker 不一定能读到你工作目录里的文件(独立 worktree 里没有你未提交的文件,另一台电脑上的 worker 读不到这台电脑的任何文件),任务要点写进正文,文件只作补充并给绝对路径。' +
@@ -112,7 +114,8 @@ const DESCRIPTION =
   '用户在对话里贴的图, 把上下文 <cindy-host-image-references> 里的 uri 原样传入即可。' +
   '没插成时照常直发或排队,排队时附 steer_fallback_reason。' +
   '需要替换 worker 当前任务时改用 interrupt_worker。' +
-  '失败码: LEAD_NOT_SUPPORTED / NOT_FOUND / ARCHIVED / DELETED / BUSY / AGENT_NOT_READY。';
+  '失败码: LEAD_NOT_SUPPORTED / NOT_FOUND / ARCHIVED / DELETED / BUSY / AGENT_NOT_READY / DELIVERY_UNKNOWN。' +
+  DELIVERY_UNKNOWN_HINT;
 
 /**
  * 排队回执的队列部分:这条消息的位置,以及 Lead 自己此前发出、worker 还没读到的其他消息。
@@ -220,7 +223,7 @@ export function registerSendToWorkerTool(
       '原子地把新指令预留为 worker 下一条输入,再请求优雅停止当前 turn。' +
       'This ends the unfinished turn. Do not use it for additional context, progress requests, or independent follow-up work; use send_to_worker instead. ' +
       '只在新指令必须替换当前任务时使用;普通追加任务请用 send_to_worker。' +
-      '即使 stop_outcome=unsupported/unconfirmed,消息仍保留在优先队首,不会硬 abort。',
+      '即使 stop_outcome=unsupported/unconfirmed,消息仍保留在优先队首,不会硬 abort。' + DELIVERY_UNKNOWN_HINT,
     inputShape: {
       target_session_id: z
         .string()
