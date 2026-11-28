@@ -5333,7 +5333,7 @@ async function readSubscriptionRuntimeSession(id: string) {
   const row = await getSessionRowSnapshotStrict(id);
   if (!sessionRuntimeControlOwnerEpochMatches(owner)) throw new Error('Subscription account owner changed');
   const effective = getSessionRuntimeControlSnapshot(id).effectiveOverride;
-  return row && effective && effective.agentKind === dbToMakerAgentKind(row.agentKind)
+  return row && effective && effective.agentKind === dbToMakerEngineKind(row.agentKind)
     && (effective.agentDeviceId ?? null) === (row.agentDeviceId ?? null)
     ? { ...row, model: effective.model, providerId: effective.providerId } : row;
 }
@@ -5373,7 +5373,7 @@ const subscriptionAccountRecoveryDeps = {
 
 /** 同池是否存在另一个此刻可接手该任务的健康账号（订阅池 / 混合池 / 插件引擎多账号池）。 */
 export async function canSwitchTaskAccount(sessionId: string): Promise<boolean> {
-  return (await canSwitchPluginEngineTaskAccount(sessionId, readSubscriptionRuntimeSession).catch(() => false))
+  return (await canSwitchPluginEngineTaskAccount(sessionId, readSubscriptionRuntimeSession, remoteBackgroundInvoke).catch(() => false))
     || canSwitchSubscriptionAccount(sessionId, readSubscriptionRuntimeSession, remoteBackgroundInvoke);
 }
 
@@ -5389,16 +5389,6 @@ async function prepareSessionAccountsAndHistory(
   sessionId: string,
   retry?: Parameters<NonNullable<typeof contextOverflowRolloverHolder>['prepareNativeSessionRecovery']>[4],
 ): Promise<boolean> {
-  // Plugin engine accounts (subscription-account-pools.md 插件引擎的账号) hand off the same way.
-  const pluginSwitched = await preparePluginEngineAccountForSend(sessionId, {
-    readSession: readSubscriptionRuntimeSession,
-    isRunning: subscriptionAccountRecoveryDeps.isRunning,
-    rebuild: async (id, assertCurrent) => {
-      await subscriptionAccountRecoveryDeps.rebuild(id, assertCurrent);
-      agentInputCoordinatorHolder?.cancelUsageLimitWait(id);
-    },
-    log: subscriptionAccountRecoveryDeps.log,
-  });
   const accountRecovery = retry ? {
     ...subscriptionAccountRecoveryDeps,
     rebuild: async (id: string, assertCurrent: () => void) => {
@@ -5408,6 +5398,17 @@ async function prepareSessionAccountsAndHistory(
         agentInputCoordinatorHolder?.getInputAbortSignal(id), retry);
     },
   } : subscriptionAccountRecoveryDeps;
+  // Plugin engine accounts (subscription-account-pools.md 插件引擎的账号) hand off the same way.
+  const pluginSwitched = await preparePluginEngineAccountForSend(sessionId, {
+    readSession: readSubscriptionRuntimeSession,
+    isRunning: accountRecovery.isRunning,
+    invokeRemote: accountRecovery.invokeRemote,
+    rebuild: async (id, assertCurrent) => {
+      await accountRecovery.rebuild(id, assertCurrent);
+      agentInputCoordinatorHolder?.cancelUsageLimitWait(id);
+    },
+    log: accountRecovery.log,
+  });
   const switched = pluginSwitched || await prepareSubscriptionAccountForSend(sessionId, {
     ...accountRecovery,
     resolveCodexHistoryHome: async threadId => (await readCodexThreadStorageReadOnly(threadId))?.historyHome,
