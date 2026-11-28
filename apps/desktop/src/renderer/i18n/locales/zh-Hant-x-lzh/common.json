@@ -15099,6 +15099,23 @@
       "removeFromList": "自錄中除之",
       "missingDir": "目錄不存"
     },
+    "remoteOutbox": {
+      "notSent": "未遣",
+      "retry": "再試",
+      "delete": "刪",
+      "deliveryUnconfirmed": "傳送未驗",
+      "recheckDelivery": "再驗",
+      "waitingForPrevious": "俟前訊",
+      "taskInactive": "此差事今不能收訊。",
+      "inputNotSupported": "此機尚不能向此差事傳此類之訊。",
+      "taskClearedBeforeSend": "差事已清或方清，訊猶存於此機。",
+      "invalidInput": "此訊有誤，此機未收。",
+      "profileInUseByDesktop": "此資料為獨行之 Cindy 電腦端所用。先退其程，再傳訊。",
+      "deleteConfirmTitle": "刪此訊？",
+      "deleteConfirmBody": "此訊未能遣出，刪之則不可復原。",
+      "deleteUnconfirmedBody": "彼機或已收此訊。刪之，唯去此機待遣之訊。彼機若已收，訊仍見於對談之錄。",
+      "cancel": "罷"
+    },
     "pendingQueue": {
       "waitingForDevice": "尚未發，俟彼機復通乃發",
       "stopping": "方止",

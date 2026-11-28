@@ -4505,7 +4505,7 @@ interface ElectronAPI {
     openLink: (deviceId: string) => Promise<{ appVersion: string; allowlistHash: string }>;
     closeLink: (deviceId: string) => Promise<{ ok: true }>;
     /** 远程调用被控端 allowlist 内 channel;成功拿返回值,失败 reject 带 code 的 Error */
-    invoke: (deviceId: string, channel: string, args: unknown[], scheduling?: { background?: boolean }) => Promise<unknown>;
+    invoke: (deviceId: string, channel: string, args: unknown[], scheduling?: { background?: boolean; requireStructuredHistoryMiss?: boolean }) => Promise<unknown>;
     /** 控制端:订阅被控端某 topic 的变更推送(push 驱动侧边栏 / 会话视图) */
     subscribe: (deviceId: string, topics: string[]) => Promise<{ ok: true }>;
     /** 控制端:取消订阅某 topic */

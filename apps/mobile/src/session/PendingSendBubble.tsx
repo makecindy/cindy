@@ -626,7 +626,8 @@ export function PendingSendBubble({
       <View style={styles.statusRow} testID={`pendingSend.statusRow.${item.clientId}`}>
         {item.historyConfirmation ? (
           <OutboxHistoryConfirmationRow clientId={item.clientId}
-            requested={item.historyConfirmation === 'requested'} onConfirm={actions.onRetryOutbox} />
+            requested={item.historyConfirmation === 'requested'} onConfirm={actions.onRetryOutbox}
+            onRemove={actions.onRemoveOutbox} />
         ) : failed ? (
           <>
             <Text numberOfLines={1} style={styles.statusError}>
@@ -756,10 +757,11 @@ function QueuedSendMenu({ item, actions, accessibilityLabel }: {
   );
 }
 
-export function OutboxHistoryConfirmationRow({ clientId, requested, onConfirm }: {
+export function OutboxHistoryConfirmationRow({ clientId, requested, onConfirm, onRemove }: {
   clientId: string;
   requested: boolean;
   onConfirm(clientId: string): void;
+  onRemove(clientId: string): void;
 }) {
   const { t } = useTranslation();
   const styles = useThemedStyles(makeStyles);
@@ -769,6 +771,8 @@ export function OutboxHistoryConfirmationRow({ clientId, requested, onConfirm }:
       <View style={styles.statusDivider} />
       <StatusAction busy={requested} disabled={requested} label={t('message.queue.recheckDelivery')} primary
         onPress={() => onConfirm(clientId)} testID={`pendingSend.outboxRecheck.${clientId}`} />
+      <StatusAction disabled={requested} label={t('message.queue.delete')}
+        onPress={() => onRemove(clientId)} testID={`pendingSend.outboxRemove.${clientId}`} />
     </View>
   );
 }

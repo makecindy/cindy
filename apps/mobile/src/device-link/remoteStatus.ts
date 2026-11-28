@@ -1,3 +1,4 @@
+import { remoteInputRefusal } from '@cindy/device-link';
 import {
   formatRemoteError as formatRemoteErrorShared,
   isDeviceUnresponsiveRemoteError,
@@ -185,27 +186,9 @@ export function humanizeRemoteError(error: unknown): string {
  * post-handler authorization failures in receipt reconciliation.
  */
 export function describeOutboxEnqueueRefusal(error: unknown): string | undefined {
-  const formatted = formatRemoteErrorShared(error);
-  if (formatted === 'session is not active' || formatted === '[PRECONDITION_FAILED] Session is not active') {
-    return i18n.t('session.outbox.taskInactive');
-  }
-  if (formatted.startsWith('[PRECONDITION_FAILED] HOST_PROFILE_IN_USE_BY_DESKTOP:')) {
-    return i18n.t('session.outbox.profileInUseByDesktop');
-  }
-  if (formatted.startsWith('[UNSUPPORTED_CAPABILITY] ')) return i18n.t('session.outbox.inputNotSupported');
-  if (formatted.startsWith('[INVALID_PARAMS] ')) return i18n.t('session.outbox.invalidInput');
-  if (formatted.startsWith('[PRECONDITION_FAILED] REMOTE_OPTIMISTIC_INPUT_CLEARED:')) {
-    return i18n.t('session.outbox.taskClearedBeforeSend');
-  }
-  // The desktop/Host input preflight includes the requested task ID. The
-  // dispatcher's generic NOT_FOUND reply can also happen after the write.
-  const taskMissing = /^\[NOT_FOUND\] Session \S+ not found$/.test(formatted);
-  const denied = /^\[(?:CHANNEL_NOT_ALLOWED|REMOTE_DISABLED)\] /.test(formatted);
-  const precondition = /^\[PRECONDITION_FAILED\] (?:REMOTE_OPTIMISTIC_INPUT_SUPERSEDED:|Account changed before input$|binary_not_ready:)/.test(formatted);
-  if (taskMissing || denied || precondition) {
-    return humanizeRemoteError(error);
-  }
-  return undefined;
+  const reason = remoteInputRefusal(formatRemoteErrorShared(error));
+  if (reason === 'other') return humanizeRemoteError(error);
+  return reason ? i18n.t(`session.outbox.${reason}`) : undefined;
 }
 
 /**

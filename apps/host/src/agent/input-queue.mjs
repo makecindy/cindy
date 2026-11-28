@@ -605,6 +605,7 @@ export function createInputQueue(deps) {
         const ordinaryInput = !handoff && userInputOptions !== undefined && !getDeviceLinkInvokeContext()?.sharedTask;
         const generation = ordinaryInput ? coordinator.getGeneration(id) : undefined;
         const expectedClearBoundary = readExpectedClearBoundary(userInputOptions);
+        let wakeAfterRouteLock = false;
         const enqueue = routeLockHeld => command(id, async state => {
           if (coordinator.hasKnownClientId(id, item?.clientId)) {
             handoff?.onQueueAcceptanceStarted?.();
@@ -652,6 +653,8 @@ export function createInputQueue(deps) {
                 assertAdmitted,
                 signal: AbortSignal.any([routeStartup.signal, coordinator.getInputAbortSignal(id, generation)]),
               });
+              // The restore is a durable task transition. If admission changes
+              // after it commits, leave the task active without accepting this input.
               assertAdmitted();
             }
             state.lastUserActionAt = Date.now();
@@ -664,7 +667,10 @@ export function createInputQueue(deps) {
             await flushed(id);
             await attachmentOwnership.markDurable(id, item.clientId, prepared.ownerId ?? undefined);
             commitAutoTitle?.();
-            if (!state.persistenceError) unpause(id);
+            if (!state.persistenceError) {
+              if (routeLockHeld) wakeAfterRouteLock = true;
+              else unpause(id);
+            }
             return api.projection(id);
           } finally {
             if (!accepted && prepared.ownerId) await attachmentOwnership.discardSpecific(id, item.clientId, prepared.ownerId);
@@ -674,7 +680,15 @@ export function createInputQueue(deps) {
         if (result !== NEEDS_ARCHIVE_RESTORE_LOCK) return result;
         // Delete takes the same route lock, then drains this command chain. A
         // command must finish before we wait for the lock, never the reverse.
-        return withSessionRouteLock(id, () => enqueue(true));
+        const projection = await withSessionRouteLock(id, () => enqueue(true));
+        const state = states.get(id);
+        // A drain scheduled inside the route lock inherits its async context.
+        // Start it after release so its send takes the lock as an independent operation.
+        if (!wakeAfterRouteLock || !state || !isCurrent() || closing || state.closed
+            || state.persistenceError || state.admission !== admission
+            || !coordinator.isGenerationCurrent(id, generation)) return projection;
+        unpause(id);
+        return api.projection(id);
       },
       /**
        * Capture the input epoch before any asynchronous preparation. The stamp is

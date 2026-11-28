@@ -9,6 +9,7 @@ import type { readKimiCodingAccountUsage, readOpenCodeGoAccountUsage, readZhipuC
 import { PROVIDER_SHARE_INSIGHTS_CHANNEL } from '../../shared/providerShareInsights.js';
 import { PROVIDER_SHARE_AGENT_NET_LINK_CHANNEL } from '../../shared/providerShareAgentNetLink.js';
 import { sharedTaskRecoveryError } from '../../shared/sharedTaskRecovery.js';
+import { isIpcError } from '../../shared/ipc-errors.js';
 import { hasRichAnswer, compactRichAnswer, richAnswerText } from '@cindy/maker-shared/rich-answer';
 import type { RemoteAgentLimitUsage } from '../../shared/remoteAgentLimits.js';
 import type { executeTaskTags, TASK_TAG_CHANNEL } from '../localDb/ipc/taskTags.js';
@@ -5790,7 +5791,8 @@ async function executeRemoteInvoke(src: string, payload: InvokePayload | undefin
     if (isDbWorkerOverloadedError(message) && (!handlerCompleted || isCompletedInvokeRetryableReadChannel(payload.channel))) {
       return { ok: false, error: { code: 'BACKPRESSURE', message } };
     }
-    if (payload.channel === 'local-db:messages:around-client-id' && err instanceof DeviceLinkError && err.code === 'NOT_FOUND') {
+    if (!handlerCompleted && payload.channel === 'local-db:messages:around-client-id'
+        && (err instanceof DeviceLinkError || isIpcError(err)) && err.code === 'NOT_FOUND') {
       return { ok: false, error: { code: err.code, message } };
     }
     return { ok: false, error: { code: 'IPC_ERROR', message } };

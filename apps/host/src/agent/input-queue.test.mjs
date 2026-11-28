@@ -37,6 +37,7 @@ import { CredentialModeSwitchBusyError } from '../../../desktop/src/main/maker-h
 import { SILENT_STOP_DECISION_DELAY_MS } from '../../../desktop/src/main/maker-ipc/silentStopAutoResume.ts';
 import { SILENT_STOP_AUTO_RESUME_SETTINGS_FILE } from '../../../desktop/src/main/maker-host/silentStopAutoResumeSettingsCore.ts';
 import { lockSessionRoute } from './session-route-lock.mjs';
+import { setSessionRouteLockImplementation } from '../../../desktop/src/main/localDb/sessionRouteLock.ts';
 import { CONTEXT_OVERFLOW_REASON } from '../../../../packages/maker-core/src/agents/shared/context-overflow-error.ts';
 import { RECOVERY_SHUTDOWN_WAIT_MS, contextRecoveryKind, createHostContextRecovery } from './context-recovery.ts';
 import { createHostCodexThreadStorage } from './codex-thread-storage.ts';
@@ -2981,6 +2982,64 @@ test('queue commands finish while another holder has the task send lock; the que
   assert.equal(h.maker.sessions.get('lock-commands')?.sent.length ?? 0, 0, 'the send waits for the lock');
   await lock.release();
   await waitFor(() => h.maker.sessions.get('lock-commands')?.sent.length === 1);
+});
+
+// Unit: a restored enqueue must give up the route lock before its drain starts.
+// An archived row and one input exercise the actual queue and executor; the
+// fixture keeps the route callback open through the first drain microtasks.
+test('ordinary archived enqueue gives up the route lock before dispatch', async t => {
+  const id = 'archive-route-lock';
+  let routeHeld = false;
+  let status = 'archived';
+  const observed = [];
+  const h = createHarness({
+    readSession: async (sessionId, options) => {
+      if (sessionId === id && !options?.forUserInput) observed.push(routeHeld);
+      return { id: sessionId, status, agentKind: 'claude-code', model: 'm',
+        workingDir: os.tmpdir(), providerId: 'xd' };
+    },
+    restoreArchivedSessionForSend: async () => { status = 'active'; },
+  });
+  setSessionRouteLockImplementation((sessionId, run) => withSendToSessionLock(sessionId, async () => {
+    routeHeld = true;
+    try {
+      const result = await run();
+      await new Promise(resolve => setImmediate(resolve));
+      assert.deepEqual(observed, [], 'the drain must not inherit a still-held route lock');
+      return result;
+    } finally {
+      routeHeld = false;
+    }
+  }));
+  t.after(() => { setSessionRouteLockImplementation(null); return h.queue.dispose(); });
+  await h.queue.enqueue(id, { clientId: 'archived-1', text: 'continue' }, undefined, {});
+  await waitFor(() => h.maker.getSession(id)?.sent.length === 1);
+  assert.ok(observed.length > 0 && observed.every(held => !held));
+  assert.equal(status, 'active');
+});
+
+// Unit: Stop after restoration commits but before admission recheck cannot
+// enqueue the input. The independent task status transition is already durable.
+test('a stopped archived send keeps the completed restore without accepting input', async t => {
+  let status = 'archived';
+  let stopping;
+  const h = createHarness({
+    readSession: async id => ({ id, status, agentKind: 'claude-code', model: 'm',
+      workingDir: os.tmpdir(), providerId: 'xd' }),
+    restoreArchivedSessionForSend: async id => {
+      status = 'active';
+      stopping = h.queue.stop(id);
+    },
+  });
+  t.after(() => h.queue.dispose());
+  const id = 'archive-stopped';
+  const input = { clientId: 'archived-1', text: 'continue' };
+  await assert.rejects(h.queue.enqueue(id, input, undefined, {}), /superseded/);
+  await stopping;
+  assert.equal(status, 'active');
+  assert.deepEqual(h.queue.projection(id).pendingQueue, []);
+  assert.equal(h.persisted.length, 0);
+  assert.equal(h.maker.getSession(id), null);
 });
 
 test('stopping a task takes effect while another holder has its send lock', { timeout: 10_000 }, async t => {

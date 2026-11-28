@@ -15099,6 +15099,23 @@
       "removeFromList": "从列表中移除",
       "missingDir": "目录不存在"
     },
+    "remoteOutbox": {
+      "notSent": "未发送",
+      "retry": "重试",
+      "delete": "删除",
+      "deliveryUnconfirmed": "发送结果未确认",
+      "recheckDelivery": "重新确认",
+      "waitingForPrevious": "等待前一条消息",
+      "taskInactive": "这个任务当前无法接收消息。",
+      "inputNotSupported": "这台电脑暂不支持向这个任务发送这类消息。",
+      "taskClearedBeforeSend": "任务已清空或正在清空，消息仍保存在本机。",
+      "invalidInput": "这条消息有无效内容，电脑未接收。",
+      "profileInUseByDesktop": "这份数据正被单独运行的 Cindy 电脑端使用。请先退出它，再发送。",
+      "deleteConfirmTitle": "删除这条消息？",
+      "deleteConfirmBody": "这条消息没有发送成功，删除后无法恢复。",
+      "deleteUnconfirmedBody": "电脑可能已经收到这条消息。删除只会移除本机的待发消息。如果电脑已收到，这条消息仍会出现在对话记录里。",
+      "cancel": "取消"
+    },
     "pendingQueue": {
       "waitingForDevice": "尚未发送，等另一台电脑恢复连接后发送",
       "stopping": "停止处理中",

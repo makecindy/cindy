@@ -26,6 +26,7 @@ import {
   CONTROLLER_CAPABILITY_TOOL_USE_EVENT_INPUT_OPTIONAL_V1,
 } from '@cindy/device-link';
 import { versionMessageBody } from '../sessionMessageReuse';
+import { createIpcError } from '../../../shared/ipc-errors';
 import { encodeHistoryViewDelta } from '../historyViewDelta';
 
 vi.mock('electron', () => ({
@@ -1116,6 +1117,26 @@ describe('[13] forwardPush — 转发失败 best-effort,不冒泡', () => {
   });
 });
 
+
+// Unit: Desktop's actual local handler error crosses remote dispatch; the
+// v1/legacy clients can distinguish an authoritative miss from generic IPC.
+it('preserves structured NOT_FOUND only for the exact client ID read', async () => {
+  const channel = 'local-db:messages:around-client-id';
+  const error = createIpcError('NOT_FOUND', 'Message 不存在');
+  const missing = vi.fn(async () => { throw error; });
+  registry.register(channel, missing);
+  registry.register('local-db:messages:around', missing);
+  setRemoteBotSessionLookup(async () => 'ordinary');
+  try {
+    expect(await runInvoke('ctrl-1', { channel, args: ['s1', 'm1'] }))
+      .toEqual({ ok: false, error: { code: 'NOT_FOUND', message: error.message } });
+    expect(await runInvoke('ctrl-1', { channel: 'local-db:messages:around', args: ['s1', 'm1'] }))
+      .toEqual({ ok: false, error: { code: 'IPC_ERROR', message: error.message } });
+    expect(missing).toHaveBeenCalledTimes(2);
+  } finally {
+    setRemoteBotSessionLookup(null);
+  }
+});
 
 describe('remote companion Session visibility at the device-link boundary', () => {
   it.each([

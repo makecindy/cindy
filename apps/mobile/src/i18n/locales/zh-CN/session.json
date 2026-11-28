@@ -686,6 +686,7 @@
   "outbox": {
     "deleteConfirmTitle": "删除这条消息？",
     "deleteConfirmBody": "这条消息没有发送成功，删除后无法恢复。",
+    "deleteUnconfirmedBody": "电脑可能已经收到这条消息。删除只会移除本机的待发消息。如果电脑已收到，这条消息仍会出现在对话记录里。",
     "legacyPlanRecovery": "这台电脑暂不支持在计划模式下恢复待发消息。请关闭计划模式，或更新电脑上的 Cindy 后重试",
     "creationRecoveryRequired": "请先重试创建任务，再删除首条消息；这条消息还保存着后续消息所需的任务恢复信息。",
     "confirmationRequired": "电脑暂时无法确认是否收到这条消息。请核对消息记录，或更新电脑上的 Cindy 后重试。",
@@ -693,7 +694,7 @@
     "taskInactive": "这个任务当前无法接收消息。",
     "inputNotSupported": "这台电脑暂不支持向这个任务发送这类消息。",
     "invalidInput": "这条消息有无效内容，电脑未接收。",
-    "taskClearedBeforeSend": "任务已清空或正在清空，消息仍保存在手机上。",
+    "taskClearedBeforeSend": "任务已清空或正在清空，消息仍保存在本机。",
     "taskCleared": "发送后，这个任务已被清空。消息仍保存在手机上，请核对后处理。",
     "restoreFailed": "暂时无法恢复待发消息，已保存的内容没有删除。请重启 App 后重试。",
     "recoveryTarget": "恢复这个任务时请保留原来的电脑，后续消息仍保存在手机上。",

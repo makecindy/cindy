@@ -52,7 +52,7 @@ describe('remoteStatus', () => {
     expect(describeOutboxEnqueueRefusal(new Error('[INVALID_PARAMS] invalid files')))
       .toBe('这条消息有无效内容，电脑未接收。');
     expect(describeOutboxEnqueueRefusal(new Error('[PRECONDITION_FAILED] REMOTE_OPTIMISTIC_INPUT_CLEARED: stale')))
-      .toBe('任务已清空或正在清空，消息仍保存在手机上。');
+      .toBe('任务已清空或正在清空，消息仍保存在本机。');
     expect(describeOutboxEnqueueRefusal(new Error('[NOT_FOUND] Session does not exist'))).toBeUndefined();
     expect(describeOutboxEnqueueRefusal(new DeviceLinkError('ACCESS_REVOKED', 'access changed'))).toBeUndefined();
     expect(describeOutboxEnqueueRefusal(new DeviceLinkError('INVOKE_TIMEOUT', 'reply lost'))).toBeUndefined();

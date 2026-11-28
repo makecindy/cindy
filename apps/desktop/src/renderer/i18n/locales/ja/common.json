@@ -15099,6 +15099,23 @@
       "removeFromList": "リストから削除",
       "missingDir": "フォルダが見つかりません"
     },
+    "remoteOutbox": {
+      "notSent": "未送信",
+      "retry": "再試行",
+      "delete": "削除",
+      "deliveryUnconfirmed": "送信結果は未確認です",
+      "recheckDelivery": "再確認",
+      "waitingForPrevious": "前のメッセージを待機中",
+      "taskInactive": "このタスクは現在メッセージを受信できません。",
+      "inputNotSupported": "このコンピューターでは、このタスクにこの種類のメッセージを送信できません。",
+      "taskClearedBeforeSend": "タスクはクリア済みか、クリア中です。メッセージはこの端末に保存されています。",
+      "invalidInput": "内容が無効なため、コンピューターはメッセージを受け付けませんでした。",
+      "profileInUseByDesktop": "このデータは単独で起動している Cindy デスクトップアプリが使用中です。アプリを終了してから、もう一度送信してください。",
+      "deleteConfirmTitle": "このメッセージを削除しますか？",
+      "deleteConfirmBody": "このメッセージは送信されていません。削除すると元に戻せません。",
+      "deleteUnconfirmedBody": "コンピューターがこのメッセージをすでに受信している可能性があります。削除すると、この端末の送信待ちメッセージだけが消えます。受信済みの場合は、会話履歴に引き続き表示されます。",
+      "cancel": "キャンセル"
+    },
     "pendingQueue": {
       "waitingForDevice": "未送信 · もう一方のコンピュータが再接続したら送信します",
       "stopping": "停止処理中",

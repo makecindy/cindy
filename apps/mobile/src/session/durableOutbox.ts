@@ -291,6 +291,14 @@ export function createDurableOutbox(storage: OutboxStorage, reconcileDraft?: (
         deviceId: record.deviceId,
       }, false, expectedRecords) as Promise<DurableOutboxRecord>,
     remove: (record: DurableOutboxRecord) => mutate(record, null),
+    async discardUnconfirmed(record: DurableOutboxRecord): Promise<void> {
+      if (record.historyConfirmation !== 'unconfirmed') return;
+      // Release the local FIFO without cancelling the remote write or cleaning
+      // uploads that a received message may already reference.
+      await store.update(record, { state: 'host-owned', cleanupOutcome: 'accepted',
+        historyConfirmation: undefined, retryAfterConfirmedMiss: undefined,
+        cancelRequested: undefined, error: undefined });
+    },
     editCreationDraft: (record: DurableOutboxRecord, edit: (current: DurableOutboxRecord) => DurableOutboxRecord | null) =>
       mutate(record, edit),
     ready: (): Promise<void> => store.activate(accountId),

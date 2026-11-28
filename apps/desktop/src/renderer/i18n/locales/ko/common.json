@@ -15099,6 +15099,23 @@
       "removeFromList": "목록에서 제거",
       "missingDir": "폴더를 찾을 수 없음"
     },
+    "remoteOutbox": {
+      "notSent": "전송 안 됨",
+      "retry": "재시도",
+      "delete": "삭제",
+      "deliveryUnconfirmed": "전송 결과 미확인",
+      "recheckDelivery": "다시 확인",
+      "waitingForPrevious": "이전 메시지 대기 중",
+      "taskInactive": "이 작업은 현재 메시지를 받을 수 없습니다.",
+      "inputNotSupported": "이 컴퓨터는 이 작업에 이런 유형의 메시지를 보내는 기능을 지원하지 않습니다.",
+      "taskClearedBeforeSend": "작업이 비워졌거나 비워지는 중입니다. 메시지는 이 기기에 저장되어 있습니다.",
+      "invalidInput": "내용이 올바르지 않아 컴퓨터에서 메시지를 거부했습니다.",
+      "profileInUseByDesktop": "이 데이터는 단독으로 실행 중인 Cindy 데스크톱 앱이 사용하고 있습니다. 앱을 종료한 후 다시 보내세요.",
+      "deleteConfirmTitle": "이 메시지를 삭제할까요?",
+      "deleteConfirmBody": "이 메시지는 전송되지 않았습니다. 삭제하면 되돌릴 수 없습니다.",
+      "deleteUnconfirmedBody": "컴퓨터가 이미 이 메시지를 받았을 수 있습니다. 삭제하면 이 기기에서 대기 중인 메시지만 사라집니다. 컴퓨터가 이미 받았다면 대화 기록에 계속 표시됩니다.",
+      "cancel": "취소"
+    },
     "pendingQueue": {
       "waitingForDevice": "미전송 · 다른 컴퓨터가 다시 연결되면 보냅니다",
       "stopping": "중지 처리 중",

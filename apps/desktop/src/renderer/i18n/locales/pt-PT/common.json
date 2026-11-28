@@ -15273,6 +15273,23 @@
       "removeFromList": "Remover da lista",
       "missingDir": "Pasta não encontrada"
     },
+    "remoteOutbox": {
+      "notSent": "Não enviado",
+      "retry": "Tentar novamente",
+      "delete": "Eliminar",
+      "deliveryUnconfirmed": "Envio não confirmado",
+      "recheckDelivery": "Verificar novamente",
+      "waitingForPrevious": "A aguardar a mensagem anterior",
+      "taskInactive": "Esta tarefa não pode receber mensagens de momento.",
+      "inputNotSupported": "Este computador não permite enviar este tipo de mensagem para a tarefa.",
+      "taskClearedBeforeSend": "A tarefa foi limpa ou está a ser limpa. A mensagem continua guardada neste dispositivo.",
+      "invalidInput": "O computador rejeitou a mensagem porque o conteúdo é inválido.",
+      "profileInUseByDesktop": "Estes dados estão a ser usados pela aplicação de computador da Cindy, que está a ser executada sozinha. Fecha-a e envia novamente.",
+      "deleteConfirmTitle": "Eliminar esta mensagem?",
+      "deleteConfirmBody": "Esta mensagem não foi enviada. A sua eliminação não pode ser anulada.",
+      "deleteUnconfirmedBody": "O computador pode já ter recebido esta mensagem. Eliminá-la remove apenas a mensagem pendente deste dispositivo. Se o computador a recebeu, a mensagem continuará a aparecer no histórico da conversa.",
+      "cancel": "Cancelar"
+    },
     "pendingQueue": {
       "waitingForDevice": "Por enviar · Será enviada quando o outro computador voltar a ligar-se",
       "stopping": "A parar",

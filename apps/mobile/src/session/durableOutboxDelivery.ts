@@ -1,4 +1,4 @@
-import type { InputDeliveryProjection } from "@cindy/device-link";
+import { projectionContainsInput, type InputDeliveryProjection } from "@cindy/device-link";
 import { isExplicitRemoteNotFoundError } from "./newSessionWorktree";
 import type { remoteSessionStore } from "./remoteSessionStore";
 import {
@@ -91,19 +91,6 @@ function hasRemoteCode(error: unknown, code: string): boolean {
   return !!error && typeof error === 'object' && 'code' in error && error.code === code;
 }
 
-function projectionContainsInput(projection: DeliveryProjection, clientId: string): boolean {
-  const recovery = projection.recovery as { clientId?: string; item?: { clientId?: string } } | null | undefined;
-  return Boolean(projection.pendingQueue.some((item) => item.clientId === clientId)
-    || projection.steeringQueueClientIds?.includes(clientId)
-    || projection.queueSnapshot?.pendingSteerClientIds?.includes(clientId)
-    || projection.queueSnapshot?.dispatchClientId === clientId
-    || projection.continuationTurnClientId === clientId
-    || projection.continuationInFlightClientId === clientId
-    || recovery?.clientId === clientId || recovery?.item?.clientId === clientId
-    || projection.withdrawnQueueClientIds?.includes(clientId)
-    || projection.deliveryReceipts?.some((receipt) => receipt.clientId === clientId && receipt.state !== 'unknown'));
-}
-
 /** One owner for writes; pages only add records or request retry/cancellation. */
 export function createDurableOutboxDelivery(deps: DurableOutboxDeliveryDeps) {
   let scanning = false;
@@ -146,6 +133,7 @@ export function createDurableOutboxDelivery(deps: DurableOutboxDeliveryDeps) {
   async function deliver(initial: DurableOutboxRecord) {
     let record = initial;
     let resending = false;
+    let retryWithDurableDelivery = false;
     // The upload in progress when an attempt throws is the image that did not get through.
     let uploadingSlot: number | undefined;
     due.set(id(record), Date.now() + 5_000);
@@ -198,18 +186,22 @@ export function createDurableOutboxDelivery(deps: DurableOutboxDeliveryDeps) {
       error: undefined,
       failedUploadSlot: undefined,
     });
-    const confirmHistory = async (fresh?: boolean) => {
+    const confirmHistory = async (fresh?: boolean, tolerateUnknown = false) => {
       let history;
       try {
         history = await readHistory(record, fresh);
       } catch (error) {
         // The explicit wire code says this peer lacks the exact read. A timeout,
         // refusal for another reason, or error text alone cannot select a new read.
-        if (!deps.legacyHistory || !hasRemoteCode(error, 'CHANNEL_NOT_ALLOWED')) throw error;
+        if (!deps.legacyHistory || !hasRemoteCode(error, 'CHANNEL_NOT_ALLOWED')) {
+          if (tolerateUnknown) return 'unknown';
+          throw error;
+        }
         if (!current(record)) return 'handled';
         const found = deps.canRun(record) && await deps.legacyHistory(record).catch(() => false);
         if (!current(record)) return 'handled';
         if (!found) {
+          if (tolerateUnknown) return 'unknown';
           await holdForHistoryConfirmation();
           return 'handled';
         }
@@ -293,7 +285,16 @@ export function createDurableOutboxDelivery(deps: DurableOutboxDeliveryDeps) {
       if (resending) {
         // Verify again on the current connection, including after app restart
         // or peer replacement between the user's two taps.
-        const confirmed = await confirmMissing();
+        confirmationEpoch = deps.connectionEpoch?.(record.deviceId);
+        // A v1 host reconciles known and persisted IDs atomically with enqueue.
+        // An older Desktop may report its exact history miss as IPC_ERROR.
+        const fresh = record.retrySafe ? await deps.projection(record, true) : undefined;
+        if (record.retrySafe && !confirmationIsCurrent()) return;
+        retryWithDurableDelivery = fresh?.sessionId === record.item.sessionId
+          && Array.isArray(fresh.pendingQueue) && fresh.inputDeliveryVersion === 1;
+        if (retryWithDurableDelivery && await confirmHistory(true, true) === 'handled') return;
+        const confirmed = retryWithDurableDelivery && confirmationIsCurrent() ? fresh
+          : retryWithDurableDelivery ? undefined : await confirmMissing();
         if (!confirmed) {
           if (current(record) && record.retryAfterConfirmedMiss && record.state === 'queued') {
             await holdForHistoryConfirmation();
@@ -367,9 +368,9 @@ export function createDurableOutboxDelivery(deps: DurableOutboxDeliveryDeps) {
       }
       if (state === "removed") return await finish();
       if (
-        record.clearBoundaryMs !== undefined &&
         projection.clearBoundaryMs !== undefined &&
-        record.clearBoundaryMs !== projection.clearBoundaryMs
+        record.clearBoundaryMs !== projection.clearBoundaryMs &&
+        (record.clearBoundaryMs !== undefined || (resending && typeof projection.clearBoundaryMs === 'number'))
       ) {
         if (durableOwnership)
           return await finish();
@@ -381,13 +382,13 @@ export function createDurableOutboxDelivery(deps: DurableOutboxDeliveryDeps) {
         if (!current(record)) return;
         // The receipt may release the last background connection. Save host
         // ownership now and read history when the bridge can run again.
-        if (deps.canRun(record) && await hasHistory(record)) {
+        if (!hasDurableOwnership(record) || record.error)
+          await update({ state: "host-owned", retrySafe: true, retryAfterConfirmedMiss: undefined, error: undefined });
+        resending = false;
+        if (current(record) && deps.canRun(record) && await hasHistory(record)) {
           await finishHistory();
           return;
         }
-        if (!current(record)) return;
-        if (!hasDurableOwnership(record) || record.error)
-          await update({ state: "host-owned", retrySafe: true, error: undefined });
         due.set(id(record), Date.now() + 5_000);
         return;
       }
@@ -489,7 +490,9 @@ export function createDurableOutboxDelivery(deps: DurableOutboxDeliveryDeps) {
       const hadNeverEnqueued = isDurableOutboxUnsent(record);
       // This write precedes every external enqueue. Crash recovery therefore knows it must reconcile.
       await update({ state: "sending", enqueueStarted: true, error: undefined,
-        ...(resending ? { retrySafe: false } : {}) });
+        ...(retryWithDurableDelivery ? {
+          prepared: record.prepared && { ...record.prepared, durableDelivery: true },
+        } : resending ? { retrySafe: false } : {}) });
       const applyEnqueueProjection = deps.bindProjection(record);
       let result: InputProjection;
       try {
