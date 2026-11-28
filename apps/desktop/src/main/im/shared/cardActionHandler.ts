@@ -78,7 +78,7 @@ import { startThreadControlFlow } from './controlFlow';
 import { bindingStore, executeDetach, type BindingAttachResult } from '../binding';
 import { generateTakeoverSummary } from './sessionSummary';
 import { broadcastSessionCreated } from './sessionBroadcast';
-import { feishuGroupPermissionMode } from '../feishu/groupOverrides';
+import { imChatPermissionMode } from './chatOverrides';
 import { decodeFeishuLaneUserId, type IdentityKey } from '@cindy/im';
 import {
   readModelRouteSnapshot,
@@ -1082,10 +1082,11 @@ export function createCardActionHandler(
     const isFeishuGroupControl =
       channel === 'feishu' && (feishuControlLane !== null || event.chatId.startsWith('oc_'));
     const controlNewPermissionMode = isFeishuGroupControl
-      ? feishuGroupPermissionMode(
+      ? imChatPermissionMode(
+          'feishu',
           botContextId,
           feishuControlLane?.chatId ?? (event.chatId.startsWith('oc_') ? event.chatId : null),
-        )
+        ) ?? desktopPrefs.permissionMode
       : desktopPrefs.permissionMode;
     log.info(
       `control:new permission mode=${controlNewPermissionMode} group=${isFeishuGroupControl} ` +

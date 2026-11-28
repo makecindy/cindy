@@ -16,6 +16,17 @@
   "memberCount_other": "メンバー {{count}} 人",
   "organizer": "まとめ役",
   "waitingConfirm": "{{name}} があなたの確認を待っています",
+  "assistantDevice": {
+    "title": "グループの Cindy がコンピュータの選択を待っています",
+    "onlyYou": "あなただけに表示",
+    "request": "「{{request}}」はコンピュータを選ぶと始まります。",
+    "requestUnknown": "コンピュータを選ぶと、この依頼が始まります。",
+    "requests_one": "{{count}} 件の依頼が待機中です。コンピュータを選ぶと始まります。",
+    "requests_other": "{{count}} 件の依頼が待機中です。コンピュータを選ぶと始まります。",
+    "remember": "このグループでの今後の依頼も同じコンピュータを使います。グループの設定で変更できます。",
+    "cancel": "依頼を取り消す",
+    "continue": "続行"
+  },
   "loadFailedTitle": "このグループチャットを読み込めません",
   "loadFailedDescription": "このグループチャットをパソコンから読み込めません。もう一度試すか、仲間の一覧に戻ってください。",
   "unavailableTitle": "このグループチャットは利用できません",
@@ -179,6 +190,9 @@
       "GROUP_AUTHORIZATION_REQUIRED": "{{name}} のツールは実行されませんでした。グループの許可が失効しているか、この操作が許可されていません。仲間の所有者がこのグループで改めて依頼してください。",
       "GROUP_AUTHORIZATION_UNAVAILABLE": "{{name}} のグループでの許可を確認できず、ツールは実行されませんでした。接続が回復してから再試行してください。",
       "ATTACHMENTS_UNAVAILABLE": "ダウンロードの失敗または添付数の上限により、一部の添付ファイルを {{name}} に渡せませんでした。今回必要なファイルを再送してください。",
+      "ATTACHMENTS_DOWNLOAD_FAILED": "ダウンロードの失敗により、一部の添付ファイルを {{name}} に渡せませんでした。今回必要なファイルを再送してください。",
+      "ATTACHMENTS_LIMIT_REACHED": "添付数の上限により、一部の添付ファイルを {{name}} に渡せませんでした。今回必要なファイルを再送してください。",
+      "ATTACHMENTS_DOWNLOAD_FAILED_AND_LIMIT_REACHED": "ダウンロードの失敗と添付数の上限により、一部の添付ファイルを {{name}} に渡せませんでした。今回必要なファイルを再送してください。",
       "GROUP_ASSISTANT_UNAVAILABLE": "{{name}} さん、Cindy に代わりに作業してもらうには、あなたの Cindy を接続してください（現在オンラインの Cindy がありません）。",
       "GROUP_ASSISTANT_DEVICE_REQUIRED": "{{name}}さん、このグループで使うコンピュータを選ぶと、この依頼を続行できます。",
       "GROUP_ASSISTANT_DEVICE_OFFLINE": "{{name}}さんがこのグループで選んだコンピュータはオフラインです。"

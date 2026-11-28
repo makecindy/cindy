@@ -12,10 +12,12 @@ export default {
   real: 'BotGroupSettingsDrawer, ChatGroupSettings (群设置 | 成员, 群管理, 编辑群资料, 本群资料, 伙伴在本群), ChatGroupMembersTab, ChatGroupInviteMenu, ChatBotAccessField, ProfileEditDialog',
   notCovered: 'Server writes (every chatServer.manage call is forbidden), the invite link dialog, AI 代答 (see group-mask), full chat host/entry, real accounts and mobile rendering',
   stubs: {
+    'src/renderer/contexts/AuthContext': { partial: 'export const useOptionalDataOwnerGeneration = () => 0; export const useOptionalAuthUser = () => null;' },
     // 新建伙伴 opens the full roster; it is not part of these settings.
     'src/renderer/features/bots/BotRosterView': 'export const BotRosterView = () => null;',
   },
   cases: {
+    'unregistered-folder': { about: 'Group management shows how to add an unregistered folder', data: { role: 'owner', unregisteredFolder: true } },
     computer: { about: 'A member chooses the computer for their own group Cindy', data: { role: 'member', assistant: 'on', computers: true } },
     'member-invites': { about: 'Owner manages friend invitations; members can still invite their own teammates', data: { role: 'owner', memberInvites: true } },
     default: { about: 'Owner: 群管理 with 解散, member menus, invite menu with both items', data: { role: 'owner' } },
@@ -37,10 +39,33 @@ export default {
     const dialog = page.getByRole('dialog');
     const invite = page.getByTestId('chat-group-invite');
     const manage = await row(page, await t('manage'));
+    if (ui.case === 'unregistered-folder') {
+      await manage.click();
+      await dialog.getByRole('button', { name: await t('ownFolder') }).click();
+      const hint = dialog.getByText(await ui.t('bots.groupChat.settings.projectDirNotRegistered'));
+      await hint.scrollIntoViewIfNeeded();
+      await ui.capture('registration-hint');
+      return;
+    }
     if (ui.case === 'computer') {
       const picker = dialog.getByRole('combobox', { name: await t('assistantComputer') });
+      const triggerWidth = await picker.evaluate(element => element.offsetWidth);
       await picker.click();
-      await page.getByRole('option', { name: 'Windows', exact: true }).waitFor();
+      const mac = page.getByRole('option', { name: 'QA-Mac.local', exact: true });
+      await mac.waitFor();
+      // UI tier: the real group field with no selection must keep a trigger-width
+      // listbox (DESIGN.md §4). The existing row-height check missed wider panels.
+      const listboxWidth = await page.getByRole('listbox').evaluate(element => element.offsetWidth);
+      assert.equal(listboxWidth, triggerWidth, 'the group settings listbox matches its trigger');
+      assert.equal(await page.getByRole('option', { name: 'a'.repeat(64) }).count(), 0, 'routing IDs are never device labels');
+      assert.equal(await mac.getAttribute('title'), 'QA-Mac.local', 'the full name is available on hover');
+      assert.ok(await mac.evaluate(option => {
+        const label = option.querySelector('span');
+        return label && label.scrollWidth <= label.clientWidth;
+      }), 'a normal hostname is not truncated');
+      const macBounds = await mac.boundingBox();
+      const windowsBounds = await page.getByRole('option', { name: 'Windows', exact: true }).boundingBox();
+      assert.equal(macBounds.height, windowsBounds.height, 'a normal hostname fits on one line');
       await ui.capture('choose-computer');
       return;
     }

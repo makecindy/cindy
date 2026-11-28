@@ -83,6 +83,7 @@ import { BotGroupAvatarStack } from './BotGroupAvatars';
 import { botGroupAttachmentScope, refreshPendingBotGroupAttachments } from './botGroupAttachments';
 import { BOT_GROUP_BOT_BROADCAST_LABELS } from './BotGroupMentionCard';
 import { BotGroupComposer } from './BotGroupComposer';
+import { BotGroupAssistantDeviceCard } from './BotGroupAssistantDeviceCard';
 import { focusBotGroupComposer } from './botGroupTextInput';
 import { BotGroupThreadHint } from './BotGroupThreadHint';
 import { findThreadMessageElement, flashThreadTarget } from './BotGroupThreadViews';
@@ -151,6 +152,11 @@ type GroupViewState =
   | ({ kind: 'ready'; readToken: number } & BotGroupLoadedTimeline)
   | { kind: 'missing' }
   | { kind: 'error' };
+
+function timelineHasMoreBefore(timeline: BotGroupLoadedTimeline): boolean {
+  return timeline.olderBeforeSequence !== undefined || timeline.older.length > 0
+    ? timeline.olderHasMore : timeline.group.hasMoreBefore;
+}
 
 /** Toast copy when a plan action fails without a more specific cause. */
 const PLAN_ACTION_FAILED: Record<BotGroupPlanAction, string> = {
@@ -692,7 +698,7 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
             ? { ...previous,
               // A single confirmed row proves no coverage between it and the previous page.
               // Preserve that page's boundary across every delta until a full read reconciles it.
-              latestPageCeiling: previous.latestPageCeiling
+              latestPageCeiling: previous.latestPageCeiling ?? previous.group.pageNewestSequence
                 ?? previous.group.messages.reduce((max, message) => Math.max(max, message.sequence), Number.NEGATIVE_INFINITY),
               group: { ...previous.group,
               // Plan messages reference details absent from a message-only push. Adopt them
@@ -922,7 +928,7 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
     [state],
   );
   const hasMoreBefore =
-    state.kind === 'ready' && (state.older.length > 0 ? state.olderHasMore : state.group.hasMoreBefore);
+    state.kind === 'ready' && timelineHasMoreBefore(state);
 
   const openSettings = useCallback(() => {
     if (direct) return;
@@ -1214,12 +1220,14 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
     return () => observer.disconnect();
   }, [ready]);
 
-  /** Reads one older page; returns it so 引用 can keep paging toward the original. */
-  const loadOlder = async (beforeSequence?: number): Promise<{ messages: BotGroupMessageView[]; hasMore: boolean } | null> => {
+  /** Reads one older page; returns its boundary so 引用 can keep paging toward the original. */
+  const loadOlder = async (beforeSequence?: number, rereadOnly = false): Promise<{ messages: BotGroupMessageView[]; nextBefore: number | null } | null> => {
     const base = stateRef.current;
     if (base.kind !== 'ready' || loadingOlderRef.current) return null;
     const loaded = mergeBotGroupMessages(base.older, base.group.messages);
-    const before = beforeSequence ?? loaded[0]?.sequence;
+    const historyBefore = base.olderBeforeSequence !== undefined ? base.olderBeforeSequence
+      : base.older.length ? loaded[0]?.sequence : base.group.pageOldestSequence ?? loaded[0]?.sequence;
+    const before = beforeSequence ?? historyBefore;
     const anchorId = loaded[0]?.id;
     const api = botGroupApi();
     if (!before || !api) return null;
@@ -1238,6 +1246,8 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
       }
       const nextGroup = applyBufferedAttachmentsToGroup(result.group, readAttachmentSeq);
       if (!acceptHistoryPage(nextGroup, base.group.historyRevision)) return null;
+      const oldest = nextGroup.pageOldestSequence ?? Math.min(...nextGroup.messages.map(message => message.sequence));
+      const nextBefore = nextGroup.hasMoreBefore && oldest && oldest < before ? oldest : null;
       // The latest page started over meanwhile (more than a page arrived): this page was read
       // below a timeline that is gone and would sit under the new one with the gap still in it.
       const stillLoaded = (timeline: GroupViewState) => timeline.kind === 'ready'
@@ -1272,12 +1282,13 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
           group: { ...previous.group, messages: applyUpdates(previous.group.messages), executionFailures },
           older: applyUpdates(older),
           olderPlans: mergeBotGroupPlans(nextGroup.plans, previous.olderPlans),
-          olderHasMore: nextGroup.hasMoreBefore,
+          ...(!rereadOnly
+            ? { olderHasMore: nextBefore !== null, olderBeforeSequence: nextBefore } : {}),
         };
       });
       // A push may have refreshed before these sources were displayed. Reconcile their current state too.
       if (newerRefresh) loadRef.current(nextGroup.messages.map(message => message.id));
-      return { messages: nextGroup.messages, hasMore: nextGroup.hasMoreBefore };
+      return { messages: nextGroup.messages, nextBefore };
     } catch {
       toast.error(t('bots.groupChat.timeline.loadEarlierFailed'));
       return null;
@@ -1310,7 +1321,7 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
     if (paged) {
       try {
         // A failed re-read is not a verified original: stay put rather than jump to a stale copy.
-        const read = await loadOlder(paged.sequence + 1);
+        const read = await loadOlder(paged.sequence + 1, true);
         if (!read || generation !== quoteLocateGeneration.current) return;
         const original = find(read.messages);
         if (original) setUnverifiedOriginals((previous) => {
@@ -1326,16 +1337,15 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
       return;
     }
     try {
-      let hasMore = base.older.length > 0 ? base.olderHasMore : base.group.hasMoreBefore;
+      let hasMore = timelineHasMoreBefore(base);
       let before: number | undefined;
       for (let page = 0; hasMore && page < QUOTE_LOCATE_MAX_PAGES; page += 1) {
         const read = await loadOlder(before);
         if (!read || generation !== quoteLocateGeneration.current) return;
         const original = find(read.messages);
         if (original) { settle(original); return; }
-        const oldest = read.messages.reduce((min, message) => Math.min(min, message.sequence), Number.POSITIVE_INFINITY);
-        hasMore = read.hasMore && Number.isFinite(oldest) && (quote.sequence === null || oldest > quote.sequence);
-        before = Number.isFinite(oldest) ? oldest : undefined;
+        hasMore = read.nextBefore !== null && (quote.sequence === null || read.nextBefore > quote.sequence);
+        before = read.nextBefore ?? undefined;
       }
       settle(undefined);
     } finally {
@@ -1783,7 +1793,6 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
                 {rowLayout?.dateDivider != null ? <BotGroupDateDivider timestamp={rowLayout.dateDivider} locale={locale} /> : null}
                 {message.id === firstUnreadId ? <BotGroupUnreadDivider /> : null}
                 <BotGroupTimelineItem
-                  showDeviceChoice={!!group.assistantComputers && !group.assistantDeviceId}
                   pluginUi={pluginUi}
                   message={message}
                   continued={timeline[timelineIndex - 1]?.kind !== 'work' && message.id !== firstUnreadId && (rowLayout?.continued ?? false)}
@@ -1903,6 +1912,7 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
             onQuoteChange={setQuoteDraft}
             onQuoteAccepted={acceptQuote}
             onSending={onSending}
+            aboveCard={group.assistantDeviceWaits?.length ? <BotGroupAssistantDeviceCard group={group} /> : null}
           />}
         </div>
       </div>
