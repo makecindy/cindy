@@ -14,6 +14,7 @@ export default {
   notCovered:
     'Real browser sign-in, credentials, native CLI processes or transport; fixture supplies account metadata only',
   cases: {
+    'plugin-engine-retry': { about: 'An identity-only plugin remains unavailable on the first retry and recovers on the second' },
     'existing-login': { about: 'Add-account split action and a verified login on the executing computer' },
     'existing-login-narrow': { about: 'Review an existing login at phone width', viewport: { width: 320, height: 650 } },
     'official-plan-name': { about: 'The account row displays official Ultra while its machine plan remains pro' },
@@ -59,6 +60,18 @@ export default {
     }
     await page.getByTestId('subscription-accounts').waitFor();
     // 第一次读取还没回来时没有可点开的：占位在收起的摘要那一行。
+    if (ui.case === 'plugin-engine-retry') {
+      const retry = page.getByRole('button', { name: await ui.t('commonUi.retry') });
+      await retry.click();
+      const message = await ui.t('subscriptionAccounts.unavailable');
+      await page.getByText(message, { exact: true }).nth(1).waitFor();
+      await ui.capture('still-unavailable');
+      await retry.click();
+      await retry.waitFor({ state: 'hidden' });
+      await page.getByText(message, { exact: true }).waitFor({ state: 'hidden' });
+      await ui.capture('recovered');
+      return;
+    }
     if (ui.case !== 'loading') await expandAccounts(page);
     assert.equal(await page.locator('main').evaluate(element => element.scrollWidth <= element.clientWidth), true);
     if (ui.case.startsWith('plugin-engine')) {

@@ -161,7 +161,7 @@ export function registerSubscriptionAccountsIpc(): void {
         throwIpcError('SUBSCRIPTION_ACCOUNT_FAILED', 'Could not verify the selected subscription login');
       }
     }
-    const command = parseSubscriptionAccountCommand(raw);
+    const command = parseSubscriptionAccountCommand(raw, !context);
     // A secret (a plugin engine's API key) is typed into this computer's own window only: it never
     // travels between computers (plugin-security-and-authoring.md 内联凭证只走本机).
     if (context && 'secret' in command && command.secret !== undefined)

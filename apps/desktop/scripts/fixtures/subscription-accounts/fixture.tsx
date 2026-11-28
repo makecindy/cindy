@@ -173,6 +173,11 @@ void mountPage({
             status: 'limited', running: 0, limit: 2, limitSet: true, weight: 1, paused: false, usage: pluginUsage(0, 44) },
         ],
       };
+    let retryCount = 0;
+    if (ctx.case === 'plugin-engine-retry') {
+      view.accounts = [{ ...view.accounts[0], status: 'unavailable', running: 0, usage: undefined }];
+      view.pluginEngine!.methods = [];
+    }
     if (ctx.case === 'expiry-past')
       view.accounts[1].loginExpiresAt = new Date(now - 86_400_000).toISOString();
     // Two accounts moved onto a long-lived token: one checked with its ordinary sign-in still
@@ -222,6 +227,9 @@ void mountPage({
         existingLogins: async () => ({ computer: 'Mac mini', candidates: ctx.case.startsWith('existing-login')
           ? [{ identity: 'studio@example.com', plan: 'Pro', directory: '~/.claude-person', receipt: 'fixture' }] : [] }),
         command: async (command: SubscriptionAccountCommand) => {
+          if (ctx.case === 'plugin-engine-retry' && command.action === 'read' && command.retryStatus === 'default') {
+            if (++retryCount === 2) view = { ...view, accounts: [{ ...view.accounts[0], status: 'ready' }] };
+          }
           if (ctx.case === 'error') throw new Error('Fixture read failure');
           // The first read never lands, so the placeholder stays for the capture.
           if (ctx.case === 'loading' && command.action === 'read') return new Promise<never>(() => {});

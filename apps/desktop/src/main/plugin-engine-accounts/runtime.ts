@@ -252,14 +252,14 @@ async function readStatus(
   state: RuntimeState,
   ref: { engineKey: string; ghostId: string; harnessId: string },
   accountId: string,
-  force = false,
+  force: boolean | 'retry' = false,
 ): Promise<StatusSnapshot> {
   const key = accountKey(ref.engineKey, accountId);
   const cached = state.status.get(key);
   const fresh = cached && Date.now() - cached.at < (cached.failed ? STATUS_FAILURE_FRESH_MS : STATUS_FRESH_MS);
   if (!force && fresh) return cached;
   const flight = state.statusFlights.get(key);
-  if (flight && !force) return flight;
+  if (flight && force !== true) return flight;
   const read = (async () => {
     let snapshot: StatusSnapshot;
     try {
@@ -1078,7 +1078,7 @@ function accountView(state: RuntimeState, ref: PluginEngineProviderRef, account:
 }
 
 /** The pool of one provider of a plugin engine, in the built-in pool's view shape. */
-export async function readPluginEnginePoolView(providerId: string, taskId?: string, force = false): Promise<SubscriptionPoolView> {
+export async function readPluginEnginePoolView(providerId: string, taskId?: string, retryStatus?: true | string): Promise<SubscriptionPoolView> {
   const ref = resolvePluginEngineProvider(providerId);
   const engine = ref && liveEngine(ref.engineKey);
   if (!ref || !engine?.accounts) throw new Error('Account not found');
@@ -1086,10 +1086,10 @@ export async function readPluginEnginePoolView(providerId: string, taskId?: stri
   const pool = effectivePluginEnginePool(ref.engineKey);
   // Identity-only engines (no methods) report just the original login.
   const accounts = engine.accounts.methods.length ? providerAccounts(pool, ref.suffix) : [DEFAULT_PLUGIN_ENGINE_ACCOUNT];
-  await Promise.all(accounts.map(account => Promise.all([
-    readStatus(state, ref, account.id, force),
-    readUsage(state, ref, account.id, force),
-  ]).catch(() => {})));
+  await Promise.all(accounts.map(account => {
+    const retry = retryStatus === true || retryStatus === account.id;
+    return Promise.all([readStatus(state, ref, account.id, retry ? 'retry' : false), readUsage(state, ref, account.id)]).catch(() => {});
+  }));
   assertOwner(state);
   const bound = taskId ? readPluginEngineBinding(ref.engineKey, `task:${taskId}`) : undefined;
   return {
@@ -1175,7 +1175,7 @@ export async function runPluginEngineAccountCommand(
     // Views refresh on every load change: reads use the plugin's cached answers (one minute, five
     // seconds after a failed read), like the built-in pool, instead of calling the plugin each time.
     case 'read':
-      return readPluginEnginePoolView(command.providerId, command.taskId);
+      return readPluginEnginePoolView(command.providerId, command.taskId, command.retryStatus);
     case 'add': {
       if (!multi) throw new Error('Account not found');
       const pool = effectivePluginEnginePool(ref.engineKey);

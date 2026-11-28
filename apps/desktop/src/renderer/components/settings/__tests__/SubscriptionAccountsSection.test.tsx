@@ -424,6 +424,23 @@ describe('SubscriptionAccountsSection usage', () => {
     if (status === 'unavailable') expect(command.mock.calls.every(([request]) => request.action === 'read')).toBe(true);
   });
 
+  // Unit, #13769: a settings change during a slow retry must still reach the account row.
+  it('refreshes the latest account view after changes arrive during a retry', async () => {
+    const command = vi.mocked(window.electronAPI.subscriptionAccounts.command);
+    const unavailable = { ...view, accounts: [{ ...view.accounts[0], status: 'unavailable' as const }] };
+    command.mockResolvedValueOnce(unavailable);
+    render(<SubscriptionAccountsSection providerId="anthropic" />);
+    let finish!: (value: SubscriptionPoolView) => void;
+    command.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    fireEvent.click(await screen.findByRole('button', { name: 'commonUi.retry' }));
+    command.mockResolvedValue({ ...view, accounts: [{ ...view.accounts[0], identity: 'updated@example.test' }] });
+    const changed = vi.mocked(window.electronAPI.subscriptionAccounts.onChanged).mock.calls[0][0];
+    act(() => { changed({ providerId: 'anthropic' }); changed({ providerId: 'anthropic' }); });
+    await act(async () => { finish(view); });
+    expect(await screen.findAllByText('updated@example.test')).not.toHaveLength(0);
+    expect(command).toHaveBeenCalledTimes(3);
+  });
+
   // Regression: a connected account's menu offered plain "Sign in", reading as if it were signed out.
   it.each([
     ['ready', 'subscriptionAccounts.loginAgain'],
