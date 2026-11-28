@@ -464,6 +464,7 @@ export function createMessagePersistence(deps: MessagePersistencePorts) {
       lastAssistantPersistIdBySession.delete(sessionId);
       lastTopLevelAssistantPersistIdBySession.delete(sessionId);
     }
+    pendingPiToolUseRowsBySession.delete(sessionId);
     samplingRuntimeIds.set(sessionId, createId());
     dbAgentKindBySession.set(sessionId, dbAgentKind);
   }
@@ -1040,6 +1041,8 @@ export function createMessagePersistence(deps: MessagePersistencePorts) {
     string,
     Map<string, { toolName: string; input?: unknown; isSnapshot?: boolean }>
   >();
+  // Active Pi calls need their durable row even after the tool input cache evicts them.
+  const pendingPiToolUseRowsBySession = new Map<string, Map<string, string>>();
 
   function retainToolUseInputForTurn(toolName: string, input: unknown): unknown {
     if (toolName === 'update_plan') return input;
@@ -1627,14 +1630,18 @@ export function createMessagePersistence(deps: MessagePersistencePorts) {
       return persistId;
     }
 
-    if (toolUseId) {
-      rememberToolUseId(sessionId, toolUseId, createdAt);
-      rememberToolUseInfo(sessionId, toolUseId, toolName, persistedInput, isSnapshot);
-    }
     const existingPersistId =
       !acpTool && isUpdatableToolUse(toolName) && toolUseId
         ? updatableToolUsePersistIdBySession.get(sessionId)?.get(toolUseId)
         : undefined;
+    const persistId = existingPersistId ?? createId();
+    if (toolUseId) {
+      rememberToolUseId(sessionId, toolUseId, createdAt);
+      rememberToolUseInfo(sessionId, toolUseId, toolName, persistedInput, isSnapshot);
+      if (!isSnapshot && getSessionDbAgentKind(sessionId) === 'pi') {
+        getOrCreateSessionMap(pendingPiToolUseRowsBySession, sessionId).set(toolUseId, persistId);
+      }
+    }
     if (existingPersistId) {
       const content = { toolUseId, toolName, input: persistedInput };
       enqueueWrite(`tool_use_update:${sessionId}:${existingPersistId}`, () =>
@@ -1646,7 +1653,6 @@ export function createMessagePersistence(deps: MessagePersistencePorts) {
       notePersistedMessage(sessionId, 'tool_use', existingPersistId);
       return existingPersistId;
     }
-    const persistId = createId();
     const meta = agentTaskMetaForToolUse(
       sessionId,
       toolUseId,
@@ -1669,6 +1675,26 @@ export function createMessagePersistence(deps: MessagePersistencePorts) {
     rememberCodexPlanRow(sessionId, toolName, toolUseId, persistId, persistedInput);
     notePersistedMessage(sessionId, 'tool_use', persistId);
     return persistId;
+  }
+
+  function markPiToolResultsUnconfirmed(sessionId: string, toolUseIds: readonly string[]): void {
+    const tools = pendingPiToolUseRowsBySession.get(sessionId);
+    if (!tools) return;
+    const clearBoundary = clearBoundaryBySession.get(sessionId);
+    for (const toolUseId of new Set(toolUseIds)) {
+      const persistId = tools.get(toolUseId);
+      if (!persistId) continue;
+      tools.delete(toolUseId);
+      enqueueWrite(`pi_tool_result_unknown:${sessionId}:${persistId}`, async (ownerScope) => {
+        if (clearBoundaryBySession.get(sessionId) !== clearBoundary) return;
+        const patched = await patchMessageAgentMetaWithResult(sessionId, persistId, {
+          piToolResultUnconfirmed: true,
+        });
+        if (patched && clearBoundaryBySession.get(sessionId) === clearBoundary) {
+          await broadcastMessageAgentMetaUpdate(sessionId, persistId, ownerScope);
+        }
+      });
+    }
   }
 
   /**
@@ -2089,6 +2115,10 @@ export function createMessagePersistence(deps: MessagePersistencePorts) {
       releaseBackgroundStateForToolUses(sessionId, backgroundState, ids);
       return null;
     }
+    if (scope === 'turn') {
+      const piRows = pendingPiToolUseRowsBySession.get(sessionId);
+      if (piRows) for (const id of ids) piRows.delete(id);
+    }
     const idMap =
       backgroundState?.toolResultIdByToolUseId ??
       getOrCreateSessionMap(toolResultIdByToolUseId, sessionId);
@@ -2283,6 +2313,7 @@ export function createMessagePersistence(deps: MessagePersistencePorts) {
       releaseBackgroundStateForToolUses(sessionId, backgroundState, [toolUseId]);
       return null;
     }
+    if (scope === 'turn') pendingPiToolUseRowsBySession.get(sessionId)?.delete(toolUseId);
     const idMap =
       backgroundState?.toolResultIdByToolUseId ??
       getOrCreateSessionMap(toolResultIdByToolUseId, sessionId);
@@ -2643,6 +2674,7 @@ export function createMessagePersistence(deps: MessagePersistencePorts) {
     knownToolUseIdsBySession.delete(sessionId);
     toolUseCreatedAtBySession.delete(sessionId);
     toolUseInfoBySession.delete(sessionId);
+    pendingPiToolUseRowsBySession.delete(sessionId);
     updatableToolUsePersistIdBySession.delete(sessionId);
     // 刻意不清 codexPlanRowByTurnToolUseId:它按 turnId 归属,必须活过每个
     // continuation boundary 的 per-segment 清空(review P1-1)。由
@@ -3594,6 +3626,7 @@ export function createMessagePersistence(deps: MessagePersistencePorts) {
     knownToolUseIdsBySession.delete(sessionId);
     toolUseCreatedAtBySession.delete(sessionId);
     toolUseInfoBySession.delete(sessionId);
+    pendingPiToolUseRowsBySession.delete(sessionId);
     updatableToolUsePersistIdBySession.delete(sessionId);
     clearAgentTaskPersistState(sessionId);
     toolResultIdByToolUseId.delete(sessionId);
@@ -3649,6 +3682,7 @@ export function createMessagePersistence(deps: MessagePersistencePorts) {
     onAgentTaskUpdateEvent,
     preserveTurnPersistStateForBackground,
     onToolUseEvent,
+    markPiToolResultsUnconfirmed,
     persistCodexPlanOnDone,
     persistCodexPlanOnTerminalError,
     prepareSyntheticToolEventForBroadcast,

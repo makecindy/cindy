@@ -6365,6 +6365,9 @@ export class PiAgent extends BaseAgent {
         onExit: ({ code, signal }) => {
           const hostAbortRequested = isCurrentTurnHostAbortRequested(ctx, true);
           const usage = ctx.pendingHostTurnStartToken === null ? piTurnUsageOf(ctx) : undefined;
+          const unconfirmedToolUseIds = !remote && ctx.isStreaming && ctx.pendingHostTurnStartToken === null
+            ? [...ctx.toolNamesByCallId.keys()]
+            : [];
           piProcessExited = true;
           clearPiSubagentRefreshTimer();
           void deferProxyDisposalForDetachedRuns();
@@ -6388,6 +6391,9 @@ export class PiAgent extends BaseAgent {
                 message: `pi process exited unexpectedly (code=${code}, signal=${signal})`,
                 isTerminal: true,
                 usage,
+                ...(unconfirmedToolUseIds.length > 0
+                  ? { reason: 'pi-tool-result-unknown', unconfirmedToolUseIds }
+                  : {}),
               },
               source: 'pi',
             });

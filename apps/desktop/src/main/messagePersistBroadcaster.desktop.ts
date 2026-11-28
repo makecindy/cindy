@@ -77,6 +77,7 @@ export const {
   onAgentTaskUpdateEvent,
   preserveTurnPersistStateForBackground,
   onToolUseEvent,
+  markPiToolResultsUnconfirmed,
   persistCodexPlanOnDone,
   persistCodexPlanOnTerminalError,
   prepareSyntheticToolEventForBroadcast,

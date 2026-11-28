@@ -249,6 +249,7 @@ import {
 import {
   persistToolProcessMedia,
   onToolUseEvent,
+  markPiToolResultsUnconfirmed,
   onAgentTaskUpdateEvent,
   persistCodexPlanOnDone,
   persistCodexPlanOnTerminalError,
@@ -401,6 +402,35 @@ beforeEach(() => {
   ownerScopeState.current = true;
   noteSessionClearBoundary(SESSION, null);
   clearSessionPersistState(SESSION);
+});
+
+// #10455 and #13388 (unit): the published tool row must survive the 2,000-entry
+// input cache limit. The previous test used two calls, so it never evicted a row.
+it('marks the original Pi tool row after cache eviction and keeps completed results', async () => {
+  noteSessionAgentKind(SESSION, 'pi');
+  const input = { command: 'printf fixture' };
+  const affected = onToolUseEvent(SESSION, { toolUseId: 'call-1', toolName: 'bash', input }, null);
+  onToolUseEvent(SESSION, { toolUseId: 'call-2', toolName: 'bash', input }, null);
+  onToolResultFullEvent(SESSION, { toolUseId: 'call-2', fullText: 'fixture result' }, null);
+  for (let index = 0; index < 2000; index += 1) {
+    onToolUseEvent(SESSION, { toolUseId: `filler-${index}`, toolName: 'bash', input }, null);
+  }
+  markPiToolResultsUnconfirmed(SESSION, ['call-1', 'call-2', 'unobserved', 'call-1']);
+  resetTurnPersistState(SESSION);
+  onToolUseEvent(SESSION, { toolUseId: 'call-1', toolName: 'bash', input }, null);
+  await drainPersistQueue();
+
+  expect(patchMessageAgentMetaWithResult).toHaveBeenCalledExactlyOnceWith(
+    SESSION, affected, { piToolResultUnconfirmed: true },
+  );
+  expect(broadcastMessageAgentMetaUpdate).toHaveBeenCalledExactlyOnceWith(
+    SESSION, affected, expect.anything(),
+  );
+  const results = vi.mocked(createMessage).mock.calls.map(([, row]) => row)
+    .filter(row => row.role === 'tool_result');
+  expect(results).toEqual([
+    expect.objectContaining({ toolUseId: 'call-2', content: 'fixture result' }),
+  ]);
 });
 
 // #6884, unit: IM display projection must not change history. Existing text

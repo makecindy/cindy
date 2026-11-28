@@ -508,6 +508,24 @@ describe('AgentActionRow — 行主文案', () => {
     expect(screen.getByLabelText('chat.agentActionRow.status.done')).toBeTruthy();
   });
 
+  // #10455 (unit): the production row previously only tested running and done.
+  // A tool-use row marked unconfirmed needs a visible status until a matching result arrives.
+  it('shows the unknown Pi result in the row and displays a matching result as complete', () => {
+    const props = {
+      pluginUi: EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES,
+      message: { ...mkTool('pi-1', 'bash', { command: 'printf fixture' }), piToolResultUnconfirmed: true as const },
+    };
+    const { rerender } = render(createElement(AgentActionRow, props));
+    expect(screen.getByRole('img', { name: 'chat.agentActionRow.status.resultUnknown' })).toBeTruthy();
+    expect(screen.getByText('chat.agentActionRow.status.resultUnknown')).toBeTruthy();
+
+    rerender(createElement(AgentActionRow, { ...props, toolResult: 'fixture result' }));
+    expect(screen.getByRole('img', { name: 'chat.agentActionRow.status.done' })).toBeTruthy();
+    expect(screen.queryByText('chat.agentActionRow.status.resultUnknown')).toBeNull();
+    fireEvent.click(screen.getByRole('button'));
+    expect(screen.getByText('fixture result')).toBeTruthy();
+  });
+
   it('就地展开区:命令原文保留,不再出现 # description 重复行', () => {
     render(
       createElement(AgentActionRow, { pluginUi: EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES,
