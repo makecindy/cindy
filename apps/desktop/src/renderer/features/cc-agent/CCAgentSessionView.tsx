@@ -2754,6 +2754,9 @@ function CCAgentSessionContent({
         session?.remoteHostId, providers.find(provider => provider.id === usageChipProviderId),
         !agentSwitchIntent && session?.providerId == null, {
           modelId: session?.model,
+          probeLocalClaude: !!session?.sdkSessionId && session.providerId == null
+            && !agentSwitchIntent && !pluginEngineSwitchIntent && pendingAgentDeviceId === undefined
+            && !taskAccountDeviceId && !remoteDeviceId && !session.deviceLinkDeviceId,
           providers: taskAccountDeviceId ? taskAccountCatalog.providers : localProviders,
           catalogReady: taskAccountDeviceId
             ? !taskAccountCatalog.loading && !taskAccountCatalog.error
@@ -7667,6 +7670,7 @@ function CCAgentSessionContent({
             sessionId={sessionId}
             nativeSessionId={session?.sdkSessionId}
             refreshKey={agentStatus.isRunning}
+            viewVisible={viewVisible}
           >
             <TopRightChipStackProvider>{content}</TopRightChipStackProvider>
           </SessionSubscriptionAccountProvider>
