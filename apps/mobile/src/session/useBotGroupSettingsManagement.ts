@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { randomUUID } from 'expo-crypto';
 import type { BotGroupRemoteActionId, BotGroupRemoteChatData } from '@cindy/maker-shared/botGroupChat';
 import { chatGroupMembership } from '@cindy/maker-shared/botGroupPresentation';
-import { chatGroupAssistant, chatGroupView, type ChatActor, type ChatGroupSettingsAction } from '@/chat/chatServerClient';
+import { chatGroupView, type ChatActor, type ChatGroupSettingsAction } from '@/chat/chatServerClient';
 import { useChatClient } from '@/chat/useChatServer';
 import { canManageBotGroup } from './botGroupRemote';
 
@@ -36,9 +36,8 @@ export function useBotGroupSettingsManagement(source: BotGroupRemoteChatData, en
     try {
       const { snapshot, self, manager } = await api.client.groupSettings(groupId);
       if (!valid() || sequence.current !== run) return;
-      const capabilities = api.client.lifecycleCapabilities();
-      const settings = { group: { ...chatGroupView({ snapshot, messages: [], before: null }, self), ...capabilities,
-        ...chatGroupAssistant(snapshot.room, capabilities) }, managerId: manager?.id };
+      const settings = { group: { ...chatGroupView({ snapshot, messages: [], before: null }, self), ...api.client.lifecycleCapabilities(),
+        ...api.client.groupAssistant(snapshot.room, self) }, managerId: manager?.id };
       verified.current = { binding, settings };
       setState({ binding, settings, loading: false, failed: false });
     } catch {
@@ -159,7 +158,12 @@ export function useBotGroupSettingsManagement(source: BotGroupRemoteChatData, en
   const group = settings && homes.size ? { ...settings.group, members: settings.group.members.map(member =>
     member.homeDeviceId === null && member.actorId && homes.has(member.actorId) ? { ...member, homeDeviceId: homes.get(member.actorId) } : member) }
     : settings?.group;
-  return { group, act, invite, refresh, loading, editable, ready: !loading && !!settings,
+  // Without a settings read of its own (e.g. offline), the sheet shows the chat page's group, with the newest
+  // 「群里的 Cindy」 value this account has read for it rather than the chat page's possibly older one. Read-only:
+  // writes still need this opening's own settings read.
+  const known = !group && source.supportsGroupAssistant && source.selfActorId ? api.client.knownGroupAssistant(source.id, source.selfActorId) : undefined;
+  const shown = group ?? (known === undefined ? source : { ...source, assistantEnabled: known });
+  return { group, shown, act, invite, refresh, loading, editable, ready: !loading && !!settings,
     reason: loading ? null : own && state.failed ? 'unavailable' as const : editable ? null : 'permission' as const };
 }
 

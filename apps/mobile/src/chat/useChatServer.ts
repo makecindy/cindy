@@ -6,7 +6,7 @@ import type { RemoteActionInvokeResponse } from '@cindy/device-link';
 import type { BotGroupAttachment, BotGroupRemoteActionId } from '@cindy/maker-shared/botGroupChat';
 import { useAuth } from '@/auth/AuthContext';
 import { mobileDebugEnabled, mobileDebugLog } from '@/debug/mobileDebugLog';
-import { getMobileAuthOwner, isMobileAuthOwnerCurrent } from '@/auth/authOwnerGeneration';
+import { getMobileAuthOwner, isMobileAuthOwnerCurrent, subscribeMobileAuthOwner } from '@/auth/authOwnerGeneration';
 import { mobileDurableOutbox } from '@/session/mobileDurableOutbox';
 import { enqueueChatMessage, enqueueChatShare, settleChatOutbox } from './chatOutbox';
 import { BUILD_AUTH_REGION, getActiveMobileSessionRealm, getMobileEndpointForRealm, loadMobileEndpointsForRealm } from '@/config/env';
@@ -14,7 +14,7 @@ import { createChatInviteShares } from './chatInviteShare';
 import { cacheChatRoster, forgetRemoteResource, hideCachedChatRooms, markRemoteResourceRead, peekCachedChatRoster, readCachedChatRoster } from '@/device-link/remoteResourceCache';
 import { useRemoteSyncCoordinator } from '@/device-link/remoteSyncTask';
 import type { BotGroupChatState } from '@/session/useBotGroupChat';
-import { chatAccessLost, chatCursor, chatGroupAssistant, chatGroupView, chatThreadMetadata, chatHttpsUrl, chatRateLimitDeadline, chatRetryWaitMs, chatRoomRow, chatReadAt, chatReadSequence, chatLastReplyAt, chatLastReplySequence, createChatServerClient, type ChatAccountIdentity, type ChatActor, type ChatMessage, type ThreadBackfill, type ChatPage, type ChatRequest, type ChatSnapshot } from './chatServerClient';
+import { chatAccessLost, chatCursor, chatGroupView, chatThreadMetadata, chatHttpsUrl, chatRateLimitDeadline, chatRetryWaitMs, chatRoomRow, chatReadAt, chatReadSequence, chatLastReplyAt, chatLastReplySequence, createChatServerClient, type ChatAccountIdentity, type ChatActor, type ChatMessage, type ThreadBackfill, type ChatPage, type ChatRequest, type ChatSnapshot } from './chatServerClient';
 import type { TeammateActivity } from '@cindy/maker-shared/teammate-status';
 import { subscribeChatServer, type ChatChangesFrame } from './chatServerSubscription';
 import { createChatHistory, type ChatHistory } from '@cindy/maker-shared/chat-history';
@@ -58,6 +58,8 @@ interface ChatAccountSession {
   rateLimitRemainingMs(): number;
 }
 let accountSession: ChatAccountSession | undefined;
+// The newest 「群里的 Cindy」 values belong to one signed-in account; a switch or sign-out drops them.
+subscribeMobileAuthOwner(() => { accountSession?.identity.groupAssistant?.clear(); });
 function chatAccountSession(owner: string, auth: ChatAuth): ChatAccountSession {
   const realm = getActiveMobileSessionRealm();
   const authOwner = getMobileAuthOwner();
@@ -532,9 +534,8 @@ export function useChatServerGroup(groupId: string, enabled: boolean, threadRoot
     // Enrich only the displayed index. The timeline and its on-disk copy keep their original window.
     const shown = history ? { ...next, cachedMessages: [...history.messages, ...(next.cachedMessages ?? [])],
       threadRoots: { ...history.roots, ...next.threadRoots } } : next;
-    const capabilities = api.client.lifecycleCapabilities();
-    // Settings fall back to this view when their own read fails, so it carries the known switch value too.
-    return { ...chatGroupView(shown, self, actors, 'group'), ...capabilities, ...chatGroupAssistant(shown.snapshot.room, capabilities) };
+    // Settings fall back to this view when their own read fails, so it carries the switch value too.
+    return { ...chatGroupView(shown, self, actors, 'group'), ...api.client.lifecycleCapabilities(), ...api.client.groupAssistant(shown.snapshot.room, self) };
   }, [api, currentIndex]);
   const hydrate = useCallback(async (previous: NonNullable<typeof page.current>) => {
     const enriched = await api.client.hydrateThreads(groupId, previous.page);

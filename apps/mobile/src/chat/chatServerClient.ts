@@ -197,10 +197,6 @@ export function chatId(value: string): string {
 /** Desktop reads `groupAssistantActorId` with Zod's `uuid()` (RFC 9562 version and variant); this is
  * the same pattern, so a server both clients see offers the group's Cindy to both or to neither. */
 const GROUP_ASSISTANT_ID = /^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$/;
-/** 「群里的 Cindy」 as on Desktop: only with the server's groupAssistant; an absent value means on. */
-export function chatGroupAssistant(room: ChatRoom, capabilities: { supportsGroupAssistant: boolean }): { assistantEnabled?: boolean } {
-  return capabilities.supportsGroupAssistant ? { assistantEnabled: room.assistant !== false } : {};
-}
 export function chatCursor(value: unknown): string {
   if (typeof value !== 'string' || !/^\d{1,30}$/.test(value)) throw new Error('INVALID_CHAT_CURSOR');
   return value;
@@ -690,6 +686,9 @@ export interface ChatAccountIdentity {
   known?: { id: string; at: number; capabilities: ChatMe['capabilities'] };
   reading?: Promise<{ id: string; capabilities: ChatMe['capabilities'] }>;
   peekHistory?: (human: string) => ChatHistory | undefined;
+  /** The newest 「群里的 Cindy」 value this account has read for each group, by room revision, keyed by
+   * `<self actor>\n<room>`. Memory only: it goes with the account session and is cleared when the account changes. */
+  groupAssistant?: Map<string, { revision: number; assistant: boolean }>;
 }
 
 const THREAD_BACKFILL_PAGE_SIZE = 100;
@@ -918,6 +917,20 @@ export function createChatServerClient(request: ChatRequest, personalList = crea
           text: message.reply.content.map(block => block.text ?? block.fallback ?? block.caption ?? '').join('\n') } } : {}),
       })) };
     },
+    /** 「群里的 Cindy」 as on Desktop: only with the server's groupAssistant; an absent value means on.
+     * Every room read (the chat page's and the settings') is recorded, and the newest by revision is shown,
+     * so a view built from an older read never shows over a newer one. */
+    groupAssistant(room: Pick<ChatRoom, 'id' | 'revision' | 'assistant'>, self: string): { assistantEnabled?: boolean } {
+      if (!supportsGroupAssistant) return {};
+      const rooms = account.groupAssistant ??= new Map();
+      const key = `${self}\n${room.id}`;
+      const known = rooms.get(key);
+      if (Number.isSafeInteger(room.revision) && (!known || room.revision >= known.revision)) rooms.set(key, { revision: room.revision, assistant: room.assistant !== false });
+      return { assistantEnabled: rooms.get(key)?.assistant ?? room.assistant !== false };
+    },
+    /** The newest value read for a group, without a read of its own (e.g. settings shown offline). */
+    knownGroupAssistant: (roomId: string, self: string): boolean | undefined =>
+      supportsGroupAssistant ? account.groupAssistant?.get(`${self}\n${roomId}`)?.assistant : undefined,
     lifecycleCapabilities: () => ({ supportsPersonalMentionHistory, supportsDissolve, supportsListRemoval, singleSpeaker, supportsMemberAvatar, supportsMentionAudiences, supportsMemberMentionAll, supportsMemberInvites, supportsNotificationSettings, supportsGroupAssistant, supportsScopedStop: singleSpeaker }),
     async groupSettings(roomId: string) {
       const [snapshot, self] = await Promise.all([

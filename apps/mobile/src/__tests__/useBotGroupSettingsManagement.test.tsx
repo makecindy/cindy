@@ -163,11 +163,14 @@ it('withdraws an owned companion as that actor without granting removal of other
 // Unit regression (#13127, direct path): the phone talking to the chat service had no 「群里的 Cindy」 switch.
 // As on Desktop it needs groupAssistant and a groupAssistantActorId Zod's uuid() accepts (the last
 // one has a valid shape but an invalid variant), and writes the same PATCH only as a manager.
+// Review on #13593: the value read back after your own write is the newest one, also offline.
 it('switches the group Cindy as a manager only on servers with groupAssistant', async () => {
   snapshot.room.assistant = false;
   let me: Record<string, unknown> = {};
+  let offline = false;
   const original = request.getMockImplementation()!;
   request.mockImplementation(async (path, method, body, actor) => {
+    if (offline) throw new Error('NETWORK_ERROR');
     if (path === '/me') return { actor: { id: id(2), kind: 'human' }, ...me };
     const saved = await original(path, method, body, actor);
     if (method === 'PATCH' && body.assistant !== undefined) snapshot.room.assistant = body.assistant;
@@ -192,6 +195,12 @@ it('switches the group Cindy as a manager only on servers with groupAssistant', 
   await act(async () => { await result.refresh(); });
   await act(async () => { await expect(result.act('set-assistant', { assistant: false })).rejects.toThrow('PERMISSION_DENIED'); });
   expect(writes()).toHaveLength(1);
+  // Reopened offline over a chat page still at revision 4 (off): the read-back at revision 5 (on) is shown, read-only.
+  source = { ...source, supportsGroupAssistant: true, assistantEnabled: false };
+  h.enabled = false; await render();
+  offline = true; h.enabled = true; await render();
+  await act(async () => { await Promise.resolve(); });
+  expect(result).toMatchObject({ group: undefined, editable: false, reason: 'unavailable', shown: { revision: 4, assistantEnabled: true } });
 });
 
 it('selects only an owned manager, never a foreign owner', async () => {

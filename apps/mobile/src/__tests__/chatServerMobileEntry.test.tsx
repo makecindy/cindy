@@ -335,36 +335,43 @@ it('saves a refreshed page once after it is drawn, and at once when the outbox d
   } finally { vi.useRealTimers(); }
 });
 
-// Integration tier: real hook, real disk store, controlled native IO / HTTP.
-// Review on #13593 (unit, direct entry): settings that cannot be read fall back to the chat page's
-// group, which carried no 「群里的 Cindy」 value, so a manager who read it off and reopened the
-// settings offline saw the row vanish. The chat page keeps the value; writing still needs the settings read.
-it('keeps the group Cindy value read off online for direct settings reopened offline', async () => {
+// Review on #13593 (unit, direct entry): settings that cannot be read fall back to the chat page's group.
+// That fallback first carried no 「群里的 Cindy」 value at all, then an older one: the chat page read the room
+// at revision 1 (on), the settings at revision 2 (off), and offline the switch went back to on. The account
+// keeps the newest value it has read by revision, in memory; writing still needs this opening's settings read.
+it('shows the newest group Cindy value read online when direct settings reopen offline', async () => {
   const admin = { id: self, kind: 'human', state: 'joined', name: 'Me', ownerActorId: self, ownerName: '', role: 'admin', avatar: null };
   const original = h.auth.apiFetch.getMockImplementation()!;
   let offline = false;
+  let server = { ...room, revision: 1, assistant: true };
   h.auth.apiFetch.mockImplementation(async (path: string, options: any) => {
     if (offline) throw new Error('NETWORK_ERROR');
     if (path === '/v1/me') return { actor: { id: self, kind: 'human' }, capabilities: { groupAssistant: 1 }, groupAssistantActorId: '00000000-0000-4000-8000-000000000020' };
     if (path.endsWith('/members')) return [admin];
-    if (path.endsWith('/snapshot')) return { room: { ...room, assistant: false }, members: [admin], messages: [], cursor: '1' };
+    if (path.endsWith('/snapshot')) return { room: server, members: [admin], messages: [], cursor: '1' };
     return original(path, options);
   });
-  let open = true;
+  let open = false;
   let settings!: ReturnType<typeof useBotGroupSettingsManagement>;
   function Sheet({ group }: { group: Parameters<typeof useBotGroupSettingsManagement>[0] }) { settings = useBotGroupSettingsManagement(group, open); return null; }
   function Screen() { chat = useBotGroupChat(host, id); return chat.state.kind === 'ready' ? createElement(Sheet, { group: chat.state.group }) : null; }
   await render(Screen);
+  await vi.waitFor(() => expect(chat.state).toMatchObject({ kind: 'ready', group: { revision: 1, assistantEnabled: true } }));
+  // Someone turns it off; only the settings read sees it, the chat page has had no reason to read again.
+  server = { ...server, revision: 2, assistant: false };
+  open = true; await render(Screen);
   await vi.waitFor(() => expect(settings?.ready).toBe(true));
-  expect(settings).toMatchObject({ editable: true, group: { supportsGroupAssistant: true, assistantEnabled: false } });
+  expect(settings).toMatchObject({ editable: true, group: { revision: 2, assistantEnabled: false } });
+  expect(chat.state).toMatchObject({ group: { revision: 1, assistantEnabled: true } });
   open = false; await render(Screen);
   offline = true; open = true; await render(Screen);
   await vi.waitFor(() => expect(settings.reason).toBe('unavailable'));
-  expect(settings).toMatchObject({ group: undefined, editable: false });
-  expect(chat.state).toMatchObject({ kind: 'ready', group: { supportsGroupAssistant: true, assistantEnabled: false } });
+  expect(settings).toMatchObject({ group: undefined, editable: false, shown: { supportsGroupAssistant: true, assistantEnabled: false } });
   await act(async () => { await expect(settings.act('set-assistant', { assistant: true })).rejects.toThrow('PERMISSION_DENIED'); });
   expect(h.auth.apiFetch.mock.calls.some(([, options]) => options.method === 'PATCH')).toBe(false);
 });
+
+// Integration tier: real hook, real disk store, controlled native IO / HTTP.
 it('reopens saved history offline from memory and disk, and purges it after membership loss', async () => {
   setMobileAuthOwner('owner'); showChat = true; await render();
   expect(chat.state).toMatchObject({ kind: 'ready', group: { messages: [{ content: 'Fixture message' }] } });
