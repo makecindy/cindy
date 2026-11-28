@@ -3313,6 +3313,7 @@ function recordInput(value: unknown): Record<string, unknown> {
     : {};
 }
 
+
 function schemaHint(schema: Record<string, unknown>): string {
   let rendered = '{}';
   try {
@@ -3354,7 +3355,7 @@ class CindyMcpGateway {
   private readonly reconnecting = new Map<string, Promise<void>>();
   /** 已披露工具：键为 server + NUL + tool，值为该工具当前 schema 的指纹。 */
   private readonly disclosedSchemas = new Map<string, string>();
-  /** 本次调用跳过了权限询问（hook 未披露即放行）：按 toolCallId 记账，execute 见此标记一律回路标。 */
+  /** 本次调用跳过了权限询问（未披露或无法解析）：按 toolCallId 记账，execute 见此标记一律回路标。 */
   private readonly permissionSkippedCalls = new Set<string>();
   private readonly approvedDefinitions = new Map<string, string>();
   private disclosureNotePending = false;
@@ -3521,17 +3522,36 @@ class CindyMcpGateway {
     });
   }
 
-  // Share deterministic input errors with the approval hook. Never unwrap or
-  // guess parameters: ghost_call and third-party tools legitimately accept args.
+  // Only omission denotes a parameterless call. Share the boundary between the
+  // approval hook and execute; never approve or dispatch silently erased args.
   private callInputError(input: unknown): string | null {
-    const record = recordInput(input);
+    const expected = 'Invalid cindy_mcp_call_tool input. Use {"server": <server>, "tool": <tool>, "args": {<tool parameters>}}; omit args only for tools that take none. ';
+    if (!input || typeof input !== 'object' || Array.isArray(input)) {
+      return expected + 'The gateway input must be a JSON object.';
+    }
+    const record = input as Record<string, unknown>;
+    if (Object.keys(record).some((key) => key !== 'server' && key !== 'tool' && key !== 'args')) {
+      return expected + 'Only server, tool and args belong at the top level; put the selected tool parameters inside args, not arguments or flattened fields.';
+    }
+    const hasArgs = Object.prototype.hasOwnProperty.call(record, 'args');
+    if (hasArgs) {
+      if (!record.args || typeof record.args !== 'object' || Array.isArray(record.args)) {
+        return expected + 'args must be a JSON object, not null, an array, a scalar or a JSON-encoded string.';
+      }
+    }
     const server = typeof record.server === 'string' ? this.resolveServerName(record.server) : null;
     const tool = server && typeof record.tool === 'string'
       ? this.tools.get(mcpGatewayKey(server, record.tool)) : undefined;
-    // Only the host plugin gateway is in scope. Other MCP tools retain their
-    // server-owned validation and the generic call_tool envelope diagnostics.
-    if (!tool || tool.serverName !== 'cindy' || !tool.name.startsWith('ghost_')) return null;
+    if (!tool) return null;
     const schema = tool.inputSchema;
+    if (tool.serverName !== 'cindy' || !tool.name.startsWith('ghost_')) {
+      // Check definitive omission only. The tool owns validation of the supplied object.
+      return !hasArgs && Array.isArray(schema.required) && schema.required.length > 0
+        ? expected + 'The selected tool declares required parameters. Inspect its schema with cindy_mcp_list_tools and provide them inside args.'
+        : null;
+    }
+    // Host plugin tools also explain exactly which fields are missing. Never
+    // unwrap nested args: ghost_call can legitimately pass them to a plugin.
     const required = Array.isArray(schema.required)
       ? schema.required.filter((key): key is string => typeof key === 'string') : [];
     const args = recordInput(record.args);
@@ -3555,7 +3575,7 @@ class CindyMcpGateway {
     if (!tool) return null;
     return {
       qualifiedName: 'mcp__' + serverName + '__' + toolName,
-      args: recordInput(record.args),
+      args: (record.args as Record<string, unknown> | undefined) ?? {},
       tool,
     };
   }
@@ -4037,7 +4057,7 @@ class CindyMcpGateway {
     content: Array<Record<string, unknown>>;
     details: unknown;
   }> {
-    // 这次调用没问过权限（hook 判未披露时跳过）→ 一律回路标，不看披露状态。
+    // 这次调用没问过权限（未披露或当时无法解析）→ 一律回路标，不看当前定义与披露状态。
     const permissionSkipped = this.consumePermissionSkipped(toolCallId);
     const approvedDefinition = toolCallId ? this.approvedDefinitions.get(toolCallId) : undefined;
     if (toolCallId) this.approvedDefinitions.delete(toolCallId);

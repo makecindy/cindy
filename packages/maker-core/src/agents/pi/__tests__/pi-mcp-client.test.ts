@@ -47,21 +47,18 @@ function gatewayWithFetch(fetchImpl: typeof fetch, permissionMode = 'ask') {
     },
   });
   registered.find(t => t.name === 'cindy_mcp_list_tools').execute('list', { server: 'cindy', tool: 'ghost_call' });
-  const call = (signal?: AbortSignal) => registered.find(t => t.name === 'cindy_mcp_call_tool')
-    .execute('call', { server: 'cindy', tool: 'ghost_call', args: { ghost_id: 'demo' } }, signal);
+  const invoke = (input: unknown, toolCallId = 'call', signal?: AbortSignal) => registered.find(t => t.name === 'cindy_mcp_call_tool')
+    .execute(toolCallId, input, signal);
+  const defaultInput = { server: 'cindy', tool: 'ghost_call', args: { ghost_id: 'demo' } };
+  const call = (signal?: AbortSignal) => invoke(defaultInput, 'call', signal);
   let approvalHook: any;
   context.installApproval(gateway, { on: (_event: string, handler: unknown) => { approvalHook = handler; } });
   const approvals: unknown[] = [];
-  const approveInput = (input: unknown, toolCallId = 'call') => approvalHook(
+  const approveInput = (input: unknown = defaultInput, toolCallId = 'call') => approvalHook(
     { toolName: 'cindy_mcp_call_tool', toolCallId, input },
     { ui: { input: async (_title: string, body: string) => { approvals.push(JSON.parse(body)); return 'allow'; } } },
   );
-  return { call, gateway, client,
-    approvals, approveInput,
-    invoke: (input: unknown, toolCallId = 'call') => registered.find(t => t.name === 'cindy_mcp_call_tool').execute(toolCallId, input),
-    approve: () => approvalHook({ toolName: 'cindy_mcp_call_tool', toolCallId: 'call',
-      input: { server: 'cindy', tool: 'ghost_call', args: { ghost_id: 'demo' } } },
-      { ui: { input: async () => 'allow' } }),
+  return { call, gateway, client, approvals, approveInput, invoke, toolCall: approvalHook,
     connect: (server: { name: string; displayName?: string; url: string; remote?: { startupTimeoutMs: number; requestTimeoutMs: number } } = {
       name: 'cindy', url: 'https://example.test/mcp',
     }) => context.connect(server, 'fake-token'),
@@ -127,6 +124,56 @@ it('keeps transformed Pi input as own JSON data without invoking prototype sette
 });
 
 describe('Pi MCP request lifecycle', () => {
+  // #10480: the real registered gateway + approval hook + HTTP serializer must
+  // never silently replace malformed model arguments with {}. Existing cases
+  // covered valid args and missing inner fields, not invalid gateway wrappers.
+  // Minimal failure: {server, tool, arguments:{ghost_id:"demo"}}; unit tier,
+  // injected fetch observes the production tools/call wire body without sockets.
+  it.each([
+    {},
+    { arguments: { ghost_id: 'demo' } },
+    { ghost_id: 'demo' },
+    { args: '{"ghost_id":"demo"}' },
+    { args: null },
+    { args: [] },
+    { args: false },
+    { args: 0 },
+    { args: undefined },
+    { args: { ghost_id: 'demo' }, arguments: { ghost_id: 'other' } },
+    { args: { ghost_id: 'demo' }, ghost_id: 'other' },
+  ])('rejects a malformed gateway wrapper before approval or dispatch: %j', async (fields) => {
+    const fetchImpl = vi.fn();
+    const h = gatewayWithFetch(fetchImpl);
+    h.gateway.add('third_party', h.client, [{ name: 'lookup', inputSchema: {
+      type: 'object', properties: { ghost_id: { type: 'string' } }, required: ['ghost_id'],
+    } }], 'Lookup Service');
+    const target = { server: 'Lookup Service', tool: 'lookup' };
+    await h.list(target);
+    const input = { ...target, ...fields };
+    await h.approveInput(input);
+    expect(h.approvals).toEqual([]);
+    await expect(h.invoke(input)).rejects.toThrow(
+      'Invalid cindy_mcp_call_tool input. Use {"server": <server>, "tool": <tool>, "args": {<tool parameters>}}; omit args only for tools that take none.',
+    );
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it('keeps canonical tool arguments identical in approval and tools/call, including reserved-looking keys', async () => {
+    const sent: unknown[] = [];
+    const h = gatewayWithFetch(vi.fn(async (_url, options) => {
+      sent.push(JSON.parse(String(options!.body)).params);
+      return Response.json({ result: { content: [{ type: 'text', text: 'retained' }] } });
+    }));
+    const args = { ghost_id: 'demo', content: '记忆\n"quoted"', bank_id: 'default', tags: ['a', 'b'],
+      options: { enabled: false, count: 0, empty: null }, name: 'name', args: { nested: true },
+      arguments: '{"literal":"string"}' };
+    const input = { server: 'cindy', tool: 'ghost_call', args };
+    await h.approveInput(input);
+    expect(h.approvals).toEqual([{ toolName: 'mcp__cindy__ghost_call', input: args, resolvedCredentialPaths: [] }]);
+    await expect(h.invoke(input)).resolves.toMatchObject({ content: [{ text: 'retained' }] });
+    expect(sent).toEqual([{ name: 'ghost_call', arguments: args }]);
+  });
+
   // #8053, unit: connectServer used to discard the handshake phase on abort.
   // A shorter request limit distinguishes measured elapsed time from the startup budget.
   it.each(['initialize', 'tools/list'])('diagnoses a stalled custom HTTP %s at startup', async phase => {
@@ -443,7 +490,7 @@ describe('Pi MCP request lifecycle', () => {
   it('rejects a changed definition discovered after approval and permits a freshly approved call', async () => {
     const fetchImpl = vi.fn(async () => Response.json({ result: { content: [{ type: 'text', text: 'ok' }] } }));
     const h = gatewayWithFetch(fetchImpl);
-    await h.approve();
+    await h.approveInput();
     h.client.needsReconnect = true;
     h.gateway.registerReconnect('cindy', async () => ({ client: h.client,
       tools: [{ name: 'ghost_call', description: 'New operation', inputSchema: { type: 'object' } }],
@@ -452,9 +499,57 @@ describe('Pi MCP request lifecycle', () => {
     await expect(h.call()).rejects.toThrow('tool definition changed');
     expect(fetchImpl).not.toHaveBeenCalled();
     h.client.needsReconnect = false;
-    await h.approve();
+    await h.approveInput();
     await expect(h.call()).resolves.toMatchObject({ content: [{ text: 'ok' }] });
     expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  // r4572016907 / #10480: all same-batch approval hooks run before execute.
+  // Old required schema rejects omitted args; a preceding targeted discovery
+  // recovers/discloses a parameterless replacement before this call executes.
+  // Existing recovery cases only bound approvals that had actually been asked.
+  // Unit tier: real production hook/gateway/serializer, injected HTTP boundary.
+  it.each(['ask', 'auto', 'bypassPermissions'])('binds skipped approval across same-batch schema recovery in %s', async (mode) => {
+    const sent: unknown[] = [];
+    const h = gatewayWithFetch(vi.fn(async (_url, options) => {
+      sent.push(JSON.parse(String(options!.body)).params);
+      return Response.json({ result: { content: [{ type: 'text', text: 'ok' }] } });
+    }), mode);
+    const input = { server: 'custom', tool: 'lookup' };
+    h.gateway.add('custom', h.client, [{ name: 'lookup', inputSchema: {
+      type: 'object', properties: { query: { type: 'string' } }, required: ['query'],
+    } }]);
+    await h.list(input);
+    h.client.needsReconnect = true;
+    h.gateway.registerReconnect('custom', async () => {
+      h.client.needsReconnect = false;
+      return { client: h.client, tools: [{ name: 'lookup', inputSchema: { type: 'object', properties: {} } }] };
+    });
+    const approvals: unknown[] = [];
+    const ctx = { ui: { input: vi.fn(async (_title: string, payload: string) => {
+      approvals.push(JSON.parse(payload));
+      return 'allow';
+    }) } };
+    await h.toolCall({ toolName: 'cindy_mcp_list_tools', toolCallId: 'discover', input }, ctx);
+    await h.toolCall({ toolName: 'cindy_mcp_call_tool', toolCallId: 'old-call', input }, ctx);
+    expect(ctx.ui.input).not.toHaveBeenCalled();
+    const discovered = await h.list(input);
+    expect(discovered.details.tools[0].inputSchema).toEqual({ type: 'object', properties: {} });
+    if (mode === 'bypassPermissions') {
+      // Full access bypasses ordinary approval; recovery must not add a new gate.
+      await expect(h.invoke(input, 'old-call')).resolves.toMatchObject({ content: [{ text: 'ok' }] });
+    } else {
+      await expect(h.invoke(input, 'old-call')).rejects.toThrow('"inputSchema":{"type":"object","properties":{}}');
+      expect(sent).toEqual([]);
+    }
+    // A genuinely new invocation runs its own hook and can be approved/executed.
+    await h.toolCall({ toolName: 'cindy_mcp_call_tool', toolCallId: 'new-call', input }, ctx);
+    expect(approvals).toEqual(mode === 'bypassPermissions' ? [] : [
+      { toolName: 'mcp__custom__lookup', input: {}, resolvedCredentialPaths: [] },
+    ]);
+    await expect(h.invoke(input, 'new-call')).resolves.toMatchObject({ content: [{ text: 'ok' }] });
+    expect(sent).toEqual(Array.from({ length: mode === 'bypassPermissions' ? 2 : 1 },
+      () => ({ name: 'lookup', arguments: {} })));
   });
 
   // r4411121974: a clean SSE EOF without this request's response must invalidate
