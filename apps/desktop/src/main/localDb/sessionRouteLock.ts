@@ -7,7 +7,9 @@
  * cleanup. Tests and DB-only tools fall back to direct execution.
  */
 
-export type SessionRouteLock = <T>(sessionId: string, task: () => Promise<T>) => Promise<T>;
+export type SessionRouteLock = <T>(
+  sessionId: string, task: () => Promise<T>, getStage?: () => string | undefined, signal?: AbortSignal,
+) => Promise<T>;
 
 const passthroughLock: SessionRouteLock = async (_sessionId, task) => task();
 let routeLock: SessionRouteLock = passthroughLock;
@@ -16,8 +18,12 @@ export function setSessionRouteLockImplementation(lock: SessionRouteLock | null)
   routeLock = lock ?? passthroughLock;
 }
 
-export function withSessionRouteLock<T>(sessionId: string, task: () => Promise<T>): Promise<T> {
-  return routeLock(sessionId, task);
+export function withSessionRouteLock<T>(
+  sessionId: string, task: () => Promise<T>, signal?: AbortSignal,
+): Promise<T> {
+  if (!signal) return routeLock(sessionId, task);
+  signal.throwIfAborted();
+  return routeLock(sessionId, task, undefined, signal);
 }
 
 /** Acquire a batch in stable order so reversed overlapping batches cannot deadlock. */

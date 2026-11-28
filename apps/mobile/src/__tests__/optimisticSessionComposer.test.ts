@@ -27,7 +27,9 @@ describe('mobile optimistic composer while session is not ready', () => {
     const remove = source.slice(source.indexOf('const removeOutboxItem ='), source.indexOf('return { findDurableOutboxRecord'));
     expect(remove).toContain('if (isDurableOutboxUnsent(record))');
     expect(remove).toContain("cleanupOutcome: 'cancelled'");
-    expect(remove).toContain("else await mobileDurableOutbox.update(record, { cancelRequested: true, state: 'confirming' })");
+    expect(remove).toContain('if (unconfirmed) {');
+    expect(remove).toContain('await mobileDurableOutbox.discardUnconfirmed(record)');
+    expect(remove).toContain("await mobileDurableOutbox.update(record, { cancelRequested: true, state: 'confirming' })");
   });
 
   it('waits for committed draft ownership recovery before submitting the visible draft', () => {

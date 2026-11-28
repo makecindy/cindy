@@ -1,6 +1,7 @@
 import { DeviceLinkError } from '@cindy/device-link';
 import { describe, expect, it, vi } from "vitest";
 import { formatRemoteError, isAutoRecoveringRemoteError } from '@/device-link/remoteStatus';
+import { HistoryViewController, projectHistoryView } from '@cindy/maker-shared/message-window';
 import { uploadMobileAttachmentFromFile } from '@/session/mobileAttachmentUpload';
 import { accountVaultKey } from '@cindy/auth-client';
 import { cancelledCreationDraft, outboxCreationRetryIdentity } from '../session/cancelledCreationDraft';
@@ -21,7 +22,9 @@ import {
 } from "../session/durableOutboxDelivery";
 import type { QueuedRemoteMessage, RemoteMessage, RemoteSession } from "../session/types";
 import { remoteSessionStore } from "../session/remoteSessionStore";
-import { appendOptimisticUserMessage, projectOptimisticUserMessages, type OptimisticUserMessage } from '../session/optimisticUserMessages';
+import { appendOptimisticUserMessage, confirmedHistoryUserClientIds, projectOptimisticUserMessages, repliedHistoryUserClientIds, type OptimisticUserMessage } from '../session/optimisticUserMessages';
+import { EMPTY_INPUT_PROJECTION } from '../session/inputProjection';
+import { hasActiveOutboxHandoff } from '../session/sessionOutbox';
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -269,7 +272,7 @@ it.each([
   new Error('CHANNEL_NOT_ALLOWED'),
   new DeviceLinkError('ACCESS_REVOKED', 'CHANNEL_NOT_ALLOWED'),
   new DeviceLinkError('INVOKE_TIMEOUT', 'timed out'),
-])('leaves an unrelated history failure on the existing path (%s)', async (error) => {
+])('never uses the legacy read for an unrelated history failure (%s)', async (error) => {
   const { store, deps } = await setup();
   const record = message();
   await store.add({ ...record, state: 'confirming', enqueueStarted: true,
@@ -280,7 +283,38 @@ it.each([
   expect(legacyHistory).not.toHaveBeenCalled();
   expect(deps.enqueue).not.toHaveBeenCalled();
   expect(store.getSnapshot()[0]).toMatchObject({ state: 'failed' });
+  expect(store.getSnapshot()[0].historyConfirmation).toBe('unconfirmed');
+});
+
+// Unit: the current attempt was refused before acceptance. Preserve FIFO
+// and the reason without a reconciliation call or a second enqueue.
+it('stops at a known refusal and does not dispatch the next message', async () => {
+  const { store, deps } = await setup();
+  await store.add(message());
+  await store.add({ ...message('id-2'), createdAt: 2 });
+  const error = new Error('session is not active');
+  const isEnqueueRefusal = vi.fn((err: unknown) => err === error);
+  deps.enqueue.mockRejectedValueOnce(error);
+  const runner = createDurableOutboxDelivery({ ...deps, isEnqueueRefusal, describe: (err) => (err as Error).message });
+  await runner.run();
+  runner.wake();
+  await runner.run();
+  expect(store.getSnapshot()[0]).toMatchObject({ state: 'failed', error: 'session is not active', enqueueStarted: false });
   expect(store.getSnapshot()[0].historyConfirmation).toBeUndefined();
+  expect(store.getSnapshot()[1].state).toBe('queued');
+  expect(deps.history).not.toHaveBeenCalled();
+  expect(deps.enqueue.mock.calls.map(([r]) => r.item.clientId)).toEqual(['id-1']);
+});
+
+// The first reply was lost. A retry refusal cannot tell us whether the first write landed.
+it('keeps an earlier uncertain write even when the next attempt is refused', async () => {
+  const { store, deps } = await setup();
+  await store.add({ ...message(), state: 'confirming', enqueueStarted: true, retrySafe: true,
+    prepared: { clientId: 'id-1', durableDelivery: true } as QueuedRemoteMessage });
+  deps.enqueue.mockRejectedValueOnce(new Error('[PRECONDITION_FAILED] Account changed before input'));
+  await createDurableOutboxDelivery({ ...deps, isEnqueueRefusal: () => true }).run();
+  expect(deps.enqueue).toHaveBeenCalledOnce();
+  expect(store.getSnapshot()[0]).toMatchObject({ state: 'failed', historyConfirmation: 'unconfirmed', enqueueStarted: true });
 });
 
 it('restores a waiting confirmation without replaying an interrupted recheck', async () => {
@@ -416,6 +450,134 @@ describe('resending a missing remote input after explicit confirmation', () => {
     expect(restarted.getSnapshot()[0]).toMatchObject({ state: 'failed', historyConfirmation: 'unconfirmed' });
     expect(deps.enqueue).toHaveBeenCalledTimes(1);
   });
+});
+
+// A restored archived task can accept A1, remove it from the live projection
+// while executing, then publish its user row. The phone must not interpret the
+// absent projection item as a miss or keep A2/A3 behind an unconfirmed A1.
+it('settles a late positive history row for an unconfirmed archived send without replaying it', async () => {
+  const { store, deps } = await setup();
+  await store.add({ ...message('a1'), state: 'failed', historyConfirmation: 'unconfirmed',
+    enqueueStarted: true, retrySafe: false, prepared: { clientId: 'a1' } as QueuedRemoteMessage });
+  await store.add({ ...message('a2'), createdAt: 2 });
+  await store.add({ ...message('a3'), createdAt: 3 });
+  let historicalA1 = false;
+  const cacheHistory = vi.fn(async () => historicalA1);
+  const runner = createDurableOutboxDelivery({ ...deps,
+    observedHistory: r => historicalA1 && r.item.clientId === 'a1', cacheHistory,
+    projection: vi.fn(async r => ({ ...projection(r.item.clientId), sessionId: r.item.sessionId })),
+  });
+  await runner.run();
+  expect(deps.enqueue).not.toHaveBeenCalled();
+  expect(deps.history).not.toHaveBeenCalled();
+  expect(cacheHistory).not.toHaveBeenCalled();
+  historicalA1 = true; // exact user row from the restored task's history push
+  runner.wake();
+  await runner.run();
+  expect(store.getSnapshot().some(r => r.item.clientId === 'a1')).toBe(false);
+  expect(deps.enqueue).not.toHaveBeenCalled();
+  runner.wake();
+  await runner.run();
+  runner.wake();
+  await runner.run();
+  expect(deps.enqueue.mock.calls.map(([r]) => r.item.clientId)).toEqual(['a2', 'a3']);
+  expect(deps.history).not.toHaveBeenCalled();
+});
+
+it('releases the unconfirmed FIFO head on positive history even while the disk view lags', async () => {
+  const { store, deps } = await setup();
+  await store.add({ ...message('a1'), state: 'failed', historyConfirmation: 'unconfirmed',
+    enqueueStarted: true, retrySafe: false, prepared: { clientId: 'a1' } as QueuedRemoteMessage });
+  await store.add({ ...message('a2'), createdAt: 2 });
+  let rowVisible = false;
+  const runner = createDurableOutboxDelivery({ ...deps,
+    observedHistory: r => rowVisible && r.item.clientId === 'a1',
+    cacheHistory: vi.fn(async () => false),
+  });
+  await runner.run();
+  rowVisible = true;
+  runner.wake();
+  await runner.run();
+  expect(store.getSnapshot().find(r => r.item.clientId === 'a1'))
+    .toMatchObject({ state: 'host-owned', historyConfirmed: true });
+  runner.wake();
+  await runner.run();
+  expect(deps.enqueue.mock.calls.map(([r]) => r.item.clientId)).toEqual(['a2']);
+  expect(deps.history).not.toHaveBeenCalled();
+});
+
+// Unit, #13672 E1/E2: enqueue a follow-up during a run, then drive delivery and
+// the composer's activity predicate with a history page missing the new turn.
+// Restart tests cover ledger cleanup, but did not exercise the visible activity
+// between exact confirmation and caching, including the pre-run user-only row.
+it('clears follow-up activity after its finished reply while keeping the ledger until history catches up', async () => {
+  const { store, deps } = await setup();
+  const target = { deviceId: 'mac-a', sessionId: 'session-a' };
+  const row = (clientId: string, role: RemoteMessage['role'], seconds: number): RemoteMessage => ({
+    id: clientId, clientId, sessionId: target.sessionId, role, content: clientId,
+    createdAt: new Date(seconds * 1_000).toISOString(), toolUseId: null, agentMeta: null,
+  });
+  const first = [
+    row('e1', 'user', 1),
+    { ...row('e1-reply', 'assistant', 2), agentMeta: { turnCompleted: true } },
+  ];
+  const followUp = row('e2', 'user', 3);
+  let page = first;
+  let raw = first;
+  const view = new HistoryViewController<RemoteMessage>({
+    page: async () => ({ version: 1, items: projectHistoryView(page, false), hasMore: false, nextCursor: null }),
+    details: async () => ({ version: 1, messages: [], hasMore: false, nextCursor: null }),
+    expanded: async () => undefined,
+  });
+  await view.refresh();
+
+  const idle = { ...EMPTY_INPUT_PROJECTION, sessionId: target.sessionId };
+  const running: DeliveryProjection = { ...idle, queueSnapshot: { dispatchClientId: 'e1' } };
+  deps.projection.mockResolvedValueOnce(running).mockResolvedValue(idle);
+  deps.enqueue.mockResolvedValue({ ...running, pendingQueue: [{ clientId: 'e2' } as QueuedRemoteMessage] });
+  const runner = createDurableOutboxDelivery({
+    ...deps,
+    history: async record => raw.some(message => message.role === 'user'
+      && message.sessionId === record.item.sessionId && message.clientId === record.item.clientId),
+    cacheHistory: async record => confirmedHistoryUserClientIds(view.getSnapshot(), []).has(record.item.clientId),
+  });
+  const activity = () => {
+    const records = store.getSnapshot();
+    const clientIds = new Set(records.filter(record => record.historyConfirmed).map(record => record.item.clientId));
+    const replied = repliedHistoryUserClientIds(view.getSnapshot(), raw, { sessionId: target.sessionId, clientIds });
+    return hasActiveOutboxHandoff(records, target, {
+      relayOnline: true, targetAvailable: true, deviceUnresponsive: false, autoRecoveringError: false, syncInProgress: false,
+    }, replied);
+  };
+  await store.add(message('e2'));
+  await runner.run();
+  expect(store.getSnapshot()[0]?.state).toBe('confirming');
+  raw = [...first, followUp];
+  runner.wake();
+  await runner.run();
+  expect(store.getSnapshot()).toMatchObject([{ state: 'host-owned', historyConfirmed: true }]);
+  expect(activity()).toBe(true);
+
+  const reply = row('e2-reply', 'assistant', 4);
+  raw = [...raw, { ...reply, agentMeta: { isStreaming: true } }];
+  expect(activity()).toBe(true);
+  const completedReply = { ...reply, agentMeta: { turnCompleted: true } };
+  raw = [...first, followUp, { ...completedReply, sessionId: 'other-task' }];
+  expect(activity()).toBe(true);
+  raw = [...first, followUp, row('other-input', 'user', 4), completedReply];
+  expect(activity()).toBe(true);
+  raw = [...first, followUp, completedReply];
+  expect(activity()).toBe(false);
+  expect(store.getSnapshot()).toHaveLength(1);
+  expect(deps.cleanup).not.toHaveBeenCalled();
+
+  page = raw;
+  await view.refresh();
+  runner.wake();
+  await runner.run();
+  expect(store.getSnapshot()).toEqual([]);
+  expect(deps.cleanup).toHaveBeenCalledOnce();
+  expect(deps.enqueue.mock.calls.map(([record]) => record.item.clientId)).toEqual(['e2']);
 });
 
 describe('disabled Cindy Make outbox recovery', () => {
@@ -561,7 +723,7 @@ describe("durable mobile outbox ownership", () => {
     deps.projection.mockResolvedValue({ ...projection(), inputDeliveryVersion: undefined });
     deps.history.mockRejectedValue(new Error('[NOT_FOUND] Message 不存在'));
     await runner.run();
-    expect(store.getSnapshot()[0]).toMatchObject({ state: 'failed', error: 'check receipt' });
+    expect(store.getSnapshot()[0]).toMatchObject({ state: 'failed', historyConfirmation: 'unconfirmed' });
     expect(deps.enqueue).not.toHaveBeenCalled();
     expect(deps.cleanup).not.toHaveBeenCalled();
   });
@@ -1154,16 +1316,16 @@ describe("app-owned delivery and reconciliation", () => {
     await first.store.add(host === 'legacy' ? message() : { ...message(), retrySafe: false,
       prepared: { clientId: 'id-1' } as QueuedRemoteMessage });
     await first.runner.run();
-    expect(first.store.getSnapshot()[0]).toMatchObject({ state: 'confirming', error: 'check receipt' });
+    expect(first.store.getSnapshot()[0]).toMatchObject({ state: 'confirming', error: undefined });
     first.runner.stop();
     const second = await setup(first.storage);
     second.deps.projection.mockResolvedValue(legacy);
     await second.runner.run();
-    expect(second.store.getSnapshot()[0]).toMatchObject({ state: 'failed', error: 'check receipt' });
+    expect(second.store.getSnapshot()[0]).toMatchObject({ state: 'failed', historyConfirmation: 'unconfirmed' });
     expect(second.deps.enqueue).not.toHaveBeenCalled();
     expect(second.deps.cleanup).not.toHaveBeenCalled();
     second.deps.history.mockResolvedValue(true);
-    second.runner.wake();
+    await second.store.update(second.store.getSnapshot()[0]!, { historyConfirmation: 'requested' });
     await second.runner.run();
     expect(second.store.getSnapshot()).toEqual([]);
     expect(second.deps.cleanup).toHaveBeenCalledOnce();
@@ -1175,7 +1337,7 @@ describe("app-owned delivery and reconciliation", () => {
     await store.add({ ...message('id-2'), createdAt: 2 });
     deps.projection.mockResolvedValue({ pendingQueue: [{ clientId: 'id-1' }], clearBoundaryMs: null } as unknown as DeliveryProjection);
     await runner.run();
-    expect(store.getSnapshot()[0]).toMatchObject({ state: 'confirming', error: 'check receipt' });
+    expect(store.getSnapshot()[0]).toMatchObject({ state: 'confirming', error: undefined });
     deps.projection.mockResolvedValue({ pendingQueue: [], clearBoundaryMs: 123 } as unknown as DeliveryProjection);
     runner.wake();
     await runner.run();
@@ -1366,7 +1528,7 @@ describe("app-owned delivery and reconciliation", () => {
     } as unknown as DeliveryProjection);
     await second.runner.run();
     expect(second.deps.enqueue).not.toHaveBeenCalled();
-    expect(second.store.getSnapshot()[0]?.error).toBe("check receipt");
+    expect(second.store.getSnapshot()[0]).toMatchObject({ state: 'failed', historyConfirmation: 'unconfirmed' });
   });
   it("does not replay a message after the desktop clear boundary changes", async () => {
     const { store, runner, deps } = await setup();

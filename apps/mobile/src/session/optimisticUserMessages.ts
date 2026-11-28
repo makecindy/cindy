@@ -1,5 +1,6 @@
 import type { QueuedRemoteMessage, RemoteMessage } from './types';
 import { historyViewLeaves, isHistoryViewUnavailable, type HistoryViewSnapshot } from '@cindy/maker-shared/message-window';
+import { remoteMessageCompletesTurn } from './messageNormalize';
 import { pendingSendBubbleText } from './pendingSendItems';
 
 function authoritativeHistoryMessages(
@@ -22,10 +23,13 @@ export function confirmedHistoryUserClientIds(
  * 已确认、且其后已出现任何消息(turn 已跑过)的用户消息 clientId。
  *
  * 被控端先落库用户行、再跑派发前钩子,之后才有运行信号;只「已确认」不代表已开跑。
- * 权威历史与实时推送(rawMessages)可能分叉,任一来源里这条后面已有消息就算跑过。
+ * 已在权威历史中的用户行可用实时后续活动判断已交接。历史页还没追上时，只有经同设备
+ * 待发记录确认的用户行和属于它的轮次结束标记，才能提前收起活动条。
  */
 export function repliedHistoryUserClientIds(
-  snapshot: HistoryViewSnapshot<RemoteMessage>, rawMessages: readonly RemoteMessage[],
+  snapshot: HistoryViewSnapshot<RemoteMessage>,
+  rawMessages: readonly RemoteMessage[],
+  confirmedOutbox?: { sessionId: string; clientIds: ReadonlySet<string> },
 ): ReadonlySet<string> {
   const confirmed = confirmedHistoryUserClientIds(snapshot, rawMessages);
   const replied = new Set<string>();
@@ -35,6 +39,17 @@ export function repliedHistoryUserClientIds(
         replied.add(message.clientId);
       }
     });
+  }
+  if (!confirmedOutbox?.clientIds.size) return replied;
+  let confirmedInput: string | undefined;
+  for (const message of rawMessages) {
+    if (message.sessionId !== confirmedOutbox.sessionId) continue;
+    if (message.role === 'user') {
+      confirmedInput = confirmedOutbox.clientIds.has(message.clientId) ? message.clientId : undefined;
+    } else if (confirmedInput && remoteMessageCompletesTurn(message)) {
+      replied.add(confirmedInput);
+      confirmedInput = undefined;
+    }
   }
   return replied;
 }
