@@ -54,6 +54,7 @@
 - 协议：`packages/device-link/src/machineStatus.ts`，登记于 `allowlist.ts`（不进共享任务访客白名单）。
 - Desktop：`apps/desktop/src/main/machines/`（`localStatus.ts` 读本机，`sshStatus.ts` 读 SSH，`directory.ts` 汇总），
   工具接线在 `mcp-integrations/mcp-providers.ts`，channel 处理在 `maker-ipc/register.ts`。
+- Node Host 同样在后台链路处理 `maker:machine:status`，CPU、内存和磁盘复用 Desktop 的 `localStatusCore.ts`。桌面 Electron 继续读原有的空闲和电源接口，Node Host 在 macOS 按需读系统状态，其他平台尚无可靠来源时返回 `null`。
 - 工具：`packages/lizi-mcps/src/xdt-helper/list_machines.ts`。
 
 ## 5. 验收注意

@@ -25,6 +25,39 @@ export interface GhostAgentTurnRunnerDeps {
   broadcastSessionCreated(id: string): void;
 }
 
+export type LocalGhostSessionMeta = Pick<
+  SessionMeta,
+  'agentKind' | 'model' | 'providerId' | 'effort' | 'remoteHostId' | 'agentDeviceId'
+>;
+
+/**
+ * Local route admission for `cindy.agent.run` card handoffs.
+ * Built-in sessions continue through the Harness catalog resolver; plugin-engine
+ * sessions (`agent_kind = 'acp'`) validate against the local plugin harness
+ * registry and settings instead of failing in the built-in catalog.
+ */
+export function createLocalGhostSessionAdmission(deps: {
+  captureOwner(): () => void;
+  readSessionMeta(id: string): Promise<LocalGhostSessionMeta | null>;
+  hasPendingAgentSwitch(id: string): boolean;
+  admitBuiltinSession(id: string): Promise<unknown>;
+  admitPluginEngineSession(source: LocalGhostSessionMeta): unknown;
+}): (sessionId: string) => Promise<unknown> {
+  return async (sessionId) => {
+    const assertOwner = deps.captureOwner();
+    assertOwner();
+    const meta = await deps.readSessionMeta(sessionId);
+    assertOwner();
+    if (meta?.agentKind === 'acp') {
+      if (deps.hasPendingAgentSwitch(sessionId)) {
+        throw new Error('发起任务正在切换模型，请稍后重试');
+      }
+      return deps.admitPluginEngineSession(meta);
+    }
+    return deps.admitBuiltinSession(sessionId);
+  };
+}
+
 /** Host runner after the plugin slot has validated the request and click ticket. */
 export function createGhostAgentTurnRunner(deps: GhostAgentTurnRunnerDeps): GhostAgentTurnRunner {
   return async (request) => {

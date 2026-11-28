@@ -4640,11 +4640,23 @@ describe('remoteSessionStore', () => {
     remoteSessionStore.applyRemotePush('dev-1', 'usage:message-model-mismatch', {
       sessionId: 's1',
       clientId: 'm1',
-      modelMismatch: { selected: 'claude-fable-5', actual: 'claude-opus-4-8' },
+      modelMismatch: { selected: 'claude-fable-5-2', actual: 'claude-opus-4-8', providerName: ' Anthropic ' },
     });
 
     expect(remoteSessionStore.getMessages('s1')[0].agentMeta).toMatchObject({
+      modelMismatch: { selected: 'claude-fable-5-2', actual: 'claude-opus-4-8', providerName: 'Anthropic' },
+    });
+
+    // 不带 providerName 的旧端/通用 push 照旧写入，不补空字段。
+    remoteSessionStore.setMessages('s3', [message('m3', 's3')]);
+    remoteSessionStore.applyRemotePush('dev-1', 'usage:message-model-mismatch', {
+      sessionId: 's3',
+      clientId: 'm3',
       modelMismatch: { selected: 'claude-fable-5', actual: 'claude-opus-4-8' },
+    });
+    expect(remoteSessionStore.getMessages('s3')[0].agentMeta?.modelMismatch).toEqual({
+      selected: 'claude-fable-5',
+      actual: 'claude-opus-4-8',
     });
 
     // 字段不全的 push 一律忽略,不写入半截标记。

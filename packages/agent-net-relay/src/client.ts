@@ -16,8 +16,9 @@ export type { Identity, TenantJoinRequest } from './identity.js';
 export { createPrivateNetwork } from './bootstrap.js';
 export { uploadEncryptedMedia, openEncryptedMedia } from './media.js';
 export { sealNotification } from './notification.js';
-export { UDP_RELAY_HEADER, UDP_RELAY_REGISTER_ACK, UDP_RELAY_DOWN, UDP_RELAY_UP_OVERHEAD, encodeUdpRegister, encodeUdpUp, isUdpRelayPacket, udpRelayPeerHash,
-  verifyUdpDown, verifyUdpRegisterAck, type UdpRelayCredentials } from './udpRelay.js';
+export { UDP_RELAY_HEADER, UDP_RELAY_REGISTER_ACK, UDP_RELAY_DOWN, UDP_RELAY_PROBE, UDP_RELAY_PROBE_ACK, UDP_RELAY_PROBE_BYTES, UDP_RELAY_PROBE_FEATURE,
+  UDP_RELAY_UP_OVERHEAD, encodeUdpProbe, encodeUdpRegister, encodeUdpUp, isUdpRelayPacket, udpRelayPeerHash,
+  verifyUdpDown, verifyUdpProbeAck, verifyUdpRegisterAck, type UdpRelayCredentials } from './udpRelay.js';
 /**
  * Whether this relay WebSocket URL may carry UDP credentials: they are a reusable secret, so only over TLS or on this
  * machine. Owner-pinned private relays on plain http stay on the WebSocket (2026-11-17 review: the key travelled in clear).
@@ -395,10 +396,11 @@ export function createDelegationApprover(client: AgentNetClient, assertCurrent: 
 /** A malformed credential only disables UDP for this session; it never fails the WebSocket handshake. */
 function udpCredentials(value: unknown): UdpRelayCredentials | null {
   if (!value || typeof value !== 'object') return null;
-  const { session, key } = value as { session?: unknown; key?: unknown };
+  const { session, key, probe } = value as { session?: unknown; key?: unknown; probe?: unknown };
   if (typeof session !== 'string' || typeof key !== 'string') return null;
   const sessionBytes = Buffer.from(session, 'base64url'), keyBytes = Buffer.from(key, 'base64url');
-  return sessionBytes.length === UDP_RELAY_SESSION_BYTES && keyBytes.length === UDP_RELAY_KEY_BYTES ? { session: sessionBytes, key: keyBytes } : null;
+  if (sessionBytes.length !== UDP_RELAY_SESSION_BYTES || keyBytes.length !== UDP_RELAY_KEY_BYTES) return null;
+  return probe === true ? { session: sessionBytes, key: keyBytes, probe: true } : { session: sessionBytes, key: keyBytes };
 }
 export class AgentNetUplink extends EventEmitter {
   readonly kind = 'agent-net' as const;

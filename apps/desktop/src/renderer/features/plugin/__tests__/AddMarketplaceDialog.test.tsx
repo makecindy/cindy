@@ -47,6 +47,14 @@ function input(key: string): HTMLElement {
 }
 
 describe('AddMarketplaceDialog', () => {
+  it('opens with focus on the source field before the help action', async () => {
+    render(<AddMarketplaceDialog open onOpenChange={() => {}} onSourcesChanged={() => {}} />);
+    const source = input('settings.ghosts.market.sources.sourcePlaceholder');
+    const help = screen.getByRole('button', { name: 'settings.ghosts.market.sources.learnMore' });
+    await waitFor(() => expect(document.activeElement).toBe(source));
+    expect(source.compareDocumentPosition(help) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
   it('drops ref and sparse paths once the source turns out to be a local path', async () => {
     render(<AddMarketplaceDialog open onOpenChange={() => {}} onSourcesChanged={() => {}} />);
 

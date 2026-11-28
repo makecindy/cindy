@@ -1,13 +1,36 @@
 import { Activity, ArrowDownToLine } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { Tip } from '@/components/ui/tooltip';
-import type { PluginMarketItem } from '../../../shared/pluginMarket';
+import { parsePluginMarketSortValue, type PluginMarketItem, type PluginMarketMetric } from '../../../shared/pluginMarket';
 
-function formatDownloadCount(count: bigint): string {
+function formatCompactCount(count: bigint): string {
   const unit = count >= 1_000_000n ? 1_000_000n : count >= 1_000n ? 1_000n : 1n;
   if (unit === 1n) return count.toString();
   const decimal = ((count % unit) * 10n) / unit;
   return `${count / unit}${decimal ? `.${decimal}` : ''}${unit === 1_000n ? 'k' : 'M'}`;
+}
+
+function calendarDay(date: Date): number {
+  return Date.UTC(date.getFullYear(), date.getMonth(), date.getDate());
+}
+
+export function formatPluginMarketMetric(metric: PluginMarketMetric, value: PluginMarketItem['sortValue'], locale: string) {
+  const sortValue = parsePluginMarketSortValue(value, metric.kind);
+  if (typeof sortValue === 'number') {
+    return {
+      text: formatCompactCount(BigInt(sortValue)),
+      label: `${metric.label} ${sortValue.toLocaleString(locale, { useGrouping: true })}`,
+    };
+  }
+  if (typeof sortValue !== 'string') return null;
+  const date = new Date(sortValue);
+  const days = Math.min(0, (calendarDay(date) - calendarDay(new Date())) / 86_400_000);
+  return {
+    text: days >= -29
+      ? new Intl.RelativeTimeFormat(locale, { numeric: 'auto' }).format(days, 'day')
+      : new Intl.DateTimeFormat(locale, { month: 'short', day: 'numeric' }).format(date),
+    label: `${metric.label} ${new Intl.DateTimeFormat(locale, { dateStyle: 'medium' }).format(date)}`,
+  };
 }
 
 /** Shared counters from the authorized server catalog; personal/custom sources never grant access. */
@@ -66,7 +89,7 @@ export function PluginSharedUsage({
             className={`inline-flex min-w-0 items-center gap-1 rounded-full tabular-nums focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)] ${variant === 'detail' ? '-mx-1 min-h-7 px-1' : 'pointer-events-auto relative z-[1]'}`}
           >
             <Icon size={12} className="shrink-0" aria-hidden="true" />
-            <span className="break-words [overflow-wrap:anywhere]">{variant === 'list' ? formatDownloadCount(numericCount) : label}</span>
+            <span className="break-words [overflow-wrap:anywhere]">{variant === 'list' ? formatCompactCount(numericCount) : label}</span>
           </span>
         </Tip>
       </span>

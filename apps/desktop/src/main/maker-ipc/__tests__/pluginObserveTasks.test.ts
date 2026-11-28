@@ -60,6 +60,8 @@ const insert = (id: string, workingDir: string, updatedAt: number, extra = '') =
   (extra ? db.exec(`UPDATE sessions SET ${extra} WHERE id = '${id}'`) : undefined);
 
 // unit: real SQL filters against in-memory SQLite; only the activity reader and workdir registry are stubbed.
+// A task whose Agent runs on a shared provider (agent_device_id 'share:…') keeps its record and files
+// here, so it stays listed; before 2026-11-27 it was dropped and plugins showed nothing. SSH tasks stay out.
 it('lists only visible local tasks of the registered project, as metadata in activity order', async () => {
   insert('recent', '/repo', 30);
   insert('worktree', '/repo/.cindy-worktrees/branch', 10, 'last_activity_at = 50');
@@ -71,7 +73,7 @@ it('lists only visible local tasks of the registered project, as metadata in act
   insert('worker', '/repo', 99, "orca_role = 'worker'");
   insert('review', '/repo', 99, "source = 'review'");
   insert('remote', '/repo', 99, "remote_host_id = 'ssh-host'");
-  insert('device', '/repo', 99, "agent_device_id = 'other'");
+  insert('shared-agent', '/repo', 40, "agent_device_id = 'share:s1'");
   insert('bot', '/repo', 99);
   db.exec("INSERT INTO bot_session_links VALUES ('link', 'bot')");
   mocks.phases.set('recent', { phase: 'running', attention: false });
@@ -81,6 +83,7 @@ it('lists only visible local tasks of the registered project, as metadata in act
 
   expect(tasks).toEqual([
     { id: 'worktree', title: 'title worktree', agentKind: 'cc', archived: false, status: 'awaiting', lastActivityAt: 50 },
+    { id: 'shared-agent', title: 'title shared-agent', agentKind: 'cc', archived: false, status: 'idle', lastActivityAt: 40 },
     { id: 'recent', title: 'title recent', agentKind: 'cc', archived: false, status: 'running', lastActivityAt: 30 },
     { id: 'archived', title: 'title archived', agentKind: 'cc', archived: true, status: 'idle', lastActivityAt: 20 },
   ]);
@@ -106,11 +109,15 @@ it('lifts local worker error and awaiting onto the lead with one batched activit
 
 it('rejects unregistered or missing projects and opens only listable tasks', async () => {
   insert('task', '/repo', 1);
+  insert('shared-agent', '/repo', 1, "agent_device_id = 'share:s1'");
+  insert('ssh', '/repo', 1, "remote_host_id = 'ssh-host'");
   insert('worker', '/repo', 1, "orca_role = 'worker'");
   insert('unregistered', '/elsewhere', 1);
   await expect(listPluginObserveTasks('/elsewhere')).rejects.toThrow('TARGET_UNAVAILABLE');
   await expect(listPluginObserveTasks('/gone')).rejects.toThrow('TARGET_UNAVAILABLE');
   await expect(assertPluginObservableTask('task')).resolves.toBeUndefined();
+  await expect(assertPluginObservableTask('shared-agent')).resolves.toBeUndefined();
+  await expect(assertPluginObservableTask('ssh')).rejects.toThrow('TARGET_UNAVAILABLE');
   await expect(assertPluginObservableTask('worker')).rejects.toThrow('TARGET_UNAVAILABLE');
   await expect(assertPluginObservableTask('unregistered')).rejects.toThrow('TARGET_UNAVAILABLE');
   await expect(assertPluginObservableTask('missing')).rejects.toThrow('TARGET_UNAVAILABLE');

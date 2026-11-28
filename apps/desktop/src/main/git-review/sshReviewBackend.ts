@@ -10,7 +10,9 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import type { Stats } from 'node:fs';
 import path from 'node:path';
+import { getDeviceLinkInvokeContext } from '../device-link/invoke-context.js';
 
+import { isCanonicalBase64 } from '@cindy/maker-shared';
 import type { ExecOpts, ExecResult } from '@cindy/maker-remote-ssh';
 
 import { getRemoteFileBrowser } from '../file-browser/remote-deps.js';
@@ -304,7 +306,17 @@ function createGitBackend(host: SshReviewHost): GitExecutionBackend {
         message: 'Remote Git review request was cancelled',
       });
     }
-    const safeArgs = hardenedRemoteGitArgs(args);
+    let safeArgs = hardenedRemoteGitArgs(args);
+    if (getDeviceLinkInvokeContext()?.sharedTask) {
+      const { gitDriverIsolationArgs, snapshotGitIsolationArgs } = await import('../git-snapshot/isolatedGitExec.js');
+      const base = snapshotGitIsolationArgs('/dev/null');
+      const keys = await host.exec(buildRemoteGitCommand(cwd, [...base, 'config', '--null', '--name-only', '--list']), {
+        timeoutMs: 30_000, maxOutputBytes: 512_000, label: 'git-review-read',
+      });
+      if (keys.exitCode !== 0) throw new Error('Cannot isolate shared Git review');
+      const config = decodedOutput(keys, 384_000, ['config'], cwd).toString('utf8');
+      safeArgs = ['--no-optional-locks', ...base, ...gitDriverIsolationArgs(config), ...safeArgs];
+    }
     const maxStdoutBytes = opts.maxStdoutBytes ?? DEFAULT_REMOTE_STDOUT_BYTES;
     const encodedLimit = Math.ceil(maxStdoutBytes / 3) * 4 + 4_096;
     const result = await host.exec(buildRemoteGitCommand(cwd, safeArgs), {
@@ -433,9 +445,7 @@ function decodeRemoteChunk(result: RemoteChunkResult, maxChunkBytes: number): Bu
   const maxEncodedChars = Math.ceil(maxChunkBytes / 3) * 4;
   if (
     result.dataBase64.length > maxEncodedChars ||
-    !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(
-      result.dataBase64,
-    )
+    !isCanonicalBase64(result.dataBase64)
   ) {
     throw new Error('Remote review file service returned an oversized or invalid chunk');
   }

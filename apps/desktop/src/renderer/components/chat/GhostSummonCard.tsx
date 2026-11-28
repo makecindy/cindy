@@ -36,6 +36,7 @@ import { useTranslation } from 'react-i18next';
 import { Check, ChevronDown, Ghost } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { SHARE_SOURCE_ATTR } from '@/lib/shareConversationImage';
+import { Badge } from '@/components/ui/badge';
 import { Collapse } from '@/components/ui/collapse';
 import {
   commandDirectiveSegments,
@@ -512,12 +513,9 @@ export function GhostSummonCard({
           {(badgeCommand || versionLabel) && (
             <div className="mb-2 flex items-center gap-2">
               {badgeCommand && (
-                <span
-                  className="shrink-0 rounded-full px-2 py-0.5 font-mono text-11 leading-none"
-                  style={{ backgroundColor: 'var(--surface-chip)', color: 'var(--text-secondary)' }}
-                >
+                <Badge mono>
                   ${badgeCommand}
-                </span>
+                </Badge>
               )}
               {versionLabel && (
                 <span

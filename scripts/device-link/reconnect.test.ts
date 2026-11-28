@@ -59,6 +59,71 @@ async function setup() {
 }
 
 describe("Device Link over real loopback WebSockets (contract fixture)", () => {
+  // Test value: real DeviceLinkClient sends, actual TCP coalescing and serial WS
+  // ingress (soft pause 64 / hard 128). Existing reconnect cases have <=3 peers,
+  // so cannot exceed the server's frame bound through healthy receive windows.
+  // Minimal reproducer: nine linked peers x sixteen tiny alternating push/results.
+  // Integration tier; loopback only, port 0, event-based waits, all sockets closed.
+  it('keeps a coalesced healthy cross-peer burst below bounded relay ingress', async () => {
+    const relay = await createRelayFixture();
+    cleanups.push(() => relay.close());
+    const host = createClient(relay.url, 'burst-host', true, { timing: { transportRetryIntervalMs: 60_000 } });
+    const peers = Array.from({ length: 9 }, (_, i) => createClient(relay.url, `p${i}`, true));
+    const largeReply = 'x'.repeat(4 * 1024 * 1024 - 1024);
+    cleanups.push(() => host.close(), ...peers.map(p => () => p.close()));
+    host.client.onFrame(env => {
+      if (env.kind === 'link-open') host.client.sendLinkAccept(env.src!, env.id!, { appVersion: 'test', allowlistHash: 'fixture' });
+      if (env.kind === 'invoke' && (env.payload as InvokePayload).channel === 'fixture:large') {
+        host.client.sendInvokeResult(env.src!, env.id!, { ok: true, result: largeReply });
+      }
+    });
+    const delivered = new Map<string, number>();
+    for (const peer of peers) peer.client.onFrame(env => {
+      if (env.kind === 'push' && (env.payload as { channel?: string }).channel === 'burst-event') {
+        delivered.set(env.dst!, (delivered.get(env.dst!) ?? 0) + 1);
+      }
+      if (env.kind === 'invoke') peer.client.sendInvokeResult(env.src!, env.id!, { ok: true, result: 'alive' });
+    });
+    for (const p of [host, ...peers]) p.client.start();
+    await until(() => [host, ...peers].forEach(p => expect(p.client.getStatus()).toBe('online')));
+    for (const peer of peers) await peer.client.openLink('burst-host', { controllerName: 'test', protocolVersion: 1, appVersion: 'test' });
+    await until(() => peers.forEach((_, i) => expect(host.client.isLinkReady(`p${i}`)).toBe(true)));
+    const bound = relay.boundInbound('burst-host');
+    const socket = host.sockets[0] as unknown as { _socket: { cork(): void; uncork(): void } };
+    socket._socket.cork();
+    try {
+      for (let i = 0; i < 16; i++) for (let p = 0; p < peers.length; p++) {
+        if (i % 2) host.client.sendInvokeResult(`p${p}`, `r${p}-${i}`, { ok: true, result: i });
+        else host.client.sendPush(`p${p}`, 'burst-event', i);
+      }
+    } finally { socket._socket.uncork(); }
+    await until(() => expect(bound.peak).toBeGreaterThan(0));
+    expect(bound.rejected).toBe(0);
+    await until(() => {
+      expect(bound.peak).toBeGreaterThan(0);
+      expect(host.sockets[0].readyState).toBe(1);
+      for (let p = 0; p < peers.length; p++) {
+        expect(delivered.get(`p${p}`)).toBe(8);
+        expect(host.client.getReliableSendQueueDepth(`p${p}`)).toBe(0);
+      }
+    });
+    const data = relay.frames.filter(e => e.src === 'burst-host' && (e.kind === 'invoke-result'
+      || (e.kind === 'push' && (e.payload as { channel?: string }).channel !== DEVICE_LINK_TRANSPORT_ACK_CHANNEL)));
+    expect(data).toHaveLength(144);
+    expect(bound.peak).toBeLessThanOrEqual(128);
+    expect(host.sockets).toHaveLength(1);
+    for (let p = 0; p < peers.length; p++) {
+      await expect(invoke(host.client, `p${p}`, 'fixture:alive')).resolves.toBe('alive');
+    }
+    // Normal large replies retain atomic fragmentation and complete on two
+    // real request/result paths, rather than inheriting 1013's 32 frames/s.
+    const large = await Promise.all(peers.slice(0, 2).map(peer => invoke(peer.client, 'burst-host', 'fixture:large')));
+    expect(large.map(result => typeof result === 'string' ? result.length : -1)).toEqual([largeReply.length, largeReply.length]);
+    expect(large.every(result => result === largeReply)).toBe(true);
+    expect(bound.rejected).toBe(0);
+    expect(host.sockets).toHaveLength(1);
+  });
+
   it('reuses a full long list message over real sockets on both desktop and mobile', async () => {
     const relay = await createRelayFixture();
     cleanups.push(() => relay.close());
@@ -253,23 +318,31 @@ describe("Device Link over real loopback WebSockets (contract fixture)", () => {
 
   it("replays a lost result without executing the request twice", async () => {
     const { relay, controller, data } = await setup();
+    // Recovery can finish a separate RPC after setup. Scope both the dropped
+    // reply and execution count to this request, not that peer's whole history.
+    const isRequest = (env: { kind: string; payload?: unknown }) => {
+      const payload = env.payload as InvokePayload;
+      return env.kind === 'invoke' && payload.channel === 'local-db:messages:list'
+        && (payload.args[1] as { testRequest?: string } | undefined)?.testRequest === 'lost-result';
+    };
     let dropped = false;
     relay.dropFrames((frame) => {
-      if (frame.kind !== "invoke-result" || frame.dst !== "phone" || dropped)
+      if (frame.kind !== "invoke-result" || frame.dst !== "phone" || dropped
+        || !data.received.some(env => env.id === frame.id && isRequest(env)))
         return false;
       dropped = true;
       return true;
     });
-    const previous = new Set(data.executions.keys());
     expect(
       await invoke(controller.client, "host", "local-db:messages:list", [
         SESSION_ID,
+        { testRequest: 'lost-result' },
       ]),
     ).toHaveLength(1);
     expect(dropped).toBe(true);
-    const executions = [...data.executions].filter(([id]) => !previous.has(id));
+    const executions = data.received.filter(isRequest);
     expect(executions).toHaveLength(1);
-    expect(executions[0][1]).toBe(1);
+    expect(data.executions.get(executions[0].id!)).toBe(1);
   });
 
   it("rebuilds link and snapshot when the host client restarts with a new reliable stream", async () => {
@@ -347,7 +420,9 @@ describe("Device Link over real loopback WebSockets (contract fixture)", () => {
       if (status === "online") scheduler.replay("ws-online");
     });
     cleanups.push(off, () => scheduler.teardown());
-    data.failSubscriptionOnce();
+    // Phone recovery may still issue a late subscription; inject the failure
+    // into this Desktop attempt so that it cannot consume another peer's fault.
+    data.failSubscriptionOnce('desktop');
     desktop.client.start();
     await until(() =>
       expect(data.subscriptions.get("desktop")).toEqual([...TOPICS]),

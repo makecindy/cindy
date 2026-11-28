@@ -80,6 +80,7 @@
     "modelCatalogUnconfirmed": "Não foi possível confirmar a lista de modelos. O modelo selecionado foi mantido. Atualiza a lista de modelos e tenta novamente.",
     "actionScheduled": "A autorização para esta ação expirou. A próxima execução continua agendada.",
     "actionExpired": "A autorização da sessão para esta ação expirou. Consulte a execução mais recente da automatização.",
+    "modelRebuildRetry": "A instrução não foi enviada. Abra a automatização no computador e selecione «Executar agora» para tentar novamente.",
     "actionRecovered": "A autorização para esta ação expirou. A mesma automatização foi executada com sucesso mais tarde.",
     "text": "Uma execução automática falhou.",
     "prCheck_dns": "{{device}} não conseguiu resolver {{host}}. Se o problema persistir, verifique a rede ou o DNS nesse dispositivo. Falhas consecutivas: {{failures}}. As verificações agendadas podem ser retomadas a partir de {{retry}}.",
@@ -397,7 +398,13 @@
     "forkConfirmTitle": "Iniciar uma nova sessão a partir daqui?",
     "forkConfirmDescription": "Será criada uma sessão separada com o contexto deste ponto. A sessão original permanece inalterada e as mensagens futuras de uma sessão não afetarão a outra.",
     "forkConfirm": "Iniciar nova sessão",
-    "forkCancel": "Cancelar"
+    "forkCancel": "Cancelar",
+    "modelSwitchPreparation": {
+      "pending": "Próxima mensagem",
+      "preparing": "A preparar…",
+      "failed": "Falha ao mudar",
+      "usingPrevious": "Esta mensagem usa {{actual}}; {{target}} ainda não está pronto."
+    }
   },
   "shareImage": {
     "title": "Partilhar conversa",
@@ -651,6 +658,9 @@
     "ignore": "Ignorar",
     "executionResultUnavailable": "Não foi possível obter o resultado da execução. A continuação automática foi interrompida. Peça ao assistente para verificar o resultado da execução existente.",
     "unexecutedToolMarkup": "O modelo escreveu uma chamada de ferramenta como texto. Não foi possível confirmar a execução, pelo que este turno não foi concluído.",
+    "codexReconnectStalled": "Não foi possível restabelecer a ligação ao modelo em 2 minutos.",
+    "reconnectAutoResumeDisabled": "A continuação automática está desativada.",
+    "reconnectAutoResumeExhausted": "Foi atingido o limite de tentativas de continuação automática.",
     "silentStopExhausted": "Foi detetada uma resposta vazia. A continuação automática está em pausa.",
     "outputLimit": "O modelo atingiu o limite de saída, pelo que esta resposta pode estar incompleta. Envie uma nova mensagem para continuar. Se isto se repetir, reduza o esforço de raciocínio ou compacte primeiro o histórico da conversa.",
     "outputLimitReasoning": "O raciocínio consumiu a maior parte do orçamento de saída deste pedido, pelo que a resposta pode estar incompleta. Reduza o esforço de raciocínio ou compacte o histórico da conversa antes de continuar.",
@@ -663,7 +673,20 @@
     "toolUseLoopDetectedRotationWithCount": "O modelo continuou a percorrer chamadas de ferramenta em ciclo, pelo que o Cindy interrompeu este turno após detetar {{count}} chamadas no ciclo. Envie uma nova mensagem para continuar.",
     "codexThreadLost": "O modo de autenticação do Codex mudou, pelo que esta sessão não pode continuar. Inicie uma nova sessão.",
     "remoteCompactEncryptedContent": "A compactação do contexto falhou porque o modelo não conseguiu ler o histórico encriptado. A continuação automática não foi concluída. Tente novamente para recuperar.",
-    "encryptedContentInvalid": "A mudança de fornecedor tornou a encriptação indisponível, pelo que esta sessão só funciona com o fornecedor original. Resolva a situação no computador (use «Iniciar nova sessão a partir daqui» para descartar o conteúdo encriptado do protocolo e continuar numa nova sessão)."
+    "encryptedContentInvalid": "A mudança de fornecedor tornou a encriptação indisponível, pelo que esta sessão só funciona com o fornecedor original. Resolva a situação no computador (use «Iniciar nova sessão a partir daqui» para descartar o conteúdo encriptado do protocolo e continuar numa nova sessão).",
+    "providerSafetyRefusal": "A política de segurança do fornecedor de modelos bloqueou esta resposta. Ajusta o pedido e tenta enviar novamente.",
+    "providerSafetyRefusalWithProvider": "A política de segurança de {{provider}} bloqueou esta resposta. Ajusta o pedido e tenta enviar novamente.",
+    "overloadBusy": "O fornecedor de modelos está temporariamente sobrecarregado e sem capacidade disponível. Tenta mais tarde ou muda de modelo.",
+    "overloadBusyWithProvider": "{{provider}} está temporariamente sobrecarregado e sem capacidade disponível. Tenta mais tarde ou muda de modelo.",
+    "streamInterrupted": "A resposta do fornecedor de modelos foi interrompida a meio da transmissão. Tenta novamente mais tarde.",
+    "streamInterruptedWithProvider": "A resposta de {{provider}} foi interrompida a meio da transmissão. Tenta novamente mais tarde.",
+    "upstreamStatusError": "O serviço do fornecedor de modelos devolveu um erro (HTTP {{status}}). Esta resposta não foi concluída.",
+    "upstreamStatusErrorWithProvider": "O serviço de {{provider}} devolveu um erro (HTTP {{status}}). Esta resposta não foi concluída.",
+    "modelAccessDenied": "A tua conta atual do fornecedor de modelos não tem acesso a este modelo. Muda de modelo ou confirma as permissões.",
+    "modelAccessDeniedWithProvider": "A tua conta {{provider}} não tem acesso a este modelo. Muda de modelo ou confirma as permissões de acesso.",
+    "providerQuotaExhausted": "Quota ou saldo insuficiente na conta do fornecedor de modelos. Verifica a conta do fornecedor.",
+    "providerQuotaExhaustedWithProvider": "A tua conta {{provider}} não tem quota ou saldo suficiente. Verifica o estado da conta.",
+    "usageLimitReachedWithProvider": "A tua conta {{provider}} atingiu o limite de utilização"
   },
   "row": {
     "markRead": "Marcar como lida",
@@ -734,7 +757,7 @@
     "REMOTE_WORKDIR_UNAVAILABLE": "O diretório de trabalho remoto está indisponível. Verifique se a pasta ainda existe nesse computador e tente novamente.",
     "REMOTE_OPTIMISTIC_SESSION_STATE_UNAVAILABLE": "O computador ainda não consegue confirmar se esta mensagem foi enviada. Aguarde um momento e tente novamente. Não envie a mesma mensagem duas vezes.",
     "REMOTE_AGENT_UNAVAILABLE": "Não foi possível comunicar com o computador que executa o Agent. Consulte os detalhes do erro.",
-    "REMOTE_AGENT_TIMEOUT": "O tempo de espera pelo computador que executa o Agent expirou. O resultado é desconhecido. Verifique a tarefa antes de tentar novamente.",
+    "REMOTE_AGENT_TIMEOUT": "O computador que executa o Agent ainda não respondeu. Verifique o progresso da tarefa. Se ainda estiver em curso ou já tiver terminado, não precisa de tentar novamente.",
     "REMOTE_AGENT_LINK_BUSY": "A comunicação com o computador que executa o Agent está congestionada. Aguarde um momento antes de tentar novamente.",
     "REMOTE_AGENT_UNRESPONSIVE": "O computador que executa o Agent não respondeu repetidamente, pelo que as chamadas foram suspensas temporariamente. Aguarde um momento antes de tentar novamente.",
     "REMOTE_AGENT_OFFLINE": "O computador que executa o Agent está offline. Tente novamente quando voltar a ligar-se.",
@@ -863,7 +886,8 @@
       "WORKER_CREATION_IN_PROGRESS": "Está a ser criado um Worker com o mesmo nome. Tente novamente dentro de instantes.",
       "WORKER_NOT_FOUND": "Este Worker já não existe. A lista foi atualizada.",
       "ORCA_CREATE_UNCONFIRMED": "A criação do Worker excedeu o tempo limite e não pôde ser confirmada. Verifique primeiro a lista de Workers e tente novamente apenas se não aparecer nenhum novo Worker.",
-      "ORCA_ACTION_UNCONFIRMED": "O pedido excedeu o tempo limite, pelo que o resultado ainda não está confirmado. A lista foi atualizada; guie-se pelo que é apresentado agora."
+      "ORCA_ACTION_UNCONFIRMED": "O pedido excedeu o tempo limite, pelo que o resultado ainda não está confirmado. A lista foi atualizada; guie-se pelo que é apresentado agora.",
+      "PLUGIN_ENGINE_CANNOT_LEAD": "A versão neste computador não permite iniciar colaboração numa tarefa com motor de plugin."
     },
     "workerCountSummary_many": "{{count}} Workers · {{running}} em execução",
     "barLead_many": "Colaboração · {{count}} Workers · {{running}} em execução"

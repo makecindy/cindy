@@ -1,4 +1,3 @@
-import { DEFAULT_AGENT_ISLAND_SOUND_SETTINGS } from '../../shared/agentIsland';
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -15,10 +14,6 @@ import { setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 const gates = vi.hoisted(() => ({
   desktop: true,
   feishu: false,
-  islandEnabled: false,
-  soundEnabled: true,
-  completionSound: true,
-  islandSupported: false,
 }));
 
 vi.mock('@/hooks/useNotificationSettings', () => ({
@@ -26,11 +21,6 @@ vi.mock('@/hooks/useNotificationSettings', () => ({
 }));
 vi.mock('@/hooks/useFeishuNotificationSettings', () => ({
   getFeishuNotificationsEnabled: () => gates.feishu,
-}));
-vi.mock('@/hooks/useAgentIslandSettings', () => ({
-  getAgentIslandEnabled: () => gates.islandEnabled,
-  getAgentIslandSoundSettings: () => ({ enabled: gates.soundEnabled, sounds: { ...DEFAULT_AGENT_ISLAND_SOUND_SETTINGS.sounds, complete: gates.completionSound ? DEFAULT_AGENT_ISLAND_SOUND_SETTINGS.sounds.complete : { type: 'builtin', id: 'none' } } }),
-  isAgentIslandSupported: () => gates.islandSupported,
 }));
 
 const markAttention = vi.fn(() => Promise.resolve());
@@ -72,10 +62,6 @@ describe('shared session event notifications', () => {
     clearRemoteSessionActivity();
     gates.desktop = true;
     gates.feishu = false;
-    gates.islandEnabled = false;
-    gates.soundEnabled = true;
-    gates.completionSound = true;
-    gates.islandSupported = false;
     vi.clearAllMocks();
     getSession.mockResolvedValue({ source: 'desktop', feishuOpenId: null });
     resolveBinding.mockResolvedValue({ attached: false });
@@ -205,32 +191,26 @@ describe('shared session event notifications', () => {
     expect(resolveBinding).not.toHaveBeenCalled();
   });
 
-  it('lets Agent Island replace desktop notification without suppressing other channels', () => {
-    gates.islandSupported = true;
-    gates.islandEnabled = true;
+  // #13214 / unit: renderer only enforces the global desktop notification preference;
+  // live Agent Notch display visibility and Live Activity ownership are decided in main
+  // so a disconnected external display can fall back to OS notifications.
+  it.each(['done', 'needs-reply', 'error'] as const)('leaves %s desktop arbitration to main while honoring the global desktop toggle', (kind) => {
     gates.feishu = true;
+    gates.desktop = true;
+    sendSessionEventNotification('session-2', 'Cindy', kind);
+    expect(showSessionEvent).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        channels: { desktop: true, feishu: true, mobile: true },
+      }),
+    );
 
-    sendSessionEventNotification('session-2', 'Cindy', 'done');
-
-    expect(showSessionEvent).toHaveBeenCalledWith(
+    gates.desktop = false;
+    sendSessionEventNotification('session-2', 'Cindy', kind);
+    expect(showSessionEvent).toHaveBeenLastCalledWith(
       expect.objectContaining({
         channels: { desktop: false, feishu: true, mobile: true },
       }),
     );
-  });
-
-  // Unit: the old island gate swallowed the OS notification selected as the sound source.
-  it('keeps the OS notification available for an unconfigured event sound with the island enabled', () => {
-    gates.islandSupported = true;
-    gates.islandEnabled = true;
-    gates.completionSound = false;
-    sendSessionEventNotification('system-sound', 'Task', 'done');
-    expect(showSessionEvent).toHaveBeenLastCalledWith(expect.objectContaining({ channels: { desktop: true, feishu: false, mobile: true } }));
-    sendSessionEventNotification('system-sound', 'Task', 'needs-reply');
-    expect(showSessionEvent).toHaveBeenLastCalledWith(expect.objectContaining({ channels: { desktop: false, feishu: false, mobile: true } }));
-    gates.soundEnabled = false;
-    sendSessionEventNotification('system-sound', 'Task', 'needs-reply');
-    expect(showSessionEvent).toHaveBeenLastCalledWith(expect.objectContaining({ channels: { desktop: true, feishu: false, mobile: true } }));
   });
 
   it('leaves the desktop toast of a remote device task to the main-process scope filter', () => {

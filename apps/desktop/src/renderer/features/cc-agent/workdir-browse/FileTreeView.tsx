@@ -6,7 +6,7 @@
  *   indent = depth * 16 px
  *
  * 视觉对齐 cc-agent 侧栏的 ProjectNode + SessionItem：
- *   - h 7 (28 px) rounded-md
+ *   - h 7 (28 px) rounded-lg
  *   - 选中 text-sm font-medium，其余 normal
  *   - hover bg sidebar-item-hover / selected bg sidebar-item-active
  *
@@ -854,7 +854,7 @@ const FileTreeRow = memo(function FileTreeRow({
       className={cn(
         // min-w-max:行宽由内容决定(缩进 + 完整名字),深层级/长名字撑出横向滚动区,
         // 而不是把名字 truncate 到 0 宽;内容比容器窄时 w-full 仍撑满整行。
-        'group/file-row flex h-7 w-full min-w-max shrink-0 items-center rounded-md pr-2',
+        'group/file-row flex h-7 w-full min-w-max shrink-0 items-center rounded-lg pr-2',
         'cursor-pointer text-13 transition-colors',
         selected
           ? 'bg-sidebar-item-active font-medium text-sidebar-item-active-foreground'
@@ -1015,7 +1015,7 @@ function InlineTreeRow({
       style={{ paddingLeft: depth * 16 + 8 }}
       className={cn(
         // 同 FileTreeRow:深层重命名输入框不能被缩进挤没,行宽跟随输入框自身宽度。
-        'flex h-7 w-full min-w-max shrink-0 items-center gap-1.5 rounded-md pr-2',
+        'flex h-7 w-full min-w-max shrink-0 items-center gap-1.5 rounded-lg pr-2',
         'bg-sidebar-item-active text-sidebar-item-active-foreground',
       )}
     >
@@ -1035,7 +1035,7 @@ function InlineTreeRow({
         placeholder={placeholder}
         className={cn(
           'min-w-0 flex-1 bg-transparent text-13 leading-none outline-none',
-          'border border-[var(--cmd-palette-item-meta)] rounded-sm px-1 py-0.5',
+          'border border-[var(--cmd-palette-item-meta)] rounded-full px-1 py-0.5',
           'text-sidebar-item-active-foreground placeholder:text-[var(--text-placeholder)]',
         )}
       />

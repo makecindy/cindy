@@ -40,8 +40,17 @@ export type CindyVoiceAsrSession = {
     model?: string;
     resourceId?: string;
   };
-  /** `maxRefineRequests` is absent on servers from before pause-time refinement. */
-  refiner: { enabled: boolean; provider?: string; maxRefineRequests?: number };
+  /**
+   * `maxRefineRequests` is absent on servers from before pause-time refinement.
+   * `supportedContextFields` is absent on servers whose strict refinement
+   * schema predates optional context extensions (e.g. `activeApp`).
+   */
+  refiner: {
+    enabled: boolean;
+    provider?: string;
+    maxRefineRequests?: number;
+    supportedContextFields?: string[];
+  };
 };
 
 /** Session-scoped bridge from Cindy identity to one-shot voice data-plane tickets. */
@@ -60,6 +69,7 @@ export class CindyVoiceRunContext {
    */
   private refinerUnavailableOnServer = false;
   private latestRefineRequestLimit = LEGACY_MANAGED_REFINE_REQUEST_LIMIT;
+  private supportedRefinerContextFields = new Set<string>();
 
   constructor(
     private readonly sourceLanguage: string | undefined,
@@ -106,6 +116,11 @@ export class CindyVoiceRunContext {
     if (usedLegacyRefinerFallback) this.refinerUnavailableOnServer = true;
     this.latestSessionId = session.sessionId;
     this.latestRefineRequestLimit = resolveManagedRefineRequestLimit(session.refiner?.maxRefineRequests);
+    this.supportedRefinerContextFields = new Set(
+      Array.isArray(session.refiner?.supportedContextFields)
+        ? session.refiner.supportedContextFields.filter((field): field is string => typeof field === 'string')
+        : [],
+    );
     // Session allocation is the HTTP half of managed ASR startup; the socket
     // handshake that follows is timed separately by the provider. Splitting the
     // two is what makes a slow start attributable.
@@ -123,6 +138,16 @@ export class CindyVoiceRunContext {
    */
   refineRequestBudget(): RefineRequestBudget {
     return { sessionKey: this.latestSessionId ?? '', limit: this.latestRefineRequestLimit };
+  }
+
+  /**
+   * Whether the latest managed voice-server session explicitly declared
+   * support for an optional refinement context field (such as `activeApp`).
+   * Servers with strict payload schemas reject unknown fields with HTTP 400,
+   * so callers must strip unsupported fields before both warmup and refine.
+   */
+  supportsRefinementContextField(field: string): boolean {
+    return this.supportedRefinerContextFields.has(field);
   }
 
   async createRefinerTarget(

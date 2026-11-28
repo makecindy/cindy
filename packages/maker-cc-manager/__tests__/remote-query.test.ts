@@ -51,6 +51,7 @@ function buildFakeFactory(): SdkQueryFactory {
         cwd: opts.cwd,
         model: opts.model,
       };
+      if (opts.env.FAKE_SDK_FAILURE) throw new Error(opts.env.FAKE_SDK_FAILURE);
       for await (const userMsg of opts.inputStream) {
         yield {
           type: 'assistant',
@@ -192,6 +193,24 @@ describe('RemoteQuery', () => {
     const usage = await remote.getContextUsage() as { totalTokens: number; model: string };
     expect(usage).toMatchObject({ totalTokens: 42, model: 'm-context' });
     await remote.close();
+  });
+
+  it('drains buffered SDK events before surfacing the bounded, redacted daemon error', async () => {
+    const reason = 'Full access is unavailable with root/sudo privileges';
+    const remote = await createRemoteQuery({
+      client: ctx!.client,
+      sessionId: 's-sdk-failure',
+      startParams: {
+        cwd: '/tmp/w',
+        model: 'test-model',
+        env: { FAKE_SDK_FAILURE: `${reason}; token=${'s'.repeat(3000)} tail ${'.'.repeat(3000)}` },
+      },
+    });
+    const iterator = remote[Symbol.asyncIterator]();
+    expect((await iterator.next()).value).toMatchObject({ type: 'system', subtype: 'init' });
+    const failure = iterator.next();
+    await expect(failure).rejects.toThrow(`${reason}; token=[REDACTED] tail`);
+    await expect(failure).rejects.toMatchObject({ message: expect.stringMatching(/^.{2048}$/) });
   });
 
   it('close() ends iterator (consumer for-await sees done)', async () => {

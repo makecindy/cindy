@@ -7,10 +7,10 @@
  * only devices in the Device Link list). The login command holds the freshly signed-in token in memory: it says hello once
  * with it and closes. The token is not stored or logged; a failure only means the Host stays removed, as before.
  */
-import os from 'node:os';
 import WebSocket from 'ws';
 import { PROTOCOL_VERSION } from '@cindy/device-link';
 import { createHostWebSocketAgent } from '../outbound.mjs';
+import { readHostDeviceName } from '../platform/machine-status.js';
 
 const REGISTRATION_TIMEOUT_MS = 10_000;
 
@@ -40,7 +40,7 @@ export async function restoreDeviceLinkRegistration(options) {
     timer.unref?.();
     socket.once('open', () => {
       socket.send(JSON.stringify({ v: PROTOCOL_VERSION, kind: 'hello', payload: {
-        platform: process.platform, deviceName: process.env.CINDY_HOST_DEVICE_NAME?.trim() || `${os.hostname()} · Cindy Host`,
+        platform: process.platform, deviceName: readHostDeviceName(),
         appVersion: options.version, remoteControlEnabled: false, busy: false, capabilities: [],
       } }));
     });

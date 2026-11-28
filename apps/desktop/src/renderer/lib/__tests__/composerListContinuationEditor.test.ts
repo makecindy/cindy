@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it } from 'vitest';
 import { Editor } from '@tiptap/core';
+import { resolveComposerSuggestionKey } from '../composerSuggestion';
 import Document from '@tiptap/extension-document';
 import Paragraph from '@tiptap/extension-paragraph';
 import Text from '@tiptap/extension-text';
@@ -53,6 +54,23 @@ function docText(ed: Editor): string {
 afterEach(() => {
   editor?.destroy();
   editor = null;
+});
+
+// Unit, DESIGN §14.3: route a real editor keydown with a directory completion
+// available. Without the panel guard, Shift+Enter also accepts the directory.
+it.each([
+  { shiftKey: false, expected: '@src/main/' },
+  { shiftKey: true, expected: '@src/\n' },
+])('routes Enter with shiftKey=$shiftKey while a suggestion is open', ({ shiftKey, expected }) => {
+  const ed = makeEditor(['@src/']);
+  ed.setOptions({ editorProps: {
+    handleKeyDown: (_view, event) =>
+      resolveComposerSuggestionKey(event) === 'Enter' && ed.commands.insertContent('main/'),
+  } });
+  ed.view.dom.dispatchEvent(new KeyboardEvent('keydown', {
+    key: 'Enter', code: 'Enter', shiftKey, bubbles: true, cancelable: true,
+  }));
+  expect(docText(ed)).toBe(expected);
 });
 
 /**

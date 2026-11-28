@@ -129,6 +129,7 @@ function EngineRemoteUseCard({
               <button
                 type="button"
                 onClick={() => navigate('/settings?tab=providers')}
+                // 无框文字按钮：圆角只塑形键盘焦点环（DESIGN.md §5 登记）
                 className="rounded-sm text-[var(--text-secondary)] underline underline-offset-2 transition-colors hover:text-[var(--text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
               >
                 {t('settings.ghosts.detail.engineRemoteUse.openProviders')}
@@ -140,6 +141,7 @@ function EngineRemoteUseCard({
               <button
                 type="button"
                 onClick={() => navigate('/settings?tab=remote-control')}
+                // 无框文字按钮：圆角只塑形键盘焦点环（DESIGN.md §5 登记）
                 className="rounded-sm text-[var(--text-secondary)] underline underline-offset-2 transition-colors hover:text-[var(--text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
               >
                 {t('providerShare.entry.openRemoteControl')}
