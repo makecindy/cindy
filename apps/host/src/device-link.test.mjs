@@ -39,7 +39,8 @@ import { MCP_APPS_INVOKE } from '../../desktop/src/shared/mcpApps.ts';
 import { createEventHub } from './events.mjs';
 import { configureHostOwner } from './agent/claude-auth.mjs';
 import { configureAppDataDir } from '../../desktop/src/main/userDataPath.ts';
-import { commitVolatileAppSession } from '../../desktop/src/main/appSessionState.ts';
+import { beginAppSessionBoundary, commitVolatileAppSession } from '../../desktop/src/main/appSessionState.ts';
+import { getControllerPlatform } from '../../desktop/src/main/device-link/controllerPlatform.ts';
 import { getCurrentDbClientSnapshot, setCurrentDbClient, clearCurrentDbClient } from '../../desktop/src/main/localDb/client/current.ts';
 import { createDbClientForHandle } from '../../desktop/src/main/localDb/client/createDbClientForHandle.ts';
 import { messageToCamel } from '../../desktop/src/main/localDb/mapper.ts';
@@ -1550,7 +1551,8 @@ for (const offlineSignal of ['presence', 'relay error']) {
         const frame = JSON.parse(data);
         if (frame.kind === 'invoke-result') {
           attempts.push(frame.id);
-          if (frame.id === 'waiting-a' && attempts.filter(id => id === 'waiting-a').length === 1)
+          if ((frame.id === 'waiting-a' || frame.id === 'waiting-b')
+            && attempts.filter(id => id === frame.id).length === 1)
             throw new DeviceLinkError('BACKPRESSURE', 'fixture write is full');
         }
         this.sent.push(frame);
@@ -1584,8 +1586,8 @@ for (const offlineSignal of ['presence', 'relay error']) {
     const [relay] = sockets;
     const open = (src, id) => relay.push({ kind: 'link-open', src, id,
       payload: { controllerName: src, protocolVersion: PROTOCOL_VERSION, appVersion: 'test' } });
-    const subscribe = (src, id) => relay.push({ kind: 'invoke', src, id,
-      payload: { channel: 'device-link:subscribe', args: [{ topics: ['sessions'] }] } });
+    const subscribe = (src, id, topics = ['sessions']) => relay.push({ kind: 'invoke', src, id,
+      payload: { channel: 'device-link:subscribe', args: [{ topics }] } });
     const reply = id => relay.sent.find(frame => frame.kind === 'invoke-result' && frame.id === id);
     const settle = () => new Promise(resolve => setImmediate(resolve));
     open('peer-a', 'a-open');
@@ -1619,6 +1621,32 @@ for (const offlineSignal of ['presence', 'relay error']) {
     assert.deepEqual(attempts, ['a-probe', 'waiting-a', 'b-live', 'waiting-a']);
     assert.deepEqual(sockets, [relay]);
     assert.equal(relay.sent.filter(frame => frame.kind === 'link-accept' && frame.dst === 'peer-b').length, 1);
+
+    if (offlineSignal === 'presence') {
+      // §3.2: the production presence handler must still clear the controller's
+      // platform, App caller, and accepted subscription during an owner boundary.
+      // This is distinct from recording a new offline outbox gate for that owner.
+      relay.push({ kind: 'presence-changed', payload: { deviceId: 'peer-b', online: true, platform: 'ios' } });
+      assert.equal(getControllerPlatform('peer-b'), 'ios');
+      subscribe('peer-b', 'waiting-b', ['session:task']);
+      await settle();
+      assert.equal(attempts.filter(id => id === 'waiting-b').length, 1);
+      assert.equal(host.state().controllers.some(controller => controller.deviceId === 'peer-b'), true);
+      const endBoundary = beginAppSessionBoundary();
+      try {
+        relay.push({ kind: 'presence-changed', payload: { deviceId: 'peer-b', online: false } });
+        await settle();
+        assert.equal(getControllerPlatform('peer-b'), undefined);
+        assert.deepEqual(released, ['device:peer-a', 'device:peer-b']);
+        assert.equal(host.state().controllers.some(controller => controller.deviceId === 'peer-b'), false);
+      } finally {
+        endBoundary();
+      }
+      t.mock.timers.tick(500);
+      await settle();
+      assert.equal(attempts.filter(id => id === 'waiting-b').length, 2,
+        'a pending owner boundary must not record an offline outbox gate');
+    }
   });
 }
 

@@ -1107,12 +1107,13 @@ export function createHostDeviceLink(deps: HostDeviceLinkPorts) {
   const unbind = dispatch.wireInboundDispatch(client);
   const offlineControllers = new Map<string, { connection: PeerLinks; connectionEpoch: number; linkGeneration: number }>();
   function noteControllerOffline(deviceId: string, change?: DeviceLinkPeerRouteStateChanged) {
-    if (!current()) return;
     const connection = client.connectionFor(deviceId);
     const connectionEpoch = connection.getConnectionEpoch();
     const linkGeneration = connection.getPeerLinkGeneration(deviceId);
     if (change && (change.connectionEpoch !== connectionEpoch || change.linkGeneration !== linkGeneration)) return;
-    offlineControllers.set(deviceId, { connection, connectionEpoch, linkGeneration });
+    // An owner boundary forbids recording an outbox gate for the next owner,
+    // but does not defer cleanup of the controller that just went offline.
+    if (current()) offlineControllers.set(deviceId, { connection, connectionEpoch, linkGeneration });
     setControllerPlatform(deviceId, null);
     releaseAppsInBackground([deviceId]);
     dispatch.handleControllerOffline(deviceId, change);
