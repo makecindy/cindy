@@ -1347,6 +1347,29 @@ export function replaceToolResultImagesWithNotice(
   return { ...body, messages: nextMessages };
 }
 
+/** Replace images in Responses tool outputs without changing user messages or the replay source. */
+export function replaceResponsesToolResultImagesWithNotice(
+  body: Record<string, unknown>,
+): Record<string, unknown> | null {
+  if (!Array.isArray(body.input)) return null;
+  let changed = false;
+  const input = body.input.map((item: unknown) => {
+    if (!isPlainObject(item)
+      || (item.type !== 'function_call_output' && item.type !== 'custom_tool_call_output')
+      || !Array.isArray(item.output)) return item;
+    let outputChanged = false;
+    const output = item.output.map((part: unknown) => {
+      if (!isPlainObject(part) || (part.type !== 'input_image' && part.type !== 'image_url')) return part;
+      outputChanged = true;
+      return { type: 'input_text', text: TOOL_RESULT_IMAGE_OMITTED_TEXT };
+    });
+    if (!outputChanged) return item;
+    changed = true;
+    return { ...item, output };
+  });
+  return changed ? { ...body, input } : null;
+}
+
 /**
  * Compact image-heavy conversation history for a request that already crossed
  * the proxy's hard body limit.

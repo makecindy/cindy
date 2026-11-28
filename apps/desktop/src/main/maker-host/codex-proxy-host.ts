@@ -29,7 +29,7 @@ import {
 import { reconcileOutboundReasoningEffort } from './outbound-reasoning-effort.js';
 import { createPiProviderFetch, handlePiProviderRequest, invocationModelRecord, nativeBridgeApiKey, readBoundedResponseText, requiresNativeProviderAuth } from './pi-provider-transport.js';
 import { normalizeProviderRequest, normalizeUnsupportedCodexWebSearch, normalizeMiniMaxResponsesReasoning, normalizeRepeatedResponseToolCallIdsFromBody, normalizeKimiToolHistory, resolveProviderCompatibilityProfile } from '@cindy/model-compat';
-import { createCodexResponsesCompatibilityAdapter, sanitizeXaiTools, hasCacheOnlySearchProhibition, sanitizeByteDanceSeedTools, normalizeByteDanceSeedInput, sanitizeByteDanceSeedReasoning, normalizeStrictGatewayHistory, normalizeDeepSeekV41ToolHistory, sanitizeDeepSeekV4CustomTools } from '@cindy/model-compat';
+import { createCodexResponsesCompatibilityAdapter, sanitizeXaiTools, hasCacheOnlySearchProhibition, sanitizeByteDanceSeedTools, normalizeByteDanceSeedInput, sanitizeByteDanceSeedReasoning, normalizeStrictGatewayHistory, normalizeDeepSeekV41ToolHistory, sanitizeDeepSeekV4CustomTools, replaceResponsesToolResultImagesWithNotice } from '@cindy/model-compat';
 import { bearerAccessTokenFromHeaders } from './chatgpt-bridge-auth-invalidation.js';
 import {
   isCodexModelUnavailableError,
@@ -2534,6 +2534,22 @@ function isXdGatewayUpstream(upstreamBase: string | undefined): boolean {
   }
 }
 
+function createXdResponsesToolImageTransform(frozenAuthInjection?: CodexProxyAuthInjection): RequestTransform {
+  return (body, ctx) => {
+    if (ctx.method !== 'POST' || ctx.url.split('?', 1)[0]?.replace(/\/+$/, '') !== '/responses'
+      || !isPlainObject(body) || !isXdGatewayUpstream(ctx.upstreamBase)) return null;
+    const { providerId, routing, catalogModel } = responsesCompatibilityRoute(body, ctx, frozenAuthInjection);
+    if (providerId !== 'xd' || !routing || (routing.wireProtocol ?? 'openai-responses') !== 'openai-responses') return null;
+    const modelId = catalogModel.replace(/\[1m\]$/, '');
+    const models = getActiveCatalog().providers.find(provider => provider.id === 'xd')?.models.codex;
+    const model = models?.find(candidate => candidate.id === modelId)
+      ?? models?.find(candidate => candidate.id === stripCodexGatewayWirePrefix(modelId));
+    const inputs = model?.modalities?.input;
+    if (inputs?.length !== 1 || inputs[0] !== 'text') return null;
+    return replaceResponsesToolResultImagesWithNotice(body);
+  };
+}
+
 /**
  * The XD Gateway claims this wire model for its codex routing when the active
  * catalog exposes it under `xd.models.codex`. We use the catalog membership
@@ -3855,6 +3871,7 @@ function createTransformRequestChain(
       enabled: () => true,
       strip: shortenOversizedResponsesItemIdsFromBody,
     }),
+    createXdResponsesToolImageTransform(frozenAuthInjection),
     // Providers that explicitly lack Responses custom tools still accept ordinary
     // functions. Adapt before provider sanitizers, then restore custom_tool_call
     // events on the matching response stream.
