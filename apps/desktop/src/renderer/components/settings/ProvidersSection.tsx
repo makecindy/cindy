@@ -140,6 +140,7 @@ import {
   OwnRemotePluginEngineDetail,
   OwnRemotePluginEngineRows,
   useOwnRemotePluginEngines,
+  type OwnRemotePluginEngine,
 } from './OwnRemotePluginEngines';
 import { LlamaCppProviderDetail } from './LlamaCppProviderDetail';
 import {
@@ -166,8 +167,8 @@ import { CindyMark } from '@/components/icons/CindyMark';
 import { CustomProviderIcon } from '@/components/icons/CustomProviderIcon';
 import { PluginEngineIcon } from '@/components/icons/PluginEngineIcon';
 import { hasProviderLogo, ProviderLogoMark } from '@/components/icons/ProviderLogoMark';
-import { usePluginEngines } from '@/hooks/usePluginEngines';
-import { pluginEngineKeyFromProviderId, type PluginEngineView } from '../../../shared/pluginEngines';
+import { usePluginEngines, usePluginEnginesSettled } from '@/hooks/usePluginEngines';
+import { PLUGIN_ENGINE_SETTINGS_PARAM, pluginEngineKeyFromProviderId, type PluginEngineView } from '../../../shared/pluginEngines';
 import { SortableList } from '@/components/sidebar/SortableList';
 import { ProviderShareEntryButton } from '@/features/provider-share/ProviderShareEntryButton';
 import { useLocalProviderGroupsState } from '@/features/provider-group/useLocalProviderGroups';
@@ -3125,6 +3126,34 @@ export function ProvidersSection({ routing = false, onRoutingChange }: {
     next.delete(PROVIDER_SHARE_RECEIVED_PARAM);
     setSearchParams(next, { replace: true });
   }, [searchParams, setSearchParams, receivedSharesLoaded, receivedShares, selectShare, selectionKey]);
+  // 插件引擎深链(?pluginEngine=<引擎 key>，来自插件设置页的「在模型供应商里管理」)：等本次读到的引擎列表到了
+  // 再消费并从 URL 摘除；这个引擎不在列表里(插件刚停用)时只停在供应商页。列表仓在没人订阅时保留上次的列表，
+  // 所以进页面那一刻看到的可能是旧的(刚启用的引擎不在里面)，也可能本来就是空的——两种都不能凭长度判断，
+  // 以 usePluginEnginesSettled 为准。等待期间用户自己改选了别的，就放弃这次跳转。
+  const pluginEnginesSettled = usePluginEnginesSettled();
+  const pluginEngineWaitRef = useRef<string | null>(null);
+  useEffect(() => {
+    const target = searchParams.get(PLUGIN_ENGINE_SETTINGS_PARAM);
+    if (!target) {
+      pluginEngineWaitRef.current = null;
+      return;
+    }
+    const waiting = !pluginEnginesSettled;
+    const userMoved = pluginEngineWaitRef.current !== null && pluginEngineWaitRef.current !== selectionKey;
+    if (waiting && !userMoved) {
+      pluginEngineWaitRef.current ??= selectionKey;
+      return;
+    }
+    pluginEngineWaitRef.current = null;
+    if (!userMoved && pluginEngines.some((engine) => engine.key === target)) {
+      setShareManageProviderId(null);
+      setFocusedModel(null);
+      selectEngine(target);
+    }
+    const next = new URLSearchParams(searchParams);
+    next.delete(PLUGIN_ENGINE_SETTINGS_PARAM);
+    setSearchParams(next, { replace: true });
+  }, [searchParams, setSearchParams, pluginEngines, pluginEnginesSettled, selectEngine, selectionKey]);
   useEffect(() => {
     if (loading) return;
     const connect = searchParams.get('connect');
@@ -3666,6 +3695,11 @@ export function ProvidersSection({ routing = false, onRoutingChange }: {
   const activeEngines = ordinaryEngines.filter(engine => pluginEngineRailGroup(engine) === 'active');
   const hiddenEngines = ordinaryEngines.filter(engine => pluginEngineRailGroup(engine) === 'hidden');
   const suspendedEngines = ordinaryEngines.filter(engine => pluginEngineRailGroup(engine) === 'suspended');
+  // 自己其他电脑上的插件供应商同一口径：那台电脑已有人加入分享的，也放进「我分享的供应商」。
+  const remoteEngineShared = (entry: OwnRemotePluginEngine) =>
+    ownedShares.get(entry.deviceId)?.has(entry.engine.providerId) === true;
+  const sharedRemoteEngines = remotePluginEngines.filter(remoteEngineShared);
+  const ordinaryRemoteEngines = remotePluginEngines.filter(entry => !remoteEngineShared(entry));
   const [railGroupOpen, setRailGroupOpen] = useState<{ hidden: boolean; suspended: boolean }>(
     { hidden: false, suspended: false },
   );
@@ -3743,6 +3777,17 @@ export function ProvidersSection({ routing = false, onRoutingChange }: {
     <PluginEngineProviderRows
       engines={engines}
       selectedKey={routing ? null : selectedEngine?.key ?? null}
+      onSelect={key => {
+        setFocusedModel(null);
+        selectEngine(key);
+      }}
+    />
+  );
+
+  const renderRemoteEngineRows = (entries: readonly OwnRemotePluginEngine[]) => (
+    <OwnRemotePluginEngineRows
+      entries={entries}
+      selectedKey={routing ? null : selectedRemoteEngine?.key ?? null}
       onSelect={key => {
         setFocusedModel(null);
         selectEngine(key);
@@ -3878,15 +3923,9 @@ export function ProvidersSection({ routing = false, onRoutingChange }: {
               {/* 自己其他电脑上能用的供应商：接在本机供应商后面，图标带远程角标。 */}
               {renderRemoteProviderRows(activeRemoteProviders)}
               {/* 自己其他电脑开放的插件引擎：接在远程供应商后面，图标带远程角标、名字后带「插件」标识。 */}
-              <OwnRemotePluginEngineRows
-                entries={remotePluginEngines}
-                selectedKey={routing ? null : selectedRemoteEngine?.key ?? null}
-                onSelect={key => {
-                  setFocusedModel(null);
-                  selectEngine(key);
-                }}
-              />
-              {(sharedLocalProviders.length > 0 || sharedEngines.length > 0 || sharedRemoteProviders.length > 0) && (
+              {renderRemoteEngineRows(ordinaryRemoteEngines)}
+              {(sharedLocalProviders.length > 0 || sharedEngines.length > 0 || sharedRemoteProviders.length > 0
+                || sharedRemoteEngines.length > 0) && (
                 <div
                   data-testid="provider-share-owned"
                   role="group"
@@ -3899,6 +3938,7 @@ export function ProvidersSection({ routing = false, onRoutingChange }: {
                   {renderLocalProviderList(sharedLocalProviders)}
                   {renderEngineRows(sharedEngines)}
                   {renderRemoteProviderRows(sharedRemoteProviders)}
+                  {renderRemoteEngineRows(sharedRemoteEngines)}
                 </div>
               )}
               {/* 分享给我的供应商(受邀者)：单独成组，没有分享时不显示。 */}

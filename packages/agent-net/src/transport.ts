@@ -127,6 +127,7 @@ class CoreChannel implements PeerChannel {
     reprobeMs: number,
     private readonly publicOnly = false,
     relayAddress: () => PeerAddress | null = () => null,
+    localRelayVia: () => 'udp' | 'websocket' | null = () => null,
   ) {
     this.remoteId = hex(connection.remotePublicKey);
     this.outbound = connection.openStream('normal');
@@ -144,8 +145,10 @@ class CoreChannel implements PeerChannel {
       measure: (address) => { connection.measure(address); },
       setPreferRelay: (prefer) => connection.setPreferRelay(prefer),
       writeControl: (line) => this.control.write(Buffer.from(line)),
+      localRelayVia,
     }, reprobeMs);
     this.announceCandidates();
+    this.router.announceRelayVia();
     connection.on('probe-rtt', (address: PeerAddress, rttUs: number) => this.router.onProbeRtt(address, isLinkAddress(address), rttUs));
     connection.on('stream', (stream: RecvStream) => {
       let kind: number | null = null;
@@ -196,12 +199,14 @@ class CoreChannel implements PeerChannel {
   }
 
   private onControl(line: string): void {
-    let message: { candidates?: unknown; session?: unknown; pathPreference?: unknown; autoRelay?: unknown };
+    let message: { candidates?: unknown; session?: unknown; pathPreference?: unknown; autoRelay?: unknown; relayVia?: unknown };
     try {
       message = JSON.parse(line);
     } catch {
       return;
     }
+    if (!message || typeof message !== 'object') return;
+    this.router.onPeerRelayVia(message);
     if (Array.isArray(message.session) && message.session.includes(AGENT_NET_SESSION_V1) && !this.sessionCapable) {
       this.sessionCapable = true;
       this.peerSessionFeatures = message.session
@@ -508,7 +513,7 @@ export async function createCoreTransport(options: TransportOptions): Promise<Tr
     const channel = new CoreChannel(connection, candidates, reprobeMs, publicOnly, () => {
       const id = relay && options.relayIdOf?.(remoteId);
       return id ? linkFor(id).address : null;
-    });
+    }, () => (!relay || closed ? null : relayUdp?.up ? 'udp' : 'websocket'));
     channels.add(channel); connection.once('close', () => channels.delete(channel)); return channel;
   };
   // Install admission listeners before any DNS/STUN wait. Relay RPC never waits for a UDP response.

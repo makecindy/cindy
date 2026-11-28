@@ -235,6 +235,7 @@ import { pluginSuggestionComposerText } from '@/features/cc-agent/pluginHomeSugg
 import { useInstalledGhosts } from '@/cindy-brain/useInstalledGhosts';
 import { useRemoteComposerGhosts } from '@/cindy-brain/useRemoteComposerGhosts';
 import { projectGhostComposerEntries, type GhostCommandSource } from '../../../shared/ghostComposer';
+import { MAX_SESSION_REFERENCES, reconcileSessionRefsForText } from '../../../shared/agentInputQueue';
 import {
   attachGhostMediaToSession,
   getGhostMediaHandoverFromDataTransfer,
@@ -958,6 +959,7 @@ interface ChatInputProps {
   pluginModels?: PluginModelsPickerProps;
   /** 新任务的模型组(只有新任务草稿传)。 */
   modelGroups?: ModelGroupsPickerProps;
+  readModelGroupDevices?(): void;
   /**
    * 插件提供的执行引擎(docs/plans/acp-plugin-bridge.md)。只有本机新任务草稿在至少有一个引擎时传。
    * 选中引擎时：模型 pill 显示引擎与模型，权限只给引擎的两档，计划模式等内置引擎专属入口不出现，
@@ -1321,6 +1323,7 @@ export function ChatInput({
   onUnifiedDraftSelect,
   pluginModels,
   modelGroups,
+  readModelGroupDevices,
   pluginEngines,
   pluginEngineSession,
   selectedFavoriteUid = null,
@@ -4748,7 +4751,7 @@ export function ChatInput({
   // 插件引擎在列清单的这台电脑上运行(本机，或正在远控的那台)时，`/` 列出它能展开的 Cindy 技能；
   // Agent 在另一台电脑上的任务，引擎那边没有技能来源，与首轮技能清单一致不列。
   const pluginEngineDeviceId = pluginEngineSession
-    ? pluginEngineSession.engine?.deviceId
+    ? (pluginEngineSession.engine?.deviceId ?? pluginEngineSession.agentDeviceId ?? undefined)
     : !sessionId ? pluginEngines?.active?.deviceId : undefined;
   const pluginEngineSkillsListed = pluginEngineActive
     && (!pluginEngineDeviceId || pluginEngineDeviceId === deviceLinkDeviceId);
@@ -5766,6 +5769,11 @@ export function ChatInput({
   const dispatchSendRef = useRef<(deliveryMode?: MessageDeliveryMode) => void | Promise<void>>(
     () => {},
   );
+  const taskReferencesFit = useCallback((text: string) => {
+    if (reconcileSessionRefsForText(text, undefined).length <= MAX_SESSION_REFERENCES) return true;
+    toast.error(t('newChat.chatInput.tooManyTaskReferences', { max: MAX_SESSION_REFERENCES }));
+    return false;
+  }, [t]);
   const dispatchSend = useCallback(
     async (deliveryMode: MessageDeliveryMode = 'queue') => {
       if (!editor) return;
@@ -6210,6 +6218,7 @@ export function ChatInput({
           slashCommandRanges = rebaseInlineRangesAfterSlashCommandRewrite(slashCommandRanges, routedText, rewritten);
           routedText = rewritten;
         }
+        if (!taskReferencesFit(routedText)) return;
         let recentUsageMarked = false;
         const markRecentPluginUsage = () => {
           if (!usedGhost || recentUsageMarked || sourceRemoteGhosts) return;
@@ -6671,6 +6680,7 @@ export function ChatInput({
       navigate,
       planModeEntry,
       captureSendFocusForRestore,
+      taskReferencesFit,
       slashCommandsReady,
       mergedCommands,
     ],
@@ -6704,6 +6714,7 @@ export function ChatInput({
     const content = serializeEditorContent(editor);
     const completedAttachments = [...latestAttachmentsRef.current];
     if (content.text.trim().length === 0 && completedAttachments.length === 0) return;
+    if (!taskReferencesFit(content.text)) return;
 
     setSendDispatchInFlight(true);
     try {
@@ -6727,6 +6738,7 @@ export function ChatInput({
     sendDispatchInFlight,
     waitForFolders,
     folderTransfers.hasPending,
+    taskReferencesFit,
     t,
     voiceBusyOnCurrentComposer,
   ]);
@@ -10316,6 +10328,7 @@ export function ChatInput({
                         ? composerAgentIdentity
                         : undefined
                     }
+                    selectionPreparation={storedAgentSwitchIntent ? storedAgentSwitchIntent.preparation ?? 'pending' : undefined}
                     // 统一模型选择器(M5 新会话 / M6 会话内)。composer 是它的两个真实入口;
                     // 其余 7 个消费者(scheduler / IM / Hook / Subagent / Worker /
                     // GhostErrand / 设置)本版一律不开。
@@ -10344,6 +10357,7 @@ export function ChatInput({
                     }
                     {...(!sessionId && unifiedPanelActive && pluginModels ? { pluginModels } : {})}
                     {...(unifiedPanelActive && modelGroups ? { modelGroups } : {})}
+                    readModelGroupDevices={unifiedPanelActive ? readModelGroupDevices : undefined}
                     // 已建普通任务也能换到 / 换出任务所属电脑的插件引擎。
                     {...(unifiedPanelActive && pluginEngines && (!sessionId || sessionAgentSwitchSupported)
                       ? { pluginEngines } : {})}

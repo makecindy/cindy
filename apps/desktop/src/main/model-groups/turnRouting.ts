@@ -136,7 +136,7 @@ export async function evaluateModelGroupBeforeSend(
   const route: ModelGroupRoute = sshHostId
     ? {
         ...target.route,
-        candidates: target.route.candidates.map((c) => (c.agentDeviceId ? { ...c, off: true } : c)),
+        candidates: target.route.candidates.map((c) => (c.agentDeviceId || c.agentKind === 'acp' ? { ...c, off: true } : c)),
       }
     : target.route;
 
@@ -225,6 +225,11 @@ export async function evaluateModelGroupBeforeSend(
     return !win || win >= Math.ceil(contextTokens * 1.1);
   };
 
+  const isSameEngine = (
+    a: { agentKind: ModelGroupAgentKind; providerId: string },
+    b: { agentKind: ModelGroupAgentKind; providerId: string },
+  ) => a.agentKind === b.agentKind && (a.agentKind !== 'acp' || a.providerId === b.providerId);
+
   let picked: ReturnType<typeof pickModelGroupCandidate> | null = null;
   if (cause === 'preflight-unavailable') {
     const sameExhaustedSource = isLimitedInTrace(currentTrace)
@@ -243,11 +248,11 @@ export async function evaluateModelGroupBeforeSend(
     };
     // 先保上下文窗口 + 同引擎同位置 → 同引擎跨位置 → 跨引擎同位置 → 跨引擎跨位置，最后允许带 handoff 的小窗口
     picked =
-      tryBucket((c, i) => fitsContext(i) && c.agentKind === current.agentKind && (c.agentDeviceId || undefined) === currentLocation)
-      ?? tryBucket((c, i) => fitsContext(i) && c.agentKind === current.agentKind)
+      tryBucket((c, i) => fitsContext(i) && isSameEngine(c, current) && (c.agentDeviceId || undefined) === currentLocation)
+      ?? tryBucket((c, i) => fitsContext(i) && isSameEngine(c, current))
       ?? tryBucket((c, i) => fitsContext(i) && (c.agentDeviceId || undefined) === currentLocation)
       ?? tryBucket((_c, i) => fitsContext(i))
-      ?? tryBucket((c) => c.agentKind === current.agentKind)
+      ?? tryBucket((c) => isSameEngine(c, current))
       ?? tryBucket(() => true);
   } else if (cause === 'image-input') {
     const visionOnly = (c: ModelGroupCandidate, idx: number) =>
@@ -258,8 +263,8 @@ export async function evaluateModelGroupBeforeSend(
       return usablePick(pickModelGroupCandidate(filtered, facts, { now, lastPickedKey: currentKey, needsImage: true }));
     };
     picked =
-      tryBucket((c, i) => fitsContext(i) && c.agentKind === current.agentKind && (c.agentDeviceId || undefined) === currentLocation)
-      ?? tryBucket((c, i) => fitsContext(i) && c.agentKind === current.agentKind)
+      tryBucket((c, i) => fitsContext(i) && isSameEngine(c, current) && (c.agentDeviceId || undefined) === currentLocation)
+      ?? tryBucket((c, i) => fitsContext(i) && isSameEngine(c, current))
       ?? tryBucket((_c, i) => fitsContext(i))
       ?? tryBucket(() => true);
   } else {
@@ -292,7 +297,7 @@ export async function evaluateModelGroupBeforeSend(
     ? `${currentTrace.modelName} · ${currentTrace.sourceName}`
     : `${current.model} · ${current.providerId}`;
   const toLabel = `${chosenTrace.modelName} · ${chosenTrace.sourceName}`;
-  const crossEngine = chosen.agentKind !== current.agentKind;
+  const crossEngine = !isSameEngine(chosen, current);
   const crossLocation = (chosen.agentDeviceId || undefined) !== currentLocation;
   const requiresHandoffForWindow = !fitsContext(picked.index);
 

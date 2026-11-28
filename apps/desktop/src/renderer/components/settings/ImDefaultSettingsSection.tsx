@@ -363,6 +363,23 @@ export function ImDefaultSettingsSection({
       toast.warning(t('modelGroups.picker.chooseUnavailable', { name: group?.name ?? '' }));
       return;
     }
+    if (preview.route.agentKind === 'acp') {
+      if (channel && isUnconditionalTurnPolicyChannel(channel)) {
+        toast.warning(t('modelGroups.picker.chooseUnavailable', { name: group?.name ?? '' }));
+        return;
+      }
+      await persist({
+        agentKind: 'acp',
+        modelGroup: selection.id,
+        ...buildAgentSettingsPatch('acp', {
+          providerId: preview.route.providerId,
+          model: preview.route.model || PLUGIN_ENGINE_DEFAULT_MODEL,
+          effort: isImDefaultEffort(preview.route.effort) ? preview.route.effort : '',
+          agentDeviceId: preview.route.agentDeviceId ?? null,
+        }),
+      });
+      return;
+    }
     const agentKind: ImDefaultBuiltinAgentKind =
       preview.route.agentKind === 'cc' ? 'claude-code' : preview.route.agentKind;
     if (channel && isUnconditionalTurnPolicyChannel(channel) && agentKind === 'pi') {

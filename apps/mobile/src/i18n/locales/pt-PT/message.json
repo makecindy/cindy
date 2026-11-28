@@ -8,6 +8,19 @@
       "selected": "Selecionada"
     }
   },
+  "voiceCall": {
+    "title": "Chamada de voz",
+    "saved": "Registo guardado",
+    "you": "Eu",
+    "companion": "Amigo",
+    "sendFailed": "Não foi possível enviar. As suas palavras foram mantidas.",
+    "handoff": {
+      "sending": "A transferir…",
+      "accepted": "Transferido para o seu amigo",
+      "failed": "Não foi possível transferir. As suas palavras foram mantidas.",
+      "completed": "Resultado recebido"
+    }
+  },
   "renderer": {
     "sourceLocalApp": "Enviado pela aplicação local «{{name}}»",
     "sourceLocalAppId": "ID da aplicação: {{id}}",
@@ -265,6 +278,8 @@
     "delete": "Eliminar",
     "retry": "Tentar novamente",
     "notSent": "Não enviado",
+    "deliveryUnconfirmed": "Envio não confirmado",
+    "recheckDelivery": "Verificar novamente",
     "imagesNotUploaded_one": "Não foi possível carregar {{count}} imagem",
     "imagesNotUploaded_other": "Não foi possível carregar {{count}} imagens",
     "waitingForNamedComputer": "Envio automático quando {{name}} se ligar",
@@ -445,6 +460,9 @@
     "send": "Enviar mensagem",
     "sending": "A enviar…",
     "sent": "Enviado",
+    "sendTooManyArguments": "Esta mensagem usa mais de {{limit}} itens num só passo. Pede ao assistente para os dividir em grupos mais pequenos.",
+    "sendValueUnavailable": "Um valor usado nesta mensagem não está disponível. Pede ao assistente para verificar os campos do formulário.",
+    "sendTextUnavailable": "Não foi possível preparar a mensagem para envio.",
     "sendFailed": "A mensagem não foi enviada. O que introduziu continua aqui.",
     "playVideo": "Reproduzir vídeo",
     "downloadVideo": "Transferir vídeo",

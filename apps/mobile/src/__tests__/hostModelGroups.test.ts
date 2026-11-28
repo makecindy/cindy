@@ -35,6 +35,7 @@ import {
 import {
   implicitMobileSourceRouteSelection,
   isMobileSourceRouteProviderId,
+  parseHostModelGroupsPayload,
   withMobileSourceRouteProviders,
 } from '@/session/sourceRouteProviders';
 import { parseCompanionModelGroups } from '@/session/companionProfileData';
@@ -280,5 +281,149 @@ describe('host model group strategies', () => {
       location: { agentDeviceId: null },
       sshHostId: 'ssh-host-1',
     }]);
+  });
+
+  // 2026-11-27 回归：被控电脑在供应商路由里取消某个来源(source.off=true)后，
+  // 手机端选择器同样应将其恢复为独立供应商且不再映射回合并路由。
+  it('leaves turned-off source route members listed independently on mobile', () => {
+    const provider = (id: string) => ({
+      id, name: id, source: 'builtin', agents: ['codex'], auth: { method: 'api-key' }, connected: true, routing: { codex: {} },
+      models: { codex: [{ id: 'gpt-6', name: 'GPT-6', efforts: [] }] },
+    }) as unknown as import('@cindy/model-providers').ProviderView;
+    const payload = parseHostModelGroupsPayload({
+      routes: [],
+      sourceRoutes: [{
+        id: 'auto:openai',
+        name: 'OpenAI',
+        strategy: 'expiring',
+        sources: [{ providerId: 'openai' }, { providerId: 'own-gpt', off: true }, { providerId: 'openai', agentDeviceId: 'share:s1', off: true }],
+      }],
+      expandedRoutes: [{
+        id: 'src:gpt-6',
+        name: 'GPT-6',
+        strategy: 'expiring',
+        parent: { id: 'auto:openai', name: 'OpenAI' },
+        candidates: [
+          { agentKind: 'codex', providerId: 'openai', model: 'gpt-6' },
+          { agentKind: 'codex', providerId: 'own-gpt', model: 'gpt-6', off: true },
+          { agentKind: 'codex', providerId: 'openai', model: 'gpt-6', agentDeviceId: 'share:s1', off: true },
+        ],
+      }],
+    });
+    const remote = new Map([['share:s1', [provider('openai')]]]);
+    const listed = withMobileSourceRouteProviders([provider('openai'), provider('own-gpt')], payload, undefined, remote);
+    expect(listed.providers.map((item) => item.id)).toEqual(['sroute:auto:openai', 'own-gpt']);
+    expect(listed.shownAs('own-gpt')).toBeNull();
+    expect(listed.hidesRemote('share:s1', 'openai')).toBe(false);
+    expect(implicitMobileSourceRouteSelection(payload, { providerId: 'own-gpt', model: 'gpt-6' })).toBeNull();
+    expect(implicitMobileSourceRouteSelection(payload, { providerId: 'openai', model: 'gpt-6', agentDeviceId: 'share:s1' })).toBeNull();
+  });
+
+  // 2026-11-27 回归：手机端未绑定托管(keepMember: true)的进行中任务保留当前成员单列，
+  // 且跨前缀 wire id 的成员在托管中映射回合并条目的代表 modelId。
+  it('keeps detached current member visible and maps cross-prefix member wire id on mobile', () => {
+    const provider = (id: string, modelId: string) => ({
+      id, name: id, source: 'builtin', agents: ['codex'], auth: { method: 'api-key' }, connected: true, routing: { codex: {} },
+      models: { codex: [{ id: modelId, name: 'GPT-6', efforts: [] }] },
+    }) as unknown as import('@cindy/model-providers').ProviderView;
+    const payload = parseHostModelGroupsPayload({
+      routes: [],
+      sourceRoutes: [{
+        id: 'auto:openai',
+        name: 'OpenAI',
+        strategy: 'expiring',
+        sources: [{ providerId: 'openai' }, { providerId: 'byok-1' }, { providerId: 'openai', agentDeviceId: 'share:s1' }],
+      }],
+      expandedRoutes: [{
+        id: 'src:gpt-6',
+        name: 'GPT-6',
+        strategy: 'expiring',
+        parent: { id: 'auto:openai', name: 'OpenAI' },
+        candidates: [
+          { agentKind: 'codex', providerId: 'openai', model: 'gpt-6' },
+          { agentKind: 'codex', providerId: 'byok-1', model: 'byok/gpt-6' },
+          { agentKind: 'codex', providerId: 'openai', model: 'gpt-6', agentDeviceId: 'share:s1' },
+        ],
+      }],
+    });
+    const remote = new Map([['share:s1', [provider('openai', 'gpt-6')]]]);
+    const detached = withMobileSourceRouteProviders(
+      [provider('openai', 'gpt-6'), provider('byok-1', 'byok/gpt-6')],
+      payload,
+      { providerId: 'openai', modelId: 'gpt-6', agentDeviceId: 'share:s1', keepMember: true },
+      remote,
+    );
+    expect(detached.hidesRemote('share:s1', 'openai')).toBe(false);
+    expect(detached.shownAs('openai', null, 'share:s1')).toBeNull();
+
+    const managed = withMobileSourceRouteProviders(
+      [provider('openai', 'gpt-6'), provider('byok-1', 'byok/gpt-6')],
+      payload,
+      { providerId: 'byok-1', modelId: 'byok/gpt-6', keepMember: false },
+      remote,
+    );
+    expect(managed.providers.map((item) => item.id)).toEqual(['sroute:auto:openai']);
+    expect(managed.shownModelId('byok-1', 'byok/gpt-6', 'src:gpt-6')).toBe('gpt-6');
+  });
+
+  // 测试价值
+  // - 生产入口与可观察结果：parseHostModelGroupsPayload 与 withMobileSourceRouteProviders / isModelVisible。
+  // - Bug／规则依据：2026-11-28 对齐桌面端 MODEL_GROUP_EXPANDED_LIMIT(512) 避免截断，并防止首成员 hidden/suspended
+  //   污染合并供应商及按真实成员判定模型可见性。
+  // - 现有覆盖缺口：此前用例未测试超过 128 条展开路由、首成员隐藏/停用及成员级可见性覆盖。
+  // - 最小失败输入：150 条 expandedRoutes 被旧上限 128 截断；首成员 hidden=true/suspended=true 导致合并条目继承隐藏态。
+  // - tier：unit（纯函数，Node 环境）。
+  it('retains up to 512 expanded routes, ignores hidden/suspended first member, and evaluates member visibility on mobile', () => {
+    const manyExpanded = Array.from({ length: 150 }, (_, index) => ({
+      id: `src:m-${index}`,
+      name: `Model ${index}`,
+      parent: { id: 'auto:openai', name: 'OpenAI' },
+      candidates: [{ agentKind: 'codex' as const, providerId: 'openai', model: `m-${index}` }],
+    }));
+    const bigPayload = parseHostModelGroupsPayload({
+      routes: [],
+      sourceRoutes: [{ id: 'auto:openai', name: 'OpenAI', sources: [{ providerId: 'openai' }] }],
+      expandedRoutes: manyExpanded,
+    });
+    expect(bigPayload?.expandedRoutes).toHaveLength(150);
+
+    const hiddenFirst = {
+      id: 'openai', name: 'OpenAI', source: 'builtin', agents: ['codex'], auth: { method: 'api-key' },
+      connected: true, hidden: true, suspended: true, subscriptionAccountPool: 'openai',
+      routing: { codex: {} },
+      models: { codex: [{ id: 'gpt-6', name: 'GPT-6', defaultEnabled: false, efforts: [] }] },
+    } as unknown as import('@cindy/model-providers').ProviderView;
+    const healthySecond = {
+      id: 'byok-1', name: 'BYOK', source: 'builtin', agents: ['codex'], auth: { method: 'api-key' },
+      connected: true, routing: { codex: {} },
+      models: { codex: [{ id: 'byok/gpt-6', name: 'GPT-6', defaultEnabled: false, efforts: [] }] },
+    } as unknown as import('@cindy/model-providers').ProviderView;
+    const payload = parseHostModelGroupsPayload({
+      routes: [],
+      sourceRoutes: [{ id: 'auto:openai', name: 'OpenAI', sources: [{ providerId: 'openai' }, { providerId: 'byok-1' }] }],
+      expandedRoutes: [{
+        id: 'src:gpt-6',
+        name: 'GPT-6',
+        parent: { id: 'auto:openai', name: 'OpenAI' },
+        candidates: [
+          { agentKind: 'codex', providerId: 'openai', model: 'gpt-6' },
+          { agentKind: 'codex', providerId: 'byok-1', model: 'byok/gpt-6' },
+        ],
+      }],
+    });
+    const listed = withMobileSourceRouteProviders([hiddenFirst, healthySecond], payload);
+    const merged = listed.providers.find((item) => item.id === 'sroute:auto:openai')!;
+    expect(merged.hidden).toBeUndefined();
+    expect(merged.suspended).toBeUndefined();
+    expect(merged.subscriptionAccountPool).toBeUndefined();
+    expect(merged.connected).toBe(true);
+    expect(listed.hit('sroute:auto:openai', 'byok/gpt-6')?.candidate.providerId).toBe('byok-1');
+    expect(listed.usageMember('sroute:auto:openai')?.provider.id).toBe('byok-1');
+    expect(
+      listed.isModelVisible('sroute:auto:openai', 'byok/gpt-6', 'codex', (member) => member.providerId === 'byok-1'),
+    ).toBe(true);
+    expect(
+      listed.isModelVisible('sroute:auto:openai', 'byok/gpt-6', 'codex', () => false),
+    ).toBe(false);
   });
 });

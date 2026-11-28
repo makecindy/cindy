@@ -210,6 +210,7 @@ export function BotGroupComposer({
   onSent,
   onSending,
   footerStart,
+  aboveCard,
 }: {
   groupId: string;
   conversationKind?: 'direct';
@@ -249,6 +250,8 @@ export function BotGroupComposer({
   /** Main-group send was queued; keep the timeline at the bottom. */
   onSending?: () => void;
   footerStart?: (sending: boolean) => ReactNode;
+  /** A request waiting on this person, docked above the input like a permission request. */
+  aboveCard?: ReactNode;
 }) {
   const { t } = useTranslation();
   const { preference: sendShortcutPreference } = useComposerSendShortcutPreference();
@@ -785,6 +788,7 @@ export function BotGroupComposer({
             />
           </div>
         ) : null}
+        {aboveCard}
         {mention.list}
         <ComposerCard className={cn(COMPOSER_CONTENT_CLASS, 'gap-2')}>
           {dragOver ? (

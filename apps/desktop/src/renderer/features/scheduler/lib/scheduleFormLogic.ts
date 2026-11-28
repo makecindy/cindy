@@ -676,8 +676,8 @@ export function parseScriptTimeoutMs(sec: string): number | undefined {
 export function scheduleEngineFormFields(
   s: Schedule,
 ): Pick<ScheduleFormState, 'agentKind' | 'modelAgentKind' | 'boundAgent' | 'model' | 'providerId' | 'pluginEngine'> {
-  if (s.modelAgentKind === 'acp' || (!s.targetSessionId && s.agentKind === 'acp')) {
-    const deviceId = (s.modelAgentDeviceId ?? (!s.targetSessionId ? s.agentDeviceId : undefined))?.trim() || undefined;
+  if (s.modelAgentKind === 'acp' || ((!s.targetSessionId || s.persistentSession) && s.agentKind === 'acp')) {
+    const deviceId = (s.modelAgentDeviceId ?? (!s.targetSessionId || s.persistentSession ? s.agentDeviceId : undefined))?.trim() || undefined;
     return {
       agentKind: 'claude-code',
       modelAgentKind: undefined,
@@ -927,7 +927,7 @@ export function buildScheduleInput(form: ScheduleFormState): CreateScheduleInput
 
   if (isHeartbeat) {
     base.useWorktree = false;
-    if (form.pluginEngine && !form.persistentSession) {
+    if (form.pluginEngine) {
       const pluginDeviceId = form.pluginEngine.deviceId?.trim() || '';
       return {
         ...base,
@@ -937,7 +937,7 @@ export function buildScheduleInput(form: ScheduleFormState): CreateScheduleInput
         providerId: form.pluginEngine.providerId,
         effort: form.pluginEngine.effort,
         fastMode: false,
-        agentDeviceId: undefined,
+        agentDeviceId: form.persistentSession ? (pluginDeviceId || undefined) : undefined,
         // 绑定任务显式保存插件引擎的位置：'' = 本机(使绑定的远程任务能切回本机)，或远程 deviceId。
         modelAgentDeviceId: pluginDeviceId,
       };
@@ -963,8 +963,8 @@ export function buildScheduleInput(form: ScheduleFormState): CreateScheduleInput
   // codex 会让用户在 Pi 任务里开的 Fast 被静默丢弃(codex review)。表单侧 Fast 开关已按
   // capability × 模型 supportsFastMode 门控,Pi 只有真支持时才可能为 true。
   if (form.agentKind === 'codex' || form.agentKind === 'pi') base.fastMode = form.fastMode;
-  if (form.pluginEngine && !form.persistentSession) {
-    // 插件引擎：每次新建任务(本机或另一台电脑)；没有 Fast，worktree 与内置引擎相同。
+  if (form.pluginEngine) {
+    // 插件引擎：每次新建任务或持续会话(本机或另一台电脑)；没有 Fast，worktree 与内置引擎相同。
     const pluginDeviceId = form.pluginEngine.deviceId?.trim() || undefined;
     return {
       ...base,

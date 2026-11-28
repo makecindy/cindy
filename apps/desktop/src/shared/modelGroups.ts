@@ -4,6 +4,7 @@
  * 产品规则见 docs/product-rules/model-groups.md。
  */
 
+import { pluginEngineKeyFromProviderId } from './pluginEngines.js';
 import { ROUTE_STRATEGIES, type RouteStrategy } from './routeStrategy.js';
 
 export const MODEL_GROUPS_IPC = {
@@ -192,7 +193,7 @@ export function modelGroupResolveResultFromRemote(result: ModelGroupResolveResul
     : { ...result, trace };
 }
 
-export type ModelGroupAgentKind = 'cc' | 'codex' | 'pi';
+export type ModelGroupAgentKind = 'cc' | 'codex' | 'pi' | 'acp';
 
 /** 一个已连接的模型：与新任务选择器选中一行时得到的组合相同。 */
 export interface ModelGroupCandidate {
@@ -453,7 +454,7 @@ export interface ModelGroupResolveRequest {
    * effort / fastMode = 用户在选择器里给这个模型选的思考深度与 Fast：只对供应商路由展开出来的路由生效
    * (它们在选择器里就是普通模型行，这两项用户照常能调)，选中的来源不支持时不带。
    */
-  context?: { hasImages?: boolean; effort?: string; fastMode?: true | 'ultrafast' };
+  context?: { scheduled?: boolean; hasImages?: boolean; effort?: string; fastMode?: true | 'ultrafast' };
   /**
    * 只在这个运行位置的来源里选(agentDeviceId null = 本机)。省略 = 不限(含跨本地、分享与远程位置)。
    */
@@ -475,7 +476,7 @@ function text(value: unknown, max: number): string {
 }
 
 function agentKind(value: unknown): ModelGroupAgentKind | null {
-  return value === 'cc' || value === 'codex' || value === 'pi' ? value : null;
+  return value === 'cc' || value === 'codex' || value === 'pi' || value === 'acp' ? value : null;
 }
 
 function candidate(raw: unknown): ModelGroupCandidate | null {
@@ -485,6 +486,7 @@ function candidate(raw: unknown): ModelGroupCandidate | null {
   const providerId = text(value.providerId, MODEL_GROUP_LIMITS.field);
   const model = text(value.model, MODEL_GROUP_LIMITS.field);
   if (!kind || !providerId || !model) return null;
+  if (kind === 'acp' && !pluginEngineKeyFromProviderId(providerId)) return null;
   // 运行位置截断后会指到别处：格式不对的整条丢弃，不悄悄变成本机。
   let agentDeviceId: string | undefined;
   if (value.agentDeviceId !== undefined && value.agentDeviceId !== null) {

@@ -247,6 +247,20 @@ export default {
         { id: 'designer', name: 'Designer', deviceId: 'cccccccccccccccccccccccccccccccc', deviceName: '', online: false, preview: 'Ready', activityAt: 0 },
       ] },
     },
+    'remote-hide-recover': {
+      about: '#13461: Hide a remote companion via context menu, inspect it with its device label in the shared hidden section, and restore it',
+      data: {
+        profiles: [
+          { ...profiles[0], name: '写作伙伴', avatar: 'cindy://avatar/preset/dash', lastMessagePreview: '今天的草稿已整理好' },
+          { ...profiles[1], name: '本地隐藏伙伴', avatar: 'cindy://avatar/preset/lizi', hiddenAt: 10 },
+        ],
+        remoteBots: [
+          { id: 'studio-ops', name: '发布助手', deviceId: 'mac-studio', deviceName: 'Mac Studio', avatar: 'cindy://avatar/preset/cindy', avatarColor: 'blue', online: true, connectionKnown: true, preview: 'CI 流水线已就绪', activityAt: 500 },
+          { id: 'office-review', name: '代码评审', deviceId: 'office-mac', deviceName: 'Office Mac', avatar: 'cindy://avatar/preset/dash', avatarColor: 'amber', online: false, connectionKnown: true, preview: '昨天完成 3 条建议', activityAt: 400 },
+        ],
+        route: '/bots/mate-1',
+      },
+    },
   },
   async check(page, ui) {
     if (ui.case === 'startup-read-pending') {
@@ -716,6 +730,26 @@ export default {
       assert.match(text, /Mac Studio \(2\)/);
       assert.ok(text.includes(await ui.t('bots.cloud.unknownDevice')));
       assert.doesNotMatch(text, /[abc]{32}/);
+      return;
+    }
+    if (ui.case === 'remote-hide-recover') {
+      const remoteRow = page.getByRole('button', { name: /发布助手/ });
+      await remoteRow.click({ button: 'right' });
+      const hideItem = page.getByRole('menuitem', { name: await ui.t('bots.list.hide'), exact: true });
+      await hideItem.waitFor();
+      assert.equal(await page.getByRole('menuitem', { name: await ui.t('bots.lifecycle.delete'), exact: true }).count(), 0);
+      await ui.capture('remote-context-menu');
+      await hideItem.click();
+      await page.getByText('CI 流水线已就绪').waitFor({ state: 'detached' });
+      const hiddenToggle = page.getByRole('button', { name: await ui.t('bots.list.hidden', { count: 2 }), exact: true });
+      await hiddenToggle.click();
+      const unhideButton = page.getByRole('button', { name: await ui.t('bots.list.unhideNamed', { name: '发布助手' }), exact: true });
+      await unhideButton.waitFor();
+      assert.equal(await page.getByRole('button', { name: await ui.t('bots.lifecycle.deleteTitle'), exact: true }).count(), 1);
+      await ui.capture('hidden-section-expanded');
+      await unhideButton.click();
+      await page.getByText('CI 流水线已就绪').waitFor();
+      assert.equal(await page.getByRole('button', { name: await ui.t('bots.list.hidden', { count: 1 }), exact: true }).count(), 1);
       return;
     }
     const rows = page.getByText('Ready', { exact: true });

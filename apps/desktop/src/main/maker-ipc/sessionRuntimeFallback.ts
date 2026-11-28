@@ -69,9 +69,9 @@ export interface SessionRuntimeFallbackPorts<RuntimeSession extends { agentKind:
     candidate: FallbackRouteProfile | null;
     routeLocked?: boolean;
   }>;
-  readModelGroupFallbackCandidate?(sessionId: string, current: SessionRuntimeProfile, visited: readonly string[], recovery: ModelGroupRecovery, generation: number): Promise<{
-    candidate: SessionRuntimeProfile | null;
-    bindCommittedRoute?(profile: SessionRuntimeProfile): void;
+  readModelGroupFallbackCandidate?(sessionId: string, current: FallbackRouteProfile, visited: readonly string[], recovery: ModelGroupRecovery, generation: number): Promise<{
+    candidate: FallbackRouteProfile | null;
+    bindCommittedRoute?(profile: FallbackRouteProfile): void;
     /** Display names of the failed source and the candidate («model · source»). */
     labels?: { from: string; to: string };
   } | null>;
@@ -131,7 +131,7 @@ export function createSessionRuntimeFallback<RuntimeSession extends { agentKind:
             effort: sessions.effort,
           })
           .from(sessions)
-          .where(and(eq(sessions.id, sessionId), eq(sessions.source, 'bot'), eq(sessions.status, 'active'), eq(sessions.agentKind, 'acp')))
+          .where(and(eq(sessions.id, sessionId), eq(sessions.status, 'active'), eq(sessions.agentKind, 'acp')))
           .limit(1);
         if (pluginRow) {
           profiles = {
@@ -167,8 +167,8 @@ export function createSessionRuntimeFallback<RuntimeSession extends { agentKind:
       let currentForFallback: FallbackRouteProfile = profiles.effective;
       let candidate: FallbackRouteProfile | null = botFallback.candidate;
       // 智能路由接替优先于静态伙伴链：当伙伴配置了智能路由或在对话中间切入了智能路由，先按智能路由实时配额与策略接替，
-      // 只有整个智能路由耗尽后才回落到伙伴兜底模型(2026-11-27 全面接替)。
-      const group = groupRecovery && profiles.effective.agentKind !== 'acp'
+      // 只有整个智能路由耗尽后才回落到伙伴兜底模型(2026-11-27 全面接替；含插件引擎任务)。
+      const group = groupRecovery
         ? await readModelGroupFallbackCandidate?.(sessionId, profiles.effective, profiles.control.visitedRoutes, groupRecovery, profiles.control.generation)
         : null;
       if (!isCurrent()) return { session: null, outcome: 'superseded' };
@@ -253,12 +253,14 @@ export function createSessionRuntimeFallback<RuntimeSession extends { agentKind:
         failed: FallbackRouteProfile,
       ): Promise<boolean> => {
         if (!await recordFailedCandidate(failed) || !isCurrent()) return false;
-        if (group && groupRecovery && currentForFallback.agentKind !== 'acp') {
-          const latest = await readSessionRuntimeProfiles(sessionId);
-          if (!latest || latest.control.pending || latest.control.generation !== profiles.control.generation ||
-              !canApplyAutomaticRuntimeSelection(sessionId, latest.control.generation)) return false;
+        if (group && groupRecovery) {
+          const latestControl = currentForFallback.agentKind === 'acp'
+            ? getSessionRuntimeControlSnapshot(sessionId)
+            : (await readSessionRuntimeProfiles(sessionId))?.control ?? null;
+          if (!latestControl || latestControl.pending || latestControl.generation !== profiles.control.generation ||
+              !canApplyAutomaticRuntimeSelection(sessionId, latestControl.generation)) return false;
           const next = await readModelGroupFallbackCandidate?.(sessionId, currentForFallback,
-            latest.control.visitedRoutes, groupRecovery, latest.control.generation);
+            latestControl.visitedRoutes, groupRecovery, latestControl.generation);
           candidate = next?.candidate ?? null;
           groupLabels = next?.labels;
           return candidate !== null;
@@ -298,7 +300,7 @@ export function createSessionRuntimeFallback<RuntimeSession extends { agentKind:
           );
           // A live override can leave the saved session on its original route.
           // Move the durable group binding only when the session row moved too.
-          if (selected.agentKind !== 'acp' && result.persistedRoute && !result.deferred && !result.superseded &&
+          if (result.persistedRoute && !result.deferred && !result.superseded &&
               sessionRuntimeControlOwnerEpochMatches(runtimeOwnerEpoch)) {
             group?.bindCommittedRoute?.({
               ...selected,
@@ -337,7 +339,7 @@ export function createSessionRuntimeFallback<RuntimeSession extends { agentKind:
                 preserveModelGroupBinding: true,
               });
               if (switched.switched && sessionRuntimeControlOwnerEpochMatches(runtimeOwnerEpoch)) {
-                if (selected.agentKind !== 'acp') group?.bindCommittedRoute?.(selected);
+                group?.bindCommittedRoute?.(selected);
                 acceptSessionRuntimeMutation({
                   sessionId,
                   source: 'fallback',

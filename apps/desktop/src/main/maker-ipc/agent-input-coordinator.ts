@@ -520,6 +520,9 @@ export interface AgentInputCoordinatorDeps {
     signals: InterruptedTurnErrorSignals,
     item: AgentInputQueuedMessage,
   ) => AutoResumeAgentSwitchCause | null;
+  /** Narrow local mixed-pool exception to the direct Worker failure boundary.
+   * Pure synchronous hint; actual same-model admission remains in group recovery. */
+  isLocalMixedPoolWorkerInput?: (sessionId: string, item: AgentInputQueuedMessage) => boolean;
   /** Shared bounded budget for provider-group recovery, which has no normal auto-resume token. */
   claimExternalAutomaticRecovery?: (sessionId: string) => boolean;
   /**
@@ -996,6 +999,8 @@ interface PendingAutoResumeRecovery {
   stateRef: SessionInputState;
   /** The continuation entry owns cancellation; activity metadata is presentation only. */
   recoveryOwner: 'interrupted' | 'quota-reset' | 'provider-group';
+  /** Immediate account handoff must still be true after ordinary send preparation. */
+  beforeDispatch?: () => Promise<void>;
   recovery: Extract<AgentInputRecovery, { kind: 'active-turn' }>;
   error: string | null;
   errorReason: string | null;
@@ -1535,6 +1540,14 @@ export class AgentInputCoordinator {
       if (state.recovery) texts.push(JSON.stringify(state.recovery));
     }
     return texts;
+  }
+
+  /** A persisted user row and an input still in pre-dispatch hooks both precede this boundary. */
+  getDispatchedInput(sessionId: string, clientIds: readonly string[]) {
+    const active = this.states.get(sessionId)?.activeTurn;
+    if (!active?.item || !isActiveTurnDispatched(active) || !clientIds.includes(active.item.clientId)) return undefined;
+    const agentKind = this.deps.getAgentKind(sessionId);
+    return agentKind ? { clientId: active.item.clientId, agentKind } : undefined;
   }
 
   /** O(1), main-owned input attribution before synchronous provider events settle the turn. */
@@ -3910,6 +3923,9 @@ export class AgentInputCoordinator {
       expectedSwitchRevision?: number;
       /** Quota/group continuation shares the wait token, but retains its actual recovery owner. */
       usageLimitWait?: { token: number; info: AutoResumeInfo; recoveryOwner: 'quota-reset' | 'provider-group' };
+      /** Host-observed output already crossed the vendor boundary; never replay the original input. */
+      forceContinuationOnly?: boolean;
+      beforeRecoveryDispatch?: () => Promise<void>;
       resumeExtra?: Pick<AutoResumeInfo, 'agentSwitch'>;
     },
   ): Promise<{ projection: AgentInputProjection; outcome: AutoRetryOutcome }> {
@@ -3968,7 +3984,7 @@ export class AgentInputCoordinator {
     const reconnectNote = this.reconnectRecoveryNotes.get(recovery) ??
       ((state.errorReason ?? state.autoResumePending?.reason) === 'codex_reconnect_stalled'
         ? codexReconnectRecoveryNote({}) : undefined);
-    const continuationOnly = providerRestart || reconnectNote !== undefined || Boolean(
+    const continuationOnly = opts?.forceContinuationOnly || providerRestart || reconnectNote !== undefined || Boolean(
       opts?.auto && isContinuationOnlyAutoResumeReason(previousAutoResumeInfo?.reason),
     );
     // Group inputs are hidden in the transcript and omitted by engine handoff.
@@ -4226,6 +4242,7 @@ export class AgentInputCoordinator {
           sessionId,
           stateRef: state,
           recoveryOwner: usageWait?.recoveryOwner ?? 'interrupted',
+          ...(opts?.beforeRecoveryDispatch ? { beforeDispatch: opts.beforeRecoveryDispatch } : {}),
           recovery,
           error: previousError,
           errorReason: previousErrorReason,
@@ -4914,9 +4931,9 @@ export class AgentInputCoordinator {
     }
     const active = state.activeTurn;
     let directWorkerItem: AgentInputQueuedMessage | undefined;
-    // An explicit failure (usage limit, unavailable model...) of a direct Lead
-    // assignment keeps no retry record: the assignment may have partly run, and
-    // the Lead decides when to resume. The user can still continue it by hand.
+    // A direct Lead assignment normally leaves explicit failures to the Lead.
+    // The executing mixed pool may instead immediately hand off a known account
+    // rejection, using the same accepted input and provider-group hold.
     let directWorkerCanContinue = false;
     const runtime = this.deps.getTurnSessionIdentity?.(sessionId);
     if (runtime && meta?.sessionInstanceId && meta.sessionInstanceId === readSessionInstanceId(runtime)) {
@@ -4925,7 +4942,9 @@ export class AgentInputCoordinator {
         this.directWorkerReceipts.delete(runtime);
         if (!active && !receipt.signal.aborted && !state.queuePaused && !state.queueAbortPending &&
             !state.pendingQueue.length && !state.recovery && type === 'error') {
-          if (isUnexpectedWorkerStreamEnd({ ...signals, message })) directWorkerItem = receipt.item;
+          if (isUnexpectedWorkerStreamEnd({ ...signals, message })
+            || this.canRecoverDirectWorkerAccountFailure(sessionId, receipt.item, message, signals))
+            directWorkerItem = receipt.item;
           else directWorkerCanContinue = true;
         }
       }
@@ -4978,9 +4997,12 @@ export class AgentInputCoordinator {
         runtime === steerRecovery.runtime &&
         meta?.sessionInstanceId && meta.sessionInstanceId === readSessionInstanceId(runtime) &&
         meta.sessionTurnGeneration === active.vendorTurnGeneration &&
-        isUnexpectedWorkerStreamEnd({ ...signals, message })
+        (isUnexpectedWorkerStreamEnd({ ...signals, message })
+          || this.canRecoverDirectWorkerAccountFailure(sessionId, steerRecovery.item, message, signals))
           ? steerRecovery.item : undefined;
-      if (active?.persisted || directWorkerItem || pendingSteerWorkerItem) {
+      const activePastDispatchHooks =
+        Boolean(active?.persisted) && active?.dispatchLifecycle !== 'awaiting-dispatch-hooks';
+      if (activePastDispatchHooks || directWorkerItem || pendingSteerWorkerItem) {
         const item = pendingSteerWorkerItem ?? active?.item ?? directWorkerItem ?? null;
         const steerPersistenceError = active?.workerSteerPersistenceError;
         if (pendingSteerWorkerItem && steerPersistenceError && state.stickyError === steerPersistenceError) {
@@ -4999,7 +5021,7 @@ export class AgentInputCoordinator {
           allowSchedulerAutoResume: Boolean(schedulerItem && resumableCandidate) || scheduledQuota,
           persistedFailure: true,
         });
-        if (active && (active.persisted || pendingSteerWorkerItem) &&
+        if (active && (activePastDispatchHooks || pendingSteerWorkerItem) &&
           state.recovery?.kind === 'active-turn' && meta?.sessionInstanceId &&
           meta.sessionTurnGeneration !== undefined && active.vendorTurnGeneration === meta.sessionTurnGeneration) {
           this.terminalRecoveryOwners.set(state.recovery, {
@@ -5105,8 +5127,16 @@ export class AgentInputCoordinator {
         return;
       }
       if (active) {
-        // 未持久化的 active 还没有跨过产品层 accepted hook；此时到达的
-        // terminal error 只能是上一轮迟到事件，不能接管当前 drain。
+        // 未持久化或仍停留在派发前钩子(beforeDispatchUserTurn / onAcceptedQueuedMessage /
+        // onUndispatchedRetry)的 active 还没有进入 vendor dispatch；此时到达的 terminal
+        // error 不可能属于本轮，只能是上一轮迟到事件或启动期伪终态，不能接管当前 drain。
+        log.warn('stray turn-error ignored for pre-dispatch active turn', {
+          sessionId,
+          clientId: active.item?.clientId,
+          controlKind: active.controlKind,
+          dispatchLifecycle: active.dispatchLifecycle,
+          persisted: active.persisted,
+        });
         this.emit(sessionId);
         return;
       }
@@ -5150,20 +5180,24 @@ export class AgentInputCoordinator {
       this.emit(sessionId);
       return;
     }
-    if (active && !active.persisted && !isActiveTurnDispatched(active)) {
-      // 与 error 分支的迟到事件守卫对称: preparing / sending 且未跨过持久化边界的
-      // active 收不到属于自己的 done —— vendor turn 尚未放行, 这只能是上一轮的
-      // 迟到终态(典型: 插话打断后旧 turn 的 error→done 尾巴落进 drain 的
-      // pre-dispatch 异步窗口)。此前这里落到下方无条件 `state.activeTurn = null`,
-      // 而 drain 已把 item 从 pendingQueue 切走, 清掉 activeTurn 会让 drain 的
-      // isActiveTurnCurrent 校验静默 return —— 这条输入就此蒸发(无日志、无落库、
-      // 无 Retry 入口, 2026-07-03 插话丢消息实锤)。忽略之, 后续状态由 in-flight
-      // send 的真实 outcome 驱动。
+    if (
+      active &&
+      !isActiveTurnDispatched(active) &&
+      (!active.persisted || active.dispatchLifecycle === 'awaiting-dispatch-hooks')
+    ) {
+      // 与 error 分支的迟到事件守卫对称: preparing、持久化前 sending，以及已落库但仍停留在
+      // 派发前钩子(beforeDispatchUserTurn / onAcceptedQueuedMessage / onUndispatchedRetry)的
+      // active 都尚未放行到 vendor handle.send —— 此时收到的 done 只能是上一轮迟到终态或
+      // 恢复会话启动期空终态。此前仅检查 !active.persisted，漏掉了已落库但阻塞在
+      // beforeDispatchUserTurn(如 Git 快照)的 awaiting-dispatch-hooks 窗口，导致
+      // state.activeTurn 被清 null、onPersisted 随后的 isActiveTurnCurrent 校验失败并取消
+      // 派发(定时任务或排队消息直接丢弃)。忽略之，后续状态由 in-flight send 的真实 outcome 驱动。
       log.warn('stray turn-done ignored for pre-dispatch active turn', {
         sessionId,
         clientId: active.item?.clientId,
         controlKind: active.controlKind,
         dispatchLifecycle: active.dispatchLifecycle,
+        persisted: active.persisted,
       });
       this.emit(sessionId);
       return;
@@ -6406,6 +6440,8 @@ export class AgentInputCoordinator {
               // 已送达的消息二次恢复(issue #761)。
               this.maybePersistQueueSnapshot(sessionId);
             }
+            const beforeRecoveryDispatch = this.pendingAutoResumeRecoveries.get(head.clientId)?.beforeDispatch;
+            if (beforeRecoveryDispatch) await beforeRecoveryDispatch();
             await this.deps.beforeDispatchUserTurn?.(sessionId, head, signal ?? this.getInputAbortSignal(sessionId, active.generation));
             if (!this.isActiveTurnCurrent(sessionId, active)) {
               throw new Error(
@@ -8469,6 +8505,16 @@ export class AgentInputCoordinator {
     };
   }
 
+  private canRecoverDirectWorkerAccountFailure(
+    sessionId: string,
+    item: AgentInputQueuedMessage,
+    message?: string,
+    signals?: Omit<InterruptedTurnErrorSignals, 'message'>,
+  ): boolean {
+    return this.deps.isLocalMixedPoolWorkerInput?.(sessionId, item) === true
+      && this.getProviderGroupSwitchCandidate(sessionId, item, message, signals) === 'usage-limit';
+  }
+
   /** 只查询可由组接管的输入；判定不可用时保留通用重试与错误呈现。 */
   private getProviderGroupSwitchCandidate(
     sessionId: string,
@@ -8787,9 +8833,12 @@ export class AgentInputCoordinator {
     sessionId: string,
     token: number,
     info: AutoResumeInfo,
+    accountRecovery?: { forceContinuationOnly?: boolean; beforeDispatch?: () => Promise<void> },
   ): Promise<AutoRetryOutcome> {
     const { outcome } = await this.performRetryLastError(sessionId, {
       usageLimitWait: { token, info, recoveryOwner: 'provider-group' },
+      forceContinuationOnly: accountRecovery?.forceContinuationOnly,
+      beforeRecoveryDispatch: accountRecovery?.beforeDispatch,
     });
     return outcome;
   }

@@ -13,9 +13,11 @@ import { getDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 import { useProviderShareAgentDevices } from '@/features/provider-share/useProviderShareAgentDevices';
 import { useSelectableDevices } from '@/hooks/useControllableDevices';
 import { useDevicesProviders } from '@/hooks/useDevicesProviders';
+import { usePickerPluginEngines } from '@/hooks/usePickerPluginEngines';
 import { useProviders } from '@/hooks/useProviders';
 import { deviceDisplayName } from '@/lib/deviceName';
 import { createLogger } from '@/lib/logger';
+import { PLUGIN_ENGINE_DEFAULT_MODEL, type PluginEngineChoice } from '@/lib/pluginEngineSelection';
 import {
   buildModelGroupRouteNote,
   modelGroupSourceLabel,
@@ -45,6 +47,7 @@ const log = createLogger('model-groups');
  */
 let cached: { owner: string | null; config: ModelGroupsConfig; visible: ModelGroupsConfig } | null = null;
 let loading: { owner: string | null; promise: Promise<void> } | null = null;
+let saving: Promise<unknown> = Promise.resolve();
 const listeners = new Set<() => void>();
 
 const ownerNow = (): string | null => getDataOwnerGeneration().dataOwnerId;
@@ -62,17 +65,29 @@ function publish(owner: string | null, next: ModelGroupsConfig): void {
 export function refreshModelGroups(): Promise<void> {
   const owner = ownerNow();
   if (loading?.owner === owner) return loading.promise;
+  const pendingSave = saving;
   // 读不到(含桥接还没有这个接口)只记日志：选择器照常显示其余内容，不让挂载它的页面报错。
-  const promise = Promise.resolve()
-    .then(() => window.electronAPI.modelGroups.get())
-    .then((next) => publish(owner, next))
+  const promise = pendingSave.then(async () => {
+    if (owner !== ownerNow()) return;
+    const next = await window.electronAPI.modelGroups.get();
+    if (owner !== ownerNow()) return;
+    if (pendingSave === saving) {
+      publish(owner, next);
+      return;
+    }
+    // 保存与这次读取交错时，待已排队的编辑完成后合并补读一次；随后提交的编辑复用同一队列。
+    const reload = saving.then(async () => {
+      if (owner !== ownerNow()) return;
+      publish(owner, await window.electronAPI.modelGroups.get());
+    });
+    saving = reload.catch(() => undefined);
+    await reload;
+  })
     .catch((err: unknown) => log.warn('model groups unavailable', err))
     .finally(() => { if (loading?.promise === promise) loading = null; });
   loading = { owner, promise };
   return promise;
 }
-
-let saving: Promise<unknown> = Promise.resolve();
 
 /**
  * 保存排队执行，每次都在上一次保存的结果上改：连点两次「上移」或改名后马上再改别的，
@@ -82,7 +97,9 @@ export function saveModelGroups(change: (latest: ModelGroupsConfig) => ModelGrou
   const owner = ownerNow();
   const run = saving.then(async () => {
     if (owner !== ownerNow() || cached?.owner !== owner) throw new Error('model groups are not loaded for this account');
-    const saved = await window.electronAPI.modelGroups.set(change(cached.config));
+    const next = change(cached.config);
+    if (next === cached.config) return cached.config;
+    const saved = await window.electronAPI.modelGroups.set(next);
     publish(owner, saved);
     return saved;
   });
@@ -214,6 +231,7 @@ type CandidateRef = Pick<ModelGroupCandidate, 'agentKind' | 'providerId' | 'mode
 
 export interface ModelGroupCandidateNames {
   provider: ProviderView | undefined;
+  pluginEngine?: PluginEngineChoice;
   modelName: string;
   sourceName: string;
   /** 来源连同运行位置：modelGroupSourceLabel。 */
@@ -234,11 +252,37 @@ export function useModelGroupCandidateNames(
   const { t } = useTranslation();
   const { providers } = useProviders();
   const locationName = useModelGroupLocationName();
-  const remoteKey = [...new Set(candidates.flatMap((candidate) => (candidate.agentDeviceId ? [candidate.agentDeviceId] : [])))].sort().join('\n');
+  const remoteKey = [...new Set(candidates.flatMap((candidate) => (candidate.agentKind !== 'acp' && candidate.agentDeviceId ? [candidate.agentDeviceId] : [])))].sort().join('\n');
   const remoteIds = useMemo(() => (remoteKey ? remoteKey.split('\n') : []), [remoteKey]);
   const catalogs = useDevicesProviders(remoteIds);
+  const hasAcp = candidates.some((candidate) => candidate.agentKind === 'acp');
+  const acpRemoteKey = [...new Set(candidates.flatMap((candidate) => (candidate.agentKind === 'acp' && candidate.agentDeviceId ? [candidate.agentDeviceId] : [])))].sort().join('\n');
+  const acpRemoteIds = useMemo(() => (acpRemoteKey ? acpRemoteKey.split('\n') : []), [acpRemoteKey]);
+  const pluginEngines = usePickerPluginEngines({ enabled: hasAcp, rememberedDeviceIds: acpRemoteIds });
   // fallback：目录里找不到时用的名字(如选路结果里带回的)，再找不到才显示 id。
   return useCallback((candidate: CandidateRef, fallback?: { modelName?: string; sourceName?: string }) => {
+    if (candidate.agentKind === 'acp') {
+      const exactEngine = pluginEngines.findEngine(candidate.providerId, candidate.agentDeviceId);
+      const anyEngine = exactEngine ?? pluginEngines.engines.find((item) => item.providerId === candidate.providerId) ?? null;
+      const modelEntry = (exactEngine ?? anyEngine)?.models.find((item) => item.id === candidate.model);
+      const sourceName = exactEngine?.name
+        ?? (fallback?.sourceName && fallback.sourceName !== candidate.providerId ? fallback.sourceName : anyEngine?.name ?? fallback?.sourceName ?? t('newChat.pluginEngines.genericName'));
+      const modelName = candidate.model === PLUGIN_ENGINE_DEFAULT_MODEL
+        ? t('newChat.pluginEngines.defaultModel')
+        : modelEntry?.displayName ?? (fallback?.modelName && fallback.modelName !== candidate.model ? fallback.modelName : candidate.model);
+      const modelDisabled = !!exactEngine?.disabledModels?.some((item) => item.id === candidate.model);
+      const modelAllowed = !!exactEngine && !modelDisabled
+        && !(exactEngine.defaultModelAllowed === false && (candidate.model === PLUGIN_ENGINE_DEFAULT_MODEL || !modelEntry));
+      return {
+        provider: undefined,
+        pluginEngine: exactEngine ?? anyEngine ?? undefined,
+        modelName,
+        sourceName,
+        sourceLabel: modelGroupSourceLabel({ sourceName, agentDeviceId: candidate.agentDeviceId }, locationName, t),
+        known: !!exactEngine,
+        connected: !!exactEngine && !exactEngine.suspended && exactEngine.availability.state !== 'unavailable' && modelAllowed,
+      };
+    }
     const agent = candidate.agentKind === 'cc' ? 'claude-code' : candidate.agentKind;
     const catalog = candidate.agentDeviceId ? catalogs.get(candidate.agentDeviceId) : undefined;
     const list = candidate.agentDeviceId ? remoteAgentProviders(catalog?.providers ?? []) : providers;
@@ -261,7 +305,7 @@ export function useModelGroupCandidateNames(
       known: !!provider,
       connected: catalog?.loading === true || (!!provider?.connected && !provider.suspended && !!model),
     };
-  }, [catalogs, locationName, providers, t]);
+  }, [catalogs, locationName, pluginEngines, providers, t]);
 }
 
 /**

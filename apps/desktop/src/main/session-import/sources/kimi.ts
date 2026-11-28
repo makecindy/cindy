@@ -120,11 +120,13 @@ async function cliMessages(dir: string, opts: { maxBytes?: number; signal?: Abor
   return items;
 }
 
-function firstUserText(items: Array<{ msg: Record<string, unknown> }>): string {
+function firstUserTitle(items: Array<{ msg: Record<string, unknown> }>): string {
   for (const { msg } of items) {
     if (str(msg.role) !== 'user') continue;
     const parsed = parseKimiMessage(msg, 'x', 0).find((m) => m.role === 'user');
-    if (parsed && typeof parsed.content === 'string' && parsed.content.trim()) return parsed.content;
+    if (typeof parsed?.content !== 'string') continue;
+    const title = makeTitle(parsed.content, '');
+    if (title) return title;
   }
   return '';
 }
@@ -149,7 +151,8 @@ async function list(ctx: ScanContext): Promise<SourceListResult> {
         const wire = await fsp.stat(path.join(dir, 'agents', 'main', 'wire.jsonl')).catch(() => null);
         if (!wire?.isFile() || wire.size === 0) continue;
         const { size, mtimeMs } = await dirSize(dir);
-        const title = makeTitle(firstNonEmpty(state.title, state.lastPrompt) || firstUserText(await codeMessages(dir, { maxBytes: 256 * 1024 })), '');
+        const title = makeTitle(str(state.title), '') || makeTitle(str(state.lastPrompt), '')
+          || firstUserTitle(await codeMessages(dir, { maxBytes: 256 * 1024 }));
         if (!title) continue;
         sessions.push({
           source: 'kimi',
@@ -185,7 +188,7 @@ async function list(ctx: ScanContext): Promise<SourceListResult> {
         const subagents = await subdirs(path.join(dir, 'subagents'));
         internalCount += subagents.length;
         const state = await readJson(path.join(dir, 'state.json'));
-        const title = makeTitle(str(state.custom_title) || firstUserText(await cliMessages(dir, { maxBytes: 256 * 1024 })), '');
+        const title = makeTitle(str(state.custom_title), '') || firstUserTitle(await cliMessages(dir, { maxBytes: 256 * 1024 }));
         if (!title) continue;
         const birth = await fsp.stat(dir).catch(() => null);
         sessions.push({

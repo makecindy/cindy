@@ -398,7 +398,13 @@
     "forkConfirmTitle": "Start a new session from here?",
     "forkConfirmDescription": "A separate session will be created using the context at this point. The original session stays unchanged, and future messages in either session won't affect the other.",
     "forkConfirm": "Start new session",
-    "forkCancel": "Cancel"
+    "forkCancel": "Cancel",
+    "modelSwitchPreparation": {
+      "pending": "Next message",
+      "preparing": "Preparing…",
+      "failed": "Switch failed",
+      "usingPrevious": "This message uses {{actual}}; {{target}} is not ready."
+    }
   },
   "shareImage": {
     "title": "Share Conversation",
