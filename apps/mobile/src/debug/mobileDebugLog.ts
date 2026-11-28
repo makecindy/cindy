@@ -10,9 +10,7 @@ export type MobileDebugScope =
   | "keyboard"
   | "files"
   | "voice"
-  | "new-session"
-  /** Development builds only: the plugin confirmation sheet's layout gate (sizes and positions). */
-  | "plugins";
+  | "new-session";
 export type MobileDebugLevel = "debug" | "info" | "warn" | "error";
 type Sink = (
   level: MobileDebugLevel,

@@ -68,21 +68,17 @@ export function consentSummaryFadeAllowed(plan: ConsentSheetPlan): boolean {
   return plan.mode === "regular" && plan.clipped && plan.summaryLines - CONSENT_FADE_HEIGHT >= plan.guaranteed;
 }
 /**
- * The real-layout check of the regular layout (Android reshoot 2026-11-26), both sheets: the list, as laid out, shows the
- * whole identity block (where it installs, where it comes from) without scrolling, above the fade over its lower edge
- * while it scrolls (`top`: the list's own top padding). Not measured yet (a height of 0) counts as not shown.
+ * The real-layout check of the regular layout (Android reshoot 2026-11-26). Android only: its sizes come from one layout
+ * pass (`onLayout`); iOS cannot tie its readings to one layout pass and always reviews first (maintainer review 19:34).
+ * The list, as laid out, shows the whole identity block (where it installs, where it comes from) without scrolling, above
+ * the fade over its lower edge while it scrolls. Not measured yet (a height of 0) counts as not shown.
  */
-export function consentIdentityShown(list: { identity: number; visible: number; content: number; top?: number;
-  identityEnd?: number }, positions = false): boolean {
+export function consentIdentityShown(list: { identity: number; visible: number; content: number }): boolean {
   // Not measured yet (a height of 0, the content height included: whether the list scrolls decides the fade) is not shown.
   if (list.identity <= 0 || list.visible <= 0 || list.content <= 0) return false;
   const scrolls = list.content > list.visible + 1;
   const fade = scrolls ? CONSENT_FADE_HEIGHT : 0;
-  // iOS (reshoots m2b, b098aa578f; maintainer review 03:06): where the identity block ends below the list's top, as laid
-  // out with the list at rest at its top (`identityEnd`: its top inset and padding included, the latest such layout), is
-  // checked against the list's current visible height.
-  if (positions) return (list.identityEnd ?? 0) > 0 && list.identityEnd! + fade <= list.visible;
-  return (list.top ?? 0) + list.identity + fade <= list.visible;
+  return list.identity + fade <= list.visible;
 }
 /**
  * One consent's sheet as laid out (maintainer review 18:13): every size the decision reads, all reported by that
@@ -94,26 +90,19 @@ export interface ConsentSheetSizes {
   identity: number; heading: number; actions: number;
   /** Each summary item's height, in order. */
   lines: number[];
-  /** The list's visible height and its content height. */
+  /** The list's visible height and its content height (Android; iOS does not report them). */
   visible: number; content: number;
-  /**
-   * iOS: where the identity block ends below the list's top, from their global frames while the list is at rest at its
-   * top (the latest such layout: the Form lays its rows out later, so a top inset can arrive in a later pass; scrolled
-   * layouts do not count, so scrolling never relaxes it). 0 = not reported.
-   */
-  identityEnd: number;
 }
 /** The key a consent sheet's sizes and measured views belong to: this consent, at this window size and text size. */
 export function consentLayoutKey(requestId: string | undefined, window: { width: number; height: number; fontScale: number }): string | null {
   return requestId ? `${requestId}|${window.width}x${window.height}@${window.fontScale}` : null;
 }
 export const emptyConsentSheetSizes = (layoutKey: string | null): ConsentSheetSizes =>
-  ({ for: layoutKey, identity: 0, heading: 0, actions: 0, lines: [], visible: 0, content: 0, identityEnd: 0 });
+  ({ for: layoutKey, identity: 0, heading: 0, actions: 0, lines: [], visible: 0, content: 0 });
 /** Every size the regular layout's decision needs has been reported for this consent. */
-export function consentSheetMeasured(sizes: ConsentSheetSizes, lineCount: number, positions = false): boolean {
+export function consentSheetMeasured(sizes: ConsentSheetSizes, lineCount: number): boolean {
   // The content height too (maintainer review 03:06): it decides whether the list scrolls, and so the fade.
   if (sizes.identity <= 0 || sizes.actions <= 0 || sizes.visible <= 0 || sizes.content <= 0) return false;
-  if (positions && sizes.identityEnd <= 0) return false;
   if (lineCount === 0) return true;
   return sizes.heading > 0 && Array.from({ length: lineCount }, (_, index) => sizes.lines[index] ?? 0).every((line) => line > 0);
 }
@@ -122,12 +111,11 @@ export function consentSheetMeasured(sizes: ConsentSheetSizes, lineCount: number
  * plan from them is regular, and the list as laid out shows the whole identity block. Anything short of that (first
  * mount, only some sizes, another consent's sizes) is not regular yet.
  */
-export function consentRegularConfirmed(sizes: ConsentSheetSizes, sheet: { lineCount: number; available: (actions: number) => number; gap: number;
-  top?: number; positions?: boolean }): boolean {
-  if (!consentSheetMeasured(sizes, sheet.lineCount, sheet.positions)) return false;
+export function consentRegularConfirmed(sizes: ConsentSheetSizes, sheet: { lineCount: number; available: (actions: number) => number; gap: number }): boolean {
+  if (!consentSheetMeasured(sizes, sheet.lineCount)) return false;
   const plan = planConsentSheet({ available: sheet.available(sizes.actions), identity: sizes.identity, heading: sizes.heading,
     lines: Array.from({ length: sheet.lineCount }, (_, index) => sizes.lines[index] ?? 0), gap: sheet.gap });
-  return plan.mode === "regular" && consentIdentityShown({ ...sizes, top: sheet.top }, sheet.positions);
+  return plan.mode === "regular" && consentIdentityShown(sizes);
 }
 export function planConsentSheet(sheet: ConsentSheetMeasures): ConsentSheetPlan {
   if (sheet.lines.length === 0) return { mode: "regular", summaryLines: 0, clipped: false, guaranteed: 0 };

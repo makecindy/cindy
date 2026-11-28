@@ -32,15 +32,15 @@ const bridge = vi.hoisted(() => ({
   mode: "light" as "light" | "dark",
   /** `scrollTo` calls on a ScrollView, by its testID. */
   scrolledTo: [] as Array<[string | undefined, unknown]>,
-  /** The consent sheet's settle clock (`consentSettle`), in ms: `layOutSheet` moves it on once a layout is in. */
-  clock: 0,
   /** How many times a ScrollView with that testID was mounted (a new one starts at its top). */
   scrollMounts: new Map<string, number>(),
+  /** The iOS consent sheet's review clock (`consentReviewClock`), in ms; tests move it on after a review press. */
+  clock: 0,
+}));
+vi.mock("@/plugins/consentReviewClock", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/plugins/consentReviewClock")>()), consentReviewClockNow: () => bridge.clock,
 }));
 vi.mock("@/hooks/useReduceMotion", () => ({ useReduceMotionEnabled: () => false }));
-vi.mock("@/plugins/consentSettle", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@/plugins/consentSettle")>()), consentClockNow: () => bridge.clock,
-}));
 // Metro resolves the iOS market rows inside the iOS directory; vitest needs the platform file named.
 vi.mock("@/plugins/PluginMarketRows", () => import("@/plugins/PluginMarketRows.ios"));
 // The record panel only calls this on "Read again" (not pressed here); the real module needs the device link.
@@ -344,8 +344,8 @@ afterEach(() => {
   bridge.mode = "light";
   bridge.width = 390;
   bridge.height = 844;
-  bridge.clock = 0;
   bridge.ownerCurrent = true;
+  bridge.clock = 0;
   bridge.keyboardVisible = false;
   bridge.fontScale = 1;
   bridge.width = 390;
@@ -369,10 +369,10 @@ function mount(component: any, props: any) {
 const layoutKeyOf = (requestId: string) => `${requestId}|${bridge.width}x${bridge.height}@${bridge.fontScale}`;
 /**
  * `content: 0` leaves the list's content height unreported (on iOS that is the list's scroll geometry, its visible height
- * included). iOS: `visible` and `content` are the native list's scroll geometry (container and content heights, the
- * same the fade reads); frames are global and give only positions: the list starts at `listTop` (100 by default), its
- * content root at `contentTop` (the same by default; below it with a top inset, as in landscape). `innerContent` is the
- * content root's own height (the inner VStack; `content` by default), which can be shorter than the scrolling Form.
+ * included). iOS: `visible` and `content` are the native list's scroll geometry, frames are global (the list at
+ * `listTop`, 100 by default; its content root at `contentTop`); `innerContent` is the content root's own height. On iOS
+ * these readings only lay the sheet out: none of them lets Allow answer (maintainer review 19:34), which the iOS cases
+ * below check by reporting them in the orders a device can.
  */
 /** Every view identity (`id` modifier) on the iOS sheet now: the list's, and those in its content and footer. */
 function sheetViewIds(): Set<string> {
@@ -395,7 +395,7 @@ function sheetViewIds(): Set<string> {
  * or inside one, report again; a view that kept its identity and its size reports nothing.
  */
 function layOutSheet(heights: { identity: number; visible: number; content: number; other?: number; listTop?: number; contentTop?: number;
-  innerContent?: number }, renewedSince?: Set<string>, options: { settle?: boolean } = {}) {
+  innerContent?: number }, renewedSince?: Set<string>) {
   const sheet = bridge.props.get("plugins.managementConfirmation");
   const other = heights.other ?? 20;
   const listTop = heights.listTop ?? 100, contentTop = heights.contentTop ?? listTop;
@@ -431,8 +431,6 @@ function layOutSheet(heights: { identity: number; visible: number; content: numb
     walk(sheet.footer);
   } else walk(sheet.children);
   for (const call of calls) act(call);
-  // A device shows a laid-out sheet for a while before a person presses anything (`settle: false`: pressed at once).
-  if (options.settle !== false) bridge.clock += 1000;
 }
 // New plugin picker wrapper: native sheets call onClose after a successful onSelect.
 // Minimal input is one model click; the observable result must be one complete route,
@@ -1211,6 +1209,7 @@ it("leaves unknown configuration to the original form without a second status or
 it("shows full consent facts in a separate sheet and rejects stale owner or request callbacks", () => {
   const state = { outcome: "confirmation", operationId: "operation", online: true, busy: false, receipt: { consent: {
     requestId: "request", origin: "custom-market", originLabel: "Verified source", initiator: "user",
+    originSource: { kind: "git", repository: "github.com/acme/plugins" },
     facts: { kind: "update", ghostId: "plugin-id", name: "Plugin", version: "2", previousVersion: "1", unchangedCount: 2, builtinOauthClientChanged: true,
       added: [{ key: "node", kind: "node", labelKey: "nodeRuntime", detailKey: "nodeRuntimeDetail", detail: "Full local access risk" }],
       removed: [{ key: "network", kind: "network", labelKey: "networkHost", detail: "Removed host access" }] },
@@ -1221,8 +1220,9 @@ it("shows full consent facts in a separate sheet and rejects stale owner or requ
   expect(bridge.props.get("plugins.managementConfirmation").visible).toBe(true);
   // The custom market name is interpolated into the source line (pluginManagement.test.ts checks the text).
   for (const fact of ["Plugin · v2", "plugin-id", "plugins.notice.consentSource.customMarket", "Full local access risk", "Removed host access", "plugins.management.permissions.nodeRuntimeDetail", "plugins.management.oauthChanged"]) expect(container.textContent).toContain(fact);
-  // Laid out with the whole identity block showing, so only the inactive guard can stop the press below.
+  // iOS reviews first (maintainer review 19:34), so only the inactive guard can stop the press below.
   layOutSheet({ identity: 100, visible: 2000, content: 400 });
+  act(() => bridge.props.get("plugins.management.review").onPress()); bridge.clock += 1000;
   const allow = bridge.props.get("plugins.management.allow").onPress;
   act(() => allow());
   expect(controller.answer, "control: active and laid out, Allow answers").toHaveBeenCalledWith(true);
@@ -1314,7 +1314,8 @@ it.each(["light", "dark"] as const)("pairs confirmation Allow background and cus
     requestId: "request", origin: "local-file", initiator: "user", facts: { kind: "install", ghostId: "qa", name: "QA", version: "1", permissions: [] },
   } } } as any;
   mount(PluginManagementConfirmation, { state, controller: { getState: () => state, answer: vi.fn() } as any, active: true, deviceName: "QA Mac" });
-  const allow = bridge.props.get("plugins.management.allow");
+  // The main button: on iOS "Review source and permissions" first (maintainer review 19:34), then Allow, in the same style.
+  const allow = bridge.props.get("plugins.management.review");
   expect(allow.modifiers).toContainEqual({ tint: palettes[mode].cta });
   expect(allow.modifiers).toContainEqual({ foregroundStyle: palettes[mode].ctaText });
   expect(allow.children.props.modifiers).toContainEqual({ foregroundStyle: palettes[mode].ctaText });
@@ -1491,18 +1492,37 @@ describe("older Host without a repository identity", () => {
       // Rejecting stays possible, so the waiting install can be closed from the phone.
       expect(disabled("plugins.management.reject")).toBe(false);
     });
+  it("iOS: a consent that turns reject-only after it was reviewed never answers Allow (a press before the native disabled state)", () => {
+    const chosen = { kind: "local" as const, sourceId: "SourceA_0123456789abcd" };
+    const p = sheetProps({ originSource: chosen }, installFacts);
+    const expected = { kind: "install", deviceId: "host", pluginId: "custom:Acme/runner", ghostId: "runner", version: "1",
+      releaseId: "runner@1", sourceType: "local-market", source: chosen };
+    p.state.expectedConsent = expected;
+    const { rerender } = mount(PluginManagementConfirmation, p);
+    act(() => bridge.props.get("plugins.management.review").onPress()); bridge.clock += 1000;
+    expect(bridge.props.has("plugins.management.allow"), "reviewed: Allow is offered").toBe(true);
+    // The same consent can no longer be allowed here (another source than the one chosen).
+    p.state.expectedConsent = { ...expected, source: { kind: "local", sourceId: "SourceB_0123456789abcd" } };
+    rerender({ ...p });
+    act(() => bridge.props.get("plugins.management.allow").onPress());
+    expect(p.controller.answer).not.toHaveBeenCalled();
+    act(() => bridge.props.get("plugins.management.reject").onPress());
+    expect(p.controller.answer).toHaveBeenCalledWith(false);
+  });
   // Maintainer review 11:45: while an answer to this consent is in flight or written (answerHeld), neither button can be
   // tapped, so one consent request never gets two answers; both come back once it is known the answer was not written.
   it.each([["iOS", PluginManagementConfirmation], ["Android", AndroidManagementConfirmation]] as const)(
-    "%s keeps both answers unavailable while an answer to this consent is held", (_platform, Sheet) => {
+    "%s keeps both answers unavailable while an answer to this consent is held", (platform, Sheet) => {
       const p = sheetProps({ origin: "market" }, installFacts);
       p.state.answerHeld = "request";
       mount(Sheet, p);
-      expect(disabled("plugins.management.allow")).toBe(true);
+      // The main button (on iOS "Review source and permissions" first: maintainer review 19:34).
+      const main = platform === "iOS" ? "plugins.management.review" : "plugins.management.allow";
+      expect(disabled(main)).toBe(true);
       expect(disabled("plugins.management.reject")).toBe(true);
       p.state.answerHeld = null;
       mount(Sheet, p);
-      expect(disabled("plugins.management.allow")).toBe(false);
+      expect(disabled(main)).toBe(false);
       expect(disabled("plugins.management.reject")).toBe(false);
     });
   // Maintainer review 05:55 #3 (contract #12731): an update from a custom market without a source is not allowed
@@ -1539,10 +1559,10 @@ describe("older Host without a repository identity", () => {
       expect(disabled("plugins.management.reject")).toBe(false);
     });
   it.each([["iOS", PluginManagementConfirmation], ["Android", AndroidManagementConfirmation]] as const)(
-    "%s allows a first install whose repository the Host named", (_platform, Sheet) => {
+    "%s allows a first install whose repository the Host named", (platform, Sheet) => {
       const { container } = mount(Sheet, sheetProps({ originSource: { kind: "git", repository: "github.com/acme/plugins" } }, installFacts));
       expect(container.textContent).not.toContain("repositoryMissing");
-      expect(disabled("plugins.management.allow")).toBe(false);
+      expect(disabled(platform === "iOS" ? "plugins.management.review" : "plugins.management.allow")).toBe(false);
     });
   const legacyItem = { pluginId: "custom:Acme/runner", ghostId: "runner", name: "Runner", description: "From Acme",
     scope: "public", sourceType: "git-market", sourceMarketName: "Acme", installState: "not-installed", icon: null,
@@ -1654,7 +1674,8 @@ describe("pinned high-risk permission", () => {
   it.each(cases)("iOS pins a bounded summary of %s beside the buttons; full details stay in the scrolled list", (_name, facts, summary, details) => {
     const { container } = mount(PluginManagementConfirmation, props(facts));
     const pinned = container.querySelector('[data-testid="plugins.management.highRisk"]')!;
-    expect(pinned.parentElement!.querySelector('[data-testid="plugins.management.allow"]')).not.toBeNull();
+    // Beside the main button (on iOS "Review source and permissions" first: maintainer review 19:34).
+    expect(pinned.parentElement!.querySelector('[data-testid="plugins.management.review"]')).not.toBeNull();
     expect(pinned.textContent).toContain("plugins.management.highRiskTitle");
     for (const line of summary) expect(pinned.textContent).toContain(line);
     // A heading plus at most five lines, each capped to two lines.
@@ -1812,7 +1833,7 @@ describe("pinned high-risk permission", () => {
       items().forEach((item: any, index: number) => act(() => item.modifiers.find((m: any) => m.onGeometryChange).onGeometryChange({ width: 300, height: reviewLines[index] })));
       const shown = (id: string) => container.querySelector(`[data-testid="${id}"]`) !== null;
       expect({ allow: shown("plugins.management.allow"), review: shown("plugins.management.review") }).toEqual({ allow: false, review: true });
-      act(() => bridge.props.get("plugins.management.review").onPress());
+      act(() => bridge.props.get("plugins.management.review").onPress()); bridge.clock += 1000;
       expect(sheetProps.controller.answer).not.toHaveBeenCalled();
       const ids = order(container);
       expect(ids.indexOf("plugins.management.reviewLead")).toBeGreaterThanOrEqual(0);
@@ -1869,7 +1890,7 @@ describe("pinned high-risk permission", () => {
     rerender(second);
     expect(toTop(), "the same consent drawn again does not move the list").toBe(before + 1);
   });
-  it.each([["iOS", PluginManagementConfirmation], ["Android", AndroidManagementConfirmation]] as const)(
+  it.each([["Android", AndroidManagementConfirmation]] as const)(
     "%s regular layout: Allow at once, no review step (unchanged)", (_platform, Sheet) => {
       bridge.fontScale = 1;
       const { container } = mount(Sheet, props(allFive));
@@ -1909,10 +1930,10 @@ describe("pinned high-risk permission", () => {
     expect(bridge.props.get("plugins.management.actions").style).toContainEqual({ flexDirection: "column-reverse" });
   });
   /* 测试价值（Android 复拍 2026-11-26，eb018bba36）
-   * - 生产入口与可观察结果：两端真实确认面板组件；观察主按钮是「查看来源和权限」还是「允许」。
+   * - 生产入口与可观察结果：Android 真实确认面板组件；观察主按钮是「查看来源和权限」还是「允许」（iOS 一律先查看，见下文 19:34）。
    * - 依据：「安装目标 + 来源」不滚动就看不全时必须是紧凑档（先查看再允许）。1080×1600、字号 2.0 下估算说放得下，原生
    *   底部面板的高度上限让列表实际只剩一小段，官方来源走了常规档，不滚动就能点「允许」。判定改为看实际列表高度。
-   * - 最小失败输入：估算为常规档（身份块 200、摘要五项各 20），列表实际可视 150（Android）/ 150（iOS）；改前主按钮是
+   * - 最小失败输入：估算为常规档（身份块 200、摘要五项各 20），列表实际可视 150；改前主按钮是
    *   「允许」。对照：可视 300 时仍是常规档。tier: unit。
    */
   it.each([[150, "review"], [300, "allow"]] as const)(
@@ -1934,19 +1955,9 @@ describe("pinned high-risk permission", () => {
       expect({ review: shown("plugins.management.review"), allow: shown("plugins.management.allow") })
         .toEqual({ review: button === "review", allow: button === "allow" });
     });
-  it.each([[150, "review"], [300, "allow"]] as const)(
-    "iOS: the regular list shows %s of a 200-high identity block: the main button is %s", (visible, button) => {
-      bridge.fontScale = 1;
-      const { container } = mount(PluginManagementConfirmation, props(allFive));
-      const shown = (id: string) => container.querySelector(`[data-testid="${id}"]`) !== null;
-      expect({ review: shown("plugins.management.review"), allow: shown("plugins.management.allow") }, "the estimate says regular").toEqual({ review: false, allow: true });
-      // Identity 200, buttons and summary items 20 each (the estimate stays regular); the list shows `visible`.
-      layOutSheet({ identity: 200, visible, content: 1200 });
-      expect({ review: shown("plugins.management.review"), allow: shown("plugins.management.allow") })
-        .toEqual({ review: button === "review", allow: button === "allow" });
-    });
   /* 测试价值（维护者 18:13：布局测量完成前「允许并继续」可写出；调度 2026-11-26：实测到达前的那一帧）
-   * - 生产入口与可观察结果：两端真实确认面板组件；观察按下「允许」是否写出 answer(true)、之后的主按钮、Android 读屏状态。
+   * - 生产入口与可观察结果：Android 真实确认面板组件（iOS 一律先查看，见下文 19:34）；观察按下「允许」是否写出
+   *   answer(true)、之后的主按钮、读屏状态。
    * - 依据：刚挂载时各尺寸都是 0，只测完部分尺寸时估算仍可能是常规档；判定所需的尺寸（身份块、按钮区、风险标题与各项、
    *   列表可视高度）全部属于这次确认且已到齐、按实测确认是常规档之前，「允许」不能写出；按下即转为先查看。换确认时旧尺寸作废。
    * - 最小失败输入：初次挂载按「允许」；只测完按钮区；测完除风险项外的全部；改前都会写出。对照：全部到齐后写出。tier: unit。
@@ -1957,40 +1968,36 @@ describe("pinned high-risk permission", () => {
     "with only the buttons measured": () => layOutSheet({ identity: 0, visible: 0, content: 0 }),
     "with everything but the summary items measured": () => {
       layOutSheet({ identity: 100, visible: 2000, content: 400, other: 0 });
-      const actions = bridge.props.get("plugins.management.actions");
-      if (actions.onLayout) act(() => actions.onLayout({ nativeEvent: { layout: { height: 44 } } }));
-      else act(() => actions.modifiers.find((m: any) => m.onGeometryChange).onGeometryChange({ width: 390, height: 44 }));
+      act(() => bridge.props.get("plugins.management.actions").onLayout({ nativeEvent: { layout: { height: 44 } } }));
       const title = bridge.props.get("plugins.management.highRiskTitle");
-      if (title?.onLayout) act(() => title.onLayout({ nativeEvent: { layout: { height: 20 } } }));
-      else if (title) act(() => title.modifiers.find((m: any) => m.onGeometryChange).onGeometryChange({ width: 390, height: 20 }));
+      if (title) act(() => title.onLayout({ nativeEvent: { layout: { height: 20 } } }));
     },
   };
   for (const [when, lay] of Object.entries(partly)) {
-    it.each([["iOS", PluginManagementConfirmation], ["Android", AndroidManagementConfirmation]] as const)(
-      `%s: Allow pressed ${when} writes nothing; the sheet asks to review first`, (platform, Sheet) => {
+    it.each([["Android", AndroidManagementConfirmation]] as const)(
+      `%s: Allow pressed ${when} writes nothing; the sheet asks to review first`, (_platform, Sheet) => {
         bridge.fontScale = 1;
         const p = props(allFive);
         const { container } = mount(Sheet, p);
         lay();
         const shown = (id: string) => container.querySelector(`[data-testid="${id}"]`) !== null;
         expect(shown("plugins.management.allow"), "nothing is drawn differently before the check").toBe(true);
-        if (platform === "Android")
-          expect(bridge.props.get("plugins.management.allow").accessibilityState, "screen readers hear it unavailable").toMatchObject({ disabled: true });
+        expect(bridge.props.get("plugins.management.allow").accessibilityState, "screen readers hear it unavailable").toMatchObject({ disabled: true });
         expect(pressAllow(p)).toBe(false);
         expect({ review: shown("plugins.management.review"), allow: shown("plugins.management.allow") }).toEqual({ review: true, allow: false });
       });
   }
-  it.each([["iOS", PluginManagementConfirmation], ["Android", AndroidManagementConfirmation]] as const)(
-    "%s: once every size of this consent has arrived and confirms the regular layout, Allow answers", (platform, Sheet) => {
+  it.each([["Android", AndroidManagementConfirmation]] as const)(
+    "%s: once every size of this consent has arrived and confirms the regular layout, Allow answers", (_platform, Sheet) => {
       bridge.fontScale = 1;
       const p = props(allFive);
       mount(Sheet, p);
       layOutSheet({ identity: 100, visible: 2000, content: 400 });
-      if (platform === "Android") expect(bridge.props.get("plugins.management.allow").accessibilityState).toMatchObject({ disabled: false });
+      expect(bridge.props.get("plugins.management.allow").accessibilityState).toMatchObject({ disabled: false });
       expect(pressAllow(p)).toBe(true);
       expect(p.controller.answer).toHaveBeenCalledWith(true);
     });
-  it.each([["iOS", PluginManagementConfirmation], ["Android", AndroidManagementConfirmation]] as const)(
+  it.each([["Android", AndroidManagementConfirmation]] as const)(
     "%s: the next consent does not reuse the previous one's sizes (they fit, its own do not): Allow writes nothing before or after its sizes arrive", (_platform, Sheet) => {
       bridge.fontScale = 1;
       const first = props(allFive);
@@ -2019,6 +2026,7 @@ describe("pinned high-risk permission", () => {
     });
   /* 测试价值（iOS m2b 复拍 2026-11-26，1d1eae1a6d：官方来源转横屏后是常规档，「来自 Cindy 插件市场」被渐隐遮住，仍能直接允许）
    * - 生产入口与可观察结果：两端真实确认面板组件；按一个布局模型报出各视图的尺寸与（iOS）全局位置，观察是否为常规档。
+   *   iOS 现在每格都是先查看（维护者 19:34），这里只保住「iOS 不因任何读数进常规档」；Android 按读数判定。
    * - 依据：不变量「常规档 ⇒ 身份块（每条身份行）的下缘都在列表渐隐起点之上」。横屏时列表内容上方有一段内边距（截图里
    *   标题与插件名之间的空白），内容不从列表顶端开始；只按高度相加判定会算成放得下。
    * - 最小失败输入：iOS 横屏（内边距 52）、字号 1、官方来源一行身份；改前常规档且身份下缘落在渐隐里。正文另有「接近视区」
@@ -2064,19 +2072,18 @@ describe("pinned high-risk permission", () => {
       const fadeTop = (platform === "iOS" ? listTop : 0) + visible - fade;
       if (regular) expect(identityBottom, `regular, so the identity block ends above the fade (inset ${inset}, fade ${fade})`).toBeLessThanOrEqual(fadeTop);
       else expect(container.querySelector('[data-testid="plugins.management.review"]'), "compact: review first").not.toBeNull();
-      // The iOS landscape fallback (reshoot 811ac92adc): always review first, whatever the measured layout says.
-      if (platform === "iOS" && windowName === "landscape") expect(regular, "iOS landscape: compact").toBe(false);
+      // iOS reviews first in every cell, whatever the measured layout says (maintainer review 19:34).
+      if (platform === "iOS") expect(regular, "iOS: review first").toBe(false);
     });
   }
-  /* 测试价值（维护者 03:06：① 列表内容高度到达前可写出「允许」；② iOS 仍会用收缩前的列表下缘放行）
-   * - 生产入口与可观察结果：两端真实确认面板组件；按下「允许」是否写出 answer(true)，以及之后的主按钮。
+  /* 测试价值（维护者 03:06：① 列表内容高度到达前可写出「允许」；② 同一确认的列表缩短后仍按旧高度放行）
+   * - 生产入口与可观察结果：Android 真实确认面板组件（iOS 一律先查看，见下文 19:34）；按下「允许」是否写出 answer(true)，以及之后的主按钮。
    * - 依据：① 内容高度决定列表是否滚动、底缘渐隐是否压住身份块，没到齐不能判；② 同一确认下列表因固定摘要按实测扩高而
    *   缩短时要按缩短后的高度重判；用户滚动正文不能被当成首屏已展示。
-   * - 最小失败输入：① 身份块 220、可视 230、按钮与五项摘要都已回报，只差内容高度；改前写出。② iOS 身份块下缘 320、列表
-   *   下缘 370→330（列表顶 100、内容顶留白 8）；改前沿用 370 写出。对照：内容 450 到达后、或列表缩短后，都改为先查看；
-   *   只滚动正文（内容顶上移）时仍是常规档并作答。tier: unit。
+   * - 最小失败输入：① 身份块 220、可视 230、按钮与五项摘要都已回报，只差内容高度；改前写出。② 列表 270→230；改前沿用
+   *   270 写出。对照：内容 450 到达后、或列表缩短后，都改为先查看。tier: unit。
    */
-  it.each([["iOS", PluginManagementConfirmation], ["Android", AndroidManagementConfirmation]] as const)(
+  it.each([["Android", AndroidManagementConfirmation]] as const)(
     "%s: with every size but the list's content height, Allow writes nothing; once it arrives (450, the fade over the block) it is review first", (_platform, Sheet) => {
       bridge.fontScale = 1;
       const p = props(allFive);
@@ -2090,126 +2097,128 @@ describe("pinned high-risk permission", () => {
       const shown = (id: string) => other.querySelector(`[data-testid="${id}"]`) !== null;
       expect({ review: shown("plugins.management.review"), allow: shown("plugins.management.allow") }).toEqual({ review: true, allow: false });
     });
-  it.each([["iOS", PluginManagementConfirmation], ["Android", AndroidManagementConfirmation]] as const)(
-    "%s: every size in, then the same consent's list shortens (the pinned summary takes its measured height): Allow writes nothing, review first", (platform, Sheet) => {
+  it.each([["Android", AndroidManagementConfirmation]] as const)(
+    "%s: every size in, then the same consent's list shortens (the pinned summary takes its measured height): Allow writes nothing, review first", (_platform, Sheet) => {
       bridge.fontScale = 1;
       const p = props(allFive);
       const { container } = mount(Sheet, p);
-      // Identity block 212 below an 8-point top padding: it ends at 320 on a list from 100 to 370 (iOS frames).
       layOutSheet({ identity: 212, visible: 270, content: 1200 });
       const shown = (id: string) => container.querySelector(`[data-testid="${id}"]`) !== null;
       expect(shown("plugins.management.allow"), "fits: 8 + 212 + 24 ≤ 270").toBe(true);
-      // The list now ends at 330.
-      if (platform === "iOS") act(() => bridge.props.get("plugins.managementConfirmation").nativeContentModifiers.find((m: any) => m.scrollGeometry)
-        .scrollGeometry({ contentOffsetY: 0, containerHeight: 230, contentHeight: 1200 }));
-      else act(() => bridge.props.get("plugins.management.list").onLayout({ nativeEvent: { layout: { height: 230 } } }));
+      // The list shortens to 230.
+      act(() => bridge.props.get("plugins.management.list").onLayout({ nativeEvent: { layout: { height: 230 } } }));
       if (shown("plugins.management.allow")) expect(pressAllow(p), "the shortened list does not show the block above its fade").toBe(false);
       expect({ review: shown("plugins.management.review"), allow: shown("plugins.management.allow") }).toEqual({ review: true, allow: false });
     });
-  /* 测试价值（维护者 17:24：iOS 的底缘渐隐读外层原生 Form 的滚动范围，允许门槛却用内层 VStack 的高度判断要不要为渐隐留空间）
-   * - 生产入口与可观察结果：iOS 真实确认面板组件；按下「允许」是否写出 answer(true)、之后的主按钮。
-   * - 依据：渐隐与允许门槛读同一份原生列表滚动范围（containerHeight / contentHeight）。
-   * - 最小失败输入：视区 230、顶部内边距 20、正文 VStack 220、Form 可滚动内容 240、身份块末端（含 8 留白）223：Form 从 206 起
-   *   渐隐、盖住来源；83719a07d4 按 VStack 220 判无需渐隐而写出。对照：Form 内容不超过视区（230）时作答。tier: unit。
+  /* 测试价值（维护者 19:34：竖屏仍可能在来源未完整显示时作答；iOS 复拍 811ac92adc / b098aa578f / b2df9a9469：横屏直开官方来源，
+   * 来源在渐隐里仍能作答）
+   * - 生产入口与可观察结果：iOS 真实确认面板组件；首次展示时的主按钮，按下主按钮（含同一帧里连按）是否写出 answer(true)，
+   *   查看后列表的先后与「允许」是否作答。
+   * - 依据：iOS 的几何回调是各视图各自的异步事件（全局 frame、iOS 18 起才有的滚动几何），没有能把 frame 和偏移绑到同一次
+   *   原生布局的标记，纠正回报可能在任意时刻之后才到；拿不到一致样本就从首次展示起提供查看。所以 iOS 一律先「查看来源和
+   *   权限」，「允许」只在这次确认被查看过之后作答；布局读数只决定排版，不放行。
+   * - 缺口：d696b656c2 上竖屏按读数判常规档，旧键迟到、位置先于偏移、纠正晚于 150 ms 时按「允许」写出。
+   * - 最小失败输入：可视 270、渐隐 24、身份块 250（真实下缘距列表顶 258，应先查看），读数为 218（旧键迟到 / 位置先于偏移）；
+   *   纠正（258）在按下之后才到；iOS 17（没有滚动几何）；以及横屏直开与转屏（视区 132.5、内容 1894.5、列表顶 52）。
+   *   d696b656c2 上竖屏几格首屏是「允许」并写出。tier: unit。
    */
-  it.each([[240, false], [230, true]] as const)(
-    "iOS: inner content 220 in a 230 viewport, the native list's content %s: Allow answers: %s", (formContent, answers) => {
-      bridge.fontScale = 1;
-      const p = props(allFive);
-      const { container } = mount(PluginManagementConfirmation, p);
-      layOutSheet({ identity: 195, visible: 230, content: formContent, innerContent: 220, listTop: 100, contentTop: 120 });
-      expect(pressAllow(p)).toBe(answers);
-      if (!answers) expect(container.querySelector('[data-testid="plugins.management.review"]'), "review first").not.toBeNull();
-    });
-  /* 测试价值（iOS 复拍 811ac92adc：官方来源直接横屏打开，所有尺寸到齐并停稳后来源仍在渐隐里，按「允许」照样写出；60a054a9a5：
-   * 竖屏打开、转横屏停稳后仍是常规档）
-   * - 生产入口与可观察结果：iOS 真实确认面板组件；横屏下的主按钮与按下主按钮是否写出 answer(true)。
-   * - 依据：实测布局在真机横屏上读得比画出来的松，根因未明（诊断日志跟进）；保底为 iOS 横屏一律先「查看来源和权限」。
-   *   竖屏仍按实测判定（上面的不变量表与竖屏用例）。
-   * - 最小失败输入：667×375，列表顶 52、视区 132.5、内容 1894.5，身份块 40（按实测读数放得下）；b2df9a9469 上是常规档、
-   *   停稳后按「允许」写出。另一档身份块 126.5（实测也放不下），以及竖屏常规档到齐后再转横屏。tier: unit。
-   */
-  it.each([
-    ["opened in landscape", 40], ["opened in landscape", 126.5],
-    ["opened in portrait, turned to landscape", 40], ["opened in portrait, turned to landscape", 126.5],
-  ] as const)("iOS: %s (identity block %s high, settled): review first, the main button writes nothing", (how, identity) => {
+  const geometryOf = (id: string) => bridge.props.get(id).modifiers.find((m: any) => m.onGeometryChange).onGeometryChange;
+  const scrollGeometryOf = () => bridge.props.get("plugins.managementConfirmation").nativeContentModifiers.find((m: any) => m.scrollGeometry)?.scrollGeometry;
+  const reports: Record<string, (rerender: (p: any) => void, p: any) => void> = {
+    "on first mount": () => {},
+    // Every size in, reading that the whole identity block fits (8 + 210 + 24 ≤ 270).
+    "with every size in, reading that it fits": () => layOutSheet({ identity: 210, visible: 270, content: 1200 }),
+    "with a late report from the previous layout key (reading 218 where the truth is 258)": (rerender, p) => {
+      layOutSheet({ identity: 250, visible: 270, content: 1200 });
+      const late = geometryOf("plugins.management.identity");
+      bridge.fontScale = 1.1; rerender({ ...p });
+      layOutSheet({ identity: 250, visible: 270, content: 1200 });
+      act(() => late({ x: 0, y: 68, width: 390, height: 250 }));
+    },
+    "with a scrolled frame before its offset": () => {
+      layOutSheet({ identity: 250, visible: 270, content: 1200 });
+      act(() => geometryOf("plugins.management.identity")({ x: 0, y: 68, width: 390, height: 250 }));
+      act(() => scrollGeometryOf()({ contentOffsetY: 40, containerHeight: 270, contentHeight: 1200 }));
+    },
+    "with the offset before the scrolled frame": () => {
+      layOutSheet({ identity: 250, visible: 270, content: 1200 });
+      act(() => scrollGeometryOf()({ contentOffsetY: 40, containerHeight: 270, contentHeight: 1200 }));
+      act(() => geometryOf("plugins.management.identity")({ x: 0, y: 68, width: 390, height: 250 }));
+    },
+    "on iOS 17 (no scroll geometry reported)": () => layOutSheet({ identity: 210, visible: 270, content: 0, innerContent: 1200 }),
+    "opened in landscape (the official source under the fade)": (rerender, p) => {
+      bridge.width = 667; bridge.height = 375; rerender({ ...p });
+      layOutSheet({ identity: 96, visible: 132.5, content: 1894.5, listTop: 52 });
+    },
+    "opened in portrait, turned to landscape": (rerender, p) => {
+      layOutSheet({ identity: 120, visible: 404.5, content: 1894.5 });
+      const before = sheetViewIds();
+      bridge.width = 667; bridge.height = 375; rerender({ ...p });
+      layOutSheet({ identity: 40, visible: 132.5, content: 1894.5, listTop: 52 }, before);
+    },
+  };
+  for (const build of [props, customProps])
+    for (const [when, report] of Object.entries(reports))
+      it(`iOS (${build === props ? "Cindy market" : "custom market"}) ${when}: the main button is "Review source and permissions", pressing it (twice in one frame too) writes nothing; Allow answers only after it`, () => {
+        bridge.fontScale = 1;
+        const p = build(allFive);
+        const { container, rerender } = mount(PluginManagementConfirmation, p);
+        const shown = (id: string) => container.querySelector(`[data-testid="${id}"]`) !== null;
+        expect({ review: shown("plugins.management.review"), allow: shown("plugins.management.allow") }, "from the first display").toEqual({ review: true, allow: false });
+        report(rerender, p);
+        // The correction arrives after any wait: nothing measured lets Allow answer.
+        expect({ review: shown("plugins.management.review"), allow: shown("plugins.management.allow") }).toEqual({ review: true, allow: false });
+        const press = bridge.props.get("plugins.management.review").onPress;
+        act(() => { press(); press(); });
+        expect(p.controller.answer, "review only shows the source and permissions first").not.toHaveBeenCalled();
+        // The second tap of a quick double tap lands on Allow (the same place) after the redraw: it answers nothing.
+        bridge.clock += 200;
+        act(() => bridge.props.get("plugins.management.allow").onPress());
+        expect(p.controller.answer, "a quick double tap does not answer").not.toHaveBeenCalled();
+        bridge.clock += 400;
+        // Reviewed: the source and the high-risk summary come first, in a new list at its top; then Allow answers.
+        const ids = order(container);
+        expect(ids.indexOf("plugins.management.reviewLead")).toBeGreaterThanOrEqual(0);
+        expect(ids.indexOf("plugins.management.reviewLead")).toBeLessThan(ids.indexOf("plugins.management.highRisk"));
+        act(() => bridge.props.get("plugins.management.allow").onPress());
+        expect(p.controller.answer).toHaveBeenCalledWith(true);
+      });
+  it("iOS: reviewed, then turned to landscape or a larger text size: still reviewed for that consent, the reviewed list drawn anew from its top", () => {
     bridge.fontScale = 1;
-    if (how === "opened in landscape") { bridge.width = 667; bridge.height = 375; }
     const p = props(allFive);
     const { container, rerender } = mount(PluginManagementConfirmation, p);
+    act(() => bridge.props.get("plugins.management.review").onPress()); bridge.clock += 1000;
+    const listId = () => bridge.props.get("plugins.managementConfirmation").nativeContentModifiers.find((m: any) => "id" in m)?.id;
+    const before = listId();
+    bridge.width = 667; bridge.height = 375; bridge.fontScale = 1.6;
+    rerender({ ...p });
     const shown = (id: string) => container.querySelector(`[data-testid="${id}"]`) !== null;
-    let before: ReturnType<typeof sheetViewIds> | undefined;
-    if (how !== "opened in landscape") {
-      layOutSheet({ identity: 120, visible: 404.5, content: 1894.5 });
-      expect(shown("plugins.management.allow"), "portrait: regular").toBe(true);
-      before = sheetViewIds();
-      bridge.width = 667; bridge.height = 375;
-      rerender({ ...p });
-    }
-    layOutSheet({ identity, visible: 132.5, content: 1894.5, listTop: 52 }, before);
-    expect({ review: shown("plugins.management.review"), allow: shown("plugins.management.allow") }).toEqual({ review: true, allow: false });
-    act(() => bridge.props.get("plugins.management.review").onPress());
-    expect(p.controller.answer, "review only shows the source and permissions first").not.toHaveBeenCalled();
+    expect({ review: shown("plugins.management.review"), allow: shown("plugins.management.allow") }).toEqual({ review: false, allow: true });
+    expect(listId(), "a new reviewed list, from its top (the source first)").toBe(`plugins.management.reviewed:${layoutKeyOf("request")}`);
+    expect(listId()).not.toBe(before);
+    act(() => bridge.props.get("plugins.management.allow").onPress());
+    expect(p.controller.answer).toHaveBeenCalledWith(true);
   });
-  /* 测试价值（iOS 复拍 b098aa578f：官方来源直接横屏打开，两次都是常规档；来源下缘 186.5 落在渐隐（起点 160.5）里，点「允许」真的作答）
-   * - 生产入口与可观察结果：iOS 真实确认面板组件；主按钮与按下「允许」是否写出 answer(true)。
-   * - 依据：Form 的行延迟排版，列表内容的顶部留白可能在后一轮排版才加上；判定要用停在顶部时最新的位置，不能冻结首次回报。
-   *   横屏现在一律先查看（上一条），这里用竖屏窗口保住同一条判定：后一轮把内容下移时按最新位置重判。
-   * - 最小失败输入：竖屏，列表顶 52、视区 132.5、内容 1894.5、身份块 96；第一轮内容顶 52（还没有留白），后一轮 82.5
-   *   （身份块下缘 186.5）。b098aa578f 冻结首次回报，判放得下并写出。tier: unit。
-   */
-  it("iOS: the list's content moves down in a later layout pass: the source under the fade is review first and Allow writes nothing", () => {
+  it("iOS: a consent reviewed does not carry over to the next one; the reviewed sheet's late Allow cannot answer it", () => {
     bridge.fontScale = 1;
-    const p = props(allFive);
-    const { container } = mount(PluginManagementConfirmation, p);
-    layOutSheet({ identity: 96, visible: 132.5, content: 1894.5, listTop: 52, contentTop: 52 });
-    layOutSheet({ identity: 96, visible: 132.5, content: 1894.5, listTop: 52, contentTop: 82.5 });
-    if (container.querySelector('[data-testid="plugins.management.allow"]')) expect(pressAllow(p), "the source line is under the fade").toBe(false);
-    expect(container.querySelector('[data-testid="plugins.management.review"]'), "review first").not.toBeNull();
-  });
-  /* 测试价值（调度 2026-11-27：身份块与列表两个 frame 在面板没停稳的一帧里可能来自不同排版轮次，往松的方向偏）
-   * - 生产入口与可观察结果：iOS 真实确认面板组件；按下「允许」是否写出 answer(true)、之后的主按钮。
-   * - 依据：判定所需的布局自最后一次变化起稳定 150 ms 之前，按下只进入查看；稳定后按最新布局判定。
-   * - 最小失败输入：列表顶 100、视区 270、身份块 250；身份块的 frame 还停在上一轮的 y 68（真实是 108），读成下缘距列表顶 218、
-   *   放得下（真实 258，加渐隐 282 > 270），这一帧里按「允许」；811ac92adc 上写出。对照：同样放得下的布局停稳后按下作答。
-   *   tier: unit。
-   */
-  it("iOS: the identity block's frame still from an earlier pass (reading looser than the truth): Allow pressed in that frame writes nothing; settled, the truth is review first", () => {
-    bridge.fontScale = 1;
-    const p = props(allFive);
-    mount(PluginManagementConfirmation, p);
-    layOutSheet({ identity: 250, visible: 270, content: 1200, listTop: 100, contentTop: 60 }, undefined, { settle: false });
-    expect(pressAllow(p), "pressed in the frame where the two frames are from different passes").toBe(false);
+    const first = props(allFive);
+    const { container, rerender } = mount(PluginManagementConfirmation, first);
+    act(() => bridge.props.get("plugins.management.review").onPress()); bridge.clock += 1000;
+    const lateAllow = bridge.props.get("plugins.management.allow").onPress;
     const second = props(allFive);
     second.state.receipt.consent.requestId = "request-2";
-    const { container: other } = mount(PluginManagementConfirmation, second);
-    layOutSheet({ identity: 250, visible: 270, content: 1200, listTop: 100, contentTop: 60 }, undefined, { settle: false });
-    // The identity block's frame of this pass arrives: it ends 258 below the list's top, the fade starts at 246.
-    act(() => bridge.props.get("plugins.management.identity").modifiers.find((m: any) => m.onGeometryChange)
-      .onGeometryChange({ x: 0, y: 108, width: 390, height: 250 }));
-    bridge.clock += 1000;
-    expect(other.querySelector('[data-testid="plugins.management.review"]'), "settled: review first").not.toBeNull();
+    rerender(second);
+    const shown = (id: string) => container.querySelector(`[data-testid="${id}"]`) !== null;
+    expect({ review: shown("plugins.management.review"), allow: shown("plugins.management.allow") }).toEqual({ review: true, allow: false });
+    // The earlier sheet's Allow, pressed after the switch: it was for the first consent.
+    second.controller.getState = () => second.state;
+    act(() => lateAllow());
+    expect(first.controller.answer).not.toHaveBeenCalled();
+    expect(second.controller.answer).not.toHaveBeenCalled();
+    act(() => bridge.props.get("plugins.management.review").onPress()); bridge.clock += 1000;
+    act(() => bridge.props.get("plugins.management.allow").onPress());
+    expect(second.controller.answer).toHaveBeenCalledWith(true);
   });
-  it("iOS: a layout that fits and has settled answers at once (control for the settle wait)", () => {
-    bridge.fontScale = 1;
-    const p = props(allFive);
-    mount(PluginManagementConfirmation, p);
-    layOutSheet({ identity: 200, visible: 270, content: 1200 });
-    expect(pressAllow(p)).toBe(true);
-  });
-  it.each([[212, true], [240, false]] as const)(
-    "iOS: scrolling the list (the identity block moving up) does not change the decision made at rest (identity %s: answers %s)", (identity, answers) => {
-      bridge.fontScale = 1;
-      const p = props(allFive);
-      mount(PluginManagementConfirmation, p);
-      layOutSheet({ identity, visible: 270, content: 1200 });
-      // Scrolled 300 points: the list's offset moves first, then the identity block reports its new, higher frame.
-      act(() => bridge.props.get("plugins.managementConfirmation").nativeContentModifiers.find((m: any) => m.scrollGeometry)
-        .scrollGeometry({ contentOffsetY: 300, containerHeight: 270, contentHeight: 1200 }));
-      act(() => bridge.props.get("plugins.management.identity").modifiers.find((m: any) => m.onGeometryChange)
-        .onGeometryChange({ x: 0, y: 108 - 300, width: 390, height: identity }));
-      expect(pressAllow(p)).toBe(answers);
-    });
   /* 测试价值（维护者 18:20：切到下一次确认时，固定高风险摘要仍停在上一条的滚动位置）
    * - 生产入口与可观察结果：两端真实确认面板组件；Android 观察主列表与固定摘要的滚动区是否重建（新建的滚动区从顶部开始），
    *   iOS 观察两个滚动区的视图标识。

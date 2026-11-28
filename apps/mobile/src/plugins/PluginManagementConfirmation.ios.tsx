@@ -23,14 +23,12 @@ import {
   usePluginConsent,
   type PluginManagementConfirmationProps,
 } from "./usePluginConsent";
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import { useConsentSheetSizes } from "./useConsentSheetSizes";
-import { CONSENT_SETTLE_MS } from "./consentSettle";
-import { logConsentGate, type ConsentGateValues } from "./consentGateDiagnostics";
+import { CONSENT_REVIEW_ALLOW_DELAY_MS, consentReviewClockNow } from "./consentReviewClock";
 import { useWindowDimensions } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { CONSENT_FADE_HEIGHT, CONSENT_SIDE_BY_SIDE_MIN_WIDTH, consentIdentityShown, consentLayoutKey, consentRegularConfirmed, consentSheetMeasured,
-  consentSummaryFadeAllowed, planConsentSheet,
+import { CONSENT_FADE_HEIGHT, CONSENT_SIDE_BY_SIDE_MIN_WIDTH, consentLayoutKey, consentSummaryFadeAllowed, planConsentSheet,
   pluginConsentPresentation } from "./pluginConsentPresentation";
 export function PluginManagementConfirmation(
   props: PluginManagementConfirmationProps,
@@ -50,34 +48,14 @@ export function PluginManagementConfirmation(
   // it takes no room. SwiftUI shows scroll indicators only while scrolling, so the fade is what says there is more.
   // A SwiftUI ScrollView takes all the height it is offered, so the pinned summary gets an explicit height: its
   // measured content height, capped by the plan.
-  // Every size comes from this consent's own sheet at this window size and text size (maintainer review 18:13): another
-  // consent, a rotation or another text size starts from nothing (the measured views get new identities, see
-  // `forRequest`, so every size is reported again), and a late report made before is dropped.
+  // The sizes below only lay the sheet out (which layout, how high the pinned summary is); none of them lets Allow answer
+  // (see `reviewedFor`). They come from this consent's own sheet at this window size and text size: another consent, a
+  // rotation or another text size starts from nothing (the measured views get new identities, see `forRequest`).
   const layoutKey = consentLayoutKey(consent?.requestId, { width: windowWidth, height: windowHeight, fontScale });
   const layout = useConsentSheetSizes(layoutKey);
   const sizes = layout.sizes;
-  // Where the identity block ends below the list's top (iOS reshoot b098aa578f): from the latest global frames of both,
-  // taken only while the list is at rest at its top (its scroll offset as first reported for this key, a single view's
-  // own value). The Form lays its rows out later, so the content's top inset can arrive in a later pass; the latest
-  // at-rest layout counts, and scrolled layouts never do. The list's visible and content heights come from its own
-  // scroll geometry (below), the same the fade reads.
-  const placed = useRef<{ key: string | null; identity?: { y: number; height: number }; listY?: number; rest?: number; offset?: number }>({ key: null });
-  if (placed.current.key !== layoutKey) placed.current = { key: layoutKey };
-  const place = () => {
-    const at = placed.current;
-    if (at.identity === undefined || at.listY === undefined || at.rest === undefined || at.offset === undefined) return;
-    if (Math.abs(at.offset - at.rest) > 0.5) return;
-    layout.report("identityEnd", at.identity.y + at.identity.height - at.listY);
-  };
-  const measure = (key: "identity" | "heading" | "actions") => (frame: { y: number; height: number }) => {
-    if (frame.height <= 0) return;
-    layout.report(key, frame.height);
-    if (key === "identity") { placed.current.identity = { y: frame.y, height: frame.height }; place(); }
-  };
-  const measureList = (frame: { y: number; height: number }) => {
-    if (frame.height <= 0) return;
-    placed.current.listY = frame.y;
-    place();
+  const measure = (key: "identity" | "heading" | "actions") => (frame: { height: number }) => {
+    if (frame.height > 0) layout.report(key, frame.height);
   };
   const measureLine = (index: number) => (size: { height: number }) => {
     if (size.height > 0) layout.reportLine(index, size.height);
@@ -91,17 +69,8 @@ export function PluginManagementConfirmation(
     const next = geometry.contentHeight > geometry.containerHeight + 1 && geometry.contentOffsetY + geometry.containerHeight < geometry.contentHeight - 2;
     setMore((current) => current[key] === next ? current : { ...current, [key]: next });
   };
-  // The native list's own scroll range: the fade over its lower edge reads it, and so does the real-layout check
-  // (maintainer review 17:24: the inner content can be shorter than the viewport while the Form around it still scrolls,
-  // with the fade over the source line). Container and content sizes, not the offset: scrolling never relaxes the check.
-  const listGeometry = useScrollGeometryChange((geometry: { contentOffsetY: number; containerHeight: number; contentHeight: number }) => {
-    watchMore("list")(geometry);
-    if (geometry.containerHeight > 0) layout.report("visible", geometry.containerHeight);
-    if (geometry.contentHeight > 0) layout.report("content", geometry.contentHeight);
-    placed.current.rest ??= geometry.contentOffsetY;
-    placed.current.offset = geometry.contentOffsetY;
-    place();
-  });
+  // The native list's own scroll range, for the fade over its lower edge (display only; iOS 18 and later report it).
+  const listGeometry = useScrollGeometryChange(watchMore("list"));
   const summaryGeometry = useScrollGeometryChange(watchMore("summary"));
   const fade = (testID: string, shown: boolean) => (
     <Rectangle testID={testID} modifiers={[
@@ -116,63 +85,26 @@ export function PluginManagementConfirmation(
     available: available(sizes.actions), identity: sizes.identity, heading: sizes.heading,
     lines: Array.from({ length: lineCount }, (_, index) => sizes.lines[index] ?? 0) /* 0 = not measured yet */, gap: spacing.xs,
   });
-  // Compact (maintainer review 16:35 #2): Allow comes after an explicit "Review source and permissions" step, which shows
-  // the source and this consent's high-risk summary first; the sheet stays compact once reviewed (the reordered list
-  // would measure differently). Regular is unchanged: there the summary is pinned above the buttons.
+  // iOS: review first, always (maintainer review 19:34). Allow answers only after an explicit "Review source and
+  // permissions" step for this consent, which puts the source and this consent's high-risk summary first, at the top of
+  // a new list. On Android the decision reads one layout pass (`onLayout`); here the native callbacks are separate events
+  // (each view's global frame, the list's scroll geometry on iOS 18 and later only), with nothing that ties a frame and an
+  // offset to the same layout pass, and a correction can come at any later time. Without a consistent sample the
+  // measured layout cannot show the source was on screen, so it never lets Allow answer: from the first display, in
+  // every orientation, text size and iOS version, the main button is "Review source and permissions".
+  // Recorded at the press, read at the press (a ref, not the render): a press answers only for the consent reviewed, and
+  // not as the second tap of a quick double tap on the review button (CONSENT_REVIEW_ALLOW_DELAY_MS). Reviewed stays with
+  // the requestId: turning the phone or changing the text size afterwards keeps it reviewed (the reviewed list is drawn
+  // anew for the new size, from its top: the source first); another consent starts again from the review step.
+  const requestId = consent?.requestId ?? null;
+  const reviewedRef = useRef<{ id: string; at: number } | null>(null);
   const [reviewedFor, setReviewedFor] = useState<string | null>(null);
-  const reviewed = !!consent && reviewedFor === consent.requestId;
-  // Checked on the real layout, as on Android (reshoot 2026-11-26): the usable height above is an estimate (header and
-  // footer constants). When the regular list shows less than the whole identity block (where it installs, where it
-  // comes from) without scrolling, this consent goes compact; kept for this consent at this window and text size, so
-  // the compact layout cannot flip it back.
-  const fitKey = layoutKey;
-  const [crampedFor, setCrampedFor] = useState<string | null>(null);
-  const cramped = fitKey !== null && crampedFor === fitKey;
-  // Fallback, iOS in landscape (reshoot 811ac92adc, dispatcher 2026-11-27): opened directly in landscape, the official
-  // source's line was still under the fade with every size in and settled, and Allow answered; the measured layout read
-  // looser than what was drawn, root cause not yet known (see `logConsentGate`). Until it is, landscape is always compact:
-  // review the source and permissions first. Portrait keeps the real-layout check below.
+  const reviewed = requestId !== null && reviewedFor === requestId;
+  // Layout only: reviewed, the list is reordered (source and summary first, the whole summary in it); in landscape the
+  // regular layout would leave the list a short strip under the pinned summary.
   const landscape = windowWidth > windowHeight;
-  const compact = plan.mode === "compact" || reviewed || cramped || landscape;
-  const measuredAll = consentSheetMeasured(sizes, lineCount, true);
-  useEffect(() => {
-    // Where the identity block ends below the list's top, at rest, against the list's visible height (its top inset in
-    // landscape included: reshoots m2b, b098aa578f). Checked again whenever either changes for this key (maintainer
-    // review 03:06).
-    if (fitKey && !compact && measuredAll && !consentIdentityShown(sizes, true)) setCrampedFor(fitKey);
-  }, [fitKey, compact, measuredAll, sizes]);
-  // Allow answers in the regular layout only once this consent's sizes have all arrived and confirm it (maintainer review
-  // 18:13: on first mount, or with only some sizes, the plan can say regular before it knows). Until then Allow looks the
-  // same but does not answer: pressed, the sheet goes compact (review first) instead. Read from the newest reports when
-  // pressed. Not marked unavailable: SwiftUI's disabled state would dim the button for that frame.
-  // And only once that layout has stayed unchanged a moment (CONSENT_SETTLE_MS): for a frame, the identity block's and
-  // the list's frames can come from different layout passes and read looser than the truth (dispatcher 2026-11-27).
-  const confirmedNow = () => layout.settledFor() >= CONSENT_SETTLE_MS
-    && consentRegularConfirmed(layout.latest(), { lineCount, available, gap: spacing.xs, positions: true });
-  const needsReview = compact && !reviewed && info?.allowBlocked !== true;
-  // Development builds only: every value the gate reads, on each tier decision and each Allow press.
-  const gateValues = (event: "tier" | "allow", result?: ConsentGateValues["result"]): ConsentGateValues => {
-    const now = layout.latest(), at = placed.current;
-    const scrolls = now.content > now.visible + 1, fade = scrolls ? CONSENT_FADE_HEIGHT : 0;
-    return {
-      event, result, tier: compact ? "compact" : "regular",
-      why: [plan.mode === "compact" && "plan", reviewed && "reviewed", cramped && "cramped", landscape && "landscape"].filter((reason): reason is string => !!reason),
-      window: { width: windowWidth, height: windowHeight, fontScale }, insets: { top: insets.top, bottom: insets.bottom },
-      visible: now.visible, content: now.content, scrolls, fade, fadeStart: now.visible - fade,
-      offset: at.offset, rest: at.rest,
-      atRest: at.offset !== undefined && at.rest !== undefined && Math.abs(at.offset - at.rest) <= 0.5,
-      listY: at.listY, identity: at.identity, identityEnd: now.identityEnd,
-      identityEndNow: at.identity && at.listY !== undefined ? at.identity.y + at.identity.height - at.listY : undefined,
-      heading: now.heading, actions: now.actions, lines: Array.from({ length: lineCount }, (_, index) => now.lines[index] ?? 0),
-      available: available(now.actions), plan: plan.mode, measuredAll: consentSheetMeasured(now, lineCount, true),
-      identityShown: consentIdentityShown(now, true),
-      regularConfirmed: consentRegularConfirmed(now, { lineCount, available, gap: spacing.xs, positions: true }),
-      settledMs: Math.round(layout.settledFor()),
-    };
-  };
-  useEffect(() => {
-    if (visible && consent) logConsentGate(() => gateValues("tier"));
-  });
+  const compact = plan.mode === "compact" || reviewed || landscape;
+  const needsReview = !reviewed && info?.allowBlocked !== true;
   // The pinned summary's content height, for this layout key only.
   const [summaryContent, setSummaryContent] = useState<{ for: string | null; height: number }>({ for: null, height: 0 });
   const summaryHeight = summaryContent.for === layoutKey ? summaryContent.height : 0;
@@ -196,9 +128,16 @@ export function PluginManagementConfirmation(
       key={String(accept)}
       testID={"plugins.management." + (accept && needsReview ? "review" : accept ? "allow" : "reject")}
       onPress={() => {
-        if (accept && needsReview) { logConsentGate(() => gateValues("allow", "review")); setReviewedFor(consent!.requestId); return; }
-        if (accept && !compact && !confirmedNow()) { logConsentGate(() => gateValues("allow", "cramped")); if (fitKey) setCrampedFor(fitKey); return; }
-        if (accept) logConsentGate(() => gateValues("allow", compact ? "reviewed" : "answered"));
+        // This render's consent: a press from an earlier render answers nothing newer (usePluginConsent checks it too).
+        if (accept && (needsReview || reviewedRef.current?.id !== requestId)) {
+          if (info?.allowBlocked === true || !requestId) return;
+          reviewedRef.current = { id: requestId, at: consentReviewClockNow() };
+          setReviewedFor(requestId);
+          return;
+        }
+        if (accept && consentReviewClockNow() - reviewedRef.current!.at < CONSENT_REVIEW_ALLOW_DELAY_MS) return;
+        // A consent that can only be rejected never answers Allow, even reviewed (the button is disabled too).
+        if (accept && info?.allowBlocked === true) return;
         answer(accept);
       }}
       modifiers={[
@@ -265,8 +204,6 @@ export function PluginManagementConfirmation(
       nativeContent
       // A new identity for the reviewed list, so it opens at its top (the source) rather than where the first list was.
       nativeContentModifiers={[...(listGeometry ? [listGeometry] : []), accessibilityHint(t("plugins.management.scrollHint")),
-        // Where the list starts on screen, for the content's top inset.
-        onGeometryChange(measureList),
         forRequest(reviewed ? "plugins.management.reviewed" : "plugins.management.list")]}
       nativeContentOverlay={fade("plugins.management.listFade", more.list)}
       // Open large when the summary, a source-change notice or an accessibility text size needs the room (at the medium
