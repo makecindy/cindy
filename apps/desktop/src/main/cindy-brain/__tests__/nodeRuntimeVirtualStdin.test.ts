@@ -37,7 +37,7 @@ describe('installVirtualStdin', () => {
     expect((await done).toString('utf8')).toBe('{"jsonrpc":"2.0"}\n第二行\n');
   });
 
-  it('stdin 被钉成不可配置 EOF 流时原地复活(Electron win32 形状)', async () => {
+  it('revives Win32 Electron stdin and preserves UTF-8 across chunks', async () => {
     // 复刻 Electron common/init 的 win32 行为:EOF Readable + 不可配置 getter。
     const stub = new Readable();
     stub.push(null);
@@ -55,11 +55,17 @@ describe('installVirtualStdin', () => {
     // 属性无法重定义,插件读到的必须仍是同一个对象。
     expect(proc.stdin as unknown).toBe(stub);
 
+    const frame = JSON.stringify({ jsonrpc: '2.0', params: { text: '中文：😀' } }) + '\n';
+    const bytes = Buffer.from(frame, 'utf8');
+    const emojiStart = bytes.indexOf(Buffer.from('😀', 'utf8'));
     const done = collectUntilEnd(stub);
-    sink.feed('hello ');
-    sink.feed(Buffer.from('world'));
+    sink.feed(frame.slice(0, frame.indexOf('😀')));
+    // A Buffer boundary can fall inside a code point. Decoding chunks
+    // separately would replace the split emoji before the plugin reads it.
+    sink.feed(bytes.subarray(emojiStart, emojiStart + 1));
+    sink.feed(bytes.subarray(emojiStart + 1));
     sink.end();
-    expect((await done).toString('utf8')).toBe('hello world');
+    expect(await done).toEqual(bytes);
   });
 
   it('stdin 不可重定义且形状不符时抛错,不让插件读到静默 EOF', () => {
