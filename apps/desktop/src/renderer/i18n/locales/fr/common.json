@@ -13286,6 +13286,8 @@
       "targetOutdatedItem": "Déplacer vers « {{device}} » · ancienne Cindy",
       "targetOutdatedMeta": "Ancienne Cindy",
       "olderTargetNote": "« {{device}} » utilise une ancienne version de Cindy : {{name}} y fonctionnera comme avant. L'historique de conversation reste synchronisé, mais les règles et automatisations du projet ne s'y appliquent pas.",
+      "localRestorePending": "La reprise sur cet ordinateur est en attente",
+      "oversizedMemoryHint": "Une mémoire est trop volumineuse. Raccourcissez l’original et réessayez, ou continuez ici en conservant la copie dans le cloud.",
       "shadowTitle": "Cet ami s'exécute désormais sur « {{device}} »",
       "shadowHint": "La conversation ici est en lecture seule.",
       "openOnHome": "Ouvrir sur « {{device}} »",

@@ -203,7 +203,8 @@ export async function readCompanionRestoreValue(api: CompanionApi, store: Compan
  * Everything a restore or merge needs: the preference rows, plus from the store only the keys
  * the preferences could not hold (absent there, or too large for them).
  */
-export async function readCompanionRows(api: CompanionApi, store: CompanionStore | undefined, actorId: string): Promise<CompanionRow[]> {
+export async function readCompanionRows(api: CompanionApi, store: CompanionStore | undefined, actorId: string,
+  observed?: Map<string, { preference: number; store: number }>): Promise<CompanionRow[]> {
   // A restore is complete or fails: never let a switch-off pause decide what it reads.
   store?.retryNow();
   if (!store?.active()) return readPreferences(api, actorId);
@@ -220,6 +221,9 @@ export async function readCompanionRows(api: CompanionApi, store: CompanionStore
   // A large store value wins over its preference row unless that row is newer than the value
   // (a deletion or small value written while the store was off).
   const prefRevisions = new Map(rows.map(row => [row.key, row.revision]));
+  if (observed) {
+    for (const row of stored) observed.set(row.key, { preference: prefRevisions.get(row.key) ?? 0, store: row.revision });
+  }
   const extra = stored.filter(row => storeRowWins(row, prefRevisions.get(row.key)))
     .map(row => ({ ...row, fromStore: true as const }));
   const replaced = new Set(extra.map(row => row.key));

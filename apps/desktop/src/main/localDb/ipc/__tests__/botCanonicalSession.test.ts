@@ -2601,6 +2601,26 @@ describe('Bot canonical Session lifecycle', () => {
     });
   });
 
+  // #13755, db: an explicitly saved Pi connection can disappear while a new
+  // connection serves the same model. Exercise canonical creation and its real admission.
+  it('reports a removed explicit provider during local companion recovery', async () => {
+    const model = 'same-model';
+    await invoke('local-db:bots:create', { id: 'removed-route', name: 'Mia',
+      capabilities: { harness: 'pi', model, providerId: 'old-provider' } });
+    const resolve = createSessionExecutionResolver({
+      captureOwner: () => () => {}, readCaller: vi.fn(), readDefault: () => undefined,
+      availableAgents: () => ['pi'], availableModels: () => [{ id: model }],
+      readProviderRouting: async () => ({
+        availability: { pi: [{ id: 'new-provider', name: 'New', models: [model] }], codex: [], 'claude-code': [] },
+        resolveDefaultProviderIdForModel: () => 'new-provider',
+      }), hasCindyAiApiKey: () => false,
+    });
+    setSessionOpeningModelAdmission(async (body, source) => ({ ...body, providerId: (await resolve(body, source)).providerId }));
+    const { ensureBotCanonicalSession } = await import('../../../maker-ipc/botCanonicalSessionEnsure');
+    await expect(ensureBotCanonicalSession('removed-route', { allowMissingModel: true }))
+      .rejects.toMatchObject({ code: 'PROVIDER_ROUTE_UNAVAILABLE' });
+  });
+
   it.each([
     { providerId: 'hermes', saved: '', efforts: [], modelDefault: null, expected: '' },
     { providerId: 'hermes', saved: '', efforts: ['low', 'medium'], modelDefault: 'medium', expected: 'medium' },

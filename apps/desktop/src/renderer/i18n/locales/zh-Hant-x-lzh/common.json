@@ -13127,6 +13127,8 @@
       "targetOutdatedItem": "移至「{{device}}」· 舊版 Cindy",
       "targetOutdatedMeta": "舊版 Cindy",
       "olderTargetNote": "「{{device}}」之 Cindy 為舊版，{{name}} 於彼依舊法而行：言談記錄照常同步，案之規約與自運於彼不行。",
+      "localRestorePending": "本機接管未畢",
+      "oversizedMemoryHint": "記憶過長，未能復原。可刪節原文再試，或於本機繼續，雲端原件仍存。",
       "shadowTitle": "此同伴已於「{{device}}」行事",
       "shadowHint": "此處言談僅可觀覽。",
       "openOnHome": "啟「{{device}}」上之同伴",

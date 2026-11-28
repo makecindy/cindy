@@ -31,6 +31,7 @@ export interface CompanionCloudActor {
   /** This computer could not restore the source. No user content; absent on older hosts. */
   profileFailure?: BotProfileSourceFailure;
   needsModelSetup?: boolean;
+  hasOversizedMemory?: boolean;
 }
 
 export interface CompanionCloudSnapshot {
@@ -64,7 +65,7 @@ export type CompanionCloudFailureCode =
   /** The chosen computer still rejects imported skills above its 64 KiB body limit. */
   | 'SKILL_TARGET_OUTDATED'
   /** Cloud has no uploaded profile snapshot yet; another computer requires confirmation before starting fresh. */
-  | 'PROFILE_SNAPSHOT_MISSING';
+  | 'PROFILE_SNAPSHOT_MISSING' | 'SESSION_MODEL_UNAVAILABLE';
 
 export type CompanionCloudActionResult =
   | { ok: true }

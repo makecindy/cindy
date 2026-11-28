@@ -37,6 +37,7 @@ import {
 } from './companionCloudStore';
 
 const SWITCH_ERROR_KEYS: Record<CompanionCloudFailureCode, string> = {
+  SESSION_MODEL_UNAVAILABLE: 'bots.cloud.modelSetupHint',
   HOME_CONFLICT: 'bots.cloud.switchConflict',
   LOCAL_CINDY_CONFLICT: 'bots.cloud.localCindyConflict',
   OFFLINE: 'bots.cloud.switchOffline',

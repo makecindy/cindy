@@ -13177,6 +13177,8 @@
       "targetOutdatedItem": "Move to “{{device}}” · older Cindy",
       "targetOutdatedMeta": "Older Cindy",
       "olderTargetNote": "“{{device}}” runs an older Cindy, so {{name}} works the older way there: the chat history still syncs, but project rules and automations don’t apply there.",
+      "localRestorePending": "Takeover on this computer is pending",
+      "oversizedMemoryHint": "A memory is too large to restore. Shorten the original and retry, or continue here with its cloud copy preserved.",
       "shadowTitle": "This buddy now runs on “{{device}}”",
       "shadowHint": "The conversation here is read only.",
       "openOnHome": "Open on “{{device}}”",

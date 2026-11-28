@@ -31,6 +31,7 @@ import {
   type BotMemoryType,
   type BotMemoryUpdateInput,
 } from '../../shared/botMemory.js';
+import { createIpcError } from '../../shared/ipc-errors.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
 import matter from 'gray-matter';
 
@@ -125,6 +126,9 @@ const byNewest = (a: BotMemorySummary, b: BotMemorySummary) =>
 
 function translateStoreError(error: unknown): never {
   if (error instanceof MemoryError) {
+    if (error.code === 'shard-too-large') {
+      throw Object.assign(createIpcError('INVALID_PARAMS', error.message), { reason: 'MEMORY_SHARD_TOO_LARGE' });
+    }
     if (error.code === 'version-conflict') throwIpcError('PRECONDITION_FAILED', BOT_MEMORY_CHANGED);
     if (error.code === 'not-found') throwIpcError('NOT_FOUND', 'Memory not found');
     if (error.code === 'not-ready')

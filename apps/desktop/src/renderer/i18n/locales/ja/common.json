@@ -13127,6 +13127,8 @@
       "targetOutdatedItem": "「{{device}}」に移す · 旧バージョンの Cindy",
       "targetOutdatedMeta": "旧バージョンの Cindy",
       "olderTargetNote": "「{{device}}」の Cindy は旧バージョンのため、{{name}} はそこで従来どおりに動きます。チャット履歴は同期されますが、プロジェクトのルールと自動化はそこでは適用されません。",
+      "localRestorePending": "このコンピューターでの引き継ぎは完了していません",
+      "oversizedMemoryHint": "大きすぎて復元できないメモリがあります。元の内容を短くして再試行するか、クラウドの原本を残してこのまま続けてください。",
       "shadowTitle": "この仲間は「{{device}}」で動作しています",
       "shadowHint": "ここの会話は閲覧のみできます。",
       "openOnHome": "「{{device}}」で開く",

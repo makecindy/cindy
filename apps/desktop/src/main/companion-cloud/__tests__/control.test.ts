@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { COMPANION_CLOUD_VERSION } from '@cindy/device-link';
 import { createIpcError, missingBotModelError } from '../../../shared/ipc-errors.js';
@@ -424,6 +425,50 @@ describe('take over', () => {
       prefRevision = 2;
       expect(await t.runtime.takeOver('bot_mia')).toEqual({ ok: true });
       expect(t.local.host.createProfile).toHaveBeenCalledWith(expect.objectContaining({ identitySource: 'ok' }), expect.anything());
+    } finally { runtime?.dispose(); vi.useRealTimers(); }
+  });
+
+  // #13755, unit: unchanged rejected content must not replay a takeover. A corrected
+  // revision should restore normally without a manual action.
+  it.each([false, true])('waits for a changed memory after a size rejection (blob: %s)', async blob => {
+    vi.useFakeTimers();
+    try {
+      const key = 'companion.memory.v1:project_large.md';
+      const row = { key, revision: 1, value: { content: 'oversized' } };
+      const bytes = Buffer.from(JSON.stringify({ companionStore: 1, prefRevision: 1, value: { content: 'x'.repeat(70000) } }));
+      const stored = { key, revision: 1, blob: true, hash: createHash('sha256').update(bytes).digest('hex'), size: bytes.length };
+      const getBlob = vi.fn(async () => bytes);
+      const t = setup({ home: 'desk', store: { enabled: () => blob, transfer: { getBlob, putBlob: vi.fn() } }, handler: (route, method) => {
+        if (route.startsWith('/companion-store/changes')) return { entries: [stored], hasMore: false, cursor: '1' };
+        if (route.startsWith('/companion-store/entry?')) return stored;
+        if (route.startsWith('/companion-store/blob?')) return { url: 'https://mock.invalid/memory', ...stored };
+        if (route === '/preferences' && method === 'GET') return [{ key: 'companion.profile.v1', value: MIA, revision: 1 }, row];
+        if (route === '/conversations') return { id: ROOM };
+        if (route.includes('/messages?')) return [];
+        return {};
+      } });
+      vi.mocked(t.local.host.restoreMemory).mockRejectedValueOnce(Object.assign(createIpcError('INVALID_PARAMS', 'size limit'), { reason: 'MEMORY_SHARD_TOO_LARGE' }));
+      const reconcile = async () => {
+        await t.runtime.reconcile([]);
+        await vi.advanceTimersByTimeAsync(0);
+      };
+      await reconcile();
+      expect(t.runtime.hasOversizedMemory('bot_mia')).toBe(true);
+      expect(t.state.bot('bot_mia')?.restoreBlockedKeys).toEqual([key]);
+      const claims = () => t.calls.filter(call => call.method === 'PATCH');
+      const initialClaims = claims().length;
+      await vi.advanceTimersByTimeAsync(65_000);
+      await reconcile();
+      expect(claims()).toHaveLength(initialClaims);
+      expect(getBlob).toHaveBeenCalledTimes(blob ? 1 : 0);
+      expect(t.local.host.restoreMemory).toHaveBeenCalledTimes(1);
+      row.revision++;
+      row.value = { content: 'shortened' };
+      await vi.advanceTimersByTimeAsync(65_000);
+      await reconcile();
+      expect(t.state.isDemoted('bot_mia')).toBe(false);
+      expect(t.local.memories.get('project_large.md')).toBe('shortened');
+      expect(t.state.bot('bot_mia')?.restoreBlockedKeys).toBeUndefined();
     } finally { runtime?.dispose(); vi.useRealTimers(); }
   });
 
