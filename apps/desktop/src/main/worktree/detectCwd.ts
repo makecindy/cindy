@@ -42,7 +42,7 @@ async function detectCwdOnce(cwd: string, opts?: DetectCwdOptions): Promise<Dete
     // Keep timeout/pool exhaustion unknown; falling back to a symlink spelling
     // could recreate the false linked-worktree result we are trying to avoid.
     if (err?.code === 'WORKDIR_PROBE_TIMEOUT' || err?.code === 'WORKDIR_PROBE_UNAVAILABLE') throw err;
-    if (err?.code === 'ENOENT') return null;
+    if (err?.code === 'ENOENT' || err?.code === 'ENOTDIR') return null;
     return cwd;
   });
   if (physicalCwd !== null) {
@@ -94,7 +94,7 @@ async function detectCwdOnce(cwd: string, opts?: DetectCwdOptions): Promise<Dete
     return out;
   }
 
-  // A missing directory can only answer the cwd-independent installation check.
+  // A missing or non-directory path can only answer the cwd-independent installation check.
   if (physicalCwd === null) return out;
 
   // 2. rev-parse --show-toplevel: 拿 repo 根

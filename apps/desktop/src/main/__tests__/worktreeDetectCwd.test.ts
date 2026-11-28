@@ -203,10 +203,15 @@ describe('detectCwd → isInsideWorktree (I-1 fix)', () => {
     }
   });
 
-  // #13175, unit tier: realpath ENOENT used to launch Git in the missing cwd
+  // #13175, unit tier: realpath ENOENT/ENOTDIR used to launch Git in the invalid cwd
   // despite returning the correct status. Only the installation check can succeed.
-  it.each([true, false])('preserves missing-directory results when gitInstalled=%s', async (gitInstalled) => {
-    realpathMock.mockRejectedValueOnce(Object.assign(new Error('missing directory'), { code: 'ENOENT' }));
+  it.each([
+    { code: 'ENOENT', gitInstalled: true },
+    { code: 'ENOENT', gitInstalled: false },
+    { code: 'ENOTDIR', gitInstalled: true },
+    { code: 'ENOTDIR', gitInstalled: false },
+  ])('preserves invalid-directory results on $code when gitInstalled=$gitInstalled', async ({ code, gitInstalled }) => {
+    realpathMock.mockRejectedValueOnce(Object.assign(new Error(`invalid directory (${code})`), { code }));
     gitExecMock.mockImplementation(async (args: readonly string[]) => {
       if (gitInstalled && args[0] === '--version') return { stdout: 'git version 2.45.0\n', stderr: '' };
       throw new GitExecError({ args, exitCode: null, stderr: '', stdout: '',
