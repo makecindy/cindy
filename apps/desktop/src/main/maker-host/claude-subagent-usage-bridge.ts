@@ -7,6 +7,7 @@
  */
 
 import type { RequestTransform, ResponseObserver } from '@cindy/anthropic-compat-proxy';
+import type { ClaudeSubagentTaskRegistration, ClaudeSubagentTaskUsage } from '@cindy/maker-core';
 import { Buffer } from 'node:buffer';
 
 import {
@@ -18,18 +19,12 @@ import {
 
 const MAX_TRACKED_TASKS = 200;
 const MAX_PENDING_REQUESTS = 1_000;
+// Reclaim orphaned receipts if an interrupted session never reaches settlement.
+const ORPHAN_RETENTION_MS = 24 * 60 * 60 * 1_000;
+const MAX_SEGMENTS_PER_TASK = 1_000;
 const MAX_RESPONSE_BYTES = 2 * 1024 * 1024;
 
-export interface ClaudeSubagentTaskRegistration {
-  taskId: string;
-  parentToolUseId: string;
-  prompt: string;
-  model?: string;
-}
-
-export interface ClaudeSubagentTaskUsage {
-  totalTokens: number;
-}
+export type { ClaudeSubagentTaskRegistration, ClaudeSubagentTaskUsage } from '@cindy/maker-core';
 
 interface TrackedTask extends ClaudeSubagentTaskRegistration {
   normalizedPrompt: string;
@@ -78,19 +73,97 @@ function requestUserTexts(body: Record<string, unknown>): string[] {
   return texts;
 }
 
+const COUNT_FIELDS = ['input_tokens', 'output_tokens', 'cache_read_input_tokens', 'cache_creation_input_tokens'] as const;
+type BillingUsage = Partial<Record<typeof COUNT_FIELDS[number], number>> & {
+  cacheCreate1hTokens?: number;
+  speed?: unknown;
+  tier?: unknown;
+};
+
+function validCount(value: unknown): value is number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
+}
+
+/** Provider usage frames are cumulative snapshots. An omitted field carries no new evidence. */
+function mergeBillingUsage(total: BillingUsage, usage: Record<string, unknown>): boolean {
+  for (const key of COUNT_FIELDS) {
+    const count = usage[key];
+    if (count === undefined) continue;
+    if (!validCount(count)) return false;
+    total[key] = Math.max(total[key] ?? 0, count);
+  }
+  if (usage.cache_creation != null) {
+    if (!isPlainObject(usage.cache_creation)) return false;
+    const count = usage.cache_creation.ephemeral_1h_input_tokens;
+    if (count !== undefined) {
+      if (!validCount(count)) return false;
+      total.cacheCreate1hTokens = Math.max(total.cacheCreate1hTokens ?? 0, count);
+    }
+  }
+  total.speed = usage.speed ?? total.speed;
+  total.tier = usage.service_tier ?? total.tier;
+  return true;
+}
+
+type BillingReceipt = NonNullable<ClaudeSubagentTaskUsage['billing']>['segments'][number];
+interface BillingReservation {
+  segments: BillingReceipt[];
+  requestedFast: boolean;
+  reservedAt: number;
+  parentToolUseId?: string;
+}
+
+function recordBillingSegment(
+  reservation: BillingReservation,
+  message: Record<string, unknown> | null,
+  usage: BillingUsage,
+): void {
+  const { segments, reservedAt, parentToolUseId, requestedFast } = reservation;
+  if (!message || typeof message.id !== 'string' || !message.id ||
+      typeof message.model !== 'string' || !message.model.trim() ||
+      usage.input_tokens === undefined || usage.output_tokens === undefined) return;
+  const speed = usage.speed ?? (requestedFast ? 'fast' : 'standard');
+  const tier = usage.tier;
+  if (speed !== 'standard' && speed !== 'fast') return;
+  if (tier != null && tier !== 'standard' && tier !== 'priority' && tier !== 'batch' && tier !== 'default') return;
+  const cacheCreate = usage.cache_creation_input_tokens ?? 0;
+  const cache1h = usage.cacheCreate1hTokens ?? 0;
+  if (cache1h > cacheCreate) return;
+  const id = message.id;
+  // Deduplicate after invocation matching: a stale receipt may share both the
+  // provider ID and the last observed parent with a newly reserved request.
+  if (segments.length >= MAX_SEGMENTS_PER_TASK) return;
+  segments.push({
+    reservedAt, parentToolUseId, id, model: message.model, modelConfirmed: true,
+    complete: usage.cache_read_input_tokens !== undefined && usage.cache_creation_input_tokens !== undefined,
+    priceVariant: speed === 'fast' || tier === 'priority' ? 'priority' : tier === 'batch' ? 'batch' : 'standard',
+    inputTokens: usage.input_tokens, outputTokens: usage.output_tokens,
+    cacheReadTokens: usage.cache_read_input_tokens ?? 0, cacheCreateTokens: cacheCreate,
+    cacheCreate1hTokens: cache1h,
+  });
+}
+
 /** In-memory bridge shared by the Claude agent host and loopback proxy observer. */
 export class ClaudeSubagentUsageBridge {
   private readonly tasks = new Map<string, TrackedTask>();
-  private readonly taskIdByRequestId = new Map<number, string>();
+  private readonly reservations = new Map<number, {
+    taskId: string;
+    billing?: BillingReservation;
+  }>();
   private readonly activeResponseCountByTaskId = new Map<string, number>();
+  // A background request can complete before the SDK sends its async launch receipt.
+  private readonly segmentsByOwner = new Map<string, {
+    taskId: string;
+    registered: boolean;
+    lastRequestAt: number;
+    segments: BillingReceipt[];
+  }>();
   private nextRegistrationOrder = 0;
 
   /** Enforces the task cap without evicting entries still referenced by in-flight responses. */
   private trimTasks(): void {
-    const reservedTaskIds = new Set([
-      ...this.taskIdByRequestId.values(),
-      ...this.activeResponseCountByTaskId.keys(),
-    ]);
+    const reservedTaskIds = new Set(this.activeResponseCountByTaskId.keys());
+    for (const { taskId } of this.reservations.values()) reservedTaskIds.add(taskId);
     while (this.tasks.size > MAX_TRACKED_TASKS) {
       let oldestEvictableTaskId: string | undefined;
       for (const taskId of this.tasks.keys()) {
@@ -106,6 +179,9 @@ export class ClaudeSubagentUsageBridge {
   registerTask(task: ClaudeSubagentTaskRegistration): void {
     const normalizedPrompt = normalizePrompt(task.prompt);
     if (!task.taskId || !task.parentToolUseId || !normalizedPrompt) return;
+    for (const entry of this.segmentsByOwner.values()) {
+      if (entry.taskId === task.taskId) entry.registered = true;
+    }
     this.tasks.set(task.taskId, {
       ...task,
       normalizedPrompt,
@@ -117,7 +193,7 @@ export class ClaudeSubagentUsageBridge {
     this.trimTasks();
   }
 
-  private selectTask(body: Record<string, unknown>): TrackedTask | null {
+  private selectTask(body: Record<string, unknown>) {
     const model = typeof body.model === 'string' ? body.model : undefined;
     const userTexts = requestUserTexts(body);
     if (userTexts.length === 0) return null;
@@ -136,31 +212,65 @@ export class ClaudeSubagentUsageBridge {
       }
       return left.registrationOrder - right.registrationOrder;
     });
-    const selected = candidates[0];
-    if (!selected) return null;
-    return selected;
+    return candidates[0] ?? null;
   }
 
   /** Reserves a task while the proxy is handling the request, before responses can reorder. */
-  reserveRequest(reqId: number, body: Record<string, unknown>): string | null {
-    const reservedTaskId = this.taskIdByRequestId.get(reqId);
-    if (reservedTaskId) return reservedTaskId;
+  reserveRequest(reqId: number, body: Record<string, unknown>, sdkSessionId?: string, agentId?: string): string | null {
+    const reserved = this.reservations.get(reqId);
+    if (reserved) return reserved.taskId;
     // Never evict an in-flight reservation to make room: doing so would also
     // remove its task from trimTasks() protection before the response is recorded.
-    if (this.taskIdByRequestId.size >= MAX_PENDING_REQUESTS) return null;
+    if (this.reservations.size >= MAX_PENDING_REQUESTS) return null;
 
-    const selected = this.selectTask(body);
-    if (!selected) return null;
-    selected.matchedRequests += 1;
-    this.taskIdByRequestId.set(reqId, selected.taskId);
-    return selected.taskId;
+    const selected = agentId ? this.tasks.get(agentId) : this.selectTask(body);
+    const taskId = selected?.taskId ?? (sdkSessionId ? agentId : undefined);
+    if (!taskId) return null;
+    if (selected) selected.matchedRequests += 1;
+    let segments: BillingReceipt[] | undefined;
+    if (sdkSessionId && agentId) {
+      const owner = JSON.stringify([sdkSessionId, agentId]);
+      const current = this.segmentsByOwner.get(owner);
+      if (current) current.lastRequestAt = Date.now();
+      segments = current?.segments;
+      if (!segments) {
+        if (this.segmentsByOwner.size >= MAX_TRACKED_TASKS) {
+          // Only reclaim abandoned, unregistered owners. An observer may still be writing
+          // through its reservation, or the launched task may be awaiting settlement.
+          const protectedTasks = new Set(this.activeResponseCountByTaskId.keys());
+          for (const reservation of this.reservations.values()) protectedTasks.add(reservation.taskId);
+          for (const [key, entry] of this.segmentsByOwner) {
+            const expired = Date.now() - entry.lastRequestAt > ORPHAN_RETENTION_MS;
+            if ((!entry.registered || expired) && !protectedTasks.has(entry.taskId)) {
+              this.segmentsByOwner.delete(key);
+              break;
+            }
+          }
+        }
+        if (this.segmentsByOwner.size < MAX_TRACKED_TASKS) {
+          segments = [];
+          this.segmentsByOwner.set(owner, { taskId, segments, registered: Boolean(selected), lastRequestAt: Date.now() });
+        }
+      }
+    }
+    this.reservations.set(reqId, {
+      taskId,
+      billing: segments && (body.speed == null || body.speed === 'standard' || body.speed === 'fast')
+        ? { segments, requestedFast: body.speed === 'fast', reservedAt: performance.now(), parentToolUseId: selected?.parentToolUseId }
+        : undefined,
+    });
+    return taskId;
+  }
+
+  billingForRequest(reqId: number) {
+    return this.reservations.get(reqId)?.billing;
   }
 
   /** Transfers request protection to a compact per-task counter once the response starts. */
   activateReservedTask(reqId: number): string | null {
-    const taskId = this.taskIdByRequestId.get(reqId);
+    const taskId = this.reservations.get(reqId)?.taskId;
     if (!taskId) return null;
-    this.taskIdByRequestId.delete(reqId);
+    this.reservations.delete(reqId);
     this.activeResponseCountByTaskId.set(
       taskId,
       (this.activeResponseCountByTaskId.get(taskId) ?? 0) + 1,
@@ -170,7 +280,7 @@ export class ClaudeSubagentUsageBridge {
 
   /** Ends the in-flight protection after the response is fully handled. */
   releaseReservedTask(reqId: number): void {
-    this.taskIdByRequestId.delete(reqId);
+    this.reservations.delete(reqId);
   }
 
   /** Ends task protection after an active response has committed or been abandoned. */
@@ -191,16 +301,23 @@ export class ClaudeSubagentUsageBridge {
     task.cumulativeOutputTokens += numberField(usage, 'output_tokens');
   }
 
-  getTaskUsage(taskId: string): ClaudeSubagentTaskUsage | undefined {
+  getTaskUsage(taskId: string, sdkSessionId?: string): ClaudeSubagentTaskUsage | undefined {
     const task = this.tasks.get(taskId);
-    if (!task) return undefined;
-    const totalTokens = task.latestInputTokens + task.cumulativeOutputTokens;
+    const totalTokens = task ? task.latestInputTokens + task.cumulativeOutputTokens : 0;
+    if (sdkSessionId) {
+      // Only billing settlement supplies the SDK session. Notifications read the card total.
+      const owner = JSON.stringify([sdkSessionId, taskId]);
+      const segments = this.segmentsByOwner.get(owner)?.segments;
+      this.segmentsByOwner.delete(owner);
+      if (segments?.length) return { totalTokens, billing: { sdkSessionId, segments: segments.slice() } };
+    }
     return totalTokens > 0 ? { totalTokens } : undefined;
   }
 
   clear(): void {
+    this.segmentsByOwner.clear();
     this.tasks.clear();
-    this.taskIdByRequestId.clear();
+    this.reservations.clear();
     this.activeResponseCountByTaskId.clear();
   }
 }
@@ -218,7 +335,11 @@ export function createClaudeSubagentUsageRequestTransform(
 ): RequestTransform {
   return (body, ctx) => {
     if (ctx.method !== 'POST' || !isMessagesPath(ctx.url)) return null;
-    if (isPlainObject(body)) bridge.reserveRequest(ctx.reqId, body);
+    if (isPlainObject(body)) {
+      bridge.reserveRequest(ctx.reqId, body,
+        headerValue(ctx.headers, 'x-claude-code-session-id'),
+        headerValue(ctx.headers, 'x-claude-code-agent-id'));
+    }
     return null;
   };
 }
@@ -238,19 +359,26 @@ export function createClaudeSubagentUsageResponseObserver(
       bridge.releaseReservedTask(ctx.reqId);
       return null;
     }
+    const billing = bridge.billingForRequest(ctx.reqId);
     const taskId = bridge.activateReservedTask(ctx.reqId);
     if (!taskId) return null;
 
     let done = false;
-    let usageCommitted = false;
+    let cardUsageCommitted = false;
     let totalBytes = 0;
     let buffer = '';
     let latestInputUsage: Record<string, unknown> | null = null;
     let latestOutputUsage: Record<string, unknown> | null = null;
 
-    const commitUsage = (): void => {
-      if (usageCommitted) return;
-      usageCommitted = true;
+    let message: Record<string, unknown> | null = null;
+    let billingUsage: BillingUsage = {};
+    let sawInputStart = false;
+    let sawOutputUpdate = false;
+    let responseError = false;
+    let cycleStopped = false;
+    const commitCardUsage = (): void => {
+      if (cardUsageCommitted) return;
+      cardUsageCommitted = true;
       const usage = {
         input_tokens: latestInputUsage ? numberField(latestInputUsage, 'input_tokens') : 0,
         cache_read_input_tokens: latestInputUsage
@@ -270,23 +398,44 @@ export function createClaudeSubagentUsageResponseObserver(
       bridge.releaseActiveTask(taskId);
     };
 
+    const markInvalidData = (): void => { responseError = true; };
     const processFrame = (frame: string): void => {
-      const data = readSseFrameData(frame);
+      const data = readSseFrameData(frame, markInvalidData);
       if (!data) return;
-      const message = isPlainObject(data.message) ? data.message : null;
-      const usage = message && isPlainObject(message.usage)
-        ? message.usage
+      if (data.type === 'error') responseError = true;
+      const start = isPlainObject(data.message) ? data.message : null;
+      if (data.type === 'message_start') {
+        cycleStopped = false;
+        if (!message || message.id !== start?.id) {
+          message = start;
+          billingUsage = {};
+          sawInputStart = false;
+          sawOutputUpdate = false;
+        } else if (!message.model && start?.model) {
+          message = start;
+        }
+        if (isPlainObject(start?.usage) && validCount(start.usage.input_tokens)) sawInputStart = true;
+      }
+      const usage = start && isPlainObject(start.usage)
+        ? start.usage
         : isPlainObject(data.usage)
           ? data.usage
           : null;
       if (usage) {
+        if (billing && (data.type === 'message_start' || data.type === 'message_delta')) {
+          if (!mergeBillingUsage(billingUsage, usage)) responseError = true;
+          if (data.type === 'message_delta' && validCount(usage.output_tokens)) sawOutputUpdate = true;
+        }
         const inputTokens = numberField(usage, 'input_tokens')
           + numberField(usage, 'cache_read_input_tokens')
           + numberField(usage, 'cache_creation_input_tokens');
         if (inputTokens > 0) latestInputUsage = usage;
         if (numberField(usage, 'output_tokens') > 0) latestOutputUsage = usage;
       }
-      if (data.type === 'message_stop') commitUsage();
+      if (data.type === 'message_stop') {
+        cycleStopped = true;
+        commitCardUsage();
+      }
     };
 
     const drain = (flush: boolean): void => {
@@ -314,11 +463,22 @@ export function createClaudeSubagentUsageResponseObserver(
       } else {
         const body = parseJsonObject(buffer);
         if (body && isPlainObject(body.usage)) {
+          message = body;
+          if (billing) {
+            sawInputStart = validCount(body.usage.input_tokens);
+            sawOutputUpdate = validCount(body.usage.output_tokens);
+            if (!mergeBillingUsage(billingUsage, body.usage)) responseError = true;
+          }
           latestInputUsage = body.usage;
           latestOutputUsage = body.usage;
         }
       }
-      commitUsage();
+      commitCardUsage();
+      // One HTTP response may carry several SSE cycles for the same message.
+      // Only its clean end and the last cycle's stop establish the billing boundary.
+      if (billing && (isJson || cycleStopped) && sawInputStart && sawOutputUpdate && !responseError) {
+        recordBillingSegment(billing, message, billingUsage);
+      }
       done = true;
       bridge.releaseActiveTask(taskId);
     };

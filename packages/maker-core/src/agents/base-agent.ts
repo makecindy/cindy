@@ -563,6 +563,14 @@ export interface ClaudeSubagentTaskRegistration {
 }
 
 export interface ClaudeSubagentTaskUsage {
+  billing?: {
+    sdkSessionId: string;
+    /** Local monotonic reservation time and the invocation known when the request started. */
+    segments: readonly (import('./shared/usage-tracker.js').UsageSegment & {
+      reservedAt: number;
+      parentToolUseId?: string;
+    })[];
+  };
   totalTokens: number;
 }
 
@@ -1584,7 +1592,7 @@ export interface AgentDeps {
 
   /** Host bridge for repairing Claude Code subagent usage when provider usage is zero. */
   registerClaudeSubagentTask?: (task: ClaudeSubagentTaskRegistration) => void;
-  getClaudeSubagentTaskUsage?: (taskId: string) => ClaudeSubagentTaskUsage | undefined;
+  getClaudeSubagentTaskUsage?: (taskId: string, sdkSessionId?: string) => ClaudeSubagentTaskUsage | undefined;
 
   /**
    * Claude Code 专用:为远端机器构造一个 SDK `Query` (实际是 cc-mgr daemon 端

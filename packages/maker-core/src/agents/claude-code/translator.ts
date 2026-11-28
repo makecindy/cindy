@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from 'node:util';
 import { collectNativeToolMedia, type NativeToolMedia } from '@cindy/maker-shared/tool-process-media';
 /**
  * Claude Code SDKMessage → maker-core 语义 AgentEvent 翻译器。
@@ -38,7 +39,8 @@ import {
   CONTEXT_OVERFLOW_REASON,
   isContextOverflowErrorMessage,
 } from '../shared/context-overflow-error.js';
-import type { UsageTracker } from '../shared/usage-tracker.js';
+import type { ClaudeSubagentTaskUsage } from '../base-agent.js';
+import type { UsageSegment, UsageTracker } from '../shared/usage-tracker.js';
 import { isModelAccessDenied } from './model-access-error.js';
 import { attachLiveGeneration, sampleGenerationDuration } from '../shared/live-generation-snapshot.js';
 import {
@@ -64,6 +66,9 @@ import {
 //  - thinkingBuf: thinking_delta 跨多个 stream_event 累积; assistant.thinking final 时关闭
 
 export interface TurnState {
+  /** Agent tool calls issued in this turn, paired with their async launch receipt. */
+  subagentTasks?: Map<string, { startedAt: number; taskId?: string }>;
+  messageIdBySegment?: Map<string, string>;
   text: string;
   toolUses: number;
   /** 本 turn 内真实 Claude API call 次数；message_start 触发时递增。 */
@@ -376,11 +381,102 @@ function ccLiveStatus(
   };
 }
 
+/** A completed proxy response supplies a request boundary for background agents
+ * whose SDK events never reached the parent. Keep SDK identities and scope for
+ * any request already present, including a parent request matching a child prompt. */
+function mergeProxyUsage(ctx: TranslateContext, sdk: UsageSegment[]): UsageSegment[] {
+  if (!ctx.turn.subagentTasks?.size) return sdk;
+  const merged = [...sdk];
+  // A provider can reuse an ID after a tool result or retry. Keep every SDK
+  // boundary until settlement so an older receipt cannot replace a later call.
+  const segmentsByMessageId = new Map<string, string[]>();
+  for (const [segmentId, messageId] of ctx.turn.messageIdBySegment ?? []) {
+    const ids = segmentsByMessageId.get(messageId);
+    if (ids) ids.push(segmentId);
+    else segmentsByMessageId.set(messageId, [segmentId]);
+  }
+  const indexBySegment = new Map(sdk.map((segment, index) => [segment.id, index]));
+  const soleParentByTask = new Map<string, string | undefined>();
+  for (const [parent, { taskId }] of ctx.turn.subagentTasks) {
+    if (!taskId) continue;
+    soleParentByTask.set(taskId, soleParentByTask.has(taskId) ? undefined : parent);
+  }
+  // SDK segment IDs are claude:<sequence>:<parent>. Parent IDs may themselves contain colons.
+  const sdkParent = (id: string) => id.slice(id.indexOf(':', 'claude:'.length) + 1);
+  const anonymousParents = new Set(sdk.flatMap(s => s.id && !ctx.turn.messageIdBySegment?.has(s.id) ? [sdkParent(s.id)] : []));
+  for (const [taskId, onlyParent] of soleParentByTask) {
+    // Reading transfers the whole owner batch, including receipts for resumed calls.
+    const billing = ctx.getSubagentTaskUsage?.(taskId, ctx.getSdkSessionId())?.billing;
+    if (!billing || billing.sdkSessionId !== ctx.getSdkSessionId()) continue;
+    // Compare only eligible receipts within this SDK session and task. Re-delivery
+    // can repeat the same usage, but conflicting evidence cannot identify a request.
+    const candidates = new Map<string, UsageSegment[]>();
+    for (const { reservedAt, parentToolUseId, ...request } of billing.segments) {
+      if (!request.id) continue;
+      const sameId = segmentsByMessageId.get(request.id) ?? [];
+      const matches = sameId.filter(id => ctx.turn.subagentTasks?.get(sdkParent(id))?.taskId === taskId);
+      if (matches.length > 1) continue;
+      const sdkId = matches[0];
+      // A known different owner can independently use the same provider ID.
+      // An unidentified SDK stream could already contain this request.
+      if (!sdkId && sameId.some(id => !ctx.turn.subagentTasks?.get(sdkParent(id))?.taskId)) continue;
+      const parent = sdkId ? sdkParent(sdkId) : onlyParent;
+      if (!parent) continue;
+      const invocation = ctx.turn.subagentTasks.get(parent);
+      // HTTP reservations and tool-use observations share the local Host's monotonic clock.
+      // Finishing after a resume cannot move a request that started earlier into this invocation.
+      if (!invocation || invocation.taskId !== taskId || !(reservedAt > invocation.startedAt)) continue;
+      if (parentToolUseId && parentToolUseId !== parent) {
+        // The card registry names only the latest launch. A unique SDK match can
+        // identify an older concurrent call, but cannot move its receipt forward
+        // into a later invocation that happened to reuse the provider ID.
+        const latest = ctx.turn.subagentTasks.get(parentToolUseId);
+        if (!sdkId || latest?.taskId !== taskId || latest.startedAt <= invocation.startedAt) continue;
+      }
+      if (!sdkId && anonymousParents.has(parent)) continue;
+      const id = sdkId ?? `claude:proxy/${request.id}:${parent}`;
+      const group = candidates.get(id);
+      if (group) group.push(request);
+      else candidates.set(id, [request]);
+    }
+    for (const [id, group] of candidates) {
+      const request = group[0]!;
+      const index = indexBySegment.get(id);
+      if (group.some(receipt => receipt !== request && !isDeepStrictEqual(receipt, request))) {
+        // The SDK can still establish the counts. Its default tariff cannot settle
+        // a request if an eligible receipt for this model contradicts that tariff.
+        if (index === undefined) continue;
+        const observed = sdk[index]!;
+        if (group.some(receipt => receipt.model === observed.model && receipt.priceVariant !== observed.priceVariant)) {
+          merged[index] = { ...observed, ambiguousPriceVariant: true };
+        }
+        continue;
+      }
+      if (index === undefined) {
+        merged.push({ ...request, id });
+      } else if (!merged[index]?.complete) {
+        const previous = merged[index]!;
+        merged[index] = request.complete ? { ...request, id } : {
+          ...request, id,
+          inputTokens: Math.max(previous.inputTokens, request.inputTokens),
+          outputTokens: Math.max(previous.outputTokens, request.outputTokens),
+          cacheReadTokens: Math.max(previous.cacheReadTokens ?? 0, request.cacheReadTokens ?? 0),
+          cacheCreateTokens: Math.max(previous.cacheCreateTokens ?? 0, request.cacheCreateTokens ?? 0),
+          cacheCreate1hTokens: Math.max(previous.cacheCreate1hTokens ?? 0, request.cacheCreate1hTokens ?? 0),
+        };
+      }
+    }
+  }
+  return merged;
+}
+
 /**
  * 清掉一个 turn 的非 usage 累积状态(usage 由 UsageTracker.endTurn 内部 reset)。
  * turn 收尾共用:正常 Done/done 路径与 empty-response 终态 error 提前 return 路径。
  */
 function resetTurnState(turn: TurnState): void {
+  turn.subagentTasks?.clear();
+  turn.messageIdBySegment?.clear();
   turn.text = '';
   turn.toolUses = 0;
   turn.apiCalls = 0;
@@ -581,6 +677,7 @@ function readToolResultFullText(blockRaw: unknown): ToolResultPair | null {
  * 或流式子消息时序推断可靠，应直接投影成 AgentTaskUpdate。
  */
 interface SubagentToolResult {
+  agentId?: string;
   taskId: string;
   parentToolUseId: string;
   prompt?: string;
@@ -644,7 +741,7 @@ function extractSubagentToolResult(
   if (toolUses !== undefined) usage.toolUses = toolUses;
   if (durationMs !== undefined) usage.durationMs = durationMs;
   return {
-    taskId,
+    taskId, agentId,
     parentToolUseId: toolResult.toolUseId,
     model,
     prompt,
@@ -770,7 +867,7 @@ interface TranslateContext {
     prompt: string;
     model?: string;
   }) => void;
-  getSubagentTaskUsage?: (taskId: string) => AgentTaskUsage | undefined;
+  getSubagentTaskUsage?: (taskId: string, sdkSessionId?: string) => (AgentTaskUsage & Pick<ClaudeSubagentTaskUsage, 'billing'>) | undefined;
   /**
    * Maker Memory flush 观察器 — 翻译 status / message_delta event 时, push 完
    * eventQueue 后调一下 (传当前 contextTokens / contextWindow 让 controller 算 ratio)。
@@ -884,6 +981,8 @@ export function translateSdkMessage(
         if (actualModel) {
           ctx.rt.publishedSubagentModelByParentToolUseId.set(parentToolUseId, actualModel);
         }
+        const invocation = ctx.turn.subagentTasks?.get(parentToolUseId);
+        if (invocation && subagentResult.agentId) invocation.taskId = subagentResult.agentId;
         if (status === 'running' && prompt && !isTerminal) {
           ctx.onSubagentTaskLaunched?.({ taskId, parentToolUseId, prompt, model: actualModel });
         }
@@ -1687,6 +1786,9 @@ function rememberClaudeToolUseId(
   toolName: unknown,
 ): string | null {
   if (typeof toolUseId !== 'string' || toolUseId.length === 0) return null;
+  if ((toolName === 'Agent' || toolName === 'Task') && !ctx.turn.subagentTasks?.has(toolUseId)) {
+    (ctx.turn.subagentTasks ??= new Map()).set(toolUseId, { startedAt: performance.now() });
+  }
   const existingName = ctx.rt.toolUseIdToName.get(toolUseId);
   ctx.rt.toolUseIdToName.set(
     toolUseId,
@@ -1998,6 +2100,9 @@ function handleStreamEvent(
         generation: ctx.turn.generation,
       });
     }
+    if (typeof eventRequestId === 'string' && eventRequestId) {
+      (ctx.turn.messageIdBySegment ??= new Map()).set(segmentId, eventRequestId);
+    }
     ctx.rt.activeUsageSegmentByParent.set(parentStreamKey, segmentId);
     if (!parentToolUseId) {
       ctx.rt.mainOpenRequest = {
@@ -2280,7 +2385,8 @@ function handleResult(
 
   // turn 桶快照 — endTurn 会清掉 turn 桶, 必须在调用之前先取出来给后面日志用
   const preTurnEndCacheStats = ctx.tracker.getCacheStats();
-  const turnUsageSegments = ctx.tracker.getTurnUsageSegments();
+  const sdkSegments = ctx.tracker.getTurnUsageSegments();
+  const turnUsageSegments = mergeProxyUsage(ctx, sdkSegments);
   const segmentTotals = turnUsageSegments.reduce<{
     inputTokens: number;
     outputTokens: number;
@@ -2307,7 +2413,13 @@ function handleResult(
   // On the first result after resume that aggregate may still include history,
   // so a mismatch must fail closed to token-only accounting rather than price
   // an incomplete set of requests.
-  const usageSegmentsComplete = segmentsMatchResult;
+  const partialProxyUsage = turnUsageSegments.some(segment => segment.modelConfirmed && !segment.complete);
+  // The general usage display can subtract a missing historical counter as zero;
+  // that fallback is not an independent measurement for pricing a partial request.
+  const knownCacheBaseline = !aggregateBeforeThisResult ||
+    (aggregateBeforeThisResult.cacheReadTokens !== undefined && aggregateBeforeThisResult.cacheCreateTokens !== undefined);
+  const usageSegmentsComplete = segmentsMatchResult && (!partialProxyUsage ||
+    (knownCacheBaseline && resultUsage?.cacheReadTokens !== undefined && resultUsage.cacheCreateTokens !== undefined));
   const finalTextForLogs = msg.is_error ? redactSensitiveText(finalText) : finalText;
 
   // turn end usage 锁定: Claude Code result.usage 是 session aggregate,
@@ -2317,7 +2429,7 @@ function handleResult(
   const liveTurnOutput = liveParentOutputTokens(
     ctx,
     resultUsage?.outputTokens,
-    resultUsage != null && segmentTotals.outputTokens === resultUsage.outputTokens,
+    resultUsage != null && sdkSegments.reduce((sum, s) => sum + s.outputTokens, 0) === resultUsage.outputTokens,
   );
   const liveGeneration = ctx.rt.generation;
   // Snap to this turn's streamed main-thread usage: the result aggregate can be

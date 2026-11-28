@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { Buffer } from 'node:buffer';
+import { createAsyncQueue } from '../../../../../../packages/maker-core/src/agents/shared/async-queue.js';
+import { UsageTracker } from '../../../../../../packages/maker-core/src/agents/shared/usage-tracker.js';
+import { translateSdkMessage, newRuntimeState, type TurnState } from '../../../../../../packages/maker-core/src/agents/claude-code/translator.js';
+import { type AgentEvent } from '../../../../../../packages/maker-core/src/types/events.js';
+import { normalizeTurnUsageSegments, resolveClaudeTurnCostSinks } from '../../usage/turnCostCalculator.js';
+
 
 import {
   ClaudeSubagentUsageBridge,
@@ -340,4 +346,403 @@ describe('ClaudeSubagentUsageBridge', () => {
     expect(bridge.getTaskUsage('agent-a')).toEqual({ totalTokens: 110 });
     expect(bridge.getTaskUsage('agent-b')).toEqual({ totalTokens: 220 });
   });
+});
+
+function billingFixture() {
+  const bridge = new ClaudeSubagentUsageBridge();
+  const queue = createAsyncQueue<AgentEvent>();
+  const sdkSessionId = 'sdk-session';
+  const turn: TurnState = {
+    text: '', toolUses: 0, apiCalls: 0, sawCompactBoundary: false, hasEmittedText: false,
+    uiEmittedText: '', pendingApiError: null, interruptRequested: false, generation: 0,
+    interruptGeneration: 0, lastAssistantMsgHadSubstance: true,
+  };
+  const ctx = {
+    rt: newRuntimeState(), turn, tracker: new UsageTracker(),
+    getModel: () => 'main-model', getSdkSessionId: () => sdkSessionId,
+    getEffort: () => 'medium', getPermissionMode: () => 'auto', getLogTitle: () => undefined,
+    log: { debug() {}, info() {}, warn() {} }, onSessionId() {},
+    onSubagentTaskLaunched: (task: Parameters<typeof bridge.registerTask>[0]) =>
+      bridge.registerTask(task),
+    getSubagentTaskUsage: (id: string, sid?: string) => bridge.getTaskUsage(id, sid),
+  };
+  return { bridge, queue, sdkSessionId, ctx };
+}
+
+const cacheCases = [
+  { name: 'missing read bucket, late 300k', start: { cache_creation_input_tokens: 0 }, aggregate: { cache_read_input_tokens: 300_000, cache_creation_input_tokens: 0 }, expected: null },
+  { name: 'missing write bucket, late 300k', start: { cache_read_input_tokens: 0 }, aggregate: { cache_read_input_tokens: 0, cache_creation_input_tokens: 300_000 }, expected: null },
+  { name: 'independent zero buckets', start: {}, aggregate: { cache_read_input_tokens: 0, cache_creation_input_tokens: 0 }, expected: 0.002 },
+  { name: 'neither source reports cache', start: {}, aggregate: {}, expected: null },
+  { name: 'SDK confirms 300k', start: {}, aggregate: {}, expected: 0.302 },
+  { name: 'SDK observes 300k, aggregate agrees', start: {}, aggregate: { cache_read_input_tokens: 300_000, cache_creation_input_tokens: 0 }, expected: 0.302 },
+  { name: 'unknown prior cache baseline', start: { cache_read_input_tokens: 300_000 }, aggregate: { cache_read_input_tokens: 300_000, cache_creation_input_tokens: 0 }, expected: null },
+  { name: 'explicit zero buckets', start: { cache_read_input_tokens: 0, cache_creation_input_tokens: 0 }, aggregate: {}, expected: 0.002 },
+] as const;
+
+it.each([
+  ...Object.entries({
+    proxy: 0.0027, 'sdk-and-proxy': 0.0027, legacy: null, truncated: null, 'foreign-session': null,
+    untagged: null, 'late-launch': null, 'early-response': 0.0027, 'middle-delta': 0.304,
+    'same-response-cycles': 0.3027, 'truncated-second-cycle': null, 'malformed-next-cycle': null, 'reused-request-id': 0.0074,
+    'resumed-agent': 0.0054, 'ambiguous-resume': 0.0027, 'restarted-stream': 0.0027, 'restart-without-output': null,
+  }).map(([mode, expected]) => ({ mode, name: mode, cache: undefined, expected })),
+  ...cacheCases.map(cache => ({ mode: 'proxy', name: cache.name, cache, expected: cache.expected })),
+])('prices the main model and only identifiable completed background requests ($name)',
+  async ({ mode, cache, expected }) => {
+    const { bridge, queue, sdkSessionId, ctx } = billingFixture();
+    const model = 'child-model';
+    const prompt = 'Count the blue flowers';
+    bridge.registerTask({ taskId: 'finished-task', parentToolUseId: 'older-tool', prompt, model });
+    const usage = { input_tokens: 100, output_tokens: 10, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 };
+    const childUsage = cache ? { input_tokens: 100, output_tokens: 10, ...cache.start } : {
+      ...usage, cache_creation_input_tokens: 50,
+      cache_creation: { ephemeral_5m_input_tokens: 20, ephemeral_1h_input_tokens: 30 },
+    };
+    const splitResponse = mode === 'same-response-cycles' || mode === 'truncated-second-cycle';
+    const repeatedId = mode === 'reused-request-id';
+    const resumed = mode === 'resumed-agent' || mode === 'ambiguous-resume';
+    const middleUsage = {
+      input_tokens: 150, output_tokens: 12, cache_read_input_tokens: 300_000, cache_creation_input_tokens: 80,
+      cache_creation: { ephemeral_1h_input_tokens: 40 },
+    };
+    const emit = (msg: Parameters<typeof translateSdkMessage>[0]) => translateSdkMessage(msg, queue, ctx);
+    function sdkRequest(id: string, model: string, parent?: string, sdkUsage = cache?.name.startsWith('SDK ')
+      ? { ...usage, cache_read_input_tokens: 300_000 } : childUsage) {
+      emit({ type: 'stream_event', parent_tool_use_id: parent, event: {
+        type: 'message_start', message: { id, model, usage: parent ? sdkUsage : usage },
+      } });
+      if (parent && resumed) return;
+      for (const event of [
+        ...(parent && mode === 'middle-delta' ? [{ type: 'message_delta', usage: { cache_read_input_tokens: 300_000 } }] : []),
+        { type: 'message_delta', usage: parent ? (cache?.name === 'SDK confirms 300k' ? sdkUsage : { output_tokens: sdkUsage.output_tokens }) : usage }, { type: 'message_stop' },
+      ]) emit({ type: 'stream_event', parent_tool_use_id: parent, event });
+    }
+    if (cache?.name === 'unknown prior cache baseline') {
+      emit({ type: 'result', result: 'previous turn', usage: { input_tokens: 20, output_tokens: 5 } });
+    }
+    sdkRequest('msg-main', 'main-model');
+    if (mode !== 'late-launch') {
+      emit({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 'tool-a', name: 'Agent', input: { prompt } }] } });
+    }
+    const launch = (parent = 'tool-a') => emit({
+      type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: parent, content: 'launched' }] },
+      tool_use_result: { isAsync: true, agentId: 'agent-a', resolvedModel: model, prompt },
+    });
+    if (mode !== 'early-response') launch();
+    if (mode === 'sdk-and-proxy' || mode === 'middle-delta' || cache?.name.startsWith('SDK ')) sdkRequest('msg-child', model, 'tool-a');
+    if (mode === 'sdk-and-proxy') {
+      // A second SDK block shares this provider request with the first block and both proxy receipts.
+      sdkRequest('msg-child', model, 'tool-a');
+    }
+    if (mode === 'same-response-cycles') {
+      sdkRequest('msg-child', model, 'tool-a', { ...childUsage, cache_read_input_tokens: 300_000 });
+    }
+    if (repeatedId) {
+      sdkRequest('msg-child', model, 'tool-a');
+      emit({ type: 'user', parent_tool_use_id: 'tool-a', message: { content: [
+        { type: 'tool_result', tool_use_id: 'inner-tool', content: 'ok' },
+      ] } });
+      sdkRequest('msg-child', model, 'tool-a', { ...childUsage, input_tokens: 200, output_tokens: 20 });
+    }
+    if (resumed) {
+      emit({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 'tool-b', name: 'Agent', input: { prompt } }] } });
+      launch('tool-b');
+      sdkRequest('msg-child', model, 'tool-a');
+      if (mode === 'resumed-agent') sdkRequest('msg-resumed', model, 'tool-b');
+    }
+    if (mode !== 'legacy') {
+      const transform = createClaudeSubagentUsageRequestTransform(bridge);
+      for (const reqId of resumed ? [3, 1, 4, 2] : [1, 2]) {
+        transform(requestPayload(model, prompt), {
+          reqId, method: 'POST', url: '/v1/messages',
+          headers: {
+            'x-claude-code-session-id': mode === 'foreign-session' ? 'foreign' : sdkSessionId,
+            ...(mode === 'untagged' ? {} : { 'x-claude-code-agent-id': 'agent-a' }),
+          },
+        });
+        const sink = createClaudeSubagentUsageResponseObserver(bridge)({
+          reqId, method: 'POST', url: '/v1/messages', upstreamBase: 'https://example.test', status: 200,
+          requestHeaders: {}, responseHeaders: { 'content-type': 'text/event-stream' },
+          requestBody: requestBody(model, prompt),
+        });
+        const secondRequest = repeatedId && reqId === 2;
+        const frames = [
+          ...(splitResponse ? [
+            { type: 'message_start', message: { id: 'msg-child', model, usage: { ...usage, output_tokens: 0 } } },
+            { type: 'message_delta', usage: { output_tokens: 0 } }, { type: 'message_stop' },
+          ] : []),
+          ...(['restarted-stream', 'restart-without-output'].includes(mode) ? [
+            { type: 'message_start', message: { id: 'abandoned', model, usage } },
+            { type: 'message_delta', usage: middleUsage },
+          ] : []),
+          { type: 'message_start', message: { id: reqId > 2 ? 'msg-resumed' : 'msg-child', model, usage: {
+            ...childUsage, ...(splitResponse ? { cache_read_input_tokens: 300_000 } : {}),
+            input_tokens: splitResponse ? undefined : secondRequest ? 200 : 100, output_tokens: 0,
+          } } },
+          ...(mode === 'middle-delta' ? [{ type: 'message_delta', usage: middleUsage }] : []),
+          { type: 'message_delta', usage: {
+            ...(mode === 'restart-without-output' ? {} : { output_tokens: secondRequest ? 20 : 10 }),
+            ...(!cache ? { cache_creation: mode === 'sdk-and-proxy' ? { ephemeral_1h_input_tokens: 0 } : { ephemeral_5m_input_tokens: 20 } } : {}),
+          } },
+          ...(mode === 'truncated' || mode === 'truncated-second-cycle' ? [] : [{ type: 'message_stop' }]),
+        ];
+        sink?.onData?.(Buffer.from(frames.map(frame => `data: ${JSON.stringify(frame)}\n\n`).join('')));
+        const tail = mode === 'malformed-next-cycle' ? 'data: {"type":"message_start"' : ': keepalive\n\ndata: [DONE]\n\n';
+        sink?.onData?.(Buffer.from(tail));
+        sink?.onEnd?.();
+      }
+    }
+    if (mode === 'early-response') {
+      emit({ type: 'system', subtype: 'task_notification', status: 'completed', task_id: 'agent-a', tool_use_id: 'tool-a' });
+      launch();
+    }
+    const childInput = repeatedId ? 300 : mode === 'middle-delta' ? 150 : resumed ? 200 : 100;
+    const childOutput = repeatedId ? 30 : mode === 'middle-delta' ? 12 : resumed ? 20 : 10;
+    const reportedCache: { cache_read_input_tokens?: number; cache_creation_input_tokens?: number } = cache?.aggregate ?? {
+      cache_read_input_tokens: splitResponse || mode === 'middle-delta' ? 300_000 : 0,
+      cache_creation_input_tokens: mode === 'middle-delta' ? 80 : resumed || repeatedId ? 100 : 50,
+    };
+    const priorTurn = cache?.name === 'unknown prior cache baseline';
+    emit({ type: 'result', result: 'done', usage: { input_tokens: childInput + (priorTurn ? 120 : 100), output_tokens: childOutput + (priorTurn ? 15 : 10), ...reportedCache } });
+    queue.end();
+    let segments = normalizeTurnUsageSegments([]);
+    let complete = false;
+    for await (const event of queue) {
+      if (event.type !== 'done') continue;
+      const done = event.data as { usageSegments?: unknown; usageSegmentsComplete?: boolean };
+      segments = normalizeTurnUsageSegments(done.usageSegments);
+      complete = done.usageSegmentsComplete === true;
+    }
+    const childSegment = segments.find(segment => segment.model === model);
+    if (mode === 'sdk-and-proxy') {
+      const childSegments = segments.filter(segment => segment.model === model);
+      expect(childSegments).toHaveLength(1);
+      expect(childSegments[0]).toMatchObject({ complete: true, cacheCreate1hTokens: 30 });
+    }
+    if (mode === 'same-response-cycles') expect(childSegment).toMatchObject({ cacheReadTokens: 300_000, outputTokens: 10, complete: true });
+    if (mode === 'truncated-second-cycle' || mode === 'malformed-next-cycle') expect(childSegment).toBeUndefined();
+    if (repeatedId) {
+      expect(segments.filter(s => s.model === model).map(s => [s.inputTokens, s.outputTokens])).toEqual([[100, 10], [200, 20]]);
+      expect(complete).toBe(true);
+    }
+    if (mode === 'restarted-stream') expect(childSegment?.outputTokens).toBe(10);
+    if (mode === 'restart-without-output') expect(childSegment).toBeUndefined();
+    if (mode === 'middle-delta') {
+      expect(childSegment).toMatchObject({
+        inputTokens: 150, outputTokens: 12, cacheReadTokens: 300_000, cacheCreateTokens: 80, cacheCreate1hTokens: 40,
+      });
+    }
+    if (resumed) {
+      expect(segments.filter(segment => segment.model === model).map(segment => [segment.id?.split(':').at(-1), segment.complete])).toEqual(
+        mode === 'resumed-agent' ? [['tool-a', true], ['tool-b', true]] : [['tool-a', true]],
+      );
+    }
+    const models = ['main-model', model];
+    const { perModel } = resolveClaudeTurnCostSinks(models.map(model => ({
+      model, inputTokensDelta: model === 'child-model' ? childInput : 100, outputTokensDelta: model === 'child-model' ? childOutput : 10, cacheReadTokensDelta: model === 'child-model' ? reportedCache.cache_read_input_tokens ?? 0 : 0,
+      cacheCreateTokensDelta: model === 'child-model' ? reportedCache.cache_creation_input_tokens ?? 0 : 0, costUsdDelta: 0,
+    })), { supplier: Object.fromEntries(models.map((modelId, index) => [modelId, {
+      modelId, providerId: 'supplier', source: 'user-override', currency: 'USD', approximate: true,
+      inputPerMtok: 10 * (index + 1), outputPerMtok: 0, cacheReadPerMtok: 1, cacheCreatePerMtok: 5, cacheCreate1hPerMtok: 20,
+    }])) }, { providerId: 'supplier', billingRoute: 'provider-api', region: 'global' }, segments, complete);
+    expect(perModel.map(row => [row.model, row.money?.amount ?? null])).toEqual([
+      ['main-model', 0.001], [model, expected], ...(mode === 'ambiguous-resume' ? [[model, null]] : []),
+    ]);
+  },
+);
+
+it.each(['fresh', 'stale-only', 'late-finish', 'previous-parent', 'reused-id', 'previous-parent-sdk-id', 'unregistered-id', 'same-turn-overlap'])(
+  'charges a resumed background task only for requests belonging to its current invocation (%s)',
+  async mode => {
+    const { bridge, queue, sdkSessionId, ctx } = billingFixture();
+    const model = 'child-model';
+    const prompt = 'Count flowers';
+    const usage = { input_tokens: 100, output_tokens: 10, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 };
+    const emit = (msg: Parameters<typeof translateSdkMessage>[0]) => translateSdkMessage(msg, queue, ctx);
+    const launch = (parent: string, beforeLaunchReceipt?: () => void) => {
+      emit({ type: 'assistant', message: { content: [{ type: 'tool_use', name: 'Agent', id: parent, input: { prompt } }] } });
+      beforeLaunchReceipt?.();
+      emit({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: parent, content: 'launched' }] },
+        tool_use_result: { isAsync: true, agentId: 'agent-a', resolvedModel: model, prompt: mode === 'unregistered-id' ? undefined : prompt } });
+    };
+    const reserve = (reqId: number, id: string, input = 100) => {
+      createClaudeSubagentUsageRequestTransform(bridge)(requestPayload(model, prompt), {
+        reqId, method: 'POST', url: '/v1/messages',
+        headers: { 'x-claude-code-session-id': sdkSessionId, 'x-claude-code-agent-id': 'agent-a' },
+      });
+      const sink = openObservation(bridge, reqId, model, prompt);
+      return () => {
+        const frames = [
+          { type: 'message_start', message: { id, model, usage: { ...usage, input_tokens: input } } },
+          { type: 'message_delta', usage: { output_tokens: input / 10 } }, { type: 'message_stop' },
+        ];
+        sink?.onData?.(Buffer.from(frames.map(f => `data: ${JSON.stringify(f)}\n\n`).join('')));
+        sink?.onEnd?.();
+      };
+    };
+    const settle = (requests: number) => {
+      emit({ type: 'result', result: 'done', usage: { ...usage, input_tokens: 100 * requests, output_tokens: 10 * requests } });
+      ctx.turn.generation++;
+      ctx.tracker.beginTurn();
+    };
+    launch('first-parent');
+    settle(0);
+
+    // The existing task continues without an Agent/Task call in turn two.
+    const finishOld = reserve(1, 'old');
+    if (mode !== 'late-finish') finishOld();
+    for (const event of [
+      { type: 'message_start', message: { id: 'old', model, usage } },
+      { type: 'message_delta', usage }, { type: 'message_stop' },
+    ]) emit({ type: 'stream_event', parent_tool_use_id: 'first-parent', event });
+    settle(1);
+
+    const overlappingSdkId = mode === 'previous-parent-sdk-id' || mode === 'same-turn-overlap';
+    if (mode === 'same-turn-overlap') launch('earlier-current-parent');
+    launch('new-parent', () => {
+      if (mode === 'unregistered-id') reserve(2, 'old', 200)();
+      if (mode === 'previous-parent' || overlappingSdkId) reserve(2, 'still-running')();
+    });
+    if (mode === 'late-finish') finishOld();
+    if (mode === 'fresh' || mode === 'reused-id') reserve(2, mode === 'reused-id' ? 'old' : 'fresh', mode === 'reused-id' ? 200 : 100)();
+    const currentInput = (overlappingSdkId || mode === 'reused-id' || mode === 'unregistered-id') ? 200 : 100;
+    if (mode === 'unregistered-id') {
+      emit({ type: 'stream_event', parent_tool_use_id: 'new-parent', event: {
+        type: 'message_start', message: { id: 'old', model, usage: { input_tokens: 200 } },
+      } });
+    }
+    if (overlappingSdkId) {
+      for (const event of [
+        { type: 'message_start', message: { id: 'still-running', model, usage: { ...usage, input_tokens: 200 } } },
+        { type: 'message_delta', usage: { output_tokens: 20 } }, { type: 'message_stop' },
+      ]) emit({ type: 'stream_event', parent_tool_use_id: 'new-parent', event });
+    }
+    settle(1 + currentInput / 100);
+    queue.end();
+
+    const charges: Array<{ ids: Array<string | undefined>; amount: number | null }> = [];
+    for await (const event of queue) {
+      if (event.type !== 'done') continue;
+      const done = event.data as { usageSegments?: unknown; usageSegmentsComplete?: boolean };
+      const segments = normalizeTurnUsageSegments(done.usageSegments);
+      if (charges.length === 2 && overlappingSdkId) {
+        expect(segments).toMatchObject([{ inputTokens: 200, outputTokens: 20, complete: false }]);
+      }
+      const delta = charges.length === 2 ? currentInput : charges.length ? 100 : 0;
+      const { perModel } = resolveClaudeTurnCostSinks([{
+        model, inputTokensDelta: delta, outputTokensDelta: delta / 10,
+        cacheReadTokensDelta: 0, cacheCreateTokensDelta: 0, costUsdDelta: 0,
+      }], { supplier: { [model]: {
+        modelId: model, providerId: 'supplier', source: 'user-override', currency: 'USD', approximate: true,
+        inputPerMtok: 20, outputPerMtok: 0,
+      } } }, { providerId: 'supplier', billingRoute: 'provider-api', region: 'global' }, segments, done.usageSegmentsComplete);
+      charges.push({ ids: segments.map(s => s.id), amount: perModel[0]?.money?.amount ?? null });
+    }
+    expect(charges).toHaveLength(3);
+    expect(charges[1]?.amount).toBe(0.002);
+    if (overlappingSdkId || mode === 'unregistered-id') {
+      expect(charges[2]?.amount).toBe(0.004);
+      expect(charges[2]?.ids).toEqual([expect.stringMatching(/^claude:\d+:new-parent$/)]);
+      return;
+    }
+    const fresh = mode === 'fresh' || mode === 'reused-id';
+    expect(charges[2]?.amount).toBe(mode === 'reused-id' ? 0.004 : fresh ? 0.002 : null);
+    expect(charges[2]?.ids).toEqual(fresh ? [`claude:proxy/${mode === 'reused-id' ? 'old' : 'fresh'}:new-parent`] : []);
+  },
+);
+
+// #12615 unit regression: existing reused-ID coverage forwards both requests through
+// the SDK. Price two observed HTTP receipts with one or zero SDK boundaries instead.
+it.each(['sdk-sees-later', 'ambiguous-tariff', 'conflicting-proxy-only', 'two-owners', 'one-owner-streamed', 'duplicate'])(
+  'settles same-ID receipts using their owner and unambiguous usage (%s)', async mode => {
+    const { bridge, queue, sdkSessionId, ctx } = billingFixture();
+    const sdkSeesLater = mode === 'sdk-sees-later' || mode === 'ambiguous-tariff';
+    const separate = mode === 'two-owners' || mode === 'one-owner-streamed';
+    const models = separate ? ['model-a', 'model-b'] : ['model-a'];
+    const emit = (msg: Parameters<typeof translateSdkMessage>[0]) => translateSdkMessage(msg, queue, ctx);
+    for (const model of models) {
+      emit({ type: 'assistant', message: { content: [
+        { type: 'tool_use', name: 'Agent', id: model, input: { prompt: model } },
+      ] } });
+      emit({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: model, content: 'launched' }] },
+        tool_use_result: { isAsync: true, agentId: `agent-${model}`, resolvedModel: model, prompt: model } });
+    }
+
+    for (const reqId of [1, 2]) {
+      const model = models[reqId - 1] ?? models[0]!;
+      const input = reqId === 2 && !separate && mode !== 'duplicate' ? 200 : 100;
+      const usage = { input_tokens: input, output_tokens: input / 10, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 };
+      const message = { id: 'reused', model, usage };
+      createClaudeSubagentUsageRequestTransform(bridge)({ ...requestPayload(model, model), speed: mode === 'ambiguous-tariff' ? 'fast' : 'standard' }, {
+        reqId, method: 'POST', url: '/v1/messages',
+        headers: { 'x-claude-code-session-id': sdkSessionId, 'x-claude-code-agent-id': `agent-${model}` },
+      });
+      const sink = openObservation(bridge, reqId, model, model);
+      const frames = [
+        { type: 'message_start', message },
+        { type: 'message_delta', usage: { output_tokens: usage.output_tokens } }, { type: 'message_stop' },
+      ];
+      sink?.onData?.(Buffer.from(frames.map(frame => `data: ${JSON.stringify(frame)}\n\n`).join('')));
+      sink?.onEnd?.();
+      if ((sdkSeesLater && reqId === 2) || (mode === 'one-owner-streamed' && reqId === 1)) {
+        for (const event of frames) emit({ type: 'stream_event', parent_tool_use_id: model, event });
+      }
+    }
+    const perModelInput = mode === 'conflicting-proxy-only' ? 300 : sdkSeesLater ? 200 : 100;
+    emit({ type: 'result', result: 'done', usage: {
+      input_tokens: perModelInput * models.length, output_tokens: perModelInput * models.length / 10,
+      cache_read_input_tokens: 0, cache_creation_input_tokens: 0,
+    } });
+    queue.end();
+    const amounts: Array<number | null> = [];
+    for await (const event of queue) {
+      if (event.type !== 'done') continue;
+      const done = event.data as { usageSegments?: unknown; usageSegmentsComplete?: boolean };
+      const segments = normalizeTurnUsageSegments(done.usageSegments);
+      const { perModel } = resolveClaudeTurnCostSinks(models.map(model => ({
+        model, inputTokensDelta: perModelInput, outputTokensDelta: perModelInput / 10,
+        cacheReadTokensDelta: 0, cacheCreateTokensDelta: 0, costUsdDelta: 0,
+      })), { supplier: Object.fromEntries(models.map(modelId => [modelId, {
+        modelId, providerId: 'supplier', source: 'user-override', currency: 'USD', approximate: true,
+        inputPerMtok: 20, outputPerMtok: 0,
+      }])) }, { providerId: 'supplier', billingRoute: 'provider-api', region: 'global' }, segments, done.usageSegmentsComplete);
+      if (mode === 'ambiguous-tariff') {
+        // An independently reported model cost still follows the existing non-opaque SDK route.
+        const reported = resolveClaudeTurnCostSinks([{
+          model: 'model-a', inputTokensDelta: 200, outputTokensDelta: 20,
+          cacheReadTokensDelta: 0, cacheCreateTokensDelta: 0, costUsdDelta: 0.007,
+        }], undefined, { providerId: 'supplier', billingRoute: 'provider-api', region: 'global' }, segments, done.usageSegmentsComplete);
+        expect(reported.perModel).toMatchObject([{ source: 'sdk', money: { amount: 0.007 } }]);
+      }
+      amounts.push(...perModel.map(row => row.money?.amount ?? null));
+      expect(segments.map(segment => [segment.model, segment.inputTokens, segment.outputTokens])).toEqual(
+        mode === 'conflicting-proxy-only' ? [] : models.map(model => [model, perModelInput, perModelInput / 10]),
+      );
+    }
+    expect(amounts).toEqual(models.map(() => mode === 'conflicting-proxy-only' || mode === 'ambiguous-tariff' ? null : perModelInput * 0.00002));
+  },
+);
+
+it('retains an accepted billing receipt when the card registry evicts its task', () => {
+  const bridge = new ClaudeSubagentUsageBridge();
+  const sdkSessionId = 'sdk';
+  for (let reqId = 1; reqId <= 201; reqId++) {
+    const taskId = `task-${reqId}`;
+    bridge.registerTask({ taskId, parentToolUseId: `tool-${reqId}`, prompt: 'count' });
+    bridge.reserveRequest(reqId, requestPayload('child', 'count'), sdkSessionId, taskId);
+    const sink = createClaudeSubagentUsageResponseObserver(bridge)({
+      reqId, method: 'POST', url: '/v1/messages', upstreamBase: 'https://example.test',
+      status: 200, requestHeaders: {}, responseHeaders: { 'content-type': 'application/json' },
+      requestBody: requestBody('child', 'count'),
+    });
+    sink?.onData?.(Buffer.from(JSON.stringify({
+      id: `msg-${reqId}`, model: 'child', usage: { input_tokens: 3, output_tokens: 1 },
+    })));
+    sink?.onEnd?.();
+  }
+  expect(bridge.getTaskUsage('task-1', sdkSessionId)?.billing?.segments).toMatchObject([
+    { id: 'msg-1', inputTokens: 3, outputTokens: 1 },
+  ]);
+  expect(bridge.getTaskUsage('task-1', sdkSessionId)?.billing).toBeUndefined();
 });

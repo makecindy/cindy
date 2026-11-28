@@ -109,7 +109,7 @@ export function extractResponseSpeed(data: Record<string, unknown>): string | nu
 }
 
 /** 解析一个 SSE frame(可能含 event: / 多行 data:),返回 data JSON。 */
-export function readSseFrameData(frame: string): Record<string, unknown> | null {
+export function readSseFrameData(frame: string, onInvalidData?: () => void): Record<string, unknown> | null {
   const dataLines: string[] = [];
   for (const part of frame.split(/\r?\n/)) {
     if (part.startsWith('data:')) dataLines.push(part.slice('data:'.length).trimStart());
@@ -117,7 +117,9 @@ export function readSseFrameData(frame: string): Record<string, unknown> | null 
   if (dataLines.length === 0) return null;
   const text = dataLines.join('\n').trim();
   if (!text || text === '[DONE]') return null;
-  return parseJsonObject(text);
+  const data = parseJsonObject(text);
+  if (!data) onInvalidData?.();
+  return data;
 }
 
 /**
