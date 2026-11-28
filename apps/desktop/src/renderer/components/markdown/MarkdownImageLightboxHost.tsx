@@ -12,6 +12,8 @@
 
 import { useEffect, useState } from 'react';
 
+import { AttachmentCollectionContext } from '@/components/chat/AttachmentCollectionContext';
+import { ImageGalleryContext } from '@/components/chat/ImageGalleryContext';
 import { ImageLightbox } from '@/components/chat/ImageLightbox';
 
 import {
@@ -26,17 +28,30 @@ export function MarkdownImageLightboxHost({
    *  lightbox 才能启用"发送到对话"。不传则该动作不显示。 */
   sessionId?: string;
 }) {
-  const [src, setSrc] = useState<string | null>(null);
+  const [opening, setOpening] = useState<MdImageLightboxOpenDetail | null>(null);
 
   useEffect(() => {
     const onOpen = (ev: Event) => {
       const detail = (ev as CustomEvent<MdImageLightboxOpenDetail>).detail;
-      if (detail?.src) setSrc(detail.src);
+      if (detail?.src) setOpening(detail);
     };
     window.addEventListener(MD_IMAGE_LIGHTBOX_EVENT, onOpen);
     return () => window.removeEventListener(MD_IMAGE_LIGHTBOX_EVENT, onOpen);
   }, []);
 
-  if (src == null) return null;
-  return <ImageLightbox src={src} onClose={() => setSrc(null)} sessionId={sessionId} />;
+  if (opening == null) return null;
+  const gallery = opening.gallery ?? null;
+  return (
+    <AttachmentCollectionContext.Provider value={null}>
+      <ImageGalleryContext.Provider value={gallery}>
+        <ImageLightbox
+          src={opening.src}
+          galleryId={opening.galleryId}
+          enableGallery={Boolean(gallery && gallery.length > 0)}
+          onClose={() => setOpening(null)}
+          sessionId={sessionId}
+        />
+      </ImageGalleryContext.Provider>
+    </AttachmentCollectionContext.Provider>
+  );
 }

@@ -20,6 +20,7 @@ import { assertGitDirectoryReady, currentOperationBudget, quarantineGitDirectory
 import { killProcessTree } from '../scheduler-host/proc-util';
 import { withCrossProcessLock } from '../device-link/crossProcessLock';
 import { createLogger } from '../logger';
+import { DEFAULT_GIT_MAX_BUFFER } from './gitOutputLimits';
 import {
   beginExecFileDiagnostic,
   execFileWithDiagnostics,
@@ -101,6 +102,8 @@ export interface GitExecOpts {
   signal?: AbortSignal;
   /** Called immediately after the git child is spawned. */
   onSpawn?: (pid: number) => void;
+  /** Output ceiling per stream; see ./gitOutputLimits. Default 16 MiB. */
+  maxBuffer?: number;
 }
 
 /** Check the caller's monotonic budget before starting another repair step. */
@@ -252,7 +255,7 @@ function execDetachedGit(
     stream?.on('data', (chunk: Buffer) => {
       if (done) return;
       size += chunk.length;
-      if (size > (options.maxBuffer ?? 16 * 1024 * 1024)) {
+      if (size > (options.maxBuffer ?? DEFAULT_GIT_MAX_BUFFER)) {
         finish(Object.assign(new Error('Git output exceeded maxBuffer'), { code: 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER' }));
         return;
       }
@@ -315,8 +318,7 @@ function execFileOnce(
     // POSIX uses spawn through execDetachedGit; execFile does not forward detached.
     const spawnOptions: ExecFileOptions & { detached: boolean } = {
       cwd,
-      // 防止超大输出炸内存。listBranches/listFiles 这类正常情况远低于此。
-      maxBuffer: 16 * 1024 * 1024,
+      maxBuffer: opts?.maxBuffer ?? DEFAULT_GIT_MAX_BUFFER,
       env: opts?.extraEnv ? { ...process.env, ...opts.extraEnv } : undefined,
       // POSIX 让 git 自成进程组长:超时收口可对**整组**发信号,连
       // git-remote-http/credential helper 后代一起;Windows 的 detached 语义是

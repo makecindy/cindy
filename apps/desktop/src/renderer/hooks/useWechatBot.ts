@@ -28,7 +28,7 @@ export interface UseWechatBotReturn {
   unbind: () => Promise<boolean>;
   chooseWorkingDirectory: () => Promise<void>;
   resetWorkingDirectory: () => Promise<void>;
-  setCompanion: (botId: string | null) => Promise<boolean>;
+  setCompanion: (botId: string | null, options?: { allowReassign?: boolean }) => Promise<boolean>;
   isUpdatingCompanion: boolean;
 }
 
@@ -181,13 +181,15 @@ export function useWechatBot(override?: WechatBotApi): UseWechatBotReturn {
     }
   }, [override, isUpdatingWorkingDir, owner, t]);
 
-  const setCompanion = useCallback(async (botId: string | null): Promise<boolean> => {
+  const setCompanion = useCallback(async (botId: string | null, options?: { allowReassign?: boolean }): Promise<boolean> => {
     if (companionBusyRef.current || !channelSettings || !isDataOwnerIdCurrent(owner)) return false;
     const requestOwner = getDataOwnerGeneration();
     companionBusyRef.current = true;
     setIsUpdatingCompanion(true);
     try {
-      const next = await api().setCompanion(botId);
+      const next = options?.allowReassign
+        ? await api().setCompanion(botId, options)
+        : await api().setCompanion(botId);
       if (!isDataOwnerGenerationCurrent(requestOwner)) return false;
       settingsVersionRef.current += 1;
       if (!override) cachedChannelSettings = next;

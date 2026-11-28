@@ -28,6 +28,33 @@ export {
   type VoiceInputCustomAsrProtocol,
 } from '../../shared/voiceInputCustomAsr.js';
 
+import { inspectSettingsJson } from '../maker-host/inspect-settings-json.js';
+import { validateOptionalSettingsFields } from '../maker-host/settings-inspection.js';
+
+/** Saved transport choices only. No ensure-file, credentials, connection discovery or refiner overlay. */
+export function inspectVoiceInputModelSelection(ownerRoot: string, env?: NodeJS.ProcessEnv) {
+  const selectedEnv = env ?? {
+    XDT_VOICE_INPUT_SERVICE_MODE: process.env.XDT_VOICE_INPUT_SERVICE_MODE,
+    XDT_VOICE_INPUT_ASR_PROVIDER: process.env.XDT_VOICE_INPUT_ASR_PROVIDER,
+    XDT_VOICE_INPUT_ASR_PROVIDER_CHAIN: process.env.XDT_VOICE_INPUT_ASR_PROVIDER_CHAIN,
+  };
+  // Only configuration keys are passed to resolution; legacy warning hooks remain silent.
+  const safeEnv: NodeJS.ProcessEnv = {};
+  for (const key of ['XDT_VOICE_INPUT_SERVICE_MODE', 'XDT_VOICE_INPUT_ASR_PROVIDER',
+    'XDT_VOICE_INPUT_ASR_PROVIDER_CHAIN', 'XDT_UTILITY_MODEL_PROVIDER', 'XDT_UTILITY_MODEL',
+    'XDT_UTILITY_MODEL_PROVIDER_CHAIN', 'XDT_VOICE_INPUT_REFINER_PROVIDER',
+    'XDT_VOICE_INPUT_REFINER_MODEL', 'XDT_VOICE_INPUT_REFINER_PROVIDER_CHAIN']) safeEnv[key] = selectedEnv[key];
+  const inspection = inspectSettingsJson(path.join(ownerRoot, CONFIG_FILE_NAME), (raw) => {
+    validateOptionalSettingsFields(raw, {
+      serviceMode: value => value === null || typeof value === 'string',
+      asrProvider: value => value === null || typeof value === 'string',
+      asrProviderChain: value => value === null || (Array.isArray(value) && value.every(item => typeof item === 'string')),
+    });
+    return resolveVoiceInputModelSelectionValues(raw, safeEnv);
+  });
+  return inspection.status === 'ready' ? { ...inspection, env: safeEnv } : inspection;
+}
+
 const EMPTY_REFINER_DEFAULT_CHAIN: readonly VoiceInputRefinerProviderKind[] = [];
 
 const log = createLogger('voice-input:model-selection');

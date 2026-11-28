@@ -6,6 +6,7 @@ import { useSyncExternalStore } from 'react';
 import { richAnswerText } from '@cindy/maker-shared/rich-answer';
 import { forwardedRequestDisplayText } from '@cindy/maker-shared/message-source';
 
+import { isFeishuIm, resolveUserDisplayText } from '@/components/chat/userMessageDisplayText';
 import type { ChatMessage } from '@/lib/makerChatStore';
 import type { BotGroupQuoteDisplay } from '../../../shared/botGroupChat';
 import { chatReplyQuoteExcerpt, type ChatReplyQuote } from '../../../shared/chatReplyQuote';
@@ -43,6 +44,7 @@ type QuotableMessage = Pick<ChatMessage, 'clientId' | 'role' | 'content' | 'imag
 /** The text the user reads: a companion reply's components as their visible text, not their source. */
 function readableText(message: QuotableMessage): string {
   if (message.role === 'assistant') return richAnswerText(message.content);
+  if (isFeishuIm(message.hookSource?.im)) return resolveUserDisplayText(message);
   return message.automationOrigin?.kind === 'session' && !message.hookSource
     ? forwardedRequestDisplayText(message.content) : message.content;
 }

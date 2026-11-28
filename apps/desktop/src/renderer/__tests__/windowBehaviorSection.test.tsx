@@ -157,9 +157,17 @@ describe('WindowBehaviorSection login startup', () => {
     render(<WindowBehaviorSection />);
     const toggle = screen.getByRole('switch', { name: label });
     await waitFor(() => expect(toggle.hasAttribute('disabled')).toBe(false));
-    api.getLoginItem.mockResolvedValue({ available: true, enabled: true, requiresApproval: false });
+    // macOS rejects a write during its native status read. Keep the row stable while locked.
+    let finish!: (state: LoginItemState) => void;
+    api.getLoginItem.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
     fireEvent.focus(window);
+    expect(toggle.hasAttribute('disabled')).toBe(true);
+    expect(screen.queryByText('settings.windowBehavior.loginItem.loading')).toBeNull();
+    fireEvent.click(toggle);
+    expect(api.setLoginItem).not.toHaveBeenCalled();
+    await act(async () => finish({ available: true, enabled: true, requiresApproval: false }));
     await waitFor(() => expect(toggle.getAttribute('aria-checked')).toBe('true'));
+    expect(toggle.hasAttribute('disabled')).toBe(false);
   });
 
   it('shows read failure instead of presenting an editable default', async () => {
@@ -234,8 +242,18 @@ describe('WindowBehaviorSection close behavior', () => {
 
   it('keeps tray and quit on Windows', async () => {
     const api = installWindowBehaviorApi('win32');
+    // Unit regression for #11277: exercise the searchable Windows hover-card switch.
+    const { windowBehavior } = window.electronAPI;
+    windowBehavior.getMenubarState = vi.fn().mockResolvedValue({ available: true, enabled: true });
+    windowBehavior.setMenubarEnabled = vi.fn(async (enabled) => ({ available: true, enabled }));
 
     render(<WindowBehaviorSection />);
+
+    const card = await screen.findByRole('switch', { name: windowBehaviorSettings.trayCardLabel.titleKey });
+    expect(card.getAttribute('aria-checked')).toBe('true');
+    fireEvent.click(card);
+    await waitFor(() => expect(card.getAttribute('aria-checked')).toBe('false'));
+    expect(windowBehavior.setMenubarEnabled).toHaveBeenCalledWith(false);
 
     expect(await screen.findByText('settings.windowBehavior.closeBehavior.label')).toBeTruthy();
     expect(api.getWindowsCloseBehavior).toHaveBeenCalledTimes(1);

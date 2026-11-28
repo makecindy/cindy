@@ -59,17 +59,17 @@ describe('Bot avatar selection', () => {
 });
 
 describe('bundled teammate portrait fallback', () => {
-  it('provides sixteen distinct real portraits and wraps without reviving a retired role', async () => {
+  it('provides twenty-five distinct real portraits and wraps without reviving a retired role', async () => {
     const sharp = (await import('sharp')).default;
     const hashes = new Set<string>();
-    for (let index = 0; index < 16; index++) {
+    for (let index = 0; index < 25; index++) {
       const image = await readDefaultTeammatePortrait(index);
       expect(image.mimeType).toBe('image/png');
       expect(await sharp(image.buffer).metadata()).toMatchObject({ width: 256, height: 256 });
       hashes.add(createHash('sha256').update(image.buffer).digest('hex'));
     }
-    expect(hashes.size).toBe(16);
-    expect(await readDefaultTeammatePortrait(16)).toEqual(await readDefaultTeammatePortrait(0));
+    expect(hashes.size).toBe(25);
+    expect(await readDefaultTeammatePortrait(25)).toEqual(await readDefaultTeammatePortrait(0));
   });
 
   it('uses the packaged gallery with exactly the same pixels as development', async () => {

@@ -22,7 +22,12 @@ export function useSideChatCount({ deviceId, sessionId, maker, owner, enabled, r
       const epoch = ++request;
       void maker.listSideChats(sessionId).then(rows => {
         if (active && request === epoch && isMobileAuthOwnerCurrent(owner)) {
-          setSnapshot({ deviceId, sessionId, owner, count: rows.length });
+          const ids = new Set(rows.map(row => row.id));
+          for (const row of remoteSessionStore.getSessions()) {
+            if (row.pendingLocalCreation && row.source === 'side-chat' && row.parentSessionId === sessionId
+              && row.deviceLinkDeviceId === deviceId) ids.add(row.id);
+          }
+          setSnapshot({ deviceId, sessionId, owner, count: ids.size });
         }
       }).catch(() => { /* Optional summary: explicit entry retains the retry/error UI. */ });
     };

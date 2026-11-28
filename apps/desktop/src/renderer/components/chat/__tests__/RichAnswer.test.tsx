@@ -275,6 +275,28 @@ it('renders model styling and vector geometry and applies a local visual patch',
   expect(screen.getByText('自由排版').style.color).toBe('var(--error-fg)');
 });
 
+it('renders markdown with an empty style string without reporting incomplete content', () => {
+  const source =
+    line(1, { version: 1, op: 'create', id: 'stack', kind: 'stack' }) +
+    line(2, {
+      op: 'create',
+      id: 'note',
+      kind: 'markdown',
+      parent: 'stack',
+      props: { text: 'Keep this note visible', style: '' },
+    });
+  render(
+    <RichAnswer
+      source={source}
+      stateKey="empty-style"
+      complete
+      renderMarkdown={(text) => <span>{text}</span>}
+    />,
+  );
+  expect(screen.getByText('Keep this note visible')).toBeTruthy();
+  expect(screen.queryByText('richAnswer.incomplete')).toBeNull();
+});
+
 // Tier 1: real model output used a unitless line-height and stock data whose
 // dates became a vertical list whenever point values did not fit. Earlier
 // renderer tests only covered two points and did not exercise either failure.
@@ -402,4 +424,59 @@ it('disables message actions outside a writable conversation while local buttons
   expect((screen.getByRole('button', { name: 'Send form' }) as HTMLButtonElement).disabled).toBe(true);
   fireEvent.click(screen.getByRole('button', { name: 'Calculate' }));
   expect(screen.getByText('1')).toBeTruthy();
+});
+
+// Unit: #13479, unlike the existing valid-send test, a generated action over
+// the argument limit must explain its disabled state without blocking edits.
+it.each(['button', 'form'] as const)('explains unavailable send text in a writable %s', async (kind) => {
+  const { SessionQuickSendProvider } = await import('../SessionQuickSendContext');
+  const send = vi.fn(async () => true);
+  const { act } = await import('@testing-library/react');
+  const args = Array.from({ length: 33 }, (_, index) => index % 2 ? { ref: 'color' } : 'Color: ');
+  const source = (expr: unknown) => [
+    { id: 'color', kind: 'select', props: { label: 'Color', default: 'Red', options: [
+      { label: 'Red', value: 'Red' }, { label: 'Blue', value: 'Blue' },
+    ] } },
+    { id: 'send', kind, props: { label: 'Send selections', send: expr } },
+  ].map((op, index) => line(index + 1, { op: 'create', ...op })).join('');
+  const renderAction = (expr: unknown, writable = true) => (
+    <SessionQuickSendProvider value={writable ? { send } : null}>
+      <RichAnswer source={source(expr)} complete stateKey={`send-limit-${kind}`} renderMarkdown={text => <span>{text}</span>} />
+    </SessionQuickSendProvider>
+  );
+
+  const oversized = { op: 'concat', args };
+  const view = render(renderAction(oversized));
+  const button = screen.getByRole<HTMLButtonElement>('button', { name: 'Send selections' });
+  const color = screen.getByRole<HTMLSelectElement>('combobox', { name: 'Color' });
+  fireEvent.change(color, { target: { value: 'Blue' } });
+  expect(color.value).toBe('Blue');
+  expect(button.disabled).toBe(true);
+  expect(screen.getByRole('status').textContent).toBe('richAnswer.sendTooManyArguments');
+  fireEvent.click(button);
+  expect(send).not.toHaveBeenCalled();
+
+  view.rerender(renderAction({ ref: 'missing' }));
+  expect(button.disabled).toBe(true);
+  expect(screen.getByRole('status').textContent).toBe('richAnswer.sendValueUnavailable');
+
+  view.rerender(renderAction(oversized, false));
+  expect(button.disabled).toBe(true);
+  expect(screen.queryByRole('status')).toBeNull();
+
+  const boundary = { op: 'concat', args: args.slice(0, 32) };
+  view.rerender(renderAction(boundary, false));
+  expect(button.disabled).toBe(true);
+  expect(screen.getByText('Color: Blue'.repeat(16))).toBeTruthy();
+
+  view.rerender(renderAction(boundary));
+  expect(button.disabled).toBe(false);
+
+  view.rerender(renderAction({ op: 'concat', args: [
+    { op: 'concat', args: args.slice(0, 16) }, { op: 'concat', args: args.slice(16) },
+  ] }));
+  const preview = screen.getByText('Color: Blue'.repeat(16) + 'Color:').textContent;
+  expect(send).not.toHaveBeenCalled();
+  await act(async () => { fireEvent.click(button); });
+  expect(send).toHaveBeenCalledExactlyOnceWith(preview, { literalText: true, independent: true });
 });

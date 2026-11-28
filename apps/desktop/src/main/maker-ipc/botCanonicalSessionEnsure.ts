@@ -1,12 +1,13 @@
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 
 import { getDbClient } from '../localDb/client/current.js';
 import { createBotCanonicalSession } from '../localDb/ipc/bots.js';
-import { botProfiles, botSessionLinks, sessions } from '../localDb/schema.js';
+import { botProfiles, botProfileVersions, botSessionLinks, sessions } from '../localDb/schema.js';
+import { readEffectiveBotPrimaryRoute } from '../maker-host/bot-model-chain-settings-store.js';
 import { resolveBotCanonicalSession } from './botCanonicalSessionRegistry.js';
 
 export type EnsureBotCanonicalSessionResult =
-  | { ok: true; sessionId: string }
+  | { ok: true; sessionId: string; missingModel?: boolean }
   | { ok: false; errorCode: string; message: string };
 
 /**
@@ -16,7 +17,7 @@ export type EnsureBotCanonicalSessionResult =
  */
 export async function ensureBotCanonicalSession(
   botId: string,
-  opts: { beforeRecovery?: () => Promise<void>; onCreated?: (sessionId: string) => void } = {},
+  opts: { beforeRecovery?: () => Promise<void>; onCreated?: (sessionId: string) => void; allowMissingModel?: boolean } = {},
 ): Promise<EnsureBotCanonicalSessionResult> {
   const db = getDbClient().drizzle;
   const [profile] = await db
@@ -27,10 +28,11 @@ export async function ensureBotCanonicalSession(
   if (!profile || profile.status !== 'active') {
     return { ok: false, errorCode: 'TARGET_BOT_INACTIVE', message: '目标伙伴已暂停或归档' };
   }
-  const { beforeRecovery, onCreated } = opts;
+  const { beforeRecovery, onCreated, allowMissingModel } = opts;
   await beforeRecovery?.();
   const registered = await resolveBotCanonicalSession(profile.id);
   let expected = registered.status === 'resolved' ? registered.sessionId : null;
+  let missingModel: boolean | undefined;
   for (let attempt = 0; attempt < 3; attempt += 1) {
     if (expected) {
       const [current] = await db
@@ -41,7 +43,21 @@ export async function ensureBotCanonicalSession(
         .limit(1);
       if (current?.status === 'active' && current.source === 'bot'
         && current.botId === profile.id && current.role === 'canonical') {
-        return { ok: true, sessionId: expected };
+        if (allowMissingModel && missingModel === undefined) {
+          // A previous take-over may have created the task but failed importing history.
+          // Check the current profile route, not the task's creation-time model fields.
+          const [version] = await db
+            .select({ config: botProfileVersions.capabilitiesJson })
+            .from(botProfileVersions)
+            .where(and(eq(botProfileVersions.botId, profile.id), eq(botProfileVersions.version, profile.currentVersion)))
+            .limit(1);
+          let config: unknown;
+          try { config = JSON.parse(version?.config ?? '{}'); } catch { config = {}; }
+          missingModel = !(await readEffectiveBotPrimaryRoute(config && typeof config === 'object' && !Array.isArray(config)
+            ? config as Record<string, unknown> : {}));
+          await beforeRecovery?.();
+        }
+        return { ok: true, sessionId: expected, ...(missingModel ? { missingModel: true } : {}) };
       }
     }
     await beforeRecovery?.();
@@ -50,7 +66,8 @@ export async function ensureBotCanonicalSession(
       botId: profile.id,
       expectedCanonicalSessionId: expected,
       expectedProfileVersion: profile.currentVersion,
-    }, beforeRecovery);
+    }, beforeRecovery, allowMissingModel ? { allowMissingModel: true } : undefined);
+    missingModel = created.missingModel === true;
     if (created.created) onCreated?.(created.canonicalSessionId);
     expected = created.canonicalSessionId;
   }

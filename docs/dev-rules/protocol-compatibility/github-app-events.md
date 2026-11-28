@@ -60,3 +60,24 @@ GitHub numeric ID，并在 GitHub 回复后复核账号状态与绑定代次。�
 上线顺序：服务端先发布能力与续期接口，再发布 Desktop；无需数据库 migration。回滚客户端
 保留本机加密 grant，回滚服务端使 App 续期暂不可用但不影响原 gh/PAT 和事件订阅。真实 OAuth、
 新权限接受与跨区回调仍需部署后验收，不能把单元测试通过当成生产已部署。
+
+## 指定 Issue（2026-11-24）
+
+自动任务的 `webhookTrigger.source` 在 `{preset:"github-app"}` 上纯增可选 `number`（正整数），此时 `repositories` 恰好一个，
+表示只接收该编号的事件（Issue 或 PR 的评论等）。存在既有 JSON 列，不加 migration；`sameGithubAppScope` 把编号计入范围，
+改变编号会更换本地队列身份。服务端订阅协议不变：客户端仍按仓库提交 `repositorySubscriptions`，编号只在客户端
+（宿主批次筛选与持久队列）复核，服务端事件已有的 `number` 字段即可。旧执行端的来源校验拒绝未知字段，写入报错而不会
+扩大为整个仓库；旧控制端编辑省略来源时原样保留。`schedule_create/update` 的 `webhookTrigger.source` 同步接受 `number`。
+
+本机 Renderer 新增只读 `git-context:github-item:resolve`（仓库、编号 → PR / Issue、标题、开闭状态），只信任本机应用窗口，
+不进 Device Link 白名单；复用账号级 GitHub 条件读取与限速，读取 `GET /repos/{repo}/issues/{number}`。
+
+## GitLab 指定 MR 与 Issue（2026-11-24）
+
+`prTrigger.url` 纯增接受 GitLab MR 链接（`https://<实例>/group/…/project/-/merge_requests/N`，规整为小写），
+沿用 `maker:schedule:create/update` 与 `supportsSchedulePrTrigger`；旧执行端的校验只认 GitHub 链接，写入报错而不会静默丢失。
+宿主的 GitHub App 订阅只取 GitHub 链接，GitLab MR 不进入 webhook-server；定时检查通过既有 MR 状态读取（本机 glab）复核。
+
+地址型发送方（如 `gitlab` / `gitlab-token`）的 `webhookTrigger.source` 纯增可选 `repository` 与 `number`，二者须同时出现，
+只在本机按事件已有的 `repository`、`number` 字段复核；服务器上的地址、格式与密钥不变，也不同步这两个字段。
+旧执行端拒绝认不出的字段；旧控制端编辑省略来源时原样保留。`schedule_create/update` 同步接受这两个字段。

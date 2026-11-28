@@ -1,8 +1,10 @@
+import { t } from '../i18n.desktop.js';
 import { shouldApplyExclusiveProviderRerouteLive } from '../maker-host/model-route-guard-live.js';
 import { createMessage, rewindPersistedUserMessageAfterClear } from '../localDb/ipc/messages.js';
 import { getSessionRowSnapshot, getSessionFsSnapshot, touchUserSendInDb } from '../localDb/ipc/sessions.js';
 import { wireSessionToIpc, isSessionInTurn, noteSilentStopUserSend, onSilentStopSettled } from '../maker-ipc/register.js';
 import { agentHandoffPending } from '../maker-ipc/agentHandoffPendingSingleton.js';
+import { workingDirectoryRecovery } from '../maker-ipc/workingDirectoryRecovery.desktop.js';
 import { resolveWorkingDir } from './workdir-resolver';
 import { WorktreePool } from '../worktree';
 import { isManagedScheduledTarget, restoreScheduledTarget } from './restore-target.desktop';
@@ -12,6 +14,7 @@ export * from './runner.js';
 export class MakerScheduleRunner extends SharedScheduleRunner {
   constructor(deps: MakerScheduleRunnerDeps) {
     super(deps, {
+      billingWaitMessage: () => t('scheduler.billingWait'),
       shouldApplyExclusiveProviderRerouteLive: (...args) => shouldApplyExclusiveProviderRerouteLive(...args),
       createMessage: (...args) => createMessage(...args),
       rewindPersistedUserMessageAfterClear: (...args) => rewindPersistedUserMessageAfterClear(...args),
@@ -27,6 +30,12 @@ export class MakerScheduleRunner extends SharedScheduleRunner {
       releaseWorktree: (...args) => WorktreePool.releaseWorktree(...args),
       isManagedScheduledTarget: (...args) => isManagedScheduledTarget(...args),
       restoreScheduledTarget: (...args) => restoreScheduledTarget(...args),
+      resolveRecoveredWorkingDir: (sessionId, workingDir) =>
+        workingDirectoryRecovery.resolve(sessionId, workingDir),
+      peekWorkingDirectoryRecoveryNote: (sessionId, workingDir) =>
+        workingDirectoryRecovery.peek(sessionId, workingDir),
+      consumeWorkingDirectoryRecoveryNote: (sessionId, note) =>
+        workingDirectoryRecovery.consume(sessionId, note),
     });
   }
 }

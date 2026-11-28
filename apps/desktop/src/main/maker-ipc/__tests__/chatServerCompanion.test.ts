@@ -291,8 +291,13 @@ describe('Chat Server cloud companions', () => {
       expect(calls('/preferences', 'GET')).toHaveLength(2);
     }
     renewed = true; finish(true); await vi.advanceTimersByTimeAsync(0);
-    expect(calls('/preferences', 'GET')).toHaveLength(4);
-    expect(calls('/preferences', 'POST')).toHaveLength(2);
+    // Once each claim succeeds, the immediate first snapshot pass also reads upload
+    // revisions. Assert each install still replays exactly once before that extra read.
+    for (const id of [botActor, other]) {
+      const requests = calls('/preferences').filter(([, , , actor]) => actor === id);
+      expect(requests.map(([, method]) => method)).toEqual(['GET', 'GET', 'POST', 'GET']);
+      expect(requests[2]?.[2]).toMatchObject({ key: 'companion.install.v1' });
+    }
     expect(activeCompanionCloud()!.installConfirmed('local-bot')).toBe(true);
     expect(activeCompanionCloud()!.installConfirmed('other-bot')).toBe(true);
   });

@@ -187,9 +187,9 @@ export type RemoteAgentRequest =
   /** A shared guest asks the group owner to choose a same-account executor for a short-lived direct route. */
   | { op: 'allocate'; agentKind: RemoteAgentKind; model: string; sessionId: string;
       /** Renewal and model changes must stay on the executor holding this task. */
-      preferredExecutorDeviceId?: string; prepareStandby?: true }
+      preferredExecutorDeviceId?: string; prepareStandby?: true; linkedShareExecutor?: true }
   /** Prepare one spare executor without starting or assigning a real task. */
-  | { op: 'standby-prepare'; agentKind: RemoteAgentKind; model: string; sessionId: string; excludeExecutorDeviceId?: string }
+  | { op: 'standby-prepare'; agentKind: RemoteAgentKind; model: string; sessionId: string; excludeExecutorDeviceId?: string; linkedShareExecutor?: true }
   /** Content-free running state for the group's load balancer; expires if reports stop. */
   | { op: 'direct-status'; sessionId: string; running: boolean; generation?: string }
   | { op: 'direct-status-batch'; statuses: Array<{ sessionId: string; running: boolean; generation: string }> }
@@ -205,6 +205,7 @@ export type RemoteAgentRequest =
   /** Authenticated same-account group owner installs or removes a guest grant on the executor. */
   | { op: 'delegate'; action: 'grant' | 'revoke' | 'disarm-standby'; shareId: string; memberId: string; guestDeviceId: string;
       providerId: string; model: string; sessionId: string; generation?: string; cleanupEpoch?: number;
+      linkedShareAgentNet?: true;
       standby?: { agentKind: RemoteAgentKind; limit: number | null; only?: true };
       fastPolicy?: Pick<RemoteAgentFastPolicy, 'group' | 'revision' | 'allowFast'> }
   /** Authenticated group owner updates only its own task speed constraints, never model grants. */
@@ -343,6 +344,8 @@ export interface RemoteAgentCaps {
   /** Executor accepts bounded same-account group-owner delegation for a shared guest. */
   directGuestExecution?: boolean;
   directGuestStandby?: true;
+  /** Executor verifies Agent-Net executor grants for migrated V1 shares without pinning V2 routes. */
+  linkedShareExecutor?: true;
   /** Same-account M supports an explicit bounded group routing context. */
   groupContinuity?: true;
   subscriptionFastPolicy?: true;
@@ -362,6 +365,8 @@ export interface RemoteAgentCaps {
   version: number;
   agents: Array<{ kind: RemoteAgentKind; available: boolean }>;
   maxRuns: number;
+  /** Live anonymous admission hint for this authenticated controller, not a reservation. */
+  runCapacityAvailable?: boolean;
   uploadChunkBytes: number;
   maxPayloadBytes: number;
   /** 是否支持 opaque 虚拟工作区；不支持时控制端必须拒绝启动以免泄露真实路径。 */
@@ -580,12 +585,13 @@ export function parseRemoteAgentRequest(value: unknown): RemoteAgentRequest {
       if (typeof v.model !== 'string' || !v.model || v.model.length > 512 || v.model.includes('\0')) invalid();
       if (typeof v.sessionId !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(v.sessionId)) invalid();
       const task = { agentKind: oneOf(v.agentKind, REMOTE_AGENT_KINDS), model: v.model, sessionId: v.sessionId };
+      const linkedShareExecutor = v.linkedShareExecutor === true ? { linkedShareExecutor: true as const } : {};
       if (v.op === 'standby-prepare') {
         if (!ID.test(v.sessionId)) invalid();
-        return { op: 'standby-prepare', ...task,
+        return { op: 'standby-prepare', ...task, ...linkedShareExecutor,
           ...(v.excludeExecutorDeviceId === undefined ? {} : { excludeExecutorDeviceId: deviceId(v.excludeExecutorDeviceId) }) };
       }
-      return { op: 'allocate', ...task,
+      return { op: 'allocate', ...task, ...linkedShareExecutor,
         ...(v.preferredExecutorDeviceId === undefined ? {} : { preferredExecutorDeviceId: deviceId(v.preferredExecutorDeviceId) }),
         ...(v.prepareStandby === true ? { prepareStandby: true as const } : {}) };
     }
@@ -671,10 +677,12 @@ export function parseRemoteAgentRequest(value: unknown): RemoteAgentRequest {
         standby = { agentKind: oneOf(permit.agentKind, REMOTE_AGENT_KINDS), limit: permit.limit as number | null,
           ...(permit.only === true ? { only: true as const } : {}) };
       }
+      if (v.linkedShareAgentNet !== undefined && (v.action !== 'grant' || v.linkedShareAgentNet !== true)) invalid();
       return { op: 'delegate', action: oneOf(v.action, ['grant', 'revoke', 'disarm-standby'] as const), shareId, memberId, guestDeviceId,
         providerId: v.providerId, model: v.model, sessionId: v.sessionId,
         ...(typeof v.generation === 'string' ? { generation: v.generation } : {}),
         ...(v.cleanupEpoch !== undefined ? { cleanupEpoch: v.cleanupEpoch as number } : {}),
+        ...(v.linkedShareAgentNet === true ? { linkedShareAgentNet: true as const } : {}),
         ...(fastPolicy ? { fastPolicy } : {}), ...(standby ? { standby } : {}) };
     }
     case 'fast-policy': {
@@ -956,6 +964,7 @@ export function parseRemoteAgentCaps(value: unknown): RemoteAgentCaps {
     version: count(v.version, 1_000),
     agents,
     maxRuns: count(v.maxRuns, 1_000),
+    ...(typeof v.runCapacityAvailable === 'boolean' ? { runCapacityAvailable: v.runCapacityAvailable } : {}),
     uploadChunkBytes: count(v.uploadChunkBytes, REMOTE_AGENT_UPLOAD_CHUNK_BYTES),
     maxPayloadBytes: count(v.maxPayloadBytes, Number.MAX_SAFE_INTEGER),
     ...(v.virtualWorkspace === true ? { virtualWorkspace: true } : {}),
@@ -971,6 +980,7 @@ export function parseRemoteAgentCaps(value: unknown): RemoteAgentCaps {
     ...(v.guestRelay === true ? { guestRelay: true } : {}),
     ...(v.directGuestExecution === true ? { directGuestExecution: true } : {}),
     ...(v.directGuestStandby === true ? { directGuestStandby: true as const } : {}),
+    ...(v.linkedShareExecutor === true ? { linkedShareExecutor: true as const } : {}),
     ...(v.groupContinuity === true ? { groupContinuity: true as const } : {}),
     ...(v.relayModelAccess === true ? { relayModelAccess: true } : {}),
     ...(v.reshareConsent === true ? { reshareConsent: true } : {}),

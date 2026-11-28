@@ -7,12 +7,22 @@
  */
 
 export {
+  ACP_ELICITATION_CREATE_METHOD,
   ACP_PROTOCOL_VERSION,
   type AcpAuthMethod,
   type AcpConfigOption,
+  type AcpElicitationResult,
+  type AcpElicitationValue,
   type AcpInitializeResult,
   type AcpMcpServer,
 } from './protocol.js';
+export {
+  encodeAcpElicitationResponse,
+  parseAcpElicitationForm,
+  type AcpElicitationChoice,
+  type AcpElicitationField,
+  type AcpElicitationForm,
+} from './elicitation.js';
 export {
   ACP_DEFAULT_MAX_LINE_CHARS,
   AcpLineDecoder,
@@ -32,6 +42,7 @@ export {
   openAcpSession,
   type AcpClientInfo,
   type AcpResumeOutcome,
+  type AcpReportedModelDetails,
   type OpenAcpSessionOptions,
 } from './session.js';
 export {
@@ -46,7 +57,26 @@ export {
 } from './acp-agent.js';
 export {
   CINDY_PLUGIN_GATEWAY_MCP_SERVER,
+  collectPluginEngineSkillNames,
+  defusePluginEngineHandoffPrefix,
+  defusePluginEngineSlashMentions,
+  defusePluginEngineWireEnvelope,
+  formatPluginEngineDirectoryGrants,
+  formatPluginEngineDirectoryGrantsUpdate,
   formatPluginEngineSkillList,
+  isLeadingSlashCommand,
   renderPluginEngineCapabilityBriefing,
   type PluginEngineBriefingSkill,
+  type PluginEngineWireMessage,
 } from './briefing.js';
+export {
+  ACP_MCP_RECEIPT_MAX_TEXT_CHARS,
+  canonicalizeMcpToolInput,
+  createAcpMcpResultBackfiller,
+  createMcpToolResultBucket,
+  parseAcpMcpToolName,
+  type CreateMcpToolResultBucketOptions,
+  type McpToolResultBucket,
+  type ParsedAcpMcpToolName,
+  type RecordedMcpToolResult,
+} from './mcp-tool-result.js';

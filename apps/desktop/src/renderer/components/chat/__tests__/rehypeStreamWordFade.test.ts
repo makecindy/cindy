@@ -21,6 +21,8 @@ import {
   rehypeStreamWordFade,
   scheduleWordFadeSegment,
   splitWords,
+  WORD_FADE_DURATION_MS,
+  WORD_FADE_MIN_DURATION_MS,
   type WordFadeState,
 } from '../rehypeStreamWordFade';
 
@@ -94,6 +96,47 @@ function schedule(state: WordFadeState, key: string): number {
   expect(writtenDelay).toBe(`${delay}ms`);
   return delay;
 }
+
+// 2026-11-25 黑盒基准 turbo 场景（~4000 字/秒）：500ms 淡入让数百个词同时动画，
+// 绘制开销随出字速度线性增长。段越密淡入越短（下限 --motion-fast），慢速仍是长淡入。
+describe('scheduleWordFadeSegment 的自适应淡入时长', () => {
+  function durationsAt(segmentsPerSecond: number): number[] {
+    const state = createWordFadeState();
+    let now = 0;
+    state.timeline.nowFn = () => now;
+    const written: number[] = [];
+    for (let i = 0; i < segmentsPerSecond; i++) {
+      now = (i * 1000) / segmentsPerSecond;
+      const element = {
+        style: {
+          setProperty(name: string, value: string) {
+            if (name === '--wf-duration') written.push(Number.parseFloat(value));
+          },
+        },
+      } as unknown as HTMLElement;
+      scheduleWordFadeSegment(state, `k${i}`, element);
+    }
+    return written;
+  }
+
+  it('慢速出字保持完整长淡入，高速出字缩短但不低于下限', () => {
+    expect(Math.min(...durationsAt(20))).toBe(WORD_FADE_DURATION_MS);
+    const fast = durationsAt(800).slice(-100);
+    expect(Math.max(...fast)).toBeLessThan(WORD_FADE_DURATION_MS / 2);
+    expect(Math.min(...fast)).toBeGreaterThanOrEqual(WORD_FADE_MIN_DURATION_MS);
+  });
+
+  it('remount 沿用开播时定下的时长', () => {
+    const state = createWordFadeState();
+    state.timeline.nowFn = () => 0;
+    const values: string[] = [];
+    const element = { style: { setProperty: (name: string, value: string) => { if (name === '--wf-duration') values.push(value); } } } as unknown as HTMLElement;
+    scheduleWordFadeSegment(state, 'same', element);
+    state.timeline.nowFn = () => 40;
+    scheduleWordFadeSegment(state, 'same', element);
+    expect(values[0]).toBe(values[1]);
+  });
+});
 
 describe('splitWords', () => {
   it('英文按空格切词,空白并入前一词', () => {
@@ -466,10 +509,12 @@ describe('globals.css 的 stream-word 动画本体', () => {
     'utf8',
   );
 
-  it('引用 --motion-fast token + both 填充(delay 未到时保持透明)', () => {
+  // §14.4 Stream pacing(2026-11-25):匀速放出每帧只交出几个词,淡入必须是
+  // --motion-stream-word 的线性长淡入,才能形成连续渐显前沿。改回 --motion-fast
+  // (150ms ease-out)会让每次发布重新变成「一批词同时闪现」。
+  it('引用 --motion-stream-word token(可被 --wf-duration 按段覆盖) + linear + both 填充', () => {
     const rule = /\.stream-word\s*\{[\s\S]*?\}/.exec(css)?.[0] ?? '';
-    expect(rule).toContain('var(--motion-fast)');
-    expect(rule).toContain('var(--motion-ease-out)');
+    expect(rule).toContain('var(--wf-duration, var(--motion-stream-word)) linear');
     expect(rule).toContain('var(--wf-delay');
     expect(rule).toContain('both');
     expect(css).not.toContain('--motion-ease-stream-word');
@@ -485,8 +530,7 @@ describe('globals.css 的 stream-word 动画本体', () => {
   it('列表圆点 ::marker 淡入规则存在且纳入 reduced-motion 关停清单', () => {
     const rule = /\[data-stream-marker\]::marker\s*\{[\s\S]*?\}/.exec(css)?.[0] ?? '';
     expect(rule).toContain('stream-marker-in');
-    expect(rule).toContain('var(--motion-fast)');
-    expect(rule).toContain('var(--motion-ease-out)');
+    expect(rule).toContain('var(--wf-duration, var(--motion-stream-word)) linear');
     expect(rule).toContain('var(--wf-delay');
     expect(rule).toContain('both');
     // ::marker 只支持 color/font 系属性,关键帧必须动 color 而不是 opacity。
@@ -524,4 +568,53 @@ it('bounds retained word payload while keeping hot small entries and exact text'
   expect(hugeWords.join('')).toBe(huge);
   expect(splitWords(huge)).not.toBe(hugeWords);
   expect(splitWords(hot)).toBe(hotWords);
+});
+
+// Regression (P0-4.4): candidate creation must not clone committed Map/Set per chunk,
+// adaptive shortened durations must settle on their own duration (not 500ms), and
+// sustained high-throughput bursts must degrade new segments without stream-word layers.
+describe('rehypeStreamWordFade zero-clone candidate & high-throughput degradation', () => {
+  it('shares committed Map/Set on candidate without cloning and merges only candidateSettled on commit', () => {
+    const committed = createWordFadeState();
+    committed.timeline.settled.add('already-settled');
+    committed.timeline.startAtByKey.set('wf-0', 0);
+    committed.timeline.durationByKey.set('wf-0', WORD_FADE_MIN_DURATION_MS);
+    committed.previous = [{ kind: 'text', content: 'old ', key: 'wf-0' }];
+    committed.nextId = 1;
+
+    const abandoned = createWordFadeCandidate(committed);
+    expect(abandoned.timeline.startAtByKey).toBe(committed.timeline.startAtByKey);
+    expect(abandoned.timeline.settled).toBe(committed.timeline.settled);
+
+    // At 160ms (> 150ms adaptive duration, < 500ms default), wf-0 settles in candidate only.
+    run(root(el('p', [textNode('old new')])), abandoned, 160);
+    expect(committed.timeline.settled.has('wf-0')).toBe(false);
+
+    const committedCandidate = createWordFadeCandidate(committed);
+    run(root(el('p', [textNode('old new')])), committedCandidate, 160);
+    commitWordFadeCandidate(committed, committedCandidate);
+
+    expect(committed.timeline.settled.has('already-settled')).toBe(true);
+    expect(committed.timeline.settled.has('wf-0')).toBe(true);
+    expect(committed.timeline.startAtByKey.has('wf-0')).toBe(false);
+  });
+
+  it('degrades newly arriving segments to settled spans during sustained high throughput and recovers after', () => {
+    const state = createWordFadeState();
+    // Simulate 140 recently started segments within 100ms (exceeds WORD_FADE_MAX_ACTIVE = 120).
+    for (let i = 0; i < 140; i += 1) {
+      state.timeline.recentStarts.push(900 + Math.floor((i * 80) / 140));
+    }
+
+    const burstTree = root(el('p', [textNode('fast burst words here')]));
+    run(burstTree, state, 1000);
+    // All text is preserved, but zero new .stream-word compositor animation layers are created.
+    expect(nodeText(burstTree)).toBe('fast burst words here');
+    expect(collectWords(burstTree)).toEqual([]);
+
+    // Once the rate window drains (600ms later), new segments animate normally again.
+    const calmTree = root(el('p', [textNode('fast burst words here resumed')]));
+    run(calmTree, state, 1700);
+    expect(collectWords(calmTree).map((w) => w.text)).toEqual(['resumed']);
+  });
 });

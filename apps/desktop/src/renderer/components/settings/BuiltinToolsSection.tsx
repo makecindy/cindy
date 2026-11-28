@@ -193,14 +193,14 @@ export function BuiltinToolsSection({ workingDir }: BuiltinToolsSectionProps) {
   // First render: null → blank (no flash). After data arrives: render list.
   if (!plugins) return null;
 
-  const toggleHint = t('settings.builtinTools.toggleHint');
-
   return (
-    <SettingsSection
-      titleId={builtinToolsSettings.title.targetId}
-      title={t(builtinToolsSettings.title.titleKey)}
-      description={t(builtinToolsSettings.title.descriptionKey)}
-      action={
+    <BuiltinToolsSectionView
+      plugins={plugins}
+      pendingIds={pendingIds}
+      effectiveWorkingDir={effectiveWorkingDir}
+      handleToggle={handleToggle}
+      handleClearOverride={handleClearOverride}
+      scopePicker={
         <ScopePicker
           effectiveWorkingDir={effectiveWorkingDir}
           activeSessionWorkingDir={activeProjectWorkingDir}
@@ -208,6 +208,37 @@ export function BuiltinToolsSection({ workingDir }: BuiltinToolsSectionProps) {
           onPick={setSelectedScope}
         />
       }
+    />
+  );
+}
+
+export function BuiltinToolsSectionView({
+  plugins,
+  pendingIds,
+  effectiveWorkingDir,
+  handleToggle,
+  handleClearOverride,
+  scopePicker,
+  headingStatus,
+}: {
+  plugins: BuiltinToolListItem[];
+  pendingIds: Set<string>;
+  effectiveWorkingDir?: string | null;
+  handleToggle: (id: string, next: boolean, label: string) => void;
+  handleClearOverride: (id: string, label: string) => void;
+  scopePicker?: React.ReactNode;
+  /** Cloud settings: a group that could not be read says so here, in place of the heading's action. */
+  headingStatus?: React.ReactNode;
+}) {
+  const { t } = useTranslation();
+  const toggleHint = t('settings.builtinTools.toggleHint');
+
+  return (
+    <SettingsSection
+      titleId={builtinToolsSettings.title.targetId}
+      title={t(builtinToolsSettings.title.titleKey)}
+      description={t(builtinToolsSettings.title.descriptionKey)}
+      action={headingStatus ?? scopePicker}
       caption={
         effectiveWorkingDir
           ? toggleHint

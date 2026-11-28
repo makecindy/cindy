@@ -53,16 +53,26 @@ function remoteWorkerPermissionModeUnsupportedError(): Error {
   );
 }
 
+function assertWorkerModelGroupCapability(raw: unknown): void {
+  if ((raw as { supportsOrcaWorkerModelGroup?: boolean } | null)?.supportsOrcaWorkerModelGroup !== true) {
+    throw new Error('[DEVICE_LINK_CHANNEL_NOT_ALLOWED] controlled device does not support Worker model groups');
+  }
+}
+
+export async function assertRemoteWorkerModelGroupSupported(deviceId: string): Promise<void> {
+  assertWorkerModelGroupCapability(await agentCapabilitiesForDevice(deviceId, 'claude-code'));
+}
+
 async function readRemoteCollabCapabilities(
   deviceId: string,
-  options: Pick<EnableOrcaOptions, 'workerAgent' | 'agentDeviceId'>,
+  options: Pick<EnableOrcaOptions, 'workerAgent' | 'agentDeviceId' | 'modelGroup'>,
 ): Promise<{
   supportsOrcaWorkerPermissionMode?: boolean;
   supportsDeferredOrcaUiAssignment?: boolean;
 }> {
   // Worker 的 Agent 在另一台电脑运行时，那个 Agent 不一定装在被控电脑上；这些是整台电脑的协议位，
   // 改用被控电脑一定注册的 Claude Code 读。插件引擎不是内置 Agent，同样按 Claude Code 读。
-  const probeAgent = typeof options.agentDeviceId === 'string' || options.workerAgent === 'acp'
+  const probeAgent = options.modelGroup || typeof options.agentDeviceId === 'string' || options.workerAgent === 'acp'
     ? 'claude-code'
     : options.workerAgent;
   const raw = await agentCapabilitiesForDevice(deviceId, probeAgent);
@@ -74,6 +84,7 @@ async function readRemoteCollabCapabilities(
   ) {
     throw remoteWorkerPermissionModeUnsupportedError();
   }
+  if (options.modelGroup) assertWorkerModelGroupCapability(raw);
   // 旧被控端会静默丢掉 Worker 的 Agent 位置、把 Worker 建在 Lead 那里：弹窗之后降级了就直接失败。
   if (
     options.agentDeviceId !== undefined

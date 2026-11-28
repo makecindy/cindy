@@ -193,7 +193,7 @@ describe('formatMobileSystemCard — 中断自动重连状态', () => {
   it('uses persisted outcome while keeping silent-stop records on their original copy', () => {
     expect(['succeeded', 'failed', undefined].map((outcome) =>
       formatMobileSystemCard('auto-resume', outcome ? { ...info, outcome } : {}).title,
-    )).toEqual(['Reconnected', 'Reconnect failed', 'Connection interrupted — resumed automatically']);
+    )).toEqual(['Reconnected', 'Reconnect failed', 'Empty response — resumed automatically']);
   });
 });
 

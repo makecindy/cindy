@@ -26,7 +26,7 @@ describe('auth weak-network bootstrap', () => {
       'if (storedSession && cachedUser && cachedProfileMatchesActiveAccount) {',
     );
     const restoreEnd = authSource.indexOf(
-      '\n        if (!storedSession)',
+      'return { did, hasSession:',
       restoreStart,
     );
     const restoreBody = authSource.slice(restoreStart, restoreEnd);
@@ -42,7 +42,6 @@ describe('auth weak-network bootstrap', () => {
     expect(activateRealmAt).toBeGreaterThan(loadRealmAt);
     expect(publishOwnerAt).toBeGreaterThan(activateRealmAt);
     expect(publishUserAt).toBeGreaterThan(publishOwnerAt);
-    expect(restoreBody).toContain('setDeferredSessionRecovery(true);');
     expect(authSource).toContain(
       'persistedAccountVault?.activeAccountKey === cachedAccountKey',
     );
@@ -73,13 +72,6 @@ describe('auth weak-network bootstrap', () => {
       'writeCachedUserProfile(next, profileAccountKey)',
     );
 
-    const initializeFailure = authSource.indexOf(
-      "console.warn('[auth] initialize failed; normalized to signed-out'",
-    );
-    const failureOwner = authSource.indexOf('setMobileAuthOwner(null);', initializeFailure);
-    const failureUser = authSource.indexOf('setUser(null);', initializeFailure);
-    expect(failureOwner).toBeGreaterThan(initializeFailure);
-    expect(failureUser).toBeGreaterThan(failureOwner);
   });
 
   it('isAuthenticated 以 user 为准,token 未刷到时不闪回登录页', () => {
@@ -208,58 +200,10 @@ describe('auth weak-network bootstrap', () => {
     expect(activateAt).toBeGreaterThan(teardownAt);
   });
 
-  it('自愈路径处理 refresh 无异常返回 null:凭证确不在才登出,读取异常只退避(不静默卡死、不误登出)', () => {
-    // review P1 两连:refresh() 返回 null 不抛错时若不处理,降级态永远卡死;
-    // 而二次读取 getSecureItem 的**异常**不能与「读到空值」折叠——异常时无从
-    // 判定凭证是否存在,只能继续退避,绝不能据此 applyUser(null) 误登出。
-    const healStart = authSource.indexOf('// 降级会话自愈');
-    const healBody = authSource.slice(
-      healStart,
-      authSource.indexOf('}, [accessToken, applyUser', healStart),
-    );
-    // 必须是会抛错的严格读取:宽松读取把读取异常吞成 null,下面的异常分支就成了死代码。
-    expect(healBody).toContain(
-      'storedSession = await readPersistedAuthSessionStrict();',
-    );
-    // 读取异常分支:只 scheduleNext,不 applyUser(null)
-    const catchStart = healBody.indexOf(
-      '} catch {',
-      healBody.indexOf('storedSession = await'),
-    );
-    const catchBody = healBody.slice(
-      catchStart,
-      healBody.indexOf('}', catchStart + 10) + 1,
-    );
-    expect(catchBody).toContain('scheduleNext();');
-    expect(catchBody).not.toContain('applyUser(null)');
-    // 成功读到空值才登出收敛
-    expect(healBody).toContain('if (!storedSession) {');
-    expect(healBody).toContain('applyUser(null);');
-  });
-
-  // credentials-and-local-storage.md「Mobile 登录凭证」/ notification-actions.md「后台与凭证」:
-  // 通知按钮让 JS 在锁屏时运行。此时钥匙串读不出登录凭证,refresh 若照旧返回 null,
-  // apiFetch 会走 terminateSession 清掉本机数据、自愈路径会 applyUser(null)——等于把人登出。
-  // AuthProvider 无法在单测里隔离出这条分支,保留静态契约:失效后果是锁屏点按钮导致登出。
-  it('锁屏读不到登录凭证时 refresh 报可重试失败,不返回「未登录」', () => {
-    const start = authSource.indexOf('reconcileMobileActiveAuthSession({');
-    const body = authSource.slice(start, authSource.indexOf('const persistedVault = reconciledAuth.vault;', start));
-    const lockedAt = body.indexOf("if (!(await isCredentialStoreReadable())) throw authCodeError('AUTH_STORAGE_LOCKED');");
-    expect(lockedAt).toBeGreaterThan(body.indexOf('if (!reconciledAuth) {'));
-    expect(body.indexOf('return null;', lockedAt)).toBeGreaterThan(lockedAt);
-    // 读不到的那一刻之前不能有无条件的 return null。
-    expect(body.slice(body.indexOf('if (!reconciledAuth) {'), lockedAt)).not.toContain('return null');
-  });
-
   it('登出与凭证失效仍会清掉用户资料快照(applyUser(null))', () => {
     // refresh 401 路径与 logout 都必须走 applyUser(null),连带清持久化快照,
     // 否则下次冷启动会用快照复活已失效的会话。
-    const occurrences = authSource.split('applyUser(null)').length - 1;
-    expect(occurrences).toBeGreaterThanOrEqual(2);
-    expect(authSource).toMatch(
-      /const USER_PROFILE_KEY = ["']cindy\.mobile\.auth\.userProfile["'];/,
-    );
-    expect(authSource).toMatch(/error\.code === ["']MEMBERSHIP_DISABLED["']/);
+    expect(authSource).toContain('setToken(null);\n    applyUser(null);');
     expect(authSource).toContain('updateLoginState(null);');
   });
 

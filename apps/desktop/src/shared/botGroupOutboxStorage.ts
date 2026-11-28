@@ -7,6 +7,10 @@ export interface BotGroupOutboxStoredEntry {
   input: { groupId: string; clientId: string; text: string; [key: string]: unknown };
   createdAt: number;
   status: 'sending' | 'sent' | 'failed';
+  /** A rate-limited entry has one queued retry while sending, or needs explicit retry when failed. */
+  retryAt?: number;
+  /** The actual message write, after any preflight reads, has already been rate-limited. */
+  postRateLimited?: true;
   /** Main-issued local execution generation, independent of the network clientId. */
   entryRevision?: number;
   queueOrdinal?: number;
