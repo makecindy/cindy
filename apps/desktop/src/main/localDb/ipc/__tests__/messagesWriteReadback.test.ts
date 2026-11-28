@@ -196,6 +196,26 @@ describe('message write paths avoid large-content readback', () => {
     expect(page.nextCursor).toBeNull();
   });
 
+  // Unit, provider-sharing §4.1: the renderer-only fake cannot prove that the
+  // no-embedding marker survives storage, retry and the normal message broadcast.
+  it('preserves save-only text and embedding exclusion through persistence and broadcast', async () => {
+    const { tapWindowBroadcast } = await import('../../../device-link/broadcast-tap');
+    const { onMessageCreated } = await import('../../../embedders/chat-history-embedder');
+    vi.mocked(tapWindowBroadcast).mockClear();
+    vi.mocked(onMessageCreated).mockClear();
+    const content = 'https://example.invalid/provider-share/join#fixture-not-a-real-token';
+    const body = { clientId: 'provider-share-link', role: 'user' as const, content,
+      agentMeta: { excludeFromEmbedding: true } };
+    const saved = await createMessage('s1', body);
+    const row = (await h.db!.select().from(messages))[0]!;
+    expect(messageToCamel(row)).toMatchObject({ content, agentMeta: body.agentMeta });
+    expect(onMessageCreated).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ content, agentMeta: body.agentMeta }));
+    expect(tapWindowBroadcast).toHaveBeenCalledWith('local-db:messages:created',
+      expect.objectContaining({ message: expect.objectContaining({ content, agentMeta: body.agentMeta }) }));
+    expect(await createMessage('s1', body)).toEqual(saved);
+    expect(onMessageCreated).toHaveBeenCalledTimes(1);
+  });
+
   it('keeps View-only MCP App data out of create, reload and owner broadcasts', async () => {
     const { tapWindowBroadcast } = await import('../../../device-link/broadcast-tap');
     vi.mocked(tapWindowBroadcast).mockClear();

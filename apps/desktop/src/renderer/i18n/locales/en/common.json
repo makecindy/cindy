@@ -543,6 +543,11 @@
       "removed": "Removed sharing with {{name}}"
     },
     "link": {
+      "sendToSelf": "Send to myself",
+      "sentToSelf": "Sent to myself",
+      "sendFailed": "Could not save the link. Send it again or copy it.",
+      "sendHint": "Save in a new session on this computer without running a model.",
+      "taskTitle": "{{provider}} share link",
       "title": "{{provider}} Share Link Created",
       "description": "Send the link. Sharing starts after you receive and approve their request.",
       "fieldLabel": "Share link",

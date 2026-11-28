@@ -552,6 +552,11 @@
       "removed": "Partilha com {{name}} removida"
     },
     "link": {
+      "sendToSelf": "Enviar para mim",
+      "sentToSelf": "Enviado para mim",
+      "sendFailed": "Não foi possível guardar a ligação. Envie-a novamente ou copie-a.",
+      "sendHint": "Guarda a ligação numa nova sessão neste computador sem executar um modelo.",
+      "taskTitle": "Ligação de partilha de {{provider}}",
       "title": "Ligação de partilha de {{provider}} criada",
       "description": "Envie a ligação. A partilha começa depois de receber e aprovar o pedido.",
       "fieldLabel": "Ligação de partilha",

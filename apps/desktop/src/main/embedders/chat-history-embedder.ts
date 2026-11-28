@@ -107,9 +107,10 @@ export function setupChatHistoryEmbedder(deps: ChatHistoryEmbedderDeps): void {
         id: string;
         role: string;
         content: string;
+        agent_meta: string | null;
         rewind_at: number | null;
       }>(
-        `SELECT id, role, content, rewind_at
+        `SELECT id, role, content, agent_meta, rewind_at
            FROM messages
           WHERE id IN (${placeholders})`,
         jobs.map((j) => j.sourceId),
@@ -117,8 +118,10 @@ export function setupChatHistoryEmbedder(deps: ChatHistoryEmbedderDeps): void {
       const byId = new Map(rows.map((r) => [r.id, r]));
       return jobs.map((j) => {
         const r = byId.get(j.sourceId);
-        // 行已不在 (cascade delete 等) 或被 rewind → 返 null, Worker 把 job 标 done
-        if (!r || r.rewind_at !== null) return { rowid: j.rowid, text: null };
+        // Deleted, rewound or explicitly excluded rows finish without a model call.
+        if (!r || r.rewind_at !== null || excludesEmbedding(r.agent_meta)) {
+          return { rowid: j.rowid, text: null };
+        }
         const text = extractEmbedText(r.role as MessageRole, r.content);
         return { rowid: j.rowid, text };
       });
@@ -172,7 +175,7 @@ export function isChatEmbeddingEnabled(): boolean {
  * messages IPC createMessage 末尾调用的 hook (fire-and-forget)。
  *
  * 守卫顺序 (任一不满足 → 直接 return, 零成本):
- *   1. 全局 enabled 开关
+ *   1. 全局 enabled 开关，且消息未标记 excludeFromEmbedding
  *   2. cutoff 已存在 (从未启用过 = 无 cutoff = 不嵌; 防御性, 正常路径 setEnabled
  *      会在 enable=true 时立刻写入 cutoff)
  *   3. msg.createdAt >= cutoff
@@ -182,7 +185,7 @@ export function isChatEmbeddingEnabled(): boolean {
  * 全程不抛出: 任何错都吞 + log warn, 避免影响 createMessage IPC 返回。
  */
 export async function onMessageCreated(msg: Message): Promise<void> {
-  if (!_enabled || !_deps) return;
+  if (!_enabled || !_deps || excludesEmbedding(msg.agentMeta)) return;
   try {
     const cutoff = await readCutoff();
     if (cutoff === null) return;
@@ -309,6 +312,13 @@ export function resetCacheForNewDb(): void {
 }
 
 // ── internal: content → text 提取 ────────────────────────────────────────────
+
+/** One policy for new writes and queued/retried jobs read back from storage. */
+function excludesEmbedding(agentMeta: unknown): boolean {
+  const meta = typeof agentMeta === 'string' ? tryParseJson(agentMeta) : agentMeta;
+  return meta !== null && typeof meta === 'object'
+    && (meta as { excludeFromEmbedding?: unknown }).excludeFromEmbedding === true;
+}
 
 /**
  * 把按 role 不同形态的 content 抽取成"可嵌入的一段文本"。

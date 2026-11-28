@@ -539,6 +539,11 @@
       "removed": "已删除对 {{name}} 的分享"
     },
     "link": {
+      "sendToSelf": "发给自己",
+      "sentToSelf": "已发给自己",
+      "sendFailed": "链接未能发给自己，可重新发送或复制链接",
+      "sendHint": "保存到这台电脑的新任务，不调用模型。",
+      "taskTitle": "{{provider}} 分享链接",
       "title": "分享 {{provider}} 的链接已生成",
       "description": "将链接发给对方，收到申请并同意后分享生效",
       "fieldLabel": "分享链接",

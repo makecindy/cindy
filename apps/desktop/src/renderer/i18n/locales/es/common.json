@@ -552,6 +552,11 @@
       "removed": "Se eliminó el uso compartido con {{name}}."
     },
     "link": {
+      "sendToSelf": "Enviarme el enlace",
+      "sentToSelf": "Enlace enviado",
+      "sendFailed": "No se pudo guardar el enlace. Vuelve a enviarlo o cópialo.",
+      "sendHint": "Guarda el enlace en una nueva sesión en este equipo sin ejecutar un modelo.",
+      "taskTitle": "Enlace para compartir {{provider}}",
       "title": "Enlace para compartir {{provider}} creado",
       "description": "Envía el enlace. El uso compartido comienza cuando recibas y apruebes su solicitud.",
       "fieldLabel": "Enlace para compartir",
