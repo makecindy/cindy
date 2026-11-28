@@ -2,10 +2,19 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
-const design = readFileSync(
-  fileURLToPath(new URL('../../../../../docs/design-rules/DESIGN.md', import.meta.url)),
-  'utf8',
-);
+// 渐变例外在 DESIGN.md §2，动效类别与品牌界面登记在 exceptions/ 下的登记文件里，三处一起读。
+const design = [
+  'DESIGN.md',
+  'exceptions/motion.md',
+  'exceptions/brand-surfaces.md',
+]
+  .map((file) =>
+    readFileSync(
+      fileURLToPath(new URL(`../../../../../docs/design-rules/${file}`, import.meta.url)),
+      'utf8',
+    ),
+  )
+  .join('\n');
 const css = readFileSync(
   fileURLToPath(new URL('../styles/globals.css', import.meta.url)),
   'utf8',

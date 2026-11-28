@@ -1478,3 +1478,11 @@ DESIGN.md 瘦身 4a 把下列历史说明从正文移到这里，原文逐字保
 
 - **§5 Spacing System：间距例外与保留债务**（现在在 [exceptions/layout.md](./exceptions/layout.md)）：`(owner decision 2026-11-22)`
 - **§5 Content and unresolved shapes：已登记的内容形状**（现在在 [exceptions/layout.md](./exceptions/layout.md)）：`(owner decision 2026-11-22)` ×2；`(owner decision 2026-11-23)` ×2；`(owner decision 2026-11-25)` ×2
+
+## 2026-11-29 · DESIGN.md 瘦身 4c：动效与品牌界面例外搬出时移出的来源说明
+
+下列括号里的来源与日期说明，在动效与品牌界面例外从 DESIGN.md 搬到登记文件时从正文移出，原文逐字记在这里。规则本身没有改。
+
+- **§14.4 Motion tokens：已登记的循环动效**（现在在 [exceptions/motion.md](./exceptions/motion.md)）：`(maintainer rulings D-05 / D-06 / D-07, 2026-11-11)`；`(owner-approved 2026-11-18)`；`(D-06)` ×3
+- **Other sanctioned motion classes**（现在在 [exceptions/motion.md](./exceptions/motion.md)）：`(approved 2026-07-23)`；`(updated by user decision, 2026-09-12)`；`(user-approved 2026-11-09)`；`(approved 2026-07-29)`；`(2026-11-16)`；`(approved 2026-08-10)`；`(approved 2026-10-16)`；`(maintainer ruling D-11, 2026-11-11)`
+- **15.7 Brand Assets (icon + logo)**（现在在 [exceptions/brand-surfaces.md](./exceptions/brand-surfaces.md)）：`(registered 2026-11-11, maintainer ruling D-07)`；`(owner-requested 2026-11-11)`；`(approved 2026-07-25)`；`(owner-requested 2026-11-16)` ×2；`(owner-approved 2026-11-19)`；`(approved 2026-07-29)`；`(approved 2026-08-04)`
