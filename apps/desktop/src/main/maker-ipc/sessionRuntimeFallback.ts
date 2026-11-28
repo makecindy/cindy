@@ -26,6 +26,7 @@ import {
 } from './sessionRuntimeControl.js';
 
 type FallbackPick = Parameters<typeof pickSessionRuntimeFallback>[0];
+export type SessionRuntimeFallbackContext = ModelGroupRecovery | { hasImages: boolean };
 export type { FallbackRouteProfile } from './sessionRuntimeControl.js';
 
 /** The runtime selection a fallback candidate is applied through (the desktop: applySessionRuntimeSelection). */
@@ -120,7 +121,7 @@ export function createSessionRuntimeFallback<RuntimeSession extends { agentKind:
     attemptToken: number,
     requireRouteChange = false,
     isCurrent: () => boolean = () => true,
-    groupRecovery?: ModelGroupRecovery,
+    recovery?: SessionRuntimeFallbackContext,
     fallbackReason?: string,
   ): Promise<RuntimeFallbackResult<RuntimeSession>> => {
     const runtimeOwnerEpoch = captureSessionRuntimeControlOwnerEpoch();
@@ -167,6 +168,7 @@ export function createSessionRuntimeFallback<RuntimeSession extends { agentKind:
       if (!isCurrent()) return { session: null, outcome: 'superseded' };
       if (explicitTaskModel) return { session: null, outcome: requireRouteChange ? 'exhausted' : 'unchanged' };
       // Model-group inputs either stay on their source or choose from their group (model-groups.md §4).
+      const groupRecovery = recovery && 'accountUnavailable' in recovery ? recovery : undefined;
       if (groupRecovery?.retrySameSource) return { session: null, outcome: 'unchanged' };
       // Bot routes are explicit and ordered. They switch on the first recoverable
       // failure and never depend on the generic Session fallback toggle/catalog
@@ -221,6 +223,7 @@ export function createSessionRuntimeFallback<RuntimeSession extends { agentKind:
             visitedRoutes: profiles.control.visitedRoutes,
             currentHop: profiles.control.fallbackHop,
             maxHops: 2,
+            hasImages: recovery?.hasImages,
           });
       }
       // A Bot with no other route has nothing to exhaust; the caller decides whether

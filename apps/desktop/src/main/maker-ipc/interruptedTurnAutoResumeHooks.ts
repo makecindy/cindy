@@ -1,5 +1,5 @@
 import type { AgentInputCoordinatorDeps } from './agent-input-coordinator.js';
-import type { AgentInputQueuedMessage, ReconnectHandoff } from '../../shared/agentInputQueue.js';
+import { recoveryRequiresImageInput, type AgentInputQueuedMessage, type ReconnectHandoff } from '../../shared/agentInputQueue.js';
 import { MODEL_GROUP_LIMITS } from '../../shared/modelGroups.js';
 import { canRecoverUndeliveredOrcaReport } from '../../shared/sharedTaskRecovery.js';
 import type { AutoResumeBookkeeping, SuppressedTurnErrorOwner } from './autoResumeBookkeeping.js';
@@ -12,11 +12,12 @@ import {
 } from './interruptedTurnAutoResume.js';
 import {
   BOT_SUBSCRIPTION_STARTUP_ADMISSION_REASON, MODEL_GROUP_SAME_SOURCE_RETRIES, canResumeAfterRuntimeFallback, isBotCandidateUnavailable,
-  modelGroupFailureScope, modelGroupSwitchCause, type ModelGroupRecovery, type ModelGroupSwitchCause, type RuntimeFallbackResult,
+  modelGroupFailureScope, modelGroupSwitchCause, type ModelGroupSwitchCause, type RuntimeFallbackResult,
 } from './botCandidateRecovery.js';
 import { isProviderSafetyRefusalError, PROVIDER_SAFETY_REFUSAL_REASON } from '@cindy/maker-shared/error-redaction';
 import { isAccountUsageLimitError } from './usageLimitAutoResume.js';
 import { sanitizeRouteChangeReason } from './sessionRuntimeControl.js';
+import type { SessionRuntimeFallbackContext } from './sessionRuntimeFallback.js';
 
 type Hook<K extends keyof AgentInputCoordinatorDeps> = NonNullable<AgentInputCoordinatorDeps[K]>;
 
@@ -56,7 +57,7 @@ export interface InterruptedTurnAutoResumeHookPorts<RuntimeSession extends objec
     attemptToken: number,
     requireRouteChange: boolean,
     isCurrent: () => boolean,
-    groupRecovery?: ModelGroupRecovery,
+    recovery?: SessionRuntimeFallbackContext,
     fallbackReason?: string,
   ): Promise<RuntimeFallbackResult<RuntimeSession>>;
   pendingSessionRuntimeFallbackRebuilds: { delete(session: RuntimeSession): unknown };
@@ -177,6 +178,7 @@ export function createInterruptedTurnAutoResumeHooks<RuntimeSession extends obje
       // saveTurnStartedAtForDeferred 与 isRemoteAuthRetry 同款 —— 补落时 turn 开始时刻
       // 已被 resetTurnPersistState 清掉,不先存一份会让 /clear 竞态 cap 判错。
       saveTurnStartedAtForDeferred(sessionId);
+      const hasImages = recoveryRequiresImageInput(item);
       const groupSwitch = groupSwitchesNow || (groupScope === 'transient' && decision.attempt > MODEL_GROUP_SAME_SOURCE_RETRIES);
       const requireRouteChange = modelGroupPolicy !== undefined
         ? groupSwitch
@@ -248,9 +250,8 @@ export function createInterruptedTurnAutoResumeHooks<RuntimeSession extends obje
                   modelGroupPolicy !== undefined ? {
                     retrySameSource: !groupSwitch,
                     accountUnavailable: groupScope === 'connection',
-                    hasImages: item.files?.some(file => file.category === 'image') === true
-                      || (Array.isArray((item as { images?: unknown[] }).images) && (item as { images?: unknown[] }).images!.length > 0),
-                  } : undefined,
+                    hasImages,
+                  } : hasImages ? { hasImages } : undefined,
                   fallbackReason,
                 );
               fallbackRebuildSession = fallback.session;

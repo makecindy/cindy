@@ -303,6 +303,8 @@ export interface RecoveryCheckpoint {
 
 /** Same-process model source prefix; cannot be supplied by JSON or survive queue persistence. */
 export const HOST_ONLY_AGENT_PREFIX = Symbol('host-only-agent-prefix');
+/** The input being continued included model-facing images in this host's recovery chain. */
+export const HOST_ONLY_RECOVERY_REQUIRES_IMAGES = Symbol('host-only-recovery-requires-images');
 
 export interface AgentInputQueuedMessage {
   waitingForRemoteAccount?: true;
@@ -311,6 +313,7 @@ export interface AgentInputQueuedMessage {
   /** Main-owned delegation receipt; stripped from renderer/device-link input. */
   botTaskCoordination?: BotTaskCoordination;
   [HOST_ONLY_AGENT_PREFIX]?: string;
+  [HOST_ONLY_RECOVERY_REQUIRES_IMAGES]?: true;
   /** Host-stamped attribution, retained in durable queue snapshots and messages. */
   sharedTaskAuthor?: SharedTaskAuthor;
   /** Host-captured authored text before plugin/reference decoration; omitted from wire projections. */
@@ -639,6 +642,17 @@ export function getAgentInputAttachmentBlockType(
   return category === 'image' && ext.toLowerCase() !== '.gif' ? 'image' : 'file';
 }
 
+export function recoveryRequiresImageInput(item: AgentInputQueuedMessage): boolean {
+  const isImage = (file: AgentInputSerializedFile) =>
+    getAgentInputAttachmentBlockType(file.category, file.ext) === 'image';
+  // Node Host also queues images separately from serialized files.
+  const { images } = item as AgentInputQueuedMessage & { images?: unknown };
+  return item[HOST_ONLY_RECOVERY_REQUIRES_IMAGES] === true
+    || item.files?.some(isImage) === true
+    || item.contextFiles?.some(isImage) === true
+    || (Array.isArray(images) && images.length > 0);
+}
+
 export function queuedMessageRetryToken(queued: AgentInputQueuedMessage): string {
   return queued.text || `__xdt_queue_retry__:${queued.clientId}`;
 }
@@ -720,7 +734,8 @@ export function sanitizeQueuedMessageForPersistence(
     // Historical plain-text queue payloads have no embedded reference bodies.
   }
 
-  if (!changed && !item.trustedSessionReferenceContexts && item[HOST_ONLY_AGENT_PREFIX] === undefined) return item;
+  if (!changed && !item.trustedSessionReferenceContexts && item[HOST_ONLY_AGENT_PREFIX] === undefined
+    && item[HOST_ONLY_RECOVERY_REQUIRES_IMAGES] === undefined) return item;
   const sanitized: AgentInputQueuedMessage = {
     ...item,
     persistedContent,
@@ -731,6 +746,7 @@ export function sanitizeQueuedMessageForPersistence(
       : {}),
   };
   delete sanitized[HOST_ONLY_AGENT_PREFIX];
+  delete sanitized[HOST_ONLY_RECOVERY_REQUIRES_IMAGES];
   if (transientUsageResume) delete sanitized.autoResumeInfo;
   if (!item.agentReferences) delete sanitized.agentReferences;
   if (item.trustedSessionReferenceContexts) delete sanitized.trustedSessionReferenceContexts;
