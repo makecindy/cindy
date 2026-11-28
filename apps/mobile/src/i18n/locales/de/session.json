@@ -504,7 +504,7 @@
     "worktreeCreateFailed": "Worktree konnte nicht erstellt werden: {{message}}",
     "worktreeRecoveryStateFailed": "Der Wiederherstellungsstatus des Worktrees konnte nicht gespeichert werden. Versuch es erneut.",
     "worktreeCleanupPending": "Der vorherige Worktree wartet noch auf die Bereinigung. Verbinde das Gerät erneut und versuch es noch einmal.",
-    "createRejectedReturnToEdit": "Tippe auf „Zurück zum Bearbeiten“ und sende es erneut. Der Worktree wird dabei sicher aufgeräumt."
+    "createRejectedResend": "Dein Inhalt ist wieder da. Passe ihn bei Bedarf an und sende ihn erneut."
   },
   "menu": {
     "moveToProject": "Aufgabe verschieben",

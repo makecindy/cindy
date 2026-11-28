@@ -974,10 +974,10 @@ describe('newSessionCreation pipeline', () => {
   });
 
   // 测试价值:2026-11-29 手机新建 worktree 任务时，电脑明确拒绝(插件正在停用或更新),
-  // 失败页却提示「请重新连接设备后再试」——重连解决不了，真正能走的是「返回编辑」。
-  // 走真实管线的托管 worktree 分支:明确拒绝给返回编辑的指引，断连类不确定失败保留重连提示。
+  // 失败页却提示「请重新连接设备后再试」——重连解决不了。失败后会自动带回新建页，
+  // 走真实管线的托管 worktree 分支:明确拒绝提示内容已带回、可重新发送，断连类不确定失败保留重连提示。
   it.each([
-    ['The plugin is stopping or updating; try again after it is enabled', 'session.new.createRejectedReturnToEdit'],
+    ['The plugin is stopping or updating; try again after it is enabled', 'session.new.createRejectedResend'],
     ['[NOT_CONNECTED] offline', 'session.new.worktreeCleanupPending'],
   ] as const)('points a managed-worktree create failure at the step that helps (%s)', async (message, hintKey) => {
     const maker = makeMaker({ createSession: vi.fn(async () => { throw new Error(message); }) });

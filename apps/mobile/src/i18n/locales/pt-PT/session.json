@@ -505,7 +505,7 @@
     "worktreeCreateFailed": "Falha ao criar o worktree: {{message}}",
     "worktreeRecoveryStateFailed": "Não foi possível guardar o estado de recuperação do worktree. Tente novamente.",
     "worktreeCleanupPending": "O worktree anterior ainda aguarda limpeza. Volte a ligar o dispositivo e tente novamente.",
-    "createRejectedReturnToEdit": "Toque em «Voltar à edição» e envie novamente. O worktree será limpo em segurança."
+    "createRejectedResend": "O seu conteúdo foi restaurado. Ajuste se necessário e envie novamente."
   },
   "menu": {
     "moveToProject": "Mover tarefa",

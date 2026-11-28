@@ -504,7 +504,7 @@
     "worktreeCreateFailed": "worktree の作成に失敗しました：{{message}}",
     "worktreeRecoveryStateFailed": "worktree の復旧状態を保存できませんでした。もう一度お試しください。",
     "worktreeCleanupPending": "前回の worktree はまだクリーンアップ待ちです。デバイスを再接続してから再試行してください。",
-    "createRejectedReturnToEdit": "「編集に戻る」をタップしてから送信し直してください。worktree は安全に片付けられます。"
+    "createRejectedResend": "内容を戻しました。必要に応じて調整し、もう一度送信してください。"
   },
   "menu": {
     "moveToProject": "タスクを移動",

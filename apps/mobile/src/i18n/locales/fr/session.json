@@ -505,7 +505,7 @@
     "worktreeCreateFailed": "Échec de la création du worktree : {{message}}",
     "worktreeRecoveryStateFailed": "Impossible d'enregistrer l'état de récupération du worktree. Réessayez.",
     "worktreeCleanupPending": "Le worktree précédent est toujours en attente de nettoyage. Reconnectez l'appareil et réessayez.",
-    "createRejectedReturnToEdit": "Touchez « Revenir à la modification » puis renvoyez. Le worktree sera nettoyé en toute sécurité."
+    "createRejectedResend": "Votre contenu a été restauré. Modifiez-le si besoin, puis renvoyez-le."
   },
   "menu": {
     "moveToProject": "Déplacer la tâche",
