@@ -11,6 +11,8 @@
  * 问题,留在 footer 最自然。
  */
 import { AgentErrorDetails } from './AgentErrorDetails';
+import { resolveMobileErrorExplain } from './chatErrorExplain';
+import { NoticeExplainButton } from './NoticeExplainSheet';
 import { ErrorNotice, ErrorNoticeAction } from '@/components/ErrorNotice';
 import { ReadableHistoryRecovery } from './ReadableHistoryRecovery';
 import { useTranslation } from 'react-i18next';
@@ -45,7 +47,10 @@ import { radius, spacing, typeScale } from '@/theme/tokens';
 export interface InlineQueueSectionProps {
   onRecoverHistory?: () => void;
   projection: InputProjection;
+  isRunning?: boolean;
   sessionSource?: string | null;
+  providerId?: string | null;
+  providerName?: string | null;
   busy?: boolean;
   readOnlyReason?: string | null;
   onResume(): void;
@@ -57,12 +62,17 @@ export interface InlineQueueSectionProps {
   onCancelUsageLimitWait?(): void;
   /** 展开详情后的「诊断」：上层带着错误与出错任务去新任务里排查。 */
   onDiagnose?(error: ErrorDiagnosisSource): void;
+  /** 智能路由在同路由里找到的下一个可用来源：一键换过去并继续。 */
+  modelGroupSwitchOffer?: { label: string; onPress(): void } | null;
 }
 
 export function InlineQueueSection({
   onRecoverHistory,
   projection,
+  isRunning,
   sessionSource,
+  providerId,
+  providerName,
   busy,
   readOnlyReason,
   onResume,
@@ -71,15 +81,23 @@ export function InlineQueueSection({
   onClearError,
   onCancelUsageLimitWait,
   onDiagnose,
+  modelGroupSwitchOffer,
 }: InlineQueueSectionProps) {
   const styles = useThemedStyles(makeStyles);
   const { colors } = useTheme();
   const { t, i18n } = useTranslation();
 
+  const showSteerUnsupportedNotice = projection.steerUnsupported === true
+    && (projection.pendingQueue?.length ?? 0) > 0
+    && isRunning === true
+    && !projection.queuePaused
+    && !projection.queueAbortPending;
+
   const hasBanner = !!projection.error
     || !!projection.credentialSwitchWait
     || projection.queueAbortPending
-    || projection.queuePaused;
+    || projection.queuePaused
+    || showSteerUnsupportedNotice;
   if (!hasBanner) return null;
 
   const controlsDisabled = busy || !!readOnlyReason;
@@ -96,12 +114,26 @@ export function InlineQueueSection({
     projection.toolLoop ?? null,
     projection.error ?? '',
     projection.outputLimit,
+    projection.reconnectHandoff,
+    { providerId, providerName },
   );
   const projectionErrorKey = projection.error
     ? inputProjectionErrorI18nKey(projection.error)
     : null;
   const usageLimitResumeAt = projection.error && projection.usageLimitWait
     ? formatUsageLimitResumeAt(projection.usageLimitWait.resumeAt, i18n.resolvedLanguage || i18n.language)
+    : null;
+  const errorExplain = projection.error
+    ? resolveMobileErrorExplain(
+        {
+          message: projection.error,
+          reason: projection.errorReason,
+          providerId,
+          providerName,
+          hasUsageLimitWait: Boolean(usageLimitResumeAt),
+        },
+        t,
+      )
     : null;
   // The computer already confirmed an account usage limit and armed the automatic
   // continuation, so name the cause even when the upstream text is not recognizable.
@@ -133,19 +165,31 @@ export function InlineQueueSection({
           dismissBusy={busy}
           dismissHint={errorDisabledReason ?? undefined}
         >
-          <AgentErrorDetails message={projection.error} onDiagnose={onDiagnose
+          <AgentErrorDetails
+            message={projection.error}
+            explainButton={errorExplain ? <NoticeExplainButton content={errorExplain} /> : undefined}
+            onDiagnose={onDiagnose
             ? () => onDiagnose({
               message: projectionError ?? '',
               details: projection.error ?? '',
               reason: projection.errorReason,
             })
             : undefined} actions={<>
-            {retryable ? <ErrorNoticeAction
+            {modelGroupSwitchOffer ? <ErrorNoticeAction
               primary
+              disabled={!!errorDisabledReason}
+              busy={busy}
+              hint={errorDisabledReason ?? undefined}
+              label={modelGroupSwitchOffer.label}
+              onPress={modelGroupSwitchOffer.onPress}
+              testID="queue.inline.modelGroupSwitchButton"
+            /> : null}
+            {retryable ? <ErrorNoticeAction
+              primary={!modelGroupSwitchOffer}
               disabled={!!retryDisabledReason}
               busy={busy}
               hint={retryDisabledReason ?? undefined}
-              label={t('message.queue.retrySend')}
+              label={t(projection.errorReason === 'codex_reconnect_stalled' ? 'session.tail.continueTask' : 'message.queue.retrySend')}
               onPress={projection.errorRetryText ? onRetryError : (onContinueAfterError ?? onRetryError)}
               testID="queue.inline.retryButton"
             /> : null}
@@ -208,6 +252,10 @@ export function InlineQueueSection({
             <Text style={styles.resumePillText}>{t('message.queue.resume')}</Text>
           </QueueTouchButton>
         </View>
+      ) : showSteerUnsupportedNotice ? (
+        <Text style={styles.steerUnsupportedNotice} testID="queue.inline.steerUnsupportedNotice">
+          {t('message.queue.steerUnsupportedNotice')}
+        </Text>
       ) : null}
     </View>
   );
@@ -339,6 +387,12 @@ const makeStyles = (colors: ThemeColors) =>
       color: colors.textSecondary,
       fontSize: typeScale.footnote,
       lineHeight: lineHeight.caption,
+    },
+    steerUnsupportedNotice: {
+      color: colors.textSecondary,
+      fontSize: typeScale.footnote,
+      lineHeight: lineHeight.caption,
+      paddingHorizontal: spacing.xs,
     },
     errorActions: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm },
     actionPill: {

@@ -4,16 +4,21 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   __testing,
+  classifyRemoteWorktreeDiscardFailure,
   createRemoteSessionWithPrecreatedWorktree,
+  getRemoteWorktreeCleanupPendingMessage,
   isRemotePrecreatedWorktreeCleanupPendingError,
   isRemotePrecreatedWorktreeOwnerChangedError,
   listPendingRemotePrecreatedWorktrees,
   parseRemoteDiscardPrecreatedAck,
   parseRemoteWorktreeCreateResult,
+  precreateRemoteDraftWorktree,
   recoverPendingRemotePrecreatedWorktrees,
+  recoverSinglePendingRemotePrecreatedWorktree,
   registerPendingRemotePrecreatedWorktree,
 } from '../features/cc-agent/remotePrecreatedWorktree';
 import {
+  formatPrecreatedWorktreePreservedMessage,
   normalizePendingRemotePrecreatedWorktrees,
   remotePrecreatedWorktreeRecordKey,
   type PendingRemotePrecreatedWorktree,
@@ -172,6 +177,38 @@ describe('createRemoteSessionWithPrecreatedWorktree', () => {
         ledgerRecords = ledgerRecords.filter((item) => !targetMatches(item, target));
         return { persisted: true };
       },
+    });
+  });
+
+  // Shared by the built-in and plugin-engine remote new-task flows (2026-11-25). Unit, in-memory ledger.
+  // Minimal failing inputs: an empty source branch sent as '' (or a guessed 'main') instead of the current
+  // checkout; a reservation written after worktree:create; an explicit refusal leaving a stale obligation.
+  describe('precreateRemoteDraftWorktree', () => {
+    const precreate = (invoke: ReturnType<typeof vi.fn>, sourceBranch = '') => precreateRemoteDraftWorktree({
+      deviceId: DEVICE_ID, sessionId: SESSION_ID, dataOwnerId: 'owner-1', baseRepo: '/repo', name: '',
+      sourceBranch, resolveName: async () => 'quiet-otter', makeRecoveryKey: () => RECOVERY_KEY,
+      invoke, isCurrent: () => true, progress: { start: vi.fn(), named: vi.fn(), end: vi.fn() },
+    });
+
+    it('records the obligation first and checks out the current checkout when no source was chosen', async () => {
+      const invoke = vi.fn(async (_channel: string, [request]: unknown[]) => {
+        expect(ledgerRecords).toEqual([expect.objectContaining({ sessionId: SESSION_ID, phase: 'reserved' })]);
+        return { ok: true, meta: { ...(request as object), path: WORKTREE_PATH, branch: 'cindy/quiet-otter',
+          createdAt: '2026-11-25T00:00:00.000Z' } };
+      });
+      await expect(precreate(invoke)).resolves.toMatchObject({ ok: true, path: WORKTREE_PATH, recoveryKey: RECOVERY_KEY });
+      expect(invoke).toHaveBeenCalledExactlyOnceWith('worktree:create', [{
+        sessionId: SESSION_ID, baseRepo: '/repo', name: 'quiet-otter', sourceBranch: 'HEAD', recoveryKey: RECOVERY_KEY,
+      }]);
+      expect(ledgerRecords).toEqual([expect.objectContaining({ path: WORKTREE_PATH, phase: 'precreated' })]);
+    });
+
+    it('drops the obligation and reports the error when the computer refuses the checkout', async () => {
+      const invoke = vi.fn(async () => ({ ok: false, error: { kind: 'not-a-git-repo', message: 'not a repo' } }));
+      await expect(precreate(invoke, 'feature/x')).resolves.toEqual({
+        ok: false, error: { kind: 'not-a-git-repo', message: 'not a repo' },
+      });
+      expect(ledgerRecords).toEqual([]);
     });
   });
 
@@ -593,6 +630,7 @@ describe('createRemoteSessionWithPrecreatedWorktree', () => {
       recovered: 0,
       retained: 1,
       storageReadable: true,
+      failureKind: 'offline',
     });
     await expect(listPendingRemotePrecreatedWorktrees()).resolves.toHaveLength(1);
   });
@@ -625,6 +663,7 @@ describe('createRemoteSessionWithPrecreatedWorktree', () => {
       recovered: 0,
       retained: 1,
       storageReadable: true,
+      failureKind: 'unsupported',
     });
     await expect(listPendingRemotePrecreatedWorktrees()).resolves.toHaveLength(1);
   });
@@ -919,6 +958,100 @@ describe('createRemoteSessionWithPrecreatedWorktree', () => {
       }),
     ).resolves.toBe(false);
     expect(localStorage.getItem(__testing.storageKey)).toBe('{{{');
+    await expect(listPendingRemotePrecreatedWorktrees()).resolves.toEqual([]);
+  });
+
+  /*
+   * Test value (engineering-conventions §3.2)
+   * - Production entry: classifyRemoteWorktreeDiscardFailure, recoverPendingRemotePrecreatedWorktrees,
+   *   recoverSinglePendingRemotePrecreatedWorktree, getRemoteWorktreeCleanupPendingMessage.
+   * - Bug/rule basis: deterministic PRECONDITION_FAILED / PERMISSION_DENIED refusals were previously collapsed into
+   *   the generic offline/reconnect toast, misdirecting users when the remote device was online and refusing deletion.
+   * - Existing coverage gap: prior tests never asserted classified failureKind/preserveReason propagation, persisted
+   *   diagnostic metadata on retained records, or distinct localized error key selection.
+   * - Minimal failing inputs: structured WORKTREE_PRECREATED_PRESERVED:dirty refusal, legacy PRECONDITION_FAILED,
+   *   in-progress refusal, PERMISSION_DENIED mismatch, and single-record Settings retry.
+   */
+  it('classifies deterministic remote refusals, persists diagnostics on retained records, and selects specific messages', async () => {
+    await registerPendingRemotePrecreatedWorktree({
+      dataOwnerId: 'owner-1',
+      deviceId: DEVICE_ID,
+      deviceName: 'MacBook Pro',
+      sessionId: SESSION_ID,
+      recoveryKey: RECOVERY_KEY,
+      createdAt: Date.now(),
+      phase: 'reserved',
+    });
+
+    const invoke = vi.fn(async (channel: string) => {
+      if (channel === 'local-db:sessions:get') {
+        throw new Error('[NOT_FOUND] Session 不存在');
+      }
+      if (channel === 'worktree:discard-precreated') {
+        throw new Error(`[PRECONDITION_FAILED] ${formatPrecreatedWorktreePreservedMessage('dirty')}`);
+      }
+      throw new Error(`unexpected ${channel}`);
+    });
+
+    const failure = await precreateRemoteDraftWorktree({
+      deviceId: DEVICE_ID,
+      deviceName: 'MacBook Pro',
+      sessionId: 'session-next',
+      dataOwnerId: 'owner-1',
+      baseRepo: '/repo',
+      name: '',
+      sourceBranch: '',
+      resolveName: async () => 'quiet-otter',
+      makeRecoveryKey: () => 'next-recovery-key-123456',
+      invoke,
+      isCurrent: () => true,
+      progress: { start: vi.fn(), named: vi.fn(), end: vi.fn() },
+    }).catch((err: unknown) => err);
+
+    expect(isRemotePrecreatedWorktreeCleanupPendingError(failure)).toBe(true);
+    if (!isRemotePrecreatedWorktreeCleanupPendingError(failure)) throw new Error('expected cleanup pending error');
+    expect(failure.failureKind).toBe('preserved');
+    expect(failure.preserveReason).toBe('dirty');
+    expect(getRemoteWorktreeCleanupPendingMessage(failure, (key) => key)).toBe(
+      'ccAgent.draft.remoteWorktreeCleanup.preservedDirty',
+    );
+    expect(ledgerRecords[0]).toMatchObject({
+      deviceName: 'MacBook Pro',
+      lastFailureKind: 'preserved',
+      lastFailureReason: 'dirty',
+    });
+
+    expect(classifyRemoteWorktreeDiscardFailure(new Error('[PRECONDITION_FAILED] worktree 已有改动、保留标记或仍被使用'))).toEqual({
+      kind: 'preserved',
+    });
+    expect(classifyRemoteWorktreeDiscardFailure(new Error(`[PRECONDITION_FAILED] ${formatPrecreatedWorktreePreservedMessage('in-progress')}`))).toEqual({
+      kind: 'in-progress',
+      preserveReason: 'in-progress',
+    });
+    expect(classifyRemoteWorktreeDiscardFailure(new Error('[PERMISSION_DENIED] mismatch'))).toEqual({
+      kind: 'mismatch',
+    });
+    expect(getRemoteWorktreeCleanupPendingMessage({ failureKind: 'preserved' }, (key) => key)).toBe(
+      'ccAgent.draft.remoteWorktreeCleanup.preserved',
+    );
+    expect(getRemoteWorktreeCleanupPendingMessage({ failureKind: 'in-progress', preserveReason: 'in-progress' }, (key) => key)).toBe(
+      'ccAgent.draft.remoteWorktreeCleanup.inProgress',
+    );
+    expect(getRemoteWorktreeCleanupPendingMessage({ failureKind: 'mismatch' }, (key) => key)).toBe(
+      'ccAgent.draft.remoteWorktreeCleanup.mismatch',
+    );
+
+    const retryInvoke = vi.fn(async (channel: string) => {
+      if (channel === 'local-db:sessions:get') throw new Error('[NOT_FOUND] Session 不存在');
+      if (channel === 'worktree:discard-precreated') return { discarded: true };
+      throw new Error(`unexpected ${channel}`);
+    });
+    await expect(
+      recoverSinglePendingRemotePrecreatedWorktree({
+        record: ledgerRecords[0],
+        invoke: retryInvoke,
+      }),
+    ).resolves.toEqual({ recovered: true });
     await expect(listPendingRemotePrecreatedWorktrees()).resolves.toEqual([]);
   });
 });

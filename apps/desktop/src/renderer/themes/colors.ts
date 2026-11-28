@@ -2134,6 +2134,10 @@ const GENERATED_DEFAULTS = {
     "light": "var(--text-secondary-mid)",
     "dark": "var(--text-secondary-mid)"
   },
+  "search-input-bg": {
+    "light": "var(--surface-elevated)",
+    "dark": "var(--surface-elevated)"
+  },
   "slider-track": {
     "light": "var(--border-default)",
     "dark": "var(--border-default)"
@@ -3214,6 +3218,9 @@ registerColor('button-danger-solid-pressed', {
 
 // DS-11 readable form help; preserves existing Cindy secondary-information colors.
 registerColor('form-field-hint', GENERATED_DEFAULTS["form-field-hint"], '表单阅读说明；独立于 metadata 与 placeholder，允许主题单独调节');
+
+// SearchInput page fill; defaults to surface-elevated so search fields can be retuned in one place.
+registerColor('search-input-bg', GENERATED_DEFAULTS["search-input-bg"], 'SearchInput page-surface fill; defaults to surface-elevated');
 
 registerColor('slider-track', GENERATED_DEFAULTS["slider-track"], '共享 Slider 组件颜色');
 

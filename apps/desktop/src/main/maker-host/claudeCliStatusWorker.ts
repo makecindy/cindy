@@ -6,6 +6,8 @@ export interface ClaudeCliStatusRequest {
   binary: string;
   env: NodeJS.ProcessEnv;
   timeoutMs: number;
+  /** A path only: the reader hands the open file to the CLI and never reads it. */
+  oauthTokenFile?: string;
 }
 
 // Only the bundled CLI's read-only status query runs here. Login cancellation

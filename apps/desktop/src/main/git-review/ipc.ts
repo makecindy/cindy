@@ -433,12 +433,13 @@ export async function runReviewPush(
   sessionId: string,
   confirmForce?: ReviewPushConfirmForce,
   deps: GitReviewDeps = { resolveScope: resolveReviewScope, readStatus, readDiffs },
+  options?: { syncBeforePush?: boolean },
 ): Promise<ReviewPushResult> {
   try {
     return await runQueuedWrite(sessionId, deps, async () => {
       const scope = await deps.resolveScope(sessionId);
       const status = await deps.readStatus(scope);
-      const push = await pushBranch(status.scope, status, confirmForce);
+      const push = await pushBranch(status.scope, status, confirmForce, options);
       const data = await readReviewData(sessionId, deps);
       if (push.kind === 'needs-force') {
         return { data, ...push };
@@ -675,7 +676,11 @@ function parseCommitPayload(payload: unknown): { sessionId: string; message: str
   };
 }
 
-function parsePushPayload(payload: unknown): { sessionId: string; confirmForce?: ReviewPushConfirmForce } {
+function parsePushPayload(payload: unknown): {
+  sessionId: string;
+  confirmForce?: ReviewPushConfirmForce;
+  syncBeforePush?: boolean;
+} {
   const obj = requireObject(payload);
   let confirmForce: ReviewPushConfirmForce | undefined;
   if (obj.confirmForce !== undefined) {
@@ -685,9 +690,11 @@ function parsePushPayload(payload: unknown): { sessionId: string; confirmForce?:
       expectedOid: requireString(rawConfirm.expectedOid, 'confirmForce.expectedOid'),
     };
   }
+  const syncBeforePush = obj.syncBeforePush === true ? true : undefined;
   return {
     sessionId: requireString(obj.sessionId, 'sessionId'),
     confirmForce,
+    syncBeforePush,
   };
 }
 
@@ -829,7 +836,9 @@ export function registerGitReviewIpc(options: GitReviewIpcOptions = {}): void {
   });
 
   ipcMain.handle(GIT_REVIEW_INVOKE.PUSH, async (_event, payload: unknown) => {
-    const { sessionId, confirmForce } = parsePushPayload(payload);
-    return withSessionReviewExecution(sessionId, () => runReviewPush(sessionId, confirmForce, writeDeps));
+    const { sessionId, confirmForce, syncBeforePush } = parsePushPayload(payload);
+    return withSessionReviewExecution(sessionId, () =>
+      runReviewPush(sessionId, confirmForce, writeDeps, { syncBeforePush }),
+    );
   });
 }

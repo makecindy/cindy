@@ -42,6 +42,29 @@ const raw = JSON.stringify({ error: {
 } });
 afterEach(cleanup);
 
+// #12924, unit: the live and historical notices name an upstream 5xx status —
+// the exact empty HTTP 550 and any other message naming "550 status code" get
+// the same upstream-status notice (#12970) — while the dispatch refusal keeps
+// its own "not sent" text.
+const upstream550 = zhCN.chat.errorBanner.upstreamStatusError.replace('{{status}}', '550');
+it.each([
+  ['550 status code (no body)', upstream550],
+  ['ordinary failure mentioning 550 status code (no body)', upstream550],
+  ['provider-rejected-before-dispatch: Provider rejected the Session send before dispatch: SEND/task/send',
+    zhCN.chat.errorBanner.messageNotSent],
+])('names the upstream 5xx status and keeps the dispatch refusal (%s)', async (message, expected) => {
+  const i18n = createInstance();
+  await i18n.init({ lng: 'zh-CN', resources: { 'zh-CN': { translation: zhCN } } });
+  const { rerender } = render(<I18nextProvider i18n={i18n}>
+    <ErrorBanner error={message} agentKind="pi" onRetry={vi.fn()} />
+  </I18nextProvider>);
+  expect(screen.getByText(expected)).toBeTruthy();
+  rerender(<I18nextProvider i18n={i18n}>
+    <ErrorMessageCard message={message} />
+  </I18nextProvider>);
+  expect(screen.getByText(expected)).toBeTruthy();
+});
+
 // #12240, unit: the live banner must explain both options for a retained
 // queue head. The same network error without that recovery cannot promise
 // that the original input is still waiting to be sent.
@@ -73,6 +96,35 @@ it('shows the context-full notice on a skipped short input', async () => {
   const notice = container.querySelectorAll('[data-input-notice]');
   expect(notice).toHaveLength(1);
   expect(notice[0].textContent).toBe('上下文已满，这条消息未能处理。后面的消息会继续按顺序处理。');
+});
+
+// PR #13360 follow-up / unit: normal messages (including historical rows carrying a
+// non-mismatch dispatchRoute) must not show a route header above the bubble; only a
+// mismatched fallback shows ErrorNotice, using a readable plugin engine name without
+// leaking raw `acp-plugin:...` internal ids.
+it('hides non-mismatch dispatchRoute on UserMessage and shows readable plugin names only on fallback mismatch', async () => {
+  const i18n = createInstance();
+  await i18n.init({ lng: 'zh-CN', resources: { 'zh-CN': { translation: zhCN } } });
+  const normal = render(<I18nextProvider i18n={i18n}><MemoryRouter><Tooltip.Provider>
+    <UserMessage pluginUi={EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES} workingDir="" content="普通消息"
+      dispatchRoute={{ agentKind: 'acp', model: 'gemini-4-neon', providerId: 'acp-plugin:_root__cindy-antigravity-acp:agy', agentDeviceId: null }} />
+  </Tooltip.Provider></MemoryRouter></I18nextProvider>);
+  expect(normal.container.textContent).toBe('普通消息');
+  expect(normal.container.textContent).not.toContain('插件引擎');
+  expect(normal.container.textContent).not.toContain('acp-plugin:');
+  normal.unmount();
+
+  const fallback = render(<I18nextProvider i18n={i18n}><MemoryRouter><Tooltip.Provider>
+    <UserMessage pluginUi={EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES} workingDir="" content="回退消息"
+      dispatchRoute={{
+        agentKind: 'acp', model: 'gemini-4-neon', providerId: 'acp-plugin:_root__cindy-antigravity-acp:agy',
+        agentDeviceId: null, engineName: 'Antigravity',
+        selected: { agentKind: 'codex', model: 'gpt-6-astra', providerId: 'openai', agentDeviceId: null },
+        switchError: '[DEVICE_LINK_TIMEOUT] Target preparation timed out',
+      }} />
+  </Tooltip.Provider></MemoryRouter></I18nextProvider>);
+  expect(fallback.container.textContent).toContain('本次使用 Antigravity · gemini-4-neon，Codex · openai · gpt-6-astra 尚未就绪');
+  expect(fallback.container.textContent).not.toContain('acp-plugin:');
 });
 
 it.each(['live', 'history'] as const)('reports a clean Codex transport exit as an interruption in %s', async surface => {
@@ -111,6 +163,57 @@ it.each(['live', 'history', 'unclassified'] as const)('attributes a send prepara
   if (surface === 'live') {
     fireEvent.click(screen.getByRole('button', { name: zhCN.chat.errorBanner.retry }));
     expect(retry).toHaveBeenCalledWith('原消息');
+  }
+});
+
+// #12924, unit: an upstream 5xx without a body must name the status in both
+// error surfaces. The generic "reply failed" copy hides that the upstream
+// refused the request.
+it.each(['live', 'history'] as const)('names the upstream status in %s', async surface => {
+  const i18n = createInstance();
+  await i18n.init({ lng: 'zh-CN', resources: { 'zh-CN': { translation: zhCN } } });
+  const message = '550 status code (no body)';
+  const retry = vi.fn();
+  render(<I18nextProvider i18n={i18n}>{surface === 'history'
+    ? <ErrorMessageCard message={message} />
+    : <ErrorBanner error={message} agentKind="pi" retryText="原消息" onRetry={retry} />}</I18nextProvider>);
+  expect(screen.getByText('模型供应商服务返回异常（HTTP 550），本次回复未完成。')).toBeTruthy();
+});
+
+// #12924, unit: a Pi history read the upstream refused never reached the
+// provider. Both surfaces must say "not sent" and name that reason instead of
+// the generic "reply failed".
+it.each(['live', 'history'] as const)('explains a refused Pi history read in %s', async surface => {
+  const i18n = createInstance();
+  await i18n.init({ lng: 'zh-CN', resources: { 'zh-CN': { translation: zhCN } } });
+  const message = 'provider-rejected-before-dispatch: [PI_RETRY_HISTORY_UNAVAILABLE] Your message was not sent. Pi could not read the history needed to send it (status 550). You can retry, or continue in a new task.';
+  const retry = vi.fn();
+  render(<I18nextProvider i18n={i18n}>{surface === 'history'
+    ? <ErrorMessageCard message={message} />
+    : <ErrorBanner error={message} agentKind="pi" retryText="原消息" onRetry={retry} />}</I18nextProvider>);
+  expect(screen.getByText(zhCN.chat.errorBanner.piRetryHistoryUnavailable)).toBeTruthy();
+});
+
+// #12970, unit: the refused-history-read cause must outrank every broad status
+// matcher. 502/503/504 read as network-unreachable and 529 as overloaded, so a
+// banner that let them win would hide that the message was never sent at all.
+// Minimal failure input: the same synthesized message with a non-550 status.
+it.each(['live', 'history'] as const)('keeps a refused Pi history read ahead of broad matchers in %s', async surface => {
+  // 500/413 never reached the competing copy, but pin them so a future branch
+  // added ahead of this one cannot quietly swallow the "not sent" fact either.
+  for (const status of ['502', '503', '504', '529', '500', '413']) {
+    const i18n = createInstance();
+    await i18n.init({ lng: 'zh-CN', resources: { 'zh-CN': { translation: zhCN } } });
+    const message = `provider-rejected-before-dispatch: [PI_RETRY_HISTORY_UNAVAILABLE] Your message was not sent. Pi could not read the history needed to send it (status ${status}). You can retry, or continue in a new task.`;
+    const retry = vi.fn();
+    const { unmount } = render(<I18nextProvider i18n={i18n}>{surface === 'history'
+      ? <ErrorMessageCard message={message} />
+      : <ErrorBanner error={message} agentKind="pi" retryText="原消息" onRetry={retry} />}</I18nextProvider>);
+    expect(screen.getByText(zhCN.chat.errorBanner.piRetryHistoryUnavailable, { ignore: 'style,script' })).toBeTruthy();
+    expect(screen.queryByText(zhCN.chat.errorBanner.networkUnreachable)).toBeNull();
+    expect(screen.queryByText(zhCN.chat.errorBanner.overloadBusy)).toBeNull();
+    expect(screen.queryByText(/服务返回异常/)).toBeNull();
+    unmount();
   }
 });
 

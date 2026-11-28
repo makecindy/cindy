@@ -26,7 +26,26 @@ export type DesktopLoginAction =
   | { type: 'request-sso-verification-code' }
   | { type: 'verify-sso-verification'; code: string }
   | { type: 'request-binding-code'; contact: string }
-  | { type: 'verify-binding'; contact: string; code: string };
+  | { type: 'verify-binding'; contact: string; code: string }
+  /** 「还没有 Cindy 账号」里确认创建；注册票据只在 main。 */
+  | { type: 'confirm-signup' };
+
+/** 已登录电脑为另一台设备出码（「远程控制 Cindy」弹窗）。凭据不经过 renderer。 */
+export type DesktopQrHandoffResult =
+  | { success: true; handoffId: string; payload: string; expiresAt: string }
+  | { success: false; code: string };
+
+export type DesktopQrHandoffStateResult =
+  | {
+      success: true;
+      status: 'pending' | 'claimed' | 'approved' | 'denied' | 'expired';
+      expiresAt?: string;
+      requester?: { clientType: 'desktop' | 'mobile' | 'web'; deviceName?: string; platform?: string };
+    }
+  /** `retryAt`：服务端 Retry-After 给出的重试时刻（epoch ms），只在限流 / 暂不可用时出现。 */
+  | { success: false; code: string; retryAt?: number };
+
+export type DesktopQrHandoffDecisionResult = { success: true } | { success: false; code: string };
 
 /** In-memory presentation metadata; never a persisted cooldown or retry budget. */
 export type DesktopLoginState = (AuthFlowState | { step: 'entry' }) & { retryAt?: number; httpStatus?: number };
@@ -148,6 +167,60 @@ export type DesktopAccountDeletionConfirmResult =
 export type DesktopAccountDeletionStatusResult =
   DesktopAccountDeletionResult<AccountDeletionStatus | null>;
 
+/**
+ * 换绑登录联系方式(国内版手机号、国际版邮箱)。changeTicket 与 account token 只留在
+ * Electron main;renderer 只拿到打码后的展示值与 auth-server 错误码。
+ */
+export type DesktopContactChangeType = 'phone' | 'email';
+
+export interface DesktopContactChangeAvailability {
+  available: boolean;
+  /** 本账号所在区域换绑的联系方式类型;不可用时为 null。 */
+  type: DesktopContactChangeType | null;
+}
+
+export interface DesktopContactChangeCodeSent {
+  channel: 'email' | 'sms';
+  maskedTarget: string;
+}
+
+export interface DesktopContactChangeVerified {
+  type: DesktopContactChangeType;
+}
+
+export interface DesktopContactChangeCompleted {
+  type: DesktopContactChangeType;
+  maskedValue: string;
+}
+
+/**
+ * 换绑一步的结果。失败时 `retryAt` 是服务端 Retry-After 给出的重试时刻(epoch ms),
+ * 只在仍处于冷却期时出现;冷却结束前 renderer 不再发起同类请求。
+ */
+export type DesktopContactChangeResult<T> =
+  | { success: true; value: T }
+  | { success: false; code: string; retryAt?: number };
+
+const MAX_CONTACT_VALUE_LENGTH = 254;
+
+/** 验证码输入:6 位数字。 */
+export function parseDesktopContactChangeCode(value: unknown): string | null {
+  return typeof value === 'string' && /^\d{6}$/.test(value) ? value : null;
+}
+
+/** 新联系方式输入:只做长度与形状的边界校验,规范化与归属判断以 auth-server 为准。 */
+export function parseDesktopContactChangeValue(
+  type: DesktopContactChangeType,
+  value: unknown,
+): string | null {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  if (trimmed.length === 0 || trimmed.length > MAX_CONTACT_VALUE_LENGTH) return null;
+  if (type === 'email') return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmed) ? trimmed : null;
+  const compact = trimmed.replace(/[\s-]/g, '');
+  return /^\+?\d{6,15}$/.test(compact) ? compact : null;
+}
+
 const MAX_IDENTIFIER_LENGTH = 320;
 const MAX_OPAQUE_ID_LENGTH = 256;
 const MAX_CODE_LENGTH = 32;
@@ -257,9 +330,16 @@ export function parseDesktopLoginAction(value: unknown): DesktopLoginAction | nu
         isBoundedString(value.code, MAX_CODE_LENGTH)
         ? { type: 'verify-binding', contact: value.contact, code: value.code }
         : null;
+    case 'confirm-signup':
+      return { type: value.type };
     default:
       return null;
   }
+}
+
+/** 扫码登录出码 id 由服务端生成（base64url）；IPC 边界只放行同形值。 */
+export function parseDesktopQrHandoffId(value: unknown): string | null {
+  return typeof value === 'string' && /^[A-Za-z0-9_-]{16,64}$/.test(value) ? value : null;
 }
 
 export function parseDesktopAccountKey(value: unknown): string | null {

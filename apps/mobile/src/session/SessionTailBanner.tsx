@@ -11,6 +11,9 @@ import { ErrorNotice, ErrorNoticeAction } from '@/components/ErrorNotice';
  *  - 右上角关闭 → error-tail 持久化 dismiss / interrupted 写 ack,不再提示。
  */
 import { AgentErrorDetails } from './AgentErrorDetails';
+import { resolveMobileErrorExplain } from './chatErrorExplain';
+import { NoticeExplainButton } from './NoticeExplainSheet';
+import { localizeAgentError } from './agentErrorI18n';
 import { ReadableHistoryRecovery } from './ReadableHistoryRecovery';
 import { StyleSheet, View } from 'react-native';
 import { useTranslation } from 'react-i18next';
@@ -22,9 +25,13 @@ import { spacing } from '@/theme/tokens';
 export interface SessionTailBannerProps {
   state: NonNullable<SessionTailBannerState>;
   busy?: boolean;
+  providerId?: string | null;
+  providerName?: string | null;
   onRecoverHistory?: () => void;
   /** 展开详情后的「诊断」：上层带着错误与出错任务去新任务里排查。 */
   onDiagnose?: (error: ErrorDiagnosisSource) => void;
+  /** 智能路由在同路由里找到的下一个可用来源：一键换过去并继续。 */
+  modelGroupSwitchOffer?: { label: string; onPress(): void } | null;
   onContinue(): void;
   onDismiss(): void;
 }
@@ -32,30 +39,61 @@ export interface SessionTailBannerProps {
 export function SessionTailBanner({
   state,
   busy,
+  providerId,
+  providerName,
   onContinue,
   onDismiss,
   onRecoverHistory,
   onDiagnose,
+  modelGroupSwitchOffer,
 }: SessionTailBannerProps) {
   const { t } = useTranslation();
   const isInterrupted =
     state.kind === 'interrupted' || state.continueKind === 'interrupted';
+  const namedError = state.kind === 'error-tail' && state.rawError && providerName
+    ? localizeAgentError(state.reason, null, state.rawError, undefined, undefined, {
+        providerId: state.providerId ?? providerId,
+        providerName,
+      })
+    : null;
   const text =
     state.kind === 'error-tail' && state.continueKind === 'error'
       ? state.summaryKey
         ? t(state.summaryKey)
-        : state.text
+        : namedError?.includes(providerName ?? '\0') ? namedError : state.text
       : t('session.tail.interrupted');
+  const errorExplain =
+    state.kind === 'error-tail' && state.rawError && !isInterrupted
+      ? resolveMobileErrorExplain(
+          {
+            message: state.rawError,
+            reason: state.reason,
+            providerId: state.providerId ?? providerId,
+            providerName,
+          },
+          t,
+        )
+      : null;
   const showContinue = state.kind === 'interrupted' || state.retryable;
   const actions = (
     <>
-      {showContinue ? (
+      {modelGroupSwitchOffer ? (
         <ErrorNoticeAction
           primary
           disabled={busy}
           busy={busy}
+          label={modelGroupSwitchOffer.label}
+          onPress={modelGroupSwitchOffer.onPress}
+          testID="session.tailBanner.modelGroupSwitch"
+        />
+      ) : null}
+      {showContinue ? (
+        <ErrorNoticeAction
+          primary={!modelGroupSwitchOffer}
+          disabled={busy}
+          busy={busy}
           label={
-            isInterrupted
+            isInterrupted || (state.kind === 'error-tail' && state.reason === 'codex_reconnect_stalled')
               ? t('session.tail.continueTask')
               : t('session.tail.retry')
           }
@@ -89,6 +127,7 @@ export function SessionTailBanner({
         <AgentErrorDetails
           message={state.rawError}
           actions={actions}
+          explainButton={errorExplain ? <NoticeExplainButton content={errorExplain} /> : undefined}
           onDiagnose={
             onDiagnose
               ? () => onDiagnose({ message: text, details: state.rawError ?? '', reason: state.reason })

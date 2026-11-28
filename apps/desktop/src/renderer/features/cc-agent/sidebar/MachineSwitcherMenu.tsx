@@ -4,7 +4,7 @@
  * 2026-08-13 用户定稿(新设计,显式推翻两条 2026-07 旧定稿):
  *   - 「全部任务」段头与设备下拉**合并**——标题文字反映当前范围(全部任务 /
  *     本机任务 / 设备名 / N 台机器),点击标题弹出「所有 / 本机 / 各远程设备」
- *     切换 + 「远程连接设置」/「侧边栏显示设置」入口。顶部导航不再有独立的远程
+ *     切换 + 「远程连接设置」入口。顶部导航不再有独立的远程
  *     机器行,省一行;
  *     标题不再撒谎(旧结构下范围收窄后段头仍写「全部任务」)。
  *     (推翻 2026-07 「切换器收进 SidebarTopNav 末行、不挂段头」——当年是段头
@@ -13,10 +13,7 @@
  *     标题,hover 扫过就弹菜单太吵;段级收起同时取消,标题的点击语义让给范围切换。
  *
  * 无任何相关远程机器时标题仍是「全部任务 ▾」(2026-08-13 用户裁决:箭头保留),
- * 菜单不出现设备列表,只留「远程连接设置」与「侧边栏显示设置」——单机用户看不到
- * 设备概念,但仍能从段头进这两项。范围标题恒在后,断网逃生不再靠「假装还有
- * 远程设备」画出机器列表——目录空了就只留两项设置,用户从「远程连接设置」
- * 或范围标题本身回到本机。
+ * 菜单只保留「远程连接设置」。设备目录清空后同样不展示设备列表。
  *
  * 机器选择:**默认单选、多选框另走多选**(2026-07 用户定稿):
  *   - 「所有」→ 重置回默认(本机 + 全部远程),菜单关闭;
@@ -46,7 +43,7 @@
  * 颜色全走主题 token(规则 16),文案全走 i18n(规则 18)。
  */
 
-import { useEffect, useState, useRef, type ReactNode } from 'react';
+import { useRef, type ReactNode } from 'react';
 import {
   Ban,
   Check,
@@ -55,7 +52,6 @@ import {
   Monitor,
   MonitorCog,
   MonitorSmartphone,
-  SlidersHorizontal,
 } from 'lucide-react';
 import { useMatch, useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
@@ -73,9 +69,7 @@ import {
   DropdownMenuSub, DropdownMenuSubTrigger, DropdownMenuSubContent,
 } from '@/components/ui/dropdown-menu';
 import { useDeviceLinkDeviceList } from '@/features/device-link/useDeviceLinkDeviceList';
-import { useOptionalAuthUser, useOptionalDataOwnerGeneration } from '@/contexts/AuthContext';
-import { BRAND_IDENTITY } from '@cindy/maker-shared/brand-identity';
-import { cloudComputerEntry, isMobilePlatform } from '@cindy/maker-shared/device-list';
+import { isMobilePlatform } from '@cindy/maker-shared/device-list';
 import {
   isMachineSelected,
   MACHINE_ALL,
@@ -87,45 +81,11 @@ import {
 } from '@/features/device-link/useMachineSwitcher';
 import { MENU_ITEM_CLASS, MENU_ROW_CLASS } from './menuStyles';
 
-function CloudComputerMenuEntry() {
-  const user = useOptionalAuthUser();
-  const generation = useOptionalDataOwnerGeneration();
-  const { t } = useTranslation();
-  const member = user?.membershipKind === 'org' ? user.id : undefined;
-  const org = user?.orgId;
-  const owner = JSON.stringify([member,org,generation]);
-  const [result,setResult] = useState<{owner:string; entry:ReturnType<typeof cloudComputerEntry>} | null>(null);
-  useEffect(() => {
-    if (!member || !org) return;
-    let current = true;
-    // Radix mounts the content only while the menu is open.
-    const read = window.electronAPI?.deviceLink?.cloudComputerEntry;
-    if (read) void read().then(value => {
-      if (current) setResult({owner,entry:cloudComputerEntry(value,member,org)});
-    }).catch(() => { if (current) setResult(null); });
-    return () => { current = false; };
-  },[member,org,owner]);
-  const entry = result?.owner === owner ? result.entry : null;
-  if (!entry) return null;
-  const actions = 'canAdd' in entry && entry.canAdd ? [entry.action,'addCloud' as const] : [entry.action];
-  return <>{actions.map(action=><DropdownMenuItem key={action} className={MENU_ITEM_CLASS} onSelect={() => {
-    const url = new URL(entry.url);
-    url.searchParams.set('app', BRAND_IDENTITY.primaryScheme);
-    if (action==='addCloud') url.searchParams.set('add','1');
-    void window.electronAPI.openExternal(url.href).catch(() => toast.error(t('remoteDesktop.connectionError')));
-  }}><Monitor size={14}/><span>{t('ccAgent.sidebar.machineSwitcher.' + action)}</span></DropdownMenuItem>)}</>;
-}
-
 /** 段头标题共用样式:与原「全部任务」标题一致(淡灰、hover 加深)。 */
 const SCOPE_TITLE_CLASS =
   'text-sm leading-5 font-medium text-[var(--sidebar-list-muted)] transition-colors hover:text-[var(--sidebar-nav-text)]';
 
-export function MachineSwitcherMenu({
-  onOpenDisplaySettings,
-}: {
-  /** 打开段头同一份「侧边栏显示设置」菜单;不传则不渲染该入口。 */
-  onOpenDisplaySettings?: () => void;
-} = {}): ReactNode {
+export function MachineSwitcherMenu(): ReactNode {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const { devices, selectedDeviceId, select, toggle } = useMachineSwitcher();
@@ -166,7 +126,6 @@ export function MachineSwitcherMenu({
   const triggerLabel = t('ccAgent.sidebar.machineSwitcher.menuTrigger');
   const settingsItems = (
     <>
-      <CloudComputerMenuEntry />
       {desktopTargets.length>0 && <DropdownMenuSub>
         <DropdownMenuSubTrigger className={MENU_ROW_CLASS}><Monitor size={14}/><span>{t('remoteDesktop.title')}</span></DropdownMenuSubTrigger>
         <DropdownMenuSubContent>{desktopTargets.map(device=><DropdownMenuItem
@@ -183,19 +142,6 @@ export function MachineSwitcherMenu({
         <MonitorCog size={14} strokeWidth={2} className="shrink-0 opacity-70" />
         <span className="truncate">{t('ccAgent.sidebar.machineSwitcher.remoteSettings')}</span>
       </DropdownMenuItem>
-      {onOpenDisplaySettings ? (
-        <DropdownMenuItem
-          className={MENU_ITEM_CLASS}
-          onSelect={() => {
-            // 等本菜单关完、当前指针事件走完再开显示设置,避免两个 Radix
-            // 菜单抢焦点、或同一次 click 被新菜单当成点外部而立刻关掉。
-            window.setTimeout(() => onOpenDisplaySettings(), 0);
-          }}
-        >
-          <SlidersHorizontal size={14} strokeWidth={2} className="shrink-0 opacity-70" />
-          <span className="truncate">{t('ccAgent.sidebar.organizeSidebar')}</span>
-        </DropdownMenuItem>
-      ) : null}
     </>
   );
 

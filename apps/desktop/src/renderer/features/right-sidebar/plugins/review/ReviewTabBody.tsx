@@ -1,4 +1,6 @@
+import { Badge } from '@/components/ui/badge';
 import { ErrorNotice } from '@/components/ui/error-notice';
+import { SearchInput } from '@/components/ui/search-input';
 import { FileTypeIcon } from '@/components/ui/file-type-icon';
 import { SegmentedControl } from '@/components/ui/segmented-control';
 /**
@@ -42,7 +44,6 @@ import {
   MoreHorizontal,
   Plus,
   RefreshCw,
-  Search,
   SlidersHorizontal,
   SquareSplitHorizontal,
   Undo2,
@@ -73,11 +74,16 @@ import type {
 import { formatSidebarTime } from '@/features/cc-agent/lib/formatSidebarTime';
 
 import { gitReviewApiFor, isReviewRemoteOversizeError } from '@/lib/gitReviewTransport';
+import { getDraft, plainTextToTiptapDoc, saveDraft } from '@/lib/composerDraftStore';
+import {
+  buildBranchConflictResolvePrompt,
+  formatConflictFilesSummary,
+} from '@/lib/branchConflictPrompt';
+import { composerDraftKeyForRightSidebarSession } from '@/features/cc-agent/newMakerDraftRightSidebar';
 import { makerChatStore } from '@/lib/makerChatStore';
 import { extractIpcError } from '@/utils/ipcError';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
 import {
   COMPOSER_MENU_ROW,
   MenuHighlightLayer,
@@ -455,7 +461,7 @@ export function descriptorForReviewSource(
 
 export function ReviewTabBody({ state, ctx }: ReviewTabBodyProps) {
   const { t } = useTranslation();
-  const { confirm } = useConfirmDialog();
+  const { confirm, confirmThree } = useConfirmDialog();
   // device-link 远程会话:session 行在被控设备的 DB 里,只读查询经 gitReviewTransport
   // 隧道到被控端执行(被控端以它自己的 session 记录解析 workdir);写操作与本机
   // 文件打开在控制端禁用(readOnly 经 writeDisabledReasons 的 remote-device 档)。
@@ -985,31 +991,125 @@ export function ReviewTabBody({ state, ctx }: ReviewTabBodyProps) {
       return;
     }
 
-    const ok = await confirm({
-      title: t('rightSidebar.review.push.forceTitle'),
-      description: t('rightSidebar.review.push.forceDesc', {
-        count: result.behind,
-        remoteRef: result.remoteRef,
-      }),
-      confirmText: t('rightSidebar.review.push.forceConfirm'),
-      cancelText: t('rightSidebar.review.push.forceCancel'),
-    });
-    if (!ok) return;
+    const runForcePush = async (
+      needsForce: Extract<ReviewPushResult, { kind: 'needs-force' }>,
+    ) => {
+      const forceResult = applyPushResult(
+        await window.electronAPI.gitReview.push({
+          sessionId,
+          confirmForce: {
+            remoteRef: needsForce.remoteRef,
+            expectedOid: needsForce.remoteOid,
+          },
+        }),
+      );
+      if (forceResult.kind === 'needs-force') {
+        throw new Error(t('rightSidebar.review.push.forceStillRejected'));
+      }
+      toast.success(t('rightSidebar.review.push.successToast'));
+    };
 
-    const forceResult = applyPushResult(
-      await window.electronAPI.gitReview.push({
-        sessionId,
-        confirmForce: {
-          remoteRef: result.remoteRef,
-          expectedOid: result.remoteOid,
-        },
-      }),
-    );
-    if (forceResult.kind === 'needs-force') {
-      throw new Error(t('rightSidebar.review.push.forceStillRejected'));
+    const askAgentToResolve = (
+      needsForce: Extract<ReviewPushResult, { kind: 'needs-force' }>,
+    ) => {
+      const draftKey = composerDraftKeyForRightSidebarSession(sessionId);
+      const branchName =
+        needsForce.branch ??
+        needsForce.data.scope.branch ??
+        needsForce.remoteRef.replace(/^refs\/heads\//, '');
+      const remoteDisplay =
+        needsForce.upstream ??
+        `${needsForce.remote}/${needsForce.remoteRef.replace(/^refs\/heads\//, '')}`;
+      const prompt = buildBranchConflictResolvePrompt(t, {
+        branch: branchName,
+        remoteRef: remoteDisplay,
+        ahead: needsForce.ahead,
+        behind: needsForce.behind,
+        dirtyFiles: needsForce.dirty ? needsForce.data.summary.totalFiles : 0,
+        conflictFiles: needsForce.conflictFiles,
+        pushAfterSync: true,
+      });
+      const existing = getDraft(draftKey);
+      saveDraft(draftKey, {
+        ...existing,
+        text: plainTextToTiptapDoc(prompt),
+        attachments: existing?.attachments ?? [],
+      });
+      toast.info(t('rightSidebar.review.push.agentPromptFilled'));
+    };
+
+    const promptConflictOptions = async (
+      needsForce: Extract<ReviewPushResult, { kind: 'needs-force' }>,
+    ) => {
+      const remoteDisplay =
+        needsForce.upstream ??
+        `${needsForce.remote}/${needsForce.remoteRef.replace(/^refs\/heads\//, '')}`;
+      const description =
+        needsForce.conflictFiles && needsForce.conflictFiles.length > 0
+          ? t('rightSidebar.review.push.divergedConflictDesc', {
+              count: needsForce.behind,
+              remoteRef: remoteDisplay,
+              files: formatConflictFilesSummary(needsForce.conflictFiles),
+            })
+          : needsForce.dirty
+            ? t('rightSidebar.review.push.divergedDirtyDesc', {
+                count: needsForce.behind,
+                remoteRef: remoteDisplay,
+              })
+            : t('rightSidebar.review.push.divergedGeneralDesc', {
+                count: needsForce.behind,
+                remoteRef: remoteDisplay,
+              });
+      const choice = await confirmThree({
+        title: t('rightSidebar.review.push.divergedTitle'),
+        description,
+        confirmText: t('rightSidebar.review.push.askAgentSyncConfirm'),
+        tertiaryText: t('rightSidebar.review.push.forceConfirm'),
+        cancelText: t('rightSidebar.review.push.forceCancel'),
+        maxWidth: 440,
+        autoFocusConfirm: true,
+      });
+      if (choice === 'confirm') {
+        askAgentToResolve(needsForce);
+      } else if (choice === 'tertiary') {
+        await runForcePush(needsForce);
+      }
+    };
+
+    if (result.canSyncCleanly) {
+      const remoteDisplay =
+        result.upstream ?? `${result.remote}/${result.remoteRef.replace(/^refs\/heads\//, '')}`;
+      const choice = await confirmThree({
+        title: t('rightSidebar.review.push.divergedTitle'),
+        description: t('rightSidebar.review.push.syncCleanDesc', {
+          count: result.behind,
+          remoteRef: remoteDisplay,
+        }),
+        confirmText: t('rightSidebar.review.push.syncAndPushConfirm'),
+        tertiaryText: t('rightSidebar.review.push.forceConfirm'),
+        cancelText: t('rightSidebar.review.push.forceCancel'),
+        autoFocusConfirm: true,
+      });
+      if (choice === 'confirm') {
+        const syncedResult = applyPushResult(
+          await window.electronAPI.gitReview.push({
+            sessionId,
+            syncBeforePush: true,
+          }),
+        );
+        if (syncedResult.kind === 'needs-force') {
+          await promptConflictOptions(syncedResult);
+          return;
+        }
+        toast.success(t('rightSidebar.review.push.syncedAndPushedToast'));
+      } else if (choice === 'tertiary') {
+        await runForcePush(result);
+      }
+      return;
     }
-    toast.success(t('rightSidebar.review.push.successToast'));
-  }, [applyPushResult, confirm, sessionId, t]);
+
+    await promptConflictOptions(result);
+  }, [applyPushResult, confirmThree, sessionId, t]);
 
   const decoratePushError = useCallback(
     (message: string, err: unknown) => {
@@ -1771,12 +1871,9 @@ function AheadBehindPill({
   const label = t('rightSidebar.review.aheadBehindTooltip', { ahead, behind, upstream });
   return (
     <Tip text={label}>
-      <span
-        className="shrink-0 rounded-full bg-[var(--surface-chip)] px-1.5 py-0.5 font-mono text-10 text-[var(--text-secondary)]"
-        aria-label={label}
-      >
+      <Badge size="xs" mono aria-label={label}>
         ↑{ahead} ↓{behind}
-      </span>
+      </Badge>
     </Tip>
   );
 }
@@ -2048,9 +2145,9 @@ function CommitOrPushDropdown({
           }}
         >
           {push.ahead > 0 && (
-            <span className="rounded-full bg-[var(--surface-chip)] px-1 font-mono text-10 text-[var(--text-secondary)]">
+            <Badge size="xs" mono>
               ↑{push.ahead}
-            </span>
+            </Badge>
           )}
         </CommitDropdownAction>
       </DropdownMenuContent>
@@ -2214,20 +2311,14 @@ function FileJumpPopover({
         className="w-[280px] rounded-xl border border-[var(--cmd-palette-border)] bg-[var(--cmd-palette-bg)] p-2 shadow-[shadow:var(--shadow-menu)]"
       >
         <div onKeyDown={handleKeyDown}>
-          <label className="relative block">
-            <Search
-              size={12}
-              className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 text-[var(--text-tertiary)]"
-            />
-            <input
-              ref={inputRef}
-              value={query}
-              onChange={(event) => setQuery(event.target.value)}
-              placeholder={t('rightSidebar.review.fileJump.placeholder')}
-              aria-label={t('rightSidebar.review.fileJump.placeholder')}
-              className="h-7 w-full rounded-full border border-[var(--border-default)] bg-[var(--surface-elevated)] pl-7 pr-2 text-12 text-[var(--text-primary)] placeholder:text-[var(--text-placeholder)] focus:outline-none focus:ring-2 focus:ring-[var(--focus-ring-soft)]"
-            />
-          </label>
+          <SearchInput
+            surface="panel"
+            inputRef={inputRef}
+            value={query}
+            onChange={setQuery}
+            placeholder={t('rightSidebar.review.fileJump.placeholder')}
+            aria-label={t('rightSidebar.review.fileJump.placeholder')}
+          />
           <div
             role="listbox"
             aria-label={t('rightSidebar.review.fileJump.tooltip')}
@@ -3434,19 +3525,12 @@ export function ReviewFileTreeSidebar({
       style={{ width: REVIEW_FILE_TREE_WIDTH_PX }}
     >
       <div className="shrink-0 border-b border-[var(--border-default)] p-2">
-        <label className="relative block">
-          <Search
-            size={12}
-            className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 text-[var(--text-tertiary)]"
-          />
-          <input
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-            placeholder={t('rightSidebar.review.fileTree.filterPlaceholder')}
-            aria-label={t('rightSidebar.review.fileTree.filterPlaceholder')}
-            className="h-7 w-full rounded-full border border-[var(--border-default)] bg-[var(--surface-elevated)] pl-7 pr-2 text-12 text-[var(--text-primary)] placeholder:text-[var(--text-placeholder)] focus:outline-none focus:ring-2 focus:ring-[var(--focus-ring-soft)]"
-          />
-        </label>
+        <SearchInput
+          value={query}
+          onChange={setQuery}
+          placeholder={t('rightSidebar.review.fileTree.filterPlaceholder')}
+          aria-label={t('rightSidebar.review.fileTree.filterPlaceholder')}
+        />
       </div>
       {flatNodes.length === 0 ? (
         <div className="px-3 py-4 text-11 leading-relaxed text-[var(--text-tertiary)]">
@@ -3766,8 +3850,7 @@ function DiffViewModeToggle({
       aria-label={t('rightSidebar.review.viewMode.aria')}
       value={mode}
       onValueChange={onChange}
-      height={24}
-      optionHeight={18}
+      density="xs"
       optionClassName="px-2 text-10"
       className="shrink-0"
       prefix={
@@ -4288,9 +4371,9 @@ export function BranchBaseDropdown({
           inputRef.current?.focus();
         }}
       >
-        <Input
+        <SearchInput
+          surface="panel"
           inputRef={inputRef}
-          size="sm"
           className="m-1 shrink-0"
           role="combobox"
           aria-expanded={open}
@@ -4742,14 +4825,14 @@ function FileRow({
           </span>
         </button>
         {changeChip && (
-          <span className="shrink-0 rounded-full bg-[var(--surface-chip)] px-2 py-0.5 text-10 text-[var(--text-secondary)]">
+          <Badge size="xs">
             {changeChip}
-          </span>
+          </Badge>
         )}
         {diff.kind !== 'text' && (
-          <span className="shrink-0 rounded-full bg-[var(--surface-chip)] px-2 py-0.5 text-10 text-[var(--text-secondary)]">
+          <Badge size="xs">
             {t(`rightSidebar.review.status.${diff.kind}`, { defaultValue: diff.kind })}
-          </span>
+          </Badge>
         )}
         <span className="shrink-0 font-mono text-11 tabular-nums">
           <span className="text-[var(--diff-add-fg)]">+{diff.additions}</span>{' '}

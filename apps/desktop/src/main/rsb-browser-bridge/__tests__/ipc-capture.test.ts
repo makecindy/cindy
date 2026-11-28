@@ -71,11 +71,12 @@ function getHandler(channel: string = RSB_BROWSER_BRIDGE_CAPTURE_SCREENSHOT_CHAN
   return fn;
 }
 
-function register(registry: TabRegistry) {
+function register(registry: TabRegistry, extra?: { captureTimeoutMs?: number }) {
   registerRsbBrowserBridgeIpc({
     registry,
     getHostWebContents: () => null,
     logger: logger(),
+    ...extra,
   });
 }
 
@@ -166,6 +167,57 @@ describe('capture-screenshot handler', () => {
     await expect(getHandler()(senderEvent, { tabId: 42 })).rejects.toThrow(
       /\[INVALID_PARAMS\]/,
     );
+  });
+
+  // Regression (P0-2): capturePage() on a hidden guest webview can hang forever without timeout.
+  // Production entry: RSB_BROWSER_BRIDGE_CAPTURE_SCREENSHOT_CHANNEL IPC handler (unit tier, fake timers).
+  it('rejects with INTERNAL timeout when capturePage hangs', async () => {
+    vi.useFakeTimers();
+    try {
+      register(
+        fakeRegistry({
+          getWebContentsByTabId: () =>
+            fakeGuestWc({
+              hostId: 7,
+              capture: () => new Promise<FakeImage>(() => {}),
+            }),
+        }),
+        { captureTimeoutMs: 1000 },
+      );
+
+      const pending = Promise.resolve(getHandler()(senderEvent, { tabId: 't1' }));
+      const rejection = expect(pending).rejects.toThrow(/\[INTERNAL\] capturePage timed out/);
+      await vi.advanceTimersByTimeAsync(1000);
+      await rejection;
+      expect(clipboard.writeImage).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('rejects immediately when target webContents is destroyed while capturePage is pending', async () => {
+    const listeners = new Map<string, Array<() => void>>();
+    const guest = {
+      hostWebContents: { id: 7 },
+      isDestroyed: () => false,
+      capturePage: () => new Promise<FakeImage>(() => {}),
+      once: (event: string, fn: () => void) => {
+        const list = listeners.get(event) ?? [];
+        list.push(fn);
+        listeners.set(event, list);
+      },
+      removeListener: (event: string, fn: () => void) => {
+        const list = listeners.get(event);
+        if (list) listeners.set(event, list.filter((f) => f !== fn));
+      },
+    };
+    register(fakeRegistry({ getWebContentsByTabId: () => guest }), { captureTimeoutMs: 60_000 });
+
+    const pending = Promise.resolve(getHandler()(senderEvent, { tabId: 't1' }));
+    const rejection = expect(pending).rejects.toThrow(/\[INTERNAL\] capturePage failed/);
+    for (const fn of listeners.get('destroyed') ?? []) fn();
+    await rejection;
+    expect(clipboard.writeImage).not.toHaveBeenCalled();
   });
 });
 

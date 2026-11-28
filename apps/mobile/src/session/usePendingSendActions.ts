@@ -5,7 +5,8 @@ import type { TFunction } from 'i18next';
 import { getMobileAuthOwner, isMobileAuthOwnerCurrent } from '@/auth/authOwnerGeneration';
 import { formatRemoteError } from '@/device-link/remoteStatus';
 import { getCurrentMobileOutboxRecords, mobileDurableOutbox } from './mobileDurableOutbox';
-import { isDurableOutboxUnsent } from './durableOutbox';
+import { endOutboxBackgroundSend } from './outboxBackgroundSend';
+import { hasUncreatedHostSession, isDurableOutboxUnsent } from './durableOutbox';
 import { remoteSessionStore } from './remoteSessionStore';
 import type { PendingSendBubbleActions } from './PendingSendBubble';
 import type { QueuedRemoteMessage } from './types';
@@ -28,8 +29,15 @@ export function usePendingOutboxActions({
     r.deviceId === deviceId && r.item.sessionId === sessionId && r.item.clientId === clientId), [deviceId, sessionId]);
   const retryOutboxItem = useCallback((clientId: string) => {
     const record = findDurableOutboxRecord(clientId);
-    if (!record || record.state !== 'failed') return;
-    if (record.creation && !record.prepared && !record.template) {
+    if (!record || record.historyConfirmation === 'requested') return;
+    if (record.historyConfirmation === 'unconfirmed') {
+      void mobileDurableOutbox.update(record, { historyConfirmation: 'requested' }).catch((err) => {
+        if (findDurableOutboxRecord(clientId) === record) setError(formatRemoteError(err));
+      });
+      return;
+    }
+    if (record.state !== 'failed') return;
+    if (hasUncreatedHostSession(record)) {
       const owner = getMobileAuthOwner();
       void mobileDurableOutbox.update(record, { suspended: true }).then(() => {
         if (isMobileAuthOwnerCurrent(owner) && outboxSessionAliveRef.current === sessionId) {
@@ -40,14 +48,14 @@ export function usePendingOutboxActions({
     }
     setQueueSelectedClientId(null);
     void mobileDurableOutbox.update(record, {
-      state: record.prepared ? 'confirming' : 'queued', error: undefined,
+      state: record.prepared && !record.retryAfterConfirmedMiss ? 'confirming' : 'queued', error: undefined,
     }).catch((err) => setError(formatRemoteError(err)));
   }, [deviceId, deviceName, findDurableOutboxRecord, outboxSessionAliveRef, router, sessionId, setError, setQueueSelectedClientId]);
   const removeOutboxItem = useCallback((clientId: string) => {
     const record = findDurableOutboxRecord(clientId);
-    if (!record) return;
+    if (!record || record.historyConfirmation) return;
     // Until creation succeeds, this row also owns the recovery form for every later message.
-    if (record.creation && !record.prepared && !record.template) {
+    if (hasUncreatedHostSession(record)) {
       setError(t('session.outbox.creationRecoveryRequired'));
       return;
     }
@@ -56,6 +64,7 @@ export function usePendingOutboxActions({
       setQueueSelectedClientId(null);
       const owner = getMobileAuthOwner();
       const remove = async () => {
+        endOutboxBackgroundSend(record);
         if (isDurableOutboxUnsent(record)) {
           await mobileDurableOutbox.update(record, { state: 'host-owned', cleanupOutcome: 'cancelled', cancelRequested: true, error: undefined });
         } else await mobileDurableOutbox.update(record, { cancelRequested: true, state: 'confirming' });

@@ -314,7 +314,7 @@ export function useAutomationScheduleSessionIndex(
         }
       } else if (event.type === 'failed' || event.type === 'deferred') {
         clearSilencedRun(event.runId);
-        if (event.type === 'failed' && event.sessionId && event.error !== 'aborted') {
+        if (event.type === 'failed' && event.sessionId && event.error !== 'aborted' && !event.silenced) {
           rememberOptimisticUnread(event.sessionId, event.runId, 'failed');
         }
       }

@@ -1,0 +1,70 @@
+name: Verify dependency downloads
+on:
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: verify-dependency-downloads
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    if: github.repository == 'makecindy/cindy' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: release-dependencies
+    permissions:
+      id-token: write
+    steps:
+      - name: Install OSS client
+        run: |
+          python3 -m venv "$RUNNER_TEMP/oss"
+          "$RUNNER_TEMP/oss/bin/pip" install --disable-pip-version-check oss2==2.19.1
+      - name: Obtain short-lived upload credentials
+        id: auth
+        uses: aliyun/configure-aliyun-credentials-action@1e5248c8d5d93a8781ac344a68e19a43341e79e6
+        with:
+          role-to-assume: ${{ vars.ROLE_ARN }}
+          oidc-provider-arn: ${{ vars.OIDC_PROVIDER_ARN }}
+          audience: ${{ vars.OIDC_AUDIENCE }}
+      - name: Upload one marker and check both public downloads
+        env:
+          KEY_ID: ${{ steps.auth.outputs.aliyun-access-key-id }}
+          KEY_SECRET: ${{ steps.auth.outputs.aliyun-access-key-secret }}
+          TOKEN: ${{ steps.auth.outputs.aliyun-security-token }}
+          CN_REGION: ${{ vars.CN_OSS_REGION }}
+          CN_BUCKET: ${{ vars.CN_OSS_BUCKET }}
+          GLOBAL_REGION: ${{ vars.GLOBAL_OSS_REGION }}
+          GLOBAL_BUCKET: ${{ vars.GLOBAL_OSS_BUCKET }}
+        run: |
+          "$RUNNER_TEMP/oss/bin/python" - <<'PY'
+          import os
+          import time
+          import urllib.request
+
+          import oss2
+
+          env = os.environ
+          marker = f"{env['GITHUB_RUN_ID']}.{env['GITHUB_RUN_ATTEMPT']}\n".encode()
+          key = "cindy/dependencies/_checks/download.txt"
+          auth = oss2.StsAuth(env["KEY_ID"], env["KEY_SECRET"], env["TOKEN"], auth_version=oss2.AUTH_VERSION_4)
+          for area, host in [("CN", "hotfix.cindy.com.cn"), ("GLOBAL", "hotfix.cindy.app")]:
+              region = env[f"{area}_REGION"]
+              bucket = oss2.Bucket(auth, f"https://oss-{region}.aliyuncs.com", env[f"{area}_BUCKET"], region=region)
+              bucket.put_object(key, marker, headers={"Cache-Control": "no-cache", "Content-Type": "text/plain"})
+              url = f"https://{host}/{key}"
+              for attempt in range(6):
+                  try:
+                      with urllib.request.urlopen(url, timeout=15) as response:
+                          directives = response.headers.get("Cache-Control", "").lower().split(",")
+                          if response.read(128) == marker and "no-cache" in [d.strip() for d in directives]:
+                              print(f"{area}: verified current run marker and Cache-Control at {url}")
+                              break
+                  except OSError:
+                      if attempt == 5:
+                          raise
+                  time.sleep(3)
+              else:
+                  raise RuntimeError(f"{area}: public download content or Cache-Control did not match")
+          PY

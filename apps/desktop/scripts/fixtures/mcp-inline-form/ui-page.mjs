@@ -10,6 +10,7 @@ export default {
   stubs: { 'src/renderer/components/chat/GhostToolCard': 'export const CARD_EXPAND_TOGGLE_EVENT = "xdt-card-expand-toggle"; export const GhostToolCard = () => null; export const MailCardEditor = () => null;' },
   cases: {
     default: { about: 'The existing Settings form expanded in the message flow' },
+    teammate: { about: 'The inline form for a buddy with a partially filled proposal' },
     narrow: { about: 'Inline form at 320 px', viewport: { width: 320, height: 1100 } },
     invalid: { about: 'Original validation and focus in the embedded form' },
     'result-error': { about: 'Saved configuration remains saved when result delivery fails; retry and cancel remain available' },

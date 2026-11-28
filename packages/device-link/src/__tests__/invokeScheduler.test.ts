@@ -339,6 +339,7 @@ describe("invoke admission", () => {
     expect(resolveInvokePriority("local-db:messages:view")).toBe("foreground");
     expect(resolveInvokePriority("local-db:messages:view", true)).toBe("background");
     expect(resolveInvokePriority("git-context:pr-status")).toBe("background");
+    expect(resolveInvokePriority("maker:usage:zhipu-coding-plan")).toBe("background");
     expect(resolveInvokePriority("maker:predict-prompt")).toBe("background");
     const remote = 'maker:remote-agent:v1';
     for (const request of [
