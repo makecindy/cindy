@@ -129,6 +129,7 @@ vi.mock('../../clientEndpointsService.js', () => ({
   getClientEndpoint: vi.fn(() => runtime.pluginApiBaseUrl),
 }));
 vi.mock('../../maker-host/pluginEngineModelCache.js', () => ({
+  observePluginEngineContextWindow: () => () => {},
   observePluginEngineModelDetails: () => () => {},
   rememberPluginHarnessModels: () => {},
 }));
