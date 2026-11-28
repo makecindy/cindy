@@ -202,7 +202,8 @@ export async function materializeCompanion(input: {
     return value;
   };
   const botId = actor.externalId;
-  const rows = await step(() => readCompanionRows(api, input.store, actor.id));
+  const observed = new Map<string, { preference: number; store: number }>();
+  const rows = await step(() => readCompanionRows(api, input.store, actor.id, observed));
   const prefs = new Map(rows.map(row => [row.key, row]));
   const profileValue = prefs.get(COMPANION_PROFILE_KEY)?.value;
   const profileRowForRepair = prefs.get(COMPANION_PROFILE_KEY);
@@ -287,7 +288,7 @@ export async function materializeCompanion(input: {
   const profileRow = prefs.get(COMPANION_PROFILE_KEY);
   if (profileRow && profile) applied.set(COMPANION_PROFILE_KEY, { hash: valueHash(profileRow.value), revision: profileRow.revision });
   const failedKeys = new Set<string>();
-  let oversized: { key: string; version: string } | undefined;
+  let oversized: { key: string; preference: number; store: number } | undefined;
   const apply = async (kind: string, keys: readonly string[], run: () => Promise<void>) => {
     try { await run(); } catch (error) {
       if (errorCode(error) === 'OWNER_CHANGED') throw error;
@@ -295,7 +296,7 @@ export async function materializeCompanion(input: {
       for (const key of keys) failedKeys.add(key);
       if (kind === 'memory' && error instanceof Error && 'reason' in error && error.reason === 'MEMORY_SHARD_TOO_LARGE') {
         const key = keys[0]!;
-        oversized ??= { key, version: valueHash(prefs.get(key)) };
+        oversized ??= { key, ...(observed.get(key) ?? { preference: prefs.get(key)!.revision, store: 0 }) };
         log?.warn('Companion memory could not be restored', { actorId: actor.id, code: 'MEMORY_SHARD_TOO_LARGE' });
         return;
       }

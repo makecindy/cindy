@@ -38,7 +38,7 @@ import { importCloudHistory } from './materialize.js';
 import type { CompanionCloudState } from './state.js';
 import { chatRejection, errorCode, isUnreachable, type CompanionApi, type CompanionLog } from './types.js';
 import { createCompanionStore, readCompanionRestoreValue, readPreference, type CompanionStoreTransfer } from './store.js';
-import { COMPANION_PROFILE_KEY, COMPANION_READ_INCOMPLETE, COMPANION_SKILL_FILES_PREFIX, COMPANION_SKILL_PREFIX, COMPANION_VALUE_TOO_LARGE, canonicalJson, valueHash, createCompanionUploader, isCompanionProfileSnapshot, type CompanionPreferenceValue } from './uploader.js';
+import { COMPANION_PROFILE_KEY, COMPANION_READ_INCOMPLETE, COMPANION_SKILL_FILES_PREFIX, COMPANION_SKILL_PREFIX, COMPANION_VALUE_TOO_LARGE, canonicalJson, createCompanionUploader, isCompanionProfileSnapshot, type CompanionPreferenceValue } from './uploader.js';
 
 /** Electron/database side of the feature, wired in register.ts. */
 export interface CompanionCloudHost {
@@ -746,11 +746,16 @@ export function startCompanionCloud(input: {
       const entry = state.bot(botId);
       const blocked = entry?.actorId === actorId && entry.oversizedMemory;
       if (blocked) {
-        const row = await readCompanionRestoreValue(backgroundIdentityApi, store, actorId, blocked.key);
+        let storeRevision = 0;
+        if (store?.active()) {
+          try { storeRevision = (await store.entry(actorId, blocked.key))?.revision ?? 0; }
+          catch (error) { if (store.active()) throw error; }
+        }
+        const row = await readPreference(backgroundIdentityApi, actorId, blocked.key);
         fence.assertCurrent();
         const current = actorOf(botId);
         if (current?.id !== actorId || current.homeDeviceId !== input.selfDeviceId || !state.isDemoted(botId)) throw new Error('COMPANION_CHANGED');
-        if (row && valueHash(row) === blocked.version) throw new Error('MEMORY_REVISION_UNCHANGED');
+        if ((row?.revision ?? 0) === blocked.preference && storeRevision === blocked.store) throw new Error('MEMORY_REVISION_UNCHANGED');
         state.update(botId, actorId, next => { delete next.oversizedMemory; });
       }
       let correction = entry?.actorId === actorId && entry.profileCorrection && entry.profileCorrection.homeDeviceId === input.selfDeviceId
