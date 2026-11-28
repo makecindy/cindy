@@ -11473,7 +11473,50 @@
       "tokens": "{{value}} tokens",
       "noProgress": "暫無進度詳情"
     },
+    "hostDaemons": {
+      "scanning": "正在掃描本機常駐…",
+      "refresh": "重新整理",
+      "loadFailed": "讀取本機常駐失敗",
+      "refreshFailed": "重新整理失敗，清單可能不是最新的",
+      "incomplete": "有來源未能讀取，清單可能不完整",
+      "unsupported": "這台電腦的系統不提供本機常駐清單",
+      "empty": "還沒有由任務建立的本機常駐項目",
+      "owner": "建立任務：{{title}}",
+      "ownerUnknown": "未知",
+      "state": {
+        "running": "執行中",
+        "ready": "待執行",
+        "disabled": "已停用",
+        "unknown": "未知"
+      },
+      "trigger": {
+        "logon": "登入時啟動",
+        "startup": "開機啟動",
+        "schedule": "依排程啟動",
+        "other": "其他觸發方式"
+      },
+      "stop": "停止",
+      "delete": "刪除",
+      "run": "啟動",
+      "started": "已啟動 {{name}}",
+      "stopTitle": "停止「{{name}}」？",
+      "stopBody": "只結束這一次執行，常駐項本身仍然保留。",
+      "deleteTitle": "刪除「{{name}}」？",
+      "deleteBody": "會從這台電腦徹底刪除這項常駐項，之後不會再自動啟動；Cindy 裡的任務記錄不受影響。",
+      "stopped": "已停止 {{name}}",
+      "deleted": "已刪除 {{name}}",
+      "actionFailed": "操作失敗，請重試",
+      "unrelated_one": "另有 {{count}} 項與本機任務無關的常駐項目未顯示",
+      "unrelated_other": "另有 {{count}} 項與本機任務無關的常駐項目未顯示",
+      "checking_one": "另有 {{count}} 項常駐項目還在核對本機任務歷史，核對後會自動更新",
+      "checking_other": "另有 {{count}} 項常駐項目還在核對本機任務歷史，核對後會自動更新"
+    },
     "resourceUsage": {
+      "tabs": {
+        "label": "資源檢視",
+        "processes": "處理程序",
+        "hostDaemons": "本機常駐"
+      },
       "sections": {
         "agents": "Agent 處理程序",
         "app": "應用程式處理程序"

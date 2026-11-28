@@ -60,6 +60,21 @@ function createTables(db: Database.Database): void {
       rewind_at INTEGER
     );
     CREATE UNIQUE INDEX uniq_messages_session_client ON messages(session_id, client_id);
+    CREATE TABLE session_imports (
+      session_id TEXT PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,
+      source TEXT NOT NULL,
+      source_session_id TEXT NOT NULL,
+      source_fingerprint TEXT,
+      source_version TEXT,
+      mode TEXT NOT NULL,
+      status TEXT NOT NULL,
+      issue TEXT,
+      original_cwd TEXT,
+      request_id TEXT,
+      imported_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+    CREATE UNIQUE INDEX uniq_session_imports_source ON session_imports(source, source_session_id);
     CREATE TABLE orca_teams (
       id TEXT PRIMARY KEY,
       lead_session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
@@ -445,5 +460,14 @@ describe('tx session.importShare', () => {
       .get('new-session-1') as Record<string, unknown>;
     expect(lead.orca_role).toBeNull();
     expect(db.prepare('SELECT COUNT(*) AS n FROM orca_teams').get()).toEqual({ n: 0 });
+  });
+
+  it('records the share import watermark so host-daemon attribution can skip imported work', () => {
+    tx(db, validArgs());
+    const watermark = db
+      .prepare('SELECT source, source_session_id FROM session_imports WHERE session_id = ?')
+      .get('new-session-1') as Record<string, unknown> | undefined;
+    expect(watermark?.source).toBe('cshare');
+    expect(watermark?.source_session_id).toBeTruthy();
   });
 });

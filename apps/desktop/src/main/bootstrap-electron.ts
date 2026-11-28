@@ -653,6 +653,11 @@ import {
 import { reapClaudeOrphansSync, reapHistoricalClaudeOrphans } from './claude-orphan-reaper';
 import { reapCodexToolTreesSync } from './codex-tool-tree-reaper';
 import { startAgentProcessPriorityWatcher } from './agent-process-priority';
+import { registerHostDaemonsIpc } from './host-daemons/ipc.js';
+import { createHostDaemonLedger } from './host-daemons/ledger.js';
+import { createHostDaemonTarget } from './host-daemons/platformTarget.js';
+import { createHostDaemonsService, type HostDaemonsService } from './host-daemons/service.js';
+import { readToolUses, readToolUsesFrom } from './host-daemons/toolHistory.js';
 import { registerProcessMonitorIpc } from './process-monitor/ipc.js';
 import { readMainHeapSamplingFlag, startMainHeapSampling } from './process-monitor/heap-sampling.js';
 import { monitorEventLoopDelay } from 'node:perf_hooks';
@@ -1308,6 +1313,7 @@ import {
   getActiveAppSession,
   getActiveDataOwnerPushStamp,
   isAppSessionBoundaryPending,
+  onAppSessionInvalidated,
   ownerScopedUserDataPath,
   setAppSessionCommitBoundaryHook,
 } from './appSessionState.js';
@@ -3041,6 +3047,11 @@ const resourceUsageWindowController = new ResourceUsageWindowController({
   },
 });
 registerResourceUsageWindowIpc({ controller: resourceUsageWindowController });
+// 资源监视器是独立 renderer，账号切换不会重载它：不主动关掉，上一账号的
+// 「本机常驻」清单（含会话标题）会原样留在屏幕上。
+onAppSessionInvalidated(() => {
+  resourceUsageWindowController.destroyWindow();
+});
 const remoteDesktopViewerWindows = new RemoteDesktopViewerWindows(
   (sender) =>
     isResourceUsageOpenSender({
@@ -3151,6 +3162,36 @@ registerAwayGuardIpc({
 // ── 资源用量面板 IPC ─────────────────────────────────────────────────
 // 订阅驱动采样(面板不开不采样),interval 已 unref 不拖退出;terminate 只认
 // 本产品 spawn 的 agent 根进程。见 main/process-monitor/。
+// ── 本机常驻清单 IPC ─────────────────────────────────────────────────
+// 与资源监视器共用「本机、可信 renderer」边界；只有带 Cindy 归属证据的计划任务
+// 会出现在清单里（判定见 host-daemons/service.ts），停止/删除在 main 重新校验。
+// list 只读；归属核对由 main 自己的后台任务在面板可见时推进（工程规范 §8.2 / §8.3），
+// 每轮结束推一条变化通知，界面重读。
+let hostDaemonsService: HostDaemonsService | null = null;
+registerHostDaemonsIpc({
+  // 与进程采样同一道闸：隐藏预热的资源窗口不触发后台推进。
+  allowsRefresh: (sender) => resourceUsageWindowController.allowsProcessMonitorSampling(sender),
+  getService: () => {
+    hostDaemonsService ??= createHostDaemonsService({
+      // 来源按平台装配：Windows 计划任务 / macOS LaunchAgents / Linux systemd 用户单元，
+      // 后两者都与用户自己的 crontab 并列。不支持的平台传 null，界面回「本机不支持」。
+      target: createHostDaemonTarget(process.platform),
+      // 两次读都走库线程的后台级通道：全历史回看在冷盘的大库上要读几分钟，
+      // 不能挤占交互和写入（见 host-daemons/toolHistory.ts）。
+      readToolUses,
+      readToolUsesFrom,
+      // 台账按当前账号隔离：归属记录带会话标题，共享路径会让切号后的账号看到
+      // 旧账号留下的标题与 id（路径随账号变化 → 切号即换目录）。
+      ledger: createHostDaemonLedger(() => ownerScopedUserDataPath('host-daemons.v1.json')),
+      // 切号即作废在途追溯与本次清单：归属记录带会话标题，不能跨账号。
+      // 边界进行中（拆运行时 / 换库）读写的账号可能不一致，同样整体作废。
+      ownerScopeKey: activeOwnerScopeKey,
+      isOwnerBoundaryPending: isAppSessionBoundaryPending,
+    });
+    return hostDaemonsService;
+  },
+});
+
 registerProcessMonitorIpc({
   allowsSampling: (sender) => resourceUsageWindowController.allowsProcessMonitorSampling(sender),
   // agent 行显示承载任务标题。标题查询由采样器后台缓存，不阻塞采样帧；

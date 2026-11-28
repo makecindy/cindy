@@ -11,6 +11,7 @@ import { writeModelUsage, type ModelUsageWrite } from './modelUsageTx.js';
 import { recordPiUsage } from './piUsageTx.js';
 import { batchAutoReviewProjection, readAutoReviewProjectionTransaction } from '../../autoReviewProjection.js';
 import { CLOSE_SHARED_TASKS_FOR_SESSION_SQL } from '../../sharedTaskClosureSql.js';
+import { SESSION_IMPORT_SHARE_WATERMARK_SQL } from '../../sessionImportWatermarkSql.js';
 import { IDLE_ARCHIVE_GUARD_SQL } from '../../../task-management/eligibility.js';
 import { assertSessionDeleteTarget, COMMITTED_SIDE_CHAT_WORKER_SQL, ORCA_WORKER_LINK_TEAM_SQL, SIDE_CHAT_CLOSE_TARGET_SQL } from '../../sessionDeleteTarget.js';
 import { botProfileModelSelectionChanged } from '../../../../shared/botModelChain.js';
@@ -3260,6 +3261,15 @@ function sessionImportShare(db: Database.Database, args: unknown): { messageCoun
       nullableNumber(rawSession.userSendAt),
       expectNumber(rawSession.createdAt, 'session.createdAt'),
       expectNumber(rawSession.updatedAt, 'session.updatedAt'),
+    );
+    // 分享导入水印：记录本机导入时刻。归属追溯（host-daemons/toolHistory）用它区分
+    // 「导入的外机旧消息」与「导入后真正在本机执行的新消息」——前者保留原始时间，
+    // 不能当本机执行证据。SQL 与默认热路径共用同一份，避免两份实现漂移。
+    db.prepare(SESSION_IMPORT_SHARE_WATERMARK_SQL).run(
+      sessionId,
+      sessionId,
+      Date.now(),
+      Date.now(),
     );
     for (const rawMessage of rawMessages) {
       const m = asRecord(rawMessage, 'message');

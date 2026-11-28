@@ -1,8 +1,19 @@
-/** 资源用量窗口专用 preload：只暴露窗口 chrome、外观、快捷键和进程采样能力。 */
+/** 资源用量窗口专用 preload：只暴露窗口 chrome、外观、快捷键、进程采样与本机常驻清单能力。 */
 
 import { contextBridge, ipcRenderer } from 'electron';
 
 import { createAppearanceSnapshotBridge } from './appearanceSnapshot';
+import {
+  HOST_DAEMONS_CHANGED_EVENT,
+  HOST_DAEMONS_DELETE_CHANNEL,
+  HOST_DAEMONS_REFRESH_CHANNEL,
+  HOST_DAEMONS_RUN_CHANNEL,
+  HOST_DAEMONS_STOP_CHANNEL,
+  HOST_DAEMONS_SUBSCRIBE_CHANNEL,
+  HOST_DAEMONS_UNSUBSCRIBE_CHANNEL,
+  type HostDaemonActionRequest,
+  type HostDaemonsUpdate,
+} from '../shared/hostDaemons';
 import type { LocalThemesResult } from '../shared/local-themes';
 import { DEFAULT_LOCALE, SUPPORTED_LOCALES, type SupportedLocale } from '../shared/locale';
 import {
@@ -109,6 +120,21 @@ contextBridge.exposeInMainWorld('electronAPI', {
       onPayload(RESOURCE_USAGE_WINDOW_SAMPLING_ACTIVE_CHANNEL, cb),
     onLocaleChanged: (cb: (locale: SupportedLocale) => void): (() => void) =>
       onPayload(RESOURCE_USAGE_WINDOW_LOCALE_CHANGED_CHANNEL, cb),
+  },
+  // 「本机常驻」页签：归属判定与停止/删除授权都在 main，这里只转发 id。清单只有一个来源 ——
+  // 一轮更新：可见时订阅，main 按自己的节奏一轮轮做，每轮把清单推来。
+  hostDaemons: {
+    refresh: (): Promise<HostDaemonsUpdate> => ipcRenderer.invoke(HOST_DAEMONS_REFRESH_CHANNEL),
+    stop: (request: HostDaemonActionRequest): Promise<{ ok: true }> =>
+      ipcRenderer.invoke(HOST_DAEMONS_STOP_CHANNEL, request),
+    run: (request: HostDaemonActionRequest): Promise<{ ok: true }> =>
+      ipcRenderer.invoke(HOST_DAEMONS_RUN_CHANNEL, request),
+    remove: (request: HostDaemonActionRequest): Promise<{ ok: true }> =>
+      ipcRenderer.invoke(HOST_DAEMONS_DELETE_CHANNEL, request),
+    subscribe: (): Promise<HostDaemonsUpdate> => ipcRenderer.invoke(HOST_DAEMONS_SUBSCRIBE_CHANNEL),
+    unsubscribe: (): Promise<void> => ipcRenderer.invoke(HOST_DAEMONS_UNSUBSCRIBE_CHANNEL),
+    onChanged: (cb: (update: HostDaemonsUpdate) => void): (() => void) =>
+      onPayload(HOST_DAEMONS_CHANGED_EVENT, cb),
   },
   processMonitor: {
     subscribe: (): Promise<void> => ipcRenderer.invoke(PROCESS_MONITOR_SUBSCRIBE_CHANNEL),

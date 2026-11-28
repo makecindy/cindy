@@ -5928,6 +5928,30 @@ interface ElectronAPI {
   };
 
   /**
+   * 本机常驻清单(host-daemons):只有带 Cindy 归属证据的条目会返回;
+   * stop/remove 由 main 重新扫描并复核归属,renderer 传来的 id 只是候选。
+   * 清单只有一个来源 —— 一轮更新:可见时订阅,main 每轮经 onChanged 推来清单;
+   * 打开面板、点刷新、操作之后用 refresh 请求一轮,回执就是这一轮的清单或失败。
+   */
+  hostDaemons: {
+    refresh: () => Promise<import('../shared/hostDaemons').HostDaemonsUpdate>;
+    stop: (
+      request: import('../shared/hostDaemons').HostDaemonActionRequest,
+    ) => Promise<{ ok: true }>;
+    run: (
+      request: import('../shared/hostDaemons').HostDaemonActionRequest,
+    ) => Promise<{ ok: true }>;
+    remove: (
+      request: import('../shared/hostDaemons').HostDaemonActionRequest,
+    ) => Promise<{ ok: true }>;
+    subscribe: () => Promise<import('../shared/hostDaemons').HostDaemonsUpdate>;
+    unsubscribe: () => Promise<void>;
+    onChanged: (
+      cb: (update: import('../shared/hostDaemons').HostDaemonsUpdate) => void,
+    ) => () => void;
+  };
+
+  /**
    * 资源用量面板(process-monitor):订阅期间 main 才采样;terminate 只对
    * 本产品 spawn 的 agent 根进程有效,归属由 main 重新校验。
    */
