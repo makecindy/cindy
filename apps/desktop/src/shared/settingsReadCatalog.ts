@@ -221,7 +221,7 @@ const desktop = {
   ...family(SETTINGS_READ_ISLAND_EVENTS, event => group(`desktop.agentIslandSoundSettings.sounds`, { [event]: sound } as Record<typeof event, typeof sound>,
     'agent-island', 'AgentIslandSection', 'shared/agentIsland.ts#AGENT_ISLAND_SOUND_EVENTS', 'cloudDesktop', 'immediate', 'safeProjection', ['darwin'])),
 };
-export const SETTINGS_READ_ASR_PROVIDERS = ['custom-realtime-asr', 'elevenlabs-scribe-realtime', 'elevenlabs-scribe-v3-live', 'openai-realtime-whisper', 'litellm-gpt-realtime-whisper', 'litellm-qwen3-asr-flash-realtime', 'litellm-volcengine-sauc-asr', 'litellm-batch'] as const;
+export const SETTINGS_READ_ASR_PROVIDERS = ['custom-realtime-asr', 'elevenlabs-scribe-realtime', 'elevenlabs-scribe-v3-live', 'openai-realtime-whisper', 'litellm-gpt-realtime-whisper', 'litellm-qwen3-asr-flash-realtime', 'litellm-volcengine-sauc-asr', 'litellm-batch', 'local-sherpa-onnx'] as const;
 const voice = {
   ...group('voice', { language: z.enum(['auto', 'zh-CN', 'zh-TW', 'en', 'ja', 'ko']), microphoneDeviceIdConfigured: bool,
     muteSystemAudio: bool, playInteractionSound: bool, fastActivationEnabled: bool, composerLongPressEnabled: bool, refinementEnabled: bool,

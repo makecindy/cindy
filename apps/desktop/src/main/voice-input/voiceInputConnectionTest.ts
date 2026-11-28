@@ -67,6 +67,7 @@ export function classifyVoiceInputConnectionTestError(
     || normalized.includes('sign-in is required')
     || normalized.includes('login is required')
     || normalized.includes('configure the realtime asr websocket url')
+    || normalized.includes('select a local sherpa-onnx asr model folder')
   ) {
     return 'credentials-missing';
   }

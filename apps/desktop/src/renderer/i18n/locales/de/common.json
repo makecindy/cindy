@@ -3184,7 +3184,8 @@
           "gatewayKey": "Dein KI-Gateway muss diese Echtzeit-ASR-Route unterstützen",
           "codexLogin": "Verwendet deine Codex-Anmeldung",
           "elevenlabsKey": "Verwendet deinen ElevenLabs-Schlüssel (Umgebungsvariable)",
-          "codexRealtimeUnsupported": "Nicht verfügbar: Die Codex-Anmeldung ist kein Zugangsnachweis für OpenAI API Realtime"
+          "codexRealtimeUnsupported": "Nicht verfügbar: Die Codex-Anmeldung ist kein Zugangsnachweis für OpenAI API Realtime",
+          "localOffline": "Läuft offline auf diesem Gerät (kein Konto oder API-Schlüssel erforderlich)"
         },
         "credentialError": {
           "gatewayMissing": "Kein KI-Gateway-Schlüssel gefunden; dieses Modell ist nicht verfügbar.",
@@ -3192,10 +3193,24 @@
           "elevenlabsMissing": "Kein ElevenLabs-Schlüssel konfiguriert (Umgebungsvariable); dieses Modell ist nicht verfügbar.",
           "customAsrConfigMissing": "Vervollständige und speichere die Einstellungen des Echtzeit-ASR-Dienstes, bevor du die Spracheingabe startest.",
           "customAsrKeyMissing": "Füge einen API-Schlüssel für den benutzerdefinierten Echtzeit-ASR-Dienst hinzu und speichere ihn.",
-          "codexRealtimeUnsupported": "Die Codex-Anmeldung kann nicht für die Echtzeit-Spracherkennung verwendet werden. Wähle einen unterstützten ASR-Dienst."
+          "codexRealtimeUnsupported": "Die Codex-Anmeldung kann nicht für die Echtzeit-Spracherkennung verwendet werden. Wähle einen unterstützten ASR-Dienst.",
+          "localAsrModelMissing": "Wähle zuerst einen lokalen sherpa-onnx-ASR-Modellordner für die Offline-Spracheingabe aus.",
+          "localAsrUnsupported": "Lokale Offline-Spracherkennung wird auf dieser Computerarchitektur nicht unterstützt."
         },
         "manageProviders": "Modellanbieter öffnen",
-        "reset": "Auf Standard zurücksetzen"
+        "reset": "Auf Standard zurücksetzen",
+        "localAsr": {
+          "optionLabel": "Lokale Offline-Spracherkennung (sherpa-onnx)",
+          "optionDescription": "ONNX-Erkennung auf dem Gerät; funktioniert komplett offline ohne Konto oder API-Schlüssel",
+          "notice": "Wähle einen lokalen sherpa-onnx-Modellordner (SenseVoice, Paraformer, Whisper oder Transducer mit tokens.txt und .onnx-Gewichten). Audio bleibt auf diesem Computer.",
+          "modelDirLabel": "Lokaler Modellordner",
+          "readyStatus": "Bereit · {{kind}} ({{folder}})",
+          "unsupportedStatus": "Auf dieser Plattform nicht unterstützt",
+          "notConfiguredStatus": "Noch kein Modellordner ausgewählt",
+          "clearFolder": "Entfernen",
+          "chooseFolder": "Modellordner wählen",
+          "invalidFolder": "Dieser Ordner enthält kein unterstütztes sherpa-onnx-Modell (tokens.txt und .onnx-Dateien)."
+        }
       },
       "historyToggle": {
         "show": "Letzten Verlauf anzeigen",
@@ -3343,7 +3358,9 @@
           "filters": {
             "all": "Alle",
             "automatic": "Automatisch",
-            "manual": "Manuell"
+            "manual": "Manuell",
+            "candidates": "Kandidaten",
+            "suppressed": "Unterdrückt"
           },
           "sources": {
             "automatic": "Automatisch",
@@ -3356,6 +3373,28 @@
             "automaticAddedMultiple": "{{count}} Begriffe automatisch hinzugefügt, darunter {{term}}",
             "delete": "Löschen",
             "deleteAriaLabel": "Automatisch hinzugefügten Begriff löschen: {{term}}"
+          },
+          "export": {
+            "csv": "CSV exportieren",
+            "json": "JSON exportieren",
+            "successCsv": "Wörterbuch als CSV exportiert",
+            "successJson": "Wörterbuch als JSON exportiert"
+          },
+          "candidates": {
+            "hint": "Begriffe aus deinen manuellen Korrekturen, die noch nicht automatisch übernommen wurden. Sofort übernehmen oder entfernen.",
+            "evidenceCount": "{{count}}× beobachtet",
+            "promote": "Übernehmen",
+            "promoteTooltip": "Diesen Kandidaten sofort ins Wörterbuch übernehmen",
+            "promotedToast": "„{{term}}“ ins Wörterbuch übernommen",
+            "empty": "Noch keine Kandidaten vorhanden."
+          },
+          "suppressed": {
+            "hint": "Gelöschte automatisch gelernte Begriffe werden unterdrückt. Stelle das Lernen wieder her oder füge sie erneut hinzu.",
+            "restore": "Lernen erlauben",
+            "addToDictionary": "Wieder hinzufügen",
+            "restoredToast": "Automatisches Lernen für „{{term}}“ wiederhergestellt",
+            "addedToast": "„{{term}}“ wieder zum Wörterbuch hinzugefügt",
+            "empty": "Keine unterdrückten Begriffe."
           }
         }
       },
@@ -3400,7 +3439,15 @@
         "toast": {
           "copied": "Kopiert",
           "copyFailed": "Kopieren fehlgeschlagen"
-        }
+        },
+        "searchAriaLabel": "Sprachverlauf durchsuchen",
+        "searchPlaceholder": "Transkripte oder Roherkennung durchsuchen…",
+        "showRawComparison": "Roh vs. bereinigt vergleichen",
+        "hideRawComparison": "Vergleich ausblenden",
+        "rawLabel": "Roherkennung",
+        "refinedLabel": "Bereinigt",
+        "loadMore": "Mehr laden ({{count}} übrig)",
+        "noSearchResults": "Keine passenden Transkripte."
       },
       "speakerFilter": {
         "label": "Meine Stimme erkennen",
@@ -15452,7 +15499,11 @@
           "description": "Erlaube den Mikrofonzugriff und klicke dann erneut auf Spracheingabe.",
           "confirm": "Berechtigung erteilen",
           "cancel": "Abbrechen"
-        }
+        },
+        "rewriteSelected": "Per Sprache umschreiben",
+        "rewriteSelectedTooltip": "Sprich eine Anweisung zum Umschreiben des markierten Texts (bei Fehlern bleibt das Original erhalten)",
+        "rewriteSelectedAria": "Markierten Text per Sprache umschreiben",
+        "rewriteFailed": "Das Umschreiben per Sprache wurde nicht abgeschlossen; dein markierter Text blieb unverändert."
       },
       "remoteSwitchFailed": "Einstellung auf entferntem Gerät konnte nicht geändert werden; nicht angewendet",
       "switchFailed": "Einstellung konnte nicht geändert werden; nicht angewendet",

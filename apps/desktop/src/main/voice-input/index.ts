@@ -7,6 +7,7 @@ import fs from 'node:fs/promises';
 import {
   DictationDictionaryAdvisor,
   DictationRefiner,
+  DictationRewriter,
   VoiceInputController,
   VoiceTimelineLogger,
   buildAsrRecognitionHints,
@@ -62,6 +63,7 @@ import {
 } from './CodexResponsesTextModelClient.js';
 import { ElevenLabsScribeProvider } from './ElevenLabsScribeProvider.js';
 import { DictionaryLearningTextModelClient } from './DictionaryLearningTextModelClient.js';
+import { VoiceRewriteTextModelClient } from './VoiceRewriteTextModelClient.js';
 import { FallbackAsrProvider } from './FallbackAsrProvider.js';
 import {
   FallbackTextModelClient,
@@ -171,6 +173,8 @@ import {
 } from '../../shared/voiceInputConnectionTest.js';
 import { runSerializedVoiceInputConnectionTest } from './voiceInputConnectionTest.js';
 import { getSpeakerFilterService, registerVoiceSpeakerFilterIpc } from './speaker/index.js';
+import { getLocalAsrService, registerVoiceLocalAsrIpc } from './local-asr/index.js';
+import { LocalSherpaAsrProvider } from './local-asr/LocalSherpaAsrProvider.js';
 
 const log = createLogger('voice-input');
 let customAsrCredentialRevision = 0;
@@ -242,11 +246,16 @@ type VoiceInputReadiness = {
   serviceMode: VoiceInputServiceMode;
   provider: VoiceInputProviderKind;
   providerModel: string;
-  auth: 'api-key' | 'codex';
+  auth: 'api-key' | 'codex' | 'local';
   settingsTab: 'api-keys' | 'connections' | 'providers';
   error?: string;
   authErrorReason?: string;
-  failureReason?: 'custom-asr-config-missing' | 'custom-asr-key-missing' | 'codex-realtime-unsupported';
+  failureReason?:
+    | 'custom-asr-config-missing'
+    | 'custom-asr-key-missing'
+    | 'codex-realtime-unsupported'
+    | 'local-asr-model-missing'
+    | 'local-asr-unsupported';
 };
 
 type VoiceInputRefinerReadiness = {
@@ -291,6 +300,7 @@ type VoiceInputSystemPermissions = {
 
 type StartPayload = {
   recordingId?: string;
+  mode?: 'dictation' | 'rewrite';
   sourceLanguage?: string;
   refinementEnabled?: boolean;
   refinementContext?: DictationRefinementContext;
@@ -601,6 +611,7 @@ function resolveRefineSourceLanguage(explicit?: string): string {
 function normalizeRefinementContext(
   context: DictationRefinementContext | undefined,
   sourceLanguage: string,
+  isRewriteMode = false,
 ): DictationRefinementContext {
   const contextSourceLanguage = context?.sourceLanguage?.trim();
   const effectiveSourceLanguage =
@@ -623,7 +634,9 @@ function normalizeRefinementContext(
     dictionaryAliasHints: normalizeDictionaryAliasHints(context?.dictionaryAliasHints),
     voiceInputHistory: normalizeMultilineText(context?.voiceInputHistory ?? ''),
     selectionBefore: takeTail(context?.selectionBefore ?? '', MAX_REFINEMENT_SIDE_CONTEXT_CHARS),
-    selectedText: takeHead(context?.selectedText ?? '', MAX_REFINEMENT_SIDE_CONTEXT_CHARS),
+    selectedText: isRewriteMode
+      ? (context?.selectedText ?? '')
+      : takeHead(context?.selectedText ?? '', MAX_REFINEMENT_SIDE_CONTEXT_CHARS),
     selectionAfter: takeHead(context?.selectionAfter ?? '', MAX_REFINEMENT_SIDE_CONTEXT_CHARS),
     ...(activeApp ? { activeApp } : {}),
     replyToMessage: truncateRefinementReply(
@@ -1645,6 +1658,9 @@ export async function prewarmVoiceInputProvider(options?: {
           }
         }
       }
+      if (byokMode && profile.mode === 'local-offline' && getLocalAsrService().isReady()) {
+        await getLocalAsrService().warm(asrLanguageHint);
+      }
       // BYOK notes: LiteLLM batch / ElevenLabs direct read env-var keys
       // synchronously — nothing to warm at their provider layer. Volcengine
       // SAUC must not keep a warm idle session (the gateway reaps sessions
@@ -1691,6 +1707,25 @@ async function getAsrProfileCredentialReadiness(profile: VoiceInputAsrProfile): 
   // Mirror the pre-managed-migration readiness checks per auth kind. The
   // managed voice service is deliberately not consulted here — no cross-mode
   // fallback in either direction.
+  if (profile.auth === 'local' || profile.mode === 'local-offline') {
+    const localStatus = getLocalAsrService().getStatus();
+    if (!localStatus.supported) {
+      return {
+        ok: false,
+        error: 'Local offline speech recognition is not supported on this platform.',
+        failureReason: 'local-asr-unsupported',
+      };
+    }
+    if (!localStatus.ready) {
+      return {
+        ok: false,
+        error: profile.missingCredentialMessage,
+        failureReason: 'local-asr-model-missing',
+      };
+    }
+    return { ok: true };
+  }
+
   if (profile.id === 'custom-realtime-asr') {
     const customAsr = readActiveVoiceInputModelSelection('custom-asr-readiness').customAsr;
     if (!customAsr) {
@@ -2118,6 +2153,23 @@ async function createVoiceInputProvider(
   if (voiceContext && !isManagedVoiceAsrProfile(profile)) {
     throw new Error(CINDY_VOICE_SERVICE_UNAVAILABLE_MESSAGE);
   }
+  if (profile.mode === 'local-offline') {
+    if (!isVoiceInputByokMode()) {
+      throw new Error(CINDY_VOICE_SERVICE_UNAVAILABLE_MESSAGE);
+    }
+    const localAsr = getLocalAsrService();
+    if (!localAsr.supported) {
+      throw new Error('Local offline speech recognition is not supported on this platform.');
+    }
+    if (!localAsr.isReady()) {
+      throw new Error(profile.missingCredentialMessage);
+    }
+    return new LocalSherpaAsrProvider({
+      engine: localAsr.getEngine(),
+      language: sourceLanguage,
+    });
+  }
+
   if (provider === 'custom-realtime-asr') {
     if (!isVoiceInputByokMode()) {
       throw new Error(CINDY_VOICE_SERVICE_UNAVAILABLE_MESSAGE);
@@ -2297,6 +2349,9 @@ export async function transcribeVoiceInputAudioFile(
 export function registerVoiceInputIpc(): void {
   registerVoiceInputDataStoreIpc();
   registerVoiceSpeakerFilterIpc();
+  registerVoiceLocalAsrIpc(() => {
+    void refreshVoiceInputReadinessCache('local-asr-model-changed');
+  });
   let pendingDictationStarts = 0;
   registerVoiceConversationIpc({
     getSettings: () => voiceInputDataStore.getSettings(),
@@ -2612,17 +2667,15 @@ export function registerVoiceInputIpc(): void {
         authErrorReason: readiness.auth === 'codex' ? readiness.authErrorReason : undefined,
       };
     }
-    const shouldRefine = payload?.refinementEnabled !== false;
+    const isRewriteMode = payload?.mode === 'rewrite';
+    const shouldRefine = isRewriteMode || payload?.refinementEnabled !== false;
     // Explicit service mode: managed Cindy voice service by default; the
     // user's own credentials only when they opted into BYOK in settings. The
     // two planes never fall back into each other.
     const useCindyVoiceService = !isVoiceInputByokMode();
     // Refiner fallback chain: credential-ready profiles in runtime priority
-    // order. The built-in default is readiness-aware (Codex ready: Codex →
-    // Kimi; Codex unavailable: LiteLLM GPT → Kimi), then cooldown-aware.
-    // Refiner-chain and ASR-chain resolution are independent reads (settings,
-    // secret store, Codex auth state); resolving them concurrently keeps the
-    // Codex auth round trip off the ASR dial's critical path.
+    // order. Rewrite mode deliberately skips the dictation refiner chain and
+    // managed voice-server /refine; it runs via the auxiliary utility model.
     const [
       {
         refinerChainProfiles,
@@ -2631,7 +2684,7 @@ export function registerVoiceInputIpc(): void {
       },
       startableAsrChain,
     ] = await Promise.all([
-      shouldRefine
+      shouldRefine && !isRewriteMode
         ? resolveVoiceInputRefinerChainForRuntime(useCindyVoiceService)
         : Promise.resolve({ refinerChainProfiles: [], refinerReadinessList: [], readyRefinerProfiles: [] }),
       resolveStartableAsrChain(),
@@ -2664,7 +2717,7 @@ export function registerVoiceInputIpc(): void {
     // the overlay was shown. We mutate refinementContext in place once that
     // capture resolves — kicked off in parallel with the provider create so
     // ASR start latency isn't blocked by AX capture.
-    const refinementContext = normalizeRefinementContext(payload?.refinementContext, refineSourceLanguage);
+    const refinementContext = normalizeRefinementContext(payload?.refinementContext, refineSourceLanguage, isRewriteMode);
     if (shouldRefine) {
       beginOverlayContextInjection(payload?.refinementContext, event.sender, refinementContext);
     }
@@ -2686,14 +2739,14 @@ export function registerVoiceInputIpc(): void {
     // BYOK mode must never allocate a managed voice-server session even when
     // the service is reachable — the user explicitly chose their own
     // credential plane.
-    const claimedPrewarm = useCindyVoiceService && isCindyVoiceServiceReady()
+    const claimedPrewarm = !isRewriteMode && useCindyVoiceService && isCindyVoiceServiceReady()
       ? claimManagedVoiceInputPressPrewarm({
           ownerScopeKey,
           asrLanguageHint,
-          canRefine,
+          canRefine: canRefine && !isRewriteMode,
           asrChainKey: startableAsrChain.join(','),
         })
-      : (discardManagedVoiceInputPressPrewarm('byok_or_unready'), null);
+      : (discardManagedVoiceInputPressPrewarm(isRewriteMode ? 'rewrite_mode' : 'byok_or_unready'), null);
     const voiceContext = claimedPrewarm?.voiceContext
       ?? (useCindyVoiceService && isCindyVoiceServiceReady()
         ? new CindyVoiceRunContext(
@@ -2701,7 +2754,7 @@ export function registerVoiceInputIpc(): void {
             // Managed refinement delegates model choice and failover to
             // voice-server; the session is registered with the 'auto' marker
             // instead of a concrete provider id.
-            canRefine ? CINDY_MANAGED_REFINER_PROVIDER : undefined,
+            canRefine && !isRewriteMode ? CINDY_MANAGED_REFINER_PROVIDER : undefined,
           )
         : undefined);
     let provider: FallbackAsrProvider | ClaimedPrewarmAsrProvider;
@@ -2744,9 +2797,25 @@ export function registerVoiceInputIpc(): void {
       if (event.sender.isDestroyed() || admission.cancelled) return;
       event.sender.send('voice-input:event', message);
     };
-    let refiner: DictationRefiner | undefined;
+    let refiner: DictationRefiner | DictationRewriter | undefined;
     let managedRefinerCacheScope: string | undefined;
-    if (canRefine && effectiveRefinerProfile) {
+    if (isRewriteMode) {
+      // Explicit "selected text + voice rewrite" mode: always routes through
+      // the desktop auxiliary utility-model chain (requestUtilityText) and NEVER
+      // touches DictationRefiner or managed voice-server /refine.
+      const rewriteClient = new VoiceRewriteTextModelClient(
+        (prompt, requestOptions) => requestUtilityText(getMaker(), prompt, requestOptions),
+        () => {
+          if (admission.cancelled) throw new Error('voice input cancelled');
+          assertVoiceInputOwnerScopeCurrent(ownerScopeKey, auxiliaryChainSnapshot);
+        },
+      );
+      refiner = new DictationRewriter({
+        client: rewriteClient,
+        model: 'auxiliary',
+        contextProvider: () => refinementContext,
+      });
+    } else if (canRefine && effectiveRefinerProfile) {
       const customCacheScope = payload?.refinementCacheScope;
       try {
         if (voiceContext) {
@@ -2879,10 +2948,10 @@ export function registerVoiceInputIpc(): void {
       asr: provider,
       refiner,
       audioGate,
-      pauseRefinementEnabled: true,
+      pauseRefinementEnabled: !isRewriteMode,
       // Managed refinement is capped per voice-server session; keep one request
-      // for the final text. BYOK refiners have no such cap.
-      refineRequestBudget: voiceContext ? () => voiceContext.refineRequestBudget() : undefined,
+      // for the final text. BYOK refiners and rewrite mode have no such cap.
+      refineRequestBudget: voiceContext && !isRewriteMode ? () => voiceContext.refineRequestBudget() : undefined,
       // Managed voice-server sessions enforce a 180s ceiling (close 1008).
       // Proactively rotate make-before-break around 150s (pause) / 165s (deadline).
       sessionRotation: voiceContext
@@ -2945,7 +3014,7 @@ export function registerVoiceInputIpc(): void {
       // The ASR session now exists server-side; warm the refiner prompt
       // cache in the background so the (large, mostly static) prompt prefix
       // is hot by the time the user stops speaking. Best effort by design.
-      if (voiceContext && refiner && managedRefinerCacheScope) {
+      if (voiceContext && refiner instanceof DictationRefiner && managedRefinerCacheScope) {
         warmManagedRefinerPromptCache(voiceContext, refiner, managedRefinerCacheScope);
       }
       if (refinerAuthErrorReason) {

@@ -3222,7 +3222,8 @@
           "gatewayKey": "Requiere que tu puerta de enlace de IA admita esta ruta ASR en tiempo real",
           "codexLogin": "Usa tu inicio de sesión de Codex",
           "elevenlabsKey": "Utiliza tu clave de ElevenLabs (variable de entorno)",
-          "codexRealtimeUnsupported": "No disponible: el inicio de sesión de Codex no es una credencial de tiempo real de OpenAI API"
+          "codexRealtimeUnsupported": "No disponible: el inicio de sesión de Codex no es una credencial de tiempo real de OpenAI API",
+          "localOffline": "Se ejecuta sin conexión en este dispositivo (sin cuenta ni clave API)"
         },
         "credentialError": {
           "gatewayMissing": "No se encontró ninguna clave de puerta de enlace de IA; este modelo no está disponible.",
@@ -3230,10 +3231,24 @@
           "elevenlabsMissing": "No hay ninguna clave de ElevenLabs configurada (variable de entorno); este modelo no está disponible.",
           "customAsrConfigMissing": "Completa y guarda la configuración del servicio ASR en tiempo real antes de iniciar la entrada de voz.",
           "customAsrKeyMissing": "Agrega y guarda una clave API para el servicio ASR personalizado en tiempo real.",
-          "codexRealtimeUnsupported": "El inicio de sesión de Codex no se puede usar para el reconocimiento de voz en tiempo real. Elige un servicio ASR compatible."
+          "codexRealtimeUnsupported": "El inicio de sesión de Codex no se puede usar para el reconocimiento de voz en tiempo real. Elige un servicio ASR compatible.",
+          "localAsrModelMissing": "Selecciona una carpeta de modelo ASR sherpa-onnx local antes de iniciar la entrada de voz sin conexión.",
+          "localAsrUnsupported": "El reconocimiento de voz local sin conexión no es compatible con esta arquitectura."
         },
         "manageProviders": "Abrir proveedores de modelos",
-        "reset": "Restablecer los valores predeterminados"
+        "reset": "Restablecer los valores predeterminados",
+        "localAsr": {
+          "optionLabel": "Reconocimiento local sin conexión (sherpa-onnx)",
+          "optionDescription": "Reconocimiento ONNX en el dispositivo; funciona sin conexión sin cuenta ni clave API",
+          "notice": "Elige una carpeta de modelo local sherpa-onnx (SenseVoice, Paraformer, Whisper o Transducer con tokens.txt y pesos .onnx). El audio permanece en este equipo.",
+          "modelDirLabel": "Carpeta del modelo local",
+          "readyStatus": "Listo · {{kind}} ({{folder}})",
+          "unsupportedStatus": "No compatible en esta plataforma",
+          "notConfiguredStatus": "Aún no se ha seleccionado ninguna carpeta de modelo",
+          "clearFolder": "Limpiar",
+          "chooseFolder": "Elegir carpeta de modelo",
+          "invalidFolder": "Esa carpeta no contiene un modelo sherpa-onnx compatible (tokens.txt y archivos .onnx)."
+        }
       },
       "historyToggle": {
         "show": "Mostrar historial reciente",
@@ -3381,7 +3396,9 @@
           "filters": {
             "all": "Todos",
             "automatic": "Automáticos",
-            "manual": "Manuales"
+            "manual": "Manuales",
+            "candidates": "Candidatos",
+            "suppressed": "Suprimidos"
           },
           "sources": {
             "automatic": "Automático",
@@ -3394,6 +3411,28 @@
             "automaticAddedMultiple": "{{count}} términos agregados automáticamente, incluido {{term}}",
             "delete": "Eliminar",
             "deleteAriaLabel": "Eliminar término agregado automáticamente: {{term}}"
+          },
+          "export": {
+            "csv": "Exportar CSV",
+            "json": "Exportar JSON",
+            "successCsv": "Diccionario exportado como CSV",
+            "successJson": "Diccionario exportado como JSON"
+          },
+          "candidates": {
+            "hint": "Términos observados en tus ediciones manuales aún no promovidos automáticamente. Promuévelos o elimínalos.",
+            "evidenceCount": "Observado {{count}}×",
+            "promote": "Promover",
+            "promoteTooltip": "Promover este candidato al diccionario ahora",
+            "promotedToast": "Se promovió «{{term}}» al diccionario",
+            "empty": "Aún no hay términos candidatos."
+          },
+          "suppressed": {
+            "hint": "Los términos eliminados se suprimen para no volver a añadirse automáticamente. Restaura el aprendizaje o añádelos de nuevo.",
+            "restore": "Permitir aprendizaje",
+            "addToDictionary": "Volver a añadir",
+            "restoredToast": "Se restauró el aprendizaje automático para «{{term}}»",
+            "addedToast": "Se volvió a añadir «{{term}}» al diccionario",
+            "empty": "No hay términos suprimidos."
           }
         }
       },
@@ -3438,7 +3477,15 @@
         "toast": {
           "copied": "Copiado",
           "copyFailed": "No se pudo copiar"
-        }
+        },
+        "searchAriaLabel": "Buscar en el historial de voz",
+        "searchPlaceholder": "Buscar transcripciones o reconocimiento sin procesar…",
+        "showRawComparison": "Comparar original y refinado",
+        "hideRawComparison": "Ocultar comparación",
+        "rawLabel": "Reconocimiento original",
+        "refinedLabel": "Refinado",
+        "loadMore": "Cargar más ({{count}} restantes)",
+        "noSearchResults": "No hay transcripciones que coincidan."
       },
       "speakerFilter": {
         "label": "Reconocer mi voz",
@@ -15578,7 +15625,11 @@
           "description": "Permite el acceso al micrófono y vuelve a hacer clic en la entrada de voz.",
           "confirm": "Conceder permiso",
           "cancel": "Cancelar"
-        }
+        },
+        "rewriteSelected": "Reescribir por voz",
+        "rewriteSelectedTooltip": "Dicta una instrucción para reescribir el texto seleccionado (se conserva el original si falla)",
+        "rewriteSelectedAria": "Reescribir el texto seleccionado por voz",
+        "rewriteFailed": "No se pudo completar la reescritura por voz; se conservó el texto seleccionado."
       },
       "remoteSwitchFailed": "Falló el cambio de configuración remota; no se aplicó",
       "switchFailed": "Falló el cambio de configuración; no se aplicó",
