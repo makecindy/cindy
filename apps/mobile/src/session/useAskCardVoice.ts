@@ -8,6 +8,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { i18n } from '@/i18n';
+import { playHaptic } from '@/platform/haptics';
 import { useAskCardAuth } from '@/session/askCardAuth';
 import { useSpeakerFilterNotice } from '@/session/useSpeakerFilterNotice';
 import type { MobileVoiceSelection } from '@/session/mobileVoiceInput';
@@ -153,7 +154,10 @@ export function useAskCardVoice(input: {
             if (abort.signal.aborted) return;
             startingRef.current = false;
             setStarting(false);
-            if (!stoppingRef.current) setListening(true);
+            if (!stoppingRef.current) {
+              setListening(true);
+              playHaptic('commit');
+            }
           },
           onRunCreated: (run) => {
             if (abort.signal.aborted) { void run.cancel().catch(() => undefined); return; }

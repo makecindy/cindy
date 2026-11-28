@@ -32,6 +32,7 @@ type NativeAudioErrorEvent = {
 
 type NativeRealtimeAudioModule = {
   start(options?: { sampleRate?: number; bufferSize?: number; captureId?: string }): Promise<{
+    backend?: 'ios-native' | 'android-native';
     inputPortTypes: string[];
     inputSampleRate: number;
     inputChannels: number;
@@ -206,7 +207,7 @@ async function startCustomNativeRealtimeAudio(
       captureId,
     });
     logMobileVoice('debug', 'capture input', {
-      backend: 'ios-native',
+      backend: input?.backend ?? 'ios-native',
       // Older installed native modules return void; capture remains compatible.
       inputPortTypes: input?.inputPortTypes ?? ['unknown'],
       inputSampleRate: input?.inputSampleRate,
@@ -370,10 +371,10 @@ async function startExpoAudioRealtimeAudio(
 
 /**
  * Best-effort microphone warm-up, wired to touch-down (pressIn) of the mic
- * button. The custom iOS module can activate AVAudioSession ahead of start;
- * Android's Expo AudioStream has no prepare phase, so Android safely no-ops
- * here while its ASR connection still prewarms in parallel. Never throws and
- * never blocks the caller — a real failure will surface from start.
+ * button. Both iOS and Android native XdtMobileRealtimeAudio modules warm their
+ * audio stack ahead of start; older Android binaries falling back to Expo
+ * AudioStream have no prepare phase and safely no-op here while ASR connects in
+ * parallel. Never throws and never blocks the caller.
  */
 export function prewarmMobileRealtimeAudio(): void {
   if (isE2eMockRealtimeAudioEnabled()) return;
