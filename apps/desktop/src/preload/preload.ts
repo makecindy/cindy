@@ -678,6 +678,7 @@ const fanOutAppUpdateProgress = createIpcFanOut('app-update-progress');
 // worktree 回收(归档/删除后的异步链)真正跑完 —— renderer 据此重拉 worktree 快照,
 // 否则徽标会停在回收前的旧条目上。只在本机窗口内广播。
 const fanOutWorktreeChanged = createIpcFanOut('worktree:changed');
+const fanOutWorktreeProvisioningChanged = createIpcFanOut('worktree:provisioning:changed');
 const fanOutAuthStateChange = createIpcFanOut('auth:state-change');
 const fanOutAuthSessionExpired = createIpcFanOut('auth:session-expired');
 // 使用统计(TapDB)的同意状态 / 开关变化;renderer 据此即时 init 或 opt-out
@@ -5957,6 +5958,18 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('worktree:restore-for-session', sessionId),
   /** worktree 回收完成后，按实际受影响的 sessionId 增量更新 renderer 缓存。 */
   onWorktreeChanged: fanOutWorktreeChanged,
+  /** 后台异步 worktree 创建态查询、重试与实时推送（send_to_session use_worktree）。 */
+  worktreeListProvisioning: (): Promise<import('../shared/worktreeProvisioning').WorktreeProvisioningSnapshot[]> =>
+    ipcRenderer.invoke('worktree:provisioning:list'),
+  worktreeRetryProvisioning: (
+    sessionId: string,
+  ): Promise<{
+    ok: boolean;
+    snapshot?: import('../shared/worktreeProvisioning').WorktreeProvisioningSnapshot;
+    errorCode?: string;
+    message?: string;
+  }> => ipcRenderer.invoke('worktree:provisioning:retry', sessionId),
+  onWorktreeProvisioningChanged: fanOutWorktreeProvisioningChanged,
 
   // ── Slack Hook(公司中心 slack-hook-server 接入, 单内置连接) ─────────────
   // 通道名与 shared/hookControlIpc.ts 保持一致(preload 因 vite chunking 不

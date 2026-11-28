@@ -385,7 +385,11 @@ export function createHostService(deps) {
         return { status: 200, body: await deps.input.setExpanded(String(body.sessionId ?? ''), Boolean(body.expanded)) };
     }
     if (url.pathname === '/api/input/set-interaction-lock') {
-        return { status: 200, body: await deps.input.setInteractionLock(String(body.sessionId ?? ''), String(body.lockId ?? ''), Boolean(body.locked)) };
+        const lockId = String(body.lockId ?? '');
+        if (lockId === 'worktree-provisioning') {
+            throwIpcError('PERMISSION_DENIED', 'Worktree provisioning lock is host-managed');
+        }
+        return { status: 200, body: await deps.input.setInteractionLock(String(body.sessionId ?? ''), lockId, Boolean(body.locked)) };
     }
     if (url.pathname === '/api/input/set-edit-lock') {
         return { status: 200, body: await deps.input.setEditLock(String(body.sessionId ?? ''), String(body.clientId ?? ''), Boolean(body.locked)) };

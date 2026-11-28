@@ -1286,6 +1286,10 @@ export function registerSessionIpc(
       // 同一时机清掉上次运行没来得及删的未发送任务；先等它清完再读列表，残留不会被列出来。
       // 每个账号库只真正清理一次，之后直接返回同一个结果。
       await sweepLeftoverProvisionalSessions().catch(() => undefined);
+      // 同步对账异步 worktree 创建态：上次运行中断的 provisioning 转为 failed 并继续锁队列。
+      void import('../../maker-ipc/register.js')
+        .then((m) => m.getHandoffProvisioningService()?.reconcileForCurrentOwner())
+        .catch(() => undefined);
       const cap = clampLimit(limit, 20);
       const includePinned = shouldIncludePinnedSessions(options);
       const fresh = shouldBypassSessionListSingleFlight(options);

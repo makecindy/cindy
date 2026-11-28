@@ -9,7 +9,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { GitExecOpts } from '../gitExec';
 
 const mocks = vi.hoisted(() => ({
-  impl: undefined as undefined | ((args: readonly string[]) => string | undefined),
+  impl: undefined as
+    | undefined
+    | ((args: readonly string[]) => string | undefined | Promise<string | undefined>),
   calls: [] as { args: string[]; opts?: { timeoutMs?: number } }[],
 }));
 
@@ -18,7 +20,7 @@ vi.mock('../gitExec', () => ({
   KILL_CLEANUP_BUDGET_MS: 3_000,
   gitExec: async (args: readonly string[], _cwd?: string, opts?: GitExecOpts) => {
     mocks.calls.push({ args: [...args], opts });
-    const out = mocks.impl?.(args);
+    const out = await mocks.impl?.(args);
     if (out === undefined) throw new Error(`git ${args.join(' ')} failed`);
     return { stdout: out, stderr: '' };
   },
@@ -295,4 +297,84 @@ it('keeps the selected origin default after a fetch timeout, without probing ups
   expect(call('fetch')?.opts?.timeoutMs).toBeLessThanOrEqual(2000);
   expect(call('ls-remote')).toBeUndefined();
   expect(call('remote get-url upstream')).toBeUndefined();
+});
+
+// P1-1 single-flight coalescing (unit): concurrent resolveFreshSourceBranch /
+// refreshSelectedDefaultSource bursts on the same repo share one network round-trip
+// and do not leave stale cached results after settlement.
+describe('freshBase in-flight single-flight coalescing', () => {
+  it('coalesces concurrent resolveFreshSourceBranch calls and fetches fresh after settlement', async () => {
+    let releaseFetch!: () => void;
+    let fetchCalls = 0;
+    const fetchEntered = new Promise<void>((resolve) => {
+      mocks.impl = async (args) => {
+        const key = args.join(' ');
+        if (key === 'remote get-url origin') return 'git@github.com:me/repo.git';
+        if (key === 'ls-remote --symref origin HEAD') return 'ref: refs/heads/main\tHEAD\nabc123\tHEAD';
+        if (key === 'fetch --quiet origin +refs/heads/main:refs/remotes/origin/main') {
+          fetchCalls += 1;
+          if (fetchCalls === 1) {
+            resolve();
+            await new Promise<void>((r) => {
+              releaseFetch = r;
+            });
+          }
+          return '';
+        }
+        if (key === 'rev-parse --verify refs/remotes/origin/main') return 'abc123';
+        return undefined;
+      };
+    });
+
+    const p1 = resolveFreshSourceBranch(REPO, 'feature-a');
+    await fetchEntered;
+    const p2 = resolveFreshSourceBranch(REPO, 'feature-a');
+    // Allow p2's async canonicalRepoKey() to settle and join p1's in-flight promise.
+    await new Promise((r) => setTimeout(r, 15));
+    releaseFetch();
+    const [r1, r2] = await Promise.all([p1, p2]);
+    expect(r1).toEqual({ sourceBranch: 'refs/remotes/origin/main', fetched: true, reason: undefined });
+    expect(r2).toEqual(r1);
+    expect(fetchCalls).toBe(1);
+
+    // After settlement, a subsequent call runs a fresh fetch (no stale cache).
+    const r3 = await resolveFreshSourceBranch(REPO, 'feature-a');
+    expect(r3.fetched).toBe(true);
+    expect(fetchCalls).toBe(2);
+  });
+
+  it('coalesces concurrent refreshSelectedDefaultSource calls for the same ref', async () => {
+    let releaseFetch!: () => void;
+    let fetchCalls = 0;
+    const fetchEntered = new Promise<void>((resolve) => {
+      mocks.impl = async (args) => {
+        const key = args.join(' ');
+        if (key === 'symbolic-ref refs/remotes/origin/HEAD') return 'refs/remotes/origin/main';
+        if (key === 'rev-parse --verify refs/remotes/origin/main^{commit}') return 'abc123';
+        if (args[0] === 'fetch') {
+          fetchCalls += 1;
+          if (fetchCalls === 1) {
+            resolve();
+            await new Promise<void>((r) => {
+              releaseFetch = r;
+            });
+          }
+          return '';
+        }
+        return undefined;
+      };
+    });
+
+    const p1 = refreshSelectedDefaultSource(REPO, 'refs/remotes/origin/main', 5000);
+    await fetchEntered;
+    const p2 = refreshSelectedDefaultSource(REPO, 'refs/remotes/origin/main', 5000);
+    // Allow p2's async canonicalRepoKey() to settle and join p1's in-flight promise.
+    await new Promise((r) => setTimeout(r, 15));
+    releaseFetch();
+    await Promise.all([p1, p2]);
+    expect(fetchCalls).toBe(1);
+
+    await refreshSelectedDefaultSource(REPO, 'refs/remotes/origin/main', 5000);
+    expect(fetchCalls).toBe(2);
+  });
 });

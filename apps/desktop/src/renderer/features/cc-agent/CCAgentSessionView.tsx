@@ -3398,7 +3398,9 @@ function CCAgentSessionContent({
     void makerChatStore.reconcileRemoteMessages(sessionId).catch(() => undefined);
     return () => setRemoteReceiptDisplayReady(sessionId, false);
   }, [historyLoaded, remoteDeviceId, sessionId, viewVisible]);
-  const worktreePreparing = worktreeCreation?.status === 'creating';
+  const worktreePreparing =
+    worktreeCreation?.status === 'creating' ||
+    (worktreeCreation?.status === 'failed' && worktreeCreation.canRetry === true);
 
   // device-link 远程草稿的交接要等隧道往返(见下方 pending 消费):开协同要等被控端起
   // Worker,起目标另有 subscribe 与 setGoal —— 每一段都可能走到 30s 超时。期间会话看起来
@@ -7460,11 +7462,15 @@ function CCAgentSessionContent({
                     <div className="flex min-w-0 items-center gap-1.5">
                       <Spinner size={12} className="text-[var(--workingdir-icon)]" />
                       <span className="block min-w-0 truncate text-12 font-medium leading-none text-[var(--workingdir-text)]">
-                        {t('ccAgent.layout.worktreeCreating', '正在创建 worktree')}{' '}
-                        <code className="font-mono text-11 text-[var(--text-tertiary)]">
-                          {worktreeCreation.name}
-                        </code>
-                        …
+                        {t('ccAgent.layout.worktreeCreating', '正在创建 worktree')}
+                        {worktreeCreation.name ? (
+                          <>
+                            {' '}
+                            <code className="font-mono text-11 text-[var(--text-tertiary)]">
+                              {worktreeCreation.name}
+                            </code>
+                          </>
+                        ) : null}
                       </span>
                     </div>
                   ) : worktreeCreation?.status === 'failed' ? (
@@ -7476,20 +7482,32 @@ function CCAgentSessionContent({
                         />
                         <span className="block min-w-0 truncate text-12 font-medium leading-none text-[var(--error-fg)]">
                           {t('ccAgent.layout.worktreeFailed', 'Worktree 创建失败')}
-                          {' — '}
-                          {worktreeCreation.error}
+                          {worktreeCreation.error ? ` — ${worktreeCreation.error}` : ''}
                         </span>
-                        <button
-                          type="button"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            if (sessionId) worktreeCreationStore.clear(sessionId);
-                          }}
-                          className="shrink-0 rounded-full p-0.5 transition-colors hover:bg-foreground/10"
-                          aria-label={t('common.dismiss', 'Dismiss')}
-                        >
-                          <X size={10} className="text-[color-mix(in_srgb,var(--error-fg)_70%,transparent)]" />
-                        </button>
+                        {worktreeCreation.canRetry && sessionId ? (
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              void window.electronAPI?.worktreeRetryProvisioning?.(sessionId);
+                            }}
+                            className="shrink-0 rounded-md px-1.5 py-0.5 text-11 font-medium text-[var(--error-fg)] transition-colors hover:bg-foreground/10"
+                          >
+                            {t('commonUi.retry', '重试')}
+                          </button>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              if (sessionId) worktreeCreationStore.clear(sessionId);
+                            }}
+                            className="shrink-0 rounded-full p-0.5 transition-colors hover:bg-foreground/10"
+                            aria-label={t('common.dismiss', 'Dismiss')}
+                          >
+                            <X size={10} className="text-[color-mix(in_srgb,var(--error-fg)_70%,transparent)]" />
+                          </button>
+                        )}
                       </div>
                     </Tip>
                   ) : hasWorkdirMenu && sessionId && composerDir && !isRemoteWorktreeSession && !remoteDeviceId ? (

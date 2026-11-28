@@ -281,6 +281,7 @@ function botTaskDispatchHarness(
     sendToSessionLocks: new Map(),
     waitForSendToSessionLock: async () => undefined,
     trackSendToSessionLockRun: (_id: string, run: Promise<unknown>) => run,
+    handoffProvisioningHolder: null,
     inputCoordinator: { ensureQueueRestored: asyncNoop, shouldQueueNewTurn: () => false },
     enqueueSendToSessionMessage: vi.fn(asyncNoop),
     BOT_GROUP_CLIENT_ID_PREFIX: 'bot-group:',
@@ -1203,5 +1204,151 @@ describe('unbound Codex pre-send history wiring', () => {
     expect(cancelUsageLimitWait).toHaveBeenCalledExactlyOnceWith('old-task');
     expect(order).toEqual(['durable-handoff', 'cancel-wait']);
     expect(failover).not.toHaveBeenCalled();
+  });
+});
+
+// P1-1 guard tier: execute the real sendToSessionInternal closure with an injected
+// handoffProvisioningHolder to verify preflight rejection, fast-path ready/rollback,
+// async provisioning handoff, and jump-to-blocked queueing (never bypassing to base repo).
+describe('sendToSessionInternal two-phase worktree provisioning wiring', () => {
+  it('handles preflight rejection, fast-path rollback, fast-path ready, async provisioning, and blocked follow-up sends', async () => {
+    const dbRows = new Map<string, Record<string, unknown>>();
+    const deletedRows: string[] = [];
+    const broadcasted: string[] = [];
+    const enqueue = vi.fn(async () => undefined);
+    let uuidSeq = 0;
+
+    const makeHarness = (overrides: Record<string, unknown>) =>
+      botTaskDispatchHarness(
+        {},
+        {},
+        {
+          randomUUID: () => `prov-sess-${++uuidSeq}`,
+          openSession: vi.fn(async (input: { id?: string; body: Record<string, unknown> }) => {
+            const id = input.id ?? `prov-sess-${++uuidSeq}`;
+            const row = { ...input.body, id, status: 'active', userSendAt: null, planModeEnabled: false };
+            dbRows.set(id, row);
+            return { row, value: undefined };
+          }),
+          deleteUnsentSessionRow: vi.fn(async (id: string) => {
+            deletedRows.push(id);
+            dbRows.delete(id);
+          }),
+          getSessionRowSnapshot: async (id: string) => dbRows.get(id) ?? null,
+          maker: {
+            getSession: () => undefined,
+            getSessionMeta: async (id: string) => {
+              const row = dbRows.get(id);
+              if (row) {
+                return {
+                  id,
+                  agentKind: row.agentKind === 'cc' ? 'claude-code' : row.agentKind,
+                  workDir: row.workingDir,
+                  model: row.model,
+                };
+              }
+              return { id, agentKind: 'claude-code', workDir: '/repo', model: 'claude-opus-fixture' };
+            },
+          },
+          broadcastSessionCreated: (id: string) => broadcasted.push(id),
+          awaitAgentInputQueueSnapshotPersistence: async () => undefined,
+          enqueueSendToSessionMessage: enqueue,
+          worktreeManager: {
+            getForSession: () => null,
+            listAll: () => [],
+            detectCwd: async () => ({ gitInstalled: true, isGitRepo: true, repoRoot: '/repo', isWorktree: false }),
+          },
+          resolveHandoffBaseRepo: vi.fn(async () => ({ baseRepo: '/repo' })),
+          ...overrides,
+        },
+      );
+
+    // 1. Preflight failure rejects before creating any DB row.
+    {
+      const holder = { beginProvisioning: vi.fn(), cancelProvisioning: vi.fn(), enforceLockIfBlocked: vi.fn(), isBlocked: () => false };
+      const h = makeHarness({
+        handoffProvisioningHolder: holder,
+        resolveHandoffBaseRepo: vi.fn(async () => ({ baseRepo: null, message: 'Not a git repo' })),
+      });
+      const res = await h.sendToSessionInternal({ dispatcherSessionId: 'source', message: 'Work', useWorktree: true });
+      expect(res).toMatchObject({ ok: false, errorCode: 'WORKTREE_UNAVAILABLE', message: 'Not a git repo' });
+      expect(holder.beginProvisioning).not.toHaveBeenCalled();
+      expect(dbRows.size).toBe(0);
+    }
+
+    // 2. Fast-path failure rolls back the unsent DB row and never enqueues or broadcasts.
+    {
+      const holder = {
+        beginProvisioning: vi.fn(async () => ({ state: 'failed' as const, message: 'git worktree failed' })),
+        cancelProvisioning: vi.fn(),
+        enforceLockIfBlocked: vi.fn(),
+        isBlocked: () => false,
+      };
+      const h = makeHarness({ handoffProvisioningHolder: holder });
+      const res = await h.sendToSessionInternal({ dispatcherSessionId: 'source', message: 'Work', useWorktree: true });
+      expect(res).toMatchObject({ ok: false, errorCode: 'WORKTREE_UNAVAILABLE', message: 'git worktree failed' });
+      expect(deletedRows).toHaveLength(1);
+      expect(dbRows.size).toBe(0);
+      expect(enqueue).not.toHaveBeenCalled();
+      expect(broadcasted).toEqual([]);
+    }
+
+    // 3. Fast-path ready returns wakeKind='created', worktreePath, enqueues, and broadcasts once.
+    {
+      const holder = {
+        beginProvisioning: vi.fn(async ({ sessionId }: { sessionId: string }) => {
+          const r = dbRows.get(sessionId);
+          if (r) r.workingDir = '/repo/.cindy-worktrees/fast-wt';
+          return { state: 'ready' as const, meta: { path: '/repo/.cindy-worktrees/fast-wt' } };
+        }),
+        cancelProvisioning: vi.fn(),
+        enforceLockIfBlocked: vi.fn(),
+        isBlocked: () => false,
+      };
+      const h = makeHarness({ handoffProvisioningHolder: holder });
+      const res = await h.sendToSessionInternal({ dispatcherSessionId: 'source', message: 'Fast work', useWorktree: true });
+      expect(res).toMatchObject({
+        ok: true,
+        wakeKind: 'created',
+        worktreePath: '/repo/.cindy-worktrees/fast-wt',
+        workingDir: '/repo/.cindy-worktrees/fast-wt',
+      });
+      expect(enqueue).toHaveBeenCalledTimes(1);
+      expect(broadcasted).toHaveLength(1);
+    }
+
+    // 4. Slow/queued repo returns wakeKind='provisioning', worktreeStatus='provisioning',
+    //    queues first message, and a follow-up jump send queues behind the lock (no direct bootstrap).
+    {
+      const blockedIds = new Set<string>();
+      const enforceLockIfBlocked = vi.fn();
+      const holder = {
+        beginProvisioning: vi.fn(async ({ sessionId }: { sessionId: string }) => {
+          blockedIds.add(sessionId);
+          return { state: 'provisioning' as const };
+        }),
+        cancelProvisioning: vi.fn(),
+        enforceLockIfBlocked,
+        isBlocked: (id: string) => blockedIds.has(id),
+      };
+      const h = makeHarness({ handoffProvisioningHolder: holder });
+      const res = await h.sendToSessionInternal({ dispatcherSessionId: 'source', message: 'Slow repo work', useWorktree: true });
+      expect(res).toMatchObject({
+        ok: true,
+        wakeKind: 'provisioning',
+        worktreeStatus: 'provisioning',
+        worktreePath: null,
+      });
+      const createdId = (res as { targetSessionId: string }).targetSessionId;
+      expect(enqueue).toHaveBeenCalledTimes(2);
+
+      // Follow-up jump to the provisioning session (even when shouldQueueNewTurn() is false)
+      // MUST enqueue behind the lock instead of bootstrapping directly in the base repo.
+      const followUp = await h.sendToSessionInternal({ targetSessionId: createdId, message: 'Extra context' });
+      expect(followUp).toMatchObject({ ok: true, wakeKind: 'queued' });
+      expect(enforceLockIfBlocked).toHaveBeenCalledWith(createdId);
+      expect(enqueue).toHaveBeenCalledTimes(3);
+      expect(h.bootstrapped).toEqual([]);
+    }
   });
 });

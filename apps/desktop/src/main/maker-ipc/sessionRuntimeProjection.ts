@@ -214,6 +214,8 @@ export function createSessionRuntimeProjector(ports: SessionRuntimeProjectorPort
 export interface SessionRuntimeCleanupPorts {
   /** A start of the task still in progress on another computer (remote-agent startRemote.ts). */
   cancelPendingRemoteStart(sessionId: string): void;
+  /** Cancel any in-flight asynchronous worktree provisioning and clear its lock/state. */
+  cancelWorktreeProvisioning?(sessionId: string): void;
   /** The working-directory recovery's memory of the task (workingDirectoryRecovery.discard). */
   discardWorkingDirectoryRecovery(sessionId: string): void;
   clearDeferredCredentialSelection(sessionId: string): void;
@@ -232,6 +234,7 @@ export function createSessionRuntimeCleanup(ports: SessionRuntimeCleanupPorts): 
   return (sessionId) => {
     // 任务在另一台电脑上还没启动完：让那台停下，不再迟到地启动、跑完这一轮。
     cancelPendingRemoteStart(sessionId);
+    ports.cancelWorktreeProvisioning?.(sessionId);
     ports.discardWorkingDirectoryRecovery(sessionId);
     ports.clearDeferredCredentialSelection(sessionId);
     clearSessionRuntimeControlState(sessionId);

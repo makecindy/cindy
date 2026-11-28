@@ -16,6 +16,7 @@ import { resolveHistoryScope } from './_history_scope.js';
 import { errorPayload, okPayload } from './_payload.js';
 
 export type TaskDigestPhase =
+  | 'provisioning'
   | 'running'
   | 'waiting-permission'
   | 'waiting-answer'
@@ -133,7 +134,7 @@ const DESCRIPTION = [
   'idle_minutes 距最后一次动静的分钟数;tool_in_flight 为 true 表示有工具调用(如长时间构建、测试)正在执行,宿主不知道时不出现。',
   '被程序叫醒跟进任务时先读这一份再决定;要看原文再用 get_chat_history。',
   '作用范围:本机任务直接传 id;另一台电脑上的任务传 deviceId::sessionId(只读,对方须在线)。',
-  'phase:running 运行中 / waiting-permission 等权限 / waiting-answer 等回答 / errored 出错 / usage-limit 撞用量上限 / finished 本轮已结束 / idle 空闲。',
+  'phase:provisioning 正在后台准备 worktree（首条消息已入队等待） / running 运行中 / waiting-permission 等权限 / waiting-answer 等回答 / errored 出错 / usage-limit 撞用量上限 / finished 本轮已结束 / idle 空闲。',
   'finished 只描述所查任务的本轮，不代表它新建的其它任务或用户目标已完成。下一条消息的派发仍由该任务的实时运行状态和输入队列决定。',
   'queue_paused 为 true 且 queued_count 大于 0 时，提醒用户在任务页继续发送。未提供 queue_paused 时，队列是否暂停未知。',
   'suggested_route 只供判断，不是换模型授权。获得目标和变更的明确授权后才用 set_session_runtime(expected_generation 填 runtime_generation;只支持本机任务)。',

@@ -25,6 +25,7 @@ import { getWorktreeRestoreStatus, restoreWorktreeForSession } from './restore';
 import { generateModelWorktreeName } from './modelName';
 import { createLogger } from '../logger';
 import { throwIpcError } from '../utils/ipcValidate';
+import { WORKTREE_PROVISIONING_CHANNELS } from '../../shared/worktreeProvisioning';
 
 const log = createLogger('worktree');
 
@@ -211,5 +212,33 @@ export function registerWorktreeIpc(
       return { ok: false, message: 'invalid sessionId' };
     }
     return restoreWorktreeForSession(sessionId);
+  });
+
+  ipcMain.handle(WORKTREE_PROVISIONING_CHANNELS.LIST, async (event) => {
+    if (isDeviceLinkInvoke()) {
+      throwIpcError('PERMISSION_DENIED', 'worktree:provisioning:list is local only');
+    }
+    assertTrustedAppRendererEvent(event);
+    const { getHandoffProvisioningService } = await import('../maker-ipc/register.js');
+    const service = getHandoffProvisioningService();
+    if (!service) return [];
+    await service.reconcileForCurrentOwner().catch(() => undefined);
+    return service.listSnapshots();
+  });
+
+  ipcMain.handle(WORKTREE_PROVISIONING_CHANNELS.RETRY, async (event, sessionId: unknown) => {
+    if (isDeviceLinkInvoke()) {
+      throwIpcError('PERMISSION_DENIED', 'worktree:provisioning:retry is local only');
+    }
+    assertTrustedAppRendererEvent(event);
+    if (typeof sessionId !== 'string' || !sessionId.trim()) {
+      throwIpcError('INVALID_PARAMS', 'sessionId required');
+    }
+    const { getHandoffProvisioningService } = await import('../maker-ipc/register.js');
+    const service = getHandoffProvisioningService();
+    if (!service) {
+      throwIpcError('PRECONDITION_FAILED', 'Worktree provisioning service is not ready');
+    }
+    return service.retryProvisioning(sessionId.trim());
   });
 }

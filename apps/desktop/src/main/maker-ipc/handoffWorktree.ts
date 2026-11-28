@@ -39,7 +39,13 @@ export interface HandoffWorktreeDeps {
   listBranches: (repoDir: string) => Promise<ListBranchesResp>;
   /** 把 ref(如 HEAD)解析为 commit SHA,失败返回 null(WorktreeManager.revParseCommit)。 */
   resolveCommit?: (repoDir: string, ref: string) => Promise<string | null>;
-  createWorktree: (req: CreateWorktreeReq) => Promise<CreateWorktreeResp>;
+  createWorktree: (
+    req: CreateWorktreeReq,
+    options?: {
+      signal?: AbortSignal;
+      onStageChange?: (stage: 'queued' | 'creating') => void;
+    },
+  ) => Promise<CreateWorktreeResp>;
   createId: () => string;
   /**
    * 新任务基底解析(worktree/freshBase.ts 的 resolveFreshSourceBranch):fetch 基准
@@ -139,13 +145,28 @@ export async function prepareHandoffWorktree(
   deps: HandoffWorktreeDeps,
   dispatcherSessionId: string | undefined,
   workingDir: string,
-  options?: { sourceRef?: string },
+  options?: {
+    sourceRef?: string;
+    signal?: AbortSignal;
+    onStageChange?: (stage: 'queued' | 'creating') => void;
+    onNameSelected?: (name: string) => void;
+  },
 ): Promise<PrepareHandoffWorktreeResult> {
+  if (options?.signal?.aborted) {
+    return { ok: false, message: 'Worktree creation aborted' };
+  }
   const resolved = await resolveHandoffBaseRepo(deps, dispatcherSessionId, workingDir);
   if (resolved.baseRepo === null) return { ok: false, message: resolved.message };
+  if (options?.signal?.aborted) {
+    return { ok: false, message: 'Worktree creation aborted' };
+  }
   const baseRepo = resolved.baseRepo;
 
   const name = await deps.suggestName(baseRepo);
+  options?.onNameSelected?.(name);
+  if (options?.signal?.aborted) {
+    return { ok: false, message: 'Worktree creation aborted' };
+  }
   const dispatcherWorktree = dispatcherSessionId ? deps.getForSession(dispatcherSessionId) : null;
   const continuingDispatcherWork =
     !!dispatcherWorktree && isSamePathOrUnder(workingDir, dispatcherWorktree.path);
@@ -182,8 +203,20 @@ export async function prepareHandoffWorktree(
       sourceBranch = fallback;
     }
   }
+  if (options?.signal?.aborted) {
+    return { ok: false, message: 'Worktree creation aborted' };
+  }
   const sessionId = deps.createId();
-  const resp = await deps.createWorktree({ sessionId, baseRepo, name, sourceBranch });
+  const createOpts =
+    options?.signal || options?.onStageChange
+      ? {
+          ...(options.signal ? { signal: options.signal } : {}),
+          ...(options.onStageChange ? { onStageChange: options.onStageChange } : {}),
+        }
+      : undefined;
+  const resp = createOpts
+    ? await deps.createWorktree({ sessionId, baseRepo, name, sourceBranch }, createOpts)
+    : await deps.createWorktree({ sessionId, baseRepo, name, sourceBranch });
   if (!resp.ok) {
     return { ok: false, message: resp.error.message || resp.error.kind };
   }

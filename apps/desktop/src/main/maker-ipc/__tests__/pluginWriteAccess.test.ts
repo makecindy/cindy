@@ -567,7 +567,7 @@ describe('new user input waits outside execution fences',()=>{
   const prior=withSessionPermissionChange('task',()=>new Promise<void>(r=>{release=r;}));
   await vi.waitFor(()=>expect(release).toBeTypeOf('function'));
   const dispatch=vi.fn(async()=>({}));
-  const deps={withSessionPermissionChange,getCurrentDbClientSnapshot:()=>ownership.current,throwIpcError:(code:string,message:string)=>{throw Object.assign(Error(message),{code});},sendToAgentAccepted:dispatch,isDeviceLinkInvoke:()=>false,attachTrustedDesktopSendContext:(_m:unknown,o:unknown)=>o,requireSessionId:(id:string)=>id,assertReviewExternalInputAllowed:async()=>{},assertTrustedAppRendererEvent:()=>{},prepareSharedTaskInput:dispatch,requireQueuedMessage:(x:unknown)=>x};
+  const deps={handoffProvisioningHolder:null,withSessionPermissionChange,getCurrentDbClientSnapshot:()=>ownership.current,throwIpcError:(code:string,message:string)=>{throw Object.assign(Error(message),{code});},sendToAgentAccepted:dispatch,isDeviceLinkInvoke:()=>false,attachTrustedDesktopSendContext:(_m:unknown,o:unknown)=>o,requireSessionId:(id:string)=>id,assertReviewExternalInputAllowed:async()=>{},assertTrustedAppRendererEvent:()=>{},prepareSharedTaskInput:dispatch,requireQueuedMessage:(x:unknown)=>x};
   const run=new Function(...Object.keys(deps),entry==='send'?sendJs:enqueueJs)(...Object.values(deps));
   const result=(entry==='send'?run('task','hello',{},{}):run({},'task',{})).then((v:unknown)=>v,(e:Error)=>e);
   await Promise.resolve();await Promise.resolve();expect(dispatch).not.toHaveBeenCalled();

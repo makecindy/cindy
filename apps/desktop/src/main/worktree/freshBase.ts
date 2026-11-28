@@ -21,8 +21,17 @@
 import { gitExec, KILL_CLEANUP_BUDGET_MS, type GitExecOpts } from './gitExec';
 import { createLogger } from '../logger';
 import { readOriginDefaultBranch } from './branchSync';
+import { canonicalRepoKey } from './worktreeConcurrency';
 
 const log = createLogger('worktree');
+
+/**
+ * In-flight single-flight tables: when multiple tasks burst on the same repo at once,
+ * concurrent `ls-remote` + `fetch` share one network round-trip instead of racing
+ * `.git/refs/remotes/*` locks. Entries are removed immediately on settlement (no stale cache).
+ */
+const inFlightFreshResolutions = new Map<string, Promise<FreshSourceResolution>>();
+const inFlightDefaultRefreshes = new Map<string, Promise<void>>();
 
 /**
  * 网络操作总预算:ls-remote 与 fetch 共享同一个 deadline,合计不超过此值——worktree
@@ -66,6 +75,26 @@ export async function resolveFreshSourceBranch(
   fallback: string,
   /** 网络总预算覆盖(测试注入/调优用);≤0 表示不做任何网络操作,纯本地回退。 */
   totalBudgetMs: number = NET_TOTAL_BUDGET_MS,
+): Promise<FreshSourceResolution> {
+  if (totalBudgetMs <= 0) {
+    return resolveFreshSourceBranchUncached(baseRepo, fallback, totalBudgetMs);
+  }
+  const key = JSON.stringify([await canonicalRepoKey(baseRepo), fallback, totalBudgetMs]);
+  const existing = inFlightFreshResolutions.get(key);
+  if (existing) return existing;
+  const run = resolveFreshSourceBranchUncached(baseRepo, fallback, totalBudgetMs).finally(() => {
+    if (inFlightFreshResolutions.get(key) === run) {
+      inFlightFreshResolutions.delete(key);
+    }
+  });
+  inFlightFreshResolutions.set(key, run);
+  return run;
+}
+
+async function resolveFreshSourceBranchUncached(
+  baseRepo: string,
+  fallback: string,
+  totalBudgetMs: number,
 ): Promise<FreshSourceResolution> {
   let remote: 'upstream' | 'origin' | null = null;
   if ((await tryGit(['remote', 'get-url', 'upstream'], baseRepo)) !== null) {
@@ -208,16 +237,28 @@ export async function refreshSelectedDefaultSource(
   totalBudgetMs = NET_TOTAL_BUDGET_MS,
 ): Promise<void> {
   if (!sourceBranch?.startsWith('refs/remotes/origin/')) return;
-  const deadline = Date.now() + totalBudgetMs;
-  try {
-    if (sourceBranch !== (await readOriginDefaultBranch(baseRepo))) return;
-    await fetchRemoteDefaultBranch(
-      baseRepo,
-      'origin',
-      sourceBranch.slice('refs/remotes/origin/'.length),
-      deadline - Date.now() - KILL_CLEANUP_BUDGET_MS,
-    );
-  } catch {
-    log.warn('[freshBase] 默认源分支探测失败，使用本地已有 ref');
-  }
+  if (totalBudgetMs <= 0) return;
+  const key = JSON.stringify([await canonicalRepoKey(baseRepo), sourceBranch, totalBudgetMs]);
+  const existing = inFlightDefaultRefreshes.get(key);
+  if (existing) return existing;
+  const run = (async () => {
+    const deadline = Date.now() + totalBudgetMs;
+    try {
+      if (sourceBranch !== (await readOriginDefaultBranch(baseRepo))) return;
+      await fetchRemoteDefaultBranch(
+        baseRepo,
+        'origin',
+        sourceBranch.slice('refs/remotes/origin/'.length),
+        deadline - Date.now() - KILL_CLEANUP_BUDGET_MS,
+      );
+    } catch {
+      log.warn('[freshBase] 默认源分支探测失败，使用本地已有 ref');
+    }
+  })().finally(() => {
+    if (inFlightDefaultRefreshes.get(key) === run) {
+      inFlightDefaultRefreshes.delete(key);
+    }
+  });
+  inFlightDefaultRefreshes.set(key, run);
+  return run;
 }

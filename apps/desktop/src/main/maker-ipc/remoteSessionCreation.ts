@@ -113,6 +113,21 @@ export function createRemoteSessionOpener(deps: {
   resolveExecution(options: RemoteSessionCreation): Promise<Execution>;
   prepareWorktree(id: string, directory: string): Promise<{ ok: true; path: string } | Failure>;
   discardWorktree(id: string, path: string, assertOwner: () => void): Promise<unknown>;
+  /**
+   * Two-phase async worktree provisioning (optional; when provided, replaces synchronous
+   * `prepareWorktree` before DB commit so large/Multibox repos never time out Device Link).
+   */
+  preflightWorktree?: (directory: string) => Promise<{ ok: true; baseRepo: string } | Failure>;
+  beginAsyncWorktree?: (input: {
+    sessionId: string;
+    baseRepo: string;
+    workingDir: string;
+  }) => Promise<
+    | { state: 'ready'; path: string }
+    | { state: 'failed'; message: string }
+    | { state: 'provisioning' }
+  >;
+  rollbackUnsentSession?: (id: string) => Promise<void>;
   broadcastCreated(id: string): void;
 }) {
   return async (
@@ -141,17 +156,30 @@ export function createRemoteSessionOpener(deps: {
       const execution = await deps.resolveExecution(input);
       await check();
       let worktreePath: string | null = null;
+      let worktreeStatus: 'provisioning' | undefined;
       let persistenceStarted = false;
+      const useAsyncWorktree = Boolean(
+        input.useWorktree && deps.preflightWorktree && deps.beginAsyncWorktree,
+      );
+      let asyncBaseRepo: string | undefined;
       try {
         if (input.useWorktree) {
           if (!workingDir) return { ok: false, errorCode: 'INVALID_ARGS', message: 'use_worktree requires a project or working_dir on the destination.' };
-          const tree = await deps.prepareWorktree(id, workingDir);
-          if (!tree.ok) return tree;
-          worktreePath = tree.path;
-          workingDir = tree.path;
-          await check();
+          if (useAsyncWorktree) {
+            const preflight = await deps.preflightWorktree!(workingDir);
+            await check();
+            if (!preflight.ok) return preflight;
+            asyncBaseRepo = preflight.baseRepo;
+          } else {
+            const tree = await deps.prepareWorktree(id, workingDir);
+            if (!tree.ok) return tree;
+            worktreePath = tree.path;
+            workingDir = tree.path;
+            await check();
+          }
         }
         const { row } = await deps.openSession({ id, assertCurrent: assertOwner,
+          ...(useAsyncWorktree ? { deferGitInit: true } : {}),
           body: {
             title: input.title,
             projectDir: project.projectDir,
@@ -171,12 +199,35 @@ export function createRemoteSessionOpener(deps: {
           await deps.openSessionCommit({ ...row, worktreePath }, assertCurrent);
         });
         assertOwner();
+        let finalWorkingDir = row.workingDir ?? '';
+        if (useAsyncWorktree && asyncBaseRepo) {
+          const outcome = await deps.beginAsyncWorktree!({
+            sessionId: id,
+            baseRepo: asyncBaseRepo,
+            workingDir: workingDir!,
+          });
+          if (outcome.state === 'failed') {
+            if (deps.rollbackUnsentSession) {
+              await deps.rollbackUnsentSession(id);
+              return { ok: false, errorCode: 'WORKTREE_UNAVAILABLE', message: outcome.message };
+            }
+            return { ok: false, errorCode: 'WORKTREE_UNAVAILABLE', message: outcome.message };
+          }
+          if (outcome.state === 'ready') {
+            worktreePath = outcome.path;
+            finalWorkingDir = outcome.path;
+          } else {
+            worktreeStatus = 'provisioning';
+          }
+        }
+        assertOwner();
         deps.broadcastCreated(id);
         return { ok: true, targetSessionId: id, targetTitle: row.title ?? null,
           agentKind: execution.agentKind, model: row.model, providerId: row.providerId ?? null,
           effort: (row.effort || null) as RemoteSessionCreated['effort'], fastMode: row.fastMode ?? false,
           projectDir: project.projectDir, workspaceKind: row.workspaceKind ?? (project.projectDir === null ? 'dialogue' : 'project'),
-          workingDir: row.workingDir ?? '', worktreePath };
+          workingDir: finalWorkingDir, worktreePath,
+          ...(worktreeStatus ? { worktreeStatus } : {}) };
       } catch (error) {
         // A database write may have committed even when its reply was lost. Keep its workspace.
         if (worktreePath && !persistenceStarted) await deps.discardWorktree(id, worktreePath, assertOwner).catch(() => undefined);

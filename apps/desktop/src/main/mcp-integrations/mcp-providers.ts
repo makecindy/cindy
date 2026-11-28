@@ -126,6 +126,7 @@ import {
   tryGetBotDirectMessageService,
   tryGetOrcaCollabService,
   readLocalTaskQueuePaused,
+  getHandoffProvisioningService,
   isSessionInTurn,
   getTaskActionInputState,
   isActiveInputAccountScoped,
@@ -336,6 +337,10 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
       return svc ? svc.listSessionQueuedCounts(sessionIds) : { ok: false as const };
     },
     readLocalQueuePaused: readLocalTaskQueuePaused,
+    readWorktreeProvisioning: (sessionId) => {
+      // Loaded synchronously via register module cache when Desktop main is active.
+      return getHandoffProvisioningService()?.getSnapshot(sessionId) ?? null;
+    },
     // git-context 牵连 Electron 窗口广播,按需加载,不让工具装配一引用就把它带进来。
     readSessionPrStatuses: async (sessionId) =>
       (await import('../git-context/ipc.js')).readSessionPrStatuses(sessionId),
@@ -1345,7 +1350,14 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
           if (!result.ok) return { ...result,
             ...(['DELIVERY_UNKNOWN', 'CREATED_NOT_DELIVERED'].includes(result.errorCode)
               ? { recoverySessionId: qualifiedId, message: `${result.message} Recovery target_session_id: ${qualifiedId}. Do not repeat create.` } : {}) };
-          const accepted = { ...result, targetSessionId: qualifiedId, targetDeviceId: device };
+          const accepted = {
+            ...result,
+            ...(result.worktreeStatus === 'provisioning'
+              ? { wakeKind: 'provisioning' as const, worktreeStatus: 'provisioning' as const }
+              : {}),
+            targetSessionId: qualifiedId,
+            targetDeviceId: device,
+          };
           // Opened from a group: the group shows the task as a card (bot-group-chat.md §10).
           reportGroupTaskCreated(dispatcherSessionId, { taskId: id, deviceId: device, title: result.targetTitle || title?.trim() || normalizeAutoTitle(message) });
           if (recordCreation) {
@@ -1387,10 +1399,11 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
               : {}),
             ...(agentDeviceId !== undefined ? { agentDeviceId } : {}),
           }, true);
-          if (result.ok && result.wakeKind === 'created' && dispatcherSessionId)
+          const localCreated = result.ok && (result.wakeKind === 'created' || result.wakeKind === 'provisioning');
+          if (localCreated && dispatcherSessionId)
             reportGroupTaskCreated(dispatcherSessionId, { taskId: result.targetSessionId, deviceId: null,
               title: result.targetTitle || title?.trim() || normalizeAutoTitle(message) });
-          if (result.ok && result.wakeKind === 'created' && recordCreation) {
+          if (localCreated && recordCreation) {
             try { await recordCreation(result.targetSessionId); }
             catch { return { ...result, responsibilityRecorded: false }; }
           }

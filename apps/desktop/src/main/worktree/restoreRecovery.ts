@@ -7,6 +7,7 @@ import { randomUUID } from 'node:crypto';
 import { GitExecError, gitExec } from './gitExec';
 import { ensureManagedWorktreeExcluded } from './managedWorktreeExclude';
 import { buildMultiboxRestoreArgs, isCarriedMultiboxConfig, logMultiboxAddResult, shouldUseMultibox } from './multibox';
+import { withMultiboxHeavyOpQueue } from './worktreeConcurrency';
 import { readRecycleRecord, writeRecycleRecord, worktreeGeneration } from './recycleJournal';
 import { extractRecoveryArchive, inventoryWorktree, sameWorktreeFiles, verifyRecoveryArchive } from './recoveryArchive';
 import { physicalWorktreeKey, withWorktreeResourceLock } from './resourceLock';
@@ -74,7 +75,9 @@ async function restoreMultiboxSnapshot(record: RecycleRecord, worktreePath: stri
   if (!(await gitMetadataUsable(worktreePath))) {
     if ((await fs.readdir(worktreePath)).length !== 0 || !guardHeld()) return false;
     await gitExec(['worktree', 'prune'], record.meta.baseRepo);
-    const { stdout } = await gitExec(buildMultiboxRestoreArgs(worktreePath, snapshot.commit, { detach: true }), record.meta.baseRepo);
+    const { stdout } = await withMultiboxHeavyOpQueue(() =>
+      gitExec(buildMultiboxRestoreArgs(worktreePath, snapshot.commit, { detach: true }), record.meta.baseRepo),
+    );
     logMultiboxAddResult(worktreePath, stdout);
   }
   const identity = await fs.lstat(worktreePath);

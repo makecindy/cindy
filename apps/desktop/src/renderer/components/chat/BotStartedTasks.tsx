@@ -80,7 +80,7 @@ export function collectBotStartedTasks(turn: readonly ChatMessage[]): BotStarted
       sessionId,
       title: typeof receipt.target_title === 'string' && receipt.target_title.trim()
         ? receipt.target_title.trim() : previous?.title ?? null,
-      created: previous?.created === true || receipt.wake_kind === 'created',
+      created: previous?.created === true || receipt.wake_kind === 'created' || receipt.wake_kind === 'provisioning',
     });
   }
   return [...tasks.values()];

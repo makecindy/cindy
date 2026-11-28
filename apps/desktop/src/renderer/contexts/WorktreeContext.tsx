@@ -14,6 +14,7 @@
  * Provider+hooks 范式，不引入新状态库。
  */
 
+import { worktreeCreationStore } from '@/lib/worktreeCreationStore';
 import {
   createContext,
   useCallback,
@@ -309,6 +310,32 @@ export function WorktreeProvider({ children }: { children: ReactNode }) {
       if (ownerStamp !== undefined || !sessionId) return;
       void refreshSession(sessionId);
     });
+  }, [refreshSession]);
+
+  useEffect(() => {
+    let active = true;
+    const listProvisioning = window.electronAPI?.worktreeListProvisioning;
+    if (listProvisioning) {
+      void listProvisioning()
+        .then((items) => {
+          if (active && Array.isArray(items)) {
+            worktreeCreationStore.replaceHostProvisioningList(items);
+          }
+        })
+        .catch(() => undefined);
+    }
+    const subscribe = window.electronAPI?.onWorktreeProvisioningChanged;
+    const unsubscribe = subscribe?.(({ sessionId, snapshot }) => {
+      if (!sessionId) return;
+      worktreeCreationStore.syncHostProvisioning(sessionId, snapshot);
+      if (snapshot === null) {
+        void refreshSession(sessionId);
+      }
+    });
+    return () => {
+      active = false;
+      unsubscribe?.();
+    };
   }, [refreshSession]);
 
   const value = useMemo<WorktreeContextValue>(

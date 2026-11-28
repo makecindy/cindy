@@ -52,13 +52,15 @@ export type SendToSessionCallback = (params: {
       targetSessionId: string;
       /** 'acp' for plugin-engine standalone tasks and plugin-engine Workers. */
       agentKind: ControlWorkerEngine;
-      wakeKind: "resumed" | "already-active" | "created" | "queued";
+      wakeKind: "resumed" | "already-active" | "created" | "provisioning" | "queued";
       targetTitle: string | null;
       targetLastUserSendAt: string | null;
       /** jump 进入队列时的可寻址句柄，可用于本人编辑/撤回。 */
       queuedMessageId?: string;
-      /** create + useWorktree 成功时为新 session 的 worktree 绝对路径;其余情况 host 可省略。 */
+      /** create + useWorktree 成功时为新 session 的 worktree 绝对路径;异步准备中时为 null。 */
       worktreePath?: string | null;
+      /** create + useWorktree 后台异步准备中时为 'provisioning'。 */
+      worktreeStatus?: 'provisioning';
       projectDir?: string | null;
       /** The project was chosen because the requested execution directory is inside it. */
       projectFromWorkingDir?: true;
@@ -167,7 +169,7 @@ const describeSendToSession = (supportsRemote: boolean, supportsShared: boolean)
   "【远程新建】device 选择任务与文件所在电脑；先 list_machines、list_projects(device)、list_available_models(device)。旧版本不支持时不发出；DELIVERY_UNKNOWN / CREATED_NOT_DELIVERED 返回恢复用 target_session_id，先读该任务记录和队列，不能重复 create。不会建立 Worker、父子编排或自动回传；需要回信时用普通 send_to_session。",
   "【working_dir(仅 create 模式)】可选执行目录，缺省为选中或继承的项目目录；不绑项目时分配独立的托管目录。可以指定已有仓库、子目录或临时 worktree；必须为存在的绝对目录。它不改变已指定或继承的项目归属，也不登记项目。不绑项目且 use_worktree=true 时必须显式指定 working_dir 作为 Git 仓库。jump 模式忽略。",
   "",
-  "【use_worktree(仅 create 模式)】use_worktree=true 时,host 会先从**新 session 的 workingDir**(即 working_dir 覆盖后的目录;未覆盖时为选中或继承的项目目录)解析出 base git 仓库,为新 session 预建一个正规 session worktree(<baseRepo>/.cindy-worktrees/<自动名> + cindy/<自动名> 分支,UI 有徽标,session 关闭时自动 stash 未提交改动后回收),新 session 的 workingDir 即该 worktree 路径,返回里带 worktree_path，项目归属保持不变，包括不绑项目的任务。历史 xdt/<自动名> 分支仍可恢复与回收。适用:新 session 要改代码 / checkout 分支,不能污染当前工作树时(如 PR 修复跟进)。workingDir 不是 git 仓库 / git 未装 / worktree 创建失败 → 返 WORKTREE_UNAVAILABLE(不静默降级);调用方可视情况去掉该参数重试(新 session 将直接使用 working_dir 或默认执行目录)。jump 模式忽略此参数。",
+  "【use_worktree(仅 create 模式)】use_worktree=true 时,host 会先从**新 session 的 workingDir**(即 working_dir 覆盖后的目录;未覆盖时为选中或继承的项目目录)解析出 base git 仓库,为新 session 预建一个正规 session worktree(<baseRepo>/.cindy-worktrees/<自动名> + cindy/<自动名> 分支,UI 有徽标,session 关闭时自动 stash 未提交改动后回收),新 session 的 workingDir 即该 worktree 路径,返回里带 worktree_path，项目归属保持不变，包括不绑项目的任务。历史 xdt/<自动名> 分支仍可恢复与回收。大型或 Multibox 仓库创建耗时较长时,host 会先建任务并将首条消息入队,立即返回 wake_kind=provisioning、worktree_status=provisioning、worktree_path=null 与 target_session_id,后台建好 worktree 后自动在其中启动首轮(无需重发或重复新建;可用 get_task_digest 查看准备进展,失败时任务保持阻断不降级到 base 仓库)。适用:新 session 要改代码 / checkout 分支,不能污染当前工作树时(如 PR 修复跟进)。workingDir 不是 git 仓库 / git 未装 / 同步预检或创建失败 → 返 WORKTREE_UNAVAILABLE(不静默降级);调用方可视情况去掉该参数重试(新 session 将直接使用 working_dir 或默认执行目录)。jump 模式忽略此参数。",
   "当前 dispatcher session 不会被本工具关闭或改写,消息投递成功后立即返回。",
   "",
   "【典型场景】首次处理外部业务对象时，选择已有项目并传 project_path 新建任务，保存返回的 id；再次处理时传 target_session_id 回到原任务。",
@@ -200,6 +202,17 @@ export function createdNote(targetSessionId: string): string {
   return (
     `已新建任务 ${targetSessionId}(wake_kind=created),本条消息作为其首条输入,本轮已触发。` +
     "这不是投递到既有任务;若原意是发给某个已存在的任务,请用 list_sessions 找到目标 id 后带 target_session_id 重发,并停止或归档这个多出来的任务。"
+  );
+}
+
+/**
+ * create + use_worktree 异步准备中附带的说明:明确告知任务已建、首条消息已入队等待
+ * worktree 就绪后自动运行，避免调用方误以为未发出而重复创建或重发。
+ */
+export function provisioningNote(targetSessionId: string): string {
+  return (
+    `已新建任务 ${targetSessionId}(wake_kind=provisioning),worktree 正在后台准备中,首条消息已入队并将在 worktree 就绪后自动开始执行。` +
+    "无需重发或重复新建;可用 get_task_digest 查看准备进展,也可继续向该 target_session_id 发消息(会按顺序排队)。"
   );
 }
 
@@ -413,21 +426,25 @@ export function registerSendToSessionTool(
         return errorPayload(result.errorCode, result.message, result.recoverySessionId ? { target_session_id: result.recoverySessionId } : {});
       }
 
+      const isCreated = result.wakeKind === "created" || result.wakeKind === "provisioning";
       return okPayload({
         target_session_id: result.targetSessionId,
         ...(result.targetDeviceId ? { target_device_id: result.targetDeviceId } : {}),
         agent_kind: result.agentKind,
         wake_kind: result.wakeKind,
+        ...(result.worktreeStatus ? { worktree_status: result.worktreeStatus } : {}),
         ...(result.responsibilityRecorded === false ? { responsibility_recorded: false, responsibility_note: "Task creation succeeded, but the responsibility record could not be saved. Do not recreate or resend this task; reconcile the responsibility with the host." } : {}),
         ...(result.wakeKind === "created"
           ? { note: createdNote(result.targetSessionId) }
-          : {}),
+          : result.wakeKind === "provisioning"
+            ? { note: provisioningNote(result.targetSessionId) }
+            : {}),
         target_title: result.targetTitle,
         target_last_user_send_at: result.targetLastUserSendAt,
         ...(result.queuedMessageId ? { queued_message_id: result.queuedMessageId } : {}),
         worktree_path: result.worktreePath ?? null,
         ...(result.projectDir !== undefined ? { project_path: result.projectDir } : {}),
-        ...(result.wakeKind === "created"
+        ...(isCreated
           ? projectMembershipNote({
               requested: project_path,
               resolved: result.projectDir,

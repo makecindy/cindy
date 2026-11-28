@@ -50,6 +50,13 @@ export interface DesktopTaskDigestHost {
   getSessionRuntime(sessionId: string): Promise<{ ok: true; runtime: RuntimeLike } | { ok: false }>;
   listSessionQueuedCounts(sessionIds: string[]): Promise<{ ok: true; counts: Record<string, number> } | { ok: false }>;
   readLocalQueuePaused?(sessionId: string): boolean | undefined;
+  /** Optional reader for local asynchronous worktree provisioning snapshots. */
+  readWorktreeProvisioning?(sessionId: string): {
+    status: 'provisioning' | 'failed';
+    stage?: 'queued' | 'creating';
+    startedAt: number;
+    error?: string;
+  } | null;
   /** 本机任务的 PR 状态(git-context 同一服务与缓存)。 */
   readSessionPrStatuses(sessionId: string): Promise<Parameters<typeof formatPrStatuses>[0]>;
   /**
@@ -188,7 +195,23 @@ export function createDesktopTaskDigestDeps(host: DesktopTaskDigestHost): TaskDi
         return row ? sessionFactsFromRow(row) : null;
       },
       readActivity: async (sessionId): Promise<TaskDigestActivity | null> => {
+        const provisioning = host.readWorktreeProvisioning?.(sessionId) ?? null;
         const result = await host.getSessionRuntime(sessionId);
+        if (provisioning) {
+          const runtime = result.ok ? result.runtime : undefined;
+          return {
+            phase: provisioning.status === 'provisioning' ? 'provisioning' : 'error',
+            source: 'worktree-provisioning',
+            interactionKind: null,
+            startedAtMs: provisioning.startedAt,
+            lastActivityAtMs: provisioning.startedAt,
+            runtimeGeneration: num(runtime?.runtimeGeneration),
+            route: routeFromProfile(runtime?.effectiveProfile),
+            ...(provisioning.status === 'failed'
+              ? { provisioningError: provisioning.error ?? 'Worktree creation failed' }
+              : {}),
+          };
+        }
         if (!result.ok) return null;
         const runtime = result.runtime;
         return {
@@ -202,6 +225,7 @@ export function createDesktopTaskDigestDeps(host: DesktopTaskDigestHost): TaskDi
         };
       },
       readError: async (sessionId, activity, facts) => {
+        if (activity?.provisioningError) return activity.provisioningError;
         if (activity?.phase !== 'error') return null;
         const runtime = await host.readRuntimeFacts?.(sessionId).catch(() => null);
         const terminal = runtime?.terminalError;
@@ -297,12 +321,41 @@ export function createDesktopTaskDigestDeps(host: DesktopTaskDigestHost): TaskDi
         ]));
         // 认不出的格式按读取失败：摘要退回保守推断，不报成「空闲」。
         if (!list) throw Object.assign(new Error('Unexpected active session list'), { code: 'REMOTE_SHAPE' });
-        const row = (list as Array<{ sessionId?: unknown; isTurnRunning?: unknown; activityPhase?: unknown } | null>)
-          .find((item) => item?.sessionId === sessionId);
+        const row = (list as Array<{
+          sessionId?: unknown;
+          isTurnRunning?: unknown;
+          activityPhase?: unknown;
+          worktreeProvisioningStatus?: unknown;
+          worktreeProvisioningStartedAt?: unknown;
+          worktreeProvisioningError?: unknown;
+        } | null>).find((item) => item?.sessionId === sessionId);
         if (!row) return { phase: 'idle' };
+        if (row.worktreeProvisioningStatus === 'provisioning') {
+          const startedAtMs = num(row.worktreeProvisioningStartedAt);
+          return {
+            phase: 'provisioning',
+            source: 'worktree-provisioning',
+            startedAtMs,
+            lastActivityAtMs: startedAtMs,
+          };
+        }
+        if (row.worktreeProvisioningStatus === 'failed') {
+          const startedAtMs = num(row.worktreeProvisioningStartedAt);
+          return {
+            phase: 'error',
+            source: 'worktree-provisioning',
+            startedAtMs,
+            lastActivityAtMs: startedAtMs,
+            provisioningError:
+              typeof row.worktreeProvisioningError === 'string' && row.worktreeProvisioningError.trim()
+                ? row.worktreeProvisioningError
+                : 'Worktree creation failed',
+          };
+        }
         return { phase: typeof row.activityPhase === 'string' ? row.activityPhase : row.isTurnRunning === true ? 'running' : 'idle' };
       },
       readError: async (deviceId, sessionId, activity, facts) => {
+        if (activity?.provisioningError) return activity.provisioningError;
         if (activity?.phase !== 'error' && activity?.phase !== 'idle') return null;
         // One bounded read, using the same authorized history channel as the UI.
         // The terminal marker must refer to this exact error row, not a newer turn.

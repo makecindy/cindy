@@ -115,7 +115,7 @@ export type OrcaInterAgentSendToSessionInternalResult =
       ok: true;
       targetSessionId: string;
       agentKind: EngineKind;
-      wakeKind: 'resumed' | 'already-active' | 'created' | 'queued';
+      wakeKind: 'resumed' | 'already-active' | 'created' | 'queued' | 'provisioning';
       targetTitle: string | null;
       targetLastUserSendAt: string | null;
       /** create + useWorktree 专用回传;dispatcher 恒走 jump(必传 targetSessionId),不消费。 */

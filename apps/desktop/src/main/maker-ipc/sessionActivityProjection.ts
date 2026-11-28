@@ -12,6 +12,15 @@ import {
   readLatestSessionTerminal,
   type SessionTerminalHint,
 } from '../localDb/sessionTerminal.js';
+import type { WorktreeProvisioningSnapshot } from '../../shared/worktreeProvisioning.js';
+
+type ProvisioningLookup = (sessionId: string) => WorktreeProvisioningSnapshot | null;
+let provisioningSnapshotLookup: ProvisioningLookup | null = null;
+
+/** Composition-root injection (Desktop register.ts) avoids circular imports with register.ts. */
+export function setSessionActivityProvisioningLookup(lookup: ProvisioningLookup | null): void {
+  provisioningSnapshotLookup = lookup;
+}
 
 export interface PersistedSessionActivityFacts {
   status: SessionRecordStatus;
@@ -23,6 +32,7 @@ export interface PersistedSessionActivityFacts {
 
 export interface SessionActivityReaderDeps {
   getLiveSnapshot(sessionId: string): SessionActivitySnapshot | null;
+  getProvisioningSnapshot?(sessionId: string): WorktreeProvisioningSnapshot | null;
   getPersistedFacts(sessionId: string): Promise<PersistedSessionActivityFacts | null>;
   getLatestTerminal(
     sessionId: string,
@@ -38,6 +48,30 @@ export function createSessionActivityReader(deps: SessionActivityReaderDeps) {
   return async (sessionId: string): Promise<SessionActivitySnapshot> => {
     const live = deps.getLiveSnapshot(sessionId);
     if (live) return live;
+
+    const provisioning = deps.getProvisioningSnapshot?.(sessionId) ?? null;
+    if (provisioning) {
+      const row = await deps.getPersistedFacts(sessionId);
+      if (row && row.status !== 'deleted' && row.status !== 'archived') {
+        const failed = provisioning.status === 'failed';
+        return projectSessionActivity({
+          sessionId,
+          recordStatus: row.status,
+          title: row.title,
+          source: 'live',
+          livePhase: failed ? 'error' : 'provisioning',
+          terminal: failed ? 'error' : null,
+          startedAtMs: provisioning.startedAt,
+          lastActivityAtMs: provisioning.startedAt,
+          currentActionSummary: failed
+            ? 'Worktree 创建失败'
+            : provisioning.stage === 'queued'
+              ? '排队等待创建 worktree'
+              : '正在创建 worktree',
+          attention: failed,
+        });
+      }
+    }
 
     const row = await deps.getPersistedFacts(sessionId);
     if (!row) return projectSessionActivity({ sessionId, source: 'fallback' });
@@ -91,6 +125,7 @@ async function readPersistedSessionActivityFacts(
 const readDefaultSessionActivity = createSessionActivityReader({
   getLiveSnapshot: (sessionId) =>
     getAgentIslandService()?.getSessionActivitySnapshot(sessionId) ?? null,
+  getProvisioningSnapshot: (sessionId) => provisioningSnapshotLookup?.(sessionId) ?? null,
   getPersistedFacts: readPersistedSessionActivityFacts,
   getLatestTerminal: readLatestSessionTerminal,
 });
@@ -114,6 +149,7 @@ export function createCanonicalSessionActivityBatchReader(
   );
   return createSessionActivityReader({
     getLiveSnapshot: (sessionId) => live.get(sessionId) ?? null,
+    getProvisioningSnapshot: (sessionId) => provisioningSnapshotLookup?.(sessionId) ?? null,
     getPersistedFacts: async (sessionId) => persisted.get(sessionId) ?? null,
     getLatestTerminal: readLatestSessionTerminal,
   });

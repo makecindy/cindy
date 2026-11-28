@@ -103,3 +103,25 @@ Host 在此阶段仍不声明 Worker 执行能力。共享任务访客不获准�
 未新增 wire 字段或中转处理，自建中转继续透传同样的 invoke 和 invoke-result。
 回归覆盖 `apps/host/src/device-link.test.mjs` 的真实回环连接、伙伴拒绝、创建后未送达与回执释放，
 以及队列写后结果不明时保留认领。`apps/host/src/agent/input-queue.test.mjs` 覆盖排队撤销。
+
+## 异步 Worktree 两阶段准备（2026-11-28）
+
+为避免大型或 Multibox 仓库在远程 `send_to_session(use_worktree=true)` 期间超过 `maker:session:handoff`
+65 秒隧道超时并回退为 `DELIVERY_UNKNOWN`，Desktop 与 Node Host 接收端在 `task-action-capability`
+中新增可选能力位 `ordinaryCreateAsyncWorktree: 1`：
+
+- **两阶段准备与短阈值快路径**：接收端在落库前先完成轻量 Git 预检（非仓库 / 未装 Git / 未登记 worktree
+  仍同步返回 `WORKTREE_UNAVAILABLE`，不留空任务）。落库后挂起宿主自持的 `worktree-provisioning` 队列锁
+  （`preserveOnStop: true`，拒绝外部 IPC 解锁）并后台创建 worktree。若 3 秒快路径内完成且队列空闲，
+  直接绑定 worktree 并按原有同步结果返回；快路径内失败则删除未广播的未发送行并返回 `WORKTREE_UNAVAILABLE`；
+  超出阈值或仓库/Multibox 队列繁忙时立即返回任务 ID，首条消息保持在持久化队列中，待 worktree 就绪并绑定
+  DB `workingDir`/`worktreePath` 后自动解冻派发。失败时保持锁定，绝不降级到 base 仓库执行。
+- **前后兼容**：wire 回包仍保持 `wakeKind: 'created'`，仅附带可选增量字段 `worktreeStatus?: 'provisioning'`，
+  旧控制端按既有 `created` 成功接收而不会误报 `DELIVERY_UNKNOWN`；新控制端与本机 `send_to_session`
+  将其投影为 MCP 输出 `wake_kind: 'provisioning'`、`worktree_status: 'provisioning'`、`worktree_path: null`。
+- **可观测性**：`maker:list-active`（含 Device Link `summary: true, snapshotVersion: 2` 投影）保留兼容的
+  `activityPhase: 'running' | 'error'`，并附带可选 `worktreeProvisioningStatus` / `Stage` / `StartedAt` / `Error`
+  （脱敏裁剪），供远端 `get_task_digest` 返回 `phase: 'provisioning'` 或 `phase: 'errored'`，同时旧移动端与桌面
+  控制端可直接显示运行中或错误指示。
+- **不新增 relay channel 或 SQLite migration**：准备态持久化在 `<userData>/worktree-provisioning.json`；
+  进程重启后残留的 `provisioning` 记录转为 `failed` 并继续持锁等待用户重试或删除。自建中转透传既有通道无需改造。

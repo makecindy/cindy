@@ -67,6 +67,7 @@ import type { Session } from '@/lib/ccAgent.types';
 import { usePrActions, usePrRefsForSession } from '@/contexts/PrRefsContext';
 import { buildSessionInfoPieces, SessionInfoMeta, type SessionInfoPiece } from './SessionInfoMeta';
 import { useTaskInfoWorktree, type SessionWorktreeInfo } from './sessionWorktreeInfo';
+import { useWorktreeCreation } from '@/lib/worktreeCreationStore';
 import type { SessionPrRef } from '@/lib/gitContext.types';
 import { useTaskInfoFields } from '../hooks/useTaskInfoFields';
 import { highlightSegments } from '../lib/highlightSegments';
@@ -203,6 +204,7 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
   const isUrgentFromContext = useSessionAttentionUrgency(session.id);
   const remoteActivity = useRemoteSessionActivity(session.id, session.deviceLinkDeviceId);
   const remoteSchedule = useRemoteSessionScheduleInfo(session.id);
+  const worktreeCreation = useWorktreeCreation(session.deviceLinkDeviceId ? undefined : session.id);
   const pendingIssueConfirm = useSidebarIssueConfirm(
     session.deviceLinkDeviceId || session.remoteHostId || navigationOnly ? undefined : session.id,
   );
@@ -214,10 +216,13 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
     recordStatus: session.status,
     liveActivity: session.deviceLinkDeviceId ? remoteActivity : islandActivity,
     attentionKind,
-    isUrgentFromContext: isUrgentFromContext || remoteSchedule?.hasUnreadFailedRun === true,
+    isUrgentFromContext:
+      isUrgentFromContext ||
+      remoteSchedule?.hasUnreadFailedRun === true ||
+      worktreeCreation?.status === 'failed',
     isRunning: session.deviceLinkDeviceId
       ? remoteActivity?.phase === 'running'
-      : isRunning || cindyMakeActivity != null,
+      : isRunning || cindyMakeActivity != null || worktreeCreation?.status === 'creating',
     hasAttentionNotification:
       hasAttentionNotification ||
       orcaWorkerAttentionKind !== undefined ||

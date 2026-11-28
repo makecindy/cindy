@@ -160,6 +160,7 @@ export function createInputEnqueueHarness(coordinator: AgentInputCoordinator, op
   });
   const bindings = {
     inputCoordinator: coordinator,
+    handoffProvisioningHolder: null,
     CONTINUE_AFTER_APP_EXIT_PROMPT,
     markManualSchedulerContinuation,
     resumeInterruptedScheduleRun,

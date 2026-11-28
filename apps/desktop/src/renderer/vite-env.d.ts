@@ -4833,6 +4833,22 @@ interface ElectronAPI {
   }>;
   /** worktree 回收完成后，按实际受影响的 sessionId 增量更新本机缓存。 */
   onWorktreeChanged: (callback: (payload: { sessionId: string }) => void) => () => void;
+  /** 后台异步 worktree 创建态查询、重试与实时推送。 */
+  worktreeListProvisioning?: () => Promise<
+    import('../shared/worktreeProvisioning').WorktreeProvisioningSnapshot[]
+  >;
+  worktreeRetryProvisioning?: (sessionId: string) => Promise<{
+    ok: boolean;
+    snapshot?: import('../shared/worktreeProvisioning').WorktreeProvisioningSnapshot;
+    errorCode?: string;
+    message?: string;
+  }>;
+  onWorktreeProvisioningChanged?: (
+    callback: (payload: {
+      sessionId: string;
+      snapshot: import('../shared/worktreeProvisioning').WorktreeProvisioningSnapshot | null;
+    }) => void,
+  ) => () => void;
 
   // ── Slack Hook(中心 slack-hook-server 接入) ── 类型正本在 shared/hookControlIpc.ts
   hookControl: {
