@@ -207,6 +207,24 @@ describe('side chat picker', () => {
     } finally { act(() => root.unmount()); }
   });
 
+  it('opens the new child while the existing follow-ups are still loading', async () => {
+    Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+    const host = document.createElement('div'), root = createRoot(host);
+    let finish!: (rows: typeof child[]) => void;
+    const maker = { listSideChats: () => new Promise<typeof child[]>(resolve => { finish = resolve; }), getSession: vi.fn() };
+    const onCreate = vi.fn(async () => child), onSelect = vi.fn(), onClose = vi.fn();
+    try {
+      await act(async () => root.render(<Picker visible session={main} maker={maker} onClose={onClose} onSelect={onSelect} onCreate={onCreate} />));
+      const button = host.querySelector<HTMLButtonElement>('[data-testid="session.sideChat.create"]')!;
+      await act(async () => { button.click(); button.click(); });
+      expect(onCreate).toHaveBeenCalledExactlyOnceWith(main);
+      expect(onClose).toHaveBeenCalledOnce();
+      act(() => sheet.props.onClosed());
+      expect(onSelect).toHaveBeenCalledExactlyOnceWith(child);
+      await act(async () => finish([]));
+    } finally { act(() => root.unmount()); }
+  });
+
   it('ignores a previous task list that completes after switching tasks', async () => {
     Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
     const host = document.createElement('div'), root = createRoot(host);

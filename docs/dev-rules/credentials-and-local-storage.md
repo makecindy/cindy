@@ -21,12 +21,19 @@
 
 ## 凭证不入仓
 
-### 本地模式首次云登录：资产交接暂时回退
+### 本地模式首次云登录：数据库、供应商密钥与资产边界
 
 2026-11-17 回退 #10357 新增的资产交接：它将密钥与插件复制放入登录提交路径，
 复制或 Windows 实例检查失败会阻断已提交登录的后续完成及原生供应商绑定。
-登录继续沿用原数据库与原生供应商绑定流程；本地模式的自定义供应商密钥、请求头、
-插件及偏好暂不自动接续到首个云账号，这是回退恢复的已知限制。
+登录继续沿用原数据库与原生供应商绑定流程。自定义请求头、插件及偏好仍留在本地模式。
+#12399 单独接续本地自定义供应商的 Pi、Codex、Claude Code API key。仅当显式登录获得本机
+首次认领、且本地数据库快照成功发布至该账号时生效。发布前按快照中的供应商定义和启用的
+runtime 冻结密文；暂存写入失败时仅凭原密文摘要继续。安全存储目录中的临时密文和摘要
+绑定到该账号的随机批次，数据库发布回执核对实际目标文件身份。重试只使用原批次，并复核
+供应商定义。目标已有值、来源无法证明或供应商定义已变化时保留双方数据。登出、普通切号
+和缺少逐项证明的旧认领不会接续新密钥。重试由主实例的 `beforeEnsureReady` 触发：它先核对当前
+云账号，再在原有数据库认领锁和独占访问检查下尝试完成剩余项。密钥处理失败不阻断登录。
+密文通过同卷硬链接排他发布；文件系统不支持时保留本地源与已冻结批次。
 
 回退只撤销代码，不清理源资料、已复制的目标资料、`.local-profile-assets-v1.json`
 或 `.local-profile-assets-*` 暂存目录，也不撤销原账号认领或修改历史数据库 migration。
@@ -138,7 +145,7 @@ Claude.ai 登录，也不得收集、存储或中转订阅凭证。Cindy 因此�
   （dev 多实例的默认账号也一样），确保仍能看到终端已有登录。
   2026-11-07 起，用户显式添加的[供应商内订阅账号](../product-rules/subscription-account-pools.md)
   使用官方多账号方式：只在该账号的 CLI 子进程设置 `CLAUDE_CONFIG_DIR=~/.claude-cindy-<owner摘要>-<随机id>`，
-  登录、状态、用量、任务及分叉始终使用同一目录。目录不含邮箱，不接受外部传入路径。
+  登录、状态、用量、任务及分叉始终使用同一目录。生成的目录不含邮箱。用户在「添加账号」里连接已有登录时，可复用执行电脑经官方 CLI 核实的既有目录。连接请求只接受执行电脑为当前 owner 签发的短期选择回执，提交时重新核实登录。自定义目录及身份随 owner 的账号池保存，移除后保留目录与 CLI 登录。
   2026-11-13 裁决的 Claude 单独供应商同样如此（账号放在哪个供应商记在 `subscription-account-placement.json`，不含凭证）：账号并入、移动或拿出只改它属于哪个供应商，目录与官方登录不动；
   不复用 09-24 已停用的旧 Claude 连接及其 Cindy 自存凭证。
   Cindy 从不设置 `CLAUDE_SECURESTORAGE_CONFIG_DIR`，并在启动与每次调起 CLI 时剥掉继承值：
@@ -183,6 +190,36 @@ Claude.ai 登录，也不得收集、存储或中转订阅凭证。Cindy 因此�
   项目级设置、不起 MCP、不落会话记录），会话内的 SDK `rate_limit_event` 做增量刷新；
   模型列表来自 SDK `supportedModels` 与 Registry；
   不得为此恢复用订阅 token 直接调用 Anthropic API。
+- **长期令牌是这一节唯一的例外**（2026-11-24 用户裁决，产品行为见
+  [账号池规则](../product-rules/subscription-account-pools.md)「Claude 长期令牌」）。普通登录由服务端限定约
+  四周的寿命，刷新不延长，无人值守的任务到期即断；官方给这种场景的办法是 `claude setup-token`（约一年
+  有效、只有模型请求权限）。这条命令只把令牌显示在终端里、不保存，所以由 Cindy 代办：
+  - 在伪终端里运行内置 CLI 的 `claude setup-token`，浏览器授权仍由 CLI 打开、在 Anthropic 的页面完成；
+    Cindy 不自己发起 OAuth，也不向用户索要令牌。授权后从还原出的终端屏幕读出令牌，写进**该账号自己的
+    Claude 配置目录**，随即重读登录态确认 CLI 认了它，不认就删掉。令牌只在这一次调用里经手：不进
+    Cindy 的数据库、设置、日志，不发给 Renderer、Agent、插件或其他电脑，也不随新电脑设置迁移。
+  - macOS / Linux：目录下的 `cindy-long-lived-token`（仅本人可读）。每次拉起 CLI 时把这个文件的句柄交给它
+    （`CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR`），由 CLI 自己读；Cindy 只判断文件是否存在，不读内容，
+    也不把令牌放进任何进程的环境变量。不依赖用户级设置，设备托管与隔离伙伴会话同样拿得到；终端里的
+    `claude` 不受影响。这个变量官方文档未记载（Anthropic 自己的远程环境在用），所以
+    [smoke-claude-sdk.mjs](../../scripts/smoke-claude-sdk.mjs) 对内置 CLI 实测这条途径；升级 CLI 时它不过就不能升。
+  - Windows：CLI 经 `/dev/fd` 读句柄，Windows 上不通（2026-11-24 实测）。令牌写进该账号用户设置文件的
+    `env.CLAUDE_CODE_OAUTH_TOKEN`，由 CLI 加载用户设置时自己读；只合并这一个键，读不懂的设置文件原样
+    不动。不加载用户设置的会话读不到它，账号池因此不把这类账号派给它们（见产品规则）。CLI 默认目录
+    与终端共用，Windows 上不给默认账号写令牌。
+  - 这是一份明文凭证文件，与「不要新增自定义明文凭证文件」相悖：它放在官方 CLI 自己的配置目录里、
+    只供官方 CLI 读取，是官方「把令牌设为环境变量」做法的等价物，不是 Cindy 的凭证库。除此之外不得
+    仿照它新增别的明文凭证。
+  - 账号是谁仍只认普通登录：长期令牌没有读资料的权限（服务端 403），状态命令因此不带邮箱与套餐。
+    令牌在位时再读一次不交句柄（Windows 为跳过用户设置）的状态，取那份普通登录的邮箱、套餐、到期日
+    与完整余量；普通登录结束后沿用已记下的身份。JSON 状态分不清长期令牌与中转 token，必须以文本状态
+    里写明的来源为准，中转 token 照旧按 `not_a_subscription` 处理。
+  - 「停用」只删本机这份令牌；官方没有作废命令，它在 Anthropic 那边仍有效到期满。
+  - 实现见 [claude-setup-token.ts](../../apps/desktop/src/main/maker-host/claude-setup-token.ts)、
+    [claude-long-lived-token.ts](../../apps/desktop/src/main/maker-host/claude-long-lived-token.ts)、
+    [cli-login-status.ts](../../packages/maker-core/src/agents/claude-code/cli-login-status.ts) 与
+    [local-process-spawn.ts](../../packages/maker-core/src/agents/claude-code/local-process-spawn.ts)；回归见
+    [claudeSetupToken.test.ts](../../apps/desktop/src/main/maker-host/__tests__/claudeSetupToken.test.ts)。
 - 实现见 [claude-native-cli.ts](../../apps/desktop/src/main/maker-host/claude-native-cli.ts)、
   [env-builder.ts](../../packages/maker-core/src/agents/claude-code/env-builder.ts)；回归见
   [claudeAuthAdapterOAuthEnv.test.ts](../../apps/desktop/src/main/maker-host/__tests__/claudeAuthAdapterOAuthEnv.test.ts)
@@ -253,7 +290,21 @@ Claude.ai 登录，也不得收集、存储或中转订阅凭证。Cindy 因此�
   在运行且不是共享数据的被动实例。单个密文损坏或文件访问错误不得因此触发自动重启。
 - 后端故障资格只消费 main 现有的 `credentialEncryptionUnavailable` 观察值，不依赖登录页
   当前步骤。返回或重置表单不清除已观察故障；后续真实凭证操作观察到后端可用时清除。
-  不增加探针、独立故障标记或恢复次数，实际重启仍经过原恢复器全部门禁。
+  不在启动路径探测钥匙串；仅在用户主动发起登录动作（取码 / 验码 / 浏览器登录）或显式登录
+  提交遇到旧账号库解密失败时，执行内存级 `encryptString → decryptString` 往返自检：
+  - 自检失败说明当前进程内加密后端（如 macOS 钥匙串拒绝/锁定）不可用：立即在发码/开浏览器前
+    返回 `CREDENTIAL_STORE_UNAVAILABLE`，不消耗验证码限流配额、不修改已有密文文件，并写入
+    `credentialEncryptionUnavailable` 供既有单次进程恢复消费。
+  - 用户主动登录遇到主账号库解密失败时，先尝试读取原子写入留下的备份，保留其中可恢复的账号。
+    新主库写入成功前必须始终保留可读副本，以应对磁盘写满、文件锁和进程中断。托管实例自动续期不获授替换权限。
+  - 仅当主账号库与备份均无可恢复记录、读取无 I/O 错误、`decryptString` 失败且内存自检通过（证明当前密钥健康、
+    旧密文永久不可解）时，显式登录事务允许在跨进程锁内以新凭证覆盖旧账号库，并在提交完成前
+    保留旧密文快照以支持失败回滚；冷启动、后端不可用与文件 I/O 错误均保持 fail-closed。
+  诊断日志仅额外记录脱敏枚举 `stage`（`io` / `backend` / `decrypt` / `decrypt-mismatch`）与
+  `probeOk` 布尔，不记录路径、明文或密文。实现与回归见
+  [authSafeStorageHealth.ts](../../apps/desktop/src/main/authSafeStorageHealth.ts)、
+  [authSafeStorageHealth.test.ts](../../apps/desktop/src/main/__tests__/authSafeStorageHealth.test.ts)
+  与 [authCredentialLoginRecovery.test.ts](../../apps/desktop/src/main/__tests__/authCredentialLoginRecovery.test.ts)。
 - 登录页与已登录警示条共用 `CredentialStoreHelpDialog`。提示说明本机存储问题、按系统给出
   解锁与完整退出步骤，持续异常时提供错误码、日志目录和私下支持渠道；不承诺重启一定恢复，
   不建议删除钥匙串、清空凭证或反复获取验证码。打开日志目录不等于上传日志。

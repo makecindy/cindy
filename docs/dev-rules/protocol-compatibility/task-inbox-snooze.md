@@ -30,3 +30,14 @@
 宿主不再发送；本 PR 之前的宿主若仍发送，控制端解析时忽略该字段（不再校验类型，也不会因此拒收整份
 列表）。手机读取完整定时任务列表自行判断。仍走现有 channel，无新增 topic、relay 能力或授权。验证入口：
 `providerListProjection.test.ts`、`remoteScheduleBindings.test.tsx`。
+
+## 已处理时间 `archivedAt`（2026-11-27）
+
+沿用既有 `local-db:sessions:patch-meta`、`local-db:sessions:update`、Node Host `/sessions/update`
+与 `local-db:sessions:list` / `local-db:sessions:patched`（Host `session_changed`）通道，新增宿主派生可选只读字段 `archivedAt`
+（ISO 时间或 `null`，调用方不可直接写入）。迁移 0165（`0165_whole_nemesis`）为 `sessions` 新增可空毫秒列 `archived_at`，存量行为 `NULL`。
+
+- **写入语义**：手动归档 / 点「完成」/ 批量归档在任务从未归档转为 `archived` 时写入宿主当前时间，对已归档行幂等重归档保持原值；恢复为 `active` 或软删除为 `deleted` 时清为 `null`。闲置自动归档（`idleArchiveCutoff`）不写入新处理时间；自动化安静轮次将原已归档任务放回 `archived` 时恢复该轮前的 `archivedAt`（每轮新建任务的安静归档记为 `null`）。
+- **跨端与旧端兼容**：属于 append-only 可选字段，不新增 channel、topic、relay 能力或授权；托管与自建中转（`packages/device-link-relay`）继续透明转发既有载荷，无需修改或升级。旧控制端／手机忽略未知 `archivedAt` 字段，保持原列表行为；新控制端／手机读到缺失 `archivedAt` 的旧宿主或存量记录时，经共享 `getSessionArchivedActivityAt` 回退到最近活动时间，并在收到未携带 `archivedAt` 的旧宿主归档回包时将乐观值收敛为 `null`。
+- **缓存与离线意图**：桌面镜像缓存（`mirrorCacheStore.ts`）与手机首页列表缓存（`mobileHomeListCache.ts`）保留 `archivedAt`；离线「完成」意图在投影层暂用点击时间 `intent.createdAt`，重连重放后以宿主返回值覆盖。
+- **验证入口**：`tx.test.ts`、`sessionsUpdate.test.ts`、`sessionsRestoreIfArchived.test.ts`、`quietRunArchive.test.ts`、`quietRunArchiveDesktop.test.ts`、Node Host `session-update.test.mjs`、共享 `sessionActivity.test.ts` / `offlineInboxIntent.test.ts`、桌面 `TaskInbox.test.tsx` / `taskInboxPlacement.test.ts`、手机 `homeSections.test.ts` / `mobileHomeListCache.test.ts` / `useSessionListActions.test.tsx`，以及 `db:validate` 与 `test:migration-replay`。

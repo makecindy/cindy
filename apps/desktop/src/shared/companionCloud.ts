@@ -13,7 +13,7 @@ export interface CompanionCloudHomeDevice {
 }
 
 /** What a move to this computer could not keep of the companion's old setup (cloud-companions.md §2). */
-export type CompanionArrivalNoticeKind = 'permissions' | 'model';
+export type CompanionArrivalNoticeKind = 'permissions' | 'model' | 'model_setup' | 'partial_content';
 
 export interface CompanionCloudActor {
   /** Chat Server actor id. */
@@ -61,7 +61,9 @@ export type CompanionCloudFailureCode =
   /** The chosen computer runs a Cindy too old for a V2 teammate (a project): update it first. */
   | 'TARGET_OUTDATED'
   /** The chosen computer still rejects imported skills above its 64 KiB body limit. */
-  | 'SKILL_TARGET_OUTDATED';
+  | 'SKILL_TARGET_OUTDATED'
+  /** Cloud has no uploaded profile snapshot yet; another computer requires confirmation before starting fresh. */
+  | 'PROFILE_SNAPSHOT_MISSING';
 
 export type CompanionCloudActionResult =
   | { ok: true }
@@ -81,12 +83,19 @@ export type CompanionProfileRepairRequest = { action: 'read' }
 export type CompanionProfileRepairResult = { ok: true; draft?: CompanionProfileRepairDraft }
   | Extract<CompanionCloudActionResult, { ok: false }>;
 
+export interface CompanionTakeOverOptions {
+  /** User confirmed continuing with a default profile when the cloud has no uploaded profile snapshot. */
+  allowMissingProfile?: boolean;
+}
+
 /**
  * What a move does while the companion is still working (a turn running or queued in any of
  * its tasks): fail with `BUSY` (default), wait for it to finish, or stop it first.
  */
 export interface CompanionSwitchOptions {
   whenBusy?: 'wait' | 'stop';
+  /** User confirmed continuing with a default profile when switching in take-over mode without a snapshot. */
+  allowMissingProfile?: boolean;
 }
 
 export interface CompanionTranscriptMessage {

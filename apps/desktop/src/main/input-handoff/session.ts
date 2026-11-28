@@ -281,6 +281,11 @@ export class InputHandoffSession {
   private initial: HandoffTarget | null = null;
   private step: ExtractedStep | null = null;
   private unreadablePage: IncompleteFormError['page'] | null = null;
+  /**
+   * A read that is the card's step except for its hidden code fields, on the same page that still lays out hidden
+   * ones: whose they are can no longer be told, which is no evidence the owner finished or moved on.
+   */
+  private unsureRead: ExtractedStep | null = null;
   private stepNumber = 0;
   private submissions = 0;
   private finishingUntil: number | undefined;
@@ -306,6 +311,10 @@ export class InputHandoffSession {
   private fieldPlanRetired = false;
   /** The owner has been asked something, so a screen with nothing to ask means they finished it. */
   private asked = false;
+  /** The last step that asked the owner for something: shown again while the agent's completion hint is pending. */
+  private askedStep: ExtractedStep | null = null;
+  /** The page lost its fields before the agent's completion hint showed: the card keeps the asked step and waits. */
+  private awaitingHint = false;
   /** The asked fields went away without an answer through the card: the owner did it on the window. */
   private doneOutside = false;
   private ambiguousTitles: string[] | undefined;
@@ -574,6 +583,13 @@ export class InputHandoffSession {
         this.end('succeeded', 'detected');
         return true;
       }
+      // The page kept the step (a code error, say) but whose its hidden code field is can no longer be told: the card
+      // stays on it rather than taking the step as done. Answering it again stops before typing into a guess.
+      if (settled === this.unsureRead && this.step) {
+        if (!ok) this.failure = outcome === 'origin_changed' ? 'origin_changed' : 'action_failed';
+        this.publish('ready');
+        return true;
+      }
       const next = settledForm(settled, current) ? askingNothing(settled) : settled;
       if (outcome !== 'origin_changed') this.stepNumber++;
       if (!ok) this.failure = outcome === 'origin_changed' ? 'origin_changed' : 'action_failed';
@@ -724,8 +740,18 @@ export class InputHandoffSession {
     this.fieldsGoneReads = 0;
     if (read.signIn) this.signInMode = true;
     // Past a sign-in, a page's own fields (a reply box) are not its next step.
-    const signInOver = this.signInMode && !read.signIn && !this.pageUnknown(read) && !read.deviceCode && !hasSecretField(read);
-    const step = signInOver ? { ...read, shown: [] } : read;
+    const step = this.shownStep(read);
+    // The owner has not answered through the card and the agent's completion hint is not met: a page that swapped
+    // its fields away (a slider check, a scan tab) is mid-way. Whoever read it, the window watch or a refresh after
+    // the live view closed, keeps the asked step instead of handing back as done outside.
+    if (this.asked && this.submissions === 0 && this.askedStep && !actionable(step) && !step.pageMissing && this.hintsPending(step)) {
+      this.step = this.askedStep;
+      this.fieldsGoneReads = 0;
+      this.awaitingHint = true;
+      this.publish('ready');
+      return;
+    }
+    this.awaitingHint = false;
     this.step = step;
     this.guardSignInPage(step);
     this.doneOutside = this.asked && this.submissions === 0 && !actionable(step) && !step.pageMissing;
@@ -735,6 +761,7 @@ export class InputHandoffSession {
       return;
     }
     this.asked = true;
+    if (actionable(step)) this.askedStep = step;
     if (this.stepNumber === 0) this.stepNumber = 1;
     if ((!suppressAutoFinish || this.doneOutside) && this.shouldFinish(step)) {
       this.finishingUntil = this.now() + (this.options.finishingDelayMs ?? 3000);
@@ -748,11 +775,23 @@ export class InputHandoffSession {
     this.publish('ready');
   }
 
+  /** What the card would show for a read: past a sign-in, a page's own fields (a reply box) are not its next step. */
+  private shownStep(read: ExtractedStep): ExtractedStep {
+    const signInOver = this.signInMode && !read.signIn && !this.pageUnknown(read) && !read.deviceCode && !hasSecretField(read);
+    return signInOver ? { ...read, shown: [] } : read;
+  }
+
   /** The agent said what the end looks like, and this screen shows it. */
   private hintsMet(step: ExtractedStep): boolean {
     const hints = this.options.completeWhen;
     if (hints?.textAppears && step.texts.some((text) => text.includes(hints.textAppears!))) return true;
     return !!hints?.urlContains && !!step.url?.includes(hints.urlContains);
+  }
+
+  /** The agent named a page text or address that marks the end, and this screen does not show it yet. */
+  private hintsPending(step: ExtractedStep): boolean {
+    const hints = this.options.completeWhen;
+    return !!(hints?.textAppears || hints?.urlContains) && !this.hintsMet(step);
   }
 
   private shouldFinish(step: ExtractedStep): boolean {
@@ -796,14 +835,28 @@ export class InputHandoffSession {
    * Scan-to-sign-in: looks for a QR code in the target window and, when there
    * is one, makes it this step. Works on any app or page; nothing product-specific.
    */
-  private async showQr(): Promise<boolean> {
+  /**
+   * `frame`: the target's place from a window list, read while it is the focused window in front. Looking there
+   * neither brings it forward nor takes the desktop from other tasks, as `checkQr` does; a card that keeps watching
+   * must do neither. Without a frame the window is raised once, under the desktop turn, to be looked at.
+   * `read`: the screen the code is looked for on, when the card keeps showing an earlier step meanwhile.
+   */
+  private async showQr(frame: number[] | null = null, read: ExtractedStep | null = this.step): Promise<boolean> {
     const driver = this.options.driver;
     const target = this.target;
     if (!target || !driver.qr || this.pictureChosen) return false;
-    const found = await withDesktopTurn(() => driver.qr!(target, null)).catch(() => null);
+    const look = () => driver.qr!(target, frame);
+    // A passive look runs while the card stays open: the owner may move on through it before the look returns.
+    const step = this.step;
+    const submissions = this.submissions;
+    const picture = this.picture;
+    const found = await (frame ? look() : withDesktopTurn(look)).catch(() => null);
     if (!found || 'error' in found) return false;
     const qr = qrContent(found.text);
-    if (!qr || this.ended) {
+    // Whoever looked, an owner who chose the window picture (or got another view) meanwhile keeps it.
+    const moved = this.pictureChosen || this.picture !== picture ||
+      (!!frame && (this.step !== step || this.submissions !== submissions || this.busy || this.phase !== 'ready'));
+    if (!qr || this.ended || moved) {
       found.capture.jpeg.fill(0);
       return false;
     }
@@ -815,7 +868,7 @@ export class InputHandoffSession {
       pid: current.pid,
       windowIndex: current.window.index,
       windowTitle: current.window.title,
-      ...(this.step?.url ? { url: this.step.url } : {}),
+      ...(read?.url ? { url: read.url } : {}),
     };
     if (this.stepNumber === 0) this.stepNumber = 1;
     this.watchQr();
@@ -1097,7 +1150,8 @@ export class InputHandoffSession {
     if (this.ended || this.busy || this.phase !== 'ready' || this.qrState || !this.target) return false;
     // Another device holding the card is answering a form, whose fields must not change under it; a sign-in on
     // the window has no form to protect, so taking it over does not stop the watching.
-    if (this.holder && !this.directSignInOffered()) return false;
+    // Holding the card while it only waits for the agent's completion hint is no form being typed: keep watching.
+    if (this.holder && !this.directSignInOffered() && !this.awaitingHint) return false;
     if (this.picture) return !this.pictureChosen;
     return !!this.step && actionable(this.step) && !this.step.deviceCode;
   }
@@ -1150,6 +1204,8 @@ export class InputHandoffSession {
     if (!known) this.target = { ...target, window: { index: window.index, title: window.title } };
     const read = await this.read().catch(() => null);
     if (!read || read.pageMissing || !this.watching()) return;
+    // Not telling whose a hidden code field is now is no evidence of anything: the card stays as it is.
+    if (read === this.unsureRead) return;
     const step = settledForm(read, this.step) ? askingNothing(read) : read;
     // Answering on a picture because nothing could be read: now something can.
     if (this.picture) {
@@ -1161,6 +1217,8 @@ export class InputHandoffSession {
     if (this.signInMode && this.pageUnknown(step) && !hasSecretField(step)) return;
     if (this.signInMode ? step.signIn || hasSecretField(step) : actionable(step)) {
       this.fieldsGoneReads = 0;
+      // The fields are back: a holder may be typing in the form again, so stop watching on its behalf.
+      this.awaitingHint = false;
       // Whatever page the owner is on is covered, whoever is typing where.
       this.guardSignInPage(step);
       if (fieldShape(step) === fieldShape(this.step)) {
@@ -1177,12 +1235,39 @@ export class InputHandoffSession {
     if (++this.fieldsGoneReads < FIELDS_GONE_READS) return;
     // The fields went away: before calling it done, the next step may be a code to scan (a second factor).
     if (!this.hintsMet(step)) {
-      this.step = step;
-      const scanning = await this.showQr();
-      // The owner may have ended it or started answering meanwhile.
+      // Waiting for the agent's hint repeats this look: only a passive one, and only at the target while it is the
+      // focused window in front (another window of the same app may sit at the same place). Otherwise the one look
+      // before handing back raises the window, as before.
+      // A step the card can show by itself (a device code) is presented, not waited over.
+      // Judged on what the card would show, as present() does: a reply box on a page past the sign-in is no step.
+      const waiting = this.hintsPending(step) && !actionable(this.shownStep(step));
+      // While waiting the card keeps its step during the look: an owner claiming it meanwhile gets that step.
+      if (!waiting) this.step = step;
+      const shown = this.step;
+      const submissions = this.submissions;
+      const scanning = !waiting
+        ? await this.showQr()
+        : list.frontmost === target.pid && window.focused && window.frame?.length === 4
+          ? await this.showQr(window.frame, step)
+          : false;
+      // The owner may have ended it or started answering meanwhile, or already moved on through the card: what this
+      // look found, or did not, is about a step that is gone.
       if (this.ended || this.busy || this.phase !== 'ready') return;
+      if (this.step !== shown || this.submissions !== submissions) {
+        // A code a raising look set up for the gone step is not this one's (a passive look already dropped it).
+        if (scanning) { this.stopQr(); this.dropPicture(); }
+        return;
+      }
       if (scanning) {
+        this.step = step;
         this.publish('ready');
+        return;
+      }
+      // The agent said what the end looks like and this is not it: a sign-in page that swapped its fields for a
+      // slider check or a scan tab is still mid-way. Keep the card as it was and keep watching the window.
+      if (waiting) {
+        this.fieldsGoneReads = 0;
+        this.awaitingHint = true;
         return;
       }
     }
@@ -1297,8 +1382,14 @@ export class InputHandoffSession {
     this.target = { ...this.target, window: { index: raw.window.index, title: raw.window.title } };
     this.unreadablePage = null;
     let step: ExtractedStep;
+    this.unsureRead = null;
     try {
       step = extractStep(raw as NativeAxSnapshot);
+      // The owner clicking another field moves the focus off a hidden code field of the step on the card; it is
+      // still that step's while the page still shows the step's fields. Another form never inherits it.
+      const kept = this.keptHidden(raw as NativeAxSnapshot);
+      if (!kept && this.lostHiddenOnly(step)) this.unsureRead = step;
+      step = kept ?? step;
     } catch (error) {
       if (error instanceof IncompleteFormError) {
         this.unreadablePage = error.page;
@@ -1337,6 +1428,62 @@ export class InputHandoffSession {
     return step;
   }
 
+  /**
+   * The read with the hidden code fields of the step on the card, when it is still that step: same page, and exactly
+   * the same fields. Both reads take in the same fields, so each field's identity is worked out among the same
+   * others. A different form, even one that adds a field, starts without any.
+   */
+  private keptHidden(raw: NativeAxSnapshot): ExtractedStep | undefined {
+    const current = this.step;
+    if (!current?.hiddenFields?.length) return undefined;
+    const fresh = extractStep(raw, new Set(current.hiddenFields));
+    const page = (url: string | undefined) => url?.split('#')[0];
+    if (page(fresh.url) !== page(current.url)) return undefined;
+    // A field plan joins several of the page's fields into one: compare the page's own fields, as `sameFields` does.
+    // Their names are left out: an error the page shows right above a field renames it without replacing it.
+    const unnamed = (identity: string) => {
+      const [domId, fp, , place, frameOrigin] = JSON.parse(identity) as unknown[];
+      return JSON.stringify([domId, fp, place, frameOrigin]);
+    };
+    const fields = (step: ExtractedStep) => [...step.bindings.values()]
+      .flatMap<{ identity: string }>((binding) => binding.kind !== 'text' ? [] : (binding.segments ?? [binding]))
+      .map((field) => unnamed(field.identity))
+      .sort();
+    return JSON.stringify(fields(fresh)) === JSON.stringify(fields(current)) ? fresh : undefined;
+  }
+
+  /**
+   * A fresh read that is the card's step without its hidden code fields: the same page, still laying out hidden
+   * fields, with every other field the same. A form with any other field is another step, shown as usual.
+   */
+  private lostHiddenOnly(fresh: ExtractedStep): boolean {
+    const current = this.step;
+    const hidden = current?.hiddenTaken ?? 0;
+    if (!current || !hidden || !fresh.hiddenCandidates || fresh.url?.split('#')[0] !== current.url?.split('#')[0]) return false;
+    // The agent's own sign of the end is no unsure read (product rules §2.5).
+    if (this.hintsMet(fresh)) return false;
+    // Names and tree places change with the hidden fields gone (an error above a field, a fingerprint now unique).
+    const plain = (step: ExtractedStep) => [...step.bindings.values()]
+      .flatMap<{ identity: string }>((binding) => binding.kind !== 'text' ? [] : (binding.segments ?? [binding]))
+      .map((field) => JSON.parse(field.identity) as unknown[]);
+    const key = ([domId, fp, , , frameOrigin]: unknown[]) => JSON.stringify([domId, fp, frameOrigin]);
+    const left = plain(current);
+    for (const field of plain(fresh)) {
+      const at = left.findIndex((candidate) => key(candidate) === key(field));
+      if (at < 0) return false;
+      left.splice(at, 1);
+    }
+    if (left.length !== hidden) return false;
+    // Each field gone must still be on the page as a hidden one: a field the page turned into text is simply gone.
+    const candidates = [...fresh.hiddenCandidates];
+    return left.every(([domId, fp]) => {
+      const at = candidates.indexOf(JSON.stringify([domId ?? null, fp]));
+      if (at < 0) return false;
+      candidates.splice(at, 1);
+      return true;
+    });
+  }
+
   /** A browser showing no page, or a page whose address went missing for now. */
   private pageUnknown(step: ExtractedStep): boolean {
     return !!step.pageMissing || (!step.url && isBrowserBundle(this.target?.bundleId ?? ''));
@@ -1359,11 +1506,19 @@ export class InputHandoffSession {
       // The screen re-rendered; find the same element by identity and retry once.
       const fresh = await this.options.driver.snapshot(this.target.pid, this.target.window);
       if ('error' in fresh) return false;
-      const matches = binding.kind === 'text'
-        ? [...extractStep(fresh).bindings.values()].filter(candidate => candidate.kind === 'text' &&
+      // The same hidden code fields stay part of the step here as on every other read of it.
+      const again = binding.kind === 'text' ? extractStep(fresh, new Set(this.step?.hiddenFields ?? [])) : null;
+      const matches = binding.kind === 'text' && again
+        ? [...again.bindings.values()].filter(candidate => candidate.kind === 'text' &&
           candidate.identity === binding.identity && candidate.secure === (binding.nativeSecure ?? binding.secure))
         : fresh.nodes.filter((node) => node.fp === binding.fp);
       if (matches.length !== 1 || this.ended) return false;
+      // As after the submit check: a key this read found ambiguous no longer vouches for any field of the step.
+      if (again && this.step) {
+        const valid = new Set(again.hiddenFields ?? []);
+        const kept = (this.step.hiddenFields ?? []).filter((key) => valid.has(key));
+        this.step.hiddenFields = kept.length ? kept : undefined;
+      }
       result = await this.options.driver.act({ ...request, ref: matches[0].ref, window: { index: fresh.window.index, title: fresh.window.title } });
     }
     return 'ok' in result && result.ok === true;
@@ -1398,7 +1553,8 @@ export class InputHandoffSession {
     const identity = (field: FieldTarget) =>
       JSON.stringify([field.identity, field.nativeSecure ?? field.secure]);
     const expected = fields(step);
-    const current = extractStep(raw);
+    // Typing into an earlier field moves the focus off a hidden code field found focused: it is still this step's.
+    const current = extractStep(raw, new Set(step.hiddenFields ?? []));
     if (raw.window.title !== this.target.window.title || current.source.origin !== step.source.origin || current.url !== step.url) return 'origin_changed';
     const actual = fields(current);
     const byIdentity = new Map(actual.map(field => [identity(field), field]));
@@ -1407,6 +1563,10 @@ export class InputHandoffSession {
     // Rebind only after the entire form matches. In particular, a reused old
     // index may now point at a different field with the same native fingerprint.
     for (const field of expected) field.ref = byIdentity.get(identity(field))!.ref;
+    // The keys follow this read, which took in the same fields: one that turned ambiguous meanwhile (another field
+    // now reads with it) is dropped, so it cannot vouch for that other field once this one goes.
+    step.hiddenFields = current.hiddenFields;
+    step.hiddenTaken = current.hiddenTaken;
     return true;
   }
 

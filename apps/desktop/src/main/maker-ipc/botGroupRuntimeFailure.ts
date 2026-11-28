@@ -73,6 +73,9 @@ export function botGroupRuntimeFailureCode(error: unknown): BotGroupRuntimeFailu
   }
   if (data?.codexErrorInfo === 'httpConnectionFailed' || data?.codexErrorInfo === 'responseStreamConnectionFailed'
     || data?.codexErrorInfo === 'responseStreamDisconnected') return 'NETWORK_ERROR';
+  // Device Link IPC and the remote Agent controller preserve these transport codes in error envelopes.
+  if (/\b(?:DEVICE_LINK_TIMEOUT|REMOTE_AGENT_TIMEOUT)\b/.test(text)) return 'RUNTIME_TIMEOUT';
+  if (/\b(?:DEVICE_LINK_NOT_CONNECTED|DEVICE_LINK_DEVICE_OFFLINE|REMOTE_AGENT_OFFLINE)\b/.test(text)) return 'NETWORK_ERROR';
   if (/\b(?:ECONNRESET|ECONNREFUSED|ETIMEDOUT|ENOTFOUND|REQUEST_TIMEOUT)\b|fetch failed|socket hang up/i.test(text)) return 'NETWORK_ERROR';
   return 'RUNTIME_ERROR';
 }

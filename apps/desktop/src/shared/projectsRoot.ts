@@ -24,5 +24,6 @@ export interface CreateProjectFromTaskInput {
 
 export interface CreateProjectFromTaskResult {
   workingDir: string;
+  session: { workingDir: string | null; projectDir: string | null };
   movedEntries: number;
 }

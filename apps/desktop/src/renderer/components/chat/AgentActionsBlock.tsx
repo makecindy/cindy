@@ -30,6 +30,7 @@
 import { useCallback, useMemo } from 'react';
 import { Bot, ChevronRight } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
+import { getCollapsibleCollabWaitKey } from '@cindy/maker-shared';
 
 import { cn } from '@/lib/utils';
 import { Collapse } from '@/components/ui/collapse';
@@ -88,6 +89,31 @@ export function AgentActionsBlock({
     () => toolCalls.some((msg) => rowStatus(msg.clientId) === 'running'),
     [toolCalls, rowStatus],
   );
+  const collapsedRows = useMemo(() => {
+    const collapseKeyFor = (msg: ChatMessage): string | null =>
+      getCollapsibleCollabWaitKey(msg.toolName ?? '', msg.toolInput, resultMap.get(msg.clientId));
+    const rows: Array<{ message: ChatMessage; repeatCount?: number }> = [];
+    let index = 0;
+    while (index < toolCalls.length) {
+      const startKey = collapseKeyFor(toolCalls[index]);
+      if (!startKey) {
+        rows.push({ message: toolCalls[index] });
+        index += 1;
+        continue;
+      }
+      let end = index + 1;
+      while (end < toolCalls.length && collapseKeyFor(toolCalls[end]) === startKey) {
+        end += 1;
+      }
+      const count = end - index;
+      rows.push({
+        message: toolCalls[end - 1],
+        ...(count > 1 ? { repeatCount: count } : {}),
+      });
+      index = end;
+    }
+    return rows;
+  }, [toolCalls, resultMap]);
 
   // Stable per-block id for persistence. First tool's clientId uniquely
   // identifies this segment in the stream — survives streaming token churn.
@@ -160,13 +186,14 @@ export function AgentActionsBlock({
               'flex flex-col',
             )}
           >
-            {toolCalls.map((msg) => (
+            {collapsedRows.map(({ message: msg, repeatCount }) => (
               <AgentActionRow
                 pluginUi={pluginUi}
                 key={msg.clientId}
                 message={msg}
                 toolResult={resultMap.get(msg.clientId)}
                 status={rowStatus(msg.clientId)}
+                repeatCount={repeatCount}
               />
             ))}
           </div>

@@ -89,7 +89,7 @@
     "submitAnswerAccessibility": "回答を送信",
     "next": "次へ",
     "answerRequired": "回答を選択または入力すると続行できます。",
-    "submit": "送信",
+    "submit": "回答を送信",
     "sendAndContinue": "送信して続行",
     "closeAnswer": "閉じる",
     "planReviewTitle": "Claude のプランを確認",
@@ -274,6 +274,7 @@
     "inlineFormActionGeneric": "パソコンで設定を入力"
   },
   "inputHandoff": {
+    "refreshVerification": "QR コードを更新",
     "originWarning": {
       "insecure": "このページは安全な接続を使っていません。入力内容が他人に読まれる可能性があります。",
       "ip-address": "このページはドメインではなく IP アドレスを使っています。想定したサイトか確認してください。",

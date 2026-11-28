@@ -24,7 +24,7 @@ export function wireFeishuGroupProjectPorts(): void {
     },
     projectPermissionMode: (alias) => getSharedProjectPref(alias).permissionMode,
     projectFingerprint: (alias) => sharedImProjectDefaultsFingerprint(alias),
-    resolveProject: (alias, providers) => resolveSharedImProjectConfig(alias, log, providers),
+    resolveProject: (alias, providers, options) => resolveSharedImProjectConfig(alias, log, providers, options),
     listProviders: () => getDesktopProviderService().listProviders({ allowSideEffects: true }),
   });
 }

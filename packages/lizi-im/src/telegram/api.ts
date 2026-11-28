@@ -122,6 +122,36 @@ export interface TgMessageEntity {
   user?: TgUser;
 }
 
+/** Bot API 7.0+ 转发来源(MessageOrigin 联合类型)。 */
+export type TgMessageOrigin =
+  | { type: 'user'; date: number; sender_user: TgUser }
+  | { type: 'hidden_user'; date: number; sender_user_name: string }
+  | { type: 'chat'; date: number; sender_chat: TgChat; author_signature?: string }
+  | {
+      type: 'channel';
+      date: number;
+      chat: TgChat;
+      message_id: number;
+      author_signature?: string;
+    };
+
+/** 跨群/频道/转发引用信息(ExternalReplyInfo): reply_to_message 为空时承载被引媒体与来源。 */
+export interface TgExternalReplyInfo {
+  origin: TgMessageOrigin;
+  chat?: TgChat;
+  message_id?: number;
+  has_protected_content?: boolean;
+  has_media_spoiler?: boolean;
+  photo?: TgPhotoSize[];
+  document?: TgDocument;
+  sticker?: { emoji?: string; set_name?: string };
+  voice?: TgMediaFile & { duration?: number };
+  audio?: TgMediaFile & { file_name?: string };
+  video?: TgMediaFile & { file_name?: string };
+  video_note?: TgMediaFile & { duration?: number };
+  animation?: TgMediaFile & { file_name?: string };
+}
+
 export interface TgMessage {
   message_id: number;
   from?: TgUser;
@@ -147,7 +177,16 @@ export interface TgMessage {
    * Telegram 只在保护开启时下发它。
    */
   has_protected_content?: boolean;
+  /** Bot API 7.0+ 转发来源。 */
+  forward_origin?: TgMessageOrigin;
+  /** 旧版转发字段(Bot API 兼容并存)。 */
+  forward_from?: TgUser;
+  forward_from_chat?: TgChat;
+  forward_sender_name?: string;
+  forward_date?: number;
   reply_to_message?: TgMessage;
+  /** 跨聊天/转发引用: Telegram 在回复其他群/频道消息时填充本字段而非 reply_to_message。 */
+  external_reply?: TgExternalReplyInfo;
   quote?: { text: string; position?: number };
   rich_message?: { blocks?: unknown };
   text?: string;

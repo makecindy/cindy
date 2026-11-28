@@ -21,6 +21,7 @@ describe('user message durable write', () => {
       silentStopAutoResumeGuard: { noteUserSend: vi.fn(() => { calls.push('silent'); }) },
       interruptedTurnAutoResumeGuard: { noteUserSend: vi.fn(() => { calls.push('interrupted'); }) },
       usageLimitAutoResume: { noteUserAction: vi.fn(() => { calls.push('usage'); }) },
+      startFallbackTurn: vi.fn(() => { calls.push('turn'); }),
       getProviderGroupService: () => ({ noteUserAction: () => { calls.push('group'); } }),
       enqueueDurableWrite: vi.fn(async <T>(label: string, write: (owner: unknown) => Promise<T>) => { labels.push(label); return write('owner'); }),
       getLastAssistantTranscriptUuid: () => 'anchor',
@@ -34,7 +35,7 @@ describe('user message durable write', () => {
   it('charges every budget for a person\'s message and writes the stamped, anchored row through the FIFO', async () => {
     const f = fixture();
     await f.write('s1', { clientId: 'c1', role: 'user', content: 'hi' } as never);
-    expect(f.calls).toEqual(['silent', 'interrupted', 'usage', 'group']);
+    expect(f.calls).toEqual(['turn', 'silent', 'interrupted', 'usage', 'group']);
     expect(f.labels).toEqual(['user:s1:c1']);
     expect(f.createDbMessage).toHaveBeenCalledWith('s1',
       expect.objectContaining({ clientId: 'c1', agentKind: 'codex', agentMeta: { transcriptParentUuid: 'anchor' } }),
@@ -44,7 +45,8 @@ describe('user message durable write', () => {
   it('charges only the silent-stop budget for an automatic input', async () => {
     const f = fixture();
     await f.write('s1', { clientId: 'c2', role: 'user', content: 'run', agentMeta: { origin: { kind: 'scheduler' } } } as never);
-    expect(f.calls).toEqual(['silent']);
+    // An automatic input is still a new turn: sources that failed earlier may take over again.
+    expect(f.calls).toEqual(['turn', 'silent']);
   });
 
   it('registers an auto-resume\'s pending outcome without charging, and releases it when the write fails', async () => {

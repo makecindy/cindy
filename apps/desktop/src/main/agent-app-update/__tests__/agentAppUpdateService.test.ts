@@ -26,6 +26,7 @@ function setup(overrides: Partial<AgentAppUpdateDeps> = {}) {
   const deps: AgentAppUpdateDeps = {
     appVersion: () => '0.1.86',
     platform: 'darwin',
+    supportsUnattendedInstall: () => true,
     pid: 100,
     now: () => 1_000,
     check: vi.fn(async () => ({
@@ -476,12 +477,22 @@ describe('Agent app update install', () => {
     expect(deps.apply).not.toHaveBeenCalled();
   });
 
-  it('mentions the Linux password prompt only on Linux', async () => {
-    const { deps, service } = setup({ platform: 'linux', countOtherRunningTasks: vi.fn(() => 0) });
+  // Only a Linux system .deb asks for a password; a user-directory install
+  // must not warn about one. In-memory deps; unit.
+  it.each([
+    { platform: 'linux' as const, unattended: false, warns: true },
+    { platform: 'linux' as const, unattended: true, warns: false },
+  ])('mentions the Linux password prompt on $platform only when unattended=$unattended is false', async ({ platform, unattended, warns }) => {
+    const { deps, service } = setup({
+      platform,
+      supportsUnattendedInstall: () => unattended,
+      countOtherRunningTasks: vi.fn(() => 0),
+    });
     await service.install(caller);
     const card = vi.mocked(deps.requestHostPermission).mock.calls[0]![2];
     expect(card.description).toContain('update.agentInstall.noOtherTasks');
-    expect(card.description).toContain('update.agentInstall.linuxAuth');
+    if (warns) expect(card.description).toContain('update.agentInstall.linuxAuth');
+    else expect(card.description).not.toContain('update.agentInstall.linuxAuth');
   });
 
   it('warns about background work instead of claiming nothing else is running', async () => {
@@ -655,5 +666,19 @@ describe('Agent auto update switch and hint', () => {
     const enabled = setup({ readAutoUpdate: () => true });
     await expect(enabled.service.check(caller)).resolves.toMatchObject({ autoUpdateEnabled: true });
     expect(await enabled.service.check(caller)).not.toHaveProperty('autoUpdateHint');
+  });
+
+  // Linux system .deb: the idle switch can never take effect, so the Agent
+  // must neither suggest it nor ask the user to confirm turning it on.
+  // In-memory deps; unit.
+  it('neither hints nor enables auto update where unattended install is impossible', async () => {
+    const { deps, service } = setup({ platform: 'linux', supportsUnattendedInstall: () => false });
+    expect(await service.check(caller)).not.toHaveProperty('autoUpdateHint');
+    await expect(service.setAutoUpdate(caller, true)).resolves.toMatchObject({
+      status: 'unsupported',
+      autoUpdateEnabled: false,
+    });
+    expect(deps.requestHostPermission).not.toHaveBeenCalled();
+    expect(deps.writeAutoUpdate).not.toHaveBeenCalled();
   });
 });

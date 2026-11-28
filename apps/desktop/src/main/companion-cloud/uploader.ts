@@ -226,7 +226,10 @@ export function createCompanionUploader(deps: {
    */
   async function syncBot(botId: string, actorId: string, budget = Number.POSITIVE_INFINITY,
     options: { requireAll?: boolean; preferencesOnly?: boolean; validateValues?: (values: CompanionPreferenceValue[]) => void } = {}): Promise<number> {
-    const read = await deps.readValues(botId, actorId);
+    const localValues = await deps.readValues(botId, actorId);
+    const entry = deps.state.bot(botId);
+    const blocked = new Set(entry?.actorId === actorId ? entry.restoreBlockedKeys : undefined);
+    const read = localValues.filter(value => !blocked.has(value.key));
     const unread = read.filter(entry => entry.unread).map(entry => entry.key);
     if (unread.length && options.requireAll) throw new Error(COMPANION_READ_INCOMPLETE);
     const values = read.filter(entry => !entry.unread);
@@ -261,11 +264,11 @@ export function createCompanionUploader(deps: {
     // the store sees, so a store tombstone without a preference tombstone still needs one.
     const known = deps.state.bot(botId);
     for (const [key, entry] of Object.entries(known?.prefs ?? {})) {
-      if (unread.some(prefix => key.startsWith(prefix))) continue;
+      if (blocked.has(key) || unread.some(prefix => key.startsWith(prefix))) continue;
       if (!desired.has(key) && entry.local && entry.hash !== TOMBSTONE_HASH) desired.set(key, null);
     }
     for (const [key, entry] of Object.entries(known?.stored ?? {})) {
-      if (unread.some(prefix => key.startsWith(prefix))) continue;
+      if (blocked.has(key) || unread.some(prefix => key.startsWith(prefix))) continue;
       if (!desired.has(key) && entry.local && (entry.hash !== TOMBSTONE_HASH || known?.prefs[key]?.hash !== TOMBSTONE_HASH)) desired.set(key, null);
     }
     let writes = 0;

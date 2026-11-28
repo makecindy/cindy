@@ -179,8 +179,47 @@ export function redactSensitiveTextDeep(input: unknown): unknown {
 }
 
 export interface NonSecretErrorSignals {
-  errorStatus?: 401 | 403 | 429 | 529;
+  errorStatus?: 401 | 402 | 403 | 429 | 529;
   usageLimit: boolean;
+}
+
+const BILLING_CODES = [
+  'credit_balance_exhausted',
+  'organization_spend_limit_exceeded',
+  'project_spend_limit_exceeded',
+  'organization_usage_limit_exceeded',
+  'insufficient_quota',
+] as const;
+export type ProviderBillingCode = typeof BILLING_CODES[number] | 'payment_required';
+const billingCodes: ReadonlySet<string> = new Set(BILLING_CODES);
+type ProviderAccountLimitCode = ProviderBillingCode | 'rate_limit_exceeded';
+
+/** Only return an allowlisted code. Native harnesses can prefix a JSON error with
+ * status/text, so the wrapped form accepts explicit code/type fields too. */
+export function readProviderAccountLimitCode(status: number | undefined, body: string): ProviderAccountLimitCode | undefined {
+  if (status === 402) return 'payment_required';
+  if (status !== undefined && status !== 429) return undefined;
+  let code: unknown;
+  let type: unknown;
+  try {
+    type ErrorFields = { code?: unknown; type?: unknown };
+    const parsed = JSON.parse(body) as (ErrorFields & { error?: ErrorFields }) | null;
+    const error = parsed?.error ?? parsed;
+    code = error?.code;
+    type = error?.type;
+  } catch {
+    code = /(?:^|[\s,{])"code"\s*:\s*"([a-z_]+)"/.exec(body)?.[1];
+    type = /(?:^|[\s,{])"type"\s*:\s*"([a-z_]+)"/.exec(body)?.[1];
+  }
+  if (typeof code === 'string' && billingCodes.has(code)) return code as ProviderBillingCode;
+  // The upstream code wins over an inconsistent legacy type.
+  if (code === 'rate_limit_exceeded') return code;
+  return type === 'insufficient_quota' ? 'insufficient_quota' : undefined;
+}
+
+export function readProviderBillingCode(status: number | undefined, body: string): ProviderBillingCode | undefined {
+  const code = readProviderAccountLimitCode(status, body);
+  return code === 'rate_limit_exceeded' ? undefined : code;
 }
 
 const DETERMINISTIC_USAGE_EXHAUSTION_PATTERNS = [
@@ -188,8 +227,8 @@ const DETERMINISTIC_USAGE_EXHAUSTION_PATTERNS = [
   /\binsufficient_balance_error\b/i,
   /\binsufficient[-_ ]?quota\b/i,
   /\binsufficient.{0,12}\b(?:balance|credit|funds)\b/i,
-  /\bquota\b.{0,24}\b(?:exhausted|exceeded)\b/i,
-  /\b(?:exhausted|exceeded)\b.{0,24}\bquota\b/i,
+  /\bquota\b.{0,24}\b(?:exhausted|exceeded|reached)\b/i,
+  /\b(?:exhausted|exceeded|reached)\b.{0,24}\bquota\b/i,
   /\busage\s+limit\b/i,
   /\b(?:exceeded[-_]?budget|budget[-_]?exceeded)\b/i,
   /\b(?:account|session|usage)\s+budget\b.{0,16}\b(?:exhausted|exceeded)\b/i,
@@ -214,21 +253,39 @@ const ACCOUNT_USAGE_LIMIT_REACHED_PATTERNS = [
   // Claude: "You've hit your session limit · resets 1:20am (TZ)"; ChatGPT: "You've hit
   // your usage limit"; Pi: "You have hit your ChatGPT usage limit (plus plan)".
   /\byou(?:(?:'|’)ve|\s+have)\s+hit\s+your\s+(?:(?:(?:claude\s+)?session|(?:chatgpt\s+)?usage|daily|weekly|monthly|\d+-hour)\s+)?limit\b/i,
-  // "Usage limit reached. Try again in 1h." / `usage_limit_reached` / `usageLimitExceeded`.
+  // "Usage limit reached. Try again in 1h." / `usage_limit_reached` / `usageLimitExceeded`
+  // / ACP fallback: "The plugin engine account has reached its usage limit."
   /\busage[\s_-]?limit[\s_-]?(?:reached|exceeded)\b/i,
+  /\bhas\s+reached\s+its\s+usage\s+limit\b/i,
+  // Antigravity & plugin engines: "Individual quota reached. ... Resets in 2h13m2s.",
+  // "You have exhausted your quota", "subscription/model/daily/weekly quota reached/exhausted/exceeded".
+  /\b(?:individual|subscription|model|daily|weekly|monthly)\s+quota\s+(?:reached|exhausted|exceeded)\b/i,
+  /\byou\s+have\s+exhausted\s+your\s+quota\b/i,
 ];
 
-/** Balance, budget and spend caps need a top-up or an owner, not a reset. */
-const USAGE_LIMIT_NOT_PERIODIC_PATTERN = /\binsufficient|budget|\bspend(?:ing)?[-_ ]?cap\b|\bbilling|余额不足|欠费/i;
+/** Explicit HTTP 402 / Payment Required wording (requiring status context so plain numbers like "line 402" never match). */
+const EXPLICIT_PAYMENT_REQUIRED_PATTERN =
+  /\bpayment\s+required\b|(?:\b(?:http|status|code|error)\b[^0-9a-z]{0,10}402\b|\(\s*402\s*\)|\b402\s+payment\s+required\b|(?:^|[\r\n])\s*402\s*:)/i;
+
+export function hasExplicitPaymentRequiredText(input: string): boolean {
+  return Boolean(input) && EXPLICIT_PAYMENT_REQUIRED_PATTERN.test(input);
+}
+
+/** Balance, budget, payment (HTTP 402) and spend caps need a top-up or an owner, not a reset. */
+const USAGE_LIMIT_NOT_PERIODIC_PATTERN =
+  /\binsufficient|budget|\bspend(?:ing)?[-_ ]?cap\b|\bbilling|\bcredit(?:s| balance)?\s+(?:depleted|exhausted|too low)\b|余额不足|欠费/i;
 
 /**
  * UI-only: the upstream text plainly says the account used up its periodic
  * allowance. Desktop and Mobile use it to replace the generic "reply failed"
  * summary with a readable one. It never decides waiting or auto-continue, and
- * excludes transient rate limiting (`429`, `rate limit`) and balance depletion.
+ * excludes transient rate limiting (`429`, `rate limit`) and balance/payment depletion.
  */
 export function isAccountUsageLimitReachedText(input: string): boolean {
-  if (!input || USAGE_LIMIT_NOT_PERIODIC_PATTERN.test(input)) return false;
+  if (!input || USAGE_LIMIT_NOT_PERIODIC_PATTERN.test(input) || EXPLICIT_PAYMENT_REQUIRED_PATTERN.test(input)) {
+    return false;
+  }
+  if (readProviderBillingCode(undefined, input)) return false;
   return ACCOUNT_USAGE_LIMIT_REACHED_PATTERNS.some((pattern) => pattern.test(input));
 }
 
@@ -239,12 +296,14 @@ export function isAccountUsageLimitReachedText(input: string): boolean {
  */
 export function extractNonSecretErrorSignals(input: string): NonSecretErrorSignals {
   const statusMatch =
-    /(?:^|[\s,{;])["']?(?:status(?:[-_ ]?code)?|http(?:[-_ ]?status)?|code)["']?\s*(?:[:=]\s*)?["']?(401|403|429|529)["']?(?=$|[\s,;:}\]])/i.exec(
+    // Pi's OpenAI SDK puts the authentication status before the error body.
+    /^OpenAI API error \((401)\):/.exec(input)
+    ?? /(?:^|[\s,{;])["']?(?:status(?:[-_ ]?code)?|http(?:[-_ ]?status)?|code)["']?\s*(?:[:=]\s*)?["']?(401|402|403|429|529)["']?(?=$|[\s,;:}\]])/i.exec(
       input,
-    ) ?? /\brequest\s+rejected\s*\(\s*(401|403|429|529)\s*\)/i.exec(input);
+    ) ?? /\brequest\s+rejected\s*\(\s*(401|402|403|429|529)\s*\)/i.exec(input);
   const usageLimit =
     !isProviderSafetyRefusalError(input) &&
-    /(?:^|[\s,{;])(?:rate\s+limit(?:ed|s|ing)?|usage\s+limit(?:ed|s|ing)?|too\s+many\s+requests|quota(?:["']?\s*[:=]\s*["']?|\s+)(?:exhausted|exceeded)|(?:["']?(?:code|type|error|message)["']?\s*[:=]\s*["']?)?(?:rate_limit_exceeded|insufficient_quota|exceeded[-_ ]?budget|budget[-_ ]?exceeded))\b/i.test(
+    /(?:^|[\s,{;])(?:rate\s+limit(?:ed|s|ing)?|usage\s+limit(?:ed|s|ing)?|too\s+many\s+requests|quota(?:["']?\s*[:=]\s*["']?|\s+)(?:exhausted|exceeded|reached)|(?:["']?(?:code|type|error|message)["']?\s*[:=]\s*["']?)?(?:rate_limit_exceeded|insufficient_quota|exceeded[-_ ]?budget|budget[-_ ]?exceeded))\b/i.test(
       input,
     );
 
@@ -395,6 +454,8 @@ const AGENT_CHAT_ERROR_CODES: ReadonlySet<string> = new Set([
   'SUBSCRIPTION_POOL_MODEL_LIMITED',
   'SUBSCRIPTION_ACCOUNT_LOGIN_REQUIRED',
   'SUBSCRIPTION_ACCOUNT_SIGNING_IN',
+  'CODEX_ACCOUNT_READ_RETRY',
+  'CODEX_ACCOUNT_SERVICE_UNREACHABLE',
   'SUBSCRIPTION_ACCOUNT_UNAVAILABLE',
   'SSH_HARNESS_SWITCH_UNSUPPORTED',
   'MODEL_SELECTION_UNAVAILABLE',
@@ -514,6 +575,13 @@ export function localizeSubscriptionAccountError(
   switch (parsed?.code) {
     case 'SUBSCRIPTION_ACCOUNT_LOGIN_REQUIRED': return translate('chat.subscriptionAccountError.loginRequired');
     case 'SUBSCRIPTION_ACCOUNT_SIGNING_IN': return translate('chat.subscriptionAccountError.signingIn');
+    case 'CODEX_ACCOUNT_SERVICE_UNREACHABLE': return translate('chat.subscriptionAccountError.unreachable');
+    case 'CODEX_ACCOUNT_READ_RETRY': {
+      const at = Number(/^retryAtMs=(\d{1,16})$/.exec(parsed.fallback)?.[1]);
+      if (!Number.isFinite(at) || at > 8.64e15) return translate('chat.subscriptionAccountError.unreachable');
+      const resetAt = new Intl.DateTimeFormat(locale?.replace(/-x-lzh$/, ''), { timeStyle: 'medium' }).format(at);
+      return translate('chat.subscriptionAccountError.rechecking', { resetAt });
+    }
     case 'SUBSCRIPTION_ACCOUNT_UNAVAILABLE': return translate('chat.subscriptionAccountError.unavailable');
     case 'SUBSCRIPTION_ACCOUNT_LIMITED': {
       const resetAt = subscriptionRetryTime(parsed.fallback, locale);

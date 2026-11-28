@@ -1,9 +1,12 @@
 import { matchesTaskCreators } from '@/features/bots/botFollowScopes';
 import type { Session } from '@/lib/ccAgent.types';
 import type { UseSidebarFilterReturn } from '../hooks/useSidebarFilter';
+import { isAutomationSidebarSession } from './automationSidebarGrouping';
 import { sessionActivityMs } from './dateSessionGrouping';
 
-type TaskContentFilters = Pick<UseSidebarFilterReturn, 'lastActivity' | 'creators' | 'hideAutomations'>;
+type TaskContentFilters = Pick<UseSidebarFilterReturn, 'lastActivity' | 'creators' | 'hideAutomations'> & {
+  hideTaskCreated?: boolean;
+};
 
 const LAST_ACTIVITY_DAY_COUNTS: Record<Exclude<TaskContentFilters['lastActivity'], 'all'>, number> = {
   '1d': 1,
@@ -22,13 +25,14 @@ export function cutoffForLastActivity(lastActivity: TaskContentFilters['lastActi
 /** Both modes narrow individual tasks before grouping. Pinned rows use their own unfiltered catalogue. */
 export function filterSidebarTasks(
   sessions: Session[],
-  { hideAutomations, creators, lastActivity }: TaskContentFilters,
+  { hideAutomations, hideTaskCreated = false, creators, lastActivity }: TaskContentFilters,
   creatorIndex: ReadonlyMap<string, ReadonlySet<string>>,
 ): Session[] {
   const cutoff = cutoffForLastActivity(lastActivity);
-  if (!hideAutomations && creators === 'all' && cutoff === null) return sessions;
+  if (!hideAutomations && !hideTaskCreated && creators === 'all' && cutoff === null) return sessions;
   return sessions.filter(session =>
-    (!hideAutomations || session.source !== 'scheduler')
+    (!hideAutomations || !isAutomationSidebarSession(session))
+    && (!hideTaskCreated || !session.createdBySession)
     && (cutoff === null || sessionActivityMs(session) >= cutoff)
     && matchesTaskCreators(session, creators, creatorIndex));
 }

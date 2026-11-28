@@ -12,25 +12,26 @@ import type { TaskInboxSection } from '@cindy/maker-shared/live-task-priority';
 
 import { freezeInboxLayout, snapshotInboxLayout } from '../taskInboxPlacement';
 
-const groups = (inbox: string[], working: string[], snoozed: string[] = []) =>
-  new Map<TaskInboxSection, string[]>([['inbox', inbox], ['working', working], ['snoozed', snoozed], ['archived', []]]);
+const groups = (inbox: string[], working: string[], snoozed: string[] = [], archived: string[] = []) =>
+  new Map<TaskInboxSection, string[]>([['inbox', inbox], ['working', working], ['snoozed', snoozed], ['archived', archived]]);
 const id = (value: string) => value;
 
 it('keeps rows in place while hovered, closes the gap for settled rows and holds new arrivals', () => {
-  const frozen = snapshotInboxLayout(groups(['a', 'b', 'c'], ['w']), id);
+  const frozen = snapshotInboxLayout(groups(['a', 'b', 'c'], ['w'], [], ['old-done']), id);
   // Meanwhile: b was completed (archived), a started running, c stays, n newly arrived.
   const fresh = new Map<TaskInboxSection, string[]>([
-    ['inbox', ['n', 'c']], ['working', ['a', 'w']], ['snoozed', []], ['archived', ['b']],
+    ['inbox', ['n', 'c']], ['working', ['a', 'w']], ['snoozed', []], ['archived', ['b', 'old-done']],
   ]);
   const shown = freezeInboxLayout(fresh, id, frozen);
   expect(shown.get('inbox')).toEqual(['a', 'c']);
   expect(shown.get('working')).toEqual(['w']);
-  expect(shown.get('archived')).toEqual(['b']);
+  // Newly completed rows enter at the top of archived to match archivedAt descending order.
+  expect(shown.get('archived')).toEqual(['b', 'old-done']);
   expect([...shown.values()].flat()).not.toContain('n');
   // Restoring a processed task is explicit too: it leaves its slot and joins the end of its section.
   const restored = freezeInboxLayout(new Map<TaskInboxSection, string[]>([
-    ['inbox', ['b', 'a', 'c']], ['working', ['w']], ['snoozed', []], ['archived', []],
+    ['inbox', ['b', 'a', 'c']], ['working', ['w']], ['snoozed', []], ['archived', ['old-done']],
   ]), id, snapshotInboxLayout(shown, id));
   expect(restored.get('inbox')).toEqual(['a', 'c', 'b']);
-  expect(restored.get('archived')).toEqual([]);
+  expect(restored.get('archived')).toEqual(['old-done']);
 });
