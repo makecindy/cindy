@@ -83,19 +83,9 @@ Inter 是标题与正文共用的唯一无衬线字体，配柔和几何让强�
 颜色经语义 Token 表达，同一角色在 Light 与 Dark 下都成立。复用组件让一致的设计自然延续。
 排版、几何与状态的精确约定在后续章节。
 
-### 1.1 New-task home content (user decision, 2026-09-06)
+### 1.1 New-task home content
 
-The new-task home does not display the inherited-subscription or promotional-credit
-notice cards. With a usable model, the composer is followed by suggestion rows;
-the existing zero-model action remains available when no model can be used.
-Subscription details belong in provider settings, and credit balances and expiry
-details remain in billing settings.
-
-Removing these two cards is an explicit product decision, including for users who
-have not dismissed them. Do not restore them or move them to another automatic
-notice surface merely to preserve their former one-time-notification behavior.
-The decision and review correction are recorded in
-[`design-decision-log.md`](./design-decision-log.md) (2026-09-06).
+正文已移至 [new-task-home.md](./new-task-home.md)，规范效力不变。
 
 ## 2. Color Palette & Roles
 
@@ -266,21 +256,9 @@ _Dark Mode text uses softened neutrals to reduce eye strain. In Classic, `--text
 - **Computer Use cursor bloom** — the out-of-process agent cursor's brand-red bloom and its driver-required gradient (§15.7). It is not drawn by the renderer.
 - **Session-loading wordmark sheen — narrow functional exception (Desktop approved 2026-08-10).** `BrandLoadingMark` may use one neutral `transparent → --text-primary → transparent` gradient solely as a mask-clipped highlight inside the official Light/Dark wordmark while a session's message tree is deferred. It is a loading-progress signal, not a background, separator, fill, or reusable surface treatment. It may appear only after the 200ms delayed-reveal threshold, disappears as soon as the message tree mounts, and may not leak to messages, cards, dialogs, sidebars, or static branding. Full motion and brand-surface constraints are registered in §14.4 and §15.7.
 
-### Filter reminder inside display settings (2026-10-28)
+### Filter reminder inside display settings
 
-Mobile only since 2026-11-28 (owner decision): the Desktop display-settings menu no longer
-marks archived tasks, on its button or inside the menu.
-
-When the sidebar display-settings trigger shows the archived-view reminder, repeat
-the same static accent dot on the Task status submenu and its selected Archived
-option. Desktop and Mobile retain neutral labels and selection checkmarks. Active
-and All remove the whole reminder path. Native iOS menus retain their system UIMenu
-and toolbar presenters and use the image slot for the dot. MenuView receives an
-absolute path to a temporary 1x copy of the bundled PNG: a 20pt canvas containing
-the same 6pt dot. Ordinary row icons and selection checkmarks remain available.
-Custom menus remain fallback paths and use the shared inline dot. This extends
-the existing filter reminder registration without changing which settings light
-the entry indicator.
+正文已移至 [task-sidebar.md](./task-sidebar.md)，规范效力不变。
 
 ## 3. Typography Rules
 
@@ -516,59 +494,23 @@ Owner decisions, 2026-11-08. They apply to every Settings page, drawer and setti
 
 ### Device access pills
 
-Settings → Remote Connection → My devices shows what each other device may do as two rows split by direction, not as a stack of switches (owner decision, 2026-11-03, unified authorization direction B): “I can” holds the outbound pill (Control it), “It can” holds what that device may do with this computer (Control this device; later Sync keys and Use models on this computer join the same row). The row label is 12px `--text-secondary` in a `max-content` column; pills are 28px-tall full-radius buttons with 12px text. Pressed = `--surface-chip` fill, no border, 12px check icon, `--text-primary`; not pressed = 1px `--border-default` outline, `--text-tertiary`, hover `--surface-hover`; disabled = 40% opacity. A pill is a `button` with `aria-pressed` and keeps the per-device accessible name of the switch it replaced; a click applies immediately with no confirmation. A reason line (11px `--text-tertiary`) sits under the pills of its row. Devices that cannot be controlled (phones/tablets) or that refused this computer show only the “It can” row. The master “Allow devices on this account to control this computer” switch on the This device card stays a switch. Implementation: [MyDevicesPanel.tsx](../../apps/desktop/src/renderer/components/settings/MyDevicesPanel.tsx). My devices is also where cloud computers are managed (owner decision 2026-11-25): for an organization member with a cloud computer entry, a 云主机 `SettingsCard` / `SettingsRow` sits pinned under this computer's card, with a one-line hint for the current state and `secondary` `sm` buttons 添加云主机 / 查看进度 / 管理云主机 that open the cloud computer web page; accounts without the entry show no row. A delivered cloud computer is an ordinary device in the list. The sidebar machine menu does not carry cloud computer entries (owner correction 2026-11-27). Implementation: [CloudComputerRow.tsx](../../apps/desktop/src/renderer/components/settings/CloudComputerRow.tsx).
+正文已移至 [settings-pages.md](./settings-pages.md)，规范效力不变。
 
 ### Provider detail header
 
-All provider connections share one header pattern, independent of builtin/custom storage or login source.
-Model counts belong in the provider list, not the detail header. The fixed slots are: brand mark; connection display name and access type; account/source
-subtitle; connection status, at most one primary action and one overflow menu. Editing and deletion
-belong in that shared menu, not additional provider-specific icon buttons. Identity text is not an
-implicit expand/collapse target. At narrow widths, wrap the action group without clipping controls.
-Use existing Button, menu and themed settings styles; radii and hit targets follow §5, icon-only
-controls follow §14.6, and both Light/Dark follow §10. Account usage sits below the header identity
-row with the existing layer separation, not a nested card. Provider-specific authentication and
-recovery content may fill the explanation slot without replacing the header layout.
-Identity, state, action semantics and pending implementation are defined in
-[供应商设置](../product-rules/provider-settings.md). This contract does not declare existing headers migrated.
+正文已移至 [provider-settings-ui.md](./provider-settings-ui.md)，规范效力不变。
 
 ### Provider dialog disclosures
 
-In Desktop `ProviderConnectionDialog`, Manual add model and Advanced connection settings are
-registered frameless text disclosures (user-approved lightweight indentation layout, 2026-11-03).
-Stack the sections vertically with aligned left chevrons, existing 13px/500 settings section title
-color and a minimum 32px hit height. Resting, hover and pressed states retain no fill or border
-and do not change label color or geometry. Keyboard focus independently uses a 2px semantic
-`--focus-ring` box-shadow ring with a pill shape; this does not introduce a resting button frame. The left
-chevron rotates with the expanded state. Indent the expanded manual form by 20px, retaining
-vertical fields and existing shared inputs, select and Add button. Light and Dark use existing
-semantic theme tokens. This registration covers only these two disclosures; other provider
-actions retain their shared Button treatment. Model and connection logic remain unchanged.
+正文已移至 [provider-settings-ui.md](./provider-settings-ui.md)，规范效力不变。
 
 ### Teammate model settings
 
-The model page shows the primary model with its backup chain, using the shared model picker and
-retaining provider account, Harness, thinking level and Fast; the backup chain stays folded. The
-separate task model group was removed with the setting (2026-11-09): a teammate chooses a new task's
-model when it starts the task. Reuse themed controls for Light/Dark; this contract does not claim
-runtime visual verification.
+正文已移至 [settings-pages.md](./settings-pages.md)，规范效力不变。
 
-### Teammate capability page (owner-approved r2, 2026-11-01)
+### Teammate capability page
 
-The teammate's Capabilities page follows the Memory page's grouped list: a quiet 12px/500 group
-heading with a tabular count or summary (`1 of 3 on`, `Following this computer · 11`), then one
-12px-radius card per group with 13px/500 names, one-line 12px descriptions (full text on hover)
-and inset dividers. Groups in order: Core skill (always on, opens a read-only page with a
-plain-language summary and the original text folded), Learned skills (switch; the page shows the content with Edit
-and Delete), Skills on this computer, Built-in tools, MCP, Permissions (Input Handoff). A group
-shows at most four rows, enabled first and unavailable last; the rest unfold under "Show N more"
-with the shared grid `0fr ↔ 1fr` motion. Configuration lives in one heading link per group
-(Manage / Tool settings) instead of a button on every row; an unavailable tool says so in its
-note line with a "Turn on" link. Rows that open a page carry a trailing chevron and keep the switch
-as a separate control. Light and Dark use the existing tokens; prototype and screenshots live in
-the design archive for Cindy-伙伴能力页重设计-2026-11-01. Product rules: cindy-bots-runtime.md §6
-「伙伴技能分层」. (2026-11-08: the System skills group — todo, routine, follow — was removed with
-V2 teammates; the page no longer shows it.)
+正文已移至 [settings-pages.md](./settings-pages.md)，规范效力不变。
 
 ### Worker creation dialog (owner-requested simplification, 2026-11-10; layout pending sign-off)
 
@@ -619,40 +561,9 @@ Mobile shows the same form in the "+" panel (`OrcaWorkerFormView`), rules in
 toolbar row in the same order. On the phone the permission shrinks to the composer's icon-only
 button (owner request, 2026-11-10) and roles are removed by touch and hold.
 
-### Get-started guide (owner-approved, 2026-11-11)
+### Get-started guide
 
-Desktop `features/first-run-guide/FirstRunGuide.tsx` is a multi-step dialog shown once after the
-first sign-in; product rules are in [`../product-rules/first-run-guide.md`](../product-rules/first-run-guide.md).
-The owner asked for a more designed guide whose first page stands apart. It keeps the shared
-`.modal-scrim` / `.modal-panel`, pill buttons and the registered wizard step chips, with these
-differences from the general multi-step dialog rule:
-
-- **Fixed size.** 640px wide (`min(640px, 100vw-32px)`) and `min(640px, 88vh)` high on every
-  step, so the window does not jump between steps; a step that is taller scrolls inside it.
-- **Cover page (new users only).** No step chips, no header title and no footer. Centered: the
-  brand block (§15.7), a 28px/500 headline, one 15px sentence, three bordered 12px-radius cards
-  and a single centered CTA with one 12px line naming the steps that follow. Each card opens
-  with an 88px `--surface-chip` stage holding a small scene assembled from the product's own
-  elements — task rows being ticked off, three registered provider marks (Anthropic, OpenAI,
-  DeepSeek — a fixed set, the same in every edition, owner decision 2026-11-11) and a key, a
-  computer and a phone showing the same task — then a 14px/500 title and 13px body.
-  The scenes replaced generic glyph tiles at the owner's request (2026-11-11); they use only
-  semantic tokens and registered marks, with no drawn illustration. This is the only page with
-  a centered commit action.
-- **Step pages.** The header carries the guide title and the step chips; only the current step
-  shows its label. Each page opens with a neutral icon tile, a 20px/500 title and one 14px
-  sentence. Sparse pages (earlier-version data, migration, finish) center their content; the
-  migration page shows two neutral computer tiles joined by an arrow. Option cards on the model
-  page are bordered 12px containers with an outlined pill label.
-- **Closing.** A top-right × on every page, because the footer holds navigation (back, skip,
-  next) rather than a Cancel action; Esc also closes. The scrim never closes it.
-- **No decoration beyond the cover's brand block**: no illustration, gradient, shadow or colour
-  outside the semantic tokens; icons are lucide glyphs in `--text-primary` / `--text-secondary`.
-- **Motion.** Step content arrives with the registered get-started guide entrance (§14.4); the
-  window itself keeps the shared modal entrance and nothing loops.
-
-Other wizards keep the registered rule; this entry does not authorize removing step chips,
-centering commit actions or adding a × elsewhere.
+正文已移至 [first-run-guide.md](./first-run-guide.md)，规范效力不变。
 
 ### Feature introduction (owner-requested, 2026-11-18)
 
@@ -845,150 +756,45 @@ The usage heatmap (`UsageHeatmap`) and daily-token bars (`UsageTokenBars` / `Usa
 
 正文已移至 [macos-menu-bar-quota.md](./macos-menu-bar-quota.md)，规范效力不变。
 
-### Desktop chat and operation authorization (DS-9, 2026-09-11)
+### Desktop chat and operation authorization
 
-Chat prose and compact code use the existing `chatChrome.ts` presentation entry; activity rows reuse `activityRowChrome.ts`. Keep user/assistant, tool, code, thinking and media theme aliases local. Icon actions use the ordinary pill frame with their contextual targets, visible keyboard focus and a Tip; a hidden message action bar becomes visible when keyboard focus enters it. Media previews and content-clipping cards retain their content geometry under §5. Do not change message identity, streaming, history, Diff Worker/virtualization or media/file lifecycles to share presentation.
+正文已移至 [chat-surfaces.md](./chat-surfaces.md)，规范效力不变。
 
-**IM context card disclosures (owner-confirmed HTML direction, registered 2026-09-12, #4367):** `HookTaskCard` has two narrowly scoped bare-text controls: long-body expand/collapse and the attached-context disclosure. Both remain frameless in resting, hover and expanded states; group contents also have no background frame. This records the confirmed quiet presentation, not a general exemption for chat actions. Both controls share a minimum 24px hit height/width and 4px vertical padding, retain native button keyboard activation, and use a separate visible `focus-ring` box-shadow ring. Text uses `text-tertiary`, with `text-secondary` on hover, in both modes; context text may wrap. The outer message card retains its existing content-clipping treatment. This registration does not assert real-client visual acceptance; Light/Dark HTML previews are not client screenshots.
+### Desktop chat content width
 
-**Desktop group member-joined disclosure (#13171).** `BotGroupMemberJoinedNotice` (`BotGroupTimelineItem.tsx`) displays one or two names as centered notice text. When three or more names are grouped, the centered summary is a frameless text button that toggles the full list in place. Both states stay frameless at rest and on hover, with `--text-tertiary` at rest and `--text-secondary` on hover. Keyboard focus draws a 2px `--focus-ring` with `rounded-lg` shaping the ring. The button exposes its state through `aria-expanded`.
-
-**Android in-app update card (registered 2026-10-16, #6199):** moved to the [Mobile design guide §9](../../apps/mobile/docs/mobile-design-guide.md#android-in-app-update-card-owner-approved-html-direction-registered-2026-10-16-6199).
-
-**Desktop Permission decisions, user-approved 2026-09-11 after actual-component comparison:** Allow once remains the visual main action using `perm-allow-*`; deny and session-scoped allow remain secondary. Retain neutral operation information: Desktop has no trusted risk-level field, and `autoReviewUnavailable` is not a risk conclusion. No invented danger variant or command-based risk inference. Keep the request in the composer area with title → description → scrollable operation → right-aligned wrapping actions, at the existing density. Use Button with a narrow local-alias adaptation; apply §5's existing pill-button and keycap treatments. Keep long scoped rules bounded by the column and available in the Tip. Labels, order, shortcuts, IME/editable-focus guards, submitting and failure recovery remain owned by the existing permission flow. This decision does not cover permission mode selectors, account/plugin authorization lifecycles or Mobile layout; Mobile is deferred to its own phase.
-
-### Desktop chat content width (2026-11-18; shared across chat surfaces)
-
-新建任务、进行中的普通任务、伙伴私聊与群聊共用居中的内容列、输入区和本机的「外观 → 聊天布局」偏好。
-标准是默认选项，内容列上限为 914px。「宽屏」显示内容宽度滑杆，从扣除左右边距后的实际面板宽度取 50%–100%，
-默认 75%，每次调整 5 个百分点。宽裕的面板逐档变化，窄面板优先留足阅读空间并随可用宽度自然收缩。
-输入区与内容列同轴居中，每侧向外 10px。右侧面板和分栏仍由现有布局引擎分配空间，消息边距从紧凑的每侧 20px
-逐渐过渡到宽裕面板的 50px。
-外观页在壁纸下方的「侧边栏与面板」卡片中放置聊天布局。宽屏滑杆、百分比和缩略预览并排，窄窗口随设置行换行。
-缩略预览用同一宽度计算及消息、输入卡片。切回标准会保留之前选择的宽屏比例。
-偏好随本机桌面普通窗口同步，独立于单条回复的主题阅读宽度。
-
-普通任务的正文、表格与代码共用内容列。伙伴私聊和群聊的消息使用原有按内容收窄的气泡，仍为720px
-上限。实际面板达到 1600px 或内容列宽超过标准列宽时，Markdown表格按内容决定列宽，短表格的列保持相邻，长表格仍受消息
-或气泡可用空间约束，超出时在表格内横向滚动。用户外观设置的阅读宽度继续约束整条回复。
-
-实现见 `useProportionalWidth.ts`，真实组件几何与明暗回归见 `scripts/fixtures/task-content-width/`
-和 `scripts/fixtures/group-width/`。
+正文已移至 [chat-surfaces.md](./chat-surfaces.md)，规范效力不变。
 
 ### Desktop message nav rail preview
 
-提问导航条的悬停预览在首行标出发送者，有发送时间时一并显示。圆角底框只用来标出本人的提问：只有本人提问才放进与用户气泡同色（`--msg-user-bg`）的圆角框。本人身份与聊天来源一致，设备标签只说明发送设备。其他来源沿用聊天的署名和图标，正文使用次级文字色，不得加圆角底框；给所有消息加框就无法一眼认出自己的提问。
+正文已移至 [chat-surfaces.md](./chat-surfaces.md)，规范效力不变。
 
 ### Desktop chat threads
 
-Group and private threads share the same panel chrome, root message row and reply divider. The complete root message belongs to the replies’ scroll container; it has no independent height limit or scrollbar. Keep the header and reply composer visible outside that scrolling content. Private threads retain the ordinary task runtime for progress, approvals and stopping.
+正文已移至 [chat-surfaces.md](./chat-surfaces.md)，规范效力不变。
 
 ### Desktop group progress strip
 
-`BotGroupProgressStrip` is the in-progress entry in the group timeline
-([group chat §5](../product-rules/bot-group-chat.md#5-界面)): one left-aligned entry per running
-execution, made of the member avatar and the shared `WorkGroupBlock` journal (2026-10-31). It has no
-capsule or other outer frame; its content and states follow the product rule. Keep semantic
-surface/border/text colors in both Light and Dark. It does not authorize pill-shaped toolbars or other status panels.
+正文已移至 [chat-surfaces.md](./chat-surfaces.md)，规范效力不变。
 
-### Group Cindy waiting-for-a-computer card (owner-chosen option C, 2026-11-28)
+### Group Cindy waiting-for-a-computer card
 
-`BotGroupAssistantDeviceCard` (Desktop, passed to `BotGroupComposer` as `aboveCard`; Mobile, above the
-group composer) is the requester's own prompt for group-Cindy requests held until they choose a computer
-([group chat §9](../product-rules/bot-group-chat.md#9-群里的-cindy2026-11-12)). Only that member sees it. It docks above the
-composer in the permission request's place and uses the same chrome: `rounded-xl`, 1px
-`--chat-input-border`, `--chat-input-bg`, and 16px horizontal / 12px vertical padding. Top row: a 15/500
-title, with a 12px `--text-tertiary` 「只有你能看到」 label and an eye-off icon on the right. Below it,
-two 13px `--text-secondary` lines: the request (or how many are waiting) and the reminder that later
-requests use the same computer. Separate lines are needed because sentence joining differs by language.
-Bottom row: a compact `Select` of computers, plus a right-aligned secondary 「取消请求」 and primary
-「继续」 that wrap together as one group. Mobile uses the same order with `BotGroupMenu` and two
-equal-width compact `MainWindowActionButton`s. When there are no computers, both clients show the
-request and the cancel action. Real-component regression:
-`scripts/fixtures/group-control` cases `assistant-device-wait` and `assistant-device-wait-narrow`.
+正文已移至 [chat-surfaces.md](./chat-surfaces.md)，规范效力不变。
 
 ### Desktop hidden channel records
 
-`BotChannelsPage` lists each connection's hidden channel tasks. The record name and
-summary are one narrowly scoped bare-text control: resting, hover and pressed states
-keep the existing text block (12px `--text-primary` name, 11px `--text-tertiary` meta,
-no fill, border, radius or added padding). Making that existing text open the ordinary
-task page does not assign a pill frame or change task state. The separate restart
-action remains the registered compact secondary Button and is outside this exemption.
-This records the accepted quiet list, not a general exemption for settings actions.
-
-Keyboard focus uses the theme-invariant `--focus-ring` as a `focus-visible` box-shadow
-ring. Non-input `outline` is suppressed globally, so an outline class is not a visible
-focus treatment here. The ring appears only for keyboard focus and does not create an
-ordinary control frame (§5). The single-page comparison showed no resting-pixel change;
-this registration does not claim a new client screenshot of the keyboard ring.
+正文已移至 [chat-surfaces.md](./chat-surfaces.md)，规范效力不变。
 
 ### About: harness versions
 
-Each harness occupies one compact row. Pi shows the executable's actual version and a short
-check/update status in that row. Its pill trigger opens a menu containing upstream update,
-restore Cindy release, check again, and release notes; source versions never become permanently
-expanded rows. Upstream compatibility risk appears only in the install confirmation. Installation
-progress remains inside the row. Menus use the existing container and inner-row geometry, and
-all states use semantic colors in both Light and Dark.
-
-Claude Code and Codex use the same row, trigger and menu (`HarnessVersionMenuRow`), with only
-the Cindy-maintained version chain: update to the current channel's version (shown right-aligned,
-disabled unless strictly newer), check again, and the last successful check time. A later failed
-online check keeps that last version in the menu but disables Update. There is no upstream
-source, restore or release-notes entry. Updating first prepares the selected version in the
-shared background cache, showing download status in the row, then follows the existing
-confirm → busy warning → restart flow. Startup installs only a complete cache matching the
-current manifest; if that target has changed or the cache is unavailable, it keeps a usable
-old runtime and retries in the background. First-install and repair downloads retain their
-existing startup fallback.
-
+正文已移至 [settings-pages.md](./settings-pages.md)，规范效力不变。
 
 ### User-attached long images
 
-Desktop user attachments with natural height / width **strictly greater than 3** use a
-240×240 top-aligned partial preview, shrinking to the available container width. A
-non-interactive pill overlay says “长图 · 点击查看完整图片” (localized); it uses semantic
-surface/text tokens and wraps in narrow containers. The image retains its existing
-12px content crop and keyboard/click target. Ordinary portraits, landscape images,
-unknown dimensions and tool-output images retain their existing contain rules.
-Click/Enter/Space still opens the complete original in ImageLightbox; gallery, copy,
-annotations and original bytes remain unchanged. This applies through the shared
-Desktop user-attachment renderer in private chats, groups and tasks.
-Decision: [#6796, maintainer confirmation](https://github.com/makecindy/cindy/issues/6796#issuecomment-6361112964).
+正文已移至 [chat-surfaces.md](./chat-surfaces.md)，规范效力不变。
 
-### Remote connection V2 topology (owner-approved 2026-11-06, revised the same day)
+### Remote connection V2 topology
 
-Desktop `features/remote-connection-v2`, behind the per-computer 「Agent-Net (Beta)」 switch on the 远程连接 settings page (renamed from 「新版连接」 on 2026-11-07; its hint says this is the new device-link, still iterating, and lists what is implemented so far; default off). When on, the topology follows 我的设备, which lists every device exactly as with the switch off — this computer's card pinned, the other devices in the collapsible list (owner decision 2026-11-25: 我的设备 is the device management; replaces the 2026-11-07 「only this computer's card」) — with no separate 需要处理 / 最近 card (owner decision 2026-11-07: a device with a problem is red in the topology and its card says why; this computer's master switch and connection issue are on its card above).
-Recent online / offline events sit behind a lucide `History` icon button (24px, `--text-tertiary`, `--text-primary` on hover / open) at the right end of the stats line, after the link status, opening a `Popover` (`w-72`, title 最近活动, up to 20 rows of event and relative time, scrolls past `max-h-72`, an empty line when nothing happened); the topology only shows connections (owner decision 2026-11-07: 拓扑图管拓扑图).
-Off, there is no topology; 我的设备, the relay route and SSH are the same either way. This computer is a 56px `rounded-full` `--surface-chip` disc with its system mark, inside a 72px 1px `--border-default` ring that every line starts from (`design: intrinsic-geometry`: it is the hub of the diagram, not a card); its name sits below in `text-12` / 500, and while it is online the protocol its own main connection actually runs on sits under the name — the same `ProtocolMark` in `text-12` as under device names (owner request 2026-11-18;
-Main's installed transport, not the switch preference, so 「Agent-Net (Beta)」 on but running on Device Link reads Device Link; nothing while connecting or stopped; the hub's accessible name adds it). Other devices are `--surface-chip` tiles in two columns on either side — computers 36px `rounded-lg` squares, phones and tablets 24×38px `rounded-[7px]` portrait slabs with an 8×2px pill near the top (`design: intrinsic-geometry`; owner feedback: with the system mark alone an iPhone and a Mac looked the same) whose lines run to their edge while latency labels keep the computers' column — grouped by how they connect (direct, via relay, connecting, not linked, needs attention, offline) with a `text-11` / 500 `--text-tertiary` caption above every group, and **sorted by name only** inside a group (owner feedback: latency ordering made tiles jump whenever a measurement refreshed; only a real path or status change moves a tile).
-The tile shows the device's system as a single-color mark instead of a word (owner request): Apple (the Apple Design Resources artwork already used on the login page), Windows (four-pane geometry), Linux and Android (Simple Icons, CC0), each cropped to the same optical size; unknown systems fall back to lucide `Monitor` / `Smartphone`.
-Every line is a curve: it leaves the ring, bends into the device's row and runs straight to the tile, bending wider the farther the row is; relayed devices pass through a 30px `rounded-full` outline relay point (`--border-default`, lucide `Radio`) placed close to the hub so its fan of lanes has room, with the relay's name, protocol and path in three `text-11` lines centred above it (owner feedback 2026-11-18: written beside it toward the hub they ran into this computer's name and protocol; only when the relay point sits wholly below that text — a split direct group above it — do they go under it).
-The second line is the main connection's `ProtocolMark` (12px icon, Agent-Net in protocol purple); the third says how relayed data actually travels and that path's own round trip — 「UDP · 25 ms」 / 「WS · 25 ms」: Agent-Net goes over the relay's UDP port, or its WebSocket when UDP is blocked; Device Link is always the WebSocket; the latency is the UDP registration round trip over UDP and the WebSocket ping otherwise.
-Owner request 2026-11-18: the protocol under this computer's name did not read as the relay's, and Agent-Net's UDP and WebSocket fallback looked the same while the latency was the WebSocket's even when data went over UDP. Protocol and path are separate lines because 「Agent-Net · WS」 on one line did not fit when the relay point sits close to the hub (`fleet`).
-While Main has not reported the path yet the third line is the latency alone. That third line is this computer's own leg to the relay, so it now sits on that leg — a link pill centred on the hub-to-relay line, leaving the name and protocol above the point (owner request 2026-11-27: written above the point while the lanes beside it showed the same transport, two computers relayed over different legs, one on WS and the other on UDP, read as if their pages disagreed).
-The trunk is lengthened for it: the relay point moves out until the line clears the pill plus 8px of line at each end, measured with a 「UDP · 999 ms」 minimum so ordinary round trips do not shift the layout, and the device columns move out with it while the fan of lanes gives up at most 15px (only the room the lane pills can spare while they stay on one line); the pill stacks transport over latency like the lane pills do, and returns to the relay caption when the device name column would drop under 100px or the pill would cover this computer's name or protocol.
-The relay point's tooltip and accessible name read name · protocol · UDP / WS · latency, and the hub card's 与「relay」 row reads status · UDP / WS · latency. A long name stays clear of the fan of lanes and of the ring (and of the trunk where it crosses that height), grows toward the hub, wraps to two lines, and only then truncates.
-The name and latency use the settings card surface behind the text for legibility over nearby group curves. Line style encodes only linked (1.5px solid) / not linked or needs attention (dotted) / offline (fainter dotted). Link pills (`text-11`, tabular) sit near the tile end of each straight segment, so each side reads as one aligned column; they show the actual underlying transport protocol alongside the nearest whole millisecond (owner request 2026-11-19): 「UDP · latency」 for Agent-Net direct, 「UDP / WS · latency」 for Agent-Net via relay (the other device's own leg to the relay, as it says over the encrypted link — this computer's leg is on the hub-to-relay line; an older peer that does not say shows the latency alone, never this computer's leg; owner request 2026-11-27), 「WebRTC · latency」 for Device Link direct, and 「WS · latency」 for Device Link via relay — showing whichever of transport or latency is known, and omitting transport while a remote switch is reconnecting.
-The protocol and latency usually share one line. Each column clears the relay caption and this computer’s name. At narrow widths the protocol and latency stack, and the column moves toward the tiles if the stacked labels need more room. A stacked label is a narrow, tall block, so it takes the topology's 4px label corner instead of the pill's full round, which cut off the characters in its corners (owner screenshot 2026-11-27: the 「s」 of 「9 ms」).
-Each device card's 路径 row appends the same transport (`shrink-0`, so a long self-hosted relay name truncates only the middle path) and the tile's accessible name / tooltip includes it; for Agent-Net via relay the card's 连接方式 row names both legs, 「本机 UDP · 对方 WS」 (this computer's leg alone when the peer has not said).
-Rows show the device name (`text-13` / 500, vertically centred on the tile; owner decision 2026-11-07: state by color, no status text under the name — only the folded offline row keeps its 「显示离线设备」 hint) and, for a linked device, the negotiated protocol below it in `text-12` as a 12px icon + name (`ProtocolMark`: Agent-Net lucide `Waypoints` in `--remote-agent-net-accent` / 500, Device Link lucide `Link2` in `--text-tertiary`; owner decision 2026-11-13, so the two read apart at a glance); while a computer is switching, that line is the plain `--text-tertiary` 正在切到 … text instead.
-The tile's tooltip and accessible name carry the state in words: needs-attention reason, else last seen when offline, else the message direction while messages move (发送中 / 接收中 / 收发中 — written 收发中 when the other direction also had a message within `LABEL_HOLD_MS` = 15s, as is the card's 消息 row; the line's dash direction still follows the 4s window), else busy and model.
-Rows are 54px (46px from nine devices). Two or more offline devices fold into one row with a 「显示离线设备」 toggle; a non-relay group above six devices splits in two. Hovering a tile or opening its popover traces that device's whole path (including the relay trunk) and lets the other lines recede. Every line color, width and opacity change — a link coming up or going down, messages starting or stopping, focus — fades over `--motion-enter` linear (line `style`, not attributes), and so do tile outline, glyph, glow and the hub ring.
-Tiles and the hub open read-only cards in the shared opaque `Popover` (`w-64`). A device card shows the system mark, name, model / system / version, status (忙碌中 in Thinking Orange; for a device that needs attention the reason in `--error-fg`, while 路径 then states only how it connects), path, messages, last measured latency, last seen and whether it is controlling this computer, then 「远程桌面」 for an online, controllable computer that both sides allow.
-The hub card shows this computer's name and system, while online a 连接方式 row with that same protocol mark (its own row: in the `w-64` card it does not fit in front of the relay status), the connection to the relay, any connection issue (`--error-fg`) or standby note. It has no management shortcut: this computer's settings are already in the card directly above the topology (owner decision 2026-11-12).
-Cards carry no switches, rename or delete. A computer's card also ends with a connection-method area (owner decision 2026-11-12, [agent-net.md](../product-rules/agent-net.md)「远程切换其他电脑的连接方式」) below a `--border-default` divider: while it asks that computer it shows a 12px `Spinner` and 正在确认…; then the reason it cannot switch (`--text-secondary`), the three switching steps (done lucide `Check`, current `Spinner`, pending dot; the going-back step in `--error-fg`), the went-back reason in `--error-fg` with 重试, the just-switched line in `--status-success`, or a `sm` `compact` 「切到 Agent-Net」 primary / 「切回 Device Link」 secondary button beside 「远程桌面」 (secondary when both show).
-While that computer reconnects its tile shows a `Spinner` instead of the system mark and drops the connected green, and the line under its name reads 正在切到 Agent-Net…. The stats line adds 「全部切到 Agent-Net」 / 「全部切回 Device Link」 text buttons (`text-12` `--text-secondary`; `--text-primary` and underline on hover / open) that open a `Popover` (`w-72`) listing each computer with its answer, then its progress.
-On the switched computer the 「Agent-Net (Beta)」 row hint gains a second line 由「…」在 HH:MM 远程打开 / 关闭 in `--text-secondary`. A device deep link (message device labels, the sidebar entry) is handled by 我的设备 whether the switch is on or off: it expands the list and scrolls to that device's card; the topology opens no card for it (owner decision 2026-11-25: one target, so the two do not fight over the scroll position).
-Each tile is an outer transparent button that holds the position (its `transform`) and an inner visible layer that carries the outline and the system mark. Motion: position changes (`transform` on `--motion-base` / `--motion-ease-move`) only once the opening layout has settled — 600ms after the device list and the first link snapshot are in, at most 2s after the card is first measured; until then everything lands in place without sliding (owner feedback 2026-11-07: the hub slid in when the page opened) and the registered §14.4 「Remote connection message packets」 while real messages move;
-`useReducedMotion` disables both, leaving the solid blue line and the 收发中 text. Colors: §2 「Remote connection V2 topology: green and red only — no blue, no yellow」. Fixture: `pnpm ui:check --page remote-connection-v2` (cases default / fleet / many / split-direct / relay-below / relay-below-long-name / narrow-relay / narrow-fleet / empty / legacy-off / self-device-link; every case with a relay checks that its label clears this computer's name, protocol and ring; the `flow` capture turns motion on).
-
-An authenticated Agent-Net path appears as direct or via relay as soon as it is available, including when the device is idle. An ongoing handshake appears in a neutral 「连接中」 group with dotted lines and the same status in each device card. An active control link supplies the path actually in use for remote operations.
-
-Remote switch-back respects the target's 「仅使用 Agent-Net」 choice (owner decision 2026-11-12): its card replaces the switch-back button with a neutral explanation to disable that option on the target first. Both batch directions probe before selection; the switch-back list labels strict targets 「仅使用 Agent-Net」 and excludes them from the count and first-computer trial. The note explains the local step; longer labels wrap within the existing popover in both themes.
-
-When the initiating computer itself only accepts encrypted connections, the same card/batch area explains that its local choice must be disabled before switch-back; Main also prevents sending the request. A V2-only network has a separate explanation to select a route that supports Device Link. These restrictions never automatically change either computer's encryption choice, and Device Link success requires a verified legacy link.
+正文已移至 [remote-connection-v2.md](./remote-connection-v2.md)，规范效力不变。
 
 ## 5. Layout Principles
 
@@ -1016,59 +822,15 @@ When the initiating computer itself only accepts encrypted connections, the same
 
 ### Desktop task sidebar identity
 
-Individually pinned tasks stay out of the ordinary list. Automatic task groups use two presentation modes:
-while expanded, history includes the task represented by the group header, whether read or unread;
-while collapsed, omit that task from the visible attention rows so it only appears in the header.
-Deduplicate collapsed rows by task ID, not title. The header keeps its existing click target (latest run,
-or the failing run when a collapsed group reports an error). Expanded preview limits, frozen layouts
-and “Show all” continue to include the header task.
-Non-silent unread runs and pending errors/replies remain visible while collapsed, without a five-row cap;
-a task already represented by the header satisfies this visibility rule. Silent successful runs and
-read history stay hidden unless the group is expanded.
-Implementation: `AutomationSessionGroupItem.tsx` and `automationSidebarGrouping.ts`; regression:
-`automationGroupCollapsedAlerts.test.tsx` and the `automation-unread` UI fixture.
+正文已移至 [task-sidebar.md](./task-sidebar.md)，规范效力不变。
 
 ### Desktop teammate sidebar
 
-The teammate display-style menu adds a separated “Show avatars when collapsed” checkbox. It defaults off on Desktop, preserving the existing attention-only collapse behavior, and stores explicit choices per account on this computer. Enabling it shows all visible chats as a single avatar strip while collapsed, regardless of the expanded icon/list preference; overflow uses the existing +N entry, which expands the section into the full list. Disabling it restores the existing attention exception without changing the fold or expanded display style. Mobile keeps its own existing default-on choice. Implementation and regressions: `TeammatesSection.tsx`, `teammatesSectionPrefs.ts`, their existing unit tests and the `collapse-attention` UI fixture.
+正文已移至 [task-sidebar.md](./task-sidebar.md)，规范效力不变。
 
-The expanded teammate section previews five chats (local teammates, remote teammates, groups and the merged Cindy device row share this limit). Keep the current chat visible within those five rows. Use the task list’s “Show all N” footer style, with “Show less” after expansion. The teammate section has its own icon/list preference, independent of the pinned section and of collapse state. The icon strip’s +N button switches to the full list. With collapsed avatars disabled, collapsing resets the preview and hides ordinary entries entirely; unread chats and pending interaction/error rows remain visible in the chosen mode, without a preview cap. The currently open teammate chat also stays visible after it becomes read, until navigation leaves that chat; pending attention still keeps it visible after leaving. Explicitly collapsing the teammate section hides a read selection immediately; new unread or pending attention restores its visibility and read-until-leaving protection. This applies to both icon and list modes. The pinned section follows the same attention exception, including tasks inside pinned projects. This limit applies to the Desktop sidebar; the Mobile task home section below previews three.
+### Desktop and Mobile task creator filters
 
-### Desktop and Mobile task creator filters (2026-10-27)
-
-The sidebar's existing Filter submenu adds Teammates. All (全部) is the default and includes personal tasks and all teammates' tasks;
-choosing one teammate selects only its created tasks, then further choices add or remove teammates.
-Hide all (都不显示) excludes teammate-created tasks and teammate routine/IM tasks while retaining personal tasks.
-On Desktop this choice moved out of the Teammates submenu on 2026-11-28 (owner decision): it is the 「伙伴的任务」 checkbox
-under the display-settings menu's 「隐藏」 row, with the same stored value and matching rule; Mobile keeps it in Filter.
-Since V2 (2026-11-08) a task belongs to a teammate here when it runs in that teammate's project or the
-teammate opened it with `send_to_session` (children of its old V1 background tasks still count, read from
-the stored rows); V1 workbench takeovers no longer count, and teammate projects are left out of the sidebar and search project filters.
-Selecting a teammate from Hide all switches to that teammate; removing the last choice restores All. Reset Filters also clears this dimension, preserving task status,
-grouping and sorting. Pinned entries retain their existing exemption from content filters.
-Use the existing menu rows, avatar component and check marks; keep the menu open for multiple choices.
-Show a remote computer name only for device-scoped identities, to distinguish same-name teammates.
-Cindy and cloud companions use a single name row without a computer subtitle: their filters span computers. Persist selections
-per viewer account. Built-in Cindy is one choice across computers; choosing it includes every copy’s
-created tasks, including archived history. Identify it from preset/cloud identity, never its name; custom
-namesakes remain separate. Existing per-computer Cindy selections migrate to the unified choice.
-Cloud companions use their account identity across old and current computers; retired copies stay out
-of the choices, as in the teammate roster. Unlinked teammates remain keyed by computer and teammate ID.
-Creation attribution is distinct from following. Existing teammate routine and IM channel tasks also
-appear in the desktop task list and share this filter. Their exact linked owner supplies the avatar;
-the tooltip says “Belongs to” to distinguish ownership from delegation or following. Active/archived
-filters still apply; main chats, private threads and internal group lanes retain their dedicated entries.
-Task rows retain their creator avatar after archiving, on both local and remote computers. Prefer the
-creator's avatar when others follow the same task; the tooltip distinguishes creation from following.
-Two-line teammate rows grow with their content; align the avatar and check mark with the name line,
-keeping the computer name in the same text column and preserving vertical padding.
-Verify the menu in every supported UI locale and both themes; long names retain the existing menu width.
-Mobile uses the same multi-selection semantics in the existing iOS native / Android display menus.
-The home (including the task drawer) and device task lists retain creation/ownership avatars after
-archiving and cold start. Read the existing teammate delegation and history APIs on older hosts;
-keep main chats and internal lanes out of these lists. Cache only portable ownership/avatar metadata
-in the account-scoped home snapshot. Late cloud/preset discovery canonicalizes existing selections
-without clearing the list or splitting Cindy by computer.
+正文已移至 [task-sidebar.md](./task-sidebar.md)，规范效力不变。
 
 ### Mobile task home teammate section (owner-approved “A+B”, 2026-10-24)
 
@@ -1189,7 +951,6 @@ Making something clickable never moves a layer between Step 1 and Step 2.
 *Governed corner-radius values are **0px and 2px** for registered data marks, **4px** for keycaps, **8px** for inner controls, **12px** for containers, and **9999px** for pill frames. No 3px / 6px / 10px, and no arbitrary values. A layer with no frame to round needs no assignment; "no assignment" is not an additional radius value. **Intrinsic content and mark geometry remain outside this corner-radius inventory** — a scatter dot's circle, a pie sector's arc, a map outline are shapes of the mark itself. Existing non-keycap `rounded-[4px]` usages remain registered debt; bare `rounded` and `rounded-sm` substitute for nothing.*
 
 *Guard (2026-10-30): in Desktop renderer code, an added line whose radius resolves outside this inventory — `rounded-md` (6px), `rounded-2xl` / `rounded-3xl`, arbitrary values such as `rounded-[6px]` / `rounded-[10px]`, or a literal `border-radius` / `borderRadius` — fails `pnpm check:design-colors`. Intrinsic content geometry (an icon mask, an illustration shape) is declared with a `design: intrinsic-geometry — <reason>` comment on that line or just above and is then reported for review instead. Existing occurrences are debt, migrated page by page as visible changes; see [`design-governance.md` §8](./design-governance.md).*
-
 
 ## 6. Depth & Elevation
 
@@ -1764,9 +1525,9 @@ _Reference-implementation paths in this table are relative to `apps/desktop/src/
 - Forbidden: pointless displacement, unregistered bouncing, parallax, looping decoration, `transition-all`, and typewriter per-character animation on streamed text (streaming already is the motion). Interactions stay fast and direct. (Per-**word** opacity fade-in on streamed text is **not** the typewriter — see the sanctioned stream-word-fade class below: the word is fully laid out and only its opacity ramps; ruled distinct on 2026-08-07.)
 - **Cadenced running shimmer (2026-08-07)**: the running status bar's breathing (`status-bar-shimmer`) is **event-driven, not an infinite loop** — one 1.5s dip (1 → 0.45 → 1, `steps(18)`) plays per real sign of progress (status text change / token count advance; re-triggered via keyed remount in `RunningStatusBar`, back-to-back plays merge through an animation-end pending flag). Silence (long thinking, tool wait) holds steady full opacity. Semantics: _breathing = producing_, not _heartbeat = alive_. New loading/working indicators should prefer this cadenced pattern over a new infinite loop.
 
-#### Registered response: Usage History chart emphasis (2026-09-08)
+#### Registered response: Usage History chart emphasis
 
-The two registered chart members (§5) enlarge their non-hit-testing visible layer on hover, keyboard focus or selection, in Settings → Usage History and in the provider 「远程与分享」 usage block (same components, `.usage-history-charts`). Enter uses `--motion-base` and the component-scoped `--usage-mark-ease`, a local curve with one small overshoot; leave uses `--motion-fast` / `--motion-ease-out`. The bounded width/height transition is a one-shot non-compositor exception already allowed by the red lines: no looping, no replay on unrelated rerenders, no whole-chart motion. Reduced motion removes the transition and keeps immediate focus / selection feedback. Geometry and states: [usage-history-charts.md](./usage-history-charts.md). No other component may borrow this response.
+正文已移至 [usage-history-charts.md](./usage-history-charts.md)，规范效力不变。
 
 #### Exception category: container transform (chip lifts off and grows)
 
@@ -2138,17 +1899,9 @@ The execution rulebook for subsequent desktop / mobile UI updates. Sources: the 
 - **Collaboration menu row ON state is orange**: the collaboration item inside the composer「+」menu sits beside Goal and Plan. Its active text + UsersRound icon use `warning-accent`; the row highlight remains the shared menu glide, and the OFF state stays neutral. This is an explicit carve-out from the 2026-07-17 neutral composer-menu rule for the ON state only.
 - **SVG persistent-animation red line**: breathing-type persistent animation sits on an HTML wrapper (span); SVG stays static (engineering conventions §7).
 
-### 15.15 Create-Page Content Position + Titlebar Hover Discipline (finalized 2026-07-21)
+### 15.15 Create-Page Content Position + Titlebar Hover Discipline
 
-- **CREATE AGENT content-group vertical position**: `max(96px, 28vh) + 46px` from the window top, 32px side padding. Narrow band: when the composer's available width is under 560px (both side panels open or a narrow window), `max(64px, 18vh) + 32px` with 16px side padding (registered 2026-11-11, maintainer ruling E-14).
-  Implementation = route container `pt-[calc(max(96px,28vh)+46px-var(--content-header-h,46px))]` (narrow: `max(64px,18vh)+32px`):
-  - the 268px cap is dead (a leftover of the Figma frame height — the root cause of content sitting high on large windows); 28% is device-tuned (from 25.5%);
-  - `--content-header-h` is broadcast by `ContentHeaderSlot` (inside FeatureSidebarSlotProvider) through a display:contents wrapper (46px rendered / 0px hidden, same source as ContentHeader `h-[46px]`) — content stays pinned at the "header present" position with **zero jump** when selecting a project toggles the header;
-  - header visibility has a single decision source = `useContentHeaderHidden` (mac + sidebar expanded + no injected content + no right-panel toggle; continues the 2026-06-11 "hide empty header" ruling);
-  - guard: the position formula and its anti-regression assertions are part of the create-page review contract.
-- **Hover-token discipline**: `--update-btn-hover` is exclusively the upgrade button's hover (inverse dark CTA) — **forbidden** on ordinary ghost buttons/badges (near-black under CINDY light swallows text and icons; 6 misuses cleaned up 2026-07-21). Correct picks:
-  - titlebar-area (ContentHeader) ghost elements → `titlebar-button-hover` (same as the ChromeActions window buttons);
-  - general light hover in the content area → `--surface-hover`.
+正文已移至 [new-task-home.md](./new-task-home.md)，规范效力不变。
 
 ### 15.16 2026-08 Color-Ramp Revision (warm ivory light / neutral near-black dark)
 
@@ -2198,24 +1951,6 @@ and media position (`ui/media-scrubber`, seconds in/out). Native media controls 
 
 §16.1 视觉风格、§16.2 设计规则、§16.3 组件定义、§16.4 登录链路逐屏与 §16.5 深色模式与主题跟随都在该文件，编号不变。
 
-## 流式正文与可组合组件（2026-10-18）
+## 流式正文与可组合组件
 
-用户确认的答案方向：正文由流式编辑器与共享组件库承载，模型自由组合图文、图表和交互布局；普通任务与伙伴采用同一能力。每个完整节点增量出现，局部修订保留稳定控件身份和用户操作值。视觉沿现有正文、控件和媒体规范，不以整页 HTML 预览框替代连续正文。两端主题与窄屏同等实现。协议、能力发现与当前验收边界见 [流式正文与可组合组件](../rich-answers.md)。
-
-### 伙伴私聊消息下操作（2026-10-29）
-
-伙伴私聊同一轮的工作过程区与最终回复共用一个当前伙伴头像，三端一致。
-头像在本轮开头显示，右侧依次呈现处理记录与回复正文；执行中转为完成态时保持同组，不再给回复重复头像。
-复用回复头像的尺寸、间距和正文列；展开的中间文字与工具明细不重复头像，成果卡仍与正文对齐。没有过程的回复照常显示头像，新一轮重新显示头像。
-
-常用操作固定在消息下方，复用现有群聊图标、引用预览与输入组件。桌面32px按钮、4px间隔、14px图标；手机44pt热区、不额外插空，左右消息的操作图形对齐对应正文边缘。复制/回复/更多常显，现有朗读与编辑能力保留；创建话题与分享图片放更多。已有话题沿用头像、回复数及最后回复时间/未读提示入口，不另造数字徽章。普通任务、伙伴私聊与群聊共用 §4 Desktop chat content width 的居中宽度规则，气泡及输入区规则见 [群聊规则](../product-rules/bot-group-chat.md)。手机正文直接选字不受操作栏影响。沿用语义色与原菜单开合、焦点和按压状态；各语言及明暗模式均不得溢出。
-
-### 伙伴内部通讯入口（2026-11-01）
-
-伙伴间收发只留一行次级文字「已发消息给 X」／「消息来自 X」，复用原小头像与双向箭头的单行胶囊入口，
-入口与「处理记录」及助手正文共用左对齐轴，不用两侧伸展分隔线把入口推到中间；
-11px 字号、28px 最小点击高度，颜色走现有语义 token，键盘焦点可见。
-不铺两行摘要、不另放展开/完整对话按钮。点击直接打开原只读往来页，返回原主任务位置。
-长名字在可用宽度内省略，完整标签保留在可访问名称和悬停提示。手机沿用已有触摸热区。
-内部往来不制造用户未读；执行与提醒边界见 `cindy-bots-runtime.md` §6.1。
-2026-11-08 起伙伴私信已移除（伙伴之间改用 `send_to_session`），不再产生新入口；历史入口照常打开只读往来页。
+正文已移至 [chat-surfaces.md](./chat-surfaces.md)，规范效力不变。

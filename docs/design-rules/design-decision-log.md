@@ -1432,3 +1432,18 @@ DESIGN.md 瘦身 4a 把下列历史说明从正文移到这里，原文逐字保
   > | `textPlaceholder`     | `#858581`                | `#757575`             | Input placeholder only (≈3.5:1) |
 
 现行规则见 `DESIGN.md` §2、§3、§4 Dialog & Modal、§15.1、§15.2，以及手机设计指南 §2。
+
+## 2026-11-29 · DESIGN.md 瘦身 4b：功能规格搬到专题文件时移出的来源说明
+
+下列括号里的来源与日期说明，在功能规格从 DESIGN.md 搬到专题文件时从正文移出，原文逐字记在这里。规则本身没有改，现行规则以各专题文件为准。
+
+- **15.15 Create-Page Content Position + Titlebar Hover Discipline**（现在在 [new-task-home.md](./new-task-home.md)）：`(registered 2026-11-11, maintainer ruling E-14)`
+- **Filter reminder inside display settings**（现在在 [task-sidebar.md](./task-sidebar.md)）：`(owner decision)`
+- **Desktop and Mobile task creator filters**（现在在 [task-sidebar.md](./task-sidebar.md)）：`(owner decision)`；`(2026-11-08)`
+- **Device access pills**（现在在 [settings-pages.md](./settings-pages.md)）：`(owner decision 2026-11-25)`；`(owner correction 2026-11-27)`
+- **Teammate model settings**（现在在 [settings-pages.md](./settings-pages.md)）：`(2026-11-09)`
+- **Get-started guide**（现在在 [first-run-guide.md](./first-run-guide.md)）：`(2026-11-11)`
+- **Desktop chat and operation authorization**（现在在 [chat-surfaces.md](./chat-surfaces.md)）：`(#13171)`；`(registered 2026-10-16, #6199)`
+- **Desktop group progress strip**（现在在 [chat-surfaces.md](./chat-surfaces.md)）：`(2026-10-31)`
+- **流式正文与可组合组件**（现在在 [chat-surfaces.md](./chat-surfaces.md)）：`（2026-10-29）`；`（2026-11-01）`
+- **Remote connection V2 topology**（现在在 [remote-connection-v2.md](./remote-connection-v2.md)）：`(owner request)`；`(owner request 2026-11-19)`；`(owner decision 2026-11-12)` ×2
