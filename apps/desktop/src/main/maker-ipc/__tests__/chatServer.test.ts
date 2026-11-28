@@ -3245,6 +3245,26 @@ describe('Chat Server result delivery and refresh', () => {
       expect(fixture.handle.mock.calls.some(([route, method]) => route === `/conversations/${roomId}/assistant-device` && method === 'POST')).toBe(true);
     });
 
+    // MagicLizi P1 (2026-11-29): the fallback that keeps this account's own no-reason notice visible
+    // must not also re-show someone else's when the client lacks the capability (bot-group-chat.md §9).
+    // Unit: the real getGroup against the HTTP boundary, capability absent, requester is another member.
+    it.each([null, 'studio-device'])('keeps another member’s no-reason notice out of this view (bound=%s)', async bound => {
+      const source = message(80, peerId, 'Weekly report');
+      const notice = message(81, cindyId, '', { origin: 'bot', content: [{ type: 'card', namespace: 'cindy.group-assistant',
+        schemaRevision: 1, fallback: 'notice', data: { type: 'executor_unavailable', requesterId: peerId, sourceMessageId: source.id } }] });
+      const previous = fixture.handle.getMockImplementation()!;
+      fixture.handle.mockImplementation((route, method, body) => {
+        if (route === '/me') return { body: { actor: { id: selfId }, deviceId: 'studio-device',
+          capabilities: { groupAssistant: 1 }, groupAssistantActorId: cindyId } };
+        if (route.endsWith('/snapshot')) return { body: { room: { ...room(roomId), assistant_device_id: bound }, members, messages: [source, notice], cursor: '1' } };
+        if (route === `/conversations/${roomId}/messages?limit=100`) return { body: [source, notice] };
+        return previous(route, method, body);
+      });
+      const result = await service.getGroup(roomId);
+      if (!result.ok) throw new Error(result.errorCode);
+      expect(result.group.messages.map(m => m.id)).toEqual([source.id]);
+    });
+
     // #13638: the existing notice test always has a visible source in the same page.
     // Unit: real group and thread reads return the pagination boundary for all-hidden pages.
     it.each(['group', 'thread'])('retains the boundary of an all-hidden %s page', async scope => {

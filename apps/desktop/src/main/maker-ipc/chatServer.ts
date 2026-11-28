@@ -1850,9 +1850,10 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       if (!notice) return true;
       if (!isBotGroupAssistantNoticeHidden({ ...notice, reason: groupAssistantNoticeReason(notice, assistantDeviceId) }, selfId)) return true;
       // A notice the server marked unbound is always the requester's card. A reason inferred from
-      // the room is only hidden when this client can actually offer the choice: a server that does
-      // not advertise the capability keeps its own notice instead of going silent.
-      return notice.reason === undefined && !boundAssistantDevice;
+      // the room is only kept visible for its own requester, and only when this client cannot offer
+      // the choice: someone else's notice never enters this account's view, and a server that
+      // advertises the capability gets the composer card instead.
+      return notice.requesterId === selfId && notice.reason === undefined && !boundAssistantDevice;
     });
   }
   function shownSnapshot<T extends Snapshot>(s: T): T {
