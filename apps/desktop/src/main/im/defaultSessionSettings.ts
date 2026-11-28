@@ -136,7 +136,8 @@ export function applyImRouteOverride<T extends ImDefaultSettings>(
         },
       },
     };
-    delete next.modelGroup;
+    if (override.modelGroup) next.modelGroup = override.modelGroup;
+    else delete next.modelGroup;
     return next;
   }
   const next: T = {

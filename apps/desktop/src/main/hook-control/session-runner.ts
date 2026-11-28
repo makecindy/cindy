@@ -1737,7 +1737,8 @@ export function createMakerHookSessionRunner(deps: {
       // 渲染层展示的用户消息保持来源 IM 原话。逐 turn 追加固定文本,教模型
       // 用 xdt-file 引用回传文件而非误用 cindy_feishu_bot(规则 9,实踩背景
       // 见 outbound.ts 的常量注释)。
-      const publicCompanionNote = req.companionBotId
+      // 只有 X 是公开回帖; 其它官方渠道交给伙伴时是主人与伙伴的私聊 / 群, 不加这条。
+      const publicCompanionNote = req.companionBotId && req.source?.im === 'x'
         ? '\n[渠道说明] 本轮是主人通过官方 X 账号绑定发起的公开提问，最终回答将公开回帖。请勿公开伙伴记忆或工作目录中的私人信息。回复由当前 X 通道投递，不要另用 X Manager 发帖。'
         : '';
       const promptWithNote = `${req.prompt}\n\n${buildHookPromptNote(req.source?.im)}${publicCompanionNote}`;

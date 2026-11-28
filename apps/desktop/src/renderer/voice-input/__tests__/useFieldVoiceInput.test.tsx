@@ -27,6 +27,9 @@ const mocks = vi.hoisted(() => ({
   owner: { dataOwnerId: 'field-owner', generation: 1 },
   guards: vi.fn(),
   onSamples: null as ((pcm: ArrayBuffer) => void) | null,
+  captureVoiced: true,
+  captureStarts: 0,
+  adviseDictionaryLearning: vi.fn(),
 }));
 
 vi.mock('react-i18next', () => ({
@@ -39,7 +42,7 @@ vi.mock('@/hooks/useCodexSessionExpiredPrompt', () => ({
 vi.mock('@/hooks/useVoiceInputSettings', () => ({
   useVoiceInputSettings: () => ({ settings: mocks.settings }),
   getVoiceInputSettings: () => mocks.settings,
-  adviseAndRecordVoiceInputDictionaryLearning: vi.fn(),
+  adviseAndRecordVoiceInputDictionaryLearning: mocks.adviseDictionaryLearning,
 }));
 vi.mock('@/hooks/useVoiceInputHistory', () => ({
   recordVoiceInputHistory: () => null,
@@ -64,10 +67,19 @@ vi.mock('@/voice-input/captureSession', () => ({
     onCaptureReady?: () => void;
     onSoundDetected: () => void;
     onSamples?: (pcm: ArrayBuffer) => void;
+    onPcmCaptured?: (pcm: ArrayBuffer) => void;
   }) => {
+    mocks.captureStarts += 1;
     mocks.onSamples = input.onSamples ?? null;
     input.onCaptureReady?.();
-    input.onSoundDetected();
+    const pcm = new Int16Array(4_000);
+    if (mocks.captureVoiced) {
+      pcm.fill(2_000);
+      input.onPcmCaptured?.(pcm.buffer.slice(0));
+      input.onSoundDetected();
+    } else {
+      input.onPcmCaptured?.(pcm.buffer.slice(0));
+    }
     return { ok: true, drainPendingChunks: () => {} };
   },
 }));
@@ -77,6 +89,7 @@ vi.mock('@/contexts/dataOwnerGeneration', () => ({
 }));
 vi.mock('@/lib/logger', () => ({ createLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn() }) }));
 
+import { VOICE_INPUT_DICTIONARY_LEARNING_TRACK_TIMEOUT_MS } from '../../../shared/voiceInputDictionaryLearning';
 import { FieldVoiceInputNotice } from '../FieldVoiceInputNotice';
 import { useFieldVoiceInput } from '../useFieldVoiceInput';
 import { VoiceInputButton } from '../VoiceInputButton';
@@ -101,6 +114,7 @@ const voiceApi = {
   start: vi.fn(),
   stop: vi.fn(),
   cancel: vi.fn(),
+  appendAudio: vi.fn(),
   drainAudioQueue: vi.fn().mockResolvedValue(undefined),
   muteSystemAudio: vi.fn().mockResolvedValue({ ok: true }),
   restoreSystemAudio: vi.fn().mockResolvedValue({ ok: true }),
@@ -137,7 +151,7 @@ function FieldHarness({
         onChange={(e) => setText(e.target.value)}
       />
       <VoiceInputButton {...voice.buttonProps} testId={`${id}-voice`} />
-      <FieldVoiceInputNotice error={voice.lastError} speakerFiltered={voice.speakerFiltered} />
+      <FieldVoiceInputNotice {...voice.noticeProps} />
       <button
         type="button"
         onClick={() => {
@@ -160,9 +174,12 @@ beforeEach(() => {
   voiceApi.start.mockReset();
   voiceApi.stop.mockReset();
   voiceApi.cancel.mockReset();
+  voiceApi.appendAudio.mockReset();
   events.clear();
   shortcuts.clear();
   mocks.onSamples = null;
+  mocks.captureVoiced = true;
+  mocks.captureStarts = 0;
   mocks.owner.generation = 1;
   mocks.guards.mockResolvedValue({ ok: true, permission: { ok: true }, readiness: { ok: true } });
   voiceApi.start.mockResolvedValue({ ok: true, runId: 'run-1', transport: 'direct' });
@@ -565,5 +582,185 @@ describe('VoiceInputButton & useFieldVoiceInput', () => {
     expect((screen.getByRole('textbox', { name: 'expanded-prompt' }) as HTMLTextAreaElement).value).toBe(
       'Hello world.',
     );
+  });
+
+  it('tracks post-dictation manual corrections in controlled textareas for dictionary learning', async () => {
+    mocks.adviseDictionaryLearning.mockClear();
+    render(
+      <Tooltip.Provider>
+        <FieldHarness id="dict-learn" initialValue="前文：" />
+      </Tooltip.Provider>,
+    );
+
+    const textarea = screen.getByRole('textbox', { name: 'dict-learn' }) as HTMLTextAreaElement;
+    textarea.setSelectionRange(3, 3);
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('dict-learn-voice'));
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('dict-learn-voice'));
+    });
+    expect(textarea.value).toBe('前文：Hello world.');
+
+    // User fixes a misrecognized word inside the voice-inserted range.
+    await act(async () => {
+      fireEvent.change(textarea, { target: { value: '前文：Hello Notion.' } });
+    });
+    expect(mocks.adviseDictionaryLearning).not.toHaveBeenCalled();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(VOICE_INPUT_DICTIONARY_LEARNING_TRACK_TIMEOUT_MS + 100);
+    });
+    expect(mocks.adviseDictionaryLearning).toHaveBeenCalledTimes(1);
+    expect(mocks.adviseDictionaryLearning).toHaveBeenCalledWith(expect.objectContaining({
+      source: 'in_app',
+      rawTranscriptText: 'hello world',
+      beforeText: 'Hello world.',
+      afterText: 'Hello Notion.',
+      context: expect.objectContaining({
+        selectionBefore: '前文：',
+        selectionAfter: '',
+      }),
+    }));
+  });
+
+  it('clears pending dictionary learning on undo, flushes on submit-clear, and drops on owner switch', async () => {
+    mocks.adviseDictionaryLearning.mockClear();
+    const { rerender, unmount } = render(
+      <Tooltip.Provider>
+        <FieldHarness id="dict-undo" />
+      </Tooltip.Provider>,
+    );
+
+    const textarea = screen.getByRole('textbox', { name: 'dict-undo' }) as HTMLTextAreaElement;
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('dict-undo-voice'));
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('dict-undo-voice'));
+    });
+    expect(textarea.value).toBe('Hello world.');
+
+    // Edit then undo back to baseline -> must not publish on timeout or clear.
+    await act(async () => {
+      fireEvent.change(textarea, { target: { value: 'Hello Notion.' } });
+    });
+    await act(async () => {
+      fireEvent.change(textarea, { target: { value: 'Hello world.' } });
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(VOICE_INPUT_DICTIONARY_LEARNING_TRACK_TIMEOUT_MS + 100);
+    });
+    expect(mocks.adviseDictionaryLearning).not.toHaveBeenCalled();
+
+    // Edit again after a fresh utterance and clear input (as when submitting a form) -> flushes immediately.
+    await act(async () => {
+      fireEvent.change(textarea, { target: { value: '' } });
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('dict-undo-voice'));
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('dict-undo-voice'));
+    });
+    expect(textarea.value).toBe('Hello world.');
+    await act(async () => {
+      fireEvent.change(textarea, { target: { value: 'Hello PostgreSQL.' } });
+    });
+    await act(async () => {
+      fireEvent.change(textarea, { target: { value: '' } });
+    });
+    expect(mocks.adviseDictionaryLearning).toHaveBeenCalledTimes(1);
+    expect(mocks.adviseDictionaryLearning).toHaveBeenCalledWith(expect.objectContaining({
+      beforeText: 'Hello world.',
+      afterText: 'Hello PostgreSQL.',
+    }));
+
+    // Owner switch before timeout must discard pending evidence without leaking across accounts.
+    mocks.adviseDictionaryLearning.mockClear();
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('dict-undo-voice'));
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('dict-undo-voice'));
+    });
+    await act(async () => {
+      fireEvent.change(textarea, { target: { value: 'Hello Cindy.' } });
+    });
+    mocks.owner.generation += 1;
+    rerender(
+      <Tooltip.Provider>
+        <FieldHarness id="dict-undo" />
+      </Tooltip.Provider>,
+    );
+    unmount();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(VOICE_INPUT_DICTIONARY_LEARNING_TRACK_TIMEOUT_MS + 100);
+    });
+    expect(mocks.adviseDictionaryLearning).not.toHaveBeenCalled();
+  });
+
+  it('retains failed voiced audio and replays it via one-click retry without reopening the mic', async () => {
+    voiceApi.stop.mockImplementationOnce(async () => {
+      emit({ type: 'error', runId: 'run-1', message: 'ASR timeout' });
+      emit({ type: 'state', runId: 'run-1', state: 'error' });
+      return { ok: false, error: 'ASR timeout' };
+    });
+
+    render(
+      <Tooltip.Provider>
+        <FieldHarness id="retry-field" />
+      </Tooltip.Provider>,
+    );
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('retry-field-voice'));
+    });
+    expect(mocks.captureStarts).toBe(1);
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('retry-field-voice'));
+    });
+    expect(screen.getByText('ASR timeout')).toBeTruthy();
+    const retryButton = screen.getByRole('button', { name: 'voiceInputOverlay.retryRecognition' });
+    expect(retryButton).toBeTruthy();
+
+    await act(async () => {
+      fireEvent.click(retryButton);
+    });
+    expect(mocks.captureStarts).toBe(1);
+    expect(voiceApi.start).toHaveBeenCalledTimes(2);
+    expect(voiceApi.appendAudio).toHaveBeenCalled();
+    expect(voiceApi.drainAudioQueue).toHaveBeenCalled();
+    expect((screen.getByRole('textbox', { name: 'retry-field' }) as HTMLTextAreaElement).value).toBe('Hello world.');
+    expect(screen.queryByRole('button', { name: 'voiceInputOverlay.retryRecognition' })).toBeNull();
+  });
+
+  it('does not retain failed audio on silent takes or explicit cancel', async () => {
+    mocks.captureVoiced = false;
+    voiceApi.start.mockResolvedValueOnce({ ok: false, error: 'connect failed' });
+
+    render(
+      <Tooltip.Provider>
+        <FieldHarness id="silent-field" />
+      </Tooltip.Provider>,
+    );
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('silent-field-voice'));
+    });
+    expect(screen.getByText('connect failed')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'voiceInputOverlay.retryRecognition' })).toBeNull();
+
+    // Explicit cancel on a voiced recording must not leave retry audio behind.
+    mocks.captureVoiced = true;
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('silent-field-voice'));
+    });
+    await act(async () => {
+      fireEvent.keyDown(window, { key: 'Escape' });
+    });
+    expect(screen.queryByRole('button', { name: 'voiceInputOverlay.retryRecognition' })).toBeNull();
   });
 });

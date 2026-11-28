@@ -4,7 +4,7 @@ export default {
   name: 'feishu-connection',
   entry: './fixture.tsx',
   viewport: { width: 660, height: 620 },
-  real: 'FeishuBotSection, useFeishuBot, ImChannelSettingsCard, ErrorNotice, Button and translated recovery text',
+  real: 'FeishuBotSettings, useFeishuBot, settings rows, ErrorNotice, Button and translated recovery text',
   notCovered:
     'Live Feishu network, credential writes and model/notification settings; transport recovery has targeted unit tests',
   stubs: {
@@ -49,6 +49,7 @@ export default {
     await page.locator('[data-feishu-connection-card]').waitFor();
   },
   async check(page, ui) {
+    // 设置 → IM 机器人 → 飞书 子页的连接卡: 一行身份 + 状态, 出错时下面是原因与详情, 末行解绑。
     const card = page.locator('[data-feishu-connection-card]');
     const reconnect = card.getByRole('button', {
       name: await ui.t('settings.feishuBot.connected.reconnect', {
@@ -65,7 +66,6 @@ export default {
       credentials: 'credentialsErrorNote',
       unknown: 'errorNote',
       conflict: 'conflictNote',
-      reconnecting: 'reconnectingNote',
     };
     if (notes[ui.case])
       assert.ok(
@@ -73,6 +73,8 @@ export default {
           .getByText(await ui.t(`settings.feishuBot.saved.${notes[ui.case]}`), { exact: true })
           .isVisible(),
       );
+    if (ui.case === 'reconnecting')
+      assert.ok(await card.getByText(await ui.t('settings.feishuBot.status.reconnecting')).isVisible());
     if (ui.data.error) {
       const details = card.getByRole('button', {
         name: await ui.t('chat.errorBanner.networkShowRaw'),
@@ -88,33 +90,12 @@ export default {
         botAppId: 'cli_example1234567890',
         ownerOpenId: 'ou_example1234567890',
       });
-      await card
-        .getByText(
-          await ui.t('settings.feishuBot.connected.heading', {
-            service: await ui.t('settings.feishuBot.services.feishu'),
-          }),
-          { exact: true },
-        )
-        .waitFor();
+      await card.getByText(await ui.t('settings.feishuBot.status.connected')).waitFor();
       assert.equal(await card.locator('pre').count(), 0);
       await ui.capture('recovered');
     }
     await reconnect.click();
     assert.ok(await reconnect.isDisabled());
-    assert.ok(
-      await page
-        .getByRole('status', {
-          name: await ui.t('settings.feishuBot.statusAria', {
-            status: await ui.t('settings.feishuBot.status.connecting'),
-          }),
-          exact: true,
-        })
-        .isVisible(),
-    );
-    assert.ok(
-      await card
-        .getByText(await ui.t('settings.feishuBot.status.connecting'), { exact: true })
-        .isVisible(),
-    );
+    assert.ok(await card.getByText(await ui.t('settings.feishuBot.status.connecting')).isVisible());
   },
 };

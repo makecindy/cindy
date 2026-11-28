@@ -57,10 +57,10 @@ export default {
     saved: { about: 'Saved changes toast and persistent menu entry leave the controls aligned' },
   },
   async ready(page) {
-    await page.getByTestId('create-agent-branch-chip').filter({ hasText: 'main' }).waitFor();
+    await page.getByTestId('create-agent-branch-name').filter({ hasText: 'main' }).waitFor();
   },
   async check(page, ui) {
-    assert.equal(await page.getByTestId('create-agent-branch-chip').innerText(), 'main');
+    assert.equal(await page.getByTestId('create-agent-branch-name').innerText(), 'main');
     assert.equal(
       await page
         .getByTestId('create-agent-branch-worktree')
@@ -81,7 +81,7 @@ export default {
           x: box.x,
           y: box.y,
           height: box.height,
-          ...(ui.case === 'switching' || ui.case === 'sync-off' ? { width: box.width } : {}),
+          ...(ui.case === 'switching' ? { width: box.width } : {}),
         };
       }
       return result;
@@ -89,50 +89,31 @@ export default {
     const before = await geometry();
     await ui.capture('before-feedback');
     if (ui.case === 'default-source') {
+      await page.getByTestId('create-agent-branch-chip').click();
       await page.getByTestId('create-agent-worktree-chip').click();
       await page
-        .getByTestId('create-agent-branch-chip')
+        .getByTestId('create-agent-branch-name')
         .filter({ hasText: 'origin/main' })
         .waitFor();
-      assert.equal(await page.getByRole('checkbox').isChecked(), true);
+      assert.equal(await page.getByRole('switch').getAttribute('aria-checked'), 'true');
       assert.equal(await page.locator('[data-toast-id]').count(), 0);
       return;
     }
     if (ui.case === 'sync-off') {
-      const refresh = page.getByRole('button', {
-        name: await ui.t('newChat.branchSync.action', {
-          branch: 'main',
-          remote: 'origin',
-          remoteBranch: 'main',
-        }),
-      });
+      await page.getByTestId('create-agent-branch-chip').click();
+      const refresh = page.getByTestId('workspace-sync-header-btn');
       await refresh.waitFor();
       assert.equal(await refresh.isDisabled(), false);
       await ui.capture('unchecked-refresh');
       await page.getByTestId('create-agent-worktree-chip').click();
-      await page
-        .getByRole('button', {
-          name: await ui.t('newChat.branchSync.action', {
-            branch: 'main',
-            remote: 'origin',
-            remoteBranch: 'main',
-          }),
-        })
-        .waitFor();
-      const after = await geometry();
-      assert.deepEqual(after, before, 'Toggling worktree must not hide refresh or resize the row');
+      await page.getByTestId('workspace-sync-header-btn').waitFor();
       await ui.capture('checked-refresh');
       return;
     }
     if (ui.case === 'checkbox-tooltip') {
-      await page.getByTestId('create-agent-worktree-chip').hover();
-      const tooltip = page.getByRole('tooltip');
-      await tooltip.waitFor();
-      assert.equal(await tooltip.innerText(), await ui.t('newChat.worktree.chipTooltip'));
-      const box = await tooltip.boundingBox();
-      assert.ok(
-        box.x >= 0 && box.x + box.width <= (await page.evaluate(() => globalThis.innerWidth)),
-      );
+      await page.getByTestId('create-agent-branch-chip').click();
+      await page.getByText(await ui.t('newChat.workspaceCapsule.worktreeTitle')).waitFor();
+      await page.getByText(await ui.t('newChat.workspaceCapsule.worktreeOffDesc')).waitFor();
       return;
     }
     await page.getByTestId('create-agent-branch-chip').click();
@@ -232,11 +213,11 @@ export default {
         await feedback.innerText(),
         await ui.t('newChat.checkout.errors.occupied', { branch: 'release' }),
       );
-      assert.equal(await page.getByTestId('create-agent-branch-chip').innerText(), 'main');
+      assert.equal(await page.getByTestId('create-agent-branch-name').innerText(), 'main');
     } else if (ui.case === 'switching') {
       await page.getByRole('option', { name: 'feature', exact: true }).click();
       await page.locator('[data-testid="create-agent-branch-chip"][aria-busy="true"]').waitFor();
-      assert.equal(await page.getByTestId('create-agent-branch-chip').innerText(), 'main');
+      assert.equal(await page.getByTestId('create-agent-branch-name').innerText(), 'main');
       assert.equal(
         await page.getByTestId('create-agent-branch-chip').getAttribute('aria-disabled'),
         'true',
@@ -248,7 +229,7 @@ export default {
       assert.match(await feedback.innerText(), /private\/collision/);
       assert.match(await feedback.innerText(), /feature/);
       assert.equal(await page.getByRole('dialog').count(), 0);
-      assert.equal(await page.getByTestId('create-agent-branch-chip').innerText(), 'main');
+      assert.equal(await page.getByTestId('create-agent-branch-name').innerText(), 'main');
     } else if (['success', 'saved'].includes(ui.case)) {
       await page.getByRole('option', { name: 'feature', exact: true }).click();
       await page
