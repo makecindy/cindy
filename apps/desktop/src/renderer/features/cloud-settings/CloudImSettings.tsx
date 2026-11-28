@@ -323,6 +323,7 @@ export function CloudImSettings({
                         modelGroup: selection.id,
                       });
                     },
+                    readDevices: deviceGroups.read,
                   },
                 } : {})}
                 configurationEnabled={false}

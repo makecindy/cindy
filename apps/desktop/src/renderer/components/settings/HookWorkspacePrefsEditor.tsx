@@ -521,7 +521,7 @@ export function WorkspacePrefsEditor({
                 lastUnifiedSelectionRef.current = null;
                 if (last) void state.applyProviderSource(alias, last.providerId, last.agentDeviceId, selection.id);
               },
-              ...(targetDeviceId ? {} : { onManage: () => { window.location.hash = '#/settings?tab=model-groups'; } }),
+              ...(targetDeviceId ? { readDevices: remoteGroups.read } : { onManage: () => { window.location.hash = '#/settings?tab=model-groups'; } }),
             },
           } : {})}
           onUnifiedSelect={({ engine, modelId, providerId, effort, agentDevice }) => {

@@ -3136,9 +3136,9 @@ function CCAgentSessionContent({
             switchTaskByModelGroup(selection, context),
         }),
         // 管理入口只在本机：另一台电脑的模式在那台上改。
-        ...(modelGroupsTaskDeviceId ? {} : { onManage: () => navigate('/settings?tab=model-groups') }),
+        ...(modelGroupsTaskDeviceId ? { readDevices: deviceTaskModelGroups.read } : { onManage: () => navigate('/settings?tab=model-groups') }),
       }
-    : undefined), [modelGroupsInTask, modelGroupsConfig, effectiveManagedBinding, detachTaskModelGroup, switchTaskByModelGroup, session?.remoteHostId, navigate, modelGroupsTaskDeviceId]);
+    : undefined), [modelGroupsInTask, modelGroupsConfig, effectiveManagedBinding, detachTaskModelGroup, switchTaskByModelGroup, session?.remoteHostId, navigate, modelGroupsTaskDeviceId, deviceTaskModelGroups.read]);
   // 本地隐藏态:点主按钮后立即隐藏,不等新消息入流(视觉连续性,规则 7)。
   // 「忽略/关闭」走 store 的乐观 errorDismissed 更新,无需本地态。
   // 按错误行 clientId 归属(不是 sessionId,review P2):续跑后同一会话再次以

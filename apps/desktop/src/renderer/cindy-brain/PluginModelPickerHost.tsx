@@ -396,6 +396,7 @@ export function PluginModelPickerDialog({
                 onAttach: (selection: ModelGroupSelection) => {
                   setRoute((current) => (current && current.agentKind !== 'acp' ? { ...current, modelGroup: selection.id } : current));
                 },
+                ...(deviceId ? { readDevices: remoteGroups.read } : {}),
               },
             } : {})}
             onModelChange={() => false}

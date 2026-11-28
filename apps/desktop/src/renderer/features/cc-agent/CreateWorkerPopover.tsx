@@ -415,6 +415,7 @@ export function CreateWorkerPopover({
             setModelGroup(selection.id);
           },
         }),
+        ...(workerHostDeviceId ? { readDevices: remoteModelGroups.read } : {}),
       }
     : undefined;
   const activeModels = useMemo(() => {

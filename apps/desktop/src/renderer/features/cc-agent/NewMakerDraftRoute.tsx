@@ -26,7 +26,7 @@ import {
 } from '@/lib/pluginEngineSelection';
 import { bindModelGroupSession, buildModelGroupRouteNote, commitModelGroupDecision, modelGroupLocationNameFrom, useModelGroups, writeModelGroupRouteNote } from '../model-groups/modelGroupsClient';
 import { modelGroupOwnerDevice, resolveDraftModelGroup } from '../model-groups/draftModelGroupRouting';
-import { implicitSourceRouteSelection } from '../model-groups/sourceRouteProviders';
+import { implicitSourceRouteSelection, userDefinedModelGroupRoutes } from '../model-groups/sourceRouteProviders';
 import { bindDeviceModelGroupSession, commitDeviceModelGroupDecision, useDeviceModelGroups, useDevicesModelGroups, writeDeviceModelGroupRouteNote } from '../model-groups/remoteModelGroups';
 import { findModelGroupRoute, MODEL_GROUPS_DEFAULTS, type ModelGroupResolvedRoute, type ModelGroupSelection } from '../../../shared/modelGroups';
 import { isPluginEngineEffort, isPluginEnginePermissionModeId } from '../../../shared/pluginEngines';
@@ -1594,9 +1594,9 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
   }, [rememberedModelGroupDeviceId, readDevicesModelGroups]);
   const modelGroupDevices = useMemo(
     () => modelGroupDeviceIds.flatMap((deviceId) => {
-      const config = devicesModelGroups.get(deviceId)?.config;
-      return config && config.routes.length > 0
-        ? [{ deviceId, name: deviceDisplayName(deviceId, undefined, selectableDevices), config }]
+      const routes = userDefinedModelGroupRoutes(devicesModelGroups.get(deviceId)?.config);
+      return routes.length > 0
+        ? [{ deviceId, name: deviceDisplayName(deviceId, undefined, selectableDevices), config: { routes } }]
         : [];
     }),
     [modelGroupDeviceIds, devicesModelGroups, selectableDevices],
@@ -3016,10 +3016,14 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
           // 「管理模型组」只在本机：另一台电脑的模式在那台上改。
           ...(isDeviceLinkDraft ? {} : { onManage: () => navigate('/settings?tab=model-groups') }),
           ...(modelGroupDevices.length > 0 ? { devices: modelGroupDevices } : {}),
-          ...(modelGroupDeviceIds.length > 0 ? { readDevices: readDevicesModelGroups } : {}),
+          ...(isDeviceLinkDraft
+            ? { readDevices: deviceModelGroups.read }
+            : modelGroupDeviceIds.length > 0
+              ? { readDevices: readDevicesModelGroups }
+              : {}),
         }
       : undefined,
-    [modelGroupsAllowed, modelGroupsConfig, effectiveDisplayModelGroup, navigate, isDeviceLinkDraft, effectiveRemoteHostId, modelGroupDevices, modelGroupDeviceIds, readDevicesModelGroups, setAlternateModel, forgetRemoteAlternateDraftModel],
+    [modelGroupsAllowed, modelGroupsConfig, effectiveDisplayModelGroup, navigate, isDeviceLinkDraft, effectiveRemoteHostId, modelGroupDevices, modelGroupDeviceIds, deviceModelGroups.read, readDevicesModelGroups, setAlternateModel, forgetRemoteAlternateDraftModel],
   );
 
   // 选中来源与型号之后的**档位**:按目标目录里该型号的档位表解析 —— 用户上次在这台设备
