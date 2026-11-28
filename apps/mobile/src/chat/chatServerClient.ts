@@ -8,7 +8,7 @@ import { parseChatInvitationShareId, parseChatInvitationToken } from '@cindy/dev
 import type { ChatInviteShares } from './chatInviteShare';
 import { createConversationListState } from '@cindy/maker-shared/chatConversationList';
 import type { ChatHistory, ChatHistoryBatch } from '@cindy/maker-shared/chat-history';
-import { isBotGroupAssistantDeviceWait, isBotGroupAssistantNoticeHidden, isBotGroupAssistantWaitPrivate, type BotGroupAssistantDeviceWait, BOT_GROUP_ASSISTANT_AVATAR, readBotGroupAssistantNotice, groupAssistantNoticeCode, readBotGroupCapabilityNotice, botGroupMessageSummaryText, botGroupQuoteFromMessage, buildBotGroupQuoteCard, readBotGroupExecutionFailure, readBotGroupLiveTaskCard, readBotGroupQuote, readBotGroupQuoteCard, readBotGroupTaskCard, readImportedBotGroupRuntimeFailureCode, type BotGroupAttachment, type BotGroupMemberView, type BotGroupMessageView, type BotGroupRemoteChatData } from '@cindy/maker-shared/botGroupChat';
+import { isBotGroupAssistantDeviceWait, isBotGroupAssistantNoticeHidden, isBotGroupAssistantWaitPrivate, type BotGroupAssistantDeviceWait, BOT_GROUP_ASSISTANT_AVATAR, readBotGroupAssistantNotice, groupAssistantNoticeCode, groupAssistantNoticeReason, readBotGroupCapabilityNotice, botGroupMessageSummaryText, botGroupQuoteFromMessage, buildBotGroupQuoteCard, readBotGroupExecutionFailure, readBotGroupLiveTaskCard, readBotGroupQuote, readBotGroupQuoteCard, readBotGroupTaskCard, readImportedBotGroupRuntimeFailureCode, type BotGroupAttachment, type BotGroupMemberView, type BotGroupMessageView, type BotGroupRemoteChatData } from '@cindy/maker-shared/botGroupChat';
 import { chatGroupMemberName as memberName, chatGroupOwnerName, botGroupActivityAt, latestBotGroupMessage, botGroupExecutionFailureBatches, projectBotGroupExecutionFailures, extractBotGroupThreadCodeRefsFromMessages, describeBotGroupThreadRootFallback } from '@cindy/maker-shared/botGroupPresentation';
 import type { HostedRemoteCollectionItem } from '@/device-link/remoteResources';
 // The app's `@/i18n` sets up this default instance; importing it here would pull React bindings into a plain client.
@@ -422,7 +422,9 @@ export function chatGroupView(serverPage: ChatPage, selfId: string, actors: read
     .sort((a, b) => BigInt(chatCursor(a.seq)) < BigInt(chatCursor(b.seq)) ? -1 : BigInt(a.seq) > BigInt(b.seq) ? 1 : 0);
   const messages: BotGroupMessageView[] = sorted.map((message, index) => {
     const assistantNotice = page.snapshot.members.some(candidate => candidate.id === message.authorId && candidate.assistant) ? readBotGroupAssistantNotice(message) : null;
-    const capabilityNoticeCode = assistantNotice ? groupAssistantNoticeCode(assistantNotice.reason) : readBotGroupCapabilityNotice(message);
+    // Servers that predate per-member binding omit `reason`; the room's own binding decides.
+    const noticeReason = assistantNotice ? groupAssistantNoticeReason(assistantNotice, room.assistant_device_id ?? null) : undefined;
+    const capabilityNoticeCode = assistantNotice ? groupAssistantNoticeCode(noticeReason) : readBotGroupCapabilityNotice(message);
     const requester = assistantNotice && page.snapshot.members.find(candidate => candidate.id === assistantNotice.requesterId);
     const runtimeFailureCode = readImportedBotGroupRuntimeFailureCode(message);
     const legacy = runtimeFailureCode ? message.content.find(block => block.type === 'card' && block.namespace === 'cindy.local-history' && block.schemaRevision === 1)?.data : undefined;
@@ -437,7 +439,7 @@ export function chatGroupView(serverPage: ChatPage, selfId: string, actors: read
     const task = message.origin === 'system' || planCard ? null : taskCardOf(message);
     const process = !message.deleted && message.origin !== 'system' && message.author.kind === 'bot' ? message.content.map(readBotGroupProcessCard).find(Boolean) : null;
     return { id: message.id, sequence: index + 1, serverSequence: chatCursor(message.seq), kind: capabilityNoticeCode ? 'notice' : planCard ? 'plan' : message.origin === 'system' ? 'notice' : 'message', ...(capabilityNoticeCode ? { capabilityNoticeCode } : {}),
-      ...(assistantNotice?.reason === 'unbound' && assistantNotice.requesterId === selfId && page.snapshot.assistantComputers && !room.assistant_device_id ? { canChooseAssistantDevice: true as const } : {}),
+      ...(noticeReason === 'unbound' && assistantNotice?.requesterId === selfId && page.snapshot.assistantComputers && !room.assistant_device_id ? { canChooseAssistantDevice: true as const } : {}),
       ...(message.maskAttribution ? { maskAttribution: message.maskAttribution } : {}),
       ...(task ? { task } : {}), ...(process ? { process } : {}), threadRootId: message.threadRootId, replyCount: message.replyCount, reactions: message.reactions,
       authorKind: message.origin === 'system' ? 'system' : message.author.kind === 'human' ? 'user' : 'bot',
