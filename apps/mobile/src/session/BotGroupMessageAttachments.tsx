@@ -15,6 +15,7 @@ import {
   setCachedServerMedia,
   subscribeChatServerMediaInvalidation,
 } from "@/chat/chatServerMediaCache";
+import type { ChatServerMedia, ResolveChatServerMedia } from "@/chat/chatServerClient";
 import { RemoteAttachmentPreview } from "./RemoteAttachmentPreview";
 import { Text } from "@/components/AppText";
 import { spacing, textStyles, useTheme } from "@/theme";
@@ -46,7 +47,7 @@ import type { ResolveRemoteMediaFn } from "./remoteMedia";
 
 /**
  * A group attachment in the shape session messages render; an image without an address is a file.
- * An authorized HTTPS image loads directly; `cindy-media://` and older media addresses are fetched from the computer.
+ * An authorized HTTPS image or a locally cached copy loads directly; `cindy-media://` and older media addresses are fetched from the computer.
  */
 export function botGroupAttachmentForDisplay(
   attachment: BotGroupAttachment,
@@ -59,7 +60,8 @@ export function botGroupAttachmentForDisplay(
         uri: attachment.url,
         ...(attachment.mimeType ? { mimeType: attachment.mimeType } : {}),
         ...(cacheKey ? { cacheKey } : {}),
-        previewable: isPayloadDirectPreviewableUrl(attachment.url),
+        // `file://` is a copy this phone already cached for a server image (see cachedServerImage).
+        previewable: attachment.url.startsWith("file://") || isPayloadDirectPreviewableUrl(attachment.url),
       }
     : {
         kind: "file",
@@ -106,10 +108,7 @@ export function BotGroupMessageAttachments({
   attachments: readonly BotGroupAttachment[];
   align: "left" | "right";
   onResolveRemoteMedia: ResolveRemoteMediaFn;
-  resolveServerMedia?: (
-    id: string,
-    signal?: AbortSignal,
-  ) => Promise<BotGroupAttachment>;
+  resolveServerMedia?: ResolveChatServerMedia;
   /** Cloud transcripts keep the tap-only contract in cloud-companions.md §3.1. */
   previewServerImages?: boolean;
 }) {
@@ -308,6 +307,26 @@ function PendingAttachment({
   );
 }
 
+// The timeline thumbnail and the original are different bytes; keep them apart in the image cache.
+// No ":" — per-room cleanup (isChatServerMediaCacheKeyForRoom) splits keys on it.
+const CHAT_SERVER_THUMBNAIL_CACHE_SUFFIX = "~thumbnail";
+
+/**
+ * Bytes an earlier visit or launch already left in the image cache for this attachment, so the
+ * timeline shows them at once without an authorization round trip per image. The image cache is
+ * wiped on logout, account switch and lost room access (`registerChatServerNativeImageCacheClearer`),
+ * and keys carry the account and room epoch, so a hit never crosses those boundaries.
+ */
+async function cachedServerImage(baseKey: string): Promise<{ uri: string; thumbnail: boolean } | null> {
+  const ExpoImage = await import("expo-image").then((m) => m.Image).catch(() => null);
+  if (!ExpoImage) return null;
+  for (const [key, thumbnail] of [[baseKey + CHAT_SERVER_THUMBNAIL_CACHE_SUFFIX, true], [baseKey, false]] as const) {
+    const path = await Promise.resolve(ExpoImage.getCachePathAsync?.(key)).catch(() => null);
+    if (path) return { uri: path.startsWith("file://") ? path : `file://${path}`, thumbnail };
+  }
+  return null;
+}
+
 // Bound passive authorization across mounted messages; no account data or URLs are cached here.
 type PreviewJob = {
   run(signal: AbortSignal): Promise<void>;
@@ -375,16 +394,16 @@ function ServerAttachments({
   align: "left" | "right";
   runs: ReturnType<typeof botGroupAttachmentRuns>;
   layout: ReturnType<typeof buildMessageContentLayout>;
-  resolve(id: string, signal?: AbortSignal): Promise<BotGroupAttachment>;
+  resolve: ResolveChatServerMedia;
 }) {
   const { t } = useTranslation();
   const { colors } = useTheme();
   const canUseCache = previewServerImages && !!roomId && !!mediaOwner;
   const previewExpiresAtRef = useRef<Record<string, number>>({});
-  const [previews, setPreviews] = useState<Record<string, BotGroupAttachment>>(
+  const [previews, setPreviews] = useState<Record<string, ChatServerMedia>>(
     () => {
       if (!visible || !canUseCache || !roomId || !mediaOwner) return {};
-      const initial: Record<string, BotGroupAttachment> = {};
+      const initial: Record<string, ChatServerMedia> = {};
       for (const run of runs) {
         if (run.kind !== "ready") continue;
         for (const item of run.attachments) {
@@ -406,7 +425,10 @@ function ServerAttachments({
   );
   const failedPreviewIds = useRef(new Set<string>());
   // Keep the failed preview identity across retries so a concurrent renewal can repair it.
-  const retriedPreviews = useRef(new Map<string, BotGroupAttachment>());
+  const retriedPreviews = useRef(new Map<string, ChatServerMedia>());
+  // A thumbnail that failed to render (e.g. storage without image processing) is replaced by the
+  // original on the retry, so a preview never ends up worse than before thumbnails existed.
+  const originalPreviewIds = useRef(new Set<string>());
   const retryPreview = useRef<((id: string) => void) | null>(null);
   const [previewVersions, setPreviewVersions] = useState<
     Record<string, number>
@@ -420,11 +442,22 @@ function ServerAttachments({
       run.kind === "ready" ? run.attachments.map((item) => item.id) : [],
     ),
   );
+  const imageIds = JSON.stringify(
+    runs.flatMap((run) =>
+      run.kind === "ready"
+        ? run.attachments.filter((item) => item.category === "image").map((item) => item.id)
+        : [],
+    ),
+  );
+  // Previews shown from the local image cache: a later decode failure re-authorizes the same
+  // rendition instead of treating it as a broken thumbnail.
+  const localPreviewIds = useRef(new Set<string>());
   useEffect(() => {
     if (!canUseCache || !roomId) return;
     return subscribeChatServerMediaInvalidation((invalidatedRoomId) => {
       if (invalidatedRoomId !== null && invalidatedRoomId !== roomId) return;
       previewExpiresAtRef.current = {};
+      localPreviewIds.current.clear();
       failedPreviewIds.current.clear();
       retriedPreviews.current.clear();
       previewsRef.current = {};
@@ -450,7 +483,8 @@ function ServerAttachments({
           const startEpoch =
             canUseCache && roomId ? chatServerMediaRoomEpoch(roomId) : 0;
           try {
-            const value = await resolveRef.current(id, signal);
+            const value = await resolveRef.current(id, signal,
+              originalPreviewIds.current.has(id) ? undefined : { thumbnail: true });
             const preview =
               value.category === "image" ? value : { ...value, url: null };
             const epochValid =
@@ -495,7 +529,7 @@ function ServerAttachments({
       );
     };
     retryPreview.current = schedule;
-    const hydrated: Record<string, BotGroupAttachment> = {};
+    const hydrated: Record<string, ChatServerMedia> = {};
     let hydratedAny = false;
     const toSchedule: string[] = [];
     for (const id of JSON.parse(previewIds) as string[]) {
@@ -524,15 +558,37 @@ function ServerAttachments({
       previewsRef.current = { ...previewsRef.current, ...hydrated };
       setPreviews(previewsRef.current);
     }
-    for (const id of toSchedule) schedule(id);
+    const images = new Set(JSON.parse(imageIds) as string[]);
+    for (const id of toSchedule) {
+      if (!images.has(id) || failedPreviewIds.current.has(id) || !canUseCache || !roomId || !mediaOwner) {
+        schedule(id);
+        continue;
+      }
+      const baseKey = chatServerMediaCacheKey(mediaOwner, roomId, id);
+      const item = runs.flatMap((run) => (run.kind === "ready" ? run.attachments : [])).find((a) => a.id === id);
+      void cachedServerImage(baseKey).then((local) => {
+        if (cancelled) return;
+        if (!local || !item || chatServerMediaCacheKey(mediaOwner, roomId, id) !== baseKey) {
+          schedule(id);
+          return;
+        }
+        localPreviewIds.current.add(id);
+        previewExpiresAtRef.current[id] = Number.POSITIVE_INFINITY;
+        previewsRef.current = {
+          ...previewsRef.current,
+          [id]: { ...item, url: local.uri, ...(local.thumbnail ? { thumbnail: true as const } : {}) },
+        };
+        setPreviews(previewsRef.current);
+      });
+    }
     return () => {
       cancelled = true;
       retryPreview.current = null;
       cancelJobs.forEach((cancel) => cancel());
     };
-  }, [previewIds, visible, canUseCache, roomId, mediaOwner]);
+  }, [previewIds, imageIds, visible, canUseCache, roomId, mediaOwner]);
   const displayRuns = botGroupAttachmentRuns(
-    runs.flatMap((run) =>
+    runs.flatMap((run): BotGroupAttachment[] =>
       run.kind === "pending"
         ? [run.attachment]
         : run.attachments.map(
@@ -573,7 +629,8 @@ function ServerAttachments({
                     mediaOwner &&
                     item.category === "image" &&
                     item.url
-                    ? chatServerMediaCacheKey(mediaOwner, roomId, item.id)
+                    ? chatServerMediaCacheKey(mediaOwner, roomId, item.id) +
+                      (previews[item.id]?.thumbnail ? CHAT_SERVER_THUMBNAIL_CACHE_SUFFIX : "")
                     : undefined,
                 ),
               )}
@@ -598,6 +655,9 @@ function ServerAttachments({
                 if (!currentPreview || currentPreview.url !== attachment.url) return;
                 const alreadyRetried = retriedPreviews.current.has(attachment.id);
                 retriedPreviews.current.set(attachment.id, currentPreview);
+                // A cache file evicted since lookup is re-authorized as the same rendition.
+                const wasLocal = localPreviewIds.current.delete(attachment.id);
+                if (currentPreview.thumbnail && !wasLocal) originalPreviewIds.current.add(attachment.id);
                 if (alreadyRetried) return;
                 if (canUseCache && roomId && mediaOwner) {
                   invalidateCachedServerMedia(
@@ -635,7 +695,14 @@ function ServerAttachments({
               !canUseCache ||
               !roomId ||
               chatServerMediaRoomEpoch(roomId) === startEpoch;
-            if (previewServerImages && value.category === "image" && epochValid) {
+            const hadFailure =
+              failedPreviewIds.current.has(filePreview.id) ||
+              retriedPreviews.current.has(filePreview.id);
+            // Opening reads the original for the viewer; a healthy timeline thumbnail stays, so
+            // the list neither re-downloads the full image nor swaps its cached rendition.
+            const keepThumbnail =
+              previewsRef.current[filePreview.id]?.thumbnail === true && !hadFailure;
+            if (previewServerImages && value.category === "image" && epochValid && !keepThumbnail) {
               if (canUseCache && roomId && mediaOwner) {
                 const nextExpiresAt = setCachedServerMedia(
                   mediaOwner,
@@ -648,9 +715,6 @@ function ServerAttachments({
                   delete previewExpiresAtRef.current[filePreview.id];
                 }
               }
-              const hadFailure =
-                failedPreviewIds.current.has(filePreview.id) ||
-                retriedPreviews.current.has(filePreview.id);
               previewsRef.current = {
                 ...previewsRef.current,
                 [filePreview.id]: value,

@@ -18,7 +18,13 @@ import { mobileMarkdownPreviewText } from '@/session/messageMarkdown';
 import { buildBotGroupThreadShareCard, botGroupThreadShareOperationId, readBotGroupThreadShareCard, type BotGroupThreadShareView, type BotGroupThreadSummary } from '@cindy/maker-shared/botGroupChat';
 import type { RemoteSerializedAttachment } from '@/session/types';
 import type { BotGroupPlanView } from '@cindy/maker-shared/botGroupChat';
+import { noteChatServerMediaAuthorized } from './chatServerMediaCache';
 
+
+/** A Chat Server attachment read; `thumbnail` marks the bounded timeline rendition of an image. */
+export type ChatServerMedia = BotGroupAttachment & { thumbnail?: true };
+export interface ChatServerMediaOptions { thumbnail?: boolean }
+export type ResolveChatServerMedia = (id: string, signal?: AbortSignal, options?: ChatServerMediaOptions) => Promise<ChatServerMedia>;
 export interface MobileChatInviteMemberAvatar { avatar: string | null; initial: string }
 
 /** Preview-only fields are optional for older Chat Servers. Never infer count from an avatar. */
@@ -1213,8 +1219,12 @@ export function createChatServerClient(request: ChatRequest, personalList = crea
     },
     async snapshot(roomId: string, metadata = false): Promise<ChatSnapshot> {
       const stored = await cache();
-      if (stored) { stored.invalidate(roomId, metadata); return stored.snapshot<ChatSnapshot>(chatId(roomId)); }
-      return request(`/conversations/${chatId(roomId)}/snapshot`);
+      let value: ChatSnapshot;
+      if (stored) { stored.invalidate(roomId, metadata); value = await stored.snapshot<ChatSnapshot>(chatId(roomId)); }
+      else value = await request(`/conversations/${chatId(roomId)}/snapshot`);
+      // A readable room may put images (emoji, previews) in the image cache again.
+      noteChatServerMediaAuthorized(roomId);
+      return value;
     },
     async members(roomId: string): Promise<ChatMember[]> {
       const members = await request<ChatMember[]>(`/conversations/${chatId(roomId)}/members`);
@@ -1630,12 +1640,16 @@ export function createChatServerClient(request: ChatRequest, personalList = crea
       return { ...page, plans, messages: loaded, failures: executionFailures,
         before: messages.length === 100 ? chatCursor(messages.at(-1)!.seq) : null };
     },
-    async media(roomId: string, mediaId: string, signal?: AbortSignal): Promise<BotGroupAttachment> {
-      const media = await request<{ name: string; type: string; size: string | number; url: string }>(`/conversations/${chatId(roomId)}/media/${chatId(mediaId)}`, 'GET', undefined, undefined, signal);
+    async media(roomId: string, mediaId: string, signal?: AbortSignal, options?: ChatServerMediaOptions): Promise<ChatServerMedia> {
+      // Timeline previews ask for the server-rendered thumbnail; servers without it ignore the
+      // query and return the original, which then carries no `thumbnail` mark.
+      const query = options?.thumbnail ? '?variant=thumbnail' : '';
+      const media = await request<{ name: string; type: string; size: string | number; url: string; variant?: string }>(`/conversations/${chatId(roomId)}/media/${chatId(mediaId)}${query}`, 'GET', undefined, undefined, signal);
       const size = Number(media.size);
       if (!Number.isSafeInteger(size) || size < 0) throw new Error('INVALID_MEDIA_SIZE');
+      noteChatServerMediaAuthorized(roomId);
       return { id: mediaId, name: media.name, mimeType: media.type, size, category: media.type.startsWith('image/') ? 'image' : 'file',
-        url: chatHttpsUrl(media.url), path: null };
+        url: chatHttpsUrl(media.url), path: null, ...(options?.thumbnail && media.variant === 'thumbnail' ? { thumbnail: true as const } : {}) };
     },
     /** Enrich the already visible page without holding its first paint behind extra reads. */
     async hydrateThreads(roomId: string, page: ChatPage): Promise<ChatPage> {

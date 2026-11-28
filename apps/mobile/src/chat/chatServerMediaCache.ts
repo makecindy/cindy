@@ -67,6 +67,61 @@ function notifyInvalidation(roomId: string | null): void {
 }
 
 /**
+ * Rooms whose images were already wiped from the native image cache after access was lost.
+ * The image cache can only be cleared as a whole, and rooms that stay inaccessible are reported
+ * lost again on every refresh; wiping each time discarded every other group's images too, so
+ * reopening the app re-downloaded all of them. A room leaves this set as soon as any of its media
+ * is authorized again (new bytes may be cached), so a later loss still wipes.
+ * `null` until the persisted set is loaded; meanwhile every loss wipes, as before.
+ */
+let purgedRooms: Set<string> | null = null;
+const purgedBeforeLoad = new Set<string>();
+const PURGED_ROOMS_MAX = 500;
+let purgedRoomsSave: ((roomIds: string[]) => void) | null = null;
+
+function savePurgedRooms(): void {
+  if (!purgedRooms) return;
+  const ids = [...purgedRooms].slice(-PURGED_ROOMS_MAX);
+  try {
+    purgedRoomsSave?.(ids);
+  } catch {
+    /* Persistence is an optimization; a lost write only costs one extra wipe. */
+  }
+}
+
+const authorizedBeforeLoad = new Set<string>();
+/** Set when the whole image cache was wiped before the persisted marks loaded: they are stale. */
+let wipedBeforeLoad = false;
+/** Registers the device store for {@link purgedRooms} (see MessageLoadingImage). */
+export function registerChatServerPurgedRoomStore(
+  store: { load(): Promise<readonly string[]>; save(roomIds: string[]): void } | null,
+): void {
+  purgedRoomsSave = store?.save ?? null;
+  if (!store) return;
+  const settle = (ids: readonly string[]) => {
+    // Rooms read again while loading may already have new bytes cached: drop their mark.
+    const kept = wipedBeforeLoad ? [] : ids.filter((id) => !authorizedBeforeLoad.has(id));
+    purgedRooms = new Set([...kept, ...purgedBeforeLoad]);
+    purgedBeforeLoad.clear();
+    authorizedBeforeLoad.clear();
+    wipedBeforeLoad = false;
+    savePurgedRooms();
+  };
+  void store.load().then(settle, () => settle([]));
+}
+
+/** Any successful read or media authorization in a room may put its bytes in the image cache again. */
+export function noteChatServerMediaAuthorized(roomId: string): void {
+  if (!roomId) return;
+  if (!purgedRooms) {
+    purgedBeforeLoad.delete(roomId);
+    authorizedBeforeLoad.add(roomId);
+    return;
+  }
+  if (purgedRooms.delete(roomId)) savePurgedRooms();
+}
+
+/**
  * Registers the native `expo-image` cache clearer from a UI module so this
  * cache module stays free of React Native / Expo runtime imports.
  */
@@ -335,7 +390,15 @@ export function forgetChatServerMediaRoom(roomId: string): void {
     isChatServerMediaCacheKeyForRoom(key, roomId),
   );
   notifyInvalidation(roomId);
+  if (purgedRooms?.has(roomId)) return;
   clearNativeImageCachesBestEffort();
+  if (purgedRooms) {
+    purgedRooms.delete(roomId);
+    purgedRooms.add(roomId);
+    savePurgedRooms();
+  } else {
+    purgedBeforeLoad.add(roomId);
+  }
 }
 
 /**
@@ -354,6 +417,14 @@ export function clearChatServerMediaCache(
   notifyInvalidation(null);
   if (options.clearNativeImageCache) {
     clearNativeImageCachesBestEffort();
+    // The whole image cache is gone, so no room needs a mark; drop the previous account's ids.
+    purgedBeforeLoad.clear();
+    if (purgedRooms) {
+      purgedRooms.clear();
+      savePurgedRooms();
+    } else {
+      wipedBeforeLoad = true;
+    }
   }
 }
 
@@ -381,6 +452,11 @@ export const __testing = {
     globalEpoch = 0;
     activeCacheOwner = null;
     lastSignedInAccountKey = getMobileAuthOwner().accountKey;
+    purgedRooms = null;
+    purgedRoomsSave = null;
+    purgedBeforeLoad.clear();
+    authorizedBeforeLoad.clear();
+    wipedBeforeLoad = false;
     clearAttachmentIntrinsicSizes((key) =>
       key.startsWith(CHAT_SERVER_MEDIA_CACHE_KEY_PREFIX),
     );

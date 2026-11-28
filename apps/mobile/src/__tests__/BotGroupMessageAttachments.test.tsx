@@ -33,6 +33,8 @@ vi.mock('@/i18n/locales/ko', () => ({ default: {} }));
 // Keep the real group attachment, AttachmentStrip, MediaPreview and LegendList hooks.
 // Only native surfaces and unrelated viewers are replaced for Node rendering.
 const imageEvents = vi.hoisted(() => new Map<string, { onLoad: (event: unknown) => void; onError: () => void; onDisplay: () => void; transition: number }>());
+// expo-image disk cache contents by cacheKey (what an earlier launch left behind).
+const cachedImagePaths = vi.hoisted(() => new Map<string, string>());
 const nativeTextRoots = vi.hoisted(() => new Map<string, {
   selectable: boolean;
   onTextLayout?: (event: { nativeEvent: { lines: string[] } }) => void;
@@ -85,11 +87,11 @@ vi.mock('react-native-uitextview', async () => {
 });
 vi.mock('expo-image', async () => {
   const { createElement } = await import('react');
-  return { Image: ({ source, onLoad, onError, onDisplay, transition, style }: any) => {
+  return { Image: Object.assign(({ source, onLoad, onError, onDisplay, transition, style }: any) => {
     imageEvents.set(source.uri, { onLoad, onError, onDisplay, transition });
     const frame = Object.assign({}, ...[style].flat().filter(Boolean));
     return createElement('img', { src: source.uri, 'data-width': frame.width, 'data-height': frame.height });
-  } };
+  }, { getCachePathAsync: async (key: string) => cachedImagePaths.get(key) ?? null }) };
 });
 vi.mock('expo-router', () => ({ useRouter: () => ({ push: vi.fn() }), useFocusEffect: vi.fn(), useNavigation: () => ({ isFocused: () => true, addListener: () => () => {} }) }));
 vi.mock('@/device-link/DeviceLinkContext', () => ({
@@ -170,6 +172,7 @@ import { MessageLoadingImage } from '@/session/MessageLoadingImage';
 import { buildMessageContentLayout } from '@/session/messageContentLayout';
 import { MessageContentLongPressContext } from '@/session/messageContentLongPress';
 import { SelectionQuoteContext } from '@/session/selectionQuote';
+import { chatServerMediaCacheKey, resolveChatServerMediaOwner } from '@/chat/chatServerMediaCache';
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 let root: Root | undefined;
@@ -183,7 +186,7 @@ const resolveMedia = vi.fn<ResolveRemoteMediaFn>(async (_media, options) => ({
   ossKey: 'thumbnail', size: 10, expiresAt: '',
 }));
 
-beforeEach(() => { resolveMedia.mockClear(); imageEvents.clear(); nativeTextRoots.clear(); vi.mocked(openBrowserAsync).mockClear(); });
+beforeEach(() => { resolveMedia.mockClear(); imageEvents.clear(); cachedImagePaths.clear(); nativeTextRoots.clear(); vi.mocked(openBrowserAsync).mockClear(); });
 
 async function renderAttachment(messageId: string) {
   host = document.createElement('div');
@@ -315,6 +318,49 @@ describe('group image attachments outside LegendList (#5278)', () => {
 
 // #9650: group and cloud-companion rich answers render MarkdownBody in a plain ScrollView.
 // Before the fix, LegendList row state read a null list store and Android crashed on entry.
+// Direct-server group images: the timeline used to download each multi-MB original after a
+// per-image authorization, on every visit and launch.
+describe('direct-server group image previews', () => {
+  const photo = { id: 'photo', name: 'photo.jpg', category: 'image' as const, mimeType: 'image/jpeg', size: 4_000_000, url: null, path: null };
+  const original = { ...photo, url: 'https://example.invalid/signed/original' };
+  const thumbnail = { ...photo, mimeType: 'image/webp', url: 'https://example.invalid/signed/thumbnail', thumbnail: true as const };
+  // Each case uses its own room: the in-memory authorized-URL cache is per room and module-wide.
+  const renderServer = async (resolveServerMedia: any, roomId: string) => {
+    host = document.createElement('div');
+    document.body.append(host);
+    root = createRoot(host);
+    await act(async () => root!.render(createElement(BotGroupMessageAttachments, {
+      messageId: 'direct-photo', roomId, align: 'left', onResolveRemoteMedia: resolveMedia, resolveServerMedia, attachments: [photo],
+    })));
+    return host;
+  };
+
+  it('replaces a thumbnail that fails to render with the original instead of leaving a broken preview', async () => {
+    const resolveServerMedia = vi.fn(async (_id: string, _signal?: AbortSignal, options?: { thumbnail?: boolean }) => options?.thumbnail ? thumbnail : original);
+    const view = await renderServer(resolveServerMedia, 'room-thumbnail-fallback');
+    expect(resolveServerMedia).toHaveBeenCalledExactlyOnceWith('photo', expect.any(AbortSignal), { thumbnail: true });
+    expect(view.querySelector('img')?.getAttribute('src')).toBe(thumbnail.url);
+    await act(async () => imageEvents.get(thumbnail.url)!.onError());
+    expect(resolveServerMedia).toHaveBeenLastCalledWith('photo', expect.any(AbortSignal), undefined);
+    expect(view.querySelector('img')?.getAttribute('src')).toBe(original.url);
+  });
+
+  it('shows an image cached by an earlier launch without authorizing it again, then opens the original', async () => {
+    const owner = resolveChatServerMediaOwner(undefined, 1)!;
+    cachedImagePaths.set(`${chatServerMediaCacheKey(owner, 'room-relaunch', 'photo')}~thumbnail`, '/cache/expo-image/photo.webp');
+    const resolveServerMedia = vi.fn(async () => original);
+    const view = await renderServer(resolveServerMedia, 'room-relaunch');
+    await vi.waitFor(async () => {
+      await act(async () => undefined);
+      expect(view.querySelector('img')?.getAttribute('src')).toBe('file:///cache/expo-image/photo.webp');
+    });
+    expect(resolveServerMedia).not.toHaveBeenCalled();
+    await act(async () => view.querySelector<HTMLElement>('[data-testid="message.mediaPreviewButton"]')!.click());
+    expect(resolveServerMedia).toHaveBeenCalledExactlyOnceWith('photo', expect.any(AbortSignal));
+    expect(view.querySelector('[data-testid="lightbox"]')?.getAttribute('data-url')).toBe(original.url);
+  });
+});
+
 describe('rich answer bodies outside LegendList', () => {
   it('renders Markdown and lit file paths around a cindy-ui block without a list provider', async () => {
     host = document.createElement('div');

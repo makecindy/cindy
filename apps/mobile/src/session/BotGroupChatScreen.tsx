@@ -1,4 +1,5 @@
 import { useWallpaper, wallpaperRaisedFill } from '@/theme/wallpaper';
+import type { ResolveChatServerMedia } from '@/chat/chatServerClient';
 import { canStopBotGroupSpeaker } from '@cindy/maker-shared/botGroupChat';
 import { canMentionAllInBotGroup, interleaveBotGroupWork } from '@cindy/maker-shared/botGroupPresentation';
 import type { BotGroupWorkRow } from './BotGroupWorkArea';
@@ -1257,7 +1258,7 @@ export const BotGroupTimeline = memo(function BotGroupTimeline({
   identityFor: BotGroupIdentityLookup;
   /** Reads a picture attached to a message from the computer. */
   resolveMedia: ResolveRemoteMediaFn;
-  resolveServerMedia?: (id: string, signal?: AbortSignal) => Promise<BotGroupAttachment>;
+  resolveServerMedia?: ResolveChatServerMedia;
   loadOlder?: () => void;
   loadingOlder?: boolean;
   continuing: boolean;
@@ -1511,7 +1512,7 @@ function BotGroupTimelineItem({
   mentionLabels: readonly string[];
   mentionContext: BotGroupMentionContext;
   resolveMedia: ResolveRemoteMediaFn;
-  resolveServerMedia?: (id: string, signal?: AbortSignal) => Promise<BotGroupAttachment>;
+  resolveServerMedia?: ResolveChatServerMedia;
   canContinue: boolean;
   continuing: boolean;
   onContinue(): void;
