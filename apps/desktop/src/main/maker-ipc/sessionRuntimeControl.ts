@@ -616,6 +616,12 @@ export function clearSessionRuntimeControlState(sessionId: string): void {
   states.delete(sessionId);
 }
 
+/** /clear hides prior history but preserves the selected runtime and pending route. */
+export function clearSessionRuntimeRouteChange(sessionId: string): void {
+  const state = states.get(sessionId);
+  if (state) state.lastRouteChange = null;
+}
+
 export function clearAllSessionRuntimeControlStates(): void {
   ownerEpoch += 1;
   states.clear();

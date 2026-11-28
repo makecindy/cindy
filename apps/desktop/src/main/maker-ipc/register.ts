@@ -1592,6 +1592,7 @@ import { runSchedulerQueuedPreparation } from './schedulerQueuedPreparation.js';
 import {
   acceptSessionRuntimeMutation,
   captureSessionRuntimeControlOwnerEpoch,
+  clearSessionRuntimeRouteChange,
   recordFailedSessionRuntimeFallbackCandidate,
   getPendingSessionRuntimeMutation,
   applySessionRuntimeOverrideForStart,
@@ -18990,7 +18991,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           ...(accountId !== null ? { accountId } : {}),
           managedBy,
         },
-        lastRouteChange: profiles.control.lastRouteChange ?? persistedRouteChange,
+        lastRouteChange: (() => {
+          const change = profiles.control.lastRouteChange ?? persistedRouteChange;
+          const clearedAt = inputCoordinator.getClearBoundaryMs(sessionId);
+          return change && (clearedAt === null || Date.parse(change.at) > clearedAt) ? change : null;
+        })(),
         fallbackEnabled: await hasExplicitSessionTaskModel(sessionId) ? false : botFallback.isBot
           ? botFallback.candidate !== null
           : modelGroupBinding
@@ -23544,6 +23549,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           isRemoteInvoke: remoteInvoke,
         });
         const projection = inputCoordinator.clearSession(sid, clearBoundary);
+        clearSessionRuntimeRouteChange(sid);
         cindyMakeManager.cancelTasksForSession(sid);
         workingDirectoryRecovery.discard(sid);
         resetAutomaticRecoveryForExplicitStop(sid);

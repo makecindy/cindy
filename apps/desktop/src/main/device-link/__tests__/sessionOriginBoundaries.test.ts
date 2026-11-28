@@ -17,13 +17,30 @@ import { buildSessionCreatedBy, parseSessionCreatedBy } from '../../../shared/se
 import { sessionCreateToRow, sessionToCamel } from '../../localDb/mapper';
 import { coerceCachedSession } from '../mirrorCacheStore';
 import { projectRemoteSessionResult, setRemoteBotSessionLookup } from '../remoteBotSessionBoundary';
-import { redactSessionRowForSharedGuest, redactSharedGuestPush } from '../sharedTaskMessageOrigin';
+import { redactMessageRowForSharedGuest, redactSessionRowForSharedGuest, redactSharedGuestPush } from '../sharedTaskMessageOrigin';
 
 afterEach(() => {
   setRemoteBotSessionLookup(null);
 });
 
 describe('session-level origin persistence and privacy boundaries', () => {
+  // Value: shared-task message history and live pushes retain the handoff while
+  // hiding host-only route attribution. Before this fix, both paths disclosed it.
+  // Minimal input: one agent_switch JSON boundary with attribution; tier: unit.
+  it('removes route attribution from shared guest history and message pushes', () => {
+    const content = JSON.stringify({ handoff: 'Continue task', attribution: {
+      by: 'provider-group', reason: 'quota_rebalance',
+      from: { agentDeviceId: 'private-device' }, to: { agentDeviceId: 'studio' },
+    } });
+    const message = { id: 'switch-1', role: 'agent_switch', content, agentMeta: null };
+    const history = redactMessageRowForSharedGuest(message);
+    expect(JSON.parse(history.content)).toEqual({ handoff: 'Continue task' });
+    expect(message.content).toBe(content);
+    expect(redactSharedGuestPush('local-db:messages:created', { sessionId: 'shared-1', message }))
+      .toEqual({ sessionId: 'shared-1', message: history });
+    expect(redactMessageRowForSharedGuest({ ...message, content: JSON.parse(content) }).content)
+      .toEqual({ handoff: 'Continue task' });
+  });
   it('round-trips createdBySession through mapper without touching parentSessionId and tolerates corrupted JSON', () => {
     const origin = buildSessionCreatedBy({
       sessionId: 'origin-task-1',

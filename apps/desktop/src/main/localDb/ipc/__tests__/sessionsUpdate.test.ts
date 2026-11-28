@@ -172,7 +172,10 @@ vi.mock('../../agentIslandSessionPatch', async (importOriginal) => ({
   ...await importOriginal<typeof import('../../agentIslandSessionPatch')>(),
   notifyAgentIslandSessionPatch: vi.fn(),
 }));
-vi.mock('../../../messagePersistBroadcaster.desktop', () => ({ noteSessionClearBoundary: vi.fn() }));
+vi.mock('../../../messagePersistBroadcaster.desktop', () => ({
+  noteSessionClearBoundary: vi.fn(),
+  backgroundTurnPredatesSessionClear: vi.fn(() => false),
+}));
 vi.mock('../../toolResultCompaction.js', () => ({
   compactSessionToolResultsBestEffort: h.compactSessionToolResultsBestEffort,
 }));
@@ -589,6 +592,36 @@ it('makes a follow-up independently visible only when its worker exists', async 
   });
   const raw = h.sqlite!.prepare("SELECT source, side_chat_promoted FROM sessions WHERE id = 'codex-local'").get();
   expect(raw).toEqual({ source: 'side-chat', side_chat_promoted: 1 });
+});
+
+// Value: the existing single-session IPC read carries persisted switch attribution
+// to remote task digests after a host restart, without another device-link RPC.
+// Gap: previous tests covered the in-memory projection and DB reader separately.
+// Minimal input: one post-clear agent_switch row and an empty runtime state; tier: db.
+it('recovers route attribution through single-session read after restart', async () => {
+  const content = JSON.stringify({
+    fromAgentKind: 'cc', toAgentKind: 'codex',
+    fromModel: 'claude-opus-4-6', toModel: 'gpt-5.6',
+    fromProviderId: 'anthropic', toProviderId: 'openai',
+    toAgentDeviceId: 'studio',
+    attribution: { at: '2026-11-28T10:00:00.000Z', by: 'agent', reason: 'explicit' },
+  });
+  h.sqlite!.prepare("INSERT INTO messages (id, client_id, session_id, role, content, created_at) VALUES ('switch-route', 'switch-route', 'codex-local', 'agent_switch', ?, 1000)")
+    .run(content);
+  clearSessionRuntimeControlState('codex-local');
+  const read = () => h.handlers.get('local-db:sessions:get')!({}, 'codex-local');
+  expect(await read()).toMatchObject({ runtimeLastRouteChange: {
+    by: 'agent', reason: 'explicit',
+    from: { agentKind: 'claude-code', model: 'claude-opus-4-6' },
+    to: { agentKind: 'codex', model: 'gpt-5.6', agentDeviceId: 'studio' },
+  } });
+  // The host's in-memory clear fence must hide a stale DB row before the
+  // cleared_at write finishes (or when that write fails).
+  const { backgroundTurnPredatesSessionClear } = await import('../../../messagePersistBroadcaster.desktop.js');
+  vi.mocked(backgroundTurnPredatesSessionClear).mockReturnValueOnce(true);
+  expect(await read()).toMatchObject({ runtimeLastRouteChange: null });
+  h.sqlite!.prepare("UPDATE sessions SET cleared_at = 1500 WHERE id = 'codex-local'").run();
+  expect(await read()).toMatchObject({ runtimeLastRouteChange: null });
 });
 
 // DB tier: the remote preview must cover the owning project even when only one task

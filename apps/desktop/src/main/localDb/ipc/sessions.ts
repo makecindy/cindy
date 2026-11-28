@@ -126,7 +126,7 @@ import { hasTaskChangeListener, publishTaskChange } from '../taskEvents.js';
 import { notifyAgentIslandInboxFactsChanged, notifyAgentIslandSessionPatch } from '../agentIslandSessionPatch';
 import { ensureSessionFlagRegistryLoaded, noteSessionNotificationsMuted } from '../sessionFlagRegistry.js';
 import { recoverGeneratedImagesForHistory } from '../../cindy-media/generatedImageRecovery';
-import { noteSessionClearBoundary } from '../../messagePersistBroadcaster.desktop';
+import { backgroundTurnPredatesSessionClear, noteSessionClearBoundary } from '../../messagePersistBroadcaster.desktop';
 import {
   ackSessionTurnEndedDurable,
   ackSessionTurnEndedIfUnchanged,
@@ -153,7 +153,8 @@ import type { SessionDeleteTarget } from '@cindy/maker-shared/device-link-contra
 import { assertSessionDeleteTarget, COMMITTED_SIDE_CHAT_WORKER_SQL } from '../sessionDeleteTarget.js';
 import { noteSessionsRestoring } from '../sessionRestoreRetention.js';
 import { isTaskListBotLane, restoreArchivedTaskForSend } from '../archivedTaskRestore.js';
-import { applyAgentSwitchResumeFallbackAtomicallyWithPorts, applyAgentSwitchToSessionRowWithPorts, type AgentSwitchRowPatch } from '../agentSwitchRows.js';
+import { applyAgentSwitchResumeFallbackAtomicallyWithPorts, applyAgentSwitchToSessionRowWithPorts, readLatestAgentSwitchAttribution, type AgentSwitchRowPatch } from '../agentSwitchRows.js';
+import { clearSessionRuntimeRouteChange } from '../../maker-ipc/sessionRuntimeControl.js';
 import { cleanupSessionRuntimeForTerminalStatus } from '../sessionRuntimeCleanup.js';
 import { requestSessionArchiveSync } from '../sessionArchiveSync.js';
 import { cindyMakeManager } from '../../cindy-make/manager.js';
@@ -1179,6 +1180,7 @@ export async function persistSessionTitleIfStillDraft(
  * 补这一步。广播让被控端窗口和控制端镜像都收敛到同一个 clearedAt 边界。
  */
 export async function clearSessionContextInDb(sessionId: string, atMs?: number): Promise<void> {
+  clearSessionRuntimeRouteChange(sessionId);
   const ownerScope = captureOwnerScope();
   const ts =
     typeof atMs === 'number' && Number.isFinite(atMs) && atMs > 0 ? Math.floor(atMs) : Date.now();
@@ -1229,6 +1231,7 @@ export async function clearSessionContextInDb(sessionId: string, atMs?: number):
         clearedAt: new Date(effectiveClearedAt).toISOString(),
         updatedAt: new Date(effectiveUpdatedAt).toISOString(),
         preview: null,
+        runtimeLastRouteChange: null,
       },
       ownerScope,
     );
@@ -1561,8 +1564,17 @@ export function registerSessionIpc(
     ]);
     if (!row) throwIpcError('NOT_FOUND', 'Session 不存在');
     const timing = getSilentContinuationTiming(sid, row.activeTurnStartedAt, dbClient);
+    const projected = projectSessionDetail(row, opts.resolveContextWindow, timing?.startedAt ?? undefined, timing?.settledEndAt);
+    // A restarted host has no runtime memory. Reuse this single-session read's
+    // existing RPC to recover a visible boundary, with no additional remote call.
+    const candidateRouteChange = projected.runtimeLastRouteChange ??
+      await readLatestAgentSwitchAttribution(sid).catch(() => null);
+    const runtimeLastRouteChange = candidateRouteChange &&
+      !backgroundTurnPredatesSessionClear(sid, Date.parse(candidateRouteChange.at))
+      ? candidateRouteChange : null;
     return {
-      ...projectSessionDetail(row, opts.resolveContextWindow, timing?.startedAt ?? undefined, timing?.settledEndAt),
+      ...projected,
+      runtimeLastRouteChange,
       imAttached,
     };
   });
@@ -1976,6 +1988,7 @@ export async function updateSessionInDb(
     // 不可见,PR 引用同步重算(fire-and-forget,内部按 clearedAt/rewindAt 过滤)。
     if (p.clearedAt !== undefined) {
       noteSessionClearBoundary(sid, p.clearedAt as string | null);
+      clearSessionRuntimeRouteChange(sid);
       // sidebar-card-mode(codex review):summary 是基于 clear 前内容生成的,clear 后
       // 已过时;置顶卡片优先用 summary 而非 preview,不清就会继续显示旧任务摘要。
       // 与 clearedAt 同一句 UPDATE 置空，避免崩溃后非 NULL 缓存绕过 clear 边界。
@@ -2070,6 +2083,7 @@ export async function updateSessionInDb(
     ) {
       if (isOwnerScopeCurrent(ownerScope)) {
         broadcastSessionPatched(sid, { ...broadcastPatch,
+          ...(p.clearedAt !== undefined ? { runtimeLastRouteChange: null } : {}),
           ...(p.snoozedUntil !== undefined || p.status !== undefined ? { snoozedUntil: updated.snoozedUntil, snoozedAt: updated.snoozedAt } : {}),
         }, ownerScope);
       }

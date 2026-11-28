@@ -58,9 +58,20 @@ export function redactMessageRowForSharedGuest<T>(message: T): T {
   if (!message || typeof message !== 'object' || Array.isArray(message)) return message;
   const record = message as Record<string, unknown>;
   let agentMeta = redactMessageOriginForSharedGuest(record.agentMeta);
-  const content = projectMcpAppHistory(record.content,
+  let content = projectMcpAppHistory(record.content,
     !!record.agentMeta && typeof record.agentMeta === 'object' &&
     (record.agentMeta as Record<string, unknown>).mcpApp === true);
+  if (record.role === 'agent_switch') {
+    const serialized = typeof content === 'string';
+    let parsed: unknown = content;
+    if (serialized) {
+      try { parsed = JSON.parse(content as string); } catch { parsed = null; }
+    }
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed) && 'attribution' in parsed) {
+      const { attribution: _privateAttribution, ...visible } = parsed as Record<string, unknown>;
+      content = serialized ? JSON.stringify(visible) : visible;
+    }
+  }
   // Preserve independent reply visibility without disclosing source identity
   // or sealing unrelated prose in the canonical model turn.
   if (record.role === 'assistant' && readMessageSourceGroup(record.agentMeta)) {
