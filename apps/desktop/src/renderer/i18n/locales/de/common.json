@@ -3683,7 +3683,7 @@
         "restart": "Neu starten und Modelle aktualisieren",
         "stop": "Dienst beenden",
         "cancel": "Vorgang abbrechen",
-        "repository": "Hugging Face Repository",
+        "repository": "Hugging Face-Repository",
         "findFiles": "Modelldateien suchen",
         "file": "GGUF-Datei",
         "shards": "Bei Split-Modellen lädt Cindy alle Teile herunter. Die obige Größe gilt für das ausgewählte Teil. Textmodelle werden unterstützt; Vision-Projektoren werden nicht heruntergeladen.",
