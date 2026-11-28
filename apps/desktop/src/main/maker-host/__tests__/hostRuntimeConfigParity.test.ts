@@ -197,7 +197,6 @@ describe('Host runtime config parity with the desktop assembly', () => {
     writeMemorySetting('maker', true);
     writeMemorySetting('claudeCode', false);
     writeMemorySetting('codex', false);
-    writeMemorySetting('pi', true);
     writeSubagentModelSettingsPatch({ claudeCode: 'claude-sonnet-4-5' });
     writeAgentResourceSetting('capToolchainThreads', false);
     await compare('claude', desktop.claude, host.claude);

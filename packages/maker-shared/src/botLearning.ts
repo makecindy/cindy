@@ -1,9 +1,19 @@
-/** Durable receipts attached to the originating assistant message, never timeline rows. */
+/**
+ * Durable receipts attached to the originating assistant message, never timeline rows.
+ * Teammate replies and ordinary task replies share this shape and the `botLearning` meta key.
+ */
 export interface BotLearningReceipt {
   kind: 'memory' | 'skill';
   key: string;
   title: string;
   action: 'created' | 'updated';
+  /**
+   * Ordinary tasks only: which of the task's two Cindy memories was written — `user` (about
+   * the user, every project) or `project` (the task's repository or folder) — so the receipt
+   * opens there. A name, never a path: the receipt is stored on the message and travels to
+   * phones and shared-task guests. Absent on teammate receipts.
+   */
+  scope?: 'user' | 'project';
 }
 
 export function readBotLearningReceipts(value: unknown): BotLearningReceipt[] {
@@ -32,6 +42,14 @@ export function mergeBotLearningReceipts(
   );
 }
 
+function scopeOfLast(items: BotLearningReceipt[]): { scope?: 'user' | 'project' } {
+  for (let index = items.length - 1; index >= 0; index -= 1) {
+    const scope = items[index]!.scope;
+    if (scope === 'user' || scope === 'project') return { scope };
+  }
+  return {};
+}
+
 /** Two quiet rows at most: memory and Skills remain separate even after several saves. */
 export function botLearningRows(value: unknown): BotLearningReceipt[] {
   const receipts = readBotLearningReceipts(value);
@@ -46,6 +64,8 @@ export function botLearningRows(value: unknown): BotLearningReceipt[] {
             action: items.some((item) => item.action === 'updated')
               ? ('updated' as const)
               : ('created' as const),
+            // One row, one destination: the most recent save that knows its scope.
+            ...scopeOfLast(items),
           },
         ]
       : [];

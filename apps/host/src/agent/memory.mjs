@@ -17,7 +17,7 @@ import { getActiveAppSession, isAppSessionBoundaryPending } from '../../../deskt
 import { hostMemoryManagerPorts } from './memory-manager-ports.ts';
 import { hostMemoryMcpPorts } from './memory-mcp-ports.ts';
 
-const DEFAULTS = Object.freeze({ maker: true, claudeCode: true, codex: true, pi: true });
+const DEFAULTS = Object.freeze({ maker: true, claudeCode: true, codex: true });
 
 /** `<ownerRoot>/memory-settings.json`, same file Desktop writes. */
 export function readMemorySettings(ownerRoot) {

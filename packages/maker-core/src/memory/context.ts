@@ -1,7 +1,7 @@
 import { promises as fs } from 'node:fs';
 import * as path from 'node:path';
 
-import type { MakerMemoryManager } from './manager.js';
+import { USER_INDEX_HEADING, type MakerMemoryManager } from './manager.js';
 import { MAKER_MEMORY_RULES } from './system-prompt.js';
 import { CORE_MEMORY_INDEX_MAX_BYTES } from './types.js';
 
@@ -44,6 +44,16 @@ export async function readProjectCoreMemoryIndex(
   }
 }
 
+/**
+ * 项目记忆放在项目文件夹里的任务 (伙伴的项目) 另有账号级记忆时, 接在定位说明后面的一段:
+ * 那一份不在项目文件夹里, 要经 cindy_memory 读写。
+ */
+const ACCOUNT_MEMORY_IN_PROJECT_FOLDER_RULES = [
+  '',
+  '',
+  'Separately, the user has an account-level memory (scope `user`): what holds for them in every project — preferences, working habits, facts about their accounts and devices. Its index is under the `# Memory Index — user` heading later in this prompt, a snapshot taken when this conversation started. It is not in the project folder: read and write it through the `cindy_memory` MCP server (`call_tool` with `memory_read` / `memory_search` / `memory_write`), always passing `scope: "user"`. Save there only what holds in every project, and check the index for an existing entry first; everything about this project stays in the project memory files.',
+].join('\n');
+
 /** The same contract for all engines, including a provider running on another computer. */
 export async function loadMemoryContext(input: {
   manager?: MakerMemoryManager;
@@ -55,9 +65,13 @@ export async function loadMemoryContext(input: {
   const projectDirectory = input.projectDirectory
     ?? (input.hosted ? undefined : input.manager?.getProjectMemoryDirectory?.(input.scopeKey));
   if (projectDirectory) {
-    const index = input.hosted
-      ? (input.snapshot ?? '')
-      : await readProjectCoreMemoryIndex(projectDirectory);
+    // An explicit shared-conversation snapshot already enforces the account visibility policy.
+    // Only the owning machine reads MEMORY.md; the provider receives the combined snapshot.
+    const core = input.hosted ? '' : await readProjectCoreMemoryIndex(projectDirectory);
+    const account = input.snapshot !== undefined
+      ? (input.snapshot.startsWith(USER_INDEX_HEADING) ? input.snapshot : '')
+      : (input.hosted ? '' : await input.manager?.getPromptIndex?.(input.scopeKey).catch(() => '') ?? '');
+    const index = input.hosted ? (input.snapshot ?? '') : [account.trimEnd(), core].filter(Boolean).join('\n\n');
     return {
       // Minimal location + two-layer taste contract: MEMORY.md is the compact always-loaded core
       // entry; detailed notes are freeform Markdown files beside it.
@@ -65,14 +79,15 @@ export async function loadMemoryContext(input: {
         `Durable memory lives in ${JSON.stringify(projectDirectory)} as plain Markdown files (use native file tools). ` +
         `Keep MEMORY.md concise (under ~2 KB) for always-loaded key preferences, hard corrections, and brief topic pointers; ` +
         `put detailed notes in separate .md files beside it. Save only durable cross-session facts or rules (no logs or transient progress), ` +
-        `and check existing files to update before creating new ones.`,
+        `and check existing files to update before creating new ones.` +
+        (account ? ACCOUNT_MEMORY_IN_PROJECT_FOLDER_RULES : ''),
       index,
       projectDirectory,
     };
   }
-  const store = input.hosted ? undefined : await input.manager?.getStore(input.scopeKey);
   return {
     rules: input.scopeKey.startsWith('bot:') ? '' : MAKER_MEMORY_RULES,
-    index: input.snapshot ?? (store ? await store.getIndex() : ''),
+    // 账号级在前、项目在后的两份索引 (伙伴等只有一份的作用域照旧是那一份), 见 getPromptIndex。
+    index: input.snapshot ?? (input.hosted ? '' : await input.manager?.getPromptIndex(input.scopeKey) ?? ''),
   };
 }

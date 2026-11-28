@@ -6,7 +6,7 @@
  * memory_list 返结构化 JSON, LLM 处理大量条目时更精准。
  */
 
-import { withStore } from './_shared.js';
+import { memoryProjectArg, withStore } from './_shared.js';
 import type { MemoryMcpDeps } from '../types.js';
 import type { MemoryToolRegistry } from '../cindy_memoryToolRegistry.js';
 
@@ -15,13 +15,20 @@ export function registerMemoryListTool(registry: MemoryToolRegistry, deps: Memor
     name: 'memory_list',
     category: 'read',
     description:
-      '列出当前 workdir 全部 memory 分片元数据 (filename / type / title / description / updatedAt / sizeBytes)。' +
-      ' 按 type → slug 排序, 不含 body。要看 body 走 memory_read。',
-    inputShape: {},
-    handler: async () =>
-      withStore(deps, async (store) => {
-        const records = await store.list();
+      '列出这次任务能用的全部 memory 分片元数据 (scope / filename / type / title / description / updatedAt / sizeBytes),' +
+      ' 含 user (每个项目都生效) 和 project (当前仓库或目录) 两份。' +
+      ' 按 type → slug 排序, 不含 body。要看 body 走 memory_read。' +
+      ' 传 project (取自 memory_scopes) 时, project 那一份换成另一个项目的记忆。',
+    inputShape: { project: memoryProjectArg },
+    handler: async ({ project }) =>
+      withStore(deps, async (_store, ctx) => {
+        const records = [];
+        for (const scope of ['user', 'project'] as const) {
+          const store = await ctx.open(scope);
+          if (store) for (const r of await store.list()) records.push({ ...r, scope });
+        }
         return records.map((r) => ({
+          scope: r.scope,
           filename: r.filename,
           type: r.frontmatter.type,
           title: r.frontmatter.title,
@@ -29,6 +36,6 @@ export function registerMemoryListTool(registry: MemoryToolRegistry, deps: Memor
           updatedAt: r.frontmatter.updatedAt,
           sizeBytes: r.sizeBytes,
         }));
-      }),
+      }, { project: project as string | undefined }),
   });
 }

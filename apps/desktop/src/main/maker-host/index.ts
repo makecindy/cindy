@@ -291,6 +291,8 @@ import { ensureCurrentAccountProviderReadiness } from './account-provider-readin
 import { ACCOUNT_PROVIDER_NOT_READY_CODE } from '../../shared/accountProviderReadiness.js';
 import { listBotImConnectionsForBot } from '../im/shared/botImConnectionStore.js';
 import { listPersonalChannelsForCompanion } from '../im/shared/personalChannelStore.js';
+import { isSharedChannelSession, noteSessionStartAccountIndex } from '../im/shared/channelSessionLanes.js';
+import { withholdAccountMemoryIndexInSharedConversation } from './shared-conversation-memory.js';
 import {
   getRejectedCodexDownshiftModel,
   getObservedCodexUpstreamCapacity,
@@ -2782,6 +2784,13 @@ export function getMaker(): Maker {
             });
             if (mount) createOpts.hostSkills = [mount];
           }
+          // 旧式伙伴的记忆快照已在上一步给出; 这里处理带账号级记忆的任务 (含伙伴的项目)。
+          await withholdAccountMemoryIndexInSharedConversation(sessionId, createOpts, {
+            isSharedSession: isSharedChannelSession,
+            noteStart: noteSessionStartAccountIndex,
+            manager: makerMemoryManager,
+            warn: (message, fields) => desktopMakerLogger.warn(message, fields),
+          });
           if (botRuntimeSnapshot?.unavailableSkills.length) {
             desktopMakerLogger.warn('Bot configured Skills unavailable for runtime', {
               botId: botRuntimeSnapshot.botId,

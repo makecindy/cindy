@@ -56,3 +56,17 @@ it.each([false, true])(
     await act(async () => root.unmount());
   },
 );
+// 普通任务的记忆页只在电脑上: 手机上的回执是一行文字, 不可点、不进伙伴设置, 也不出现技能行。
+it('shows an ordinary task receipt as plain text that opens nothing', async () => {
+  Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+  const host = document.createElement('div');
+  const root = createRoot(host);
+  const receipts = [
+    { kind: 'memory', key: 'preference', title: 'Conclusion first', action: 'created' },
+    { kind: 'skill', key: 'report', title: 'Weekly report', action: 'updated' },
+  ];
+  await act(async () => root.render(<CompanionLearningFooter receipts={receipts} />));
+  expect(host.querySelectorAll('button')).toHaveLength(0);
+  expect(host.textContent).toBe('message.learning.memory: Conclusion first');
+  await act(async () => root.unmount());
+});

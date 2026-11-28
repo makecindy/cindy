@@ -18,6 +18,17 @@ export function learningTurnIdentity(session: Session, generation = session.getT
   return `${session.instanceId}:${generation}`;
 }
 
+/**
+ * Which replies may carry a save receipt:
+ * - a teammate Session (`source='bot'`): only its main or history chat (`canonical` / `history`);
+ *   group lanes, channels, topics, routines and delegated tasks show none;
+ * - an ordinary task: any Session that is neither a teammate Session nor linked to a teammate.
+ */
+function sessionShowsReceipts(source: string | null, botRole: string | null): boolean {
+  if (botRole === null) return source !== 'bot';
+  return source === 'bot' && (botRole === 'canonical' || botRole === 'history');
+}
+
 /** Frozen owner + reply ID, so delayed writes cannot migrate to a later bubble/account. */
 export function learningReceiptPublisher(sessionId: string) {
   const owner = activeOwnerScopeKey();
@@ -27,23 +38,23 @@ export function learningReceiptPublisher(sessionId: string) {
     void enqueueDurableWrite(`bot-learning:${sessionId}:${replyId}`, async (scope) => {
       if (isAppSessionBoundaryPending() || activeOwnerScopeKey() !== owner || getDbClient() !== db)
         return;
-      const row = await db.queryOne<{ meta: string }>(
+      const row = await db.queryOne<{ meta: string; source: string | null; botRole: string | null }>(
         `
-        SELECT m.agent_meta AS meta FROM messages m
-        JOIN sessions s ON s.id=m.session_id JOIN bot_session_links b ON b.session_id=s.id
+        SELECT m.agent_meta AS meta, s.source AS source, b.role AS botRole FROM messages m
+        JOIN sessions s ON s.id=m.session_id LEFT JOIN bot_session_links b ON b.session_id=s.id
         WHERE m.session_id=? AND m.client_id=? AND m.role='assistant' AND m.rewind_at IS NULL
-          AND b.role IN ('canonical', 'history') AND s.source='bot'
           AND (s.cleared_at IS NULL OR m.created_at > s.cleared_at)
       `,
         [sessionId, replyId],
       );
-      if (!row) return;
+      if (!row || !sessionShowsReceipts(row.source ?? null, row.botRole ?? null)) return;
       let meta: Record<string, unknown>;
       try {
         meta = JSON.parse(row.meta || '{}');
       } catch {
         return;
       }
+      // Sub-agent messages never carry one; the teammate-only markers do not occur in ordinary tasks.
       if (meta.parentUuid || meta.botPrivateReply || meta.botGroupLane) return;
       if (isAppSessionBoundaryPending() || activeOwnerScopeKey() !== owner || getDbClient() !== db)
         return;

@@ -110,7 +110,8 @@ export function readCoreSettings(deps: {
   read('collaboration', ['workerSoftLimit', 'workerHardLimit', 'workerIdleReleaseMinutes'], () => s.collaboration());
   read('agentResource', ['maxConcurrentCommands', 'processPriority', 'capToolchainThreads'], () => s.agentResource());
   read('gitSafety', ['mode', 'autoSnapshotEnabled', 'autoInitProjectGit'], () => s.gitSafety());
-  read('memory', ['maker', 'claudeCode', 'codex', 'pi'], () => s.memory(context.ownerRoot));
+  read('memory', ['maker', 'claudeCode', 'codex'], () => s.memory(context.ownerRoot));
+  fields['memory.pi'] = { status: 'unsupported' };
   read('compaction', ['claudeCodeAutoCompactPct'], () => s.compaction(context.ownerRoot));
   read('compaction', ['piAutoCompactPct'], () => s.piCompaction(context.ownerRoot));
   // Smart Contacts live in the cindy-contacts plugin; the frozen field IDs remain.

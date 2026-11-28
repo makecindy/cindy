@@ -82,9 +82,12 @@ export class MakerMemoryStore {
   private initialized = false;
   /** Per-file stat baseline for incremental FTS sync when nativeFileEdits is enabled. */
   private syncedFileStats: Map<string, { mtimeMs: number; size: number }> | null = null;
+  /** 生效配置 (默认值 + 宿主覆盖)。 */
+  readonly config: MemoryConfig;
 
   constructor(private readonly deps: MakerMemoryStoreDeps) {
     const config = { ...DEFAULT_MEMORY_CONFIG, ...(deps.config ?? {}) };
+    this.config = config;
     this.storage = new MemoryStorage(
       deps.storageDir,
       config,
@@ -108,6 +111,12 @@ export class MakerMemoryStore {
    */
   private assertScopeOk(): void {
     this.deps.scopeCheck?.();
+  }
+
+  /** 把调用方给的名字 (slug 或索引里的文件名) 解析成这一份记忆里的落盘文件名, 见 MemoryStorage.resolveFilename。 */
+  async resolveFilename(type: WriteOptions['type'], name: string): Promise<string> {
+    this.assertScopeOk();
+    return this.storage.resolveFilename(type, name);
   }
 
   /** mkdir + meta.json + FTS 表创建 + sanity check (count 不一致 → rebuild). 幂等. */
@@ -344,7 +353,7 @@ export class MakerMemoryStore {
     // tryReadRaw 与 entry check 之间有 await 窗口 — 写 target 前再复核一次
     // (review #2388 Codex 7th P1), 边界不得写入旧 owner 文件。
     this.assertScopeOk();
-    const writeRes = await this.storage.write(writeOpts);
+    const writeRes = await this.storage.write(writeOpts, sourcesToDelete);
 
     // 删源 — 每次删除前复核 scope (review #2388 Codex 7th P1): target write 与
     // 删源之间有 await, 边界若在窗口内发生, 裸 storage.delete 仍会变更旧 owner

@@ -37,7 +37,7 @@ describe('memory-settings-store', () => {
     const { preserveLegacyMakerMemoryDisabled, readMemorySettings, readMemorySettingsState } =
       await import('../memory-settings-store.js');
 
-    expect(readMemorySettings()).toEqual({ maker: true, claudeCode: true, codex: true, pi: true });
+    expect(readMemorySettings()).toEqual({ maker: true, claudeCode: true, codex: true });
     expect(preserveLegacyMakerMemoryDisabled(null).maker).toBe(true);
     expect(readMemorySettingsState().customizedKeys).toEqual([]);
   });
@@ -49,7 +49,7 @@ describe('memory-settings-store', () => {
 
     expect(preserveLegacyMakerMemoryDisabled(false).maker).toBe(false);
     expect(readMemorySettingsState()).toMatchObject({
-      value: { maker: false, claudeCode: true, codex: true, pi: true },
+      value: { maker: false, claudeCode: true, codex: true },
       customizedKeys: ['maker'],
     });
   });
@@ -77,7 +77,7 @@ describe('memory-settings-store', () => {
 
     expect(preserveLegacyMakerMemoryDisabled(null).maker).toBe(true);
     expect(readMemorySettingsState()).toMatchObject({
-      value: { maker: true, claudeCode: false, codex: false, pi: true },
+      value: { maker: true, claudeCode: false, codex: false },
       customizedKeys: ['claudeCode', 'codex'],
     });
   });
@@ -94,7 +94,7 @@ describe('memory-settings-store', () => {
 
     expect(preserveLegacyMakerMemoryDisabled(null).maker).toBe(true);
     expect(readMemorySettingsState()).toMatchObject({
-      value: { maker: true, claudeCode: false, codex: true, pi: true },
+      value: { maker: true, claudeCode: false, codex: true },
       customizedKeys: ['claudeCode'],
     });
   });
@@ -120,7 +120,7 @@ describe('memory-settings-store', () => {
 
     expect(preserveLegacyMakerMemoryDisabled(true).maker).toBe(true);
     expect(readMemorySettingsState()).toMatchObject({
-      value: { maker: true, claudeCode: true, codex: true, pi: true },
+      value: { maker: true, claudeCode: true, codex: true },
       customizedKeys: ['maker'],
     });
     expect(JSON.parse(fs.readFileSync(path.join(userDataDir, 'memory-settings.json'), 'utf8'))).toEqual({
@@ -141,11 +141,20 @@ describe('memory-settings-store', () => {
     expect(fs.existsSync(path.join(userDataDir, 'memory-settings.json'))).toBe(false);
   });
 
-  it('persists the Pi auto-memory override independently', async () => {
-    const { readMemorySettings, writeMemorySetting } = await import('../memory-settings-store.js');
-    expect(writeMemorySetting('pi', false).value.pi).toBe(false);
-    expect(readMemorySettings().pi).toBe(false);
-    expect(JSON.parse(fs.readFileSync(path.join(userDataDir, 'memory-settings.json'), 'utf8')))
-      .toEqual({ pi: false });
+  // 旧版本有一个 Pi 开关 (`pi`), 管 Pi 压缩摘要要不要存进 Cindy 记忆。该功能已移除: 文件里留下的
+  // `pi` 读取时忽略, 不算「改过设置」(否则设置页会出现一个什么也恢复不了的「恢复默认」)。
+  it('ignores the retired Pi switch left in the file by older versions', async () => {
+    fs.writeFileSync(
+      path.join(userDataDir, 'memory-settings.json'),
+      JSON.stringify({ pi: false }),
+      'utf-8',
+    );
+    const { readMemorySettingsState } = await import('../memory-settings-store.js');
+
+    expect(readMemorySettingsState()).toMatchObject({
+      value: { maker: true, claudeCode: true, codex: true },
+      isCustomized: false,
+      customizedKeys: [],
+    });
   });
 });

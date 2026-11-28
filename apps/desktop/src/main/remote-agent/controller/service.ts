@@ -33,7 +33,7 @@ import {
   AgentStartupStoppedError,
   AgentStartupResourcesReleasedError,
   isolatedBotProfile,
-  readProjectCoreMemoryIndex,
+  loadMemoryContext,
   resolveAllowedManagedSkills,
   resolveMemoryScopeKey,
   snapshotManagedSkillGrants,
@@ -304,17 +304,17 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
       const scopeKey = opts.makerMemoryScopeKey ?? await resolveMemoryScopeKey(opts.workingDir, undefined);
       requireCurrent();
       opts.makerMemoryScopeKey = scopeKey;
-      if (opts.makerMemoryIndexSnapshot === undefined) {
+      {
         try {
           const manager = deps.makerMemory();
-          opts.makerMemoryProjectDir = manager?.getProjectMemoryDirectory(scopeKey);
-          if (opts.makerMemoryProjectDir) {
-            opts.makerMemoryIndexSnapshot = await readProjectCoreMemoryIndex(opts.makerMemoryProjectDir);
+          opts.makerMemoryProjectDir ??= manager?.getProjectMemoryDirectory(scopeKey);
+          if (opts.makerMemoryProjectDir || opts.makerMemoryIndexSnapshot === undefined) {
+            const memory = await loadMemoryContext({
+              manager: manager ?? undefined, scopeKey, snapshot: opts.makerMemoryIndexSnapshot,
+              projectDirectory: opts.makerMemoryProjectDir,
+            });
             requireCurrent();
-          } else {
-            const store = await manager?.getStore(scopeKey);
-            requireCurrent();
-            opts.makerMemoryIndexSnapshot = await store?.getIndex() ?? '';
+            opts.makerMemoryIndexSnapshot = memory.index;
           }
         } catch (error) {
           requireCurrent();

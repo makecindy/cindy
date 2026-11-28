@@ -4,7 +4,6 @@ let memorySettings = {
   maker: true,
   claudeCode: false,
   codex: false,
-  pi: false,
 };
 
 import { configureUserDataDir } from '../../userDataPath.js';
@@ -54,7 +53,6 @@ describe('runtime-configs', () => {
       maker: true,
       claudeCode: false,
       codex: false,
-      pi: false,
     };
   });
 
@@ -78,7 +76,6 @@ describe('runtime-configs', () => {
       maker: false,
       claudeCode: true,
       codex: true,
-      pi: true,
     };
 
     expect(claudeConfig.memoryEnabled).toBe(true);
