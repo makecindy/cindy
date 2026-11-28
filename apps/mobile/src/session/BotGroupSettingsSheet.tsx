@@ -70,7 +70,7 @@ export function BotGroupSettingsSheet(props: SettingsProps) {
 function DirectGroupSettings(props: SettingsProps) {
   const management = useBotGroupSettingsManagement(props.group, props.visible);
   // Settings reads contain metadata only; execution activity stays with the live chat subscription.
-  const group = management.group ? { ...management.group, round: props.group.round } : props.group;
+  const group = management.group ? { ...management.group, round: props.group.round } : management.shown;
   const lookup = useBotGroupIdentities('');
   // Settings writes refresh the chat like lifecycle actions do.
   const refreshing = { ...management, act: async (...args: Parameters<typeof management.act>) => {

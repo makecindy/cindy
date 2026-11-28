@@ -118,6 +118,8 @@ export interface AcpAgentDeps extends AgentDeps {
   onSessionCapabilities?: (harnessKey: string, capabilities: Capabilities) => void;
   /** Captures the local settings owner before the endpoint starts. */
   observeModelDetails?: (providerId: string) => (details: AcpReportedModelDetails | undefined) => void;
+  /** Scoped to the same local provider as the model details; never observes hosted tasks. */
+  observeContextWindow?: (providerId: string) => (modelId: string, size: number) => void;
   /**
    * The Skills a task in this directory can use (the same discovery and enablement as the built-in Pi
    * engine): the briefing ahead of the first message, `/<skill>` expansion and the `/` menu. A failure
@@ -273,10 +275,12 @@ export class AcpAgent extends BaseAgent {
     const managed = opts[NATIVE_SUBSCRIPTION_ACCOUNT];
     // The base provider can rotate through managed logins. Their details belong only to a
     // separate account provider, never to the original login or a guest's settings.
-    const observeDetails = !hosted && opts.providerId
+    const observedProvider = !hosted && opts.providerId
       && (!managed || managed.defaultProfile || opts.providerId !== acpProviderIdForHarness(harnessKey))
-      ? this.acpDeps.observeModelDetails?.(opts.providerId)
+      ? opts.providerId
       : undefined;
+    const observeDetails = observedProvider ? this.acpDeps.observeModelDetails?.(observedProvider) : undefined;
+    const observeContextWindow = observedProvider ? this.acpDeps.observeContextWindow?.(observedProvider) : undefined;
     const logger = this.deps.logger.child(`acp:${harnessKey}`);
     const botMcpPolicy = isolatedBotProfile(opts.botRuntimeProfile)?.mcpPolicy;
     // Mutable object shared by reference with the host MCP bridge so live
@@ -466,6 +470,7 @@ export class AcpAgent extends BaseAgent {
           ...(skillCommandNames.length > 0 ? { skillCommandNames } : {}),
           ...(expandSlashInvocation ? { expandSlashInvocation } : {}),
           ...(extra?.takeMcpToolResult ? { takeMcpToolResult: extra.takeMcpToolResult } : {}),
+          ...(observeContextWindow ? { observeContextWindow } : {}),
           logger,
           onVendorOptionsChange: (patch) => {
             for (const [key, value] of Object.entries(patch)) {
