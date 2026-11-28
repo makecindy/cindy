@@ -7571,7 +7571,7 @@ function CCAgentSessionContent({
                   )}
                   <ContextCapacityRing
                     showWindowBudget={!botChatIdentity}
-                    contextUsageKnown={!botChatIdentity || agentStatus.contextWindowFromRuntime === true || agentStatus.contextTokens > 0}
+                    contextUsageKnown={!botChatIdentity || agentStatus.contextUsageReported === true}
                     visible={viewVisible}
                     reportedOnly={pluginEngineTask}
                     isRunning={agentStatus.isRunning}
