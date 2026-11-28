@@ -15,7 +15,7 @@ export async function assertXcodeBuildSessionWorkdir(
     throwIpcError('PRECONDITION_FAILED', 'session workspace is unavailable');
   }
   if (!row || !row.workingDir) throwIpcError('NOT_FOUND', 'session workspace not found');
-  if (row.remoteHostId || row.agentDeviceId) {
+  if (row.remoteHostId) {
     throwIpcError('UNSUPPORTED_CAPABILITY', 'Xcode builds require a local workspace');
   }
   if (path.resolve(row.workingDir) !== path.resolve(workdir)) {

@@ -56,6 +56,12 @@ import type {
   SidebarTabWindowMergeBackRequest,
   SidebarTabWindowsState,
 } from '../shared/sidebarTabWindow';
+import {
+  XCODE_BUILD_INVOKE,
+  XCODE_BUILD_PUSH,
+  type XcodeBuildBridge,
+  type XcodeBuildEvent,
+} from '../shared/xcodeBuild';
 
 type ApplicationMenuLocale = SupportedLocale;
 
@@ -280,6 +286,16 @@ contextBridge.exposeInMainWorld('electronAPI', {
     onData: (cb: (event: unknown) => void): (() => void) => onPayload('terminal:data', cb),
     onExit: (cb: (event: unknown) => void): (() => void) => onPayload('terminal:exit', cb),
   },
+  xcode: {
+    discover: (request) => ipcRenderer.invoke(XCODE_BUILD_INVOKE.DISCOVER, request),
+    start: (request) => ipcRenderer.invoke(XCODE_BUILD_INVOKE.START, request),
+    stop: (buildId) => ipcRenderer.invoke(XCODE_BUILD_INVOKE.STOP, buildId),
+    flutterAction: (buildId, action) =>
+      ipcRenderer.invoke(XCODE_BUILD_INVOKE.FLUTTER_ACTION, buildId, action),
+    getStatus: (request) => ipcRenderer.invoke(XCODE_BUILD_INVOKE.STATUS, request),
+    onEvent: (callback: (event: XcodeBuildEvent) => void) =>
+      onPayload(XCODE_BUILD_PUSH.EVENT, callback),
+  } satisfies XcodeBuildBridge,
   processMonitor: {
     subscribe: (): Promise<unknown> => ipcRenderer.invoke('process-monitor:subscribe'),
     unsubscribe: (): Promise<unknown> => ipcRenderer.invoke('process-monitor:unsubscribe'),

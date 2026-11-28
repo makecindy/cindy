@@ -213,7 +213,7 @@ describe('sidebarWindowPreload 椤跺眰濂戠害', () => {
 
   it('鏆撮湶鍒嗙鍙充晶鏍忓疄闄呮寕杞介潰鏉挎墍闇€鐨勬渶灏?bridge', () => {
     expect(topLevel).toEqual(expect.arrayContaining([
-      'fileBrowser', 'terminal', 'gitReview', 'processMonitor', 'rsbNativePopup',
+      'fileBrowser', 'terminal', 'xcode', 'gitReview', 'processMonitor', 'rsbNativePopup',
       'openExternal', 'openFileInBrowser', 'openPath', 'showItemInFolder',
       'copyMediaToClipboard', 'openMediaWithDefaultApp', 'saveMediaAs',
       'cacheMediaForSession', 'readImageBytes', 'readCachedImageAsBase64',

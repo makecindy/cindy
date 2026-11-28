@@ -187,8 +187,7 @@ function WorkdirBrowseContent({ requestedDeviceId }: { requestedDeviceId: string
     enabled:
       window.electronAPI.platform === 'darwin' &&
       !remoteHostId &&
-      deviceId === null &&
-      !currentSession?.agentDeviceId,
+      deviceId === null,
   });
   const rail = useChatRailResize();
   const railCollapse = useChatRailCollapsed();
