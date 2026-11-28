@@ -721,18 +721,23 @@ let instanceBinariesReady = false;
 import {
   isLinuxAwayCoverUp,
   registerRemoteDesktopIpc,
+  remoteDesktop,
   requestRemoteDesktop,
   setAwayCaptureExcludedWindows,
+  setRemoteDesktopTransientOverlayCloser,
   startLinuxAwayCover,
 } from './remote-desktop';
 import { registerLocalNetworkIpc } from './local-network/index.js';
-import { isAwayCoverUp, registerAwayGuardIpc, startAwayGuard } from './remote-desktop/awayGuardService';
+import { isAwayCoverUp, ownerPromptTeardownSettled, registerAwayGuardIpc, startAwayGuard } from './remote-desktop/awayGuardService';
 import { DisplayDemand } from './remote-desktop/displayDemand';
 import {
   isDesktopScreenLocked,
   seedDesktopScreenLocked,
   msSinceForeignDesktopInput,
   setPhysicalInputShielded,
+  openComputerUseSessions,
+  onComputerUseSessionsChange,
+  setCaptureBarrier,
 } from './mcp-integrations/computer.desktop.js';
 import * as usageReporting from './product-token-usage/reporting.js';
 import { initAnalyticsSettingsService, noteAuthColdStartState, onAnalyticsPermissionChange } from './analyticsSettingsService';
@@ -1170,7 +1175,12 @@ import { disposeRemoteFileBrowser } from './file-browser/remote-deps.js';
 import { registerFileBrowserDeviceOp } from './file-browser/device-op.js';
 import { registerSearchIpc } from './file-browser/search/index.js';
 import { registerVoiceInputIpc } from './voice-input/index.js';
-import { initRegionScreenshot, setRegionScreenshotLocale, stopRegionScreenshot } from './region-screenshot/index.js';
+import {
+  closeActiveRegionScreenshot,
+  initRegionScreenshot,
+  setRegionScreenshotLocale,
+  stopRegionScreenshot,
+} from './region-screenshot/index.js';
 import { installWindowHiddenBroadcast } from './windowHiddenBroadcast.js';
 import { getRenderWatchdogContext } from './renderWatchdogContext.js';
 import {
@@ -5540,9 +5550,26 @@ const registerIpcHandlers = () => {
       enabled: () => readWindowBehaviorSettings().awayGuard,
       delaySeconds: () => readWindowBehaviorSettings().awayGuardDelaySeconds,
       screenLocked: isDesktopScreenLocked,
+      // The Agent driving this desktop must not find a system prompt in its screenshots
+      // or under its desktop clicks (2026-11-18 user decision).
+      computerInUse: () => openComputerUseSessions() > 0,
+      onComputerInUseChange: onComputerUseSessionsChange,
+      // A remote viewer receives this same screen: the system sheet must not sit in its
+      // video or under its injected clicks (docs/product-rules/privacy-screen.md).
+      // A viewer that just disconnected may still have injected input landing: the native
+      // helper keeps ownership until it closes (inputHost waits up to 1.5 s for that).
+      remoteInUse: () => remoteDesktop.hasActiveLease || remoteDesktop.leaseJustEnded(),
+      // The frozen selection overlay is one level above the masks: end it with the cover so
+      // a captured desktop is not left on screen while the owner is away. The in-session
+      // remote mask raises the same overlay, so it gets the same hook.
+      closeTransientOverlays: closeActiveRegionScreenshot,
       seedScreenLocked: seedDesktopScreenLocked,
       msSinceOwnerInput: () => msSinceForeignDesktopInput(),
     });
+    // Computer Use captures the same display through its own MCP session: the exclusion list
+    // that keeps the panel out of a remote viewer's frames does not reach it, so its calls
+    // wait for the Touch ID helper to close.
+    setCaptureBarrier(ownerPromptTeardownSettled);
     // Hyprland draws its privacy screen in the compositor; same policy, own loop.
     startLinuxAwayCover();
     setPhysicalInputShielded(() => isAwayCoverUp() || isLinuxAwayCoverUp());
@@ -11485,6 +11512,9 @@ app.on('ready', async () => {
   registerProviderGroupReshare();
   registerFilePeerIpc();
   registerLocalNetworkIpc();
+  // A remote viewer's privacy mask covers the whole screen; the frozen region-selection
+  // overlay would stay above it and be captured, so end it with the mask.
+  setRemoteDesktopTransientOverlayCloser(closeActiveRegionScreenshot);
   registerRemoteDesktopIpc(
     isGlobalVoiceInputOverlaySender,
     { name: getControllerName, revoke: revokeController },

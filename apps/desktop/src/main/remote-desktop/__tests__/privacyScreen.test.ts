@@ -35,6 +35,7 @@ vi.mock('../inputHost', () => ({
   lockDesktopScreen: away.lock,
   // The owner has not answered the system verification yet.
   verifyDesktopOwner: () => new Promise(() => {}),
+  readDesktopBiometry: async () => 'touchid',
 }));
 vi.mock('../privacyInput', () => ({
   watchPrivacyInput: vi.fn(),
@@ -530,6 +531,9 @@ it('recovers away-guard failure masks after OS unlock, including late lock failu
       enabled: () => enabled,
       delaySeconds: () => 30,
       screenLocked: () => false,
+      computerInUse: () => false,
+      onComputerInUseChange: () => () => {},
+      remoteInUse: () => false,
       seedScreenLocked: () => {},
       msSinceOwnerInput: () => Infinity,
     });

@@ -14,9 +14,15 @@ import {
   lockDesktopScreen,
   readDesktopLockState,
   readDesktopInputPermission,
+  readDesktopBiometry,
   requestDesktopInputPermission,
 } from './inputHost';
 import { watchAwayGuardInput, type AwayGuardInputMonitor } from './privacyInput';
+import {
+  watchEmbeddedOwnerPrompt,
+  watchOwnerPrompt,
+  type OwnerPrompt,
+} from './ownerPrompt';
 import { keepAwakeController } from '../device-link/power-blocker';
 import { PrivacyScreen } from './privacyScreen';
 import { privacyScreenHtml } from './privacyScreenHtml';
@@ -32,6 +38,7 @@ import {
   type AwayGuardFailure,
   type AwayGuardPreviewResult,
   type AwayGuardState,
+  biometryLabel,
 } from '../../shared/awayGuard';
 
 const log = createLogger('remote-desktop:away-guard');
@@ -43,6 +50,36 @@ const DISPLAY_SLEEP_REFRESH_MS = 60_000;
 /** Time for the system lock screen to fade in above the masks before they are removed. */
 const LOCK_SCREEN_SETTLE_MS = 1500;
 
+/**
+ * Panels that may still be on screen. The system prompt's panel can outlive its helper
+ * (a killed helper leaves the request up for about ten seconds), and the exclusion list
+ * only reaches the remote viewer's capture: Computer Use reads the same display through
+ * its own MCP session, so it waits on this barrier before it touches the desktop.
+ */
+const pendingOwnerPromptHelpers = new Set<Promise<void>>();
+
+/** Resolves once no Touch ID helper can still be drawing a panel on this display. */
+export function ownerPromptTeardownSettled(): Promise<void> {
+  if (pendingOwnerPromptHelpers.size === 0) return Promise.resolve();
+  return Promise.allSettled([...pendingOwnerPromptHelpers]).then(() => undefined);
+}
+
+/**
+ * Copy names the owner's biometry the way Apple does (Touch ID / Face ID / Optic ID).
+ * Read once per run; until then the wording stays on today's Touch ID.
+ */
+let biometryName = 'Touch ID';
+let biometryAsked = false;
+const loadBiometryName = () => {
+  if (biometryAsked) return;
+  biometryAsked = true;
+  void readDesktopBiometry().then((type) => {
+    biometryName = biometryLabel(type);
+  });
+};
+/** Main's i18n only fills `{{appName}}`, so the hardware name is filled here. */
+const withBiometry = (text: string) => text.replace('{{biometry}}', biometryName);
+
 export interface AwayGuardServiceDeps {
   /** Publish cover IDs to the shared remote-capture exclusion filter. */
   excludedWindows(ids: number[]): void;
@@ -52,6 +89,18 @@ export interface AwayGuardServiceDeps {
   delaySeconds(): AwayGuardDelaySeconds | null;
   screenLocked(): boolean;
   /** Startup lock state, used until the first lock/unlock event. */
+  /** The Agent is driving this desktop through Computer Use right now. */
+  computerInUse(): boolean;
+  /** Fires when Computer Use sessions open or close. */
+  onComputerInUseChange(listener: () => void): () => void;
+  /** A remote viewer is connected to this desktop (control or view-only) right now. */
+  remoteInUse(): boolean;
+  /**
+   * End transient windows that sit above the masks, e.g. the frozen region-screenshot
+   * overlay (`screen-saver` + 1). The cover must never leave a captured desktop on screen
+   * (docs/product-rules/privacy-screen.md「隐私屏不是认证边界」).
+   */
+  closeTransientOverlays?(): void;
   seedScreenLocked(locked: boolean): void;
   msSinceOwnerInput(): number | null;
   /** Work needs the screen awake (see displayDemand.ts); otherwise the system sleeps and locks. */
@@ -169,6 +218,8 @@ export async function coverDesktopLockFailure(): Promise<void> {
 
 export function startAwayGuard(deps: AwayGuardServiceDeps): void {
   if (controller || hostPolicy) return;
+  // Name the owner's biometry the way Apple does, once, off the startup path.
+  loadBiometryName();
   if (process.platform === 'linux') {
     // Hyprland's compositor draws and guards the cover (index.ts startLinuxAwayCover);
     // only the policy lives here. "Follow system" has no readable system time there.
@@ -206,6 +257,7 @@ export function startAwayGuard(deps: AwayGuardServiceDeps): void {
   let lockScreenUp = false;
   let settleTimer: ReturnType<typeof setTimeout> | null = null;
   const stopMasksUnderLockScreen = () => {
+    disarmOwnerPrompt();
     if (settleTimer) return;
     settleTimer = setTimeout(() => {
       settleTimer = null;
@@ -281,9 +333,168 @@ export function startAwayGuard(deps: AwayGuardServiceDeps): void {
   // masks also go once the system locks by itself or the owner locks.
   let heldUntilLocked = false;
   let verifying = false;
+  // While the cover itself keeps the display awake, the system's own Touch ID check stays
+  // armed: resting a finger on the sensor uncovers without locking (user decision
+  // 2026-11-17, docs/product-rules/privacy-screen.md). Keys and clicks still lock.
+  let ownerPrompt: OwnerPrompt | null = null;
+  let ownerPromptBusy = false;
+  // One answer per cover: a failed or cancelled check is not turned into a prompt loop.
+  let ownerPromptAnswered = false;
+  let ownerPromptGeneration = 0;
+  // A start still waiting for the helper's `ready`; the display can be released first.
+  let ownerPromptStart: AbortController | null = null;
+  // Older helpers drew their own Touch ID panel and reported its window id; the sheet is
+  // the system's now (hidden under the cover), so no id arrives. The publishing path stays:
+  // modern ScreenCaptureKit only excludes ids it is handed, and a viewer that starts its
+  // lease between two ticks must not catch anything still on screen.
+  let coverWindowIds: number[] = [];
+  // Panel window id per live helper process. A re-armed prompt can overlap a helper that is
+  // still closing (2 s kill fallback), so the ids are tracked per helper: publishing only the
+  // newest one would let an older visible panel into a viewer's frames.
+  const ownerPromptPanelIds = new Map<Promise<void>, number>();
+  // Helper processes that have not closed yet; each can still be drawing its panel.
+  const ownerPromptHelpers = pendingOwnerPromptHelpers;
+  const publishExcludedWindows = () =>
+    deps.excludedWindows([...coverWindowIds, ...ownerPromptPanelIds.values()]);
+  /** The last display request the controller made, so a session change can re-evaluate. */
+  let displayRequested = false;
+  const disarmOwnerPrompt = () => {
+    ownerPromptGeneration++;
+    const prompt = ownerPrompt;
+    const start = ownerPromptStart;
+    ownerPrompt = null;
+    ownerPromptStart = null;
+    // A start still in flight may yet put the system prompt on screen: cancel the helper
+    // now rather than waiting for its `ready`.
+    start?.abort();
+    // A helper still starting or already closing keeps its own panel id published until its
+    // `close` (see the helper-tracking callback); a repeated tick changes nothing here.
+    if (!prompt) return;
+    void prompt.stop().catch(() => undefined);
+  };
+  const armOwnerPrompt = () => {
+    if (
+      process.platform !== 'darwin' ||
+      ownerPromptAnswered ||
+      ownerPromptBusy ||
+      ownerPrompt ||
+      heldUntilLocked ||
+      verifying
+    )
+      return;
+    // Only while the cover itself guards physical input; never during its startup.
+    if (controller?.inputShielded !== true || deps.screenLocked()) return;
+    ownerPromptBusy = true;
+    const generation = ++ownerPromptGeneration;
+    // The masks stay at the screen-saver level above everything. The bundled helper hosts
+    // the control itself, so no dialog is drawn at all; the system's own sheet stays the
+    // fallback for a macOS that refuses an embedded control.
+    const start = new AbortController();
+    ownerPromptStart = start;
+    // The helper this start spawned, by its `close`; its panel id is tracked against it.
+    let closedHelper: Promise<void> | null = null;
+    const spawn = (embedded: boolean) => {
+      let abandoned = false;
+      const watch = embedded ? watchEmbeddedOwnerPrompt : watchOwnerPrompt;
+      void watch(
+        (answer) => {
+          if (generation !== ownerPromptGeneration) return;
+          if (answer === 'fallback') {
+            // This macOS will not accept an embedded control: let it draw its sheet, which
+            // the mask covers, instead of leaving touch-to-return silently broken.
+            abandoned = true;
+            ownerPrompt = null;
+            // The retry keeps the same abort controller: releasing the display must still
+            // cancel the sheet this cover just started.
+            log.info('away guard embedded prompt unavailable, using the system sheet');
+            spawn(false);
+            return;
+          }
+          ownerPrompt = null;
+          ownerPromptStart = null;
+          ownerPromptGeneration++;
+          // One answer per cover: a failed or cancelled check must not become a prompt loop.
+          ownerPromptAnswered = answer !== 'verified';
+          if (answer !== 'verified') return;
+          log.info('away guard owner verified');
+          controller?.ownerPresent();
+        },
+        t('awayGuard.verifyReason'),
+        undefined,
+        start.signal,
+        (windowId) => {
+          // A late id from a helper this cover already let go of is not published: the
+          // prompt has been stopped and its replacement may reuse the number.
+          if (generation !== ownerPromptGeneration) return;
+          if (!closedHelper || windowId === null) return;
+          if (ownerPromptPanelIds.get(closedHelper) === windowId) return;
+          ownerPromptPanelIds.set(closedHelper, windowId);
+          publishExcludedWindows();
+        },
+        (closed) => {
+          closedHelper = closed;
+          ownerPromptHelpers.add(closed);
+          void closed.then(() => {
+            ownerPromptHelpers.delete(closed);
+            // Window numbers get reused once this helper is gone: stop excluding its panel.
+            ownerPromptPanelIds.delete(closed);
+            publishExcludedWindows();
+          });
+        },
+      )
+        .then((prompt) => {
+          if (abandoned) {
+            void prompt.stop().catch(() => undefined);
+            return;
+          }
+          if (ownerPromptStart === start) ownerPromptStart = null;
+          if (generation === ownerPromptGeneration) {
+            ownerPrompt = prompt;
+            return;
+          }
+          // The cover let go while the helper was coming up: stop it like any other teardown
+          // so its panel id survives until `close`.
+          ownerPrompt = prompt;
+          disarmOwnerPrompt();
+        })
+        .catch(() => {
+          if (ownerPromptStart === start) ownerPromptStart = null;
+          if (generation !== ownerPromptGeneration) return;
+          // The bundled helper could not even start: the system's own sheet still works.
+          if (embedded) {
+            abandoned = true;
+            log.info('away guard embedded prompt failed to start, using the system sheet');
+            spawn(false);
+            return;
+          }
+          // A cancelled start is not an answer: once the cover holds the display again it
+          // may arm a fresh prompt (unlike a helper that cannot start at all).
+          ownerPromptAnswered = true;
+        })
+        .finally(() => {
+          if (!abandoned) ownerPromptBusy = false;
+        });
+    };
+    spawn(true);
+  };
+  const syncOwnerPrompt = (awake: boolean) => {
+    displayRequested = awake;
+    // Computer Use reads the whole display and clicks desktop coordinates, so the system
+    // prompt is never in its way (2026-11-18 user decision). A remote viewer gets the same
+    // screen in its video and its clicks land on desktop coordinates, so a live lease keeps
+    // the prompt off too (docs/product-rules/privacy-screen.md「远程控制」).
+    if (awake && !deps.computerInUse() && !deps.remoteInUse()) armOwnerPrompt();
+    else disarmOwnerPrompt();
+  };
+  // A session that opens mid-cover takes the prompt down at once, not on the next tick.
+  onQuit(
+    'away-guard-owner-prompt',
+    deps.onComputerInUseChange(() => syncOwnerPrompt(displayRequested)),
+  );
   const verifyOwnerOrRetry = async () => {
     if (verifying || !heldUntilLocked) return;
     verifying = true;
+    disarmOwnerPrompt();
     try {
       // The prompt needs the owner's typing; the input guard would swallow it.
       await masks.releaseInput();
@@ -306,11 +517,12 @@ export function startAwayGuard(deps: AwayGuardServiceDeps): void {
   };
   const holdUntilLocked = () => {
     heldUntilLocked = true;
+    disarmOwnerPrompt();
     masks.holdInput();
     void masks
       .replacePage(privacyScreenHtml(
         t('awayGuard.lockFailed.status'),
-        t(process.platform === 'win32' ? 'awayGuard.lockFailed.hintWindows' : 'awayGuard.lockFailed.hint'),
+        withBiometry(t(process.platform === 'win32' ? 'awayGuard.lockFailed.hintWindows' : 'awayGuard.lockFailed.hint')),
       ))
       .catch(() => {});
     void verifyOwnerOrRetry();
@@ -332,7 +544,10 @@ export function startAwayGuard(deps: AwayGuardServiceDeps): void {
 
   const masks = new PrivacyScreen(
     // Persistent covers must also be excluded when a viewer reconnects.
-    deps.excludedWindows,
+    (ids) => {
+      coverWindowIds = ids;
+      publishExcludedWindows();
+    },
     // The helper or a mask ended on its own: never leave the desktop without a lock.
     async (): Promise<false | void> => {
       const transition = coverLockTransition;
@@ -368,7 +583,7 @@ export function startAwayGuard(deps: AwayGuardServiceDeps): void {
     {
       html: () => privacyScreenHtml(
         t('awayGuard.status'),
-        t(process.platform === 'win32' ? 'awayGuard.hintWindows' : 'awayGuard.hint'),
+        withBiometry(t(process.platform === 'win32' ? 'awayGuard.hintWindows' : 'awayGuard.hint')),
       ),
       nonActivating: true,
       // No new UI or native permission: the held mask already catches local clicks.
@@ -411,12 +626,19 @@ export function startAwayGuard(deps: AwayGuardServiceDeps): void {
         powerSaveBlocker.stop(displayAwake);
         displayAwake = null;
       }
+      // The Touch ID prompt only lives as long as the cover holds the display awake.
+      syncOwnerPrompt(awake);
     },
     showMasks: async () => {
       if (heldUntilLocked) {
         if (!deps.screenLocked()) throw new Error('DESKTOP_LOCK_PENDING');
         releaseHeld();
       }
+      // Nothing may sit above the masks: a region-screenshot selection draws the frozen
+      // desktop one level higher and would stay visible over the cover for as long as it
+      // is open. The cover wins; the owner can start a new selection after unlocking.
+      deps.closeTransientOverlays?.();
+      ownerPromptAnswered = false;
       const current = ++generation;
       coverLockTransition = lockTransition;
       restoreWindow = BrowserWindow.getFocusedWindow();
@@ -429,6 +651,7 @@ export function startAwayGuard(deps: AwayGuardServiceDeps): void {
     },
     lockAndHideMasks: async () => {
       generation++;
+      disarmOwnerPrompt();
       const transition = coverLockTransition;
       // Do not send another lock shortcut after an intervening OS unlock.
       const locked =
@@ -446,6 +669,7 @@ export function startAwayGuard(deps: AwayGuardServiceDeps): void {
     },
     hideMasks: () => {
       generation++;
+      disarmOwnerPrompt();
       // Locked by other means (Touch ID / power key, the system): uncover under the lock
       // screen. Otherwise (a preview ran out) the owner was here: uncover now.
       if (lockScreenUp || deps.screenLocked()) return stopMasksUnderLockScreen();
@@ -477,7 +701,13 @@ export async function readAwayGuardState(
   knownPermission?: DesktopPermissionStatus,
 ): Promise<AwayGuardState> {
   if (!privacyScreenAvailable())
-    return { available: false, enabled: false, delaySeconds: null, permission: 'unknown' };
+    return {
+      available: false,
+      enabled: false,
+      delaySeconds: null,
+      permission: 'unknown',
+      biometry: 'none',
+    };
   const status = knownPermission ?? await readDesktopInputPermission();
   return {
     available: true,
@@ -492,6 +722,7 @@ export async function readAwayGuardState(
         : status === 'missing'
           ? 'missing'
           : 'unknown',
+    biometry: await readDesktopBiometry(),
   };
 }
 

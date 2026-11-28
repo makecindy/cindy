@@ -81,7 +81,7 @@ vi.mock('../session', () => ({
     }
   },
 }));
-import { initRegionScreenshot, stopRegionScreenshot } from '../index';
+import { closeActiveRegionScreenshot, initRegionScreenshot, stopRegionScreenshot } from '../index';
 
 // 测试价值：从真实快捷键启动入口验证失败和晚到 helper 的释放，填补原先启动编排零覆盖。
 // 最小失败输入为 capture reject 早于 helper resolve；tier: unit，假定时器和内存依赖。
@@ -143,6 +143,25 @@ describe('screenshot startup cleanup', () => {
     expect(mocks.start).toHaveBeenCalledWith(false);
     expect(mocks.dispose).toHaveBeenCalledTimes(1);
   });
+  // Codex P1: the privacy cover rises while frames are still arriving. The late start must
+  // not draw its frozen overlay above the masks once the capture resolves.
+  it('drops a capture that was invalidated while it waited for frames', async () => {
+    let resolveCapture!: (value: unknown[]) => void;
+    mocks.capture.mockReturnValueOnce(
+      new Promise((done) => {
+        resolveCapture = done;
+      }),
+    );
+    mocks.shortcut!();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(mocks.start).toHaveBeenCalled();
+    closeActiveRegionScreenshot();
+    resolveCapture([{ display_id: '1', thumbnail: { isEmpty: () => false } }]);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(mocks.activeSession).toBeNull();
+    expect(mocks.dispose).toHaveBeenCalledTimes(1);
+  });
+
   it('keeps the helper until the successfully opened screenshot closes', async () => {
     mocks.capture.mockResolvedValueOnce([{ display_id: '1', thumbnail: { isEmpty: () => false } }]);
     mocks.shortcut!();

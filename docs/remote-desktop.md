@@ -175,7 +175,45 @@ The helper consumes all physical input; only a deliberate press (key down, mouse
 button down, a modifier going down, or a real scroll of 30+ points within a second)
 turns into the system lock. Releases, pointer drift, Caps Lock and stray
 scroll ticks are swallowed without locking, because idle mice, wireless receivers and
-some keypads emit them on their own (`AwayInputGate`). The owner unlocks with
+some keypads emit them on their own (`AwayInputGate`). While the cover itself keeps the
+display awake, Main also arms the owner's Touch ID check (`--owner-prompt`): resting a
+finger on the sensor verifies the owner and uncovers without locking, while keys and
+clicks still turn into the lock. The check lives only as long as the cover holds the
+display awake, and goes when the cover locks, ends, or enters the lock-failed state; it
+never unlocks a locked Mac.
+
+The check is not the standard authentication alert. In `--owner-prompt-app` the bundled
+helper (`Contents/CindyOwnerPrompt.app`, its executable sealed as
+`Resources/tools/remote-desktop/cindy-owner-prompt` for the caller check) owns a 32 pt
+borderless panel (`sharingType = .none`) and puts an `LAAuthenticationView`
+(`LocalAuthenticationEmbeddedUI`) in it, so the system keeps drawing and judging the
+prompt. The panel is at full opacity but sits behind the cover, so the owner never sees
+it; the control's own `isVisibleToUser` gate is answered in the helper, because a control
+the cover hides would otherwise pause the sensor. Cindy only chooses size and place. A
+macOS that refuses the embedded control (`notInteractive` / `systemCancel` within the
+first 2.5 s) answers `fallback`, and Main retries once with the system sheet
+(`--owner-prompt`), which the cover hides but cannot keep out of a capture.
+
+The helper orders its panel front and then prints the window number (`panel <id>`); Main
+feeds that id into the away-capture exclusion filter alongside the mask ids, since modern
+ScreenCaptureKit ignores `sharingType` and only excludes ids the caller supplies. The id
+is only known once the panel exists, so a lease that starts in that instant — or the
+sheet fallback, which has no id at all — can still put the control in an early frame
+until the next away-guard tick takes the prompt down. The id is dropped from the filter
+the moment the panel closes, since window numbers are reused. Mounting is still suppressed while any
+Computer Use session is open (`openComputerUseSessions` / `onComputerUseSessionsChange`)
+and while a remote viewer holds a lease (`RemoteDesktopController.hasActiveLease`,
+including the few seconds after one ends, when native input may still be landing):
+those paths capture the whole display, and a bare-touch signal cannot tell the owner
+from anyone else who happens to touch the sensor.
+
+Taking the control down goes through the helper's `stop` command, including a start that
+is still waiting for `ready owner-prompt`. The greeting is versioned on purpose — an
+older shipped helper ignores the unknown switch, falls through to its generic input loop
+and would also print a bare `ready`; Main treats anything but `ready owner-prompt` as
+"this build cannot show the control", so touch-to-return is never promised by a helper
+that cannot keep it.
+The owner unlocks with
 Touch ID or password through macOS itself, and the tap is disabled as soon as the lock
 is up. Covering every Space briefly makes Electron a background app, so Main brings the
 Cindy window that was focused back to the front after unlock. Away masks are
