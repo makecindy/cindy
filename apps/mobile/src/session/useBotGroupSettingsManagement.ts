@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { randomUUID } from 'expo-crypto';
 import type { BotGroupRemoteActionId, BotGroupRemoteChatData } from '@cindy/maker-shared/botGroupChat';
 import { chatGroupMembership } from '@cindy/maker-shared/botGroupPresentation';
@@ -152,7 +152,21 @@ export function useBotGroupSettingsManagement(source: BotGroupRemoteChatData, en
   const own = state?.binding === binding;
   const settings = own ? state.settings : undefined;
   const loading = enabled && (!own || state.loading);
-  const editable = !loading && !!settings?.managerId && canManageBotGroup(settings.group) && !settings.group.dissolvedAt;
+  // Follows the account's known values and its /me, so a late answer (another screen's read, a /me that arrives after
+  // this read already failed) reaches an open sheet without waiting for some other render.
+  const known = useSyncExternalStore(api.client.subscribeGroupAssistant, () => api.client.knownGroupAssistant(groupId));
+  const knownRevision = useSyncExternalStore(api.client.subscribeGroupAssistant, () => api.client.knownGroupAssistantRevision(groupId));
+  // This opening's read is behind what the account knows (a newer revision read elsewhere, or the server's switch came
+  // or went): what it shows would not be what a write is based on. Not writable; read again, once per known state.
+  const stale = !!settings && !loading && ((known !== undefined && (typeof known === 'boolean') !== (settings.group.supportsGroupAssistant === true))
+    || (knownRevision !== undefined && settings.group.revision !== undefined && knownRevision > settings.group.revision));
+  const staleRead = useRef<string | null>(null);
+  useEffect(() => {
+    const key = `${String(known)}:${String(knownRevision)}`;
+    if (!stale || staleRead.current === key) return;
+    staleRead.current = key; void refresh();
+  }, [stale, known, knownRevision, refresh]);
+  const editable = !loading && !stale && !!settings?.managerId && canManageBotGroup(settings.group) && !settings.group.dissolvedAt;
   // Settings reads skip `/actors`; the chat page already knows which computer runs each of your teammates.
   const homes = new Map(source.members.flatMap(member => member.homeDeviceId && member.actorId ? [[member.actorId, member.homeDeviceId] as const] : []));
   const read = settings && homes.size ? { ...settings.group, members: settings.group.members.map(member =>
@@ -162,13 +176,12 @@ export function useBotGroupSettingsManagement(source: BotGroupRemoteChatData, en
   // settings read kept while the next one loads, a chat page copy that is older or restored without the server's
   // capabilities. Without a settings read of its own (loading, or failed e.g. offline) the sheet shows the chat page's
   // group. Display only: writes still need this opening's own settings read. Every case: bot-group-mobile-direct-settings.md.
-  const known = api.client.knownGroupAssistant(source.id);
   const withKnown = (data: BotGroupRemoteChatData) => known === null ? { ...data, supportsGroupAssistant: false }
     : known === undefined ? data : { ...data, supportsGroupAssistant: true, assistantEnabled: known };
   const group = read && withKnown(read);
   const shown = group ?? withKnown(source);
   return { group, shown, act, invite, refresh, loading, editable, ready: !loading && !!settings,
-    reason: loading ? null : own && state.failed ? 'unavailable' as const : editable ? null : 'permission' as const };
+    reason: loading || stale ? null : own && state.failed ? 'unavailable' as const : editable ? null : 'permission' as const };
 }
 
 /** Own cloud actors remain addable while their execution computers are offline. */

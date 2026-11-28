@@ -14,7 +14,7 @@ import { createChatInviteShares } from './chatInviteShare';
 import { cacheChatRoster, forgetRemoteResource, hideCachedChatRooms, markRemoteResourceRead, peekCachedChatRoster, readCachedChatRoster } from '@/device-link/remoteResourceCache';
 import { useRemoteSyncCoordinator } from '@/device-link/remoteSyncTask';
 import type { BotGroupChatState } from '@/session/useBotGroupChat';
-import { chatAccessLost, chatCursor, chatGroupView, chatThreadMetadata, chatHttpsUrl, chatRateLimitDeadline, chatRetryWaitMs, chatRoomRow, chatReadAt, chatReadSequence, chatLastReplyAt, chatLastReplySequence, createChatServerClient, type ChatAccountIdentity, type ChatActor, type ChatMessage, type ThreadBackfill, type ChatPage, type ChatRequest, type ChatSnapshot } from './chatServerClient';
+import { chatAccessLost, chatCursor, chatGroupAssistantChanged, chatGroupView, chatThreadMetadata, chatHttpsUrl, chatRateLimitDeadline, chatRetryWaitMs, chatRoomRow, chatReadAt, chatReadSequence, chatLastReplyAt, chatLastReplySequence, createChatServerClient, type ChatAccountIdentity, type ChatActor, type ChatMessage, type ThreadBackfill, type ChatPage, type ChatRequest, type ChatSnapshot } from './chatServerClient';
 import type { TeammateActivity } from '@cindy/maker-shared/teammate-status';
 import { subscribeChatServer, type ChatChangesFrame } from './chatServerSubscription';
 import { createChatHistory, type ChatHistory } from '@cindy/maker-shared/chat-history';
@@ -59,7 +59,10 @@ interface ChatAccountSession {
 }
 let accountSession: ChatAccountSession | undefined;
 // The newest 「群里的 Cindy」 values belong to one signed-in account; a switch or sign-out drops them.
-subscribeMobileAuthOwner(() => { accountSession?.identity.groupAssistant?.clear(); });
+subscribeMobileAuthOwner(() => {
+  const identity = accountSession?.identity;
+  if (identity?.groupAssistant?.size) { identity.groupAssistant.clear(); chatGroupAssistantChanged(identity); }
+});
 function chatAccountSession(owner: string, auth: ChatAuth): ChatAccountSession {
   const realm = getActiveMobileSessionRealm();
   const authOwner = getMobileAuthOwner();

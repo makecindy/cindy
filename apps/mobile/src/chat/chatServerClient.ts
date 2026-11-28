@@ -689,6 +689,20 @@ export interface ChatAccountIdentity {
   /** The newest 「群里的 Cindy」 value this account has read for each group, by room revision, keyed by
    * `<self actor>\n<room>`. Memory only: it goes with the account session and is cleared when the account changes. */
   groupAssistant?: Map<string, { revision: number; assistant: boolean }>;
+  /** Screens showing 「群里的 Cindy」, told when `groupAssistant` or `known` changes; see chatGroupAssistantChanged. */
+  groupAssistantListeners?: Set<() => void>;
+  groupAssistantNotifying?: boolean;
+}
+
+/** The account's known 「群里的 Cindy」 values or its `/me` (capability, own actor) changed: open screens recompute.
+ * A chat page may record while it renders, so listeners hear about it once that render is over. */
+export function chatGroupAssistantChanged(account: ChatAccountIdentity) {
+  if (!account.groupAssistantListeners?.size || account.groupAssistantNotifying) return;
+  account.groupAssistantNotifying = true;
+  queueMicrotask(() => {
+    account.groupAssistantNotifying = false;
+    for (const listener of [...account.groupAssistantListeners ?? []]) listener();
+  });
 }
 
 const THREAD_BACKFILL_PAGE_SIZE = 100;
@@ -818,6 +832,7 @@ export function createChatServerClient(request: ChatRequest, personalList = crea
       const capabilities = me.capabilities?.groupAssistant === 1 && !(typeof me.groupAssistantActorId === 'string' && GROUP_ASSISTANT_ID.test(me.groupAssistantActorId))
         ? { ...me.capabilities, groupAssistant: undefined } : me.capabilities;
       account.known = { id, at: Date.now(), capabilities };
+      chatGroupAssistantChanged(account);
       return { id, capabilities };
     })().finally(() => { if (account.reading === reading) account.reading = undefined; });
     const me = await reading;
@@ -925,8 +940,17 @@ export function createChatServerClient(request: ChatRequest, personalList = crea
       const rooms = account.groupAssistant ??= new Map();
       const key = `${self}\n${room.id}`;
       const known = rooms.get(key);
-      if (Number.isSafeInteger(room.revision) && (!known || room.revision >= known.revision)) rooms.set(key, { revision: room.revision, assistant: room.assistant !== false });
+      if (Number.isSafeInteger(room.revision) && (!known || room.revision >= known.revision)) {
+        const assistant = room.assistant !== false;
+        if (known?.revision !== room.revision || known.assistant !== assistant) { rooms.set(key, { revision: room.revision, assistant }); chatGroupAssistantChanged(account); }
+      }
       return { assistantEnabled: rooms.get(key)?.assistant ?? room.assistant !== false };
+    },
+    /** Tells `listener` whenever knownGroupAssistant may answer differently, until the returned function is called. */
+    subscribeGroupAssistant(listener: () => void) {
+      const listeners = account.groupAssistantListeners ??= new Set();
+      listeners.add(listener);
+      return () => { listeners.delete(listener); };
     },
     /** The newest value this account has read for a group, looked up by the account's own verified actor and the
      * room only, never by what a view carries. `null`: the account's latest `/me` says the server has no switch;
@@ -936,6 +960,11 @@ export function createChatServerClient(request: ChatRequest, personalList = crea
       if (!known) return undefined;
       if (known.capabilities?.groupAssistant !== 1) return null;
       return account.groupAssistant?.get(`${known.id}\n${roomId}`)?.assistant;
+    },
+    /** The room revision of that newest value, when the account's /me offers the switch. */
+    knownGroupAssistantRevision(roomId: string): number | undefined {
+      const known = account.known;
+      return known?.capabilities?.groupAssistant === 1 ? account.groupAssistant?.get(`${known.id}\n${roomId}`)?.revision : undefined;
     },
     lifecycleCapabilities: () => ({ supportsPersonalMentionHistory, supportsDissolve, supportsListRemoval, singleSpeaker, supportsMemberAvatar, supportsMentionAudiences, supportsMemberMentionAll, supportsMemberInvites, supportsNotificationSettings, supportsGroupAssistant, supportsScopedStop: singleSpeaker }),
     async groupSettings(roomId: string) {

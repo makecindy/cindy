@@ -168,10 +168,11 @@ it('switches the group Cindy as a manager only on servers with groupAssistant', 
   snapshot.room.assistant = false;
   let me: Record<string, unknown> = {};
   let offline = false, snapshotDown = false;
+  let meGate: Promise<void> | undefined;
   const original = request.getMockImplementation()!;
   request.mockImplementation(async (path, method, body, actor) => {
     if (offline || (snapshotDown && path.endsWith('/snapshot'))) throw new Error('NETWORK_ERROR');
-    if (path === '/me') return { actor: { id: id(2), kind: 'human' }, ...me };
+    if (path === '/me') { const answer = { actor: { id: id(2), kind: 'human' }, ...me }; await meGate; return answer; }
     const saved = await original(path, method, body, actor);
     if (method === 'PATCH' && body.assistant !== undefined) snapshot.room.assistant = body.assistant;
     return saved;
@@ -201,32 +202,40 @@ it('switches the group Cindy as a manager only on servers with groupAssistant', 
   offline = true; h.enabled = true; await render();
   await act(async () => { await Promise.resolve(); });
   expect(result).toMatchObject({ group: undefined, editable: false, reason: 'unavailable', shown: { revision: 4, assistantEnabled: true } });
-  // The server stops offering the switch (its /me says so) while the settings read fails: the row goes, although
-  // the chat page's older copy still carries the flag.
+  // Review on #13593: reopened online, the read's snapshot fails first and the sheet shows the known value; its /me then
+  // arrives late and no longer offers the switch. The open sheet drops the row by itself (nothing renders it again),
+  // although the chat page's older copy still carries the flag.
+  let answer!: () => void;
   h.enabled = false; await render();
-  offline = false; snapshotDown = true; me = {}; h.enabled = true; await render();
-  await act(async () => { await Promise.resolve(); }); await render();
-  expect(result).toMatchObject({ group: undefined, reason: 'unavailable', shown: { supportsGroupAssistant: false } });
+  offline = false; snapshotDown = true; me = {}; meGate = new Promise<void>(resolve => { answer = resolve; });
+  h.enabled = true; await render();
+  await act(async () => { await Promise.resolve(); });
+  expect(result).toMatchObject({ group: undefined, reason: 'unavailable', shown: { supportsGroupAssistant: true, assistantEnabled: true } });
+  await act(async () => { answer(); await meGate; });
+  expect(result.shown).toMatchObject({ supportsGroupAssistant: false });
 });
 
-// Review on #13593: while settings read again (a write's read-back, or the chat page moved on), the sheet keeps the
-// previous read on screen. Its 「群里的 Cindy」 value is the newest the account has read, not the one frozen in it.
-it('shows the newest group Cindy value while the settings read again', async () => {
+// Review on #13593: the open sheet follows a newer 「群里的 Cindy」 value read elsewhere (another screen of the group)
+// without rendering again. Its own read is then behind what it shows, so it is not writable until it has read again.
+it('shows a newer group Cindy value read elsewhere on the open settings and reads again before writing', async () => {
   snapshot.room.assistant = false;
-  let hold: Promise<never> | undefined;
+  let hold: Promise<void> | undefined;
   const original = request.getMockImplementation()!;
   request.mockImplementation(async (path, method, body, actor) => {
     if (path === '/me') return { actor: { id: id(2), kind: 'human' }, capabilities: { groupAssistant: 1 }, groupAssistantActorId: id(20) };
-    if (hold && path.endsWith('/snapshot')) return hold;
+    if (path.endsWith('/snapshot')) await hold;
     return original(path, method, body, actor);
   });
   await render(); await act(async () => { await result.refresh(); });
-  expect(result.group).toMatchObject({ revision: 4, assistantEnabled: false });
-  // The chat page reads the room at revision 6 (on); the settings' own re-read does not finish yet.
-  h.api.client.groupAssistant({ ...snapshot.room, revision: 6, assistant: true }, id(2));
-  hold = new Promise<never>(() => {});
-  source = { ...source, revision: 6 }; await render();
-  expect(result).toMatchObject({ loading: true, editable: false, group: { revision: 4, assistantEnabled: true } });
+  expect(result).toMatchObject({ editable: true, group: { revision: 4, assistantEnabled: false } });
+  // Someone turns it on; another screen reads revision 5 first, and this sheet's re-read waits.
+  snapshot.room = { ...snapshot.room, revision: 5, assistant: true };
+  let release!: () => void;
+  hold = new Promise<void>(resolve => { release = resolve; });
+  await act(async () => { h.api.client.groupAssistant(snapshot.room, id(2)); await Promise.resolve(); });
+  expect(result).toMatchObject({ editable: false, group: { assistantEnabled: true } });
+  await act(async () => { release(); await hold; });
+  await vi.waitFor(() => expect(result).toMatchObject({ editable: true, group: { revision: 5, assistantEnabled: true } }));
 });
 
 it('selects only an owned manager, never a foreign owner', async () => {
