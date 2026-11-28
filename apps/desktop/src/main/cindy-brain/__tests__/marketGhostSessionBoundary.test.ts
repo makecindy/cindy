@@ -408,6 +408,15 @@ describe('market Ghost session boundary', () => {
     expect(body).toContain(
       'await stopGhostNodeRuntimeForUpdate(installed);',
     );
+    // 竞态守卫：最终忙碌复核、runtime.stop 与 broker 停止之间不能有 await。
+    const finalBusyCheck = body.indexOf('expected.beforeRuntimeStopInLock?.();');
+    const runtimeStop = body.indexOf('runtime.stop(installedGhostStoragePart(installed));');
+    const nodeStop = body.indexOf('await stopGhostNodeRuntimeForUpdate(installed);');
+    const appStop = body.indexOf('await stopPluginAppInstance(installedGhostStoragePart(installed));');
+    expect(finalBusyCheck).toBeGreaterThan(-1);
+    expect(finalBusyCheck).toBeLessThan(runtimeStop);
+    expect(runtimeStop).toBeLessThan(nodeStop);
+    expect(nodeStop).toBeLessThan(appStop);
     expect(body).toContain('runtime.resetFuse(installedGhostStoragePart(result.ghost));');
     expect(body).toContain('...(!previousRelId ? { expectedInstalledInstanceId: installedGhostStoragePart(installed) } : {}),');
     const confirmNamespace = body.indexOf('await manager.confirmUpdatedInstanceNamespace(result.ghost,');
@@ -416,7 +425,7 @@ describe('market Ghost session boundary', () => {
     expect(body).not.toContain(
       'pluginStoragePart(createPluginLogicalIdentity(expected.namespace ?? null, expected.ghostId))',
     );
-    const restoreIndex = body.indexOf('spawnIfResident(installed);');
+    const restoreIndex = body.lastIndexOf('spawnIfResident(installed);');
     expect(restoreIndex).toBeGreaterThan(updateIndex);
   });
 

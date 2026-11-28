@@ -165,12 +165,35 @@ function withPluginEngineTurnTracking(agent: AcpAgent): AcpAgent {
     get(target, property) {
       if (property === 'startSession') {
         return async (options: StartSessionOptions) => {
-          const handle = await target.startSession(options);
           const ref = parsePluginEngineProviderId(options.providerId);
-          if (!ref) return handle;
-          const untrack = trackPluginEngineSession(ref.ghostId, handle);
+          if (!ref) return target.startSession(options);
+          let handle: AgentSessionHandle | null = null;
+          let opening = true;
+          let preparingSends = 0;
+          const untrack = trackPluginEngineSession(ref.ghostId, {
+            isTurnRunning: () => opening || preparingSends > 0 || handle?.isTurnRunning?.() === true,
+          });
+          try {
+            handle = await target.startSession(options);
+          } catch (error) {
+            untrack();
+            throw error;
+          } finally {
+            opening = false;
+          }
+          const sessionHandle = handle;
           return new Proxy(handle, {
             get(session, sessionProperty) {
+              if (sessionProperty === 'send') {
+                return async (...args: Parameters<AgentSessionHandle['send']>) => {
+                  preparingSends++;
+                  try {
+                    return await sessionHandle.send(...args);
+                  } finally {
+                    preparingSends--;
+                  }
+                };
+              }
               if (sessionProperty === 'close') {
                 return async () => {
                   try {

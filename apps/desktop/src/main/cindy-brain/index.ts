@@ -8916,6 +8916,8 @@ export async function installOrUpdateMarketGhostPackage(
     /** 自定义 Git/本地市场在打包前读取的 Manifest，用于防止打包窗口内能力扩张。 */
     manifestCap?: GhostManifest;
     beforeCommitInLock?: () => void;
+    /** Automatic updates recheck activity immediately before stopping the runtime. */
+    beforeRuntimeStopInLock?: () => void;
     /** Caller owner/peer/cancellation guard, valid after the directory swap. */
     assertCurrent?: () => void;
     /** 新包已经原子换位；后续异常不能再按落位失败回滚来源路由。 */
@@ -8962,6 +8964,7 @@ async function installOrUpdateMarketGhostPackageLocked(
     reclaimLegacyBareInstance?: boolean;
     manifestCap?: GhostManifest;
     beforeCommitInLock?: () => void;
+    beforeRuntimeStopInLock?: () => void;
     assertCurrent?: () => void;
     /** 新包已经原子换位；后续异常不能再按落位失败回滚来源路由。 */
     onPackagePlacedInLock?: () => void;
@@ -9132,11 +9135,19 @@ async function installOrUpdateMarketGhostPackageLocked(
     expected.assertCurrent?.();
     const runtime = getGhostRuntime();
     releaseSync = pluginDeviceSync.beginMutation(installedGhostStoragePart(installed));
+    // No await between this last activity check and stopping the engine. A turn
+    // accepted while prepareUpdate waited must defer an automatic update.
+    expected.beforeRuntimeStopInLock?.();
     runtime.stop(installedGhostStoragePart(installed));
+    await stopGhostNodeRuntimeForUpdate(installed);
     // 无法确认旧进程已退出时保持停止态，不能启动第二份 resident。只有旧进程
     // 已确认退出、后续目录更新失败时，才恢复原版本。
-    await stopPluginAppInstance(installedGhostStoragePart(installed));
-    await stopGhostNodeRuntimeForUpdate(installed);
+    try {
+      await stopPluginAppInstance(installedGhostStoragePart(installed));
+    } catch (error) {
+      spawnIfResident(installed);
+      throw error;
+    }
     let result: Awaited<ReturnType<typeof manager.update>>;
     let packagePlaced = false;
     try {

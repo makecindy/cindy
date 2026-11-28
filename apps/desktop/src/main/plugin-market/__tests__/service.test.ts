@@ -6613,6 +6613,30 @@ describe('organization default Plugin takeover', () => {
     } finally { untrack(); }
   });
 
+  // Review regression: a turn can start while the update waits for browser work to end.
+  // The final check must still defer the update without recording a failed release.
+  it('defers an automatic update when a turn starts after the earlier busy check', async () => {
+    setCurrentOrganization();
+    const item = organizationDefaultSummary();
+    installRuntimeGhost({ ...manifest(item.ghostId), description: 'Local package' });
+    const h = harness([item]);
+    let turnRunning = false;
+    const untrack = trackPluginEngineSession(item.ghostId, { isTurnRunning: () => turnRunning });
+    try {
+      runtime.install.mockImplementationOnce(async (_file, options) => {
+        options.beforeCommitInLock?.();
+        turnRunning = true;
+        options.beforeRuntimeStopInLock?.();
+        throw new Error('The final activity check did not defer the update');
+      });
+      await h.service.snapshot();
+      expect(runtime.ghosts[0]?.manifest.version).toBe('1.0.0');
+      turnRunning = false;
+      await h.service.snapshot();
+      expect(runtime.install).toHaveBeenCalledTimes(2);
+    } finally { untrack(); }
+  });
+
   it.each(['detail', 'download', 'inspect'] as const)(
     'keeps service backoff for a real %s failure',
     async (failurePoint) => {
