@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { create } from '@/lib/sessionService';
+import { dialogueWorkspaceUnavailableI18nKey } from '@/utils/ipcError';
 
 vi.mock('@/lib/makerTransport', () => ({
   makerApiFor: vi.fn(),
@@ -27,6 +29,27 @@ async function loadSessionService() {
   vi.resetModules();
   return import('@/lib/sessionService');
 }
+
+// #10323: exercise the real create adapter with Electron's serialized rejection.
+// The main allocator coverage cannot catch a dropped or misclassified recovery reason.
+// Unit input: one failed folderless dialogue create; no Electron or engine process needed.
+it('keeps the dialogue workspace recovery reason through the session create IPC adapter', async () => {
+  const rejectCreate = vi.fn().mockRejectedValueOnce(new Error(
+    "Error invoking remote method 'local-db:sessions:create': Error: [PRECONDITION_FAILED] DIALOGUE_WORKSPACE_UNAVAILABLE",
+  )).mockRejectedValueOnce(new Error(
+    "Error invoking remote method 'local-db:sessions:create': Error: [PRECONDITION_FAILED] Account changed",
+  ));
+  vi.stubGlobal('window', { electronAPI: { localDb: { sessions: { create: rejectCreate } } } });
+  try {
+    const input = { workspaceKind: 'dialogue' } as const;
+    expect(await create(input).catch(dialogueWorkspaceUnavailableI18nKey)).toBe(
+      'settings.about.storage.dialogueDirectoryUnavailable',
+    );
+    expect(await create(input).catch(dialogueWorkspaceUnavailableI18nKey)).toBeNull();
+  } finally {
+    vi.unstubAllGlobals();
+  }
+});
 
 describe('sessionService.get in-flight deduplication', () => {
   beforeEach(() => {

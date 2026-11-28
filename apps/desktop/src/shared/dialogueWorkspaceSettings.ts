@@ -3,3 +3,5 @@ export interface DialogueWorkspaceSettingsState {
   directory: string;
   isCustomized: boolean;
 }
+
+export const DIALOGUE_WORKSPACE_UNAVAILABLE = 'DIALOGUE_WORKSPACE_UNAVAILABLE';

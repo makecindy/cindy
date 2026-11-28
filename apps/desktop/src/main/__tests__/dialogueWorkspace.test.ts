@@ -113,7 +113,11 @@ describe('dialogue workspace directory', () => {
     fs.writeFileSync(path.join(oldDir, 'keep.txt'), 'keep');
     fs.renameSync(mount, detached);
     fs.mkdirSync(mount);
-    expect(() => ensureDialogueWorkspaceDir('new', now)).toThrow();
+    // #10323: folderless dialogue creation uses this allocator before writing the task row.
+    // A real missing root must report a recovery reason without exposing its path. Unit, using the existing temp volume.
+    expect(() => ensureDialogueWorkspaceDir('new', now)).toThrow(
+      /^\[PRECONDITION_FAILED\] DIALOGUE_WORKSPACE_UNAVAILABLE$/,
+    );
     expect(fs.readdirSync(mount)).toEqual([]);
     expect(readDialogueWorkspaceSettings()).toEqual({ directory: custom, isCustomized: true });
     fs.rmdirSync(mount);
@@ -136,7 +140,9 @@ describe('dialogue workspace directory', () => {
       return result;
     }) as typeof fs.mkdirSync);
     try {
-      expect(() => ensureDialogueWorkspaceDir('new', Date.now())).toThrow();
+      expect(() => ensureDialogueWorkspaceDir('new', Date.now())).toThrow(
+        /^\[PRECONDITION_FAILED\] DIALOGUE_WORKSPACE_UNAVAILABLE$/,
+      );
       expect(fs.existsSync(custom)).toBe(false);
     } finally {
       spy.mockRestore();
