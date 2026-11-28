@@ -3,7 +3,7 @@ import { FileTypeIcon } from '@/components/ui/file-type-icon';
  * FilterResultList —— 文件名筛选结果列表。
  *
  * 每行 basename(主) + dirname(副,小一号),点击选中文件触发 onSelectFile。
- * 跟 FileTreeView 同视觉风格(h-28px / rounded-md / hover bg-sidebar-item-hover /
+ * 跟 FileTreeView 同视觉风格(h-28px / rounded-lg / hover bg-sidebar-item-hover /
  * selected bg-sidebar-item-active)。
  *
  * 抽到 workdir-browse/ 下,RSB plugin 和 doc 模式 sidebar 共用。
@@ -79,7 +79,7 @@ export function FilterResultList({
               onClick={() => onSelectFile(relPath)}
               title={relPath}
               className={cn(
-                'flex w-full items-center gap-1.5 rounded-md px-2 py-1 text-left text-sm',
+                'flex w-full items-center gap-1.5 rounded-lg px-2 py-1 text-left text-sm',
                 selected
                   ? 'bg-sidebar-item-active font-medium text-sidebar-item-active-foreground'
                   : 'text-foreground hover:bg-sidebar-item-hover',

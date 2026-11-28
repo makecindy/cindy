@@ -1,0 +1,259 @@
+import { useEffect, useRef, useState } from 'react';
+import {
+  Check,
+  ChevronRight,
+  Copy,
+  Folder,
+  FolderOpen,
+  HardDrive,
+  Link2,
+} from 'lucide-react';
+import { Button } from '@/components/ui/button';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import { Tip } from '@/components/ui/tooltip';
+import { cn } from '@/lib/utils';
+
+/**
+ * Extracts a Windows drive letter (e.g. "D:") for instant volume recognition.
+ * Returns null on POSIX paths or UNC shares.
+ */
+export function extractDriveBadge(rawPath: string): string | null {
+  const match = /^([A-Za-z]):[\\/]/.exec(rawPath.trim());
+  return match ? `${match[1].toUpperCase()}:` : null;
+}
+
+/**
+ * Formats a full filesystem path for compact single-line display while preserving
+ * the leading volume/anchor and the most meaningful trailing segments.
+ */
+function elideSegment(segment: string, maxLen = 20): string {
+  if (segment.length <= maxLen) return segment;
+  const head = Math.max(6, Math.floor((maxLen - 1) * 0.55));
+  const tail = Math.max(4, maxLen - 1 - head);
+  return `${segment.slice(0, head)}…${segment.slice(-tail)}`;
+}
+
+export function formatCompactPath(rawPath: string): string {
+  const trimmed = rawPath.trim();
+  const drive = extractDriveBadge(trimmed);
+  const sep = trimmed.includes('\\') && !trimmed.includes('/') ? '\\' : '/';
+  const withoutDrive = drive ? trimmed.slice(2) : trimmed;
+  const parts = withoutDrive.split(/[\\/]+/).filter(Boolean);
+  if (parts.length <= 2) {
+    const compact = parts.map((part, idx) => (idx === parts.length - 1 ? part : elideSegment(part))).join(sep);
+    return drive ? compact || sep : compact ? `${sep}${compact}` : trimmed;
+  }
+  const parent = elideSegment(parts[parts.length - 2]);
+  const leaf = parts[parts.length - 1];
+  return `…${sep}${parent}${sep}${leaf}`;
+}
+
+export interface WorkspacePathFieldProps {
+  path: string;
+  /** Optional original linked/canonical path shown as a secondary section in the popover. */
+  linkedPath?: string;
+  linkedPathLabel?: string;
+  fullPathLabel: string;
+  primaryPathLabel?: string;
+  detailsText?: string;
+  copyLabel: string;
+  /** Keep copy available in the full-path popover, without a second inline action. */
+  hideInlineCopy?: boolean;
+  openLabel?: string;
+  onCopy: (value: string) => void | Promise<void>;
+  onOpen?: () => void | Promise<void>;
+  disabled?: boolean;
+  className?: string;
+}
+
+/**
+ * Tactile, scannable read-only path well for buddy workspace location settings.
+ *
+ * Anatomy (36px height = Input md):
+ *   [ Drive badge / Folder ] [ Monospace path (opens Full Path Popover) ] | [ Copy ] [ Open ]
+ */
+export function WorkspacePathField({
+  path,
+  linkedPath,
+  linkedPathLabel,
+  fullPathLabel,
+  primaryPathLabel,
+  detailsText,
+  copyLabel,
+  hideInlineCopy = false,
+  openLabel,
+  onCopy,
+  onOpen,
+  disabled = false,
+  className,
+}: WorkspacePathFieldProps) {
+  const [copied, setCopied] = useState(false);
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (timerRef.current) clearTimeout(timerRef.current);
+    };
+  }, []);
+
+  const driveBadge = extractDriveBadge(path);
+  const compactDisplay = formatCompactPath(path);
+
+  const handleCopy = async () => {
+    await onCopy(path);
+    setCopied(true);
+    if (timerRef.current) clearTimeout(timerRef.current);
+    timerRef.current = setTimeout(() => setCopied(false), 1600);
+  };
+
+  return (
+    <div
+      className={cn(
+        'group flex h-9 min-w-0 items-center gap-2 overflow-hidden rounded-lg border border-[var(--border-default)] bg-[var(--surface-elevated)] pl-2.5 pr-1.5 transition-colors',
+        'hover:border-[var(--text-tertiary)]/50 focus-within:border-[var(--focus-ring)]',
+        className,
+      )}
+    >
+      <Popover>
+        <PopoverTrigger asChild>
+          <button
+            type="button"
+            aria-label={fullPathLabel}
+            title={path}
+            disabled={disabled}
+            className={cn(
+              'group/path flex h-7 min-w-0 flex-1 items-center gap-2 rounded px-1 text-left transition-colors',
+              'enabled:hover:bg-[var(--surface-hover)] data-[state=open]:bg-[var(--surface-hover)]',
+              'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--focus-ring)]',
+              hideInlineCopy && 'mr-1.5 pr-1.5',
+            )}
+          >
+            {driveBadge ? (
+              <span
+                className="inline-flex h-5 shrink-0 items-center gap-1 rounded bg-[var(--surface-chip)] px-1.5 font-mono text-11 font-medium text-[var(--text-primary)]"
+                aria-hidden
+              >
+                <HardDrive size={11} className="text-[var(--text-secondary)]" />
+                {driveBadge}
+              </span>
+            ) : (
+              <Folder
+                size={14}
+                className="shrink-0 text-[var(--text-secondary)]"
+                aria-hidden
+              />
+            )}
+            <span className="min-w-0 flex-1 truncate font-mono text-12 text-[var(--text-primary)]">
+              {compactDisplay}
+            </span>
+            {hideInlineCopy ? (
+              <ChevronRight
+                size={13}
+                className="shrink-0 text-[var(--text-secondary)] group-data-[state=open]/path:rotate-90"
+                aria-hidden
+              />
+            ) : null}
+          </button>
+        </PopoverTrigger>
+        <PopoverContent
+          align="start"
+          sideOffset={6}
+          className="w-[380px] max-w-[calc(100vw-32px)] rounded-xl border-[var(--border-default)] bg-[var(--surface-elevated)] p-4 text-[var(--text-primary)]"
+        >
+          <div className="flex flex-col gap-3">
+            <div>
+              <p className="mb-1.5 text-11 font-medium text-[var(--text-secondary)]">
+                {primaryPathLabel ?? fullPathLabel}
+              </p>
+              <p className="select-text break-all font-mono text-12 leading-relaxed text-[var(--text-primary)]">
+                {path}
+              </p>
+            </div>
+
+            {linkedPath ? (
+              <div className="border-t border-[var(--border-default)] pt-3">
+                <p className="mb-1.5 flex items-center gap-1.5 text-11 font-medium text-[var(--text-secondary)]">
+                  <Link2 size={12} className="shrink-0 text-[var(--text-tertiary)]" aria-hidden />
+                  {linkedPathLabel}
+                </p>
+                <p className="select-text break-all font-mono text-12 leading-relaxed text-[var(--text-secondary)]">
+                  {linkedPath}
+                </p>
+              </div>
+            ) : null}
+
+            {detailsText ? (
+              <p className="text-12 leading-[1.5] text-[var(--text-secondary)] [text-wrap:pretty]">
+                {detailsText}
+              </p>
+            ) : null}
+
+            <div className="flex items-center justify-end gap-2 pt-0.5">
+              <Button
+                type="button"
+                variant="secondary"
+                size="sm"
+                compact
+                className="gap-1.5"
+                disabled={disabled}
+                onClick={() => void handleCopy()}
+              >
+                {copied ? (
+                  <Check size={13} className="text-[var(--status-success)]" aria-hidden />
+                ) : (
+                  <Copy size={13} aria-hidden />
+                )}
+                {copyLabel}
+              </Button>
+            </div>
+          </div>
+        </PopoverContent>
+      </Popover>
+
+      {!hideInlineCopy || (onOpen && openLabel) ? (
+        <>
+          <div className="h-4 w-px shrink-0 bg-[var(--border-default)]" aria-hidden />
+          <div className="flex shrink-0 items-center gap-0.5">
+            {!hideInlineCopy ? (
+              <Tip text={copyLabel}>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  tone="quiet"
+                  size="sm"
+                  className="w-7 px-0"
+                  disabled={disabled}
+                  aria-label={copyLabel}
+                  onClick={() => void handleCopy()}
+                >
+                  {copied ? (
+                    <Check size={14} className="text-[var(--status-success)]" aria-hidden />
+                  ) : (
+                    <Copy size={14} aria-hidden />
+                  )}
+                </Button>
+              </Tip>
+            ) : null}
+
+            {onOpen && openLabel ? (
+              <Tip text={openLabel}>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  tone="quiet"
+                  size="sm"
+                  className="w-7 px-0"
+                  disabled={disabled}
+                  aria-label={openLabel}
+                  onClick={() => void onOpen()}
+                >
+                  <FolderOpen size={14} aria-hidden />
+                </Button>
+              </Tip>
+            ) : null}
+          </div>
+        </>
+      ) : null}
+    </div>
+  );
+}

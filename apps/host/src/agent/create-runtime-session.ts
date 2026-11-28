@@ -35,16 +35,30 @@ export interface StoredTaskRow {
 
 export interface HostRuntimeSessionCreatePorts {
   serverDeps: { createSession(input: Record<string, unknown>): Promise<{ id: string }> };
-  getAgentGraph(): { maker: Pick<Maker, 'createSession'> } | null;
+  getAgentGraph(): {
+    maker: Pick<Maker, 'createSession'> & { listAvailableAgents?: Maker['listAvailableAgents'] };
+    hasEngine?(kind: 'claude-code' | 'codex' | 'pi' | 'acp'): boolean;
+  } | null;
   /** The send path's provider group refusal (send-preflight.ts createHostProviderExecutionCheck). */
-  assertProviderExecutionSupported(id: string, providerId?: string | null): void;
+  assertProviderExecutionSupported(id: string, providerId?: string | null, nativeId?: string | null): void;
   admitLocalRoute(opts: LocalRouteAdmissionOpts): Promise<void>;
   /** The stored task row of a caller-provided id, or null when no such row exists. */
   readStoredSession(id: string): Promise<StoredTaskRow | null>;
 }
 
+export function throwAgentBinaryNotReady(): never {
+  throwIpcError('PRECONDITION_FAILED', 'binary_not_ready: No Agent engine is available on this computer. Install an engine and restart Cindy.');
+}
+
 export async function createHostRuntimeSession(ports: HostRuntimeSessionCreatePorts, input: unknown) {
   const { serverDeps, getAgentGraph, assertProviderExecutionSupported, admitLocalRoute, readStoredSession } = ports;
+  const initialGraph = getAgentGraph();
+  const hasAnyEngine = Boolean(initialGraph && (
+    typeof initialGraph.hasEngine === 'function'
+      ? (initialGraph.maker.listAvailableAgents?.().length ?? 0) > 0 || initialGraph.hasEngine('acp')
+      : (initialGraph.maker.listAvailableAgents?.().length ?? 1) > 0
+  ));
+  if (!hasAnyEngine) throwAgentBinaryNotReady();
   const scope = activeOwnerScopeKey();
   const opts = readHostCreateSessionOpts(input, ensureDialogueWorkspaceDir);
   // These routes need separate execution services; never reinterpret a remote
@@ -67,6 +81,7 @@ export async function createHostRuntimeSession(ports: HostRuntimeSessionCreatePo
     throwIpcError('PRECONDITION_FAILED', 'This task id already belongs to a different task');
   }
   if (activeOwnerScopeKey() !== scope || isAppSessionBoundaryPending()) throwIpcError('PRECONDITION_FAILED', 'Host account changed');
+  assertProviderExecutionSupported(opts.id ?? '', stored ? stored.providerId : opts.providerId, stored?.sdkSessionId);
   const row = stored
     ? { id: opts.id as string }
     : await serverDeps.createSession({

@@ -21,7 +21,11 @@ import {
   connectedProvidersForAgent,
   getModel,
   isModelVisible,
+  type ProviderSection,
+  type SectionModel,
 } from '@cindy/model-providers';
+import { readImPluginEngine } from './pluginEngineCatalog';
+import type { PluginEngineView } from '../../../shared/pluginEngines';
 import { createLogger } from '../../logger';
 
 import { resetImSessionToChannelDefaults } from './channelDefaultRouteSync';
@@ -278,13 +282,13 @@ export function createSlashHandlers(
           return true;
         }
         // 连接已交给伙伴: 群 / 话题换一条新专线; 主人私聊不轮换伙伴主任务。
-        // 伙伴当前解析不出时('unbound')走下面原有的 `/new`, 与消息路由的回落一致。
+        // 伙伴当前解析不出时回「伙伴暂时不可用」, 不走下面原有的 `/new`(与消息路由同口径)。
         // `/ctr` 接管中仍按原有 `/new` 处理(它会顺带结束接管)。
         if (
           turnRunner.rotateCompanionLane &&
           !bindingStore.get({ channel, botContextId: ctx.botContextId, userId: ctx.userId })
         ) {
-          let companionNew: 'unbound' | 'owner-dm' | 'rotated';
+          let companionNew: 'unbound' | 'owner-dm' | 'rotated' | { unavailable: string };
           try {
             companionNew = await turnRunner.rotateCompanionLane(ctx.botContextId, ctx.userId);
           } catch (err) {
@@ -299,6 +303,10 @@ export function createSlashHandlers(
           }
           if (companionNew === 'rotated') {
             await safeSendText(ctx, ui.slash.companionLaneNew ?? ui.slash.new);
+            return true;
+          }
+          if (typeof companionNew === 'object') {
+            await safeSendText(ctx, companionNew.unavailable);
             return true;
           }
         }
@@ -375,6 +383,26 @@ export function createSlashHandlers(
           return true;
         }
         const { row } = target;
+        if (row.agentKind === 'acp') {
+          // 插件引擎任务(docs/plans/acp-plugin-bridge.md)：列它自己的引擎提供的模型，同一引擎内切换(与应用内
+          // 选择器同一规则)。卡片按钮带引擎的 providerId；换到别的引擎只在应用里做(那要交接)。
+          const engine = await readImPluginEngine(row);
+          const section = engine ? pluginEngineModelSection(engine) : null;
+          if (!section) {
+            await safeSendText(ctx, imText('imBot.text.shared.slash.pluginEngineModelsUnavailable'));
+            return true;
+          }
+          await safeSendCard(ctx, cards.buildModelPickerCard({
+            sessionId: row.id,
+            agentKind: 'pi',
+            sections: [section],
+            currentModelId: row.model,
+            currentProviderId: row.providerId,
+            currentEffort: row.effort || null,
+            defaultEffortByModel: Object.fromEntries(section.models.map((m) => [m.id, m.defaultEffort ?? ''])),
+          })).catch((err: unknown) => log.error(`/model card send failed: ${err instanceof Error ? err.message : String(err)}`));
+          return true;
+        }
         // 模型清单与应用内模型选择器**走同一个方法**:live providers(含自定义供应商 + 实时连接态)
         // → 仅已连接供应商 → buildProviderSections(每供应商各列其模型、每行 = (供应商, 模型))。
         // 可见性过滤复用 renderer 镜像到 main 的 override(modelVisibilityMirror)+ 目录 defaultEnabled,
@@ -406,7 +434,7 @@ export function createSlashHandlers(
           sections,
           currentModelId: row.model,
           currentProviderId,
-          currentEffort: row.effort,
+          currentEffort: row.effort || null,
           defaultEffortByModel: target.attached
             ? Object.fromEntries(
                 sections.flatMap((s) => s.models.map((m) => [m.id, m.defaultEffort ?? row.effort])),
@@ -635,11 +663,18 @@ export function createSlashHandlers(
           ctx.botContextId,
           effective.workspaceKind,
         );
+        const effectiveAgentLabel =
+          effective.agentKind === 'acp'
+            ? ((await readImPluginEngine({
+                providerId: effective.providerId,
+                agentDeviceId: effective.agentDeviceId,
+              }))?.name ?? effective.agentKind)
+            : effective.agentKind;
         await safeSendText(
           ctx,
           ((companionRow && ui.slash.settingsCompanion) || render)({
             workspace,
-            agent: effective.agentKind,
+            agent: effectiveAgentLabel,
             model: effective.model,
             effort: effective.effort,
             permission: effective.permissionMode,
@@ -662,7 +697,9 @@ export function createSlashHandlers(
         const context = permissionModeCommandContext(
           row.id,
           row.permissionMode,
-          turnRunner.getPermissionModes(row.agentKind),
+          await turnRunner.getPermissionModes(row.agentKind, {
+            sessionId: row.id, providerId: row.providerId, agentDeviceId: row.agentDeviceId,
+          }),
         );
         if (!richIm) {
           const requested = commandArgs[0];
@@ -708,3 +745,23 @@ export function createSlashHandlers(
 
   return { handleSlashCommand };
 }
+
+/**
+ * A plugin engine's models as one picker section. The card reads only the section's id and name, so the
+ * engine is presented under its own task providerId (`acp-plugin:…`) rather than a built-in provider.
+ */
+function pluginEngineModelSection(engine: PluginEngineView): ProviderSection | null {
+  const models = engine.models.filter((model) => !engine.disabledModels?.some((off) => off.id === model.id));
+  if (models.length === 0) return null;
+  return {
+    provider: { id: engine.providerId, name: engine.name } as ProviderSection['provider'],
+    models: models.map((model) => ({
+      id: model.id,
+      displayName: model.displayName || model.id,
+      efforts: (model.efforts ?? []) as SectionModel['efforts'],
+      defaultEffort: (model.defaultEffort ?? null) as SectionModel['defaultEffort'],
+      contextWindow: 0,
+    })),
+  };
+}
+

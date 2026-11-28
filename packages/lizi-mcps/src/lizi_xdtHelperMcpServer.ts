@@ -114,7 +114,7 @@ import type { SetCurrentSessionTitleDeps } from './xdt-helper/set_current_sessio
 import type { RenameSessionsDeps } from './xdt-helper/rename_sessions.js';
 import type { ArchiveSessionsDeps, PinSessionsDeps, SnoozeSessionsDeps } from './xdt-helper/archive_sessions.js';
 import { registerSessionImportTools, type SessionImportCallbacks } from './xdt-helper/session_import.js';
-import { projectMembershipNote, type SendToRemoteSessionCallback, type SendToSessionCallback } from './xdt-helper/send_to_session.js';
+import { projectMembershipNote, type SendToRemoteSessionCallback, type SendToSessionCallback, type SendToSessionDeps } from './xdt-helper/send_to_session.js';
 import type {
   AuthorizeSkillLearningCallback,
   StartSkillLearningCallback,
@@ -129,6 +129,7 @@ import {
 } from './xdt-helper/teammate_projects.js';
 import { registerRemoteControlRequestTool, registerListMachinesTool, type ListMachinesCallbacks } from './xdt-helper/list_machines.js';
 import { registerTeammateHomeTools, type TeammateHomeCallbacks } from './xdt-helper/teammate_home.js';
+import { registerWorkspaceMigrationTool, type WorkspaceMigrationCallbacks } from './xdt-helper/workspace_migration.js';
 import {
   registerBotCapabilityTools,
   registerAppDefaultModelTools,
@@ -244,6 +245,7 @@ export const HELPER_CATEGORY_DESCRIPTIONS: Record<(typeof CATEGORY_ENUM)[number]
   usage: '只读查询订阅额度、任务额度、已记录供应商用量与供应组状态。get_subscription_usage 查询本机订阅；get_session_quota 按任务读取实际执行来源的额度，包含已授权的同账号电脑和供应商分享。供应商历史与组状态可用 device 指定同账号已授权电脑，缺省本机。插件需声明 usage 组。',
   feedback: `向 ${BRAND_NAME} 官方提交反馈。`,
   handoff: [
+    '用于跨任务发消息，或为独立业务工作流新建用户侧边栏可见的普通任务（只服务当前任务的临时检查、复核或子步骤优先用引擎原生 subagent，多 worker 协同用 cindy_orca）。',
     '新建普通任务默认在本机；宿主支持跨电脑新建时，可用 device 指定任务和文件所在电脑。',
     '新建可指定 title；',
     '本机省略 project_path 继承来源归属（来源不绑项目时按执行目录所在的已登记可见项目归属），传已有项目路径切换项目，传 null 创建不绑项目的任务。',
@@ -260,7 +262,7 @@ export const HELPER_CATEGORY_DESCRIPTIONS: Record<(typeof CATEGORY_ENUM)[number]
     `本机。`,
   ].join(''),
   bots: [
-    '伙伴：资料、能力、关联项目（list_teammate_projects / set_teammate_project，仅自身）、发现伙伴与主力电脑。',
+    '伙伴：资料、能力、关联项目（list_teammate_projects / set_teammate_project，仅自身）、发现伙伴与主力电脑，以及本机工作区迁移（teammate_workspace_migration）。',
     '发现伙伴（list_agents，返回伙伴主对话的 session_id，发消息用 handoff 类的 send_to_session）与主力电脑（get_teammate_home / move_teammate_home）可跨电脑；',
     '其余本机。',
   ].join(''),
@@ -539,6 +541,7 @@ export interface XdtHelperMcpDeps {
   listAvailableModels?: ListAvailableModelsDeps['listAvailableModels'];
   /** 另一台电脑上的既有任务(send_to_session 的 deviceId::sessionId 目标)。 */
   sendToRemoteSession?: SendToRemoteSessionCallback;
+  sendToSharedTask?: SendToSessionDeps['sendToSharedTask'];
   /** Cindy-managed Learn flow; registered in the skills category when supplied by the host. */
   skillLearning?: StartSkillLearningCallback;
   /** Search catalogs and publish the current user's Skills through the host's SkillHub service. */
@@ -574,6 +577,7 @@ export interface XdtHelperMcpDeps {
   botCapabilities?: BotCapabilityCallbacks;
   /** Which computer runs a teammate, and moving it to another (cloud companions). */
   teammateHome?: TeammateHomeCallbacks;
+  workspaceMigration?: WorkspaceMigrationCallbacks;
   /** What machines this account has and their live resources. */
   machines?: ListMachinesCallbacks;
   /**
@@ -657,7 +661,7 @@ export function createXdtHelperMcpServer(
     }
     const allow = (categories: ReadonlySet<string>): HelperSurfaceAllow => ({
       categories,
-      ...(sessionId && !remoteBotOnly ? { tools: new Set(['list_agents']) } : {}),
+      ...(sessionId && !remoteBotOnly ? { tools: new Set(['list_agents', ...(!context.remoteHostId ? ['teammate_workspace_migration'] : [])]) } : {}),
     });
     if (!sessionId) return allow(remoteBotOnly ? new Set() : defaultCategories);
     if (!deps.resolveSurface) return allow(remoteBotOnly ? new Set(['auth', 'cindy']) : defaultCategories);
@@ -843,6 +847,7 @@ export function createXdtHelperMcpServer(
       getSessionContext: () => resolveLiziMcpSessionContext(sessionCtx),
       sendToSession: deps.sendToSession,
       ...(deps.sendToRemoteSession ? { sendToRemoteSession: deps.sendToRemoteSession } : {}),
+      ...(deps.sendToSharedTask ? { sendToSharedTask: deps.sendToSharedTask } : {}),
     });
   }
   if (deps.skillLearning && deps.authorizeSkillLearning) {
@@ -878,6 +883,9 @@ export function createXdtHelperMcpServer(
       callbacks: deps.teammateHome,
     });
   }
+  if (deps.workspaceMigration) registerWorkspaceMigrationTool(registry, {
+    getSessionContext: () => resolveLiziMcpSessionContext(sessionCtx), callbacks: deps.workspaceMigration,
+  });
   if (deps.modelSettings) registerAppModelsTools(registry, deps.modelSettings, () => resolveLiziMcpSessionContext(sessionCtx));
   if (deps.providerReads) registerProviderReadTools(registry, deps.providerReads, () => resolveLiziMcpSessionContext(sessionCtx));
   if (deps.providerSharing) registerProviderSharingTools(registry, deps.providerSharing, () => resolveLiziMcpSessionContext(sessionCtx));
@@ -904,7 +912,7 @@ export function createXdtHelperMcpServer(
       callbacks: deps.botProfiles,
     });
   }
-  const sendToSessionScope = sessionDeliveryScope(!!deps.sendToRemoteSession);
+  const sendToSessionScope = sessionDeliveryScope(!!deps.sendToRemoteSession, !!deps.sendToSharedTask);
   const sendToSession = registry.get('send_to_session');
   registerListToolsEntry(server, registry, allowedSurface, sessionCtx, sendToSessionScope);
   const call = registerCallToolEntry(server, registry, {

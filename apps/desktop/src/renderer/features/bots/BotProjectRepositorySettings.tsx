@@ -35,7 +35,12 @@ export function BotProjectRepositorySettings({ botId }: { botId: string }) {
 
   if (!projectRepository) return null;
   if (!status) return <div role="status"><Spinner size={16} /></div>;
-  if (status === 'ready') return <p role="status" className="text-13 text-[var(--text-secondary)]">{t('bots.homeFolder.repository.ready')}</p>;
+  if (status === 'ready') return (
+    <p role="status" className="flex items-center gap-2 text-12 font-medium text-[var(--text-secondary)]">
+      <span className="size-1.5 shrink-0 rounded-full bg-[var(--status-success)]" aria-hidden />
+      {t('bots.homeFolder.repository.ready')}
+    </p>
+  );
   const description = {
     'needs-identity': 'needsIdentity',
     'not-ready': 'notReady',

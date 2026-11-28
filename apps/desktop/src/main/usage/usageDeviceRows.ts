@@ -16,6 +16,7 @@
  * 老被控端没有该 channel → CHANNEL_NOT_ALLOWED,控制端标记「版本过旧」。
  */
 
+import { randomUUID } from 'node:crypto';
 import { gzip as gzipCb, gunzip as gunzipCb } from 'node:zlib';
 import { promisify } from 'node:util';
 
@@ -47,12 +48,30 @@ export interface UsageDeviceRows {
   tasks: UsageTaskMeta[];
 }
 
+export interface UsageTaskDelta {
+  removedTaskIds: string[];
+}
+
+export interface UsageTaskDeltaCache {
+  encode(
+    scopeKey: string,
+    requestedBase: string | null | undefined,
+    visibleTasks: readonly UsageTaskMeta[],
+  ): {
+    tasks: UsageTaskMeta[];
+    tasksToken: string;
+    tasksDelta?: UsageTaskDelta;
+  };
+}
+
 export type UsageDeviceRowsResponse =
   | {
       format: typeof USAGE_DEVICE_ROWS_FORMAT;
       todayKey: string;
       sinceDay: string | null;
       rowsGz: string;
+      tasksToken?: string;
+      tasksDelta?: UsageTaskDelta;
     }
   | { format: typeof USAGE_DEVICE_ROWS_FORMAT; oversize: true };
 
@@ -68,25 +87,100 @@ export interface UsageDeviceRowsReaderDeps {
    */
   remoteVisibleTaskIds(sessionIds: readonly string[]): Promise<ReadonlySet<string>>;
   todayKey(): string;
+  taskDeltaCache?: UsageTaskDeltaCache;
+  scopeKey?(): string;
+}
+
+const MAX_TASK_DELTA_SNAPSHOTS = 16;
+
+function isTaskBaseToken(value: unknown): value is string {
+  return typeof value === 'string' && value.length > 0 && value.length <= 128;
+}
+
+/**
+ * 被控端任务元数据增量基准缓存(按账号 scope 严格隔离,有界 LRU):
+ * 新控制端带 `tasksBase` 时只回变更/新增的任务元数据与已移除 id,避免每分钟增量同步重传数千条未改动的历史任务元数据;
+ * 旧控制端不带 `tasksBase`,或重启/淘汰未命中时回完整集合,保持双向无损兼容。
+ */
+export function createUsageTaskDeltaCache(maxSnapshots = MAX_TASK_DELTA_SNAPSHOTS): UsageTaskDeltaCache {
+  const limit = Math.max(1, maxSnapshots);
+  const entries = new Map<string, { scopeKey: string; token: string; byId: Map<string, string> }>();
+
+  return {
+    encode(scopeKey, requestedBase, visibleTasks) {
+      const currentById = new Map<string, string>();
+      for (const task of visibleTasks) {
+        currentById.set(task.sessionId, JSON.stringify(task));
+      }
+      let latest: { scopeKey: string; token: string; byId: Map<string, string> } | undefined;
+      for (const entry of entries.values()) {
+        if (entry.scopeKey === scopeKey) latest = entry;
+      }
+      let token: string;
+      let storedById: Map<string, string>;
+      if (
+        latest &&
+        latest.byId.size === currentById.size &&
+        [...currentById.entries()].every(([id, serialized]) => latest.byId.get(id) === serialized)
+      ) {
+        token = latest.token;
+        storedById = latest.byId;
+      } else {
+        token = randomUUID();
+        storedById = currentById;
+      }
+      const baseKey = isTaskBaseToken(requestedBase) ? `${scopeKey}\u0000${requestedBase}` : null;
+      const base = baseKey ? entries.get(baseKey) : undefined;
+      const currentKey = `${scopeKey}\u0000${token}`;
+      entries.delete(currentKey);
+      entries.set(currentKey, { scopeKey, token, byId: storedById });
+      while (entries.size > limit) {
+        const oldest = entries.keys().next().value;
+        if (oldest === undefined) break;
+        entries.delete(oldest);
+      }
+      if (!base) {
+        return { tasks: [...visibleTasks], tasksToken: token };
+      }
+      if (base.token === token) {
+        return { tasks: [], tasksToken: token, tasksDelta: { removedTaskIds: [] } };
+      }
+      const tasks = visibleTasks.filter(
+        (task) => base.byId.get(task.sessionId) !== currentById.get(task.sessionId),
+      );
+      const removedTaskIds = [...base.byId.keys()].filter((id) => !currentById.has(id));
+      return { tasks, tasksToken: token, tasksDelta: { removedTaskIds } };
+    },
+  };
 }
 
 export function isDayKey(value: unknown): value is string {
   return typeof value === 'string' && DAY_KEY_RE.test(value);
 }
 
+export interface UsageDeviceRowsRequest {
+  sinceDay: string | null;
+  tasksBase?: string | null;
+}
+
 /** 解析被控端请求参数;非法时返回 null(由 IPC handler 转成 INVALID_PARAMS)。 */
-export function parseUsageDeviceRowsRequest(arg: unknown): { sinceDay: string | null } | null {
+export function parseUsageDeviceRowsRequest(arg: unknown): UsageDeviceRowsRequest | null {
   if (arg === undefined || arg === null) return { sinceDay: null };
   if (typeof arg !== 'object' || Array.isArray(arg)) return null;
-  const sinceDay = (arg as { sinceDay?: unknown }).sinceDay;
-  if (sinceDay === undefined || sinceDay === null) return { sinceDay: null };
-  return isDayKey(sinceDay) ? { sinceDay } : null;
+  const raw = arg as { sinceDay?: unknown; tasksBase?: unknown };
+  const sinceDay = raw.sinceDay;
+  if (sinceDay !== undefined && sinceDay !== null && !isDayKey(sinceDay)) return null;
+  const tasksBase = isTaskBaseToken(raw.tasksBase) ? raw.tasksBase : undefined;
+  return {
+    sinceDay: sinceDay ?? null,
+    ...(tasksBase ? { tasksBase } : {}),
+  };
 }
 
 /** 被控端:读本机原始用量行并编码成 wire 响应。 */
 export async function readUsageDeviceRows(
   deps: UsageDeviceRowsReaderDeps,
-  request: { sinceDay: string | null },
+  request: UsageDeviceRowsRequest,
 ): Promise<UsageDeviceRowsResponse> {
   const todayKey = deps.todayKey();
   const sinceDay = request.sinceDay;
@@ -96,17 +190,32 @@ export async function readUsageDeviceRows(
     deps.getSessionUsageSince(sinceDay ?? '0000-01-01'),
   ]);
   const visible = await deps.remoteVisibleTaskIds(sessionUsage.tasks.map((task) => task.sessionId));
+  const visibleTasks = sessionUsage.tasks.filter((task) => visible.has(task.sessionId));
+  const encodedTasks = deps.taskDeltaCache
+    ? deps.taskDeltaCache.encode(
+        deps.scopeKey?.() ?? 'default',
+        sinceDay ? request.tasksBase : null,
+        visibleTasks,
+      )
+    : { tasks: visibleTasks, tasksToken: undefined, tasksDelta: undefined };
   const rows: UsageDeviceRows = {
     spendDays: sinceDay ? spendDays.filter((row) => row.day >= sinceDay) : spendDays,
     modelRows,
     sessionRows: sessionUsage.rows.filter((row) => visible.has(row.sessionId)),
-    tasks: sessionUsage.tasks.filter((task) => visible.has(task.sessionId)),
+    tasks: encodedTasks.tasks,
   };
   const rowsGz = (await gzipAsync(Buffer.from(JSON.stringify(rows), 'utf8'))).toString('base64');
   if (Buffer.byteLength(rowsGz, 'utf8') > MAX_ROWS_GZ_BASE64_BYTES) {
     return { format: USAGE_DEVICE_ROWS_FORMAT, oversize: true };
   }
-  return { format: USAGE_DEVICE_ROWS_FORMAT, todayKey, sinceDay, rowsGz };
+  return {
+    format: USAGE_DEVICE_ROWS_FORMAT,
+    todayKey,
+    sinceDay,
+    rowsGz,
+    ...(encodedTasks.tasksToken ? { tasksToken: encodedTasks.tasksToken } : {}),
+    ...(encodedTasks.tasksDelta ? { tasksDelta: encodedTasks.tasksDelta } : {}),
+  };
 }
 
 /** JavaScript Date 能表示的最大 Unix 毫秒;超出时 toISOString / Intl 格式化会抛 RangeError。 */
@@ -207,7 +316,14 @@ function isShortString(value: unknown): value is string {
 export async function decodeUsageDeviceRowsResponse(
   value: unknown,
 ): Promise<
-  | { kind: 'rows'; todayKey: string; sinceDay: string | null; rows: UsageDeviceRows }
+  | {
+      kind: 'rows';
+      todayKey: string;
+      sinceDay: string | null;
+      rows: UsageDeviceRows;
+      tasksToken?: string;
+      tasksDelta?: UsageTaskDelta;
+    }
   | { kind: 'oversize' }
   | null
 > {
@@ -218,12 +334,29 @@ export async function decodeUsageDeviceRowsResponse(
   if (!isDayKey(response.todayKey) || typeof response.rowsGz !== 'string') return null;
   const sinceDay = response.sinceDay === null ? null : response.sinceDay;
   if (sinceDay !== null && !isDayKey(sinceDay)) return null;
+  const tasksToken = isTaskBaseToken(response.tasksToken) ? response.tasksToken : undefined;
+  let tasksDelta: UsageTaskDelta | undefined;
+  if (response.tasksDelta && typeof response.tasksDelta === 'object' && !Array.isArray(response.tasksDelta)) {
+    const rawRemoved = (response.tasksDelta as { removedTaskIds?: unknown }).removedTaskIds;
+    if (Array.isArray(rawRemoved)) {
+      tasksDelta = { removedTaskIds: rawRemoved.filter(isShortString) };
+    }
+  }
   try {
     const json = await gunzipAsync(Buffer.from(response.rowsGz, 'base64'), {
       maxOutputLength: MAX_ROWS_JSON_BYTES,
     });
     const rows = sanitizeUsageDeviceRows(JSON.parse(json.toString('utf8')));
-    return rows ? { kind: 'rows', todayKey: response.todayKey, sinceDay, rows } : null;
+    return rows
+      ? {
+          kind: 'rows',
+          todayKey: response.todayKey,
+          sinceDay,
+          rows,
+          ...(tasksToken ? { tasksToken } : {}),
+          ...(tasksDelta ? { tasksDelta } : {}),
+        }
+      : null;
   } catch {
     return null;
   }

@@ -3,12 +3,13 @@
  * Existing delegated-access tests cover permissions, not query counts/cooldown/scope scheduling.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { ProviderShareScopeChangedError } from '@cindy/device-link';
 import { createProviderShareDelegationChecks, startProviderShareDelegationRechecks,
   type DelegationCheckResult } from '../providerShareDelegationChecks';
 import { checkProviderShareDelegation, clearProviderShareDelegationChecks,
   grantProviderShareDelegation, revokeProviderShareDelegation } from '../providerShareApi';
 
-const api = vi.hoisted(() => ({ scope: 'account-a', endpoint: 'https://api.example.invalid', fetch: vi.fn() }));
+const api = vi.hoisted(() => ({ scope: 'account-a', endpoint: 'https://api.example.invalid', fetch: vi.fn(), linkedGrant: vi.fn() }));
 vi.mock('../../appSessionState.js', () => ({ activeOwnerScopeKey: () => api.scope,
   isAppSessionBoundaryPending: () => false, getActiveAppSession: () => ({ mode: 'cloud', dataOwnerId: api.scope }) }));
 vi.mock('../../authManager.js', () => ({ getAuthState: () => ({ isAuthenticated: true }) }));
@@ -17,6 +18,9 @@ vi.mock('../../serverApiClient.desktop.js', () => ({ serverApiFetch: api.fetch }
 vi.mock('../../utils/ipcValidate.js', () => ({ throwIpcError: (code: string) => { throw new Error(code); } }));
 vi.mock('../agentNetSharing.js', () => ({ agentNetProviderExecutorProof: () => null, checkAgentNetProviderExecutor: async () => null,
   grantAgentNetProviderExecutor: async () => null, revokeAgentNetProviderExecutor: async () => false }));
+vi.mock('../agentNetLinkedShares.js', () => ({ grantLinkedProviderShareExecutor: api.linkedGrant,
+  linkedProviderShareExecutorProof: () => null, revokeLinkedProviderShareExecutor: async () => false,
+  waitLinkedProviderShareExecutorProof: async () => null }));
 
 const input = { shareId: 'share', memberId: 'member', guestDeviceId: 'guest', executorDeviceId: 'executor' };
 const approved = { active: true, ownerDeviceId: 'owner', generation: 'generation-1', expiresAt: 1_800_000 };
@@ -38,7 +42,8 @@ function harness() {
 let apiTestEpoch = 0;
 beforeEach(() => {
   vi.useFakeTimers(); vi.setSystemTime(0);
-  api.scope = 'account-' + ++apiTestEpoch; api.endpoint = 'https://api.example.invalid'; api.fetch.mockReset();
+  api.scope = 'account-' + ++apiTestEpoch; api.endpoint = 'https://api.example.invalid';
+  api.fetch.mockReset(); api.linkedGrant.mockReset(); api.linkedGrant.mockResolvedValue(null);
 });
 afterEach(() => { clearProviderShareDelegationChecks(); vi.clearAllTimers(); vi.useRealTimers(); });
 
@@ -114,6 +119,37 @@ describe('authenticated delegation API', () => {
     await first;
     await expect(checkProviderShareDelegation({ ...input, guestDeviceId: 'other' })).rejects.toThrow();
     expect(api.fetch).toHaveBeenCalledTimes(1);
+  });
+
+  // Unit / real grantProviderShareDelegation entry, synthetic Agent-Net & V1 HTTP.
+  // Basis: docs/dev-rules/protocol-compatibility/agent-net-linked-provider-shares.md (mixed-mode fallback).
+  // Gap: transient /grants failure previously aborted allocation/renewal instead of falling back to V1.
+  it('falls back to V1 delegation on transient linked executor failure', async () => {
+    const generation = '11111111-1111-4111-8111-111111111111';
+    api.linkedGrant.mockRejectedValueOnce(new Error('AGENT_NET_GRANTS_TIMEOUT'));
+    api.fetch.mockResolvedValueOnce({ expiresAt: 1_800_000, generation });
+    const fallback = grantProviderShareDelegation(input, { linkedShareExecutor: true });
+    await vi.advanceTimersByTimeAsync(0);
+    await expect(fallback).resolves.toEqual({ expiresAt: 1_800_000, generation });
+    expect(api.fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ['cancel', 'error'], ['cancel', 'unavailable'],
+    ['account', 'error'], ['account', 'unavailable'],
+    ['region', 'error'], ['region', 'unavailable'],
+  ] as const)('does not issue a V1 delegation after %s during an upgrade returning %s', async (change, outcome) => {
+    const controller = new AbortController();
+    api.linkedGrant.mockImplementationOnce(async () => {
+      if (change === 'cancel') controller.abort(new Error('cancelled'));
+      else if (change === 'account') api.scope = 'account-switched';
+      else api.endpoint = 'https://other-region.example.invalid';
+      if (outcome === 'error') throw new Error('network');
+      return null;
+    });
+    await expect(grantProviderShareDelegation(input, { linkedShareExecutor: true, signal: controller.signal }))
+      .rejects.toThrow(change === 'cancel' ? 'cancelled' : ProviderShareScopeChangedError);
+    expect(api.fetch).not.toHaveBeenCalled();
   });
 });
 

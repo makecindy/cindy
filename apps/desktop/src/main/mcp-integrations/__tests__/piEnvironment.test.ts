@@ -1423,4 +1423,87 @@ describe('piEnvironment per-session identity', () => {
       vi.useRealTimers();
     }
   });
+
+  // 测试价值
+  // - 生产入口与可观察结果：getPiExtraSpawnConfig 在 recordMcpToolResults: true（ACP 引擎）时返回
+  //   takeMcpToolResult，真实 MCP 调用完成后可取回带 xdt_card_id 的原文，disposeSessionCtx 后清空；
+  //   普通 Pi 会话未声明该开关时不启用录制（takeMcpToolResult 为 undefined）。
+  // - Bug／规则依据：Antigravity 等 ACP 引擎不回传 MCP tool_call_update 输出，导致 PR 卡片丢失；
+  //   同时避免给原生 Pi 会话增加额外内存开销。
+  // - 现有覆盖缺口：现有 piEnvironment 用例未验证 recordMcpToolResults 开关与生命周期释放。
+  // - 最小失败输入：带 recordMcpToolResults: true 的会话调用 cindy.ghost_call 后经 takeMcpToolResult 取回。
+  // - tier：unit（本地回环 HTTP 桥）。
+  it('enables Host MCP tool-result recording only when recordMcpToolResults is requested and disposes it with the session', async () => {
+    const provider: McpProvider = {
+      name: 'cindy',
+      toClaudeSdkConfig: () => ({
+        type: 'sdk',
+        name: 'cindy',
+        instance: (() => {
+          const server = new McpServer({ name: 'cindy', version: '1.0.0' });
+          server.registerTool(
+            'ghost_call',
+            { description: 'probe' },
+            async () => ({ content: [{ type: 'text' as const, text: '{"ok":true,"xdt_card_id":"card-pi-env"}' }] }),
+          );
+          return server;
+        })(),
+      }),
+    };
+
+    const plainPi = await getPiExtraSpawnConfig([provider], noopLogger(), {
+      sessionId: 'pi-plain',
+      sessionInstanceId: 'pi-plain-inst',
+      workingDir: '/repo',
+    });
+    expect(plainPi?.takeMcpToolResult).toBeUndefined();
+    plainPi?.disposeSessionCtx?.();
+
+    const acp = await getPiExtraSpawnConfig([provider], noopLogger(), {
+      sessionId: 'acp-rec',
+      sessionInstanceId: 'acp-rec-inst',
+      workingDir: '/repo',
+      recordMcpToolResults: true,
+    });
+    expect(acp?.takeMcpToolResult).toBeTypeOf('function');
+    const serverUrl = acp?.mcpBridge?.servers.find((s) => s.name === 'cindy')?.url;
+    expect(serverUrl).toBeTruthy();
+
+    const client = new Client({ name: 'antigravity-client', version: '1' });
+    let reconnectedClient: Client | null = null;
+    await client.connect(new StreamableHTTPClientTransport(new URL(serverUrl!), {
+      requestInit: { headers: { Authorization: `Bearer ${acp!.mcpBridge!.token}` } },
+    }));
+    try {
+      await client.callTool({ name: 'ghost_call', arguments: {} });
+      expect(acp!.takeMcpToolResult!({ serverName: 'cindy', toolName: 'ghost_call', input: {} })).toEqual({
+        fullText: '{"ok":true,"xdt_card_id":"card-pi-env"}',
+        isError: false,
+      });
+
+      // Simulate remote-agent idle reclaim / slot yield: closeSessionInstance clears stale
+      // receipts and closes old transports, while keeping recording enabled on reconnect.
+      await client.callTool({ name: 'ghost_call', arguments: {} });
+      acp!.closeSessionInstance?.();
+      expect(acp!.takeMcpToolResult!({ serverName: 'cindy', toolName: 'ghost_call', input: {} })).toBeNull();
+
+      reconnectedClient = new Client({ name: 'antigravity-client', version: '1' });
+      await reconnectedClient.connect(new StreamableHTTPClientTransport(new URL(serverUrl!), {
+        requestInit: { headers: { Authorization: `Bearer ${acp!.mcpBridge!.token}` } },
+      }));
+      await reconnectedClient.callTool({ name: 'ghost_call', arguments: {} });
+      expect(acp!.takeMcpToolResult!({ serverName: 'cindy', toolName: 'ghost_call', input: {} })).toEqual({
+        fullText: '{"ok":true,"xdt_card_id":"card-pi-env"}',
+        isError: false,
+      });
+
+      await reconnectedClient.callTool({ name: 'ghost_call', arguments: {} });
+      acp!.disposeSessionCtx?.();
+      expect(acp!.takeMcpToolResult!({ serverName: 'cindy', toolName: 'ghost_call', input: {} })).toBeNull();
+    } finally {
+      acp?.disposeSessionCtx?.();
+      await reconnectedClient?.close().catch(() => {});
+      await client.close().catch(() => {});
+    }
+  });
 });
