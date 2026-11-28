@@ -4,14 +4,15 @@ import assert from 'node:assert/strict';
 // scroller. jsdom cannot measure that failure; keep this in the Electron UI tier.
 export default {
   name: 'thread-panels', entry: './fixture.tsx', viewport: { width: 960, height: 640 },
-  real: 'BotDmThreadPanel, ChatThreadPanel, shared ThreadPanel/ThreadPanelRoot, BotGroupTimelineItem, Markdown, wallpaper, theme and translations',
+  real: 'BotDmThreadHost, BotDmThreadPanel, useThreadPanelResize, ChatThreadPanel, shared ThreadPanel/ThreadPanelRoot, BotGroupTimelineItem, Markdown, wallpaper, theme and translations',
   notCovered: 'Private ready-state task runtime, model execution, real media upload, server persistence and attachment IO, microphone/ASR and native voice shortcuts; attachment selection and layout use scenario host data',
   stubs: {
     'src/renderer/features/cc-agent/CCAgentSessionView': 'export const CCAgentSessionView = () => { throw new Error("Use full Desktop for ready-state task verification"); };',
-    'src/renderer/lib/makerChatStore': { partial: 'export const makerChatStore = { subscribe: () => () => {}, getSnapshot: () => window.__threadRoot };' },
+    'src/renderer/lib/makerChatStore': { partial: 'export const makerChatStore = { subscribe: () => () => {}, getSnapshot: () => window.__threadRoot, subscribeAll: () => () => {}, getRunningSnapshot: () => (window.__threadRunning ??= new Map()) };' },
     'src/renderer/voice-input/workletUrl': 'export const getVoiceInputWorkletUrl = () => "";',
   },
   cases: {
+    resized: { about: 'Private topic drag, keyboard, narrow bounds, switch and reopen through the real host; opening state only' },
     'group-actions': { about: 'PR #9182: topic toolbars sit outside both bubble sides without overlapping read receipts' },
     group: { about: 'Group topic with a long source message and working follow switch, with and without wallpaper' },
     'group-attachments': { about: 'Thread + menu, image-only send and tray reset at narrow panel width' },
@@ -41,6 +42,38 @@ export default {
       return;
     }
     const panel = page.locator('aside');
+    if (ui.case === 'resized') {
+      const separator = panel.getByRole('separator');
+      const before = (await panel.boundingBox()).width;
+      const handle = await separator.boundingBox();
+      await page.mouse.move(handle.x + handle.width / 2, handle.y + handle.height / 2);
+      await page.mouse.down();
+      await page.mouse.move(handle.x - 200, handle.y + handle.height / 2, { steps: 8 });
+      await page.mouse.up();
+      const dragged = (await panel.boundingBox()).width;
+      assert.equal(before, 448);
+      // 960px row clamps to 560; 600px row keeps half for the chat, so the panel is 300.
+      assert.equal(dragged, 560);
+      await ui.capture('dragged');
+      await separator.focus();
+      await page.keyboard.press('ArrowRight');
+      assert.equal((await panel.boundingBox()).width, 544);
+      await page.keyboard.press('ArrowLeft');
+      assert.equal((await panel.boundingBox()).width, dragged);
+      await page.setViewportSize({ width: 600, height: 640 });
+      await page.waitForFunction(() => document.querySelector('aside').getBoundingClientRect().width === 300);
+      await ui.capture('narrow');
+      await page.setViewportSize({ width: 960, height: 640 });
+      await page.waitForFunction(() => document.querySelector('aside').getBoundingClientRect().width === 560);
+      await page.getByRole('button', { name: 'Switch topic', exact: true }).click();
+      assert.equal((await panel.boundingBox()).width, dragged);
+      await panel.getByRole('button', { name: await ui.t('bots.close'), exact: true }).click();
+      assert.equal(await panel.count(), 0);
+      await page.getByRole('button', { name: 'Open topic', exact: true }).click();
+      assert.equal((await panel.boundingBox()).width, dragged);
+      await ui.capture('reopened');
+      return;
+    }
     if (ui.case === 'group-actions') {
       // UI tier: old in-flow topic CSS put actions inside the bubble over the read mark.
       // Existing long-root/table cases had no own-message receipt. No source-string assertions.
@@ -77,7 +110,6 @@ export default {
       }
       return;
     }
-
     if (ui.case === 'group-cache-pending') {
       await panel.locator('input[type="file"]').setInputFiles({
         name: 'late.png', mimeType: 'image/png', buffer: Buffer.from('fixture-image-bytes'),
