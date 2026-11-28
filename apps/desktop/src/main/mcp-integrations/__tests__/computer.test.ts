@@ -62,6 +62,8 @@ function setPlatform(platform: NodeJS.Platform): void {
   });
 }
 
+vi.mock('../../../shared/brandRegion.js', () => ({ CURRENT_CINDY_REGION: 'cn' }));
+
 vi.mock('../../input-handoff/macDriver.js', () => ({ isSecureInputTarget: vi.fn(async () => false) }));
 
 vi.mock('node:child_process', () => ({
@@ -3757,7 +3759,7 @@ describe('computer mcp integration', () => {
     await installComputerDriver();
 
     expect(resolveDesktopOutboundProxyMock).toHaveBeenCalledWith(
-      'https://raw.githubusercontent.com/trycua/cua/main/libs/cua-driver/scripts/install.sh',
+      'https://hotfix.cindy.com.cn/cindy/dependencies/cua-driver/install.sh',
     );
     expect(spawnMock.mock.calls[0]?.[2]?.env).toMatchObject({
       HTTPS_PROXY: 'http://127.0.0.1:7897',
@@ -3765,6 +3767,22 @@ describe('computer mcp integration', () => {
       https_proxy: 'http://127.0.0.1:7897',
       http_proxy: 'http://127.0.0.1:7897',
     });
+  });
+
+  // Tier: unit. A mirror bootstrap miss must re-evaluate PAC for GitHub.
+  it('uses the upstream proxy after the direct regional bootstrap fails to download', async () => {
+    setPlatform('linux');
+    resolveDesktopOutboundProxyMock.mockResolvedValueOnce(null).mockResolvedValueOnce('http://127.0.0.1:7897');
+    mockDriverSpawn({ exitCode: 75 });
+    mockDriverSpawn({ stdout: 'installed\n' });
+    mockDriverSpawn({ stdout: 'cua-driver 0.5.8\n' });
+    mockDriverSpawn({ stdout: 'Cua Driver daemon is running\n' });
+
+    await expect(installComputerDriver()).resolves.toMatchObject({ ok: true });
+    expect(spawnMock.mock.calls[0]?.[2]?.env).not.toHaveProperty('HTTPS_PROXY');
+    expect(resolveDesktopOutboundProxyMock).toHaveBeenNthCalledWith(2,
+      'https://raw.githubusercontent.com/trycua/cua/main/libs/cua-driver/scripts/install.sh');
+    expect(spawnMock.mock.calls[1]?.[2]?.env?.HTTPS_PROXY).toBe('http://127.0.0.1:7897');
   });
 
   it('continues the POSIX install when system proxy resolution fails', async () => {
@@ -4873,7 +4891,7 @@ describe('computer driver update check', () => {
     });
     expect(fetchImpl).toHaveBeenCalledTimes(2);
     expect(String(fetchImpl.mock.calls[0][0])).toBe(
-      'https://raw.githubusercontent.com/trycua/cua/main/.github/release-state/cua-driver-rs-published-version',
+      'https://hotfix.cindy.com.cn/cindy/dependencies/cua-driver/published-version',
     );
     const [assetUrl, assetInit] = fetchImpl.mock.calls[1];
     expect(String(assetUrl)).toContain('releases/download/cua-driver-rs-v0.7.0/');
@@ -4881,6 +4899,21 @@ describe('computer driver update check', () => {
     expect(
       fetchImpl.mock.calls.filter(([url]) => String(url).includes('api.github.com')),
     ).toEqual([]);
+  });
+
+  // Mirror rollout regression: before the regional pointer exists, discovery
+  // and the platform HEAD must use the same upstream release. Tier: unit.
+  it('probes the official release after a regional pointer miss', async () => {
+    mockDriverSpawn({ stdout: 'cua-driver 0.5.8\n' });
+    const fetchImpl = vi.fn()
+      .mockResolvedValueOnce({ ok: false, status: 404 })
+      .mockResolvedValueOnce(publishedVersionResponse('0.7.0'))
+      .mockResolvedValueOnce(assetHeadResponse());
+    await expect(checkComputerDriverUpdate(fetchImpl as unknown as typeof fetch))
+      .resolves.toMatchObject({ updateAvailable: true, latestVersion: '0.7.0' });
+    expect(fetchImpl.mock.calls.map(([url]) => new URL(url).hostname)).toEqual([
+      'hotfix.cindy.com.cn', 'raw.githubusercontent.com', 'github.com',
+    ]);
   });
 
   it('reports no update when the installed version already matches the published one (single request)', async () => {
@@ -5152,7 +5185,7 @@ describe('computer driver update check', () => {
         latestVersion: '0.7.0', updateAvailable: true, checkStatus: 'error', checkedAt: Date.now(),
       });
       // 节流窗口外确实触发了后台刷新
-      expect(failingFetch).toHaveBeenCalledTimes(1);
+      expect(failingFetch).toHaveBeenCalledTimes(2);
 
       mockDriverSpawn({ stdout: 'cua-driver 0.5.8\n' });
       const hangingFetch = vi.fn().mockReturnValue(new Promise(() => {}));

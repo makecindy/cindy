@@ -1,3 +1,4 @@
+import { resolveHostRegion } from '../profile-path.mjs';
 import { randomUUID } from 'node:crypto';
 import os from 'node:os';
 import type { createPlatformClientBridge } from './client-bridge.js';
@@ -91,7 +92,7 @@ export function createHostPlatformTools(options: {
     await preparing;
     check(); await power().refresh(); check();
   }
-  const computer = createComputerRuntime({ getPath: name => name === 'home' ? os.homedir() : os.tmpdir(),
+  const computer = createComputerRuntime({ downloadEdition: resolveHostRegion(), getPath: name => name === 'home' ? os.homedir() : os.tmpdir(),
     beforeCall, assertAvailable: () => power().assertAvailable(),
     // Input ownership still lives in Desktop. Never expose a second independent
     // writer while that shared coordinator and signed input helper are absent.

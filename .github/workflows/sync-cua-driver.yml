@@ -1,0 +1,92 @@
+name: Sync CuaDriver downloads
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '23 */6 * * *'
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/sync-cua-driver.yml'
+      - 'scripts/cua-mirror/**'
+
+permissions: {}
+
+concurrency:
+  group: sync-cua-driver
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: github.repository == 'makecindy/cindy' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    outputs:
+      version: ${{ steps.mirror.outputs.version }}
+    environment: release-dependencies
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Install OSS client
+        run: |
+          python3 -m venv "$RUNNER_TEMP/oss"
+          "$RUNNER_TEMP/oss/bin/pip" install --disable-pip-version-check oss2==2.19.1
+      - name: Obtain short-lived upload credentials
+        id: auth
+        uses: aliyun/configure-aliyun-credentials-action@1e5248c8d5d93a8781ac344a68e19a43341e79e6
+        with:
+          role-to-assume: ${{ vars.ROLE_ARN }}
+          oidc-provider-arn: ${{ vars.OIDC_PROVIDER_ARN }}
+          audience: ${{ vars.OIDC_AUDIENCE }}
+      - name: Verify and mirror the stable CuaDriver release
+        id: mirror
+        env:
+          KEY_ID: ${{ steps.auth.outputs.aliyun-access-key-id }}
+          KEY_SECRET: ${{ steps.auth.outputs.aliyun-access-key-secret }}
+          TOKEN: ${{ steps.auth.outputs.aliyun-security-token }}
+          CN_REGION: ${{ vars.CN_OSS_REGION }}
+          CN_BUCKET: ${{ vars.CN_OSS_BUCKET }}
+          GLOBAL_REGION: ${{ vars.GLOBAL_OSS_REGION }}
+          GLOBAL_BUCKET: ${{ vars.GLOBAL_OSS_BUCKET }}
+          CUA_SOURCE_REPOSITORY: ${{ vars.CUA_SOURCE_REPOSITORY }}
+        run: '"$RUNNER_TEMP/oss/bin/python" scripts/cua-mirror/sync.py'
+
+  install:
+    needs: publish
+    if: needs.publish.outputs.version != ''
+    permissions: {}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { runner: macos-latest, cdn: 'https://hotfix.cindy.com.cn' }
+          - { runner: windows-latest, cdn: 'https://hotfix.cindy.app' }
+          - { runner: ubuntu-latest, cdn: 'https://hotfix.cindy.com.cn' }
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
+    env:
+      BASE: ${{ matrix.cdn }}/cindy/dependencies/cua-driver
+      EXPECTED: ${{ needs.publish.outputs.version }}
+      CUA_DRIVER_NO_CONNECT: '1'
+      CUA_DRIVER_NO_TEST: '1'
+    steps:
+      - name: Install from the public entry point on macOS or Linux
+        if: runner.os != 'Windows'
+        run: |
+          curl -fsSL "$BASE/install.sh" -o "$RUNNER_TEMP/cua-install.sh"
+          bash "$RUNNER_TEMP/cua-install.sh"
+          test "$("$HOME/.local/bin/cua-driver" --version)" = "cua-driver $EXPECTED"
+      - name: Install from the public entry point on Windows
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          $env:CUA_DRIVER_RS_INSTALL_DIR = Join-Path $env:RUNNER_TEMP 'cua-bin'
+          $script = Invoke-RestMethod -ErrorAction Stop -Uri "$env:BASE/install.ps1"
+          & ([ScriptBlock]::Create($script))
+          $actual = & (Join-Path $env:CUA_DRIVER_RS_INSTALL_DIR 'cua-driver.exe') --version
+          if ($LASTEXITCODE -ne 0 -or $actual -ne "cua-driver $env:EXPECTED") {
+              throw "Unexpected installed version: $actual"
+          }
