@@ -447,3 +447,14 @@ Cindy 自己的系统提示词仍不交给插件引擎；「个性化 → 自定
 实现见 maker-core `agents/acp/{acp-agent,protocol,session}.ts` 与 `maker.ts`；回归见 maker-core `acp-session.test.ts`
 （本机、隔离伙伴、同账号托管、受邀者托管四种输入）、`maker.test.ts`（只取冻结正文，`prepareStartOptions` 拼入的协同说明不外发）
 与 Desktop `remote-agent/__tests__/mirror.test.ts`（发起端 `userPrompt` 到达执行端）。
+
+## 同账号远程任务的 Lead 角色说明
+
+同账号远程任务仍通过既有 `setVendorOptions` 发送角色说明字符串，不新增协议或重连投递机制。
+与本机重建时从宿主进程内交接待发说明不同，远程设置缓存随同账号代理存活：
+
+1. **代理保留、团队未撤销**：远端执行进程让位后重连，代理会把缓存中待交付的说明交给新进程；
+   已交付的说明也可能再进入一次提示。与 `main` 一致。
+2. **整个代理重建**：原代理的设置缓存不会随之恢复，待交付的说明会丢失。与 `main` 一致。
+3. **团队已撤销**：即使代理把旧说明和撤销字段一起重放，旧说明也不会再进入提示。
+   这是本次改进；`main` 在这种情况下仍会注入旧说明。

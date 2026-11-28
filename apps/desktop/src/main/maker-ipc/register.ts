@@ -1244,8 +1244,10 @@ import {
 import {
   applyOrcaInstructions,
   ORCA_DIRECT_TASK_CREATE,
-  renderOrcaRoleInstructions,
   synthesizeOrcaVendorOptionsFromDb,
+  acpLeadBriefings,
+  applyLeadVendorOptions,
+  prepareAcpRoleBriefingForStart,
 } from './orcaSessionStartOptions.js';
 import {
   clearManualInterrupt,
@@ -9540,14 +9542,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     // Lead and Worker role instructions travel ahead of the first message; ordinary local owner
     // tasks (non-bot, non-review, non-hosted) trust the plugin engine as a whole so Orca Lead /
     // Worker tools and Cindy async user question tools work seamlessly.
+    const promotedLeadBriefing = await prepareAcpRoleBriefingForStart(o, acpLeadBriefings);
+    assertAccess?.();
     if (o.agentKind === 'acp' && o.reviewMode !== true) {
-      if (o.vendorOptions?.orcaRole === 'worker' || o.vendorOptions?.orcaRole === 'lead') {
-        const briefing = renderOrcaRoleInstructions(o);
-        if (briefing) {
-          o.pluginEngineBriefing = briefing;
-          o.pluginEngineTrustedCaller = true;
-        }
-      }
       if (!o.deviceHosted && !o.botRuntimeProfile) {
         o.pluginEngineTrustedCaller = true;
       }
@@ -9614,7 +9611,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         delete vendorOptions._cindyRequireNativeResume;
         if (nativeHistoryResume || nativeRelocation?.nativeId) vendorOptions._cindyRequireNativeResume = true;
         o.vendorOptions = vendorOptions;
-        const start = () => createSessionWithRuntimePlugins(o, creationSignal);
+        const start = () => {
+          // Provider-group fallback may have changed the route since the instructions were prepared.
+          o.readPluginEngineRoleBriefing = o.agentDeviceId ? undefined : promotedLeadBriefing;
+          return createSessionWithRuntimePlugins(o, creationSignal);
+        };
         const open = async () => nativeHistoryResume || nativeRelocation?.nativeId
           ? await start()
           : await withSharedSessionResumeRecovery(o, start, {
@@ -12715,9 +12716,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     workerPermissionMode: OrcaWorkerPermissionMode;
     dispatchOutcome?: CollabDispatchOutcome;
   }> {
-    await assertLeadCollabProjectEnabled(leadSessionId);
+    const admittedLeadAgentKind = await assertLeadCollabProjectEnabled(leadSessionId);
     const result = await orcaLifecycleService.enableTeam({
       leadSessionId,
+      admittedLeadAgentKind,
       workerAgent: opts.workerAgent,
       role: opts.role,
       label: opts.label,
@@ -12758,7 +12760,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     };
   }
 
-  async function assertLeadCollabProjectEnabled(leadSessionId: string): Promise<void> {
+  async function assertLeadCollabProjectEnabled(leadSessionId: string): Promise<EngineKind | undefined> {
     await assertReviewSettingsUnlocked(leadSessionId);
     const lead = maker.getSession(leadSessionId);
     const leadRow = await getSessionRowSnapshot(leadSessionId);
@@ -12788,6 +12790,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       (pluginId, workingDir) => getPluginRegistry().isEnabled(pluginId, workingDir),
       isManagedDialogueWorkspace,
     );
+    return lead?.agentKind ?? (leadRow ? dbToMakerEngineKind(leadRow.agentKind) : undefined);
   }
 
   async function sendUserMessageWithAwaitedGitBaseline(
@@ -15669,7 +15672,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   };
   const startOrcaTeamForCaller = async (leadSessionId: string, workerPermissionMode?: OrcaWorkerPermissionMode, assertCurrent?: (activationStarted?: boolean) => Promise<void>, completeOperation?: PluginTaskService['completeOperation']) => {
       try {
-        await assertLeadCollabProjectEnabled(leadSessionId);
+        const admittedLeadAgentKind = await assertLeadCollabProjectEnabled(leadSessionId);
         return await startOrcaTeamWithPermissionGate(
           { leadSessionId, workerPermissionMode },
           {
@@ -15682,7 +15685,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             startTeam: async (params) => {
               const start = async () => {
                 await assertCurrent?.();
-                return orcaLifecycleService.startTeam(params, assertCurrent ? () => assertCurrent(true) : undefined);
+                return orcaLifecycleService.startTeam({ ...params, admittedLeadAgentKind }, assertCurrent ? () => assertCurrent(true) : undefined);
               };
               // Track only admitted native work, never the permission dialog.
               return completeOperation ? completeOperation(start) : start();
@@ -16768,6 +16771,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     peekPendingHandoff: (sessionId) => agentHandoffPending.peek(sessionId),
     consumePendingHandoff: (sessionId) => agentHandoffPending.consume(sessionId),
     shouldQueueNewTurn: (sessionId, orcaReport): boolean => inputCoordinator.shouldQueueNewTurn(sessionId, orcaReport),
+    needsOrcaRuntimeRefresh: (sessionId) => {
+      const live = maker.getSession(sessionId);
+      return live?.agentKind === 'acp' && !live.agentDeviceId &&
+        (acpLeadBriefings.hasPending(sessionId) || !isOrcaMcpHydrated(sessionId));
+    },
     steerControlInput: (sessionId, item, expectedTurn) =>
       inputCoordinator.steerControlInput(sessionId, { item }, expectedTurn),
     hasSendToSessionLock: (sessionId) => sendToSessionLocks.has(sessionId),
@@ -17017,6 +17025,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     await assertCurrent?.();
     if (persistRole) await setSessionOrcaRole(leadSessionId, null);
     knownNonOrcaSessionIds.delete(leadSessionId);
+    acpLeadBriefings.revoke(leadSessionId);
 
     const leadSess = maker.getSession(leadSessionId);
     if (leadSess) {
@@ -17895,30 +17904,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     clearKnownNonOrcaSession: (sessionId) => {
       knownNonOrcaSessionIds.delete(sessionId);
     },
-    setLeadVendorOptions: async ({ leadSessionId, teamId, workerId, workerSessionId }) => {
-      const leadSess = maker.getSession(leadSessionId);
-      if (!leadSess) return;
-      const patch: Record<string, unknown> = {
-        orcaRole: 'lead',
-        orcaWorkflowId: teamId,
-        orcaLeadSessionId: leadSessionId,
-        ...(workerId && workerSessionId
-          ? { initialWorker: { workerId, sessionId: workerSessionId } }
-          : {}),
-      };
-      if (leadSess.agentKind === 'acp') {
-        const briefing = renderOrcaRoleInstructions({
-          id: leadSessionId,
-          agentKind: 'acp',
-          workingDir: leadSess.workDir,
-          model: '',
-          vendorOptions: patch,
-        });
-        if (briefing) patch.pluginEngineRoleBriefing = briefing;
-      }
-      await leadSess.setVendorOptions(patch);
+    setLeadVendorOptions: async (input) => {
+      const live = maker.getSession(input.leadSessionId);
+      await applyLeadVendorOptions(acpLeadBriefings, input, live, clearOrcaMcpHydrated);
     },
     clearLeadVendorOptions: async (leadSessionId) => {
+      acpLeadBriefings.revoke(leadSessionId);
       const leadSess = maker.getSession(leadSessionId);
       if (!leadSess) return;
       await leadSess.setVendorOptions({

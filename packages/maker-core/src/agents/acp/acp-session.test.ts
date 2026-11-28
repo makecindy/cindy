@@ -418,6 +418,82 @@ describe('AcpSession turns', () => {
     await session.close();
   });
 
+  // ACP harness §4, unit: ordinary verification tests don't change the role
+  // while awaiting the account check. Exercise the live vendor-options and
+  // transport boundaries so recovery cannot send in a task missing its role tools.
+  it.each(['promoted to Lead', 'still independent'] as const)('checks collaboration tools before verification recovery (%s)', async (state) => {
+    const agent = createFakeAgent({ handlers: { '_cindy/checkAccountVerification': () => ({ status: 'ready' }) } });
+    const waiting = deferred<void>();
+    const verified = deferred<void>();
+    const engine = new AcpAgent({
+      auth: { getState: async () => ({ authenticated: true }), triggerLogin: async () => ({ authenticated: true }), logout: async () => {}, getAuthEnv: async () => ({}) },
+      runtimeConfig: {}, logger: silentLogger, binaryPath: '', clientInfo: { name: 'cindy', version: 'test' },
+      endpoints: { connect: async () => agent.transport },
+      verificationForTask: () => async (probe) => {
+        waiting.resolve();
+        await verified.promise;
+        return (await probe()).status === 'ready' ? 'ready' : 'unavailable';
+      },
+    });
+    const session = await engine.startSession({
+      sessionId: 'verification-task', workingDir: '/w', model: '',
+      providerId: 'acp-plugin:test:verification', pluginEngineBriefing: 'Initial briefing.',
+    });
+    const events: AgentEvent[] = [];
+    const terminal = deferred<AgentEvent>();
+    const ended = (async () => {
+      for await (const event of session.events()) {
+        events.push(event);
+        if (event.type === 'done' || event.type === 'error') terminal.resolve(event);
+      }
+    })();
+    const usage = { inputTokens: 20, outputTokens: 5 };
+    try {
+      expect(agent.sent.find(message => message.method === 'session/new')?.params).toMatchObject({ mcpServers: [] });
+      await session.send({ type: 'user', content: 'edit-once' });
+      expect(agent.prompts[0]!.params.prompt).toEqual([
+        { type: 'text', text: 'Initial briefing.' }, { type: 'text', text: 'edit-once' },
+      ]);
+      agent.update({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: '⚠ Verification Required' } });
+      agent.prompts[0]!.settle.resolve({ stopReason: 'end_turn', usage });
+      await waiting.promise;
+
+      const consumeRoleBriefing = vi.fn();
+      if (state === 'promoted to Lead') {
+        await session.setVendorOptions!({
+          orcaRole: 'lead',
+          pluginEngineRoleBriefing: () => ({ text: 'New Lead briefing.', onSent: consumeRoleBriefing }),
+        });
+        await expect(session.send({ type: 'user', content: 'new input' })).rejects.toThrow(/cindy_orca/);
+      }
+      verified.resolve();
+      // Recovery either writes a new prompt immediately after the probe or
+      // exits through finishTurn. Drain that microtask chain before counting.
+      await new Promise(resolve => setImmediate(resolve));
+      const prompts = agent.sent.filter(message => message.method === 'session/prompt');
+      if (state === 'promoted to Lead') {
+        expect(prompts).toHaveLength(1);
+        expect(await terminal.promise).toMatchObject({ type: 'error', data: {
+          type: 'acp/prompt_end', isTerminal: true, message: expect.stringContaining('cindy_orca'),
+          usage: { ...usage, cacheReadTokens: 0, cacheCreationTokens: 0 },
+        } });
+        expect(consumeRoleBriefing).not.toHaveBeenCalled();
+      } else {
+        expect(prompts).toHaveLength(2);
+        expect(prompts[1]!.params).toMatchObject({ sessionId: 'sess-1', prompt: [{
+          type: 'text', text: expect.stringContaining('Continue the interrupted task'),
+        }] });
+        expect(JSON.stringify(prompts[1])).not.toMatch(/Initial briefing|edit-once/);
+        agent.prompts[1]!.settle.resolve({ stopReason: 'end_turn' });
+        expect(await terminal.promise).toMatchObject({ type: 'done', data: { usage } });
+      }
+      expect(events.filter(event => event.type === 'done' || event.type === 'error')).toHaveLength(1);
+    } finally {
+      await session.close();
+      await ended;
+    }
+  });
+
   it('leaves a quota warning out of verification recovery', async () => {
     const agent = createFakeAgent();
     const recoverVerification = vi.fn();
@@ -1301,6 +1377,20 @@ describe('AcpSession model and effort', () => {
 // 2026-11-19:Antigravity(agy 1.5.12)在 configOptions 里公布 mode = default / accept-edits / auto / plan；
 // 用户决定权限菜单显示 Agent 的模式并保留「全部允许」，插件基座通用。
 describe('AcpSession agent modes', () => {
+  // Unit: role promotion after enqueue must not write a prompt without cindy_orca.
+  it('rejects a queued prompt before writing it after becoming a Lead without role tools', async () => {
+    let role: 'lead' | undefined;
+    const agent = createFakeAgent();
+    const { session, events } = await open(agent, { getOrcaRole: () => role });
+    await session.send({ type: 'user', content: 'running input' });
+    await session.send({ type: 'user', content: 'queued input' });
+    role = 'lead';
+    agent.prompts[0]!.settle.resolve({ stopReason: 'end_turn' });
+    await vi.waitFor(() => expect(events).toContainEqual(expect.objectContaining({ type: 'error', data: expect.objectContaining({ reason: 'acp-prompt-not-sent', message: expect.stringMatching(/not sent/i) }) })));
+    expect(agent.prompts).toHaveLength(1);
+    await session.close();
+  });
+
   const configOptions = [
     {
       id: 'mode', name: 'Mode', category: 'mode', type: 'select', currentValue: 'default',
@@ -3731,7 +3821,7 @@ describe('AcpSession form elicitation, plans, additionalDirectories, planMode an
   });
 
   it('mutates live vendorOptions in-place and queues role briefing on setVendorOptions', async () => {
-    const agent = createFakeAgent();
+    const agent = createFakeAgent({ agentCapabilities: { mcpCapabilities: { http: true } } });
     const capturedContexts: Array<Record<string, unknown>> = [];
     const engine = new AcpAgent({
       auth: { getState: async () => ({ authenticated: true }), triggerLogin: async () => ({ authenticated: true }), logout: async () => {}, getAuthEnv: async () => ({}) },
@@ -3742,7 +3832,7 @@ describe('AcpSession form elicitation, plans, additionalDirectories, planMode an
       endpoints: { connect: async () => agent.transport },
       preparePiExtraSpawnConfig: async (_providers, ctx) => {
         capturedContexts.push(ctx as unknown as Record<string, unknown>);
-        return null;
+        return { mcpBridge: { token: 'fixture', servers: [{ name: 'cindy_orca', url: 'http://127.0.0.1:1/mcp/cindy_orca' }] } };
       },
     });
     const session = await engine.startSession({
@@ -3775,10 +3865,53 @@ describe('AcpSession form elicitation, plans, additionalDirectories, planMode an
     agent.prompts[0]!.settle.resolve({ stopReason: 'end_turn' });
     await vi.waitFor(() => expect(session.isTurnRunning?.()).toBe(false));
 
-    await session.setVendorOptions!({ orcaRole: null, orcaWorkflowId: null, orcaLeadSessionId: null });
+    // A stale controller may still send the old text together with the revocation.
+    await session.setVendorOptions!({
+      orcaRole: null, orcaWorkflowId: null, orcaLeadSessionId: null,
+      pluginEngineRoleBriefing: 'You are now the Orca Lead.',
+    });
     expect(vendorOptions).toEqual({});
+    await session.send({ type: 'user', content: 'continue without a team' });
+    expect(agent.prompts[1]!.params.prompt).toEqual([{ type: 'text', text: 'continue without a team' }]);
     await session.close();
   });
+
+  // ACP harness §4, unit through AcpAgent: missing host descriptors or an
+  // incompatible HTTP transport must never start a Worker that can't report.
+  it.each(['bridge throws', 'missing descriptor', 'HTTP unsupported'])(
+    'rejects a Worker without role tools (%s) but allows an independent task', async (state) => {
+      const agent = createFakeAgent({ agentCapabilities: { mcpCapabilities: { http: state !== 'HTTP unsupported' } } });
+      const connect = vi.fn(async () => agent.transport);
+      const dispose = vi.fn();
+      const engine = new AcpAgent({
+        auth: { getState: async () => ({ authenticated: true }), triggerLogin: async () => ({ authenticated: true }), logout: async () => {}, getAuthEnv: async () => ({}) },
+        runtimeConfig: {}, logger: silentLogger, binaryPath: '', clientInfo: { name: 'cindy', version: 'test' },
+        endpoints: { connect },
+        preparePiExtraSpawnConfig: async () => {
+          if (state === 'bridge throws') throw new Error('bridge down');
+          const names = state === 'missing descriptor' ? ['cindy_orca'] : ['cindy_orca', 'orca_worker_bridge'];
+          return { disposeSessionCtx: dispose, mcpBridge: { token: 'fixture', servers: names.map(name => ({ name, url: 'http://127.0.0.1:1/mcp/' + name })) } };
+        },
+      });
+      const opts = { workingDir: '/repo', model: '', providerId: 'acp-plugin:example:example' };
+      if (state !== 'HTTP unsupported') {
+        const err = await engine.startSession({ ...opts, vendorOptions: { orcaRole: 'worker' } }).catch(error => error);
+        expect(err).toBeInstanceOf(AgentStartupStoppedError);
+        expect(err.cause.message).toContain('orca_worker_bridge');
+        expect(connect).not.toHaveBeenCalled();
+        const ordinary = await engine.startSession(opts);
+        await ordinary.send({ type: 'user', content: 'ordinary task' });
+        expect(agent.prompts).toHaveLength(1);
+        await ordinary.close();
+      } else {
+        const err = await engine.startSession({ ...opts, vendorOptions: { orcaRole: 'worker' } }).catch(error => error);
+        expect(err.cause.message).toContain('orca_worker_bridge');
+        expect(agent.closedByClient).toBe(true);
+        expect(dispose).toHaveBeenCalledOnce();
+        expect(agent.methods()).not.toContain('session/new');
+      }
+    },
+  );
 
   it('enforces elicitation schema invariants: required choices, multi-select custom text, and minItems/maxItems', async () => {
     const agent = createFakeAgent();

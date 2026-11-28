@@ -13,6 +13,9 @@ import { withSharedSessionResumeRecovery, type SharedSessionResumeRecoveryDeps }
 import { createAgentHandoffPendingRegistry } from '../agentHandoff.js';
 import { ROUTINE_TRIGGER_DATA_LEAD } from '../../../shared/botAutonomy.js';
 import {
+  AcpAgent,
+  createConsoleLogger,
+  type AcpLineTransport,
   AgentStartupStoppedError,
   CodexResumePreparationBlockedError,
   PI_CACHE_RECOVERY_EXPECTATION,
@@ -30,6 +33,10 @@ import {
   type SessionSendResult,
   type UserMessage,
 } from '@cindy/maker-core';
+import { Client as McpClient } from '@modelcontextprotocol/sdk/client/index.js';
+import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
+import { createOrcaMcpServer, type OrcaMcpDeps } from '../../../../../../packages/lizi-mcps/src/orca/server.js';
+import { applyLeadVendorOptions, createAcpLeadBriefingHandoff, prepareAcpRoleBriefingForStart, renderOrcaRoleInstructions } from '../orcaSessionStartOptions.js';
 import { CODEX_RESUME_NOT_READY_WIRE_MESSAGE, projectPersistedAgentFacingUserText } from '@cindy/maker-shared/agent-input-projection';
 import { formatQuotesForSend, stripChatQuoteMarkerLines } from '@cindy/maker-shared/chat-quotes';
 import type { AgentInputQueuedMessage } from '../../../shared/agentInputQueue';
@@ -3690,6 +3697,125 @@ describe('maker SEND transaction', () => {
     await expect(transaction.hydrateActiveOrcaSession('orca-session', createOpts)).resolves.toBe(false);
     expect(deps.closeSession).toHaveBeenCalledTimes(1);
     expect(deps.bootstrapSession).toHaveBeenCalledTimes(1);
+  });
+
+  // ACP harness §4–5; unit through both send-transaction entries and the actual
+  // ACP engine and Orca MCP tool. Previously closing the live handle discarded
+  // the only copy of the promotion. Use in-process protocol peers, no sockets.
+  it.each(['ordinary send', 'Worker report'] as const)('rehydrates the same ACP Lead and its Orca tools before %s', async entry => {
+    const id = 'acp-lead';
+    const workDir = path.join(os.tmpdir(), 'acp-lead-fixture');
+    const nativeId = 'native-history-id';
+    const history: unknown[] = [];
+    const calls: Array<{ method: string; params: Record<string, unknown> }> = [];
+    let hasOrca = false;
+    let role: 'lead' | null = null;
+    let hydrated = false;
+    let live: MakerSendTransactionSession | undefined;
+    const handoff = createAcpLeadBriefingHandoff({
+      currentOwner: () => 'owner', readActiveTeamId: async () => 'team', readRole: async () => role,
+    });
+    const getWorkspaceInfo = vi.fn<OrcaMcpDeps['getWorkspaceInfo']>(async ({ leadSessionId }) => ({
+      ok: true, workflow: { workflow_id: 'team', lead_session_id: leadSessionId, status: 'active' },
+      ui_capacity: 1, worker_count: 0, workers: [],
+    }));
+    const mcp = createOrcaMcpServer({ getWorkspaceInfo } as unknown as OrcaMcpDeps, { sessionId: id, agentKind: 'pi', workingDir: workDir });
+    const client = new McpClient({ name: 'acp-test', version: '1' });
+    const [clientTx, serverTx] = InMemoryTransport.createLinkedPair();
+    await Promise.all([client.connect(clientTx), mcp.connect(serverTx)]);
+    const toolResults: Array<ReturnType<McpClient['callTool']>> = [];
+    const connect = (): AcpLineTransport => {
+      let onLine: ((line: string) => void) | undefined;
+      return {
+        write(line) {
+          const request = JSON.parse(line) as { id?: number; method: string; params: Record<string, unknown> };
+          calls.push(request);
+          const reply = (result: object) => queueMicrotask(() => onLine?.(JSON.stringify({ jsonrpc: '2.0', id: request.id, result })));
+          const { method, params } = request;
+          if (method === 'initialize') reply({ protocolVersion: 1, agentCapabilities: { mcpCapabilities: { http: true }, sessionCapabilities: { resume: {} } } });
+          if (method === 'session/new') reply({ sessionId: nativeId });
+          if (method === 'session/resume') {
+            hasOrca = (params.mcpServers as Array<{ name: string }>).some(server => server.name === 'cindy_orca');
+            reply({});
+          }
+          if (method === 'session/prompt') {
+            history.push(params.prompt);
+            if (hasOrca) toolResults.push(client.callTool({ name: 'get_workspace_info', arguments: {} }));
+            reply({ stopReason: 'end_turn' });
+          }
+        },
+        onLine(listener) { onLine = listener; return () => { onLine = undefined; }; },
+        onClose: () => () => {},
+        close: async () => {},
+      };
+    };
+    const engine = new AcpAgent({
+      auth: { getState: async () => ({ authenticated: true }), triggerLogin: async () => ({ authenticated: true }), logout: async () => {}, getAuthEnv: async () => ({}) },
+      runtimeConfig: {}, binaryPath: '', logger: createConsoleLogger('acp-test'), clientInfo: { name: 'test', version: '1' },
+      endpoints: { connect: async () => connect() },
+      preparePiExtraSpawnConfig: async (_providers, ctx) => ctx?.vendorOptions?.orcaRole === 'lead' ? {
+        mcpBridge: { token: 'fixture', servers: [{ name: 'cindy_orca', url: 'http://127.0.0.1:1/mcp/cindy_orca' }] },
+      } : null,
+    });
+    const opts = { id, agentKind: 'acp' as const, workDir, workingDir: workDir, model: '', providerId: 'acp-plugin:example:example' };
+    let handle = await engine.startSession(opts);
+    const liveAdapter = () => createSession({
+      id, workDir, agentKind: 'acp',
+      isTurnRunning: () => handle.isTurnRunning?.() ?? false,
+      send: async (message, sendOpts) => {
+        await sendOpts?.onAccepted?.();
+        await handle.send(typeof message === 'string' ? ordinaryUserMessage(message) : message, sendOpts);
+        return { accepted: true };
+      },
+    });
+    try {
+      live = liveAdapter();
+      await handle.send(ordinaryUserMessage('original native transcript'));
+      await vi.waitFor(() => expect(handle.isTurnRunning?.()).toBe(false));
+      role = 'lead';
+      const vendorOptions = { orcaRole: role, orcaWorkflowId: 'team', orcaLeadSessionId: id };
+      const briefing = renderOrcaRoleInstructions({ ...opts, vendorOptions })!;
+      await applyLeadVendorOptions(handoff, { leadSessionId: id, teamId: 'team', newTeam: true }, {
+        agentKind: 'acp', workDir,
+        setVendorOptions: patch => handle.setVendorOptions!(patch),
+      }, () => { hydrated = false; });
+      const { deps } = createDeps({
+        getSession: () => live, closeSession: async () => { await handle.close(); live = undefined; },
+        isOrcaMcpHydrated: () => hydrated,
+        synthesizeOrcaVendorOptionsFromDb: async (_id, next) => { next.orcaRole = 'lead'; next.vendorOptions = vendorOptions; return true; },
+        reconcileCreateOptsWithDb: async (_id, next) => { next.resumeSessionId = nativeId; },
+        bootstrapSession: async next => {
+          await prepareAcpRoleBriefingForStart(next, handoff);
+          handle = await engine.startSession(next);
+          hydrated = true;
+          live = liveAdapter();
+          return { session: live, didInjectOrcaInstructions: true, didInjectProjectContext: false };
+        },
+      });
+      const tx = createMakerSendTransaction(deps);
+      if (entry !== 'Worker report') {
+        await expect(tx.sendToAgentAccepted(id, entry, opts)).resolves.toMatchObject({ accepted: true });
+      } else {
+        await expect(tx.hydrateActiveOrcaSession(id, opts)).resolves.toBe(true);
+        await live!.send(ordinaryUserMessage(entry));
+      }
+      expect(calls.filter(call => call.method === 'session/new')).toHaveLength(1);
+      expect(calls.find(call => call.method === 'session/resume')?.params.sessionId).toBe(nativeId);
+      expect(history[0]).toEqual([{ type: 'text', text: 'original native transcript' }]);
+      expect(history[1]).toEqual([{ type: 'text', text: briefing }, { type: 'text', text: entry }]);
+      const results = await Promise.all(toolResults);
+      expect(results).toHaveLength(1);
+      const resultText = (results[0]?.content as Array<{ text: string }>)[0]!.text;
+      expect(JSON.parse(resultText)).toMatchObject({ ok: true, workflow: { workflow_id: 'team' } });
+      expect(getWorkspaceInfo).toHaveBeenCalledWith({ leadSessionId: id });
+      await live!.send(ordinaryUserMessage('next'));
+      expect(history[2]).toEqual([{ type: 'text', text: 'next' }]);
+    } finally {
+      await handle.close();
+      await Promise.allSettled(toolResults);
+      await client.close();
+      await mcp.close();
+    }
   });
 
   it('reconciles createOpts against DB before closing the old runtime on active Orca rehydrate (#2882)', async () => {
