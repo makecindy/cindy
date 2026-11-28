@@ -50,9 +50,14 @@ const SSH_RECONNECT_WAIT_TIMEOUT_MS = 150_000;
 const SSH_TURN_RESTORE_TIMEOUT_MS = 12_000;
 const MAX_RECOVERY_THREADS = 16;
 
-type RecoveredItem = { id: string; type: string; status?: string };
+type RecoveredItem = { id: string; type: string; status?: string; text?: string };
 type RecoveredTurn = { id: string; status: string; items: RecoveredItem[] };
-type ObservedTurn = { id: string; completedItems: Set<string>; restoredItems: Set<string> };
+type ObservedTurn = {
+  id: string;
+  startedMcpCalls: Set<string>;
+  completedItems: Map<string, string | undefined>;
+  restoredItems: Set<string>;
+};
 type RecoveryMessage = { line: string; message: { id?: JsonRpcId; method: string; params?: unknown } };
 type RecoveryInterrupt = {
   params: TurnInterruptParams;
@@ -1102,7 +1107,7 @@ export class AppServerClient {
   private observeTurn(method: string, raw: unknown): boolean {
     if (!raw || typeof raw !== 'object') return false;
     const { threadId, turnId, turn, item, itemId } = raw as {
-      threadId?: string; turnId?: string; turn?: { id: string }; item?: { id: string }; itemId?: string;
+      threadId?: string; turnId?: string; turn?: { id: string }; item?: RecoveredItem; itemId?: string;
     };
     if (!threadId) return false;
     const active = this.activeTurns.get(threadId);
@@ -1126,7 +1131,13 @@ export class AppServerClient {
     } else if (active && active.id === turnId && method.startsWith('item/')) {
       const id = item?.id ?? itemId;
       if (id && active.restoredItems.has(id)) return true;
-      if (method === 'item/completed' && id) active.completedItems.add(id);
+      if ((method === 'item/started' || method === 'item/updated') && item?.type === 'mcpToolCall') {
+        active.startedMcpCalls.add(item.id);
+      }
+      if (method === 'item/completed' && id) {
+        active.completedItems.set(id, item?.type === 'agentMessage' ? item.text : undefined);
+        active.startedMcpCalls.delete(id);
+      }
     }
     return false;
   }
@@ -1134,7 +1145,7 @@ export class AppServerClient {
   private recordActiveTurn(threadId: string, turnId: string): void {
     if (this.activeTurns.get(threadId)?.id === turnId || this.restoredTerminals.get(threadId) === turnId) return;
     this.restoredTerminals.delete(threadId);
-    this.activeTurns.set(threadId, { id: turnId, completedItems: new Set(), restoredItems: new Set() });
+    this.activeTurns.set(threadId, { id: turnId, startedMcpCalls: new Set(), completedItems: new Map(), restoredItems: new Set() });
   }
 
   private async recoverTransport(
@@ -1240,17 +1251,67 @@ export class AppServerClient {
       if (unconfirmedTurn) return [];
       throw new Error('SSH recovery could not confirm the acknowledged turn start');
     });
+    const itemAliases = deliverable.map(({ threadId, turn, observed }) => {
+      const messages = turn.items.filter((item) => item.type === 'agentMessage');
+      const delivered = [...observed.completedItems].filter(([, text]) => typeof text === 'string');
+      const aliases = new Map<string, string>();
+      if (!messages.length || !messages.every(({ id }) => /^item-\d+$/.test(id))) return aliases;
+      const snapshotIds = new Set(messages.map(({ id }) => id));
+      // Legacy snapshots number reconstructed items. The completions seen on
+      // the original connection form an ordered prefix of the turn's messages.
+      // Match each occurrence in that prefix, even when two texts are identical.
+      let next = 0;
+      for (const [id, text] of delivered) {
+        const item = messages[next++];
+        if (item?.id === id) continue;
+        if (!item || item.text !== text || snapshotIds.has(id)) {
+          throw new Error('SSH recovery could not align legacy messages');
+        }
+        aliases.set(item.id, id);
+      }
+      // The replacement stream can start after a gap. A buffered completion
+      // only matches a reconstructed ID when it has one possible position.
+      const seen = new Set(observed.completedItems.keys());
+      for (const { message } of unconfirmedTurn ? [] : recovery.messages) {
+        if (message.method !== 'item/completed') continue;
+        const event = message.params as { threadId?: string; turnId?: string; item?: RecoveredItem } | undefined;
+        if (event?.threadId !== threadId || event.turnId !== turn.id || event.item?.type !== 'agentMessage') continue;
+        const { id, text } = event.item;
+        if (seen.has(id)) continue;
+        seen.add(id);
+        if (snapshotIds.has(id)) {
+          const index = messages.findIndex((item) => item.id === id);
+          if (index < next) throw new Error('SSH recovery could not align legacy messages');
+          next = index + 1;
+          continue;
+        }
+        if (typeof text !== 'string') continue;
+        const matches = messages.slice(next).filter((item) => item.text === text);
+        if (matches.length > 1) throw new Error('SSH recovery could not align legacy messages');
+        if (matches.length === 1) {
+          aliases.set(matches[0].id, id);
+          next = messages.indexOf(matches[0]) + 1;
+        }
+      }
+      return aliases;
+    });
     // Synchronous notification handlers can start work too. Keep the startup
     // gate closed while delivering the recovered items and terminal events.
     recovery.replaying = true;
-    for (const { threadId, turn, observed } of deliverable) {
+    for (const [index, { threadId, turn, observed }] of deliverable.entries()) {
       // Persisted order includes items also seen live. Restoring them here
       // suppresses their buffered copies without moving earlier items to the end.
       for (const item of turn.items) {
         if (item.type === 'userMessage' || item.status === 'inProgress') continue;
-        if (!observed.completedItems.has(item.id)) {
-          this.handleLine(JSON.stringify({ method: 'item/completed', params: { threadId, turnId: turn.id, item } }), true);
+        const id = itemAliases[index].get(item.id) ?? item.id;
+        if (!observed.completedItems.has(id)) {
+          const params = { threadId, turnId: turn.id, item: { ...item, id } };
+          if (item.type === 'mcpToolCall' && !observed.startedMcpCalls.has(id)) {
+            this.handleLine(JSON.stringify({ method: 'item/started', params }), true);
+          }
+          this.handleLine(JSON.stringify({ method: 'item/completed', params }), true);
         }
+        observed.restoredItems.add(id);
         observed.restoredItems.add(item.id);
       }
     }

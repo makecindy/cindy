@@ -825,7 +825,7 @@ describe('AppServerClient SSH recovery', () => {
     snapshotStatus: 'inProgress' | 'completed',
     { waitingOnApproval = false, withChild = false, withSecondRoot = false, missingSecondTurn = false, items = [item] }: {
       waitingOnApproval?: boolean; withChild?: boolean; withSecondRoot?: boolean;
-      missingSecondTurn?: boolean; items?: Array<typeof item>;
+      missingSecondTurn?: boolean; items?: Array<{ id: string; type: string; text?: string; server?: string; tool?: string }>;
     } = {},
   ) {
     const initialize = { userAgent: 'test', platformFamily: 'unix', platformOs: 'linux', codexHome: '/tmp' };
@@ -910,6 +910,42 @@ describe('AppServerClient SSH recovery', () => {
     try {
       transport.emitClose({ reason: 'SSH dropped', reconnectable: true });
       await vi.waitFor(() => expect(order).toEqual([item.id, second.id, 'terminal']));
+      expect(fail).not.toHaveBeenCalled();
+    } finally {
+      await client.close();
+    }
+  });
+
+  it('uses legacy snapshot order to deduplicate an already delivered message and preserve a repeated reply', async () => {
+    const { client, transport, fail } = await startCase('completed', {
+      items: [{ ...item, id: 'item-2' }, { ...item, id: 'item-3' }],
+    });
+    const delivered: string[] = [];
+    client.onNotification('item/completed', (params) => {
+      delivered.push((params as { item: { id: string } }).item.id);
+    });
+    client.onNotification('turn/completed', () => { delivered.push('terminal'); });
+    try {
+      transport.emitLine({ method: 'item/completed', params: { threadId, turnId, item } });
+      transport.emitClose({ reason: 'SSH dropped', reconnectable: true });
+      await vi.waitFor(() => expect(delivered).toEqual([item.id, 'item-3', 'terminal']));
+      expect(fail).not.toHaveBeenCalled();
+    } finally {
+      await client.close();
+    }
+  });
+
+  it.each([false, true])('delivers one MCP anchor before the recovered result (start seen: %s)', async (startSeen) => {
+    const mcp = { id: 'mcp-call', type: 'mcpToolCall', server: 'fixture', tool: 'lookup' };
+    const { client, transport, fail } = await startCase('completed', { items: [mcp] });
+    const events: string[] = [];
+    client.onNotification('item/started', () => { events.push('start'); });
+    client.onNotification('item/completed', () => { events.push('complete'); });
+    client.onNotification('turn/completed', () => { events.push('terminal'); });
+    try {
+      if (startSeen) transport.emitLine({ method: 'item/started', params: { threadId, turnId, item: mcp } });
+      transport.emitClose({ reason: 'SSH dropped', reconnectable: true });
+      await vi.waitFor(() => expect(events).toEqual(['start', 'complete', 'terminal']));
       expect(fail).not.toHaveBeenCalled();
     } finally {
       await client.close();
