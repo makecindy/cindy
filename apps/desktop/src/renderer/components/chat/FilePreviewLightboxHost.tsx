@@ -23,9 +23,11 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
   type ReactNode,
   type RefObject,
 } from 'react';
@@ -34,6 +36,7 @@ import { useTranslation } from 'react-i18next';
 
 import { Button } from '@/components/ui/button';
 import { Tip } from '@/components/ui/tooltip';
+import { getDataOwnerGeneration, subscribeDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 import {
   absoluteToWorkdirRelative,
   editedPathsOfToolCall,
@@ -79,6 +82,7 @@ export type FilePreviewRequest =
     };
 
 interface FilePreviewLightboxContextValue {
+  canHostDiff: boolean;
   open(request: FilePreviewRequest): void;
 }
 
@@ -111,9 +115,19 @@ export function FileChangedBadge({ onClick }: { onClick(): void }) {
  * 挂在 MessageStream 顶层(会话文件上下文之内),所以远程会话的文件来源与
  * 工作目录都跟着会话走,浮层内容与右侧栏文件浏览器一致。
  */
-export function FilePreviewLightboxProvider({ children }: { children?: ReactNode }) {
+export function FilePreviewLightboxProvider({ children, diffPreviewScope }: {
+  children?: ReactNode;
+  /** A new value dismisses the open diff. Null keeps the diff local to its row. */
+  diffPreviewScope?: string | null;
+}) {
   const { workingDir } = useChatSessionFile();
-  const [preview, setPreview] = useState<FilePreviewRequest | null>(null);
+  const owner = useSyncExternalStore(subscribeDataOwnerGeneration, getDataOwnerGeneration);
+  const diffScope = useMemo(() => ({ owner, enabled: diffPreviewScope !== null }), [owner, diffPreviewScope]);
+  const activeDiffScope = useRef<typeof diffScope | null>(null);
+  const [opened, setOpened] = useState<{ request: FilePreviewRequest; diffScope: typeof diffScope } | null>(null);
+  const preview = opened && (opened.request.kind !== 'diff' || opened.diffScope === diffScope)
+    ? opened.request
+    : null;
   const [changed, setChanged] = useState(false);
   const [refreshToken, setRefreshToken] = useState(0);
   // 变化代次:每检测到一次新的文件变化 +1。
@@ -122,16 +136,29 @@ export function FilePreviewLightboxProvider({ children }: { children?: ReactNode
   const changeGen = useRef(0);
   const refreshGen = useRef(0);
 
+  useLayoutEffect(() => {
+    activeDiffScope.current = diffScope;
+    return () => { activeDiffScope.current = null; };
+  }, [diffScope]);
+
+  useEffect(() => {
+    setOpened((current) => current?.request.kind === 'diff' && current.diffScope !== diffScope ? null : current);
+  }, [diffScope]);
+
   const open = useCallback((request: FilePreviewRequest) => {
-    setPreview(request);
+    // Compact tool payload hydration may complete after the task scope changes.
+    if (request.kind === 'diff' && (
+      !diffScope.enabled || activeDiffScope.current !== diffScope || getDataOwnerGeneration() !== diffScope.owner
+    )) return;
+    setOpened({ request, diffScope });
     setChanged(false);
     setRefreshToken(0);
-  }, []);
+  }, [diffScope]);
 
   const close = useCallback(() => {
-    setPreview(null);
-    setChanged(false);
-  }, []);
+    // A closing animation can finish after a new preview has opened.
+    setOpened((current) => current === opened ? null : current);
+  }, [opened]);
 
   const refresh = useCallback(() => {
     // 只递增加计数,不在这里清提示:刷新可能只拿到历史副本(远端不可达)或直接失败,
@@ -200,7 +227,7 @@ export function FilePreviewLightboxProvider({ children }: { children?: ReactNode
     return makerChatStore.subscribe(sessionId, check);
   }, [preview?.sessionId, documentPath, workingDir]);
 
-  const value = useMemo(() => ({ open }), [open]);
+  const value = useMemo(() => ({ canHostDiff: diffScope.enabled, open }), [diffScope.enabled, open]);
 
   return (
     <FilePreviewLightboxContext.Provider value={value}>

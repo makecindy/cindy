@@ -1055,7 +1055,7 @@ export function AgentActionRow({
     const diffPayload = buildDiffPayload(activeDescriptor, activeInput, asyncDiff ?? syncDiff);
     if (diffPayload) {
       triggerRef.current = anchor;
-      if (previewHost) {
+      if (previewHost?.canHostDiff) {
         previewHost.open({
           kind: 'diff',
           sessionId: fileCtx.sessionId,

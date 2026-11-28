@@ -127,12 +127,15 @@ const readTextFilePreview = vi.fn();
 const chatFetch = vi.fn();
 const readCached = vi.fn();
 
-function Harness({ message }: { message?: ChatMessage }) {
+function Harness({ message, diffPreviewScope }: {
+  message?: ChatMessage;
+  diffPreviewScope?: string | null;
+}) {
   return (
     <ChatSessionFileProvider
       value={{ sessionId: SESSION_ID, workingDir: WORKDIR, origin: LOCAL_FILE_ORIGIN }}
     >
-      <FilePreviewLightboxProvider>
+      <FilePreviewLightboxProvider diffPreviewScope={diffPreviewScope}>
         {message ? (
           <AgentActionRow pluginUi={EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES} message={message} />
         ) : null}
@@ -218,6 +221,24 @@ it('keeps the file diff preview open after the tool row that opened it is gone',
 
   view.rerender(<Harness />);
   expect(document.querySelector('[data-tool-payload-lightbox-overlay]')).toBeTruthy();
+});
+
+// #12861 scope contract: the row-unmount test covers keeping the diff open.
+// This jsdom unit uses the same real row and host to check that changing the
+// task's permission scope dismisses an already-open diff, even with no row left.
+it('dismisses the detached diff when the task permission scope changes', () => {
+  const overlay = () => document.querySelector('[data-tool-payload-lightbox-overlay]');
+  const view = render(<Harness message={fileChangeMessage} diffPreviewScope="full" />);
+  fireEvent.click(screen.getByRole('button'));
+  const opened = overlay();
+  expect(opened).toBeTruthy();
+
+  view.rerender(<Harness diffPreviewScope="full" />);
+  expect(overlay()).toBe(opened);
+  view.rerender(<Harness diffPreviewScope="ask" />);
+  expect(overlay()).toBeNull();
+  view.rerender(<Harness diffPreviewScope="full" />);
+  expect(overlay()).toBeNull();
 });
 
 it('flags the preview as changed only after the edit finishes, and refreshes on click', async () => {

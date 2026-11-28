@@ -461,6 +461,8 @@ import type { TurnUsageDetails } from '../../../shared/turnUsageDetails';
 import { hasReviewableTurnChanges, type TurnChangeSetSummary } from '../../../shared/turnChangeSet';
 
 interface MessageStreamProps {
+  /** Viewing scope for file diffs that outlive the activity row. */
+  toolDiffPreviewScope?: string | null;
   pendingMessages?: readonly ChatMessage[];
   renderPendingMessage?: (message: ChatMessage, pluginUi: PluginUiMessageCandidates) => ReactNode;
   /** Content before history, sharing its scrolling and measured content height. */
@@ -3321,6 +3323,7 @@ export function MessageStream({
   isLocalUserSend,
   ownsHardwareScrollActions = true,
   onInlinePlanVisibilityChange,
+  toolDiffPreviewScope,
 }: MessageStreamProps) {
   const { i18n, t } = useTranslation();
   const pluginUi = usePluginUiMessageCandidates(sessionId);
@@ -6899,7 +6902,7 @@ export function MessageStream({
     <ChatSessionFileProvider value={sessionFileValue}>
       {/* 文件预览浮层的会话级宿主(issue #12851):预览属于「用户正在看这个文件」,
         不属于任何一行工具 —— 工具行被重建时浮层必须留着。 */}
-      <FilePreviewLightboxProvider key={sessionId}>
+      <FilePreviewLightboxProvider key={sessionId} diffPreviewScope={toolDiffPreviewScope}>
       <GhostFulfillmentContext.Provider value={ghostCallsByUserTurn}>
         <>
           <div className="relative h-full w-full">
