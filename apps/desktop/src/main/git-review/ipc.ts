@@ -22,7 +22,7 @@ import { readMarkdownPreview } from './markdownReader.js';
 import { GitReviewPushError, pushBranch } from './pushOps.js';
 import { resolveReviewScope } from './scopeResolver.js';
 import { createSshPreviewReaderDeps, withSessionReviewExecution } from './sshReviewBackend.js';
-import { findSvnReviewScope, readSvnStatus, readSvnDiffs, readSvnFileDiff } from './svnReader.js';
+import { readSvnStatus, readSvnDiffs, readSvnFileDiff } from './svnReader.js';
 import { readStatus } from './statusReader.js';
 import { applyFileBatch, applyHunkSelection, GitReviewStageError } from './stageOps.js';
 import type {
@@ -109,7 +109,7 @@ const defaultGitReviewDeps: GitReviewDeps = {
 // Only panel reads opt into SVN. Git writes and Reviewer evidence keep their
 // original Git-only resolver, even if an older controller requests a write.
 export const panelReadDeps: GitReviewDeps = {
-  resolveScope: async id => findSvnReviewScope(await resolveReviewScope(id)),
+  resolveScope: id => resolveReviewScope(id, undefined, 'git-and-svn'),
   readStatus: scope => scope.vcs === 'svn' ? readSvnStatus(scope) : readStatus(scope),
   readDiffs: (scope, status, options) => scope.vcs === 'svn'
     ? readSvnDiffs(scope, status, options) : readDiffs(scope, status, options),

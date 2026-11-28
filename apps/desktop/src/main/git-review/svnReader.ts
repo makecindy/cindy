@@ -64,47 +64,24 @@ async function svn(cwd: string, args: string[], maxBuffer: number) {
 
 // Avoid spawning an optional CLI on every refresh of an ordinary directory.
 // Stay in the selected subtree even when its working copy root is higher up.
-export async function findSvnReviewScope(scope: ReviewScope): Promise<ReviewScope> {
-  if (scope.source === 'remote' || !['non-git', 'git-unavailable'].includes(scope.disabledReason ?? ''))
-    return scope;
-  // Git telemetry can point at a different checkout. For SVN the task's
-  // registered directory is the sole authority, including shared-task reads.
-  const cwd = scope.workingDir;
-  if (!cwd || !path.isAbsolute(cwd)) return scope;
+export async function probeSvnWorkingCopy(cwd: string): Promise<'available' | 'svn-unavailable' | null> {
+  if (!path.isAbsolute(cwd)) return null;
   const physicalDir = await realpath(cwd).catch(() => null);
-  if (!physicalDir) return scope;
+  if (!physicalDir) return null;
   for (let dir = physicalDir; ; dir = path.dirname(dir)) {
-    if (
-      await stat(path.join(dir, '.svn', 'wc.db')).then(
-        (s) => s.isFile(),
-        () => false,
-      )
-    )
-      break;
-    if (dir === path.dirname(dir)) return scope;
+    if (await stat(path.join(dir, '.svn', 'wc.db')).then(s => s.isFile(), () => false)) break;
+    // A nested Git checkout (including a linked worktree) has its own review scope.
+    if (await stat(path.join(dir, '.git')).then(s => s.isDirectory() || s.isFile(), () => false)) return null;
+    if (dir === path.dirname(dir)) return null;
   }
   try {
     await svn(cwd, ['info', '--xml', '--depth', 'empty', '.'], 64 * 1024);
   } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
-      return {
-        ...scope,
-        disabledReason: 'svn-unavailable',
-        disabledMessage: 'Install the Subversion command-line client to review this working copy.',
-      };
-    }
-    if (/W155010|E155007/.test(String(err))) return scope;
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return 'svn-unavailable';
+    if (/W155010|E155007/.test(String(err))) return null;
     throw err;
   }
-  return {
-    ...scope,
-    vcs: 'svn',
-    workdir: cwd,
-    repoRoot: cwd,
-    source: 'workingDir',
-    disabledReason: null,
-    disabledMessage: null,
-  };
+  return 'available';
 }
 
 function diffStatus(file: FileStatus) {

@@ -3,6 +3,7 @@ import os from 'node:os';
 import { execFile } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
+import * as gitDirResolver from '../../git-context/sessionDirResolver';
 import { withSessionReviewRowSnapshot } from '../scopeResolver';
 import path from 'node:path';
 
@@ -474,6 +475,15 @@ it('reviews SVN BASE edits in the selected subtree through panel and single-file
   await svn('commit', '-m', 'seed');
   await fs.writeFile(path.join(sub, file), 'diff --git inside content\n');
   await fs.writeFile(path.join(wc, 'outside'), 'changed\n');
+  // #13714: the last tool call may have visited another valid Git repository.
+  // Neither the panel reads nor a stale Git write should target that repository.
+  const unrelatedGit = await initRepo();
+  const unrelatedFile = path.join(unrelatedGit, 'seed.txt');
+  await fs.writeFile(unrelatedFile, 'pending Git edit\n');
+  const telemetry = vi.spyOn(gitDirResolver, 'resolveSessionGitDirLive').mockResolvedValue({
+    source: 'telemetry', workdir: unrelatedGit, head: null,
+  });
+  ctx.onTestFinished(() => { telemetry.mockRestore(); });
   await withSessionReviewRowSnapshot({ id: 'svn-task', workingDir: sub, worktreePath: null, remoteHostId: null }, async () => {
     const data = await readReviewData('svn-task', {}, panelReadDeps);
     expect(data.scope.vcs).toBe('svn');
@@ -493,6 +503,7 @@ it('reviews SVN BASE edits in the selected subtree through panel and single-file
     const large = await readReviewData('svn-task', {}, panelReadDeps);
     expect(large.diffs.capped?.unstaged?.files.map(item => item.path)).toContain(file);
     expect((await readReviewFileDiff('svn-task', { source: 'unstaged', path: file })).diff?.additions).toBeGreaterThanOrEqual(9_500);
-    await expect(runReviewFileStageOperation('svn-task', 'discard', [{ source: 'unstaged', path: file, oldPath: null }])).rejects.toThrow(/PRECONDITION_FAILED/);
+    await expect(runReviewFileStageOperation('svn-task', 'discard', [{ source: 'unstaged', path: 'seed.txt', oldPath: null }])).rejects.toThrow(/PRECONDITION_FAILED/);
+    expect(await fs.readFile(unrelatedFile, 'utf8')).toBe('pending Git edit\n');
   });
 });
