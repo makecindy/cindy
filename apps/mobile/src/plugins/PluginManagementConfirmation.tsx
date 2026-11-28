@@ -152,7 +152,7 @@ export function PluginManagementConfirmation(
           start at their top and every size is reported again; redrawing the same consent keeps where the person was
           reading. */}
       <View key={layoutKey ?? "none"} style={[styles.sheet, compact && styles.compactSheet]} testID="plugins.managementConfirmation">
-        <View style={styles.listArea}>
+        <View testID="plugins.management.listArea" style={[styles.listArea, compact && styles.compactListArea]}>
           <ScrollView ref={listRef} contentContainerStyle={[styles.content, list.thumbGutter]} testID="plugins.management.list" showsVerticalScrollIndicator={false}
             accessibilityHint={t("plugins.management.scrollHint")}
             onLayout={(event) => { layout.report("visible", event.nativeEvent.layout.height); list.onLayout(event); }}
@@ -259,8 +259,11 @@ const makeStyles = (c: ThemeColors) =>
       borderTopRightRadius: radius.container,
       padding: spacing.lg + spacing.xs,
     },
-    // Compact fills its maximum (it does not fit anyway), so the review step cannot move the buttons.
+    // Compact: the buttons stay at the sheet's bottom edge whatever the list holds, so the review step (which reorders
+    // the list) cannot move them. Where the sheet has a definite height (the centered sheet) it fills its maximum and the
+    // list takes all the room above the buttons; the native bottom sheet sizes itself to its content from its bottom edge.
     compactSheet: { height: "85%" },
+    compactListArea: { flexGrow: 1 },
     content: { gap: spacing.md, paddingBottom: spacing.md },
     identity: { gap: spacing.md },
     permission: { gap: spacing.xs },

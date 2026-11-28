@@ -2263,12 +2263,16 @@ describe("pinned high-risk permission", () => {
       press("plugins.management.reject");
       expect(answer).toHaveBeenCalledWith(false);
     });
-  it("Android compact fills its maximum height, so the review step cannot move the buttons", () => {
+  it("Android compact keeps the buttons at the sheet's bottom edge: the sheet fills its maximum, the list takes the room above them", () => {
     bridge.fontScale = 2;
-    mount(AndroidManagementConfirmation, props(allFive));
+    const { container } = mount(AndroidManagementConfirmation, props(allFive));
     act(() => bridge.props.get("plugins.management.allow").onPress());
     const sheet = [bridge.props.get("plugins.managementConfirmation").style].flat(3).filter(Boolean);
     expect(sheet).toContainEqual({ height: "85%" });
+    // The list area grows into any spare height, and the buttons are the sheet's last child.
+    expect([bridge.props.get("plugins.management.listArea").style].flat(3).filter(Boolean)).toContainEqual({ flexGrow: 1 });
+    const sheetNode = container.querySelector('[data-testid="plugins.managementConfirmation"]')!;
+    expect(sheetNode.lastElementChild?.getAttribute("data-testid")).toBe("plugins.management.actions");
   });
   it("iOS: reviewed, then turned to landscape or a larger text size: still reviewed for that consent, the reviewed list drawn anew from its top", () => {
     bridge.fontScale = 1;
