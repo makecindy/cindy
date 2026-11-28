@@ -280,6 +280,7 @@
       "newTask": "新增任務",
       "tryThese": "試試這些新任務",
       "shuffle": "換一組",
+      "dismiss": "不再顯示",
       "syncHint": "在電腦上開始的任務，也會出現在這裡",
       "items": {
         "findFile": {

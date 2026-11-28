@@ -878,7 +878,9 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
   const { projectFilter, teammateFilter, vendorFilter, lastActivityFilter, hideAutomations = false,
     viewMode = 'list', taskInfoFields = DEFAULT_HOME_TASK_INFO_FIELDS } =
     { ...DEFAULT_HOME_FILTERS, ...(taskListMode === 'inbox' ? inboxFilters : taskFilters) };
-  const { showCollapsedTeammateAvatars, setShowCollapsedTeammateAvatars } = useHomeMode(taskListMode);
+  const { showCollapsedTeammateAvatars, setShowCollapsedTeammateAvatars, taskSuggestionFooterDismissed,
+    dismissTaskSuggestionFooter } = useHomeMode(taskListMode);
+  const canDismissTaskSuggestionFooter = Platform.OS === 'android' && taskListMode === 'tasks' && !!preferenceOwner;
   const [hostProjectOrders, setHostProjectOrders] = useState<ReadonlyMap<string, SyncedProjectOrderSnapshot>>(() => new Map());
   const reloadHostProjectOrderRef = useRef<(() => Promise<void>) | null>(null);
   const projectOrderFetchFenceRef = useRef(createProjectOrderFetchFence());
@@ -3002,6 +3004,7 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
     homeSyncDeviceIds, homeListOwnedDeviceIdsRef.current, rawDeviceConnectionStates,
   );
   const taskSuggestionsCandidateMode = remoteTaskSuggestionsMode({
+    footerDismissed: canDismissTaskSuggestionFooter && taskSuggestionFooterDismissed,
     sessionCount: countHomeSuggestionSessions(displayedHome,
       shouldReplaceListWithSearchResults(searchQuery, indexedSearch.status) ? indexedSearch.results : undefined),
     totalSessionCount: displayedHome.overview.all,
@@ -4214,7 +4217,8 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
         }
         ListFooterComponent={(taskSuggestionsMode === 'footer' ? (
           <RemoteTaskSuggestions mode="footer" onNewSession={() => openSuggestedSession()}
-            onSelect={openSuggestedSession} />
+            onSelect={openSuggestedSession}
+            onHideFooterSuggestions={canDismissTaskSuggestionFooter ? dismissTaskSuggestionFooter : undefined} />
         ) : null) ?? undefined}
         renderItem={renderHomeRow}
       />

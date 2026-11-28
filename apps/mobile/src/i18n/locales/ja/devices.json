@@ -280,6 +280,7 @@
       "newTask": "新しいセッション",
       "tryThese": "こんなタスクはいかがですか",
       "shuffle": "別の候補",
+      "dismiss": "今後表示しない",
       "syncHint": "コンピューターで始めたセッションもここに表示されます。",
       "items": {
         "findFile": {

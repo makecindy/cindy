@@ -280,6 +280,7 @@
       "newTask": "新建任务",
       "tryThese": "试试这些新任务",
       "shuffle": "换一组",
+      "dismiss": "不再显示",
       "syncHint": "在电脑上开始的任务也会出现在这里。",
       "items": {
         "findFile": {

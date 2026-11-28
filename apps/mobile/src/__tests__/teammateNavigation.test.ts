@@ -39,6 +39,17 @@ describe('account-scoped home navigation overrides', () => {
     expect(await readHomeNavigationPreferences('account-b')).toEqual({ showCollapsedTeammateAvatars: false });
     expect(await readHomeNavigationPreferences('account-c')).toEqual({});
   });
+  // Unit: exercise the persisted owner record and an overlapping preference write.
+  it('restores the dismissed task footer for its account only', async () => {
+    await Promise.all([
+      saveHomeNavigationPreferences('account-a', { taskSuggestionFooterDismissed: true }),
+      saveHomeNavigationPreferences('account-a', { teammatesCollapsed: true }),
+    ]);
+    expect(await readHomeNavigationPreferences('account-a')).toEqual({
+      taskSuggestionFooterDismissed: true, teammatesCollapsed: true,
+    });
+    expect(await readHomeNavigationPreferences('account-b')).toEqual({});
+  });
   it('serializes overlapping patches and isolates accounts even when resource ids match', async () => {
     await Promise.all([
       saveHomeNavigationPreferences('account-a', { lastTeammate: teammateIdentity(row()) }),

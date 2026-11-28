@@ -280,6 +280,7 @@
       "newTask": "Neue Sitzung",
       "tryThese": "Neue Aufgabe ausprobieren",
       "shuffle": "Mehr Ideen anzeigen",
+      "dismiss": "Nicht mehr anzeigen",
       "syncHint": "Auf deinem Computer gestartete Sitzungen erscheinen ebenfalls hier.",
       "items": {
         "findFile": {

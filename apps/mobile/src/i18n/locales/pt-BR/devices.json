@@ -283,6 +283,7 @@
       "newTask": "Nova sessão",
       "tryThese": "Experimentar uma nova tarefa",
       "shuffle": "Mostrar mais ideias",
+      "dismiss": "Não mostrar novamente",
       "syncHint": "Sessões iniciadas no computador também aparecerão aqui.",
       "items": {
         "findFile": {
