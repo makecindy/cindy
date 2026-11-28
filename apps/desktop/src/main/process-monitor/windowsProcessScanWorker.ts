@@ -1,6 +1,6 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 // eslint-disable-next-line no-restricted-imports -- child-process pipe failures are isolated from Electron Main.
-import { parentPort } from 'node:worker_threads';
+import { parentPort, workerData } from 'node:worker_threads';
 
 import {
   WINDOWS_PROCESS_SCAN_SCRIPT,
@@ -15,6 +15,15 @@ const MAX_STDERR_BYTES = 64 * 1024;
 if (!parentPort) throw new Error('Windows process scan must run in a worker thread');
 const workerPort = parentPort;
 
+/**
+ * 默认执行进程表扫描；调用方可用 `workerData.script` 复用同一个一次性 worker
+ * 跑别的只读 PowerShell（本机常驻清单用它扫计划任务）。复用同一个 worker 文件
+ * 是为了守住「PowerShell 管道不与 Electron main 同线程」这条既有边界，同时
+ * 不必为每个扫描再登记一个构建入口。
+ */
+const injectedScript = (workerData as { script?: unknown } | null)?.script;
+const scanScript = typeof injectedScript === 'string' ? injectedScript : WINDOWS_PROCESS_SCAN_SCRIPT;
+
 runWindowsProcessTable();
 
 function runWindowsProcessTable(): void {
@@ -22,7 +31,7 @@ function runWindowsProcessTable(): void {
   try {
     child = spawn(
       'powershell.exe',
-      ['-NoProfile', '-NonInteractive', '-Command', WINDOWS_PROCESS_SCAN_SCRIPT],
+      ['-NoProfile', '-NonInteractive', '-Command', scanScript],
       {
         windowsHide: true,
         stdio: ['ignore', 'pipe', 'pipe'],

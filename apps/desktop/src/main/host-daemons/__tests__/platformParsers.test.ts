@@ -1,0 +1,1029 @@
+/**
+ * host-daemons 平台来源的解析层。
+ *
+ * 这层是唯一的「平台文本 → 条目」入口。macOS 本机没有环境，只用真实样例文本锁住
+ * 解析；Linux 侧在 WSL2 Ubuntu 上做过真实的 systemd / crontab 建、跑、停、删验证。
+ */
+
+import { chmod, mkdir, mkdtemp, readFile, rm, stat, unlink, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { basename, dirname, join, sep } from 'node:path';
+
+import { describe, expect, it } from 'vitest';
+
+import {
+  createCrontabAdapter,
+  cronEntryId,
+  parseCronLine,
+  parseCrontab,
+  removeCronLine,
+} from '../crontab.js';
+import {
+  createLaunchAgentsAdapter,
+  parseLaunchAgentPlist,
+  parseLaunchctlList,
+  toHostDaemonTrigger,
+} from '../launchAgents.js';
+import {
+  createSystemdUserAdapter,
+  parseSystemdListUnits,
+  parseSystemdUnitFile,
+  parseUnitFragmentPaths,
+  stateOf,
+  unitTextDependsOn,
+  userUnitDirs,
+} from '../systemdUser.js';
+import { combineHostDaemonAdapters } from '../target.js';
+import type { ExecResult, RawHostDaemon } from '../target.js';
+import type { RunCommand } from '../exec.js';
+
+describe('launchd', () => {
+  it('按 plutil 真实输出取 Label、命令与触发', () => {
+    const plist = parseLaunchAgentPlist(
+      JSON.stringify({
+        Label: 'com.cindy.backup',
+        ProgramArguments: ['/usr/bin/env', 'node', '/tmp/backup.mjs'],
+        StartInterval: 3600,
+      }),
+      'fallback.plist',
+    );
+    expect(plist).toEqual({
+      label: 'com.cindy.backup',
+      command: '/usr/bin/env node /tmp/backup.mjs',
+      runAtLoad: false,
+      timeTriggered: true,
+    });
+    expect(toHostDaemonTrigger(plist!)).toBe('schedule');
+  });
+
+  it('Program 是可执行文件、ProgramArguments 是它的参数；命令要完整；RunAtLoad 记为登录启动', () => {
+    const plist = parseLaunchAgentPlist(
+      JSON.stringify({ Program: '/usr/local/bin/tool', ProgramArguments: ['--flag', 'x'], RunAtLoad: true }),
+      'fallback.plist',
+    );
+    expect(plist?.command).toBe('/usr/local/bin/tool --flag x');
+    expect(toHostDaemonTrigger(plist!)).toBe('logon');
+  });
+
+  it('没有 Label 时退回文件名，坏 JSON 直接丢弃', () => {
+    expect(parseLaunchAgentPlist('{"RunAtLoad":true}', 'com.a.plist')?.label).toBe('com.a.plist');
+    expect(parseLaunchAgentPlist('not json', 'com.a.plist')).toBeNull();
+  });
+
+  it('launchctl list 用 `-` 表示未运行，并跳过表头', () => {
+    const jobs = parseLaunchctlList('PID\tStatus\tLabel\n123\t0\tcom.cindy.a\n-\t0\tcom.cindy.b\n');
+    expect(jobs.get('com.cindy.a')).toEqual({ running: true });
+    expect(jobs.get('com.cindy.b')).toEqual({ running: false });
+    expect(jobs.has('Label')).toBe(false);
+  });
+});
+
+describe('systemd 用户单元', () => {
+  it('剥掉 systemd 的 ExecStart 前缀并取时间表达式', () => {
+    const file = parseSystemdUnitFile(
+      [
+        '[Unit]',
+        'Description=Daily backup',
+        '# comment',
+        '',
+        '[Service]',
+        'ExecStart=-/usr/bin/node /tmp/backup.mjs',
+        '[Timer]',
+        'OnCalendar=*-*-* 04:00:00',
+      ].join('\n'),
+    );
+    expect(file.execStart).toBe('/usr/bin/node /tmp/backup.mjs');
+    expect(file.description).toBe('Daily backup');
+    expect(file.schedule).toBe('OnCalendar=*-*-* 04:00:00');
+  });
+
+  it('list-units 跳过表头与无效行（真实 Ubuntu WSL 输出，带引号描述）', () => {
+    // 取自 WSL2 Ubuntu 里 `systemctl --user list-units --type=service --type=timer
+    // --all --plain --no-legend` 的原始输出：列是 NAME/LOAD/ACTIVE/SUB/DESCRIPTION，
+    // 描述里的引号与空格会把「按空白切分」的实现带偏。
+    const units = parseSystemdListUnits(
+      [
+        'cindy-probe.service              loaded active   running Cindy host-daemon probe',
+        'gpg-agent.service                loaded inactive dead    GnuPG cryptographic agent and passphrase cache',
+        'ubuntu-insights-collect.service  loaded inactive dead    "Collect platform report using Ubuntu Insights while respecting consent"',
+        'cindy-probe.timer                loaded active   waiting Cindy host-daemon probe timer',
+        'UNIT FILE STATE ACTIVE SUB DESCRIPTION',
+        'junk-line',
+      ].join('\n'),
+    );
+    expect(units.get('cindy-probe.service')).toEqual({ active: 'active', sub: 'running' });
+    expect(units.get('cindy-probe.timer')).toEqual({ active: 'active', sub: 'waiting' });
+    expect(units.get('gpg-agent.service')).toEqual({ active: 'inactive', sub: 'dead' });
+    expect(units.size).toBe(4);
+  });
+
+  it('timer 条目跟随它 service 的运行状态，等待触发不算正在运行', () => {
+    // WSL 实测：`systemctl --user start foo.service` 后 timer 仍是 waiting，
+    // 只看 timer 自己的 active 会让「立即运行」后状态永远停在待执行。
+    const runtime = new Map([
+      ['cindy-probe.timer', { active: 'active', sub: 'waiting' }],
+      ['cindy-probe.service', { active: 'active', sub: 'running' }],
+    ]);
+    expect(stateOf('cindy-probe.timer', runtime)).toBe('running');
+    runtime.set('cindy-probe.service', { active: 'inactive', sub: 'dead' });
+    expect(stateOf('cindy-probe.timer', runtime)).toBe('ready');
+    expect(stateOf('cindy-probe.timer', new Map())).toBe('ready');
+    // systemctl 读不到运行时状态时不能说它在跑，也不能说它没跑。
+    expect(stateOf('cindy-probe.timer', null)).toBe('unknown');
+  });
+
+  it('单元文本是否依赖某个执行面：认 Unit= 与依赖列表，不认命令正文和描述', () => {
+    const cases: Array<[string, boolean]> = [
+      ['[Timer]\nUnit=backup.service\n', true],
+      ['[Timer]\nUnit=backup\n', true],
+      // 续行先接回同一行；值可以省略 .service 后缀。
+      ['[Unit]\nWants=a.service b.service \\n    backup.service\n', true],
+      ['[Unit]\nRequires=backup.timer\n', false],
+      ['[Unit]\nUpholds=backup2.service\n', false],
+      ['[Service]\nExecStart=/bin/backup.service\n', false],
+      ['[Unit]\nDescription=runs backup.service daily\n', false],
+    ];
+    for (const [text, expected] of cases) {
+      expect(unitTextDependsOn(text, 'backup.service')).toBe(expected);
+    }
+  });
+
+  it('timer 显式指名别的 service 时，不把那个 service 当成自己的另一半', () => {
+    // 删 timer 时跟着删 `Unit=` 指向的文件，会删掉别的 timer 也在用的 service。
+    const runtime = new Map([['other.service', { active: 'active', sub: 'running' }]]);
+    expect(stateOf('cron-a.timer', runtime, 'other.service')).toBe('running');
+  });
+
+  it('userUnitDirs 按 systemd 的搜索优先序给出持久用户目录', () => {
+    // systemd 的用户单元搜索序：配置目录 > $XDG_CONFIG_DIRS > /etc > 数据目录。
+    // 同名单元在多个目录里都有时，systemd 加载的是靠前那个——顺序错了会读错单元文件，
+    // 进而停错、删错。
+    const previous = {
+      config: process.env.XDG_CONFIG_HOME,
+      configDirs: process.env.XDG_CONFIG_DIRS,
+      data: process.env.XDG_DATA_HOME,
+    };
+    const restore = () => {
+      for (const [key, value] of [
+        ['XDG_CONFIG_HOME', previous.config],
+        ['XDG_CONFIG_DIRS', previous.configDirs],
+        ['XDG_DATA_HOME', previous.data],
+      ] as const) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    };
+    try {
+      process.env.XDG_CONFIG_HOME = '/tmp/xdg-config';
+      process.env.XDG_CONFIG_DIRS = '/tmp/xdg-a:/tmp/xdg-b';
+      process.env.XDG_DATA_HOME = '/tmp/xdg-data';
+      expect(userUnitDirs()).toEqual([
+        join('/tmp/xdg-config', 'systemd', 'user'),
+        join('/tmp/xdg-a', 'systemd', 'user'),
+        join('/tmp/xdg-b', 'systemd', 'user'),
+        join(sep, 'etc', 'systemd', 'user'),
+        join('/tmp/xdg-data', 'systemd', 'user'),
+      ]);
+
+      // 没设 XDG_CONFIG_DIRS 时按默认的 /etc/xdg 算，仍然排在 /etc/systemd/user 前面。
+      delete process.env.XDG_CONFIG_DIRS;
+      expect(userUnitDirs()[1]).toBe(join(sep, 'etc', 'xdg', 'systemd', 'user'));
+      expect(userUnitDirs()[2]).toBe(join(sep, 'etc', 'systemd', 'user'));
+    } finally {
+      restore();
+    }
+  });
+
+  it('show 的键值输出只收非空 FragmentPath，跳过 mount/device 与 transient', () => {
+    // 摘自真实 Ubuntu 桌面（systemd 259）`systemctl --user show '*' -p Id -p FragmentPath`：
+    // mount/device 单元的名字里带 \x2d 转义（那是名字本身，不是输出转义），
+    // transient/not-found 单元 FragmentPath 为空。
+    const paths = parseUnitFragmentPaths(
+      [
+        'Id=snap-core18-3267.mount',
+        'FragmentPath=',
+        '',
+        'Id=sys-devices-pci0000:00-0000:00:14.0-usb3-3\\x2d3-3\\x2d3:1.0-bluetooth-hci0.device',
+        'FragmentPath=',
+        '',
+        'Id=agent-quota-guard.service',
+        'FragmentPath=/home/u/.config/systemd/user/agent-quota-guard.service',
+        '',
+        'Id=evolution-alarm-notify.service',
+        'FragmentPath=',
+        '',
+        'Id=obex.service',
+        'FragmentPath=/usr/lib/systemd/user/obex.service',
+      ].join('\n'),
+    );
+    expect(paths.get('agent-quota-guard.service')).toBe('/home/u/.config/systemd/user/agent-quota-guard.service');
+    expect(paths.get('obex.service')).toBe('/usr/lib/systemd/user/obex.service');
+    expect(paths.size).toBe(2);
+  });
+});
+
+describe('systemd 用户单元来自多个目录', () => {
+  // 归属与布局取自真实 Ubuntu 桌面实测（systemd 259，98 个用户单元）：
+  // 只有 8 个单元的 FragmentPath 在 ~/.config/systemd/user，4 个在 /etc/systemd/user
+  // （snap 装的），77 个在发行版 /usr/lib，8 个 FragmentPath 为空（transient/not-found），
+  // 另有模板实例（单元名 ≠ 文件名）。这里按同一分布搭 fixture。
+  async function makeUnitDirs() {
+    const root = await mkdtemp(join(tmpdir(), 'host-daemons-systemd-'));
+    const cfg = join(root, 'config', 'systemd', 'user');
+    const etc = join(root, 'etc', 'systemd', 'user');
+    const data = join(root, 'data', 'systemd', 'user');
+    const distro = join(root, 'usr', 'lib', 'systemd', 'user');
+    const generator = join(root, 'run', 'user', '1000', 'systemd', 'generator.late');
+    for (const dir of [cfg, etc, data, distro, generator]) {
+      await mkdir(dir, { recursive: true });
+    }
+    const unit = async (dir: string, name: string, lines: string[]) => {
+      await writeFile(join(dir, name), ['[Unit]', 'Description=x', '[Service]', ...lines].join('\n'));
+    };
+    await unit(cfg, 'herdr-server.service', ['ExecStart=/usr/bin/node /home/u/herdr/server.mjs']);
+    // 模板实例：show 报的 Id 是实例名，FragmentPath 指向模板文件。
+    await unit(cfg, 'gnome-session-manager@.service', ['ExecStart=/usr/libexec/gnome-session-manager %i']);
+    await unit(cfg, 'magpie-3-issues-watch.timer', ['[Timer]', 'OnCalendar=*-*-* 04:00:00']);
+    // timer 在配置目录、service 在数据目录：同一常驻物的两半跨目录。
+    await unit(data, 'magpie-3-issues-watch.service', ['ExecStart=/usr/bin/node /home/u/magpie/watch.mjs']);
+    // /etc 下 snap 装的一对。
+    await unit(etc, 'snap.firmware-updater.firmware-notifier.service', ['ExecStart=/usr/lib/snapd/snapd-notifier']);
+    await unit(etc, 'snap.firmware-updater.firmware-notifier.timer', ['[Timer]', 'OnCalendar=*:0/15']);
+    await unit(distro, 'dbus.service', ['ExecStart=/usr/bin/dbus-daemon --session']);
+    // \x2d 转义是 systemd 单元名正文；Windows 文件名不允许 \，那里换无转义名搭 fixture——
+    // 转义名本身的解析由上面 parseUnitFragmentPaths 的纯字符串用例覆盖，这里只验证
+    // 「generator 目录里的单元不进清单」。
+    const generatorUnitName = process.platform === 'win32'
+      ? 'app-geoclue-agent@autostart.service'
+      : 'app-geoclue\\x2ddemo\\x2dagent@autostart.service';
+    await unit(generator, generatorUnitName, ['ExecStart=/usr/libexec/geoclue']);
+    return { root, cfg, etc, data, distro, generator, generatorUnitName };
+  }
+
+  /** 假 systemctl：list-units 与 show 给真实形状的输出，其余动作只记账。 */
+  function systemdExec(opts: { show: string | null; listUnits?: string }) {
+    const calls: string[][] = [];
+    const exec: RunCommand = async (_file, args) => {
+      calls.push(args);
+      if (args[1] === 'show') {
+        return opts.show === null ? { stdout: '', failed: true } : { stdout: opts.show, failed: false };
+      }
+      if (args[1] === 'list-units') {
+        return { stdout: opts.listUnits ?? '', failed: false };
+      }
+      return { stdout: '', failed: false };
+    };
+    return Object.assign(exec, { calls });
+  }
+
+  function showOutput(dirs: {
+    cfg: string; etc: string; data: string; distro: string; generator: string; generatorUnitName: string;
+  }): string {
+    // FragmentPath 为空的单元（transient/not-found）与 mount/device 照真实输出保留。
+    return [
+      `Id=herdr-server.service`,
+      `FragmentPath=${join(dirs.cfg, 'herdr-server.service')}`,
+      '',
+      `Id=gnome-session-manager@ubuntu.service`,
+      `FragmentPath=${join(dirs.cfg, 'gnome-session-manager@.service')}`,
+      '',
+      `Id=magpie-3-issues-watch.timer`,
+      `FragmentPath=${join(dirs.cfg, 'magpie-3-issues-watch.timer')}`,
+      '',
+      `Id=magpie-3-issues-watch.service`,
+      `FragmentPath=${join(dirs.data, 'magpie-3-issues-watch.service')}`,
+      '',
+      `Id=snap.firmware-updater.firmware-notifier.timer`,
+      `FragmentPath=${join(dirs.etc, 'snap.firmware-updater.firmware-notifier.timer')}`,
+      '',
+      `Id=snap.firmware-updater.firmware-notifier.service`,
+      `FragmentPath=${join(dirs.etc, 'snap.firmware-updater.firmware-notifier.service')}`,
+      '',
+      `Id=dbus.service`,
+      `FragmentPath=${join(dirs.distro, 'dbus.service')}`,
+      '',
+      `Id=${dirs.generatorUnitName}`,
+      `FragmentPath=${join(dirs.generator, dirs.generatorUnitName)}`,
+      '',
+      `Id=evolution-alarm-notify.service`,
+      `FragmentPath=`,
+      '',
+      'Id=snap-core18-3267.mount',
+      'FragmentPath=',
+    ].join('\n');
+  }
+
+  it('scan 列出配置/数据//etc 三个目录的单元，排除发行版、generator 与空 FragmentPath', async () => {
+    const dirs = await makeUnitDirs();
+    try {
+      const exec = systemdExec({ show: showOutput(dirs) });
+      const adapter = createSystemdUserAdapter({ dirs: [dirs.cfg, dirs.etc, dirs.data], exec });
+      const items = await adapter.scan();
+      expect(items.map((item) => item.name)).toEqual([
+        'herdr-server.service',
+        'gnome-session-manager@ubuntu.service',
+        'magpie-3-issues-watch.timer',
+        'snap.firmware-updater.firmware-notifier.timer',
+      ]);
+      // timer 与它的 service 是同一常驻物：service 在另一个目录也一样只列 timer。
+      const timer = items.find((item) => item.name === 'magpie-3-issues-watch.timer');
+      expect(timer?.command).toBe('/usr/bin/node /home/u/magpie/watch.mjs');
+      expect(timer?.trigger).toBe('schedule');
+    } finally {
+      await rm(dirs.root, { recursive: true, force: true });
+    }
+  });
+
+  it('remove 删除 systemd 回答的真实路径（含 /etc 下），timer 与 service 成对删', async () => {
+    const dirs = await makeUnitDirs();
+    try {
+      const removed: string[] = [];
+      const exec = systemdExec({ show: showOutput(dirs) });
+      const adapter = createSystemdUserAdapter({
+        dirs: [dirs.cfg, dirs.etc, dirs.data],
+        exec,
+        removeFile: async (file) => void removed.push(file),
+      });
+      await adapter.scan();
+      await adapter.remove('systemd-user:snap.firmware-updater.firmware-notifier.timer');
+      expect(exec.calls.some((args) => args[1] === 'disable' && args[2] === '--now'
+        && args[3] === 'snap.firmware-updater.firmware-notifier.timer')).toBe(true);
+      expect(exec.calls.some((args) => args[1] === 'daemon-reload')).toBe(true);
+      // 执行面先删、条目自己的文件最后删：中途失败时 timer 还在清单里、还带着归属，能重试。
+      expect(removed).toEqual([
+        join(dirs.etc, 'snap.firmware-updater.firmware-notifier.service'),
+        join(dirs.etc, 'snap.firmware-updater.firmware-notifier.timer'),
+      ]);
+    } finally {
+      await rm(dirs.root, { recursive: true, force: true });
+    }
+  });
+
+  it('show 回答不了时退回扫同样的目录，按文件名列表（模板实例以模板名出现）', async () => {
+    const dirs = await makeUnitDirs();
+    try {
+      const exec = systemdExec({ show: null });
+      const adapter = createSystemdUserAdapter({ dirs: [dirs.cfg, dirs.etc, dirs.data], exec });
+      const items = await adapter.scan();
+      // 退回路径拿不到 systemd 的单元名，只能按文件名：模板实例以模板名出现，
+      // /etc 下的 snap 对与跨目录的 timer/service 配对仍照常工作。
+      // （readdir 顺序由文件系统决定，断言排序后的名单。）
+      expect(items.map((item) => item.name).sort()).toEqual([
+        'gnome-session-manager@.service',
+        'herdr-server.service',
+        'magpie-3-issues-watch.timer',
+        'snap.firmware-updater.firmware-notifier.timer',
+      ]);
+    } finally {
+      await rm(dirs.root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('crontab', () => {
+  it('跳过注释与环境变量，解析五字段与 @macro', () => {
+    expect(parseCronLine('PATH=/usr/local/bin:/usr/bin')).toBeNull();
+    expect(parseCronLine('# 0 4 * * * /bin/x')).toBeNull();
+    expect(parseCronLine('0 4 * * * /usr/bin/node /tmp/backup.mjs')).toEqual({
+      line: '0 4 * * * /usr/bin/node /tmp/backup.mjs',
+      command: '/usr/bin/node /tmp/backup.mjs',
+      name: 'node',
+    });
+    expect(parseCronLine('@reboot /home/u/run.sh --now')?.command).toBe('/home/u/run.sh --now');
+    expect(parseCronLine('@reboot /home/u/run.sh --now')?.name).toBe('run.sh');
+  });
+
+  it('命令首个 token 在日程里也出现过时，命令起点仍取日程之后', () => {
+    // 旧实现用 indexOf(首个命令 token, 若干字段位置) 定位起点，重名 token 会把起点退回日程段。
+    const entry = parseCronLine('*/5 * * * * */5 /bin/a');
+    expect(entry?.command).toBe('*/5 /bin/a');
+  });
+
+  it('id 由整行决定：同一行稳定，改一个字段就换 id', () => {
+    const line = '0 4 * * * /usr/bin/node /tmp/backup.mjs';
+    expect(cronEntryId(line)).toBe(cronEntryId(line));
+    expect(cronEntryId(line)).not.toBe(cronEntryId('0 5 * * * /usr/bin/node /tmp/backup.mjs'));
+  });
+
+  it('删除只动目标行，保留其余行与末尾换行', () => {
+    const text = 'MAILTO=""\n0 4 * * * /usr/bin/a\n  0 5 * * * /usr/bin/b\n';
+    const result = removeCronLine(text, '0 5 * * * /usr/bin/b');
+    expect(result.removed).toBe(true);
+    expect(result.text).toBe('MAILTO=""\n0 4 * * * /usr/bin/a\n');
+    expect(removeCronLine('0 4 * * * /bin/a\n', '0 5 * * * /bin/b')).toEqual({
+      text: '0 4 * * * /bin/a\n',
+      removed: false,
+    });
+  });
+
+  it('parseCrontab 汇总有效行', () => {
+    expect(parseCrontab('MAILTO=""\n\n0 4 * * * /bin/a\n@reboot /bin/b\n')).toHaveLength(2);
+  });
+
+  it('同一行写两遍也能分别列出，id 不撞车', async () => {
+    // 面板按 id 索引条目，撞车的第二条会在列表里被前一条顶掉。
+    const adapter = createCrontabAdapter({
+      exec: async () => ({ stdout: '@reboot /bin/sync\n@reboot /bin/sync\n', failed: false }),
+    });
+    const items = await adapter.scan();
+    expect(items).toHaveLength(2);
+    expect(new Set(items.map((item) => item.id)).size).toBe(2);
+    expect(items.map((item) => item.name)).toEqual(['sync', 'sync']);
+    // `@reboot` 是开机跑一次，不是定时：同一条 cron 行要按开机归类。
+    expect(items.map((item) => item.trigger)).toEqual(['startup', 'startup']);
+  });
+
+  it('两个删除并发时按表排队，不会把刚删掉的行写回来', async () => {
+    // 整表读改写的固有风险：两个请求同时拿到同一份旧快照，后写的就会覆盖先写的。
+    const table = { text: '0 4 * * * /bin/a\n0 5 * * * /bin/b\n' };
+    const adapter = createCrontabAdapter({
+      exec: async (file, args, options) => {
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        if (args[0] === '-l') return { stdout: table.text, failed: false };
+        table.text = options?.input ?? '';
+        return { stdout: '', failed: false };
+      },
+    });
+    await Promise.all([
+      adapter.remove(cronEntryId('0 4 * * * /bin/a')),
+      adapter.remove(cronEntryId('0 5 * * * /bin/b')),
+    ]);
+    expect(parseCrontab(table.text)).toHaveLength(0);
+  });
+
+  it('「立即运行」起不来时如实报错，不谎报已运行', async () => {
+    // 旧实现 fire-and-forget：spawn 失败（命令不存在）时界面照样说已运行。
+    const adapter = createCrontabAdapter({
+      exec: async () => ({ stdout: '0 4 * * * /bin/absent\n', failed: false }),
+      launch: async () => {
+        throw new Error('spawn /bin/absent ENOENT');
+      },
+    });
+    await expect(adapter.run(cronEntryId('0 4 * * * /bin/absent'))).rejects.toThrow('ENOENT');
+  });
+});
+
+describe('systemd 动作契约（真目录 + 假 systemctl）', () => {
+  /**
+   * 这两个用例锁的是「删除」的两条根因类别：
+   * - 删定义前必须先停执行面，否则 disable 之后进程还活着（页面说删了，进程还在）。
+   * - 只删能确认属于这个 timer 的文件；显式指名别的 service 时不得连带删它。
+   */
+  async function withUnits(
+    units: Record<string, string>,
+    overrides: {
+      reload?: () => Promise<void>;
+      stopCode?: number;
+      listUnits?: string;
+      removeFile?: (path: string) => Promise<void>;
+    } = {},
+  ) {
+    const dir = await mkdtemp(join(tmpdir(), 'host-daemons-'));
+    for (const [name, body] of Object.entries(units)) {
+      const path = join(dir, name);
+      await mkdir(dirname(path), { recursive: true });
+      await writeFile(path, body, 'utf8');
+    }
+    const commands: string[][] = [];
+    const adapter = createSystemdUserAdapter({
+      dirs: [dir],
+      exec: async (command, args) => {
+        commands.push([command, ...args]);
+        // show 回答不了（模拟老 systemd）：契约测试走按目录列表的回退路径。
+        if (args[1] === 'show') return { stdout: '', failed: true };
+        if (args[1] === 'list-units') return { stdout: overrides.listUnits ?? '', failed: false };
+        return args.includes('stop') && overrides.stopCode !== undefined
+          ? { stdout: '', failed: true, code: overrides.stopCode }
+          : { stdout: '', failed: false };
+      },
+      ...(overrides.removeFile ? { removeFile: overrides.removeFile } : {}),
+      reload: overrides.reload ?? (async () => {}),
+    });
+    const cleanup = () => rm(dir, { recursive: true, force: true });
+    return { adapter, commands, dir, cleanup };
+  }
+
+  it('删 timer 先停执行面；执行面被别的 timer 指名时留在盘上', async () => {
+    const { adapter, commands, dir, cleanup } = await withUnits({
+      'cron-a.timer': '[Timer]\nUnit=shared.service\nOnCalendar=hourly\n',
+      'cron-b.timer': '[Timer]\nUnit=shared.service\nOnCalendar=daily\n',
+      'shared.service': '[Service]\nExecStart=/bin/true\n',
+    });
+    try {
+      await adapter.scan();
+      await adapter.remove('systemd-user:cron-a.timer');
+      // 停执行面必须在 disable 之前，否则 disable 只停 timer、进程仍在。
+      const acts = commands.filter((c) => c.includes('stop') || c.includes('disable'));
+      expect(acts).toEqual([
+        ['systemctl', '--user', 'stop', 'shared.service'],
+        ['systemctl', '--user', 'disable', '--now', 'cron-a.timer'],
+      ]);
+      // 共享的执行面不是这一个 timer 的东西，删它等于删另一个 timer 的定义。
+      await expect(stat(join(dir, 'shared.service'))).resolves.toBeTruthy();
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it('timer 指名的 service 与自己不同名：没别的单元在用也不连带删', async () => {
+    // 不同名的 service 是另一份定义，这个 timer 只是借用它；删 timer 不等于替它的主人做主。
+    const { adapter, dir, cleanup } = await withUnits({
+      'cron-a.timer': '[Timer]\nUnit=shared.service\nOnCalendar=hourly\n',
+      'shared.service': '[Service]\nExecStart=/bin/true\n',
+    });
+    try {
+      await adapter.scan();
+      await adapter.remove('systemd-user:cron-a.timer');
+      await expect(stat(join(dir, 'cron-a.timer'))).rejects.toMatchObject({ code: 'ENOENT' });
+      await expect(stat(join(dir, 'shared.service'))).resolves.toBeTruthy();
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it('执行面未加载（stop 返回 5）时停与删都不算失败；真停不下来则不删', async () => {
+    const units = { 'orphan.timer': '[Timer]\nOnCalendar=hourly\n' };
+    const orphan = await withUnits(units, { stopCode: 5 });
+    const stuck = await withUnits(units, { stopCode: 1 });
+    try {
+      // WSL2 实测：timer 指向的 service 没加载时 `systemctl stop` 返回 5，没有任何实例在跑。
+      // 把它当失败，指向已删 service 的孤儿 timer 就永远删不掉。
+      await orphan.adapter.scan();
+      await orphan.adapter.stop('systemd-user:orphan.timer');
+      await orphan.adapter.remove('systemd-user:orphan.timer');
+      await expect(stat(join(orphan.dir, 'orphan.timer'))).rejects.toMatchObject({
+        code: 'ENOENT',
+      });
+      await stuck.adapter.scan();
+      await expect(
+        stuck.adapter.remove('systemd-user:orphan.timer'),
+      ).rejects.toThrow('could not be stopped');
+      await expect(stat(join(stuck.dir, 'orphan.timer'))).resolves.toBeTruthy();
+    } finally {
+      await orphan.cleanup();
+      await stuck.cleanup();
+    }
+  });
+
+  it('默认同名配对的执行面，被别的单元使用时不连带删除；没人用才跟着删', async () => {
+    const own = {
+      'backup.timer': '[Timer]\nOnCalendar=hourly\n',
+      'backup.service': '[Service]\nExecStart=/bin/true\n',
+    };
+    // 「在用」不只有 Unit=：硬依赖、开机启用建的依赖目录，删掉执行面都会让它们启动失败。
+    const users: Record<string, string> = {
+      'daily.timer': '[Timer]\nUnit=backup.service\nOnCalendar=daily\n',
+      'report.service': '[Unit]\nRequires=backup.service\n[Service]\nExecStart=/bin/true\n',
+      'default.target.wants/backup.service': 'symlink\n',
+    };
+    for (const [name, body] of Object.entries(users)) {
+      const { adapter, dir, cleanup } = await withUnits({ ...own, [name]: body });
+      try {
+        await adapter.scan();
+        await adapter.remove('systemd-user:backup.timer');
+        // 删的是这一项自己；执行面留着，下次扫描还能把它列出来、还能删。
+        await expect(stat(join(dir, 'backup.timer'))).rejects.toMatchObject({ code: 'ENOENT' });
+        await expect(stat(join(dir, 'backup.service'))).resolves.toBeTruthy();
+      } finally {
+        await cleanup();
+      }
+    }
+
+    // 对照：执行面确实只属于这一项时，不留下没人认领、页面上再也删不掉的文件。
+    const { adapter, dir, cleanup } = await withUnits(own);
+    try {
+      await adapter.scan();
+      await adapter.remove('systemd-user:backup.timer');
+      await expect(stat(join(dir, 'backup.service'))).rejects.toMatchObject({ code: 'ENOENT' });
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it('daemon-reload 失败时在 unlink 之前报错，不留半删状态', async () => {
+    const { adapter, dir, cleanup } = await withUnits(
+      { 'cron-a.timer': '[Timer]\nOnCalendar=hourly\n' },
+      {
+        reload: async () => {
+          throw new Error('systemd could not reload units');
+        },
+      },
+    );
+    try {
+      await adapter.scan();
+      await expect(adapter.remove('systemd-user:cron-a.timer')).rejects.toThrow(
+        'could not reload',
+      );
+      // 文件还在，下次扫描能把它找回来。
+      await expect(stat(join(dir, 'cron-a.timer'))).resolves.toBeTruthy();
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it('模板实例的动作解析到模板文件：stop/run 用实例名，remove 只停用不动模板', async () => {
+    const { adapter, commands, dir, cleanup } = await withUnits({
+      'notify@.service': '[Service]\nExecStart=/usr/bin/notify %i\n',
+    });
+    try {
+      // 实例没有同名文件；show 给实例的 FragmentPath 就是模板文件（见多目录组），
+      // 动作按模板定义核对，systemd 的调用对象仍是实例名。
+      await adapter.stop('systemd-user:notify@ubuntu.service');
+      expect(commands.some((c) => c[2] === 'stop' && c[3] === 'notify@ubuntu.service')).toBe(true);
+      await adapter.run('systemd-user:notify@ubuntu.service');
+      expect(commands.some((c) => c[2] === 'start' && c[3] === 'notify@ubuntu.service')).toBe(true);
+      await adapter.remove('systemd-user:notify@ubuntu.service');
+      expect(
+        commands.some((c) => c[2] === 'disable' && c[4] === 'notify@ubuntu.service'),
+      ).toBe(true);
+      // 模板是共享定义：实例停用了，模板文件必须留下。
+      await expect(stat(join(dir, 'notify@.service'))).resolves.toBeTruthy();
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it('直接创建的实例文件跟着删掉，共享模板留下', async () => {
+    // `backup@daily.service` 是自己写出来的实例文件（不是模板实例的定义）：只停用不删
+    // 会留下残档——服务层随后清掉归属并报告成功，页面上再也找不回这个条目。
+    const { adapter, dir, cleanup } = await withUnits({
+      'backup@daily.service': '[Service]\nExecStart=/usr/bin/backup %i\n',
+      'backup@.service': '[Service]\nExecStart=/usr/bin/backup %i\n',
+    });
+    try {
+      await adapter.scan();
+      await adapter.remove('systemd-user:backup@daily.service');
+      await expect(stat(join(dir, 'backup@daily.service'))).rejects.toMatchObject({ code: 'ENOENT' });
+      // 模板是共享定义：别的实例、乃至从未加载过的实例名都可能用它，不能跟着这次删除没。
+      await expect(stat(join(dir, 'backup@.service'))).resolves.toBeTruthy();
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it('drop-in 改了 Unit= 时，停与删都作用到真正被拉起的 service', async () => {
+    // `backup.timer.d/override.conf` 把 Unit= 改成 other.service：主文件里没写 Unit=，
+    // 按同名猜出来的 backup.service 根本不是被拉起的那个——停它等于停错东西，删它
+    // 等于删掉别人的定义。
+    const { adapter, commands, dir, cleanup } = await withUnits({
+      'backup.timer': '[Timer]\nOnCalendar=hourly\n',
+      'backup.timer.d/override.conf': '[Timer]\nUnit=other.service\n',
+      'backup.service': '[Service]\nExecStart=/bin/wrong\n',
+      'other.service': '[Service]\nExecStart=/bin/other\n',
+    });
+    try {
+      const entries = await adapter.scan();
+      // 清单里的命令也按生效的定义走：真正被拉起的是 other.service。
+      expect(entries.find((entry) => entry.name === 'backup.timer')?.command).toBe('/bin/other');
+      await adapter.stop('systemd-user:backup.timer');
+      expect(commands.some((c) => c[2] === 'stop' && c[3] === 'other.service')).toBe(true);
+      expect(commands.some((c) => c[2] === 'stop' && c[3] === 'backup.service')).toBe(false);
+      await adapter.remove('systemd-user:backup.timer');
+      // other.service 是别的单元的文件；backup.service 从来不是目标，都不该动。
+      await expect(stat(join(dir, 'other.service'))).resolves.toBeTruthy();
+      await expect(stat(join(dir, 'backup.service'))).resolves.toBeTruthy();
+      await expect(stat(join(dir, 'backup.timer'))).rejects.toMatchObject({ code: 'ENOENT' });
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it('drop-in 重置 ExecStart 后，命令按生效的那份来', async () => {
+    // `ExecStart=` 赋空值是 systemd 的列表重置语义：清掉之前的，再接新的。
+    const { adapter, cleanup } = await withUnits({
+      'worker.service': '[Service]\nExecStart=/bin/old\n',
+      'worker.service.d/10-reset.conf': '[Service]\nExecStart=\nExecStart=/bin/new\n',
+    });
+    try {
+      const entries = await adapter.scan();
+      expect(entries.find((entry) => entry.name === 'worker.service')?.command).toBe('/bin/new');
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it('模板实例的 drop-in 优先于模板的 drop-in', async () => {
+    // systemd 对模板实例先看实例目录、再看模板目录；实例那份覆盖模板那份。
+    const { adapter, commands, cleanup } = await withUnits({
+      'notify@.timer': '[Timer]\nOnCalendar=hourly\n',
+      'notify@.timer.d/10-base.conf': '[Timer]\nUnit=base.service\n',
+      'notify@ubuntu.timer.d/10-override.conf': '[Timer]\nUnit=instance.service\n',
+    });
+    try {
+      await adapter.stop('systemd-user:notify@ubuntu.timer');
+      expect(commands.some((c) => c[2] === 'stop' && c[3] === 'instance.service')).toBe(true);
+      expect(commands.some((c) => c[2] === 'stop' && c[3] === 'base.service')).toBe(false);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it('模板还有实例在跑时拒绝删除，避免把实例一并带走', async () => {
+    const { adapter, dir, cleanup } = await withUnits(
+      { 'notify@.service': '[Service]\nExecStart=/usr/bin/notify %i\n' },
+      {
+        listUnits: [
+          'notify@ubuntu.service              loaded active   running notify',
+          'notify@other.service               loaded inactive dead    notify',
+        ].join('\n'),
+      },
+    );
+    try {
+      await adapter.scan();
+      await expect(adapter.remove('systemd-user:notify@.service')).rejects.toThrow(
+        'loaded instances',
+      );
+      await expect(stat(join(dir, 'notify@.service'))).resolves.toBeTruthy();
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it('timer/path/socket 与执行面同名且没写 Unit= 时也算在用，不连带删', async () => {
+    const own = {
+      'backup.timer': '[Timer]\nOnCalendar=hourly\n',
+      'backup.service': '[Service]\nExecStart=/bin/true\n',
+    };
+    // 「在用」不只有显式引用：backup.path 不写 Unit= 照样启动 backup.service，
+    // backup.socket 同理。只看 Unit=/依赖列表会把它们漏掉，删执行面等于删掉它们的触发目标。
+    const users: Record<string, string> = {
+      'backup.path': '[Path]\nPathModified=/var/tmp/backup\n',
+      'backup.socket': '[Socket]\nListenStream=%t/backup.sock\n',
+    };
+    for (const [name, body] of Object.entries(users)) {
+      const { adapter, dir, cleanup } = await withUnits({ ...own, [name]: body });
+      try {
+        await adapter.scan();
+        await adapter.remove('systemd-user:backup.timer');
+        await expect(stat(join(dir, 'backup.timer'))).rejects.toMatchObject({ code: 'ENOENT' });
+        await expect(stat(join(dir, 'backup.service'))).resolves.toBeTruthy();
+      } finally {
+        await cleanup();
+      }
+    }
+  });
+
+  it.runIf(process.platform !== 'win32')(
+    '单元文件读不了时按「有人用」处理，不连带删执行面',
+    async () => {
+      const { adapter, dir, cleanup } = await withUnits({
+        'backup.timer': '[Timer]\nOnCalendar=hourly\n',
+        'backup.service': '[Service]\nExecStart=/bin/true\n',
+        'mystery.service': '[Service]\nExecStart=/bin/true\n',
+      });
+      try {
+        // 判断不了 mystery.service 是否引用 backup.service：不删执行面（fail closed）。
+        // 代价只是执行面文件多留一阵，误删别人还在用的文件才是数据事故。
+        await chmod(join(dir, 'mystery.service'), 0o000);
+        await adapter.scan();
+        await adapter.remove('systemd-user:backup.timer');
+        await expect(stat(join(dir, 'backup.timer'))).rejects.toMatchObject({ code: 'ENOENT' });
+        await expect(stat(join(dir, 'backup.service'))).resolves.toBeTruthy();
+      } finally {
+        await chmod(join(dir, 'mystery.service'), 0o644);
+        await cleanup();
+      }
+    },
+  );
+
+  // Unit: a concurrent replacement must survive the real adapter's failed removal and recovery.
+  it('恢复写回时不覆盖并发重建的服务文件', async () => {
+    const replacement = '[Service]\nExecStart=/bin/new-service\n';
+    const { adapter, dir, cleanup } = await withUnits(
+      {
+        'backup.timer': '[Timer]\nOnCalendar=hourly\n',
+        'backup.service': '[Service]\nExecStart=/bin/old-service\n',
+      },
+      {
+        removeFile: async (file) => {
+          if (file.endsWith('backup.timer')) {
+            await writeFile(join(dirname(file), 'backup.service'), replacement);
+            throw new Error('timer removal failed');
+          }
+          await unlink(file);
+        },
+      },
+    );
+    try {
+      await expect(adapter.remove('systemd-user:backup.timer')).rejects.toThrow('could not be restored');
+      expect(await readFile(join(dir, 'backup.service'), 'utf8')).toBe(replacement);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it('timer 文件删失败时把执行面写回，条目仍带着归属可重试', async () => {
+    const { adapter, dir, cleanup } = await withUnits(
+      {
+        'backup.timer': '[Timer]\nOnCalendar=hourly\n',
+        'backup.service': '[Service]\nExecStart=/bin/node /home/u/backup.mjs\n',
+      },
+      {
+        removeFile: async (file) => {
+          if (file.endsWith('backup.timer')) {
+            throw Object.assign(new Error('EACCES'), { code: 'EACCES' });
+          }
+          await unlink(file);
+        },
+      },
+    );
+    try {
+      await adapter.scan();
+      // service 已删、timer 删失败 = 半删状态：timer 的 command 会退化成时间表达式，
+      // 原会话再也认不出它。执行面必须原样写回，让下次扫描还能带着归属重试。
+      await expect(adapter.remove('systemd-user:backup.timer')).rejects.toThrow('EACCES');
+      await expect(stat(join(dir, 'backup.timer'))).resolves.toBeTruthy();
+      const restored = await readFile(join(dir, 'backup.service'), 'utf8');
+      expect(restored).toContain('ExecStart=/bin/node /home/u/backup.mjs');
+    } finally {
+      await cleanup();
+    }
+  });
+});
+
+describe('launchd 动作契约（真目录 + 假 launchctl）', () => {
+  // macOS 本机没有环境：动作只锁「失败不报成功」这类结果，不冒充 launchctl 的行为。
+  const LABEL = 'com.example.probe';
+  const plist: Record<string, string> = {
+    [`${LABEL}.plist`]: JSON.stringify({ Label: LABEL, Program: '/bin/true' }),
+  };
+
+  async function withAgents(ctl: (args: string[]) => ExecResult | undefined) {
+    const dir = await mkdtemp(join(tmpdir(), 'host-daemons-'));
+    for (const name of Object.keys(plist)) await writeFile(join(dir, name), '<plist/>', 'utf8');
+    const commands: string[][] = [];
+    const adapter = createLaunchAgentsAdapter({
+      dir,
+      exec: async (command, args) => {
+        commands.push([command, ...args]);
+        // plutil 读的是盘上真实存在的那个文件。
+        if (command === 'plutil') {
+          return { stdout: plist[basename(args.at(-1) ?? '')] ?? '', failed: false };
+        }
+        return ctl(args) ?? { stdout: '', failed: false };
+      },
+    });
+    return { adapter, commands, dir, cleanup: () => rm(dir, { recursive: true, force: true }) };
+  }
+
+  it('已加载的 agent 卸载失败时不删文件；本来就没加载的 agent 直接删', async () => {
+    const stuck = await withAgents((args) =>
+      args[0] === 'bootout' ? { stdout: '', failed: true } : undefined,
+    );
+    // `launchctl list <Label>` 非 0 = 没加载。
+    const notLoaded = await withAgents((args) =>
+      args[0] === 'list' && args.length === 2 ? { stdout: '', failed: true } : undefined,
+    );
+    try {
+      await expect(stuck.adapter.remove(`launch-agent:${LABEL}`)).rejects.toThrow(
+        'could not be unloaded',
+      );
+      await expect(stat(join(stuck.dir, `${LABEL}.plist`))).resolves.toBeTruthy();
+
+      await notLoaded.adapter.remove(`launch-agent:${LABEL}`);
+      expect(notLoaded.commands.some((c) => c[1] === 'bootout')).toBe(false);
+      await expect(stat(join(notLoaded.dir, `${LABEL}.plist`))).rejects.toMatchObject({
+        code: 'ENOENT',
+      });
+    } finally {
+      await stuck.cleanup();
+      await notLoaded.cleanup();
+    }
+  });
+
+  it('bootstrap 之后 kickstart 仍失败时不报成功', async () => {
+    let kickstarts = 0;
+    const started = await withAgents(
+      (args) =>
+        args[0] === 'kickstart' && ++kickstarts === 1 ? { stdout: '', failed: true } : undefined,
+    );
+    const failed = await withAgents(
+      (args) => (args[0] === 'kickstart' ? { stdout: '', failed: true } : undefined),
+    );
+    try {
+      await started.adapter.run(`launch-agent:${LABEL}`);
+      expect(kickstarts).toBe(2);
+      await expect(failed.adapter.run(`launch-agent:${LABEL}`)).rejects.toThrow(
+        'could not be started',
+      );
+    } finally {
+      await started.cleanup();
+      await failed.cleanup();
+    }
+  });
+});
+
+/**
+ * 读失败 ≠ 没读到。清单层只有「扫描完整」才敢把没扫到的条目当作已删除，所以来源
+ * 适配器必须把「读失败」和「本来就没有」分开：后者才是空表。
+ */
+describe('来源适配器：读失败和空表分开报', () => {
+  const scanCrontab = (result: ExecResult) =>
+    createCrontabAdapter({ exec: async () => result }).scan();
+
+  it('crontab：读到空表或「没有 crontab」才算空，其余失败如实抛出', async () => {
+    // Vixie cron 实测：没有 crontab 时以 1 退出并报「no crontab for <用户>」；没装 cron
+    // 是命令起不来。其余失败（无权限、被信号结束）如果也当成空表，所有条目都会被
+    // 当作已删除，归属记录清掉之后再也找不回来。
+    await expect(scanCrontab({ stdout: '', failed: false })).resolves.toEqual([]);
+    await expect(
+      scanCrontab({ stdout: '', failed: true, code: 1, stderr: 'no crontab for someone' }),
+    ).resolves.toEqual([]);
+    await expect(
+      scanCrontab({ stdout: '', failed: true, notInstalled: true }),
+    ).resolves.toEqual([]);
+    await expect(
+      scanCrontab({
+        stdout: '',
+        failed: true,
+        code: 1,
+        stderr: '/var/spool/cron: Permission denied',
+      }),
+    ).rejects.toThrow('crontab -l failed (1)');
+    await expect(scanCrontab({ stdout: '', failed: true })).rejects.toThrow(
+      'crontab -l failed',
+    );
+  });
+
+  async function expectDirHonesty(make: (dir: string) => { scan: () => Promise<unknown> }) {
+    // EACCES 造不出来（测试不提权）：目录不存在 = 本来就没有；目录位置上放一个普通
+    // 文件 = readdir 以非 ENOENT 的错误失败，等同于读不了。
+    const base = await mkdtemp(join(tmpdir(), 'host-daemons-dir-'));
+    const blocked = join(base, 'blocked');
+    await writeFile(blocked, 'not a directory', 'utf8');
+    try {
+      await expect(make(join(base, 'absent')).scan()).resolves.toEqual([]);
+      await expect(make(blocked).scan()).rejects.toThrow();
+    } finally {
+      await rm(base, { recursive: true, force: true });
+    }
+  }
+
+  it('launchd：目录不存在才是没有 agent，读不了如实抛出', async () => {
+    await expectDirHonesty(
+      (dir) =>
+        createLaunchAgentsAdapter({ dir, exec: async () => ({ stdout: '', failed: false }) }),
+    );
+  });
+
+  it('systemd：目录不存在才是没有单元，读不了如实抛出', async () => {
+    await expectDirHonesty(
+      (dir) =>
+        createSystemdUserAdapter({ dirs: [dir], exec: async () => ({ stdout: '', failed: false }) }),
+    );
+  });
+
+  it('launchd：运行状态读不到时不冒充「没有在运行的任务」', async () => {
+    const base = await mkdtemp(join(tmpdir(), 'host-daemons-jobs-'));
+    const label = `com.cindy.unreadable.${process.pid}`;
+    await writeFile(
+      join(base, `${label}.plist`),
+      `<?xml version="1.0" encoding="UTF-8"?>
+      <plist version="1.0"><dict>
+        <key>Label</key><string>${label}</string>
+        <key>ProgramArguments</key><array><string>/bin/sleep</string><string>600</string></array>
+      </dict></plist>`,
+      'utf8',
+    );
+    try {
+      await expect(
+        createLaunchAgentsAdapter({
+          dir: base,
+          exec: async () => ({ stdout: '', failed: true }),
+        }).scan(),
+      ).rejects.toThrow('launchctl list failed');
+    } finally {
+      await rm(base, { recursive: true, force: true });
+    }
+  });
+
+  it('组合层：一个来源读不了不拖垮整张清单，并如实报出没读到的来源', async () => {
+    const entry: RawHostDaemon = {
+      id: 'cron-entry:a',
+      name: 'a',
+      kind: 'cron-entry',
+      state: 'ready',
+      trigger: 'schedule',
+      command: '/bin/a',
+      attributionNeedles: ['/bin/a'],
+      definitionMtimeMs: null,
+      lastRunAtMs: null,
+      stoppable: false,
+    };
+    const noop = async () => {};
+    const target = combineHostDaemonAdapters([
+      {
+        idPrefix: 'launch-agent:',
+        scan: async () => {
+          throw new Error('EACCES: permission denied');
+        },
+        stop: noop,
+        run: noop,
+        remove: noop,
+      },
+      { idPrefix: 'cron-entry:', scan: async () => [entry], stop: noop, run: noop, remove: noop },
+    ]);
+
+    expect(await target!.scan()).toEqual({ entries: [entry], unread: ['launch-agent:'] });
+  });
+});

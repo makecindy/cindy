@@ -11331,7 +11331,50 @@
       "tokens": "{{value}} tokens",
       "noProgress": "No progress details yet"
     },
+    "hostDaemons": {
+      "scanning": "Scanning background items…",
+      "refresh": "Refresh",
+      "loadFailed": "Couldn't read background items",
+      "refreshFailed": "Refresh failed; this list may be out of date",
+      "incomplete": "Some sources couldn’t be read; this list may be incomplete",
+      "unsupported": "Background items aren't available on this system",
+      "empty": "No background items created by tasks yet",
+      "owner": "Created by: {{title}}",
+      "ownerUnknown": "Unknown",
+      "state": {
+        "running": "Running",
+        "ready": "Idle",
+        "disabled": "Disabled",
+        "unknown": "Unknown"
+      },
+      "trigger": {
+        "logon": "At sign-in",
+        "startup": "At startup",
+        "schedule": "On schedule",
+        "other": "Other trigger"
+      },
+      "stop": "Stop",
+      "delete": "Delete",
+      "run": "Start",
+      "started": "Started {{name}}",
+      "stopTitle": "Stop “{{name}}”?",
+      "stopBody": "Ends the current run only. The item itself is kept.",
+      "deleteTitle": "Delete “{{name}}”?",
+      "deleteBody": "Removes this background item from this computer permanently, so it no longer starts automatically. Task records in Cindy are unaffected.",
+      "stopped": "Stopped {{name}}",
+      "deleted": "Deleted {{name}}",
+      "actionFailed": "Action failed. Try again.",
+      "unrelated_one": "{{count}} unrelated background item is hidden",
+      "unrelated_other": "{{count}} unrelated background items are hidden",
+      "checking_one": "{{count}} background item is still being checked; this list updates automatically",
+      "checking_other": "{{count}} background items are still being checked; this list updates automatically"
+    },
     "resourceUsage": {
+      "tabs": {
+        "label": "Resource view",
+        "processes": "Processes",
+        "hostDaemons": "Background items"
+      },
       "sections": {
         "agents": "Agent Processes",
         "app": "App Processes"

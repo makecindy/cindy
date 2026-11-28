@@ -11377,7 +11377,50 @@
       "terminateConfirmDescription": "Dadurch wird der Agent-Prozess zwangsweise beendet. Alle Aufgaben, die diesen Prozess verwenden, werden unterbrochen. Sende eine weitere Nachricht in einer betroffenen Aufgabe, um wieder einen Agent zu starten.",
       "terminated": "Prozess {{name}} gestoppt",
       "terminateFailed": "Dieser Prozess konnte nicht gestoppt werden – möglicherweise wurde er bereits beendet. Die Liste wird bei der nächsten Erfassung aktualisiert.",
-      "sessionDetail": "Aufgabe: {{title}}"
+      "sessionDetail": "Aufgabe: {{title}}",
+      "tabs": {
+        "label": "Ressourcenansicht",
+        "processes": "Prozesse",
+        "hostDaemons": "Hintergrundelemente"
+      }
+    },
+    "hostDaemons": {
+      "scanning": "Hintergrundelemente werden geprüft…",
+      "refresh": "Aktualisieren",
+      "loadFailed": "Hintergrundelemente konnten nicht gelesen werden",
+      "refreshFailed": "Aktualisierung fehlgeschlagen; diese Liste ist möglicherweise veraltet",
+      "incomplete": "Einige Quellen konnten nicht gelesen werden; diese Liste ist möglicherweise unvollständig",
+      "unsupported": "Hintergrundelemente sind auf diesem System nicht verfügbar",
+      "empty": "Noch keine von Aufgaben erstellten Hintergrundelemente",
+      "owner": "Erstellt von: {{title}}",
+      "ownerUnknown": "Unbekannt",
+      "state": {
+        "running": "Läuft",
+        "ready": "Bereit",
+        "disabled": "Deaktiviert",
+        "unknown": "Unbekannt"
+      },
+      "trigger": {
+        "logon": "Bei der Anmeldung",
+        "startup": "Beim Start",
+        "schedule": "Nach Zeitplan",
+        "other": "Andere Auslöser"
+      },
+      "stop": "Stoppen",
+      "delete": "Löschen",
+      "run": "Starten",
+      "started": "{{name}} gestartet",
+      "stopTitle": "„{{name}}“ stoppen?",
+      "stopBody": "Beendet nur den aktuellen Lauf. Der Eintrag selbst bleibt bestehen.",
+      "deleteTitle": "„{{name}}“ löschen?",
+      "deleteBody": "Entfernt dieses Hintergrundelement dauerhaft von diesem Rechner, sodass es nicht mehr automatisch startet. Aufgabeneinträge in Cindy bleiben unberührt.",
+      "stopped": "{{name}} gestoppt",
+      "deleted": "{{name}} gelöscht",
+      "actionFailed": "Aktion fehlgeschlagen. Versuche es erneut.",
+      "unrelated_one": "{{count}} nicht zugehöriges Hintergrundelement ist ausgeblendet",
+      "unrelated_other": "{{count}} nicht zugehörige Hintergrundelemente sind ausgeblendet",
+      "checking_one": "{{count}} Hintergrundelement wird noch zugeordnet; diese Liste aktualisiert sich automatisch",
+      "checking_other": "{{count}} Hintergrundelemente werden noch zugeordnet; diese Liste aktualisiert sich automatisch"
     }
   },
   "update": {
