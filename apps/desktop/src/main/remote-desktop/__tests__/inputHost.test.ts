@@ -587,6 +587,39 @@ it('keeps Linux whole-desktop coordinates normalized and releases input before r
   }
 });
 
+it('cloud X11 waits for agent input and holds ownership until native cleanup completes', async () => {
+  vi.useFakeTimers();
+  vi.stubEnv('WAYLAND_DISPLAY', '');
+  let finishAgent!: () => void, finishInput!: () => void, finishStop!: () => void;
+  const connection = {
+    input: vi.fn(), settled: () => new Promise<void>(resolve => { finishInput = resolve; }),
+    stop: () => new Promise<void>(resolve => { finishStop = resolve; }),
+  };
+  const host = new DesktopInputHost(vi.fn(), {
+    platform: 'linux', openLinuxInput: async () => connection as never,
+    resolveBinary: async () => { throw new Error('X11 must not resolve the Wayland helper'); },
+    spawn: () => { throw new Error('X11 must not spawn the Wayland helper'); },
+  });
+  try {
+    await host.start('1');
+    const agent = withAgentDesktopInput(() => new Promise<void>(resolve => { finishAgent = resolve; }));
+    await flush();
+    host.input([{ kind: 'text', text: 'fixture' }]);
+    await flush();
+    expect(connection.input).not.toHaveBeenCalled();
+    finishAgent(); await agent; await flush();
+    expect(connection.input).toHaveBeenCalledExactlyOnceWith([{ kind: 'text', text: 'fixture' }]);
+    await expect(withAgentDesktopInput(async () => {})).rejects.toThrow('input is active');
+    host.stop(); await flush();
+    finishInput(); await flush();
+    await expect(withAgentDesktopInput(async () => {})).rejects.toThrow('input is active');
+    finishStop(); await flush();
+    await expect(withAgentDesktopInput(async () => {})).resolves.toBeUndefined();
+  } finally {
+    finishAgent?.(); finishInput?.(); host.stop(); finishStop?.(); await flush(); vi.unstubAllEnvs();
+  }
+});
+
 describe('代输入 window input', () => {
   it('starts the helper confined to one window and passes fractions through untouched', async () => {
     const c = childProcess();
@@ -669,6 +702,38 @@ it('starts an X11 helper with monitor geometry and releases held keys on teardow
   }
 });
 
+// GNOME Wayland (Ubuntu default): Mutter maps normalized points onto the selected
+// monitor's stream, so the helper must receive the connector and unmapped points.
+// A malformed connector must never reach the helper's arguments.
+it('starts the GNOME helper for one connector and forwards normalized points', async () => {
+  vi.useFakeTimers();
+  vi.stubEnv('XDG_SESSION_TYPE', 'wayland');
+  vi.stubEnv('WAYLAND_DISPLAY', 'wayland-0');
+  const c = childProcess();
+  const spawn = vi.fn(() => {
+    queueMicrotask(() => c.child.stdout.emit('data', Buffer.from('ready\n')));
+    return c.typed;
+  });
+  const host = new DesktopInputHost(vi.fn(), {
+    platform: 'linux',
+    resolveBinary: async () => '/test/input',
+    spawn,
+  });
+  try {
+    await expect(host.start('gnome:../DP-1')).rejects.toThrow('DESKTOP_DISPLAY_MISSING');
+    expect(spawn).not.toHaveBeenCalled();
+    await host.start('gnome:DP-1');
+    expect(spawn).toHaveBeenCalledWith('/test/input', ['--gnome', 'DP-1']);
+    const events = [{ kind: 'move' as const, x: 0.25, y: 0.75 }];
+    host.input(events);
+    await flush();
+    expect(c.child.stdin.write.mock.calls[0][0]).toBe(JSON.stringify(events) + '\n');
+  } finally {
+    host.stop();
+    c.exit();
+  }
+});
+
 it('maps an X11 display from scaled desktop coordinates and rejects ambiguous layouts', () => {
   const left = { id: 1, scaleFactor: 2, bounds: { x: -100, y: 0, width: 100, height: 80 } };
   const right = { id: 2, scaleFactor: 2, bounds: { x: 0, y: 0, width: 120, height: 100 } };
@@ -680,6 +745,71 @@ it('maps an X11 display from scaled desktop coordinates and rejects ambiguous la
   vi.stubEnv('DISPLAY', ':1');
   vi.stubEnv('XDG_SESSION_TYPE', 'wayland');
   expect(isX11Desktop('linux')).toBe(false); // XWayland is not X11 desktop access.
+});
+
+// Native X11 has two bounded client fences per character. A legal maximum-size
+// paste must fit the framing budget and advance only after each native ACK.
+it('streams a full X11 paste with one code point per acknowledged command', async () => {
+  vi.useFakeTimers();
+  vi.stubEnv('DISPLAY', ':test');
+  vi.stubEnv('XDG_SESSION_TYPE', 'x11');
+  vi.stubEnv('WAYLAND_DISPLAY', '');
+  const c = childProcess();
+  const failure = vi.fn();
+  const host = new DesktopInputHost(failure, {
+    platform: 'linux', resolveBinary: async () => '/test/input',
+    spawn: () => {
+      queueMicrotask(() => c.child.stdout.emit('data', Buffer.from('ready\n')));
+      return c.typed;
+    },
+  });
+  try {
+    await host.start('1');
+    const text = '中🙂'.repeat(2048);
+    host.input([{ kind: 'text', text }]);
+    await flush();
+    expect(c.child.stdin.write).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(c.child.stdin.write.mock.calls[0][0])).toEqual([{ kind: 'text-check', text }]);
+    c.child.stdout.emit('data', Buffer.from('ok\n'));
+    for (const [i, char] of Array.from(text).entries()) {
+      await flush();
+      expect(c.child.stdin.write).toHaveBeenCalledTimes(i + 2);
+      expect(JSON.parse(c.child.stdin.write.mock.calls[i + 1][0])).toEqual([{ kind: 'text', text: char }]);
+      c.child.stdout.emit('data', Buffer.from('ok\n'));
+    }
+    await flush();
+    expect(failure).not.toHaveBeenCalled();
+  } finally {
+    host.stop(); c.exit();
+  }
+});
+
+it('does not send the supported prefix when whole X11 text preflight is refused', async () => {
+  vi.useFakeTimers();
+  vi.stubEnv('DISPLAY', ':test');
+  vi.stubEnv('XDG_SESSION_TYPE', 'x11');
+  vi.stubEnv('WAYLAND_DISPLAY', '');
+  const c = childProcess();
+  let host: DesktopInputHost;
+  const failure = vi.fn(() => host.stop());
+  host = new DesktopInputHost(failure, {
+    platform: 'linux', resolveBinary: async () => '/test/input',
+    spawn: () => {
+      queueMicrotask(() => c.child.stdout.emit('data', Buffer.from('ready\n')));
+      return c.typed;
+    },
+  });
+  try {
+    await host.start('1');
+    host.input([{ kind: 'text', text: 'a中' }]);
+    await flush();
+    expect(JSON.parse(c.child.stdin.write.mock.calls[0][0])).toEqual([{ kind: 'text-check', text: 'a中' }]);
+    // The native helper exits without an ACK for unsupported text.
+    c.exit();
+    await flush();
+    expect(c.child.stdin.write).toHaveBeenCalledTimes(1);
+    expect(failure).toHaveBeenCalled();
+  } finally { host.stop(); c.exit(); }
 });
 
 it('drops queued X11 input if monitor geometry changes while an earlier batch is pending', async () => {

@@ -476,3 +476,137 @@ test('browser seeds build native hosts before hashing and reject incomplete pack
   assert.equal(entry.sha256, packageHash(dest));
   assert.equal(fs.existsSync(path.join(source, 'native-host/bin')), false);
 });
+
+// Real Git runner: a personal merge contains another open PR, while the target
+// and PR both advanced outside the conflict. The ordinary build tests never push.
+test('conflict forwarding keeps live context, gates push on both checks, and verifies the original branch', async (t) => {
+  const { forward, checkInventory } = await import('../personal-build/conflict-forward.mjs');
+  const { replayConflict } = await import('../personal-build/conflict-resolution.mjs');
+  const root = tmp(t),
+    src = path.join(root, 'src'),
+    upstream = path.join(root, 'upstream.git');
+  const runGit = (cwd, ...args) => execFileSync('git', args, { cwd, encoding: 'utf8', stdio: 'pipe' }).trim();
+  fs.mkdirSync(src);
+  runGit(src, 'init', '-q', '-b', 'main');
+  runGit(src, 'config', 'user.name', 'Test');
+  runGit(src, 'config', 'user.email', 'test@example.invalid');
+  runGit(src, 'config', 'commit.gpgsign', 'false');
+  runGit(src, 'config', 'core.autocrlf', 'true');
+  const filename = 'settings.txt';
+  const initial = 'start\n1\n2\n3\n4\nold\n6\n7\n8\n9\nend\n';
+  const write = (value) => put(path.join(src, filename), value);
+  const commit = (msg) => {
+    runGit(src, 'add', '.');
+    runGit(src, 'commit', '-qm', msg);
+    return runGit(src, 'rev-parse', 'HEAD');
+  };
+  write(initial);
+  const baseSha = commit('base');
+  runGit(src, 'switch', '-qc', 'feature');
+  write(initial.replace('old', 'feature'));
+  const frozen = commit('original PR');
+  runGit(src, 'switch', '-qc', 'integration', baseSha);
+  write(initial.replace('old', 'base'));
+  put(path.join(src, 'private-only'), 'other unmerged PR');
+  commit('composition before this PR');
+  assert.throws(() => runGit(src, '-c', 'rerere.enabled=false', 'merge', '--no-commit', frozen));
+  write(initial.replace('old', 'combined'));
+  const target = commit('personal resolution');
+  const report = path.join(root, 'report.json');
+  put(report, {
+    author: 'alice',
+    app: { checkout: src, repository: 'example/app', baseSha, target, prs: [{ number: 11, sha: frozen }] },
+  });
+  const cli = fileURLToPath(new URL('../personal-build.mjs', import.meta.url));
+  const rows = JSON.parse(execFileSync(process.execPath, [cli, 'conflicts', 'list', report, report], { encoding: 'utf8' }));
+  assert.equal(rows.length, 1);
+  const row = rows[0];
+  assert.deepEqual(row.files, [filename]);
+  runGit(src, 'switch', '-q', 'main');
+  write(initial.replace('old', 'base').replace('start', 'new target context'));
+  const base = commit('new target');
+  runGit(src, 'switch', '-q', 'feature');
+  write(initial.replace('old', 'feature').replace('end', 'new PR context'));
+  const head = commit('later PR edit');
+  runGit(src, 'clone', '--bare', '.', upstream);
+  const remote = {
+    state: 'open',
+    head: { url: upstream, ref: 'refs/heads/feature', sha: head },
+    base: { url: upstream, ref: 'refs/heads/main', sha: base },
+  };
+  const pull = () => remote;
+  const worktree = path.join(root, 'forward');
+  assert.equal(checkInventory(rows, {}, pull).pending.length, 1);
+  const candidate = forward(row, worktree, null, { pull });
+  assert.equal(candidate.status, 'prepared');
+  assert.equal(
+    execFileSync('git', ['show', 'HEAD:' + filename], { cwd: worktree, encoding: 'utf8' }),
+    initial
+      .replace('old', 'combined')
+      .replace('start', 'new target context')
+      .replace('end', 'new PR context'),
+  );
+  assert.equal(fs.existsSync(path.join(worktree, 'private-only')), false);
+  const remoteHead = () => runGit(upstream, 'rev-parse', 'refs/heads/feature');
+  const subdirectory = path.join(worktree, 'nested directory');
+  fs.mkdirSync(subdirectory);
+  assert.throws(() => forward(row, subdirectory, null, { pull }), /Expected a worktree root/);
+  const pass = [process.execPath, '-e', 'process.exit(0)'];
+  const bad = [process.execPath, '-e', 'process.exit(1)'];
+  assert.throws(() => forward(row, worktree, [pass, bad], { pull }));
+  assert.equal(remoteHead(), head);
+  let reads = 0;
+  assert.throws(
+    () =>
+      forward(row, worktree, [pass, pass], { pull: () => (++reads === 1 ? remote : { state: 'closed' }) }),
+    /PR changed/,
+  );
+  assert.equal(remoteHead(), head);
+  let typecheck = pass;
+  if (process.platform === 'win32') {
+    // npm/Corepack install a .cmd alongside the JS entry. Validation must bypass the shell.
+    const bin = path.join(root, 'tool shims');
+    fs.mkdirSync(bin);
+    put(path.join(bin, 'pnpm.cmd'), '@echo off\r\nexit /b 1\r\n');
+    const previous = process.env.PATH;
+    process.env.PATH = bin + path.delimiter + previous;
+    t.after(() => { process.env.PATH = previous; });
+    const args = ['types with spaces', '', 'A & B'];
+    const checkArgv = 'require("node:assert/strict").deepEqual(process.argv.slice(2), ' + JSON.stringify(args) + ')';
+    typecheck = ['pnpm', ...args];
+    assert.throws(() => forward(row, worktree, [pass, typecheck], { pull }), /pnpm entry point/);
+    assert.equal(remoteHead(), head);
+    const shimFor = (entry) => put(path.join(bin, 'pnpm.cmd'),
+      '@node "%~dp0\\node_modules\\' + entry + '" wrapper %*\r\n');
+    put(path.join(bin, 'node_modules/pnpm/bin/pnpm.cjs'), checkArgv);
+    put(path.join(bin, 'node_modules/corepack/dist/pnpm.js'), 'process.exit(1)');
+    shimFor('pnpm\\bin\\pnpm.cjs');
+    reads = 0;
+    assert.throws(
+      () => forward(row, worktree, [pass, typecheck], { pull: () => (++reads === 1 ? remote : { state: 'closed' }) }),
+      /PR changed/,
+    );
+    assert.equal(remoteHead(), head);
+    put(path.join(bin, 'node_modules/pnpm/bin/pnpm.cjs'), 'process.exit(1)');
+    shimFor('corepack\\dist\\pnpm.js');
+    put(path.join(bin, 'node_modules/corepack/dist/pnpm.js'), checkArgv);
+  }
+  const result = forward(row, worktree, [pass, typecheck], { pull });
+  assert.equal(remoteHead(), result.commit);
+  assert.equal(runGit(upstream, 'show', '-s', '--format=%P', result.commit), head + ' ' + base);
+  remote.head.sha = result.commit;
+  const clean = checkInventory(rows, {}, pull);
+  assert.equal(clean.open, 1);
+  assert.deepEqual(clean.pending, []);
+  assert.deepEqual(checkInventory(rows, clean.cache, pull), clean);
+  assert.equal(checkInventory(rows, clean.cache, () => ({ state: 'merged' })).open, 0);
+  assert.throws(
+    () =>
+      replayConflict(
+        'a\n<<<<<<< p\nb\n||||||| ancestor\na\n=======\nc\n>>>>>>> b\n',
+        'a\nfixed\n',
+        'a\n<<<<<<< p\nb\n||||||| ancestor\nNEW\n=======\nc\n>>>>>>> b\n',
+      ),
+    /blocks changed/,
+  );
+});

@@ -3,6 +3,7 @@ import { act, renderHook, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { useDiscordBot } from '../useDiscordBot';
+import { toast } from '@/lib/toast';
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
@@ -108,6 +109,19 @@ describe('useDiscordBot', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     delete (window as unknown as { electronAPI?: unknown }).electronAPI;
+  });
+
+  // Unit: the displayed toggle already rolled back on a failed IPC verdict,
+  // but the settings hook did not tell the user why the change was lost.
+  it('reports the refused Discord lifecycle change after restoring the saved value', async () => {
+    const api = installDiscordApi({ kind: 'idle' }, false);
+    const { result } = renderHook(() => useDiscordBot());
+    await waitFor(() => expect(result.current.lifecycleAnnouncement).toBe(false));
+    api.setLifecycleAnnouncement.mockResolvedValueOnce({ ok: false, lifecycleAnnouncement: false });
+    await act(async () => result.current.setLifecycleAnnouncement(true));
+    expect(api.setLifecycleAnnouncement).toHaveBeenCalledExactlyOnceWith(true);
+    expect(result.current.lifecycleAnnouncement).toBe(false);
+    expect(toast.error).toHaveBeenCalledExactlyOnceWith('ipcError.INTERNAL');
   });
 
   it('validates owner user id before saving config', async () => {

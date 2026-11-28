@@ -47,7 +47,7 @@ export function PlanModeIndicator({ onExit, disabled }: PlanModeIndicatorProps):
           type="button"
           aria-label={t('planMode.exit')}
           title={t('planMode.exit')}
-          className="flex h-4 w-4 shrink-0 items-center justify-center rounded transition-colors hover:bg-[var(--surface-elevated)]"
+          className="flex h-4 w-4 shrink-0 items-center justify-center rounded-full transition-colors hover:bg-[var(--surface-elevated)]"
           style={{ color: 'var(--text-tertiary)' }}
           onClick={onExit}
         >

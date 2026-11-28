@@ -149,8 +149,11 @@ describe('startup log support', () => {
     fireEvent.click(policy);
     expect(mocks.openExternal).toHaveBeenCalledOnce();
     expect(mocks.acceptManualLogUploadConsent).not.toHaveBeenCalled();
-    fireEvent.click(accept);
-    await waitFor(() => expect(upload.disabled).toBe(false));
+    // The button is enabled on commit, before the focus effect runs.
+    await act(async () => {
+      fireEvent.click(accept);
+    });
+    expect(upload.disabled).toBe(false);
     expect(document.activeElement).toBe(upload);
     expect(screen.queryByRole('button', { name: '同意' })).toBeNull();
     expect(mocks.acceptManualLogUploadConsent).toHaveBeenCalledExactlyOnceWith(LEGAL_TERMS_VERSION);

@@ -409,7 +409,7 @@ describe('ProviderShareGlobalHost', () => {
     expect(screen.getByTestId('provider-share-approve-dialog').textContent).toContain('providerShare.approve.calloutClaudeEmail');
   });
 
-  const groupConfig = { strategy: 'least', autoSwitch: true, members: [{ kind: 'local' }] };
+  const groupConfig = { strategy: 'expiring', autoSwitch: true, members: [{ kind: 'local' }] };
 
   it('waits for local group settings before enabling approval', async () => {
     let finish!: (groups: Record<string, unknown>) => void;

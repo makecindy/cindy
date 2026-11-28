@@ -10,7 +10,10 @@ import { providerReferencePriceQuote, getModelPriceQuote, modelPricingKey } from
 const accountCatalog = { ...BUNDLED_CATALOG, providers: [buildUserProvider({
     id: 'openai-account', name: 'Account', auth: { method: 'oauth', native: 'codex' },
     runtimes: { codex: { baseUrl: 'https://chatgpt.com/backend-api/codex', models: [{ id: 'gpt-5.6-luna', name: 'Luna' }] } },
-  }), buildUserProvider({ id: 'router-account', name: 'Router', runtimes: {
+  }), {
+    ...BUNDLED_CATALOG.providers.find(provider => provider.id === 'openai')!,
+    id: 'openai-sub-fixture', subscriptionPool: 'openai' as const,
+  }, buildUserProvider({ id: 'router-account', name: 'Router', runtimes: {
     pi: { baseUrl: 'https://openrouter.ai/api/v1', wireProtocol: 'openai-chat', models: [
       { id: 'aion-labs/aion-3.0-mini', name: 'Aion' },
       { id: 'new/model', name: 'New', discoveredCost: { input: 0, output: 0.5 } },
@@ -117,6 +120,9 @@ describe('independent subscription account reference prices', () => {
     const actual = accountReferencePriceQuote('openai-account', 'gpt-5.6-luna', BUNDLED_CATALOG.modelRegistry, options);
     expect(actual).toEqual({ ...base, providerId: 'openai-account' });
     expect(getCodexProviderSubscriptionValuePrice('openai-account', 'gpt-5.6-luna', {}, options.at)).toEqual(actual);
+    // A generated pool has its own ID and no override. The public tariff follows subscriptionPool.
+    expect(getCodexProviderSubscriptionValuePrice('openai-sub-fixture', 'gpt-5.6-luna', {}, options.at))
+      .toEqual({ ...base, providerId: 'openai-sub-fixture' });
     expect(accountReferencePriceQuote('unrelated', 'gpt-5.6-luna', BUNDLED_CATALOG.modelRegistry, options)).toBeUndefined();
   });
   it('publishes distinct model keys for Codex and Pi without borrowing default account overrides', () => {

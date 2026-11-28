@@ -23,7 +23,7 @@ export function McpAppViewsProvider({ children }: { children: ReactNode }) {
   const views = useRef(new Set<McpAppView>());
   const mounted = useRef(true);
   const [, refresh] = useState(0);
-  const [foreground, setForeground] = useState(AppState.currentState !== 'background' && AppState.currentState !== 'inactive');
+  const [foreground, setForeground] = useState(AppState.currentState !== 'background');
   const changed = useCallback(() => { if (mounted.current) refresh((n) => n + 1); }, []);
   const open = useCallback((deviceId: string, sessionId: string, clientId: string, context: Record<string, unknown>, isPlugin: boolean, quotaVisible: () => boolean, placeholder: number) => {
     const view = new McpAppView(invoke, deviceId, sessionId, clientId, changed,
@@ -35,7 +35,7 @@ export function McpAppViewsProvider({ children }: { children: ReactNode }) {
       }, getMobileAuthOwner().generation, placeholder, isPlugin, getUserCloseEpoch, onUserClose);
     views.current.add(view);
     changed();
-    void view.open(context, () => mounted.current && AppState.currentState !== 'background' && AppState.currentState !== 'inactive' && quotaVisible());
+    void view.open(context, () => mounted.current && AppState.currentState !== 'background' && quotaVisible());
     return view;
   }, [invoke, changed, getUserCloseEpoch, onUserClose]);
   useEffect(() => {
@@ -43,6 +43,8 @@ export function McpAppViewsProvider({ children }: { children: ReactNode }) {
     const subscription = AppState.addEventListener('change', (state) => {
       const active = state === 'active';
       if (!active) void getMobileHeights()?.flush();
+      // iOS can briefly become inactive both before and after backgrounding.
+      if (state === 'inactive') return;
       if (!active) for (const view of views.current) void view.close();
       setForeground(active);
     });

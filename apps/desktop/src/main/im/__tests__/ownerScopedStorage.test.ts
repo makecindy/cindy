@@ -231,6 +231,34 @@ describe('IM owner-scoped storage', () => {
     expect(fs.existsSync(`${target}.bak`)).toBe(false);
     expect(ownerScopedImSecrets.read('discord-bot-token')).toBeNull();
   });
+  // Unit: confirm real file removal, including a backup or legacy copy that could
+  // otherwise be restored by the next read. Only the selected unlink is faulted.
+  it.each(['primary', 'backup', 'legacy'] as const)('reports a failed unlink of the %s secret copy', copy => {
+    setSession('cloud', 'cloud-a');
+    const key = 'telegram-bot-token';
+    expect(ownerScopedImSecrets.write(key, 'invalid-test-token')).toBe(true);
+    const target = __testing.scopedSecretPath(key)!;
+    const blockedPath = copy === 'legacy' ? writeLegacySecret(key, 'invalid-legacy-token')
+      : copy === 'backup' ? `${target}.bak` : target;
+    if (copy === 'backup') fs.renameSync(target, blockedPath);
+
+    const unlink = fs.unlinkSync;
+    const failure = vi.spyOn(fs, 'unlinkSync').mockImplementation((file) => {
+      if (file === blockedPath) throw Object.assign(new Error('synthetic unlink failure'), { code: 'EACCES' });
+      return unlink(file);
+    });
+
+    try {
+      expect(ownerScopedImSecrets.removeConfirmed?.(key)).toBe(false);
+      expect(fs.existsSync(blockedPath)).toBe(true);
+    } finally {
+      failure.mockRestore();
+    }
+
+    expect(ownerScopedImSecrets.removeConfirmed?.(key)).toBe(true);
+    expect(ownerScopedImSecrets.readResult?.(key)).toEqual({ kind: 'missing' });
+  });
+
   it.each(['not-a-uuid', '12345678-1234-4123-8123-123456789abc'])('does not reinterpret a legacy credential containing a revision marker (%s)', revision => {
     setSession('local', 'local-v1');
     const target = __testing.scopedSecretPath('bluebubbles-password');

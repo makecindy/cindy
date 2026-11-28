@@ -38,14 +38,15 @@ export const personalizationSettings = defineSettings({
   },
   subagents: {
     id: 'personalization.subagents',
-    tab: 'personalization',
+    // 这一项在「模型供应商 → 智能路由」页里；id 与 targetId 沿用，旧链接仍然有效。
+    tab: 'model-groups',
     targetId: 'settings-search-target-personalization-subagents',
     titleKey: 'settings.sections.subagentModels',
     sectionKey: 'settings.sections.subagentModels',
   },
   auxiliaryModels: {
     id: 'personalization.auxiliaryModels',
-    tab: 'personalization',
+    tab: 'model-groups',
     targetId: 'settings-search-target-personalization-auxiliary-models',
     titleKey: 'settings.sections.auxiliaryModels',
     sectionKey: 'settings.sections.auxiliaryModels',

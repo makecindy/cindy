@@ -48,6 +48,12 @@ const EMPTY_RESULT: ParsedIncoming = {
   unsupported: [],
 };
 
+/**
+ * Text Feishu events carry for a directly received merged forward. It is a channel-generated
+ * placeholder, not words the user typed; the forwarded messages arrive as the reply context.
+ */
+export const FEISHU_MERGE_FORWARD_PLACEHOLDER = '[合并转发消息]';
+
 export function parseIncoming(
   msgType: string,
   rawContent: string,
@@ -55,7 +61,7 @@ export function parseIncoming(
   // Feishu's merge envelope may contain a literal string rather than JSON.
   // Its children must be fetched with message.get, never inferred from content.
   if (msgType === 'merge_forward') {
-    return { text: '[合并转发消息]', attachments: [], unsupported: [] };
+    return { text: FEISHU_MERGE_FORWARD_PLACEHOLDER, attachments: [], unsupported: [] };
   }
   let parsed: unknown;
   try {

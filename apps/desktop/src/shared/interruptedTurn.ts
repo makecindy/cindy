@@ -29,6 +29,31 @@ export {
   CONTINUE_AFTER_APP_EXIT_PROMPT,
   CONTINUE_AFTER_ERROR_PROMPT,
 } from '@cindy/maker-shared/synthetic-trigger';
+import { isSyntheticTriggerText } from '@cindy/maker-shared/synthetic-trigger';
+
+/**
+ * Whether a persisted `role='user'` row's raw DB content (plain text or JSON-encoded
+ * string / `{ text, images?, files? }`) is a hidden synthetic UI trigger (such as a
+ * legacy invitation welcome prompt) rather than a real message spoken by the user.
+ */
+export function isSyntheticUserMessageContent(rawContent: string): boolean {
+  let content: unknown = rawContent;
+  try {
+    content = JSON.parse(rawContent);
+  } catch {
+    // Raw string content (not JSON-encoded).
+  }
+  if (typeof content === 'string') return isSyntheticTriggerText(content);
+  if (!content || typeof content !== 'object' || Array.isArray(content)) return false;
+  const record = content as { text?: unknown; images?: unknown; files?: unknown };
+  if (
+    (Array.isArray(record.images) && record.images.length > 0) ||
+    (Array.isArray(record.files) && record.files.length > 0)
+  ) {
+    return false;
+  }
+  return typeof record.text === 'string' && isSyntheticTriggerText(record.text);
+}
 
 /**
  * error-tail-banner:把 role='error' 行的原始 content(DB 存的 JSON 字符串)

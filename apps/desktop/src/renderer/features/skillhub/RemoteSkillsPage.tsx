@@ -56,6 +56,7 @@ export function RemoteSkillsPage({
   active = true,
   deviceControl,
   onSelectCatalogTab,
+  hideManagingNotice = false,
 }: {
   device: CatalogDevice;
   online: boolean;
@@ -63,6 +64,11 @@ export function RemoteSkillsPage({
   active?: boolean;
   deviceControl?: CatalogDeviceControl;
   onSelectCatalogTab?: (tab: 'plugins' | 'skills') => void;
+  /**
+   * Leaves the notice out while it only says which computer is managed, for a page fixed to that
+   * computer that already names it (cloud settings). Offline, loading and failures still show.
+   */
+  hideManagingNotice?: boolean;
 }) {
   const { t } = useTranslation();
   const [snapshot, setSnapshot] = useState<RemoteSkillsSnapshot | null>(null);
@@ -433,7 +439,8 @@ export function RemoteSkillsPage({
     rootFor,
     receipt,
   ]);
-  const notice = (
+  const managingOnly = online && !status && !(checked && !capabilities.catalog) && !!snapshot;
+  const notice = hideManagingNotice && managingOnly ? null : (
     <CatalogManagementNotice
       className="mb-0"
       title={t('settings.ghosts.remote.managingTarget', { device: device.name })}
