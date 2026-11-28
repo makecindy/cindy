@@ -30,6 +30,7 @@ export interface ApplicationMenuLabels {
   newMaker: string;
   viewMenu: string;
   toggleSidebar: string;
+  toggleRightSidebarPersistent: string;
   windowMenu: string;
   helpMenu: string;
   performanceTrace: string;
@@ -65,6 +66,7 @@ export const APPLICATION_MENU_LABELS: Record<ApplicationMenuLocale, ApplicationM
     newMaker: '新建任务',
     viewMenu: '显示',
     toggleSidebar: '切换侧边栏',
+    toggleRightSidebarPersistent: '保持右侧栏常驻',
     windowMenu: '窗口',
     helpMenu: '帮助',
     performanceTrace: '性能跟踪…',
@@ -102,6 +104,7 @@ export const APPLICATION_MENU_LABELS: Record<ApplicationMenuLocale, ApplicationM
     newMaker: '新增任務',
     viewMenu: '顯示方式',
     toggleSidebar: '切換側邊欄',
+    toggleRightSidebarPersistent: '保持右側欄常駐',
     windowMenu: '視窗',
     helpMenu: '輔助說明',
     performanceTrace: '效能追蹤…',
@@ -139,6 +142,7 @@ export const APPLICATION_MENU_LABELS: Record<ApplicationMenuLocale, ApplicationM
     newMaker: 'New Session',
     viewMenu: 'View',
     toggleSidebar: 'Toggle Sidebar',
+    toggleRightSidebarPersistent: 'Keep Right Sidebar Open',
     windowMenu: 'Window',
     helpMenu: 'Help',
     performanceTrace: 'Performance Trace…',
@@ -176,6 +180,7 @@ export const APPLICATION_MENU_LABELS: Record<ApplicationMenuLocale, ApplicationM
     newMaker: '新規セッション',
     viewMenu: '表示',
     toggleSidebar: 'サイドバーを切り替え',
+    toggleRightSidebarPersistent: '右サイドバーを常時表示',
     windowMenu: 'ウインドウ',
     helpMenu: 'ヘルプ',
     performanceTrace: 'パフォーマンスの記録…',
@@ -213,6 +218,7 @@ export const APPLICATION_MENU_LABELS: Record<ApplicationMenuLocale, ApplicationM
     newMaker: '새 세션',
     viewMenu: '보기',
     toggleSidebar: '사이드바 토글',
+    toggleRightSidebarPersistent: '오른쪽 사이드바 상시 표시',
     windowMenu: '윈도우',
     helpMenu: '도움말',
     performanceTrace: '성능 기록…',
@@ -251,6 +257,7 @@ export const APPLICATION_MENU_LABELS: Record<ApplicationMenuLocale, ApplicationM
     "newMaker": "Nueva sesión",
     "viewMenu": "Ver",
     "toggleSidebar": "Alternar barra lateral",
+    toggleRightSidebarPersistent: "Mantener abierta la barra derecha",
     "windowMenu": "Ventana",
     "helpMenu": "Ayuda",
     "performanceTrace": "Seguimiento de rendimiento…",
@@ -284,6 +291,7 @@ export const APPLICATION_MENU_LABELS: Record<ApplicationMenuLocale, ApplicationM
     "newMaker": "Nouvelle session",
     "viewMenu": "Présentation",
     "toggleSidebar": "Afficher/masquer la barre latérale",
+    toggleRightSidebarPersistent: "Garder la barre latérale droite ouverte",
     "windowMenu": "Fenêtre",
     "helpMenu": "Aide",
     "performanceTrace": "Suivi des performances…",
@@ -317,6 +325,7 @@ export const APPLICATION_MENU_LABELS: Record<ApplicationMenuLocale, ApplicationM
     "newMaker": "Neue Sitzung",
     "viewMenu": "Ansicht",
     "toggleSidebar": "Seitenleiste umschalten",
+    toggleRightSidebarPersistent: "Rechte Seitenleiste geöffnet lassen",
     "windowMenu": "Fenster",
     "helpMenu": "Hilfe",
     "performanceTrace": "Leistungsaufzeichnung…",
@@ -350,6 +359,7 @@ export const APPLICATION_MENU_LABELS: Record<ApplicationMenuLocale, ApplicationM
     "newMaker": "Nova sessão",
     "viewMenu": "Ver",
     "toggleSidebar": "Mostrar/ocultar barra lateral",
+    toggleRightSidebarPersistent: "Manter a barra lateral direita aberta",
     "windowMenu": "Janela",
     "helpMenu": "Ajuda",
     "performanceTrace": "Registo de desempenho…",
@@ -383,6 +393,7 @@ export const APPLICATION_MENU_LABELS: Record<ApplicationMenuLocale, ApplicationM
     "newMaker": "Nova sessão",
     "viewMenu": "Ver",
     "toggleSidebar": "Mostrar/ocultar barra lateral",
+    toggleRightSidebarPersistent: "Manter a barra lateral direita aberta",
     "windowMenu": "Janela",
     "helpMenu": "Ajuda",
     "performanceTrace": "Rastreamento de desempenho…",
@@ -416,6 +427,7 @@ export const APPLICATION_MENU_LABELS: Record<ApplicationMenuLocale, ApplicationM
     newMaker: '新開差事',
     viewMenu: '觀',
     toggleSidebar: '側欄隱現',
+    toggleRightSidebarPersistent: '右欄常駐',
     windowMenu: '窗',
     helpMenu: '求助',
     performanceTrace: '效能追蹤…',
@@ -453,6 +465,7 @@ export const APPLICATION_MENU_LABELS: Record<ApplicationMenuLocale, ApplicationM
     newMaker: '新开差事',
     viewMenu: '观',
     toggleSidebar: '侧栏隐现',
+    toggleRightSidebarPersistent: '右栏常驻',
     windowMenu: '窗',
     helpMenu: '求助',
     performanceTrace: '性能跟踪…',
