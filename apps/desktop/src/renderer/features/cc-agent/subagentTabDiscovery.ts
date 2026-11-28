@@ -197,7 +197,8 @@ export function startSubagentTabDiscovery(options: SubagentTabDiscoveryOptions):
         return;
       }
       if (!remote) return;
-      const delay = remotePushDriven ? pushFallbackPollMs : registered ? presencePollMs : pollMs;
+      const historyFound = Boolean(observedRuns?.size);
+      const delay = remotePushDriven ? pushFallbackPollMs : historyFound ? presencePollMs : pollMs;
       poll = setTimeout(runDiscovery, delay);
     });
   };

@@ -501,6 +501,22 @@ describe('startSubagentTabDiscovery', () => {
       dispose();
     });
 
+    it('polls terminal history slowly on a legacy Host and discovers a newly finished run', async () => {
+      const h = harness();
+      h.listRemote.mockResolvedValueOnce(runs(1, 'completed')).mockResolvedValue(runs(2, 'completed'));
+      const dispose = startSubagentTabDiscovery({
+        ...h, sessionId: 's1', deviceId: 'legacy', isRequestOwnerCurrent: () => true,
+        onPresenceChange: vi.fn(),
+      });
+      await settle();
+      await vi.advanceTimersByTimeAsync(REMOTE_SUBAGENT_PRESENCE_POLL_MS - 1);
+      expect(h.listRemote).toHaveBeenCalledTimes(1);
+      expect(h.registerTab).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(h.registerTab).toHaveBeenCalledOnce();
+      dispose();
+    });
+
     it('polls presence more slowly than it polls for discovery', () => {
       // Discovery decides whether a tab appears at all and a user is waiting on
       // it; this only decides when a stale entry disappears, and nobody is.
