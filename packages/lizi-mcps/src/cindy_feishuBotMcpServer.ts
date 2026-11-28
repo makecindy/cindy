@@ -24,6 +24,7 @@ import { jsonObjectArg } from './json-object-arg.js';
 
 import { FeishuBotToolRegistry, type FeishuBotToolResult } from './cindy_feishuBotToolRegistry';
 import { registerFeishuLaneTools } from './cindy_feishuBotLaneTools.js';
+import { registerManagedFeishuCardTools, type ManagedFeishuCardTools } from './cindy_feishuManagedCards.js';
 import type { FeishuBotLaneScope, FeishuBotMcpHostDeps } from './types.js';
 
 import descListTools from './prompts/cindy_feishu_bot/tools/list_tools.md?raw';
@@ -113,6 +114,7 @@ const RULES: Record<string, string> = {};
  * interface omits the host-only accessor and adds the resolved closure.
  */
 export type FeishuBotMcpDeps = Omit<FeishuBotMcpHostDeps, 'getOwnerOpenId' | 'readLaneScope'> & {
+  managedCards?: ManagedFeishuCardTools;
   /**
    * 当前 tool-call 的飞书逐轮作用域(provider 闭包从 session ctx 解出);null 表示本轮
    * 不是由飞书消息触发或轮次已结束,轮次内工具一律 fail closed。缺省(未注入)时不注册
@@ -390,6 +392,9 @@ export function createFeishuBotMcpServer(deps: FeishuBotMcpDeps): McpServer {
   const registry = new FeishuBotToolRegistry();
   registerSendFileToUser(registry, deps, d);
   registerSendMessageToUser(registry, deps, d);
+  if (deps.managedCards) registerManagedFeishuCardTools(
+    registry, deps.managedCards, d.send_message_to_user.slice(D.send_message_to_user.length),
+  );
 
   registerListToolsEntry(server, registry, d);
   registerCallToolEntry(server, registry, d);

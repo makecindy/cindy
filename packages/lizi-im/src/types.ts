@@ -21,6 +21,14 @@ export type IMSecretReadResult =
  * we use the bundled console logger.
  */
 export interface IMHost {
+  /** Owner-scoped business-card routing metadata. Never stores card bodies or callback tokens.
+   * Missing is compatible with legacy hosts; managed card tools fail closed.
+   */
+  managedCards?: {
+    read(connectionKey: string): string | null;
+    write(connectionKey: string, contents: string): void;
+    clear(connectionKey: string): void;
+  };
   /** Encrypted KV storage (replaces electron.safeStorage). */
   secrets: {
     /** Persist `plaintext` under `name`; returns whether it was written. */

@@ -111,6 +111,7 @@ import { discordIm, feishuIm, wechatIm } from '../im';
 import { directDeliveryFile, prepareDirectDelivery } from '../im/imessage/directDelivery';
 import { getBotFeishuTransport, getBotIMessageDirectTarget, getBotIMessageLaneTarget } from '../im/shared/botImConnectionRuntime';
 import { createFeishuTransportResolver } from './feishuTransportRouting';
+import { createManagedFeishuCardHost } from './feishuManagedCards';
 import { readChannelToolScope } from '../im/shared/channelToolScope';
 import { hasImChannelVendorOptions } from '../../shared/botImConnection.js';
 import { sendFeishuSessionNotification } from '../im/feishu/notificationOrigin';
@@ -471,6 +472,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
   };
 
   const providers = createLiziMcpProviders({
+    managedFeishuCards: createManagedFeishuCardHost({ resolve: feishuTransportFor, readScope: readFeishuTurnScope }),
     // 先传完整内置列表；按会话启停由下面的 isEnabled 包装处理。
     enabled: BUILTIN_LIZI_MCP_IDS,
     android: getAndroidMcpDeps({
