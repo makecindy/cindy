@@ -385,7 +385,13 @@ async function confirmCdpGone(cdpHttpUrl: string): Promise<boolean> {
  * as a status poll — unlike {@link closeAdoptedManagedBrowser}, which proves
  * ownership by actually closing the browser.
  */
-export async function isManagedBrowserGone(cdpHttpUrl: string): Promise<boolean> {
+export async function isManagedBrowserGone(
+  cdpHttpUrl: string,
+  options?: { fastIfListening?: boolean },
+): Promise<boolean> {
+  // During cold quit, a listening port disproves absence and lets the caller
+  // begin ownership-checked cleanup without consuming another wait window.
+  if (options?.fastIfListening && await isCdpPortListening(cdpHttpUrl)) return false;
   return await confirmCdpGone(cdpHttpUrl);
 }
 
