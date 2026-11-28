@@ -88,6 +88,7 @@ function snapshot(...workerSessionIds: string[]): WorkersSnapshot {
       status: 'running',
       focused: false,
       idleSince: null,
+      reportState: null,
     })),
     softLimit: 5,
     hardLimit: 8,

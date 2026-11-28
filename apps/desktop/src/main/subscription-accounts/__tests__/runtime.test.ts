@@ -721,7 +721,7 @@ it.each(['subscription-to-key', 'subscription-to-subscription', 'key-to-subscrip
   const team = createOrcaTeamService({
     getWorkerLinkBySessionId: async () => ({ workerId: worker.id, teamId: worker.teamId, workerSessionId: task, leadSessionId: 'lead' }),
     listWorkersByLead: async () => [worker], getLiveSession: () => live ?? null, resumeWorkerSession: async () => { await open(); },
-    getManualInterrupt: () => null, clearManualInterrupt() {}, updateWorkerStatus: async (_id, status) => { worker.status = status; terminalStatuses.push(status); },
+    getManualInterrupt: () => null, clearManualInterrupt() {}, updateWorkerStatus: async (_id, status) => { worker.status = status; terminalStatuses.push(status); }, setWorkerLatestReport: async () => {},
     broadcastOrcaWorkerChanged() {}, sendAutoBridgeToLead: reported,
     dispatchWorkerMessage: async params => {
       const item: import('../../../shared/agentInputQueue.js').AgentInputQueuedMessage = {

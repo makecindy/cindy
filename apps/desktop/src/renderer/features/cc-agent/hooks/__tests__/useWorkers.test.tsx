@@ -67,6 +67,7 @@ function workerRecord(
     status,
     focused,
     idleSince: null,
+    reportState: null,
     session: {
       agentKind: 'codex',
       model: 'gpt-5.4',

@@ -20,6 +20,7 @@ function worker(
     leadSessionId: LEAD_ID,
     status,
     focused,
+    reportDropped: false,
   };
 }
 

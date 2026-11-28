@@ -18,6 +18,7 @@ function worker(overrides: Partial<WorkerInfo> = {}): WorkerInfo {
     status: 'idle',
     focused: true,
     idleSince: null,
+    reportState: null,
     ...overrides,
   };
 }
