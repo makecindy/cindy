@@ -490,6 +490,69 @@ describe('Chat Server result delivery and refresh', () => {
     expect(fixture.handle.mock.calls.some(([route, , body]) => route === '/mask/executions/claim' && body?.accessPolicyVersion === 1)).toBe(true);
   });
 
+  // #13022, unit: the real mask claim and settlement must carry the source quote
+  // to the send endpoint. The existing manual quote tests do not run a mask execution.
+  it.each(['visible', 'forbidden', 'deleted', 'wrong-id', 'no-mention', 'edited-mention', 'quoted-source', 'refused'] as const)(
+    'settles an AI reply to a directed main-group mention with source %s', async mode => {
+      const enabled = vi.spyOn(groupChatContract, 'BOT_GROUP_PERSONAL_REPLIES_ENABLED', 'get').mockReturnValue(true);
+      onTestFinished(() => enabled.mockRestore());
+      const peer = '30000000-0000-4000-8000-000000000002';
+      const laterId = '50000000-0000-4000-8000-000000000002';
+      const source = { id: execution.source_message_id, seq: '2', authorId: peer,
+        author: { kind: 'human', name: 'Peer' }, origin: 'user', deleted: false, threadRootId: null,
+        createdAt: '2026-10-03T00:00:00Z', mentions: mode === 'no-mention' ? [] : [selfId],
+        content: [{ type: 'text', text: '@Owner can you check?' },
+          ...(mode === 'quoted-source' ? [buildBotGroupQuoteCard({ messageId: laterId, authorName: 'Peer', authorKind: 'user',
+            excerpt: 'Do not copy this snapshot', attachmentCount: 0, attachmentName: null, sequence: 1 })] : [])] };
+      const posts: unknown[] = [];
+      const warn = vi.fn();
+      if (mode === 'refused') (deps as unknown as { log: unknown }).log = { warn, info: vi.fn() };
+      let settled = false;
+      fixture.handle.mockImplementation((route, _method, body) => {
+        if (route === '/me') return { body: { actor: { id: selfId }, capabilities: { personalMask: 1 } } };
+        if (route === '/mask/executions/claim') {
+          const next = claimed ? null : { ...execution, context_seq: source.seq, mask_owner_id: selfId, mask_kind: 'reply', requester_id: peer,
+            maskOwner: { id: selfId, name: 'Owner', avatarUrl: null } };
+          claimed = true;
+          return { body: { execution: next } };
+        }
+        if (body?.action === 'complete') {
+          posts.push(structuredClone(body.content));
+          if (mode === 'refused' && posts.length === 1) return { status: 400, body: { error: {
+            code: 'INVALID_INPUT', message: 'raw rejection with fake bearer secret', details: { author: peer, text: source.content[0] },
+          } } };
+        }
+        if (route.endsWith(`/messages/${source.id}`)) {
+          if (settled && mode === 'forbidden') return { status: 403, body: {} };
+          return { body: settled && mode === 'deleted' ? { ...source, deleted: true }
+            : settled && mode === 'wrong-id' ? { ...source, id: laterId }
+            : settled && mode === 'edited-mention' ? { ...source, mentions: [] } : source };
+        }
+        if (route.includes('/messages?all=true')) return { body: [source] };
+        return response(route);
+      });
+      await start();
+      settled = true;
+      await service.settleLaneTurn({ ...terminal, activeInputClientId: vi.mocked(deps.dispatch).mock.calls[0][0].clientId });
+      expect(deliveries().map(([route]) => route)).toEqual(Array(mode === 'refused' ? 2 : 1)
+        .fill(`/conversations/${roomId}/mask/executions/${execution.id}`));
+      const quote = expect.objectContaining({ namespace: 'cindy.quote', schemaRevision: 1,
+        data: expect.objectContaining({ messageId: source.id, excerpt: '@Owner can you check?' }),
+        fallback: '> Peer: @Owner can you check?' });
+      const reply = { type: 'text', text: 'Finished reply' };
+      const process = expect.objectContaining({ namespace: 'cindy.work-record' });
+      expect(posts[0]).toEqual(['visible', 'refused'].includes(mode) ? [quote, reply, process] : [reply, process]);
+      if (mode === 'refused') {
+        expect(posts[1]).toEqual([reply, process]);
+        expect(deliveries().map(([, , body]) => body.operationId)).toEqual(Array(2).fill(`chat:${execution.id}:${execution.epoch}:complete`));
+        expect(warn.mock.calls.filter(([message]) => message === 'Group reply quote refused')).toEqual([
+          ['Group reply quote refused', { action: 'complete', downgrade: 'drop-quote', code: 'INVALID_INPUT', status: 400,
+            blocks: [{ type: 'card', namespace: 'cindy.quote', schemaRevision: 1 }, { type: 'text' },
+              { type: 'card', namespace: 'cindy.work-record', schemaRevision: 1 }] }],
+        ]);
+      }
+    });
+
   // Unit: even a server with an enabled legacy configuration cannot make this
   // release claim a reply/digest or change settings. Ordinary work still runs.
   it('takes ordinary work without claiming or enabling personal replies', async () => {

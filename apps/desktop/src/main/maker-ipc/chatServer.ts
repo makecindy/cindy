@@ -163,7 +163,7 @@ interface Running {
   /** The conversation this turn answers in (see executionLane); unknown until its source is read. */
   lane?: string;
   laneLookup?: Promise<void>;
-  replyQuote?: { messageId: string; members: Member[]; multiple: boolean };
+  replyQuote?: { messageId: string; members: Member[]; multiple: boolean; accepts?: (message: Message) => boolean };
   attachmentAfter?: string;
   /** The group's Cindy answered with this computer's model instead of the selected one: said once, before the reply. */
   modelNotice?: string;
@@ -2112,7 +2112,8 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
    * message can be quoted; the snapshot never comes from the controller's input. A thread
    * share's own text is only its card's fallback, so a share is not quotable either.
    */
-  async function quoteSnapshot(roomId: string, messageId: string, members: Promise<Member[]>, direct: boolean): Promise<BotGroupQuoteView & { recipientActorId?: string }> {
+  async function quoteSnapshot(roomId: string, messageId: string, members: Promise<Member[]>, direct: boolean,
+    accepts?: (message: Message) => boolean): Promise<BotGroupQuoteView & { recipientActorId?: string }> {
     let quoted: Message;
     try {
       quoted = await api<Message>(`/conversations/${roomId}/messages/${messageId}`);
@@ -2122,7 +2123,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     }
     const resolvedMembers = await members;
     const view = messageView(quoted, resolvedMembers, direct ? [] : resolvedMembers);
-    if (quoted.id !== messageId || quoted.deleted || quoted.threadRootId !== null || quoted.origin === 'system'
+    if (quoted.id !== messageId || quoted.deleted || quoted.threadRootId !== null || quoted.origin === 'system' || (accepts && !accepts(quoted))
       || view.kind !== 'message' || view.authorKind === 'system' || readBotGroupThreadShareCard(quoted)) throw new Error('QUOTE_UNAVAILABLE');
     return { ...botGroupQuoteFromMessage({ ...view, content: quotedText(quoted),
       attachments: quotedAttachments(quoted) }),
@@ -3239,7 +3240,13 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     let refusal = await attempt();
     if (contentRefusal(action, refusal) && pending.autoQuote && Array.isArray(payload.content)
       && payload.content.includes(pending.autoQuote)) {
-      reportRefusal(run, action, refusal, payload.content, 1);
+      if (run.replyQuote?.accepts) {
+        deps.log?.warn('Group reply quote refused', {
+          action, downgrade: 'drop-quote', ...chatErrorDiagnostic(refusal), blocks: contentShapes(payload.content),
+        });
+      } else {
+        reportRefusal(run, action, refusal, payload.content, 1);
+      }
       payload.content = payload.content.filter(block => block !== pending.autoQuote);
       refusal = await attempt();
     }
@@ -3401,8 +3408,8 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
               ...(singleSpeaker || run.execution.mask_owner_id ? {} : { continueDiscussion: !run.plan && !isBotGroupNoReplyText(text) }) };
           const blocks = pending.payload.content;
           if (!pending.cancelled && run.replyQuote && Array.isArray(blocks) && !readBotGroupQuote(blocks)) {
-            const { messageId, members, multiple } = run.replyQuote;
-            const quote = await quoteSnapshot(run.execution.conversation_id, messageId, Promise.resolve(members), false).catch(() => undefined);
+            const { messageId, members, multiple, accepts } = run.replyQuote;
+            const quote = await quoteSnapshot(run.execution.conversation_id, messageId, Promise.resolve(members), false, accepts).catch(() => undefined);
             if (quote) {
               if (multiple) {
                 const body = blocks.find(block => block.type === 'text');
@@ -3575,6 +3582,17 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       || (e.plan_id && run.plan?.kind !== 'talk')) return;
     const recipient = e.mask_owner_id ?? e.bot_id;
     const quote = readBotGroupQuote(source.content);
+    if (e.mask_kind === 'reply' && e.mask_owner_id === selfId && !run.plan && !e.plan_id && !quote) {
+      // The claim has no trigger reason. Recheck the explicit mention when reading the
+      // authorized source again at settlement, in case it was edited or became unavailable.
+      const accepts = (message: Message) => message.threadRootId === null && !message.deleted
+        && message.origin === 'user' && message.author.kind === 'human'
+        && (!message.mentionAudience || message.mentionAudience === 'bots')
+        && message.mentions?.includes(recipient) === true
+        && !message.content.some(block => block.namespace === 'cindy.quote');
+      if (accepts(source)) run.replyQuote = { messageId: source.id, members, multiple: false, accepts };
+      return;
+    }
     const notes = new Set(run.plan?.note_message_ids);
     const inputs = notes.size ? [source, ...history.filter(m => notes.has(m.id) && m.id !== source.id && !m.deleted
       && m.threadRootId === null && m.origin === 'user' && BigInt(m.seq) <= BigInt(e.context_seq))] : [source];
