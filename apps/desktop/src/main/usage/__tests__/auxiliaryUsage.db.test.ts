@@ -11,7 +11,7 @@ function owner() {
   const sqlite = new Database(':memory:');
   databases.push(sqlite);
   sqlite.exec(`CREATE TABLE auxiliary_usage_receipts (
-    receipt_id TEXT PRIMARY KEY, provider_id TEXT, model TEXT, source TEXT, session_id TEXT,
+    receipt_id TEXT PRIMARY KEY, provider_id TEXT, model TEXT, source TEXT, harness TEXT NOT NULL DEFAULT 'unknown', session_id TEXT,
     transport TEXT, day TEXT, recorded_at INTEGER, input_tokens INTEGER,
     output_tokens INTEGER, cache_read_tokens INTEGER, cache_create_tokens INTEGER)`);
   // Production DbClient runs Drizzle asynchronously; awaiting a synchronous fixture has the same result.
@@ -71,9 +71,9 @@ describe('auxiliary receipts', () => {
     await drain;
     expect(
       first.sqlite
-        .prepare('SELECT source, session_id, model, provider_id FROM auxiliary_usage_receipts')
+        .prepare('SELECT source, harness, session_id, model, provider_id FROM auxiliary_usage_receipts')
         .all(),
-    ).toEqual([{ source: 'title', session_id: 'task', model: 'served', provider_id: 'actual' }]);
+    ).toEqual([{ source: 'title', harness: 'auxiliary', session_id: 'task', model: 'served', provider_id: 'actual' }]);
     expect(second.sqlite.prepare('SELECT COUNT(*) n FROM auxiliary_usage_receipts').get()).toEqual({
       n: 0,
     });

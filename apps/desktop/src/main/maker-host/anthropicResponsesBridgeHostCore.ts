@@ -874,6 +874,7 @@ function getPiNativeSubscriptionHandler(
         }
         requestedModel = isPlainRecord(current) && typeof current.model === 'string' ? current.model : '';
         if (!await modelAllowed()) return;
+        recordUsage = captureUsagePricing(sessionId, undefined);
         recordGuestUsage = captureGuestRequestUsage(sessionId, isPlainRecord(current) && typeof current.model === 'string' ? current.model : '');
         const profile = withOpenaiContextProfileModel(current);
         current = profile ?? current;
