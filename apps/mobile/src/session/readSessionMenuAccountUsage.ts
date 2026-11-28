@@ -20,6 +20,11 @@ import {
   shouldFallbackToLegacyCodexUsage,
 } from "./sessionControls";
 
+import {
+  effectivePluginWindowMinutes,
+  parsePluginQuotaWindowLabel,
+  selectPluginWindowsForModel,
+} from '@cindy/maker-shared/plugin-engine-quota';
 import { isPluginEngineProviderId, isPluginEngineSessionKind, PLUGIN_ENGINE_PROVIDER_PREFIX } from './pluginEngines';
 
 type Reader = Partial<Pick<MobileMakerTransport, "getPluginEngineUsage">> & Pick<
@@ -187,6 +192,7 @@ export async function readSessionMenuAccountUsage(
   session: RemoteSession,
   reader: Reader,
   accountProvider?: OpenAiAccountProvider,
+  modelLabel?: string | null,
 ): Promise<SessionMenuAccountUsage> {
   if (session.remoteHostId?.trim()) return empty("unavailable");
   // The host projects runtime-effective selection onto providerId. Missing
@@ -203,10 +209,33 @@ export async function readSessionMenuAccountUsage(
       : await reader.getPluginEngineUsage?.(key, session.id);
     if (!usage) return result;
     result.updatedAt = usage.updatedAt;
-    result.windows = (usage.windows ?? []).map((row, index) => ({
-      id: String(index), minutes: row.windowMinutes ?? null, modelLabel: row.label, remainingPercent: row.remainingPercent,
-      resetsAt: row.resetsAt ? row.resetsAt / 1000 : null,
-    }));
+    const selected = selectPluginWindowsForModel(
+      usage.windows,
+      { id: session.model, displayName: modelLabel },
+      Date.now(),
+      { strictModelMatch: false, includeExpired: true },
+    );
+    result.windows = selected.windows.map((row, index) => {
+      const minutes = effectivePluginWindowMinutes(row);
+      const resetsAt =
+        typeof row.resetsAt === "number" && Number.isFinite(row.resetsAt) && row.resetsAt > 0
+          ? row.resetsAt / 1000
+          : null;
+      const parsed = parsePluginQuotaWindowLabel(row.label);
+      const hasPeriod = resetsAt !== null || minutes !== null;
+      const windowModelLabel = !hasPeriod
+        ? (parsed.groupName ?? row.label)
+        : !selected.matchedModel && !selected.singleGroup && parsed.groupName
+          ? parsed.groupName
+          : undefined;
+      return {
+        id: String(index),
+        minutes,
+        ...(windowModelLabel ? { modelLabel: windowModelLabel } : {}),
+        remainingPercent: row.remainingPercent,
+        resetsAt,
+      };
+    });
     result.amounts = (usage.balances ?? []).map(row => ({
       id: "balance", currency: row.currency, amount: Number(row.amount),
     }));

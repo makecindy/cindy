@@ -1,4 +1,5 @@
 import path from 'node:path';
+import { isProviderConnectionIcon, isProviderConnectionImage, type ConnectionArtwork } from '@cindy/model-providers/branding';
 import { inspectSettingsJson, isSettingsRecord } from './inspect-settings-json.js';
 import { validateOptionalSettingsFields } from './settings-inspection.js';
 import { activeOwnerScopeKey, ownerScopedUserDataPath } from '../appSessionState.js';
@@ -10,6 +11,7 @@ export interface ProviderPresentation {
   removed?: boolean;
 }
 interface PresentationFile extends ProviderPresentation {
+  connectionIcons?: Record<string, ConnectionArtwork>;
   providers?: Record<string, ProviderPresentation>;
 }
 function normalizePresentation(raw: unknown): ProviderPresentation {
@@ -23,7 +25,11 @@ function normalizePresentation(raw: unknown): ProviderPresentation {
   };
 }
 function normalizeFile(raw: unknown): PresentationFile {
-    const root = normalizePresentation(raw);
+    const root: PresentationFile = normalizePresentation(raw);
+    const icons = (raw as PresentationFile | null)?.connectionIcons;
+    if (isSettingsRecord(icons)) {
+      root.connectionIcons = Object.fromEntries(Object.entries(icons).filter(([, icon]) => isProviderConnectionIcon(icon) || isProviderConnectionImage(icon)));
+    }
     const providers = (raw as PresentationFile | null)?.providers;
     if (!providers || typeof providers !== 'object' || Array.isArray(providers)) return root;
     return {
@@ -42,6 +48,9 @@ const store = createOverrideSettingsFile<PresentationFile>({
   scopeKey: activeOwnerScopeKey,
   defaults: {},
   normalize: normalizeFile,
+  preserveUnreadableFile: true,
+  logLoadedValue: false,
+  maxBytes: 4 * 1024 * 1024,
   log,
   label: 'provider-presentation',
 });
@@ -54,6 +63,20 @@ export function inspectProviderPresentations(root: string) {
       validateOptionalSettingsFields(value, validators);
     }
     return normalizeFile(raw);
+  }, 4 * 1024 * 1024);
+}
+
+export function readProviderConnectionIcons(): Readonly<Record<string, ConnectionArtwork>> {
+  store.invalidateIfChanged();
+  return store.read().connectionIcons ?? {};
+}
+
+export async function setProviderConnectionIcon(providerId: string, icon: ConnectionArtwork | null): Promise<void> {
+  await store.updateAtomic(({ value }) => {
+    if (icon !== null) return { connectionIcons: { ...value.connectionIcons, [providerId]: icon } };
+    if (!value.connectionIcons || !Object.hasOwn(value.connectionIcons, providerId)) return null;
+    const { [providerId]: _removed, ...remaining } = value.connectionIcons;
+    return { connectionIcons: remaining };
   });
 }
 

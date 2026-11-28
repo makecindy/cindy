@@ -20,6 +20,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import * as codexSessions from '../../maker-host/codex-local-sessions';
 import { defaultClassifyEnv, groupFor } from '../classify';
+import { claudeAdapter } from '../sources/claude';
 import { codexAdapter } from '../sources/codex';
 import { cursorAdapter } from '../sources/cursor';
 import { deepseekAdapter } from '../sources/deepseek';
@@ -29,6 +30,7 @@ import { kimiAdapter } from '../sources/kimi';
 import { opencodeAdapter } from '../sources/opencode';
 import { qwenAdapter } from '../sources/qwen';
 import { workbuddyAdapter } from '../sources/workbuddy';
+import { repairImportedSessionTitles } from '../titleRepair';
 import type { NormalizedMessage, SourceAdapter } from '../types';
 
 let home: string;
@@ -138,6 +140,32 @@ describe('foreign source adapters', () => {
     } finally { discovery.mockRestore(); }
   });
 
+  it('Codex caps an overlong thread title at the device task title limit', async () => {
+    // #9403：Codex 自己的标题可能是整条首条消息。设备灯位按 512 字符收任务标题，
+    // 超长会让整份任务列表被主进程拒收，所以导入时就要截到同一上限。
+    const codexHome = path.join(home, 'codex-long-title');
+    await mkdir(codexHome, { recursive: true });
+    const db = new Database(path.join(codexHome, 'state_5.sqlite'));
+    db.exec('CREATE TABLE threads (id TEXT, cwd TEXT, thread_source TEXT, source TEXT, title TEXT, rollout_path TEXT, updated_at INTEGER)');
+    const threadId = '019dcd5a-6e54-7960-95e0-000000000099';
+    const rollout = `.codex/sessions/rollout-2026-11-12T10-00-00-${threadId}.jsonl`;
+    const file = await put(rollout, [
+      { type: 'session_meta', payload: { id: threadId, cwd: project(), source: 'vscode' } },
+      { type: 'response_item', payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'Question' }] } },
+    ]);
+    db.prepare('INSERT INTO threads VALUES (?,?,?,?,?,?,?)').run(
+      threadId, project(), null, 'vscode', 'a'.repeat(600), file, 1000,
+    );
+    db.close();
+    const discovery = vi.spyOn(codexSessions, 'discoverExternalCodexHomesSync').mockReturnValue([codexHome]);
+    try {
+      const listed = await codexAdapter.list({ homeDir: home, cindyUserDataDir: null });
+      const found = listed.sessions.find((s) => s.sourceSessionId === threadId);
+      expect(found?.title).toHaveLength(512);
+      expect(found?.title).toBe('a'.repeat(512));
+    } finally { discovery.mockRestore(); }
+  });
+
   it('Gemini CLI folds overwrites, patches and rewinds and maps the project folder', async () => {
     await put('.gemini/projects.json', JSON.stringify({ projects: { [project()]: 'my-app' } }));
     await put('.gemini/tmp/my-app/chats/session-2026-10-30T10-00-abcd1234.jsonl', [
@@ -166,7 +194,8 @@ describe('foreign source adapters', () => {
   it('Qwen Code follows the active branch so rewound turns are dropped', async () => {
     const base = { sessionId: 'q', cwd: project(), version: '1' };
     await put(`.qwen/projects/-work-my-app/chats/${'1'.repeat(8)}-0000-0000-0000-000000000000.jsonl`, [
-      { ...base, uuid: 'u1', parentUuid: null, timestamp: '2026-10-30T10:00:00Z', type: 'user', message: { role: 'user', parts: [{ text: 'hello' }] } },
+      { ...base, uuid: 'injected', parentUuid: null, timestamp: '2026-10-30T09:59:59Z', type: 'user', message: { role: 'user', parts: [{ text: '<system-reminder data-role="user-context">Injected context</system-reminder>' }] } },
+      { ...base, uuid: 'u1', parentUuid: 'injected', timestamp: '2026-10-30T10:00:00Z', type: 'user', message: { role: 'user', parts: [{ text: 'hello' }] } },
       { ...base, uuid: 'a1', parentUuid: 'u1', timestamp: '2026-10-30T10:00:01Z', type: 'assistant', message: { role: 'model', parts: [{ text: 'thinking…', thought: true }, { functionCall: { id: 'c1', name: 'ls', args: {} } }] } },
       { ...base, uuid: 't1', parentUuid: 'a1', timestamp: '2026-10-30T10:00:02Z', type: 'tool_result', message: { role: 'user', parts: [{ functionResponse: { id: 'c1', name: 'ls', response: { output: 'a b' } } }] } },
       { ...base, uuid: 'u2', parentUuid: 't1', timestamp: '2026-10-30T10:01:00Z', type: 'user', message: { role: 'user', parts: [{ text: 'rewound question' }] } },
@@ -178,6 +207,7 @@ describe('foreign source adapters', () => {
     await put('.qwen/projects/-work-my-app/subagents/q/agent-1.jsonl', [{ uuid: 'z' }]);
     const { listed, messages } = await readAll(qwenAdapter);
     expect(listed.internalCount).toBe(1);
+    expect(listed.sessions.map((s) => s.title)).toEqual(['hello']);
     expect(listed.sessions[0]!.cwd).toBe(project());
     expect(brief(Object.values(messages)[0]!)).toEqual([
       'user:hello',
@@ -317,5 +347,124 @@ describe('foreign source adapters', () => {
     // Cursor recovers the folder from its dashed name, so Windows separators come back as '/'.
     expect(path.resolve(listed.sessions[0]!.cwd!)).toBe(project());
     expect(brief(Object.values(messages)[0]!).map((m) => (m.startsWith('tool_use') ? 'tool_use' : m))).toEqual(expected);
+  });
+
+  // Field report (CN 0.1.148, Windows): WorkBuddy puts its whole context into the user turn as
+  // `<system-reminder data-role="user-context">…</system-reminder><user_query>ask</user_query>`.
+  // The attribute defeated the old reminder matching, so every imported task was titled
+  // `<system-reminder d…` and the first bubble showed WorkBuddy's own context.
+  it('WorkBuddy titles come from the source title or the user query, never the injected context', async () => {
+    const dir = '.workbuddy/projects/-work-wb-titles';
+    const injected = '<system-reminder data-role="user-context">\n<user_info>\nOS Version: darwin 25.1\n</user_info>\n</system-reminder>';
+    const user = (n: number, text: string | string[]) => ({
+      type: 'message', role: 'user', sessionId: `t${n}`, cwd: project(), timestamp: 1000 + n,
+      content: (Array.isArray(text) ? text : [text]).map((t) => ({ type: 'input_text', text: t })),
+    });
+    // One text block holding both, as in the report.
+    await put(`${dir}/t1.jsonl`, [user(1, `${injected}\n<user_query>整理本周周报</user_query>`)]);
+    // Context and ask as separate blocks of the same turn.
+    await put(`${dir}/t2.jsonl`, [user(2, [injected, '<user_query>\n比较云服务器价格\n</user_query>'])]);
+    // WorkBuddy's own title wins over the first message; a bare timestamp topic is only a placeholder.
+    await put(`${dir}/t3.jsonl`, [
+      user(3, `${injected}<user_query>写一封请假邮件</user_query>`),
+      { type: 'topic', topic: '2026-11-22-23-52-07' },
+      { type: 'ai-title', aiTitle: '请假邮件草稿' },
+    ]);
+    await put(`${dir}/t4.jsonl`, [user(4, `${injected}<user_query>导出发票</user_query>`), { type: 'topic', topic: '2026-11-22-23-52-07' }]);
+    const listed = await workbuddyAdapter.list({ homeDir: home, cindyUserDataDir: null });
+    const mine = listed.sessions.filter((s) => s.locator.includes('wb-titles'));
+    expect(Object.fromEntries(mine.map((s) => [s.sourceSessionId, s.title]))).toEqual({
+      t1: '整理本周周报',
+      t2: '比较云服务器价格',
+      t3: '请假邮件草稿',
+      t4: '导出发票',
+    });
+    const read: NormalizedMessage[] = [];
+    for await (const m of workbuddyAdapter.read(mine.find((s) => s.sourceSessionId === 't1')!, { cindySessionId: 'x' })) read.push(m);
+    expect(brief(read)).toEqual(['user:整理本周周报']);
+  });
+
+  // Tasks imported before the fix keep the broken title in sessions.title (cut at 120 chars, so the
+  // closing tag and the real ask are gone). The startup repair re-derives it from the stored first
+  // user message, and leaves titles the user typed, non-imported tasks and good titles alone.
+  it('repairs stored titles of earlier imports from their first user message', () => {
+    const db = new Database(':memory:');
+    db.exec(`
+      CREATE TABLE sessions (id TEXT PRIMARY KEY, title TEXT, status TEXT NOT NULL DEFAULT 'active', updated_at INTEGER NOT NULL DEFAULT 0);
+      CREATE TABLE session_imports (session_id TEXT PRIMARY KEY, source TEXT NOT NULL);
+      CREATE TABLE messages (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, role TEXT NOT NULL, content TEXT NOT NULL, created_at INTEGER NOT NULL);
+    `);
+    const raw = '<system-reminder data-role="user-context">\n<user_info>\nOS Version: darwin\n</user_info>\n</system-reminder>\n<user_query>整理本周周报</user_query>';
+    const broken = raw.replace(/\s+/g, ' ').slice(0, 120);
+    const addSession = (id: string, title: string, source: string | null, firstUser: unknown) => {
+      db.prepare('INSERT INTO sessions (id, title, updated_at) VALUES (?, ?, 5)').run(id, title);
+      if (source) db.prepare('INSERT INTO session_imports VALUES (?, ?)').run(id, source);
+      db.prepare("INSERT INTO messages VALUES (?, ?, 'user', ?, 1)").run(`${id}-m`, id, JSON.stringify(firstUser));
+    };
+    addSession('wb-1', broken, 'workbuddy', raw);
+    addSession('wb-2', broken, 'workbuddy', { text: raw, images: [], files: [] });
+    addSession('wb-3', '2026-11-22-23-52-07', 'workbuddy', '<user_query>导出发票</user_query>');
+    addSession('wb-4', '用户改过的名字', 'workbuddy', raw);
+    addSession('native-1', broken, null, raw);
+    addSession('wb-5', broken, 'workbuddy', raw.replace(/<user_query>[\s\S]*$/, ''));
+
+    expect(repairImportedSessionTitles(db)).toBe(3);
+    const titles = Object.fromEntries((db.prepare('SELECT id, title, updated_at AS u FROM sessions').all() as Array<{ id: string; title: string; u: number }>)
+      .map((r) => [r.id, `${r.title}@${r.u}`]));
+    expect(titles).toEqual({
+      'wb-1': '整理本周周报@5',
+      'wb-2': '整理本周周报@5',
+      'wb-3': '导出发票@5',
+      'wb-4': '用户改过的名字@5',
+      'native-1': `${broken}@5`,
+      // Nothing the user said survives: keep the old title rather than invent one.
+      'wb-5': `${broken}@5`,
+    });
+    expect(repairImportedSessionTitles(db)).toBe(0);
+    db.close();
+  });
+
+  // Unit: Claude Code `claude -p` (entrypoint=sdk-cli), Python SDK (sdk-py), and
+  // internal daemon sessions must count as internal instead of polluting import candidates,
+  // while interactive CLI, legacy transcripts without entrypoint, and Cindy SDK sessions remain intact.
+  it('Claude Code filters claude -p and daemon sessions as internal without hiding interactive or Cindy sessions', async () => {
+    const claudeDir = path.join(home, '.claude-test');
+    const prev = process.env.CLAUDE_CONFIG_DIR;
+    process.env.CLAUDE_CONFIG_DIR = claudeDir;
+    const id = (n: number) => `019dcd5a-6e54-7960-95e0-${String(n).padStart(12, '0')}`;
+    const putClaude = (n: number, lines: unknown[]) =>
+      put(path.join('.claude-test', 'projects', '-work-my-app', `${id(n)}.jsonl`), lines);
+    try {
+      await putClaude(1, [
+        { type: 'user', entrypoint: 'cli', cwd: project(), sessionId: id(1), timestamp: '2026-11-26T10:00:00Z', message: { role: 'user', content: 'interactive task' } },
+        { type: 'assistant', entrypoint: 'cli', cwd: project(), sessionId: id(1), timestamp: '2026-11-26T10:00:01Z', message: { role: 'assistant', content: [{ type: 'text', text: 'done' }] } },
+      ]);
+      await putClaude(2, [
+        { type: 'user', cwd: project(), sessionId: id(2), timestamp: '2026-11-26T10:00:00Z', message: { role: 'user', content: 'legacy claude task' } },
+      ]);
+      await putClaude(3, [
+        { type: 'user', entrypoint: 'sdk-cli', cwd: project(), sessionId: id(3), timestamp: '2026-11-26T10:00:00Z', message: { role: 'user', content: 'claude -p quick check' } },
+      ]);
+      await putClaude(4, [
+        { type: 'user', entrypoint: 'sdk-py', cwd: project(), sessionId: id(4), timestamp: '2026-11-26T10:00:00Z', message: { role: 'user', content: 'python headless' } },
+      ]);
+      await putClaude(5, [
+        { type: 'user', sessionKind: 'daemon-worker', cwd: project(), sessionId: id(5), timestamp: '2026-11-26T10:00:00Z', message: { role: 'user', content: 'daemon worker' } },
+      ]);
+      await putClaude(6, [
+        { type: 'user', entrypoint: 'sdk-ts', cwd: project(), sessionId: id(6), timestamp: '2026-11-26T10:00:00Z', message: { role: 'user', content: '[消息来源]\nfrom cindy\n\nactual prompt' } },
+      ]);
+
+      const listed = await claudeAdapter.list({ homeDir: home, cindyUserDataDir: null });
+      const byId = new Map(listed.sessions.map((s) => [s.sourceSessionId, s]));
+      expect(listed.internalCount).toBe(3);
+      expect([...byId.keys()].sort()).toEqual([id(1), id(2), id(6)].sort());
+      expect(byId.get(id(1))?.ranByCindy).toBeUndefined();
+      expect(byId.get(id(2))?.ranByCindy).toBeUndefined();
+      expect(byId.get(id(6))?.ranByCindy).toBe(true);
+    } finally {
+      if (prev === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+      else process.env.CLAUDE_CONFIG_DIR = prev;
+    }
   });
 });

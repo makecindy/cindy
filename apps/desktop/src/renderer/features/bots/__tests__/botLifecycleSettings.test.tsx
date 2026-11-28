@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MemoryRouter } from 'react-router-dom';
 
@@ -107,6 +107,74 @@ describe('BotLifecycleSettings v1 actions', () => {
     await waitFor(() => expect(screen.getByText('bots.historySearch.empty')).toBeTruthy());
     expect(window.electronAPI.localDb.bots.searchHistory).toHaveBeenCalledWith({ botId: 'bot-1', query: 'project', limit: 20 });
   });
+
+  /*
+   * 测试价值
+   * - 生产入口与可观察结果：BotLifecycleSettings 的历史搜索（提交才查询）迁到 SearchInput 后，
+   *   表单提交仍发起查询；点内置清空按钮后输入框清空、上一次的结果与报错一起消失。
+   * - 规则依据：主人裁决 2026-11-27（所有搜索框都要有清空，提交式搜索清空后结果复位）。
+   * - 现有覆盖缺口：上面的用例只覆盖点击「搜索」按钮，不覆盖清空后的复位。
+   * - 最小失败输入：搜索 "project" 得到空结果后点清空，「bots.historySearch.empty」仍在。
+   * - tier：unit（jsdom 渲染真实组件）。
+   */
+  it('submits the history search from the form and clears the last result with the clear button', async () => {
+    render(<MemoryRouter><BotLifecycleSettings bot={bot('active')} onOpenSession={vi.fn()} /></MemoryRouter>);
+    const box = screen.getByRole('textbox', { name: 'bots.historySearch.title' }) as HTMLInputElement;
+    fireEvent.change(box, { target: { value: 'project' } });
+    fireEvent.submit(box.form!);
+    await waitFor(() => expect(screen.getByText('bots.historySearch.empty')).toBeTruthy());
+    expect(window.electronAPI.localDb.bots.searchHistory).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(screen.getByRole('button', { name: 'commonUi.clearSearch' }));
+    expect(box.value).toBe('');
+    expect(screen.queryByText('bots.historySearch.empty')).toBeNull();
+    expect(document.activeElement).toBe(box);
+    // 清空按钮是 type="button"：没有再发起一次查询。
+    expect(window.electronAPI.localDb.bots.searchHistory).toHaveBeenCalledTimes(1);
+  });
+
+  /*
+   * 测试价值
+   * - 生产入口与可观察结果：查询还没返回时点清空，之后这次查询成功或失败都不能把结果 / 报错
+   *   写回空输入框下面，「搜索中」也要立即复位。
+   * - 规则依据：PR #13409 Greptile P2（清空后旧结果重新出现）。
+   * - 现有覆盖缺口：上一条用例只覆盖查询返回之后再清空。
+   * - 最小失败输入：提交 "project" → 点清空 → resolve({ results: [] }) 后出现
+   *   「bots.historySearch.empty」，或 reject 后出现「bots.historySearch.failed」。
+   * - tier：unit（jsdom 渲染真实组件）。
+   */
+  it.each(['resolve', 'reject'] as const)(
+    'drops a pending history search cleared before it returns (%s)',
+    async (outcome) => {
+      let settle!: () => void;
+      vi.mocked(window.electronAPI.localDb.bots.searchHistory).mockImplementation(
+        () =>
+          new Promise((resolve, reject) => {
+            settle = () =>
+              outcome === 'resolve' ? resolve({ results: [] } as never) : reject(new Error('offline'));
+          }),
+      );
+      render(<MemoryRouter><BotLifecycleSettings bot={bot('active')} onOpenSession={vi.fn()} /></MemoryRouter>);
+      const box = screen.getByRole('textbox', { name: 'bots.historySearch.title' }) as HTMLInputElement;
+      fireEvent.change(box, { target: { value: 'project' } });
+      fireEvent.submit(box.form!);
+      await waitFor(() => expect(screen.getByRole('button', { name: 'bots.historySearch.searching' })).toBeTruthy());
+
+      fireEvent.click(screen.getByRole('button', { name: 'commonUi.clearSearch' }));
+      expect(box.value).toBe('');
+      expect(screen.getByRole('button', { name: 'bots.historySearch.search' })).toBeTruthy();
+
+      await act(async () => {
+        settle();
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(screen.queryByText('bots.historySearch.empty')).toBeNull();
+      expect(screen.queryByText('bots.historySearch.failed')).toBeNull();
+      expect(screen.queryByRole('button', { name: 'bots.historySearch.searching' })).toBeNull();
+      expect(screen.getByRole('button', { name: 'bots.historySearch.search' })).toBeTruthy();
+    },
+  );
 
   it('offers deletion and restart without a pause action', async () => {
     render(

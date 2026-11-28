@@ -120,14 +120,22 @@ export function readAtomicFileSync(filePath: string): string | null {
  * 那时它是磁盘上唯一有效的快照，继续写入会让它先被忽略、再在下一次写入时当陈旧
  * 残留删掉。宁可这次写失败让上层看见，也不能把唯一副本换成派生自空数据的内容。
  */
-export function atomicWriteFileSync(filePath: string, contents: string): void {
+export function atomicWriteFileSync(
+  filePath: string,
+  contents: string,
+  { preserveExistingBackup = false }: { preserveExistingBackup?: boolean } = {},
+): void {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   const tempPath = `${filePath}.${crypto.randomUUID()}.tmp`;
   const backupPath = `${filePath}.bak`;
   // 上次 temp 落位与恢复都失败时,主文件缺失、.bak 是唯一有效快照:
   // 先把它恢复回主文件,再写入,避免把缺失主文件读成空后覆盖唯一快照。
   // 主文件存在时,.bak 才是陈旧残留,直接清理。恢复不了则抛错,不写入。
-  if (restoreBackupIfMainMissing(filePath) === 'not-needed') {
+  if (preserveExistingBackup) {
+    // The caller recovered from .bak under its write lock. Verify that the
+    // recovery source still exists before touching either file.
+    fs.statSync(backupPath);
+  } else if (restoreBackupIfMainMissing(filePath) === 'not-needed') {
     rmSyncQuiet(backupPath);
   }
   try {
@@ -135,6 +143,7 @@ export function atomicWriteFileSync(filePath: string, contents: string): void {
     try {
       // 主路径:rename 覆盖已存在目标(Windows/POSIX 均原子替换),瞬时锁重试。
       renameSyncWithRetry(tempPath, filePath);
+      if (preserveExistingBackup) rmSyncQuiet(backupPath);
       return;
     } catch (error) {
       const code =
@@ -147,7 +156,12 @@ export function atomicWriteFileSync(filePath: string, contents: string): void {
         throw error;
       }
       // 兜底：备份交换而非直接删目标(两步 rename 都带瞬时锁重试)。
-      renameSyncWithRetry(filePath, backupPath);
+      if (preserveExistingBackup) {
+        // Readers can still use .bak if the process stops before temp lands.
+        fs.rmSync(filePath, { force: true });
+      } else {
+        renameSyncWithRetry(filePath, backupPath);
+      }
       try {
         renameSyncWithRetry(tempPath, filePath);
       } catch (swapError) {

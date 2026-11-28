@@ -42,6 +42,7 @@ export function createHostAutoReview(options: {
   reportGatewayKeyRejected?(key: string): void;
   providerConfig: ReturnType<typeof createHostProviderConfig>;
   bridge?: (() => SubscriptionBridge | null) | null;
+  expandRouteRef?: (routeId: string) => string[];
   logger: AutoReviewLogger;
 }) {
   const config = options.providerConfig;
@@ -50,7 +51,15 @@ export function createHostAutoReview(options: {
     if (!value) throw new Error('The ChatGPT subscription bridge needs the Host Codex runtime');
     return value;
   };
-  const { chain } = createHostAuxiliaryModelChain({ userDataDir: options.userDataDir });
+  const { settings, chain } = createHostAuxiliaryModelChain({
+    userDataDir: options.userDataDir,
+    expandRouteRef: options.expandRouteRef,
+  });
+  const listRouteGuardProviders = () => config.publicViews(Boolean(options.gateway?.credential));
+  const isOneShotRouteDisabled = createOneShotRouteGuard({
+    listRouteGuardProviders,
+    verdictForModelRoute: (...args) => verdictForModelRouteWithProviders(listRouteGuardProviders, ...args),
+  });
   const oneShot = createOneShotCandidates({
     createUsageRecorder: createAuxiliaryUsageRecorder,
     readClaudeApiKey: () => options.gateway?.credential || null,
@@ -89,11 +98,7 @@ export function createHostAutoReview(options: {
       const held = profileHold();
       if (held) throw holdError(held);
     };
-    const listRouteGuardProviders = () => config.publicViews(Boolean(options.gateway?.credential));
-    const isDisabled = createOneShotRouteGuard({
-      listRouteGuardProviders,
-      verdictForModelRoute: (...args) => verdictForModelRouteWithProviders(listRouteGuardProviders, ...args),
-    });
+    const isDisabled = isOneShotRouteDisabled;
     const review = createMemoryReviewOneShotCore({
       getMaker: options.getMaker,
       requestText: (maker, prompt, opts) => oneShot.requestUtilityText(maker, prompt, {
@@ -123,7 +128,7 @@ export function createHostAutoReview(options: {
     return contextResolver(request);
   };
   return {
-    reviewAutoPermissionAction, toolLoopReviewer, oneShot, chain, memoryReview,
+    reviewAutoPermissionAction, toolLoopReviewer, oneShot, settings, chain, isOneShotRouteDisabled, memoryReview,
     /** The desktop's setAutoReviewContextResolver. */
     setContextResolver(resolver: AutoReviewDelegate['prepareRequest']) { contextResolver = resolver; },
   };

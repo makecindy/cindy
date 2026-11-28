@@ -7,10 +7,12 @@ const state = vi.hoisted(() => ({
   snapshot: null as unknown,
   personal: false,
   pool: undefined as unknown,
+  pluginPool: undefined as unknown,
+  pluginPrefs: {} as Record<string, { suspended?: true }>,
   endpoint: 'region-a',
 }));
 const remote = vi.hoisted(() => vi.fn());
-const readers = vi.hoisted(() => ({ claude: vi.fn(), xai: vi.fn(), codex: vi.fn() }));
+const readers = vi.hoisted(() => ({ claude: vi.fn(), xai: vi.fn(), codex: vi.fn(), plugin: vi.fn() }));
 vi.mock('../../appSessionState.js', () => ({
   activeOwnerScopeKey: () => String(state.owner),
   isAppSessionBoundaryPending: () => false,
@@ -24,6 +26,12 @@ vi.mock('../../authManager.js', () => ({
 vi.mock('../../clientEndpointsService.js', () => ({ getClientEndpoint: () => state.endpoint }));
 vi.mock('../../maker-host/createDesktopProviderService.js', () => ({
   getDesktopProviderService: () => ({ listProviders: async () => state.providers }),
+}));
+vi.mock('../../maker-host/plugin-engine-prefs-store.js', () => ({
+  readPluginEnginePrefs: (key: string) => state.pluginPrefs[key] ?? {},
+}));
+vi.mock('../../plugin-engine-accounts/runtime.js', () => ({
+  readPluginEnginePoolAccountUsages: (...args: unknown[]) => readers.plugin(...args),
 }));
 vi.mock('../../maker-ipc/usage.js', () => ({
   readClaudeSubscriptionUsageSnapshotForDeviceLink: readers.claude,
@@ -64,7 +72,10 @@ beforeEach(() => {
   state.providers = [{ id: 'xd', connected: true, auth: { method: 'apiKey' } }];
   state.snapshot = null;
   state.pool = undefined;
+  state.pluginPool = undefined;
+  state.pluginPrefs = {};
   state.endpoint = 'region-a';
+  readers.plugin.mockReset().mockImplementation(async () => state.pluginPool);
   remote.mockReset().mockResolvedValue(ready);
 });
 afterEach(() => vi.useRealTimers());
@@ -174,16 +185,60 @@ describe('share quota projection', () => {
     expect(JSON.stringify(result)).not.toContain('secret');
   });
   // Regression: a shared multi-account subscription showed only its default account's quota.
-  // #10405, unit: no assignable accounts is not a single-account fallback. A pure
-  // historical alias still serves its original shared account after it moved elsewhere.
+  // Unit tier: merged subscription aliases now resolve their pinned serving account through
+  // readSubscriptionPoolAccountUsages, so an empty pool (paused/signed-out/disconnected) must
+  // return unavailable rather than falling back to the legacy single-account reader.
   it.each([false, true])('does not borrow old quota from an empty target pool (compatibility alias: %s)', async alias => {
     state.providers = [{ id: 'legacy', connected: true, auth: { method: 'oauth', native: 'claude' },
       ...(alias ? { subscriptionPoolAlias: true } : { subscriptionAccountPool: 'anthropic' }) }];
     state.pool = [];
+    readers.claude.mockClear();
     readers.claude.mockResolvedValue({ updatedAt: 1, sevenDay: { utilization: 25, resetsAt: Date.now() / 1000 + 3600 } });
     const result = await readProviderShareQuota('legacy');
-    expect(result.accounts[0]).toMatchObject(alias ? { state: 'ready', windows: [{ remainingPercent: 75 }] }
-      : { state: 'unavailable', windows: [] });
+    expect(result.accounts[0]).toMatchObject({ state: 'unavailable', windows: [] });
+    expect(readers.claude).not.toHaveBeenCalled();
+  });
+
+  // Regression (unit): shared created Claude subscriptions (`anthropic-sub-*`) previously
+  // misrouted into codexSource whenever providerWeeklyQuotaSource could not classify the
+  // provider view. Use the authoritative pool `kind` returned with each pooled usage entry,
+  // and classify opencode-go as unsupported instead of falling into Codex.
+  it('uses the authoritative pool kind for created subscriptions and marks opencode-go unsupported', async () => {
+    const resetsAt = Date.now() / 1000 + 3600;
+    state.providers = [{
+      id: 'anthropic-sub-a1b2c3d4',
+      connected: true,
+      auth: { method: 'oauth' },
+      subscriptionAccountPool: 'anthropic',
+    }];
+    state.pool = [{
+      kind: 'anthropic',
+      usage: { claudeUsage: { updatedAt: 10, fiveHour: { utilization: 20, resetsAt }, sevenDay: { utilization: 45, resetsAt } } },
+    }];
+    const claudeResult = await readProviderShareQuota('anthropic-sub-a1b2c3d4');
+    expect(claudeResult.accounts).toHaveLength(1);
+    expect(claudeResult.accounts[0]).toMatchObject({
+      state: 'ready',
+      windows: [
+        { kind: 'session', remainingPercent: 80 },
+        { kind: 'week', remainingPercent: 55 },
+      ],
+    });
+
+    state.owner++;
+    state.pool = undefined;
+    state.providers = [{
+      id: 'opencode-go-1',
+      connected: true,
+      auth: { method: 'apiKey' },
+      access: { kind: 'coding-plan', product: 'OpenCode Go' },
+      agents: ['claude-code'],
+      routing: {
+        'claude-code': { kind: 'anthropic-messages', baseUrl: 'https://opencode.ai/zen/go/v1' },
+      },
+    }];
+    expect(await readProviderShareQuotaAccount('opencode-go-1')).toMatchObject({ state: 'unsupported', windows: [] });
+    expect(readers.codex).not.toHaveBeenCalled();
   });
 
   // #10405 unit: a named target must expand its accounts too, selecting the quota family
@@ -333,4 +388,109 @@ it('keeps Kimi account quota outside the provider-sharing projection', async () 
   readers.codex.mockClear();
   expect(await readProviderShareQuotaAccount('kimi-coding')).toMatchObject({ state: 'unsupported', windows: [], balance: null });
   expect(readers.codex).not.toHaveBeenCalled();
+});
+
+// Regression (unit): shared plugin engines (e.g. Antigravity) previously returned hardcoded
+// `unsupported` even when the plugin reported usage; non-pooled Claude also returned cached
+// null/expired snapshots without awaiting a fresh read and cached `unavailable` for 15-30s.
+describe('shared plugin engine quota & Claude cold/unavailable recovery', () => {
+  it('projects Antigravity multi-window and pooled plugin engine quotas within the v1 insights contract', async () => {
+    const now = Date.now();
+    state.pluginPool = [
+      {
+        usage: {
+          updatedAt: now,
+          windows: [
+            { label: 'Gemini Models · weekly', remainingPercent: 89.2, resetsAt: now + 86_400_000, windowMinutes: 10_080 },
+            { label: 'Gemini Models · 5h', remainingPercent: 56.5, resetsAt: now + 3_600_000, windowMinutes: 300 },
+            { label: 'Claude and GPT models · weekly', remainingPercent: 84, resetsAt: now + 86_400_000, windowMinutes: 10_080 },
+            { label: 'Expired · 5h', remainingPercent: 0, resetsAt: now - 1_000, windowMinutes: 300 },
+          ],
+        },
+      },
+      {
+        usage: {
+          updatedAt: now,
+          balances: [{ currency: 'CNY', amount: '12.50' }],
+        },
+      },
+    ];
+    const quota = await readProviderShareQuota('acp-plugin:antigravity:agy');
+    expect(quota).toMatchObject({
+      group: true,
+      partial: false,
+      accounts: [
+        {
+          state: 'ready',
+          updatedAt: now,
+          balance: null,
+          windows: [
+            { kind: 'week', label: 'Gemini Models · weekly', remainingPercent: 89.2, windowMinutes: 10_080 },
+            { kind: 'session', label: 'Gemini Models · 5h', remainingPercent: 56.5, windowMinutes: 300 },
+            { kind: 'week', label: 'Claude and GPT models · weekly', remainingPercent: 84, windowMinutes: 10_080 },
+          ],
+        },
+        {
+          state: 'ready',
+          updatedAt: now,
+          windows: [],
+          balance: { remaining: 12.5, total: null, currency: 'CNY', resetsAt: null, pools: [] },
+        },
+      ],
+    });
+    const envelope = {
+      version: 1 as const,
+      capabilities: { quota: true, usage: false },
+      status: { quota: 'ready' as const, usage: 'disabled' as const },
+      quota,
+      usage: null,
+    };
+    expect(parseProviderShareInsights(envelope)).toEqual(envelope);
+  });
+
+  it('marks non-usage plugin engines unsupported and suspended engines unavailable without reading plugin usage', async () => {
+    state.pluginPool = 'unsupported';
+    expect(await readProviderShareQuota('acp-plugin:plain:agent')).toMatchObject({
+      group: false,
+      accounts: [{ state: 'unsupported', windows: [], balance: null }],
+    });
+
+    state.owner++;
+    readers.plugin.mockClear();
+    state.pluginPrefs['antigravity:agy'] = { suspended: true };
+    expect(await readProviderShareQuota('acp-plugin:antigravity:agy~abcd1234')).toMatchObject({
+      group: false,
+      accounts: [{ state: 'unavailable', windows: [], balance: null }],
+    });
+    expect(readers.plugin).not.toHaveBeenCalled();
+  });
+
+  it('awaits a fresh Claude read when the cached snapshot is empty/expired and does not stall unavailable for 15-30s', async () => {
+    vi.useFakeTimers();
+    const now = Date.now();
+    state.providers = [{ id: 'anthropic', connected: true, source: 'builtin', auth: { method: 'oauth', native: 'claude' } }];
+    readers.claude.mockReset()
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce({ updatedAt: now, fiveHour: { utilization: 25, resetsAt: now / 1000 + 3_600 } });
+    const first = await readProviderShareQuotaAccount('anthropic');
+    expect(first).toMatchObject({
+      state: 'ready',
+      updatedAt: now,
+      windows: [{ kind: 'session', remainingPercent: 75 }],
+    });
+    expect(readers.claude).toHaveBeenNthCalledWith(1, 'anthropic');
+    expect(readers.claude).toHaveBeenNthCalledWith(2, 'anthropic', { fresh: true });
+
+    state.owner++;
+    readers.claude.mockReset()
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce({ updatedAt: now + 4_000, sevenDay: { utilization: 40, resetsAt: (now + 4_000) / 1000 + 86_400 } });
+    expect((await readProviderShareQuota('anthropic')).accounts[0].state).toBe('unavailable');
+    await vi.advanceTimersByTimeAsync(3_001);
+    expect((await readProviderShareQuota('anthropic')).accounts[0]).toMatchObject({
+      state: 'ready',
+      windows: [{ kind: 'week', remainingPercent: 60 }],
+    });
+  });
 });

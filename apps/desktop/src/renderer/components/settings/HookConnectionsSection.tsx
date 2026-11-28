@@ -81,7 +81,6 @@ import { useSettingsSearchNavigation } from './SettingsSearchNavigation';
 import { useSettingsTarget } from './settingsTarget';
 import {
   TelegramBehaviorSettings,
-  TelegramGroupActivationSettings,
 } from './TelegramBehaviorSettings';
 
 /** 「官方」栏的渠道手风琴卡(同刻最多展开一张, 交互对齐「个人」栏)。 */
@@ -1506,10 +1505,6 @@ export function HookConnectionsSection({ companion, projectsOnly = false }: {
               className="mt-2 flex flex-col gap-5 border-t border-[var(--border-default)] pt-4"
             >
               <TelegramBehaviorSettings
-                source="official"
-                bindingId={cs.binding?.bindingId ?? undefined}
-              />
-              <TelegramGroupActivationSettings
                 source="official"
                 bindingId={cs.binding?.bindingId ?? undefined}
               />

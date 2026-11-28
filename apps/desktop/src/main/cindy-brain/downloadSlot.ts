@@ -7,6 +7,51 @@ import { DownloadError } from '../downloader/types.js';
 import type { createOutboundTransport } from '../maker-host/outbound-fetch.js';
 import { PluginDownloadCache } from './downloadCache.js';
 
+const MAX_DOWNLOAD_BYTES = 8 * 1024 ** 3;
+
+/**
+ * Whole-artifact size declared by a 200/206 response and the offset its body starts at, or
+ * null. Used only when the plugin omits `bytes`: the size must be known before any byte is
+ * written so the cache budget is reserved up front. Re-encoded bodies (the downloader asks
+ * for identity) are rejected rather than guessed.
+ */
+function declaredArtifactSize(response: Response): { total: number; start: number } | null {
+  const encoding = response.headers.get('content-encoding')?.trim().toLowerCase();
+  if (encoding && encoding !== 'identity') return null;
+  if (response.status === 206) {
+    const range = /^bytes (\d+)-\d+\/(\d+)$/.exec(response.headers.get('content-range') ?? '');
+    return range ? { total: Number(range[2]), start: Number(range[1]) } : null;
+  }
+  const length = response.headers.get('content-length')?.trim() ?? '';
+  return /^\d+$/.test(length) ? { total: Number(length), start: 0 } : null;
+}
+
+/**
+ * The downloader caps writes only by `expectedSize` / `maxBytes`, which an omitted size leaves
+ * at 8 GiB. A response may omit Content-Length (a 206 relies on Content-Range alone) and keep
+ * sending, so stop the body itself once it passes what the response declared: never write
+ * more than was reserved.
+ */
+function capResponseBody(response: Response, limit: number): Response {
+  if (!response.body) return response;
+  let seen = 0;
+  const body = response.body.pipeThrough(
+    new TransformStream<Uint8Array, Uint8Array>({
+      transform(chunk, controller) {
+        seen += chunk.byteLength;
+        if (seen > limit)
+          controller.error(new DownloadError('SIZE', 'Download exceeds the size the response declared'));
+        else controller.enqueue(chunk);
+      },
+    }),
+  );
+  return new Response(body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers: response.headers,
+  });
+}
+
 /** Verified public artifacts, in the requesting plugin's host-managed cache only. */
 export interface PluginDownloadDeps {
   guardedFetch: ReturnType<typeof createOutboundTransport>['guardedOutboundFetch'];
@@ -137,16 +182,21 @@ export class PluginDownloadSlot {
         Object.keys(p).some((k) => !['type', 'kind', 'id', 'url', 'sha256', 'bytes'].includes(k))
       )
         throw Error('Invalid download request');
+      // `bytes` is optional: publishers often sign only a SHA-256 (e.g. a release manifest),
+      // and looking the size up elsewhere can hit third-party rate limits. Without it the
+      // size comes from the response headers; the SHA-256 still decides what is accepted.
       if (
         typeof p.url !== 'string' ||
         p.url.length > 8192 ||
         typeof p.sha256 !== 'string' ||
         !/^[a-f0-9]{64}$/.test(p.sha256) ||
-        !Number.isSafeInteger(p.bytes) ||
-        (p.bytes as number) < 1 ||
-        (p.bytes as number) > 8 * 1024 ** 3
+        (p.bytes !== undefined &&
+          (!Number.isSafeInteger(p.bytes) ||
+            (p.bytes as number) < 1 ||
+            (p.bytes as number) > MAX_DOWNLOAD_BYTES))
       )
-        throw Error('URL, SHA-256 and exact size (up to 8 GiB) are required');
+        throw Error('URL and SHA-256 are required; a given size must be exact (up to 8 GiB)');
+      const declaredBytes = p.bytes as number | undefined;
       const ghost = this.deps.getGhost(id);
       if (!ghost?.enabled || !ghost.manifest.node || !ghost.manifest.network?.hosts.length)
         throw Error('Download requires node and network.hosts declarations');
@@ -196,6 +246,9 @@ export class PluginDownloadSlot {
       // Transport bytes may reset when a server ignores Range on retry. Keep
       // display progress stable without changing the bytes used for validation.
       let displayedLoaded = 0;
+      // The exact size: declared by the plugin, or learned from the first full/partial
+      // response and then required to stay the same for every reconnection.
+      let size = declaredBytes;
       const emit = (data: Record<string, unknown>) => {
         if (current())
           this.deps.send(id, {
@@ -220,7 +273,9 @@ export class PluginDownloadSlot {
               .update(JSON.stringify([scope, p.id, fingerprint]))
               .digest('hex'),
           );
-        await this.cache.reserve(path.dirname(root), dir, p.bytes as number);
+        // An unknown size starts with the entry overhead only; the request hook reserves the
+        // real size once the response declares it, before the downloader writes any byte.
+        await this.cache.reserve(path.dirname(root), dir, declaredBytes ?? 0);
         try {
           if ((await fs.realpath(dir)) !== path.resolve(dir))
             throw Error('Download cache must not contain symbolic links');
@@ -233,56 +288,99 @@ export class PluginDownloadSlot {
             }
           }
           if (!current() || controller.signal.aborted) throw Error('Download cancelled');
-          emit({ phase: 'queued', loaded: 0, total: p.bytes, speedBps: 0 });
+          emit({
+            phase: 'queued',
+            loaded: 0,
+            ...(declaredBytes === undefined ? {} : { total: declaredBytes }),
+            speedBps: 0,
+          });
           const watch = setInterval(() => {
             if (!current()) controller.abort();
           }, 250);
+          const reserveReplacement = async (bytes: number) => {
+            try {
+              await this.cache.reserve(path.dirname(root), dir, bytes, true);
+            } catch {
+              throw new DownloadError('SIZE', 'Download cache cannot reserve replacement space');
+            }
+          };
           // Plugin-supplied URLs: one SSRF-guarded hop at a time (DNS pinning, HTTPS only,
           // no ambient cookies), re-checking the owner before every connection.
           const request: DownloadRequest = async (url, init) => {
             controller.signal.throwIfAborted();
             // Cache hits never reach this callback. On a miss, the old target
             // remains beside the growing .part until the downloader publishes it.
-            try {
-              await this.cache.reserve(path.dirname(root), dir, p.bytes as number, true);
-            } catch {
-              throw new DownloadError('SIZE', 'Download cache cannot reserve replacement space');
-            }
-            return this.deps.guardedFetch(url, { ...init, credentials: 'omit' }, () => {
+            if (size !== undefined) await reserveReplacement(size);
+            const sent = await this.deps.guardedFetch(url, { ...init, credentials: 'omit' }, () => {
               controller.signal.throwIfAborted();
               // A revoked owner is final: do not let the downloader retry this hop.
               if (!isUrlAllowed(url))
                 throw new DownloadError('URL_POLICY', 'Download URL is not allowed');
             });
+            const status = sent.response.status;
+            if (declaredBytes !== undefined || (status !== 200 && status !== 206)) return sent;
+            // The downloader only writes after this returns, so a missing, oversized or
+            // changed size (the file was replaced between attempts) never reaches disk.
+            try {
+              const declared = declaredArtifactSize(sent.response);
+              if (
+                declared === null ||
+                declared.total < 1 ||
+                declared.total > MAX_DOWNLOAD_BYTES ||
+                declared.start >= declared.total ||
+                (size !== undefined && declared.total !== size)
+              )
+                throw new DownloadError('SIZE', 'Download response does not declare a usable size');
+              if (size === undefined) {
+                await reserveReplacement(declared.total);
+                size = declared.total;
+              }
+              return {
+                ...sent,
+                response: capResponseBody(sent.response, declared.total - declared.start),
+              };
+            } catch (error) {
+              await sent.response.body?.cancel().catch(() => {});
+              await sent.release?.();
+              throw error;
+            }
           };
           try {
             const result = await this.deps.download({
               url: p.url as string,
               targetPath,
               sha256: p.sha256 as string,
-              expectedSize: p.bytes as number,
-              maxBytes: p.bytes as number,
+              expectedSize: declaredBytes,
+              maxBytes: declaredBytes ?? MAX_DOWNLOAD_BYTES,
               timeout: { totalMs: 2 * 60 * 60 * 1000 },
               isUrlAllowed,
               request,
               signal: controller.signal,
               logger: { debug() {}, info() {}, warn() {}, error() {} },
               onProgress: (e) => {
-                displayedLoaded = Math.max(displayedLoaded, Math.min(e.loaded, p.bytes as number));
+                const total = size ?? e.total;
+                displayedLoaded = Math.max(displayedLoaded, Math.min(e.loaded, total ?? e.loaded));
                 emit({
                   phase: 'downloading',
                   ...e,
                   loaded: displayedLoaded,
-                  total: p.bytes,
-                  percent: (displayedLoaded / (p.bytes as number)) * 100,
+                  total,
+                  percent: total ? (displayedLoaded / total) * 100 : null,
                 });
               },
               onVerifying: () =>
-                emit({ phase: 'verifying', loaded: p.bytes, total: p.bytes, speedBps: 0 }),
+                emit({
+                  phase: 'verifying',
+                  ...(size === undefined ? {} : { loaded: size, total: size }),
+                  speedBps: 0,
+                }),
               onRetry: (e) => emit({ phase: 'retrying', attempt: e.attempt, delayMs: e.delayMs }),
             });
             if (!current() || controller.signal.aborted) throw Error('Download cancelled');
-            if (result.size !== p.bytes) throw Error('Downloaded size mismatch');
+            // A verified cache hit never connects, so only a fresh transfer has a learned size.
+            const expectedSize = declaredBytes ?? (result.fromCache ? undefined : size);
+            if (expectedSize !== undefined && result.size !== expectedSize)
+              throw Error('Downloaded size mismatch');
             const token = await this.cache.issue(dir, scope, id, approval);
             if (!current() || controller.signal.aborted) throw Error('Plugin changed');
             emit({

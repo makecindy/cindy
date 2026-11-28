@@ -168,8 +168,7 @@ export function PluginManagementHeader({
       role="tablist"
       aria-label={t('sidebar.horizontalTabbarAria')}
       style={WINDOW_NO_DRAG_STYLE}
-      height={stacked ? 38 : 32}
-      optionHeight={stacked ? 32 : 28}
+      density={stacked ? 'lg' : 'md'}
       optionClassName={cn('text-13', stacked && 'plugin-management-tab px-4')}
       value={activeTab}
       onValueChange={(tab) =>
@@ -394,7 +393,7 @@ export function CatalogHeading({ title, target, tabs, searching = false, anchor 
   );
   return <>
     <div ref={anchor} aria-hidden="true" />
-    <header className="plugin-catalog-heading" data-catalog-region="heading">
+    <header className="plugin-catalog-heading wallpaper-sticky-header" data-catalog-region="heading">
       {tabs ? (
         <div className="plugin-catalog-heading-navigation">
           {heading}
@@ -418,6 +417,8 @@ export function CatalogHeadingTabs({ value, onValueChange, installedCount, marke
       role="tablist"
       aria-label={t('settings.ghosts.page.secondaryTabsAria')}
       className="plugin-catalog-heading-tabs"
+      // Underline-styled heading tabs keep an explicit size so the underline covers the heading
+      // divider; density presets would lift it (DESIGN.md §4 Tabs).
       height={44}
       optionHeight={44}
       optionClassName="text-15"

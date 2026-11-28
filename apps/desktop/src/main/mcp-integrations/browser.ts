@@ -48,7 +48,11 @@ import {
 } from './browser-real-profile/index.js';
 import { createBrowserBackendIpcHandlers } from './browser-backend/settings-ipc.js';
 import { readCdpBrowserCommandLine, terminateManagedChromePortOwner } from './browser-backend/proxy-auth.js';
-import { openExtensionStoreInUserBrowser, startUserBrowser } from './browser-backend/open-extension-store.js';
+import {
+  isUserBrowserRunning,
+  openExtensionStoreInUserBrowser,
+  startUserBrowser,
+} from './browser-backend/open-extension-store.js';
 import { ExternalLinkHandoff } from './browser-backend/external-link-handoff.js';
 import { resolveBrowserScreenshot } from './browserScreenshotResolver.js';
 import { compressInlineImage } from './inlineImageCompressor.js';
@@ -347,6 +351,7 @@ function createUserBrowserBackend(): UserBrowserBackend {
   return (currentUserBrowserBackend = new UserBrowserBackend({
     getPageControl: () => userBrowserPageControlProvider(),
     startBrowser: () => startUserBrowser({ resolveBrowser: () => resolveSourceBrowserFromOs() }),
+    isBrowserRunning: () => isUserBrowserRunning({ resolveBrowser: () => resolveSourceBrowserFromOs() }),
     getUnavailableReason: () => userBrowserUnavailableReason?.() ?? 'plugin-missing',
     // Same upload roots as the sidebar browser: the session's own folders plus its artifacts.
     resolveUploadRoots: async (sessionId) => [

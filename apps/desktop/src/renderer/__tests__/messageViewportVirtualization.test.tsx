@@ -455,17 +455,26 @@ describe('message viewport content virtualization', () => {
     });
     expect(host.querySelectorAll('button').length).toBeLessThan(20);
   });
-  it('keeps the selected history mounted without reading the range on unchanged pointer or focus events', async () => {
+  it('keeps just the selected rows available across scrolling without rereading on pointer or focus', async () => {
     vi.useFakeTimers();
     await act(async () => root.render(<Fixture restore />));
     const outside = host.appendChild(document.createElement('button'));
     const selection = document.getSelection()!;
     await act(async () => {
       const range = document.createRange();
-      range.selectNodeContents(row(40));
+      range.setStart(row(40).querySelector('button')!.firstChild!, 0);
+      range.setEndAfter(row(42).querySelector('button')!);
       selection.addRange(range);
       vi.runOnlyPendingTimers();
     });
+    expect(scroller().querySelectorAll('button').length).toBeLessThan(20);
+    await act(async () => {
+      scroller().scrollTop = 0;
+      scroller().dispatchEvent(new Event('scroll'));
+    });
+    await flushFrames();
+    expect(row(0).querySelector('button')).not.toBeNull();
+    expect(selection.toString()).toBe('Row 40Row 41Row 42');
     const readSelection = vi.spyOn(document, 'getSelection');
     await act(async () => {
       outside.dispatchEvent(new Event('pointerdown', { bubbles: true }));
@@ -476,11 +485,14 @@ describe('message viewport content virtualization', () => {
     });
     // #12504: selection getters can synchronously flush Chromium layout.
     expect(readSelection).not.toHaveBeenCalled();
-    expect(scroller().querySelectorAll('button')).toHaveLength(80);
+    expect(scroller().querySelectorAll('button').length).toBeLessThan(20);
     await act(async () => {
       selection.removeAllRanges();
+      document.dispatchEvent(new Event('selectionchange'));
       vi.runOnlyPendingTimers();
     });
+    await flushFrames();
+    expect(row(40).querySelector('button')).toBeNull();
     expect(scroller().querySelectorAll('button').length).toBeLessThan(20);
   });
   it('keeps page-text access active when a selection ends, then releases independently', async () => {

@@ -34,6 +34,7 @@ import { decideCindyCompression } from './cindyContextCompression.js';
 import {
   buildHandoff,
   type HandoffCoverage,
+  type BuildHandoffOptions,
   extractPlainText,
   prependNoteToWireUserMessage,
   type HandoffSourceMessage,
@@ -390,7 +391,7 @@ function replayWireWithSourceNotes(
 
 function isExternalDispatchOwner(agentMeta: Record<string, unknown> | null | undefined): boolean {
   if (!agentMeta) return false;
-  if (agentMeta.hookSource) return true;
+  if (agentMeta.hookSource || agentMeta.imSource) return true;
   const origin = agentMeta.origin;
   if (!origin || typeof origin !== 'object' || Array.isArray(origin)) return false;
   const kind = (origin as { kind?: unknown }).kind;
@@ -399,8 +400,9 @@ function isExternalDispatchOwner(agentMeta: Record<string, unknown> | null | und
   return typeof kind === 'string' && kind.length > 0;
 }
 
-function normalizeOverflowDbAgentKind(value: string): 'cc' | 'codex' | 'pi' {
-  if (value === 'codex' || value === 'pi') return value;
+function normalizeOverflowDbAgentKind(value: string): 'cc' | 'codex' | 'pi' | 'acp' {
+  // A plugin engine task's rebuild records its own engine: forks route by it, never as Claude Code.
+  if (value === 'codex' || value === 'pi' || value === 'acp') return value;
   return 'cc';
 }
 
@@ -528,7 +530,8 @@ export interface ContextOverflowRolloverDeps {
       reason: ContextRebuildReason;
       handoffCoverage?: HandoffCoverage;
       sourceUserClientId: string | null;
-      sourceAgentKind?: 'cc' | 'codex' | 'pi';
+      /** 'acp' = plugin engine task. */
+      sourceAgentKind?: 'cc' | 'codex' | 'pi' | 'acp';
       sourceModel?: string | null;
       sourceProviderId?: string | null;
       expectedClearedAt?: number | null;
@@ -682,6 +685,7 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
     target: NativeSessionRecoveryTarget | 'retain-route' | null,
     assertCanCommit: () => void,
     signal?: AbortSignal,
+    retry?: { userClientId: string; onHandoff(full: string, forRetry: string): void },
   ): Promise<void>;
   prepareModelWindowSwitch(
     sessionId: string,
@@ -757,12 +761,21 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
     if (unsupportedOption && (sessionRow.source !== 'desktop' || sessionRow.agentKind !== 'pi')) return false;
     if (checkExternalOwner && sessionRow.agentKind !== 'codex') return false;
     if (oversized && !canContinueContextRecovery(sessionRow)) return false;
+    // A plugin engine cannot shrink its own history; the task continues in a fresh session on the same
+    // engine with a handoff (docs/plans/acp-plugin-bridge.md). getLiveSession hides plugin engine
+    // runtimes, so the busy check and the retirement read the runtime itself; without that reader
+    // nothing is rebuilt (a rebuild beside a still-open runtime would hand over into the old session).
+    const pluginEngine = sessionRow.agentKind === 'acp';
+    if (pluginEngine && !deps.getRuntimeSession) return false;
+    // The IM owner supplies approval during its own send; generic replay cannot restore that policy.
+    if (pluginEngine && (externalOwnerAtFailure || deps.hasExternalRecoveryOwner?.(sessionId))) return false;
 
     return deps.withCloseSuppressed(sessionId, async () => {
       const live = deps.getLiveSession(sessionId);
+      const runtime = pluginEngine ? deps.getRuntimeSession?.(sessionId) : live;
       // Sampled while the source runtime is still live; the replay below goes through the send transaction.
       const sendToSession = deps.sendToSessionHint?.(sessionId);
-      if (live?.isTurnRunning() || (live?.listBackgroundTasks?.().length ?? 0) > 0) {
+      if (runtime?.isTurnRunning() || (runtime?.listBackgroundTasks?.().length ?? 0) > 0) {
         deps.log.warn('context overflow rollover skipped: turn still running', { sessionId });
         return false;
       }
@@ -941,7 +954,7 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
         continuedInputs.set(sessionId, plan.sourceUserClientId);
       }
 
-      if (live) await deps.closeSession(sessionId);
+      if (runtime) await deps.closeSession(sessionId);
       signal?.throwIfAborted();
       if (checkExternalOwner && deps.hasExternalRecoveryOwner?.(sessionId)) return false;
       const sourceWire = persistedUserContentToWireMessage(
@@ -971,7 +984,7 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
       }, signal);
       signal?.throwIfAborted();
       deps.setPendingHandoff(sessionId, handoff, handoffGeneration);
-      if (plan.skipGenericReplay) {
+      if (plan.skipGenericReplay || (pluginEngine && deps.hasExternalRecoveryOwner?.(sessionId))) {
         deps.log.info('overflow rebuilt; external owner must retry send', {
           sessionId,
           sourceUserClientId: plan.sourceUserClientId,
@@ -1184,8 +1197,12 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
     if (!sessionRow || sessionRow.status === 'deleted') return false;
     // SSH only; device-link 会话在被控桌面是本地 session,继续换窗。
     if (sessionRow.remoteHostId) return false;
+    // Same plugin engine rule as runRecover: busy check and retirement read the runtime itself.
+    const pluginEngine = sessionRow.agentKind === 'acp';
+    if (pluginEngine && !deps.getRuntimeSession) return false;
     const live = deps.getLiveSession(sessionId);
-    if (live?.isTurnRunning() || (live?.listBackgroundTasks?.().length ?? 0) > 0) return false;
+    const runtime = pluginEngine ? deps.getRuntimeSession?.(sessionId) : live;
+    if (runtime?.isTurnRunning() || (runtime?.listBackgroundTasks?.().length ?? 0) > 0) return false;
     const accountHandoff = await deps.needsNativeSessionHandoff?.(sessionId, sessionRow) ?? false;
     if (!sessionRow.sdkSessionId && !accountHandoff) return false;
     // All companion lanes use the ordinary Session recovery boundary. Healthy
@@ -1274,7 +1291,7 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
     // 关掉当前 live handle。调用方必须在解析发送目标之前调用 prepare,
     // 再 getSession / createSession;peek 之后对旧对象 send 会打到已关闭实例。
     signal.throwIfAborted();
-    if (live) await deps.closeSession(sessionId);
+    if (runtime) await deps.closeSession(sessionId);
     signal.throwIfAborted();
     const label = engineLabelForOverflow(sessionRow.agentKind);
     const { handoff, handoffCoverage } = buildHandoff(handoffMessages, {
@@ -1308,7 +1325,7 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
   };
 
   return {
-    async prepareNativeSessionRecovery(sessionId, target, assertCanCommit, signal) {
+    async prepareNativeSessionRecovery(sessionId, target, assertCanCommit, signal, retry) {
       if (inFlight.has(sessionId)) throw new Error('Native session recovery is already in progress');
       const controller = target === 'retain-route' ? new AbortController() : undefined;
       if (controller) signal = signal ? AbortSignal.any([signal, controller.signal]) : controller.signal;
@@ -1351,7 +1368,7 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
           // 显式重启(target=null)对伙伴的每段对话一视同仁: 主任务与 IM / 群专线按空闲间隔
           // 刷新同一口径写交接(isBotChatContext)。换路由恢复仍只认主任务。
           const companionChat = target ? isCanonicalBotContext(row) : isBotChatContext(row);
-          const { handoff, handoffCoverage } = buildHandoff(source, {
+          const handoffOptions: BuildHandoffOptions = {
             fromLabel: engineLabelForOverflow(row.agentKind),
             toLabel: engineLabelForOverflow(row.agentKind),
             sessionId,
@@ -1361,7 +1378,14 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
             reason: 'native-session-recovery',
             companion: companionChat,
             ...(await companionRecall(sessionId, companionChat)),
-          });
+          };
+          const { handoff, handoffCoverage } = buildHandoff(source, handoffOptions);
+          // Keep the full recovery record for cancellation, restart and later inputs.
+          // Only this retry is about to supply the same accepted user input itself.
+          const retrySource = target === 'retain-route' && retry
+            ? source.find(message => message.role === 'user' && message.clientId === retry.userClientId)
+            : undefined;
+          const retryHandoff = retrySource ? buildHandoff(source.filter(message => message !== retrySource), handoffOptions).handoff : undefined;
           assertReady();
           // Durable handoff, SDK reset and complete target route succeed or fail together.
           // No user turn or tool call is replayed by this control-plane operation.
@@ -1379,6 +1403,7 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
           if (signal) commitArgs[3] = signal;
           await deps.commitRebuild(...commitArgs);
           deps.setPendingHandoff(sessionId, handoff, generation);
+          if (retryHandoff !== undefined) retry?.onHandoff(handoff, retryHandoff);
           deps.onRebuilt?.(sessionId);
         });
       } finally {
@@ -1432,7 +1457,7 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
           && deps.hasExternalRecoveryOwner?.(sessionId)) return false;
         // Terminal subscribers may release a headless/IM marker immediately.
         // Keep learning, but never take over that turn's replay after an await.
-        const externalOwnerAtFailure = isUnsupportedRequestOptionErrorData(errorData)
+        const externalOwnerAtFailure = (isUnsupportedRequestOptionErrorData(errorData) || isContextOverflowErrorData(errorData))
           && (deps.hasExternalRecoveryOwner?.(sessionId) ?? false);
         const claim = inFlight.get(sessionId) ?? new AbortController();
         inFlight.set(sessionId, claim);

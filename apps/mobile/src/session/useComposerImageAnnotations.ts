@@ -25,6 +25,7 @@ import { useCallback, useMemo, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Alert, Platform } from 'react-native';
 import * as FileSystem from 'expo-file-system/legacy';
+import { parseBase64DataUrl } from '@cindy/maker-shared';
 import { summarizeAnnotationRegions } from '@cindy/maker-shared/image-annotation';
 import { useAnnotationBurnIn } from '@/session/AnnotationBurnInWebView';
 import {
@@ -354,12 +355,12 @@ export function useComposerImageAnnotations(
     displayUri: string,
     mimeTypeHint: string | undefined,
   ): Promise<{ fileUri: string; mimeType: string; size: number }> => {
-    const dataMatch = /^data:(image\/[a-z0-9+.-]+);base64,(.+)$/i.exec(displayUri);
+    const dataMatch = parseBase64DataUrl(displayUri, /^data:(image\/[a-z0-9+.-]+);base64$/i);
     if (dataMatch) {
-      const mimeType = dataMatch[1].toLowerCase();
+      const mimeType = dataMatch.header[1].toLowerCase();
       await ensureDir(srcDir);
       const fileUri = `${srcDir}src-${nextFileTag()}.${extForMime(mimeType)}`;
-      await FileSystem.writeAsStringAsync(fileUri, dataMatch[2], {
+      await FileSystem.writeAsStringAsync(fileUri, dataMatch.payload, {
         encoding: FileSystem.EncodingType.Base64,
       });
       return finalizeSource(fileUri, mimeType);

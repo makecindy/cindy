@@ -128,6 +128,7 @@ export function parseModelsListResponse(
     return null;
   })();
   if (!list) return null;
+  const glmModels = /^https:\/\/open\.bigmodel\.cn\/api\/paas\/v4\/models\/?(?:\?[^#]*)?$/.test(sourceUrl ?? '');
   const copilot = sourceUrl && copilotModelsUrl(sourceUrl);
   const magpieCatalog = list.some(item => !!item && typeof item === "object" && !!discoveredMagpieSource(item as Record<string, unknown>));
   const openCode = openCodeModelsChannel(sourceUrl);
@@ -265,6 +266,7 @@ export function parseModelsListResponse(
     const endpoints = record.supported_endpoints;
     const copilotApi = copilot && Array.isArray(endpoints)
       ? (endpoints.includes('/responses') ? 'openai-responses' : null) : undefined;
+    const glmRealtime = glmModels && id === 'glm-realtime-flash';
     const discoveredMetadata = { ...nestedLimits, ...pickModelMetadata(record), ...pickModelMetadata({
       nativeApi: record.nativeApi !== undefined ? record.nativeApi
         : record.native_api !== undefined ? record.native_api : copilotApi,
@@ -273,9 +275,10 @@ export function parseModelsListResponse(
       )
         ? { name }
         : {}),
-      mode: record.mode ?? info.mode ?? elevenLabsMode ?? (openRouterSpeech ? 'audio_speech' : undefined) ??
+      mode: record.mode ?? info.mode ?? (glmRealtime ? 'realtime' : undefined) ?? elevenLabsMode ?? (openRouterSpeech ? 'audio_speech' : undefined) ??
         (isVercel && record.type === 'language' ? 'chat' : isVercel ? record.type : undefined),
-      modalities,
+      modalities: modalities ?? (glmRealtime && (record.mode ?? info.mode ?? 'realtime') === 'realtime'
+        ? { input: ['audio', 'text'], output: ['audio', 'text'] } : undefined),
       officialDocs: record.officialDocs,
       description: record.description,
       group: record.group,
