@@ -356,6 +356,7 @@ import { SendDeliveryTip } from './SendDeliveryTip';
 import { usePromptRecommendationPreference } from '@/hooks/usePromptRecommendationPreference';
 import { usePromptRecommendationPrediction } from '@/hooks/usePromptRecommendationPrediction';
 import { predictPromptUntilDisabled } from '@/lib/predictPromptUntilDisabled';
+import { promptRecommendationAgentKind } from '@/lib/promptRecommendationAgentKind';
 import {
   dismissPromptRecommendation,
   usePromptRecommendation,
@@ -9358,20 +9359,28 @@ export function ChatInput({
     mutationLocked: composerMutationLocked || showStopButton,
   };
   const recommendationComposerReady = isComposerReadyForPromptRecommendation(recommendationComposerState);
+  // 预测用的「已确认会话引擎」：插件引擎(ACP)任务没有内置 Harness 身份(runtimeAgentKind 为
+  // null)，但会话已确认为 ACP 时 pluginEngineSession 在。启用条件、回调入口与 IPC 参数
+  // 共用这一个值；两者都没有 = 会话信息未就绪，等待，不拿模型选择器默认值补成 claude-code
+  // (#13694：错标的请求会被主进程按 DB 的 dbAgentKind 拒绝)。
+  const predictionAgentKind = promptRecommendationAgentKind({
+    isPluginEngineSession: !!pluginEngineSession,
+    runtimeAgentKind,
+  });
   usePromptRecommendationPrediction({
     sessionId,
     recommendation,
     canPredict:
       recommendationComposerReady && !!editor && !editor.isDestroyed &&
-      deviceLinkDeviceId !== undefined && runtimeAgentKind != null &&
+      deviceLinkDeviceId !== undefined && predictionAgentKind != null &&
       hasPredictionMessages && !remoteHostId,
     predict: async (revision, isCurrent) => {
-      if (!sessionId || runtimeAgentKind == null) return null;
+      if (!sessionId || predictionAgentKind == null) return null;
       // 素材仍由 Main 从 DB 读取；远程任务经 sticky 路由交给被控电脑。
       const result = await predictPromptUntilDisabled(makerApiForSticky(sessionId), {
         sessionId,
         // 插件引擎任务按 'acp' 请求：推荐只用辅助模型链，主进程据此核对任务没有换引擎。
-        agentKind: pluginEngineSession ? 'acp' : runtimeAgentKind,
+        agentKind: predictionAgentKind,
         messages: (messages ?? []).slice(-20).map(({ role, content }) => ({ role, content })),
         workingDir: workingDirRef.current ?? undefined,
         turnGen: turnGenRef.current,
@@ -9609,7 +9618,12 @@ export function ChatInput({
       {(voiceInput.lastError || showSpeakerFilteredNotice || rejections.length > 0) && (
         <div className="pointer-events-none absolute bottom-full left-0 right-0 z-page-float mb-2 flex flex-col items-center gap-1 px-3">
           {voiceInput.lastError ? (
-            <VoiceInputStatusNotice message={voiceInput.lastError} />
+            <VoiceInputStatusNotice
+              message={voiceInput.lastError}
+              actionLabel={voiceInput.canRetryRecognition ? t('voiceInputOverlay.retryRecognition') : undefined}
+              onAction={voiceInput.canRetryRecognition ? () => { voiceInput.retryRecognition(); } : undefined}
+              actionDisabled={voiceInput.isBusy}
+            />
           ) : showSpeakerFilteredNotice ? (
             <VoiceInputStatusNotice tone="info" message={t('voiceInputOverlay.speakerFiltered')} />
           ) : null}

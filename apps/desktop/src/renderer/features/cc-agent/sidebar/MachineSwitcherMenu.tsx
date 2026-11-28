@@ -4,7 +4,7 @@
  * 2026-08-13 用户定稿(新设计,显式推翻两条 2026-07 旧定稿):
  *   - 「全部任务」段头与设备下拉**合并**——标题文字反映当前范围(全部任务 /
  *     本机任务 / 设备名 / N 台机器),点击标题弹出「所有 / 本机 / 各远程设备」
- *     切换 + 「远程连接设置」/「侧边栏显示设置」入口。顶部导航不再有独立的远程
+ *     切换 + 「远程连接设置」入口。顶部导航不再有独立的远程
  *     机器行,省一行;
  *     标题不再撒谎(旧结构下范围收窄后段头仍写「全部任务」)。
  *     (推翻 2026-07 「切换器收进 SidebarTopNav 末行、不挂段头」——当年是段头
@@ -13,10 +13,7 @@
  *     标题,hover 扫过就弹菜单太吵;段级收起同时取消,标题的点击语义让给范围切换。
  *
  * 无任何相关远程机器时标题仍是「全部任务 ▾」(2026-08-13 用户裁决:箭头保留),
- * 菜单不出现设备列表,只留「远程连接设置」与「侧边栏显示设置」——单机用户看不到
- * 设备概念,但仍能从段头进这两项。范围标题恒在后,断网逃生不再靠「假装还有
- * 远程设备」画出机器列表——目录空了就只留两项设置,用户从「远程连接设置」
- * 或范围标题本身回到本机。
+ * 菜单只保留「远程连接设置」。设备目录清空后同样不展示设备列表。
  *
  * 机器选择:**默认单选、多选框另走多选**(2026-07 用户定稿):
  *   - 「所有」→ 重置回默认(本机 + 全部远程),菜单关闭;
@@ -55,7 +52,6 @@ import {
   Monitor,
   MonitorCog,
   MonitorSmartphone,
-  SlidersHorizontal,
 } from 'lucide-react';
 import { useMatch, useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
@@ -89,12 +85,7 @@ import { MENU_ITEM_CLASS, MENU_ROW_CLASS } from './menuStyles';
 const SCOPE_TITLE_CLASS =
   'text-sm leading-5 font-medium text-[var(--sidebar-list-muted)] transition-colors hover:text-[var(--sidebar-nav-text)]';
 
-export function MachineSwitcherMenu({
-  onOpenDisplaySettings,
-}: {
-  /** 打开段头同一份「侧边栏显示设置」菜单;不传则不渲染该入口。 */
-  onOpenDisplaySettings?: () => void;
-} = {}): ReactNode {
+export function MachineSwitcherMenu(): ReactNode {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const { devices, selectedDeviceId, select, toggle } = useMachineSwitcher();
@@ -151,19 +142,6 @@ export function MachineSwitcherMenu({
         <MonitorCog size={14} strokeWidth={2} className="shrink-0 opacity-70" />
         <span className="truncate">{t('ccAgent.sidebar.machineSwitcher.remoteSettings')}</span>
       </DropdownMenuItem>
-      {onOpenDisplaySettings ? (
-        <DropdownMenuItem
-          className={MENU_ITEM_CLASS}
-          onSelect={() => {
-            // 等本菜单关完、当前指针事件走完再开显示设置,避免两个 Radix
-            // 菜单抢焦点、或同一次 click 被新菜单当成点外部而立刻关掉。
-            window.setTimeout(() => onOpenDisplaySettings(), 0);
-          }}
-        >
-          <SlidersHorizontal size={14} strokeWidth={2} className="shrink-0 opacity-70" />
-          <span className="truncate">{t('ccAgent.sidebar.organizeSidebar')}</span>
-        </DropdownMenuItem>
-      ) : null}
     </>
   );
 

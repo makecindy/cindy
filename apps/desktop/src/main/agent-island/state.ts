@@ -14,6 +14,7 @@ import {
   type InteractionRequest,
 } from '@cindy/maker-core';
 import { DEFAULT_TOOL_ROW_WORDING, type ToolRowWording } from '@cindy/maker-shared/message-presentation';
+import { isSyntheticTriggerText } from '@cindy/maker-shared/synthetic-trigger';
 import { isTurnContinuationBoundaryEvent } from '@cindy/maker-shared/turn-continuation';
 import { sessionProjectDirectory } from '@cindy/maker-shared/worktree-paths';
 
@@ -577,7 +578,7 @@ export function applyAgentIslandUserPrompt(
   now: number,
 ): boolean {
   const text = normalizeActivityText(prompt);
-  if (!text) return false;
+  if (!text || isSyntheticTriggerText(text)) return false;
   const session = getOrCreateSession(state, meta, now);
   applyMeta(session, meta);
   markSessionRunning(state, session, now);

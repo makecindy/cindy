@@ -360,7 +360,7 @@ export function createHostService(deps) {
         return { status: 200, body: await deps.input.projection(String(body.sessionId ?? '')) };
     }
     if (url.pathname === '/api/input/enqueue') {
-        return { status: 200, body: await deps.input.enqueue(String(body.sessionId ?? ''), body.item ?? {}) };
+        return { status: 200, body: await deps.input.enqueue(String(body.sessionId ?? ''), body.item ?? {}, body.options) };
     }
     if (url.pathname === '/api/input/stop') {
         return { status: 200, body: await deps.input.stop(String(body.sessionId ?? '')) };
