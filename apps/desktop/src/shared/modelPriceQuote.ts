@@ -547,10 +547,14 @@ export function subscriptionDirectPriceQuote(
 }
 
 /**
- * Reference value for a plugin engine's turn (agentKind `acp`). The plugin owns the account and
- * its billing, so Cindy only knows the model id it reported. When exactly one provider in the
- * Model Registry lists that id with an official tariff, that tariff values the tokens as a
- * value estimate (like subscription turns); an unknown or ambiguous id gets no value.
+ * Reference value for plugin engine usage (agentKind `acp`). The plugin owns the account and its
+ * billing, so Cindy only knows the model id it reported. When exactly one provider in the Model
+ * Registry lists that id, that provider's official tariff values the tokens as a value estimate
+ * (like subscription turns); an unknown id, or one listed by several providers, gets no value.
+ *
+ * Plugin usage is only kept as daily totals, without request boundaries, so a context-length or
+ * priority tier cannot be chosen from it: the quote keeps only the base tier (the band that starts
+ * at zero input tokens). Long requests are then valued low, never high.
  */
 export function pluginEngineReferencePriceQuote(
   modelId: string,
@@ -565,11 +569,17 @@ export function pluginEngineReferencePriceQuote(
       if (route.providerId !== 'xd' && route.modelId?.toLowerCase() === id) providers.add(route.providerId);
     }
   }
-  const quotes = [...providers].flatMap((providerId) => {
-    const quote = providerReferencePriceQuote(providerId, modelId, registry, { at, officialOnly: true });
-    return quote ? [quote] : [];
-  });
-  if (quotes.length !== 1) return undefined;
-  return { ...quotes[0], modelId, source: 'subscription-reference' };
+  if (providers.size !== 1) return undefined;
+  const [providerId] = providers;
+  const quote = providerReferencePriceQuote(providerId, modelId, registry, { at, officialOnly: true });
+  if (!quote) return undefined;
+  const { inputTokenPriceBands, priority: _priority, ...rest } = quote;
+  const base = inputTokenPriceBands?.find(band => band.minInputTokens === 0);
+  if (inputTokenPriceBands?.length && !base) return undefined;
+  const priced: ModelPriceQuote = { ...rest, modelId, source: 'subscription-reference' };
+  for (const field of ['inputPerMtok', 'outputPerMtok', 'cacheReadPerMtok', 'cacheCreatePerMtok', 'cacheCreate1hPerMtok'] as const) {
+    const value = base?.[field];
+    if (value !== undefined) priced[field] = value;
+  }
+  return priced;
 }
-

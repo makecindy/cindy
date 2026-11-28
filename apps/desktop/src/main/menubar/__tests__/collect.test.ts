@@ -299,6 +299,21 @@ describe('collectMenubarInputs', () => {
     expect(collected.tasks[0].valueToday).toBeCloseTo(0.1);
   });
 
+  // Unit regression (#13757 review): one model used through a plugin engine and a built-in engine
+  // on the same day. Each task must take its own engine's average rate, not the mixed one.
+  it('prices plugin and built-in tasks of the same model at their own engine rate', async () => {
+    const input = usage([task('builtin'), task('plugin')]);
+    const estimate = { amount: 2, currency: 'USD', approximate: true, kind: 'value-estimate' } as const;
+    input.modelDaily.push({ ...input.modelDaily[0], agentKind: 'acp', money: estimate, apiMoney: { ...estimate, amount: 0 }, subscriptionEstimateMoney: estimate });
+    const collected = await collectMenubarInputs(deps({
+      readUsage: async () => input,
+      sessionRow: async (sessionId) => ({ title: sessionId, model: 'gpt-5.5', agentKind: sessionId === 'plugin' ? 'acp' : 'codex' }),
+    }));
+    const value = (sessionId: string) => collected.tasks.find(entry => entry.sessionId === sessionId)?.valueToday;
+    expect(value('builtin')).toBeCloseTo(0.1);
+    expect(value('plugin')).toBeCloseTo(0.198);
+  });
+
   it('keeps the other sources when one reader fails', async () => {
     const errors: string[] = [];
     const collected = await collectMenubarInputs(deps({ onError: (scope) => errors.push(scope) }));

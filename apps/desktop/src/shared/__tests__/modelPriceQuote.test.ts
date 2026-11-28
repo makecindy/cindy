@@ -348,5 +348,25 @@ describe('pluginEngineReferencePriceQuote', () => {
     expect(otherPrice).toBeDefined();
     expect(pluginEngineReferencePriceQuote('gemini-4-carbon', duplicated)).toBeUndefined();
   });
+
+  // #13757 review: a second provider without a price still makes the id ambiguous.
+  it('gives no price when another provider lists the id without a tariff', () => {
+    const carbon = registry.models.find(entry => entry.id === 'google-gemini-api/gemini-4-carbon')!;
+    const duplicated = {
+      ...registry,
+      models: [...registry.models, { id: 'unpriced/gemini-4-carbon', name: carbon.name, status: 'active', routes: [{ providerId: 'unpriced', modelId: 'gemini-4-carbon', agents: ['codex'] }] }],
+    } as ModelRegistry;
+    expect(providerReferencePriceQuote('unpriced', 'gemini-4-carbon', duplicated, { officialOnly: true })).toBeUndefined();
+    expect(pluginEngineReferencePriceQuote('gemini-4-carbon', duplicated)).toBeUndefined();
+  });
+
+  // #13757 review: plugin usage is a daily total, so a long-context band must never be chosen
+  // from it. gpt-6.2-sol has <272k and >=272k input bands; only the base band is kept.
+  it('keeps only the base tier because plugin usage has no request boundaries', () => {
+    const quote = pluginEngineReferencePriceQuote('gpt-6.2-sol', registry, '2026-11-28');
+    expect(quote).toMatchObject({ inputPerMtok: 2, outputPerMtok: 10, cacheReadPerMtok: 0.1 });
+    expect(quote?.inputTokenPriceBands).toBeUndefined();
+    expect(quote?.priority).toBeUndefined();
+  });
 });
 
