@@ -1967,6 +1967,7 @@ async function createVoiceInputProvider(
     const directApiKey = readElevenLabsApiKey();
     if (!directApiKey) throw new Error(profile.missingCredentialMessage);
     return new ElevenLabsScribeProvider({
+      model: profile.model,
       apiKey: directApiKey,
       baseUrl: readElevenLabsBaseUrl(),
       sourceLanguage,
