@@ -129,6 +129,7 @@ export interface ListingCoalesceCallerOptions {
   beforeDispatch?: () => void;
   canRerouteBeforeWrite?: () => boolean;
   noResultCache?: boolean;
+  onRequestWritten?: () => void;
 }
 
 export interface ListingCoalesceExecutionContext {
@@ -175,7 +176,8 @@ export class RemoteListingReadCoalescer {
     ) => Promise<InvokeResultPayload>,
     runWire: (ctx: ListingCoalesceExecutionContext) => Promise<InvokeResultPayload>,
   ): Promise<InvokeResultPayload> | null {
-    if (options?.noResultCache || priority === 'interactive' || isScopedPeer(dst)) return null;
+    // A caller with its own write receipt needs its own request (a joined read would not report its write).
+    if (options?.noResultCache || options?.onRequestWritten || priority === 'interactive' || isScopedPeer(dst)) return null;
     const normalized = normalizeRemoteListingArgsKey(payload.channel, payload.args, {
       allowedChannels: CONTROLLER_COALESCIBLE_LISTING_CHANNELS,
     });

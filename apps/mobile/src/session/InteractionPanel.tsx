@@ -9,6 +9,8 @@ import { bytesToHex } from '@noble/hashes/utils';
 import { InputHandoffCard } from '@/inputHandoff/InputHandoffCard';
 import { parseInputHandoffSnapshotLike } from '@/inputHandoff/inputHandoffNative';
 import { mobilePluginSetupActions } from '@/plugins/pluginSetupActions';
+import { isPluginMarketSourceIdentity } from '@/plugins/pluginManagementTypes';
+import { declaredTaskCardConsent, pluginConsentAllowance } from '@/plugins/pluginConsentAllowance';
 import { usePaneViewport } from '@/platform/AdaptiveWindowContext';
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -823,10 +825,12 @@ function PermissionCard({
   const isMcpUrl = item.request.toolName === 'mcp_url';
   const url = (item.request.input as { url?: string })?.url;
   const { t, i18n: i18nInstance } = useTranslation();
-  const presentation = useMemo(
-    () => buildPermissionReviewPresentation(item.request, mobilePresentationLocalizer),
-    [i18nInstance.language, item.request],
-  );
+  // Host-owned plugin install card: never hand the raw input to the generic previews (they serialize it whole). The
+  // source is shown only as the checked repository line below; its sourceId or a malformed value never appears.
+  const { displayRequest, presentation } = useMemo(() => {
+    const displayRequest = safePluginInstallRequest(item.request);
+    return { displayRequest, presentation: buildPermissionReviewPresentation(displayRequest, mobilePresentationLocalizer) };
+  }, [i18nInstance.language, item.request]);
   const companion = useContext(CompanionInteractionContext);
   const companionIdentity = useContext(CompanionIdentityContext);
   const hung = useContext(CompanionHungContext);
@@ -834,7 +838,25 @@ function PermissionCard({
   const requestId = readRequestId(item);
   const [armedDecision, setArmedDecision] = useState<'allow-once' | 'always-allow' | null>(null);
   const isPluginInstall = item.request.toolName === 'cindy.plugin.install';
-  const isFirstInstall = isPluginInstall && (item.request.input as { operation?: unknown } | null)?.operation === 'install';
+  const installInput = isPluginInstall
+    ? item.request.input as { operation?: unknown; origin?: unknown; source?: unknown; originSourceChanged?: unknown } | null : null;
+  const isFirstInstall = installInput?.operation === 'install';
+  // Host-owned plugin install card (Agent-initiated). Newer Hosts name the origin and, for custom markets, the
+  // source they pack from; a malformed source counts as missing.
+  const installSource = isPluginInstall && installInput?.origin === 'custom-market' && isPluginMarketSourceIdentity(installInput.source)
+    ? installInput.source : undefined;
+  // The same decision as the plugins page's confirmation (pluginConsentAllowance, dispatcher O-4); nothing was chosen
+  // on the phone, so only the declaration rules apply: a custom-market card without a valid source is never allowed
+  // here, install or update (maintainer review 05:55, contract #12731); nor an older Host's first-install card without
+  // an origin (it may come from a custom market). Install on the computer instead.
+  const installSourceUnverified = isPluginInstall
+    && !pluginConsentAllowance(null, declaredTaskCardConsent(item.request.input, '')).allow;
+  const installRepository = installSource
+    ? installSource.kind === 'local' ? t('plugins.notice.consentSource.localFolder')
+      : installSource.ref
+        ? t('plugins.notice.consentSource.repositoryRef', { repository: installSource.repository, ref: installSource.ref })
+        : t('plugins.notice.consentSource.repository', { repository: installSource.repository })
+    : undefined;
   const [showInstallDetails, setShowInstallDetails] = useState(false);
   const installSummary = isPluginInstall && !showInstallDetails;
   const permissionState = buildMobilePermissionCardState({ armedDecision, presentation });
@@ -883,6 +905,8 @@ function PermissionCard({
   const allowButton = (
     <ResolveButton
       key="allow"
+      // An update's first press only opens its details; the decision itself stays unavailable.
+      disabled={installSourceUnverified && (isFirstInstall || !installSummary)}
       accessibilityLabel={t(isFirstInstall ? 'interaction.permission.install' : installSummary ? 'interaction.companion.details' : isMcpUrl ? 'interaction.permission.mcpComplete' : 'interaction.permission.allowOnceAccessibility')}
       armed={armedDecision === 'allow-once'}
       busy={busy}
@@ -917,16 +941,34 @@ function PermissionCard({
         {url}
       </Text> : null}
       {installSummary ? <Text style={styles.body}>{presentation.description?.split('\n', 1)[0]}</Text> : isMcpUrl ? (!companion && presentation.description ? <Text style={styles.body}>{presentation.description}</Text> : null) : <PermissionEvidence
-        input={item.request.input}
+        input={displayRequest.input}
         armed={!!armedDecision}
         presentation={presentation}
         riskWarningText={permissionState.riskWarningText}
         touchLayout={touchLayout}
       />}
+      {installRepository ? <Text style={styles.body} testID="interaction.permission.installRepository">{installRepository}</Text> : null}
+      {/* A source switch is confirmed like a first install (contract V2.4b): the card says 'install' and carries the flag.
+          Same sentences as the computer: a custom market (with a valid source) or a replacement with the market's version. */}
+      {isPluginInstall && installInput?.originSourceChanged === true
+        && (installInput.origin === 'market' || installInput.origin === 'custom-market') ? (
+        <Text style={styles.body} testID="interaction.permission.installOriginSourceChanged">
+          {t(installInput.origin === 'market' ? 'plugins.notice.consentSource.marketSourceChanged'
+            : installSource?.kind === 'git' ? 'plugins.notice.consentSource.originSourceChanged'
+              : 'plugins.notice.consentSource.sourceChangedIsolated')}
+        </Text>
+      ) : null}
+      {installSourceUnverified ? (
+        <Text style={styles.body} testID="interaction.permission.installSourceUnverified">
+          {t('interaction.permission.installSourceUnverified')}
+        </Text>
+      ) : null}
+      {/* Says what tapping does: show the details, or fold them again. */}
       {isFirstInstall && <InteractionTouchButton
-        accessibilityLabel={t('interaction.companion.details')} expanded={showInstallDetails}
-        disabled={busy} onPress={() => setShowInstallDetails(open => !open)} style={styles.companionDetailsButton}>
-        <Text style={styles.companionDetailsText}>{t('interaction.companion.details')}</Text>
+        accessibilityLabel={t(showInstallDetails ? 'interaction.panel.collapse' : 'interaction.companion.details')} expanded={showInstallDetails}
+        disabled={busy} onPress={() => setShowInstallDetails(open => !open)} style={styles.companionDetailsButton}
+        testID="interaction.permission.installDetailsButton">
+        <Text style={styles.companionDetailsText}>{t(showInstallDetails ? 'interaction.panel.collapse' : 'interaction.companion.details')}</Text>
       </InteractionTouchButton>}
     </>
   );
@@ -2141,6 +2183,15 @@ function UnsupportedCard({
       {summaryText ? <Text style={styles.body} numberOfLines={6}>{summaryText}</Text> : null}
     </View>
   );
+}
+
+/** Host-owned plugin install card: only the safe display fields reach the generic previews (never the raw source). */
+function safePluginInstallRequest<T extends Record<string, unknown>>(request: T): T {
+  if (request.toolName !== 'cindy.plugin.install') return request;
+  const raw = request.input && typeof request.input === 'object' ? request.input as Record<string, unknown> : {};
+  const safe: Record<string, string> = {};
+  for (const key of ['ghost_id', 'version', 'operation', 'origin'] as const) if (typeof raw[key] === 'string') safe[key] = raw[key] as string;
+  return { ...request, input: safe };
 }
 
 function ResolveButton({

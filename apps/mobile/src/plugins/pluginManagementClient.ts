@@ -1,4 +1,5 @@
-import { isSharedTaskPeer, isProviderSharePeer, REMOTE_RESOURCE_INVOKE_CHANNEL, REMOTE_RESOURCE_MANIFEST_CHANNEL } from '@cindy/device-link';
+import { isSharedTaskPeer, isProviderSharePeer, REMOTE_RESOURCE_INVOKE_CHANNEL,
+  REMOTE_RESOURCE_MANIFEST_CHANNEL } from '@cindy/device-link';
 import { getMobileAuthOwner, isMobileAuthOwnerCurrent } from '@/auth/authOwnerGeneration';
 import { isRemoteResourcesUnsupported } from '@/device-link/remoteResources';
 import {
@@ -6,10 +7,11 @@ import {
   parsePluginManagementReceipt, parsePluginManagementSnapshot, parsePluginUiConsent, pluginApprovalToken,
   type ManagedMarketDetail, type ManagedPlugin,
 } from './pluginManagementTypes';
+import { parsePluginMarketPage, pluginMarketQueryInput, type PluginMarketPage, type PluginMarketQuery } from './pluginMarketCatalog';
 
 /** Use DeviceLinkContext.invoke directly; preserve its final, synchronous queue fence. */
 export type PluginManagementInvoke = <T = unknown>(deviceId: string, channel: string, args?: unknown[],
-  options?: { preSend?: () => void; background?: boolean }) => Promise<T>;
+  options?: { preSend?: () => void; background?: boolean; onRequestWritten?: () => void; onNotSent?: () => void }) => Promise<T>;
 export interface PluginManagementClientOptions {
   invoke: PluginManagementInvoke;
   deviceId: string;
@@ -25,8 +27,10 @@ export class PluginManagementRequestError extends Error {
   constructor(message: string, readonly outcomeUnknown = false) { super(message); }
 }
 export function pluginManagementErrorCode(error: unknown): string {
-  if (error && typeof error === 'object' && 'code' in error && typeof error.code === 'string') return error.code;
-  return error instanceof Error ? error.message : 'REQUEST_FAILED';
+  if (error && typeof error === 'object' && 'code' in error && typeof error.code === 'string' && error.code !== 'IPC_ERROR') return error.code;
+  const message = error instanceof Error ? error.message : '';
+  // Host IPC errors reach the phone as Error("[CODE] message") without a code (same form as deviceProvidersCache).
+  return /^(?:Error invoking remote method '[^']+': Error: )?\[([A-Z0-9_]+)\]/.exec(message)?.[1] ?? (message || 'REQUEST_FAILED');
 }
 const descriptor = { protocolVersion: 1, primitives: ['status', 'markdown', 'action', 'form', 'list'] };
 const validId = (id: string, max = 128) => typeof id === 'string' && id.length > 0 && id.length <= max && !id.includes('\0');
@@ -42,15 +46,41 @@ export function createPluginManagementClient(options: PluginManagementClientOpti
   let uiCapabilityApproval = false;
   const isOwnerCurrent = () => !owner.switching && isMobileAuthOwnerCurrent(owner);
   const isCurrent = () => isOwnerCurrent() && (options.isCurrent?.() ?? true);
+  /**
+   * Whether a failed request was written is decided from evidence, three ways (dispatcher N-1; see
+   * plugin-mobile-implementation.md, "written or not"):
+   * - written: a reply came back, or the transport's `onRequestWritten` ran (DeviceLinkContext.invoke calls it at the
+   *   first write of this request itself; a link handshake's writes never count);
+   * - not written: positive evidence it never left: this client's own check refused it (`preSend`), or the transport
+   *   said so (`onNotSent`: the computer unavailable, the link never ready, link recovery failed, its check refused it
+   *   before the write); a plain failure, safe to try again;
+   * - neither (a transport that reports nothing, a failure whose source is unclear): possibly written. A mutation is
+   *   then an unknown outcome, looked up and never replayed, exactly as a written one whose result is lost; it never
+   *   shows "failed, try again", which would invite a second begin.
+   */
   async function call<T>(channel: string, payload: unknown, parse: (value: unknown) => T, mutation = false, guard?: () => boolean, cleanup = false): Promise<T> {
     const requestCurrent = () => (cleanup ? isOwnerCurrent() : isCurrent()) && (!guard || guard());
     const assertRequestCurrent = () => {
       if (isSharedTaskPeer(options.deviceId) || isProviderSharePeer(options.deviceId)) localError('PLUGIN_MANAGEMENT_OWNER_ONLY');
       if (!requestCurrent()) localError('PLUGIN_MANAGEMENT_STALE'); };
     assertRequestCurrent();
+    let written = false, refused = false;
+    const onRequestWritten = () => { written = true; };
+    const onNotSent = () => { if (!written) refused = true; };
+    const preSend = () => { try { assertRequestCurrent(); } catch (error) { onNotSent(); throw error; } };
+    let response: unknown;
     try {
-      const response = await options.invoke(options.deviceId, channel, [payload], { preSend: assertRequestCurrent });
-      if (!requestCurrent()) throw new PluginManagementRequestError('PLUGIN_MANAGEMENT_STALE', mutation);
+      response = await options.invoke(options.deviceId, channel, [payload], { preSend, onRequestWritten, onNotSent });
+    } catch (error) {
+      const notWritten = !written && refused;
+      if (error instanceof PluginManagementRequestError && (!mutation || notWritten)) throw error;
+      throw new PluginManagementRequestError(pluginManagementErrorCode(error), mutation && !notWritten);
+    }
+    try {
+      // A write's reply is the Host's state of its operation: once written, only a changed account or target drops it
+      // (the controller places it by operation id). The per-request guard fences sending only.
+      if (!(mutation ? (cleanup ? isOwnerCurrent() : isCurrent()) : requestCurrent()))
+        throw new PluginManagementRequestError('PLUGIN_MANAGEMENT_STALE', mutation);
       if (!isBoundedPluginResponse(response)) throw new Error('INVALID_RESPONSE');
       return parse(response);
     } catch (error) {
@@ -76,7 +106,8 @@ export function createPluginManagementClient(options: PluginManagementClientOpti
   return {
     deviceId: options.deviceId,
     isCurrent,
-    async capabilities(): Promise<PluginManagementCapabilities> {
+    /** `ticket`: an optional per-request check, re-run right before the request leaves and when its reply lands. */
+    async capabilities(ticket?: () => boolean): Promise<PluginManagementCapabilities> {
       try {
         return await call(REMOTE_RESOURCE_MANIFEST_CHANNEL, { client: descriptor }, (value) => {
           if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('INVALID_RESPONSE');
@@ -87,28 +118,46 @@ export function createPluginManagementClient(options: PluginManagementClientOpti
           const actions = plugins?.actions ?? [];
           return { snapshot: actions.some((a) => a.id === 'management:snapshot' && !a.disabled),
             uiConsent: actions.some((a) => a.id === 'management:ui-consent' && !a.disabled) };
-        });
+        }, false, ticket);
       } catch (error) {
         if (isRemoteResourcesUnsupported(error)) return { snapshot: false, uiConsent: false };
         throw error;
       }
     },
-    async capability(): Promise<'supported' | 'unsupported'> {
-      return (await this.capabilities()).snapshot ? 'supported' : 'unsupported';
+    async capability(ticket?: () => boolean): Promise<'supported' | 'unsupported'> {
+      return (await this.capabilities(ticket)).snapshot ? 'supported' : 'unsupported';
     },
     uiConsent: () => action('ui-consent', {}, parsePluginUiConsent),
-    snapshot: () => action('snapshot', {}, (value) => {
+    /** `installed` (Host ≥ 0.1.130) returns the same shape with only the installed-maintenance market projection. */
+    snapshot: (read?: 'installed') => action('snapshot', read ? { read } : {}, (value) => {
       const snapshot = parsePluginManagementSnapshot(value);
       uiCapabilityApproval = snapshot.uiCapabilityApproval === true;
       return snapshot;
     }),
-    async detail(pluginId: string) {
+    /** Paged market discovery (Host ≥ 0.1.130). Only an explicit INVALID_PARAMS marks an older Host. */
+    async catalogPaging(ticket?: () => boolean): Promise<boolean> {
+      try {
+        return await action('snapshot', { read: 'capabilities' }, (value) => {
+          if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('INVALID_RESPONSE');
+          return (value as { catalogPaging?: unknown }).catalogPaging === true;
+        }, undefined, false, ticket);
+      } catch (error) {
+        if (error instanceof PluginManagementRequestError && error.message === 'INVALID_PARAMS') return false;
+        throw error;
+      }
+    },
+    catalog(query: PluginMarketQuery, ticket?: () => boolean): Promise<PluginMarketPage> {
+      let input: Record<string, unknown>;
+      try { input = pluginMarketQueryInput(query); } catch { return Promise.reject(new PluginManagementRequestError('INVALID_INPUT')); }
+      return action('snapshot', { read: 'catalog', query: input }, parsePluginMarketPage, undefined, false, ticket);
+    },
+    async detail(pluginId: string, ticket?: () => boolean) {
       if (!validId(pluginId, 1024)) return localError('INVALID_INPUT');
       return action('market-detail', { pluginId }, (v) => {
         const detail = parsePluginManagementDetail(v);
         if (detail.pluginId !== pluginId) throw new Error('INVALID_RESPONSE');
         return detail;
-      });
+      }, undefined, false, ticket);
     },
     begin(request: PluginManagementBegin, guard?: () => boolean) {
       if (!validId(request.operationId)) return localError('INVALID_INPUT');
@@ -132,7 +181,7 @@ export function createPluginManagementClient(options: PluginManagementClientOpti
     operation: (id: string) => receiptAction('operation', id),
     answer(id: string, requestId: string, confirmed: boolean, guard?: () => boolean) {
       if (!validId(requestId) || typeof confirmed !== 'boolean') return localError('INVALID_INPUT');
-      return receiptAction('answer', id, { requestId, confirmed }, true, guard);
+      return receiptAction('answer', id, { requestId, confirmed }, true, guard, false);
     },
     cancel: (id: string, guard?: () => boolean) => receiptAction('cancel', id, {}, true, guard),
     /** Controller teardown only: cancel the original Host operation after its view is gone. Owner fencing remains mandatory. */

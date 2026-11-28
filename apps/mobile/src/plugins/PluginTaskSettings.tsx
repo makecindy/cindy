@@ -1,3 +1,4 @@
+import { usePluginManagementSlot, type PluginSlotHolder } from "./pluginManagementSlot";
 import { useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
@@ -53,9 +54,12 @@ import { invokePlugin } from "./pluginClient";
 export function PluginTaskSettings({
   deviceId,
   pluginId,
+  holder: who,
 }: {
   deviceId: string;
   pluginId: string;
+  /** Who a save holds the computer's slot for (shown if the page is mounted again while it is out). */
+  holder: PluginSlotHolder;
 }) {
   const { t } = useTranslation(),
     { invoke } = useDeviceLink(),
@@ -69,8 +73,12 @@ export function PluginTaskSettings({
     [busy, setBusy] = useState(false);
   const [capabilities, setCapabilities] =
     useState<MobileAgentCapabilities | null>(null);
+  // The computer's management slot (pluginManagementSlot.ts): a save takes it when pressed and releases it with its
+  // own token when the write settles, even if this form was closed or mounted again meanwhile; while anyone holds
+  // it (another save, an install, an update…), or this plugin has a pending check, the controls are unavailable.
+  const { slot } = usePluginManagementSlot();
+  const blocked = !slot.available(who);
   const alive = useRef(true),
-    lock = useRef(false),
     owner = useRef(getMobileAuthOwner()).current;
   const current = () => alive.current && isMobileAuthOwnerCurrent(owner);
   const call = <T,>(action: string, input: Record<string, unknown> = {}) =>
@@ -136,8 +144,9 @@ export function PluginTaskSettings({
     };
   }, [picker, maker, agent]);
   const save = async (patch: Record<string, unknown>) => {
-    if (!preferences || lock.current || !current()) return false;
-    lock.current = true;
+    if (!preferences || !current()) return false;
+    const token = slot.tryAcquire("task-settings", who);
+    if (!token) return false;
     setBusy(true);
     try {
       const value = await call<PluginTaskPreferences>("task-settings:set", {
@@ -156,7 +165,7 @@ export function PluginTaskSettings({
       // Unknown receipt is read back only; configuration writes are never automatically replayed.
       return false;
     } finally {
-      lock.current = false;
+      slot.release(token);
       if (current()) setBusy(false);
     }
   };
@@ -288,7 +297,7 @@ export function PluginTaskSettings({
       <View style={styles.card}>
         <Pressable
           accessibilityRole="button"
-          disabled={!preferences || busy || error}
+          disabled={!preferences || busy || blocked || error}
           style={styles.row}
           onPress={() => setPicker(true)}
         >
@@ -302,7 +311,7 @@ export function PluginTaskSettings({
         </Pressable>
         <Pressable
           accessibilityRole="button"
-          disabled={!preferences || busy || error}
+          disabled={!preferences || busy || blocked || error}
           style={styles.row}
           onPress={choosePermission}
         >
@@ -321,7 +330,7 @@ export function PluginTaskSettings({
         {config?.model ? (
           <Pressable
             accessibilityRole="button"
-            disabled={busy || error}
+            disabled={busy || blocked || error}
             style={styles.row}
             onPress={() => {
               void save({ model: null });
@@ -364,7 +373,7 @@ export function PluginTaskSettings({
         selectedEffort={isAcpConfig ? "" : (config?.effort ?? "")}
         selectedFastMode={isAcpConfig ? false : (config?.fastMode ?? false)}
         loading={providers.loading}
-        disabled={busy || error}
+        disabled={busy || blocked || error}
         hidePermissionTrigger
         activePermissionMode={
           config?.permissionMode ?? preferences?.defaultPermissionMode ?? ""

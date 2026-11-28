@@ -40,11 +40,16 @@ const STRINGS: Record<string, string> = {
   'settings.ghosts.installConsent.originMarket': 'From market',
   'settings.ghosts.installConsent.originForge': 'Local plugin',
   'settings.ghosts.installConsent.initiatedByAgent': 'Agent · {{origin}}',
+  'settings.ghosts.installConsent.originCustomMarket': 'From custom market {{name}}',
+  'settings.ghosts.installConsent.originRepository': 'Repository {{repository}}',
+  'settings.ghosts.installConsent.originRepositoryRef': 'Repository {{repository}} ({{ref}})',
+  'settings.ghosts.installConsent.originLocalFolder': 'Local folder',
   'settings.ghosts.perm.networkHost': 'Reach {{host}}',
   'settings.ghosts.perm.networkSecretOauth': 'Connect {{name}} ({{host}})',
   'settings.ghosts.perm.networkSecretOauthDetail': 'Requested scopes:',
 };
 const translate = (key: string) => STRINGS[key] ?? key;
+const SOURCE_ID = 'AbCdEfGhIjKlMnOpQrStUv';
 
 const INSTALL: Omit<GhostInstallConsentRequest, 'requestId'> = {
   initiator: 'agent',
@@ -71,6 +76,24 @@ describe('plugin install confirmation card', () => {
       title: 'Install Weather?',
       description: 'v1.0.0 · Agent · From market\nConfirm to install.\nIt will have:\n• Reach api.weather.test',
     });
+  });
+
+  // PR #12684 maintainer review (2026-11-25): task and IM cards name the repository a custom-market
+  // package comes from. Before this change the line only had the market name. A malformed identity
+  // never prints partial values; the line falls back to the market name.
+  it.each([
+    [{ kind: 'git', repository: 'github.com/acme/plugins', sourceId: SOURCE_ID }, 'From custom market Acme · Repository github.com/acme/plugins'],
+    [{ kind: 'git', repository: 'github.com/acme/plugins', ref: 'main', sourceId: SOURCE_ID }, 'From custom market Acme · Repository github.com/acme/plugins (main)'],
+    [{ kind: 'local', sourceId: SOURCE_ID }, 'From custom market Acme · Local folder'],
+    [undefined, 'From custom market Acme'],
+    [{ kind: 'git', repository: 'https://ghp_SECRET@github.com/acme/plugins', sourceId: SOURCE_ID }, 'From custom market Acme'],
+    [{ kind: 'git', repository: 'github.com/acme/plugins' }, 'From custom market Acme'],
+  ] as const)('names the custom-market repository on the source line (%o)', (originSource, line) => {
+    const request = { ...INSTALL, origin: 'custom-market' as const, originLabel: 'Acme',
+      ...(originSource ? { originSource: originSource as GhostInstallConsentRequest['originSource'] } : {}) };
+    expect(renderGhostInstallConsentText({ ...request, initiator: 'user' }, translate).description.split('\n')[0])
+      .toBe(`v1.0.0 · ${line}`);
+    expect(renderGhostInstallConsentText(request, translate).description.split('\n')[0]).toBe(`v1.0.0 · Agent · ${line}`);
   });
 
   it.each([
@@ -110,6 +133,22 @@ describe('plugin install confirmation card', () => {
     ]);
   });
 
+  // PR #12731 maintainer review (06:33, item 2): an update whose actual source changed is confirmed
+  // explicitly; the task / IM card says so even when no permission was added.
+  it('says the source changed on a custom-market update confirmed for a source switch', () => {
+    const text = renderGhostInstallConsentText({
+      initiator: 'user', origin: 'custom-market', originLabel: 'Acme', originSourceChanged: true,
+      originSource: { kind: 'git', repository: 'github.com/acme/plugins', sourceId: SOURCE_ID },
+      facts: { kind: 'update', ghostId: 'weather-chip', name: 'Weather', version: '2.0.0', previousVersion: '1.0.0',
+        added: [], removed: [], unchangedCount: 1, builtinOauthClientChanged: false },
+    }, (key) => key === 'settings.ghosts.installConsent.originSourceChanged' ? 'Source changed.' : translate(key));
+    expect(text.description.split('\n').slice(0, 3)).toEqual([
+      'v1.0.0 → v2.0.0 · From custom market Acme · Repository github.com/acme/plugins',
+      'Source changed.',
+      'Needs more permissions.',
+    ]);
+  });
+
   it('includes host detail keys and author detail such as OAuth scopes', () => {
     const text = renderGhostInstallConsentText(
       {
@@ -146,10 +185,76 @@ describe('plugin install confirmation card', () => {
       kind: 'permission',
       requestId: 'req-1',
       toolName: 'cindy.plugin.install',
-      input: { ghost_id: 'weather-chip', version: '1.0.0' },
+      input: { ghost_id: 'weather-chip', version: '1.0.0', operation: 'install', origin: 'market' },
       metadata: { hostOwnedConfirmation: 'plugin_install' },
     });
+    expect(request.input).not.toHaveProperty('source');
     expect(request.suggestions).toBeUndefined();
+  });
+
+  // PR #12684 maintainer review (2026-11-25, item 2): an Agent-started custom-market install reaches the
+  // phone as this task card; its input must carry the Host's structured source identity so the controller
+  // can show the repository and refuse approval when it is missing. Before this change the input held only
+  // ghost_id / version / operation.
+  it('carries the origin and the custom-market source identity in the task card input', () => {
+    const source = { kind: 'git' as const, repository: 'github.com/acme/plugins', ref: 'main', sourceId: SOURCE_ID };
+    const custom = buildGhostInstallConsentInteraction('req-2',
+      { ...INSTALL, origin: 'custom-market', originLabel: 'Acme', originSource: source }, translate);
+    expect(custom.input).toEqual({ ghost_id: 'weather-chip', version: '1.0.0', operation: 'install', origin: 'custom-market', source });
+    // Without a verifiable identity the card says so by omission; a malformed one never passes through.
+    const missing = buildGhostInstallConsentInteraction('req-3', { ...INSTALL, origin: 'custom-market', originLabel: 'Acme' }, translate);
+    expect(missing.input).toEqual({ ghost_id: 'weather-chip', version: '1.0.0', operation: 'install', origin: 'custom-market' });
+    const malformed = buildGhostInstallConsentInteraction('req-4', { ...INSTALL, origin: 'custom-market',
+      originSource: { kind: 'git', repository: 'github.com/acme/plugins' } as unknown as GhostInstallConsentRequest['originSource'] }, translate);
+    expect(malformed.input).not.toHaveProperty('source');
+  });
+
+  // Phone request relayed for PR #12731: a collapsed task card shows only the first description line, so the
+  // controller needs the source change as a field to show it without scrolling. Only a custom-market update
+  // confirmed for a source change carries it; everything else omits it.
+  // The phone uses this exact sample (byte for byte) in its own test of how it shows a Host-built card.
+  // A source switch is confirmed like a first install (full permissions, contract V2.4b), hence operation 'install'.
+  const SOURCE_SWITCH_CARD_INPUT_SAMPLE = {
+    ghost_id: 'weather-chip',
+    version: '2.0.0',
+    operation: 'install',
+    origin: 'custom-market',
+    source: { kind: 'git', repository: 'github.com/acme/plugins', ref: 'main', sourceId: 'AbCdEfGhIjKlMnOpQrStUv' },
+    originSourceChanged: true,
+  };
+  it('marks a custom-market update confirmed for a source change in the task card input', () => {
+    const source = { kind: 'git' as const, repository: 'github.com/acme/plugins', ref: 'main', sourceId: 'AbCdEfGhIjKlMnOpQrStUv' };
+    const update = {
+      kind: 'update' as const, ghostId: 'weather-chip', name: 'Weather', version: '2.0.0', previousVersion: '1.0.0',
+      added: [], removed: [], unchangedCount: 1, builtinOauthClientChanged: false,
+    };
+    const switched = { kind: 'install' as const, ghostId: 'weather-chip', name: 'Weather', version: '2.0.0', permissions: [] };
+    const changed = buildGhostInstallConsentInteraction('req-5', { initiator: 'agent', origin: 'custom-market',
+      originLabel: 'Acme', originSource: source, originSourceChanged: true, facts: switched }, translate);
+    expect(changed.description).toContain(translate('settings.ghosts.installConsent.originSourceChanged'));
+    expect(changed.input).toEqual(SOURCE_SWITCH_CARD_INPUT_SAMPLE);
+    expect(JSON.stringify(changed.input)).toBe(JSON.stringify(SOURCE_SWITCH_CARD_INPUT_SAMPLE));
+    const sameSource = buildGhostInstallConsentInteraction('req-6', { initiator: 'agent', origin: 'custom-market',
+      originLabel: 'Acme', originSource: source, facts: update }, translate);
+    expect(sameSource.input).not.toHaveProperty('originSourceChanged');
+    // A replacement with the Cindy market version (review 6055952481) carries it too, with wording that names no
+    // repository; other origins never do.
+    const marketReplacement = buildGhostInstallConsentInteraction('req-7', { initiator: 'agent', origin: 'market',
+      originSourceChanged: true, facts: switched }, translate);
+    expect(marketReplacement.input).toMatchObject({ operation: 'install', origin: 'market', originSourceChanged: true });
+    expect(marketReplacement.description).toContain(translate('settings.ghosts.installConsent.marketSourceChanged'));
+    // Review 6057084746: a local-folder market (or a missing identity) shows no repository, so the card text must
+    // not ask to trust one; the input still flags the switch.
+    for (const originSource of [{ kind: 'local' as const, sourceId: SOURCE_ID }, undefined]) {
+      const card = buildGhostInstallConsentInteraction('req-9', { initiator: 'agent', origin: 'custom-market',
+        originLabel: 'Acme', ...(originSource ? { originSource } : {}), originSourceChanged: true, facts: switched }, translate);
+      expect(card.input).toMatchObject({ originSourceChanged: true });
+      expect(card.description).toContain(translate('settings.ghosts.installConsent.sourceChangedIsolated'));
+      expect(card.description).not.toContain(translate('settings.ghosts.installConsent.originSourceChanged'));
+    }
+    const otherOrigin = buildGhostInstallConsentInteraction('req-8', { initiator: 'agent', origin: 'local-file',
+      originSourceChanged: true, facts: update }, translate);
+    expect(otherOrigin.input).not.toHaveProperty('originSourceChanged');
   });
 });
 

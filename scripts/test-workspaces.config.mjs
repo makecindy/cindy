@@ -110,6 +110,8 @@ const desktopE2eInclude = [
   'src/main/remote-agent/__tests__/startupProbe.e2e.test.ts',
 ];
 const mobileGuardInclude = [
+  // Metro resolution order: a generic file must never hide a platform file (reads the directory and Metro config).
+  'src/__tests__/platformFileResolution.test.ts',
   // Swift/delegate authorization, recording lifecycle, and native clipping are cross-runtime contracts.
   'src/__tests__/mobileNativeBoundaryContracts.test.ts',
   'src/__tests__/messageNativeLifecycleContracts.test.ts',

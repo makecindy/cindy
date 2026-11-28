@@ -31,6 +31,8 @@ export interface ManagedMarketItem {
   name: string;
   description: string | null;
   author: string | null;
+  /** Optional display identity of a public release; older Hosts omit it. Never a trust grant. */
+  publisherKind?: 'official' | 'personal' | null;
   scope: 'public' | 'organization' | 'personal';
   organizationId: string | null;
   defaultInstall: boolean;
@@ -43,6 +45,67 @@ export interface ManagedMarketItem {
   sourceType: 'server' | 'git-market' | 'local-market';
   sourceMarketName: string | null;
   updateRequiresConsent?: true;
+  /** Custom-market items: the Host's credential-free source identity (newer Hosts only). */
+  sourceIdentity?: PluginMarketSourceIdentity;
+  /** Custom-market items: the source id of the instance installed on this computer, when it came from this item. */
+  installedSourceId?: string;
+  /**
+   * Contract V2.9: the remote management operation id that installed the instance on this computer, given only to the
+   * device that started that operation (and only while that package is still the installed one). The only evidence
+   * that a lost-receipt install is this attempt's result.
+   */
+  installedOperationId?: string;
+  /**
+   * Contract V2.10: whether the computer attributes the instance installed now to this controller's remote operation
+   * (`'self'`, always with `installedOperationId`) or not (`'unattributed'`); given for `installed` / `update-available`
+   * by computers that know it, never by older ones. `'unknown'` is the phone's own value for one that was sent but cannot
+   * be used (another value, or an operation id sent without a marker): it is never read as "older computer".
+   */
+  installedOperationAttribution?: 'self' | 'unattributed' | 'unknown';
+}
+/**
+ * The V2.10 marker as received: kept when it is one of the two values; any other value sent, or an operation id sent
+ * without one, becomes `'unknown'` (proven by nothing, but not the older computer's "no fields at all").
+ */
+export function receivedInstallAttribution(raw: Record<string, unknown>): ManagedMarketItem['installedOperationAttribution'] {
+  const value = raw.installedOperationAttribution;
+  if (value === 'self' || value === 'unattributed') return value;
+  if (value !== undefined || raw.installedOperationId !== undefined) return 'unknown';
+  return undefined;
+}
+/**
+ * Host-generated, credential-free source of a custom market: the repository actually fetched from (host/owner/repo,
+ * optional ref) or a local folder, plus an opaque per-Host `sourceId` (HMAC of the full source configuration) that
+ * tells apart sources the repository text cannot (other folders, ports, URL forms, sparse paths).
+ */
+export type PluginMarketSourceIdentity =
+  | { kind: 'git'; repository: string; ref?: string; sourceId: string }
+  | { kind: 'local'; sourceId: string };
+// Same shapes as the Host's PLUGIN_MARKET_SOURCE_REPOSITORY_PATTERN and Git ref rule.
+const SOURCE_REPOSITORY = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)*(?:\/[A-Za-z0-9_][A-Za-z0-9._-]{0,99}){2,4}$/;
+const SOURCE_REF = /^(?!-)[A-Za-z0-9][A-Za-z0-9._/-]{0,127}$/;
+const SOURCE_ID = /^[A-Za-z0-9_-]{22}$/;
+export function isPluginMarketSourceId(v: unknown): v is string {
+  return typeof v === 'string' && SOURCE_ID.test(v);
+}
+/** Contract V2.9 shape of an operation id the Host records as install evidence (the phone's ids are random UUIDs). */
+const OPERATION_EVIDENCE_ID = /^[A-Za-z0-9_-]{8,128}$/;
+export function isPluginOperationEvidenceId(v: unknown): v is string {
+  return typeof v === 'string' && OPERATION_EVIDENCE_ID.test(v);
+}
+export function isPluginMarketSourceIdentity(v: unknown): v is PluginMarketSourceIdentity {
+  if (!v || typeof v !== 'object' || Array.isArray(v)) return false;
+  const value = v as Record<string, unknown>;
+  if (!isPluginMarketSourceId(value.sourceId)) return false;
+  if (value.kind === 'local') return Object.keys(value).every((key) => key === 'kind' || key === 'sourceId');
+  return value.kind === 'git' && typeof value.repository === 'string' && value.repository.length <= 256
+    && SOURCE_REPOSITORY.test(value.repository) && (value.ref === undefined || (typeof value.ref === 'string' && SOURCE_REF.test(value.ref)))
+    && Object.keys(value).every((key) => key === 'kind' || key === 'repository' || key === 'ref' || key === 'sourceId');
+}
+/** All keys equal (kind, repository, ref, sourceId); a missing side never matches. */
+export function samePluginMarketSourceIdentity(a: PluginMarketSourceIdentity | undefined, b: PluginMarketSourceIdentity | undefined): boolean {
+  if (!a || !b || a.kind !== b.kind || a.sourceId !== b.sourceId) return false;
+  return a.kind === 'local' || (b.kind === 'git' && a.repository === b.repository && (a.ref ?? null) === (b.ref ?? null));
 }
 export interface ManagedMarketDetail extends ManagedMarketItem {
   /** Keep the complete Host manifest for custom-market expectedManifest checks. */
@@ -89,6 +152,15 @@ export interface PluginManagementReceipt {
     initiator: 'user' | 'agent';
     origin: 'market' | 'custom-market' | 'local-file' | 'forge';
     originLabel?: string;
+    /** Custom markets: the source this install actually packs from, generated by the Host. */
+    originSource?: PluginMarketSourceIdentity;
+    /**
+     * Custom-market updates only: the installed instance and this update come from different (verifiable) sources.
+     * The Host forces the consent and the computer says so; only `true` or absent.
+     */
+    originSourceChanged?: true;
+    /** Host-verified public community publisher (market origin only); drives the community notice. */
+    communityMarket?: true;
     purpose?: 'task-capability' | 'ui-capability';
     trust?: 'unverified' | 'cindy-official' | 'reviewed' | 'verified-publisher';
     facts: PluginConsentFacts;
@@ -151,6 +223,17 @@ function safeMarketItem<T extends ManagedMarketItem>(v: T): T {
   // This target-local icon lookup key must never resolve against the controller's filesystem.
   const safe = { ...v } as T & { customIconKey?: unknown };
   delete safe.customIconKey;
+  // Additive display field: an unknown value degrades to "no publisher label" instead of rejecting the page.
+  if (safe.publisherKind !== undefined && safe.publisherKind !== null && !oneOf(safe.publisherKind, ['official', 'personal']))
+    delete safe.publisherKind;
+  // Additive identity: an unusable value is dropped, which makes any source check fail closed.
+  if (safe.sourceIdentity !== undefined && !isPluginMarketSourceIdentity(safe.sourceIdentity)) delete safe.sourceIdentity;
+  if (safe.installedSourceId !== undefined && !isPluginMarketSourceId(safe.installedSourceId)) delete safe.installedSourceId;
+  // Additive evidence (V2.9, V2.10): the marker as received (see receivedInstallAttribution); an id of another shape is
+  // dropped, so a `'self'` without a usable id proves nothing.
+  const attribution = receivedInstallAttribution(safe as unknown as Record<string, unknown>);
+  if (attribution) safe.installedOperationAttribution = attribution; else delete safe.installedOperationAttribution;
+  if (safe.installedOperationId !== undefined && !isPluginOperationEvidenceId(safe.installedOperationId)) delete safe.installedOperationId;
   return safe;
 }
 export function parsePluginManagementSnapshot(value: unknown): PluginManagementSnapshot {
@@ -198,7 +281,9 @@ export function parsePluginManagementReceipt(value: unknown, operationId: string
   if (value.consent !== undefined) {
     const c = value.consent;
     if (!record(c) || !str(c.requestId) || !oneOf(c.initiator, ['user', 'agent']) || !oneOf(c.origin, ['market', 'custom-market', 'local-file', 'forge'])
-      || !optionalString(c.originLabel) || (c.purpose !== undefined && !oneOf(c.purpose, ['task-capability', 'ui-capability']))
+      || !optionalString(c.originLabel) || (c.communityMarket !== undefined && c.communityMarket !== true)
+      || (c.originSource !== undefined && !isPluginMarketSourceIdentity(c.originSource))
+      || (c.originSourceChanged !== undefined && c.originSourceChanged !== true) || (c.purpose !== undefined && !oneOf(c.purpose, ['task-capability', 'ui-capability']))
       || (c.trust !== undefined && !oneOf(c.trust, ['unverified', 'cindy-official', 'reviewed', 'verified-publisher'])) || !record(c.facts)) return invalid();
     const f = c.facts;
     const permissions = (v: unknown) => Array.isArray(v) && v.every(permission);
@@ -206,14 +291,21 @@ export function parsePluginManagementReceipt(value: unknown, operationId: string
       : f.kind !== 'update' || !str(f.previousVersion) || !permissions(f.added) || !permissions(f.removed)
       || !Number.isSafeInteger(f.unchangedCount) || (f.unchangedCount as number) < 0 || typeof f.builtinOauthClientChanged !== 'boolean')) return invalid();
   }
-  if (value.phase === 'confirmation' && !value.consent) return invalid();
+  // A consent the computer has withdrawn (this phone's cancel aborted it, or the connection it was asked on went away)
+  // while its operation is still winding down: the Host leaves the phase at "confirmation" and drops the consent
+  // (`remotePluginManagement.ts`, the prompt's abort listener). Nothing waits for an answer any more; the operation runs
+  // on to its final result, which a later lookup brings. Read as running, never as a malformed reply.
+  if (value.phase === 'confirmation' && !value.consent) {
+    const { consent: _withdrawn, ...rest } = value as Record<string, unknown>;
+    return { ...rest, phase: 'running' } as unknown as PluginManagementReceipt;
+  }
   return value as unknown as PluginManagementReceipt;
 }
 export function pluginApprovalToken(plugin: ManagedPlugin): string {
   return plugin.approval.state === 'approved' ? `approved:${plugin.approval.revision}` : plugin.approval.state;
 }
 /** Never infer a namespace from a name/prefix. Legacy wire falls back only to the exact physical key. */
-export function marketItemMatchesPlugin(item: ManagedMarketItem, plugin: ManagedPlugin): boolean {
+export function marketItemMatchesPlugin(item: Pick<ManagedMarketItem, 'ghostId' | 'namespace'>, plugin: ManagedPlugin): boolean {
   return item.ghostId === plugin.manifest.id && (item.namespace !== undefined && plugin.namespace !== undefined
     ? item.namespace === plugin.namespace : plugin.instanceKey === item.ghostId);
 }

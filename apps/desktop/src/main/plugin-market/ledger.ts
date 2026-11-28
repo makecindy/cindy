@@ -64,6 +64,78 @@ export interface PluginMarketInstallationRecord {
   rawManifestSha256?: string;
   /** Verified delivery endpoint; absent legacy records require catalog verification before reporting. */
   serverRoot?: string;
+  /**
+   * 仅自定义市场安装：这次落位的包所用来源的不透明标识（sourceId，见 sources/sourceId.ts），连同它是为哪个
+   * `sourceKey`、哪份已装 `ghost.json` 字节（`rawManifestSha256`）算的。市场条目投影 `installedSourceId`
+   * 时要求两者仍等于本记录当前的值，否则缺省；任何保留了旧值、但来源或包已变的写入都不会让它误配。
+   * `keyId` 是算出 sourceId 的那把本机密钥的标识：与当前密钥不同即无法核实（不是换源），见 sourceId.ts。
+   *
+   * 存量兼容：只增可选字段，`validRecord` 不检查它（形状不对在投影时当缺省，绝不因此丢记录）；旧记录
+   * 不迁移。降级时旧版本的 `validRecord` 同样只认已知键，读到的记录对象原样写回，所以字段会被保留；
+   * 旧版本重写安装记录（重新安装或更新）时写出不含此字段的新记录，结果是缺省（控制端未确认）。
+   */
+  sourceIdBinding?: { sourceId: string; sourceKey: string; rawManifestSha256: string; keyId: string };
+  /**
+   * 远程管理操作的安装证据（契约 V2.9，服务端与自定义市场记录都可能带）：这条记录是哪一次远程
+   * `management:begin` 安装／更新提交的。`controller` 是发起方设备身份的本机不可逆标识（不存原始设备号），
+   * `keyId` 是算它的密钥，`rawManifestSha256` 是当次装入的包，`approval` 是那次落位后实例的批准令牌。投影时要求
+   * 包摘要仍等于记录当前的值、keyId 等于当前密钥、controller 等于请求方、当前实例的批准令牌等于 `approval`，否则缺省。
+   * 批准令牌每次落位都新铸，所以无论哪条路径（包括旧版本客户端）整条复制记录、把绑定带了过去，只要实例被重新
+   * 落位过，绑定就对不上；只有那次落位本身还在时才会成立。
+   * 契约 V2.10：继承来的绑定清除，本次事务新生成的绑定保留。
+   * - markRemovedRecord、restoreDisconnectedInstallation、replaceManifestIdentityAfterPackageCommit 的调用方都只持有
+   *   继承的旧记录，不会生成新绑定，所以一律经 withoutRemoteOperationBinding 清除。
+   * - migrateSimulatorInstallation 一律清除（中断迁移的恢复只复制旧记录）。
+   * - 本次远程操作的新证据不在提交时写：整次安装成功收尾后（此后回执只会是 succeeded）才经
+   *   attachRemoteOperationBinding 补进提交时写下的那条记录，所以「读到 'self' ⇒ 回执是 succeeded」。
+   * - 换装失败时原样恢复整条旧记录（restoreInstallation）会保留，因为包也回到了那一份。
+   * - 只补元数据、不换包的写回（backfillServerRoot、stampNamespaceIfAbsent、backfillMissingNamespacesFromCatalog、
+   *   首次补 raw 摘要）保留绑定：那次落位仍在，归属不变。namespace 补写改变记录键，进行中的读取会重读一次。
+   * - 提交时写下的整条新记录（upsertInstallation／upsertInstallationAndClearOptOut）都不含证据。
+   * 这样「操作号相等 ⇒ 当前包就是那次操作装的」才成立。
+   *
+   * 存量兼容同 `sourceIdBinding`：只增可选字段，`validRecord` 不检查它；旧记录缺省。降级后旧版本有的写回整条
+   * 复制记录（保留绑定），有的整条重写（丢弃）；升级回来后，保留下来的绑定只在那次落位仍在时成立，实例被重新落位过
+   * 就因批准令牌对不上而按未确认处理。
+   */
+  remoteOperationBinding?: {
+    operationId: string;
+    controller: string;
+    keyId: string;
+    rawManifestSha256: string;
+    /** 契约 V2.10：那次落位后实例的批准令牌（每次落位新铸）；缺省的旧证据不投影。 */
+    approval?: string;
+  };
+}
+
+/**
+ * 契约 V2.10：去掉操作证据。用于沿用旧记录、但不再是「那次远程操作提交的那份包」的写回。`sourceIdBinding` 不动：
+ * 它绑定的是来源指纹与 raw manifest 摘要，换包或换来源后投影自然失效，而且这些路径不改记录的来源与包摘要
+ * （或只对从不带它的服务端记录生效）。
+ */
+function withoutRemoteOperationBinding(record: PluginMarketInstallationRecord): PluginMarketInstallationRecord {
+  if (record.remoteOperationBinding === undefined) return record;
+  const copy = { ...record };
+  delete copy.remoteOperationBinding;
+  return copy;
+}
+
+/**
+ * 比较并写入（CAS）时判断「仍是捕获时那条安装记录」。远程操作证据不参与比较：它在安装成功收尾后才补写（契约 V2.10），
+ * 只说明是哪次操作落位的，不改变安装本身；把它算进去会让恰好在补写前捕获记录的卸载、迁移、信任补写永久比对失败。
+ * 这些写入方写回时都会按各自规则处理证据（清除或沿用当前记录）。
+ */
+function sameInstallationRecord(current: PluginMarketInstallationRecord, expected: PluginMarketInstallationRecord): boolean {
+  return canonicalJson(withoutRemoteOperationBinding(current)) === canonicalJson(withoutRemoteOperationBinding(expected));
+}
+
+/**
+ * 本进程内账本写入的次数（任何实例、任何 owner；写盘结束或日志重放后前进，写失败也算）。市场读取用它判断「在途读取是否早于某次安装
+ * 记录的变化」：发起后计数变了的在途读取，之后的请求不再并入（见 PluginMarketService.installGeneration）。
+ */
+let ledgerWriteRevision = 0;
+export function pluginMarketLedgerRevision(): number {
+  return ledgerWriteRevision;
 }
 
 export type PluginMarketAuthorizationTarget = { ghostId: string; namespace?: string | null };
@@ -372,9 +444,14 @@ export class PluginMarketLedger {
         !isLedgerSnapshotText(snapshot.main)) {
       throw new Error('Plugin market ledger pending write is unreadable');
     }
-    atomicWriteFileSync(this.nsFilePath(), snapshot.namespaced);
-    atomicWriteFileSync(this.customFilePath(), snapshot.custom);
-    atomicWriteFileSync(this.filePath(), snapshot.main);
+    try {
+      atomicWriteFileSync(this.nsFilePath(), snapshot.namespaced);
+      atomicWriteFileSync(this.customFilePath(), snapshot.custom);
+      atomicWriteFileSync(this.filePath(), snapshot.main);
+    } finally {
+      // 重放让日志里的变更此刻才对读取可见，同样算一次记录变化。
+      ledgerWriteRevision++;
+    }
     try {
       fs.unlinkSync(this.pendingFilePath());
     } catch (error) {
@@ -516,7 +593,7 @@ export class PluginMarketLedger {
     // Every other provenance field (and an already pinned root) still participates in CAS.
     const expected = record.serverRoot === undefined && current.serverRoot
       ? { ...record, serverRoot: current.serverRoot } : record;
-    if (canonicalJson(current) !== canonicalJson(expected)) return false;
+    if (!sameInstallationRecord(current, expected)) return false;
     this.markRemovedRecord(current, userId);
     return true;
   }
@@ -633,7 +710,7 @@ export class PluginMarketLedger {
       !current
       || !current.installed
       || !SERVER_SOURCES.has(current.source)
-      || canonicalJson(current) !== canonicalJson(expected)
+      || !sameInstallationRecord(current, expected)
       || !removeDefaultInstallOptOut(data, userId, current.pluginId)
     ) {
       return false;
@@ -642,17 +719,49 @@ export class PluginMarketLedger {
     return true;
   }
 
-  /** The simulator keeps its server resource; replace both local route keys in one ledger write. */
-  migrateSimulatorInstallation(expected: PluginMarketInstallationRecord, next: PluginMarketInstallationRecord): boolean {
+  /**
+   * The simulator keeps its server resource; replace both local route keys in one ledger write.
+   * 契约 V2.10：`next` 上带来的 `remoteOperationBinding` 一律丢弃，所以中断迁移的恢复复制旧记录时不会带回旧操作号；
+   * 远程更新的新证据在整次安装成功后经 attachRemoteOperationBinding 补上。
+   */
+  migrateSimulatorInstallation(
+    expected: PluginMarketInstallationRecord,
+    next: PluginMarketInstallationRecord,
+  ): boolean {
     const data = this.read();
     const current = data.installations[pluginLedgerRecordKey(expected)];
     const target = data.installations[pluginLedgerRecordKey(next)];
-    if (!current || canonicalJson(current) !== canonicalJson(expected) || !current.installed ||
+    if (!current || !sameInstallationRecord(current, expected) || !current.installed ||
         current.ghostId !== 'baguette-simulator' || next.ghostId !== 'cindy-simulator' ||
         current.scope !== 'public' || next.scope !== 'public' || current.namespace != null || next.namespace !== null ||
         current.pluginId !== next.pluginId || (current.source !== 'market' && current.source !== 'legacy-adopted') ||
         (target && target.installed)) return false;
-    this.replaceRecord(data, current, next);
+    this.replaceRecord(data, current, withoutRemoteOperationBinding(next));
+    this.write(data);
+    return true;
+  }
+
+  /**
+   * 契约 V2.10：远程操作的安装成功收尾后，把它的证据补进提交时写下的那条记录。只在那条记录原样还在时写：同一插件、
+   * 同一实例键（提交时未定 namespace 的，允许之后被补写成确定值）、同一写入时刻与包摘要、已安装、尚无证据，且只有
+   * 唯一一条。此期间任何重装、卸载、换源或另一次操作都会让它对不上，于是放弃（读成未证实）。
+   */
+  attachRemoteOperationBinding(
+    expected: PluginMarketInstallationRecord,
+    binding: NonNullable<PluginMarketInstallationRecord['remoteOperationBinding']>,
+  ): boolean {
+    const data = this.read();
+    const matches = Object.values(data.installations).filter((record) =>
+      record.installed &&
+      record.remoteOperationBinding === undefined &&
+      record.pluginId === expected.pluginId &&
+      record.ghostId === expected.ghostId &&
+      (expected.namespace === undefined || record.namespace === expected.namespace) &&
+      record.updatedAt === expected.updatedAt &&
+      record.rawManifestSha256 === binding.rawManifestSha256 &&
+      expected.rawManifestSha256 === binding.rawManifestSha256);
+    if (matches.length !== 1) return false;
+    this.replaceRecord(data, matches[0]!, { ...matches[0]!, remoteOperationBinding: binding });
     this.write(data);
     return true;
   }
@@ -660,7 +769,7 @@ export class PluginMarketLedger {
   backfillServerRoot(expected: PluginMarketInstallationRecord, serverRoot: string): boolean {
     const data = this.read();
     const current = data.installations[pluginLedgerRecordKey(expected)];
-    if (!current || current.serverRoot || canonicalJson(current) !== canonicalJson(expected)) return false;
+    if (!current || current.serverRoot || !sameInstallationRecord(current, expected)) return false;
     data.installations[pluginLedgerRecordKey(current)] = { ...current, serverRoot };
     this.write(data);
     return true;
@@ -736,7 +845,7 @@ export class PluginMarketLedger {
     if (!/^[a-f0-9]{64}$/.test(rawManifestSha256)) return false;
     const data = this.read();
     const current = data.installations[pluginLedgerRecordKey(expected)];
-    if (!current || canonicalJson(current) !== canonicalJson(expected)) return false;
+    if (!current || !sameInstallationRecord(current, expected)) return false;
     if (current.rawManifestSha256 !== undefined) {
       return current.rawManifestSha256 === rawManifestSha256;
     }
@@ -761,9 +870,9 @@ export class PluginMarketLedger {
     }
     const data = this.read();
     const current = data.installations[pluginLedgerRecordKey(expected)];
-    if (!current || canonicalJson(current) !== canonicalJson(expected)) return false;
+    if (!current || !sameInstallationRecord(current, expected)) return false;
     this.replaceRecord(data, current, {
-      ...current,
+      ...withoutRemoteOperationBinding(current),
       manifestDigest,
       rawManifestSha256,
     });
@@ -814,12 +923,12 @@ export class PluginMarketLedger {
       !current
       || current.installed
       || (current.source !== 'market' && current.source !== 'legacy-adopted')
-      || canonicalJson(current) !== canonicalJson(expected)
+      || !sameInstallationRecord(current, expected)
     ) {
       return false;
     }
     this.replaceRecord(data, current, {
-      ...current,
+      ...withoutRemoteOperationBinding(current),
       source:
         current.scope === 'organization' && current.source === 'market'
           ? 'legacy-adopted'
@@ -839,7 +948,7 @@ export class PluginMarketLedger {
     const current = data.installations[pluginLedgerRecordKey(record)];
     if (!current) return;
     this.replaceRecord(data, current, {
-      ...current,
+      ...withoutRemoteOperationBinding(current),
       installed: false,
       updatedAt: new Date().toISOString(),
     });
@@ -968,9 +1077,14 @@ export class PluginMarketLedger {
       this.pendingFilePath(),
       JSON.stringify({ schemaVersion: LEDGER_SCHEMA_VERSION, targets }, null, 2) + '\n',
     );
-    atomicWriteFileSync(this.nsFilePath(), targets.namespaced);
-    atomicWriteFileSync(this.customFilePath(), targets.custom);
-    atomicWriteFileSync(this.filePath(), targets.main);
+    try {
+      atomicWriteFileSync(this.nsFilePath(), targets.namespaced);
+      atomicWriteFileSync(this.customFilePath(), targets.custom);
+      atomicWriteFileSync(this.filePath(), targets.main);
+    } finally {
+      // 日志已落盘：这次变更要么现在写完，要么由下一次读取重放，都算一次记录变化（宁可多算）。
+      ledgerWriteRevision++;
+    }
     try {
       fs.unlinkSync(this.pendingFilePath());
     } catch (error) {

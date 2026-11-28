@@ -660,6 +660,132 @@ describe('PluginMarketLedger', () => {
     ]);
   });
 
+  /* 测试价值（契约 V2.10，PR #12731：「操作号相等 ⇒ 当前包就是那次操作装的」）
+   * - 生产入口与可观察结果：PluginMarketLedger 的四条沿用旧记录写回的路径（标记卸载、断开路由的恢复、同发行重新
+   *   提交包、模拟器路由迁移）与换装失败的原样恢复，写回后记录上的 remoteOperationBinding／sourceIdBinding。
+   * - 缺口：这些路径原来整条复制旧记录，会把旧操作证据带过去，卸载后恢复或重新提交包都会让旧操作号复活，
+   *   原控制端随后仍被判成「是我那次装的」。
+   * - 最小失败输入：带两种绑定的已装记录各走一次这四条路径；以及标记卸载后原样恢复。
+   * - 改前失败：四条各自失败（写回后仍带 remoteOperationBinding）；原样恢复一条改前即通过（覆盖既有行为）。
+   *   远程操作的新证据改为整次安装成功后经 attachRemoteOperationBinding 补写，另有一条断言它只补进提交时写下的那条记录。
+   * - tier：unit。
+   */
+  describe('remote operation evidence on ledger rewrites (V2.10)', () => {
+    const operation = { operationId: 'op-0000000000000001', controller: 'AbCdEfGhIjKlMnOpQrStUv', keyId: 'AbCdEfGhIjKl',
+      rawManifestSha256: 'd'.repeat(64) };
+    const bound = (overrides: Partial<PluginMarketInstallationRecord> = {}) =>
+      record({ rawManifestSha256: 'd'.repeat(64), remoteOperationBinding: operation, ...overrides });
+
+    it('drops the evidence when an installation is marked removed, and keeps the source binding', () => {
+      const { ledger } = harness();
+      const sourceIdBinding = { sourceId: 'AbCdEfGhIjKlMnOpQrStUv', sourceKey: 'k', rawManifestSha256: 'd'.repeat(64), keyId: 'AbCdEfGhIjKl' };
+      ledger.upsertInstallation(bound({ ghostId: 'bound', pluginId: 'custom:team-lib/bound', source: 'local-market',
+        sourceKey: 'k', sourceIdBinding }));
+      ledger.markRemovedRecord(ledger.installationForGhost('bound')!, null);
+      const removed = ledger.installationForGhost('bound');
+      expect(removed).toMatchObject({ installed: false, sourceIdBinding });
+      expect(removed).not.toHaveProperty('remoteOperationBinding');
+    });
+
+    it('does not bring the evidence back when a disconnected server route is reconnected', () => {
+      const { ledger } = harness();
+      ledger.upsertInstallation(bound());
+      // Reconnect the exact record as captured before removal (the strongest case for resurrection).
+      const disconnected = { ...ledger.installationForGhost('cindy-test')!, installed: false };
+      ledger.upsertInstallation(disconnected);
+      expect(ledger.restoreDisconnectedInstallation(disconnected, 'user-a')).toBe(true);
+      const reconnected = ledger.installationForGhost('cindy-test');
+      expect(reconnected).toMatchObject({ installed: true, rawManifestSha256: 'd'.repeat(64) });
+      expect(reconnected).not.toHaveProperty('remoteOperationBinding');
+    });
+
+    it('drops the evidence when a package of the same release is committed again', () => {
+      const { ledger } = harness();
+      const previous = bound({ manifestDigest: 'c'.repeat(64) });
+      ledger.upsertInstallation(previous);
+      // Same raw manifest bytes: the binding digest would still match, so only dropping it prevents a false 'self'.
+      expect(ledger.replaceManifestIdentityAfterPackageCommit(previous, 'c'.repeat(64), 'd'.repeat(64))).toBe(true);
+      expect(ledger.installationForGhost('cindy-test')).not.toHaveProperty('remoteOperationBinding');
+    });
+
+    it('drops the evidence on a simulator migration', () => {
+      const { ledger } = harness();
+      const legacy = bound({ ghostId: 'baguette-simulator' });
+      ledger.upsertInstallation(legacy);
+      // Whatever binding `next` carries is inherited and dropped (an interrupted-migration repair copies the old record).
+      expect(ledger.migrateSimulatorInstallation(legacy, { ...legacy, ghostId: 'cindy-simulator', namespace: null }))
+        .toBe(true);
+      const migrated = ledger.installationForGhost('cindy-simulator');
+      expect(migrated).toMatchObject({ installed: true, ghostId: 'cindy-simulator' });
+      expect(migrated).not.toHaveProperty('remoteOperationBinding');
+    });
+
+    it('attaches an operation\'s evidence only to the exact record its commit wrote', () => {
+      const { ledger } = harness();
+      const written = record({ rawManifestSha256: 'd'.repeat(64), updatedAt: '2026-11-26T07:00:00.000Z' });
+      ledger.upsertInstallation(written);
+      const evidence = { ...operation, approval: 'approved:00000000-0000-4000-8000-000000000001' };
+      expect(ledger.attachRemoteOperationBinding(written, evidence)).toBe(true);
+      expect(ledger.installationForGhost('cindy-test')?.remoteOperationBinding).toEqual(evidence);
+      // Never twice, never over someone else's evidence.
+      expect(ledger.attachRemoteOperationBinding(written, { ...evidence, operationId: 'op-0000000000000009' })).toBe(false);
+      // A later rewrite (reinstall, another operation) makes the commit's record disappear: nothing is attached.
+      const rewritten = record({ rawManifestSha256: 'd'.repeat(64), updatedAt: '2026-11-26T07:00:01.000Z' });
+      ledger.upsertInstallation(rewritten);
+      expect(ledger.attachRemoteOperationBinding(written, evidence)).toBe(false);
+      expect(ledger.installationForGhost('cindy-test')).not.toHaveProperty('remoteOperationBinding');
+      // Removed in between: nothing is attached either.
+      ledger.markRemovedRecord(rewritten, null);
+      expect(ledger.attachRemoteOperationBinding(rewritten, evidence)).toBe(false);
+    });
+
+    // 自审（推送前）：证据在安装成功收尾后才补写，恰在补写前捕获记录的比较并写入不能因此永久失败（否则卸载、
+    // 默认安装退订、迁移、信任补写都会落空）。改前失败。
+    it('does not let a late attach defeat compare-and-write on a record captured just before it', () => {
+      const { ledger } = harness();
+      const written = record({ rawManifestSha256: 'd'.repeat(64) });
+      ledger.upsertInstallation(written);
+      const captured = ledger.installationForGhost('cindy-test')!;
+      expect(ledger.attachRemoteOperationBinding(written, { ...operation, approval: 'approved:00000000-0000-4000-8000-000000000001' }))
+        .toBe(true);
+      expect(ledger.markRemovedRecordIfUnchanged(captured, 'user-a')).toBe(true);
+      expect(ledger.installationForGhost('cindy-test')).toMatchObject({ installed: false });
+      expect(ledger.installationForGhost('cindy-test')).not.toHaveProperty('remoteOperationBinding');
+    });
+
+    it('keeps the evidence when a failed replacement restores the exact previous record', () => {
+      const { ledger } = harness();
+      const previous = bound();
+      ledger.upsertInstallation(previous);
+      ledger.markRemovedRecord(ledger.installationForGhost('cindy-test')!, null);
+      ledger.restoreInstallation(previous);
+      expect(ledger.installationForGhost('cindy-test')).toEqual(previous);
+    });
+  });
+
+  /* 测试价值（PR #12731：账本只增可选字段 sourceIdBinding，存量兼容红线）
+   * - 生产入口与可观察结果：PluginMarketLedger 读写 custom-ledger.v1.json 后的记录。validRecord 与 main 相同
+   *   （未改），所以这里的行为也就是旧版本读到新字段时的行为。
+   * - 缺口：新字段若触发读取校验失败，整条安装记录会在下一次写入时被过滤掉，插件变成「本地冲突项」。
+   * - 最小失败输入：带 sourceIdBinding 的自定义记录；以及该字段形状损坏的记录。
+   * - tier：unit。
+   */
+  it('keeps custom records carrying the optional source id binding, well-formed or not, across a rewrite', () => {
+    const h = harness();
+    const customPath = path.join(path.dirname(h.filePath), 'custom-ledger.v1.json');
+    const binding = { sourceId: 'AbCdEfGhIjKlMnOpQrStUv', sourceKey: 'k', rawManifestSha256: 'c'.repeat(64), keyId: 'AbCdEfGhIjKl' };
+    h.ledger.upsertInstallation(record({ ghostId: 'bound', pluginId: 'custom:team-lib/bound', source: 'local-market',
+      sourceKey: 'k', rawManifestSha256: 'c'.repeat(64), sourceIdBinding: binding }));
+    h.ledger.upsertInstallation(record({ ghostId: 'broken', pluginId: 'custom:team-lib/broken', source: 'git-market',
+      sourceKey: 'k2', sourceIdBinding: 42 as unknown as typeof binding }));
+    // An unrelated write rewrites both files; both records and the field survive as they were.
+    h.ledger.upsertInstallation(record({ ghostId: 'cindy-server', source: 'market' }));
+    const reread = new PluginMarketLedger(h.filePath);
+    expect(reread.installationForGhost('bound')).toMatchObject({ installed: true, sourceIdBinding: binding });
+    expect(reread.installationForGhost('broken')).toMatchObject({ installed: true, sourceIdBinding: 42 });
+    expect(Object.keys(JSON.parse(fs.readFileSync(customPath, 'utf8')).installations).sort()).toEqual(['bound', 'broken']);
+  });
+
   it('survives an old-version rewrite that drops unknown sources from the main ledger', () => {
     const h = harness();
     h.ledger.upsertInstallation(record({ ghostId: 'cindy-server', source: 'market' }));

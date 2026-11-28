@@ -7,6 +7,11 @@ import {
   type PluginUsageSummary,
   type PluginConfigurationItem,
 } from "@cindy/device-link";
+import {
+  pluginMarketVisualInstalledItems,
+  pluginMarketVisualManagement,
+  pluginMarketVisualResource,
+} from "./pluginMarketVisualFixture";
 export function pluginVisualDemosEnabled() {
   return (
     typeof __DEV__ !== "undefined" &&
@@ -411,12 +416,17 @@ export function pluginVisualFixture(channel: string, args: unknown[]): unknown {
     return {
       collectionId: PLUGIN_COLLECTION,
       revision: [...enabled.values()].join(),
-      items: pluginVisualScenarios.map((scenario) => item(scenario.id)),
+      items: [
+        ...pluginVisualScenarios.map((scenario) => item(scenario.id)),
+        ...pluginMarketVisualInstalledItems(),
+      ],
     };
   if (
     channel === REMOTE_RESOURCE_GET_CHANNEL &&
     request?.ref?.collectionId === PLUGIN_COLLECTION
   ) {
+    const installedFromMarket = pluginMarketVisualResource(request.ref.id);
+    if (installedFromMarket !== undefined) return installedFromMarket;
     reads.set(request.ref.id, (reads.get(request.ref.id) ?? 0) + 1);
     const current = item(request.ref.id),
       scenario = pluginVisualScenarios.find(
@@ -455,8 +465,24 @@ export function pluginVisualFixture(channel: string, args: unknown[]): unknown {
   }
   if (
     channel === REMOTE_RESOURCE_INVOKE_CHANNEL &&
+    request?.actionId?.startsWith("management:") &&
+    (request.collectionId === PLUGIN_COLLECTION ||
+      request.resourceRef?.collectionId === PLUGIN_COLLECTION)
+  )
+    return pluginMarketVisualManagement(
+      request.actionId,
+      request.input,
+      request.resourceRef?.id,
+    );
+  if (
+    channel === REMOTE_RESOURCE_INVOKE_CHANNEL &&
     request?.resourceRef?.collectionId === PLUGIN_COLLECTION
   ) {
+    const installedFromMarket = pluginMarketVisualResource(
+      request.resourceRef.id,
+      request.actionId,
+    );
+    if (installedFromMarket !== undefined) return installedFromMarket;
     const id = request.resourceRef.id,
       current = item(id);
     const scenario = pluginVisualScenarios.find(

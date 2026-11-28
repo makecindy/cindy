@@ -136,6 +136,7 @@
     "readmeLoadFailed": "无法加载介绍，请重试。",
     "readmeUnavailable": "暂无介绍。",
     "computerSettings": "请在电脑端 Cindy 的「插件」中打开此插件详情，完成配置。",
+    "computerSettingsTitle": "需在电脑上完成配置",
     "runtimeIssue": "插件上次运行异常，可重新打开或在任务中重试。",
     "runtimeFused": "插件多次运行失败，已停止。关闭后重新启用，再试一次。",
     "status": {
@@ -163,7 +164,8 @@
     "version": "版本",
     "showAll": "显示全部",
     "showLess": "收起",
-    "identifier": "标识"
+    "identifier": "标识",
+    "author": "作者"
   },
   "demo": {
     "hint": "演示数据 · 不会修改真实配置"
@@ -179,16 +181,19 @@
   "management": {
     "checkResult": "核实结果",
     "manage": "管理插件",
-    "update": "升级",
+    "updateTo": "更新到 v{{version}}",
     "uninstall": "卸载",
     "uninstallTitle": "卸载 {{name}}？",
     "uninstallBody": "将从 {{device}} 移除此插件、凭证和私有配置。作品库及已有任务内容会保留。",
     "reject": "取消",
     "allow": "允许并继续",
+    "review": "查看来源和权限",
     "versionChange": "{{previous}} → {{next}}",
+    "switchVersion": "将安装的版本：{{version}}",
     "oauthChanged": "账号登录配置发生了变化。",
     "state": {
-      "readFailed": "未能读取插件管理信息，请刷新查看。"
+      "readFailed": "未能读取插件管理信息，请刷新查看。",
+      "readFailedTitle": "读取失败"
     },
     "permissions": {
       "mail": "使用邮件草稿与发送卡片",
@@ -308,9 +313,16 @@
       "routineEvents": "自动化事件",
       "mcpUi": "可在对话中显示交互页面",
       "mcpUiDomains": "页面可连接域名：{{domains}}",
-      "uiPageAccess": "页面：{{pages}}\n页面可连接域名：{{domains}}\n页面可调用工具：{{tools}}"
+      "uiPageAccess": "页面：{{pages}}\n页面可连接域名：{{domains}}\n页面可调用工具：{{tools}}",
+      "nodeSecretCount": "本机 Node 程序可获得 {{count}} 个已保存凭证",
+      "nodeSecretOne": "本机 Node 程序可获得 1 个已保存凭证"
     },
     "releaseChanged": "可用版本已变化，请查看刷新后的版本，再选择安装。",
+    "releaseChangedTitle": "版本已变化",
+    "sourceUnverified": "这台电脑没有提供这个自定义市场的仓库信息，不能从手机更新这个插件。请先在那台电脑上更新 Cindy 并刷新这个市场；若仍不行，请直接在电脑上更新这个插件。",
+    "sourceUnverifiedTitle": "无法从手机更新",
+    "sourceChanged": "这个市场的来源刚刚有变化，已停止更新。请在电脑上核对这个市场后再试。",
+    "sourceChangedTitle": "市场来源已变化",
     "settingsUnavailable": "插件设置加载失败，请重新加载设置后重试。",
     "settingsResultUnknown": "尚未确认操作结果。请先重新读取电脑上的设置，再决定是否提交。",
     "settingsOperationFailed": "设置操作未能完成，请检查连接后重试。",
@@ -320,7 +332,10 @@
       "reviewed": "已审核",
       "verified-publisher": "发布者已验证",
       "unverified": "未验证"
-    }
+    },
+    "highRiskTitle": "高风险权限",
+    "highRiskTitleCount": "{{title}} · {{count}} 项",
+    "scrollHint": "可上下滑动查看全部内容"
   },
   "notice": {
     "title": {
@@ -337,17 +352,30 @@
       "managementFailed": "操作失败",
       "confirmation": "确认插件权限"
     },
-    "consentOrigin": {
-      "market": "官方市场",
-      "custom-market": "自定义市场",
-      "local-file": "本地文件",
-      "forge": "本地构建"
+    "taskCapability": "用于当前任务",
+    "consentSource": {
+      "market": "来自 {{appName}} 插件市场",
+      "customMarket": "来自自定义市场「{{name}}」",
+      "customMarketUnnamed": "来自自定义市场",
+      "localFile": "来自本地 .cindy 文件",
+      "forge": "本地开发的插件",
+      "initiatedByAgent": "由 Agent 发起 · {{origin}}",
+      "repository": "仓库 {{repository}}",
+      "repositoryRef": "仓库 {{repository}}（{{ref}}）",
+      "originSourceChanged": "这次更新的来源与已安装的版本不同。旧账号和数据会隔离保存，需要重新连接账号。请确认你信任上面显示的仓库后再继续。",
+      "marketSourceChanged": "这次更新会改为插件市场里的版本。旧账号和数据会隔离保存，需要重新连接账号。",
+      "sourceChangedIsolated": "这次更新的来源与已安装的版本不同。旧账号和数据会隔离保存，需要重新连接账号。",
+      "localFolder": "本地文件夹",
+      "repositoryMissingInstall": "这台电脑没有提供这个自定义市场的仓库信息，不能从手机安装。请先在那台电脑上更新 Cindy 并刷新这个市场；若仍不行，请直接在电脑上安装。",
+      "repositoryMissingUpdate": "这台电脑没有提供这个自定义市场的仓库信息，不能从手机更新这个插件。请先在那台电脑上更新 Cindy 并刷新这个市场；若仍不行，请直接在电脑上更新这个插件。",
+      "sourceChanged": "确认里的来源与你选择时不同，不能在手机上允许。请拒绝后重新选择。",
+      "consentChanged": "确认里的插件、版本或电脑与你选择时不同，不能在手机上允许。请拒绝后重新选择，或在电脑上处理。"
     },
-    "initiator": {
-      "user": "由你发起",
-      "agent": "由 Agent 发起"
-    },
-    "taskCapability": "用于当前任务"
+    "sourceNotice": {
+      "community": "此插件由社区作者开发和维护，{{appName}} 已审核该版本，但无法保证插件在所有使用场景下都安全。",
+      "customMarket": "请确认你信任该市场，再核对插件申请的权限。",
+      "localFile": "请确认文件来自你信任的来源，再继续安装。"
+    }
   },
   "uiApproval": {
     "title": "插件「{{name}}」新增了交互页面，需要你确认后才能使用",
@@ -382,5 +410,144 @@
     "cancelled": "本次不会自动归档",
     "archived": "已归档「{{title}}」",
     "undo": "撤销"
+  },
+  "market": {
+    "title": "插件市场",
+    "installDestination": "安装到：{{device}}",
+    "filterLabel": "按来源筛选插件",
+    "filter": {
+      "all": "全部",
+      "official": "官方",
+      "community": "社区",
+      "organization": "团队共享",
+      "custom": "自定义"
+    },
+    "install": "安装",
+    "installAria": "安装 {{name}}",
+    "waiting": "等待确认…",
+    "installing": "正在安装…",
+    "loadMore": "加载更多",
+    "allLoaded": "已显示全部 {{count}} 个插件",
+    "unavailable": "插件市场暂时不可用；已安装插件仍可正常管理和使用。",
+    "customSourcesUnavailable": "以下自定义市场暂时不可用：{{names}}。其他市场不受影响。",
+    "securityTitle": "安装与权限",
+    "source": "来源",
+    "scope": {
+      "public": "公开",
+      "organization": "组织",
+      "personal": "个人",
+      "custom": "自定义",
+      "local": "本地"
+    },
+    "publisherDescription": {
+      "official": "由 Cindy 官方发布和维护",
+      "community": "由社区开发者发布和维护",
+      "organization": "由当前组织共享给有权限的成员",
+      "custom": "来自你添加的 Git 或本地文件夹市场"
+    },
+    "errors": {
+      "generic": "插件市场操作失败，请重试。",
+      "invalidRequest": "插件请求无效。",
+      "notFound": "该插件已不可用，请刷新市场后重试。",
+      "conflict": "已有本地或市场插件使用相同的插件标识。",
+      "stateChanged": "操作期间账号、插件或版本已发生变化，请确认最新状态后重试。",
+      "listChanged": "企业插件目录已变化，请重试。",
+      "accessDenied": "当前插件操作不被允许，或操作已取消。",
+      "notConfigured": "当前环境未提供插件市场。",
+      "invalidPackage": "插件安装包异常，无法安装，请联系发布者。",
+      "downloadAuthorizationExpired": "插件下载授权已过期，无法继续安装。请检查系统日期和时间后重新发起安装",
+      "downloadTimeout": "插件下载超时，请稍后重试。",
+      "downloadFailed": "插件下载失败，请检查网络后重试。",
+      "brokerRedirectPortRequired": "该插件声明了授权 broker，但同一项 OAuth 配置缺少 redirectPort，无法从插件市场安装。请联系发布者补充该字段并重新发布。",
+      "hostUnsupported": "当前 Cindy 无法识别此插件的清单格式。",
+      "namespaceClientRequired": "当前版本无法查看企业插件，请更新 Cindy。已安装的企业插件仍可使用。",
+      "organizationContextUnavailable": "暂时无法确认企业身份，请稍后重试。已安装的企业插件仍可使用。",
+      "namespaceConfigRequired": "企业插件服务暂不可用。已安装的企业插件仍可使用。",
+      "organizationUnavailable": "企业插件暂不可用。已安装的企业插件仍可使用。",
+      "idReserved": "这个插件的标识使用了官方插件保留的前缀，不能从自定义插件市场装入；请从 Cindy 插件市场安装对应的官方插件。"
+    },
+    "segmentsLabel": "查看插件",
+    "installTo": "安装到 {{device}}",
+    "conflict": "这台电脑已装了相同标识的插件，请在电脑上处理。",
+    "offline": "「{{device}}」未连接。连接恢复后可以浏览和安装插件。",
+    "outdated": "「{{device}}」上的 Cindy 版本还不支持从手机安装插件，请先在那台电脑更新 Cindy。已安装的插件照常可用。",
+    "outdatedShort": "这台电脑上的 Cindy 版本还不支持从手机安装插件，请先更新。",
+    "readFailed": "未能读取插件市场，请重试。",
+    "securityBody": "点「安装」后，电脑会先下载并检查安装包，再把它需要的权限列给你确认。确认前不会安装；装好后自动启用，可随时停用或卸载。",
+    "resultUnknownDetail": "还没确认这次安装是否完成。",
+    "unconfirmedNotInstalled": "没能确认这次安装的结果；目前这台电脑上没有这个插件。",
+    "alreadyInstalled": "这台电脑已经安装了这个插件。",
+    "unconfirmedMismatch": "没能确认这次安装的结果；这台电脑上同标识的插件可能来自本地文件、其他版本或其他来源，或它所在的市场已不再列出它。请在电脑上核对，或在「已安装」里查看。",
+    "unconfirmedLegacy": "没能确认这次安装的结果：电脑端的 Cindy 版本较旧，无法核实。请在电脑上核对，或在「已安装」里查看。",
+    "sourceUnverified": "这台电脑没有提供这个自定义市场的仓库信息，不能从手机安装。请先在那台电脑上更新 Cindy 并刷新这个市场；若仍不行，请直接在电脑上安装。",
+    "sourceUnverifiedShort": "缺少仓库信息，不能从手机安装",
+    "sourceChanged": "这个市场的来源刚刚有变化，请重新选择要安装的插件。",
+    "publicInstall": "公开市场",
+    "communityDisclaimer": "此插件由社区作者开发和维护，Cindy 已审核该版本，但无法保证插件在所有使用场景下都安全。"
+  },
+  "gotIt": "知道了",
+  "slot": {
+    "holder": "「{{name}}」在「{{device}}」上的操作还没结束",
+    "show": "查看"
+  },
+  "checks": {
+    "title": "还没结束的插件操作",
+    "titleEnded": "插件操作的结果",
+    "many": "{{count}} 项插件操作还没结束",
+    "waitingOne": "「{{name}}」在「{{device}}」上的结果待核实",
+    "settledOne": "「{{name}}」在「{{device}}」上的操作有结果了",
+    "settledMany": "{{count}} 项插件操作有结果了",
+    "attentionMany": "{{count}} 项插件操作待查看",
+    "kind": {
+      "marketInstall": "安装",
+      "update": "更新",
+      "uninstall": "卸载",
+      "pageApproval": "启用页面",
+      "enable": "启用或停用",
+      "taskSettings": "任务设置"
+    },
+    "status": {
+      "preparing": "正在准备",
+      "running": "电脑正在处理",
+      "confirmation": "等待确认",
+      "checking": "正在核实结果",
+      "waiting": "结果未确认。可以再核实一次，或不再跟踪。",
+      "recordMissing": "电脑上有这个插件，但读不到它的安装记录，还不能确认结果。可以稍后再核实一次，或不再跟踪。",
+      "offline": "「{{device}}」未连接，连接后才能核实结果。",
+      "awaitingYou": "电脑正在等你确认",
+      "unprovable": {
+        "uninstall": {
+          "absent": "电脑上已查不到这次卸载的记录，无法确认结果。电脑上现在没有这个插件。",
+          "present": "电脑上已查不到这次卸载的记录，无法确认结果。电脑上现在还装着这个插件。"
+        },
+        "pageApproval": {
+          "absent": "电脑上已查不到这次启用页面的记录，无法确认结果。电脑上现在没有这个插件。",
+          "approved": "电脑上已查不到这次启用页面的记录，无法确认结果。这个插件的页面现在已启用。",
+          "notApproved": "电脑上已查不到这次启用页面的记录，无法确认结果。这个插件的页面现在还没启用。"
+        }
+      }
+    },
+    "stop": "不再跟踪",
+    "stopHint": "只是这台手机不再跟踪，不会取消电脑上的操作。",
+    "result": {
+      "succeeded": "已完成",
+      "installed": "已安装",
+      "failed": "没有完成",
+      "cancelled": "已取消",
+      "untracked": "已不再跟踪",
+      "ended": "已结束",
+      "readingBack": "已完成，正在确认电脑上的插件…",
+      "unconfirmed": "已完成，但电脑上的这个插件之后有变更，或无法核实是这次安装的。",
+      "legacyHost": "已完成，但电脑端的 Cindy 版本较旧，无法核实。请在「已安装」里打开。",
+      "goneSince": "已完成，但电脑上现在没有这个插件。",
+      "succeededUnread": "已完成，但没能读取电脑上的插件。",
+      "uninstalled": "已卸载"
+    },
+    "close": "完成",
+    "decide": "查看并决定",
+    "decideBlocked": "这台电脑上另一项操作还没结束，结束后再决定。",
+    "readAgain": "重新读取",
+    "showInstalled": "去已安装",
+    "unlisted": "「{{device}}」已不在这个账号的电脑列表里。"
   }
 }

@@ -19,6 +19,7 @@ import {
   type GhostPermissionItem,
   type InstalledGhost,
 } from './ghost.js';
+import { isPluginMarketSourceIdentity, type PluginMarketSourceIdentity } from './pluginMarket.js';
 
 /**
  * Agent 发起安装时投给任务的宿主权限确认卡的工具名。桌面卡片据此把首行作为说明、
@@ -37,6 +38,26 @@ export function ghostInstallSourceNoticeKey(origin: GhostInstallConsentOrigin | 
   if (origin === 'custom-market') return 'settings.ghosts.installConsent.customMarketSourceNotice';
   if (origin === 'local-file') return 'settings.ghosts.installConsent.localFileSourceNotice';
   return undefined;
+}
+
+/**
+ * 自定义市场确认里的仓库说明（「仓库 host/owner/repo」「本地文件夹」）。桌面确认框、电脑作远程端
+ * 时的确认与任务卡共用。只认 custom-market 且形状合法的 `originSource`；远程 Host 发来的
+ * 请求同样经过这里，形状不对就不展示，回到只显示市场名。
+ */
+export function ghostInstallConsentOriginSourceText(
+  request: Pick<GhostInstallConsentRequest, 'origin' | 'originSource'>,
+  text: (
+    key: 'originRepository' | 'originRepositoryRef' | 'originLocalFolder',
+    args?: Record<string, string>,
+  ) => string,
+): string | null {
+  const source = request.origin === 'custom-market' ? request.originSource : undefined;
+  if (!isPluginMarketSourceIdentity(source)) return null;
+  if (source.kind === 'local') return text('originLocalFolder');
+  return source.ref
+    ? text('originRepositoryRef', { repository: source.repository, ref: source.ref })
+    : text('originRepository', { repository: source.repository });
 }
 
 export type GhostInstallConsentFacts =
@@ -76,8 +97,20 @@ export interface GhostInstallConsentRequest {
   origin: GhostInstallConsentOrigin;
   /** Host-verified public community publisher, used for installation copy. */
   communityMarket?: true;
-  /** 自定义市场名称（用户添加来源时起的名字，按原样展示）。 */
+  /** 自定义市场名称（取自来源仓库 marketplace.json 的 name，按原样展示）。 */
   originLabel?: string;
+  /**
+   * 仅 custom-market：Main 在打包所在的来源租约内、用打包所用的那份来源配置生成的去敏来源身份
+   * （见 pluginMarketSourceIdentity）。提交前 Main 复核来源指纹，来源被换即拒绝安装，所以确认时
+   * 展示的就是随后安装的来源。生成不出时缺省。
+   */
+  originSource?: PluginMarketSourceIdentity;
+  /**
+   * 这次确认会按换源落位（契约 V2.4b）：自定义市场同一配置下实际来源已变，或显式跨市场替换（服务端 ↔ 自定义、
+   * 自定义 A ↔ B）。旧实例的批准与数据随旧来源归档，所以 `facts` 按首装给出新来源的完整权限，确认后旧账号与数据
+   * 隔离保存。只在 `origin` 为 `custom-market` 或 `market` 时出现；提示文案见 ghostInstallSourceChangedNoticeKey。
+   */
+  originSourceChanged?: true;
   /** Host-generated installation identity and account impact, never package-provided. */
   target?: { namespace: string | null; sourceChanged: boolean; otherCopies: number; organizationIdentityUnavailable?: true };
   facts: GhostInstallConsentFacts;
@@ -162,4 +195,28 @@ export function ghostInstallConsentKey(
     packageSha256,
     receiverApprovalToken,
   ]);
+}
+
+/**
+ * 换源确认（`originSourceChanged`）的提示文案键（契约 V2.4b）。确认后旧实例归档、旧账号与数据隔离：
+ * - 服务端市场（显式替换为插件市场版本）：`marketSourceChanged`，不提仓库；
+ * - 自定义市场且确认里确实展示了仓库（`originSource` 是合形的 git 身份，与来源行同一判定）：`originSourceChanged`，
+ *   同时提醒核对上面显示的仓库；
+ * - 其余自定义市场（本地文件夹、身份缺省或形状不对）：`sourceChangedIsolated`，只说换源与数据隔离；
+ * - 其它来源不出现。
+ * 本机确认、电脑作远程端／分享替换、任务卡与 IM 卡都用这一处判定。
+ */
+export function ghostInstallSourceChangedNoticeKey(
+  request: {
+    origin?: GhostInstallConsentRequest['origin'];
+    originSource?: unknown;
+    originSourceChanged?: GhostInstallConsentRequest['originSourceChanged'];
+  },
+): string | null {
+  if (request.originSourceChanged !== true) return null;
+  if (request.origin === 'market') return 'settings.ghosts.installConsent.marketSourceChanged';
+  if (request.origin !== 'custom-market') return null;
+  return isPluginMarketSourceIdentity(request.originSource) && request.originSource.kind === 'git'
+    ? 'settings.ghosts.installConsent.originSourceChanged'
+    : 'settings.ghosts.installConsent.sourceChangedIsolated';
 }

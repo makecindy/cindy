@@ -136,6 +136,7 @@
     "readmeLoadFailed": "介绍未能载入，请再试。",
     "readmeUnavailable": "暂无介绍。",
     "computerSettings": "请于机上 Cindy 之「法器」中启此法器详情，以竟其设。",
+    "computerSettingsTitle": "当于电脑设之",
     "runtimeIssue": "法器前次行之有异，可重启或于差事中再试。",
     "runtimeFused": "法器屡止。关之再启，然后再试。",
     "status": {
@@ -163,7 +164,8 @@
     "version": "版本",
     "showAll": "示全",
     "showLess": "收",
-    "identifier": "标识"
+    "identifier": "标识",
+    "author": "作者"
   },
   "demo": {
     "hint": "示范之资 · 不改真实设置"
@@ -179,16 +181,19 @@
   "management": {
     "checkResult": "核实之果",
     "manage": "理法器",
-    "update": "更之",
+    "updateTo": "更新至 v{{version}}",
     "uninstall": "卸之",
     "uninstallTitle": "卸 {{name}} 乎？",
     "uninstallBody": "将自 {{device}} 除此法器、其凭证与私有设置。作品库及旧有差事之内容皆存。",
     "reject": "罢",
     "allow": "许而续之",
+    "review": "观其源与权",
     "versionChange": "{{previous}} → {{next}}",
+    "switchVersion": "将纳之版：{{version}}",
     "oauthChanged": "名籍登录之设置已变。",
     "state": {
-      "readFailed": "法器管理之资无从读取，请重整。"
+      "readFailed": "法器管理之资无从读取，请重整。",
+      "readFailedTitle": "读之未成"
     },
     "permissions": {
       "mail": "用邮件草稿与遣信之卡",
@@ -308,9 +313,16 @@
       "routineEvents": "自动化之事",
       "mcpUi": "可于言谈中示交互之页",
       "mcpUiDomains": "页可连之网域：{{domains}}",
-      "uiPageAccess": "页：{{pages}}\n页可连之网域：{{domains}}\n页可唤之工具：{{tools}}"
+      "uiPageAccess": "页：{{pages}}\n页可连之网域：{{domains}}\n页可唤之工具：{{tools}}",
+      "nodeSecretCount": "本机 Node 程序可得已存之凭证 {{count}} 件",
+      "nodeSecretOne": "本机 Node 程序可得已存之凭证一件"
     },
     "releaseChanged": "可用之版已变，请观更新后之版，再择安装。",
+    "releaseChangedTitle": "版已易",
+    "sourceUnverified": "此机未示此自订之坊之库，不能自手机更之。请先于彼机更新 Cindy 并刷新此坊；若仍不可，请径于电脑更之。",
+    "sourceUnverifiedTitle": "不能自手机更之",
+    "sourceChanged": "此坊之源方易，已止此番更新。请于电脑核此坊再试。",
+    "sourceChangedTitle": "坊之源已易",
     "settingsUnavailable": "法器规制加载未成，请重载规制后再试。",
     "settingsResultUnknown": "此举之果尚未确认。请先重读机上之设置，再决是否呈之。",
     "settingsOperationFailed": "设置之举未竟，请察连接后再试。",
@@ -320,7 +332,10 @@
       "reviewed": "已审",
       "verified-publisher": "发布者已验",
       "unverified": "未验"
-    }
+    },
+    "highRiskTitle": "险要之权",
+    "highRiskTitleCount": "{{title}} · 凡 {{count}} 项",
+    "scrollHint": "可上下滑以观全文"
   },
   "notice": {
     "title": {
@@ -337,17 +352,30 @@
       "managementFailed": "此举未成",
       "confirmation": "确认法器权柄"
     },
-    "consentOrigin": {
-      "market": "官方之坊",
-      "custom-market": "自定之坊",
-      "local-file": "此机之卷",
-      "forge": "此机所造"
+    "taskCapability": "用于今差事",
+    "consentSource": {
+      "market": "出自 {{appName}} 法器坊",
+      "customMarket": "出自自订之坊「{{name}}」",
+      "customMarketUnnamed": "出自自订之坊",
+      "localFile": "出自此机 .cindy 卷",
+      "forge": "此机自造之法器",
+      "initiatedByAgent": "由 Agent 所发 · {{origin}}",
+      "repository": "库 {{repository}}",
+      "repositoryRef": "库 {{repository}}（{{ref}}）",
+      "originSourceChanged": "此番更新所出之源，与已装之版不同。旧名籍与数据隔离保留，须重新连接名籍。唯信上列之仓库，方可续之。",
+      "marketSourceChanged": "此次更新将改为法器坊之版。旧名籍与数据隔离保留，须重新连接名籍。",
+      "sourceChangedIsolated": "此番更新所出之源，与已装之版不同。旧名籍与数据隔离保留，须重新连接名籍。",
+      "localFolder": "本地之匣",
+      "repositoryMissingInstall": "此机未示此自订之坊之库，不能自手机纳之。请先于彼机更新 Cindy 并刷新此坊；若仍不可，请径于电脑纳之。",
+      "repositoryMissingUpdate": "此机未示此自订之坊之库，不能自手机更之。请先于彼机更新 Cindy 并刷新此坊；若仍不可，请径于电脑更之。",
+      "sourceChanged": "所请之源与汝择时异，不能于手机许之。请却之而复择。",
+      "consentChanged": "所请之法器、版次或彼机与汝择时异，不能于手机许之。请却之而复择，或于彼机处之。"
     },
-    "initiator": {
-      "user": "君所发起",
-      "agent": "Agent 所发起"
-    },
-    "taskCapability": "用于今差事"
+    "sourceNotice": {
+      "community": "此法器由社区作者开发与维护，{{appName}} 已审核此版本，但无法保证其在所有使用情境下皆安全。",
+      "customMarket": "宜先信此法器坊，再核法器所请权柄。",
+      "localFile": "档之来处可信，方可续纳。"
+    }
   },
   "uiApproval": {
     "title": "法器「{{name}}」添加交互之页，须君确认后方可用",
@@ -382,5 +410,144 @@
     "cancelled": "此番不自封存",
     "archived": "「{{title}}」已封存",
     "undo": "撤"
+  },
+  "market": {
+    "title": "法器市集",
+    "installDestination": "纳于：{{device}}",
+    "filterLabel": "依来源筛法器",
+    "filter": {
+      "all": "皆",
+      "official": "官设",
+      "community": "社区",
+      "organization": "团队同享",
+      "custom": "自订"
+    },
+    "install": "纳",
+    "installAria": "纳 {{name}}",
+    "waiting": "候确认…",
+    "installing": "方安装…",
+    "loadMore": "载更多",
+    "allLoaded": "诸法器已尽示，共 {{count}} 件",
+    "unavailable": "法器坊暂不可用；已纳之法器仍可照常理之、用之。",
+    "customSourcesUnavailable": "下列自订坊暂不可访问：{{names}}，他坊不受影响。",
+    "securityTitle": "纳器与权柄",
+    "source": "所出",
+    "scope": {
+      "public": "公",
+      "organization": "组织",
+      "personal": "私",
+      "custom": "自订",
+      "local": "此机"
+    },
+    "publisherDescription": {
+      "official": "Cindy 官方所制，发布维护",
+      "community": "社区开发者所制，发布维护",
+      "organization": "本组织共享于获准成员",
+      "custom": "取自所添 Git 或本机目录市场"
+    },
+    "errors": {
+      "generic": "法器坊之操作未成，请再试。",
+      "invalidRequest": "法器之请求无效。",
+      "notFound": "此法器已不可用，请重整法器坊后再试。",
+      "conflict": "已有此机或坊中法器用同一标识。",
+      "stateChanged": "操作之间，名籍、法器或版本已变，请核最新之状后再试。",
+      "listChanged": "企业法器目录已变，请再试。",
+      "accessDenied": "此法器操作不被允许，或已取消。",
+      "notConfigured": "此环境未设法器坊。",
+      "invalidPackage": "法器安装包有异，不可纳，请联系发布者。",
+      "downloadAuthorizationExpired": "法器下载授权已过期，无法续装。请核对系统日期与时间后重新安装",
+      "downloadTimeout": "法器取下逾时，请稍后再试。",
+      "downloadFailed": "法器取下未成，请查网络后再试。",
+      "brokerRedirectPortRequired": "此法器声明授权 broker，然同一 OAuth 设置缺 redirectPort，故不能自法器坊纳之。请联系发布者补此字段并重新发布。",
+      "hostUnsupported": "当前 Cindy 不能识此法器之清单格式。",
+      "namespaceClientRequired": "此版不能观企业法器，请更新 Cindy。已纳之企业法器仍可用。",
+      "organizationContextUnavailable": "暂不能确认企业身分，请稍后再试。已纳之企业法器仍可用。",
+      "namespaceConfigRequired": "企业法器之服务暂不可用。已纳之企业法器仍可用。",
+      "organizationUnavailable": "企业法器暂不可用。已纳之企业法器仍可用。",
+      "idReserved": "此法器之标识用官方法器保留前缀，不可自自订法器坊纳之；请自 Cindy 法器坊纳相应之官方法器。"
+    },
+    "segmentsLabel": "观法器",
+    "installTo": "纳于 {{device}}",
+    "conflict": "此机已纳同标识之法器，请于电脑处之。",
+    "offline": "「{{device}}」未连。连复之后，可览可纳法器。",
+    "outdated": "「{{device}}」之 Cindy 尚不能自手机纳法器，请先于彼机更新 Cindy。已纳之法器照常可用。",
+    "outdatedShort": "此机之 Cindy 尚不能自手机纳法器，请先更新。",
+    "readFailed": "未能读法器市集，请复试。",
+    "securityBody": "点「纳」后，电脑先下载、检视其包，再列所需权柄请君确认。未确认则不纳；纳毕自启，可随时停之、去之。",
+    "resultUnknownDetail": "此番纳器成否，尚未确认。",
+    "unconfirmedNotInstalled": "此番纳器之果未能确认；今此机未有此法器。",
+    "alreadyInstalled": "此机已纳此法器。",
+    "unconfirmedMismatch": "此番纳器之果未能确认；此机同名之法器或出自本地之卷、他版或他源，或其市已不列之。请于彼机核之，或于「已纳」中观之。",
+    "unconfirmedLegacy": "未能确此番所装之果：彼机之 Cindy 版旧，不能验之。请于彼机核之，或于「已纳」中观之。",
+    "sourceUnverified": "此机未示此自订之坊之库，不能自手机纳之。请先于彼机更新 Cindy 并刷新此坊；若仍不可，请径于电脑纳之。",
+    "sourceUnverifiedShort": "缺库之讯，不能自手机纳之",
+    "sourceChanged": "此坊之源方易，请复择所欲纳之法器。",
+    "publicInstall": "公开市场",
+    "communityDisclaimer": "此法器由社区作者开发与维护，Cindy 已审核此版本，但无法保证其在所有使用情境下皆安全。"
+  },
+  "gotIt": "知矣",
+  "slot": {
+    "holder": "「{{name}}」于「{{device}}」之事未竟",
+    "show": "观之"
+  },
+  "checks": {
+    "title": "未竟之法器事",
+    "titleEnded": "法器之事之果",
+    "many": "法器之事未竟者 {{count}}",
+    "waitingOne": "「{{name}}」于「{{device}}」之果待核",
+    "settledOne": "「{{name}}」于「{{device}}」之事已有果",
+    "settledMany": "法器之事已有果者 {{count}}",
+    "attentionMany": "法器之事待观者 {{count}}",
+    "kind": {
+      "marketInstall": "纳之",
+      "update": "更之",
+      "uninstall": "卸之",
+      "pageApproval": "启其页",
+      "enable": "启或止",
+      "taskSettings": "任务之设"
+    },
+    "status": {
+      "preparing": "将备",
+      "running": "彼机方理之",
+      "confirmation": "待确",
+      "checking": "方核其果",
+      "waiting": "果未确。可复核之，或不复随之。",
+      "recordMissing": "彼机有此法器，然其装录未可读，果未可确。可稍后复核之，或不复随之。",
+      "offline": "「{{device}}」未连，连之乃可核果。",
+      "awaitingYou": "彼机待汝确之",
+      "unprovable": {
+        "uninstall": {
+          "absent": "彼机已无此番卸之之录，其果不可确。今彼机无此法器。",
+          "present": "彼机已无此番卸之之录，其果不可确。今彼机仍存此法器。"
+        },
+        "pageApproval": {
+          "absent": "彼机已无此番启页之录，其果不可确。今彼机无此法器。",
+          "approved": "彼机已无此番启页之录，其果不可确。其页今已启。",
+          "notApproved": "彼机已无此番启页之录，其果不可确。其页今犹未启。"
+        }
+      }
+    },
+    "stop": "不复随之",
+    "stopHint": "唯此手机不复随之，不废彼机之事。",
+    "result": {
+      "succeeded": "已成",
+      "installed": "已纳",
+      "failed": "未成",
+      "cancelled": "已罢",
+      "untracked": "已不复随之",
+      "ended": "已终",
+      "readingBack": "已成，方核彼机之法器…",
+      "unconfirmed": "已成，然彼机此法器其后有易，或不能验其为此番所装。",
+      "legacyHost": "已成，然彼机之 Cindy 版旧，不能验之。请于「已纳」中启之。",
+      "goneSince": "已成，然彼机今无此法器。",
+      "succeededUnread": "已成，然未能读彼机之法器。",
+      "uninstalled": "已卸"
+    },
+    "close": "毕",
+    "decide": "观而决之",
+    "decideBlocked": "此机另有一事未竟，竟后再决。",
+    "readAgain": "复读",
+    "showInstalled": "往已纳",
+    "unlisted": "「{{device}}」已不在此号之机列。"
   }
 }

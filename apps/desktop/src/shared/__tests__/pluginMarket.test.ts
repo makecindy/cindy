@@ -1,9 +1,15 @@
 import { describe, expect, it } from 'vitest';
 
+import { parseMarketSource } from '../../main/plugin-market/sources/parse';
 import {
   isPluginMarketCustomIconKey,
+  isPluginMarketSourceIdentity,
+  pluginMarketFetchAddress,
+  pluginMarketRepositoryFromUrl,
+  pluginMarketSourceIdentity,
   pluginMarketCustomIconProjectionToken,
   pluginMarketCustomIconSourceToken,
+  type MarketSource,
 } from '../pluginMarket';
 
 describe('Plugin Market shared contract', () => {
@@ -22,5 +28,214 @@ describe('Plugin Market shared contract', () => {
     expect(pluginMarketCustomIconProjectionToken(key)).toBe('b'.repeat(16));
     expect(pluginMarketCustomIconSourceToken('0'.repeat(64))).toBeNull();
     expect(pluginMarketCustomIconProjectionToken('invalid')).toBeNull();
+  });
+});
+
+/* 测试价值
+ * - 生产入口与可观察结果：pluginMarketRepositoryFromUrl（把配置地址或 git 解析出的实际取包地址归约成展示用
+ *   仓库）、pluginMarketSourceIdentity（组装进入确认、条目与远程回执的身份）与控制端用的
+ *   isPluginMarketSourceIdentity；添加来源的地址先经生产 parseMarketSource 归一。
+ * - 依据：PR #12684／#12731 维护者评审（2026-11-25）：目标 Host 生成去敏的仓库身份与不透明来源标识；
+ *   credentials-and-local-storage.md：凭证只留在系统 git，不进任何投影。
+ * - 现有覆盖缺口：此前没有来源身份投影，来源地址只在 Main 内使用。
+ * - 最小失败输入：内嵌令牌、user:pass、端口；带 `?` / `#` 的地址（PR #12731 Codex P1：会被 URL 解析器截掉，git 却取另一个仓库）；手工改坏的配置（非字符串、双向控制符、
+ *   百分号编码、`..` 路径段、不合法 ref）；缺来源标识或取包记录。函数新增之前这些用例全部失败。
+ * - tier：unit（纯函数，node 环境）。
+ */
+const SOURCE_ID = 'AbCdEfGhIjKlMnOpQrStUv';
+
+describe('pluginMarketRepositoryFromUrl', () => {
+  const added = (input: string) => {
+    const parsed = parseMarketSource({ source: input }, '/home/tester');
+    if (!parsed.ok || parsed.source.type !== 'git') throw new Error('not a git source');
+    return pluginMarketRepositoryFromUrl(parsed.source.url);
+  };
+
+  it('names the repository for every Git address form a source can be added with', () => {
+    for (const input of [
+      'acme/plugins',
+      'https://github.com/acme/plugins.git',
+      'https://github.com/acme/plugins',
+      'https://github.com/acme/plugins/',
+      'HTTPS://GitHub.COM/acme/plugins.git',
+      'ssh://git@github.com/acme/plugins.git',
+      'git@github.com:acme/plugins.git',
+    ]) expect(added(input)).toBe('github.com/acme/plugins');
+    // Forms git can still fetch from: hand-edited configs and insteadOf rewrites.
+    expect(pluginMarketRepositoryFromUrl('git://github.com/acme/plugins.git')).toBe('github.com/acme/plugins');
+    expect(pluginMarketRepositoryFromUrl('http://github.com/acme/plugins')).toBe('github.com/acme/plugins');
+    expect(added('https://gitlab.example.com/group/sub/plugins.git')).toBe('gitlab.example.com/group/sub/plugins');
+  });
+
+  it('never carries credentials or ports into the repository', () => {
+    for (const url of [
+      'https://ghp_SECRET@github.com/acme/plugins.git',
+      'https://user:pass@github.com/acme/plugins.git',
+      'https://github.com:8443/acme/plugins.git',
+      'ssh://git@github.com:2222/acme/plugins.git',
+    ]) {
+      const repository = pluginMarketRepositoryFromUrl(url);
+      expect(repository).toBe('github.com/acme/plugins');
+      expect(JSON.stringify(repository)).not.toMatch(/SECRET|ghp_|user|pass|8443|2222/);
+    }
+  });
+
+  it('fails closed for addresses it cannot reduce to the repository git really fetches', () => {
+    for (const url of [
+      '', '   ', 'github.com', 'https://github.com/only-owner', 'https://github.com/a/b/c/d/e',
+      // Git sends these suffixes as part of the path (ssh, git) or the request (http); a URL parser drops them.
+      'https://github.com/acme/plugins.git?access_token=SECRET', 'https://github.com/acme/plugins.git#SECRET',
+      'ssh://git@github.com/acme/plugins.git?other', 'ssh://git@github.com/acme/plugins.git#other',
+      // URL parsing would normalise these into a different path than the one git requests.
+      'https://github.com/acme/x/../plugins', 'https://github.com/acme/./plugins', 'https://github.com/acme/x/%2e%2e/plugins',
+      'https://github.com/acme/plu%67ins.git', 'https://github.com//acme/plugins',
+      // Parsers disagree on the host in these.
+      'https://github.com\\@evil.test/acme/plugins', 'https://a@evil.test@github.com/acme/plugins',
+      'https://exa mple.com/acme/plugins', 'https://[::1]/acme/plugins', 'https://bad_host.test/acme/plugins',
+      'git@github.com:/acme/plugins.git', 'github.com:acme/plugins', 'git@github.com/acme/plugins',
+      'file:///home/tester/plugins', '/home/tester/plugins', 'not a url at all',
+      'https://github.com/acme/plugins\u202e.git', 'https://github.com/acme/plug\u200bins',
+      `https://${'a'.repeat(250)}.com/acme/plugins`,
+    ]) expect(pluginMarketRepositoryFromUrl(url)).toBeNull();
+    expect(pluginMarketRepositoryFromUrl(42)).toBeNull();
+  });
+});
+
+describe('pluginMarketFetchAddress', () => {
+  // Parts that feed the source id: scheme, host and port distinguish endpoints; credentials never appear.
+  it('keeps the endpoint parts that tell sources apart and drops credentials', () => {
+    expect(pluginMarketFetchAddress('https://ghp_SECRET@Git.Example.test:8443/acme/plugins.git'))
+      .toEqual({ identity: 'https://Git.Example.test:8443/acme/plugins.git', scheme: 'https', user: '', host: 'git.example.test', port: '8443', path: '/acme/plugins.git' });
+    // PR #12731 Codex P1 (trailing whitespace) and the follow-up audit: the parts are the raw bytes git uses.
+    // Nothing that could merge two different actual addresses is normalised: no trimming, no URL-parser
+    // normalisation, path and port kept as written. Only the host (DNS) and the scheme are lower-cased.
+    for (const raw of ['ssh://git@git.example.test/acme/plugins.git ', ' https://git.example.test/acme/plugins.git',
+      'git@git.example.test:acme/plugins.git\t', 'https://bücher.example/acme/plugins.git']) {
+      expect(pluginMarketFetchAddress(raw)).toBeNull();
+    }
+    const part = (raw: string) => pluginMarketFetchAddress(raw);
+    expect(part('https://git.example.test/acme/plugins')?.path).toBe('/acme/plugins');
+    expect(part('https://git.example.test/acme/plugins.git')?.path).toBe('/acme/plugins.git');
+    expect(part('https://git.example.test/acme/plugins.git/')?.path).toBe('/acme/plugins.git/');
+    expect(part('https://git.example.test/Acme/Plugins.git')?.path).toBe('/Acme/Plugins.git');
+    expect(part('https://git.example.test:443/acme/plugins.git')?.port).toBe('443');
+    expect(part('https://git.example.test/acme/plugins.git')?.port).toBe('');
+    expect(part('HTTPS://Git.Example.TEST/acme/plugins.git')).toMatchObject({ scheme: 'https', host: 'git.example.test' });
+    // Display may still normalise: these spellings share one repository text but not one source id.
+    for (const raw of ['https://git.example.test/acme/plugins', 'https://git.example.test/acme/plugins.git/']) {
+      expect(pluginMarketRepositoryFromUrl(raw)).toBe('git.example.test/acme/plugins');
+    }
+    // PR #12731 maintainer review 6054636680: a `?` or `#` before the first path slash ends the authority for
+    // libcurl and git, but a greedy userinfo match swallowed it and reported another host. The whole string is
+    // rejected before it is split, and so is every other shape on which parsers can disagree.
+    for (const raw of [
+      'https://git.example.test?@evil.example/acme/plugins.git',
+      'https://git.example.test#@evil.example/acme/plugins.git',
+      'https://user@git.example.test@evil.example/acme/plugins.git',
+      'https://a/b@evil.example/acme/plugins.git',
+      'https://@git.example.test/acme/plugins.git',
+      'https://[::1]/acme/plugins.git',
+      'https://git.example.test:abc/acme/plugins.git',
+      'https://git.example.test:0443/acme/plugins.git',
+      'https://git.example.test:70000/acme/plugins.git',
+      'https://git.example.test:/acme/plugins.git',
+      'https://git.example.test//acme/plugins.git',
+      'https://git.example.test/acme//plugins.git',
+      'https://git.example.test./acme/plugins.git',
+      'ssh://-oProxyCommand@git.example.test/acme/plugins.git',
+      'ssh://git@git.example.test:22:23/acme/plugins.git',
+      'git@git.example.test:acme/plugins.git:x',
+      'git@git.example.test:acme//plugins.git',
+      'git@git.example.test:../plugins.git',
+    ]) {
+      expect(pluginMarketFetchAddress(raw), raw).toBeNull();
+      expect(pluginMarketRepositoryFromUrl(raw), raw).toBeNull();
+    }
+    // PR #12731 Codex P1: `?…` / `#…` would be cut off by a URL parser while git fetches a different repository
+    // (`plugins.git?other` is another path on an SSH server), so such addresses have no endpoint at all.
+    for (const suffix of ['?other', '#other']) {
+      expect(pluginMarketFetchAddress(`ssh://git@git.example.test/acme/plugins.git${suffix}`)).toBeNull();
+      expect(pluginMarketFetchAddress(`git://git.example.test/acme/plugins.git${suffix}`)).toBeNull();
+      expect(pluginMarketFetchAddress(`https://git.example.test/acme/plugins.git${suffix}`)).toBeNull();
+    }
+    // SSH login users are part of the source (same host and path can resolve per user); https userinfo is a
+    // credential and is never read.
+    expect(pluginMarketFetchAddress('ssh://deploy@git.example.test:2222/acme/plugins.git'))
+      .toEqual({ identity: 'ssh://deploy@git.example.test:2222/acme/plugins.git', scheme: 'ssh', user: 'deploy', host: 'git.example.test', port: '2222', path: '/acme/plugins.git' });
+    expect(pluginMarketFetchAddress('git@git.example.test:acme/plugins.git'))
+      .toEqual({ identity: 'git@git.example.test:acme/plugins.git', scheme: 'scp', user: 'git', host: 'git.example.test', port: '', path: 'acme/plugins.git' });
+    // PR #12731 Codex P1: git passes `git:tenant-a` to ssh as the whole login name, not user and password, so two
+    // tenants would merge if the suffix were dropped. Such SSH userinfo yields no identity.
+    expect(pluginMarketFetchAddress('ssh://git:tenant-a@git.example.test/acme/plugins.git')).toBeNull();
+    expect(pluginMarketRepositoryFromUrl('ssh://git:tenant-a@git.example.test/acme/plugins.git')).toBeNull();
+    // PR #12731 maintainer review 6055280843: OpenSSH Host aliases are case-sensitive, so the identity keeps the raw
+    // host; only http(s)/git userinfo (a credential) is removed. Display still normalises.
+    const identity = (raw: string) => pluginMarketFetchAddress(raw)?.identity;
+    expect(identity('ssh://git@Mirror/acme/plugins.git')).not.toBe(identity('ssh://git@mirror/acme/plugins.git'));
+    expect(identity('git@Mirror:acme/plugins.git')).not.toBe(identity('git@mirror:acme/plugins.git'));
+    expect(identity('https://ghp_ONE@git.example.test/acme/plugins.git')).toBe('https://git.example.test/acme/plugins.git');
+    expect(identity('https://ghp_TWO@git.example.test/acme/plugins.git')).toBe(identity('https://git.example.test/acme/plugins.git'));
+    expect(pluginMarketRepositoryFromUrl('git@Mirror:acme/plugins.git')).toBe(pluginMarketRepositoryFromUrl('git@mirror:acme/plugins.git'));
+    // Paths the display identity rejects (e.g. a `.github` repository) still identify a source.
+    expect(pluginMarketFetchAddress('https://github.com/acme/.github')).toMatchObject({ path: '/acme/.github' });
+    expect(pluginMarketRepositoryFromUrl('https://github.com/acme/.github')).toBeNull();
+    for (const url of ['file:///home/tester/plugins', 'https://github.com/', 'https://a@b@github.com/acme/plugins', 42]) {
+      expect(pluginMarketFetchAddress(url)).toBeNull();
+    }
+  });
+});
+
+describe('pluginMarketSourceIdentity', () => {
+  const git = (extra: Record<string, unknown> = {}) =>
+    ({ type: 'git', url: 'https://origin.example.test/acme/plugins.git', sparsePaths: [], ...extra }) as unknown as MarketSource;
+  const facts = { sourceId: SOURCE_ID, fetchedRepository: 'mirror.example.test/tenant/plugins' };
+
+  it('shows the repository git actually fetched from, not the configured address', () => {
+    expect(pluginMarketSourceIdentity(git(), facts))
+      .toEqual({ kind: 'git', repository: 'mirror.example.test/tenant/plugins', sourceId: SOURCE_ID });
+    expect(pluginMarketSourceIdentity(git({ ref: 'release/2026' }), facts))
+      .toEqual({ kind: 'git', repository: 'mirror.example.test/tenant/plugins', ref: 'release/2026', sourceId: SOURCE_ID });
+  });
+
+  it('marks a local folder market by kind and source id only, without its path', () => {
+    const identity = pluginMarketSourceIdentity({ type: 'local', path: '/home/tester/Projects/market' },
+      { sourceId: SOURCE_ID, fetchedRepository: null });
+    expect(identity).toEqual({ kind: 'local', sourceId: SOURCE_ID });
+    expect(JSON.stringify(identity)).not.toContain('Projects');
+  });
+
+  it('yields no identity when any part cannot be produced or verified', () => {
+    // No source id (key unavailable) or a malformed one.
+    expect(pluginMarketSourceIdentity(git(), { ...facts, sourceId: null })).toBeNull();
+    expect(pluginMarketSourceIdentity(git(), { ...facts, sourceId: 'short' })).toBeNull();
+    // No verified fetch record for this cache version, or a malformed one.
+    expect(pluginMarketSourceIdentity(git(), { ...facts, fetchedRepository: null })).toBeNull();
+    expect(pluginMarketSourceIdentity(git(), { ...facts, fetchedRepository: 'https://ghp_SECRET@x.test/a/b' })).toBeNull();
+    // git still fetches a configured ref, so an invalid one yields no identity instead of a ref-less one.
+    for (const ref of [42, '--upload-pack=evil', 'main branch', '../main', `a${'b'.repeat(128)}`]) {
+      expect(pluginMarketSourceIdentity(git({ ref }), facts)).toBeNull();
+    }
+    // An unset ref (absent key as stored by the add dialog; null or empty as git treats them) is no ref.
+    for (const ref of [undefined, null, '']) {
+      expect(pluginMarketSourceIdentity(git({ ref }), facts))
+        .toEqual({ kind: 'git', repository: 'mirror.example.test/tenant/plugins', sourceId: SOURCE_ID });
+    }
+    expect(pluginMarketSourceIdentity({ type: 'svn' } as unknown as MarketSource, facts)).toBeNull();
+  });
+
+  it('accepts only the contract shape when a controller validates a received identity', () => {
+    for (const valid of [
+      { kind: 'git', repository: 'github.com/acme/plugins', sourceId: SOURCE_ID },
+      { kind: 'git', repository: 'github.com/acme/plugins', ref: 'main', sourceId: SOURCE_ID },
+      { kind: 'local', sourceId: SOURCE_ID },
+    ]) expect(isPluginMarketSourceIdentity(valid)).toBe(true);
+    for (const invalid of [
+      null, 'github.com/acme/plugins', { kind: 'local' }, { kind: 'git', repository: 'github.com/acme/plugins' },
+      { kind: 'git', repository: 'github.com/acme', sourceId: SOURCE_ID },
+      { kind: 'git', repository: 'github.com/acme/plugins', sourceId: `${SOURCE_ID}=` },
+      { kind: 'git', repository: 'github.com/acme/plugins', url: 'https://github.com/acme/plugins', sourceId: SOURCE_ID },
+      { kind: 'git', repository: 'github.com/acme/plugins', ref: 7, sourceId: SOURCE_ID },
+      { kind: 'local', path: '/home/tester/market', sourceId: SOURCE_ID },
+    ]) expect(isPluginMarketSourceIdentity(invalid)).toBe(false);
   });
 });

@@ -7,7 +7,7 @@ import { Spinner } from '@/components/ui/spinner';
 import { useAuth } from '@/contexts/AuthContext';
 import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
-import { GhostInstallConsentContent, ghostInstallConsentSourceLabel } from '@/cindy-brain/GhostInstallConsentHost';
+import { GHOST_INSTALL_CONSENT_TEXT_CLASS, GhostInstallConsentContent, ghostInstallConsentSourceLabel } from '@/cindy-brain/GhostInstallConsentHost';
 import { useSignInToCindy } from '@/hooks/useSignInToCindy';
 import { extractIpcError } from '@/utils/ipcError';
 import type { InstalledGhost } from '../../../shared/ghost';
@@ -160,10 +160,12 @@ function RemoteShareInstall({ snapshot, device, online, onBusy, onError, onInsta
           ? t('settings.ghosts.installConsent.installMeta', { version: consent.facts.version, source: ghostInstallConsentSourceLabel(t, consent) })
           : t('settings.ghosts.installConsent.updateMeta', { from: consent.facts.previousVersion, to: consent.facts.version, source: ghostInstallConsentSourceLabel(t, consent) })}`,
         content: <GhostInstallConsentContent facts={consent.facts} origin={consent.origin} communityMarket={consent.communityMarket}
-          replacement={replacement} sourceChanged={consent.target?.sourceChanged} />,
+          replacement={replacement} sourceChanged={consent.target?.sourceChanged}
+          originSourceChanged={consent.originSourceChanged === true} originSource={consent.originSource} />,
         confirmText: t(replacement ? 'sharing.localReplaceButton' : consent.facts.kind === 'install'
           ? 'settings.ghosts.installConsent.confirmInstall' : 'settings.ghosts.installConsent.confirmUpdate'),
-        cancelText: t('settings.ghosts.installConsent.cancel'), maxWidth: 460, contentSelectable: true,
+        cancelText: t('settings.ghosts.installConsent.cancel'), maxWidth: 460,
+        textClassName: GHOST_INSTALL_CONSENT_TEXT_CLASS, contentSelectable: true,
       }, abort.signal);
       if (writable() && !abort.signal.aborted && operation.current === next.operationId)
         await invoke('answer', { operationId: next.operationId, requestId: consent.requestId, confirmed });

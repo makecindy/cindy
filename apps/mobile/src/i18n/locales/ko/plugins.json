@@ -136,6 +136,7 @@
     "readmeLoadFailed": "소개를 불러오지 못했습니다. 다시 시도하세요.",
     "readmeUnavailable": "소개가 없습니다.",
     "computerSettings": "컴퓨터의 Cindy에서 플러그인 메뉴를 열고 이 플러그인의 세부 정보에서 구성하세요.",
+    "computerSettingsTitle": "컴퓨터에서 설정을 완료하세요",
     "runtimeIssue": "플러그인이 예기치 않게 중지되었습니다. 다시 열거나 작업에서 다시 시도하세요.",
     "runtimeFused": "오류가 반복되어 플러그인이 중지되었습니다. 껐다가 다시 켠 후 시도하세요.",
     "status": {
@@ -163,7 +164,8 @@
     "version": "버전",
     "showAll": "모두 보기",
     "showLess": "접기",
-    "identifier": "식별자"
+    "identifier": "식별자",
+    "author": "제작자"
   },
   "demo": {
     "hint": "데모 데이터 · 실제 설정은 변경되지 않습니다"
@@ -179,16 +181,19 @@
   "management": {
     "checkResult": "결과 확인",
     "manage": "플러그인 관리",
-    "update": "업데이트",
+    "updateTo": "v{{version}}(으)로 업데이트",
     "uninstall": "제거",
     "uninstallTitle": "{{name}}을(를) 제거할까요?",
     "uninstallBody": "{{device}}에서 플러그인, 인증 정보 및 전용 설정을 제거합니다. 라이브러리와 기존 작업 내용은 유지됩니다.",
     "reject": "취소",
     "allow": "허용하고 계속",
+    "review": "출처와 권한 확인",
     "versionChange": "{{previous}} → {{next}}",
+    "switchVersion": "설치할 버전: {{version}}",
     "oauthChanged": "계정 로그인 설정이 변경되었습니다.",
     "state": {
-      "readFailed": "플러그인 관리 정보를 불러오지 못했습니다. 새로 고침하세요."
+      "readFailed": "플러그인 관리 정보를 불러오지 못했습니다. 새로 고침하세요.",
+      "readFailedTitle": "읽지 못함"
     },
     "permissions": {
       "mail": "메일 초안 및 전송 카드 사용",
@@ -308,9 +313,16 @@
       "routineEvents": "자동화 이벤트",
       "mcpUi": "대화에 대화형 페이지를 표시할 수 있음",
       "mcpUiDomains": "페이지가 연결할 수 있는 도메인: {{domains}}",
-      "uiPageAccess": "페이지: {{pages}}\n페이지가 연결할 수 있는 도메인: {{domains}}\n페이지가 호출할 수 있는 도구: {{tools}}"
+      "uiPageAccess": "페이지: {{pages}}\n페이지가 연결할 수 있는 도메인: {{domains}}\n페이지가 호출할 수 있는 도구: {{tools}}",
+      "nodeSecretCount": "로컬 Node 프로그램이 저장된 자격 증명 {{count}}개를 받을 수 있음",
+      "nodeSecretOne": "로컬 Node 프로그램이 저장된 자격 증명 1개를 받을 수 있음"
     },
     "releaseChanged": "사용 가능한 버전이 변경되었습니다. 새 버전을 확인한 뒤 설치하세요.",
+    "releaseChangedTitle": "버전이 변경됨",
+    "sourceUnverified": "이 컴퓨터가 이 사용자 지정 마켓의 저장소 정보를 보내지 않아 휴대폰에서 업데이트할 수 없습니다. 먼저 그 컴퓨터에서 Cindy를 업데이트하고 이 마켓을 새로 고치세요. 그래도 안 되면 컴퓨터에서 바로 플러그인을 업데이트하세요.",
+    "sourceUnverifiedTitle": "휴대폰에서 업데이트할 수 없음",
+    "sourceChanged": "이 마켓의 출처가 방금 바뀌어 업데이트를 중단했습니다. 컴퓨터에서 이 마켓을 확인한 뒤 다시 시도하세요.",
+    "sourceChangedTitle": "마켓 소스가 변경됨",
     "settingsUnavailable": "플러그인 설정을 불러오지 못했습니다. 설정을 다시 불러와 주세요.",
     "settingsResultUnknown": "작업 결과를 확인하지 못했습니다. 다시 제출하기 전에 컴퓨터의 설정을 다시 불러와 확인하세요.",
     "settingsOperationFailed": "설정 작업을 완료하지 못했습니다. 연결을 확인하고 다시 시도해 주세요.",
@@ -320,7 +332,10 @@
       "reviewed": "검토됨",
       "verified-publisher": "게시자 인증됨",
       "unverified": "미인증"
-    }
+    },
+    "highRiskTitle": "위험도가 높은 권한",
+    "highRiskTitleCount": "{{title}} · {{count}}개",
+    "scrollHint": "스크롤하면 전체 내용을 볼 수 있습니다"
   },
   "notice": {
     "title": {
@@ -337,17 +352,30 @@
       "managementFailed": "작업 실패",
       "confirmation": "플러그인 권한 확인"
     },
-    "consentOrigin": {
-      "market": "공식 마켓",
-      "custom-market": "사용자 지정 마켓",
-      "local-file": "로컬 파일",
-      "forge": "로컬 빌드"
+    "taskCapability": "현재 작업용",
+    "consentSource": {
+      "market": "{{appName}} 플러그인 마켓에서",
+      "customMarket": "사용자 지정 마켓 \"{{name}}\"에서",
+      "customMarketUnnamed": "사용자 지정 마켓에서",
+      "localFile": "로컬 .cindy 파일에서",
+      "forge": "로컬에서 개발한 플러그인",
+      "initiatedByAgent": "Agent 요청 · {{origin}}",
+      "repository": "저장소 {{repository}}",
+      "repositoryRef": "저장소 {{repository}} ({{ref}})",
+      "originSourceChanged": "이 업데이트는 설치된 버전과 다른 소스에서 가져옵니다. 기존 계정과 데이터는 별도로 보관되므로 업데이트 후 계정을 다시 연결하세요. 위에 표시된 저장소를 신뢰하는 경우에만 계속하세요.",
+      "marketSourceChanged": "이 업데이트는 플러그인 마켓의 버전으로 전환합니다. 기존 계정과 데이터는 별도로 보관됩니다. 업데이트 후 계정을 다시 연결하세요.",
+      "sourceChangedIsolated": "이 업데이트는 설치된 버전과 다른 소스에서 가져옵니다. 기존 계정과 데이터는 별도로 보관되므로 업데이트 후 계정을 다시 연결하세요.",
+      "localFolder": "로컬 폴더",
+      "repositoryMissingInstall": "이 컴퓨터가 이 사용자 지정 마켓의 저장소 정보를 보내지 않아 휴대폰에서 설치할 수 없습니다. 먼저 그 컴퓨터에서 Cindy를 업데이트하고 이 마켓을 새로 고치세요. 그래도 안 되면 컴퓨터에서 바로 설치하세요.",
+      "repositoryMissingUpdate": "이 컴퓨터가 이 사용자 지정 마켓의 저장소 정보를 보내지 않아 휴대폰에서 업데이트할 수 없습니다. 먼저 그 컴퓨터에서 Cindy를 업데이트하고 이 마켓을 새로 고치세요. 그래도 안 되면 컴퓨터에서 바로 플러그인을 업데이트하세요.",
+      "sourceChanged": "이 요청의 출처가 선택한 것과 달라 휴대폰에서 허용할 수 없습니다. 거부한 뒤 다시 선택하세요.",
+      "consentChanged": "이 요청은 선택한 것과 다른 플러그인, 버전 또는 컴퓨터에 대한 것이라 휴대폰에서 허용할 수 없습니다. 거부한 뒤 다시 선택하거나 컴퓨터에서 처리하세요."
     },
-    "initiator": {
-      "user": "사용자가 요청함",
-      "agent": "Agent가 요청함"
-    },
-    "taskCapability": "현재 작업용"
+    "sourceNotice": {
+      "community": "이 플러그인은 커뮤니티 개발자가 개발하고 유지 관리합니다. {{appName}}는 이 버전을 검토했지만 모든 사용 상황에서 안전하다고 보장할 수는 없습니다.",
+      "customMarket": "이 마켓을 신뢰할 수 있는지 확인하고 플러그인이 요청하는 권한을 검토하세요.",
+      "localFile": "신뢰할 수 있는 출처에서 받은 파일인지 확인한 뒤에 설치를 계속하세요."
+    }
   },
   "uiApproval": {
     "title": "플러그인 “{{name}}”에 대화형 페이지가 추가되었습니다. 사용하려면 권한을 확인해 주세요.",
@@ -382,5 +410,144 @@
     "cancelled": "이번에는 자동으로 보관하지 않습니다",
     "archived": "\"{{title}}\"을(를) 보관했습니다",
     "undo": "실행 취소"
+  },
+  "market": {
+    "title": "플러그인 마켓",
+    "installDestination": "설치 대상: {{device}}",
+    "filterLabel": "출처별 플러그인 필터",
+    "filter": {
+      "all": "전체",
+      "official": "공식",
+      "community": "커뮤니티",
+      "organization": "팀 공유",
+      "custom": "사용자 지정"
+    },
+    "install": "설치",
+    "installAria": "{{name}} 설치",
+    "waiting": "확인 대기 중…",
+    "installing": "설치 중…",
+    "loadMore": "더 보기",
+    "allLoaded": "플러그인 {{count}}개를 모두 표시했습니다",
+    "unavailable": "플러그인 마켓을 일시적으로 사용할 수 없습니다. 설치된 플러그인은 계속 사용할 수 있습니다.",
+    "customSourcesUnavailable": "다음 사용자 지정 마켓을 일시적으로 사용할 수 없습니다: {{names}}. 다른 마켓에는 영향을 주지 않습니다.",
+    "securityTitle": "설치 및 권한",
+    "source": "소스",
+    "scope": {
+      "public": "공개",
+      "organization": "조직",
+      "personal": "개인",
+      "custom": "사용자 지정",
+      "local": "로컬"
+    },
+    "publisherDescription": {
+      "official": "Cindy 공식 배포 및 유지 관리",
+      "community": "커뮤니티 개발자가 배포 및 유지 관리",
+      "organization": "조직에서 권한이 있는 구성원에게 공유",
+      "custom": "추가한 Git 또는 로컬 폴더 마켓에서 제공"
+    },
+    "errors": {
+      "generic": "플러그인 마켓 작업에 실패했습니다. 다시 시도해 주세요.",
+      "invalidRequest": "플러그인 요청이 올바르지 않습니다.",
+      "notFound": "이 플러그인은 더 이상 사용할 수 없습니다. 마켓을 새로 고친 후 다시 시도해 주세요.",
+      "conflict": "설치된 플러그인 또는 마켓 플러그인이 동일한 플러그인 ID를 사용하고 있습니다.",
+      "stateChanged": "작업 중 계정, 플러그인 또는 릴리스가 변경되었습니다. 최신 상태를 확인한 후 다시 시도해 주세요.",
+      "listChanged": "조직 플러그인 목록이 변경되었습니다. 다시 시도하세요.",
+      "accessDenied": "이 플러그인 작업은 허용되지 않았거나 취소되었습니다.",
+      "notConfigured": "이 환경에서는 플러그인 마켓을 사용할 수 없습니다.",
+      "invalidPackage": "플러그인 패키지에 문제가 있어 설치할 수 없습니다. 게시자에게 문의해 주세요.",
+      "downloadAuthorizationExpired": "플러그인 다운로드 권한이 만료되어 설치를 계속할 수 없습니다. 시스템 날짜와 시간을 확인한 후 설치를 다시 시작하세요.",
+      "downloadTimeout": "플러그인 다운로드 시간이 초과되었습니다. 잠시 후 다시 시도해 주세요.",
+      "downloadFailed": "플러그인을 다운로드하지 못했습니다. 네트워크 연결을 확인한 후 다시 시도해 주세요.",
+      "brokerRedirectPortRequired": "이 플러그인은 인증 broker를 선언했지만 같은 OAuth 설정에 redirectPort가 없어 플러그인 마켓에서 설치할 수 없습니다. 게시자에게 이 필드를 추가해 새 버전을 게시해 달라고 알려 주세요.",
+      "hostUnsupported": "이 Cindy 버전에서는 플러그인의 매니페스트 형식을 읽을 수 없습니다.",
+      "namespaceClientRequired": "이 버전에서는 조직 플러그인을 볼 수 없습니다. Cindy를 업데이트하세요. 설치된 조직 플러그인은 계속 사용할 수 있습니다.",
+      "organizationContextUnavailable": "조직 신원을 일시적으로 확인할 수 없습니다. 나중에 다시 시도하세요. 설치된 조직 플러그인은 계속 사용할 수 있습니다.",
+      "namespaceConfigRequired": "조직 플러그인을 일시적으로 사용할 수 없습니다. 설치된 조직 플러그인은 계속 사용할 수 있습니다.",
+      "organizationUnavailable": "조직 플러그인을 일시적으로 사용할 수 없습니다. 설치된 조직 플러그인은 계속 사용할 수 있습니다.",
+      "idReserved": "이 플러그인의 식별자는 공식 플러그인용 예약 접두사를 사용하므로 사용자 지정 플러그인 마켓으로는 설치할 수 없습니다. 해당 공식 플러그인은 Cindy 플러그인 마켓에서 설치하세요."
+    },
+    "segmentsLabel": "플러그인 보기",
+    "installTo": "{{device}}에 설치",
+    "conflict": "이 컴퓨터에 같은 식별자의 플러그인이 이미 설치되어 있습니다. 컴퓨터에서 처리하세요.",
+    "offline": "{{device}}이(가) 연결되어 있지 않습니다. 다시 연결되면 플러그인을 둘러보고 설치할 수 있습니다.",
+    "outdated": "{{device}}의 Cindy 버전은 아직 휴대폰에서 플러그인 설치를 지원하지 않습니다. 먼저 해당 컴퓨터에서 Cindy를 업데이트하세요. 설치된 플러그인은 계속 사용할 수 있습니다.",
+    "outdatedShort": "이 컴퓨터의 Cindy는 아직 휴대폰에서 플러그인 설치를 지원하지 않습니다. 먼저 업데이트하세요.",
+    "readFailed": "플러그인 마켓을 불러오지 못했습니다. 다시 시도하세요.",
+    "securityBody": "설치를 탭하면 컴퓨터가 설치 패키지를 내려받아 확인한 뒤 필요한 권한을 보여 줍니다. 확인하기 전에는 설치되지 않습니다. 설치 후에는 자동으로 활성화되며 언제든지 비활성화하거나 제거할 수 있습니다.",
+    "resultUnknownDetail": "이번 설치가 완료되었는지 아직 확인되지 않았습니다.",
+    "unconfirmedNotInstalled": "이번 설치 결과를 확인하지 못했습니다. 현재 이 컴퓨터에는 이 플러그인이 없습니다.",
+    "alreadyInstalled": "이 컴퓨터에는 이 플러그인이 이미 설치되어 있습니다.",
+    "unconfirmedMismatch": "이번 설치 결과를 확인하지 못했습니다. 이 컴퓨터에 있는 같은 ID의 플러그인은 로컬 파일, 다른 버전 또는 다른 출처의 것이거나, 마켓에서 더 이상 제공되지 않는 것일 수 있습니다. 컴퓨터나 ‘설치됨’에서 확인하세요.",
+    "unconfirmedLegacy": "이번 설치 결과를 확인하지 못했습니다. 컴퓨터의 Cindy 버전이 오래되어 확인할 수 없습니다. 컴퓨터나 ‘설치됨’에서 확인하세요.",
+    "sourceUnverified": "이 컴퓨터가 이 사용자 지정 마켓의 저장소 정보를 보내지 않아 휴대폰에서 설치할 수 없습니다. 먼저 그 컴퓨터에서 Cindy를 업데이트하고 이 마켓을 새로 고치세요. 그래도 안 되면 컴퓨터에서 바로 설치하세요.",
+    "sourceUnverifiedShort": "저장소 정보가 없어 휴대폰에서 설치할 수 없습니다",
+    "sourceChanged": "이 마켓의 출처가 방금 바뀌었습니다. 설치할 플러그인을 다시 선택하세요.",
+    "publicInstall": "공개 마켓",
+    "communityDisclaimer": "이 플러그인은 커뮤니티 개발자가 개발하고 유지 관리합니다. Cindy는 이 버전을 검토했지만 모든 사용 상황에서 안전하다고 보장할 수는 없습니다."
+  },
+  "gotIt": "확인",
+  "slot": {
+    "holder": "\"{{device}}\"의 \"{{name}}\" 작업이 끝나지 않았습니다",
+    "show": "보기"
+  },
+  "checks": {
+    "title": "끝나지 않은 플러그인 작업",
+    "titleEnded": "플러그인 작업 결과",
+    "many": "플러그인 작업 {{count}}개가 끝나지 않았습니다",
+    "waitingOne": "“{{device}}”의 “{{name}}” 결과를 확인해야 합니다",
+    "settledOne": "“{{device}}”의 “{{name}}” 작업 결과가 나왔습니다",
+    "settledMany": "플러그인 작업 {{count}}개의 결과가 나왔습니다",
+    "attentionMany": "플러그인 작업 {{count}}개를 확인해야 합니다",
+    "kind": {
+      "marketInstall": "설치",
+      "update": "업데이트",
+      "uninstall": "제거",
+      "pageApproval": "페이지 켜기",
+      "enable": "켜기 또는 끄기",
+      "taskSettings": "작업 설정"
+    },
+    "status": {
+      "preparing": "준비 중",
+      "running": "컴퓨터에서 처리 중",
+      "confirmation": "확인 대기 중",
+      "checking": "결과 확인 중",
+      "waiting": "결과가 확인되지 않았습니다. 다시 확인하거나 추적을 중지하세요.",
+      "recordMissing": "이 플러그인은 컴퓨터에 있지만 설치 기록을 읽을 수 없어 결과를 아직 확인할 수 없습니다. 나중에 다시 확인하거나 추적을 중지하세요.",
+      "offline": "“{{device}}”이(가) 연결되어 있지 않습니다. 연결하면 결과를 확인할 수 있습니다.",
+      "awaitingYou": "컴퓨터가 확인을 기다리고 있습니다",
+      "unprovable": {
+        "uninstall": {
+          "absent": "컴퓨터에 이 제거 기록이 더 이상 없어 결과를 확인할 수 없습니다. 지금 컴퓨터에 이 플러그인이 없습니다.",
+          "present": "컴퓨터에 이 제거 기록이 더 이상 없어 결과를 확인할 수 없습니다. 이 플러그인은 아직 컴퓨터에 있습니다."
+        },
+        "pageApproval": {
+          "absent": "컴퓨터에 이 페이지 켜기 기록이 더 이상 없어 결과를 확인할 수 없습니다. 지금 컴퓨터에 이 플러그인이 없습니다.",
+          "approved": "컴퓨터에 이 페이지 켜기 기록이 더 이상 없어 결과를 확인할 수 없습니다. 페이지는 지금 켜져 있습니다.",
+          "notApproved": "컴퓨터에 이 페이지 켜기 기록이 더 이상 없어 결과를 확인할 수 없습니다. 페이지는 아직 켜지지 않았습니다."
+        }
+      }
+    },
+    "stop": "추적 중지",
+    "stopHint": "이 휴대폰에서만 추적을 멈춥니다. 컴퓨터의 작업은 취소되지 않습니다.",
+    "result": {
+      "succeeded": "완료",
+      "installed": "설치됨",
+      "failed": "완료되지 않음",
+      "cancelled": "취소됨",
+      "untracked": "추적하지 않음",
+      "ended": "종료됨",
+      "readingBack": "완료. 컴퓨터의 플러그인을 확인하는 중…",
+      "unconfirmed": "완료되었지만 그 뒤 컴퓨터의 이 플러그인이 바뀌었거나, 이번 설치로 설치된 것인지 확인할 수 없습니다.",
+      "legacyHost": "완료되었지만 컴퓨터의 Cindy 버전이 오래되어 확인할 수 없습니다. ‘설치됨’에서 여세요.",
+      "goneSince": "완료되었지만 지금 컴퓨터에 이 플러그인이 없습니다.",
+      "succeededUnread": "완료되었지만 컴퓨터의 플러그인을 읽지 못했습니다.",
+      "uninstalled": "제거됨"
+    },
+    "close": "닫기",
+    "decide": "보고 결정하기",
+    "decideBlocked": "이 컴퓨터의 다른 작업이 끝나지 않았습니다. 끝난 뒤 결정하세요.",
+    "readAgain": "다시 읽기",
+    "showInstalled": "‘설치됨’으로 이동",
+    "unlisted": "“{{device}}”이(가) 더 이상 이 계정의 컴퓨터 목록에 없습니다."
   }
 }

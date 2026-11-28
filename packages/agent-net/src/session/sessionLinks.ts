@@ -489,7 +489,9 @@ export class AgentNetSessionLinks implements Pick<PeerLinks, PeerLinkRoutedMetho
   }
 
   async invoke(dst: string, payload: InvokePayload, timeoutMs?: number,
-    options?: { preSend?: () => void; beforeDispatch?: () => void; noResultCache?: boolean; background?: boolean; diagnosticSource?: 'renderer' | 'main' | 'mobile' }): Promise<InvokeResultPayload> {
+    options?: { preSend?: () => void; beforeDispatch?: () => void; noResultCache?: boolean; background?: boolean; diagnosticSource?: 'renderer' | 'main' | 'mobile';
+      /** Same local-only write receipt as Device Link `invoke`: runs before the call settles once a session took its request. */
+      onRequestWritten?: () => void }): Promise<InvokeResultPayload> {
     if (this.remoteControlDisabled.has(dst)) throw new DeviceLinkError('REMOTE_DISABLED', 'remote control is disabled by the target');
     if (!this.live(dst)) throw new DeviceLinkError('LINK_NOT_OPEN', 'no Agent-Net session with the target');
     const queuedAt = performance.now();
@@ -511,6 +513,12 @@ export class AgentNetSessionLinks implements Pick<PeerLinks, PeerLinkRoutedMetho
       }
       const effectiveSlotBudgetMs = Math.min(wireTimeoutMs ?? this.requestTimeout(), 30_000);
       const sentAt = performance.now();
+      let requestWritten = false;
+      const noteRequestWritten = () => {
+        if (requestWritten) return;
+        requestWritten = true;
+        try { options?.onRequestWritten?.(); } catch (error) { this.options.log.debug('agent-net session onRequestWritten callback failed', error); }
+      };
       // 跨账号对端和 Device Link 一样不用历史页增量和结果缓存（对方也不按这两样编码给受邀者的结果）。
       const scoped = isScopedPeer(dst);
       const attempt = async (fullHistory: boolean, timeout: number | undefined): Promise<Attempt> => {
@@ -544,6 +552,7 @@ export class AgentNetSessionLinks implements Pick<PeerLinks, PeerLinkRoutedMetho
           priority === 'background' || backgroundLane,
           retired && retired.length > 0 ? () => this.retiredReadInvokes.acknowledge(dst, retired) : undefined,
           setUnderlyingControls,
+          noteRequestWritten,
         );
         const result = transfer ? await transfer.decode(raw) : raw;
         if (transfer?.retryWithoutBase()) return { result, retry: 'remaining-budget' };
@@ -835,6 +844,8 @@ export class AgentNetSessionLinks implements Pick<PeerLinks, PeerLinkRoutedMetho
     background?: boolean,
     onDispatched?: () => void,
     setUnderlyingControls?: (controls: ListingUnderlyingControls) => void,
+    /** The caller's write receipt (see `invoke` `onRequestWritten`). */
+    onWritten?: () => void,
   ): Promise<InvokeResultPayload> {
     let session = this.live(dst);
     if (!session) throw new DeviceLinkError('LINK_NOT_OPEN', 'no Agent-Net session with the target');
@@ -868,7 +879,10 @@ export class AgentNetSessionLinks implements Pick<PeerLinks, PeerLinkRoutedMetho
           isInFlight: () => true,
           sharesProgressTimeout: true,
         });
-        outcome = await pending;
+        // A handle that throws instead of answering may already have handed the request to the peer.
+        try { outcome = await pending; } catch (error) { onWritten?.(); throw error; }
+        // Only NOT_SENT proves the session never took the request; anything else may have reached the peer.
+        if (outcome.ok || outcome.error.code !== 'NOT_SENT') onWritten?.();
         if (attempt > 0 && outcome.ok) {
           const result = outcome.result as InvokeResultPayload;
           if (result?.ok === false && result.error?.code === 'INVOKE_TIMEOUT') {

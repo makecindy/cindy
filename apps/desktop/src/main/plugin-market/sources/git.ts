@@ -241,12 +241,20 @@ export async function cloneMarketplace(
   input: { url: string; ref?: string; sparsePaths: readonly string[] },
   destPath: string,
   executor: GitExecutor = defaultExecutor,
+  /**
+   * 在 git 实际取包的那个仓库（staging 目录）里执行，用来采集实际取包地址（见 fetchIdentity.ts）：
+   * `'cloned'` 紧接 `git clone` 之后、显式 checkout 之前；`'checked-out'` 在检出完成、落位之前
+   * （`includeIf "gitdir:…"` 与之后刷新的状态）。调用方要求各次采集一致才记下地址。注意 `'cloned'` 时 git
+   * 可能已从取包时的初始分支切到远端默认分支，`includeIf "onbranch:…"` 只能靠 hasBranchConditionalConfig 排除。
+   */
+  inspect?: (repoDir: string, phase: 'cloned' | 'checked-out') => Promise<void>,
 ): Promise<string> {
   const stagingPath = `${destPath}.staging-${crypto.randomUUID()}`;
   const timeoutMs = GIT_OPERATION_TIMEOUT_MS;
   try {
     if (input.sparsePaths.length === 0) {
       await executor(['clone', input.url, stagingPath], { timeoutMs });
+      await inspect?.(stagingPath, 'cloned');
       if (input.ref) {
         // --branch 只支持 branch/tag;显式 checkout 同时覆盖可达的 commit SHA。
         // 必须带 --detach 消歧:`git checkout <ref>` 在 ref 不存在但仓库根恰有
@@ -260,6 +268,7 @@ export async function cloneMarketplace(
         ['clone', '--filter=blob:none', '--no-checkout', input.url, stagingPath],
         { timeoutMs },
       );
+      await inspect?.(stagingPath, 'cloned');
       // -- 终止选项解析：即使上游漏放了以 - 开头的值,也只被当作路径。
       await executor(['sparse-checkout', 'set', '--', ...input.sparsePaths], {
         cwd: stagingPath,
@@ -276,6 +285,7 @@ export async function cloneMarketplace(
         await executor(['checkout', target], { cwd: stagingPath, timeoutMs });
       }
     }
+    await inspect?.(stagingPath, 'checked-out');
     await fs.promises.mkdir(path.dirname(destPath), { recursive: true });
     // Windows 上 AV/索引器/云同步会短暂占用刚 clone 出的文件,rename 抛
     // EBUSY/EACCES/EPERM;瞬时锁短退避重试。目标是全新 UUID 路径,不存在覆盖。
@@ -309,7 +319,19 @@ export async function fetchMarketplace(
     } else {
       await executor(['pull', '--ff-only'], { cwd: workDir, timeoutMs });
     }
-    return await currentRevision(workDir, executor);
+    const revision = await currentRevision(workDir, executor);
+    // 检出的 HEAD 必须就是本次获取的目标提交。远端（或 insteadOf 改写到的另一个仓库）停在本地 HEAD 的
+    // 祖先时，`pull --ff-only` 也会成功但保留领先的本地 HEAD；那样落位的包并不是这次取到的内容。
+    // 对不上就按刷新失败处理，由调用方回落到全新克隆。
+    // `^{commit}`：显式 ref 是附注标签时 FETCH_HEAD 指向标签对象，要剥到提交再比。
+    const { stdout } = await executor(['rev-parse', '--verify', `${ref ? 'FETCH_HEAD' : '@{u}'}^{commit}`], {
+      cwd: workDir,
+      timeoutMs: 10_000,
+    });
+    if (stdout.trim() !== revision) {
+      throw new Error('The checked-out commit is not the fetched target');
+    }
+    return revision;
   } catch (error) {
     throw classifyGitFailure(error, [workDir]);
   }
@@ -324,4 +346,50 @@ export async function currentRevision(
     timeoutMs: 10_000,
   });
   return stdout.trim();
+}
+
+/**
+ * 当前配置上下文里有没有按分支生效的条件包含（`includeIf "onbranch:…"`）。部分 git 版本（如 2.43）的
+ * `git clone` 在初始分支（`init.defaultBranch`）上取包，返回前再切到远端默认分支或检出目标，这类规则在取包
+ * 当时与事后可能不同，事后解析还原不了取包时的上下文；有这类规则时调用方不核实来源。只列键名（不含值），
+ * 不联网；读不到配置也按「有」处理。
+ */
+export async function hasBranchConditionalConfig(
+  executor: GitExecutor = defaultExecutor,
+  cwd?: string,
+): Promise<boolean> {
+  try {
+    const { stdout } = await executor(['config', '--list', '--name-only'], {
+      ...(cwd ? { cwd } : {}),
+      timeoutMs: 10_000,
+    });
+    return stdout.split('\n').some((line) => /^includeif\.onbranch:/i.test(line.trim()));
+  } catch {
+    return true;
+  }
+}
+
+/**
+ * git 实际会连的地址：`ls-remote --get-url` 按当前 git 配置展开 `url.*.insteadOf`，不联网。
+ * `target` 是配置里的地址（clone 前）或 `origin`（在已克隆的工作目录里 fetch 前）。
+ * 结果可能含改写注入的凭证：只交给白名单生成函数，不得写日志、错误详情或任何文件；失败返回 null。
+ * 返回 git 输出的原始地址（只去掉行终止符），不做任何规整。
+ */
+export async function resolveFetchUrl(
+  target: string,
+  executor: GitExecutor = defaultExecutor,
+  cwd?: string,
+): Promise<string | null> {
+  try {
+    const { stdout } = await executor(['ls-remote', '--get-url', '--', target], {
+      ...(cwd ? { cwd } : {}),
+      timeoutMs: 10_000,
+    });
+    // 只去掉 git 输出的那一个 LF，不 trim、也不去 CR：改写目标末尾可以真的带空白或 CR，它们是 git 实际使用的地址
+    // 的一部分，留给白名单拒绝（身份缺省）。Git for Windows 的管道输出同样只用 LF。
+    const value = stdout.endsWith('\n') ? stdout.slice(0, -1) : stdout;
+    return value && !value.includes('\n') ? value : null;
+  } catch {
+    return null;
+  }
 }

@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { act, useLayoutEffect, useState, type ReactNode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import { afterEach, beforeEach, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { sharedTaskHostPeer } from '@cindy/device-link';
 import { AuthorizationMessageCard } from '@/session/AuthorizationMessageCard';
 import type { NormalizedRemoteMessage } from '@/session/messageNormalize';
@@ -1019,6 +1019,140 @@ it('keeps plugin update decisions outside the scrollable permission details', as
     expect(button).not.toBeNull();
     expect(details!.contains(button)).toBe(false);
   }
+});
+
+// Maintainer review 04:44 #2 (#12684): an Agent-initiated first install reaches the phone as a task card. The plugin
+// management sheet's "no repository" block did not apply there; the card must use the Host's source identity too.
+describe('plugin first-install task card and its source', () => {
+  const source = { kind: 'git', repository: 'github.com/acme/market', sourceId: 'SourceA_0123456789abcd' };
+  const card = (input: Record<string, unknown>) => ({ kind: 'permission', requestId, toolName: 'cindy.plugin.install',
+    description: 'Install Runner\nPermission detail', input: { ghost_id: 'runner', version: '1', ...input } });
+  const render = async (input: Record<string, unknown>) => act(async () => root.render(<InteractionPanel deviceId="d1" sessionId="s1"
+    pinPermissionActions interactions={[{ request: card(input) }]} onError={onError} />));
+  it.each([
+    ['an older Host card without an origin', { operation: 'install' }],
+    ['a custom-market card without a source', { operation: 'install', origin: 'custom-market' }],
+    ['a custom-market card with a malformed source', { operation: 'install', origin: 'custom-market', source: { kind: 'git', repository: 'https://u:p@github.com/a/b', sourceId: 'x' } }],
+  ])('keeps only Reject for %s and says to confirm on the computer', async (_name, input) => {
+    await render(input);
+    expect(host.querySelector('[data-testid="interaction.permission.installSourceUnverified"]')).not.toBeNull();
+    await click('interaction.permission.allowOnceButton');
+    expect(resolveInteraction).not.toHaveBeenCalled();
+    resolveInteraction.mockResolvedValueOnce({ accepted: true });
+    await click('interaction.permission.denyButton');
+    expect(resolveInteraction).toHaveBeenLastCalledWith(requestId, expect.objectContaining({ behavior: 'deny' }));
+  });
+  // Android re-check of d81200da: after expanding, the button still said "Details". It now says what a tap does.
+  it.each([false, true])('labels the install details button by what a tap does (companion=%s)', async (companion) => {
+    remoteSessionStore.setPendingInteractions('s1', [{ request: card({ operation: 'install', origin: 'market' }) }]);
+    await act(async () => root.render(<Harness companion={companion} />));
+    const button = () => host.querySelector('[data-testid="interaction.permission.installDetailsButton"]')!;
+    expect(button().textContent).toBe('interaction.companion.details');
+    await click('interaction.permission.installDetailsButton');
+    expect(button().textContent).toBe('interaction.panel.collapse');
+    await click('interaction.permission.installDetailsButton');
+    expect(button().textContent).toBe('interaction.companion.details');
+  });
+  // Maintainer review 05:55 #1: the expanded details handed the whole input to the generic previews (the companion
+  // card serializes it), so a valid source's sourceId and a malformed source's credential URL appeared.
+  it.each([false, true])('never shows the raw source fields in the expanded details (companion=%s)', async (companion) => {
+    for (const shown of [source, { kind: 'git', repository: 'https://ghp_secret@github.com/acme/market', sourceId: 'x' }]) {
+      remoteSessionStore.setPendingInteractions('s1', [{ request: card({ operation: 'install', origin: 'custom-market', source: shown }) }]);
+      await act(async () => root.render(<Harness companion={companion} />));
+      await click('interaction.permission.installDetailsButton');
+      const details = host.querySelector<HTMLButtonElement>('[data-testid="interaction.permission.detailsButton"]');
+      if (details) await act(async () => details.click());
+      expect(host.textContent).toContain('runner');
+      for (const raw of ['SourceA_0123456789abcd', 'ghp_secret', 'sourceId', '"source"']) expect(host.textContent).not.toContain(raw);
+      await act(async () => root.render(<></>));
+    }
+  });
+  // Maintainer review 05:55 #3: an update card that is explicitly from a custom market but carries no source is not
+  // allowed here either. Its first press still opens the details; the decision itself stays unavailable.
+  it('keeps only Reject for a custom-market update card without a source', async () => {
+    await render({ operation: 'update', origin: 'custom-market' });
+    await click('interaction.permission.allowOnceButton'); // Opens the update details.
+    expect(host.querySelector('[data-testid="interaction.permission.installSourceUnverified"]')).not.toBeNull();
+    await click('interaction.permission.allowOnceButton');
+    expect(resolveInteraction).not.toHaveBeenCalled();
+    resolveInteraction.mockResolvedValueOnce({ accepted: true });
+    await click('interaction.permission.denyButton');
+    expect(resolveInteraction).toHaveBeenLastCalledWith(requestId, expect.objectContaining({ behavior: 'deny' }));
+  });
+  // Contract V2.4b: an update card from another source than the installed version says so without opening details.
+  it('says on a custom-market update card when the source differs from the installed version', async () => {
+    await render({ operation: 'update', origin: 'custom-market', source, originSourceChanged: true });
+    expect(host.querySelector('[data-testid="interaction.permission.installOriginSourceChanged"]')?.textContent)
+      .toBe('plugins.notice.consentSource.originSourceChanged');
+    // Only `true` counts.
+    await render({ operation: 'update', origin: 'custom-market', source, originSourceChanged: 'yes' });
+    expect(host.querySelector('[data-testid="interaction.permission.installOriginSourceChanged"]')).toBeNull();
+  });
+  // Maintainer review 08:15 #2: verify with a Host-built card, not a hand-made field. This is byte for byte the
+  // input asserted for buildGhostInstallConsentInteraction in apps/desktop/src/main/cindy-brain/__tests__/
+  // ghostInstallConsentInteraction.test.ts ("marks a custom-market update confirmed for a source change in the task
+  // card input", SOURCE_SWITCH_CARD_INPUT_SAMPLE); the phone cannot import Desktop test code. A source switch is confirmed
+  // like a first install (contract V2.4b), so the card's operation is 'install'.
+  const hostSourceSwitchCardInput = JSON.parse('{"ghost_id":"weather-chip","version":"2.0.0","operation":"install","origin":"custom-market","source":{"kind":"git","repository":"github.com/acme/plugins","ref":"main","sourceId":"AbCdEfGhIjKlMnOpQrStUv"},"originSourceChanged":true}');
+  it.each([false, true])('shows the source change of a Host-built source-switch card without opening details (companion=%s)', async (companion) => {
+    remoteSessionStore.setPendingInteractions('s1', [{ request: { kind: 'permission', requestId, toolName: 'cindy.plugin.install',
+      description: 'Update Weather 2.0.0\nPermission detail', input: hostSourceSwitchCardInput } }]);
+    await act(async () => root.render(<Harness companion={companion} />));
+    // Collapsed: no details opened.
+    expect(host.querySelector('[data-testid="interaction.permission.installOriginSourceChanged"]')?.textContent)
+      .toBe('plugins.notice.consentSource.originSourceChanged');
+    expect(host.querySelector('[data-testid="interaction.permission.installRepository"]')?.textContent)
+      .toBe('plugins.notice.consentSource.repositoryRef');
+    expect(host.textContent).not.toContain('AbCdEfGhIjKlMnOpQrStUv');
+    // It names its source, so it is not treated as a card without one: Allow works.
+    expect(host.querySelector('[data-testid="interaction.permission.installSourceUnverified"]')).toBeNull();
+    resolveInteraction.mockResolvedValueOnce({ accepted: true });
+    await click('interaction.permission.allowOnceButton');
+    expect(resolveInteraction).toHaveBeenLastCalledWith(requestId, expect.objectContaining({ behavior: 'allow' }));
+  });
+  // Contract V2.4b (#12731 00b3c1a6): a replacement with the plugin market's version is marked by originSourceChanged
+  // alone (origin 'market', no source); the card shows the computer's sentence for it and stays allowable. A
+  // custom-market switch card without a valid source stays rejectable only, with no switch sentence.
+  it('picks the source switch sentence on the card the way the computer does', async () => {
+    await render({ operation: 'install', origin: 'market', originSourceChanged: true });
+    expect(host.querySelector('[data-testid="interaction.permission.installOriginSourceChanged"]')?.textContent)
+      .toBe('plugins.notice.consentSource.marketSourceChanged');
+    expect(host.querySelector('[data-testid="interaction.permission.installSourceUnverified"]')).toBeNull();
+    resolveInteraction.mockResolvedValueOnce({ accepted: true });
+    await click('interaction.permission.allowOnceButton');
+    expect(resolveInteraction).toHaveBeenLastCalledWith(requestId, expect.objectContaining({ behavior: 'allow' }));
+    // A custom-market switch card without a valid source names no repository: the sentence without it, and only Reject.
+    await render({ operation: 'install', origin: 'custom-market', originSourceChanged: true });
+    expect(host.querySelector('[data-testid="interaction.permission.installOriginSourceChanged"]')?.textContent)
+      .toBe('plugins.notice.consentSource.sourceChangedIsolated');
+    expect(host.querySelector('[data-testid="interaction.permission.installSourceUnverified"]')).not.toBeNull();
+    // A local-folder source: the sentence without a repository too (#12731 e2fbe72a); it has a source, so Allow stays.
+    await render({ operation: 'install', origin: 'custom-market', originSourceChanged: true, source: { kind: 'local', sourceId: 'SourceB_0123456789abcd' } });
+    expect(host.querySelector('[data-testid="interaction.permission.installOriginSourceChanged"]')?.textContent)
+      .toBe('plugins.notice.consentSource.sourceChangedIsolated');
+    expect(host.querySelector('[data-testid="interaction.permission.installSourceUnverified"]')).toBeNull();
+  });
+  it('shows the repository of a custom-market card and allows it', async () => {
+    await render({ operation: 'install', origin: 'custom-market', source });
+    expect(host.querySelector('[data-testid="interaction.permission.installRepository"]')?.textContent)
+      .toBe('plugins.notice.consentSource.repository');
+    expect(host.querySelector('[data-testid="interaction.permission.installSourceUnverified"]')).toBeNull();
+    resolveInteraction.mockResolvedValueOnce({ accepted: true });
+    await click('interaction.permission.allowOnceButton');
+    expect(resolveInteraction).toHaveBeenLastCalledWith(requestId, expect.objectContaining({ behavior: 'allow' }));
+  });
+  it.each([
+    ['an official market card', { operation: 'install', origin: 'market' }],
+    ['an older Host update card', { operation: 'update' }],
+  ])('still allows %s', async (_name, input) => {
+    await render(input);
+    expect(host.querySelector('[data-testid="interaction.permission.installSourceUnverified"]')).toBeNull();
+    resolveInteraction.mockResolvedValueOnce({ accepted: true });
+    await click('interaction.permission.allowOnceButton');
+    // An update first opens its details; a first install allows directly.
+    if (input.operation === 'update') await click('interaction.permission.allowOnceButton');
+    expect(resolveInteraction).toHaveBeenLastCalledWith(requestId, expect.objectContaining({ behavior: 'allow' }));
+  });
 });
 
 // #8706 unit: both actual confirmation layouts must use the safe quota translation.

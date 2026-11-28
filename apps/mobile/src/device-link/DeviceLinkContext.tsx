@@ -4,6 +4,7 @@ import { tryMobilePeerInvoke, resetMobilePeer } from './peerFileRegistry';
 import { isHistoryViewUnavailable, type HistoryWorkPatch } from '@cindy/maker-shared/message-window';
 import { findRemoteHistoryView } from '@/session/remoteHistoryView';
 import { BACKGROUND_STOP_GRACE_MS, createBackgroundConnection } from './backgroundConnection';
+import { invokeSendEvidence } from './invokeSendEvidence';
 import { invokeWithHistoryViewCapability } from './historyViewCapability';
 import { createRecoveryDiagnostics, settleMeasuredSnapshot, type RecoveryPhase } from './recoveryDiagnostics';
 import { confirmTrackedSubscription, releaseTrackedSubscription, SubscriptionAcknowledgements } from './subscriptionAcknowledgements';
@@ -238,6 +239,10 @@ export interface DeviceLinkInvokeOptions {
   background?: boolean;
   /** Only for the outbox's one legacy page read after an exact-ID refusal. */
   legacyHistoryConfirmation?: true;
+  /** This request's write receipt: called once, at its first write (see `invokeSendEvidence`). */
+  onRequestWritten?: () => void;
+  /** Called once when the request is known not to have been written (no write receipt, no transport holding it). */
+  onNotSent?: () => void;
 }
 
 export interface DeviceLinkContextValue {
@@ -289,6 +294,13 @@ export interface DeviceLinkContextValue {
    * 中止本次发送(错误原样上抛)。供写序敏感的调用方(patchHomeSession 的 isLatest
    * 屏障)把「过期即放弃」判定贴到实际发送点——重连或排队期间写可能被同字段新写
    * 取代,等待前的检查不够晚。
+   * opts.onRequestWritten:本次业务请求可能已写出时(Device Link 首次 socket 写出、Agent-Net 会话收下请求、
+   * 直连路径尝试过)在调用结束前调用一次;握手帧不算。
+   * opts.onNotSent:调用失败且确知本次业务请求没有写出时,在调用结束前调用一次:失败时写出回执没有来过,
+   * 也没有哪条传输还拿着这次请求(还没交给传输就退出的每一处,以及传输自己结束了却没有写出:Device Link 与
+   * Agent-Net 只在写出时给回执,见各自 `invoke` 的 `onRequestWritten`)。两者互斥、各至多一次;成功返回时
+   * 两者都可能没有(结果缓存等),失败时恰有其一(调度要求 N-1、O-3;提前退出点表见
+   * docs/dev-rules/plugin-mobile-implementation.md「写出与否的判据」)。
    */
   invoke<T = unknown>(
     deviceId: string,
@@ -2301,6 +2313,11 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
     args: unknown[] = [],
     opts?: DeviceLinkInvokeOptions,
   ) => {
+    // One decision for every exit (dispatcher O-3): a failure reports `onNotSent` unless this request's write receipt
+    // came, or a transport still holds it. Each transport gives its receipt at its own first write of this request and
+    // never after it settles, so a transport that settled without one never wrote it (see `invokeSendEvidence`).
+    const evidence = invokeSendEvidence(opts);
+    const { onRequestWritten, viaTransport } = evidence;
     const preSend = () => {
       if (presenceAvailableByDeviceRef.current.get(deviceId) === false) {
         const disabled = presenceUnavailableVerdictsRef.current.get(deviceId)?.kind === 'disabled';
@@ -2308,53 +2325,70 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
       }
       opts?.preSend?.();
     };
-    preSend();
-    const client = requireClient(clientRef.current);
-    const send = () => invokeWithHistoryViewCapability(
-      channel,
-      async () => {
-        // Reuse the existing peer-scoped handshake cache and its invalidation.
-        // A late accept from an obsolete link must not declare a downgrade.
-        const tracked = sendOpenLinkOnce(client, deviceId);
-        const accepted = await tracked.request;
-        if (clientRef.current !== client || !isCurrentOpenLink(deviceId, tracked)) {
-          throw new DeviceLinkError('NOT_CONNECTED', 'history link was superseded');
-        }
-        preSend();
-        return accepted;
-      },
-      async () => {
-        if (!isSharedTaskPeer(deviceId)) {
-          const result = await tryMobilePeerInvoke(deviceId, channel, args);
+    try {
+      preSend();
+      const client = requireClient(clientRef.current);
+      const send = () => invokeWithHistoryViewCapability(
+        channel,
+        async () => {
+          // Reuse the existing peer-scoped handshake cache and its invalidation.
+          // A late accept from an obsolete link must not declare a downgrade.
+          const tracked = sendOpenLinkOnce(client, deviceId);
+          const accepted = await tracked.request;
+          if (clientRef.current !== client || !isCurrentOpenLink(deviceId, tracked)) {
+            throw new DeviceLinkError('NOT_CONNECTED', 'history link was superseded');
+          }
           preSend();
-          if (clientRef.current !== client) throw new DeviceLinkError('NOT_CONNECTED', 'link changed');
-          if (result) {
-            return withAccessRevokedHandling(deviceId, async () => unwrapInvoke<T>(result, channel));
+          return accepted;
+        },
+        async () => {
+          if (!isSharedTaskPeer(deviceId)) {
+            const result = await viaTransport(async () => {
+              try {
+                const direct = await tryMobilePeerInvoke(deviceId, channel, args);
+                if (direct) onRequestWritten?.();
+                return direct;
+              } catch (err) {
+                // The direct path may have delivered it before failing.
+                onRequestWritten?.();
+                throw err;
+              }
+            });
+            preSend();
+            if (clientRef.current !== client) throw new DeviceLinkError('NOT_CONNECTED', 'link changed');
+            if (result) {
+              return withAccessRevokedHandling(deviceId, async () => unwrapInvoke<T>(result, channel));
+            }
           }
-        }
-        // File cleanup is best effort over the existing link, as on Desktop: a late
-        // file answer must not reopen the link just to dispose its allocation.
-        if (channel === FILE_PEER_CHANNEL && (args[0] as { action?: unknown } | null)?.action === 'close') {
-          if (client.needsLinkRecovery(deviceId)) {
-            throw new DeviceLinkError('LINK_NOT_OPEN', 'file cleanup requires an existing link');
+          // File cleanup is best effort over the existing link, as on Desktop: a late
+          // file answer must not reopen the link just to dispose its allocation.
+          if (channel === FILE_PEER_CHANNEL && (args[0] as { action?: unknown } | null)?.action === 'close') {
+            if (client.needsLinkRecovery(deviceId)) {
+              throw new DeviceLinkError('LINK_NOT_OPEN', 'file cleanup requires an existing link');
+            }
+          } else {
+            await recoverLinkBeforeSend(client, deviceId, preSend);
           }
-        } else {
-          await recoverLinkBeforeSend(client, deviceId, preSend);
-        }
-        return sendInvokeWithAccessHandling<T>(client, deviceId, channel, args, { preSend, background: opts?.background, noResultCache: opts?.noResultCache });
-      },
-      opts?.legacyHistoryConfirmation,
-    );
-    const result = isLowPriorityRead(channel)
-      // A caller's own preSend can cancel only its own read, so it must not share one.
-      ? await lowPriorityReadGateFor(client).run(
-        opts?.preSend ? null : JSON.stringify([deviceId, channel, args, opts?.background ?? null]), send,
-      )
-      : await send();
-    // Existing list refreshes also reconcile optional project display names. This read
-    // is single-flight and never changes task-list success or connection recovery.
-    if (channel === 'local-db:sessions:list') refreshProjectAliasesForClient(client, deviceId);
-    return result;
+          return sendInvokeWithAccessHandling<T>(client, deviceId, channel, args, {
+            preSend, background: opts?.background, noResultCache: opts?.noResultCache, onRequestWritten, viaTransport,
+          });
+        },
+        opts?.legacyHistoryConfirmation,
+      );
+      const result = isLowPriorityRead(channel)
+        // A caller's own preSend or write receipt belongs to its own read, so it must not share one.
+        ? await lowPriorityReadGateFor(client).run(
+          opts?.preSend || opts?.onRequestWritten || opts?.onNotSent ? null : JSON.stringify([deviceId, channel, args, opts?.background ?? null]), send,
+        )
+        : await send();
+      // Existing list refreshes also reconcile optional project display names. This read
+      // is single-flight and never changes task-list success or connection recovery.
+      if (channel === 'local-db:sessions:list') refreshProjectAliasesForClient(client, deviceId);
+      return result;
+    } catch (error) {
+      evidence.failed();
+      throw error;
+    }
   }, [refreshProjectAliasesForClient, sendOpenLinkOnce, recoverLinkBeforeSend, isCurrentOpenLink]);
 
   const subscribe = useCallback(async (owner: string, deviceId: string, topics: string[]) => {
@@ -2908,6 +2942,10 @@ async function sendOpenLink(
 
 interface SendInvokeOptions {
   preSend?: () => void;
+  /** See DeviceLinkContextValue.invoke opts.onRequestWritten. */
+  onRequestWritten?: () => void;
+  /** Wraps the transport call itself, so the caller knows whether a transport still holds this request (invokeSendEvidence). */
+  viaTransport?: <R>(run: () => Promise<R>) => Promise<R>;
   background?: boolean;
   noResultCache?: boolean;
   /** 同一轮明确 fan-out 共享;普通独立请求省略。 */
@@ -2954,13 +2992,13 @@ async function sendInvoke<T>(
   try {
     // 长执行通道(desktop-cmd:run / worktree:create 等)按协议契约表放宽超时,
     // 与桌面控制端用法对齐,避免 mobile 收紧的默认 15s 误伤合法慢操作。
-    result = await client.invoke(
+    const handOff = () => client.invoke(
       deviceId,
       { channel, args },
       // 长通道(media / 文件搜索 / schedule 就绪窗口等)按 invokeTimeouts 解析
       // 规则保留更长窗口,避免 mobile 收紧的默认 15s 误伤合法慢操作。
       resolveMobileInvokeTimeoutMs(channel, args),
-      { background: opts?.background, noResultCache: opts?.noResultCache, preSend: () => {
+      { background: opts?.background, noResultCache: opts?.noResultCache, onRequestWritten: opts?.onRequestWritten, preSend: () => {
         try {
           opts?.preSend?.();
         } catch (err) {
@@ -2969,6 +3007,7 @@ async function sendInvoke<T>(
         }
       } },
     );
+    result = await (opts?.viaTransport ? opts.viaTransport(handOff) : handOff());
   } catch (err) {
     // A queued call rejected by its local guard is not a remote timeout.
     settleDeviceSend(deviceId, slot, preSendFailed ? 'inconclusive' : classifyDeviceSendFailure(err));

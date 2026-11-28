@@ -1,0 +1,541 @@
+import { PLUGIN_COLLECTION, type RemoteCollectionItem } from "@cindy/device-link";
+import type { ManagedMarketItem, ManagedPlugin } from "@/plugins/pluginManagementTypes";
+
+/**
+ * `--mock` plugin market (docs/dev-rules/ui-mock-data.md). Fictional "Demo" plugins on the
+ * online mock computer, served through the real management wire shapes so the phone's market
+ * list, detail, consent sheet and failure states can be checked without a computer.
+ * Writes live only in this process. Scenario links: cindy://plugins?market=<scenario>.
+ */
+export type PluginMarketVisualScenario =
+  | "normal" | "outdated" | "unavailable" | "organization" | "customPartial" | "empty" | "readFailed"
+  | "twoComputers" | "offline" | "hold" | "lateConsent" | "lateResult" | "unreadResult"
+  | "updateReleaseChanged" | "updateSourceChanged" | "updateReadFailed" | "detailReadFailed" | "readbackFailed" | "secondConsent";
+const SCENARIOS: PluginMarketVisualScenario[] = ["normal", "outdated", "unavailable", "organization", "customPartial", "empty",
+  "readFailed", "twoComputers", "offline", "hold", "lateConsent", "lateResult", "unreadResult",
+  "updateReleaseChanged", "updateSourceChanged", "updateReadFailed", "detailReadFailed", "readbackFailed", "secondConsent"];
+/**
+ * Scripted operations for the list of pending checks (`cindy://plugins?checks=<state>`, see pluginChecksVisualFixture):
+ * how the mock computer answers lookups of one operation id. `waiting`: a protocol error every time (lookups stop);
+ * `consent`, `succeeded`, `unread`, `failed`: a protocol error first, then a consent this phone never showed, a success,
+ * a success whose first installed read fails, a failure; `running`: still under way. `readingBack`: a success after
+ * which the computer's installed reads stay out (the list says it is still reading); `changed`: a success after which
+ * the plugin is at another version (changed on the computer since); `gone`: the operation takes effect (not an
+ * uninstall) and the computer then forgets its receipt (NOT_FOUND from then on); `goneUnattributed`: the same, but the
+ * computer's record of the install is not attributed to this phone's operation (V2.10 ②). After a success, as the computer
+ * answers in each situation (dispatcher R-4): `reinstalled`, the computer installed the same version again itself (no
+ * evidence for this phone); `uninstalledAfter`, the plugin was uninstalled; `catalogAhead`, only the catalog published
+ * its next release (this install stays, `update-available`, still this phone's evidence); `legacyHost`, the computer
+ * answers from then on as an older one (no attribution fields, V2.10 ③).
+ */
+export type VisualCheckBehavior = "running" | "waiting" | "consent" | "succeeded" | "unread" | "failed" | "readingBack" | "changed" | "gone"
+  | "goneUnread" | "goneUnattributed" | "reinstalled" | "uninstalledAfter" | "catalogAhead" | "legacyHost";
+const scripted = new Map<string, { behavior: VisualCheckBehavior; lookups: number }>();
+export function scriptVisualCheckOperation(operationId: string, behavior: VisualCheckBehavior) {
+  scripted.set(operationId, { behavior, lookups: 0 });
+}
+/** The computer answers an already scripted operation's later lookups with `behavior` (its first lookup is past). */
+export function rescriptVisualCheckOperation(operationId: string, behavior: VisualCheckBehavior) {
+  const script = scripted.get(operationId);
+  if (script) script.behavior = behavior;
+}
+/**
+ * Demo Uncertain Sync in the pending-check scenarios (begin's reply is lost; the first lookup hits a protocol error, so
+ * the attempt becomes a pending check): `lateConsent` then shows a consent this phone never showed ("The computer is
+ * waiting for you"), `lateResult` a success ("Go to Installed"), `unreadResult` a success whose first installed read fails
+ * ("Read again").
+ */
+const PENDING_CHECK_SCENARIOS: PluginMarketVisualScenario[] = ["lateConsent", "lateResult", "unreadResult"];
+let failInstalledRead = false, failInstalledReadOnCommit = false;
+/**
+ * `readbackFailed` (maintainer review 03:52): the installed reads right after an install commits fail (the success's own
+ * read and the page's refresh), so the row ends "done, but could not read" and the success stays listed at the top and in
+ * the list of checks; the next read ("Read again", or the computer coming back) succeeds.
+ */
+let failReadsAfterCommit = 0;
+/** A second online mock computer for the twoComputers scenario (same demo market, shared process state). */
+export const PLUGIN_MARKET_VISUAL_SECOND_DEVICE_ID = "cindy-visual-mock-second-mac";
+/** Device-list adjustments for the market scenarios; other scenarios keep the mock computers unchanged. */
+export function pluginMarketVisualDeviceScenario(): "twoComputers" | "offline" | null {
+  return scenario === "twoComputers" || scenario === "offline" ? scenario : null;
+}
+let scenario: PluginMarketVisualScenario = "normal";
+let failedReads = 0;
+/**
+ * `detailReadFailed`: the first market detail read of each plugin that is not being updated fails once, then reads
+ * succeed ("Retry" recovers). Kept per plugin and not reset when the same scenario is applied again (a repeated deep
+ * link), so a retry always finds the plugin's read working (dispatcher S-1).
+ */
+const failedDetailReads = new Set<string>();
+
+/** Every `market=` scenario, and every demo plugin's market id (the protocol check in pluginMarketVisualFixture.test.ts). */
+export const PLUGIN_MARKET_VISUAL_SCENARIOS: readonly string[] = SCENARIOS;
+export function pluginMarketVisualDemoIds(): string[] { return DEMOS.map((demo) => marketItem(demo).pluginId); }
+/** Applies a deep-link scenario; returns true when the market tab should open. */
+export function setPluginMarketVisualScenario(value: unknown, enabled: boolean): boolean {
+  if (!enabled || typeof value !== "string" || !SCENARIOS.includes(value as PluginMarketVisualScenario)) return false;
+  // A market scenario starts from a current computer that can read its market: `checks=recordMissing` leaves the mock
+  // computer unable to, and `checks=legacyHost` leaves it answering as an older one (until the next seed); an install
+  // from the market would then end as "could not read" or "older computer".
+  catalogUnreadable = false;
+  legacyHost = false;
+  // The same scenario again (a repeated deep link) keeps what already failed once, so the scenarios are repeatable:
+  // `readFailed`'s and `detailReadFailed`'s Retry read successfully however often the link is sent. Another scenario
+  // first arms them again.
+  if (scenario === value) return true;
+  scenario = value as PluginMarketVisualScenario;
+  failedReads = 0;
+  failedDetailReads.clear();
+  failReadsAfterCommit = 0;
+  return true;
+}
+
+interface DemoPlugin {
+  ghostId: string;
+  name: string;
+  description: string;
+  author: string | null;
+  publisher: "official" | "personal" | "organization" | "custom";
+  tools: string[];
+  /** Install outcome after the package check: consent (default), download failure, or a lost begin reply. */
+  outcome?: "downloadFailed" | "uncertain";
+  conflict?: boolean;
+  /** Permissions in the Host's consent shape (no tools: the Host's consent list leaves them out). */
+  permissions?: DemoPermission[];
+  /** Pre-installed at this older version, so the installed detail offers an update that asks for consent. */
+  installedVersion?: string;
+  /** The update's permission change versus the installed version. */
+  update?: { added: DemoPermission[]; removed: DemoPermission[]; unchangedCount: number };
+  /** Custom market of an older Host that does not name the repository (no sourceIdentity / originSource). */
+  legacySource?: true;
+  /** Installed from another source than the market's current one: its update consent says the source changed. */
+  sourceMoved?: true;
+  /** Custom markets other than Demo Git Market: a long repository name with a ref, or a local folder. */
+  market?: "long" | "folder";
+}
+type DemoPermission = { key: string; kind: string; labelKey: string; labelArgs?: Record<string, string>; detailKey?: string; detail?: string };
+// Same keys, kinds and copy keys as the Host's ghostPermissionItems; node:execute is the one it calls high risk.
+const nodeExecute = (labelKey: "nodeRuntime" | "nodeMcp" = "nodeRuntime"): DemoPermission =>
+  ({ key: "node:execute", kind: "node", labelKey, detailKey: "nodeRuntimeDetail" });
+const network = (host: string): DemoPermission => ({ key: `network:${host}`, kind: "network", labelKey: "networkHost", labelArgs: { host } });
+const notify: DemoPermission = { key: "notify", kind: "notify", labelKey: "notify", detailKey: "notifyDetail" };
+const badge: DemoPermission = { key: "badge", kind: "notify", labelKey: "badge", detailKey: "badgeDetail" };
+const fsWrite: DemoPermission = { key: "fs", kind: "fs", labelKey: "fsWrite", detailKey: "fsWriteDetail" };
+// Host shape of a credential binding: key names the binding, entry and methods; detail lists the methods.
+const nodeSecret: DemoPermission = { key: "node:secret:api-token:node/worker.cjs:sync", kind: "node", labelKey: "nodeSecret",
+  labelArgs: { name: "Demo API token" }, detailKey: "nodeSecretDetail", detail: "sync" };
+const agentUserAction: DemoPermission = { key: "agent:user-action", kind: "agent", labelKey: "agentUserAction", detailKey: "agentUserActionDetail" };
+const agentBackground: DemoPermission = { key: "agent:background", kind: "agent", labelKey: "agentBackground", detailKey: "agentBackgroundDetail" };
+const agentErrand: DemoPermission = { key: "agent:errand", kind: "agent", labelKey: "agentErrand", detailKey: "agentErrandDetail" };
+const nodeResident: DemoPermission = { key: "node:resident", kind: "node", labelKey: "nodeResident", detailKey: "nodeResidentDetail" };
+// The Host's upper bound: 4 credential bindings with 16 methods each (detail lists one method per line).
+const vaultMethods = Array.from({ length: 16 }, (_, index) => `vault_call_${String(index + 1).padStart(2, "0")}`);
+const vaultBindings: DemoPermission[] = ["Primary", "Backup", "Audit", "Archive"].map((name) => ({
+  key: `node:secret:${name.toLowerCase()}:node/worker.cjs:${vaultMethods.join(",")}`, kind: "node", labelKey: "nodeSecret",
+  labelArgs: { name: `Demo ${name} token` }, detailKey: "nodeSecretDetail", detail: vaultMethods.join("\n"),
+}));
+const RELEASE = "1.4.2";
+const DEMOS: DemoPlugin[] = [
+  { ghostId: "demo-device-simulator", name: "Demo Device Simulator", publisher: "official", author: "Cindy",
+    description: "Open a phone simulator in a task, take screenshots, tap and type into the app you are building.",
+    tools: ["demo_boot_device", "demo_screenshot", "demo_tap", "demo_type_text", "demo_install_app"],
+    // Consent with a high-risk item (pinned above the buttons).
+    permissions: [nodeExecute("nodeMcp"), { key: "panel:tab:Demo Device Simulator", kind: "panel", labelKey: "panelTab",
+      labelArgs: { title: "Demo Device Simulator" } }, network("simulator.example.com")] },
+  // Named apart from the installed demo plugins so a market row never looks like something already installed.
+  { ghostId: "demo-agenda", name: "Demo Agenda", publisher: "official", author: "Cindy",
+    description: "View, create and adjust events across several calendar accounts.", tools: ["demo_list_events", "demo_create_event"],
+    // Consent without any high-risk item, for comparison.
+    permissions: [network("calendar.example.com"), notify] },
+  { ghostId: "demo-image-studio", name: "Demo Image Studio", publisher: "official", author: "Cindy",
+    description: "Generate and edit images in a conversation and keep the results in the library.", tools: ["demo_generate_image"] },
+  { ghostId: "demo-glossary", name: "Demo Glossary Translate", publisher: "official", author: "Cindy", outcome: "downloadFailed",
+    description: "Translate documents with a glossary so names stay consistent. Installing it shows a download failure.",
+    tools: ["demo_translate"] },
+  { ghostId: "demo-uncertain-sync", name: "Demo Uncertain Sync", publisher: "official", author: "Cindy", outcome: "uncertain",
+    description: "The install reply is lost on purpose; use Check result to confirm what happened.", tools: ["demo_sync"] },
+  { ghostId: "demo-shift-calendar", name: "Demo Shift Calendar", publisher: "personal", author: "community-author",
+    description: "Build a shift rota and sync it to a calendar.", tools: ["demo_build_rota"],
+    // Community publisher: the consent carries communityMarket and shows the community notice.
+    permissions: [network("rota.example.com"), notify] },
+  { ghostId: "demo-team-sheets", name: "Demo Team Sheets", publisher: "organization", author: "Demo Org",
+    description: "Read and write the team's shared tables.", tools: ["demo_read_table", "demo_write_table"] },
+  { ghostId: "demo-notes", name: "Demo Notes", publisher: "custom", author: null, conflict: true,
+    description: "A same-ID plugin is already installed on this computer, so it cannot be installed here.", tools: [] },
+  { ghostId: "demo-repo-tools", name: "Demo Repo Tools", publisher: "custom", author: null,
+    description: "Run repository checks with a bundled Node program. Installs from the custom Git market.",
+    tools: ["demo_run_checks"], permissions: [nodeExecute(), network("api.github.com"), fsWrite] },
+  // Installed at an older version; updating asks for consent. One update adds the high-risk item, one does not.
+  { ghostId: "demo-weather-board", name: "Demo Weather Board", publisher: "official", author: "Cindy",
+    description: "Show forecasts for saved places. Its update adds a bundled Node program.", tools: ["demo_forecast"],
+    permissions: [nodeExecute(), network("weather.example.com"), notify], installedVersion: "1.3.0",
+    update: { added: [nodeExecute(), notify], removed: [badge], unchangedCount: 1 } },
+  // An update that keeps the approved Node program and only adds a credential binding (pinned).
+  { ghostId: "demo-secret-sync", name: "Demo Secret Sync", publisher: "official", author: "Cindy",
+    description: "Sync notes with a service. Its update hands a saved API token to the bundled Node program.", tools: ["demo_sync_notes"],
+    permissions: [nodeExecute(), nodeSecret, network("sync.example.com")], installedVersion: "1.3.0",
+    update: { added: [nodeSecret], removed: [], unchangedCount: 2 } },
+  // Layout check for the pinned summary: all five high-risk classes at once (four bindings collapse into one
+  // counted line), while every binding and method stays in the scrolled list.
+  { ghostId: "demo-vault-bridge", name: "Demo Vault Bridge", publisher: "official", author: "Cindy",
+    description: "Bridge several saved tokens into a bundled Node program. Shows every high-risk class and the largest permission list.",
+    tools: ["demo_vault_sync"],
+    permissions: [nodeResident, ...vaultBindings, nodeExecute(), agentBackground, agentErrand, network("vault.example.com")] },
+  // The same extreme case as an update: an approved plugin whose update adds every high-risk class at once.
+  { ghostId: "demo-vault-upgrade", name: "Demo Vault Upgrade", publisher: "official", author: "Cindy",
+    description: "Installed at an older version. Its update adds every high-risk class and the largest permission list.",
+    tools: ["demo_vault_upgrade"],
+    permissions: [nodeResident, ...vaultBindings, nodeExecute(), agentBackground, agentErrand, network("vault.example.com")],
+    installedVersion: "1.3.0",
+    update: { added: [nodeResident, ...vaultBindings, nodeExecute(), agentBackground, agentErrand], removed: [], unchangedCount: 1 } },
+  // A first install without Node that still asks for Agent high-risk permissions (pinned).
+  { ghostId: "demo-auto-agent", name: "Demo Auto Agent", publisher: "official", author: "Cindy",
+    description: "Start Agent work in the background and hand errands to an Agent.", tools: ["demo_start_errand"],
+    permissions: [agentErrand, agentBackground, agentUserAction, notify] },
+  // Layout check: a custom market with a long repository name and ref, and all five high-risk classes.
+  { ghostId: "demo-long-repo-tools", name: "Demo Long Repository Tools", publisher: "custom",
+    // A long author: the market detail's facts show a value on two lines.
+    author: "Cindy Demo Publisher With A Rather Long Name", market: "long",
+    description: "From a custom market whose repository name is long. Asks for every high-risk class.", tools: ["demo_long_tools"],
+    permissions: [nodeResident, ...vaultBindings, nodeExecute(), agentBackground, agentErrand, network("long.example.com")] },
+  // A market added from a local folder on the computer: the consent says "Local folder".
+  { ghostId: "demo-folder-tools", name: "Demo Folder Tools", publisher: "custom", author: null, market: "folder",
+    description: "From a marketplace in a local folder on the computer.", tools: ["demo_folder_tools"],
+    permissions: [nodeExecute(), network("folder.example.com")] },
+  // An update whose source differs from the installed instance's (the computer forces the consent and says so).
+  // Contract V2.4b: it is confirmed like a first install, with the new source's full permissions (old approvals are
+  // not carried over), so the sheet lists every permission and every high-risk item.
+  { ghostId: "demo-moved-source", name: "Demo Moved Source", publisher: "custom", author: null, sourceMoved: true,
+    description: "Installed from another repository than the market now points to. Its update says the source changed.",
+    tools: ["demo_moved"], permissions: [nodeExecute(), agentBackground, network("moved.example.com")], installedVersion: "1.3.0",
+    update: { added: [], removed: [], unchangedCount: 1 } },
+  // The same switch from a local-folder market: no repository is shown, so the computer's sentence without it.
+  { ghostId: "demo-moved-folder", name: "Demo Moved Folder", publisher: "custom", author: null, market: "folder", sourceMoved: true,
+    description: "Installed from another folder than the market now points to. Its update says the source changed.",
+    tools: ["demo_moved_folder"], permissions: [nodeExecute(), network("folder.example.com")], installedVersion: "1.3.0",
+    update: { added: [], removed: [], unchangedCount: 1 } },
+  // Compact sheet check (maintainer review 16:48): a long repository with a ref, a source-change notice and all five
+  // high-risk classes, so the shortest screen at the largest text size puts everything in one scroll area above the
+  // buttons. Installed from another source; its update is confirmed like a first install.
+  { ghostId: "demo-moved-long-repo", name: "Demo Moved Long Repository", publisher: "custom", author: null, market: "long", sourceMoved: true,
+    description: "Installed from another repository than this long-named market. Its update asks for every high-risk class.",
+    tools: ["demo_moved_long"], permissions: [nodeResident, ...vaultBindings, nodeExecute(), agentBackground, agentErrand, network("long.example.com")],
+    installedVersion: "1.3.0", update: { added: [], removed: [], unchangedCount: 1 } },
+  // Older Host: a custom market without a repository identity. A new install is not offered on the phone.
+  { ghostId: "demo-legacy-tools", name: "Demo Legacy Tools", publisher: "custom", author: null, legacySource: true,
+    description: "From a custom market on an older computer version that does not name its repository.",
+    tools: ["demo_legacy_check"], permissions: [nodeExecute(), network("legacy.example.com")] },
+  // Older Host, already installed: without a source the update cannot be allowed on the phone; the installed
+  // detail's update stops before begin and says to refresh or update on the computer.
+  { ghostId: "demo-legacy-sync", name: "Demo Legacy Sync", publisher: "custom", author: null, legacySource: true,
+    description: "Installed from a custom market on an older computer version. Its update adds notifications.",
+    tools: ["demo_legacy_sync"], permissions: [network("legacy.example.com"), notify], installedVersion: "1.3.0",
+    update: { added: [notify], removed: [], unchangedCount: 1 } },
+  { ghostId: "demo-reading-list", name: "Demo Reading List", publisher: "official", author: "Cindy",
+    description: "Save articles to read later. Its update only adds notifications.", tools: ["demo_save_article"],
+    permissions: [network("reader.example.com"), notify], installedVersion: "1.3.0",
+    update: { added: [notify], removed: [], unchangedCount: 1 } },
+  ...Array.from({ length: 26 }, (_, index): DemoPlugin => ({
+    ghostId: `demo-extension-${index + 1}`, name: `Demo Extension ${index + 1}`, publisher: index % 3 ? "personal" : "official",
+    author: index % 3 ? "community-author" : "Cindy", description: "A filler entry that exercises paging and long lists.", tools: ["demo_tool"],
+  })),
+];
+const CUSTOM_MARKET = "Demo Git Market";
+// What a new Host generates for a Git market: the fetched host/owner/repo (never the configured URL) and an opaque
+// per-Host source id.
+const CUSTOM_MARKET_SOURCE = { kind: "git" as const, repository: "github.com/demo-org/demo-git-market", sourceId: "DemoGitMarketSource001" };
+const OFFLINE_MARKET = "Demo Offline Market";
+const LEGACY_MARKET = "Demo Legacy Market";
+const LONG_MARKET = "Demo Long Repository Market";
+const FOLDER_MARKET = "Demo Folder Market";
+const LONG_MARKET_SOURCE = { kind: "git" as const, ref: "release/2026-11",
+  repository: "github.com/demo-organization-with-a-long-name/demo-plugin-marketplace-with-a-very-long-repository-name",
+  sourceId: "DemoLongMarketSource01" };
+const FOLDER_MARKET_SOURCE = { kind: "local" as const, sourceId: "DemoFolderMarketSrc001" };
+const marketName = (demo: DemoPlugin) => demo.legacySource ? LEGACY_MARKET
+  : demo.market === "long" ? LONG_MARKET : demo.market === "folder" ? FOLDER_MARKET : CUSTOM_MARKET;
+const marketSource = (demo: DemoPlugin) => demo.market === "long" ? LONG_MARKET_SOURCE
+  : demo.market === "folder" ? FOLDER_MARKET_SOURCE : CUSTOM_MARKET_SOURCE;
+const CUSTOM_SOURCE_NAMES = [CUSTOM_MARKET, LEGACY_MARKET, LONG_MARKET, FOLDER_MARKET];
+/** `operationId`: the remote operation that installed it (the Host's `installedOperationId`, contract V2.9). */
+const installed = new Map<string, { demo: DemoPlugin; enabled: boolean; version: string; operationId?: string }>();
+/** `readingBack` checks: the computer's installed reads stay out until the next seed. */
+let holdInstalledReads = false;
+/** `legacyHost` checks: the mock computer answers as an older one (no attribution fields at all). */
+let legacyHost = false;
+/**
+ * `goneUnread` checks: the receipt is gone and the mock computer cannot read its plugin market (its installed snapshot
+ * has the instances, only the custom markets' records, and says the market is unavailable), so the facts settle nothing.
+ */
+let catalogUnreadable = false;
+/** Demo plugins whose catalog moved on to its next release (`catalogAhead`). */
+const catalogAhead = new Set<string>();
+const NEXT_RELEASE = "1.5.0";
+export function pluginMarketVisualHoldsInstalledReads(): boolean { return holdInstalledReads; }
+/**
+ * DEV: the mock computer back to its first state (each `checks=` seed starts from it), also out of a `market=` scenario
+ * sent before (`hold`, `unreadResult`, `readbackFailed` would otherwise decide how the seed's operation ends).
+ */
+export function resetPluginMarketVisualComputer() {
+  scenario = "normal"; failedReads = 0; failedDetailReads.clear();
+  installed.clear(); operations.clear(); scripted.clear(); catalogAhead.clear(); holdInstalledReads = false; legacyHost = false; catalogUnreadable = false; failInstalledRead = false;
+  failInstalledReadOnCommit = false; failReadsAfterCommit = 0; seedInstalled();
+}
+/** `second`: under `secondConsent`, the first consent was allowed and the computer asks again (another requestId). */
+const operations = new Map<string, { kind: "install" | "update" | "uninstall"; ghostId: string; answered: boolean; polls: number; done?: "succeeded" | "failed" | "cancelled"; second?: boolean }>();
+const instanceKey = (ghostId: string) => `_root__${ghostId}`;
+const seedInstalled = () => {
+  for (const demo of DEMOS) if (demo.installedVersion && !installed.has(instanceKey(demo.ghostId)))
+    installed.set(instanceKey(demo.ghostId), { demo, enabled: true, version: demo.installedVersion });
+};
+seedInstalled();
+// Same form the phone receives from a real Host: dispatch's IPC_ERROR unwraps to Error("[CODE] message").
+const failure = (code: string) => new Error(`[${code}] Demo plugin management request`);
+
+const catalogVersion = (demo: DemoPlugin) => catalogAhead.has(demo.ghostId) ? NEXT_RELEASE : RELEASE;
+function marketItem(demo: DemoPlugin): ManagedMarketItem {
+  const server = demo.publisher !== "custom";
+  const entry = installed.get(instanceKey(demo.ghostId));
+  return {
+    pluginId: `demo-market/${demo.ghostId}`, ghostId: demo.ghostId, namespace: null, name: demo.name,
+    description: demo.description, author: demo.author,
+    ...(server && demo.publisher !== "organization" ? { publisherKind: demo.publisher === "official" ? "official" as const : "personal" as const } : {}),
+    scope: demo.publisher === "organization" ? "organization" : "public",
+    organizationId: demo.publisher === "organization" ? "demo-org" : null, defaultInstall: false,
+    // The catalog's current release (it may be ahead of what is installed, `catalogAhead`).
+    releaseId: `${demo.ghostId}@${catalogVersion(demo)}`, version: catalogVersion(demo), publishedAt: "2026-11-01T00:00:00.000Z", icon: null,
+    installState: demo.conflict ? "conflict" : !entry ? "not-installed" : entry.version === catalogVersion(demo) ? "installed" : "update-available",
+    enabled: entry?.enabled ?? null,
+    sourceType: server ? "server" : demo.market === "folder" ? "local-market" : "git-market", sourceMarketName: server ? null : marketName(demo),
+    ...(server || demo.legacySource ? {} : { sourceIdentity: marketSource(demo) }),
+    // The installed instance came from this item's source (newer Hosts only).
+    ...(entry && !server && !demo.legacySource
+      ? { installedSourceId: demo.sourceMoved ? "DemoOldMarketSource001" : marketSource(demo).sourceId } : {}),
+    ...(entry && entry.version !== RELEASE ? { updateRequiresConsent: true as const } : {}),
+    // Contract V2.10: an install of this item is attributed to this phone's operation (`'self'` with its id; the mock
+    // computer has just this phone) or not (`'unattributed'`); an older computer (`legacyHost`) sends neither field.
+    ...(entry && !demo.conflict && !legacyHost ? entry.operationId
+      ? { installedOperationId: entry.operationId, installedOperationAttribution: "self" as const }
+      : { installedOperationAttribution: "unattributed" as const } : {}),
+  };
+}
+const manifest = (demo: DemoPlugin, version = RELEASE) => ({
+  schemaVersion: 3, id: demo.ghostId, name: demo.name, version, description: demo.description,
+  ...(demo.author ? { author: demo.author } : {}),
+  tools: demo.tools.map((name) => ({ name, description: "Example capability" })),
+});
+const demoFor = (pluginId: unknown) => DEMOS.find((demo) => `demo-market/${demo.ghostId}` === pluginId);
+
+function catalog(query: Record<string, unknown> = {}) {
+  if (scenario === "readFailed" && failedReads++ < 1) throw failure("TIMEOUT");
+  const text = typeof query.query === "string" ? query.query.trim().toLocaleLowerCase() : "";
+  const scope = typeof query.scope === "string" ? query.scope : "all";
+  // excludeInstalled leaves out anything already on the computer, including plugins with an update.
+  const visible = DEMOS.map(marketItem).filter((item) => item.installState !== "installed" && item.installState !== "update-available"
+    && (scenario !== "organization" || item.scope !== "organization")
+    && `${item.name} ${item.description} ${item.ghostId}`.toLocaleLowerCase().includes(text));
+  const matches = scenario === "empty" || scenario === "unavailable" ? [] : visible;
+  const inScope = matches.filter((item) => scope === "all" ? true : scope === "custom" ? item.sourceType !== "server"
+    : item.sourceType === "server" && item.scope === scope);
+  const offset = typeof query.cursor === "string" ? Number(query.cursor) : 0;
+  const limit = typeof query.limit === "number" ? query.limit : 20;
+  const page = inScope.slice(offset, offset + limit);
+  const server = matches.filter((item) => item.sourceType === "server");
+  const counts = {
+    public: server.filter((item) => item.scope === "public").length,
+    organization: server.filter((item) => item.scope === "organization").length, personal: 0,
+    custom: matches.length - server.length,
+    official: server.filter((item) => item.publisherKind === "official").length,
+    community: server.filter((item) => item.publisherKind === "personal").length,
+  };
+  return {
+    items: page,
+    unavailableReason: scenario === "unavailable" ? "MARKET_UNAVAILABLE" : null,
+    customSourceNames: scenario === "customPartial" ? [...CUSTOM_SOURCE_NAMES, OFFLINE_MARKET] : CUSTOM_SOURCE_NAMES,
+    unavailableCustomSourceNames: scenario === "customPartial" ? [OFFLINE_MARKET] : [],
+    organizationAccessError: scenario === "organization" ? "PLUGIN_ORGANIZATION_CONTEXT_UNAVAILABLE" : null,
+    nextCursor: offset + page.length < inScope.length ? String(offset + page.length) : null,
+    counts: query.counts === true ? { ...counts, all: counts.public + counts.organization + counts.custom } : null,
+  };
+}
+function ghost(key: string, entry: { demo: DemoPlugin; enabled: boolean; version: string }): ManagedPlugin {
+  return { instanceKey: key, namespace: null, manifest: manifest(entry.demo, entry.version) as ManagedPlugin["manifest"], enabled: entry.enabled,
+    approval: { state: "approved", revision: "12345678-1234-4123-8123-123456789abc" } };
+}
+function snapshot() {
+  return { version: 1, ghosts: [...installed].map(([key, entry]) => ghost(key, entry)),
+    market: { items: DEMOS.filter((demo) => !catalogUnreadable || demo.publisher === "custom").map(marketItem),
+      unavailableReason: catalogUnreadable ? "Demo plugin market unreachable" : null, customSourceNames: CUSTOM_SOURCE_NAMES,
+      unavailableCustomSourceNames: [] } };
+}
+function receipt(operationId: string) {
+  const op = operations.get(operationId);
+  if (!op) throw failure("NOT_FOUND");
+  op.polls += 1;
+  const demo = DEMOS.find((item) => item.ghostId === op.ghostId)!;
+  const script = scripted.get(operationId);
+  if (script && !op.done) {
+    script.lookups += 1;
+    if (script.behavior === "running") return { operationId, phase: "running" };
+    if (script.behavior === "waiting" || script.lookups === 1) throw failure("INVALID_RESPONSE");
+    if (script.behavior === "gone" || script.behavior === "goneUnread" || script.behavior === "goneUnattributed") {
+      if (script.behavior === "goneUnread") catalogUnreadable = true;
+      if (op.kind !== "uninstall") installed.set(instanceKey(demo.ghostId), { demo, enabled: true, version: RELEASE,
+        ...(script.behavior === "goneUnattributed" ? {} : { operationId }) });
+      operations.delete(operationId);
+      throw failure("NOT_FOUND");
+    }
+    if (script.behavior === "failed") op.done = "failed";
+    else if (script.behavior === "consent" && !op.answered) op.answered = false;
+    else { op.polls = 3; op.answered = true; if (script.behavior === "unread") failInstalledReadOnCommit = true; }
+  }
+  if (op.done) return { operationId, phase: op.done, ...(op.done === "failed" ? { errorCode: "GHOST_DOWNLOAD_FAILED" } : {}) };
+  const pendingCheck = op.kind === "install" && demo.outcome === "uncertain" && PENDING_CHECK_SCENARIOS.includes(scenario);
+  if (pendingCheck && op.polls === 1) throw failure("INVALID_RESPONSE");
+  if (op.kind === "uninstall") { installed.delete(instanceKey(op.ghostId)); op.done = "succeeded"; return { operationId, phase: "succeeded" }; }
+  if (demo.outcome === "downloadFailed") { op.done = "failed"; return receipt(operationId); }
+  const entry = installed.get(instanceKey(demo.ghostId));
+  if (!op.answered) return { operationId, phase: "confirmation", consent: {
+    // The second consent of `secondConsent` says an Agent asked for it: its source line is longer ("Initiated by Agent · …"),
+    // so the next consent's identity block is taller than the one before (initiator is not part of what may be allowed).
+    requestId: `demo-consent-${operationId}${op.second ? "-2" : ""}`, initiator: op.second ? "agent" : "user", origin: demo.publisher === "custom" ? "custom-market" : "market",
+    ...(demo.publisher === "custom" ? { originLabel: marketName(demo), ...(demo.legacySource ? {} : { originSource: marketSource(demo) }) } : {}),
+    // Host: an update from another (verifiable) source than the installed instance's carries originSourceChanged and is
+    // confirmed like a first install (full permissions of the new source).
+    ...(demo.sourceMoved && op.kind === "update" ? { originSourceChanged: true as const } : {}),
+    // The Host marks a verified public community publisher; the phone shows the community notice.
+    ...(demo.publisher === "personal" ? { communityMarket: true } : {}),
+    // Host: trust comes from the inspected package signature; unsigned custom-market packages are "unverified".
+    trust: demo.publisher === "official" ? "cindy-official" : demo.publisher === "custom" ? "unverified" : "reviewed",
+    // Same source facts as the Host's obtainGhostInstallConsent for each market origin.
+    installationSource: demo.publisher === "custom" ? { kind: "third-party" }
+      : demo.publisher === "organization" ? { kind: "organization", namespace: "demo-org" }
+        : { kind: demo.publisher === "official" ? "official" : "market" },
+    facts: op.kind === "update" && entry && demo.update && !demo.sourceMoved
+      ? { kind: "update", ghostId: demo.ghostId, name: demo.name, version: RELEASE, previousVersion: entry.version,
+        added: demo.update.added, removed: demo.update.removed, unchangedCount: demo.update.unchangedCount,
+        builtinOauthClientChanged: false }
+      : { kind: "install", ghostId: demo.ghostId, name: demo.name, version: RELEASE, permissions: demo.permissions ?? [] } } };
+  // Two polls of "installing" after consent, then the install commits. `hold`: it stays in progress (for screenshots of
+  // an operation under way: other entries unavailable, the notice at the top), until another scenario is chosen.
+  if ((op.polls < 3 && !pendingCheck) || scenario === "hold")
+    return { operationId, phase: "running" };
+  installed.set(instanceKey(demo.ghostId), { demo, enabled: entry?.enabled ?? true, version: RELEASE, operationId });
+  if (scenario === "unreadResult" || failInstalledReadOnCommit) { failInstalledRead = true; failInstalledReadOnCommit = false; }
+  if (scenario === "readbackFailed") failReadsAfterCommit = 2;
+  if (script?.behavior === "readingBack") holdInstalledReads = true;
+  // Changed on the computer since: an older package of the same plugin replaced it.
+  if (script?.behavior === "changed") installed.set(instanceKey(demo.ghostId), { demo, enabled: true, version: "0.9.0" });
+  // The computer reinstalled the same version itself: the record is rewritten without this phone's evidence.
+  if (script?.behavior === "reinstalled") installed.set(instanceKey(demo.ghostId), { demo, enabled: true, version: RELEASE });
+  if (script?.behavior === "uninstalledAfter") installed.delete(instanceKey(demo.ghostId));
+  if (script?.behavior === "catalogAhead") catalogAhead.add(demo.ghostId);
+  if (script?.behavior === "legacyHost") legacyHost = true;
+  op.done = "succeeded";
+  return { operationId, phase: "succeeded" };
+}
+
+/** Management actions of the `plugins` collection; undefined for anything else. */
+export function pluginMarketVisualManagement(actionId: string | undefined, input: Record<string, unknown> = {}, resourceId?: string): unknown {
+  const result = (value: unknown) => ({ effects: [], result: value });
+  switch (actionId) {
+    case "management:snapshot":
+      // An older Host rejects any non-empty snapshot input; its v1 full snapshot still works.
+      if (scenario === "outdated" && input.read !== undefined) throw failure("INVALID_PARAMS");
+      if (input.read === "capabilities") return result({ catalogPaging: true });
+      if (input.read === "catalog") return result(catalog(input.query as Record<string, unknown>));
+      if (input.read === "recommendations") return result([]);
+      if (failInstalledRead) { failInstalledRead = false; throw failure("TIMEOUT"); }
+      if (failReadsAfterCommit > 0) { failReadsAfterCommit -= 1; throw failure("TIMEOUT"); }
+      return result(snapshot());
+    case "management:market-detail": {
+      const demo = demoFor(input.pluginId);
+      if (!demo) throw failure("NOT_FOUND");
+      // Update preflight prompts (installed detail → "Update to v…"): the release or the source changed since the list
+      // was read, or the read fails. Only plugins with an update are affected.
+      const entry = installed.get(instanceKey(demo.ghostId));
+      const updating = !!entry && entry.version !== RELEASE;
+      if (updating && scenario === "updateReadFailed") throw failure("TIMEOUT");
+      if (!updating && scenario === "detailReadFailed" && !failedDetailReads.has(demo.ghostId)) {
+        failedDetailReads.add(demo.ghostId);
+        throw failure("TIMEOUT");
+      }
+      const item = marketItem(demo);
+      if (updating && scenario === "updateReleaseChanged") return result({ ...item, releaseId: `${demo.ghostId}@9.9.9`, version: "9.9.9", manifest: manifest(demo, "9.9.9") });
+      if (updating && scenario === "updateSourceChanged" && item.sourceIdentity)
+        return result({ ...item, sourceIdentity: { ...item.sourceIdentity, sourceId: "DemoChangedMarketSrc01" }, manifest: manifest(demo) });
+      return result({ ...item, manifest: manifest(demo) });
+    }
+    case "management:begin": {
+      const operationId = String(input.operationId);
+      if (input.kind === "uninstall") {
+        const entry = resourceId ? installed.get(resourceId) : undefined;
+        if (!entry) throw failure("PRECONDITION_FAILED");
+        operations.set(operationId, { kind: "uninstall", ghostId: entry.demo.ghostId, answered: true, polls: 0 });
+        return result({ operationId, phase: "running" });
+      }
+      const demo = demoFor(input.pluginId);
+      if (!demo || input.kind !== "install" || input.expectedReleaseId !== `${demo.ghostId}@${RELEASE}`) throw failure("PRECONDITION_FAILED");
+      // An update is an install that names the installed instance (resourceRef + expectedInstalledApproval).
+      const current = resourceId ? installed.get(resourceId) : undefined;
+      if (resourceId) {
+        if (!current || current.demo !== demo || current.version === RELEASE || !demo.update) throw failure("PRECONDITION_FAILED");
+        operations.set(operationId, { kind: "update", ghostId: demo.ghostId, answered: false, polls: 2 });
+        return result({ operationId, phase: "running" });
+      }
+      if (demo.conflict || installed.has(instanceKey(demo.ghostId))) throw failure("ALREADY_EXISTS");
+      operations.set(operationId, { kind: "install", ghostId: demo.ghostId,
+        answered: demo.outcome === "uncertain" && scenario !== "lateConsent",
+        polls: demo.outcome === "uncertain" && PENDING_CHECK_SCENARIOS.includes(scenario) ? 0 : 2 });
+      // Simulate a reply lost after the Host accepted the install; Check result reads the original operation.
+      if (demo.outcome === "uncertain") throw failure("TIMEOUT");
+      return result({ operationId, phase: "running" });
+    }
+    case "management:operation": return result(receipt(String(input.operationId)));
+    case "management:answer": {
+      const op = operations.get(String(input.operationId));
+      if (!op) throw failure("NOT_FOUND");
+      if (input.confirmed !== true) op.done = "cancelled";
+      // `secondConsent` (maintainer review 18:20): the first Allow of an install or update is followed by a second consent
+      // of the same operation (another requestId), so the sheet shows two consents in a row; the second Allow goes on.
+      else if (scenario === "secondConsent" && op.kind !== "uninstall" && !op.second) { op.second = true; op.polls = 0; }
+      else { op.answered = true; op.polls = 0; }
+      return result({ operationId: String(input.operationId), phase: op.done ?? "running" });
+    }
+    case "management:cancel": {
+      const op = operations.get(String(input.operationId));
+      if (op && !op.done) op.done = "cancelled";
+      return result({ operationId: String(input.operationId), phase: op?.done ?? "cancelled" });
+    }
+    default: return undefined;
+  }
+}
+
+/** Demo plugins installed from the mock market join the installed list and detail. */
+export function pluginMarketVisualInstalledItems(): RemoteCollectionItem[] {
+  return [...installed].map(([key, entry]) => ({
+    ref: { collectionId: PLUGIN_COLLECTION, kind: "plugin", id: key }, revision: String(entry.enabled), links: [],
+    display: { title: entry.demo.name, subtitle: entry.demo.description },
+    actions: [{ id: entry.enabled ? "disable" : "enable", label: entry.enabled ? "Disable" : "Enable" }],
+  }));
+}
+export function pluginMarketVisualResource(id: string, actionId?: string): unknown {
+  const entry = installed.get(id);
+  if (!entry) return undefined;
+  if (actionId === "enable" || actionId === "disable") {
+    entry.enabled = actionId === "enable";
+    return { effects: [{ kind: "refresh-collection", collectionId: PLUGIN_COLLECTION }] };
+  }
+  if (actionId) throw failure("UNSUPPORTED_DEMO_PLUGIN_ACTION");
+  const item = pluginMarketVisualInstalledItems().find((candidate) => candidate.ref.id === id)!;
+  return { ...item, blocks: [{ id: "capabilities", primitive: "plugin-capabilities", fallbackMarkdown: "",
+    data: { tools: entry.demo.tools.map((name) => ({ name, description: "Example capability" })) } }] };
+}
+
+/** The mock computer also declares plugin management, next to the teammate collections it already lists. */
+export function withPluginManagementManifest<T>(manifest: T): T {
+  const value = manifest as { collections?: Array<{ id: string }> };
+  if (!Array.isArray(value?.collections) || value.collections.some((collection) => collection.id === PLUGIN_COLLECTION)) return manifest;
+  return { ...value, collections: [...value.collections, { id: PLUGIN_COLLECTION, resourceKind: "plugin", title: "Plugins",
+    actions: [{ id: "management:snapshot", label: "Manage" }] }] } as T;
+}

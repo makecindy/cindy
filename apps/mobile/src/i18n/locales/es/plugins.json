@@ -137,6 +137,7 @@
     "readmeLoadFailed": "No se pudo cargar la presentación. Inténtalo de nuevo.",
     "readmeUnavailable": "No hay presentación disponible.",
     "computerSettings": "Para configurar este complemento, abre sus detalles en Cindy → Complementos en tu computadora.",
+    "computerSettingsTitle": "Termina la configuración en el ordenador",
     "runtimeIssue": "El complemento se detuvo inesperadamente. Intenta abrirlo de nuevo o usarlo en una tarea.",
     "runtimeFused": "El complemento se detuvo después de repetidos fallos. Apágalo y enciéndelo para volver a intentarlo.",
     "status": {
@@ -164,7 +165,8 @@
     "version": "Versión",
     "showAll": "Mostrar todo",
     "showLess": "Mostrar menos",
-    "identifier": "Identificador"
+    "identifier": "Identificador",
+    "author": "Autor"
   },
   "demo": {
     "hint": "Datos de demostración · No se cambia ninguna configuración real"
@@ -180,16 +182,19 @@
   "management": {
     "checkResult": "Comprobar resultado",
     "manage": "Administrar complemento",
-    "update": "Actualizar",
+    "updateTo": "Actualizar a v{{version}}",
     "uninstall": "Desinstalar",
     "uninstallTitle": "¿Desinstalar {{name}}?",
     "uninstallBody": "Esto elimina el complemento, sus credenciales y configuraciones privadas de {{device}}. Se conservan los elementos de la biblioteca y el contenido de las tareas existentes.",
     "reject": "Cancelar",
     "allow": "Permitir y continuar",
+    "review": "Revisar origen y permisos",
     "versionChange": "{{previous}} → {{next}}",
+    "switchVersion": "Versión que se instalará: {{version}}",
     "oauthChanged": "La configuración de inicio de sesión de la cuenta ha cambiado.",
     "state": {
-      "readFailed": "No se pudo leer la información de administración del complemento. Actualiza para volver a comprobarlo."
+      "readFailed": "No se pudo leer la información de administración del complemento. Actualiza para volver a comprobarlo.",
+      "readFailedTitle": "No se pudo leer"
     },
     "permissions": {
       "mail": "Usar borradores de correo y tarjetas de envío",
@@ -309,9 +314,16 @@
       "routineEvents": "Eventos de automatización",
       "mcpUi": "Puede mostrar páginas interactivas en conversaciones.",
       "mcpUiDomains": "Dominios a los que se pueden conectar las páginas: {{domains}}",
-      "uiPageAccess": "Páginas: {{pages}}\nDominios a los que se pueden conectar las páginas: {{domains}}\nHerramientas que las páginas pueden llamar: {{tools}}"
+      "uiPageAccess": "Páginas: {{pages}}\nDominios a los que se pueden conectar las páginas: {{domains}}\nHerramientas que las páginas pueden llamar: {{tools}}",
+      "nodeSecretCount": "El programa local Node puede recibir {{count}} credenciales almacenadas",
+      "nodeSecretOne": "El programa local Node puede recibir una credencial almacenada"
     },
     "releaseChanged": "La versión disponible cambió. Revisa la versión actualizada antes de instalar.",
+    "releaseChangedTitle": "La versión cambió",
+    "sourceUnverified": "Este ordenador no ha indicado el repositorio de este mercado personalizado, así que no se puede actualizar desde el teléfono. Primero actualiza Cindy en ese ordenador y actualiza este mercado; si sigue sin funcionar, actualiza el complemento directamente en el ordenador.",
+    "sourceUnverifiedTitle": "No se puede actualizar desde el teléfono",
+    "sourceChanged": "El origen de este mercado acaba de cambiar y la actualización se ha detenido. Revisa el mercado en el ordenador y vuelve a intentarlo.",
+    "sourceChangedTitle": "Cambió el origen del mercado",
     "settingsUnavailable": "No se pudo cargar la configuración del complemento. Vuelve a cargar la configuración para intentarlo de nuevo.",
     "settingsResultUnknown": "No se pudo confirmar el resultado de la operación. Vuelve a cargar la configuración de la computadora antes de enviar de nuevo.",
     "settingsOperationFailed": "No se pudo completar la operación de configuración. Verifica la conexión y vuelve a intentarlo.",
@@ -321,7 +333,10 @@
       "reviewed": "Revisado",
       "verified-publisher": "Editor verificado",
       "unverified": "No verificado"
-    }
+    },
+    "highRiskTitle": "Permisos de alto riesgo",
+    "highRiskTitleCount": "{{title}} · {{count}}",
+    "scrollHint": "Desplázate para verlo todo"
   },
   "notice": {
     "title": {
@@ -338,17 +353,30 @@
       "managementFailed": "Operación fallida",
       "confirmation": "Revisar los permisos del complemento"
     },
-    "consentOrigin": {
-      "market": "Mercado oficial",
-      "custom-market": "Mercado personalizado",
-      "local-file": "Archivo local",
-      "forge": "Construido localmente"
+    "taskCapability": "Para esta tarea",
+    "consentSource": {
+      "market": "Del mercado de complementos de {{appName}}",
+      "customMarket": "Del mercado personalizado “{{name}}”",
+      "customMarketUnnamed": "De un mercado personalizado",
+      "localFile": "De un archivo .cindy local",
+      "forge": "Complemento desarrollado localmente",
+      "initiatedByAgent": "Solicitado por Agent · {{origin}}",
+      "repository": "Repositorio {{repository}}",
+      "repositoryRef": "Repositorio {{repository}} ({{ref}})",
+      "originSourceChanged": "Esta actualización procede de un origen distinto al de la versión instalada. Las cuentas y los datos existentes se archivan por separado; vuelve a conectar tus cuentas después de actualizar. Continúa solo si confías en el repositorio que se muestra arriba.",
+      "marketSourceChanged": "Esta actualización cambia a la versión del mercado de complementos. Las cuentas y los datos existentes se archivan por separado. Vuelve a conectar tus cuentas después de actualizar.",
+      "sourceChangedIsolated": "Esta actualización procede de un origen distinto al de la versión instalada. Las cuentas y los datos existentes se archivan por separado; vuelve a conectar tus cuentas después de actualizar.",
+      "localFolder": "Carpeta local",
+      "repositoryMissingInstall": "Este ordenador no ha indicado el repositorio de este mercado personalizado, así que no se puede instalar desde el teléfono. Primero actualiza Cindy en ese ordenador y actualiza este mercado; si sigue sin funcionar, instala directamente en el ordenador.",
+      "repositoryMissingUpdate": "Este ordenador no ha indicado el repositorio de este mercado personalizado, así que no se puede actualizar desde el teléfono. Primero actualiza Cindy en ese ordenador y actualiza este mercado; si sigue sin funcionar, actualiza el complemento directamente en el ordenador.",
+      "sourceChanged": "El origen de esta solicitud no coincide con el que elegiste, así que no se puede permitir desde el teléfono. Recházala y vuelve a elegir.",
+      "consentChanged": "Esta solicitud es para un complemento, versión u ordenador distinto del que elegiste, así que no se puede permitir desde el teléfono. Recházala y vuelve a elegir, o resuélvelo en el ordenador."
     },
-    "initiator": {
-      "user": "Solicitado por ti",
-      "agent": "Solicitado por Agent"
-    },
-    "taskCapability": "Para esta tarea"
+    "sourceNotice": {
+      "community": "Este complemento lo desarrollan y mantienen miembros de la comunidad. {{appName}} ha revisado esta versión, pero no puede garantizar que sea seguro en todas las situaciones de uso.",
+      "customMarket": "Asegúrate de que confías en este mercado y revisa los permisos que solicita el complemento.",
+      "localFile": "Antes de continuar, comprueba que el archivo procede de una fuente de confianza."
+    }
   },
   "uiApproval": {
     "title": "El complemento “{{name}}” ha agregado páginas interactivas. Revisa sus permisos antes de usarlas.",
@@ -383,6 +411,145 @@
     "cancelled": "No se archivará automáticamente esta vez",
     "archived": "Se archivó «{{title}}»",
     "undo": "Deshacer"
+  },
+  "market": {
+    "title": "Mercado de complementos",
+    "installDestination": "Instalar en: {{device}}",
+    "filterLabel": "Filtrar complementos por origen",
+    "filter": {
+      "all": "Todo",
+      "official": "Oficial",
+      "community": "Comunidad",
+      "organization": "Compartido con el equipo",
+      "custom": "Personalizado"
+    },
+    "install": "Instalar",
+    "installAria": "Instalar {{name}}",
+    "waiting": "Esperando confirmación…",
+    "installing": "Instalando…",
+    "loadMore": "Cargar más",
+    "allLoaded": "Se muestran los {{count}} complementos",
+    "unavailable": "El mercado de complementos no está disponible temporalmente. Los complementos instalados siguen disponibles.",
+    "customSourcesUnavailable": "Estos mercados personalizados no están disponibles temporalmente: {{names}}. Los demás mercados no se ven afectados.",
+    "securityTitle": "Instalación y permisos",
+    "source": "Fuente",
+    "scope": {
+      "public": "Público",
+      "organization": "Organización",
+      "personal": "Personal",
+      "custom": "Personalizado",
+      "local": "Local"
+    },
+    "publisherDescription": {
+      "official": "Publicado y mantenido por Cindy",
+      "community": "Publicado y mantenido por desarrolladores de la comunidad",
+      "organization": "Compartido por tu organización con los miembros autorizados",
+      "custom": "De un mercado Git o de una carpeta local que añadiste"
+    },
+    "errors": {
+      "generic": "La operación del mercado de complementos falló. Inténtalo de nuevo.",
+      "invalidRequest": "La solicitud del complemento no es válida.",
+      "notFound": "Este complemento ya no está disponible. Actualiza el mercado e inténtalo de nuevo.",
+      "conflict": "Otro complemento instalado o del mercado usa el mismo ID de complemento.",
+      "stateChanged": "La cuenta, el complemento o la versión cambió durante esta operación. Revisa el estado actual e inténtalo de nuevo.",
+      "listChanged": "El catálogo de complementos de la organización cambió. Inténtalo de nuevo.",
+      "accessDenied": "Esta operación del complemento no está permitida o se canceló.",
+      "notConfigured": "El mercado de complementos no está disponible en este entorno.",
+      "invalidPackage": "Este paquete de complemento no es válido y no se puede instalar. Contacta al editor.",
+      "downloadAuthorizationExpired": "La autorización de descarga del complemento ha caducado. Comprueba la fecha y la hora del sistema antes de iniciar una nueva instalación.",
+      "downloadTimeout": "Se agotó el tiempo de descarga del complemento. Inténtalo más tarde.",
+      "downloadFailed": "No se pudo descargar el complemento. Revisa tu conexión e inténtalo de nuevo.",
+      "brokerRedirectPortRequired": "Este complemento declara un intermediario de autorización, pero falta redirectPort en la misma configuración de OAuth, por lo que no se puede instalar desde el mercado de complementos. Contacta al editor para que agregue el campo y publique una nueva versión.",
+      "hostUnsupported": "Esta versión de Cindy no puede leer el formato del manifiesto de este complemento.",
+      "namespaceClientRequired": "Esta versión no puede mostrar los complementos de la organización. Actualiza Cindy para continuar. Los complementos de la organización instalados siguen disponibles.",
+      "organizationContextUnavailable": "La identidad de la organización no está disponible temporalmente. Inténtalo más tarde. Los complementos de la organización instalados siguen disponibles.",
+      "namespaceConfigRequired": "Los complementos de la organización no están disponibles temporalmente. Los complementos de la organización instalados siguen disponibles.",
+      "organizationUnavailable": "Los complementos de la organización no están disponibles temporalmente. Los complementos de la organización instalados siguen disponibles.",
+      "idReserved": "El identificador de este complemento usa un prefijo reservado para complementos oficiales, así que no se puede instalar desde un mercado de complementos personalizado. Instala el complemento oficial correspondiente desde el mercado de complementos de Cindy."
+    },
+    "segmentsLabel": "Mostrar complementos",
+    "installTo": "Instalar en {{device}}",
+    "conflict": "Ya hay un complemento con el mismo identificador en este ordenador. Resuélvelo en el ordenador.",
+    "offline": "{{device}} no está conectado. Podrás explorar e instalar complementos cuando se restablezca la conexión.",
+    "outdated": "La versión de Cindy en {{device}} aún no permite instalar complementos desde el teléfono. Actualiza primero Cindy en ese ordenador. Los complementos instalados siguen disponibles.",
+    "outdatedShort": "Cindy en este ordenador aún no permite instalar desde el teléfono. Actualízala primero.",
+    "readFailed": "No se pudo cargar el mercado de complementos. Inténtalo de nuevo.",
+    "securityBody": "Al tocar Instalar, el ordenador descarga y comprueba el paquete y luego te muestra los permisos que necesita para que los confirmes. No se instala nada antes de tu confirmación. Una vez instalado, se activa automáticamente y puedes desactivarlo o desinstalarlo cuando quieras.",
+    "resultUnknownDetail": "Aún no se ha confirmado si esta instalación terminó.",
+    "unconfirmedNotInstalled": "No se pudo confirmar el resultado de esta instalación. El complemento no está en este ordenador ahora mismo.",
+    "alreadyInstalled": "Este complemento ya está instalado en este ordenador.",
+    "unconfirmedMismatch": "No se pudo confirmar el resultado de esta instalación. El complemento con el mismo identificador en este ordenador puede venir de un archivo local, de otra versión o de otro origen, o su mercado ya no lo incluye. Compruébalo en el ordenador o en Instalados.",
+    "unconfirmedLegacy": "No se pudo confirmar el resultado de esta instalación: la versión de Cindy del ordenador es demasiado antigua para confirmarlo. Compruébalo en el ordenador o en Instalados.",
+    "sourceUnverified": "Este ordenador no ha indicado el repositorio de este mercado personalizado, así que no se puede instalar desde el teléfono. Primero actualiza Cindy en ese ordenador y actualiza este mercado; si sigue sin funcionar, instala directamente en el ordenador.",
+    "sourceUnverifiedShort": "Falta el repositorio; no se puede instalar desde el teléfono",
+    "sourceChanged": "El origen de este mercado acaba de cambiar. Vuelve a elegir el complemento que quieres instalar.",
+    "publicInstall": "Mercado público",
+    "communityDisclaimer": "Este complemento lo desarrollan y mantienen miembros de la comunidad. Cindy ha revisado esta versión, pero no puede garantizar que sea seguro en todas las situaciones de uso."
+  },
+  "gotIt": "Entendido",
+  "slot": {
+    "holder": "Una operación de “{{name}}” en “{{device}}” no ha terminado",
+    "show": "Ver"
+  },
+  "checks": {
+    "title": "Operaciones de complementos sin terminar",
+    "titleEnded": "Resultados de las operaciones de complementos",
+    "many": "{{count}} operaciones de complementos no han terminado",
+    "waitingOne": "Hay que comprobar el resultado de «{{name}}» en «{{device}}»",
+    "settledOne": "La operación de «{{name}}» en «{{device}}» tiene un resultado",
+    "settledMany": "{{count}} operaciones de complementos tienen un resultado",
+    "attentionMany": "{{count}} operaciones de complementos requieren revisión",
+    "kind": {
+      "marketInstall": "Instalar",
+      "update": "Actualizar",
+      "uninstall": "Desinstalar",
+      "pageApproval": "Activar páginas",
+      "enable": "Activar o desactivar",
+      "taskSettings": "Ajustes de tareas"
+    },
+    "status": {
+      "preparing": "Preparando",
+      "running": "El ordenador lo está procesando",
+      "confirmation": "Esperando confirmación",
+      "checking": "Comprobando el resultado",
+      "waiting": "Resultado sin confirmar. Compruébalo otra vez o deja de seguirlo.",
+      "recordMissing": "Este complemento está en el ordenador, pero no se pudo leer su registro de instalación, así que el resultado aún no se puede confirmar. Compruébalo más tarde o deja de seguirlo.",
+      "offline": "«{{device}}» no está conectado. Conéctalo para comprobar el resultado.",
+      "awaitingYou": "El ordenador espera tu confirmación",
+      "unprovable": {
+        "uninstall": {
+          "absent": "El ordenador ya no tiene registro de esta desinstalación, así que no se puede confirmar el resultado. El complemento no está ahora en el ordenador.",
+          "present": "El ordenador ya no tiene registro de esta desinstalación, así que no se puede confirmar el resultado. El complemento sigue en el ordenador."
+        },
+        "pageApproval": {
+          "absent": "El ordenador ya no tiene registro de la activación de estas páginas, así que no se puede confirmar el resultado. El complemento no está ahora en el ordenador.",
+          "approved": "El ordenador ya no tiene registro de la activación de estas páginas, así que no se puede confirmar el resultado. Sus páginas están activadas.",
+          "notApproved": "El ordenador ya no tiene registro de la activación de estas páginas, así que no se puede confirmar el resultado. Sus páginas aún no están activadas."
+        }
+      }
+    },
+    "stop": "Dejar de seguir",
+    "stopHint": "Solo este teléfono deja de seguirla. La operación del ordenador no se cancela.",
+    "result": {
+      "succeeded": "Hecho",
+      "installed": "Instalado",
+      "failed": "No completado",
+      "cancelled": "Cancelado",
+      "untracked": "Ya no se sigue",
+      "ended": "Terminado",
+      "readingBack": "Hecho. Comprobando el complemento en el ordenador…",
+      "unconfirmed": "Hecho, pero el complemento del ordenador ha cambiado desde entonces, o no se puede confirmar que sea de esta instalación.",
+      "legacyHost": "Hecho, pero la versión de Cindy del ordenador es demasiado antigua para confirmarlo. Ábrelo desde Instalados.",
+      "goneSince": "Hecho, pero este complemento ya no está en el ordenador.",
+      "succeededUnread": "Hecho, pero no se pudieron leer los complementos del ordenador.",
+      "uninstalled": "Desinstalado"
+    },
+    "close": "Listo",
+    "decide": "Ver y decidir",
+    "decideBlocked": "Otra operación en este ordenador no ha terminado. Decide cuando termine.",
+    "readAgain": "Volver a leer",
+    "showInstalled": "Ir a Instalados",
+    "unlisted": "«{{device}}» ya no está entre los ordenadores de esta cuenta."
   },
   "automationCheck": "Dejar que {{name}} compruebe antes de usar un modelo"
 }

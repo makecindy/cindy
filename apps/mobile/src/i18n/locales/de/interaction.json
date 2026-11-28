@@ -1,6 +1,7 @@
 {
   "permission": {
     "install": "Installieren",
+    "installSourceUnverified": "Dieser Computer hat das Repository dieses benutzerdefinierten Marktplatzes nicht angegeben. Installieren vom Handy ist daher nicht möglich. Du kannst zuerst Cindy auf diesem Computer und dann den Marktplatz aktualisieren und den Agent es erneut versuchen lassen; hier kannst du nur ablehnen. Zum Installieren bestätige am Computer.",
     "mcpComplete": "Fertig",
     "mcpCancel": "Abbrechen",
     "mode": {

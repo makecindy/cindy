@@ -138,6 +138,7 @@
     "readmeLoadFailed": "Não foi possível carregar a apresentação. Tente novamente.",
     "readmeUnavailable": "Nenhuma apresentação disponível.",
     "computerSettings": "Para configurar este plugin, abra os respetivos detalhes em Cindy → Plugins no computador.",
+    "computerSettingsTitle": "Conclua a configuração no computador",
     "runtimeIssue": "O plugin parou inesperadamente. Tente abri-lo novamente ou utilizá-lo numa tarefa.",
     "runtimeFused": "O plugin parou após falhas repetidas. Desative-o e volte a ativá-lo para tentar novamente.",
     "status": {
@@ -165,7 +166,8 @@
     "version": "Versão",
     "showAll": "Mostrar tudo",
     "showLess": "Mostrar menos",
-    "identifier": "Identificador"
+    "identifier": "Identificador",
+    "author": "Autor"
   },
   "demo": {
     "hint": "Dados de demonstração · Nenhuma configuração real é alterada"
@@ -181,16 +183,19 @@
   "management": {
     "checkResult": "Verificar resultado",
     "manage": "Gerir plugin",
-    "update": "Atualizar",
+    "updateTo": "Atualizar para v{{version}}",
     "uninstall": "Desinstalar",
     "uninstallTitle": "Desinstalar {{name}}?",
     "uninstallBody": "Esta ação remove o plugin, as respetivas credenciais e definições privadas de {{device}}. Os itens da biblioteca e o conteúdo das tarefas existentes são mantidos.",
     "reject": "Cancelar",
     "allow": "Permitir e continuar",
+    "review": "Rever origem e permissões",
     "versionChange": "{{previous}} → {{next}}",
+    "switchVersion": "Versão a instalar: {{version}}",
     "oauthChanged": "A configuração de início de sessão da conta foi alterada.",
     "state": {
-      "readFailed": "Não foi possível ler as informações de gestão do plugin. Atualize para verificar novamente."
+      "readFailed": "Não foi possível ler as informações de gestão do plugin. Atualize para verificar novamente.",
+      "readFailedTitle": "Não foi possível ler"
     },
     "permissions": {
       "mail": "Usar rascunhos de email e cartões de envio",
@@ -310,9 +315,16 @@
       "routineEvents": "Eventos de automatização",
       "mcpUi": "Pode apresentar páginas interativas em conversas",
       "mcpUiDomains": "Domínios aos quais as páginas se podem ligar: {{domains}}",
-      "uiPageAccess": "Páginas: {{pages}}\nDomínios aos quais as páginas se podem ligar: {{domains}}\nFerramentas que as páginas podem chamar: {{tools}}"
+      "uiPageAccess": "Páginas: {{pages}}\nDomínios aos quais as páginas se podem ligar: {{domains}}\nFerramentas que as páginas podem chamar: {{tools}}",
+      "nodeSecretCount": "O programa Node local pode receber {{count}} credenciais guardadas",
+      "nodeSecretOne": "O programa Node local pode receber uma credencial guardada"
     },
     "releaseChanged": "A versão disponível mudou. Reveja a versão atualizada antes de instalar.",
+    "releaseChangedTitle": "A versão mudou",
+    "sourceUnverified": "Este computador não indicou o repositório deste mercado personalizado, por isso não é possível atualizar a partir do telemóvel. Primeiro atualize a Cindy nesse computador e atualize este mercado; se não resolver, atualize o plugin diretamente a partir do computador.",
+    "sourceUnverifiedTitle": "Não é possível atualizar a partir do telemóvel",
+    "sourceChanged": "A origem deste mercado acabou de mudar e a atualização foi interrompida. Verifique o mercado no computador e tente novamente.",
+    "sourceChangedTitle": "A origem do mercado mudou",
     "settingsUnavailable": "Não foi possível carregar as definições do plugin. Recarregue as definições para tentar novamente.",
     "settingsResultUnknown": "Não foi possível confirmar o resultado da operação. Recarregue as definições do computador antes de voltar a submeter.",
     "settingsOperationFailed": "Não foi possível concluir a operação de definições. Verifique a ligação e tente novamente.",
@@ -322,7 +334,10 @@
       "reviewed": "Revisto",
       "verified-publisher": "Editor verificado",
       "unverified": "Não verificado"
-    }
+    },
+    "highRiskTitle": "Permissões de alto risco",
+    "highRiskTitleCount": "{{title}} · {{count}}",
+    "scrollHint": "Deslize para ver tudo"
   },
   "notice": {
     "title": {
@@ -339,17 +354,30 @@
       "managementFailed": "Falha na operação",
       "confirmation": "Rever permissões do plugin"
     },
-    "consentOrigin": {
-      "market": "Mercado oficial",
-      "custom-market": "Mercado personalizado",
-      "local-file": "Ficheiro local",
-      "forge": "Compilado localmente"
+    "taskCapability": "Para esta tarefa",
+    "consentSource": {
+      "market": "Do mercado de plugins de {{appName}}",
+      "customMarket": "Do mercado personalizado “{{name}}”",
+      "customMarketUnnamed": "De um mercado personalizado",
+      "localFile": "De um ficheiro .cindy local",
+      "forge": "Plugin desenvolvido localmente",
+      "initiatedByAgent": "Solicitado pelo Agent · {{origin}}",
+      "repository": "Repositório {{repository}}",
+      "repositoryRef": "Repositório {{repository}} ({{ref}})",
+      "originSourceChanged": "Esta atualização vem de uma origem diferente da versão instalada. As contas e os dados existentes são arquivados separadamente; ligue novamente as suas contas após a atualização. Continue apenas se confiar no repositório indicado acima.",
+      "marketSourceChanged": "Esta atualização muda para a versão do mercado de plugins. As contas e os dados existentes são arquivados separadamente. Ligue novamente as suas contas após a atualização.",
+      "sourceChangedIsolated": "Esta atualização vem de uma origem diferente da versão instalada. As contas e os dados existentes são arquivados separadamente; ligue novamente as suas contas após a atualização.",
+      "localFolder": "Pasta local",
+      "repositoryMissingInstall": "Este computador não indicou o repositório deste mercado personalizado, por isso não é possível instalar a partir do telemóvel. Primeiro atualize a Cindy nesse computador e atualize este mercado; se não resolver, instale diretamente a partir do computador.",
+      "repositoryMissingUpdate": "Este computador não indicou o repositório deste mercado personalizado, por isso não é possível atualizar a partir do telemóvel. Primeiro atualize a Cindy nesse computador e atualize este mercado; se não resolver, atualize o plugin diretamente a partir do computador.",
+      "sourceChanged": "A origem deste pedido é diferente da que escolheu, por isso não pode ser permitido a partir do telemóvel. Recuse e escolha novamente.",
+      "consentChanged": "Este pedido é para um plugin, versão ou computador diferente do que escolheu, por isso não pode ser permitido a partir do telemóvel. Recuse e escolha novamente, ou resolva no computador."
     },
-    "initiator": {
-      "user": "Pedido por si",
-      "agent": "Pedido pelo Agent"
-    },
-    "taskCapability": "Para esta tarefa"
+    "sourceNotice": {
+      "community": "Este plugin é desenvolvido e mantido por membros da comunidade. A {{appName}} analisou esta versão, mas não pode garantir a segurança do plugin em todas as situações de utilização.",
+      "customMarket": "Confirme que confia neste mercado e verifique as permissões pedidas pelo plugin.",
+      "localFile": "Antes de continuar a instalação, confirme que o ficheiro veio de uma fonte de confiança."
+    }
   },
   "uiApproval": {
     "title": "O plugin «{{name}}» adicionou páginas interativas. Reveja as respetivas permissões antes de as usar.",
@@ -384,5 +412,144 @@
     "cancelled": "Sem arquivo automático desta vez",
     "archived": "\"{{title}}\" arquivada",
     "undo": "Desfazer"
+  },
+  "market": {
+    "title": "Mercado de plugins",
+    "installDestination": "Instalar em: {{device}}",
+    "filterLabel": "Filtrar plugins por origem",
+    "filter": {
+      "all": "Todas",
+      "official": "Oficial",
+      "community": "Comunidade",
+      "organization": "Da equipa",
+      "custom": "Personalizados"
+    },
+    "install": "Instalar",
+    "installAria": "Instalar {{name}}",
+    "waiting": "A aguardar confirmação…",
+    "installing": "A instalar…",
+    "loadMore": "Carregar mais",
+    "allLoaded": "Todos os {{count}} plugins apresentados",
+    "unavailable": "O mercado de plugins está temporariamente indisponível. Os plugins instalados continuam disponíveis.",
+    "customSourcesUnavailable": "Estes mercados personalizados estão temporariamente indisponíveis: {{names}}. Os outros mercados não são afetados.",
+    "securityTitle": "Instalação e permissões",
+    "source": "Origem",
+    "scope": {
+      "public": "Públicos",
+      "organization": "Organização",
+      "personal": "Pessoal",
+      "custom": "Personalizados",
+      "local": "Locais"
+    },
+    "publisherDescription": {
+      "official": "Publicado e mantido pela Cindy",
+      "community": "Publicado e mantido por programadores da comunidade",
+      "organization": "Partilhado pela sua organização com membros autorizados",
+      "custom": "De um mercado Git ou de uma pasta local que adicionou"
+    },
+    "errors": {
+      "generic": "A operação do mercado de plugins falhou. Tente novamente.",
+      "invalidRequest": "O pedido do plugin é inválido.",
+      "notFound": "Este plugin já não está disponível. Atualize o mercado e tente novamente.",
+      "conflict": "Outro plugin instalado ou do mercado utiliza o mesmo ID de plugin.",
+      "stateChanged": "A conta, o plugin ou a versão mudou durante esta operação. Reveja o estado mais recente e tente novamente.",
+      "listChanged": "O catálogo de plugins da organização foi alterado. Tente novamente.",
+      "accessDenied": "Esta operação do plugin não é permitida ou foi cancelada.",
+      "notConfigured": "O mercado de plugins não está disponível neste ambiente.",
+      "invalidPackage": "Este pacote de plugin é inválido e não pode ser instalado. Contacte o editor.",
+      "downloadAuthorizationExpired": "A autorização de transferência do plugin expirou. Verifique a data e a hora do sistema antes de iniciar uma nova instalação.",
+      "downloadTimeout": "O tempo limite da transferência do plugin foi excedido. Tente novamente mais tarde.",
+      "downloadFailed": "A transferência do plugin falhou. Verifique a ligação e tente novamente.",
+      "brokerRedirectPortRequired": "Este plugin declara um intermediário de autorização, mas falta redirectPort na mesma configuração OAuth, pelo que não pode ser instalado a partir do mercado de plugins. Contacte o editor para adicionar o campo e publicar uma nova versão.",
+      "hostUnsupported": "Esta versão de Cindy não consegue ler o formato do manifesto deste plugin.",
+      "namespaceClientRequired": "Esta versão não permite mostrar plugins da organização. Atualize Cindy para continuar. Os plugins da organização instalados continuam disponíveis.",
+      "organizationContextUnavailable": "A identidade da organização está temporariamente indisponível. Tente novamente mais tarde. Os plugins da organização instalados continuam disponíveis.",
+      "namespaceConfigRequired": "Os plugins da organização estão temporariamente indisponíveis. Os plugins da organização instalados continuam disponíveis.",
+      "organizationUnavailable": "Os plugins da organização estão temporariamente indisponíveis. Os plugins da organização instalados continuam disponíveis.",
+      "idReserved": "O identificador deste plugin usa um prefixo reservado para plugins oficiais, pelo que não pode ser instalado a partir de um mercado de plugins personalizado. Instale o plugin oficial correspondente a partir do mercado de plugins da Cindy."
+    },
+    "segmentsLabel": "Mostrar plugins",
+    "installTo": "Instalar em {{device}}",
+    "conflict": "Já existe um plugin com o mesmo identificador neste computador. Resolva-o no computador.",
+    "offline": "{{device}} não está ligado. Poderá explorar e instalar plugins quando a ligação for restabelecida.",
+    "outdated": "A versão da Cindy em {{device}} ainda não permite instalar plugins a partir do telemóvel. Atualize primeiro a Cindy nesse computador. Os plugins instalados continuam disponíveis.",
+    "outdatedShort": "A Cindy neste computador ainda não permite instalar a partir do telemóvel. Atualize-a primeiro.",
+    "readFailed": "Não foi possível carregar o mercado de plugins. Tente novamente.",
+    "securityBody": "Ao tocar em Instalar, o computador transfere e verifica o pacote e depois mostra as permissões necessárias para confirmar. Nada é instalado antes da sua confirmação. Depois de instalado, o plugin é ativado automaticamente e pode ser desativado ou desinstalado a qualquer momento.",
+    "resultUnknownDetail": "Ainda não foi confirmado se esta instalação foi concluída.",
+    "unconfirmedNotInstalled": "Não foi possível confirmar o resultado desta instalação. O plugin não está neste computador de momento.",
+    "alreadyInstalled": "Este plugin já está instalado neste computador.",
+    "unconfirmedMismatch": "Não foi possível confirmar o resultado desta instalação. O plugin com o mesmo identificador neste computador pode vir de um ficheiro local, de outra versão ou de outra origem, ou o mercado dele já não o lista. Verifique no computador ou em Instalados.",
+    "unconfirmedLegacy": "Não foi possível confirmar o resultado desta instalação: a versão do Cindy no computador é demasiado antiga para isso. Verifique no computador ou em Instalados.",
+    "sourceUnverified": "Este computador não indicou o repositório deste mercado personalizado, por isso não é possível instalar a partir do telemóvel. Primeiro atualize a Cindy nesse computador e atualize este mercado; se não resolver, instale diretamente a partir do computador.",
+    "sourceUnverifiedShort": "Falta o repositório; não é possível instalar a partir do telemóvel",
+    "sourceChanged": "A origem deste mercado acabou de mudar. Escolha novamente o plugin a instalar.",
+    "publicInstall": "Mercado público",
+    "communityDisclaimer": "Este plugin é desenvolvido e mantido por membros da comunidade. A Cindy analisou esta versão, mas não pode garantir a segurança do plugin em todas as situações de utilização."
+  },
+  "gotIt": "Compreendido",
+  "slot": {
+    "holder": "Uma operação de “{{name}}” em “{{device}}” não terminou",
+    "show": "Ver"
+  },
+  "checks": {
+    "title": "Operações de plugins por concluir",
+    "titleEnded": "Resultados das operações de plugins",
+    "many": "{{count}} operações de plugins ainda não foram concluídas",
+    "waitingOne": "É preciso verificar o resultado de «{{name}}» em «{{device}}»",
+    "settledOne": "A operação de «{{name}}» em «{{device}}» tem um resultado",
+    "settledMany": "{{count}} operações de plugins têm um resultado",
+    "attentionMany": "{{count}} operações de plugins precisam de atenção",
+    "kind": {
+      "marketInstall": "Instalar",
+      "update": "Atualizar",
+      "uninstall": "Desinstalar",
+      "pageApproval": "Ativar páginas",
+      "enable": "Ativar ou desativar",
+      "taskSettings": "Definições de tarefas"
+    },
+    "status": {
+      "preparing": "A preparar",
+      "running": "O computador está a processar",
+      "confirmation": "A aguardar confirmação",
+      "checking": "A verificar o resultado",
+      "waiting": "Resultado não confirmado. Verifique novamente ou deixe de acompanhar.",
+      "recordMissing": "Este plugin está no computador, mas não foi possível ler o respetivo registo de instalação, pelo que o resultado ainda não pode ser confirmado. Verifique novamente mais tarde ou deixe de acompanhar.",
+      "offline": "«{{device}}» não está ligado. Ligue-o para verificar o resultado.",
+      "awaitingYou": "O computador está a aguardar a sua confirmação",
+      "unprovable": {
+        "uninstall": {
+          "absent": "O computador já não tem registo desta desinstalação, pelo que não é possível confirmar o resultado. O plugin não está no computador agora.",
+          "present": "O computador já não tem registo desta desinstalação, pelo que não é possível confirmar o resultado. O plugin ainda está no computador."
+        },
+        "pageApproval": {
+          "absent": "O computador já não tem registo da ativação destas páginas, pelo que não é possível confirmar o resultado. O plugin não está no computador agora.",
+          "approved": "O computador já não tem registo da ativação destas páginas, pelo que não é possível confirmar o resultado. As páginas estão ativadas.",
+          "notApproved": "O computador já não tem registo da ativação destas páginas, pelo que não é possível confirmar o resultado. As páginas ainda não estão ativadas."
+        }
+      }
+    },
+    "stop": "Deixar de acompanhar",
+    "stopHint": "Só este telemóvel deixa de acompanhar. A operação no computador não é cancelada.",
+    "result": {
+      "succeeded": "Concluído",
+      "installed": "Instalado",
+      "failed": "Não concluído",
+      "cancelled": "Cancelado",
+      "untracked": "Já não é acompanhado",
+      "ended": "Terminado",
+      "readingBack": "Concluído. A verificar o plugin no computador…",
+      "unconfirmed": "Concluído, mas o plugin no computador mudou desde então, ou não é possível confirmar que é desta instalação.",
+      "legacyHost": "Concluído, mas a versão do Cindy no computador é demasiado antiga para o confirmar. Abra-o em Instalados.",
+      "goneSince": "Concluído, mas este plugin já não está no computador.",
+      "succeededUnread": "Concluído, mas não foi possível ler os plugins do computador.",
+      "uninstalled": "Desinstalado"
+    },
+    "close": "OK",
+    "decide": "Ver e decidir",
+    "decideBlocked": "Outra operação neste computador ainda não terminou. Decida quando terminar.",
+    "readAgain": "Ler novamente",
+    "showInstalled": "Ir para Instalados",
+    "unlisted": "«{{device}}» já não está entre os computadores desta conta."
   }
 }

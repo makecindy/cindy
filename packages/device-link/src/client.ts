@@ -2342,7 +2342,13 @@ export class DeviceLinkClient {
     dst: string,
     payload: InvokePayload,
     timeoutMs?: number,
-    options?: { canRerouteBeforeWrite?: () => boolean; preSend?: () => void; beforeDispatch?: () => void; noResultCache?: boolean; background?: boolean; diagnosticSource?: 'renderer' | 'main' | 'mobile' },
+    options?: { canRerouteBeforeWrite?: () => boolean; preSend?: () => void; beforeDispatch?: () => void; noResultCache?: boolean; background?: boolean; diagnosticSource?: 'renderer' | 'main' | 'mobile';
+      /**
+       * Local-only write receipt: runs once, at the first socket write of this call's own invoke request (the same point that
+       * marks its failure `inFlight`), before the call settles. A call that settles without it never wrote its request:
+       * refused by `preSend`, the queue or the route, or expired before writing. A handshake's writes never count.
+       */
+      onRequestWritten?: () => void },
   ): Promise<InvokeResultPayload> {
     if (this.status !== 'online' && !this.hasOfflineDirectPath(dst)) {
       throw new DeviceLinkError('NOT_CONNECTED', 'not connected to relay');
@@ -2380,6 +2386,12 @@ export class DeviceLinkClient {
       // reads may have filled the existing cache while this one was waiting.
       let decodeStarted = 0;
       let sentId = requestId;
+      let requestWritten = false;
+      const noteRequestWritten = () => {
+        if (requestWritten) return;
+        requestWritten = true;
+        try { options?.onRequestWritten?.(); } catch (error) { this.log.debug('device-link onRequestWritten callback failed', error); }
+      };
       const sentAt = this.monotonicNow();
       const attempt = async (id: string, fullHistory: boolean, timeout: number | undefined): Promise<InvokeAttempt> => {
         const reuse = this.messageReuse.prepare(dst, wirePayload);
@@ -2400,7 +2412,10 @@ export class DeviceLinkClient {
           timeout, true, { id, admissionMs, source: options?.diagnosticSource ?? 'client', operation: diagnosticOperation(wirePayload) },
           id === requestId ? hooks.canRerouteBeforeWrite : undefined,
           {
-            onFirstWrite: retired && retired.length > 0 ? () => this.retiredReadInvokes.acknowledge(dst, retired) : undefined,
+            onFirstWrite: (retired && retired.length > 0) || options?.onRequestWritten ? () => {
+              if (retired && retired.length > 0) this.retiredReadInvokes.acknowledge(dst, retired);
+              noteRequestWritten();
+            } : undefined,
             onCreatedControls: hooks.setUnderlyingControls,
           },
         );
@@ -2740,6 +2755,7 @@ export class DeviceLinkClient {
     allowPeerResetRetry = true,
     diagnostic?: { id: string; admissionMs: number; source: string; operation: string },
     canRerouteBeforeWrite?: () => boolean,
+    /** `onFirstWrite` runs once with the first socket write of this request (see `invoke` `onRequestWritten`). */
     lifecycle?: { onFirstWrite?: () => void; onCreatedControls?: (controls: ListingUnderlyingControls) => void },
   ): Promise<Envelope> {
     if (env.dst && this.remoteControlDisabled.has(env.dst)) {

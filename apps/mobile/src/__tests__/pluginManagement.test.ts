@@ -1,18 +1,28 @@
 // @vitest-environment jsdom
-import { pluginConsentPresentation } from '@/plugins/pluginConsentPresentation';
-import { sharedTaskHostPeer, providerShareHostPeer } from '@cindy/device-link';
+import { CONSENT_FADE_HEIGHT, consentSummaryFadeAllowed, isPinnedHighRiskPermission, PINNED_HIGH_RISK_MIN_HEIGHT, planConsentSheet, pluginConsentPresentation } from '@/plugins/pluginConsentPresentation';
+import { DeviceLinkError, sharedTaskHostPeer, providerShareHostPeer } from '@cindy/device-link';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, createElement } from 'react';
 import { createRoot } from 'react-dom/client';
-import { getMobileAuthOwner, setMobileAuthOwner } from '@/auth/authOwnerGeneration';
+import { getMobileAuthOwner, isMobileAuthOwnerCurrent, setMobileAuthOwner } from '@/auth/authOwnerGeneration';
 import { createPluginManagementClient, type PluginManagementInvoke } from '@/plugins/pluginManagementClient';
 import { createPluginPromptReads } from '@/plugins/pluginPromptReads';
 import { pluginUiApprovalNotice } from '@/plugins/pluginUiApprovalNotice';
 import { PluginPromptReadsProvider, usePluginPromptReads } from '@/plugins/PluginPromptReadsContext';
-import { createPluginManagementController } from '@/plugins/pluginManagementController';
+import { createPluginManagementController, nextDetachedStep } from '@/plugins/pluginManagementController';
+import { invokeSendEvidence } from '@/device-link/invokeSendEvidence';
+import { pluginMarketIncomplete, pluginOperationOpens } from '@/plugins/pluginOperationOpens';
+import { CONTRACT_OFFICIAL_SAMPLE_TEXT, CONTRACT_OFFICIAL_SAMPLES, CONTRACT_SAMPLE_OPERATION_ID, CONTRACT_SAMPLES, HOST_INSTALL_SITUATIONS, hostInstallFacts, secondShapes, type HostInstallSituation } from './hostPluginInstallFacts';
+import { declaredPluginConsent, declaredTaskCardConsent, pluginConsentAllowance } from '@/plugins/pluginConsentAllowance';
 import { isBoundedPluginResponse, parsePluginManagementDetail, parsePluginManagementReceipt,
   parsePluginManagementSnapshot, marketItemMatchesPlugin, pluginNeedsUiApproval, type ManagedPlugin,
-  parsePluginUiConsent, type ManagedMarketDetail, type PluginManagementReceipt, type PluginManagementSnapshot } from '@/plugins/pluginManagementTypes';
+  parsePluginUiConsent, pluginApprovalToken, samePluginMarketSourceIdentity, isPluginMarketSourceIdentity, type ManagedMarketDetail, type PluginManagementReceipt, type PluginManagementSnapshot } from '@/plugins/pluginManagementTypes';
+import { createPluginManagementSlot, pluginManagementSlotFor, pluginOperationHold } from '@/plugins/pluginManagementSlot';
+import { parsePluginMarketPage, pluginMarketFacts, pluginMarketIconUri, pluginMarketShowsCommunityNotice, pluginMarketSourceUnverified,
+  pluginMarketSubtitle } from '@/plugins/pluginMarketCatalog';
+import { readdirSync, readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+/** The computer a test's slot belongs to (one slot per account and computer). */
 
 vi.mock('expo-crypto', () => ({ randomUUID: () => 'operation-1' }));
 const appState = vi.hoisted(() => ({ currentState: 'active', listeners: new Set<(state: string) => void>() }));
@@ -34,45 +44,17 @@ vi.mock('@/device-link/revokedDevicesStore', () => ({ useRevokedDevices: () => n
  * 缺口：已有 pluginClient/page 测试没有管理事务；Desktop 测试不经过手机版 owner/队列 fence。
  * 最小失败输入：begin 丢回执、同物理键更换批准、排队后切设备/账号/离线；tier: unit（内存 Host、假时钟）。
  * 实测耗时：定向两文件 Vitest 0.989s（本文件测试 496ms）；无真实网络/插件/凭证。
+ *
+ * 手机插件市场（2026-11-25 增补）
+ * - 生产入口与可观察结果：client.catalog/catalogPaging、parsePluginMarketPage、controller.install（无已装实例）；
+ *   观察发往 Host 的请求形状、解析后的页面与安装回执阶段。
+ * - 依据：same-account-remote-plugin-management.md「新控制端先探测能力…普通读取失败不得回退全量」；
+ *   plugin-security-and-authoring §5.4 分页只做 discovery；brief 要求有界解析、缺字段降级。
+ * - 缺口：此前手机只有升级（带 installed）的安装用例，没有全新安装与分页读取。
+ * - 最小失败输入：旧 Host 页面缺 nextCursor/counts/publisherKind；101 条或计数不自洽的页面；
+ *   INVALID_PARAMS 与普通网络错误的区分；不带 installed 的 begin。tier: unit（内存 Host）。
  */
-const manifest = { schemaVersion: 3 as const, id: 'demo', name: 'Demo', version: '2', kind: 'chip' };
-const plugin: ManagedPlugin = { instanceKey: '_root__demo', namespace: null, manifest: { ...manifest, version: '1' },
-  enabled: true, approval: { state: 'approved', revision: '12345678-1234-4123-8123-123456789abc' } };
-const detail: ManagedMarketDetail = { pluginId: 'market/demo', ghostId: 'demo', namespace: null, name: 'Demo',
-  description: null, author: null, scope: 'public', organizationId: null, defaultInstall: false,
-  releaseId: 'release-2', version: '2', publishedAt: '', icon: null, installState: 'update-available',
-  enabled: true, sourceType: 'server', sourceMarketName: null, manifest };
-const snapshot = (ghosts: ManagedPlugin[] = [plugin]): PluginManagementSnapshot => ({ version: 1, ghosts,
-  market: { items: [detail], unavailableReason: null, customSourceNames: [], unavailableCustomSourceNames: [] } });
-const receipt = (phase: PluginManagementReceipt['phase'] = 'running'): PluginManagementReceipt => ({ operationId: 'operation-1', phase });
-const confirmation = (): PluginManagementReceipt => ({ ...receipt('confirmation'), consent: { requestId: 'consent-1',
-  initiator: 'user', origin: 'market', facts: { kind: 'install', ghostId: 'demo', name: 'Demo', version: '2', permissions: [] } } });
-const capability = { protocolVersion: 1, collections: [{ id: 'plugins', actions: [{ id: 'management:snapshot', label: 'Manage' }] }] };
-function deferred<T>() { let resolve!: (value: T) => void, reject!: (reason: unknown) => void;
-  const promise = new Promise<T>((yes, no) => { resolve = yes; reject = no; }); return { promise, resolve, reject }; }
-type Envelope = { actionId: string; input: Record<string, unknown>; resourceRef?: { id: string } };
-function host(handler?: (request: Envelope) => unknown | Promise<unknown>) {
-  const requests: Envelope[] = [];
-  let facts = snapshot();
-  const invoke = vi.fn(async (_id: string, channel: string, args?: unknown[], options?: { preSend?: () => void }) => {
-    options?.preSend?.();
-    if (channel.endsWith(':manifest')) return capability;
-    const request = args?.[0] as Envelope;
-    requests.push(request);
-    let result;
-    if (request.actionId === 'management:snapshot') result = facts;
-    else if (request.actionId === 'management:market-detail') result = detail;
-    else result = handler ? await handler(request) : receipt();
-    return { effects: [], result };
-  }) as unknown as PluginManagementInvoke;
-  const client = createPluginManagementClient({ deviceId: 'host-1', invoke });
-  return { invoke, requests, client, setFacts: (next: PluginManagementSnapshot) => { facts = next; } };
-}
-const controllers: Array<ReturnType<typeof createPluginManagementController>> = [];
-function controller(client: ReturnType<typeof createPluginManagementClient>) {
-  const value = createPluginManagementController(client, { createOperationId: () => 'operation-1' });
-  controllers.push(value); return value;
-}
+import { SLOT_WHO, capability, confirmation, controller, controllers, deferred, detail, eventually, host, manifest, plugin, receipt, shownCancel, snapshot, uiConfirmation, type Envelope } from './pluginManagementFixtures';
 beforeEach(() => { setMobileAuthOwner('owner'); });
 afterEach(() => { controllers.forEach((value) => value.dispose()); controllers.length = 0; vi.useRealTimers(); });
 
@@ -95,6 +77,20 @@ describe('mobile management contract', () => {
     expect(parsePluginManagementSnapshot({ ...value, market: { ...value.market, items: [extended] } })
       .market.items[0]).toMatchObject(detail);
     expect(parsePluginManagementDetail(extended)).toMatchObject(detail);
+  });
+  // Merge check after main 5fd5f542c0: the other optional fields a newer Host now sends (sortValue on catalog items,
+  // release updates on the detail, sizeBytes everywhere) do not make the strict reader reject the whole response;
+  // the source identity keeps its strict key check. Same shapes as apps/desktop/src/shared/pluginMarket.ts. Unit.
+  it('accepts catalog pages and details carrying the newer optional market fields', () => {
+    const id = 'DemoGitMarketSource001';
+    const updates = [{ version: '2', publishedAt: '2026-11-20T08:00:00.000Z', releaseNotes: 'Faster sync' },
+      { version: '1', publishedAt: '2026-10-01T08:00:00.000Z', releaseNotes: '' }];
+    expect(parsePluginManagementDetail({ ...detail, sizeBytes: 1200, sortValue: 42, updates })).toMatchObject(detail);
+    const page = parsePluginMarketPage({ items: [{ ...detail, sizeBytes: 1200, sortValue: 'trending' }], nextCursor: null });
+    expect(page.items[0]).toMatchObject({ pluginId: detail.pluginId, releaseId: detail.releaseId });
+    const custom = parsePluginMarketPage({ items: [{ ...detail, sourceType: 'git-market', sourceMarketName: 'Acme', sizeBytes: 1,
+      sourceIdentity: { kind: 'git', repository: 'github.com/a/b', sourceId: id, sizeBytes: 1 } }] }).items[0]!;
+    expect(custom).not.toHaveProperty('sourceIdentity');
   });
   it('keeps namespace missing distinct from root, and removes Host-local icon lookup keys', () => {
     const legacy = { ...plugin }; delete legacy.namespace;
@@ -158,6 +154,547 @@ describe('mobile management contract', () => {
   });
 });
 
+// Maintainer reviews 08:48 and 09:30: `preSend` is only a check (the mobile invoke calls it at entry, after a direct-path
+// attempt, once connected, and right before the first socket write), never evidence that a request was written, and a
+// link handshake's writes are not this request's. Written is what the transport reports for the request itself: a reply,
+// or `onRequestWritten` (its first socket write) before the failure. A mutation that was never written is a plain failure.
+describe('what counts as written', () => {
+  const uninstall = (client: ReturnType<typeof createPluginManagementClient>) => client.begin({ operationId: 'operation-1', kind: 'uninstall', installed: plugin });
+  const handshakeTimeout = () => { const error = new DeviceLinkError('INVOKE_TIMEOUT', 'no link-accept after the handshake was written'); error.inFlight = true; return error; };
+  it.each([
+    // [case, how the transport ends, outcome unknown]
+    ['refused at the entry check', 'entry', false],
+    ['refused at the last check before the write (it was never written)', 'dequeue', false],
+    ['expired before the first write (BACKPRESSURE, not in flight)', 'expired', false],
+    ['failed in the link handshake after the handshake was written (in flight, but not this request)', 'handshake', false],
+    // Dispatcher N-1: a transport that reports neither a write nor a refusal says nothing: possibly written, so a
+    // lost begin is looked up, never shown as "failed, try again" (which would invite a second begin).
+    ['failed with no evidence either way (a transport that reports nothing)', 'silent', true],
+    ['written, then the reply was lost (in flight)', 'lost', true],
+    ['written, then refused at a later check (a resend after the first write)', 'resend', true],
+  ] as const)('classifies a write %s', async (_name, end, unknown) => {
+    let active = true;
+    const invoke = vi.fn(async (_d, _c, _a, opts) => {
+      if (end === 'entry') active = false;
+      opts!.preSend!();
+      // As DeviceLinkContext.invoke reports them: link recovery that failed, the client's own "never written" mark.
+      if (end === 'handshake') { opts!.onNotSent!(); throw handshakeTimeout(); }
+      if (end === 'silent') throw new Error('transport failed');
+      if (end === 'dequeue') active = false;
+      opts!.preSend!();
+      if (end === 'expired') { const error = new DeviceLinkError('BACKPRESSURE', 'expired before socket write'); error.inFlight = false; opts!.onNotSent!(); throw error; }
+      opts!.onRequestWritten!();
+      if (end === 'resend') { active = false; opts!.preSend!(); }
+      const error = new DeviceLinkError('INVOKE_TIMEOUT', 'no reply after first socket write'); error.inFlight = true; throw error;
+    }) as PluginManagementInvoke;
+    const client = createPluginManagementClient({ invoke, deviceId: 'host-1', isCurrent: () => active });
+    await expect(uninstall(client)).rejects.toMatchObject({ outcomeUnknown: unknown });
+  });
+  it('classifies an answer from the transport, never from a passing check or a handshake', async () => {
+    let active = true;
+    // Passes the entry check, then is refused right before the write: not written, a plain failure.
+    const refused = vi.fn(async (_d, _c, _a, opts) => { opts!.preSend!(); active = false; opts!.preSend!(); }) as PluginManagementInvoke;
+    await expect(createPluginManagementClient({ invoke: refused, deviceId: 'host-1', isCurrent: () => active })
+      .answer('operation-1', 'consent-1', true)).rejects.toMatchObject({ outcomeUnknown: false });
+    // Only the handshake was written and timed out: not written.
+    const handshake = vi.fn(async (_d, _c, _a, opts) => { opts!.preSend!(); opts!.onNotSent!(); throw handshakeTimeout(); }) as PluginManagementInvoke;
+    await expect(createPluginManagementClient({ invoke: handshake, deviceId: 'host-1' })
+      .answer('operation-1', 'consent-1', true)).rejects.toMatchObject({ outcomeUnknown: false });
+    // Written, reply lost: unknown.
+    const lost = vi.fn(async (_d, _c, _a, opts) => { opts!.preSend!(); opts!.preSend!(); opts!.onRequestWritten!();
+      const error = new DeviceLinkError('INVOKE_TIMEOUT', 'lost'); error.inFlight = true; throw error; }) as PluginManagementInvoke;
+    await expect(createPluginManagementClient({ invoke: lost, deviceId: 'host-1' }).answer('operation-1', 'consent-1', true))
+      .rejects.toMatchObject({ outcomeUnknown: true });
+    const replied = vi.fn(async (_d, _c, _a, opts) => { opts!.preSend!(); opts!.preSend!(); opts!.onRequestWritten!(); return { effects: [], result: receipt('running') }; }) as PluginManagementInvoke;
+    await expect(createPluginManagementClient({ invoke: replied, deviceId: 'host-1' }).answer('operation-1', 'consent-1', true))
+      .resolves.toMatchObject({ phase: 'running' });
+  });
+});
+
+// Maintainer review 09:30 #3 (reproduced on b93ba486 with 0 writes: it ended "unknown", the original-operation lookup
+// said NOT_FOUND and it stayed unknown, so this computer's management slot could not start the next operation).
+// A disable is queued; a refresh meanwhile finds the instance gone, so the last send check stops it before the write.
+// Minimal failing input: one queued disable, one refresh without the instance. Tier: unit (in-memory Host).
+describe('a queued operation stopped before it was written', () => {
+  it('fails, frees the management slot and is never looked up or sent again', async () => {
+    let facts = snapshot();
+    let hold: Promise<void> | undefined;
+    let release!: () => void;
+    const requests: Envelope[] = [];
+    // Production order: the check at entry, the queue, the last check, then the write.
+    const invoke = vi.fn(async (_id: string, channel: string, args?: unknown[], options?: { preSend?: () => void; onRequestWritten?: () => void; onNotSent?: () => void }) => {
+      options?.preSend?.();
+      const request = args?.[0] as Envelope;
+      if (!channel.endsWith(':manifest') && request.actionId === 'management:begin' && hold) await hold;
+      options?.preSend?.();
+      options?.onRequestWritten?.();
+      if (channel.endsWith(':manifest')) return capability;
+      requests.push(request);
+      if (request.actionId === 'management:snapshot') return { effects: [], result: facts };
+      if (request.actionId === 'management:operation') throw Object.assign(new Error('forgotten'), { code: 'NOT_FOUND' });
+      return { effects: [], result: receipt('succeeded') };
+    }) as unknown as PluginManagementInvoke;
+    const c = controller(createPluginManagementClient({ deviceId: 'host-1', invoke }));
+    await c.refresh();
+    hold = new Promise((resolve) => { release = resolve; });
+    const disabling = c.setEnabled(plugin, false);
+    await eventually(() => expect(c.getState()).toMatchObject({ busy: true, outcome: 'running', operationId: 'operation-1' }));
+    facts = snapshot([]);
+    await c.refresh();
+    release();
+    await disabling;
+    expect(requests.filter((r) => r.actionId === 'management:begin')).toHaveLength(0);
+    expect(c.getState()).toMatchObject({ busy: false, outcome: 'failed', errorCode: 'PLUGIN_MANAGEMENT_STALE' });
+    await c.reconcile();
+    expect(requests.filter((r) => r.actionId === 'management:operation')).toHaveLength(0);
+    // The slot is free: once the plugin is back, the next operation starts and is sent once.
+    hold = undefined;
+    facts = snapshot();
+    await c.refresh();
+    await c.setEnabled(plugin, false);
+    expect(requests.filter((r) => r.actionId === 'management:begin')).toHaveLength(1);
+    expect(c.getState()).toMatchObject({ busy: false, outcome: 'succeeded' });
+  });
+});
+
+// Maintainer review 10:36 #1: a result belongs to the account, computer and operation, not to the connection epoch.
+// Going offline and coming back are separate events inserted between a request's enqueue, its last check before the
+// write (dequeue), the write and its reply, for every kind of operation:
+// - never written (stopped at the dequeue check because the computer went offline while it was queued): a begin fails
+//   and frees the management slot; an answer or cancel leaves its operation as the computer reports it; a lookup that
+//   lands later never turns it back into an unknown result;
+// - written, reply lost: unknown, looked up only, never sent again.
+// Minimal failing input: enqueue → offline → dequeue refused → reconnect (b93ba486..51996243 kept the slot taken).
+// The begin orders fail before this change; the answer and cancel orders also pass on the old code (existing behaviour).
+// Tier: unit (in-memory Host, every valid order enumerated).
+describe('offline and reconnect between enqueue, dequeue, write and reply', () => {
+  type Target = 'begin' | 'answer' | 'cancel';
+  type Step = 'offline' | 'online' | 'dequeue' | 'reply' | 'query';
+  const lost = () => { const error = new DeviceLinkError('INVOKE_TIMEOUT', 'no reply after first socket write'); error.inFlight = true; return error; };
+  const notFound = () => Object.assign(new Error('forgotten'), { code: 'NOT_FOUND' });
+  const orderings = (items: Step[]): Step[][] => items.length <= 1 ? [items]
+    : items.flatMap((first, index) => orderings([...items.slice(0, index), ...items.slice(index + 1)]).map((rest) => [first, ...rest]));
+  const at = (order: Step[], step: Step) => order.indexOf(step);
+  // Never written: offline comes before the dequeue check; the reconnect's lookup comes after the reconnect.
+  const refusedOrders = orderings(['offline', 'online', 'dequeue', 'query'])
+    .filter((o) => at(o, 'offline') < at(o, 'dequeue') && at(o, 'offline') < at(o, 'online') && at(o, 'online') < at(o, 'query'));
+  // Written: the dequeue check passes first, then the reply is lost somewhere among going offline and coming back.
+  const writtenOrders = orderings(['reply', 'offline', 'online', 'query'])
+    .filter((o) => at(o, 'offline') < at(o, 'online') && at(o, 'online') < at(o, 'query')).map((o): Step[] => ['dequeue', ...o]);
+  function rig(target: Target, lookup: () => unknown) {
+    const written: string[] = [];
+    const gates = new Map<string, ReturnType<typeof deferred<void>>>();
+    const gate = (name: string) => { if (!gates.has(name)) gates.set(name, deferred<void>()); return gates.get(name)!; };
+    let holding = false;
+    const invoke = vi.fn(async (_id: string, channel: string, args?: unknown[], options?: { preSend?: () => void; onRequestWritten?: () => void; onNotSent?: () => void }) => {
+      options?.preSend?.();
+      const request = args?.[0] as Envelope | undefined;
+      const held = holding && request?.actionId === `management:${target}`;
+      const query = holding && request?.actionId === 'management:operation';
+      if (held) await gate('dequeue').promise;
+      options?.preSend?.();
+      options?.onRequestWritten?.();
+      if (channel.endsWith(':manifest')) return capability;
+      written.push(request!.actionId);
+      if (held) { await gate('reply').promise; throw lost(); }
+      if (query) { await gate('query').promise; return { effects: [], result: lookup() }; }
+      if (request!.actionId === 'management:snapshot') return { effects: [], result: snapshot() };
+      if (request!.actionId === 'management:market-detail') return { effects: [], result: detail };
+      // A cancel is only ever sent for a consent shown and not answered (maintainer review 17:43), so its case starts there.
+      if (request!.actionId === 'management:begin') return { effects: [], result: target === 'answer' || target === 'cancel' ? confirmation() : receipt('succeeded') };
+      if (request!.actionId === 'management:cancel') return { effects: [], result: receipt('cancelled') };
+      return { effects: [], result: receipt('succeeded') };
+    }) as unknown as PluginManagementInvoke;
+    const c = createPluginManagementController(createPluginManagementClient({ deviceId: 'host-1', invoke }),
+      { createOperationId: () => 'operation-1', pollIntervalMs: 60_000 });
+    controllers.push(c);
+    // Every reply here settles through promises only (no timers: polling is 60 s away), so draining the microtask queue
+    // is enough; a timer tick per step only cost time (file performance budget).
+    const flush = async () => { for (let i = 0; i < 200; i++) await Promise.resolve(); };
+    const run = async (order: Step[]) => {
+      for (const step of order) {
+        if (step === 'offline') c.setOnline(false);
+        else if (step === 'online') c.setOnline(true);
+        else if (step === 'dequeue') gate('dequeue').resolve();
+        else if (step === 'reply') gate('reply').resolve();
+        else gate('query').resolve();
+        await flush();
+      }
+    };
+    return { c, written, run, hold: (value: boolean) => { holding = value; }, flush,
+      count: (action: string) => written.filter((id) => id === `management:${action}`).length };
+  }
+  const begins = [
+    ['disable', (c: ReturnType<typeof createPluginManagementController>) => c.setEnabled(plugin, false)],
+    ['uninstall', (c: ReturnType<typeof createPluginManagementController>) => c.uninstall(plugin)],
+    ['update', (c: ReturnType<typeof createPluginManagementController>) => c.install(detail, plugin)],
+  ] as const;
+  describe.each(begins)('begin (%s)', (_kind, startOperation) => {
+    it.each(refusedOrders.map((o) => [o.join(' → '), o] as const))('never written: %s', async (_label, order) => {
+      const r = rig('begin', () => { throw notFound(); });
+      await r.c.refresh();
+      r.hold(true);
+      void startOperation(r.c);
+      await r.flush();
+      await r.run(order);
+      expect(r.count('begin')).toBe(0);
+      expect(r.c.getState()).toMatchObject({ outcome: 'failed', busy: false });
+      // The slot is free: the next operation starts and is written once.
+      r.hold(false);
+      await startOperation(r.c);
+      expect(r.count('begin')).toBe(1);
+      expect(r.c.getState().outcome).toBe('succeeded');
+    });
+    it.each(writtenOrders.map((o) => [o.join(' → '), o] as const))('written, reply lost: %s', async (_label, order) => {
+      const r = rig('begin', () => { throw notFound(); });
+      await r.c.refresh();
+      r.hold(true);
+      void startOperation(r.c);
+      await r.flush();
+      await r.run(order);
+      expect(r.count('begin')).toBe(1);
+      expect(r.c.getState()).toMatchObject({ outcome: 'unknown', operationId: 'operation-1' });
+      // Held as unknown: another start sends nothing; the reconnect only looked the operation up.
+      await startOperation(r.c);
+      expect(r.count('begin')).toBe(1);
+      expect(r.count('operation')).toBeGreaterThan(0);
+    });
+  });
+  describe('answer', () => {
+    it.each(refusedOrders.map((o) => [o.join(' → '), o] as const))('never written: %s', async (_label, order) => {
+      // The computer still waits for the answer; its lookup returns the consent.
+      const r = rig('answer', () => confirmation());
+      await r.c.refresh(); await r.c.install(detail, plugin);
+      expect(r.c.getState().outcome).toBe('confirmation');
+      r.hold(true);
+      void r.c.answer(true);
+      await r.flush();
+      await r.run(order);
+      expect(r.count('answer')).toBe(0);
+      expect(r.c.getState()).toMatchObject({ outcome: 'confirmation', busy: false });
+      r.hold(false);
+      await r.c.answer(true);
+      expect(r.count('answer')).toBe(1);
+      expect(r.c.getState().outcome).toBe('succeeded');
+    });
+    it.each(writtenOrders.map((o) => [o.join(' → '), o] as const))('written, reply lost: %s', async (_label, order) => {
+      const r = rig('answer', () => receipt('running'));
+      await r.c.refresh(); await r.c.install(detail, plugin);
+      r.hold(true);
+      void r.c.answer(true);
+      await r.flush();
+      await r.run(order);
+      expect(r.count('answer')).toBe(1);
+      expect(r.c.getState()).toMatchObject({ outcome: 'running', busy: false });
+    });
+  });
+  describe('cancel', () => {
+    it.each(refusedOrders.map((o) => [o.join(' → '), o] as const))('never written: %s', async (_label, order) => {
+      // Never written: the computer still shows the consent, and that is what a lookup returns.
+      const r = rig('cancel', () => confirmation());
+      await r.c.refresh(); await r.c.uninstall(plugin);
+      expect(r.c.getState().outcome).toBe('confirmation');
+      r.hold(true);
+      void shownCancel(r.c);
+      await r.flush();
+      await r.run(order);
+      expect(r.count('cancel')).toBe(0);
+      // Never written: the consent stays as the computer shows it (the one cancel is spent; nothing is sent again).
+      expect(r.c.getState()).toMatchObject({ outcome: 'confirmation', busy: false });
+      expect(r.c.cancelPhase()).toBe('over');
+    });
+    it.each(writtenOrders.map((o) => [o.join(' → '), o] as const))('written, reply lost: %s', async (_label, order) => {
+      const r = rig('cancel', () => receipt('cancelled'));
+      await r.c.refresh(); await r.c.uninstall(plugin);
+      r.hold(true);
+      void shownCancel(r.c);
+      await r.flush();
+      await r.run(order);
+      expect(r.count('cancel')).toBe(1);
+      expect(r.c.getState()).toMatchObject({ outcome: 'cancelled', busy: false });
+    });
+  });
+});
+
+// Maintainer review 11:45: an old answer or cancel stopped at its last check must not release the busy state a newer
+// request holds (two opposite answers were written for one consent), and a late, older lookup must not reopen a
+// consent the Host already moved past. Model check from a shown consent: every reachable sequence of events
+// (going offline or online; each request's dequeue check, its delivery or its lost reply; the person tapping Allow,
+// Reject or Check result whenever the screen lets them), with these invariants after every step:
+// ① Allow / Reject are tappable only when no request holds busy and no answer to this consent is in flight or written;
+// ② at most one answer is written per consent request; ③ at most one lookup is in flight on the current connection;
+// ④ once the Host's later phase was shown, the consent never shows again; ⑤ busy is never held with nothing in flight;
+// ⑥ (dispatcher O-3) every request ends in exactly one class (answered, written, known not sent), and an unknown result
+// only follows a written mutation.
+// Minimal failing input (54a3e8db): Reject queued → offline → online → lookup → Allow written → old Reject refused.
+// Tier: unit (in-memory Host; bounded depth, every enabled event at every step).
+describe('busy belongs to one request; one answer per consent', () => {
+  type Pending = { kind: 'answer' | 'operation' | 'cancel'; confirmed?: boolean; stage: 'queued' | 'written'; epoch: number;
+    dequeue(): void; deliver?(): void; reply?(): void; lose(): void };
+  const lostError = () => { const error = new DeviceLinkError('INVOKE_TIMEOUT', 'no reply after first socket write'); error.inFlight = true; return error; };
+  function rig() {
+    const host = { phase: 'confirmation' as 'confirmation' | 'running' | 'succeeded' | 'cancelled', answersWritten: 0 };
+    const hostReceipt = (): PluginManagementReceipt => host.phase === 'confirmation' ? confirmation() : receipt(host.phase);
+    const pending: Pending[] = [];
+    let connection = 0;
+    const settle = (item: Pending) => { const index = pending.indexOf(item); if (index >= 0) pending.splice(index, 1); };
+    // The Host applies a delivered answer or cancel once (a cancel ends anything not finished).
+    const apply = (item: Pending) => {
+      if (item.kind === 'answer' && host.phase === 'confirmation') host.phase = item.confirmed ? 'running' : 'cancelled';
+      if (item.kind === 'cancel' && (host.phase === 'confirmation' || host.phase === 'running')) host.phase = 'cancelled';
+    };
+    // ⑥ (dispatcher O-3) Each request ends in exactly one class: answered, written (then lost), or known not sent; the
+    // two reports never both come and each at most once. The stand-in transport below sits behind the same decision
+    // DeviceLinkContext.invoke makes (invokeSendEvidence), as production does.
+    const ends: Array<{ action: string; written: number; notSent: number; answered: boolean; failed: boolean }> = [];
+    const transport = (async (_id: string, channel: string, args?: unknown[], options?: { preSend?: () => void; onRequestWritten?: () => void }) => {
+      options?.preSend?.();
+      const request = args?.[0] as Envelope | undefined;
+      const action = request?.actionId;
+      if (action !== 'management:answer' && action !== 'management:operation' && action !== 'management:cancel') {
+        options?.preSend?.(); options?.onRequestWritten?.();
+        if (channel.endsWith(':manifest')) return capability;
+        if (action === 'management:snapshot') return { effects: [], result: snapshot() };
+        if (action === 'management:market-detail') return { effects: [], result: detail };
+        if (action === 'management:begin') return { effects: [], result: confirmation() };
+        throw new Error('unexpected ' + action);
+      }
+      return new Promise((resolve, reject) => {
+        const item: Pending = { kind: action === 'management:answer' ? 'answer' : action === 'management:cancel' ? 'cancel' : 'operation',
+          stage: 'queued', epoch: connection,
+          confirmed: (request!.input as { confirmed?: boolean }).confirmed,
+          dequeue: () => {
+            try { options?.preSend?.(); } catch (error) { settle(item); reject(error); return; }
+            options?.onRequestWritten?.();
+            item.stage = 'written';
+            if (item.kind === 'answer') host.answersWritten += 1;
+            else { const captured = hostReceipt(); if (host.phase === 'running') host.phase = 'succeeded';
+              item.reply = () => { settle(item); resolve({ effects: [], result: captured }); }; }
+          },
+          deliver: () => {
+            settle(item);
+            apply(item);
+            resolve({ effects: [], result: hostReceipt() });
+          },
+          lose: () => {
+            settle(item);
+            apply(item);
+            reject(lostError());
+          },
+        };
+        pending.push(item);
+      });
+    });
+    const invoke = (async (id: string, channel: string, args?: unknown[], options?: { preSend?: () => void; onRequestWritten?: () => void; onNotSent?: () => void }) => {
+      const end = { action: (args?.[0] as Envelope | undefined)?.actionId ?? channel, written: 0, notSent: 0, answered: false, failed: false };
+      ends.push(end);
+      const evidence = invokeSendEvidence({
+        onRequestWritten: () => { end.written += 1; options?.onRequestWritten?.(); },
+        onNotSent: () => { end.notSent += 1; options?.onNotSent?.(); },
+      });
+      try {
+        const result = await evidence.viaTransport(() => transport(id, channel, args, { preSend: options?.preSend, onRequestWritten: evidence.onRequestWritten }));
+        end.answered = true;
+        return result;
+      } catch (error) { end.failed = true; evidence.failed(); throw error; }
+    }) as unknown as PluginManagementInvoke;
+    const c = createPluginManagementController(createPluginManagementClient({ deviceId: 'host-1', invoke }),
+      { createOperationId: () => 'operation-1', pollIntervalMs: 3_600_000 });
+    controllers.push(c);
+    return { c, host, pending, ends, toggle: () => { connection += 1; }, connection: () => connection };
+  }
+  // Every step settles on microtasks alone (the rig never uses timers), which keeps the exhaustive walk fast.
+  const flush = async () => { for (let i = 0; i < 100; i++) await Promise.resolve(); };
+  type Event = string;
+  async function replay(events: Event[]) {
+    const r = rig();
+    await r.c.refresh(); await r.c.install(detail, plugin);
+    expect(r.c.getState().outcome).toBe('confirmation');
+    let hostPhaseShown = false, violation: string | null = null, offline = 0, online = 0, taps = 0, checks = 0, cancels = 0;
+    const tappable = () => { const st = r.c.getState(); return st.outcome === 'confirmation' && st.online && !st.busy && !st.answerHeld; };
+    const check = (step: string) => {
+      const st = r.c.getState();
+      const answering = r.pending.some((item) => item.kind === 'answer');
+      if (tappable() && (answering || r.host.answersWritten > 0)) violation ??= `① tappable while an answer is in flight or written (${step})`;
+      if (tappable() && r.host.phase !== 'confirmation' && r.pending.length === 0) violation ??= `④ consent tappable after the Host moved on (${step})`;
+      if (r.host.answersWritten > 1) violation ??= `② ${r.host.answersWritten} answers written (${step})`;
+      if (r.pending.filter((item) => item.kind === 'operation' && item.epoch === r.connection()).length > 1) violation ??= `③ two lookups in flight (${step})`;
+      if (st.outcome === 'running' || st.outcome === 'succeeded' || st.outcome === 'cancelled') hostPhaseShown = true;
+      if (hostPhaseShown && st.outcome === 'confirmation') violation ??= `④ consent reopened (${step})`;
+      if (st.busy && r.pending.length === 0) violation ??= `⑤ busy with nothing in flight (${step})`;
+      for (const end of r.ends) {
+        if (end.written > 1 || end.notSent > 1 || (end.written && end.notSent)) violation ??= `⑥ ${end.action} reported written ${end.written}, not sent ${end.notSent} (${step})`;
+        if (end.failed && !end.answered && end.written + end.notSent !== 1) violation ??= `⑥ ${end.action} failed in no class (${step})`;
+      }
+      // An unknown result only after a mutation was handed to the transport and written.
+      if (st.outcome === 'unknown' && !r.ends.some((end) => end.action !== 'management:operation' && end.written > 0))
+        violation ??= `⑥ unknown with no mutation written (${step})`;
+    };
+    const enabled = (): Event[] => {
+      const st = r.c.getState(), list: Event[] = [];
+      if (st.online && offline === 0) list.push('offline');
+      if (!st.online && online === 0) list.push('online');
+      if (tappable() && taps < 2) list.push('allow', 'reject');
+      if (st.outcome === 'unknown' && st.online && !st.busy && checks < 2) list.push('check');
+      // Cancellation races queued and in-flight requests (the controller accepts it while busy).
+      if (cancels === 0 && st.online && st.operationId && !['succeeded', 'cancelled', 'failed'].includes(st.outcome)) list.push('cancel');
+      r.pending.forEach((item, index) => {
+        if (item.stage === 'queued') list.push(`dequeue#${index}`);
+        else { if (item.kind === 'operation') list.push(`reply#${index}`); else list.push(`deliver#${index}`); list.push(`lose#${index}`); }
+      });
+      return list;
+    };
+    for (const event of events) {
+      const [name, at] = event.split('#');
+      const item = at !== undefined ? r.pending[Number(at)] : undefined;
+      if (name === 'offline') { offline += 1; r.toggle(); r.c.setOnline(false); }
+      else if (name === 'online') { online += 1; r.toggle(); r.c.setOnline(true); }
+      else if (name === 'allow' || name === 'reject') { taps += 1; void r.c.answer(name === 'allow'); }
+      else if (name === 'check') { checks += 1; void r.c.reconcile(); }
+      else if (name === 'cancel') { cancels += 1; void shownCancel(r.c); }
+      else if (name === 'dequeue') item!.dequeue();
+      else if (name === 'deliver') item!.deliver!();
+      else if (name === 'reply') item!.reply!();
+      else item!.lose();
+      await flush();
+      check(events.join(' → '));
+    }
+    return { violation, next: enabled() };
+  }
+  it('keeps the invariants after every step of every reachable sequence', async () => {
+    const violations = new Set<string>();
+    let paths = 0;
+    const explore = async (events: Event[]): Promise<void> => {
+      const { violation, next } = await replay(events);
+      if (violation) { violations.add(violation); return; }
+      if (!next.length || events.length >= 7) { paths += 1; return; }
+      for (const event of next) await explore([...events, event]);
+    };
+    await explore([]);
+    expect([...violations].slice(0, 10)).toEqual([]);
+    expect(paths).toBeGreaterThan(100);
+  }, 120_000);
+  // The two orders the maintainer reproduced, as plain regressions.
+  it('keeps a consent unanswerable while an old Reject is queued, then lets exactly one answer through', async () => {
+    const r = rig();
+    await r.c.refresh(); await r.c.install(detail, plugin);
+    void r.c.answer(false); await flush();                      // Reject queued
+    r.toggle(); r.c.setOnline(false); await flush();             // offline
+    r.toggle(); r.c.setOnline(true); await flush();              // online: the lookup is queued
+    const lookup = r.pending.find((item) => item.kind === 'operation')!;
+    lookup.dequeue(); await flush(); lookup.reply!(); await flush();
+    // The consent is back, but the old Reject may still leave: Allow and Reject stay unavailable.
+    expect(r.c.getState()).toMatchObject({ outcome: 'confirmation', answerHeld: 'consent-1' });
+    void r.c.answer(true); await flush();
+    expect(r.pending.filter((item) => item.kind === 'answer')).toHaveLength(1);
+    r.pending.find((item) => item.kind === 'answer')!.dequeue(); await flush(); // the old Reject is refused: never written
+    expect(r.c.getState()).toMatchObject({ outcome: 'confirmation', busy: false, answerHeld: null });
+    void r.c.answer(true); await flush();                        // Allow queued
+    const allow = r.pending.find((item) => item.kind === 'answer')!;
+    allow.dequeue(); await flush();                              // Allow written, waiting
+    expect(r.c.getState()).toMatchObject({ busy: true, answerHeld: 'consent-1' });
+    void r.c.answer(false); await flush();
+    expect(r.host.answersWritten).toBe(1);
+    allow.deliver!(); await flush();
+    expect(r.c.getState()).toMatchObject({ busy: false, outcome: 'running' });
+  });
+  it('keeps the reconnect lookup holding busy when an old cancel is stopped at its last check', async () => {
+    const r = rig();
+    await r.c.refresh(); await r.c.install(detail, plugin);
+    void shownCancel(r.c); await flush();                            // cancel queued (sent as an operation-scoped request)
+    r.toggle(); r.c.setOnline(false); await flush();
+    r.toggle(); r.c.setOnline(true); await flush();              // the reconnect lookup is queued
+    const lookups = () => r.pending.filter((item) => item.kind === 'operation');
+    expect(lookups()).toHaveLength(1);
+    const old = r.pending.find((item) => item.kind === 'cancel');
+    old?.dequeue(); await flush();                               // the old cancel is refused
+    expect(r.c.getState().busy).toBe(true);
+    await r.c.reconcile(); await flush();                        // no second lookup while the first holds busy
+    expect(lookups()).toHaveLength(1);
+  });
+});
+
+
+/* 测试价值（维护者 15:37 复审；页面占用的凭据语义）
+ * - 生产入口与可观察结果：pluginManagementSlot 与真实 controller（传输替身）；观察占用的持有者与写出。
+ * - 依据：只有持有者的凭据能释放；同一个凭据可能经两条路径释放（市场安装的行结束、它交给的 controller 结束），晚到的
+ *   那次不能放掉别人此后拿到的占用。
+ * - 缺口：渲染态或布尔 saving 由任意一方清零，第一笔结束就让第三个入口恢复。
+ * - 最小失败输入：凭据 1 已被行结束释放、凭据 2 已拿到时，持有凭据 1 的 controller 被释放。tier: unit。
+ */
+describe('page management slot', () => {
+  it('lets only the holder release it, once, and refuses a second taker', () => {
+    const slot = createPluginManagementSlot();
+    const first = slot.tryAcquire('update', SLOT_WHO)!;
+    expect(slot.tryAcquire('market-install', SLOT_WHO)).toBeNull();
+    expect(slot.tryAcquire('update', SLOT_WHO)).toBeNull();
+    expect(slot.release({ id: first.id + 1, entry: 'update', who: SLOT_WHO })).toBe(false);
+    expect(slot.holds(first)).toBe(true);
+    expect(slot.release(first)).toBe(true);
+    const second = slot.tryAcquire('enable', SLOT_WHO)!;
+    // A late release of the earlier token (a second path ending the same entry) leaves the new holder alone.
+    expect(slot.release(first)).toBe(false);
+    expect(slot.holder('host-1')).toBe(second);
+  });
+  it('keeps a later holder when the controller of an earlier one goes after the entry already released it', async () => {
+    const slot = createPluginManagementSlot();
+    const requests: string[] = [];
+    const invoke = (async (_id: string, channel: string, args?: unknown[], options?: { preSend?: () => void; onRequestWritten?: () => void; onNotSent?: () => void }) => {
+      options?.preSend?.(); options?.onRequestWritten?.();
+      if (channel.endsWith(':manifest')) return capability;
+      const action = (args?.[0] as Envelope).actionId.replace('management:', '');
+      requests.push(action);
+      if (action === 'snapshot') return { effects: [], result: snapshot() };
+      if (action === 'market-detail') return { effects: [], result: detail };
+      return new Promise(() => {});                       // begin stays in flight
+    }) as unknown as PluginManagementInvoke;
+    const c = createPluginManagementController(createPluginManagementClient({ deviceId: 'host-1', invoke }), { createOperationId: () => 'operation-1' });
+    controllers.push(c);
+    await c.refresh();
+    const first = slot.tryAcquire('market-install', SLOT_WHO)!;
+    void c.install(detail, plugin, pluginOperationHold(slot, first));
+    for (let i = 0; i < 50; i++) await Promise.resolve();
+    expect(requests).toContain('begin');
+    // The market row settled this attempt on its own (for example from the computer's facts) and released it…
+    slot.release(first);
+    const second = slot.tryAcquire('update', SLOT_WHO)!;
+    // …then the controller that still held the first token goes.
+    c.dispose();
+    expect(slot.holder('host-1')).toBe(second);
+  });
+  it('gives the next account a free slot, and releases the previous account\'s', async () => {
+    const owner = getMobileAuthOwner();
+    const previous = pluginManagementSlotFor(owner);
+    const invoke = (async (_id: string, channel: string, args?: unknown[], options?: { preSend?: () => void; onRequestWritten?: () => void; onNotSent?: () => void }) => {
+      options?.preSend?.(); options?.onRequestWritten?.();
+      if (channel.endsWith(':manifest')) return capability;
+      const action = (args?.[0] as Envelope).actionId.replace('management:', '');
+      if (action === 'snapshot') return { effects: [], result: snapshot() };
+      if (action === 'market-detail') return { effects: [], result: detail };
+      return begin.promise;
+    }) as unknown as PluginManagementInvoke;
+    const begin = deferred<unknown>();
+    // As usePluginManagement builds it: current only while the account is the same.
+    const c = createPluginManagementController(createPluginManagementClient({ deviceId: 'host-1', invoke,
+      isCurrent: () => isMobileAuthOwnerCurrent(owner) }), { createOperationId: () => 'operation-1' });
+    controllers.push(c);
+    await c.refresh();
+    const token = previous.tryAcquire('update', SLOT_WHO)!;
+    void c.install(detail, plugin, pluginOperationHold(previous, token));
+    for (let i = 0; i < 50; i++) await Promise.resolve();
+    setMobileAuthOwner('another-account-for-slot');
+    try {
+      // The next account starts with its own free slot at once.
+      expect(pluginManagementSlotFor().holder('host-1')).toBeNull();
+      // The previous account's slot goes once the begin already on its way settles (never while a write is out).
+      expect(previous.holder('host-1')).not.toBeNull();
+      begin.resolve({ effects: [], result: receipt('running') });
+      for (let i = 0; i < 50; i++) await Promise.resolve();
+      expect(previous.holder('host-1')).toBeNull();
+    } finally { setMobileAuthOwner(owner.accountId || null); }
+  });
+});
+
 describe('mobile management transactions', () => {
   it('submits only the active consent request and preserves Host failure receipts', async () => {
     const h = host((r) => r.actionId === 'management:begin' ? confirmation() : { ...receipt('failed'), errorCode: 'PACKAGE_CHANGED' });
@@ -207,19 +744,26 @@ describe('mobile management transactions', () => {
     expect(c.getState().outcome).toBe('confirmation');
     h.setFacts(snapshot([{ ...plugin, approval: { state: 'invalid' } }]));
     await c.answer(true);
-    expect(c.getState()).toMatchObject({ outcome: 'unknown', errorCode: 'PLUGIN_INSTALL_CHANGED' });
+    // Allow was never written, so the operation still waits on the computer: the consent stays (Reject still works)
+    // with the reason, instead of an unknown result (maintainer review 10:36: an unwritten request releases its hold).
+    expect(c.getState()).toMatchObject({ outcome: 'confirmation', busy: false, errorCode: 'PLUGIN_INSTALL_CHANGED' });
     expect(h.requests.some((r) => r.actionId === 'management:answer')).toBe(false);
   });
-  it('preserves committed success when cancellation races the original begin response', async () => {
+  // Maintainer review 17:43: a cancel is a state of the operation, sent at most once and only for a consent shown and
+  // never answered; while the operation only runs (no consent yet) nothing is cancelled and its result stands.
+  it('sends no cancel while the operation runs without a consent, so a committed result stands', async () => {
     const begin = deferred<PluginManagementReceipt>();
     const h = host((r) => r.actionId === 'management:begin' ? begin.promise : receipt('succeeded'));
     const c = controller(h.client); await c.refresh();
     const start = c.uninstall(plugin);
-    await vi.waitFor(() => expect(c.getState().operationId).toBe('operation-1'));
-    await c.cancel(); begin.resolve(receipt('running')); await start;
+    await eventually(() => expect(c.getState().operationId).toBe('operation-1'));
+    await shownCancel(c); begin.resolve(receipt('running')); await start;
+    expect(c.getState().outcome).toBe('running');
+    await c.reconcile();
     expect(c.getState().outcome).toBe('succeeded');
+    expect(h.requests.some((r) => r.actionId === 'management:cancel')).toBe(false);
   });
-  it('blocks an enqueued begin after cancellation before transport sends it', async () => {
+  it('writes no cancel for a begin still queued (no consent shown yet), and leaves the begin as it was', async () => {
     const queued = deferred<unknown>(); let preSend!: () => void;
     const h = host();
     const invoke = (async (d, channel, args, opts) => {
@@ -228,15 +772,17 @@ describe('mobile management transactions', () => {
     }) as PluginManagementInvoke;
     const c = controller(createPluginManagementClient({ invoke, deviceId: 'host-1' })); await c.refresh();
     const start = c.uninstall(plugin);
-    await vi.waitFor(() => expect(preSend).toBeTypeOf('function'));
-    await c.cancel();
-    expect(() => preSend()).toThrow('PLUGIN_MANAGEMENT_STALE');
-    queued.reject(new Error('cancelled before send')); await start;
-    expect(c.getState().outcome).toBe('running');
+    await eventually(() => expect(preSend).toBeTypeOf('function'));
+    await shownCancel(c);
+    expect(() => preSend()).not.toThrow();
+    queued.resolve({ effects: [], result: receipt('succeeded') }); await start;
+    expect(c.getState()).toMatchObject({ outcome: 'succeeded', busy: false });
+    expect(h.requests.some((r) => r.actionId === 'management:cancel')).toBe(false);
   });
   it.each(['begin', 'answer', 'cancel'] as const)('permanently fences queued %s across offline and online epochs', async (action) => {
     const queued = deferred<unknown>(); let preSend!: () => void;
-    const h = host((r) => action === 'answer' || r.actionId === 'management:begin' && action !== 'cancel' ? confirmation() : receipt());
+    // Answer and cancel both start from a consent shown (a cancel is only sent for an unanswered consent).
+    const h = host((r) => action === 'answer' || r.actionId === 'management:begin' ? confirmation() : receipt());
     const invoke = (async (d, channel, args, opts) => {
       if ((args?.[0] as Envelope)?.actionId === `management:${action}`) { preSend = opts!.preSend!; return queued.promise; }
       return h.invoke(d, channel, args, opts);
@@ -244,47 +790,48 @@ describe('mobile management transactions', () => {
     const c = controller(createPluginManagementClient({ invoke, deviceId: 'host-1' })); await c.refresh();
     let pending: Promise<void>;
     if (action === 'begin') pending = c.install(detail, plugin);
-    else { await c.install(detail, plugin); pending = action === 'answer' ? c.answer(true) : c.cancel(); }
-    await vi.waitFor(() => expect(preSend).toBeTypeOf('function'));
+    else { await c.install(detail, plugin); pending = action === 'answer' ? c.answer(true) : shownCancel(c); }
+    await eventually(() => expect(preSend).toBeTypeOf('function'));
     c.setOnline(false); c.setOnline(true);
-    await vi.waitFor(() => expect(c.getState().busy).toBe(false));
+    await eventually(() => expect(c.getState().busy).toBe(false));
     expect(c.getState().online).toBe(true);
-    expect(() => preSend()).toThrow('PLUGIN_MANAGEMENT_STALE');
+    // The queued write's last check refuses it after the reconnect; like the real transport, a refused request never
+    // gets a reply, it fails as never written.
+    let refusal: unknown;
+    try { preSend(); } catch (error) { refusal = error; }
+    expect(refusal).toMatchObject({ message: 'PLUGIN_MANAGEMENT_STALE' });
     const recoveredOutcome = c.getState().outcome;
-    queued.resolve({ effects: [], result: receipt('succeeded') }); await pending;
-    expect(c.getState().outcome).toBe(recoveredOutcome);
+    queued.reject(refusal); await pending;
+    // An unwritten answer or cancel leaves the operation as the computer reported it; an unwritten begin means the
+    // operation never existed on the computer, so it ends as a plain failure.
+    expect(c.getState().outcome).toBe(action === 'begin' ? 'failed' : recoveredOutcome);
+    expect(h.requests.some((r) => r.actionId === `management:${action}`)).toBe(false);
   });
-  it('still cancels the original operation when the view becomes stale before disposal', async () => {
-    let alive = true;
-    const h = host();
-    const c = controller(createPluginManagementClient({ invoke: h.invoke, deviceId: 'original-host', isCurrent: () => alive }));
-    await c.refresh(); await c.uninstall(plugin); alive = false; c.dispose();
-    await vi.waitFor(() => expect(h.requests.some((r) => r.actionId === 'management:cancel')).toBe(true));
-    expect(h.requests.find((r) => r.actionId === 'management:cancel')?.input).toEqual({ operationId: 'operation-1' });
-    expect(h.invoke).toHaveBeenLastCalledWith('original-host', expect.any(String), expect.any(Array), expect.any(Object));
-  });
-  it('blocks queued disposal cancellation after the account owner changes', async () => {
-    let preSend!: () => void;
-    const queued = deferred<unknown>(), h = host();
-    const invoke = (async (d, channel, args, opts) => {
-      if ((args?.[0] as Envelope)?.actionId === 'management:cancel') { preSend = opts!.preSend!; return queued.promise; }
-      return h.invoke(d, channel, args, opts);
-    }) as PluginManagementInvoke;
-    const c = controller(createPluginManagementClient({ invoke, deviceId: 'original-host' }));
-    await c.refresh(); await c.uninstall(plugin); c.dispose();
-    expect(preSend).toBeTypeOf('function'); setMobileAuthOwner('replacement');
-    expect(() => preSend()).toThrow('PLUGIN_MANAGEMENT_STALE');
-    queued.reject(new Error('account switched'));
-  });
+  // Maintainer review 17:43 (c): disposing only ends this phone's tracking; it writes nothing, so an operation that was
+  // allowed is never stopped on the computer by leaving, and an unanswered consent is cancelled (once) before, not here.
+  it.each([['running', () => receipt()], ['a consent', () => confirmation()]] as const)(
+    'writes nothing when disposed with an operation in %s', async (_name, begin) => {
+      const h = host((r) => r.actionId === 'management:begin' ? begin() : receipt());
+      const c = controller(createPluginManagementClient({ invoke: h.invoke, deviceId: 'original-host' }));
+      await c.refresh(); await c.uninstall(plugin);
+      const before = h.requests.length;
+      c.dispose();
+      for (let i = 0; i < 20; i++) await Promise.resolve();
+      expect(h.requests.slice(before)).toEqual([]);
+    });
   it('ignores late offline results and reconnects by operation lookup, with no write replay', async () => {
     const begin = deferred<PluginManagementReceipt>();
     const h = host((r) => r.actionId === 'management:begin' ? begin.promise : receipt('cancelled'));
     const c = controller(h.client); await c.refresh(); const start = c.uninstall(plugin);
-    await vi.waitFor(() => expect(c.getState().operationId).toBe('operation-1'));
+    await eventually(() => expect(c.getState().operationId).toBe('operation-1'));
+    // The written begin's reply is the Host's state of this operation: it lands by operation id even though the
+    // computer went offline meanwhile (maintainer reviews 10:36 and 11:45: results belong to the operation).
     c.setOnline(false); begin.resolve(receipt('succeeded')); await start;
-    expect(c.getState()).toMatchObject({ online: false, outcome: 'unknown' });
+    expect(c.getState()).toMatchObject({ online: false, outcome: 'succeeded' });
     c.setOnline(true);
-    await vi.waitFor(() => expect(c.getState().outcome).toBe('cancelled'));
+    await eventually(() => expect(c.getState().busy).toBe(false));
+    // A final outcome is never changed by the reconnect, and nothing is sent again.
+    expect(c.getState().outcome).toBe('succeeded');
     expect(h.requests.filter((r) => r.actionId === 'management:begin')).toHaveLength(1);
   });
   it('polls only running receipts, stops at confirmation, and clears account data on owner switch', async () => {
@@ -305,6 +852,84 @@ describe('mobile management transactions', () => {
 
 /* 新增依据：页面批准是增量能力；旧 Host 不接新写入，丢失回执不能重放。
  * 缺口/最小输入：v1 snapshot 缺 capability 或批准 answer 超时；tier: unit，真实 client/controller。 */
+describe('mobile plugin market', () => {
+  const fresh: ManagedMarketDetail = { ...detail, installState: 'not-installed', enabled: null };
+  it('installs a plugin the computer does not have yet: begin without an instance, consent, then the new instance is read back', async () => {
+    const installedNow = { ...plugin, manifest };
+    const h = host((request) => {
+      // A first install's consent (dispatcher O-4: it declares a first install of the version chosen).
+      if (request.actionId === 'management:begin') return { ...confirmation(), consent: { ...confirmation().consent!,
+        facts: { kind: 'install', ghostId: 'demo', name: 'Demo', version: fresh.version, permissions: [] } } };
+      h.setFacts(snapshot([installedNow]));
+      return receipt('succeeded');
+    }, fresh);
+    h.setFacts(snapshot([]));
+    const c = controller(h.client); await c.refresh();
+    await c.install(fresh);
+    expect(c.getState().outcome).toBe('confirmation');
+    const begin = h.requests.find((r) => r.actionId === 'management:begin')!;
+    expect(begin.resourceRef).toBeUndefined();
+    expect(begin.input).toEqual({ operationId: 'operation-1', kind: 'install', pluginId: 'market/demo', expectedReleaseId: 'release-2' });
+    await c.answer(true);
+    expect(c.getState()).toMatchObject({ outcome: 'succeeded', busy: false });
+    expect(c.getState().snapshot?.ghosts.map((g) => g.instanceKey)).toEqual([plugin.instanceKey]);
+    expect(h.requests.filter((r) => r.actionId === 'management:begin')).toHaveLength(1);
+  });
+  it('accepts an older paging Host page with optional fields missing and degrades unknown publisher labels', () => {
+    const page = parsePluginMarketPage({ items: [{ ...fresh, publisherKind: 'partner', customIconKey: 'target-only' }] });
+    expect(page).toMatchObject({ nextCursor: null, counts: null, organizationAccessError: null, unavailableReason: null,
+      customSourceNames: [], unavailableCustomSourceNames: [] });
+    expect(page.items[0]).not.toHaveProperty('publisherKind');
+    expect(page.items[0]).not.toHaveProperty('customIconKey');
+    expect(page.items[0]).not.toHaveProperty('manifest');
+    expect(parsePluginMarketPage({ items: [{ ...fresh, publisherKind: 'official' }], nextCursor: 'next',
+      counts: { all: 3, public: 2, organization: 0, personal: 0, custom: 1, official: 1 } })).toMatchObject({
+      nextCursor: 'next', counts: { all: 3, official: 1 }, items: [{ publisherKind: 'official' }] });
+  });
+  it.each([
+    ['too many items', { items: Array(101).fill(fresh) }],
+    ['oversized cursor', { items: [], nextCursor: 'x'.repeat(2049) }],
+    ['non-string cursor', { items: [], nextCursor: 5 }],
+    ['counts that do not add up', { items: [], counts: { all: 3, public: 1, organization: 0, personal: 0, custom: 0 } }],
+    ['publisher subsets larger than public', { items: [], counts: { all: 1, public: 1, organization: 0, personal: 0, custom: 0, official: 1, community: 1 } }],
+    ['a malformed item', { items: [{ ...fresh, releaseId: '' }] }],
+  ])('rejects a market page with %s', (_name, value) => {
+    expect(() => parsePluginMarketPage(value)).toThrow('INVALID_RESPONSE');
+  });
+  it('sends one bounded catalog query and treats only INVALID_PARAMS as an older Host', async () => {
+    const inputs: unknown[] = [];
+    let capabilities: () => unknown = () => ({ catalogPaging: true });
+    const invoke = vi.fn(async (_id: string, _channel: string, args?: unknown[]) => {
+      const input = (args?.[0] as Envelope).input;
+      inputs.push(input);
+      return { effects: [], result: input.read === 'capabilities' ? capabilities() : { items: [fresh], nextCursor: null } };
+    }) as unknown as PluginManagementInvoke;
+    const client = createPluginManagementClient({ deviceId: 'host-1', invoke });
+    await expect(client.catalog({ query: ' cal ', scope: 'public', limit: 100, excludeInstalled: true, counts: false }))
+      .resolves.toMatchObject({ items: [{ pluginId: 'market/demo' }] });
+    expect(inputs.at(-1)).toEqual({ read: 'catalog', query: { query: 'cal', scope: 'public', limit: 100, excludeInstalled: true, counts: false } });
+    await expect(client.catalog({ query: 'x'.repeat(101) })).rejects.toThrow('INVALID_INPUT');
+    expect(inputs).toHaveLength(1);
+    await expect(client.catalogPaging()).resolves.toBe(true);
+    capabilities = () => { throw Object.assign(new Error('old'), { code: 'INVALID_PARAMS' }); };
+    await expect(client.catalogPaging()).resolves.toBe(false);
+    // The real wire form: dispatch IPC_ERROR → Error("[INVALID_PARAMS] …") with no code.
+    capabilities = () => { throw new Error('[INVALID_PARAMS] Invalid plugin management request'); };
+    await expect(client.catalogPaging()).resolves.toBe(false);
+    capabilities = () => { throw Object.assign(new Error('offline'), { code: 'TIMEOUT' }); };
+    await expect(client.catalogPaging()).rejects.toThrow('TIMEOUT');
+  });
+  it.each([
+    ['https://cdn.example.test/icon.png', '2099-01-01T00:00:00.000Z', true],
+    ['http://cdn.example.test/icon.png', '2099-01-01T00:00:00.000Z', false],
+    ['https://cdn.example.test/icon.png', '2000-01-01T00:00:00.000Z', false],
+    ['not a url', '2099-01-01T00:00:00.000Z', false],
+  ])('loads only unexpired HTTPS icons (%s, %s)', (url, expiresAt, loads) => {
+    const icon = { mimeType: 'image/png', sha256: 'a'.repeat(64), sizeBytes: 10, url, expiresAt };
+    expect(pluginMarketIconUri({ icon })).toBe(loads ? url : undefined);
+  });
+});
+
 describe('interactive page capability approval', () => {
   it.each(['approve-ui', 'defer-ui'] as const)('requires advertised support before %s and binds the revision and consent version', async (kind) => {
     const h = host(() => receipt('succeeded'));
@@ -337,10 +962,27 @@ describe('interactive page capability approval', () => {
     expect(parsePluginManagementReceipt({ ...confirmation(), consent }, 'operation-1').consent).toMatchObject(consent);
     expect(() => parsePluginManagementSnapshot({ ...snapshot(), uiCapabilityApproval: 'true' })).toThrow('INVALID_RESPONSE');
   });
+  // Self-review, path 3 (Host shapes): the computer's page-approval consent names the instance key as `facts.ghostId`
+  // (`requestPluginUiApproval`, main and #12731 alike), not the plugin id. For `_root__<id>` and namespaced instances they
+  // differ; comparing against the plugin id left Allow unavailable on every such page approval from the installed
+  // detail. Minimal failing input on fd37378e31: this plugin (`_root__demo`, manifest `demo`). Tier: unit.
+  it('a page approval from the installed detail of a `_root__` instance can be allowed (the consent names the instance key)', async () => {
+    const h = host(() => uiConfirmation());
+    h.setFacts({ ...snapshot(), uiCapabilityApproval: true });
+    const c = controller(h.client); await c.refresh(); await c.approveUi(plugin);
+    expect(c.getState().receipt?.consent?.facts.ghostId).toBe('_root__demo');
+    expect(c.consentAllowance()).toMatchObject({ allow: true });
+    await c.answer(true);
+    expect(h.requests.filter((r) => r.actionId === 'management:answer')).toHaveLength(1);
+  });
+  // Self-review, path 3: a consent the computer withdrew (this phone's cancel aborted it, or its connection went away)
+  // comes back as "confirmation" with no consent while the operation winds down (`remotePluginManagement.ts`, the prompt's
+  // abort listener). Read as running, not as a malformed reply. Minimal failing input on fd37378e31: that reply.
+  it('a receipt in "confirmation" with no consent (withdrawn by the computer) reads as running', () => {
+    expect(parsePluginManagementReceipt({ operationId: 'operation-1', phase: 'confirmation' }, 'operation-1')).toEqual({ operationId: 'operation-1', phase: 'running' });
+  });
   it('queries a lost UI approval receipt without replaying the answer', async () => {
-    const h = host((r) => r.actionId === 'management:begin' ? { ...confirmation(), consent: {
-      ...confirmation().consent!, purpose: 'ui-capability',
-    } } : r.actionId === 'management:answer' ? Promise.reject(new Error('TIMEOUT')) : receipt('succeeded'));
+    const h = host((r) => r.actionId === 'management:begin' ? uiConfirmation() : r.actionId === 'management:answer' ? Promise.reject(new Error('TIMEOUT')) : receipt('succeeded'));
     h.setFacts({ ...snapshot(), uiCapabilityApproval: true });
     const c = controller(h.client); await c.refresh(); await c.approveUi(plugin); await c.answer(true);
     expect(c.getState().outcome).toBe('unknown');
@@ -349,8 +991,18 @@ describe('interactive page capability approval', () => {
     expect(h.requests.filter((r) => r.actionId === 'management:begin')).toHaveLength(1);
     expect(c.getState().outcome).toBe('succeeded');
   });
+  // Maintainer review 15:22 #2: the page approval's record keeps the install it was started for. Tier: unit (in-memory Host).
+  it('a page approval keeps the approval token of the install it was started for', async () => {
+    const h = host((r) => r.actionId === 'management:begin' ? uiConfirmation() : receipt('succeeded'));
+    h.setFacts({ ...snapshot(), uiCapabilityApproval: true });
+    const c = controller(h.client); await c.refresh();
+    const slot = createPluginManagementSlot();
+    const token = slot.tryAcquire('page-approval', { ...SLOT_WHO, instanceKey: '_root__demo' })!;
+    await c.approveUi(plugin, pluginOperationHold(slot, token)); await c.answer(true);
+    expect({ outcome: c.getState().outcome, target: c.finishedOperation()?.target }).toEqual({ outcome: 'succeeded', target: pluginApprovalToken(plugin) });
+  });
   it.each(['revision', 'owner', 'disconnect'] as const)('does not send a stale UI confirmation after %s changes', async (change) => {
-    const h = host(() => ({ ...confirmation(), consent: { ...confirmation().consent!, purpose: 'ui-capability' } }));
+    const h = host(() => uiConfirmation());
     h.setFacts({ ...snapshot(), uiCapabilityApproval: true });
     const c = controller(h.client); await c.refresh(); await c.approveUi(plugin);
     if (change === 'revision') h.setFacts({ ...snapshot([{ ...plugin, approval: { state: 'approved', revision: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' } }]), uiCapabilityApproval: true });
@@ -495,17 +1147,22 @@ describe('shared chat plugin hints', () => {
     expect(h.requests).toHaveLength(1);
   });
   it('rejects invalidated in-flight replies and retries after a read failure', async () => {
-    const h = host(); const pending = deferred<unknown>();
-    const invoke = vi.fn().mockReturnValueOnce(pending.promise).mockImplementation(h.invoke) as PluginManagementInvoke;
-    const reads = createPluginPromptReads(invoke, () => true);
-    const first = reads.read('host-1');
-    const rejection = expect(first).rejects.toThrow('PLUGIN_MANAGEMENT_STALE');
-    await Promise.resolve(); reads.invalidate(); pending.resolve(capability); await rejection;
-    await expect(reads.read('host-1')).resolves.toMatchObject({ capability: 'supported' });
-    reads.invalidate();
-    vi.mocked(invoke).mockRejectedValueOnce(new Error('offline'));
-    await expect(reads.read('host-1')).rejects.toThrow('offline');
-    await expect(reads.read('host-1')).resolves.toMatchObject({ capability: 'supported' });
+    // The reads wait out a 250 ms notification window after an invalidation; fake timers step over it (performance budget).
+    vi.useFakeTimers();
+    try {
+      const h = host(); const pending = deferred<unknown>();
+      const invoke = vi.fn().mockReturnValueOnce(pending.promise).mockImplementation(h.invoke) as PluginManagementInvoke;
+      const reads = createPluginPromptReads(invoke, () => true);
+      const settled = async <T,>(assertion: Promise<T>) => { await vi.advanceTimersByTimeAsync(300); return assertion; };
+      const first = reads.read('host-1');
+      const rejection = expect(first).rejects.toThrow('PLUGIN_MANAGEMENT_STALE');
+      await Promise.resolve(); reads.invalidate(); pending.resolve(capability); await rejection;
+      await settled(expect(reads.read('host-1')).resolves.toMatchObject({ capability: 'supported' }));
+      reads.invalidate();
+      vi.mocked(invoke).mockRejectedValueOnce(new Error('offline'));
+      await settled(expect(reads.read('host-1')).rejects.toThrow('offline'));
+      await settled(expect(reads.read('host-1')).resolves.toMatchObject({ capability: 'supported' }));
+    } finally { vi.useRealTimers(); }
   });
   it('rechecks live facts before a mutation even when the display was shared', async () => {
     const h = host(); const reads = createPluginPromptReads(h.invoke, () => true);
@@ -722,4 +1379,744 @@ it.each([
   expect(pluginConsentPresentation(consent, key => key).trust).toBe(warning);
   expect(consent.trust).toBe('unverified');
   expect(() => parsePluginManagementReceipt({ ...input, consent: { ...input.consent, trust: 'local' } }, 'operation-1')).toThrow('INVALID_RESPONSE');
+});
+
+/* 测试价值（PR 评审：确认面板来源文案与高风险摘要，2026-11-25）
+ * - 生产入口与可观察结果：pluginConsentPresentation（两端确认面板共用）与 parsePluginManagementReceipt 的输出文字。
+ * - 依据：维护者要求渠道统一为电脑端口径、高风险权限在确认前可见；电脑端 ghostInstallConsentSourceLabel /
+ *   ghostInstallSourceNoticeKey；ghostPermissionItems 只有 node:execute 的说明自标「高风险」。
+ * - 缺口：此前只测 trust 行；没有覆盖来源行、来源说明、高风险的判断口径和升级只看新增。
+ * - 最小失败输入：社区插件被写成「官方市场」；Node 权限混在列表里没有固定摘要；node:secret 被当作高风险。
+ * - tier: unit。
+ */
+describe('confirmation sheet wording', () => {
+  // Interpolating stand-in for i18next, so names and devices are visible in assertions.
+  const t = (key: string, args?: Record<string, unknown>) => {
+    const values = Object.entries(args ?? {}).filter(([name]) => name !== 'defaultValue').map(([name, value]) => `${name}=${String(value)}`);
+    return values.length ? `${key}(${values.join(',')})` : key;
+  };
+  const item = (key: string, kind: string, labelKey: string, detailKey?: string) => ({ key, kind, labelKey, ...(detailKey ? { detailKey } : {}) });
+  const nodeExecute = (labelKey = 'nodeRuntime') => item('node:execute', 'node', labelKey, 'nodeRuntimeDetail');
+  const install = (consent: Record<string, unknown>, permissions: any[]) => ({ requestId: 'r', initiator: 'user', origin: 'market',
+    ...consent, facts: { kind: 'install', ghostId: 'demo', name: 'Demo', version: '1', permissions } }) as any;
+
+  // Contract V2.4b (2026-11-25, #12731 00b3c1a6): a source switch is confirmed like a first install with the new source's
+  // full permissions, and only `originSourceChanged` marks it, whatever the origin. An explicit replacement with the
+  // plugin market's version comes as origin 'market' without a source; the phone cannot start one, but shows it like
+  // the computer: every permission and every high-risk item, the market sentence, no repository line, and Allow.
+  it('shows a source switch like a first install, with the sentence for its origin', () => {
+    const permissions = [nodeExecute(), item('agent:background', 'agent', 'agentBackground'), item('tool:open', 'tool', 'tool')];
+    const market = pluginConsentPresentation(install({ originSourceChanged: true }, permissions), t, 'Mac');
+    expect(market.originSourceChanged).toBe('plugins.notice.consentSource.marketSourceChanged');
+    expect(market.repository).toBeUndefined();
+    expect(market.allowBlocked).toBe(false);
+    // An update of the plugin already there: the computer name, not "install to".
+    expect(market.device).toBe('Mac');
+    expect(market.permissions).toHaveLength(3);
+    expect(market.highRisk?.lines).toHaveLength(2);
+    // A custom market names the repository it shows (#12731 e2fbe72a): only a Git source asks to trust "the repository
+    // shown above"; a local folder, or no usable source, gets the sentence without it.
+    const git = { kind: 'git', repository: 'github.com/acme/plugins', sourceId: 'SourceB_0123456789abcd' };
+    const custom = pluginConsentPresentation(install({ origin: 'custom-market', originLabel: 'Team', originSource: git, originSourceChanged: true }, permissions), t, 'Mac');
+    expect(custom.originSourceChanged).toBe('plugins.notice.consentSource.originSourceChanged');
+    expect(custom).toMatchObject({ allowBlocked: false, device: 'Mac' });
+    expect(custom.highRisk?.lines).toHaveLength(2);
+    const folder = pluginConsentPresentation(install({ origin: 'custom-market', originLabel: 'Team',
+      originSource: { kind: 'local', sourceId: 'SourceB_0123456789abcd' }, originSourceChanged: true }, permissions), t, 'Mac');
+    expect(folder).toMatchObject({ originSourceChanged: 'plugins.notice.consentSource.sourceChangedIsolated', allowBlocked: false });
+    // The relaxed check does not relax the custom-market rule: without a source only Reject stays available.
+    const sourceless = pluginConsentPresentation(install({ origin: 'custom-market', originLabel: 'Team', originSourceChanged: true }, permissions), t, 'Mac');
+    expect(sourceless).toMatchObject({ originSourceChanged: 'plugins.notice.consentSource.sourceChangedIsolated', allowBlocked: true });
+    // Other origins have no switch sentence, like the computer.
+    expect(pluginConsentPresentation(install({ origin: 'local-file', originSourceChanged: true }, permissions), t, 'Mac').originSourceChanged).toBeUndefined();
+    // A plain first install still says where it goes.
+    expect(pluginConsentPresentation(install({}, permissions), t, 'Mac').device).toBe('plugins.market.installTo(device=Mac)');
+  });
+  it('pins the Host items it treats as high risk, by their stable keys', () => {
+    for (const key of ['node:execute', 'node:secret:token:worker.cjs:run', 'node:resident', 'agent:background', 'agent:errand'])
+      expect(isPinnedHighRiskPermission({ key })).toBe(true);
+    // Lower-risk items share kinds with them; the kind alone must not decide.
+    for (const key of ['node:child-spawn', 'agent:user-action', 'agent:tasks', 'harnesses', 'fs', 'notify', 'code'])
+      expect(isPinnedHighRiskPermission({ key })).toBe(false);
+    const secret = { ...item('node:secret:token:worker.cjs:run', 'node', 'nodeSecret', 'nodeSecretDetail'), labelArgs: { name: 'API token' }, detail: 'run' };
+    const view = pluginConsentPresentation(install({}, [item('notify', 'notify', 'notify', 'notifyDetail'), secret, nodeExecute('nodeMcp')]), t, 'Mac');
+    // Pinned above the buttons: a heading and one short line per high-risk class, in the Host's order.
+    expect(view.highRisk).toEqual({ title: 'plugins.management.highRiskTitleCount(title=plugins.management.highRiskTitle,count=2)',
+      lines: ['plugins.management.permissions.nodeMcp', 'plugins.management.permissions.nodeSecretOne'] });
+    // The scrolled list keeps every full explanation (credential names and methods included), high-risk items first.
+    expect(view.permissions.map((row) => [row.title, row.detail])).toEqual([
+      ['plugins.management.permissions.nodeSecret(name=API token)', 'plugins.management.permissions.nodeSecretDetail\n\nrun'],
+      ['plugins.management.permissions.nodeMcp', 'plugins.management.permissions.nodeRuntimeDetail'],
+      ['plugins.management.permissions.notify', 'plugins.management.permissions.notifyDetail'],
+    ]);
+    expect(pluginConsentPresentation(install({}, [item('notify', 'notify', 'notify', 'notifyDetail')]), t).highRisk).toBeUndefined();
+  });
+
+  // Maintainer review (2026-11-25): an approved Node plugin whose update only adds a credential binding, and a
+  // first install without Node that asks for Agent high-risk permissions, both had no summary above the buttons.
+  // Maintainer review 03:10 #2: the Host allows 4 credential bindings with up to 16 methods each; the pinned area
+  // must stay bounded while every credential name and method remains reachable in the scrolled list.
+  it('keeps the pinned summary bounded for many credential bindings and methods', () => {
+    const methods = Array.from({ length: 16 }, (_, index) => `method_${index}`);
+    const bindings = Array.from({ length: 4 }, (_, index) => ({ ...item(`node:secret:token${index}:worker.cjs:${methods.join(',')}`,
+      'node', 'nodeSecret', 'nodeSecretDetail'), labelArgs: { name: `Token ${index}` }, detail: methods.join('\n') }));
+    const view = pluginConsentPresentation(install({}, [...bindings, item('node:resident', 'node', 'nodeResident', 'nodeResidentDetail'),
+      nodeExecute(), item('agent:background', 'agent', 'agentBackground', 'agentBackgroundDetail'),
+      item('agent:errand', 'agent', 'agentErrand', 'agentErrandDetail')]), t, 'Mac');
+    expect(view.highRisk?.lines).toEqual(['plugins.management.permissions.nodeRuntime', 'plugins.management.permissions.nodeSecretCount(count=4)',
+      'plugins.management.permissions.nodeResident', 'plugins.management.permissions.agentBackground', 'plugins.management.permissions.agentErrand']);
+    expect(JSON.stringify(view.highRisk)).not.toMatch(/method_|Token \d/);
+    const scrolled = view.permissions.map((row) => `${row.title}\n${row.detail}`).join('\n');
+    for (let index = 0; index < 4; index++) expect(scrolled).toContain(`Token ${index}`);
+    for (const method of methods) expect(scrolled.split(method).length - 1).toBeGreaterThanOrEqual(4);
+  });
+  // iOS layout re-check (3587f6ca, accessibility-large): the end of a credential line ("to the local Node program") was
+  // cut. Every pinned line is now shown in full, and the credential lines name the receiver first.
+  it('names the receiver first in the pinned credential lines', async () => {
+    for (const locale of ['en', 'zh-CN'] as const) {
+      const strings = (await import(`@/i18n/locales/${locale}/plugins.json`)).default.management.permissions;
+      const receiver = locale === 'en' ? 'Local Node program' : '本机 Node 程序';
+      expect(strings.nodeSecretOne.startsWith(receiver)).toBe(true);
+      expect(strings.nodeSecretCount.startsWith(receiver)).toBe(true);
+    }
+  });
+  /* 测试价值（维护者 16:48 复审；两档布局的不变量）
+   * - 生产入口与可观察结果：两端面板共用的 `planConsentSheet`（纯函数）。
+   * - 依据：放得下「身份块完整 + 摘要标题 + 前两项（不足两项则全部）」才固定摘要；否则单一滚动区；提示不参与。
+   * - 缺口：两条提示测得后，摘要分到 0 高度。
+   * - 最小失败输入：可分配 100、身份块 384、标题 40、五项 [36, 48, 40, 40, 48]。tier: unit；约一万个组合，纯计算。
+   */
+  it('never squeezes a text area to nothing: compact when the identity block and two items do not fit (maintainer numbers)', () => {
+    expect(planConsentSheet({ available: 100, identity: 384, heading: 40, lines: [36, 48, 40, 40, 48], gap: 4 })).toEqual({ mode: 'compact' });
+    // Room for everything: nothing changes.
+    expect(planConsentSheet({ available: 640, identity: 210, heading: 20, lines: [20, 20, 20, 20, 20], gap: 4 }))
+      .toEqual({ mode: 'regular', summaryLines: 116, clipped: false, guaranteed: 44 });
+    // The identity block and two items fit, the rest scrolls inside the summary.
+    expect(planConsentSheet({ available: 332, identity: 230, heading: 25, lines: [20, 20, 20, 20, 20], gap: 4 }))
+      .toEqual({ mode: 'regular', summaryLines: 77, clipped: true, guaranteed: 44 });
+    // Dispatcher P-3 (iOS XXXL, SE): room for the two items and 1 pt of the third (55 of 5 items) is no longer regular;
+    // with the fade's height of the third showing it is.
+    expect(planConsentSheet({ available: 255 + 55, identity: 230, heading: 25, lines: [27, 27, 27, 27, 27], gap: 0 })).toEqual({ mode: 'compact' });
+    expect(planConsentSheet({ available: 255 + 54 + CONSENT_FADE_HEIGHT, identity: 230, heading: 25, lines: [27, 27, 27, 27, 27], gap: 0 }))
+      .toEqual({ mode: 'regular', summaryLines: 54 + CONSENT_FADE_HEIGHT, clipped: true, guaranteed: 54 });
+  });
+  it('keeps the two-layout invariants for every height, text size and item count', () => {
+    const availables = [0, 1, 10, 43, 44, 88, 100, 200, 320, 480, 640, 900];
+    const identities = [0, 40, 120, 230, 384, 600];
+    const headings = [0, 20, 40, 60];
+    const patterns = [[20], [36, 48, 40], [48]];
+    let checked = 0;
+    for (const gap of [4, 8]) for (const available of availables) for (const identity of identities) for (const heading of headings)
+      for (let count = 0; count <= 6; count++) for (const pattern of patterns) {
+        const lines = Array.from({ length: count }, (_, index) => pattern[index % pattern.length]);
+        const input = { available, identity, heading, lines, gap };
+        const name = JSON.stringify(input);
+        const plan = planConsentSheet(input);
+        checked += 1;
+        // ⑥ The same input always plans the same way (nothing to oscillate on).
+        expect(planConsentSheet({ ...input, lines: [...lines] }), name).toEqual(plan);
+        // ⑤ Hints are not an input: whatever their heights, measured or not, the plan is the same.
+        expect(planConsentSheet({ ...input, summaryHint: 48, listHint: 48 } as typeof input), name).toEqual(plan);
+        if (count === 0) { expect(plan, name).toEqual({ mode: 'regular', summaryLines: 0, clipped: false, guaranteed: 0 }); continue; }
+        const measured = identity > 0 && heading > 0;
+        const sum = (n: number) => lines.slice(0, n).reduce((total, line) => total + line, 0) + Math.max(0, Math.min(n, count) - 1) * gap;
+        const floor = sum(Math.min(2, count)), full = sum(count);
+        if (plan.mode === 'compact') {
+          // ③ Compact only when the regular layout's floor does not fit: everything, or (dispatcher P-3) the two items and
+          // enough of the next to draw the fade over it (or nothing is measured and even one line would not).
+          if (measured) expect(identity + heading + Math.min(full, floor + gap + CONSENT_FADE_HEIGHT), name).toBeGreaterThan(available);
+          continue;
+        }
+        // ① A pinned summary always gets a real height, and so does the list above it.
+        expect(plan.summaryLines, name).toBeGreaterThan(0);
+        if (measured) {
+          // ② At least the heading's two items (all, if fewer); never more than all of them.
+          expect(plan.summaryLines, name).toBeGreaterThanOrEqual(floor);
+          expect(plan.summaryLines, name).toBeLessThanOrEqual(full);
+          expect(plan.clipped, name).toBe(plan.summaryLines < full);
+          // ④ Within the room, with the identity block in full above it.
+          expect(identity + heading + plan.summaryLines, name).toBeLessThanOrEqual(available);
+          // ⑦ (dispatcher N-3) The fade over the pinned summary never reaches its guaranteed two items: drawn only when
+          // what shows below them is at least the fade's height (otherwise only the scrollbar says there is more).
+          expect(plan.guaranteed, name).toBe(floor);
+          if (consentSummaryFadeAllowed(plan)) expect(plan.summaryLines - CONSENT_FADE_HEIGHT, name).toBeGreaterThanOrEqual(plan.guaranteed);
+          // ⑨ (dispatcher P-3) Regular and not all shown ⇒ the fade can be drawn (part of the next item always shows).
+          if (plan.clipped) expect(consentSummaryFadeAllowed(plan), name).toBe(true);
+        } else {
+          expect(plan.summaryLines + PINNED_HIGH_RISK_MIN_HEIGHT, name).toBeLessThanOrEqual(available);
+        }
+      }
+    expect(checked).toBe(2 * availables.length * identities.length * headings.length * 7 * patterns.length);
+  });
+  it('orders the pinned classes the same way whatever order the package declares them in', () => {
+    const resident = item('node:resident', 'node', 'nodeResident', 'nodeResidentDetail');
+    const errand = item('agent:errand', 'agent', 'agentErrand', 'agentErrandDetail');
+    const background = item('agent:background', 'agent', 'agentBackground', 'agentBackgroundDetail');
+    const view = pluginConsentPresentation(install({}, [errand, resident, background, nodeExecute()]), t, 'Mac');
+    expect(view.highRisk?.lines).toEqual(['plugins.management.permissions.nodeRuntime', 'plugins.management.permissions.nodeResident',
+      'plugins.management.permissions.agentBackground', 'plugins.management.permissions.agentErrand']);
+  });
+  it('pins an update that only adds a credential binding to an approved Node plugin', () => {
+    const secret = { ...item('node:secret:token:worker.cjs:run', 'node', 'nodeSecret', 'nodeSecretDetail'), labelArgs: { name: 'API token' }, detail: 'run' };
+    const view = pluginConsentPresentation({ requestId: 'r', initiator: 'user', origin: 'market',
+      facts: { kind: 'update', ghostId: 'demo', name: 'Demo', version: '2', previousVersion: '1', added: [secret], removed: [],
+        unchangedCount: 3, builtinOauthClientChanged: false } } as any, t, 'Mac');
+    expect(view.highRisk).toEqual({ title: 'plugins.management.highRiskTitleCount(title=plugins.management.highRiskTitle,count=1)', lines: ['plugins.management.permissions.nodeSecretOne'] });
+    expect(view.permissions[0]).toEqual({ title: 'plugins.management.permissions.added · plugins.management.permissions.nodeSecret(name=API token)',
+      detail: 'plugins.management.permissions.nodeSecretDetail\n\nrun' });
+  });
+  // Maintainer review 04:09: the Host accepts binding names up to 64 characters, line breaks included. Interpolated
+  // into the two-line summary, a long name pushed "to the local Node program" out of view while Allow stayed enabled.
+  it('keeps the package-declared name out of the pinned line for an update that adds one binding with a long name', () => {
+    const name = 'Production deployment token\nfor the shared release pipeline\n(rotated every Monday)';
+    const secret = { ...item('node:secret:deploy:worker.cjs:publish', 'node', 'nodeSecret', 'nodeSecretDetail'), labelArgs: { name }, detail: 'publish' };
+    const view = pluginConsentPresentation({ requestId: 'r', initiator: 'user', origin: 'market',
+      facts: { kind: 'update', ghostId: 'demo', name: 'Demo', version: '2', previousVersion: '1', added: [secret], removed: [],
+        unchangedCount: 3, builtinOauthClientChanged: false } } as any, t, 'Mac');
+    expect(view.highRisk?.lines).toEqual(['plugins.management.permissions.nodeSecretOne']);
+    expect(JSON.stringify(view.highRisk)).not.toContain('Production');
+    // The full name and its method stay in the scrolled list.
+    expect(view.permissions[0].title).toContain(name);
+    expect(view.permissions[0].detail).toContain('publish');
+  });
+  it('pins Agent high-risk permissions in a first install without Node', () => {
+    const view = pluginConsentPresentation(install({}, [item('agent:errand', 'agent', 'agentErrand', 'agentErrandDetail'),
+      item('agent:background', 'agent', 'agentBackground', 'agentBackgroundDetail'), item('agent:user-action', 'agent', 'agentUserAction', 'agentUserActionDetail')]), t, 'Mac');
+    expect(view.highRisk?.lines).toEqual(['plugins.management.permissions.agentBackground', 'plugins.management.permissions.agentErrand']);
+    expect(view.permissions[2]).toEqual({ title: 'plugins.management.permissions.agentUserAction', detail: 'plugins.management.permissions.agentUserActionDetail' });
+  });
+
+  it('uses the computer\'s source line and source notices, and says which computer a new install goes to', () => {
+    const official = pluginConsentPresentation(install({}, []), t, 'Mac');
+    expect(official).toMatchObject({ device: 'plugins.market.installTo(device=Mac)', origin: 'plugins.notice.consentSource.market', sourceNotice: undefined });
+    expect(pluginConsentPresentation(install({ communityMarket: true }, []), t)).toMatchObject({
+      origin: 'plugins.notice.consentSource.market', sourceNotice: 'plugins.notice.sourceNotice.community' });
+    expect(pluginConsentPresentation(install({ origin: 'custom-market', originLabel: 'Demo Git Market' }, []), t)).toMatchObject({
+      origin: 'plugins.notice.consentSource.customMarket(name=Demo Git Market)', sourceNotice: 'plugins.notice.sourceNotice.customMarket' });
+    expect(pluginConsentPresentation(install({ origin: 'custom-market' }, []), t).origin).toBe('plugins.notice.consentSource.customMarketUnnamed');
+    expect(pluginConsentPresentation(install({ origin: 'local-file' }, []), t)).toMatchObject({
+      origin: 'plugins.notice.consentSource.localFile', sourceNotice: 'plugins.notice.sourceNotice.localFile' });
+    // A user-started install adds no initiator text; an Agent-started one wraps the source like the computer.
+    expect(pluginConsentPresentation(install({ initiator: 'agent' }, []), t).origin)
+      .toBe('plugins.notice.consentSource.initiatedByAgent(origin=plugins.notice.consentSource.market)');
+    expect(pluginConsentPresentation(install({ purpose: 'ui-capability' }, []), t).origin)
+      .toBe('plugins.notice.consentSource.market · plugins.uiApproval.purpose');
+  });
+
+  it('pins a high-risk item in an update only when the update adds it', () => {
+    const update = (added: any[], removed: any[]) => ({ requestId: 'r', initiator: 'user', origin: 'market', communityMarket: true,
+      facts: { kind: 'update', ghostId: 'demo', name: 'Demo', version: '2', previousVersion: '1', added, removed,
+        unchangedCount: 2, builtinOauthClientChanged: false } }) as any;
+    const adds = pluginConsentPresentation(update([item('notify', 'notify', 'notify'), nodeExecute()], []), t, 'Mac');
+    expect(adds).toMatchObject({ device: 'Mac', sourceNotice: undefined,
+      highRisk: { title: 'plugins.management.highRiskTitleCount(title=plugins.management.highRiskTitle,count=1)', lines: ['plugins.management.permissions.nodeRuntime'] } });
+    expect(adds.permissions[0].title).toBe('plugins.management.permissions.added · plugins.management.permissions.nodeRuntime');
+    const removes = pluginConsentPresentation(update([item('notify', 'notify', 'notify')], [nodeExecute()]), t, 'Mac');
+    expect(removes.highRisk).toBeUndefined();
+    expect(removes.permissions[1]).toEqual({ title: 'plugins.management.permissions.removed · plugins.management.permissions.nodeRuntime',
+      detail: 'plugins.management.permissions.nodeRuntimeDetail' });
+  });
+
+  // PR #12684 maintainer review: a custom-market install names the Host-generated repository next to the computer.
+  it('names the repository of a custom-market install right under the computer line', () => {
+    const custom = (originSource?: unknown) => install({ origin: 'custom-market', originLabel: 'Acme',
+      ...(originSource ? { originSource } : {}) }, []);
+    expect(pluginConsentPresentation(custom({ kind: 'git', repository: 'github.com/acme/plugins' }), t, 'Mac'))
+      .toMatchObject({ device: 'plugins.market.installTo(device=Mac)', repository: 'plugins.notice.consentSource.repository(repository=github.com/acme/plugins)' });
+    expect(pluginConsentPresentation(custom({ kind: 'git', repository: 'github.com/acme/plugins', ref: 'main' }), t).repository)
+      .toBe('plugins.notice.consentSource.repositoryRef(repository=github.com/acme/plugins,ref=main)');
+    expect(pluginConsentPresentation(custom({ kind: 'local' }), t).repository).toBe('plugins.notice.consentSource.localFolder');
+    // Market installs never show a repository line, even if a Host sent one.
+    expect(pluginConsentPresentation(install({ originSource: { kind: 'git', repository: 'github.com/acme/plugins' } }, []), t).repository).toBeUndefined();
+  });
+  // Maintainer review 05:55 #3 (contract #12731): a custom-market consent without a source is not allowed on the
+  // phone, install or update; the line says how to continue on the computer.
+  it('blocks Allow for a custom-market install or update without a source, and for another source than the one chosen', () => {
+    const named = install({ origin: 'custom-market', originLabel: 'Acme', originSource: { kind: 'git', repository: 'github.com/acme/plugins' } }, []);
+    const unnamed = install({ origin: 'custom-market', originLabel: 'Acme' }, []);
+    const update = { ...unnamed, facts: { kind: 'update', ghostId: 'demo', name: 'Demo', version: '2', previousVersion: '1', added: [],
+      removed: [], unchangedCount: 0, builtinOauthClientChanged: false } };
+    expect(pluginConsentPresentation(unnamed, t, 'Mac')).toMatchObject({ allowBlocked: true,
+      repository: 'plugins.notice.consentSource.repositoryMissingInstall' });
+    expect(pluginConsentPresentation(update, t, 'Mac')).toMatchObject({ allowBlocked: true,
+      repository: 'plugins.notice.consentSource.repositoryMissingUpdate' });
+    expect(pluginConsentPresentation(named, t, 'Mac').allowBlocked).toBe(false);
+    // Maintainer review 05:55 #2: compared with the full identity chosen on the phone, sourceId included.
+    const chosen = { kind: 'git' as const, repository: 'github.com/acme/plugins', sourceId: 'SourceA_0123456789abcd' };
+    const consented = (sourceId: string) => install({ origin: 'custom-market', originLabel: 'Acme', originSource: { ...chosen, sourceId } }, []);
+    const chose = (consent: any) => pluginConsentAllowance({ kind: 'install', deviceId: 'host-1', pluginId: 'custom-market:Acme/demo',
+      ghostId: 'demo', version: '1', releaseId: 'release-1', sourceType: 'git-market', source: chosen }, declaredPluginConsent(consent, 'host-1'));
+    expect(pluginConsentPresentation(consented(chosen.sourceId), t, 'Mac', chose(consented(chosen.sourceId)))).toMatchObject({ allowBlocked: false, sourceChanged: undefined });
+    expect(pluginConsentPresentation(consented('SourceB_0123456789abcd'), t, 'Mac', chose(consented('SourceB_0123456789abcd'))))
+      .toMatchObject({ allowBlocked: true, sourceChanged: 'plugins.notice.consentSource.sourceChanged' });
+    // Official and community market installs carry no repository and are never blocked by its absence.
+    expect(pluginConsentPresentation(install({}, []), t, 'Mac')).toMatchObject({ allowBlocked: false, repository: undefined });
+  });
+  // Contract v2: git { kind, repository, ref?, sourceId } or local { kind, sourceId }; sourceId is 22 base64url chars.
+  it('accepts only a credential-free source identity from the Host', () => {
+    const id = 'AbCdEfGhIjKlMnOpQr_-12';
+    const receipt = (originSource: unknown) => ({ operationId: 'op', phase: 'confirmation', consent: { requestId: 'r', initiator: 'user',
+      origin: 'custom-market', originLabel: 'Acme', originSource, facts: { kind: 'install', ghostId: 'demo', name: 'Demo', version: '1', permissions: [] } } });
+    for (const value of [{ kind: 'local', sourceId: id }, { kind: 'git', repository: 'github.com/acme/plugins', sourceId: id },
+      { kind: 'git', repository: 'gitlab.example.com/g/s/plugins', ref: 'v1.2', sourceId: id }])
+      expect(parsePluginManagementReceipt(receipt(value), 'op').consent?.originSource).toEqual(value);
+    for (const value of [{ kind: 'git', repository: 'https://ghp_x@github.com/acme/plugins', sourceId: id },
+      { kind: 'git', repository: 'github.com/acme', sourceId: id }, { kind: 'git', repository: 'github.com/acme/plugins?token=x', sourceId: id },
+      { kind: 'local', sourceId: id, path: '/Users/me/market' }, { kind: 'git', repository: 'github.com/a/b', sourceId: id, url: 'x' },
+      { kind: 'git', repository: 'github.com/acme/plugins', ref: '--upload-pack=x', sourceId: id },
+      // sourceId is required and has a fixed shape (first-edition objects without it are rejected).
+      { kind: 'git', repository: 'github.com/acme/plugins' }, { kind: 'local' }, { kind: 'local', sourceId: 'short' },
+      { kind: 'local', sourceId: id + '=' }, 'github.com/acme/plugins'])
+      expect(() => parsePluginManagementReceipt(receipt(value), 'op')).toThrow('INVALID_RESPONSE');
+    // A page item with an unusable identity or installedSourceId keeps the item but drops the field (checks then fail closed).
+    const item = (extra: Record<string, unknown>) => parsePluginMarketPage({ items: [{ ...detail, installState: 'not-installed', enabled: null,
+      sourceType: 'git-market', sourceMarketName: 'Acme', ...extra }] }).items[0]!;
+    expect(item({ sourceIdentity: { kind: 'git', repository: 'https://u:p@github.com/a/b', sourceId: id } })).not.toHaveProperty('sourceIdentity');
+    expect(item({ sourceIdentity: { kind: 'git', repository: 'github.com/a/b', sourceId: id } }).sourceIdentity)
+      .toEqual({ kind: 'git', repository: 'github.com/a/b', sourceId: id });
+    expect(item({ installedSourceId: 'not-an-id' })).not.toHaveProperty('installedSourceId');
+    expect(item({ installedSourceId: id }).installedSourceId).toBe(id);
+  });
+  /* 测试价值（缺仓库信息的说明，调度 2026-11-25 文案决定，提案，待维护者确认）
+   * - 生产入口与可观察结果：12 种语言的实际文案；市场条目经真实解析后的判定。
+   * - 依据：手机分不清缺省原因（电脑上的 Cindy 较旧、Host 升级后 Git 市场还没刷新、地址生成不出身份），说明不能暗示
+   *   以后会有，长句要先让更新并刷新、再给「仍不行就在电脑上做」的出口；只在非官方市场出现。
+   * - 缺口：旧文案写「暂未 / yet」，只让刷新再试。
+   * - 最小失败输入：zh-CN market.sourceUnverified 含「暂」。tier: unit。
+   */
+  it('words the missing repository information the same way in every language, without implying it comes later', () => {
+    const locales = resolve(process.cwd(), 'src/i18n/locales');
+    const read = (language: string, file: string, key: string) => key.split('.')
+      .reduce((node: any, part) => node?.[part], JSON.parse(readFileSync(resolve(locales, language, `${file}.json`), 'utf8')));
+    const keys = [['plugins', 'market.sourceUnverified'], ['plugins', 'market.sourceUnverifiedShort'], ['plugins', 'management.sourceUnverified'],
+      ['plugins', 'notice.consentSource.repositoryMissingInstall'], ['plugins', 'notice.consentSource.repositoryMissingUpdate'],
+      ['interaction', 'permission.installSourceUnverified']] as const;
+    const languages = readdirSync(locales);
+    expect(languages).toHaveLength(12);
+    for (const language of languages) for (const [file, key] of keys) {
+      const value = read(language, file, key);
+      expect(typeof value, `${language} ${key}`).toBe('string');
+      expect(value, `${language} ${key}`).not.toMatch(/暂|暫|\byet\b|\bnoch\b|\bencore\b|\baún\b|\bainda\b|まだ|아직/i);
+    }
+    // zh-CN as decided: update and refresh first, then the way out; the card ends with deny here, confirm on the computer.
+    expect(read('zh-CN', 'plugins', 'market.sourceUnverified')).toBe('这台电脑没有提供这个自定义市场的仓库信息，不能从手机安装。请先在那台电脑上更新 Cindy 并刷新这个市场；若仍不行，请直接在电脑上安装。');
+    expect(read('zh-CN', 'plugins', 'notice.consentSource.repositoryMissingInstall')).toBe(read('zh-CN', 'plugins', 'market.sourceUnverified'));
+    expect(read('zh-CN', 'plugins', 'notice.consentSource.repositoryMissingUpdate')).toBe(read('zh-CN', 'plugins', 'management.sourceUnverified'));
+    expect(read('zh-CN', 'plugins', 'management.sourceUnverified')).toContain('若仍不行，请直接在电脑上更新这个插件');
+    expect(read('zh-CN', 'plugins', 'market.sourceUnverifiedShort')).toBe('缺少仓库信息，不能从手机安装');
+    expect(read('zh-CN', 'interaction', 'permission.installSourceUnverified')).toMatch(/这里只能拒绝，要安装请在电脑上确认。$/);
+  });
+  // Covers existing behavior; keeps the phone and the computer from drifting apart. The literals are the same as in the
+  // computer's apps/desktop/src/shared/__tests__/pluginMarket.test.ts (`isPluginMarketSourceIdentity` there, the
+  // repositories its generator produces there): what the computer accepts and generates, the phone accepts; what it
+  // rejects, the phone rejects. Change both together. Tier: unit.
+  it('accepts exactly the source identities the computer accepts and generates', () => {
+    const SOURCE_ID = 'AbCdEfGhIjKlMnOpQrStUv';
+    for (const valid of [
+      { kind: 'git', repository: 'github.com/acme/plugins', sourceId: SOURCE_ID },
+      { kind: 'git', repository: 'github.com/acme/plugins', ref: 'main', sourceId: SOURCE_ID },
+      { kind: 'local', sourceId: SOURCE_ID },
+      // Generated there from real addresses (https / ssh / scp / nested groups / a fetched mirror with a ref).
+      { kind: 'git', repository: 'gitlab.example.com/group/sub/plugins', sourceId: SOURCE_ID },
+      { kind: 'git', repository: 'mirror.example.test/tenant/plugins', sourceId: SOURCE_ID },
+      { kind: 'git', repository: 'mirror.example.test/tenant/plugins', ref: 'release/2026', sourceId: SOURCE_ID },
+    ]) expect(isPluginMarketSourceIdentity(valid), JSON.stringify(valid)).toBe(true);
+    for (const invalid of [
+      null, 'github.com/acme/plugins', { kind: 'local' }, { kind: 'git', repository: 'github.com/acme/plugins' },
+      { kind: 'git', repository: 'github.com/acme', sourceId: SOURCE_ID },
+      { kind: 'git', repository: 'github.com/acme/plugins', sourceId: `${SOURCE_ID}=` },
+      { kind: 'git', repository: 'github.com/acme/plugins', url: 'https://github.com/acme/plugins', sourceId: SOURCE_ID },
+      // A ref that is not a valid one (or not a string): the computer now sends no identity at all, never one without it.
+      { kind: 'git', repository: 'github.com/acme/plugins', ref: 7, sourceId: SOURCE_ID },
+      { kind: 'git', repository: 'github.com/acme/plugins', ref: '-x', sourceId: SOURCE_ID },
+      { kind: 'local', path: '/tmp/market', sourceId: SOURCE_ID },
+    ]) expect(isPluginMarketSourceIdentity(invalid), JSON.stringify(invalid)).toBe(false);
+  });
+  /* 测试价值（与桌面 5fd5f542c0 的市场详情对齐，调度 2026-11-25 决定，提案，待维护者确认）
+   * - 生产入口与可观察结果：市场条目经真实解析后，详情的资料行、名称下的副标题、社区声明是否出现。
+   * - 依据：桌面详情资料为「版本 v1.2 / 作者（显示时）/ 来源：公开市场、组织、自定义」，头部只放作者与徽标，公开的社区
+   *   作者插件有社区声明；这是安全提示，手机不能比电脑少。自定义市场在手机上保留市场名。
+   * - 缺口：手机来源一格对所有服务端插件都写「插件市场」，版本不带 v、没有作者，副标题重复徽标与版本，没有社区声明。
+   * - 最小失败输入：公开的官方插件（来源应为公开市场）；公开的社区插件（应有社区声明）。tier: unit。
+   */
+  it('shows the market detail facts, subtitle and community notice the way the computer does', () => {
+    const t = (key: string) => key;
+    const item = (extra: Record<string, unknown>) => parsePluginMarketPage({ items: [{ ...detail, installState: 'not-installed',
+      enabled: null, version: '1.4.2', author: 'Ada', ...extra }] }).items[0]!;
+    const facts = (extra: Record<string, unknown>) => Object.fromEntries(pluginMarketFacts(item(extra), t).map((fact) => [fact.key, fact.value]));
+    const official = { sourceType: 'server', scope: 'public', publisherKind: 'official' };
+    const community = { sourceType: 'server', scope: 'public', publisherKind: 'personal' };
+    const organization = { sourceType: 'server', scope: 'organization', publisherKind: null };
+    const custom = { sourceType: 'git-market', scope: 'public', publisherKind: null, sourceMarketName: 'Acme' };
+    expect(facts(official)).toEqual({ version: 'v1.4.2', author: 'Ada', source: 'plugins.market.publicInstall', identifier: 'demo' });
+    // Community authors stay anonymous, as on the computer.
+    expect(facts(community)).toEqual({ version: 'v1.4.2', source: 'plugins.market.publicInstall', identifier: 'demo' });
+    expect(facts(organization)).toMatchObject({ author: 'Ada', source: 'plugins.market.scope.organization' });
+    expect(facts(custom)).toMatchObject({ author: 'Ada', source: 'Acme' });
+    expect(pluginMarketFacts(item(official), t).map((fact) => fact.key)).toEqual(['version', 'author', 'source', 'identifier']);
+    // Under the name: the author only (no scope or version repeating the badge and the facts).
+    expect(pluginMarketSubtitle(item(official))).toBe('Ada');
+    expect(pluginMarketSubtitle(item(community))).toBe('');
+    // The community notice: public plugins by community authors only.
+    expect([official, community, organization, custom].map((extra) => pluginMarketShowsCommunityNotice(item(extra))))
+      .toEqual([false, true, false, false]);
+  });
+  // The update action uses the computer's own label in every language (desktop settings.ghosts.page.updateTo, copied
+  // verbatim; desktop 5fd5f542c0 made the computer say "update" throughout). Chinese no longer says 升级 for a plugin.
+  it('names a plugin update the way the computer does', () => {
+    const locales = resolve(process.cwd(), 'src/i18n/locales');
+    const plugins = (language: string) => JSON.parse(readFileSync(resolve(locales, language, 'plugins.json'), 'utf8'));
+    for (const language of readdirSync(locales)) {
+      const updateTo: string = plugins(language).management.updateTo;
+      expect(updateTo, language).toContain('v{{version}}');
+      expect(plugins(language).management, language).not.toHaveProperty('update');
+      expect(JSON.stringify(plugins(language)), language).not.toMatch(/升级|升級|升之|其升/);
+    }
+    expect(plugins('zh-CN').management.updateTo).toBe('更新到 v{{version}}');
+    expect(plugins('en').management.updateTo).toBe('Update to v{{version}}');
+    // Where updating Cindy and updating the plugin share a sentence, the plugin is named.
+    expect(plugins('zh-CN').management.sourceUnverified).toContain('请直接在电脑上更新这个插件');
+    expect(plugins('en').management.sourceUnverified).toContain('update the plugin on the computer');
+  });
+  // Covers existing behavior: the repository is what the person checks, so the longest allowed one (256 characters, no
+  // spaces) reaches the confirmation line whole, from the Host receipt through parsing; the line itself wraps on screen.
+  it('keeps a 256-character repository whole from the receipt to the confirmation line', () => {
+    const repository = 'github.com/' + 'o'.repeat(100) + '/' + 'r'.repeat(100) + '/' + 'p'.repeat(43);
+    expect(repository).toHaveLength(256);
+    const parsed = parsePluginManagementReceipt({ operationId: 'op', phase: 'confirmation', consent: {
+      requestId: 'r', origin: 'custom-market', originLabel: 'Acme', initiator: 'user',
+      originSource: { kind: 'git', repository, sourceId: 'DemoGitMarketSource001' },
+      facts: { kind: 'install', ghostId: 'demo', name: 'Demo', version: '1', permissions: [] } } }, 'op');
+    const t = (key: string, args?: Record<string, unknown>) => args ? `${key}|${args.repository ?? ''}` : key;
+    expect(pluginConsentPresentation(parsed.consent!, t as any, 'Mac').repository).toBe(`plugins.notice.consentSource.repository|${repository}`);
+  });
+  // Covers existing behavior: the market shows it only off the official market, for a missing or unusable identity.
+  it('marks only a non-official market item without a usable identity as missing its repository', () => {
+    const id = 'DemoGitMarketSource001';
+    const item = (extra: Record<string, unknown>) => parsePluginMarketPage({ items: [{ ...detail, installState: 'not-installed', enabled: null,
+      sourceMarketName: 'Acme', ...extra }] }).items[0]!;
+    expect(pluginMarketSourceUnverified(item({ sourceType: 'server' }))).toBe(false);
+    expect(pluginMarketSourceUnverified(item({ sourceType: 'git-market' }))).toBe(true);
+    expect(pluginMarketSourceUnverified(item({ sourceType: 'git-market', sourceIdentity: { kind: 'git', repository: 'https://u:p@github.com/a/b', sourceId: id } }))).toBe(true);
+    expect(pluginMarketSourceUnverified(item({ sourceType: 'git-market', sourceIdentity: { kind: 'git', repository: 'github.com/a/b', sourceId: id } }))).toBe(false);
+    expect(pluginMarketSourceUnverified(item({ sourceType: 'git-market', sourceIdentity: { kind: 'local', sourceId: id } }))).toBe(false);
+  });
+  // Contract V2.9: installedOperationId matches ^[A-Za-z0-9_-]{8,128}$ (on page items, server items included, and on
+  // the market detail); any other value counts as absent, so a lost-receipt result stays unconfirmed.
+  it('keeps only a well-formed installed operation id from the Host', () => {
+    const uuid = '12345678-1234-4123-8123-123456789abc';
+    const item = (extra: Record<string, unknown>) => parsePluginMarketPage({ items: [{ ...detail, installState: 'installed', enabled: true, ...extra }] }).items[0]!;
+    expect(item({ installedOperationId: uuid }).installedOperationId).toBe(uuid);
+    expect(item({ installedOperationId: 'a'.repeat(128) }).installedOperationId).toBe('a'.repeat(128));
+    for (const value of ['short7!', 'abcdefg', 'a'.repeat(129), 'has space ok', 'semi;colon', 12345678, null])
+      expect(item({ installedOperationId: value })).not.toHaveProperty('installedOperationId');
+    expect(parsePluginManagementDetail({ ...detail, installState: 'installed', installedOperationId: uuid }).installedOperationId).toBe(uuid);
+    expect(parsePluginManagementDetail({ ...detail, installState: 'installed', installedOperationId: 'bad id' })).not.toHaveProperty('installedOperationId');
+  });
+  // Maintainer review 04:44 #1: every local folder used to compare equal; two folders now differ by sourceId.
+  it('compares source identities on every key, sourceId included', () => {
+    const a = 'SourceA_0123456789abcd', b = 'SourceB_0123456789abcd';
+    expect(samePluginMarketSourceIdentity({ kind: 'local', sourceId: a }, { kind: 'local', sourceId: a })).toBe(true);
+    expect(samePluginMarketSourceIdentity({ kind: 'local', sourceId: a }, { kind: 'local', sourceId: b })).toBe(false);
+    const git = { kind: 'git' as const, repository: 'github.com/acme/plugins', sourceId: a };
+    expect(samePluginMarketSourceIdentity(git, { ...git })).toBe(true);
+    expect(samePluginMarketSourceIdentity(git, { ...git, sourceId: b })).toBe(false);
+    expect(samePluginMarketSourceIdentity(git, { ...git, ref: 'main' })).toBe(false);
+    expect(samePluginMarketSourceIdentity(git, undefined)).toBe(false);
+  });
+  // Contract V2.4b: a custom-market update from another (verifiable) source than the installed instance carries
+  // originSourceChanged (older builds of #12731 sent it on update facts, current ones on install facts); the phone says so next to the repository, like the computer's dialog.
+  it('says when a custom-market update comes from another source than the installed version', () => {
+    const id = 'SourceA_0123456789abcd';
+    const receipt = (originSourceChanged: unknown, kind = 'update') => ({ operationId: 'op', phase: 'confirmation', consent: {
+      requestId: 'r', initiator: 'user', origin: 'custom-market', originLabel: 'Acme', originSource: { kind: 'local', sourceId: id },
+      ...(originSourceChanged === undefined ? {} : { originSourceChanged }),
+      facts: kind === 'update' ? { kind: 'update', ghostId: 'demo', name: 'Demo', version: '2', previousVersion: '1', added: [], removed: [],
+        unchangedCount: 1, builtinOauthClientChanged: false } : { kind: 'install', ghostId: 'demo', name: 'Demo', version: '1', permissions: [] } } });
+    const consent = parsePluginManagementReceipt(receipt(true), 'op').consent!;
+    expect(consent.originSourceChanged).toBe(true);
+    // This consent's source is a local folder: no repository is shown, so the sentence without it (#12731 e2fbe72a).
+    expect(pluginConsentPresentation(consent, t, 'Mac').originSourceChanged).toBe('plugins.notice.consentSource.sourceChangedIsolated');
+    expect(pluginConsentPresentation(parsePluginManagementReceipt(receipt(undefined), 'op').consent!, t, 'Mac').originSourceChanged).toBeUndefined();
+    // Contract V2.4b (2026-11-25 update): a source switch is confirmed like a first install (full permissions of the
+    // new source, facts.kind 'install'); the sentence shows there too. Any other value makes the receipt invalid.
+    expect(pluginConsentPresentation(parsePluginManagementReceipt(receipt(true, 'install'), 'op').consent!, t, 'Mac').originSourceChanged)
+      .toBe('plugins.notice.consentSource.sourceChangedIsolated');
+    for (const value of [false, 'true', 1]) expect(() => parsePluginManagementReceipt(receipt(value), 'op')).toThrow('INVALID_RESPONSE');
+  });
+  it('accepts the community flag only as true', () => {
+    const receipt = (communityMarket: unknown) => ({ operationId: 'op', phase: 'confirmation', consent: { requestId: 'r', initiator: 'user',
+      origin: 'market', ...(communityMarket === undefined ? {} : { communityMarket }), facts: { kind: 'install', ghostId: 'demo', name: 'Demo', version: '1', permissions: [] } } });
+    expect(parsePluginManagementReceipt(receipt(true), 'op').consent?.communityMarket).toBe(true);
+    expect(parsePluginManagementReceipt(receipt(undefined), 'op').consent?.communityMarket).toBeUndefined();
+    for (const value of ['true', 1, false, null]) expect(() => parsePluginManagementReceipt(receipt(value), 'op')).toThrow('INVALID_RESPONSE');
+  });
+});
+
+// Dispatcher O-2, R-1, R-2, R-3 (maintainer review 01:21 of #12684; contract V2.10): one decision for every "Open"
+// after an operation. It reads only the computer's newest facts: a success receipt is a past result. The facts are the
+// computer's own shapes: the contract's three samples byte for byte, and the same rules per situation
+// (hostPluginInstallFacts.ts). Minimal failing inputs on 5983ba71dd: a same-version reinstall by the computer or
+// another controller still opened after a final receipt; only the catalog's next release (sample ①) lost "Open".
+// Tier: unit (pure).
+describe('whether a finished operation is proven done on the computer now', () => {
+  const finished = (entry: 'market-install' | 'update' | 'page-approval' | 'uninstall' | 'enable' | 'task-settings', instanceKey?: string) =>
+    ({ operationId: 'operation-1', entry, who: { instanceKey }, detail: entry === 'market-install' || entry === 'update' ? detail : undefined });
+  const updated: ManagedPlugin = { ...plugin, manifest: { ...plugin.manifest, version: '2' } };
+  const facts = (situation: HostInstallSituation) => hostInstallFacts(situation, { operationId: 'operation-1',
+    target: { ...detail, installState: 'installed' }, instance: updated, next: { releaseId: 'release-3', version: '3' } });
+  const expected: Record<HostInstallSituation, ReturnType<typeof pluginOperationOpens>> = {
+    own: { open: true, instanceKey: '_root__demo' },
+    catalogAdvanced: { open: true, instanceKey: '_root__demo' },
+    localReinstall: { open: false, reason: 'unconfirmed' },
+    otherControllerReinstall: { open: false, reason: 'unconfirmed' },
+    bindingLost: { open: false, reason: 'unconfirmed' },
+    otherControllerUpdate: { open: false, reason: 'unconfirmed' },
+    olderHost: { open: false, reason: 'legacy' },
+    uninstalled: { open: false, reason: 'gone' },
+  };
+  it.each(HOST_INSTALL_SITUATIONS.flatMap((situation) => (['market-install', 'update'] as const).map((entry) => [situation, entry] as const)))(
+    '%s, %s', (situation, entry) => {
+      const { ghosts, record } = facts(situation);
+      // The same answer from the installed snapshot's records and from the market detail, before and after parsing.
+      const parsed = parsePluginManagementDetail({ ...record, manifest: { ...manifest, version: record.version } });
+      for (const market of [[record], record, parsed])
+        expect(pluginOperationOpens(finished(entry, '_root__demo'), { ghosts, market })).toEqual(expected[situation]);
+    });
+  // The contract's samples as sent (catalog 2.1.0, the computer on 2.0.0), parsed by the phone's own parser.
+  it.each([['own', { open: true, instanceKey: 'weather-chip' }], ['unattributed', { open: false, reason: 'unconfirmed' }],
+    ['olderHost', { open: false, reason: 'legacy' }]] as const)('contract V2.10 sample %s', (name, opens) => {
+    const sample = CONTRACT_SAMPLES[name];
+    const target = { ...sample, releaseId: 'custom:Acme%20Team%20Plugins:weather-chip:2.0.0', version: '2.0.0' };
+    const ghost: ManagedPlugin = { ...plugin, instanceKey: 'weather-chip', manifest: { ...plugin.manifest, id: 'weather-chip', version: '2.0.0' } };
+    const operation = { operationId: CONTRACT_SAMPLE_OPERATION_ID, entry: 'market-install' as const, who: {}, detail: target };
+    const parsed = parsePluginManagementDetail({ ...detail, ...sample, manifest: { ...manifest, id: 'weather-chip', version: sample.version } });
+    expect(pluginOperationOpens(operation, { ghosts: [ghost], market: parsed })).toEqual(opens);
+  });
+  // Maintainer review 15:22 #3: whether the response is incomplete for an item depends on that item's own source.
+  // Minimal failing input on af50d3d92d: a server item with only an unrelated custom market unread. Tier: unit (pure).
+  it.each([
+    ['server item, server catalog unread', { unavailableReason: 'fetch failed' }, 'server', null, true],
+    ['server item, organization access error', { organizationAccessError: 'forbidden' }, 'server', null, true],
+    ['server item, an unrelated custom market unread', { unavailableCustomSourceNames: ['Team'] }, 'server', null, false],
+    ['custom item, its own market unread', { unavailableCustomSourceNames: ['Team'] }, 'git-market', 'Team', true],
+    ['custom item, another custom market unread', { unavailableCustomSourceNames: ['Other'] }, 'git-market', 'Team', false],
+    ['custom item, server catalog unread', { unavailableReason: 'fetch failed' }, 'local-market', 'Team', false],
+    ['any item while the computer switches accounts', { unavailableReason: 'session-switching' }, 'git-market', 'Team', true],
+    ['no item: any marker', { unavailableCustomSourceNames: ['Team'] }, undefined, undefined, true],
+  ] as const)('the market part read for an item is incomplete only by its own source: %s', (_name, marker, sourceType, sourceMarketName, incomplete) => {
+    const market = { unavailableReason: null, unavailableCustomSourceNames: [], ...marker };
+    expect(pluginMarketIncomplete(market, sourceType ? { sourceType, sourceMarketName } : undefined)).toBe(incomplete);
+  });
+  // Contract V2.10, the official-market sample (byte for byte as the Host's real projection gives it): the item read
+  // before the install has no namespace; after it, the root instance and `namespace: null`. Through the phone's parser
+  // and decision: the phone that ran it opens the root instance; another phone cannot attribute it (②). No real-Host
+  // run backs this: these bytes are what stands in for it. Tier: unit (pure).
+  it.each([['own', { open: true, instanceKey: '_root__server-plugin' }], ['other', { open: false, reason: 'unconfirmed' }]] as const)(
+    'contract V2.10 official-market sample, read by %s', (name, opens) => {
+      expect(Object.keys(CONTRACT_OFFICIAL_SAMPLES.before)).not.toContain('namespace');
+      expect(JSON.stringify(CONTRACT_OFFICIAL_SAMPLES[name])).toBe(CONTRACT_OFFICIAL_SAMPLE_TEXT[name]);
+      const officialManifest = { ...manifest, id: 'server-plugin', version: '1.0.0' };
+      const before = parsePluginManagementDetail({ ...detail, ...CONTRACT_OFFICIAL_SAMPLES.before, manifest: officialManifest });
+      const record = parsePluginManagementDetail({ ...detail, ...CONTRACT_OFFICIAL_SAMPLES[name], manifest: officialManifest });
+      const root: ManagedPlugin = { ...plugin, instanceKey: '_root__server-plugin', namespace: null, manifest: { ...plugin.manifest, id: 'server-plugin', version: '1.0.0' } };
+      const operation = { operationId: CONTRACT_SAMPLE_OPERATION_ID, entry: 'market-install' as const, who: {}, detail: before };
+      expect(pluginOperationOpens(operation, { ghosts: [root], market: [record] })).toEqual(opens);
+    });
+  // Every shape contract V2.10 lists under ② (not proven), through the phone's parser: never Open, never "older computer".
+  it.each(secondShapes('operation-1'))('② %s', (_name, fields) => {
+    const parsed = parsePluginManagementDetail({ ...detail, installState: 'update-available', ...fields });
+    expect(pluginOperationOpens(finished('market-install'), { ghosts: [updated], market: parsed })).toEqual({ open: false, reason: 'unconfirmed' });
+    // The catalog page's parser keeps the same reading.
+    const { manifest: _manifest, ...summary } = detail;
+    const [item] = parsePluginMarketPage({ items: [{ ...summary, installState: 'update-available', ...fields }] }).items;
+    expect(pluginOperationOpens(finished('market-install'), { ghosts: [updated], market: item })).toEqual({ open: false, reason: 'unconfirmed' });
+  });
+  it.each([
+    ['the same name in another namespace', [{ ...updated, instanceKey: 'team__demo', namespace: 'team' }],
+      [{ ...detail, namespace: 'team', installState: 'installed' as const, installedOperationId: 'operation-1', installedOperationAttribution: 'self' as const }], 'unconfirmed'],
+    // An instance is there but the response names no record of it (the Host sends this shape when it could not read its
+    // catalog, for a plugin whose market was removed, and on the first read after an install): what the computer says
+    // about this install was not read, so nothing is settled ("could not read", read again); never "not on the computer
+    // now", and never "cannot confirm" from a record that was not there to say so. Whether the response calls its market
+    // part complete plays no part (minimal failing input on a337ae955c: a complete-looking response gave 'unconfirmed').
+    // With no instance of the plugin there at all it is gone.
+    ['no record of it, an instance there', [updated], [], 'unread'],
+    ['a record saying not installed, an instance there', [updated], [{ ...detail, installState: 'not-installed' as const }], 'unconfirmed'],
+    ['no record of it, no instance', [], [], 'gone'],
+    // A package of the same id from elsewhere is there: not this attempt's instance, and not "gone" (V2.10: unconfirmed).
+    ['a conflict', [updated], [{ ...detail, installState: 'conflict' as const }], 'unconfirmed'],
+  ] as const)('install: %s', (_name, ghosts, market, reason) => {
+    expect(pluginOperationOpens(finished('market-install'), { ghosts, market })).toEqual({ open: false, reason });
+  });
+  // Pre-push review, round 6: an item read before the install carries no namespace (the root one, as the computer fills
+  // it in once installed). With the root instance gone, an instance of the same id in another known namespace is
+  // another plugin: "not on the computer now". Minimal failing input on 84ddb5043c: the two rows after the control gave
+  // 'unconfirmed' and 'unread' (a missing namespace matched any instance). Tier: unit (pure).
+  it.each([
+    ['control: the computer\'s ① record for the root', [{ ...detail, namespace: null, installState: 'installed' as const, installedOperationId: 'operation-1', installedOperationAttribution: 'self' as const }]],
+    ['a record saying not installed', [{ ...detail, namespace: undefined, installState: 'not-installed' as const }]],
+    ['no record of it', []],
+  ] as const)('install of an item without a namespace; only an instance of the same id in another namespace is there; %s: gone', (_name, market) => {
+    const { namespace: _omitted, ...before } = detail;
+    const team = { ...updated, instanceKey: 'team__demo', namespace: 'team' };
+    expect(pluginOperationOpens({ ...finished('market-install'), detail: before }, { ghosts: [team], market: market as any })).toEqual({ open: false, reason: 'gone' });
+  });
+  // The same default where the instance is found once proven (pre-push review, rounds 7 and 8; it gave 'gone' on
+  // f8d1f490c4): neither the item read before the install nor the computer's ① record carries a namespace.
+  it('install: neither the item nor the computer\'s ① record carries a namespace: the root instance opens', () => {
+    const { namespace: _omitted, ...before } = detail;
+    const own = { ...before, installState: 'installed' as const, installedOperationId: 'operation-1', installedOperationAttribution: 'self' as const };
+    const root = { ...updated, instanceKey: '_root__demo', namespace: null };
+    expect(pluginOperationOpens({ ...finished('market-install'), detail: before }, { ghosts: [root], market: [own] as any })).toEqual({ open: true, instanceKey: '_root__demo' });
+  });
+  it('install: what a response does name about the plugin decides, whatever else it left out', () => {
+    const own = { ...detail, installState: 'installed' as const, installedOperationId: 'operation-1', installedOperationAttribution: 'self' as const };
+    const other = { ...detail, pluginId: 'market/other', ghostId: 'other', name: 'Other', installState: 'installed' as const };
+    expect(pluginOperationOpens(finished('market-install'), { ghosts: [updated], market: [other, own] })).toEqual({ open: true, instanceKey: updated.instanceKey });
+    // Records of other plugins are not a record of this one.
+    expect(pluginOperationOpens(finished('market-install'), { ghosts: [updated], market: [other] })).toEqual({ open: false, reason: 'unread' });
+    expect(pluginOperationOpens(finished('market-install'), { ghosts: [], market: [other] })).toEqual({ open: false, reason: 'gone' });
+  });
+  // The Host shape asserted by apps/desktop plugin-market service.test.ts ("isolated-root"): a server summary carries no
+  // `namespace` before the install; once installed the same item is projected with `namespace: null` beside the
+  // `_root__<id>` instance. The attempt recorded the item read before the install, so the instance is found by the
+  // record of the same response (it failed before: "not on the computer now" for a proven install). Tier: unit (pure).
+  it('install: the item read before the install has no namespace; the record beside the instance has the root one', () => {
+    const { namespace: _omitted, ...before } = detail;
+    const root = { ...updated, instanceKey: '_root__demo', namespace: null };
+    const own = { ...detail, namespace: null, installState: 'installed' as const, installedOperationId: 'operation-1', installedOperationAttribution: 'self' as const };
+    const operation = { ...finished('market-install'), detail: before };
+    expect(pluginOperationOpens(operation, { ghosts: [root], market: [own] })).toEqual({ open: true, instanceKey: '_root__demo' });
+    // Still not an org instance of the same id, and never without the computer's evidence.
+    expect(pluginOperationOpens(operation, { ghosts: [{ ...root, instanceKey: 'team__demo', namespace: 'team' }], market: [own] })).toEqual({ open: false, reason: 'gone' });
+    expect(pluginOperationOpens(operation, { ghosts: [root], market: [{ ...own, installedOperationId: undefined, installedOperationAttribution: 'unattributed' as const }] }))
+      .toEqual({ open: false, reason: 'unconfirmed' });
+    // The record's namespace is exact: an instance in the older layout (no namespace, keyed by its id) listed first
+    // is not taken for the root one the record names.
+    const { namespace: _none, ...older } = { ...updated, instanceKey: 'demo' };
+    expect(pluginOperationOpens(operation, { ghosts: [older as ManagedPlugin, root], market: [own] })).toEqual({ open: true, instanceKey: '_root__demo' });
+  });
+  // Contract V2.10 case 7b (Host 0b93a48c25): a remote update of the old simulator migrates it to a new plugin id; after a
+  // Host restart (receipt gone) the device that ran it reads 'self' with its id, another device 'unattributed'. On the
+  // phone the old instance never pairs with the new market item (other ghostId), so the update entry cannot start it;
+  // the market install of the new plugin is the phone's way in, and it opens only for the device that ran it. No new
+  // rule; covers existing behaviour. Tier: unit (pure).
+  it('contract case 7b: the old simulator migrated by this device opens; another device keeps the result without Open', () => {
+    const target = { ...detail, pluginId: 'market/cindy-simulator', ghostId: 'cindy-simulator', installState: 'installed' as const };
+    const migrated: ManagedPlugin = { ...plugin, instanceKey: '_root__cindy-simulator', manifest: { ...manifest, id: 'cindy-simulator' } };
+    const old: ManagedPlugin = { ...plugin, instanceKey: '_root__baguette-simulator', manifest: { ...manifest, id: 'baguette-simulator' } };
+    expect(marketItemMatchesPlugin(target, old)).toBe(false);
+    const install = { operationId: 'op-0000000000000001', entry: 'market-install' as const, who: {}, detail: target };
+    const read = (fields: Record<string, unknown>) => parsePluginManagementDetail({ ...target, ...fields, manifest: { ...manifest, id: 'cindy-simulator' } });
+    expect(pluginOperationOpens(install, { ghosts: [migrated], market: read({ installedOperationAttribution: 'self', installedOperationId: 'op-0000000000000001' }) }))
+      .toEqual({ open: true, instanceKey: '_root__cindy-simulator' });
+    expect(pluginOperationOpens(install, { ghosts: [migrated], market: read({ installedOperationAttribution: 'unattributed' }) }))
+      .toEqual({ open: false, reason: 'unconfirmed' });
+  });
+  it('update: another instance of the plugin with its own gone', () => {
+    const { record } = facts('own');
+    expect(pluginOperationOpens(finished('update', '_root__demo'), { ghosts: [{ ...updated, instanceKey: 'demo-copy' }], market: [record] }))
+      .toEqual({ open: false, reason: 'gone' });
+  });
+  it('page approval: its own instance with its pages approved now', () => {
+    const approved = { ...plugin, uiCapabilityApproved: true as const };
+    expect(pluginOperationOpens(finished('page-approval', '_root__demo'), { ghosts: [approved] })).toEqual({ open: true, instanceKey: '_root__demo' });
+    expect(pluginOperationOpens(finished('page-approval', '_root__demo'), { ghosts: [plugin] })).toEqual({ open: false, reason: 'unconfirmed' });
+    expect(pluginOperationOpens(finished('page-approval', 'demo-copy'), { ghosts: [approved] })).toEqual({ open: false, reason: 'gone' });
+  });
+  // Maintainer review 15:22 #2: a page approval keeps the install it was started for (that instance's approval token;
+  // approving pages keeps it, Host `approveUiCapability`). Another install under the same key, its pages approved too,
+  // is not this approval's result (the record says "changed or cannot be confirmed", not "done"). Minimal failing input
+  // on af50d3d92d: the replaced, approved instance. Tier: unit.
+  it('page approval: another install under the same key, its pages approved too, is not this approval', () => {
+    const target = pluginApprovalToken(plugin);
+    const approvedA = { ...plugin, uiCapabilityApproved: true as const };
+    const approvedB = { ...approvedA, approval: { state: 'approved' as const, revision: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb' } };
+    const approval = { ...finished('page-approval', '_root__demo'), target };
+    expect(pluginOperationOpens(approval, { ghosts: [approvedA] })).toEqual({ open: true, instanceKey: '_root__demo' });
+    expect(pluginOperationOpens(approval, { ghosts: [approvedB] })).toEqual({ open: false, reason: 'unconfirmed' });
+  });
+  it.each(['uninstall', 'enable', 'task-settings'] as const)('%s never opens one', (entry) => {
+    expect(pluginOperationOpens(finished(entry, '_root__demo'), { ghosts: [updated] })).toMatchObject({ open: false });
+  });
+});
+
+// Dispatcher O-4: the one decision whether a consent can be allowed (pluginConsentAllowance), field by field. From a
+// consent that declares exactly what was chosen (allowed), one declared field changed at a time; each is refused, and
+// only the Host's source switch (`originSourceChanged` on an update that comes back as a first install) is the switch
+// flow. Minimal failing input on 015469869c: a consent of another source type (or version, kind, plugin) was allowed
+// because only custom-market consents were compared. Tier: unit (pure).
+describe('whether a consent can be allowed', () => {
+  const git = { kind: 'git' as const, repository: 'github.com/acme/plugins', ref: 'main', sourceId: 'SourceA_0123456789abcd' };
+  const chosen = { kind: 'update' as const, deviceId: 'host-1', pluginId: 'custom:Acme/demo', ghostId: 'demo', version: '2',
+    releaseId: 'release-2', sourceType: 'git-market' as const, source: git };
+  const declared = { deviceId: 'host-1', ghostId: 'demo', version: '2', kind: 'update' as const, origin: 'custom-market' as const, source: git };
+  it('allows exactly what was chosen', () => {
+    expect(pluginConsentAllowance(chosen, declared)).toEqual({ allow: true, sourceSwitch: false });
+    expect(pluginConsentAllowance(chosen, { ...declared, kind: 'install', originSourceChanged: true })).toEqual({ allow: true, sourceSwitch: true });
+  });
+  it.each([
+    ['another computer', { deviceId: 'host-2' }, 'changed', 'deviceId'],
+    ['another plugin', { ghostId: 'other' }, 'changed', 'ghostId'],
+    ['another version', { version: '3' }, 'changed', 'version'],
+    ['a first install for an update', { kind: 'install' as const }, 'changed', 'kind'],
+    ['an update marked as a source switch', { originSourceChanged: true }, 'changed', 'kind'],
+    ['a page approval for an update', { purpose: 'ui-capability' as const }, 'changed', 'purpose'],
+    ['the server market (another source type)', { origin: 'market' as const, source: undefined }, 'source-changed', 'sourceType'],
+    ['a local file (another source type)', { origin: 'local-file' as const, source: undefined }, 'source-changed', 'sourceType'],
+    ['a local folder for a Git market (another source kind)', { source: { kind: 'local' as const, sourceId: git.sourceId } }, 'source-changed', 'sourceType'],
+    ['another repository', { source: { ...git, repository: 'github.com/other/plugins' } }, 'source-changed', 'source'],
+    ['another ref', { source: { ...git, ref: 'next' } }, 'source-changed', 'source'],
+    ['no ref', { source: { kind: 'git' as const, repository: git.repository, sourceId: git.sourceId } }, 'source-changed', 'source'],
+    ['another source id', { source: { ...git, sourceId: 'SourceB_0123456789abcd' } }, 'source-changed', 'source'],
+    ['no source', { source: undefined }, 'source-unverified', 'source'],
+    ['a malformed source', { sourceMalformed: true }, 'source-unverified', 'source'],
+  ] as const)('refuses %s', (_name, change, reason, field) => {
+    expect(pluginConsentAllowance(chosen, { ...declared, ...change })).toEqual({ allow: false, reason, field });
+  });
+  it('a first install takes no source switch; the server market asks for the market origin; a page approval its purpose', () => {
+    const install = { ...chosen, kind: 'install' as const };
+    expect(pluginConsentAllowance(install, { ...declared, kind: 'install' })).toEqual({ allow: true, sourceSwitch: false });
+    expect(pluginConsentAllowance(install, { ...declared, kind: 'install', originSourceChanged: true })).toMatchObject({ allow: false, field: 'kind' });
+    const server = { ...chosen, sourceType: 'server' as const, source: null };
+    expect(pluginConsentAllowance(server, { ...declared, origin: 'market', source: undefined })).toEqual({ allow: true, sourceSwitch: false });
+    expect(pluginConsentAllowance(server, declared)).toMatchObject({ allow: false, reason: 'source-changed', field: 'sourceType' });
+    const pages = { kind: 'ui-capability' as const, deviceId: 'host-1', ghostId: 'demo', version: '1' };
+    expect(pluginConsentAllowance(pages, { deviceId: 'host-1', ghostId: 'demo', version: '1', kind: 'update', purpose: 'ui-capability', origin: 'local-file' }))
+      .toEqual({ allow: true, sourceSwitch: false });
+    expect(pluginConsentAllowance(pages, { deviceId: 'host-1', ghostId: 'demo', version: '1', kind: 'update', origin: 'local-file' }))
+      .toMatchObject({ allow: false, field: 'purpose' });
+  });
+  it('without a choice (an Agent task card, a prompt started elsewhere) only the declaration rules apply', () => {
+    expect(pluginConsentAllowance(null, declaredTaskCardConsent({ ghost_id: 'demo', version: '1', operation: 'install', origin: 'market' }, 'host-1'))).toMatchObject({ allow: true });
+    expect(pluginConsentAllowance(null, declaredTaskCardConsent({ ghost_id: 'demo', version: '1', operation: 'install' }, 'host-1'))).toMatchObject({ allow: false, field: 'origin' });
+    expect(pluginConsentAllowance(null, declaredTaskCardConsent({ ghost_id: 'demo', version: '1', operation: 'update' }, 'host-1'))).toMatchObject({ allow: true });
+    expect(pluginConsentAllowance(null, declaredTaskCardConsent({ operation: 'update', origin: 'custom-market' }, 'host-1'))).toMatchObject({ allow: false, reason: 'source-unverified' });
+    expect(pluginConsentAllowance(null, declaredTaskCardConsent({ operation: 'update', origin: 'custom-market', source: { kind: 'git', sourceId: 'x' } }, 'host-1')))
+      .toMatchObject({ allow: false, reason: 'source-unverified' });
+  });
+});
+
+// Dispatcher O-4: the controller checks the same decision right before it writes an Allow, whoever calls it (a sheet
+// that missed it, a stale callback). A consent of another source type or kind than the update chosen: no answer
+// written, the consent stays to be rejected. Minimal failing input on 015469869c: an official-market update whose
+// consent names a custom market wrote Allow. Tier: unit (in-memory Host).
+describe('the controller writes Allow only for a consent that declares what was chosen', () => {
+  it.each([
+    ['another source type', { origin: 'custom-market', originLabel: 'Team', originSource: { kind: 'git', repository: 'github.com/acme/market', sourceId: 'SourceA_0123456789abcd' } }, 'PLUGIN_SOURCE_CHANGED'],
+    ['a first install for the update chosen', { facts: { kind: 'install', ghostId: 'demo', name: 'Demo', version: '2', permissions: [] } }, 'PLUGIN_CONSENT_CHANGED'],
+    ['another version', { facts: { ...(confirmation().consent!.facts), version: '3' } }, 'PLUGIN_CONSENT_CHANGED'],
+  ] as const)('%s', async (_name, change, code) => {
+    const h = host((request) => request.actionId === 'management:begin'
+      ? { ...confirmation(), consent: { ...confirmation().consent!, ...change } } : receipt('running'));
+    const c = controller(h.client); await c.refresh();
+    await c.install(detail, plugin);
+    expect(c.getState().outcome).toBe('confirmation');
+    await c.answer(true);
+    expect(h.requests.filter((r) => r.actionId === 'management:answer')).toEqual([]);
+    expect(c.getState()).toMatchObject({ outcome: 'confirmation', errorCode: code, busy: false });
+    await c.answer(false);
+    expect(h.requests.filter((r) => r.actionId === 'management:answer').map((r) => r.input.confirmed)).toEqual([false]);
+  });
 });

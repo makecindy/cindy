@@ -124,6 +124,18 @@ it('selects a supported native detent when opening and rotating a menu', () => {
   } finally { act(() => root.unmount()); }
 });
 
+// iOS re-check (#12684): at the medium detent an upward swipe expands the sheet instead of scrolling, so a plugin
+// consent with high-risk items could not be read to the end. largeOnly opens large; omitting it keeps both detents.
+it('opens only at the large detent when asked, and keeps medium and large by default', () => {
+  const root = createRoot(document.createElement('div'));
+  try {
+    act(() => root.render(<ComposerSheet visible title="" nativeContent largeOnly onClose={() => {}} footer={<span>Allow</span>}><span>List</span></ComposerSheet>));
+    expect(presentationDetents).toHaveBeenLastCalledWith(['large'], { selection: 'large' });
+    act(() => root.render(<ComposerSheet visible title="" nativeContent onClose={() => {}} footer={<span>Allow</span>}><span>List</span></ComposerSheet>));
+    expect(presentationDetents).toHaveBeenLastCalledWith(['medium', 'large'], { selection: 'medium' });
+  } finally { act(() => root.unmount()); }
+});
+
 // #7658: native appearance/dismissal events guard focus and opening the created group.
 // RN Modal + ScreenStack swallowed row touches on-device; this mock rejects that nesting.
 it('keeps native form actions outside the roster and waits for completed dismissal', () => {

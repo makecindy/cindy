@@ -752,6 +752,8 @@ export class GhostManager {
   private readonly retirements = new FeatureRetirementStore(() => this.receiptStore.rootDir());
   private ownerContextKey: string;
   private mutationTail: Promise<void> = Promise.resolve();
+  /** 已完成的互斥变更（安装、更新、卸载、启停、批准等）次数；变更结束、放行下一个之前前进。 */
+  private completedMutations = 0;
   /** One small archive, for the inspect → consent → install path only. */
   private parsedPackageCache: {
     manifestSource?: 'stored-release';
@@ -2434,8 +2436,17 @@ export class GhostManager {
       capabilityActive = false;
       this.activeMutationContext = null;
       this.notificationIndex.invalidate();
+      this.completedMutations++;
       release();
     }
+  }
+
+  /**
+   * 已装集合与批准状态的变更代次：每完成一次互斥变更就前进（只增，进程内）。读取方据此判断一个在途读取是否早于
+   * 某次变更，不读盘、不扫描。
+   */
+  installationRevision(): number {
+    return this.completedMutations;
   }
 
   /**
@@ -3186,6 +3197,35 @@ export class GhostManager {
     }
     const [ghost] = this.projectListedEntries([{ relId: record.contentRelId, dir }]);
     return ghost && installedGhostStoragePart(ghost) === instanceKey ? ghost : undefined;
+  }
+
+  /**
+   * 契约 V2.10（远程归属复核）：一个已装实例当前的批准事实。只读实例注册表（内存）、实例目录类型（一次 stat）和该
+   * 实例的批准记录，不做完整实例投影：不读安装来源、不读市场账本、不读其它实例。批准经 readApproval，与 list() 同
+   * 一口径（隔离中的换装读作不可信）。注册表答不了、目录不在或批准不是 approved 时返回 undefined。
+   */
+  readInstalledInstanceApproval(
+    instanceKey: string,
+  ): { revision: string; manifest: GhostManifest } | undefined {
+    this.ensureCurrentOwnerContextSync();
+    if (this.instanceRegistryService.isBlocked()) return undefined;
+    const record = this.instanceRegistryService.current()?.instances[instanceKey];
+    if (!record?.active || !isValidPluginInstallRelId(record.contentRelId)) return undefined;
+    // 与实例投影（instanceProjection）同一口径：注册表里这份内容目录对应的正是这个实例键、同一个 ghostId。迁移后的
+    // 模拟器实例键沿用旧名而内容目录是新名，不能按目录名推实例键。
+    const identity = parsePluginInstallRelId(record.contentRelId);
+    const registry = this.instanceRegistryService.current();
+    if (!identity || !registry || record.ghostId !== identity.ghostId ||
+        findInstanceByContentRelId(registry, record.contentRelId)?.instanceKey !== instanceKey) return undefined;
+    try {
+      if (classifyGhostDirEntrySync(this.contentPath(record.contentRelId)) !== 'directory') return undefined;
+    } catch {
+      return undefined;
+    }
+    const approval = this.readApproval(record.contentRelId);
+    return approval.state === 'approved'
+      ? { revision: approval.receipt.revision, manifest: approval.receipt.manifest }
+      : undefined;
   }
 
   private projectListedEntries(

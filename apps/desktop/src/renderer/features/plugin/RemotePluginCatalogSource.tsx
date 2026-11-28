@@ -21,6 +21,7 @@ import { isDeviceLinkRemotePushCurrent } from '@/lib/remoteDataOwnerPushFence';
 import { extractIpcError } from '@/utils/ipcError';
 import { toast } from '@/lib/toast';
 import {
+  GHOST_INSTALL_CONSENT_TEXT_CLASS,
   GhostInstallConsentContent,
   ghostInstallConsentSourceLabel,
 } from '@/cindy-brain/GhostInstallConsentHost';
@@ -398,7 +399,8 @@ export function RemotePluginCatalogSource({
                   {t(pluginSourceWarningKey(consent.installationSource)!)}
                 </p>}
                 <GhostInstallConsentContent facts={consent.facts} origin={consent.origin} communityMarket={consent.communityMarket}
-                  capabilityOnly={consent.purpose === 'ui-capability'} />
+                  capabilityOnly={consent.purpose === 'ui-capability'} originSourceChanged={consent.originSourceChanged === true}
+                  originSource={consent.originSource} />
               </>,
               confirmText: t(
                 consent.purpose === 'ui-capability' ? 'newChat.pluginUi.enable' : consent.facts.kind === 'install'
@@ -407,6 +409,7 @@ export function RemotePluginCatalogSource({
               ),
               cancelText: t('settings.ghosts.installConsent.cancel'),
               maxWidth: 460,
+              textClassName: GHOST_INSTALL_CONSENT_TEXT_CLASS,
               contentSelectable: true,
             },
             abort.signal,

@@ -41,9 +41,11 @@ import crypto from 'node:crypto';
 
 import {
   marketSourceKey,
+  pluginMarketSourceIdentity,
   type MarketSource,
   type MarketSourceConfig,
   type MarketSourceSummary,
+  type PluginMarketSourceIdentity,
 } from '../../../shared/pluginMarket.js';
 import { createLogger } from '../../logger.js';
 import { throwIpcError } from '../../utils/ipcValidate.js';
@@ -55,7 +57,16 @@ import {
   settleCachePathRemovals,
 } from './cacheLease.js';
 import { discoverMarketplace, type DiscoveredMarketplace, type DiscoverError } from './discover.js';
-import { MarketGitError, cloneMarketplace, fetchMarketplace, type GitExecutor } from './git.js';
+import {
+  MarketGitError,
+  cloneMarketplace,
+  fetchMarketplace,
+  hasBranchConditionalConfig,
+  resolveFetchUrl,
+  type GitExecutor,
+} from './git.js';
+import { fetchedSourceId, readFetchIdentity, writeFetchIdentity } from './fetchIdentity.js';
+import type { MarketSourceIdOf } from './sourceId.js';
 import { checkGitPreflight as checkGitPreflightImpl } from './preflight.js';
 import { parseMarketSource } from './parse.js';
 import { MarketSourceStore } from './store.js';
@@ -67,10 +78,22 @@ export interface MarketSourceManagerDeps {
   gitExecutor?: GitExecutor;
   homeDir?: string;
   now?: () => string;
+  /** 不透明来源标识计算器（见 sourceId.ts）。缺省或返回 null 时所有来源身份缺省。 */
+  sourceIdOf?: MarketSourceIdOf;
 }
 
 export interface DiscoveredSource {
   config: MarketSourceConfig;
+  /**
+   * 去敏来源身份，在同一个读取租约内由来源配置与**这份缓存版本**的取包记录生成；无法核实时为 null。
+   * 安装打包与确认用的就是这份租约内的目录与身份，二者同出一处。
+   */
+  sourceIdentity: PluginMarketSourceIdentity | null;
+  /**
+   * 这份配置与缓存版本的不透明来源标识（同 sourceIdentity.sourceId；展示身份生成不出时，例如 `.github`
+   * 仓库，仍可能有）。安装落位时写进账本记录，用来投影已装实例的来源。
+   */
+  sourceId: string | null;
   result:
     | { ok: true; marketplace: DiscoveredMarketplace }
     | { ok: false; code: DiscoverError; detail?: string };
@@ -445,15 +468,7 @@ export class MarketSourceManager {
     const incoming = path.join(this.deps.cloneRoot, `.incoming-${crypto.randomUUID()}`);
     let revision: string;
     try {
-      revision = await cloneMarketplace(
-        {
-          url: source.url,
-          ...(source.ref ? { ref: source.ref } : {}),
-          sparsePaths: source.sparsePaths,
-        },
-        incoming,
-        this.deps.gitExecutor,
-      );
+      revision = await this.cloneWithFetchIdentity(source, incoming);
     } catch (error) {
       if (error instanceof MarketGitError) {
         // 原始 git 输出（含命令行与内部路径）只进 main 日志；Renderer 拿到的是
@@ -604,12 +619,30 @@ export class MarketSourceManager {
           // 快进路径:复制当前版本到暂存目录,在暂存目录内快进。
           try {
             await fs.promises.cp(current, fastForwardDir, { recursive: true });
+            const sourceKey = marketSourceKey(gitSource);
+            // 实际取包地址在 fetch 发生的这个仓库里、网络操作前后各解析一次（insteadOf 及按仓库路径加载的
+            // includeIf 规则都在这个上下文里生效）。
+            const before = await resolveFetchUrl('origin', this.deps.gitExecutor, fastForwardDir);
+            // 实际地址相对上一版本的记录变了（改写目标变了，或上一版本没有可核实记录而这次有）：不在旧来源的
+            // 历史上快进，回落到全新克隆。
+            await this.deps.sourceIdOf?.prepare?.();
+            if (fetchedSourceId(before, sourceKey, this.deps.sourceIdOf) !== this.currentKeySourceId(await readFetchIdentity(current))) {
+              throw new Error('The fetch address changed since the cached version');
+            }
             revision = await fetchMarketplace(
               current,
               gitSource.ref,
               this.deps.gitExecutor,
               fastForwardDir,
             );
+            const after = await resolveFetchUrl('origin', this.deps.gitExecutor, fastForwardDir);
+            // 复制来的旧记录必须被重写或清掉；清不掉时抛出，回落到全新克隆。
+            await writeFetchIdentity(fastForwardDir, {
+              resolved: before && before === after ? before : null,
+              revision,
+              sourceKey,
+              sourceIdOf: this.deps.sourceIdOf,
+            });
             fastForwarded = true;
           } catch {
             fastForwarded = false;
@@ -619,15 +652,7 @@ export class MarketSourceManager {
           // 无当前版本或快进失败(历史改写/缓存损坏):整目录重克隆到另一个暂存目录。
           stagedDir = cloneDir;
           try {
-            revision = await cloneMarketplace(
-              {
-                url: gitSource.url,
-                ...(gitSource.ref ? { ref: gitSource.ref } : {}),
-                sparsePaths: gitSource.sparsePaths,
-              },
-              cloneDir,
-              this.deps.gitExecutor,
-            );
+            revision = await this.cloneWithFetchIdentity(gitSource, cloneDir);
           } catch (error) {
             if (error instanceof MarketGitError) throwIpcError(error.code, error.message);
             throw error;
@@ -693,6 +718,103 @@ export class MarketSourceManager {
   }
 
   /**
+   * 本地文件夹来源的不透明标识（旧账本记录没有存标识时，按记录的来源指纹现算）。同步计算，只用本实例里
+   * 已异步读好的密钥（任何一次发现都会先备好）；还没备好时返回 null，即「无法核实」，不回退到同步读盘。
+   */
+  localSourceIdOf(sourceKey: string): string | null {
+    return this.deps.sourceIdOf?.({ kind: 'local', sourceKey }) ?? null;
+  }
+
+  /**
+   * 当前密钥的标识（见 sourceId.ts）。只有用同一个 keyId 算出的 sourceId 才能比较；不同即无法核实。任何一次
+   * 发现之后才有值。
+   */
+  sourceKeyId(): string | null {
+    return this.deps.sourceIdOf?.keyId() ?? null;
+  }
+
+  /** 取包记录里用当前密钥算出的 sourceId；密钥换过（keyId 不同）或没有记录时为 null（无法核实）。 */
+  private currentKeySourceId(record: { sourceId: string | null; keyId: string | null } | null): string | null {
+    const keyId = this.sourceKeyId();
+    return record?.sourceId && keyId && record.keyId === keyId ? record.sourceId : null;
+  }
+
+  /**
+   * 在读取租约内为这份市场根目录生成来源身份与标识。Git 来源都取该缓存版本的取包记录（仓库是实际取包
+   * 地址，标识含实际地址部件），不取配置字符串；本地来源的标识由来源指纹直接算。
+   */
+  private async sourceFactsAt(
+    config: MarketSourceConfig,
+    root: string,
+  ): Promise<Pick<DiscoveredSource, 'sourceIdentity' | 'sourceId'>> {
+    // 密钥先异步备好：本地来源的标识、以及之后安装路径里的同步核对（localSourceIdOf）都用它。
+    await this.deps.sourceIdOf?.prepare?.();
+    const record = config.source.type === 'git' ? await readFetchIdentity(root) : null;
+    const sourceId = config.source.type === 'local'
+      ? this.localSourceIdOf(marketSourceKey(config.source))
+      : this.currentKeySourceId(record);
+    return {
+      sourceId,
+      sourceIdentity: pluginMarketSourceIdentity(config.source, {
+        sourceId,
+        fetchedRepository: record?.repository ?? null,
+      }),
+    };
+  }
+
+  /**
+   * 新克隆目录的取包记录。新目录里没有旧记录，写不下来只是「无法核实」，不让添加或刷新失败。
+   */
+  /**
+   * 克隆并记下实际取包地址。git clone 读的可能是全局配置上下文，也可能是新仓库自己的上下文，且仓库上下文里
+   * 的条件规则会随状态变化（`includeIf "gitdir:…"` 看仓库路径，`includeIf "onbranch:…"` 看当前分支，检出
+   * `--detach` 后即失效）。所以克隆前（无仓库）、克隆刚完成时与检出完成后（staging 仓库里）、克隆后（无仓库）
+   * 各解析一次，全部一致才算核实，否则只记「无法核实」。
+   * `includeIf "onbranch:…"` 还可能只在克隆中途的初始分支上生效（clone 返回前已切走），四次采样都看不到；
+   * 所以克隆前（无仓库）与克隆刚完成时（staging 仓库里）只要配置里有按分支生效的条件包含，就不核实。
+   */
+  private async cloneWithFetchIdentity(
+    source: Extract<MarketSource, { type: 'git' }>,
+    dest: string,
+  ): Promise<string> {
+    const executor = this.deps.gitExecutor;
+    const samples: Array<string | null> = [await resolveFetchUrl(source.url, executor)];
+    let branchConditional = await hasBranchConditionalConfig(executor);
+    const revision = await cloneMarketplace(
+      {
+        url: source.url,
+        ...(source.ref ? { ref: source.ref } : {}),
+        sparsePaths: source.sparsePaths,
+      },
+      dest,
+      executor,
+      async (repoDir, phase) => {
+        samples.push(await resolveFetchUrl('origin', executor, repoDir));
+        if (phase === 'cloned' && !branchConditional) branchConditional = await hasBranchConditionalConfig(executor, repoDir);
+      },
+    );
+    samples.push(await resolveFetchUrl(source.url, executor));
+    const [first] = samples;
+    const verified = !branchConditional && first && samples.every((sample) => sample === first) ? first : null;
+    await this.recordFetchIdentity(dest, source, verified, revision);
+    return revision;
+  }
+
+  private async recordFetchIdentity(
+    dir: string,
+    source: MarketSource,
+    resolved: string | null,
+    revision: string,
+  ): Promise<void> {
+    try {
+      await this.deps.sourceIdOf?.prepare?.();
+      await writeFetchIdentity(dir, { resolved, revision, sourceKey: marketSourceKey(source), sourceIdOf: this.deps.sourceIdOf });
+    } catch {
+      // 记录缺失即身份缺省；不记录错误详情（可能含改写注入的地址）。
+    }
+  }
+
+  /**
    * 发现单个来源（详情 / 安装入口现查事实用）。
    *
    * 发现结果里的 `plugin.dir` 指向缓存版本目录:调用方**在 fn 返回后就不得再
@@ -711,12 +833,15 @@ export class MarketSourceManager {
       if (!root || !fs.existsSync(root)) {
         return fn({
           config: config!,
+          sourceIdentity: null,
+          sourceId: null,
           result: { ok: false, code: 'MARKET_SOURCE_INVALID', detail: 'market root missing' },
         });
       }
       const discovered = await discoverMarketplace(root);
       return fn({
         config: config!,
+        ...(await this.sourceFactsAt(config!, root)),
         result: discovered.ok
           ? { ok: true, marketplace: discovered.marketplace }
           : {
@@ -765,6 +890,8 @@ export class MarketSourceManager {
         if (!root || !fs.existsSync(root)) {
           await fn({
             config,
+            sourceIdentity: null,
+            sourceId: null,
             result: { ok: false, code: 'MARKET_SOURCE_INVALID', detail: 'market root missing' },
           });
           return;
@@ -772,6 +899,7 @@ export class MarketSourceManager {
         const discovered = await discoverMarketplace(root);
         await fn({
           config,
+          ...(await this.sourceFactsAt(config, root)),
           result: discovered.ok
             ? { ok: true, marketplace: discovered.marketplace }
             : {
@@ -793,6 +921,8 @@ export class MarketSourceManager {
         if (!root || !fs.existsSync(root)) {
           results.push({
             config,
+            sourceIdentity: null,
+            sourceId: null,
             result: { ok: false, code: 'MARKET_SOURCE_INVALID', detail: 'market root missing' },
           });
           return;
@@ -800,6 +930,7 @@ export class MarketSourceManager {
         const discovered = await discoverMarketplace(root);
         results.push({
           config,
+          ...(await this.sourceFactsAt(config, root)),
           result: discovered.ok
             ? { ok: true, marketplace: discovered.marketplace }
             : {

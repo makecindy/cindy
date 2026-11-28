@@ -2,6 +2,8 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { PLUGIN_COLLECTION, type DeviceView } from '@cindy/device-link';
 import { getRemoteResource, listRemoteCollection, normalizeRemoteCollectionItems } from '@/device-link/remoteResources';
 import { invokePlugin } from '@/plugins/pluginClient';
+import { createPluginManagementClient } from '@/plugins/pluginManagementClient';
+import { pluginConsentPresentation } from '@/plugins/pluginConsentPresentation';
 import { projectHistoryView } from '@cindy/maker-shared/message-window';
 import type { RemoteMessage, RemoteSession } from '@/session/types';
 import { UI_MOCK_PROJECTS } from '@cindy/maker-shared/ui-mock';
@@ -66,12 +68,27 @@ it('serves showcase files without replacing legacy Markdown and media regression
   }
 });
 
+// Layout demo: an Agent-initiated plugin install from a custom market, as the Host's task card carries it.
+it('serves an Agent plugin install task card with the Host-generated source', async () => {
+  const mock = await import('@/debug/visualMock');
+  const link = mock.createVisualMockDeviceLinkContext();
+  const pending = await link.invoke(mock.VISUAL_MOCK_DEVICE_ID, 'maker:get-pending-interactions', ['visual-plugin-install-card']) as any[];
+  expect(pending[0].request).toMatchObject({ toolName: 'cindy.plugin.install',
+    input: { operation: 'install', origin: 'custom-market', source: { kind: 'git', sourceId: 'DemoLongMarketSource01' } } });
+  // Re-checks of d81200da asked for the card a custom market without a source shows (only Reject).
+  const unverified = await link.invoke(mock.VISUAL_MOCK_DEVICE_ID, 'maker:get-pending-interactions', ['visual-plugin-install-card-unverified']) as any[];
+  expect(unverified[0].request).toMatchObject({ toolName: 'cindy.plugin.install', input: { operation: 'install', origin: 'custom-market' } });
+  expect(unverified[0].request.input).not.toHaveProperty('source');
+  await link.invoke(mock.VISUAL_MOCK_DEVICE_ID, 'maker:resolve-interaction', ['visual-plugin-install-card-unverified-request', { behavior: 'deny' }]);
+  expect(await link.invoke(mock.VISUAL_MOCK_DEVICE_ID, 'maker:get-pending-interactions', ['visual-plugin-install-card-unverified'])).toEqual([]);
+});
 it('supplies valid demo plugin projections and confirms enable/disable through the real client', async () => {
   const mock = await import('@/debug/visualMock');
   const link = mock.createVisualMockDeviceLinkContext();
   const host = { deviceId: mock.VISUAL_MOCK_DEVICE_ID, deviceName: mock.VISUAL_MOCK_DEVICE_NAME };
   const items = normalizeRemoteCollectionItems(await listRemoteCollection(link.invoke, host, PLUGIN_COLLECTION), PLUGIN_COLLECTION);
-  expect(items).toHaveLength(28);
+  // 28 teammate/demo plugins plus the eight market demos pre-installed at an older version (update consent).
+  expect(items).toHaveLength(36);
   expect(items.filter(item => item.display.badges?.length)).toHaveLength(2);
   const ref = items[0].ref;
   await invokePlugin(link.invoke, host.deviceId, ref.id, 'disable');
@@ -365,4 +382,97 @@ it('keeps snooze metadata through fixture list reload and clears it on wake', as
   await request('local-db:sessions:patch-meta', [row.id, { snoozedUntil: null }]);
   expect((await request<RemoteSession[]>('local-db:sessions:list', ['all'])).find(item => item.id === row.id))
     .toMatchObject({ snoozedUntil: null, snoozedAt: null });
+});
+
+/* 测试价值（--mock 插件市场的四种确认面板与升级确认，2026-11-25）
+ * - 生产入口与可观察结果：模拟电脑的管理动作经真实 createPluginManagementClient（含回执与详情解析）读出的确认内容。
+ * - 依据：ui-mock-data.md 模拟数据走真实 wire 形状；模拟器复看要能打开有 / 无高风险、社区、自定义市场与升级确认。
+ * - 缺口：此前模拟确认把工具列为权限、Node 项不是 Host 的 node:execute 形状、没有可安装的自定义项也没有升级。
+ * - 最小失败输入：升级 begin 带已装实例被当作重复安装拒绝；社区确认缺 communityMarket。
+ * - tier: unit。
+ */
+it('serves the market demo consents in the Host shape, including updates that add or do not add the high-risk item', async () => {
+  const mock = await import('@/debug/visualMock');
+  const link = mock.createVisualMockDeviceLinkContext();
+  const client = createPluginManagementClient({ invoke: link.invoke, deviceId: mock.VISUAL_MOCK_DEVICE_ID, isCurrent: () => true });
+  let id = 0;
+  const consentOf = async (pluginId: string, installedKey?: string) => {
+    const detail = await client.detail(pluginId);
+    const snapshot = await client.snapshot('installed');
+    const installed = installedKey ? snapshot.ghosts.find((ghost) => ghost.instanceKey === installedKey) : undefined;
+    const operationId = `op-${++id}`;
+    await client.begin({ operationId, kind: 'install', detail, ...(installed ? { installed } : {}) });
+    return { operationId, consent: (await client.operation(operationId)).consent! };
+  };
+  const keys = (items: Array<{ key: string }>) => items.map((item) => item.key);
+  const official = await consentOf('demo-market/demo-device-simulator');
+  // Same source facts as the Host's obtainGhostInstallConsent (trust from the package signature).
+  expect(official.consent).toMatchObject({ origin: 'market', trust: 'cindy-official', installationSource: { kind: 'official' } });
+  expect(official.consent.communityMarket).toBeUndefined();
+  expect(keys((official.consent.facts as any).permissions)[0]).toBe('node:execute');
+  expect(keys((official.consent.facts as any).permissions).some((key) => key.startsWith('tool:'))).toBe(false);
+  expect(keys(((await consentOf('demo-market/demo-agenda')).consent.facts as any).permissions)).not.toContain('node:execute');
+  expect((await consentOf('demo-market/demo-shift-calendar')).consent).toMatchObject({ origin: 'market', communityMarket: true });
+  const custom = await consentOf('demo-market/demo-repo-tools');
+  expect(custom.consent).toMatchObject({ origin: 'custom-market', originLabel: 'Demo Git Market', trust: 'unverified',
+    installationSource: { kind: 'third-party' }, originSource: { kind: 'git', repository: 'github.com/demo-org/demo-git-market' } });
+  // Layout demos: a long repository name with a ref and all five high-risk classes; a local-folder market.
+  const longRepo = (await consentOf('demo-market/demo-long-repo-tools')).consent;
+  expect(longRepo.originSource).toMatchObject({ kind: 'git', ref: 'release/2026-11' });
+  expect(pluginConsentPresentation(longRepo, (key: string) => key).highRisk!.lines).toHaveLength(5);
+  expect((await consentOf('demo-market/demo-folder-tools')).consent.originSource).toEqual({ kind: 'local', sourceId: 'DemoFolderMarketSrc001' });
+  // Older Host demos: no repository identity on the new-install item, nor on the installed plugin's update consent.
+  expect((await client.detail('demo-market/demo-legacy-tools')).sourceIdentity).toBeUndefined();
+  const legacyUpdate = await consentOf('demo-market/demo-legacy-sync', '_root__demo-legacy-sync');
+  expect(legacyUpdate.consent).toMatchObject({ origin: 'custom-market', originLabel: 'Demo Legacy Market', facts: { kind: 'update' } });
+  expect(legacyUpdate.consent.originSource).toBeUndefined();
+  expect(keys((custom.consent.facts as any).permissions)[0]).toBe('node:execute');
+  // Updates: the installed detail's update is an install naming the installed instance.
+  const weather = await consentOf('demo-market/demo-weather-board', '_root__demo-weather-board');
+  expect(weather.consent.facts).toMatchObject({ kind: 'update', previousVersion: '1.3.0', version: '1.4.2', unchangedCount: 1 });
+  expect(keys((weather.consent.facts as any).added)).toEqual(['node:execute', 'notify']);
+  // Maintainer cases: an approved Node plugin whose update only adds a credential binding; Agent high risk without Node.
+  const secretSync = await consentOf('demo-market/demo-secret-sync', '_root__demo-secret-sync');
+  expect(keys((secretSync.consent.facts as any).added)).toEqual(['node:secret:api-token:node/worker.cjs:sync']);
+  expect(keys(((await consentOf('demo-market/demo-auto-agent')).consent.facts as any).permissions))
+    .toEqual(['agent:errand', 'agent:background', 'agent:user-action', 'notify']);
+  // Layout check demo: all five high-risk classes at once, with the Host's upper bound of 4 bindings × 16 methods.
+  const vaultConsent = (await consentOf('demo-market/demo-vault-bridge')).consent;
+  const vault = vaultConsent.facts as any;
+  expect(vault.permissions.filter((entry: any) => entry.key.startsWith('node:secret:'))).toHaveLength(4);
+  expect(vault.permissions[1].detail.split('\n')).toHaveLength(16);
+  const vaultSummary = pluginConsentPresentation(vaultConsent, (key: string) => key).highRisk!;
+  expect(vaultSummary.lines).toEqual(['plugins.management.permissions.nodeRuntime', 'plugins.management.permissions.nodeSecretCount',
+    'plugins.management.permissions.nodeResident', 'plugins.management.permissions.agentBackground', 'plugins.management.permissions.agentErrand']);
+  // The same extreme case as an update: only added items, all five classes and 4 × 16 methods.
+  const vaultUpgrade = (await consentOf('demo-market/demo-vault-upgrade', '_root__demo-vault-upgrade')).consent;
+  expect(vaultUpgrade.facts).toMatchObject({ kind: 'update', previousVersion: '1.3.0' });
+  expect(pluginConsentPresentation(vaultUpgrade, (key: string) => key).highRisk!.lines).toEqual(vaultSummary.lines);
+  // Contract V2.4b demo: the update comes from another source than the installed instance; it is confirmed like a
+  // first install with the full permissions, so every high-risk item shows.
+  const moved = (await consentOf('demo-market/demo-moved-source', '_root__demo-moved-source')).consent;
+  expect(moved).toMatchObject({ origin: 'custom-market', originSourceChanged: true, facts: { kind: 'install' } });
+  const movedView = pluginConsentPresentation(moved, (key: string) => key);
+  expect(movedView.originSourceChanged).toBe('plugins.notice.consentSource.originSourceChanged');
+  expect(movedView.highRisk!.lines).toEqual(['plugins.management.permissions.nodeRuntime', 'plugins.management.permissions.agentBackground']);
+  expect(movedView.permissions).toHaveLength(3);
+  // The local-folder switch: no repository is shown, so the sentence does not ask to trust one.
+  const movedFolder = (await consentOf('demo-market/demo-moved-folder', '_root__demo-moved-folder')).consent;
+  expect(movedFolder).toMatchObject({ origin: 'custom-market', originSource: { kind: 'local' }, originSourceChanged: true, facts: { kind: 'install' } });
+  expect(pluginConsentPresentation(movedFolder, (key: string) => key).originSourceChanged).toBe('plugins.notice.consentSource.sourceChangedIsolated');
+  // Compact sheet check (maintainer review 16:48): long repository with a ref, the source-change notice, five high-risk classes.
+  const movedLong = (await consentOf('demo-market/demo-moved-long-repo', '_root__demo-moved-long-repo')).consent;
+  expect(movedLong).toMatchObject({ origin: 'custom-market', originSourceChanged: true, facts: { kind: 'install' },
+    originSource: { kind: 'git', ref: 'release/2026-11' } });
+  const movedLongView = pluginConsentPresentation(movedLong, (key: string) => key);
+  expect(movedLongView.originSourceChanged).toBe('plugins.notice.consentSource.originSourceChanged');
+  expect(movedLongView.highRisk!.lines).toHaveLength(5);
+  const reading = await consentOf('demo-market/demo-reading-list', '_root__demo-reading-list');
+  expect(keys((reading.consent.facts as any).added)).toEqual(['notify']);
+  // Allowing the update commits the new version on the mock computer.
+  await client.answer(weather.operationId, weather.consent.requestId, true);
+  for (let poll = 0; poll < 4; poll++) await client.operation(weather.operationId);
+  expect((await client.operation(weather.operationId)).phase).toBe('succeeded');
+  expect((await client.snapshot('installed')).ghosts.find((ghost) => ghost.instanceKey === '_root__demo-weather-board')?.manifest.version).toBe('1.4.2');
+  expect((await client.detail('demo-market/demo-weather-board')).installState).toBe('installed');
 });

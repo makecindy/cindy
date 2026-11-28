@@ -5,6 +5,7 @@ import {
   Alert,
   BackHandler,
   Image,
+  Keyboard,
   Pressable,
   Platform,
   RefreshControl,
@@ -20,9 +21,12 @@ import {
   useLocalSearchParams,
 } from "expo-router";
 import {
+  pluginVisualDemosEnabled,
   pluginVisualPreview,
   pluginVisualScenario,
 } from "@/debug/pluginVisualFixture";
+import { setPluginMarketVisualScenario } from "@/debug/pluginMarketVisualFixture";
+import { seedPluginChecksForVisualMock } from "@/debug/pluginChecksVisualFixture";
 import type { SearchBarCommands } from "react-native-screens";
 import { goBackGuarded } from "@/utils/backGuard";
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -71,17 +75,28 @@ import {
 import { PluginOriginalSettings } from "./PluginOriginalSettings";
 import { PluginTaskSettings } from "./PluginTaskSettings";
 import { PluginReadmePage } from "./PluginReadmePage";
-import { usePluginManagement } from "./usePluginManagement";
+import { pluginConclusionListed, usePluginCheckConclusions, usePluginManagement, usePluginPendingChecks } from "./usePluginManagement";
 import { PluginManagementMenu } from "./PluginManagementMenu";
 import { PluginManagementConfirmation } from "./PluginManagementConfirmation";
-import { PluginNotice } from "./PluginNotice";
+import { PluginNotice, type PluginNoticeProps } from "./PluginNotice";
 import { createPluginManagementClient } from "./pluginManagementClient";
 import {
   marketItemMatchesPlugin,
   pluginApprovalToken,
+  samePluginMarketSourceIdentity,
 } from "./pluginManagementTypes";
 import { pluginDetailModel } from "./pluginDetailModel";
-import { PluginDirectoryView } from "./PluginDirectoryView";
+import {
+  PluginDirectoryView,
+  type PluginDirectorySegment,
+} from "./PluginDirectoryView";
+import { usePluginMarket } from "./usePluginMarket";
+import { pluginOperationHold, samePluginSlotHolder, usePluginManagementSlot, type PluginSlotHolder, type PluginSlotToken } from "./pluginManagementSlot";
+import { PluginPendingChecksSheet, type PluginOperationLine } from "./PluginPendingChecksSheet";
+import { usePluginPrompt } from "./usePluginPrompt";
+import { PluginMarketSection } from "./PluginMarketSection";
+import { PluginMarketDetailView } from "./PluginMarketDetailView";
+import { FileBrowserSegmentedControl } from "@/session/FileBrowserSegmentedControl";
 import { PluginDetailView } from "./PluginDetailView";
 import { PluginTaskPicker } from "./PluginTaskPicker";
 import { PluginComputerPicker } from "./PluginComputerPicker";
@@ -98,7 +113,11 @@ function PluginDirectory() {
     router = useRouter(),
     focused = useIsFocused();
   const { t, i18n } = useTranslation();
-  const { preview } = useLocalSearchParams<{ preview?: string }>();
+  const { preview, market: marketPreview, checks: checksPreview } = useLocalSearchParams<{
+    preview?: string;
+    market?: string;
+    checks?: string;
+  }>();
   const previewSelection = useRef<string | undefined>(undefined);
   const { invoke, connectionEpoch } = useDeviceLink();
   const { colors } = useTheme(),
@@ -125,6 +144,12 @@ function PluginDirectory() {
   const directoryLoading = Boolean(devices.loading || list.loading);
   const [deviceId, setDeviceId] = useState("");
   const [query, setQuery] = useState("");
+  const [segment, setSegment] = useState<PluginDirectorySegment>("installed");
+  // DEV visual mock only: cindy://plugins?market=<scenario> opens a market demo state.
+  useEffect(() => {
+    if (setPluginMarketVisualScenario(marketPreview, pluginVisualDemosEnabled()))
+      setSegment("market");
+  }, [marketPreview]);
   const [settingsNotice, setSettingsNotice] = useState("");
   const transientScope = useRef("");
   const [selected, setSelected] = useState<{
@@ -145,12 +170,14 @@ function PluginDirectory() {
   const [detailOpen, setDetailOpen] = useState(false);
   const [detail, setDetail] = useState<RemoteResource>();
   const [detailLoading, setDetailLoading] = useState(false);
+  /** Detail reads issued by this page (`showDetail`), counted. */
   const [detailFailed, setDetailFailed] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [readmeOpen, setReadmeOpen] = useState(false);
   const [recent, setRecent] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
-  const enableLock = useRef(false);
+  // The enable / disable write in flight (its token in the page slot): the detail is not read again meanwhile.
+  const toggleToken = useRef<PluginSlotToken | null>(null);
   const [taskPicker, setTaskPicker] = useState(false);
   const [pageTitle, setPageTitle] = useState("");
   const liveSelection = useRef({
@@ -187,20 +214,69 @@ function PluginDirectory() {
         marketItemMatchesPlugin(item, managed),
       )
     : undefined;
+  // This detail's own management operation (shown in its sheet and notices).
   const managementPending =
     !!management.state &&
     (management.state.busy ||
-      ["running", "confirmation", "unknown"].includes(
-        management.state.outcome,
-      ));
-  const managementAvailable =
+      ["running", "confirmation", "unknown"].includes(management.state.outcome));
+  // The management slots, one per computer (pluginManagementSlot.ts; maintainer reviews 15:37, 18:45): the six entries
+  // (market install, update, uninstall, enable switch, page approval, task settings save) take their computer's slot
+  // synchronously when pressed and only the holder's token releases it. Whether an entry may start is decided by
+  // `slot.tryAcquire`; the unavailable buttons below only show `slot.available`. The table of holders, releases and
+  // pending checks is in plugin-mobile-implementation.md.
+  const { slot, holders, holderOn } = usePluginManagementSlot();
+  const holder = holderOn(selected?.row.host.deviceId);
+  // The page's prompts (dispatcher J-2, M-2): the app's themed card on Android, a native sheet on iOS (buttons of their
+  // own height, the text scrolling above them at any size); light and dark follow the app's theme. A short title; the
+  // full explanation, when there is one, as its message.
+  const { confirm: prompt, dialog: promptDialog } = usePluginPrompt();
+  const tell = (title: string, message?: string) => { void prompt({ title: t(title), message: message ? t(message) : undefined, confirmLabel: t("plugins.gotIt") }); };
+  // Who an installed-detail entry holds the slot for (shown after the page is mounted again; see the notice at the top).
+  const slotHolderOf = (row: HostedRemoteCollectionItem, name?: string): PluginSlotHolder => ({
+    name: name ?? resolveRemoteText(row.item.display.title, i18n.language),
+    deviceId: row.host.deviceId, deviceName: row.host.deviceName, instanceKey: row.item.ref.id, rowKey: row.key,
+    ...(row.key === selected?.row.key && managed ? { ghostId: managed.manifest.id } : {}) });
+  // Market browsing and installs live in usePluginMarket; this screen only routes views. An install that ends never
+  // moves this page: its result is listed at the top (see the notice below).
+  const market = usePluginMarket({
+    visible: focused && (segment === "market" || !!query.trim()) && (wide || !selected),
+    focused,
+    targets,
+    isOnline: list.isOnline,
+    installedDeviceId: deviceId,
+    query,
+    // Both platforms (reshoots m1, m2 Android; m2b iOS): the search field lets go of focus as an install starts, so the
+    // closed consent sheet gives it nothing to focus again. The typed search stays; tapping the field focuses it as before.
+    onInstallStart: () => { searchBar.current?.blur(); Keyboard.dismiss(); },
+  });
+  // Shown unavailable while anyone holds this computer's slot, this plugin has a pending check, or this detail's own
+  // operation is still open.
+  const managementLocked = managementPending || (!!selected && !slot.available(slotHolderOf(selected.row, managed?.manifest.name)));
+  const managementReady =
     management.state?.capability === "supported" &&
     !management.state.errorCode &&
     !!management.state.snapshot &&
-    management.state.online &&
-    !managementPending;
+    management.state.online;
+  const managementAvailable = managementReady && !managementLocked;
+  const marketDetail = selected ? null : market.detail;
+  const marketView = {
+    ...market,
+    openDetail: (item: Parameters<typeof market.openDetail>[0]) => {
+      detailGeneration.current += 1;
+      setSelected(undefined);
+      market.openDetail(item);
+    },
+    // Pull-to-refresh and "Retry" on the market alone also look for computers again: after a failed lookup the
+    // market has no target and its own refresh would do nothing. A search shows both lists; the installed
+    // refresh already does the lookup there.
+    refresh: async () => {
+      if (!query.trim()) devices.refresh();
+      await market.refresh();
+    },
+  };
 
-  const searchVisible = Platform.OS === "ios" && (!selected || wide);
+  const searchVisible =
+    Platform.OS === "ios" && ((!selected && !marketDetail) || wide);
   const latestQuery = useRef(query);
   latestQuery.current = query;
   const searchBar = useMemo(() => {
@@ -266,18 +342,19 @@ function PluginDirectory() {
     else if (selected && !wide) {
       detailGeneration.current += 1;
       setSelected(undefined);
-    } else goBackGuarded(router);
-  }, [detailOpen, readmeOpen, settingsOpen, selected, wide, router]);
+    } else if (marketDetail && !wide) market.closeDetail();
+    else goBackGuarded(router);
+  }, [detailOpen, readmeOpen, settingsOpen, selected, wide, router, marketDetail, market.closeDetail]);
   // The introduction belongs to one plugin's detail page.
   useEffect(() => setReadmeOpen(false), [selected?.row.key, detailOpen]);
   useEffect(() => {
-    if (!focused || !selected || wide) return;
+    if (!focused || (!selected && !marketDetail) || wide) return;
     const listener = BackHandler.addEventListener("hardwareBackPress", () => {
       goBack();
       return true;
     });
     return () => listener.remove();
-  }, [focused, selected, wide, goBack]);
+  }, [focused, selected, marketDetail, wide, goBack]);
   const detailGeneration = useRef(0),
     recentTouched = useRef(false);
   const recentOwner = useRef(getMobileAuthOwner()).current;
@@ -355,6 +432,7 @@ function PluginDirectory() {
   const showDetail = async (row: HostedRemoteCollectionItem) => {
     const generation = ++detailGeneration.current,
       owner = getMobileAuthOwner();
+    market.closeDetail();
     setSelected((current) =>
       current?.row.key === row.key ? { ...current, row } : { row },
     );
@@ -423,7 +501,7 @@ function PluginDirectory() {
       selected &&
       detailOpen &&
       selectedOnline &&
-      !enableLock.current &&
+      !toggleToken.current &&
       (returned || reconnected || (!detailLoading && !detail && !detailFailed))
     )
       void showDetail(selected.row);
@@ -462,6 +540,7 @@ function PluginDirectory() {
       return;
     }
     detailGeneration.current += 1;
+    market.closeDetail();
     setDetailOpen(false);
     setSettingsOpen(false);
     setSelected({ row, surface: action.id.slice(5) as PluginPageSurface });
@@ -574,6 +653,117 @@ function PluginDirectory() {
       </Pressable>
     </View>
   );
+  // Unfinished operations (maintainer reviews 17:43, 18:45): every computer's slot holder and every pending check, one
+  // line per operation, in a notice at the top while any is open. "View" opens their list, drawn from what each kept,
+  // never from the directory or the market (PluginPendingChecksSheet).
+  const targetOnline = (id: string) => { const host = targets.find((candidate) => candidate.deviceId === id); return !!host && list.isOnline(host); };
+  const checks = usePluginPendingChecks(targetOnline, focused, targets.map((candidate) => candidate.deviceId));
+  const conclusions = usePluginCheckConclusions();
+  const [checksOpen, setChecksOpen] = useState(false);
+  const operationLines: PluginOperationLine[] = [
+    ...checks.map((check) => ({ key: check.operationId, entry: check.entry, who: check.who, check })),
+    ...holders.filter((token) => !checks.some((check) => samePluginSlotHolder(check.who, token.who)))
+      .map((token) => ({ key: "slot:" + token.id, entry: token.entry, who: token.who })),
+    // A success the person has not been shown yet (maintainer review 03:52): its read of the computer is out or failed,
+    // or it settled. Listed until the person has seen it in the list of checks (and closed that list).
+    ...conclusions.filter((item) => pluginConclusionListed(item) && !checks.some((check) => check.operationId === item.operationId))
+      .map((item) => ({ key: item.operationId, entry: item.entry, who: item.who, concluded: item.readback })),
+  ];
+  // Every line, also the one of the plugin on screen (dispatcher N-2: the page went unavailable with nothing saying why).
+  const noticeLines = operationLines;
+  const lone = noticeLines.length === 1 ? noticeLines[0] : undefined;
+  // What each line is: settled (its result is known and nobody has looked at it yet), waiting (needs checking: a pending
+  // check whose lookups stopped, a success whose read failed), or still under way (also a success being read).
+  const settledLine = (line: PluginOperationLine) => !!line.concluded && line.concluded !== "failed" && line.concluded !== "pending";
+  const waitingLine = (line: PluginOperationLine) => line.concluded === "failed"
+    || (!!line.check && (line.check.waiting || line.check.state.outcome === "unknown"));
+  const loneWaits = !!lone && waitingLine(lone);
+  const loneSettled = !!lone && settledLine(lone);
+  // Several: "aren't finished" only while every one is still under way, "have a result" only when every one has;
+  // any other mix says they need a look.
+  const manyTitle = noticeLines.every(settledLine) ? "plugins.checks.settledMany"
+    : noticeLines.some((line) => settledLine(line) || waitingLine(line)) ? "plugins.checks.attentionMany" : "plugins.checks.many";
+  const holderNoticeProps: PluginNoticeProps | undefined = noticeLines.length ? {
+    testID: "plugins.slotHolder", icon: "info", compact: true,
+    title: !lone ? t(manyTitle, { count: noticeLines.length })
+      : t(loneWaits ? "plugins.checks.waitingOne" : loneSettled ? "plugins.checks.settledOne" : "plugins.slot.holder", { name: lone.who.name, device: lone.who.deviceName }),
+    actions: [{ label: t("plugins.slot.show"), testID: "plugins.slotHolder.show", onPress: () => setChecksOpen(true) }],
+    // Anywhere on it opens the list (dispatcher P-2: at the largest text sizes its button can sit off screen).
+    onPress: () => setChecksOpen(true),
+  } : undefined;
+  // Wide screens (both platforms) and Android: above both panes. A narrow iOS screen: as the first row of the native
+  // list on screen (`pageNotice`), where the navigation bar and the search field never cover it (dispatcher M-1).
+  const noticeInList = Platform.OS === "ios" && !wide;
+  const holderNotice = holderNoticeProps && !noticeInList ? (
+    <View style={[styles.holderNotice, wide && styles.holderNoticeWide]}>
+      <PluginNotice {...holderNoticeProps} />
+    </View>
+  ) : null;
+  const pageNotice = noticeInList ? holderNoticeProps : undefined;
+  const showInstalled = !!query.trim() || segment === "installed";
+  const showMarket = !!query.trim() || segment === "market";
+  const installedDirectory = (
+    <>
+      {androidDirectoryLoading && !items.length ? (
+        <ActivityIndicator color={colors.textSecondary} />
+      ) : null}
+      <View style={styles.inline}>
+        <Text style={[styles.groupLabel, { flex: 1 }]}>
+          {t("plugins.installed")}
+        </Text>
+      </View>
+      <View style={styles.groupCard}>{items.map(renderRow)}</View>
+      {!androidDirectoryLoading && !androidListFailed && !items.length ? (
+        <View style={styles.empty}>
+          <Puzzle size={iconSize.xl} color={colors.textTertiary} />
+          <Text style={styles.preview}>
+            {t(
+              query
+                ? "plugins.noResults"
+                : targets.length
+                  ? "plugins.noPlugins"
+                  : "plugins.noComputer",
+            )}
+          </Text>
+          {!targets.length ? (
+            <Pressable
+              style={styles.button}
+              onPress={() => router.push("/devices/manage")}
+            >
+              <Text style={styles.controlText}>
+                {t("plugins.connectComputer")}
+              </Text>
+            </Pressable>
+          ) : null}
+        </View>
+      ) : null}
+      {androidListFailed ? (
+        <View>
+          <Text style={styles.note}>
+            {t(
+              items.length
+                ? "plugins.listUnavailable"
+                : "plugins.listLoadFailed",
+            )}
+          </Text>
+          {!items.length && !androidDirectoryLoading ? (
+            <Pressable
+              accessibilityRole="button"
+              style={styles.button}
+              onPress={() => {
+                devices.refresh();
+                void list.refresh();
+              }}
+            >
+              <Text style={styles.controlText}>
+                {t("plugins.detail.action.retry")}
+              </Text>
+            </Pressable>
+          ) : null}
+        </View>
+      ) : null}
+    </>
+  );
   const directory =
     Platform.OS === "ios" ? (
       <View style={[styles.directory, wide && styles.sidebar]}>
@@ -593,6 +783,10 @@ function PluginDirectory() {
             void showDetail(row);
           }}
           onConnectComputer={() => router.push("/devices/manage")}
+          segment={segment}
+          onSegmentChange={setSegment}
+          market={marketView}
+          pageNotice={pageNotice}
         />
       </View>
     ) : (
@@ -601,29 +795,41 @@ function PluginDirectory() {
           contentContainerStyle={styles.content}
           keyboardShouldPersistTaps="handled"
           keyboardDismissMode="on-drag"
+          scrollEventThrottle={200}
+          onScroll={({ nativeEvent: n }) => {
+            // Page the market when the end of the list comes into view.
+            if (showMarket && n.layoutMeasurement.height + n.contentOffset.y >= n.contentSize.height - 240)
+              market.loadMore();
+          }}
           refreshControl={
             <RefreshControl
-              refreshing={list.refreshing}
+              refreshing={
+                (showInstalled && list.refreshing) ||
+                (showMarket && market.refreshing)
+              }
               onRefresh={() => {
-                void refreshDirectory();
+                if (showInstalled) void refreshDirectory();
+                if (showMarket) void marketView.refresh();
               }}
               tintColor={colors.textSecondary}
             />
           }
         >
           <View style={styles.controls}>
-            <Pressable
-              accessibilityRole="button"
-              style={styles.device}
-              onPress={selectDevice}
-            >
-              <Monitor size={iconSize.sm} color={colors.textSecondary} />
-              <Text style={styles.controlText}>
-                {targets.find((h) => h.deviceId === deviceId)?.deviceName ??
-                  t("plugins.allComputers")}
-              </Text>
-              <ChevronDown size={iconSize.sm} color={colors.textSecondary} />
-            </Pressable>
+            {showInstalled ? (
+              <Pressable
+                accessibilityRole="button"
+                style={styles.device}
+                onPress={selectDevice}
+              >
+                <Monitor size={iconSize.sm} color={colors.textSecondary} />
+                <Text style={styles.controlText}>
+                  {targets.find((h) => h.deviceId === deviceId)?.deviceName ??
+                    t("plugins.allComputers")}
+                </Text>
+                <ChevronDown size={iconSize.sm} color={colors.textSecondary} />
+              </Pressable>
+            ) : null}
             <View style={styles.search}>
               <Search size={iconSize.md} color={colors.textTertiary} />
               <TextInput
@@ -636,64 +842,27 @@ function PluginDirectory() {
                 clearButtonMode="while-editing"
               />
             </View>
+            {!query.trim() ? (
+              <FileBrowserSegmentedControl
+                accessibilityLabel={t("plugins.market.segmentsLabel")}
+                testID="plugins.segment"
+                value={segment}
+                onChange={(next) =>
+                  setSegment(next === "market" ? "market" : "installed")
+                }
+                options={[
+                  { value: "installed", label: t("plugins.installed") },
+                  { value: "market", label: t("plugins.market.title") },
+                ]}
+              />
+            ) : null}
           </View>
-          {androidDirectoryLoading && !items.length ? (
-            <ActivityIndicator color={colors.textSecondary} />
-          ) : null}
-          <View style={styles.inline}>
-            <Text style={[styles.groupLabel, { flex: 1 }]}>
-              {t("plugins.installed")}
-            </Text>
-          </View>
-          <View style={styles.groupCard}>{items.map(renderRow)}</View>
-          {!androidDirectoryLoading && !androidListFailed && !items.length ? (
-            <View style={styles.empty}>
-              <Puzzle size={iconSize.xl} color={colors.textTertiary} />
-              <Text style={styles.preview}>
-                {t(
-                  query
-                    ? "plugins.noResults"
-                    : targets.length
-                      ? "plugins.noPlugins"
-                      : "plugins.noComputer",
-                )}
-              </Text>
-              {!targets.length ? (
-                <Pressable
-                  style={styles.button}
-                  onPress={() => router.push("/devices/manage")}
-                >
-                  <Text style={styles.controlText}>
-                    {t("plugins.connectComputer")}
-                  </Text>
-                </Pressable>
-              ) : null}
-            </View>
-          ) : null}
-          {androidListFailed ? (
-            <View>
-              <Text style={styles.note}>
-                {t(
-                  items.length
-                    ? "plugins.listUnavailable"
-                    : "plugins.listLoadFailed",
-                )}
-              </Text>
-              {!items.length && !androidDirectoryLoading ? (
-                <Pressable
-                  accessibilityRole="button"
-                  style={styles.button}
-                  onPress={() => {
-                    devices.refresh();
-                    void list.refresh();
-                  }}
-                >
-                  <Text style={styles.controlText}>
-                    {t("plugins.detail.action.retry")}
-                  </Text>
-                </Pressable>
-              ) : null}
-            </View>
+          {showInstalled ? installedDirectory : null}
+          {showMarket ? (
+            <PluginMarketSection
+              market={marketView}
+              onConnectComputer={() => router.push("/devices/manage")}
+            />
           ) : null}
         </ScrollView>
         <PluginComputerPicker
@@ -706,13 +875,7 @@ function PluginDirectory() {
       </View>
     );
   const enable = async (enabled: boolean) => {
-    if (
-      !selected ||
-      !detail ||
-      enableLock.current ||
-      !list.isOnline(selected.row.host)
-    )
-      return;
+    if (!selected || !detail || !list.isOnline(selected.row.host)) return;
     const actionId = enabled ? "enable" : "disable";
     if (
       !selected.row.item.actions?.some(
@@ -726,16 +889,20 @@ function PluginDirectory() {
     const current = () =>
       generation === detailGeneration.current &&
       isMobileAuthOwnerCurrent(owner);
-    enableLock.current = true;
+    // The slot decides: a second tap, or a tap while another entry holds it, does nothing.
+    const token = slot.tryAcquire("enable", slotHolderOf(row));
+    if (!token) return;
+    toggleToken.current = token;
     setBusy(true);
     try {
       await invokePlugin(invoke, row.host.deviceId, row.item.ref.id, actionId);
     } catch {
-      if (current()) Alert.alert(t("plugins.actionFailed"));
+      if (current()) tell("plugins.notice.title.managementFailed", "plugins.actionFailed");
     } finally {
       // A failed reply may follow an applied write; confirm by reading, never replaying it.
       if (current()) await showDetail(row);
-      enableLock.current = false;
+      if (toggleToken.current === token) toggleToken.current = null;
+      slot.release(token);
       if (isMobileAuthOwnerCurrent(owner)) setBusy(false);
       void list.refresh();
     }
@@ -773,6 +940,55 @@ function PluginDirectory() {
     }).catch(() => { /* Existing author page stays usable; an uncertain background read needs no second notice. */ });
   }, [uncertainConfiguration, selected?.row.key, focused, online, detailLoading, detailFailed, connectionEpoch, auth.accountGeneration]);
   const renderedGeneration = detailGeneration.current;
+  // The record's computer is still listed for this account ("Go to Installed" goes to its list only then).
+  const knownTarget = (deviceId: string) => targets.some((candidate) => candidate.deviceId === deviceId);
+  // The page never moves, and prompts nothing, for a result (pre-push review 2026-11-26, four rounds: every way of
+  // opening or announcing a result by itself took the person away from something, and leaving a consent cancels it).
+  // However an operation ended, its result is listed at the top and its record says it in the list of checks. Here only
+  // the installed list is read again, once per operation, so it shows what the result says.
+  const refreshedFor = useRef<Set<string> | undefined>(undefined);
+  refreshedFor.current ??= new Set(conclusions.map((item) => item.operationId));
+  useEffect(() => {
+    for (const conclusion of conclusions) {
+      if (refreshedFor.current!.has(conclusion.operationId)) continue;
+      refreshedFor.current!.add(conclusion.operationId);
+      // The installed detail reads the list again itself for its own operations.
+      if (conclusion.entry === "market-install" || !conclusion.shown) void list.refresh();
+    }
+  }, [conclusions]);
+  // "View and decide" (dispatcher L-2): a consent a lookup found that this phone never showed opens in the same
+  // confirmation sheet, after its operation took its computer's slot; while it is open the check counts as shown.
+  const [deciding, setDeciding] = useState<string | null>(null);
+  const decidingCheck = deciding ? checks.find((check) => check.operationId === deciding) : undefined;
+  useEffect(() => {
+    if (!decidingCheck) { if (deciding) setDeciding(null); return; }
+    return decidingCheck.view();
+  }, [decidingCheck?.operationId]);
+  useEffect(() => {
+    // The sheet goes once the consent is no longer what the computer shows (answered, a final result, or unknown for
+    // now: the computer dropped, the app was in the background). That is not the person leaving a consent: the
+    // controller no longer counts it as shown then, so the same consent found again is read-only in the list
+    // ("View and decide") and nothing cancels it.
+    if (decidingCheck && decidingCheck.state.outcome !== "confirmation" && !decidingCheck.state.busy) setDeciding(null);
+  }, [decidingCheck?.state.outcome, decidingCheck?.state.busy]);
+  // DEV visual mock only: cindy://plugins?checks=<state> opens the list of pending checks in that state.
+  useEffect(() => {
+    if (!checksPreview || !pluginVisualDemosEnabled()) return;
+    let live = true;
+    void seedPluginChecksForVisualMock(checksPreview).then((after) => {
+      if (!live || !after) return;
+      setChecksOpen(true);
+      setTimeout(() => { if (live) after(); }, 400);
+    });
+    return () => { live = false; };
+  }, [checksPreview]);
+  const decide = (operationId: string) => {
+    const check = checks.find((item) => item.operationId === operationId);
+    if (!check || !check.decide()) return false;
+    setChecksOpen(false);
+    setDeciding(operationId);
+    return true;
+  };
   const manageAction = async (action: string) => {
     if (
       !managementAvailable ||
@@ -798,46 +1014,71 @@ function PluginDirectory() {
       liveSelection.current.online;
     const reportPreflightFailure = () => {
       const state = controller.getState();
-      if (current() && state.outcome === "failed" && !state.operationId)
-        Alert.alert(t("plugins.notice.title.managementFailed"));
+      if (!current() || state.outcome !== "failed" || state.operationId) return;
+      // The controller's last detail read before begin: a source not named (refresh or update on the computer) is
+      // told apart from a source that really changed.
+      if (state.errorCode === "PLUGIN_SOURCE_UNVERIFIED") tell("plugins.management.sourceUnverifiedTitle", "plugins.management.sourceUnverified");
+      else if (state.errorCode === "PLUGIN_SOURCE_CHANGED") tell("plugins.management.sourceChangedTitle", "plugins.management.sourceChanged");
+      else if (state.errorCode === "PLUGIN_CONSENT_CHANGED") tell("plugins.notice.title.managementFailed", "plugins.notice.consentSource.consentChanged");
+      else tell("plugins.notice.title.managementFailed");
     };
     if (action === "uninstall" && managed) {
       const plugin = managed;
-      Alert.alert(
-        t("plugins.management.uninstallTitle", { name: plugin.manifest.name }),
-        t("plugins.management.uninstallBody", { device: row.host.deviceName }),
-        [
-          { text: t("plugins.cancel"), style: "cancel" },
-          {
-            text: t("plugins.management.uninstall"),
-            style: "destructive",
-            onPress: async () => {
-              if (!current()) return;
-              await controller.uninstall(plugin);
-              reportPreflightFailure();
-            },
-          },
-        ],
-      );
+      if (!slot.available(slotHolderOf(row, plugin.manifest.name))) return;
+      void prompt({
+        title: t("plugins.management.uninstallTitle", { name: plugin.manifest.name }),
+        message: t("plugins.management.uninstallBody", { device: row.host.deviceName }),
+        cancelLabel: t("plugins.cancel"),
+        confirmLabel: t("plugins.management.uninstall"),
+        destructive: true,
+        cancelable: true,
+        // Taken in the tap that confirms (the prompt itself sends nothing), so no other entry can start in that frame.
+        onConfirm: () => {
+          if (!current()) return;
+          const token = slot.tryAcquire("uninstall", slotHolderOf(row, plugin.manifest.name));
+          if (token) void controller.uninstall(plugin, pluginOperationHold(slot, token)).then(reportPreflightFailure);
+        },
+      });
     } else if (action === "update" && marketItem && managed) {
       const displayed = marketItem;
+      // The slot is taken now, before the preparing read: another entry pressed in the same frame cannot start.
+      const token = slot.tryAcquire("update", slotHolderOf(row, managed.manifest.name));
+      if (!token) return;
+      const hold = pluginOperationHold(slot, token);
+      let handedOver = false;
+      const updateCurrent = () => current() && hold.guard();
       try {
         const client = createPluginManagementClient({
           invoke,
           deviceId: row.host.deviceId,
-          isCurrent: current,
+          isCurrent: updateCurrent,
         });
         const next = await client.detail(displayed.pluginId);
-        if (!current()) return;
+        if (!updateCurrent()) return;
         if (next.releaseId !== displayed.releaseId) {
           await controller.refresh();
-          if (current()) Alert.alert(t("plugins.management.releaseChanged"));
+          if (current()) tell("plugins.management.releaseChangedTitle", "plugins.management.releaseChanged");
           return;
         }
-        await controller.install(next, managed);
+        if (next.sourceType !== "server") {
+          // No source named (older Host, or a Git market not refreshed since the Host was updated): the consent could
+          // not be tied to a source, so the update continues on the computer.
+          if (!next.sourceIdentity) { tell("plugins.management.sourceUnverifiedTitle", "plugins.management.sourceUnverified"); return; }
+          // The plugin's market now points to another source than the one listed here: not the same update.
+          if (displayed.sourceIdentity && !samePluginMarketSourceIdentity(next.sourceIdentity, displayed.sourceIdentity)) {
+            await controller.refresh();
+            if (current()) tell("plugins.management.sourceChangedTitle", "plugins.management.sourceChanged");
+            return;
+          }
+        }
+        // From here the controller holds the slot for this update and releases it when the update is over.
+        handedOver = true;
+        await controller.install(next, managed, hold);
         reportPreflightFailure();
       } catch {
-        if (current()) Alert.alert(t("plugins.management.state.readFailed"));
+        if (current()) tell("plugins.management.state.readFailedTitle", "plugins.management.state.readFailed");
+      } finally {
+        if (!handedOver) hold.onSettled();
       }
     }
   };
@@ -846,7 +1087,8 @@ function PluginDirectory() {
       ? [
           {
             id: "update",
-            title: t("plugins.management.update") + " · " + marketItem.version,
+            // The computer's own label for this action ("Update to v1.4.2").
+            title: t("plugins.management.updateTo", { version: marketItem.version }),
             disabled: !managementAvailable,
           },
         ]
@@ -862,57 +1104,47 @@ function PluginDirectory() {
         ]
       : []),
   ];
-  const completedOperation = useRef<string | undefined>(undefined);
+  const completedOperation = useRef<{ operationId: string; row?: HostedRemoteCollectionItem; generation: number;
+    owner: ReturnType<typeof getMobileAuthOwner>; settled: boolean } | undefined>(undefined);
   useEffect(() => {
-    const state = management.state;
-    if (
-      !state ||
-      state.outcome !== "succeeded" ||
-      !state.operationId ||
-      completedOperation.current === state.operationId
-    )
-      return;
-    completedOperation.current = state.operationId;
-    const row = selected?.row,
-      generation = detailGeneration.current,
-      owner = getMobileAuthOwner();
-    void list.refresh();
-    const controller = management.controller;
-    void controller?.refresh().then(() => {
-      if (
-        !row ||
-        liveManagement.current !== controller ||
-        generation !== detailGeneration.current ||
-        !isMobileAuthOwnerCurrent(owner)
-      )
-        return;
-      const refreshed = controller.getState();
-      if (!refreshed || refreshed.errorCode || !refreshed.online) return;
-      const snapshot = refreshed.snapshot;
-      const plugin = snapshot?.ghosts.find(
-        (item) => item.instanceKey === row.item.ref.id,
-      );
-      if (plugin)
-        void showDetail({
-          ...row,
-          key: JSON.stringify([
-            row.host.deviceId,
-            "plugins",
-            "plugin",
-            plugin.instanceKey,
-          ]),
-          item: {
-            ...row.item,
-            ref: { ...row.item.ref, id: plugin.instanceKey },
-          },
-        });
-      else if (snapshot) {
-        detailGeneration.current += 1;
-        setSelected(undefined);
-        setDetail(undefined);
-      }
-    });
-  }, [management.state?.outcome, management.state?.operationId]);
+    const state = management.state, controller = management.controller;
+    if (!state || state.outcome !== "succeeded" || !state.operationId || !controller) return;
+    if (completedOperation.current?.operationId !== state.operationId) {
+      const row = selected?.row;
+      completedOperation.current = { operationId: state.operationId, row, generation: detailGeneration.current,
+        owner: getMobileAuthOwner(), settled: false };
+      void list.refresh();
+      // The market beside it (wide screen) or on the next visit must not keep that computer's old pages and counts.
+      if (row) market.invalidate(row.host.deviceId);
+    }
+    // The detail on screen is brought up to date once, on the controller's snapshot read after the result (its
+    // `finalReadback`, settled where a snapshot is published): the instance shown is read again, or the detail closes
+    // when it is gone (an uninstall). Only this detail's display: what an update or a page approval concluded (proven
+    // as this operation's, or why not) is the list's one read of the success. While the snapshot read is out nothing
+    // happens; a failed one leaves the detail as it is (as before this operation; the result is listed at the top).
+    const done = completedOperation.current!;
+    if (done.settled || state.finalReadback !== "read") return;
+    done.settled = true;
+    const { row, generation, owner } = done;
+    if (!row || liveManagement.current !== controller || !isMobileAuthOwnerCurrent(owner)) return;
+    // The selection moved on since the result was known: nothing to bring up to date.
+    if (generation !== detailGeneration.current) return;
+    const refreshed = controller.getState();
+    if (!refreshed.online) return;
+    const snapshot = refreshed.snapshot;
+    const viewed = snapshot?.ghosts.find(
+      (item) => item.instanceKey === row.item.ref.id,
+    );
+    // Read again only while this detail is what is shown: from the plugin's own page (the person went back to it
+    // meanwhile) nothing is put over it; its details button reads the detail when it is shown again.
+    if (viewed) {
+      if (!selected?.surface || detailOpen) void showDetail(row);
+    } else if (snapshot) {
+      detailGeneration.current += 1;
+      setSelected(undefined);
+      setDetail(undefined);
+    }
+  }, [management.state?.outcome, management.state?.operationId, management.state?.finalReadback]);
   const failedOperationNotice = useRef<string | undefined>(undefined);
   useEffect(() => {
     const state = management.state;
@@ -920,8 +1152,32 @@ function PluginDirectory() {
     const key = JSON.stringify([selected.row.key, auth.accountGeneration, connectionEpoch, state.operationId]);
     if (failedOperationNotice.current === key) return;
     failedOperationNotice.current = key;
-    Alert.alert(t("plugins.notice.title.managementFailed"));
+    tell("plugins.notice.title.managementFailed");
   }, [management.state?.outcome, management.state?.operationId, selected?.row.key, focused, auth.accountGeneration, connectionEpoch]);
+  /**
+   * "Go to Installed" (a record whose plugin may still be there; maintainer review 16:53): back to the directory the way its
+   * back step goes (the readme, settings, the installed detail and the market detail close; an installed detail's late
+   * reads are fenced), on the record's computer, in the installed segment. Nothing particular opens.
+   */
+  const showInstalledOf = (who: { deviceId: string }) => {
+    // Its computer left this account's list: nothing to go to (the list of checks offers no entry then).
+    if (!knownTarget(who.deviceId)) return;
+    setChecksOpen(false);
+    // A search typed earlier would filter the installed list (the plugin may not match it); the native search field
+    // (iOS) is cleared with it.
+    setQuery("");
+    searchBar.current?.setText("");
+    setReadmeOpen(false);
+    setSettingsOpen(false);
+    if (selected) {
+      detailGeneration.current += 1;
+      setSelected(undefined);
+      setDetail(undefined);
+    }
+    if (market.detail) market.closeDetail();
+    if (targets.some((host) => host.deviceId === who.deviceId)) setDeviceId(who.deviceId);
+    setSegment("installed");
+  };
   const newTask = () => {
     if (!selected || !model || busy || !online || !detail || !enabled) return;
     if (!model.canUseTasks) return;
@@ -954,10 +1210,12 @@ function PluginDirectory() {
       case "enable":
         void enable(true);
         break;
+      // Not reached from the status row today: it offers only "connect" and "retry" (main's existing choice, both
+      // platforms); kept for when a settings action is offered there (dispatcher Q-2, follow-up outside #12684).
       case "reconnect":
       case "settings":
         if (originalSettings) setSettingsOpen(true);
-        else Alert.alert(t("plugins.detail.computerSettings"));
+        else tell("plugins.detail.computerSettingsTitle", "plugins.detail.computerSettings");
         break;
     }
   };
@@ -970,7 +1228,7 @@ function PluginDirectory() {
         instanceId: managed.instanceKey,
         expectedInstalledApproval: pluginApprovalToken(managed),
       }}
-      active={focused && online && detailOpen && !managementPending}
+      active={focused && online && detailOpen && !managementPending && !holder}
       onNotice={(notice) => {
         if (
           renderedGeneration === detailGeneration.current &&
@@ -984,15 +1242,17 @@ function PluginDirectory() {
   ) : undefined;
   const taskSettingsAvailable = model?.taskPreferences && managed?.approval.state === "approved" &&
     managed.enabled && enabled && online && focused && detailOpen && !busy &&
-    managementAvailable && !detailLoading && !detailFailed;
+    managementReady && (!holder || holder.entry === "task-settings") && !detailLoading && !detailFailed;
   const detailView =
     selected && model ? (
       <PluginDetailView
         row={selected.row}
         enabled={enabled}
-        busy={busy || detailLoading || managementPending}
+        busy={busy || detailLoading || !!holder || managementPending}
         statusRecoveryBusy={busy || detailLoading}
-        uiApprovalNotice={pluginUiApprovalNotice(managed, management.state, management.controller, t)}
+        pageNotice={pageNotice}
+        uiApprovalNotice={pluginUiApprovalNotice(managed, management.state, management.controller, t, false,
+          { slot, who: slotHolderOf(selected.row, managed?.manifest.name) })}
         managementNotice={management.state?.outcome === "unknown" ? {
           testID: "plugins.managementUnknown",
           title: t("plugins.notice.title.resultUnknown"),
@@ -1019,6 +1279,7 @@ function PluginDirectory() {
                   key={JSON.stringify(["tasks", selected.row.host.deviceId, managed.instanceKey, pluginApprovalToken(managed), connectionEpoch])}
                   deviceId={selected.row.host.deviceId}
                   pluginId={managed.instanceKey}
+                  holder={slotHolderOf(selected.row, managed.manifest.name)}
                 />
               ) : null}
               {originalSettingsContent}
@@ -1052,7 +1313,9 @@ function PluginDirectory() {
               (settingsOpen && t("plugins.settings")) ||
               (!detailOpen && selected.surface && pageTitle) ||
               text(selected.row.item.display.title)
-            : t("plugins.title")
+            : marketDetail && !wide
+              ? marketDetail.item.name
+              : t("plugins.title")
         }
         onBack={goBack}
         rightToolbar={
@@ -1125,9 +1388,40 @@ function PluginDirectory() {
           active={focused && online && detailOpen}
         />
       ) : null}
+      {market.confirmation ? (
+        <PluginManagementConfirmation
+          key={JSON.stringify([
+            "market",
+            auth.accountGeneration,
+            connectionEpoch,
+          ])}
+          state={market.confirmation.state}
+          controller={market.confirmation.controller}
+          deviceName={market.confirmation.deviceName}
+          active={focused && market.confirmation.state.online}
+        />
+      ) : null}
+      {/* Above both panes (a row on wide screens): one line across, never a column of its own. */}
+      {holderNotice}
+      {promptDialog}
+      {/* Not while the installed detail's own sheet shows the same operation's consent (one sheet for one consent). */}
+      {decidingCheck && !(selected && detailOpen && focused && online && management.controller === decidingCheck.controller) ? (
+        <PluginManagementConfirmation
+          key={JSON.stringify(["check", decidingCheck.operationId, auth.accountGeneration, connectionEpoch])}
+          state={decidingCheck.state}
+          controller={decidingCheck.controller}
+          deviceName={decidingCheck.who.deviceName}
+          active={focused && decidingCheck.state.online}
+        />
+      ) : null}
+      <PluginPendingChecksSheet visible={checksOpen} lines={operationLines} conclusions={conclusions} isOnline={targetOnline}
+        listed={knownTarget} onDecide={decide}
+        onClose={() => setChecksOpen(false)}
+        // The record's computer's installed list: the person manages the plugin from its current instance there.
+        onShowInstalled={showInstalledOf} />
       <View style={styles.layout}>
-        {wide || !selected ? directory : null}
-        {wide || selected ? (
+        {wide || (!selected && !marketDetail) ? directory : null}
+        {wide || selected || marketDetail ? (
           <View style={styles.main}>
             {selected?.surface ? (
               <View style={[styles.main, detailOpen && styles.hidden]}>
@@ -1153,7 +1447,16 @@ function PluginDirectory() {
                       pluginId={selected.row.item.ref.id}
                     />
                   )
-                : detailView
+                : marketDetail
+                  ? (
+                      <PluginMarketDetailView
+                        key={marketDetail.item.pluginId}
+                        detail={marketDetail}
+                        market={marketView}
+                        pageNotice={pageNotice}
+                      />
+                    )
+                  : detailView
               : null}
             {settingsNotice && transientScope.current === noticeScope ? (
               <View pointerEvents="none" style={styles.toast}>
@@ -1171,6 +1474,9 @@ function PluginDirectory() {
 }
 const makeStyles = (c: ThemeColors) =>
   StyleSheet.create({
+    holderNotice: { paddingHorizontal: spacing.lg + spacing.xs, paddingTop: spacing.sm },
+    // Wide screens: as wide as the directory column's content, at the start, so it reads with the list it explains.
+    holderNoticeWide: { maxWidth: 560 },
     toast: {
       position: "absolute",
       top: spacing.md,

@@ -16,7 +16,7 @@ import { projectHistoryView } from '@cindy/maker-shared/message-window';
 import { TASK_TAG_COLORS, type TaskTagRequest, type TaskTagResult } from '@cindy/maker-shared';
 import { BOT_GROUP_CHAT_PRIMITIVE, BOT_GROUP_REMOTE_COLLECTION_ID, BOT_GROUP_REMOTE_RESOURCE_KIND } from '@cindy/maker-shared/botGroupChat';
 import { ApiError, type ApiFetchOptions } from '@/api/client';
-import { DeviceLinkError, REMOTE_RESOURCE_GET_CHANNEL, type DeviceView, type LinkAcceptPayload, type RemoteResource, type RemoteResourceRef } from '@cindy/device-link';
+import { DeviceLinkError, REMOTE_RESOURCE_GET_CHANNEL, REMOTE_RESOURCE_MANIFEST_CHANNEL, type DeviceView, type LinkAcceptPayload, type RemoteResource, type RemoteResourceRef } from '@cindy/device-link';
 import type { MobileUser } from '@/auth/AuthContext';
 import { getMobileAuthOwner, setMobileAuthOwner } from '@/auth/authOwnerGeneration';
 import { refreshRemoteProjectAliases, setRemoteProjectAliasesAccount } from '@/session/remoteProjectAliases';
@@ -37,6 +37,7 @@ import type {
 import { remoteSessionStore } from '@/session/remoteSessionStore';
 import { readRemoteCollectionCache } from '@/device-link/remoteResourceAvailability';
 import { pluginVisualFixture } from '@/debug/pluginVisualFixture';
+import { PLUGIN_MARKET_VISUAL_SECOND_DEVICE_ID, pluginMarketVisualDeviceScenario, withPluginManagementManifest } from '@/debug/pluginMarketVisualFixture';
 import { prCardVisualFixture } from '@/debug/prCardVisualFixture';
 import { mailDraftCardFixture, mailVisualFixture, VISUAL_MAIL_DRAFT_CALL_ID, VISUAL_MAIL_DRAFT_SESSION_ID } from '@/debug/mailVisualFixture';
 import { teammateVisualFixture, teammateVisualReplyAt, VISUAL_TEAMMATE_SESSION_ID, VISUAL_TEAMMATE_THREAD_ROOT_ID, visualTeammateThreads } from '@/debug/teammateVisualFixture';
@@ -107,6 +108,13 @@ const codexFormQuestions = () => [
 const codexQuestionIds = [0, 1].map((i) => JSON.stringify(['request_user_input_async', 'visual-codex', i]));
 let codexQuestionAnswers: Record<string, string> | null = null;
 let codexUrlCompleted = false;
+// Agent-initiated plugin install from a custom market (Host-owned confirmation task card, cindy.plugin.install).
+const pluginInstallCardSession = 'visual-plugin-install-card';
+// The same card from a custom market without a source (older Host, or a Git market not refreshed since the Host was
+// updated): only Reject is offered, with the line that says how to continue on the computer.
+const pluginInstallCardUnverifiedSession = 'visual-plugin-install-card-unverified';
+const pluginInstallCardSessions = [pluginInstallCardSession, pluginInstallCardUnverifiedSession];
+const pluginInstallCardsAnswered = new Set<string>();
 const codexQuestions = () => codexQuestionIds.map((id) => ({ id, question: '验收结果？', options: [{ label: 'A' }, { label: 'B' }] }));
 // Explicit mock task: the old peer accepts an input, but only the second
 // confirmation page contains its saved row. The normal task screen and outbox
@@ -209,9 +217,15 @@ export function visualMockDevices(): DeviceView[] {
       lastSeenAt: ISO_NOW,
       online: false,
       busy: false,
-      remoteControlEnabled: false,
+      // cindy://plugins?market=offline makes this computer selectable so its offline market state shows.
+      remoteControlEnabled: !realData && pluginMarketVisualDeviceScenario() === 'offline',
       isSelf: false,
     },
+    // cindy://plugins?market=twoComputers adds a second online computer for the market's computer picker.
+    ...(!realData && pluginMarketVisualDeviceScenario() === 'twoComputers' ? [{
+      deviceId: PLUGIN_MARKET_VISUAL_SECOND_DEVICE_ID, name: 'CINDY Second Mock Mac', platform: 'darwin',
+      appVersion: '0.0.0-visual-mock', lastSeenAt: ISO_NOW, online: true, busy: false, remoteControlEnabled: true, isSelf: false,
+    }] : []),
   ].filter((device) => !deletedDeviceIds.has(device.deviceId))
     .map((device) => ({ ...device, name: renamedDevices.get(device.deviceId) ?? device.name }));
 }
@@ -326,8 +340,18 @@ async function visualMockInvoke<T = unknown>(
   _deviceId: string,
   channel: string,
   args: unknown[] = [],
-  options?: DeviceLinkInvokeOptions,
+  opts?: DeviceLinkInvokeOptions,
 ): Promise<T> {
+  // The offline mock computer never answers, including in the market's offline scenario: refused before sending, as
+  // DeviceLinkContext.invoke refuses an unavailable computer.
+  if (_deviceId === VISUAL_MOCK_OFFLINE_DEVICE_ID && pluginMarketVisualDeviceScenario() === 'offline') {
+    opts?.onNotSent?.();
+    throw Object.assign(new Error('DEVICE_OFFLINE'), { code: 'DEVICE_OFFLINE' });
+  }
+  // Same order as DeviceLinkContext.invoke: the caller's last check, then the request is written (its write receipt),
+  // then the mock computer answers (dispatcher N-1: without the receipt a lost reply looked like a refused request).
+  try { opts?.preSend?.(); } catch (error) { opts?.onNotSent?.(); throw error; }
+  opts?.onRequestWritten?.();
   if (channel === DEVICE_LINK_USAGE_WIDGET_SNAPSHOT_CHANNEL && _deviceId === VISUAL_MOCK_DEVICE_ID) {
     const now = new Date();
     const readings = [
@@ -444,6 +468,12 @@ async function visualMockInvoke<T = unknown>(
     const fixture = await audioAttachmentFixture(request) ?? attachmentPreviewFixture(request.url ?? "");
     if (fixture) return fixture as T;
   }
+  const answeredCard = pluginInstallCardSessions.find((id) => args[0] === `${id}-request`);
+  if (channel === 'maker:resolve-interaction' && answeredCard) {
+    pluginInstallCardsAnswered.add(answeredCard);
+    remoteSessionStore.setPendingInteractions(answeredCard, []);
+    return { accepted: true } as T;
+  }
   if (channel === 'maker:resolve-interaction' && ['visual-codex-question-request', 'visual-codex-url-request', 'visual-codex-form-request'].includes(String(args[0]))) {
     const decision = args[1] as { kind?: string; answers?: Record<string, string>; behavior?: string; inProgress?: boolean };
     if (decision.inProgress) return { accepted: true } as T;
@@ -465,7 +495,8 @@ async function visualMockInvoke<T = unknown>(
   const prCardResult = realData ? undefined : prCardVisualFixture(channel, args);
   if (prCardResult !== undefined) return prCardResult as T;
   const teammateResult = realData ? undefined : teammateVisualFixture(channel, args);
-  if (teammateResult !== undefined) return teammateResult as T;
+  if (teammateResult !== undefined)
+    return (channel === REMOTE_RESOURCE_MANIFEST_CHANNEL ? withPluginManagementManifest(teammateResult) : teammateResult) as T;
   if (channel === 'local-db:task-tags:execute') {
     const request = args[0] as TaskTagRequest;
     if (request.action !== 'list' && request.action !== 'get') {
@@ -511,7 +542,7 @@ async function visualMockInvoke<T = unknown>(
       throw new Error('Visual fixture: delivery refused before enqueue');
     }
     if (args[0] === outboxRetrySession) {
-      options?.preSend?.();
+      opts?.preSend?.();
       switch (channel) {
         case 'maker:input:enqueue': {
           const input = args[1] as QueuedRemoteMessage;
@@ -536,14 +567,14 @@ async function visualMockInvoke<T = unknown>(
           return found as T;
         }
         case 'local-db:messages:view':
-          if (options?.legacyHistoryConfirmation) outboxRetryHostUpgraded = true;
+          if (opts?.legacyHistoryConfirmation) outboxRetryHostUpgraded = true;
           break;
       }
     }
     if (args[0] === outboxConfirmationSession) {
       switch (channel) {
         case 'maker:input:enqueue': {
-          options?.preSend?.();
+          opts?.preSend?.();
           const input = args[1] as QueuedRemoteMessage;
           const row = message(outboxConfirmationSession, input.clientId, 'user', input.persistedContent,
             Date.now() - NOW, { rowid: outboxConfirmationRows.length + 1 });
@@ -561,8 +592,8 @@ async function visualMockInvoke<T = unknown>(
         case 'local-db:messages:around-client-id':
           throw new DeviceLinkError('CHANNEL_NOT_ALLOWED', 'Visual fixture: old peer');
         case 'local-db:messages:view':
-          if (options?.legacyHistoryConfirmation && unconfirmedVisualRow) {
-            options.preSend?.();
+          if (opts?.legacyHistoryConfirmation && unconfirmedVisualRow) {
+            opts?.preSend?.();
             if (outboxConfirmationReadMissed) {
               outboxConfirmationRows.push(unconfirmedVisualRow);
               unconfirmedVisualRow = undefined;
@@ -933,6 +964,8 @@ function visualMockSession(id: string): RemoteSession {
   if (id === codexQuestionSession || id === codexUrlSession || id === codexFormSession) return { ...visualMockSession('ui-mock-rich-answer'), id,
     title: id === codexFormSession ? 'Codex 表单验收' : id === codexQuestionSession ? 'Codex 提问验收' : 'Codex 链接确认验收', agentKind: 'codex', _count: { messages: 3 } };
   if (id.startsWith('visual-entry-replay-')) return { ...visualMockSession('ui-mock-rich-answer'), id, title: id, _count: { messages: 0 } };
+  if (pluginInstallCardSessions.includes(id)) return { ...visualMockSession('ui-mock-rich-answer'), id,
+    title: id === pluginInstallCardSession ? 'Agent 安装插件确认' : 'Agent 安装插件确认（缺来源）', _count: { messages: 1 } };
   if (id === 'visual-teammate-b2b') return { ...visualMockSession('ui-mock-rich-answer'), id, source: 'bot', title: 'Cindy · 内部通讯',
     companion: { id: 'visual-bot-b2b', role: 'canonical' } };
   if (id === 'visual-teammate-process') return { ...visualMockSession('ui-mock-rich-answer'), id, source: 'bot', title: 'Cindy', companion: { id: 'cindy-default', role: 'canonical' } };
@@ -981,6 +1014,8 @@ function visualMockMessages(sessionId: string): RemoteMessage[] {
   if (sessionId === codexUrlSession) return [message(sessionId, 'codex-url-context', 'assistant',
     codexUrlCompleted ? '链接请求已回传。' : '服务请求你打开链接，完成后再确认。', -1000)];
   if (sessionId.startsWith('visual-entry-replay-')) return entryReplayMessages(sessionId);
+  if (pluginInstallCardSessions.includes(sessionId)) return [message(sessionId, 'plugin-install-card-context', 'assistant',
+    pluginInstallCardsAnswered.has(sessionId) ? '已回传安装决定。' : '需要安装一个插件来继续，请确认。', -1000)];
   if (sessionId === 'visual-teammate-b2b') {
     const trace = (direction: 'received' | 'sent', sequence: number) => ({ botDirectMessage: {
       v: 1, threadId: 'visual-b2b-thread', viewerBotId: 'visual-bot-b2b', peerBotId: 'visual-bot-lizi',
@@ -1150,6 +1185,21 @@ function visualMockPendingInteractions(sessionId: string): PendingInteraction[] 
   if (sessionId === codexQuestionSession) return codexQuestionAnswers === null ? [{ persistId: 'codex-ask', request: {
     kind: 'ask_user_question', requestId: 'visual-codex-question-request', delivery: 'async', questions: codexQuestions(),
   } }] : [];
+  // Same input shape as the Host's buildGhostInstallConsentInteraction (origin and the Host-generated source).
+  if (sessionId === pluginInstallCardUnverifiedSession) return pluginInstallCardsAnswered.has(sessionId) ? [] : [{ request: {
+    kind: 'permission', requestId: `${pluginInstallCardUnverifiedSession}-request`, toolName: 'cindy.plugin.install',
+    metadata: { hostOwnedConfirmation: 'plugin_install' },
+    description: '安装插件 Demo Legacy Tools 1.4.2\n来自自定义市场「Demo Legacy Market」\n这个插件会获得以下权限：\n- 访问 legacy.example.com',
+    input: { ghost_id: 'demo-legacy-tools', version: '1.4.2', operation: 'install', origin: 'custom-market' },
+  } }];
+  if (sessionId === pluginInstallCardSession) return pluginInstallCardsAnswered.has(sessionId) ? [] : [{ request: {
+    kind: 'permission', requestId: 'visual-plugin-install-card-request', toolName: 'cindy.plugin.install',
+    metadata: { hostOwnedConfirmation: 'plugin_install' },
+    description: '安装插件 Demo Long Repository Tools 1.4.2\n来自自定义市场「Demo Long Repository Market」\n这个插件会获得以下权限：\n- 运行随包 Node 程序\n- 本机 Node 程序可获得已保存凭证',
+    input: { ghost_id: 'demo-long-repo-tools', version: '1.4.2', operation: 'install', origin: 'custom-market',
+      source: { kind: 'git', ref: 'release/2026-11', sourceId: 'DemoLongMarketSource01',
+        repository: 'github.com/demo-organization-with-a-long-name/demo-plugin-marketplace-with-a-very-long-repository-name' } },
+  } }];
   if (sessionId === codexUrlSession) return codexUrlCompleted ? [] : [{ request: {
     kind: 'permission', requestId: 'visual-codex-url-request', toolName: 'mcp_url',
     description: '在网页完成操作后返回并确认。', input: { url: 'https://example.com/connect', serverName: 'Example' },

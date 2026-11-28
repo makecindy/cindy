@@ -15,6 +15,7 @@ import {
   Text,
   VStack,
   ZStack,
+  Overlay,
 } from "@expo/ui/swift-ui";
 import {
   accessibilityLabel,
@@ -68,6 +69,9 @@ export function ComposerSheet({
   nativeHeader,
   nativeRoot,
   preventDismiss = false,
+  largeOnly: largeOnlyRequested = false,
+  nativeContentModifiers,
+  nativeContentOverlay,
 }: ComposerSheetProps) {
   const { mode, colors } = useTheme();
   const { t } = useTranslation();
@@ -78,7 +82,7 @@ export function ComposerSheet({
   const landscape = width > height;
   // The hosted RN tree keeps its first detent's layout, so a pinned footer is pushed below a
   // medium sheet or under the home indicator after resizing. Such sheets always open large.
-  const largeOnly = landscape || (!!contentScrolls && !!footer);
+  const largeOnly = landscape || largeOnlyRequested || (!!contentScrolls && !!footer);
   const editModeModifiers = nativeEditMode === undefined
     ? []
     : [environment('editMode', nativeEditMode ? 'active' : 'inactive')];
@@ -198,16 +202,25 @@ export function ComposerSheet({
               ]}>
                 {children}
               </List>
-            ) : nativeContent ? (
-              <Form testID={testID} modifiers={[
-                ...editModeModifiers,
-                containerRelativeFrame({ axes: 'horizontal' }),
-                scrollContentBackground("hidden"),
-                ...(aboveContent ? [padding({ top: -12 })] : []),
-              ]}>
-                {children}
-              </Form>
-            ) : contentScrolls ? (
+            ) : nativeContent ? (() => {
+              const form = (
+                <Form testID={testID} modifiers={[
+                  ...editModeModifiers,
+                  containerRelativeFrame({ axes: 'horizontal' }),
+                  scrollContentBackground("hidden"),
+                  ...(aboveContent ? [padding({ top: -12 })] : []),
+                  ...((nativeContentModifiers ?? []) as never[]),
+                ]}>
+                  {children}
+                </Form>
+              );
+              return nativeContentOverlay ? (
+                <Overlay alignment="bottom">
+                  {form}
+                  <Overlay.Content>{nativeContentOverlay}</Overlay.Content>
+                </Overlay>
+              ) : form;
+            })() : contentScrolls ? (
               <RNHostView>
                 <View style={{ flex: 1 }} testID={testID}>
                   <RNScrollView

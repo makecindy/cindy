@@ -88,6 +88,8 @@ export function showConfirm(input: {
   confirmLabel: string;
   destructive?: boolean;
   cancelable?: boolean;
+  /** Runs in the same tap that confirms, before the promise settles (for work that must start in that frame). */
+  onConfirm?: () => void;
 }): Promise<boolean> {
   return new Promise((resolve) => {
     Alert.alert(input.title, input.message, [
@@ -99,7 +101,7 @@ export function showConfirm(input: {
       {
         style: input.destructive === true ? "destructive" : "default",
         text: input.confirmLabel,
-        onPress: () => resolve(true),
+        onPress: () => { input.onConfirm?.(); resolve(true); },
       },
     ], { cancelable: input.cancelable ?? false, onDismiss: () => resolve(false) });
   });

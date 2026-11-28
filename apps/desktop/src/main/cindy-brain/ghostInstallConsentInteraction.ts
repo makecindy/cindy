@@ -14,8 +14,11 @@ import type { InteractionDecision, InteractionRequest } from '@cindy/maker-core'
 
 import type { GhostPermissionItem } from '../../shared/ghost.js';
 import { permissionItemDetail } from '../../shared/ghostPermissionDetail.js';
+import { isPluginMarketSourceIdentity } from '../../shared/pluginMarket.js';
 import {
   GHOST_INSTALL_CONSENT_TOOL_NAME,
+  ghostInstallConsentOriginSourceText,
+  ghostInstallSourceChangedNoticeKey,
   ghostInstallSourceNoticeKey,
   type GhostInstallConsentRequest,
 } from '../../shared/ghostInstallConsent.js';
@@ -54,9 +57,9 @@ export function ghostInstallTargetText(translate: Translate, target: GhostInstal
 /** 来源说明：包从哪里来，Agent 发起时再标明发起方。桌面确认框与任务卡共用。 */
 export function ghostInstallConsentSourceText(
   translate: Translate,
-  request: Pick<GhostInstallConsentRequest, 'initiator' | 'origin' | 'originLabel'>,
+  request: Pick<GhostInstallConsentRequest, 'initiator' | 'origin' | 'originLabel' | 'originSource'>,
 ): string {
-  const origin =
+  const market =
     request.origin === 'market'
       ? consentText(translate, 'originMarket')
       : request.origin === 'custom-market'
@@ -66,6 +69,9 @@ export function ghostInstallConsentSourceText(
         : request.origin === 'local-file'
           ? consentText(translate, 'originLocalFile')
           : consentText(translate, 'originForge');
+  // 自定义市场再写明包来自哪个仓库（Main 生成的去敏身份），任务卡与 IM 卡共用。
+  const repository = ghostInstallConsentOriginSourceText(request, (key, args) => consentText(translate, key, args));
+  const origin = repository ? `${market} · ${repository}` : market;
   return request.initiator === 'agent'
     ? consentText(translate, 'initiatedByAgent', { origin })
     : origin;
@@ -100,6 +106,9 @@ export function renderGhostInstallConsentText(
   if (facts.kind === 'install') {
     lines.push(consentText(translate, 'installMeta', { version: facts.version, source }));
     lines.push(...targetLines);
+    // 换源确认按首装展示（契约 V2.4b）：完整权限之前先说明来源变了、旧账号与数据隔离。
+    const sourceChangedNotice = ghostInstallSourceChangedNoticeKey(request);
+    if (sourceChangedNotice) lines.push(translate(sourceChangedNotice));
     lines.push(consentText(translate, 'installDescription'));
     const sourceNotice = ghostInstallSourceNoticeKey(request.origin, request.communityMarket);
     if (sourceNotice) lines.push(translate(sourceNotice));
@@ -118,6 +127,8 @@ export function renderGhostInstallConsentText(
     consentText(translate, 'updateMeta', { from: facts.previousVersion, to: facts.version, source }),
   );
   lines.push(...targetLines);
+  const sourceChangedNotice = ghostInstallSourceChangedNoticeKey(request);
+  if (sourceChangedNotice) lines.push(translate(sourceChangedNotice));
   lines.push(consentText(translate, 'updateDescription'));
   if (facts.builtinOauthClientChanged) lines.push(consentText(translate, 'oauthClientChanged'));
   if (facts.added.length > 0) {
@@ -149,7 +160,24 @@ export function buildGhostInstallConsentInteraction(
     kind: 'permission',
     requestId,
     toolName: GHOST_INSTALL_CONSENT_TOOL_NAME,
-    input: { ghost_id: request.facts.ghostId, version: request.facts.version, operation: request.facts.kind },
+    // 结构化来源（契约第 2 版 V2.4 第 3 处）：控制端据此显示仓库，缺身份的自定义市场卡不在控制端批准；
+    // originSourceChanged 见契约 V2.4b。
+    // 卡输入不进模型上下文（宿主交互不是 Agent 的工具调用）；IM 卡把它当参数显示，其中 sourceId 是
+    // 本机密钥生成的不透明标识，仓库名本来就在说明文字里。
+    input: {
+      ghost_id: request.facts.ghostId,
+      version: request.facts.version,
+      operation: request.facts.kind,
+      origin: request.origin,
+      ...(request.origin === 'custom-market' && isPluginMarketSourceIdentity(request.originSource)
+        ? { source: request.originSource }
+        : {}),
+      // 自定义市场的实际来源与已装的不同（确认后旧账号与数据隔离保存）：控制端据此在卡片收起时也能提示。换源确认按
+      // 首装展示完整权限，所以这里的 operation 是 'install'（契约 V2.4b）。
+      ...(ghostInstallSourceChangedNoticeKey(request)
+        ? { originSourceChanged: true }
+        : {}),
+    },
     title: text.title,
     description: [deviceName(), publisher?.replace(/[\r\n]+/g, ' '), text.description].filter(Boolean).join(' · '),
     metadata: { hostOwnedConfirmation: GHOST_INSTALL_CONSENT_HOST_CONFIRMATION },

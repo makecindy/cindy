@@ -1,6 +1,7 @@
 {
   "permission": {
     "install": "Instalar",
+    "installSourceUnverified": "Este computador não indicou o repositório deste mercado personalizado, por isso não é possível instalar a partir do telemóvel. Pode atualizar a Cindy nesse computador, atualizar este mercado e pedir ao Agent para tentar novamente; aqui só pode recusar. Para instalar, confirme no computador.",
     "mcpComplete": "Concluído",
     "mcpCancel": "Cancelar",
     "mode": {

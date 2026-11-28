@@ -127,9 +127,91 @@ pnpm mobile:sim:whoami -- --mock --json
 - 复古皮肤：`cindy://retro-skin-preview`，可加 `?skin=thinkpad` 等已有外观标识以直接比较各款键盘；在折叠屏竖向半折叠姿态下，使用正式的外壳、键盘及窗口几何显示原生预览；按键事件仅显示在屏幕内，不连接远程电脑。用于检查屏幕边界、素材拼接及真实触摸反馈，不代表远程连接已验证。
 - 设备画面连接页：`cindy://devices/desktop/cindy-visual-mock-mac?liveScreen=cindy-simulator%7Cpreview`。
   mock provider 保持远程桌面请求等待，真实页面展示连接中、等待较久及原有超时状态，供返回按钮与明暗主题截图；不连接真实电脑。
+- 插件市场：插件页切到「插件市场」即读模拟电脑上的虚构 Demo 市场（`apps/mobile/src/debug/pluginMarketVisualFixture.ts`），
+  走真实的分页、详情、确认面板与安装回执；Demo Glossary Translate 演示下载失败，Demo Uncertain Sync 演示结果待确认（安装后
+  离开插件页再回来，或在「安装到」切到另一台电脑，顶部一直有待核实提示，「查看」打开记录面板：核实结果、不再跟踪；
+  配合 `market=lateConsent` 它在 begin 回包丢失、第一次查询协议错误后交给记录，核实时出现「电脑正在等你确认 · 查看并决定」；
+  `market=lateResult` 核实出成功（「已完成」＋「去已安装」）；`market=unreadResult` 核实出成功但第一次已装读取失败，出现「重新读取」），
+  Demo Notes 是同标识冲突。确认面板的对照：Demo Device Simulator（官方，有高风险 `node:execute`）、Demo Agenda
+  （官方，无高风险）、Demo Shift Calendar（社区，回执带 `communityMarket`）、Demo Repo Tools（Demo Git Market 自定义市场，
+  可正常安装，有高风险，确认面板显示仓库 github.com/demo-org/demo-git-market）、Demo Auto Agent（官方，没有 Node，但有后台 Agent 与派活取件两项高风险）、
+  Demo Vault Bridge（官方，五类高风险同时出现：Node 常驻、4 个凭证绑定（每个 16 个方法，摘要合成一行）、运行 Node 程序、后台 Agent、派活取件，用来看高风险摘要的高度上限和滚动区里的完整方法列表）、
+  Demo Legacy Tools（Demo Legacy Market，模拟不提供仓库身份的旧 Host：行内与详情的「安装」不可点并说明原因）、
+  Demo Long Repository Tools（长仓库名带 ref 的自定义市场，五类高风险同时出现，看仓库一行与固定摘要的换行）、
+  Demo Folder Tools（本地文件夹市场，确认面板显示「本地文件夹」）。已安装列表里预置
+  Demo Weather Board、Demo Secret Sync、Demo Vault Upgrade、Demo Moved Source、Demo Moved Folder、Demo Moved Long Repository、Demo Reading List 与 Demo Legacy Sync 的 1.3.0，详情里「管理插件 → 更新到 v版本」会出现更新确认：
+  Weather Board 新增运行 Node 程序、Secret Sync 已有 Node 只新增凭证绑定（两者都显示高风险固定段）、Vault Upgrade 是升级版的极端情况（新增五类高风险、
+  4 个凭证绑定 × 16 个方法）、Moved Source 的升级来源与已装实例不同（回执带 `originSourceChanged`，按首装给出完整权限，含两类高风险；Git 来源，提示句请用户核对上面显示的仓库）、
+  Moved Folder 是本地文件夹市场的同类换源（不显示仓库，提示句不提仓库）、Moved Long Repository 用来稳定触发确认面板紧凑档（长仓库名带 ref、换来源提示、五类高风险；
+  在最矮屏加最大辅助字号下更新它，应为一个滚动区加固定按钮，打开时第一屏是身份块开头）、Reading List 只新增通知
+  （没有固定段）、Legacy Sync 来自旧 Host 的自定义市场（没有来源，手机上不能更新：已装详情点「更新到 v版本」后提示先在电脑上更新 Cindy 并刷新市场、仍不行就在电脑上更新这个插件）。
+  市场详情与电脑一致：Demo Shift Calendar（公开的社区作者插件）显示社区声明、不显示作者；官方插件的「来源」为「公开市场」，团队共享插件为「组织」，
+  版本带 v。
+  整页状态用 `cindy://plugins?market=<场景>`：`outdated`（电脑版本太旧）、`unavailable`、
+  `organization`、`customPartial`、`empty`、`readFailed`（首次读取失败，重试恢复；同一深链重发不重新造失败。要看列表的「重试」按钮，重载 App 后直接进这个场景；先 `normal` 再 `readFailed` 时列表已经读到，只有下拉刷新才失败，表现是保留列表并加一行「未能读取插件市场」、没有按钮，再下拉一次提示消失）、`twoComputers`（多一台在线的
+  CINDY Second Mock Mac，可在「安装到」里切换）、`offline`（离线模拟电脑变成可选且不应答，选中后显示离线状态）、
+  `hold`（确认后的安装、更新一直停在「进行中」，不自动完成：用于截「进行中时其它入口不可用、顶部提示可见」，例如 iPad 宽屏
+  打开 Demo Weather Board 详情点「更新到 v版本」并允许，再在旁边切到市场；换回 `normal` 后下一次查询即完成），
+  `normal` 回到默认。插件页已打开时再发带不同 `market` 参数的深链，场景已经切换，但要在插件页下拉刷新一次
+  才会重新读取（twoComputers / offline 改的是电脑列表，同样下拉刷新）。
+  装好或升级后的 Demo 插件只在本次进程内保留，可在详情里卸载；不连接真实电脑或市场。
+- 插件页待核实记录与管理提示，状态 → 入口（开发构建，打开即处于该态，不依赖时序或手速）：
+
+  | 状态 | 入口 |
+  | --- | --- |
+  | 进行中（顶部「…操作还没结束」） | `cindy://plugins?checks=running` |
+  | 结果待核实（「核实结果」可点） | `cindy://plugins?checks=waiting` |
+  | 待核实 + 电脑离线（「核实结果」不可点并写原因） | `cindy://plugins?checks=offline`（记录在不在账号列表里的 CINDY Away Mock Mac 上） |
+  | 电脑正在等你确认（「查看并决定」） | `cindy://plugins?checks=awaitingYou` |
+  | 成功（「已完成」＋「去已安装」） | `cindy://plugins?checks=succeeded` |
+  | 市场安装成功后的常规路径（市场留在原处，顶部提示「…的操作有结果了」→「查看」→「去已安装」；从市场详情安装时详情改显示「已安装」） | `cindy://plugins?market=normal`，在市场里（列表行或市场详情）安装任一未装插件并允许 |
+  | 成功但实例未核实（「重新读取」） | `cindy://plugins?checks=unread` |
+  | 失败 | `cindy://plugins?checks=failed` |
+  | 已不再跟踪 | `cindy://plugins?checks=untracked` |
+  | 多条记录，一条待核实、一条进行中（顶部提示写「2 项插件操作待查看」） | `cindy://plugins?checks=many` |
+  | 多条都还在进行（「N 项插件操作还没结束」） | 没有入口：要两台电脑上各有一项进行中，模拟环境只有一台在线电脑；这句的出现条件由 `pluginsScreenMarketFences.test.tsx` 的两台电脑用例断言 |
+  | 回执过期，电脑上有这个插件但那份回答里没有它的安装记录（待核实的一行写「电脑上有这个插件，但读不到它的安装记录，还不能确认结果」，「核实结果」可点） | `cindy://plugins?checks=recordMissing`（模拟电脑的已装快照只剩自定义市场条目并报市场不可用；之后发任一 `market=` 场景，模拟电脑恢复为读得到市场；`checks=legacyHost` 留下的「按旧电脑回答」同样在发 `market=` 场景时恢复） |
+  | 两条都已读出结果（关上面板前，面板后面的顶部提示写「2 项插件操作有结果了」；两行都是「已完成」与「去已安装」） | `cindy://plugins?checks=results` |
+  | 一条有结果、一条待核实（顶部提示写「2 项插件操作待查看」） | `cindy://plugins?checks=attention` |
+  | 单条有结果的顶部提示（「…的操作有结果了」，不带面板） | 没有单独入口：`cindy://plugins?market=readbackFailed` 安装一个插件后退出并重新打开插件页（重开时自动重读，读出后只列在顶部、页面不跳转） |
+  | 成功，正在确认电脑上的插件（「已完成，正在确认电脑上的插件…」） | `cindy://plugins?checks=readingBack`（之后的已装读取一直不回） |
+  | 成功，但插件之后又有变化（未能证实，「已变更，或无法核实是这次安装的」＋「去已安装」） | `cindy://plugins?checks=changed`（提交后模拟电脑换成同一插件的旧版本，记录 `unattributed`；形状不完全贴合真实 Host：真实电脑上从本地文件装旧版本可能落到 `conflict`，结论同样是未能证实） |
+  | 已卸载 | `cindy://plugins?checks=uninstalled`（Demo Weather Board 的卸载） |
+  | 「查看并决定」被占用挡住（说明要等另一项结束） | `cindy://plugins?checks=decideBlocked`，列表里两条：点 Demo Agenda 的「查看并决定」（Demo Device Simulator 正在同一台电脑上安装；电脑在 Simulator 拿到位置之后才回答 Agenda 的确认，页面中途的查询不会让 Agenda 先拿回位置） |
+  | 卸载回执过期，无法确认（显示还装着、只有「不再跟踪」） | `cindy://plugins?checks=unprovableUninstall`（面板打开后自动核实一次即出现） |
+  | 更新完成且回执过期后核实（「已安装」+「去已安装」） | `cindy://plugins?checks=updateGone`（Demo Reading List 的更新） |
+  | 回执过期后未能确认（电脑上的安装记录不是这台手机的这次操作，② 那句＋「去已安装」） | `cindy://plugins?checks=updateGoneUnattributed`（Demo Reading List 的更新，模拟电脑记 `unattributed`） |
+  | 成功，但未能证实（本机换装同版本，`unattributed`，「去已安装」） | `cindy://plugins?checks=reinstalled` |
+  | 成功，但电脑端版本较旧（两个归属字段都没有，有「去已安装」） | `cindy://plugins?checks=legacyHost` |
+  | 成功，但电脑上现在没有这个插件（之后被卸载） | `cindy://plugins?checks=goneSince` |
+  | 成功，只推进了目录版本（条目「可更新」，`self` ＋ 原号，仍是「已完成」） | `cindy://plugins?checks=catalogAhead` |
+  | 确认与选择不一致（只能拒绝） | 没有模拟入口：模拟电脑的确认都与所选一致（`pluginMarketVisualFixture.test.ts` 逐场景核对）；组件测试覆盖 |
+  | 来源变化（更新预检） | `cindy://plugins?market=updateSourceChanged`，已安装里 Demo Moved Source 详情「管理插件 → 更新到 v版本」 |
+  | 版本变化（更新预检） | `cindy://plugins?market=updateReleaseChanged`，已安装里 Demo Weather Board 详情「更新到 v版本」 |
+  | 读取失败（更新预检） | `cindy://plugins?market=updateReadFailed`，同上 |
+  | 市场安装成功但没能读取（「已完成，但没能读取」，留在顶部提示与记录列表） | `cindy://plugins?market=readbackFailed`，在市场里安装任一未装插件并允许：装好后紧接着的两次已装读取失败（这笔成功自己的那次和页面的刷新），市场行直接结束、不弹提示，市场留在原处，顶部提示写「…的结果待核实」，记录面板列出这条「已完成，但没能读取电脑上的插件」（「重新读取」「不再跟踪」）；点「重新读取」后读到，面板里显示「已完成」与「去已安装」（要再截先发 `market=normal` 再发这个） |
+  | 市场详情读取失败（「重试」） | `cindy://plugins?market=detailReadFailed`，打开任一未装插件的市场详情（每个插件第一次读取失败，「重试」后正常；同一深链再发一次不重新造失败，要再截失败先发 `market=normal` 再发这个） |
+  | 在电脑上完成配置 | 没有界面入口：已装详情的状态行只提供「连接电脑」「重试」（主干现状），`settings` 分支的这句提示点不到；`preview=1`（Missing API key）只显示状态 |
+  | 进行中停住（其它入口不可用） | `cindy://plugins?market=hold`，安装或更新并允许后停在「进行中」 |
+  | 同一操作连续两个确认（换确认时主列表与固定摘要回到顶部、「允许」重新等这一张的尺寸） | `cindy://plugins?market=secondConsent`，安装或更新并允许后，模拟电脑再给同一操作的第二个确认（另一个 requestId，标为由 Agent 发起，来源行更长，身份块比第一张高）；矮屏下先滚动第一张的主列表与固定摘要再允许。发 `market=normal` 退出 |
+  | 资料值折两行 | 市场里 Demo Long Repository Tools 详情的「作者」 |
+
+  `checks=` 用真实 controller 在模拟电脑上发起操作（按操作号预设回答），交给待核实记录后打开记录面板；每次都从模拟电脑的初始
+  状态开始（已装插件复原、没有操作，之前发过的 `market=` 场景也一并退出）。复位的只是模拟电脑：手机上一条 `checks=` 留下的
+  未结束记录还在（`running`、`awaitingYou`、`many`、`decideBlocked` 占着那台电脑的位置；`waiting`、`recordMissing`、
+  `unprovableUninstall`、`attention` 的记录挡住同一个插件）。紧接着再发的 `checks=` 若用到被占的电脑或同一个插件就
+  不会播种（或只播一半），要连着截图时先在面板里把上一条「不再跟踪」，或重载 App。成功、读取失败、失败、不再跟踪、已卸载、无法确认、更新回执过期这几态在面板打开后才发生，面板里看得到
+  结束的那一条。模拟电脑的市场记录按契约 V2.10 给归属：这台手机远程装的是 `self` 加操作号，其余已装的是 `unattributed`，`checks=legacyHost`
+  之后按旧 Host 两个字段都不给（直到下一次 `checks=` 播种，或发任一 `market=` 场景）。任务设置保存、页面批准两个入口的模拟数据
+  还没有（只有组件测试）。
 - 邮件阅读页：`cindy://mail-preview?deviceId=cindy-visual-mock-mac&sessionId=visual-running&url=<编码后的地址>`，
   地址取 `apps/mobile/src/debug/mailVisualFixture.ts` 的 `VISUAL_MAIL_URLS`（宽版营销邮件、三封往来邮件），均为合成数据。
 - 写邮件卡片：`cindy://sessions/visual-mail-draft?deviceId=cindy-visual-mock-mac`（仅手机端的模拟任务，含一张回复草稿卡）。
+- Agent 安装插件确认卡：`cindy://sessions/visual-plugin-install-card?deviceId=cindy-visual-mock-mac`，与 Host
+  `buildGhostInstallConsentInteraction` 同形的 `cindy.plugin.install` 卡（自定义市场首装、长仓库名带 ref），看仓库一行、
+  展开详情不显示原始来源字段；允许或拒绝后卡片消失，不连接真实电脑。缺来源的同类卡：
+  `cindy://sessions/visual-plugin-install-card-unverified?deviceId=cindy-visual-mock-mac`（自定义市场、卡上没有 `source`，
+  只能拒绝，并说明在电脑上处理）。
 - 手机续发确认：`cindy://sessions/visual-outbox-confirmation?deviceId=cindy-visual-mock-mac`。发两条
   合成消息，首条历史查询先不命中，第二条留在待发。点「重新确认」后首条回到历史，第二条接着发出。
   用 `cindy://sessions/visual-outbox-failure?deviceId=cindy-visual-mock-mac` 对照普通发送失败。
