@@ -1026,6 +1026,12 @@ export async function performSessionAgentSwitch(
     preserveModelGroupBinding?: boolean;
     /** 仅限 main 内部：记录此次路由切换的发起方与原因码。 */
     routeChangeAttribution?: SessionRuntimeRouteChangeAttribution;
+    /**
+     * 仅限 main 内部：智能路由选中的本机账号槽位(model-groups.md §3.5)。`changes` 为真表示任务换到同一供应商的另一个账号：
+     * 引擎、模型、位置都没变也按换连接处理——关闭旧原生会话、全量交接、不续接停泊会话(原生历史属于原账号)。
+     * `commit` 在切换提交后、新原生会话启动前把任务改绑到这个账号。只在 applyNow 时生效。
+     */
+    localSubscriptionAccount?: { changes: boolean; commit(): Promise<void> };
   },
 ): Promise<SessionAgentSwitchResult> {
   const ownerGeneration = deps.readOwnerGeneration?.();
@@ -1211,7 +1217,8 @@ export async function performSessionAgentSwitch(
   const forcedRelocation =
     !agentDeviceChanges && params.forceRelocation === true && params.applyNow === true && targetAgentDeviceId !== null;
   const relocating = agentDeviceChanges || forcedRelocation;
-  const rebuildingRoute = relocating || providerConnectionChanges;
+  const subscriptionAccountChanges = params.applyNow === true && params.localSubscriptionAccount?.changes === true;
+  const rebuildingRoute = relocating || providerConnectionChanges || subscriptionAccountChanges;
   // 协同任务点了别处的供应商组、组又选回当前位置：同引擎原地换模型在发送时要用点选时核对过的窗口，
   // 而这次点选按换电脑登记、没有窗口确认，换到更小窗口的模型时会一直卡在发送前。用户已确认过按交接
   // 重新开始，这里照此全量交接重建，不走原地换模型。
@@ -1657,6 +1664,16 @@ export async function performSessionAgentSwitch(
       await commitBindingAfterSwitch();
     } else if (toDbKind === 'acp') {
       await clearBindingAfterSwitch();
+    }
+    if (params.applyNow === true && params.localSubscriptionAccount) {
+      try {
+        await params.localSubscriptionAccount.commit();
+      } catch (error) {
+        deps.log.warn('agent-switch: subscription account binding failed after switch committed', {
+          sessionId,
+          err: error instanceof Error ? error.message : String(error),
+        });
+      }
     }
     if (!params.configStaged && !params.providerGroupRelocation && !params.scheduledModelSwitch && !params.preserveModelGroupBinding) {
       unbindModelGroupSession(sessionId);
