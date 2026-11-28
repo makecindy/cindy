@@ -248,6 +248,16 @@ export function hasAnyAutoConnectHost(): boolean {
   return false;
 }
 
+/** A host moved to a new alias (a device host following its device's name): its prefs move with it in one write. */
+export function moveSshHostPref(fromHostId: string, toHostId: string): void {
+  const current = readSshHostPrefs();
+  if (!(fromHostId in current) || fromHostId === toHostId) return;
+  const next = { ...current, [toHostId]: current[fromHostId]! };
+  delete next[fromHostId];
+  writePrefs(next);
+  log.info('ssh host pref moved', { fromHostId, toHostId });
+}
+
 /** host 被删时清理 prefs (避免长尾僵尸 key). */
 export function removeSshHostPref(hostId: string): void {
   const current = readSshHostPrefs();

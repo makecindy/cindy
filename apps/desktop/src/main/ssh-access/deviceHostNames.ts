@@ -4,7 +4,8 @@
  *
  * - Terminal alias and SSH host id: `cindy-<ascii slug of the device name>`. When the slug is empty (a name with no
  *   ASCII letters or digits) or already taken by another host, `cindy-<device id prefix>` (longer prefixes, then a
- *   number, while still taken). Assigned once per device and kept: a rename never moves the alias people type.
+ *   number, while still taken). Follows the device's name (decision 2026-11-28): after a rename the controller moves
+ *   the host to the alias these rules give the new name, and the old alias stops working.
  * - HostKeyAlias: `cindy-device-<device id>` (a hash of it when the id has other characters). The device's host keys
  *   are pinned under this name in ~/.ssh/cindy_known_hosts and in Cindy's host-key store, so an address change
  *   keeps the pin and no other host's address-based entry is ever touched.

@@ -31,6 +31,7 @@ import {
   defaultSshConfigPath,
   readSshConfigDetailed,
   removeManagedHost,
+  renameManagedHost,
   updateManagedHostFields,
   installRemoteAgent as installRemoteAgentPackage,
   PINNED_PI_VERSION,
@@ -101,6 +102,7 @@ import {
   readSshHostPrefs,
   patchSshHostPref,
   removeSshHostPref,
+  moveSshHostPref,
   setSshHostAutoConnect,
   type SshHostAgentProxyPref,
 } from './ssh-host-prefs-store.js';
@@ -1637,6 +1639,76 @@ export async function upsertPinnedDeviceHost(
     const host = getPool().get(cfg.id);
     if (host) broadcastStatus(host.snapshot());
     return outcome;
+  });
+}
+
+/** `in-use`: remote sessions still name the old alias, so it stays until they are gone (the next sync tries again). */
+export type PinnedDeviceHostRenameOutcome = 'renamed' | 'missing' | 'alias-taken' | 'in-use';
+
+/**
+ * Moves the host of one of the person's own devices to a new alias (the device was renamed in the device list).
+ * One atomic rewrite of its block in ~/.ssh/cindy.conf; the HostKeyAlias and its pin do not change, so the host key
+ * is never checked again. The host's prefs move with it and the old alias's runtime state is dropped. A host that is
+ * gone or no longer this device's is `missing`; an alias any other host uses is `alias-taken`; neither is written.
+ * Never reported to the removal listeners: a rename is not the person deleting the host.
+ */
+export async function renamePinnedDeviceHost(
+  fromAlias: string,
+  spec: PinnedDeviceHostSpec,
+): Promise<PinnedDeviceHostRenameOutcome> {
+  await ensureHydrated();
+  return remoteHostHydrationQueue.run(async () => {
+    const latest = await readLatestSshConfigOrThrow();
+    const existing = latest.hosts.find((host) => host.id === fromAlias);
+    if (!existing?.managedByCindy || existing.hostKeyAlias !== spec.hostKeyAlias) return 'missing';
+    if (latest.hosts.some((host) => host.id === spec.alias)) return 'alias-taken';
+    try {
+      await assertHostHasNoSessionReferences(fromAlias, '修改');
+    } catch (error) {
+      if ((error as { code?: string }).code === 'PRECONDITION_FAILED') return 'in-use';
+      throw error;
+    }
+    const cfg: HostConfig = {
+      id: spec.alias,
+      hostname: spec.hostname,
+      port: spec.port,
+      user: spec.user,
+      authMethod: 'key',
+      identityFile: spec.identityFile,
+      hostKeyAlias: spec.hostKeyAlias,
+      userKnownHostsFile: spec.userKnownHostsFile,
+      strictHostKeyChecking: true,
+      source: 'ssh-config',
+      managedByCindy: true,
+    };
+    await getSharedHostKeyStore().pin(spec.hostKeyAlias, spec.hostKeyFingerprint);
+    pinnedDeviceHostKeys.set(spec.hostKeyAlias, true);
+    await renameManagedHost(fromAlias, cfg, managedSshConfigPath, managedWriteTokenOrThrow(latest));
+    try {
+      moveSshHostPref(fromAlias, spec.alias);
+    } catch (error) {
+      log.warn('device SSH host prefs did not move with the alias', { error: String(error) });
+    }
+    try {
+      await invalidateHostRuntimeState(fromAlias);
+      await hydrateRemoteHostsUnqueued(new Set([fromAlias]));
+    } catch (error) {
+      log.warn('device SSH host renamed but the list refresh failed', { error: String(error) });
+    }
+    for (const cleanup of [() => clearAgentProxyTunnelState(fromAlias), () => removeRemoteMcpForwardPref(fromAlias)]) {
+      try {
+        await cleanup();
+      } catch (error) {
+        log.warn('failed to clean renamed SSH host local state', { hostId: fromAlias, error: String(error) });
+      }
+    }
+    log.info('audit: device ssh host renamed', {
+      operation: 'remote_ssh_device_host_rename', fromHostId: fromAlias, hostId: cfg.id,
+    });
+    for (const win of BrowserWindow.getAllWindows()) {
+      if (!win.isDestroyed()) win.webContents.send(REMOTE_SSH_PUSH.HOSTS_CHANGED, currentRemoteSshListResult());
+    }
+    return 'renamed';
   });
 }
 

@@ -352,7 +352,7 @@ export function applyControllerDisplayNameListSnapshot(
     freshness: controllerDisplayNameFreshness,
     requestEpoch,
     normalizeName: normalizeCachedDeviceName,
-    setDisplayName: setControllerDisplayName,
+    setDisplayName: setControllerDisplayNameAndFollow,
     rememberName: () => {},
     forgetName: () => {},
   });
@@ -422,7 +422,7 @@ function seedControllerDisplayNamesFromLastKnown(): void {
   seedControllerDisplayNamesFromCache(
     readLastKnownDeviceNames(),
     controllerDisplayNameFreshness,
-    setControllerDisplayName,
+    setControllerDisplayNameAndFollow,
   );
 }
 
@@ -467,7 +467,7 @@ async function runControllerDisplayNamesFromDirectory(
       freshness: controllerDisplayNameFreshness,
       requestEpoch: displayNameRequestEpoch,
       normalizeName: normalizeCachedDeviceName,
-      setDisplayName: setControllerDisplayName,
+      setDisplayName: setControllerDisplayNameAndFollow,
       rememberName: (deviceId, name) => {
         void rememberLastKnownDeviceName(deviceId, name);
       },
@@ -841,6 +841,15 @@ let sshAccessTarget: SshAccessTarget | null = null;
  * 在「SSH 远程主机」和终端别名里维护那台设备。只在持有连接的实例上运行，换账号时丢弃在途工作。
  */
 let sshAccessController: SshAccessController | null = null;
+
+/**
+ * A device's name changed (directory, presence, the cached names at start): the remote-control banner shows it, and
+ * the SSH access controller moves that device's host and terminal alias to the new name.
+ */
+function setControllerDisplayNameAndFollow(deviceId: string, name: string): void {
+  setControllerDisplayName(deviceId, name);
+  sshAccessController?.peerRenamed(deviceId);
+}
 
 /** The account's device ids for the SSH access membership check; a partial (one-leg) answer proves nothing. */
 async function readSshAccessDeviceDirectory(): Promise<readonly string[] | null> {
@@ -1553,7 +1562,7 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
         : {}),
       freshness: controllerDisplayNameFreshness,
       normalizeName: normalizeCachedDeviceName,
-      setDisplayName: setControllerDisplayName,
+      setDisplayName: setControllerDisplayNameAndFollow,
       setFallbackDisplayName: setControllerFallbackDisplayName,
       rememberName: (deviceId, name) => {
         void rememberLastKnownDeviceName(deviceId, name);

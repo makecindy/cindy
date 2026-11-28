@@ -48,7 +48,7 @@ export interface SshDeviceEndpointRecord {
 }
 
 export interface SshDeviceTargetRecord {
-  /** Terminal alias and SSH host id; assigned when the host is first added, then kept. */
+  /** Terminal alias and SSH host id; follows the device's name (sshAccessController.ts writeHost). */
   alias: string | null;
   /** Cindy added the host and it should still be listed: if it is gone, the person deleted it. */
   hostAdded: boolean;

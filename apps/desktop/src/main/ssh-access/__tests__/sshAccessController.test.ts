@@ -50,6 +50,10 @@ interface World {
   hold: { promise: Promise<void>; release(): void } | null;
   invokes: SshAccessRequest[];
   hosts: Map<string, { managed: boolean; spec: DeviceHostSpec | null }>;
+  /** The target's name in this computer's device list. */
+  peerName: string;
+  /** Aliases remote sessions still use: the SSH host list refuses to move them. */
+  sessionAliases: Set<string>;
 }
 
 let w: World;
@@ -130,7 +134,7 @@ function makeController(): SshAccessController {
     keyDir: () => (w.owner ? keyDir(w.owner) : null),
     selfDeviceId: () => w.self,
     homeDir: controllerHome,
-    peer: (deviceId) => (deviceId === TARGET ? { desktop: true, name: 'Studio Cloud' } : null),
+    peer: (deviceId) => (deviceId === TARGET ? { desktop: true, name: w.peerName } : null),
     controlDisabled: () => w.controlDisabled,
     invoke,
     probeAddress: async (host) => w.reachableHosts?.includes(host) ?? true,
@@ -144,6 +148,16 @@ function makeController(): SshAccessController {
       if (!existing) return 'created';
       return JSON.stringify({ ...existing.spec, previousDisplayName: null }) === JSON.stringify({ ...spec, previousDisplayName: null })
         ? 'unchanged' : 'updated';
+    },
+    // The SSH host list's rename (remote-ssh/index.ts renamePinnedDeviceHost), in memory.
+    renameHost: async (fromAlias, spec) => {
+      const existing = w.hosts.get(fromAlias);
+      if (!existing?.managed || existing.spec?.hostKeyAlias !== spec.hostKeyAlias) return 'missing';
+      if (w.hosts.has(spec.alias)) return 'alias-taken';
+      if (w.sessionAliases.has(fromAlias)) return 'in-use';
+      w.hosts.delete(fromAlias);
+      w.hosts.set(spec.alias, { managed: true, spec });
+      return 'renamed';
     },
     generateKeyPair: (comment) => generateOpenSshEd25519KeyPair(comment),
     log: { info() {}, warn() {} },
@@ -193,7 +207,8 @@ async function flushUntil(done: () => boolean | Promise<boolean>): Promise<void>
   while (!(await done()) && Date.now() < deadline) await flush();
 }
 
-const hostSpec = () => w.hosts.get(ALIAS)?.spec ?? null;
+const hostSpecFor = (alias: string) => w.hosts.get(alias)?.spec ?? null;
+const hostSpec = () => hostSpecFor(ALIAS);
 const dedicatedPublicKey = async () => (await fs.readFile(path.join(keyDir(), 'id_ed25519.pub'), 'utf8')).split(' ').slice(0, 2).join(' ');
 const targetFile = () => readText(path.join(targetHome(), '.ssh', CLOUD_GUEST_AUTHORIZED_KEYS_FILE));
 
@@ -203,7 +218,7 @@ beforeEach(async () => {
   w = {
     root, owner: 'owner-a', self: 'laptop-fedcba9876543210', targetSettings: { remoteControlEnabled: true, revokedControllers: [] },
     targetOnline: true, targetOld: false, publicIp: '203.0.113.7', reachableHosts: null,
-    controlDisabled: false, busy: 0, hold: null, invokes: [], hosts: new Map(),
+    controlDisabled: false, busy: 0, hold: null, invokes: [], hosts: new Map(), peerName: 'Studio Cloud', sessionAliases: new Set(),
   };
   await fs.mkdir(path.join(controllerHome(), '.ssh'), { recursive: true });
   await fs.writeFile(path.join(controllerHome(), '.ssh', 'known_hosts'), OWN_KNOWN_HOSTS);
@@ -358,6 +373,69 @@ describe('SSH access controller: the person\'s deletion and unavailable devices'
     await flush();
     expect((await states())[0]).toMatchObject({ state: 'ready' });
     expect(w.hosts.has(ALIAS)).toBe(true);
+  });
+});
+
+// 测试价值（别名跟着设备名走，Dash 2026-11-28 决定）
+// - 入口：createSshAccessController 的 peerRenamed（device-link/index.ts 在设备名变化时调用）与 readState / deviceHostFor；
+//   对端仍是真实的 createSshAccessTarget。断言写入「SSH 远程主机」的别名、固定的 HostKeyAlias 与指纹、调用次数。
+// - 缺口：此前别名首次分配后永不改变，被控端按当前名字显示的 `ssh cindy-<名字>` 在改名后对不上（Greptile P2）。
+// - 最小失败输入：设备从 Studio Cloud 改名为 Studio Office；新名的别名已被用户自己的主机占用；主机已被用户删除。
+// - tier：unit。
+describe('SSH access controller: the alias follows the device\'s name', () => {
+  const RENAMED = 'cindy-studio-office';
+
+  it('moves the host to cindy-<new name> without calling the device, keeping the pinned host key', async () => {
+    await startReady();
+    const before = hostSpec()!;
+    const calls = w.invokes.length;
+    w.peerName = 'Studio Office';
+    controller.peerRenamed(TARGET);
+    await flushUntil(() => w.hosts.has(RENAMED));
+    expect(w.hosts.has(ALIAS)).toBe(false);
+    expect(w.hosts.get(RENAMED)?.spec).toEqual({
+      ...before, alias: RENAMED, displayName: 'Studio Office', previousDisplayName: 'Studio Cloud',
+    });
+    expect(w.invokes).toHaveLength(calls);
+    expect(await states()).toEqual([{ deviceId: TARGET, alias: RENAMED, hostId: RENAMED, state: 'ready', reason: null, blocked: null }]);
+    expect(controller.deviceHostFor(RENAMED)).toEqual({ deviceId: TARGET, available: true });
+    expect(controller.deviceHostFor(ALIAS)).toBeNull();
+
+    // The same name again changes nothing.
+    controller.peerRenamed(TARGET);
+    await flush();
+    expect([...w.hosts.keys()]).toEqual([RENAMED]);
+    expect(w.invokes).toHaveLength(calls);
+  });
+
+  it('takes chooseDeviceAlias\'s next alias when the new one is taken, and keeps an alias remote sessions use', async () => {
+    await startReady();
+    w.hosts.set(RENAMED, { managed: false, spec: null });
+    w.peerName = 'Studio Office';
+    controller.peerRenamed(TARGET);
+    await flushUntil(() => w.hosts.has('cindy-cloudhos'));
+    expect(w.hosts.get(RENAMED)).toEqual({ managed: false, spec: null });
+    expect(w.hosts.has(ALIAS)).toBe(false);
+    expect(w.hosts.get('cindy-cloudhos')?.spec).toMatchObject({ hostKeyAlias: `cindy-device-${TARGET}`, hostKeyFingerprint: HOST_KEY_FP });
+
+    w.sessionAliases.add('cindy-cloudhos');
+    w.peerName = 'Studio Lab';
+    controller.peerRenamed(TARGET);
+    await flushUntil(async () => hostSpecFor('cindy-cloudhos')?.displayName === 'Studio Lab');
+    expect([...w.hosts.keys()].sort()).toEqual(['cindy-cloudhos', RENAMED]);
+    expect((await states())[0]).toMatchObject({ alias: 'cindy-cloudhos', hostId: 'cindy-cloudhos', state: 'ready' });
+  });
+
+  it('never adds back a host the person deleted when its device is renamed', async () => {
+    await startReady();
+    w.hosts.delete(ALIAS);
+    controller.hostRemovedByUser(ALIAS);
+    await controller.idle();
+    w.peerName = 'Studio Office';
+    controller.peerRenamed(TARGET);
+    await flush();
+    expect(w.hosts.size).toBe(0);
+    expect((await states())[0]).toMatchObject({ state: 'user-deleted', hostId: null, alias: ALIAS });
   });
 });
 

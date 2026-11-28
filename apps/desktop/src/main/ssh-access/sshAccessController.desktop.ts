@@ -16,6 +16,7 @@ import {
   broadcastRemoteSshHostsChanged,
   listRemoteSshHostAliases,
   onRemoteSshHostRemoved,
+  renamePinnedDeviceHost,
   setRemoteSshDeviceHostResolver,
   upsertPinnedDeviceHost,
 } from '../remote-ssh/index.js';
@@ -70,6 +71,7 @@ export function createDesktopSshAccessController(link: DesktopSshAccessControlle
     probeAddress: (host, port) => probeSshBanner(port, { host }),
     hostAliases: () => listRemoteSshHostAliases(),
     upsertHost: (spec, options) => upsertPinnedDeviceHost(spec, options),
+    renameHost: (fromAlias, spec) => renamePinnedDeviceHost(fromAlias, spec),
     generateKeyPair: (comment) => generateOpenSshEd25519KeyPair(comment),
     onChanged: notify,
     log,

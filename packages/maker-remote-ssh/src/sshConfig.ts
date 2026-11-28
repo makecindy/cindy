@@ -1176,6 +1176,40 @@ export async function updateManagedHostFields(
   );
 }
 
+/**
+ * Move one managed Host block to a new alias in a single atomic write: the block keeps its place and every other
+ * directive, its `Host` line names `host.id`, and Cindy-owned connection fields are projected from `host`. Refuses
+ * when the old alias is missing or ambiguous, or any Host block in the managed file already names the new alias.
+ */
+export async function renameManagedHost(
+  fromAlias: string,
+  host: HostConfig,
+  managedConfigPath: string,
+  expectedToken: ManagedConfigWriteToken,
+): Promise<void> {
+  assertManagedWriteToken(expectedToken);
+  assertManagedAlias(host.id);
+  const existingBytes = await readRawConfigBytes(managedConfigPath);
+  assertManagedConfigUnchanged(existingBytes, expectedToken);
+  const existing = existingBytes.toString('utf8');
+  assertManagedConfigOwnership(existing);
+  if (!existing) throw new Error(`managed SSH host not found: ${fromAlias}`);
+  const parsed = SSHConfig.parse(existing) as SshConfigSection[];
+  const section = findSingleHostSection(parsed, fromAlias);
+  if (!section?.config) throw new Error(`managed SSH host not found or ambiguous: ${fromAlias}`);
+  if (findAnyHostSection(parsed, host.id)) throw new Error(`host already exists in managed SSH config: ${host.id}`);
+  section.value = host.id;
+  section.quoted = false;
+  projectManagedFields(section, host, existing.includes('\r\n') ? '\r\n' : '\n');
+  const next = (parsed as unknown as { toString(): string }).toString();
+  // Same syntax gate as an add: the exact bytes must read back with the new alias in place of the old one.
+  const reparsed = SSHConfig.parse(next) as SshConfigSection[];
+  if (!findSingleHostSection(reparsed, host.id) || findAnyHostSection(reparsed, fromAlias)) {
+    throw new Error(`managed SSH host rename did not round-trip: ${fromAlias}`);
+  }
+  await writeAtomicPreservingTarget(managedConfigPath, next, existing);
+}
+
 export async function removeManagedHost(
   alias: string,
   managedConfigPath: string,

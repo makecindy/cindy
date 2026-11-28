@@ -114,6 +114,7 @@ export {
   readSshConfig,
   readSshConfigDetailed,
   removeManagedHost,
+  renameManagedHost,
   updateManagedHostFields,
   upsertHost,
   updateHostFields,

@@ -18,6 +18,10 @@
  * - This computer's own 「控制它」 switch for a device being off means no enrollment there (decision 2).
  * - Deleting the host in the SSH list (or its block in cindy.conf) is final: it is never added back automatically; the
  *   enrollment stays and 「添加到 SSH 远程主机」 brings the host back.
+ * - The alias follows the device's name (decision 2026-11-28): when the device is renamed in the device list, the
+ *   host moves to `cindy-<new name>` (chooseDeviceAlias when that is taken) without a call to the device; the pinned
+ *   HostKeyAlias does not change. The old alias stops working. A deleted host stays deleted, and a host that remote
+ *   sessions still use keeps its alias until they are gone.
  * - A device turning access off, revoking this computer or leaving the account marks the host unavailable; nothing the
  *   person can see is deleted, and the next good status makes it available again.
  */
@@ -42,6 +46,7 @@ import {
   readSshDeviceAccessRecord,
   updateSshDeviceAccessRecord,
   type SshDeviceAccessRecord,
+  type SshDeviceEndpointRecord,
   type SshDeviceTargetRecord,
 } from './sshDeviceAccessRecord.js';
 
@@ -76,6 +81,8 @@ export interface DeviceHostSpec {
 
 /** `missing`: the host should be there and is not (the person deleted it). `alias-taken`: one of their own hosts. */
 export type DeviceHostUpsertOutcome = 'created' | 'updated' | 'unchanged' | 'missing' | 'alias-taken';
+/** `missing`: gone or no longer this device's. `alias-taken`: another host has it. `in-use`: sessions use the old alias. */
+export type DeviceHostRenameOutcome = 'renamed' | 'missing' | 'alias-taken' | 'in-use';
 
 type InvokeResult = { ok: true; result: unknown } | { ok: false; error: { code: string; message: string } };
 
@@ -102,6 +109,8 @@ export interface SshAccessControllerPorts {
    */
   hostAliases(): Promise<ReadonlyMap<string, string | null>>;
   upsertHost(spec: DeviceHostSpec, options: { expectPresent: boolean }): Promise<DeviceHostUpsertOutcome>;
+  /** Moves the host from `fromAlias` to `spec.alias` (same HostKeyAlias and pin); never reported as the person's deletion. */
+  renameHost(fromAlias: string, spec: DeviceHostSpec): Promise<DeviceHostRenameOutcome>;
   generateKeyPair(comment: string): Promise<OpenSshKeyPair>;
   /** Local UI: the device hosts' state may have changed. */
   onChanged?(): void;
@@ -110,7 +119,8 @@ export interface SshAccessControllerPorts {
   log: { info(message: string): void; warn(message: string): void };
 }
 
-type Trigger = { kind: 'announce'; announce: SshAccessAnnounce } | { kind: 'refresh' };
+/** `rename`: the device's name changed; the host follows it from what is recorded, without calling the device. */
+type Trigger = { kind: 'announce'; announce: SshAccessAnnounce } | { kind: 'refresh' } | { kind: 'rename' };
 /** How a failed call is handled: recorded on the device (`needs-update`, `off`, `revoked`, `refused`), shown
  * (`control-off`), retried (`transient`) or left for the device's next announce (`offline`, `write-failed`). */
 export type SshAccessCallFailure =
@@ -398,7 +408,7 @@ export function createSshAccessController(ports: SshAccessControllerPorts) {
     }
     const facts = { user: endpoint.user, port: endpoint.port, hostname, hostKeys: [...endpoint.hostKeys] };
     const ready = { status: 'ready' as const, blocked: null, revision: status.revision, enrolledFingerprint: key.fingerprint, endpoint: facts, needsUpdateVersion: null };
-    let target = record?.targets[deviceId];
+    const target = record?.targets[deviceId];
     if (!target || target.userDeleted) {
       await patchTarget(captured, deviceId, () => ready, true);
       return;
@@ -411,7 +421,43 @@ export function createSshAccessController(ports: SshAccessControllerPorts) {
       ports.log.warn(`ssh-access controller could not update cindy_known_hosts: ${error.message}`);
     }
     assertCurrent(captured);
-    const name = ports.peer(deviceId)?.name?.trim() || null;
+    await writeHost(captured, deviceId, facts, hostKey, ready, key);
+  }
+
+  /** The device's name in the device list, or null while it is not known. */
+  function peerName(deviceId: string): string | null {
+    return ports.peer(deviceId)?.name?.trim() || null;
+  }
+
+  /** A listed host whose device has a name Cindy has not given the host yet. */
+  function nameStale(deviceId: string, target: SshDeviceTargetRecord): boolean {
+    const name = peerName(deviceId);
+    return target.hostAdded && !target.userDeleted && name !== null && name !== target.displayName;
+  }
+
+  /** The device was renamed: rewrite its listed host from the recorded endpoint (no call to the device). */
+  async function followRename(captured: Captured, deviceId: string, target: SshDeviceTargetRecord, key: DedicatedKey): Promise<void> {
+    const hostKey = target.endpoint ? pinnedHostKey(target.endpoint.hostKeys) : null;
+    if (!target.endpoint || !hostKey || target.status !== 'ready' || target.enrolledFingerprint !== key.fingerprint) return;
+    await writeHost(captured, deviceId, target.endpoint, hostKey, {}, key);
+  }
+
+  /**
+   * Writes the listed host of a device whose key is enrolled and whose endpoint is known. The alias follows the
+   * device's name: a new name moves the host to the alias chooseDeviceAlias gives it (the pin stays).
+   */
+  async function writeHost(
+    captured: Captured,
+    deviceId: string,
+    facts: SshDeviceEndpointRecord,
+    hostKey: string,
+    ready: Partial<SshDeviceTargetRecord>,
+    key: DedicatedKey,
+  ): Promise<void> {
+    const hostKeyAlias = deviceHostKeyAlias(deviceId);
+    let target = record?.targets[deviceId];
+    if (!target || target.userDeleted) return;
+    const name = peerName(deviceId);
     const others = () => new Set(Object.entries(record?.targets ?? {})
       .filter(([id, entry]) => id !== deviceId && entry.alias).map(([, entry]) => entry.alias!));
     const spec = (alias: string): DeviceHostSpec => ({
@@ -432,6 +478,24 @@ export function createSshAccessController(ports: SshAccessControllerPorts) {
       // A host Cindy already keeps for this device (an earlier record, another profile) is reused, not duplicated.
       alias = [...known].find(([, pinned]) => pinned === hostKeyAlias)?.[0]
         ?? chooseDeviceAlias(name, deviceId, new Set([...known.keys(), ...others()]));
+    } else if (target.hostAdded && name) {
+      const taken = new Set([...(await ports.hostAliases()).keys(), ...others()]);
+      taken.delete(alias);
+      assertCurrent(captured);
+      const desired = chooseDeviceAlias(name, deviceId, taken);
+      if (desired !== alias) {
+        const moved = await ports.renameHost(alias, spec(desired));
+        assertCurrent(captured);
+        if (moved === 'renamed') {
+          ports.log.info(`ssh-access controller: the host for ${deviceId.slice(0, 8)} follows the device's new name`);
+          alias = desired;
+          // The host exists only under the new alias now; record it before anything else can fail.
+          await patchTarget(captured, deviceId, () => ({ alias: desired }));
+        } else if (moved === 'in-use') {
+          ports.log.info(`ssh-access controller: remote sessions still use the host for ${deviceId.slice(0, 8)}; keeping its alias`);
+        }
+        // `missing` is found again by the upsert below and recorded as the person's deletion; `alias-taken` keeps it.
+      }
     }
     assertCurrent(captured);
     target = record?.targets[deviceId] ?? target;
@@ -455,6 +519,11 @@ export function createSshAccessController(ports: SshAccessControllerPorts) {
     if (!loaded || !ports.peer(deviceId)?.desktop) return;
     const announce = trigger.kind === 'announce' ? trigger.announce : null;
     let target: SshDeviceTargetRecord | undefined = loaded.targets[deviceId];
+    if (trigger.kind === 'rename') {
+      if (!target || !nameStale(deviceId, target) || target.needsUpdateVersion || ports.controlDisabled(deviceId)) return;
+      await followRename(captured, deviceId, target, await ensureKey(captured, deviceId));
+      return;
+    }
     if (announce) lastAnnounce.set(deviceId, announce);
     if (target?.needsUpdateVersion) {
       // An announce proves the channel exists now; a new app version may have it too.
@@ -482,7 +551,10 @@ export function createSshAccessController(ports: SshAccessControllerPorts) {
     const key = await ensureKey(captured, deviceId);
     const stale = target.enrolledFingerprint !== key.fingerprint;
     if (announce && announce.authorized && !stale && announce.revision === target.revision
-      && target.status === 'ready' && target.hostAdded) return;
+      && target.status === 'ready' && target.hostAdded) {
+      if (nameStale(deviceId, target)) await followRename(captured, deviceId, target, key);
+      return;
+    }
     // The device does not hold this computer's current key: enroll, which replaces this computer's line only.
     let enrolled = !!announce && (!announce.authorized || stale);
     let status = await call(captured, deviceId, enrolled ? enrollRequest(key) : { action: 'status' });
@@ -514,7 +586,8 @@ export function createSshAccessController(ports: SshAccessControllerPorts) {
 
   function schedule(deviceId: string, trigger: Trigger): void {
     if (running.has(deviceId)) {
-      pending.set(deviceId, trigger);
+      // Every other trigger also brings the name up to date; a rename must not replace one of them.
+      if (trigger.kind !== 'rename' || !pending.has(deviceId)) pending.set(deviceId, trigger);
       return;
     }
     const captured = capture();
@@ -610,6 +683,11 @@ export function createSshAccessController(ports: SshAccessControllerPorts) {
       versions.set(deviceId, version);
       const marked = record?.targets[deviceId]?.needsUpdateVersion;
       if (marked && marked !== version) schedule(deviceId, { kind: 'refresh' });
+    },
+    /** The device's name in the device list may have changed: its listed host and alias follow it. */
+    peerRenamed(deviceId: string): void {
+      const target = record?.targets[deviceId];
+      if (active && target && nameStale(deviceId, target)) schedule(deviceId, { kind: 'rename' });
     },
     /** A complete device list: devices that left the account are unavailable, ones that came back wait for them. */
     noteDeviceList(deviceIds: readonly string[]): void {

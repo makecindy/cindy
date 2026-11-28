@@ -47,7 +47,10 @@ const LONG_RESULT_TOAST_MS = 5000;
 
 type Translate = (key: string, values?: Record<string, unknown>) => string;
 
-/** The alias this computer's other devices usually get (`cindy-<slug>`, else a device id prefix). */
+/**
+ * The alias this computer's other devices give it (`cindy-<slug>`, else a device id prefix): their hosts follow this
+ * computer's current name (sshAccessController.ts). Only a name another of their hosts already uses gives them another.
+ */
 function usualAlias(name: string | undefined, deviceId: string | undefined): string | null {
   const slug = deviceAliasSlug(name ?? '');
   if (slug) return `cindy-${slug}`;
