@@ -20,7 +20,9 @@ import { createLogger } from '../../../desktop/src/main/logger.ts';
 import { isSessionErrorSuppressed } from '../../../desktop/src/main/maker-ipc/sessionErrorSuppression.ts';
 import { createIpcError } from '../../../desktop/src/shared/ipc-errors.ts';
 import { throwIpcError } from '../../../desktop/src/main/utils/ipcValidate.ts';
-import { normalizeAgentInputClearBoundaryMs } from '../../../desktop/src/shared/agentInputQueue.ts';
+import { normalizeAgentInputClearBoundaryMs, serializeSessionReferencePayload } from '../../../desktop/src/shared/agentInputQueue.ts';
+import { estimateReferenceTokens, MAX_REFERENCE_MESSAGES, MAX_REFERENCE_TOKENS, MAX_SESSION_REFERENCES } from '../../../desktop/src/main/maker-ipc/sessionReferenceResolverCore.ts';
+import { stampMobileClientOrigin } from '../../../desktop/src/main/maker-ipc/mobileClientPromptNote.ts';
 
 const settlementLog = createLogger('host-turn-settlement');
 const attachmentLog = createLogger('host-attachments');
@@ -52,12 +54,93 @@ export function holdTaskForProfile(coordinator, id) {
 }
 const errorText = error => error instanceof Error ? error.message : String(error);
 
+function requireSessionRefs(value) {
+  if (value == null) return undefined;
+  if (!Array.isArray(value) || value.length > MAX_SESSION_REFERENCES) {
+    throwIpcError('INVALID_PARAMS', `sessionRefs must contain at most ${MAX_SESSION_REFERENCES} items`);
+  }
+  const seen = new Set();
+  for (const ref of value) {
+    if (
+      !ref || typeof ref !== 'object' ||
+      typeof ref.sessionId !== 'string' || ref.sessionId.length === 0 || ref.sessionId.length > 256 ||
+      (ref.deviceId !== undefined && (typeof ref.deviceId !== 'string' || ref.deviceId.length === 0 || ref.deviceId.length > 256)) ||
+      (ref.messageClientId !== undefined && (typeof ref.messageClientId !== 'string' || ref.messageClientId.length === 0 || ref.messageClientId.length > 256))
+    ) {
+      throwIpcError('INVALID_PARAMS', 'sessionRefs contains an invalid reference');
+    }
+    const key = `${ref.deviceId ?? ''}\u0000${ref.sessionId}\u0000${ref.messageClientId ?? ''}`;
+    if (seen.has(key)) throwIpcError('INVALID_PARAMS', 'sessionRefs contains duplicates');
+    seen.add(key);
+  }
+  return value;
+}
+
+function requireTrustedReferenceContexts(refs, value) {
+  if (value == null) return undefined;
+  if (!Array.isArray(value) || value.length > MAX_SESSION_REFERENCES || value.length !== (refs?.length ?? 0)) {
+    throwIpcError('SESSION_REFERENCE_UNAVAILABLE', 'remote session reference snapshot count is invalid');
+  }
+  let totalMessages = 0;
+  let totalTokens = 0;
+  const sanitized = [];
+  for (let i = 0; i < value.length; i += 1) {
+    const context = value[i];
+    const ref = refs?.[i];
+    if (
+      !context || typeof context !== 'object' ||
+      typeof context.sessionId !== 'string' || context.sessionId.length > 256 ||
+      (context.title !== undefined && (typeof context.title !== 'string' || context.title.length > 128)) ||
+      !Array.isArray(context.messages)
+    ) {
+      throwIpcError('SESSION_REFERENCE_UNAVAILABLE', 'remote session reference snapshot is invalid');
+    }
+    if (
+      !ref ||
+      ref.sessionId !== context.sessionId ||
+      ref.messageClientId !== context.messageClientId ||
+      ref.deviceId !== context.deviceId ||
+      (context.source !== 'local' && context.source !== 'device-link') ||
+      (context.source === 'local' && context.deviceId !== undefined) ||
+      (context.source === 'device-link' && typeof context.deviceId !== 'string') ||
+      (context.range !== 'recent' && context.range !== 'around-anchor') ||
+      context.messageCount !== context.messages.length ||
+      typeof context.truncated !== 'boolean'
+    ) {
+      throwIpcError('SESSION_REFERENCE_UNAVAILABLE', 'remote session reference snapshot does not match the request');
+    }
+    let terminal;
+    if (context.terminal !== undefined) {
+      const t = context.terminal;
+      if (!t || typeof t !== 'object' || Array.isArray(t) || t.status !== 'error' ||
+        (t.createdAt !== undefined && (typeof t.createdAt !== 'number' || !Number.isFinite(t.createdAt)))) {
+        throwIpcError('SESSION_REFERENCE_UNAVAILABLE', 'remote session reference terminal status is invalid');
+      }
+      terminal = { status: 'error', ...(t.createdAt !== undefined ? { createdAt: t.createdAt } : {}) };
+    }
+    totalMessages += context.messages.length;
+    for (const message of context.messages) {
+      if (!message || (message.role !== 'user' && message.role !== 'assistant') || typeof message.content !== 'string') {
+        throwIpcError('SESSION_REFERENCE_UNAVAILABLE', 'remote session reference message is invalid');
+      }
+      totalTokens += estimateReferenceTokens(message.content);
+    }
+    sanitized.push(terminal !== undefined ? { ...context, terminal } : context);
+  }
+  const serializedTokens = estimateReferenceTokens(serializeSessionReferencePayload(sanitized));
+  if (totalMessages > MAX_REFERENCE_MESSAGES || totalTokens > MAX_REFERENCE_TOKENS || serializedTokens > MAX_REFERENCE_TOKENS - 128) {
+    throwIpcError('SESSION_REFERENCE_UNAVAILABLE', 'remote session reference snapshot exceeds the shared budget');
+  }
+  return sanitized;
+}
+
 /** Only composition fields cross the browser trust boundary. Host receipts,
  * scheduler origins, hook bypasses and remote-device identity never do. */
 function composeInput(item, stored, handoff) {
   if (!item || typeof item.clientId !== 'string' || !item.clientId.trim()) throw new Error('clientId is required');
   const text = typeof item.text === 'string' ? item.text : item.content;
-  if (typeof text !== 'string' || !text.trim()) throw new Error('message text is required');
+  const hasFiles = Array.isArray(item.files) && item.files.length > 0;
+  if (typeof text !== 'string' || (!text.trim() && !hasFiles)) throw new Error('message text is required');
   // Picker changes already persist through their own entries (set-model, set-effort,
   // set-permission-mode and the like). Input fields are snapshots for presentation,
   // not another authority over task settings.
@@ -77,12 +160,14 @@ function composeInput(item, stored, handoff) {
     createOpts: { agentKind, model, workingDir, effort: effort || undefined,
       permissionMode: permissionMode || undefined, providerId: stored.providerId ?? undefined,
       fastMode: stored.fastMode ?? undefined, planMode: stored.planModeEnabled ?? undefined } };
-  for (const key of ['files', 'mentions', 'sessionRefs', 'agentReferences']) {
+  for (const key of ['files', 'mentions', 'agentReferences']) {
     if (item[key] !== undefined) {
       if (!Array.isArray(item[key])) throw new Error(`invalid ${key}`);
       result[key] = item[key];
     }
   }
+  const refs = requireSessionRefs(item.sessionRefs);
+  if (refs !== undefined) result.sessionRefs = refs;
   if (handoff) {
     // Only the in-process handoff adapter supplies this argument.
     result.autoReviewUserText = handoff.autoReviewUserText;
@@ -103,6 +188,16 @@ function composeInput(item, stored, handoff) {
   }
   // AsyncLocalStorage belongs to authenticated dispatch, never the wire item.
   const remote = isDeviceLinkInvoke();
+  if (remote) {
+    const trustedContexts = requireTrustedReferenceContexts(refs, item.trustedSessionReferenceContexts);
+    if ((refs?.length ?? 0) > 0) {
+      if (!trustedContexts) {
+        throwIpcError('SESSION_REFERENCE_UNAVAILABLE', 'remote session references were not resolved by the controller');
+      }
+      result.sessionReferencesRequireTrustedSnapshot = true;
+      result.trustedSessionReferenceContexts = trustedContexts;
+    }
+  }
   if (remote && isMobileControllerInvoke()) result.fromMobileClient = true;
   // An MCP App message is page content relayed by the in-process App service.
   // The desktop stamp would record its text as the user's own authored intent,
@@ -422,15 +517,52 @@ export function createInputQueue(deps) {
       state.commands = result;
       return result;
     }
-    async function mutate(id, fn) {
+    function parseControlBoundary(id, opts) {
+      const expectedInputGeneration = coordinator.getGeneration(id);
+      const hasExpectedBoundary = Boolean(opts && typeof opts === 'object'
+        && Object.prototype.hasOwnProperty.call(opts, 'expectedClearBoundaryMs'));
+      const expectedBoundary = hasExpectedBoundary
+        ? normalizeAgentInputClearBoundaryMs(opts.expectedClearBoundaryMs)
+        : undefined;
+      if (hasExpectedBoundary && expectedBoundary === undefined) {
+        throwIpcError('INVALID_PARAMS', 'expectedClearBoundaryMs must be null or a non-negative finite number');
+      }
+      return { expectedInputGeneration, hasExpectedBoundary, expectedBoundary };
+    }
+    function assertControlBoundary(id, check) {
+      if (!coordinator.isGenerationCurrent(id, check.expectedInputGeneration)) {
+        throwIpcError('PRECONDITION_FAILED', 'REMOTE_OPTIMISTIC_INPUT_SUPERSEDED: input preparation was superseded');
+      }
+      const currentBoundary = coordinator.getClearBoundaryMs(id);
+      if (check.hasExpectedBoundary && check.expectedBoundary !== currentBoundary) {
+        throwIpcError('PRECONDITION_FAILED',
+          `REMOTE_OPTIMISTIC_INPUT_CLEARED: expectedClearBoundaryMs=${check.expectedBoundary ?? 'null'}; currentClearBoundaryMs=${currentBoundary ?? 'null'}`);
+      }
+      return currentBoundary;
+    }
+    function readEditorProvenance() {
+      return { sourceDevice: readDeviceLinkInvokeSourceDevice(), isMobile: isMobileControllerInvoke() };
+    }
+    function stampEditedProvenance(updated, remote, editor) {
+      return stampTrustedDeviceLinkQueuedOrigin(
+        stampTrustedDesktopQueuedOrigin(stampMobileClientOrigin(updated, editor.isMobile), true, true),
+        remote,
+        editor.sourceDevice,
+      );
+    }
+    async function mutate(id, fn, preCheck) {
       return command(id, async state => {
         // Editing, removing or moving a queued input writes the queue the desktop may be using.
         refuseWhileHeld();
+        preCheck?.();
         coordinator.setExecutionPaused(id, true);
-        const result = fn();
-        await flushed(id);
-        if (!state.persistenceError) unpause(id);
-        return project(result);
+        try {
+          const result = fn();
+          await flushed(id);
+          return project(result);
+        } finally {
+          if (!state.persistenceError) unpause(id);
+        }
       });
     }
     async function stop(id, options = { keepQueue: true, pauseQueue: true }) {
@@ -637,28 +769,13 @@ export function createInputQueue(deps) {
        * attached by the Device Link adapter and checked again by the turn executor.
        */
       assertRemoteInputControlBoundary(id, opts) {
-        const expectedInputGeneration = coordinator.getGeneration(id);
-        const hasExpectedBoundary = opts && typeof opts === 'object'
-          && Object.prototype.hasOwnProperty.call(opts, 'expectedClearBoundaryMs');
-        const expectedBoundary = hasExpectedBoundary
-          ? normalizeAgentInputClearBoundaryMs(opts.expectedClearBoundaryMs)
-          : undefined;
-        if (hasExpectedBoundary && expectedBoundary === undefined) {
-          throwIpcError('INVALID_PARAMS', 'expectedClearBoundaryMs must be null or a non-negative finite number');
-        }
+        const check = parseControlBoundary(id, opts);
         return command(id, () => {
-          if (!coordinator.isGenerationCurrent(id, expectedInputGeneration)) {
-            throwIpcError('PRECONDITION_FAILED', 'REMOTE_OPTIMISTIC_INPUT_SUPERSEDED: input preparation was superseded');
-          }
-          const currentBoundary = coordinator.getClearBoundaryMs(id);
-          if (hasExpectedBoundary && expectedBoundary !== currentBoundary) {
-            throwIpcError('PRECONDITION_FAILED',
-              `REMOTE_OPTIMISTIC_INPUT_CLEARED: expectedClearBoundaryMs=${expectedBoundary ?? 'null'}; currentClearBoundaryMs=${currentBoundary ?? 'null'}`);
-          }
+          const currentBoundary = assertControlBoundary(id, check);
           return {
             expectedClearBoundaryMs: currentBoundary,
-            expectedInputGeneration,
-            inputAbortSignal: coordinator.getInputAbortSignal(id, expectedInputGeneration),
+            expectedInputGeneration: check.expectedInputGeneration,
+            inputAbortSignal: coordinator.getInputAbortSignal(id, check.expectedInputGeneration),
           };
         });
       },
@@ -718,19 +835,62 @@ export function createInputQueue(deps) {
         }
         return res;
       }),
-      updateText: (id, clientId, text) => mutate(id, () => coordinator.updateText(id, clientId, text)),
-      updateContent(id, clientId, item) {
+      async updateText(id, clientId, text, sessionRefs, trustedContexts, opts) {
+        if (typeof text !== 'string') throwIpcError('INVALID_PARAMS', 'newText required');
+        const normalizedRefs = requireSessionRefs(sessionRefs);
+        const remote = isDeviceLinkInvoke();
+        const editor = readEditorProvenance();
+        const normalizedContexts = remote ? requireTrustedReferenceContexts(normalizedRefs, trustedContexts) : undefined;
+        if (remote && (normalizedRefs?.length ?? 0) > 0 && !normalizedContexts) {
+          throwIpcError('SESSION_REFERENCE_UNAVAILABLE', 'remote session references were not resolved by the controller');
+        }
+        const check = parseControlBoundary(id, opts);
+        return mutate(
+          id,
+          () => coordinator.updateText(
+            id, clientId, text, normalizedRefs, normalizedContexts, remote,
+            updated => stampEditedProvenance(updated, remote, editor),
+          ),
+          () => assertControlBoundary(id, check),
+        );
+      },
+      async updateContent(id, clientId, item, opts) {
+        if (!item || typeof item !== 'object' || Array.isArray(item)) throwIpcError('INVALID_PARAMS', 'item required');
+        if (item.clientId !== undefined && item.clientId !== clientId) {
+          throwIpcError('INVALID_PARAMS', 'queued.clientId must match clientId');
+        }
+        const remote = isDeviceLinkInvoke();
+        const editor = readEditorProvenance();
+        const check = parseControlBoundary(id, opts);
         return command(id, async (state, admission) => {
           refuseWhileHeld();
+          assertControlBoundary(id, check);
           const old = coordinator.getProjection(id).pendingQueue.find(row => row.clientId === clientId);
           if (!old) return api.projection(id);
-          const composed = composeInput({ ...old, ...item, clientId,
-            persistedContent: item.persistedContent ?? item.text ?? old.persistedContent }, await deps.readSession(id));
+          const merged = {
+            ...old,
+            ...item,
+            clientId,
+            persistedContent: item.persistedContent ?? item.text ?? old.persistedContent,
+            chatMessage: item.chatMessage,
+            files: item.files,
+            mentions: item.mentions,
+            agentReferences: item.agentReferences,
+            sessionRefs: item.sessionRefs == null ? (remote ? [] : undefined) : item.sessionRefs,
+            trustedSessionReferenceContexts: item.trustedSessionReferenceContexts,
+          };
+          const composed = composeInput(merged, await deps.readSession(id));
           const prepared = await prepareAttachments(id, composed, admission);
           let accepted = false;
+          let paused = false;
           try {
+            assertControlBoundary(id, check);
             coordinator.setExecutionPaused(id, true);
-            const result = coordinator.updateContentWithResult(id, clientId, prepared.item);
+            paused = true;
+            const result = coordinator.updateContentWithResult(
+              id, clientId, prepared.item,
+              updated => stampEditedProvenance(updated, remote, editor),
+            );
             accepted = result.updated;
             if (accepted) {
               const refs = attachments?.collectRefs(prepared.item) ?? new Set();
@@ -741,17 +901,41 @@ export function createInputQueue(deps) {
             }
             await flushed(id);
             await attachmentOwnership.markDurable(id, clientId);
-            if (!state.persistenceError) unpause(id);
             return api.projection(id);
           } finally {
+            if (paused && !state.persistenceError) unpause(id);
             if (!accepted && prepared.ownerId) await attachmentOwnership.discardSpecific(id, clientId, prepared.ownerId);
           }
         });
       },
-      move: (id, clientId, index) => mutate(id, () => coordinator.move(id, clientId, index)),
-      setExpanded: (id, expanded) => command(id, () => coordinator.setExpanded(id, expanded)),
-      setInteractionLock: (id, lock, locked) => command(id, () => coordinator.setInteractionLock(id, lock, locked)),
-      setEditLock: (id, clientId, locked) => command(id, () => coordinator.setEditLock(id, clientId, locked)),
+      async move(id, clientId, index, opts) {
+        if (typeof index !== 'number' || !Number.isFinite(index)) {
+          throwIpcError('INVALID_PARAMS', 'targetIndex required');
+        }
+        const check = parseControlBoundary(id, opts);
+        return mutate(id, () => coordinator.move(id, clientId, index), () => assertControlBoundary(id, check));
+      },
+      async setExpanded(id, expanded, opts) {
+        const check = parseControlBoundary(id, opts);
+        return command(id, () => {
+          assertControlBoundary(id, check);
+          return coordinator.setExpanded(id, expanded === true);
+        });
+      },
+      async setInteractionLock(id, lock, locked, opts) {
+        const check = parseControlBoundary(id, opts);
+        return command(id, () => {
+          assertControlBoundary(id, check);
+          return coordinator.setInteractionLock(id, lock, locked === true);
+        });
+      },
+      async setEditLock(id, clientId, locked, opts) {
+        const check = parseControlBoundary(id, opts);
+        return command(id, () => {
+          assertControlBoundary(id, check);
+          return coordinator.setEditLock(id, clientId, locked === true);
+        });
+      },
       // This endpoint clears pending inputs, not persisted history. Only the
       // history service may advance the durable conversation clear boundary.
       clearSession: id => stop(id, { keepQueue: false }),

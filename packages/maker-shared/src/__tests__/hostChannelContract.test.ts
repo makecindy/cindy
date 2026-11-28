@@ -95,3 +95,39 @@ it('maps ack-interrupted and dismiss-error to their Host routes', () => {
   expect(clear.hostPath).toBe('/api/notifications/clear-session-attention');
   expect(clear.body?.(['s1', 'explicit'])).toEqual({ sessionId: 's1', intent: 'explicit' });
 });
+
+it('maps queued input edit, move, expansion, and lock channels to their Host routes', () => {
+  const byCh = (ch: string) => HOST_CONTRACT_CHANNELS.find(c => c.desktopChannel === ch)!;
+  const opts = { expectedClearBoundaryMs: 123 };
+
+  const updateText = byCh('maker:input:update-text');
+  expect(updateText.hostPath).toBe('/api/input/update-text');
+  expect(updateText.webPath).toBe('maker.input.updateText');
+  expect(updateText.body?.(['s1', 'c1', 'hello', [{ sessionId: 's2' }], [{ sessionId: 's2' }], opts])).toEqual({
+    sessionId: 's1', clientId: 'c1', newText: 'hello',
+    sessionRefs: [{ sessionId: 's2' }], trustedContexts: [{ sessionId: 's2' }], opts,
+  });
+
+  const updateContent = byCh('maker:input:update-content');
+  expect(updateContent.hostPath).toBe('/api/input/update-content');
+  expect(updateContent.webPath).toBe('maker.input.updateContent');
+  expect(updateContent.body?.(['s1', 'c1', { clientId: 'c1', text: 'hi' }, opts])).toEqual({
+    sessionId: 's1', clientId: 'c1', item: { clientId: 'c1', text: 'hi' }, opts,
+  });
+
+  const move = byCh('maker:input:move');
+  expect(move.hostPath).toBe('/api/input/move');
+  expect(move.body?.(['s1', 'c1', 2, opts])).toEqual({ sessionId: 's1', clientId: 'c1', targetIndex: 2, opts });
+
+  const expanded = byCh('maker:input:set-expanded');
+  expect(expanded.hostPath).toBe('/api/input/set-expanded');
+  expect(expanded.body?.(['s1', true, opts])).toEqual({ sessionId: 's1', expanded: true, opts });
+
+  const interactionLock = byCh('maker:input:set-interaction-lock');
+  expect(interactionLock.hostPath).toBe('/api/input/set-interaction-lock');
+  expect(interactionLock.body?.(['s1', 'l1', true, opts])).toEqual({ sessionId: 's1', lockId: 'l1', locked: true, opts });
+
+  const editLock = byCh('maker:input:set-edit-lock');
+  expect(editLock.hostPath).toBe('/api/input/set-edit-lock');
+  expect(editLock.body?.(['s1', 'c1', true, opts])).toEqual({ sessionId: 's1', clientId: 'c1', locked: true, opts });
+});

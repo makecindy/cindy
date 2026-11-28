@@ -373,22 +373,22 @@ export function createHostService(deps) {
         return { status: 200, body: await deps.input.remove(String(body.sessionId ?? ''), String(body.clientId ?? '')) };
     }
     if (url.pathname === '/api/input/update-content') {
-        return { status: 200, body: await deps.input.updateContent(String(body.sessionId ?? ''), String(body.clientId ?? ''), body.item ?? {}) };
+        return { status: 200, body: await deps.input.updateContent(String(body.sessionId ?? ''), String(body.clientId ?? ''), body.item, body.opts) };
     }
     if (url.pathname === '/api/input/update-text') {
-        return { status: 200, body: await deps.input.updateText(String(body.sessionId ?? ''), String(body.clientId ?? ''), body.newText) };
+        return { status: 200, body: await deps.input.updateText(String(body.sessionId ?? ''), String(body.clientId ?? ''), body.newText, body.sessionRefs, body.trustedContexts, body.opts) };
     }
     if (url.pathname === '/api/input/move') {
-        return { status: 200, body: await deps.input.move(String(body.sessionId ?? ''), String(body.clientId ?? ''), Number(body.targetIndex ?? 0)) };
+        return { status: 200, body: await deps.input.move(String(body.sessionId ?? ''), String(body.clientId ?? ''), body.targetIndex, body.opts) };
     }
     if (url.pathname === '/api/input/set-expanded') {
-        return { status: 200, body: await deps.input.setExpanded(String(body.sessionId ?? ''), Boolean(body.expanded)) };
+        return { status: 200, body: await deps.input.setExpanded(String(body.sessionId ?? ''), Boolean(body.expanded), body.opts) };
     }
     if (url.pathname === '/api/input/set-interaction-lock') {
-        return { status: 200, body: await deps.input.setInteractionLock(String(body.sessionId ?? ''), String(body.lockId ?? ''), Boolean(body.locked)) };
+        return { status: 200, body: await deps.input.setInteractionLock(String(body.sessionId ?? ''), String(body.lockId ?? ''), Boolean(body.locked), body.opts) };
     }
     if (url.pathname === '/api/input/set-edit-lock') {
-        return { status: 200, body: await deps.input.setEditLock(String(body.sessionId ?? ''), String(body.clientId ?? ''), Boolean(body.locked)) };
+        return { status: 200, body: await deps.input.setEditLock(String(body.sessionId ?? ''), String(body.clientId ?? ''), Boolean(body.locked), body.opts) };
     }
     if (url.pathname === '/api/input/clear-session') {
         return { status: 200, body: await deps.input.clearSession(String(body.sessionId ?? '')) };

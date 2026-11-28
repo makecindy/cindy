@@ -344,6 +344,44 @@ export const HOST_CONTRACT_CHANNELS: readonly HostChannelDef[] = [
     body: ([sessionId, clientId]) => ({ sessionId, clientId }),
   },
   {
+    desktopChannel: 'maker:input:update-text',
+    webPath: 'maker.input.updateText',
+    hostPath: '/api/input/update-text',
+    body: ([sessionId, clientId, newText, sessionRefs, trustedContexts, opts]) => ({
+      sessionId, clientId, newText, sessionRefs, trustedContexts, opts,
+    }),
+  },
+  {
+    desktopChannel: 'maker:input:update-content',
+    webPath: 'maker.input.updateContent',
+    hostPath: '/api/input/update-content',
+    body: ([sessionId, clientId, item, opts]) => ({ sessionId, clientId, item, opts }),
+  },
+  {
+    desktopChannel: 'maker:input:move',
+    webPath: 'maker.input.move',
+    hostPath: '/api/input/move',
+    body: ([sessionId, clientId, targetIndex, opts]) => ({ sessionId, clientId, targetIndex, opts }),
+  },
+  {
+    desktopChannel: 'maker:input:set-expanded',
+    webPath: 'maker.input.setExpanded',
+    hostPath: '/api/input/set-expanded',
+    body: ([sessionId, expanded, opts]) => ({ sessionId, expanded, opts }),
+  },
+  {
+    desktopChannel: 'maker:input:set-interaction-lock',
+    webPath: 'maker.input.setInteractionLock',
+    hostPath: '/api/input/set-interaction-lock',
+    body: ([sessionId, lockId, locked, opts]) => ({ sessionId, lockId, locked, opts }),
+  },
+  {
+    desktopChannel: 'maker:input:set-edit-lock',
+    webPath: 'maker.input.setEditLock',
+    hostPath: '/api/input/set-edit-lock',
+    body: ([sessionId, clientId, locked, opts]) => ({ sessionId, clientId, locked, opts }),
+  },
+  {
     desktopChannel: 'maker:input:retry-last-error',
     webPath: 'maker.input.retryLastError',
     hostPath: '/api/input/retry-last-error',

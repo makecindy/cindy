@@ -572,3 +572,35 @@ it('enforces trusted renderer admission for local-db:messages:work-details in Ho
   });
   await expect(noGuardHandlers.get('local-db:messages:work-details')!(event, 's1', {}, {})).rejects.toThrow(/Trusted renderer admission is required/);
 });
+
+it('enforces trusted renderer admission for queued input edit channels in Host client mode', async () => {
+  const event = {} as IpcMainInvokeEvent;
+  const handlers = new Map<string, (event: IpcMainInvokeEvent, ...args: unknown[]) => unknown>();
+  let trustedChecks = 0;
+  const paths: string[] = [];
+  registerHostDelegatedIpc({
+    ipcMain: {
+      handle: (ch: string, fn: (event: IpcMainInvokeEvent, ...args: unknown[]) => unknown) => handlers.set(ch, fn),
+      removeHandler: (ch: string) => handlers.delete(ch),
+    },
+    client: {
+      request: async (path: string) => { paths.push(path); return { pendingQueue: [] }; },
+    },
+    assertTrusted: () => { trustedChecks += 1; },
+  });
+  await handlers.get('maker:input:update-text')!(event, 's1', 'c1', 'edited');
+  await handlers.get('maker:input:update-content')!(event, 's1', 'c1', { clientId: 'c1', text: 'edited' });
+  expect(trustedChecks).toBe(2);
+  expect(paths).toEqual(['/api/input/update-text', '/api/input/update-content']);
+
+  const noGuardHandlers = new Map<string, (event: IpcMainInvokeEvent, ...args: unknown[]) => unknown>();
+  registerHostDelegatedIpc({
+    ipcMain: {
+      handle: (ch: string, fn: (event: IpcMainInvokeEvent, ...args: unknown[]) => unknown) => noGuardHandlers.set(ch, fn),
+      removeHandler: (ch: string) => noGuardHandlers.delete(ch),
+    },
+    client: { request: async () => ({ pendingQueue: [] }) },
+  });
+  await expect(noGuardHandlers.get('maker:input:update-text')!(event, 's1', 'c1', 'x')).rejects.toThrow(/Trusted renderer admission is required/);
+  await expect(noGuardHandlers.get('maker:input:update-content')!(event, 's1', 'c1', { clientId: 'c1', text: 'x' })).rejects.toThrow(/Trusted renderer admission is required/);
+});
