@@ -64,6 +64,11 @@ it.each<[string, AgentIslandSessionSnapshot['phase'], boolean, Partial<SessionIn
   ['teammate own task, waiting', 'needs-interaction', true, { kind: 'teammate-task' }, true],
   ['teammate own task, running', 'running', false, { kind: 'teammate-task' }, true],
   ['archived', 'completed', true, { status: 'archived' }, false],
+  // 2026-11-28: a teammate main conversation lives only in the teammate section, which shows its
+  // state and has no snooze; an old client's leftover snooze must not hide a visible unread.
+  ['teammate main conversation, unread', 'completed', true, { kind: 'canonical' }, true],
+  ['teammate main conversation, read', 'completed', false, { kind: 'canonical' }, false],
+  ['teammate main conversation, snoozed by an old client', 'completed', true, { kind: 'canonical', snoozedUntil: '2026-01-02T00:00:00.000Z', snoozedAt: '2026-01-01T00:00:00.000Z' }, true],
 ])('phone share keeps inbox tasks only: %s', (_name, phase, attention, facts, counted) => {
   const now = Date.parse('2026-01-01T12:00:00.000Z');
   const full = facts && ({ status: 'active', kind: 'task', ...facts } as SessionInboxFacts);
