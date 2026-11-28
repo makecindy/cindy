@@ -13132,6 +13132,7 @@
       "arrivalPermissions": "{{name}}은(는) 이 컴퓨터의 기본 권한으로 실행됩니다.",
       "arrivalModel": "{{name}}에 저장된 모델을 이 컴퓨터에서 사용할 수 없어 이 컴퓨터의 기본 모델을 사용합니다.",
       "arrivalModelSetup": "{{name}}이(가) 이 컴퓨터로 왔지만 아직 사용할 수 있는 모델이 없습니다. 모델 제공자를 연결하거나 「제공자 → 스마트 라우팅」에서 버디 기본 모델을 설정하세요.",
+      "modelSetupHint": "이 컴퓨터에 사용할 수 있는 버디 모델이 없습니다. 제공자 → 스마트 라우팅에서 버디 기본 모델을 설정하세요. Cindy가 자동으로 다시 시도합니다.",
       "arrivalPartialContent": "{{name}}이(가) 이제 이 컴퓨터에서 실행되지만 일부 동기화된 항목은 복원하지 못했습니다. 클라우드의 원본은 그대로 유지됩니다.",
       "missingProfileTitle": "기본 프로필로 {{name}}을(를) 계속할까요?",
       "missingProfileDescription": "기존 주 컴퓨터에서 {{name}}의 프로필이 아직 업로드되지 않았습니다. 기존 컴퓨터를 재설치했거나 복구할 수 없다면 여기서 기본 프로필로 계속할 수 있으며, 클라우드에 동기화된 대화와 내용은 그대로 유지됩니다.",
@@ -15750,7 +15751,9 @@
     "connectionInterrupted": "음성 연결이 중단되었습니다. 네트워크를 확인한 뒤 다시 시도하세요.",
     "recognitionStalled": "음성 인식 결과가 더 이상 오지 않습니다. 다시 시도하세요.",
     "transcriptKept": "{{message}} 지금까지 인식된 텍스트는 유지했습니다. 바로 이어서 편집할 수 있습니다.",
-    "transcriptKeptOverlay": "{{message}} 지금까지 인식된 텍스트는 유지했습니다. 복사해서 이어가세요."
+    "transcriptKeptOverlay": "{{message}} 지금까지 인식된 텍스트는 유지했습니다. 복사해서 이어가세요.",
+    "retryRecognition": "다시 인식",
+    "recordAgain": "다시 녹음"
   },
   "chatgptAuthRecovery": {
     "title": "ChatGPT 로그인이 더 이상 유효하지 않습니다",
@@ -16020,7 +16023,7 @@
       "requestFormatError": "앱이 보낸 요청 형식에 문제가 있어 답변을 완료하지 못했습니다.",
       "piRetryHistoryTooLarge": "메시지를 보내지 못했습니다. Pi가 재시도에 필요한 기록을 읽는 동안 데이터 프레임이 로컬 한도인 16 MiB를 초과했습니다. 새 작업에서 계속할 수 있습니다.",
       "piRetryHistoryUnavailable": "메시지를 보내지 못했습니다. Pi가 전송에 필요한 기록을 읽지 못했습니다. 다시 시도하거나 새 작업에서 계속할 수 있습니다.",
-      "upstreamStatusError": "상위 서비스가 {{status}}를 반환하여 이 답변이 완료되지 않았습니다.",
+      "upstreamStatusError": "모델 프로바이더 서비스가 오류(HTTP {{status}})를 반환했습니다. 이번 응답이 완료되지 않았습니다.",
       "messageNotSent": "메시지를 보내지 못했습니다.",
       "replyFailed": "답변을 완료하지 못했습니다",
       "queuedSendRecovery": "이전 메시지가 전송되지 않았습니다. ‘다시 시도’를 누르면 그대로 보낼 수 있습니다. 새 메시지를 보내면 이전 메시지를 대체합니다.",
@@ -16078,12 +16081,12 @@
       "networkUnreachableNoRetry": "네트워크 오류: 서비스에 일시적으로 연결할 수 없습니다.",
       "networkAutoRetrying": "네트워크 오류: 자동으로 다시 시도하는 중…",
       "networkReconnecting": "연결이 끊어졌습니다. 다시 연결하는 중({{attempt}}/{{maxAttempts}})…",
-      "overloadRetrying": "모델 서비스가 혼잡합니다. 자동으로 다시 시도하는 중({{attempt}}/{{maxAttempts}})…",
+      "overloadRetrying": "모델 프로바이더가 일시적으로 혼잡합니다. 자동 재시도 중({{attempt}}/{{maxAttempts}})…",
       "rateLimitRetrying": "요청이 속도 제한에 걸렸습니다. 자동으로 다시 시도하는 중({{attempt}}/{{maxAttempts}})…",
-      "overloadBusy": "모델 서비스가 혼잡합니다. 상위 서비스에 여유 용량이 없습니다. ‘다시 시도’를 누르거나 다른 모델로 바꿔 보세요.",
-      "overloadBusyNoRetry": "모델 서비스가 혼잡합니다. 상위 서비스에 여유 용량이 없습니다. 잠시 후 다시 시도하거나 다른 모델로 바꿔 보세요.",
-      "streamInterrupted": "모델 출력이 중간에 중단되었습니다. 보통은 일시적인 상위 서비스 장애입니다. ‘다시 시도’를 눌러 주세요.",
-      "streamInterruptedNoRetry": "모델 출력이 중간에 중단되었습니다. 보통은 일시적인 상위 서비스 장애입니다. 잠시 후 다시 시도해 주세요.",
+      "overloadBusy": "모델 프로바이더가 일시적으로 혼잡해 가용 용량이 없습니다. 「다시 시도」를 누르거나 다른 모델로 전환하세요.",
+      "overloadBusyNoRetry": "모델 프로바이더가 일시적으로 혼잡해 가용 용량이 없습니다. 잠시 후 다시 시도하거나 다른 모델로 전환하세요.",
+      "streamInterrupted": "모델 프로바이더의 응답 스트림이 도중에 중단되었습니다. 「다시 시도」를 누르세요.",
+      "streamInterruptedNoRetry": "모델 프로바이더의 응답 스트림이 도중에 중단되었습니다. 잠시 후 다시 시도해 주세요.",
       "networkShowRaw": "오류 상세 정보",
       "networkHideRaw": "상세 정보 접기",
       "diagnose": "진단",
@@ -16092,7 +16095,7 @@
       "diagnosePromptWithoutSession": "이 오류를 진단해서 원인과 해결 방법을 알려 주세요.\n\n오류 메시지: {{message}}\n오류 상세:\n{{details}}\n\nCindy 자체의 문제로 확인되면 알려 주세요. Cindy 팀에 issue를 제출할지는 제가 선택할게요.",
       "gatewayProxyTokenInvalid": "Cindy AI 자격 증명이 더 이상 유효하지 않습니다. 다시 시도를 클릭하세요. 반복되면 로그아웃 후 다시 로그인하세요",
       "gatewayProxyTokenInvalidNoRetry": "Cindy AI 자격 증명이 더 이상 유효하지 않습니다. 반복되면 로그아웃 후 다시 로그인하세요",
-      "modelAccessDenied": "연결된 서비스 계정에 이 모델의 접근 권한이 없습니다. 다른 모델로 전환하거나 제공자에게 모델 접근 권한을 확인하세요",
+      "modelAccessDenied": "현재 모델 프로바이더 계정에 이 모델에 대한 접근 권한이 없습니다. 모델을 전환하거나 접근 권한을 확인하세요.",
       "providerSafetyRefusal": "모델 제공자의 안전 정책에 의해 이번 응답이 차단되었습니다. 계속하려면 요청 내용을 수정한 뒤 다시 보내세요",
       "silentStopContinue": "계속",
       "silentStopContinueTitle": "현재 작업 계속",
@@ -16102,7 +16105,20 @@
       "remoteCompactEncryptedContent": "모델이 기록의 암호화된 내용을 읽지 못해 컨텍스트 압축에 실패했습니다. 자동으로 이어가지 못했습니다. 다시 시도하여 복구할 수 있습니다.",
       "contextOverflow": "이 메시지 자체가 모델 컨텍스트 한도를 초과해서, 같은 세션에서 새 Agent 세션으로 자동 이어갈 수 없습니다. 입력을 줄이거나 큰 첨부파일을 제거한 뒤 다시 시도하세요.",
       "attachmentAccessDeniedTitle": "Cindy가 원본 첨부 파일을 읽을 수 없어 메시지가 전송되지 않았습니다.",
-      "attachmentAccessDeniedRecovery": "다운로드 등 접근 가능한 폴더에 사본을 저장하고, 원본 첨부 파일을 제거한 뒤 첨부 버튼으로 사본을 추가하여 다시 전송하세요."
+      "attachmentAccessDeniedRecovery": "다운로드 등 접근 가능한 폴더에 사본을 저장하고, 원본 첨부 파일을 제거한 뒤 첨부 버튼으로 사본을 추가하여 다시 전송하세요.",
+      "providerSafetyRefusalWithProvider": "{{provider}}의 안전 정책으로 이번 응답이 차단되었습니다. 요청 내용을 조정한 뒤 다시 보내세요.",
+      "overloadRetryingWithProvider": "{{provider}}가 일시적으로 혼잡합니다. 자동 재시도 중({{attempt}}/{{maxAttempts}})…",
+      "overloadBusyWithProvider": "{{provider}}가 일시적으로 혼잡해 가용 용량이 없습니다. 「다시 시도」를 누르거나 다른 모델로 전환하세요.",
+      "overloadBusyNoRetryWithProvider": "{{provider}}가 일시적으로 혼잡해 가용 용량이 없습니다. 잠시 후 다시 시도하거나 다른 모델로 전환하세요.",
+      "streamInterruptedWithProvider": "{{provider}}의 응답 스트림이 도중에 중단되었습니다. 「다시 시도」를 누르세요.",
+      "streamInterruptedNoRetryWithProvider": "{{provider}}의 응답 스트림이 도중에 중단되었습니다. 잠시 후 다시 시도해 주세요.",
+      "upstreamStatusErrorWithProvider": "{{provider}} 서비스가 오류(HTTP {{status}})를 반환했습니다. 이번 응답이 완료되지 않았습니다.",
+      "modelAccessDeniedWithProvider": "현재 {{provider}} 계정에 이 모델에 대한 접근 권한이 없습니다. 모델을 전환하거나 접근 권한을 확인하세요.",
+      "providerQuotaExhaustedWithProvider": "{{provider}} 계정의 할당량 또는 잔액이 부족합니다. 계정 상태를 확인하세요.",
+      "usageLimitReachedWithProvider": "{{provider}} 계정이 사용 한도에 도달했습니다",
+      "usageLimitReachedWithResetWithProvider": "{{provider}} 계정이 사용 한도에 도달했습니다. {{resetAt}}경 초기화될 예정입니다.",
+      "usageLimitReachedNoResetWithProvider": "{{provider}} 계정이 사용 한도에 도달했습니다. 한도가 초기화될 때까지 기다리거나 다른 모델로 전환하세요.",
+      "invalidEncryptedContentWithProvider": "{{provider}}에서 이전 대화의 암호화된 일부 기록을 읽을 수 없습니다. 원래 프로바이더로 돌아가거나 새 작업에서 계속하세요."
     },
     "backgroundActivity": {
       "status": "백그라운드 하위 작업 실행 중, 모델 사용량을 소비하고 있습니다…",
@@ -17055,7 +17071,20 @@
       "viewGhostCard": "플러그인 카드 보기"
     },
     "modelMismatch": {
-      "notice": "이번 턴은 선택한 {{selected}} 대신 {{actual}} 모델이 응답했습니다(제공자 측 임시 다운그레이드)"
+      "notice": "모델 제공자가 이번 턴을 {{selected}} 대신 {{actual}}(으)로 응답했습니다",
+      "noticeWithProvider": "{{provider}}에서 이번 턴을 {{selected}} 대신 {{actual}}(으)로 응답했습니다",
+      "infoLink": "이유 보기",
+      "infoTitle": "다른 모델이 응답한 이유",
+      "infoSummary": "Cindy는 선택한 {{selected}}(으)로 이번 턴 요청을 보냈지만, 모델 제공자가 실제로는 {{actual}}(으)로 응답을 반환했습니다.",
+      "infoSummaryWithProvider": "Cindy는 선택한 {{selected}}(으)로 이번 턴 요청을 보냈지만, {{provider}}에서 실제로는 {{actual}}(으)로 응답을 반환했습니다.",
+      "infoCausesTitle": "주요 원인",
+      "infoCausePolicy": "안전 또는 콘텐츠 정책 폴백(일부 모델은 응답을 거부하는 대신 이전 모델로 자동 전환하여 답변합니다).",
+      "infoCauseLoad": "트래픽이 몰리는 시간대에 모델 제공자가 임시로 대체 모델로 라우팅한 경우.",
+      "infoCauseGateway": "서드파티 또는 자체 모델 게이트웨이에서 모델 이름을 다른 모델로 매핑한 경우.",
+      "infoActionsTitle": "해결 방법",
+      "infoActionContinue": "설정을 바꿀 필요는 없습니다. 이번 턴에만 해당하며, 이후 메시지는 계속 {{selected}}(으)로 요청됩니다.",
+      "infoActionRetry": "이번 답변이 기대에 미치지 못하면 질문을 다듬어 다시 보내거나 다른 사용 가능한 모델로 전환해 보세요.",
+      "infoActionCheckProvider": "여러 턴에 걸쳐 계속 발생하면 모델 제공자의 할당량 상태나 게이트웨이 라우팅 설정을 확인하세요."
     },
     "ghostNotify": {
       "secretSaved": "자격 증명 \"{{name}}\"이(가) 저장되었습니다",
@@ -17134,6 +17163,88 @@
       "signingIn": "이 작업에서 사용하는 구독 계정에 로그인 중입니다. 로그인이 완료된 후 다시 시도하세요.",
       "unavailable": "이 작업에 지정된 구독 계정을 이번 요청에 사용할 수 없습니다. 작업을 실행하는 컴퓨터의 모델 제공자 설정에서 계정을 확인하거나 다른 모델 연결을 선택하세요.",
       "legacy": "이 작업에 지정된 구독 계정을 사용할 수 없습니다. 작업을 실행하는 컴퓨터에서 계정의 로그인 및 사용 상태를 확인하거나 다른 모델 연결을 선택하세요. 계정은 자동으로 변경되지 않습니다."
+    },
+    "errorExplain": {
+      "providerSafetyRefusal": {
+        "title": "응답이 차단된 이유",
+        "summary": "Cindy는 요청을 그대로 전송했지만 모델 프로바이더에 내장된 안전·콘텐츠 정책이 이번 출력을 차단했습니다. Cindy의 검열이나 로컬 플러그인 차단이 아닙니다.",
+        "summaryWithProvider": "Cindy는 요청을 그대로 전송했지만 {{provider}}에 내장된 안전·콘텐츠 정책이 이번 출력을 차단했습니다. Cindy의 검열이나 로컬 플러그인 차단이 아닙니다.",
+        "cause1": "요청 내용, 첨부 파일 또는 이전 대화 맥락이 프로바이더의 안전 심사 규칙에 걸렸습니다.",
+        "cause2": "모델이 생성 도중 출력 안전 필터에 걸려 응답이 중단되었습니다.",
+        "action1": "같은 내용으로 다시 시도하면 다시 차단될 수 있으므로 표현을 조정하거나 문제 부분을 제외하고 다시 보내세요.",
+        "action2": "이전 맥락 때문이라면 새 작업을 시작하거나 다른 모델로 전환해 보세요."
+      },
+      "overload": {
+        "title": "서비스 혼잡이 표시되는 이유",
+        "summary": "모델 프로바이더의 연산 자원이 일시적으로 부족합니다(피크 시간 과부하 또는 HTTP 529 등). Cindy나 로컬 네트워크와는 무관합니다.",
+        "summaryWithProvider": "{{provider}}의 연산 자원이 일시적으로 부족합니다(피크 시간 과부하 또는 HTTP 529 등). Cindy나 로컬 네트워크와는 무관합니다.",
+        "cause1": "피크 시간대 요청 급증으로 해당 모델의 가용 용량이 일시적으로 가득 찼습니다.",
+        "cause2": "프로바이더 측의 임시 점검 또는 용량 제한이 적용되고 있습니다.",
+        "action1": "Cindy를 재시작하거나 네트워크 설정을 바꿀 필요 없이 잠시 후 「다시 시도」를 누르세요.",
+        "action2": "바로 이어가려면 일시적으로 다른 모델이나 모델 그룹의 다른 소스로 전환하세요."
+      },
+      "streamInterrupted": {
+        "title": "출력이 도중에 중단된 이유",
+        "summary": "모델 프로바이더가 스트리밍 응답을 보내던 중 연결이 예기치 않게 끊어졌습니다. Cindy가 충돌한 것은 아니며 완료된 단계와 대화 기록은 모두 보존되었습니다.",
+        "summaryWithProvider": "{{provider}}가 스트리밍 응답을 보내던 중 연결이 예기치 않게 끊어졌습니다. Cindy가 충돌한 것은 아니며 완료된 단계와 대화 기록은 모두 보존되었습니다.",
+        "cause1": "모델 프로바이더 서버에서 생성 도중 일시적 오류나 연결 종료가 발생했습니다.",
+        "cause2": "서드파티 또는 자체 중계 게이트웨이가 긴 응답 전송 중 시간 초과로 끊어졌습니다.",
+        "action1": "「다시 시도」를 누르거나 「계속」이라고 보내 이어서 완료하도록 하세요.",
+        "action2": "여러 턴에 걸쳐 반복된다면 다른 모델로 바꾸거나 사용자 지정 게이트웨이의 타임아웃 설정을 확인하세요."
+      },
+      "upstreamStatus": {
+        "title": "서비스 오류가 반환된 이유",
+        "summary": "Cindy가 요청을 정상적으로 보냈지만 모델 프로바이더 서비스가 상세 본문 없는 HTTP {{status}} 내부 오류를 반환했습니다. Cindy 장애가 아닌 외부 서비스 이상입니다.",
+        "summaryWithProvider": "Cindy가 요청을 정상적으로 보냈지만 {{provider}} 서비스가 상세 본문 없는 HTTP {{status}} 내부 오류를 반환했습니다. Cindy 장애가 아닌 외부 서비스 이상입니다.",
+        "cause1": "모델 프로바이더 백엔드에서 일시적인 내부 오류가 발생했습니다.",
+        "cause2": "서드파티 또는 자체 모델 게이트웨이가 요청 전달에 실패했거나 사용자 지정 5xx 코드를 반환했습니다.",
+        "action1": "잠시 후 「다시 시도」를 누르세요. 일시적인 장애는 곧 복구되는 경우가 많습니다.",
+        "action2": "서드파티·자체 게이트웨이를 사용 중이라면 게이트웨이 상태와 로그를 확인하거나 다른 프로바이더로 전환하세요."
+      },
+      "modelAccessDenied": {
+        "title": "이 모델에 접근할 수 없는 이유",
+        "summary": "모델 프로바이더가 현재 계정의 이 모델 접근 요청을 거부했습니다. Cindy는 프로바이더 측 모델 권한 제어를 우회할 수 없습니다.",
+        "summaryWithProvider": "{{provider}}가 현재 계정의 이 모델 접근 요청을 거부했습니다. Cindy는 {{provider}} 측 모델 권한 제어를 우회할 수 없습니다.",
+        "cause1": "현재 구독 요금제 등급 또는 API 키에 이 모델 사용 권한이 포함되어 있지 않습니다.",
+        "cause2": "조직 관리자가 허용 모델 목록을 제한했거나 현재 지역에서 지원되지 않는 모델입니다.",
+        "action1": "현재 계정에서 사용할 수 있는 다른 모델로 전환해 작업을 이어가세요.",
+        "action2": "프로바이더 콘솔이나 요금제 페이지에서 권한을 확인하고, 방금 업그레이드했다면 계정을 다시 연결해 보세요."
+      },
+      "providerQuotaExceeded": {
+        "title": "할당량 또는 잔액 부족이 표시되는 이유",
+        "summary": "연결된 외부 모델 프로바이더 계정의 잔액 또는 할당량이 소진되어 프로바이더가 요청을 거부했습니다. Cindy 계정과는 별개입니다.",
+        "summaryWithProvider": "연결된 {{provider}} 계정의 잔액 또는 할당량이 소진되어 {{provider}}가 요청을 거부했습니다. Cindy 계정과는 별개입니다.",
+        "cause1": "해당 프로바이더 계정의 선불 크레딧이 소진되었거나 유효한 결제 수단이 등록되지 않았습니다.",
+        "cause2": "API 키의 사용 한도 또는 조직 할당량 한도에 도달했습니다.",
+        "action1": "해당 프로바이더 결제 페이지에서 충전하거나 한도를 높인 뒤 「다시 시도」를 누르세요.",
+        "action2": "모델 선택기에서 사용 가능한 할당량이 있는 다른 프로바이더로 전환해 계속할 수도 있습니다."
+      },
+      "usageLimit": {
+        "title": "사용 한도에 도달한 이유",
+        "summary": "연결된 모델 계정이 모델 프로바이더가 설정한 주기적 사용량 창 한도에 도달해 일시적으로 새 요청을 처리할 수 없습니다. Cindy가 부과한 제한이 아닙니다.",
+        "summaryWithProvider": "연결된 {{provider}} 계정이 {{provider}}가 설정한 주기적 사용량 창 한도에 도달해 일시적으로 새 요청을 처리할 수 없습니다. Cindy가 부과한 제한이 아닙니다.",
+        "cause1": "구독 계정의 현재 시간 창(예: 5시간 또는 주간 주기) 사용량을 모두 소진했습니다.",
+        "cause2": "같은 계정을 여러 작업이나 기기에서 동시에 사용하면 동일한 주기 할당량 창을 공유합니다.",
+        "action1": "할당량 창이 초기화된 뒤 다시 시도하세요. 자동 계속이 켜져 있으면 초기화 후 자동으로 이어집니다.",
+        "action2": "바로 이어가려면 다른 모델, 다른 구독 계정 또는 API 프로바이더로 임시 전환하세요."
+      },
+      "encryptedContent": {
+        "title": "일부 기록을 읽을 수 없는 이유",
+        "summary": "일부 모델은 내부 추론 상태를 대화 기록에 암호화해 저장하며 원래 프로바이더와 계정만 복호화할 수 있습니다. 프로바이더·계정을 바꾸거나 원격 컨텍스트 정리 시 이전 암호화 구간을 읽지 못할 수 있습니다.",
+        "summaryWithProvider": "일부 모델은 내부 추론 상태를 대화 기록에 암호화해 저장하며 원래 프로바이더와 계정만 복호화할 수 있습니다. 프로바이더·계정을 바꾸거나 원격 컨텍스트 정리 시 {{provider}}가 이전 암호화 구간을 읽지 못할 수 있습니다.",
+        "cause1": "도중에 다른 모델 프로바이더나 계정으로 전환해 이전 암호화 추론 내용을 복호화할 수 없습니다.",
+        "cause2": "원격 컨텍스트 정리나 다른 엔드포인트 라우팅으로 암호 상태가 일치하지 않습니다.",
+        "action1": "원래 사용하던 모델 프로바이더 또는 계정으로 되돌리면 이 작업을 그대로 이어갈 수 있습니다.",
+        "action2": "또는 「새 작업에서 계속」을 누르면 읽을 수 있는 대화 기록은 유지하고 복호화 불가 구간만 제거하며 기존 작업은 그대로 보존됩니다."
+      },
+      "failedSamplingAttempt": {
+        "title": "완료되지 않은 답변이 표시되는 이유",
+        "summary": "모델이 이 답변을 생성하던 중 실패하거나 중단되어 앞부분만 출력되었습니다. 이미 나온 내용이 사라지지 않도록 Cindy가 참고용으로 남겨 두었습니다.",
+        "cause1": "스트리밍 도중 프로바이더 오류, 연결 끊김 또는 안전 정책 차단이 발생했습니다.",
+        "cause2": "응답이 완전히 마무리되기 전에 오류가 나거나 중단되었습니다.",
+        "action1": "아래 오류 카드에서 구체적인 중단 원인과 재시도 필요 여부를 확인하세요.",
+        "action2": "다시 시도하거나 새 메시지를 보내 이어갈 수 있으며, 표시된 내용도 참고할 수 있습니다."
+      }
     }
   },
   "ccAgent": {

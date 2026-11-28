@@ -5,12 +5,20 @@ import type { Transaction } from '@tiptap/pm/state';
 import { useTranslation } from 'react-i18next';
 import type {
   DictationRefinementContext,
+  RetainedFailedVoiceAudio,
   VoiceInputDraftSource,
   VoiceInputErrorCode,
   VoiceInputRendererEvent,
   VoiceInputState,
 } from '@cindy/voice-input-core';
-import { takeRefinementContextHead, takeRefinementContextTail } from '@cindy/voice-input-core';
+import {
+  FailedVoiceAudioAccumulator,
+  FAILED_VOICE_AUDIO_TTL_MS,
+  isRetainedFailedVoiceAudioExpired,
+  shouldRetainFailedVoiceAudio,
+  takeRefinementContextHead,
+  takeRefinementContextTail,
+} from '@cindy/voice-input-core';
 
 import { createLogger } from '@/lib/logger';
 import { toast } from '@/lib/toast';
@@ -50,6 +58,7 @@ import {
 import { prewarmVoiceInputAudio } from './audioContextPool';
 import { createVoiceInputAudioProfile } from './audioProfile';
 import { startVoiceInputCaptureSession } from './captureSession';
+import { streamRetainedAudioToMain } from './failedAudioReplay';
 import {
   buildBaseVoiceInputRefinementContext,
   resolveBrowserVoiceInputLanguage,
@@ -68,6 +77,7 @@ import {
   resolveInsertedTextRange,
   type EditorTextRange,
 } from './editorRangeMapping';
+import { mapTextTargetWatchRange } from './textTargetDictionaryWatch';
 import { getVoiceInputErrorMessageKey, VOICE_INPUT_ERROR_CODE_KEYS } from './overlayErrors';
 import {
   hasArmedDetachedVoiceDraft,
@@ -116,6 +126,9 @@ type DictionaryLearningWatch = {
   end: number;
   createdAt: number;
   lastActivityAt: number;
+  /** Last full input value observed for controlled plain-text (`textTarget`) watches. */
+  lastFullText?: string;
+  touchedTrailingEdge?: boolean;
   pendingEvidence?: VoiceInputDictionaryLearningEvidence;
   pendingAdviceTimer?: number;
 };
@@ -136,6 +149,7 @@ const STOP_WAIT_RAW_TIMEOUT_MS = 1_000;
 const STOP_WAIT_REFINEMENT_FAILSAFE_MS = 90_000;
 const START_READY_STOP_TIMEOUT_MS = 10_000;
 const INLINE_ERROR_AUTO_DISMISS_MS = 8_000;
+const INLINE_RETRYABLE_ERROR_AUTO_DISMISS_MS = 60_000;
 
 // Only the latest recording may issue a delayed mute. Restoration always carries
 // that recording's ID so main can release an old lease while preserving its successor.
@@ -152,6 +166,8 @@ export type UseVoiceInputResult = {
   draftSource: VoiceInputDraftSource | null;
   draftRange: EditorTextRange | null;
   lastError: string | null;
+  /** Whether locally retained voiced audio from the last failed take can be re-recognized. */
+  canRetryRecognition: boolean;
   isListening: boolean;
   isCaptureReady: boolean;
   isBusy: boolean;
@@ -165,8 +181,17 @@ export type UseVoiceInputResult = {
   prepare: () => void;
   /** 同步 claim 录音后立刻返回是否占用；启动流程（授权确认、采集、连接）在后台继续。 */
   start: (options?: VoiceInputStartOptions) => boolean;
+  /** Replay the locally retained failed audio through ASR + refinement without reopening the mic. */
+  retryRecognition: () => boolean;
+  clearRetainedFailedAudio: () => void;
   stop: (options?: VoiceInputStopOptions) => Promise<void>;
   cancel: () => Promise<void>;
+  /** Notify controlled `textTarget` dictionary watches after a user edit. */
+  inspectTextTargetValue: (nextText: string) => void;
+  /** Flush pending dictionary-learning edits (e.g. before switching drafts) and clear watches. */
+  flushDictionaryLearningWatches: () => void;
+  /** Drop active dictionary-learning watches without publishing (e.g. on account switch). */
+  discardDictionaryLearningWatches: () => void;
 };
 
 export type VoiceInputStartOptions = {
@@ -228,6 +253,7 @@ export function useVoiceInput(
   const [draftText, setDraftText] = useState('');
   const [draftSource, setDraftSource] = useState<VoiceInputDraftSource | null>(null);
   const [lastError, setLastError] = useState<string | null>(null);
+  const [canRetryRecognition, setCanRetryRecognition] = useState(false);
   const {
     visible: speakerFiltered,
     show: showSpeakerFiltered,
@@ -266,6 +292,10 @@ export function useVoiceInput(
   const stopInFlightPromiseRef = useRef<Promise<void> | null>(null);
   const inlineErrorDismissTimerRef = useRef<number | null>(null);
   const lastErrorRef = useRef<string | null>(null);
+  const audioAccumulatorRef = useRef(new FailedVoiceAudioAccumulator());
+  const retainedFailedAudioRef = useRef<RetainedFailedVoiceAudio | null>(null);
+  const retainedAudioExpireTimerRef = useRef<number | null>(null);
+  const retryingAudioRef = useRef(false);
   const shouldRestoreEditorFocusRef = useRef(false);
   const insertionRangeRef = useRef<EditorTextRange | null>(null);
   const draftDisplayRangeRef = useRef<EditorTextRange | null>(null);
@@ -439,6 +469,70 @@ export function useVoiceInput(
     });
   }, []);
 
+  const clearRetainedFailedAudio = useCallback(() => {
+    if (retainedAudioExpireTimerRef.current !== null) {
+      window.clearTimeout(retainedAudioExpireTimerRef.current);
+      retainedAudioExpireTimerRef.current = null;
+    }
+    retainedFailedAudioRef.current = null;
+    retryingAudioRef.current = false;
+    setCanRetryRecognition(false);
+  }, []);
+
+  const retainFailedAudioIfEligible = useCallback((flags?: {
+    cancelled?: boolean;
+    permissionDenied?: boolean;
+    captureFailed?: boolean;
+  }): boolean => {
+    if (retryingAudioRef.current) {
+      retryingAudioRef.current = false;
+      if (retainedFailedAudioRef.current && !isRetainedFailedVoiceAudioExpired(retainedFailedAudioRef.current)) {
+        setCanRetryRecognition(true);
+        return true;
+      }
+      clearRetainedFailedAudio();
+      return false;
+    }
+    const recordingId = recordingIdRef.current;
+    if (
+      !flags?.cancelled &&
+      !flags?.permissionDenied &&
+      !flags?.captureFailed &&
+      recordingId &&
+      retainedFailedAudioRef.current?.id === recordingId &&
+      !isRetainedFailedVoiceAudioExpired(retainedFailedAudioRef.current)
+    ) {
+      setCanRetryRecognition(true);
+      return true;
+    }
+    const eligible = shouldRetainFailedVoiceAudio({
+      hasSound: audioAccumulatorRef.current.hasSound,
+      transcriptLanded: transcriptLandedRef.current,
+      cancelled: Boolean(flags?.cancelled),
+      permissionDenied: flags?.permissionDenied,
+      captureFailed: flags?.captureFailed,
+    });
+    const snapshot = eligible
+      ? audioAccumulatorRef.current.snapshot(recordingId || `voice-${Date.now()}`)
+      : null;
+    audioAccumulatorRef.current.clear();
+    if (!snapshot) {
+      clearRetainedFailedAudio();
+      return false;
+    }
+    if (retainedAudioExpireTimerRef.current !== null) {
+      window.clearTimeout(retainedAudioExpireTimerRef.current);
+    }
+    retainedFailedAudioRef.current = snapshot;
+    setCanRetryRecognition(true);
+    retainedAudioExpireTimerRef.current = window.setTimeout(() => {
+      retainedAudioExpireTimerRef.current = null;
+      retainedFailedAudioRef.current = null;
+      setCanRetryRecognition(false);
+    }, FAILED_VOICE_AUDIO_TTL_MS);
+    return true;
+  }, [clearRetainedFailedAudio]);
+
   const clearInlineErrorDismissTimer = useCallback(() => {
     if (inlineErrorDismissTimerRef.current === null) return;
     window.clearTimeout(inlineErrorDismissTimerRef.current);
@@ -455,10 +549,13 @@ export function useVoiceInput(
     clearInlineErrorDismissTimer();
     lastErrorRef.current = message;
     setLastError(message);
+    const dismissDelayMs = retainedFailedAudioRef.current
+      ? INLINE_RETRYABLE_ERROR_AUTO_DISMISS_MS
+      : INLINE_ERROR_AUTO_DISMISS_MS;
     inlineErrorDismissTimerRef.current = window.setTimeout(() => {
       inlineErrorDismissTimerRef.current = null;
       setLastError(null);
-    }, INLINE_ERROR_AUTO_DISMISS_MS);
+    }, dismissDelayMs);
   }, [clearInlineErrorDismissTimer]);
 
   const formatVoiceInputStartError = useCallback((message: string): string => {
@@ -552,7 +649,7 @@ export function useVoiceInput(
     }
   }, []);
 
-  const failActiveRecording = useCallback(async (message: string) => {
+  const failActiveRecording = useCallback(async (message: string, flags?: { captureFailed?: boolean }) => {
     if (stateRef.current !== 'listening') return;
     log.warn('microphone capture interrupted:', message);
     invalidateStartAttempt();
@@ -565,11 +662,12 @@ export function useVoiceInput(
     draftDisplayRangeRef.current = null;
     insertionRangeRef.current = null;
     submittedRangesRef.current.clear();
+    await stopEngine();
+    retainFailedAudioIfEligible(flags);
     setVoiceState('error');
     reportVoiceInputError(message);
     restoreEditorFocusAfterVoiceInput();
 
-    await stopEngine();
     try {
       if (runId) await window.electronAPI.voiceInput.cancel({ runId });
     } finally {
@@ -583,6 +681,7 @@ export function useVoiceInput(
     resolveStopCompletion,
     restoreSystemAudioForRecording,
     restoreEditorFocusAfterVoiceInput,
+    retainFailedAudioIfEligible,
     setVoiceState,
     stopEngine,
   ]);
@@ -669,12 +768,24 @@ export function useVoiceInput(
     dictionaryLearningWatchesRef.current.clear();
   }, [clearDictionaryLearningWatchTimer, publishDictionaryLearningEvidence]);
 
+  const discardDictionaryLearningWatches = useCallback(() => {
+    dictionaryLearningWatchesRef.current.forEach((watch) => {
+      clearDictionaryLearningWatchTimer(watch);
+    });
+    dictionaryLearningWatchesRef.current.clear();
+  }, [clearDictionaryLearningWatchTimer]);
+
   const upsertDictionaryLearningWatch = useCallback((watch: DictionaryLearningWatch) => {
-    // ProseMirror transaction watches do not apply to controlled textareas.
-    if (optionsRef.current?.textTarget) return;
+    const target = optionsRef.current?.textTarget;
+    const normalizedWatch: DictionaryLearningWatch = target
+      ? {
+          ...watch,
+          lastFullText: watch.lastFullText ?? target.getText(),
+        }
+      : watch;
     const watches = dictionaryLearningWatchesRef.current;
-    clearDictionaryLearningWatchTimer(watches.get(watch.segmentId));
-    watches.set(watch.segmentId, watch);
+    clearDictionaryLearningWatchTimer(watches.get(normalizedWatch.segmentId));
+    watches.set(normalizedWatch.segmentId, normalizedWatch);
     if (watches.size <= MAX_DICTIONARY_LEARNING_WATCHES) return;
     const oldest = Array.from(watches.values()).sort((a, b) => a.createdAt - b.createdAt)[0];
     if (oldest) {
@@ -693,6 +804,32 @@ export function useVoiceInput(
     const timer = window.setTimeout(() => {
       const currentWatch = dictionaryLearningWatchesRef.current.get(segmentId);
       if (!currentWatch || currentWatch.pendingAdviceTimer !== timer) return;
+      const target = optionsRef.current?.textTarget;
+      if (target) {
+        const fullText = target.getText();
+        const start = Math.max(0, Math.min(currentWatch.start, fullText.length));
+        const end = Math.max(start, Math.min(currentWatch.end, fullText.length));
+        const afterText = fullText.slice(start, end);
+        if (!afterText || afterText === currentWatch.baselineText) {
+          dictionaryLearningWatchesRef.current.delete(segmentId);
+          return;
+        }
+        const latestEvidence: VoiceInputDictionaryLearningEvidence = {
+          source: evidence.source,
+          rawTranscriptText: currentWatch.rawTranscriptText,
+          beforeText: currentWatch.baselineText,
+          afterText,
+          context: {
+            uiLanguage: navigator.language,
+            sourceLanguage: resolveBrowserVoiceInputLanguage(voiceInputSettings.language),
+            selectionBefore: fullText.slice(Math.max(0, start - DICTIONARY_LEARNING_CONTEXT_CHARS), start),
+            selectionAfter: fullText.slice(end, Math.min(fullText.length, end + DICTIONARY_LEARNING_CONTEXT_CHARS)),
+          },
+        };
+        dictionaryLearningWatchesRef.current.delete(segmentId);
+        publishDictionaryLearningEvidence(latestEvidence, 'track_timeout');
+        return;
+      }
       const current = editorRef.current;
       if (!current || current.isDestroyed) {
         dictionaryLearningWatchesRef.current.set(segmentId, {
@@ -841,6 +978,98 @@ export function useVoiceInput(
     voiceInputSettings.language,
   ]);
 
+  const inspectTextTargetValue = useCallback((nextFullText: string) => {
+    if (applyingVoiceTextRef.current || !optionsRef.current?.textTarget) return;
+    if (dictionaryLearningWatchesRef.current.size === 0) return;
+    const now = Date.now();
+    pruneDictionaryLearningWatches(now);
+    const evidences: Array<{ segmentId: string; evidence: VoiceInputDictionaryLearningEvidence }> = [];
+    for (const watch of Array.from(dictionaryLearningWatchesRef.current.values())) {
+      const prevFullText = watch.lastFullText ?? '';
+      if (prevFullText === nextFullText) continue;
+      const mapped = mapTextTargetWatchRange(prevFullText, nextFullText, {
+        start: watch.start,
+        end: watch.end,
+        touchedTrailingEdge: watch.touchedTrailingEdge,
+      });
+      if (mapped.status === 'cleared') {
+        finalizeDictionaryLearningWatch(watch.segmentId, 'clear_input_box');
+        continue;
+      }
+      if (mapped.status === 'lost') {
+        finalizeDictionaryLearningWatch(watch.segmentId, 'range_lost');
+        continue;
+      }
+      if (mapped.status === 'unchanged') {
+        dictionaryLearningWatchesRef.current.set(watch.segmentId, {
+          ...watch,
+          start: mapped.start,
+          end: mapped.end,
+          touchedTrailingEdge: mapped.touchedTrailingEdge,
+          lastFullText: nextFullText,
+        });
+        continue;
+      }
+      if (mapped.text === watch.baselineText) {
+        clearDictionaryLearningWatchTimer(watch);
+        dictionaryLearningWatchesRef.current.set(watch.segmentId, {
+          ...watch,
+          start: mapped.start,
+          end: mapped.end,
+          touchedTrailingEdge: mapped.touchedTrailingEdge,
+          lastFullText: nextFullText,
+          pendingAdviceTimer: undefined,
+          pendingEvidence: undefined,
+        });
+        continue;
+      }
+      const evidence: VoiceInputDictionaryLearningEvidence = {
+        source: 'in_app',
+        rawTranscriptText: watch.rawTranscriptText,
+        beforeText: watch.baselineText,
+        afterText: mapped.text,
+        context: {
+          uiLanguage: navigator.language,
+          sourceLanguage: resolveBrowserVoiceInputLanguage(voiceInputSettings.language),
+          selectionBefore: nextFullText.slice(
+            Math.max(0, mapped.start - DICTIONARY_LEARNING_CONTEXT_CHARS),
+            mapped.start,
+          ),
+          selectionAfter: nextFullText.slice(
+            mapped.end,
+            Math.min(nextFullText.length, mapped.end + DICTIONARY_LEARNING_CONTEXT_CHARS),
+          ),
+        },
+      };
+      dictionaryLearningWatchesRef.current.set(watch.segmentId, {
+        ...watch,
+        start: mapped.start,
+        end: mapped.end,
+        touchedTrailingEdge: mapped.touchedTrailingEdge,
+        lastFullText: nextFullText,
+        lastActivityAt: now,
+      });
+      evidences.push({ segmentId: watch.segmentId, evidence });
+    }
+    if (evidences.length > 0) {
+      evidences.forEach(({ segmentId, evidence }) => {
+        scheduleDictionaryLearningAdvice(segmentId, evidence);
+      });
+      log.debug('voice input textTarget dictionary learning evidence detected', {
+        count: evidences.length,
+        rawTranscriptChars: evidences.map(({ evidence }) => evidence.rawTranscriptText?.length ?? 0),
+        beforeChars: evidences.map(({ evidence }) => evidence.beforeText.length),
+        afterChars: evidences.map(({ evidence }) => evidence.afterText.length),
+      });
+    }
+  }, [
+    clearDictionaryLearningWatchTimer,
+    finalizeDictionaryLearningWatch,
+    pruneDictionaryLearningWatches,
+    scheduleDictionaryLearningAdvice,
+    voiceInputSettings.language,
+  ]);
+
   const buildRefinementContext = useCallback((): DictationRefinementContext => {
     const current = editorRef.current;
     const baseContext = buildBaseVoiceInputRefinementContext({
@@ -913,7 +1142,12 @@ export function useVoiceInput(
     if (target) {
       const range = insertionRangeRef.current ?? target.getSelection();
       insertionRangeRef.current = null;
-      return target.replace(range, text);
+      applyingVoiceTextRef.current = true;
+      try {
+        return target.replace(range, text);
+      } finally {
+        applyingVoiceTextRef.current = false;
+      }
     }
     const current = editorRef.current;
     if (!current || current.isDestroyed) return null;
@@ -948,9 +1182,25 @@ export function useVoiceInput(
       const text = target.getText();
       const basedOnText = event.segment.basedOnText ?? range.rawTranscriptText ?? range.submittedText;
       if (range.end > text.length || ![range.submittedText, basedOnText].includes(text.slice(range.start, range.end))) return false;
-      const replaced = target.replace({ from: range.start, to: range.end }, event.text);
+      applyingVoiceTextRef.current = true;
+      let replaced: { start: number; end: number } | null = null;
+      try {
+        replaced = target.replace({ from: range.start, to: range.end }, event.text);
+      } finally {
+        applyingVoiceTextRef.current = false;
+      }
       if (!replaced) return false;
       submittedRangesRef.current.set(segmentId, { ...range, ...replaced, submittedText: event.text });
+      upsertDictionaryLearningWatch({
+        segmentId,
+        rawTranscriptText: basedOnText,
+        baselineText: event.text,
+        start: replaced.start,
+        end: replaced.end,
+        createdAt: Date.now(),
+        lastActivityAt: Date.now(),
+        lastFullText: target.getText(),
+      });
       if (range.historyEntryId) updateVoiceInputHistoryEntry(range.historyEntryId, event.text);
       return true;
     }
@@ -1090,6 +1340,8 @@ export function useVoiceInput(
             const range = insertSubmittedText(event.text);
             transcriptLandedRef.current = Boolean(range);
             if (range) {
+              audioAccumulatorRef.current.clear();
+              clearRetainedFailedAudio();
               const historyEntryId = recordVoiceInputHistory(event.text);
               submittedRangesRef.current.set(event.segment.id, {
                 segmentId: event.segment.id,
@@ -1207,6 +1459,7 @@ export function useVoiceInput(
               log.warn('failed voice input cleanup:', error instanceof Error ? error.message : String(error));
             });
           }
+          retainFailedAudioIfEligible();
           resolveStopCompletion();
           reportVoiceInputError(formattedMessage);
           restoreEditorFocusAfterVoiceInput();
@@ -1245,7 +1498,7 @@ export function useVoiceInput(
       }
       stopListening();
     };
-  }, [applyRefinedText, clampEditorTextRange, commitUsageStats, formatVoiceInputError, insertSubmittedText, promptCodexSessionExpired, recordVisibleTextChanged, reportVoiceInputError, resolveStopCompletion, restoreEditorFocusAfterVoiceInput, restoreSystemAudioForRecording, setVoiceState, showSpeakerFiltered, stopEngine, upsertDictionaryLearningWatch]);
+  }, [applyRefinedText, clampEditorTextRange, clearRetainedFailedAudio, commitUsageStats, formatVoiceInputError, insertSubmittedText, promptCodexSessionExpired, recordVisibleTextChanged, reportVoiceInputError, resolveStopCompletion, restoreEditorFocusAfterVoiceInput, restoreSystemAudioForRecording, retainFailedAudioIfEligible, setVoiceState, showSpeakerFiltered, stopEngine, upsertDictionaryLearningWatch]);
 
   useEffect(() => {
     return () => {
@@ -1277,6 +1530,8 @@ export function useVoiceInput(
       runIdRef.current = null;
       commitUsageStats();
       clearDictionaryLearningWatches();
+      audioAccumulatorRef.current.clear();
+      clearRetainedFailedAudio();
       void stopEngine();
       void restoreSystemAudioForRecording();
       // A main-group and a thread composer can coexist. Disposing an idle
@@ -1287,6 +1542,7 @@ export function useVoiceInput(
   }, [
     clearDictionaryLearningWatches,
     clearInlineErrorDismissTimer,
+    clearRetainedFailedAudio,
     invalidateStartAttempt,
     commitUsageStats,
     resolveStopCompletion,
@@ -1399,6 +1655,8 @@ export function useVoiceInput(
     setCaptureReady(false);
     dismissInlineError();
     clearSpeakerFiltered();
+    audioAccumulatorRef.current.clear();
+    clearRetainedFailedAudio();
     shouldRestoreEditorFocusRef.current = true;
     insertionRangeRef.current = readEditorSelectionRange();
     draftDisplayRangeRef.current = insertionRangeRef.current;
@@ -1416,6 +1674,7 @@ export function useVoiceInput(
     submittedRangesRef.current.clear();
     lastRefinementRef.current = null;
     lastSubmittedTextRef.current = '';
+    transcriptLandedRef.current = false;
     hasRecordingContentRef.current = false;
     sentAudioMsRef.current = 0;
     terminalOutcomeRef.current = 'success';
@@ -1448,11 +1707,12 @@ export function useVoiceInput(
         if (!isActiveStartAttempt(attemptId) || stateRef.current !== 'listening') return;
         setCaptureReady(true);
       },
+      onPcmCaptured: (pcm) => audioAccumulatorRef.current.append(pcm),
       onSamples: optionsRef.current?.onSamples,
       onSoundDetected: () => { hasRecordingContentRef.current = true; },
       appendAudioChunk,
       onInterrupted: (message) => {
-        if (isActiveStartAttempt(attemptId)) void failActiveRecording(message);
+        if (isActiveStartAttempt(attemptId)) void failActiveRecording(message, { captureFailed: true });
       },
       onStateChange: (event, details) => {
         log.debug('microphone engine', event, details);
@@ -1670,6 +1930,7 @@ export function useVoiceInput(
       resolveStartReadyState(attemptId, result);
       await stopEngine();
       await restoreSystemAudioForRecording();
+      retainFailedAudioIfEligible();
       draftDisplayRangeRef.current = null;
       insertionRangeRef.current = null;
       setVoiceState('error');
@@ -1786,6 +2047,8 @@ export function useVoiceInput(
     eventAdmissionRevokedRef.current = true;
     setDraftText('');
     setDraftSource(null);
+    audioAccumulatorRef.current.clear();
+    clearRetainedFailedAudio();
     const cancelledAttempt = startAttemptIdRef.current;
     resolveStopCompletion();
     await stopEngine();
@@ -1857,6 +2120,7 @@ export function useVoiceInput(
         if (!startResult.ok) {
           invalidateStartAttempt();
           await restorePromise;
+          retainFailedAudioIfEligible();
           commitUsageStats();
           setDraftText('');
           setDraftSource(null);
@@ -1916,6 +2180,7 @@ export function useVoiceInput(
     // their completion wait and failure checks below.
     if (startAttemptIdRef.current !== attemptId) return;
     if (!result.ok) {
+      retainFailedAudioIfEligible();
       resolveStopCompletion();
       setVoiceState('error');
       commitUsageStats();
@@ -1973,12 +2238,142 @@ export function useVoiceInput(
     void cancel();
   }, [cancel, disabled, editor, options?.textTarget]);
 
+  const retryRecognition = useCallback((): boolean => {
+    const bridge = getVoiceInputBridge();
+    const retained = retainedFailedAudioRef.current;
+    if (!retained || isRetainedFailedVoiceAudioExpired(retained)) {
+      clearRetainedFailedAudio();
+      return false;
+    }
+    const currentState = stateRef.current;
+    if (
+      disabled ||
+      !bridge?.start ||
+      (!editorRef.current && !optionsRef.current?.textTarget) ||
+      stopInFlightRef.current ||
+      currentState === 'listening' ||
+      currentState === 'submitting' ||
+      currentState === 'refining'
+    ) {
+      return false;
+    }
+    dismissInlineError();
+    clearSpeakerFiltered();
+    shouldRestoreEditorFocusRef.current = true;
+    insertionRangeRef.current = readEditorSelectionRange();
+    draftDisplayRangeRef.current = insertionRangeRef.current;
+    setDraftText('');
+    setDraftSource(null);
+    setVoiceState('submitting');
+    eventAdmissionRevokedRef.current = false;
+    retryingAudioRef.current = true;
+    const recordingId = crypto.randomUUID();
+    recordingIdRef.current = recordingId;
+    const attemptId = startAttemptIdRef.current + 1;
+    startAttemptIdRef.current = attemptId;
+    createStartReadyState(attemptId);
+    runIdRef.current = null;
+    ownedRunIdRef.current = null;
+    submittedRangesRef.current.clear();
+    lastRefinementRef.current = null;
+    lastSubmittedTextRef.current = '';
+    hasRecordingContentRef.current = true;
+    sentAudioMsRef.current = retained.durationMs;
+    transcriptLandedRef.current = false;
+    terminalOutcomeRef.current = 'success';
+
+    void (async () => {
+      const startPayload = {
+        recordingId,
+        sourceLanguage: voiceInputSettings.language,
+        refinementEnabled: voiceInputSettings.refinementEnabled,
+        refinementContext: voiceInputSettings.refinementEnabled ? buildRefinementContext() : undefined,
+        refinementCacheScope: VOICE_INPUT_REFINEMENT_CACHE_SCOPE,
+      };
+      let result: StartVoiceInputResult;
+      try {
+        result = await bridge.start(startPayload);
+      } catch (startError) {
+        result = {
+          ok: false,
+          error: startError instanceof Error ? startError.message : String(startError),
+        };
+      }
+      if (!isActiveStartAttempt(attemptId)) {
+        resolveStartReadyState(attemptId, { ok: false, error: 'Voice input start was cancelled.' });
+        if (result.ok) await bridge.cancel({ runId: result.runId }).catch(() => undefined);
+        return;
+      }
+      if (!result.ok) {
+        resolveStartReadyState(attemptId, result);
+        retainFailedAudioIfEligible();
+        draftDisplayRangeRef.current = null;
+        insertionRangeRef.current = null;
+        setVoiceState('error');
+        promptCodexSessionExpired(result.authErrorReason ?? result.error);
+        reportVoiceInputError(formatVoiceInputStartError(result.error));
+        restoreEditorFocusAfterVoiceInput();
+        return;
+      }
+      runIdRef.current = result.runId;
+      ownedRunIdRef.current = result.runId;
+      resolveStartReadyState(attemptId, result);
+      const streamed = await streamRetainedAudioToMain(retained, () => isActiveStartAttempt(attemptId));
+      if (!streamed || !isActiveStartAttempt(attemptId)) return;
+      runIdRef.current = null;
+      let stopResult: { ok: true } | { ok: false; error: string };
+      try {
+        stopResult = await bridge.stop();
+      } catch (stopError) {
+        stopResult = {
+          ok: false,
+          error: stopError instanceof Error ? stopError.message : String(stopError),
+        };
+      }
+      if (startAttemptIdRef.current !== attemptId) return;
+      if (!stopResult.ok) {
+        retainFailedAudioIfEligible();
+        resolveStopCompletion();
+        setVoiceState('error');
+        commitUsageStats();
+        reportVoiceInputError(formatVoiceInputStartError(stopResult.error));
+        restoreEditorFocusAfterVoiceInput();
+      }
+    })().catch((error) => {
+      log.warn('voice input retry failed', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
+    return true;
+  }, [
+    buildRefinementContext,
+    clearRetainedFailedAudio,
+    clearSpeakerFiltered,
+    commitUsageStats,
+    createStartReadyState,
+    disabled,
+    dismissInlineError,
+    formatVoiceInputStartError,
+    isActiveStartAttempt,
+    promptCodexSessionExpired,
+    readEditorSelectionRange,
+    reportVoiceInputError,
+    resolveStartReadyState,
+    resolveStopCompletion,
+    restoreEditorFocusAfterVoiceInput,
+    retainFailedAudioIfEligible,
+    setVoiceState,
+    voiceInputSettings.language,
+    voiceInputSettings.refinementEnabled,
+  ]);
+
   return {
     state,
     draftText,
     draftSource,
     draftRange: draftDisplayRangeRef.current ?? insertionRangeRef.current,
     lastError,
+    canRetryRecognition,
     isListening: state === 'listening',
     isCaptureReady: state === 'listening' && captureReady,
     isBusy: state === 'listening' || state === 'submitting' || state === 'refining',
@@ -1988,8 +2383,13 @@ export function useVoiceInput(
     getState,
     prepare,
     start,
+    retryRecognition,
+    clearRetainedFailedAudio,
     stop: stopWithGate,
     cancel,
+    inspectTextTargetValue,
+    flushDictionaryLearningWatches: clearDictionaryLearningWatches,
+    discardDictionaryLearningWatches,
   };
 }
 

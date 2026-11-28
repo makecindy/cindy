@@ -38,19 +38,22 @@ export function writeModelUsage(db: Database.Database, row: ModelUsageWrite) {
   if (!row.attribution || !counts.some(n => n > 0)) return;
   const utcDay = new Date(row.recordedAt).toISOString().slice(0, 10);
   const model = row.attribution.modelUnconfirmed ? 'unknown' : row.model.replace(/#billing=(subscription|api)$/, '');
+  const harness = row.agentKind === 'claude-code' || row.agentKind === 'codex' || row.agentKind === 'pi'
+    ? row.agentKind
+    : 'unknown';
   db.prepare(`INSERT INTO daily_token_attribution
-    (day,provider,billing_source,model,input_tokens,output_tokens,cache_read_tokens,cache_create_tokens)
-    VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(day,provider,billing_source,model) DO UPDATE SET
+    (day,provider,billing_source,model,harness,input_tokens,output_tokens,cache_read_tokens,cache_create_tokens)
+    VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT(day,provider,billing_source,model,harness) DO UPDATE SET
       input_tokens=input_tokens+excluded.input_tokens,output_tokens=output_tokens+excluded.output_tokens,
       cache_read_tokens=cache_read_tokens+excluded.cache_read_tokens,
       cache_create_tokens=cache_create_tokens+excluded.cache_create_tokens`)
-    .run(utcDay, row.attribution.provider, row.attribution.billingSource, model, ...counts);
-  db.prepare(`INSERT INTO token_reporting_first_day(provider,billing,model,generation,input,output,cache_read,cache_write)
-    SELECT ?,?,?,generation,?,?,?,? FROM token_reporting_window WHERE id=1 AND day=? AND starts_at<=?
-    ON CONFLICT(provider,billing,model) DO UPDATE SET generation=excluded.generation,
+    .run(utcDay, row.attribution.provider, row.attribution.billingSource, model, harness, ...counts);
+  db.prepare(`INSERT INTO token_reporting_first_day(provider,billing,model,harness,generation,input,output,cache_read,cache_write)
+    SELECT ?,?,?,?,generation,?,?,?,? FROM token_reporting_window WHERE id=1 AND day=? AND starts_at<=?
+    ON CONFLICT(provider,billing,model,harness) DO UPDATE SET generation=excluded.generation,
       input=excluded.input+CASE WHEN generation=excluded.generation THEN input ELSE 0 END,
       output=excluded.output+CASE WHEN generation=excluded.generation THEN output ELSE 0 END,
       cache_read=excluded.cache_read+CASE WHEN generation=excluded.generation THEN cache_read ELSE 0 END,
       cache_write=excluded.cache_write+CASE WHEN generation=excluded.generation THEN cache_write ELSE 0 END`)
-    .run(row.attribution.provider, row.attribution.billingSource, model, ...counts, utcDay, row.recordedAt);
+    .run(row.attribution.provider, row.attribution.billingSource, model, harness, ...counts, utcDay, row.recordedAt);
 }
