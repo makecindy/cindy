@@ -12230,6 +12230,8 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
                       generationReliable={remoteSessionRunStatus.generationReliable}
                       tokenSpeed={remoteSessionRunStatus.tokenSpeed}
                       generationActive={remoteSessionRunStatus.generationActive}
+                      replyStreaming={makerTurnRunning && currentTurnStreaming
+                        && /^generating(?:…|\.\.\.)?$/i.test(remoteSessionRunStatus.status.trim())}
                       visible={showComposerActivity}
                       slowSendPhase={creationSlowPhase}
                     />
@@ -14358,6 +14360,7 @@ function ComposerActivityStatus({
   generationReliable: reportedGenerationReliable,
   tokenSpeed,
   generationActive,
+  replyStreaming,
   visible,
   slowSendPhase = null,
 }: {
@@ -14378,6 +14381,7 @@ function ComposerActivityStatus({
   /** Host-measured live tok/s; replaces the usage-counter estimate when present. */
   tokenSpeed?: TokenSpeedSnapshot;
   generationActive: boolean;
+  replyStreaming: boolean;
   visible: boolean;
   /** Set once a new task's creation has waited past the slow-send delay. */
   slowSendPhase?: SlowSendPhase | null;
@@ -14502,6 +14506,7 @@ function ComposerActivityStatus({
       )
     : // 发送等待超过阈值时,同一行先说明卡在哪一步;创建完成后回到「思考中」。
       slowSendPhase ? t(`session.new.slowSend.${slowSendPhase}`)
+    : replyStreaming && !sideTaskRunning ? t('session.screen.replyStreaming')
     : t('session.screen.thinking');
 
   return (
