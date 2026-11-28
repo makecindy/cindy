@@ -38,6 +38,7 @@ const runtime = vi.hoisted(() => ({
   pendingCalls: false,
   runningErrand: false,
   cindyWork: false,
+  runningHarness: false,
   generatedInstallDirs: [] as string[],
   boundaryPending: false,
   pluginApiBaseUrl: 'https://plugin.test.invalid' as string | null,
@@ -140,6 +141,7 @@ vi.mock('../../cindy-brain/index.js', () => ({
   hasPendingGhostCalls: vi.fn(() => runtime.pendingCalls),
   hasRunningGhostErrand: vi.fn(() => runtime.runningErrand),
   hasRunningGhostCindyWork: vi.fn(() => runtime.cindyWork),
+  hasRunningGhostHarness: vi.fn(() => runtime.runningHarness),
   rejectReservedGhostIdForCustomMarket: vi.fn(),
   isBuiltinGhostRemovedByUser: (id: string) => runtime.builtinRemoved.has(id),
   uninstallGhostAndCleanup: runtime.uninstall,
@@ -193,6 +195,7 @@ afterEach(() => {
   runtime.pendingCalls = false;
   runtime.runningErrand = false;
   runtime.cindyWork = false;
+  runtime.runningHarness = false;
   for (const dir of runtime.generatedInstallDirs.splice(0)) {
     fs.rmSync(dir, { recursive: true, force: true });
   }

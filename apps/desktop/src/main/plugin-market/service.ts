@@ -75,6 +75,7 @@ import {
   hasPendingGhostCalls,
   hasRunningGhostCindyWork,
   hasRunningGhostErrand,
+  hasRunningGhostHarness,
   installOrUpdateMarketGhostPackage,
   isGhostAvailableForActiveSession,
   isBuiltinGhostRemovedByUser,
@@ -607,7 +608,8 @@ function isGhostBusy(
   return (
     hasPendingGhostCalls(runtimeId) ||
     hasRunningGhostErrand(runtimeId) ||
-    hasRunningGhostCindyWork(runtimeId)
+    hasRunningGhostCindyWork(runtimeId) ||
+    hasRunningGhostHarness(runtimeId)
   );
 }
 

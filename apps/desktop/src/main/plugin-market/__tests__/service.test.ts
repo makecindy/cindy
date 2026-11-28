@@ -54,6 +54,7 @@ const runtime = vi.hoisted(() => ({
   pendingCalls: false,
   runningErrand: false,
   cindyWork: false,
+  runningHarness: false,
   busyQueryIds: [] as string[],
   generatedInstallDirs: [] as string[],
   installOrigins: new Map<string, 'manual' | 'agent-forge'>(),
@@ -237,6 +238,10 @@ vi.mock('../../cindy-brain/index.js', () => ({
     runtime.busyQueryIds.push(id);
     return runtime.cindyWork;
   }),
+  hasRunningGhostHarness: vi.fn((id: string) => {
+    runtime.busyQueryIds.push(id);
+    return runtime.runningHarness;
+  }),
   isBuiltinGhostRemovedByUser: (id: string) => runtime.builtinRemoved.has(id),
   builtinSeedYieldsToStoreVersion: (id: string, storeVersion: string) => {
     if (!runtime.hostSeedVersions.has(id)) return false;
@@ -321,6 +326,7 @@ afterEach(() => {
   runtime.pendingCalls = false;
   runtime.runningErrand = false;
   runtime.cindyWork = false;
+  runtime.runningHarness = false;
   runtime.busyQueryIds = [];
   for (const dir of runtime.generatedInstallDirs.splice(0)) {
     fs.rmSync(dir, { recursive: true, force: true });
@@ -4475,7 +4481,7 @@ describe('PluginMarketService migration and defaultInstall', () => {
     expect(runtime.install).not.toHaveBeenCalled();
   });
 
-  it.each(['pendingCalls', 'runningErrand', 'cindyWork'] as const)(
+  it.each(['pendingCalls', 'runningErrand', 'cindyWork', 'runningHarness'] as const)(
     'skips a busy organization upgrade and retries on the next snapshot (%s)',
     async (signal) => {
       const item = summary({
