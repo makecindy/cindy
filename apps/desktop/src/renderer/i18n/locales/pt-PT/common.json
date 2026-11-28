@@ -3194,7 +3194,7 @@
             "hint": "Escolha o formato de mensagem implementado pelo serviço ASR.",
             "ariaLabel": "Protocolo ASR em tempo real personalizado",
             "openai": "Transcrição OpenAI",
-            "qwen": "Qwen realtime ASR"
+            "qwen": "ASR em tempo real Qwen"
           },
           "websocketUrl": {
             "label": "WebSocket URL",
