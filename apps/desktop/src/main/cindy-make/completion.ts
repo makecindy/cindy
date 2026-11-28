@@ -2,7 +2,7 @@ import path from 'node:path';
 import { realpath } from 'node:fs/promises';
 import { contentRef, taskCommitRef, taskContentRef, type ContentGit } from './sourceContent.js';
 import { commitLocalFiles } from './localHistory.js';
-import { makeTaskBranch, makeSourceCheckoutPath, isCindyMakeWorktreePath } from './sourcePaths.js';
+import { makeTaskBranch, makeSourceCheckoutPath, makeTaskWorktreePath } from './sourcePaths.js';
 import type { AgentEvent } from '@cindy/maker-core';
 import { isTerminalAgentErrorEvent } from '@cindy/maker-core';
 import { isTurnContinuationBoundaryEvent } from '@cindy/maker-shared/turn-continuation';
@@ -99,17 +99,18 @@ export async function collectCindyMakeChanges(
 ): Promise<Omit<CindyMakeCompletionMeta, 'reportedAt'>> {
   const runId = path.basename(worktree);
   const branch = (await git(['rev-parse', '--abbrev-ref', 'HEAD'], worktree)).trim();
+  if (branch !== makeTaskBranch(runId)) throw new Error('Unexpected Cindy Make worktree');
   const samePath = (a: string, b: string) =>
     process.platform === 'win32'
       ? path.resolve(a).toLowerCase() === path.resolve(b).toLowerCase()
       : path.resolve(a) === path.resolve(b);
+  // The workspace is compared with `realpath`, so its managed path comes from the resolved profile.
+  const root = await realpath(userData);
   if (
-    !isCindyMakeWorktreePath(userData, worktree) ||
-    branch !== makeTaskBranch(runId) ||
-    !samePath(await realpath(worktree), worktree) ||
+    !samePath(await realpath(worktree), makeTaskWorktreePath(root, runId)) ||
     !samePath(
       (await git(['rev-parse', '--path-format=absolute', '--git-common-dir'], worktree)).trim(),
-      await realpath(path.join(makeSourceCheckoutPath(userData), '.git')),
+      await realpath(path.join(makeSourceCheckoutPath(root), '.git')),
     )
   )
     throw new Error('Unexpected Cindy Make worktree');
