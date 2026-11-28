@@ -167,8 +167,10 @@ export function buildFeishuReplyContextBlock(
   requestText: string,
 ): string {
   const author = sanitizeDisplayText(reply.author) || (reply.isBot ? 'bot' : 'user');
+  const senderId = reply.isBot ? undefined : safeOpenId(reply.senderId ?? '');
+  const idPart = senderId ? ` (user_id: ${senderId})` : '';
   const line = neutralizeFenceTags(
-    `[${author}${reply.isBot ? ' (bot)' : ''}] ${channelHistoryTime(reply.sentAt ?? 0)} ${boundFeishuReplyText(reply.text)}`,
+    `[${author}${idPart}${reply.isBot ? ' (bot)' : ''}] ${channelHistoryTime(reply.sentAt ?? 0)} ${boundFeishuReplyText(reply.text)}`,
   );
   const attachmentNote =
     reply.attachmentCount && reply.attachmentCount > 0

@@ -1972,6 +1972,9 @@ async function resolveReplyWithClient(
         ...(root.create_time ? { sentAt: Number(root.create_time) } : {}),
         author: authorOf(root),
         text,
+        ...(root.sender?.id_type === 'open_id' && root.sender.id
+          ? { senderId: root.sender.id }
+          : {}),
         ...(root.sender?.sender_type === 'app' ? { isBot: true } : {}),
       },
       ...(attachments.length ? { attachments } : {}),

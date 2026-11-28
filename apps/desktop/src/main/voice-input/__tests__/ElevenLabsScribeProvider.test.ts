@@ -77,7 +77,7 @@ describe('ElevenLabsScribeProvider helpers', () => {
   });
 
   it('recovers by replaying uncommitted audio and preserving the current partial prefix', async () => {
-    const server = new WebSocketServer({ port: 0 });
+    const server = new WebSocketServer({ host: '127.0.0.1', port: 0 });
     const sockets: WebSocket[] = [];
     const messageCounts: number[] = [];
     let provider: ElevenLabsScribeProvider | undefined;
@@ -134,6 +134,7 @@ describe('ElevenLabsScribeProvider helpers', () => {
 
   it('does not reopen a socket after stop while recovery is connecting', async () => {
     const server = new WebSocketServer({
+      host: '127.0.0.1',
       port: 0,
       verifyClient(_info, done) {
         setTimeout(() => done(true), 80);
@@ -185,6 +186,7 @@ describe('ElevenLabsScribeProvider helpers', () => {
 
   it('fails startup with a clear timeout when the websocket handshake stalls', async () => {
     const server = new WebSocketServer({
+      host: '127.0.0.1',
       port: 0,
       verifyClient(_info, done) {
         setTimeout(() => done(true), 100);
@@ -214,6 +216,7 @@ describe('ElevenLabsScribeProvider helpers', () => {
 
   it('fails startup with a clear handshake error when upstream rejects the websocket upgrade', async () => {
     const server = new WebSocketServer({
+      host: '127.0.0.1',
       port: 0,
       verifyClient(_info, done) {
         done(false, 403, 'Forbidden');
@@ -242,7 +245,7 @@ describe('ElevenLabsScribeProvider helpers', () => {
   });
 
   it('waits for application authentication and rejects an auth error after the websocket opens', async () => {
-    const server = new WebSocketServer({ port: 0 });
+    const server = new WebSocketServer({ host: '127.0.0.1', port: 0 });
     let provider: ElevenLabsScribeProvider | undefined;
     server.on('connection', (socket) => {
       socket.send(JSON.stringify({ message_type: 'auth_error', error: 'Invalid API key' }));
