@@ -1,3 +1,4 @@
+import { ANTIGRAVITY_MARK_DATA_URL } from '@cindy/maker-shared/branding';
 import { useState } from 'react';
 import type { ProviderView } from '@cindy/model-providers';
 import { mountPage, subscription } from '../../ui-page/harness';
@@ -176,11 +177,84 @@ function AgentModes() {
   );
 }
 
+const antigravityEngines: PluginEngineView[] = [
+  {
+    key: '_root__cindy-antigravity-acp:agy',
+    providerId: 'acp-plugin:_root__cindy-antigravity-acp:agy',
+    ghostId: '_root__cindy-antigravity-acp',
+    harnessId: 'agy',
+    name: 'Antigravity',
+    iconDataUrl: ANTIGRAVITY_MARK_DATA_URL,
+    reportsUsage: true,
+    availability: { state: 'available', version: '0.5.0' },
+    models: [
+      { id: 'gemini-4-neon', displayName: 'Gemini 4 Neon', efforts: ['low', 'medium', 'high', 'xhigh'], defaultEffort: 'high' },
+      { id: 'claude-sonnet-5-5', displayName: 'Claude Sonnet 5.5', efforts: ['low', 'medium', 'high'], defaultEffort: 'medium' },
+      { id: 'gpt-oss-120b-medium', displayName: 'GPT-OSS 120B (Medium)' },
+    ],
+    permissionModes: modes,
+    defaultPermissionMode: 'ask',
+  },
+  {
+    ...engines[0]!,
+    reportsUsage: true,
+  },
+];
+
+function AntigravityQuotaPicker() {
+  const [active, setActive] = useState<PluginEngineSelection | null>({
+    providerId: antigravityEngines[0]!.providerId,
+    modelId: 'gemini-4-neon',
+    effort: 'high',
+  });
+  return (
+    <main className="mx-auto w-full max-w-[720px] p-3">
+      <div className="rounded-xl border border-[var(--border-default)] bg-[var(--bg-primary)] p-2">
+        <ModelSelectorContent
+          providersOverride={providers}
+          providersOverrideState={{ status: 'ready', refresh: () => {} }}
+          modelId="claude-opus-5"
+          effort="medium"
+          currentProviderId="anthropic"
+          onModelChange={() => {}}
+          onEffortChange={() => {}}
+          onUnifiedSelect={() => {}}
+          pluginEngines={{ engines: antigravityEngines, active, onSelect: setActive }}
+          remoteAgent={undefined}
+        />
+      </div>
+    </main>
+  );
+}
+
 void mountPage({
   host: {
     maker: {
       getModelContextLimit: async () => ({ limit: 200000, isCustomized: false }),
       onProvidersChanged: subscription('providersChanged'),
+      getPluginEngineUsage: async (engineKey: string) => {
+        const now = Date.now();
+        if (engineKey === '_root__cindy-antigravity-acp:agy') {
+          return {
+            updatedAt: now,
+            windows: [
+              { label: 'Gemini Models · weekly', remainingPercent: 89.23, resetsAt: now + 6 * 86_400_000, windowMinutes: 10080 },
+              { label: 'Gemini Models · 5h', remainingPercent: 56.93, resetsAt: now + 75 * 60_000, windowMinutes: 300 },
+              { label: 'Claude and GPT models · weekly', remainingPercent: 24.4, resetsAt: now + 4 * 86_400_000, windowMinutes: 10080 },
+              { label: 'Claude and GPT models · 5h', remainingPercent: 100, windowMinutes: 300 },
+            ],
+          };
+        }
+        if (engineKey === 'dsh-plugin:dsh') {
+          return {
+            updatedAt: now,
+            windows: [
+              { label: 'Weekly', remainingPercent: 78, resetsAt: now + 4 * 86_400_000, windowMinutes: 10080 },
+            ],
+          };
+        }
+        return null;
+      },
       getCapabilities: async () => ({
         hasFastMode: false,
         availableModels: [],
@@ -190,7 +264,9 @@ void mountPage({
     },
   },
   render: (ctx) =>
-    ctx.case === 'task-icons'
+    ctx.case === 'antigravity-quota'
+      ? <AntigravityQuotaPicker />
+      : ctx.case === 'task-icons'
       ? <TaskIcons />
       : ctx.case === 'agent-modes'
       ? <AgentModes />

@@ -1,10 +1,14 @@
+import { DeferredSessionCompletions } from './deferredSessionCompletions.js';
+import { toSessionActivity } from './sessionActivitySnapshot.js';
 import { retireReadMobileNotifications, retireAnsweredMobileNotifications } from '../device-link/notificationDismissalHost.js';
 import { app, dialog, ipcMain, screen, BrowserWindow, type Display, type OpenDialogOptions, type WebContents } from 'electron';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { release as getOsRelease } from 'node:os';
 import { TASK_ACTIVITY_SNAPSHOT } from '@cindy/device-link';
-import { projectHostTaskActivity } from '../device-link/taskActivity.js';
+import { taskSnoozeUntil } from '@cindy/maker-shared/live-task-priority';
+import { keepInboxCountedTasks, projectHostTaskActivity } from '../device-link/taskActivity.js';
+import { readSessionInboxFacts, type SessionInboxFacts } from '../localDb/sessionInboxFacts.js';
 import { SESSION_ACTIVITY_CHANNEL, type SessionActivityPayload } from '@cindy/device-link';
 import {
   isTerminalAgentErrorEvent,
@@ -15,7 +19,6 @@ import {
 import type { SchedulerEvent } from '@cindy/maker-scheduler';
 import { BRAND_NAME } from '@cindy/maker-shared/branding';
 import {
-  projectSessionActivity,
   type SessionActivitySnapshot,
   type SessionActivityTransition,
 } from '@cindy/maker-shared/session-activity';
@@ -121,7 +124,7 @@ import {
   type AgentIslandCompanionIdentity,
 } from './companionIdentity.js';
 import { createLogger } from '../logger.js';
-import { t, tCount } from '../i18n.desktop.js';
+import { getResolvedMainLocale, t, tCount } from '../i18n.desktop.js';
 import { isAppContentWindow, isFocusedAppContentWindow } from '../windowFocusClassifier.js';
 import {
   acknowledgeAgentIslandSessionRead,
@@ -140,7 +143,6 @@ import {
   buildDeviceSessionActivitySnapshots,
   closeAgentIslandSessionPreservingUnread,
   completeAgentIslandSessionWithoutAttention,
-  completedReplySummary,
   createAgentIslandUserPromptRollbackToken,
   createAgentIslandState,
   dismissAgentIslandActiveReveal,
@@ -325,6 +327,7 @@ export function initAgentIslandService(deps: AgentIslandServiceDeps): AgentIslan
   setAgentIslandCompanionChangeSink({
     companionChanged: (botId) => serviceSingleton?.handleCompanionProfileChanged(botId),
     groupChanged: (groupId) => serviceSingleton?.handleBotGroupChanged(groupId),
+    inboxFactsChanged: (sessionId) => serviceSingleton?.handleSessionInboxFactsChanged(sessionId),
   });
   // 远程任务同步与原生岛面无关:无原生岛的平台也要靠它发桌面通知。
   serviceSingleton.registerDeviceSessionIpc();
@@ -363,49 +366,6 @@ function sessionActivitySnapshotsEqual(
     && left.source === right.source;
 }
 
-function safeSessionActionSummary(snapshot: AgentIslandSessionSnapshot): string {
-  if (snapshot.phase === 'needs-interaction') {
-    if (snapshot.interactionKind === 'permission') return '等待权限确认';
-    if (snapshot.interactionKind === 'ask_user_question') return '等待用户回答';
-    if (snapshot.interactionKind === 'plan_review') return '等待计划确认';
-    if (snapshot.interactionKind === 'plugin_setup') return '等待插件配置';
-    if (snapshot.interactionKind === 'input_handoff') return '等待代输入';
-    return '等待用户确认';
-  }
-  if (snapshot.phase === 'completed') return '运行已正常结束';
-  if (snapshot.phase === 'error') return '运行出错';
-  const latestKind = snapshot.activityLines.at(-1)?.kind;
-  if (latestKind === 'tool') return '正在运行工具';
-  if (latestKind === 'assistant') return '正在生成回复';
-  if (latestKind === 'user') return '正在处理新消息';
-  return '正在运行';
-}
-
-function toSessionActivity(s: AgentIslandSessionSnapshot): AgentIslandSessionActivity {
-  return {
-    ...(s.completionToken ? { completionToken: s.completionToken } : {}),
-    ...(s.completionNotification ? { completionNotification: s.completionNotification } : {}),
-    ...projectSessionActivity({
-      sessionId: s.sessionId,
-      recordStatus: 'active',
-      title: s.title,
-      source: 'live',
-      livePhase: s.phase,
-      startedAtMs: s.startedAt,
-      lastActivityAtMs: s.lastActivityAt,
-      currentActionSummary: safeSessionActionSummary(s),
-      interactionKind: s.interactionKind,
-      attention: s.attention,
-    }),
-    phase: s.phase,
-    interactionKind: s.interactionKind,
-    // 完成后这份摘要只给其它设备的完成卡片用(本机岛面直接读展示快照)。
-    compactDetail: s.phase === 'completed' ? completedReplySummary(s) : s.compactDetail,
-    summaryFormat: 'plain-text',
-    workingPhase: s.workingPhase,
-  };
-}
-
 function canonicalSessionActivity(
   activity: AgentIslandSessionActivity,
 ): SessionActivitySnapshot {
@@ -440,6 +400,9 @@ export class AgentIslandService {
   private publishTimer: ReturnType<typeof setTimeout> | null = null;
   private readonly metadataCache = new Map<string, AgentIslandCachedMetadata>();
   private readonly metadataLoading = new Set<string>();
+  private readonly inboxFacts = new Map<string, { stamp: string; facts: SessionInboxFacts | null }>();
+  private readonly inboxFactsLoading = new Map<string, string>();
+  private inboxWakeTimer: ReturnType<typeof setTimeout> | undefined;
   private readonly remoteCompanions = new Map<string, { snapshot: AgentIslandCompanionSnapshot; retryAt: number | null }>();
   private readonly remoteCompanionKeysInUse = new Set<string>();
   /** Latest identity read per Session: an older read that finishes late never overwrites a newer one. */
@@ -504,7 +467,7 @@ export class AgentIslandService {
     wasReplacementTurnPending: boolean;
     wasReplacementTurnDispatching: boolean;
   }>();
-  private readonly deferredCompletions = new Map<string, { event: AgentEvent; suppressAttention: boolean }>();
+  private readonly deferredCompletions = new DeferredSessionCompletions(id => this.shouldDeferCompletion?.(id) === true);
   private readonly deferredRemoteAuthErrors = new Map<string, {
     meta: AgentIslandSessionMeta;
     event: AgentEvent;
@@ -520,13 +483,17 @@ export class AgentIslandService {
   private shouldDeferCompletion: ((sessionId: string) => boolean) | null = null;
   private layoutPreferenceWriteTimer: ReturnType<typeof setTimeout> | null = null;
   private streamingPreviewPublishTimer: ReturnType<typeof setTimeout> | null = null;
+  private cachedStrings: AgentIslandStrings | null = null;
+  private cachedStringsLocale: string | null = null;
 
   constructor(private readonly deps: AgentIslandServiceDeps) {
     this.sessionActivityRelay = new SessionActivityRelay((payload) => {
       tapWindowBroadcast(SESSION_ACTIVITY_CHANNEL, payload);
     });
-    // lazy t() 闭包跟随 locale 运行时切换,注入一次即可(strings 仍每次 publish 重建)。
+    // lazy t() 闭包跟随 locale 运行时切换,注入一次即可; strings 按当前 locale 缓存并在
+    // 初始化和 refreshLocalization() / locale 变更时重建，避免每条流式事件重复构造 26 条文案。
     setAgentIslandToolWording(this.state, createLocalizedToolRowWording());
+    this.getLocalizedStrings(true);
     this.layoutPreferencesByDisplayId = readAgentIslandLayoutPreferences();
     this.detachedLayoutPreferences = readAgentIslandDetachedLayoutPreferences();
     this.nativeHost = deps.nativeHost ?? new MacAgentIslandNativeHost({
@@ -587,17 +554,15 @@ export class AgentIslandService {
    * (之前因推迟判定成立而被压住),且现在推迟判定已不成立,则立即补发。
    */
   notifyQueueEmptied(sessionId: string): void {
-    const deferred = this.deferredCompletions.get(sessionId);
+    const deferred = this.deferredCompletions.takeIfReady(sessionId);
     if (!deferred) return;
-    if (this.shouldDeferCompletion?.(sessionId) === true) return;
-    this.deferredCompletions.delete(sessionId);
     const { event, suppressAttention } = deferred;
     if (suppressAttention) {
       // 延后完成已被标记为「应压制注意力」:silencedSessionRunIds 可能已被清除,
       // 不能再通过 isCompletionEventSilenced 重新判断,直接使用快照值。
       const hydrated = this.hydrateMeta({ sessionId });
       const now = Date.now();
-      setAgentIslandStrings(this.state, buildAgentIslandStrings());
+      this.ensureLocalizedStrings();
       const changed = applyAgentIslandEvent(this.state, hydrated, event, now, {
         suppressCompletionAttention: true,
         preserveCompletionAttention: this.hadAttentionBeforeSilencedRun(sessionId),
@@ -918,8 +883,24 @@ export class AgentIslandService {
     return hasAgentIslandNotificationSound(this.soundSettings, kind);
   }
 
+  private getLocalizedStrings(force = false): AgentIslandStrings {
+    const locale = getResolvedMainLocale();
+    if (!force && this.cachedStrings && this.cachedStringsLocale === locale) {
+      return this.cachedStrings;
+    }
+    const strings = buildAgentIslandStrings();
+    this.cachedStrings = strings;
+    this.cachedStringsLocale = locale;
+    setAgentIslandStrings(this.state, strings);
+    return strings;
+  }
+
+  private ensureLocalizedStrings(): void {
+    this.getLocalizedStrings(false);
+  }
+
   refreshLocalization(): void {
-    setAgentIslandStrings(this.state, buildAgentIslandStrings());
+    this.getLocalizedStrings(true);
     this.publish();
   }
 
@@ -947,7 +928,7 @@ export class AgentIslandService {
   setDeviceSessions(inputs: readonly AgentIslandRemoteSessionInput[]): void {
     this.lastDeviceSessionInputs = inputs;
     this.remoteCompanionKeysInUse.clear();
-    setAgentIslandStrings(this.state, buildAgentIslandStrings());
+    this.ensureLocalizedStrings();
     const result = syncAgentIslandDeviceSessions(
       this.state,
       inputs,
@@ -1116,6 +1097,10 @@ export class AgentIslandService {
     this.emitSessionActivityTransitions([], Date.now());
     this.metadataCache.clear();
     this.metadataLoading.clear();
+    this.inboxFacts.clear();
+    this.inboxFactsLoading.clear();
+    clearTimeout(this.inboxWakeTimer);
+    this.inboxWakeTimer = undefined;
     this.remoteCompanions.clear();
     this.remoteCompanionKeysInUse.clear();
     this.companionReadSeq.clear();
@@ -1243,22 +1228,21 @@ export class AgentIslandService {
       }
     }
     const now = Date.now();
-    setAgentIslandStrings(this.state, buildAgentIslandStrings());
+    this.ensureLocalizedStrings();
     this.prunePermissionRequestsForAgentEvent(hydrated.sessionId, event);
     if (
       isCompletionDoneEvent(event) &&
-      this.shouldDeferCompletion?.(hydrated.sessionId) === true &&
       // Thread 2 fix: silenced completions carry no attention/sound regardless of
       // queue state, so there is no need to defer them — apply with no-attention
       // immediately. Linger 只挂 scheduler 的 completed && silenced;中间 agent done
       // 不得开 linger,否则续 turn 会清掉标记。这里仍跳过 defer,免得 completed 先到
       // 排了 linger 后,队列排空重放时标记已退场、被当成普通完成。
-      !this.isCompletionEventSilenced(hydrated.sessionId, event)
+      !this.isCompletionEventSilenced(hydrated.sessionId, event) &&
+      this.deferredCompletions.deferIfPending(hydrated.sessionId, event)
     ) {
       if (event.type === 'done') {
         this.deletePermissionRequestsForSession(hydrated.sessionId);
       }
-      this.deferredCompletions.set(hydrated.sessionId, { event, suppressAttention: false });
       this.clearStreamingPreviewPublishTimer();
       this.publish();
       return;
@@ -1336,10 +1320,7 @@ export class AgentIslandService {
       // 防止队列排空后 notifyQueueEmptied 重放时 silencedSessionRunIds 已被清除、
       // 误触发 reveal/sound。
       if (event.sessionId) {
-        const deferred = this.deferredCompletions.get(event.sessionId);
-        if (deferred) {
-          this.deferredCompletions.set(event.sessionId, { ...deferred, suppressAttention: true });
-        }
+        this.deferredCompletions.suppressAttention(event.sessionId);
       }
       this.scheduleSilencedRunClear(event.runId, SILENCED_COMPLETION_CLEAR_MS);
       if (changed) this.publish();
@@ -1498,7 +1479,7 @@ export class AgentIslandService {
     if (request.kind === 'permission') {
       this.permissionRequests.set(request.requestId, { sessionId: hydrated.sessionId, request });
     }
-    setAgentIslandStrings(this.state, buildAgentIslandStrings());
+    this.ensureLocalizedStrings();
     applyAgentIslandInteractionRequest(this.state, hydrated, request, Date.now());
     this.ensureMetadata(hydrated.sessionId);
     this.syncSessionAttention(hydrated.sessionId);
@@ -1522,7 +1503,7 @@ export class AgentIslandService {
     kind: 'plugin_setup' | 'input_handoff' = 'plugin_setup',
   ): void {
     const hydrated = this.hydrateMeta({ sessionId });
-    setAgentIslandStrings(this.state, buildAgentIslandStrings());
+    this.ensureLocalizedStrings();
     // If the requestId is already pending (revision update from the coordinator),
     // only update the detail string without resetting the dismissal state.
     const existing = this.state.sessions.get(hydrated.sessionId);
@@ -2146,7 +2127,7 @@ export class AgentIslandService {
   private foregroundRevision = 0;
 
   getForegroundTaskActivity() {
-    const summary = projectHostTaskActivity(this.getLocalTaskOverview());
+    const summary = projectHostTaskActivity(this.getLocalTaskOverview(), { includeCompanion: true });
     const key = JSON.stringify(summary);
     if (key !== this.foregroundSummaryKey) {
       this.foregroundSummaryKey = key;
@@ -2159,9 +2140,71 @@ export class AgentIslandService {
     return buildAllSessionActivitySnapshots(this.state);
   }
 
-  /** This computer's share of the island counts; the phone island adds these per computer. */
+  /**
+   * This computer's share of the phone counts; the phone island adds these per computer.
+   * Only tasks the inbox lists count (see `keepInboxCountedTasks`): the user must be able
+   * to find and clear every counted task there.
+   */
   getLocalTaskOverview(): AgentIslandSessionSnapshot[] {
-    return buildLocalAgentIslandTaskOverview(this.state, Date.now(), this.companionChatProjections());
+    const now = Date.now();
+    const rows = buildLocalAgentIslandTaskOverview(this.state, now, this.companionChatProjections());
+    this.refreshInboxFacts(rows, now);
+    return keepInboxCountedTasks(rows, (sessionId) => this.inboxFacts.get(sessionId)?.facts, now);
+  }
+
+  /**
+   * Row facts follow the row: a new phase or result reloads them, after the turn has written
+   * its send time. Snooze and wake edits arrive through `handleSessionInboxFactsChanged`.
+   * Entries for tasks that left the overview are dropped, so the cache stays bounded by it.
+   */
+  private refreshInboxFacts(rows: readonly AgentIslandSessionSnapshot[], now: number): void {
+    const ids = new Set(rows.map((row) => row.sessionId));
+    for (const id of this.inboxFacts.keys()) if (!ids.has(id)) this.inboxFacts.delete(id);
+    for (const id of this.inboxFactsLoading.keys()) if (!ids.has(id)) this.inboxFactsLoading.delete(id);
+    let wakeAt = Infinity;
+    for (const row of rows) {
+      const stamp = row.phase === 'running' ? 'running' : `${row.phase}:${row.lastActivityAt}`;
+      const cached = this.inboxFacts.get(row.sessionId);
+      const until = cached?.facts ? taskSnoozeUntil(cached.facts) : 0;
+      if (until > now) wakeAt = Math.min(wakeAt, until);
+      if (cached?.stamp === stamp || this.inboxFactsLoading.get(row.sessionId) === stamp) continue;
+      this.inboxFactsLoading.set(row.sessionId, stamp);
+      void readSessionInboxFacts(row.sessionId)
+        .then((facts) => {
+          if (this.inboxFactsLoading.get(row.sessionId) !== stamp) return;
+          this.inboxFactsLoading.delete(row.sessionId);
+          const previous = this.inboxFacts.get(row.sessionId);
+          this.inboxFacts.set(row.sessionId, { stamp, facts });
+          if (JSON.stringify(previous?.facts ?? null) !== JSON.stringify(facts)) this.notifyTaskOverview();
+        })
+        .catch((err) => {
+          if (this.inboxFactsLoading.get(row.sessionId) === stamp) this.inboxFactsLoading.delete(row.sessionId);
+          log.warn('session inbox facts load failed', {
+            sessionId: row.sessionId,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        });
+    }
+    // A snooze ending returns its task to the inbox without any other change to announce it.
+    clearTimeout(this.inboxWakeTimer);
+    this.inboxWakeTimer = undefined;
+    if (Number.isFinite(wakeAt)) {
+      this.inboxWakeTimer = setTimeout(() => {
+        this.inboxWakeTimer = undefined;
+        this.notifyTaskOverview();
+      }, Math.min(2_147_483_647, Math.max(1, wakeAt - now)));
+      this.inboxWakeTimer.unref?.();
+    }
+  }
+
+  /** Snooze, wake or a new send changed which inbox section a task belongs to. */
+  handleSessionInboxFactsChanged(sessionId: string): void {
+    const cached = this.inboxFacts.get(sessionId);
+    if (!cached && !this.inboxFactsLoading.has(sessionId)) return;
+    // Keep counting by the old facts until the reload lands, so a snooze never flashes back in.
+    if (cached) this.inboxFacts.set(sessionId, { stamp: '', facts: cached.facts });
+    this.inboxFactsLoading.delete(sessionId);
+    this.notifyTaskOverview();
   }
 
   /** Read the same canonical snapshot used by sidebar and device-list relays. */
@@ -2218,13 +2261,17 @@ export class AgentIslandService {
     return () => this.attentionCountListeners.delete(listener);
   }
 
-  private publishAttentionCount(count: number): void {
-    // Content can change without changing the count (including restored companion chats).
+  private notifyTaskOverview(): void {
     for (const listener of this.taskOverviewListeners) {
       try { listener(); } catch (error) {
         log.warn('task overview listener failed', { error: error instanceof Error ? error.message : String(error) });
       }
     }
+  }
+
+  private publishAttentionCount(count: number): void {
+    // Content can change without changing the count (including restored companion chats).
+    this.notifyTaskOverview();
     if (count === this.attentionCount) return;
     this.attentionCount = count;
     for (const listener of this.attentionCountListeners) {
@@ -2343,13 +2390,14 @@ export class AgentIslandService {
     }
     // Sounds follow real runtime transitions. Chat read/visibility filters only own
     // the rendered unread projection and must neither mute a fresh turn nor replay history.
+    const localizedStrings = this.getLocalizedStrings();
     const soundDisplayState = withAgentIslandConfig(
-      buildAgentIslandDisplayState(this.state, now), this.soundSettings, this.mascotSkin, this.quota,
+      buildAgentIslandDisplayState(this.state, now), this.soundSettings, this.mascotSkin, this.quota, localizedStrings,
     );
     const chatDisplayState = this.companionChats.size > 0
       ? withAgentIslandConfig(
         buildAgentIslandDisplayState(this.state, now, this.companionChatProjections()),
-        this.soundSettings, this.mascotSkin, this.quota,
+        this.soundSettings, this.mascotSkin, this.quota, localizedStrings,
       )
       : soundDisplayState;
     // The system Live Activity works whether or not our own island is shown.
@@ -2500,7 +2548,7 @@ export class AgentIslandService {
     const displayState = withAgentIslandConfig(buildHiddenAgentIslandDisplayState({
       now,
       appFocused: this.state.appFocused,
-    }), this.soundSettings, this.mascotSkin);
+    }), this.soundSettings, this.mascotSkin, [], this.getLocalizedStrings());
     const update = this.computeNativeDisplayUpdate(displayState);
     if (!this.nativeHost.publish(
       displayState,
@@ -3419,11 +3467,12 @@ function withAgentIslandConfig(
   soundSettings: AgentIslandSoundSettings,
   mascotSkin: AgentIslandMascotSkin,
   quota: readonly AgentIslandQuotaItem[] = [],
+  strings: AgentIslandStrings = buildAgentIslandStrings(),
 ): AgentIslandDisplayState {
   return {
     ...displayState,
     ...(quota.length > 0 ? { quota: [...quota] } : {}),
-    strings: buildAgentIslandStrings(),
+    strings,
     soundSettings: cloneAgentIslandSoundSettings(soundSettings),
     mascotSkin,
   };

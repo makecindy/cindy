@@ -464,6 +464,9 @@ describe('model group failure handling', () => {
     ['a Claude subscription window limit with usageResetAt', { sdkError: 'rate_limit', usageLimit: true, usageResetAt: 1_900_000_000_000, message: "You've hit your session limit" }, 'connection'],
     ['a Codex usageLimitExceeded tag', { codexErrorInfo: 'usageLimitExceeded', errorStatus: 429, usageLimit: true, message: 'usage_limit_reached' }, 'connection'],
     ['a dead login', { reason: 'provider_auth_or_access' }, 'connection'],
+    // 2026-11-27: a Claude account on hold was sorted transient, so the task retried the held account twice.
+    ['a Claude account on hold', { sdkError: 'account_on_hold',
+      message: "Your account is on hold and can't use Claude Code. View details or appeal: https://claude.ai/restricted" }, 'connection'],
     ['an unauthorized key', { errorStatus: 401 }, 'connection'],
     ['an ACP agent quota', { reason: 'acp-usage-limit' }, 'connection'],
     // Seen on a Pi task with a dead Agnes AI key: the status only exists as the text's prefix.

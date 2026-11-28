@@ -18,6 +18,7 @@ import path from 'node:path';
 
 import { createLogger } from '../logger.js';
 import { installWindowFullscreenStateBroadcast } from '../mainWindowFullscreenStartup.js';
+import { installMacFullscreenDesyncRecovery } from '../macFullscreenRecovery.js';
 import { installWindowHiddenBroadcast } from '../windowHiddenBroadcast.js';
 import { markAppContentWindow } from '../windowFocusClassifier.js';
 import { installExternalLinkGuards } from '../secondary-windows.js';
@@ -86,6 +87,14 @@ export function createResourceUsageWindow(parent?: BrowserWindow, surface?: {
   // resize 边界兜底提前撤掉 renderer 的全屏标题留白，不能只等待 leave-full-screen。
   installWindowFullscreenStateBroadcast(win, {
     getDisplayBounds: (bounds) => screen.getDisplayMatching(bounds).bounds,
+  });
+  installMacFullscreenDesyncRecovery(win, {
+    windowLabel: 'resource-usage',
+    trafficLightPosition: { x: 12, y: 16 },
+    minSize: {
+      width: surface?.minWidth ?? 380,
+      height: surface?.minHeight ?? 320,
+    },
   });
   installWindowHiddenBroadcast(win);
   (surface?.register ?? markResourceUsageWebContentsId)(win.webContents.id);

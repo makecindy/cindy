@@ -378,6 +378,11 @@ export function getSelectedNewMakerRoute(ownerScope: string): ModelRoute | undef
   return selectedRouteOwner === ownerScope ? cache?.selectedRoute : undefined;
 }
 
+/** The new-task engine lives on another computer; the group's Cindy runs on the claiming one. */
+export class GroupCindyRemoteEngineError extends Error {
+  constructor() { super('Group Cindy needs an engine on the executing computer'); this.name = 'GroupCindyRemoteEngineError'; }
+}
+
 export function getGroupAssistantPluginSelection(ownerScope: string) {
   const selection = selectedRouteOwner === ownerScope ? cache?.selectedPluginEngine : undefined;
   if (selection === undefined) return undefined;
@@ -385,8 +390,9 @@ export function getGroupAssistantPluginSelection(ownerScope: string) {
     || typeof selection.modelId !== 'string' || !selection.modelId.trim()) {
     throw new Error('Invalid plugin engine selection');
   }
-  // Group execution belongs to the claiming computer. Never substitute a local engine for a remote choice.
-  if (selection.deviceId !== undefined) throw new Error('Group Cindy needs an engine on the executing computer');
+  // Group execution belongs to the claiming computer and never moves to the engine's computer.
+  // The caller answers with one of this computer's models instead (bot-group-chat.md §9).
+  if (selection.deviceId !== undefined) throw new GroupCindyRemoteEngineError();
   return { providerId: selection.providerId, model: selection.modelId,
     effort: typeof selection.effort === 'string' ? selection.effort : '',
     permissionMode: isPluginEnginePermissionModeId(selection.permissionMode) ? selection.permissionMode : undefined };

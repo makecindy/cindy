@@ -13,6 +13,9 @@ export function subscriptionAccountErrorKey(error: unknown): string | null {
     case 'SUBSCRIPTION_CODEX_PROVIDER_AUTH': return 'subscriptionAccounts.providerManagedAuth';
     case 'SUBSCRIPTION_CLAUDE_ACCOUNT_MISMATCH': return 'subscriptionAccounts.loginIdentityMismatch';
     case 'SUBSCRIPTION_CLAUDE_IDENTITY_UNKNOWN': return 'subscriptionAccounts.loginIdentityUnknown';
+    case 'SUBSCRIPTION_CLAUDE_TOKEN_NEEDS_LOGIN': return 'subscriptionAccounts.longLivedToken.needsLogin';
+    case 'SUBSCRIPTION_CLAUDE_TOKEN_NOT_PERMITTED': return 'subscriptionAccounts.longLivedToken.notPermitted';
+    case 'SUBSCRIPTION_CLAUDE_TOKEN_UNSUPPORTED': return 'subscriptionAccounts.longLivedToken.unsupported';
     default: return 'subscriptionAccounts.failed';
   }
 }

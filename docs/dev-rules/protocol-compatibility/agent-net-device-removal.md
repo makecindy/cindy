@@ -40,6 +40,29 @@ Agent-Net refuses this identity」（被拒后改走中转、签「没开」；�
   一次点击各发一次请求，不自动重试、不轮询；只动本机的连接，不影响其他设备（范围见下面「重连的范围」）。
 - **界面。** Desktop 设置页本机卡片在官方网络的「已移除」旁给「重新加入」（main 给连接问题带 `rejoinable`，自建中转不带）；
   删除确认框改为说明那台设备点「重新加入」即可回来。手机在横幅与首页连接行给同样的按钮（`apps/mobile/src/device-link/deviceRejoin.ts`）。
+- **被删后重新登录：开着的开关自动关掉，再打开就重新加入（2026-11-26 用户定）。** 现场：一台手机被删后重新登录，Device Link
+  照常能连，但它不回到账号的设备列表里（只有「重新加入」清掉删除记录），同账号的电脑按上面的列表规则在 Agent-Net 上一直拦它；
+  它的身份也可能已被撤销。手机打开 Agent-Net 后分不清被拦和慢，一台电脑都连不上、干等十几秒。现在「被移除」的证据有两种：
+  官方服务回 `DEVICE_REVOKED`（注册带 `reportRevocation`，或 `/directory` 401），或成功读到的账号设备列表里没有本机（读不到、
+  超时都不算）。
+  - **开着时：自动关掉并写明原因。** 手机（`agentNetRuntime.ts` 的 `turnOffMobileAgentNetAfterRemoval`，偏好里记 `removed`）、电脑
+    （`agentNetRuntime.ts` 的 `onAgentNetRemoved` → `selfHostedRelayRuntime.ts` 的 `turnOffAgentNetAfterRemoval`，设置里记
+    `agentNetRemoved`）在打开连接时（设备列表读完后、身份准备回撤销时）和之后每次读到列表时检查；是就不打开这条连接、这次按
+    「被拒」走 Device Link，并把开关关掉，开关下写「已从账号中移除，Agent-Net 已自动关闭，重新打开即可重新加入」。开关再变（人
+    打开、远程切换）就清掉这句。「仅使用加密连接／仅使用 Agent-Net」时不关（关了就会改走未加密的 Device Link），照旧进「已移除」
+    的重新加入入口。Node Host 没有界面，照旧按「被拒」走 Device Link 中转。
+  - **打开时：先重新加入。** 这台设备上的人打开开关时，按点一次「重新加入」的同一组请求把它接回来再打开（先清 Device Link
+    删除记录、再带 `rejoin` 入网）。手机 `AgentNetSettingsGroup` → `deviceRejoin.ts` 的 `prepareMobileAgentNetEnable`（多读一次设备
+    列表；原来打开前读 `/directory` 时撤销回答会被本机旧名单吞掉、开关照样打开，现在不吞），接不回来就不打开并写明原因；电脑
+    本机 `set-agent-net` 先用 `officialAgentNetRemoved` 读一次设备列表、入过网时再读一次 `/directory`（各最多等 3 秒），接不回来照旧
+    打开并提示结果；Node Host `cindy-host remote agent-net-on` 用 `removedFromAccount` 同样判断，结果放在返回的 `rejoin` 里。
+  - **范围。** 只用于官方网络；网络错误不算移除；远程切换（另一台电脑替它打开）不触发重新加入，只能让自己这台回来；后台续签不
+    重新加入。每次打开最多多一次设备列表读取、一次 `/directory` 与一轮重新加入，不重试、不轮询；开着时用的是本来就会读的列表。
+    别的电脑在它重新加入后按上面的列表规则重读（被拦的设备上线时确认），放行它。
+  - 回归：手机 `deviceRejoin.test.ts`「turning Agent-Net on …」、`agentNetRuntime.test.ts`「turns Agent-Net off as removed …」、
+    `agentNetOnlyRelayJoin.test.ts`「keeps the removed note …」；电脑 `selfHostedRelayRuntime.test.ts`「rejoins a removed computer …」
+    「turns Agent-Net off with the removed note …」、`agentNetRuntime.test.ts`「asks the official services whether this computer was
+    removed …」「reports a removal instead of opening …」；Host `device-link.test.mjs`「cindy-host remote agent-net-on rejoins …」。
 - **重连的范围。** 4410 只停了主连接。手机、Node Host 与 Desktop 都用 `start()` 只拉起这条主连接，别的账号分享来的任务与
   供应商连接照常运行（2026-11-23 review）。如果桌面主连接仍在运行，但需由 Device Link 切回 Agent-Net，则单独重启主连接。点击时的
   账号与中转在每个等待点之后核对，中途切号就整个停下，不替新账号入网或重连。

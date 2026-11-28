@@ -52,6 +52,7 @@ import {
   AgentStartupStoppedError,
   AgentStartupResourcesReleasedError,
   LOCAL_AGENT_CLIENT,
+  isolatedBotProfile,
 } from './agents/base-agent.js';
 import type {
   AgentSessionHandle,
@@ -93,8 +94,8 @@ export interface SessionStartFailureContext {
 }
 
 export interface SessionLifecycleHooks {
-  /** Host-owned per-turn settings, refreshed only after a turn has reserved the session. */
-  beforeTurn?: (session: Session) => Promise<void>;
+  /** Host-owned per-turn preparation, run only after a turn has reserved the session. */
+  beforeTurn?: (session: Session, signal?: AbortSignal) => Promise<void>;
   /**
    * Agent 启动前补齐 start options。该步骤属于正确启动的前置条件，失败会阻断创建。
    * 允许直接修改 options；Maker 会把同一个对象传给 agent 和成功钩子。
@@ -249,20 +250,11 @@ function capabilitiesForSession(
   base: Capabilities,
   remoteHostId?: string | null,
   agentDeviceId?: string | null,
-  handle?: AgentSessionHandle,
 ): Capabilities {
   if (agentDeviceId) {
-    // Agent 在另一台电脑上：对话在那台截断(handle 转发 commitRewindFiles)，文件由本机按保存点
-    // 回退。那台的 Cindy 不支持转发时不提供。
-    if (base.rewind.supported && typeof handle?.commitRewindFiles === 'function') return base;
-    return {
-      ...base,
-      rewind: {
-        supported: false,
-        reason: 'platform-limited',
-        message: 'Update Cindy on the computer running the agent to rewind this task',
-      },
-    };
+    // Agent 在另一台电脑上：对话截断、目录热更新与手动压缩是否可用取决于远端 handle
+    // 当下暴露的方法（含重连切换对端版本后的最新状态），由 Session.capabilities 动态对齐。
+    return base;
   }
   if (agentKind !== 'codex' || !remoteHostId) return base;
   return {
@@ -924,6 +916,17 @@ export class Maker {
       }
       agentStartAttempted = true;
       if (startOpts.fastModePolicy && !(startOpts.fastModePolicy.isRequestAllowed?.() ?? startOpts.fastModePolicy.isAllowed())) startOpts.fastMode = false;
+      // Desktop enriches userPrompt for built-in engines (project context; collaboration role
+      // instructions from prepareStartOptions, also on starts that bypass bootstrap such as goal
+      // restore). A plugin engine gets it as its ACP system prompt, so it receives only the
+      // personal instructions frozen before any of that, and none when a start froze none.
+      // Isolated companions and read-only reviews get none, decided here: an engine on another
+      // computer sees only the remote-agent start options, which carry no companion profile.
+      if (opts.agentKind === 'acp') {
+        startOpts.userPrompt = startOpts.reviewMode || isolatedBotProfile(startOpts.botRuntimeProfile)
+          ? undefined
+          : startOpts.hostStartupPreferences?.userPrompt;
+      }
       if (startOpts.agentDeviceId) {
         if (startOpts.remoteHostId) {
           throw new Error('A session cannot run its agent on another computer and on an SSH host at the same time');
@@ -1256,8 +1259,7 @@ export class Maker {
         meta.agentKind,
         handle.negotiatedCapabilities ?? agent?.capabilities ?? applicationHandleCapabilities(handle),
         meta.remoteHostId,
-        meta.agentDeviceId ?? startOpts.agentDeviceId,
-        handle,
+        startOpts.agentDeviceId || null,
       ),
       logger: this.logger,
       permissionMode: startOpts.permissionMode,
@@ -1784,7 +1786,7 @@ export class Maker {
         handle,
         logger: this.logger,
         permissionMode: opts.permissionMode,
-        capabilities: deviceId ? applicationHandleCapabilities(handle) : capabilitiesForSession(kind, agent!.capabilities, undefined, undefined, handle),
+        capabilities: deviceId ? applicationHandleCapabilities(handle) : capabilitiesForSession(kind, agent!.capabilities, undefined, undefined),
         toolLoopReviewer: this.toolLoopReviewer,
         // 整机拆除期间抑制空闲会话的进程死亡终态错误(#8831 退出期守卫)。
         isHostShuttingDown: () => this.shutdownStarted,

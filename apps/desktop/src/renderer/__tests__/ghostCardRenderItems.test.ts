@@ -9,13 +9,18 @@
  * - key 稳定性:`ghostcard-${clientId}`。
  */
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { buildRenderItems, buildCachedRenderItems, type RenderItem } from '../components/chat/MessageStream';
 import type { ChatMessage } from '@/lib/makerChatStore';
-import { makerChatStore } from '@/lib/makerChatStore';
+import { getDataOwnerGeneration, setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
+import { makerChatStore, mapServerMessages } from '@/lib/makerChatStore';
+import type { Session } from '@cindy/maker-core';
+import { createMessagePersistence, type MessagePersistencePorts } from '../../main/messagePersistBroadcaster';
+import { persistSessionStreamEventCore } from '../../main/maker-ipc/sessionEventStreamCore';
 import type { GhostCardSnapshot, GhostCardEntry, GhostLiveCard } from '@/cindy-brain/ghostCardStore';
 import { __resetGhostCardStoreForTest, getGhostCardSnapshot, ingestCardPush } from '@/cindy-brain/ghostCardStore';
 import type { TurnChangeSetSummary } from '../../shared/turnChangeSet';
+import { AcpUpdateTranslator } from '../../../../../packages/maker-core/src/agents/acp/translator.js';
 
 const GHOST_TOOL = 'mcp__cindy__ghost_call';
 const HASH = 'a'.repeat(64);
@@ -55,7 +60,143 @@ function itemsOf(messages: ChatMessage[], snap?: GhostCardSnapshot, sessionId = 
   return buildRenderItems(messages, undefined, snap, { sessionId }).items;
 }
 
+type ToolRow = Parameters<typeof mapServerMessages>[0][number];
+
+function cardPersistence(id: string, onCreated?: (payload: unknown) => void) {
+  const rows = new Map<string, ToolRow>();
+  const persistence = createMessagePersistence({
+    broadcastTap: { captureDataOwnerBroadcastScope: () => null },
+    createDbMessage: async (_id: string, body: { clientId: string; createdAt: number }) => {
+      const row = JSON.parse(JSON.stringify({ ...body, sessionId: id, createdAt: new Date(body.createdAt).toISOString() }));
+      rows.set(body.clientId, row);
+      onCreated?.({ sessionId: id, message: row });
+      return row;
+    },
+    updateDbMessageContent: async (_id: string, clientId: string, content: unknown) => {
+      const row = rows.get(clientId);
+      if (row) row.content = JSON.parse(JSON.stringify(content));
+      return row;
+    },
+    broadcastMessageRow: (sessionId: string, message: ToolRow) => onCreated?.({ sessionId, message }),
+    commitMessageMediaRefs: async () => {},
+    findVisibleToolUseMessageByAliases: async () => null,
+  } as unknown as MessagePersistencePorts);
+  return {
+    rows,
+    persist(events: ReturnType<AcpUpdateTranslator['handleUpdate']>) {
+      for (const event of events) {
+        persistSessionStreamEventCore({ persistence, orcaTeamServiceForEvents: null,
+          log: { warn: () => {} }, broadcastSubagentRunsChanged: () => {},
+        }, { id, agentKind: 'acp' } as Session, { event, eventAgentMeta: null });
+      }
+    },
+    drain: persistence.drainPersistQueue,
+  };
+}
+
+describe('ghost_card · live persisted tool identity', () => {
+  // ACP harness §4, unit: reloading a corrected row used to work, but merging
+  // its messages:created echo kept the old card. A truncated remote echo is
+  // not authoritative and must not hide the card with the same missing key.
+  it.each(['complete local row', 'truncated remote row'] as const)('hydrates a corrected ACP tool name from a %s', async (source) => {
+    const id = 'card-identity-live';
+    const deviceId = 'card-identity-device';
+    const owner = getDataOwnerGeneration();
+    setDataOwnerGeneration('card-test-owner');
+    let onCreated!: (payload: unknown) => void;
+    let onRemotePush!: (payload: unknown) => void;
+    const subscribe = () => () => {};
+    vi.stubGlobal('window', { electronAPI: {
+      maker: { onEvent: subscribe, onStatusChanged: subscribe, onInputProjection: subscribe,
+        onInteractionRequest: subscribe, onInteractionDismissed: subscribe },
+      localDb: { messages: { onCreated: (cb: typeof onCreated) => { onCreated = cb; return () => {}; } } },
+      deviceLink: { onRemotePush: (cb: typeof onRemotePush) => { onRemotePush = cb; return () => {}; } },
+      onUsageMessageTurnCost: subscribe,
+    } });
+    makerChatStore.initGlobalListeners();
+    try {
+      const translator = new AcpUpdateTranslator({ blockIdPrefix: id, mcpServerNames: ['cindy'] });
+      let truncate = false;
+      const { rows, persist, drain } = cardPersistence(id, payload => {
+        if (source === 'complete local row') {
+          onCreated(payload);
+        } else {
+          const { sessionId, message } = payload as { sessionId: string; message: ToolRow };
+          onRemotePush({ deviceId, channel: 'local-db:messages:created', payload: {
+            sessionId,
+            message: truncate ? {
+              ...message,
+              content: { toolUseId: 'read', toolName: 'Read project', input: '[remote content truncated: payload too large]' },
+              agentMeta: { ...message.agentMeta, remoteContentTruncated: true },
+            } : message,
+          } });
+        }
+      });
+      const snap = snapshot({ progress: readyEntry('demo') },
+        [{ callId: 'progress', ghostId: 'demo', sessionId: id, toolUseId: 'read', receivedAt: 1 }]);
+      const visible = () => itemsOf(makerChatStore.getSnapshot(id).messages, snap, id);
+      persist(translator.handleUpdate({
+        sessionUpdate: 'tool_call', toolCallId: 'read', title: 'Read project', name: GHOST_TOOL,
+        rawInput: { ghost_id: 'demo', tool: 'make_card' },
+      }));
+      await drain();
+      expect(visible().filter(item => item.type === 'ghost_card')).toHaveLength(1);
+
+      truncate = source === 'truncated remote row';
+      persist(translator.handleUpdate({ sessionUpdate: 'tool_call_update', toolCallId: 'read', name: 'Read' }));
+      await drain();
+      expect(rows.size).toBe(1);
+      expect([...rows.values()][0]?.content).not.toHaveProperty('mcpToolName');
+      const [current] = makerChatStore.getSnapshot(id).messages;
+      expect(current).toMatchObject({ role: 'tool_use', toolName: 'Read project', toolUseId: 'read',
+        toolInput: { ghost_id: 'demo', tool: 'make_card' } });
+      const rendered = visible();
+      expect(rendered.filter(item => item.type === 'ghost_card')).toHaveLength(truncate ? 1 : 0);
+      if (!truncate) expect(rendered.some(item => item.type === 'tool_segment')).toBe(true);
+      expect(current?.mcpToolName).toBe(truncate ? 'mcp:cindy:ghost_call' : undefined);
+      expect(current?.remoteContentTruncated).toBeUndefined();
+    } finally {
+      makerChatStore.purgeSession(id);
+      makerChatStore.__teardownGlobalListeners();
+      setDataOwnerGeneration(owner.dataOwnerId, owner.generation);
+      vi.unstubAllGlobals();
+    }
+  });
+});
+
 describe('ghost_card · settled 配对', () => {
+  // ACP harness §4, unit: feed real ACP translations with friendly titles
+  // and mixed results through the stream persister and history renderer.
+  // #13597: the foreground case missed the separate background insert, which
+  // dropped mcpToolName when a titled ghost_call began between turns.
+  it.each(['turn', 'background'] as const)('reopens %s ACP tool history with the original title and two correctly paired cards', async (scope) => {
+    const translator = new AcpUpdateTranslator({
+      blockIdPrefix: 'acp-card-fixture',
+      mcpServerNames: ['cindy'],
+      takeMcpToolResult: ({ input }) => {
+        const plugin = (input as { ghost_id: string }).ghost_id;
+        return { fullText: JSON.stringify({ xdt_card_id: 'receipt-' + plugin }), isError: false };
+      },
+    });
+    const events = [
+      ...translator.handleUpdate({ sessionUpdate: 'tool_call', toolCallId: 'first', name: 'mcp_cindy_ghost_call', title: 'First card', rawInput: { ghost_id: 'first', tool: 'make_card' } }),
+      ...translator.handleUpdate({ sessionUpdate: 'tool_call', toolCallId: 'second', name: 'mcp__cindy__ghost_call', title: 'Second card', rawInput: { ghost_id: 'second', tool: 'make_card' } }),
+      ...translator.handleUpdate({ sessionUpdate: 'tool_call', toolCallId: 'normal', name: 'mcp__cindy__example', title: '读取项目状态', rawInput: {} }),
+      ...translator.handleUpdate({ sessionUpdate: 'tool_call_update', toolCallId: 'first', status: 'completed' }),
+      ...translator.handleUpdate({ sessionUpdate: 'tool_call_update', toolCallId: 'second', status: 'completed', rawOutput: { xdt_card_id: 'native-second' } }),
+    ];
+    const { rows, persist, drain } = cardPersistence('session-a');
+    persist(scope === 'background' ? events.map(event => ({ ...event, turnScope: scope })) : events);
+    await drain();
+    const messages = mapServerMessages([...rows.values()]);
+    expect(messages.find(message => message.toolUseId === 'normal')).toMatchObject({
+      toolName: '读取项目状态', mcpToolName: 'mcp:cindy:example', toolInput: {},
+    });
+    const items = itemsOf(messages, snapshot({ 'receipt-first': readyEntry('first'), 'native-second': readyEntry('second') }));
+    expect(items.filter(item => item.type === 'ghost_card').map(item => [item.callId, item.toolCall.toolUseId])).toEqual([
+      ['receipt-first', 'first'], ['native-second', 'second'],
+    ]);
+  });
   // Unit: the result uses the ordinary Host card id, while the named MCP call
   // carries only args. Progressive ghost_call fixtures do not cover this route.
   it('renders the Host card returned by a named startup plugin tool', () => {
@@ -475,9 +616,15 @@ describe('ghost_card · 媒体回锚(xdt_anchor_card_id)', () => {
     mkResult('r2', 'tu-g2', pollBody),
   ];
 
-  it('锚到同 ghost 已上屏卡 → 媒体挂卡 item,不出 tool_media', () => {
+  // Unit / render items: two tool calls with readable titles still anchor media
+  // to the first card. Untitled calls alone missed the machine-name fallback.
+  it.each([false, true])('anchors same-plugin media (readable titles=%s)', (readableTitles) => {
     const items = itemsOf(
-      submitAndPoll({ ok: true, xdt_anchor_card_id: 'call-1', xdt_video_urls: [VIDEO] }),
+      submitAndPoll({ ok: true, xdt_anchor_card_id: 'call-1', xdt_video_urls: [VIDEO] }).map(message =>
+        readableTitles && message.role === 'tool_use'
+          ? { ...message, mcpToolName: message.toolName, toolName: '读取生成进度' }
+          : message,
+      ),
       snapshot({ 'call-1': readyEntry('xd-mivo') }),
     );
     const card = items.find((it) => it.type === 'ghost_card');
