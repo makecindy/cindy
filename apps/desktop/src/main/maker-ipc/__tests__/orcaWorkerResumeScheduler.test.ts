@@ -205,6 +205,101 @@ describe('createOrcaWorkerResumeScheduler', () => {
     expect(scheduler.pendingCount()).toBe(0);
   });
 
+  it('yields to a send that is already using the session', async () => {
+    const resume = vi.fn(async () => true);
+    const scheduler = createOrcaWorkerResumeScheduler({
+      resume,
+      withSessionLock: (_sessionId, task) => task(),
+      // 用户直发已拿到 / 已排队同一会话锁。
+      hasActiveSend: (sessionId) => sessionId === 'worker-1',
+    });
+
+    await expect(scheduler.request({ sessionId: 'worker-1' })).resolves.toBe(false);
+    expect(resume).not.toHaveBeenCalled();
+    expect(scheduler.pendingCount()).toBe(0);
+
+    // 别的会话不受影响。
+    await expect(scheduler.request({ sessionId: 'worker-2' })).resolves.toBe(true);
+    expect(resume).toHaveBeenCalledTimes(1);
+  });
+
+  it('queues a send behind a wake that already holds the lock', async () => {
+    // 反过来的一格：预热先拿到锁时，后到的发送不插队、等它冷启动完 —— 实现没有抢占，
+    // 所以不变量只能写「跳过尚未开始的预热」，不能写「发送优先于预热」。
+    const order: string[] = [];
+    let releaseResume!: (value: boolean) => void;
+    const resumeGate = new Promise<boolean>((resolve) => {
+      releaseResume = resolve;
+    });
+    const tails = new Map<string, Promise<unknown>>();
+    const withSessionLock = <T>(sessionId: string, task: () => Promise<T>): Promise<T> => {
+      const previous = tails.get(sessionId) ?? Promise.resolve();
+      const next = previous.then(task);
+      tails.set(
+        sessionId,
+        next.catch(() => undefined),
+      );
+      return next;
+    };
+    const scheduler = createOrcaWorkerResumeScheduler({
+      resume: async () => {
+        order.push('resume');
+        return resumeGate;
+      },
+      withSessionLock,
+    });
+
+    const warm = scheduler.request({ sessionId: 'worker-1' });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const send = withSessionLock('worker-1', async () => {
+      order.push('send');
+      return 'sent';
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+    // 发送还没跑：它在等预热那把锁。
+    expect(order).toEqual(['resume']);
+
+    releaseResume(true);
+    await expect(warm).resolves.toBe(true);
+    await expect(send).resolves.toBe('sent');
+    // 两条都只各跑一次，顺序是预热在前。
+    expect(order).toEqual(['resume', 'send']);
+  });
+
+  it('shares the in-flight wake instead of yielding to its own lock', async () => {
+    // 预热自己持锁时 hasActiveSend 也为真：第二次请求必须共享第一次的 promise，
+    // 而不是立刻返回 false 让调用方以为唤醒失败了。
+    let release!: (value: boolean) => void;
+    let warmingUp = false;
+    const gate = new Promise<boolean>((resolve) => {
+      release = resolve;
+    });
+    const resume = vi.fn(async () => {
+      warmingUp = true;
+      return gate;
+    });
+    const scheduler = createOrcaWorkerResumeScheduler({
+      resume,
+      withSessionLock: (_sessionId, task) => task(),
+      hasActiveSend: () => warmingUp,
+    });
+
+    const first = scheduler.request({ sessionId: 'worker-1' });
+    await Promise.resolve();
+    expect(warmingUp).toBe(true);
+
+    const second = scheduler.request({ sessionId: 'worker-1' });
+    expect(resume).toHaveBeenCalledTimes(1);
+
+    release(true);
+    await expect(first).resolves.toBe(true);
+    await expect(second).resolves.toBe(true);
+    expect(resume).toHaveBeenCalledTimes(1);
+  });
+
   it('ignores cancel for sessions without an in-flight resume', () => {
     const scheduler = createOrcaWorkerResumeScheduler({
       resume: async () => true,

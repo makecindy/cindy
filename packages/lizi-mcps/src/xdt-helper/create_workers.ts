@@ -21,6 +21,7 @@ import {
   type InitialTaskState,
   type WorkerFileAccess,
   type WorkerLimitSnapshot,
+  hardLimitSuggestions,
 } from './create_worker.js';
 
 const workersSchema = z
@@ -92,14 +93,6 @@ function baseResult(worker: CreateWorkerSpec) {
     role: worker.role,
     agent: worker.agent,
   };
-}
-
-function hardLimitSuggestions(): string[] {
-  return [
-    '在协同设置中提高 Worker hard limit 后，只重试未创建项。',
-    '复用已有 Worker，通过 send_to_worker 继续派发任务。',
-    '归档不再需要的 Worker 释放名额，或把剩余任务分批执行。',
-  ];
 }
 
 function hostNotReadySuggestions(): string[] {

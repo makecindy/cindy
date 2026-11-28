@@ -1233,6 +1233,7 @@ import {
   buildOrcaLeadSessionSnapshot,
   createOrcaWorkerCreationService,
   pickWorkerAgentDeviceId,
+  workerCapacitySnapshot,
 } from './orcaWorkerCreationService.js';
 import {
   resolveSendToSessionCreateRoute,
@@ -10545,6 +10546,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     },
     withSessionLock: (sessionId, task) =>
       withSendToSessionLock(sessionId, task, () => 'orca-worker-resume'),
+    // 预热只让路，不抢占：该会话上已有发送在临界区 / 等待中时跳过本次预热（不变量 3b，见
+    // docs/dev-rules/orca-team-architecture.md「跳过尚未开始的预热」）。已经开始的后台
+    // 冷启动不被打断，后到的发送排在它后面。
+    hasActiveSend: (sessionId) => hasSendToSessionLock(sessionId),
   });
 
   // sessionId → remoteHostId 的进程内缓存 reader(lazy resume 路径每次 send 都
@@ -15981,9 +15986,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         const occupiedSlots=workers.length+reservations.length;
         if (epoch !== getCurrentDbClientSnapshot()) throw new PluginTaskError('PERMISSION_DENIED','Account changed');
         await service.get(pluginId,request.taskId);
-        const hardLimit = readCollaborationSettings().workerHardLimit;
         const live = maker.getSession(request.taskId);
-        return {...team, capacity:{hardLimit,occupiedSlots,remainingSlots:Math.max(0,hardLimit-occupiedSlots),advisory:true}, coordinatorUsage:{scope:'session-total',tokens:leadRow?.totalTokenUsage ?? null,costUSD:leadRow?.totalCostCurrency==='USD' && leadRow.totalCostAmount>0 ? leadRow.totalCostAmount : null, approximate:leadRow?.totalCostIsApproximate ?? false}, workers, waitingForUser:!!live && live.getTurnControlSnapshot().pendingInteractionCount > 0, leadWorking:(!!live && (live.isTurnRunning() || live.getTurnControlSnapshot().pendingInteractionCount > 0)) || inputCoordinator.getQueueControlSnapshot(request.taskId).pendingQueue.length > 0};
+        return {...team, capacity:{...workerCapacitySnapshot(readCollaborationSettings(), occupiedSlots),advisory:true}, coordinatorUsage:{scope:'session-total',tokens:leadRow?.totalTokenUsage ?? null,costUSD:leadRow?.totalCostCurrency==='USD' && leadRow.totalCostAmount>0 ? leadRow.totalCostAmount : null, approximate:leadRow?.totalCostIsApproximate ?? false}, workers, waitingForUser:!!live && live.getTurnControlSnapshot().pendingInteractionCount > 0, leadWorking:(!!live && (live.isTurnRunning() || live.getTurnControlSnapshot().pendingInteractionCount > 0)) || inputCoordinator.getQueueControlSnapshot(request.taskId).pendingQueue.length > 0};
       }
       case 'models': {
         const snapshot = getCurrentDbClientSnapshot();
