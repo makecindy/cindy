@@ -4,7 +4,6 @@ import { WorktreeProvider } from '../../../src/renderer/contexts/WorktreeContext
 import { MainViewHistoryProvider } from '../../../src/renderer/contexts/MainViewHistoryContext';
 import { SidebarTopNav } from '../../../src/renderer/components/sidebar/SidebarTopNav';
 import { ProjectsSection } from '../../../src/renderer/features/cc-agent/sidebar/sections/ProjectsSection';
-import { TaskInbox } from '../../../src/renderer/features/cc-agent/sidebar/TaskInbox';
 import { groupSessions } from '../../../src/renderer/features/cc-agent/lib/projectGrouping';
 import { useSidebarFilter } from '../../../src/renderer/features/cc-agent/hooks/useSidebarFilter';
 import {
@@ -21,7 +20,6 @@ import {
 } from '../../../src/renderer/features/cc-agent/lib/mainListModel';
 import type { Session } from '../../../src/renderer/lib/ccAgent.types';
 import type { AutomationScheduleSessionInfo } from '../../../src/renderer/features/cc-agent/lib/automationSidebarGrouping';
-import type { TeammateInboxEntry } from '../../../src/renderer/features/bots/teammateInbox';
 import { ctx, mountPage, subscription } from '../../ui-page/harness';
 
 setDataOwnerGeneration('fixture', 1);
@@ -37,10 +35,9 @@ const sidebarSettingsSnapshot = {
 };
 const isList = ctx.case === 'list' || ctx.case === 'devices-list';
 const isDevices = ctx.case === 'devices' || ctx.case === 'devices-list';
-const isInbox = ctx.case === 'inbox-list';
 
 function seedSidebarStorage() {
-  localStorage.setItem('sidebar.mainListMode', isList || isInbox ? 'list' : 'text');
+  localStorage.setItem('sidebar.mainListMode', isList ? 'list' : 'text');
   localStorage.setItem(GROUP_DIALOGUE_KEY, 'true');
   localStorage.setItem(GROUP_AUTOMATION_KEY, String(!isDevices));
   localStorage.setItem(GROUP_DEVICE_KEY, String(isDevices));
@@ -195,19 +192,6 @@ const remoteDeviceIndex = isDevices
     ])
   : null;
 
-const inboxTeammates: TeammateInboxEntry[] = [
-  {
-    key: 'teammate:local:qa',
-    name: '阿澈',
-    status: 'done',
-    snooze: { snoozedUntil: null, snoozedAt: null, userSendAt: null },
-    sessionId: 'chat-qa',
-    activityAt: now,
-    route: '/bots/qa',
-    bot: { id: 'qa', name: '阿澈', avatar: '', avatarColor: 'teal', lastMessageAt: now },
-  } as TeammateInboxEntry,
-];
-
 function SidebarSpecimen() {
   const filter = useSidebarFilter(hiddenProjectKeys, sidebarSettingsSnapshot);
   const [collapsed, setCollapsed] = useState<Set<string>>(
@@ -216,35 +200,6 @@ function SidebarSpecimen() {
   const grouped = useMemo(() => groupSessions(allSessions), []);
   const projects = grouped.projects;
   const dialogues = grouped.dialogues;
-
-  if (isInbox) {
-    return (
-      <aside
-        data-ui-page-subject
-        className="flex h-screen flex-col gap-2 overflow-y-auto bg-sidebar pt-2 pb-4 text-foreground"
-        style={{ scrollbarGutter: 'stable' }}
-      >
-        <TaskInbox
-          sessionVariant="list"
-          sessions={[localProjectSessions[0]]}
-          teammates={inboxTeammates}
-          priorityContext={{
-            runningSessionIds: new Set(),
-            waitingSessionIds: new Set(),
-            attentionSessionIds: new Set([localProjectSessions[0].id]),
-          }}
-          runningSessionIds={new Set()}
-          attachedSessionIds={new Set()}
-          notifications={new Set([localProjectSessions[0].id])}
-          onSessionClick={noop}
-          onAction={noop}
-          onRename={noop}
-          onTogglePin={noop}
-          onScheduleAction={noop}
-        />
-      </aside>
-    );
-  }
 
   return (
     <aside
