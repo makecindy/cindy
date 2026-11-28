@@ -10799,7 +10799,33 @@
       "deviceTooOld": "彼设备之 {{appName}} 版本过旧，不支持远程览卷，请升级后再试",
       "loadFailed": "卷树加载未成",
       "unsupportedDropFile": "此格式之卷，暂不能展示",
-      "multipleDropFilesUnsupported": "一次仅可拖入一卷"
+      "multipleDropFilesUnsupported": "一次仅可拖入一卷",
+      "pushNow": "推",
+      "aiCommitFallback": "AI 总结暂不可用，已存简要之提交讯息。",
+      "commitSuccess": "已提交 {{oid}}",
+      "changes": "已改",
+      "changedOnlyEmpty": "无已改之卷",
+      "commitMessage": "提交讯息",
+      "commitMessagePlaceholder": "述此改之旨…",
+      "autoPush": "自动 push",
+      "pushBranch": "推分支：{{branch}}",
+      "aiCommitSummary": "AI 总结",
+      "commitToGithub": "提交于 GitHub",
+      "changedOnly": "仅示已改之卷",
+      "unstagedGroup": "未暂存",
+      "stagedGroup": "已暂存",
+      "history": "史",
+      "historyEmpty": "尚无提交",
+      "historyUnpushed": "未推",
+      "pull": "拉取",
+      "pullSuccess": "已得远端之新",
+      "pullFailedTitle": "拉取未成",
+      "remoteBehind_one": "远端有新本一，请先拉取而后提交",
+      "remoteBehind_other": "远端有新本 {{count}}，请先拉取而后提交",
+      "remoteDiverged": "本地与远端已分：领先 {{ahead}}，落后 {{behind}}，请先拉取并理其争",
+      "localAhead_one": "本地领先一本，尚未推",
+      "localAhead_other": "本地领先 {{count}} 本，尚未推",
+      "pullBeforePush": "远端有新本，请先拉取而后推"
     },
     "browser": {
       "newTab": "新分页",
@@ -18200,6 +18226,16 @@
       "imagePreview": {
         "loadFailed": "图不能载",
         "viewLarge": "览大图"
+      },
+      "gitStatus": {
+        "modified": "已改",
+        "added": "新增",
+        "deleted": "已删",
+        "renamed": "已易名",
+        "copied": "已复制",
+        "typechange": "类型易",
+        "untracked": "未随",
+        "unmerged": "有冲突"
       }
     },
     "search": {

@@ -12,14 +12,16 @@ import { ipcMain, shell } from 'electron';
 import { requireObject, requireString, throwIpcError } from '../utils/ipcValidate.js';
 import { enqueueGitRepoWrite } from '../git-snapshot/gitRepoWriteQueue.js';
 import { isSafeBranchBaseRef, readBranchDiff, readBranchFileDiff } from './branchReader.js';
+import { createCommitMessageDraft } from './commitMessage.js';
 import { commitStagedChanges, GitReviewCommitError } from './commitOps.js';
-import { listBranchCommits, readCommitDiff, readCommitFileDiff } from './commitReader.js';
+import { listBranchCommits, listRecentCommits, readCommitDiff, readCommitFileDiff } from './commitReader.js';
 import { readCappedFileDiff, readDiffs } from './diffReader.js';
 import { RepoContainedPathError, resolveRepoContainedRealPath } from './fsPathGuard.js';
 import { isSafeGitObjectOid, isSafeGitPath, normalizeGitDiffIndexOid } from './gitPath.js';
 import { readImagePreview } from './imageReader.js';
 import { readMarkdownPreview } from './markdownReader.js';
 import { GitReviewPushError, pushBranch } from './pushOps.js';
+import { GitReviewPullError, pullBranch } from './pullOps.js';
 import { resolveReviewScope } from './scopeResolver.js';
 import { createSshPreviewReaderDeps, withSessionReviewExecution } from './sshReviewBackend.js';
 import { readStatus } from './statusReader.js';
@@ -28,6 +30,7 @@ import type {
   FileDiff,
   GitReviewDeps,
   ReviewCommitDiffData,
+  ReviewCommitMessageDraft,
   ReviewCommitListData,
   ReviewCommitResult,
   ReviewBranchDiffData,
@@ -37,12 +40,14 @@ import type {
   ReviewFileDiffData,
   ReviewFileDiffRequest,
   ReviewFileTarget,
+  ReviewHistoryData,
   ReviewImagePreviewData,
   ReviewImagePreviewRequest,
   ReviewMarkdownPreviewData,
   ReviewMarkdownPreviewRequest,
   ReviewPushConfirmForce,
   ReviewPushResult,
+  ReviewPullResult,
   ReviewScope,
   ReviewStageAction,
   ReviewStageOperationResult,
@@ -51,8 +56,10 @@ import type {
 
 export const GIT_REVIEW_INVOKE = {
   GET: 'git-review:get',
+  COMMIT_MESSAGE: 'git-review:commit-message',
   SUMMARY: 'git-review:summary',
   COMMITS: 'git-review:commits',
+  HISTORY: 'git-review:history',
   COMMIT_DIFF: 'git-review:commit-diff',
   BRANCH_DIFF: 'git-review:branch-diff',
   FILE_DIFF: 'git-review:file-diff',
@@ -70,6 +77,7 @@ export const GIT_REVIEW_INVOKE = {
   DISCARD_ALL: 'git-review:discard-all',
   COMMIT: 'git-review:commit',
   PUSH: 'git-review:push',
+  PULL: 'git-review:pull',
 } as const;
 
 export function buildDirtySummary(sessionId: string, scope: ReviewScope, status: ReviewStatus | null): ReviewDirtySummary {
@@ -105,7 +113,9 @@ const defaultGitReviewDeps: GitReviewDeps = {
   readDiffs,
 };
 
-type GitReviewIpcOptions = Pick<GitReviewDeps, 'isSessionRunning'>;
+type GitReviewIpcOptions = Pick<GitReviewDeps, 'isSessionRunning'> & {
+  generateCommitMessage?: (prompt: string) => Promise<string>;
+};
 
 function isGitReviewDeps(value: unknown): value is GitReviewDeps {
   return Boolean(value) &&
@@ -147,6 +157,28 @@ export async function readReviewData(
   };
 }
 
+export async function readReviewCommitMessageDraft(
+  sessionId: string,
+  generateCommitMessage?: (prompt: string) => Promise<string>,
+  deps: GitReviewDeps = defaultGitReviewDeps,
+  includeUnstaged = true,
+): Promise<ReviewCommitMessageDraft> {
+  const data = await readReviewData(sessionId, deps);
+  const scoped = includeUnstaged
+    ? data
+    : {
+        ...data,
+        status: data.status
+          ? {
+              ...data.status,
+              files: data.status.files.filter((file) => file.sources.includes('staged')),
+            }
+          : null,
+        diffs: { ...data.diffs, unstaged: [] },
+      };
+  return createCommitMessageDraft(scoped, generateCommitMessage);
+}
+
 export async function readReviewSummary(sessionId: string, deps: Pick<GitReviewDeps, 'resolveScope' | 'readStatus'> = {
   resolveScope: resolveReviewScope,
   readStatus,
@@ -162,6 +194,15 @@ export async function readReviewCommits(sessionId: string, baseRef: string | nul
 }): Promise<ReviewCommitListData> {
   const scope = await deps.resolveScope(sessionId);
   return listBranchCommits(scope, baseRef);
+}
+
+export async function readReviewHistory(
+  sessionId: string,
+  limit?: number,
+  deps: Pick<GitReviewDeps, 'resolveScope'> = { resolveScope: resolveReviewScope },
+): Promise<ReviewHistoryData> {
+  const scope = await deps.resolveScope(sessionId);
+  return listRecentCommits(scope, limit);
 }
 
 export async function readReviewCommitDiff(
@@ -323,7 +364,12 @@ async function assertSessionWriteAllowed(sessionId: string, deps: GitReviewDeps)
 }
 
 function mapWriteError(err: unknown): never {
-  if (err instanceof GitReviewStageError || err instanceof GitReviewCommitError || err instanceof GitReviewPushError) {
+  if (
+    err instanceof GitReviewStageError ||
+    err instanceof GitReviewCommitError ||
+    err instanceof GitReviewPushError ||
+    err instanceof GitReviewPullError
+  ) {
     const message = messageWithDetails(err.message, err.stderr);
     if (err instanceof GitReviewStageError && err.kind === 'stale') {
       throwIpcError('STALE_DIFF', message);
@@ -450,6 +496,23 @@ export async function runReviewPush(
   }
 }
 
+export async function runReviewPull(
+  sessionId: string,
+  deps: GitReviewDeps = { resolveScope: resolveReviewScope, readStatus, readDiffs },
+): Promise<ReviewPullResult> {
+  try {
+    return await runQueuedWrite(sessionId, deps, async () => {
+      const scope = await deps.resolveScope(sessionId);
+      const status = await deps.readStatus(scope);
+      const pull = await pullBranch(status.scope, status);
+      const data = await readReviewData(sessionId, deps);
+      return { data, ...pull };
+    });
+  } catch (err) {
+    mapWriteError(err);
+  }
+}
+
 export function parseSessionId(payload: unknown): string {
   const obj = requireObject(payload);
   return requireString(obj.sessionId, 'sessionId');
@@ -494,6 +557,32 @@ export function parseCommitsPayload(payload: unknown): { sessionId: string; base
   return {
     sessionId: requireString(obj.sessionId, 'sessionId'),
     baseRef: rawBaseRef,
+  };
+}
+
+export function parseHistoryPayload(payload: unknown): { sessionId: string; limit: number } {
+  const obj = requireObject(payload);
+  const rawLimit = obj.limit;
+  if (
+    rawLimit !== undefined &&
+    (typeof rawLimit !== 'number' || !Number.isSafeInteger(rawLimit) || rawLimit < 1 || rawLimit > 50)
+  ) {
+    throwIpcError('INVALID_PARAMS', 'limit must be an integer between 1 and 50');
+  }
+  return {
+    sessionId: requireString(obj.sessionId, 'sessionId'),
+    limit: typeof rawLimit === 'number' ? rawLimit : 20,
+  };
+}
+
+export function parseCommitMessagePayload(payload: unknown): {
+  sessionId: string;
+  includeUnstaged: boolean;
+} {
+  const obj = requireObject(payload);
+  return {
+    sessionId: requireString(obj.sessionId, 'sessionId'),
+    includeUnstaged: readOptionalBoolean(obj, 'includeUnstaged') ?? true,
   };
 }
 
@@ -706,6 +795,22 @@ export function registerGitReviewIpc(options: GitReviewIpcOptions = {}): void {
     }
   });
 
+  ipcMain.handle(GIT_REVIEW_INVOKE.COMMIT_MESSAGE, async (_event, payload: unknown) => {
+    try {
+      const { sessionId, includeUnstaged } = parseCommitMessagePayload(payload);
+      return await withSessionReviewExecution(sessionId, () =>
+        readReviewCommitMessageDraft(
+          sessionId,
+          options.generateCommitMessage,
+          defaultGitReviewDeps,
+          includeUnstaged,
+        ),
+      );
+    } catch (err) {
+      rethrowReviewIpcError(err);
+    }
+  });
+
   ipcMain.handle(GIT_REVIEW_INVOKE.SUMMARY, async (_event, payload: unknown) => {
     try {
       const sessionId = parseSessionId(payload);
@@ -719,6 +824,17 @@ export function registerGitReviewIpc(options: GitReviewIpcOptions = {}): void {
     try {
       const { sessionId, baseRef } = parseCommitsPayload(payload);
       return await withSessionReviewExecution(sessionId, () => readReviewCommits(sessionId, baseRef));
+    } catch (err) {
+      rethrowReviewIpcError(err);
+    }
+  });
+
+  ipcMain.handle(GIT_REVIEW_INVOKE.HISTORY, async (_event, payload: unknown) => {
+    try {
+      const { sessionId, limit } = parseHistoryPayload(payload);
+      return await withSessionReviewExecution(sessionId, () =>
+        readReviewHistory(sessionId, limit),
+      );
     } catch (err) {
       rethrowReviewIpcError(err);
     }
@@ -831,5 +947,10 @@ export function registerGitReviewIpc(options: GitReviewIpcOptions = {}): void {
   ipcMain.handle(GIT_REVIEW_INVOKE.PUSH, async (_event, payload: unknown) => {
     const { sessionId, confirmForce } = parsePushPayload(payload);
     return withSessionReviewExecution(sessionId, () => runReviewPush(sessionId, confirmForce, writeDeps));
+  });
+
+  ipcMain.handle(GIT_REVIEW_INVOKE.PULL, async (_event, payload: unknown) => {
+    const sessionId = parseSessionId(payload);
+    return withSessionReviewExecution(sessionId, () => runReviewPull(sessionId, writeDeps));
   });
 }

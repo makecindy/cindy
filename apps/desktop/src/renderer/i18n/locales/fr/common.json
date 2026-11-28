@@ -10919,7 +10919,35 @@
       "deviceTooOld": "L'appareil distant utilise une ancienne version de {{appName}} qui ne prend pas en charge la navigation de fichiers à distance. Mettez-la à jour et réessayez",
       "loadFailed": "Impossible de charger l'arborescence des fichiers",
       "unsupportedDropFile": "Ce format de fichier ne peut pas encore être prévisualisé",
-      "multipleDropFilesUnsupported": "Déposez un seul fichier à la fois"
+      "multipleDropFilesUnsupported": "Déposez un seul fichier à la fois",
+      "pushNow": "Pousser",
+      "aiCommitFallback": "Le résumé IA est indisponible ; un message de commit concis a été conservé.",
+      "commitSuccess": "Commit {{oid}} créé",
+      "changes": "Modifications",
+      "changedOnlyEmpty": "Aucun fichier modifié",
+      "commitMessage": "Message de commit",
+      "commitMessagePlaceholder": "Décrivez l’objectif de cette modification…",
+      "autoPush": "Push automatique",
+      "pushBranch": "Branche de push : {{branch}}",
+      "aiCommitSummary": "Résumé IA",
+      "commitToGithub": "Commit sur GitHub",
+      "changedOnly": "Afficher uniquement les fichiers modifiés",
+      "unstagedGroup": "Non préparé",
+      "stagedGroup": "Préparé",
+      "history": "Historique",
+      "historyEmpty": "Aucun commit pour l’instant",
+      "historyUnpushed": "Non poussé",
+      "pull": "Pull",
+      "pullSuccess": "Mises à jour distantes récupérées",
+      "pullFailedTitle": "Échec de la récupération",
+      "remoteBehind_one": "1 nouvelle version distante. Récupérez les changements avant de valider.",
+      "remoteBehind_other": "{{count}} nouvelles versions distantes. Récupérez les changements avant de valider.",
+      "remoteBehind_many": "{{count}} nouvelles versions distantes. Récupérez les changements avant de valider.",
+      "remoteDiverged": "Local et distant ont divergé : {{ahead}} en avance, {{behind}} en retard. Récupérez les changements et résolvez les conflits d’abord.",
+      "localAhead_one": "1 commit local non poussé",
+      "localAhead_other": "{{count}} commits locaux non poussés",
+      "localAhead_many": "{{count}} commits locaux non poussés",
+      "pullBeforePush": "Le distant a de nouveaux commits ; récupérez-les avant de pousser."
     },
     "browser": {
       "newTab": "Nouvel onglet",
@@ -18453,7 +18481,17 @@
         "loadFailed": "Impossible de charger l'image",
         "viewLarge": "Afficher en taille réelle"
       },
-      "activeSessionCount_many": "{{count}} sessions actives"
+      "activeSessionCount_many": "{{count}} sessions actives",
+      "gitStatus": {
+        "modified": "Modifié",
+        "added": "Ajouté",
+        "deleted": "Supprimé",
+        "renamed": "Renommé",
+        "copied": "Copié",
+        "typechange": "Type modifié",
+        "untracked": "Non suivi",
+        "unmerged": "En conflit"
+      }
     },
     "search": {
       "open": "Rechercher",

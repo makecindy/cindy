@@ -286,6 +286,7 @@ import type {
   ReviewBranchDiffData,
   ReviewCommitDiffData,
   ReviewCommitListData,
+  ReviewCommitMessageDraft,
   ReviewCommitRequest,
   ReviewCommitResult,
   ReviewData,
@@ -294,11 +295,13 @@ import type {
   ReviewFileDiffData,
   ReviewFileDiffRequest,
   ReviewFileTarget,
+  ReviewHistoryData,
   ReviewHunkOperationRequest,
   ReviewImagePreviewData,
   ReviewMarkdownPreviewData,
   ReviewPushConfirmForce,
   ReviewPushResult,
+  ReviewPullResult,
   ReviewStageOperationResult,
 } from '../shared/gitReviewWire';
 import type {
@@ -6128,12 +6131,21 @@ contextBridge.exposeInMainWorld('electronAPI', {
   gitReview: {
     get: (params: { sessionId: string; ignoreWhitespace?: boolean }): Promise<ReviewData> =>
       ipcRenderer.invoke('git-review:get', params),
+    commitMessage: (params: {
+      sessionId: string;
+      includeUnstaged?: boolean;
+    }): Promise<ReviewCommitMessageDraft> =>
+      ipcRenderer.invoke('git-review:commit-message', params),
     summary: (params: { sessionId: string }): Promise<ReviewDirtySummary> =>
       ipcRenderer.invoke('git-review:summary', params),
     commits: (params: {
       sessionId: string;
       baseRef?: string | null;
     }): Promise<ReviewCommitListData> => ipcRenderer.invoke('git-review:commits', params),
+    history: (params: {
+      sessionId: string;
+      limit?: number;
+    }): Promise<ReviewHistoryData> => ipcRenderer.invoke('git-review:history', params),
     commitDiff: (params: {
       sessionId: string;
       oid: string;
@@ -6200,6 +6212,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
       sessionId: string;
       confirmForce?: ReviewPushConfirmForce;
     }): Promise<ReviewPushResult> => ipcRenderer.invoke('git-review:push', params),
+    pull: (params: { sessionId: string }): Promise<ReviewPullResult> =>
+      ipcRenderer.invoke('git-review:pull', params),
   },
 
   // Sidebar identity state is owner-scoped in main and every mutation/push is generation-fenced.

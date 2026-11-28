@@ -32,6 +32,7 @@ import {
   parseCommitDiffPayload,
   parseCommitsPayload,
   parseFileDiffPayload,
+  parseHistoryPayload,
   parseImagePreviewPayload,
   parseMarkdownPreviewPayload,
   parseReviewDataPayload,
@@ -41,6 +42,7 @@ import {
   readReviewCommits,
   readReviewData,
   readReviewFileDiff,
+  readReviewHistory,
   readReviewImagePreview,
   readReviewMarkdownPreview,
   readReviewSummary,
@@ -118,6 +120,10 @@ async function dispatchRemoteOp(op: string, payload: unknown): Promise<unknown> 
     case 'summary': {
       const sessionId = parseSessionId(payload);
       return withSessionReviewExecution(sessionId, () => readReviewSummary(sessionId));
+    }
+    case 'history': {
+      const { sessionId, limit } = parseHistoryPayload(payload);
+      return withSessionReviewExecution(sessionId, () => readReviewHistory(sessionId, limit));
     }
     case 'commits': {
       const { sessionId, baseRef } = parseCommitsPayload(payload);

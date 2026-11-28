@@ -634,8 +634,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   gitReview: {
     get: (params: unknown): Promise<unknown> => ipcRenderer.invoke('git-review:get', params),
+    commitMessage: (params: unknown): Promise<unknown> =>
+      ipcRenderer.invoke('git-review:commit-message', params),
     summary: (params: unknown): Promise<unknown> => ipcRenderer.invoke('git-review:summary', params),
     commits: (params: unknown): Promise<unknown> => ipcRenderer.invoke('git-review:commits', params),
+    history: (params: unknown): Promise<unknown> =>
+      ipcRenderer.invoke('git-review:history', params),
     commitDiff: (params: unknown): Promise<unknown> => ipcRenderer.invoke('git-review:commit-diff', params),
     branchDiff: (params: unknown): Promise<unknown> => ipcRenderer.invoke('git-review:branch-diff', params),
     fileDiff: (params: unknown): Promise<unknown> => ipcRenderer.invoke('git-review:file-diff', params),
@@ -653,6 +657,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     discardAll: (params: unknown): Promise<unknown> => ipcRenderer.invoke('git-review:discard-all', params),
     commit: (params: unknown): Promise<unknown> => ipcRenderer.invoke('git-review:commit', params),
     push: (params: unknown): Promise<unknown> => ipcRenderer.invoke('git-review:push', params),
+    pull: (params: unknown): Promise<unknown> => ipcRenderer.invoke('git-review:pull', params),
   },
   maker: {
     mcpApps: (sessionId: string | null, input: unknown): Promise<unknown> => ipcRenderer.invoke('maker:mcp-apps:v1', sessionId, input),

@@ -10919,7 +10919,35 @@
       "deviceTooOld": "O dispositivo remoto está a executar uma versão antiga do {{appName}} que não suporta a navegação remota de ficheiros. Atualize-a e tente novamente",
       "loadFailed": "Falha ao carregar a árvore de ficheiros",
       "unsupportedDropFile": "Ainda não é possível pré-visualizar este formato de ficheiro",
-      "multipleDropFilesUnsupported": "Largue um ficheiro de cada vez"
+      "multipleDropFilesUnsupported": "Largue um ficheiro de cada vez",
+      "pushNow": "Push",
+      "aiCommitFallback": "O resumo por IA não está disponível; foi mantida uma mensagem de commit concisa.",
+      "commitSuccess": "{{oid}} submetido",
+      "changes": "Alterações",
+      "changedOnlyEmpty": "Sem ficheiros alterados",
+      "commitMessage": "Mensagem de commit",
+      "commitMessagePlaceholder": "Descreva o objetivo desta alteração…",
+      "autoPush": "Push automático",
+      "pushBranch": "Ramo de push: {{branch}}",
+      "aiCommitSummary": "Resumo por IA",
+      "commitToGithub": "Commit no GitHub",
+      "changedOnly": "Mostrar apenas ficheiros alterados",
+      "unstagedGroup": "Não preparado",
+      "stagedGroup": "Preparado",
+      "history": "Histórico",
+      "historyEmpty": "Ainda não há commits",
+      "historyUnpushed": "Não enviado",
+      "pull": "Pull",
+      "pullSuccess": "Atualizações remotas recebidas",
+      "pullFailedTitle": "Falha no pull",
+      "remoteBehind_one": "Há 1 nova versão remota. Faça pull antes de confirmar.",
+      "remoteBehind_other": "Há {{count}} novas versões remotas. Faça pull antes de confirmar.",
+      "remoteBehind_many": "Há {{count}} novas versões remotas. Faça pull antes de confirmar.",
+      "remoteDiverged": "Local e remoto divergiram: {{ahead}} à frente, {{behind}} atrás. Faça pull e resolva os conflitos primeiro.",
+      "localAhead_one": "1 commit local não enviado",
+      "localAhead_other": "{{count}} commits locais não enviados",
+      "localAhead_many": "{{count}} commits locais não enviados",
+      "pullBeforePush": "O remoto tem novos commits; faça pull antes de enviar."
     },
     "browser": {
       "newTab": "Novo separador",
@@ -18453,7 +18481,17 @@
         "loadFailed": "Falha ao carregar a imagem",
         "viewLarge": "Ver em tamanho real"
       },
-      "activeSessionCount_many": "{{count}} sessões ativas"
+      "activeSessionCount_many": "{{count}} sessões ativas",
+      "gitStatus": {
+        "modified": "Modificado",
+        "added": "Adicionado",
+        "deleted": "Eliminado",
+        "renamed": "Renomeado",
+        "copied": "Copiado",
+        "typechange": "Tipo alterado",
+        "untracked": "Não seguido",
+        "unmerged": "Em conflito"
+      }
     },
     "search": {
       "open": "Pesquisar",

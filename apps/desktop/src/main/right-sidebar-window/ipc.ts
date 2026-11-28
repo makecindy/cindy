@@ -127,6 +127,12 @@ function parseCommand(raw: unknown): RsbWindowCommand {
   if (r.type === 'toggle-review-tab') {
     return { type: 'toggle-review-tab', sessionId: r.sessionId };
   }
+  if (r.type === 'open-commit-review') {
+    if (typeof r.commitOid !== 'string' || !/^[0-9a-f]{40,64}$/i.test(r.commitOid)) {
+      throwIpcError('INVALID_PARAMS', 'command.commitOid must be a commit hash');
+    }
+    return { type: 'open-commit-review', sessionId: r.sessionId, commitOid: r.commitOid };
+  }
   if (r.type === 'open-web-browser' || r.type === 'open-mail-preview') {
     if (typeof r.url !== 'string' || r.url.length === 0) {
       throwIpcError('INVALID_PARAMS', 'command.url required');

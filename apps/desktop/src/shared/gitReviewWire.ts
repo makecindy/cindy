@@ -33,6 +33,8 @@ export interface ReviewScope {
   headOid: string | null;
   isDetached: boolean;
   isUnborn: boolean;
+  /** Sanitized web page for the current branch's push remote. */
+  branchWebUrl?: string | null;
   source: 'telemetry' | 'worktree' | 'workingDir' | 'remote' | null;
   aheadBehind: AheadBehind;
   disabledReason: ReviewDisableReason | null;
@@ -238,6 +240,13 @@ export interface ReviewCommitListData {
   warning: ReviewBranchDiffWarning | null;
 }
 
+export interface ReviewHistoryData {
+  scope: ReviewScope;
+  commits: ReviewCommit[];
+  /** Resolved upstream tip; null when the branch has no upstream. */
+  upstreamOid: string | null;
+}
+
 export interface ReviewCommitDiffData {
   scope: ReviewScope;
   commitOid: string;
@@ -406,6 +415,11 @@ export interface ReviewCommitResult {
   stderr: string;
 }
 
+export interface ReviewCommitMessageDraft {
+  message: string;
+  source: 'ai' | 'fallback';
+}
+
 export interface ReviewPushConfirmForce {
   remoteRef: string;
   expectedOid: string;
@@ -434,3 +448,9 @@ export interface ReviewPushNeedsForceResult {
 }
 
 export type ReviewPushResult = ReviewPushPushedResult | ReviewPushNeedsForceResult;
+
+export interface ReviewPullResult {
+  data: ReviewData;
+  stdout: string;
+  stderr: string;
+}

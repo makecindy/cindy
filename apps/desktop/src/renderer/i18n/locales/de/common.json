@@ -10843,7 +10843,33 @@
       "deviceTooOld": "Auf dem Remote-Gerät läuft eine ältere Version von {{appName}}, die keinen Remote-Dateizugriff unterstützt. Aktualisiere sie und versuche es erneut",
       "loadFailed": "Dateibaum konnte nicht geladen werden",
       "unsupportedDropFile": "Für dieses Dateiformat ist noch keine Vorschau verfügbar",
-      "multipleDropFilesUnsupported": "Lege jeweils nur eine Datei ab"
+      "multipleDropFilesUnsupported": "Lege jeweils nur eine Datei ab",
+      "pushNow": "Push",
+      "aiCommitFallback": "Die KI-Zusammenfassung ist nicht verfügbar; eine knappe Commit-Nachricht wurde beibehalten.",
+      "commitSuccess": "{{oid}} committet",
+      "changes": "Änderungen",
+      "changedOnlyEmpty": "Keine geänderten Dateien",
+      "commitMessage": "Commit-Nachricht",
+      "commitMessagePlaceholder": "Beschreibe den Zweck dieser Änderung…",
+      "autoPush": "Automatischer Push",
+      "pushBranch": "Push-Branch: {{branch}}",
+      "aiCommitSummary": "KI-Zusammenfassung",
+      "commitToGithub": "Auf GitHub committen",
+      "changedOnly": "Nur geänderte Dateien anzeigen",
+      "unstagedGroup": "Nicht vorgemerkt",
+      "stagedGroup": "Vorgemerkt",
+      "history": "Verlauf",
+      "historyEmpty": "Noch keine Commits",
+      "historyUnpushed": "Nicht gepusht",
+      "pull": "Pull",
+      "pullSuccess": "Remote-Updates abgerufen",
+      "pullFailedTitle": "Abrufen fehlgeschlagen",
+      "remoteBehind_one": "1 neue Remote-Version. Vor dem Commit zuerst abrufen.",
+      "remoteBehind_other": "{{count}} neue Remote-Versionen. Vor dem Commit zuerst abrufen.",
+      "remoteDiverged": "Lokal und Remote sind divergiert: {{ahead}} voraus, {{behind}} zurück. Zuerst abrufen und Konflikte lösen.",
+      "localAhead_one": "1 lokaler Commit nicht gepusht",
+      "localAhead_other": "{{count}} lokale Commits nicht gepusht",
+      "pullBeforePush": "Remote hat neue Commits; vor dem Push zuerst abrufen."
     },
     "browser": {
       "newTab": "Neuer Tab",
@@ -18275,6 +18301,16 @@
       "imagePreview": {
         "loadFailed": "Bild konnte nicht geladen werden",
         "viewLarge": "In voller Größe anzeigen"
+      },
+      "gitStatus": {
+        "modified": "Geändert",
+        "added": "Hinzugefügt",
+        "deleted": "Gelöscht",
+        "renamed": "Umbenannt",
+        "copied": "Kopiert",
+        "typechange": "Typ geändert",
+        "untracked": "Nicht verfolgt",
+        "unmerged": "Konflikt"
       }
     },
     "search": {

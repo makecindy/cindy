@@ -10919,7 +10919,35 @@
       "deviceTooOld": "El dispositivo remoto usa una versión anterior de {{appName}} que no admite la exploración remota de archivos. Actualízala e inténtalo de nuevo",
       "loadFailed": "No se pudo cargar el árbol de archivos",
       "unsupportedDropFile": "Aún no se puede obtener una vista previa de este formato de archivo",
-      "multipleDropFilesUnsupported": "Suelta un archivo a la vez"
+      "multipleDropFilesUnsupported": "Suelta un archivo a la vez",
+      "pushNow": "Push",
+      "aiCommitFallback": "El resumen con IA no está disponible; se mantuvo un mensaje de commit conciso.",
+      "commitSuccess": "Commit {{oid}} creado",
+      "changes": "Cambios",
+      "changedOnlyEmpty": "No hay archivos modificados",
+      "commitMessage": "Mensaje de commit",
+      "commitMessagePlaceholder": "Describe el propósito de este cambio…",
+      "autoPush": "Push automático",
+      "pushBranch": "Rama de push: {{branch}}",
+      "aiCommitSummary": "Resumen con IA",
+      "commitToGithub": "Commit en GitHub",
+      "changedOnly": "Mostrar solo archivos modificados",
+      "unstagedGroup": "Sin preparar",
+      "stagedGroup": "Preparado",
+      "history": "Historial",
+      "historyEmpty": "Aún no hay commits",
+      "historyUnpushed": "Sin subir",
+      "pull": "Pull",
+      "pullSuccess": "Se trajeron los cambios remotos",
+      "pullFailedTitle": "Error al traer cambios",
+      "remoteBehind_one": "Hay 1 versión nueva en el remoto. Trae los cambios antes de confirmar.",
+      "remoteBehind_other": "Hay {{count}} versiones nuevas en el remoto. Trae los cambios antes de confirmar.",
+      "remoteBehind_many": "Hay {{count}} versiones nuevas en el remoto. Trae los cambios antes de confirmar.",
+      "remoteDiverged": "Local y remoto han divergido: {{ahead}} por delante y {{behind}} por detrás. Trae los cambios y resuelve los conflictos primero.",
+      "localAhead_one": "Hay 1 commit local sin subir",
+      "localAhead_other": "Hay {{count}} commits locales sin subir",
+      "localAhead_many": "Hay {{count}} commits locales sin subir",
+      "pullBeforePush": "El remoto tiene commits nuevos; trae los cambios antes de subir."
     },
     "browser": {
       "newTab": "Nueva pestaña",
@@ -18453,7 +18481,17 @@
         "loadFailed": "No se pudo cargar la imagen",
         "viewLarge": "Ver en tamaño completo"
       },
-      "activeSessionCount_many": "{{count}} sesiones activas"
+      "activeSessionCount_many": "{{count}} sesiones activas",
+      "gitStatus": {
+        "modified": "Modificado",
+        "added": "Añadido",
+        "deleted": "Eliminado",
+        "renamed": "Renombrado",
+        "copied": "Copiado",
+        "typechange": "Tipo cambiado",
+        "untracked": "Sin seguimiento",
+        "unmerged": "En conflicto"
+      }
     },
     "search": {
       "open": "Buscar",

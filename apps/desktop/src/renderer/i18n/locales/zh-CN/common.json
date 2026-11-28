@@ -10799,7 +10799,33 @@
       "deviceTooOld": "对方设备的 {{appName}} 版本过旧，不支持远程文件浏览，请升级后重试",
       "loadFailed": "文件树加载失败",
       "unsupportedDropFile": "暂时不支持展示该格式的文件",
-      "multipleDropFilesUnsupported": "一次只能拖入一个文件"
+      "multipleDropFilesUnsupported": "一次只能拖入一个文件",
+      "pushNow": "推送",
+      "aiCommitFallback": "AI 总结暂不可用，已保留简洁提交信息。",
+      "commitSuccess": "已提交 {{oid}}",
+      "changes": "已更改",
+      "changedOnlyEmpty": "没有已更改文件",
+      "commitMessage": "提交信息",
+      "commitMessagePlaceholder": "说明本次修改的目的…",
+      "autoPush": "自动 push",
+      "pushBranch": "推送分支：{{branch}}",
+      "aiCommitSummary": "AI 总结",
+      "commitToGithub": "提交到 GitHub",
+      "changedOnly": "仅显示已更改文件",
+      "unstagedGroup": "未暂存",
+      "stagedGroup": "已暂存",
+      "history": "历史",
+      "historyEmpty": "暂无提交记录",
+      "historyUnpushed": "未推送",
+      "pull": "拉取",
+      "pullSuccess": "已拉取远端更新",
+      "pullFailedTitle": "拉取失败",
+      "remoteBehind_one": "远端有 1 个新版本，请先拉取再提交",
+      "remoteBehind_other": "远端有 {{count}} 个新版本，请先拉取再提交",
+      "remoteDiverged": "本地与远端已分叉：领先 {{ahead}}，落后 {{behind}}，请先拉取并处理冲突",
+      "localAhead_one": "本地领先 1 个版本，尚未推送",
+      "localAhead_other": "本地领先 {{count}} 个版本，尚未推送",
+      "pullBeforePush": "远端有新版本，请先拉取再推送"
     },
     "browser": {
       "newTab": "新标签",
@@ -18200,6 +18226,16 @@
       "imagePreview": {
         "loadFailed": "无法加载图片",
         "viewLarge": "查看大图"
+      },
+      "gitStatus": {
+        "modified": "已修改",
+        "added": "新增",
+        "deleted": "已删除",
+        "renamed": "已重命名",
+        "copied": "已复制",
+        "typechange": "类型变更",
+        "untracked": "未跟踪",
+        "unmerged": "有冲突"
       }
     },
     "search": {

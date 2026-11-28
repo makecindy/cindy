@@ -10799,7 +10799,33 @@
       "deviceTooOld": "상대 기기의 {{appName}} 버전이 오래되어 원격 파일 탐색을 지원하지 않습니다. 업데이트 후 다시 시도해 주세요",
       "loadFailed": "파일 트리를 불러오지 못했습니다",
       "unsupportedDropFile": "이 형식의 파일은 아직 미리 볼 수 없습니다",
-      "multipleDropFilesUnsupported": "파일은 한 번에 하나만 드롭할 수 있습니다"
+      "multipleDropFilesUnsupported": "파일은 한 번에 하나만 드롭할 수 있습니다",
+      "pushNow": "푸시",
+      "aiCommitFallback": "AI 요약을 사용할 수 없어 간결한 커밋 메시지를 유지했습니다.",
+      "commitSuccess": "커밋됨 {{oid}}",
+      "changes": "변경 사항",
+      "changedOnlyEmpty": "변경된 파일이 없습니다",
+      "commitMessage": "커밋 메시지",
+      "commitMessagePlaceholder": "이 변경의 목적을 입력하세요…",
+      "autoPush": "자동 push",
+      "pushBranch": "Push 브랜치: {{branch}}",
+      "aiCommitSummary": "AI 요약",
+      "commitToGithub": "GitHub에 커밋",
+      "changedOnly": "변경된 파일만 표시",
+      "unstagedGroup": "스테이징 안 됨",
+      "stagedGroup": "스테이징됨",
+      "history": "기록",
+      "historyEmpty": "아직 커밋이 없습니다",
+      "historyUnpushed": "푸시 안 됨",
+      "pull": "풀",
+      "pullSuccess": "원격 업데이트를 가져왔습니다",
+      "pullFailedTitle": "풀 실패",
+      "remoteBehind_one": "원격에 새 버전이 1개 있습니다. 먼저 풀하세요",
+      "remoteBehind_other": "원격에 새 버전이 {{count}}개 있습니다. 먼저 풀하세요",
+      "remoteDiverged": "로컬과 원격이 갈라졌습니다: {{ahead}}개 앞섬, {{behind}}개 뒤짐. 먼저 풀고 충돌을 해결하세요",
+      "localAhead_one": "로컬 커밋 1개가 아직 푸시되지 않았습니다",
+      "localAhead_other": "로컬 커밋 {{count}}개가 아직 푸시되지 않았습니다",
+      "pullBeforePush": "원격에 새 커밋이 있습니다. 먼저 풀하세요"
     },
     "browser": {
       "newTab": "새 탭",
@@ -18200,6 +18226,16 @@
       "imagePreview": {
         "loadFailed": "이미지를 불러올 수 없습니다",
         "viewLarge": "크게 보기"
+      },
+      "gitStatus": {
+        "modified": "수정됨",
+        "added": "추가됨",
+        "deleted": "삭제됨",
+        "renamed": "이름 변경됨",
+        "copied": "복사됨",
+        "typechange": "유형 변경됨",
+        "untracked": "추적되지 않음",
+        "unmerged": "충돌"
       }
     },
     "search": {

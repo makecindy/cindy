@@ -10843,7 +10843,33 @@
       "deviceTooOld": "The remote device is running an older {{appName}} version that does not support remote file browsing. Update it and try again.",
       "loadFailed": "Failed to load the file tree",
       "unsupportedDropFile": "This file format cannot be previewed yet",
-      "multipleDropFilesUnsupported": "Drop one file at a time"
+      "multipleDropFilesUnsupported": "Drop one file at a time",
+      "pushNow": "Push",
+      "aiCommitFallback": "AI summary is unavailable; a concise commit message was kept.",
+      "commitSuccess": "Committed {{oid}}",
+      "changes": "Changes",
+      "changedOnlyEmpty": "No changed files",
+      "commitMessage": "Commit message",
+      "commitMessagePlaceholder": "Describe the purpose of this change…",
+      "autoPush": "Auto push",
+      "pushBranch": "Push branch: {{branch}}",
+      "aiCommitSummary": "AI summary",
+      "commitToGithub": "Commit to GitHub",
+      "changedOnly": "Show changed files only",
+      "unstagedGroup": "Changes",
+      "stagedGroup": "Staged",
+      "history": "History",
+      "historyEmpty": "No commits yet",
+      "historyUnpushed": "Unpushed",
+      "pull": "Pull",
+      "pullSuccess": "Pulled remote updates",
+      "pullFailedTitle": "Pull failed",
+      "remoteBehind_one": "{{count}} new remote version. Pull before committing.",
+      "remoteBehind_other": "{{count}} new remote versions. Pull before committing.",
+      "remoteDiverged": "Local and remote have diverged: {{ahead}} ahead, {{behind}} behind. Pull and resolve conflicts first.",
+      "localAhead_one": "{{count}} local commit not pushed",
+      "localAhead_other": "{{count}} local commits not pushed",
+      "pullBeforePush": "Remote has new commits; pull before pushing."
     },
     "browser": {
       "newTab": "New tab",
@@ -18275,6 +18301,16 @@
       "imagePreview": {
         "loadFailed": "Failed to load image",
         "viewLarge": "View full size"
+      },
+      "gitStatus": {
+        "modified": "Modified",
+        "added": "Added",
+        "deleted": "Deleted",
+        "renamed": "Renamed",
+        "copied": "Copied",
+        "typechange": "Type changed",
+        "untracked": "Untracked",
+        "unmerged": "Conflicted"
       }
     },
     "search": {

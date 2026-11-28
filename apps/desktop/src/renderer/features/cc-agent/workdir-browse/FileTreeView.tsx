@@ -93,6 +93,11 @@ import {
 import { isBrowserOpenablePath } from '../../../../shared/browserOpenableExts';
 import { pickFileIcon, pickFolderIcon } from './lib/fileIcon';
 import { isLightboxImagePath } from './lib/imageExt';
+import {
+  WORKDIR_GIT_STATUS_VISUAL,
+  type WorkdirGitDirectoryChange,
+  type WorkdirGitFileChange,
+} from './lib/workdirGitStatus';
 import type { DirEntry, UseFileTreeReturn } from './hooks/useFileTree';
 import { useDelayedFlag } from './hooks/useDelayedFlag';
 import { useTreeScrollRestore } from './hooks/useTreeScrollRestore';
@@ -121,7 +126,6 @@ export interface FileTreeViewHandle {
    *  渲染再调本方法（典型：两次 rAF 之间，见 useRevealFileInTree）。 */
   scrollToPath: (relPath: string) => void;
 }
-
 export interface FileTreeViewProps {
   tree: UseFileTreeReturn;
   /**
@@ -175,6 +179,10 @@ export interface FileTreeViewProps {
   onRenameSubmit?: (newName: string) => void;
   /** Esc / 同名 / 空内容失焦。 */
   onRenameCancel?: () => void;
+  /** Git status for files, keyed by workdir-relative path. */
+  gitFiles?: ReadonlyMap<string, WorkdirGitFileChange>;
+  /** Aggregated Git status for directories, keyed by workdir-relative path. */
+  gitDirectories?: ReadonlyMap<string, WorkdirGitDirectoryChange>;
 }
 
 interface MenuState {
@@ -280,6 +288,8 @@ export const FileTreeView = forwardRef<FileTreeViewHandle, FileTreeViewProps>(fu
     renamingPath,
     onRenameSubmit,
     onRenameCancel,
+    gitFiles,
+    gitDirectories,
   },
   ref,
 ) {
@@ -701,6 +711,8 @@ export const FileTreeView = forwardRef<FileTreeViewHandle, FileTreeViewProps>(fu
                   selected={entry.relPath === selectedPath}
                   expanded={tree.expanded.has(entry.relPath)}
                   loading={tree.loadingPaths.has(entry.relPath)}
+                  gitChange={gitFiles?.get(entry.relPath)}
+                  gitDirectoryChange={gitDirectories?.get(entry.relPath)}
                   onToggleFolder={tree.toggleFolder}
                   onSelectFile={onSelectFile}
                   onSelectFolder={onSelectFolder}
@@ -782,6 +794,8 @@ interface FileTreeRowProps {
   onSelectFile: (relPath: string) => void;
   onSelectFolder?: (relPath: string) => void;
   onPreviewImage?: (entry: DirEntry) => void;
+  gitChange?: WorkdirGitFileChange;
+  gitDirectoryChange?: WorkdirGitDirectoryChange;
   /** 稳定回调（entry 由行内回传）。行组件已 memo，父组件传内联箭头会让 memo
    *  全部失效 —— node_modules 展开时每次 store 更新都会重渲染全部行。 */
   onContextMenu: (entry: DirEntry, e: React.MouseEvent<HTMLDivElement>) => void;
@@ -798,6 +812,8 @@ const FileTreeRow = memo(function FileTreeRow({
   onSelectFile,
   onPreviewImage,
   onContextMenu,
+  gitChange,
+  gitDirectoryChange,
 }: FileTreeRowProps) {
   const { t } = useTranslation();
   const isFolder = entry.type === 'directory';
@@ -807,6 +823,11 @@ const FileTreeRow = memo(function FileTreeRow({
   const showLoadingChevron = useDelayedFlag(loading && isFolder);
   const Chev = expanded ? ChevronDown : ChevronRight;
   const Icon = isFolder ? pickFolderIcon(expanded) : pickFileIcon(entry.name);
+  const gitKind = gitChange?.kind ?? gitDirectoryChange?.kind;
+  const gitVisual = gitKind ? WORKDIR_GIT_STATUS_VISUAL[gitKind] : null;
+  const gitLabel = gitKind ? t(`ccAgent.workdirBrowse.gitStatus.${gitKind}`) : undefined;
+  // Keep the file-state color on the name and icon even when the row is active.
+  const fileStatusColor = gitVisual && !isFolder ? gitVisual.color : undefined;
 
   const disclosure = showLoadingChevron
     ? <Spinner size={12} strokeWidth={2} className="text-[var(--cmd-palette-item-meta)]" />
@@ -890,6 +911,7 @@ const FileTreeRow = memo(function FileTreeRow({
         <Icon
           size={14}
           strokeWidth={1.75}
+          style={fileStatusColor ? { color: fileStatusColor } : undefined}
           className={cn(
             'shrink-0',
             selected
@@ -897,7 +919,31 @@ const FileTreeRow = memo(function FileTreeRow({
               : 'text-[var(--cmd-palette-item-meta)]',
           )}
         />
-        <span className="min-w-0 flex-1 truncate">{entry.name}</span>
+        <span
+          className="min-w-0 flex-1 truncate"
+          style={fileStatusColor ? { color: fileStatusColor } : undefined}
+        >
+          {entry.name}
+        </span>
+        {gitVisual && !isFolder ? (
+          <span
+            aria-label={gitLabel}
+            title={gitLabel}
+            className="ml-1 shrink-0 text-11 font-medium"
+            style={{ color: gitVisual.color }}
+          >
+            {gitVisual.code}
+          </span>
+        ) : null}
+        {gitVisual && isFolder ? (
+          <span
+            role="img"
+            aria-label={gitLabel}
+            title={gitLabel}
+            className="ml-1 size-1.5 shrink-0 rounded-full"
+            style={{ backgroundColor: gitVisual.color }}
+          />
+        ) : null}
       </button>
       {canPreviewImage ? (
         <Tip text={t('ccAgent.workdirBrowse.imagePreview.viewLarge')} side="left">
@@ -1042,4 +1088,3 @@ function InlineTreeRow({
     </div>
   );
 }
-

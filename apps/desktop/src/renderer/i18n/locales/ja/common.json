@@ -10799,7 +10799,33 @@
       "deviceTooOld": "相手のデバイスの {{appName}} のバージョンが古く、リモートファイルブラウズに対応していません。アップデート後にもう一度お試しください",
       "loadFailed": "ファイルツリーの読み込みに失敗しました",
       "unsupportedDropFile": "この形式のファイルはまだプレビューできません",
-      "multipleDropFilesUnsupported": "一度にドラッグできるファイルは1つだけです"
+      "multipleDropFilesUnsupported": "一度にドラッグできるファイルは1つだけです",
+      "pushNow": "プッシュ",
+      "aiCommitFallback": "AI 要約を利用できないため、簡潔なコミットメッセージを維持しました。",
+      "commitSuccess": "コミットしました {{oid}}",
+      "changes": "変更",
+      "changedOnlyEmpty": "変更されたファイルはありません",
+      "commitMessage": "コミットメッセージ",
+      "commitMessagePlaceholder": "この変更の目的を入力…",
+      "autoPush": "自動 push",
+      "pushBranch": "Push ブランチ：{{branch}}",
+      "aiCommitSummary": "AI 要約",
+      "commitToGithub": "GitHub にコミット",
+      "changedOnly": "変更されたファイルのみ表示",
+      "unstagedGroup": "未ステージ",
+      "stagedGroup": "ステージ済み",
+      "history": "履歴",
+      "historyEmpty": "コミットはまだありません",
+      "historyUnpushed": "未プッシュ",
+      "pull": "プル",
+      "pullSuccess": "リモートの更新を取得しました",
+      "pullFailedTitle": "プルに失敗しました",
+      "remoteBehind_one": "リモートに新しいバージョンが 1 件あります。先にプルしてください",
+      "remoteBehind_other": "リモートに新しいバージョンが {{count}} 件あります。先にプルしてください",
+      "remoteDiverged": "ローカルとリモートが分岐しています：{{ahead}} 件先行、{{behind}} 件遅れ。先にプルして競合を解決してください",
+      "localAhead_one": "ローカルコミットが 1 件未プッシュです",
+      "localAhead_other": "ローカルコミットが {{count}} 件未プッシュです",
+      "pullBeforePush": "リモートに新しいコミットがあります。先にプルしてください"
     },
     "browser": {
       "newTab": "新しいタブ",
@@ -18200,6 +18226,16 @@
       "imagePreview": {
         "loadFailed": "画像を読み込めません",
         "viewLarge": "拡大表示"
+      },
+      "gitStatus": {
+        "modified": "変更済み",
+        "added": "追加済み",
+        "deleted": "削除済み",
+        "renamed": "名前変更済み",
+        "copied": "コピー済み",
+        "typechange": "種類変更",
+        "untracked": "未追跡",
+        "unmerged": "競合"
       }
     },
     "search": {

@@ -4,6 +4,7 @@ import { openMailPreview, openMailCard } from './mailPreview';
 /** 执行 main 已裁决并推给当前 renderer host 的 RSB command。 */
 
 import type { RsbWindowCommand, RsbWindowContext } from '../../../../shared/rightSidebarWindow';
+import { openCommitReview } from './openCommitReview';
 import { addOrFocusSingletonTab, closeTab, ensureHydrated, getBucket } from '../store';
 import {
   closeOrcaWorkersTabAfterTeamEnd,
@@ -118,6 +119,10 @@ export async function executeSidebarCommand(
       return;
     }
     await addOrFocusSingletonTab(command.sessionId, 'review', null);
+    return;
+  }
+  if (command.type === 'open-commit-review') {
+    await openCommitReview(command.sessionId, command.commitOid);
     return;
   }
   await ensureHydrated(command.sessionId);

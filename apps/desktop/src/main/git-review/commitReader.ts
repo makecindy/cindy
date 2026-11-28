@@ -18,7 +18,7 @@ import {
   type ParsedNumstat,
   singleFileTooLargeReason,
 } from './cappedDiff.js';
-import type { DiffChangeKind, FileDiff, ReviewBranchDiffWarning, ReviewCappedDiffData, ReviewCommit, ReviewCommitListData, ReviewDiffReadOptions, ReviewDiffSummaryEntry, ReviewScope } from './types.js';
+import type { DiffChangeKind, FileDiff, ReviewBranchDiffWarning, ReviewCappedDiffData, ReviewCommit, ReviewCommitListData, ReviewDiffReadOptions, ReviewDiffSummaryEntry, ReviewHistoryData, ReviewScope } from './types.js';
 
 const LARGE_TEXT_THRESHOLD_BYTES = Math.floor(4.4 * 1024 * 1024);
 const TOO_LARGE_THRESHOLD_BYTES = 70 * 1024 * 1024;
@@ -132,6 +132,35 @@ function parseBranchCommitLog(stdout: string): ReviewCommit[] {
       };
     })
     .filter((commit) => commit.oid);
+}
+
+const HISTORY_MAX_COMMITS = 50;
+
+export async function listRecentCommits(
+  scope: ReviewScope,
+  limit = 20,
+): Promise<ReviewHistoryData> {
+  if (scope.disabledReason || !scope.repoRoot) {
+    return { scope, commits: [], upstreamOid: null };
+  }
+  const headOid = await resolveHeadCommit(scope.repoRoot);
+  if (!headOid) return { scope, commits: [], upstreamOid: null };
+
+  let upstreamOid: string | null = null;
+  try {
+    const { stdout } = await runGit(['rev-parse', '--verify', '@{upstream}'], { cwd: scope.repoRoot });
+    const oid = stdout.trim();
+    upstreamOid = /^[0-9a-f]{40,64}$/i.test(oid) ? oid : null;
+  } catch {
+    // No upstream configured (or it no longer exists); the history still helps.
+  }
+
+  const count = Math.min(Math.max(Math.trunc(limit) || 20, 1), HISTORY_MAX_COMMITS);
+  const { stdout } = await runGit(
+    ['log', `--max-count=${count}`, '--no-decorate', '--format=%H%x00%cI%x00%s', headOid],
+    { cwd: scope.repoRoot, maxStdoutBytes: 4 * 1024 * 1024 },
+  );
+  return { scope, commits: parseBranchCommitLog(stdout), upstreamOid };
 }
 
 export async function listBranchCommits(

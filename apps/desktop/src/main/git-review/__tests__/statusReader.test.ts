@@ -152,4 +152,35 @@ describe('git-review statusReader', () => {
     const statusCall = runGitMock.mock.calls.find(([args]) => (args as readonly string[])[0] === 'status');
     expect(statusCall?.[0]).toContain('--ignore-submodules=none');
   });
+
+  it('adds a sanitized branch web URL from the push remote', async () => {
+    runGitMock.mockImplementation(async (args: readonly string[]) => {
+      if (args[0] === 'status') {
+        return {
+          stdout: ['# branch.oid abcdef', '# branch.head main', ''].join('\0'),
+          stderr: '',
+          exitCode: 0,
+        };
+      }
+      if (args[0] === 'for-each-ref') {
+        return { stdout: 'origin\n', stderr: '', exitCode: 0 };
+      }
+      if (args[0] === 'config' && args[2] === 'remote.origin.url') {
+        return {
+          stdout: 'https://user:secret@github.com/octo/repo.git\n',
+          stderr: '',
+          exitCode: 0,
+        };
+      }
+      if (args[0] === 'config') throw new Error('unset');
+      if (args[0] === 'rev-parse') {
+        return { stdout: `/repo/.git/${args.at(-1) ?? 'marker'}\n`, stderr: '', exitCode: 0 };
+      }
+      throw new Error(`unexpected git args: ${args.join(' ')}`);
+    });
+
+    const status = await readStatus(scope);
+
+    expect(status.scope.branchWebUrl).toBe('https://github.com/octo/repo/tree/main');
+  });
 });
