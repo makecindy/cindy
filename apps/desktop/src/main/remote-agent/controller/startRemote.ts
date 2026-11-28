@@ -185,6 +185,8 @@ export interface StartRemoteAgentDeps {
   isGitRepo(workingDir: string): Promise<boolean>;
   /** Read 读 PDF 时取文字(Claude Code)。 */
   extractPdfText?: PdfTextExtractor;
+  /** 远程执行器访问本机工作树（文件/命令工具）前等待后台 worktree 完整检出就绪。 */
+  ensureWorktreeReady?(sessionId: string, signal?: AbortSignal): Promise<void>;
   /**
    * 在本机抓取网页的出站通道：给 Claude Code 提供 WebFetch(供应商分享的受邀者任务，自带的
    * WebFetch 在对方电脑上已关闭)。缺省时不提供。
@@ -553,6 +555,9 @@ async function prepareAndStartRemoteAgentSession(
     gate,
     rgPath: deps.rgPath,
     capture: deps.capture?.({ kind, opts }),
+    ...(opts.sessionId && deps.ensureWorktreeReady
+      ? { beforeWorktreeAccess: (execSignal) => deps.ensureWorktreeReady!(opts.sessionId!, execSignal) }
+      : {}),
     ...(deps.extractPdfText ? { extractPdfText: deps.extractPdfText } : {}),
     // 只有 Claude Code 经 cindy_exec 使用这组工具。
     ...(kind === 'claude-code' && deps.webFetch ? { webFetch: deps.webFetch } : {}),

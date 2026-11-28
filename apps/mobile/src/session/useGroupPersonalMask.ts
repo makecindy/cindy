@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { AppState } from 'react-native';
 import { useIsFocused } from 'expo-router';
 import { randomUUID } from 'expo-crypto';
-import { BOT_GROUP_PERSONAL_REPLIES_ENABLED, type ChatMaskAction, type ChatMaskMention, type ChatMaskSettings, type ChatMaskState, type BotGroupRemoteActionId } from '@cindy/maker-shared/botGroupChat';
+import { BOT_GROUP_PERSONAL_REPLIES_ENABLED, type ChatMaskAction, type ChatMaskMention, type ChatMaskOriginal, type ChatMaskSettings, type ChatMaskState, type BotGroupRemoteActionId } from '@cindy/maker-shared/botGroupChat';
 import { THREAD_BACKFILL_MAX_MESSAGES, type ChatMessage } from '@/chat/chatServerClient';
 import { useChatClient } from '@/chat/useChatServer';
 import { useDeviceLink } from '@/device-link/DeviceLinkContext';
@@ -37,10 +37,23 @@ export function useGroupPersonalMask(groupId: string, deviceId: string, enabled:
     if (!current()) throw new Error('OWNER_CHANGED');
     if (!deviceId) return kind === 'mask'
       ? { state: await api.client.mask(groupId, input.action as ChatMaskAction | undefined, input.operationId as string | undefined) }
-      : api.client.maskMentions(groupId, input.before as string | undefined, input.readIds as string[] | undefined, input.operationId as string | undefined);
+      : api.client.maskMentions(groupId, input.before as string | undefined, input.readIds as string[] | undefined, input.operationId as string | undefined, input.history === true);
     const response = await deps.current.act(kind, input) as { result?: { state?: ChatMaskState; mentions?: ChatMaskMention[]; hasMore?: boolean } };
     if (!response.result) throw new Error('INVALID_MASK_RESPONSE');
     return response.result;
+  }, [current, deviceId, api, groupId]);
+  const loadHistory = useCallback(async (before?: string) => {
+    const page = await call('mask-mentions', { history: true, before });
+    if (!current() || !('mentions' in page) || !page.mentions) throw new Error('INVALID_MASK_RESPONSE');
+    return { mentions: page.mentions, hasMore: page.hasMore === true };
+  }, [current, call]);
+  const loadOriginal = useCallback(async (originalId: string) => {
+    if (!current()) throw new Error('OWNER_CHANGED');
+    const original = deviceId
+      ? (await deps.current.act('mask-mentions', { originalId }) as { result?: { original?: ChatMaskOriginal } })?.result?.original
+      : await api.client.mentionOriginal(groupId, originalId);
+    if (!current() || original?.messageId !== originalId) throw new Error('MENTION_UNAVAILABLE');
+    return original;
   }, [current, deviceId, api, groupId]);
   const reload = useCallback(async () => {
     if (!deps.current.enabled || !current() || AppState.currentState !== 'active') return;
@@ -155,7 +168,7 @@ export function useGroupPersonalMask(groupId: string, deviceId: string, enabled:
   }, [call, current, run]);
   const lastParticipation = useRef(0);
   const homeOffline = !!state?.homeDeviceId && getPresenceAvailability(state.homeDeviceId) === false;
-  return { threadMessages: data.key === key ? data.threadMessages : undefined, state: state ? { ...state, status: (connectionLost || homeOffline) && state.status === 'enabled' ? 'offline' as const : state.status, settings: Object.assign({ ...state.settings, companionId: state.settings.companionId ?? state.defaultCompanionId ?? null }, ...shownDrafts) } : null, mentions, saving, error, reload, markRead,
+  return { loadHistory, loadOriginal, threadMessages: data.key === key ? data.threadMessages : undefined, state: state ? { ...state, status: (connectionLost || homeOffline) && state.status === 'enabled' ? 'offline' as const : state.status, settings: Object.assign({ ...state.settings, companionId: state.settings.companionId ?? state.defaultCompanionId ?? null }, ...shownDrafts) } : null, mentions, saving, error, reload, markRead,
     update: (patch: Partial<ChatMaskSettings>) => action(`save:${Object.keys(patch).sort().join(',')}`, s => ({ type: 'save', expectedRevision: s.revision,
       settings: { ...s.settings, companionId: s.settings.companionId ?? s.defaultCompanionId ?? null, ...patch, timeZone: s.revision ? s.settings.timeZone : Intl.DateTimeFormat().resolvedOptions().timeZone } }), { ...patch }),
     perform: (type: 'resume' | 'stop' | 'digest' | 'participate') => action(type, () => ({ type })),

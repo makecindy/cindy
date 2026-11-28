@@ -804,7 +804,7 @@ describe('Chat Server Thread context reaches the Agent input', () => {
       }
     });
 
-  it('offers a Thread request only its own Thread\'s files, again behind the watermark', async () => {
+  it('offers a Thread request only its own Thread\'s files, once per settled lane', async () => {
     const root = post('请看这张权限截图。', { media: ['permissions.png'] });
     for (let n = 0; n < 45; n++) post(`主群图片 ${n}`, { media: [`noise-${n}.png`] });
     const question = post('@所有人 截图里的说法对吗？', { threadRootId: root.id, mentions: bots.map(bot => bot.id) });
@@ -816,14 +816,14 @@ describe('Chat Server Thread context reaches the Agent input', () => {
     expect(payload(input.message).thread.root.attachments).toEqual([{ name: 'permissions.png', delivery: 'included' }]);
     expect(payload(input.message).unavailableAttachments).toEqual([]);
 
-    // The watermark only records a successful turn, not delivery: the Thread's own files are offered again.
+    // The successful Thread turn examined the root. A text follow-up does not resend its files.
     const followUp = post('@Pico 那现在呢？', { threadRootId: root.id, mentions: [bots[1].id] });
     await settle('pico', '对。');
     trigger(followUp, { attachment_after_seq: String(Number(followUp.seq) - 1) });
     await vi.advanceTimersByTimeAsync(2000);
     const second = inputs('pico')[1];
-    expect(second.attachments?.map(a => a.id)).toEqual([root.content[1].mediaId]);
-    expect(payload(second.message).thread.root.attachments).toEqual([{ name: 'permissions.png', delivery: 'included' }]);
+    expect(second.attachments).toEqual([]);
+    expect(payload(second.message).thread.root.attachments).toEqual([{ name: 'permissions.png', delivery: 'not-resent' }]);
     expect(second.message).not.toContain('sent-earlier');
   });
 
@@ -877,20 +877,28 @@ describe('Chat Server Thread context reaches the Agent input', () => {
     expect(inputs('nova')[2].attachments?.map(a => a.id)).toEqual([pictures[0].content[1].mediaId]);
   });
 
-  it('does not consume failed downloads or share attachment progress with another lane', async () => {
-    const picture = post('截图', { media: ['board.png'] });
+  // #13589 (unit): a failed history file used to be retried on every unrelated request.
+  it.each([1, 42])('retires examined history on the settled lane after a download fails among %i files', async count => {
+    const picture = post('截图', { media: Array.from({ length: count }, (_, i) => `board-${i}.png`) });
     fixture.download.mockRejectedValueOnce(new Error('download failed'));
     trigger(post('@Nova 看图', { mentions: [bots[0].id] }));
     await vi.advanceTimersByTimeAsync(2000);
-    expect(inputs('nova')[0].attachments).toEqual([]);
+    expect(inputs('nova')[0].attachments).toHaveLength(Math.min(count - 1, 40));
+    const notices = () => fixture.handle.mock.calls.flatMap(([route, method, body]) =>
+      route === `/conversations/${roomId}/messages` && method === 'POST' ? body.content ?? [] : []);
+    expect(notices()).toHaveLength(1);
+    expect(notices()[0].data).toEqual({ code: count === 1 ? 'ATTACHMENTS_DOWNLOAD_FAILED' : 'ATTACHMENTS_DOWNLOAD_FAILED_AND_LIMIT_REACHED' });
+    expect(notices()[0].fallback).not.toContain('board-');
     await settle('nova', '图片暂时没收到。');
     trigger(post('@Nova 再试一次', { mentions: [bots[0].id] }));
     await vi.advanceTimersByTimeAsync(2000);
-    expect(inputs('nova')[1].attachments?.map(a => a.id)).toEqual([picture.content[1].mediaId]);
+    expect(inputs('nova')[1].attachments).toEqual([]);
+    expect(fixture.download).toHaveBeenCalledTimes(Math.min(count, 41));
+    expect(notices()).toHaveLength(1);
     await settle('nova', '已看到。');
     trigger(post('@Pico 看图', { mentions: [bots[1].id] }));
     await vi.advanceTimersByTimeAsync(2000);
-    expect(inputs('pico')[0].attachments?.map(a => a.id)).toEqual([picture.content[1].mediaId]);
+    expect(inputs('pico')[0].attachments?.map(a => a.id)).toEqual(picture.content.slice(1, 41).map(block => block.mediaId));
   });
 
   // Review regression: a multi-speaker talk queue excluded explicitly quoted
