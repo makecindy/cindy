@@ -46,6 +46,19 @@ describe('cindy-subagent extension source', () => {
     expect(CINDY_SUBAGENT_EXTENSION_SOURCE).toContain("const TOOL_NAME = '" + PI_SUBAGENT_RUNTIME_TOOL_NAME + "'");
   });
 
+  it('keeps the delegation decision rules in the generated tool description', () => {
+    // 决策规则只活在这段字符串里:漏了就会被 schema 校验或 typecheck 静默放过,模型只看到
+    // 参数说明,于是退回「有工具就随手派」或「永不派」。守的是规则仍在生成的扩展源码中。
+    for (const rule of [
+      'bounded, self-contained, independent tasks',
+      'task count alone is not a reason to delegate',
+      'non-overlapping write scopes',
+      'Return conclusions',
+    ]) {
+      expect(CINDY_SUBAGENT_EXTENSION_SOURCE).toContain(rule);
+    }
+  });
+
   it('uses the same progress marker the host parser checks', () => {
     // 标记不一致 = 进度帧被 parse 当成别的工具的流式结果丢掉。
     expect(CINDY_SUBAGENT_EXTENSION_SOURCE).toContain("const MARKER = '" + PI_SUBAGENT_PROGRESS_MARKER + "'");

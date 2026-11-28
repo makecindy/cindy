@@ -447,4 +447,12 @@ describe('Pi subagent provider selection', () => {
     expect(f.tool.parameters.properties.provider.type).toBe('string');
     expect(f.tool.parameters.properties.tasks.items.properties.provider.type).toBe('string');
   });
+
+  it('registers the delegation decision rules on the tool the model actually sees', async () => {
+    // 生成源码里有规则 ≠ 注册到 Pi 的工具带上了规则;这里走真实注册路径。
+    const f = await fixture();
+    expect(f.tool.description).toContain('bounded, self-contained, independent tasks');
+    expect(f.tool.description).toContain('task count alone is not a reason to delegate');
+    expect(f.tool.description).toContain('Children cannot spawn further subagents.');
+  });
 });
