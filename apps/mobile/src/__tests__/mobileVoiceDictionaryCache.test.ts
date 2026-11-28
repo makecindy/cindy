@@ -50,7 +50,9 @@ const {
   applyMobileVoiceDictionarySnapshot,
   setMobileVoiceDictionaryAccountScope,
   clearAllMobileVoiceDictionaryCaches,
+  hydrateAllCachedMobileVoiceDictionaries,
   hydrateMobileVoiceDictionary,
+  listCachedMobileVoiceDictionaryHosts,
   readCachedMobileVoiceDictionary,
   readCachedMobileVoiceDictionarySnapshot,
   refreshMobileVoiceDictionary,
@@ -563,5 +565,33 @@ describe('缓存订阅隔离', () => {
     } finally {
       unsubscribe();
     }
+  });
+});
+
+describe('离线全量缓存水合', () => {
+  it('离线时即使不知道 desktopDevices 列表，也能按当前账号分区水合全部已缓存 host', async () => {
+    setMobileVoiceDictionaryAccountScope('user-a');
+    await applyMobileVoiceDictionarySnapshot('desktop-a', {
+      ok: true,
+      entries: [{ text: 'SherpaOnnx', frequency: 2, aliases: [{ text: '夏帕', count: 1 }] }],
+    });
+    setMobileVoiceDictionaryAccountScope('user-b');
+    await applyMobileVoiceDictionarySnapshot('desktop-b', {
+      ok: true,
+      entries: [{ text: 'PrivateTerm', frequency: 1 }],
+    });
+
+    // 切回 user-a 并模拟重启（内存全空、离线无设备清单）。
+    __resetMobileVoiceDictionaryCacheForTests();
+    setMobileVoiceDictionaryAccountScope('user-a');
+
+    const knownHosts = await listCachedMobileVoiceDictionaryHosts();
+    expect(knownHosts).toContain('desktop-a');
+
+    const hydratedHosts = await hydrateAllCachedMobileVoiceDictionaries();
+    expect(hydratedHosts).toEqual(['desktop-a']);
+    expect(readCachedMobileVoiceDictionary('desktop-a').map((e) => e.text)).toEqual(['SherpaOnnx']);
+    // 绝不泄露 user-b 的词条。
+    expect(readCachedMobileVoiceDictionary('desktop-b')).toEqual([]);
   });
 });

@@ -303,6 +303,7 @@
   },
   "screen": {
     "thinking": "A raciocinar…",
+    "replyStreaming": "A gerar…",
     "tokenCount": "{{tokens}} tok",
     "tokenCountFull": "{{tokens}} tokens",
     "tokenRate": "{{rate}} tok/s",
@@ -504,7 +505,8 @@
     "worktreeUnsupported": "O Cindy no seu computador não consegue criar worktrees em segurança. Desative o worktree para continuar ou atualize o Cindy no seu computador.",
     "worktreeCreateFailed": "Falha ao criar o worktree: {{message}}",
     "worktreeRecoveryStateFailed": "Não foi possível guardar o estado de recuperação do worktree. Tente novamente.",
-    "worktreeCleanupPending": "O worktree anterior ainda aguarda limpeza. Volte a ligar o dispositivo e tente novamente."
+    "worktreeCleanupPending": "O worktree anterior ainda aguarda limpeza. Volte a ligar o dispositivo e tente novamente.",
+    "createRejectedResend": "O seu conteúdo foi restaurado. Ajuste se necessário e envie novamente."
   },
   "menu": {
     "moveToProject": "Mover tarefa",
@@ -702,9 +704,15 @@
   "outbox": {
     "deleteConfirmTitle": "Eliminar esta mensagem?",
     "deleteConfirmBody": "Esta mensagem não foi enviada. A sua eliminação não pode ser anulada.",
+    "deleteUnconfirmedBody": "O computador pode já ter recebido esta mensagem. Eliminá-la remove apenas a mensagem pendente deste dispositivo. Se o computador a recebeu, a mensagem continuará a aparecer no histórico da conversa.",
     "legacyPlanRecovery": "Este computador não consegue restaurar mensagens guardadas no modo de planeamento. Desative o modo de planeamento ou atualize o Cindy no computador e tente novamente.",
     "creationRecoveryRequired": "Tente criar esta tarefa novamente antes de eliminar a primeira mensagem. Essa mensagem guarda os detalhes de recuperação das mensagens seguintes.",
     "confirmationRequired": "Este computador não consegue confirmar se a mensagem foi recebida. Verifique o histórico ou atualize o Cindy antes de tentar novamente.",
+    "profileInUseByDesktop": "Estes dados estão a ser usados pela aplicação de computador da Cindy, que está a ser executada sozinha. Fecha-a e envia novamente.",
+    "taskInactive": "Esta tarefa não pode receber mensagens de momento.",
+    "inputNotSupported": "Este computador não permite enviar este tipo de mensagem para a tarefa.",
+    "invalidInput": "O computador rejeitou a mensagem porque o conteúdo é inválido.",
+    "taskClearedBeforeSend": "A tarefa foi limpa ou está a ser limpa. A mensagem continua guardada neste dispositivo.",
     "taskCleared": "Esta tarefa foi limpa depois de enviar a mensagem. A mensagem guardada foi mantida para que a possa rever.",
     "restoreFailed": "Não foi possível restaurar as mensagens guardadas. Não foram eliminadas. Reinicie a aplicação e tente novamente.",
     "recoveryTarget": "Mantenha o computador original durante a recuperação desta tarefa. As mensagens seguintes continuam guardadas.",

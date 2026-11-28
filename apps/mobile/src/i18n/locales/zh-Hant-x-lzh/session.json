@@ -303,6 +303,7 @@
   },
   "screen": {
     "thinking": "容吾思之…",
+    "replyStreaming": "方生成…",
     "tokenCount": "{{tokens}} tok",
     "tokenCountFull": "{{tokens}} tokens",
     "tokenRate": "{{rate}} tok/s",
@@ -503,7 +504,8 @@
     "worktreeUnsupported": "電腦端今之 Cindy 不能安全建立 worktree，請闔 worktree 再續，或更新機上之 Cindy。",
     "worktreeCreateFailed": "worktree 未能立：{{message}}",
     "worktreeRecoveryStateFailed": "worktree 復原之狀未能存，請再試。",
-    "worktreeCleanupPending": "前次之 worktree 尚待回收，請重連裝置後再試。"
+    "worktreeCleanupPending": "前次之 worktree 尚待回收，請重連裝置後再試。",
+    "createRejectedResend": "所書已歸，可修之而再發。"
   },
   "menu": {
     "moveToProject": "移差事",
@@ -699,9 +701,15 @@
   "outbox": {
     "deleteConfirmTitle": "刪此訊？",
     "deleteConfirmBody": "此訊未能遣出，刪之則不可復原。",
+    "deleteUnconfirmedBody": "彼機或已收此訊。刪之，唯去此機待遣之訊。彼機若已收，訊仍見於對談之錄。",
     "legacyPlanRecovery": "此機暫不支援於計畫模式下復原待遣之訊。請闔計畫模式，或更新機上之 Cindy 後再試",
     "creationRecoveryRequired": "請先重試立差事，再刪首訊；此訊尚存後續諸訊所需之差事復原資訊。",
     "confirmationRequired": "此機暫不能確認是否收得此訊。請核對訊之記錄，或更新機上之 Cindy 後再試。",
+    "profileInUseByDesktop": "此資料為獨行之 Cindy 電腦端所用。先退其程，再傳訊。",
+    "taskInactive": "此差事今不能收訊。",
+    "inputNotSupported": "此機尚不能向此差事傳此類之訊。",
+    "invalidInput": "此訊有誤，此機未收。",
+    "taskClearedBeforeSend": "差事已清或方清，訊猶存於此機。",
     "taskCleared": "遣出之後，此差事已遭清空。訊仍存於手機，請核對後處置。",
     "restoreFailed": "待遣之訊暫不能復原，已存之內容未刪。請重啟 App 後再試。",
     "recoveryTarget": "復原此差事時，請保留原機；後續諸訊仍存於手機。",

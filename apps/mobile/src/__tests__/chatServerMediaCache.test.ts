@@ -17,6 +17,8 @@ import {
   clearChatServerMediaCache,
   forgetChatServerMediaRoom,
   invalidateCachedServerMedia,
+  noteChatServerMediaAuthorized,
+  registerChatServerPurgedRoomStore,
   isChatServerMediaCacheKeyForRoom,
   parsePresignedUrlExpiresAtMs,
   peekCachedServerMedia,
@@ -208,6 +210,48 @@ describe('chatServerMediaCache', () => {
     expect(chatServerMediaCacheKey(owner, roomA, 'media:1')).not.toBe(keyA1);
     expect(invalidatedRooms).toEqual([roomA]);
     expect(clearNative).toHaveBeenCalledTimes(1);
+  });
+
+  // Regression (2026-11-28): rooms that stay inaccessible are reported lost on every roster
+  // refresh, and each report wiped the whole native image cache, so every launch re-downloaded
+  // all group images. A room is wiped once per loss; any later read or authorization re-arms it.
+  it('wipes the image cache once per room access loss, across launches, until the room is read again', async () => {
+    const clearNative = vi.fn();
+    registerChatServerNativeImageCacheClearer(clearNative);
+    let stored: string[] = [];
+    const store = { load: async () => stored, save: (ids: string[]) => { stored = ids; } };
+    registerChatServerPurgedRoomStore(store);
+    await Promise.resolve();
+
+    forgetChatServerMediaRoom('room:gone');
+    forgetChatServerMediaRoom('room:gone');
+    expect(clearNative).toHaveBeenCalledTimes(1);
+    expect(stored).toEqual(['room:gone']);
+
+    // Next launch: the persisted mark survives, so the repeated report does not wipe again.
+    cacheTesting.reset();
+    registerChatServerNativeImageCacheClearer(clearNative);
+    registerChatServerPurgedRoomStore(store);
+    await Promise.resolve();
+    forgetChatServerMediaRoom('room:gone');
+    expect(clearNative).toHaveBeenCalledTimes(1);
+
+    // Rejoined and read: its bytes may be cached again, so the next loss wipes.
+    noteChatServerMediaAuthorized('room:gone');
+    expect(stored).toEqual([]);
+    forgetChatServerMediaRoom('room:gone');
+    expect(clearNative).toHaveBeenCalledTimes(2);
+
+    // Logout / account switch wipes everything, so the marks (another account's room ids) go too.
+    clearChatServerMediaCache({ clearNativeImageCache: true });
+    expect(stored).toEqual([]);
+
+    // Before the persisted marks load, a loss still wipes (the previous, safe behaviour).
+    cacheTesting.reset();
+    registerChatServerNativeImageCacheClearer(clearNative);
+    registerChatServerPurgedRoomStore({ load: () => new Promise(() => undefined), save: () => undefined });
+    forgetChatServerMediaRoom('room:gone');
+    expect(clearNative).toHaveBeenCalledTimes(4);
   });
 
   it('clears all caches on logout and account switch without wiping native disk cache on cold start', () => {

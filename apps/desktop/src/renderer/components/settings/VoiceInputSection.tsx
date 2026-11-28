@@ -10,7 +10,7 @@ import { VoiceSpeakerFilterCard } from './VoiceSpeakerFilterCard';
 import { useTranslation } from 'react-i18next';
 import { useSearchParams } from 'react-router-dom';
 import * as Dialog from '@radix-ui/react-dialog';
-import { Check, ChevronDown, Copy, Keyboard, Loader2, Pencil, Plus, RotateCcw, Search, Sparkles, Trash2, Upload, X } from 'lucide-react';
+import { ArrowUpRight, Check, ChevronDown, Copy, Download, Keyboard, Loader2, Pencil, Plus, RotateCcw, Search, Sparkles, Trash2, Upload, X } from 'lucide-react';
 
 import { Select } from '@/components/ui/select';
 import { Switch } from '@/components/ui/switch';
@@ -26,9 +26,11 @@ import {
   MAX_VOICE_INPUT_REFINEMENT_INSTRUCTIONS_CHARS,
   MAX_VOICE_INPUT_DICTIONARY_CSV_BYTES,
   getVoiceInputSettings,
-  mergeVoiceInputDictionaryCsvTerms,
+  mergeVoiceInputDictionaryImportItems,
   normalizeVoiceInputDictionaryEntryText,
-  parseVoiceInputDictionaryCsv,
+  parseVoiceInputDictionaryImport,
+  serializeVoiceInputDictionaryCsv,
+  serializeVoiceInputDictionaryJson,
   suspendVoiceInputGlobalShortcut,
   syncVoiceInputGlobalShortcut,
   useVoiceInputSettings,
@@ -71,6 +73,7 @@ import {
   voiceInputShortcutNeedsMacNativeListener,
   type VoiceInputShortcut,
 } from '@/voice-input/shortcut';
+import { resolveVoiceInputReadinessRecovery } from '@/voice-input/readinessRecovery';
 import { requestRendererMicrophonePermission } from '@/voice-input/startGuards';
 import {
   canReuseVoiceInputCustomAsrCredential,
@@ -86,7 +89,9 @@ const log = createLogger('VoiceInputSection');
 // Recognition-language availability is independent of UI localization.
 // Keep the established languages plus the dictation languages added upstream.
 const AUTO_MICROPHONE_VALUE = '__auto__';
-const DICTIONARY_FILTERS = ['all', 'automatic', 'manual'] as const;
+const DICTIONARY_FILTERS = ['all', 'automatic', 'manual', 'candidates', 'suppressed'] as const;
+const HISTORY_PAGE_SIZE = 10;
+const HISTORY_PAGE_INCREMENT = 20;
 
 type DictionaryFilter = (typeof DICTIONARY_FILTERS)[number];
 type VoiceInputSystemPermissions = ReturnType<typeof window.electronAPI.voiceInput.getSystemPermissionsCached>;
@@ -310,6 +315,9 @@ function VoiceInputServiceSourceCard({ modelSelection }: VoiceInputSectionProps)
   const [customAsrWebsocketUrl, setCustomAsrWebsocketUrl] = useState('');
   const [customAsrModel, setCustomAsrModel] = useState('');
   const [customAsrApiKey, setCustomAsrApiKey] = useState('');
+  const [localAsrStatus, setLocalAsrStatus] = useState<VoiceLocalAsrStatusData | null>(null);
+  const [localAsrBusy, setLocalAsrBusy] = useState(false);
+  const [localAsrPickError, setLocalAsrPickError] = useState<'invalid_model_dir' | 'unsupported_platform' | null>(null);
   const [connectionTest, setConnectionTest] = useState<VoiceInputConnectionTestViewState>({ status: 'idle' });
   const connectionTestRequestRef = useRef(0);
   const customAsrFormDirtyRef = useRef(false);
@@ -320,6 +328,7 @@ function VoiceInputServiceSourceCard({ modelSelection }: VoiceInputSectionProps)
     : (selection?.serviceMode ?? 'cindy');
   const byok = serviceMode === 'byok';
   const customAsrSelected = selection?.asrProvider === 'custom-realtime-asr';
+  const localAsrSelected = selection?.asrProvider === 'local-sherpa-onnx';
   const customAsrHasUnsavedChanges = customAsrSelected && (
     !selection?.customAsr
     || customAsrProtocol !== selection.customAsr.protocol
@@ -345,6 +354,54 @@ function VoiceInputServiceSourceCard({ modelSelection }: VoiceInputSectionProps)
   }, [customAsrSelected, selection?.customAsr]);
 
   useEffect(() => {
+    let active = true;
+    const api = window.electronAPI.voiceInput.localAsr;
+    if (!api) return;
+    void api.getStatus().then((status) => {
+      if (active) setLocalAsrStatus(status);
+    }).catch(() => undefined);
+    const unsubscribe = api.onStatusChanged((status) => {
+      if (active) setLocalAsrStatus(status);
+    });
+    return () => {
+      active = false;
+      unsubscribe();
+    };
+  }, []);
+
+  const handleChooseLocalAsrModelDir = useCallback(async () => {
+    const api = window.electronAPI.voiceInput.localAsr;
+    if (!api || localAsrBusy) return;
+    setLocalAsrBusy(true);
+    setLocalAsrPickError(null);
+    try {
+      const result = await api.chooseModelDir();
+      setLocalAsrStatus(result.status);
+      if (!result.ok) {
+        setLocalAsrPickError(result.error);
+      } else if (!result.cancelled) {
+        await modelSelection.refresh();
+      }
+    } finally {
+      setLocalAsrBusy(false);
+    }
+  }, [localAsrBusy, modelSelection]);
+
+  const handleClearLocalAsrModelDir = useCallback(async () => {
+    const api = window.electronAPI.voiceInput.localAsr;
+    if (!api || localAsrBusy) return;
+    setLocalAsrBusy(true);
+    setLocalAsrPickError(null);
+    try {
+      const status = await api.clearModelDir();
+      setLocalAsrStatus(status);
+      await modelSelection.refresh();
+    } finally {
+      setLocalAsrBusy(false);
+    }
+  }, [localAsrBusy, modelSelection]);
+
+  useEffect(() => {
     connectionTestRequestRef.current += 1;
     setConnectionTest({ status: 'idle' });
   }, [
@@ -358,6 +415,8 @@ function VoiceInputServiceSourceCard({ modelSelection }: VoiceInputSectionProps)
     customAsrWebsocketUrl,
     customAsrModel,
     customAsrApiKey,
+    localAsrStatus?.modelDir,
+    localAsrStatus?.ready,
   ]);
 
   const openProvidersTab = useCallback(() => {
@@ -374,7 +433,8 @@ function VoiceInputServiceSourceCard({ modelSelection }: VoiceInputSectionProps)
 
   const modeOptions = useMemo<ReadonlyArray<VoiceInputSelectOption<VoiceInputServiceModeData>>>(() => voiceInputSettings.serviceSource.options.filter((option) => !localMode || option.value === 'byok').map(({ value, labelKey, descriptionKey }) => ({ value, label: t(labelKey), description: t(descriptionKey) })), [localMode, t]);
 
-  const credentialSourceLabel = useCallback((profile: { id: string; auth: 'api-key' | 'codex' }): string => {
+  const credentialSourceLabel = useCallback((profile: { id: string; auth: 'api-key' | 'codex' | 'local' }): string => {
+    if (profile.auth === 'local') return t('settings.voiceInput.serviceSource.credential.localOffline');
     if (profile.auth === 'codex') return t('settings.voiceInput.serviceSource.credential.codexLogin');
     if (profile.id.startsWith('elevenlabs')) return t('settings.voiceInput.serviceSource.credential.elevenlabsKey');
     return t('settings.voiceInput.serviceSource.credential.gatewayKey');
@@ -389,12 +449,16 @@ function VoiceInputServiceSourceCard({ modelSelection }: VoiceInputSectionProps)
         value: profile.id,
         label: profile.id === 'custom-realtime-asr'
           ? t('settings.voiceInput.serviceSource.customAsr.optionLabel')
-          : profile.model,
+          : profile.id === 'local-sherpa-onnx'
+            ? t('settings.voiceInput.serviceSource.localAsr.optionLabel')
+            : profile.model,
         description: profile.id === 'custom-realtime-asr'
           ? t('settings.voiceInput.serviceSource.customAsr.optionDescription')
-          : profile.id === 'openai-realtime-whisper'
-            ? t('settings.voiceInput.serviceSource.credential.codexRealtimeUnsupported')
-            : credentialSourceLabel(profile),
+          : profile.id === 'local-sherpa-onnx'
+            ? t('settings.voiceInput.serviceSource.localAsr.optionDescription')
+            : profile.id === 'openai-realtime-whisper'
+              ? t('settings.voiceInput.serviceSource.credential.codexRealtimeUnsupported')
+              : credentialSourceLabel(profile),
         disabled: profile.id === 'openai-realtime-whisper',
       }))
   ), [asrProfiles, credentialSourceLabel, t]);
@@ -409,6 +473,12 @@ function VoiceInputServiceSourceCard({ modelSelection }: VoiceInputSectionProps)
   // raw main-process message (which is an untranslated profile constant).
   const byokCredentialErrorText = useMemo(() => {
     if (!byok || !readiness || readiness.ok) return null;
+    if (readiness.failureReason === 'local-asr-model-missing') {
+      return t('settings.voiceInput.serviceSource.credentialError.localAsrModelMissing');
+    }
+    if (readiness.failureReason === 'local-asr-unsupported') {
+      return t('settings.voiceInput.serviceSource.credentialError.localAsrUnsupported');
+    }
     if (readiness.failureReason === 'custom-asr-config-missing') {
       return t('settings.voiceInput.serviceSource.credentialError.customAsrConfigMissing');
     }
@@ -437,7 +507,12 @@ function VoiceInputServiceSourceCard({ modelSelection }: VoiceInputSectionProps)
     && Boolean(customAsrModel.trim())
     && (!customAsrEndpointRequiresNewKey || Boolean(customAsrApiKey.trim()));
   const credentialRecoveryInVoiceSettings = customAsrSelected
-    || readiness?.failureReason === 'codex-realtime-unsupported';
+    || localAsrSelected
+    || readiness?.failureReason === 'codex-realtime-unsupported'
+    || readiness?.failureReason === 'local-asr-model-missing'
+    || readiness?.failureReason === 'local-asr-unsupported'
+    || Boolean(byok && readiness && !readiness.ok
+      && resolveVoiceInputReadinessRecovery(readiness, 'byok').settingsTab === 'voice-input');
 
   const handleSaveCustomAsr = useCallback(async () => {
     const saved = await saveCustomAsr({
@@ -554,7 +629,7 @@ function VoiceInputServiceSourceCard({ modelSelection }: VoiceInputSectionProps)
             }
           />
 
-          {connectionTest.status !== 'idle' || customAsrSelected ? (
+          {connectionTest.status !== 'idle' || customAsrSelected || localAsrSelected ? (
           <SettingsBlock className="flex flex-col gap-4">
             {connectionTest.status === 'error' ? (
               <ErrorNotice
@@ -726,6 +801,66 @@ function VoiceInputServiceSourceCard({ modelSelection }: VoiceInputSectionProps)
                     {t('settings.voiceInput.serviceSource.customAsr.save')}
                   </Button>
                 </div>
+              </div>
+            ) : null}
+
+            {localAsrSelected ? (
+              <div className="flex flex-col gap-3 rounded-xl border border-[var(--settings-input-border)] bg-[var(--settings-input-bg)] p-3.5">
+                <p className="text-12 leading-[1.45] text-[var(--settings-section-sublabel)]">
+                  {t('settings.voiceInput.serviceSource.localAsr.notice')}
+                </p>
+
+                <VoiceInputInlineSettingRow
+                  label={t('settings.voiceInput.serviceSource.localAsr.modelDirLabel')}
+                  hint={
+                    localAsrStatus?.ready
+                      ? t('settings.voiceInput.serviceSource.localAsr.readyStatus', {
+                          kind: localAsrStatus.modelKind ?? 'onnx',
+                          folder: localAsrStatus.modelDirName ?? localAsrStatus.modelDir ?? '',
+                        })
+                      : localAsrStatus?.supported === false
+                        ? t('settings.voiceInput.serviceSource.localAsr.unsupportedStatus')
+                        : t('settings.voiceInput.serviceSource.localAsr.notConfiguredStatus')
+                  }
+                >
+                  <div className="flex flex-wrap justify-end gap-2">
+                    {localAsrStatus?.modelDir ? (
+                      <Button data-settings-search-action="Clear the selected local ASR model folder"
+                        variant="secondary"
+                        size="sm"
+                        compact
+                        type="button"
+                        disabled={localAsrBusy}
+                        onClick={() => void handleClearLocalAsrModelDir()}
+                      >
+                        {t('settings.voiceInput.serviceSource.localAsr.clearFolder')}
+                      </Button>
+                    ) : null}
+                    <Button data-settings-search-action="Choose a local ASR model folder"
+                      variant="secondary"
+                      size="sm"
+                      compact
+                      loading={localAsrBusy}
+                      type="button"
+                      disabled={localAsrBusy || localAsrStatus?.supported === false}
+                      onClick={() => void handleChooseLocalAsrModelDir()}
+                    >
+                      {t('settings.voiceInput.serviceSource.localAsr.chooseFolder')}
+                    </Button>
+                  </div>
+                </VoiceInputInlineSettingRow>
+
+                {localAsrPickError ? (
+                  <ErrorNotice
+                    role="alert"
+                    aria-live="polite"
+                    message={
+                      localAsrPickError === 'invalid_model_dir'
+                        ? t('settings.voiceInput.serviceSource.localAsr.invalidFolder')
+                        : t('settings.voiceInput.serviceSource.localAsr.unsupportedStatus')
+                    }
+                  />
+                ) : null}
               </div>
             ) : null}
           </SettingsBlock>
@@ -954,6 +1089,9 @@ export function VoiceInputSection({ modelSelection }: VoiceInputSectionProps) {
     resetSpeakerFilterStrictness,
     addDictionaryEntry: addDictionarySettingEntry,
     importDictionaryEntries: importDictionarySettingEntries,
+    promoteDictionaryCandidate: promoteDictionarySettingCandidate,
+    deleteDictionaryCandidate: deleteDictionarySettingCandidate,
+    restoreSuppressedDictionaryTerm: restoreSuppressedDictionarySettingTerm,
     editDictionaryEntry: editDictionarySettingEntry,
     deleteDictionaryEntry: deleteDictionarySettingEntry,
     setShortcut,
@@ -967,6 +1105,9 @@ export function VoiceInputSection({ modelSelection }: VoiceInputSectionProps) {
   // 但裸修饰键和普通组合键仍然正常。所以这不是错误，只在提示区说明，不弹 toast。
   const [fnRecordingBlocked, setFnRecordingBlocked] = useState(false);
   const [historyExpanded, setHistoryExpanded] = useState(false);
+  const [historySearch, setHistorySearch] = useState('');
+  const [historyVisibleCount, setHistoryVisibleCount] = useState(HISTORY_PAGE_SIZE);
+  const [expandedHistoryDiffIds, setExpandedHistoryDiffIds] = useState<Record<string, boolean>>({});
   const [refinementRulesExpanded, setRefinementRulesExpanded] = useState(false);
   const [customDictionaryExpanded, setCustomDictionaryExpanded] = useState(false);
   useLayoutEffect(() => {
@@ -1673,22 +1814,91 @@ export function VoiceInputSection({ modelSelection }: VoiceInputSectionProps) {
       all: settings.dictionaryEntries.length,
       automatic,
       manual,
+      candidates: settings.dictionaryCandidates.length,
+      suppressed: settings.suppressedAutomaticDictionaryTexts.length,
     };
-  }, [settings.dictionaryEntries]);
+  }, [
+    settings.dictionaryCandidates.length,
+    settings.dictionaryEntries,
+    settings.suppressedAutomaticDictionaryTexts.length,
+  ]);
 
-  const filteredDictionaryEntries = useMemo(
-    () =>
-      settings.dictionaryEntries
-        .filter((entry) =>
-          voiceInputDictionaryEntryMatches(entry, dictionaryFilter, dictionarySearch),
-        )
-        .sort((a, b) => {
-          if (a.source !== b.source) return a.source === 'manual' ? -1 : 1;
-          if (a.source === 'automatic') return b.frequency - a.frequency || b.updatedAt - a.updatedAt;
-          return b.updatedAt - a.updatedAt;
-        }),
-    [dictionaryFilter, dictionarySearch, settings.dictionaryEntries],
+  const filteredDictionaryEntries = useMemo(() => {
+    if (dictionaryFilter === 'candidates' || dictionaryFilter === 'suppressed') return [];
+    return settings.dictionaryEntries
+      .filter((entry) =>
+        voiceInputDictionaryEntryMatches(entry, dictionaryFilter, dictionarySearch),
+      )
+      .sort((a, b) => {
+        if (a.source !== b.source) return a.source === 'manual' ? -1 : 1;
+        if (a.source === 'automatic') return b.frequency - a.frequency || b.updatedAt - a.updatedAt;
+        return b.updatedAt - a.updatedAt;
+      });
+  }, [dictionaryFilter, dictionarySearch, settings.dictionaryEntries]);
+
+  const filteredDictionaryCandidates = useMemo(() => {
+    if (dictionaryFilter !== 'candidates') return [];
+    const query = dictionarySearch.trim().toLocaleLowerCase();
+    return settings.dictionaryCandidates
+      .filter((candidate) => {
+        if (!query) return true;
+        return candidate.text.toLocaleLowerCase().includes(query)
+          || candidate.aliases.some((alias) => alias.text.toLocaleLowerCase().includes(query));
+      })
+      .sort((a, b) => b.evidenceCount - a.evidenceCount || b.updatedAt - a.updatedAt);
+  }, [dictionaryFilter, dictionarySearch, settings.dictionaryCandidates]);
+
+  const filteredSuppressedTerms = useMemo(() => {
+    if (dictionaryFilter !== 'suppressed') return [];
+    const query = dictionarySearch.trim().toLocaleLowerCase();
+    return settings.suppressedAutomaticDictionaryTexts.filter((term) =>
+      !query || term.toLocaleLowerCase().includes(query),
+    );
+  }, [dictionaryFilter, dictionarySearch, settings.suppressedAutomaticDictionaryTexts]);
+
+  const filteredHistoryEntries = useMemo(() => {
+    const query = historySearch.trim().toLocaleLowerCase();
+    if (!query) return historyEntries;
+    return historyEntries.filter((entry) =>
+      entry.text.toLocaleLowerCase().includes(query)
+      || (entry.rawText?.toLocaleLowerCase().includes(query) ?? false),
+    );
+  }, [historyEntries, historySearch]);
+
+  const visibleHistoryEntries = useMemo(
+    () => filteredHistoryEntries.slice(0, historyVisibleCount),
+    [filteredHistoryEntries, historyVisibleCount],
   );
+
+  const toggleHistoryDiff = useCallback((entryId: string) => {
+    setExpandedHistoryDiffIds((prev) => ({ ...prev, [entryId]: !prev[entryId] }));
+  }, []);
+
+  const exportDictionaryFile = useCallback((format: 'csv' | 'json') => {
+    if (settings.dictionaryEntries.length === 0) return;
+    const content = format === 'json'
+      ? serializeVoiceInputDictionaryJson(settings.dictionaryEntries)
+      : serializeVoiceInputDictionaryCsv(settings.dictionaryEntries);
+    const mimeType = format === 'json' ? 'application/json;charset=utf-8' : 'text/csv;charset=utf-8';
+    const fileName = `cindy-voice-dictionary.${format}`;
+    const blob = new Blob([content], { type: mimeType });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = fileName;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 1_000);
+    toast.success(
+      t(
+        format === 'json'
+          ? 'settings.voiceInput.refinement.dictionary.export.successJson'
+          : 'settings.voiceInput.refinement.dictionary.export.successCsv',
+        { count: settings.dictionaryEntries.length },
+      ),
+    );
+  }, [settings.dictionaryEntries, t]);
 
   const addDictionaryEntry = useCallback(() => {
     const text = normalizeVoiceInputDictionaryEntryText(newDictionaryEntryText);
@@ -1706,9 +1916,10 @@ export function VoiceInputSection({ modelSelection }: VoiceInputSectionProps) {
     setNewDictionaryEntryText('');
   }, []);
 
-  const importDictionaryCsvFile = useCallback(async (file: File | null) => {
+  const importDictionaryFile = useCallback(async (file: File | null) => {
     if (!file) return;
-    if (!file.name.toLocaleLowerCase().endsWith('.csv')) {
+    const lowerName = file.name.toLocaleLowerCase();
+    if (!lowerName.endsWith('.csv') && !lowerName.endsWith('.json')) {
       toast.error(t('settings.voiceInput.refinement.dictionary.csvImport.errors.fileType'));
       return;
     }
@@ -1725,7 +1936,7 @@ export function VoiceInputSection({ modelSelection }: VoiceInputSectionProps) {
       return;
     }
 
-    const parsed = parseVoiceInputDictionaryCsv(text);
+    const parsed = parseVoiceInputDictionaryImport(text, file.name);
     if (!parsed.ok) {
       toast.error(
         t(
@@ -1738,7 +1949,7 @@ export function VoiceInputSection({ modelSelection }: VoiceInputSectionProps) {
       return;
     }
 
-    const merged = mergeVoiceInputDictionaryCsvTerms(settings.dictionaryEntries, parsed.terms);
+    const merged = mergeVoiceInputDictionaryImportItems(settings.dictionaryEntries, parsed.items);
     if (merged.importedCount === 0) {
       toast.warning(
         t(
@@ -1750,18 +1961,16 @@ export function VoiceInputSection({ modelSelection }: VoiceInputSectionProps) {
       return;
     }
 
-    // 容量与去重裁决仍由 mergeVoiceInputDictionaryCsvTerms 负责(下面的统计文案依赖
-    // 它的计数),但写入只提交「本次真正新增的词条文本」,由主进程按手动词条认领。
-    // 去重键必须与同步主键同一套折叠(locale 无关),否则土耳其语这类 locale 下
-    // 会出现「明明已存在却被当成新增」或反之,导入结果与实际合并结果对不上。
     const existingKeys = new Set(
       settings.dictionaryEntries.map((entry) => dictionaryTermKey(entry.text)),
     );
-    const imported = await importDictionarySettingEntries(
-      merged.entries
-        .filter((entry) => !existingKeys.has(dictionaryTermKey(entry.text)))
-        .map((entry) => entry.text),
-    );
+    const itemsToImport = merged.entries
+      .filter((entry) => !existingKeys.has(dictionaryTermKey(entry.text)))
+      .map((entry) => ({
+        text: entry.text,
+        aliases: entry.aliases.map((alias) => alias.text),
+      }));
+    const imported = await importDictionarySettingEntries(itemsToImport);
     // 写入失败时错误提示已经弹过了,不能再报一次"导入成功"。
     if (!imported) return;
     closeDictionaryEntryDialog();
@@ -1787,6 +1996,30 @@ export function VoiceInputSection({ modelSelection }: VoiceInputSectionProps) {
     settings.dictionaryEntries,
     t,
   ]);
+
+  const promoteDictionaryCandidate = useCallback((term: string) => {
+    void promoteDictionarySettingCandidate(term).then((ok) => {
+      if (ok) toast.success(t('settings.voiceInput.refinement.dictionary.candidates.promotedToast', { term }));
+    });
+  }, [promoteDictionarySettingCandidate, t]);
+
+  const deleteDictionaryCandidate = useCallback((term: string) => {
+    void deleteDictionarySettingCandidate(term);
+  }, [deleteDictionarySettingCandidate]);
+
+  const restoreSuppressedTerm = useCallback((term: string, addToDictionary = false) => {
+    void restoreSuppressedDictionarySettingTerm(term, { addToDictionary }).then((ok) => {
+      if (!ok) return;
+      toast.success(
+        t(
+          addToDictionary
+            ? 'settings.voiceInput.refinement.dictionary.suppressed.addedToast'
+            : 'settings.voiceInput.refinement.dictionary.suppressed.restoredToast',
+          { term },
+        ),
+      );
+    });
+  }, [restoreSuppressedDictionarySettingTerm, t]);
 
   const startEditingDictionaryEntry = useCallback((entry: VoiceInputDictionaryEntry) => {
     setEditingDictionaryEntryId(entry.id);
@@ -2136,7 +2369,7 @@ export function VoiceInputSection({ modelSelection }: VoiceInputSectionProps) {
                       }))}
                     />
 
-                    <div className="flex items-center gap-2">
+                    <div className="flex flex-wrap items-center gap-2">
                       <Tip
                         text={t(
                           dictionarySearchExpanded
@@ -2165,6 +2398,30 @@ export function VoiceInputSection({ modelSelection }: VoiceInputSectionProps) {
                           <Search size={14} />
                         </button>
                       </Tip>
+
+                      <Button data-settings-search-action="Export dictionary as CSV"
+                        variant="secondary"
+                        size="sm"
+                        compact
+                        type="button"
+                        disabled={settings.dictionaryEntries.length === 0}
+                        onClick={() => exportDictionaryFile('csv')}
+                      >
+                        <Download size={13} />
+                        {t('settings.voiceInput.refinement.dictionary.export.csv')}
+                      </Button>
+
+                      <Button data-settings-search-action="Export dictionary as JSON"
+                        variant="secondary"
+                        size="sm"
+                        compact
+                        type="button"
+                        disabled={settings.dictionaryEntries.length === 0}
+                        onClick={() => exportDictionaryFile('json')}
+                      >
+                        <Download size={13} />
+                        {t('settings.voiceInput.refinement.dictionary.export.json')}
+                      </Button>
 
                       <Button data-setting-id={voiceInputSettings.refinementDictionaryLabel.id}
                         variant="cta"
@@ -2251,13 +2508,13 @@ export function VoiceInputSection({ modelSelection }: VoiceInputSectionProps) {
                         <input data-setting-id={voiceInputSettings.refinementDictionaryLabel.id}
                           ref={dictionaryCsvInputRef}
                           type="file"
-                          accept=".csv,text/csv"
+                          accept=".csv,.json,text/csv,application/json"
                           className="sr-only"
                           tabIndex={-1}
                           onChange={(event) => {
                             const file = event.currentTarget.files?.[0] ?? null;
                             event.currentTarget.value = '';
-                            void importDictionaryCsvFile(file);
+                            void importDictionaryFile(file);
                           }}
                         />
                         <div className="mt-5 flex flex-wrap items-center justify-between gap-3">
@@ -2294,7 +2551,126 @@ export function VoiceInputSection({ modelSelection }: VoiceInputSectionProps) {
                     </Dialog.Portal>
                   </Dialog.Root>
 
-                  {filteredDictionaryEntries.length > 0 ? (
+                  {dictionaryFilter === 'candidates' ? (
+                    filteredDictionaryCandidates.length > 0 ? (
+                      <div className="flex flex-col gap-2">
+                        <p className="text-12 leading-[1.4] text-[var(--text-secondary)]">
+                          {t('settings.voiceInput.refinement.dictionary.candidates.hint')}
+                        </p>
+                        <div className="grid gap-2 md:grid-cols-2">
+                          {filteredDictionaryCandidates.map((candidate) => (
+                            <div
+                              key={candidate.text}
+                              className={cn(
+                                'group flex min-w-0 items-start gap-2 rounded-xl border border-[var(--settings-input-border)]',
+                                'bg-[var(--settings-input-bg)] px-3 py-2.5 transition-colors',
+                                'hover:bg-[var(--settings-menu-bg-hover)]',
+                              )}
+                            >
+                              <div className="min-w-0 flex-1">
+                                <div className="flex items-center gap-1.5">
+                                  <p className="truncate text-13 font-medium text-[var(--settings-section-title)]">
+                                    {candidate.text}
+                                  </p>
+                                  <span className="shrink-0 rounded-full border border-[var(--settings-input-border)] px-1.5 py-0.5 text-11 leading-none text-[var(--text-secondary)]">
+                                    {t('settings.voiceInput.refinement.dictionary.candidates.evidenceCount', {
+                                      count: candidate.evidenceCount,
+                                    })}
+                                  </span>
+                                </div>
+                                {candidate.aliases.length > 0 ? (
+                                  <p className="mt-0.5 line-clamp-2 text-11 leading-[1.35] text-[var(--text-secondary)]">
+                                    {t('settings.voiceInput.refinement.dictionary.aliases', {
+                                      aliases: candidate.aliases
+                                        .map((alias) => alias.text)
+                                        .join(t('settings.voiceInput.refinement.dictionary.aliasSeparator')),
+                                    })}
+                                  </p>
+                                ) : null}
+                              </div>
+                              <div className="flex shrink-0 items-center gap-1">
+                                <Tip text={t('settings.voiceInput.refinement.dictionary.candidates.promoteTooltip')} side="top">
+                                  <Button data-settings-search-action="Promote dictionary candidate to formal entry"
+                                    variant="secondary"
+                                    size="sm"
+                                    compact
+                                    type="button"
+                                    onClick={() => promoteDictionaryCandidate(candidate.text)}
+                                  >
+                                    <ArrowUpRight size={13} />
+                                    {t('settings.voiceInput.refinement.dictionary.candidates.promote')}
+                                  </Button>
+                                </Tip>
+                                <Tip text={t('settings.voiceInput.refinement.dictionary.delete')} side="top">
+                                  <button data-settings-search-action="Delete this dictionary candidate"
+                                    type="button"
+                                    onClick={() => deleteDictionaryCandidate(candidate.text)}
+                                    className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-[var(--settings-section-sublabel)] transition-colors hover:bg-[var(--settings-btn-secondary-hover-bg)] hover:text-[var(--settings-section-title)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]"
+                                    aria-label={t('settings.voiceInput.refinement.dictionary.delete')}
+                                  >
+                                    <Trash2 size={13} />
+                                  </button>
+                                </Tip>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    ) : (
+                      <p className="rounded-xl border border-[var(--settings-input-border)] bg-[var(--settings-input-bg)] px-4 py-3 text-12 leading-[1.4] text-[var(--text-secondary)]">
+                        {t('settings.voiceInput.refinement.dictionary.candidates.empty')}
+                      </p>
+                    )
+                  ) : dictionaryFilter === 'suppressed' ? (
+                    filteredSuppressedTerms.length > 0 ? (
+                      <div className="flex flex-col gap-2">
+                        <p className="text-12 leading-[1.4] text-[var(--text-secondary)]">
+                          {t('settings.voiceInput.refinement.dictionary.suppressed.hint')}
+                        </p>
+                        <div className="grid gap-2 md:grid-cols-2">
+                          {filteredSuppressedTerms.map((term) => (
+                            <div
+                              key={term}
+                              className={cn(
+                                'flex min-w-0 items-center justify-between gap-2 rounded-xl border border-[var(--settings-input-border)]',
+                                'bg-[var(--settings-input-bg)] px-3 py-2.5',
+                              )}
+                            >
+                              <p className="min-w-0 flex-1 truncate text-13 font-medium text-[var(--settings-section-title)]">
+                                {term}
+                              </p>
+                              <div className="flex shrink-0 items-center gap-1.5">
+                                <Button data-settings-search-action="Restore auto-learning for suppressed dictionary term"
+                                  variant="secondary"
+                                  size="sm"
+                                  compact
+                                  type="button"
+                                  onClick={() => restoreSuppressedTerm(term, false)}
+                                >
+                                  <RotateCcw size={12} />
+                                  {t('settings.voiceInput.refinement.dictionary.suppressed.restore')}
+                                </Button>
+                                <Button data-settings-search-action="Restore and add suppressed dictionary term"
+                                  variant="secondary"
+                                  size="sm"
+                                  compact
+                                  type="button"
+                                  onClick={() => restoreSuppressedTerm(term, true)}
+                                >
+                                  <Plus size={12} />
+                                  {t('settings.voiceInput.refinement.dictionary.suppressed.addToDictionary')}
+                                </Button>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    ) : (
+                      <p className="rounded-xl border border-[var(--settings-input-border)] bg-[var(--settings-input-bg)] px-4 py-3 text-12 leading-[1.4] text-[var(--text-secondary)]">
+                        {t('settings.voiceInput.refinement.dictionary.suppressed.empty')}
+                      </p>
+                    )
+                  ) : filteredDictionaryEntries.length > 0 ? (
                     <div className="grid gap-2 md:grid-cols-2">
                       {filteredDictionaryEntries.map((entry) => {
                         const editing = editingDictionaryEntryId === entry.id;
@@ -2668,64 +3044,151 @@ export function VoiceInputSection({ modelSelection }: VoiceInputSectionProps) {
           </button>
 
           {historyExpanded ? (
-            <div id="voice-input-history-panel" className="mt-3">
+            <div id="voice-input-history-panel" className="mt-3 flex flex-col gap-3">
               {historyEntries.length > 0 ? (
-                <div className="flex flex-col gap-2">
-                  {historyEntries.map((entry) => (
-                    <div
-                      key={entry.id}
-                      className={cn(
-                        'flex items-start gap-3 rounded-xl p-3',
-                        'border border-[var(--settings-theme-card-border)]',
-                        'bg-[var(--settings-input-bg)]',
-                      )}
-                    >
-                      <div className="min-w-0 flex-1">
-                        <p className="max-h-[92px] overflow-y-auto whitespace-pre-wrap break-words text-13 leading-[1.45] text-[var(--settings-section-title)]">
-                          {entry.text}
-                        </p>
-                        <p className="mt-1 text-11 leading-[1.3] text-[var(--text-tertiary)]">
-                          {formatHistoryTime(entry.createdAt, i18n.resolvedLanguage ?? i18n.language)}
-                        </p>
-                      </div>
+                <>
+                  <SearchInput
+                    data-setting-id={voiceInputSettings.historyLabel.id}
+                    value={historySearch}
+                    onChange={(next) => {
+                      setHistorySearch(next);
+                      setHistoryVisibleCount(HISTORY_PAGE_SIZE);
+                    }}
+                    aria-label={t('settings.voiceInput.history.searchAriaLabel')}
+                    placeholder={t('settings.voiceInput.history.searchPlaceholder')}
+                  />
+                  {visibleHistoryEntries.length > 0 ? (
+                    <div className="flex flex-col gap-2">
+                      {visibleHistoryEntries.map((entry) => {
+                        const hasRawDiff = Boolean(entry.rawText && entry.rawText !== entry.text);
+                        const diffExpanded = Boolean(expandedHistoryDiffIds[entry.id]);
+                        return (
+                          <div
+                            key={entry.id}
+                            className={cn(
+                              'flex flex-col gap-2 rounded-xl p-3',
+                              'border border-[var(--settings-theme-card-border)]',
+                              'bg-[var(--settings-input-bg)]',
+                            )}
+                          >
+                            <div className="flex items-start gap-3">
+                              <div className="min-w-0 flex-1">
+                                <p className="max-h-[92px] overflow-y-auto whitespace-pre-wrap break-words text-13 leading-[1.45] text-[var(--settings-section-title)]">
+                                  {entry.text}
+                                </p>
+                                <div className="mt-1 flex flex-wrap items-center gap-2">
+                                  <p className="text-11 leading-[1.3] text-[var(--text-tertiary)]">
+                                    {formatHistoryTime(entry.createdAt, i18n.resolvedLanguage ?? i18n.language)}
+                                  </p>
+                                  {hasRawDiff ? (
+                                    <button data-settings-search-action="Toggle raw ASR vs refined comparison"
+                                      type="button"
+                                      onClick={() => toggleHistoryDiff(entry.id)}
+                                      className="inline-flex items-center gap-1 rounded-full border border-[var(--settings-input-border)] px-2 py-0.5 text-11 leading-none text-[var(--settings-section-sublabel)] transition-colors hover:bg-[var(--settings-btn-secondary-hover-bg)] hover:text-[var(--settings-section-title)]"
+                                    >
+                                      <Sparkles size={11} aria-hidden />
+                                      {t(
+                                        diffExpanded
+                                          ? 'settings.voiceInput.history.hideRawComparison'
+                                          : 'settings.voiceInput.history.showRawComparison',
+                                      )}
+                                    </button>
+                                  ) : null}
+                                </div>
+                              </div>
 
-                      <div className="flex shrink-0 items-center gap-1">
-                        <Tip text={t('settings.voiceInput.history.copy')} side="top">
-                          <button data-settings-search-action="Copy this voice-input history entry"
+                              <div className="flex shrink-0 items-center gap-1">
+                                <Tip text={t('settings.voiceInput.history.copy')} side="top">
+                                  <button data-settings-search-action="Copy this voice-input history entry"
+                                    type="button"
+                                    onClick={() => {
+                                      void handleCopyHistoryEntry(entry.text);
+                                    }}
+                                    className={cn(
+                                      'inline-flex h-8 w-8 items-center justify-center rounded-full',
+                                      'border border-[var(--settings-btn-secondary-border)]',
+                                      'bg-[var(--settings-btn-secondary-bg)] text-[var(--settings-btn-secondary-text)]',
+                                      'transition-colors hover:bg-[var(--settings-btn-secondary-hover-bg)]',
+                                    )}
+                                    aria-label={t('settings.voiceInput.history.copyAria')}
+                                  >
+                                    <Copy size={13} />
+                                  </button>
+                                </Tip>
+                                <Tip text={t('settings.voiceInput.history.delete')} side="top">
+                                  <button data-settings-search-action="Delete this voice-input history entry"
+                                    type="button"
+                                    onClick={() => deleteHistoryEntry(entry.id)}
+                                    className={cn(
+                                      'inline-flex h-8 w-8 items-center justify-center rounded-full',
+                                      'border border-[var(--settings-btn-secondary-border)]',
+                                      'bg-[var(--settings-btn-secondary-bg)] text-[var(--settings-btn-secondary-text)]',
+                                      'transition-colors hover:bg-[var(--settings-btn-secondary-hover-bg)]',
+                                    )}
+                                    aria-label={t('settings.voiceInput.history.deleteAria')}
+                                  >
+                                    <Trash2 size={13} />
+                                  </button>
+                                </Tip>
+                              </div>
+                            </div>
+
+                            {hasRawDiff && diffExpanded ? (
+                              <div className="grid gap-2 rounded-lg border border-[var(--settings-input-border)] bg-[var(--settings-theme-card-bg)] p-2.5 sm:grid-cols-2">
+                                <div className="min-w-0">
+                                  <div className="flex items-center justify-between gap-2">
+                                    <span className="text-11 font-medium text-[var(--text-secondary)]">
+                                      {t('settings.voiceInput.history.rawLabel')}
+                                    </span>
+                                    <button data-settings-search-action="Copy raw ASR transcript"
+                                      type="button"
+                                      onClick={() => void handleCopyHistoryEntry(entry.rawText!)}
+                                      className="text-11 text-[var(--text-tertiary)] transition-colors hover:text-[var(--settings-section-title)]"
+                                    >
+                                      {t('settings.voiceInput.history.copy')}
+                                    </button>
+                                  </div>
+                                  <p className="mt-1 whitespace-pre-wrap break-words text-12 leading-[1.45] text-[var(--text-secondary)]">
+                                    {entry.rawText}
+                                  </p>
+                                </div>
+                                <div className="min-w-0 border-t border-[var(--settings-input-border)] pt-2 sm:border-l sm:border-t-0 sm:pl-2.5 sm:pt-0">
+                                  <span className="text-11 font-medium text-[var(--settings-section-title)]">
+                                    {t('settings.voiceInput.history.refinedLabel')}
+                                  </span>
+                                  <p className="mt-1 whitespace-pre-wrap break-words text-12 leading-[1.45] text-[var(--settings-section-title)]">
+                                    {entry.text}
+                                  </p>
+                                </div>
+                              </div>
+                            ) : null}
+                          </div>
+                        );
+                      })}
+                      {filteredHistoryEntries.length > visibleHistoryEntries.length ? (
+                        <div className="flex justify-center pt-1">
+                          <Button data-settings-search-action="Load more voice-input history entries"
+                            variant="secondary"
+                            size="sm"
+                            compact
                             type="button"
-                            onClick={() => {
-                              void handleCopyHistoryEntry(entry.text);
-                            }}
-                            className={cn(
-                              'inline-flex h-8 w-8 items-center justify-center rounded-full',
-                              'border border-[var(--settings-btn-secondary-border)]',
-                              'bg-[var(--settings-btn-secondary-bg)] text-[var(--settings-btn-secondary-text)]',
-                              'transition-colors hover:bg-[var(--settings-btn-secondary-hover-bg)]',
-                            )}
-                            aria-label={t('settings.voiceInput.history.copyAria')}
+                            onClick={() =>
+                              setHistoryVisibleCount((count) => count + HISTORY_PAGE_INCREMENT)
+                            }
                           >
-                            <Copy size={13} />
-                          </button>
-                        </Tip>
-                        <Tip text={t('settings.voiceInput.history.delete')} side="top">
-                          <button data-settings-search-action="Delete this voice-input history entry"
-                            type="button"
-                            onClick={() => deleteHistoryEntry(entry.id)}
-                            className={cn(
-                              'inline-flex h-8 w-8 items-center justify-center rounded-full',
-                              'border border-[var(--settings-btn-secondary-border)]',
-                              'bg-[var(--settings-btn-secondary-bg)] text-[var(--settings-btn-secondary-text)]',
-                              'transition-colors hover:bg-[var(--settings-btn-secondary-hover-bg)]',
-                            )}
-                            aria-label={t('settings.voiceInput.history.deleteAria')}
-                          >
-                            <Trash2 size={13} />
-                          </button>
-                        </Tip>
-                      </div>
+                            {t('settings.voiceInput.history.loadMore', {
+                              count: filteredHistoryEntries.length - visibleHistoryEntries.length,
+                            })}
+                          </Button>
+                        </div>
+                      ) : null}
                     </div>
-                  ))}
-                </div>
+                  ) : (
+                    <p className="rounded-xl border border-[var(--settings-theme-card-border)] bg-[var(--settings-input-bg)] px-4 py-3 text-12 leading-[1.4] text-[var(--text-secondary)]">
+                      {t('settings.voiceInput.history.noSearchResults')}
+                    </p>
+                  )}
+                </>
               ) : (
                 <p className="rounded-xl border border-[var(--settings-theme-card-border)] bg-[var(--settings-input-bg)] px-4 py-3 text-12 leading-[1.4] text-[var(--text-secondary)]">
                   {t('settings.voiceInput.history.empty')}

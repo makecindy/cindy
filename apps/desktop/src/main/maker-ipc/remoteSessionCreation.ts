@@ -8,6 +8,7 @@ import { resolveSendToSessionPluginEngineConfig } from './sendToSessionExecution
 import type { PluginEngineView } from '../../shared/pluginEngines.js';
 import type { SessionCreatedBy } from '../../shared/sessionOrigin.js';
 import type { HandoffWorkingDirValidation } from './handoffWorkingDir.js';
+import { checkWorktreeBaseRefArg } from '../worktree/sourceRef.js';
 
 type Failure = { ok: false; errorCode: string; message: string };
 type Execution = Pick<RemoteSessionCreated, 'agentKind' | 'model' | 'fastMode'>
@@ -111,7 +112,9 @@ export function createRemoteSessionOpener(deps: {
   resolveProject(input: { projectDir?: string | null; workingDir?: string }): Promise<{ ok: true; projectDir: string | null } | Failure>;
   validateDirectory(path: string): Promise<HandoffWorkingDirValidation>;
   resolveExecution(options: RemoteSessionCreation): Promise<Execution>;
-  prepareWorktree(id: string, directory: string): Promise<{ ok: true; path: string } | Failure>;
+  /** `baseRef` is the caller's explicit baseline, already validated; omitted = the fresh remote default branch. */
+  prepareWorktree(id: string, directory: string, baseRef?: string): Promise<
+    { ok: true; path: string; baseRef?: string; staleBaseReason?: string } | Failure>;
   discardWorktree(id: string, path: string, assertOwner: () => void): Promise<unknown>;
   broadcastCreated(id: string): void;
 }) {
@@ -128,6 +131,10 @@ export function createRemoteSessionOpener(deps: {
       // A replay must never enqueue another first message or modify an existing task.
       if (await deps.sessionExists(id)) return { ok: false, errorCode: 'DELIVERY_UNKNOWN',
         message: 'This task ID already exists. Inspect its history and queue; do not create another task.' };
+      // The wire is not trusted: recheck what the sending tool already checked.
+      const checkedBase = checkWorktreeBaseRefArg(input.baseRef, input.useWorktree);
+      if (!checkedBase.ok) return { ok: false, errorCode: 'INVALID_ARGS', message: checkedBase.message };
+      const baseRef = checkedBase.value;
       const project = await deps.resolveProject(input);
       await check();
       if (!project.ok) return project;
@@ -141,13 +148,20 @@ export function createRemoteSessionOpener(deps: {
       const execution = await deps.resolveExecution(input);
       await check();
       let worktreePath: string | null = null;
+      let worktreeBase: { worktreeBaseRef?: string; worktreeBaseStaleReason?: string } = {};
       let persistenceStarted = false;
       try {
         if (input.useWorktree) {
           if (!workingDir) return { ok: false, errorCode: 'INVALID_ARGS', message: 'use_worktree requires a project or working_dir on the destination.' };
-          const tree = await deps.prepareWorktree(id, workingDir);
-          if (!tree.ok) return tree;
+          const tree = await deps.prepareWorktree(id, workingDir, baseRef);
+          // An unresolvable baseline fails here; it never falls back to the default branch.
+          if (!tree.ok) return baseRef === undefined ? tree
+            : { ...tree, message: `Could not create the worktree from base_ref "${baseRef}": ${tree.message}` };
           worktreePath = tree.path;
+          worktreeBase = {
+            ...(tree.baseRef ? { worktreeBaseRef: tree.baseRef } : {}),
+            ...(tree.staleBaseReason ? { worktreeBaseStaleReason: tree.staleBaseReason } : {}),
+          };
           workingDir = tree.path;
           await check();
         }
@@ -176,7 +190,10 @@ export function createRemoteSessionOpener(deps: {
           agentKind: execution.agentKind, model: row.model, providerId: row.providerId ?? null,
           effort: (row.effort || null) as RemoteSessionCreated['effort'], fastMode: row.fastMode ?? false,
           projectDir: project.projectDir, workspaceKind: row.workspaceKind ?? (project.projectDir === null ? 'dialogue' : 'project'),
-          workingDir: row.workingDir ?? '', worktreePath };
+          workingDir: row.workingDir ?? '', worktreePath, ...worktreeBase,
+          // Report where the model actually runs, as stored: a caller cannot otherwise tell a task
+          // that uses this computer's provider from one bound to another computer's account.
+          agentDeviceId: row.agentDeviceId ?? null };
       } catch (error) {
         // A database write may have committed even when its reply was lost. Keep its workspace.
         if (worktreePath && !persistenceStarted) await deps.discardWorktree(id, worktreePath, assertOwner).catch(() => undefined);

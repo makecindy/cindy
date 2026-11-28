@@ -345,6 +345,27 @@ class AcpRouter {
   }
 }
 
+/**
+ * Strips the single host-owned plugin library slot occurrence from `extraDirs`
+ * before binding ACP handshake `additionalDirectories`. Plugin library roots
+ * follow window focus and are delivered per turn via `<cindy-library-native-read>`;
+ * binding them into handshake `additionalDirectories` mutates the engine's system
+ * prompt workspace list on every focus flip and wipes prompt caches. An explicit
+ * user grant for the same directory keeps its second occurrence and stays bound.
+ */
+function userExtraDirsForHandshake(
+  extraDirs: readonly string[] | undefined,
+  libraryRoot: string | null | undefined,
+): string[] {
+  const trimmed = (extraDirs ?? []).map((dir) => dir.trim()).filter(Boolean);
+  if (typeof libraryRoot === 'string' && libraryRoot.trim()) {
+    const root = libraryRoot.trim();
+    const libraryIndex = trimmed.lastIndexOf(root);
+    if (libraryIndex >= 0) trimmed.splice(libraryIndex, 1);
+  }
+  return [...new Set(trimmed)];
+}
+
 export async function openAcpSession(opts: OpenAcpSessionOptions): Promise<AcpSession> {
   const router = new AcpRouter();
   const connection = new AcpConnection(opts.transport, {
@@ -387,7 +408,7 @@ export async function openAcpSession(opts: OpenAcpSessionOptions): Promise<AcpSe
     const missing = (opts.requiredMcpServers ?? []).filter((name) => !accepted.some((server) => server.name === name));
     if (missing.length > 0) throw new AcpRequiredMcpUnavailableError(missing);
     const additionalDirs = !opts.reviewMode && init.agentCapabilities.sessionCapabilities.additionalDirectories
-      ? [...new Set((opts.extraDirs ?? []).map((dir) => dir.trim()).filter(Boolean))]
+      ? userExtraDirsForHandshake(opts.extraDirs, opts.libraryRoot)
       : [];
     const additionalDirsField = additionalDirs.length > 0 ? { additionalDirectories: additionalDirs } : {};
     const sessionParams: AcpRecord = { cwd: opts.cwd, mcpServers: accepted, ...additionalDirsField };
@@ -641,6 +662,7 @@ export class AcpSession {
   private readonly reviewMode: boolean;
   private readonly reviewReadGrants: readonly ReviewReadGrant[];
   private extraDirs: string[];
+  private readonly boundAdditionalDirs: string[];
   private writableDirs: string[];
   private libraryRoot: string | null | undefined;
   private directoryGeneration = 0;
@@ -716,6 +738,9 @@ export class AcpSession {
     this.reviewMode = init.options.reviewMode === true;
     this.reviewReadGrants = this.reviewMode ? [...(init.options.reviewReadGrants ?? [])] : [];
     this.extraDirs = this.reviewMode ? [] : [...new Set((init.options.extraDirs ?? []).map((dir) => dir.trim()).filter(Boolean))];
+    this.boundAdditionalDirs = this.reviewMode || !init.init.agentCapabilities.sessionCapabilities.additionalDirectories
+      ? []
+      : userExtraDirsForHandshake(init.options.extraDirs, init.options.libraryRoot);
     this.writableDirs = this.reviewMode ? [] : [...(init.options.writableDirs ?? [])];
     this.libraryRoot = this.reviewMode ? undefined : init.options.libraryRoot;
     this.initialDirectoryBriefingPending = !this.reviewMode && init.resumeOutcome === 'new';
@@ -1116,13 +1141,15 @@ export class AcpSession {
   async setExtraDirs(dirs: string[], libraryRoot?: string | null): Promise<void> {
     if (this.reviewMode) return;
     const normalized = [...new Set(dirs.map((dir) => dir.trim()).filter(Boolean))];
-    const unchanged = normalized.length === this.extraDirs.length
-      && normalized.every((dir, index) => dir === this.extraDirs[index]);
-    // ACP carries `additionalDirectories` only on session/new, session/resume, and session/load.
-    // Refuse live directory changes when an engine relies on native `additionalDirectories` but
-    // cannot resume its session on reload.
+    const nextLibraryRoot = libraryRoot !== undefined ? libraryRoot : this.libraryRoot;
+    const nextAdditionalDirs = userExtraDirsForHandshake(dirs, nextLibraryRoot);
+    const additionalDirsUnchanged = nextAdditionalDirs.length === this.boundAdditionalDirs.length
+      && nextAdditionalDirs.every((dir, index) => dir === this.boundAdditionalDirs[index]);
+    // ACP carries user `additionalDirectories` only on session/new, session/resume, and session/load.
+    // Refuse live user directory changes when an engine relies on native `additionalDirectories`
+    // but cannot resume its session on reload; library-slot-only updates stay in-process.
     if (this.initializeResult.agentCapabilities.sessionCapabilities.additionalDirectories
-      && !unchanged
+      && !additionalDirsUnchanged
       && !this.canResumeAfterClose()) {
       throw new NotSupportedError('extraDirs', {
         supported: false,
@@ -1130,8 +1157,12 @@ export class AcpSession {
         message: 'Cannot update additional directories on a live plugin engine session that does not support resume or load.',
       });
     }
+    const unchanged = normalized.length === this.extraDirs.length
+      && normalized.every((dir, index) => dir === this.extraDirs[index])
+      && nextLibraryRoot === this.libraryRoot;
+    if (unchanged) return;
     this.extraDirs = normalized;
-    if (libraryRoot !== undefined) this.libraryRoot = libraryRoot;
+    this.libraryRoot = nextLibraryRoot;
     this.directoryGeneration += 1;
     if (!this.initialDirectoryBriefingPending) this.directoryGrantsDirty = true;
   }

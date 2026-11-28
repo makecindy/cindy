@@ -144,7 +144,13 @@
       "exceptionImage": "메시지에 이미지가 있어 이미지를 볼 수 있는 소스 중에서 선택",
       "exceptionImageFallback": "메시지에 이미지가 있지만 이미지를 볼 수 있는 소스가 없어 평소대로 선택",
       "exceptionHours": "이 시간대에는 '{{name}}' 사용",
-      "separator": "; "
+      "separator": "; ",
+      "usageHabit": "평소 사용 패턴에 따라 우선 선택",
+      "usageHabitQuota": "평소 사용 패턴에 따라 우선 선택(할당량 {{left}}% 남음)",
+      "autoBalance": "다른 소스의 여유가 부족하거나 사용 중이어서 분산 선택",
+      "autoBalanceQuota": "여유 할당량과 부하를 고려해 우선 선택({{left}}% 남음)",
+      "lessBusy": "다른 소스가 작업 실행 중이어서 여유 있는 이 소스를 먼저 사용",
+      "paygFallback": "구독 및 공유 소스를 사용할 수 없어 종량제 소스로 대체"
     },
     "picker": {
       "switched": "'{{name}}'에서 이 작업을 {{model}}(으)로 바꿨습니다",

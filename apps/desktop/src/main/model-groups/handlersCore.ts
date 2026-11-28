@@ -81,8 +81,12 @@ export function createModelGroupHandlers(ports: ModelGroupHandlersPorts) {
       const includeSourceRoutes = opts?.includeSourceRoutes === true;
       const getOptions: ModelGroupGetOptions = includeSourceRoutes ? { includeSourceRoutes: true } : {};
       // 远端旧控制端不要求 sourceRoutes，无需白等 2 秒远程目录读取；新控制端显式请求 includeSourceRoutes 时补齐。
-      await ports.runtime().refreshAutoModelGroupRoutes({ waitRemote: !remoteCaller || includeSourceRoutes });
-      return remoteCaller ? modelGroupsConfigForRemote(readModelGroupsConfig(), getOptions) : readModelGroupsConfig();
+      const runtime = ports.runtime();
+      await runtime.refreshAutoModelGroupRoutes({ waitRemote: !remoteCaller || includeSourceRoutes });
+      if (remoteCaller) return modelGroupsConfigForRemote(readModelGroupsConfig(), getOptions);
+      const autoModelPriorities = await runtime.autoModelPriorities();
+      const localConfig = readModelGroupsConfig();
+      return autoModelPriorities ? { ...localConfig, autoModelPriorities } : localConfig;
     },
 
     set(raw: unknown, assertLocal?: () => void) {

@@ -26,6 +26,7 @@ vi.mock('@/session/mobileDurableOutbox', () => ({
 }));
 import { getMobileAuthOwner, setMobileAuthOwner } from '@/auth/authOwnerGeneration';
 import { setMobileDebugSink } from '@/debug/mobileDebugLog';
+import { i18n } from '@/i18n';
 import { returnNewSessionToEdit } from '@/session/returnNewSessionToEdit';
 const recoveryAsyncStorage = vi.hoisted(() => ({
   getItem: vi.fn(async (key: string) => recoveryStorage.get(key) ?? null),
@@ -970,6 +971,30 @@ describe('newSessionCreation pipeline', () => {
       }),
       expect.anything(),
     );
+  });
+
+  // 测试价值:2026-11-29 手机新建 worktree 任务时，电脑明确拒绝(插件正在停用或更新),
+  // 失败页却提示「请重新连接设备后再试」——重连解决不了。失败后会自动带回新建页，
+  // 走真实管线的托管 worktree 分支:明确拒绝提示内容已带回、可重新发送，断连类不确定失败保留重连提示。
+  it.each([
+    ['The plugin is stopping or updating; try again after it is enabled', 'session.new.createRejectedResend'],
+    ['[NOT_CONNECTED] offline', 'session.new.worktreeCleanupPending'],
+  ] as const)('points a managed-worktree create failure at the step that helps (%s)', async (message, hintKey) => {
+    const maker = makeMaker({ createSession: vi.fn(async () => { throw new Error(message); }) });
+    startNewSessionCreation(makeParams('s23', maker, {
+      draft: { ...DRAFT, workingDir: '/repo/.cindy-worktrees/auto-three' },
+      precreatedWorktree: {
+        path: '/repo/.cindy-worktrees/auto-three',
+        recoveryKey: 'recovery-key-3333333333',
+        originalWorkingDir: '/repo',
+      },
+      precreatedWorktreeAccountId: 'owner-a',
+    }));
+    await flushPipeline();
+    const task = getNewSessionCreationTask('s23');
+    expect(task?.status).toBe('create-failed');
+    expect(task?.error).toContain(i18n.t(hintKey));
+    expect(maker.createSession).toHaveBeenCalledOnce();
   });
 
   it('started 写盘后二次鉴权中止:账本降回 precreated,任务可返回编辑(codex P2)', async () => {

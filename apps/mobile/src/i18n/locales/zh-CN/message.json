@@ -286,6 +286,7 @@
     "pendingDelivery": "待送达",
     "pendingDeliveryHint": "消息已保存在手机上，正在等待电脑确认。",
     "waitingForComputer": "等电脑连上后发送",
+    "waitingForPrevious": "等待前一条消息",
     "waitingForNetwork": "等网络恢复后发送",
     "queued": "排队中",
     "retryImage": "重新上传这张图片",

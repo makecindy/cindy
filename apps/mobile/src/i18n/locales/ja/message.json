@@ -286,6 +286,7 @@
     "pendingDelivery": "配信待ち",
     "pendingDeliveryHint": "この端末に保存しました。パソコンからの確認を待っています。",
     "waitingForComputer": "パソコンにつながったら送信",
+    "waitingForPrevious": "前のメッセージを待機中",
     "waitingForNetwork": "ネットワークが戻ったら送信",
     "queued": "順番待ち",
     "retryImage": "この画像を再アップロード",

@@ -37,8 +37,11 @@ const DESCRIPTION =
   'returned worktree_path. If the task already has a worktree, that one is returned with created=false. ' +
   'Pass repo_dir when the task working directory is not itself the repository. Pass base_ref to branch ' +
   'from a specific branch or remote ref (e.g. "release/2.x" or "origin/release/2.x") instead of the ' +
-  'remote default branch; it is resolved against the repository as it currently exists locally, and a ' +
-  'ref that does not resolve fails instead of falling back to the default branch. Local tasks only.';
+  'remote default branch. A remote branch ("origin/...") is fetched first, so commits just pushed from ' +
+  'another computer are included (when that fetch fails the local copy is used and base_fetched=false ' +
+  'is returned with a warning); a local branch or commit is used as it currently exists locally. A ref ' +
+  'that does not resolve fails instead of falling back to the default branch. send_to_session accepts ' +
+  'the same base_ref for a new task\'s worktree. Local tasks only.';
 
 export function registerCreateTaskWorktreeTool(
   registry: XdtHelperToolRegistry,
@@ -67,6 +70,7 @@ export function registerCreateTaskWorktreeTool(
         .optional()
         .describe(
           'Branch or remote ref to branch the worktree from, e.g. "release/2.x" or "origin/release/2.x". ' +
+            'A remote branch is fetched first; a local branch or commit is used as it exists locally. ' +
             'Defaults to the freshly fetched remote default branch. A ref that does not resolve fails ' +
             'instead of falling back to the default branch.',
         ),
@@ -96,9 +100,10 @@ export function registerCreateTaskWorktreeTool(
           ? {
               base_fetched: false,
               warning:
-                `Could not refresh the remote default branch (${result.staleBaseReason}). This worktree ` +
+                `Could not refresh ${base_ref ? 'base_ref' : 'the remote default branch'} from its remote ` +
+                `(${result.staleBaseReason}). This worktree ` +
                 `starts from ${result.sourceBranch} as it exists locally and may be behind the remote. ` +
-                'Tell the user, and fetch and merge the remote default branch once the network is available.',
+                `Tell the user, and fetch and merge the remote ${base_ref ? '' : 'default '}branch once the network is available.`,
             }
           : {}),
       });

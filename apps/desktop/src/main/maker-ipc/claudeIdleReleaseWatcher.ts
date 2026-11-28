@@ -8,8 +8,17 @@ export type IdleClaudeSession = Pick<Session, 'id' | 'agentKind' | 'remoteHostId
   & Partial<Pick<Session, 'hasLiveBackgroundWork' | 'canResumeAfterClose'>>;
 /** Codex mirrors the Pi and Claude 30-minute default; no separate setting. */
 export const DEFAULT_CODEX_IDLE_RELEASE_MINUTES = 30;
-/** Plugin engines (ACP) follow the same 30-minute default; no separate setting. */
-export const DEFAULT_PLUGIN_ENGINE_IDLE_RELEASE_MINUTES = 30;
+/**
+ * Plugin engines (ACP) keep a longer idle window (90 minutes) because closing and
+ * resuming an engine process frequently busts provider-side prompt caches that
+ * remain warm across 30–60 minute pauses while the live process stays attached.
+ */
+export const DEFAULT_PLUGIN_ENGINE_IDLE_RELEASE_MINUTES = 90;
+/**
+ * Upper bound on recurring schedule intervals (1 hour) that keep a bound plugin
+ * engine task warm between ticks instead of releasing and cold-resuming each cycle.
+ */
+export const PLUGIN_ENGINE_KEEP_WARM_SCHEDULE_MAX_INTERVAL_MS = 60 * 60_000;
 /** Engines whose ordinary local tasks share this reclamation policy. */
 export type IdleReleaseAgentKind = 'claude-code' | 'codex' | 'acp';
 export interface ClaudeIdleReleaseDeps {
@@ -61,8 +70,24 @@ export const ORDINARY_CLAUDE_TASK_SQL = ordinaryTaskSql('cc');
  * thread lazily. Bot lanes stay out: their lifecycle belongs to the bot runner.
  */
 export const ORDINARY_CODEX_TASK_SQL = ordinaryTaskSql('codex', true);
-/** Same scope for plugin engine tasks; their Orca workers keep their lifecycle like any engine's. */
-export const ORDINARY_PLUGIN_ENGINE_TASK_SQL = ordinaryTaskSql('acp');
+/**
+ * Plugin engine tasks keep the same ownership exclusions as built-in engines, and
+ * also stay warm while bound to an active automatic schedule that fires frequently
+ * (interval <= 60 min) or reacts to PR/webhook events (e.g., PR auto-follow), so
+ * idle reclamation does not recycle the process and wipe prompt cache mid-followup.
+ */
+export const ORDINARY_PLUGIN_ENGINE_TASK_SQL = `${ordinaryTaskSql('acp')}
+AND NOT EXISTS (
+  SELECT 1 FROM schedules sc
+  WHERE sc.target_session_id = s.id
+    AND sc.status = 'active'
+    AND sc.manual = 0
+    AND (
+      sc.pr_trigger IS NOT NULL
+      OR sc.webhook_trigger IS NOT NULL
+      OR (sc.interval_ms IS NOT NULL AND sc.interval_ms <= ${PLUGIN_ENGINE_KEEP_WARM_SCHEDULE_MAX_INTERVAL_MS})
+    )
+)`;
 
 /** Whether a task is in the ordinary scope, by the given SQL against the database the caller reads now. */
 export function createOrdinaryIdleReleaseTaskCheck(

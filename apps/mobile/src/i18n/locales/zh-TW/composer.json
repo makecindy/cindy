@@ -103,6 +103,7 @@
     "missingRefinerTargetProvider": "語音潤色暫時無法使用，請重新登入 {{appName}} 後重試。",
     "emptyTranscript": "語音辨識未回傳文字，請重新錄音。",
     "speakerFiltered": "已忽略其他人的聲音",
+    "undoRefinement": "還原原文",
     "connectionInterrupted": "語音連線中斷了，請檢查網路後重試。",
     "recognitionStalled": "語音辨識沒有繼續回傳結果，請重試。",
     "transcriptKept": "{{message}}（辨識出的文字已經保留，可以直接編輯）",

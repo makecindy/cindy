@@ -3154,7 +3154,8 @@
           "gatewayKey": "需要 AI 网关支持所选实时 ASR 路由",
           "codexLogin": "使用 Codex 登录",
           "elevenlabsKey": "使用 ElevenLabs Key（环境变量）",
-          "codexRealtimeUnsupported": "不可用：Codex 登录不是 OpenAI API Realtime 凭证"
+          "codexRealtimeUnsupported": "不可用：Codex 登录不是 OpenAI API Realtime 凭证",
+          "localOffline": "本机离线运行（无需账号或 API Key）"
         },
         "credentialError": {
           "gatewayMissing": "未找到可用的 AI 网关 Key，当前模型无法使用。",
@@ -3162,10 +3163,24 @@
           "elevenlabsMissing": "未配置 ElevenLabs Key（环境变量），当前模型无法使用。",
           "customAsrConfigMissing": "请先完整填写并保存实时 ASR 服务配置，再开始语音输入。",
           "customAsrKeyMissing": "请为自定义实时 ASR 服务填写并保存 API Key。",
-          "codexRealtimeUnsupported": "Codex 登录不能用于实时语音识别，请选择受支持的 ASR 服务。"
+          "codexRealtimeUnsupported": "Codex 登录不能用于实时语音识别，请选择受支持的 ASR 服务。",
+          "localAsrModelMissing": "请先选择本地 sherpa-onnx 语音识别模型目录，再开始离线语音输入。",
+          "localAsrUnsupported": "当前电脑平台暂不支持本地离线语音识别。"
         },
         "manageProviders": "前往模型供应商",
-        "reset": "恢复默认"
+        "reset": "恢复默认",
+        "localAsr": {
+          "optionLabel": "本地离线识别（sherpa-onnx）",
+          "optionDescription": "本机 ONNX 离线转写，无需云账号与 API Key",
+          "notice": "请选择本地 sherpa-onnx 离线模型目录（支持 SenseVoice、Paraformer、Whisper 或 Transducer，需包含 tokens.txt 与 .onnx 权重）。音频全程留在本机。",
+          "modelDirLabel": "本地模型目录",
+          "readyStatus": "已就绪 · {{kind}}（{{folder}}）",
+          "unsupportedStatus": "当前平台暂不支持",
+          "notConfiguredStatus": "尚未选择模型目录",
+          "clearFolder": "清除",
+          "chooseFolder": "选择模型目录",
+          "invalidFolder": "所选目录未找到受支持的 sherpa-onnx 模型文件（需包含 tokens.txt 与 .onnx）。"
+        }
       },
       "historyToggle": {
         "show": "展开近期历史",
@@ -3313,7 +3328,9 @@
           "filters": {
             "all": "全部",
             "automatic": "自动添加",
-            "manual": "手动添加"
+            "manual": "手动添加",
+            "candidates": "候选词",
+            "suppressed": "已抑制"
           },
           "sources": {
             "automatic": "自动",
@@ -3326,6 +3343,28 @@
             "automaticAddedMultiple": "已自动加入词典：{{term}} 等 {{count}} 个词",
             "delete": "删除",
             "deleteAriaLabel": "删除自动加入的词：{{term}}"
+          },
+          "export": {
+            "csv": "导出 CSV",
+            "json": "导出 JSON",
+            "successCsv": "已导出 CSV 词典文件",
+            "successJson": "已导出 JSON 词典文件"
+          },
+          "candidates": {
+            "hint": "自动学习从你的手动修正中观察到的候选词，尚未达到自动转正阈值。可一键加入词典或删除。",
+            "evidenceCount": "已观察 {{count}} 次",
+            "promote": "转正加入",
+            "promoteTooltip": "一键将该候选词加入个人词典",
+            "promotedToast": "已将「{{term}}」加入词典",
+            "empty": "暂无自动学习候选词。"
+          },
+          "suppressed": {
+            "hint": "你曾删除的自动学习词会被抑制，避免再次自动加入。可恢复自动学习资格，或直接重新加入词典。",
+            "restore": "恢复自动学习",
+            "addToDictionary": "重新加入词典",
+            "restoredToast": "已恢复「{{term}}」的自动学习资格",
+            "addedToast": "已将「{{term}}」重新加入词典",
+            "empty": "暂无已抑制词条。"
           }
         }
       },
@@ -3370,7 +3409,15 @@
         "toast": {
           "copied": "已复制",
           "copyFailed": "复制失败"
-        }
+        },
+        "searchAriaLabel": "搜索语音历史记录",
+        "searchPlaceholder": "搜索转写或原始识别内容…",
+        "showRawComparison": "对比原始识别",
+        "hideRawComparison": "收起对比",
+        "rawLabel": "原始识别",
+        "refinedLabel": "润色后",
+        "loadMore": "加载更多（剩余 {{count}} 条）",
+        "noSearchResults": "没有匹配的语音历史记录。"
       },
       "speakerFilter": {
         "label": "识别我的声音",
@@ -10999,12 +11046,14 @@
       "fileCount_other": "{{count}} 个文件",
       "emptyTitle": "暂无改动",
       "emptyDesc": "本任务还没有任何文件改动。让 Agent 编辑或创建文件后，会在这里出现。",
+      "emptyDescSvn": "版本控制下的文件与 SVN 基准版本一致。",
+      "svnSelectFile": "选择文件查看差异。",
       "emptyDescGit": "当前 git worktree 没有 staged 或 unstaged 改动。",
       "filterEmptyTitle": "当前筛选下暂无改动",
-      "filterEmptyDesc": "当前筛选或设置下没有可显示的 git 改动。",
+      "filterEmptyDesc": "当前筛选或设置下没有可显示的改动。",
       "noSessionTitle": "暂无任务",
       "noSessionDesc": "选择一个本机任务后可查看 git worktree 改动。",
-      "loadingTitle": "正在读取 git 改动",
+      "loadingTitle": "正在读取改动",
       "loadingDesc": "面板会保留上一次内容，读取完成后刷新。",
       "errorTitle": "读取失败",
       "refresh": "刷新",
@@ -11278,6 +11327,10 @@
         "non-git": {
           "title": "不是 git 仓库",
           "desc": "当前工作目录下没有可用的 git 仓库。"
+        },
+        "svn-unavailable": {
+          "title": "找不到 SVN",
+          "desc": "安装 Subversion 命令行客户端后即可查看工作副本的差异。"
         },
         "git-unavailable": {
           "title": "git 不可用",
@@ -15250,6 +15303,24 @@
       "removeFromList": "从列表中移除",
       "missingDir": "目录不存在"
     },
+    "remoteOutbox": {
+      "notSent": "未发送",
+      "retry": "重试",
+      "delete": "删除",
+      "deliveryUnconfirmed": "发送结果未确认",
+      "recheckDelivery": "重新确认",
+      "waitingForPrevious": "等待前一条消息",
+      "taskInactive": "这个任务当前无法接收消息。",
+      "inputNotSupported": "这台电脑暂不支持向这个任务发送这类消息。",
+      "taskClearedBeforeSend": "任务已清空或正在清空，消息仍保存在本机。",
+      "invalidInput": "这条消息有无效内容，电脑未接收。",
+      "profileInUseByDesktop": "这份数据正被单独运行的 Cindy 电脑端使用。请先退出它，再发送。",
+      "other": "这个操作没有完成。请稍后重试。",
+      "deleteConfirmTitle": "删除这条消息？",
+      "deleteConfirmBody": "这条消息没有发送成功，删除后无法恢复。",
+      "deleteUnconfirmedBody": "电脑可能已经收到这条消息。删除只会移除本机的待发消息。如果电脑已收到，这条消息仍会出现在对话记录里。",
+      "cancel": "取消"
+    },
     "pendingQueue": {
       "waitingForDevice": "尚未发送，等另一台电脑恢复连接后发送",
       "stopping": "停止处理中",
@@ -15369,7 +15440,11 @@
           "description": "请开启麦克风权限，再点击语音输入",
           "confirm": "去授权",
           "cancel": "取消"
-        }
+        },
+        "rewriteSelected": "语音改写",
+        "rewriteSelectedTooltip": "口述指令改写选中文字（如翻译、精简、换语气；失败时保留原文）",
+        "rewriteSelectedAria": "语音改写选中文字",
+        "rewriteFailed": "语音改写未完成，已保留选中的原文。"
       },
       "remoteSwitchFailed": "远程设置切换失败，未生效",
       "switchFailed": "设置切换失败，未生效",
@@ -20857,6 +20932,8 @@
     },
     "errors": {
       "piStartupCloudFile": "发现仅在云端的指令文件：{{path}}。它可能使 Pi 启动等待。请在访达中下载该文件，确认已保存在本机后重试；超时也可能另有原因。",
+      "remoteEngineMissing": "远程电脑没有可用的引擎。请在那台电脑上安装引擎并重启 Cindy 后重试。",
+      "remoteCapabilityUnavailable": "当前服务器或电脑暂不支持此操作。",
       "hostProfileInUseByDesktop": "这份数据正被单独运行的 Cindy 电脑端使用。请先退出它，再发送。",
       "hostProfileInUseByDesktopAtStart": "这份数据正被单独运行的 Cindy 电脑端使用，Cindy 后台服务没有启动。请先退出它，重新启动 Cindy 后台服务，然后重新打开当前这个 Cindy 窗口。",
       "hostProfileInUseByDesktopRetry": "这份数据正被单独运行的 Cindy 电脑端使用，暂时不能修改。请先退出它，再试一次。",
@@ -23559,10 +23636,10 @@
   },
   "openAiAccountGroup": {
     "removeDescription": "此连接将不再接收组内的新任务。正在运行的任务仍留在原连接。",
-    "mergeDescription": "从 {{target}} 新建的任务可以使用这两个供应商。登录、密钥和已有任务保留在原处。建立调度关系前，Cindy 会测试 {{apiKey}} 的 API Key。",
+    "mergeDescription": "从 {{target}} 新建的任务将在可用成员间分配。登录、密钥和已有任务保留在原处。Cindy 会测试 {{apiKey}} 的 API Key；如果只是余额不足或达到计费上限，仍可并入，但在恢复可用前不会自动分配任务给它。",
     "modelUnavailable": "此连接无法调用本次自动选中的模型。再次测试可尝试其他候选。",
     "noTestModel": "当前连接没有可用于测试的模型。请确认 OpenAI 项目可调用哪些模型，再刷新或更新此连接的模型列表。",
-    "billingPaused": "余额不足或达到计费上限，已暂停组内分配。",
+    "billingPaused": "余额不足或达到计费上限，已暂停自动分配。",
     "title": "账号组",
     "testPassed": "测试成功",
     "refresh": "刷新配额"
@@ -23802,7 +23879,15 @@
       "exceptionImage": "消息里有图片，只在能看图的来源里选",
       "exceptionImageFallback": "消息里有图片，但没有能看图的来源，照常选",
       "exceptionHours": "这个时段改走「{{name}}」",
-      "separator": "；"
+      "separator": "；",
+      "usageHabit": "根据你平时的用量优先选它",
+      "usageHabitQuota": "根据你平时的用量优先选它（还剩 {{left}}% 配额）",
+      "autoBalance": "其他来源配额偏紧或已有任务，优先用它分担",
+      "autoBalanceQuota": "综合余量与负载优先选它（还剩 {{left}}% 配额）",
+      "lessBusy": "其他来源正在运行任务，先用空闲的它",
+      "paygFallback": "订阅与共享暂不可用，改用按量付费来源兜底",
+      "paygReserve": "按量付费来源，其余来源不可用时再兜底",
+      "standbyQuotaNeutral": "还剩 {{left}}% 配额，{{reset}} 重置，这次没轮到"
     },
     "settings": {
       "autoSwitch": {

@@ -6,6 +6,7 @@ import path from 'node:path';
 import test from 'node:test';
 import ts from 'typescript';
 import { spawn } from 'node:child_process';
+import { PassThrough } from 'node:stream';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createMediaTransfer, AttachmentIntegrityError } from '../../desktop/src/main/device-link/mediaTransfer.js';
 import { createDeviceLinkApi } from '../../desktop/src/main/device-link/deviceLinkApi.js';
@@ -342,7 +343,7 @@ test('25b: serve refuses to publish the projection owner and writes no state', a
   assert.equal(fs.existsSync(boundary.__testing.quarantinePath()), false);
 });
 
-async function fakeLoginAuth({ region = 'global', discoveryStatus = 404 } = {}) {
+async function fakeLoginAuth({ region = 'global', discoveryStatus = 404, social = ['google'] } = {}) {
   const { createServer } = await import('node:http');
   const hits = [];
   let member = 'member-a';
@@ -351,7 +352,7 @@ async function fakeLoginAuth({ region = 'global', discoveryStatus = 404 } = {}) 
     hits.push(request.url);
     const json = (value) => response.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify(value));
     const membership = { id: member, kind, role: 'owner', displayName: 'Fixture', email: null, orgId: null, orgName: null };
-    if (request.url === '/api/auth/providers') return json({ region, attribution: 'email', email: true, phone: false, social: ['google'] });
+    if (request.url === '/api/auth/providers') return json({ region, attribution: 'email', email: true, phone: false, social });
     if (request.url === '/api/auth/sso/discovery') {
       if (discoveryStatus === 404) {
         return response.writeHead(404, { 'content-type': 'application/json' })
@@ -393,13 +394,72 @@ async function loginEnvironment(t, root, profile, port) {
   const { runLoginCommand } = await import('./login-cli.mjs');
   const { CindyAuthClient } = await import('@cindy/auth-client');
   const diagnostics = [];
-  const login = (deps = {}, stdout = () => {}, argv = []) => runLoginCommand(['--no-open', ...argv], { stdout, stderr: line => diagnostics.push(line), deps: {
+  const login = (deps = {}, stdout = () => {}, argv = [], terminal = {}) => runLoginCommand(['--no-open', ...argv], { stdout, stderr: line => diagnostics.push(line), ...terminal, deps: {
     store, readStatus: async () => ({ running: false }), scanDesktops: async () => [],
     // The manifest must be https (endpoints.mjs); the fake server listens on plain loopback HTTP.
     createAuthClient: (options) => new CindyAuthClient({ ...options, fetch: (input, init) => fetch(String(input).replace(/^https:/, 'http:'), init) }),
     ...deps } });
   return { login, records, diagnostics };
 }
+
+/*
+ * Cloud status gap 9 / CLI entry: runLoginCommand with a loopback CindyAuthClient,
+ * isolated profile and simulated TTY streams. A personal realm advertising two
+ * methods must accept an interactive choice, while a pipe must fail before any
+ * authorize or credential write and tell scripts which --method to pass.
+ * Tier: unit with loopback HTTP, in-memory credentials and no real browser.
+ */
+test('personal CLI login chooses in a TTY and gives a method code outside one', async (t) => {
+  const { root, profile } = await skillBoundaryProfile(t);
+  const auth = await fakeLoginAuth({ social: ['apple', 'google'] });
+  t.after(auth.close);
+  const { login, records } = await loginEnvironment(t, root, profile, auth.port);
+  const { reportLoginCommandFailure } = await import('./login-cli.mjs');
+
+  const lines = [];
+  const pipedInput = new PassThrough();
+  const pipedOutput = new PassThrough();
+  pipedInput.isTTY = false;
+  pipedOutput.isTTY = false;
+  const refusal = await login({}, line => lines.push(line), [], {
+    stdin: pipedInput, stdoutStream: pipedOutput,
+  }).then(() => null, error => error);
+  assert.equal(refusal?.code, 'LOGIN_METHOD_REQUIRED');
+  assert.equal(refusal?.exitCode, 2);
+  assert.match(lines.join('\n'), /Continue with Apple.*--method=apple/);
+  assert.match(lines.join('\n'), /Continue with Google.*--method=google/);
+  assert.match(lines.join('\n'), /Complete verification in your browser/);
+  const failures = [];
+  assert.equal(reportLoginCommandFailure(refusal, line => failures.push(line)), 2);
+  assert.match(failures[0], /\[LOGIN_METHOD_REQUIRED\].*--method=<id>/);
+  assert.deepEqual(auth.hits.splice(0), ['/api/auth/providers']);
+  assert.equal(records.size, 0);
+
+  const ttyInput = new PassThrough();
+  const ttyOutput = new PassThrough();
+  ttyInput.isTTY = true;
+  ttyOutput.isTTY = true;
+  let question = '';
+  let answered = false;
+  ttyOutput.on('data', chunk => {
+    question += chunk.toString();
+    if (!answered && question.includes('Select a method [1-2]:')) {
+      answered = true;
+      ttyInput.write('2\n');
+    }
+  });
+  const chosen = await login({}, line => lines.push(line), [], {
+    stdin: ttyInput, stdoutStream: ttyOutput,
+  });
+  assert.equal(chosen.method, 'google');
+  assert.match(question, /Select a method \[1-2\]:/);
+  assert.ok(records.size > 0, 'only the selected login saves a session');
+
+  const explicit = await login({}, undefined, ['--method=apple'], {
+    stdin: pipedInput, stdoutStream: pipedOutput,
+  });
+  assert.equal(explicit.method, 'apple', 'existing non-interactive --method scripts still work');
+});
 
 /*
  * Test value (engineering-conventions §3.2)

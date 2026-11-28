@@ -25,11 +25,15 @@ import {
 import type { ModelGroupRecovery } from '../../../desktop/src/main/maker-ipc/sessionRuntimeFallback.js';
 import type { RunModelGroupBeforeSendSessionRow } from '../../../desktop/src/main/model-groups/applyTurnRouting.js';
 import {
+  createAutoUsageProfileStore,
+  readLocalAutoUsageSamples,
+} from '../../../desktop/src/main/model-groups/autoUsageProfile.js';
+import {
   createModelGroupHandlers,
   type ModelGroupHandlersPorts,
 } from '../../../desktop/src/main/model-groups/handlersCore.js';
 import type { ModelGroupRouteNotePorts } from '../../../desktop/src/main/model-groups/routeNote.js';
-import { createModelGroupRuntime } from '../../../desktop/src/main/model-groups/runtimeCore.js';
+import { createModelGroupRuntime, type ModelGroupRuntimePorts } from '../../../desktop/src/main/model-groups/runtimeCore.js';
 import {
   bindModelGroupSession,
   peekModelGroupSessionBinding,
@@ -52,6 +56,7 @@ const log = createLogger('host-model-groups');
 export interface HostModelGroupsPorts {
   listProviderViews(): Promise<ProviderView[]>;
   listLocalAgents(): readonly string[];
+  runningSessions: ModelGroupRuntimePorts['runningSessions'];
   readPricing(): Promise<{ gateway: ModelPricingCatalog | null; reference: ModelPricingCatalog | null }>;
   createDbMessage(sessionId: string, body: Record<string, unknown>): Promise<unknown>;
   readPendingSessionTarget?: ModelGroupHandlersPorts['readPendingSessionTarget'];
@@ -137,6 +142,11 @@ export function createHostModelGroups(ports: HostModelGroupsPorts) {
     };
   }
 
+  const autoUsageProfileStore = createAutoUsageProfileStore({
+    scope: () => activeOwnerScopeKey(),
+    readSamples: (sinceMs, nowMs) => readLocalAutoUsageSamples(sinceMs, nowMs),
+  });
+
   const runtime = createModelGroupRuntime({
     scope: () => activeOwnerScopeKey(),
     localViews: () => ports.listProviderViews(),
@@ -147,6 +157,10 @@ export function createHostModelGroups(ports: HostModelGroupsPorts) {
       return ports.listLocalAgents().includes(makerAgent);
     },
     quotaWindows: async () => new Map(),
+    usageProfile: (options) => (options?.dryRun ? autoUsageProfileStore.readForPreview(200) : autoUsageProfileStore.peek()),
+    runningSessions: () => ports.runningSessions(),
+    onCommitPick: (candidate) => autoUsageProfileStore.recordPick(candidate),
+    onDispose: () => autoUsageProfileStore.dispose(),
     pricing: () => ports.readPricing(),
     readSession: readSwitchOfferSessionRow,
     isShared: () => false,

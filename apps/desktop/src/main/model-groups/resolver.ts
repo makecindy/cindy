@@ -29,9 +29,11 @@ import {
   pluginEngineKeyFromProviderId,
   type PluginEngineView,
 } from '../../shared/pluginEngines.js';
+import { isProviderShareAgentDeviceId } from '../../shared/providerShare.js';
 import { GHOST_REMOTE_AGENT_MODELS } from '../cindy-brain/ghostAgentModels.js';
 import { isGhostCardModelRouteAvailable, isPluginModelPickerRouteAvailable } from '../cindy-brain/ghostModelPicker.js';
 import { applyRouteWeightStep, type RouteWeightStep } from '../provider-group/scheduler.js';
+import { autoUsageSourceKey, type AutoUsageProfileSnapshot } from './autoUsageProfile.js';
 import {
   pickModelGroupCandidate,
   type ModelGroupCandidateFacts,
@@ -39,6 +41,13 @@ import {
   type ModelGroupInnerQuota,
 } from './pick.js';
 import { modelGroupRouteFor } from './routeFor.js';
+
+export interface ModelGroupLocalAccountFact {
+  available: boolean;
+  label: string;
+  running?: number;
+  payAsYouGo?: boolean;
+}
 
 export interface ModelGroupResolverDeps {
   billingUnavailable?(providerId: string): boolean;
@@ -65,12 +74,23 @@ export interface ModelGroupResolverDeps {
    * 各订阅来源当前的额度窗口，键是 modelGroupQuotaKey：本机的按供应商连接 ID，别的电脑上的再加那台的设备 id。
    * 本机连接的额度不会拿去给别的电脑上同 ID 的连接用。
    */
-  quotaWindows(options?: { cached?: boolean }): Promise<ReadonlyMap<string, readonly (ModelGroupTraceQuota & { scopedTo?: string | null })[]>>;
+  quotaWindows(options?: { cached?: boolean; dryRun?: boolean }): Promise<ReadonlyMap<string, readonly (ModelGroupTraceQuota & { scopedTo?: string | null })[]>>;
+  /**
+   * 本机近 14 天用量画像（纯内存读，绝不上传）：
+   * 正式选路时同步 0ms 返回；仅 dryRun（「试一下」）冷启动时允许短等预热。
+   */
+  usageProfile?(options?: { dryRun?: boolean }): AutoUsageProfileSnapshot | null | Promise<AutoUsageProfileSnapshot | null>;
+  /** 一次选路取一次内存快照，按 autoUsageSourceKey 查各来源正在运行的任务数。 */
+  runningSourceCounts?(): ReadonlyMap<string, number>;
+  /** 本次选路正式采用后的回调（用于增量更新内存用量画像）。 */
+  onCommitPick?(candidate: { providerId: string; agentDeviceId?: string | null; model: string }): void;
   /**
    * 本机多账号订阅池里单个账号此刻的事实（由拆平后的扁平候选使用）：
    * 是否可用（已登录、未暂停、支持此模型）以及给用户看的账号显示名。
    */
-  localAccount?(providerId: string, accountId: string, model: string): { available: boolean; label: string } | null;
+  localAccount?(providerId: string, accountId: string, model: string, agent: AgentKind): ModelGroupLocalAccountFact | null;
+  /** Unqualified local sources use their own connection's current health. */
+  localCandidateAvailable?(view: ProviderView, agent: AgentKind): boolean;
   /**
    * 本机来源背后是电脑组或几个账号时，内层按它自己的选法下一个会接任务的那一个的额度事实(pick.ts 的
    * ModelGroupInnerQuota)；仅用于未拆平的按模型手工路由。拆平后的账号候选与供应商路由不再走内层。
@@ -222,6 +242,7 @@ export function createModelGroupResolver(deps: ModelGroupResolverDeps) {
     deps.recordDecision?.(item.selection, item.result);
     if (item.result.outcome === 'routed' && item.routeId) {
       lastPicked.set(`${item.scope}\u0000${item.routeId}`, modelGroupCandidateKey(item.result.route));
+      deps.onCommitPick?.(item.result.route);
       const key = `${item.scope}\u0000${item.routeId}`;
       // 选路之后改了来源或权重：这一步是按旧比例算的，不记，按新配置从头开始。
       const routeNow = item.weightStep && deps.config().routes.find((route) => route.id === item.routeId);
@@ -277,6 +298,7 @@ export function createModelGroupResolver(deps: ModelGroupResolverDeps) {
     cachedQuota = false,
     remoteInvocableOnly = false,
     sshHostId?: string,
+    dryRun = false,
     continuingSourceKey?: string,
   ): Promise<ModelGroupCandidateFacts[]> {
     const agents = deps.agents();
@@ -293,8 +315,10 @@ export function createModelGroupResolver(deps: ModelGroupResolverDeps) {
     const sshCodexPromise = hasSshCodex
       ? within(Promise.resolve().then(() => deps.sshCodexViews!(sshHostId!)), deps.remoteWaitMs ?? MODEL_GROUP_REMOTE_WAIT_MS).catch(() => null)
       : Promise.resolve(null);
-    // cachedQuota(只为显示)：用手头的读数，不等一份新的。
-    const quota = await deps.quotaWindows(cachedQuota ? { cached: true } : undefined).catch(() => new Map<string, never[]>());
+    // cachedQuota(只为显示)：用手头的读数，不等一份新的；dryRun(「试一下」)允许取新快照。
+    const quota = await deps.quotaWindows(
+      cachedQuota || dryRun ? { ...(cachedQuota ? { cached: true } : {}), ...(dryRun ? { dryRun: true } : {}) } : undefined,
+    ).catch(() => new Map<string, never[]>());
     const pricing = route.strategy === 'cheapest' && deps.pricing ? await deps.pricing().catch(() => null) : null;
     const sshCodex = await sshCodexPromise;
     const installed = new Map<string, boolean>();
@@ -316,8 +340,11 @@ export function createModelGroupResolver(deps: ModelGroupResolverDeps) {
         !candidate.off && !candidate.agentDeviceId && candidate.agentKind !== 'acp').map(candidate => candidate.providerId));
       for (const id of localProviders) if (deps.billingUnavailable(id)) heldProviders.add(id);
     }
+    // SSH 目录里的连接不代表本机同 ID 的来源，不能用本机任务给它算负载。
+    const runningSourceCounts = route.strategy === 'expiring' && !sshHostId ? deps.runningSourceCounts?.() : undefined;
     return Promise.all(route.candidates.map(async (candidate) => {
       const { agentDeviceId } = candidate;
+      const running = runningSourceCounts?.get(autoUsageSourceKey(agentDeviceId, candidate.providerId)) ?? 0;
       if (candidate.agentKind === 'acp') {
         const key = pluginEngineKeyFromProviderId(candidate.providerId);
         const remoteEngines = agentDeviceId ? (await remote?.pluginEngines.get(agentDeviceId)) ?? null : null;
@@ -356,6 +383,7 @@ export function createModelGroupResolver(deps: ModelGroupResolverDeps) {
           sourceName,
           windows: windows && windows.length > 0 ? windows : null,
           ...(route.strategy === 'cheapest' ? { price: null } : {}),
+          ...(running > 0 ? { running } : {}),
           acceptsImage,
         };
       }
@@ -377,7 +405,7 @@ export function createModelGroupResolver(deps: ModelGroupResolverDeps) {
       const model = view?.models[agent]?.find((item) => item.id === candidate.model);
       const modelName = model?.name ?? candidate.model;
       const accountFact = !agentDeviceId && candidate.accountId && deps.localAccount
-        ? deps.localAccount(candidate.providerId, candidate.accountId, candidate.model)
+        ? deps.localAccount(candidate.providerId, candidate.accountId, candidate.model, agent)
         : null;
       const windows = quota.get(modelGroupQuotaKey(agentDeviceId, candidate.providerId, candidate.accountId))
         // 只对某个模型生效的窗口，只在候选就是那个模型时参与。
@@ -391,7 +419,9 @@ export function createModelGroupResolver(deps: ModelGroupResolverDeps) {
       const sshAllowed = !sshHostId
         ? true
         : !agentDeviceId && (!deps.sshFilter || await Promise.resolve(deps.sshFilter(sshHostId, candidate, view)).catch(() => false));
-      const baseAvailable = sshAllowed && (!!agentDeviceId || !heldProviders.has(candidate.providerId)) && (agentDeviceId
+      const baseAvailable = sshAllowed
+        && (!view || !!agentDeviceId || useSshCodex || !!candidate.accountId || deps.localCandidateAvailable?.(view, agent) !== false)
+        && (!!agentDeviceId || !heldProviders.has(candidate.providerId)) && (agentDeviceId
         // 与插件卡片里的远程模型同一判断：位置此刻能选，模型也在那里允许远程调用的目录里。
         ? !!locations && !!remoteViews && await isGhostCardModelRouteAvailable({ ...exact, agentDeviceId }, {
             localViews: async () => views,
@@ -408,6 +438,11 @@ export function createModelGroupResolver(deps: ModelGroupResolverDeps) {
       const sourceName = accountFact?.label && accountFact.label !== baseSourceName
         ? `${baseSourceName} · ${accountFact.label}`
         : baseSourceName;
+      const isShare = !!agentDeviceId && isProviderShareAgentDeviceId(agentDeviceId);
+      const payAsYouGo = accountFact?.payAsYouGo ?? (!isShare && (view?.access?.kind === 'api' || view?.id === 'xd'));
+      const sourceRunning = candidate.accountId
+        ? (route.strategy === 'expiring' && !sshHostId ? accountFact?.running ?? 0 : 0)
+        : running;
       return {
         available,
         ...(available && wantedEffort && isPluginModelPickerRouteAvailable(
@@ -420,6 +455,8 @@ export function createModelGroupResolver(deps: ModelGroupResolverDeps) {
         sourceName,
         windows: windows && windows.length > 0 ? windows : null,
         ...(inner ? { inner } : {}),
+        ...(payAsYouGo ? { payAsYouGo: true } : {}),
+        ...(sourceRunning > 0 ? { running: sourceRunning } : {}),
         ...(route.strategy === 'cheapest'
           ? { price: agentDeviceId ? remoteListedPrice(view, model) : listedPrice(view, agent, model, pricing) }
           : {}),
@@ -453,10 +490,24 @@ export function createModelGroupResolver(deps: ModelGroupResolverDeps) {
     // 为另一台电脑跑 Agent 时只认允许被远程调用的连接：别的连接在这次选路里按没有连接处理。
     const remoteInvocable = (view: ProviderView) => (deps.remoteInvocable ? deps.remoteInvocable(view.id) : view.remoteInvocationEnabled === true);
     const views = request.remoteInvocableOnly ? allViews.filter(remoteInvocable) : allViews;
-    const facts = await inspect(route, views, request.context, request.cachedQuota === true, request.remoteInvocableOnly === true, request.sshHostId);
+    const [facts, usageProfile] = await Promise.all([
+      inspect(
+        route,
+        views,
+        request.context,
+        request.cachedQuota === true,
+        request.remoteInvocableOnly === true,
+        request.sshHostId,
+        request.dryRun === true,
+      ),
+      route.strategy === 'expiring' && deps.usageProfile
+        ? Promise.resolve(deps.usageProfile({ dryRun: request.dryRun === true })).catch(() => null)
+        : Promise.resolve(null),
+    ]);
     const picked = pickModelGroupCandidate(route, facts, {
       now, lastPickedKey: lastPicked.get(`${scope}\u0000${route.id}`) ?? null, needsImage,
       weightCounters: countersFor(`${scope}\u0000${route.id}`, weightSignature(target.route)),
+      usageProfile,
     });
     const exceptions: ModelGroupAppliedException[] = [
       ...via,
@@ -490,7 +541,7 @@ export function createModelGroupResolver(deps: ModelGroupResolverDeps) {
     context?: ModelGroupResolveRequest['context'],
     options?: ModelGroupCandidateFactsOptions,
   ): Promise<ModelGroupCandidateFacts[]> {
-    return inspect(route, await deps.views(), context, options?.cachedQuota === true, false, options?.sshHostId, options?.continuingSourceKey);
+    return inspect(route, await deps.views(), context, options?.cachedQuota === true, false, options?.sshHostId, false, options?.continuingSourceKey);
   }
 
   function dispose(): void {

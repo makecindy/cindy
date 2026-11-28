@@ -323,6 +323,7 @@ import { isGlobalDropIntercepted } from '@/lib/globalDropIntercept';
 import { classifyUnclassifiedDroppedItems, getDroppedFileItems } from '@/lib/fileDrop';
 import { createLogger } from '@/lib/logger';
 import { getRemoteWorkingDirErrorMessage } from './remoteWorkingDirErrors';
+import { isRemoteEngineMissing } from '@/lib/remoteCapabilityNotices';
 import {
   classifyRemoteWorktreeDiscardFailure,
   createRemoteSessionWithPrecreatedWorktree,
@@ -5683,7 +5684,8 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
             });
           } else {
             toast.error(
-              getRemoteWorkingDirErrorMessage(err, t) ?? t('ccAgent.draft.createSessionFailed'),
+              isRemoteEngineMissing(err) ? t('logic.errors.remoteEngineMissing')
+                : getRemoteWorkingDirErrorMessage(err, t) ?? t('ccAgent.draft.createSessionFailed'),
             );
           }
         } finally {
@@ -7124,7 +7126,9 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
             toast.error(
               extractIpcError(err)?.code === 'REMOTE_CODEX_SOURCE_UNSUPPORTED'
                 ? t('settings.remote.startSession.unsupportedCodexSource')
-                : (getRemoteWorkingDirErrorMessage(err, t) ?? t('ccAgent.draft.createSessionFailed')),
+                : isRemoteEngineMissing(err)
+                  ? t('logic.errors.remoteEngineMissing')
+                  : getRemoteWorkingDirErrorMessage(err, t) ?? t('ccAgent.draft.createSessionFailed'),
             );
           }
         } finally {
@@ -7625,6 +7629,10 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
                   return created?.sessionId;
                 })
           ).catch((err) => {
+            if (isRemoteEngineMissing(err)) {
+              log.warn('[draft goal] remote create-session has no available engine', err);
+              throw new Error(t('logic.errors.remoteEngineMissing'));
+            }
             const remoteWorkdirMessage = getRemoteWorkingDirErrorMessage(err, t);
             if (remoteWorkdirMessage) throw new Error(remoteWorkdirMessage);
             throw err;
