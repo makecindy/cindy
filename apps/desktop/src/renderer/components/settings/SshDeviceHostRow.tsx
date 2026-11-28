@@ -126,7 +126,8 @@ export function SshDeviceHostRow({ view, name, onRestore }: {
       <div className="flex min-w-0 flex-wrap items-center gap-1.5">
         {command && view.hostId !== null && (
           <code
-            className={`min-w-0 select-text break-all rounded-md bg-[var(--surface-chip)] px-2 py-1 font-mono text-11 ${usable ? 'text-[var(--text-primary)]' : 'text-[var(--text-tertiary)]'}`}
+            // design: intrinsic-geometry — 行内代码，与 Markdown 行内代码同为 6px（DESIGN.md §5 内容排版）
+            className={`min-w-0 select-text break-all rounded-[6px] bg-[var(--surface-chip)] px-2 py-1 font-mono text-11 ${usable ? 'text-[var(--text-primary)]' : 'text-[var(--text-tertiary)]'}`}
           >
             {command}
           </code>

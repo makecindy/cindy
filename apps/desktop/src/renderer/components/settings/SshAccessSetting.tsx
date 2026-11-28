@@ -426,7 +426,10 @@ export function SshAccessSetting({ selfName, selfDeviceId, deviceNames }: {
           {state.blocked === 'SSHD_UNREACHABLE' && (
             <>
               <div className="flex items-start gap-2">
-                <code className="min-w-0 flex-1 select-text break-all rounded-md bg-[var(--surface-elevated)] px-2 py-1 font-mono text-11 text-[var(--text-primary)]">
+                <code
+                  // design: intrinsic-geometry — 行内代码，与 Markdown 行内代码同为 6px（DESIGN.md §5 内容排版）
+                  className="min-w-0 flex-1 select-text break-all rounded-[6px] bg-[var(--surface-elevated)] px-2 py-1 font-mono text-11 text-[var(--text-primary)]"
+                >
                   {SSHD_INSTALL_COMMAND}
                 </code>
                 <Button
