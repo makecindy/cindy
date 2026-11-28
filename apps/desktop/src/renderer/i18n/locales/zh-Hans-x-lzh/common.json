@@ -18696,6 +18696,7 @@
       "subtitlePaused": "已暂止",
       "subtitleWaitingForResources": "候行之资（今 {{inFlight}}/{{max}}）",
       "subtitleQueuedForSession": "列队，候差事得闲",
+      "subtitleDeferredForSession": "{{reason}}，已顺延 {{count}} 次",
       "subtitleManual": "手发",
       "subtitleOnce": "一次",
       "tagOnce": "一次",
@@ -18714,6 +18715,7 @@
     },
     "detail": {
       "manualTrigger": "手触",
+      "deferredBanner": "{{reason}}；自 {{since}} 起已顺延 {{count}} 次",
       "recentRuns": "近行 · {{count}}",
       "noRunsHeading": "尚无行录",
       "noRunsHint": "点「即行」，或静候下回定时而发。",
@@ -19482,6 +19484,12 @@
       "cleanMergedConfirmAction": "删去",
       "cleanMergedDone": "已删去已竣之 PR 自运 {{count}} 条",
       "checkFailed": "此刻未能查验 PR 状态"
+    },
+    "deferral": {
+      "busy": "正候目标差事闲暇",
+      "usage": "正候额度复原",
+      "permission": "正候权限状态可用",
+      "other": "已顺延执行"
     }
   },
   "issueTracker": {

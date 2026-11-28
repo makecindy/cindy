@@ -18696,6 +18696,7 @@
       "subtitlePaused": "一時停止中",
       "subtitleWaitingForResources": "実行スロット待ち（{{inFlight}}/{{max}}）",
       "subtitleQueuedForSession": "セッションが空くのを待機中",
+      "subtitleDeferredForSession": "{{reason}} · {{count}} 回延期",
       "subtitleManual": "手動",
       "subtitleOnce": "1回",
       "tagOnce": "1回",
@@ -18714,6 +18715,7 @@
     },
     "detail": {
       "manualTrigger": "手動トリガー",
+      "deferredBanner": "{{reason}} · {{since}} から {{count}} 回延期",
       "recentRuns": "最近の実行 · {{count}}",
       "noRunsHeading": "実行履歴はまだありません",
       "noRunsHint": "「今すぐ実行」をクリックするか、次のスケジュール実行をお待ちください。",
@@ -19482,6 +19484,12 @@
       "cleanMergedConfirmAction": "削除",
       "cleanMergedDone": "完了した PR 自動化 {{count}} 件を削除しました",
       "checkFailed": "現在 PR の状態を確認できません"
+    },
+    "deferral": {
+      "busy": "対象タスクが空くのを待機中",
+      "usage": "利用上限の回復待ち",
+      "permission": "権限状態の確認待ち",
+      "other": "実行を延期中"
     }
   },
   "issueTracker": {

@@ -18952,6 +18952,7 @@
       "subtitlePaused": "En pause",
       "subtitleWaitingForResources": "En attente d'un créneau ({{inFlight}}/{{max}})",
       "subtitleQueuedForSession": "En file d'attente jusqu'à ce que la session soit inactive",
+      "subtitleDeferredForSession": "{{reason}} · reporté {{count}} fois",
       "subtitleManual": "Manuelle",
       "subtitleOnce": "Ponctuelle",
       "tagOnce": "Ponctuelle",
@@ -18970,6 +18971,7 @@
     },
     "detail": {
       "manualTrigger": "Déclenchement manuel",
+      "deferredBanner": "{{reason}} · reporté {{count}} fois depuis {{since}}",
       "recentRuns": "EXÉCUTIONS RÉCENTES · {{count}}",
       "noRunsHeading": "Aucune exécution",
       "noRunsHint": "Cliquez sur Exécuter maintenant ou attendez le prochain déclenchement planifié.",
@@ -19738,6 +19740,12 @@
       "cleanMergedConfirmAction": "Supprimer",
       "cleanMergedDone": "{{count}} automatisations de PR terminées supprimées",
       "checkFailed": "Impossible de vérifier le statut des PR pour le moment"
+    },
+    "deferral": {
+      "busy": "En attente de la disponibilité de la tâche cible",
+      "usage": "En attente du rétablissement du quota",
+      "permission": "En attente de l’état des autorisations",
+      "other": "Exécution reportée"
     }
   },
   "issueTracker": {
