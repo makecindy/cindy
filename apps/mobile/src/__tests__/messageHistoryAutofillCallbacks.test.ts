@@ -205,6 +205,7 @@ describe('history pagination across interrupted gestures', () => {
       historyPrependTransactionRef: { current: transaction }, historyAnchorVerifyFrameRef: { current: null },
       readingOlderRef: { current: true }, loadingEarlierRef: { current: !promiseSettled },
       isDraggingRef: { current: true }, isMomentumScrollingRef: { current: false },
+      pendingViewportExpandPreviousHeightRef: { current: 0 },
       historyTouchStartYRef: { current: 100 }, historyTouchTriggeredRef: { current: true }, dragStartOffsetYRef: { current: 500 },
       nearBottomRef: { current: false }, userScrollForOlderRef: { current: true },
       tailFollowerRef: { current: { reset: vi.fn() } }, getTailFollower: () => ({ reconcile: vi.fn() }),

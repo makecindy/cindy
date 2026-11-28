@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 
 import {
   applyDesktopDevStartupConfig,
@@ -254,4 +256,37 @@ test("remote CDN startup removes inherited files and remains CDN through the chi
       endpointManifestFile: undefined,
     });
   }
+});
+
+// A temporary edit to config/endpoint.json restored after launch would make the next
+// restart lose CIS and hide both cloud settings entries for an admitted account.
+test("explicit private endpoint files survive the child wrapper without trusting inherited overrides", () => {
+  const manifest = "/private/cloud test/endpoint.json";
+  for (const argv of [["--endpoints-file", manifest], [`--endpoints-file=${manifest}`]]) {
+    const env = { XDT_ENDPOINT_MANIFEST_FILE: "/stale/endpoint.json" };
+    const config = applyDesktopDevStartupConfig({ argv: ["--region=cn", ...argv], env });
+    assert.equal(config.endpointManifestFile, manifest);
+    const child = spawnSync(process.execPath, [
+      fileURLToPath(new URL("../../apps/desktop/scripts/dev-remote-env.mjs", import.meta.url)),
+      process.execPath, ...argv, "-e",
+      "process.stdout.write(JSON.stringify({file:process.env.XDT_ENDPOINT_MANIFEST_FILE,region:process.env.CINDY_AUTH_REGION}))",
+    ], { encoding: "utf8", env: { ...process.env, ...env, XDT_ENDPOINTS_CDN: "0" } });
+    assert.equal(child.status, 0, child.stderr);
+    assert.deepEqual(JSON.parse(child.stdout), { file: manifest, region: "cn" });
+    assert.deepEqual(stripDesktopDevRegionArgs(["start", ...argv]), ["start"]);
+    // A future invocation without the explicit option still rejects stale env.
+    assert.equal(resolveDesktopDevStartupConfig({ argv: [], env }).endpointManifestFile, "config/endpoint.json");
+  }
+});
+
+test("explicit endpoint option rejects missing, duplicate and conflicting choices", () => {
+  for (const argv of [["--endpoints-file"], ["--endpoints-file="], ["--endpoints-file", "--region=cn"]]) {
+    assert.throws(() => resolveDesktopDevStartupConfig({ argv, env: {} }), /requires a file path/);
+  }
+  assert.throws(() => resolveDesktopDevStartupConfig({ argv: ["--endpoints-file=a", "--endpoints-file=b"], env: {} }), /only be specified once/);
+  for (const env of [{}, { XDT_ENDPOINTS_CDN: "1" }]) {
+    assert.throws(() => resolveDesktopDevStartupConfig({ argv: ["--endpoints-file=a", "--endpoints-cdn"], env }), /cannot be combined/);
+  }
+  assert.throws(() => resolveDesktopDevStartupConfig({ argv: ["--endpoints-file=a"], env: { XDT_ENDPOINTS_CDN: "1" } }), /cannot be combined/);
+  assert.throws(() => resolveDesktopDevStartupConfig({ argv: ["--endpoints-file=a"], env: {}, mode: "local" }), /only supports remote/);
 });

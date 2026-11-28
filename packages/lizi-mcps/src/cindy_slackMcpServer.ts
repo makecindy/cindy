@@ -21,6 +21,7 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 
+import { isStrictBase64Chars } from '@cindy/maker-shared';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 
@@ -120,7 +121,7 @@ async function deliver(
           typeof image.data === 'string' &&
           image.data.length > 0 &&
           image.data.length <= 7 * 1024 * 1024 &&
-          /^[A-Za-z0-9+/]*={0,2}$/.test(image.data) &&
+          isStrictBase64Chars(image.data, { allowEmpty: true }) &&
           typeof image.mimeType === 'string' &&
           /^image\/(png|jpeg|gif|webp)$/.test(image.mimeType)
         );

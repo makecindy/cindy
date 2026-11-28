@@ -153,6 +153,8 @@ export interface BotGroupChatServiceDeps {
   readLaneContext?: (sessionId: string) => { key: string; contextTokens: number } | null;
   /** Same hidden, durable input path as Bot DMs; attachments go with the turn like a task message's. */
   dispatch: (params: {
+    /** Set by the host only after resolving the visible Cindy task for this room or thread. */
+    groupAssistantTask?: true;
     targetSessionId: string;
     message: string;
     persistedContent: string;
@@ -179,7 +181,7 @@ export interface BotGroupChatServiceDeps {
    * folder (`projectDir`) or under 「对话」 (null), with this user's new-task model and permission.
    */
   ensureGroupAssistantSession?: (input: { sessionId?: string; title: string; projectDir: string | null }) =>
-    Promise<{ ok: true; sessionId: string; created: boolean } | { ok: false; errorCode: string; message: string }>;
+    Promise<{ ok: true; sessionId: string; created: boolean; modelFallback?: { name?: string } } | { ok: false; errorCode: string; message: string }>;
   /**
    * Turns a composer's attachments into stored ones (bot-group-chat.md §3.1): images end up
    * in the media store under this group, files stay where they are on this computer or, from
@@ -206,7 +208,7 @@ export interface BotGroupChatServiceDeps {
   decidePlan?: (input: PlanDecisionInput, signal: AbortSignal) => Promise<PlanDecision | null>;
   workDir?: Pick<BotGroupWorkDir, 'prepare' | 'snapshot' | 'changedFiles' | 'trashGroupFolder'>;
   /** Existing local directory usable as a 项目文件夹 (same rules as new-task projects). */
-  validateProjectDir?: (dir: string) => Promise<{ ok: true; dir: string } | { ok: false; message: string }>;
+  validateProjectDir?: (dir: string) => Promise<{ ok: true; dir: string } | { ok: false; message: string; errorCode?: 'PROJECT_NOT_REGISTERED' | 'INVALID_PARAMS' }>;
   /**
    * A task this computer runs, for its group card: title, state and recorded pull request; null
    * when the task is gone (bot-group-chat.md §10).
@@ -1990,10 +1992,8 @@ export function createBotGroupChatService(deps: BotGroupChatServiceDeps) {
         if (typeof raw.projectDir !== 'string' || !raw.projectDir || raw.projectDir.length > MAX_PROJECT_DIR_CHARS) {
           return failure('INVALID_PARAMS', '项目文件夹无效');
         }
-        const checked = deps.validateProjectDir
-          ? await deps.validateProjectDir(raw.projectDir).catch(() => ({ ok: false as const, message: '' }))
-          : ({ ok: false as const, message: '' });
-        if (!checked.ok) return failure('INVALID_PARAMS', checked.message || '项目文件夹不可用');
+        const checked = await deps.validateProjectDir?.(raw.projectDir).catch(() => undefined);
+        if (!checked?.ok) return failure(checked?.errorCode ?? 'INVALID_PARAMS', checked?.message || '项目文件夹不可用');
         patch.projectDir = checked.dir;
       }
     }

@@ -1,0 +1,68 @@
+#!/bin/bash
+set -euo pipefail
+umask 077
+export XDG_CURRENT_DESKTOP=XFCE XDG_SESSION_DESKTOP=xfce DESKTOP_SESSION=xfce
+# D-Bus starts before Xvfb. GUI-activated services (BAMF) need its final DISPLAY.
+dbus-update-activation-environment DISPLAY XDG_CURRENT_DESKTOP XDG_SESSION_DESKTOP DESKTOP_SESSION
+if [ -n "${XAUTHORITY:-}" ]; then dbus-update-activation-environment XAUTHORITY; fi
+python3 /usr/local/share/cindy/appearance/apply-appearance.py
+python3 /usr/local/share/cindy/appearance/apply-dock.py
+python3 /usr/local/share/cindy/appearance/apply-dock-apps.py
+critical=()
+dock=''
+cleanup() {
+  trap '' TERM INT
+  rm -f -- "$XDG_RUNTIME_DIR/desktop-ready"
+  local pid active tick
+  for pid in "${critical[@]}" "${dock:-}"; do [ -z "$pid" ] || kill -TERM "$pid" 2>/dev/null || true; done
+  for ((tick=0; tick<50; tick++)); do
+    active=0
+    for pid in "${critical[@]}" "${dock:-}"; do if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then active=1; fi; done
+    [ "$active" = 1 ] || break
+    sleep 0.05
+  done
+  for pid in "${critical[@]}" "${dock:-}"; do [ -z "$pid" ] || kill -KILL "$pid" 2>/dev/null || true; done
+  wait || true
+}
+trap cleanup EXIT
+trap 'exit 0' TERM INT
+xfsettingsd --no-daemon &
+critical+=("$!")
+xfwm4 --compositor=on &
+critical+=("$!")
+xfdesktop --disable-wm-check &
+critical+=("$!")
+timeout 10s gdbus call --session --dest org.ayatana.bamf --object-path /org/ayatana/bamf/matcher --method org.ayatana.bamf.matcher.RunningApplications >/dev/null
+plank &
+dock=$!
+# Wait until WM and Dock reserve their screen space before launching Cindy.
+ready=0
+for ((tick=0; tick<100; tick++)); do
+  for pid in "${critical[@]}" "$dock"; do kill -0 "$pid" 2>/dev/null || exit 1; done
+  dock_window=$(xdotool search --onlyvisible --class '^Plank$' 2>/dev/null | tail -n 1) || dock_window=''
+  if [ -n "$dock_window" ] && xprop -id "$dock_window" _NET_WM_STRUT_PARTIAL 2>/dev/null | grep -Eq '= 0, 0, 0, [1-9][0-9]*,' && xprop -root _NET_SUPPORTING_WM_CHECK 2>/dev/null | grep -q 'window id'; then
+    ready=1;break
+  fi
+  sleep 0.1
+done
+if [ "$ready" != 1 ]; then echo INSTANCE_DESKTOP_NOT_READY >&2;exit 1;fi
+: > "$XDG_RUNTIME_DIR/desktop-ready"
+# A Dock restart must not tear down the session. Bound automatic recovery so
+# a crash loop remains observable to the existing outer runtime supervisor.
+restarts=0
+interval_start=$SECONDS
+while true; do
+  finished='';status=0
+  wait -n -p finished "${critical[@]}" "$dock" || status=$?
+  if [ "${finished:-}" != "$dock" ]; then
+    echo "INSTANCE_DESKTOP_DEPENDENCY_EXITED:$status" >&2;exit 1
+  fi
+  dock=''
+  if (( SECONDS - interval_start >= 60 )); then restarts=0;interval_start=$SECONDS;fi
+  restarts=$((restarts + 1))
+  if (( restarts > 3 )); then echo INSTANCE_DOCK_RESTART_LIMIT >&2;exit 1;fi
+  sleep 0.25
+  for pid in "${critical[@]}"; do kill -0 "$pid" 2>/dev/null || exit 1;done
+  plank &
+  dock=$!
+done

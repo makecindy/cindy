@@ -38,7 +38,7 @@ describe('createProjectFromTask', () => {
       validateProjectDirectory: vi.fn(async (workingDir: string) => ({ ok: true as const, workingDir })),
       registerProject: vi.fn(async (_id: string, workingDir: string) => ({ ok: true as const, workingDir })),
       hideProject: vi.fn(async () => undefined),
-      moveTask: vi.fn(async () => ({ ok: true as const })),
+      moveTask: vi.fn(async (_id: string, workingDir: string) => ({ ok: true as const, workingDir, projectDir: null })),
     } as never;
   });
   afterEach(async () => {
@@ -49,7 +49,7 @@ describe('createProjectFromTask', () => {
 
   it('moves every dialogue entry into the new folder, then registers and moves the task there', async () => {
     const target = path.join(projects, 'my-app');
-    expect(await create()).toEqual({ workingDir: target, movedEntries: 2 });
+    expect(await create()).toEqual({ workingDir: target, session: { workingDir: target, projectDir: null }, movedEntries: 2 });
     expect(await readFile(path.join(target, 'docs', 'notes.md'), 'utf8')).toBe('notes');
     expect(await readdir(dialogue)).toEqual([]);
     expect(deps.registerProject).toHaveBeenCalledWith('task-1', target);
@@ -68,6 +68,7 @@ describe('createProjectFromTask', () => {
   // Rolling the files back then would split the task from its files.
   it.each([
     ['already committed', async () => ({ title: 'Plan', workingDir: path.join(projects, 'my-app'), workspaceKind: 'project' }), 'resolves'],
+    ['committed with a worktree', async () => ({ title: 'Plan', workingDir: '/repo/.cindy-worktrees/task', projectDir: path.join(projects, 'my-app'), workspaceKind: 'project' }), 'resolves'],
     ['unknown after an account change', async () => { throw Object.assign(new Error('[NOT_FOUND] gone'), { code: 'NOT_FOUND' }); }, 'rejects'],
   ] as const)('keeps the files in the new folder when a failed move is %s', async (_case, reread, outcome) => {
     deps.moveTask.mockResolvedValue({ ok: false, errorCode: 'PRECONDITION_FAILED', message: 'account changed' });

@@ -1,3 +1,4 @@
+import { validateAdditionalSettingsOverrides } from '../../shared/settingsEditableCatalog.js';
 /**
  * compaction-settings-store —— 原生压缩设置，按 owner 隔离。
  *
@@ -25,7 +26,37 @@ import {
 import { hasCommittedOwner, ownerScopedPath as ownerScopedUserDataPath } from '../ownerContext.js';
 import { atomicWriteFileSync } from '../utils/atomicWriteFile.js';
 
+import { inspectSettingsJson } from './inspect-settings-json.js';
+import { inspectSettingsFile, isSettingNumber, validateOptionalSettingsFields, type SettingsFileInspection } from './settings-inspection.js';
+
 const log = desktopMakerLogger.child('compaction-settings-store');
+
+export function inspectCompactionSettings(ownerRoot: string) {
+  return inspectSettingsFile({ filePath: () => settingsFilePath(ownerRoot),
+    defaults: { claudeCodeAutoCompactPct: DEFAULT_PCT }, normalize,
+    validate: (raw) => validateOptionalSettingsFields(raw, { claudeCodeAutoCompactPct: isSettingNumber }),
+  });
+}
+
+/** 绕过 currentPiStore；它的首次访问会执行迁移并写入标记。 */
+export function inspectPiCompactionSettings(ownerRoot: string): SettingsFileInspection<PiCompactionSettings> {
+  const result = inspectSettingsJson(piSettingsFilePath(ownerRoot), (raw) => {
+    validateOptionalSettingsFields(raw, { piAutoCompactPct: isSettingNumber });
+    return normalizePi(raw);
+  });
+  if (result.status !== 'ready') return result;
+  if (Object.hasOwn(result.raw, 'piAutoCompactPct')) {
+    return { status: 'ready', value: result.value, sources: { piAutoCompactPct: 'override' } };
+  }
+  const marker = inspectSettingsJson(piMigrationMarkerPath(ownerRoot), (raw) => raw);
+  if (marker.status !== 'ready') return marker;
+  if (marker.missing) {
+    const legacy = inspectCompactionSettings(ownerRoot);
+    if (legacy.status !== 'ready') return legacy;
+    if (legacy.sources.claudeCodeAutoCompactPct === 'override') return { status: 'migrationPending' };
+  }
+  return { status: 'ready', value: result.value, sources: { piAutoCompactPct: 'default' } };
+}
 
 const MIN_PCT = 50;
 const MAX_PCT = 95;
@@ -62,6 +93,7 @@ function currentStore() {
   let store = stores.get(key);
   if (!store) {
     store = createOverrideSettingsFile<CompactionSettings>({
+  validateOverrides: raw => validateAdditionalSettingsOverrides('claudeCompaction', raw),
       filePath: () => settingsFilePath(ownerRoot ?? undefined),
       defaults: { claudeCodeAutoCompactPct: DEFAULT_PCT },
       normalize,
@@ -171,20 +203,21 @@ function migratePiFromLegacyIfNeeded(ownerRoot: string | null): void {
   markPiMigrationDone(ownerRoot);
 }
 
-function currentPiStore() {
+function currentPiStore(migrate = true) {
   const ownerRoot = hasCommittedOwner() ? ownerScopedUserDataPath() : null;
   const key = ownerRoot ?? '<no-session>';
   let store = piStores.get(key);
   if (!store) {
-    migratePiFromLegacyIfNeeded(ownerRoot);
+    if (migrate) migratePiFromLegacyIfNeeded(ownerRoot);
     store = createOverrideSettingsFile<PiCompactionSettings>({
+  validateOverrides: raw => validateAdditionalSettingsOverrides('piCompaction', raw),
       filePath: () => piSettingsFilePath(ownerRoot ?? undefined),
       defaults: { piAutoCompactPct: DEFAULT_PCT },
       normalize: normalizePi,
       log,
       label: 'pi-compaction',
     });
-    piStores.set(key, store);
+    if (migrate) piStores.set(key, store);
   }
   return store;
 }
@@ -243,4 +276,13 @@ export function readCodexCompactionState() { return codexStore().readState(); }
 export function writeCodexServerCompaction(value: boolean | null): void {
   if (value === null) codexStore().reset();
   else codexStore().writePatch({ serverEnabled: value });
+}
+
+/** Passive access never runs the legacy migration while opening a settings form. */
+export function getClaudeCompactionSettingsStore() { return currentStore(); }
+export function getPiCompactionSettingsStore() { return currentPiStore(false); }
+
+/** Called only inside an authorized settings commit, never by passive inspection. */
+export function sealExplicitPiCompactionChoice(): void {
+  markPiMigrationDone(hasCommittedOwner() ? ownerScopedUserDataPath() : null);
 }

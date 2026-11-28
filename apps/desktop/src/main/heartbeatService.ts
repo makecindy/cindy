@@ -93,6 +93,8 @@ function applyAuthState(state: AuthStateSnapshot): void {
   const realm = authManager.getActiveAuthRealm();
   if (handle && handleUid === uid && handleRealm === realm) return;
   if (handle) stopCloudHeartbeat();
+  // An empty manifest field means this environment runs no heartbeat service.
+  if (!getClientEndpoint('heartbeatUrl')) return;
   startCloudHeartbeat(uid);
 }
 

@@ -15,8 +15,23 @@ import { useEffect, useState, type Dispatch, type ReactNode, type SetStateAction
 
 import { Collapse } from '@/components/ui/collapse';
 import { cn } from '@/lib/utils';
-import type { ImDefaultSettingsChannel } from '../../../shared/imDefaultSettings';
+import {
+  activeImDefaultAgentSettings,
+  type ImDefaultSettingsChannel,
+} from '../../../shared/imDefaultSettings';
 import type { ImDefaultSettingsSummary } from './ImDefaultSettingsSection';
+
+export function formatImDefaultRouteSummary(
+  summary: ImDefaultSettingsSummary | null,
+  t: (key: string) => string,
+): string | null {
+  if (!summary) return null;
+  const agentLabel =
+    summary.agentKind === 'acp'
+      ? t('newChat.pluginEngines.genericName')
+      : t(`settings.imBot.defaults.agents.${summary.agentKind}`);
+  return `${agentLabel} · ${summary.model}`;
+}
 
 export function useImChannelSettingsSummary(
   channel: ImDefaultSettingsChannel,
@@ -31,7 +46,7 @@ export function useImChannelSettingsSummary(
         if (cancelled) return;
         setSummary({
           agentKind: settings.agentKind,
-          model: settings.agents[settings.agentKind].model,
+          model: activeImDefaultAgentSettings(settings).model,
         });
       })
       .catch(() => {

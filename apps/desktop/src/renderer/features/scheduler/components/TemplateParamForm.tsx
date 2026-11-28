@@ -58,7 +58,7 @@ function TemplateParamControl({
     return (
       <span
         className={cn(
-          'inline-flex h-9 w-fit items-center gap-2 rounded-md px-1.5',
+          'inline-flex h-9 w-fit items-center gap-2 rounded-lg px-1.5',
           'cursor-pointer',
           'text-13 leading-none text-[var(--settings-btn-secondary-text)]',
           'transition-colors hover:bg-[var(--surface-hover)]',

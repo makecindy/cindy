@@ -3,7 +3,7 @@ import { getStickySessionDeviceId } from '@/features/device-link/stickySessionOr
 import { useLocation, useParams } from 'react-router-dom';
 import { remoteProjectsStore } from '@/features/device-link/remoteProjectsStore';
 import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
-import { getSessionFor } from '@/lib/makerTransport';
+import { confirmSessionOrigin } from '@/features/device-link/confirmSessionOrigin';
 import { SessionEntryError, sessionEntryFailure } from './SessionEntryError';
 
 /** Restore a route's host before any nested metadata read or composer mounts. */
@@ -29,31 +29,9 @@ export function SessionRouteOriginGate({ sessionId, ownsWindowRoute, children }:
     let disposed = false;
     const owner = getDataOwnerGeneration();
     const valid = () => !disposed && isDataOwnerGenerationCurrent(owner);
-    const existing = remoteProjectsStore.getSessionDeviceId(sessionId);
-    if (existing && existing !== deviceId) {
-      setRegistered({ key, failure: 'denied' });
-      return;
-    }
-    // This is only a routing hint. The existing Main invoke boundary still
-    // authorizes the device and session; a URL cannot grant remote access.
-    remoteProjectsStore.pinSessionOrigin(deviceId, sessionId);
-    void (async () => {
-      if (!remoteProjectsStore.getDeviceSessions(deviceId).some(row => row.id === sessionId)) {
-        // Hidden branches never arrive in the ordinary task listing. Recover
-        // their metadata explicitly when the asynchronous disk cache is empty.
-        const current = remoteProjectsStore.captureSessionRead(deviceId, sessionId);
-        const value = await getSessionFor(sessionId);
-        if (!valid()) return;
-        if (!value || value.id !== sessionId) { setRegistered({ key, failure: 'missing' }); return; }
-        if (current()) {
-          remoteProjectsStore.mergeDeviceSessions(deviceId, remoteProjectsStore.getDeviceName(deviceId) ?? '',
-            [current.mergeActivity(value)]);
-        } else if (!remoteProjectsStore.getDeviceSessions(deviceId).some(row => row.id === sessionId)) {
-          throw new Error('Remote task read invalidated');
-        }
-      }
+    void confirmSessionOrigin(sessionId, deviceId, valid).then(() => {
       if (valid()) setRegistered({ key });
-    })().catch(error => { if (valid()) setRegistered({ key, failure: sessionEntryFailure(error) }); });
+    }).catch(error => { if (valid()) setRegistered({ key, failure: sessionEntryFailure(error) }); });
     return () => { disposed = true; };
   }, [key, sessionId, deviceId, retry]);
 

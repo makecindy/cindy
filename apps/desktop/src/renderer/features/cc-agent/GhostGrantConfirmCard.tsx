@@ -1,5 +1,7 @@
 import { FileTypeTile } from '@/components/ui/file-type-tile';
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { Kbd } from '@/components/ui/kbd';
 /**
  * GhostGrantConfirmCard
  * ---------------------------------------------------------------------------
@@ -114,9 +116,9 @@ export function GhostGrantConfirmCard({ pending, onRespond }: GhostGrantConfirmC
             {t(descriptionKey)}
           </p>
         </div>
-        <span className="shrink-0 rounded-full border border-[var(--chat-input-border)] px-2 py-1 text-12 font-medium text-[var(--status-bar-meta)]">
+        <Badge tone="outline" size="md">
           {t('ghostGrant.confirm.count', { count: pending.items.length })}
-        </span>
+        </Badge>
       </div>
 
       {/* 文件清单:自适应高度,超出封顶滚动。上限 = 4 整行 + 半行(行高 ≈65px:
@@ -178,9 +180,9 @@ export function GhostGrantConfirmCard({ pending, onRespond }: GhostGrantConfirmC
           palette="permission" size="md" compact type="button" onClick={handleAllow}>
           <Check className="size-4" />
           <span>{t('ghostGrant.confirm.allow')}</span>
-          <kbd className="rounded-[4px] border border-[var(--perm-allow-kbd-border)] bg-[var(--perm-allow-kbd-bg)] px-1.5 py-px text-11 font-normal text-[var(--perm-allow-btn-text)] opacity-70">
+          <Kbd tone="onSolid">
             {window.electronAPI?.platform === 'darwin' ? '⌘↵' : 'Ctrl+Enter'}
-          </kbd>
+          </Kbd>
         </Button>
       </div>
     </div>

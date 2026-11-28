@@ -33,6 +33,7 @@ export const appShortcutSettings = defineSettings(Object.fromEntries(
     fallbackTargetId: 'settings-panel-shortcuts',
     titleKey: definition.labelKey,
     descriptionKey: definition.descriptionKey,
+    aliases: definition.id === 'region-screenshot' ? ['screen capture'] : undefined,
     sectionKey: 'settings.tabs.shortcuts',
     isVisible: ({ platform }: { platform: string }) =>
       isAppShortcutAvailableOnPlatform(definition.id, platform),

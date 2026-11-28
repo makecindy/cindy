@@ -29,7 +29,9 @@ describe('Pi session-tree lazy resume provider route', () => {
       '// ── Session 生命周期',
     );
 
-    expect(listSkills).toContain('const kind = requireAgentKind(agentKind);');
+    // Every kind is still validated; `acp` (a plugin-engine task's `/` menu, #12732) is the only addition
+    // and, like Pi, reads Pi's shared directories, so it takes the same shared-Skill refresh below.
+    expect(listSkills).toContain("const kind = agentKind === 'acp' ? 'acp' : requireAgentKind(agentKind);");
     expect(listSkills).toContain('await desktopClaudeAuthAdapter.ensureSharedGlobalSkills();');
     // Guard discovery order independently of optional host verification arguments.
     const skillsDiscoveryIdx = listSkills.indexOf('maker.listAgentSkills(');

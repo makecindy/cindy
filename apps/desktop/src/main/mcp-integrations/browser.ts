@@ -48,7 +48,11 @@ import {
 } from './browser-real-profile/index.js';
 import { createBrowserBackendIpcHandlers } from './browser-backend/settings-ipc.js';
 import { readCdpBrowserCommandLine, terminateManagedChromePortOwner } from './browser-backend/proxy-auth.js';
-import { openExtensionStoreInUserBrowser, startUserBrowser } from './browser-backend/open-extension-store.js';
+import {
+  isUserBrowserRunning,
+  openExtensionStoreInUserBrowser,
+  startUserBrowser,
+} from './browser-backend/open-extension-store.js';
 import { ExternalLinkHandoff } from './browser-backend/external-link-handoff.js';
 import { resolveBrowserScreenshot } from './browserScreenshotResolver.js';
 import { compressInlineImage } from './inlineImageCompressor.js';
@@ -347,6 +351,7 @@ function createUserBrowserBackend(): UserBrowserBackend {
   return (currentUserBrowserBackend = new UserBrowserBackend({
     getPageControl: () => userBrowserPageControlProvider(),
     startBrowser: () => startUserBrowser({ resolveBrowser: () => resolveSourceBrowserFromOs() }),
+    isBrowserRunning: () => isUserBrowserRunning({ resolveBrowser: () => resolveSourceBrowserFromOs() }),
     getUnavailableReason: () => userBrowserUnavailableReason?.() ?? 'plugin-missing',
     // Same upload roots as the sidebar browser: the session's own folders plus its artifacts.
     resolveUploadRoots: async (sessionId) => [
@@ -396,6 +401,11 @@ async function managedPortHeldByAnotherCindy(): Promise<boolean> {
     () => null,
   );
   return commandLine !== null && !commandLine.includes(`--user-data-dir=${runtimeDir}${nodePath.sep}`);
+}
+
+/** Internal settings transaction: keep CAS persistence inside the native switch queue. */
+function commitHostBrowserBackendKind(kind: BackendKind, persist: () => Promise<void>): Promise<boolean> {
+  return backendController.setKind(kind, persist);
 }
 
 async function stopExternalRuntimeIfUsed(): Promise<void> {
@@ -744,5 +754,5 @@ function disposeBrowserRuntime(): Promise<void> {
   externalChromeBackend.beginQuiescence();
   return backendController.dispose().finally(() => externalBackend.dispose());
 }
-return { setBrowserSessionUploadRootResolver, setUserBrowserPageControlProvider, clearUserBrowserMarksForSession, setActiveBrowserBackendKind, setBrowserUseRealProfile, getBrowserMcpDeps, getBrowserAvailability, getActiveBrowserBackendKind, recoverActiveBrowserBackend, getBrowserBackendHealth, createBrowserSettingsHandlers, openBrowserForLogin, disposeBrowserRuntime };
+return { setBrowserSessionUploadRootResolver, setUserBrowserPageControlProvider, clearUserBrowserMarksForSession, setActiveBrowserBackendKind, setBrowserUseRealProfile, getBrowserMcpDeps, getBrowserAvailability, getActiveBrowserBackendKind, recoverActiveBrowserBackend, getBrowserBackendHealth, createBrowserSettingsHandlers, openBrowserForLogin, disposeBrowserRuntime, commitHostBrowserBackendKind };
 }

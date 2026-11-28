@@ -1,3 +1,4 @@
+import path from 'node:path';
 import { ownerScopedUserDataPath } from '../appSessionState.js';
 import { desktopMakerLogger } from '../maker-host/logger-adapter.js';
 import { createOverrideSettingsFile } from '../maker-host/override-settings-file.js';
@@ -18,6 +19,29 @@ import {
   type XboxGamepadStickBinding,
 } from '../../shared/xboxGamepad.js';
 import { xboxGamepadLayoutOverrides } from './layoutOverride.js';
+
+import { inspectSettingsJson, isSettingsRecord } from '../maker-host/inspect-settings-json.js';
+import { validateOptionalSettingsFields, isSettingBoolean } from '../maker-host/settings-inspection.js';
+
+function validateInspectionRaw(raw: Record<string, unknown>): void {
+  const binding = (value: unknown) => value === null || isXboxGamepadBinding(value);
+  validateOptionalSettingsFields(raw, { deviceEnabled: isSettingBoolean, layout: isSettingsRecord });
+  if (!isSettingsRecord(raw.layout)) return;
+  validateOptionalSettingsFields(raw.layout, { version: value => value === 1, buttons: isSettingsRecord, sticks: isSettingsRecord });
+  if (isSettingsRecord(raw.layout.buttons)) validateOptionalSettingsFields(raw.layout.buttons, Object.fromEntries(XBOX_GAMEPAD_BUTTON_IDS.map(key => [key, binding])));
+  if (isSettingsRecord(raw.layout.sticks)) for (const stick of XBOX_GAMEPAD_STICK_IDS) {
+    const value = raw.layout.sticks[stick];
+    if (value === undefined) continue;
+    if (!isSettingsRecord(value)) throw new Error('invalid stick');
+    validateOptionalSettingsFields(value, { mode: isXboxGamepadStickMode, directions: isSettingsRecord });
+    if (isSettingsRecord(value.directions)) validateOptionalSettingsFields(value.directions, Object.fromEntries(XBOX_GAMEPAD_STICK_DIRECTIONS.map(key => [key, binding])));
+  }
+}
+
+/** Preferences, not driver/device availability. Does not initialize hardware. */
+export function inspectXboxGamepadSettings(ownerRoot: string, family: GamepadFamily) {
+  return inspectSettingsJson(path.join(ownerRoot, settingsFileName(family)), raw => { validateInspectionRaw(raw); return normalizeSettings(raw); }, 64 * 1024);
+}
 
 const log = desktopMakerLogger.child('xbox-gamepad-settings-store');
 

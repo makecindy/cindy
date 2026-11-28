@@ -97,7 +97,7 @@ CREATE TABLE sessions (
   context_window_runtime INTEGER,
   fast_mode INTEGER NOT NULL DEFAULT 0,
   cleared_at INTEGER,
-  pinned_at INTEGER, snoozed_until INTEGER, snoozed_at INTEGER,
+  pinned_at INTEGER, snoozed_until INTEGER, snoozed_at INTEGER, archived_at INTEGER,
   user_send_at INTEGER,
   agent_kind TEXT NOT NULL DEFAULT 'cc',
   orca_role TEXT,
@@ -424,6 +424,7 @@ describe('db worker tx handlers', () => {
       await client.exec('ALTER TABLE sessions ADD COLUMN hidden_at INTEGER');
       await client.exec('ALTER TABLE sessions ADD COLUMN worktree_path TEXT');
       await client.exec('ALTER TABLE sessions ADD COLUMN orca_remote_lead TEXT');
+      await client.exec('ALTER TABLE sessions ADD COLUMN created_by_session TEXT');
       await client.exec('CREATE TABLE schedules (target_session_id TEXT, status TEXT)');
       await client.exec('CREATE TABLE session_goals (session_id TEXT, status TEXT)');
       await client.exec('CREATE TABLE agent_input_queue_snapshots (session_id TEXT, payload TEXT)');
@@ -441,16 +442,34 @@ describe('db worker tx handlers', () => {
       await expect(archive()).rejects.toMatchObject({ code: 'PRECONDITION_FAILED' });
       expect(await client.queryOne("SELECT status FROM sessions WHERE id = 'idle'")).toEqual({ status: 'active' });
       await client.exec("UPDATE sessions SET pinned_at = NULL WHERE id = 'idle'");
-      await expect(archive()).resolves.toMatchObject({ sessionId: 'idle', status: 'archived' });
-      expect(await client.queryOne("SELECT updated_at AS updatedAt, snoozed_until AS snoozedUntil, snoozed_at AS snoozedAt FROM sessions WHERE id = 'idle'"))
-        .toEqual({ updatedAt: 123, snoozedUntil: null, snoozedAt: null });
-      // A manual archive continues to use the existing flow, without idle guards.
+      await expect(archive()).resolves.toMatchObject({ sessionId: 'idle', status: 'archived', archivedAt: null });
+      expect(await client.queryOne("SELECT updated_at AS updatedAt, archived_at AS archivedAt, snoozed_until AS snoozedUntil, snoozed_at AS snoozedAt FROM sessions WHERE id = 'idle'"))
+        .toEqual({ updatedAt: 123, archivedAt: null, snoozedUntil: null, snoozedAt: null });
+      // A manual archive continues to use the existing flow, without idle guards, and stamps archived_at.
       await seedSession(client, 'manual', { status: 'active', pinnedAt: 50 });
       await client.exec("UPDATE sessions SET updated_at = 123 WHERE id = 'manual'");
-      await expect(client.tx('sessions.setTerminalStatus', { sessionId: 'manual', status: 'archived' }))
-        .resolves.toMatchObject({ sessionId: 'manual', status: 'archived' });
-      expect((await client.queryOne<{ updatedAt: number }>("SELECT updated_at AS updatedAt FROM sessions WHERE id = 'manual'"))!.updatedAt)
-        .toBeGreaterThan(123);
+      const manualResult = await client.tx('sessions.setTerminalStatus', { sessionId: 'manual', status: 'archived' });
+      expect(manualResult).toMatchObject({ sessionId: 'manual', status: 'archived' });
+      expect(manualResult.archivedAt).toBeGreaterThan(123);
+      expect(await client.queryOne<{ updatedAt: number; archivedAt: number | null }>("SELECT updated_at AS updatedAt, archived_at AS archivedAt FROM sessions WHERE id = 'manual'"))
+        .toEqual({ updatedAt: manualResult.archivedAt, archivedAt: manualResult.archivedAt });
+      // Re-archiving an already-archived task preserves its existing archived_at; restoring clears it.
+      const repeated = await client.tx('sessions.setTerminalStatus', { sessionId: 'manual', status: 'archived' });
+      expect(repeated.archivedAt).toBe(manualResult.archivedAt);
+      const restored = await client.tx('sessions.setStatus', { sessionIds: ['manual'], status: 'active' });
+      expect(restored[0]).toMatchObject({ sessionId: 'manual', status: 'active', archivedAt: null });
+      expect(await client.queryOne("SELECT archived_at AS archivedAt FROM sessions WHERE id = 'manual'"))
+        .toEqual({ archivedAt: null });
+      // Explicit archivedAt (quiet re-archive) writes the exact timestamp or null without overriding it.
+      const quietRestored = await client.tx('sessions.setTerminalStatus', { sessionId: 'manual', status: 'archived', archivedAt: 777 });
+      expect(quietRestored.archivedAt).toBe(777);
+      expect(await client.queryOne("SELECT archived_at AS archivedAt FROM sessions WHERE id = 'manual'"))
+        .toEqual({ archivedAt: 777 });
+      await client.tx('sessions.setStatus', { sessionIds: ['manual'], status: 'active' });
+      const quietNew = await client.tx('sessions.setTerminalStatus', { sessionId: 'manual', status: 'archived', archivedAt: null });
+      expect(quietNew.archivedAt).toBeNull();
+      expect(await client.queryOne("SELECT archived_at AS archivedAt FROM sessions WHERE id = 'manual'"))
+        .toEqual({ archivedAt: null });
     }, { useInlineWorker });
   });
 

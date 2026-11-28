@@ -22,6 +22,8 @@ import {
   getWorkspaceProviderRoute,
   listWorkspaceProviderSources,
   setWorkspaceProviderSource,
+  getHostWorkspaceProviderSourceStore,
+  commitHostWorkspaceProviderSources,
 } from '../workspaceProviderSourceStore';
 
 describe('workspaceProviderSourceStore', () => {
@@ -39,6 +41,19 @@ describe('workspaceProviderSourceStore', () => {
     fs.rmSync(tmp.dir, { recursive: true, force: true });
   });
 
+  it('Host CAS preserves source row metadata and unrelated keys while resetting only source preferences', async () => {
+    const file=path.join(tmp.dir,'hook-workspace-provider-source.json');
+    const row={channel:'slack' as const,teamId:'team-a',workspace:'repo',providerId:'original',future:'keep'};
+    fs.writeFileSync(file,JSON.stringify({entries:[row],futureRoot:true}));
+    const before=getHostWorkspaceProviderSourceStore().inspect(); if(before.status!=='ready')throw new Error('fixture');
+    const saved=await commitHostWorkspaceProviderSources([{...row,providerId:'updated'}],{expectedRevision:before.revision});
+    expect(getWorkspaceProviderSource('slack','team-a','repo')).toBe('updated');
+    expect(JSON.parse(fs.readFileSync(file,'utf8'))).toEqual({entries:[{...row,providerId:'updated'}],futureRoot:true});
+    await expect(commitHostWorkspaceProviderSources([],{expectedRevision:before.revision})).rejects.toMatchObject({code:'CONFLICT'});
+    await commitHostWorkspaceProviderSources([],{expectedRevision:saved.revision});
+    expect(getWorkspaceProviderSource('slack','team-a','repo')).toBeNull();
+    expect(JSON.parse(fs.readFileSync(file,'utf8'))).toEqual({entries:[],futureRoot:true});
+  });
   it('写读一条来源偏好;不同渠道/目录互不串', () => {
     setWorkspaceProviderSource('telegram', null, 'chat', 'anthropic');
     setWorkspaceProviderSource('slack', null, 'chat', 'openai');

@@ -75,4 +75,14 @@ describe('useCompanionArrivalNotice', () => {
     renderHook(() => useCompanionArrivalNotice('mia', 'Mia'));
     expect(h.toast).toHaveBeenCalledTimes(2);
   });
+
+  // 2026-11-25 resilient take-over arrival notices: surfaces model_setup and partial_content distinctly.
+  it('shows distinct notices for model_setup and partial_content arrivals', async () => {
+    h.notices = ['model_setup', 'partial_content'];
+    const view = renderHook(() => useCompanionArrivalNotice('mia', 'Mia'));
+    expect(h.toast).toHaveBeenCalledWith('bots.cloud.arrivalModelSetup');
+    expect(h.toast).toHaveBeenCalledWith('bots.cloud.arrivalPartialContent');
+    view.unmount();
+    await settle();
+  });
 });

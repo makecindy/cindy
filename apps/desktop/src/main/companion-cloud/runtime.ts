@@ -18,6 +18,7 @@ import type {
   CompanionCloudActionResult,
   CompanionHomeChoices,
   CompanionSwitchOptions,
+  CompanionTakeOverOptions,
   CompanionTranscriptPage,
   CompanionTransferTarget,
 } from '../../shared/companionCloud.js';
@@ -35,7 +36,7 @@ import { importCloudHistory } from './materialize.js';
 import type { CompanionCloudState } from './state.js';
 import { chatRejection, errorCode, isUnreachable, type CompanionApi, type CompanionLog } from './types.js';
 import { createCompanionStore, readCompanionRestoreValue, readPreference, type CompanionStoreTransfer } from './store.js';
-import { COMPANION_PROFILE_KEY, COMPANION_READ_INCOMPLETE, COMPANION_SKILL_PREFIX, COMPANION_VALUE_TOO_LARGE, canonicalJson, createCompanionUploader, isCompanionProfileSnapshot, type CompanionPreferenceValue } from './uploader.js';
+import { COMPANION_PROFILE_KEY, COMPANION_READ_INCOMPLETE, COMPANION_SKILL_FILES_PREFIX, COMPANION_SKILL_PREFIX, COMPANION_VALUE_TOO_LARGE, canonicalJson, createCompanionUploader, isCompanionProfileSnapshot, type CompanionPreferenceValue } from './uploader.js';
 
 /** Electron/database side of the feature, wired in register.ts. */
 export interface CompanionCloudHost {
@@ -113,7 +114,10 @@ export interface CompanionCloudRuntime {
   syncNow: () => Promise<void>;
   /** Demote local copies homed elsewhere and materialize companions handed to this computer. */
   reconcile: (localProfiles: Array<{ id: string; status: string }>) => Promise<void>;
-  takeOver: (botId: string, correction?: ProfileCorrection & { actorId: string; home: string | null }) => Promise<CompanionCloudActionResult>;
+  takeOver: (
+    botId: string,
+    options?: CompanionTakeOverOptions | (ProfileCorrection & { actorId: string; home: string | null }),
+  ) => Promise<CompanionCloudActionResult>;
   repairProfile: (botId: string, request: CompanionProfileRepairRequest) => Promise<CompanionProfileRepairResult>;
   transfer: (botId: string, targetDeviceId: string, options?: CompanionSwitchOptions) => Promise<CompanionCloudActionResult>;
   transferTargets: () => Promise<CompanionTransferTarget[]>;
@@ -157,6 +161,8 @@ export interface CompanionCloudRuntime {
 export const COMPANION_INSTALL_KEY = 'companion.install.v1';
 const INSTALL_RECHECK_MS = 2 * 60_000;
 
+type TakeOverFailureStage = 'actor-lookup' | 'profile-check' | 'home-cas' | 'local-demotion' | 'install-claim' | 'local-restore';
+
 let active: CompanionCloudRuntime | null = null;
 /** The running sync of the current account, or null when the feature is off. */
 export function activeCompanionCloud(): CompanionCloudRuntime | null { return active; }
@@ -187,6 +193,7 @@ function actionFailure(error: unknown, fallback: 'FAILED' | 'OFFLINE' = 'FAILED'
   if (error instanceof CompanionProfileRepairError) return { ok: false, code: 'FAILED', profileRepairError: error.reason };
   if (error instanceof BotProfileSourceTooLong) return { ok: false, code: 'FAILED', profileFailure: error.failure };
   if (error instanceof CompanionIdentityConflict) return { ok: false, code: 'LOCAL_CINDY_CONFLICT' };
+  if (error instanceof Error && error.message === 'PROFILE_SNAPSHOT_MISSING') return { ok: false, code: 'PROFILE_SNAPSHOT_MISSING' };
   const conflict = chatRejection(error, 409, 'HOME_DEVICE_CONFLICT');
   if (conflict) return { ok: false, code: 'HOME_CONFLICT', homeDeviceId: typeof conflict.homeDeviceId === 'string' ? conflict.homeDeviceId : null };
   return { ok: false, code: isUnreachable(error) ? 'OFFLINE' : fallback };
@@ -233,6 +240,7 @@ export function startCompanionCloud(input: {
   /** A local admission delay is not a failed ownership check. Keep this
    * distinction with the transport; data sync and explicit actions keep api. */
   backgroundIdentity?: { api: CompanionApi; isDeferred: (error: unknown) => boolean };
+  backgroundMirror?: { api: CompanionApi; check: () => void };
   host: CompanionCloudHost;
   endpoint: string;
   humanActorId: string;
@@ -272,36 +280,51 @@ export function startCompanionCloud(input: {
   const roomName = (botId: string) => input.bots().find(bot => bot.botId === botId)?.name ?? '';
   const store = input.store ? createCompanionStore(input.api, input.store) : undefined;
   const uploader = createCompanionUploader({ api: input.api, state, log: input.log, store,
-    readValues: async (botId, actorId) => resolveCompanionSkillFiles(await input.host.readValues(botId), {
-      known: sha256 => state.bot(botId)?.skillFileMedia?.[sha256],
-      gaps: state.bot(botId)?.skillFileGaps ?? {},
-      ...(input.media ? { upload: async file => {
-        const roomId = await mirror.ensureRoom(botId, actorId, roomName(botId));
-        // As the owner: a room file with no message is readable only by whoever uploaded it.
-        const [block] = await input.media!.upload(roomId, `skill-file:${file.sha256}`, [{ id: file.sha256, name: file.name, category: 'file',
-          mimeType: 'application/octet-stream', size: file.size, url: null, path: file.path }], input.humanActorId);
-        if (!block?.mediaId) throw new Error('ATTACHMENT_UNAVAILABLE');
-        return block.mediaId;
-      } } : {}),
-      retain: (media, gaps, preserveExisting) => {
-        const known = state.bot(botId);
-        const nextMedia = preserveExisting ? { ...known?.skillFileMedia, ...media } : media;
-        const nextGaps = preserveExisting ? known?.skillFileGaps ?? {} : gaps;
-        if (canonicalJson([nextMedia, nextGaps]) === canonicalJson([known?.skillFileMedia ?? {}, known?.skillFileGaps ?? {}])) return;
-        state.update(botId, actorId, entry => { entry.skillFileMedia = nextMedia; entry.skillFileGaps = nextGaps; });
-      },
-      ...(input.log ? { log: input.log } : {}),
-    }),
+    readValues: async (botId, actorId) => {
+      const localValues = await input.host.readValues(botId);
+      const entry = state.bot(botId);
+      const blocked = new Set(entry?.actorId === actorId ? entry.restoreBlockedKeys : undefined);
+      // Skip protected attachments before the resolver can send their stale files to room storage.
+      const blockedFiles = [...blocked].filter(key => key.startsWith(COMPANION_SKILL_FILES_PREFIX));
+      return resolveCompanionSkillFiles(localValues.filter(value => !blocked.has(value.key)), {
+        known: sha256 => state.bot(botId)?.skillFileMedia?.[sha256],
+        gaps: state.bot(botId)?.skillFileGaps ?? {},
+        ...(input.media ? { upload: async file => {
+          const roomId = await mirror.ensureRoom(botId, actorId, roomName(botId));
+          // As the owner: a room file with no message is readable only by whoever uploaded it.
+          const [block] = await input.media!.upload(roomId, `skill-file:${file.sha256}`, [{ id: file.sha256, name: file.name, category: 'file',
+            mimeType: 'application/octet-stream', size: file.size, url: null, path: file.path }], input.humanActorId);
+          if (!block?.mediaId) throw new Error('ATTACHMENT_UNAVAILABLE');
+          return block.mediaId;
+        } } : {}),
+        retain: (media, gaps, preserveExisting) => {
+          const known = state.bot(botId);
+          const nextMedia = preserveExisting || blockedFiles.length ? { ...known?.skillFileMedia, ...media } : media;
+          const nextGaps = preserveExisting ? known?.skillFileGaps ?? {} : { ...gaps };
+          if (!preserveExisting) for (const key of blockedFiles) {
+            const slug = key.slice(COMPANION_SKILL_FILES_PREFIX.length);
+            const gap = known?.skillFileGaps?.[slug];
+            if (gap) nextGaps[slug] = gap;
+          }
+          if (canonicalJson([nextMedia, nextGaps]) === canonicalJson([known?.skillFileMedia ?? {}, known?.skillFileGaps ?? {}])) return;
+          state.update(botId, actorId, entry => { entry.skillFileMedia = nextMedia; entry.skillFileGaps = nextGaps; });
+        },
+        ...(input.log ? { log: input.log } : {}),
+      });
+    },
     confirmHome: async (_botId, actorId) => {
       const actors = await input.api<CompanionRuntimeActor[]>('/actors');
       return actors.find(actor => actor.id === actorId)?.homeDeviceId === input.selfDeviceId;
     },
     onLostHome: () => { void input.refresh?.().catch(() => undefined); },
   });
-  const mirror = createCompanionMirror({ api: input.api, state, humanActorId: () => input.humanActorId,
+  const mirrorDeps = { state, humanActorId: () => input.humanActorId,
     canonicalSession: input.host.canonicalSession, rowsAfter: input.host.rowsAfter, latestRows: input.host.latestRows,
     ...(input.media ? { uploadMedia: input.media.upload } : {}),
-    ...(input.host.replyAttachments ? { replyAttachments: input.host.replyAttachments } : {}), ...(input.log ? { log: input.log } : {}) });
+    ...(input.host.replyAttachments ? { replyAttachments: input.host.replyAttachments } : {}), ...(input.log ? { log: input.log } : {}) };
+  const mirror = createCompanionMirror({ ...mirrorDeps, api: input.api });
+  const backgroundMirror = input.backgroundMirror
+    ? createCompanionMirror({ ...mirrorDeps, api: input.backgroundMirror.api }) : mirror;
   let disposed = false;
   const live = () => !disposed && input.current();
   const aborts = new AbortController();
@@ -329,11 +352,12 @@ export function startCompanionCloud(input: {
 
   /** Explicit home actions must leave a diagnostic, without logging response text or paths. */
   function homeActionFailure(action: 'takeOver' | 'transfer' | 'switchHome', botId: string, error: unknown,
-    fallback: 'FAILED' | 'OFFLINE' = 'FAILED'): CompanionCloudActionResult {
+    { fallback, stage }: { fallback?: 'FAILED' | 'OFFLINE'; stage?: TakeOverFailureStage } = {}): CompanionCloudActionResult {
     const result = actionFailure(error, fallback);
     const reason = errorCode(error);
     input.log?.warn('Companion home change failed', { action, botId,
       code: /^[A-Z][A-Z0-9_]{0,79}$/.test(reason) ? reason : (result.ok ? 'FAILED' : result.code),
+      ...(stage ? { stage } : {}),
       ...(error instanceof CompanionIdentityConflict ? { conflictingBotId: error.conflictingBotId } : {}),
     });
     return !result.ok && error instanceof CompanionIdentityConflict
@@ -345,6 +369,7 @@ export function startCompanionCloud(input: {
     let queued: Only;
     let kicked: Only;
     let debounce: ReturnType<typeof setTimeout> | undefined;
+    let urgent = false;
     const hold = (work: Promise<unknown>): Promise<void> => {
       busy = work.then(() => undefined, () => undefined).finally(() => {
         busy = undefined;
@@ -369,13 +394,20 @@ export function startCompanionCloud(input: {
         void hold(result);
         return result;
       },
-      kick(botId?: string) {
+      kick(botId?: string, delayMs?: number) {
         kicked = union(kicked, botId === undefined ? null : new Set([botId]));
+        const nextUrgent = delayMs === 0;
+        if (urgent && !nextUrgent && debounce) return;
+        urgent = nextUrgent;
         clearTimeout(debounce);
-        debounce = setTimeout(() => { const only = kicked ?? null; kicked = undefined; void fire(only); }, debounceMs);
+        debounce = setTimeout(() => {
+          debounce = undefined; urgent = false;
+          const only = kicked ?? null; kicked = undefined;
+          void fire(only);
+        }, delayMs ?? debounceMs);
         debounce.unref?.();
       },
-      dispose() { clearInterval(interval); clearTimeout(debounce); },
+      dispose() { clearInterval(interval); clearTimeout(debounce); debounce = undefined; urgent = false; },
     };
   }
 
@@ -395,12 +427,16 @@ export function startCompanionCloud(input: {
     for (const bot of pick(only)) {
       if (!live()) return;
       try {
+        input.backgroundMirror?.check();
         if (state.bot(bot.botId)?.pendingRebuild && input.host.materializer) {
           const sessionId = await input.host.canonicalSession(bot.botId);
           if (sessionId) await rebuildPending({ state, host: input.host.materializer, botId: bot.botId, actorId: bot.actorId, sessionId, fence });
         }
-        await mirror.syncBot(bot.botId, bot.actorId, bot.name);
-      } catch (error) { input.log?.warn('Companion conversation mirror will retry', { actorId: bot.actorId, code: errorCode(error) }); }
+        await backgroundMirror.syncBot(bot.botId, bot.actorId, bot.name);
+      } catch (error) {
+        if (input.backgroundIdentity?.isDeferred(error)) return;
+        input.log?.warn('Companion conversation mirror will retry', { actorId: bot.actorId, code: errorCode(error) });
+      }
     }
   }, input.mirrorIntervalMs ?? 15_000, 2_000);
   const unsubscribe = input.host.onLocalChange?.(botId => { mirrors.kick(botId); uploads.kick(botId); });
@@ -554,14 +590,21 @@ export function startCompanionCloud(input: {
     return read;
   }
 
-  function materialize(actor: CompanionRuntimeActor, correction?: ProfileCorrection): Promise<CompanionMaterializeResult> {
+  function materialize(
+    actor: CompanionRuntimeActor,
+    correction?: ProfileCorrection,
+    options?: { allowMissingProfile?: boolean; resilient?: boolean },
+  ): Promise<CompanionMaterializeResult> {
     const materializer = input.host.materializer;
     if (!materializer) return Promise.reject(new Error('MATERIALIZE_UNAVAILABLE'));
     const botId = actor.externalId;
     const actorId = actor.id;
     const pending = materializing.get(botId);
-    if (pending) return pending;
+    if (pending && !options?.resilient && !options?.allowMissingProfile) return pending;
     const run = (async () => {
+      if (pending) {
+        try { return await pending; } catch { /* explicit resilient retry proceeds below */ }
+      }
       // Home CAS confirms ownership, but does not refresh the cached avatar. Read the
       // current actor before restoring; once materialized, reconcile will not replay it.
       fence.assertCurrent();
@@ -571,7 +614,10 @@ export function startCompanionCloud(input: {
       const fresh = actors.find(value => value.id === actorId && value.externalId === botId && value.kind === 'bot' && !value.disabled);
       if (current?.id !== actorId || current.homeDeviceId !== input.selfDeviceId
         || !fresh || fresh.homeDeviceId !== input.selfDeviceId) throw new Error('COMPANION_CHANGED');
-      return materializeCompanion({ api: input.api, store, state, log: input.log, fence, correction, onDemoted: publish, host: {
+      return materializeCompanion({ api: input.api, store, state, log: input.log, fence, correction,
+        ...(options?.allowMissingProfile ? { allowMissingProfile: true } : {}),
+        ...(options?.resilient ? { resilient: true } : {}),
+        onDemoted: publish, host: {
         ...materializer, latestRows: input.host.latestRows,
         ...(correction && materializer.backupProfileSource ? { backupProfileSource: async (id: string, value: unknown, writeFence: CompanionWriteFence) => {
           const pending = state.bot(id)?.profileCorrection;
@@ -600,7 +646,7 @@ export function startCompanionCloud(input: {
         }
         return result;
       })
-      .finally(() => { materializing.delete(botId); });
+      .finally(() => { if (materializing.get(botId) === run) materializing.delete(botId); });
     materializing.set(botId, run);
     return run;
   }
@@ -642,7 +688,14 @@ export function startCompanionCloud(input: {
     void claimInstall(actor, 'check', backgroundIdentityApi).then(owner => {
       // Handed here before this computer ever saw the move: take the existing copy over.
       if (owner === 'handed' && input.host.materializer) scheduleAuto(actor);
-      if (owner !== known?.owner) { publish(); uploads.kick(actor.externalId); mirrors.kick(actor.externalId); }
+      if (owner !== known?.owner) {
+        publish();
+        const needsInitialProfile = owner === 'mine' && input.initialKick !== false
+          && !state.bot(actor.externalId)?.prefs[COMPANION_PROFILE_KEY]
+          && !state.bot(actor.externalId)?.stored?.[COMPANION_PROFILE_KEY];
+        uploads.kick(actor.externalId, needsInitialProfile ? 0 : undefined);
+        mirrors.kick(actor.externalId);
+      }
     }, error => {
       const deferred = input.backgroundIdentity?.isDeferred(error) === true;
       if (installs.get(actor.externalId) === checking) {
@@ -1008,16 +1061,23 @@ export function startCompanionCloud(input: {
       finally { repairing.delete(botId); }
     },
 
-    async takeOver(botId, correction) {
+    async takeOver(botId, optionsOrCorrection) {
+      type TakeOverCorrection = ProfileCorrection & { actorId: string; home: string | null };
+      let correction: TakeOverCorrection | undefined = optionsOrCorrection && 'actorId' in optionsOrCorrection && 'values' in optionsOrCorrection
+        ? optionsOrCorrection : undefined;
+      const allowMissingProfileOption = !correction && !!optionsOrCorrection
+        && 'allowMissingProfile' in optionsOrCorrection && optionsOrCorrection.allowMissingProfile === true;
       if (repairing.has(botId) && !correction) return { ok: false, code: 'BUSY' };
       const self = input.selfDeviceId;
       if (!self || !live() || !input.host.materializer) return { ok: false, code: 'NOT_ENABLED' };
       let actor = actorOf(botId);
       if (!actor) {
-        try { await refreshForeground?.(); } catch (error) { return homeActionFailure('takeOver', botId, error); }
+        try { await refreshForeground?.(); } catch (error) {
+          return homeActionFailure('takeOver', botId, error, { stage: 'actor-lookup' });
+        }
         actor = actorOf(botId);
       }
-      if (!actor) return homeActionFailure('takeOver', botId, new Error('COMPANION_NOT_FOUND'));
+      if (!actor) return homeActionFailure('takeOver', botId, new Error('COMPANION_NOT_FOUND'), { stage: 'actor-lookup' });
       const actorId = actor.id;
       const pendingCorrection = state.bot(botId);
       if (!correction && pendingCorrection?.actorId === actorId && pendingCorrection.profileCorrection
@@ -1031,18 +1091,31 @@ export function startCompanionCloud(input: {
         if (!current || current.disabled || current.id !== correction.actorId
           || (current.homeDeviceId ?? null) !== correction.home) throw new CompanionProfileRepairError('changed');
       };
-      // Never move the home before the companion's profile snapshot is in the cloud: without it
-      // this copy could not be built, and the old home would already be demoted.
+      // Never move another computer's home before the profile snapshot is in the cloud unless the
+      // owner explicitly confirmed continuing from default profile data; on the same device
+      // (e.g. OS reinstall), recover immediately so a wiped home never deadlocks.
+      let missingProfileFallback = false;
       try {
         assertRepairHome();
-        const profile = await checkProfileSources(actor, correction);
-        await assertCompanionIdentity(input.host.materializer, actor.externalId,
-          (profile as { templateId?: unknown }).templateId, fence);
+        let templateId: unknown;
+        try {
+          const profile = await checkProfileSources(actor, correction);
+          templateId = (profile as { templateId?: unknown }).templateId;
+        } catch (error) {
+          if (!correction && error instanceof Error && error.message === 'PROFILE_SNAPSHOT_MISSING'
+            && (actor.homeDeviceId === self || allowMissingProfileOption)) {
+            missingProfileFallback = true;
+            templateId = isCindyCompanion(actor.externalId, null) ? 'cindy' : undefined;
+          } else {
+            throw error;
+          }
+        }
+        await assertCompanionIdentity(input.host.materializer, actor.externalId, templateId, fence);
         assertRepairHome();
         identityConflicts.delete(actor.externalId);
       } catch (error) {
         recordProfileFailure(actor, actorId, error);
-        return homeActionFailure('takeOver', botId, error);
+        return homeActionFailure('takeOver', botId, error, { stage: 'profile-check' });
       }
       // Always compare-and-set, even when the cached home already says "here": the cache may be
       // stale (another computer took over while this one was offline). Unchanged homes are a no-op.
@@ -1050,7 +1123,7 @@ export function startCompanionCloud(input: {
         await input.api(`/actors/${actor.id}`, 'PATCH', { homeDeviceId: self,
           expectedHomeDeviceId: correction ? correction.home : actor.homeDeviceId ?? null });
       } catch (error) {
-        const failure = homeActionFailure('takeOver', botId, error);
+        const failure = homeActionFailure('takeOver', botId, error, { stage: 'home-cas' });
         if (!failure.ok && failure.code === 'HOME_CONFLICT') {
           actor.homeDeviceId = failure.homeDeviceId ?? null;
           await refreshForeground?.().catch(() => undefined);
@@ -1059,10 +1132,15 @@ export function startCompanionCloud(input: {
         return failure;
       }
       actor.homeDeviceId = self;
+      let stage: TakeOverFailureStage = 'local-demotion';
       try {
         // Taking over from this installation also takes it from another install on the same device.
         demoteNow(actor);
-        if (await claimInstall(actor, 'takeover', input.api) !== 'mine') return homeActionFailure('takeOver', botId, new Error('INSTALL_CLAIM_LOST'));
+        stage = 'install-claim';
+        if (await claimInstall(actor, 'takeover', input.api) !== 'mine') {
+          return homeActionFailure('takeOver', botId, new Error('INSTALL_CLAIM_LOST'), { stage });
+        }
+        stage = 'local-restore';
         if (correction) {
           const accepted = { homeDeviceId: self, version: correction.version,
             values: Object.fromEntries(Object.entries(correction.values).map(([key, value]) => [key, value.trim()])) };
@@ -1072,16 +1150,17 @@ export function startCompanionCloud(input: {
               && canonicalJson(previous.values) === canonicalJson(accepted.values) && previous.backedUp ? { backedUp: true } : {}) };
           });
         }
-        await materialize(actor, correction);
+        await materialize(actor, correction, { allowMissingProfile: missingProfileFallback, resilient: true });
         identityConflicts.delete(actor.externalId);
         profileFailures.delete(actor.externalId);
         autoRetryAt.delete(actor.externalId);
       } catch (error) {
         recordProfileFailure(actor, actorId, error);
         publish();
-        return homeActionFailure('takeOver', botId, error);
+        return homeActionFailure('takeOver', botId, error, { stage });
       }
-      publish(); mirrors.kick(actor.externalId); uploads.kick(actor.externalId);
+      publish(); mirrors.kick(actor.externalId);
+      uploads.kick(actor.externalId, missingProfileFallback && input.initialKick !== false ? 0 : undefined);
       return { ok: true };
     },
 
@@ -1149,7 +1228,9 @@ export function startCompanionCloud(input: {
       const chosen = choices.targets.find(target => target.deviceId === targetDeviceId);
       if (!chosen) return { ok: false, code: 'TARGET_UNAVAILABLE' };
       if (choices.mode === 'local') return runtime.transfer(botId, targetDeviceId, options);
-      if (choices.mode === 'takeOver') return runtime.takeOver(botId);
+      if (choices.mode === 'takeOver') {
+        return runtime.takeOver(botId, options?.allowMissingProfile ? { allowMissingProfile: true } : undefined);
+      }
       // The home hands it over itself (flush, busy check, compare-and-set), exactly as from its own settings.
       let result: CompanionCloudActionResult;
       try { result = await input.host.homeLink!.handOver(choices.homeDeviceId!, botId, targetDeviceId, options); }
@@ -1157,7 +1238,7 @@ export function startCompanionCloud(input: {
         // A lost answer may still have moved it: show where it runs now.
         await refreshForeground?.().catch(() => undefined);
         publish();
-        return homeActionFailure('switchHome', botId, error, 'OFFLINE');
+        return homeActionFailure('switchHome', botId, error, { fallback: 'OFFLINE' });
       }
       // Moved here: re-read homes now so the automatic take-over starts without waiting for the push.
       if (result.ok || result.code === 'HOME_CONFLICT') await refreshForeground?.().catch(() => undefined);

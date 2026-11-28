@@ -45,6 +45,26 @@ function makeStore(
 }
 
 describe('默认态与持久化', () => {
+  it('commits Host preferences together and preserves binding state, other accounts and future metadata', () => {
+    const store = makeStore();
+    store.setWorkspaces({ project: path.join(dir, 'project') });
+    store.setEnabled(true);
+    const before = JSON.parse(fs.readFileSync(filePath(), 'utf8'));
+    before.future = true;
+    before.accounts['account-test'].slack.future = 'preserve';
+    before.accounts['another-account'] = { future: 'untouched' };
+    fs.writeFileSync(filePath(), JSON.stringify(before));
+    const committed = store.commitPreferences!({ lifecycleAnnouncementOverride: true, telegramDefaultWorkspace: 'project' });
+    expect(committed).toMatchObject({ enabled: true, lifecycleAnnouncementOverride: true, telegramDefaultWorkspace: 'project' });
+    const after = JSON.parse(fs.readFileSync(filePath(), 'utf8'));
+    expect(after.future).toBe(true);
+    expect(after.accounts['another-account']).toEqual(before.accounts['another-account']);
+    expect(after.accounts['account-test'].slack).toMatchObject({ enabled: true, future: 'preserve' });
+    const bytes = fs.readFileSync(filePath(), 'utf8');
+    expect(() => store.commitPreferences!({ lifecycleAnnouncementOverride: false, xDefaultWorkspace: 'unknown' })).toThrow();
+    expect(fs.readFileSync(filePath(), 'utf8')).toBe(bytes);
+    expect(store.commitPreferences!({ lifecycleAnnouncementOverride: null, telegramDefaultWorkspace: null })).toMatchObject({ lifecycleAnnouncementOverride: null, telegramDefaultWorkspace: null, enabled: true });
+  });
   it('无文件: 关闭 + 空目录清单 + 内置默认地址 + 空绑定缓存', () => {
     const store = makeStore();
     expect(store.get()).toEqual({

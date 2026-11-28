@@ -1,7 +1,6 @@
 import { EventEmitter } from 'node:events';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { runGhostSnapshotWorkerRequest } from '../../main/cindy-brain/ghostSnapshotWorkerProcess';
 
 const noop = () => undefined;
 const asyncNoop = async () => undefined;
@@ -264,7 +263,10 @@ export const utilityProcess = {
       postMessage: (message: unknown) => {
         const value = message as { type?: string; request?: unknown };
         if (value.type !== 'mutate' || !value.request || !options?.cwd) return;
-        void runGhostSnapshotWorkerRequest(value.request as never, options.cwd).then(
+        // Loaded on use: a static import pulls main-process modules into every test's setup
+        // graph before its own `node:os` / module mocks apply.
+        void import('../../main/cindy-brain/ghostSnapshotWorkerProcess').then(({ runGhostSnapshotWorkerRequest }) =>
+          runGhostSnapshotWorkerRequest(value.request as never, options.cwd!)).then(
           () => emitter.emit('message', { ok: true }),
           (error) => emitter.emit('message', {
             ok: false,

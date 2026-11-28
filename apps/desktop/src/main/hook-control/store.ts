@@ -18,6 +18,8 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
+import { inspectSettingsJson, isSettingsRecord, type SettingsJsonInspection } from '../maker-host/inspect-settings-json.js';
+import { validateOptionalSettingsFields } from '../maker-host/settings-inspection.js';
 
 import { HOOK_CHAT_WORKSPACE_ALIAS, HOOK_WORKSPACE_ALIAS_RE } from '../../shared/hookControlIpc.js';
 
@@ -197,7 +199,19 @@ export function validateWorkspaces(input: Record<string, string>): Record<string
 }
 
 /** Slack Hook 配置仓库(写操作同步落盘, 返回写后最新状态)。 */
+export type OfficialHookInspection = SettingsJsonInspection<Pick<SlackHookConfigState,
+  'enabled' | 'telegramEnabled' | 'xEnabled' | 'lifecycleAnnouncementOverride' |
+  'telegramDefaultWorkspace' | 'xDefaultWorkspace' | 'urlOverride'>> |
+  { status: 'unavailable' | 'migrationPending' };
+
+/** No manager construction, authentication reads, migration or endpoint lookup. */
+export function inspectOfficialHookSettings(filePath: string, fingerprint: string | null, legacyFilePath?: string): OfficialHookInspection {
+  return createSlackHookStore({ filePath, legacyFilePath, defaultUrl: () => '', log: { info() {}, warn() {} } }).inspect(fingerprint);
+}
+
 export interface SlackHookStore {
+  /** One native mutation for the editable preferences; never changes binding/authentication. */
+  commitPreferences?(patch: Partial<Pick<SlackHookConfigState, 'lifecycleAnnouncementOverride' | 'telegramDefaultWorkspace' | 'xDefaultWorkspace'>>): SlackHookConfigState;
   get(): SlackHookConfigState;
   /** 实际生效的服务器地址(覆写优先, 否则内置默认)。 */
   effectiveUrl(): string;
@@ -239,7 +253,7 @@ export interface SlackHookStore {
   setXCompanionBotId(botId: string | null): SlackHookConfigState;
 }
 
-export function createSlackHookStore(deps: SlackHookStoreDeps): SlackHookStore {
+export function createSlackHookStore(deps: SlackHookStoreDeps): SlackHookStore & { inspect(fingerprint: string | null): OfficialHookInspection } {
   const { filePath, legacyFilePath, cleanupLegacySecrets, log } = deps;
 
   interface AccountState {
@@ -701,6 +715,59 @@ export function createSlackHookStore(deps: SlackHookStoreDeps): SlackHookStore {
   }
 
   return {
+    commitPreferences(patch) {
+      const current = read();
+      const fingerprint = parseAccountFingerprint(deps.getAccountFingerprint?.());
+      if (!fingerprint) throw new HookConnectionValidationError('account is not available');
+      for (const key of ['telegramDefaultWorkspace', 'xDefaultWorkspace'] as const) {
+        const alias = patch[key];
+        if (alias !== undefined && alias !== null && !Object.hasOwn(current.workspaces, alias)) throw new HookConnectionValidationError('workspace is not configured');
+      }
+      const inspected = inspectSettingsJson(filePath, raw => raw);
+      if (inspected.status !== 'ready' || !inspected.missing && inspected.raw.version !== 2) throw new HookConnectionValidationError('configuration is not readable');
+      const document = structuredClone(inspected.missing ? { version: 2, workspaces: {}, accounts: {} } : inspected.raw);
+      const accounts = (document.accounts ??= {}) as Record<string, Record<string, unknown>>;
+      const account = accounts[fingerprint] ??= {};
+      if (patch.lifecycleAnnouncementOverride !== undefined) ((account.slack ??= {}) as Record<string, unknown>).lifecycleAnnouncementOverride = patch.lifecycleAnnouncementOverride;
+      if (patch.telegramDefaultWorkspace !== undefined) ((account.telegram ??= {}) as Record<string, unknown>).defaultWorkspace = patch.telegramDefaultWorkspace;
+      if (patch.xDefaultWorkspace !== undefined) ((account.x ??= {}) as Record<string, unknown>).defaultWorkspace = patch.xDefaultWorkspace;
+      writeDocument(document as unknown as StoredDocument);
+      return { ...current, ...patch };
+    },
+    inspect(fingerprint) {
+      if (!parseAccountFingerprint(fingerprint)) return { status: 'unavailable' };
+      const inspection = inspectSettingsJson(filePath, (raw) => raw);
+      if (inspection.status !== 'ready') return inspection;
+      if (inspection.missing && legacyFilePath) {
+        try { fs.lstatSync(legacyFilePath); return { status: 'migrationPending' }; }
+        catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return { status: 'unreadable' }; }
+      }
+      const raw = inspection.raw;
+      if (raw.version !== undefined && raw.version !== 1 && raw.version !== 2) return { status: 'unreadable' };
+      if (!inspection.missing && (raw.version !== 2 || raw.legacyAccount !== undefined)) return { status: 'migrationPending' };
+      if (raw.accounts !== undefined && !isSettingsRecord(raw.accounts)) return { status: 'unreadable' };
+      const accountRaw = isSettingsRecord(raw.accounts) ? raw.accounts[fingerprint!] : undefined;
+      if (accountRaw !== undefined && !isSettingsRecord(accountRaw)) return { status: 'unreadable' };
+      try {
+        validateOptionalSettingsFields(raw, { workspaces: isSettingsRecord, urlOverride: value => value === null || (typeof value === 'string' && /^wss?:\/\/.+/.test(value)) });
+        if (isSettingsRecord(accountRaw)) for (const provider of ['slack', 'telegram', 'x']) {
+          const value = accountRaw[provider];
+          if (value === undefined) continue;
+          if (!isSettingsRecord(value)) return { status: 'unreadable' };
+          validateOptionalSettingsFields(value, { enabled: value => typeof value === 'boolean', lifecycleAnnouncementOverride: value => value === null || typeof value === 'boolean', defaultWorkspace: value => value === null || typeof value === 'string' });
+        }
+      } catch { return { status: 'unreadable' }; }
+      const document: StoredDocument = {
+        version: 2, urlOverride: typeof raw.urlOverride === 'string' && /^wss?:\/\/.+/.test(raw.urlOverride) ? raw.urlOverride : null,
+        workspaces: parseWorkspaces(raw.workspaces), accounts: { [fingerprint!]: parseAccount(accountRaw) },
+      };
+      const view = viewOf(document, fingerprint);
+      return { ...inspection, raw: { account: accountRaw ?? {}, ...(raw.urlOverride !== undefined ? { urlOverride: raw.urlOverride } : {}) }, value: {
+        enabled: view.enabled, telegramEnabled: view.telegramEnabled, xEnabled: view.xEnabled,
+        lifecycleAnnouncementOverride: view.lifecycleAnnouncementOverride,
+        telegramDefaultWorkspace: view.telegramDefaultWorkspace, xDefaultWorkspace: view.xDefaultWorkspace, urlOverride: view.urlOverride,
+      } };
+    },
     get: () => read(),
     effectiveUrl() {
       return read().urlOverride ?? deps.defaultUrl();

@@ -36,7 +36,7 @@ import type { Session } from '@/lib/ccAgent.types';
 import { onPatch as onSessionPatch } from '@/lib/sessionsBus';
 
 export interface UsageHistoryModel {
-  agentKind: 'claude-code' | 'codex' | 'pi' | 'media' | 'auxiliary';
+  agentKind: 'claude-code' | 'codex' | 'pi' | 'acp' | 'media' | 'auxiliary';
   model: string;
   money: RegionalMoney;
   estimatedMoney: RegionalMoney | null;
@@ -52,7 +52,7 @@ export interface UsageHistoryModelDay {
   providerId?: string;
   requestCount?: number;
   day: string;
-  agentKind: 'claude-code' | 'codex' | 'pi' | 'media' | 'auxiliary';
+  agentKind: UsageHistoryModel['agentKind'];
   model: string;
   money: RegionalMoney;
   apiMoney: RegionalMoney;
@@ -214,7 +214,8 @@ function finiteNumber(value: unknown, fallback = 0): number {
 }
 
 function isAgentKind(value: unknown): value is UsageHistoryModel['agentKind'] {
-  return value === 'claude-code' || value === 'codex' || value === 'pi' || value === 'media' || value === 'auxiliary';
+  return value === 'claude-code' || value === 'codex' || value === 'pi' ||
+    value === 'acp' || value === 'media' || value === 'auxiliary';
 }
 
 function parseDevices(value: unknown): UsageHistoryDevice[] | undefined {

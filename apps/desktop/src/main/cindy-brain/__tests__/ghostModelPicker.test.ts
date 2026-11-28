@@ -13,6 +13,7 @@ import type { WebContents } from 'electron';
 import { installGhostPageModelPicker } from '../ghostPageModelPicker.js';
 import type { ProviderView } from '@cindy/model-providers';
 import type { InstalledGhost } from '../../../shared/ghost.js';
+import type { PluginEngineView } from '../../../shared/pluginEngines.js';
 import type { PluginTaskRoute } from '../../../shared/pluginTasks.js';
 import type { PluginModelPickerRequest } from '../../../shared/pluginModelPicker.js';
 import { GhostModelPicker, chooseModelPickerWindow, readPluginModelRouteCatalog, isGhostCardModelRouteAvailable, isPluginModelPickerRouteAvailable, isPluginRouteHarnessInstalled, setPluginRouteAgentStatusProvider } from '../ghostModelPicker.js';
@@ -301,6 +302,48 @@ it('checks a card model at its own location: local catalog, or the offered remot
   expect(await isGhostCardModelRouteAvailable({ ...route, model: 'remote-model', agentDeviceId: 'offline-mac' }, sources)).toBe(false);
   expect(remoteViews).not.toHaveBeenCalledWith('offline-mac');
   expect(await isGhostCardModelRouteAvailable({ ...route, agentDeviceId: 'mac-mini' }, { ...sources, locations: null })).toBe(false);
+});
+
+it('checks local and remote plugin-engine (acp) card and picker routes against offered plugin engines', async () => {
+  const localEngine: PluginEngineView = {
+    key: 'antigravity:agy',
+    providerId: 'acp-plugin:antigravity:agy',
+    ghostId: 'antigravity',
+    harnessId: 'agy',
+    name: 'Antigravity',
+    availability: { state: 'available' },
+    models: [{ id: 'gemini-4-neon', displayName: 'Gemini 4 Neon', efforts: ['low', 'high'] }],
+    permissionModes: [],
+    defaultPermissionMode: 'ask',
+  };
+  const remoteEngine: PluginEngineView = {
+    ...localEngine,
+    models: [{ id: 'gemini-remote', displayName: 'Gemini Remote', efforts: ['high'] }],
+  };
+  const acpRoute = {
+    agentKind: 'acp' as const,
+    providerId: 'acp-plugin:antigravity:agy',
+    model: 'gemini-4-neon',
+    effort: 'high',
+    fastMode: false as const,
+  };
+  const sources = {
+    localViews: async () => [],
+    localAgents: () => [],
+    localPluginEngines: () => [localEngine],
+    locations: async () => ({ locations: [{ agentDeviceId: 'mac-mini' }] }),
+    remoteViews: async () => [],
+    remotePluginEngines: vi.fn(async () => [remoteEngine]),
+  };
+  expect(isPluginModelPickerRouteAvailable(acpRoute, [], [], [localEngine])).toBe(true);
+  expect(isPluginModelPickerRouteAvailable({ ...acpRoute, fastMode: true }, [], [], [localEngine])).toBe(false);
+  expect(isPluginModelPickerRouteAvailable({ ...acpRoute, effort: 'xhigh' }, [], [], [localEngine])).toBe(false);
+  expect(isPluginModelPickerRouteAvailable({ ...acpRoute, model: 'missing' }, [], [], [localEngine])).toBe(false);
+  expect(isPluginModelPickerRouteAvailable(acpRoute, [], [], [{ ...localEngine, suspended: true }])).toBe(false);
+  expect(await isGhostCardModelRouteAvailable(acpRoute, sources)).toBe(true);
+  expect(await isGhostCardModelRouteAvailable({ ...acpRoute, model: 'gemini-remote', agentDeviceId: 'mac-mini' }, sources)).toBe(true);
+  expect(await isGhostCardModelRouteAvailable({ ...acpRoute, model: 'gemini-4-neon', agentDeviceId: 'mac-mini' }, sources)).toBe(false);
+  expect(await isGhostCardModelRouteAvailable({ ...acpRoute, model: 'gemini-remote', agentDeviceId: 'offline-mac' }, sources)).toBe(false);
 });
 
 // Unit: after a first successful pick, "choose a model" on a PR card stopped opening the picker.

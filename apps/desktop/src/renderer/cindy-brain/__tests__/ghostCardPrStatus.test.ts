@@ -73,6 +73,49 @@ describe('fillGhostCardPrStatus', () => {
     expect(el.style.display).toBe('none');
   });
 
+  it('reveals a dormant merge-ready button when live status becomes CLEAN and hides it otherwise', () => {
+    document.body.innerHTML =
+      '<button id="dormant" data-ghost-action="pr:merge" data-ghost-pr-merge-ready="Octo/Repo#9" style="display:none"></button>' +
+      '<button id="active" data-ghost-action="pr:merge" data-ghost-pr-merge-ready="Octo/Repo#9" style="display:inline-flex"></button>';
+    const dormant = document.querySelector<HTMLElement>('#dormant')!;
+    const active = document.querySelector<HTMLElement>('#active')!;
+    // Live BLOCKED hides both.
+    fillGhostCardPrStatus(document, () => status({ mergeState: 'BLOCKED' }), t);
+    expect(dormant.style.display).toBe('none');
+    expect(active.style.display).toBe('none');
+    // Live CLEAN reveals both.
+    fillGhostCardPrStatus(document, () => status({ mergeState: 'CLEAN' }), t);
+    expect(dormant.style.display).toBe('inline-flex');
+    expect(active.style.display).toBe('inline-flex');
+    // Missing or legacy status restores each button's original plugin snapshot display.
+    fillGhostCardPrStatus(document, () => undefined, t);
+    expect(dormant.style.display).toBe('none');
+    expect(active.style.display).toBe('inline-flex');
+    // Merged PR hides both.
+    fillGhostCardPrStatus(document, () => status({ status: 'merged', mergeState: undefined }), t);
+    expect(dormant.style.display).toBe('none');
+    expect(active.style.display).toBe('none');
+  });
+
+  // Regression (Greptile P2 on #12991): a button carrying both open-only and merge-ready previously
+  // captured `none!important` written by applyOpenOnly when first rendered as merged, losing its
+  // plugin fallback display once live status later became unavailable.
+  it('preserves the original plugin display when open-only and merge-ready share one button', () => {
+    document.body.innerHTML =
+      '<button data-ghost-action="pr:merge" data-ghost-pr-open-only="Octo/Repo#9" data-ghost-pr-merge-ready="Octo/Repo#9" style="display:inline-flex"></button>';
+    const btn = document.querySelector<HTMLElement>('button')!;
+    fillGhostCardPrStatus(document, () => status({ status: 'merged', mergeState: undefined }), t);
+    expect(btn.style.display).toBe('none');
+    fillGhostCardPrStatus(document, () => undefined, t);
+    expect(btn.style.display).toBe('inline-flex');
+    fillGhostCardPrStatus(document, () => status({ status: 'open', mergeState: 'BLOCKED' }), t);
+    expect(btn.style.display).toBe('none');
+    fillGhostCardPrStatus(document, () => status({ status: 'open', mergeState: 'CLEAN' }), t);
+    expect(btn.style.display).toBe('inline-flex');
+    fillGhostCardPrStatus(document, () => undefined, t);
+    expect(btn.style.display).toBe('inline-flex');
+  });
+
   // Regression: one merged card must not offer to archive a task with another unfinished PR.
   // Unit: the second PR need not have a mounted card; missing/failed status is not completion.
   it('requires every task PR to be confirmed merged before revealing archive', () => {
