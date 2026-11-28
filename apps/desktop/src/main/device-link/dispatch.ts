@@ -107,6 +107,7 @@ import {
   CONTROLLER_CAPABILITY_PROVIDER_PICKER_V1,
   type ProviderPickerModel,
   DL_VOICE_DICTIONARY_GET_CHANNEL,
+  DL_VOICE_DICTIONARY_MUTATE_CHANNEL,
   DL_TELEGRAM_STATUS_CHANNEL,
   DL_TELEGRAM_SET_ONLINE_CHANNEL,
   DL_USAGE_WIDGET_SNAPSHOT_CHANNEL,
@@ -186,7 +187,7 @@ import type { admitSharedTaskFsWatchTopics } from './sharedTaskFileAccess.js';
 import type { transcribeRemoteVoiceInput } from './voiceTranscribe';
 import type { readTelegramRemoteStatus, setTelegramRemoteOnline } from './telegramRemoteControl';
 import type { adviseAndRecordVoiceInputDictionaryLearning } from '../voice-input/index.js';
-import type { buildMobileDictionarySnapshot } from '../voice-input/dictionarySyncDriver.js';
+import type { buildMobileDictionarySnapshot, mutateMobileDictionary } from '../voice-input/dictionarySyncDriver.js';
 import type {
   setBroadcastTapListener,
 } from './broadcast-tap';
@@ -518,6 +519,7 @@ export interface InboundDispatchPorts {
   setTelegramRemoteOnline?: typeof setTelegramRemoteOnline;
   adviseAndRecordVoiceInputDictionaryLearning?: typeof adviseAndRecordVoiceInputDictionaryLearning;
   buildMobileDictionarySnapshot?: typeof buildMobileDictionarySnapshot;
+  mutateMobileDictionary?: typeof mutateMobileDictionary;
   setBroadcastTapListener: typeof setBroadcastTapListener;
   broadcastTap: typeof broadcastTap;
   RECOVERY_CHECKPOINT_MARKER: typeof RECOVERY_CHECKPOINT_MARKER;
@@ -589,6 +591,7 @@ export function createInboundDispatch(ports: InboundDispatchPorts) {
     setTelegramRemoteOnline = unavailable('setTelegramRemoteOnline'),
     adviseAndRecordVoiceInputDictionaryLearning = unavailable('adviseAndRecordVoiceInputDictionaryLearning'),
     buildMobileDictionarySnapshot = unavailable('buildMobileDictionarySnapshot'),
+    mutateMobileDictionary = unavailable('mutateMobileDictionary'),
     setBroadcastTapListener,
     broadcastTap,
     RECOVERY_CHECKPOINT_MARKER,
@@ -5642,6 +5645,24 @@ async function executeRemoteInvoke(src: string, payload: InvokePayload | undefin
       const message = err instanceof Error ? err.message : String(err);
       log.warn(`voice:dictionary:get failed from ${shortId(src)}: ${message}`);
       return { ok: false, error: { code: 'VOICE_DICTIONARY_GET_FAILED', message } };
+    }
+  }
+
+  // device-link:voice:dictionary:mutate 让手机直接通过同账号桌面 CRDT 增删改个人词典词条及别名，
+  // 变更立即经桌面 CRDT 广播同步到其它桌面与手机，避免移动端维护会分叉的可写副本。
+  if (payload.channel === DL_VOICE_DICTIONARY_MUTATE_CHANNEL) {
+    if (!isSameAccountController(src)) {
+      return {
+        ok: false,
+        error: { code: 'CHANNEL_NOT_ALLOWED', message: 'Voice dictionary editing requires the same account' },
+      };
+    }
+    try {
+      return { ok: true, result: mutateMobileDictionary((payload.args ?? [])[0]) };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      log.warn(`voice:dictionary:mutate failed from ${shortId(src)}: ${message}`);
+      return { ok: false, error: { code: 'IPC_ERROR', message } };
     }
   }
 

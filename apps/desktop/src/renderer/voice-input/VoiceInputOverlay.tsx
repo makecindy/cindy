@@ -50,9 +50,11 @@ import {
   type VoiceInputUsageOutcome,
 } from '@/hooks/useVoiceInputUsageStats';
 import {
+  createStartCueEchoTracker,
   createStartCueGate,
   playVoiceInputEndCue,
   playVoiceInputStartCue,
+  type StartCueEchoTracker,
   type StartCueGate,
 } from './startCue';
 import {
@@ -263,6 +265,7 @@ export function VoiceInputOverlay() {
   const startupTimelineRef = useRef<VoiceInputStartupTimeline | null>(null);
   const engineRef = useRef<WebMicAudioEngine | null>(null);
   const startCueGateRef = useRef<StartCueGate | null>(null);
+  const startCueEchoTrackerRef = useRef<StartCueEchoTracker>(createStartCueEchoTracker());
   const runIdRef = useRef<string | null>(null);
   const stateRef = useRef<VoiceInputState>('idle');
   const stopInFlightRef = useRef(false);
@@ -279,6 +282,7 @@ export function VoiceInputOverlay() {
   const historyEntryIdRef = useRef<string | null>(null);
   const sentAudioMsRef = useRef(0);
   const hasRecordingContentRef = useRef(false);
+  const hasCaptureSoundRef = useRef<(() => boolean) | null>(null);
   const terminalOutcomeRef = useRef<VoiceInputUsageOutcome>('success');
   const recordingIdRef = useRef<string | null>(null);
   const audioMutePromisesRef = useRef(new Map<string, Promise<void>>());
@@ -509,6 +513,7 @@ export function VoiceInputOverlay() {
   const stopEngine = useCallback(async () => {
     // The attempt is ending: nothing is left for the start cue to wait for.
     startCueGateRef.current?.abandon();
+    startCueEchoTrackerRef.current.reset();
     const engine = engineRef.current;
     engineRef.current = null;
     if (engine) await engine.stop();
@@ -923,6 +928,7 @@ export function VoiceInputOverlay() {
     historyEntryIdRef.current = null;
     sentAudioMsRef.current = 0;
     hasRecordingContentRef.current = false;
+    hasCaptureSoundRef.current = null;
     terminalOutcomeRef.current = 'success';
     runIdRef.current = null;
     ownedRunIdRef.current = null;
@@ -935,6 +941,8 @@ export function VoiceInputOverlay() {
     // microphone is open so capture does not queue behind that (see createStartCueGate).
     const cueGate = createStartCueGate();
     startCueGateRef.current = cueGate;
+    const cueEchoTracker = createStartCueEchoTracker();
+    startCueEchoTrackerRef.current = cueEchoTracker;
 
     const capturePromise = startVoiceInputCaptureSession({
       label: 'global',
@@ -951,6 +959,8 @@ export function VoiceInputOverlay() {
       onCaptureReady: () => cueGate.release(),
       onPcmCaptured: (pcm) => audioAccumulatorRef.current.append(pcm),
       onSoundDetected: () => { hasRecordingContentRef.current = true; },
+      onSoundEvidenceAvailable: (hasSound) => { hasCaptureSoundRef.current = hasSound; },
+      isInStartCueEchoWindow: () => cueEchoTracker.isInEchoWindow(),
       onInterrupted: (message) => {
         if (isActiveStartAttempt(attemptId)) void failRecording(message);
       },
@@ -970,7 +980,10 @@ export function VoiceInputOverlay() {
       if (!play || !settings.playInteractionSound) return;
       if (!isActiveStartAttempt(attemptId) || stateRef.current !== 'listening') return;
       timeline.mark('start_cue_released');
-      return playVoiceInputStartCue();
+      cueEchoTracker.markCueStarted();
+      return playVoiceInputStartCue().finally(() => {
+        cueEchoTracker.markCueEnded();
+      });
     });
     // A capture that never becomes ready (denied, unavailable, cancelled) has no
     // cue to wait for; do not leave system mute waiting for the cap.
@@ -1343,6 +1356,7 @@ export function VoiceInputOverlay() {
     const settings = settingsRef.current;
     if (hasRecordingContentRef.current) setVoiceState('submitting');
     await drainAndStopEngine();
+    if (hasCaptureSoundRef.current?.()) hasRecordingContentRef.current = true;
     if (!isCurrentStop()) return;
     void restoreSystemAudioAndMaybePlayEndCue(settings.playInteractionSound);
     if (!hasRecordingContentRef.current && !draftTextRef.current.trim() && !finalTextRef.current.trim()) {
@@ -1579,7 +1593,8 @@ export function VoiceInputOverlay() {
           }
           if (historyEntryIdRef.current) {
             const historyEntryId = historyEntryIdRef.current;
-            window.setTimeout(() => updateVoiceInputHistoryEntry(historyEntryId, event.text), 0);
+            const rawTranscript = rawTranscriptTextRef.current || undefined;
+            window.setTimeout(() => updateVoiceInputHistoryEntry(historyEntryId, event.text, rawTranscript), 0);
           }
           break;
         case 'error': {

@@ -118,7 +118,7 @@ import { createHostProviderConfig } from './agent/provider-config.js';
 import { createProviderRouteResolver } from './agent/provider-credentials.mjs';
 import { createHostHistoryReader, dismissHostErrorMessage, readHostHistoryView, readHostSessionActivityMeta, readHostWorkDetails, readMessagesList, readMessagesAroundClientId } from './agent/history.js';
 import { requireString } from '../../desktop/src/main/utils/ipcValidate.js';
-import { runLoginCommand } from './login-cli.mjs';
+import { reportLoginCommandFailure, runLoginCommand } from './login-cli.mjs';
 import { readOrCreateApiToken } from './api-token.mjs';
 import { CindyAuthClient } from '@cindy/auth-client';
 import { hostAuthFetch } from './auth-fetch.mjs';
@@ -335,8 +335,7 @@ if (command === '--help' || command === '-h') {
     await proxyWarmup;
     await runLoginCommand(process.argv.slice(3));
   } catch (error) {
-    console.error(`cindy-host login failed: ${error instanceof Error ? error.message : String(error)}`);
-    process.exitCode = 1;
+    process.exitCode = reportLoginCommandFailure(error);
   }
 } else if (command !== undefined && command !== 'serve') {
   console.error(
@@ -1370,6 +1369,7 @@ const hostAutoTitle = createHostAutoTitle({
 const hostModelGroups = createHostModelGroups({
   listProviderViews: async () => (await listProviders({ gateway: currentGateway(), ownerId: runtime.owner })).providers,
   listLocalAgents: () => agentGraph?.agents ?? [],
+  runningSessions: () => agentGraph?.maker.listActiveSessions().filter(session => session.isTurnRunning()) ?? [],
   readPricing: async () => ({
     gateway: await usagePricing.getGatewayModelPricing().catch(() => null),
     reference: usagePricing.readReferenceModelPricing(),

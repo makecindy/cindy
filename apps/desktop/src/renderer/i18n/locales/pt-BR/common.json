@@ -1178,7 +1178,7 @@
     "permissionMissing": "Não concedida",
     "openPermissionSettings": "Conceder permissão",
     "recheckPermissions": "Verificar novamente",
-    "permissionActionFailed": "Não foi possível abrir o guia de permissões. Tente novamente nas configurações de Controle remoto do computador.",
+    "permissionActionFailed": "Não foi possível abrir o guia de permissões. Tente novamente em Configurações → Conexão remota no computador.",
     "permissionCheckFailed": "Não foi possível verificar as permissões. Verifique se o computador está online e tente novamente.",
     "openGuideOnComputer": "Abrir guia no computador",
     "permissionGuideOpened": "O guia de permissões está aberto no computador. Continue por lá.",
@@ -3222,7 +3222,8 @@
           "gatewayKey": "Requer que seu gateway de IA ofereça suporte a esta rota ASR em tempo real",
           "codexLogin": "Usa seu login do Codex",
           "elevenlabsKey": "Usa sua chave do ElevenLabs (variável de ambiente)",
-          "codexRealtimeUnsupported": "Indisponível: o login do Codex não é uma credencial da API Realtime da OpenAI"
+          "codexRealtimeUnsupported": "Indisponível: o login do Codex não é uma credencial da API Realtime da OpenAI",
+          "localOffline": "Executa offline neste dispositivo (sem conta nem chave de API)"
         },
         "credentialError": {
           "gatewayMissing": "Nenhuma chave de gateway de IA encontrada; este modelo está indisponível.",
@@ -3230,10 +3231,24 @@
           "elevenlabsMissing": "Nenhuma chave do ElevenLabs configurada (variável de ambiente); este modelo está indisponível.",
           "customAsrConfigMissing": "Conclua e salve as configurações do serviço ASR em tempo real antes de iniciar a entrada por voz.",
           "customAsrKeyMissing": "Adicione e salve uma chave de API para o serviço ASR em tempo real personalizado.",
-          "codexRealtimeUnsupported": "O login do Codex não pode ser usado para reconhecimento de fala em tempo real. Escolha um serviço ASR compatível."
+          "codexRealtimeUnsupported": "O login do Codex não pode ser usado para reconhecimento de fala em tempo real. Escolha um serviço ASR compatível.",
+          "localAsrModelMissing": "Selecione uma pasta de modelo ASR sherpa-onnx local antes de iniciar a entrada de voz offline.",
+          "localAsrUnsupported": "O reconhecimento de voz offline local não é compatível com esta arquitetura."
         },
         "manageProviders": "Abrir provedores de modelos",
-        "reset": "Restaurar padrão"
+        "reset": "Restaurar padrão",
+        "localAsr": {
+          "optionLabel": "Reconhecimento local offline (sherpa-onnx)",
+          "optionDescription": "Reconhecimento ONNX no dispositivo; funciona totalmente offline sem conta ou chave de API",
+          "notice": "Escolha uma pasta local de modelo sherpa-onnx (SenseVoice, Paraformer, Whisper ou Transducer com tokens.txt e arquivos .onnx). O áudio permanece neste computador.",
+          "modelDirLabel": "Pasta do modelo local",
+          "readyStatus": "Pronto · {{kind}} ({{folder}})",
+          "unsupportedStatus": "Não compatível nesta plataforma",
+          "notConfiguredStatus": "Nenhuma pasta de modelo selecionada",
+          "clearFolder": "Limpar",
+          "chooseFolder": "Escolher pasta do modelo",
+          "invalidFolder": "Esta pasta não contém um modelo sherpa-onnx compatível (tokens.txt e arquivos .onnx)."
+        }
       },
       "historyToggle": {
         "show": "Mostrar histórico recente",
@@ -3381,7 +3396,9 @@
           "filters": {
             "all": "Todas",
             "automatic": "Automática",
-            "manual": "Manual"
+            "manual": "Manual",
+            "candidates": "Candidatos",
+            "suppressed": "Suprimidos"
           },
           "sources": {
             "automatic": "Automática",
@@ -3394,6 +3411,28 @@
             "automaticAddedMultiple": "{{count}} termos adicionados automaticamente, incluindo {{term}}",
             "delete": "Excluir",
             "deleteAriaLabel": "Excluir termo adicionado automaticamente: {{term}}"
+          },
+          "export": {
+            "csv": "Exportar CSV",
+            "json": "Exportar JSON",
+            "successCsv": "Dicionário exportado em CSV",
+            "successJson": "Dicionário exportado em JSON"
+          },
+          "candidates": {
+            "hint": "Termos observados nas suas correções manuais ainda não promovidos automaticamente. Promova agora ou remova.",
+            "evidenceCount": "Observado {{count}}×",
+            "promote": "Promover",
+            "promoteTooltip": "Promover este candidato ao dicionário agora",
+            "promotedToast": "“{{term}}” promovido ao dicionário",
+            "empty": "Ainda não há termos candidatos."
+          },
+          "suppressed": {
+            "hint": "Termos automáticos excluídos ficam suprimidos para não voltarem sozinhos. Restaure o aprendizado ou adicione novamente.",
+            "restore": "Permitir aprendizado",
+            "addToDictionary": "Adicionar novamente",
+            "restoredToast": "Aprendizado automático restaurado para “{{term}}”",
+            "addedToast": "“{{term}}” adicionado novamente ao dicionário",
+            "empty": "Nenhum termo suprimido."
           }
         }
       },
@@ -3438,7 +3477,15 @@
         "toast": {
           "copied": "Copiado",
           "copyFailed": "Falha ao copiar"
-        }
+        },
+        "searchAriaLabel": "Pesquisar histórico de voz",
+        "searchPlaceholder": "Pesquisar transcrições ou texto bruto…",
+        "showRawComparison": "Comparar bruto e refinado",
+        "hideRawComparison": "Ocultar comparação",
+        "rawLabel": "Reconhecimento bruto",
+        "refinedLabel": "Refinado",
+        "loadMore": "Carregar mais ({{count}} restantes)",
+        "noSearchResults": "Nenhuma transcrição correspondente."
       },
       "speakerFilter": {
         "label": "Reconhecer minha voz",
@@ -11121,12 +11168,14 @@
       "fileCount_other": "{{count}} arquivos",
       "emptyTitle": "Nenhuma alteração ainda",
       "emptyDesc": "Esta sessão ainda não editou nenhum arquivo. As alterações do Agent aparecerão aqui.",
+      "emptyDescSvn": "Os arquivos versionados correspondem à revisão base do SVN.",
+      "svnSelectFile": "Selecione um arquivo para ver as alterações.",
       "emptyDescGit": "O worktree git atual não tem alterações preparadas nem não preparadas.",
       "filterEmptyTitle": "Nenhuma alteração neste filtro",
-      "filterEmptyDesc": "Nenhuma alteração do git está visível com o filtro ou as configurações atuais.",
+      "filterEmptyDesc": "Nenhuma alteração está visível com o filtro ou as configurações atuais.",
       "noSessionTitle": "Nenhuma sessão",
       "noSessionDesc": "Selecione uma sessão local para revisar as alterações do worktree git.",
-      "loadingTitle": "Lendo alterações do git",
+      "loadingTitle": "Lendo alterações",
       "loadingDesc": "O painel mantém o conteúdo anterior até a atualização ser concluída.",
       "errorTitle": "Falha ao ler alterações",
       "refresh": "Atualizar",
@@ -11412,6 +11461,10 @@
         "non-git": {
           "title": "Não é um repositório Git",
           "desc": "O diretório de trabalho atual não contém um repositório Git utilizável."
+        },
+        "svn-unavailable": {
+          "title": "SVN indisponível",
+          "desc": "Instale o cliente de linha de comando do Subversion para revisar esta cópia de trabalho."
         },
         "git-unavailable": {
           "title": "Git indisponível",
@@ -15572,7 +15625,11 @@
           "description": "Permita o acesso ao microfone e clique novamente na entrada por voz.",
           "confirm": "Conceder permissão",
           "cancel": "Cancelar"
-        }
+        },
+        "rewriteSelected": "Reescrever por voz",
+        "rewriteSelectedTooltip": "Fale uma instrução para reescrever o texto selecionado (o original é preservado em caso de falha)",
+        "rewriteSelectedAria": "Reescrever texto selecionado por voz",
+        "rewriteFailed": "A reescrita por voz não foi concluída; o texto selecionado foi mantido intacto."
       },
       "remoteSwitchFailed": "Falha ao alterar configuração remota; não aplicada",
       "switchFailed": "Falha ao alterar configuração; não aplicada",
@@ -21173,6 +21230,8 @@
     },
     "errors": {
       "piStartupCloudFile": "Um arquivo de instruções disponível apenas na nuvem pode estar atrasando a inicialização do Pi: {{path}}. Baixe este arquivo no Finder, espere até que esteja disponível localmente e tente novamente. O tempo limite excedido pode ter outra causa.",
+      "remoteEngineMissing": "O computador remoto não tem um mecanismo disponível. Instale um mecanismo nesse computador, reinicie a Cindy e tente novamente.",
+      "remoteCapabilityUnavailable": "O servidor ou computador atual ainda não oferece suporte a esta ação.",
       "hostProfileInUseByDesktop": "Estes dados estão sendo usados pelo aplicativo para desktop da Cindy, que está rodando sozinho. Feche-o e envie novamente.",
       "hostProfileInUseByDesktopAtStart": "Estes dados estão sendo usados pelo aplicativo para desktop da Cindy, que está rodando sozinho, então o serviço em segundo plano da Cindy não foi iniciado. Feche-o, reinicie o serviço em segundo plano da Cindy e abra esta janela da Cindy novamente.",
       "hostProfileInUseByDesktopRetry": "Estes dados estão sendo usados pelo aplicativo para desktop da Cindy, que está rodando sozinho, então não dá para alterar agora. Feche-o e tente novamente.",
@@ -24165,7 +24224,15 @@
       "exceptionImage": "A mensagem tem imagens, então só foram consideradas as fontes que conseguem vê-las",
       "exceptionImageFallback": "A mensagem tem imagens, mas nenhuma fonte consegue vê-las, então escolheu como de costume",
       "exceptionHours": "Neste horário, usa “{{name}}” no lugar",
-      "separator": "; "
+      "separator": "; ",
+      "usageHabit": "Escolhida primeiro com base no seu uso habitual",
+      "usageHabitQuota": "Escolhida primeiro com base no seu uso habitual ({{left}}% de cota restante)",
+      "autoBalance": "Assumindo a carga enquanto outras fontes estão apertadas ou ocupadas",
+      "autoBalanceQuota": "Balanceada por folga de cota e carga ({{left}}% de cota restante)",
+      "lessBusy": "Outras fontes estão executando tarefas, então esta livre vai primeiro",
+      "paygFallback": "Assinaturas e fontes compartilhadas indisponíveis; usando pagamento por uso",
+      "paygReserve": "Reserva de pagamento por uso; usada apenas quando outras fontes não estiverem disponíveis",
+      "standbyQuotaNeutral": "Restam {{left}}% da cota, redefinida {{reset}}; não escolhida desta vez"
     },
     "settings": {
       "autoSwitch": {

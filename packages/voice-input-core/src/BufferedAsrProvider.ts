@@ -68,6 +68,12 @@ export class BufferedAsrProvider implements AsrProvider {
     return () => innerRecover.call(this.inner);
   }
 
+  get rotateSession(): (() => Promise<void>) | undefined {
+    const innerRotate = this.inner.rotateSession;
+    if (typeof innerRotate !== 'function') return undefined;
+    return () => innerRotate.call(this.inner);
+  }
+
   start(): Promise<void> {
     this.runToken += 1;
     const token = this.runToken;

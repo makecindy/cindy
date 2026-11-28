@@ -147,7 +147,13 @@
       "exceptionImage": "Le message contient des images : seules les sources capables de les voir ont été prises en compte",
       "exceptionImageFallback": "Le message contient des images, mais aucune source ne peut les voir : choix habituel",
       "exceptionHours": "Sur cette plage horaire, utilise « {{name}} »",
-      "separator": " ; "
+      "separator": " ; ",
+      "usageHabit": "Choisie en priorité selon vos habitudes d’utilisation",
+      "usageHabitQuota": "Choisie en priorité selon vos habitudes d’utilisation ({{left}} % de quota restant)",
+      "autoBalance": "Prend le relais pendant que les autres sources sont tendues ou occupées",
+      "autoBalanceQuota": "Équilibrée selon la marge de quota et la charge ({{left}} % de quota restant)",
+      "lessBusy": "Les autres sources exécutent des tâches, celle-ci est libre et passe en premier",
+      "paygFallback": "Abonnements et sources partagées indisponibles : bascule sur le paiement à l’usage"
     },
     "picker": {
       "switched": "« {{name}} » a basculé cette tâche sur {{model}}",

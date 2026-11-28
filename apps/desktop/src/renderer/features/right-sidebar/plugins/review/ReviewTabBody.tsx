@@ -509,13 +509,17 @@ export function ReviewTabBody({ state, ctx }: ReviewTabBodyProps) {
     workdir: ctx.workdir,
   });
   const data = sourceState.reviewData;
+  const svn = data?.scope.vcs === 'svn';
+  useEffect(() => {
+    if (svn && descriptor.kind !== 'unstaged') setSource('unstaged');
+  }, [descriptor.kind, setSource, svn]);
   const loading = sourceState.loading;
   const error = sourceState.error;
   const errorCode = sourceState.gitErrorCode;
   const refresh = sourceState.refreshGit;
   const setReviewData = sourceState.setReviewData;
   const commitsState = useReviewCommits(
-    capabilities.canSwitchSource ? sessionId : null,
+    !svn && capabilities.canSwitchSource ? sessionId : null,
     branchBaseRef,
     deviceLinkDeviceId,
     ctx.workdir,
@@ -645,8 +649,10 @@ export function ReviewTabBody({ state, ctx }: ReviewTabBodyProps) {
     [diffsExpanded, expansionDiffs],
   );
   const gitApplyAvailability = useMemo(
-    () => getGitApplyCopyAvailability(visibleDiffs, hideWhitespace, platform),
-    [hideWhitespace, platform, visibleDiffs],
+    (): ReturnType<typeof getGitApplyCopyAvailability> => svn
+      ? { canCopy: false, reason: 'empty' }
+      : getGitApplyCopyAvailability(visibleDiffs, hideWhitespace, platform),
+    [hideWhitespace, platform, svn, visibleDiffs],
   );
   /**
    * device-link 预览请求只发送被控端实际读取的轻量 diff 字段，裁剪 hunks / hunksPlain
@@ -740,7 +746,7 @@ export function ReviewTabBody({ state, ctx }: ReviewTabBodyProps) {
   );
   // device-link 与 SSH 工作区都没有可由控制端 shell 打开的本机文件。
   const openFileHandler =
-    capabilities.canOpenFile && shouldOfferReviewOpenFile(ctx.remoteHostId, deviceLinkDeviceId)
+    !svn && capabilities.canOpenFile && shouldOfferReviewOpenFile(ctx.remoteHostId, deviceLinkDeviceId)
       ? openReviewFile
       : undefined;
   // 次级视图(提交 / 分支 / 单文件)错误串的 OVERSIZE 标记 → 可读文案;其余原样。
@@ -777,7 +783,7 @@ export function ReviewTabBody({ state, ctx }: ReviewTabBodyProps) {
   const commitOrPushPending =
     pendingKey === 'commit' || pendingKey === 'commit-push' || pendingKey === 'push';
   const pushPending = pendingKey === 'push' || pendingKey === 'commit-push';
-  const writeDisabledReasonText = effectiveWriteDisabledReasons
+  const writeDisabledReasonText = svn ? '' : effectiveWriteDisabledReasons
     .map((reason) =>
       t(`rightSidebar.review.writeDisabledReasons.${reason}`, { defaultValue: reason }),
     )
@@ -1172,7 +1178,7 @@ export function ReviewTabBody({ state, ctx }: ReviewTabBodyProps) {
 
   useEffect(() => {
     if (
-      shouldFallbackFromMissingSelectedCommit(
+      !svn && shouldFallbackFromMissingSelectedCommit(
         source,
         selectedCommitOid,
         commits,
@@ -1182,7 +1188,7 @@ export function ReviewTabBody({ state, ctx }: ReviewTabBodyProps) {
     ) {
       setSource('branch');
     }
-  }, [commits, commitsState.data, commitsState.loading, selectedCommitOid, setSource, source]);
+  }, [commits, commitsState.data, commitsState.loading, selectedCommitOid, setSource, source, svn]);
 
   const togglePath = useCallback(
     (id: string) => {
@@ -1391,7 +1397,7 @@ export function ReviewTabBody({ state, ctx }: ReviewTabBodyProps) {
     cappedFileDiffState.loading;
   const toolbarLayout = getReviewToolbarLayout(headerWidth);
   const toolbarMinimal = toolbarLayout === 'minimal';
-  const toolbarShowBranch = toolbarLayout === 'wide' && capabilities.showBranchInfo;
+  const toolbarShowBranch = !svn && toolbarLayout === 'wide' && capabilities.showBranchInfo;
   const toolbarShowSecondaryActions = toolbarLayout !== 'minimal';
   const toolbarFileTreeVisibility = getReviewFileTreeVisibility({
     userVisible: fileTreeVisible,
@@ -1419,7 +1425,7 @@ export function ReviewTabBody({ state, ctx }: ReviewTabBodyProps) {
         <div
           className={cn('flex min-h-8 min-w-0 items-center', toolbarMinimal ? 'gap-1' : 'gap-1.5')}
         >
-          <SourceDropdown
+          {svn ? <span className="shrink-0 text-12 font-medium">SVN</span> : <SourceDropdown
             source={source}
             messageSnapshotAvailable={messageSnapshot !== null}
             counts={{
@@ -1443,11 +1449,11 @@ export function ReviewTabBody({ state, ctx }: ReviewTabBodyProps) {
             onSelectMessageSnapshot={selectMessageSnapshot}
             onSelectCommit={selectCommitSource}
             onRefreshCommits={commitsState.refresh}
-          />
-          <span className="shrink-0 whitespace-nowrap font-mono text-11 tabular-nums">
+          />}
+          {!(svn && currentCapped) && <span className="shrink-0 whitespace-nowrap font-mono text-11 tabular-nums">
             <span className="text-[var(--diff-add-fg)]">+{totalAdd}</span>{' '}
             <span className="text-[var(--diff-del-fg)]">-{totalDel}</span>
-          </span>
+          </span>}
           {toolbarShowBranch && (
             <>
               <div className="mx-0.5 h-4 w-px shrink-0 bg-[var(--border-default)]" />
@@ -1494,7 +1500,7 @@ export function ReviewTabBody({ state, ctx }: ReviewTabBodyProps) {
                       onToggle: () => setFileTreeVisible(!fileTreeVisible),
                     }
               }
-              canCopyGitApply={descriptor.kind !== 'turn-set' && gitApplyAvailability.canCopy}
+              canCopyGitApply={svn ? undefined : descriptor.kind !== 'turn-set' && gitApplyAvailability.canCopy}
               copyGitApplyDisabledTooltip={copyGitApplyDisabledTooltip}
               onWordWrapChange={setWordWrap}
               onWordDiffChange={setWordDiff}
@@ -1515,7 +1521,7 @@ export function ReviewTabBody({ state, ctx }: ReviewTabBodyProps) {
                 />
               </>
             )}
-            <CommitOrPushDropdown
+            {!svn && <CommitOrPushDropdown
               branchLabel={branchLabel}
               totalAdd={totalAdd}
               totalDel={totalDel}
@@ -1537,10 +1543,10 @@ export function ReviewTabBody({ state, ctx }: ReviewTabBodyProps) {
               iconOnly={toolbarLayout !== 'wide'}
               platform={platform}
               onCommit={commitChanges}
-            />
+            />}
           </div>
         </div>
-        {effectiveWriteDisabledReasons.length > 0 && (
+        {!svn && effectiveWriteDisabledReasons.length > 0 && (
           <div className="mt-2 flex items-start gap-2 rounded-lg border border-[var(--border-default)] bg-[var(--warning-bg-soft)] px-2.5 py-2 text-11 leading-relaxed text-[var(--text-secondary)]">
             <AlertTriangle size={13} className="mt-0.5 shrink-0 text-[var(--warning-fg)]" />
             <span>
@@ -1609,6 +1615,7 @@ export function ReviewTabBody({ state, ctx }: ReviewTabBodyProps) {
         )
       ) : currentCapped ? (
         <CappedSourceView
+          lineCountsKnown={!svn}
           capped={currentCapped}
           summaryDiffs={cappedSummaryDiffs}
           selectedSummaryDiff={selectedCappedSummaryDiff}
@@ -1634,18 +1641,18 @@ export function ReviewTabBody({ state, ctx }: ReviewTabBodyProps) {
           }
           viewMode={diffViewMode}
           onViewModeChange={setDiffViewMode}
-          onRichMarkdownPreviewChange={setRichMarkdownPreview}
+          onRichMarkdownPreviewChange={svn ? undefined : setRichMarkdownPreview}
           wordWrap={wordWrap}
           wordDiff={wordDiff}
           expandedSet={expandedSet}
           onToggleDiff={togglePath}
           fileTreeVisible
-          loadImagePreview={loadImagePreview}
+          loadImagePreview={svn ? undefined : loadImagePreview}
           loadMarkdownPreview={loadMarkdownPreview}
-          richMarkdownPreview={capabilities.canRichPreview && richMarkdownPreview}
+          richMarkdownPreview={!svn && capabilities.canRichPreview && richMarkdownPreview}
           onOpenFile={openFileHandler}
           writeAction={
-            source === 'unstaged'
+            !svn && source === 'unstaged'
               ? {
                   canWrite,
                   pendingKey,
@@ -1789,7 +1796,9 @@ export function ReviewTabBody({ state, ctx }: ReviewTabBodyProps) {
         <CenteredState
           icon={<FileDiffIcon size={24} />}
           title={t('rightSidebar.review.emptyTitle')}
-          desc={t('rightSidebar.review.emptyDescGit')}
+          desc={svn ? t('rightSidebar.review.emptyDescSvn') : t('rightSidebar.review.emptyDescGit')}
+          actionLabel={svn ? t('rightSidebar.review.refresh') : undefined}
+          onAction={refreshAll}
         />
       ) : visibleDiffs.length === 0 ? (
         <CenteredState
@@ -1806,17 +1815,17 @@ export function ReviewTabBody({ state, ctx }: ReviewTabBodyProps) {
           refreshPending={reviewRefreshPending}
           viewMode={diffViewMode}
           onViewModeChange={setDiffViewMode}
-          onRichMarkdownPreviewChange={setRichMarkdownPreview}
+          onRichMarkdownPreviewChange={svn ? undefined : setRichMarkdownPreview}
           wordWrap={wordWrap}
           wordDiff={wordDiff}
           fileTreeVisible={fileTreeVisible}
           jumpRequest={resolvedJumpRequest}
-          loadImagePreview={loadImagePreview}
+          loadImagePreview={svn ? undefined : loadImagePreview}
           loadMarkdownPreview={loadMarkdownPreview}
-          richMarkdownPreview={capabilities.canRichPreview && richMarkdownPreview}
+          richMarkdownPreview={!svn && capabilities.canRichPreview && richMarkdownPreview}
           onOpenFile={openFileHandler}
           writeAction={
-            source === 'last-turn'
+            svn || source === 'last-turn'
               ? undefined
               : {
                   canWrite,
@@ -2460,7 +2469,7 @@ export function ReviewMoreMenu({
   hideWhitespace: boolean;
   diffExpansionOverflow: DiffExpansionOverflowProps | null;
   fileTreeOverflow: FileTreeOverflowProps | null;
-  canCopyGitApply: boolean;
+  canCopyGitApply?: boolean;
   copyGitApplyDisabledTooltip?: string;
   onWordWrapChange: (wordWrap: boolean) => void;
   onWordDiffChange: (wordDiff: boolean) => void;
@@ -2579,7 +2588,7 @@ export function ReviewMoreMenu({
           </span>
         </DropdownMenuItem>
         <DropdownMenuSeparator />
-        {canCopyGitApply || !copyGitApplyDisabledTooltip ? (
+        {canCopyGitApply === undefined ? null : canCopyGitApply || !copyGitApplyDisabledTooltip ? (
           copyItem
         ) : (
           <Tip text={copyGitApplyDisabledTooltip}>
@@ -3096,12 +3105,12 @@ export function DiffList({
   topNotice?: ReactNode;
   viewMode: DiffViewMode;
   onViewModeChange: (mode: DiffViewMode) => void;
-  onRichMarkdownPreviewChange: (richMarkdownPreview: boolean) => void;
+  onRichMarkdownPreviewChange?: (richMarkdownPreview: boolean) => void;
   wordWrap: boolean;
   wordDiff: boolean;
   fileTreeVisible: boolean;
   jumpRequest: ReviewFileJumpRequest | null;
-  loadImagePreview: LoadImagePreview;
+  loadImagePreview?: LoadImagePreview;
   loadMarkdownPreview: LoadMarkdownPreview;
   richMarkdownPreview: boolean;
   richMarkdownPreviewDisabledReason?: string;
@@ -3705,7 +3714,7 @@ export function ReviewDiffListHeader({
   onViewModeChange: (mode: DiffViewMode) => void;
   richMarkdownPreview: boolean;
   richMarkdownPreviewDisabledReason?: string;
-  onRichMarkdownPreviewChange: (richMarkdownPreview: boolean) => void;
+  onRichMarkdownPreviewChange?: (richMarkdownPreview: boolean) => void;
 }) {
   const { t } = useTranslation();
   const [rowEl, setRowEl] = useState<HTMLDivElement | null>(null);
@@ -3761,11 +3770,11 @@ export function ReviewDiffListHeader({
         className="ml-auto flex shrink-0 items-center gap-1"
       >
         <ReviewRefreshButton pending={refreshPending} onRefresh={onRefresh} />
-        <RichMarkdownPreviewToggleButton
+        {onRichMarkdownPreviewChange && <RichMarkdownPreviewToggleButton
           enabled={richMarkdownPreview}
           disabledReason={richMarkdownPreviewDisabledReason}
           onToggle={() => onRichMarkdownPreviewChange(!richMarkdownPreview)}
-        />
+        />}
         <DiffViewModeToggle mode={viewMode} onChange={onViewModeChange} />
       </div>
     </div>
@@ -3868,6 +3877,7 @@ function DiffViewModeToggle({
 export function CappedSourceView({
   capped,
   summaryDiffs,
+  lineCountsKnown = true,
   selectedSummaryDiff,
   loadedDiff,
   loading,
@@ -3893,6 +3903,7 @@ export function CappedSourceView({
 }: {
   capped: ReviewCappedDiffData;
   summaryDiffs: FileDiff[];
+  lineCountsKnown?: boolean;
   selectedSummaryDiff: FileDiff | null;
   loadedDiff: FileDiff | null;
   loading: boolean;
@@ -3904,13 +3915,13 @@ export function CappedSourceView({
   topNotice?: ReactNode;
   viewMode: DiffViewMode;
   onViewModeChange: (mode: DiffViewMode) => void;
-  onRichMarkdownPreviewChange: (richMarkdownPreview: boolean) => void;
+  onRichMarkdownPreviewChange?: (richMarkdownPreview: boolean) => void;
   wordWrap: boolean;
   wordDiff: boolean;
   expandedSet: Set<string>;
   onToggleDiff: (id: string) => void;
   fileTreeVisible: boolean;
-  loadImagePreview: LoadImagePreview;
+  loadImagePreview?: LoadImagePreview;
   loadMarkdownPreview: LoadMarkdownPreview;
   richMarkdownPreview: boolean;
   onOpenFile?: (diff: FileDiff) => void;
@@ -3947,10 +3958,10 @@ export function CappedSourceView({
     <div className="space-y-1">
       {topNotice && <div>{topNotice}</div>}
       <div>
-        {t('rightSidebar.review.capped.notice', {
+        {lineCountsKnown ? t('rightSidebar.review.capped.notice', {
           count: capped.stats.fileCount,
           lines: capped.stats.totalChangedLines,
-        })}
+        }) : t('rightSidebar.review.svnSelectFile')}
       </div>
     </div>
   );
@@ -4079,12 +4090,12 @@ function CommitSourceView({
   onToggleDiff: (id: string) => void;
   viewMode: DiffViewMode;
   onViewModeChange: (mode: DiffViewMode) => void;
-  onRichMarkdownPreviewChange: (richMarkdownPreview: boolean) => void;
+  onRichMarkdownPreviewChange?: (richMarkdownPreview: boolean) => void;
   wordWrap: boolean;
   wordDiff: boolean;
   fileTreeVisible: boolean;
   jumpRequest: ReviewFileJumpRequest | null;
-  loadImagePreview: LoadImagePreview;
+  loadImagePreview?: LoadImagePreview;
   loadMarkdownPreview: LoadMarkdownPreview;
   richMarkdownPreview: boolean;
   onOpenFile?: (diff: FileDiff) => void;
@@ -4194,12 +4205,12 @@ function BranchSourceView({
   onToggleDiff: (id: string) => void;
   viewMode: DiffViewMode;
   onViewModeChange: (mode: DiffViewMode) => void;
-  onRichMarkdownPreviewChange: (richMarkdownPreview: boolean) => void;
+  onRichMarkdownPreviewChange?: (richMarkdownPreview: boolean) => void;
   wordWrap: boolean;
   wordDiff: boolean;
   fileTreeVisible: boolean;
   jumpRequest: ReviewFileJumpRequest | null;
-  loadImagePreview: LoadImagePreview;
+  loadImagePreview?: LoadImagePreview;
   loadMarkdownPreview: LoadMarkdownPreview;
   richMarkdownPreview: boolean;
   onOpenFile?: (diff: FileDiff) => void;
@@ -4626,12 +4637,12 @@ function StagedSourceView({
   onSectionAction: () => void;
   viewMode: DiffViewMode;
   onViewModeChange: (mode: DiffViewMode) => void;
-  onRichMarkdownPreviewChange: (richMarkdownPreview: boolean) => void;
+  onRichMarkdownPreviewChange?: (richMarkdownPreview: boolean) => void;
   wordWrap: boolean;
   wordDiff: boolean;
   fileTreeVisible: boolean;
   jumpRequest: ReviewFileJumpRequest | null;
-  loadImagePreview: LoadImagePreview;
+  loadImagePreview?: LoadImagePreview;
   loadMarkdownPreview: LoadMarkdownPreview;
   richMarkdownPreview: boolean;
   hunkActionsEnabled: boolean;
@@ -4710,7 +4721,7 @@ function FileRow({
   viewMode: DiffViewMode;
   wordWrap: boolean;
   wordDiff: boolean;
-  loadImagePreview: LoadImagePreview;
+  loadImagePreview?: LoadImagePreview;
   loadMarkdownPreview: LoadMarkdownPreview;
   richMarkdownPreview: boolean;
   onImagePreviewLoad: () => void;

@@ -1691,7 +1691,7 @@ export class GhostNodeRuntimeBroker {
    * - 若期间收到新的 stop() / resumeHarnesses() / destroyAll()，立即摘监听并作废；
    * - 若调用时快照已空，立刻执行（并捕获回调异常，避免掩盖上游 stopAndWait 报错）。
    */
-  whenProcessesDrained(ghostId: string, onDrained: () => void): void {
+  whenProcessesExited(ghostId: string, onDrained: () => void): void {
     if (this.destroyed) return;
     const generation = this.stopGeneration.get(ghostId) ?? 0;
     this.reconcileProcessExits(ghostId);

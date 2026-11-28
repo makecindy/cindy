@@ -1,6 +1,7 @@
 import { holdError, releaseFailure } from './agent/profile-hold.ts';
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -228,7 +229,8 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
   const worktreeCreates = [];
   const worktreeLifecycle = { ...createHostWorktreeLifecycle(profile), createWorktree: async (request, options) => {
     worktreeCreates.push({ request, options });
-    return { ok: true, meta: { sessionId: request.sessionId, path: path.join(profile, 'created-worktree') } };
+    return { ok: true, meta: { sessionId: request.sessionId, path: path.join(profile, 'created-worktree'),
+      sourceBranch: request.sourceBranch } };
   } };
   const handoffQueue = [];
   let enqueueHandoff = async (id, item, handoff) => {
@@ -899,6 +901,59 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
         assert.equal((await handoff([lastWrite])).result?.errorCode, 'UNSUPPORTED_CAPABILITY');
       });
 
+      // Integration (2026-11-28): `create.baseRef` over the real relay. The opener is shared with
+      // Desktop, so this loopback is where the key crosses the wire into the Host's own worktree
+      // preparation; the cases above never ask for a worktree. A project whose work branch is not
+      // the default one otherwise starts every new task from the default branch. Minimal input: a
+      // real repository and one create per outcome; createWorktree only records its request.
+      await t.test('creates the task worktree from the requested base and reports what took effect', async () => {
+        assert.equal(support.result.ordinaryCreateBaseRef, 1);
+        const repo = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-host-base-')));
+        const git = (...args) => execFileSync('git', ['-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', ...args], {
+          cwd: repo, stdio: 'ignore', env: { ...process.env,
+            GIT_CONFIG_GLOBAL: process.platform === 'win32' ? 'NUL' : os.devNull,
+            GIT_CONFIG_NOSYSTEM: '1' },
+        });
+        fs.mkdirSync(path.join(profile, 'created-worktree'), { recursive: true });
+        try {
+          git('init', '--initial-branch=main');
+          git('commit', '--allow-empty', '-m', 'base');
+          git('branch', 'release/2.x');
+          const sessionId = randomUUID();
+          const created = await send({ deviceId: 'host', sessionId }, {
+            sender, message: 'Work on the release branch',
+            create: async () => ({ permissionMode: 'ask', projectDir: null, workingDir: repo, useWorktree: true, baseRef: 'release/2.x' }),
+          });
+          assert.equal(created.ok, true, JSON.stringify(created));
+          assert.equal(created.wakeKind, 'created');
+          assert.equal(worktreeCreates.at(-1).request.sourceBranch, 'release/2.x');
+          assert.equal(worktreeCreates.at(-1).request.sessionId, sessionId);
+          assert.equal(created.worktreeBaseRef, 'release/2.x');
+          assert.equal(created.worktreePath, path.join(profile, 'created-worktree'));
+          // null = the Host's own provider; a caller must be able to tell it from "not reported".
+          assert.equal(created.agentDeviceId, null);
+          const [stored] = await db.drizzle.select().from(sessions).where(eq(sessions.id, sessionId));
+          assert.equal(stored.worktreePath, path.join(profile, 'created-worktree'));
+
+          const attempts = worktreeCreates.length;
+          for (const create of [
+            { useWorktree: true, baseRef: '--upload-pack=evil' },
+            { baseRef: 'release/2.x' },
+          ]) {
+            const refusedId = randomUUID();
+            const refused = await send({ deviceId: 'host', sessionId: refusedId }, {
+              sender, message: 'Refused base',
+              create: async () => ({ permissionMode: 'ask', projectDir: null, workingDir: repo, ...create }),
+            });
+            assert.equal(refused.errorCode, 'INVALID_ARGS', JSON.stringify(refused));
+            assert.equal((await db.drizzle.select().from(sessions).where(eq(sessions.id, refusedId))).length, 0);
+          }
+          assert.equal(worktreeCreates.length, attempts);
+        } finally {
+          fs.rmSync(repo, { recursive: true, force: true });
+        }
+      });
+
       // This also uses the actual Node queue. The hold case does not reach it;
       // inject one failing boundary at a time after the task row exists.
       await t.test('settles pre-acceptance rejections but retains receipts after uncertain queue writes', async () => {
@@ -1381,7 +1436,7 @@ const PINNED_DISPATCH_PORTS = {
     'delegatedProviderShareLeases', 'invalidateProviderShareDelegation',
     'remoteDesktop', 'requestRemoteDesktop', 'remoteCredentialHost', 'fetchLocalMediaToOss', 'transcribeRemoteVoiceInput',
     'readTelegramRemoteStatus', 'setTelegramRemoteOnline', 'adviseAndRecordVoiceInputDictionaryLearning',
-    'buildMobileDictionarySnapshot'],
+    'buildMobileDictionarySnapshot', 'mutateMobileDictionary'],
 };
 
 test('every port the Host passes the inbound dispatch has the class pinned here', () => {

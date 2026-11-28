@@ -31,6 +31,7 @@ import { isSharedTaskPeer } from '@cindy/device-link';
 import { controlledComputerSupportsRemoteAgent, selectControlledTaskAgentDevices } from '@/lib/controlledTaskAgentLocation';
 import { modelCatalogKey } from '../../../../shared/controlledModelCatalog';
 import { DraftDirectoryRecovery, type DraftDirectoryRecoveryContext } from '../draftDirectoryRecovery';
+import { isRemoteEngineMissing } from '@/lib/remoteCapabilityNotices';
 import { extractIpcError } from '@/utils/ipcError';
 import { createIpcError } from '../../../../shared/ipc-errors';
 import { dbToMakerAgentKind } from '../../../../shared/agentKindConversion';
@@ -503,7 +504,7 @@ async function submit(options: {
     // The real two-step precreation, over an in-memory cleanup ledger.
     precreateRemoteDraftWorktree, makeRemoteWorktreeProgress: () => ({ start: noop, named: noop, end: noop }),
     showWorktreeError: (error: unknown) => errors.push(error),
-    getRemoteWorkingDirErrorMessage: () => null,
+    getRemoteWorkingDirErrorMessage: () => null, isRemoteEngineMissing,
     emitAutoTitlePreviewCleared: noop, restoreRemoteOptimisticDraft: vi.fn(),
     normalizeAutoTitle: () => options.titlePreview ?? null,
     isLocalGoalWorktreeCleanupPendingError: () => false,
@@ -607,6 +608,19 @@ describe('homepage submission to Main admission and first-message handoff', () =
     const result = await submit({ entry, deviceId: 'task-computer', rememberedPluginEngineDeviceId: 'engine-computer' });
     expect(result.invokeRemote).toHaveBeenCalledWith('task-computer', 'maker:create-session', [expect.objectContaining({ agentKind: 'pi' })]);
   });
+  // Cloud status gap 6 / unit: a controlled computer refuses create-session
+  // before committing a task. The real submit callbacks must show install guidance.
+  it.each(['send', 'goal'] as const)('localizes the missing remote engine during %s', async (entry) => {
+    const result = await submit({
+      entry, deviceId: 'task-computer',
+      createRemote: async () => { throw new Error('[PRECONDITION_FAILED] binary_not_ready: No Agent engine is available'); },
+    });
+    expect(result.sendMessage).not.toHaveBeenCalled();
+    expect(result.setGoal).not.toHaveBeenCalled();
+    if (entry === 'send') expect(result.toastError).toHaveBeenCalledWith('logic.errors.remoteEngineMissing');
+    else expect(result.errors.at(-1)).toMatchObject({ message: 'logic.errors.remoteEngineMissing' });
+  });
+
   // Choosing a one-task alternate model (for example a built-in model on another
   // agent computer) must mask any stale remote plugin engine stored on savedDraft,
   // instead of blocking submission with newChat.pluginEngines.unavailable.

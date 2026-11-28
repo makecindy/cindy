@@ -4,7 +4,11 @@ import {
   MAX_VOICE_INPUT_DICTIONARY_ENTRIES,
   createManualVoiceInputDictionaryEntry,
   mergeVoiceInputDictionaryCsvTerms,
+  mergeVoiceInputDictionaryImportItems,
   parseVoiceInputDictionaryCsv,
+  parseVoiceInputDictionaryImport,
+  serializeVoiceInputDictionaryCsv,
+  serializeVoiceInputDictionaryJson,
 } from '../../../shared/voiceInputData.js';
 
 describe('voice input dictionary CSV import', () => {
@@ -95,5 +99,69 @@ describe('voice input dictionary CSV import', () => {
     expect(result.importedCount).toBe(0);
     expect(result.capacitySkippedCount).toBe(1);
     expect(result.entries).toHaveLength(MAX_VOICE_INPUT_DICTIONARY_ENTRIES);
+  });
+
+  it('round-trips dictionary entries and aliases through JSON and CSV export/import', () => {
+    const entryA = createManualVoiceInputDictionaryEntry('Vibe Coding');
+    const entryB = createManualVoiceInputDictionaryEntry('OpenAI, Inc.');
+    if (!entryA || !entryB) throw new Error('failed to create fixture entries');
+    entryA.aliases = [
+      { text: 'OpenAI, Inc.', count: 3, lastSeenAt: 100 },
+      { text: 'A | B', count: 2, lastSeenAt: 100 },
+      { text: '外博扣丁', count: 1, lastSeenAt: 90 },
+    ];
+
+    const json = serializeVoiceInputDictionaryJson([entryA, entryB], '2026-11-28T00:00:00.000Z');
+    const parsedJson = parseVoiceInputDictionaryImport(json, 'dictionary.json');
+    expect(parsedJson).toEqual({
+      ok: true,
+      format: 'json',
+      items: [
+        { text: 'Vibe Coding', aliases: ['OpenAI, Inc.', 'A | B', '外博扣丁'] },
+        { text: 'OpenAI, Inc.', aliases: [] },
+      ],
+      duplicateRowCount: 0,
+      skippedTooLongCount: 0,
+    });
+
+    const csv = serializeVoiceInputDictionaryCsv([entryA, entryB]);
+    const parsedCsv = parseVoiceInputDictionaryImport(csv, 'dictionary.csv');
+    expect(parsedCsv).toEqual({
+      ok: true,
+      format: 'csv',
+      items: [
+        { text: 'Vibe Coding', aliases: ['OpenAI, Inc.', 'A | B', '外博扣丁'] },
+        { text: 'OpenAI, Inc.', aliases: [] },
+      ],
+      duplicateRowCount: 0,
+      skippedTooLongCount: 0,
+    });
+
+    const merged = mergeVoiceInputDictionaryImportItems([], parsedCsv.ok ? parsedCsv.items : []);
+    expect(merged.importedCount).toBe(2);
+    expect(merged.entries[0]?.aliases.map((alias) => alias.text)).toEqual(['OpenAI, Inc.', 'A | B', '外博扣丁']);
+  });
+
+  it('keeps legacy one-column CSV import compatible and rejects unrecognized multi-column CSV', () => {
+    const legacy = parseVoiceInputDictionaryImport('Claude Code\n"OpenAI, Inc."\n', 'legacy.csv');
+    expect(legacy).toEqual({
+      ok: true,
+      format: 'csv',
+      items: [
+        { text: 'Claude Code', aliases: [] },
+        { text: 'OpenAI, Inc.', aliases: [] },
+      ],
+      duplicateRowCount: 0,
+      skippedTooLongCount: 0,
+    });
+
+    expect(parseVoiceInputDictionaryImport('Claude Code,Cloud Code', 'bad.csv')).toEqual({
+      ok: false,
+      reason: 'invalidFormat',
+    });
+    expect(parseVoiceInputDictionaryImport('{"notEntries":true}', 'bad.json')).toEqual({
+      ok: false,
+      reason: 'invalidFormat',
+    });
   });
 });

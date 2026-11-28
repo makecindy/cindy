@@ -19,7 +19,7 @@ import { isScopedPeer, isSharedTaskPeer } from '@cindy/device-link';
 import { isProviderShareAgentDeviceId } from '../../../shared/providerShare';
 import { useNavigate } from 'react-router-dom';
 import { buildLocalSkillPathRoute } from '@/features/skillhub/lib/localRoutes';
-import { Folder, MessageSquarePlus, TriangleAlert, X } from 'lucide-react';
+import { Folder, MessageSquarePlus, Sparkles, TriangleAlert, X } from 'lucide-react';
 import { useStableTranslation as useTranslation } from '@/hooks/useStableTranslation';
 import type { AgentInputReference } from '@cindy/maker-shared/agent-input-projection';
 import { CINDY_MAKE_ENABLED } from '@cindy/maker-shared/cindy-make-feature';
@@ -1542,6 +1542,7 @@ export function ChatInput({
 
   // ── ESC / history ref bridges for Tiptap handleKeyDown ────────────
   // Tiptap editorProps can't read React state, so we use refs.
+  const voiceInputHandleUndoKeyDownRef = useRef<((event: KeyboardEvent) => boolean) | null>(null);
   const onStopRef = useRef(onStop);
   onStopRef.current = onStop;
   const handleStop = useCallback(() => {
@@ -2827,6 +2828,12 @@ export function ChatInput({
           return true;
         }
 
+        // 语音听写润色后按 Cmd/Ctrl+Z 独立撤销回原始 ASR 文本（预润色上屏路径）。
+        if (voiceInputHandleUndoKeyDownRef.current?.(event)) {
+          event.preventDefault();
+          return true;
+        }
+
         // Delegate panel navigation keys (↑ ↓ Enter Esc Tab) when a
         // palette is open. We can't read React state from here directly,
         // but we expose a ref-based escape hatch via `panelBridgeRef`.
@@ -3600,12 +3607,46 @@ export function ChatInput({
       voiceConversationButtonRef.current?.focus();
     wasVoiceConversationActive.current = voiceConversationActive;
   }, [voiceConversationActive, onStartVoiceConversation]);
+  const [hasSelectedTextForVoiceRewrite, setHasSelectedTextForVoiceRewrite] = useState(false);
+  useEffect(() => {
+    if (!editor || editor.isDestroyed) {
+      setHasSelectedTextForVoiceRewrite(false);
+      return;
+    }
+    const updateSelectionFlag = () => {
+      if (editor.isDestroyed) {
+        setHasSelectedTextForVoiceRewrite(false);
+        return;
+      }
+      const { from, to, empty } = editor.state.selection;
+      const hasText = !empty && editor.state.doc.textBetween(from, to, '\n').trim().length > 0;
+      setHasSelectedTextForVoiceRewrite(hasText);
+    };
+    updateSelectionFlag();
+    editor.on('selectionUpdate', updateSelectionFlag);
+    editor.on('transaction', updateSelectionFlag);
+    return () => {
+      editor.off('selectionUpdate', updateSelectionFlag);
+      editor.off('transaction', updateSelectionFlag);
+    };
+  }, [editor]);
+
   const handleVoiceInputStart = useCallback((): boolean => {
     // 同步 claim 录音后立刻返回是否占用；授权确认（beforeStart）与启动提示音
     // 由 useVoiceInput 的后台启动流程继续处理。
     onComposerTypingRef.current?.();
     return voiceInput.start({
       startedAt: performance.now(),
+      beforeStart: onBeforeVoiceInputStart,
+      onStartFeedback: voiceInputSettings.playInteractionSound ? playVoiceInputStartCue : undefined,
+    });
+  }, [onBeforeVoiceInputStart, voiceInput.start, voiceInputSettings.playInteractionSound]);
+
+  const handleVoiceRewriteStart = useCallback((): boolean => {
+    onComposerTypingRef.current?.();
+    return voiceInput.start({
+      startedAt: performance.now(),
+      mode: 'rewrite',
       beforeStart: onBeforeVoiceInputStart,
       onStartFeedback: voiceInputSettings.playInteractionSound ? playVoiceInputStartCue : undefined,
     });
@@ -3638,9 +3679,12 @@ export function ChatInput({
   );
 
   const voiceShortcutRef = useRef(voiceInputSettings.shortcut);
+  const voiceInputSettingsRef = useRef(voiceInputSettings);
+  voiceInputSettingsRef.current = voiceInputSettings;
   const voiceInputStateRef = useRef(voiceInput.state);
   const voiceInputGetStateRef = useRef(voiceInput.getState);
   const voiceInputPrepareRef = useRef(voiceInput.prepare);
+  voiceInputHandleUndoKeyDownRef.current = voiceInput.handleUndoKeyDown;
   const voiceInputStopRef = useRef(handleVoiceInputStopWithRefinement);
   voiceInputBusyRef.current = voiceInput.isBusy;
   voiceDraftTextRef.current = voiceInput.draftText;
@@ -3689,6 +3733,7 @@ export function ChatInput({
     voiceInputStateRef.current = voiceInput.state;
     voiceInputGetStateRef.current = voiceInput.getState;
     voiceInputPrepareRef.current = voiceInput.prepare;
+    voiceInputHandleUndoKeyDownRef.current = voiceInput.handleUndoKeyDown;
     voiceInputStopRef.current = handleVoiceInputStopWithRefinement;
     voiceInputCancelRef.current = voiceInput.cancel;
     handleVoiceInputStartRef.current = handleVoiceInputStart;
@@ -3703,6 +3748,7 @@ export function ChatInput({
     handleVoiceInputStopWithRefinement,
     voiceInput.cancel,
     voiceInput.getState,
+    voiceInput.handleUndoKeyDown,
     voiceInput.prepare,
     voiceInput.state,
   ]);
@@ -3970,6 +4016,15 @@ export function ChatInput({
     const gesture = createComposerLongPressVoiceGesture({
       getState: () => voiceInputGetStateRef.current(),
       prepare: () => voiceInputPrepareRef.current?.(),
+      onHoldWarmup: () => {
+        const bridge = window.electronAPI?.voiceInput;
+        if (!bridge?.prewarmOnPress) return;
+        const { language, refinementEnabled } = voiceInputSettingsRef.current;
+        void bridge.prewarmOnPress({ sourceLanguage: language, refinementEnabled }).catch(() => undefined);
+        return () => {
+          void bridge.discardPressPrewarm?.().catch(() => undefined);
+        };
+      },
       start: () => handleVoiceInputStartRef.current(),
       stop: () => voiceInputStopRef.current(),
       onHoldStart: () => {
@@ -8602,7 +8657,6 @@ export function ChatInput({
             await enqueueEffortChange(effortChangeCoordinatorRef.current, sessionId, newEffort, {
               persist: (targetSessionId, effort) =>
                 window.electronAPI.maker.setEffort(targetSessionId, effort),
-              applyRuntime: async () => {}, // Main has already committed the runtime and its fields.
               onCommitted: (targetSessionId, effort) => {
                 if (activeModel)
                   syncSessionDraftModelPrefs(activeModel, { effort, fast: fastMode });
@@ -10263,6 +10317,10 @@ export function ChatInput({
                     effort={activeEffort}
                     onModelChange={handleModelChange}
                     onEffortChange={handleEffortChange}
+                    showEffortShortcut={
+                      !!sessionId && deviceLinkDeviceId === null && !catalogDeviceId && !remoteHostId &&
+                      !noConnectedSource && !agentSwitchIntent
+                    }
                     fastMode={composerSelection.display.fastMode}
                     currentSelection={sessionId && runtimeAgentKind ? composerSelection.current : undefined}
                     onFastModeChange={handleFastModeChange}
@@ -10511,6 +10569,34 @@ export function ChatInput({
                       </button>
                     </Tip>
                   )}
+                  {!queueEditActive &&
+                    hasSelectedTextForVoiceRewrite &&
+                    !voiceInput.isBusy &&
+                    !composerEditorLocked &&
+                    editor && (
+                      <Tip text={t('newChat.chatInput.voiceInput.rewriteSelectedTooltip')} side="top">
+                        <button
+                          type="button"
+                          onMouseDown={(event) => {
+                            // Keep the user's editor text selection intact when clicking rewrite.
+                            event.preventDefault();
+                          }}
+                          onClick={() => {
+                            handleVoiceRewriteStart();
+                          }}
+                          className={cn(
+                            'flex h-[30px] shrink-0 items-center gap-1 rounded-full px-2.5 text-12 font-medium',
+                            'border border-[var(--border-default)] bg-[var(--composer-pill-bg)] text-[var(--composer-pill-icon)]',
+                            'transition-colors hover:bg-[var(--model-trigger-hover)] focus-visible:outline-none',
+                            'focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]',
+                          )}
+                          aria-label={t('newChat.chatInput.voiceInput.rewriteSelectedAria')}
+                        >
+                          <Sparkles size={13} strokeWidth={2} aria-hidden />
+                          <span>{t('newChat.chatInput.voiceInput.rewriteSelected')}</span>
+                        </button>
+                      </Tip>
+                    )}
                   {!queueEditActive && (
                     <VoiceInputButton
                       samplesRef={recordingSamplesRef}
