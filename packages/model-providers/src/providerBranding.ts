@@ -236,6 +236,7 @@ const PROVIDER_LOGO_KIND_BY_ID: Readonly<Record<string, ProviderLogoKind>> = {
   "amazon-bedrock-eu-central-1": "bedrock",
   "azure-openai-responses": "azure",
   "google-vertex": "google",
+  "google-ai-plan": "google",
   "cloudflare-ai-gateway": "cloudflare",
   "cloudflare-workers-ai": "cloudflare",
   "nous": "nousresearch",

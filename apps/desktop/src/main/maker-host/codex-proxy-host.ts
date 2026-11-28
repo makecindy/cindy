@@ -1716,10 +1716,11 @@ function createChatBridgeDecision(
       }
       if (standard && isPlainObject(body)) {
         const copilotOAuth = isCopilotOAuthResponses(selected, route.routing);
+        const googleInteractionsApi = standard.execution.pi.api === 'google-interactions';
         const providerHeaders = Object.fromEntries(Object.entries(headers).filter(([name]) =>
           !['authorization', 'x-api-key'].includes(name.toLowerCase())));
         const nativeHeaders = overrideHeadersCaseInsensitive(
-          copilotOAuth ? providerHeaders : withChatBridgeUserAgent(providerHeaders),
+          copilotOAuth || googleInteractionsApi ? providerHeaders : withChatBridgeUserAgent(providerHeaders),
           resolveConversationSessionHeaders(ctx?.headers),
         );
         if (standard.execution.pi.api === 'anthropic-messages' && (actualModel.endsWith('[1m]')

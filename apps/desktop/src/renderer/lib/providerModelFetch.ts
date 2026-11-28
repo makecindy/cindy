@@ -73,7 +73,7 @@ export function resolveProviderConnectionProbeRoute(
   }, { presets }).models[agent] : undefined;
   const firstModel = firstProviderChatModel(projectedModels ?? fields.models, fields.catalogModels);
   const api = firstModel?.api ?? firstModel?.piApi;
-  if (api && ['google-generative-ai', 'google-vertex', 'azure-openai-responses', 'bedrock-converse-stream', 'mistral-conversations'].includes(api)) {
+  if (api && ['google-generative-ai', 'google-interactions', 'google-vertex', 'azure-openai-responses', 'bedrock-converse-stream', 'mistral-conversations'].includes(api)) {
     return { api, baseUrl: firstModel?.route?.baseUrl ?? fields.baseUrl,
       wireProtocol: providerWireProtocolForApi(api) ?? fields.wireProtocol };
   }

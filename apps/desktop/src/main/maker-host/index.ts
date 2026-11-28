@@ -53,6 +53,7 @@ import { getActiveAppSession, activeOwnerScopeKey, isAppSessionBoundaryPending }
 import { remoteCodexProvider } from './ssh-codex-models.js';
 import { getActiveAuthRealm, getAuthState } from '../authManager.js';
 import { getCustomProvider, updateCustomProviderIfUnchanged } from './custom-provider-store.js';
+import { setGoogleInteractionsAppVersion } from './google-interactions.js';
 import { refreshCustomProvidersIntoCatalog } from './createDesktopProviderService.js';
 import { hasCodexApiConnections, setCodexApiModelProbe } from './codex-api-model-capabilities.js';
 import { acquireWorktreeRuntimeLease, releaseWorktreeRuntimeLease, type WorktreeRuntimeLease } from '../worktree/runtimeLeases';
@@ -2939,6 +2940,7 @@ export function getMaker(): Maker {
     installLocalAgentHost(_maker);
     // Plugin-provided ACP engines (docs/plans/acp-plugin-bridge.md): registered only
     // once a plugin provides one; the built-in engines are untouched either way.
+    setGoogleInteractionsAppVersion(app.getVersion());
     installPluginEngines({
       maker: _maker,
       logger: desktopMakerLogger,

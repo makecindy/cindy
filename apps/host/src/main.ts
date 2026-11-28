@@ -115,6 +115,7 @@ import { closeCliProxyBridge } from '../../desktop/src/main/maker-host/cli-proxy
 import { getXdGatewayModels, markXdGatewayModelAccessUnknown, setXdGatewayModels } from '../../desktop/src/main/maker-host/active-catalog.js';
 import { buildModelsSyncRequest, parseModelsSyncPayload, withModelsSyncOverallDeadline } from '../../desktop/src/main/model-access/modelsSyncRefresh.js';
 import { createHostProviderConfig } from './agent/provider-config.js';
+import { setGoogleInteractionsAppVersion } from '../../desktop/src/main/maker-host/google-interactions.js';
 import { createProviderRouteResolver } from './agent/provider-credentials.mjs';
 import { createHostHistoryReader, dismissHostErrorMessage, readHostHistoryView, readHostSessionActivityMeta, readHostWorkDetails, readMessagesList, readMessagesAroundClientId } from './agent/history.js';
 import { requireString } from '../../desktop/src/main/utils/ipcValidate.js';
@@ -1119,6 +1120,7 @@ async function ensureRuntime(ownerId: string): Promise<void> {
       // cannot start, the endpoint falls back to the upstream with a log, as there.
       await claudeProxy.ready();
     }
+    setGoogleInteractionsAppVersion(layout.version);
     agentGraph = createHostAgentGraph({
       appVersion: layout.version,
       onSessionClose: (id, close) => {

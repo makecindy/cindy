@@ -2037,14 +2037,18 @@ export function AddProviderWizard({
                     官方 API 预设表单(填 key),与从目录选预设完全同一条流水线。
                     与「授权」并排的次级描边按钮(White Pill):小灰字形态用户根本
                     注意不到(2026-07-24 实测)。 */}
-                {(OFFICIAL_API_PRESETS[sel.provider.id] ?? presets.find(p => p.id === sel.provider.id)) && (
+                {((sel.provider.id === 'google-ai-plan'
+                  ? presets.find((p) => p.id === 'google-gemini-api')
+                  : (OFFICIAL_API_PRESETS[sel.provider.id] ?? presets.find(p => p.id === sel.provider.id)))) && (
                   <Button
                     variant="secondary"
                     size="lg"
                     type="button"
                     onClick={() =>
                       pickPreset(
-                        (OFFICIAL_API_PRESETS[sel.provider.id] ?? presets.find((p) => p.id === sel.provider.id))!,
+                        (sel.provider.id === 'google-ai-plan'
+                          ? presets.find((p) => p.id === 'google-gemini-api')
+                          : (OFFICIAL_API_PRESETS[sel.provider.id] ?? presets.find((p) => p.id === sel.provider.id)))!,
                         true,
                       )
                     }
