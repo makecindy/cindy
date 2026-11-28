@@ -14,6 +14,7 @@ import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { goalApiFor } from '@/lib/makerTransport';
+import { createLogger } from '@/lib/logger';
 import { getStickySessionDeviceId } from '@/features/device-link/stickySessionOrigin';
 import { isRemoteGoalUnsupported } from '@/lib/remoteCapabilityNotices';
 import { extractIpcError } from '@/utils/ipcError';
@@ -23,6 +24,8 @@ import { ListComposerTextarea } from './ListComposerTextarea';
 import { FieldVoiceInputNotice } from '@/voice-input/FieldVoiceInputNotice';
 import { useFieldVoiceInput } from '@/voice-input/useFieldVoiceInput';
 import { VoiceInputButton } from '@/voice-input/VoiceInputButton';
+
+const log = createLogger('NewGoalDialog');
 
 interface NewGoalDialogProps {
   /** 会话态:有 sessionId → 直接 setGoal。首页草稿态:不传 sessionId,改走 onCreate。 */
@@ -131,6 +134,7 @@ export function NewGoalDialog({ sessionId, open, onOpenChange, onCreate, initial
       onCreated?.(); // 创建成功 → 通知父组件清空 composer(默认目标文字的来源)
       onOpenChange(false);
     } catch (err) {
+      if (remote) log.warn('[goal dialog] remote setGoal failed', err);
       // The recovery notice explains the handled picker error. A later retry
       // can fail for another reason while that notice is still visible.
       setError({

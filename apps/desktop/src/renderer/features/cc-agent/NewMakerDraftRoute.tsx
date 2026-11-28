@@ -7614,7 +7614,10 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
                   return created?.sessionId;
                 })
           ).catch((err) => {
-            if (isRemoteEngineMissing(err)) throw new Error(t('logic.errors.remoteEngineMissing'));
+            if (isRemoteEngineMissing(err)) {
+              log.warn('[draft goal] remote create-session has no available engine', err);
+              throw new Error(t('logic.errors.remoteEngineMissing'));
+            }
             const remoteWorkdirMessage = getRemoteWorkingDirErrorMessage(err, t);
             if (remoteWorkdirMessage) throw new Error(remoteWorkdirMessage);
             throw err;
