@@ -191,6 +191,41 @@ async function open(agent: FakeAgent, extra: Partial<OpenAcpSessionOptions> = {}
 const SHOT = resolve('attachments', 'shot.png');
 const NOTES = resolve('attachments', 'notes.md');
 
+// #13471: the old image test used one image. Two individually admissible images can exceed
+// the endpoint's whole-line budget. Use a small injected budget and the normal send path.
+it('refuses oversized image prompts before writing and accepts a smaller retry', async () => {
+  const agent = createFakeAgent({ agentCapabilities: { promptCapabilities: { image: true } } });
+  const { session } = await open(agent, { imagePromptByteLimit: 1024, readFile: async () => Buffer.alloc(400) });
+  const image = { type: 'image' as const, path: SHOT };
+  try {
+    await expect(session.send({ type: 'user', content: [image, image] }))
+      .rejects.toMatchObject({ diagnostic: 'acp-image-prompt-too-large' });
+    expect(agent.prompts).toHaveLength(0);
+    await session.send({ type: 'user', content: [image] });
+    expect(agent.prompts).toHaveLength(1);
+    const wire = agent.sent.find(request => request.method === 'session/prompt')!;
+    const bytes = Buffer.byteLength(JSON.stringify(wire));
+    for (const imagePromptByteLimit of [bytes, bytes - 1]) {
+      const endpoint = createFakeAgent({ agentCapabilities: { promptCapabilities: { image: true } } });
+      const { session: fresh } = await open(endpoint, { imagePromptByteLimit, readFile: async () => Buffer.alloc(400) });
+      try {
+        const send = fresh.send({ type: 'user', content: [image] });
+        if (imagePromptByteLimit === bytes) {
+          await send;
+          expect(endpoint.prompts).toHaveLength(1);
+        } else {
+          await expect(send).rejects.toMatchObject({ diagnostic: 'acp-image-prompt-too-large' });
+          expect(endpoint.prompts).toHaveLength(0);
+        }
+      } finally {
+        await fresh.close();
+      }
+    }
+  } finally {
+    await session.close();
+  }
+});
+
 const PERMISSION_OPTIONS = [
   { optionId: 'yes', name: 'Allow', kind: 'allow_once' },
   { optionId: 'always', name: 'Always allow', kind: 'allow_always' },

@@ -14,6 +14,14 @@ export function toSessionDispatchOutcome(
   context: string,
 ): SessionDispatchOutcome {
   if (result.accepted) return { dispatched: true };
+  if (result.reason === 'provider-rejected-before-dispatch' && result.diagnostic === 'acp-image-prompt-too-large') {
+    return {
+      dispatched: false,
+      reason: result.reason,
+      context,
+      message: '[ACP_IMAGE_PROMPT_TOO_LARGE] Your message was not sent. Send fewer images at once or reduce their size and try again.',
+    };
+  }
   if (result.reason === 'provider-rejected-before-dispatch' && result.diagnostic === 'pi-retry-history-frame-too-large') {
     return {
       dispatched: false,

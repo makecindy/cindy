@@ -7787,10 +7787,12 @@ describe('AgentInputCoordinator send transaction', () => {
     expect(projection.errorRetryText).toBe('first');
   });
 
-  it.each(['cancelled', 'history-frame-too-large'])('keeps a persisted ordinary send recoverable after %s', async failure => {
+  it.each(['cancelled', 'history-frame-too-large', 'acp-image-prompt-too-large'])('keeps a persisted ordinary send recoverable after %s', async failure => {
     const h = createHarness();
     const sid = 'send-persisted-dispatch-failure';
-    const first = makeItem('q-1', 'first');
+    const first = makeItem('q-1', 'first', failure === 'acp-image-prompt-too-large' ? {
+      files: [{ id: 'pic', name: 'image.png', path: '/repo/image.png', mimeType: 'image/png', category: 'image', size: 12, ext: 'png' }],
+    } : {});
     const second = makeItem('q-2', 'second');
     const persisted = deferred<void>();
     const sendSettled = deferred<void>();
@@ -7801,7 +7803,8 @@ describe('AgentInputCoordinator send transaction', () => {
       await sendSettled.promise;
       return failure === 'cancelled' ? sessionDispatchFailure('SEND/send-persisted-dispatch-failure/send')
         : toDesktopSessionDispatchOutcome({
-          accepted: false, reason: 'provider-rejected-before-dispatch', diagnostic: 'pi-retry-history-frame-too-large',
+          accepted: false, reason: 'provider-rejected-before-dispatch',
+          diagnostic: failure === 'acp-image-prompt-too-large' ? failure : 'pi-retry-history-frame-too-large',
         }, { source: 'maker-ipc', context: sid });
     });
 
@@ -7818,7 +7821,7 @@ describe('AgentInputCoordinator send transaction', () => {
     if (failure === 'cancelled') expect(projection.error).toContain('cancelled-before-dispatch');
     else {
       expect(projection.error).toContain('not sent');
-      expect(projection.error).toContain('16 MiB');
+      expect(projection.error).toContain(failure === 'acp-image-prompt-too-large' ? 'fewer images' : '16 MiB');
       expect(projection.error).not.toContain(sid);
     }
     expect(projection.recovery).toEqual({ kind: 'active-turn', item: first });
