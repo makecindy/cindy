@@ -5967,6 +5967,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   worktreeCheckout: (req: import('../shared/worktreeCheckout').CheckoutRequest): Promise<import('../shared/worktreeCheckout').CheckoutReply> => ipcRenderer.invoke('worktree:checkout', req),
   worktreeBranchSyncStatus: (req: import('../shared/worktreeBranchSync').BranchSyncRequest): Promise<import('../shared/worktreeBranchSync').BranchSyncStatus> => ipcRenderer.invoke('worktree:branch-sync-status', req),
   worktreeSyncBranch: (req: import('../shared/worktreeBranchSync').BranchSyncRequest): Promise<import('../shared/worktreeBranchSync').BranchSyncReply> => ipcRenderer.invoke('worktree:sync-branch', req),
+  worktreeWorkspaceClutterSummary: (req: import('../shared/worktreeWorkspaceClutter').WorkspaceClutterRequest): Promise<import('../shared/worktreeWorkspaceClutter').WorkspaceClutterSummary> => ipcRenderer.invoke('worktree:workspace-clutter-summary', req),
   worktreeListBranches: (req: { baseRepo: string }): Promise<unknown> =>
     ipcRenderer.invoke('worktree:list-branches', req),
   // P1: 删除/归档确认预检(有无 worktree、是否有未提交更改)
@@ -6229,6 +6230,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     push: (params: {
       sessionId: string;
       confirmForce?: ReviewPushConfirmForce;
+      syncBeforePush?: boolean;
     }): Promise<ReviewPushResult> => ipcRenderer.invoke('git-review:push', params),
   },
 
