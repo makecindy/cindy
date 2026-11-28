@@ -37,6 +37,7 @@
     "./device-responsiveness": "./src/deviceResponsiveness.ts",
     "./context-overflow-error": "./src/contextOverflowError.ts",
     "./error-redaction": "./src/errorRedaction.ts",
+    "./external-link": "./src/externalLink.ts",
     "./expanded-block-memory": "./src/expandedBlockMemory.ts",
     "./file-browser": "./src/fileBrowser.ts",
     "./file-browser-grid": "./src/fileBrowserGrid.ts",

@@ -15,9 +15,22 @@ export default {
     sol:{about:'GPT-6.1 Sol with Codex Ultrafast entitlement'},
     'legacy-sol':{about:'GPT-6 Sol reasoning metadata'},
     unavailable:{about:'Account has not enabled Ultrafast'},
+    'third-party-speed':{about:'#13496: supplier-declared Ultrafast unavailable on this Codex connection'},
     'owner-repair':{about:'Same-owner generation change recovers an in-flight image capability save'},
   },
   async check(page,ui) {
+    if (ui.case === 'third-party-speed') {
+      const speed = page.getByText(await ui.t('newChat.modelSelector.speed.ultrafast'), { exact: true });
+      const row = speed.locator('..');
+      await row.scrollIntoViewIfNeeded();
+      await ui.capture('ultrafast-availability', { locator: row });
+      if (ui.role === 'before') return;
+      const expected = await ui.t('settings.providers.models.advanced.ultrafastDeclaredUnavailable');
+      if (!(await row.textContent())?.includes(expected)) {
+        throw Error('Model details do not explain the difference between the supplier declaration and availability');
+      }
+      return;
+    }
     if (ui.case.startsWith('pricing')) {
       const price = page.getByRole('region', { name: await ui.t('settings.providers.models.advanced.pricing'), exact: true });
       const input = price.getByRole('spinbutton', { name: await ui.t('settings.providers.models.priceOverride.input'), exact: true });

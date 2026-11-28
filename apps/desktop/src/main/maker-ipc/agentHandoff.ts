@@ -14,6 +14,7 @@
 import { replaceInlineBase64DataUrls } from '@cindy/maker-shared';
 import { projectPersistedAgentFacingUserText } from '@cindy/maker-shared/agent-input-projection';
 import { judgeCommandOutcome } from '@cindy/maker-shared/delivery-receipt';
+import { isSyntheticTriggerText } from '@cindy/maker-shared/synthetic-trigger';
 import {
   describeMessageSourceSender,
   formatSourceRef,
@@ -388,8 +389,9 @@ function isStringifyUserContentEnvelope(
     && Array.isArray(record.files);
 }
 
-/** 岛上预览正文:只解开 stringifyUserContent 信封,JSON 原文提示保持原样。 */
+/** 岛上预览正文:只解开 stringifyUserContent 信封,JSON 原文提示保持原样,隐藏合成指令不进岛。 */
 export function extractAgentIslandPromptText(content: unknown): string | null {
+  let text = '';
   if (typeof content === 'string') {
     const trimmed = content.trim();
     if (!trimmed) return null;
@@ -397,21 +399,24 @@ export function extractAgentIslandPromptText(content: unknown): string | null {
       try {
         const parsed: unknown = JSON.parse(trimmed);
         if (isStringifyUserContentEnvelope(parsed)) {
-          const text = parsed.text.trim();
-          return text || null;
+          text = parsed.text.trim();
+        } else {
+          text = trimmed;
         }
       } catch {
         // 用户原文就是 JSON 形字符串。
+        text = trimmed;
       }
+    } else {
+      text = trimmed;
     }
-    return trimmed;
+  } else if (isStringifyUserContentEnvelope(content)) {
+    text = content.text.trim();
+  } else {
+    text = extractPlainText(content).trim();
   }
-  if (isStringifyUserContentEnvelope(content)) {
-    const text = content.text.trim();
-    return text || null;
-  }
-  const text = extractPlainText(content).trim();
-  return text || null;
+  if (!text || isSyntheticTriggerText(text)) return null;
+  return text;
 }
 
 /**

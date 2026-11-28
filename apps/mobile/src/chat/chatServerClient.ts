@@ -8,7 +8,7 @@ import { parseChatInvitationShareId, parseChatInvitationToken } from '@cindy/dev
 import type { ChatInviteShares } from './chatInviteShare';
 import { createConversationListState } from '@cindy/maker-shared/chatConversationList';
 import type { ChatHistory, ChatHistoryBatch } from '@cindy/maker-shared/chat-history';
-import { readBotGroupAssistantNotice, groupAssistantNoticeCode, readBotGroupCapabilityNotice, botGroupMessageSummaryText, botGroupQuoteFromMessage, buildBotGroupQuoteCard, readBotGroupExecutionFailure, readBotGroupLiveTaskCard, readBotGroupQuote, readBotGroupQuoteCard, readBotGroupTaskCard, readImportedBotGroupRuntimeFailureCode, type BotGroupAttachment, type BotGroupMemberView, type BotGroupMessageView, type BotGroupRemoteChatData } from '@cindy/maker-shared/botGroupChat';
+import { isBotGroupAssistantDeviceWait, isBotGroupAssistantNoticeHidden, isBotGroupAssistantWaitPrivate, type BotGroupAssistantDeviceWait, BOT_GROUP_ASSISTANT_AVATAR, readBotGroupAssistantNotice, groupAssistantNoticeCode, readBotGroupCapabilityNotice, botGroupMessageSummaryText, botGroupQuoteFromMessage, buildBotGroupQuoteCard, readBotGroupExecutionFailure, readBotGroupLiveTaskCard, readBotGroupQuote, readBotGroupQuoteCard, readBotGroupTaskCard, readImportedBotGroupRuntimeFailureCode, type BotGroupAttachment, type BotGroupMemberView, type BotGroupMessageView, type BotGroupRemoteChatData } from '@cindy/maker-shared/botGroupChat';
 import { chatGroupMemberName as memberName, chatGroupOwnerName, botGroupActivityAt, latestBotGroupMessage, botGroupExecutionFailureBatches, projectBotGroupExecutionFailures, extractBotGroupThreadCodeRefsFromMessages, describeBotGroupThreadRootFallback } from '@cindy/maker-shared/botGroupPresentation';
 import type { HostedRemoteCollectionItem } from '@/device-link/remoteResources';
 // The app's `@/i18n` sets up this default instance; importing it here would pull React bindings into a plain client.
@@ -51,6 +51,8 @@ function invitationPreview(value: MobileChatInvitePreview): MobileChatInvitePrev
 }
 
 export interface ChatRoom {
+  /** The group's own Cindy is on (servers with `groupAssistant`); absent means on. */
+  assistant?: boolean;
   assistant_device_id?: string | null;
   default_notification_scope?: 'all' | 'mentions';
   id: string; name: string; state?: string; kind: string; archived: boolean; dissolved_at?: string | null;
@@ -83,7 +85,9 @@ export interface ChatExecutionFailure {
   id: string; conversation_id?: string; source_message_id: string; bot_id: string; epoch: number; status?: string;
   failure_code?: unknown; updated_at?: string; plan_id?: string | null;
 }
-export interface ChatExecution extends ChatExecutionFailure { threadRootId?: string | null; requester_id?: string; mask_owner_id?: string; created_at?: string; status: string }
+export interface ChatExecution extends ChatExecutionFailure { threadRootId?: string | null; requester_id?: string; mask_owner_id?: string; created_at?: string; status: string;
+  /** The requester's own group-Cindy turn: which of their computers took it (the server shows it to them only). */
+  executor?: { deviceId?: string } | null }
 function mayStopWork(members: ChatMember[], selfId: string, botId: string, requesterId?: string) {
   const member = members.find(member => member.id === botId && member.kind === 'bot');
   return canStopBotGroupWork(member && { assistant: member.assistant, isOwned: member.ownerActorId === selfId }, requesterId === selfId);
@@ -125,7 +129,7 @@ export interface ChatHistoryPage { messages: ChatMessage[]; before: string | nul
 export type ChatGroupSettingsAction =
   | { type: 'assistantDevice'; deviceId: string }
   | { type: 'notifications'; mode: ChatGroupNotificationMode }
-  | { type: 'update'; expectedRevision: number; name?: string; topic?: string; description?: string; responseMode?: 'all' | 'mentioned'; speakingMode?: 'auto' | 'sequential'; organizerId?: string | null; archived?: boolean; allowMentionAllBots?: boolean; allowMemberMentionAll?: boolean; allowMemberInvites?: boolean }
+  | { type: 'update'; expectedRevision: number; name?: string; topic?: string; description?: string; responseMode?: 'all' | 'mentioned'; speakingMode?: 'auto' | 'sequential'; organizerId?: string | null; archived?: boolean; allowMentionAllBots?: boolean; allowMemberMentionAll?: boolean; allowMemberInvites?: boolean; assistant?: boolean }
   | { type: 'member'; actorId: string; action: 'invite' | 'leave' | 'remove' | 'role'; role?: 'admin' | 'member' }
   /** Your own group identity: a nickname, or a public avatar URL (null resets it). */
   | { type: 'nickname'; actorId: string; nickname: string | null }
@@ -192,6 +196,9 @@ export function chatId(value: string): string {
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value)) throw new Error('INVALID_CHAT_ID');
   return value;
 }
+/** Desktop reads `groupAssistantActorId` with Zod's `uuid()` (RFC 9562 version and variant); this is
+ * the same pattern, so a server both clients see offers the group's Cindy to both or to neither. */
+const GROUP_ASSISTANT_ID = /^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$/;
 export function chatCursor(value: unknown): string {
   if (typeof value !== 'string' || !/^\d{1,30}$/.test(value)) throw new Error('INVALID_CHAT_CURSOR');
   return value;
@@ -245,8 +252,24 @@ function sharedReplyPreview(message: ChatMessage, members: ChatMember[], selfId?
     { name: member ? memberName(member, members) : message.author.name });
 }
 
+/**
+ * What this account sees of a room's messages: the group Cindy's computer notices speak only to their
+ * requester, who gets an unbound one as a card above the composer (bot-group-chat.md 第 9 节).
+ */
+export function chatShownMessages<T extends ChatMessage>(messages: readonly T[], members: readonly ChatMember[], selfId: string): T[] {
+  return messages.filter(message => {
+    const notice = members.some(member => member.id === message.authorId && member.assistant) ? readBotGroupAssistantNotice(message) : null;
+    return !notice || !isBotGroupAssistantNoticeHidden(notice, selfId);
+  });
+}
+function chatShownSnapshot(snapshot: ChatSnapshot, selfId: string): ChatSnapshot {
+  const messages = chatShownMessages(snapshot.messages, snapshot.members, selfId);
+  return messages.length === snapshot.messages.length ? snapshot : { ...snapshot, messages };
+}
+
 /** Empty device identity means a server-owned conversation, never a fictitious computer. */
-export function chatRoomRow(room: ChatRoom, snapshot?: ChatSnapshot, selfId?: string, activity?: TeammateActivity): HostedRemoteCollectionItem {
+export function chatRoomRow(room: ChatRoom, serverSnapshot?: ChatSnapshot, selfId?: string, activity?: TeammateActivity): HostedRemoteCollectionItem {
+  const snapshot = serverSnapshot && selfId ? chatShownSnapshot(serverSnapshot, selfId) : serverSnapshot;
   const members = snapshot?.members.filter(member => member.state === 'joined') ?? [];
   const last = latestBotGroupMessage(snapshot?.messages ?? []);
   const joinedName = last && joinedMemberName(last);
@@ -345,8 +368,11 @@ export function chatMemberAvatar(value: string | null): Pick<BotGroupMemberView,
 }
 
 function chatMemberIdentity(member: ChatMember, members: readonly ChatMember[]) {
-  // The group avatar wins in its group, as on Desktop.
-  return { botId: member.id, name: memberName(member, members), ...chatMemberAvatar(member.groupAvatar ?? member.avatar ?? member.defaultAvatarUrl ?? null), avatarColor: '' };
+  // The group avatar wins in its group, as on Desktop. The group's own Cindy always shows
+  // Cindy's artwork, whatever the server sends, also as on Desktop (chatServer.ts members).
+  const avatar = member.kind === 'bot' && member.assistant === true ? BOT_GROUP_ASSISTANT_AVATAR
+    : member.groupAvatar ?? member.avatar ?? member.defaultAvatarUrl ?? null;
+  return { botId: member.id, name: memberName(member, members), ...chatMemberAvatar(avatar), avatarColor: '' };
 }
 
 function chatMessageMentions(message: ChatMessage): BotGroupMention {
@@ -359,7 +385,10 @@ function chatMessageMentions(message: ChatMessage): BotGroupMention {
  * Sequence strings stay on the wire; numeric positions below are presentation order only.
  * `actors` (the account's own, from `/actors`) tell which computer runs each owned companion.
  */
-export function chatGroupView(page: ChatPage, selfId: string, actors: readonly ChatActor[] = [], activityScope: 'thread' | 'group' = 'thread'): BotGroupRemoteChatData {
+export function chatGroupView(serverPage: ChatPage, selfId: string, actors: readonly ChatActor[] = [], activityScope: 'thread' | 'group' = 'thread'): BotGroupRemoteChatData {
+  const page: ChatPage = { ...serverPage, snapshot: chatShownSnapshot(serverPage.snapshot, selfId),
+    messages: chatShownMessages(serverPage.messages, serverPage.snapshot.members, selfId),
+    ...(serverPage.previewMessages ? { previewMessages: chatShownMessages(serverPage.previewMessages, serverPage.snapshot.members, selfId) } : {}) };
   const { room, members } = page.snapshot;
   const ownerMembers = room.kind === 'direct' ? [] : members;
   const active = members.filter(member => member.state === 'joined');
@@ -597,7 +626,20 @@ export function chatGroupView(page: ChatPage, selfId: string, actors: readonly C
     const member = members.find(candidate => candidate.id === failure.botId);
     return [{ ...failure, botName: member ? memberName(member, ownerMembers) : '' }];
   });
-  const executions = (page.executions ?? []).filter(row => ['queued', 'running', 'needs_input', 'stopping'].includes(row.status));
+  // A group-Cindy request waiting only on one member is not group activity (bot-group-chat.md 第 9 节):
+  // others see nothing of it, and its requester gets a card to choose a computer.
+  const waitInput = (row: ChatExecution) => ({ assistant: members.some(member => member.id === row.bot_id && member.assistant === true),
+    requesterId: row.requester_id, status: row.status });
+  // A turn one of this account's computers already took is not waiting for one.
+  const deviceWait = (row: ChatExecution) => room.kind === 'group' && !!page.snapshot.assistantComputers && !row.executor?.deviceId
+    && isBotGroupAssistantDeviceWait(waitInput(row), selfId, room.assistant_device_id);
+  const assistantDeviceWaits: BotGroupAssistantDeviceWait[] = (page.executions ?? []).filter(deviceWait).map(row => {
+    const source = messages.find(message => message.id === row.source_message_id);
+    return { executionId: row.id, sourceMessageId: row.source_message_id,
+      requestText: source ? mobileMarkdownPreviewText(botGroupMessageSummaryText(source)).slice(0, 120) : '' };
+  });
+  const executions = (page.executions ?? []).filter(row => ['queued', 'running', 'needs_input', 'stopping'].includes(row.status)
+    && !isBotGroupAssistantWaitPrivate(waitInput(row), selfId) && !deviceWait(row));
   // Enqueue time anchors history; it is not an elapsed-work start.
   const speakers = executions.map(row => {
     const bot = page.snapshot.members.find(member => member.id === row.bot_id);
@@ -614,7 +656,8 @@ export function chatGroupView(page: ChatPage, selfId: string, actors: readonly C
   const plans = (page.plans ?? []).map(plan => chatPlanView(plan, page.snapshot, selfId));
   const open = plans.find(plan => ['proposed', 'running', 'waiting'].includes(plan.status));
   const currentStep = open?.steps.find(step => step.position === open.currentStep);
-  return { ...(page.snapshot.assistantComputers ? { assistantComputers: page.snapshot.assistantComputers, assistantDeviceId: room.assistant_device_id ?? null } : {}), id: room.id, conversationKind: room.kind === 'direct' ? 'direct' : 'group',
+  return { ...(page.snapshot.assistantComputers ? { assistantComputers: page.snapshot.assistantComputers, assistantDeviceId: room.assistant_device_id ?? null } : {}),
+    ...(assistantDeviceWaits.length ? { assistantDeviceWaits } : {}), id: room.id, conversationKind: room.kind === 'direct' ? 'direct' : 'group',
     name: room.kind === 'direct' ? active.filter(member => member.id !== selfId).map(member => memberName(member, [])).join(', ') || room.name : room.name,
     ...(room.kind !== 'direct' && room.org_name ? { orgName: room.org_name } : {}),
     ...(room.kind !== 'direct' && room.external === true ? { external: true } : {}),
@@ -640,7 +683,7 @@ export function chatGroupView(page: ChatPage, selfId: string, actors: readonly C
         && !mayStopWork(members, selfId, execution.bot_id, execution.requester_id)) }, supportsAttachments: true };
 }
 
-type ChatMe = { actor: { id: string; kind: string }; capabilities?: { groupLifecycleVersion?: number; conversationListStateVersion?: number; groupSingleSpeaker?: number; independentReplies?: number; personalMentionHistory?: number; personalMask?: number; groupMemberAvatar?: number; groupMentionAudiences?: number; groupMemberMentionAll?: number; groupMemberInvites?: number; groupNotificationSettings?: number } };
+type ChatMe = { actor: { id: string; kind: string }; groupAssistantActorId?: unknown; capabilities?: { groupLifecycleVersion?: number; conversationListStateVersion?: number; groupSingleSpeaker?: number; independentReplies?: number; personalMentionHistory?: number; personalMask?: number; groupMemberAvatar?: number; groupMentionAudiences?: number; groupMemberMentionAll?: number; groupMemberInvites?: number; groupNotificationSettings?: number; groupAssistant?: number } };
 /** What every screen of one signed-in account may share: who it is on the Chat Server and the
  * read in flight for it. `request` must be fenced to the account, never to one screen, so a
  * screen that closes cannot fail the read another screen is waiting on. */
@@ -678,6 +721,23 @@ export interface ChatAccountIdentity {
   known?: { id: string; at: number; capabilities: ChatMe['capabilities'] };
   reading?: Promise<{ id: string; capabilities: ChatMe['capabilities'] }>;
   peekHistory?: (human: string) => ChatHistory | undefined;
+  /** The newest 「群里的 Cindy」 value this account has read for each group, by room revision, keyed by
+   * `<self actor>\n<room>`. Memory only: it goes with the account session and is cleared when the account changes. */
+  groupAssistant?: Map<string, { revision: number; assistant: boolean }>;
+  /** Screens showing 「群里的 Cindy」, told when `groupAssistant` or `known` changes; see chatGroupAssistantChanged. */
+  groupAssistantListeners?: Set<() => void>;
+  groupAssistantNotifying?: boolean;
+}
+
+/** The account's known 「群里的 Cindy」 values or its `/me` (capability, own actor) changed: open screens recompute.
+ * A chat page may record while it renders, so listeners hear about it once that render is over. */
+export function chatGroupAssistantChanged(account: ChatAccountIdentity) {
+  if (!account.groupAssistantListeners?.size || account.groupAssistantNotifying) return;
+  account.groupAssistantNotifying = true;
+  queueMicrotask(() => {
+    account.groupAssistantNotifying = false;
+    for (const listener of [...account.groupAssistantListeners ?? []]) listener();
+  });
 }
 
 const THREAD_BACKFILL_PAGE_SIZE = 100;
@@ -780,6 +840,7 @@ export function createChatServerClient(request: ChatRequest, personalList = crea
   let supportsMentionAudiences = false;
   let supportsMemberMentionAll = false;
   let supportsMemberInvites = false;
+  let supportsGroupAssistant = false;
   function adopt(capabilities: ChatMe['capabilities']) {
     supportsDissolve = capabilities?.groupLifecycleVersion === 1;
     supportsListRemoval = capabilities?.conversationListStateVersion === 1;
@@ -792,6 +853,7 @@ export function createChatServerClient(request: ChatRequest, personalList = crea
     supportsMentionAudiences = capabilities?.groupMentionAudiences === 1;
     supportsMemberMentionAll = capabilities?.groupMemberMentionAll === 1;
     supportsMemberInvites = capabilities?.groupMemberInvites === 1;
+    supportsGroupAssistant = capabilities?.groupAssistant === 1;
   }
   // A screen opened after another already knows what the account's server supports.
   if (account.known) adopt(account.known.capabilities);
@@ -801,8 +863,12 @@ export function createChatServerClient(request: ChatRequest, personalList = crea
       const me = await (account.request ?? request)<ChatMe>('/me');
       if (me.actor.kind !== 'human') throw new Error('INVALID_CHAT_IDENTITY');
       const id = chatId(me.actor.id);
-      account.known = { id, at: Date.now(), capabilities: me.capabilities };
-      return { id, capabilities: me.capabilities };
+      // As on Desktop, the group's Cindy needs both the capability and a valid actor.
+      const capabilities = me.capabilities?.groupAssistant === 1 && !(typeof me.groupAssistantActorId === 'string' && GROUP_ASSISTANT_ID.test(me.groupAssistantActorId))
+        ? { ...me.capabilities, groupAssistant: undefined } : me.capabilities;
+      account.known = { id, at: Date.now(), capabilities };
+      chatGroupAssistantChanged(account);
+      return { id, capabilities };
     })().finally(() => { if (account.reading === reading) account.reading = undefined; });
     const me = await reading;
     adopt(me.capabilities);
@@ -901,7 +967,41 @@ export function createChatServerClient(request: ChatRequest, personalList = crea
           text: message.reply.content.map(block => block.text ?? block.fallback ?? block.caption ?? '').join('\n') } } : {}),
       })) };
     },
-    lifecycleCapabilities: () => ({ supportsPersonalMentionHistory, supportsDissolve, supportsListRemoval, singleSpeaker, supportsMemberAvatar, supportsMentionAudiences, supportsMemberMentionAll, supportsMemberInvites, supportsNotificationSettings, supportsScopedStop: singleSpeaker }),
+    /** 「群里的 Cindy」 as on Desktop: only with the server's groupAssistant; an absent value means on.
+     * Every room read (the chat page's and the settings') is recorded, and the newest by revision is shown,
+     * so a view built from an older read never shows over a newer one. */
+    groupAssistant(room: Pick<ChatRoom, 'id' | 'revision' | 'assistant'>, self: string): { assistantEnabled?: boolean } {
+      if (!supportsGroupAssistant) return {};
+      const rooms = account.groupAssistant ??= new Map();
+      const key = `${self}\n${room.id}`;
+      const known = rooms.get(key);
+      if (Number.isSafeInteger(room.revision) && (!known || room.revision >= known.revision)) {
+        const assistant = room.assistant !== false;
+        if (known?.revision !== room.revision || known.assistant !== assistant) { rooms.set(key, { revision: room.revision, assistant }); chatGroupAssistantChanged(account); }
+      }
+      return { assistantEnabled: rooms.get(key)?.assistant ?? room.assistant !== false };
+    },
+    /** Tells `listener` whenever knownGroupAssistant may answer differently, until the returned function is called. */
+    subscribeGroupAssistant(listener: () => void) {
+      const listeners = account.groupAssistantListeners ??= new Set();
+      listeners.add(listener);
+      return () => { listeners.delete(listener); };
+    },
+    /** The newest value this account has read for a group, looked up by the account's own verified actor and the
+     * room only, never by what a view carries. `null`: the account's latest `/me` says the server has no switch;
+     * `undefined`: nothing known (no `/me` read yet in this account session, or no value read for the room). */
+    knownGroupAssistant(roomId: string): boolean | null | undefined {
+      const known = account.known;
+      if (!known) return undefined;
+      if (known.capabilities?.groupAssistant !== 1) return null;
+      return account.groupAssistant?.get(`${known.id}\n${roomId}`)?.assistant;
+    },
+    /** The room revision of that newest value, when the account's /me offers the switch. */
+    knownGroupAssistantRevision(roomId: string): number | undefined {
+      const known = account.known;
+      return known?.capabilities?.groupAssistant === 1 ? account.groupAssistant?.get(`${known.id}\n${roomId}`)?.revision : undefined;
+    },
+    lifecycleCapabilities: () => ({ supportsPersonalMentionHistory, supportsDissolve, supportsListRemoval, singleSpeaker, supportsMemberAvatar, supportsMentionAudiences, supportsMemberMentionAll, supportsMemberInvites, supportsNotificationSettings, supportsGroupAssistant, supportsScopedStop: singleSpeaker }),
     async groupSettings(roomId: string) {
       const [snapshot, self] = await Promise.all([
         request<ChatSnapshot>(`/conversations/${chatId(roomId)}/snapshot`), identity(),
@@ -926,6 +1026,11 @@ export function createChatServerClient(request: ChatRequest, personalList = crea
         const saved = await request(`/conversations/${chatId(roomId)}/read`, 'POST', { operationId, readSeq: '0', notificationMode: action.mode });
         const stored = await cache(); stored?.invalidate(roomId, true);
         return saved;
+      }
+      // As on Desktop: an older server has no group Cindy switch to write.
+      if (action.type === 'update' && action.assistant !== undefined) {
+        await identity();
+        if (!supportsGroupAssistant) throw new Error('CHAT_UNAVAILABLE');
       }
       const [route, method] = SETTINGS_ROUTES[action.type];
       const { type: _type, ...body } = action;
@@ -1099,7 +1204,12 @@ export function createChatServerClient(request: ChatRequest, personalList = crea
         const closed = await request<Array<Partial<ChatPlan> & { id?: string; status: string }>>(`/conversations/${room}/plans?ids=${missingPlans.join(',')}`).catch(() => []);
         if (Array.isArray(closed)) plans = [...plans, ...closed];
       }
-      return teammateChatActivity({ executions, plans, archived: snapshot.room.archived, lastMessageAt });
+      // Another member's private group-Cindy wait is not this account's to answer (bot-group-chat.md 第 9 节).
+      // The roster reads no identity of its own; before one is known, no such wait is treated as ours.
+      const selfId = account.known?.id ?? '';
+      const answerable = executions.filter(row => !isBotGroupAssistantWaitPrivate({ requesterId: row.requester_id, status: row.status,
+        assistant: snapshot.members.some(member => member.id === row.bot_id && member.assistant === true) }, selfId));
+      return teammateChatActivity({ executions: answerable, plans, archived: snapshot.room.archived, lastMessageAt });
     },
     async snapshot(roomId: string, metadata = false): Promise<ChatSnapshot> {
       const stored = await cache();
@@ -1423,6 +1533,19 @@ export function createChatServerClient(request: ChatRequest, personalList = crea
       // Use the revision the user saw. Never rebase a click onto a later step/revision.
       await request(`/conversations/${room}/plans/${planId}`, 'POST',
         { operationId, expectedRevision: plan.revision, action, ...edit }, manager?.id === self ? undefined : manager?.id, signal);
+    },
+    /** End this account's own group-Cindy request still waiting for a computer; a settled one needs nothing. */
+    async cancelAssistantDeviceWait(roomId: string, executionId: string, operationId: string) {
+      const room = chatId(roomId);
+      const [self, snapshot, executions] = await Promise.all([identity(),
+        request<ChatSnapshot>(`/conversations/${room}/snapshot`), request<ChatExecution[]>(`/conversations/${room}/executions`)]);
+      const execution = executions.find(row => row.id === executionId);
+      if (!execution || !['queued', 'needs_input'].includes(execution.status)) return;
+      if (!snapshot.members.some(member => member.id === execution.bot_id && member.assistant === true) || execution.requester_id !== self) throw new Error('ROLE_REQUIRED');
+      const epoch = botGroupStopRunEpoch(execution);
+      await request(`/conversations/${room}/executions/${chatId(execution.id)}/control${epoch === undefined ? '' : `?runEpoch=${epoch}`}`, 'POST',
+        { operationId, action: 'stop' });
+      (await cache())?.invalidate(roomId, true);
     },
     async stop(roomId: string, operationId: string, scope?: 'all', current = () => true) {
       if (scope === 'all') throw new Error('ROLE_REQUIRED');

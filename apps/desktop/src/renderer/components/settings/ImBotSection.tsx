@@ -1,148 +1,368 @@
+import { imBotSettings } from './ImBotSection.settings-search';
 /**
- * ImBotSection —— 「IM 机器人」设置页(单页 + 官方/个人纵向分区)。
+ * ImBotSection —— 「IM 机器人」设置页: 一个聊天软件一行, 点进去设置(2026-11-24 用户选定方案 A)。
  *
- * 侧边栏「IM 机器人」是普通 cell(不再有可展开的子 cell),内容整合在本页。
- * 官方与个人分区同时渲染、上下排列,避免 tab 把另一组支持的机器人类型藏起来；
- * 每个分区配一条简短 Tips 说明差异:
- *   1. Cindy(group='cindy',默认):官方 Cindy 机器人渠道 —— 多渠道卡片
- *      (HookConnectionsSection,原 Tina 设置区,由 Cindy 维护、用户零凭证)
- *   2. 个人(group='personal'):按渠道折叠的用户自配机器人。每个渠道独立保存
- *      Agent / 模型与凭证配置；同一时刻最多展开一个，渠道增加时页面不会线性变长。
- *   3. 插件:声明 imEntrance 的已启用插件(没有时不显示)。它们读官方机器人那份
- *      「项目与模型」；本地模式没有官方分栏时，这一块随插件分栏显示。
+ *   - 主页: 「已连接」与「还可以连接」两组, 每个聊天软件只出现一次; 行内一句话说清状态和谁来回复。
+ *     底部是声明了 IM 入口的插件。
+ *   - 聊天软件子页: 同时有官方机器人与你自己的机器人时两种方式上下排列(官方一张卡, 自己的一组卡);
+ *     只有一种方式时直接给那一种。最常改的(谁来回复、模型、群聊)在上, 不常改的收进下一层页面,
+ *     连接与解绑在最下面。
+ *   - 导航是页面内状态(主页 → 子页 → 更深一层), 返回逐级退回; 设置搜索的结果先打开对应子页,
+ *     再由 useSettingsSectionTarget 定位到具体一项。
  *
- * ?imGroup= 参数仍由 SettingsView 驱动,但只负责把深链滚动到对应分区；缺省时
- * 保持页面顶部不动,旧「飞书机器人」深链继续定位到「个人」。
- * Beta 标识用一颗 pill(主题 token,无硬编码 hex),表示整块功能处于 Beta。
- *
- * 可见性(imBotVisibility 单点):本地模式没有 Cindy 分栏，深链落「个人」。
- * 个人机器人在各构建与账号中都显示。
+ * 官方机器人整组只挂一份 HookConnectionsSection(固定在同一位置, 换页不重挂): 主页用它回报的状态画行,
+ * 子页只显示对应那一张卡, 自动弹出的确认框也只有一份。本地模式没有官方机器人。
  */
 
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { useSettingsSearchNavigation } from './SettingsSearchNavigation';
+import {
+  AtSign,
+  Briefcase,
+  Feather,
+  Gamepad2,
+  Hash,
+  MessageCircle,
+  Send,
+  Zap,
+  type LucideIcon,
+} from 'lucide-react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useTranslation } from 'react-i18next';
 
 import { useAuth } from '@/contexts/AuthContext';
-import { DiscordBotSection } from './DiscordBotSection';
-import { DingTalkBotSection } from './DingTalkBotSection';
-import { FeishuBotSection } from './FeishuBotSection';
-import { HookConnectionsSection } from './HookConnectionsSection';
+import { cn } from '@/lib/utils';
+import { useBotProfiles } from '@/features/bots/botStore';
+import type { BotImConnectionView } from '../../../shared/botImConnection';
+import {
+  SettingsCard,
+  SettingsPageHeader,
+  SettingsPageScope,
+  SettingsRow,
+  SettingsRowIcon,
+  SettingsSection,
+} from '@/components/ui/settings-rows';
+import { useSettingsSubpageBack } from './useSettingsEscape';
+import { useSettingsSearchNavigation } from './SettingsSearchNavigation';
+import { DingTalkBotSettings, useDingTalkListStatus } from './DingTalkBotSection';
+import { DiscordBotSettings, useDiscordListStatus } from './DiscordBotSection';
+import { FeishuBotSettings, useFeishuListStatus } from './FeishuBotSection';
+import {
+  HookConnectionsSection,
+  type CindyImCard,
+  type ChannelBadgeTone,
+  type HookConnectionsShow,
+  type OfficialImSummary,
+} from './HookConnectionsSection';
+import { ImBotNavProvider, ImBotStatusText, type ImBotNav, type ImBotStatusTone } from './ImBotPageParts';
 import { ImPluginEntrancesCard, useImEntrancePlugins } from './ImPluginEntrances';
-import { TelegramBotSection } from './TelegramBotSection';
-import { WechatBotSection } from './WechatBotSection';
-import { WecomBotSection } from './WecomBotSection';
+import { useImReplyTarget } from './ImReplyTargetField';
+import { TelegramBotSettings, useTelegramListStatus } from './TelegramBotSection';
+import { WechatBotSettings, useWechatListStatus } from './WechatBotSection';
+import { WecomBotSettings, useWecomListStatus } from './WecomBotSection';
 import { showCindyGroup } from './imBotVisibility';
 
-import { ImBotSettingsFrame, ImBotGroupSection } from './ImBotSettingsLayout';
-
-/** 「IM 机器人」页面分区 id(与 ?imGroup= 参数共用)。 */
+/** 「IM 机器人」旧分区 id(?imGroup= 深链与设置跳转仍会带它); 新结构下都落在主页。 */
 export type ImBotSettingsGroup = 'cindy' | 'personal';
 
 export function isImBotSettingsGroup(value: string | null): value is ImBotSettingsGroup {
   return value === 'cindy' || value === 'personal';
 }
 
-/** 个人栏内容 —— 用户自配凭证的机器人。 */
-function PersonalGroupContent({
-  targetChannel,
-  preferredFeishuService,
-  activation,
-}: {
-  targetChannel: 'wechat' | 'wecom' | 'feishu' | 'discord' | 'telegram' | 'dingtalk' | null;
-  preferredFeishuService: 'feishu' | 'lark' | null;
-  activation: number;
-}) {
-  const [expandedChannel, setExpandedChannel] = useState<
-    'wechat' | 'wecom' | 'feishu' | 'discord' | 'telegram' | 'dingtalk' | null
-  >(targetChannel);
+type ImBotApp = 'wechat' | 'feishu' | 'telegram' | 'slack' | 'discord' | 'wecom' | 'dingtalk' | 'x';
+type PersonalApp = Exclude<ImBotApp, 'slack' | 'x'>;
 
-  useLayoutEffect(() => {
-    if (targetChannel) setExpandedChannel(targetChannel);
-  }, [targetChannel, activation]);
-
-  const toggle = (channel: 'wechat' | 'wecom' | 'feishu' | 'discord' | 'telegram' | 'dingtalk') => {
-    setExpandedChannel((current) => (current === channel ? null : channel));
-  };
-
-  return (
-    <div className="flex flex-col gap-3">
-      <WechatBotSection expanded={expandedChannel === 'wechat'} onToggle={() => toggle('wechat')} />
-      <WecomBotSection expanded={expandedChannel === 'wecom'} onToggle={() => toggle('wecom')} />
-      <FeishuBotSection
-        expanded={expandedChannel === 'feishu'}
-        onToggle={() => toggle('feishu')}
-        preferredService={preferredFeishuService}
-        searchActivation={activation}
-      />
-      <DingTalkBotSection
-        expanded={expandedChannel === 'dingtalk'}
-        onToggle={() => toggle('dingtalk')}
-      />
-      <DiscordBotSection
-        expanded={expandedChannel === 'discord'}
-        onToggle={() => toggle('discord')}
-      />
-      <TelegramBotSection
-        expanded={expandedChannel === 'telegram'}
-        onToggle={() => toggle('telegram')}
-      />
-    </div>
-  );
+interface AppDef {
+  id: ImBotApp;
+  icon: LucideIcon;
+  /** 官方机器人渠道(没有 = 只有你自己的机器人)。 */
+  official?: CindyImCard;
+  /** 有「你自己的机器人」这种方式。 */
+  personal: boolean;
 }
 
-export function ImBotSection({ targetGroup }: { targetGroup: ImBotSettingsGroup | null }) {
+/** 主页顺序: 国内常用在前, 海外在后; 同组内按常用程度。 */
+const APPS: readonly AppDef[] = [
+  { id: 'wechat', icon: MessageCircle, personal: true },
+  { id: 'feishu', icon: Feather, official: 'feishu', personal: true },
+  { id: 'wecom', icon: Briefcase, personal: true },
+  { id: 'dingtalk', icon: Zap, personal: true },
+  { id: 'telegram', icon: Send, official: 'telegram', personal: true },
+  { id: 'slack', icon: Hash, official: 'slack', personal: false },
+  { id: 'discord', icon: Gamepad2, official: 'discord', personal: true },
+  { id: 'x', icon: AtSign, official: 'x', personal: false },
+];
+
+type Nav =
+  | { app: ImBotApp; page: string | null }
+  | { app: 'projects'; page: null; returnApp?: ImBotApp }
+  | null;
+
+/** 设置搜索 / 深链的落点 → 该打开哪个子页(以及更深一层)。 */
+function navForTarget(targetId: string | undefined): Nav {
+  if (!targetId) return null;
+  if (targetId === imBotSettings.projects.targetId) return { app: 'projects', page: null };
+  if (targetId === 'personal-im-feishu-groups') return { app: 'feishu', page: null };
+  if (targetId === 'personal-im-discord-channels') return { app: 'discord', page: 'channels' };
+  if (targetId === 'cindy-im-feishu-working-device') return { app: 'feishu', page: null };
+  const match = /^(?:cindy|personal)-im-([a-z]+)$/.exec(targetId);
+  const app = match?.[1] as ImBotApp | undefined;
+  return app && APPS.some((item) => item.id === app) ? { app, page: null } : null;
+}
+
+const OFFICIAL_TONE: Record<ChannelBadgeTone, ImBotStatusTone> = {
+  ok: 'connected',
+  progress: 'progress',
+  attention: 'attention',
+  error: 'error',
+};
+
+function AppIcon({ icon: Icon }: { icon: LucideIcon }) {
+  return <SettingsRowIcon><Icon size={16} aria-hidden /></SettingsRowIcon>;
+}
+
+export function ImBotSection({ targetGroup: _targetGroup }: { targetGroup: ImBotSettingsGroup | null }) {
   const { mode, dataOwnerId } = useAuth();
+  // 换账号时整页从主页重新开始(各渠道状态都按数据主人缓存)。
+  return <ImBotPages key={`${mode}:${dataOwnerId ?? 'none'}`} cindyGroupAvailable={showCindyGroup({ mode })} />;
+}
+
+function ImBotPages({ cindyGroupAvailable }: { cindyGroupAvailable: boolean }) {
+  const { t } = useTranslation();
   const { entry, activation } = useSettingsSearchNavigation();
-  const cindyGroupAvailable = showCindyGroup({ mode });
   const imPlugins = useImEntrancePlugins();
-  const targetChannel =
-    (['wechat', 'wecom', 'feishu', 'discord', 'telegram', 'dingtalk'] as const).find(
-      (channel) => entry?.targetId === 'personal-im-' + channel,
-    ) ?? null;
-  const preferredFeishuService =
-    entry?.id === 'imBot.lark' ? 'lark' : entry?.id === 'imBot.feishu' ? 'feishu' : null;
-  const cindySectionRef = useRef<HTMLElement | null>(null);
-  const personalSectionRef = useRef<HTMLElement | null>(null);
-  const effectiveTargetGroup = targetGroup
-    ? cindyGroupAvailable
-      ? targetGroup
-      : 'personal'
-    : null;
+  const bots = useBotProfiles();
+  const [official, setOfficial] = useState<OfficialImSummary>({});
+  const [companionConnections, setCompanionConnections] = useState<BotImConnectionView[]>([]);
+  const [nav, setNav] = useState<Nav>(() => navForTarget(entry?.targetId) ?? navForTarget(entry?.fallbackTargetId));
+  const rootRef = useRef<HTMLDivElement | null>(null);
 
+  // 订阅本机已在「伙伴 → 消息平台」里配置的伙伴专属机器人，升级后设置页主页与子页都能一眼看见。
   useEffect(() => {
-    if (!effectiveTargetGroup) return;
-    const section =
-      effectiveTargetGroup === 'cindy' ? cindySectionRef.current : personalSectionRef.current;
-    if (!section) return;
-
-    // SettingsView 切 tab 时会先把外层滚动容器回顶；下一帧再处理分区深链，
-    // 避免父级回顶覆盖 personal 定位。
-    const frame = window.requestAnimationFrame(() => {
-      section.scrollIntoView({ block: 'start', inline: 'nearest' });
+    const api = (window as { electronAPI?: Partial<Window['electronAPI']> }).electronAPI?.botImConnection;
+    if (!api || typeof api.list !== 'function') return;
+    let cancelled = false;
+    void api.list()
+      .then((payload) => { if (!cancelled) setCompanionConnections(payload.connections ?? []); })
+      .catch(() => {});
+    const off = api.onChanged?.((payload) => {
+      if (!cancelled) setCompanionConnections(payload.connections ?? []);
     });
-    return () => window.cancelAnimationFrame(frame);
-  }, [effectiveTargetGroup]);
+    return () => { cancelled = true; off?.(); };
+  }, []);
+
+  // 各渠道状态(只读订阅, 与子页同一份 hook)。
+  const personal: Record<PersonalApp, { configured: boolean; tone: ImBotStatusTone; labelKey: string }> = {
+    wechat: useWechatListStatus(),
+    feishu: useFeishuListStatus(),
+    telegram: useTelegramListStatus(),
+    discord: useDiscordListStatus(),
+    wecom: useWecomListStatus(),
+    dingtalk: useDingTalkListStatus(),
+  };
+  const replyTargets = {
+    telegram: useImReplyTarget('telegram'),
+    feishu: useImReplyTarget('feishu'),
+    discord: useImReplyTarget('discord'),
+    wecom: useImReplyTarget('wecom'),
+    dingtalk: useImReplyTarget('dingtalk'),
+  };
+  const wechatCompanion = useWechatListStatus().companionBotId;
+
+  /** 官方渠道在这个账号 / 这次灰度里是否出现。 */
+  const officialVisible = useCallback(
+    (app: AppDef) => cindyGroupAvailable && !!app.official && official[app.official]?.visible === true,
+    [cindyGroupAvailable, official],
+  );
+  const availableApps = APPS.filter((app) => app.personal || officialVisible(app));
+
+  // 搜索结果 / 深链: 打开对应子页(官方渠道还没下发时留在主页)。
+  useLayoutEffect(() => {
+    const target = navForTarget(entry?.targetId) ?? navForTarget(entry?.fallbackTargetId);
+    if (!target) return;
+    setNav(target);
+  }, [entry, activation]);
+
+  // 换页回到顶部(搜索定位在这之后接管滚动)。
+  const navKey = nav ? `${nav.app}/${nav.page ?? ''}` : '';
+  useLayoutEffect(() => {
+    rootRef.current?.scrollIntoView({ block: 'start' });
+  }, [navKey]);
+
+  const openApp = (app: ImBotApp | 'projects') =>
+    setNav(app === 'projects' ? { app: 'projects', page: null } : { app, page: null });
+  const appName = useCallback((id: ImBotApp) => t(`settings.imBot.apps.${id}`), [t]);
+  const stepBack = useCallback(() => {
+    setNav((current) => {
+      if (!current) return null;
+      if (current.app === 'projects') {
+        return current.returnApp ? { app: current.returnApp, page: null } : null;
+      }
+      return current.page ? { ...current, page: null } : null;
+    });
+  }, []);
+  useSettingsSubpageBack(nav ? stepBack : null);
+
+  const appNav: ImBotNav = useMemo(() => {
+    const def = nav && nav.app !== 'projects' ? APPS.find((app) => app.id === nav.app) : undefined;
+    return {
+      page: nav?.page ?? null,
+      open: (page) => setNav((current) => (current && current.app !== 'projects' ? { ...current, page } : current)),
+      openProjects: () => setNav((current) => ({
+        app: 'projects',
+        page: null,
+        ...(current && current.app !== 'projects' ? { returnApp: current.app } : {}),
+      })),
+      back: stepBack,
+      appName: def ? appName(def.id) : undefined,
+      multiWay: !!def && def.personal && officialVisible(def),
+      companionConnections,
+    };
+  }, [nav, officialVisible, stepBack, appName, companionConnections]);
+
+  const companionName = (id: string | null | undefined) =>
+    id ? bots.find((bot) => bot.id === id)?.name ?? t('settings.imBot.replyTarget.missingCompanion') : null;
+
+  /** 主页一行的状态与说明。 */
+  const rowFor = (app: AppDef): { inUse: boolean; hint: ReactNode } => {
+    const parts: string[] = [];
+    let tone: ImBotStatusTone = 'off';
+    const mine = app.personal ? personal[app.id as PersonalApp] : null;
+    if (mine?.configured) {
+      tone = mine.tone;
+      parts.push(t(mine.labelKey));
+      if (mine.tone === 'connected') {
+        const companionId = app.id === 'wechat'
+          ? wechatCompanion
+          : replyTargets[app.id as keyof typeof replyTargets]?.companionBotId;
+        const name = companionName(companionId);
+        parts.push(name ? t('settings.imBot.replyTarget.summary', { name }) : t('settings.imBot.list.cindyReplies'));
+      }
+    }
+    const theirs = app.official && officialVisible(app) ? official[app.official] : undefined;
+    if (theirs?.enabled) {
+      if (!mine?.configured) tone = OFFICIAL_TONE[theirs.tone];
+      parts.push(app.personal ? t('settings.imBot.list.official', { status: theirs.label }) : theirs.label);
+      const name = companionName(theirs.companionBotId);
+      if (name) parts.push(t('settings.imBot.replyTarget.summary', { name }));
+    }
+    const dedicated = companionConnections.filter((conn) => conn.channel === app.id);
+    if (dedicated.length > 0) {
+      const anyConnected = dedicated.some((conn) => conn.status.kind === 'connected');
+      const anyError = dedicated.some((conn) => conn.status.kind === 'error');
+      const anyProgress = dedicated.some((conn) => conn.status.kind === 'connecting' || conn.status.kind === 'conflict');
+      if (parts.length === 0) {
+        tone = anyConnected ? 'connected' : anyError ? 'error' : anyProgress ? 'progress' : 'off';
+      }
+      const names = [...new Set(dedicated.map((conn) => companionName(conn.botId)).filter((n): n is string => Boolean(n)))];
+      parts.push(t('settings.imBot.list.companionDedicated', {
+        names: names.join(t('bots.channels.handedOverSeparator')),
+      }));
+    }
+    if (parts.length > 0) return { inUse: true, hint: <ImBotStatusText tone={tone}>{parts.join(' · ')}</ImBotStatusText> };
+    const hintKey = app.id === 'slack' || app.id === 'x' || app.id === 'wechat'
+      ? `settings.imBot.list.hint.${app.id}`
+      : officialVisible(app) ? 'settings.imBot.list.hint.both' : 'settings.imBot.list.hint.personal';
+    return { inUse: false, hint: t(hintKey) };
+  };
+
+  const rootTitle = t(imBotSettings.imBot.sectionKey);
+
+  let content: ReactNode = null;
+  let officialShow: HookConnectionsShow = 'list';
+  let personalPart: ReactNode = null;
+
+  if (nav === null) {
+    const rows = availableApps.map((app) => ({ app, ...rowFor(app) }));
+    const inUse = rows.filter((row) => row.inUse);
+    const rest = rows.filter((row) => !row.inUse);
+    const renderRows = (items: typeof rows) => (
+      <SettingsCard>
+        {items.map(({ app, hint }) => (
+          <SettingsRow key={app.id} lead={<AppIcon icon={app.icon} />} title={appName(app.id)} hint={hint}
+            chevron onClick={() => openApp(app.id)} data-im-bot-app={app.id} />
+        ))}
+      </SettingsCard>
+    );
+    content = (
+      <div id="im-bot-apps" className="flex min-w-0 flex-col">
+        <SettingsPageHeader
+          title={rootTitle}
+          description={t(imBotSettings.imBot.descriptionKey)}
+          adornment={<span className="rounded-full border border-[var(--settings-badge-border)] bg-[var(--settings-badge-bg)] px-2 py-px text-10 font-medium uppercase leading-[1.5] tracking-wide text-[var(--text-secondary)]">
+            {t('settings.imBot.beta')}
+          </span>}
+        />
+        <div className="mt-6 flex min-w-0 flex-col gap-9">
+          {inUse.length > 0 ? <SettingsSection title={t('settings.imBot.list.connected')}>{renderRows(inUse)}</SettingsSection> : null}
+          {rest.length > 0 ? (
+            <SettingsSection title={t(inUse.length > 0 ? 'settings.imBot.list.available' : 'settings.imBot.list.choose')}>
+              {renderRows(rest)}
+            </SettingsSection>
+          ) : null}
+          {/* 「项目与模型」独立成组，方便查找；官方机器人、选了项目的个人机器人和插件共用这一份。 */}
+          <SettingsSection className="scroll-mt-4" title={t('settings.imBot.groups.shared')}>
+            <SettingsCard>
+              <SettingsRow title={t(imBotSettings.projects.titleKey)} hint={t(imBotSettings.projects.descriptionKey)}
+                chevron onClick={() => openApp('projects')} />
+            </SettingsCard>
+          </SettingsSection>
+          {imPlugins.length > 0 ? (
+            <SettingsSection id="im-bot-group-plugins" className="scroll-mt-4"
+              title={t('settings.imBot.groups.plugins')}
+              description={t('settings.imBot.tips.plugins')}>
+              <ImPluginEntrancesCard plugins={imPlugins} />
+            </SettingsSection>
+          ) : null}
+        </div>
+      </div>
+    );
+  } else if (nav.app === 'projects') {
+    officialShow = 'projects';
+    const backTarget = nav.returnApp ? appName(nav.returnApp) : rootTitle;
+    const backLabel = t('settings.imBot.nav.backTo', { page: backTarget });
+    content = (
+      <SettingsPageHeader titleId={imBotSettings.projects.targetId} title={t(imBotSettings.projects.titleKey)} description={t(imBotSettings.projects.descriptionKey)}
+        onBack={appNav.back} backLabel={backLabel} backProps={{ title: backLabel }} />
+    );
+  } else {
+    const def = APPS.find((app) => app.id === nav.app)!;
+    if (!nav.page) {
+      const backLabel = t('settings.imBot.nav.backTo', { page: rootTitle });
+      content = (
+        <SettingsPageHeader title={appName(def.id)} onBack={appNav.back} backLabel={backLabel} backProps={{ title: backLabel }} />
+      );
+      if (def.official && officialVisible(def)) officialShow = def.official;
+    }
+    if (def.personal) {
+      personalPart = def.id === 'wechat' ? <WechatBotSettings />
+        : def.id === 'feishu' ? <FeishuBotSettings
+            preferredService={entry?.id === 'imBot.lark' ? 'lark' : entry?.id === 'imBot.feishu' ? 'feishu' : null}
+            searchActivation={activation} />
+          : def.id === 'telegram' ? <TelegramBotSettings />
+            : def.id === 'discord' ? <DiscordBotSettings />
+              : def.id === 'wecom' ? <WecomBotSettings />
+                : <DingTalkBotSettings />;
+    }
+  }
+
+  const appHeaderShown = !!nav && !(nav.app !== 'projects' && nav.page);
+  // 官方机器人那张卡与「用你自己的机器人」一行入口平级时(还没配好自己的), 两张卡贴近成一组(14px)。
+  const pairedCards = !!nav && nav.app !== 'projects' && appNav.multiWay
+    && !personal[nav.app as PersonalApp]?.configured;
 
   return (
-    <ImBotSettingsFrame contentKey={`${mode}:${dataOwnerId ?? 'none'}`}>
-      {cindyGroupAvailable && (
-        <ImBotGroupSection group="cindy" sectionRef={cindySectionRef}>
-          <HookConnectionsSection />
-        </ImBotGroupSection>
-      )}
-      <ImBotGroupSection group="personal" sectionRef={personalSectionRef}>
-        <PersonalGroupContent
-          targetChannel={targetChannel}
-          preferredFeishuService={preferredFeishuService}
-          activation={activation}
-        />
-      </ImBotGroupSection>
-      {imPlugins.length > 0 && (
-        <ImBotGroupSection group="plugins">
-          <ImPluginEntrancesCard plugins={imPlugins} />
-          {!cindyGroupAvailable && <HookConnectionsSection projectsOnly />}
-        </ImBotGroupSection>
-      )}
-    </ImBotSettingsFrame>
+    <ImBotNavProvider value={appNav}>
+      <SettingsPageScope>
+        {/* 三个位置固定(页头 / 官方机器人 / 你自己的机器人): 官方那一份换页时不重挂。标题到内容 24px, 两组之间 36px。 */}
+        <div ref={rootRef} className={cn('flex min-w-0 flex-col', appHeaderShown && (pairedCards
+          ? 'gap-3.5 [&>*:first-child]:mb-2.5'
+          : 'gap-9 [&>*:first-child]:-mb-3'))}>
+          {content}
+          {cindyGroupAvailable || officialShow === 'projects' ? (
+            <HookConnectionsSection show={officialShow} onSummary={cindyGroupAvailable ? setOfficial : undefined} />
+          ) : null}
+          {personalPart}
+        </div>
+      </SettingsPageScope>
+    </ImBotNavProvider>
   );
 }

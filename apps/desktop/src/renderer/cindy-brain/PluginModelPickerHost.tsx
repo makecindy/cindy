@@ -386,6 +386,7 @@ export function PluginModelPickerDialog({
             fastMode={isAcpRoute ? false : (route?.fastMode ?? false)}
             unifiedAgents={agents}
             pluginEngines={pluginEngines}
+            readModelGroupDevices={deviceId ? remoteGroups.read : undefined}
             {...(dialogGroupsAvailable ? {
               modelGroups: {
                 config: dialogGroupsConfig,

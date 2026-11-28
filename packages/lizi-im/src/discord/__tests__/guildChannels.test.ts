@@ -84,7 +84,11 @@ function makeSentMessage(id: string) {
   };
 }
 
-async function harness(initial: DiscordChannelAccessConfig = { channels: [{ guildId: GUILD, channelId: CHANNEL }] }, host = makeHost()): Promise<Harness> {
+async function harness(
+  initial: DiscordChannelAccessConfig = { channels: [{ guildId: GUILD, channelId: CHANNEL }] },
+  host = makeHost(),
+  admitMember?: (lane: { guildId: string; channelId: string }) => boolean,
+): Promise<Harness> {
   const access = { config: initial };
   const channels = new Map<string, ReturnType<typeof makeTextChannel>>([
     [CHANNEL, makeTextChannel(CHANNEL)],
@@ -107,6 +111,7 @@ async function harness(initial: DiscordChannelAccessConfig = { channels: [{ guil
   const im = new DiscordIM(host, {
     channelAccess: { read: () => access.config, write: (c) => (access.config = c) },
     gatewayFactory: (ev) => { handlers = ev; return gateway; },
+    ...(admitMember ? { admitMember } : {}),
   });
   await im.init();
   const events: IMMessageEvent[] = [];
@@ -337,6 +342,16 @@ describe('DiscordIM guild channel inbound', () => {
     expect(h.events).toHaveLength(1);
     expect(h.events[0].speaker).toMatchObject({ id: MEMBER, isOwner: false });
     expect(h.events[0].senderId).toBe(LANE);
+  });
+
+  // 2026-11-24「群成员也能提问」: 个人 bot 按频道问宿主; 只在白名单开着的频道里放行成员。
+  // 最小失败输入: 宿主允许的频道一条成员 @, 不在白名单里的频道一条成员 @。
+  it('admits members where the host allows them, still only inside the whitelist', async () => {
+    const admit = vi.fn((lane: { channelId: string }) => lane.channelId === CHANNEL || lane.channelId === OTHER_CHANNEL);
+    const h = await harness(undefined, makeHost(), admit);
+    await h.emitGuild(guildMessage({ id: 'm1', authorId: MEMBER }));
+    await h.emitGuild(guildMessage({ id: 'm2', authorId: MEMBER, channelId: OTHER_CHANNEL }));
+    expect(h.events.map((e) => [e.messageId, e.speaker?.isOwner])).toEqual([[`${CHANNEL}|m1`, false]]);
   });
 
   it('keeps threads independent of the channel but gated by the parent whitelist', async () => {

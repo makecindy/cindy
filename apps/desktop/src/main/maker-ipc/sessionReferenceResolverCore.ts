@@ -14,6 +14,7 @@ import { messageToCamel } from '../localDb/mapper.js';
 import { isSyntheticTriggerText } from '../../shared/interruptedTurn.js';
 import { agentInputMessageReferenceKey } from '@cindy/maker-shared/agent-input-projection';
 import {
+  MAX_SESSION_REFERENCES,
   serializeSessionReferencePayload,
   type AgentInputSessionRef,
   type AgentInputSessionReferenceContext,
@@ -27,7 +28,7 @@ export interface SessionReferenceRemotePorts {
   invokeRemote: typeof remoteInvoke;
 }
 
-export const MAX_SESSION_REFERENCES = 8;
+export { MAX_SESSION_REFERENCES };
 export const MAX_REFERENCE_MESSAGES = 20;
 export const MAX_REFERENCE_TOKENS = 8_000;
 const FINAL_REFERENCE_PAYLOAD_TOKENS = MAX_REFERENCE_TOKENS - 128;
