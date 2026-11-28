@@ -480,7 +480,9 @@
       "file": "Datei",
       "share": "Geteilte Antwort",
       "card": "Karte"
-    }
+    },
+    "selectText": "Text auswählen",
+    "repliedToTopic": "Auf Thema geantwortet"
   },
   "mask": {
     "toolAccess": "Tool-Zugriff",
@@ -709,5 +711,18 @@
     "add": "Reaktion hinzufügen",
     "count": "{{emoji}} · {{count}} Reaktionen",
     "failed": "Die Reaktion konnte nicht aktualisiert werden. Versuche es erneut."
+  },
+  "reactions": {
+    "badgeLabel": "{{emoji}}, {{count}}",
+    "moreLabel": "{{count}} weitere Reaktionen",
+    "morePicker": "Weitere Reaktionen",
+    "pickerTitle": "Reaktion hinzufügen",
+    "detailsTitle": "Reaktionen",
+    "addMine": "Mit {{emoji}} reagieren",
+    "removeMine": "{{emoji}} entfernen",
+    "loadReactorsFailed": "Reaktionen konnten nicht geladen werden",
+    "unknownMember": "Mitglied",
+    "you": "Du",
+    "formerMember": "Ehemaliges Mitglied"
   }
 }

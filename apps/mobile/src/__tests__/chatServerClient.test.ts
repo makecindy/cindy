@@ -1568,3 +1568,22 @@ it('uses the main-page cursor with an isolated cached lookup and retries missing
   expect(chatGroupView({ snapshot: snap, before: null, messages: page, cachedMessages: completed.messages }, id(10)).threads)
     .toContainEqual(expect.objectContaining({ rootId: root.id, participated: true, mentionedMe: true }));
 });
+
+it('stops reactors pagination immediately when the caller aborts the signal', async () => {
+  const controller = new AbortController();
+  const fullPage = Array.from({ length: 100 }, (_, i) => ({ actor_id: id(300 + i) }));
+  const request = vi.fn(async (route: string, _method?: string, _body?: unknown, _actorId?: string, signal?: AbortSignal) => {
+    if (route === '/me') return { actor: { id: id(10), kind: 'human' } };
+    if (route.endsWith('/members')) return [];
+    if (route.includes('/reactions?')) {
+      expect(signal).toBe(controller.signal);
+      controller.abort();
+      return fullPage;
+    }
+    return [];
+  });
+  const client = createChatServerClient(request as never);
+  const result = await client.reactors(id(1), id(20), '👍', controller.signal);
+  expect(result).toEqual([]);
+  expect(request.mock.calls.filter(([route]) => route.includes('/reactions?'))).toHaveLength(1);
+});

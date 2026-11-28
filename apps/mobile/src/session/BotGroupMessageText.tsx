@@ -6,9 +6,12 @@ import type { ViewInstance } from 'react-native';
 import { botGroupBodyParts } from '@cindy/maker-shared/botGroupPresentation';
 import type { BotGroupAuthorKind } from '@cindy/maker-shared/botGroupChat';
 import { memo, useContext, useId, useCallback, useMemo, useRef, useState, type ReactNode } from 'react';
-import { Linking, Pressable, Platform, ScrollView, StyleSheet, View, type GestureResponderEvent, type LayoutChangeEvent, type StyleProp, type TextStyle } from 'react-native';
+import { ActionSheetIOS, Alert, Linking, Pressable, Platform, ScrollView, StyleSheet, View, type GestureResponderEvent, type LayoutChangeEvent, type StyleProp, type TextStyle } from 'react-native';
 import { useTranslation } from 'react-i18next';
 import { tokenizeInlineMath } from '@cindy/maker-shared/math-markdown';
+import { playHaptic } from '@/platform/haptics';
+import { copyMessageText } from './messageActions';
+import { BotGroupLinkLongPressContext, useSuppressMessageLongPress } from './botGroupMessageGestureContext';
 import { HighlightedCodeText } from './HighlightedCodeText';
 import { MarkdownBlockCopyButton } from './MarkdownBlockCopyButton';
 import { MermaidDiagramWebView } from './mermaidWebView';
@@ -36,7 +39,10 @@ type BodyOptions = {
   richContent?: boolean;
   active?: boolean;
   interactive?: boolean;
+  selectable?: boolean;
   onOpenDiagram?: (source: string) => void;
+  onChildLongPress?: () => void;
+  onLinkLongPress?: (url: string) => void;
 };
 
 
@@ -71,13 +77,19 @@ function useMentionTouchContext(context?: BotGroupMentionContext) {
   return { ref: body, onTouchStart, context: anchored };
 }
 
-function renderMentionSegments(segments: readonly (BotGroupTextSegment & { label?: string })[], styles: Styles, context?: BotGroupMentionContext, textStyle?: StyleProp<TextStyle>): ReactNode {
-  const Span = Platform.OS === 'ios' ? MarkdownSelectableSpan : Text;
+function renderMentionSegments(segments: readonly (BotGroupTextSegment & { label?: string })[], styles: Styles, context?: BotGroupMentionContext, textStyle?: StyleProp<TextStyle>, selectable = true, onChildLongPress?: () => void): ReactNode {
+  const Span = selectable && Platform.OS === 'ios' ? MarkdownSelectableSpan : Text;
   return segments.map((segment, index) => {
     const member = segment.mention && context ? botGroupMentionMember(segment.label ?? segment.text, context) : undefined;
     return <Span key={index} style={[textStyle, segment.mention && styles.mention]}
       accessibilityRole={member ? 'link' : undefined}
-      onPress={member ? event => { event.stopPropagation(); context?.onPress(member); } : undefined}>{segment.text}</Span>;
+      onPress={member ? event => { event.stopPropagation(); context?.onPress(member); } : undefined}
+      onLongPress={member ? event => {
+        event.stopPropagation();
+        onChildLongPress?.();
+        playHaptic('selection');
+        context?.onPress(member);
+      } : undefined}>{segment.text}</Span>;
   });
 }
 
@@ -88,7 +100,8 @@ function inlineMathSubFontSize(baseFontSize: number): number {
 }
 
 function renderInlines(inlines: readonly MobileMarkdownInline[], styles: Styles, options: BodyOptions, context?: BotGroupMentionContext, baseFontSize: number = typeScale.bodyLarge): ReactNode[] {
-  const Span = Platform.OS === 'ios' ? MarkdownSelectableSpan : Text;
+  const selectable = options.selectable !== false;
+  const Span = selectable && Platform.OS === 'ios' ? MarkdownSelectableSpan : Text;
   const markStyles = { strong: styles.strong, emphasis: styles.emphasis, strikethrough: styles.strike };
   let offset = 0;
   const runs = inlines.map(inline => {
@@ -142,7 +155,13 @@ function renderInlines(inlines: readonly MobileMarkdownInline[], styles: Styles,
     if (inline.type === 'link') {
       const clickable = options.richContent && options.interactive !== false && /^https?:\/\//i.test(inline.url);
       return <Span key={index} style={[textStyle, clickable && styles.link]}
-        onPress={clickable ? () => { void Linking.openURL(inline.url).catch(() => undefined); } : undefined}>{text}</Span>;
+        onPress={clickable ? event => { event.stopPropagation(); void Linking.openURL(inline.url).catch(() => undefined); } : undefined}
+        onLongPress={clickable ? event => {
+          event.stopPropagation();
+          options.onChildLongPress?.();
+          playHaptic('selection');
+          options.onLinkLongPress?.(inline.url);
+        } : undefined}>{text}</Span>;
     }
     // UITextView children inherit the root's style, not an enclosing span's.
     // Keep formatting on each actual text run when splitting it around a mention.
@@ -151,7 +170,7 @@ function renderInlines(inlines: readonly MobileMarkdownInline[], styles: Styles,
       const from = Math.max(start, segment.start);
       const to = Math.min(end, segment.end);
       return from < to ? [{ text: segment.text.slice(from - segment.start, to - segment.start), mention: segment.mention, label: segment.label }] : [];
-    }), styles, context, textStyle)}</Span>;
+    }), styles, context, textStyle, selectable, options.onChildLongPress)}</Span>;
   });
 }
 
@@ -178,11 +197,12 @@ function BotGroupMarkdownTable({ block, styles, options, context }: {
   const minWidth = buildMessageContentLayout({ screenWidth }).markdownTableCellMinWidth;
   const widths = useMemo(() => buildMobileMarkdownTableColumnWidths({ ...measured, availableWidth, minWidth }),
     [measured, availableWidth, minWidth]);
+  const tableSelectable = options.selectable !== false;
   const renderRow = (cells: readonly MobileMarkdownInline[][], key: string, header = false) => (
     <View key={key} style={[styles.tableRow, header && styles.tableHeaderRow]}>
       {widths.map((width, index) => (
         <View key={index} style={[styles.tableCell, { width }]}>
-          <MarkdownSelectableText selectable style={[styles.tableText, header && styles.tableHeaderText]}>
+          <MarkdownSelectableText selectable={tableSelectable} allowIosUITextView={tableSelectable} style={[styles.tableText, header && styles.tableHeaderText]}>
             {renderInlines(cells[index] ?? [], styles, options, context, typeScale.bodySmall)}
           </MarkdownSelectableText>
         </View>
@@ -203,39 +223,40 @@ function BotGroupMarkdownTable({ block, styles, options, context }: {
 }
 
 function renderBlock(block: MobileMarkdownBlock, styles: Styles, options: BodyOptions, diagramLabel: string, context?: BotGroupMentionContext): ReactNode {
+  const selectable = options.selectable !== false;
   switch (block.type) {
     case 'heading':
-      return <MarkdownSelectableText key={block.key} selectable style={[styles.text, styles.heading]}>{renderInlines(block.inlines, styles, options, context)}</MarkdownSelectableText>;
+      return <MarkdownSelectableText key={block.key} selectable={selectable} allowIosUITextView={selectable} style={[styles.text, styles.heading]}>{renderInlines(block.inlines, styles, options, context)}</MarkdownSelectableText>;
     case 'blockquote':
       return <View key={block.key} style={styles.quote}>
-        <MarkdownSelectableText selectable style={[styles.text, styles.quoteText]}>{renderInlines(block.inlines, styles, options, context)}</MarkdownSelectableText>
+        <MarkdownSelectableText selectable={selectable} allowIosUITextView={selectable} style={[styles.text, styles.quoteText]}>{renderInlines(block.inlines, styles, options, context)}</MarkdownSelectableText>
       </View>;
     case 'list_item':
       return <View key={block.key} style={[styles.listItem, { paddingLeft: (block.depth ?? 0) * typeScale.bodyLarge }]}>
         <Text style={styles.text}>{mobileMarkdownListMarkerText(block).trim()}</Text>
-        <MarkdownSelectableText selectable style={[styles.text, styles.listText]}>{renderInlines(block.inlines, styles, options, context)}</MarkdownSelectableText>
+        <MarkdownSelectableText selectable={selectable} allowIosUITextView={selectable} style={[styles.text, styles.listText]}>{renderInlines(block.inlines, styles, options, context)}</MarkdownSelectableText>
       </View>;
     case 'code':
       if (options.richContent) {
         const copyable = options.interactive !== false && block.text.trim().length > 0;
         return <View key={block.key} style={[styles.codeBlock, copyable && styles.codeWithCopy]}>
-          <HighlightedCodeText text={block.text} language={block.language} styles={styles} selectable allowIosUITextView
-            SpanComponent={Platform.OS === 'ios' ? MarkdownSelectableSpan : Text} />
+          <HighlightedCodeText text={block.text} language={block.language} styles={styles} selectable={selectable} allowIosUITextView={selectable}
+            SpanComponent={selectable && Platform.OS === 'ios' ? MarkdownSelectableSpan : Text} />
           {copyable ? <MarkdownBlockCopyButton text={block.text} /> : null}
         </View>;
       }
-      return renderSourceBlock(block, styles);
+      return renderSourceBlock(block, styles, selectable);
     case 'mermaid':
       if (options.richContent) return <View key={block.key}>
         <MermaidDiagramWebView active={options.active} source={block.text} cachePreview testID="botGroup.mermaidDiagram" />
         {options.onOpenDiagram && options.interactive !== false ? <Pressable
           accessibilityLabel={diagramLabel} accessibilityRole="button" style={StyleSheet.absoluteFill}
-          onPress={() => options.onOpenDiagram?.(block.text)} testID="botGroup.openDiagram" /> : null}
+          onPress={event => { event?.stopPropagation?.(); options.onOpenDiagram?.(block.text); }} testID="botGroup.openDiagram" /> : null}
       </View>;
-      return renderSourceBlock(block, styles);
+      return renderSourceBlock(block, styles, selectable);
     case 'math':
       if (options.richContent) return <MathFormulaWebView active={options.active} key={block.key} source={block.text} testID="botGroup.mathFormula" />;
-      return renderSourceBlock(block, styles);
+      return renderSourceBlock(block, styles, selectable);
     case 'table':
       return <BotGroupMarkdownTable key={block.key} block={block} styles={styles} options={options} context={context} />;
     case 'carousel':
@@ -247,13 +268,13 @@ function renderBlock(block: MobileMarkdownBlock, styles: Styles, options: BodyOp
         </View>
       );
     default:
-      return <MarkdownSelectableText key={block.key} selectable style={styles.text}>{renderInlines(block.inlines, styles, options, context)}</MarkdownSelectableText>;
+      return <MarkdownSelectableText key={block.key} selectable={selectable} allowIosUITextView={selectable} style={styles.text}>{renderInlines(block.inlines, styles, options, context)}</MarkdownSelectableText>;
   }
 }
 
-function renderSourceBlock(block: { key: string; text: string }, styles: Styles) {
+function renderSourceBlock(block: { key: string; text: string }, styles: Styles, selectable = true) {
   return <View key={block.key} style={styles.codeBlock}>
-    <MarkdownSelectableText selectable style={styles.markdownCodeText}>{block.text}</MarkdownSelectableText>
+    <MarkdownSelectableText selectable={selectable} allowIosUITextView={selectable} style={styles.markdownCodeText}>{block.text}</MarkdownSelectableText>
   </View>;
 }
 
@@ -265,12 +286,39 @@ const BotGroupMarkdownBlock = memo(function BotGroupMarkdownBlock({ block, style
   return renderBlock(block, styles, options, diagramLabel, context);
 });
 
-export function BotGroupMarkdownText({ content, authorKind, mentionContext, richContent = false, interactive = true, active = true, onOpenDiagram, messageKey, messageId, readOnly = false }: {
+export function BotGroupMarkdownText({ content, authorKind, mentionContext, richContent = false, interactive = true, active = true, selectable = true, onOpenDiagram, messageKey, messageId, readOnly = false }: {
   content: string; authorKind?: BotGroupAuthorKind; mentionContext?: BotGroupMentionContext;
   messageKey?: string; messageId?: string; readOnly?: boolean;
 } & BodyOptions) {
   const { t } = useTranslation();
+  const tRef = useRef(t);
+  tRef.current = t;
   const styles = useThemedStyles(makeStyles);
+  const suppressMessageLongPress = useSuppressMessageLongPress();
+  const openLinkActionSheet = useCallback((url: string) => {
+    const tr = tRef.current;
+    let host = '';
+    try { host = new URL(url).host; } catch { /* ignore malformed URL */ }
+    const openLabel = host ? tr('plugins.openLinkHost', { host }) : tr('interaction.deviceCode.open');
+    const copyLabel = tr('interaction.qr.copyLink');
+    const cancelLabel = tr('session.common.cancel');
+    const previewTitle = url.length > 96 ? `${url.slice(0, 95)}…` : url;
+    if (Platform.OS === 'ios' && ActionSheetIOS?.showActionSheetWithOptions) {
+      ActionSheetIOS.showActionSheetWithOptions(
+        { title: previewTitle, options: [openLabel, copyLabel, cancelLabel], cancelButtonIndex: 2 },
+        (buttonIndex) => {
+          if (buttonIndex === 0) void Linking.openURL(url).catch(() => undefined);
+          else if (buttonIndex === 1) void copyMessageText(url);
+        },
+      );
+      return;
+    }
+    Alert.alert(previewTitle, undefined, [
+      { text: openLabel, onPress: () => { void Linking.openURL(url).catch(() => undefined); } },
+      { text: copyLabel, onPress: () => { void copyMessageText(url); } },
+      { text: cancelLabel, style: 'cancel' },
+    ]);
+  }, []);
   const touch = useMentionTouchContext(content.includes('@') ? mentionContext : undefined);
   const width = useWindowWidth();
   const instanceKey = useId();
@@ -283,40 +331,50 @@ export function BotGroupMarkdownText({ content, authorKind, mentionContext, rich
   const blocks = useMemo(() => rich ? [] : botGroupBodyParts(content, authorKind).flatMap((part, index): MobileMarkdownBlock[] => part.kind === 'markdown'
     ? parseMobileMarkdown(part.content).map(block => ({ ...block, key: `${index}:${block.key}` }))
     : [{ type: 'paragraph', key: String(index), inlines: [{ type: 'text', text: part.content }] }]), [content, authorKind, rich]);
+  const handleRichLinkLongPress = useCallback((url: string) => {
+    suppressMessageLongPress();
+    playHaptic('selection');
+    openLinkActionSheet(url);
+  }, [suppressMessageLongPress, openLinkActionSheet]);
   if (rich) return (
-    <SessionQuickSendProvider value={readOnly || !interactive ? null : sender}>
-      <MessageHeavyContentVisibilityContext.Provider value={active && (!visibility || visible)}>
-        <ChatFilePathContext.Provider value={null}>
-          <MarkdownBody renderRichAnswers publicMediaOnly richStateKey={messageKey ?? instanceKey}
-            codeCopyEnabled={interactive}
-            markdownImageCacheKey={messageKey ?? instanceKey} layout={layout} text={content} selectable
-            onOpenPayload={next => {
-              // Shared answers may open public media and diagrams, never task-local files.
-              if (next.kind === 'mermaid' || (next.kind === 'media' && /^https?:\/\//i.test(next.media.url))) setPayload(next);
-            }} />
-          {payload?.kind === 'media' && payload.media.kind === 'image'
-            ? <ImageLightbox images={[{ key: messageKey ?? instanceKey, title: payload.title, url: payload.media.url, payload }]}
-                initialUrl={payload.media.url} onClose={() => setPayload(null)} />
-            : payload ? <MessagePayloadModal payload={payload} onClose={() => setPayload(null)} /> : null}
-        </ChatFilePathContext.Provider>
-      </MessageHeavyContentVisibilityContext.Provider>
-    </SessionQuickSendProvider>
+    <BotGroupLinkLongPressContext.Provider value={interactive ? handleRichLinkLongPress : null}>
+      <SessionQuickSendProvider value={readOnly || !interactive ? null : sender}>
+        <MessageHeavyContentVisibilityContext.Provider value={active && (!visibility || visible)}>
+          <ChatFilePathContext.Provider value={null}>
+            <MarkdownBody renderRichAnswers publicMediaOnly richStateKey={messageKey ?? instanceKey}
+              codeCopyEnabled={interactive}
+              markdownImageCacheKey={messageKey ?? instanceKey} layout={layout} text={content} selectable={selectable} allowIosUITextView={selectable}
+              onOpenPayload={next => {
+                // Shared answers may open public media and diagrams, never task-local files.
+                if (next.kind === 'mermaid' || (next.kind === 'media' && /^https?:\/\//i.test(next.media.url))) setPayload(next);
+              }} />
+            {payload?.kind === 'media' && payload.media.kind === 'image'
+              ? <ImageLightbox images={[{ key: messageKey ?? instanceKey, title: payload.title, url: payload.media.url, payload }]}
+                  initialUrl={payload.media.url} onClose={() => setPayload(null)} />
+              : payload ? <MessagePayloadModal payload={payload} onClose={() => setPayload(null)} /> : null}
+          </ChatFilePathContext.Provider>
+        </MessageHeavyContentVisibilityContext.Provider>
+      </SessionQuickSendProvider>
+    </BotGroupLinkLongPressContext.Provider>
   );
   const diagramLabel = t('message.renderer.openDiagramDetail');
   return <View ref={touch.ref} collapsable={false} style={styles.body} onTouchStart={touch.onTouchStart}>{blocks.map(block =>
     <BotGroupMarkdownBlock key={block.key} block={block} styles={styles} diagramLabel={diagramLabel}
-      context={touch.context} richContent={richContent} interactive={interactive}
+      context={touch.context} richContent={richContent} interactive={interactive} selectable={selectable}
+      onChildLongPress={suppressMessageLongPress}
+      onLinkLongPress={openLinkActionSheet}
       active={block.type === 'mermaid' || block.type === 'math' ? active : undefined}
       onOpenDiagram={block.type === 'mermaid' ? onOpenDiagram : undefined} />)}</View>;
 }
 
 /** The user's own words: plain text with `@name` shown as a mention mark. */
-export function BotGroupUserText({ content, mentionLabels, mentionContext }: { content: string; mentionLabels: readonly string[]; mentionContext?: BotGroupMentionContext }) {
+export function BotGroupUserText({ content, mentionLabels, mentionContext, selectable = true }: { content: string; mentionLabels: readonly string[]; mentionContext?: BotGroupMentionContext; selectable?: boolean }) {
   const styles = useThemedStyles(makeStyles);
+  const suppressMessageLongPress = useSuppressMessageLongPress();
   const touch = useMentionTouchContext(content.includes('@') ? mentionContext : undefined);
-  const text = useMemo(() => renderMentionSegments(splitMobileBotGroupMentionSegments(content, mentionLabels, touch.context), styles, touch.context),
-    [content, mentionLabels, styles, touch.context]);
-  return <View ref={touch.ref} collapsable={false} onTouchStart={touch.onTouchStart}><MarkdownSelectableText selectable style={styles.text}>
+  const text = useMemo(() => renderMentionSegments(splitMobileBotGroupMentionSegments(content, mentionLabels, touch.context), styles, touch.context, undefined, selectable, suppressMessageLongPress),
+    [content, mentionLabels, styles, touch.context, selectable, suppressMessageLongPress]);
+  return <View ref={touch.ref} collapsable={false} onTouchStart={touch.onTouchStart}><MarkdownSelectableText selectable={selectable} allowIosUITextView={selectable} style={styles.text}>
     {text}
   </MarkdownSelectableText></View>;
 }
@@ -342,7 +400,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     fontStyle: 'normal',
   },
   link: { textDecorationLine: 'underline' },
-  inlineCode: { fontFamily: monoFont, fontSize: typeScale.bodySmall, lineHeight: lineHeight.bodyLarge, backgroundColor: colors.surfaceChip },
+  inlineCode: { fontFamily: monoFont, fontSize: typeScale.bodySmall, lineHeight: lineHeight.bodyLarge, color: colors.chatInlineCodeText },
   quote: { borderLeftWidth: 2, borderLeftColor: colors.border, paddingLeft: spacing.md },
   quoteText: { color: colors.textSecondary },
   listItem: { flexDirection: 'row', gap: spacing.sm },

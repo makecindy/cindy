@@ -490,7 +490,9 @@
       "file": "Arquivo",
       "share": "Resposta compartilhada",
       "card": "Cartão"
-    }
+    },
+    "selectText": "Selecionar texto",
+    "repliedToTopic": "Respondeu ao tópico"
   },
   "mask": {
     "toolAccess": "Acesso a ferramentas",
@@ -720,5 +722,18 @@
     "add": "Adicionar reação",
     "count": "{{emoji}} · {{count}} reações",
     "failed": "Não foi possível atualizar a reação. Tente novamente."
+  },
+  "reactions": {
+    "badgeLabel": "{{emoji}}, {{count}}",
+    "moreLabel": "Mais {{count}} reações",
+    "morePicker": "Mais reações",
+    "pickerTitle": "Adicionar reação",
+    "detailsTitle": "Reações",
+    "addMine": "Reagir com {{emoji}}",
+    "removeMine": "Remover {{emoji}}",
+    "loadReactorsFailed": "Não foi possível carregar quem reagiu",
+    "unknownMember": "Membro",
+    "you": "Você",
+    "formerMember": "Ex-membro"
   }
 }

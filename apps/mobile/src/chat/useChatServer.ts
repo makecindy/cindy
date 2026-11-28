@@ -1,3 +1,4 @@
+import { randomUUID } from 'expo-crypto';
 import { createConversationListState } from '@cindy/maker-shared/chatConversationList';
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { AppState } from 'react-native';
@@ -1107,10 +1108,14 @@ export function useChatServerGroup(groupId: string, enabled: boolean, threadRoot
   }, [valid, enabled, identity, view, groupId]);
   const react = useCallback(async (messageId: string, emoji: string, present: boolean) => {
     if (!valid() || !enabled) throw new Error('OWNER_CHANGED');
-    const operationId = (await import('expo-crypto')).randomUUID();
+    const operationId = randomUUID();
     await api.client.react(groupId, messageId, emoji, present, operationId);
     if (valid()) reload();
   }, [valid, enabled, api, groupId, reload]);
+  const reactors = useCallback(async (messageId: string, emoji: string, signal?: AbortSignal) => {
+    if (!valid() || !enabled) throw new Error('OWNER_CHANGED');
+    return api.client.reactors(groupId, messageId, emoji, signal);
+  }, [valid, enabled, api, groupId]);
   const backfillThreads = useCallback((mentions: readonly ChatMessage[] = []) => {
     const current = page.current;
     if (!valid() || !enabled || threadRootId || !current || current.identity !== identity
@@ -1150,7 +1155,7 @@ export function useChatServerGroup(groupId: string, enabled: boolean, threadRoot
   const threadMeta = useMemo(() => enabled && latest ? chatThreadMetadata(latest.page, latest.self) : undefined, [enabled, latest]);
   return { state: state.identity === identity ? state.value : { kind: 'loading' } as BotGroupChatState,
     listHidden: api.current() && api.client.personalList.hidden(groupId),
-    online: state.identity === identity && state.online, verified: state.identity === identity && state.verified, reload, act, pending, pendingAction, threadMeta, followThread, shareToMain, react,
+    online: state.identity === identity && state.online, verified: state.identity === identity && state.verified, reload, act, pending, pendingAction, threadMeta, followThread, shareToMain, react, reactors,
     backfillThreads, threadsSyncing: state.identity === identity && threadsSyncing,
     canQueue: enabled && api.enabled && state.identity === identity && state.value.kind === 'ready' && !api.client.personalList.hidden(groupId),
     acceptListState, isListHidden: () => api.client.personalList.hidden(groupId), loadOlder, loadingOlder: state.loadingOlder, media, markRead, uploadAttachment };

@@ -40,7 +40,7 @@ export function TeammateProcessLink({ title, onPress }: { title: string; onPress
 }
 
 /** One turn, one guide. Public notes remain selectable; only the header owns a gesture. */
-export function TeammateProcess({ id, title, titleContent, titleAccessory, running = false, children, secondary = false, statusIcon, railFooter = false }: {
+export function TeammateProcess({ id, title, titleContent, titleAccessory, running = false, children, secondary = false, compact = false, statusIcon, railFooter = false }: {
   id: string;
   title: string;
   titleContent?: ReactNode;
@@ -48,6 +48,8 @@ export function TeammateProcess({ id, title, titleContent, titleAccessory, runni
   titleAccessory?: ReactNode;
   running?: boolean;
   secondary?: boolean;
+  /** 群聊消息内嵌时收紧上下空白，同时用 hitSlop 维持 44pt 可点热区。 */
+  compact?: boolean;
   statusIcon?: ReactNode;
   railFooter?: boolean;
   children: ReactNode | ((expanded: boolean) => ReactNode);
@@ -112,8 +114,9 @@ export function TeammateProcess({ id, title, titleContent, titleAccessory, runni
   }, [expanded, contentHeight, height, reduceMotion, disclosure.moving]);
   return <View style={styles.container}>
       <Pressable accessibilityRole="button" accessibilityState={{ expanded }} accessibilityLabel={title}
+        hitSlop={compact ? { top: 10, bottom: 10, left: 4, right: 8 } : undefined}
         onPress={toggle} testID={secondary ? 'message.processRecords' : 'message.teammateProcess'}
-        style={[styles.header, titleAccessory != null && styles.headerWithAccessory]} onLayout={event => footer.setRowHeight(event.nativeEvent.layout.height)}>
+        style={[styles.header, compact && styles.headerCompact, titleAccessory != null && styles.headerWithAccessory]} onLayout={event => footer.setRowHeight(event.nativeEvent.layout.height)}>
         {(statusIcon || !secondary) && <View style={styles.statusIcon}>{statusIcon ?? <>{running ? <ActivityIndicator color={colors.textSecondary} size="small" style={styles.spinner} />
           : <Layers size={iconSize.sm} color={colors.textSecondary} />}</>}</View>}
         <Text style={[styles.title, secondary && styles.secondary, titleAccessory != null && styles.titleWithAccessory]}
@@ -142,6 +145,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   container: { minWidth: 0 },
   measuredBody: { position: 'absolute', left: 0, right: 0, top: 0 },
   header: { alignSelf: 'flex-start', maxWidth: '100%', flexDirection: 'row', alignItems: 'center', gap: spacing.sm, minHeight: 44 },
+  headerCompact: { minHeight: 24 },
   headerWithAccessory: { alignSelf: 'stretch' },
   titleWithAccessory: { flex: 1, minWidth: 0 },
   accessory: { flexShrink: 0 },

@@ -28,6 +28,8 @@ const h = vi.hoisted(() => ({
   openTeammate: vi.fn(),
   pickAvatar: vi.fn(async () => null),
   alert: vi.fn(),
+  actionSheet: vi.fn(),
+  linkingOpenURL: vi.fn(async () => {}),
   leaveGuard: [] as boolean[],
   leaveDecision: (async () => false) as () => Promise<boolean>,
   confirm: vi.fn(),
@@ -86,10 +88,19 @@ vi.mock('@/session/ConversationShareWebView', () => ({ cleanupConversationShareP
   writeConversationSharePngTemp: async () => 'file:///export.png', deleteConversationSharePngTemp: async () => {} }));
 vi.mock('expo-sharing', () => ({ shareAsync: h.sharedImage }));
 vi.mock('expo-clipboard', () => ({ setStringAsync: vi.fn(async () => {}) }));
+vi.mock('expo-glass-effect', () => ({ GlassView: ({ children }: any) => el('div', null, children), isLiquidGlassAvailable: () => false }));
+vi.mock('expo-blur', () => ({ BlurView: () => null }));
 vi.mock('react-native-uitextview', () => ({
   UITextView: ({ children, testID, onPress, onTouchStart, style, accessibilityRole }: any) => {
     h.textRender();
     return el('span', { 'data-testid': testID, onClick: onPress, onTouchStart, role: accessibilityRole,
+      'data-style': JSON.stringify(Object.assign({}, ...[style].flat(Infinity).filter(Boolean))) }, children);
+  },
+}));
+vi.mock('@/session/SelectionMenuText', () => ({
+  SelectionMenuText: ({ children, testID, onPress, onTouchStart, style }: any) => {
+    h.textRender();
+    return el('span', { 'data-testid': testID, onClick: onPress, onTouchStart,
       'data-style': JSON.stringify(Object.assign({}, ...[style].flat(Infinity).filter(Boolean))) }, children);
   },
 }));
@@ -139,19 +150,30 @@ vi.mock('react-native', () => {
       h.keyboardAvoidingView = props;
       return el('div', null, children);
     },
+    Modal: ({ visible, children }: any) => (visible ? el('div', { 'data-testid': 'modal' }, children) : null),
     Pressable: ({ children, onPress, onLongPress, disabled, testID, accessibilityLabel, accessibilityRole, accessibilityHint,
-      accessibilityActions, onAccessibilityAction, onAccessibilityTap }: any) => el('button',
-      { 'data-testid': testID, 'aria-label': accessibilityLabel, 'aria-description': accessibilityHint, role: accessibilityRole,
-        disabled, onClick: onPress, onContextMenu: onLongPress,
-        ref: testID && (onAccessibilityAction || onAccessibilityTap) ? (element: HTMLButtonElement | null) => {
+      accessibilityActions, onAccessibilityAction, onAccessibilityTap }: any) => el(
+      onPress || onAccessibilityAction || onAccessibilityTap ? 'button' : 'div',
+      {
+        'data-testid': testID,
+        'aria-label': accessibilityLabel,
+        'aria-description': accessibilityHint,
+        role: accessibilityRole,
+        disabled: onPress ? disabled : undefined,
+        onClick: onPress,
+        onContextMenu: onLongPress && !disabled ? (event: any) => { event.preventDefault?.(); event.stopPropagation?.(); onLongPress(); } : undefined,
+        ref: testID && (onAccessibilityAction || onAccessibilityTap) ? (element: HTMLElement | null) => {
           if (element) h.accessibility.set(testID, { actions: accessibilityActions, tap: onAccessibilityTap, action: onAccessibilityAction });
           else h.accessibility.delete(testID);
-        } : undefined },
+        } : undefined,
+      },
       typeof children === 'function' ? children({ pressed: false }) : children),
     ActivityIndicator: ({ testID }: any) => el('i', { 'data-testid': testID ?? 'spinner' }),
     StyleSheet: { create: (value: unknown) => value, flatten: (style: unknown) => Object.assign({}, ...[style].flat(Infinity).filter(Boolean)), hairlineWidth: 1 },
     Platform: { get OS() { return h.platform.OS; }, select: (value: any) => value[h.platform.OS] },
     Alert: { alert: h.alert },
+    ActionSheetIOS: { showActionSheetWithOptions: h.actionSheet },
+    Linking: { openURL: h.linkingOpenURL },
     useWindowDimensions: () => h.window,
     Dimensions: { get: () => h.window, addEventListener: () => ({ remove() {} }) },
     AppState: { get currentState() { return h.appState; }, addEventListener: (_event: string, listener: (state: string) => void) => {
@@ -205,7 +227,7 @@ vi.mock('react-i18next', async (importOriginal) => {
 });
 vi.mock('expo-crypto', () => ({ randomUUID: () => `uuid-${++h.uuid}` }));
 vi.mock('lucide-react-native', () => Object.fromEntries(
-  ['Copy', 'Share', 'ArrowUpRight', 'CornerDownRight', 'Circle', 'CircleDot', 'GitPullRequest', 'Bell', 'BellRing', 'ChevronLeft', 'MessagesSquare', 'Search', 'Settings2', 'Plus', 'Square', 'Users', 'X', 'Check', 'CircleAlert', 'CircleCheck', 'CircleDashed', 'FileText', 'Sparkles', 'Folder', 'Camera', 'Image',
+  ['Copy', 'Share', 'ArrowUpRight', 'CornerDownRight', 'Circle', 'CircleDot', 'GitPullRequest', 'Bell', 'BellRing', 'ChevronLeft', 'MessagesSquare', 'MessageSquare', 'Search', 'Settings2', 'Plus', 'Square', 'Users', 'X', 'Check', 'CircleAlert', 'CircleCheck', 'CircleDashed', 'FileText', 'Sparkles', 'Folder', 'Camera', 'Image',
     'Minus', 'ChevronUp', 'CircleMinus', 'Layers', 'ListChecks', 'ListTodo', 'Ellipsis', 'ChevronRight', 'ChevronDown', 'AtSign', 'Reply', 'SlidersHorizontal', 'UserPlus', 'SmilePlus', 'EyeOff']
     .map((name) => [name, () => null]),
 ));
@@ -241,7 +263,14 @@ vi.mock('@/platform/chrome/NativePullDownMenu', () => ({
 }));
 vi.mock('@/components/AppText', () => ({
   MAX_FONT_SIZE_MULTIPLIER: 1.5,
-  Text: ({ children, testID }: any) => el('span', { 'data-testid': testID }, children),
+  Text: ({ children, testID, onPress, onLongPress, onTouchStart, style, accessibilityRole }: any) => el('span', {
+    'data-testid': testID,
+    role: accessibilityRole,
+    onClick: onPress,
+    onContextMenu: onLongPress ? (event: any) => { event.preventDefault?.(); onLongPress(event); } : undefined,
+    onTouchStart,
+    'data-style': JSON.stringify(Object.assign({}, ...[style].flat(Infinity).filter(Boolean))),
+  }, children),
   TextInput: ({ testID, ...props }: any) => { h.inputs[testID] = props; return el('input', { 'data-testid': testID, value: props.value ?? '', readOnly: true }); },
 }));
 vi.mock('@/components/PaperPlaneIcon', () => ({ PaperPlaneIcon: () => null }));
@@ -303,6 +332,12 @@ vi.mock('react-native-reanimated', async () => {
     useDerivedValue: (calculate: () => unknown) => ({ get value() { return calculate(); } }),
     useAnimatedStyle: (calculate: () => any) => new Proxy({}, { get: (_target, key) => calculate()[key] }),
     useAnimatedReaction: () => {}, measure: () => null,
+    withSpring: (value: unknown) => value,
+    withTiming: (value: unknown) => value,
+    withSequence: (...values: unknown[]) => values.at(-1),
+    Easing: { out: (fn: any) => fn, in: (fn: any) => fn, cubic: (t: number) => t },
+    interpolate: (value: number) => value,
+    Extrapolation: { CLAMP: 'clamp' },
     runOnUI: (fn: any) => fn, runOnJS: (fn: any) => fn,
   };
 });
@@ -420,7 +455,7 @@ vi.mock('@/session/useBotGroupSettingsManagement', () => ({ useBotGroupSettingsM
   return { shown: management.group ?? source, ...management };
 }, useCloudGroupCandidates: () => ({ ...h.teammates, rows: h.cloudRows ?? h.teammates.rows.map(row => ({ id: row.item.ref.id, name: row.item.display.title, avatar: null })) }) }));
 
-vi.mock('@/hooks/useReduceMotion', () => ({ useReduceMotionEnabled: () => true }));
+vi.mock('@/hooks/useReduceMotion', () => ({ useReduceMotionEnabled: () => true, getCachedReduceMotionEnabled: () => true }));
 vi.mock('@/session/listDisclosureTransition', () => ({ DisclosureItem: ({ children, testID }: any) => el('div', { 'data-testid': testID }, children) }));
 vi.mock('@/session/FileBrowserSegmentedControl', () => ({
   FileBrowserSegmentedControl: ({ options, onChange, value }: any) => el('div', null, options.map((option: any) => el('button', {
@@ -484,23 +519,30 @@ function group(overrides: Partial<BotGroupRemoteChatData> = {}): BotGroupRemoteC
 
 let root: Root;
 let node: HTMLDivElement;
-const byId = (id: string) => node.querySelector(`[data-testid="${id}"]`) as HTMLButtonElement | null;
+const byId = (id: string) =>
+  (node.querySelector(`[data-testid="${id}"]`)
+    ?? [...node.querySelectorAll('[data-testid]')].find(candidate => candidate.getAttribute('data-testid') === id)
+    ?? null) as HTMLButtonElement | null;
 const all = (id: string) => [...node.querySelectorAll(`[data-testid="${id}"]`)];
 async function click(id: string) {
   const target = byId(id);
   if (!target) throw new Error(`missing ${id}`);
   await act(async () => { target.click(); });
 }
-
 function holdAvatar(botId: string) {
   const target = byId(`botGroup.avatarMention.${botId}`);
   if (!target) throw new Error(`Missing mention avatar for ${botId}`);
   target.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true }));
 }
+async function longPress(id: string) {
+  const target = byId(id);
+  if (!target) throw new Error(`missing ${id}`);
+  await act(async () => { target.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true })); });
+}
 async function openTopicMenu(messageId: string) {
+  await longPress(`botGroup.message.press.${messageId}`);
   const menu = byId(`botGroup.thread.context.${messageId}`);
   expect(menu).not.toBeNull();
-  await click(`botGroup.thread.more.${messageId}`);
 }
 async function render(data: BotGroupRemoteChatData | null = group(), kind: 'ready' | 'loading' | 'missing' | 'error' = 'ready', threadRootId?: string, deviceId = 'mac', routeGroupId = 'g1') {
   h.chat = { pending: [],
@@ -810,6 +852,7 @@ describe('group timeline', () => {
     expect(card.textContent).toContain('groupChat.task.state.waiting');
     expect(card.textContent).toContain('首页要放几个案例？');
     expect(byId('botGroup.task.live')).toBeNull();
+    await openTopicMenu('t1');
     await click('botGroup.thread.context.t1.action.quote');
     expect(byId('botGroup.cancelReply')).not.toBeNull();
   });
@@ -1707,6 +1750,7 @@ describe('group composer', () => {
     await render(group({ serverBacked: true, openPlan: null, messages: [
       message(originalId, 1, { authorName: '咪咪', authorBotId: 'mimi', content: '请回复这条' }),
     ] }));
+    await openTopicMenu(originalId);
     await click(`botGroup.thread.context.${originalId}.action.quote`);
     await type('引用回复');
     h.chat.act.mockRejectedValueOnce(new Error('QUOTE_UNAVAILABLE'));
@@ -1717,6 +1761,7 @@ describe('group composer', () => {
     await click('botGroup.cancelReply');
     expect(byId('botGroup.quote')).toBeNull();
     expect(h.row.value).toBe('引用回复');
+    await openTopicMenu(originalId);
     await click(`botGroup.thread.context.${originalId}.action.quote`);
     await click('botGroup.composer.send');
     expect(h.chat.act).toHaveBeenLastCalledWith('send', expect.objectContaining({
@@ -1742,9 +1787,11 @@ describe('group composer', () => {
     await render(group({ serverBacked: true, openPlan: null, messages: [
       message(originalId, 1, { authorName: '咪咪', authorBotId: 'mimi', content: '请回复这条' }),
     ] }));
+    await openTopicMenu(originalId);
     await click(`botGroup.thread.context.${originalId}.action.quote`);
     h.inputFocus.mockClear(); h.inputBlur.mockClear();
     h.inputFocused = focused; h.keyboardVisible = keyboard;
+    await openTopicMenu(originalId);
     await click(`botGroup.thread.context.${originalId}.action.quote`);
     expect(h.inputBlur).toHaveBeenCalledTimes(blurs);
     expect(h.inputFocus).toHaveBeenCalledTimes(1);
@@ -3386,12 +3433,12 @@ describe('mobile group threads', () => {
     messages: [rootMessage()], plans: [], openPlan: null, serverBacked: true, ...overrides,
   });
 
-  it.each(['user', 'bot'] as const)('shows copy feedback for a %s message and restores the action after 1.5 seconds', async authorKind => {
-    vi.useFakeTimers();
+  it.each(['user', 'bot'] as const)('shows copy feedback inside the long-press menu for a %s message and closes when copied', async authorKind => {
     const clipboard = vi.mocked((await import('expo-clipboard')).setStringAsync);
     let finish!: () => void;
     clipboard.mockReturnValueOnce(new Promise<boolean>(resolve => { finish = () => resolve(true); }));
     await render(threadGroup({ messages: [message(rootId, 1, { authorKind, isSelf: authorKind === 'user', content: 'Copy this message' })] }), 'ready', undefined, '');
+    await openTopicMenu(rootId);
     const id = `botGroup.thread.context.${rootId}.action.copy`;
     await click(id);
     expect(byId(id)!.disabled).toBe(true);
@@ -3399,27 +3446,25 @@ describe('mobile group threads', () => {
     await click(id);
     expect(clipboard).toHaveBeenCalledExactlyOnceWith('Copy this message');
     await act(async () => finish());
-    expect(byId(id)!.disabled).toBe(false);
-    expect(byId(id)!.getAttribute('aria-label')).toBe('message.renderer.copyStateCopied');
-    await act(async () => vi.advanceTimersByTime(1500));
-    expect(byId(id)!.getAttribute('aria-label')).toBe('groupChat.thread.copy');
+    expect(byId('botGroup.messageMenu')).toBeNull();
   });
 
   it('does not report success when clipboard writing fails and lets the user retry', async () => {
     const clipboard = vi.mocked((await import('expo-clipboard')).setStringAsync);
     clipboard.mockRejectedValueOnce(new Error('Clipboard unavailable'));
     await render(threadGroup(), 'ready', undefined, '');
+    await openTopicMenu(rootId);
     const id = `botGroup.thread.context.${rootId}.action.copy`;
     await click(id);
     expect(byId(id)!.getAttribute('aria-label')).toBe('message.renderer.copyStateFailed');
     expect(byId(id)!.disabled).toBe(false);
     await click(id);
     expect(clipboard).toHaveBeenCalledTimes(2);
-    expect(byId(id)!.getAttribute('aria-label')).toBe('message.renderer.copyStateCopied');
+    expect(byId('botGroup.messageMenu')).toBeNull();
   });
 
-  // Unit: attachment-only messages retain footer actions without wrapping the attachment.
-  it.each(['user', 'bot'] as const)('opens a thread from an attachment-only %s message using More', async authorKind => {
+  // Unit: attachment-only messages open the long-press menu without wrapping the attachment in a context menu.
+  it.each(['user', 'bot'] as const)('opens a thread from an attachment-only %s message using the long-press menu', async authorKind => {
     h.chat.server = true;
     await render(threadGroup({ messages: [message(rootId, 1, { authorKind, isSelf: authorKind === 'user', content: '',
       attachments: [{ id: 'media', name: 'brief.pdf', category: 'pdf', mimeType: 'application/pdf', size: 9, url: null, path: null }],
@@ -3429,9 +3474,8 @@ describe('mobile group threads', () => {
     expect(h.push).toHaveBeenLastCalledWith({ pathname: '/companions/groups/[groupId]', params: { groupId: 'g1', threadRootId: rootId } });
   });
 
-  // User correction, unit: removing message long press must keep the footer and topic entry together.
-  // Mixed attachments stay outside the native More trigger so preview taps reach their responder.
-  it.each(['user', 'bot'] as const)('keeps a %s attachment outside More while showing reply actions and the topic entry', async authorKind => {
+  // Telegram-style simplification: no permanent action icons on timeline; attachments stay tappable and actions open via long-press.
+  it.each(['user', 'bot'] as const)('keeps a %s attachment outside the context menu while showing the topic entry and long-press actions', async authorKind => {
     h.chat.server = true;
     await render(threadGroup({ messages: [message(rootId, 1, { authorKind, isSelf: authorKind === 'user', content: 'See attachment', replyCount: 2,
       attachments: [{ id: 'media', name: 'brief.pdf', category: 'pdf', mimeType: 'application/pdf', size: 9, url: null, path: null }],
@@ -3440,15 +3484,13 @@ describe('mobile group threads', () => {
     expect(attachment).not.toBeNull();
     expect(attachment.closest('[data-testid^="botGroup.thread.context."]')).toBeNull();
     expect(byId(`botGroup.thread.${rootId}`)).not.toBeNull();
-    expect(byId(`botGroup.thread.context.${rootId}.action.copy`)).not.toBeNull();
-    expect(byId(`botGroup.thread.${rootId}`)!.compareDocumentPosition(byId(`botGroup.thread.context.${rootId}.action.copy`)!)
-      & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0);
+    expect(byId(`botGroup.thread.context.${rootId}.action.copy`)).toBeNull();
+    await openTopicMenu(rootId);
     await click(`botGroup.thread.context.${rootId}.action.quote`);
     expect(byId('botGroup.cancelReply')).not.toBeNull();
     await openTopicMenu(rootId);
     await click(`botGroup.thread.context.${rootId}.action.thread`);
     expect(h.push).toHaveBeenLastCalledWith({ pathname: '/companions/groups/[groupId]', params: { groupId: 'g1', threadRootId: rootId } });
-    expect(all(`botGroup.thread.context.${rootId}`)).toHaveLength(1);
   });
 
   // Unit regression: thread routing must not turn my plain-text message into a
@@ -3507,13 +3549,14 @@ describe('mobile group threads', () => {
     expect(byId('botGroup.mention.identity')).toBeNull();
   });
 
-  it('renders my resolved own post as a user message with the same thread summary as every thread share', async () => {
+  it('renders my resolved own post as a user message with topic origin context and the same thread summary as every thread share', async () => {
     h.chat.server = true;
     const share = { messageId: 'source', threadRootId: rootId, status: 'available' as const, authorKind: 'user' as const,
       authorBotId: 'self', authorName: 'Me', sharedByAuthor: true, content: '**My reply**', attachments: [], createdAt: 1000, edited: true };
     const posted = message('posted', 2, { authorKind: 'user', isSelf: true, content: 'UNTRUSTED FALLBACK', threadShare: share });
     await render(threadGroup({ messages: [posted] }), 'ready', undefined, '');
-    expect(byId('botGroup.message.userBubble')?.textContent).toBe('**My reply**');
+    expect(byId('botGroup.thread.shareOrigin')?.textContent).toContain('groupChat.thread.repliedToTopic');
+    expect(byId('botGroup.message.userBubble')?.textContent).toContain('**My reply**');
     expect(byId('botGroup.thread.share')).toBeNull();
     expect(node.textContent).not.toContain('UNTRUSTED FALLBACK');
     expect(node.textContent).toContain('groupChat.thread.edited');
@@ -3525,7 +3568,9 @@ describe('mobile group threads', () => {
       await render(threadGroup({ messages: [{ ...posted, threadShare }] }), 'ready', undefined, '');
       expect(byId('botGroup.message.userBubble')).toBeNull();
       expect(byId('botGroup.thread.share')).not.toBeNull();
+      await openTopicMenu('posted');
       expect(byId('botGroup.thread.context.posted.action.copy')?.disabled).toBe(threadShare.status !== 'available');
+      await click('botGroup.messageMenu.backdrop');
       expect(byId('botGroup.thread.open.posted')).toBeNull();
       expect(byId('botGroup.thread.posted')).not.toBeNull();
       expect(node.textContent).not.toContain('UNTRUSTED FALLBACK');
@@ -3674,10 +3719,13 @@ describe('mobile group threads', () => {
     expect(h.replace).toHaveBeenCalledTimes(3);
     await render(threadGroup(), 'ready', undefined, 'mac');
     expect(byId(`botGroup.thread.${rootId}`)).toBeNull();
+    await openTopicMenu(rootId);
     expect(byId(`botGroup.thread.context.${rootId}.action.quote`)).not.toBeNull();
-    await click(`botGroup.thread.more.${rootId}`);
-    expect(byId(`botGroup.thread.context.${rootId}.sheet`)?.textContent)
-      .toContain(new Date(rootMessage().createdAt).toLocaleString('zh-CN'));
+    // Timestamp stays next to the author name on the timeline and is omitted from the long-press action menu.
+    expect(byId(`botGroup.row.${rootId}`)?.textContent)
+      .toContain(new Date(rootMessage().createdAt).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' }));
+    expect(byId(`botGroup.thread.context.${rootId}`)?.textContent)
+      .not.toContain(new Date(rootMessage().createdAt).toLocaleString('zh-CN'));
   });
 
   it.each(['root', 'shared'] as const)('restores the retained group viewport without scrolling or marking it read after opening a %s topic entry', async entry => {
@@ -3735,9 +3783,11 @@ describe('mobile group threads', () => {
     expect(summary?.textContent).not.toContain('groupChat.thread.mentioned');
     expect(summary?.textContent).not.toContain('lastMinutes');
     expect(summary?.textContent).not.toContain('lastHours');
-    if (unread) expect(summary?.textContent).not.toContain('15:15');
-    else expect(summary?.textContent).toContain('15:15');
+    expect(summary?.textContent).not.toContain('15:15');
+    if (unread) expect(byId(`botGroup.thread.${rootId}.unread`)).not.toBeNull();
+    else expect(byId(`botGroup.thread.${rootId}.unread`)).toBeNull();
     await click(`botGroup.thread.${rootId}`); expect(h.push).toHaveBeenCalledOnce();
+    await openTopicMenu(rootId);
     await click(`botGroup.thread.context.${rootId}.action.quote`);
     expect(h.push).toHaveBeenCalledOnce(); expect(byId('botGroup.cancelReply')).not.toBeNull();
   });
@@ -3751,6 +3801,98 @@ describe('mobile group threads', () => {
     const divider = byId('botGroup.newMessagesDivider');
     expect(divider?.children).toHaveLength(2);
     expect(divider?.children[0]?.textContent).toBe('groupChat.newMessagesBoundary');
+  });
+
+  it('supports optimistic emoji reactions, tab retention, abortable reactor loads, read-only inspection, and select-text sheet', async () => {
+    resetOptimisticReactionsForTest();
+    h.chat.server = true;
+    const react = vi.fn(async () => {});
+    const reactorSignals: Array<{ emoji: string; signal?: AbortSignal }> = [];
+    const reactors = vi.fn(async (_messageId: string, emoji: string, signal?: AbortSignal) => {
+      reactorSignals.push({ emoji, signal });
+      return [{ actorId: 'a1', name: 'Alex', isSelf: false, formerMember: false }];
+    });
+    h.chat.react = react;
+    h.chat.reactors = reactors;
+    const reactedMessage = message(rootId, 1, {
+      authorKind: 'user',
+      isSelf: false,
+      content: 'Select part of this message',
+      reactions: [
+        { emoji: '👍', count: 2, me: false },
+        { emoji: '❤️', count: 2, me: true },
+        { emoji: '😂', count: 1, me: false },
+        { emoji: '🎉', count: 1, me: false },
+        { emoji: '🔥', count: 1, me: false },
+      ],
+    });
+    await render(threadGroup({ messages: [reactedMessage] }), 'ready', undefined, '');
+
+    // Overflow collapses >4 reactions into 3 pills + "+2".
+    expect(byId(`botGroup.reaction.${rootId}.👍`)?.textContent).toBe('👍2');
+    expect(byId(`botGroup.reactions.more.${rootId}`)?.textContent).toBe('+2');
+
+    // Optimistic toggle increments count immediately and calls chat.react.
+    let resolveReact!: () => void;
+    react.mockImplementationOnce(() => new Promise<void>(resolve => { resolveReact = resolve; }));
+    await click(`botGroup.reaction.${rootId}.👍`);
+    expect(byId(`botGroup.reaction.${rootId}.👍`)?.textContent).toBe('👍3');
+    expect(react).toHaveBeenLastCalledWith(rootId, '👍', true);
+    await act(async () => resolveReact());
+
+    // Failure rolls back optimistic count and alerts the user.
+    react.mockRejectedValueOnce(new Error('NETWORK_FAIL'));
+    await click(`botGroup.reaction.${rootId}.❤️`);
+    expect(h.alert).toHaveBeenCalledWith('groupChat.reaction.failed');
+    expect(byId(`botGroup.reaction.${rootId}.❤️`)?.textContent).toBe('❤️2');
+
+    // Opening "+2" details sheet fetches reactors with an AbortSignal; switching tabs keeps selection across toggles and aborts prior load.
+    await click(`botGroup.reactions.more.${rootId}`);
+    expect(byId('botGroup.reactions.detailsSheet')).not.toBeNull();
+    expect(reactors).toHaveBeenCalledWith(rootId, '👍', expect.any(AbortSignal));
+    expect(byId('botGroup.reactions.detailsSheet')?.textContent).toContain('Alex');
+    const firstSignal = reactorSignals[0]!.signal!;
+    expect(firstSignal.aborted).toBe(false);
+    await click('botGroup.reactions.tab.❤️');
+    expect(firstSignal.aborted).toBe(true);
+    const secondSignal = reactorSignals[1]!.signal!;
+    expect(secondSignal.aborted).toBe(false);
+    await click('botGroup.reactions.detailsToggle');
+    // Toggling the switched tab must NOT snap selectedEmoji back to initialEmoji ('👍').
+    expect(byId('botGroup.reactions.tab.❤️')?.textContent).toBe('❤️1');
+    expect(reactorSignals.map(entry => entry.emoji)).toEqual(['👍', '❤️']);
+    await click('botGroup.reactions.detailsSheet.close');
+    expect(secondSignal.aborted).toBe(true);
+
+    // Long-press quick reaction bar + full 36-emoji picker sheet.
+    await openTopicMenu(rootId);
+    expect(byId('botGroup.messageMenu.quickReactions')).not.toBeNull();
+    await click('botGroup.messageMenu.react.more');
+    expect(byId('botGroup.reactions.pickerSheet')).not.toBeNull();
+    await click('botGroup.reactions.pick.🚀');
+    expect(react).toHaveBeenLastCalledWith(rootId, '🚀', true);
+    expect(byId('botGroup.reactions.pickerSheet')).toBeNull();
+
+    // Long-press "Select text" opens the native selectable text sheet.
+    await openTopicMenu(rootId);
+    await click(`botGroup.thread.context.${rootId}.action.selectText`);
+    expect(byId('botGroup.selectText.sheet')?.textContent).toContain('Select part of this message');
+    await click('botGroup.selectText.sheet.close');
+
+    // Archived (read-only) group with <=4 reactions blocks tap toggle but still allows long-press inspection.
+    react.mockClear();
+    const readOnlyMsg = message(rootId, 1, {
+      authorKind: 'user',
+      isSelf: false,
+      content: 'Archived message',
+      reactions: [{ emoji: '👍', count: 2, me: false }],
+    });
+    await render(threadGroup({ archived: true, messages: [readOnlyMsg] }), 'ready', undefined, '');
+    await click(`botGroup.reaction.${rootId}.👍`);
+    expect(react).not.toHaveBeenCalled();
+    await longPress(`botGroup.reaction.${rootId}.👍`);
+    expect(byId('botGroup.reactions.detailsSheet')).not.toBeNull();
+    await click('botGroup.reactions.detailsSheet.close');
   });
 
   it.each(['ios', 'android'])('exposes follow/unfollow in the %s header independently of sending', async platform => {
@@ -3786,7 +3928,8 @@ describe('mobile group threads', () => {
     const tap = async (id: string) => { const target = byTestId(id); expect(target).not.toBeNull(); await act(async () => { target!.click(); }); };
     const chip = () => byTestId(`botGroup.reaction.${rootId}.🎉`);
     expect(chip()).toBeNull();
-    await tap(`botGroup.reactionPicker.${rootId}.action.🎉`);
+    await openTopicMenu(rootId);
+    await tap('botGroup.messageMenu.react.🎉');
     expect(chip()?.textContent).toContain('1');
     expect(saves.map(save => save.args)).toEqual([[rootId, '🎉', true]]);
     // A tap on the chip while the first save runs removes it at once and is sent after the first.
@@ -3795,7 +3938,8 @@ describe('mobile group threads', () => {
     await act(async () => saves[0]!.settle());
     expect(saves.map(save => save.args)).toEqual([[rootId, '🎉', true], [rootId, '🎉', false]]);
     // Picking it again before that answers; then the last save fails.
-    await tap(`botGroup.reactionPicker.${rootId}.action.🎉`);
+    await openTopicMenu(rootId);
+    await tap('botGroup.messageMenu.react.🎉');
     await act(async () => saves[1]!.settle());
     expect(chip()?.textContent).toContain('1');
     await act(async () => saves[2]!.settle(new Error('NETWORK_ERROR')));
@@ -4430,4 +4574,197 @@ it('opens the in-group thread index sheet, filters tabs and search, and jumps to
     pathname: '/companions/groups/[groupId]',
     params: { groupId: 'g1', threadRootId: 'root-mention', messageId: 'm-mention' },
   });
+});
+
+it('prioritizes inline @mention and http(s) link long-press over the whole-message context menu', async () => {
+  h.actionSheet.mockReset();
+  h.linkingOpenURL.mockReset();
+  h.alert.mockReset();
+  const data = group({
+    serverBacked: true,
+    messages: [
+      message('bot-with-links', 1, {
+        authorKind: 'bot',
+        authorBotId: 'mimi',
+        authorName: '咪咪',
+        content: '请 @咪咪 看一下 [Cindy 官网](https://cindy.xd.com/docs) 的说明',
+        mentions: { all: false, botIds: ['mimi'] },
+      }),
+      message('self-with-mention', 2, {
+        authorKind: 'user',
+        isSelf: true,
+        content: '@咪咪 好的收到',
+        mentions: { all: false, botIds: ['mimi'] },
+      }),
+    ],
+  });
+  data.members[0] = { ...data.members[0]!, actorKind: 'bot', ownerName: '王悦', isOwned: false, nickname: '咪咪', displayName: 'Cindy', status: 'active' };
+  await render(data);
+
+  // 1. Long-pressing @mention inside bot markdown opens identity popover without opening message menu.
+  const botRow = byId('botGroup.row.bot-with-links')!;
+  const botMention = [...botRow.querySelectorAll('span')].find(span => span.textContent === '@咪咪')!;
+  expect(botMention).toBeDefined();
+  await act(async () => {
+    botMention.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true }));
+  });
+  expect(byId('botGroup.mention.identity')).not.toBeNull();
+  expect(byId('botGroup.messageMenu')).toBeNull();
+  await click('botGroup.mention.identity.close');
+
+  // 2. Long-pressing an http(s) link triggers native ActionSheetIOS on iOS without opening message menu.
+  const linkSpan = [...botRow.querySelectorAll('span')].find(span => span.textContent === 'Cindy 官网')!;
+  expect(linkSpan).toBeDefined();
+  await act(async () => {
+    linkSpan.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true }));
+  });
+  expect(h.actionSheet).toHaveBeenCalledTimes(1);
+  expect(h.actionSheet.mock.calls[0]?.[0]).toMatchObject({
+    title: 'https://cindy.xd.com/docs',
+    cancelButtonIndex: 2,
+  });
+  expect(byId('botGroup.messageMenu')).toBeNull();
+  // Selecting "Open" in the action sheet opens the URL.
+  const onSelect = h.actionSheet.mock.calls[0]?.[1] as (index: number) => void;
+  await act(async () => onSelect(0));
+  expect(h.linkingOpenURL).toHaveBeenCalledWith('https://cindy.xd.com/docs');
+
+  // 3. Long-pressing @mention inside self bubble also opens identity popover instead of message menu.
+  const selfRow = byId('botGroup.row.self-with-mention')!;
+  const selfMention = [...selfRow.querySelectorAll('span')].find(span => span.textContent === '@咪咪')!;
+  expect(selfMention).toBeDefined();
+  await act(async () => {
+    selfMention.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true }));
+  });
+  expect(byId('botGroup.mention.identity')).not.toBeNull();
+  expect(byId('botGroup.messageMenu')).toBeNull();
+  await click('botGroup.mention.identity.close');
+
+  // 4. Long-pressing plain body area of the same message still opens the message context menu.
+  const pressTarget = byId('botGroup.message.press.bot-with-links')!;
+  await act(async () => {
+    pressTarget.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true }));
+  });
+  expect(byId('botGroup.messageMenu')).not.toBeNull();
+  expect(byId('botGroup.thread.context.bot-with-links.action.copy')).not.toBeNull();
+});
+
+it('keeps time group dividers outside ShareMessageCheckbox so share checkboxes align with message avatars', async () => {
+  h.chat.server = true;
+  await render(group({
+    serverBacked: true,
+    messages: [
+      message('m-time-1', 1, { authorKind: 'bot', authorBotId: 'mimi', authorName: '咪咪', content: '第一条消息', createdAt: 1_700_000_000_000 }),
+      message('m-time-2', 2, { authorKind: 'bot', authorBotId: 'abu', authorName: '阿布', content: '第二条消息', createdAt: 1_700_000_060_000 }),
+    ],
+  }), 'ready', undefined, '');
+  await openTopicMenu('m-time-1');
+  await click('botGroup.thread.context.m-time-1.action.image');
+  const outerRow = byId('botGroup.row.m-time-1')!;
+  const shareRow = byId('session.shareImage.row.m-time-1')!;
+  expect(shareRow).not.toBeNull();
+  // The time header sits above ShareMessageCheckbox (inside outerRow) instead of inside shareRow.
+  expect(outerRow.textContent!.length).toBeGreaterThan(shareRow.textContent!.length);
+  expect(shareRow.textContent).toContain('第一条消息');
+});
+
+// User request (2026-11-27), unit: thread-share card body stays non-clickable (matching Desktop) to avoid misfires on
+// touch/long-press, while the dedicated thread entry below still locates the original reply in its topic.
+it('keeps thread share card body non-clickable and opens the original reply via the thread entry', async () => {
+  h.chat.server = true;
+  h.push.mockReset();
+  const rootId = 'topic-root-1';
+  const share = {
+    messageId: 'source-msg-1',
+    threadRootId: rootId,
+    status: 'available' as const,
+    authorKind: 'user' as const,
+    authorBotId: 'other',
+    authorName: '黄小文',
+    sharedByAuthor: false,
+    content: '原话题里的那条消息',
+    attachments: [],
+    createdAt: 1000,
+    edited: false,
+  };
+  await render(group({
+    serverBacked: true,
+    messages: [
+      message(rootId, 1, { content: '话题根消息' }),
+      message('shared-card', 2, { authorKind: 'user', isSelf: false, authorName: '小文', content: '', threadShare: share }),
+    ],
+  }), 'ready', undefined, '');
+  await click('botGroup.thread.share');
+  expect(h.push).not.toHaveBeenCalled();
+  await click('botGroup.thread.shared-card');
+  expect(h.push).toHaveBeenCalledWith({
+    pathname: '/companions/groups/[groupId]',
+    params: { groupId: 'g1', threadRootId: rootId, messageId: 'source-msg-1' },
+  });
+});
+
+// User request (2026-11-27), unit: tapping the topic-origin quote rail on an authored share (self or other teammate)
+// locates the original message in its topic; minimal input is one topic root + one authored share.
+it.each([true, false])('locates the original message when tapping shareOrigin rail (isSelf=%s)', async isSelf => {
+  h.chat.server = true;
+  h.push.mockReset();
+  const rootId = 'topic-root-2';
+  const share = {
+    messageId: 'source-msg-2',
+    threadRootId: rootId,
+    status: 'available' as const,
+    authorKind: 'user' as const,
+    authorBotId: isSelf ? 'self' : 'other',
+    authorName: isSelf ? '我' : '黄小文',
+    sharedByAuthor: true,
+    content: '贴回主群的回复',
+    attachments: [],
+    createdAt: 1000,
+    edited: false,
+  };
+  await render(group({
+    serverBacked: true,
+    messages: [
+      message(rootId, 1, { authorName: '发起人', content: '原话题首条' }),
+      message('authored-share', 2, { authorKind: 'user', isSelf, authorName: share.authorName, content: '', threadShare: share }),
+    ],
+  }), 'ready', undefined, '');
+  await click('botGroup.thread.shareOrigin');
+  expect(h.push).toHaveBeenCalledWith({
+    pathname: '/companions/groups/[groupId]',
+    params: { groupId: 'g1', threadRootId: rootId, messageId: 'source-msg-2' },
+  });
+});
+
+// User request (2026-11-27), unit: replying to a synced/shared topic message in main chat quotes it as
+// simple author + plain text (identical to ordinary quotes); minimal input is one available threadShare message.
+it('quotes a resolved thread-share message as simple author + plain text', async () => {
+  h.chat.server = true;
+  const rootId = 'topic-root-quote';
+  const share = {
+    messageId: 'source-msg-quote',
+    threadRootId: rootId,
+    status: 'available' as const,
+    authorKind: 'user' as const,
+    authorBotId: 'other',
+    authorName: '黄小文',
+    sharedByAuthor: false,
+    content: '这是同步到主群的话题回复正文',
+    attachments: [],
+    createdAt: 1000,
+    edited: false,
+  };
+  await render(group({
+    serverBacked: true,
+    messages: [
+      message(rootId, 1, { authorName: '发起人', content: '原话题首条' }),
+      message('shared-quotable', 2, { authorKind: 'user', isSelf: false, authorName: '小文', content: '↪ FALLBACK', threadShare: share }),
+    ],
+  }), 'ready', undefined, '');
+  await openTopicMenu('shared-quotable');
+  await click('botGroup.thread.context.shared-quotable.action.quote');
+  const draftQuote = byId('botGroup.quote')!;
+  expect(draftQuote.textContent).toContain('黄小文');
+  expect(draftQuote.textContent).toContain('这是同步到主群的话题回复正文');
+  expect(draftQuote.textContent).not.toContain('FALLBACK');
 });

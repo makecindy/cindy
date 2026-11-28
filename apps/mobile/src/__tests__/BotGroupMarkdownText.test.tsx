@@ -35,6 +35,7 @@ vi.mock('react-native', async () => {
     Platform: { OS: 'ios', select: (s: any) => s.ios ?? s.default },
   };
 });
+vi.mock('expo-modules-core', () => ({ requireOptionalNativeModule: () => null }));
 vi.mock('@/components/AppText', async () => ({ Text: (await import('react-native')).Text, MAX_FONT_SIZE_MULTIPLIER: 1.5, TextInput: ({ value, onChangeText, accessibilityLabel }: any) => createElement('input', { value, 'aria-label': accessibilityLabel, onChange: (event: any) => onChangeText(event.target.value) }) }));
 vi.mock('react-native-uitextview', async () => {
   const React = await import('react');

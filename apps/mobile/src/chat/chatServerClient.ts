@@ -1778,6 +1778,34 @@ export function createChatServerClient(request: ChatRequest, personalList = crea
     async react(roomId: string, messageId: string, emoji: string, present: boolean, operationId: string) {
       return request(`/conversations/${chatId(roomId)}/messages/${chatId(messageId)}/reactions`, 'POST', { operationId, emoji, present });
     },
+    async reactors(roomId: string, messageId: string, emoji: string, signal?: AbortSignal) {
+      if (signal?.aborted) return [];
+      const room = chatId(roomId);
+      const message = chatId(messageId);
+      const [members, self] = await Promise.all([request<ChatMember[]>(`/conversations/${room}/members`, 'GET', undefined, undefined, signal), identity()]);
+      const actorIds = new Set<string>();
+      for (let after = ''; !signal?.aborted;) {
+        const query = new URLSearchParams({ emoji, limit: '100', ...(after ? { after } : {}) });
+        const rows = await request<Array<{ actor_id: string }>>(`/conversations/${room}/messages/${message}/reactions?${query}`, 'GET', undefined, undefined, signal);
+        if (signal?.aborted || !Array.isArray(rows)) break;
+        const known = actorIds.size;
+        for (const row of rows) {
+          if (typeof row?.actor_id === 'string' && row.actor_id) actorIds.add(row.actor_id);
+        }
+        if (rows.length < 100 || actorIds.size === known) break;
+        after = rows[rows.length - 1]!.actor_id;
+      }
+      if (signal?.aborted) return [];
+      return [...actorIds].map(actorId => {
+        const member = members.find(candidate => candidate.id === actorId);
+        return {
+          actorId,
+          name: member ? memberName(member, members) : null,
+          isSelf: actorId === self,
+          formerMember: !!member && member.state !== 'joined',
+        };
+      });
+    },
     async markRead(roomId: string, page: ChatPage, messageIds: readonly string[]) {
       // Old servers omit reads. Never infer a read position from a presentation index.
       if (!page.snapshot.reads) return;
@@ -1815,10 +1843,16 @@ export function createChatServerClient(request: ChatRequest, personalList = crea
           request<ChatMember[]>(`/conversations/${chatId(roomId)}/members`),
         ]);
         if (original.deleted || (original.threadRootId && original.threadRootId !== input.threadRootId) || original.origin === 'system') throw new Error('QUOTE_UNAVAILABLE');
-        const member = members.find(member => member.id === original.authorId);
-        const quote = botGroupQuoteFromMessage({ id: original.id, sequence: Number(original.seq), authorKind: original.author.kind === 'human' ? 'user' : 'bot',
-          authorName: member ? memberName(member, input.conversationKind === 'direct' ? [] : members) : original.author.name, content: contentText(original), task: taskCardOf(original) ?? undefined,
-          attachments: original.content.filter(block => block.type === 'media').map(block => ({ name: attachmentName(block) })) });
+        const shareCard = readBotGroupThreadShareCard(original);
+        let source = original;
+        if (shareCard) {
+          source = await request<ChatMessage>(`/conversations/${chatId(roomId)}/messages/${chatId(shareCard.messageId)}`);
+          if (source.deleted || source.origin === 'system') throw new Error('QUOTE_UNAVAILABLE');
+        }
+        const member = members.find(member => member.id === source.authorId);
+        const quote = botGroupQuoteFromMessage({ id: original.id, sequence: Number(original.seq), authorKind: source.author.kind === 'human' ? 'user' : 'bot',
+          authorName: member ? memberName(member, input.conversationKind === 'direct' ? [] : members) : source.author.name, content: contentText(source), task: taskCardOf(source) ?? undefined,
+          attachments: source.content.filter(block => block.type === 'media').map(block => ({ name: attachmentName(block) })) });
         // Quote positions are only an optional UI hint; never round a server cursor into it.
         if (!Number.isSafeInteger(quote.sequence)) quote.sequence = null;
         content.unshift(buildBotGroupQuoteCard(quote));

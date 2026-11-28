@@ -480,7 +480,9 @@
       "file": "ファイル",
       "share": "共有された返信",
       "card": "カード"
-    }
+    },
+    "selectText": "テキストを選択",
+    "repliedToTopic": "トピックに返信"
   },
   "mask": {
     "toolAccess": "ツールの権限",
@@ -709,5 +711,18 @@
     "add": "リアクションを追加",
     "count": "{{emoji}} · {{count}} 件のリアクション",
     "failed": "リアクションを更新できませんでした。再試行してください。"
+  },
+  "reactions": {
+    "badgeLabel": "{{emoji}}、{{count}}件",
+    "moreLabel": "ほか{{count}}件のリアクション",
+    "morePicker": "その他のリアクション",
+    "pickerTitle": "リアクションを追加",
+    "detailsTitle": "リアクション",
+    "addMine": "{{emoji}} を追加",
+    "removeMine": "{{emoji}} を取り消す",
+    "loadReactorsFailed": "リアクションしたメンバーを読み込めませんでした",
+    "unknownMember": "メンバー",
+    "you": "あなた",
+    "formerMember": "退出済み"
   }
 }

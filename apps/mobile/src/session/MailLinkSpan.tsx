@@ -6,13 +6,29 @@ import { useDeviceLink } from '@/device-link/DeviceLinkContext';
 import { getRemoteResource } from '@/device-link/remoteResources';
 import { getMobileAuthOwner, isMobileAuthOwnerCurrent } from '@/auth/authOwnerGeneration';
 import { ChatFilePathContext, MarkdownLinkActivationContext } from './chatFilePathContext';
+import { BotGroupLinkLongPressContext } from './botGroupMessageGestureContext';
 
 /** All mail providers use Host-declared link recognition; unknown/old hosts keep OS links. */
 export function MailLinkSpan({ url, children, style, SpanText }: {
   url: string; children: string; style: StyleProp<TextStyle>; SpanText: typeof Text;
 }) {
   const open = useOpenMailLink(url);
-  return <SpanText onPress={open} style={style}>{children}</SpanText>;
+  const onGroupLinkLongPress = useContext(BotGroupLinkLongPressContext);
+  return (
+    <SpanText
+      onPress={(event) => {
+        event?.stopPropagation?.();
+        open();
+      }}
+      onLongPress={onGroupLinkLongPress ? (event) => {
+        event.stopPropagation();
+        onGroupLinkLongPress(url);
+      } : undefined}
+      style={style}
+    >
+      {children}
+    </SpanText>
+  );
 }
 
 /** Preserve Host recognition and auth/scope checks for every chat link carrier. */

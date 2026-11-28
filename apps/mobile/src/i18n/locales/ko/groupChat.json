@@ -480,7 +480,9 @@
       "file": "파일",
       "share": "공유된 답글",
       "card": "카드"
-    }
+    },
+    "selectText": "텍스트 선택",
+    "repliedToTopic": "주제에 답장함"
   },
   "mask": {
     "toolAccess": "도구 권한",
@@ -709,5 +711,18 @@
     "add": "이모지 반응 추가",
     "count": "{{emoji}} · 반응 {{count}}개",
     "failed": "반응을 업데이트하지 못했습니다. 다시 시도하세요."
+  },
+  "reactions": {
+    "badgeLabel": "{{emoji}}, {{count}}명",
+    "moreLabel": "반응 {{count}}개 더 보기",
+    "morePicker": "반응 더 보기",
+    "pickerTitle": "반응 추가",
+    "detailsTitle": "반응",
+    "addMine": "{{emoji}} 반응 남기기",
+    "removeMine": "{{emoji}} 반응 취소",
+    "loadReactorsFailed": "반응한 멤버를 불러올 수 없습니다",
+    "unknownMember": "멤버",
+    "you": "나",
+    "formerMember": "나간 멤버"
   }
 }
