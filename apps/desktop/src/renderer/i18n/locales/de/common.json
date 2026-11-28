@@ -11448,6 +11448,7 @@
     "linuxInstallation": {
       "title": "Diese Installation kann sich nicht selbst aktualisieren",
       "description": "Nutze deinen Paketmanager oder folge der Anleitung zur Linux-Benutzerinstallation. Bei einer verwalteten Installation müssen eventuell fehlende Tools oder Schreibrechte wiederhergestellt werden. Cindy und das heruntergeladene Update wurden beibehalten.",
+      "missingTools": "Für dieses Update fehlen diese Werkzeuge: {{tools}}. Installieren Sie sie und prüfen Sie erneut. Cindy und das heruntergeladene Update bleiben erhalten.",
       "guide": "Linux-Anleitung öffnen",
       "retry": "Erneut prüfen",
       "later": "Später"

@@ -123,6 +123,12 @@ interface UpdateStatusPayload {
   version?: string;
   progress?: number;
   errorCode?: string;
+  /**
+   * Executables the Linux updater needs and this machine lacks. Carried only
+   * with `linux_update_tools_missing` so the dialog can name them instead of
+   * telling the user to "check the guide" with no lead at all.
+   */
+  missingTools?: string[];
 }
 
 interface PatchInfo {
@@ -235,6 +241,7 @@ let pollTimer: ReturnType<typeof setInterval> | null = null;
 let autoRelaunchPollTimer: ReturnType<typeof setInterval> | null = null;
 let isRelaunching = false;
 let lastErrorCode: string | undefined;
+let lastMissingTools: string[] | undefined;
 let autoRelaunchInProgress = false;
 /** 资格检查(含异步 busyProbe)进行中的次数。这段窗口暂缓清补丁。 */
 let autoRelaunchDecisionDepth = 0;
@@ -291,6 +298,7 @@ function setStatus(status: UpdateStatus, extra?: Partial<UpdateStatusPayload>): 
   currentStatus = status;
   if (status !== 'downloading' && status !== 'superseding') downloadingVersion = undefined;
   lastErrorCode = extra?.errorCode;
+  lastMissingTools = extra?.missingTools;
   broadcastStatus({ status, ...extra });
   if (status === 'ready' && !startupUpdateCheckInProgress && !extra?.errorCode) {
     void evaluateAutoRelaunch('status-ready');
@@ -359,6 +367,12 @@ function ensureWindowsUpdaterPrerequisites(options?: {
 }
 
 const LINUX_INSTALLATION_UNSUPPORTED_ERROR_CODE = 'linux_installation_unsupported';
+/**
+ * The managed user install is otherwise updatable; only shell tools the update
+ * script needs are absent. Kept distinct from the generic unsupported code so
+ * the dialog can list them.
+ */
+const LINUX_UPDATE_TOOLS_MISSING_ERROR_CODE = 'linux_update_tools_missing';
 
 /**
  * A system `.deb` normally needs someone to enter a pkexec password. It can
@@ -409,7 +423,8 @@ function canApplyUnattendedAppUpdateNow(): boolean {
 /** Install blockers that only the user can clear; retrying unattended cannot help. */
 function hasUserActionInstallBlocker(): boolean {
   return lastErrorCode === WINDOWS_UPDATER_RUNTIME_MISSING_ERROR_CODE
-    || lastErrorCode === LINUX_INSTALLATION_UNSUPPORTED_ERROR_CODE;
+    || lastErrorCode === LINUX_INSTALLATION_UNSUPPORTED_ERROR_CODE
+    || lastErrorCode === LINUX_UPDATE_TOOLS_MISSING_ERROR_CODE;
 }
 
 function autoUpdateSettingsWire() {
@@ -2181,20 +2196,34 @@ async function executeRelaunchUnguarded(
       setStatus('ready', { version: readyVersion ?? undefined });
       return;
     }
+    const missingTools = installation ? missingLinuxUserInstallTools() : [];
     const supported = installation
-      ? installation.region === CURRENT_CINDY_REGION && missingLinuxUserInstallTools().length === 0
+      ? installation.region === CURRENT_CINDY_REGION && missingTools.length === 0
       // The update script needs pkexec for a system .deb; without it, quitting
       // would only stop active work and relaunch the same version.
       : debianCheck?.status === 'managed' && hasLinuxPkexec();
     if (!supported) {
-      log.error(
-        debianCheck?.status === 'managed'
-          ? 'Linux system .deb update needs pkexec, which is not installed'
-          : 'Linux installation cannot self-update; use the installation guide or its package manager',
-      );
+      // A managed install that only lacks the shell tools is fixable by the
+      // user in one command. Name them; the generic pointer to the guide
+      // leaves a distro like NixOS (no bsdtar in PATH) with nothing to act on.
+      // The patch stays staged either way.
+      const toolsMissing = installation !== null && missingTools.length > 0;
+      if (debianCheck?.status === 'managed') {
+        log.error('Linux system .deb update needs pkexec, which is not installed');
+      } else if (toolsMissing) {
+        log.error('Linux managed install is missing update tools: %s', missingTools.join(','));
+      } else {
+        log.error('Linux installation cannot self-update; use the installation guide or its package manager');
+      }
       isRelaunching = false;
       autoRelaunchInProgress = false;
-      setStatus('ready', { version: readyVersion ?? undefined, errorCode: LINUX_INSTALLATION_UNSUPPORTED_ERROR_CODE });
+      setStatus('ready', {
+        version: readyVersion ?? undefined,
+        errorCode: toolsMissing
+          ? LINUX_UPDATE_TOOLS_MISSING_ERROR_CODE
+          : LINUX_INSTALLATION_UNSUPPORTED_ERROR_CODE,
+        ...(toolsMissing ? { missingTools } : {}),
+      });
       return;
     }
   }
@@ -2274,8 +2303,12 @@ function agentUpdateApplyBlockReason(): string | null {
     const exePath = app.getPath('exe');
     const installation = findLinuxUserInstallation(exePath, os.homedir(), process.getuid?.() ?? -1);
     if (installation) {
-      if (installation.region !== CURRENT_CINDY_REGION || missingLinuxUserInstallTools().length > 0) {
+      if (installation.region !== CURRENT_CINDY_REGION) {
         return '当前 Linux 用户安装环境不支持应用内更新。';
+      }
+      const missingTools = missingLinuxUserInstallTools();
+      if (missingTools.length > 0) {
+        return `当前 Linux 用户安装缺少更新所需工具：${missingTools.join('、')}。安装后重新检查。`;
       }
     } else {
       const debianCheck = checkDebianManagedInstallation(exePath);
@@ -2534,7 +2567,7 @@ export function initUpdateService(): void {
   );
 
   ipcMain.handle('update-get-status', () => {
-    return { status: currentStatus, version: readyVersion, errorCode: lastErrorCode };
+    return { status: currentStatus, version: readyVersion, errorCode: lastErrorCode, missingTools: lastMissingTools };
   });
 
   ipcMain.handle('update-auto-settings-get', () => {

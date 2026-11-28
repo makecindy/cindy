@@ -11404,6 +11404,7 @@
     "linuxInstallation": {
       "title": "目前的安裝無法自行更新",
       "description": "請使用對應的套件管理器，或參考 Linux 使用者目錄安裝指南。受管理的安裝可能需要補齊工具或恢復寫入權限。Cindy 和已下載的更新均已保留。",
+      "missingTools": "這次更新需要這些工具，但目前的系統沒有：{{tools}}。安裝後重新檢查。Cindy 和已下載的更新均已保留。",
       "guide": "開啟 Linux 指南",
       "retry": "重新檢查",
       "later": "稍後"

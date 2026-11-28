@@ -11404,6 +11404,7 @@
     "linuxInstallation": {
       "title": "此安装不能自更",
       "description": "请用对应之套件管理器，或参 Linux 用户目录安装指南。受管之安装或须补齐工具、复其写入权柄。Cindy 与已下载之更新皆存。",
+      "missingTools": "此次更新需要以下工具，但目前缺少：{{tools}}。请先安装，再重新检查。Cindy 与已下载的更新均已保留。",
       "guide": "启 Linux 指南",
       "retry": "再察",
       "later": "少待"

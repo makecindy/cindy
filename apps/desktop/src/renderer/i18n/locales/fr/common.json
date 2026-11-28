@@ -11533,6 +11533,7 @@
     "linuxInstallation": {
       "title": "Cette installation ne peut pas se mettre à jour elle-même",
       "description": "Utilisez votre gestionnaire de paquets ou suivez le guide d'installation utilisateur pour Linux. Une installation gérée peut nécessiter de rétablir des outils manquants ou un accès en écriture. Cindy et la mise à jour téléchargée ont été conservées.",
+      "missingTools": "Cette mise à jour nécessite ces outils, introuvables sur ce système : {{tools}}. Installez-les, puis vérifiez à nouveau. Cindy et la mise à jour téléchargée sont conservés.",
       "guide": "Ouvrir le guide Linux",
       "retry": "Vérifier à nouveau",
       "later": "Plus tard"

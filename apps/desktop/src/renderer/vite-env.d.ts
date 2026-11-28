@@ -1023,8 +1023,12 @@ interface UpdateStatusPayload {
   progress?: number;
   /** Machine-readable error subtype. `windows_vc_runtime_missing` keeps a
    *  staged patch ready while the renderer prompts for the updater's x64
-   *  VC++ Runtime; `translocated` is the macOS read-only fallback. */
+   *  VC++ Runtime; `translocated` is the macOS read-only fallback;
+   *  `linux_update_tools_missing` means the managed Linux install only lacks
+   *  shell tools, listed in `missingTools`. */
   errorCode?: string;
+  /** With `linux_update_tools_missing`: executables absent from PATH. */
+  missingTools?: string[];
 }
 
 interface AutoUpdateSettingsPayload {
@@ -4306,7 +4310,12 @@ interface ElectronAPI {
   /** Register an update-status subscriber. Returns an unsubscribe function. */
   onUpdateStatus: (callback: (payload: UpdateStatusPayload) => void) => () => void;
   /** Query current update status (no network, returns in-memory state). */
-  getUpdateStatus: () => Promise<{ status: string; version?: string; errorCode?: string }>;
+  getUpdateStatus: () => Promise<{
+    status: string;
+    version?: string;
+    errorCode?: string;
+    missingTools?: string[];
+  }>;
   /** Query and update auto-apply settings for downloaded app updates. */
   getAutoUpdateSettings: () => Promise<AutoUpdateSettingsPayload>;
   setAutoUpdateSettings: (settings: {
