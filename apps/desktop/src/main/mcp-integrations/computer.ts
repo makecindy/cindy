@@ -243,6 +243,7 @@ function withStandardDriverProgress(
   };
 }
 export interface ComputerRuntimePorts {
+  downloadEdition: 'cn' | 'global' | 'dev';
   /** Host monitor liveness check; never treat unavailable OS facts as idle. */
   assertAvailable?(): void;
   /** Cross-process input coordinator readiness, checked before every write. */
@@ -293,20 +294,16 @@ const PERMISSIONS_GRANT_REUSE_MAX_AGE_MS = 15_000;
 const MAX_STDOUT_BYTES = 5 * 1024 * 1024;
 const MAX_STDERR_BYTES = 512 * 1024;
 const DOCS_URL = 'https://cua.ai/docs/cua-driver';
-const UNIX_INSTALL_COMMAND =
-  '/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/trycua/cua/main/libs/cua-driver/scripts/install.sh)"';
-const WINDOWS_INSTALL_COMMAND =
-  'irm https://raw.githubusercontent.com/trycua/cua/main/libs/cua-driver/scripts/install.ps1 | iex';
-const UNIX_INSTALL_URL = 'https://raw.githubusercontent.com/trycua/cua/main/libs/cua-driver/scripts/install.sh';
-const WINDOWS_INSTALL_URL = 'https://raw.githubusercontent.com/trycua/cua/main/libs/cua-driver/scripts/install.ps1';
-// 上游 trycua/cua 是 monorepo,cua-driver 的 release tag 前缀固定为 cua-driver-rs-v。
-// 版本发现只读上游的「已发布安装版本」清单文件,不打 api.github.com:未鉴权的 REST
-// 配额是 60/h 且按出口 IP 共享(NAT 后全公司共用),打满就只剩「GitHub 已限流」。
-// 该清单由上游发布流程在同一组提交里推进(发布 release 后再写,实测滞后约 20 分钟),
-// 所以读到的就是上游安装器默认装的版本;monorepo 里其它组件的 release 不会混进来。
-const CUA_DRIVER_PUBLISHED_VERSION_URL =
-  'https://raw.githubusercontent.com/trycua/cua/main/.github/release-state/cua-driver-rs-published-version';
-const CUA_DRIVER_RELEASE_DOWNLOAD_URL = 'https://github.com/trycua/cua/releases/download';
+// These origins serve executable scripts. Bind them to the installed edition rather
+// than accepting an account-, project- or environment-controlled URL in a shell.
+const mirrorBase = ports.downloadEdition === 'dev' ? null : ports.downloadEdition === 'cn'
+  ? 'https://hotfix.cindy.com.cn/cindy/dependencies/cua-driver'
+  : 'https://hotfix.cindy.app/cindy/dependencies/cua-driver';
+const upstreamScripts = 'https://raw.githubusercontent.com/trycua/cua/main/libs/cua-driver/scripts';
+const upstreamVersion = 'https://raw.githubusercontent.com/trycua/cua/main/.github/release-state/cua-driver-rs-published-version';
+const upstreamReleases = 'https://github.com/trycua/cua/releases/download';
+const unixInstallUrl = `${mirrorBase ?? upstreamScripts}/install.sh`;
+const windowsInstallUrl = `${mirrorBase ?? upstreamScripts}/install.ps1`;
 // SWR 后台刷新节流:打开面板即触发刷新,频繁开合面板会放大上游请求量。
 const UPDATE_CHECK_REFRESH_MIN_INTERVAL_MS = 10 * 60_000;
 const CUA_DRIVER_RELEASE_TAG_PREFIX = 'cua-driver-rs-v';
@@ -648,8 +645,21 @@ const cuaDriverSessionNames = new Map<string, string>();
 let cuaDriverNamedRunSequence = 0;
 const cuaMcpSessionCloseVersions = new Map<string, number>();
 
-function getInstallCommand(): string {
-  return process.platform === 'win32' ? WINDOWS_INSTALL_COMMAND : UNIX_INSTALL_COMMAND;
+function getInstallCommand(useUpstream = false): string {
+  if (process.platform === 'win32') {
+    const url = useUpstream ? `${upstreamScripts}/install.ps1` : windowsInstallUrl;
+    const download = `Invoke-RestMethod -ErrorAction Stop -Uri '${url}'`;
+    const fallback = mirrorBase && !useUpstream
+      ? `try { $cuaScript = ${download} } catch { $cuaScript = Invoke-RestMethod -ErrorAction Stop -Uri '${upstreamScripts}/install.ps1' }`
+      : `$cuaScript = ${download}`;
+    return `${fallback}; & ([ScriptBlock]::Create($cuaScript))`;
+  }
+  const url = useUpstream ? `${upstreamScripts}/install.sh` : unixInstallUrl;
+  const download = `curl -fsSL '${url}'`;
+  const fallback = mirrorBase && !useUpstream ? ` || cua_script="$(curl -fsSL '${upstreamScripts}/install.sh')"` : '';
+  // Capture each fetch separately: partial bytes from a failed mirror transfer
+  // must never be concatenated with a successful upstream script.
+  return `cua_script="$(${download})"${fallback}; [ $? -eq 0 ] && /bin/bash -c "$cua_script"`;
 }
 
 function getPermissionPlatform(): ComputerDriverPermissionPlatform {
@@ -1065,9 +1075,10 @@ async function runInstallCommand(
   targetVersion?: string,
 ): Promise<ExecResult> {
   clearStaleCuaInstallLock();
+  const useUpstream = Boolean(targetVersion && targetVersion === upstreamFallbackVersion);
   let extraEnv = process.platform === 'win32'
     ? undefined
-    : await resolveCuaInstallerProxyEnv(UNIX_INSTALL_URL);
+    : await resolveCuaInstallerProxyEnv(useUpstream ? `${upstreamScripts}/install.sh` : unixInstallUrl);
   if (targetVersion) extraEnv = { ...extraEnv, CUA_DRIVER_RS_VERSION: targetVersion };
   const activityOptions: ActivityTimeoutOptions = {
     idleTimeoutMs: installIdleTimeoutForPlatform(),
@@ -1087,14 +1098,14 @@ async function runInstallCommand(
         '-ExecutionPolicy',
         'Bypass',
         '-Command',
-        `irm ${WINDOWS_INSTALL_URL} | iex`,
+        getInstallCommand(useUpstream),
       ],
       activityOptions,
     );
   }
   return runProcessWithActivityTimeout(
     '/bin/bash',
-    ['-c', `curl -fsSL ${UNIX_INSTALL_URL} | /bin/bash`],
+    ['-c', getInstallCommand(useUpstream)],
     activityOptions,
   );
 }
@@ -3114,11 +3125,20 @@ function toGitHubRateLimitError(res: {
 }
 
 /** 读上游「已发布安装版本」清单。格式不对就报错,不让一次上游改动静默变成「无更新」。 */
-async function fetchPublishedCuaDriverVersion(fetchImpl: typeof fetch): Promise<string> {
-  const res = await fetchImpl(CUA_DRIVER_PUBLISHED_VERSION_URL, {
+async function fetchPublishedCuaDriverVersion(fetchImpl: typeof fetch): Promise<{ version: string; upstream: boolean }> {
+  const request = (url: string) => fetchImpl(url, {
     headers: { 'User-Agent': 'xdt-maker' },
     signal: AbortSignal.timeout(UPDATE_CHECK_TIMEOUT_MS),
   });
+  let res: Response;
+  let fromMirror = false;
+  if (mirrorBase) {
+    const mirrored = await request(`${mirrorBase}/published-version`).catch(() => null);
+    fromMirror = Boolean(mirrored?.ok);
+    res = mirrored?.ok ? mirrored : await request(upstreamVersion);
+  } else {
+    res = await request(upstreamVersion);
+  }
   if (!res.ok) {
     const rateLimited = toGitHubRateLimitError(res);
     if (rateLimited) throw rateLimited;
@@ -3128,7 +3148,7 @@ async function fetchPublishedCuaDriverVersion(fetchImpl: typeof fetch): Promise<
   if (!isStableCuaDriverVersion(version)) {
     throw new Error(`unexpected cua-driver published version payload: ${version.slice(0, 32)}`);
   }
-  return version;
+  return { version, upstream: !fromMirror };
 }
 
 /**
@@ -3138,17 +3158,20 @@ async function fetchPublishedCuaDriverVersion(fetchImpl: typeof fetch): Promise<
 async function probeCuaDriverReleaseAsset(
   version: string,
   fetchImpl: typeof fetch,
+  useUpstream = version === upstreamFallbackVersion,
 ): Promise<CuaDriverReleaseAsset | null> {
   const name = getCuaDriverReleaseAssetName(version);
   if (!name) return null;
-  const res = await fetchImpl(
-    `${CUA_DRIVER_RELEASE_DOWNLOAD_URL}/${CUA_DRIVER_RELEASE_TAG_PREFIX}${version}/${name}`,
+  const request = (base: string) => fetchImpl(
+    `${base}/${CUA_DRIVER_RELEASE_TAG_PREFIX}${version}/${name}`,
     {
       method: 'HEAD',
       headers: { 'User-Agent': 'xdt-maker' },
       signal: AbortSignal.timeout(UPDATE_CHECK_TIMEOUT_MS),
     },
   );
+  const releaseBase = mirrorBase && !useUpstream ? `${mirrorBase}/releases/download` : upstreamReleases;
+  const res = await request(releaseBase);
   // 204 与 404 同义:这个版本没有可下载的平台包。
   if (res.status === 404 || res.status === 204) {
     logger.debug('skipping cua-driver release without a downloadable platform asset', { version, name });
@@ -3174,12 +3197,14 @@ let cachedDriverUpdateCheck: Omit<ComputerDriverUpdateCheck, 'updating'> | null 
 let driverUpdateCheckInFlight: Promise<Omit<ComputerDriverUpdateCheck, 'updating'>> | null = null;
 let driverUpdateInstallInFlight: Promise<ComputerDriverInstallResult> | null = null;
 // 当前更新目标的 asset(name + size),供更新进度采样换算总字节数。
+let upstreamFallbackVersion: string | null = null;
 let cachedDriverReleaseAssets: CuaDriverReleaseAsset[] = [];
 // 上次检查(成功或失败)完成时刻,自动检查节流用。
 let driverUpdateCheckLastFetchAt = 0;
 
 /** 测试隔离用:清空更新检查缓存与 in-flight 状态。 */
 function resetComputerDriverUpdateStateForTests(): void {
+  upstreamFallbackVersion = null;
   cachedDriverUpdateCheck = null;
   driverUpdateCheckInFlight = null;
   driverUpdateInstallInFlight = null;
@@ -3218,7 +3243,7 @@ async function fetchDriverUpdateCheck(
   }
 
   try {
-    const latestVersion = await fetchPublishedCuaDriverVersion(fetchImpl);
+    const { version: latestVersion, upstream } = await fetchPublishedCuaDriverVersion(fetchImpl);
     if (compareSemver(currentVersion, latestVersion) >= 0) {
       cachedDriverReleaseAssets = [];
       return done({ currentVersion, latestVersion, updateAvailable: false });
@@ -3230,7 +3255,7 @@ async function fetchDriverUpdateCheck(
       return done({ currentVersion, latestVersion: null, updateAvailable: false });
     }
 
-    const asset = await probeCuaDriverReleaseAsset(latestVersion, fetchImpl);
+    const asset = await probeCuaDriverReleaseAsset(latestVersion, fetchImpl, upstream);
     // 上游已推进版本号但安装包还没传全(或当前平台没有包):本次不给入口,
     // 下一次检查会重试。latestVersion 保持 null,由 commit 决定旧入口留不留。
     if (!asset) {
@@ -3245,6 +3270,7 @@ async function fetchDriverUpdateCheck(
       return done({ currentVersion, latestVersion: null, updateAvailable: false });
     }
 
+    upstreamFallbackVersion = upstream ? latestVersion : null;
     cachedDriverReleaseAssets = asset.size > 0 ? [asset] : [];
     return done({ currentVersion, latestVersion, updateAvailable: true });
   } catch (err) {

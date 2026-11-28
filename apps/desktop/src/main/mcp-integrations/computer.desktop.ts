@@ -1,3 +1,4 @@
+import { CURRENT_CINDY_REGION } from '../../shared/brandRegion.js';
 import { app, powerMonitor } from 'electron';
 import { outboundFetch } from '../maker-host/outbound-fetch.desktop.js';
 import { resolveDesktopOutboundProxy } from '../maker-host/outbound-proxy-resolver.js';
@@ -44,6 +45,7 @@ export const {
   cleanupAllComputerDriverSessions,
   getComputerMcpDeps
 } = createComputerRuntime({
+  downloadEdition: CURRENT_CINDY_REGION,
   // Preserve Desktop's lazy load of the native input handoff helpers.
   isSecureTarget: async target => (await import('../input-handoff/macDriver.js')).isSecureInputTarget(target),
   getPath: name => app.getPath(name),
