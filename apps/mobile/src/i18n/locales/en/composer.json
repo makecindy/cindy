@@ -107,7 +107,8 @@
     "recognitionStalled": "Voice recognition stopped returning results. Try again.",
     "transcriptKept": "{{message}} The text recognized so far was kept — you can edit it directly.",
     "micPermission": "Microphone access is turned off. Allow {{appName}} to use the microphone in system settings.",
-    "realtimeAudioUnavailable": "This build does not support realtime voice input. Install a test build that includes the native recording module."
+    "realtimeAudioUnavailable": "This build does not support realtime voice input. Install a test build that includes the native recording module.",
+    "retryRecognition": "Retry recognition"
   },
   "incomingShare": {
     "title": "Send to Cindy",

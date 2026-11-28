@@ -13283,6 +13283,7 @@
       "arrivalPermissions": "{{name}} ahora usa los permisos predeterminados de esta computadora.",
       "arrivalModel": "El modelo guardado de {{name}} no está disponible en esta computadora, así que usa el modelo predeterminado de esta computadora.",
       "arrivalModelSetup": "{{name}} llegó a esta computadora, pero aún no tiene un modelo utilizable. Conecta un proveedor de modelos o configura el modelo predeterminado de amigos en Proveedores → Enrutamiento inteligente.",
+      "modelSetupHint": "Este equipo no tiene un modelo disponible para amigos. Configura el modelo predeterminado en Proveedores → Enrutamiento inteligente. Cindy volverá a intentarlo automáticamente.",
       "arrivalPartialContent": "{{name}} ahora se ejecuta en esta computadora, pero algunos elementos sincronizados no se pudieron restaurar. Sus copias en la nube siguen intactas.",
       "missingProfileTitle": "¿Continuar con {{name}} usando el perfil predeterminado?",
       "missingProfileDescription": "La computadora principal original aún no subió la personalidad ni la descripción de {{name}}. Si esa computadora se reinstaló o no se puede recuperar, puedes continuar aquí con un perfil predeterminado y conservar las conversaciones y el contenido ya sincronizados.",
@@ -15939,7 +15940,9 @@
     "connectionInterrupted": "Se interrumpió la conexión de voz. Revisa tu red y vuelve a intentarlo.",
     "recognitionStalled": "El reconocimiento de voz dejó de devolver resultados. Vuelve a intentarlo.",
     "transcriptKept": "{{message}} Se conservó el texto reconocido hasta ahora; puedes editarlo directamente.",
-    "transcriptKeptOverlay": "{{message}} Se conservó el texto reconocido hasta ahora; cópialo para continuar."
+    "transcriptKeptOverlay": "{{message}} Se conservó el texto reconocido hasta ahora; cópialo para continuar.",
+    "retryRecognition": "Volver a reconocer",
+    "recordAgain": "Grabar de nuevo"
   },
   "chatgptAuthRecovery": {
     "title": "El inicio de sesión de ChatGPT ya no es válido",
@@ -16188,7 +16191,7 @@
       "requestFormatError": "La aplicación envió una solicitud no válida, por lo que no se pudo completar esta respuesta.",
       "piRetryHistoryTooLarge": "Tu mensaje no se envió. Al leer el historial para reintentar, Pi encontró una trama que superaba el límite local de 16 MiB. Puedes continuar en una tarea nueva.",
       "piRetryHistoryUnavailable": "Tu mensaje no se envió. Pi no pudo leer el historial necesario para enviarlo. Puedes volver a intentarlo o continuar en una tarea nueva.",
-      "upstreamStatusError": "El proveedor devolvió {{status}}, por lo que la respuesta no pudo completarse.",
+      "upstreamStatusError": "El servicio del proveedor de modelos devolvió un error (HTTP {{status}}). Esta respuesta no se completó.",
       "messageNotSent": "Tu mensaje no se envió.",
       "replyFailed": "No se pudo completar la respuesta",
       "queuedSendRecovery": "Tu mensaje no se envió. Selecciona «Reintentar» para enviarlo tal cual. Si envías un mensaje nuevo, reemplazará al anterior.",
@@ -16246,12 +16249,12 @@
       "networkUnreachableNoRetry": "Error de red: el servicio no está disponible temporalmente.",
       "networkAutoRetrying": "Error de red: reintentando automáticamente…",
       "networkReconnecting": "Conexión interrumpida: reconectando ({{attempt}}/{{maxAttempts}})…",
-      "overloadRetrying": "El servicio del modelo está ocupado: reintentando automáticamente ({{attempt}}/{{maxAttempts}})…",
+      "overloadRetrying": "El proveedor de modelos está ocupado temporalmente. Reintentando automáticamente ({{attempt}}/{{maxAttempts}})…",
       "rateLimitRetrying": "Límite de solicitudes alcanzado: reintentando automáticamente ({{attempt}}/{{maxAttempts}})…",
-      "overloadBusy": "El servicio del modelo está ocupado: el proveedor no tiene capacidad en este momento. Haz clic en «Reintentar» o cambia a otro modelo.",
-      "overloadBusyNoRetry": "El servicio del modelo está ocupado: el proveedor no tiene capacidad en este momento. Inténtalo más tarde o cambia a otro modelo.",
-      "streamInterrupted": "Se interrumpió la transmisión del modelo. Suele ser un problema temporal del proveedor: haz clic en Reintentar.",
-      "streamInterruptedNoRetry": "Se interrumpió la transmisión del modelo. Suele ser un problema temporal del proveedor. Vuelve a intentarlo en un momento.",
+      "overloadBusy": "El proveedor de modelos está ocupado temporalmente y sin capacidad disponible. Pulsa «Reintentar» o cambia de modelo.",
+      "overloadBusyNoRetry": "El proveedor de modelos está ocupado temporalmente y sin capacidad disponible. Vuelve a intentarlo más tarde o cambia de modelo.",
+      "streamInterrupted": "La respuesta del proveedor de modelos se interrumpió a mitad de transmisión. Pulsa «Reintentar».",
+      "streamInterruptedNoRetry": "La respuesta del proveedor de modelos se interrumpió a mitad de transmisión. Inténtalo de nuevo más tarde.",
       "networkShowRaw": "Detalles del error",
       "networkHideRaw": "Ocultar detalles",
       "diagnose": "Diagnosticar",
@@ -16260,7 +16263,7 @@
       "diagnosePromptWithoutSession": "Diagnostica este error: encuentra la causa y dime cómo solucionarlo.\n\nError: {{message}}\nDetalles:\n{{details}}\n\nSi descubres que es un problema de Cindy, avísame para que pueda decidir si reportarlo al equipo de Cindy.",
       "gatewayProxyTokenInvalid": "Las credenciales de Cindy AI ya no son válidas. Haz clic en Reintentar. Si vuelve a ocurrir, cierra sesión y vuelve a iniciarla",
       "gatewayProxyTokenInvalidNoRetry": "Las credenciales de Cindy AI ya no son válidas. Si vuelve a ocurrir, cierra sesión y vuelve a iniciarla",
-      "modelAccessDenied": "La cuenta del proveedor no puede acceder a este modelo. Selecciona otro modelo o verifica el acceso con el proveedor",
+      "modelAccessDenied": "Tu cuenta actual del proveedor de modelos no tiene acceso a este modelo. Cambia de modelo o verifica los permisos con el proveedor.",
       "providerSafetyRefusal": "La política de seguridad del proveedor del modelo bloqueó esta respuesta. Ajusta tu solicitud antes de volver a enviarla",
       "silentStopContinue": "Continuar",
       "silentStopContinueTitle": "Continuar la tarea actual",
@@ -16270,7 +16273,20 @@
       "remoteCompactEncryptedContent": "No se pudo compactar el contexto porque el modelo no pudo leer el historial cifrado. La continuación automática no se completó. Vuelve a intentarlo para tratar de recuperar la sesión.",
       "contextOverflow": "Este mensaje por sí solo supera la ventana de contexto del modelo, por lo que Cindy no puede continuarlo en una sesión nueva de Agent. Acorta el texto de entrada o quita un archivo adjunto grande y vuelve a intentarlo.",
       "attachmentAccessDeniedTitle": "Cindy no puede leer el archivo adjunto original; el mensaje no se envió.",
-      "attachmentAccessDeniedRecovery": "Guarda una copia en Descargas o en otra carpeta accesible, quita el archivo adjunto original y agrega la copia con el botón de adjuntar antes de volver a enviar."
+      "attachmentAccessDeniedRecovery": "Guarda una copia en Descargas o en otra carpeta accesible, quita el archivo adjunto original y agrega la copia con el botón de adjuntar antes de volver a enviar.",
+      "providerSafetyRefusalWithProvider": "La política de seguridad de {{provider}} bloqueó esta respuesta. Ajusta tu solicitud y vuelve a enviarla.",
+      "overloadRetryingWithProvider": "{{provider}} está ocupado temporalmente. Reintentando automáticamente ({{attempt}}/{{maxAttempts}})…",
+      "overloadBusyWithProvider": "{{provider}} está ocupado temporalmente y sin capacidad disponible. Pulsa «Reintentar» o cambia de modelo.",
+      "overloadBusyNoRetryWithProvider": "{{provider}} está ocupado temporalmente y sin capacidad disponible. Vuelve a intentarlo más tarde o cambia de modelo.",
+      "streamInterruptedWithProvider": "La respuesta de {{provider}} se interrumpió a mitad de transmisión. Pulsa «Reintentar».",
+      "streamInterruptedNoRetryWithProvider": "La respuesta de {{provider}} se interrumpió a mitad de transmisión. Inténtalo de nuevo más tarde.",
+      "upstreamStatusErrorWithProvider": "El servicio de {{provider}} devolvió un error (HTTP {{status}}). Esta respuesta no se completó.",
+      "modelAccessDeniedWithProvider": "Tu cuenta de {{provider}} no tiene acceso a este modelo. Cambia de modelo o verifica los permisos de acceso.",
+      "providerQuotaExhaustedWithProvider": "Tu cuenta de {{provider}} no tiene suficiente cuota o saldo. Revisa el estado de la cuenta.",
+      "usageLimitReachedWithProvider": "Tu cuenta de {{provider}} ha alcanzado el límite de uso",
+      "usageLimitReachedWithResetWithProvider": "Tu cuenta de {{provider}} ha alcanzado el límite de uso. Se espera que se restablezca el {{resetAt}}.",
+      "usageLimitReachedNoResetWithProvider": "Tu cuenta de {{provider}} ha alcanzado el límite de uso. Espera a que se restablezca o cambia a otro modelo.",
+      "invalidEncryptedContentWithProvider": "{{provider}} no puede leer parte del historial cifrado. Vuelve al proveedor original o continúa en una tarea nueva."
     },
     "backgroundActivity": {
       "status": "Hay subtareas en segundo plano que siguen consumiendo uso del modelo…",
@@ -17255,7 +17271,20 @@
       "viewGhostCard": "Ver tarjeta del complemento"
     },
     "modelMismatch": {
-      "notice": "Este turno lo respondió {{actual}} en lugar del modelo seleccionado {{selected}} (el proveedor lo cambió temporalmente por uno de menor capacidad)"
+      "notice": "El proveedor de modelos respondió este turno con {{actual}} en lugar de {{selected}}",
+      "noticeWithProvider": "{{provider}} respondió este turno con {{actual}} en lugar de {{selected}}",
+      "infoLink": "¿Por qué ocurrió?",
+      "infoTitle": "Por qué respondió otro modelo",
+      "infoSummary": "Cindy envió este turno a {{selected}} como elegiste, pero el proveedor de modelos devolvió la respuesta usando {{actual}}.",
+      "infoSummaryWithProvider": "Cindy envió este turno a {{selected}} como elegiste, pero {{provider}} devolvió la respuesta usando {{actual}}.",
+      "infoCausesTitle": "Causas frecuentes",
+      "infoCausePolicy": "Respaldo por políticas de seguridad o contenido (algunos modelos cambian automáticamente a un modelo anterior en lugar de rechazar la solicitud).",
+      "infoCauseLoad": "Redirección temporal del proveedor de modelos durante picos de carga.",
+      "infoCauseGateway": "Reglas de mapeo o enrutamiento en una pasarela de terceros o personalizada.",
+      "infoActionsTitle": "Qué puedes hacer",
+      "infoActionContinue": "No necesitas cambiar los ajustes: esto solo afectó a este turno y los siguientes mensajes seguirán solicitando {{selected}}.",
+      "infoActionRetry": "Si la respuesta no cumple con lo que necesitas, reformula el mensaje y vuelve a enviarlo, o cambia a otro modelo disponible.",
+      "infoActionCheckProvider": "Si ocurre en varios turnos seguidos, revisa la cuota de tu proveedor de modelos o la configuración de enrutamiento de la pasarela."
     },
     "ghostNotify": {
       "secretSaved": "Credencial \"{{name}}\" guardada",
@@ -17372,6 +17401,88 @@
       "signingIn": "Se está iniciando sesión en la cuenta de suscripción de esta tarea. Vuelve a intentarlo cuando termine.",
       "unavailable": "La cuenta de suscripción asignada a esta tarea no se puede usar para esta solicitud. Revisa la cuenta en los ajustes del proveedor de modelos del ordenador que ejecuta la tarea o elige otra fuente de modelos.",
       "legacy": "La cuenta de suscripción asignada a esta tarea no está disponible. Revisa el inicio de sesión y el uso en el ordenador que ejecuta la tarea o elige otra fuente de modelos. La cuenta no cambia automáticamente."
+    },
+    "errorExplain": {
+      "providerSafetyRefusal": {
+        "title": "Por qué se bloqueó esta respuesta",
+        "summary": "Cindy envió tu solicitud tal cual, pero la política de seguridad y contenido del proveedor de modelos bloqueó la salida. No es una moderación de Cindy ni un bloqueo de complementos locales.",
+        "summaryWithProvider": "Cindy envió tu solicitud tal cual, pero la política de seguridad y contenido de {{provider}} bloqueó la salida. No es una moderación de Cindy ni un bloqueo de complementos locales.",
+        "cause1": "El mensaje, un archivo adjunto o el contexto previo activaron las reglas de seguridad del proveedor.",
+        "cause2": "Un filtro de seguridad detuvo la respuesta del modelo a mitad de generación.",
+        "action1": "Reintentar exactamente igual suele volver a bloquearse; reformula la solicitud o retira la parte conflictiva antes de reenviar.",
+        "action2": "Si el bloqueo proviene del contexto anterior, inicia una tarea nueva o cambia a otro modelo."
+      },
+      "overload": {
+        "title": "Por qué el servicio está ocupado",
+        "summary": "El proveedor de modelos tiene poca capacidad de cómputo en este momento (por ejemplo, congestión en hora punta o HTTP 529). No tiene relación con Cindy ni con tu red local.",
+        "summaryWithProvider": "{{provider}} tiene poca capacidad de cómputo en este momento (por ejemplo, congestión en hora punta o HTTP 529). No tiene relación con Cindy ni con tu red local.",
+        "cause1": "El aumento de demanda en horas punta saturó temporalmente la capacidad de este modelo.",
+        "cause2": "Hay un mantenimiento temporal o una limitación de capacidad activa en el proveedor.",
+        "action1": "No hace falta reiniciar Cindy ni cambiar tu red; espera un momento y pulsa «Reintentar».",
+        "action2": "Para seguir de inmediato, cambia temporalmente a otro modelo u otra fuente de tu grupo de modelos."
+      },
+      "streamInterrupted": {
+        "title": "Por qué se interrumpió la salida",
+        "summary": "El proveedor de modelos cerró de forma inesperada la transmisión antes de terminar la respuesta. Cindy no se ha bloqueado y tanto los pasos completados como el historial siguen intactos.",
+        "summaryWithProvider": "{{provider}} cerró de forma inesperada la transmisión antes de terminar la respuesta. Cindy no se ha bloqueado y tanto los pasos completados como el historial siguen intactos.",
+        "cause1": "Un error temporal del servidor del proveedor interrumpió la generación a mitad de respuesta.",
+        "cause2": "Una pasarela intermedia de terceros o personalizada agotó el tiempo de espera durante una respuesta larga.",
+        "action1": "Pulsa «Reintentar» o envía «continúa» para que el modelo siga donde lo dejó.",
+        "action2": "Si ocurre en varios turnos seguidos, prueba otro modelo o revisa el tiempo de espera de tu pasarela."
+      },
+      "upstreamStatus": {
+        "title": "Por qué se devolvió un error de servicio",
+        "summary": "Cindy envió tu solicitud correctamente, pero el proveedor de modelos devolvió un error interno HTTP {{status}} sin detalles. Procede del servicio externo, no de Cindy.",
+        "summaryWithProvider": "Cindy envió tu solicitud correctamente, pero {{provider}} devolvió un error interno HTTP {{status}} sin detalles. Procede del servicio externo, no de Cindy.",
+        "cause1": "El servidor del proveedor de modelos sufrió un fallo interno temporal.",
+        "cause2": "Una pasarela de terceros o propia falló al reenviar la solicitud o devolvió un código 5xx personalizado.",
+        "action1": "Pulsa «Reintentar» en unos instantes; los fallos temporales suelen recuperarse pronto.",
+        "action2": "Si usas una pasarela propia o de terceros, revisa su estado y registros, o cambia a otro proveedor."
+      },
+      "modelAccessDenied": {
+        "title": "Por qué no hay acceso a este modelo",
+        "summary": "El proveedor de modelos rechazó el acceso de esta cuenta al modelo seleccionado. Cindy no puede omitir los permisos del proveedor.",
+        "summaryWithProvider": "{{provider}} rechazó el acceso de esta cuenta al modelo seleccionado. Cindy no puede omitir los permisos de {{provider}}.",
+        "cause1": "Tu plan de suscripción actual o tu clave API no incluye acceso a este modelo.",
+        "cause2": "Un administrador de la organización restringió la lista de modelos o tu región aún no está admitida.",
+        "action1": "Cambia a otro modelo habilitado en tu cuenta actual para continuar la tarea.",
+        "action2": "Comprueba los permisos en la consola del proveedor; si acabas de mejorar tu plan, reconecta la cuenta y vuelve a intentarlo."
+      },
+      "providerQuotaExceeded": {
+        "title": "Por qué falta cuota o saldo",
+        "summary": "La cuenta externa del proveedor de modelos conectada se ha quedado sin saldo o cuota y rechazó la solicitud. Es independiente de tu cuenta de Cindy.",
+        "summaryWithProvider": "Tu cuenta conectada de {{provider}} se ha quedado sin saldo o cuota y {{provider}} rechazó la solicitud. Es independiente de tu cuenta de Cindy.",
+        "cause1": "El saldo prepago de la cuenta del proveedor se agotó o no hay un método de pago válido.",
+        "cause2": "La clave API o la organización alcanzó su límite de gasto o cuota.",
+        "action1": "Recarga el saldo o amplía el límite en la página de facturación del proveedor y pulsa «Reintentar».",
+        "action2": "También puedes cambiar a otro proveedor con cuota disponible desde el selector de modelos."
+      },
+      "usageLimit": {
+        "title": "Por qué se alcanzó el límite de uso",
+        "summary": "La cuenta de modelo conectada alcanzó la ventana periódica de uso fijada por el proveedor y no puede aceptar más solicitudes por ahora. Este límite no lo impone Cindy.",
+        "summaryWithProvider": "Tu cuenta conectada de {{provider}} alcanzó la ventana periódica de uso fijada por {{provider}} y no puede aceptar más solicitudes por ahora. Este límite no lo impone Cindy.",
+        "cause1": "La suscripción agotó su cuota en la ventana actual (por ejemplo, de 5 horas o semanal).",
+        "cause2": "Varias tareas o dispositivos con la misma cuenta comparten la misma ventana de cuota.",
+        "action1": "Espera a que se restablezca la ventana y reintenta; si la continuación automática está activa, la tarea seguirá sola.",
+        "action2": "Para seguir al instante, cambia a otro modelo, otra cuenta de suscripción conectada o un proveedor API."
+      },
+      "encryptedContent": {
+        "title": "Por qué no se puede leer parte del historial",
+        "summary": "Algunos modelos guardan su estado de razonamiento cifrado en el historial y solo el proveedor y la cuenta originales pueden descifrarlo. Al cambiar de proveedor o compactar el contexto remotamente, el proveedor actual puede no leer bloques antiguos.",
+        "summaryWithProvider": "Algunos modelos guardan su estado de razonamiento cifrado en el historial y solo el proveedor y la cuenta originales pueden descifrarlo. Al cambiar de proveedor o compactar el contexto remotamente, {{provider}} puede no leer bloques antiguos.",
+        "cause1": "Cambiaste a otro proveedor o cuenta de modelos que no puede descifrar el razonamiento cifrado previo.",
+        "cause2": "La compactación remota o el enrutamiento entre puntos finales no coincidió con la clave anterior.",
+        "action1": "Vuelve al proveedor o cuenta original para continuar directamente en esta tarea.",
+        "action2": "O elige «Continuar en una tarea nueva»: Cindy conserva el historial legible y elimina solo los bloques cifrados ilegibles sin alterar la tarea original."
+      },
+      "failedSamplingAttempt": {
+        "title": "Por qué se muestra una respuesta incompleta",
+        "summary": "El modelo falló o se interrumpió antes de terminar esta respuesta y solo generó la primera parte. Cindy mantiene visible el fragmento como referencia para que no pierdas lo ya escrito.",
+        "cause1": "Un error del proveedor, un corte de conexión o un bloqueo de seguridad interrumpió la transmisión.",
+        "cause2": "El turno falló o se detuvo antes de poder completar la respuesta.",
+        "action1": "Revisa la tarjeta de error debajo para conocer la causa exacta y si conviene reintentar.",
+        "action2": "Puedes pulsar «Reintentar» o enviar un nuevo mensaje para continuar aprovechando lo ya mostrado."
+      }
     }
   },
   "ccAgent": {
