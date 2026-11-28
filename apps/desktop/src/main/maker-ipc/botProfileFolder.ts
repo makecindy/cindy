@@ -35,7 +35,8 @@
  *   SOUL.md                     ← 身份。Hermes 同名同义
  *   memories/USER.md            ← 用户画像。Hermes 同路径
  *   system_prompt.md            ← 用户维护的 prompt overlay(有内容才生效,不取代核心协议)
- *   config.json                 ← 旧版兼容副本；运行时权限不再从这里读取
+ *   config.json                 ← 旧版兼容副本；运行时权限不再从这里读取，模型路由也不存
+ *                                 (模型在伙伴冻结快照与会话上；写入/读取都剥掉，老文件迁移时清理)
  *   .claude-plugin/plugin.json  ← 让整个目录能被 Claude Code 当本地 plugin 挂载
  *   skills/<slug>/SKILL.md      ← 技能。pi 直接 `--skill <这个目录>`
  * ```
@@ -320,6 +321,47 @@ function parseJsonOr<T>(raw: string, fallback: T, accept: (value: unknown) => bo
   }
 }
 
+/**
+ * 模型路由不是「家」里的值：真正的路由存在伙伴冻结快照和会话上。
+ * 早先播种时把当时那组 `harness/model/...` 一并写了进去，之后永不同步，
+ * 于是文件一直指着伙伴早已不用的型号（2026-11-28 就是按它报错了模型名）。
+ * 所以现在：写入时剥掉，读取时也不返回，已有文件在下一次迁移时清理。
+ */
+const VOLATILE_CONFIG_KEYS: readonly string[] = [
+  'harness', 'providerId', 'model', 'effort', 'fastMode',
+  'modelOverride', 'modelChain', 'modelChainOverride',
+];
+
+function isConfigRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+
+/** 去掉模型路由字段；没有这些字段时原样返回同一个对象。 */
+function withoutVolatileConfig(config: Record<string, unknown>): Record<string, unknown> {
+  if (!VOLATILE_CONFIG_KEYS.some(key => key in config)) return config;
+  return Object.fromEntries(Object.entries(config).filter(([key]) => !VOLATILE_CONFIG_KEYS.includes(key)));
+}
+
+/** 清掉已有 config.json 里的模型路由字段：内容没变就不写，解析失败保持用户原文。 */
+async function pruneVolatileConfig(absPath: string): Promise<void> {
+  let raw: string;
+  try {
+    raw = await fs.readFile(absPath, 'utf8');
+  } catch {
+    return;
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return;
+  }
+  if (!isConfigRecord(parsed)) return;
+  const pruned = withoutVolatileConfig(parsed);
+  if (pruned === parsed) return;
+  await writeTextAtomic(absPath, `${JSON.stringify(pruned, null, 2)}\n`);
+}
+
 export async function readBotProfileFolder(
   userDataDir: string,
   botId: string,
@@ -337,11 +379,11 @@ export async function readBotProfileFolder(
     identitySource,
     userContextSource,
     systemPromptOverride,
-    config: parseJsonOr<Record<string, unknown>>(
+    config: withoutVolatileConfig(parseJsonOr<Record<string, unknown>>(
       configRaw,
       {},
       (value) => !!value && typeof value === 'object' && !Array.isArray(value),
-    ),
+    )),
   };
 }
 
@@ -370,7 +412,7 @@ export async function writeBotProfileFolder(
     writes.push(writeTextAtomic(at(SLOT.systemPrompt), patch.systemPromptOverride));
   }
   if (patch.config !== undefined) {
-    writes.push(writeTextAtomic(at(SLOT.config), `${JSON.stringify(patch.config, null, 2)}\n`));
+    writes.push(writeTextAtomic(at(SLOT.config), `${JSON.stringify(withoutVolatileConfig(patch.config), null, 2)}\n`));
   }
   await Promise.all(writes);
 }
@@ -442,11 +484,18 @@ export async function migrateBotProfileFolder(
     // reconciling an absent USER.md as an emptied user profile.
     try {
       await writeTextIfAbsent(at(SLOT.userContext), seed.userContextSource);
-      await writeTextIfAbsent(at(SLOT.config), `${JSON.stringify(seed.config, null, 2)}\n`);
+      await writeTextIfAbsent(at(SLOT.config), `${JSON.stringify(withoutVolatileConfig(seed.config), null, 2)}\n`);
       seeded = await writeTextIfAbsent(soulPath, seed.identitySource);
     } catch (cause) {
       seedFailure = cause;
     }
+  }
+  // A Home that already exists may still carry the model name it was seeded with; drop it
+  // once so the folder stops claiming a route the buddy no longer uses.
+  try {
+    await pruneVolatileConfig(at(SLOT.config));
+  } catch (cause) {
+    seedFailure ??= cause;
   }
 
   // Skills move regardless: a seeding failure (e.g. disk full) must not also strand the

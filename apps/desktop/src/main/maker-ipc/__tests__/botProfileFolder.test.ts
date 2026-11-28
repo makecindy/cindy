@@ -37,7 +37,7 @@ afterEach(async () => {
 const SEED = {
   identitySource: '你是纸老虎，一个爱做菜的厨子。',
   userContextSource: 'Chris 住在上海。',
-  config: { model: 'claude-sonnet-4-6', harness: 'claude' },
+  config: { memory: true, mcpServers: ['companion_connections'] },
 };
 
 describe('伙伴的家', () => {
@@ -246,6 +246,42 @@ describe('搬家', () => {
     expect(content.identitySource).toBe(SEED.identitySource);
     expect(content.userContextSource).toBe(SEED.userContextSource);
     expect(content.config).toEqual(SEED.config);
+  });
+
+  // 2026-11-28：伙伴家里那份 config.json 一直指着早已不用的型号，按它报模型名就会错。
+  // 模型路由在伙伴冻结快照与会话上，家不存、不读，老文件迁移时清理。
+  it('模型路由不进家：播种时剥掉', async () => {
+    await migrateBotProfileFolder(root, 'bot-a', { ...SEED, config: { ...SEED.config, harness: 'codex', providerId: 'openai',
+      model: 'gpt-6.1-sol', effort: 'medium', modelChain: [{ model: 'gpt-6.1-sol' }] } });
+    const raw = JSON.parse(await fs.readFile(path.join(botProfileDir(root, 'bot-a'), 'config.json'), 'utf8'));
+    expect(raw).toEqual(SEED.config);
+  });
+
+  it('旧文件还没清理时，读取也不把模型名交出去', async () => {
+    await fs.mkdir(botProfileDir(root, 'bot-a'), { recursive: true });
+    await fs.writeFile(path.join(botProfileDir(root, 'bot-a'), 'config.json'),
+      JSON.stringify({ memory: true, harness: 'codex', model: 'gpt-6.1-sol' }));
+    expect((await readBotProfileFolder(root, 'bot-a')).config).toEqual({ memory: true });
+  });
+
+  it('已有的家带着上次播种的模型名：迁移时清掉，其它字段原样', async () => {
+    await fs.mkdir(botProfileDir(root, 'bot-a'), { recursive: true });
+    const file = path.join(botProfileDir(root, 'bot-a'), 'config.json');
+    await fs.writeFile(file, JSON.stringify({ memory: false, mcpServers: ['x'], harness: 'codex', providerId: 'openai',
+      model: 'gpt-6.1-sol', effort: 'medium', modelChain: [{ model: 'gpt-6.1-sol' }] }));
+    await fs.writeFile(path.join(botProfileDir(root, 'bot-a'), 'SOUL.md'), '已经建好的家');
+    const result = await migrateBotProfileFolder(root, 'bot-a', SEED);
+    expect(result.seeded).toBe(false);
+    expect(JSON.parse(await fs.readFile(file, 'utf8'))).toEqual({ memory: false, mcpServers: ['x'] });
+  });
+
+  it('手改坏的 config.json 原样留着，不因为清理而覆盖', async () => {
+    await fs.mkdir(botProfileDir(root, 'bot-a'), { recursive: true });
+    const file = path.join(botProfileDir(root, 'bot-a'), 'config.json');
+    await fs.writeFile(file, '{ model: gpt-6.1-sol, ');
+    await fs.writeFile(path.join(botProfileDir(root, 'bot-a'), 'SOUL.md'), '已经建好的家');
+    await migrateBotProfileFolder(root, 'bot-a', SEED);
+    expect(await fs.readFile(file, 'utf8')).toBe('{ model: gpt-6.1-sol, ');
   });
 
   it('已经有家了就整个跳过,绝不覆盖用户改过的灵魂', async () => {
