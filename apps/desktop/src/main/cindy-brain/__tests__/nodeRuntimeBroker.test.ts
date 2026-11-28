@@ -3573,4 +3573,36 @@ describe('nodeRuntimeBroker · 任务执行引擎进程(harnesses)', () => {
       await expect(broker.spawnHarness('node-ghost', 'dsh')).resolves.toBeDefined();
     } finally { broker.destroyAll(); }
   });
+
+  // Regression (2026-11-28): an automatic update whose stop wait (2.5s) expired just before a
+  // SIGKILLed engine exited left the start gate closed until the next successful update, so every
+  // task on that engine failed with "The plugin is stopping or updating" for ~20 minutes.
+  // whenProcessesExited lets the update caller restore the old version once the process is gone,
+  // and stays silent when a newer stop (retry, disable, uninstall) owns the plugin again.
+  it.each([
+    { newerStop: false, restored: true },
+    { newerStop: true, restored: false },
+  ])('reports stuck engine exits after a failed stop wait (newer stop: $newerStop)', async ({ newerStop, restored }) => {
+    vi.useFakeTimers();
+    const ghost = harnessGhost();
+    const { broker } = setupHarness(ghost);
+    try {
+      const proc = await broker.spawnHarness('node-ghost', 'dsh') as unknown as FakeHarnessProcess;
+      // The engine takes the signals but only exits later.
+      vi.spyOn(proc, 'kill').mockImplementation(() => { proc.killed = true; return true; });
+      const stopping = expect(broker.stopAndWait('node-ghost')).rejects.toThrow('插件 Node 进程停止超时');
+      await vi.advanceTimersByTimeAsync(2_500);
+      await stopping;
+
+      const onExited = vi.fn(() => broker.resumeHarnesses('node-ghost'));
+      broker.whenProcessesExited('node-ghost', onExited);
+      if (newerStop) broker.stop('node-ghost');
+      proc.emit('exit', null, 'SIGKILL');
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(onExited).toHaveBeenCalledTimes(restored ? 1 : 0);
+      if (restored) await expect(broker.spawnHarness('node-ghost', 'dsh')).resolves.toBeDefined();
+      else await expect(broker.spawnHarness('node-ghost', 'dsh')).rejects.toThrow('stopping or updating');
+    } finally { broker.destroyAll(); }
+  });
 });
