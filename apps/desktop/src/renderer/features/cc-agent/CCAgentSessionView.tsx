@@ -7435,6 +7435,7 @@ function CCAgentSessionContent({
                   }
                   botMentions={composerBotMentions}
                   hideRuntimeControls={false}
+                  includeBuddyFiles={Boolean(botChatIdentity) && session?.source === 'bot'}
                 />
                 </div>
               )}

@@ -404,8 +404,10 @@ export function AtMentionPanel({
     } else if (item.type === 'plugin-resource') {
       meta = item.sourceLabel || t('newChat.atMention.pluginResource');
     } else {
-      const lastSlash = item.relPath.lastIndexOf('/');
-      meta = lastSlash >= 0 ? item.relPath.slice(0, lastSlash) : '';
+      const displayPath = item.sourceRelativePath ?? item.relPath;
+      const lastSlash = displayPath.lastIndexOf('/');
+      const parent = lastSlash >= 0 ? displayPath.slice(0, lastSlash) : '';
+      meta = [item.sourceLabel, parent].filter(Boolean).join(' · ');
     }
     const displayName = item.type === 'file-picker'
       ? t('newChat.atMention.filesAndFolders')

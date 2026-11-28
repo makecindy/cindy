@@ -559,3 +559,25 @@ describe('scanAtResources context providers', () => {
   });
 
 });
+
+// #11110: the composer sends a task hint only for a typed local buddy search,
+// and the selected result keeps the same absolute path as native picking.
+it('keeps the project name and absolute path on a local buddy file candidate', async () => {
+  const workingDir = 'C:/Buddy/workspace';
+  const filePath = 'C:\\projects\\current\\docs\\report.md';
+  stubApi({ workspace: { success: true, items: [
+    { type: 'file', name: 'report.md', relPath: 'backup/report.md' },
+    { type: 'file', name: 'report.md', relPath: filePath, sourceLabel: 'current', sourceRelativePath: 'docs/report.md' },
+  ] } });
+  const context = { sessionId: 'buddy-session', includeLocalContext: true, includeBuddyFiles: true };
+  const results = await scanAtResources(workingDir, 'codex', 20, 'report', undefined, context);
+  expect(window.electronAPI.maker.scanAtResources).toHaveBeenCalledWith('codex', { workingDir, cap: 20, query: 'report', sessionId: 'buddy-session' });
+  expect(filterAtResources(results.items, 'report')).toEqual(expect.arrayContaining([
+    expect.objectContaining({ relPath: 'backup/report.md' }),
+    expect.objectContaining({ ...createAtResourceFromNativePath(filePath, 'file', workingDir), sourceLabel: 'current', sourceRelativePath: 'docs/report.md' }),
+  ]));
+  await scanAtResources(workingDir, 'codex', 20, undefined, undefined, context);
+  expect(window.electronAPI.maker.scanAtResources).toHaveBeenLastCalledWith('codex', { workingDir, cap: 20, query: undefined });
+  await scanAtResources(workingDir, 'codex', 20, 'report', 'other-device', { ...context, includeLocalContext: false });
+  expect(window.electronAPI.deviceLink.invoke).toHaveBeenLastCalledWith('other-device', 'maker:scan-at-resources', ['codex', { workingDir, cap: 20, query: 'report' }]);
+});
