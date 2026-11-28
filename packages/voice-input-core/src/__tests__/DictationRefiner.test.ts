@@ -493,5 +493,53 @@ describe('DictationRefiner', () => {
       expect(refineJson.startsWith(warmupPrefix)).toBe(true);
       expect((warmup.user as { dictationText: string }).dictationText).toBe('');
     });
+
+    it('sanitizes activeApp, places it after selectionAfter, and keeps warmup/refine prefix byte-identical', async () => {
+      let refineRequest: CapturedRequest | null = null;
+      const client: TextModelClient = {
+        async requestJson<T>(input: CapturedRequest): Promise<T> {
+          refineRequest = input;
+          return { text: '修复 API 响应。' } as T;
+        },
+      };
+      const refiner = new DictationRefiner({
+        client,
+        model: 'gpt-test',
+        contextProvider: () => ({
+          uiLanguage: 'zh-CN',
+          sourceLanguage: 'zh-CN',
+          userDictionary: 'LiteLLM',
+          selectionBefore: 'const x = ',
+          activeApp: '/Applications/Cursor.app',
+        }),
+      });
+
+      const warmup = refiner.buildWarmupRequest();
+      await refiner.refine({
+        text: '修复 api 响应',
+        runId: 'run-active-app',
+        segmentIds: ['segment-active-app'],
+      });
+
+      expect(refineRequest).not.toBeNull();
+      const captured = refineRequest as unknown as CapturedRequest;
+      const capturedUser = captured.user as { context: Record<string, unknown> };
+      expect(capturedUser.context.activeApp).toBe('Cursor (code_editor)');
+      expect(Object.keys(capturedUser.context)).toEqual([
+        'uiLanguage',
+        'sourceLanguage',
+        'userRefinementInstructions',
+        'userDictionary',
+        'voiceInputHistory',
+        'selectionBefore',
+        'selectedText',
+        'selectionAfter',
+        'activeApp',
+      ]);
+      const warmupJson = JSON.stringify(warmup.user);
+      const refineJson = JSON.stringify(captured.user);
+      const warmupPrefix = warmupJson.slice(0, warmupJson.indexOf('"dictationText"'));
+      expect(refineJson.startsWith(warmupPrefix)).toBe(true);
+    });
   });
 });

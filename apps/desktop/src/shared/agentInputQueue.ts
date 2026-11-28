@@ -12,7 +12,7 @@ import { coordinationModelPrefix, type BotTaskCoordination } from './botTaskCoor
  */
 
 import type { OutputLimitDetails } from '@cindy/maker-shared';
-import { isSharedTaskPeer } from '@cindy/device-link';
+import { isSharedTaskPeer, type InputDeliveryProjection } from '@cindy/device-link';
 
 import { stripChatQuoteMarkerLines } from '@cindy/maker-shared/chat-quotes';
 import type { SharedTaskAuthor } from '@cindy/maker-shared';
@@ -545,7 +545,7 @@ export function normalizeAgentInputClearBoundaryMs(value: unknown): number | nul
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : undefined;
 }
 
-export interface AgentInputProjection {
+export interface AgentInputProjection extends InputDeliveryProjection {
   sessionId: string;
   /** Recent explicit withdrawals. Older hosts omit this field. */
   withdrawnQueueClientIds?: string[];
@@ -888,6 +888,9 @@ export function updateQueuedMessageContent(
   else delete merged.sessionRefs;
   return merged;
 }
+
+/** Maximum structured task references accepted for a single input. */
+export const MAX_SESSION_REFERENCES = 8;
 
 const SESSION_REF_LINK_RE =
   /(?:cindy|xdt-maker):\/\/session\/([A-Za-z0-9%~_-]+)(?:\?([A-Za-z0-9%&=~._-]*))?/g;

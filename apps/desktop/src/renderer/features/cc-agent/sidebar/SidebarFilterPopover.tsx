@@ -116,7 +116,6 @@ import {
 } from '../hooks/helpers/sidebarFilterCore';
 import { useTaskInfoFields, type TaskInfoField } from '../hooks/useTaskInfoFields';
 import { MENU_ITEM_CLASS, MENU_ROW_CLASS } from './menuStyles';
-import { FilterReminderDot } from './FilterReminderDot';
 import { useTaskListModeSwitch } from './TaskInboxIntro';
 
 type Option<T extends string> = {
@@ -265,10 +264,7 @@ export interface SidebarFilterPopoverProps {
   contextMenuPos?: { x: number; y: number } | null;
   /** 受控模式下的关闭回调(点外部 / Esc / 选中项)。 */
   onContextMenuOpenChange?: (open: boolean) => void;
-  /**
-   * 段头按钮模式的受控开合。范围菜单里的「侧边栏显示设置」入口用它把同一份
-   * 菜单打开;与 contextMenuPos 互斥——受控光标模式仍走上面那对 prop。
-   */
+  /** 段头按钮模式的受控开合，用于切换任务模式后关闭菜单。 */
   open?: boolean;
   onOpenChange?: (open: boolean) => void;
 }
@@ -811,7 +807,7 @@ export function SidebarFilterPopover({
       .map((choice) => t(`ccAgent.sidebar.hideOptions.${choice.key}`))
       .join(t('ccAgent.sidebar.taskInfoSummarySeparator')) || t('ccAgent.sidebar.filterSummaryNone');
 
-  // 段头按钮上的提醒点仍看全部收窄条件（含隐藏）；一级「筛选」行只数「只看哪些」的维度。
+  // 按钮的按下状态仍看全部收窄条件（含隐藏）；一级「筛选」行只数「只看哪些」的维度。
   const activeFilterCount = sidebarContentFilterCount(filter);
   const narrowFilterCount = activeFilterCount - activeHides.length;
   const filterSummary =
@@ -901,9 +897,6 @@ export function SidebarFilterPopover({
               )}
             >
               <SlidersHorizontal size={14} strokeWidth={2} />
-              {/* 收件箱里有筛选或隐藏生效时标一个点（段头会让这个按钮常驻显示）。
-                  查看已归档任务不再标点（2026-11-28 用户决定）：任务状态已经摆在菜单第一层。 */}
-              {inboxMode && activeFilterCount > 0 && <FilterReminderDot />}
             </button>
           </Tip>
         )}

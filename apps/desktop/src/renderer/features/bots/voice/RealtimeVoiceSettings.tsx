@@ -14,6 +14,7 @@ import {
   type RealtimeVoiceSelection,
 } from '@/../shared/realtimeVoice';
 import { getDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
+import { providerDisplayName } from '@/lib/providerDisplayName';
 
 /** Independent from TTS: changing call transport must not change message read-aloud. */
 export function RealtimeVoiceSettings({ botId, disabled, preview, previewDisabled, beforeLeaveRef, children }: {
@@ -162,7 +163,12 @@ export function RealtimeVoiceSettings({ botId, disabled, preview, previewDisable
                 { value: 'speech', label: t('bots.voiceMode.realtime.off') },
                 ...Array.from(visible.values(), (m) => ({
                   value: voiceModelKey(m),
-                  label: `${m.name} · ${m.providerName}`,
+                  label: [
+                    m.name,
+                    providerDisplayName({ id: m.providerId, name: m.providerName }, t),
+                  ]
+                    .filter(Boolean)
+                    .join(' · '),
                 })),
                 ...(selection && !selectedModel
                   ? [{ value: voiceModelKey(selection), label: selection.modelId, disabled: true }]
@@ -185,7 +191,7 @@ export function RealtimeVoiceSettings({ botId, disabled, preview, previewDisable
                 chooseRoute({
                   mode: 'realtime',
                   providerId: model.providerId,
-                  agent: model.agent,
+                  ...(model.agent ? { agent: model.agent } : {}),
                   modelId: model.id,
                   protocol,
                   voice: (model.systemVoices ?? realtimeSystemVoices(protocol, model.id))[0]?.id ?? '',

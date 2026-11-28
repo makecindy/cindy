@@ -230,7 +230,7 @@ function GoalEditor({
                 <VoiceInputButton {...voice.buttonProps} testId="edit-goal-voice" tipSide="top" />
               </div>
             </div>
-            <FieldVoiceInputNotice error={voice.lastError} speakerFiltered={voice.speakerFiltered} />
+            <FieldVoiceInputNotice {...voice.noticeProps} />
           </div>
           <GoalAdvancedLimits value={limits} onChange={setLimits} />
           {error && (

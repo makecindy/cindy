@@ -18,8 +18,8 @@ import { buildLocalProviderRoutingContext, deviceAvailableModels } from '../../.
 import { pluginEngineDescriptors } from '../../../desktop/src/main/maker-ipc/pluginEnginesIpc.js';
 import { withSendToSessionLock } from '../../../desktop/src/main/maker-ipc/sendToSessionLock.js';
 import { withSessionPermissionChange } from '../../../desktop/src/main/maker-ipc/sessionPermissionChange.js';
-import { getForSession, listAll } from '../../../desktop/src/main/worktree/WorktreeManager.js';
-import { resolveFreshSourceBranch } from '../../../desktop/src/main/worktree/freshBase.js';
+import { getForSession, listAll, revParseCommit } from '../../../desktop/src/main/worktree/WorktreeManager.js';
+import { resolveExplicitSourceRef, resolveFreshSourceBranch } from '../../../desktop/src/main/worktree/freshBase.js';
 import { isTaskActionRevoked } from '../../../desktop/src/main/maker-ipc/taskActionAuthorization.js';
 import { uiText } from '../../../desktop/src/main/uiText.js';
 import { throwIpcError } from '../../../desktop/src/main/utils/ipcValidate.js';
@@ -54,6 +54,44 @@ export function createHostSessionHandoff(ports: {
       }
     };
   }
+
+  async function validateSendTarget(id: string, assertOwner: () => void): Promise<SessionHandoffSendResult> {
+    assertOwner();
+    const [target] = await getDbClient().drizzle.select({
+      row: sessions,
+      buddyStatus: botProfiles.status,
+      buddyHiddenAt: botProfiles.hiddenAt,
+      buddyRole: botSessionLinks.role,
+    }).from(sessions)
+      .leftJoin(botSessionLinks, eq(botSessionLinks.sessionId, sessions.id))
+      .leftJoin(botProfiles, eq(botProfiles.id, botSessionLinks.botId))
+      .where(eq(sessions.id, id)).limit(1);
+    assertOwner();
+    const notFound = { ok: false as const, errorCode: 'NOT_FOUND', message: 'Session does not exist' };
+    if (!target || target.row.hiddenAt != null) return notFound;
+    const { row, buddyStatus, buddyHiddenAt, buddyRole } = target;
+    if (row.source === 'bot' || buddyRole != null) {
+      if (buddyRole === 'group' || !buddyStatus ||
+          !isBotVisibleRemotely({ status: buddyStatus, hiddenAt: buddyHiddenAt })) return notFound;
+      return { ok: false, errorCode: 'UNSUPPORTED_CAPABILITY',
+        message: uiText('bots.groupChat.errors.lifecycleUnavailable', 'The current server or computer does not support this action yet.') };
+    }
+    if (row.status === 'archived' || row.status === 'deleted')
+      return { ok: false, errorCode: row.status === 'archived' ? 'ARCHIVED' : 'DELETED', message: 'Session is no longer active' };
+    const agentKind = row.agentKind === 'cc' ? 'claude-code' : row.agentKind;
+    if (agentKind !== 'claude-code' && agentKind !== 'codex' && agentKind !== 'pi' && agentKind !== 'acp')
+      return { ok: false, errorCode: 'UNSUPPORTED_CAPABILITY', message: 'The target engine is not supported on this Host' };
+    try {
+      assertHostTaskExecutionSupported(row);
+      ports.assertProviderExecutionSupported(id, row.providerId);
+    } catch (error) {
+      if (!isIpcError(error) && !(error instanceof Error && error.message.startsWith('[UNSUPPORTED_CAPABILITY]'))) throw error;
+      return { ok: false, errorCode: 'UNSUPPORTED_CAPABILITY', message: (error as Error).message };
+    }
+    return { ok: true, agentKind, wakeKind: 'queued', targetTitle: row.title,
+      targetLastUserSendAt: row.userSendAt == null ? null : new Date(row.userSendAt).toISOString() };
+  }
+
   async function send(params: SessionHandoffSendParams): Promise<SessionHandoffSendResult> {
     const { targetSessionId: id, clientId, message, taskActionDeliveryGuard: guard } = params;
     const assertOwner = captureOwner(true);
@@ -63,51 +101,15 @@ export function createHostSessionHandoff(ports: {
     try {
       assertOwner();
       await withSessionPermissionChange(id, async () => undefined);
-      return await withSendToSessionLock(id, async () => {
-        assertOwner();
-        const [target] = await getDbClient().drizzle.select({
-          row: sessions,
-          buddyStatus: botProfiles.status,
-          buddyHiddenAt: botProfiles.hiddenAt,
-          buddyRole: botSessionLinks.role,
-        }).from(sessions)
-          .leftJoin(botSessionLinks, eq(botSessionLinks.sessionId, sessions.id))
-          .leftJoin(botProfiles, eq(botProfiles.id, botSessionLinks.botId))
-          .where(eq(sessions.id, id)).limit(1);
-        assertOwner();
-        const notFound = { ok: false as const, errorCode: 'NOT_FOUND', message: 'Session does not exist' };
-        if (!target || target.row.hiddenAt != null) return notFound;
-        const { row, buddyStatus, buddyHiddenAt, buddyRole } = target;
-        if (row.source === 'bot' || buddyRole != null) {
-          if (buddyRole === 'group' || !buddyStatus ||
-              !isBotVisibleRemotely({ status: buddyStatus, hiddenAt: buddyHiddenAt })) return notFound;
-          return { ok: false, errorCode: 'UNSUPPORTED_CAPABILITY',
-            message: uiText('bots.groupChat.errors.lifecycleUnavailable', 'The current server or computer does not support this action yet.') };
-        }
-        if (row.status === 'archived' || row.status === 'deleted')
-          return { ok: false, errorCode: row.status === 'archived' ? 'ARCHIVED' : 'DELETED', message: 'Session is no longer active' };
-        const agentKind = row.agentKind === 'cc' ? 'claude-code' : row.agentKind;
-        if (agentKind !== 'claude-code' && agentKind !== 'codex' && agentKind !== 'pi' && agentKind !== 'acp')
-          return { ok: false, errorCode: 'UNSUPPORTED_CAPABILITY', message: 'The target engine is not supported on this Host' };
-        try {
-          assertHostTaskExecutionSupported(row);
-          ports.assertProviderExecutionSupported(id, row.providerId);
-        } catch (error) {
-          if (!isIpcError(error) && !(error instanceof Error && error.message.startsWith('[UNSUPPORTED_CAPABILITY]'))) throw error;
-          return { ok: false, errorCode: 'UNSUPPORTED_CAPABILITY', message: (error as Error).message };
-        }
-        const queued = await ports.input.enqueue(id, { clientId, text: message }, {
-          ...params,
-          taskActionDeliveryGuard: Object.assign(async () => {
-            assertOwner();
-            await guard();
-            assertOwner();
-          }, { onSettled: guard.onSettled }),
-          onQueueAcceptanceStarted: () => { queueAcceptanceStarted = true; },
-        });
-        if (queued?.ok === false) return queued;
-        return { ok: true, agentKind, wakeKind: 'queued', targetTitle: row.title,
-          targetLastUserSendAt: row.userSendAt == null ? null : new Date(row.userSendAt).toISOString() };
+      return await ports.input.enqueue(id, { clientId, text: message }, {
+        ...params,
+        validateTarget: () => validateSendTarget(id, assertOwner),
+        taskActionDeliveryGuard: Object.assign(async () => {
+          assertOwner();
+          await guard();
+          assertOwner();
+        }, { onSettled: guard.onSettled }),
+        onQueueAcceptanceStarted: () => { queueAcceptanceStarted = true; },
       });
     } catch (error) {
       // Once the queue may contain this input, even the same error code can
@@ -159,14 +161,17 @@ export function createHostSessionHandoff(ports: {
       ports.assertProviderExecutionSupported('', execution.providerId);
       return execution;
     },
-    prepareWorktree: async (id, directory) => {
+    prepareWorktree: async (id, directory, baseRef) => {
       const assertOwner = captureOwner(true);
       const prepared = await prepareHandoffWorktree({
         getForSession, listAll, detectCwd: ports.worktree.detect, listBranches: ports.worktree.listBranches,
         suggestName: ports.worktree.suggestName, createId: () => id, resolveFreshSource: resolveFreshSourceBranch,
+        resolveExplicitSource: resolveExplicitSourceRef, resolveCommit: revParseCommit,
         createWorktree: request => ports.worktree.createWorktree(request, { awaitFullCheckout: true, assertWriteAllowed: assertOwner }),
-      }, undefined, directory);
-      return prepared.ok ? { ok: true, path: prepared.meta.path }
+      }, undefined, directory, baseRef ? { sourceRef: baseRef } : undefined);
+      return prepared.ok
+        ? { ok: true, path: prepared.meta.path, baseRef: prepared.meta.sourceBranch,
+          ...(prepared.staleBaseReason ? { staleBaseReason: prepared.staleBaseReason } : {}) }
         : { ok: false, errorCode: 'WORKTREE_UNAVAILABLE', message: prepared.message };
     },
     discardWorktree: (id, path, assertOwner) => ports.worktree.discardPrecreatedWorktree(id, path, {

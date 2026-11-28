@@ -1909,6 +1909,11 @@ interface ElectronAPI {
       sourceLanguage?: string;
       refinementEnabled?: boolean;
     }) => Promise<{ ok: true }>;
+    prewarmOnPress?: (payload?: {
+      sourceLanguage?: string;
+      refinementEnabled?: boolean;
+    }) => Promise<{ ok: true }>;
+    discardPressPrewarm?: () => Promise<{ ok: true }>;
     getBenchmarkFixtureAudio: () => Promise<
       { ok: true; path: string; wav: ArrayBuffer } | { ok: false }
     >;
@@ -1939,14 +1944,7 @@ interface ElectronAPI {
     getReadiness: () => Promise<{
       ok: boolean;
       serviceMode: VoiceInputServiceModeData;
-      provider:
-        | 'custom-realtime-asr'
-        | 'elevenlabs-scribe-realtime'
-        | 'openai-realtime-whisper'
-        | 'litellm-gpt-realtime-whisper'
-        | 'litellm-qwen3-asr-flash-realtime'
-        | 'litellm-volcengine-sauc-asr'
-        | 'litellm-batch';
+      provider: VoiceInputProviderKindData;
       providerModel: string;
       auth: 'api-key' | 'codex';
       settingsTab: 'api-keys' | 'connections' | 'providers';
@@ -1958,14 +1956,7 @@ interface ElectronAPI {
     getReadinessCached: () => {
       ok: boolean;
       serviceMode: VoiceInputServiceModeData;
-      provider:
-        | 'custom-realtime-asr'
-        | 'elevenlabs-scribe-realtime'
-        | 'openai-realtime-whisper'
-        | 'litellm-gpt-realtime-whisper'
-        | 'litellm-qwen3-asr-flash-realtime'
-        | 'litellm-volcengine-sauc-asr'
-        | 'litellm-batch';
+      provider: VoiceInputProviderKindData;
       providerModel: string;
       auth: 'api-key' | 'codex';
       settingsTab: 'api-keys' | 'connections' | 'providers';
@@ -2609,6 +2600,30 @@ interface ElectronAPI {
 
   // ── 伙伴自有 IM 机器人连接(Telegram / 飞书, 伙伴设置「消息平台」页)──
   botImConnection: {
+    /** 个人 bot 的「谁来回复」(可选：旧 preload 没有)。 */
+    getPersonalReplyTarget?: (payload: {
+      channel: import('../shared/botImConnection').PersonalReplyTargetChannel;
+    }) => Promise<import('../shared/botImConnection').PersonalReplyTargetState>;
+    /** 切换前有排队消息或运行中的任务 → PRECONDITION_FAILED；伙伴不可用 → NOT_FOUND。 */
+    setPersonalReplyTarget?: (payload: {
+      channel: import('../shared/botImConnection').PersonalReplyTargetChannel;
+      companionBotId: string | null;
+    }) => Promise<import('../shared/botImConnection').PersonalReplyTargetState>;
+    onPersonalReplyTargetChanged?: (
+      listener: (state: import('../shared/botImConnection').PersonalReplyTargetState) => void,
+    ) => () => void;
+    /** 个人机器人的项目选择(可选：旧 preload 没有)。 */
+    getPersonalChannel?: (payload: {
+      channel: import('../shared/botImConnection').PersonalChannelState['channel'];
+    }) => Promise<import('../shared/botImConnection').PersonalChannelState>;
+    /** 只能选侧栏里的本机项目；不认识的目录 → NOT_FOUND。 */
+    setPersonalChannelProject?: (payload: {
+      channel: import('../shared/botImConnection').PersonalChannelState['channel'];
+      projectDir: string | null;
+    }) => Promise<import('../shared/botImConnection').PersonalChannelState>;
+    onPersonalChannelChanged?: (
+      listener: (state: import('../shared/botImConnection').PersonalChannelState) => void,
+    ) => () => void;
     getIMessageConfig?: (payload: { id: string }) => Promise<import('../shared/botImConnection').BotIMessageConfig>;
     updateIMessageConfig?: (payload: { id: string; config: import('../shared/botImConnection').BotIMessageUpdateInput }) => Promise<import('../shared/botImConnection').BotImConnectionListPayload>;
 
@@ -2737,7 +2752,7 @@ interface ElectronAPI {
     cancelAuthorization: () => Promise<{ ok: true }>;
     unbind: () => Promise<{ ok: true }>;
     getChannelSettings: () => Promise<WechatChannelSettingsState>;
-    setCompanion: (botId: string | null) => Promise<WechatChannelSettingsState>;
+    setCompanion: (botId: string | null, options?: { allowReassign?: boolean }) => Promise<WechatChannelSettingsState>;
     onChannelSettingsChange: (callback: (state: WechatChannelSettingsState) => void) => () => void;
     chooseWorkingDirectory: () => Promise<{
       canceled: boolean;
@@ -4506,7 +4521,7 @@ interface ElectronAPI {
     openLink: (deviceId: string) => Promise<{ appVersion: string; allowlistHash: string }>;
     closeLink: (deviceId: string) => Promise<{ ok: true }>;
     /** 远程调用被控端 allowlist 内 channel;成功拿返回值,失败 reject 带 code 的 Error */
-    invoke: (deviceId: string, channel: string, args: unknown[], scheduling?: { background?: boolean }) => Promise<unknown>;
+    invoke: (deviceId: string, channel: string, args: unknown[], scheduling?: { background?: boolean; requireStructuredHistoryMiss?: boolean }) => Promise<unknown>;
     /** 控制端:订阅被控端某 topic 的变更推送(push 驱动侧边栏 / 会话视图) */
     subscribe: (deviceId: string, topics: string[]) => Promise<{ ok: true }>;
     /** 控制端:取消订阅某 topic */
@@ -4812,6 +4827,7 @@ interface ElectronAPI {
   worktreeCheckout: (req: import('../shared/worktreeCheckout').CheckoutRequest) => Promise<import('../shared/worktreeCheckout').CheckoutReply>;
   worktreeBranchSyncStatus: (req: import('../shared/worktreeBranchSync').BranchSyncRequest) => Promise<import('../shared/worktreeBranchSync').BranchSyncStatus>;
   worktreeSyncBranch: (req: import('../shared/worktreeBranchSync').BranchSyncRequest) => Promise<import('../shared/worktreeBranchSync').BranchSyncReply>;
+  worktreeWorkspaceClutterSummary?: (req: import('../shared/worktreeWorkspaceClutter').WorkspaceClutterRequest) => Promise<import('../shared/worktreeWorkspaceClutter').WorkspaceClutterSummary>;
   worktreeListBranches: (req: {
     baseRepo: string;
   }) => Promise<import('@/lib/worktree.types').ListBranchesResp>;
@@ -4855,6 +4871,12 @@ interface ElectronAPI {
     /** Official X assignment, compared with the caller's last observed value. */
     setXCompanion: (botId: string | null, expectedBotId: string | null) =>
       Promise<{ hook: import('../shared/hookControlIpc').SlackHookView }>;
+    /** 官方渠道交给哪位伙伴(可选：旧 preload 没有), 与调用方上次看到的值比较后写入。 */
+    setProviderCompanion?: (
+      provider: 'slack' | 'telegram' | 'feishu' | 'discord' | 'x',
+      botId: string | null,
+      expectedBotId: string | null,
+    ) => Promise<{ hook: import('../shared/hookControlIpc').SlackHookView }>;
     setProviderDefaultWorkspace: (
       provider: 'telegram' | 'x' | 'feishu' | 'discord',
       alias: string | null,
@@ -5084,6 +5106,7 @@ interface ElectronAPI {
     push: (params: {
       sessionId: string;
       confirmForce?: import('@/lib/gitReview.types').ReviewPushConfirmForce;
+      syncBeforePush?: boolean;
     }) => Promise<import('@/lib/gitReview.types').ReviewPushResult>;
   };
 
@@ -7187,18 +7210,27 @@ interface ElectronAPI {
       channel?: ImDefaultSettingsChannel,
     ) => Promise<ImDefaultSettingsState>;
     imDefaultSettingsReset: (channel?: ImDefaultSettingsChannel) => Promise<ImDefaultSettingsState>;
-    /** 个人飞书 / Lark 机器人所在的群与各群单独的项目、模型、权限。 */
-    feishuGroupSettingsList: (options?: {
-      /** 用户点了「刷新」：不复用 30 秒内的群名单。 */
-      refresh?: boolean;
-      /** 只给收起时的群数与头像用：不解析项目模型（`project.config` 都是 null）。 */
-      summary?: boolean;
-    }) => Promise<import('../shared/feishuGroupSettings').FeishuGroupSettingsList>;
-    feishuGroupSettingsSet: (
+    /** 个人 IM 机器人的「群聊」总表: 所在的群与各群单独的项目、模型、权限、群成员也能提问。 */
+    imChatSettingsList: (
+      channel: import('../shared/imChatSettings').ImChatSettingsChannel,
+      options?: {
+        /** 用户点了「刷新」：不复用 30 秒内的群名单。 */
+        refresh?: boolean;
+        /** 只给收起时的群数与头像用：不解析项目模型（`project.config` 都是 null）。 */
+        summary?: boolean;
+      },
+    ) => Promise<import('../shared/imChatSettings').ImChatSettingsList>;
+    imChatSettingsSet: (
+      channel: import('../shared/imChatSettings').ImChatSettingsChannel,
       chatId: string,
-      patch: import('../shared/feishuGroupSettings').FeishuGroupSettingsPatch,
+      patch: import('../shared/imChatSettings').ImChatSettingsPatch,
       name: string | null,
-    ) => Promise<import('../shared/feishuGroupSettings').FeishuGroupSettingsView>;
+    ) => Promise<import('../shared/imChatSettings').ImChatSettingsView>;
+    imChatSettingsResumeMembers: (
+      channel: import('../shared/imChatSettings').ImChatSettingsChannel,
+      chatId: string,
+      name: string | null,
+    ) => Promise<import('../shared/imChatSettings').ImChatSettingsView>;
 
     /** 子代理模型覆盖。null 表示不注入覆盖，仅对新建 agent 会话生效。 */
     subagentModelSettingsGet: () => Promise<SubagentModelSettingsState>;

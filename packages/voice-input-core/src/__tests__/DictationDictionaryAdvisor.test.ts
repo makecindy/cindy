@@ -274,4 +274,51 @@ describe('DictationDictionaryAdvisor', () => {
 
     expect(getDictationDictionaryAdviceSkipReason(input)).toBeNull();
   });
+
+  it('does not falsely mark two distant small edits as large_rewrite', async () => {
+    const { advisor, client } = makeAdvisor({
+      actions: [
+        {
+          action: 'add_entry',
+          term: 'Notion',
+          aliases: ['motion'],
+          type: 'product_name',
+          confidence: 'high',
+        },
+        {
+          action: 'add_entry',
+          term: 'PostgreSQL',
+          aliases: ['post grass'],
+          type: 'technical_term',
+          confidence: 'high',
+        },
+      ],
+    });
+
+    const input: DictationDictionaryAdviceInput = {
+      beforeText: 'motion 的配置请先保留，完成更新以后我们还需要依次验证界面、日志、网络连接和缓存，最后检查 post grass。',
+      afterText: 'Notion 的配置请先保留，完成更新以后我们还需要依次验证界面、日志、网络连接和缓存，最后检查 PostgreSQL。',
+    };
+
+    expect(getDictationDictionaryAdviceSkipReason(input)).toBeNull();
+    const result = await advisor.advise(input);
+
+    expect(client.captured).not.toBeNull();
+    expect(result.actions.map((action) => action.term)).toEqual(['Notion', 'PostgreSQL']);
+  });
+
+  it('still skips unrelated English broad rewrites and oversized single replacements', () => {
+    expect(getDictationDictionaryAdviceSkipReason({
+      beforeText: 'Please inspect the deployment pipeline and confirm every environment variable is configured properly.',
+      afterText: 'Actually cancel that request and schedule a review session tomorrow afternoon for the Q3 roadmap.',
+    })).toBe('large_rewrite');
+
+    const unchangedPrefix = '保留这段前缀内容，';
+    const longBefore = `${unchangedPrefix}${'旧段落内容需要被整段替换掉'.repeat(18)}`;
+    const longAfter = `${unchangedPrefix}${'全新的业务背景说明与排期安排'.repeat(18)}`;
+    expect(getDictationDictionaryAdviceSkipReason({
+      beforeText: longBefore,
+      afterText: longAfter,
+    })).toBe('large_rewrite');
+  });
 });
