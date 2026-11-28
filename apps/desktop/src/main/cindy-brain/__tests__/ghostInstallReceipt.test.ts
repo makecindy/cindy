@@ -197,6 +197,21 @@ describe('GhostInstallReceiptStore cleanup', () => {
     });
   }
 
+  // Unit: old manifests preserved unknown declarations. Reading the actual
+  // store cannot infer approval from a historical declaration or changed port.
+  it('retains old approved plugin receipts and requires an exact local service grant', async () => {
+    const base = createSetupReceipt();
+    const url = 'http://127.0.0.1:41237/status';
+    const manifest = { ...base.manifest, mainView: { html: 'fallback.html', localServiceUrl: url } };
+    for (const grant of [undefined, 'http://127.0.0.1:41238/status', url]) {
+      await store.write(createGhostInstallReceipt({ ...base, manifest, approvedLocalServiceUrl: grant }));
+      const result = await store.read(base.id);
+      expect(result).toMatchObject({ state: 'approved', receipt: { enabled: true } });
+      if (result.state !== 'approved') throw new Error('missing receipt');
+      expect(result.receipt.approvedLocalServiceUrl).toBe(grant === url ? url : undefined);
+    }
+  });
+
   // Unit, #9801 scope reduction: every Host approval lookup reopens the receipt,
   // including two lookups in one synchronous segment and queued revocation.
   it('reads fresh receipt bytes throughout a host call without an authorization cache', async () => {

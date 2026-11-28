@@ -243,6 +243,7 @@
       "panelTab": "Panel “{{title}}” · opens inside the Plugins page",
       "mainView": "Can add a “{{title}}” entry to Cindy's sidebar",
       "mainViewDetail": "Opening it displays the main view in the plugin sandbox and does not grant file, network, or credential access.",
+      "localServicePage": "Embed a local service page",
       "code": "Executable code",
       "codeDetail": "Runs in an isolated sandbox with no access to your files or network.",
       "resident": "Always-on (starts when enabled, keeps a background process even when idle)",

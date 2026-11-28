@@ -18,6 +18,7 @@ import {
   confirmedFileOpenerExtensions,
   confirmedTaskCapability,
   confirmedUiCapability,
+  confirmedLocalServiceUrl,
   type GhostInstallConsentPrompt,
   isGhostInstallConsentRequiredError,
   obtainGhostInstallConsent,
@@ -617,4 +618,30 @@ it('records companions consent only when that capability was shown', async () =>
   expect(confirmedTaskCapability(decision, before, next, 'companions')).toBe(true);
   expect(confirmedTaskCapability(decision, before, next, 'observe')).toBeUndefined();
   expect(confirmedTaskCapability({ mode: 'unprompted' }, before, next, 'companions')).toBeUndefined();
+});
+
+// Unit: an older manifest could already contain this URL. It grants nothing
+// until the current Desktop dialog shows the exact value for this package.
+it('confirms local service entries only through the current local dialog', async () => {
+  const first = 'http://127.0.0.1:41237/status';
+  const second = 'http://127.0.0.1:41238/status';
+  const next: GhostManifest = { ...manifest(['api.weather.test']), mainView: { html: 'fallback.html', localServiceUrl: first } };
+  const old = installed(next);
+  const localPrompt = Object.assign(vi.fn<GhostInstallConsentPrompt>(async () => true), {
+    localServicePageApproval: true as const,
+  });
+  const policy = { mode: 'prompt', prompt: localPrompt, initiator: 'user', origin: 'local-file' } as const;
+  const decision = await obtainGhostInstallConsent(policy, old, next, reviewedDigest);
+  expect(localPrompt.mock.calls[0][0].facts).toMatchObject({
+    kind: 'update', added: [{ key: 'main-view:local-service', detail: first }],
+  });
+  expect(() => assertGhostInstallConsent(decision, old, next, reviewedDigest)).not.toThrow();
+  expect(confirmedLocalServiceUrl(decision, old, next)).toBe(first);
+  const legacy = await obtainGhostInstallConsent({ ...policy, prompt: userPrompt(true) }, old, next, reviewedDigest);
+  expect(confirmedLocalServiceUrl(legacy, old, next)).toBeUndefined();
+  const granted = { ...old, approvedLocalServiceUrl: first };
+  expect(await obtainGhostInstallConsent({ mode: 'automatic' }, granted, next, reviewedDigest)).toEqual({ mode: 'unprompted' });
+  const changed = { ...next, mainView: { html: 'fallback.html', localServiceUrl: second } };
+  await expect(obtainGhostInstallConsent({ mode: 'automatic' }, granted, changed, reviewedDigest))
+    .rejects.toSatisfy(isGhostInstallConsentRequiredError);
 });

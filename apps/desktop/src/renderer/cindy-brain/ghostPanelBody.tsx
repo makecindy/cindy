@@ -15,9 +15,10 @@ import {
 import { createLogger } from '@/lib/logger';
 import { toast } from '@/lib/toast';
 
-import { GHOST_SCHEME, ghostInstallApprovalToken, type InstalledGhost } from '../../shared/ghost';
+import { GHOST_SCHEME, approvedGhostLocalServicePageUrl, ghostInstallApprovalToken, type InstalledGhost } from '../../shared/ghost';
+import { GHOST_LOCAL_SERVICE_PARTITION } from '../../shared/ghostLocalServicePage';
 import { installedGhostStoragePart, installedGhostWebviewPartitionClaim } from '../../shared/pluginIdentity';
-import { buildGhostMainViewThemeCss, createGhostThemeInjector, observeHostTheme } from './ghostPanelTheme';
+import { buildGhostThemeVarsBlock, buildGhostMainViewThemeCss, createGhostThemeInjector, observeHostTheme } from './ghostPanelTheme';
 import {
   clearGhostUnread,
   useElementVisible,
@@ -200,13 +201,15 @@ export function pickGhostPanelMediaUri(
  * webview 崩溃 = 本地错误接管态(重载 = 原地重挂载,不经主机)。
  */
 export function GhostWebviewBody({
+  useMainViewLocalService = false,
   ghost,
   html,
   query,
   wallpaperCanvas = false,
   onHostNode,
 }: {
-  ghost: Pick<InstalledGhost, 'manifest' | 'dir' | 'namespace'> & Partial<Pick<InstalledGhost, 'approval'>>;
+  ghost: Pick<InstalledGhost, 'manifest' | 'dir' | 'namespace'> & Partial<Pick<InstalledGhost, 'approval' | 'approvedLocalServiceUrl'>>;
+  useMainViewLocalService?: boolean;
   html: string | undefined;
   /**
    * 附在入口地址后的查询串(不含 `?`),如任务页的 `session=<id>`。协议供片与附加闸
@@ -221,7 +224,10 @@ export function GhostWebviewBody({
   const instanceId = installedGhostStoragePart(ghost);
   const approvalToken = ghostInstallApprovalToken(ghost.approval);
   const [crashed, setCrashed] = useState(false);
-  const partitionClaim = installedGhostWebviewPartitionClaim(ghost);
+  const localServiceUrl = useMainViewLocalService ? approvedGhostLocalServicePageUrl(ghost) : undefined;
+  const partitionClaim = localServiceUrl
+    ? GHOST_LOCAL_SERVICE_PARTITION + instanceId
+    : installedGhostWebviewPartitionClaim(ghost);
   const [generation, setGeneration] = useState(0);
   const [mediaMenu, setMediaMenu] = useState<GhostPanelMediaMenuState | null>(null);
 
@@ -264,13 +270,15 @@ export function GhostWebviewBody({
     if (!host) return;
     const webview = document.createElement('webview') as WebviewTag;
     webview.setAttribute('partition', partitionClaim);
-    webview.setAttribute('src', `${GHOST_SCHEME}://${manifest.id}/${html}${query ? `?${query}` : ''}`);
+    webview.setAttribute('src', localServiceUrl ?? `${GHOST_SCHEME}://${manifest.id}/${html}${query ? `?${query}` : ''}`);
     webview.setAttribute('style', 'display:flex;flex:1 1 auto;width:100%;height:100%;');
     let disposed = false;
     let themeTimer: ReturnType<typeof setTimeout> | null = null;
     // 状态机见 createGhostThemeInjector:换肤误触发去重、dom-ready(含拖动
     // 换位触发的 Electron 整页重载)无条件重灌,规则都封在里面(带单测)。
-    const injector = createGhostThemeInjector(webview, wallpaperCanvas ? buildGhostMainViewThemeCss : undefined);
+    const buildThemeCss = localServiceUrl ? buildGhostThemeVarsBlock
+      : wallpaperCanvas ? buildGhostMainViewThemeCss : undefined;
+    const injector = createGhostThemeInjector(webview, buildThemeCss);
     // 突发属性变动(换肤瞬间多个属性接连翻动)合并成一次注入。
     const scheduleInjectTheme = () => {
       if (themeTimer !== null) return;
@@ -320,7 +328,7 @@ export function GhostWebviewBody({
     webview.addEventListener('dom-ready', onDomReady);
     webview.addEventListener('render-process-gone', onGone);
     webview.addEventListener('did-fail-load', onFailLoad);
-    webview.addEventListener('context-menu', onContextMenu);
+    if (!localServiceUrl) webview.addEventListener('context-menu', onContextMenu);
     const unobserveTheme = observeHostTheme(scheduleInjectTheme);
     host.appendChild(webview);
     // 每次创建 / 销毁各一条:只记插件实例 id、存活毫秒与原因类别,不带 URL 与页面内容。
@@ -345,7 +353,7 @@ export function GhostWebviewBody({
     };
     // version 入依赖:原位更新换版后 webview 重挂载,面板立刻跑新代码
     // (供片协议直读安装目录,不重挂会一直渲染旧版缓存的页面)。
-  }, [crashed, generation, librarySwapping, instanceId, approvalToken, partitionClaim, manifest.id, manifest.version, manifest.resolvedLocale, html, query, wallpaperCanvas]);
+  }, [crashed, generation, librarySwapping, instanceId, approvalToken, localServiceUrl, partitionClaim, manifest.id, manifest.version, manifest.resolvedLocale, html, query, wallpaperCanvas]);
 
   if (crashed) {
     return (

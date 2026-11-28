@@ -4,6 +4,7 @@ import { act, fireEvent, render, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('../ghostPanelTheme', () => ({
+  buildGhostThemeVarsBlock: () => ':root { color-scheme: dark; }',
   createGhostThemeInjector: () => ({
     inject: vi.fn(),
     onDomReady: vi.fn(),
@@ -195,4 +196,22 @@ describe('GhostWebviewBody', () => {
     expect(webview.getAttribute('partition')).toBe('cindy-ghost-_ns__acme__helper');
     expect(webview.getAttribute('src')).toBe('cindy-ghost://helper/main-view.html');
   });
+});
+
+// Unit: switching receipt approval selects a separate guest. The bundled
+// page and its task query remain available when the grant is absent.
+it('uses the local service entry only in an approved main view', () => {
+  const url = 'http://127.0.0.1:41237/status';
+  const ghost = { dir: '/plugins/workspace', approval: { state: 'approved' as const, revision: 'a' },
+    manifest: { ...manifest, mainView: { html: 'main-view.html', localServiceUrl: url } } };
+  const { container, rerender } = render(<GhostWebviewBody ghost={ghost} html="main-view.html" useMainViewLocalService />);
+  expect(container.querySelector('webview')?.getAttribute('src')).toBe('cindy-ghost://workspace/main-view.html');
+  const approved = { ...ghost, approvedLocalServiceUrl: url };
+  rerender(<GhostWebviewBody ghost={approved} html="main-view.html" useMainViewLocalService query="session=fixture" />);
+  const guest = container.querySelector('webview');
+  expect(guest?.getAttribute('src')).toBe(url);
+  expect(guest?.getAttribute('partition')).toBe('cindy-plugin-local-service:workspace');
+  expect(guest?.hasAttribute('preload')).toBe(false);
+  rerender(<GhostWebviewBody ghost={approved} html="task-view.html" query="session=fixture" />);
+  expect(container.querySelector('webview')?.getAttribute('src')).toBe('cindy-ghost://workspace/task-view.html?session=fixture');
 });

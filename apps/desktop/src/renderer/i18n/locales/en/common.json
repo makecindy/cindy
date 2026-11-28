@@ -8859,6 +8859,7 @@
         "panelTab": "Panel “{{title}}” · opens inside the Plugins page",
         "mainView": "Can add a “{{title}}” entry to Cindy's left navigation",
         "mainViewDetail": "Opening it displays the main view in the plugin sandbox and does not grant file, network, or credential access.",
+        "localServicePage": "Embed a local service page",
         "taskView": "Task page “{{title}}” · opens in the task's sidebar",
         "taskViewDetail": "The tab follows the task and opens in the plugin sandbox; it does not grant file, network, or credential access.",
         "code": "Executable code",

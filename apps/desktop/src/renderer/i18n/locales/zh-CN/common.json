@@ -8816,6 +8816,7 @@
         "panelTab": "面板「{{title}}」· 插件页内打开",
         "mainView": "可在 Cindy 左侧导航添加“{{title}}”入口",
         "mainViewDetail": "点击后将在插件沙箱中打开主视图，不会因此获得文件、网络或凭证访问权限。",
+        "localServicePage": "嵌入本机服务页面",
         "taskView": "任务页「{{title}}」· 在任务的侧边栏打开",
         "taskViewDetail": "页签跟着任务切换，在插件沙箱中打开，不会因此获得文件、网络或凭证访问权限。",
         "code": "可执行代码",

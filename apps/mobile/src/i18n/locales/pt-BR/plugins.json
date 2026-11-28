@@ -245,6 +245,7 @@
       "panelTab": "Painel \"{{title}}\" · abre dentro da página Plugins",
       "mainView": "Pode adicionar uma entrada “{{title}}” à barra lateral da Cindy",
       "mainViewDetail": "Ao abri-la, a visualização principal é exibida na sandbox do plugin, sem conceder acesso a arquivos, rede ou credenciais.",
+      "localServicePage": "Incorporar uma página de serviço local",
       "code": "Código executável",
       "codeDetail": "É executado em uma sandbox isolada, sem acesso aos seus arquivos ou à rede.",
       "resident": "Sempre ativo (inicia ao ser ativado e mantém um processo em segundo plano mesmo quando ocioso)",

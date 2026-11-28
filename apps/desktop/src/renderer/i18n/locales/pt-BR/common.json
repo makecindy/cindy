@@ -8933,6 +8933,7 @@
         "panelTab": "Painel \"{{title}}\" · abre dentro da página Plugins",
         "mainView": "Pode adicionar uma entrada “{{title}}” à navegação à esquerda do Cindy",
         "mainViewDetail": "Ao abri-la, a visualização principal é exibida na sandbox do plugin, sem conceder acesso a arquivos, rede ou credenciais.",
+        "localServicePage": "Incorporar uma página de serviço local",
         "taskView": "Página da tarefa “{{title}}” · abre na barra lateral da tarefa",
         "taskViewDetail": "A aba acompanha a tarefa e abre na sandbox do plugin; ela não concede acesso a arquivos, rede ou credenciais.",
         "code": "Código executável",

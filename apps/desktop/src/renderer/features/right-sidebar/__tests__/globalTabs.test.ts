@@ -222,6 +222,14 @@ describe('globalTabs', () => {
     // 同一 html 的 panel 页签等于主视图那一份。
     const same = ghost({ mainView: { html: 'panel.html' } });
     expect(tabShowsPluginView({ instanceId: 'gamma', view: 'panel' }, same)).toBe(true);
+    // Approving a live entry separates it from the bundled panel even if the
+    // fallback HTML is shared. The old tab stays a bundled panel.
+    const localServiceUrl = 'http://127.0.0.1:41237/status';
+    const embedded = ghost({ mainView: { html: 'panel.html', localServiceUrl } });
+    expect(tabShowsPluginView({ instanceId: 'gamma', view: 'panel' }, embedded)).toBe(true);
+    expect(tabShowsPluginView({ instanceId: 'gamma', view: 'panel' }, {
+      ...embedded, approvedLocalServiceUrl: localServiceUrl, approval: { state: 'approved', revision: 'local' },
+    })).toBe(false);
     // 旧数据没有 view:按插件声明推导(有停靠面板 → panel)。
     expect(effectivePluginView({ instanceId: 'gamma' }, g)).toBe('panel');
     expect(effectivePluginView({ instanceId: 'gamma' }, ghost({ panel: undefined }))).toBe('main');

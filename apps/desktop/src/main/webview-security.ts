@@ -25,7 +25,7 @@
 import path from 'node:path';
 import { installNativeTrackpad } from './nativeTrackpad';
 
-import { app, session, type BrowserWindow, type Session, type WebContents } from 'electron';
+import { app, session, BrowserWindow, type Session, type WebContents } from 'electron';
 import { CURRENT_APP_ID } from '../shared/brandRegion';
 
 import {
@@ -48,8 +48,12 @@ import {
   handleGhostPreviewNavigation,
   noteGhostUserGesture,
   resolveGhostWebviewAttach,
+  resolveGhostLocalServiceAttach,
   attachGhostPageModelPicker,
 } from './cindy-brain/index.js';
+import { attachGhostLocalServiceGuest, guardGhostLocalServiceSession } from './cindy-brain/ghostLocalServiceGuests.js';
+import { GHOST_LOCAL_SERVICE_PARTITION } from '../shared/ghostLocalServicePage.js';
+import { isTrustedAppRendererWindow } from './security/trustedAppRenderer.js';
 import { classifyGhostPanelNavigation } from './cindy-brain/previewGate.js';
 import { ghostMediaHandoverDragScript, ghostMediaHandoverTargetTracker } from './cindy-brain/ghostMediaHandoverTargetTracker.js';
 import { registerGhostWebContents } from './cindy-brain/runtime/electronSandboxAdapter.js';
@@ -989,11 +993,42 @@ export function installWebviewHardener(): void {
     // 不装浏览器的 popup 路由与快捷键转发)。
     let pendingGhostAttach: ReturnType<typeof authorizeGhostWebviewAttach> = null;
     let pendingCaptchaAttach = false;
+    let pendingLocalService: {
+      instanceId: string;
+      guestSession: Session;
+      view: NonNullable<ReturnType<typeof resolveGhostLocalServiceAttach>>;
+    } | null = null;
     let pendingRemoteSettings: ReturnType<typeof resolveRemoteSettingsAttach> = null;
     contents.on('will-attach-webview', (e, webPreferences, params) => {
       pendingCaptchaAttach = false;
       pendingRemoteSettings = null;
       pendingGhostAttach = null;
+      pendingLocalService = null;
+      if (params.partition?.startsWith(GHOST_LOCAL_SERVICE_PARTITION)) {
+        const instanceId = params.partition.slice(GHOST_LOCAL_SERVICE_PARTITION.length);
+        const src = params.src;
+        try {
+          const view = isTrustedAppRendererWindow(BrowserWindow.fromWebContents(contents)) &&
+            resolveGhostLocalServiceAttach(instanceId, src);
+          if (!view) { e.preventDefault(); return; }
+          const guestSession = session.fromPartition(view.partition);
+          guardGhostLocalServiceSession(guestSession, view.origin);
+          params.partition = view.partition;
+          webPreferences.partition = view.partition;
+          applyGhostWebviewHardening(webPreferences as unknown as Record<string, unknown>, params);
+          delete params.preload;
+          delete webPreferences.enableBlinkFeatures;
+          webPreferences.experimentalFeatures = false;
+          webPreferences.navigateOnDragDrop = false;
+          webPreferences.devTools = false;
+          webPreferences.spellcheck = false;
+          delete webPreferences.disableBlinkFeatures;
+          pendingLocalService = { instanceId, guestSession, view };
+        } catch {
+          e.preventDefault();
+        }
+        return;
+      }
       if (typeof params.partition === 'string' && params.partition.startsWith(REMOTE_PLUGIN_SETTINGS_PARTITION)) {
         const view = resolveRemoteSettingsAttach(contents, params.partition, params.src);
         if (!view) { e.preventDefault(); return; }
@@ -1056,6 +1091,14 @@ export function installWebviewHardener(): void {
       );
     });
     contents.on('did-attach-webview', (_e, guestContents) => {
+      if (pendingLocalService) {
+        const { instanceId, guestSession, view } = pendingLocalService;
+        pendingLocalService = null;
+        if (guestContents.session !== guestSession) { guestContents.close(); return; }
+        registerGhostWebContents(guestContents.id);
+        attachGhostLocalServiceGuest(guestContents, instanceId, view.origin, view.isCurrent);
+        return;
+      }
       if (pendingRemoteSettings) {
         const view = pendingRemoteSettings;
         pendingRemoteSettings = null;

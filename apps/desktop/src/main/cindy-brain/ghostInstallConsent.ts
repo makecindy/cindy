@@ -10,7 +10,7 @@
  * 每条安装路径都必须显式交出一个策略：用户或 Agent 发起的安装走 `prompt`，后台自动
  * 更新走 `automatic`（需要确认就跳过，不替用户点头），只有服务端默认安装走 `exempt`。
  */
-import { pluginHasToolUi } from '@cindy/plugin-protocol';
+import { ghostLocalServicePageUrl, pluginHasToolUi } from '@cindy/plugin-protocol';
 import {
   declaredAutoApproveTools,
   declaredGhostCindyModelActions,
@@ -32,6 +32,7 @@ import {
   type GhostInstallConsentOrigin,
   type GhostInstallConsentRequest,
 } from '../../shared/ghostInstallConsent.js';
+import { GHOST_LOCAL_SERVICE_PERMISSION } from '../../shared/ghostLocalServicePage.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
 
 /** 向用户展示确认并等待回答；true = 用户确认安装。 */
@@ -40,6 +41,8 @@ export type GhostInstallConsentPrompt = ((
 ) => Promise<boolean>) & {
   /** Main-owned negotiation: legacy remote controllers cannot approve page capabilities. */
   uiCapabilityApproval?: boolean;
+  /** Only a current local Desktop install dialog can approve embedded pages. */
+  localServicePageApproval?: true;
 };
 
 export type GhostInstallConsentPolicy =
@@ -61,7 +64,7 @@ export type GhostInstallConsentPolicy =
 
 /** 求得的确认结论；随安装请求一路交到安装锁内复核。 */
 export type GhostInstallConsentDecision =
-  | { mode: 'confirmed'; key: string; forced?: true; uiCapabilityUnsupported?: true }
+  | { mode: 'confirmed'; key: string; forced?: true; uiCapabilityUnsupported?: true; localServicePageApproval?: true }
   /** 求确认时判定无需确认；落位前必须仍然无需确认。 */
   | { mode: 'unprompted' }
   | { mode: 'exempt'; reason: 'server-default-install' };
@@ -235,6 +238,7 @@ export async function obtainGhostInstallConsent(
   }
   return {
     mode: 'confirmed',
+    ...(policy.prompt.localServicePageApproval === true ? { localServicePageApproval: true as const } : {}),
     ...(policy.prompt.uiCapabilityApproval === false ? { uiCapabilityUnsupported: true as const } : {}),
     ...(forced ? { forced: true as const } : {}),
     key: ghostInstallConsentKey(
@@ -287,4 +291,17 @@ export function confirmedUiCapability(decision: GhostInstallConsentDecision, ins
   const facts = evaluateGhostInstallConsent(installed, next);
   const shown = facts?.kind === 'install' ? facts.permissions : facts?.added;
   return shown?.some(item => item.key === 'ui:pages') ? decision.uiCapabilityUnsupported !== true : undefined;
+}
+
+/** Capture only the entry shown in the digest-bound local consent. */
+export function confirmedLocalServiceUrl(
+  decision: GhostInstallConsentDecision,
+  installed: InstalledGhost | null | undefined,
+  next: GhostManifest,
+): string | undefined {
+  if (decision.mode !== 'confirmed' || decision.localServicePageApproval !== true) return undefined;
+  const facts = evaluateGhostInstallConsent(installed, next, decision.forced === true);
+  const shown = facts?.kind === 'install' ? facts.permissions : facts?.added;
+  return shown?.some(item => item.key === GHOST_LOCAL_SERVICE_PERMISSION)
+    ? ghostLocalServicePageUrl(next.mainView?.localServiceUrl) : undefined;
 }

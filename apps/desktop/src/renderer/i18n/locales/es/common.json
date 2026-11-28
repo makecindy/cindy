@@ -8933,6 +8933,7 @@
         "panelTab": "Panel \"{{title}}\" · se abre dentro de la página de complementos",
         "mainView": "Puede agregar una entrada “{{title}}” a la navegación izquierda de Cindy",
         "mainViewDetail": "Al abrirlo, se muestra la vista principal en el entorno aislado del complemento y no otorga acceso a archivos, redes ni credenciales.",
+        "localServicePage": "Integrar una página de un servicio local",
         "taskView": "Página de tarea “{{title}}” · se abre en la barra lateral de la tarea",
         "taskViewDetail": "La pestaña sigue a la tarea y se abre en el entorno aislado del complemento; no otorga acceso a archivos, redes ni credenciales.",
         "code": "Código ejecutable",

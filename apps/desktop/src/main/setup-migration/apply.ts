@@ -13,6 +13,7 @@
  */
 import type { SetupSnapshot, SetupSnapshotMarketSource } from '@cindy/device-link';
 
+import { GHOST_LOCAL_SERVICE_PERMISSION } from '../../shared/ghostLocalServicePage.js';
 import type { GhostManifest } from '../../shared/ghost.js';
 import {
   ghostInstallConsentKey,
@@ -167,11 +168,15 @@ export async function applySetupPlan(
       const detail = await deps.pluginDetail(item.pluginId);
       const expected = approved.get(item.key);
       const prompt: GhostInstallConsentPrompt = async (request) => {
-        if (expected && request.purpose === undefined && consentFingerprint(request.facts) === expected) {
+        const { facts } = request;
+        const permissions = facts.kind === 'install' ? facts.permissions : facts.added;
+        const requiresLocalPageApproval = permissions.some(permission => permission.key === GHOST_LOCAL_SERVICE_PERMISSION);
+        if (!requiresLocalPageApproval && expected && request.purpose === undefined && consentFingerprint(facts) === expected) {
           return true;
         }
         return deps.windowPrompt(request);
       };
+      prompt.localServicePageApproval = deps.windowPrompt.localServicePageApproval;
       const installed = await deps.installPlugin(
         item.pluginId,
         {

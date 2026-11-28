@@ -187,7 +187,25 @@ export type GhostMainViewOpenMode = (typeof GHOST_MAIN_VIEW_OPEN_MODES)[number];
 export const GHOST_TAB_SIDES = ['left', 'right', 'top', 'bottom'] as const;
 export type GhostTabSide = (typeof GHOST_TAB_SIDES)[number];
 
+/**
+ * Fixed Desktop plugin page entry. Accept only a canonical HTTP loopback URL
+ * with an explicit non-default port and no credentials, query or fragment.
+ */
+export function ghostLocalServicePageUrl(value: unknown): string | undefined {
+  if (typeof value !== 'string' || value.length > 2048 ||
+      !/^http:\/\/127\.0\.0\.1:[1-9][0-9]{0,4}\//.test(value) ||
+      /[?#]/.test(value)) return undefined;
+  try {
+    const url = new URL(value);
+    return url.href === value && url.port && !url.username && !url.password ? value : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export interface GhostMainViewDecl {
+  /** Desktop local service entry. The bundled html remains the fallback. */
+  localServiceUrl?: string;
   /** 侧边栏与主视图标题；缺省回退插件 name。 */
   title?: string;
   /** 侧边栏使用的 Cindy 系统线性图标；缺省为 puzzle。 */
@@ -1856,6 +1874,10 @@ function validateGhostManifestInput(value: unknown, preserveHistoricalParameterS
       if (!(GHOST_TAB_SIDES as readonly unknown[]).includes(raw.mainView.side)) {
         return { ok: false, reason: `mainView.side 必须是 ${GHOST_TAB_SIDES.join(' / ')}` };
       }
+    }
+    if (!preserveHistoricalParameterSize && raw.mainView.localServiceUrl !== undefined &&
+        !ghostLocalServicePageUrl(raw.mainView.localServiceUrl)) {
+      return { ok: false, reason: 'mainView.localServiceUrl 必须是带显式非默认端口的规范 HTTP 回环地址，不含凭证、查询串或片段' };
     }
     mainView = {
       ...unknownDeclarationFields(raw.mainView, ['html', 'title', 'icon', 'preferredIcon', 'open', 'side', 'multiple']),

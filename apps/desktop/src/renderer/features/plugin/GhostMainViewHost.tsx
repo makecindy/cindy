@@ -54,7 +54,7 @@ export function GhostMainViewHost() {
       {broken ? (
         <GhostPanelError ghost={installedGhost} state={runtimeState} />
       ) : (
-        <GhostWebviewBody key={installedGhostStoragePart(installedGhost)} ghost={installedGhost} html={manifest.mainView?.html} wallpaperCanvas />
+        <GhostWebviewBody key={installedGhostStoragePart(installedGhost)} ghost={installedGhost} html={manifest.mainView?.html} useMainViewLocalService wallpaperCanvas />
       )}
     </section>
   );

@@ -55,6 +55,7 @@ export function createPluginInstallProgress(
       if (prompt.uiCapabilityApproval !== undefined) {
         reported.uiCapabilityApproval = prompt.uiCapabilityApproval;
       }
+      reported.localServicePageApproval = prompt.localServicePageApproval;
       return reported;
     },
     installing: () => reporter.setPhase('installing'),

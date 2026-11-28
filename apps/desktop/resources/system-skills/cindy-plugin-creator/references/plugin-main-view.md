@@ -49,3 +49,28 @@
   partition、CSP 和导航守门不变。`mainView` 本身不附赠联网、文件、凭证或其它能力；
 - 页面需要电子脑逻辑时仍先 `fetch('/wake')`，通信和媒体协议与 §5 完全相同。插件停用、
   卸载或失去批准后，Host 会卸载页面并退出该路由。
+
+### 嵌入本机服务页面
+
+桌面插件可为主视图声明一个已运行的本机服务入口。用 `mainView.html` 提供包内回退页，
+用 `mainView.localServiceUrl` 声明固定地址。例如：
+
+```json
+"mainView": {
+  "title": "Service Dashboard",
+  "html": "fallback.html",
+  "localServiceUrl": "http://127.0.0.1:41237/dashboard"
+}
+```
+
+地址使用字面的 `127.0.0.1`、HTTP 和显式非默认端口，并包含路径。安装或更新时，用户在运行
+服务的 Cindy Desktop 上确认完整入口地址。旧版 Cindy、缺少新批准的安装以及从远程控制端
+完成的首装均显示包内回退页。地址变更需要重新确认，宿主不会为插件启动服务。
+
+主视图照常从左侧导航和右侧栏入口打开。本机页面在插件实例和账号专属的内存分区运行。
+HTTP 导航、子帧、资源请求及 WebSocket 仅限批准的 IP 和端口。弹窗、下载、Worker 及浏览器权限请求会被拒绝。
+Cindy 提供 `color-scheme` 和现有语义颜色变量，页面自行选择如何使用，例如
+`body { background: var(--surface); color: var(--text-primary); }`。
+
+本机页面不接收 Cindy 页面桥或目录。需要目录的插件可在另一个包内页面显式使用目录上下文接口，
+并由插件自己的逻辑处理结果。声明固定本机页面不需要目录权限、Node、预览或网络权限。

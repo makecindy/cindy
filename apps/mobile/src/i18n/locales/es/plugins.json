@@ -244,6 +244,7 @@
       "panelTab": "Panel “{{title}}” · se abre dentro de la página de complementos",
       "mainView": "Puede agregar una entrada “{{title}}” a la barra lateral de Cindy",
       "mainViewDetail": "Al abrirlo, se muestra la vista principal en la zona de pruebas del complemento y no otorga acceso a archivos, redes o credenciales.",
+      "localServicePage": "Integrar una página de un servicio local",
       "code": "Código ejecutable",
       "codeDetail": "Se ejecuta en una zona de pruebas aislada sin acceso a tus archivos ni a la red.",
       "resident": "Siempre activo (se inicia cuando está habilitado, mantiene un proceso en segundo plano incluso cuando está inactivo)",

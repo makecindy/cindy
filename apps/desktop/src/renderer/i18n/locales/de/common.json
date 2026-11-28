@@ -8859,6 +8859,7 @@
         "panelTab": "Panel „{{title}}“ · wird innerhalb der Seite „Plugins“ geöffnet",
         "mainView": "Kann Cindys linker Navigation einen Eintrag „{{title}}“ hinzufügen",
         "mainViewDetail": "Beim Öffnen wird die Hauptansicht in der Plugin-Sandbox angezeigt. Es wird kein Zugriff auf Dateien, Netzwerk oder Zugangsdaten gewährt.",
+        "localServicePage": "Seite eines lokalen Dienstes einbetten",
         "taskView": "Aufgabenseite „{{title}}“ · öffnet sich in der Seitenleiste der Aufgabe",
         "taskViewDetail": "Der Tab folgt der Aufgabe und öffnet sich in der Plugin-Sandbox. Er gewährt keinen Zugriff auf Dateien, Netzwerk oder Zugangsdaten.",
         "code": "Ausführbarer Code",
