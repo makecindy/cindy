@@ -1184,7 +1184,7 @@ export function AgentActionRow({
     return (
       <span
         className="text-14 font-medium text-[var(--msg-tool-card-chevron)] truncate min-w-0 cursor-pointer"
-        title={displayParam.fullTitle}
+        title={displayParam.fullTitle ?? displayParam.text}
       >
         {displayParam.text}
       </span>
