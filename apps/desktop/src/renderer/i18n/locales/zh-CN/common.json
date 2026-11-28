@@ -18431,6 +18431,7 @@
       "subtitlePaused": "已暂停",
       "subtitleWaitingForResources": "等待执行资源（当前 {{inFlight}}/{{max}}）",
       "subtitleQueuedForSession": "排队等待任务空闲",
+      "subtitleDeferredForSession": "目标任务正忙，已顺延重试（{{count}} 次）",
       "subtitleManual": "手动",
       "subtitleOnce": "单次",
       "tagOnce": "单次",
@@ -18449,6 +18450,7 @@
     },
     "detail": {
       "manualTrigger": "手动触发",
+      "deferredBanner": "目标任务持续忙碌，自 {{since}} 起已顺延 {{count}} 次",
       "recentRuns": "最近运行 · {{count}}",
       "noRunsHeading": "暂无运行记录",
       "noRunsHint": "点击「立即运行」，或等待下次定时触发。",

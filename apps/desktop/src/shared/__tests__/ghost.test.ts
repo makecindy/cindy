@@ -4443,6 +4443,35 @@ describe('ghost · 2026-07-23 通用能力四件套(session-context / pick / pre
       workdir_is_local: false,
       workdir_is_read_only: false,
     });
+    // 依据：活跃 /goal 需由宿主通过 session_context 只读透出，插件据此自动解耦独立跟进任务；
+    // 既有断言未覆盖 goalActive；最小失败输入：goalActive=true 透出 goal_active:true，false/缺省省略。tier: unit。
+    expect(
+      deriveGhostSessionContext('s1', null, {
+        workingDir: '/proj',
+        remoteHostId: null,
+        workdirIsReadOnly: false,
+        goalActive: true,
+      }),
+    ).toEqual({
+      session_id: 's1',
+      workdir: '/proj',
+      workdir_is_local: true,
+      workdir_is_read_only: false,
+      goal_active: true,
+    });
+    expect(
+      deriveGhostSessionContext('s1', null, {
+        workingDir: '/proj',
+        remoteHostId: null,
+        workdirIsReadOnly: false,
+        goalActive: false,
+      }),
+    ).toEqual({
+      session_id: 's1',
+      workdir: '/proj',
+      workdir_is_local: true,
+      workdir_is_read_only: false,
+    });
   });
 });
 

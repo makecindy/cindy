@@ -18506,6 +18506,7 @@
       "subtitlePaused": "Paused",
       "subtitleWaitingForResources": "Waiting for a slot ({{inFlight}}/{{max}})",
       "subtitleQueuedForSession": "Queued until the session is idle",
+      "subtitleDeferredForSession": "Deferred while task is busy ({{count}})",
       "subtitleManual": "Manual",
       "subtitleOnce": "Once",
       "tagOnce": "Once",
@@ -18524,6 +18525,7 @@
     },
     "detail": {
       "manualTrigger": "Manual trigger",
+      "deferredBanner": "Target task busy — deferred {{count}} time(s) since {{since}}",
       "recentRuns": "RECENT RUNS · {{count}}",
       "noRunsHeading": "No runs yet",
       "noRunsHint": "Click “Run now” or wait for the next scheduled run.",

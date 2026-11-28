@@ -18431,6 +18431,7 @@
       "subtitlePaused": "已暂止",
       "subtitleWaitingForResources": "候行之资（今 {{inFlight}}/{{max}}）",
       "subtitleQueuedForSession": "列队，候差事得闲",
+      "subtitleDeferredForSession": "差事正忙，已顺延复试（{{count}} 次）",
       "subtitleManual": "手发",
       "subtitleOnce": "一次",
       "tagOnce": "一次",
@@ -18449,6 +18450,7 @@
     },
     "detail": {
       "manualTrigger": "手触",
+      "deferredBanner": "目标差事久忙，自 {{since}} 起已顺延 {{count}} 次",
       "recentRuns": "近行 · {{count}}",
       "noRunsHeading": "尚无行录",
       "noRunsHint": "点「即行」，或静候下回定时而发。",

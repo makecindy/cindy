@@ -18684,6 +18684,7 @@
       "subtitlePaused": "En pause",
       "subtitleWaitingForResources": "En attente d'un créneau ({{inFlight}}/{{max}})",
       "subtitleQueuedForSession": "En file d'attente jusqu'à ce que la session soit inactive",
+      "subtitleDeferredForSession": "Reporté tant que la tâche est occupée ({{count}})",
       "subtitleManual": "Manuelle",
       "subtitleOnce": "Ponctuelle",
       "tagOnce": "Ponctuelle",
@@ -18702,6 +18703,7 @@
     },
     "detail": {
       "manualTrigger": "Déclenchement manuel",
+      "deferredBanner": "Tâche cible occupée — reporté {{count}} fois depuis {{since}}",
       "recentRuns": "EXÉCUTIONS RÉCENTES · {{count}}",
       "noRunsHeading": "Aucune exécution",
       "noRunsHint": "Cliquez sur Exécuter maintenant ou attendez le prochain déclenchement planifié.",

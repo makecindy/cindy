@@ -108,4 +108,31 @@ describe('TaskListCell 并发等待提示', () => {
     expect(screen.getByText('scheduler.cell.subtitleQueuedForSession')).toBeTruthy();
     expect(screen.queryByText('scheduler.cell.subtitleWaitingForResources')).toBeNull();
   });
+
+  // 依据：绑定任务因目标任务长时忙碌连续顺延且未占队列/槽位时，列表副标题应可见顺延态而非假装正常等待；
+  // 既有测试只覆盖 queuedForSession 与 waitingForResources；
+  // 最小失败输入：active 调度带 deferredForSession={count:3} 时渲染顺延副标题，paused 或排队时让位。tier: unit。
+  it('连续顺延时在活跃态展示顺延副标题，排队或暂停时按优先级让位', () => {
+    const { rerender } = render(
+      createElement(TaskListCell, {
+        schedule: { ...schedule, nextFireAt: Date.now() + 60_000 },
+        selected: false,
+        onSelect: vi.fn(),
+        deferredForSession: { count: 3, firstAt: Date.now() - 600_000, lastReason: 'session-running' },
+      }),
+    );
+
+    expect(screen.getByText('scheduler.cell.subtitleDeferredForSession')).toBeTruthy();
+
+    rerender(
+      createElement(TaskListCell, {
+        schedule: { ...schedule, status: 'paused' },
+        selected: false,
+        onSelect: vi.fn(),
+        deferredForSession: { count: 3, firstAt: Date.now() - 600_000 },
+      }),
+    );
+    expect(screen.getByText('scheduler.cell.subtitlePaused')).toBeTruthy();
+    expect(screen.queryByText('scheduler.cell.subtitleDeferredForSession')).toBeNull();
+  });
 });

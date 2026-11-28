@@ -18684,6 +18684,7 @@
       "subtitlePaused": "Em pausa",
       "subtitleWaitingForResources": "À espera de uma vaga ({{inFlight}}/{{max}})",
       "subtitleQueuedForSession": "Em fila até a sessão ficar inativa",
+      "subtitleDeferredForSession": "Adiado enquanto a tarefa está ocupada ({{count}})",
       "subtitleManual": "Manual",
       "subtitleOnce": "Uma vez",
       "tagOnce": "Uma vez",
@@ -18702,6 +18703,7 @@
     },
     "detail": {
       "manualTrigger": "Acionamento manual",
+      "deferredBanner": "Tarefa de destino ocupada — adiado {{count}} vez(es) desde {{since}}",
       "recentRuns": "EXECUÇÕES RECENTES · {{count}}",
       "noRunsHeading": "Ainda sem execuções",
       "noRunsHint": "Selecione Executar agora ou aguarde a próxima execução agendada.",

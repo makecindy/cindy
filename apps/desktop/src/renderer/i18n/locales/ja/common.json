@@ -18431,6 +18431,7 @@
       "subtitlePaused": "一時停止中",
       "subtitleWaitingForResources": "実行スロット待ち（{{inFlight}}/{{max}}）",
       "subtitleQueuedForSession": "セッションが空くのを待機中",
+      "subtitleDeferredForSession": "対象タスク実行中のため延期中（{{count}}回）",
       "subtitleManual": "手動",
       "subtitleOnce": "1回",
       "tagOnce": "1回",
@@ -18449,6 +18450,7 @@
     },
     "detail": {
       "manualTrigger": "手動トリガー",
+      "deferredBanner": "対象タスクが実行中のため、{{since}} から {{count}} 回延期されています",
       "recentRuns": "最近の実行 · {{count}}",
       "noRunsHeading": "実行履歴はまだありません",
       "noRunsHint": "「今すぐ実行」をクリックするか、次のスケジュール実行をお待ちください。",

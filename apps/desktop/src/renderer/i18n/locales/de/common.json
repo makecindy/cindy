@@ -18506,6 +18506,7 @@
       "subtitlePaused": "Pausiert",
       "subtitleWaitingForResources": "Wartet auf einen freien Platz ({{inFlight}}/{{max}})",
       "subtitleQueuedForSession": "Wartet, bis die Sitzung inaktiv ist",
+      "subtitleDeferredForSession": "Aufgeschoben, solange die Aufgabe beschäftigt ist ({{count}})",
       "subtitleManual": "Manuell",
       "subtitleOnce": "Einmalig",
       "tagOnce": "Einmalig",
@@ -18524,6 +18525,7 @@
     },
     "detail": {
       "manualTrigger": "Manueller Auslöser",
+      "deferredBanner": "Zielaufgabe beschäftigt – seit {{since}} {{count}}× aufgeschoben",
       "recentRuns": "LETZTE AUSFÜHRUNGEN · {{count}}",
       "noRunsHeading": "Noch keine Ausführungen",
       "noRunsHint": "Klicke auf „Jetzt ausführen“ oder warte auf den nächsten geplanten Zeitpunkt.",

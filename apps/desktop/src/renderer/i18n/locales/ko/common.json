@@ -18431,6 +18431,7 @@
       "subtitlePaused": "일시 중지됨",
       "subtitleWaitingForResources": "실행 슬롯 대기 중 ({{inFlight}}/{{max}})",
       "subtitleQueuedForSession": "세션이 유휴 상태가 될 때까지 대기 중",
+      "subtitleDeferredForSession": "대상 작업 실행 중으로 연기됨({{count}}회)",
       "subtitleManual": "수동",
       "subtitleOnce": "1회",
       "tagOnce": "1회",
@@ -18449,6 +18450,7 @@
     },
     "detail": {
       "manualTrigger": "수동 트리거",
+      "deferredBanner": "대상 작업이 바빠 {{since}}부터 {{count}}회 연기되었습니다",
       "recentRuns": "최근 실행 · {{count}}",
       "noRunsHeading": "실행 기록이 아직 없습니다",
       "noRunsHint": "지금 실행을 트리거하거나 다음 예약 실행을 기다려 주세요.",

@@ -18431,6 +18431,7 @@
       "subtitlePaused": "已暫停",
       "subtitleWaitingForResources": "等待執行資源（當前 {{inFlight}}/{{max}}）",
       "subtitleQueuedForSession": "排隊等待任務空閒",
+      "subtitleDeferredForSession": "目標任務正忙，已順延重試（{{count}} 次）",
       "subtitleManual": "手動",
       "subtitleOnce": "一次",
       "tagOnce": "一次",
@@ -18449,6 +18450,7 @@
     },
     "detail": {
       "manualTrigger": "手動觸發",
+      "deferredBanner": "目標任務持續忙碌，自 {{since}} 起已順延 {{count}} 次",
       "recentRuns": "最近執行 · {{count}}",
       "noRunsHeading": "暫無執行記錄",
       "noRunsHint": "點選立即執行，或等待下次定時觸發。",

@@ -936,7 +936,7 @@ import {
   setIsDetachedForBackend,
   setUserBrowserPageControlProvider,
 } from './mcp-integrations/browser.desktop.js';
-import { setPageControlGhostProvider } from './mcp-integrations/ghost.desktop.js';
+import { setPageControlGhostProvider, setSessionGoalActiveProvider } from './mcp-integrations/ghost.desktop.js';
 import { RsbWindowController } from './right-sidebar-window/controller.js';
 import { resolveRsbHostContextFromSession } from './right-sidebar-window/resolveHostContext.js';
 import { createRightSidebarWindow } from './right-sidebar-window/window.js';
@@ -3113,6 +3113,11 @@ setUserBrowserPageControlProvider(
 );
 // The plugin providing "My browser" hides its own page tools from agents: one way to drive the user's browser.
 setPageControlGhostProvider(() => getGhostBrowserExtensionSlot().getPageControl()?.instanceId ?? null);
+// 倒置注入活跃 /goal 只读查询，供插件 session-context 槽按需读取，避免 ghost.desktop.ts 反向 import goal-host。
+setSessionGoalActiveProvider(async (sid) => {
+  const status = await getGoalController()?.getStatus(sid).catch(() => null);
+  return status?.status === 'active' || status?.status === 'usageLimited';
+});
 setBrowserSessionUploadRootResolver(async (sessionId) => {
   try {
     const meta = await getMakerCore().getSessionMeta(sessionId);

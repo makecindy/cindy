@@ -25,7 +25,7 @@ import { useTranslation } from 'react-i18next';
 
 import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
-import type { Schedule, ScheduleAgentKind, ScheduleRun } from '@cindy/maker-scheduler';
+import type { Schedule, ScheduleAgentKind, ScheduleRun, SchedulerDeferredSchedule } from '@cindy/maker-scheduler';
 import { usePluginEngineIdentity } from '@/hooks/usePluginEngines';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { useCCSessions } from '@/hooks/useCCSessions';
@@ -58,6 +58,8 @@ interface Props {
   runNowBusy?: boolean;
   /** The editor owns connection setup while its modal covers this pane. */
   connectionSetupVisible?: boolean;
+  /** 本调度当前因目标任务忙碌连续顺延时的运行期状态。 */
+  deferral?: SchedulerDeferredSchedule;
 }
 
 export function RunHistoryPane({
@@ -68,6 +70,7 @@ export function RunHistoryPane({
   onDelete,
   runNowBusy = false,
   connectionSetupVisible = true,
+  deferral,
 }: Props) {
   const { t } = useTranslation();
   // 插件引擎自动任务按引擎自己的名字显示(插件停用后用通用名称；另一台电脑时从该电脑目录读取)。
@@ -289,6 +292,24 @@ export function RunHistoryPane({
               dest.prefix
             )}
           </p>
+          {s.status === 'active' && deferral && deferral.count > 0 && (
+            <p
+              className="truncate text-xs text-[var(--text-secondary)]"
+              title={
+                deferral.lastReason
+                  ? `${new Date(deferral.firstAt).toLocaleString(appI18n.language)} · ${deferral.lastReason}`
+                  : new Date(deferral.firstAt).toLocaleString(appI18n.language)
+              }
+            >
+              {t('scheduler.detail.deferredBanner', {
+                count: deferral.count,
+                since: new Date(deferral.firstAt).toLocaleTimeString(appI18n.language, {
+                  hour: '2-digit',
+                  minute: '2-digit',
+                }),
+              })}
+            </p>
+          )}
         </div>
         {/* 动作区：从「Run now pill + Edit 图标 + ⋯ 溢出菜单」改为一排带图标+文字的 pill，
             语义直达（运行 / 编辑 / 启用·禁用 / 删除），少一次点击、不用猜图标含义。 */}

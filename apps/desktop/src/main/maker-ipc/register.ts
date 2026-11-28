@@ -13183,13 +13183,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             effort: (row?.effort ?? undefined) as SendToSessionCreateDefaults['effort'],
             fastMode: meta.agentKind === 'acp' ? false : (row?.fastMode ?? false),
             providerId: row?.providerId,
-            // working_dir 覆盖时强制继承来源会话的权限档(review 反馈):把新目录
-            // 以 Full access 打开是相对 dispatcher 的权限升级,跨项目 handoff
-            // 不应隐式发生;未覆盖时保持既有缺省(bypassPermissions)不变。
-            permissionMode:
-              inheritSourcePermissionMode || workingDirOverride !== undefined
-                ? permissionModeOrAsk(row?.permissionMode)
-                : 'bypassPermissions',
+            // 从来源会话经 send_to_session 新建任务一律继承来源会话权限档（与跨电脑创建
+            // 及插件创建保持一致），防止 ask / auto / plan 会话借新建任务或独立 worktree
+            // 静默提权到 bypassPermissions。
+            permissionMode: permissionModeOrAsk(row?.permissionMode),
           };
           const route = await resolveSendToSessionCreateRoute({
             source: {
