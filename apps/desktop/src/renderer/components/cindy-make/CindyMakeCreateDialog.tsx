@@ -197,7 +197,7 @@ export function CindyMakeCreateDialog({ onOpenChange }: { onOpenChange: (open: b
                       <VoiceInputButton {...voice.buttonProps} testId="cindy-make-create-voice" tipSide="top" />
                     </div>
                   </div>
-                  <FieldVoiceInputNotice error={voice.lastError} speakerFiltered={voice.speakerFiltered} />
+                  <FieldVoiceInputNotice {...voice.noticeProps} />
                 </div>
               )}
             </FormField>

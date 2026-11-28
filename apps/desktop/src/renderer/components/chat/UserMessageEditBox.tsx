@@ -385,7 +385,7 @@ export function UserMessageEditBox({
           'disabled:opacity-60',
         )}
       />
-      <FieldVoiceInputNotice error={voice.lastError} speakerFiltered={voice.speakerFiltered} className="mt-1.5" />
+      <FieldVoiceInputNotice {...voice.noticeProps} className="mt-1.5" />
       <div className="mt-2 flex items-center justify-end gap-2">
         {rollbackHint?.kind === 'files' && (
           <span className="min-w-0 flex-1 truncate text-left text-11 text-[var(--text-tertiary)]">

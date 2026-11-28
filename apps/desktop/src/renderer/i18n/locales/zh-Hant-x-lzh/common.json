@@ -15751,7 +15751,9 @@
     "connectionInterrupted": "聲之連線中斷，請察網路後再試。",
     "recognitionStalled": "識聲不復有所回，請再試。",
     "transcriptKept": "{{message}}（所識之文已存，可徑修之）",
-    "transcriptKeptOverlay": "{{message}}（所識之文已存，可錄之續用）"
+    "transcriptKeptOverlay": "{{message}}（所識之文已存，可錄之續用）",
+    "retryRecognition": "重辨",
+    "recordAgain": "重錄"
   },
   "chatgptAuthRecovery": {
     "title": "ChatGPT 登入已失效",

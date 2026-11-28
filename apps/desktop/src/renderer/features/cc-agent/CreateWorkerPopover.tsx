@@ -1677,8 +1677,7 @@ export function CreateWorkerPopover({
           </div>
         </div>
         <FieldVoiceInputNotice
-          error={taskVoice.lastError}
-          speakerFiltered={taskVoice.speakerFiltered}
+          {...taskVoice.noticeProps}
           className="-mt-2 mb-4"
         />
         {activePluginEngine || modelGroup ? null : noAvailableLocalModels ? (

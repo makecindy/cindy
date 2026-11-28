@@ -1,6 +1,12 @@
 import WebSocket from 'ws';
 import type { ClientRequest, IncomingMessage } from 'node:http';
-import type { AsrEvent, AsrProvider, AudioTrace } from '@cindy/voice-input-core';
+import {
+  buildElevenLabsScribeKeyterms,
+  type AsrEvent,
+  type AsrProvider,
+  type AsrRecognitionHints,
+  type AudioTrace,
+} from '@cindy/voice-input-core';
 import { createLogger } from '../logger.js';
 import { createOutboundHttpAgent } from '../maker-host/outbound-fetch.desktop.js';
 import { elevenLabsLanguageCode } from './language.js';
@@ -11,6 +17,7 @@ type ElevenLabsScribeProviderOptions = {
   proxyApiKey?: string;
   baseUrl?: string;
   sourceLanguage?: string;
+  recognitionHints?: AsrRecognitionHints;
   vadSilenceThresholdSecs?: number;
   connectTimeoutMs?: number;
 };
@@ -47,6 +54,7 @@ export class ElevenLabsScribeProvider implements AsrProvider {
   private readonly proxyApiKey?: string;
   private readonly baseUrl: string;
   private readonly sourceLanguage: string;
+  private readonly recognitionHints?: AsrRecognitionHints;
   private readonly vadSilenceThresholdSecs: number;
   private readonly connectTimeoutMs: number;
   private socket?: WebSocket;
@@ -71,6 +79,7 @@ export class ElevenLabsScribeProvider implements AsrProvider {
     this.proxyApiKey = options.proxyApiKey;
     this.baseUrl = options.baseUrl ?? ELEVENLABS_REALTIME_BASE_URL;
     this.sourceLanguage = options.sourceLanguage ?? 'auto';
+    this.recognitionHints = options.recognitionHints;
     this.vadSilenceThresholdSecs = options.vadSilenceThresholdSecs ?? 1.5;
     this.connectTimeoutMs = options.connectTimeoutMs ?? CONNECT_TIMEOUT_MS;
   }
@@ -336,6 +345,7 @@ export class ElevenLabsScribeProvider implements AsrProvider {
       baseUrl: this.baseUrl,
       sourceLanguage: this.sourceLanguage,
       vadSilenceThresholdSecs: this.vadSilenceThresholdSecs,
+      recognitionHints: this.recognitionHints,
     });
   }
 
@@ -524,6 +534,8 @@ export function buildElevenLabsScribeRealtimeUrl(input: {
   baseUrl: string;
   sourceLanguage?: string;
   vadSilenceThresholdSecs?: number;
+  keyterms?: readonly string[];
+  recognitionHints?: AsrRecognitionHints;
 }): string {
   const url = new URL(joinProxyPath(input.baseUrl, '/v1/speech-to-text/realtime'));
   url.protocol = url.protocol === 'http:' ? 'ws:' : 'wss:';
@@ -536,6 +548,10 @@ export function buildElevenLabsScribeRealtimeUrl(input: {
 
   const language = elevenLabsLanguageCode(input.sourceLanguage ?? 'auto');
   if (language) url.searchParams.set('language_code', language);
+  const keyterms = input.keyterms ?? buildElevenLabsScribeKeyterms(input.recognitionHints);
+  for (const term of keyterms) {
+    url.searchParams.append('keyterms', term);
+  }
   return url.toString();
 }
 

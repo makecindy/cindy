@@ -15940,7 +15940,9 @@
     "connectionInterrupted": "A conexão de voz foi interrompida. Verifique sua rede e tente novamente.",
     "recognitionStalled": "O reconhecimento de voz parou de retornar resultados. Tente novamente.",
     "transcriptKept": "{{message}} O texto reconhecido até agora foi mantido — você pode editá-lo diretamente.",
-    "transcriptKeptOverlay": "{{message}} O texto reconhecido até agora foi preservado — copie-o para continuar."
+    "transcriptKeptOverlay": "{{message}} O texto reconhecido até agora foi preservado — copie-o para continuar.",
+    "retryRecognition": "Reconhecer novamente",
+    "recordAgain": "Gravar novamente"
   },
   "chatgptAuthRecovery": {
     "title": "O login do ChatGPT não é mais válido",

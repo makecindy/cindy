@@ -15812,7 +15812,9 @@
     "connectionInterrupted": "The voice connection was interrupted. Check your network and try again.",
     "recognitionStalled": "Voice recognition stopped returning results. Try again.",
     "transcriptKept": "{{message}} The text recognized so far was kept — you can edit it directly.",
-    "transcriptKeptOverlay": "{{message}} The text recognized so far was kept — copy it to continue."
+    "transcriptKeptOverlay": "{{message}} The text recognized so far was kept — copy it to continue.",
+    "retryRecognition": "Retry recognition",
+    "recordAgain": "Record again"
   },
   "chatgptAuthRecovery": {
     "title": "ChatGPT Sign-In Is No Longer Valid",

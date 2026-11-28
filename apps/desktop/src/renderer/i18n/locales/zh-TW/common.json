@@ -15751,7 +15751,9 @@
     "connectionInterrupted": "語音連線中斷了，請檢查網路後重試。",
     "recognitionStalled": "語音辨識沒有繼續傳回結果，請重試。",
     "transcriptKept": "{{message}}（辨識出的文字已經保留，可以直接編輯）",
-    "transcriptKeptOverlay": "{{message}}（辨識出的文字已經保留，可以複製後繼續使用）"
+    "transcriptKeptOverlay": "{{message}}（辨識出的文字已經保留，可以複製後繼續使用）",
+    "retryRecognition": "重新辨識",
+    "recordAgain": "重新錄音"
   },
   "chatgptAuthRecovery": {
     "title": "ChatGPT 登入已失效",

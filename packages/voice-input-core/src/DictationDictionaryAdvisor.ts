@@ -218,49 +218,166 @@ function getNormalizedAdviceSkipReason(
   if (!beforeText || !afterText) return 'empty_text';
   if (beforeText === afterText) return 'same_text';
   if (sameIgnoringSentencePunctuation(beforeText, afterText)) return 'formatting_only';
-  const changedSpan = findChangedSpan(beforeText, afterText);
-  if (!changedSpan) return 'same_text';
-  if (isLargeRewrite(beforeText, afterText, changedSpan)) return 'large_rewrite';
+  if (isLargeRewrite(beforeText, afterText)) return 'large_rewrite';
   return null;
 }
 
-function findChangedSpan(beforeText: string, afterText: string): { before: string; after: string } | null {
-  let prefix = 0;
-  const maxPrefix = Math.min(beforeText.length, afterText.length);
-  while (prefix < maxPrefix && beforeText[prefix] === afterText[prefix]) prefix += 1;
+type DiffOp =
+  | { type: 'equal'; token: string }
+  | { type: 'delete'; token: string }
+  | { type: 'insert'; token: string };
 
-  let beforeEnd = beforeText.length;
-  let afterEnd = afterText.length;
+function isLargeRewrite(beforeText: string, afterText: string): boolean {
+  const beforeContentChars = countContentChars(beforeText);
+  const afterContentChars = countContentChars(afterText);
+  const maxContentChars = Math.max(beforeContentChars, afterContentChars);
+  const changedContentChars = measureChangedContentChars(beforeText, afterText);
+
+  if (changedContentChars > MAX_DIRECT_REPLACEMENT_CHARS) return true;
+  if (maxContentChars < LARGE_REWRITE_MIN_TEXT_CHARS) return false;
+  return changedContentChars / Math.max(1, maxContentChars) > LARGE_REWRITE_CHANGED_RATIO;
+}
+
+function tokenizeContentUnits(text: string): string[] {
+  // Keep ASCII words atomic so unrelated English sentences cannot match on
+  // scattered common letters, while splitting CJK and other scripts per
+  // character so local Chinese/Japanese/Korean edits remain granular.
+  return removeSentencePunctuation(text).match(/[A-Za-z0-9]+|[^\s]/gu) ?? [];
+}
+
+function sumTokenChars(tokens: string[]): number {
+  let total = 0;
+  for (const token of tokens) total += token.length;
+  return total;
+}
+
+function measureChangedContentChars(beforeText: string, afterText: string): number {
+  const beforeTokens = tokenizeContentUnits(beforeText);
+  const afterTokens = tokenizeContentUnits(afterText);
+
+  let prefix = 0;
+  const maxPrefix = Math.min(beforeTokens.length, afterTokens.length);
+  while (prefix < maxPrefix && beforeTokens[prefix] === afterTokens[prefix]) prefix += 1;
+
+  let beforeEnd = beforeTokens.length;
+  let afterEnd = afterTokens.length;
   while (
     beforeEnd > prefix &&
     afterEnd > prefix &&
-    beforeText[beforeEnd - 1] === afterText[afterEnd - 1]
+    beforeTokens[beforeEnd - 1] === afterTokens[afterEnd - 1]
   ) {
     beforeEnd -= 1;
     afterEnd -= 1;
   }
 
-  const before = beforeText.slice(prefix, beforeEnd);
-  const after = afterText.slice(prefix, afterEnd);
-  return before || after ? { before, after } : null;
+  const a = beforeTokens.slice(prefix, beforeEnd);
+  const b = afterTokens.slice(prefix, afterEnd);
+  if (a.length === 0 && b.length === 0) return 0;
+  if (a.length === 0) return sumTokenChars(b);
+  if (b.length === 0) return sumTokenChars(a);
+
+  // Every edit hunk deleting `del` tokens and inserting `ins` tokens adds at
+  // least max(del, ins) >= (del + ins) / 2 changed chars. Therefore any token
+  // edit distance D > 2 * MAX_DIRECT_REPLACEMENT_CHARS is guaranteed to exceed
+  // MAX_DIRECT_REPLACEMENT_CHARS.
+  const maxD = Math.min(a.length + b.length, MAX_DIRECT_REPLACEMENT_CHARS * 2);
+  const ops = diffTokensBounded(a, b, maxD);
+  if (!ops) return MAX_DIRECT_REPLACEMENT_CHARS + 1;
+
+  let totalChangedChars = 0;
+  let delChars = 0;
+  let insChars = 0;
+  for (const op of ops) {
+    if (op.type === 'equal') {
+      totalChangedChars += Math.max(delChars, insChars);
+      delChars = 0;
+      insChars = 0;
+    } else if (op.type === 'delete') {
+      delChars += op.token.length;
+    } else {
+      insChars += op.token.length;
+    }
+  }
+  totalChangedChars += Math.max(delChars, insChars);
+  return totalChangedChars;
 }
 
-function isLargeRewrite(
-  beforeText: string,
-  afterText: string,
-  changedSpan: { before: string; after: string },
-): boolean {
-  const beforeContentChars = countContentChars(beforeText);
-  const afterContentChars = countContentChars(afterText);
-  const maxContentChars = Math.max(beforeContentChars, afterContentChars);
-  const changedContentChars = Math.max(
-    countContentChars(changedSpan.before),
-    countContentChars(changedSpan.after),
-  );
+function diffTokensBounded(a: string[], b: string[], maxD: number): DiffOp[] | null {
+  const n = a.length;
+  const m = b.length;
+  const offset = maxD;
+  const v0 = new Int32Array(2 * maxD + 1).fill(-1);
+  let x0 = 0;
+  while (x0 < n && x0 < m && a[x0] === b[x0]) x0 += 1;
+  v0[offset] = x0;
+  const trace: Int32Array[] = [v0];
+  if (x0 === n && x0 === m) return backtrackMyers(a, b, trace, offset);
 
-  if (changedContentChars > MAX_DIRECT_REPLACEMENT_CHARS) return true;
-  if (maxContentChars < LARGE_REWRITE_MIN_TEXT_CHARS) return false;
-  return changedContentChars / Math.max(1, maxContentChars) > LARGE_REWRITE_CHANGED_RATIO;
+  for (let d = 1; d <= maxD; d += 1) {
+    const prev = trace[d - 1];
+    const next = new Int32Array(2 * maxD + 1).fill(-1);
+    for (let k = -d; k <= d; k += 2) {
+      const downX = k < d ? prev[k + 1 + offset] : -1;
+      const canDown = downX >= 0 && downX - k <= m;
+      const rightPrevX = k > -d ? prev[k - 1 + offset] : -1;
+      const canRight = rightPrevX >= 0 && rightPrevX + 1 <= n;
+      if (!canDown && !canRight) continue;
+      let x = !canRight || (canDown && rightPrevX < downX) ? downX : rightPrevX + 1;
+      let y = x - k;
+      while (x < n && y < m && a[x] === b[y]) {
+        x += 1;
+        y += 1;
+      }
+      next[k + offset] = x;
+      if (x === n && y === m) {
+        trace.push(next);
+        return backtrackMyers(a, b, trace, offset);
+      }
+    }
+    trace.push(next);
+  }
+  return null;
+}
+
+function backtrackMyers(a: string[], b: string[], trace: Int32Array[], offset: number): DiffOp[] {
+  const ops: DiffOp[] = [];
+  let x = a.length;
+  let y = b.length;
+
+  for (let d = trace.length - 1; d > 0; d -= 1) {
+    const prev = trace[d - 1];
+    const k = x - y;
+    const downX = k < d ? prev[k + 1 + offset] : -1;
+    const canDown = downX >= 0 && downX - k <= b.length;
+    const rightPrevX = k > -d ? prev[k - 1 + offset] : -1;
+    const canRight = rightPrevX >= 0 && rightPrevX + 1 <= a.length;
+    const movedDown = !canRight || (canDown && rightPrevX < downX);
+    const prevK = movedDown ? k + 1 : k - 1;
+    const prevX = prev[prevK + offset];
+    const prevY = prevX - prevK;
+
+    while (x > prevX && y > prevY) {
+      ops.push({ type: 'equal', token: a[x - 1] });
+      x -= 1;
+      y -= 1;
+    }
+    if (movedDown) {
+      ops.push({ type: 'insert', token: b[prevY] });
+      y -= 1;
+    } else {
+      ops.push({ type: 'delete', token: a[prevX] });
+      x -= 1;
+    }
+  }
+
+  while (x > 0 && y > 0) {
+    ops.push({ type: 'equal', token: a[x - 1] });
+    x -= 1;
+    y -= 1;
+  }
+
+  ops.reverse();
+  return ops;
 }
 
 function countContentChars(text: string): number {
