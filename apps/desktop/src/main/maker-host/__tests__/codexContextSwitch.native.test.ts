@@ -18,19 +18,30 @@ const logger: Logger = { trace() {}, debug() {}, info() {}, warn() {}, error() {
 // Different-provider catalogs cannot assume the old model is available. SSH uses
 // thread config instead of a local catalog. Neither removes native pre-turn
 // compaction with the target model; verify the real requests, not only RPC config.
-it.skipIf(!binary).each(['same-provider', 'different-provider', 'thread-budget', 'custom-compaction'] as const)(
+it.skipIf(!binary).each(['same-provider', 'different-provider', 'retry-different-provider', 'thread-budget', 'custom-compaction'] as const)(
   'cold-resumes and natively compacts before continuing (%s)', async mode => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-context-switch-native-'));
   const home = path.join(root, 'home');
   const work = path.join(root, 'work');
-  const oldModel = mode === 'thread-budget' ? 'fixture-wide' : 'codex/fixture-wide';
+  const switchesProvider = mode === 'different-provider' || mode === 'retry-different-provider';
+  const oldModel = switchesProvider || mode === 'thread-budget' ? 'fixture-wide' : 'codex/fixture-wide';
   const windows: Record<string, number> = { [oldModel]: 500_000, 'fixture-small': mode === 'custom-compaction' ? 500_000 : 272_000 };
   const compactionPct = (model: string) => mode === 'custom-compaction' && model === 'fixture-small' ? 50 : null;
   const requests: Array<{ model: string; input: unknown[] }> = [];
+  let rejectOldModel = false;
+  let legacyResume = false;
+  const deniedModels: string[] = [];
   const server = createServer(async (req, res) => {
     if (req.method !== 'POST') { res.end('{"models":[]}'); return; }
     let raw = ''; for await (const chunk of req) raw += chunk;
     const body = JSON.parse(raw);
+    if (rejectOldModel && body.model === oldModel) {
+      deniedModels.push(body.model);
+      res.writeHead(403, { 'content-type': 'application/json' }).end(JSON.stringify({
+        error: { code: 'user_model_access_denied', message: 'user not allowed to access model' },
+      }));
+      return;
+    }
     requests.push(body);
     const text = requests.length === 1 ? 'FIRST_REPLY' : requests.length === 2 ? 'NATIVE_SUMMARY' : 'CONTINUED';
     const inputTokens = requests.length === 1 ? 300_000 : 20;
@@ -51,7 +62,8 @@ it.skipIf(!binary).each(['same-provider', 'different-provider', 'thread-budget',
     await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
     await fs.writeFile(path.join(home, 'models_cache.json'), JSON.stringify({ models: Object.keys(windows)
       .map(slug => ({ ...nativeCodexFallbackModel(slug.replace(/^codex\//, ''), 'You are a test assistant.'),
-        max_context_window: 1_000_000 })) }));
+        // A discovered bare model can have a larger native window even when the next connection does not offer it.
+        context_window: windows[slug], max_context_window: 1_000_000 })) }));
     // #11025 native regression: the real startup consumer must accept the same
     // untouched BOM config as Cindy's catalog reader, then complete a message.
     // Other modes retain BOM-less coverage; all homes/providers are isolated.
@@ -76,12 +88,14 @@ it.skipIf(!binary).each(['same-provider', 'different-provider', 'thread-budget',
           return { extraArgs: [], extraEnv: {}, codexProxyActive: true };
         }
         const targetProvider = ctx.customContextProviderId === 'cprov-other';
+        // The new connection offers a namespaced sibling; the previous bare ID is distinct.
+        const contextProviderModels = targetProvider ? ['org/fixture-wide', 'fixture-small'] : Object.keys(windows);
         const catalog = await prepareCodexCustomContextCatalog({ binaryPath: binary!, codexHome: home,
           modelId: ctx.customContextModel!, contextWindow: ctx.customContextWindow!,
-          modelIds: targetProvider ? ['fixture-small'] : Object.keys(windows),
+          modelIds: contextProviderModels,
           resolveCompactionPct: compactionPct,
-          resolveContextWindow: model => targetProvider ? null : windows[model] ?? null });
-        return { extraArgs: catalog.extraArgs, extraEnv: {}, codexProxyActive: true };
+          resolveContextWindow: model => model === 'org/fixture-wide' ? 500_000 : targetProvider ? null : windows[model] ?? null });
+        return { extraArgs: catalog.extraArgs, extraEnv: {}, codexProxyActive: true, contextProviderModels: legacyResume ? undefined : contextProviderModels };
       },
       auth: {
         getState: async () => ({ authenticated: true }), triggerLogin: async () => ({ authenticated: true }),
@@ -111,12 +125,25 @@ it.skipIf(!binary).each(['same-provider', 'different-provider', 'thread-budget',
     expect(requests).toHaveLength(1);
     expect(handle.getUsageSnapshot().contextWindow).toBe(475_000);
     await handle.close(); await agent.dispose();
-    agent = makeAgent();
-    handle = await agent.startSession({ ...options,
-      ...(mode === 'different-provider' ? { providerId: 'cprov-other' } : {}),
-      model: 'fixture-small', resumeSessionId: threadId });
+    rejectOldModel = switchesProvider;
+    const resume = async () => {
+      agent = makeAgent();
+      handle = await agent.startSession({ ...options,
+        ...(switchesProvider ? { providerId: 'cprov-other' } : {}),
+        model: 'fixture-small', resumeSessionId: threadId });
+    };
+    if (mode === 'retry-different-provider') {
+      // Resume a thread already left in error by the previous build.
+      legacyResume = true;
+      await resume();
+      await expect(send('CONTINUE_MARKER')).rejects.toThrow('model_unavailable');
+      await handle.close(); await agent.dispose();
+      legacyResume = false;
+    }
+    await resume();
     expect(handle.id).toBe(threadId);
     await send('CONTINUE_MARKER');
+    expect(deniedModels).toEqual(mode === 'retry-different-provider' ? [oldModel] : []);
     expect(requests.map(request => request.model)).toEqual([oldModel,
       mode === 'same-provider' ? oldModel : 'fixture-small', 'fixture-small']);
     expect(JSON.stringify(requests[1]!.input)).toContain('ORIGINAL_HISTORY_MARKER');

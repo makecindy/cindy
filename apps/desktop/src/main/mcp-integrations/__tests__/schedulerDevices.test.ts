@@ -136,6 +136,45 @@ describe('desktop scheduler cross-device transport', () => {
     ]);
   });
 
+  // docs/product-rules/plugin-event-triggers.md, unit: plugin events need no account on the
+  // target, but a target that predates them would reject the unknown source after the write.
+  it.each([
+    { pluginEvents: true, ok: true },
+    { pluginEvents: false, ok: false },
+  ])('negotiates plugin event triggers without the receiver check: supported=$pluginEvents', async ({ pluginEvents, ok }) => {
+    const s = setup();
+    s.invoke.mockImplementation(async (_device, channel) => ({ ok: true, result:
+      channel === 'maker:get-capabilities' ? { supportsScheduleWebhookTrigger: true, supportsSchedulePluginEventTrigger: pluginEvents }
+      : channel === 'maker:schedule:webhook-receiver' ? 'signed-out' : { id: 's1' },
+    }));
+    const patch = { webhookTrigger: { source: { preset: 'plugin', sources: [{ plugin: 'public/chat' }] } } };
+    expect((await s.remote.invoke('mac', 'update', ['s1', patch])).ok).toBe(ok);
+    expect(s.invoke.mock.calls.map(([, channel]) => channel))
+      .toEqual(['maker:get-capabilities', ...(ok ? ['maker:schedule:update'] : [])]);
+  });
+
+  // PR #11881 review r4661510132: an older desktop drops the unknown modelGroup and still reports success, so the
+  // task silently runs the concrete model. Minimal input: create/update carrying a mode against a target with and
+  // without the capability; clearing the mode needs no capability.
+  it.each([
+    { op: 'create' as const, modelGroup: 'daily', supported: true, ok: true },
+    { op: 'create' as const, modelGroup: 'daily', supported: false, ok: false },
+    { op: 'update' as const, modelGroup: 'daily', supported: false, ok: false },
+    { op: 'update' as const, modelGroup: null, supported: false, ok: true },
+  ])('requires the target to store a model group: $op/$modelGroup/$supported', async ({ op, modelGroup, supported, ok }) => {
+    const s = setup();
+    s.invoke.mockImplementation(async (_device, channel) => ({ ok: true, result:
+      channel === 'maker:get-capabilities' ? { supportsRemoteScheduleDirectoryCheck: true, supportsScheduleModelGroup: supported } : { id: 's1' },
+    }));
+    const patch = { modelGroup };
+    const result = await s.remote.invoke('mac', op, op === 'create' ? [patch] : ['s1', patch]);
+    expect(result.ok).toBe(ok);
+    if (!ok) expect(result).toMatchObject({ code: 'REMOTE_UNSUPPORTED' });
+    const channels = s.invoke.mock.calls.map(([, channel]) => channel);
+    if (ok) expect(channels).toContain(`maker:schedule:${op}`);
+    else expect(channels).not.toContain(`maker:schedule:${op}`);
+  });
+
   it('does not write after ownership changes during the webhook receiver check', async () => {
     const s = setup();
     s.invoke.mockImplementation(async (_device, channel) => {

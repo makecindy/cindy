@@ -24,6 +24,8 @@
  * after the entry's timeout (default HOST_IPC_DEFAULT_TIMEOUT_MS).
  */
 
+import { isProfileReleaseFailure } from '../shared/ipc-errors.js';
+import { createMainI18n } from './i18n.js';
 import type { IpcMainInvokeEvent } from 'electron';
 import {
   HOST_INSTANCE_HEADER,
@@ -56,6 +58,7 @@ export interface HostIpcProxyDeps {
   readonly fetch?: typeof fetch;
   /** Host auth state as the windows currently show it. */
   readonly readOwner: () => HostIpcOwnerView;
+  readonly preconditionMessage?: () => string;
   /** Apply a freshly read Host auth state, so windows and proxy move together. */
   readonly applyAuthState: (state: unknown) => void;
   readonly log?: (message: string, meta?: Record<string, unknown>) => void;
@@ -249,6 +252,11 @@ export function createHostIpcProxy(deps: HostIpcProxyDeps): HostIpcProxy {
       case HOST_IPC_REJECTION.audienceDenied:
         throw createIpcError('PERMISSION_DENIED', 'The Host refused this window');
       default:
+        if (isProfileReleaseFailure(error)) {
+          const safe = deps.preconditionMessage?.() ??
+            createMainI18n(() => [Intl.DateTimeFormat().resolvedOptions().locale]).t('ipcError.PRECONDITION_FAILED');
+          throw createIpcError(error.code, safe);
+        }
         if (isIpcErrorCode(code)) throw createIpcError(code, message);
         throw createIpcError('INTERNAL', `Host ${entry.channel} failed`);
     }

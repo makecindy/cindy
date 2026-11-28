@@ -7,12 +7,18 @@ import { executeMobileGoalCommand, parseMobileDesktopCommand } from '@/session/d
 import { humanizeRemoteError } from '@/device-link/remoteStatus';
 import { evictDeviceProviders, fetchDeviceProviders, retainedProviderModelKey, type RetainedProviderCatalog } from '@/device-link/deviceProvidersCache';
 import { blockedSessionModelAtSend } from '@/session/sessionModelAtSend';
+import { isPendingPlainText } from '@/session/outboxBackgroundSend';
+import { buildOutboxItem } from '@/session/sessionOutbox';
 import { incomingShareSlotOrder } from '@/session/mobileLocalAttachmentUpload';
 import { composerDocumentProjectedText, emptyComposerDocument, normalizeComposerDocument, reconcileComposerProjectedText, serializeComposerDocument, textComposerDocument } from '@/session/composerDocument';
 import { captureNewSessionOwner } from '@/session/newSessionForm';
 import { reconcileNewSessionSubmitDraft } from '@/session/newSessionRuntimeReconciliation';
 import { getMobileAuthOwner, isMobileAuthOwnerCurrent, setMobileAuthOwner } from '@/auth/authOwnerGeneration';
 import { deviceDisplayName } from '@/device-link/deviceName';
+import {
+  applyHostModelGroupResult, applyHostModelGroupRoute, buildHostModelGroupRouteNote, resolveHostModelGroup,
+} from '@/session/hostModelGroups';
+import { implicitMobileSourceRouteSelection } from '@/session/sourceRouteProviders';
 
 // Execute the actual page callbacks, excluding unrelated native/network UI.
 function callback(path: string, name: string) {
@@ -45,7 +51,7 @@ if (!readRouteParamSource) throw new Error('Missing SessionScreen.readRouteParam
 // otherwise be caught by send and surface only as a misleading outbox failure.
 const compiledExisting = ts.transpileModule(`${readRouteParamSource}\n${sendSource}\nreturn send;`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
 
-function newHarness(text = '/goal target') {
+function newHarness(text = '/goal target', overrides: (bindings: Record<string, unknown>) => void = () => {}) {
   setMobileAuthOwner('test-user');
   const noop = vi.fn();
   const draft = { agentKind: 'pi', model: 'test-model', providerId: 'test-provider', workspaceKind: 'dialogue', workingDir: '', firstMessage: text, agentDeviceId: 'agent-device' };
@@ -64,7 +70,7 @@ function newHarness(text = '/goal target') {
     getMobileAuthOwner, isMobileAuthOwnerCurrent, captureNewSessionOwner,
     agentAuthVerdict: 'ready', applyRemoteAgentPick: (value: unknown) => value,
     // Built-in drafts only: no plugin engine picked.
-    pluginEnginePick: null, pluginEngineWorktreeUnsupported: false, applyPluginEnginePick: (value: unknown) => value,
+    pluginEnginePick: null, applyPluginEnginePick: (value: unknown) => value,
     createNewSessionId: () => 'new-goal-task', saveNewSessionPreferences: noop,
     getDeviceProvidersGen: () => 1, reconcileNewSessionSubmitDraft, targetAgentHasFast: () => false,
     withTransientRemoteRetry: (fn: () => Promise<unknown>) => fn(), openLink: noop, subscribe: vi.fn(async () => {}),
@@ -75,7 +81,17 @@ function newHarness(text = '/goal target') {
     isDefaultDraftSessionTitle: () => false, waitForPendingUploads: noop,
     setAttachments: noop, setMediaAssetAttachments: noop, setAttachmentPreviews: noop, composerAnnotationsRef: { current: null },
     patchDraft: vi.fn(), router: { replace: vi.fn() }, humanizeRemoteError,
+    // Model groups (model-groups.md §6.3): none selected unless a test picks one.
+    activeHostModelGroup: null as { id: string; name: string } | null,
+    activeAttachedSourceRouteId: null as string | null,
+    hostModelGroupsPayload: null,
+    implicitMobileSourceRouteSelection,
+    basePillModelSummary: 'test-model',
+    resolveHostModelGroup, applyHostModelGroupRoute, applyHostModelGroupResult, buildHostModelGroupRouteNote,
+    remoteAgentCatalogs: [], i18nInstance: { language: 'en' },
+    confirmAgentUnauthenticated: vi.fn(async () => ({ unauthenticated: false, fresh: null })),
   };
+  overrides(bindings);
   bindings.createGoalSession = vi.fn(goalCreate(bindings));
   return { bindings, run: newCreate(bindings) as () => Promise<void> };
 }
@@ -116,11 +132,14 @@ function existingHarness(args = 'target') {
     dismissPromptRecommendation: noop, hydrateComposerMessageReferenceBodies: async (doc: unknown) => doc,
     resolvePastedSessionLinkLabel: noop, requestMessageListFollowLatest: noop, noteLocalSend: noop, hasPastePlaceholders: () => false,
     beginOutboxAttachmentHandoff: async () => ({ prepare: async () => [], release: noop }),
-    attachmentPreviews: {}, incomingShareSlotOrder, buildOutboxItem: (input: unknown) => input, createOutboxClientId: () => 'ordinary-message',
+    attachmentPreviews: {}, incomingShareSlotOrder, buildOutboxItem, createOutboxClientId: () => 'ordinary-message',
+    status: 'online', holdBackgroundConnection: () => noop, beginBackgroundWork: noop,
+    isPendingPlainText, beginOutboxBackgroundSend: vi.fn(() => noop), mobileDebugLog: noop,
     mobileDurableOutbox: { add: vi.fn(async (_record: unknown) => {}) }, rememberSentAttachmentPreviews: noop,
     releaseUploadedSources: noop, setMediaAssetAttachments: noop, setAttachmentPreviews: noop,
     composerAnnotationsRef: { current: null }, setAttachments: noop, setAttachmentError: noop,
     voiceDictionaryLearningTrackerRef: { current: null }, formatRemoteError: String,
+    pendingReplyScope: 'test-reply-scope',
     getPendingCompanionReplyQuote: () => null, clearSentCompanionReplyQuote: noop,
   };
   bindings.setSending = vi.fn((value: boolean) => { bindings.sending = value; });
@@ -138,6 +157,30 @@ describe('new task /goal page callback', () => {
     expect(h.bindings.maker.goal.set).toHaveBeenCalledExactlyOnceWith({ sessionId: 'new-goal-task', objective: 'target' });
     expect(h.bindings.router.replace).toHaveBeenCalledWith(expect.objectContaining({ params: expect.objectContaining({ sessionId: 'new-goal-task' }) }));
     expect(h.bindings.createMessageSession).not.toHaveBeenCalled();
+  });
+  // PR #11866 review r4650525974, unit, real goal callback: a selected mode picks its source before the
+  // sign-in checks. Gap: the goal path checked the draft's own agent first. Minimal input: the draft's agent
+  // is signed out on the host, the mode routes to a signed-in Codex source (on the draft's agent computer, so the
+  // harness's catalog guard is not involved). Failure: the goal is refused
+  // with the old agent's sign-in hint, or the task is created on the draft's model.
+  it('lets a selected mode create the goal on its own source when the draft\'s agent is signed out', async () => {
+    const h = newHarness('/goal target', (bindings) => {
+      Object.assign(bindings, {
+        remoteAgentPick: null,
+        activeHostModelGroup: { id: 'daily', name: 'Daily' },
+        confirmAgentUnauthenticated: vi.fn(async () => ({ unauthenticated: true, fresh: null })),
+      });
+      Object.assign(bindings.maker as object, {
+        resolveModelGroup: vi.fn(async () => ({ outcome: 'routed', groupName: 'Daily', decisionId: 'd1', modelName: 'GPT', sourceName: 'Work',
+          route: { agentKind: 'codex', providerId: 'openai-work', model: 'gpt-6', agentDeviceId: 'agent-device' }, why: 'order', trace: [] })),
+        commitModelGroupDecision: vi.fn(async () => {}), bindModelGroupSession: vi.fn(async () => {}),
+        writeModelGroupRouteNote: vi.fn(async () => {}),
+      });
+    });
+    await h.run();
+    expect(h.bindings.confirmAgentUnauthenticated).not.toHaveBeenCalled();
+    expect(h.bindings.maker.createSession).toHaveBeenCalledWith(expect.objectContaining({ agentKind: 'codex', model: 'gpt-6', providerId: 'openai-work' }));
+    expect((h.bindings.maker as unknown as { bindModelGroupSession: () => void }).bindModelGroupSession).toHaveBeenCalledOnce();
   });
   it('opens the existing panel for bare /goal without creating a task', async () => {
     const h = newHarness('/goal'); await h.run();
@@ -280,6 +323,7 @@ describe('existing task /goal send boundary', () => {
     if (scenario === 'attachments') h.bindings.attachmentsRef.current = [{}];
     if (scenario === 'busy') h.bindings.goalBusy = true;
     await h.run();
+    expect(h.bindings.beginOutboxBackgroundSend).not.toHaveBeenCalled();
     expect(h.bindings.sendInFlightRef.current).toBe(false);
     expect(h.bindings.sending).toBe(false);
     expect(h.release).toHaveBeenCalledOnce();
@@ -289,6 +333,7 @@ describe('existing task /goal send boundary', () => {
     h.bindings.setError.mockClear();
     await h.run();
     expect(h.bindings.setError).toHaveBeenCalledExactlyOnceWith(null);
+    expect(h.bindings.beginOutboxBackgroundSend).toHaveBeenCalledOnce();
     expect(h.bindings.mobileDurableOutbox.add).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
       item: expect.objectContaining({ sessionId: 'existing-task', text: 'ordinary follow-up' }),
     }));

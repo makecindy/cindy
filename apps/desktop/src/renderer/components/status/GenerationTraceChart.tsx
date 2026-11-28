@@ -217,7 +217,7 @@ export function GenerationTraceChart({
           ref={refs.setFloating}
           aria-hidden="true"
           data-testid="trace-readout"
-          className="pointer-events-none fixed left-0 top-0 z-[10011] w-max max-w-[calc(100vw-16px)] max-h-[calc(100vh-16px)] overflow-hidden select-none rounded-xl bg-[var(--tooltip-bg)] px-2.5 py-1.5 text-12 leading-normal tabular-nums text-[var(--tooltip-text)] shadow-[shadow:var(--shadow-menu)]"
+          className="pointer-events-none fixed left-0 top-0 z-tooltip w-max max-w-[calc(100vw-16px)] max-h-[calc(100vh-16px)] overflow-hidden select-none rounded-xl bg-[var(--tooltip-bg)] px-2.5 py-1.5 text-12 leading-normal tabular-nums text-[var(--tooltip-text)] shadow-[shadow:var(--shadow-menu)]"
           style={floatingStyles}
         >
           <div className="flex justify-between gap-3">

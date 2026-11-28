@@ -23,6 +23,11 @@ export function setReferencePricingDisplayProviders(source: (() => Catalog['prov
   displayProviders = source;
 }
 
+/** The provider snapshot used by the visible model list, including newly discovered account models. */
+export function displayPricingProvider(providerId: string) {
+  return displayProviders?.().find(provider => provider.id === providerId);
+}
+
 /** Current reference prices for every model the renderer can list. */
 export function getDisplayReferenceModelPricing(): ModelPricingCatalog {
   return getReferenceModelPricing({ providers: displayProviders?.() });

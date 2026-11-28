@@ -5,6 +5,55 @@ public final class CindyAgentNetModule: Module {
   private let queue = DispatchQueue(label: "cindy.agent-net.native")
   private var handles: [String: OpaquePointer] = [:]
   private var destroyed = false
+  /// One engine's own loop, on its own thread from the first `wait` until the engine is destroyed: wait for a datagram or
+  /// the core's next timer, give the engine its turn (it reads, acknowledges, retransmits, keeps connections alive), and
+  /// tell a waiting `wait` call when the engine has something for JS to read with `poll`. It does not depend on the JS
+  /// thread: a busy or stalled JS thread no longer delays acknowledgements. The socket waiter outlives the engine and is
+  /// freed here, after the last wait on it.
+  private final class Pump {
+    private let waiter: OpaquePointer
+    private let condition = NSCondition()
+    private var work = false
+    private var closed = false
+    init(waiter: OpaquePointer) { self.waiter = waiter }
+    var isClosed: Bool { condition.lock(); defer { condition.unlock() }; return closed }
+    func close() { condition.lock(); closed = true; condition.broadcast(); condition.unlock() }
+    /// `turn`: the engine's turn, serialized with its commands; negative once the engine is gone.
+    func run(_ turn: () -> Int64) {
+      var waitMs: Int64 = 0
+      while !isClosed {
+        if waitMs > 0 { _ = cindy_agent_net_wait(waiter, UInt32(waitMs)) }
+        let state = turn()
+        if state < 0 { break }
+        if state & 1 == 1 { condition.lock(); work = true; condition.broadcast(); condition.unlock() }
+        waitMs = max(1, min(250, state >> 1))
+      }
+      close()
+      cindy_agent_net_waiter_free(waiter)
+    }
+    /// True as soon as the engine has something for JS, false after `maxMs` or once the engine is gone.
+    func nextWork(_ maxMs: Int) -> Bool {
+      condition.lock(); defer { condition.unlock() }
+      if !work && !closed { _ = condition.wait(until: Date().addingTimeInterval(Double(max(1, min(maxMs, 60_000))) / 1000)) }
+      let had = work
+      work = false
+      return had
+    }
+    /// A waiting call returns now and reads (`binary-io`: JS needs to be back sooner than that call's limit).
+    func kick() { condition.lock(); work = true; condition.broadcast(); condition.unlock() }
+  }
+  /// Changed on `queue`, always under `pumpLock`: `kick` reads it from the JS thread, which must not wait for `queue`.
+  private var pumps: [String: Pump] = [:]
+  private let pumpLock = NSLock()
+  private func pump(_ id: String) -> Pump? { pumpLock.lock(); defer { pumpLock.unlock() }; return pumps[id] }
+  private func setPump(_ id: String, _ value: Pump?) -> Pump? {
+    pumpLock.lock(); defer { pumpLock.unlock() }
+    let previous = pumps[id]
+    pumps[id] = value
+    return previous
+  }
+  /// `wait` blocks for up to its limit: its own concurrent queue, so `command` on `queue` is never held up by it.
+  private let waitQueue = DispatchQueue(label: "cindy.agent-net.native.wait", attributes: .concurrent)
   // Bonjour and its run-loop delegates live exclusively on the main queue.
   private var lan: [String: AgentNetLan] = [:]
 
@@ -49,7 +98,28 @@ public final class CindyAgentNetModule: Module {
       defer { cindy_agent_net_free_string(result) }
       return String(cString: result)
     }.runOnQueue(queue)
+    AsyncFunction("wait") { (id: String, maxMs: Int, promise: Promise) in
+      self.waitQueue.async { promise.resolve(self.waitForWork(id, maxMs)) }
+    }
+    /// `binary-io` (engine.rs `io`): one frame in, one out. With `waitMs` it first waits as `wait` does and reads only once
+    /// the engine has something for JS (an empty result otherwise), so the answer to a request comes back in the call that
+    /// waited for it. `kick`: the engine takes a turn after this call, and a waiting call reads if there is something for JS
+    /// (what this call wrote may have left a datagram for the relay WebSocket, which no packet on the socket would announce).
+    AsyncFunction("io") { (id: String, input: Data, waitMs: Int, kick: Bool, promise: Promise) in
+      let run = {
+        do { promise.resolve(try self.io(id, input, kick: kick)) }
+        catch { promise.reject(error) }
+      }
+      if waitMs > 0 {
+        // A waiting call blocks for up to its limit: on `waitQueue`, like `wait`; it reads on `queue`, like `command`.
+        self.waitQueue.async {
+          if self.waitForWork(id, waitMs) { self.queue.async(execute: run) } else { promise.resolve(Data()) }
+        }
+      } else { self.queue.async(execute: run) }
+    }
+    Function("kick") { (id: String) -> Void in _ = self.pump(id)?.kick() }
     AsyncFunction("destroy") { (id: String) in
+      self.setPump(id, nil)?.close()
       if let handle = self.handles.removeValue(forKey: id) { cindy_agent_net_destroy(handle) }
     }.runOnQueue(queue)
     OnDestroy {
@@ -58,11 +128,64 @@ public final class CindyAgentNetModule: Module {
       }
       self.queue.async {
         self.destroyed = true
+        self.pumpLock.lock()
+        let running = self.pumps.values
+        self.pumps.removeAll()
+        self.pumpLock.unlock()
+        running.forEach { $0.close() }
         let active = self.handles.values
         self.handles.removeAll()
         active.forEach { cindy_agent_net_destroy($0) }
       }
     }
+  }
+  private func waitForWork(_ id: String, _ maxMs: Int) -> Bool {
+    var ready = false
+    let pump: Pump? = queue.sync {
+      guard !self.destroyed, let handle = self.handles[id] else { return nil }
+      // The engine takes a turn before the wait starts. What JS wrote since its last poll may have left a datagram for its
+      // relay WebSocket, and no packet arriving on the socket would announce that one: the pump thread would hand it over
+      // only at its next timer, up to 250 ms later (PR #11816 review).
+      let state = cindy_agent_net_pump(handle)
+      if state < 0 { return nil }
+      ready = state & 1 == 1
+      if let existing = self.pump(id), !existing.isClosed { return existing }
+      guard let waiter = cindy_agent_net_waiter(handle) else { return nil }
+      let created = Pump(waiter: waiter)
+      _ = self.setPump(id, created)
+      let thread = Thread { [weak self] in
+        created.run {
+          guard let self else { return -1 }
+          // Every turn runs on `queue`, like `command`; the blocking wait in between holds nothing.
+          return self.queue.sync { () -> Int64 in
+            guard !self.destroyed, !created.isClosed, let handle = self.handles[id] else { return -1 }
+            return cindy_agent_net_pump(handle)
+          }
+        }
+      }
+      thread.name = "cindy-agent-net-pump"
+      thread.start()
+      return created
+    }
+    if ready { return true }
+    return pump?.nextWork(maxMs) ?? false
+  }
+  /// Only on `queue`.
+  private func io(_ id: String, _ input: Data, kick: Bool) throws -> Data {
+    guard !destroyed, let handle = handles[id] else { throw failure("AGENT_NET_ENGINE_CLOSED") }
+    guard !input.isEmpty, input.count <= 4 * 1024 * 1024 else { throw failure("AGENT_NET_COMMAND_TOO_LARGE") }
+    var length = 0
+    let result = input.withUnsafeBytes { raw in
+      cindy_agent_net_io(handle, raw.bindMemory(to: UInt8.self).baseAddress, raw.count, &length)
+    }
+    guard let result else { throw failure("AGENT_NET_COMMAND_FAILED") }
+    defer { cindy_agent_net_free_bytes(result, length) }
+    let output = Data(bytes: result, count: length)
+    if kick {
+      let state = cindy_agent_net_pump(handle)
+      if state >= 0 && state & 1 == 1 { pump(id)?.kick() }
+    }
+    return output
   }
   private func input(_ value: String) throws -> Data {
     guard let data = value.data(using: .utf8), data.count <= 2 * 1024 * 1024 else { throw failure("AGENT_NET_COMMAND_TOO_LARGE") }

@@ -67,6 +67,47 @@ test('numeric colour functions need a colour-bearing context; plain strings are 
   ]) assert.deepEqual(matchBareColors(source), values, source);
 });
 
+// #8369: production findBareColors/inspectFile must keep lexical findings and
+// offsets beyond old PR #8543's context windows. Existing short fixtures cannot
+// expose truncated declarations, label exclusions or generated-line cost.
+// Tier: existing root runner; timing is measured separately on the real asset.
+test('long colour contexts and Markdown boundaries preserve audit semantics (#8369)', () => {
+  const long = 'transparent 0%,'.repeat(6_000);
+  for (const value of ['#123abc', 'rgb(1,2,3)']) {
+    const source = `.x{background:linear-gradient(${long}${value});}`;
+    assert.deepEqual(findBareColors(source), [{ value, index: source.indexOf(value), end: source.indexOf(value) + value.length }]);
+    assert.equal(inspect(renderer + 'new.css', source).find(f => f.rule === 'bare-color')?.disposition, 'block');
+  }
+  for (const [source, values] of [
+    ['[#4022' + ' text'.repeat(220) + '](https://example.org)', []],
+    ['const label = "[#4022 ![CI](badge.svg)](https://example.org)";', []],
+    ["const rows = [{ color: '#fff', help: '[Guide](https://example.org)' }];", ['#fff']],
+    ["const style = { color: palettes[resolveColor('#fff')]() };", ['#fff']],
+    ["'--panel-shadow':\n 'inset " + long + "rgb(1 2 3)'", ['rgb(1 2 3)']],
+    ['color:\n ' + long + '#fff', ['#fff']],
+    ["url(' \t#fff')", ['#fff']],
+    ['color: ' + long + '\n#fff', []],
+    ['/*' + 'x'.repeat(80_000) + "*/ const a = '#fff';", ['#fff']],
+    ['['.repeat(80_000), []],
+  ]) assert.deepEqual(matchBareColors(source), values, source.slice(0, 100));
+});
+
+test('generated colour lists keep every value and original offset (#8369)', () => {
+  // The existing root-runner tier already exercises CLI subprocesses. Bound the
+  // synchronous scan from outside its process so a regression actually stops.
+  const run = spawnSync(process.execPath, ['--input-type=module', '-e', `
+    import assert from 'node:assert/strict';
+    import { findBareColors } from './scripts/shared/hardcoded-color-match.mjs';
+    const count = 100_000;
+    const unit = 'color:#fff;';
+    const hits = findBareColors(unit.repeat(count));
+    assert.equal(hits.length, count);
+    assert.ok(hits.every((hit, i) => hit.value === '#fff' && hit.index === i * unit.length + 6 && hit.end === i * unit.length + 10));
+  `], { cwd: root, encoding: 'utf8', timeout: 10_000 });
+  assert.equal(run.error, undefined, run.error?.message);
+  assert.equal(run.status, 0, run.stderr);
+});
+
 test('nested fallback and mixed expressions report each literal at its real location', () => {
   const source = `// PR #4135\nconst a = 'hsl(var(--x,\n  var(--y, #123456)))';\nconst b = 'color-mix(in srgb, var(--x), rgb(1, 2, 3))';`;
   assert.deepEqual(matchBareColors(source), ['#123456', 'rgb(1, 2, 3)']);

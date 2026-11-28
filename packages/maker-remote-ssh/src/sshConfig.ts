@@ -568,6 +568,9 @@ async function buildHosts(
       && firstIntroducing?.patterns.length === 1
       && pathsEqual(firstIntroducing.physicalPath, managedComparable);
     const managedOwnership = uniquelyManaged && state.managedConfigOwned;
+    const managedAliasConflict = state.managedConfigOwned && managedComparable !== null
+      && introducing.some((declaration) => pathsEqual(declaration.physicalPath, managedComparable))
+      && introducing.some((declaration) => !pathsEqual(declaration.physicalPath, managedComparable));
 
     const identityFileDirectiveSeen = identityDirectives.length > 0;
     const identityFileNoneSeen = identityDirectives.some(
@@ -694,6 +697,7 @@ async function buildHosts(
       },
       source: 'ssh-config' as const,
       managedByCindy: managedOwnership,
+      ...(managedAliasConflict ? { managedAliasConflict: true } : {}),
     });
   }
   return hosts;

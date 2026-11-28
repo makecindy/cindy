@@ -75,6 +75,7 @@ export type Annotation = ShapeAnnotation | StrokeAnnotation | TextAnnotation | S
 /** 马赛克 / 模糊的取样来源: 定格原图及其相对 DIP 的缩放。 */
 export interface AnnotationSource {
   frame: CanvasImageSource;
+  profiledPreview?: boolean;
   /** 原图像素 / DIP。 */
   ratioX: number;
   ratioY: number;
@@ -104,11 +105,17 @@ function stepTextColor(color: ScreenshotInk): string {
 }
 
 let scratch: HTMLCanvasElement | null = null;
-function scratchCanvas(width: number, height: number): CanvasRenderingContext2D | null {
-  scratch ??= document.createElement('canvas');
-  scratch.width = Math.max(1, Math.ceil(width));
-  scratch.height = Math.max(1, Math.ceil(height));
-  return scratch.getContext('2d');
+let previewScratch: HTMLCanvasElement | null = null;
+// Keep intermediate resampling and blur in the same high-precision space
+// as the visible annotation canvas. Export uses the raw frame separately.
+export const previewCanvasOptions: CanvasRenderingContext2DSettings & { colorType: 'float16' } = {
+  colorSpace: 'display-p3', colorType: 'float16',
+};
+function scratchCanvas(width: number, height: number, profiled?: boolean): CanvasRenderingContext2D | null {
+  const canvas = profiled ? (previewScratch ??= document.createElement('canvas')) : (scratch ??= document.createElement('canvas'));
+  canvas.width = Math.max(1, Math.ceil(width));
+  canvas.height = Math.max(1, Math.ceil(height));
+  return canvas.getContext('2d', profiled ? previewCanvasOptions : undefined);
 }
 
 function drawMosaic(
@@ -120,7 +127,7 @@ function drawMosaic(
   const block = MOSAIC_BLOCK[size];
   const cols = Math.max(1, Math.round(rect.width / block));
   const rows = Math.max(1, Math.round(rect.height / block));
-  const tiny = scratchCanvas(cols, rows);
+  const tiny = scratchCanvas(cols, rows, source.profiledPreview);
   if (!tiny) return;
   tiny.imageSmoothingEnabled = true;
   tiny.imageSmoothingQuality = 'high';
@@ -154,7 +161,7 @@ function drawBlur(
   const sy = (rect.y - margin - (source.offsetY ?? 0)) * source.ratioY;
   const sw = (rect.width + margin * 2) * source.ratioX;
   const sh = (rect.height + margin * 2) * source.ratioY;
-  const blurred = scratchCanvas(sw, sh);
+  const blurred = scratchCanvas(sw, sh, source.profiledPreview);
   if (!blurred) return;
   blurred.filter = `blur(${radius * source.ratioX}px)`;
   blurred.drawImage(source.frame, sx, sy, sw, sh, 0, 0, sw, sh);

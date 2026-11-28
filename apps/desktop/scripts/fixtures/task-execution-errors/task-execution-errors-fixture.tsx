@@ -8,6 +8,8 @@ import { mountPage } from '../../ui-page/harness';
 const error = 'queued heartbeat Codex thread provider identity does not match the current session route; api_key=private-fixture-value';
 const resumeError = 'LAZY_CREATE_FAILED: [REMOTE_AGENT_INVALID] this conversation cannot be resumed on this computer';
 const reviewError = '[AUTO_REVIEW_NO_AVAILABLE_MODEL] No automatic review model is available.';
+const catalogError = '[MODEL_CATALOG_UNCONFIRMED] The model list could not be confirmed. The saved model selection has been kept.';
+const preRunError = 'pre-run hook failed with exit code 1: synthetic check failure';
 const timeoutError = '[REMOTE_AGENT_TIMEOUT] [INVOKE_TIMEOUT] no invoke-result within 30000ms after first socket write\nrequestedTarget=mock-peer; channel=maker:remote-agent';
 
 function Fixture({ kind }: { kind: string }) {
@@ -42,7 +44,9 @@ function Fixture({ kind }: { kind: string }) {
         <SubagentErrorNotice rawError={error} onDiagnose={onDiagnose} />
       ) : (
         <UnreadFailedScheduleBanner dataOwnerId="fixture-owner" sessionId="fixture-task"
-          latestFailedRun={{ runId: 'fixture-run', firedAt: 1, errorMsg: kind === 'pr-dns' ? 'lookup api.github.com: no such host' : error,
+          latestFailedRun={{ runId: 'fixture-run', firedAt: 1, errorMsg: kind === 'pr-dns' ? 'lookup api.github.com: no such host'
+            : kind === 'catalog-unconfirmed' ? catalogError : kind === 'pre-run-blocked' ? preRunError : error,
+            ...(kind === 'pre-run-blocked' && { failureKind: 'precheck', preRunBlocked: true }),
             ...(kind === 'pr-dns' && { failureKind: 'precheck', prCheckDiagnosis: {
               kind: 'dns', host: 'api.github.com', device: 'Build Mac', failures: 3, retryAt: Date.UTC(2026, 10, 19, 14, 4),
             } }),

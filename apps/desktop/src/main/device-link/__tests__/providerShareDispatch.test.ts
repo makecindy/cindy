@@ -202,6 +202,32 @@ describe('provider share invoke', () => {
       .toMatchObject({ ok: false, error: { code: 'ACCESS_REVOKED' } });
   });
 
+  // 2026-11-26 linked shares (agent-net-linked-provider-shares.md): an Agent-Net key registers only over the share owner's
+  // own authenticated guest link. Unit, real dispatch gate; minimal failing input: a guest without owner catalog access
+  // (a delegated executor's peer) registering a key, or a link error surfacing as a refusal the guest would retire the share on.
+  it('lets only the owner\'s own guest register an Agent-Net key and never turns a link failure into a refusal', async () => {
+    const request = { version: 1, signingKey: 'unit-signing', transportKey: 'unit-transport' };
+    const payload = { channel: 'provider-share:agent-net-link:v1', args: [request] };
+    const route = { route: { server: 'https://agent-net.example.test' } };
+    const agentNetLink = vi.fn(async (): Promise<unknown> => route);
+    let catalog: typeof ACCESS | null = null;
+    state.access = ACCESS;
+    setProviderShareAccess({ guestAccess: () => state.access, catalogGuestAccess: () => catalog, agentNetLink,
+      ensureKnown: async () => undefined, hasShares: () => true });
+    await expect(runInvoke(GUEST, payload)).resolves.toMatchObject({ ok: false, error: { code: 'CHANNEL_NOT_ALLOWED' } });
+    expect(agentNetLink).not.toHaveBeenCalled();
+    catalog = ACCESS;
+    await expect(runInvoke(GUEST, payload)).resolves.toEqual({ ok: true, result: route });
+    expect(agentNetLink).toHaveBeenCalledWith(GUEST, request);
+    agentNetLink.mockRejectedValueOnce(new Error('service down'));
+    await expect(runInvoke(GUEST, payload)).resolves.toEqual({ ok: true, result: { unavailable: 'link-failed' } });
+    // Access ends while this computer is linking: the route never leaves it.
+    agentNetLink.mockImplementationOnce(async () => { state.access = null; return route; });
+    const late = await runInvoke(GUEST, payload);
+    expect(late).toMatchObject({ ok: false });
+    expect(JSON.stringify(late)).not.toContain('agent-net.example.test');
+  });
+
   it('refuses everything once access is gone, including results already computed', async () => {
     state.access = ACCESS;
     const handle = vi.fn(async () => {
@@ -311,6 +337,92 @@ describe('provider share invoke', () => {
     } finally { registry.reset(); }
   });
 
+  it('projects plugin engine reads down to the shared shareSupported engine, strips reportsUsage, and filters models', async () => {
+    const engineId = 'acp-plugin:dsh-acp:dsh';
+    const { __testing: registry } = await import('../invoke-registry');
+    registry.reset();
+    const listEngines = vi.fn(async () => [
+      {
+        key: 'dsh-acp:dsh',
+        providerId: engineId,
+        ghostId: 'dsh-acp',
+        harnessId: 'dsh',
+        name: 'DeepSeek Harness',
+        availability: { state: 'available' },
+        reportsUsage: true,
+        remoteUse: { supported: true, shareSupported: true, enabled: true },
+        models: [
+          { id: 'deepseek-v4', displayName: 'DeepSeek V4' },
+          { id: 'deepseek-v4-lite', displayName: 'DeepSeek V4 Lite' },
+        ],
+        permissionModes: [{ id: 'default', displayName: 'Default' }],
+        defaultPermissionMode: 'default',
+      },
+      {
+        key: 'other:other',
+        providerId: 'acp-plugin:other:other',
+        ghostId: 'other',
+        harnessId: 'other',
+        name: 'Other Engine',
+        availability: { state: 'available' },
+        remoteUse: { supported: true, shareSupported: true, enabled: true },
+        models: [{ id: 'other-model', displayName: 'Other' }],
+        permissionModes: [],
+        defaultPermissionMode: 'default',
+      },
+    ]);
+    const refreshEngines = vi.fn(async () => null);
+    registry.register('maker:list-plugin-engines', listEngines);
+    registry.register('maker:refresh-plugin-engines', refreshEngines);
+    try {
+      // Built-in provider shares never enumerate plugin engines.
+      state.access = ACCESS;
+      await expect(runInvoke(GUEST, { channel: 'maker:list-plugin-engines', args: [] }))
+        .resolves.toEqual({ ok: true, result: [] });
+      expect(listEngines).not.toHaveBeenCalled();
+
+      let allowedModel: string | null = 'deepseek-v4-lite';
+      const refreshPluginEngine = vi.fn();
+      setProviderShareAccess({
+        guestAccess: () => ({ shareId: 'share-1', memberId: 'member-1', providerId: engineId }),
+        ensureKnown: async () => undefined,
+        hasShares: () => true,
+        modelAllowed: (_src, provider, model) => provider === engineId && allowedModel !== null && model === allowedModel,
+        refreshPluginEngine,
+      });
+      await expect(runInvoke(GUEST, { channel: 'maker:refresh-plugin-engines', args: [] }))
+        .resolves.toEqual({ ok: true, result: undefined });
+      expect(refreshPluginEngine).toHaveBeenCalledWith(engineId);
+      expect(refreshEngines).not.toHaveBeenCalled();
+
+      const res = await runInvoke(GUEST, { channel: 'maker:list-plugin-engines', args: [] });
+      expect(res).toMatchObject({
+        ok: true,
+        result: [{
+          providerId: engineId,
+          name: 'DeepSeek Harness',
+          models: [{ id: 'deepseek-v4-lite', displayName: 'DeepSeek V4 Lite' }],
+          defaultModelAllowed: false,
+        }],
+      });
+      expect((res as { result: Array<Record<string, unknown>> }).result[0]).not.toHaveProperty('reportsUsage');
+
+      // When all models are filtered out for a member, defaultModelAllowed: false prevents synthesizing default.
+      allowedModel = null;
+      const emptyRes = await runInvoke(GUEST, { channel: 'maker:list-plugin-engines', args: [] });
+      expect(emptyRes).toMatchObject({
+        ok: true,
+        result: [{
+          providerId: engineId,
+          models: [],
+          defaultModelAllowed: false,
+        }],
+      });
+    } finally {
+      registry.reset();
+    }
+  });
+
   it('never hands the sharer account identity to the guest', () => {
     const projected = __testing.projectProviderListForShare({
       providers: [{
@@ -327,7 +439,7 @@ describe('provider share invoke', () => {
     const projected = __testing.projectProviderListForShare({
       providers: [{
         id: 'anthropic', name: 'Anthropic', remoteInvocationEnabled: true,
-        group: { strategy: 'least', autoSwitch: true, members: [{ key: 'device:mini:a', kind: 'device', agentDeviceId: 'mini', providerId: 'a', label: 'Mini' }] },
+        group: { strategy: 'expiring', autoSwitch: true, members: [{ key: 'device:mini:a', kind: 'device', agentDeviceId: 'mini', providerId: 'a', label: 'Mini' }] },
       }],
     }, 'anthropic') as { providers: Array<Record<string, unknown>> };
     expect(projected.providers[0]).not.toHaveProperty('group');
@@ -340,7 +452,7 @@ describe('provider share invoke', () => {
     const projected = __testing.projectProviderListForShare({
       providers: [{
         id: 'anthropic', name: 'Anthropic', remoteInvocationEnabled: true, groupSize: 99,
-        group: { strategy: 'least', autoSwitch: true, members: [{ key: 'device:mini:a', kind: 'device', agentDeviceId: 'mini', providerId: 'a', label: 'Mini' }] },
+        group: { strategy: 'expiring', autoSwitch: true, members: [{ key: 'device:mini:a', kind: 'device', agentDeviceId: 'mini', providerId: 'a', label: 'Mini' }] },
       }],
     }, 'anthropic') as { providers: Array<Record<string, unknown>> };
     // 台数只来自本机的组设置，目录里原有的值不算；组内电脑名单照旧不给。

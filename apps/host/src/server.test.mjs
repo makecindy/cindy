@@ -1,3 +1,4 @@
+import { releaseFailure } from './agent/profile-hold.ts';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import fs from 'node:fs';
@@ -461,6 +462,16 @@ test('typed errors from /api entries answer with their table status; anything el
     const answer = await call();
     assert.equal(answer.status, status, code);
     assert.deepEqual(answer.body, { error: code, message: `[${code}] refused` });
+  }
+  for (const reason of ['HOST_PROFILE_RELEASE_FAILED', 'FUTURE_REASON']) {
+    failure = Object.assign(typed('PRECONDITION_FAILED', '[PRECONDITION_FAILED] ' +
+      (reason === 'FUTURE_REASON' ? 'unrelated refusal' : '/private/fixture.db')), { reason });
+    const answer = await call();
+    const release = releaseFailure();
+    assert.equal(answer.status, 409);
+    assert.deepEqual(answer.body, reason === release.reason
+      ? { error: release.code, reason, message: `[${release.code}] ${release.message}` }
+      : { error: release.code, message: '[PRECONDITION_FAILED] unrelated refusal' });
   }
   for (const untyped of [typed('NOT_IN_TABLE'), typed('INVALID_PARAMS', '[NOT_FOUND] mismatch'),
     new Error('[INVALID_PARAMS] no code property')]) {

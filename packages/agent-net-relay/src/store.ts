@@ -6,7 +6,7 @@ import { MAX_MEDIA_OBJECT_BYTES } from '@cindy/agent-net-protocol';
 import { emptySharingState, type SharingState, type SharingStorage } from '@cindy/device-link-sharing/repositories';
 import type { TenantJoinRequest } from './identity.js';
 
-export interface DeviceRecord { certificate: DeviceCertificate; name: string; revokedAt: number | null; notBefore?: number;
+export interface DeviceRecord { certificate: DeviceCertificate; name: string; revokedAt: number | null; notBefore?: number; membershipGeneration?: string;
   metadata?: DeviceMetadata; lastSeenAt?: number; reportedName?: string; customName?: string | null; }
 export interface PendingJoin { request: JoinRequest; pollHash: string; expiresAt: number; status: 'pending' | 'approved' | 'rejected'; certificate?: DeviceCertificate; }
 export interface MediaRecord { owner: string; recipient: string; size: number; received: number; expiresAt: number; }
@@ -68,7 +68,8 @@ export class Store implements RelayStore {
       }
       state = parsed;
       for (const saved of [state.sharing, state.privateSharing]) if (saved && (saved.version !== 1 || ['tasks', 'invitations', 'shares', 'links', 'requests', 'credentials', 'bindings']
-        .some(key => !Array.isArray((saved as unknown as Record<string, unknown>)[key])))) throw new Error('INVALID_AGENT_NET_SHARING_STATE');
+        .some(key => !Array.isArray((saved as unknown as Record<string, unknown>)[key]))
+        || saved.linkedShares !== undefined && !Array.isArray(saved.linkedShares))) throw new Error('INVALID_AGENT_NET_SHARING_STATE');
       if (state.delegationRequests && !Array.isArray(state.delegationRequests)) throw new Error('INVALID_AGENT_NET_DELEGATION_REQUESTS');
       const map = (value: unknown) => value === undefined || (!!value && typeof value === 'object' && !Array.isArray(value));
       if ((state.primaryNetworkId !== undefined && typeof state.primaryNetworkId !== 'string')

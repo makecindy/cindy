@@ -5,7 +5,7 @@
  */
 import type { AutoReviewDecision } from '@cindy/maker-core';
 
-import type { UtilityTextResult } from '../../shared/utilityTextResult.js';
+import type { UtilityTextAttempt, UtilityTextResult } from '../../shared/utilityTextResult.js';
 import {
   DEDICATED_AUTO_REVIEW_CANDIDATES,
   type AutoReviewAuxiliaryFallback,
@@ -62,6 +62,7 @@ function sleepWithSignal(ms: number, signal: AbortSignal): Promise<void> {
 
 function transientCandidateFailure(result: UtilityTextResult): boolean {
   if (result.ok) return false;
+  if (result.attempts.some((attempt) => attempt.reason === 'http_error' && attempt.quotaExhausted)) return false;
   return result.attempts.some((attempt) => {
     if (attempt.status !== 'failed') return false;
     if (
@@ -157,7 +158,13 @@ export function createAutoReviewModelRouter(
   return async (prompt, parentSignal, sessionId?: string) => {
     const startedAt = now();
     let failure: AutoReviewTextFailure['failure'] = 'no_available_model';
+    const reviewCandidates: UtilityTextAttempt[] = [];
+    let quotaExhausted = false;
     const recordFailure = (result: UtilityTextResult) => {
+      if (!result.ok) {
+        reviewCandidates.push(...result.attempts);
+        quotaExhausted ||= result.attempts.some((attempt) => attempt.reason === 'http_error' && attempt.quotaExhausted === true);
+      }
       const next = reviewFailure(result);
       // Later skipped candidates must not erase an actual request/output failure.
       if (next !== 'no_available_model' || failure === 'no_available_model') failure = next;
@@ -320,6 +327,6 @@ export function createAutoReviewModelRouter(
       durationMs: now() - startedAt,
     });
     if (parentSignal?.aborted) return null;
-    return { failure: controller.signal.aborted ? 'timeout' : failure };
+    return { failure: quotaExhausted ? 'quota_exhausted' : controller.signal.aborted ? 'timeout' : failure, reviewCandidates };
   };
 }

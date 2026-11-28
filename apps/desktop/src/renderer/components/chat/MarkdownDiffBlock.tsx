@@ -60,7 +60,7 @@ export function MarkdownDiffBlock({ raw }: MarkdownDiffBlockProps) {
     // 滚动条常显 + 行宽取最长行,长行滚出去以后红/绿底色不断。
     <div
       className={cn(
-        'diff-hscroll my-3 overflow-x-auto rounded-[12px]',
+        'diff-hscroll my-3 overflow-x-auto rounded-xl',
         'border border-[var(--msg-code-block-border)]',
         'bg-[var(--msg-code-block-bg)]',
       )}

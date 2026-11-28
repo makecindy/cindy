@@ -84,7 +84,8 @@ async function readGithubReleases(
       if (response.status === 401) return { status: 'sign-in' };
       if (response.status === 404 && !token) return { status: 'sign-in' };
       if (response.status === 404 && tag) return { status: 'not-found' };
-      if (response.status === 404 || (response.status === 403 && response.headers.get('x-ratelimit-remaining') !== '0')) {
+      if (response.status === 404 || (response.status === 403 &&
+          response.headers.get('x-ratelimit-remaining') !== '0' && !response.headers.has('retry-after'))) {
         return { status: 'forbidden' };
       }
       return { status: 'unavailable' };
@@ -102,19 +103,33 @@ async function readGithubReleases(
   }
 }
 
-export async function findGithubPluginInstall(
+async function readGithubReleasesWithFallback(
   fetch: typeof globalThis.fetch,
   token: string | null,
   source: { repository: string; tag?: string },
 ) {
   const data = await readGithubReleases(fetch, token, source.repository, source.tag);
+  // A local credential can be rejected even when the requested release is public.
+  if (token && data.status !== 'ok' && data.status !== 'unavailable') {
+    const publicData = await readGithubReleases(fetch, null, source.repository, source.tag);
+    if (publicData.status === 'ok') return { data: publicData, authenticated: false };
+  }
+  return { data, authenticated: token !== null };
+}
+
+export async function findGithubPluginInstall(
+  fetch: typeof globalThis.fetch,
+  token: string | null,
+  source: { repository: string; tag?: string },
+) {
+  const { data, authenticated } = await readGithubReleasesWithFallback(fetch, token, source);
   if (data.status !== 'ok') return data;
   const packages = data.releases.flatMap(item => readCandidates(item));
   if (packages.length === 0) return { status: 'empty' } as const;
   if (new Set(packages.map(item => item.pluginId)).size !== 1) return { status: 'ambiguous' } as const;
   const release = packages.reduce((best, item) =>
     compareAppUpdateVersions(item.version, best.version) === 'newer' ? item : best);
-  return { status: 'available', release } as const;
+  return { status: 'available', release, authenticated } as const;
 }
 
 export async function checkGithubPluginRelease(
@@ -123,11 +138,10 @@ export async function checkGithubPluginRelease(
   repository: string,
   pluginId: string,
   currentVersion: string,
-): Promise<GithubPluginReleaseCheck> {
-  if (!token) return { status: 'sign-in' };
-  const data = await readGithubReleases(fetch, token, repository);
-  if (data.status !== 'ok') return { status: data.status === 'not-found' ? 'empty' : data.status };
-  if (!parseAppUpdateVersion(currentVersion)) return { status: 'unavailable' };
+): Promise<{ check: GithubPluginReleaseCheck; authenticated: boolean }> {
+  if (!parseAppUpdateVersion(currentVersion)) return { check: { status: 'unavailable' }, authenticated: false };
+  const { data, authenticated } = await readGithubReleasesWithFallback(fetch, token, { repository });
+  if (data.status !== 'ok') return { check: { status: data.status === 'not-found' ? 'empty' : data.status }, authenticated };
   let release: GithubPluginRelease | undefined;
   for (const item of data.releases) {
     const candidate = readCandidates(item, pluginId)[0];
@@ -136,19 +150,25 @@ export async function checkGithubPluginRelease(
       release = matchingRelease;
     }
   }
-  if (!release) return { status: 'empty' };
-  return { status: compareAppUpdateVersions(release.version, currentVersion) === 'newer' ? 'available' : 'current', release };
+  if (!release) return { check: { status: 'empty' }, authenticated };
+  const status = compareAppUpdateVersions(release.version, currentVersion) === 'newer' ? 'available' : 'current';
+  return { check: { status, release }, authenticated };
 }
 
 export async function downloadGithubPluginRelease(
   fetch: typeof globalThis.fetch,
   token: string | null,
   repository: string,
-  release: GithubPluginRelease,
+  release: GithubPluginRelease & { pluginId?: string },
   destination: string,
   callbacks?: DownloadProgressReporter['callbacks'],
 ): Promise<void> {
-  const assetUrl = `${releaseApi(repository)}/assets/${release.assetId}`;
+  const version = encodeURIComponent(release.version);
+  // Use the public binary URL for anonymous downloads. The authenticated API
+  // endpoint is still needed for private release assets.
+  const assetUrl = !token && release.pluginId
+    ? `https://github.com/${repository}/releases/download/v${version}/${release.pluginId}-${version}.cindy`
+    : `${releaseApi(repository)}/assets/${release.assetId}`;
   await download({
     ...callbacks,
     url: assetUrl,
@@ -166,7 +186,7 @@ export async function downloadGithubPluginRelease(
     },
     request: async (url, init) => {
       const headers = new Headers(init.headers);
-      if (url === assetUrl) {
+      if (token && url === assetUrl) {
         for (const [name, value] of Object.entries(githubHeaders(token, 'application/octet-stream'))) {
           headers.set(name, value);
         }

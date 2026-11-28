@@ -73,7 +73,7 @@ export function ProjectDirectoriesEditor({
                   disabled={disabled}
                   onClick={onChooseMainDirectory}
                 >
-                  {label('changeMainDirectory')}
+                  {label(automatic && local ? 'chooseExistingFolder' : 'changeMainDirectory')}
                 </Button>
               )}
               {!automatic && (

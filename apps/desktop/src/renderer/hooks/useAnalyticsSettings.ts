@@ -7,6 +7,8 @@ export interface AnalyticsSettingsState {
   analyticsEnabledCustomized: boolean;
   /** allowed = isReportingBuild && 已同意隐私政策 && 统计开关开启(dev 默认 false,XDT_TAPDB_DEV=1 可放行)。 */
   allowed: boolean;
+  /** 已同意过旧版协议、需要确认更新后的《服务条款》《隐私协议》。 */
+  legalTermsUpdateRequired: boolean;
   loading: boolean;
 }
 
@@ -15,6 +17,7 @@ const INITIAL: AnalyticsSettingsState = {
   analyticsEnabled: true,
   analyticsEnabledCustomized: false,
   allowed: false,
+  legalTermsUpdateRequired: false,
   loading: true,
 };
 
@@ -24,6 +27,7 @@ function normalize(payload: AnalyticsSettingsPayload): AnalyticsSettingsState {
     analyticsEnabled: payload.analyticsEnabled === true,
     analyticsEnabledCustomized: payload.analyticsEnabledCustomized === true,
     allowed: payload.allowed === true,
+    legalTermsUpdateRequired: payload.legalTermsUpdateRequired === true,
     loading: false,
   };
 }
@@ -38,6 +42,7 @@ export function useAnalyticsSettings(): {
   state: AnalyticsSettingsState;
   setAnalyticsEnabled: (enabled: boolean) => Promise<void>;
   resetAnalyticsEnabled: () => Promise<void>;
+  acceptLegalTermsUpdate: () => Promise<void>;
 } {
   const [state, setState] = useState<AnalyticsSettingsState>(INITIAL);
 
@@ -78,5 +83,10 @@ export function useAnalyticsSettings(): {
     setState(normalize(payload));
   }, []);
 
-  return { state, setAnalyticsEnabled, resetAnalyticsEnabled };
+  const acceptLegalTermsUpdate = useCallback(async () => {
+    const payload = await window.electronAPI.acceptLegalTermsUpdate();
+    setState(normalize(payload));
+  }, []);
+
+  return { state, setAnalyticsEnabled, resetAnalyticsEnabled, acceptLegalTermsUpdate };
 }

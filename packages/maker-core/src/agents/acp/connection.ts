@@ -108,7 +108,7 @@ export class AcpConnection {
   request(
     method: string,
     params: AcpRecord,
-    opts: { timeoutMs?: number | null; signal?: AbortSignal } = {},
+    opts: { timeoutMs?: number | null; signal?: AbortSignal; onResult?: (result: AcpRecord) => void; onSent?: () => void } = {},
   ): Promise<AcpRecord> {
     if (this.closedInfo) return Promise.reject(new AcpConnectionClosedError(this.closedInfo));
     const id = this.nextId++;
@@ -120,7 +120,17 @@ export class AcpConnection {
         entry.cleanupAbort?.();
         this.pending.delete(id);
       };
-      entry.resolve = (value) => { settle(); resolve(value); };
+      entry.resolve = (value) => {
+        settle();
+        if (opts.onResult) {
+          try {
+            opts.onResult(value);
+          } catch (error) {
+            this.options.logger?.error('acp: response handler failed', { method, error: String(error) });
+          }
+        }
+        resolve(value);
+      };
       entry.reject = (error) => { settle(); reject(error); };
       if (timeoutMs !== null) {
         entry.timer = setTimeout(() => entry.reject(new AcpRequestTimeoutError(method, timeoutMs)), timeoutMs);
@@ -135,6 +145,7 @@ export class AcpConnection {
       this.pending.set(id, entry);
       try {
         this.send({ jsonrpc: '2.0', id, method, params });
+        opts.onSent?.();
       } catch (error) {
         entry.reject(error instanceof Error ? error : new Error(String(error)));
       }

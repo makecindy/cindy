@@ -47,7 +47,7 @@ export function StartupLogSupport() {
     <>
       {visible && (
         <div
-          className="pointer-events-none fixed inset-x-0 bottom-2 z-[9999] flex justify-center"
+          className="pointer-events-none fixed inset-x-0 bottom-2 z-fullscreen flex justify-center"
           style={WINDOW_NO_DRAG_STYLE}
         >
           {/* Login's bare-text action treatment; only the label's padded hit area is interactive. */}

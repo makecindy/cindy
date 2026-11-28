@@ -1,5 +1,14 @@
 /** Bounded last-known metadata, never an execution grant or an authorization result. */
 export const PROVIDER_METADATA_TRUST_MS = 30 * 60_000;
+/**
+ * One freshness rule for every remote catalog reader on a host: a snapshot read
+ * this recently answers without another physical read. Source pushes and
+ * permission changes still retire it at once (the scope key changes), and live
+ * reads (probes, execution) never use it.
+ */
+export const REMOTE_CATALOG_FRESH_MS = 15_000;
+/** With a snapshot on hand, a slow refresh is answered from it after this wait. */
+export const REMOTE_CATALOG_REFRESH_WAIT_MS = 2_000;
 
 export interface ProviderMetadataContinuity { stale: boolean; remainingMs: number }
 /** Known permission failures retire displayed metadata as well as host snapshots. */
@@ -65,6 +74,8 @@ export interface MetadataContinuityScope {
   remainingTrustMs?(value: unknown): number;
   /** A host with its own directory generation/coalescing may deliberately refresh again. */
   joinPending?: boolean;
+  /** A snapshot stored less than this long ago answers as fresh without a new read. */
+  freshForMs?: number;
 }
 
 export interface MetadataContinuityResult<T> {
@@ -74,7 +85,7 @@ export interface MetadataContinuityResult<T> {
 }
 
 interface Entry {
-  snapshot?: { json: string; wallUntil: number; monoUntil: number };
+  snapshot?: { json: string; wallUntil: number; monoUntil: number; storedWall: number; storedMono: number };
   flight?: Promise<MetadataContinuityResult<unknown>>;
 }
 
@@ -151,6 +162,13 @@ export class MetadataContinuityReader {
     };
     const snapshot = cached();
     if (snapshot && !scope.signalingAvailable()) return snapshot;
+    const freshForMs = scope.freshForMs ?? 0;
+    const stored = currentEntry.snapshot;
+    if (snapshot && stored && freshForMs > 0) {
+      // Age by both clocks so a wall-clock jump cannot extend the fresh window.
+      const age = Math.max(this.wall() - stored.storedWall, this.mono() - stored.storedMono);
+      if (age >= 0 && age < freshForMs) return { ...snapshot, stale: false };
+    }
     if (!entry.flight) {
       const wall = this.wall(), mono = this.mono();
       const requestedDuration = scope.validForMs ?? PROVIDER_METADATA_TRUST_MS;
@@ -177,7 +195,8 @@ export class MetadataContinuityReader {
               retained -= other.snapshot.json.length; delete other.snapshot;
               if (!other.flight) this.entries.delete(otherKey);
             }
-            currentEntry.snapshot = { json, wallUntil: wall + lifetime, monoUntil: mono + lifetime };
+            currentEntry.snapshot = { json, wallUntil: wall + lifetime, monoUntil: mono + lifetime,
+              storedWall: wall, storedMono: mono };
           } else delete currentEntry.snapshot;
         }
         return { value, stale: false, remainingMs: Math.max(0, remainingMs) };
@@ -210,7 +229,7 @@ export class MetadataContinuityReader {
           const value = cached();
           if (value) resolve(value); else void flight.then(resolve, reject);
         } catch (error) { reject(error); }
-      }, this.options.refreshWaitMs ?? 2_000);
+      }, this.options.refreshWaitMs ?? REMOTE_CATALOG_REFRESH_WAIT_MS);
     });
     try { return await Promise.race([flight, fallback]); }
     finally { if (timer !== undefined) clearTimeout(timer); }

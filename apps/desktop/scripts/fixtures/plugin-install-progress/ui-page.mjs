@@ -16,6 +16,16 @@ export default {
   async check(page, ui) {
     const rings = page.getByRole('progressbar');
     if (ui.case === 'default' || ui.case === 'narrow') {
+      const card = page.getByRole('button', { name: 'Waiting for confirmation', exact: true });
+      const notice = card.getByText(await ui.t('settings.ghosts.installConsent.updateNeedsConsent'), { exact: true });
+      const update = card.locator('button').filter({ hasText: await ui.t('settings.ghosts.installConsent.confirmUpdate') });
+      assert.equal(await notice.count(), 0);
+      const button = await update.boundingBox();
+      assert.ok(button, 'The update button must be visible before confirmation');
+      await update.click();
+      const progress = card.getByRole('progressbar');
+      await progress.waitFor();
+      assert.equal(await notice.count(), 0);
       assert.equal(await rings.count(), 10);
       // No figures beside the ring: the percentage lives only in the accessible value.
       assert.equal(await page.getByText(/\d+%/).count(), 0);
@@ -24,6 +34,14 @@ export default {
       await page.getByText(await ui.t('settings.ghosts.updateAll.statusFailed'), { exact: true }).waitFor();
       await page.getByText(await ui.t('settings.ghosts.installProgress.installFailed'), { exact: true }).waitFor();
       assert.equal(await page.locator('button:has(svg.lucide-rotate-ccw)').count(), 2);
+      if (ui.case === 'narrow') {
+        const ring = await progress.boundingBox();
+        assert.ok(ring && Math.abs(ring.width - button.width) <= 1, 'The progress indicator must keep the update button width');
+        if (ui.locale === 'zh-CN') {
+          const caption = progress.locator(':scope > span').last();
+          assert.ok(await caption.evaluate(node => node.scrollWidth <= node.clientWidth + 1), 'The full Chinese confirmation state must fit');
+        }
+      }
     } else if (ui.case === 'update-all') {
       assert.equal(await rings.count(), 2);
       await page.getByText('Download timed out', { exact: true }).waitFor();

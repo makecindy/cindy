@@ -15,11 +15,16 @@ import { readCustomProviderKey } from '../secrets/providerSecretStore.js';
 import { ensureManagedOllamaReadyForSession } from '../local-model-runtime/preflight.js';
 import { getUtilityModelChainProfiles } from './UtilityModelSelection.js';
 import { getEffectiveAuxiliaryModelChain } from './resolveAuxiliaryModelChain.js';
+import { reportAuxiliaryChainOutcome } from './auxiliaryChainOutcomeSink.js';
 // After the Desktop modules, so module evaluation keeps the former order.
 import { createOneShotCandidates } from './oneShotCandidatesCore.js';
 import { getDesktopSelectableCatalog } from '../maker-host/createDesktopProviderService.js';
 import { acquireSubscriptionAccount } from '../subscription-accounts/runtime.js';
 import { accountProviderId } from '../subscription-accounts/placement.js';
+import {
+  isAuxiliaryModelTemporarilyUnavailable,
+  captureAuxiliaryHealthObserver,
+} from './auxiliary-model-health.js';
 
 export { DEDICATED_AUTO_REVIEW_CANDIDATES } from './oneShotCandidatesCore.js';
 export type {
@@ -60,8 +65,12 @@ const desktopOneShot = createOneShotCandidates({
   ensureManagedOllamaReadyForSession: (...args) => ensureManagedOllamaReadyForSession(...args),
   getUtilityModelChainProfiles: (...args) => getUtilityModelChainProfiles(...args),
   getEffectiveAuxiliaryModelChain: (...args) => getEffectiveAuxiliaryModelChain(...args),
+  isAuxiliaryModelTemporarilyUnavailable,
+  captureAuxiliaryHealthObserver,
+  reportAuxiliaryChainOutcome: (...args) => reportAuxiliaryChainOutcome(...args),
 });
 type Instance = typeof desktopOneShot;
+export const captureAuxiliaryRoutes = desktopOneShot.captureAuxiliaryRoutes;
 
 export function isUtilityRoutePaymentRequired(...args: Parameters<Instance['isUtilityRoutePaymentRequired']>): ReturnType<Instance['isUtilityRoutePaymentRequired']> {
   return desktopOneShot.isUtilityRoutePaymentRequired(...args);

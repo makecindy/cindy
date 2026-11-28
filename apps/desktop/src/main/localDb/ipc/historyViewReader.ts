@@ -40,6 +40,8 @@ export interface HistoryPageOptions {
   workLines?: boolean;
   /** Receives the latest page's shape; never serialized. */
   onShape?: (shape: HistoryPageShape) => void;
+  /** Receives the live-source rows the projection merged into the page. */
+  onLiveRows?: (ids: readonly string[]) => void;
 }
 
 function isRunningLeafWork<T extends HistoryMessageSource>(item: HistoryViewItem<T>): item is Extract<HistoryViewItem<T>, { type: 'work' }> {
@@ -48,6 +50,24 @@ function isRunningLeafWork<T extends HistoryMessageSource>(item: HistoryViewItem
 
 function fingerprint(value: unknown): string {
   return createHash('sha1').update(JSON.stringify(value)).digest('base64');
+}
+
+/** True when the page tree still holds live state: a volatile row id, a folded
+ *  live id, a row the live source owns, or a work group projected as streaming. */
+function hasVolatileItem<T extends HistoryMessageSource>(
+  items: readonly HistoryViewItem<T>[],
+  isVolatile: ((id: string) => boolean) | undefined,
+  liveIds: ReadonlySet<string>,
+): boolean {
+  const volatileId = (id: string) => liveIds.has(id) || isVolatile?.(id) === true;
+  return items.some((item) => item.type === 'messages'
+    ? item.deferred?.isStreaming === true
+      || item.messages.some((message) => volatileId(message.id))
+      || item.deferred?.liveMessageIds?.some((id) => volatileId(id)) === true
+    : item.summary.isStreaming
+      || item.summary.liveMessageIds?.some((id) => volatileId(id)) === true
+      || item.summary.preview?.liveMessageIds?.some((id) => volatileId(id)) === true
+      || (item.children ? hasVolatileItem(item.children, isVolatile, liveIds) : false));
 }
 export interface HistoryViewReaderDependencies<T extends HistoryMessageSource> {
   list(sessionId: string, opts: ReadOptions, skipImport: boolean): Promise<T[]>;
@@ -62,6 +82,9 @@ export interface HistoryViewReaderDependencies<T extends HistoryMessageSource> {
   live?(sessionId: string): T[];
   /** Caller context that changes what `list` does (e.g. import side effects). Read per call. */
   shareScope?(): string;
+  /** True for item ids that only exist while a run is live (e.g. `history-live:`)
+   * — pages containing them are never kept in the settled cache. */
+  isVolatileItemId?(id: string): boolean;
 }
 
 function compareRows(a: HistoryMessageSource, b: HistoryMessageSource): number {
@@ -211,6 +234,7 @@ export function createHistoryViewReader<T extends HistoryMessageSource>(deps: Hi
       const projectAll = () => {
         raw = chunks.slice().reverse().flat();
         live = liveRows(raw);
+        options.onLiveRows?.(live.map((row) => row.id));
         items = project(live);
         stale = false;
       };
@@ -499,10 +523,32 @@ export function createHistoryViewReader<T extends HistoryMessageSource>(deps: Hi
     },
   };
   // A task switch can request the same closed page from several surfaces at
-  // once. Share only work that is still in flight, keyed by the DB revision
-  // (client epoch + write counters), so no settled page acts as a cache. A
-  // running task keeps independent reads: its live rows change without writes.
+  // once. Share in-flight reads, then keep the settled page: the key carries
+  // the DB revision, so a cached page stays valid until the next DB write
+  // bumps it out of the key space. A running task keeps independent reads:
+  // its live rows change without writes.
   const pendingPages = new Map<string, Promise<{ page: HistoryViewPage<T>; shape?: HistoryPageShape }>>();
+  const SETTLED_PAGE_MAX_ENTRIES = 8;
+  const SETTLED_PAGE_MAX_BYTES = 4 * 1024 * 1024;
+  // The world can move while a read is in flight: a cancelled run drops its
+  // live-thinking row without a DB write, and a failed task-image restore
+  // stays a degraded-but-successful page. Neither bumps the revision, so a
+  // settled entry also needs a short TTL and a volatile-row guard.
+  const SETTLED_PAGE_TTL_MS = 30_000;
+  const settledPages = new Map<
+    string,
+    { page: HistoryViewPage<T>; shape?: HistoryPageShape; bytes: number; cachedAt: number }
+  >();
+  let settledPageBytes = 0;
+  const evictSettledPages = () => {
+    while (settledPages.size > SETTLED_PAGE_MAX_ENTRIES || settledPageBytes > SETTLED_PAGE_MAX_BYTES) {
+      const oldest = settledPages.keys().next().value as string | undefined;
+      if (oldest === undefined) break;
+      const entry = settledPages.get(oldest);
+      settledPages.delete(oldest);
+      if (entry) settledPageBytes -= entry.bytes;
+    }
+  };
   return {
     ...reader,
     async page(sessionId: string, before?: string, lazyDetails = false, options: HistoryPageOptions = {}): Promise<HistoryViewPage<T>> {
@@ -512,13 +558,60 @@ export function createHistoryViewReader<T extends HistoryMessageSource>(deps: Hi
       const revision = await deps.revision();
       if (deps.running(sessionId)) return reader.page(sessionId, before, lazyDetails, options, revision);
       const key = JSON.stringify([scope, sessionId, before ?? null, !!options.workLines, !!options.onShape, revision]);
+      // Same shared-page semantics as a concurrent in-flight read: callers get
+      // one page object per key; the serialization boundary is the caller's.
+      const settled = settledPages.get(key);
+      if (settled) {
+        // The settled cache is only valid while the session stays idle with an
+        // empty live source. A run that ended leaves its final row in the live
+        // source until the write lands (a failed write keeps it there), and the
+        // revision only moves when a write succeeds: serving the settled page
+        // then hides the newest message until the TTL expires. Re-read instead.
+        const liveNow = (deps.live?.(sessionId) ?? []).length > 0;
+        if (Date.now() - settled.cachedAt >= SETTLED_PAGE_TTL_MS || liveNow || deps.running(sessionId)) {
+          settledPages.delete(key);
+          settledPageBytes -= settled.bytes;
+        } else {
+          settledPages.delete(key); settledPages.set(key, settled);
+          if (settled.shape) options.onShape?.(settled.shape);
+          return settled.page;
+        }
+      }
       let shared = pendingPages.get(key);
       if (!shared) {
         let shape: HistoryPageShape | undefined;
+        // Live rows belong to the run that produced them: a cancelled run drops
+        // them without a DB write, so a page holding one must never outlive it.
+        // The reader reports the rows it merged, so the wrapper never asks the
+        // live source on its own: that read has its own timing meaning.
+        let liveIds: readonly string[] = [];
         const promise = reader.page(sessionId, before, lazyDetails, {
           workLines: options.workLines,
           ...(options.onShape ? { onShape: (value: HistoryPageShape) => { shape = value; } } : {}),
-        }, revision).then((page) => ({ page, shape })).finally(() => {
+          onLiveRows: (ids) => { liveIds = ids; },
+        }, revision).then(async (page) => {
+          // A live-projected row is volatile wherever it hides: as an unfolded row
+          // in `messages`, or as a folded ID kept in a work summary (`liveMessageIds`).
+          // Nested work groups keep their own summary, so scan the tree instead of
+          // the leaf-only summaries (`historyWorkSummaries` drops those parents).
+          // A group projected while the session ran keeps a streaming summary, and
+          // a run that started during the read is live again by now: both mean the
+          // page is not settled, whatever the revision says.
+          const liveIdSet = new Set(liveIds);
+          const volatile = hasVolatileItem(page.items, deps.isVolatileItemId, liveIdSet);
+          // The key carries the revision read before the page, so a write during
+          // the read only makes this entry unreachable — it is never served, and
+          // re-reading the revision here would add a query per read.
+          if (!volatile && !deps.running(sessionId)) {
+            const bytes = Buffer.byteLength(JSON.stringify(page), 'utf8');
+            if (bytes <= SETTLED_PAGE_MAX_BYTES) {
+              settledPages.set(key, { page, shape, bytes, cachedAt: Date.now() });
+              settledPageBytes += bytes;
+              evictSettledPages();
+            }
+          }
+          return { page, shape };
+        }).finally(() => {
           if (pendingPages.get(key) === promise) pendingPages.delete(key);
         });
         pendingPages.set(key, promise);

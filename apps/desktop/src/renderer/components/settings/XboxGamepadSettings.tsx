@@ -305,7 +305,7 @@ export function XboxGamepadSettings({ family, onBack }: { family: GamepadFamily;
           </Button>
         }
       />
-      <div className="flex flex-col gap-[14px]">
+      <div className="flex flex-col gap-3.5">
 
         {error && (
           <div className="flex items-center justify-between gap-3 text-12 text-[var(--error-fg)]">
@@ -539,8 +539,8 @@ function XboxGamepadPartEditor({
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
       <Dialog.Portal>
-        <Dialog.Overlay className="modal-scrim fixed inset-0 z-[10000]" />
-        <Dialog.Content onPointerDownOutside={(event) => event.preventDefault()} className="modal-panel fixed left-1/2 top-1/2 z-[10000] flex max-h-[min(700px,calc(100vh-48px))] w-[min(520px,calc(100vw-48px))] -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden text-[var(--text-primary)] focus:outline-none">
+        <Dialog.Overlay className="modal-scrim fixed inset-0 z-modal" />
+        <Dialog.Content onPointerDownOutside={(event) => event.preventDefault()} className="modal-panel fixed left-1/2 top-1/2 z-modal flex max-h-[min(700px,calc(100vh-48px))] w-[min(520px,calc(100vw-48px))] -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden text-[var(--text-primary)] focus:outline-none">
           <div className="px-6 pb-4 pt-6">
             <Dialog.Title className="text-18 font-medium leading-[1.3]">{title}</Dialog.Title>
             <Dialog.Description className="mt-1 text-13 leading-[1.4] text-[var(--text-secondary)]">

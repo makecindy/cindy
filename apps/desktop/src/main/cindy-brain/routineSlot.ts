@@ -1,16 +1,29 @@
 import type { InstalledGhost } from '../../shared/ghost.js';
 import { installedGhostStoragePart } from '../../shared/pluginIdentity.js';
-import { parseRoutineEvent } from '@cindy/maker-scheduler';
+import { parseRoutineEvent, RoutineEventAdmission } from '@cindy/maker-scheduler';
 import { createLogger } from '../logger.js';
 import { Buffer } from 'node:buffer';
+import type { PluginEventSubscription } from '@cindy/maker-scheduler';
+import {
+  pluginEventSubscriptionsFor,
+  publishPluginEvent,
+  reportPluginEventStatus,
+  type PluginEventListenState,
+} from '../scheduler-host/webhook/pluginEvents.js';
 
 const log = createLogger('routines:plugin');
 
 /*
- * Plugin routine events (`routineEvents`, `routine-request` pipe). Teammate routines were removed,
- * so nothing listens any more: requests are still validated and bounded exactly as before, then
- * answered as a no-op so plugins built for routines keep installing and running unchanged.
+ * Plugin events (`routineEvents` declaration, `routine-request` pipe). Teammate routines were removed;
+ * since 2026-11-23 published events wake the automations whose trigger chose this plugin
+ * (docs/product-rules/plugin-event-triggers.md). Validation and bounds are unchanged, so plugins built
+ * for routines keep working without reinstalling or re-approving.
  */
+
+// Publishing and status reports have separate per-plugin and host-wide rate budgets;
+// reading subscriptions shares the status budget.
+const publishAdmission = new RoutineEventAdmission();
+const statusAdmission = new RoutineEventAdmission();
 
 // Host-wide: status and publish share these slots.
 const pendingByPlugin = new Map<string, number>();
@@ -73,6 +86,7 @@ function reserveRequest(pluginId: string): () => void {
 const PUBLIC_REJECTIONS = [
   'Routine request is too large or invalid',
   'Routine request intake is busy; retry later',
+  'Routine request rate limit reached; retry after 60 seconds',
   'Expected an object',
   'Too many event fields',
   'Event fields must be strings, finite numbers or booleans',
@@ -85,32 +99,58 @@ const PUBLIC_REJECTIONS = [
   'Expected nonempty text of at most 1000 characters',
 ] as const;
 
-/** A plugin may only report or publish its own declared events; no routine receives them any more. */
+/** A plugin may only report or publish its own declared events; the host derives the source from its identity. */
 export async function handleRoutineRequest(
   ghost: InstalledGhost | undefined,
   payload: unknown,
   isCurrent: () => boolean,
-): Promise<{ ok: boolean; accepted?: number; duplicate?: boolean; message?: string }> {
+): Promise<{
+  ok: boolean;
+  accepted?: number;
+  duplicate?: boolean;
+  subscriptions?: PluginEventSubscription[];
+  message?: string;
+}> {
   if (!ghost?.enabled || !ghost.manifest.routineEvents)
     return { ok: false, message: 'Routine events are not declared or the plugin is disabled' };
   if (!payload || typeof payload !== 'object' || Array.isArray(payload))
     return { ok: false, message: 'Invalid routine request' };
   const request = payload as Record<string, unknown>;
+  const plugin = installedGhostStoragePart(ghost);
   let release: (() => void) | undefined;
+  let releaseRate: (() => void) | undefined;
   try {
-    release = reserveRequest(installedGhostStoragePart(ghost));
+    release = reserveRequest(plugin);
     validateRequestSize(request);
-    if (request.action !== 'status' && request.action !== 'publish')
+    if (request.action !== 'status' && request.action !== 'publish' && request.action !== 'subscriptions')
       return { ok: false, message: 'Unknown routine operation' };
     if (request.action === 'status' && (typeof request.status !== 'string' || !['listening', 'disconnected', 'error'].includes(request.status)))
       return { ok: false, message: 'Invalid source status' };
-    if (request.action === 'publish') {
-      const event = parseRoutineEvent(request.event);
-      if (!ghost.manifest.routineEvents.events.some((declared) => declared.type === event.type))
-        return { ok: false, message: 'Event type is undeclared' };
+    // Rate limits apply before parsing the event and before durable writes; repeated status counts too.
+    releaseRate = (request.action === 'publish' ? publishAdmission : statusAdmission).acquire(plugin, Date.now());
+    if (request.action === 'subscriptions') {
+      if (!isCurrent()) return { ok: false, message: 'Plugin owner or installation changed' };
+      // Only the event types and conditions automations chose for this plugin; no automation identity or prompt.
+      return { ok: true, subscriptions: pluginEventSubscriptionsFor(plugin) };
     }
+    if (request.action === 'status') {
+      if (!isCurrent()) return { ok: false, message: 'Plugin owner or installation changed' };
+      reportPluginEventStatus(plugin, request.status as PluginEventListenState);
+      return { ok: true };
+    }
+    const event = parseRoutineEvent(request.event);
+    if (!ghost.manifest.routineEvents.events.some((declared) => declared.type === event.type))
+      return { ok: false, message: 'Event type is undeclared' };
     if (!isCurrent()) return { ok: false, message: 'Plugin owner or installation changed' };
-    return request.action === 'status' ? { ok: true } : { ok: true, accepted: 0, duplicate: false };
+    // accepted counts automations that durably queued it; it does not mean a run succeeded.
+    const { accepted, duplicate } = await publishPluginEvent(plugin, {
+      id: event.id,
+      type: event.type,
+      occurredAt: event.occurredAt,
+      ...(event.subject !== undefined ? { subject: event.subject } : {}),
+      data: event.data,
+    });
+    return { ok: true, accepted, duplicate };
   } catch (error) {
     const publicMessage = error instanceof Error
       ? PUBLIC_REJECTIONS.find((message) => message === error.message)
@@ -122,6 +162,7 @@ export async function handleRoutineRequest(
     });
     return { ok: false, message: 'Routine request failed; please retry later' };
   } finally {
+    releaseRate?.();
     release?.();
   }
 }

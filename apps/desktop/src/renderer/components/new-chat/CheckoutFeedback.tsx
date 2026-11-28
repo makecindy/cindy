@@ -42,6 +42,7 @@ export function CheckoutSessions({
             {t(`newChat.checkout.runningTitle${vars.count === 1 ? '_one' : ''}`, vars)}
           </span>
         </div>
+        {/* ml-[22px] = 14px Spinner + gap-2，正文对齐标题文字（DESIGN.md §5 悬挂缩进）。 */}
         <div className="ml-[22px] mt-1 space-y-2 text-12 text-[var(--text-secondary)]">
           <p>
             {t(
@@ -187,7 +188,7 @@ export function CheckoutDialog({
       }}
     >
       <Dialog.Portal>
-        <Dialog.Overlay className="modal-scrim fixed inset-0 z-[10000]" />
+        <Dialog.Overlay className="modal-scrim fixed inset-0 z-modal" />
         <Dialog.Content
           style={WINDOW_NO_DRAG_STYLE}
           onOpenAutoFocus={(e) => {
@@ -198,7 +199,7 @@ export function CheckoutDialog({
           onEscapeKeyDown={(e) => {
             if (busy) e.preventDefault();
           }}
-          className="modal-panel fixed left-1/2 top-1/2 z-[10000] flex max-h-[85vh] w-[calc(100vw-32px)] max-w-[460px] -translate-x-1/2 -translate-y-1/2 flex-col gap-2 p-4"
+          className="modal-panel fixed left-1/2 top-1/2 z-modal flex max-h-[85vh] w-[calc(100vw-32px)] max-w-[460px] -translate-x-1/2 -translate-y-1/2 flex-col gap-2 p-4"
         >
           <Dialog.Title className="break-words text-18 font-medium text-[var(--confirm-title)]">
             {t('newChat.checkout.title', vars)}

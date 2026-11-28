@@ -235,6 +235,108 @@ describe('workspaceKind 在复活 / upsert 冲突时的归属', () => {
     expect(await kindOf(created.id)).toBe('dialogue');
   });
 
+  /**
+   * 个人飞书 bot 的按群设置(2026-11-23): 生产入口 prepareNewSession / resetSessionToDefaults。
+   * 群设置的项目只在新建与 `/new` 时生效, 设置之后已有任务不被悄悄挪走(与微信「工作目录」
+   * 同一规则); 群固定的模型路由交给默认解析。缺口: 现有用例只有渠道托管目录与 `/project`。
+   * 最小失败输入: 群 lane 建好任务后给它设项目, 再查一次、再 `/new` 一次。tier: unit(真 SQLite)。
+   */
+  it('路由键自带项目: 设置后已有任务不动, `/new` 才挪进项目; 模型路由交给默认解析', async () => {
+    const { resolveImSessionDefaults } = await import('../../defaultSessionSettings');
+    const { resetSessionToDefaults } = await import('../sessionRepo');
+    const route = {
+      agentKind: 'codex',
+      model: 'gpt-6.2-sol',
+      providerId: null,
+      agentDeviceId: null,
+      effort: 'low',
+    } as const;
+    let laneDir: string | null = null;
+    const laneRepo = createImSessionRepo(
+      { agentKind: 'claude-code' } as ImOrchestratorConfig,
+      {
+        ...ns,
+        routeOverrideFor: (_bot: string, user: string) => (user.startsWith('g/') ? route : null),
+        laneWorkingDirFor: async (_bot: string, user: string) => (user.startsWith('g/') ? laneDir : undefined),
+      } as unknown as ImSessionNamespace,
+      { projectSwitching: true },
+    );
+
+    const created = await laneRepo.createSession('bot1', 'g/oc_1');
+    expect(created.workingDir).toBe(MANAGED_DIR);
+    expect(vi.mocked(resolveImSessionDefaults)).toHaveBeenLastCalledWith(
+      expect.anything(),
+      undefined,
+      'telegram',
+      route,
+    );
+
+    laneDir = PROJECT_DIR;
+    expect((await laneRepo.findActiveSession('bot1', 'g/oc_1'))?.workingDir).toBe(MANAGED_DIR);
+
+    const prepared = await laneRepo.prepareNewSession('bot1', 'g/oc_1');
+    await resetSessionToDefaults(created.id, {} as ImOrchestratorConfig, prepared, 'telegram');
+    const [row] = await db.select().from(sessions);
+    expect(row!.workingDir).toBe(PROJECT_DIR);
+    expect(row!.workspaceKind).toBe('project');
+
+    // PR #12287: 解除群项目绑定后，下次 /new 应回到托管对话目录并更新侧栏归组。
+    laneDir = null;
+    const dialogue = await laneRepo.prepareNewSession('bot1', 'g/oc_1');
+    await resetSessionToDefaults(created.id, {} as ImOrchestratorConfig, dialogue, 'telegram');
+    const [reset] = await db.select().from(sessions);
+    expect(reset).toMatchObject({ workingDir: MANAGED_DIR, workspaceKind: 'dialogue' });
+  });
+
+  /**
+   * 绑定项目的群新任务跟随那个项目的设置(2026-11-23 用户裁决: 只有没绑项目的群才用渠道
+   * 「新对话配置」)。生产入口 prepareNewSession: 路由键固定的路由 > 项目设置 > 渠道设置; 项目
+   * 的权限档交给渠道的 permissionModeFor 按自己的优先级采用。缺口: 上一条只覆盖固定路由。
+   * 最小失败输入: 同一个项目群, 先不固定路由、再固定路由各建一次。tier: unit(真 SQLite)。
+   */
+  it('任务落在绑定项目里时按项目设置建; 路由键固定的路由仍优先', async () => {
+    const projectDefaults = {
+      agentKind: 'claude-code' as const,
+      model: 'claude-opus-5-5',
+      effort: 'xhigh' as const,
+      providerId: 'anthropic',
+      agentDeviceId: null,
+      permissionMode: 'bypassPermissions' as const,
+      fastMode: false,
+      fingerprint: 'fp-project',
+    };
+    const resolveProject = vi.fn(async () => projectDefaults);
+    let fixedRoute: { agentKind: 'codex'; model: string; providerId: null; agentDeviceId: null; effort: 'low' } | null = null;
+    const permissionModeFor = vi.fn((_user: string, project?: string | null) => project ?? 'auto');
+    const laneRepo = createImSessionRepo(
+      { agentKind: 'claude-code' } as ImOrchestratorConfig,
+      {
+        ...ns,
+        routeOverrideFor: () => fixedRoute,
+        laneWorkingDirFor: async () => PROJECT_DIR,
+        laneProjectDefaultsFor: (_bot: string, _user: string, dir: string) =>
+          dir === PROJECT_DIR
+            ? { fingerprint: 'fp-project', permissionMode: 'bypassPermissions', resolve: resolveProject }
+            : null,
+        permissionModeFor,
+      } as unknown as ImSessionNamespace,
+      { projectSwitching: true },
+    );
+
+    const followsProject = await laneRepo.prepareNewSession('bot1', 'g/oc_1');
+    expect(followsProject).toMatchObject({ model: 'claude-opus-5-5', effort: 'xhigh', permissionMode: 'bypassPermissions' });
+    expect(followsProject.defaultRouteFingerprint).toBe('fp-project');
+    expect(permissionModeFor).toHaveBeenLastCalledWith('g/oc_1', 'bypassPermissions');
+
+    fixedRoute = { agentKind: 'codex', model: 'gpt-6.2-sol', providerId: null, agentDeviceId: null, effort: 'low' };
+    resolveProject.mockClear();
+    const fixed = await laneRepo.prepareNewSession('bot1', 'g/oc_1');
+    expect(resolveProject).not.toHaveBeenCalled();
+    // 固定路由走渠道解析(这里的替身返回 claude-opus-4-8), 权限仍按项目档位交给渠道决定。
+    expect(fixed.model).toBe('claude-opus-4-8');
+    expect(fixed.permissionMode).toBe('bypassPermissions');
+  });
+
   it('createSession 撞上残留行时同样不动用户选的项目归属', async () => {
     const r = repo();
     const created = await r.createSession('bot1', 'u1');

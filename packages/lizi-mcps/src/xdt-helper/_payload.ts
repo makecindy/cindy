@@ -46,3 +46,11 @@ export function errorPayload(
     isError: true,
   };
 }
+
+/** Only this structured reason is part of the project write error contract. */
+export function controlErrorPayload(failure: { errorCode: string; message: string }) {
+  const detail = failure.errorCode === 'PRECONDITION_FAILED'
+    && 'reason' in failure && failure.reason === 'HOST_PROFILE_RELEASE_FAILED'
+    ? { reason: failure.reason } : undefined;
+  return errorPayload(failure.errorCode, failure.message, detail);
+}

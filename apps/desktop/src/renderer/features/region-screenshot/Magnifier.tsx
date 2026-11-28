@@ -37,7 +37,7 @@ export function Magnifier({
   color,
   scaleFactor,
 }: {
-  frame: HTMLCanvasElement | null;
+  frame: HTMLCanvasElement | HTMLImageElement | null;
   frameSize: RegionSize;
   point: RegionPoint;
   viewport: RegionSize;
@@ -50,6 +50,14 @@ export function Magnifier({
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const fx = Math.floor((point.x * frameSize.width) / viewport.width);
   const fy = Math.floor((point.y * frameSize.height) / viewport.height);
+  // Use the same ICC-tagged image as the desktop. CSS crops it before the
+  // final monitor conversion; there is no intermediate gamut for the swatch.
+  const profileBackground = (zoom: number, offset: number) => frame instanceof HTMLImageElement ? {
+    backgroundImage: `url("${frame.src}")`,
+    backgroundSize: `${frameSize.width * zoom}px ${frameSize.height * zoom}px`,
+    backgroundPosition: `${(offset - fx) * zoom}px ${(offset - fy) * zoom}px`,
+    backgroundRepeat: 'no-repeat', backgroundOrigin: 'content-box', imageRendering: 'pixelated' as const,
+  } : undefined;
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -64,10 +72,14 @@ export function Magnifier({
     if (!ctx) return;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.imageSmoothingEnabled = false;
-    ctx.fillStyle = SCREENSHOT_OVERLAY.backdrop;
-    ctx.fillRect(0, 0, VIEW, VIEW);
     const half = Math.floor(SAMPLE / 2);
-    ctx.drawImage(frame, fx - half, fy - half, SAMPLE, SAMPLE, 0, 0, VIEW, VIEW);
+    if (frame instanceof HTMLImageElement) {
+      ctx.clearRect(0, 0, VIEW, VIEW);
+    } else {
+      ctx.fillStyle = SCREENSHOT_OVERLAY.backdrop;
+      ctx.fillRect(0, 0, VIEW, VIEW);
+      ctx.drawImage(frame, fx - half, fy - half, SAMPLE, SAMPLE, 0, 0, VIEW, VIEW);
+    }
     // 十字线与中心格: 覆盖在任意截图内容上的功能像素, 暗色带 + 白框保证都看得见。
     const center = half * ZOOM;
     ctx.fillStyle = SCREENSHOT_OVERLAY.crosshair;
@@ -90,15 +102,17 @@ export function Magnifier({
       className="pointer-events-none fixed overflow-hidden rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)]"
       style={{ left: position.x, top: position.y, width }}
     >
-      <canvas ref={canvasRef} style={{ width: VIEW, height: VIEW, display: 'block' }} />
+      <canvas ref={canvasRef} style={{ width: VIEW, height: VIEW, display: 'block',
+        backgroundColor: SCREENSHOT_OVERLAY.backdrop, ...profileBackground(ZOOM, Math.floor(SAMPLE / 2)) }} />
       <div className="flex flex-col gap-0.5 border-t border-[var(--border-default)] px-2 py-1.5 text-12 leading-[1.35] tabular-nums">
         <div className="text-[var(--text-secondary)]">
           {Math.floor(point.x * scaleFactor)}, {Math.floor(point.y * scaleFactor)}
         </div>
         <div className="flex items-center gap-1.5 text-[var(--text-primary)]">
           <span
+            // 取色色样：插画内部的形状，不是控件框（DESIGN.md §5 插画登记）
             className="inline-block h-3 w-3 shrink-0 rounded-sm border border-[var(--border-default)]"
-            style={{ background: color ? colorHex(color) : 'transparent' }}
+            style={{ backgroundColor: color ? colorHex(color) : 'transparent', ...profileBackground(16, 0) }}
           />
           <span>{color ? colorHex(color) : '—'}</span>
         </div>

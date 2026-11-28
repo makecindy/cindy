@@ -9,6 +9,7 @@ import * as providerCache from '@/hooks/useDeviceProviders';
 import * as capabilities from '@/hooks/useAgentCapabilities';
 import { CONTROLLED_MODEL_CATALOG_CHANNEL, modelCatalogKey } from '../../shared/controlledModelCatalog';
 import { refreshRemoteCatalogSnapshot } from '@/lib/remoteCatalogSnapshot';
+import { REMOTE_CATALOG_FRESH_MS } from '@cindy/device-link';
 import { invokeProviderMetadataContinuity, invalidateProviderMetadataContinuity, onProviderMetadataDenied } from '../../main/device-link/providerMetadataContinuity';
 vi.mock('../../main/appSessionState.js', () => ({ activeOwnerScopeKey: () => 'catalog-test-owner', isAppSessionBoundaryPending: () => false }));
 vi.mock('../../main/clientEndpointsService.js', () => ({ getClientEndpoint: () => 'https://catalog.invalid' }));
@@ -74,6 +75,56 @@ it('expires only the direct host entry and keeps a routed alias until its own bu
     expect(capabilities.getCachedCapabilities('claude-code', route)).toBeNull();
     expect(invoke.mock.calls.length).toBe(readsBefore);
   } finally {
+    providerCache.evictAllDeviceProviders();
+    capabilities.evictAllRemoteCapabilities();
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  }
+});
+
+/**
+ * 测试价值
+ * - 生产入口与可观察结果：useDeviceProviders / useAgentCapabilities 的订阅者在有界快照到期后收到 loading → ready，
+ *   而不是停在错误、等窗口重新聚焦才恢复（2026-11-23 现场：选择器里的远程目录到期后消失）。
+ * - 规则：与 Mobile 一致，仍有界面在用时补读一次；同一来源 5 秒内不再补读（防止近零预算循环），之后照常报错。
+ * - 最小失败输入：remainingMs=1000 的目录 + 一个订阅者，推进 1001ms。修复前事件为 error、无新读取。
+ * - tier：unit（真实缓存与 SDK 到期，仅 IPC 与时钟受控）。
+ */
+it('re-reads a mounted catalog once when its budget ends instead of leaving the picker empty', async () => {
+  vi.useFakeTimers({ toFake: ['Date', 'performance', 'setTimeout', 'clearTimeout'] });
+  const capsPayload = {
+    availableModels: [{ id: 'm', displayName: 'M', contextWindow: 1, efforts: [], defaultEffort: null }],
+    hasFastMode: false, effortLevels: [], permissionModes: [],
+    providerContinuity: { stale: false, remainingMs: 1000 },
+  };
+  const invoke = vi.fn(async (_device: string, channel: string) => channel === 'maker:provider:list'
+    ? { ...result('host'), providerContinuity: { stale: false, remainingMs: 1000 } }
+    : capsPayload);
+  vi.stubGlobal('window', { electronAPI: { deviceLink: { invoke } } });
+  const providerEvents: string[] = [];
+  const capabilityEvents: string[] = [];
+  const offProvider = providerCache.subscribeDeviceProviders('host', event => providerEvents.push(event.status));
+  const offCapability = capabilities.subscribeDeviceCapabilities('host', 'claude-code', event => capabilityEvents.push(event.status));
+  const providerReads = () => invoke.mock.calls.filter(([, channel]) => channel === 'maker:provider:list').length;
+  try {
+    await providerCache.prefetchDeviceProviders('host');
+    await capabilities.prefetchDeviceCapabilities('host');
+    providerEvents.length = 0; capabilityEvents.length = 0;
+    const reads = providerReads();
+    await vi.advanceTimersByTimeAsync(1001);
+    expect(providerEvents).toEqual(['loading', 'ready']);
+    expect(capabilityEvents.at(-1)).toBe('ready');
+    expect(capabilityEvents).toContain('loading');
+    expect(providerCache.getCachedDeviceProviders('host')?.providers).toHaveLength(1);
+    expect(providerReads()).toBe(reads + 1);
+    // A second expiry inside the 5s bound reports the expiry instead of reading again.
+    providerEvents.length = 0;
+    await vi.advanceTimersByTimeAsync(1001);
+    expect(providerEvents).toEqual(['loading', 'error']);
+    expect(providerReads()).toBe(reads + 1);
+  } finally {
+    offProvider();
+    offCapability();
     providerCache.evictAllDeviceProviders();
     capabilities.evictAllRemoteCapabilities();
     vi.useRealTimers();
@@ -269,10 +320,12 @@ it('expires only the affected agent kind and keeps healthy in-flight kinds', asy
 
     const beforeExpiry = events.mock.calls.length;
     await vi.advanceTimersByTimeAsync(1000);
-    expect(capabilities.getCachedCapabilities('codex', 'host')).toBeNull();
+    // Pi has no mounted consumer: retired without a read. Codex is mounted: one bounded re-read
+    // (2026-11-23, same as provider catalogs and Mobile) instead of a terminal error.
     expect(capabilities.getCachedCapabilities('pi', 'host')).toBeNull();
-    expect(events.mock.calls.slice(beforeExpiry).some(([event]) => event.status === 'error')).toBe(true);
-    expect(invoke).toHaveBeenCalledTimes(3);
+    expect(events.mock.calls.slice(beforeExpiry).map(([event]) => event.status)).toEqual(['loading', 'ready']);
+    expect(capabilities.getCachedCapabilities('codex', 'host')).not.toBeNull();
+    expect(invoke).toHaveBeenCalledTimes(4);
   } finally {
     off();
     capabilities.evictAllRemoteCapabilities();
@@ -303,6 +356,8 @@ it('clears a displayed fallback immediately on Main late denial, even while its 
     { providerContinuity: { stale: true, remainingMs: 0 } }); });
   try {
     await Promise.all(['M', 'N'].map(id => providerCache.prefetchDeviceProviders(id)));
+    // Past Main's shared fresh window the refresh reaches the host again.
+    await vi.advanceTimersByTimeAsync(REMOTE_CATALOG_FRESH_MS);
     phase = 'hold'; const refreshing = refreshRemoteCatalogSnapshot('M');
     await vi.advanceTimersByTimeAsync(2000); await refreshing;
     expect(providerCache.getCachedDeviceProviders('M')?.providers).toHaveLength(1);

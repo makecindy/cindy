@@ -9,10 +9,24 @@ import { WINDOW_DRAG_STYLE, WINDOW_NO_DRAG_STYLE } from '@/components/layout/win
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Tooltip } from '@/components/ui/tooltip';
+import { Z_INDEX_LAYERS } from '@/styles/generated/token-mappings';
+import { useHeldWhileBlockingPrompt } from '@/components/ui/blocking-prompt-hold';
 
 // 长按钮文案在面板内换行、按钮纵向长高,不冲出弹窗也不截断(DESIGN.md §4)。
 const CONFIRM_ACTION_CLASS =
   'h-auto min-h-9 min-w-[96px] max-w-full whitespace-normal [overflow-wrap:anywhere] py-1.5';
+
+export interface ConfirmDialogCheckboxItem {
+  id: string;
+  label: string;
+  defaultChecked?: boolean;
+}
+
+export interface ConfirmDialogOverrides {
+  description: string;
+  confirmText: string;
+  confirmVariant?: 'destructive';
+}
 
 export interface ConfirmDialogProps {
   open: boolean;
@@ -74,7 +88,11 @@ export interface ConfirmDialogProps {
   zIndex?: number;
   /** Destructive actions use the semantic destructive theme tokens. */
   confirmVariant?: 'default' | 'destructive';
-  checkedOverrides?: { description: string; confirmText: string; confirmVariant?: 'destructive' };
+  checkedOverrides?: ConfirmDialogOverrides;
+  /** 多个独立业务复选框（按声明顺序渲染，确认时通过 checkedIds 回传已勾选项）。 */
+  checkboxes?: readonly ConfirmDialogCheckboxItem[];
+  /** 按当前勾选集合动态计算正文与确认按钮覆盖，传入 checkboxes 时生效。 */
+  resolveCheckedOverrides?: (checkedIds: ReadonlySet<string>) => ConfirmDialogOverrides | undefined;
   /**
    * 主按钮文字前的小图标(如 Full access 确认的警示三角)。跟随按钮文字颜色,
    * 不引入新的语义色;loading 时与文字一起被 spinner 顶掉。
@@ -96,13 +114,13 @@ export interface ConfirmDialogProps {
    * 否则按钮 disabled 也无法阻止状态被外部改成 closed。
    */
   loading?: boolean;
-  onConfirm?: (opts?: { dontShowAgain?: boolean }) => void;
+  onConfirm?: (opts?: { dontShowAgain?: boolean; checkedIds?: string[] }) => void;
   onCancel?: () => void;
   onTertiary?: () => void;
 }
 
 export function ConfirmDialog({
-  open,
+  open: requestedOpen,
   onOpenChange,
   title,
   description: defaultDescription,
@@ -124,27 +142,48 @@ export function ConfirmDialog({
   contentSelectable = false,
   confirmVariant: defaultConfirmVariant = 'default',
   checkedOverrides,
+  checkboxes,
+  resolveCheckedOverrides,
   confirmIcon,
   describeContent = false,
   loading = false,
   onConfirm,
   onCancel,
   onTertiary,
-  zIndex = 10000,
+  zIndex = Z_INDEX_LAYERS.modal,
 }: ConfirmDialogProps) {
   const { t } = useTranslation();
+  // 登录过期等阻断提示显示期间,独立挂载的确认框(如关窗确认)暂缓到它关闭后再出现。
+  const open = useHeldWhileBlockingPrompt(requestedOpen);
   // describeContent 用:让 aria-describedby 覆盖整个「description + content」滚动区。
   const bodyId = useId();
   const resolvedCancelText = cancelText ?? t('commonUi.confirmDialog.cancel');
   // 每次打开复位到初始勾选态,避免上一轮的勾选残留到下一次弹窗。
   const [dontShowAgain, setDontShowAgain] = useState(checkboxDefaultChecked);
-  const overrides = dontShowAgain ? checkedOverrides : undefined;
+  const checkboxResetKey =
+    checkboxes?.map((item) => `${item.id}:${item.defaultChecked ? '1' : '0'}`).join('|') ?? '';
+  const initialCheckedIds = () =>
+    new Set(checkboxes?.filter((item) => item.defaultChecked).map((item) => item.id) ?? []);
+  const [checkedIds, setCheckedIds] = useState<Set<string>>(initialCheckedIds);
+  const hasMultipleCheckboxes = Boolean(checkboxes && checkboxes.length > 0);
+  const overrides = hasMultipleCheckboxes
+    ? resolveCheckedOverrides?.(checkedIds)
+    : dontShowAgain
+      ? checkedOverrides
+      : undefined;
   const description = overrides?.description ?? defaultDescription;
   const confirmVariant = overrides?.confirmVariant ?? defaultConfirmVariant;
   const resolvedConfirmText = overrides?.confirmText ?? confirmText ?? t('commonUi.confirmDialog.confirm');
+  const buildConfirmOpts = () =>
+    hasMultipleCheckboxes ? { dontShowAgain, checkedIds: [...checkedIds] } : { dontShowAgain };
   useEffect(() => {
     if (open) setDontShowAgain(checkboxDefaultChecked);
   }, [open, checkboxDefaultChecked]);
+  useEffect(() => {
+    if (open) setCheckedIds(initialCheckedIds());
+    // checkboxResetKey 仅在复选框清单或初始勾选态变化时变化，避免父组件重渲染清空用户勾选。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, checkboxResetKey]);
   const [typedConfirmation, setTypedConfirmation] = useState('');
   useEffect(() => {
     if (open) setTypedConfirmation('');
@@ -189,7 +228,7 @@ export function ConfirmDialog({
             套一层 Presence)。 */}
         <AlertDialog.Overlay
           className={cn(
-            'modal-scrim fixed inset-0 z-[10000]',
+            'modal-scrim fixed inset-0 z-modal',
           )}
           style={{ ...WINDOW_DRAG_STYLE, zIndex }}
         >
@@ -199,7 +238,7 @@ export function ConfirmDialog({
               // 命中区域按布局矩形计算、不跟随 transform（ChromeActions.tsx 的既有结论），
               // transform 定位会让 no-drag 挖洞与弹窗视觉位置错位，点弹窗内容会变成拖窗。
               // inset-0 + m-auto + h-fit：布局矩形即视觉矩形，挖洞与弹窗严格重合。
-              'modal-panel fixed inset-0 z-[10000] m-auto h-fit',
+              'modal-panel fixed inset-0 z-modal m-auto h-fit',
               'flex max-h-[85vh] flex-col',
               'w-full p-4',
               contentSelectable ? 'select-text' : 'select-none',
@@ -289,7 +328,7 @@ export function ConfirmDialog({
               >
                 {description && (
                   <AlertDialog.Description
-                    aria-live={checkedOverrides ? 'polite' : undefined}
+                    aria-live={checkedOverrides || resolveCheckedOverrides ? 'polite' : undefined}
                     className={cn('text-base text-[var(--confirm-desc)]', textClassName, descriptionClassName)}
                   >
                     {description}
@@ -298,7 +337,33 @@ export function ConfirmDialog({
                 {content && <div className={cn(description && 'mt-3')}>{content}</div>}
               </div>
             )}
-            {dontShowAgainLabel && (
+            {checkboxes && checkboxes.length > 0 ? (
+              <div className="mt-4 flex shrink-0 flex-col gap-2.5">
+                {checkboxes.map((item) => (
+                  <label
+                    key={item.id}
+                    className={cn(
+                      'flex cursor-pointer select-none items-center gap-2 text-13',
+                      'text-[var(--confirm-desc)]',
+                    )}
+                  >
+                    <Checkbox
+                      checked={checkedIds.has(item.id)}
+                      onChange={(e) => {
+                        const checked = e.target.checked;
+                        setCheckedIds((prev) => {
+                          const next = new Set(prev);
+                          if (checked) next.add(item.id);
+                          else next.delete(item.id);
+                          return next;
+                        });
+                      }}
+                    />
+                    {item.label}
+                  </label>
+                ))}
+              </div>
+            ) : dontShowAgainLabel ? (
               <label
                 className={cn(
                   'mt-4 flex shrink-0 cursor-pointer select-none items-center gap-2 text-13',
@@ -311,7 +376,7 @@ export function ConfirmDialog({
                 />
                 {dontShowAgainLabel}
               </label>
-            )}
+            ) : null}
             {requireTypedConfirmation && (
               <div className="mt-4 shrink-0">
                 <label
@@ -334,7 +399,7 @@ export function ConfirmDialog({
                   onKeyDown={(e) => {
                     if (e.key === 'Enter' && !confirmBlocked) {
                       e.preventDefault();
-                      onConfirm?.({ dontShowAgain });
+                      onConfirm?.(buildConfirmOpts());
                     }
                   }}
                   placeholder={
@@ -390,7 +455,7 @@ export function ConfirmDialog({
                   disabled={confirmBlocked}
                   loading={loading}
                   aria-label={resolvedConfirmText}
-                  onClick={() => onConfirm?.({ dontShowAgain })}
+                  onClick={() => onConfirm?.(buildConfirmOpts())}
                   palette="confirmation"
                   tone={confirmVariant === 'destructive' ? 'danger-solid' : 'default'}
                   className={CONFIRM_ACTION_CLASS}

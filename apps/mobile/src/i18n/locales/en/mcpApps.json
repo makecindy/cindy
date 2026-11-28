@@ -1,6 +1,8 @@
 {
   "sharedTaskReadOnly": "Only the session owner can interact with this card.",
   "retry": "Reload",
+  "viewLimit": "Too many pages are open. Scroll another page out of view or collapse it, and this page will open automatically.",
+  "pluginRevoked": "The plugin was disabled or changed. This page is no longer available.",
   "loadFailed": "The app could not load. Check the connection and reload.",
   "updateRequired": "This computer does not support MCP Apps yet. Update Cindy on that computer and try again.",
   "appName": "MCP App",

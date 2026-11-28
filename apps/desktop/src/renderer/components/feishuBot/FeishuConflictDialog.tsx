@@ -41,12 +41,12 @@ export function FeishuConflictDialog({
       <AlertDialog.Portal>
         <AlertDialog.Overlay
           className={cn(
-            'modal-scrim fixed inset-0 z-50',
+            'modal-scrim fixed inset-0 z-modal',
           )}
         />
         <AlertDialog.Content
           className={cn(
-            'modal-panel fixed left-1/2 top-1/2 z-50 -translate-x-1/2 -translate-y-1/2',
+            'modal-panel fixed left-1/2 top-1/2 z-modal-raised -translate-x-1/2 -translate-y-1/2',
             // 与 ConfirmDialog 同款入场(250ms 淡入+缩放);keyframe 自带
             // translate(-50%,-50%) 居中,与上面的 -translate-x/y-1/2 终态一致。
             'w-[440px] max-w-[90vw]',
@@ -74,7 +74,8 @@ export function FeishuConflictDialog({
             {appId ? (
               <>
                 {' '}
-                <code className="rounded bg-[var(--msg-code-inline-bg)] px-1 py-0.5 text-12">
+                {/* design: intrinsic-geometry — 行内代码，与 Markdown 行内代码同为 6px（DESIGN.md §5 内容排版） */}
+                <code className="rounded-[6px] bg-[var(--msg-code-inline-bg)] px-1 py-0.5 text-12">
                   {appId}
                 </code>{' '}
               </>

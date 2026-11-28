@@ -8,7 +8,7 @@ import { ErrorNotice } from '@/components/ui/error-notice';
  * 表单对话框放宽到 460px；
  * 单行输入 pill、多行输入 8px 内层 radius，按钮全部 pill。
  */
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
 import { ChevronRight } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
@@ -56,6 +56,7 @@ export function AddMarketplaceDialog({
   const [sources, setSources] = useState<MarketSourceSummary[] | null>(null);
   const [gitReady, setGitReady] = useState<boolean | null>(null);
   const [sourceInput, setSourceInput] = useState('');
+  const sourceInputRef = useRef<HTMLInputElement>(null);
   const [refInput, setRefInput] = useState('');
   const [sparseInput, setSparseInput] = useState('');
   const [adding, setAdding] = useState(false);
@@ -177,39 +178,34 @@ export function AddMarketplaceDialog({
       <Dialog.Portal>
         <Dialog.Overlay
           className={cn(
-            'modal-scrim fixed inset-0 z-[10000]',
+            'modal-scrim fixed inset-0 z-modal',
           )}
           style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
         />
         <Dialog.Content
+          onOpenAutoFocus={(event) => {
+            event.preventDefault();
+            sourceInputRef.current?.focus({ preventScroll: true });
+          }}
           onPointerDownOutside={(event) => event.preventDefault()}
           className={cn(
-            'modal-panel fixed left-1/2 top-1/2 z-[10000] -translate-x-1/2 -translate-y-1/2',
-            'flex max-h-[85vh] w-full select-none flex-col p-4',
+            'modal-panel fixed inset-0 z-modal m-auto flex h-fit max-h-[70vh] w-[calc(100%-2rem)] max-w-[440px] select-none flex-col overflow-hidden p-6',
           )}
           style={
             {
               WebkitAppRegion: 'no-drag',
-              maxWidth: 'min(460px, 100vw - 32px)',
             } as React.CSSProperties
           }
         >
-          <Dialog.Title className="shrink-0 text-lg font-medium text-[var(--confirm-title)]">
+          <Dialog.Title className="shrink-0 text-18 font-medium text-[var(--confirm-title)]">
             {t('settings.ghosts.market.sources.dialogTitle')}
           </Dialog.Title>
-          <Dialog.Description className="mt-2 shrink-0 text-12 text-[var(--confirm-desc)]">
-            {t('settings.ghosts.market.sources.dialogDescription')}{' '}
-            <button
-              type="button"
-              onClick={() => setGuideOpen(true)}
-              className="cursor-pointer bg-transparent p-0 text-12 text-[var(--settings-source-link)] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
-            >
-              {t('settings.ghosts.market.sources.learnMore')}
-            </button>
-          </Dialog.Description>
-
           {/* 负 margin + 内边距补偿：滚动容器不裁掉输入框向外渲染的 focus ring。 */}
-          <div className="-mx-1 mt-3 min-h-0 flex-1 overflow-y-auto overscroll-contain px-1">
+          <div className="-mx-1 mt-4 min-h-0 flex-1 overflow-y-auto overscroll-contain px-1">
+            <Dialog.Description className="mb-4 text-pretty text-13 leading-[1.54] text-[var(--confirm-desc)]">
+              {t('settings.ghosts.market.sources.dialogDescription')}
+            </Dialog.Description>
+
             {gitReady === false ? (
               <p className="mb-3 rounded-xl border border-[var(--border-default)] bg-[var(--surface-chip)] px-4 py-3 text-12 text-[var(--text-secondary)]">
                 {t('settings.ghosts.market.sources.gitUnavailable')}
@@ -222,6 +218,7 @@ export function AddMarketplaceDialog({
                   {t('settings.ghosts.market.sources.sourceLabel')}
                 </span>
                 <input
+                  ref={sourceInputRef}
                   value={sourceInput}
                   onChange={(event) => setSourceInput(event.target.value)}
                   placeholder={t('settings.ghosts.market.sources.sourcePlaceholder')}
@@ -272,6 +269,14 @@ export function AddMarketplaceDialog({
               </label>
             </div>
 
+            <button
+              type="button"
+              onClick={() => setGuideOpen(true)}
+              className="mt-3 cursor-pointer bg-transparent p-0 text-12 text-[var(--settings-source-link)] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
+            >
+              {t('settings.ghosts.market.sources.learnMore')}
+            </button>
+
             {operationError ? (
               <ErrorNotice
                 role="alert"
@@ -292,7 +297,7 @@ export function AddMarketplaceDialog({
                 type="button"
                 onClick={() => setSourcesOpen(true)}
                 className={cn(
-                  'mt-5 flex w-full items-center justify-between gap-3 rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] px-4 py-3',
+                  'mt-4 flex w-full items-center justify-between gap-3 rounded-lg border border-[var(--border-default)] px-3 py-3',
                   'transition-colors hover:bg-[var(--surface-hover-soft)]',
                   'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
                 )}
@@ -308,9 +313,10 @@ export function AddMarketplaceDialog({
             ) : null}
           </div>
 
-          <div className="mt-6 flex shrink-0 justify-end gap-2.5">
+          <div className="mt-4 flex shrink-0 flex-wrap justify-end gap-2">
             <Button
               variant="secondary"
+              palette="confirmation"
               size="lg"
               type="button"
               disabled={adding}
@@ -320,7 +326,8 @@ export function AddMarketplaceDialog({
               {t('settings.ghosts.market.sources.close')}
             </Button>
             <Button
-              variant="cta"
+              variant="primary"
+              palette="confirmation"
               size="lg"
               loading={adding}
               type="button"

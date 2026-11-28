@@ -1,3 +1,4 @@
+import { mcpAppInitialHeight } from '@cindy/maker-shared/mcp-apps';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import {
@@ -15,11 +16,13 @@ import { consumePluginPageTicket, type PluginPageCall } from './pluginPageCall.j
 export const PLUGIN_PAGE_TICKET = 'cindy/plugin-page-ticket';
 export function pluginAppTool(_instance: string, tool: GhostToolDecl, ui: GhostUiNeeds): Tool {
   const link = ui.tools[tool.name];
+  const initialHeight = mcpAppInitialHeight(ui.resources.find(resource => resource.uri === link?.resourceUri)?.initialHeight);
   return {
     name: tool.name,
     description: tool.description,
     inputSchema: { ...tool.parameters, type: 'object' },
     _meta: {
+      ...(initialHeight !== undefined ? { 'cindy/initial-height': initialHeight } : {}),
       ui: link ? { ...link } : { visibility: ['model'] },
     },
   };
@@ -61,6 +64,7 @@ export function createPluginAppTransport(options: {
     options.assertCurrent();
     const resource = resources.find((resource) => resource.uri === params.uri);
     if (!resource) throw new Error('MCP_APP_RESOURCE_NOT_FOUND');
+    const initialHeight = mcpAppInitialHeight(resource.initialHeight);
     const text = options.readHtml(resource.file);
     options.assertCurrent();
     return {
@@ -70,6 +74,7 @@ export function createPluginAppTransport(options: {
           mimeType: RESOURCE_MIME_TYPE,
           text,
           _meta: {
+            ...(initialHeight !== undefined ? { 'cindy/initial-height': initialHeight } : {}),
             ...(resource.hostFullscreenButton !== undefined ? { 'cindy/host-fullscreen-button': resource.hostFullscreenButton } : {}),
             ui: {
               ...(resource.csp !== undefined ? { csp: resource.csp } : {}),

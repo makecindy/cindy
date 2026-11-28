@@ -10,7 +10,7 @@ import { CHAT_COLOR_TRANSITION_CLASS } from './chatChrome';
  */
 
 /** Compact row surface radius. Pair with padding on the clickable row. */
-export const ACTIVITY_ROW_RADIUS_CLASS = 'rounded-[8px]';
+export const ACTIVITY_ROW_RADIUS_CLASS = 'rounded-lg';
 
 /** Row surface that lifts on hover. Pair with `group` on the clickable row. */
 export const ACTIVITY_ROW_HOVER_SURFACE_CLASS = 'hover:bg-[var(--msg-code-inline-bg)]';

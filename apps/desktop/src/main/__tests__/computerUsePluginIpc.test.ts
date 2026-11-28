@@ -270,7 +270,7 @@ describe('computer use UI feedback invariants', () => {
       toggleBody.indexOf('await window.electronAPI.maker.computer.installDriver()'),
     );
     expect(toggleBody.indexOf('if (!isCurrentFlow()) return')).toBeLessThan(
-      toggleBody.indexOf("requestComputerPermissionGrant('toggle')"),
+      toggleBody.indexOf("requestComputerPermissionGrant('toggle',"),
     );
   });
 });

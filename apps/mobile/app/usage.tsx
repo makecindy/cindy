@@ -6,7 +6,7 @@ import { useTranslation } from 'react-i18next';
 import { UsageDashboard, useAutomaticUsage } from '@/widgets/UsageDashboard';
 import { usageWidgetsSupported } from '@/widgets/usageWidgetSync';
 import { UsageWidgetGuide } from '@/widgets/UsageWidgetGuide';
-import { ErrorNotice } from '@/components/ErrorNotice';
+import { MainWindowEmptyState } from '@/components/MobilePrimitives';
 import { SimpleStackHeader, simpleScrollInsetProps, simpleScrollScreenSafeAreaEdges } from '@/platform/chrome';
 import { useTheme } from '@/theme';
 import { spacing } from '@/theme/tokens';
@@ -41,7 +41,11 @@ export default function UsageScreen() {
       <ScrollView {...simpleScrollInsetProps} contentContainerStyle={{ padding: spacing.lg, gap: spacing.lg }}>
         {state?.kind === 'snapshot'
           ? <UsageDashboard snapshot={state.snapshot} name={state.deviceName} />
-          : <ErrorNotice message={t('session.menu.usage.quotaUnavailable')} />}
+          : state?.kind === 'update-desktop'
+            ? <MainWindowEmptyState testID="usage.updateDesktop"
+                title={t('devices.usageUpdateDesktopTitle')} copy={t('devices.usageUpdateDesktopCopy')} />
+            : <MainWindowEmptyState testID="usage.waiting"
+                title={t('devices.usageWaitingTitle')} copy={t('devices.usageWaitingCopy')} />}
       </ScrollView>
       {canShowWidgetGuide && <UsageWidgetGuide visible={guideVisible} instructions={instructions}
         lockScreenHint={Platform.OS === 'ios' ? t('devices.widgetGuideLockIOS') : undefined} onClose={() => setGuideVisible(false)} />}

@@ -117,7 +117,7 @@ function ScopeDropdown({
           sideOffset={4}
           onOpenAutoFocus={(e) => e.preventDefault()}
           className={cn(
-            'z-[10010] max-h-52 w-[var(--radix-popover-trigger-width)] overflow-y-auto rounded-xl border p-1',
+            'z-dropdown max-h-52 w-[var(--radix-popover-trigger-width)] overflow-y-auto rounded-xl border p-1',
             'border-[var(--cmd-palette-border)] bg-[var(--cmd-palette-bg)]',
             '[box-shadow:var(--cmd-palette-shadow)]',
           )}

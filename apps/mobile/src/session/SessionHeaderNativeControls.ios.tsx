@@ -43,6 +43,7 @@ import { edgeBlurMask, headerBlurLayers, HEADER_BLUR_LAYER_INTENSITY, type EdgeB
 import type {
   SessionHeaderNativeActionsProps,
   SessionHeaderNativeBackProps,
+  SessionHeaderNativeBlurProps,
   SessionHeaderNativeTitleProps,
 } from "./SessionHeaderNativeControls";
 
@@ -52,7 +53,7 @@ import type {
  * across its content-side edge. Headers use the progressive layers of
  * headerBlurLayers; the composer keeps one layer (see edgeBlurMask).
  */
-export function SessionHeaderNativeBlur({ height: chromeHeight, edge = 'top', inset = 0, fadeInside }: { height: number; edge?: 'top' | 'bottom'; inset?: number; fadeInside?: number }) {
+export function SessionHeaderNativeBlur({ height: chromeHeight, edge = 'top', inset = 0, fadeInside, horizontalOutsets }: SessionHeaderNativeBlurProps) {
   const { colors } = useTheme();
   const layers = edge === 'top'
     ? headerBlurLayers(chromeHeight, fadeInside).map((mask) => ({ mask, intensity: HEADER_BLUR_LAYER_INTENSITY, shade: colors.edgeBlurShadeLayered }))
@@ -64,8 +65,8 @@ export function SessionHeaderNativeBlur({ height: chromeHeight, edge = 'top', in
       style={{
         position: "absolute",
         ...(edge === 'top' ? { top: inset } : { bottom: inset }),
-        left: 0,
-        right: 0,
+        left: -(horizontalOutsets?.left ?? 0),
+        right: -(horizontalOutsets?.right ?? 0),
         height: layers[0]!.mask.height,
         zIndex: 9,
       }}

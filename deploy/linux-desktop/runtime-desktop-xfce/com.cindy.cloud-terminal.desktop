@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Terminal=false
+StartupNotify=true
+Name=Terminal
+Name[zh_CN]=终端
+Exec=/usr/local/bin/cindy-dock-terminal
+Icon=org.xfce.terminal
+StartupWMClass=Xfce4-terminal
+Categories=System;TerminalEmulator;

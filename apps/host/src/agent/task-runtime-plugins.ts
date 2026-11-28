@@ -1,3 +1,4 @@
+import { holdError, type ProfileHold } from './profile-hold.js';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import type { Maker } from '@cindy/maker-core';
 import type { createRuntimePluginHost } from '../../../desktop/src/main/cindy-brain/runtimePluginHostCore.js';
@@ -65,7 +66,7 @@ export function createHostRuntimePluginSettings(deps: {
   maker: Pick<Maker, 'getSessionMeta'>;
   selection: Pick<RuntimeSelection, 'assertReviewSettingsUnlocked'>;
   resolveGhostControlPointPlugin: PluginHost['resolveGhostControlPointPlugin'];
-  profileHold(): string | null;
+  profileHold(): ProfileHold | null;
   holdGeneration(): number;
   publish(event: Record<string, unknown>): void;
 }) {
@@ -75,7 +76,7 @@ export function createHostRuntimePluginSettings(deps: {
     const assertCurrent = () => {
       const held = deps.profileHold();
       if (held || hold !== deps.holdGeneration())
-        throwIpcError('PRECONDITION_FAILED', held ?? 'HOST_PROFILE_IN_USE_BY_DESKTOP: Profile ownership changed');
+        throw holdError(held ?? 'HOST_PROFILE_IN_USE_BY_DESKTOP: Profile ownership changed');
       if (!isDataOwnerBroadcastScopeCurrent(owner)) throwIpcError('PRECONDITION_FAILED', 'Account changed');
     };
     return createRuntimePluginSettingsHandler({

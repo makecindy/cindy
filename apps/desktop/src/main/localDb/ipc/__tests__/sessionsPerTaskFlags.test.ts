@@ -56,7 +56,10 @@ vi.mock('../../../device-link/broadcast-tap.js', () => ({
   getSafeDataOwnerPushStamp: vi.fn(() => undefined),
   tapWindowBroadcast: h.tapWindowBroadcast,
 }));
-vi.mock('../../agentIslandSessionPatch', () => ({ notifyAgentIslandSessionPatch: h.notifyAgentIslandSessionPatch }));
+vi.mock('../../agentIslandSessionPatch', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../../agentIslandSessionPatch')>(),
+  notifyAgentIslandSessionPatch: h.notifyAgentIslandSessionPatch,
+}));
 vi.mock('../sessionCreatedBroadcast', () => ({ emitSessionCreated: h.emitSessionCreated }));
 vi.mock('../../../messagePersistBroadcaster.desktop', () => ({ noteSessionClearBoundary: vi.fn() }));
 vi.mock('../../../sessionTaskSummary.js', () => ({ backfillPinnedSessionSummaries: vi.fn() }));
@@ -94,6 +97,7 @@ function createDb(): void {
       sdk_session_id TEXT,
       total_token_usage INTEGER NOT NULL DEFAULT 0,
       total_cost_usd REAL NOT NULL DEFAULT 0,
+      total_cost_usd_is_approximate INTEGER DEFAULT 0,
       total_cost_amount REAL NOT NULL DEFAULT 0,
       total_cost_currency TEXT,
       total_cost_is_approximate INTEGER NOT NULL DEFAULT 0,
@@ -102,7 +106,7 @@ function createDb(): void {
       context_window_runtime INTEGER,
       fast_mode INTEGER NOT NULL DEFAULT 0,
       cleared_at INTEGER,
-      pinned_at INTEGER, snoozed_until INTEGER, snoozed_at INTEGER,
+      pinned_at INTEGER, snoozed_until INTEGER, snoozed_at INTEGER, archived_at INTEGER,
       hidden_at INTEGER,
       notifications_muted INTEGER NOT NULL DEFAULT 0,
       created_at INTEGER NOT NULL,
@@ -114,6 +118,8 @@ function createDb(): void {
       forked_at_message_id TEXT,
       worktree_path TEXT,
       source TEXT NOT NULL DEFAULT 'desktop',
+      side_chat_promoted INTEGER NOT NULL DEFAULT 0,
+      side_chat_close_pending INTEGER NOT NULL DEFAULT 0,
       feishu_open_id TEXT,
       feishu_bot_app_id TEXT,
       used_project_context INTEGER NOT NULL DEFAULT 0,
@@ -125,6 +131,7 @@ function createDb(): void {
       remote_host_id TEXT,
       agent_device_id TEXT,
       orca_remote_lead TEXT,
+      created_by_session TEXT,
       codex_history_has_product_prompt INTEGER,
       codex_plan_json TEXT,
       im_bot_context_id TEXT,

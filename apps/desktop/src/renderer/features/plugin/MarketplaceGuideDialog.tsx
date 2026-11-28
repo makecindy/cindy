@@ -115,14 +115,14 @@ export function MarketplaceGuideDialog({ open, onOpenChange }: MarketplaceGuideD
       <Dialog.Portal>
         <Dialog.Overlay
           className={cn(
-            'modal-scrim fixed inset-0 z-[10001]',
+            'modal-scrim fixed inset-0 z-modal-raised',
           )}
           style={{ WebkitAppRegion: 'no-drag' } as CSSProperties}
         />
         <Dialog.Content
           onPointerDownOutside={(event) => event.preventDefault()}
           className={cn(
-            'modal-panel fixed left-1/2 top-1/2 z-[10001] -translate-x-1/2 -translate-y-1/2',
+            'modal-panel fixed left-1/2 top-1/2 z-modal-raised -translate-x-1/2 -translate-y-1/2',
             'flex max-h-[85vh] w-full select-none flex-col p-4',
           )}
           style={

@@ -46,6 +46,7 @@ const mocks = vi.hoisted(() => ({
   setSessionProvider: vi.fn(),
   isSessionInTurn: vi.fn(() => false),
   cancelPendingAgentSwitchForSession: vi.fn(),
+  listPluginEngineViews: vi.fn<() => Array<Record<string, unknown>>>(() => []),
   withSendToSessionLock: vi.fn(async (_sessionId: string, task: () => Promise<unknown>) => task()),
   // 禁止回落 cwd:TEMP 是 Windows 独有变量,macOS 上回落 cwd 会让传递 import 的
   // 写盘副作用落进仓库工作区(见 authAdaptersImportPurity.test.ts 记录的事故)。
@@ -120,6 +121,9 @@ vi.mock('../../../maker-ipc/register', () => ({
 vi.mock('../../../maker-ipc/sessionRuntimeControl', () => ({
   cancelPendingSessionRuntimeMutation: mocks.cancelPendingSessionRuntimeMutation,
 }));
+vi.mock('../../../maker-ipc/pluginEnginesIpc', () => ({
+  listPluginEngineViews: mocks.listPluginEngineViews,
+}));
 vi.mock('../pendingInteractions', () => ({
   resolvePending: vi.fn(() => false),
   lookupPending: vi.fn(() => null),
@@ -172,8 +176,12 @@ const cards = {
 
 const turnRunner = {
   getMakerSessionById: vi.fn(() => null),
+  getPermissionModes: vi.fn<ImTurnRunner['getPermissionModes']>(),
   prewireAttachedSession: vi.fn(async () => {}),
-} as unknown as ImTurnRunner & { prewireAttachedSession: ReturnType<typeof vi.fn> };
+} as unknown as ImTurnRunner & {
+  prewireAttachedSession: ReturnType<typeof vi.fn>;
+  getPermissionModes: ReturnType<typeof vi.fn<ImTurnRunner['getPermissionModes']>>;
+};
 
 const adapter = {
   channel: 'slack',
@@ -517,6 +525,7 @@ describe('/permission Full access 确认', () => {
   async function pressPermission(
     im: ChannelIM,
     buttonId: 'permmode:pick' | 'permmode:confirm-full-access' | 'permmode:cancel-full-access',
+    overrides: Record<string, string> = {},
   ): Promise<void> {
     const attach = createCardActionHandler(adapter, cards, turnRunner);
     let handler: ((e: IMCardActionEvent) => Promise<void>) | null = null;
@@ -534,9 +543,28 @@ describe('/permission Full access 确认', () => {
         mode: 'bypassPermissions',
         modeLabel: 'Full access',
         agentKind: 'codex',
+        ...overrides,
       },
     } as unknown as IMCardActionEvent);
   }
+
+  // Unit, #12820: existing confirmation cases use built-in engines. A cold remote ACP
+  // task's card must validate and persist a mode offered by the stored route.
+  it('applies a mode offered by the cold plugin task’s execution computer', async () => {
+    const providerId = 'acp-plugin:test:engine';
+    const agentDeviceId = 'other-computer';
+    mocks.getMaker.mockReturnValue({
+      getSessionMeta: vi.fn(async () => ({ agentKind: 'acp', providerId, agentDeviceId })),
+    });
+    turnRunner.getPermissionModes.mockImplementationOnce(async (_kind, route) =>
+      route.agentDeviceId === agentDeviceId ? [{ id: 'plan', displayName: 'Plan' }] : [],
+    );
+
+    await pressPermission(makeIm(), 'permmode:pick', { agentKind: 'acp', mode: 'plan', modeLabel: 'Plan' });
+
+    expect(turnRunner.getPermissionModes).toHaveBeenCalledWith('acp', { sessionId: 'sess-target', providerId, agentDeviceId });
+    expect(mocks.updatePermissionMode).toHaveBeenCalledWith('sess-target', 'plan');
+  });
 
   it('first replaces the picker with a confirmation card without changing state', async () => {
     const im = makeIm();
@@ -1298,5 +1326,112 @@ describe('control:new 新建会话（非 threadScoped 分支 — feishu 实际�
     const arg = createSession.mock.calls[0][0] as Record<string, unknown>;
     expect(arg.model).toBe('deepseek-v4-pro');
     expect(arg.providerId).toBeUndefined();
+  });
+});
+
+describe('ACP 插件引擎 IM 卡片模型准入与权限模式 (PR #12927 P2 回归)', () => {
+  const PLUGIN_PROVIDER = 'acp-plugin:_ns__local__agy-acp:agy';
+
+  // 回归：旧 /model 卡片点击已被用户在设置中关闭的 ACP 模型时，必须在落库和 live.setModel 前拒绝；
+  // 启用的模型照常切换并落库。最小失败输入与 tier：unit，disabledModels 含所选模型。
+  it('rejects a disabled ACP model from a stale /model card without mutating DB or live session', async () => {
+    mocks.readModelRouteSnapshot.mockResolvedValue({
+      model: 'gemini-3-flash',
+      effort: 'medium',
+      providerId: PLUGIN_PROVIDER,
+    });
+    const live = { agentKind: 'acp', setModel: vi.fn(async () => {}), setEffort: vi.fn(async () => {}) };
+    (turnRunner.getMakerSessionById as ReturnType<typeof vi.fn>).mockReturnValue(live);
+    mocks.listPluginEngineViews.mockReturnValue([
+      {
+        key: '_ns__local__agy-acp:agy',
+        providerId: PLUGIN_PROVIDER,
+        name: 'Antigravity',
+        availability: { state: 'ready' },
+        models: [
+          { id: 'gemini-3-flash', displayName: 'Gemini 3 Flash', efforts: ['medium'], defaultEffort: 'medium' },
+          { id: 'gemini-4-neon', displayName: 'Gemini 4 Neon', efforts: ['high'], defaultEffort: 'high' },
+        ],
+        disabledModels: [{ id: 'gemini-4-neon', displayName: 'Gemini 4 Neon' }],
+        permissionModes: [{ id: 'default', displayName: 'Default', description: '' }],
+        defaultPermissionMode: 'default',
+      },
+    ]);
+
+    const im = makeIm();
+    const attach = createCardActionHandler(adapter, cards, turnRunner);
+    let handler: ((e: IMCardActionEvent) => Promise<void>) | null = null;
+    (im.onCardAction as ReturnType<typeof vi.fn>).mockImplementation((cb) => {
+      handler = cb;
+      return () => {};
+    });
+    attach(im)();
+    await registeredHandler(handler)({
+      messageId: 'model-card',
+      senderId: 'U_NEW',
+      buttonId: 'model:pick',
+      payload: {
+        sessionId: 'sess-acp',
+        modelId: 'gemini-4-neon',
+        modelLabel: 'Gemini 4 Neon',
+        providerId: PLUGIN_PROVIDER,
+      },
+    } as unknown as IMCardActionEvent);
+
+    expect(mocks.updateModelEffort).not.toHaveBeenCalled();
+    expect(live.setModel).not.toHaveBeenCalled();
+    expect(mocks.markManualOverride).not.toHaveBeenCalled();
+    expect(im.updateInteractiveCard).toHaveBeenCalledWith(
+      'model-card',
+      expect.objectContaining({ body: expect.stringContaining('关闭') }),
+    );
+  });
+
+  // 回归：ACP 会话 /permission 卡片点击需使用引擎实际声明的权限模式(如 acceptEdits)，
+  // 而非硬编码的 ask / bypassPermissions。最小失败输入与 tier：unit，ACP 卡片选 acceptEdits。
+  it('accepts engine-declared ACP permission modes such as acceptEdits via session-scoped getPermissionModes', async () => {
+    mocks.getMaker.mockReturnValue({
+      getSessionMeta: vi.fn(async () => ({
+        agentKind: 'acp',
+        providerId: PLUGIN_PROVIDER,
+        agentDeviceId: null,
+      })),
+    });
+    const live = { setPermissionMode: vi.fn(async () => {}) };
+    (turnRunner.getMakerSessionById as ReturnType<typeof vi.fn>).mockReturnValue(live);
+    const getPermissionModes = vi.fn(async () => [
+      { id: 'default' as const, displayName: 'Default', description: '' },
+      { id: 'acceptEdits' as const, displayName: 'Accept edits', description: '' },
+      { id: 'bypassPermissions' as const, displayName: 'Full access', description: '' },
+    ]);
+    const runnerWithModes = { ...turnRunner, getPermissionModes } as unknown as ImTurnRunner;
+
+    const im = makeIm();
+    const attach = createCardActionHandler(adapter, cards, runnerWithModes);
+    let handler: ((e: IMCardActionEvent) => Promise<void>) | null = null;
+    (im.onCardAction as ReturnType<typeof vi.fn>).mockImplementation((cb) => {
+      handler = cb;
+      return () => {};
+    });
+    attach(im)();
+    await registeredHandler(handler)({
+      messageId: 'perm-card-acp',
+      senderId: 'U_NEW',
+      buttonId: 'permmode:pick',
+      payload: {
+        sessionId: 'sess-acp',
+        mode: 'acceptEdits',
+        modeLabel: 'Accept edits',
+        agentKind: 'acp',
+      },
+    } as unknown as IMCardActionEvent);
+
+    expect(getPermissionModes).toHaveBeenCalledWith('acp', {
+      sessionId: 'sess-acp',
+      providerId: PLUGIN_PROVIDER,
+      agentDeviceId: null,
+    });
+    expect(live.setPermissionMode).toHaveBeenCalledWith('acceptEdits');
+    expect(mocks.updatePermissionMode).toHaveBeenCalledWith('sess-acp', 'acceptEdits');
   });
 });

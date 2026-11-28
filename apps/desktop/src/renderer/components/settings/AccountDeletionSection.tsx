@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button';
 import { useAuth } from '@/contexts/AuthContext';
 import type { DesktopAccountDeletionChallenge } from '@/lib/authService';
 import { cn } from '@/lib/utils';
+import { Checkbox } from '@/components/ui/checkbox';
 
 /**
  * Server-gated personal-account deletion entry and OTP confirmation dialog.
@@ -182,12 +183,12 @@ export function AccountDeletionSection() {
                 )}
               />
               <label className="flex cursor-pointer items-start gap-2 text-13 leading-5 text-[var(--confirm-desc)]">
-                <input
-                  type="checkbox"
+                <Checkbox
+                  data-settings-search-action="Acknowledges the account deletion consequences inside the deletion dialog"
                   checked={acknowledged}
                   disabled={busy}
                   onChange={(event) => setAcknowledged(event.target.checked)}
-                  className="mt-1 size-3.5 shrink-0 cursor-pointer accent-[hsl(var(--destructive))]"
+                  className="mt-0.5"
                 />
                 <span>{t('accountDeletion.acknowledgement')}</span>
               </label>

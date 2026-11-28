@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { serializeModelRoutes } from '@cindy/maker-shared/model-route';
 import { createBotRemoteSettingsResource, type BotRemoteSettingsDeps } from '../botRemoteSettingsResource.js';
 
 function fixture() {
@@ -175,12 +176,16 @@ describe('opaque teammate settings actions', () => {
   });
 });
 
-it('saves the complete model chain and can restore application defaults', async () => {
+it('saves a host plugin from a remote editor and restores the companion default, keeping only the first route of an older peer chain', async () => {
   const f = fixture();
-  const route = { harness: 'pi', model: 'selected', providerId: 'source', effort: 'high', fastMode: false };
+  const routes = [
+    { harness: 'acp' as const, model: 'default', providerId: 'acp-plugin:sample:engine', effort: '', fastMode: false },
+    { harness: 'pi' as const, model: 'selected', providerId: 'source', effort: 'high', fastMode: false },
+  ];
   const resource = await f.get();
-  await f.host.invoke(f.context, f.request(actionId(resource, 'models'), { followsDefault: false, modelChain: JSON.stringify([route]) }));
-  expect(f.deps.update).toHaveBeenLastCalledWith({ id: 'bot-a', acceptSavedModelSelectionVersion: 3, capabilities: { modelChainOverride: [route], modelOverride: null } }, 3);
+  await f.host.invoke(f.context, f.request(actionId(resource, 'models'), { followsDefault: false, modelChain: serializeModelRoutes(routes) }));
+  // 2026-11-26 单模型决定：旧端的后备模型被裁掉，只存第一条。
+  expect(f.deps.update).toHaveBeenLastCalledWith({ id: 'bot-a', acceptSavedModelSelectionVersion: 3, capabilities: { modelChainOverride: routes.slice(0, 1), modelOverride: null } }, 3);
   const fresh = await f.get();
   await f.host.invoke(f.context, f.request(actionId(fresh, 'models'), { followsDefault: true }));
   expect(f.deps.update).toHaveBeenLastCalledWith({ id: 'bot-a', acceptSavedModelSelectionVersion: 4, capabilities: { modelChainOverride: null, modelOverride: null } }, 4);
@@ -204,10 +209,10 @@ it('offers this computer\'s model groups and saves a chosen group with its curre
   f.deps.modelGroups = () => ({ routes: [] });
   expect((await f.get()).blocks?.find(block => block.id === 'models')?.data).not.toHaveProperty('modelGroups');
 });
-it('rejects invalid, duplicate and oversized model chains without modifying the profile', async () => {
+it('rejects invalid and oversized (more than 5) model chains without modifying the profile', async () => {
   const f = fixture(); const resource = await f.get();
   const route = { harness: 'pi', model: 'selected', providerId: null, effort: '', fastMode: false };
-  for (const value of ['not json', '{}', '[]', JSON.stringify([route, route]), JSON.stringify(Array.from({ length: 6 }, (_, index) => ({ ...route, model: String(index) }))), JSON.stringify([{ ...route, harness: 'unknown' }])]) {
+  for (const value of ['not json', '{}', '[]', JSON.stringify(Array.from({ length: 6 }, (_, index) => ({ ...route, model: String(index) }))), JSON.stringify([{ ...route, harness: 'unknown' }])]) {
     await expect(f.host.invoke(f.context, f.request(actionId(resource, 'models'), { followsDefault: false, modelChain: value }))).rejects.toThrow();
   }
   expect(f.deps.update).not.toHaveBeenCalled();

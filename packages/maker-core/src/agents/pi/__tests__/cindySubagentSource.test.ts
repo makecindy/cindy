@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import ts from 'typescript';
 
-import { PI_SUBAGENT_TOOL_NAME } from '@cindy/maker-shared/agent-task';
+import { PI_SUBAGENT_RUNTIME_TOOL_NAME } from '@cindy/maker-shared/agent-task';
 
 import {
   CINDY_SUBAGENT_ENV,
@@ -40,10 +40,10 @@ describe('cindy-subagent extension source', () => {
     ))).toEqual([]);
   });
 
-  it('registers the tool name the card predicate recognises', () => {
-    // 工具名与 maker-shared 的判据脱同步 = 子代理卡完全不渲染(且不报错)。
-    expect(CINDY_SUBAGENT_TOOL_NAME).toBe(PI_SUBAGENT_TOOL_NAME);
-    expect(CINDY_SUBAGENT_EXTENSION_SOURCE).toContain("const TOOL_NAME = '" + PI_SUBAGENT_TOOL_NAME + "'");
+  it('registers the runtime tool name the shared presentation projection recognises', () => {
+    // A mismatched generated registration would bypass the card projection.
+    expect(CINDY_SUBAGENT_TOOL_NAME).toBe(PI_SUBAGENT_RUNTIME_TOOL_NAME);
+    expect(CINDY_SUBAGENT_EXTENSION_SOURCE).toContain("const TOOL_NAME = '" + PI_SUBAGENT_RUNTIME_TOOL_NAME + "'");
   });
 
   it('uses the same progress marker the host parser checks', () => {

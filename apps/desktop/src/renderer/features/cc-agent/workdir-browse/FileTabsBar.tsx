@@ -505,7 +505,7 @@ export function FileTabsBar({
                 onClick={(e) => handleClose(e, relPath)}
                 aria-label={t('ccAgent.workdirBrowse.tabClose', { name })}
                 className={cn(
-                  'ml-1 inline-flex size-4 shrink-0 items-center justify-center rounded',
+                  'ml-1 inline-flex size-4 shrink-0 items-center justify-center rounded-full',
                   'text-[var(--cmd-palette-item-meta)]',
                   'opacity-0 transition-opacity duration-150',
                   'group-hover/tab:opacity-100 focus-visible:opacity-100',
@@ -524,7 +524,7 @@ export function FileTabsBar({
       {/* 右侧折叠按钮:sticky 在 tab 区右边, 不参与横向滚动。点击 → 切换右侧
           聊天流的展开/折叠状态(宿主走 useChatRailCollapsed.toggle, persist
           + 触发 rail 的 width transition)。
-          尺寸 size-6 / Plus 14 / rounded-md / hover bg —— 与 SessionTabsBar 的
+          尺寸 size-6 / Plus 14 / rounded-lg / hover bg —— 与 SessionTabsBar 的
           + 按钮完全一致, 视觉上跟 doc 模式的另一侧按钮成对出现。
           border-l 把按钮区从横向滚动区视觉切开, 跟 SessionTabsBar 的 + 区同套
           做法, 避免最后一个 tab 滚到边缘时和按钮糊成一坨。
@@ -545,7 +545,7 @@ export function FileTabsBar({
               aria-pressed={!isChatRailCollapsed}
               onClick={onToggleChatRail}
               className={cn(
-                'flex size-6 items-center justify-center rounded-md',
+                'flex size-6 items-center justify-center rounded-lg',
                 'text-[var(--settings-section-desc)]',
                 'hover:bg-[var(--chat-input-chip-bg)] hover:text-foreground',
                 'transition-colors outline-none',
@@ -585,7 +585,7 @@ export function FileTabsBar({
             const hasRight = currentIdx < tabs.length - 1;
             const hasOthers = tabs.length > 1;
             const itemCls =
-              'flex h-7 w-full items-center rounded-md px-2.5 text-left text-13 leading-none text-[var(--msg-assistant-text)] hover:bg-[var(--cmd-palette-item-hover)] focus:bg-[var(--cmd-palette-item-hover)] focus:outline-none disabled:pointer-events-none disabled:opacity-45';
+              'flex h-7 w-full items-center rounded-lg px-2.5 text-left text-13 leading-none text-[var(--msg-assistant-text)] hover:bg-[var(--cmd-palette-item-hover)] focus:bg-[var(--cmd-palette-item-hover)] focus:outline-none disabled:pointer-events-none disabled:opacity-45';
             // 菜单项的 onClick 在 onPointerDown 关闭菜单 之后 触发? 不是 ——
             // 我们在菜单容器上 stopPropagation pointerdown,避免外层 window
             // 监听把菜单收掉;但菜单内的 button 自身 click 仍可正常触发。
@@ -600,7 +600,7 @@ export function FileTabsBar({
                 onPointerDown={(e) => e.stopPropagation()}
                 onContextMenu={(e) => e.preventDefault()}
                 className={cn(
-                  'fixed z-[9999] min-w-[176px] rounded-xl p-0.5 overflow-hidden',
+                  'fixed z-fullscreen min-w-[176px] rounded-xl p-0.5 overflow-hidden',
                   'bg-[var(--cmd-palette-bg)]',
                   'border border-[var(--cmd-palette-border)]',
                   'shadow-[shadow:var(--shadow-menu)]',
@@ -684,8 +684,8 @@ export function FileTabsBar({
               <div
                 aria-hidden
                 className={cn(
-                  'fixed z-[10000] pointer-events-none',
-                  'flex h-7 items-center gap-1.5 px-3 rounded-md',
+                  'fixed z-modal pointer-events-none',
+                  'flex h-7 items-center gap-1.5 px-3 rounded-lg',
                   'bg-[var(--chat-input-chip-bg)] text-foreground font-medium',
                   'border border-[var(--cmd-palette-border)]',
                   'shadow-[shadow:var(--shadow-menu)]',

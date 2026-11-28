@@ -11,6 +11,7 @@ import { useSessionPaneLayout, useSessionSidebarWidthPreference } from './Reside
 import { SessionListDrawer } from './SessionListDrawer';
 import { useConversationTaskDrawer } from './useConversationTaskDrawer';
 import { buildWideSessionNavLayout } from './wideSessionNav';
+import { WallpaperBackdrop } from '@/theme/WallpaperBackdrop';
 
 /** Group chats use the same drawer lifecycle and retained Home as task chats. */
 export function BotGroupPaneLayout({ children }: { children: ReactNode }) {
@@ -32,6 +33,7 @@ export function BotGroupPaneLayout({ children }: { children: ReactNode }) {
   const retainedHeight = useRef(Math.max(1, height - (drawerTop ?? geometry.insets.top)));
   if (focused) retainedHeight.current = Math.max(1, height - (drawerTop ?? geometry.insets.top));
   return <View style={styles.root}>
+    <WallpaperBackdrop />
     <GestureDetector gesture={drawer.sessionListDrawerPullGesture}>
       <View style={[styles.root, persistent && {
         marginLeft: detail.x, marginRight: Math.max(0, width - detail.x - detail.width),

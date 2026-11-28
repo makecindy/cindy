@@ -224,6 +224,36 @@ describe('shouldCloseSessionForCredentialSwitch codex mode', () => {
     expect(shouldCloseSessionForCredentialSwitch(input)).toBe(false);
   });
 
+  // #11639: a split OpenAI subscription copies builtin oauth auth and adds
+  // subscriptionPool, without auth.native. Its live thread is still cindy_openai.
+  it('keeps a split OpenAI subscription on the builtin OpenAI thread family', () => {
+    const openai = BUNDLED_CATALOG.providers.find((provider) => provider.id === 'openai');
+    expect(openai?.auth.native).toBeUndefined();
+    const splitId = 'openai-sub-12345678';
+    setActiveCatalog({
+      ...BUNDLED_CATALOG,
+      providers: [
+        ...BUNDLED_CATALOG.providers,
+        { ...openai!, id: splitId, name: 'Work', subscriptionPool: 'openai' },
+      ],
+    });
+    const input = {
+      agentKind: 'codex' as const,
+      currentProviderId: splitId,
+      nextProviderId: splitId,
+      currentModel: 'gpt-6.2-sol',
+      nextModel: 'gpt-6.2-sol',
+      currentCodexProxyActive: true,
+      currentCodexThreadModelProviderId: 'cindy_openai',
+    };
+    expect(isCodexThreadModelProviderIdentityMismatch(input)).toBe(false);
+    expect(shouldCloseSessionForCredentialSwitch(input)).toBe(false);
+    expect(isCodexThreadModelProviderIdentityMismatch({
+      ...input,
+      currentCodexThreadModelProviderId: 'cindy_gateway',
+    })).toBe(true);
+  });
+
   it('keeps a raw OpenAI identity for the implicit OAuth route', () => {
     const input = {
       agentKind: 'codex',

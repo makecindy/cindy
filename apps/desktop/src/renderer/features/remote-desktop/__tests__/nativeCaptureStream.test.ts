@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { Blob as NodeBlob } from 'node:buffer';
 import { afterEach, expect, it, vi } from 'vitest';
 import { nativeCaptureStream } from '../nativeCaptureStream';
 afterEach(() => {
@@ -31,6 +32,51 @@ function setup() {
   );
   return { track, drawImage, bitmap, canvas };
 }
+function stubBase64Support(native: boolean) {
+  const decode = globalThis.atob.bind(globalThis);
+  const fromBase64 = (input: string) => {
+    try {
+      return Uint8Array.from(decode(input), (ch) => ch.charCodeAt(0));
+    } catch {
+      throw new SyntaxError('Invalid base64');
+    }
+  };
+  class RuntimeBytes extends Uint8Array {}
+  Object.defineProperty(RuntimeBytes, 'fromBase64', { value: native ? fromBase64 : undefined });
+  vi.stubGlobal('Uint8Array', RuntimeBytes);
+}
+// Unit: the capture stream must deliver JPEG bytes above 0x7f unchanged on
+// both runtimes. The scheduling tests use ASCII frames and ignore Blob contents.
+it.each([true, false])('preserves JPEG bytes with native base64 support = %s', async (native) => {
+  setup();
+  const encoded = '/9j/2Q==';
+  const expected = [255, 216, 255, 217];
+  stubBase64Support(native);
+  vi.stubGlobal('Blob', NodeBlob);
+  const legacy = vi.spyOn(globalThis, 'atob');
+  const owner = await nativeCaptureStream(async () => encoded, () => true, vi.fn());
+  owner.stop();
+  expect(legacy).toHaveBeenCalledTimes(native ? 0 : 1);
+  const [blob] = vi.mocked(createImageBitmap).mock.calls[0];
+  expect([...new Uint8Array(await (blob as Blob).arrayBuffer())]).toEqual(expected);
+});
+it('preserves the base64 error on startup and releases the stream after a corrupt later frame', async () => {
+  const h = setup();
+  stubBase64Support(true);
+  const failed = vi.fn();
+  const alive = () => true;
+  await expect(nativeCaptureStream(async () => '!', alive, failed)).rejects.toMatchObject({
+    name: 'InvalidCharacterError',
+  });
+  expect(h.canvas.captureStream).not.toHaveBeenCalled();
+  const read = vi.fn().mockResolvedValueOnce('anBlZw==').mockResolvedValue('!');
+  await nativeCaptureStream(read, alive, failed);
+  await vi.advanceTimersByTimeAsync(67);
+  expect(h.bitmap.close).toHaveBeenCalledOnce();
+  expect(h.track.stop).toHaveBeenCalledOnce();
+  expect(failed).toHaveBeenCalledOnce();
+  expect(vi.getTimerCount()).toBe(0);
+});
 it('subtracts capture/decode time from the interval without overlapping reads', async () => {
   const h = setup();
   const times: number[] = [];

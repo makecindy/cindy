@@ -3,7 +3,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { buildBotSkillQueryIndex, queryBotSkillIndex, searchBotSkillQueryIndex } from '../botSkillQueryIndex';
-import { botSkillRootDir, botSkillsDir, listBotSkills, saveBotSkill, deleteBotSkill } from '../botSkillStore';
+import { botSkillRootDir, botSkillsDir, setBotProjectSkillsDir, listBotSkills, saveBotSkill, deleteBotSkill } from '../botSkillStore';
+import { removeProjectPersonalSkill } from '../botProjectTemplate';
 import { listBotSkillsForSession } from '../botSkillService';
 
 const observation = vi.hoisted(() => ({ native: true, changes: new Map<string, (filename: string) => void>() }));
@@ -118,6 +119,29 @@ it('refreshes saved/deleted/disabled/external metadata and missing catalogs with
   const other = path.join(home, 'other-owner');
   expect(await queryBotSkillIndex(botSkillRootDir(other, bot), other, bot, {})).toEqual({ total: 0, skills: [] });
   expect((await query()).total).toBe(1);
+});
+
+// Tier 1. An imported project can drop an obsolete skill directly on disk during a role change.
+it('reads back removals from the project shelf and preserves standard and disabled project skills', async () => {
+  const workspace = path.join(root(), 'workspace');
+  setBotProjectSkillsDir(home, bot, true);
+  const active = botSkillsDir(home, bot);
+  await fs.mkdir(path.dirname(active), { recursive: true });
+  await write('old-office', 'Office');
+  await write('hand-off', 'Hand off');
+  await write('personal', 'Personal');
+  await write('parked', 'Parked', 'Disabled', true);
+  await fs.rename(path.join(root(), 'skills'), active);
+  const list = () => listBotSkillsForSession({ callerSessionId: 's' }, deps());
+  expect(await list()).toMatchObject({ total: 4 });
+  await fs.rm(path.join(active, 'old-office'), { recursive: true });
+  expect(await list()).toMatchObject({ total: 3 });
+  for (const slug of ['hand-off', 'parked']) await expect(removeProjectPersonalSkill(workspace, slug, () => {})).rejects.toThrow();
+  expect(await removeProjectPersonalSkill(workspace, 'personal', () => {})).toBe(true);
+  expect(await removeProjectPersonalSkill(workspace, 'personal', () => {})).toBe(false);
+  expect(await list()).toMatchObject({ total: 2, skills: [
+    { slug: 'hand-off', ownership: 'project-standard' }, { slug: 'parked', ownership: 'personal', enabled: false },
+  ] });
 });
 
 it('checks the owner boundary again after streaming a query', async () => {

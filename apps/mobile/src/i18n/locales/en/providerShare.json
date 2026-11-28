@@ -2,7 +2,9 @@
   "picker": {
     "shareName": "Shared by {{owner}}",
     "numbered": "{{name}} ({{index}})",
-    "unavailable": "Unavailable share"
+    "unavailable": "Unavailable share",
+    "offline": "{{name}} · Offline for now",
+    "offlineNote": "Their computer is offline. You can use it again once it is back online."
   },
   "link": {
     "title": "Provider Sharing",

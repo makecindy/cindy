@@ -798,6 +798,7 @@ async function resolveOutboundDispatcher(
 const outboundFetch = (async (
   input: Parameters<typeof globalThis.fetch>[0],
   init?: Parameters<typeof globalThis.fetch>[1],
+  beforeDispatch?: () => void,
 ) => {
   const target =
     typeof input === 'string'
@@ -807,14 +808,25 @@ const outboundFetch = (async (
         : ((input as { url?: string }).url ?? '');
   const signal = signalOf(input, init);
   const dispatcher = await resolveOutboundDispatcher(target, { signal });
-  if (!dispatcher) return globalThis.fetch(input, init);
+  // Guarded callers pin the destination for this authorization. Fetch may otherwise
+  // follow a redirect internally, without another opportunity to recheck access.
+  if (beforeDispatch) init = { ...init, redirect: 'error' };
+  if (!dispatcher) {
+    beforeDispatch?.();
+    return globalThis.fetch(input, init);
+  }
   const request = await normalizeForUndici(input, init);
   if (request.init.redirect !== 'follow') {
     // 调用方要 manual / error 语义(插件 network 槽靠 manual 逐跳守门),原样交给 undici。
+    beforeDispatch?.();
     return undiciFetch(request.url as never, { ...request.init, dispatcher } as never);
   }
   return followRedirectsThroughProxy(request, dispatcher, signal);
-}) as unknown as typeof globalThis.fetch;
+}) as unknown as (
+  input: Parameters<typeof globalThis.fetch>[0],
+  init?: Parameters<typeof globalThis.fetch>[1],
+  beforeDispatch?: () => void,
+) => Promise<Response>;
 
 function signalOf(
   input: Parameters<typeof globalThis.fetch>[0],

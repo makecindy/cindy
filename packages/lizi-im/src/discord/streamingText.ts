@@ -1,5 +1,5 @@
 import type { StreamingTextHandle } from '../types.js';
-import type { chunkDiscordText } from './chunk.js';
+import type { chunkDiscordFinalText } from './chunk.js';
 import type { markdownToDiscord } from './markdown.js';
 
 export const UPDATE_THROTTLE_MS = 1300;
@@ -12,7 +12,7 @@ export function startStreaming(
     edit: (messageId: string, text: string) => Promise<void>;
     remove: (messageId: string) => Promise<void>;
     markdownToDiscord: typeof markdownToDiscord;
-    chunk: typeof chunkDiscordText;
+    chunk: typeof chunkDiscordFinalText;
     resolveImageUrl?: (url: string) => string;
     uploadImages: (messageId: string, absPaths: string[]) => Promise<void>;
   },
@@ -97,9 +97,8 @@ class DiscordStreamingTextHandle implements StreamingTextHandle {
       }
     }
 
-    const chunks = this.deps.chunk(text);
-    const firstChunk = chunks[0] ?? '';
-    if (firstChunk.trim().length > 0) {
+    const [firstChunk, ...remainingChunks] = this.deps.chunk(text);
+    if (firstChunk !== undefined) {
       await this.settleFirstMessage(firstChunk);
     } else if (imageAbsPaths.length > 0) {
       await this.settleFirstMessage(IMAGE_ONLY_PLACEHOLDER);
@@ -107,7 +106,7 @@ class DiscordStreamingTextHandle implements StreamingTextHandle {
       await this.deps.remove(this.messageId);
       return;
     }
-    for (const chunk of chunks.slice(1)) {
+    for (const chunk of remainingChunks) {
       await this.deps.send(chunk);
     }
 

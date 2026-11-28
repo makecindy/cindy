@@ -1,4 +1,11 @@
 import assert from 'node:assert/strict';
+/** 账号区读到之后默认收成一行(每个账号的余量写在这一行)；这里检查的是账号列表本身，先点开。 */
+async function expandAccounts(page) {
+  await page.locator('[data-testid="subscription-accounts-summary"], [data-testid="subscription-accounts-body"]:not(.hidden)').first().waitFor({ state: 'attached' });
+  const summary = page.getByTestId('subscription-accounts-summary');
+  if (await summary.count()) await summary.first().click();
+}
+
 export default {
   name: 'subscription-accounts',
   entry: './fixture.tsx',
@@ -7,10 +14,14 @@ export default {
   notCovered:
     'Real browser sign-in, credentials, native CLI processes or transport; fixture supplies account metadata only',
   cases: {
+    'existing-login': { about: 'Add-account split action and a verified login on the executing computer' },
+    'existing-login-narrow': { about: 'Review an existing login at phone width', viewport: { width: 320, height: 650 } },
     'official-plan-name': { about: 'The account row displays official Ultra while its machine plan remains pro' },
     'official-plan-name-narrow': { about: 'The official Ultra account label at 320-pixel content width', viewport: { width: 320, height: 850 } },
     expiry: { about: 'Login expiry and the selected-account renewal action, before interaction' },
     'expiry-narrow': { about: 'Login expiry and renewal at 320-pixel content width, before interaction' },
+    'long-lived-token': { about: 'Two Claude accounts on a long-lived token: the token tag, its own expiry line and the account menu actions' },
+    'long-lived-token-narrow': { about: 'Long-lived token rows at 320-pixel content width', viewport: { width: 320, height: 850 } },
     'identity-unknown': { about: 'A stale account row explains how to reconnect when the executor cannot confirm the original identity' },
     default: { about: 'Three Claude accounts: independent 18-day, 3-day and unknown login expiry, per-account renewal and aligned usage' },
     'expiry-past': { about: 'A past CLI estimate warns but does not mark the account signed out' },
@@ -23,9 +34,21 @@ export default {
     'provider-auth': { about: 'Codex provider-managed authentication explains the independent-account recovery action' },
     'provider-auth-preview': { about: 'Provider-managed authentication offers a separate account directory at 320px', viewport: { width: 320, height: 600 } },
     empty: { about: 'Nothing signed in: no placeholder account, strategy or count, only Add account' },
-    loading: { about: 'First read still pending: one static account-row placeholder instead of a spinner' },
+    loading: { about: 'First read still pending: a static placeholder in the collapsed summary line instead of a spinner' },
+    'plugin-engine': { about: 'A plugin engine provider: identity, plan and usage the plugin reports, with the same account controls' },
+    'plugin-engine-narrow': { about: 'Plugin engine accounts at 320-pixel content width', viewport: { width: 320, height: 850 } },
+    'plugin-engine-sign-in': { about: 'Adding a plugin engine account: choose the sign-in method and type the key in Cindy' },
   },
   async check(page, ui) {
+    if (ui.case.startsWith('existing-login')) {
+      await page.getByText(await ui.t('subscriptionAccounts.existing.found', { count: 1 })).waitFor();
+      await ui.capture('add-account');
+      await page.getByRole('button', { name: await ui.t('subscriptionAccounts.existing.menu') }).click();
+      await page.getByRole('menuitem', { name: await ui.t('subscriptionAccounts.existing.connect') }).click();
+      await page.getByText('studio@example.com', { exact: true }).waitFor();
+      await ui.capture('review');
+      return;
+    }
     if (ui.case === 'provider-auth-preview') {
       await page.getByText(await ui.t('subscriptionAccounts.providerManagedAuth'), { exact: true }).waitFor();
       await page.getByRole('button', { name: await ui.t('subscriptionAccounts.signIn.anotherAccount'), exact: true }).waitFor();
@@ -35,7 +58,25 @@ export default {
       return;
     }
     await page.getByTestId('subscription-accounts').waitFor();
+    // 第一次读取还没回来时没有可点开的：占位在收起的摘要那一行。
+    if (ui.case !== 'loading') await expandAccounts(page);
     assert.equal(await page.locator('main').evaluate(element => element.scrollWidth <= element.clientWidth), true);
+    if (ui.case.startsWith('plugin-engine')) {
+      const rows = page.getByTestId('subscription-account');
+      await rows.nth(0).getByText('me@z.ai', { exact: true }).waitFor();
+      await rows.nth(1).getByText('BigModel API Key ····a1b2', { exact: true }).waitFor();
+      await rows.nth(0).getByText('GLM Coding Plan Pro', { exact: true }).waitFor();
+      assert.equal(await page.getByRole('switch').count(), 2);
+      if (ui.case === 'plugin-engine-sign-in') {
+        await page.getByRole('button', { name: await ui.t('subscriptionAccounts.add'), exact: true }).click();
+        await page.getByTestId('plugin-engine-sign-in').waitFor();
+        await page.getByRole('textbox', { name: 'Z.ai Coding Plan API Key' }).waitFor();
+        await ui.capture('sign-in');
+        return;
+      }
+      await ui.capture('accounts');
+      return;
+    }
     if (ui.case === 'identity-unknown') {
       await page.getByTestId('subscription-account').nth(1).getByRole('button', {
         name: await ui.t('subscriptionAccounts.loginAccountAria', { name: 'long.work.account@research.example.com' }), exact: true,
@@ -94,7 +135,9 @@ export default {
       await ui.capture('account-resets');
     }
     assert.equal(await page.getByRole('switch').count(), codex ? 6 : 3);
-    assert.equal(await page.getByRole('radiogroup', { name: await ui.t('subscriptionAccounts.strategy'), exact: true }).getAttribute('data-setting-id'), 'providers.subscriptionAccounts');
+    // The accounts are one automatic route: this section states how tasks are assigned; the strategy itself is set under Smart routing.
+    await page.getByTestId('route-strategy-note').waitFor();
+    assert.equal(await page.getByRole('radiogroup').count(), 0);
     // Every account's bars share one column, whatever each account's own labels and numbers are.
     const bars = await page.getByRole('progressbar').evaluateAll(elements =>
       elements.map(element => {
@@ -104,6 +147,20 @@ export default {
     );
     assert.equal(bars.length, ui.case.startsWith('codex-no-usage') ? 4 : codex ? 6 : 8);
     assert.deepEqual([...new Set(bars)], [bars[0]]);
+    if (ui.case.startsWith('long-lived-token')) {
+      const rows = page.getByTestId('subscription-account');
+      await rows.nth(0).getByText(await ui.t('subscriptionAccounts.longLivedToken.tag'), { exact: true }).waitFor();
+      await rows.nth(0).getByText(await ui.t('subscriptionAccounts.longLivedToken.expiresInDays', { days: 300 }), { exact: true }).waitFor();
+      await rows.nth(1).getByText(await ui.t('subscriptionAccounts.longLivedToken.expiresInDays', { days: 20 }), { exact: true }).waitFor();
+      // The ordinary sign-in is no longer what keeps these rows running: no renewal button.
+      assert.equal(await rows.nth(1).getByRole('button', { name: await ui.t('subscriptionAccounts.loginAccountAria', { name: 'long.work.account@research.example.com' }), exact: true }).count(), 0);
+      await ui.capture('token');
+      await page.getByRole('button', { name: await ui.t('providerGroup.member.moreAria', { name: 'alex@example.com' }) }).click();
+      await page.getByRole('menuitem', { name: await ui.t('subscriptionAccounts.longLivedToken.renew'), exact: true }).waitFor();
+      await page.getByRole('menuitem', { name: await ui.t('subscriptionAccounts.longLivedToken.remove'), exact: true }).waitFor();
+      await ui.capture('token-menu');
+      return;
+    }
     if (['default', 'narrow', 'expiry-past', 'expiry', 'expiry-narrow'].includes(ui.case)) {
       const rows = page.getByTestId('subscription-account');
       await rows.nth(0).getByText(await ui.t('subscriptionAccounts.loginExpiresInDays', { days: 18 }), { exact: true }).waitFor();

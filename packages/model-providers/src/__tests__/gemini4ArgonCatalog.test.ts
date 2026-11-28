@@ -29,10 +29,17 @@ describe("Gemini 4 Argon catalog entry", () => {
     });
   });
 
-  it("keeps the native Gemini protocol without inventing model availability", () => {
+  it("keeps the native Gemini protocol without inventing XD model availability", () => {
     expect(
-      registry?.models.some((m) => m.modelRef === "google/gemini-4-argon"),
+      registry?.models.some(
+        (m) =>
+          m.modelRef === "google/gemini-4-argon" &&
+          m.routes.some((route) => route.providerId === "xd"),
+      ),
     ).toBe(false);
+    expect(
+      resolveModelNativeApi(registry, "google-gemini-api", "gemini-4-argon"),
+    ).toBe("google-generative-ai");
     for (const id of ["google/gemini-4-argon", "gemini-4-argon"])
       expect(resolveModelNativeApi(registry, "xd", id), id).toBe(
         "google-generative-ai",

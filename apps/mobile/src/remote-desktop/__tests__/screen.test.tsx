@@ -20,7 +20,8 @@ import { AppState } from "react-native";
 import { goBackGuarded } from "@/utils/backGuard";
 import { resolveMobileInvokeTimeoutMs } from "@/device-link/invokeTimeouts";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { darkColors, lightColors } from "@/theme/tokens";
+import { withTiming } from "react-native-reanimated";
+import { darkColors, lightColors, motionDuration } from "@/theme/tokens";
 
 // Node >= 25 replaces jsdom's localStorage (AsyncStorage's web fallback) with a
 // method-less stub, so keep storage in memory like the other mobile tests.
@@ -57,10 +58,42 @@ vi.mock("expo-blur", async () => ({
   BlurView: (await import("react-native")).View,
 }));
 
+const motionPreference = vi.hoisted(() => ({ value: false as boolean | null }));
+vi.mock("@/hooks/useReduceMotion", () => ({
+  useReduceMotionEnabled: () => motionPreference.value,
+}));
+
 vi.mock("react-native-reanimated", async () => {
-  const { View } = await import("react-native");
-  return { default: { View } };
+  const { View, ScrollView } = await import("react-native");
+  const { useRef } = await import("react");
+  return {
+    default: { View, ScrollView },
+    useAnimatedStyle: (fn: () => unknown) => fn(),
+    useAnimatedScrollHandler: (fn: unknown) => fn,
+    useSharedValue: (value: number) => useRef({ value }).current,
+    runOnJS: (fn: () => void) => fn,
+    Easing: { bezier: (...points: number[]) => points },
+    withTiming: vi.fn((value: number, _: unknown, done?: (finished: boolean) => void) => {
+      done?.(true);
+      return value;
+    }),
+  };
 });
+
+const deckPan = vi.hoisted(() => ({
+  enabled: vi.fn().mockReturnThis(), activeOffsetY: vi.fn().mockReturnThis(),
+  maxPointers: vi.fn().mockReturnThis(), failOffsetX: vi.fn().mockReturnThis(),
+  onUpdate: vi.fn().mockReturnThis(), onEnd: vi.fn().mockReturnThis(),
+  onFinalize: vi.fn().mockReturnThis(),
+}));
+vi.mock("@/platform/gestureHandler", () => ({
+  GestureDetector: ({ children }: any) => children,
+  Gesture: { Pan: () => deckPan },
+}));
+const liveKeyboard = vi.hoisted(() => ({ value: 0 }));
+vi.mock("@/session/useComposerDockKeyboardHeight", () => ({
+  useComposerDockKeyboardHeight: () => liveKeyboard,
+}));
 
 vi.mock("../useAutoUnlockSettings", () => ({
   useAutoUnlockSettings: (
@@ -506,6 +539,8 @@ const visibleInputHint = () =>
 const button = (key: string) =>
   host.querySelector<HTMLButtonElement>(`[aria-label="remoteDesktop.${key}"]`)!;
 beforeEach(async () => {
+  motionPreference.value = false;
+  liveKeyboard.value = 0;
   storage.items.clear();
   (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
   vi.clearAllMocks();
@@ -4820,12 +4855,78 @@ describe("remote desktop controls", () => {
         .at(-1)?.topInset,
     ).toBe(64);
   });
+  // Unit: remote field taps previously needed the toolbar button. Exercise the real
+  // relay input and keyboard-hide listener; manual toggles never tested reopening.
+  it("opens the phone keyboard only for an editable tap and keeps a dismissed keyboard down", async () => {
+    const original = fixture.invoke.getMockImplementation()!;
+    fixture.invoke.mockImplementation(async (...args) => {
+      const op = args[2][0].op;
+      if (op === "editableClick") return { editable: args[2][0].sequence === 2 };
+      const result = await original(...args);
+      return op === "capabilities" ? { ...result, editableClick: true } : result;
+    });
+    await connect();
+    const panel = () => host.querySelector('[data-testid="remoteDesktop.keyboardPanel"]');
+    const tap = async (sequence: number) => {
+      await act(async () => fixture.message!({ nativeEvent: { data: JSON.stringify({
+        type: "input", epoch: "lease", sequence, fieldTap: true, events: [
+          { kind: "button", button: 0, down: true, x: 0.5, y: 0.5 },
+          { kind: "button", button: 0, down: false, x: 0.5, y: 0.5 },
+        ],
+      }) } }));
+      await act(async () => vi.advanceTimersByTimeAsync(120));
+    };
+    await tap(1);
+    expect(panel()).toBeNull();
+    await tap(2);
+    expect(panel()).not.toBeNull();
+    act(() => fixture.keyboardListeners.keyboardDidShow({ endCoordinates: { screenY: 510, height: 334 } }));
+    act(() => fixture.keyboardListeners.keyboardDidHide({}));
+    await act(async () => vi.advanceTimersByTimeAsync(150));
+    expect(panel()).toBeNull();
+  });
+  it("dismisses the computer keyboard after a downward swipe and releases held keys", async () => {
+    await connect();
+    liveKeyboard.value = 324;
+    act(() => button("keyboard").click());
+    expect(fixture.views["remoteDesktop.keyboardSpacer"].style.height).toBe(324);
+    act(() => fixture.views["remoteDesktop.keyboardMode"].onPress());
+    expect(deckPan.enabled).toHaveBeenLastCalledWith(true);
+    const endDrag = deckPan.onEnd.mock.calls.at(-1)![0];
+    act(() => endDrag({ translationY: 8, velocityY: 100 }));
+    expect(host.querySelector('[data-testid="remoteDesktop.keyboardPanel"]')).not.toBeNull();
+    act(() => endDrag({ translationY: 240, velocityY: 300 }));
+    expect(host.querySelector('[data-testid="remoteDesktop.keyboardPanel"]')).toBeNull();
+    expect(sent()).toContainEqual(expect.objectContaining({ type: "events", events: [{ kind: "release" }] }));
+  });
+  // Unit regression: the previous deck always animated for 140 ms, including
+  // reduced-motion and unknown preferences. Existing swipe coverage only checked
+  // the terminal state. Exercise the screen's drag callbacks and animation port.
+  it.each([false, true, null])("respects reduced motion (%s) for deck settle and cancellation", async (preference) => {
+    motionPreference.value = preference;
+    await connect();
+    act(() => button("keyboard").click());
+    act(() => fixture.views["remoteDesktop.keyboardMode"].onPress());
+    const endDrag = deckPan.onEnd.mock.calls.at(-1)![0];
+    const finalize = deckPan.onFinalize.mock.calls.at(-1)![0];
+    const duration = preference === false ? motionDuration.fast : 0;
+    act(() => endDrag({ translationY: 8, velocityY: 100 }));
+    expect(withTiming).toHaveBeenLastCalledWith(0, expect.objectContaining({ duration }), expect.any(Function));
+    expect(host.querySelector('[data-testid="remoteDesktop.keyboardPanel"]')).not.toBeNull();
+    act(() => finalize({}, false));
+    expect(withTiming).toHaveBeenLastCalledWith(0, expect.objectContaining({ duration }));
+    act(() => endDrag({ translationY: 240, velocityY: 300 }));
+    expect(withTiming).toHaveBeenLastCalledWith(expect.any(Number), expect.objectContaining({ duration }), expect.any(Function));
+    expect(host.querySelector('[data-testid="remoteDesktop.keyboardPanel"]')).toBeNull();
+    expect(sent()).toContainEqual(expect.objectContaining({ type: "events", events: [{ kind: "release" }] }));
+  });
   it("overlays landscape keyboards and includes their measured occlusion", async () => {
+    liveKeyboard.value = 210;
     fixture.size = { width: 844, height: 390 };
     act(() => root.render(<RemoteDesktopScreen />));
     await connect();
     act(() => button("keyboard").click());
-    expect(fixture.views["remoteDesktop.layout"].enabled).toBe(false);
+    expect(fixture.views["remoteDesktop.keyboardSpacer"].style.height).toBe(0);
     const panel = () => fixture.views["remoteDesktop.keyboardPanel"];
     expect(panel().style.flat(Infinity)).toContainEqual(
       expect.objectContaining({ position: "absolute" }),
@@ -4836,7 +4937,7 @@ describe("remote desktop controls", () => {
         endCoordinates: { screenY: 180 },
       }),
     );
-    expect(panel().style.flat(Infinity)).toContainEqual({ bottom: 210 });
+    expect(panel().style.flat(Infinity)).toContainEqual(expect.objectContaining({ transform: [{ translateY: -210 }] }));
     expect(
       sent()
         .filter((m) => m.type === "mouseButtons")

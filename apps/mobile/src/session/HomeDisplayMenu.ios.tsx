@@ -47,7 +47,7 @@ export function HomeDisplayMenu(props: HomeDisplayMenuProps) {
       style={{ width: size, height: size }}
     >
       <Menu
-        testID="home.displaySettingsButton"
+        testID={props.testID ?? "home.displaySettingsButton"}
         label={
           <RNHostView matchContents>
             {/* Only artwork in the label: Menu owns the glass and activation. */}

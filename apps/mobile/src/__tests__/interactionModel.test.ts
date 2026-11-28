@@ -959,3 +959,11 @@ describe('resolveInteractionResilient', () => {
     expect(resolveCalls).toBe(4); // 首次 + 3 次重试
   });
 });
+
+// #8706 unit: shared projection retains only the known quota marker for Mobile's permission card.
+it('projects safe review quota metadata and ignores it on ordinary permissions', () => {
+  const request = { kind: 'permission', requestId: 'quota', toolName: 'Bash',
+    metadata: { autoReviewUnavailable: true, autoReviewUnavailableReason: 'quota_exhausted', autoReviewReason: 'stale model reason' } };
+  expect(buildPermissionReviewPresentation(request)).toMatchObject({ autoReviewUnavailable: true, autoReviewQuotaExhausted: true, autoReviewReason: null });
+  expect(buildPermissionReviewPresentation({ ...request, metadata: { autoReviewUnavailableReason: 'quota_exhausted' } })).not.toHaveProperty('autoReviewQuotaExhausted');
+});

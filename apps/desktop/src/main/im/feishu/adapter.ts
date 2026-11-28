@@ -25,7 +25,7 @@ import { resolveFeishuNotificationReply } from './notificationOrigin';
 import path from 'node:path';
 import fs from 'node:fs';
 import { app } from 'electron';
-import { decodeFeishuLaneUserId, type FeishuIM, type FeishuLane, type IMAttachment } from '@cindy/im';
+import { FEISHU_MERGE_FORWARD_PLACEHOLDER, decodeFeishuLaneUserId, type FeishuIM, type FeishuLane, type IMAttachment } from '@cindy/im';
 
 import { imChannelNoteDirectSourceFromEvent } from '../shared/channelNote';
 import { receivedHistoryScope } from '../shared/receivedImageHistory';
@@ -43,6 +43,12 @@ import {
   HISTORY_FILE_MAX,
 } from './groupContext';
 import { createFeishuGroupTurnPermissionPolicy } from './permissionPolicy';
+import {
+  feishuGroupPermissionMode,
+  feishuGroupProjectDefaults,
+  feishuGroupRouteOverride,
+  feishuGroupWorkingDir,
+} from './groupOverrides';
 import { feishuText, ui, REACTION_PROCESSING } from './uiText';
 
 const log = createLogger('im:feishu-adapter');
@@ -215,10 +221,23 @@ export function buildFeishuAdapter(
        * 群那档比私聊那档**宽**时同样覆写 —— 这是用户在设置里对群的显式选择,
        * 「群里的事只看这一行」是产品裁决(不看用户是否手动改过该下拉框)。
        */
-      permissionModeFor: (userId) =>
-        decodeFeishuLaneUserId(userId) === null
-          ? null
-          : readImDefaultSettings('feishu').groupPermissionMode,
+      // 个人机器人还按群读「按群设置」(设置页「群聊」): 这个群单独设置的权限档优先, 其次是
+      // 新任务所在的绑定项目的权限档。伙伴连接的群任务归伙伴设置管, 不读这份。
+      permissionModeFor: (userId, projectPermissionMode) => {
+        const lane = decodeFeishuLaneUserId(userId);
+        if (lane === null) return null;
+        return companion
+          ? readImDefaultSettings('feishu').groupPermissionMode
+          : feishuGroupPermissionMode(feishuIm.getBotAppId(), lane.chatId, projectPermissionMode ?? null);
+      },
+      ...(companion
+        ? {}
+        : {
+            routeOverrideFor: (botAppId: string, userId: string) => feishuGroupRouteOverride(botAppId, userId),
+            laneWorkingDirFor: (botAppId: string, userId: string) => feishuGroupWorkingDir(botAppId, userId),
+            laneProjectDefaultsFor: (botAppId: string, userId: string, workingDir: string) =>
+              feishuGroupProjectDefaults(botAppId, userId, workingDir),
+          }),
       // Main groups keep their native name. A thread's first words provide its subject.
       resolveSessionTitle: async (userId) => {
         const lane = decodeFeishuLaneUserId(userId);
@@ -393,7 +412,10 @@ export function buildFeishuAdapter(
           if (contextAttachments.length) safeReply.attachmentCount = contextAttachments.length;
           if (unavailable.length) safeReply.unavailableAttachments = unavailable;
         }
-        replyPrefix = buildFeishuReplyContextBlock(safeReply);
+        // A bare merged forward carries only a channel placeholder as its text: the user
+        // typed nothing, so the forwarded messages are what they are handing over.
+        const requestText = event.text === FEISHU_MERGE_FORWARD_PLACEHOLDER ? '' : event.text;
+        replyPrefix = buildFeishuReplyContextBlock(safeReply, requestText);
       }
       if (!lane) return replyPrefix ? {
         agentText: `${replyPrefix}${event.text}`,

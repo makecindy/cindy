@@ -93,6 +93,22 @@ describe('ModelPriceOverrideDialog', () => {
     };
   });
 
+  it('shows the original CNY tariff when only USD overrides are allowed', async () => {
+    const model = 'mimo-v2.6-pro';
+    const view = priceView(model);
+    view.allowedCurrencies = ['USD'];
+    view.effective = null;
+    view.reference = { ...view.reference!, currency: 'CNY', inputPerMtok: 3, outputPerMtok: 6 };
+    getModelPriceOverride.mockResolvedValue(view);
+    render(<ModelPriceOverrideDialog provider={provider} row={row(model)} open
+      presentation="inline" onOpenChange={vi.fn()} />);
+    const input = screen.getByLabelText('settings.providers.models.priceOverride.input') as HTMLInputElement;
+    await waitFor(() => expect(input.value).toBe('3'));
+    expect(input.readOnly).toBe(true);
+    expect(screen.getByText('CNY')).toBeTruthy();
+    expect(setModelPriceOverride).not.toHaveBeenCalled();
+  });
+
   it('clears and disables the stale form when loading a new target fails', async () => {
     getModelPriceOverride
       .mockResolvedValueOnce(priceView('model-a'))

@@ -4,9 +4,11 @@ import React, { useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { MemoryRouter } from 'react-router-dom';
 import '../../../src/renderer/styles/globals.css';
+import type { UiPageRuntime } from '../../ui-page/harness/types';
 
 const query = new URLSearchParams(location.search);
-const dark = query.get('theme') === 'dark';
+const uiPage = (window as unknown as { __uiPage?: UiPageRuntime }).__uiPage;
+const dark = uiPage ? uiPage.ctx.theme === 'dark' : query.get('theme') === 'dark';
 const offline = query.has('offline');
 const devices = [
   {
@@ -52,6 +54,8 @@ const ghosts = [null, 'design-team'].map((namespace) => ({
   dir: namespace ? '/fixture/_ns/design-team/notes' : '/fixture/notes',
   instanceKey: namespace ? '_ns__design-team__notes' : 'notes',
   namespace,
+  namespaceState: 'confirmed',
+  ...(namespace === null ? { publishingSource: { kind: 'local', source: 'manual' } } : {}),
   enabled: true,
   iconDataUrl: 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 48 48"><path fill="none" stroke="currentColor" stroke-width="2" d="M14 10h20v28H14zM19 18h10M19 24h10M19 30h6"/></svg>'),
   approval: { state: 'approved', revision: '00000000-0000-4000-8000-000000000001' },
@@ -361,6 +365,7 @@ const defaultApi: any = new Proxy(async () => null, {
             case 'management:snapshot':
               result = {
                 version: 1,
+                communityPublication: true,
                 ghosts,
                 ...(!query.has('old-projects') ? { projects: projectInventories.get(_device) } : {}),
                 market: {
@@ -377,6 +382,27 @@ const defaultApi: any = new Proxy(async () => null, {
                   unavailableCustomSourceNames: [],
                 },
               };
+              break;
+            case 'management:publish-prepare': {
+              const ghost = ghosts.find(item => item.instanceKey === request.resourceRef?.id);
+              if (!ghost) throw new Error('Fixture installation not found');
+              const { id, name, description, version } = ghost.manifest;
+              const now = new Date().toISOString();
+              result = { preview: {
+                preparedId: 'fixture-preview', instanceId: ghost.instanceKey, pluginId: null, ghostId: id,
+                name, description, version, sha256: 'a'.repeat(64), sizeBytes: 1024,
+                expiresAt: new Date(Date.now() + 60_000).toISOString(),
+                permissionLabels: ['systemPrompt'],
+                preflight: {
+                  subject: { authority: 'https://example.invalid', membershipId: 'fixture' },
+                  queriedAt: now, policyVersion: 2, target: { pluginId: null, ghostId: id, version, expectedRelease: null },
+                  pendingRelease: null, blockers: [], actions: { canSubmit: true },
+                },
+              } };
+              break;
+            }
+            case 'management:publish-discard':
+              result = { discarded: true };
               break;
             case 'management:project-state': {
               if (query.has('project-error')) throw new Error('fixture project read failed');
@@ -479,7 +505,7 @@ const { RemoteSkillsPage } =
   await import('../../../src/renderer/features/skillhub/RemoteSkillsPage');
 const { useConfirmDialog } =
   await import('../../../src/renderer/components/ui/confirm-dialog-provider');
-const { RemotePluginPage } = await import('../../../src/renderer/features/plugin/RemotePluginPage');
+const { RemotePluginCatalogSource } = await import('../../../src/renderer/features/plugin/RemotePluginCatalogSource');
 const { usePluginDeviceDirectory } =
   await import('../../../src/renderer/features/plugin/PluginDevicePicker');
 function FixtureContent() {
@@ -523,7 +549,7 @@ function FixtureContent() {
         </div>
         <div style={{ flex: 1, minHeight: 0 }}>
           {tab === 'plugins' ? (
-            <RemotePluginPage
+            <RemotePluginCatalogSource
               key={device.deviceId}
               device={device}
               online={reachable}
@@ -556,7 +582,10 @@ function FixtureContent() {
     </>
   );
 }
-createRoot(document.getElementById('root')!).render(
+if (uiPage) {
+  const { mountPage } = await import('../../ui-page/harness');
+  await mountPage({ route: '/plugins', render: () => <FixtureContent /> });
+} else createRoot(document.getElementById('root')!).render(
   <MemoryRouter>
     <ConfirmDialogProvider>
       <FixtureContent />

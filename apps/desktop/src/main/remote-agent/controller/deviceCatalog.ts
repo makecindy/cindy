@@ -12,6 +12,7 @@ import { effectiveSourceIdForModel, getModel, isModelSelectableForNewRoute, isMo
 
 import { remoteProviderDisableKey, isProviderDisabled } from '@cindy/model-providers';
 import { readModelDisableOverrides } from '../../maker-host/model-disable-store.js';
+import { PLUGIN_ENGINES_INVOKE, parseOfferedPluginEngines } from '../../../shared/pluginEngines.js';
 import { isProviderShareAgentDeviceId } from '../../../shared/providerShare.js';
 import { resolveVerifiedContextWindow } from '../../../shared/sessionContextWindow.js';
 
@@ -19,7 +20,7 @@ type RemoteInvoke = (
   deviceId: string,
   channel: string,
   args: unknown[],
-  options?: { liveProviderMetadata?: true },
+  options?: { liveProviderMetadata?: true; ownFreshness?: true },
 ) => Promise<{ ok: boolean; result?: unknown; error?: { code?: string; message?: string } }>;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -73,14 +74,17 @@ export interface DeviceProviderCatalogRead {
 export async function readDeviceProviderCatalog(
   invoke: RemoteInvoke,
   deviceId: string,
-  options: { visibleOnly?: boolean; groupMember?: boolean; live?: boolean } = {},
+  /** `ownFreshness`: the caller caches the result itself and needs each read to reach the host. */
+  options: { visibleOnly?: boolean; groupMember?: boolean; live?: boolean; ownFreshness?: boolean } = {},
 ): Promise<DeviceProviderCatalogRead> {
   const args = [
     { capabilities: [CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2] },
   ];
   const result = options.live
     ? await invoke(deviceId, 'maker:provider:list', args, { liveProviderMetadata: true })
-    : await invoke(deviceId, 'maker:provider:list', args);
+    : options.ownFreshness
+      ? await invoke(deviceId, 'maker:provider:list', args, { ownFreshness: true })
+      : await invoke(deviceId, 'maker:provider:list', args);
   if (!result.ok) {
     throw Object.assign(new Error(result.error?.message ?? 'provider list unavailable'), { code: result.error?.code });
   }
@@ -110,7 +114,7 @@ export async function readDeviceProviderCatalog(
 export async function readDeviceProviderViews(
   invoke: RemoteInvoke,
   deviceId: string,
-  options: { visibleOnly?: boolean; groupMember?: boolean; live?: boolean } = {},
+  options: { visibleOnly?: boolean; groupMember?: boolean; live?: boolean; ownFreshness?: boolean } = {},
 ): Promise<ProviderView[]> {
   return (await readDeviceProviderCatalog(invoke, deviceId, options)).views;
 }
@@ -151,4 +155,14 @@ export async function readRemoteProviderRoute(route: {
     provider, model,
     verifiedContextWindow: resolveDeviceHandoffWindow(catalog, route.agentDeviceId, route.agentKind, route.model, providerId),
   };
+}
+
+/** Read the authorized plugin engine catalog for one execution location. */
+export async function readRemotePluginEngines(deviceId: string) {
+  const { remoteBackgroundInvoke } = await import('../../device-link');
+  const reply = await remoteBackgroundInvoke(deviceId, PLUGIN_ENGINES_INVOKE.LIST, []);
+  if (!reply.ok) {
+    throw new Error('[REMOTE_AGENT_UNAVAILABLE] Selected remote plugin engine is unavailable.');
+  }
+  return parseOfferedPluginEngines(reply.result);
 }

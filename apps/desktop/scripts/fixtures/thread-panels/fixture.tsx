@@ -40,7 +40,7 @@ const actionReplies = [
     reactions: withReactions ? [{ emoji: '👍', count: 1, me: false }] : [],
   })),
 ];
-const report = '| 日期 | 站点 | 访问量 | 下载点击 | 访客 |\n| --- | --- | --- | --- | --- |\n| 10/28 | cindy.app | 4388 | 1048 | 759 |\n| 10/29 | cindy.app | 3621 | 639 | 466 |';
+const report = '| 日期 | 站点 | 访问量 | 下载点击 | 访客 |\n| --- | --- | --- | --- | --- |\n| `2026-10-28` | `shop-cindy` | 4388 | 1048 | 759 |\n| `2026-10-29` | `shop-cindy` | 3621 | 639 | 466 |';
 const reportName = '2026-10-29-Cindy双站逐日来源明细-完整报表.csv';
 const reportRoot = { ...root, content: report + '\n\n交付物：逐日、分来源明细，可用 Excel 打开。', attachments: [
   { id: 'csv', name: reportName, path: '/fixture/report.csv', url: null, category: 'text' as const, mimeType: 'text/csv', size: 100 },

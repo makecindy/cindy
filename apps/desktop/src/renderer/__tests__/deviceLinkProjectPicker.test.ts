@@ -12,6 +12,7 @@ import { describe, expect, it } from 'vitest';
 
 import { toDeviceProjectOptions } from '@/hooks/useDeviceLinkProjects';
 import { resolveDeviceLabel } from '@/components/new-chat/DeviceSwitcherPill';
+import { sortDevicesByOnlineAndRecency } from '@/features/device-link/deviceSort';
 import { getProjectPickerDisplayName } from '@/hooks/useProjectPickerOptions';
 
 describe('device-link project picker options', () => {
@@ -83,6 +84,52 @@ describe('device-link project picker options', () => {
     it('设备已从列表消失 → 显示 deviceId,不得回落成本机文案', () => {
       expect(resolveDeviceLabel(devices, 'dev-gone', '本机')).toBe('dev-gone');
       expect(resolveDeviceLabel([], 'dev-gone', '本机')).toBe('dev-gone');
+    });
+  });
+
+  describe('sortDevicesByOnlineAndRecency', () => {
+    it('在线优先于离线,同组内按最近使用倒序,无记录时按名称升序(再按 deviceId 兜底)', () => {
+      const input = [
+        { deviceId: 'dev-1', name: 'cindy-dash-us-desktop-99be44', online: false },
+        { deviceId: 'dev-2', name: 'dashflow', online: false },
+        { deviceId: 'dev-3', name: 'Dash Macbook Pro', online: false },
+        { deviceId: 'dev-4', name: 'Studio', online: true },
+        { deviceId: 'dev-5', name: 'Mac mini', online: true },
+        { deviceId: 'dev-6', name: 'Alpha', online: true },
+        { deviceId: 'dev-7', name: 'Alpha', online: true },
+      ];
+      const snapshot = input.map((d) => ({ ...d }));
+
+      const sorted = sortDevicesByOnlineAndRecency(input, {
+        // 离线设备即使使用时间更新,也仍排在在线设备后面,但在离线组内排第一。
+        'dev-3': 5000,
+        'dev-5': 3000,
+        'dev-4': 1000,
+        // 非法时间戳视为未使用。
+        'dev-2': Number.NaN,
+        'dev-1': -10,
+      });
+
+      expect(sorted.map((d) => d.deviceId)).toEqual([
+        'dev-5', // online, 3000
+        'dev-4', // online, 1000
+        'dev-6', // online, unused, Alpha (dev-6 < dev-7)
+        'dev-7', // online, unused, Alpha
+        'dev-3', // offline, 5000
+        'dev-1', // offline, unused, cindy-dash-us-desktop-99be44
+        'dev-2', // offline, unused, dashflow
+      ]);
+      // 不修改原数组。
+      expect(input).toEqual(snapshot);
+    });
+
+    it('未传使用记录时仍保证在线在前、名称升序', () => {
+      const sorted = sortDevicesByOnlineAndRecency([
+        { deviceId: 'a', name: 'cindy-offline', online: false },
+        { deviceId: 'z', name: 'Mac mini', online: true },
+        { deviceId: 'b', name: 'Alpha Online', online: true },
+      ]);
+      expect(sorted.map((d) => d.deviceId)).toEqual(['b', 'z', 'a']);
     });
   });
 });

@@ -154,6 +154,12 @@ describe("declarative card forms", () => {
     const invalid: Record<string, string>[] = [{ '-1': 'x' }, { 999: 'x' }, { 0: 'x'.repeat(16001) }, { 0: '\0' }];
     for (const edits of invalid) expect(applyMailInlineEdits(html, edits)).toBeNull();
   });
+  it('preserves inline line breaks only for callers requesting multiline whitespace', () => {
+    const html = '<p><strong>first</strong>\r\n<em>last</em></p>\n<p>Next<br>line</p>';
+    expect(mailInlineRuns(html).map(run => run.text)).toEqual(['first', 'last', 'Next', '\n', 'line']);
+    expect(mailTextParagraphs(html, { preserveMultilineWhitespace: true }).map(paragraph => paragraph.text))
+      .toEqual(['first\nlast', 'Next\nline']);
+  });
   it('treats typed markup as text and allows adding words to an image-only draft', () => {
     const html = '<html><head><title>Not body text</title></head><body><img src="cid:card"></body></html>';
     expect(mailTextParagraphs(html).map(p => p.text)).toEqual(['']);
@@ -178,6 +184,10 @@ describe("declarative card forms", () => {
     expect(mailCardStatus(mail!, 12000)).toBe('0 秒后发送');
     expect(parseMailCard({ ...mail, state: 'sent' })).toBeNull();
     expect(parseMailCard({ ...mail, pendingSend: { ...mail!.pendingSend, deadline: 'soon' } })).toBeNull();
+    const { pendingSend: _, ...withoutCountdown } = mail!;
+    expect(parseMailCard({ ...withoutCountdown, cancelLabel: '撤销' })?.cancelLabel).toBe('撤销');
+    expect(parseMailCard({ ...mail, cancelLabel: '撤销' })).toBeNull();
+    expect(parseMailCard({ ...withoutCountdown, state: 'draft', cancelLabel: '撤销' })).toBeNull();
   });
   // Width-based overflow must not omit a recipient or split a quoted display
   // name into multiple people. Pure unit coverage shared by both renderers.
@@ -222,6 +232,7 @@ describe("declarative card forms", () => {
     resolve(false);
     expect(await pending).toBe(false);
     expect(await pendingGhostCardFormDelivery("task")).toBe(false);
+    expect(pendingGhostCardFormDelivery("task", "card")).toBeUndefined();
     trackGhostCardFormDelivery("task", "card", Promise.resolve(true));
     expect(await pendingGhostCardFormDelivery("task")).toBe(true);
     expect(pendingGhostCardFormDelivery("task")).toBeUndefined();

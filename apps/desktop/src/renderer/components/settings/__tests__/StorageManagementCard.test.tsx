@@ -30,6 +30,7 @@ vi.mock('@/lib/composerDraftStore', () => ({
 }));
 vi.mock('@/contexts/AuthContext', () => ({
   useAuth: () => ({ dataOwnerId: 'storage-test-owner', dataOwnerGeneration: 1, dataOwnerRecoveryEpoch: 0 }),
+  useOptionalDataOwnerGeneration: () => 1,
 }));
 
 import { StorageManagementCard } from '../StorageManagementCard';
@@ -753,16 +754,16 @@ describe('StorageManagementCard database cleanup', () => {
     ]);
     fireEvent.click(options[0]!);
     expect(
-      screen
-        .getByRole('switch', { name: 'settings.about.storage.dbSlimmingBackupLabel' })
-        .getAttribute('aria-checked'),
-    ).toBe('true');
+      (screen.getByRole('checkbox', {
+        name: 'settings.about.storage.dbSlimmingBackupLabel',
+      }) as HTMLInputElement).checked,
+    ).toBe(true);
     fireEvent.click(screen.getByText('settings.about.storage.dbSlimmingBackupLabel'));
     expect(
-      screen
-        .getByRole('switch', { name: 'settings.about.storage.dbSlimmingBackupLabel' })
-        .getAttribute('aria-checked'),
-    ).toBe('false');
+      (screen.getByRole('checkbox', {
+        name: 'settings.about.storage.dbSlimmingBackupLabel',
+      }) as HTMLInputElement).checked,
+    ).toBe(false);
     fireEvent.click(screen.getByText('settings.about.storage.dbSlimmingBackupLabel'));
     const scanButton = screen.getByRole('button', {
       name: 'settings.about.storage.dbSlimmingScanButton',

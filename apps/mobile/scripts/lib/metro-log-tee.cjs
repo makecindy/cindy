@@ -73,10 +73,33 @@ module.exports = { installTee };
 
 const logPath = process.env.CINDY_METRO_LOG_PATH;
 
-if (logPath && isMainThread && !process.send && process.argv[2] === "start") {
-  installTee({
-    logPath,
-    streams: [process.stdout, process.stderr],
-    onExit: (callback) => process.once("exit", callback),
-  });
+// Recycle can rename a checkout before deleting it, and a new checkout can
+// reuse its path. Track the original directory identity inside Expo itself:
+// pnpm and the listener need not belong to the same process group.
+function watchProjectDirectory(projectDir) {
+  const original = fs.statSync(".", { bigint: true });
+  function check() {
+    try {
+      const current = fs.statSync(projectDir, { bigint: true });
+      if (original.dev === current.dev && original.ino === current.ino) return;
+    } catch (error) {
+      if (error.code !== "ENOENT" && error.code !== "ENOTDIR") return;
+    }
+    process.exit(0);
+  }
+  check();
+  setInterval(check, 5000).unref();
+}
+
+if (isMainThread && !process.send && process.argv[2] === "start") {
+  if (process.env.CINDY_METRO_PROJECT_DIR) {
+    watchProjectDirectory(process.env.CINDY_METRO_PROJECT_DIR);
+  }
+  if (logPath) {
+    installTee({
+      logPath,
+      streams: [process.stdout, process.stderr],
+      onExit: (callback) => process.once("exit", callback),
+    });
+  }
 }

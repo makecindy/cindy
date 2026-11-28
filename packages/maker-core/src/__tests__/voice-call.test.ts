@@ -19,6 +19,40 @@ function setup(
 }
 
 describe("independent voice call", () => {
+  it("dispatches only the accepted native transcript once and never runs text generation", async () => {
+    const { call, handoff, generate } = setup();
+    expect(await call.handoffNativeTurn("unknown", "forged")).toBe(false);
+    expect(call.recordNativeTurn("native", "user", "请查一下这个问题")).toBe(true);
+    expect(call.recordNativeTurn("native", "user", "replacement")).toBe(false);
+    await Promise.all([call.handoffNativeTurn("native", "context"), call.handoffNativeTurn("native", "duplicate")]);
+    expect(handoff).toHaveBeenCalledExactlyOnceWith({ id: "voice-task:call-1:native", inputId: "native", original: "请查一下这个问题", supplement: "context" });
+    expect(generate).not.toHaveBeenCalled();
+    call.recordNativeTurn("answer", "assistant", "Partial", false);
+    call.interruptNativeTurn("answer");
+    expect(call.recordNativeTurn("answer", "assistant", "Late final")).toBe(false);
+    expect(call.record.turns.at(-1)).toMatchObject({ text: "Partial", complete: true });
+    expect(call.record.turns.at(-1)?.failed).toBeFalsy();
+    call.end();
+    expect(call.recordNativeTurn("late", "user", "Late")).toBe(false);
+  });
+
+  it("delivers native task results once and retains accepted work after ending", async () => {
+    const result = vi.fn(), generate = vi.fn();
+    const call = new VoiceCallContext({ callId: "native", identity: "Cindy", reference: "", generate, handoff: async () => true, changed: vi.fn(), result });
+    call.recordNativeTurn("first", "user", "Do work");
+    await call.handoffNativeTurn("first", "");
+    call.deliverResult("voice-task:native:first", "Done");
+    call.deliverResult("voice-task:native:first", "Duplicate");
+    expect(result).toHaveBeenCalledExactlyOnceWith("voice-task:native:first", "Done");
+    call.recordNativeTurn("second", "user", "Background work");
+    await call.handoffNativeTurn("second", "");
+    call.end();
+    call.deliverResult("voice-task:native:second", "Late result");
+    expect(result).toHaveBeenCalledTimes(1);
+    expect(call.record.handoffs[1]).toMatchObject({ state: "completed", result: "Late result" });
+    expect(generate).not.toHaveBeenCalled();
+  });
+
   it("keeps casual exchanges in the call and includes them in the next call turn", async () => {
     const { call, generate, handoff } = setup();
     await call.submit("u1", "My name is Pat.");

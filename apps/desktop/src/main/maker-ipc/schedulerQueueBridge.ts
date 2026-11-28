@@ -74,6 +74,8 @@ export interface SchedulerQueueBridge {
   hasPendingInput(sessionId: string): boolean;
   hasQueuedPrompt(sessionId: string, scheduleId: string): boolean;
   enqueuePrompt(req: SchedulerQueuedPromptRequest): Promise<SchedulerEnqueueResult>;
+  /** Capture the matching run's cancellation before acceptance releases its queue registration. */
+  runSignalFor(sessionId: string, item: AgentInputQueuedMessage): AbortSignal | undefined;
   /** Manual Continue uses its existing input id but shares failure/recovery ownership. */
   trackPrompt(clientId: string, req: SchedulerQueuedPromptRequest): SchedulerQueuedPromptRequest['onAccepted'];
   removeQueuedPrompt(sessionId: string, clientId: string): void;
@@ -99,6 +101,7 @@ interface SchedulerQueueBridgeDeps<Meta> {
     onAccepted: SchedulerQueuedPromptRequest['onAccepted'];
     onAcceptedRollback?: SchedulerQueuedPromptRequest['onAcceptedRollback'];
     origin: SchedulerQueuedPromptRequest['origin'];
+    manualUiSend?: boolean;
   }): Promise<void>;
 }
 
@@ -152,6 +155,13 @@ export function createSchedulerQueueBridge<Meta>(deps: SchedulerQueueBridgeDeps<
     };
   };
   return {
+    runSignalFor: (sessionId, item) => {
+      const req = awaitingAcceptance.get(item.clientId);
+      if (req?.sessionId === sessionId && item.origin?.kind === 'scheduler'
+        && req.origin.scheduleId === item.origin.scheduleId && req.origin.runId === item.origin.runId) {
+        return req.signal;
+      }
+    },
     trackPrompt,
     recoverySourceClientId,
     releasePrompt,
@@ -227,6 +237,7 @@ export function createSchedulerQueueBridge<Meta>(deps: SchedulerQueueBridgeDeps<
           onAccepted,
           onAcceptedRollback: req.onAcceptedRollback,
           origin: req.origin,
+          manualUiSend: true,
         });
       } catch (err) {
         awaitingAcceptance.delete(clientId);

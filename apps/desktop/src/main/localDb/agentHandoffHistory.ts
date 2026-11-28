@@ -1,4 +1,4 @@
-import { and, eq, gt, gte, desc, isNull, or, inArray, sql } from 'drizzle-orm';
+import { and, eq, gt, lt, gte, desc, isNull, or, inArray, sql } from 'drizzle-orm';
 import { getDbClient } from './client/current.js';
 import { messages, sessions } from './schema.js';
 
@@ -15,18 +15,26 @@ const messageRowid = sql<number>`rowid`;
 export async function listMessagesForAgentHandoff(
   sessionId: string,
   limit: number | null = 400,
-  after?: { createdAt: number; rowid: number },
-  role?: 'user' | 'authorization' | 'replay',
-): Promise<
-  Array<{
-    clientId: string;
-    role: string;
-    content: unknown;
-    createdAt: number;
-    agentMeta: Record<string, unknown> | null;
-    toolUseId: string | null;
-  }>
-> {
+  after?: HistoryCursor,
+  role?: HistoryRole,
+  before?: HistoryCursor,
+) {
+  return (await readHistoryPage(sessionId, { limit, role, after, before })).messages;
+}
+
+type HistoryCursor = { createdAt: number; rowid: number };
+type HistoryRole = 'user' | 'authorization' | 'replay';
+
+export function readAutoReviewHistoryPage(sessionId: string) {
+  return readHistoryPage(sessionId, { limit: 400, role: 'authorization', detectTruncation: true });
+}
+
+async function readHistoryPage(
+  sessionId: string,
+  { limit, role, after, before, detectTruncation }: {
+    limit: number | null; role?: HistoryRole; after?: HistoryCursor; before?: HistoryCursor; detectTruncation?: boolean;
+  },
+) {
   const db = getDbClient().drizzle;
   const [sessRow] = await db
     .select({ clearedAt: sessions.clearedAt, source: sessions.source, createdAt: sessions.createdAt })
@@ -70,6 +78,8 @@ export async function listMessagesForAgentHandoff(
     .from(messages)
     .where(
       and(eq(messages.sessionId, sessionId), isNull(messages.rewindAt), afterClear, afterWatermark,
+        before && or(lt(messages.createdAt, before.createdAt),
+          and(eq(messages.createdAt, before.createdAt), lt(messageRowid, before.rowid))),
         // A copied parent instruction is context, never authorization for a side task.
         role === 'authorization' && sessRow?.source === 'side-chat' ? gte(messages.createdAt, sessRow.createdAt) : undefined,
         role === 'authorization' ? and(inArray(messages.role, ['user', 'ask_user', 'plan_review']), notScheduledExecution)
@@ -78,11 +88,10 @@ export async function listMessagesForAgentHandoff(
             : role ? eq(messages.role, role) : undefined),
     )
     .orderBy(desc(role === 'authorization' ? authorityTime : messages.createdAt), desc(messageRowid));
-  // Authority replay must start at the clear/rewind boundary: the shared intent
-  // budget is stateful, so an arbitrary row suffix has a different projection.
-  const rows = await (limit === null ? query : query.limit(limit));
-  rows.reverse();
-  return rows
+  const rows = await (limit === null ? query : query.limit(detectTruncation ? limit + 1 : limit));
+  const complete = limit === null || rows.length <= limit;
+  if (!complete) rows.pop();
+  const page = rows.reverse()
     .map((r) => {
       let content: unknown = r.content;
       try {
@@ -119,4 +128,5 @@ export async function listMessagesForAgentHandoff(
       };
     })
     .filter((row): row is NonNullable<typeof row> => row !== null);
+  return { messages: page, complete };
 }

@@ -1021,6 +1021,19 @@ it('keeps plugin update decisions outside the scrollable permission details', as
   }
 });
 
+// #8706 unit: both actual confirmation layouts must use the safe quota translation.
+it.each([false, true])('shows quota guidance while retaining confirmation (companion=%s)', async companion => {
+  remoteSessionStore.setPendingInteractions('s1', [{ request: {
+    kind: 'permission', requestId: 'quota', toolName: 'Write', input: { path: '/tmp/card.txt' },
+    metadata: { autoReviewUnavailable: true, autoReviewUnavailableReason: 'quota_exhausted' },
+  } }]);
+  await act(async () => root.render(<Harness companion={companion} />));
+  expect(host.textContent).toContain('session.remoteError.AUTO_REVIEW_UNAVAILABLE_QUOTA');
+  expect(host.textContent).not.toContain('interaction.permission.autoReviewUnavailable');
+  expect(resolveInteraction).not.toHaveBeenCalled();
+  expect(host.querySelector('[data-testid="interaction.permission.allowOnceButton"]')).not.toBeNull();
+});
+
 it.each(['allowOnce', 'deny'])('companion permission preserves complete evidence and %s receipt', async (action) => {
   const content = 'unique-complete-payload-' + 'x'.repeat(800);
   remoteSessionStore.setPendingInteractions('s1', [{ request: {

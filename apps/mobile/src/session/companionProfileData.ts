@@ -33,19 +33,24 @@ export interface ProfilePanel {
 export interface CompanionProfileData { resource: RemoteResource; panels: ProfilePanel[] }
 /** One model group on the host: picked by the host, which fills the saved model on save (model-groups.md §6.2). */
 export interface CompanionModelGroup {
-  id: string; name: string; strategy: 'expiring' | 'order' | 'rotate' | 'cheapest'; sources: number; effort?: string;
+  id: string; name: string; sources: number; effort?: string;
+  /** The host's pick strategy; absent when this app does not know it (the host still picks, only the label is left out). */
+  strategy?: CompanionModelGroupStrategy;
   /** The group's first enabled source: the saved model of a new entry until the host fills its current pick on save. */
   fallback?: { harness: 'claude' | 'codex' | 'pi'; model: string; providerId: string; agentDeviceId?: string };
 }
-const GROUP_STRATEGIES = ['expiring', 'order', 'rotate', 'cheapest'] as const;
+const GROUP_STRATEGIES = ['expiring', 'order', 'rotate', 'cheapest', 'drain', 'headroom', 'weighted'] as const;
+export type CompanionModelGroupStrategy = (typeof GROUP_STRATEGIES)[number];
 /** Bounded like the host's own config (32 groups); only what the picker displays is kept. */
 export function parseCompanionModelGroups(value: unknown): CompanionModelGroup[] | undefined {
   const routes = record(value)?.routes;
   if (!Array.isArray(routes)) return undefined;
   return routes.slice(0, 32).flatMap(raw => {
     const route = record(raw);
-    const id = route?.id; const name = route?.name; const strategy = GROUP_STRATEGIES.find(item => item === route?.strategy);
-    if (!string(id, 64) || !id || !string(name, 40) || !name.trim() || !strategy) return [];
+    const id = route?.id; const name = route?.name;
+    // Newer hosts send the real strategy in `pick` and an older stand-in in `strategy` for phones that predate it.
+    const strategy = GROUP_STRATEGIES.find(item => item === route?.pick) ?? GROUP_STRATEGIES.find(item => item === route?.strategy);
+    if (!string(id, 64) || !id || !string(name, 40) || !name.trim()) return [];
     const candidates = Array.isArray(route?.candidates) ? route.candidates.slice(0, 16) : [];
     const enabled = candidates.flatMap(item => (record(item) && record(item)!.off !== true ? [record(item)!] : []));
     const first = enabled[0];
@@ -54,7 +59,7 @@ export function parseCompanionModelGroups(value: unknown): CompanionModelGroup[]
       ? { harness, model: first.model, providerId: first.providerId,
           ...(string(first.agentDeviceId, 256) && first.agentDeviceId ? { agentDeviceId: first.agentDeviceId } : {}) }
       : undefined;
-    return [{ id, name: name.trim(), strategy, sources: enabled.length,
+    return [{ id, name: name.trim(), ...(strategy ? { strategy } : {}), sources: enabled.length,
       ...(string(route?.effort, 32) && route.effort ? { effort: route.effort } : {}),
       ...(fallback ? { fallback } : {}) }];
   });

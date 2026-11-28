@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>app.cindy.host</string>
+	<key>LimitLoadToSessionType</key>
+	<string>Aqua</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/absolute/path/to/node</string>
+		<string>--import</string>
+		<string>tsx</string>
+		<string>--import</string>
+		<string>./apps/host/src/loaders/register-raw.mjs</string>
+		<string>apps/host/src/main.ts</string>
+		<string>serve</string>
+	</array>
+	<key>WorkingDirectory</key>
+	<string>/absolute/path/to/cindy</string>
+	<key>EnvironmentVariables</key>
+	<dict>
+		<key>PATH</key>
+		<string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+		<key>CINDY_HOST_DATA_DIR</key>
+		<string>/absolute/path/to/cindy-state/profile</string>
+		<key>CINDY_HOST_APP_DATA_DIR</key>
+		<string>/absolute/path/to/cindy-state/app-data</string>
+		<key>CINDY_HOST_REGION</key>
+		<string>global</string>
+		<key>CINDY_HOST_PORT</key>
+		<string>0</string>
+	</dict>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>KeepAlive</key>
+	<dict>
+		<key>SuccessfulExit</key>
+		<false/>
+	</dict>
+	<key>ThrottleInterval</key>
+	<integer>30</integer>
+	<key>ExitTimeOut</key>
+	<integer>30</integer>
+	<key>StandardOutPath</key>
+	<string>/absolute/path/to/cindy-state/logs/host.stdout.log</string>
+	<key>StandardErrorPath</key>
+	<string>/absolute/path/to/cindy-state/logs/host.stderr.log</string>
+</dict>
+</plist>

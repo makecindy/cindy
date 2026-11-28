@@ -1,11 +1,12 @@
 import { TaskDrawerPresentationProvider } from './TaskDrawerPresentation';
 import { createContext, useCallback, useContext, useId, useLayoutEffect, useMemo, useState, type ReactNode } from 'react';
-import { View } from 'react-native';
+import { StyleSheet, View } from 'react-native';
 import { useSegments } from 'expo-router';
 import { NavigationContext, NavigationRouteContext, useIsFocused } from 'expo-router/react-navigation';
 import { useAdaptiveWindow } from '@/platform/AdaptiveWindowContext';
 import { NavigationActionContext } from '@/utils/NavigationActionContext';
 import { useTheme } from '@/theme';
+import { useWallpaper } from '@/theme/wallpaper';
 import { HomePresentationFocus } from './HomePresentationFocus';
 import { NativeTaskDrawerHost, NativeHistorySlot } from './NativeResidentHistory';
 import { LocalHomeList, useSessionPaneLayout } from './ResidentHomeList';
@@ -37,6 +38,7 @@ export function SharedTaskListProvider({ children }: { children: ReactNode }) {
     || segments[0] === 'companions' && segments[1] === 'groups' && segments[2] === '[groupId]';
   const column = persistent && detail;
   const { colors } = useTheme();
+  const { selected } = useWallpaper();
   const publish = useCallback((next: Entry) => setEntry(next), []);
   // Retain the last tree during blur/unmount -> focus/mount handoff. A delayed
   // departure cannot clear the new owner's props or navigation authority.
@@ -61,7 +63,8 @@ export function SharedTaskListProvider({ children }: { children: ReactNode }) {
         accessibilityElementsHidden={!entry.active}
         style={{ position: 'absolute', left: 0, top: 0, bottom: 0,
           width: entry.width + geometry.insets.left, paddingLeft: geometry.insets.left, paddingTop: geometry.insets.top,
-          backgroundColor: colors.surface }}>
+          backgroundColor: selected === 'none' ? colors.surface : 'transparent',
+          borderRightWidth: selected === 'none' ? 0 : StyleSheet.hairlineWidth, borderRightColor: colors.border }}>
         <NativeHistorySlot surfaceId={surfaceId} selected onDock={entry.onDock} style={{ flex: 1 }} />
       </View> : null}
     </> : null}

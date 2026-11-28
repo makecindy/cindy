@@ -12,44 +12,15 @@
  * 行为部分用真实 maker-core Session + fake handle 驱动 `sendHostTurnContinuation`：
  * 覆盖预约回调时序（先于 provider dispatch）、成功派发、未派发收口回滚、
  * 派发前取消（无预约时回滚必须 no-op）。
- * register 侧接线由源码契约守住（register.ts 依赖 Electron main，无法在单测导入，
- * 仓库内所有既有测试同样 mock register）。
+ * Desktop's owner-bound adapter is exercised in sessionActiveTurn.test.ts.
  */
 
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { Session, type AgentEvent, type AgentSessionHandle } from '@cindy/maker-core';
 import {
   bindSilentStopContinuationGeneration,
   type SilentStopContinuationBindingDeps,
 } from '../silentStopContinuationBinding.js';
-
-const registerSource = readFileSync(resolve(__dirname, '..', 'register.ts'), 'utf8').replace(
-  /\r\n?/g,
-  '\n',
-);
-
-function extractBetween(source: string, startMarker: string, endMarker: string): string {
-  const start = source.indexOf(startMarker);
-  const end = source.indexOf(endMarker, start + startMarker.length);
-  if (start < 0 || end < 0) {
-    throw new Error(`source markers not found: ${startMarker} .. ${endMarker}`);
-  }
-  return source.slice(start, end);
-}
-
-describe('silent-stop continuation generation binding (wiring contract)', () => {
-  it('binds the reserved generation via the extracted helper and rolls back on send failure', () => {
-    // The turn-end body is in silentStopTurnEnd.ts; register.ts's handleSilentStopTurnEnd calls it. The body's
-    // binding and rollback steps are guarded in hostDesktopSourceContracts.guard.test.ts.
-    expect(extractBetween(
-      registerSource,
-      'async function handleSilentStopTurnEnd(',
-      'function isFencedStaleProductTerminal(',
-    )).toContain('await handleSilentStopTurnEndWithPorts(session, doneAt, turnLeaseId, turnOrigin, {');
-  });
-});
 
 describe('silent-stop continuation generation binding (behavior on a real Session)', () => {
   const SID = 'silent-stop-binding';

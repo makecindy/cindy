@@ -208,6 +208,7 @@ export interface XdGatewayModelInfo {
   currency?: 'USD' | 'CNY';
   id: string;
   availability?: 'available' | 'requires_payment';
+  silentSwitch?: boolean;
   /** Gateway 原生 mode(issue #882,权威分类字段;缺省时下游按 id 正则兜底)。 */
   mode?: string;
   /** AIGateway 折扣比例(0..1),折后价 = 原价 × (1 - costDiscount)。 */
@@ -241,6 +242,13 @@ export interface XdGatewayModelInfo {
   modalities?: { input: string[]; output: string[] };
   /** per-tab 能力覆盖。 */
   perAgent?: Partial<Record<AgentKind, XdGatewayAgentOverride>>;
+}
+
+export function isXdGatewaySilentSwitchTarget(model: XdGatewayModelInfo, agent: AgentKind): boolean {
+  const runtime = model.perAgent?.[agent];
+  return model.silentSwitch === true && model.availability === 'available' && model.defaultEnabled !== false &&
+    model.agents?.length === 1 && model.agents[0] === agent &&
+    Boolean(runtime?.wireProtocol) && runtime?.defaultEnabled !== false;
 }
 
 /**
@@ -1610,6 +1618,9 @@ function computeMerged(codexModels: readonly CatalogModel[] = discoveredCodex, c
         const merged: CatalogModel = {
           ...gatewayDisplayPricing(gm),
           id: gm.id,
+          ...(xdGatewayModelsAuthoritative && isXdGatewaySilentSwitchTarget(gm, agent)
+            ? { silentSwitch: true }
+            : {}),
           discoveredMetadata: { ...pickModelMetadata(gm), ...pickModelMetadata(ov) },
           ...(nativeApi !== undefined ? { nativeApi } : {}),
           ...(gm.availability ? { availability: gm.availability } : {}),
@@ -1881,12 +1892,10 @@ function computeMerged(codexModels: readonly CatalogModel[] = discoveredCodex, c
   );
   // Subscription image_generation is one hosted capability, not the Platform model list.
   // Keep the original ID so saved Art selections and visibility overrides still resolve.
-  providers = providers.map((provider) => {
-    if (!isOpenAiSubscriptionProvider(provider) ||
-        (provider.id === 'openai' && openAiImagesApiKeyConfigured) ||
-        provider.imageModels?.length === 0) return provider;
+  const projectSubscriptionImage = (
+    provider: Provider, previous?: ProviderMediaModel, hasDefault = false,
+  ): Provider => {
     const id = subscriptionImageModelId(provider.id);
-    const previous = provider.imageModels?.find((model) => model.id === id);
     const defaults: ProviderMediaModel = {
       id,
       name: 'GPT Image Gen',
@@ -1901,8 +1910,15 @@ function computeMerged(codexModels: readonly CatalogModel[] = discoveredCodex, c
         ...defaults,
         ...userMediaMetadata(provider, id, previous ?? defaults),
       }],
-      imageDefaults: provider.imageDefaults ? { standard: id } : undefined,
+      imageDefaults: hasDefault ? { standard: id } : undefined,
     };
+  };
+  providers = providers.map((provider) => {
+    if (!isOpenAiSubscriptionProvider(provider) ||
+        (provider.id === 'openai' && openAiImagesApiKeyConfigured) ||
+        provider.imageModels?.length === 0) return provider;
+    const previous = provider.imageModels?.find((model) => model.id === subscriptionImageModelId(provider.id));
+    return projectSubscriptionImage(provider, previous, !!provider.imageDefaults);
   });
   // Execution mappings are provider data, not a guess based on a model's name.
   // Gate after every overlay so a preference cannot claim a target absent from this account.
@@ -2003,16 +2019,20 @@ function computeMerged(codexModels: readonly CatalogModel[] = discoveredCodex, c
           localOverrides.patches[key].agents?.includes(agent)));
     },
   }));
-  // Providers Cindy created for subscription accounts (2026-11-13) mirror their built-in
-  // subscription's final routes and models; only the accounts behind them differ (placement.ts).
-  // Platform-key media stays with the built-in connection.
+  // Created providers mirror chat routes. Media belongs to the connection, not the parent.
+  const openAiDeclaration = providerSources.find((provider) => provider.id === 'openai');
   for (const entry of subscriptionPoolProviders) {
     const base = providers.find((provider) => provider.id === entry.kind);
     if (!base || providers.some((provider) => provider.id === entry.id)) continue;
-    providers = [...providers, {
+    const provider: Provider = {
       ...base, id: entry.id, name: entry.name, subscriptionPool: entry.kind,
       imageModels: undefined, imageDefaults: undefined, videoModels: undefined, videoDefaults: undefined,
-    }];
+      audioModels: undefined, embeddingModels: undefined, embeddingDefaults: undefined, evaluationModels: undefined,
+    };
+    providers = [...providers, entry.kind === 'openai' && isOpenAiSubscriptionProvider(provider)
+      && openAiDeclaration?.imageModels?.length !== 0
+      ? projectSubscriptionImage(provider, undefined, !!openAiDeclaration?.imageDefaults)
+      : provider];
   }
   return { ...b, modelRegistry, providers };
 }

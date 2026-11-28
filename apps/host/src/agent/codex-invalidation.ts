@@ -3,6 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {
   CODEX_USER_DISCONNECT_REASON,
+  getActiveInvalidatedSystemCodexAuthMarker,
   isDurableDisconnectMarker,
   readInvalidatedSystemCodexAuthMarker,
   restoreInvalidationStateOnStartup,
@@ -14,7 +15,7 @@ import { currentCodexCredentialGeneration, parseCodexCredentialGeneration } from
 import { isNativeProviderAuthBound, isNativeProviderAuthRevoked, unbindNativeProviderAuth } from '../../../desktop/src/main/maker-host/nativeProviderAuthBinding.js';
 import { getActiveAppSession } from '../../../desktop/src/main/appSessionState.js';
 import { detectHostCodexCredentialScope } from './codex-system-login.js';
-import { codexAuthPathsShareEntry } from '../../../desktop/src/main/maker-host/codex-auth-link.js';
+import { codexAuthPathsShareEntry, removeLegacyCodexAuthAlias } from '../../../desktop/src/main/maker-host/codex-auth-link.js';
 import { createLogger } from '../../../desktop/src/main/logger.js';
 
 const log = createLogger('host-codex-invalidation');
@@ -70,6 +71,18 @@ export function commitHostCodexDisconnectBoundary(codexHome: string, systemAuthP
 export function readHostCodexInvalidation(codexHome: string, systemAuthPath?: string | null): { reason: string; credentialScope: CredentialScope } | null {
   const restored = restoreInvalidationStateOnStartup(codexHome, markerSystemPath(codexHome, systemAuthPath), path.join(codexHome, 'auth.json'));
   return restored.invalidatedReason ? { reason: restored.invalidatedReason, credentialScope: restored.credentialScope ?? 'unknown' } : null;
+}
+
+/**
+ * Even while reconciliation is suppressed by a durable disconnect or attributed invalidation,
+ * unlink an obsolete legacy hardlink inside this profile so native Codex can save logins.
+ */
+export function detachSuppressedLegacyCodexHardlink(codexHome: string, systemAuthPath?: string | null): boolean {
+  if (!systemAuthPath || !fs.existsSync(systemAuthPath)) return false;
+  const localAuthPath = path.join(codexHome, 'auth.json');
+  const marker = getActiveInvalidatedSystemCodexAuthMarker(codexHome, systemAuthPath, localAuthPath);
+  if (!marker || marker.unprovenCredentialAttribution) return false;
+  return removeLegacyCodexAuthAlias(systemAuthPath, localAuthPath);
 }
 
 /**

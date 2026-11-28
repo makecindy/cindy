@@ -16,6 +16,7 @@ import path from 'node:path';
 import type { AuthAdapter, AuthAdapterOptions } from '../../interfaces/auth-adapter.js';
 import type { AgentRuntimeConfig } from '../../interfaces/runtime-config.js';
 import { applyPlainTextTerminalEnv } from '../shared/terminal-output.js';
+import { withResponseTimingLogFilter } from './app-server/response-timing.js';
 
 function prependPath(env: Record<string, string>, prepends: string[]): void {
   const cleaned = prepends.map((p) => p.trim()).filter(Boolean);
@@ -73,6 +74,9 @@ export async function buildCodexEnv(
   if (env.PYTHONUTF8 === undefined) env.PYTHONUTF8 = '1';
   if (env.PYTHONIOENCODING === undefined) env.PYTHONIOENCODING = 'utf-8';
   applyPlainTextTerminalEnv(env);
+  // One trace line per model response with the provider's own generation time, read
+  // for the tok/s display only (app-server/response-timing.ts); other output unchanged.
+  env.RUST_LOG = withResponseTimingLogFilter(env.RUST_LOG);
 
   // 兜底: NO_PROXY 必须包含 127.0.0.1/localhost/::1, 否则 codex 子进程的 rmcp
   // (Rust reqwest) 会把 Cindy MCP HTTP bridge 的 localhost 请求也走 HTTP_PROXY

@@ -33,10 +33,13 @@ import {
   useProviderSharePendingRequests,
 } from './providerShareStore';
 import { subscribeProviderShareJoin } from './joinIntent';
+import { useLegalTermsGateBlocking } from '@/components/auth/legalTermsGateState';
 
 const SETTLED_TOAST_MS = 6000;
 
 export function ProviderShareGlobalHost({ manualOnly = false }: { manualOnly?: boolean }) {
+  // 协议更新确认挡着时保留待审队列、暂不弹窗,确认后再依次显示(见 legalTermsGateState)。
+  const legalTermsGateBlocking = useLegalTermsGateBlocking();
   const { t } = useTranslation();
   const { dataOwnerId, dataOwnerGeneration } = useAuth();
   useEffect(() => {
@@ -177,6 +180,7 @@ export function ProviderShareGlobalHost({ manualOnly = false }: { manualOnly?: b
     navigateRef.current('/cc-agent/new', { state: makeGenericNewMakerRouteState(pathnameRef.current) });
   }, []);
 
+  if (legalTermsGateBlocking) return null;
   return (
     <>
       {current && <ProviderShareApproveDialog

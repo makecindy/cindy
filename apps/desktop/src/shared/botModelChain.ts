@@ -1,10 +1,19 @@
-import { normalizeModelRoute, modelRouteLocationKey, type ModelRoute } from '@cindy/maker-shared/model-route';
+import { normalizeCompanionModelRoute, modelRouteLocationKey, type CompanionModelRoute } from '@cindy/maker-shared/model-route';
 
-export const BOT_MODEL_CHAIN_MAX = 5;
+/**
+ * 伙伴只用一个模型(或一条智能路由)：2026-11-26 用户裁决取消备用模型，想要出问题时自动换来源就选一条智能路由，
+ * 由路由接替(model-groups.md §6.2)。存下、生效、展示都只认第一条。
+ */
+export const BOT_MODEL_CHAIN_MAX = 1;
 
-export type BotHarness = 'claude' | 'codex' | 'pi';
+/**
+ * 旧版电脑、手机、云端记录与 Agent 工具仍可能发来最多 5 条(原来的首选 + 备用)：照样接受，不让保存失败，只用第一条。
+ */
+export const BOT_MODEL_CHAIN_INPUT_MAX = 5;
 
-export type BotModelRoute = ModelRoute;
+export type BotHarness = CompanionModelRoute['harness'];
+
+export type BotModelRoute = CompanionModelRoute;
 
 /** Runtime-control uses the same full route identity as the Bot editor. */
 export function botModelRouteRuntimeKey(
@@ -15,10 +24,10 @@ export function botModelRouteRuntimeKey(
 }
 
 export function normalizeBotHarness(value: unknown): BotHarness {
-  return value === 'codex' || value === 'pi' || value === 'claude' ? value : 'claude';
+  return value === 'codex' || value === 'pi' || value === 'claude' || value === 'acp' ? value : 'claude';
 }
 
-export const normalizeBotModelRoute = normalizeModelRoute;
+export const normalizeBotModelRoute = normalizeCompanionModelRoute;
 
 /**
  * Read the ordered route chain while preserving every legacy single-model Bot.
@@ -36,6 +45,18 @@ export function normalizeBotModelChain(
     if (single) candidates.push(single);
   }
   return uniqueBotModelRoutes(candidates).slice(0, BOT_MODEL_CHAIN_MAX);
+}
+
+/** A remote form must save every submitted route, in order, or reject the entire edit. */
+export function parseRemoteBotModelChain(value: unknown): BotModelRoute[] | null {
+  if (!Array.isArray(value) || !value.length || value.length > BOT_MODEL_CHAIN_INPUT_MAX
+    || value.some(route => !route || normalizeBotHarness(route.harness) !== route.harness)) return null;
+  // 每一条都要合法、互不重复(旧版表单发来的备用项也一样；#12944：不同写法归成同一条路由时不悄悄丢掉一项)，
+  // 否则整份拒绝；合法时只存第一条。
+  const routes = value.map(normalizeBotModelRoute);
+  if (routes.some(route => route === null)) return null;
+  if (uniqueBotModelRoutes(routes as BotModelRoute[]).length !== routes.length) return null;
+  return normalizeBotModelChain(routes);
 }
 
 /** A group entry and a plain route with the same fallback model are different choices. */
@@ -129,6 +150,29 @@ export function nextBotModelRoute(
     return route;
   }
   return null;
+}
+
+/** The candidate and whether the companion has any alternative for this execution location. */
+export function selectBotFallbackRoute(
+  chain: readonly BotModelRoute[],
+  current: Pick<BotModelRoute, 'harness' | 'model' | 'providerId' | 'agentDeviceId'>,
+  visited: readonly string[],
+  remoteHostId: string | null | undefined,
+  readMergedAccount: (providerId: string) => string | undefined,
+  eligibleForSchedule?: (candidate: BotModelRoute) => boolean,
+) {
+  const currentIndex = botModelRouteIndex(chain, current);
+  if (eligibleForSchedule && currentIndex < 0) return { route: null, routeLocked: undefined };
+  const usable = (candidate: BotModelRoute) => {
+    if (eligibleForSchedule && !eligibleForSchedule(candidate)) return false;
+    if (remoteHostId) return candidate.harness !== 'acp' && candidate.harness === current.harness;
+    // A plugin or another device owns its provider namespace. Placement here describes local accounts.
+    return candidate.harness === 'acp' || !!candidate.agentDeviceId || !candidate.providerId
+      || !readMergedAccount(candidate.providerId);
+  };
+  const route = nextBotModelRoute(chain, current, visited, usable);
+  const routeLocked = !route && !chain.some((candidate, index) => index !== currentIndex && usable(candidate));
+  return { route, routeLocked };
 }
 
 /** A saved model selection supersedes an earlier runtime-only fallback. */

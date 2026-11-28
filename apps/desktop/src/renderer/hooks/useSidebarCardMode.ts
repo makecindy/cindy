@@ -18,6 +18,9 @@
 
 import { useCallback, useEffect, useState } from 'react';
 
+import { createSidebarModePreference } from './sidebarModePreference';
+import { sidebarModeKey } from './sidebarModeKey';
+import type { TaskListMode } from './useTaskListMode';
 import { getSidebarInstallVintage } from '@/features/cc-agent/lib/sidebarInstallVintage';
 
 export type SidebarViewMode = 'text' | 'card' | 'list';
@@ -48,7 +51,6 @@ function parseMainMode(raw: string | null): SidebarMainViewMode | null {
  * 不会把刚切换的窗口又改回旧值(切换静默失效 bug)。初始 null:首个读取者落定一次。
  */
 let memoryValue: SidebarViewMode | null = null;
-let mainMemoryValue: SidebarMainViewMode | null = null;
 
 /** 同步读(置顶段)——给非 hook 路径用。 */
 export function getSidebarViewMode(): SidebarViewMode {
@@ -69,17 +71,17 @@ export function getSidebarViewMode(): SidebarViewMode {
  * 后保持文字视图**——包括从没动过显示模式、localStorage 里没有 cardMode 的那批人
  * (他们靠 sidebarInstallVintage 的使用痕迹识别)。
  */
-export function getSidebarMainViewMode(): SidebarMainViewMode {
-  if (mainMemoryValue !== null) return mainMemoryValue;
+export function loadSidebarMainViewMode(mode: TaskListMode = 'tasks'): SidebarMainViewMode {
   try {
-    const parsed = parseMainMode(localStorage.getItem(MAIN_STORAGE_KEY));
-    if (parsed) return (mainMemoryValue = parsed);
+    const parsed = parseMainMode(localStorage.getItem(sidebarModeKey(MAIN_STORAGE_KEY, mode)));
+    if (parsed) return parsed;
+    if (mode === 'inbox') return DEFAULT_MAIN_MODE;
     // 一次性迁移:老用户只有整侧栏一份 cardMode。text 保持紧凑;card/list 都映射
     // 到主列表 list(宽行)。不回写 storage——迁移是纯读取推导,用户首次显式切换才落盘。
     const legacy = parseMode(localStorage.getItem(STORAGE_KEY));
-    if (legacy) return (mainMemoryValue = legacy === 'text' ? 'text' : 'list');
+    if (legacy) return legacy === 'text' ? 'text' : 'list';
     // 没有任何显示模式痕迹:老安装沿用旧版观感(文字版),新安装用新默认(列表)。
-    if (getSidebarInstallVintage() === 'legacy') return (mainMemoryValue = 'text');
+    if (getSidebarInstallVintage() === 'legacy') return 'text';
   } catch {
     // localStorage 不可用——退回默认(不落定内存,留待后续写入)。
   }
@@ -161,40 +163,19 @@ export function useSidebarCardMode(): {
   return { mode, setMode };
 }
 
-/** 主列表显示模式 hook——与置顶段同构,独立 key 与 listener 集合。 */
-const mainListeners = new Set<() => void>();
-
-export function useSidebarMainViewMode(): {
-  mode: SidebarMainViewMode;
-  setMode: (next: SidebarMainViewMode) => void;
-} {
-  const [mode, setModeState] = useState<SidebarMainViewMode>(getSidebarMainViewMode);
-
-  const setMode = useCallback((next: SidebarMainViewMode) => {
-    mainMemoryValue = next;
-    setModeState(next);
+const useMainViewPreference = createSidebarModePreference(
+  MAIN_STORAGE_KEY,
+  loadSidebarMainViewMode,
+  (value, mode) => {
     try {
-      localStorage.setItem(MAIN_STORAGE_KEY, next);
+      localStorage.setItem(sidebarModeKey(MAIN_STORAGE_KEY, mode), value);
     } catch {
-      // localStorage 不可用——内存 SoT 已生效;仅跨窗口同步缺失。
+      // The shared in-memory selection remains available in this window.
     }
-    mainListeners.forEach((fn) => fn());
-  }, []);
+  },
+);
 
-  useEffect(() => {
-    const sync = () => setModeState(getSidebarMainViewMode());
-    mainListeners.add(sync);
-    const onStorage = (e: StorageEvent) => {
-      if (e.key !== MAIN_STORAGE_KEY) return;
-      mainMemoryValue = parseMainMode(e.newValue) ?? DEFAULT_MAIN_MODE;
-      sync();
-    };
-    window.addEventListener('storage', onStorage);
-    return () => {
-      mainListeners.delete(sync);
-      window.removeEventListener('storage', onStorage);
-    };
-  }, []);
-
-  return { mode, setMode };
+export function useSidebarMainViewMode() {
+  const { value: mode, store } = useMainViewPreference();
+  return { mode, setMode: store.set };
 }

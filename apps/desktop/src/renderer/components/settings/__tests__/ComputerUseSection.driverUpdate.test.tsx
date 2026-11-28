@@ -115,6 +115,65 @@ afterEach(() => {
 });
 
 describe('ComputerUseSection driver update completion', () => {
+  // Only an active full setup may move on to the second pane after the
+  // driver reports that control was granted. A delayed grant can outlive Settings.
+  it.each([false, true])('advances from control to recording only while setup is active (closed=%s)', async (closed) => {
+    const { computer, getState } = installApi(true);
+    getState.mockResolvedValue({ effectiveEnabled: false });
+    const status = driverStatus(oldVersion, true);
+    const missing: ComputerDriverPermissionState = {
+      ...status.permissionState!,
+      status: 'missing', accessibility: 'missing', screenRecording: 'missing', screenRecordingCapturable: 'missing',
+    };
+    computer.status.mockResolvedValue({ ...status, permissionState: missing });
+    const granting = deferred<ComputerDriverPermissionGrantResult>();
+    const grantPermissions = vi.fn(() => granting.promise);
+    const openExternal = vi.fn(async () => ({ success: true }));
+    Object.assign(computer, { grantPermissions });
+    Object.assign(window.electronAPI, { openExternal });
+    const view = render(<ComputerUseSection />);
+    await screen.findByText(`${updateKey}.available: ${newVersion}`);
+    fireEvent.click(screen.getByRole('switch', { name: 'settings.computerUse.directControl.toggleAria' }));
+    await waitFor(() => expect(grantPermissions).toHaveBeenCalledOnce());
+    expect(openExternal).not.toHaveBeenCalled();
+    if (closed) view.unmount();
+    const partial = { ...status, permissionState: { ...missing, accessibility: 'granted' as const } };
+    computer.status.mockResolvedValue(partial);
+    await act(async () => granting.resolve({
+      ok: false, stdout: '', stderr: '', status: partial, continueToScreenRecording: true,
+    }));
+    expect(openExternal.mock.calls).toEqual(closed ? [] : [[
+      'x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture',
+    ]]);
+  });
+
+  // The picker may still be waiting for one grant when the user wants to open
+  // the second pane. Previously the rows silently swallowed this click.
+  it('opens another permission pane during a pending grant without starting a second driver request', async () => {
+    const { computer } = installApi(true);
+    const status = driverStatus(oldVersion, true);
+    status.permissionState = {
+      ...status.permissionState!,
+      status: 'missing', accessibility: 'missing', screenRecording: 'missing', screenRecordingCapturable: 'missing',
+    };
+    computer.status.mockResolvedValue(status);
+    const granting = deferred<ComputerDriverPermissionGrantResult>();
+    const grantPermissions = vi.fn(() => granting.promise);
+    const openExternal = vi.fn(async () => ({ success: true }));
+    Object.assign(computer, { grantPermissions });
+    Object.assign(window.electronAPI, { openExternal });
+
+    render(<ComputerUseSection />);
+    fireEvent.click(await screen.findByRole('button', { name: /permissions.accessibilityLabel/ }));
+    await waitFor(() => expect(grantPermissions).toHaveBeenCalledOnce());
+    fireEvent.click(screen.getByRole('button', { name: /permissions.screenRecordingLabel/ }));
+    await waitFor(() => expect(openExternal).toHaveBeenLastCalledWith(
+      'x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture',
+    ));
+    expect(grantPermissions).toHaveBeenCalledOnce();
+    await act(async () => granting.resolve({ ok: false, stdout: '', stderr: '', status }));
+  });
+
   // Unit: replace the brittle JSX text scan with actual platform visibility.
   // The settings-definition migration changes t() syntax, not the permission UI.
   it.each([false, true])('shows macOS permission guidance only on macOS (%s)', async (macos) => {

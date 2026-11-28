@@ -3,9 +3,15 @@ export default {
   name: 'github-app',
   entry: './fixture.tsx',
   viewport: { width: 420, height: 320 },
-  real: 'GithubAppCard, Button, ErrorNotice and translated connection text',
+  real: 'GithubAccountCard, GithubAppCard, Button, ErrorNotice and translated connection text',
   notCovered: 'Live GitHub OAuth, installation and Electron IPC; server and client boundaries have targeted tests',
   cases: {
+    'unified-incomplete': { about: 'Existing event identity needs one App authorization on this computer', viewport: { width: 320, height: 560 },
+      data: { unified: true, userAuthorization: true, login: 'example-user', account: { status: 'missing' } } },
+    'unified-ready': { about: 'One App identity supplies operations and repository events', viewport: { width: 420, height: 480 },
+      data: { unified: true, userAuthorization: true, login: 'example-user', repositories: ['example/project'], account: { status: 'connected', source: 'github-app', login: 'example-user' } } },
+    'unified-mismatch': { about: 'Existing local login is preserved and a different event identity is explicit', viewport: { width: 320, height: 560 },
+      data: { unified: true, userAuthorization: true, login: 'event-user', account: { status: 'connected', source: 'gh-cli', login: 'local-user' } } },
     loading: { about: 'Initial status check does not offer reconnect', data: { loading: true } },
     default: { about: 'Connect a GitHub identity before selecting repositories', data: {} },
     connected: { about: 'Connected identity and selected repositories', data: { login: 'example-user', repositories: ['example/project'] } },
@@ -16,10 +22,15 @@ export default {
     error: { about: 'Connection failure offers retry', data: { failed: true } },
     'failed-refresh': { about: 'A failed check must not offer connection from an outdated snapshot', data: { failRefresh: true } },
   },
-  async ready(page) { await page.locator('[aria-live="polite"]').waitFor(); },
+  async ready(page) { await page.locator('[aria-live="polite"]').first().waitFor(); },
   async check(page, ui) {
     const key = 'ccAgent.gitContext.pr.setup.app.';
     assert.ok(await page.getByText(await ui.t(key + 'title'), { exact: true }).isVisible());
+    if (ui.data.unified) {
+      const summary = ui.case === 'unified-ready' ? 'ready' : ui.case === 'unified-mismatch' ? 'mismatch' : 'incomplete';
+      await page.getByText(await ui.t('ccAgent.gitContext.pr.setup.connection.' + summary), { exact: true }).waitFor();
+      return;
+    }
     if (ui.case === 'installation-return') {
       await page.getByRole('button', { name: await ui.t(key + 'repositories'), exact: true }).click();
       await page.getByText(await ui.t(key + 'finishInBrowser'), { exact: true }).waitFor();

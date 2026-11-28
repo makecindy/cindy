@@ -77,15 +77,21 @@ describe("medium-first defaults", () => {
       rawRegistry as unknown as ModelRegistry,
     )) {
       if (!model.efforts?.length) continue;
-      // Preserve the configured Kimi K2.8/K3.1 max defaults and Grok 4.7 high;
-      // other entries use the medium-first fallback over their supported efforts.
+      // Preserve the configured Kimi K2.8/K3.1 max defaults and official high defaults
+      // (Grok 4.7, Qwen 4 Max, Gemini 4 Neon / Hydrogen); other entries use medium-first.
       expect(model.defaultEffort, model.id).toBe(
         ["moonshotai/kimi-k2.8-preview", "moonshotai/kimi-k3.1-pro",
           "moonshot-kimi-code/k3.1-pro", "moonshotai/kimi-k3.1-pro-highspeed",
           "moonshot-kimi-code/k3.1-pro-highspeed"].includes(model.id)
           ? "max"
-          : ["xai/grok-4.7", "xai/grok-4.7-build-fast"].includes(model.id) ? "high"
-          : defaultEffortForCapabilities(model.efforts),
+          : [
+              "xai/grok-4.7",
+              "xai/grok-4.7-build-fast",
+              "google-gemini-api/gemini-4-neon",
+              "google-gemini-api/gemini-4-hydrogen",
+            ].includes(model.id)
+            ? "high"
+            : defaultEffortForCapabilities(model.efforts),
       );
       for (const override of Object.values(model.perAgent ?? {})) {
         expect(override.defaultEffort, model.id).toBe(model.defaultEffort);

@@ -1,3 +1,4 @@
+import { holdError } from './agent/profile-hold.ts';
 /**
  * Chat endpoint: one prompt in, the repo's own agent events out as SSE.
  *
@@ -89,7 +90,7 @@ export function createChatHandler(deps) {
       // gives input while held; input to an existing task is refused by the queue as before.
       if (!stored) {
         const held = deps.profileHold?.();
-        if (held) throw Object.assign(new Error(`[PRECONDITION_FAILED] ${held}`), { code: 'PRECONDITION_FAILED' });
+        if (held) throw holdError(held);
       }
       if (!stored) await deps.createSession({ id: sessionId,
         ...(payload.workDir ? { workingDir: payload.workDir, workspaceKind: 'project' } : { workspaceKind: 'dialogue' }),

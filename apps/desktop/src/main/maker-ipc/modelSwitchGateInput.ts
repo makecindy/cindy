@@ -51,27 +51,6 @@ export function resolveModelSwitchWindows(input: {
   return { verifiedTargetWindow, verifiedCurrentWindow };
 }
 
-/** Keep the owner's fail-closed gate, but name exactly what the user can ask the host to recheck. */
-export function describeOwnerModelWindowVerificationFailure(input: {
-  verifiedCurrentWindow: number | undefined;
-  targetContextWindow: number | undefined;
-  contextTokensKnown: boolean;
-}): string | null {
-  const missing = [
-    !input.verifiedCurrentWindow ? 'the current model context window' : null,
-    !input.targetContextWindow ? 'the target model context window' : null,
-    !input.contextTokensKnown ? 'the current conversation usage' : null,
-  ].filter((requirement): requirement is string => requirement !== null);
-  if (missing.length === 0) return null;
-  const requirements = missing.length === 1
-    ? missing[0]
-    : missing.length === 2
-      ? `${missing[0]} and ${missing[1]}`
-      : `${missing[0]}, ${missing[1]}, and ${missing[2]}`;
-  return `The model was not changed because Cindy could not verify ${requirements}. `
-    + 'Switch back to the previous model or switch models on the computer running this task.';
-}
-
 /**
  * The context usage a model change is judged by: the running runtime's reading when it is
  * authoritative, otherwise the task row's persisted reading (register.ts, as above).
@@ -99,4 +78,44 @@ export function resolveModelSwitchContextTokens(
     ? verifiedLiveContextTokens
     : (persistedContextTokens ?? 0);
   return { contextTokensKnown, contextTokens };
+}
+
+/**
+ * Which check made the destructive-rebuild window gate refuse a model change (a remote owner
+ * selection on a task that still holds native context), in the gate's own check order; null when
+ * the gate passes. Names only: provider/model ids and Pi's non-secret preview reason.
+ */
+export function describeModelWindowGateFailure(input: {
+  contextTokensKnown: boolean;
+  verifiedCurrentWindow: number | undefined;
+  targetContextWindow: number | undefined;
+  runtimeAgentKind: string | null | undefined;
+  model: string;
+  targetRouteProviderId: string | null | undefined;
+  rebuildLiveOrcaWorker: boolean;
+  piPreview: { action?: string; reason?: string } | null | undefined;
+}): { category: string; detail: string } | null {
+  // Claude can try the selected route with its existing native history. Missing
+  // catalog metadata is not evidence of overflow; the shared pressure planner
+  // and the existing overflow recovery handle an actual capacity problem.
+  if (input.runtimeAgentKind !== 'pi') return null;
+  const route = input.targetRouteProviderId ? `${input.targetRouteProviderId}/${input.model}` : input.model;
+  if (!input.contextTokensKnown) {
+    return { category: 'context-usage-unknown', detail: 'the task has no context usage reading' };
+  }
+  if (!input.verifiedCurrentWindow) {
+    return { category: 'current-window-unverified', detail: 'the current context window could not be verified' };
+  }
+  if (!input.targetContextWindow) {
+    return { category: 'target-window-unverified', detail: `target model ${route} has no verified context window` };
+  }
+  if (input.rebuildLiveOrcaWorker) {
+    return { category: 'orca-worker-rebuild', detail: 'a live Orca worker would have to be rebuilt' };
+  }
+  const { action, reason } = input.piPreview ?? {};
+  if (action === 'hot' || action === 'refresh') return null;
+  if (action !== 'rebuild' && action !== 'unavailable') {
+    return { category: 'pi-preview-missing', detail: `Pi reported neither a hot switch nor a refresh for ${route}` };
+  }
+  return { category: `pi-preview-${action}`, detail: reason ?? `Pi cannot switch to ${route}` };
 }

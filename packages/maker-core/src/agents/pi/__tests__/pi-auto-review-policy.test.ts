@@ -188,10 +188,11 @@ describe('classifyPiToolForAutoReview', () => {
   it('fails closed for MCP and unknown tools', () => {
     expect(verdict('mcp__cindy_orca__start_team', { anything: 1 })).toBe('prompt');
     expect(verdict('some_future_tool', {})).toBe('prompt');
+    expect(verdict('subagent', { agent: 'worker', task: 'user extension' })).toBe('prompt');
   });
 
   it('auto-approves first-party durable Subagent spawn without opening unknown tools', () => {
-    expect(verdict('subagent', {
+    expect(verdict('cindy_subagent', {
       agent: 'worker',
       task: 'implement the fix',
     })).toBe('auto-approve');

@@ -96,6 +96,19 @@ describe('SlashCommandDecoration', () => {
     expect(state.doc.textContent).toBe('/goal 已有草稿');
   });
 
+  it('输入法别名前缀(首字符顿号)按同一区间整段替换成 `/命令 `', () => {
+    let state = EditorState.create({
+      schema,
+      doc: doc(p(txt('、learn 已有草稿'))),
+    });
+    // 触发符位置与 `/` 同算法:顿号也是单个 UTF-16 单元,from 仍指住它本身。
+    const runEnd = resolveSlashCommandRunEnd(state.doc, 1, 'lea', ['learn']);
+
+    state = state.apply(replaceSlashCommandRunWithText(state.tr, schema, 1, runEnd, 'learn'));
+
+    expect(state.doc.textContent).toBe('/learn 已有草稿');
+  });
+
   it('光标位于带参数命令中间时仍替换匹配的命令后缀', () => {
     let state = EditorState.create({
       schema,

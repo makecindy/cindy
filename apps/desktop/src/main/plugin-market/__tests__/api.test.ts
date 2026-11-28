@@ -110,7 +110,7 @@ function legacyServer(plugins: unknown[], onUnknown: (path: string) => never = (
 describe('PluginMarketApi 旧服务端兼容', () => {
   // unit：客户端 62588f5ff0 先于服务端 eb701e0d4 上线；旧服务端把 defaults 当插件 ID（400），没有 resolve（404）。
   it('reads the full catalog when defaults, resolve and catalog do not exist, and remembers it', async () => {
-    const fetcher = legacyServer([summary(PLUGIN_A, 'alpha'), summary(PLUGIN_B, 'beta')]);
+    const fetcher = legacyServer([summary(PLUGIN_A, 'alpha'), { ...summary(PLUGIN_B, 'beta'), publisherKind: 'personal' }]);
     const api = new PluginMarketApi(fetcher, undefined, () => 'https://plugins.example.com', () => 0);
     await expect(api.defaults()).rejects.toBeInstanceOf(PluginMarketEndpointUnsupportedError);
 
@@ -118,9 +118,10 @@ describe('PluginMarketApi 旧服务端兼容', () => {
       { key: 'missing', ghostId: 'gamma', namespace: null }]);
     expect(resolved.results.map(row => [row.key, row.status])).toEqual([['a', 'available'], ['b', 'available'], ['missing', 'unavailable']]);
 
-    const page = await api.catalog({ limit: 1 });
+    const page = await api.catalog({ limit: 1, sort: 'default' });
+    expect(page.sort).toBeUndefined();
     expect(page.plugins.map(plugin => plugin.id)).toEqual([PLUGIN_A]);
-    expect(page.counts?.all).toBe(2);
+    expect(page.counts).toMatchObject({ all: 2, public: 2, official: 0, community: 1 });
     expect((await api.catalog({ limit: 1, cursor: page.nextCursor })).plugins.map(plugin => plugin.id)).toEqual([PLUGIN_B]);
     // 记住旧服务端后不再逐个撞 404 / 400。
     expect(fetcher.mock.calls.map(call => String(call[0])).filter(path => !path.startsWith('/api/plugins?')))
@@ -168,13 +169,79 @@ describe('PluginMarketApi', () => {
   // unit：v7.5 市场必须按页读取；旧 listAll 用例不能证明首屏不会追完整目录。
   it('reads one catalog page and preserves complete query counts without following its cursor', async () => {
     const fetcher = pagedFetcher({ plugins: [summary(PLUGIN_A, 'alpha')], nextCursor: 'next-page',
-      counts: { all: 200, public: 200, organization: 0, personal: 0 } });
+      counts: { all: 200, public: 200, organization: 0, personal: 0, official: 145, community: 53 } });
     const result = await new PluginMarketApi(fetcher).catalog({ query: 'alpha', limit: 12 });
     expect(result.plugins).toHaveLength(1);
-    expect(result.counts?.all).toBe(200);
+    expect(result.counts).toMatchObject({ all: 200, official: 145, community: 53 });
     expect(result.nextCursor).toBe('next-page');
     expect(fetcher).toHaveBeenCalledTimes(1);
     expect(fetcher.mock.calls[0]![0]).toContain('/api/plugins/catalog?');
+  });
+
+  // Unit: the HTTP catalog adapter must preserve the new optional wire value
+  // without treating legacy responses as sorted.
+  it('accepts server-defined sort keys and keeps labels as trimmed text', async () => {
+    const sort = 'region_mix_2';
+    const sorts = [
+      { key: sort, label: '  <b>按地区</b>  ', metric: { kind: 'count', label: '  地区热度  ' } },
+      { key: 'updated', label: '最近更新', metric: { kind: 'future', label: '不可展示' } },
+    ];
+    const fetcher = pagedFetcher(
+      { plugins: [{ ...summary(PLUGIN_A, 'alpha'), sortValue: 286849 }, { ...summary(PLUGIN_B, 'beta'), sortValue: '286849' }],
+        nextCursor: 'sorted-cursor', counts: null, sort, sorts, metric: { kind: 'date', label: '忽略顶层值' } },
+      { plugins: [{ ...summary(PLUGIN_B, 'beta'), sortValue: 0 }], nextCursor: null, counts: null, sort, sorts },
+    );
+    const api = new PluginMarketApi(fetcher);
+    const first = await api.catalog({ sort: 'default', query: 'alpha', counts: false });
+    expect(first.sorts).toEqual([
+      { key: sort, label: '<b>按地区</b>', metric: { kind: 'count', label: '地区热度' } },
+      { key: 'updated', label: '最近更新' },
+    ]);
+    expect(first.sort).toBe(sort);
+    expect(first).not.toHaveProperty('metric');
+    expect(first.plugins.map(plugin => plugin.sortValue)).toEqual([286849, undefined]);
+    const second = await api.catalog({ sort, cursor: first.nextCursor, query: 'alpha', counts: false });
+    expect(second).toMatchObject({ sort, plugins: [{ id: PLUGIN_B, sortValue: 0 }] });
+    const paths = fetcher.mock.calls.map(([value]) => new URL(String(value), 'https://example.test'));
+    expect(paths.map(path => [path.searchParams.get('sort'), path.searchParams.get('cursor')]))
+      .toEqual([['default', null], [sort, 'sorted-cursor']]);
+  });
+
+  // Unit: malformed optional values are omitted before the catalog reaches IPC.
+  it.each([
+    [{ kind: 'count', label: '热度' }, -1, undefined],
+    [{ kind: 'count', label: '热度' }, Number.MAX_SAFE_INTEGER + 1, undefined],
+    [{ kind: 'count', label: '更'.repeat(25) }, 12, undefined],
+    [{ kind: 'unknown', label: '热度' }, 12, undefined],
+    [{ kind: 'date', label: '更新时间' }, '2026-11-20T02:41:00.000Z', '2026-11-20T02:41:00.000Z'],
+    [{ kind: 'date', label: '更新时间' }, '2026-02-30T00:00:00Z', undefined],
+    [{ kind: 'date', label: '更新时间' }, '2026-11-20', undefined],
+  ])('projects only valid row metric values for %j and %j', async (metric, sortValue, expected) => {
+    const fetcher = pagedFetcher({ plugins: [{ ...summary(PLUGIN_A, 'alpha'), sortValue }],
+      nextCursor: null, counts: null, sort: 'rank', sorts: [{ key: 'rank', label: '排序', metric }] });
+    const result = await new PluginMarketApi(fetcher).catalog({ sort: 'default' });
+    expect(result.sorts).toHaveLength(1);
+    expect(result.plugins.map(plugin => plugin.sortValue)).toEqual([expected]);
+  });
+
+  // Unit: bad optional metadata hides sorting while preserving usable market rows.
+  it.each([
+    ['missing', undefined],
+    ['empty', []],
+    ['oversized', Array.from({ length: 21 }, (_, i) => ({ key: i ? `extra_${i}` : 'updated', label: '选项' }))],
+    ['duplicate keys', [{ key: 'updated', label: '更新' }, { key: 'updated', label: '再次更新' }]],
+    ['invalid key', [{ key: 'updated', label: '更新' }, { key: 'INVALID', label: '无效' }]],
+    ['blank label', [{ key: 'updated', label: '   ' }]],
+    ['long label', [{ key: 'updated', label: '更'.repeat(25) }]],
+    ['missing effective key', [{ key: 'trending', label: '最近热门' }]],
+  ])('ignores %s sort options without discarding the catalog', async (_description, sorts) => {
+    const fetcher = pagedFetcher({ plugins: [summary(PLUGIN_A, 'alpha')], nextCursor: 'cursor',
+      counts: null, sort: 'updated', sorts });
+    const result = await new PluginMarketApi(fetcher).catalog({ sort: 'default', counts: false });
+    expect(result.plugins.map(plugin => plugin.id)).toEqual([PLUGIN_A]);
+    expect(result.sort).toBe('updated');
+    expect(result.sorts).toBeUndefined();
+    expect(result.plugins.map(plugin => plugin.sortValue)).toEqual([undefined]);
   });
 
   it('rejects incomplete target responses instead of interpreting them as missing installations', async () => {
@@ -231,6 +298,35 @@ describe('PluginMarketApi', () => {
     expect(fetcher.mock.calls[0]?.[1]).toMatchObject({ headers: { 'x-cindy-version': '0.0.0-dev' } });
     expect(fetcher.mock.calls[1]?.[1]).toMatchObject({ headers: { 'x-cindy-version': '0.0.0-dev' } });
     expect(fetcher.mock.calls.map((call) => call[1]?.headers?.['x-cindy-version'])).toEqual(['0.0.0-dev', '0.0.0-dev']);
+  });
+
+  // Unit: update history is opt-in; invalid optional entries cannot break the detail.
+  it('keeps validated top-level update history on detail requests that opt in', async () => {
+    const latest = { version: '1.0.0', publishedAt: '2026-07-23T00:00:00.000Z', releaseNotes: '<b>Plain text</b>' };
+    const response = {
+      plugin: {
+        ...summary(PLUGIN_A, 'alpha'),
+        currentRelease: {
+          ...summary(PLUGIN_A, 'alpha').currentRelease,
+          manifest: {
+            schemaVersion: 2, id: 'alpha', name: 'alpha', version: '1.0.0', kind: 'chip',
+            entry: 'index.js', slots: ['tool'], tools: [{ name: 'help', description: 'Help' }],
+          },
+        },
+      },
+      updates: [latest, null, { ...latest, publishedAt: 'invalid' }, { ...latest, releaseNotes: ' ' },
+        { ...latest, version: 'a'.repeat(33) }],
+    };
+    const fetcher = pagedFetcher(response, response, { ...response, updates: {} });
+    const api = new PluginMarketApi(fetcher);
+    expect(await api.detail(PLUGIN_A)).not.toHaveProperty('updates');
+    expect(await api.detail(PLUGIN_A, { readmeLocale: 'zh-CN', includeUpdates: true })).toMatchObject({ updates: [latest] });
+    expect(await api.detail(PLUGIN_A, { includeUpdates: true })).toMatchObject({ updates: [] });
+    expect(fetcher.mock.calls.map(([request]) => request)).toEqual([
+      `/api/plugins/${PLUGIN_A}`,
+      `/api/plugins/${PLUGIN_A}?readmeLocale=zh-CN&includeUpdates=true`,
+      `/api/plugins/${PLUGIN_A}?includeUpdates=true`,
+    ]);
   });
 
   it('deduplicates removals by pluginId across pages keeping the first-seen notice', async () => {
