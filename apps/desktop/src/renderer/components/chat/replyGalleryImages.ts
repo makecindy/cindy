@@ -30,6 +30,7 @@ export interface ReplyImageRef {
   section: string;
   /** Which repeat of `target` within `section` (0 for the first). */
   occurrence: number;
+  caption?: string;
 }
 
 /** Reply images by message id; the stored content guards in-place updates. */
@@ -52,8 +53,8 @@ function rendersAsImage(target: string): boolean {
 }
 
 /** Rich component order follows the layout tree, not creation order. */
-function richImageMarkdown(doc: RichDocument): { id: string; markdown: string }[] {
-  const out: { id: string; markdown: string }[] = [];
+function richImageMarkdown(doc: RichDocument): { id: string; markdown: string; caption?: string }[] {
+  const out: { id: string; markdown: string; caption?: string }[] = [];
   const seen = new Set<string>();
   const visit = (id: string) => {
     const node = doc.nodes.get(id);
@@ -63,7 +64,10 @@ function richImageMarkdown(doc: RichDocument): { id: string; markdown: string }[
     const invalidImage = node.kind === 'image' && isInvalidRichImageSource(richString(node, 'src').trim());
     if ((node.kind === 'image' && !invalidImage) || node.kind === 'markdown') {
       const markdown = richMarkdown(node);
-      if (markdown) out.push({ id, markdown });
+      if (markdown) {
+        const caption = node.kind === 'image' ? richString(node, 'caption').trim() : undefined;
+        out.push({ id, markdown, caption });
+      }
     }
     for (const child of node.children) visit(child);
   };
@@ -71,8 +75,9 @@ function richImageMarkdown(doc: RichDocument): { id: string; markdown: string }[
   return out;
 }
 
-function sectionImages(markdown: string, section: string): ReplyImageRef[] {
-  return assignMarkdownGalleryOccurrences(extractMarkdownGalleryImages(markdown), section);
+function sectionImages(markdown: string, section: string, caption?: string): ReplyImageRef[] {
+  const images = assignMarkdownGalleryOccurrences(extractMarkdownGalleryImages(markdown), section);
+  return caption === undefined ? images : images.map((image) => ({ ...image, caption }));
 }
 
 /** Images a completed reply renders, in order, with their destinations as written. */
@@ -86,8 +91,8 @@ export function replyImages(content: string, messageKey: string): ReplyImageRef[
     }
     // A finished reply renders an unclosed component block as complete too.
     const doc = new RichAnswerStream().update(part.source, true);
-    for (const { id, markdown } of richImageMarkdown(doc))
-      images.push(...sectionImages(markdown, replySectionId(messageKey, part.key, id)));
+    for (const { id, markdown, caption } of richImageMarkdown(doc))
+      images.push(...sectionImages(markdown, replySectionId(messageKey, part.key, id), caption));
   }
   return images;
 }
@@ -112,7 +117,7 @@ export function replyGalleryImages(
     return normalized ? rewriteToRemoteMediaOrigin(normalized, mediaOrigin) : undefined;
   };
   const images: GalleryImage[] = [];
-  for (const { target, section, occurrence } of cachedReplyImages(content, options.cache, messageKey)) {
+  for (const { target, section, occurrence, caption } of cachedReplyImages(content, options.cache, messageKey)) {
     if (!rendersAsImage(target)) continue;
     const src = address(peekWorkspaceMediaSrc(target, options.workingDir, options.resolveInWorkspace));
     if (!src) continue;
@@ -121,6 +126,7 @@ export function replyGalleryImages(
       target,
       occurrence: { section, index: occurrence },
       scope,
+      caption,
       // The folder search may finish after the gallery is built, or never start
       // for rows outside the render window; the viewer resolves when it shows it.
       ...(usesWorkspaceLookup(target, options.workingDir, options.resolveInWorkspace)

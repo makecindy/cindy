@@ -39,6 +39,8 @@ export interface GalleryImage {
   workspace?: GalleryWorkspacePath;
   /** Original attachment name when the message carries one. */
   name?: string;
+  /** Explicit caption for this occurrence of a structured reply image. */
+  caption?: string;
 }
 
 export interface GalleryOccurrence {

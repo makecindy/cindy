@@ -408,6 +408,8 @@ interface MarkdownRendererProps {
   galleryMessageKey?: string;
   /** Internal: replySectionId of the part / component node this renderer shows. */
   gallerySection?: string;
+  /** Internal: explicit caption on the structured image this part renders. */
+  imageCaption?: string;
   /** F1: session cwd used to resolve relative paths in markdown links.
    *  Stable per-session — only changes on session switch (parent remount). */
   workingDir: string;
@@ -1922,6 +1924,7 @@ const MarkdownRendererBase = memo(function MarkdownRendererBase({
   enableDocumentGallery = false,
   insideCarousel = false,
   gallerySection,
+  imageCaption,
   onPreviewOpenChange,
 }: MarkdownRendererProps) {
   const embeddedMediaStreaming = mediaStreaming ?? isStreaming;
@@ -1972,6 +1975,7 @@ const MarkdownRendererBase = memo(function MarkdownRendererBase({
     src: string;
     galleryTarget?: string;
     galleryOccurrence?: GalleryOccurrence;
+    caption?: string;
   } | null>(null);
   // Links and chips open a single image; only embedded reply images carry a gallery target.
   const setLightboxSrc = useCallback((src: string | null) => setLightbox(src ? { src } : null), []);
@@ -2162,6 +2166,7 @@ const MarkdownRendererBase = memo(function MarkdownRendererBase({
                       src: clicked,
                       galleryTarget,
                       galleryOccurrence: galleryTarget ? clickedOccurrence(galleryTarget, sourceOffset) : undefined,
+                      caption: imageCaption,
                     })}
                   documentPreview={enableDocumentGallery}
                   insideCarousel={insideCarousel}
@@ -2314,6 +2319,7 @@ const MarkdownRendererBase = memo(function MarkdownRendererBase({
       remoteMediaOriginProp,
       resolveMediaInWorkspace,
       embeddedMediaStreaming,
+      imageCaption,
       enableDocumentGallery,
       gallerySection,
       insideCarousel,
@@ -2368,6 +2374,7 @@ const MarkdownRendererBase = memo(function MarkdownRendererBase({
           src={lightbox.src}
           galleryTarget={lightbox.galleryTarget}
           galleryOccurrence={lightbox.galleryOccurrence}
+          caption={lightbox.caption}
           enableGallery={lightbox.galleryTarget !== undefined}
           onClose={() => setLightbox(null)}
         />
@@ -2414,7 +2421,18 @@ export const MarkdownRenderer = memo(function MarkdownRenderer(incoming: Markdow
   const section = (partKey: number, nodeId?: string) =>
     props.galleryMessageKey === undefined ? undefined : replySectionId(props.galleryMessageKey, partKey, nodeId);
   const renderMediaFor = (partKey: number) => (node: RichNode) => {
-    if (node.kind === 'image') return <MarkdownRendererBase {...props} content={richMarkdown(node) ?? ''} isStreaming={false} mediaStreaming={props.isStreaming ?? false} gallerySection={section(partKey, node.id)} />;
+    if (node.kind === 'image') {
+      return (
+        <MarkdownRendererBase
+          {...props}
+          content={richMarkdown(node) ?? ''}
+          isStreaming={false}
+          mediaStreaming={props.isStreaming ?? false}
+          gallerySection={section(partKey, node.id)}
+          imageCaption={richString(node, 'caption').trim()}
+        />
+      );
+    }
     const raw = richMediaSource(node);
     if (!raw) return null;
     if (node.kind === 'video' && youtubeVideo(raw)) return <VideoSitePreview src={raw} title={richString(node, 'alt', 'YouTube')} />;
