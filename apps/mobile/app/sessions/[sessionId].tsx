@@ -7049,6 +7049,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, deferSendNavigationRef, 
     // cancellation semantics once the editor has supplied its authoritative text.
     if (finishHandoff && (!outboxEligible || earlyDesktopCommand || earlyLocalCommand || willHaveAttachments || hasPastePlaceholders())) {
       if (finishHandoff()) return;
+      finishHandoff = undefined;
     }
     if (outboxEligible && earlyDesktopCommand?.name === 'side') {
       if (!canUseSideChats) { setError(t('session.sideChat.unavailable')); return; }
@@ -7160,7 +7161,10 @@ function SessionScreenContent({ beforeSessionSwitchRef, deferSendNavigationRef, 
       return;
     }
     const useDurableOutbox = outboxEligible && !earlyLocalCommand && !earlyDesktopCommand && !legacyPlanRequiresLiveDispatch;
-    if (!useDurableOutbox && finishHandoff?.()) return;
+    if (!useDurableOutbox && finishHandoff) {
+      if (finishHandoff()) return;
+      finishHandoff = undefined;
+    }
     const outboxClientId = useDurableOutbox ? createOutboxClientId() : undefined;
     const planModeAtSend = runtimeOptions?.planModeSupported === true
       ? (readSessionRowNow() ?? currentSession).planModeEnabled === true
@@ -7177,28 +7181,31 @@ function SessionScreenContent({ beforeSessionSwitchRef, deferSendNavigationRef, 
       && !isRemoteSessionMissing(readSessionRowNow())
     ) {
       let leftBeforeRebalance = false;
+      let releasedForRebalance = false;
       await offerMobileSessionRebalance({
         invoke,
         hostDeviceId: deviceId,
         sessionId,
         clientId: outboxClientId!,
-        ask: async (suggestion) => {
-          // The rebalance modal is interactive: release any navigation hold while it is open
-          // so leaving during the dialog still cancels this send instead of queuing a departure.
+        beforeWait: () => {
+          // Both interactive prompts and auto-switch decisions wait on user input
+          // or a remote host RPC. Release any navigation hold before waiting so
+          // Back / session switches stay responsive and cancel this send safely.
+          releasedForRebalance = true;
           if (finishHandoff?.()) {
             leftBeforeRebalance = true;
-            return 'cancel';
+            return false;
           }
           finishHandoff = undefined;
-          const choice = await askMobileSessionRebalance(suggestion);
-          if (outboxSessionAliveRef.current === sessionId && !independent && !options.messageEditResend) {
-            finishHandoff = beginSendHandoff();
-          }
-          return choice;
+          return true;
         },
+        ask: askMobileSessionRebalance,
       });
-      // 弹窗期间离开了这个任务：草稿还没清空，留在原处，不发。
-      if (leftBeforeRebalance || outboxSessionAliveRef.current !== sessionId) return;
+      // 弹窗或远端换号请求期间离开了这个任务：草稿还没清空，留在原处，不发。
+      if (leftBeforeRebalance || outboxSessionAliveRef.current !== sessionId || !isMobileAuthOwnerCurrent(ownerAtSend)) return;
+      if (releasedForRebalance && !independent && !options.messageEditResend) {
+        finishHandoff = beginSendHandoff();
+      }
     }
     if (!independent) {
       pendingSkillSelectionRef.current = null;
@@ -7307,15 +7314,25 @@ function SessionScreenContent({ beforeSessionSwitchRef, deferSendNavigationRef, 
     // The optimistic clear above preserves the existing "tap sends this
     // snapshot" boundary; await the body on that captured document so a fast
     // send still carries semantic content without consuming later typing.
+    const needsRemoteReferenceHydration = documentAtSend.nodes.some(
+      (node) => node.type === 'session-link' && !!node.messageClientId && !node.agentText,
+    );
+    if (needsRemoteReferenceHydration && finishHandoff) {
+      if (finishHandoff()) return;
+      finishHandoff = undefined;
+    }
     const hydratedDocumentAtSend = await hydrateComposerMessageReferenceBodies(
       documentAtSend,
       resolvePastedSessionLinkLabel,
     );
-    if (!sendScopeStillAlive()) {
+    if (!sendScopeStillAlive() || !isMobileAuthOwnerCurrent(ownerAtSend)) {
       recoverCapturedDraftForScopeExit();
       sendInFlightRef.current = false;
       setSending(false);
       return;
+    }
+    if (needsRemoteReferenceHydration && useDurableOutbox && !independent && !options.messageEditResend) {
+      finishHandoff = beginSendHandoff();
     }
     if (!composerDocumentsEqual(hydratedDocumentAtSend, documentAtSend)) {
       agentReferencesAtSend = queueEditAtSendStart

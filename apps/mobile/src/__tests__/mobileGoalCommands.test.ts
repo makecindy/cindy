@@ -313,6 +313,36 @@ describe('existing task /goal send boundary', () => {
     expect(stored).toEqual(draft);
   });
 
+  // PR #13772 Greptile P1, unit: a slow remote rebalance-decision RPC (auto or post-confirm)
+  // must not hold the navigation guard open; leaving while waiting cancels the send safely.
+  it('releases the navigation guard before remote rebalance RPCs and cancels the send if the user leaves', async () => {
+    const h = existingHarness();
+    h.bindings.composerDocumentRef.current = textComposerDocument('ordinary message');
+    let holding = false;
+    let finishRebalanceRpc!: () => void;
+    Object.assign(h.bindings, {
+      beginSendHandoff: () => {
+        holding = true;
+        return () => { holding = false; return false; };
+      },
+      offerMobileSessionRebalance: vi.fn(async (input: { beforeWait?: () => boolean }) => {
+        expect(holding).toBe(true);
+        expect(input.beforeWait?.()).toBe(true);
+        expect(holding).toBe(false);
+        await new Promise<void>((resolve) => { finishRebalanceRpc = resolve; });
+      }),
+    });
+    const send = h.run();
+    await vi.waitFor(() => expect(finishRebalanceRpc).toBeTypeOf('function'));
+    // Guard is released during the remote RPC, so leaving takes effect immediately.
+    expect(holding).toBe(false);
+    h.bindings.outboxSessionAliveRef.current = 'task-b';
+    finishRebalanceRpc();
+    await send;
+    expect(holding).toBe(false);
+    expect(h.bindings.mobileDurableOutbox.add).not.toHaveBeenCalled();
+  });
+
   it('sets the associated task Goal and projects its real status', async () => {
     const h = existingHarness(); await h.run();
     expect(h.bindings.maker.goal.set).toHaveBeenCalledExactlyOnceWith({ sessionId: 'existing-task', objective: 'target' });
