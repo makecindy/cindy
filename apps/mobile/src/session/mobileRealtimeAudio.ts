@@ -113,7 +113,7 @@ const EXPO_AUDIO_STREAM_WATCHDOG_INTERVAL_MS = 1_000;
 
 let nativeBinding: RealtimeAudioNativeBinding | null | undefined;
 let expoAudioNativeModule: ExpoAudioNativeModule | null | undefined;
-// The custom Apple module owns one native engine. A replacement must wait for
+// The custom native module owns one capture engine per platform. A replacement must wait for
 // the previous caller's complete start/stop lifecycle, including late cleanup.
 let customNativeCaptureReleased: Promise<void> = Promise.resolve();
 let nextCaptureId = 0;
@@ -125,9 +125,8 @@ export function isMobileRealtimeAudioAvailable(): boolean {
 }
 
 /**
- * Android uses expo-audio's native PCM AudioStream when the custom Apple module
- * is absent. Keep the entry hidden in builds that predate that native class or
- * otherwise failed to link it, instead of sending users into a known failure.
+ * Older Android builds use expo-audio's native PCM AudioStream when the custom
+ * module is absent. Keep the entry hidden if neither backend is linked.
  */
 export function shouldShowMobileVoiceUi(
   platform: string,
