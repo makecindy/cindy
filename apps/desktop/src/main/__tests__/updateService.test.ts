@@ -54,9 +54,11 @@ const checkDebianManagedInstallation = vi.fn<() =>
   | { status: 'error'; error: unknown }
 >(() => ({ status: 'not-managed' }));
 const missingLinuxUserInstallTools = vi.fn(() => [] as string[]);
+const missingLinuxCustomUpdateTools = vi.fn(() => [] as string[]);
 const readLinuxUpdateActionConfig = vi.fn<() => LinuxUpdateActionConfig>(() => ({ status: 'absent' }));
 vi.mock('../linuxInstallation', () => ({
   findLinuxUserInstallation, checkDebianManagedInstallation, missingLinuxUserInstallTools,
+  missingLinuxCustomUpdateTools,
   readLinuxUpdateActionConfig, recognizeLinuxUserInstallation, hasLinuxPkexec, isLinuxPkexecPreauthorized,
 }));
 const checkWindowsUpdaterPrerequisites = vi.fn<
@@ -1221,6 +1223,50 @@ describe('checkForUpdate Linux installer flow', () => {
       expect(checkDebianManagedInstallation).not.toHaveBeenCalled();
       expect(exitSpy).not.toHaveBeenCalled();
     } finally {
+      service.stopUpdateService();
+      exitSpy.mockRestore();
+    }
+  });
+
+  // Test value
+  // - Production entry and observable result: a configured updater whose script
+  //   tools are missing refuses the relaunch and names them in the log, instead
+  //   of quitting first and leaving the update half applied.
+  // - Bug/rule basis: docs/dev-rules/cindy-updater.md — the script verifies the
+  //   staged package and relaunches; without `sha256sum`/`setsid` it cannot.
+  // - Existing coverage gap: the configured-updater path checked only the two
+  //   configuration paths and the source URL, never the tools it runs.
+  // - Smallest failure: configured command/launcher with one missing tool;
+  //   tier: unit.
+  it('refuses a configured updater when the script tools are missing', async () => {
+    readLinuxUpdateActionConfig.mockReturnValue({
+      status: 'configured',
+      command: '/nix/store/update-action/bin/cindy-update',
+      launcher: '/run/current-system/sw/bin/cindy',
+    });
+    missingLinuxCustomUpdateTools.mockReturnValue(['sha256sum']);
+    const manifest = linuxInstallerManifest();
+    manifest.app.installer.sha256 = 'ab'.repeat(32);
+    download.mockImplementation(async ({ targetPath }: { targetPath: string }) => {
+      fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+      fs.writeFileSync(targetPath, 'verified installer');
+      return { path: targetPath, size: 123 };
+    });
+    const service = await freshUpdateService('linux', 'x64');
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
+    service.initUpdateService();
+    try {
+      await expect(service.checkForUpdate(manifest)).resolves.toBe('ready');
+      ipcListeners.get('update-relaunch')?.({}, 'dark');
+      await vi.waitFor(() => expect(ipcHandlers.get('update-get-status')?.()).toMatchObject({
+        status: 'ready',
+        errorCode: 'linux_installation_unsupported',
+      }));
+      expect(spawnProcess).not.toHaveBeenCalled();
+      expect(exitSpy).not.toHaveBeenCalled();
+      expect(service.isUpdateRelaunchImminent()).toBe(false);
+    } finally {
+      missingLinuxCustomUpdateTools.mockReturnValue([]);
       service.stopUpdateService();
       exitSpy.mockRestore();
     }

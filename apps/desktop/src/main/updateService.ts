@@ -87,6 +87,7 @@ import {
   findLinuxUserInstallation,
   hasLinuxPkexec,
   isLinuxPkexecPreauthorized,
+  missingLinuxCustomUpdateTools,
   missingLinuxUserInstallTools,
   readLinuxUpdateActionConfig,
   recognizeLinuxUserInstallation,
@@ -2212,6 +2213,17 @@ async function executeRelaunchUnguarded(
     if (action.status === 'configured') {
       if (!linuxStagedDebUrl) {
         log.error('Linux custom update action has no source URL for the staged installer');
+        isRelaunching = false;
+        autoRelaunchInProgress = false;
+        setStatus('ready', { version: readyVersion ?? undefined, errorCode: LINUX_INSTALLATION_UNSUPPORTED_ERROR_CODE });
+        return;
+      }
+      // The script verifies the staged package and restarts the app after this
+      // process is gone. Without those tools the update would fail only after
+      // active work has been stopped, so refuse it while the app is running.
+      const missingCustomTools = missingLinuxCustomUpdateTools();
+      if (missingCustomTools.length > 0) {
+        log.error('Linux custom update is missing tools: %s', missingCustomTools.join(','));
         isRelaunching = false;
         autoRelaunchInProgress = false;
         setStatus('ready', { version: readyVersion ?? undefined, errorCode: LINUX_INSTALLATION_UNSUPPORTED_ERROR_CODE });

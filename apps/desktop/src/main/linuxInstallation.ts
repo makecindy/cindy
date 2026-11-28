@@ -141,6 +141,18 @@ export function missingLinuxUserInstallTools(
     .filter((name) => !probe(name));
 }
 
+/**
+ * Tools the custom-action path runs itself: it verifies the staged package and
+ * restarts the app in the same script, but the embedded installer (which wants
+ * bsdtar, dd, flock, find and the rest) never runs when an action is set.
+ */
+export function missingLinuxCustomUpdateTools(
+  probe: (name: string) => boolean = commandOnPath,
+): string[] {
+  return ['stat', 'sha256sum', 'awk', 'setsid', 'nohup']
+    .filter((name) => !probe(name));
+}
+
 /** System .deb updates run the installer through pkexec, looked up the same
  * way as the generated update script. Without it the script can only relaunch
  * the old version, so the update must be refused before Cindy quits.

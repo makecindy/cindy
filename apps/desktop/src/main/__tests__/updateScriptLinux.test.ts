@@ -238,6 +238,26 @@ describe('buildLinuxUpdateScript structure', () => {
     expect(() => buildLinuxUpdateScript(makeParams({ sha256: 'abc' }))).toThrow(/sha256/);
   });
 
+  // Test value: production builder -> custom-action version gate; a legal SemVer
+  // carrying both a prerelease tag and build metadata must be installable, and a
+  // malformed version must still be refused. The smallest failure is a second,
+  // stricter version rule that disagrees with compareAppUpdateVersions.
+  it('accepts a manifest version with prerelease and build metadata', () => {
+    const script = buildLinuxUpdateScript(makeParams({
+      customUpdateCommand: '/usr/local/bin/cindy-update',
+      relaunchCommand: '/usr/local/bin/cindy',
+      version: '1.2.3-rc.1+build.5',
+      assetUrl: 'https://example.com/cindy-1.2.3-rc.1+build.5-amd64.deb',
+    }));
+    expect(script).toContain("--version '1.2.3-rc.1+build.5'");
+    expect(() => buildLinuxUpdateScript(makeParams({
+      customUpdateCommand: '/usr/local/bin/cindy-update',
+      relaunchCommand: '/usr/local/bin/cindy',
+      version: '1.2',
+      assetUrl: 'https://example.com/cindy-amd64.deb',
+    }))).toThrow(/manifest version/);
+  });
+
   it('escalates SIGKILL at exitKillAfterSeconds and aborts at exitAbortAfterSeconds', () => {
     const t = DEFAULT_LINUX_UPDATE_SCRIPT_TIMINGS;
     const killIdx = script.indexOf(`-eq ${t.exitKillAfterSeconds} `);

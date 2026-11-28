@@ -1,6 +1,7 @@
 import path from 'node:path';
 import userInstallerSource from '../../resources/linux/install-user.sh?raw';
 import type { LinuxUserInstallation } from './linuxInstallation';
+import { parseAppUpdateVersion } from './updateVersionPolicy';
 
 /**
  * updateScriptLinux — pure builder for the Linux .deb update-apply bash script.
@@ -143,7 +144,7 @@ export function buildLinuxUpdateScript(params: LinuxUpdateScriptParams): string 
   }
   if (customUpdateCommand && (
     userInstallation || !path.posix.isAbsolute(customUpdateCommand) || !path.posix.isAbsolute(relaunchCommand!)
-    || !params.version || !/^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/.test(params.version)
+    || !parseAppUpdateVersion(params.version)
     || !params.assetUrl || params.assetUrl.length > 8192 || /[\u0000-\u001f\u007f]/.test(params.assetUrl)
   )) {
     throw new Error('Linux custom update requires absolute paths, a valid manifest version, and a safe asset URL');
