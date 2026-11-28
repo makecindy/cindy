@@ -72,6 +72,7 @@ export function RemoteSkillsPage({
 }) {
   const { t } = useTranslation();
   const [snapshot, setSnapshot] = useState<RemoteSkillsSnapshot | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
   const [capabilities, setCapabilities] = useState({ management: false, catalog: false });
   const [status, setStatus] = useState<'readFailed' | 'unknown' | null>(null);
   const [checked, setChecked] = useState(false);
@@ -83,6 +84,7 @@ export function RemoteSkillsPage({
   const alive = useRef(true),
     onlineRef = useRef(online),
     revision = useRef(0);
+  const activeRead = useRef<number | null>(null);
   onlineRef.current = online;
   const operation = useRef<{ id: string; resolve(result: RemoteSkillReceipt): void } | null>(null);
   const confirming = useRef(new Set<string>());
@@ -145,15 +147,19 @@ export function RemoteSkillsPage({
     },
     [rootFor],
   );
-  const refresh = useCallback(async () => {
-    if (!writable()) return [];
+  const refresh = useCallback(async (knownManagement = false) => {
+    if (!writable() || (knownManagement && activeRead.current !== null)) return [];
     const read = ++revision.current;
+    activeRead.current = read;
+    setRefreshing(true);
     try {
-      const nextCapabilities = await remoteSkillsCapabilities(device.deviceId);
-      if (!writable() || read !== revision.current) return [];
-      setCapabilities(nextCapabilities);
-      setChecked(true);
-      if (!nextCapabilities.management) return [];
+      if (!knownManagement) {
+        const nextCapabilities = await remoteSkillsCapabilities(device.deviceId);
+        if (!writable() || read !== revision.current) return [];
+        setCapabilities(nextCapabilities);
+        setChecked(true);
+        if (!nextCapabilities.management) return [];
+      }
       const next = parseRemoteSkills(await invoke('snapshot', { installedOnly: true }));
       if (!writable() || read !== revision.current) return [];
       setSnapshot(next);
@@ -163,8 +169,14 @@ export function RemoteSkillsPage({
     } catch {
       if (writable() && read === revision.current) setStatus('readFailed');
       return [];
+    } finally {
+      if (activeRead.current === read) {
+        activeRead.current = null;
+        if (current()) setRefreshing(false);
+      }
     }
-  }, [device.deviceId, invoke, toSkill, writable]);
+  }, [current, device.deviceId, invoke, toSkill, writable]);
+  const rescan = useCallback(() => refresh(true), [refresh]);
   const accept = useCallback(
     (next: RemoteSkillReceipt) => {
       if (!current() || next.operationId !== operation.current?.id) return;
@@ -206,6 +218,8 @@ export function RemoteSkillsPage({
   useEffect(() => {
     if (!online) {
       revision.current++;
+      activeRead.current = null;
+      setRefreshing(false);
       return;
     }
     if (active) {
@@ -383,7 +397,7 @@ export function RemoteSkillsPage({
       skills,
       projects,
       sources: [],
-      loading: !snapshot,
+      loading: refreshing,
       error: status,
       bootstrapped: !!snapshot,
       learnSkillEnabled: false,
@@ -391,7 +405,7 @@ export function RemoteSkillsPage({
       syncError: null,
       availableUninstalledCount: 0,
     }),
-    [skills, projects, snapshot, status],
+    [skills, projects, snapshot, refreshing, status],
   );
   const target = useMemo<SkillhubTarget>(() => {
     return {
@@ -401,6 +415,7 @@ export function RemoteSkillsPage({
       state,
       projects,
       api,
+      rescan,
       refresh,
       current,
       mutate,
@@ -432,6 +447,7 @@ export function RemoteSkillsPage({
     online,
     capabilities,
     api,
+    rescan,
     refresh,
     current,
     mutate,
@@ -450,6 +466,7 @@ export function RemoteSkillsPage({
           <Button
             size="sm"
             variant="secondary"
+            loading={refreshing && !operation.current}
             onClick={() => {
               if (operation.current) void poll();
               else void refresh();

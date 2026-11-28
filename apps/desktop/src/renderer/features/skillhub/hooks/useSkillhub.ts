@@ -53,8 +53,14 @@ export interface SkillhubState {
   availableUninstalledCount: number;
 }
 
-let state: SkillhubState = {
+interface LocalSkillhubState extends SkillhubState {
+  /** Manual disk scans update the list without replaying background market sync. */
+  marketSyncSkills: SkillhubSkill[];
+}
+
+let state: LocalSkillhubState = {
   skills: [],
+  marketSyncSkills: [],
   sources: [],
   loading: false,
   error: null,
@@ -72,7 +78,7 @@ function notify(): void {
   for (const l of listeners) l();
 }
 
-function setState(patch: Partial<SkillhubState>): void {
+function setState(patch: Partial<LocalSkillhubState>): void {
   state = { ...state, ...patch };
   notify();
 }
@@ -83,6 +89,15 @@ let scanRequestId = 0;
 let latestScan: { id: number; promise: Promise<SkillhubSkill[]> } | null = null;
 
 export function refresh(): Promise<SkillhubSkill[]> {
+  return scanSkills(false);
+}
+
+function rescan(): Promise<SkillhubSkill[]> {
+  if (state.loading && latestScan) return latestScan.promise;
+  return scanSkills(true);
+}
+
+function scanSkills(manual: boolean): Promise<SkillhubSkill[]> {
   const myId = ++scanRequestId;
   const promise = (async (): Promise<SkillhubSkill[]> => {
     setState({ loading: true, error: null });
@@ -96,11 +111,16 @@ export function refresh(): Promise<SkillhubSkill[]> {
       const learnSkillEnabled = typeof result.learnSkillEnabled === 'boolean'
         ? result.learnSkillEnabled
         : state.learnSkillEnabled;
-      if (result.success) {
+      // A successful IPC round-trip can still report an incomplete disk scan.
+      const sourceStatus = manual
+        ? result.sources?.find((source) => source.status.state === 'error')?.status
+        : undefined;
+      if (result.success && sourceStatus?.state !== 'error') {
         syncUninstallCleanupNotices(result.pendingCleanups ?? [], refresh);
         const skills = result.skills ?? [];
         setState({
           skills,
+          ...(!manual ? { marketSyncSkills: skills } : {}),
           sources: result.sources ?? [],
           loading: false,
           bootstrapped: true,
@@ -109,7 +129,7 @@ export function refresh(): Promise<SkillhubSkill[]> {
         return skills;
       }
       setState({
-        error: result.error ?? 'scan failed with no error message',
+        error: sourceStatus?.state === 'error' ? sourceStatus.message : result.error ?? 'scan failed with no error message',
         loading: false,
         bootstrapped: true,
         learnSkillEnabled,
@@ -214,6 +234,7 @@ export function reset(): void {
   bootstrapped = false;
   state = {
     skills: [],
+    marketSyncSkills: [],
     sources: [],
     loading: false,
     error: null,
@@ -266,13 +287,14 @@ if (import.meta.hot) {
 
 registerSyncStoreSetters({ setSyncResults, mergeSyncResults, setSyncError });
 
-interface UseSkillhubReturn extends SkillhubState {
+interface UseSkillhubReturn extends LocalSkillhubState {
+  rescan: () => Promise<SkillhubSkill[]>;
   refresh: () => Promise<SkillhubSkill[]>;
 }
 
 export function useSkillhub(): UseSkillhubReturn {
   const target = useSkillhubTarget();
-  const [snapshot, setSnapshot] = useState<SkillhubState>(state);
+  const [snapshot, setSnapshot] = useState(state);
 
   useEffect(() => {
     if (target) return;
@@ -287,6 +309,8 @@ export function useSkillhub(): UseSkillhubReturn {
 
   return {
     ...(target?.state ?? snapshot),
+    marketSyncSkills: target?.state.skills ?? snapshot.marketSyncSkills,
+    rescan: target ? target.rescan : rescan,
     refresh: target?.refresh ?? refresh,
   };
 }

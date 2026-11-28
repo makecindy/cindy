@@ -13,7 +13,7 @@ vi.mock('@/contexts/AuthContext', () => ({ useAuth: () => ({ dataOwnerId: 'local
 vi.mock('@/features/cc-agent/useRegisterCCAgentSidebar', () => ({ useRegisterCCAgentSidebar: vi.fn() }));
 vi.mock('../hooks/useSkillSync', () => ({ useSkillSync: vi.fn() }));
 vi.mock('../hooks/useSkillhub', () => ({
-  useSkillhub: () => mocks.state, syncProjects: mocks.syncProjects,
+  useSkillhub: () => ({ ...mocks.state, marketSyncSkills: mocks.state.skills }), syncProjects: mocks.syncProjects,
   bootstrapSkillhub: vi.fn(), refresh: vi.fn(), setSkillhubDataOwner: vi.fn(),
 }));
 import { useSkillhubStoreSync } from '../SkillhubFeatureLayout';

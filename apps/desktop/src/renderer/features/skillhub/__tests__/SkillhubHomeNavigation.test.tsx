@@ -12,6 +12,8 @@ const mocks = vi.hoisted(() => ({
   t: (key: string) => key,
   store: {
     skills: [] as SkillhubSkill[],
+    get marketSyncSkills() { return this.skills; },
+    error: null,
     projects: [],
     bootstrapped: true,
     learnSkillEnabled: false,

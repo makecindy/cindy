@@ -19737,6 +19737,8 @@
       "sourceLocal": "本地",
       "import": "匯入技能",
       "importAria": "從本機壓縮檔或 SKILL.md 匯入技能",
+      "refreshLocal": "重新整理本機技能",
+      "refreshLocalFailed": "無法重新整理本機技能",
       "importPickerTitle": "選擇匯入位置",
       "importPickerSubtitle": "{{name}} · {{description}}",
       "importSuccess": "{{name}} 已匯入{{suffix}}",

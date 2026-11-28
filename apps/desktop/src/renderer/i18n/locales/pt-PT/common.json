@@ -19997,6 +19997,8 @@
       "sourceLocal": "Local",
       "import": "Importar Skill",
       "importAria": "Importar uma Skill de um zip local ou de SKILL.md",
+      "refreshLocal": "Atualizar Skills locais",
+      "refreshLocalFailed": "Não foi possível atualizar as Skills locais",
       "importPickerTitle": "Escolher localização de importação",
       "importPickerSubtitle": "{{name}} · {{description}}",
       "importSuccess": "{{name}} importada{{suffix}}",

@@ -19737,6 +19737,8 @@
       "sourceLocal": "로컬",
       "import": "스킬 가져오기",
       "importAria": "로컬 zip 또는 SKILL.md에서 스킬 가져오기",
+      "refreshLocal": "로컬 스킬 새로 고침",
+      "refreshLocalFailed": "로컬 스킬을 새로 고치지 못했습니다",
       "importPickerTitle": "가져오기 위치 선택",
       "importPickerSubtitle": "{{name}} · {{description}}",
       "importSuccess": "{{name}} 가져오기 완료{{suffix}}",

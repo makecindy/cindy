@@ -237,6 +237,50 @@ describe('full Skill Hub bound to the selected computer', () => {
     expect(requests('snapshot')[0][2][0].input).toEqual({ installedOnly: true });
     expect(mocks.localScan).not.toHaveBeenCalled();
   });
+  // #13632 (unit): the actual Local tab must reread only B's installed snapshot.
+  // Existing tests cover entry reads, not a failed in-place refresh followed by recovery.
+  it('refreshes the selected computer without dropping its list or rereading the market', async () => {
+    const original = mocks.invoke.getMockImplementation()!;
+    const scan = Promise.withResolvers<unknown>();
+    let result: Promise<unknown> | undefined;
+    mocks.invoke.mockImplementation((device, channel, args) =>
+      args[0].actionId === 'management:snapshot' && result ? result : original(device, channel, args),
+    );
+    const ui = render(page());
+    const refreshButton = () =>
+      screen.getByRole('button', { name: 'skillhub.home.refreshLocal' }) as HTMLButtonElement;
+    await screen.findByText('Public skill');
+    expect(screen.queryByRole('button', { name: 'skillhub.home.refreshLocal' })).toBeNull();
+    fireEvent.click(screen.getByRole('radio', { name: 'skillhub.home.local' }));
+    await screen.findByText('B installed');
+    const before = mocks.invoke.mock.calls.length;
+    result = scan.promise;
+
+    fireEvent.click(refreshButton());
+    expect(refreshButton().disabled).toBe(true);
+    expect(refreshButton().getAttribute('aria-busy')).toBe('true');
+    fireEvent.click(refreshButton());
+    expect(screen.getByText('B installed')).toBeTruthy();
+    expect(mocks.invoke.mock.calls.slice(before)).toEqual([
+      ['B', expect.any(String), [expect.objectContaining({
+        actionId: 'management:snapshot', input: { installedOnly: true },
+      })]],
+    ]);
+    await act(async () => scan.reject(new Error('Scan failed')));
+    expect(screen.getByText('skillhub.remote.readFailed')).toBeTruthy();
+    expect(screen.getByText('B installed')).toBeTruthy();
+    expect(refreshButton().disabled).toBe(false);
+
+    result = Promise.resolve({ result: snapshot('Updated B'), effects: [] });
+    fireEvent.click(refreshButton());
+    await screen.findByText('Updated B installed');
+    expect(screen.queryByText('skillhub.remote.readFailed')).toBeNull();
+    expect(mocks.localScan).not.toHaveBeenCalled();
+
+    ui.rerender(page('B', false));
+    expect(refreshButton().disabled).toBe(true);
+    expect(screen.getByText('Updated B installed')).toBeTruthy();
+  });
   // A page fixed to a computer it already names (cloud settings) leaves out only the
   // plain 「正在管理」 notice; offline still shows here.
   it('leaves the plain managing notice to the hosting page and keeps offline', async () => {
