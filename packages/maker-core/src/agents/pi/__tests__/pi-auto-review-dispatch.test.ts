@@ -5628,4 +5628,27 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
       confirmed: true,
     });
   });
+
+  // 测试价值
+  // - 生产入口与可观察结果：`PiAgent.startSession` 把稳定根 `agentHome/config-overlay/` 的惰性
+  //   配置投影进本次 configHome；`handle.close()` 清扫后稳定根保持原样（只单向快照）。
+  // - Bug／规则依据：docs/dev-rules/pi-harness.md §2「用户扩展配置投影」；
+  //   docs/dev-rules/pi-full-access-native-parity.md（模型写 agent home 必须用户确认）。
+  // - 现有覆盖缺口：pi-config-overlay.test.ts 只覆盖模块本身，不证明 startSession／清扫已接线。
+  // - 最小失败输入：扩展配置文件放在稳定根，新任务 configHome 里没有它（key 失效）；
+  //   或会话内改过的配置在关闭时被写回稳定根（模型可借 configHome 持久化 agent home 写入）。
+  it('projects stable-root config overlay into the session config home and never writes changes back', async () => {
+    const overlayDir = path.join(agentHome, 'config-overlay');
+    mkdirSync(overlayDir, { recursive: true });
+    writeFileSync(path.join(overlayDir, 'web-search.json'), '{"curator":false}\n');
+
+    const handle = await start('bypassPermissions');
+    const configHome = captured.env.PI_CODING_AGENT_DIR!;
+    expect(readFileSync(path.join(configHome, 'web-search.json'), 'utf8')).toBe('{"curator":false}\n');
+
+    writeFileSync(path.join(configHome, 'web-search.json'), '{"curator":true}\n');
+    await handle.close();
+
+    expect(readFileSync(path.join(overlayDir, 'web-search.json'), 'utf8')).toBe('{"curator":false}\n');
+  });
 });

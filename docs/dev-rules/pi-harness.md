@@ -333,12 +333,34 @@ Skill 停用适配同时保存物理身份与管理页已扫描的词法发现�
 用户更新约定后，新启动的任务读取新版；运行中的任务保留启动快照。SSH 的配置目录身份
 包含约定内容哈希，内容不变可以 attach，变化或删除不能覆盖仍存活的旧运行时快照。
 只继承上述约定文件，不整目录复制 settings、auth、extensions，也不复制会替换 Pi 默认
-系统提示词的 `SYSTEM.md`。远端沿用文件读取通道的 4 MiB 上限，触及上限明确报错，不能
+系统提示词的 `SYSTEM.md`（扩展配置另走本节的显式投影，不是整目录复制）。远端沿用文件读取通道的 4 MiB 上限，触及上限明确报错，不能
 静默截断。文件不存在允许正常启动，读取／写入失败须报错，不能假称约定已加载。
 远端探测使用系统 `stat`（GNU／BSD，固定 C locale）区分明确缺失与权限／探测失败，
 不能用 shell `-f`／`-e` 的 false 推断文件不存在，也不能依赖首次启动尚未安装的 Node。
 内建 Pi 子代理从父任务 `configHome` 复制选中的约定快照到自己的持久运行目录；
 不重读用户原文件，父任务卸载后子代理仍保留同一份约定。
+
+### 用户扩展配置投影（config-overlay）
+
+会话 `configHome` 每次启动都是随机的隔离目录，扩展自带的配置文件（例如 pi-web-access 的
+`web-search.json`）没有跨任务的稳定落点。稳定根 `<agentHome>/config-overlay/` 承载这类
+**惰性配置数据**：每次本地普通任务启动时，把其中扁平、`*.json`、非保留名的普通文件复制进
+本次 `configHome`（0o600，复制内容、不建指向用户文件的可写链接）。这是**单向快照**：会话里
+扩展改自己的配置只在本次会话有效，清扫时随 `configHome` 一起消失，稳定根只能由用户编辑。
+实现见 [`config-overlay.ts`](../../packages/maker-core/src/agents/pi/config-overlay.ts)。
+
+- 只收惰性配置；`settings.json`／`models.json`／`auth.json`／`mcp.json`、
+  `pi-cache-compatibility.json`、`SYSTEM.md`／`APPEND_SYSTEM.md`、上下文约定文件、
+  `internal-extensions`、`extensions`、`skills`、`prompts`、`themes`、`sessions`、`runtime`
+  等保留名一律拒绝并记录原因 —— 投影它们会绕过 Cindy 的配置生成、凭证、MCP 审批与
+  skill／扩展装配边界。这是白名单式的机械隔离，不是对用户安装的 Pi 包的额外审批。
+- 投影失败（目录不可读、单文件超 256 KiB、超过 32 个文件、JSON 非法、写盘失败）不阻断
+  启动，只回报被拒文件名与原因；宿主辅助能力不得把 Pi 变得比原生更难用。
+- **不写回**：写回等于给 Full access 会话一条把模型写的配置持久进用户 agent home 的通道，
+  会绕过「模型写 agent home 必须用户确认」（[Full access 与原生对齐](pi-full-access-native-parity.md)）。
+  宁可让扩展的会话内改动丢掉，也不扩大这条路径。
+- 远端会话、Bot 与受邀者会话不投影（远端 `configHome` 全托管，Bot 不读用户个人文件）。
+  内建子代理沿用父任务的启动快照，不重新读稳定根。
 
 ## 3. 设计原则(Chris 2026-07-30 裁决)
 
