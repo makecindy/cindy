@@ -57,6 +57,7 @@ import {
   recoverOversizedMessage,
   createActiveStripTransform,
   createEncryptedContentRecoveryRule,
+  createMissingReasoningItemRecoveryRule,
   createResponsesReasoningContentRecoveryRule,
   createResponsesToolAudioRecoveryRule,
   stripResponsesToolAudioFromBody,
@@ -657,8 +658,9 @@ let dumpSeq = 0;
 
 const CODEX_RESPONSE_OBSERVER_MAX_BYTES = 2 * 1024 * 1024;
 
+const isSilentEncryptedRetryEnabled = () => readSilentEncryptedRetrySettings().enabled;
 const encryptedContentRecoveryRule = createEncryptedContentRecoveryRule({
-  enabled: () => readSilentEncryptedRetrySettings().enabled,
+  enabled: isSilentEncryptedRetryEnabled,
   onRetry: (threadId, model) => encryptedStripController.markActive(threadId, model),
 });
 const imageGenerationIdRecoveryRule = createImageGenerationIdRecoveryRule({
@@ -695,6 +697,7 @@ const xaiModelInputRecoveryRule = createXaiModelInputRecoveryRule({
 const vllmResponsesCompatibilityRule = createVllmResponsesCompatibilityRule();
 const CODEX_BODY_RECOVERY_RULES = [
   encryptedContentRecoveryRule,
+  createMissingReasoningItemRecoveryRule(isSilentEncryptedRetryEnabled),
   imageGenerationIdRecoveryRule,
   responsesItemIdPrefixRecoveryRule,
   responsesItemIdLengthRecoveryRule,
@@ -740,7 +743,13 @@ function isRepairableToolItemIdError(errorText: string): boolean {
   const rule = CODEX_BODY_RECOVERY_RULES.find(
     (candidate) => candidate.enabled() && candidate.matches(errorText),
   );
-  const reason = rule?.id ?? (isRepairableToolItemIdError(errorText) ? 'tool_item_id' : null);
+  // The OAuth WS upstream may reject item IDs without naming a specific ID. Use the
+  // existing per-thread HTTP fallback; only a precise HTTP error can authorize stripping.
+  const reason = rule?.id ?? (
+    /this request does not support user-supplied input item IDs\./i.test(errorText)
+      ? 'responses_input_item_ids_unsupported'
+      : isRepairableToolItemIdError(errorText) ? 'tool_item_id' : null
+  );
   if (!reason) return null;
 
   const sessionId = args.sessionId.trim();
@@ -3814,7 +3823,7 @@ function createTransformRequestChain(
     createArmedHttpRecoveryStripTransform(),
     createActiveStripTransform({
       controller: encryptedStripController,
-      enabled: () => readSilentEncryptedRetrySettings().enabled,
+      enabled: isSilentEncryptedRetryEnabled,
       strip: stripEncryptedContentFromBody,
     }),
     createActiveStripTransform({
