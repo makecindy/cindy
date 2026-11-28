@@ -3200,8 +3200,8 @@ export interface PiSubagentSweepScope {
   /**
    * Read-only OS process inventory budget for terminal-receipt recovery.
    * Separated from killBudgetMs so a slow Windows probe does not lengthen the
-   * account-boundary kill budget. CI fixtures can pass a larger read-only
-   * budget; production callers leave it unset.
+   * account-boundary kill budget. Unset keeps the original DEFAULT_KILL_BUDGET_MS
+   * probe ceiling; only CI fixtures pass a larger read-only budget.
    */
   inventoryBudgetMs?: number;
 }
@@ -3282,7 +3282,7 @@ async function sweepableRunsUnderRoots(
   // from each consuming another slice of the shared recovery deadline.
   const processes = await readRecoveryProcessInventory(
     recoveryDeadline,
-    scope.inventoryBudgetMs ?? scope.killBudgetMs ?? DEFAULT_KILL_BUDGET_MS,
+    scope.inventoryBudgetMs ?? DEFAULT_KILL_BUDGET_MS,
   );
   if (!processes) return byRoot;
   const missing: string[] = [];
@@ -3682,8 +3682,10 @@ async function stopPiSubagentRunsUnderRoots(
 ): Promise<boolean> {
   const deadline = Date.now() + Math.max(0, Math.floor(timeoutMs));
   const killBudgetMs = scope.killBudgetMs ?? DEFAULT_KILL_BUDGET_MS;
-  const inventoryBudgetMs = scope.inventoryBudgetMs ?? killBudgetMs;
-  const recoveryDeadline = deadline + Math.max(killBudgetMs, inventoryBudgetMs);
+  // Without an injected budget the recovery window and probe ceiling stay
+  // exactly as before: killBudgetMs for the window, DEFAULT_KILL_BUDGET_MS
+  // for the read-only inventory. Only an explicit injection widens either.
+  const recoveryDeadline = deadline + Math.max(killBudgetMs, scope.inventoryBudgetMs ?? 0);
   const requested = new Set<string>();
   for (;;) {
     // One memo per pass, discarded with it: within a single pass a pid cannot

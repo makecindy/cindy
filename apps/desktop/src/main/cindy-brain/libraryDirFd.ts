@@ -21,11 +21,8 @@ export type CustomExistingResult =
   | { ok: true; meta: CustomExistingMeta; usage: CustomExistingUsage | null }
   | { ok: false; code: 'UNSUPPORTED' | 'IO' | 'INVALID' | 'MISSING' | 'CORRUPT' };
 
-// Windows GHA runs eight desktop unit shards in parallel: the first Add-Type
-// compile inside the inline PowerShell helper can exceed 15s under that load.
-// Keep enough headroom below the 60s Windows per-test timeout; a helper that
-// still misses this budget keeps failing closed.
-const HELPER_TIMEOUT_MS = 45_000;
+/** Production helper deadline. Tests may inject a larger budget; failure stays fail-closed. */
+const HELPER_TIMEOUT_MS = 15_000;
 const SYS_OPENAT = 463;
 const SYS_MKDIRAT = 475;
 const SYS_FSYNC = 95;
@@ -121,7 +118,12 @@ POSIX::close($root);
 print STDOUT ($created ? 'created' : 'exists');
 `;
 
-function runDarwinInit(parentFd: number, ghostId: string, metaJson: string): Promise<CustomTreeInitResult> {
+function runDarwinInit(
+  parentFd: number,
+  ghostId: string,
+  metaJson: string,
+  budgetMs: number = HELPER_TIMEOUT_MS,
+): Promise<CustomTreeInitResult> {
   return new Promise((resolve) => {
     let child: ReturnType<typeof spawn>;
     try {
@@ -156,7 +158,7 @@ function runDarwinInit(parentFd: number, ghostId: string, metaJson: string): Pro
     const timer = setTimeout(() => {
       child.kill();
       finish({ ok: false, code: 'IO' });
-    }, HELPER_TIMEOUT_MS);
+    }, budgetMs);
     timer.unref?.();
   });
 }
@@ -219,6 +221,8 @@ export async function initCustomLibraryTree(req: {
   parentFd: number;
   ghostId: string;
   metaJson: string;
+  /** Test-only: larger helper budget for loaded Windows CI runners. */
+  helperTimeoutMs?: number;
 }): Promise<CustomTreeInitResult> {
   if (!validSegment(req.ghostId) || !Number.isInteger(req.parentFd) || req.parentFd < 0) {
     return { ok: false, code: 'INVALID' };
@@ -226,9 +230,9 @@ export async function initCustomLibraryTree(req: {
   if (!/^\{"version":1,"ghostId":"[A-Za-z0-9._-]{1,128}","createdAt":[0-9]{1,16}\}$/.test(req.metaJson)) {
     return { ok: false, code: 'INVALID' };
   }
-  if (process.platform === 'darwin') return runDarwinInit(req.parentFd, req.ghostId, req.metaJson);
+  if (process.platform === 'darwin') return runDarwinInit(req.parentFd, req.ghostId, req.metaJson, req.helperTimeoutMs);
   if (process.platform === 'linux') return linuxInit(req.parentFd, req.ghostId, req.metaJson);
-  if (process.platform === 'win32') return runWindowsInit(req.parentFd, req.ghostId, req.metaJson);
+  if (process.platform === 'win32') return runWindowsInit(req.parentFd, req.ghostId, req.metaJson, req.helperTimeoutMs);
   return { ok: false, code: 'UNSUPPORTED' };
 }
 
@@ -399,7 +403,11 @@ export function parseExistingStdout(text: string): CustomExistingResult {
   return { ok: true, meta, usage };
 }
 
-function runDarwinOpenExisting(parentFd: number, ghostId: string): Promise<CustomExistingResult> {
+function runDarwinOpenExisting(
+  parentFd: number,
+  ghostId: string,
+  budgetMs: number = HELPER_TIMEOUT_MS,
+): Promise<CustomExistingResult> {
   return new Promise((resolve) => {
     let child: ReturnType<typeof spawn>;
     try {
@@ -434,7 +442,7 @@ function runDarwinOpenExisting(parentFd: number, ghostId: string): Promise<Custo
     const timer = setTimeout(() => {
       child.kill();
       finish({ ok: false, code: 'IO' });
-    }, HELPER_TIMEOUT_MS);
+    }, budgetMs);
     timer.unref?.();
   });
 }
@@ -485,13 +493,15 @@ function linuxOpenExisting(parentFd: number, ghostId: string): CustomExistingRes
 export async function openExistingCustomLibrary(req: {
   parentFd: number;
   ghostId: string;
+  /** Test-only: larger helper budget for loaded Windows CI runners. */
+  helperTimeoutMs?: number;
 }): Promise<CustomExistingResult> {
   if (!validSegment(req.ghostId) || !Number.isInteger(req.parentFd) || req.parentFd < 0) {
     return { ok: false, code: 'INVALID' };
   }
-  if (process.platform === 'darwin') return runDarwinOpenExisting(req.parentFd, req.ghostId);
+  if (process.platform === 'darwin') return runDarwinOpenExisting(req.parentFd, req.ghostId, req.helperTimeoutMs);
   if (process.platform === 'linux') return linuxOpenExisting(req.parentFd, req.ghostId);
-  if (process.platform === 'win32') return runWindowsOpenExisting(req.parentFd, req.ghostId);
+  if (process.platform === 'win32') return runWindowsOpenExisting(req.parentFd, req.ghostId, req.helperTimeoutMs);
   return { ok: false, code: 'UNSUPPORTED' };
 }
 
@@ -741,7 +751,11 @@ try {
 
 const WINDOWS_EXISTING_OPEN_COMMAND = Buffer.from(WINDOWS_EXISTING_OPEN_SCRIPT, 'utf16le').toString('base64');
 
-function runWindowsOpenExisting(parentFd: number, ghostId: string): Promise<CustomExistingResult> {
+function runWindowsOpenExisting(
+  parentFd: number,
+  ghostId: string,
+  budgetMs: number = HELPER_TIMEOUT_MS,
+): Promise<CustomExistingResult> {
   return new Promise((resolve) => {
     const powershell = windowsPowerShellPath();
     if (!powershell) {
@@ -786,7 +800,7 @@ function runWindowsOpenExisting(parentFd: number, ghostId: string): Promise<Cust
     const timer = setTimeout(() => {
       child.kill();
       finish({ ok: false, code: 'IO' });
-    }, HELPER_TIMEOUT_MS);
+    }, budgetMs);
     timer.unref?.();
   });
 }
@@ -1011,7 +1025,12 @@ try {
 
 const WINDOWS_INIT_COMMAND = Buffer.from(WINDOWS_INIT_SCRIPT, 'utf16le').toString('base64');
 
-function runWindowsInit(parentFd: number, ghostId: string, metaJson: string): Promise<CustomTreeInitResult> {
+function runWindowsInit(
+  parentFd: number,
+  ghostId: string,
+  metaJson: string,
+  budgetMs: number = HELPER_TIMEOUT_MS,
+): Promise<CustomTreeInitResult> {
   return new Promise((resolve) => {
     const powershell = windowsPowerShellPath();
     if (!powershell) {
@@ -1060,7 +1079,7 @@ function runWindowsInit(parentFd: number, ghostId: string, metaJson: string): Pr
     const timer = setTimeout(() => {
       child.kill();
       finish({ ok: false, code: 'IO' });
-    }, HELPER_TIMEOUT_MS);
+    }, budgetMs);
     timer.unref?.();
   });
 }

@@ -41,6 +41,21 @@ import {
 const Ctor = Database as unknown as SqliteDatabaseConstructor;
 const GHOST_ID = 'mivo-canvas';
 
+/**
+ * Windows GHA runs eight desktop unit shards in parallel: the first Add-Type
+ * compile inside the inline PowerShell helper can exceed the production 15s
+ * deadline. Only tests use this budget; production keeps failing closed at 15s.
+ */
+const CI_LIBRARY_HELPER_TIMEOUT_MS = 45_000;
+const withInitHelperBudget = (req: { parentFd: number; ghostId: string; metaJson: string }) => ({
+  ...req,
+  helperTimeoutMs: CI_LIBRARY_HELPER_TIMEOUT_MS,
+});
+const withOpenHelperBudget = (req: { parentFd: number; ghostId: string }) => ({
+  ...req,
+  helperTimeoutMs: CI_LIBRARY_HELPER_TIMEOUT_MS,
+});
+
 function makeGhost(library: boolean, enabled = true, id = GHOST_ID): InstalledGhost {
   return {
     manifest: {
@@ -101,7 +116,11 @@ describe('GhostLibrarySlot', () => {
     const originalResolve = bindingStore.resolveLibraryRoot.bind(bindingStore);
     resolveLibraryRoot = vi.fn((ghostId: string) => originalResolve(ghostId));
     bindingStore.resolveLibraryRoot = ((ghostId: string) => resolveLibraryRoot(ghostId)) as LibraryBindingStore['resolveLibraryRoot'];
-    createVault = vi.fn((d) => new LibraryVault(d));
+    createVault = vi.fn((d: LibraryVaultDeps) => new LibraryVault({
+      initCustomTree: req => initCustomLibraryTree(withInitHelperBudget(req)),
+      openExistingCustom: req => openExistingCustomLibrary(withOpenHelperBudget(req)),
+      ...d,
+    }));
     createSqlService = vi.fn((d) =>
       new LibrarySqlService({
         ...d,
@@ -1027,7 +1046,7 @@ describe('GhostLibrarySlot', () => {
           injected = true;
           if (fs.existsSync(candidate)) await fs.promises.rename(candidate, parked);
         }
-        return openExistingCustomLibrary(req);
+        return openExistingCustomLibrary(withOpenHelperBudget(req));
       },
     }));
     const after = await slot.handleLibraryRequest(GHOST_ID, { op: 'open' });
@@ -1065,7 +1084,7 @@ describe('GhostLibrarySlot', () => {
           if (fs.existsSync(candidate)) await fs.promises.rename(candidate, parked);
           await fs.promises.mkdir(candidate);
         }
-        return openExistingCustomLibrary(req);
+        return openExistingCustomLibrary(withOpenHelperBudget(req));
       },
     }));
     const after = await slot.handleLibraryRequest(GHOST_ID, { op: 'open' });
@@ -1111,7 +1130,7 @@ describe('GhostLibrarySlot', () => {
     createVault.mockImplementation((d) => new LibraryVault({
       ...d,
       initCustomTree: async (req) => {
-        const r = await initCustomLibraryTree(req);
+        const r = await initCustomLibraryTree(withInitHelperBudget(req));
         afterInit = true;
         return r;
       },
