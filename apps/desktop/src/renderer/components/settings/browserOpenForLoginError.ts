@@ -12,6 +12,8 @@ const TOAST_KEYS: Partial<Record<BrowserOpenForLoginErrorCode, string>> = {
   HEADLESS_FORBIDDEN: 'settings.computerUse.browser.toast.headlessForbidden',
   STOP_FAILED: 'settings.computerUse.browser.toast.stopFailed',
   FOREIGN_AGENT_BROWSER: 'settings.computerUse.browser.toast.foreignInstance',
+  CUSTOM_BROWSER_INVALID: 'settings.computerUse.customBrowser.invalid',
+  CUSTOM_BROWSER_START_FAILED: 'settings.computerUse.customBrowser.startFailed',
   APP_BOUND_ENCRYPTION_UNSUPPORTED:
     'settings.computerUse.browser.toast.appBoundEncryptionUnsupported',
 };

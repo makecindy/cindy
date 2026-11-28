@@ -16,6 +16,8 @@ const api = vi.hoisted(() => ({
   getBackendState: vi.fn(),
   getBackendHealth: vi.fn(),
   setBackendKind: vi.fn(),
+  pickCustomBrowser: vi.fn(),
+  resetCustomBrowser: vi.fn(),
   recoverBackend: vi.fn(),
   openForLogin: vi.fn(),
   warningToast: vi.fn(),
@@ -125,6 +127,8 @@ beforeEach(() => {
         getState: api.getBackendState,
         getHealth: api.getBackendHealth,
         setKind: api.setBackendKind,
+        pickCustomBrowser: api.pickCustomBrowser,
+        resetCustomBrowser: api.resetCustomBrowser,
         recover: api.recoverBackend,
         setUseRealProfile: vi.fn(async (enabled: boolean) => ({ ok: true, enabled })),
       },
@@ -161,6 +165,31 @@ describe('ComputerUseSection browser backend health loading', () => {
     }); });
     expect(await screen.findByText('settings.computerUse.browser.openForLogin')).toBeTruthy();
     expect(screen.queryByText('settings.computerUse.configurationRead.loading')).toBeNull();
+  });
+
+  // #8899, unit/jsdom. Unlike default discovery tests, a saved override remains
+  // visible when its executable goes missing; reset restores the default actions.
+  it('offers the picker without auto-detection and restores detection after clearing a stale selection', async () => {
+    api.getBackendState.mockResolvedValue({ active: 'external', useRealProfile: false });
+    const executablePath = '/fixture/Chromium.app';
+    api.pickCustomBrowser.mockResolvedValue({
+      canceled: false,
+      state: { active: 'external', useRealProfile: false, customBrowser: { executablePath } },
+    });
+    api.resetCustomBrowser.mockImplementation(async () => {
+      api.getBrowserStatus.mockResolvedValue({ detected: true, browserKind: 'chrome', executablePath: '/fixture/default' });
+      return { active: 'external', useRealProfile: false };
+    });
+    render(<ComputerUseSection workingDir="/tmp/project" />);
+    fireEvent.click(await screen.findByRole('button', { name: 'settings.computerUse.customBrowser.choose' }));
+    expect(await screen.findByText(executablePath)).toBeTruthy();
+    expect(await screen.findByText('settings.computerUse.customBrowser.invalid')).toBeTruthy();
+    expect(screen.queryByRole('switch', { name: 'settings.computerUse.realProfile.toggleAria' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'settings.computerUse.browser.download' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'settings.computerUse.customBrowser.reset' }));
+    expect(await screen.findByRole('button', { name: 'settings.computerUse.browser.openForLogin' })).toBeTruthy();
+    expect(screen.queryByText(executablePath)).toBeNull();
+    expect(screen.getByRole('switch', { name: 'settings.computerUse.realProfile.toggleAria' })).toBeTruthy();
   });
 
   // Regression: the four base reads used to gate the entire page via Promise.all.

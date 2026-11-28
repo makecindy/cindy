@@ -6064,6 +6064,16 @@
           "failed": "Failed to update browser login setting"
         }
       },
+      "customBrowser": {
+        "title": "Custom browser",
+        "description": "Choose an installed Chromium browser you trust. Otherwise Cindy detects one automatically.",
+        "choose": "Choose browser",
+        "reset": "Restore automatic browser detection",
+        "isolated": "Uses a separate profile. Everyday browser logins aren’t copied.",
+        "invalid": "The selected app isn’t an available Chromium browser. Choose another browser or restore automatic detection.",
+        "startFailed": "Cindy couldn’t start the selected browser. It must support Chromium remote debugging.",
+        "saveFailed": "Couldn’t change the browser selection"
+      },
       "browserBackend": {
         "title": "Automation browser target",
         "defaultTag": "Default",

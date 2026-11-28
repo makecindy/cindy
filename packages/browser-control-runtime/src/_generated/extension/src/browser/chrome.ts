@@ -1109,7 +1109,9 @@ export async function launchOpenClawChrome(
     // Cast to ChildProcessWithoutNullStreams so callers can use .stderr safely;
     // the tuple overload resolution varies across @types/node versions.
     while (true) {
-      const preparedSpawn = prepareOomScoreAdjustedSpawn(exe.path, args, { env });
+      const preparedSpawn = resolved.spawnWithoutShell
+        ? { command: exe.path, args, env, wrapped: false }
+        : prepareOomScoreAdjustedSpawn(exe.path, args, { env });
       let proc: ChildProcess | undefined;
       let stderrOutput = "";
       try {

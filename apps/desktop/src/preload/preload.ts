@@ -281,7 +281,7 @@ import { isDataOwnerPushStamp, type DataOwnerPushStamp } from '../shared/dataOwn
 import type { VoiceInputSyncErrorResult } from '../shared/voiceInputData';
 import type { UtilityTextFailure } from '../shared/utilityTextResult';
 import { DB_SLIMMING_STARTUP_PROGRESS_CHANGED_CHANNEL } from '../shared/localDbMaintenance';
-import type { BrowserBackendHealth, BrowserBackendRecoveryResult } from '../shared/browserBackend';
+import type { BrowserBackendHealth, BrowserBackendRecoveryResult, BrowserBackendSettingsState, BrowserPickResult } from '../shared/browserBackend';
 import type {
   ReviewBranchDiffData,
   ReviewCommitDiffData,
@@ -6997,12 +6997,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
    */
   browserBackend: {
     /** Read current active kind + system default + override flag. */
-    getState: (): Promise<{
-      active: 'external' | 'rsb-webview' | 'user-browser';
-      systemDefault: 'external' | 'rsb-webview' | 'user-browser';
-      isOverride: boolean;
-      useRealProfile: boolean;
-    }> => ipcRenderer.invoke('browser-backend:get-state'),
+    getState: (): Promise<BrowserBackendSettingsState> => ipcRenderer.invoke('browser-backend:get-state'),
+    pickCustomBrowser: (): Promise<BrowserPickResult> => ipcRenderer.invoke('browser-backend:pick-custom-browser'),
+    resetCustomBrowser: (): Promise<BrowserBackendSettingsState> => ipcRenderer.invoke('browser-backend:reset-custom-browser'),
     /** Swap the active backend AND persist as user override. */
     setKind: (kind: 'external' | 'rsb-webview' | 'user-browser'): Promise<unknown> =>
       ipcRenderer.invoke('browser-backend:set-kind', { kind }),

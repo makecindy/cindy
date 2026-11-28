@@ -6064,6 +6064,16 @@
           "failed": "Einstellung für Browser-Anmeldedaten konnte nicht aktualisiert werden"
         }
       },
+      "customBrowser": {
+        "title": "Benutzerdefinierter Browser",
+        "description": "Wähle einen installierten Chromium-Browser, dem du vertraust. Ohne Auswahl erkennt Cindy automatisch einen Browser.",
+        "choose": "Browser auswählen",
+        "reset": "Automatische Browsererkennung wiederherstellen",
+        "isolated": "Verwendet ein separates Profil. Anmeldedaten aus dem üblichen Browser werden nicht kopiert.",
+        "invalid": "Die gewählte App ist kein verfügbarer Chromium-Browser. Wähle einen anderen Browser oder stelle die automatische Erkennung wieder her.",
+        "startFailed": "Cindy konnte den gewählten Browser nicht starten. Er muss Chromium-Remotedebugging unterstützen.",
+        "saveFailed": "Die Browserauswahl konnte nicht geändert werden"
+      },
       "browserBackend": {
         "title": "Zielbrowser für die Automatisierung",
         "defaultTag": "Standard",

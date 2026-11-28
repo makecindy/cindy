@@ -2135,7 +2135,9 @@ import { monitorChromeStartup } from "../../../../shim/chrome-startup.js";`,
       env: preparedSpawn.env,
     }) as unknown as ChildProcessWithoutNullStreams;`,
           `    while (true) {
-      const preparedSpawn = prepareOomScoreAdjustedSpawn(exe.path, args, { env });
+      const preparedSpawn = resolved.spawnWithoutShell
+        ? { command: exe.path, args, env, wrapped: false }
+        : prepareOomScoreAdjustedSpawn(exe.path, args, { env });
       let proc: ChildProcess | undefined;
       let stderrOutput = "";
       try {
@@ -2420,6 +2422,35 @@ import { monitorChromeStartup } from "../../../../shim/chrome-startup.js";`,
     },
   ],
   'extension/src/browser/config.ts': [
+    {
+      desc: 'carry the host-only direct spawn option into the resolved browser configuration',
+      transform: (source) => applyExactReplacements(source, [
+        [
+          `  executablePath?: string;
+  headless: boolean;
+  headlessSource?: "config" | "default";`,
+          `  executablePath?: string;
+  spawnWithoutShell?: boolean;
+  headless: boolean;
+  headlessSource?: "config" | "default";`,
+        ],
+        [
+          `    executablePath,
+    headless,
+    headlessSource,
+    noSandbox,
+    attachOnly,
+    defaultProfile,`,
+          `    executablePath,
+    spawnWithoutShell: cfg?.spawnWithoutShell === true,
+    headless,
+    headlessSource,
+    noSandbox,
+    attachOnly,
+    defaultProfile,`,
+        ],
+      ]),
+    },
     {
       desc: 'preserve narrow fake-IP SSRF allowances from the host config without enabling general private-network access',
       find: `function resolveBrowserSsrFPolicy(cfg: BrowserConfig | undefined): SsrFPolicy | undefined {

@@ -1,6 +1,8 @@
 import { ComputerUseSection } from '../../../src/renderer/components/settings/ComputerUseSection';
 import { mountPage, subscription } from '../../ui-page/harness';
 
+const customExecutable = '/opt/Test browsers/Chromium Developer Edition.app/Contents/MacOS/Chromium';
+
 void mountPage({
   // The section links to the plugin page, so it renders inside the app router.
   route: '/settings',
@@ -23,6 +25,8 @@ void mountPage({
       browser: {
         status: async () => {
           if (ctx.case === 'loading') return new Promise(() => {});
+          if (ctx.case === 'custom-browser-missing') return { detected: false, browserKind: null, executablePath: null };
+          if (ctx.case === 'custom-browser') return { detected: true, browserKind: 'custom', executablePath: customExecutable };
           return { detected: true, browserKind: 'chrome', executablePath: '/chrome' };
         },
       },
@@ -89,8 +93,12 @@ void mountPage({
       },
     },
     browserBackend: {
+      pickCustomBrowser: async () => ({ canceled: true }),
       getState: async () => {
         if (ctx.case === 'error') throw new Error('Configuration unavailable');
+        if (ctx.case.startsWith('custom-browser')) return {
+          active: 'external', useRealProfile: false, customBrowser: { executablePath: customExecutable },
+        };
         return (ctx.case.startsWith('my-browser') || ['browser-updating', 'browser-selection'].includes(ctx.case))
           ? { active: 'user-browser', useRealProfile: true }
           : { active: 'external', useRealProfile: false };

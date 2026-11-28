@@ -6021,6 +6021,16 @@
           "failed": "更新浏览器登录态设置失败"
         }
       },
+      "customBrowser": {
+        "title": "自选浏览器",
+        "description": "可选择已安装且信任的 Chromium 浏览器。不选择时，Cindy 会自动检测",
+        "choose": "选择浏览器",
+        "reset": "恢复自动检测浏览器",
+        "isolated": "使用独立浏览器资料，不复制日常登录态",
+        "invalid": "所选应用不是可用的 Chromium 浏览器。请选择其他浏览器或恢复自动检测",
+        "startFailed": "无法启动所选浏览器。浏览器需要支持 Chromium 远程调试",
+        "saveFailed": "未能更改浏览器选择"
+      },
       "browserBackend": {
         "title": "浏览器自动化目标",
         "defaultTag": "默认",

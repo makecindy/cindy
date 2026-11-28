@@ -5896,12 +5896,9 @@ interface ElectronAPI {
    * 默认值口径与两次翻转的 override 语义见 main/browser-backend-settings-store.ts。
    */
   browserBackend: {
-    getState: () => Promise<{
-      active: 'external' | 'rsb-webview' | 'user-browser';
-      systemDefault: 'external' | 'rsb-webview' | 'user-browser';
-      isOverride: boolean;
-      useRealProfile: boolean;
-    }>;
+    getState: () => Promise<import('../shared/browserBackend').BrowserBackendSettingsState>;
+    pickCustomBrowser: () => Promise<import('../shared/browserBackend').BrowserPickResult>;
+    resetCustomBrowser: () => Promise<import('../shared/browserBackend').BrowserBackendSettingsState>;
     setKind: (kind: 'external' | 'rsb-webview' | 'user-browser') => Promise<{
       ok: true;
       active: 'external' | 'rsb-webview' | 'user-browser';
