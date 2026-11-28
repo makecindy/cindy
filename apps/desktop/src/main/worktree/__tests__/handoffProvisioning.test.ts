@@ -58,7 +58,7 @@ async function createHarness(overrides: Partial<HandoffProvisioningPorts> = {}) 
   const userDataDir = await fs.mkdtemp(path.join(os.tmpdir(), 'wt-prov-'));
   tempDirs.push(userDataDir);
 
-  let ownerScope = 'owner-a:1';
+  let ownerScope = 'owner-a';
   let ownerToken: object | null = { id: ownerScope };
   const locks = new Map<string, boolean>();
   const boundWorktrees = new Map<string, WorktreeMeta>();
@@ -267,6 +267,39 @@ describe('handoffProvisioning', () => {
     expect(h.boundWorktrees.get('s-fail')?.path).toBe('/repo/.cindy-worktrees/s-fail');
   });
 
+  it('allows only one retry while the first retry awaits the session lookup', async () => {
+    const firstCreation = deferred<PrepareHandoffWorktreeResult>();
+    const secondCreation = deferred<PrepareHandoffWorktreeResult>();
+    const retryLookup = deferred<{ state: 'active'; hasWorktreePath: false }>();
+    let creationCount = 0;
+    let lookupCount = 0;
+    const h = await createHarness({
+      isQueueBusy: async () => true,
+      createWorktree: () => ++creationCount === 1 ? firstCreation.promise : secondCreation.promise,
+      readSessionLifecycle: async () => {
+        lookupCount += 1;
+        return retryLookup.promise;
+      },
+    });
+    await h.service.beginProvisioning({ sessionId: 's-retry-race', baseRepo: '/repo', workingDir: '/repo' });
+    firstCreation.resolve({ ok: false, message: 'creation failed' });
+    await h.service.whenIdle('s-retry-race');
+
+    const firstRetry = h.service.retryProvisioning('s-retry-race');
+    const secondRetry = await h.service.retryProvisioning('s-retry-race');
+    expect(secondRetry).toMatchObject({ ok: false, errorCode: 'PRECONDITION_FAILED' });
+    expect(lookupCount).toBe(1);
+    expect(creationCount).toBe(1);
+
+    retryLookup.resolve({ state: 'active', hasWorktreePath: false });
+    expect(await firstRetry).toMatchObject({ ok: true });
+    expect(creationCount).toBe(2);
+    secondCreation.resolve({ ok: true, sessionId: 's-retry-race', meta: makeMeta('s-retry-race') });
+    await h.service.whenIdle('s-retry-race');
+    expect(h.boundWorktrees.has('s-retry-race')).toBe(true);
+    expect(h.locks.get('s-retry-race')).toBe(false);
+  });
+
   it('aborts in-flight creation on cancel and discards orphan worktree if session became terminal', async () => {
     const signals: AbortSignal[] = [];
     const gate = deferred<PrepareHandoffWorktreeResult>();
@@ -336,10 +369,10 @@ describe('handoffProvisioning', () => {
 
     // Simulate process restart with a fresh service instance reading the same userDataDir.
     const restartedLocks = new Map<string, boolean>();
-    const ownerBToken = { id: 'owner-b:1' };
+    const ownerBToken = { id: 'owner-b:new-generation' };
     const restartedOtherOwner = createHandoffProvisioningService({
       ...h.ports,
-      getOwnerScopeKey: () => 'owner-b:1',
+      getOwnerScopeKey: () => 'owner-b',
       captureOwnerToken: () => ownerBToken,
       isOwnerTokenCurrent: (t) => t === ownerBToken,
       setProvisioningLock: (sid, locked) => restartedLocks.set(sid, locked),
@@ -348,10 +381,19 @@ describe('handoffProvisioning', () => {
     // Foreign owner must not see or delete owner-a's entry.
     expect(restartedOtherOwner.listSnapshots()).toEqual([]);
 
-    const ownerAToken = { id: 'owner-a:1' };
+    const signedOut = createHandoffProvisioningService({
+      ...h.ports,
+      getOwnerScopeKey: () => null,
+    });
+    expect(signedOut.listSnapshots()).toEqual([]);
+    expect(await signedOut.beginProvisioning({
+      sessionId: 's-signed-out', baseRepo: '/repo', workingDir: '/repo',
+    })).toMatchObject({ state: 'failed' });
+
+    const ownerAToken = { id: 'owner-a:new-generation' };
     const restartedSameOwner = createHandoffProvisioningService({
       ...h.ports,
-      getOwnerScopeKey: () => 'owner-a:1',
+      getOwnerScopeKey: () => 'owner-a',
       captureOwnerToken: () => ownerAToken,
       isOwnerTokenCurrent: (t) => t === ownerAToken,
       setProvisioningLock: (sid, locked) => restartedLocks.set(sid, locked),

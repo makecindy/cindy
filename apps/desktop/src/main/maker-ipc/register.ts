@@ -7124,7 +7124,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         return null;
       }
     },
-    getOwnerScopeKey: () => activeOwnerScopeKey(),
+    getOwnerScopeKey: () => getActiveAppSession().dataOwnerId,
     captureOwnerToken: () => getCurrentDbClientSnapshot(),
     isOwnerTokenCurrent: (token) =>
       token !== null &&

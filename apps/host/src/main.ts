@@ -2429,7 +2429,7 @@ function startDeviceLink(): void {
   if (!hostWorktreeProvisioning) {
     hostWorktreeProvisioning = createHandoffProvisioningService({
       getUserDataDir: () => profileDir,
-      getOwnerScopeKey: () => activeOwnerScopeKey(),
+      getOwnerScopeKey: () => getActiveAppSession().dataOwnerId,
       captureOwnerToken: () => getCurrentDbClientSnapshot(),
       isOwnerTokenCurrent: (token) =>
         token !== null &&

@@ -128,7 +128,7 @@ function isEntryOwnedByCurrent(
   entry: PersistedProvisioningEntry,
   currentOwnerScope: string | null,
 ): boolean {
-  if (!currentOwnerScope || !entry.ownerScopeKey) return true;
+  if (!currentOwnerScope || !entry.ownerScopeKey) return false;
   return entry.ownerScopeKey === currentOwnerScope;
 }
 
@@ -430,7 +430,10 @@ export function createHandoffProvisioningService(ports: HandoffProvisioningPorts
       ensureLoadedFromDisk();
       const queueBusy = await ports.isQueueBusy(input.baseRepo).catch(() => false);
       const waitMs = queueBusy ? 0 : Math.max(0, input.fastWaitMs ?? ports.fastWaitMs ?? DEFAULT_FAST_WAIT_MS);
-      const ownerScopeKey = ports.getOwnerScopeKey() ?? undefined;
+      const ownerScopeKey = ports.getOwnerScopeKey();
+      if (!ownerScopeKey) {
+        return { state: 'failed', message: 'No active data owner for worktree provisioning' };
+      }
       const entry: PersistedProvisioningEntry = {
         sessionId: input.sessionId,
         baseRepo: input.baseRepo,
@@ -440,7 +443,7 @@ export function createHandoffProvisioningService(ports: HandoffProvisioningPorts
         status: 'provisioning',
         stage: queueBusy ? 'queued' : 'creating',
         startedAt: now(),
-        ...(ownerScopeKey ? { ownerScopeKey } : {}),
+        ownerScopeKey,
       };
 
       entries.set(input.sessionId, entry);
@@ -517,7 +520,29 @@ export function createHandoffProvisioningService(ports: HandoffProvisioningPorts
           message: 'worktree 正在创建中，请勿重复重试。',
         };
       }
-      const lifecycle = await ports.readSessionLifecycle(sessionId);
+      // Reserve this existing state before the first await so a second retry cannot
+      // pass the same failed-state check and launch a second worktree creation.
+      const ownerToken = ports.captureOwnerToken();
+      if (!ownerToken) {
+        return { ok: false, errorCode: 'PRECONDITION_FAILED', message: '当前账号尚未就绪。' };
+      }
+      entry.status = 'provisioning';
+      const stillCurrent = () =>
+        ports.isOwnerTokenCurrent(ownerToken) && readOwnedEntry(sessionId) === entry;
+      let lifecycle: Awaited<ReturnType<HandoffProvisioningPorts['readSessionLifecycle']>>;
+      try {
+        lifecycle = await ports.readSessionLifecycle(sessionId);
+      } catch (error) {
+        if (stillCurrent()) entry.status = 'failed';
+        return {
+          ok: false,
+          errorCode: 'INTERNAL',
+          message: sanitizeProvisioningError(error instanceof Error ? error.message : String(error)),
+        };
+      }
+      if (!stillCurrent()) {
+        return { ok: false, errorCode: 'PRECONDITION_FAILED', message: '账号或任务状态已变化。' };
+      }
       if (lifecycle.state !== 'active') {
         entries.delete(sessionId);
         foreignEntries.delete(sessionId);
@@ -532,7 +557,9 @@ export function createHandoffProvisioningService(ports: HandoffProvisioningPorts
       }
 
       const queueBusy = await ports.isQueueBusy(entry.baseRepo).catch(() => false);
-      entry.status = 'provisioning';
+      if (!stillCurrent()) {
+        return { ok: false, errorCode: 'PRECONDITION_FAILED', message: '账号或任务状态已变化。' };
+      }
       entry.stage = queueBusy ? 'queued' : 'creating';
       entry.startedAt = now();
       delete entry.error;
