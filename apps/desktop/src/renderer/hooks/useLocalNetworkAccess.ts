@@ -17,7 +17,8 @@ export function useLocalNetworkAccess({
 }: { poll?: boolean; probe?: boolean; probeOnFocus?: () => boolean } = {}) {
   const [state, setState] = useState<LocalNetworkState | null>(null);
   const [requesting, setRequesting] = useState(false);
-  const [openedSettings, setOpenedSettings] = useState(false);
+  const [prompted, setPrompted] = useState(false);
+  const [openedSettingsLocal, setOpenedSettingsLocal] = useState(false);
   const [failed, setFailed] = useState(false);
   const mounted = useRef(false);
   const supported = window.electronAPI?.platform === 'darwin' && !!window.electronAPI.localNetwork;
@@ -25,15 +26,24 @@ export function useLocalNetworkAccess({
   const focusProbe = useRef(probeOnFocus);
   focusProbe.current = probeOnFocus;
 
+  const applyState = useCallback((next: LocalNetworkState) => {
+    setState(next);
+    if (next.access !== 'denied') {
+      setPrompted(false);
+      setOpenedSettingsLocal(false);
+      setFailed(false);
+    }
+  }, []);
+
   const refresh = useCallback(async (fresh = probe) => {
     if (!supported) return;
     try {
       const next = await window.electronAPI.localNetwork.status({ probe: fresh });
-      if (mounted.current) setState(next);
+      if (mounted.current) applyState(next);
     } catch {
       // Unknown is not denied: say nothing rather than a wrong reminder.
     }
-  }, [probe, supported]);
+  }, [applyState, probe, supported]);
 
   useEffect(() => {
     mounted.current = true;
@@ -42,7 +52,7 @@ export function useLocalNetworkAccess({
     };
     void refresh();
     const off = window.electronAPI.localNetwork.onChanged((next) => {
-      if (mounted.current) setState(next);
+      if (mounted.current) applyState(next);
     });
     const onFocus = () => void refresh(focusProbe.current ? focusProbe.current() : probe);
     window.addEventListener('focus', onFocus);
@@ -59,8 +69,9 @@ export function useLocalNetworkAccess({
       window.removeEventListener('focus', onFocus);
       if (timer) clearInterval(timer);
     };
-  }, [poll, refresh, supported]);
+  }, [applyState, poll, probe, refresh, supported]);
 
+  /** Trigger the native macOS permission prompt without hijacking focus to System Settings. */
   const request = useCallback(async () => {
     if (!supported || requesting) return;
     setRequesting(true);
@@ -68,14 +79,63 @@ export function useLocalNetworkAccess({
     try {
       const next = await window.electronAPI.localNetwork.request();
       if (!mounted.current) return;
-      setState(next);
-      if (next.access === 'denied') setOpenedSettings(true);
+      applyState(next);
+      if (next.access === 'denied') setPrompted(true);
     } catch {
       if (mounted.current) setFailed(true);
     } finally {
       if (mounted.current) setRequesting(false);
     }
-  }, [requesting, supported]);
+  }, [applyState, requesting, supported]);
 
-  return { state, requesting, openedSettings, failed, request };
+  /** Open System Settings (or a fresh System Settings window on retry). */
+  const openSettings = useCallback(async () => {
+    if (!supported || requesting) return;
+    setRequesting(true);
+    setFailed(false);
+    const separateWindow = state?.settingsOpenStage === 'standard';
+    try {
+      const next = await window.electronAPI.localNetwork.request({
+        openSettings: true,
+        ...(separateWindow ? { separateWindow: true } : {}),
+      });
+      if (!mounted.current) return;
+      applyState(next);
+      if (next.access === 'denied') setOpenedSettingsLocal(true);
+    } catch {
+      if (mounted.current) setFailed(true);
+    } finally {
+      if (mounted.current) setRequesting(false);
+    }
+  }, [applyState, requesting, state?.settingsOpenStage, supported]);
+
+  const appBundlePath = state?.appBundlePath;
+  const revealApp = useCallback(async () => {
+    if (!appBundlePath || !window.electronAPI?.showItemInFolder) return;
+    setFailed(false);
+    try {
+      const result = await window.electronAPI.showItemInFolder({ filePath: appBundlePath });
+      if (mounted.current && !result.success) setFailed(true);
+    } catch {
+      if (mounted.current) setFailed(true);
+    }
+  }, [appBundlePath]);
+
+  const settingsStage = state?.settingsOpenStage;
+  const openedSettings =
+    state?.access === 'denied' && (openedSettingsLocal || (settingsStage !== undefined && settingsStage !== 'none'));
+  const separateWindowRetry = state?.access === 'denied' && settingsStage === 'standard';
+
+  return {
+    state,
+    requesting,
+    prompted: state?.access === 'denied' && prompted,
+    openedSettings,
+    separateWindowRetry,
+    appBundlePath,
+    failed,
+    request,
+    openSettings,
+    revealApp,
+  };
 }

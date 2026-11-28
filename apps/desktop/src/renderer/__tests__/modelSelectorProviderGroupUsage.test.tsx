@@ -88,7 +88,7 @@ const catalogs = vi.hoisted(() => {
     local: [provider('a-local', 'A Local', 'me@desk')] as unknown[],
     localGroups: {
       'a-local': {
-        strategy: 'least',
+        strategy: 'expiring',
         autoSwitch: true,
         members: [member('local', 'local', null, 'a-local')],
       },
@@ -99,7 +99,7 @@ const catalogs = vi.hoisted(() => {
         provider('c-open', 'C Open', 'studio@x', {
           remoteInvocationEnabled: true,
           group: {
-            strategy: 'least',
+            strategy: 'expiring',
             autoSwitch: true,
             members: [member('local', 'local', null, 'c-open'), member('device:device-d:d-open', 'device', 'device-d', 'd-open')],
           },
@@ -315,7 +315,7 @@ describe('模型列表里供应商组那一项的用量', () => {
   it('读到任务归哪个组时，别的组那一项不认这台', async () => {
     // 本机的组也收了 Laptop：任务归的是 Studio 的组。
     catalogs.localGroups['a-local'] = {
-      strategy: 'least',
+      strategy: 'expiring',
       autoSwitch: true,
       members: [
         { key: 'local', kind: 'local', agentDeviceId: null, providerId: 'a-local', limit: 4, weight: 1, paused: false },
@@ -351,7 +351,7 @@ describe('模型列表里供应商组那一项的用量', () => {
       expect(local.getAttribute('aria-description')).toBe('开始后由供应商组选一台电脑，用量按那台显示');
     } finally {
       catalogs.localGroups['a-local'] = {
-        strategy: 'least',
+        strategy: 'expiring',
         autoSwitch: true,
         members: [{ key: 'local', kind: 'local', agentDeviceId: null, providerId: 'a-local', limit: 4, weight: 1, paused: false }],
       };

@@ -14,13 +14,19 @@ import * as authManager from './authManager.js';
 import { getResolvedMainLocale } from './i18n.desktop.js';
 import { createLogger } from './logger.js';
 import { createServerApiClient } from './serverApiClient.js';
+import { getActiveAppSession, isAppSessionBoundaryPending } from './appSessionState.js';
+import { createCreditUsageRateLimitFetch } from './model-access/creditUsageRateLimit.js';
 
 export { ServerApiError } from './serverApiClient.js';
 export type { ApiFetchOptions } from './serverApiClient.js';
 
-export const serverApiFetch = createServerApiClient({
+export const serverApiFetch = createCreditUsageRateLimitFetch(createServerApiClient({
   fetch: (url, init) => net.fetch(url instanceof URL ? url.href : url, init),
   auth: authManager,
   locale: () => getResolvedMainLocale(),
   log: createLogger('serverApiClient'),
+}), () => {
+  const session = getActiveAppSession();
+  return session.mode === 'cloud' && session.dataOwnerId && !isAppSessionBoundaryPending()
+    ? { owner: JSON.stringify([authManager.getActiveAuthRealm(), session.dataOwnerId]), generation: session.generation } : null;
 });

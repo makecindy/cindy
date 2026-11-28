@@ -64,6 +64,7 @@ import { isRemoteDesktopViewer } from './remote-desktop-viewer/registry.js';
 import { isRsbWindowWebContentsId } from './right-sidebar-window/registry.js';
 import { isReviewArtifactConfirmWebContentsId } from './reviewer/reviewArtifactConfirmWindowRegistry.js';
 import { isCaptureWindowWebContents } from './remote-desktop/captureWindowRegistry.js';
+import { createGpuCrashTracker, recordGpuCrashLoopFallback } from './gpuRenderingPolicy.js';
 
 /**
  * 瞬时网络错误的 wire payload (main → renderer)。code 永远存在 (Node 的 ErrnoException
@@ -748,6 +749,7 @@ export function installQuitHandler(timeoutMs = 2000): void {
   // GPU 崩溃 Chromium 会自行重启 GPU 进程,utility 崩溃影响面局部,都不值得
   // 整个 app 退出;但此前这些事件完全无日志,「app 卡死/白屏前发生过什么」
   // 无从追溯 (issue #758)。clean-exit / killed 是正常回收,降级 info。
+  const gpuCrashTracker = createGpuCrashTracker();
   app.on('child-process-gone', (_event, details) => {
     const desc =
       `child-process-gone: type=${details.type} reason=${details.reason} ` +
@@ -756,8 +758,39 @@ export function installQuitHandler(timeoutMs = 2000): void {
       (details.serviceName ? ` serviceName=${details.serviceName}` : '');
     if (details.reason === 'clean-exit' || details.reason === 'killed') {
       log.info(desc);
-    } else {
-      log.error(desc);
+      return;
+    }
+    log.error(desc);
+    if (details.type === 'GPU') {
+      // GPU 进程异常退出后触发可见窗口重绘，缓解恢复后留黑块/花屏帧。
+      for (const win of BrowserWindow.getAllWindows()) {
+        if (!win.isDestroyed() && win.isVisible() && !win.webContents.isDestroyed()) {
+          try {
+            win.webContents.invalidate();
+          } catch {
+            /* ignore repaint failure on closing window */
+          }
+        }
+      }
+      const crashStatus = gpuCrashTracker.record(Date.now());
+      if (crashStatus.thresholdReached) {
+        try {
+          const armed = recordGpuCrashLoopFallback({
+            userDataDir: app.getPath('userData'),
+            appVersion: app.getVersion(),
+            crashCount: crashStatus.crashCount,
+          });
+          if (armed) {
+            log.warn(
+              `GPU process crashed ${crashStatus.crashCount} times within window — ` +
+                'armed software-rendering fallback for next restart ' +
+                '(set XDT_DISABLE_HARDWARE_ACCELERATION=0 to bypass)',
+            );
+          }
+        } catch (err) {
+          log.warn('failed to persist GPU crash-loop fallback policy', err);
+        }
+      }
     }
   });
 

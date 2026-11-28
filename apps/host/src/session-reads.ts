@@ -1,6 +1,7 @@
 import type { DbClient } from '../../desktop/src/main/localDb/client/DbClient.js';
 import {
   flattenSessionReadRow,
+  isSessionImAttachedInDb,
   projectSessionDetail,
   projectSessionReadResult,
   selectOrdinarySessionListRows,
@@ -23,7 +24,10 @@ export async function readHostSessionList(db: DbClient['drizzle'], body?: Record
 }
 
 export async function readHostSession(db: DbClient['drizzle'], sessionId: string) {
-  const row = await selectSessionWithCount(db, sessionId);
+  const [row, imAttached] = await Promise.all([
+    selectSessionWithCount(db, sessionId),
+    isSessionImAttachedInDb(db, sessionId),
+  ]);
   if (!row || row.status === 'deleted') throw new Error('session not found');
-  return projectSessionDetail(row);
+  return { ...projectSessionDetail(row), imAttached };
 }

@@ -15,9 +15,22 @@ export default {
     sol:{about:'GPT-6.1 Sol with Codex Ultrafast entitlement'},
     'legacy-sol':{about:'GPT-6 Sol reasoning metadata'},
     unavailable:{about:'Account has not enabled Ultrafast'},
+    'third-party-speed':{about:'#13496: supplier-declared Ultrafast unavailable on this Codex connection'},
     'owner-repair':{about:'Same-owner generation change recovers an in-flight image capability save'},
   },
   async check(page,ui) {
+    if (ui.case === 'third-party-speed') {
+      const speed = page.getByText(await ui.t('newChat.modelSelector.speed.ultrafast'), { exact: true });
+      const row = speed.locator('..');
+      await row.scrollIntoViewIfNeeded();
+      await ui.capture('ultrafast-availability', { locator: row });
+      if (ui.role === 'before') return;
+      const expected = await ui.t('settings.providers.models.advanced.ultrafastDeclaredUnavailable');
+      if (!(await row.textContent())?.includes(expected)) {
+        throw Error('Model details do not explain the difference between the supplier declaration and availability');
+      }
+      return;
+    }
     if (ui.case.startsWith('pricing')) {
       const price = page.getByRole('region', { name: await ui.t('settings.providers.models.advanced.pricing'), exact: true });
       const input = price.getByRole('spinbutton', { name: await ui.t('settings.providers.models.priceOverride.input'), exact: true });
@@ -89,20 +102,25 @@ export default {
     await page.keyboard.press('Escape');
     const compaction = page.locator('[data-model-compaction]');
     await compaction.locator('summary').click();
-    const trigger = compaction.getByRole('combobox');
-    await trigger.click();
-    await ui.capture('compaction-options');
-    await page.getByRole('option', { name: '80%', exact: true }).click();
-    await page.waitForFunction(() => document.querySelector('[data-model-compaction] [role=combobox]')?.textContent?.includes('80%'));
+    // 滑杆用键盘驱动（与 model-speed fixture 同一手法）：90 → 80 共十次 ArrowLeft。
+    const thumb = compaction.getByRole('slider');
+    await thumb.focus();
+    await ui.capture('compaction-slider');
+    for (let step = 0; step < 10; step += 1) {
+      const before = await thumb.getAttribute('aria-valuenow');
+      await thumb.press('ArrowLeft');
+      // 等数值真的前进一步再按下一格，不靠固定时序赌写入快慢。
+      await page.waitForFunction(
+        (prev) => document.querySelector('[data-model-compaction] [role="slider"]')?.getAttribute('aria-valuenow') !== prev,
+        before,
+      );
+    }
+    await page.waitForFunction(() => document.querySelector('[data-model-compaction] span.tabular-nums')?.textContent?.trim() === '80%');
     await compaction.scrollIntoViewIfNeeded();
     await ui.capture('model-compaction');
     await ui.capture('model-compaction-closeup', { locator: compaction });
-    await page.getByRole('listbox').waitFor({ state: 'detached' });
-    await trigger.click();
-    await page.getByRole('listbox').waitFor();
-    await page.getByRole('option', { name: await ui.t('settings.providers.models.advanced.restoreDefault'), exact: true }).click();
-    const defaultCompaction = await ui.t('settings.providers.models.advanced.compaction.default', { pct: 90 });
-    await page.waitForFunction(expected => document.querySelector('[data-model-compaction] [role=combobox]')?.textContent?.includes(expected), defaultCompaction);
+    await compaction.getByRole('button', { name: await ui.t('settings.providers.models.advanced.compaction.restoreAria'), exact: true }).click();
+    await page.waitForFunction(() => document.querySelector('[data-model-compaction] span.tabular-nums')?.textContent?.trim() === '90%');
     await compaction.scrollIntoViewIfNeeded();
     await ui.capture('default-compaction');
     await ui.capture('default-compaction-closeup', { locator: compaction });

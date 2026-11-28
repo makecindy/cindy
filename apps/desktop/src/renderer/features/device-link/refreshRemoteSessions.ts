@@ -1,3 +1,5 @@
+import { remoteProjectAliases } from './remoteProjectAliases';
+import { projectAliasesForSessionList } from '@cindy/maker-shared/project-alias-sync';
 /**
  * refreshRemoteDeviceSessions —— 立即(可 await)重拉某被控设备的会话列表(bootstrap / reconcile)。
  *
@@ -40,11 +42,16 @@ const log = createLogger('device-link-refresh');
  * (review: codex P1)。断连分片是**有意保留**的,快照必须带上它们。
  */
 export function collectSessionListSnapshot(): CachedDeviceSessionsSnapshot[] {
-  return remoteProjectsStore.getAllDeviceIds().map((deviceId) => ({
-    deviceId,
-    deviceName: remoteProjectsStore.getDeviceName(deviceId) ?? deviceId,
-    sessions: [...remoteProjectsStore.getDeviceSessions(deviceId)],
-  }));
+  const snapshots = remoteProjectAliases.getSnapshot();
+  return remoteProjectsStore.getAllDeviceIds().map((deviceId) => {
+    const sessions = [...remoteProjectsStore.getDeviceSessions(deviceId)];
+    return {
+      deviceId,
+      deviceName: remoteProjectsStore.getDeviceName(deviceId) ?? deviceId,
+      sessions,
+      projectAliases: projectAliasesForSessionList(snapshots.get(deviceId), sessions),
+    };
+  });
 }
 
 /** 与 listing tier 的拉取上限一致(useDeviceLinkRemoteProjects 的 LIST_LIMIT)。 */

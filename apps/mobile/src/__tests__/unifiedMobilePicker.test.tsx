@@ -24,11 +24,11 @@ vi.mock('@react-native-async-storage/async-storage', () => ({
     removeItem: vi.fn(async (key: string) => { asyncStore.delete(key); }),
   },
 }));
-const test = vi.hoisted(() => ({ view: null as any, favoritesReady:true, quotas:{} as any, syncError:null as unknown, prefs: {favorites:[],engines:{}} as any, save: vi.fn(), entries: [] as any[],
+const test = vi.hoisted(() => ({ view: null as any, favoritesReady:true, quotas:{} as any, pluginEngineQuotas:{} as any, now: 0, syncError:null as unknown, prefs: {favorites:[],engines:{}} as any, save: vi.fn(), entries: [] as any[],
   // 按传入的目录派生(供应商组用例:每台电脑的供应商各有自己的行与正在用的来源);缺省用上面的固定值。
   entriesFor: null as null | ((providers: any[]) => any[]), activeSource: null as null | ((input: any) => string | null) }));
 vi.mock('@/session/UnifiedModelPickerView', () => ({ UnifiedModelPickerView: (p:any) => {test.view=p;return null;} }));
-vi.mock('@/session/useMobileModelQuotas',()=>({useMobileModelQuotas:()=>({quotas:test.quotas,now:0,quotaOf:(device:string,id:string)=>test.quotas[JSON.stringify([device,id])]})}));
+vi.mock('@/session/useMobileModelQuotas',()=>({useMobileModelQuotas:()=>({quotas:test.quotas,pluginEngineQuotas:test.pluginEngineQuotas,now:test.now,quotaOf:(device:string,id:string)=>test.quotas[JSON.stringify([device,id])]})}));
 vi.mock('@/session/mobileModelPreferences', async () => {
   const {useReducer} = await import('react');
   return {useMobileModelPreferences:()=>{
@@ -42,7 +42,7 @@ vi.mock('@/session/draftModelMemory',()=>({useDraftModelMemoryVersion:()=>0}));
 vi.mock('@/session/sessionModelMirror',()=>({useSessionModelMirrorVersion:()=>0}));
 vi.mock('@/session/modelPickerRows',()=>({budgetRowDisabled:()=>false,presentPickerPrice:()=>null}));
 vi.mock('@/session/unifiedMobileModels',async importOriginal=>({...await importOriginal<any>(),mobileUnifiedEntries:(providers:any[])=>test.entriesFor?test.entriesFor(providers):test.entries}));
-vi.mock('react-i18next',()=>({useTranslation:()=>({t:(key:string, options?: { provider?: string; device?: string }) =>
+vi.mock('react-i18next',()=>({useTranslation:()=>({i18n:{language:'en'},t:(key:string, options?: { provider?: string; device?: string }) =>
   key === 'models.unified.remoteCopyUnavailableOn' ? `${options?.provider} on ${options?.device} is unavailable` : key})}));
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT=true;
 let root:ReturnType<typeof createRoot>;
@@ -50,7 +50,7 @@ beforeEach(async ()=>{
   await flushRemoteAgentModelMemory();
   asyncStore.clear();
   resetRemoteAgentModelMemory();
-  test.favoritesReady=true;test.syncError=null;test.quotas={};test.entriesFor=null;test.activeSource=null;test.save.mockReset().mockImplementation(async value => {test.prefs=value;});test.prefs={favorites:[],engines:{}};test.entries=[{
+  test.favoritesReady=true;test.syncError=null;test.quotas={};test.pluginEngineQuotas={};test.now=0;test.entriesFor=null;test.activeSource=null;test.save.mockReset().mockImplementation(async value => {test.prefs=value;});test.prefs={favorites:[],engines:{}};test.entries=[{
   providerId:'account',modelId:'model',displayName:'Model',candidates:['codex','claude-code'],recommended:'codex',nativeAgent:'codex',
   capabilities:{codex:{wireModelId:'codex/model',efforts:['medium','high'],defaultEffort:'medium',supportsFastMode:true,contextWindow:200000},
   'claude-code':{wireModelId:'model',efforts:['medium','high'],defaultEffort:'medium',supportsFastMode:false,contextWindow:200000}},
@@ -1233,4 +1233,353 @@ it('keeps a listed share in the Source page while it has no models, and explains
   expect(test.view.filters.some((filter: any) => filter.id === shareFilter)).toBe(true);
   await act(async () => test.view.onFilter(shareFilter));
   expect(test.view.emptyHint).toBe('models.picker.noResults');
+});
+
+// 生产入口与可观察结果：UnifiedModelPickerSheet + pluginEngines + mobileModelPreferences；
+// 手机端插件引擎行支持打开配置页收藏、取消收藏与编辑档位，收藏以 wire 兼容的 agent:'claude-code'(cc) 持久化，
+// 在「全部」与「收藏」筛选下均可见且点击直接带档位应用并关闭选择器，隐藏引擎的收藏照常解析。
+// 规则依据：protocol-compatibility/plugin-harnesses.md「插件引擎模型收藏」。
+// 覆盖缺口：此前手机端插件引擎没有配置页与收藏能力。最小失败输入与 tier：unit(jsdom)，点收藏未写入或切到收藏筛选消失。
+it('favorites, edits, selects, and removes plugin engine models in UnifiedModelPickerSheet', async () => {
+  const selectPlugin = vi.fn(async () => true);
+  const pluginEngine = {
+    key: 'dsh-plugin:dsh',
+    providerId: 'acp-plugin:dsh-plugin:dsh',
+    name: 'DeepSeek Harness',
+    availability: { state: 'available' as const },
+    models: [
+      { id: 'pro', displayName: 'Pro', efforts: ['low', 'high', 'max'] as ('low' | 'high' | 'max')[], defaultEffort: 'high' as const },
+    ],
+    permissionModes: [{ id: 'ask', displayName: 'Ask' }],
+    defaultPermissionMode: 'ask',
+  };
+  const { onClose } = await mount(undefined, {
+    unified: {
+      scope: 'user-device',
+      agents: ['codex', 'claude-code'],
+      loadCapabilities: async () => ({ hasFastMode: true }),
+      onSelect: vi.fn(async () => true),
+      pluginEngines: { engines: [pluginEngine], active: null, onSelect: selectPlugin },
+    },
+  });
+
+  // Open options for plugin engine row, adjust effort to 'max', and favorite it.
+  const pluginRow = test.view.pluginEngines.groups[0].rows[0];
+  await act(async () => test.view.pluginEngines.onOptions(pluginRow));
+  expect(test.view.pluginEngineOptions.isFavorite).toBe(false);
+  await act(async () => test.view.pluginEngineOptions.onChangeEffort('max'));
+  await act(async () => test.view.pluginEngineOptions.onFavorite());
+  expect(test.prefs.favorites).toEqual([
+    expect.objectContaining({
+      providerId: pluginEngine.providerId,
+      modelId: 'pro',
+      agent: 'claude-code',
+      effort: 'max',
+      fast: false,
+    }),
+  ]);
+  expect(test.view.pluginEngineOptions.isFavorite).toBe(true);
+
+  // Back to list and filter by 'favorites': plugin engine favorite appears and is selectable.
+  await act(async () => test.view.onBack());
+  await act(async () => test.view.onFilter('favorites'));
+  const favGroup = test.view.groups.find((g: any) => g.key === 'favorites');
+  expect(favGroup.items).toHaveLength(1);
+  expect(favGroup.items[0]).toMatchObject({
+    kind: 'pluginEngine',
+    row: expect.objectContaining({ providerId: pluginEngine.providerId, modelId: 'pro', effort: 'max' }),
+  });
+
+  // Edit the saved favorite's effort from 'max' to 'low'.
+  await act(async () => test.view.pluginEngines.onOptions(favGroup.items[0].row));
+  await act(async () => test.view.pluginEngineOptions.onEditFavorite());
+  await act(async () => test.view.pluginEngineOptions.onChangeEffort('low'));
+  await act(async () => test.view.pluginEngineOptions.onSaveEdit());
+  expect(test.prefs.favorites[0]).toMatchObject({ providerId: pluginEngine.providerId, modelId: 'pro', effort: 'low' });
+
+  // Selecting the favorite row invokes onSelect with the saved effort and closes the sheet.
+  await act(async () => test.view.onBack());
+  const updatedFavRow = test.view.groups.find((g: any) => g.key === 'favorites').items[0].row;
+  await act(async () => test.view.pluginEngines.onSelect(updatedFavRow));
+  expect(selectPlugin).toHaveBeenCalledWith({
+    providerId: pluginEngine.providerId,
+    modelId: 'pro',
+    effort: 'low',
+  });
+  expect(onClose).toHaveBeenCalledOnce();
+});
+
+// 生产入口与可观察结果：UnifiedModelPickerSheet 未选中的插件引擎模型在详情页调整思考深度后，
+// 返回列表保留该档位展示、再次打开详情保持该档位、点击列表行以新档位调用 onSelect；
+// 从匹配当前活跃配置的收藏进入详情改档时立即应用到当前会话且保留原收藏不变。
+// 最小失败输入与 tier：unit(jsdom)，返回列表后点击模型仍传入旧默认档位 'high' 而非 'max'。
+it('retains adjusted effort for unselected plugin engine rows after returning to list and applies live favorite edits', async () => {
+  const selectPlugin = vi.fn(async () => true);
+  const pluginEngine = {
+    key: 'dsh-plugin:dsh',
+    providerId: 'acp-plugin:dsh-plugin:dsh',
+    name: 'DeepSeek Harness',
+    availability: { state: 'available' as const },
+    models: [
+      { id: 'pro', displayName: 'Pro', efforts: ['low', 'high', 'max'] as ('low' | 'high' | 'max')[], defaultEffort: 'high' as const },
+    ],
+    permissionModes: [{ id: 'ask', displayName: 'Ask' }],
+    defaultPermissionMode: 'ask',
+  };
+  await mount(undefined, {
+    unified: {
+      scope: 'user-device',
+      agents: ['codex', 'claude-code'],
+      loadCapabilities: async () => ({ hasFastMode: true }),
+      onSelect: vi.fn(async () => true),
+      pluginEngines: { engines: [pluginEngine], active: null, onSelect: selectPlugin },
+    },
+  });
+
+  const initialRow = test.view.pluginEngines.groups[0].rows[0];
+  expect(initialRow.effort).toBe('high');
+  await act(async () => test.view.pluginEngines.onOptions(initialRow));
+  await act(async () => test.view.pluginEngineOptions.onChangeEffort('max'));
+  expect(test.view.pluginEngineOptions.notice).toBe('models.unified.parametersSaved');
+  await act(async () => test.view.onBack());
+
+  // Returning to list preserves the adjusted effort on the row, on reopening options, and on row selection.
+  const updatedRow = test.view.pluginEngines.groups[0].rows[0];
+  expect(updatedRow.effort).toBe('max');
+  await act(async () => test.view.pluginEngines.onOptions(updatedRow));
+  expect(test.view.pluginEngineOptions.effort).toBe('max');
+  await act(async () => test.view.onBack());
+
+  await act(async () => test.view.pluginEngines.onSelect(test.view.pluginEngines.groups[0].rows[0]));
+  expect(selectPlugin).toHaveBeenCalledWith({
+    providerId: pluginEngine.providerId,
+    modelId: 'pro',
+    effort: 'max',
+  });
+
+  // Adjusting effort on an opened favorite that matches the live active selection applies live and keeps the favorite intact.
+  selectPlugin.mockClear();
+  test.prefs.favorites = [
+    { uid: 'fav-live', providerId: pluginEngine.providerId, modelId: 'pro', agent: 'claude-code', effort: 'max', fast: false },
+  ];
+  await mount(undefined, {
+    unified: {
+      scope: 'user-device',
+      agents: ['codex', 'claude-code'],
+      loadCapabilities: async () => ({ hasFastMode: true }),
+      onSelect: vi.fn(async () => true),
+      pluginEngines: {
+        engines: [pluginEngine],
+        active: { providerId: pluginEngine.providerId, modelId: 'pro', effort: 'max' },
+        onSelect: selectPlugin,
+      },
+    },
+  });
+  const favRow = test.view.groups.find((g: any) => g.key === 'favorites').items[0].row;
+  await act(async () => test.view.pluginEngines.onOptions(favRow));
+  await act(async () => test.view.pluginEngineOptions.onChangeEffort('low'));
+  expect(selectPlugin).toHaveBeenCalledWith({
+    providerId: pluginEngine.providerId,
+    modelId: 'pro',
+    effort: 'low',
+  });
+  expect(test.view.pluginEngineOptions.notice).toBe('models.unified.originalFavoriteKept');
+  expect(test.prefs.favorites[0].effort).toBe('max');
+});
+
+it('lists local and remote plugin engines in Sources, supports shared plugin engine favorites, and uses onConfigure without closing', async () => {
+  const onSelectPlugin = vi.fn(async () => true);
+  const onConfigurePlugin = vi.fn(async () => true);
+  const localEngine = {
+    key: 'dsh:dsh',
+    providerId: 'acp-plugin:dsh:dsh',
+    ghostId: 'dsh',
+    harnessId: 'dsh',
+    name: 'DeepSeek Harness',
+    availability: { state: 'available' as const },
+    models: [{ id: 'deepseek-v4', displayName: 'DeepSeek V4', efforts: ['low', 'high'] as ('low' | 'high')[], defaultEffort: 'high' as const }],
+    permissionModes: [{ id: 'default', displayName: 'Default' }],
+    defaultPermissionMode: 'default',
+  };
+  const sharedEngine = {
+    ...localEngine,
+    deviceId: 'share:plugin-1',
+    deviceName: 'Alice Share',
+    favoriteSource: { shareId: 'plugin-1', memberId: 'alice', providerId: 'acp-plugin:dsh:dsh', owner: { region: 'global' as const } },
+  };
+  const { onClose } = await mount(undefined, {
+    unified: {
+      scope: 'user-device',
+      agents: ['codex'],
+      loadCapabilities: async () => ({ hasFastMode: true }),
+      onSelect: vi.fn(async () => true),
+      pluginEngines: {
+        engines: [localEngine, sharedEngine],
+        active: { providerId: 'acp-plugin:dsh:dsh', deviceId: 'share:plugin-1', modelId: 'deepseek-v4', effort: 'high' },
+        onSelect: onSelectPlugin,
+        onConfigure: onConfigurePlugin,
+      },
+    },
+  });
+
+  const pluginFilters = test.view.filters.filter((f: any) => f.pluginEngineMark);
+  expect(pluginFilters).toHaveLength(2);
+  expect(pluginFilters[1].remote).toMatchObject({ deviceId: 'share:plugin-1', deviceName: 'Alice Share' });
+
+  // Filtering by the shared plugin engine keeps only that remote plugin group and hides built-in groups.
+  await act(async () => test.view.onFilter(pluginFilters[1].id));
+  expect(test.view.groups).toEqual([]);
+  expect(test.view.pluginEngines.groups).toHaveLength(1);
+  expect(test.view.pluginEngines.groups[0].deviceId).toBe('share:plugin-1');
+  expect(test.view.pluginEngines.groups[0].rows[0].remoteDevice).toEqual({ deviceId: 'share:plugin-1', name: 'Alice Share' });
+
+  // Open options on the shared plugin engine row and favorite it; favorite persists with share wire key and cc wire agent.
+  const sharedRow = test.view.pluginEngines.groups[0].rows[0];
+  await act(async () => test.view.pluginEngines.onOptions(sharedRow));
+  await act(async () => test.view.pluginEngineOptions.onFavorite());
+  expect(test.prefs.favorites).toEqual([expect.objectContaining({
+    agent: 'claude-code',
+    providerId: 'provider-share-favorite:["plugin-1","alice","acp-plugin:dsh:dsh","global"]',
+    modelId: 'deepseek-v4',
+    effort: 'high',
+    fast: false,
+  })]);
+  await act(async () => test.view.onFilter('all'));
+  const favGroup = test.view.groups.find((g: any) => g.key === 'favorites');
+  expect(favGroup.items).toEqual([expect.objectContaining({
+    kind: 'pluginEngine',
+    row: expect.objectContaining({
+      providerId: 'acp-plugin:dsh:dsh',
+      deviceId: 'share:plugin-1',
+      modelId: 'deepseek-v4',
+      effort: 'high',
+    }),
+  })]);
+
+  // Changing effort on the active plugin engine row uses onConfigure without closing the sheet.
+  await act(async () => test.view.pluginEngineOptions.onChangeEffort('low'));
+  expect(onConfigurePlugin).toHaveBeenCalledWith({
+    providerId: 'acp-plugin:dsh:dsh',
+    deviceId: 'share:plugin-1',
+    modelId: 'deepseek-v4',
+    effort: 'low',
+  });
+  expect(onSelectPlugin).not.toHaveBeenCalled();
+  expect(onClose).not.toHaveBeenCalled();
+});
+
+it('calls pluginEngines.onOpen once per open even when re-rendered with a fresh callback reference', async () => {
+  const firstOpen = vi.fn();
+  const secondOpen = vi.fn();
+  const engine = {
+    key: 'dsh:dsh',
+    providerId: 'acp-plugin:dsh:dsh',
+    name: 'DeepSeek Harness',
+    availability: { state: 'available' as const },
+    models: [{ id: 'deepseek-v4', displayName: 'DeepSeek V4', efforts: [] }],
+    permissionModes: [{ id: 'default', displayName: 'Default' }],
+    defaultPermissionMode: 'default',
+  };
+  await mount(undefined, {
+    unified: {
+      scope: 'user-device',
+      agents: ['codex'],
+      loadCapabilities: async () => ({ hasFastMode: true }),
+      onSelect: vi.fn(async () => true),
+      pluginEngines: { engines: [engine], active: null, onSelect: vi.fn(async () => true), onOpen: firstOpen },
+    },
+  });
+  expect(firstOpen).toHaveBeenCalledTimes(1);
+
+  await mount(undefined, {
+    unified: {
+      scope: 'user-device',
+      agents: ['codex'],
+      loadCapabilities: async () => ({ hasFastMode: true }),
+      onSelect: vi.fn(async () => true),
+      pluginEngines: { engines: [engine], active: null, onSelect: vi.fn(async () => true), onOpen: secondOpen },
+    },
+  });
+  expect(firstOpen).toHaveBeenCalledTimes(1);
+  expect(secondOpen).not.toHaveBeenCalled();
+});
+
+// 生产入口与可观察结果：真实 UnifiedModelPickerSheet + formatPluginEnginePickerQuota +
+// formatPluginEngineModelQuota + resolveMobilePluginEngineFavorite；验证移动端插件引擎的
+// 分组标题、来源页进度条与文案、各模型行及收藏行均按内置订阅模型口径展示周配额。
+// 规则依据：model-selector-unified 与 mobile-development 跨端展示一致性。
+// 覆盖缺口：此前无端到端验证多模型分组插件（如 Antigravity 无 models[]）在 UnifiedModelPickerSheet
+// 中向组头、来源页和收藏行输出对齐配额的测试。
+// 最小失败输入与 tier：unit(jsdom)；来源页把 5h 紧缩百分比拼成 "8% · 2h"、或 Gemini 行/收藏行无配额。
+it('aligns plugin engine group header, Sources quota bar/label, model rows, and favorite rows with built-in providers', async () => {
+  const now = 1_700_000_000_000;
+  test.now = now;
+  const agy = {
+    key: 'antigravity:agy',
+    providerId: 'acp-plugin:antigravity:agy',
+    name: 'Antigravity',
+    reportsUsage: true,
+    availability: { state: 'available' as const },
+    models: [
+      { id: 'gemini-4-neon', displayName: 'Gemini 4 Neon', efforts: ['high' as const, 'max' as const], defaultEffort: 'high' as const },
+      { id: 'claude-opus-4-7', displayName: 'Claude Opus 4.7', efforts: ['high' as const], defaultEffort: 'high' as const },
+    ],
+    permissionModes: [{ id: 'default', displayName: 'Default' }],
+    defaultPermissionMode: 'default',
+  };
+  test.pluginEngineQuotas = {
+    [agy.providerId]: {
+      updatedAt: now,
+      windows: [
+        { label: 'Gemini Models · weekly', windowMinutes: 10080, remainingPercent: 95, resetsAt: now + 7 * 24 * 3_600_000 },
+        { label: 'Gemini Models · 5h', windowMinutes: 300, remainingPercent: 80, resetsAt: now + 4 * 3_600_000 },
+        { label: 'Claude and GPT models · weekly', windowMinutes: 10080, remainingPercent: 60, resetsAt: now + 6 * 24 * 3_600_000 },
+        { label: 'Claude and GPT models · 5h', windowMinutes: 300, remainingPercent: 8, resetsAt: now + 2 * 3_600_000 },
+      ],
+    },
+  };
+  test.prefs = {
+    favorites: [
+      { uid: 'fav-agy', providerId: agy.providerId, modelId: 'gemini-4-neon', agent: 'claude-code', effort: 'max', fast: false },
+    ],
+    engines: {},
+  };
+
+  await mount(undefined, {
+    unified: {
+      scope: 'user-device',
+      agents: ['codex'],
+      loadCapabilities: async () => ({ hasFastMode: true }),
+      onSelect: vi.fn(async () => true),
+      pluginEngines: { engines: [agy], active: null, onSelect: vi.fn(async () => true) },
+    },
+  });
+
+  // Group header keeps the two pools apart, each on its weekly remaining (not 5h 8%).
+  const agyGroup = test.view.pluginEngines.groups[0];
+  expect(agyGroup.quota).toMatchObject({
+    summary: 'Gemini 95% · Claude & GPT 60%',
+    remaining: 60,
+    isMultiGroup: true,
+  });
+  expect(agyGroup.quota.groups.map((group: any) => [group.label, group.remaining, group.level]))
+    .toEqual([['Gemini', 95, 'normal'], ['Claude & GPT', 60, 'warn']]);
+
+  // Sources filter uses weekly remaining + built-in `[countdown, remaining]` label format.
+  const agyFilter = test.view.filters.find((item: any) => item.pluginEngineMark?.name === 'Antigravity');
+  expect(agyFilter?.quota).toEqual({
+    remaining: 60,
+    label: expect.stringContaining('session.menu.usage.remaining'),
+  });
+  expect(agyFilter?.quota?.label).not.toMatch(/^8%/);
+
+  // Per-model rows receive their own model group's weekly quota.
+  const geminiRow = agyGroup.rows.find((row: any) => row.modelId === 'gemini-4-neon');
+  const claudeRow = agyGroup.rows.find((row: any) => row.modelId === 'claude-opus-4-7');
+  expect(geminiRow?.quotaLabel).toContain('95%');
+  expect(claudeRow?.quotaLabel).toContain('60%');
+
+  // Plugin engine favorite row also receives Gemini's weekly quota.
+  const favGroup = test.view.groups.find((group: any) => group.key === 'favorites');
+  expect(favGroup?.items?.[0]?.row?.quotaLabel).toContain('95%');
 });

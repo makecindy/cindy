@@ -2,10 +2,12 @@
 import { Info, CheckCircle2 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { Button } from '@/components/ui/button';
+import { cn } from '@/lib/utils';
 import type { InstalledGhost } from '../../../shared/ghost';
 import { featureRetirementById } from '../../../shared/featureRetirements';
-import { GhostPluginIcon } from './GhostPluginIcon';
+import { PluginDetailHero } from './PluginDetailHero';
 import { PluginDetailTopBar, usePluginDetailScrolled } from './PluginDetailTopBar';
+import { PLUGIN_MANAGEMENT_FRAME_CLASS } from './PluginManagementLayout';
 
 export function RetiredFeatureDetail({
   ghost,
@@ -30,22 +32,12 @@ export function RetiredFeatureDetail({
   if (!descriptor) return null;
   const base = 'settings.ghosts.retirement';
   return (
-    <div className="h-full overflow-y-auto bg-[var(--surface)]" onScroll={onScroll}>
-      <PluginDetailTopBar label={t('settings.ghosts.title')} onBack={onBack} scrolled={scrolled} />
-      <article className="mx-auto max-w-[824px] px-8 pb-12 pt-5">
-        <header className="flex items-center gap-5">
-          <GhostPluginIcon
-            iconDataUrl={ghost.iconDataUrl}
-            iconId={ghost.manifest.id}
-            iconName={ghost.manifest.name}
-            size="detail"
-          />
-          <div>
-            <h1 className="text-28 font-medium text-[var(--text-primary)]">
-              {ghost.manifest.name}
-            </h1>
-            <p className="mt-2 text-13 text-[var(--text-tertiary)]">{t(`${base}.status`)}</p>
-          </div>
+    <div className="h-full overflow-y-auto bg-[var(--surface)] [scrollbar-gutter:stable_both-edges]" onScroll={onScroll}>
+      <PluginDetailTopBar label={t('settings.ghosts.detail.backToList')} onBack={onBack} scrolled={scrolled} />
+      <article className={cn(PLUGIN_MANAGEMENT_FRAME_CLASS, 'pb-12 pt-5')}>
+        <header>
+          <PluginDetailHero id={ghost.manifest.id} name={ghost.manifest.name}
+            iconDataUrl={ghost.iconDataUrl} status={t(`${base}.status`)} />
         </header>
         <section className="mt-8 rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-6">
           <div className="flex items-center gap-2 text-[var(--text-primary)]">
@@ -77,18 +69,18 @@ export function RetiredFeatureDetail({
                 {t(`${base}.${replacement.enabled ? 'installed' : 'installedDisabled'}`)}
               </p>
             )}
-            <div className="mt-5 flex flex-wrap gap-3">
+            <div className="mt-5 flex flex-wrap justify-end gap-3">
+              {!replacement && (
+                <Button variant="secondary" disabled={busy} onClick={onDismiss}>
+                  {t(`${base}.later`)}
+                </Button>
+              )}
               <Button variant="cta" loading={busy} disabled={busy} onClick={onReplace}>
                 {t(
                   `${base}.${replacement ? (replacement.enabled ? 'open' : 'enable') : 'install'}`,
                   { name: t(`${descriptor.copyKey}.replacementName`) },
                 )}
               </Button>
-              {!replacement && (
-                <Button variant="secondary" disabled={busy} onClick={onDismiss}>
-                  {t(`${base}.later`)}
-                </Button>
-              )}
             </div>
           </section>
         ) : null}

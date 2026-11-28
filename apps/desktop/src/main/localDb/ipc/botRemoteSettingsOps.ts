@@ -15,7 +15,8 @@ import {
   type BotImConnectionLanesPayload,
   type BotImConnectionListPayload,
 } from '../../../shared/botImConnection.js';
-import type { BotModelRoute } from '../../../shared/botModelChain.js';
+import { parseRemoteBotModelChain, type BotModelRoute } from '../../../shared/botModelChain.js';
+import type { ModelGroupsConfig } from '../../../shared/modelGroups.js';
 import type { BotLifecycleActionRequest } from '../../../shared/botLifecycle.js';
 import type { BotMemoryDeleteInput, BotMemoryUpdateInput } from '../../../shared/botMemory.js';
 import type { BotCoreSkill, BotSkillDetail, BotSkillSaveInput, BotSkillSummary } from '../../../shared/botSkill.js';
@@ -40,6 +41,10 @@ export interface BotSettingsOpsDeps {
   retryInvitation(botId: string): Promise<unknown>;
   lifecycle(request: BotLifecycleActionRequest, guard: () => Promise<void>): Promise<unknown>;
   defaultModelChain(): Promise<BotModelRoute[]>;
+  /** This computer's smart routes, so a controller can pick one as the default buddy model (optional in the reply). */
+  defaultModelGroups?(): ModelGroupsConfig;
+  /** Save this computer's default buddy model (a smart route is filled with its current source here). */
+  setDefaultModelChain(chain: BotModelRoute[], assertCurrent: () => void): Promise<BotModelRoute[]>;
   memory: {
     list(botId: string, query?: string): Promise<unknown>;
     read(botId: string, filename: string): Promise<unknown>;
@@ -216,7 +221,20 @@ export function createBotRemoteSettingsOps(deps: BotSettingsOpsDeps): Partial<Re
       return deps.lifecycle({ botId, action: action as BotLifecycleActionRequest['action'], confirmName, worktreeDisposition, keepTaskHistory: call.args.keepTaskHistory === true },
         async () => call.assertCurrent());
     },
-    'models.default': async () => ({ modelChain: await deps.defaultModelChain() }),
+    'models.default': async () => {
+      let modelGroups: ModelGroupsConfig | undefined;
+      try { modelGroups = deps.defaultModelGroups?.(); } catch { modelGroups = undefined; }
+      return { modelChain: await deps.defaultModelChain(), ...(modelGroups?.routes.length ? { modelGroups } : {}) };
+    },
+    'models.setDefault': async call => {
+      let raw = call.args.modelChain;
+      if (typeof raw === 'string') {
+        try { raw = JSON.parse(raw); } catch { fail('modelChain is invalid'); }
+      }
+      const chain = parseRemoteBotModelChain(raw);
+      if (!chain) fail('modelChain is invalid');
+      return { modelChain: await deps.setDefaultModelChain(chain!, () => call.assertCurrent()) };
+    },
     'memory.list': async call => deps.memory.list(botOf(call), call.args.query === undefined ? '' : text(call.args.query, 'query', 200, true)),
     'memory.read': async call => deps.memory.read(botOf(call), text(call.args.filename, 'filename', 256)),
     'memory.update': async call => deps.memory.update({

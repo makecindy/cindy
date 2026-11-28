@@ -89,7 +89,7 @@ describe('provider computer session limits', () => {
       key: `device:${id}:provider`, kind: 'device', agentDeviceId: id, providerId: 'provider', limit: 4, weight: 1, paused: false,
     })) };
     const router = createProviderGroupRouter({ readGroup: () => config, listBindings: () => ({}),
-      isTurnRunning: () => false, now: () => 1_000, random: () => 0,
+      isTurnRunning: () => false, now: () => 1_000,
       // Only catalog transport is faked: both real production scheduler and
       // real executor capacity handling are used. Idle handles report zero load.
       directory: { resolveMembers: async () => config.members.map(member => ({ member, label: member.key,
