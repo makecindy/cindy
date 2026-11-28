@@ -486,6 +486,37 @@ describe('plugin engine account pool', () => {
     expect(await canSwitchPluginEngineTaskAccount('remote-t1', deps.readSession, oldHostInvoke)).toBe(false);
     expect(await preparePluginEngineAccountForSend('remote-t1', { ...deps, invokeRemote: oldHostInvoke })).toBe(false);
   });
+
+  // The remote probe and fresh start must choose from the same provider as the bound account.
+  // Moving A out while leaving B on the original route is the smallest false-positive case.
+  it('probes the bound account provider before a remote handoff', async () => {
+    await writePluginEngineBindings(ENGINE, ['task:remote-t1'], A, PROVIDER);
+    await updatePluginEnginePool(ENGINE, pool => ({
+      ...pool,
+      providers: { ab12cd34: { strategy: 'order' } },
+      placement: { [A]: 'ab12cd34' },
+      accounts: pool.accounts.map(account => account.id === A ? { ...account, paused: true } : account),
+    }));
+    const keys = { sessionId: 'remote-t1', model: 'gemini-4-neon' };
+    const options = { remote: true, ownComputer: true, isRemoteOffered: () => true };
+    const isolated = await readPluginEngineSessionAccount(PROVIDER, keys, options);
+    expect(isolated).toMatchObject({ state: 'bound', account: { paused: true, switchAvailable: false } });
+    await expect(acquirePluginEngineAccount(PROVIDER, keys.model, ['task:remote-t1'], { resuming: false }))
+      .rejects.toThrow('No subscription account is available');
+
+    // A sibling in the taken-out provider does not make that provider remotely offered.
+    await updatePluginEnginePool(ENGINE, pool => ({ ...pool, placement: { [A]: 'ab12cd34', [B]: 'ab12cd34' } }));
+    expect(await readPluginEngineSessionAccount(PROVIDER, keys, options))
+      .toMatchObject({ state: 'bound', account: { paused: true, switchAvailable: false } });
+
+    // Moving A back to the remotely offered provider makes B selectable on both paths.
+    await updatePluginEnginePool(ENGINE, pool => ({ ...pool, placement: {} }));
+    const available = await readPluginEngineSessionAccount(PROVIDER, keys, options);
+    expect(available).toMatchObject({ state: 'bound', account: { paused: true, switchAvailable: true } });
+    const lease = await acquirePluginEngineAccount(PROVIDER, keys.model, ['task:remote-t1'], { resuming: false });
+    expect(lease?.accountId).toBe(B);
+    lease?.release();
+  });
 });
 
 // plugin-security-and-authoring.md §5（存量升级无感）＋ provider-groups.md「选择方式」：旧版本存下的选法名字

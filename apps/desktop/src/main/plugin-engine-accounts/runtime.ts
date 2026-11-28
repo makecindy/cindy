@@ -793,14 +793,18 @@ export async function readPluginEngineSessionAccount(
   const binding = resolveBinding();
   if (!binding) return { providerId, state: 'unassigned' };
 
+  // A bound task starts in its account's current provider, even when its route still names the
+  // original provider. Probe that same group or the controller could retire a usable session for
+  // an account the next start cannot select.
   const targetSuffixFor = (pool: PluginEnginePoolConfig, accountId: string) =>
-    options.remote
-      ? ref.suffix
-      : pool.accounts.some(account => account.id === accountId) ? accountSuffix(pool, accountId) : ref.suffix;
+    pool.accounts.some(account => account.id === accountId) ? accountSuffix(pool, accountId) : ref.suffix;
 
   const canReplace = async (accountId: string): Promise<boolean> => {
     const latestPool = effectivePluginEnginePool(ref.engineKey);
     const targetSuffix = targetSuffixFor(latestPool, accountId);
+    // A taken-out provider is not offered to other computers. Even if it has another account,
+    // the original remote route cannot authorize a handoff into that provider.
+    if (options.remote && targetSuffix !== ref.suffix) return false;
     const targetAccounts = providerAccounts(latestPool, targetSuffix);
     const minimum = targetAccounts.some(account => account.id === accountId) ? 2 : 1;
     if (targetAccounts.length < minimum || !remoteRouteAdmits()) return false;
