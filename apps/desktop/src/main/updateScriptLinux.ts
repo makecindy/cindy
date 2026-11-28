@@ -84,6 +84,14 @@ export interface LinuxUpdateScriptParams {
   logPath: string;
   /** Only a validated, marked user install may bypass the package manager. */
   userInstallation?: LinuxUserInstallation & { version: string };
+  /** Explicit distro-owned installer; it receives the verified .deb metadata. */
+  customUpdateCommand?: string;
+  /** Stable entry point used after a system package transition. */
+  relaunchCommand?: string;
+  /** Manifest version passed to a custom installer. */
+  version?: string;
+  /** Exact CDN URL from the accepted manifest. */
+  assetUrl?: string;
   relaunchArgs?: string[];
   timings?: Partial<LinuxUpdateScriptTimings>;
 }
@@ -128,7 +136,21 @@ export function buildLinuxUpdateScript(params: LinuxUpdateScriptParams): string 
   const qLock = shellSingleQuote(lockFilePath);
   const qSha = shellSingleQuote(sha256);
   const userInstallation = params.userInstallation;
-  const launchPath = userInstallation ? `${userInstallation.prefix}/current/Cindy` : exePath;
+  const customUpdateCommand = params.customUpdateCommand;
+  const relaunchCommand = params.relaunchCommand;
+  if (Boolean(customUpdateCommand) !== Boolean(relaunchCommand)) {
+    throw new Error('Linux custom update requires both command and launcher paths');
+  }
+  if (customUpdateCommand && (
+    userInstallation || !path.posix.isAbsolute(customUpdateCommand) || !path.posix.isAbsolute(relaunchCommand!)
+    || !params.version || !/^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/.test(params.version)
+    || !params.assetUrl || params.assetUrl.length > 8192 || /[\u0000-\u001f\u007f]/.test(params.assetUrl)
+  )) {
+    throw new Error('Linux custom update requires absolute paths, a valid manifest version, and a safe asset URL');
+  }
+  const launchPath = userInstallation
+    ? `${userInstallation.prefix}/current/Cindy`
+    : relaunchCommand ?? exePath;
   const launch = [launchPath, ...(params.relaunchArgs ?? [])].map(shellSingleQuote).join(' ');
   // The relaunched app's own stdout/stderr, rewritten on every relaunch so it
   // keeps only the latest run. Chromium reports a display-backend failure only there.
@@ -257,6 +279,23 @@ export function buildLinuxUpdateScript(params: LinuxUpdateScriptParams): string 
       // from a mutable external helper or a pinned system Node installation.
       `INSTALLER=${shellSingleQuote(userInstallerSource)}`,
       `bash -c "$INSTALLER" cindy-user-install --apply ${qDeb} ${qSha} ${sizeBytes} ${shellSingleQuote(userInstallation.prefix)} ${shellSingleQuote(userInstallation.version)} ${shellSingleQuote(userInstallation.region)} ${shellSingleQuote(userInstallation.current)} >> ${qLog} 2>&1 &`,
+    ] : customUpdateCommand ? [
+      // The configured executable is a trusted launcher path, not shell text.
+      // It must return only after its package manager has completed the update.
+      `if [ -L ${qDeb} ] || [ ! -f ${qDeb} ]; then`,
+      `    echo "[$(date)] FATAL: staged package is not a regular file" >> ${qLog}`,
+      '    relaunch_app',
+      '    exit 1',
+      'fi',
+      `ACTUAL_SIZE=$(stat -c %s ${qDeb})`,
+      `ACTUAL_SHA=$(sha256sum ${qDeb} | awk '{print $1}')`,
+      `if [ "$ACTUAL_SIZE" != "${sizeBytes}" ] || [ "$ACTUAL_SHA" != ${qSha} ]; then`,
+      `    echo "[$(date)] FATAL: staged package verification failed" >> ${qLog}`,
+      '    relaunch_app',
+      '    exit 1',
+      'fi',
+      `CUSTOM_UPDATE_COMMAND=${shellSingleQuote(customUpdateCommand)}`,
+      `"$CUSTOM_UPDATE_COMMAND" --version ${shellSingleQuote(params.version!)} --url ${shellSingleQuote(params.assetUrl!)} --file ${qDeb} --sha256 ${qSha} --size ${sizeBytes} >> ${qLog} 2>&1 &`,
     ] : [
     'PKEXEC=/usr/bin/pkexec',
     'if [ ! -x "$PKEXEC" ]; then',

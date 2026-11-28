@@ -62,6 +62,21 @@ arm64 清单不写清单缓存、不通知监听者，引擎安装继续按进�
 `.app`，换架构不残留旧文件。Agent 更新查询保持严格版本比较。新增版本闸门须复用 `appUpdateRelation`，
 不要另写同版本例外。
 
+## Linux 自定义更新动作
+
+发行版可在 Cindy 启动器环境中同时设置 `CINDY_LINUX_UPDATE_COMMAND` 和
+`CINDY_LINUX_UPDATE_LAUNCHER`，把 Linux 手动更新交给系统包管理器。两项都必须是绝对、可执行文件路径；只配置一项、路径无效或不可执行时 fail closed，不回退到 `.deb` 安装。
+
+旧 Cindy 进程退出后，更新脚本会再次校验暂存 `.deb` 的 SHA-256 和大小，然后以 argv（不经 shell 解析）调用自定义动作：
+
+```text
+<command> --version <version> --url <asset-url> --file <verified-deb> --sha256 <sha256> --size <bytes>
+```
+
+动作必须保持运行直到包管理器完成，成功返回 0，失败返回非零。它负责所需的交互授权；Cindy 不会替自定义动作提权。暂存文件位于用户可写目录；若动作要提权安装该文件，必须先复制到 root 所有的私有暂存区并再次核对大小与摘要，避免校验后文件被替换。完成后 Cindy 通过 `CINDY_LINUX_UPDATE_LAUNCHER` 指定的稳定启动入口重启，并只转发白名单图形参数和 password-store 参数。自定义动作不会进入启动或空闲无人值守更新，必须由用户触发。
+
+未设置自定义动作时，Cindy 保持原有的用户目录安装和 Debian `.deb` 更新路径。
+
 ## Linux 无人值守安装
 
 空闲自动安装与启动时安装只对不需要人输密码的安装开放（`supportsUnattendedAppUpdate`）：Cindy

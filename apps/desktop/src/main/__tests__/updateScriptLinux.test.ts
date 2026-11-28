@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -74,6 +75,69 @@ describe('buildLinuxUpdateScript structure', () => {
     expect(portable).toContain('flock -n 9');
     expect(portable).toContain('INSTALL_EXIT=$?');
     if (process.platform !== 'win32') execFileSync('bash', ['-n'], { input: portable });
+  });
+
+  // Test value: production builder -> hook argv and relaunch args; protects the
+  // custom updater contract in docs/dev-rules/cindy-updater.md. Service tests
+  // do not execute the generated shell; the smallest failure is dropping or
+  // reordering one metadata argument or relaunching the immutable exe path.
+  it.runIf(process.platform === 'linux')('runs the configured installer and relaunches through the stable launcher', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-custom-update-'));
+    const debPath = path.join(root, 'verified package.deb');
+    const hookPath = path.join(root, 'custom update hook');
+    const launcherPath = path.join(root, 'stable cindy launcher');
+    const actionLog = path.join(root, 'action-args');
+    const launchLog = path.join(root, 'launch-args');
+    const lockFilePath = path.join(root, 'update.lock');
+    const logPath = path.join(root, 'update.log');
+    let launcherPid: number | undefined;
+    try {
+      const bytes = Buffer.from('verified package bytes');
+      const sha256 = createHash('sha256').update(bytes).digest('hex');
+      fs.writeFileSync(debPath, bytes);
+      fs.writeFileSync(hookPath, '#!/bin/bash\nprintf "%s\\n" "$@" > "$CINDY_TEST_ACTION_LOG"\n', { mode: 0o755 });
+      fs.writeFileSync(launcherPath, [
+        '#!/bin/bash',
+        'printf "%s\\n" "$$" "$@" > "$CINDY_TEST_LAUNCH_LOG"',
+        'exec sleep 30',
+        '',
+      ].join('\n'), { mode: 0o755 });
+      const generated = buildLinuxUpdateScript({
+        ...makeParams({
+          pid: 2_147_483_647,
+          debPath,
+          sha256,
+          sizeBytes: bytes.length,
+          lockFilePath,
+          logPath,
+        }),
+        customUpdateCommand: hookPath,
+        relaunchCommand: launcherPath,
+        version: '0.1.148',
+        assetUrl: 'https://hotfix.cindy.app/cindy/app/linux-x64/cindy-0.1.148-amd64.deb',
+        relaunchArgs: ['--ozone-platform=wayland'],
+        timings: { lockHeartbeatSeconds: 1, verifyTimeoutSeconds: 2, verifyRetryAtSeconds: 1, verifyStableSeconds: 1 },
+      });
+      const scriptPath = path.join(root, 'apply-update.sh');
+      fs.writeFileSync(scriptPath, generated, { mode: 0o700 });
+      execFileSync('/bin/bash', [scriptPath], {
+        env: { ...process.env, CINDY_TEST_ACTION_LOG: actionLog, CINDY_TEST_LAUNCH_LOG: launchLog },
+        timeout: 10_000,
+      });
+
+      expect(fs.readFileSync(actionLog, 'utf8').trim().split('\n')).toEqual([
+        '--version', '0.1.148', '--url', 'https://hotfix.cindy.app/cindy/app/linux-x64/cindy-0.1.148-amd64.deb',
+        '--file', debPath, '--sha256', sha256, '--size', String(bytes.length),
+      ]);
+      const launchArgs = fs.readFileSync(launchLog, 'utf8').trim().split('\n');
+      launcherPid = Number(launchArgs.shift());
+      expect(launchArgs).toEqual(['--ozone-platform=wayland']);
+    } finally {
+      if (launcherPid && Number.isInteger(launcherPid)) {
+        try { process.kill(launcherPid, 'SIGTERM'); } catch { /* already exited */ }
+      }
+      fs.rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it('installs the staged .deb through one pkexec bash shell', () => {

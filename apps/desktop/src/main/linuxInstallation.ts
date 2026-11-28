@@ -154,6 +154,41 @@ export function hasLinuxPkexec(
   return isExecutable('/usr/bin/pkexec') || probe('pkexec');
 }
 
+/** Optional distro-owned update handler configured by the application launcher. */
+export type LinuxUpdateActionConfig =
+  | { status: 'absent' }
+  | { status: 'invalid'; reason: string }
+  | { status: 'configured'; command: string; launcher: string };
+
+/**
+ * A custom Linux updater is an explicit launcher contract, not a command-line
+ * string. Require both absolute executable paths so the update script never
+ * evaluates shell syntax or resolves a mutable PATH entry after Cindy exits.
+ */
+export function readLinuxUpdateActionConfig(
+  env: NodeJS.ProcessEnv = process.env,
+  isExecutable: (file: string) => boolean = (file) => {
+    try {
+      fs.accessSync(file, fs.constants.X_OK);
+      return fs.statSync(file).isFile();
+    } catch { return false; }
+  },
+): LinuxUpdateActionConfig {
+  const command = env.CINDY_LINUX_UPDATE_COMMAND?.trim() ?? '';
+  const launcher = env.CINDY_LINUX_UPDATE_LAUNCHER?.trim() ?? '';
+  if (!command && !launcher) return { status: 'absent' };
+  if (!command || !launcher) {
+    return { status: 'invalid', reason: 'both command and launcher must be configured' };
+  }
+  if (!path.posix.isAbsolute(command) || !path.posix.isAbsolute(launcher)) {
+    return { status: 'invalid', reason: 'command and launcher must be absolute paths' };
+  }
+  if (!isExecutable(command) || !isExecutable(launcher)) {
+    return { status: 'invalid', reason: 'command and launcher must be executable files' };
+  }
+  return { status: 'configured', command, launcher };
+}
+
 /** Whether polkit already grants this user `pkexec` without an authentication
  * prompt, e.g. a cloud desktop whose administrator added a rule for the
  * desktop user. pkcheck without --allow-user-interaction exits 0 only when

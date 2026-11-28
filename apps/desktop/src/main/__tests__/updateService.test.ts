@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { TEST_CDN_BASE_URL as CDN_EXTERNAL_BASE_URL } from '../../test/vitest/clientEndpointsFixture';
 import { CURRENT_CINDY_REGION } from '../../shared/brandRegion';
+import type { LinuxUpdateActionConfig } from '../linuxInstallation';
 
 const originalPlatform = process.platform;
 const originalArch = process.arch;
@@ -53,9 +54,10 @@ const checkDebianManagedInstallation = vi.fn<() =>
   | { status: 'error'; error: unknown }
 >(() => ({ status: 'not-managed' }));
 const missingLinuxUserInstallTools = vi.fn(() => [] as string[]);
+const readLinuxUpdateActionConfig = vi.fn<() => LinuxUpdateActionConfig>(() => ({ status: 'absent' }));
 vi.mock('../linuxInstallation', () => ({
   findLinuxUserInstallation, checkDebianManagedInstallation, missingLinuxUserInstallTools,
-  recognizeLinuxUserInstallation, hasLinuxPkexec, isLinuxPkexecPreauthorized,
+  readLinuxUpdateActionConfig, recognizeLinuxUserInstallation, hasLinuxPkexec, isLinuxPkexecPreauthorized,
 }));
 const checkWindowsUpdaterPrerequisites = vi.fn<
   () => { satisfied: boolean; missingFiles: string[] }
@@ -300,6 +302,8 @@ beforeEach(() => {
   checkDebianManagedInstallation.mockReturnValue({ status: 'not-managed' });
   missingLinuxUserInstallTools.mockReset();
   missingLinuxUserInstallTools.mockReturnValue([]);
+  readLinuxUpdateActionConfig.mockReset();
+  readLinuxUpdateActionConfig.mockReturnValue({ status: 'absent' });
   checkWindowsUpdaterPrerequisites.mockReset();
   checkWindowsUpdaterPrerequisites.mockReturnValue({
     satisfied: true,
@@ -1174,6 +1178,48 @@ describe('checkForUpdate Linux installer flow', () => {
       expect(spawnProcess).not.toHaveBeenCalled();
       expect(exitSpy).not.toHaveBeenCalled();
       expect(service.isUpdateRelaunchImminent()).toBe(false);
+    } finally {
+      service.stopUpdateService();
+      exitSpy.mockRestore();
+    }
+  });
+
+  // Test value
+  // - Production entry and observable result: the manual relaunch listener accepts a configured updater and generates its install/relaunch transaction.
+  // - Bug/rule basis: docs/dev-rules/cindy-updater.md, Linux custom update action contract.
+  // - Existing coverage gap: unsupported non-Debian installations were only tested as rejected, with no custom updater configured.
+  // - Smallest failure: valid command/launcher pair with a non-Debian install; tier: unit.
+  it('uses an explicitly configured updater for non-Debian Linux installations', async () => {
+    readLinuxUpdateActionConfig.mockReturnValue({
+      status: 'configured',
+      command: '/nix/store/update-action/bin/cindy-update',
+      launcher: '/run/current-system/sw/bin/cindy',
+    });
+    const manifest = linuxInstallerManifest();
+    manifest.app.installer.sha256 = 'ab'.repeat(32);
+    download.mockImplementation(async ({ targetPath }: { targetPath: string }) => {
+      fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+      fs.writeFileSync(targetPath, 'verified installer');
+      return { path: targetPath, size: 123 };
+    });
+    const service = await freshUpdateService('linux', 'x64');
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
+    service.initUpdateService();
+    try {
+      await expect(service.checkForUpdate(manifest)).resolves.toBe('ready');
+      expect(service.isUpdateRelaunchImminent()).toBe(false);
+      expect(ipcHandlers.get('update-auto-settings-get')?.()).toMatchObject({ unattendedInstallSupported: false });
+      ipcListeners.get('update-relaunch')?.({}, 'dark');
+      await vi.waitFor(() => expect(spawnProcess).toHaveBeenCalledOnce());
+      const [, args] = spawnProcess.mock.calls.at(-1)! as unknown as [string, string[]];
+      expect(args[0]).toBe('-c');
+      expect(args[1]).toContain("'/nix/store/update-action/bin/cindy-update'");
+      expect(args[1]).toContain("'/run/current-system/sw/bin/cindy'");
+      expect(args[1]).toContain("--version '0.0.65'");
+      expect(args[1]).toContain(`--url '${CDN_EXTERNAL_BASE_URL}/app/linux-x64/cindy-0.0.65-amd64.deb'`);
+      expect(args[1]).toContain('--sha256');
+      expect(checkDebianManagedInstallation).not.toHaveBeenCalled();
+      expect(exitSpy).not.toHaveBeenCalled();
     } finally {
       service.stopUpdateService();
       exitSpy.mockRestore();
