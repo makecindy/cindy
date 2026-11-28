@@ -252,7 +252,7 @@ describe('sessionsStore account boundaries', () => {
     expect(view.result.current.error).toBeNull();
   });
 
-  it('keeps initial subscribers on the latest request across consecutive replacements', async () => {
+  it('keeps initial subscribers on the latest read while coalescing consecutive notifications', async () => {
     setDataOwnerGeneration('owner-a', 1);
     const oldRead = deferred<Session[]>();
     const middleRead = deferred<Session[]>();
@@ -264,6 +264,9 @@ describe('sessionsStore account boundaries', () => {
     const firstRefresh = sessionsStore.ensureByFilter('active').catch((error: unknown) => error);
     act(() => mocks.emitSessionCreated('new', { dataOwnerId: 'owner-a', ownerGeneration: 1 }));
     const lastRefresh = sessionsStore.ensureByFilter('active').catch((error: unknown) => error);
+    expect(mocks.list).toHaveBeenCalledTimes(2);
+    await act(async () => { middleRead.reject(new Error('middle failure')); });
+    expect(mocks.list).toHaveBeenCalledTimes(3);
     const failure = new Error('latest read failed');
     await act(async () => {
       latestRead.reject(failure);
@@ -274,10 +277,7 @@ describe('sessionsStore account boundaries', () => {
       expect(hook.error).toBe(failure);
       expect(hook.isLoading).toBe(false);
     }
-    await act(async () => {
-      oldRead.resolve([session('old')]);
-      middleRead.reject(new Error('middle failure'));
-    });
+    await act(async () => { oldRead.resolve([session('old')]); });
     for (const hook of view.result.current) {
       expect(hook.error).toBe(failure);
       expect(hook.sessions).toEqual([]);

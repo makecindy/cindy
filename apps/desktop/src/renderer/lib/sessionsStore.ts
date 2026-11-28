@@ -2,7 +2,7 @@ import type { CreationPreview } from '@/features/device-link/remoteProjectsStore
 import { isOrdinaryTaskListSession } from '../../shared/sessionSource';
 import { applySessionRebalancePreferencePatch } from '@/features/provider-group/sessionRebalanceCache';
 import { emitTaskTagCatalog } from '@/features/task-tags/taskTagEvents';
-import { normalizeTaskTags, reconcileTaskTags } from '@cindy/maker-shared';
+import { normalizeTaskTags, reconcileTaskTags, type TaskTag } from '@cindy/maker-shared';
 /**
  * sessionsStore — CC Agent Session 列表的模块级单例 store
  * ---------------------------------------------------------------------------
@@ -33,17 +33,15 @@ import { normalizeTaskTags, reconcileTaskTags } from '@cindy/maker-shared';
  *                                   保留旧 createSession 的"省一次 IPC"优化。
  *   - forceRefresh(filter)         单桶强制重拉，drop 桶 + 走 ensure。
  *   - forceRefreshAll()            重拉已缓存或正在加载的桶，未访问桶不动。
- *                                   sessionsBus.onRefresh / sessionsPush.onCreated
- *                                   走这条，且带 isCurrent：重拉期间保留旧列表。
  *
  * 自订阅（模块加载时一次性挂上，hook 不再重复订阅）：
  *   - sessionsBus.onPatch                → patchLocal
- *   - sessionsBus.onRefresh              → forceRefreshAll
+ *   - sessionsBus.onRefresh              → refreshAfterNotification
  *   - electronAPI.sessionsPush.onPatched → patchLocal
- *   - electronAPI.sessionsPush.onCreated → forceRefreshAll
+ *   - electronAPI.sessionsPush.onCreated → refreshAfterNotification
  *     （payload 只带 sessionId 不带完整 row，无法 prepend，需要重拉）
  *   - electronAPI.onUsageSessionSpendChanged → patchLocal(totalCostUsd)
- *   - maker.schedule.onEvent session-bound → forceRefreshAll
+ *   - maker.schedule.onEvent session-bound → refreshAfterNotification
  *     （scheduler runner 在 main 进程创建 session，不一定走 localDb sessionsPush）
  */
 
@@ -95,6 +93,11 @@ class SessionBucketCache extends Map<ListStatusFilter, Session[]> {
 
 const cache = new SessionBucketCache();
 interface FilterRequest {
+  fresh: boolean;
+  replacesInitialLoad?: boolean;
+  prependedIds?: Set<string>;
+  taskTagCatalog?: TaskTag[];
+  taskTagPatches?: Map<string, TaskTag[]>;
   promise: Promise<void>;
   resolve: (replacement?: PromiseLike<void>) => void;
   reject: (reason: unknown) => void;
@@ -111,6 +114,10 @@ function withoutHiddenSessions(list: Session[]): Session[] {
   if (hiddenSessionIds.size === 0) return list;
   const next = list.filter((session) => !hiddenSessionIds.has(session.id));
   return next.length === list.length ? list : next;
+}
+
+function reconcileSessionTags(rows: Session[], catalog: TaskTag[]): Session[] {
+  return rows.map((row) => ({ ...row, tags: reconcileTaskTags(row.tags, catalog) }));
 }
 /** 列表请求期间收到的 session 费用权威值及其本地事件版本。 */
 interface SessionSpendOverride {
@@ -193,7 +200,7 @@ function mergeSessionPatch(
  * 自动起名的「即时标题预览」叠加层（sessionId → 预览标题）。
  *
  * 为什么必须是叠加层、而不是一次性 patchLocal：新建会话的 `sessions:created` push 会
- * 触发 `forceRefreshAll`，那次重拉从 DB 拿回的行**仍带默认哨兵**（权威标题要等
+ * 触发列表重拉，拿回的行**仍带默认哨兵**（权威标题要等
  * `maker:auto-title` 落库才有），会把只写进缓存的乐观标题冲掉 —— 表现为标题先显示
  * 用户那句话、又退回「未命名任务」，直到 IPC 回来（PR #1031 review P1）。
  *
@@ -238,7 +245,7 @@ function applyAutoTitlePreviews(list: Session[]): Session[] {
  * 请求发起于这次标题变更**之前**,它的快照里还是旧标题,回来会 `cache.set` 整桶覆盖,
  * 把刚 patch 进去的权威标题冲掉。
  *
- * 典型时序(新建会话):`sessions:created` push → `forceRefreshAll()` 起飞(快照里是
+ * 典型时序(新建会话):`sessions:created` push → 列表重拉起飞(快照里是
  * 哨兵)→ main 写完占位 → `sessions:patched` 落进缓存 → 那个更早的请求才回来,把哨兵
  * 写回去,界面退到「未命名任务」直到下一次刷新。乐观预览叠加层此刻已按权威值到达的
  * 规则回收,没人再替它顶回来(PR #1031 review P1)。
@@ -360,7 +367,7 @@ function clearPendingStatusTransition(
 }
 
 /** 同桶补查已有请求在途时只记一个 dirty 位，请求结束后最多追加一轮 fresh。 */
-const trailingFilterRefreshes = new Set<ListStatusFilter>();
+const trailingFilterRefreshes = new Map<ListStatusFilter, (() => boolean) | undefined>();
 
 function belongsInFilter(status: Session['status'], filter: ListStatusFilter): boolean {
   if (status === 'deleted') return false;
@@ -669,27 +676,39 @@ async function fetchFilter(
   return result;
 }
 
-function runFilterBackfill(filter: ListStatusFilter): void {
-  void sessionsStore.ensureByFilter(filter, { fresh: true }).catch(() => {
+function runFilterBackfill(
+  filter: ListStatusFilter,
+  isCurrent?: () => boolean,
+  continuation?: FilterRequest,
+): boolean {
+  if (isCurrent && !isCurrent()) return false;
+  const refresh = sessionsStore.ensureByFilter(filter, { fresh: true, isCurrent }, continuation);
+  // 首次加载的续读复用已有 promise 及其等待者。
+  if (!continuation) void refresh.catch(() => {
     /* 静默：后续状态广播、主动操作或 refresh 会再次兜底。 */
   });
+  return true;
 }
 
 /**
  * 缺少完整 row 时只补查需要包含它的桶。同桶若已有请求在途，不取消、不并发重启，
  * 只保留一个尾部 fresh；这样连续归档不会把每个状态事件放大成一轮列表查询。
  */
-function requestFilterBackfill(filter: ListStatusFilter): void {
+function requestFilterBackfill(filter: ListStatusFilter, isCurrent?: () => boolean): void {
   if (inflight.has(filter)) {
-    trailingFilterRefreshes.add(filter);
+    // A later status backfill must retain a queued notification's owner guard.
+    if (isCurrent || !trailingFilterRefreshes.has(filter)) {
+      trailingFilterRefreshes.set(filter, isCurrent);
+    }
     return;
   }
-  runFilterBackfill(filter);
+  runFilterBackfill(filter, isCurrent);
 }
 
-function runTrailingFilterBackfill(filter: ListStatusFilter): void {
-  if (!trailingFilterRefreshes.delete(filter)) return;
-  runFilterBackfill(filter);
+function runTrailingFilterBackfill(filter: ListStatusFilter, continuation?: FilterRequest): boolean {
+  const isCurrent = trailingFilterRefreshes.get(filter);
+  if (!trailingFilterRefreshes.delete(filter)) return false;
+  return runFilterBackfill(filter, isCurrent, continuation);
 }
 
 function recordSessionPinSummaryOverrides(
@@ -876,17 +895,23 @@ export const sessionsStore = {
    * 确保指定桶已加载（命中即 noop，dedupe 并发请求）。
    * 强制刷新会让已有等待者跟随替换请求；失败由调用方决定如何展示。
    */
-  async ensureByFilter(filter: ListStatusFilter, opts?: { fresh?: boolean; isCurrent?: () => boolean }): Promise<void> {
-    if (!opts?.fresh && cache.has(filter)) return;
+  ensureByFilter(
+    filter: ListStatusFilter,
+    opts?: { fresh?: boolean; isCurrent?: () => boolean },
+    continuation?: FilterRequest,
+  ): Promise<void> {
+    if (!opts?.fresh && cache.has(filter)) return Promise.resolve();
     let pending = inflight.get(filter);
     if (!pending) {
-      let resolve!: FilterRequest['resolve'];
-      let reject!: FilterRequest['reject'];
-      const promise = new Promise<void>((onResolve, onReject) => {
-        resolve = onResolve;
-        reject = onReject;
-      });
-      const request = { promise, resolve, reject };
+      let request = continuation;
+      if (!request) {
+        const { promise, resolve, reject } = Promise.withResolvers<void>();
+        request = { fresh: opts?.fresh === true, promise, resolve, reject };
+      } else {
+        // A continued read shares the waiters, but starts after the prior tag pushes.
+        delete request.taskTagCatalog;
+        delete request.taskTagPatches;
+      }
       pending = request;
       inflight.set(filter, request);
       void fetchFilter(filter, opts)
@@ -897,7 +922,26 @@ export const sessionsStore = {
           // 当前桶认领的 request 才能提交，避免旧账号请求回填新账号缓存。
           if (inflight.get(filter) === request) {
             const current = !opts?.isCurrent || opts.isCurrent();
-            if (current) cache.set(filter, data);
+            if (current) {
+              // 仅保护这轮读取启动后新增且仍在桶里的行。已删除、归档或隐藏的行
+              // 不会被补回，之后启动的读取也照常使用权威快照。
+              const prependedIds = request.prependedIds;
+              const tagPatches = request.taskTagPatches;
+              let next = tagPatches ? data.map((row) => {
+                const tags = tagPatches.get(row.id);
+                return tags === undefined ? row : { ...row, tags };
+              }) : data;
+              if (request.taskTagCatalog) next = reconcileSessionTags(next, request.taskTagCatalog);
+              if (prependedIds) {
+                const fetchedIds = new Set(data.map((row) => row.id));
+                const prepended = cache.get(filter)?.filter((row) =>
+                  prependedIds.has(row.id) && !fetchedIds.has(row.id)
+                    && !hiddenSessionIds.has(row.id) && belongsInFilter(row.status, filter),
+                );
+                if (prepended?.length) next = [...prepended, ...next].slice(0, DEFAULT_LIMIT);
+              }
+              cache.set(filter, next);
+            }
             inflight.delete(filter);
             if (current) notify();
             runTrailingFilterBackfill(filter);
@@ -907,13 +951,16 @@ export const sessionsStore = {
         .catch((e) => {
           if (inflight.get(filter) === request) {
             inflight.delete(filter);
-            runTrailingFilterBackfill(filter);
+            // 首次加载的替换请求失败时，有新通知就让等待者继续跟随尾刷。
+            const followNotification = request.replacesInitialLoad && trailingFilterRefreshes.get(filter);
+            if (runTrailingFilterBackfill(filter, followNotification ? request : undefined)
+              && followNotification) return;
           }
           // 替换时 resolve 已接到新请求，之后旧请求的 reject 不会再改变结果。
           request.reject(e);
         });
     }
-    await pending.promise;
+    return pending.promise;
   },
 
   /** 强制重拉单桶（先 drop 再 ensure）。返回新数据。 */
@@ -930,13 +977,8 @@ export const sessionsStore = {
     return cache.get(filter) ?? [];
   },
 
-  /**
-   * 重拉已缓存或正在加载的桶，未访问的桶不动。
-   * sessionsBus.onRefresh / sessionsPush.onCreated 走这条 ——
-   * 无完整 row 的列表成员变化（main 端新建等）需要让所有活跃订阅者同步刷新。
-   */
+  /** 重拉已缓存或正在加载的桶，未访问的桶不动。 */
   async forceRefreshAll(isCurrent?: () => boolean): Promise<void> {
-    // forceRefresh 会暂时移除缓存；这段窗口收到的新建通知仍需触发 fresh 读取。
     const filters = Array.from(new Set([...cache.keys(), ...inflight.keys()]));
     if (filters.length === 0) return;
     await Promise.all(filters.map((f) => this.forceRefresh(f, isCurrent)));
@@ -1327,6 +1369,8 @@ export const sessionsStore = {
     for (const [k, list] of cache) {
       if (k === 'archived') continue;
       if (list.some((s) => s.id === session.id)) continue;
+      const request = inflight.get(k);
+      if (request) (request.prependedIds ??= new Set()).add(session.id);
       cache.set(k, [withPreview, ...list]);
       touched = true;
     }
@@ -1387,9 +1431,21 @@ function refreshAfterNotification(): void {
   // 里刚收到消息的 Worker）会被整块卸载再重新挂载。账号切换由 reset 清空，这里只防迟到的
   // 读结果写进另一个账号的缓存；同账号的代次变化不丢弃这次刷新。
   const owner = getDataOwnerGeneration();
-  void sessionsStore.forceRefreshAll(() => isDataOwnerIdCurrent(owner)).catch(() => {
-    // 加载等待者会收到当前请求的错误；事件通知本身没有接收返回值的调用方。
-  });
+  const isCurrent = () => isDataOwnerIdCurrent(owner);
+  for (const filter of new Set([...cache.keys(), ...inflight.keys()])) {
+    const pending = inflight.get(filter);
+    if (!cache.has(filter) && pending && !pending.fresh) {
+      // 首次加载可以立刻跟随 fresh，避免等旧查询才看到新任务或错误。
+      // 已有 fresh 在途时，后续通知合并为一次尾刷。
+      void sessionsStore.forceRefresh(filter, isCurrent).catch(() => {
+        // 等待首次加载的调用方会收到替换请求的错误。
+      });
+      const replacement = inflight.get(filter);
+      if (replacement) replacement.replacesInitialLoad = true;
+    } else {
+      requestFilterBackfill(filter, isCurrent);
+    }
+  }
 }
 
 if (typeof window !== 'undefined') {
@@ -1403,7 +1459,7 @@ if (typeof window !== 'undefined') {
   //   - 已经起过名 / 用户手动改过名 / fork 与纯附件的合成占位 → 一律不动。能否覆写
   //     那几类占位由 main 的归属表裁决,这里猜错会把用户的标题在 UI 上顶掉。
   //
-  // 先记进 autoTitlePreviews 叠加层再 patch:光 patch 缓存会被随后的 forceRefreshAll
+  // 先记进 autoTitlePreviews 叠加层再 patch:光 patch 缓存会被随后的列表重拉
   // (新建会话的 sessions:created push 触发)用仍带哨兵的 DB 快照冲掉。**登记不看当前
   // 缓存**——桶未加载时 findById 拿不到行,但那之后的首次 fetch 同样需要叠加。
   //
@@ -1455,14 +1511,11 @@ if (typeof window !== 'undefined') {
   window.electronAPI?.localDb?.taskTags?.onChanged?.(({ tags }, ownerStamp) => {
     if (!isDataOwnerPushCurrent(ownerStamp)) return;
     const catalog = normalizeTaskTags(tags, 256);
+    // Only reads already in flight can return tag data from before this push.
+    for (const request of inflight.values()) request.taskTagCatalog = catalog;
     emitTaskTagCatalog(undefined, catalog);
-    for (const [filter, rows] of cache)
-      cache.set(
-        filter,
-        rows.map((row) => ({ ...row, tags: reconcileTaskTags(row.tags, catalog) })),
-      );
+    for (const [filter, rows] of cache) cache.set(filter, reconcileSessionTags(rows, catalog));
     notify();
-    // Supersede list reads which started before this directory mutation.
     refreshAfterNotification();
     },
   );
@@ -1471,6 +1524,12 @@ if (typeof window !== 'undefined') {
   if (sessionsPush) {
     sessionsPush.onPatched(({ sessionId, patch }, ownerStamp) => {
       if (!isDataOwnerPushCurrent(ownerStamp)) return;
+      // Association IDs must be restored before reconciling against the catalog.
+      if (patch.tags !== undefined) {
+        for (const request of inflight.values()) {
+          (request.taskTagPatches ??= new Map()).set(sessionId, patch.tags);
+        }
+      }
       applySessionRebalancePreferencePatch(sessionId, patch);
       sessionsStore.patchLocal(sessionId, patch);
       // A follow-up may have been absent from every loaded task list until its first worker committed.
