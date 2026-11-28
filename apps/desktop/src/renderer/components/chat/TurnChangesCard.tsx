@@ -129,7 +129,9 @@ export function TurnChangesCard({
   const hiddenCount = changeSet.fileCount - visibleFiles.length;
   const omittedCount = Math.max(0, changeSet.fileCount - files.length);
   const workspaceState = workspaceStateOverride ?? changeSet.workspaceState;
-  const appliesCapturedSubset = changeSet.state === 'partial' && changeSet.isReversible;
+  const isPartial = changeSet.state === 'partial';
+  const showsRecordedCount = isPartial && files.length > 0;
+  const appliesCapturedSubset = isPartial && changeSet.isReversible;
 
   useEffect(() => {
     setWorkspaceStateOverride(null);
@@ -223,9 +225,11 @@ export function TurnChangesCard({
           <FileDiff size={18} />
         </div>
         <div className="min-w-0 flex-1">
-          <div className="truncate text-14 font-medium text-[var(--text-primary)]">
+          <div className={cn('text-14 font-medium text-[var(--text-primary)]', showsRecordedCount ? 'break-words' : 'truncate')}>
             {files.length > 0
-              ? t('chat.turnChanges.title', { count: changeSet.fileCount })
+              ? t(showsRecordedCount ? 'chat.turnChanges.recordedTitle' : 'chat.turnChanges.title', {
+                  count: changeSet.fileCount,
+                })
               : t('chat.turnChanges.partialTitle')}
           </div>
           {files.length > 0 && (
@@ -236,7 +240,7 @@ export function TurnChangesCard({
               <span className="text-[var(--diff-del-fg)]">-{changeSet.deletions}</span>
             </div>
           )}
-          {changeSet.state === 'partial' && (
+          {isPartial && (
             <div className="mt-1 flex items-center gap-1 text-11 text-[var(--warning-fg)]">
               <AlertTriangle size={12} />
               <span>{t(

@@ -17141,6 +17141,7 @@
     },
     "turnChanges": {
       "title": "{{count}} Dateien geändert",
+      "recordedTitle": "Erfasste Dateien: {{count}}",
       "partialTitle": "Dateiänderungen wurden nicht vollständig erfasst",
       "review": "Prüfen",
       "undo": "Rückgängig",
