@@ -1,6 +1,6 @@
 # Worker 创建弹窗
 
-> 迁自 `DESIGN.md` §4，规范效力不变。文中未注明文档的 `§N` 均指 [DESIGN.md](./DESIGN.md)。
+> 迁自 `DESIGN.md` §4，规范效力不变；迁移时对照现行界面截图补写了 S1–S11（语音按钮、智能路由与插件引擎、模型不可用提示、旧版本远程电脑的降级等）、C3 的权限菜单取交集，并按 #13716 写入关闭按钮，补写内容经主人确认，见 [决策日志](./design-decision-log.md)「2026-11-29 · Worker 创建弹窗」。文中未注明文档的 `§N` 均指 [DESIGN.md](./DESIGN.md)。
 > **读取时机**：改动「开启协同」「创建新 Worker」弹窗或手机端的 Worker 表单之前
 > **适用路径**：`apps/desktop/src/renderer/features/cc-agent/CreateWorkerPopover.tsx`、`apps/mobile/src/session/ContextSheetCollabView.tsx`
 

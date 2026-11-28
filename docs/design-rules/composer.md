@@ -6,11 +6,11 @@
 
 ### Working glow colors
 
-- **Composer Stop working glow (owner-approved 2026-11-18, Design Lab send-button v5)** — while an AI turn runs, the Desktop composer Stop button (`SendButton`, `.composer-send-beam` in `globals.css`) carries a rainbow beam around its edge, ported from the open-source border-beam (MIT) small size: eight hues (green `#32C850`, teal `#1EB9AA`, orange `#FF7828`, violet `#6446FF`, pink `#F032B4`, purple `#B428F0`, blue `#288CFF`, red `#FF3264`) plus a white highlight on the dark Light-mode disc and a black one on the light Dark-mode disc. It means only “the AI is working”; it never appears on Send, idle, disabled or any other control, and the rest of the button stays neutral-inverse. Motion is registered in §14.4.
+- **Composer Stop working glow (owner-approved 2026-11-18, Design Lab send-button v5)** — while an AI turn runs, the Desktop composer Stop button (`SendButton`, `.composer-send-beam` in `globals.css`) carries a rainbow beam around its edge, ported from the open-source border-beam (MIT) small size: eight hues (green `#32C850`, teal `#1EB9AA`, orange `#FF7828`, violet `#6446FF`, pink `#F032B4`, purple `#B428F0`, blue `#288CFF`, red `#FF3264`) plus a white highlight on the dark Light-mode disc and a black one on the light Dark-mode disc. It means only “the AI is working”; it never appears on Send, idle, disabled or any other control, and the rest of the button stays neutral-inverse. Motion: [Composer motion](#composer-motion) below and the Composer Stop working glow row in [exceptions/motion.md](./exceptions/motion.md#registered-looping-indicators).
 
 ### Working glow gradients
 
-- **Composer Stop working glow** — the rim, inner glow and bloom of the registered working glow (§2 exception above, §14.4) use radial and conic gradients clipped to the 30px Stop button; masks inside it are alpha-only. Not a surface treatment for anything else.
+- **Composer Stop working glow** — the rim, inner glow and bloom of the registered working glow ([working glow colors](#working-glow-colors) above; motion in [exceptions/motion.md](./exceptions/motion.md#registered-looping-indicators)) use radial and conic gradients clipped to the 30px Stop button; masks inside it are alpha-only. Not a surface treatment for anything else.
 
 ### Composer motion
 

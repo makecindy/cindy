@@ -58,7 +58,7 @@ Icon refinement reference (2026-10-18, macOS AppKit rendering; enlarged and actu
 
 ### Windows tray quota card
 
-- **Windows tray quota card — same picture as the macOS menu bar panel.** `styles/quota-tray.css` keeps the two gradients the Swift panel draws natively: the tube's glass well (`wellTop → wellBottom`, the pair `TubeView` fills with) and the card background that stands in for the macOS blur material (warm glows over one base tone). They belong to this card only; the liquid itself stays one flat tone. See [macOS 菜单栏额度面板](./macos-menu-bar-quota.md).
+- **Windows tray quota card — same picture as the macOS menu bar panel.** `styles/quota-tray.css` keeps the two gradients the Swift panel draws natively: the tube's glass well (`wellTop → wellBottom`, the pair `TubeView` fills with) and the card background that stands in for the macOS blur material (warm glows over one base tone). They belong to this card only; the liquid itself stays one flat tone. See the macOS panel section above.
 
 ### Menu bar quota fill motion
 

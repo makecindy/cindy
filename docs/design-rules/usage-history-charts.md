@@ -98,10 +98,10 @@ Agent/harness 表复用现有引擎身份色（09-09 所有者再次反馈）：
   历史用量继续计入概览、按人、按模型与图表，在按电脑明细与按电脑分色柱图里都合进「更早的记录」。
 - 双模式：只用语义 token 与本页登记的分类色，Light / Dark 同一实现。
 
+### Registered response: Usage History chart emphasis
+
+The enlargement above is the registered chart emphasis response of the two registered chart members (§5), in Settings → Usage History and in the provider 「远程与分享」 usage block (same components, `.usage-history-charts`); its timing, curve and reduced-motion behaviour are the bullets above. The bounded width/height transition is a one-shot non-compositor exception already allowed by the red lines: no looping, no replay on unrelated rerenders, no whole-chart motion. No other component may borrow this response.
+
 ## 交付状态
 
 实现与回归检查随视觉修复 PR 交付。真实 Desktop 截图、窗口尺寸与交互实测见 [证据索引](../design-evidence/2026-09-08/usage-chart-shapes.md)。设计师视觉验收仍待完成；AI 的截图采集、静态检查和作者目检不构成人工批准。
-
-#### Registered response: Usage History chart emphasis
-
-The two registered chart members (§5) enlarge their non-hit-testing visible layer on hover, keyboard focus or selection, in Settings → Usage History and in the provider 「远程与分享」 usage block (same components, `.usage-history-charts`). Enter uses `--motion-base` and the component-scoped `--usage-mark-ease`, a local curve with one small overshoot; leave uses `--motion-fast` / `--motion-ease-out`. The bounded width/height transition is a one-shot non-compositor exception already allowed by the red lines: no looping, no replay on unrelated rerenders, no whole-chart motion. Reduced motion removes the transition and keeps immediate focus / selection feedback. Geometry and states: [usage-history-charts.md](./usage-history-charts.md). No other component may borrow this response.

@@ -31,6 +31,7 @@ every other unread dot, and the unused `session-card-prog` progress sweep and
 
 #### Other sanctioned motion classes
 
+- **Container transform(容器形变)** — the second sanctioned motion class: see [container-transform.md](../container-transform.md).
 - **Quota-reset confetti** — the third sanctioned motion class, **only** for the status-bar usage chip’s full-quota reveal:
   - **Definition**: the first observation of 100% remaining quota throws confetti once from the full window segment, including the first visit. Deduplicate by provider across task switches and component remounts. After that first burst, the quota must drop below 100% and return to 100% before another burst. Remaining at 100% never replays, even across scheduled cycles. Reset deadlines do not participate in this decision; official extra resets follow the same rule. Snapshot update timestamps only reject stale task data. The percentage roll keeps its own reset detection.
   - **Form** (shared celebration component, approved 2026-11-09): one small upward fan from the full segment center. Use the same `canvas-confetti` engine as Star, adding paper wobble, tilt and continuous fading while keeping the effect local to the footer. No stagger, loop or persistent particles.
