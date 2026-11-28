@@ -1848,7 +1848,7 @@
       "range90": "90 jours",
       "listModels_one": "Modèles · {{n}} jour",
       "listModels_other": "Modèles · {{n}} jours",
-      "listTasks": "Tâches du jour",
+      "listTasks": "Aujourd'hui ici",
       "today": "Aujourd'hui",
       "manageTitle": "Gérer",
       "done": "Terminé",

@@ -107,6 +107,17 @@ struct MBModelUsage: Decodable, Equatable {
   let tokens: Double
 }
 
+extension MBModelUsage {
+  /// The usage page's model list: valued models first, then models with tokens only. Plugin
+  /// engines record tokens without a value (and another currency's value is not converted), so a
+  /// value-only filter hid models the user did use; they show "—" in the value column instead.
+  static func listed(_ models: [MBModelUsage], limit: Int = 5) -> [MBModelUsage] {
+    Array(models.filter { $0.money > 0 || $0.tokens > 0 }
+      .sorted { $0.money != $1.money ? $0.money > $1.money : $0.tokens > $1.tokens }
+      .prefix(limit))
+  }
+}
+
 struct MBActivity: Decodable, Identifiable, Equatable {
   var id: String { sessionId }
   let sessionId: String
@@ -3452,7 +3463,7 @@ struct UsagePage: View {
 
   @ViewBuilder
   private func modelList(_ models: [MBModelUsage]) -> some View {
-    let rows = models.filter { $0.money > 0 }.sorted { $0.money > $1.money }.prefix(5)
+    let rows = MBModelUsage.listed(models)
     VStack(spacing: 0) {
       if rows.isEmpty {
         emptyRow(store.s("noUsage"))
@@ -3461,7 +3472,7 @@ struct UsagePage: View {
         HStack(spacing: 8) {
           Circle().fill(Palette.harness(model.harness)).frame(width: 6, height: 6)
           Text(model.name).lineLimit(1).truncationMode(.tail).frame(maxWidth: .infinity, alignment: .leading)
-          Text(Fmt.money(model.money)).fontWeight(.semibold)
+          Text(model.money > 0 ? Fmt.money(model.money) : "—").fontWeight(.semibold)
         }
         .font(.system(size: 12))
         .monospacedDigit()
