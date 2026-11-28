@@ -545,7 +545,10 @@ export function createRemoteAgentHandle(deps: RemoteHandleDeps): RemoteAgentHand
             sendOwnerOptions = previousOwnerOptions;
           }
           if (rejected) {
-            throw new TurnDispatchRejectedError(error.message, { cause: error });
+            throw new TurnDispatchRejectedError(error.message, {
+              cause: error,
+              diagnostic: error.info.dispatchDiagnostic,
+            });
           }
         }
         throw error;

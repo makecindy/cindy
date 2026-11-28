@@ -63,6 +63,7 @@ export interface BuildAcpAgentCoreOpts {
   spawnHarness(key: string, options?: { remoteWorkspace?: boolean; guestWorkspace?: boolean; accountDir?: string }): Promise<NodeWorkerProcess>;
   /** Optional in-task account verification recovery hook (Desktop only). */
   verificationForTask?: AcpAgentDeps['verificationForTask'];
+  inlineImageBudgetBytesForHarness?: AcpAgentDeps['inlineImageBudgetBytesForHarness'];
   /** Called on real task/turn activity for a plugin engine (used for adaptive usage refresh). */
   onActivity?(key: string, accountDir?: string): void;
 }
@@ -147,6 +148,7 @@ export function buildAcpAgentCore(opts: BuildAcpAgentCoreOpts): AcpAgent {
       ),
     },
     ...(opts.verificationForTask ? { verificationForTask: opts.verificationForTask } : {}),
+    ...(opts.inlineImageBudgetBytesForHarness ? { inlineImageBudgetBytesForHarness: opts.inlineImageBudgetBytesForHarness } : {}),
     onSessionCapabilities: rememberCapabilities,
     observeModelDetails: observePluginEngineModelDetails,
     observeContextWindow: observePluginEngineContextWindow,
@@ -166,6 +168,7 @@ export interface InstallPluginEnginesCoreOpts {
   getMcpToolApprovalPolicy?: AgentDeps['getMcpToolApprovalPolicy'];
   preparePiExtraSpawnConfig: NonNullable<AgentDeps['preparePiExtraSpawnConfig']>;
   verificationForTask?: AcpAgentDeps['verificationForTask'];
+  inlineImageBudgetBytesForHarness?: AcpAgentDeps['inlineImageBudgetBytesForHarness'];
   wrapAgent?: (agent: AcpAgent) => AcpAgent;
   onActivity?: (key: string, accountDir?: string) => void;
 }
@@ -191,6 +194,7 @@ export function installPluginEnginesCore(opts: InstallPluginEnginesCoreOpts): ()
       getMcpToolApprovalPolicy: opts.getMcpToolApprovalPolicy ?? getDesktopMcpToolApprovalPolicy,
       preparePiExtraSpawnConfig: opts.preparePiExtraSpawnConfig,
       ...(opts.verificationForTask ? { verificationForTask: opts.verificationForTask } : {}),
+      ...(opts.inlineImageBudgetBytesForHarness ? { inlineImageBudgetBytesForHarness: opts.inlineImageBudgetBytesForHarness } : {}),
       spawnHarness: (key, options) => (options ? registry.spawn(key, options) : registry.spawn(key)),
       onActivity: opts.onActivity ?? ((key, accountDir) => recordPluginHarnessActivity(key, accountDir)),
     });

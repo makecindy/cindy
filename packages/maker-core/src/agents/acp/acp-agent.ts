@@ -113,6 +113,7 @@ export interface AcpEndpointLauncher {
 export interface AcpAgentDeps extends AgentDeps {
   endpoints: AcpEndpointLauncher;
   verificationForTask?(key: string, sessionId: string): AcpVerificationRecovery | undefined;
+  inlineImageBudgetBytesForHarness?(key: string): number | undefined;
   clientInfo: AcpClientInfo;
   /** Remembers what the agent offered so pickers can show it before the next start. */
   onSessionCapabilities?: (harnessKey: string, capabilities: Capabilities) => void;
@@ -440,6 +441,7 @@ export class AcpAgent extends BaseAgent {
           transport: tracked.transport,
           cwd: opts.workingDir,
           clientInfo: this.acpDeps.clientInfo,
+          inlineImageBudgetBytes: this.acpDeps.inlineImageBudgetBytesForHarness?.(harnessKey),
           ...(!hosted && opts.sessionId ? { recoverVerification: this.acpDeps.verificationForTask?.(harnessKey, opts.sessionId) } : {}),
           mcpServers,
           // A role is not hydrated until the negotiated ACP transport can carry its tools.

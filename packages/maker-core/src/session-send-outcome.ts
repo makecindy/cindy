@@ -1,5 +1,7 @@
 import type { SessionSendResult } from './session.js';
 
+export const ACP_INLINE_IMAGES_TOO_LARGE_MESSAGE = '[ACP_INLINE_IMAGES_TOO_LARGE] Message not sent. The images are too large together. Try sending fewer or smaller images.';
+
 export type SessionDispatchOutcome =
   | { dispatched: true }
   | {
@@ -14,6 +16,14 @@ export function toSessionDispatchOutcome(
   context: string,
 ): SessionDispatchOutcome {
   if (result.accepted) return { dispatched: true };
+  if (result.reason === 'provider-rejected-before-dispatch' && result.diagnostic === 'acp-inline-images-too-large') {
+    return {
+      dispatched: false,
+      reason: result.reason,
+      context,
+      message: ACP_INLINE_IMAGES_TOO_LARGE_MESSAGE,
+    };
+  }
   if (result.reason === 'provider-rejected-before-dispatch' && result.diagnostic === 'pi-retry-history-frame-too-large') {
     return {
       dispatched: false,

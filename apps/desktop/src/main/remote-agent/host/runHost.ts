@@ -3263,7 +3263,12 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
       append(run, { t: 'result', callId, ok: true, ...(value !== undefined ? { value: JSON.parse(JSON.stringify(value)) } : {}) });
     } catch (error) {
       const info = remoteAgentErrorInfo(error);
-      if (error instanceof TurnDispatchRejectedError) info.code = error.code;
+      if (error instanceof TurnDispatchRejectedError) {
+        info.code = error.code;
+        if (method === 'send' && error.diagnostic === 'acp-inline-images-too-large') {
+          info.dispatchDiagnostic = error.diagnostic;
+        }
+      }
       if (method === 'send' && run.lastSendCallId === callId) {
         const accountFailure = run.accountFailure !== undefined || isAccountSendFailure(info);
         const previous = info.code === 'TURN_DISPATCH_REJECTED' && !accountFailure && !run.closing

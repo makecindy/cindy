@@ -19,6 +19,14 @@ const STREAM_RAW =
 afterEach(cleanup);
 
 describe('ErrorMessageCard', () => {
+  // #13471 (unit): the coordinator persists a wrapped pre-dispatch error.
+  // Generic historical-error coverage does not protect the actionable attachment guidance.
+  it('localizes the persisted over-budget image message', () => {
+    render(<ErrorMessageCard message="provider-rejected-before-dispatch: [ACP_INLINE_IMAGES_TOO_LARGE] Message not sent." />);
+    expect(screen.getByText('chat.errorBanner.acpInlineImagesTooLarge')).toBeTruthy();
+    expect(screen.queryByText('chat.errorBanner.replyFailed')).toBeNull();
+  });
+
   // #10385, unit: recover a persisted no-model error via real settings navigation, only for the execution host.
   it.each([
     ['settings.tabs.providers', '/settings?tab=providers'],
