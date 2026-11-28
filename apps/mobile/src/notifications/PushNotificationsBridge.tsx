@@ -86,8 +86,11 @@ export function PushNotificationsBridge() {
     let running = false;
     let replay = false;
     let profileRetryAvailable = true;
-    async function reconcile(skipConfirmed: boolean) {
+    let retryBlockedUntil = 0;
+    let retryDelayMs = 1_000;
+    async function reconcile(skipConfirmed: boolean, force = false) {
       if (running) { replay = true; return; }
+      if (!force && Date.now() < retryBlockedUntil) return;
       running = true;
       try {
         const unregistered = await retryPendingUnregister(apiFetchRef.current);
@@ -96,12 +99,20 @@ export function PushNotificationsBridge() {
         if (cancelled) return;
         if (enabled) {
           const result = await syncPushRegistration({ enabled, apiFetch: apiFetchRef.current, skipConfirmed });
-          if (result === 'registered') profileRetryAvailable = true;
+          if (result === 'registered') {
+            profileRetryAvailable = true;
+            retryDelayMs = 1_000;
+            retryBlockedUntil = 0;
+          }
         } else if (unregistered) {
           profileRetryAvailable = true;
         }
       } catch {
-        // A profile-triggered failure waits for foreground before another retry.
+        // A failed registration can be caused by a transient relay or API outage.
+        // Do not turn every foreground/profile notification into an immediate
+        // request storm while preserving a bounded foreground recovery path.
+        retryBlockedUntil = Date.now() + retryDelayMs;
+        retryDelayMs = Math.min(retryDelayMs * 2, 60_000);
       } finally {
         running = false;
         if (replay && !cancelled) { replay = false; void reconcile(true); }
@@ -110,12 +121,15 @@ export function PushNotificationsBridge() {
     onProfileRefresh.current = () => {
       if (!profileRetryAvailable) return;
       profileRetryAvailable = false;
-      void reconcile(true);
+      void reconcile(true, true);
     };
     const foreground = AppState.addEventListener('change', state => {
       if (state !== 'active') return;
+      // The foreground pass below is the explicit retry boundary for a failed
+      // registration. The token listener keeps its own dedupe marker so a
+      // repeated native token event cannot create a request storm.
       profileRetryAvailable = true;
-      void reconcile(true);
+      void reconcile(true, true);
     });
     void reconcile(false);
     return () => {
@@ -147,9 +161,12 @@ export function PushNotificationsBridge() {
         const enabled = await readPushEnabled();
         if (cancelled) return;
         if (!enabled) { if (lastToken === token) lastToken = undefined; return; }
-        const result = await syncPushRegistration({ enabled, apiFetch: apiFetchRef.current, deviceToken });
-        if (result !== 'registered' && lastToken === token) lastToken = undefined;
-      })().catch(() => { if (lastToken === token) lastToken = undefined; });
+        // Keep the dedupe marker when registration fails. Native token reads
+        // may emit this same value repeatedly, and clearing it here would send
+        // one network registration per read. Foreground recovery clears the
+        // marker and retries through the normal bootstrap path.
+        await syncPushRegistration({ enabled, apiFetch: apiFetchRef.current, deviceToken });
+      })().catch(() => undefined);
     });
     return () => { cancelled = true; sub.remove(); };
   }, [auth.accountGeneration, auth.initialized, auth.isAuthenticated]);
