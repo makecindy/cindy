@@ -79,7 +79,7 @@ export class DesktopCommandRegistry {
   }
 
   /**
-   * 暴露给 renderer 的视图: 只含 kind/name/description, 不含 execute 函数。
+   * 暴露给 renderer 的视图: 只含 kind/name/description 与固定 Cindy 来源, 不含 execute 函数。
    * 与 maker-core 的 DesktopCommandMeta 形状一致, palette 直接消费。
    */
   list(ctx?: Pick<DesktopCommandContext, 'deviceId'>): DesktopCommandMeta[] {
@@ -89,6 +89,7 @@ export class DesktopCommandRegistry {
         kind: 'desktop' as const,
         name: c.name,
         description: c.description,
+        meta: 'Cindy',
       }));
   }
 

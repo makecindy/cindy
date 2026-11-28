@@ -5,6 +5,7 @@ import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import zhCNCommon from '@/i18n/locales/zh-CN/common.json';
 import type { UnifiedCommand } from '@/lib/slashCommands';
 import { CINDY_LEARN_SOURCE_DESCRIPTION } from '../../../../shared/cindyBuiltInSkills';
+import { DesktopCommandRegistry } from '../../../../main/commands/registry';
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string) => key }),
@@ -243,6 +244,40 @@ describe('SlashCommandPalette project Skill rows', () => {
     );
 
     expect(screen.queryByText('skillhub.builtIn.official')).toBeNull();
+  });
+});
+
+// #13507 unit regression: render the real registry projection in the real palette. Existing
+// fixtures covered plugin metadata but not the built-in /goal source label.
+// Minimal failure input: registry /goal beside engine, Skill and plugin-setup rows.
+describe('SlashCommandPalette command sources', () => {
+  it('labels registry commands Cindy while preserving every other source label', () => {
+    const registry = new DesktopCommandRegistry();
+    registry.register({ name: 'goal', description: 'Set a goal', execute: () => undefined });
+    const commands: UnifiedCommand[] = [
+      ...registry.list(),
+      { kind: 'agent-builtin', name: 'compact', description: 'Compact the conversation' },
+      {
+        kind: 'agent-skill', name: 'learn', description: CINDY_LEARN_SOURCE_DESCRIPTION,
+        builtIn: true, source: 'skill', scope: 'user',
+      },
+      { kind: 'agent-skill', name: 'demo', description: 'My Skill', source: 'user' },
+      { kind: 'desktop', name: 'pr', description: 'Needs the GitHub plugin', meta: 'Not installed' },
+    ];
+
+    const onSelect = vi.fn();
+    render(<SlashCommandPalette query="" commands={commands} focusedIndex={0}
+      onFocusedIndexChange={vi.fn()} onSelect={onSelect} onClose={vi.fn()} />);
+
+    const goalRow = screen.getByRole('button', { name: 'goal Cindy' });
+    expect(goalRow.textContent).toContain('Cindy');
+    fireEvent.mouseDown(goalRow);
+    expect(onSelect).toHaveBeenCalledWith(commands[0]);
+    expect(screen.getByRole('button', { name: 'compact' }).textContent).toContain('agent-cmd');
+    expect(screen.getByRole('button', { name: 'learn' }).textContent).toContain('skillhub.builtIn.official');
+    expect(screen.getByRole('button', { name: 'demo' }).textContent).toContain('user');
+    expect(screen.getByRole('button', { name: 'pr Not installed' }).textContent).toContain('Not installed');
+    expect(screen.getAllByText('Cindy')).toHaveLength(1);
   });
 });
 

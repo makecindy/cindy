@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { CINDY_LEARN_SOURCE_DESCRIPTION } from '../../../shared/cindyBuiltInSkills';
+import { DesktopCommandRegistry } from '../../../main/commands/registry';
 
 import {
   addPluginSkillSetupCommands,
@@ -36,15 +37,18 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-function stubCommandLists(skillResult: { success: boolean; skills?: UnifiedCommand[] }) {
+function stubCommandLists(
+  skillResult: { success: boolean; skills?: UnifiedCommand[] },
+  sources: { desktopCommands?: UnifiedCommand[]; agentCommands?: UnifiedCommand[] } = {},
+) {
   vi.stubGlobal('window', {
     electronAPI: {
       maker: {
         listDesktopCommands: vi.fn(async () => ({
           success: true,
-          commands: [{ kind: 'desktop', name: 'learn', description: 'Learn' }],
+          commands: sources.desktopCommands ?? [{ kind: 'desktop', name: 'learn', description: 'Learn' }],
         })),
-        listAgentCommands: vi.fn(async () => ({ success: true, commands: [] })),
+        listAgentCommands: vi.fn(async () => ({ success: true, commands: sources.agentCommands ?? [] })),
         listAgentSkills: vi.fn(async () => skillResult),
       },
     },
@@ -82,6 +86,30 @@ describe('loadAllCommands Learn fallback', () => {
     stubCommandLists({ success: true, skills: [learnSkill] });
 
     await expect(loadAllCommands('claude-code', null)).resolves.toEqual([learnSkill]);
+  });
+});
+
+// #13507 unit regression: the real registry projection must retain its Cindy source through
+// loadAllCommands; existing merge tests used anonymous desktop fixtures and missed this boundary.
+// Minimal failure input: one registered /goal beside one engine command and one user Skill.
+describe('Desktop registry source labels', () => {
+  it('carries Cindy metadata through loadAllCommands without relabeling other sources', async () => {
+    const registry = new DesktopCommandRegistry();
+    registry.register({ name: 'goal', description: 'Set a goal', execute: () => undefined });
+    const userSkill = skill({ name: 'custom', source: 'user' });
+    const agentCommand: UnifiedCommand = {
+      kind: 'agent-builtin', name: 'compact', description: 'Compact the conversation',
+    };
+    stubCommandLists({ success: true, skills: [userSkill] }, {
+      desktopCommands: registry.list(),
+      agentCommands: [agentCommand],
+    });
+
+    await expect(loadAllCommands('claude-code', null)).resolves.toEqual([
+      userSkill,
+      { kind: 'desktop', name: 'goal', description: 'Set a goal', meta: 'Cindy' },
+      agentCommand,
+    ]);
   });
 });
 
