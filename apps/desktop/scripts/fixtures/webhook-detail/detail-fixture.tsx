@@ -7,6 +7,7 @@ import { RunHistoryPane } from '../../../src/renderer/features/scheduler/compone
 const initial = ctx.case === 'initial';
 const released = ctx.case === 'released';
 const unsupported = ctx.case === 'unsupported';
+const cronExpr = typeof ctx.data.cronExpr === 'string' ? ctx.data.cronExpr : undefined;
 const time = Date.now() - 60_000;
 const schedule: Schedule = {
   id: 'fixture', name: 'GitHub 项目动态', prompt: '检查项目的新动态并总结。',
@@ -16,12 +17,18 @@ const schedule: Schedule = {
   webhookTrigger: { endpointId: 'fixture-route', events: ['issues.opened'], source: ctx.case.startsWith('app-')
     ? { preset: 'github-app', repositories: ['makecindy/cindy', 'example/project'] } : { preset: 'github' } },
 };
+if (cronExpr) {
+  schedule.manual = false;
+  schedule.cronExpr = cronExpr;
+  schedule.status = 'paused';
+  schedule.webhookTrigger = undefined;
+}
 if (ctx.case === 'single-pr') {
   schedule.name = 'PR 合并后通知';
   schedule.webhookTrigger = undefined;
   schedule.prTrigger = { url: 'https://github.com/example/project/pull/42', change: 'merged' };
 }
-const runs: ScheduleRun[] = initial ? [] : [{
+const runs: ScheduleRun[] = initial || cronExpr ? [] : [{
   id: 'run', scheduleId: schedule.id, status: 'success', firedAt: time, finishedAt: time + 4600,
   readAt: time + 5000, triggerSource: ctx.case === 'single-pr' ? 'pr-status' : 'webhook', resultText: '检查完成',
 }];
