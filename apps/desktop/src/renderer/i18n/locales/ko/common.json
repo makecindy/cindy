@@ -23290,6 +23290,10 @@
     "refresh": "할당량 새로고침"
   },
   "subscriptionAccounts": {
+    "pluginLoginTimeout": "로그인 시간이 초과되었습니다. 다시 로그인하세요.",
+    "pluginLoginBusy": "로그인 중입니다. 완료될 때까지 기다려 주세요.",
+    "pluginLoginUnsupported": "플러그인이 이 로그인 방식을 지원하지 않습니다.",
+    "pluginLoginInvalidSecret": "플러그인이 이 키를 사용할 수 없습니다. 키를 확인하고 다시 시도하세요.",
     "existing": {
       "menu": "계정 추가 방법",
       "connect": "기존 로그인 연결…",

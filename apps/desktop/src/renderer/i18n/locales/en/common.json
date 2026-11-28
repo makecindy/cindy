@@ -23379,6 +23379,10 @@
     "refresh": "Refresh quota"
   },
   "subscriptionAccounts": {
+    "pluginLoginTimeout": "Sign-in timed out. Try signing in again.",
+    "pluginLoginBusy": "A sign-in is already in progress. Wait for it to finish.",
+    "pluginLoginUnsupported": "The plugin does not support this sign-in method.",
+    "pluginLoginInvalidSecret": "The plugin could not use this key. Check the key and try again.",
     "existing": {
       "menu": "More ways to add an account",
       "connect": "Connect an existing login…",

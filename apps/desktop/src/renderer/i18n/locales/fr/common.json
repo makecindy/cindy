@@ -23606,6 +23606,10 @@
     "refresh": "Actualiser le quota"
   },
   "subscriptionAccounts": {
+    "pluginLoginTimeout": "Le délai de connexion a expiré. Réessayez de vous connecter.",
+    "pluginLoginBusy": "Une connexion est déjà en cours. Attendez la fin de celle-ci.",
+    "pluginLoginUnsupported": "Le plugin ne prend pas en charge ce mode de connexion.",
+    "pluginLoginInvalidSecret": "Le plugin ne peut pas utiliser cette clé. Vérifiez-la et réessayez.",
     "existing": {
       "menu": "Autres options d’ajout",
       "connect": "Connecter une session existante…",

@@ -23606,6 +23606,10 @@
     "refresh": "Actualizar cuota"
   },
   "subscriptionAccounts": {
+    "pluginLoginTimeout": "Se agotó el tiempo de inicio de sesión. Vuelve a intentarlo.",
+    "pluginLoginBusy": "Ya hay un inicio de sesión en curso. Espera a que termine.",
+    "pluginLoginUnsupported": "El complemento no admite este método de inicio de sesión.",
+    "pluginLoginInvalidSecret": "El complemento no puede usar esta clave. Compruébala y vuelve a intentarlo.",
     "existing": {
       "menu": "Más formas de añadir una cuenta",
       "connect": "Conectar una sesión existente…",

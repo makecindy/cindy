@@ -4,6 +4,13 @@ import type { ClaudeSubscriptionUsageSnapshot } from './claudeSubscriptionUsage.
 import type { OpenAiGroupAccount } from './openAiAccountGroup.js';
 
 export const SUBSCRIPTION_ACCOUNTS_CHANNEL = 'maker:subscription-accounts';
+/** Fixed reasons carried by SUBSCRIPTION_ACCOUNT_FAILED for local plugin sign-ins. */
+export const pluginLoginErrorKeys = new Map([
+  ['timeout', 'subscriptionAccounts.pluginLoginTimeout'],
+  ['login_in_progress', 'subscriptionAccounts.pluginLoginBusy'],
+  ['login_unsupported', 'subscriptionAccounts.pluginLoginUnsupported'],
+  ['login_invalid_secret', 'subscriptionAccounts.pluginLoginInvalidSecret'],
+]);
 export const SUBSCRIPTION_ACCOUNTS_CHANGED = 'subscription-accounts:changed';
 /** Appended to legacy remote quota queries when the caller needs the CLI default account itself. */
 export const DEFAULT_ACCOUNT_USAGE_SCOPE = 'default-subscription-account';

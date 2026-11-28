@@ -23379,6 +23379,10 @@
     "refresh": "Kontingent aktualisieren"
   },
   "subscriptionAccounts": {
+    "pluginLoginTimeout": "Die Anmeldung hat zu lange gedauert. Melde dich erneut an.",
+    "pluginLoginBusy": "Eine Anmeldung läuft bereits. Warte, bis sie abgeschlossen ist.",
+    "pluginLoginUnsupported": "Das Plugin unterstützt diese Anmeldemethode nicht.",
+    "pluginLoginInvalidSecret": "Das Plugin kann diesen Schlüssel nicht verwenden. Prüfe ihn und versuche es erneut.",
     "existing": {
       "menu": "Weitere Anmeldeoptionen",
       "connect": "Vorhandene Anmeldung verbinden…",

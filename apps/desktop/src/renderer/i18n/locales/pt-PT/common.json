@@ -23606,6 +23606,10 @@
     "refresh": "Atualizar quota"
   },
   "subscriptionAccounts": {
+    "pluginLoginTimeout": "O tempo para iniciar sessão expirou. Tente novamente.",
+    "pluginLoginBusy": "Já está a iniciar sessão. Aguarde a conclusão.",
+    "pluginLoginUnsupported": "O plugin não suporta este método de início de sessão.",
+    "pluginLoginInvalidSecret": "O plugin não consegue usar esta chave. Verifique-a e tente novamente.",
     "existing": {
       "menu": "Outras formas de adicionar contas",
       "connect": "Conectar um login existente…",
