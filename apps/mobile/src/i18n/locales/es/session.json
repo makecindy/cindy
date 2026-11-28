@@ -505,7 +505,8 @@
     "worktreeUnsupported": "Cindy no puede crear worktrees de forma segura en tu computadora. Desactiva esa opción para continuar o actualiza Cindy en tu computadora.",
     "worktreeCreateFailed": "No se pudo crear el worktree: {{message}}",
     "worktreeRecoveryStateFailed": "No se pudo guardar el estado de recuperación del worktree. Vuelve a intentarlo.",
-    "worktreeCleanupPending": "El worktree anterior aún está pendiente de limpieza. Vuelve a conectar el dispositivo e inténtalo de nuevo."
+    "worktreeCleanupPending": "El worktree anterior aún está pendiente de limpieza. Vuelve a conectar el dispositivo e inténtalo de nuevo.",
+    "createRejectedResend": "Tu contenido se ha recuperado. Ajústalo si hace falta y vuelve a enviarlo."
   },
   "menu": {
     "moveToProject": "Mover tarea",

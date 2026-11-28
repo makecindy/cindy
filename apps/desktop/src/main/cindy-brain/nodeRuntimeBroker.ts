@@ -176,6 +176,11 @@ export interface GhostNodeRuntimeBrokerDeps {
   hostToolRequest?: (ghostId: string, payload: unknown, current: () => boolean) => Promise<unknown>;
   /** Explicit disable/update/uninstall releases Host-owned resources; idle worker exit does not. */
   onStopped?(ghostId: string): void;
+  /**
+   * stopAndWait 超时后，旧进程最终都已退出，且没有更新的 stop 接手。宿主据此恢复插件的
+   * 在场状态(解除执行引擎启动闸、常驻实例重新点火)，自查启用与可用性。
+   */
+  onStopSettledLate?(ghostId: string): void;
   networkRequest?: (ghostId: string, payload: Record<string, unknown>) => Promise<unknown>;
   secretSaved?: (ghostId: string, secretKey: string) => boolean;
   /** 只解析本插件显式引用的 OAuth 槽；不交付 refresh token。 */
@@ -1645,7 +1650,35 @@ export class GhostNodeRuntimeBroker {
     const processes = new Set(this.liveProcesses.get(ghostId) ?? []);
     const exited = [...processes].map((process) => this.waitForProcessExit(process, ghostId));
     this.stop(ghostId);
-    await Promise.all(exited);
+    const generation = this.stopGeneration.get(ghostId) ?? 0;
+    try {
+      await Promise.all(exited);
+    } catch (error) {
+      this.notifyWhenStopSettlesLate(ghostId, processes, generation);
+      throw error;
+    }
+  }
+
+  /**
+   * stopAndWait 超时后，调用方按约定保持停止态(不替换目录、不起第二份进程)，执行引擎
+   * 启动闸也随之关闭。旧进程之后真正退出时，若期间没有新的 stop 接手，就请宿主按
+   * 「该在场了」入口恢复；否则插件仍是启用状态，却会一直拒绝启动任务，直到重启应用。
+   */
+  private notifyWhenStopSettlesLate(
+    ghostId: string,
+    processes: ReadonlySet<NodeWorkerProcess>,
+    generation: number,
+  ): void {
+    const live = this.liveProcesses.get(ghostId);
+    const pending = [...processes].filter((process) => live?.has(process));
+    const exits = pending.map((process) => new Promise<void>((resolve) => process.once('exit', () => resolve())));
+    void Promise.all(exits).then(() => {
+      // 放到下一轮：失败的那次更新/卸载先走完自己的 finally，释放变更锁。
+      this.setTimer(() => {
+        if (this.destroyed || (this.stopGeneration.get(ghostId) ?? 0) !== generation) return;
+        this.deps.onStopSettledLate?.(ghostId);
+      }, 0);
+    });
   }
 
   /**

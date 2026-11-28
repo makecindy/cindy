@@ -854,6 +854,36 @@ describe('nodeRuntimeBroker · 进程生命周期', () => {
     await retry;
   });
 
+  // 测试价值：2026-11-28/29 插件市场自动更新 Antigravity 时，3 个任务进程 3 秒多才退出，
+  // stopAndWait 超时、更新失败；执行引擎启动闸一直关着，已启用的插件拒绝所有新任务直到
+  // 重启应用。超时后旧进程真正退出，必须恰好通知宿主恢复一次；期间有新 stop 接手则不通知。
+  it.each([false, true])('stopAndWait 超时后旧进程退出时请宿主恢复(期间再次 stop: %s)', async (stoppedAgain) => {
+    vi.useFakeTimers();
+    const ghost = fakeGhost({ lifecycle: 'resident' });
+    const child = new FakeNodeProcess();
+    vi.spyOn(child, 'kill').mockImplementation(() => {
+      child.killed = true;
+      return true;
+    });
+    const onStopSettledLate = vi.fn();
+    const broker = new GhostNodeRuntimeBroker({
+      getGhost: () => ghost,
+      spawnProcess: () => child as unknown as NodeWorkerProcess,
+      onStopSettledLate,
+    });
+    await broker.startResident(ghost);
+
+    const stopping = expect(broker.stopAndWait('node-ghost')).rejects.toThrow('插件 Node 进程停止超时');
+    await vi.advanceTimersByTimeAsync(2_500);
+    await stopping;
+    if (stoppedAgain) broker.stop('node-ghost');
+
+    child.emit('exit', 0);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(onStopSettledLate).toHaveBeenCalledTimes(stoppedAgain ? 0 : 1);
+    if (!stoppedAgain) expect(onStopSettledLate).toHaveBeenCalledWith('node-ghost');
+  });
+
   it('工作进程先报 error 时仍终止并等待真实 exit', async () => {
     vi.useFakeTimers();
     const ghost = fakeGhost({ lifecycle: 'resident' });

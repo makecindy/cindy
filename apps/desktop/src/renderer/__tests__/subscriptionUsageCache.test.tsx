@@ -3,11 +3,12 @@ import { act, cleanup, render, renderHook, waitFor } from '@testing-library/reac
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createInstance } from 'i18next';
 import { I18nextProvider } from 'react-i18next';
-import { setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
+import { getDataOwnerGeneration, setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 import { useClaudeSubscriptionUsage } from '@/hooks/useClaudeSubscriptionUsage';
 import { useXaiSubscriptionUsage } from '@/hooks/useXaiSubscriptionUsage';
 import { useXaiRateLimit } from '@/hooks/useXaiRateLimit';
 import { useAccountUsage } from '@/hooks/useAccountUsage';
+import { readPluginEngineUsage } from '@/hooks/pluginEngineUsage';
 import { PluginEngineUsageChip } from '@/components/status/PluginEngineUsageChip';
 import { resetPluginEnginesStoreForTests, usePluginEngines } from '@/hooks/usePluginEngines';
 
@@ -46,6 +47,21 @@ it('shares plugin account usage across task switches without leaking it to a new
   await act(async () => {});
   expect(otherAccount.queryByRole('button')).toBeNull();
   expect(invoke).toHaveBeenCalledTimes(2);
+});
+
+// Unit, #13748: two tasks on one remote engine have different bindings. An engine-only
+// request returns the paused original account, and an engine-only cache mixes their results.
+it('reads and caches each remote task quota on its host', async () => {
+  setDataOwnerGeneration('remote-task-quota');
+  const invoke = vi.fn(async (_device, _channel, [, task]) => ({
+    updatedAt: 1, windows: [{ label: 'Quota', remainingPercent: task?.sessionId === 'a' ? 98 : task?.sessionId === 'b' ? 37 : 66 }],
+  }));
+  vi.stubGlobal('electronAPI', { deviceLink: { invoke } });
+  const read = (id?: string) => readPluginEngineUsage(getDataOwnerGeneration(), 'host', 'demo:acp', id).result;
+  for (const [id, remainingPercent] of [['a', 98], ['b', 37], [undefined, 66], ['a', 98]] as const) {
+    expect(await read(id)).toMatchObject({ windows: [{ remainingPercent }] });
+  }
+  expect(invoke).toHaveBeenCalledTimes(3);
 });
 
 // Unit, #11563: a catalogue push can arrive while the visible chip awaits its first

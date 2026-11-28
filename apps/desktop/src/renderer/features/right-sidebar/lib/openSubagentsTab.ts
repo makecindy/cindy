@@ -2,6 +2,7 @@
 
 import type { SubagentProvider } from '@cindy/maker-shared/subagent-workspace';
 
+import { requestRevealSessionTab } from '../globalTabs';
 import { ensureSingletonTab, getBucket, patchTabState, setActiveTab } from '../store';
 import { routeSidebarCommand } from './detachedSidebarRouting';
 import { requestRightSidebarVisibility } from './sidebarCommands';
@@ -79,10 +80,11 @@ export async function openSubagentsTab(
     }));
     if (await rerouteIfOwnershipMoved()) return;
   }
-  if ((focusTab || bucket.activeTabId === null) && bucket.activeTabId !== tab.id) {
+  if (focusTab && bucket.activeTabId !== tab.id) {
     await setActiveTab(sessionId, tab.id);
     if (await rerouteIfOwnershipMoved()) return;
   }
+  if (focusTab) requestRevealSessionTab(sessionId, tab.id);
   if (revealSidebar) {
     requestRightSidebarVisibility('open', {
       sessionId,

@@ -97,7 +97,7 @@ export function PluginEngineUsageChip({
   name?: string;
   deviceId: string | null;
   running: boolean;
-  /** A local task: an engine with several accounts shows this task's account. */
+  /** Task ID on the device serving usage, when that device owns the task. */
   sessionId?: string;
   /** Active (or next-message) model id, used to pick the matching quota window group. */
   modelId?: string | null;

@@ -23976,10 +23976,10 @@
   },
   "openAiAccountGroup": {
     "removeDescription": "Cette connexion ne recevra plus de nouvelles tâches du groupe. Les tâches en cours resteront sur cette connexion.",
-    "mergeDescription": "Les nouvelles tâches lancées via {{target}} pourront utiliser les deux fournisseurs. Les connexions, les clés et les tâches existantes restent en place. Cindy testera la clé API de {{apiKey}} avant de relier les fournisseurs.",
+    "mergeDescription": "Les nouvelles tâches lancées via {{target}} seront attribuées aux membres disponibles. Les connexions, les clés et les tâches existantes restent en place. Cindy testera la clé API de {{apiKey}}. Un solde insuffisant ou une limite de facturation n’empêche pas son ajout, mais aucune tâche ne lui sera attribuée automatiquement avant qu’elle soit de nouveau disponible.",
     "modelUnavailable": "Cette connexion ne peut pas utiliser le modèle choisi pour le test. Un nouveau test peut essayer un autre modèle.",
     "noTestModel": "Aucun modèle configuré n’est disponible pour le test. Vérifiez les modèles autorisés dans votre projet OpenAI, puis actualisez ou modifiez la liste de modèles de cette connexion.",
-    "billingPaused": "Attribution suspendue en raison d’un solde insuffisant ou d’une limite de facturation.",
+    "billingPaused": "Attribution automatique suspendue en raison d’un solde insuffisant ou d’une limite de facturation.",
     "title": "Groupe de comptes",
     "testPassed": "Test réussi",
     "refresh": "Actualiser le quota"

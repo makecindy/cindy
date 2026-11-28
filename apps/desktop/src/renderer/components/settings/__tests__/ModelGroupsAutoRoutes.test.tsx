@@ -199,6 +199,9 @@ it('renders flattened local accounts as individual toggleable sources with flat 
       id: 'byok-1', name: 'OpenAI-Codex', connected: true, agents: ['codex'], routing: { codex: {} },
       models: { codex: [{ id: 'gpt-6.2', name: 'GPT-6.2' }] },
     },
+    // The old connection name is no longer an independent account or addable source.
+    { id: 'old-openai', name: 'Old OpenAI alias', connected: true, subscriptionPoolAlias: true, subscriptionPoolTarget: 'openai',
+      subscriptionAccountPool: 'openai', agents: ['codex'], routing: {}, models: {} },
   ];
   const readPool = vi.fn(async () => ({
     provider: 'openai',
@@ -314,6 +317,8 @@ it('renders flattened local accounts as individual toggleable sources with flat 
 
     // 手动「添加来源」下拉只列单账号，不列整池。
     fireEvent.click(screen.getByRole('combobox', { name: 'modelGroups.sources.addWhole' }));
+    expect(screen.queryByRole('option', { name: /Old OpenAI alias/ })).toBeNull();
+    expect(readPool).not.toHaveBeenCalledWith(expect.objectContaining({ providerId: 'old-openai' }));
     fireEvent.click(screen.getByRole('option', { name: 'OpenAI · second@example.com' }));
     expect(onAdd).toHaveBeenCalledWith({ providerId: 'openai', accountId: 'second' });
   } finally {

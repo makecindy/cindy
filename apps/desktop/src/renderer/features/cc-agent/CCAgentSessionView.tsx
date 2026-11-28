@@ -2722,6 +2722,8 @@ function CCAgentSessionContent({
       : usageAccount.kind === 'task'
         ? (remoteDeviceId ?? null)
         : null;
+  // Session IDs identify bindings on the task host. A separate execution device can have an unrelated task with the same ID.
+  const usageSessionId = usageAccount.kind === 'task' ? sessionId : undefined;
   const usageCatalogue = taskAccountDeviceId
     ? (taskAccountDeviceId === pluginEngineAgentDeviceId && agentDevicePluginEngines !== undefined
       ? agentDevicePluginEngines
@@ -7548,11 +7550,11 @@ function CCAgentSessionContent({
                     )}
                     {pluginUsageKey && viewVisible && !session?.remoteHostId && !isSharedTaskPeer(remoteDeviceId ?? '')
                       && usageAccount.kind !== 'unreadable' && (usageEngine?.reportsUsage || !usageCatalogue) && (
-                      <PluginEngineUsageChip key={JSON.stringify([dataOwnerGeneration, taskAccountDeviceId, pluginUsageKey])}
+                      <PluginEngineUsageChip key={JSON.stringify([dataOwnerGeneration, taskAccountDeviceId, pluginUsageKey, usageSessionId])}
                         engineKey={pluginUsageKey} name={usageEngine?.name} deviceId={taskAccountDeviceId}
                         modelId={pluginEngineSwitchIntent?.model ?? session?.model ?? null}
                         modelName={pluginEngineModelName(usageEngine, pluginEngineSwitchIntent?.model ?? session?.model ?? '') ?? null}
-                        running={agentStatus.isRunning} {...(sessionId ? { sessionId } : {})} />
+                        running={agentStatus.isRunning} {...(usageSessionId ? { sessionId: usageSessionId } : {})} />
                     )}
                     {!pluginUsageKey && (!pluginEngineTask || agentSwitchIntent) && (
                       <TodaySpendChip
