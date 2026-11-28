@@ -8,6 +8,19 @@
       "selected": "已选择"
     }
   },
+  "voiceCall": {
+    "title": "语音通话",
+    "saved": "记录已保存",
+    "you": "你",
+    "companion": "伙伴",
+    "sendFailed": "发送失败，原话已保留。",
+    "handoff": {
+      "sending": "正在交接…",
+      "accepted": "已交给伙伴处理",
+      "failed": "交接失败，原话已保留",
+      "completed": "结果已返回"
+    }
+  },
   "renderer": {
     "sourceLocalApp": "由本机应用「{{name}}」发送",
     "sourceLocalAppId": "应用 ID：{{id}}",
@@ -67,7 +80,6 @@
       "dingtalk": "钉钉",
       "imessage": "iMessage"
     },
-    "modelMismatch": "本轮由 {{actual}} 响应，而非所选的 {{selected}}（服务端临时降级）",
     "copyStateCopying": "复制中",
     "copyStateCopied": "已复制",
     "copyStateFailed": "复制失败",
@@ -265,6 +277,8 @@
     "delete": "删除",
     "retry": "重试",
     "notSent": "未发送",
+    "deliveryUnconfirmed": "发送结果未确认",
+    "recheckDelivery": "重新确认",
     "imagesNotUploaded_one": "{{count}} 张图片没传上去",
     "imagesNotUploaded_other": "{{count}} 张图片没传上去",
     "waitingForNamedComputer": "连上{{name}}后自动发送",
@@ -444,6 +458,9 @@
     "send": "发送消息",
     "sending": "正在发送…",
     "sent": "已提交",
+    "sendTooManyArguments": "这条消息一次处理的内容超过 {{limit}} 项。请让助手分组处理后重新生成。",
+    "sendValueUnavailable": "这条消息需要的值无法读取。请让助手检查表单字段。",
+    "sendTextUnavailable": "无法生成要发送的消息。",
     "sendFailed": "消息未提交，已保留填写内容",
     "playVideo": "播放视频",
     "downloadVideo": "下载视频",
@@ -500,5 +517,103 @@
     "wrap": "自动换行",
     "lineNumbers": "行号",
     "rendered": "查看文稿"
+  },
+  "modelMismatch": {
+    "notice": "模型供应商将本轮改由 {{actual}} 响应（原选 {{selected}}）",
+    "noticeWithProvider": "{{provider}} 将本轮改由 {{actual}} 响应（原选 {{selected}}）",
+    "infoLink": "了解原因",
+    "infoTitle": "为什么实际响应的模型不同",
+    "infoSummary": "Cindy 已按你选择的 {{selected}} 发送本轮请求，但模型供应商实际由 {{actual}} 返回了结果。",
+    "infoSummaryWithProvider": "Cindy 已按你选择的 {{selected}} 发送本轮请求，但 {{provider}} 实际由 {{actual}} 返回了结果。",
+    "infoCausesTitle": "常见原因",
+    "infoCausePolicy": "模型触发安全或内容策略回退（例如部分新模型在拒答时会自动改由旧版模型继续响应）。",
+    "infoCauseLoad": "模型供应商高峰期高负载，临时将请求分流至备用模型。",
+    "infoCauseGateway": "第三方或自建模型网关将模型名称映射到了其他模型。",
+    "infoActionsTitle": "可以怎么处理",
+    "infoActionContinue": "无需重新设置：这只影响本轮，后续消息仍会继续请求 {{selected}}。",
+    "infoActionRetry": "如果本轮结果不符合预期，可调整提问后重新发送，或临时切换到其他可用模型。",
+    "infoActionCheckProvider": "如果多轮持续出现，可检查当前模型供应商的配额状态或网关映射配置。"
+  },
+  "errorExplain": {
+    "providerSafetyRefusal": {
+      "title": "为什么回复被拦截",
+      "summary": "Cindy 已原样发送你的请求，但模型供应商内置的安全与内容策略阻止了本次输出。这不是 Cindy 的审核或本地插件拦截。",
+      "summaryWithProvider": "Cindy 已原样发送你的请求，但 {{provider}} 内置的安全与内容策略阻止了本次输出。这不是 Cindy 的审核或本地插件拦截。",
+      "cause1": "请求内容、附件或前文上下文触发了供应商的安全审查规则。",
+      "cause2": "模型在生成中途触发输出安全过滤并中断了返回。",
+      "action1": "原样重试通常会再次被拦，请先调整措辞，或去掉可能触发审查的片段后再发送。",
+      "action2": "如果前文上下文已触发拦截，可新建任务继续，或切换其他可用模型。"
+    },
+    "overload": {
+      "title": "为什么提示服务繁忙",
+      "summary": "模型供应商当前计算资源紧张（例如高峰期过载或返回 HTTP 529），暂时无法接纳本轮请求。这与 Cindy 本身及你的本地网络无关。",
+      "summaryWithProvider": "{{provider}} 当前计算资源紧张（例如高峰期过载或返回 HTTP 529），暂时无法接纳本轮请求。这与 Cindy 本身及你的本地网络无关。",
+      "cause1": "该模型在高峰时段请求量激增，供应商算力暂时满载。",
+      "cause2": "供应商临时维护或限流调度，当前没有可用容量。",
+      "action1": "无需重启 Cindy 或调整网络设置，稍等片刻后点击「重试」即可。",
+      "action2": "如需立即继续，可临时切换到其他模型，或换用模型组中的其他来源。"
+    },
+    "streamInterrupted": {
+      "title": "为什么输出中途中断",
+      "summary": "模型供应商在流式返回结果的过程中意外断开了连接。Cindy 本身没有崩溃，已完成的步骤与对话记录均已保留。",
+      "summaryWithProvider": "{{provider}} 在流式返回结果的过程中意外断开了连接。Cindy 本身没有崩溃，已完成的步骤与对话记录均已保留。",
+      "cause1": "模型供应商服务端在生成中途发生临时异常或主动断流。",
+      "cause2": "第三方中转网关在长回复传输中途超时断开。",
+      "action1": "直接点击「重试」，或发送「继续」让模型接着完成。",
+      "action2": "如果连续多轮中断，可临时换用其他模型，或检查自定义网关的超时配置。"
+    },
+    "upstreamStatus": {
+      "title": "为什么返回服务异常",
+      "summary": "Cindy 已成功发出请求，但模型供应商服务返回了 HTTP {{status}} 内部错误（无详细错误正文），属于外部服务异常而非 Cindy 故障。",
+      "summaryWithProvider": "Cindy 已成功发出请求，但 {{provider}} 服务返回了 HTTP {{status}} 内部错误（无详细错误正文），属于外部服务异常而非 Cindy 故障。",
+      "cause1": "模型供应商接口暂时出现服务端内部故障。",
+      "cause2": "第三方或自建模型网关转发请求失败，或拦截后返回了自定义 5xx 状态码。",
+      "action1": "稍后点击「重试」；如果是临时抖动，通常很快会恢复。",
+      "action2": "如果使用第三方或自建网关，可查看该网关的服务状态与日志，或先切换其他模型供应商。"
+    },
+    "modelAccessDenied": {
+      "title": "为什么无权访问此模型",
+      "summary": "模型供应商拒绝了当前账号对该模型的访问请求，Cindy 无法绕过供应商侧的模型权限控制。",
+      "summaryWithProvider": "{{provider}} 拒绝了当前账号对该模型的访问请求，Cindy 无法绕过 {{provider}} 的模型权限控制。",
+      "cause1": "当前订阅套餐等级或 API 密钥尚未开通该模型权限。",
+      "cause2": "组织管理员限制了可用模型清单，或当前账号所在地区暂不支持该模型。",
+      "action1": "切换到当前账号已开通的其他模型继续任务。",
+      "action2": "前往模型供应商控制台或订阅页面确认权限；如刚升级套餐，重新连接账号后再试。"
+    },
+    "providerQuotaExceeded": {
+      "title": "为什么提示配额或余额不足",
+      "summary": "当前使用的外部模型供应商账户可用余额或配额已耗尽，供应商拒绝了本次计费请求。这与 Cindy 账户本身无关。",
+      "summaryWithProvider": "你连接的 {{provider}} 账户可用余额或配额已耗尽，{{provider}} 拒绝了本次计费请求。这与 Cindy 账户本身无关。",
+      "cause1": "该供应商账户的预付余额已用完，或尚未绑定有效支付方式。",
+      "cause2": "该 API 密钥设置了消费上限，或组织配额已达上限。",
+      "action1": "前往对应模型供应商的计费页面充值或提高限额后，再点击「重试」。",
+      "action2": "也可以在模型选择器中切换到其他有可用配额的模型供应商继续。"
+    },
+    "usageLimit": {
+      "title": "为什么达到用量上限",
+      "summary": "当前连接的模型账号已触发模型供应商设定的周期用量窗口上限，暂时无法继续处理新请求。这不是 Cindy 施加的限制。",
+      "summaryWithProvider": "当前连接的 {{provider}} 账号已触发 {{provider}} 设定的周期用量窗口上限，暂时无法继续处理新请求。这不是 Cindy 施加的限制。",
+      "cause1": "订阅账号在当前时间窗口（如 5 小时或每周周期）内的用量已用满。",
+      "cause2": "同一账号在多个任务或设备上并发使用，共享同一个周期配额窗口。",
+      "action1": "等待配额窗口重置后重试；如果已开启自动继续，重置后任务会自动接续。",
+      "action2": "如需马上继续，可临时切换到其他模型、其他已连接的订阅账号或 API 供应商。"
+    },
+    "encryptedContent": {
+      "title": "为什么无法读取部分历史内容",
+      "summary": "部分模型会把内部推理状态加密保存在对话历史中，且仅限原供应商和原账号解密。更换供应商、账号或远端整理上下文时，当前模型供应商可能无法读取旧加密片段。",
+      "summaryWithProvider": "部分模型会把内部推理状态加密保存在对话历史中，且仅限原供应商和原账号解密。更换供应商、账号或远端整理上下文时，{{provider}} 可能无法读取旧加密片段。",
+      "cause1": "中途切换了不同的模型供应商或账号，新供应商无法解密之前的加密推理内容。",
+      "cause2": "远端上下文整理或跨端点路由时，加密状态与当前请求目标不匹配。",
+      "action1": "切回原先使用的模型供应商或账号，即可继续当前任务。",
+      "action2": "或点击「在新任务中继续」，Cindy 会保留可读对话记录并移除无法解密的加密片段，原任务不受影响。"
+    },
+    "failedSamplingAttempt": {
+      "title": "为什么会显示未完成的回复",
+      "summary": "模型在生成这条回复时中途失败或被中断，只输出了前半段内容。Cindy 保留了已生成的片段方便你参考，避免已给出的思路直接消失。",
+      "cause1": "模型在流式输出过程中遇到供应商报错、网络中断或安全策略拦截。",
+      "cause2": "任务在回复完全收尾前触发了错误或被停止。",
+      "action1": "查看下方的错误提示了解具体中断原因，并确认是否需要重试。",
+      "action2": "可以直接点击重试或发送新消息继续，已保留的内容仍可作参考，无需从头说明。"
+    }
   }
 }

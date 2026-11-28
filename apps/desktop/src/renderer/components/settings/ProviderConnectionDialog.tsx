@@ -2663,6 +2663,7 @@ export function ProviderConnectionDialog({
           {!simpleAdding && <div className="flex flex-col gap-2">
             <FieldLabel>{t('settings.providers.custom.fields.protocols')}</FieldLabel>
             <SegmentedControl
+              data-settings-search-action="Switch which runtime's endpoint, protocol and models are being edited"
               role="tablist"
               aria-label={t('settings.providers.custom.fields.protocols')}
               value={activeTab}
@@ -2671,8 +2672,7 @@ export function ProviderConnectionDialog({
                 setActiveTab(agent);
               }}
               fullWidth
-              height={36}
-              optionHeight={26}
+              density="lg"
               optionClassName="text-13 px-2"
               options={VISIBLE_AGENTS.map((agent) => {
                 const meta = TAB_META[agent];

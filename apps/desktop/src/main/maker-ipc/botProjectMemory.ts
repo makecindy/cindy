@@ -21,8 +21,8 @@ export const TEAMMATE_MEMORY_MOVE_RECEIPT_FILE = 'project-memory-move.json';
 /** The memory folder, relative to the teammate's project (defined beside its `.gitignore` entries). */
 export { TEAMMATE_PROJECT_MEMORY_SEGMENTS };
 
-/** Derived files beside the records: USER.md travels inside the profile, MEMORY.md is a rebuilt index. */
-const DERIVED_MEMORY_FILES = new Set(['USER.md', 'MEMORY.md', 'README.md']);
+/** Non-record files beside the memories: USER.md travels inside the profile, README.md is the template guide. MEMORY.md is now curated and synced. */
+const DERIVED_MEMORY_FILES = new Set(['USER.md', 'README.md']);
 
 export function teammateWorkspaceDir(ownerRoot: string, botId: string): string {
   return path.join(botProfileDir(ownerRoot, botId), 'workspace');

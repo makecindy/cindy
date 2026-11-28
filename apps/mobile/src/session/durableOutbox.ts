@@ -16,6 +16,8 @@ export interface DurableUpload {
   annotationRegions?: AnnotationRegion[];
 }
 
+export type OutboxHistoryConfirmation = 'unconfirmed' | 'requested';
+
 export interface DurableOutboxRecord {
   version: 1;
   /** Canonical realm-qualified auth accountKey; unqualified pre-release rows are never claimed. */
@@ -56,6 +58,10 @@ export interface DurableOutboxRecord {
   retrySafe?: boolean;
   /** A persisted host user row was observed; only local history caching remains. */
   historyConfirmed?: boolean;
+  /** A legacy peer could not confirm this send. Only a read may release it. */
+  historyConfirmation?: OutboxHistoryConfirmation;
+  /** Failed awaits a Retry tap; queued may retry once; sending is an uncertain retry. */
+  retryAfterConfirmedMiss?: true;
   error?: string;
   cancelRequested?: boolean;
   /** Delivery is settled; retain the ledger solely until local cleanup succeeds. */
@@ -68,6 +74,10 @@ export interface DurableOutboxRecord {
   failedUploadSlot?: number;
   creation?: {
     draft: NewSessionDraft;
+    /** Explicit first-send intent, saved after the form accepted this plain dialogue. */
+    needsHostCreation?: true;
+    /** Host task creation was confirmed by outbox recovery before the first input was prepared. */
+    hostCreated?: true;
     originalWorkingDir?: string;
     cancelled?: true;
     /** Creation was handed back to the editor; restore its entry after restart. */
@@ -97,8 +107,21 @@ export function isDurableOutboxSettled(record: DurableOutboxRecord): boolean {
 export function isDurableCreationDraft(record: DurableOutboxRecord): boolean {
   return record.suspended === true && record.state === 'failed'
     && !!(record.creation?.editReady || record.creation?.cancelled)
+    && !record.creation?.hostCreated
     && !record.prepared && !record.template && !record.enqueueStarted && record.sendAtMs === undefined
     && !record.cancelRequested && !isDurableOutboxSettled(record);
+}
+
+/** True while a creation record still owns an unconfirmed host task, including after a failed create attempt. */
+export function hasUncreatedHostSession(record: DurableOutboxRecord): boolean {
+  return !!record.creation && !record.creation.hostCreated
+    && !record.prepared && !record.template
+    && !isDurableOutboxSettled(record);
+}
+
+/** True while a submitted dialogue creation record still has no confirmed host task (queued or failed). */
+export function isPendingHostDialogueCreation(record: DurableOutboxRecord): boolean {
+  return record.creation?.needsHostCreation === true && hasUncreatedHostSession(record);
 }
 
 /**
@@ -116,6 +139,17 @@ export function isDurableOutboxHandedOff(record: Pick<DurableOutboxRecord, 'stat
 export function isDurableOutboxUnsent(record: DurableOutboxRecord): boolean {
   return record.enqueueStarted === false || (record.enqueueStarted === undefined
     && !record.prepared && record.sendAtMs === undefined);
+}
+
+export function needsHostCreation(record: DurableOutboxRecord): boolean {
+  const creation = record.creation;
+  return creation?.needsHostCreation === true && !creation.hostCreated && creation.draft?.workspaceKind === 'dialogue'
+    && !creation.draft.pluginEngine && !creation.draft.agentDeviceId && !creation.originalWorkingDir
+    && !record.chat && !record.resourceRef && !record.uploads.length && !record.item.attachmentSlots.length
+    && record.state === 'queued'
+    && !record.suspended && !record.creation!.cancelled && !record.creation!.editReady
+    && !record.cancelRequested && !record.template && !record.prepared
+    && !isDurableOutboxSettled(record) && isDurableOutboxUnsent(record);
 }
 
 export const DURABLE_OUTBOX_PREFIX = "cindy.mobile.outbox.v1.";
@@ -250,7 +284,11 @@ export function createDurableOutbox(storage: OutboxStorage, reconcileDraft?: (
             console.warn('[outbox] skipped unreadable ledger row', key);
             continue;
           }
-          loaded.push(record);
+          // A check or an already-started retry interrupted by exit needs a new check.
+          loaded.push(record.retryAfterConfirmedMiss && record.state === 'sending'
+            ? { ...record, state: 'failed', historyConfirmation: 'unconfirmed', retryAfterConfirmedMiss: undefined }
+            : record.historyConfirmation === 'requested'
+              ? { ...record, historyConfirmation: 'unconfirmed' } : record);
         }
         assertOwner(owner, epoch);
         records = loaded.sort((a, b) => a.createdAt - b.createdAt);
@@ -309,6 +347,10 @@ function isLoadableOutboxRecord(
     && keyFor(row) === key
     && Array.isArray(row.uploads)
     && (row.historyConfirmed === undefined || typeof row.historyConfirmed === 'boolean')
+    && (row.historyConfirmation === undefined
+      || row.historyConfirmation === 'unconfirmed'
+      || row.historyConfirmation === 'requested')
+    && (row.retryAfterConfirmedMiss === undefined || row.retryAfterConfirmedMiss === true)
     && (row.cleanupOutcome === undefined
       || row.cleanupOutcome === 'accepted'
       || row.cleanupOutcome === 'cancelled')

@@ -230,7 +230,7 @@ import { currentRelayFrameAuth } from './selfHostedRelayFrameAuth.js';
 import { installAgentNetMediaRouting } from './agentNetMedia.js';
 import { bindAgentNetSharing, stopAgentNetSharing, agentNetSharingRoute, agentNetProviderShareRoutes } from './agentNetSharing.js';
 import { installAgentNetSharingPolicy } from './agentNetSharingPolicy.js';
-import { linkedProviderShareAdmission, setLinkedShareControlTransport } from './agentNetLinkedShares.js';
+import { linkedProviderShareAdmission, linkedProviderShareSessionSocket, setLinkedShareControlTransport } from './agentNetLinkedShares.js';
 import { isAgentNetActive, agentNetAllowsLegacy, agentNetRequiresEncryption, createAgentNetOrLegacySocket, noteAgentNetIdentityRefused, noteOfficialAgentNetRemoved, rejoinOfficialAgentNet, agentNetSelectionKey, agentNetShouldUseLegacyPeer, agentNetShouldProbeLegacyPeer, agentNetPeerSnapshot, agentNetPeerRoutes,
   agentNetTransportAttestation, verifyAgentNetTransportAttestation, agentNetPrefersPrimary, useAgentNetSessions, agentNetSession,
   agentNetPeerRoute, agentNetRelayStalled, agentNetPeerConnectedAt, connectAgentNetSessionPeer, agentNetPeerState, agentNetNotifyCoverage, agentNetListedPhones, agentNetNetworkChanged, agentNetRelayConnected, onAgentNetRelayChange, onAgentNetPathChange, agentNetRelayRoute, setAgentNetDuplicateIdentityCooldown } from './agentNetRuntime.js';
@@ -249,6 +249,7 @@ import {
 export { setBusyProbe };
 
 const log = createLogger('device-link');
+let canUpgradeLinkedShareBackgroundLink: (peer: string) => boolean = () => false;
 // relay 建连专用的 DNS 回退(成功缓存 / 失败与慢解析回退最近成功地址)。
 const relayDnsLookup = createDnsFallbackLookup({ log });
 
@@ -941,6 +942,8 @@ export interface DeviceLinkServiceOptions {
 }
 
 let stopNetworkWatch: (() => void) | null = null;
+/** Re-uploads this computer's phone share when the remote-control switch decides whether it counts. */
+let taskActivityShareChanged: (() => void) | null = null;
 
 export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): void {
   installAgentNetMediaRouting();
@@ -993,7 +996,9 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
     // Capture both the endpoint and credential: a later account/realm switch
     // must never re-label an old host snapshot with the new account's token.
     const baseUrl = officialDeviceLinkApiBase();
-    const body = projectHostTaskActivity(island.getLocalTaskOverview());
+    // The phone counts only tasks it can open: with remote control off this computer's tasks are
+    // unreachable from the phone, so it reports an empty share instead of a stale or partial one.
+    const body = projectHostTaskActivity(readDeviceLinkSettings().remoteControlEnabled ? island.getLocalTaskOverview() : []);
     const key = JSON.stringify([baseUrl, authManager.getCurrentUserId(), body]);
     if (lastActivityUpload?.key === key && Date.now() - lastActivityUpload.at < 55_000) return;
     try {
@@ -1006,7 +1011,12 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
     }
   });
   const unsubscribeTaskActivity = options.taskActivity?.subscribeTaskOverview(taskActivityPublisher.changed);
-  onQuit('task-activity-push', () => { unsubscribeTaskActivity?.(); taskActivityPublisher.dispose(); });
+  taskActivityShareChanged = taskActivityPublisher.changed;
+  onQuit('task-activity-push', () => {
+    taskActivityShareChanged = null;
+    unsubscribeTaskActivity?.();
+    taskActivityPublisher.dispose();
+  });
   remoteCredentialHost.currentToken = () => {
     const membership = authManager.getCurrentUserId(), token = authManager.getAccessToken();
     return membership && token ? { realm: authManager.getActiveAuthRealm(), membership, authDevice: authManager.getDeviceId(), token } : null;
@@ -1175,6 +1185,17 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
   // 换到 Agent-Net 的 Device Link 分享：附件跟着这次控制链路实际走的路（受邀者看本机发起的链路，分享者看对方建来的链路）。
   setLinkedShareControlTransport((peer) => parseProviderSharePeer(peer)?.role === 'host'
     ? outboundOnSession(routedClient, sessionLinks, peer) : sessionLinks.ownsInbound(peer));
+  const linkedUpgradeAttemptAt = new Map<string, number>();
+  canUpgradeLinkedShareBackgroundLink = (peer: string): boolean => {
+    if (linkTornDown || parseProviderSharePeer(peer)?.role !== 'host' || sessionLinks.ownsOutbound(peer)
+      || linkedProviderShareSessionSocket(peer) == null || snapshotSubscriptions(peer).length > 0
+      || routedClient.getReliableSendQueueDepth(peer) > 0 || routedClient.hasPendingRequestsTo(peer)) return false;
+    const now = performance.now();
+    if (now - (linkedUpgradeAttemptAt.get(peer) ?? -Infinity) < 60_000) return false;
+    linkedUpgradeAttemptAt.set(peer, now);
+    if (linkedUpgradeAttemptAt.size > 512) linkedUpgradeAttemptAt.delete(linkedUpgradeAttemptAt.keys().next().value!);
+    return true;
+  };
   // 另一台电脑在用本机设备身份(同一系统镜像装机、MachineGuid 相同)：确认后提示用户给这台电脑
   // 换身份，并放慢被顶替后的重连。没被反复顶替时什么都不做。
   identityConflictMonitor = createDeviceIdentityConflictMonitor({
@@ -2021,6 +2042,7 @@ function teardownActiveLink(): void {
   identityConflictMonitor?.reset();
   if (!client || linkTornDown) return;
   linkTornDown = true;
+  canUpgradeLinkedShareBackgroundLink = () => false;
   // 拓扑页立刻清空;下一段链路从头比较结构。
   peerLinksPush.dispose();
   broadcast(DEVICE_LINK_PUSH.PEER_LINKS_CHANGED, { links: [], relayRttMs: null });
@@ -2306,6 +2328,7 @@ export async function setRemoteControlEnabled(enabled: boolean, assertCurrent?: 
   // 本地刚做过的动作重复 enforce 无害,同时能捕获这条竞态窗口里的外部变更。
   pollExternalSettingsChange();
   broadcast(DEVICE_LINK_PUSH.CONTROL_ENABLED_CHANGED, { remoteControlEnabled: readDeviceLinkSettings().remoteControlEnabled });
+  taskActivityShareChanged?.();
   log.info(`remote control ${enabled ? 'enabled' : 'disabled'}`);
   if (enabled) noteLocalNetworkControlEnabled();
 }
@@ -2449,6 +2472,7 @@ function pollExternalSettingsChange(): void {
     broadcast(DEVICE_LINK_PUSH.CONTROL_ENABLED_CHANGED, { remoteControlEnabled });
     client.sendPresence({ remoteControlEnabled });
     if (!remoteControlEnabled) dropAllControllers(client, 'toggle-off');
+    taskActivityShareChanged?.();
     log.info(
       `remote control ${remoteControlEnabled ? 'enabled' : 'disabled'} (external settings change)`,
     );
@@ -2956,7 +2980,7 @@ async function backgroundInvokeDevice(deviceId: string, channel: string, args: u
 
 async function backgroundInvokeDeviceLive(deviceId: string, channel: string, args: unknown[], options?: { preSend?: () => void; beforeDispatch?: () => void }): Promise<InvokeResultPayload> {
   options?.preSend?.();
-  if (!client?.isLinkReady(deviceId)) {
+  if (!client?.isLinkReady(deviceId) || canUpgradeLinkedShareBackgroundLink(deviceId)) {
     assertBackgroundLinkAccepted(await openRemoteLink(deviceId), {
       hasOutboundSubscriptions: () => snapshotSubscriptions(deviceId).length > 0,
       closeLink: () => closeRemoteLink(deviceId),

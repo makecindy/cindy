@@ -160,6 +160,16 @@ describe('plugin annotation follows actual calls, not the assistant turn', () =>
     expect(state?.pendingGhostIds.size).toBe(0);
   });
 
+  // Unit / production collector: a friendly ACP title used to hide the summon
+  // state even when the message has the canonical card identity.
+  it('tracks a titled plugin call until its result arrives', () => {
+    const original = call('c1');
+    const titled = { ...original, mcpToolName: original.toolName, toolName: '运行插件' };
+    const messages = [user('u1'), titled];
+    expect(collectGhostCallsByUserTurn(messages, true).get('u1')?.running).toBe(true);
+    expect(collectGhostCallsByUserTurn([...messages, result('c1')], true).get('u1')?.running).toBe(false);
+  });
+
   it('keeps running until every concurrent call returns, including repeated calls to one plugin', () => {
     const messages = [user('u1'), call('c1'), call('c2'), call('c3', 'poster')];
     const partial = collectGhostCallsByUserTurn([...messages, result('c1'), result('c3')], true).get('u1');

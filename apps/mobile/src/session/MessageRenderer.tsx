@@ -2,6 +2,7 @@ import { useWallpaper, wallpaperRaisedFill } from '@/theme/wallpaper';
 import { usePreviewChromeFrame } from "./usePreviewChromeFrame";
 import { parseSettingsNavigationUrl } from '@cindy/maker-shared/settings-navigation';
 import { SettingsLinkSpan } from './SettingsLinkSpan';
+import { groupExternalLinkDisplay, groupExternalLinkText } from './groupExternalLinkDisplay';
 import type { ViewInstance } from 'react-native';
 import { resolveAttachmentPreviewSource } from './messagePayload';
 import {
@@ -55,6 +56,7 @@ import { extractPayloadToolResultMedia, managedToolMediaKind } from '@cindy/make
 import { attachmentPreviewKind, previewSourceName } from '@cindy/maker-shared/attachment-preview';
 import { AuthorizationMessageCard } from './AuthorizationMessageCard';
 import { collectBotMessageTimeGroups, formatBotMessageGroupTime, type BotTimelineMessage } from '@cindy/maker-shared/botTimeline';
+import { VoiceCallHistoryCard } from './VoiceCallHistoryCard';
 import { CompanionMessageCard } from '@/session/CompanionMessageCard';
 import { CompanionEntering } from '@/session/CompanionEntering';
 import { LOCAL_SEND_FRESH_MS, localSendStartedAt } from '@/session/localSendMotion';
@@ -99,7 +101,6 @@ import {
   Sparkles,
   Timer,
   Trash2,
-  TriangleAlert,
   Undo2,
   X,
 } from 'lucide-react-native';
@@ -155,6 +156,10 @@ import {
 } from '@/platform/chrome';
 import { MessageActionSheet } from '@/session/MessageActionSheet';
 import { MessageUsageCost } from '@/session/MessageUsageCost';
+import { FailedSamplingNotice } from '@/session/FailedSamplingNotice';
+import { ModelMismatchNotice } from '@/session/ModelMismatchNotice';
+import { NoticeExplainButton } from '@/session/NoticeExplainSheet';
+import { resolveMobileErrorExplain } from '@/session/chatErrorExplain';
 import { messageCostParts } from '@cindy/maker-shared/usage-cost-details';
 import { buildMobileMessageMenu, type MobileMessageMenuActionId } from '@/session/messageActionMenu';
 import { isShareableMessage } from '@/session/shareSelectionStore';
@@ -241,7 +246,6 @@ import {
   formatMessageRelativeTime,
   formatMessageTurnCost,
   formatMessageTurnTokens,
-  formatModelShortLabel,
   mobileMessageShowsActionBar,
   writeClipboardText,
   type MobileMessageControlActionId,
@@ -297,6 +301,9 @@ import {
 } from '@/session/remoteSessionStore';
 import {
   parseSourceSessionTarget,
+  readMessageDispatchRoute,
+  messageDispatchRouteMismatch,
+  messageDispatchRouteLabel,
   shouldShowSourceDevice,
   type MessageSourceDevice,
   type MessageSourcePlugin,
@@ -336,6 +343,7 @@ import {
   type MobileWorkGroupItem,
 } from '@/session/messageRenderModel';
 import {
+  OutboxHistoryConfirmationRow,
   PendingSendBubble,
   type PendingSendBubbleActions,
 } from '@/session/PendingSendBubble';
@@ -3326,6 +3334,10 @@ const RenderItemView = memo(function RenderItemView({
   let node: ReactNode;
   switch (item.type) {
     case 'message':
+      if (item.message.voiceCall) {
+        node = <VoiceCallHistoryCard record={item.message.voiceCall} />;
+        break;
+      }
       node = item.message.authorization
         ? (
         <AuthorizationMessageCard message={item.message} />
@@ -4354,6 +4366,7 @@ function MessageBubble({
     </View>
   );
 
+  const dispatchRoute = item.message.kind === 'user' ? readMessageDispatchRoute(item.message.source.agentMeta) : undefined;
   const messageNode = (
     <View
       ref={shareableMessage ? handleShareableMessageViewChange : undefined}
@@ -4411,19 +4424,45 @@ function MessageBubble({
         />
       ) : null}
       {attachmentStripNode}
-      {item.message.failedSamplingAttempt ? (
-        <Text style={styles.failedSamplingAttemptText}>
-          {t('message.renderer.failedSamplingAttempt')}
-        </Text>
+      {dispatchRoute && messageDispatchRouteMismatch(dispatchRoute) && dispatchRoute.selected ? (
+        <ErrorNotice message={t('session.screen.modelSwitchPreparation.usingPrevious', {
+          actual: messageDispatchRouteLabel(
+            dispatchRoute,
+            t('models.pluginEngines.genericName'),
+            t('models.pluginEngines.defaultModel'),
+          ),
+          target: messageDispatchRouteLabel(
+            dispatchRoute.selected,
+            t('models.pluginEngines.genericName'),
+            t('models.pluginEngines.defaultModel'),
+          ),
+        })}>
+          {dispatchRoute.switchError ? <AgentErrorDetails message={dispatchRoute.switchError} /> : null}
+        </ErrorNotice>
       ) : null}
+      {item.message.failedSamplingAttempt ? <FailedSamplingNotice /> : null}
       {item.message.role === 'error' ? (
         <ErrorNotice message={displayBubbleBody}>
-          {item.message.rawError ? (
-            <AgentErrorDetails key={item.message.key} message={item.message.rawError}
-            onDiagnose={actions.onDiagnoseError ? () => actions.onDiagnoseError!({
-              message: displayBubbleBody, details: item.message.rawError!,
-            }) : undefined} />
-          ) : null}
+          {item.message.rawError ? (() => {
+            const explain = resolveMobileErrorExplain(
+              {
+                message: item.message.rawError,
+                reason: item.message.errorReason,
+                providerId: item.message.errorProviderId,
+              },
+              t,
+            );
+            return (
+              <AgentErrorDetails
+                key={item.message.key}
+                message={item.message.rawError}
+                explainButton={explain ? <NoticeExplainButton content={explain} /> : undefined}
+                onDiagnose={actions.onDiagnoseError ? () => actions.onDiagnoseError!({
+                  message: displayBubbleBody, details: item.message.rawError!,
+                }) : undefined}
+              />
+            );
+          })() : null}
         </ErrorNotice>
       ) : bubbleShown ? (
         bubble
@@ -4447,19 +4486,12 @@ function MessageBubble({
                 )} />
         )) : null}
       {item.message.kind === 'assistant' && item.message.modelMismatch ? (
-        // 模型降级提示(对齐桌面 AssistantMessage):所选模型本轮被上游静默替换,
-        // 常显在气泡下方,icon 用 warning 橙、文字保持 tertiary 灰阶。
-        <View style={styles.modelMismatchRow} testID="message.modelMismatch">
-          <TriangleAlert color={colors.statusAccent} size={iconSize.xs} strokeWidth={iconStroke.thin} />
-          <Text numberOfLines={2} style={styles.modelMismatchText}>
-            {t('message.renderer.modelMismatch', {
-              actual: formatModelShortLabel(item.message.modelMismatch.actual) || item.message.modelMismatch.actual,
-              selected: formatModelShortLabel(item.message.modelMismatch.selected) || item.message.modelMismatch.selected,
-            })}
-          </Text>
-        </View>
+        <ModelMismatchNotice mismatch={item.message.modelMismatch} />
       ) : null}
-      {hasActions && actions.companion ? (
+      {item.historyConfirmation && actions.pendingSend ? (
+        <OutboxHistoryConfirmationRow clientId={clientId} requested={item.historyConfirmation === 'requested'}
+          onConfirm={actions.pendingSend.onRetryOutbox} />
+      ) : hasActions && actions.companion ? (
         <CompanionMessageActions user={isUser} copied={copyState === 'copied'} copying={copyState === 'copying'} disabled={disabled}
         onCopy={canCopy ? copyMessage : undefined}
         actions={[
@@ -6418,6 +6450,7 @@ function MarkdownBodyBase({
   codeCopyEnabled = true,
   boundTextRuns = false,
   publicMediaOnly = false,
+  groupExternalLinks,
   markdownImageCacheKey,
   layout,
   onOpenPayload,
@@ -6433,6 +6466,8 @@ function MarkdownBodyBase({
   renderRichAnswers?: boolean;
   /** Shared room bodies cannot resolve task-local media from model-authored paths. */
   publicMediaOnly?: boolean;
+  /** Full group bodies keep the same link labels in reading and image-share selection. */
+  groupExternalLinks?: 'interactive' | 'static';
   /** Persisted row ids may replace stream ids; clientId stays stable across that handoff. */
   richStateKey?: string;
   /** 普通任务的超长展开正文可禁用 UITextView，伙伴改用有界文本分组。 */
@@ -6623,6 +6658,7 @@ function MarkdownBodyBase({
     ) =>
       inlines.map((inline, index) => renderInline(inline, index, styles, {
         baseStyle,
+        groupExternalLinks,
         keyPrefix,
         onOpenImage: openMarkdownImage,
         renderManagedImage,
@@ -6635,7 +6671,7 @@ function MarkdownBodyBase({
     ),
     // renderInline also reads translated fallback labels. Invalidate completed
     // memoized text blocks when useTranslation refreshes its bound translator.
-    [onOpenSessionLink, openMarkdownImage, openMarkdownMedia, renderManagedImage, sessionLinkTitles, streaming, styles, t],
+    [groupExternalLinks, onOpenSessionLink, openMarkdownImage, openMarkdownMedia, renderManagedImage, sessionLinkTitles, streaming, styles, t],
   );
   const textRunGroupingOptions = useMemo(() => ({
     ...(Platform.OS === 'android' ? ANDROID_SELECTABLE_TEXT_RUN_GROUPING_OPTIONS : {}),
@@ -6862,6 +6898,7 @@ function MarkdownBodyBase({
         rows: block.rows,
         availableWidth: layout.markdownTableAvailableWidth,
         minWidth: layout.markdownTableCellMinWidth,
+        linkText: groupExternalLinks ? groupExternalLinkText : undefined,
       });
       return (
         <View key={block.key} style={styles.markdownTableScroll}>
@@ -7121,6 +7158,7 @@ function renderInline(
   index: number,
   styles: ReturnType<typeof makeStyles>,
   ctx: {
+    groupExternalLinks?: 'interactive' | 'static';
     /** text_run 合并树里,每个 span 都要自带块级基础样式(扁平两级 flatten 不做深层继承)。 */
     baseStyle?: StyleProp<TextStyle>;
     /** text_run 合并树里多个块共父,key 需要块级前缀防冲突。 */
@@ -7241,6 +7279,16 @@ function renderInline(
       const openExternalUrl = () => {
         void Linking.openURL(inline.url).catch(() => undefined);
       };
+      if (ctx.groupExternalLinks && /^https?:\/\//i.test(inline.url)) {
+        const display = groupExternalLinkDisplay(inline);
+        const onPress = ctx.groupExternalLinks === 'interactive' ? openExternalUrl : undefined;
+        return (
+          <SpanText key={spanKey(`link:${index}:${inline.url}`)} onPress={onPress}
+            style={clickableInlineStyle(styles, onPress, ctx.baseStyle, display.github ? styles.sessionLinkChipText : undefined)}>
+            {display.text}
+          </SpanText>
+        );
+      }
       return (
         <MailLinkSpan
           key={spanKey(`link:${index}:${inline.url}`)}
@@ -9688,23 +9736,11 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   sourceLabelStackUser: {
     alignItems: 'flex-end',
   },
-  modelMismatchRow: {
-    alignItems: 'center',
-    flexDirection: 'row',
-    gap: 4,
-    maxWidth: '86%',
-  },
   failedSamplingAttemptText: {
     color: colors.textSecondary,
     fontSize: typeScale.footnote,
     lineHeight: lineHeight.caption,
     fontWeight: fontWeight.regular,
-  },
-  modelMismatchText: {
-    color: colors.textTertiary,
-    flexShrink: 1,
-    fontSize: typeScale.footnote,
-    lineHeight: lineHeight.caption,
   },
   collapseMeasureWrap: {
     // left/right 与 `bubble` 基础样式的水平 padding(spacing.md)绑定——

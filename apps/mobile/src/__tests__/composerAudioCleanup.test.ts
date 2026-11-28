@@ -41,6 +41,7 @@ function pageCleanup(page: string, recording: boolean, starting: boolean) {
   expect(cleanups).toHaveLength(1);
   const cancel = vi.fn(async () => undefined);
   const abort = vi.fn();
+  const retryAbort = vi.fn();
   const discardPendingPrewarm = vi.fn();
   const audio = { category: "playback", active: true };
   const setAudioModeAsync = vi.fn(async () => {
@@ -52,6 +53,8 @@ function pageCleanup(page: string, recording: boolean, starting: boolean) {
     voicePermissionRequestAbortRef: { current: { abort } },
     voicePermissionRequestInFlightRef: { current: starting },
     voiceStartupSeqRef: { current: 1 },
+    voiceRetryRunSeqRef: { current: 0 },
+    voiceRetryAbortRef: { current: { abort: retryAbort } },
     voiceStartupInFlightRef: { current: starting },
     voiceStopInFlightRef: { current: false },
     voiceRecordingActiveRef: { current: recording },
@@ -79,6 +82,7 @@ function pageCleanup(page: string, recording: boolean, starting: boolean) {
     cleanup,
     cancel,
     abort,
+    retryAbort,
     discardPendingPrewarm,
     audio,
     setAudioModeAsync,
@@ -100,6 +104,7 @@ describe.each(["new.tsx", "[sessionId].tsx"])("%s audio cleanup", (page) => {
       expect(run.setAudioModeAsync).not.toHaveBeenCalled();
       expect(run.cancel).toHaveBeenCalledTimes(recording ? 1 : 0);
       expect(run.abort).toHaveBeenCalledOnce();
+      expect(run.retryAbort).toHaveBeenCalledOnce();
       expect(run.discardPendingPrewarm).toHaveBeenCalledOnce();
       expect(run.bindings.voiceControllerSessionRef).toEqual({ current: null });
       expect(run.bindings.voiceStartupSeqRef).toEqual({ current: 2 });

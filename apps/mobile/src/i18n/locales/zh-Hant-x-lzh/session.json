@@ -398,7 +398,13 @@
     "forkConfirmTitle": "自此另開一差事？",
     "forkConfirmDescription": "將據此處言談之上下文，另立一獨立新差事。原差事不改，此後兩處之訊互不相擾。",
     "forkConfirm": "另開差事",
-    "forkCancel": "罷"
+    "forkCancel": "罷",
+    "modelSwitchPreparation": {
+      "pending": "下則訊息",
+      "preparing": "正備…",
+      "failed": "切換未成",
+      "usingPrevious": "此則用 {{actual}}，{{target}} 尚未備"
+    }
   },
   "shareImage": {
     "title": "分享言談",
@@ -664,7 +670,20 @@
     "toolUseLoopDetectedRotationWithCount": "模型持續輪轉呼叫數工具，Cindy 察此輪已有 {{count}} 次呼叫，遂止此輪。可遣新訊以續。",
     "codexThreadLost": "Codex 鑑權模式已易，此差事不能再續，請新開差事。",
     "remoteCompactEncryptedContent": "整理上下文未成：模型不能讀歷史中之加密內容。自動接續未竟，可再試以復。",
-    "encryptedContentInvalid": "因易供方致加密不可用，此差事僅能於原供方下使用；請歸電腦端處置（可用「自此另開差事」棄協議加密內容，於新差事中續之）。"
+    "encryptedContentInvalid": "因易供方致加密不可用，此差事僅能於原供方下使用；請歸電腦端處置（可用「自此另開差事」棄協議加密內容，於新差事中續之）。",
+    "providerSafetyRefusal": "模型供方之安策阻此覆。欲續，請修所請再發",
+    "providerSafetyRefusalWithProvider": "{{provider}} 之安策阻此覆。欲續，請修所請再發",
+    "overloadBusy": "模型供方暫繁，無餘力可承。可少頃再試，或更他型。",
+    "overloadBusyWithProvider": "{{provider}} 暫繁，無餘力可承。可少頃再試，或更他型。",
+    "streamInterrupted": "模型供方傳覆中斷，請少頃再試。",
+    "streamInterruptedWithProvider": "{{provider}} 傳覆中斷，請少頃再試。",
+    "upstreamStatusError": "模型供方返異（HTTP {{status}}），此覆未竟。",
+    "upstreamStatusErrorWithProvider": "{{provider}} 返異（HTTP {{status}}），此覆未竟。",
+    "modelAccessDenied": "今所用模型供方帳號無權用此型。請更他型，或向供方核權",
+    "modelAccessDeniedWithProvider": "今所用 {{provider}} 帳號無權用此型。請更他型，或核其權限",
+    "providerQuotaExhausted": "模型供方帳中限額或餘資不足，請察供方帳戶",
+    "providerQuotaExhaustedWithProvider": "{{provider}} 帳中限額或餘資不足，請察帳戶",
+    "usageLimitReachedWithProvider": "{{provider}} 帳號已屆用量上限"
   },
   "row": {
     "markRead": "已閱",

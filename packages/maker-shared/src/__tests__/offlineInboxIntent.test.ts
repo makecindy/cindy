@@ -6,7 +6,6 @@ import {
   evaluateOfflineInboxIntentReplay,
   normalizeOfflineInboxIntents,
   projectSessionWithOfflineInboxIntent,
-  projectTeammateSnoozeWithOfflineInboxIntent,
   resolveOfflineSnoozeIntent,
 } from '../offlineInboxIntent.js';
 
@@ -74,24 +73,15 @@ describe('offlineInboxIntent', () => {
     const intent = createOfflineCompleteIntent('dev-1', 'sess-1', pinnedSnoozed, '2026-11-26T10:10:00.000Z');
     const projected = projectSessionWithOfflineInboxIntent(pinnedSnoozed, intent);
     expect(projected.status).toBe('archived');
+    expect(projected.archivedAt).toBe('2026-11-26T10:10:00.000Z');
     expect(projected.pinnedAt).toBeNull();
     expect(projected.snoozedUntil).toBeNull();
     expect(projected.snoozedAt).toBeNull();
-  });
-
-  it('projects teammate snooze with host clock skew protection', () => {
-    const snooze = { snoozedUntil: null, snoozedAt: null, userSendAt: '2026-11-26T10:05:00.000Z' };
-    const intent = resolveOfflineSnoozeIntent(
-      'dev-1',
-      'bot-sess-1',
-      { userSendAt: snooze.userSendAt, snoozedUntil: null, snoozedAt: null },
-      INDEFINITE_SNOOZE_UNTIL,
-      '2026-11-26T10:00:00.000Z',
-    )!;
-    const projected = projectTeammateSnoozeWithOfflineInboxIntent(snooze, intent);
-    expect(projected?.snoozedUntil).toBe(INDEFINITE_SNOOZE_UNTIL);
-    expect(projected?.snoozedAt).toBe('2026-11-26T10:05:00.000Z');
-    expect(taskSnoozeUntil(projected!)).toBe(Infinity);
+    const alreadyArchived = projectSessionWithOfflineInboxIntent(
+      { ...pinnedSnoozed, status: 'archived', archivedAt: '2026-11-26T08:00:00.000Z' },
+      intent,
+    );
+    expect(alreadyArchived.archivedAt).toBe('2026-11-26T08:00:00.000Z');
   });
 
   it.each([

@@ -398,7 +398,13 @@
     "forkConfirmTitle": "Start a new session from here?",
     "forkConfirmDescription": "A separate session will be created using the context at this point. The original session stays unchanged, and future messages in either session won't affect the other.",
     "forkConfirm": "Start new session",
-    "forkCancel": "Cancel"
+    "forkCancel": "Cancel",
+    "modelSwitchPreparation": {
+      "pending": "Next message",
+      "preparing": "Preparing…",
+      "failed": "Switch failed",
+      "usingPrevious": "This message uses {{actual}}; {{target}} is not ready."
+    }
   },
   "shareImage": {
     "title": "Share Conversation",
@@ -664,7 +670,20 @@
     "toolUseLoopDetectedRotationWithCount": "The model kept rotating through tool calls, so Cindy stopped this turn after detecting {{count}} calls in the loop. Send a new message to continue.",
     "codexThreadLost": "The Codex auth mode changed, so this session can't continue. Start a new session.",
     "remoteCompactEncryptedContent": "Context compaction failed because the model could not read encrypted history. Automatic continuation did not complete. Retry to attempt recovery.",
-    "encryptedContentInvalid": "Switching providers made the encryption unavailable, so this session works only under the original provider. Handle it on the computer (use “Start new session from here” to drop the encrypted protocol content and continue in a new session)."
+    "encryptedContentInvalid": "Switching providers made the encryption unavailable, so this session works only under the original provider. Handle it on the computer (use “Start new session from here” to drop the encrypted protocol content and continue in a new session).",
+    "providerSafetyRefusal": "The model provider's safety policy blocked this reply. Adjust your request and try sending again.",
+    "providerSafetyRefusalWithProvider": "{{provider}}'s safety policy blocked this reply. Adjust your request and try sending again.",
+    "overloadBusy": "The model provider is temporarily busy and has no available capacity. Try again later or switch to another model.",
+    "overloadBusyWithProvider": "{{provider}} is temporarily busy and has no available capacity. Try again later or switch to another model.",
+    "streamInterrupted": "The reply stream from the model provider was interrupted mid-response. Try again later.",
+    "streamInterruptedWithProvider": "The reply stream from {{provider}} was interrupted mid-response. Try again later.",
+    "upstreamStatusError": "The model provider service returned an error (HTTP {{status}}). This reply did not complete.",
+    "upstreamStatusErrorWithProvider": "{{provider}} returned an error (HTTP {{status}}). This reply did not complete.",
+    "modelAccessDenied": "Your current model provider account does not have access to this model. Switch models or verify access with the provider.",
+    "modelAccessDeniedWithProvider": "Your {{provider}} account does not have access to this model. Switch models or verify model access.",
+    "providerQuotaExhausted": "Insufficient quota or balance on your model provider account. Check your provider account.",
+    "providerQuotaExhaustedWithProvider": "Your {{provider}} account has insufficient quota or balance. Check your account.",
+    "usageLimitReachedWithProvider": "Your {{provider}} account has reached its usage limit"
   },
   "row": {
     "markRead": "Mark as read",

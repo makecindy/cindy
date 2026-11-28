@@ -15,8 +15,8 @@
   },
   "sharedTaskRecovery": {
     "title": "无法在原电脑上恢复任务",
-    "description": "可以选择其他电脑或供应商，通过上下文交接继续。原消息保留，但切换不会迁移原电脑上的完整运行状态。",
-    "choose": "选择其他电脑",
+    "description": "可打开模型选择器改用其他电脑、供应商或模型，通过上下文交接继续。原消息保留，但切换不会迁移原电脑上的完整运行状态。",
+    "choose": "切换模型或供应商",
     "cancel": "留在这里",
     "stage": {
       "owner": "失败环节：联系分享所在电脑。",
@@ -1826,8 +1826,7 @@
       "ariaLabel": "搜索设置",
       "placeholder": "搜索设置",
       "resultsLabel": "设置搜索结果",
-      "noResults": "没有找到设置，试试其他关键词",
-      "clear": "清除搜索"
+      "noResults": "没有找到设置，试试其他关键词"
     },
     "back": "返回",
     "defaults": {
@@ -4261,6 +4260,7 @@
           "supported": "支持",
           "unsupported": "不支持",
           "undeclared": "未声明",
+          "ultrafastDeclaredUnavailable": "供应商已声明，当前 Codex 连接不可用",
           "pricing": "报价",
           "pricingLabel": "报价",
           "noPricing": "该路由没有报价数据",
@@ -4865,68 +4865,7 @@
         "hint": "通过已绑定的飞书或 Lark 机器人，向你私聊发送一条消息；仅在窗口失焦时发送。",
         "disabledHint": "需要先配置 Bot 并向它发送一条消息以完成绑定。"
       },
-      "bind": "绑定",
-      "groups": {
-        "title": "群聊",
-        "description": "给机器人所在的某个群单独指定项目、模型和权限。",
-        "rules": "没单独设置的项：绑定了项目的群跟随「项目与模型」里那个项目的设置，没绑项目的群跟随上面的「新对话配置」和「群聊新建任务权限档」。群主线和群里的话题共用一个群的设置。",
-        "expand": "展开",
-        "collapse": "收起",
-        "groupCount_one": "{{count}} 个群",
-        "groupCount_other": "{{count}} 个群",
-        "customCount_one": "{{count}} 个单独设置",
-        "customCount_other": "{{count}} 个单独设置",
-        "refresh": "刷新",
-        "loading": "正在读取群列表…",
-        "loadFailed": "读取群列表失败，请稍后点「刷新」重试。",
-        "saveFailed": "保存群设置失败",
-        "notConnected": "机器人连上后才能列出它所在的群。下面只列出已经单独设置过的群。",
-        "empty": "机器人还没有加入任何群。把机器人拉进群后，再来这里设置。",
-        "listPermission": "读不到机器人所在的群：请在飞书开放平台给这个应用开通「获取群组信息」权限。下面先列出机器人用过的群。",
-        "listUnavailable": "暂时读不到机器人所在的群，下面先列出机器人用过的群。",
-        "unnamed": "未命名的群（{{id}}）",
-        "summaryModel": "单独设置了模型",
-        "summaryPermission": "单独设置了权限",
-        "expandAria": "设置「{{name}}」",
-        "searchLabel": "搜索群",
-        "searchPlaceholder": "按群名搜索",
-        "customHeading": "单独设置",
-        "followHeading": "跟随渠道设置",
-        "showMore": "再显示 {{count}} 个",
-        "showLess": "收起",
-        "noMatch": "没有找到名字包含「{{query}}」的群",
-        "project": {
-          "label": "项目",
-          "follow": "对话",
-          "missing": "{{name}}（已不在侧栏）",
-          "hint": "在群里第一次 @ 机器人、开新话题或发 /new 时生效，进行中的任务不会被挪走。选项目时，模型和权限默认跟随这个项目在「项目与模型」里的设置；选「对话」时任务放在机器人的对话目录里，跟随上面的「新对话配置」。只能选侧栏里的本机项目。"
-        },
-        "model": {
-          "label": "模型和推理强度",
-          "hintFollow": "跟随「新对话配置」。在这里换模型或推理强度，就只对这个群生效。",
-          "hintFollowProject": "跟随项目「{{project}}」在「项目与模型」里的设置。在这里换模型或推理强度，就只对这个群生效。",
-          "hintProjectUnavailable": "项目「{{project}}」在「项目与模型」里设置的模型现在不可用。可以到那里重新选，或在这里给这个群单独选一个。",
-          "hintFixed": "这个群单独设置了模型。群里没单独改过模型的任务，收到下一条消息时会换过去；新任务直接用它。"
-        },
-        "permission": {
-          "label": "权限",
-          "hintFollow": "当前跟随「群聊新建任务权限档」。只影响之后在这个群新建的任务，已有任务在群里用 /permission 切换。",
-          "hintFollowProject": "当前跟随项目「{{project}}」在「项目与模型」里的权限。只影响之后在这个群新建的任务，已有任务在群里用 /permission 切换。",
-          "hintFixed": "这个群单独设置了权限。只影响之后在这个群新建的任务，已有任务在群里用 /permission 切换。"
-        },
-        "fullAccessConfirm": {
-          "title": "让「{{name}}」以完全访问执行？",
-          "description": "之后在这个群新建的任务都会直接执行、不再逐条确认，群里任何人 @ 机器人都一样。群聊内容由成员控制，请确认群里的人都可信。",
-          "confirm": "改为完全访问",
-          "cancel": "取消"
-        },
-        "widerConfirm": {
-          "title": "放宽「{{name}}」的权限？",
-          "description": "之后在这个群新建的任务会从「{{current}}」变成「{{next}}」，群里任何人 @ 机器人都一样。群聊内容由成员控制，请确认群里的人都可信。",
-          "confirm": "仍然更改",
-          "cancel": "取消"
-        }
-      }
+      "bind": "绑定"
     },
     "wechatBot": {
       "title": "个人微信",
@@ -5485,6 +5424,27 @@
           "description": "将永久删除 {{label}} 在所有项目中累积的全部记忆。此操作不可撤销。",
           "confirm": "重置",
           "cancel": "取消"
+        }
+      },
+      "tidy": {
+        "label": "记忆与技能整理",
+        "description": "定期在后台轻量整理各伙伴的记忆与技能（去重、精简、对照全局技能）。仅在有足够积压时才触发，无变动不消耗额度，也不在侧栏留下多余任务。",
+        "cadenceLabel": "整理频率",
+        "cadences": {
+          "weekly": "每周",
+          "biweekly": "每两周",
+          "monthly": "每月",
+          "off": "关闭（仅手动）"
+        },
+        "runNow": "立即整理",
+        "running": "整理中…",
+        "toast": {
+          "cadenceSaved": "整理频率已更新",
+          "cadenceFailed": "更新整理频率失败",
+          "updated": "整理完成（已更新 {{count}} 位伙伴）",
+          "idle": "当前记忆与技能都很整洁，无需改动",
+          "skipped": "暂无需要整理的伙伴",
+          "failed": "记忆整理失败"
         }
       }
     },
@@ -7102,6 +7062,8 @@
           "controlling": "正在控制这台电脑",
           "protocol": "连接方式",
           "rttNote": "最近测得",
+          "relayLegSelf": "本机 {{transport}}",
+          "relayLegPeer": "对方 {{transport}}",
           "manage": "管理设备…",
           "linkStatus": "与「{{name}}」",
           "version": "Cindy {{version}}",
@@ -7372,7 +7334,7 @@
     "tina": {
       "chat": {
         "title": "对话",
-        "description": "不落任何仓库的纯对话；在 Slack、Telegram、X 或飞书 / Lark 里选择 chat 即可使用，每条对话 lane 独立对应一个任务。"
+        "description": "不关联具体项目文件夹的纯对话；各消息应用未指定项目时默认使用这里的模型和权限。"
       },
       "prefs": {
         "agentLabel": "Agent",
@@ -7503,7 +7465,8 @@
       "groups": {
         "cindy": "官方",
         "personal": "个人",
-        "plugins": "插件"
+        "plugins": "插件",
+        "shared": "通用设置"
       },
       "tips": {
         "cindy": "由 Cindy 提供并维护。无需自行创建机器人或准备凭证，按引导连接后即可使用。",
@@ -7544,6 +7507,190 @@
       "plugins": {
         "rowHint": "登录、绑定和每个群聊、私聊的单独设置都在插件页面里。",
         "open": "打开插件"
+      },
+      "replyTarget": {
+        "label": "谁来回复",
+        "cindy": "普通任务",
+        "cindyHint": "在侧栏任务列表里处理，使用下面的项目和模型。也可以交给伙伴，按伙伴的记忆和设定回复。",
+        "companionHint": "私聊进 {{name}} 的对话，群聊由 {{name}} 独立跟进。模型、权限和记忆均跟随 {{name}}。",
+        "openCompanion": "{{name}} 的设置",
+        "summary": "由 {{name}} 回复",
+        "missingCompanion": "已不可用的伙伴",
+        "busy": "这个机器人还有消息在排队或任务在运行，结束后再切换。",
+        "updateFailed": "未能切换。请确认伙伴仍可用后重试。",
+        "companionSettingsHint": "模型、权限和记忆"
+      },
+      "nav": {
+        "back": "返回",
+        "backTo": "返回 {{page}}"
+      },
+      "pageDescription": "在微信、飞书、Telegram 这些消息应用里，给 Cindy 或你的伙伴发消息。",
+      "list": {
+        "connected": "已连接",
+        "available": "还可以连接",
+        "choose": "选一个消息应用",
+        "cindyReplies": "普通任务",
+        "official": "官方机器人：{{status}}",
+        "projects": "项目与模型",
+        "projectsHint": "消息应用或插件在项目里开新任务时，每个项目用的模型与权限",
+        "hint": {
+          "both": "官方机器人，或你自己创建的机器人",
+          "slack": "用 Cindy 官方机器人，登录 Slack 就能用",
+          "x": "用 Cindy 官方账号，授权后在 X 上回复你",
+          "wechat": "扫码连接你的个人微信",
+          "personal": "用你自己创建的机器人"
+        },
+        "companionDedicated": "伙伴专属：{{names}}"
+      },
+      "apps": {
+        "telegram": "Telegram",
+        "slack": "Slack",
+        "discord": "Discord",
+        "x": "X",
+        "wechat": "微信",
+        "feishu": "飞书 / Lark",
+        "wecom": "企业微信",
+        "dingtalk": "钉钉"
+      },
+      "ways": {
+        "official": "Cindy 官方机器人",
+        "personal": "你自己的机器人",
+        "personalHint": "用你在平台上创建的机器人，名字和头像由你定。",
+        "personalSetupTitle": "用你自己的机器人",
+        "setUp": "设置",
+        "personalSetupHint": {
+          "telegram": "在 BotFather 创建机器人，填入令牌和你的用户 ID。",
+          "discord": "在 Discord 开发者后台创建机器人，填入令牌。",
+          "feishu": "在飞书或 Lark 开放平台创建应用，填入 App ID 和 App Secret。"
+        },
+        "officialHint": "无需自建应用，直接与你的 Cindy 账号绑定。"
+      },
+      "rows": {
+        "model": "模型",
+        "groupReply": "群聊里什么时候回复",
+        "persona": "名字和性格",
+        "behavior": "表情回应和引用",
+        "receiveHere": "在这台电脑上接收消息",
+        "receiveHereHint": "关掉后机器人在这台电脑上下线，凭证保留，随时可以再打开。",
+        "unbind": "解绑这个机器人",
+        "ownerId": "我的用户 ID {{id}}",
+        "discordChannels": "服务器频道",
+        "discordChannelsHint": "机器人可以在哪些服务器频道里工作",
+        "notifications": "通知",
+        "on": "已开启",
+        "off": "未开启",
+        "project": "项目",
+        "projectDialogue": "对话（不选项目）",
+        "projectMissing": "已不在侧栏的项目",
+        "projectHint": "新任务放进这个项目，模型和权限跟随它在「项目与模型」里的设置。",
+        "projectDialogueHint": "新任务放在机器人自己的对话目录，用下面的模型。",
+        "officialProjectHint": "新任务放进这个项目，模型和权限跟随它在「项目与模型」里的设置。所有 Cindy 官方机器人共用这一项。",
+        "officialProjectDialogueHint": "新任务放在对话目录，模型和权限跟随「项目与模型」里「对话」那一行。所有 Cindy 官方机器人共用这一项。",
+        "projectFullAccessTitle": "改用「{{name}}」的权限？",
+        "projectFullAccessDescription": "「{{name}}」在「项目与模型」里是完全访问：之后在{{app}}里新建的任务会直接执行，不再逐条确认。可以先到「项目与模型」把它改成 Auto 或 Ask。",
+        "projectFullAccessConfirm": "仍然使用",
+        "projectFullAccessCancel": "取消",
+        "projectUpdateFailed": "没能切换项目，请确认它还在侧栏里后重试。",
+        "chats": "群聊",
+        "channels": "频道",
+        "projectModel": "模型与权限",
+        "projectModelHint": "在「项目与模型」里统一修改",
+        "projectModelFollow": "跟随「{{name}}」",
+        "groupReplyHint": "控制机器人在群里仅 @ 时回复还是全响应"
+      },
+      "chats": {
+        "title": "群聊",
+        "description": "给机器人所在的某个群单独指定项目、模型和权限，以及群里其他成员能不能提问。",
+        "rules": "没单独设置的项：绑定了项目的群跟随「项目与模型」里那个项目的设置，没绑项目的群跟随机器人的「项目」，机器人也没选项目时跟随机器人的「模型」设置。群主线和群里的话题共用一个群的设置。",
+        "expand": "展开",
+        "collapse": "收起",
+        "groupCount_one": "{{count}} 个群",
+        "groupCount_other": "{{count}} 个群",
+        "customCount_one": "{{count}} 个单独设置",
+        "customCount_other": "{{count}} 个单独设置",
+        "refresh": "刷新",
+        "loading": "正在读取群列表…",
+        "loadFailed": "读取群列表失败，请稍后点「刷新」重试。",
+        "saveFailed": "保存群设置失败",
+        "notConnected": "机器人连上后才能列出它所在的群。下面只列出已经单独设置过的群。",
+        "empty": "机器人还没有加入任何群。把机器人拉进群后，再来这里设置。",
+        "listPermission": "读不到机器人所在的群：请在飞书开放平台给这个应用开通「获取群组信息」权限。下面先列出机器人用过的群。",
+        "listUnavailable": "暂时读不到机器人所在的群，下面先列出机器人用过的群。",
+        "unnamed": "未命名的群（{{id}}）",
+        "summaryModel": "单独设置了模型",
+        "summaryPermission": "单独设置了权限",
+        "expandAria": "设置「{{name}}」",
+        "searchLabel": "搜索群",
+        "searchPlaceholder": "按群名搜索",
+        "customHeading": "单独设置",
+        "followHeading": "跟随渠道设置",
+        "showMore": "再显示 {{count}} 个",
+        "showLess": "收起",
+        "noMatch": "没有找到名字包含「{{query}}」的群",
+        "project": {
+          "label": "项目",
+          "follow": "跟随机器人",
+          "missing": "{{name}}（已不在侧栏）",
+          "hint": "在群里第一次 @ 机器人、开新话题或发 /new 时生效，进行中的任务不会被挪走。选项目时，模型和权限默认跟随这个项目在「项目与模型」里的设置；选「跟随机器人」时用这个机器人的「项目」设置，机器人没选项目就放在对话目录、用机器人的「模型」设置。只能选侧栏里的本机项目。",
+          "followWith": "跟随机器人（{{project}}）"
+        },
+        "model": {
+          "label": "模型和推理强度",
+          "hintFollow": "跟随「新对话配置」。在这里换模型或推理强度，就只对这个群生效。",
+          "hintFollowProject": "跟随项目「{{project}}」在「项目与模型」里的设置。在这里换模型或推理强度，就只对这个群生效。",
+          "hintProjectUnavailable": "项目「{{project}}」在「项目与模型」里设置的模型现在不可用。可以到那里重新选，或在这里给这个群单独选一个。",
+          "hintFixed": "这个群单独设置了模型。群里没单独改过模型的任务，收到下一条消息时会换过去；新任务直接用它。",
+          "reset": "模型改回跟随"
+        },
+        "permission": {
+          "label": "权限",
+          "hintFollow": "当前跟随「群聊新建任务权限档」。只影响之后在这个群新建的任务，已有任务在群里用 /permission 切换。",
+          "hintFollowProject": "当前跟随项目「{{project}}」在「项目与模型」里的权限。只影响之后在这个群新建的任务，已有任务在群里用 /permission 切换。",
+          "hintFixed": "这个群单独设置了权限。只影响之后在这个群新建的任务，已有任务在群里用 /permission 切换。",
+          "hintFollowBot": "当前跟随机器人自己的权限。只影响之后在这个群新建的任务，已有任务在群里用 /permission 切换。",
+          "followWith": "跟随 · {{mode}}"
+        },
+        "fullAccessConfirm": {
+          "title": "让「{{name}}」以完全访问执行？",
+          "description": "之后在这个群新建的任务都会直接执行、不再逐条确认，群里任何人 @ 机器人都一样。群聊内容由成员控制，请确认群里的人都可信。",
+          "confirm": "改为完全访问",
+          "cancel": "取消"
+        },
+        "widerConfirm": {
+          "title": "放宽「{{name}}」的权限？",
+          "description": "之后在这个群新建的任务会从「{{current}}」变成「{{next}}」，群里任何人 @ 机器人都一样。群聊内容由成员控制，请确认群里的人都可信。",
+          "confirm": "仍然更改",
+          "cancel": "取消"
+        },
+        "descriptionChannels": "给机器人工作的某个频道单独指定项目、模型和权限，以及频道里其他成员能不能提问。",
+        "kindGroup": "群聊",
+        "kindChannel": "频道",
+        "channelCount_one": "{{count}} 个频道",
+        "channelCount_other": "{{count}} 个频道",
+        "membersCount_one": "{{count}} 个群成员可提问",
+        "membersCount_other": "{{count}} 个群成员可提问",
+        "unnamedChannel": "未命名的频道（{{id}}）",
+        "searchPlaceholderChannels": "按频道名搜索",
+        "emptyLocal": "还没有记录到机器人所在的群。在群里 @ 机器人说一句话后，这里就会列出这个群。",
+        "emptyChannels": "还没有开放的频道。先在「服务器频道」里打开机器人要工作的频道。",
+        "members": {
+          "label": "群成员也能提问",
+          "hint": "开启后，群里其他成员 @ 机器人也会得到回答，用这个群的项目和模型。他们的提问最高按「自动审批」执行，要动手的操作仍要你确认；你自己的提问照这个群的权限。",
+          "guard": "你不在群里说话时，群成员连续问满 {{limit}} 次就先暂停，等你在群里 @ 机器人说句话或点「恢复」。命令只听你的。",
+          "paused": "已暂停回答群成员：他们连续问了 {{limit}} 次，你都没在群里说话。",
+          "resume": "恢复",
+          "chip": "群成员可提问",
+          "pausedChip": "群成员已暂停",
+          "resumeFailed": "恢复失败，请稍后再试"
+        },
+        "statusCustom": "已单独设置",
+        "shownHint": "已显示前 {{shown}} / {{total}} 个，输入名字可筛选。",
+        "fieldsNote": "换项目、模型或权限后，群里下一次新建任务时生效，进行中的任务不会被挪走。"
+      },
+      "companionBots": {
+        "title": "伙伴专属机器人",
+        "description": "这些机器人在伙伴设置里单独配置，升级前已配好的会继续正常运行。",
+        "manage": "去管理"
       }
     },
     "shortcuts": {
@@ -8779,6 +8926,8 @@
         "nodeRuntime": "可在本机运行随插件附带的 Node 程序",
         "nodeMcp": "可在本机运行随插件附带的 stdio MCP",
         "nodeRuntimeDetail": "高风险：它和你本人一样，可以读取或修改你账号能访问的本机文件、访问网络并启动其它程序。Cindy 不能用浏览器沙箱限制它。",
+        "nodeInheritEnv": "继承本机运行环境",
+        "nodeInheritEnvDetail": "高风险：插件的 Node 程序及其子进程会获得 Cindy 当前全部环境变量，包括 Proxy、证书配置，以及其中可能保存的 API Key、Token 等敏感信息。",
         "nodeSecret": "可将已保存凭证「{{name}}」提供给本机 Node 程序",
         "nodeSecretDetail": "Cindy 加密保管，仅在下列已声明 Worker 方法执行时临时注入。Node 程序会收到明文，也可以将其回传、记录、保存或暴露给浏览器侧插件代码及 Agent 参数；请只安装可信插件。",
         "nodeResident": "Node 程序可常驻后台",
@@ -9876,6 +10025,49 @@
         "identity": "目录身份需要检查",
         "failed": "回收未能完成",
         "pending": "已排队"
+      },
+      "remote": {
+        "title": "远程待回收 worktree",
+        "description": "未完成回收的远程 worktree 会阻止在同一台设备上继续创建新的 worktree，直到回收成功或手动选择保留目录以解除阻止。",
+        "storageUnreadable": "无法读取远程 worktree 回收记录，已暂停创建新的远程 worktree。",
+        "sessionLabel": "任务 {{id}}",
+        "keepUnblock": "保留目录并解除阻止",
+        "confirmKeepTitle": "保留远程 worktree 目录并解除阻止？",
+        "confirmKeepDescription": "这将清除本机的待回收记录，恢复在 {{device}} 上创建新的 worktree；远程设备上的目录不会被删除，你可以稍后手动清理。",
+        "confirmKeepConfirm": "保留并解除阻止",
+        "retrySuccess": "已回收远程 worktree。",
+        "keepSuccess": "已解除阻止，现在可以继续创建远程 worktree。",
+        "keepFailed": "未能清除回收记录，请刷新后重试。",
+        "phase": {
+          "reserved": "创建未确认",
+          "precreated": "等待回收",
+          "session-create-started": "任务创建未确认"
+        },
+        "failure": {
+          "offline": "设备离线或响应超时",
+          "in-progress": "远程仍在创建或检出中",
+          "preserved": "被远程设备保留",
+          "mismatch": "回收凭证不匹配",
+          "unsupported": "远程设备版本不支持自动回收",
+          "create-started": "等待确认任务归属",
+          "storage": "本地记录不可读写",
+          "unknown": "回收未能完成"
+        },
+        "preserveReason": {
+          "claimed": "已被任务认领",
+          "in-progress": "仍在创建或检出中",
+          "dirty": "有未提交改动",
+          "keep-sentinel": "存在保留标记（.worktree-keep）",
+          "live-reference": "仍被其他任务或进程占用",
+          "branch-mismatch": "分支或目录状态异常",
+          "include-files-changed": "本地配置文件已变化",
+          "ignored-files": "包含无法复现的忽略文件",
+          "ephemeral": "受管池目录",
+          "pending-transfer": "正在迁移中",
+          "invalid-quarantine": "隔离状态异常",
+          "quarantine-failed": "隔离移动失败",
+          "remove-failed": "删除目录失败"
+        }
       }
     },
     "awayFromComputer": {
@@ -10151,7 +10343,8 @@
       "INVALID_AUTH_CODE": "授权已过期，请重新登录",
       "INVALID_LOGIN_TICKET": "登录会话已过期，请重新登录",
       "INVALID_BIND_TICKET": "绑定会话已过期，请重新登录",
-      "REGION_MISMATCH": "登录服务区域与当前客户端不匹配"
+      "REGION_MISMATCH": "登录服务区域与当前客户端不匹配",
+      "INVALID_SIGNUP_TICKET": "注册确认已过期，请重新登录"
     },
     "rateLimit": {
       "retryAt": "请在 {{time}}（本机时间）之后重试。",
@@ -10159,6 +10352,15 @@
       "intro": "登录服务暂时限制了请求次数。这与本机凭证存储异常是不同的问题。",
       "guidance": "请等待后再获取验证码。重启、重装或切换网络不保证解除限流。",
       "support": "等待后仍无法登录，请将日志私下发给 feedback@cindy.app，并提供操作系统、Cindy 版本、出错时间和下方错误码。请勿公开发布日志。"
+    },
+    "signup": {
+      "title": "还没有 Cindy 账号",
+      "subtitle": "{{target}} 还没有注册 Cindy。之前用其他方式登录过？请返回选择。",
+      "subtitleSocial": "这个 {{provider}} 账号还没有注册 Cindy。之前用其他方式登录过？请返回选择。",
+      "create": "创建新账号",
+      "createDescEmail": "用这个邮箱注册 Cindy",
+      "createDescPhone": "用这个手机号注册 Cindy",
+      "createDescSocial": "用这个 {{provider}} 账号注册"
     }
   },
   "legalTermsUpdate": {
@@ -10277,6 +10479,7 @@
     "sessionCostLabel": "本任务 {{cost}}",
     "codex": {
       "waiting": "Codex --",
+      "openAiApiLabel": "OpenAI API",
       "noUsageLabel": "暂无用量",
       "noUsageDetail": "本任务尚未产生用量。",
       "unavailableLabel": "用量暂不可用",
@@ -10712,7 +10915,6 @@
     "fileBrowser": {
       "noWorkdir": "当前任务未关联本地工作目录，文件浏览器不可用",
       "filterPlaceholder": "筛选文件…",
-      "filterClear": "清除筛选",
       "filterIndexing": "正在索引项目文件…",
       "filterNoMatch": "未匹配到文件",
       "filterRgUnavailable": "远端机器未安装 ripgrep，文件名筛选不可用",
@@ -11476,7 +11678,17 @@
         "enable": "去开启",
         "enabled": "已开启"
       },
-      "close": "关闭"
+      "close": "关闭",
+      "scanToLogin": "用 Cindy App 扫码，直接登录这个账号",
+      "approveTitle": "允许手机登录你的账号？",
+      "approveBody": "「{{device}}」正在扫码登录。不是你本人操作，请点「拒绝」。",
+      "approveBodyUnknown": "一台手机正在扫码登录。不是你本人操作，请点「拒绝」。",
+      "approve": "允许",
+      "deny": "拒绝",
+      "loginApproved": "手机已登录",
+      "loginDenied": "已拒绝这次登录",
+      "qrExpired": "二维码已过期",
+      "qrRefresh": "刷新"
     },
     "localNetwork": {
       "title": "开启本地网络权限",
@@ -11999,6 +12211,17 @@
       "memberCount_other": "{{count}} 位成员",
       "nameLabel": "群名称",
       "waitingConfirm": "{{name}}在等你确认",
+      "assistantDevice": {
+        "title": "群里的 Cindy 在等你选电脑",
+        "onlyYou": "只有你能看到",
+        "request": "「{{request}}」选好电脑后就开始做。",
+        "requestUnknown": "选好电脑后就开始做这条请求。",
+        "requests_one": "你有 {{count}} 条请求在等，选好电脑后就开始做。",
+        "requests_other": "你有 {{count}} 条请求在等，选好电脑后就开始做。",
+        "remember": "以后你在本群的请求都用这台电脑，可在群设置里更换。",
+        "cancel": "取消请求",
+        "continue": "继续"
+      },
       "loadFailedTitle": "无法加载这个群聊",
       "loadFailedDescription": "Cindy 暂时读不到这个群的消息。你可以重试，或返回伙伴页。",
       "unavailableTitle": "这个群聊已不可用",
@@ -12141,6 +12364,9 @@
           "GROUP_AUTHORIZATION_REQUIRED": "{{name}} 的工具调用未执行：群内授权已失效或不允许此操作。请由伙伴主人在当前群重新发起。",
           "GROUP_AUTHORIZATION_UNAVAILABLE": "暂时无法核验 {{name}} 的群聊授权，这次工具调用未执行。请在连接恢复后重试。",
           "ATTACHMENTS_UNAVAILABLE": "部分附件未交给 {{name}}（下载失败或数量限制）。请重新发送本次需要的附件。",
+          "ATTACHMENTS_DOWNLOAD_FAILED": "部分附件下载失败，未能交给 {{name}}。请重新发送需要的附件。",
+          "ATTACHMENTS_LIMIT_REACHED": "本轮附件数量超过上限，部分附件未能交给 {{name}}。请分批发送需要的附件。",
+          "ATTACHMENTS_DOWNLOAD_FAILED_AND_LIMIT_REACHED": "部分附件下载失败，另一些超出本轮数量上限，未能交给 {{name}}。请分批重新发送需要的附件。",
           "GROUP_ASSISTANT_UNAVAILABLE": "{{name}}，连接你的 Cindy 后才能让 Cindy 替你干活（你的电脑上现在没有在线的 Cindy）。",
           "GROUP_ASSISTANT_DEVICE_REQUIRED": "{{name}}，请先选择本群的执行电脑，选好后会继续这条请求。",
           "GROUP_ASSISTANT_DEVICE_OFFLINE": "{{name}} 在本群选的执行电脑已离线。"
@@ -12183,6 +12409,7 @@
         "projectDirClear": "清除",
         "projectDirNote": "可以选择这台电脑上的已有项目。留空时，优先使用仓库对应的项目，其次使用执行伙伴自己的项目。Git 项目分工使用独立 worktree。",
         "autoContinueSaveFailed": "分工交接没能保存，请再试一次",
+        "projectDirNotRegistered": "先在 Cindy 中将这个文件夹添加为项目，再重新选择。",
         "projectDirSaveFailed": "项目文件夹没能保存，确认文件夹还在后再试",
         "allowMemberInvites": "允许所有成员邀请朋友",
         "allowMemberInvitesHint": "开启后，已加入的所有成员都可邀请朋友。仅群主和管理员可更改。",
@@ -12618,7 +12845,19 @@
         "failed": "操作未完成，请重试。",
         "lastOwner": "请先转让群主或解散群聊，再退出。"
       },
-      "externalBadge": "外部"
+      "externalBadge": "外部",
+      "links": {
+        "kind": {
+          "pull": "PR",
+          "issue": "Issue",
+          "discussion": "讨论",
+          "commit": "提交",
+          "file": "文件",
+          "folder": "文件夹",
+          "release": "发行版",
+          "repo": "仓库"
+        }
+      }
     },
     "joined": {
       "today": "今天加入",
@@ -12893,6 +13132,7 @@
       "arrivalPermissions": "{{name}} 已按这台电脑的默认权限运行。",
       "arrivalModel": "{{name}} 之前选的模型在这台电脑上不可用，已改用这台电脑的默认模型。",
       "arrivalModelSetup": "{{name}} 已来到这台电脑，但还没有可用模型。请连接模型供应商，或在「模型供应商 → 智能路由」里设置伙伴的默认模型。",
+      "modelSetupHint": "这台电脑还没有可用的伙伴模型。请在「模型供应商 → 智能路由」中设置伙伴默认模型，Cindy 会自动重试。",
       "arrivalPartialContent": "{{name}} 已来到这台电脑，部分云端内容未能恢复，原内容仍保留在云端。",
       "missingProfileTitle": "用初始资料继续 {{name}}？",
       "missingProfileDescription": "原主力电脑还没上传 {{name}} 的人设和简介。如果原电脑已重装或无法恢复，可以在这台电脑用初始资料继续，已同步到云端的对话和内容仍会保留。",
@@ -13165,7 +13405,11 @@
         "save": "保存并重连",
         "loadFailed": "读取连接设置失败，请重试。",
         "failed": "保存连接失败，请检查参数后重试。"
-      }
+      },
+      "handedOver": "{{apps}} 在设置里交给了 {{name}} 回复。",
+      "handedOverSeparator": "、",
+      "manageInSettings": "去设置里管理",
+      "handedOverHint": "下方添加的是 {{name}} 单独使用的机器人，与设置里的机器人互不冲突。"
     },
     "voiceMode": {
       "realtime": {
@@ -13344,6 +13588,7 @@
   },
   "commonUi": {
     "retry": "重试",
+    "clearSearch": "清除搜索",
     "listSeparator": "、",
     "crossAgentConvert": {
       "asking": {
@@ -13858,7 +14103,8 @@
         },
         "companion": {
           "retryLater": "请稍后再试"
-        }
+        },
+        "membersPaused": "群成员的提问先暂停啦，等主人回来再继续 🙈"
       },
       "hook": {
         "interaction": {
@@ -14856,6 +15102,12 @@
       "discoveredCopy": {
         "unavailableHere": "这台电脑上的 {{provider}} 现在用不了。",
         "unavailableOn": "「{{device}}」上的 {{provider}} 现在用不了。"
+      },
+      "preparation": {
+        "pending": "下条消息",
+        "preparing": "准备中…",
+        "failed": "切换失败",
+        "usingPrevious": "本次使用 {{actual}}，{{target}} 尚未就绪"
       }
     },
     "permissionSelector": {
@@ -15145,6 +15397,7 @@
       },
       "credentialSwitchDeferred": "模型来源已切换，将在当前任务结束后生效。",
       "effortRuntimeDirty": "推理强度还在更新，稍等一下再发送",
+      "tooManyTaskReferences": "一条消息最多可包含 {{max}} 个任务引用，请移除多余的任务链接",
       "steerNotSent": "未发送，暂时无法插话，草稿已保留",
       "credentialSwitchApplied": "模型来源切换已生效。",
       "credentialSwitchFailed": "模型来源切换失败，请重新选择。",
@@ -15348,6 +15601,7 @@
         "diverged": "本地和远程分支各有不同的更新，请先处理这些差异再切换",
         "missing": "所选分支已不存在，请刷新列表",
         "git": "操作未能完成，请检查当前分支和保存的改动后重试",
+        "timeout": "读取 Git 状态超时。仓库较大或未提交改动过多时会耗时过长，可先整理改动，或改用 worktree",
         "savedMissing": "这份保存的改动已经不在了",
         "undoUnavailable": "已经无法撤销这次切换"
       },
@@ -15497,7 +15751,9 @@
     "connectionInterrupted": "语音连接中断了，请检查网络后重试。",
     "recognitionStalled": "语音识别没有继续返回结果，请重试。",
     "transcriptKept": "{{message}}（识别出的文字已经保留，可以直接编辑）",
-    "transcriptKeptOverlay": "{{message}}（识别出的文字已经保留，可以复制后继续用）"
+    "transcriptKeptOverlay": "{{message}}（识别出的文字已经保留，可以复制后继续用）",
+    "retryRecognition": "重新识别",
+    "recordAgain": "重新录音"
   },
   "chatgptAuthRecovery": {
     "title": "ChatGPT 登录已失效",
@@ -15767,7 +16023,7 @@
       "requestFormatError": "应用发送的请求格式有误，本次回复未能完成。",
       "piRetryHistoryTooLarge": "本次消息未发送。Pi 读取重试所需的历史记录时，有一帧数据超过本地 16 MiB 限制。你可以在新任务中继续。",
       "piRetryHistoryUnavailable": "本次消息未发送。Pi 读取发送所需的历史记录失败。你可以重试，或在新任务中继续。",
-      "upstreamStatusError": "上游返回 {{status}}，本次回复未完成。",
+      "upstreamStatusError": "模型供应商服务返回异常（HTTP {{status}}），本次回复未完成。",
       "messageNotSent": "本次消息未发送。",
       "replyFailed": "回复未完成",
       "queuedSendRecovery": "上一条消息未发送。点「重试」可原样发送。发送新消息会替换这一条。",
@@ -15825,12 +16081,12 @@
       "networkUnreachableNoRetry": "网络异常，服务暂时不可达。",
       "networkAutoRetrying": "网络异常，正在自动重试…",
       "networkReconnecting": "网络连接中断，正在重新连接（{{attempt}}/{{maxAttempts}}）…",
-      "overloadRetrying": "模型服务繁忙，正在自动重试（{{attempt}}/{{maxAttempts}}）…",
+      "overloadRetrying": "模型供应商暂时繁忙，正在自动重试（{{attempt}}/{{maxAttempts}}）…",
       "rateLimitRetrying": "请求受到限流，正在自动重试（{{attempt}}/{{maxAttempts}}）…",
-      "overloadBusy": "模型服务繁忙，上游暂时没有可用容量。可点击「重试」，或换一个模型。",
-      "overloadBusyNoRetry": "模型服务繁忙，上游暂时没有可用容量。可稍后重试，或换一个模型。",
-      "streamInterrupted": "模型输出中途中断了。通常是上游暂时故障，可点击「重试」。",
-      "streamInterruptedNoRetry": "模型输出中途中断了。通常是上游暂时故障，请稍后重试。",
+      "overloadBusy": "模型供应商暂时繁忙，当前没有可用容量。可点击「重试」，或换一个模型。",
+      "overloadBusyNoRetry": "模型供应商暂时繁忙，当前没有可用容量。可稍后重试，或换一个模型。",
+      "streamInterrupted": "模型供应商返回回复时中途中断，可点击「重试」。",
+      "streamInterruptedNoRetry": "模型供应商返回回复时中途中断，请稍后重试。",
       "networkShowRaw": "错误详情",
       "networkHideRaw": "收起详情",
       "diagnose": "诊断",
@@ -15839,7 +16095,7 @@
       "diagnosePromptWithoutSession": "请帮我诊断这个错误：找出原因，并告诉我怎么解决。\n\n错误提示：{{message}}\n错误详情：\n{{details}}\n\n如果确认是 Cindy 本身的问题，请告诉我，我可以选择向 Cindy 团队提交 issue。",
       "gatewayProxyTokenInvalid": "Cindy AI 凭据已失效。请点击「重试」。若仍失败，请退出后重新登录",
       "gatewayProxyTokenInvalidNoRetry": "Cindy AI 凭据已失效。若后续仍失败，请退出后重新登录",
-      "modelAccessDenied": "当前上游账号无权访问此模型。请切换模型，或向供应商确认模型访问权限",
+      "modelAccessDenied": "当前模型供应商账号无权访问此模型。请切换模型，或向供应商确认模型访问权限",
       "providerSafetyRefusal": "模型供应商的安全策略拦截了本次回复。如需继续，请调整请求内容后再发送",
       "silentStopContinue": "继续",
       "silentStopContinueTitle": "继续当前任务",
@@ -15849,7 +16105,20 @@
       "remoteCompactEncryptedContent": "整理上下文失败：模型无法读取历史中的加密内容。自动接续未完成，可重试恢复。",
       "contextOverflow": "这条消息本身已经超过模型上下文上限，没法在当前 Agent 里自动换窗继续。请缩短输入或去掉超大附件后再试。",
       "attachmentAccessDeniedTitle": "Cindy 无法读取源附件，消息未发送。",
-      "attachmentAccessDeniedRecovery": "请将文件另存到「下载」或其他可访问的文件夹，移除原附件，再用附件按钮添加副本后发送。"
+      "attachmentAccessDeniedRecovery": "请将文件另存到「下载」或其他可访问的文件夹，移除原附件，再用附件按钮添加副本后发送。",
+      "providerSafetyRefusalWithProvider": "{{provider}} 的安全策略拦截了本次回复。如需继续，请调整请求内容后再发送",
+      "overloadRetryingWithProvider": "{{provider}} 暂时繁忙，正在自动重试（{{attempt}}/{{maxAttempts}}）…",
+      "overloadBusyWithProvider": "{{provider}} 暂时繁忙，当前没有可用容量。可点击「重试」，或换一个模型。",
+      "overloadBusyNoRetryWithProvider": "{{provider}} 暂时繁忙，当前没有可用容量。可稍后重试，或换一个模型。",
+      "streamInterruptedWithProvider": "{{provider}} 返回回复时中途中断，可点击「重试」。",
+      "streamInterruptedNoRetryWithProvider": "{{provider}} 返回回复时中途中断，请稍后重试。",
+      "upstreamStatusErrorWithProvider": "{{provider}} 服务返回异常（HTTP {{status}}），本次回复未完成。",
+      "modelAccessDeniedWithProvider": "当前 {{provider}} 账号无权访问此模型。请切换模型，或确认模型访问权限",
+      "providerQuotaExhaustedWithProvider": "{{provider}} 账户配额或余额不足，请检查账户状态",
+      "usageLimitReachedWithProvider": "{{provider}} 账号已达到用量上限",
+      "usageLimitReachedWithResetWithProvider": "{{provider}} 账号已达到用量上限，预计于 {{resetAt}} 恢复。",
+      "usageLimitReachedNoResetWithProvider": "{{provider}} 账号已达到用量上限。请等待用量上限重置，或切换其他模型后再重试。",
+      "invalidEncryptedContentWithProvider": "{{provider}} 无法读取部分历史内容。可切回原供应商，或在新任务中继续。"
     },
     "backgroundActivity": {
       "status": "后台子任务运行中，模型用量仍在消耗…",
@@ -16802,7 +17071,20 @@
       "viewGhostCard": "查看插件卡片"
     },
     "modelMismatch": {
-      "notice": "本轮由 {{actual}} 响应，而非所选的 {{selected}}（供应商临时降级）"
+      "notice": "模型供应商将本轮改由 {{actual}} 响应（原选 {{selected}}）",
+      "noticeWithProvider": "{{provider}} 将本轮改由 {{actual}} 响应（原选 {{selected}}）",
+      "infoLink": "了解原因",
+      "infoTitle": "为什么实际响应的模型不同",
+      "infoSummary": "Cindy 已按你选择的 {{selected}} 发送本轮请求，但模型供应商实际由 {{actual}} 返回了结果。",
+      "infoSummaryWithProvider": "Cindy 已按你选择的 {{selected}} 发送本轮请求，但 {{provider}} 实际由 {{actual}} 返回了结果。",
+      "infoCausesTitle": "常见原因",
+      "infoCausePolicy": "模型触发安全或内容策略回退（例如部分新模型在拒答时会自动改由旧版模型继续响应）。",
+      "infoCauseLoad": "模型供应商高峰期高负载，临时将请求分流至备用模型。",
+      "infoCauseGateway": "第三方或自建模型网关将模型名称映射到了其他模型。",
+      "infoActionsTitle": "可以怎么处理",
+      "infoActionContinue": "无需重新设置：这只影响本轮，后续消息仍会继续请求 {{selected}}。",
+      "infoActionRetry": "如果本轮结果不符合预期，可调整提问后重新发送，或临时切换到其他可用模型。",
+      "infoActionCheckProvider": "如果多轮持续出现，可检查当前模型供应商的配额状态或网关映射配置。"
     },
     "ghostNotify": {
       "secretSaved": "凭证「{{name}}」已保存",
@@ -16881,6 +17163,88 @@
       "signingIn": "此任务使用的订阅账号正在登录，请完成登录后重试。",
       "unavailable": "此任务绑定的订阅账号无法用于本次请求。请在执行任务的电脑上检查模型供应商中的账号设置，或选择其他模型来源。",
       "legacy": "此任务绑定的订阅账号暂不可用。请在执行任务的电脑上检查该账号的登录与用量状态，或选择其他模型来源。此任务不会自动换号。"
+    },
+    "errorExplain": {
+      "providerSafetyRefusal": {
+        "title": "为什么回复被拦截",
+        "summary": "Cindy 已原样发送你的请求，但模型供应商内置的安全与内容策略阻止了本次输出。这不是 Cindy 的审核或本地插件拦截。",
+        "summaryWithProvider": "Cindy 已原样发送你的请求，但 {{provider}} 内置的安全与内容策略阻止了本次输出。这不是 Cindy 的审核或本地插件拦截。",
+        "cause1": "请求内容、附件或前文上下文触发了供应商的安全审查规则。",
+        "cause2": "模型在生成中途触发输出安全过滤并中断了返回。",
+        "action1": "原样重试通常会再次被拦，请先调整措辞，或去掉可能触发审查的片段后再发送。",
+        "action2": "如果前文上下文已触发拦截，可新建任务继续，或切换其他可用模型。"
+      },
+      "overload": {
+        "title": "为什么提示服务繁忙",
+        "summary": "模型供应商当前计算资源紧张（例如高峰期过载或返回 HTTP 529），暂时无法接纳本轮请求。这与 Cindy 本身及你的本地网络无关。",
+        "summaryWithProvider": "{{provider}} 当前计算资源紧张（例如高峰期过载或返回 HTTP 529），暂时无法接纳本轮请求。这与 Cindy 本身及你的本地网络无关。",
+        "cause1": "该模型在高峰时段请求量激增，供应商算力暂时满载。",
+        "cause2": "供应商临时维护或限流调度，当前没有可用容量。",
+        "action1": "无需重启 Cindy 或调整网络设置，稍等片刻后点击「重试」即可。",
+        "action2": "如需立即继续，可临时切换到其他模型，或换用模型组中的其他来源。"
+      },
+      "streamInterrupted": {
+        "title": "为什么输出中途中断",
+        "summary": "模型供应商在流式返回结果的过程中意外断开了连接。Cindy 本身没有崩溃，已完成的步骤与对话记录均已保留。",
+        "summaryWithProvider": "{{provider}} 在流式返回结果的过程中意外断开了连接。Cindy 本身没有崩溃，已完成的步骤与对话记录均已保留。",
+        "cause1": "模型供应商服务端在生成中途发生临时异常或主动断流。",
+        "cause2": "第三方中转网关在长回复传输中途超时断开。",
+        "action1": "直接点击「重试」，或发送「继续」让模型接着完成。",
+        "action2": "如果连续多轮中断，可临时换用其他模型，或检查自定义网关的超时配置。"
+      },
+      "upstreamStatus": {
+        "title": "为什么返回服务异常",
+        "summary": "Cindy 已成功发出请求，但模型供应商服务返回了 HTTP {{status}} 内部错误（无详细错误正文），属于外部服务异常而非 Cindy 故障。",
+        "summaryWithProvider": "Cindy 已成功发出请求，但 {{provider}} 服务返回了 HTTP {{status}} 内部错误（无详细错误正文），属于外部服务异常而非 Cindy 故障。",
+        "cause1": "模型供应商接口暂时出现服务端内部故障。",
+        "cause2": "第三方或自建模型网关转发请求失败，或拦截后返回了自定义 5xx 状态码。",
+        "action1": "稍后点击「重试」；如果是临时抖动，通常很快会恢复。",
+        "action2": "如果使用第三方或自建网关，可查看该网关的服务状态与日志，或先切换其他模型供应商。"
+      },
+      "modelAccessDenied": {
+        "title": "为什么无权访问此模型",
+        "summary": "模型供应商拒绝了当前账号对该模型的访问请求，Cindy 无法绕过供应商侧的模型权限控制。",
+        "summaryWithProvider": "{{provider}} 拒绝了当前账号对该模型的访问请求，Cindy 无法绕过 {{provider}} 的模型权限控制。",
+        "cause1": "当前订阅套餐等级或 API 密钥尚未开通该模型权限。",
+        "cause2": "组织管理员限制了可用模型清单，或当前账号所在地区暂不支持该模型。",
+        "action1": "切换到当前账号已开通的其他模型继续任务。",
+        "action2": "前往模型供应商控制台或订阅页面确认权限；如刚升级套餐，重新连接账号后再试。"
+      },
+      "providerQuotaExceeded": {
+        "title": "为什么提示配额或余额不足",
+        "summary": "当前使用的外部模型供应商账户可用余额或配额已耗尽，供应商拒绝了本次计费请求。这与 Cindy 账户本身无关。",
+        "summaryWithProvider": "你连接的 {{provider}} 账户可用余额或配额已耗尽，{{provider}} 拒绝了本次计费请求。这与 Cindy 账户本身无关。",
+        "cause1": "该供应商账户的预付余额已用完，或尚未绑定有效支付方式。",
+        "cause2": "该 API 密钥设置了消费上限，或组织配额已达上限。",
+        "action1": "前往对应模型供应商的计费页面充值或提高限额后，再点击「重试」。",
+        "action2": "也可以在模型选择器中切换到其他有可用配额的模型供应商继续。"
+      },
+      "usageLimit": {
+        "title": "为什么达到用量上限",
+        "summary": "当前连接的模型账号已触发模型供应商设定的周期用量窗口上限，暂时无法继续处理新请求。这不是 Cindy 施加的限制。",
+        "summaryWithProvider": "当前连接的 {{provider}} 账号已触发 {{provider}} 设定的周期用量窗口上限，暂时无法继续处理新请求。这不是 Cindy 施加的限制。",
+        "cause1": "订阅账号在当前时间窗口（如 5 小时或每周周期）内的用量已用满。",
+        "cause2": "同一账号在多个任务或设备上并发使用，共享同一个周期配额窗口。",
+        "action1": "等待配额窗口重置后重试；如果已开启自动继续，重置后任务会自动接续。",
+        "action2": "如需马上继续，可临时切换到其他模型、其他已连接的订阅账号或 API 供应商。"
+      },
+      "encryptedContent": {
+        "title": "为什么无法读取部分历史内容",
+        "summary": "部分模型会把内部推理状态加密保存在对话历史中，且仅限原供应商和原账号解密。更换供应商、账号或远端整理上下文时，当前模型供应商可能无法读取旧加密片段。",
+        "summaryWithProvider": "部分模型会把内部推理状态加密保存在对话历史中，且仅限原供应商和原账号解密。更换供应商、账号或远端整理上下文时，{{provider}} 可能无法读取旧加密片段。",
+        "cause1": "中途切换了不同的模型供应商或账号，新供应商无法解密之前的加密推理内容。",
+        "cause2": "远端上下文整理或跨端点路由时，加密状态与当前请求目标不匹配。",
+        "action1": "切回原先使用的模型供应商或账号，即可继续当前任务。",
+        "action2": "或点击「在新任务中继续」，Cindy 会保留可读对话记录并移除无法解密的加密片段，原任务不受影响。"
+      },
+      "failedSamplingAttempt": {
+        "title": "为什么会显示未完成的回复",
+        "summary": "模型在生成这条回复时中途失败或被中断，只输出了前半段内容。Cindy 保留了已生成的片段方便你参考，避免已给出的思路直接消失。",
+        "cause1": "模型在流式输出过程中遇到供应商报错、网络中断或安全策略拦截。",
+        "cause2": "任务在回复完全收尾前触发了错误或被停止。",
+        "action1": "查看下方的错误提示了解具体中断原因，并确认是否需要重试。",
+        "action2": "可以直接点击重试或发送新消息继续，已保留的内容仍可作参考，无需从头说明。"
+      }
     }
   },
   "ccAgent": {
@@ -17106,6 +17470,22 @@
       "piRemoteUnsupported": "Pi 仅在本地运行，无法使用 SSH 远程主机。请切换到 Claude 或 Codex 来使用该主机。",
       "localWorktreeCleanupPending": "上一次本地 worktree 任务仍待回收，请等待清理完成后再试。",
       "remoteWorktreeCleanupPending": "上一次远程 worktree 仍待回收，请重新连接设备后再试。",
+      "remoteWorktreeCleanupOpenSettings": "前往回收设置",
+      "remoteWorktreeCleanup": {
+        "inProgress": "上一次远程 worktree 仍在创建或检出中，请稍后再试，或在「设置 → 存储空间」中处理。",
+        "preserved": "远程设备保留了上一次 worktree（可能有未提交改动或仍被占用），请到「设置 → 存储空间」重试或保留目录以解除阻止。",
+        "preservedDirty": "远程设备检测到上一次 worktree 有未提交改动，拒绝自动回收。请到「设置 → 存储空间」重试或保留目录以解除阻止。",
+        "preservedKeepSentinel": "远程设备检测到上一次 worktree 存在保留标记（.worktree-keep），拒绝自动回收。请到「设置 → 存储空间」处理。",
+        "preservedLiveReference": "远程设备检测到上一次 worktree 仍被其他任务或进程占用，拒绝自动回收。请到「设置 → 存储空间」重试或保留目录以解除阻止。",
+        "preservedBranchMismatch": "远程设备上的上一次 worktree 分支或目录状态异常，无法自动回收。请到「设置 → 存储空间」重试或保留目录以解除阻止。",
+        "preservedIncludeFilesChanged": "远程设备检测到上一次 worktree 的本地配置文件已变化，拒绝自动回收。请到「设置 → 存储空间」重试或保留目录以解除阻止。",
+        "preservedIgnoredFiles": "远程设备检测到上一次 worktree 包含无法复现的忽略文件，拒绝自动回收。请到「设置 → 存储空间」重试或保留目录以解除阻止。",
+        "preservedRemoveFailed": "远程设备删除上一次 worktree 目录失败。请检查该设备的权限或占用情况，或在「设置 → 存储空间」保留目录以解除阻止。",
+        "mismatch": "远程设备拒绝了上一次 worktree 的回收凭证，请到「设置 → 存储空间」重试或保留目录以解除阻止。",
+        "unsupported": "远程设备的 Cindy 版本不支持自动回收预创建 worktree，请更新该设备的 Cindy，或在「设置 → 存储空间」保留目录以解除阻止。",
+        "createStarted": "上一次远程任务创建未收到确认，为防误删已暂停自动清理。请确认任务状态后重试，或在「设置 → 存储空间」保留目录以解除阻止。",
+        "storage": "无法读写本地的远程 worktree 回收记录，请到「设置 → 存储空间」查看。"
+      },
       "remoteProviderUpdating": "供应商凭证正在更新，请稍后重试",
       "remoteProviderUnsupported": "该供应商不支持 SSH 远程会话，请更换来源",
       "remoteNativeOauthUnavailable": "远程任务不能使用 Claude 订阅，请选择网关或 API Key 模型",
@@ -17193,6 +17573,8 @@
       "organizeSidebar": "侧边栏显示设置",
       "filterAllText": "全部",
       "filterSelectedProjects": "已选 {{count}} 个",
+      "filterSelectedHarnesses": "已选 {{count}} 个",
+      "filterVendorPluginHeading": "来自插件",
       "filterStatus": {
         "active": "活跃",
         "archived": "已归档",
@@ -17202,7 +17584,8 @@
         "all": "全部",
         "cc": "Claude Code",
         "codex": "Codex",
-        "pi": "Pi"
+        "pi": "Pi",
+        "acp": "插件引擎"
       },
       "filterGroupBy": {
         "project": "项目",
@@ -17210,6 +17593,11 @@
         "device": "设备",
         "dialogue": "对话",
         "automation": "自动化"
+      },
+      "filterGroupByHint": {
+        "device": "最外层",
+        "dialogue": "没有项目的任务",
+        "automation": "自动化运行的任务"
       },
       "filterGroupByDeviceManualTip": "手动排序时按设备分组暂不可用",
       "deviceGroup": {
@@ -17241,6 +17629,11 @@
       "filterSortByTip": {
         "priority": "等你处理的排在最前，然后是未读、运行中，其余按时间"
       },
+      "filterSortByHint": {
+        "priority": "等你处理的在前",
+        "activity": "刚动过的在前",
+        "created": "新建的在前"
+      },
       "filterStatusHeading": "状态",
       "filterAgentHeading": "Harness",
       "filterLastActivityHeading": "最近活跃",
@@ -17255,9 +17648,17 @@
       "filterProjectOrderTip": {
         "custom": "用鼠标拖动项目行调整顺序，组内任务仍按上面的排序"
       },
+      "filterProjectOrderHint": {
+        "custom": "拖动项目行"
+      },
       "filterCreatorsHeading": "伙伴",
       "filterCreatorsAny": "全部",
-      "filterHideAutomations": "隐藏自动化任务",
+      "hideHeading": "隐藏",
+      "hideOptions": {
+        "automations": "自动化任务",
+        "taskCreated": "由其他任务创建的任务",
+        "teammates": "伙伴的任务"
+      },
       "filterCreatorsNone": "都不显示",
       "filterSelectedCreators": "已选 {{count}} 位",
       "filterProjectsHeading": "项目",
@@ -17280,6 +17681,10 @@
         "openWorktree": "打开 worktree 文件夹",
         "tokens": "Token",
         "cost": "费用"
+      },
+      "taskInfoSection": {
+        "identity": "任务标识",
+        "meta": "右侧信息 · 按勾选顺序显示"
       },
       "taskInfoTip": {
         "tokens": "累计 Token",
@@ -17361,7 +17766,15 @@
         "scheduleName": "「{{name}}」",
         "scheduleNameSeparator": "、",
         "confirm": "确认",
-        "cancel": "取消"
+        "cancel": "取消",
+        "deleteSchedules_one": "删除关联的自动化",
+        "deleteSchedules_other": "删除关联的自动化",
+        "deleteScheduleWarning_one": "关联的自动化{{names}}将被删除，无法恢复。",
+        "deleteScheduleWarning_other": "关联的自动化{{names}}将被删除，无法恢复。",
+        "deleteSchedulesAndArchive": "删除并归档",
+        "discardDeleteAndArchive": "丢弃、删除并归档",
+        "deleteScheduleFailed_one": "任务已归档，但未能删除关联的自动化，请前往自动化页面手动删除。",
+        "deleteScheduleFailed_other": "任务已归档，但未能删除 {{count}} 个关联的自动化，请前往自动化页面手动删除。"
       },
       "dialogueAction": {
         "search": "在此对话组中搜索",
@@ -17627,9 +18040,9 @@
         "tasks": "任务列表",
         "inbox": "收件箱",
         "enterInbox": "切换到收件箱模式",
-        "leaveInbox": "切换到任务列表模式"
+        "leaveInbox": "切换到任务列表模式",
+        "inboxTips": "收件箱使用技巧"
       },
-      "filterHideTaskCreated": "隐藏由其他任务创建的任务",
       "origin": {
         "createdByTask": "由其他任务创建",
         "createdByTaskNamed": "由任务「{{title}}」创建",
@@ -18109,6 +18522,7 @@
     "ultra": "极致"
   },
   "scheduler": {
+    "billingWait": "正在等待点数或订阅恢复。恢复后，用此连接成功发送一条消息，即可继续运行定时任务。",
     "prTrigger": {
       "fallback": "未接通 GitHub App 通知，仍会按计划检查。",
       "label": "PR / MR",
@@ -18312,7 +18726,11 @@
       "openWorkdirFailed": "打开文件夹失败"
     },
     "runs": {
-      "boundPluginEngineRecovery": "自动化未运行。绑定到插件引擎任务的自动化会沿用任务自己的模型，并在这台电脑上运行。如果自动化里指定了模型，请先去掉，再重新运行。",
+      "boundPluginEngineRecovery": "自动化未能使用插件引擎运行。展开错误详情查看原因。",
+      "boundPluginEngineSshRecovery": "SSH 任务必须沿用当前引擎。要使用插件引擎，请将自动化绑定到兼容的非 SSH 任务。",
+      "boundPluginEngineSelectionLocationRecovery": "所选插件引擎的位置不支持运行此自动化。请在自动化的模型设置中选择受支持电脑上的引擎。",
+      "boundPluginEngineTaskLocationRecovery": "绑定任务的插件引擎所在位置不支持运行此自动化。请将任务的引擎切换到受支持的电脑，或绑定兼容的任务。",
+      "boundPluginEngineModelRecovery": "自动化的模型设置与绑定任务的插件引擎不匹配。请将自动化设为沿用任务的模型。",
       "queueWaitTimeoutRecovery": "排队等待超时，提示词未发送。目标任务空闲后可点击「{{action}}」补跑。",
       "status": {
         "running": "运行中",
@@ -19046,6 +19464,24 @@
         "reconnectFailed": "暂时无法重新连接，请检查剩余名额后重试。"
       },
       "pluginTitle": "插件事件触发"
+    },
+    "pause": {
+      "prBarTitle": "{{count}} 条已暂停的 PR 跟进",
+      "viewPaused": "查看",
+      "resumeAll": "全部恢复",
+      "cleanMerged": "清理已合并",
+      "checking": "检查中…",
+      "resumeAllConfirmTitle": "恢复 {{count}} 条已暂停的 PR 跟进？",
+      "resumeAllConfirmDescription": "将恢复当前视图下全部已暂停的 PR 自动化，并重新计算下次定时检查时间。",
+      "resumeAllConfirmAction": "全部恢复",
+      "resumeAllDone": "已恢复 {{count}} 条 PR 跟进",
+      "resumeAllPartial": "已恢复 {{resumed}} 条 PR 跟进（{{failed}} 条失败）",
+      "noMergedFound": "已暂停的 PR 自动化中未发现已合并或已关闭的 PR",
+      "cleanMergedConfirmTitle": "删除 {{count}} 条已结束的 PR 自动化？",
+      "cleanMergedConfirmDescription": "以下已暂停自动化对应的 PR 已合并或关闭：{{names}}",
+      "cleanMergedConfirmAction": "删除",
+      "cleanMergedDone": "已删除 {{count}} 条已结束的 PR 自动化",
+      "checkFailed": "暂时无法检查 PR 状态"
     }
   },
   "issueTracker": {
@@ -22394,6 +22830,9 @@
     "send": "发送消息",
     "sending": "正在发送…",
     "sent": "已提交",
+    "sendTooManyArguments": "这条消息一次处理的内容超过 {{limit}} 项。请让助手分组处理后重新生成。",
+    "sendValueUnavailable": "这条消息需要的值无法读取。请让助手检查表单字段。",
+    "sendTextUnavailable": "无法生成要发送的消息。",
     "sendFailed": "消息未提交，已保留填写内容",
     "playVideo": "播放视频",
     "openVideoSource": "打开原视频",
@@ -23165,7 +23604,10 @@
       "chooseUnavailable": "「{{name}}」里现在没有能用的来源，没有选它。",
       "mergedLabel_other": "{{name}} · 路由（{{count}} 个来源）",
       "routeDecides": "这次用哪个来源由路由「{{name}}」决定",
-      "quotaOf": "配额：{{name}}"
+      "quotaOf": "配额：{{name}}",
+      "managedBy": "当前由「{{name}}」持续托管",
+      "detach": "解除托管",
+      "detached": "已解除智能路由托管，保留当前模型"
     },
     "why": {
       "expiringQuota": "还剩 {{left}}% 配额，{{reset}} 重置，先用它",
@@ -23203,11 +23645,17 @@
       "newRoute": "新建路由",
       "newRouteName": "新路由",
       "routesEmpty": "还没有路由。新建一个，把几个来源放进去。",
-      "scopeNote": "智能路由用于这台电脑上的任务：开新任务时选定一个来源；在进行中的任务里选它，会当场换一次，之后不会自己换。",
+      "scopeNote": "智能路由适用于这台电脑及已接入入口的任务：开新任务或在任务中途选定路由后，将持续托管该任务——每轮发前检查可用性与配额、带图自动切视觉来源、保护提示缓存并在故障时自动接替，直到你解除托管或手动改选具体模型。",
       "back": "返回智能路由",
       "name": "名字",
       "nameHint": "选模型时显示这个名字。",
-      "routeShownAs": "选模型时在「智能路由」里显示。",
+      "routeType": "路由类型",
+      "routeTypeModel": "模型路由",
+      "routeTypeProvider": "供应商路由",
+      "switchTypeConfirmTitle": "切换路由类型？",
+      "switchTypeConfirmDescription": "已经添加的来源会被移除。名字、选法和例外会保留。",
+      "switchTypeConfirmTargetWarning": "其他路由中指向这条路由的时段例外也会被移除。",
+      "switchTypeConfirmAction": "切换",
       "pick": "这次用哪个",
       "moreStrategies": "更多选法",
       "effort": "推理强度",
@@ -23217,11 +23665,10 @@
       "weightAria": "「{{name}}」的权重",
       "weightHint": "按权重分配时，权重越大分到的新任务越多，1–1000。",
       "sources": "可以用的来源",
-      "sourcesHint": "可以放不同的模型；实际用了哪个会写在任务里。",
-      "sourcesEmpty": "还没有来源。从下面添加已经连接的模型。",
+      "sourcesEmpty": "可以放不同的模型 · 实际调用了哪个会显示在任务里 · 从下面添加已经连接的模型",
       "sourcesEmptyMerged": "还没有来源。从下面添加已经连接的供应商。",
       "sourcesFull": "一个路由最多 {{count}} 个来源。",
-      "addSource": "添加来源",
+      "addSource": "添加模型路由",
       "chooseModel": "选一个模型",
       "notConnected": "没有连接",
       "moveUp": "上移",
@@ -23301,10 +23748,9 @@
       "removeAria": "把 {{name}} 从这条路由里去掉",
       "note": "自动合成的路由跟着供应商的连接增减：不能添加或移出成员，但可以调先后、填权重、停用某个成员，也可以改选法或隐藏。",
       "providers_other": "{{count}} 个供应商",
-      "addWhole": "添加整个供应商",
+      "addWhole": "添加供应商路由",
       "addWholeHint": "它的全部模型都进这条路由：选模型时这条路由像一个供应商，照常选模型，由路由决定这次用哪个成员。",
-      "addModelHint": "只加某个供应商的某个模型：选这条路由时按选法在这些来源里挑一个。",
-      "detailHint": "这条路由合并的是整个供应商：选模型时它像一个供应商，照常选模型、推理强度，由路由决定这次用哪个成员。"
+      "addModelHint": "只加某个供应商的某个模型：选这条路由时按选法在这些来源里挑一个。"
     },
     "kinds": {
       "byModel": "按模型",
@@ -23327,6 +23773,11 @@
       "deviceDefaultReadOnly": "那台电脑更新到新版本后，才能在这里改它的默认模型。",
       "deviceUnavailable": "现在读不到那台电脑的伙伴设置。确认它在线后再打开。",
       "deviceLoading": "正在读取那台电脑的设置…"
+    },
+    "turnSwitch": {
+      "preflightUnavailable": "当前来源暂不可用或配额已满，发前自动切换",
+      "imageInput": "本轮包含图片，自动切换到支持视觉的来源",
+      "cacheExpired": "缓存窗口已过，按路由策略重新挑选来源"
     }
   },
   "projectSettings": {

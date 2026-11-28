@@ -9,7 +9,7 @@ export type RealtimeProtocol = (typeof REALTIME_PROTOCOLS)[number];
 export type RealtimeVoiceSelection = {
   mode: 'realtime';
   providerId: string;
-  agent: AgentKind;
+  agent?: AgentKind;
   modelId: string;
   voice: string;
   protocol: RealtimeProtocol;
@@ -19,7 +19,7 @@ export type RealtimeVoiceModel = {
   name: string;
   providerId: string;
   providerName: string;
-  agent: AgentKind;
+  agent?: AgentKind;
   protocol?: RealtimeProtocol;
   protocolLocked: boolean;
   pickerVisible?: boolean;
@@ -42,20 +42,22 @@ export function normalizeRealtimeVoiceSelection(
   const bounded = (s: unknown): s is string =>
     typeof s === 'string' && !!s.trim() && s.length <= 256;
   const voice = normalizeSpeechVoiceId(v.voice);
+  const gateway = v.providerId === 'xd';
   if (
     v.mode !== 'realtime' ||
     !bounded(v.providerId) ||
-    v.providerId === 'xd' ||
     !bounded(v.modelId) ||
     !voice ||
-    !['codex', 'claude-code', 'pi'].includes(v.agent ?? '') ||
-    !REALTIME_PROTOCOLS.includes(v.protocol!)
+    !REALTIME_PROTOCOLS.includes(v.protocol!) ||
+    (gateway
+      ? v.agent !== undefined || v.protocol !== 'openai-realtime'
+      : !['codex', 'claude-code', 'pi'].includes(v.agent ?? ''))
   )
     return;
   return {
     mode: 'realtime',
     providerId: v.providerId,
-    agent: v.agent!,
+    ...(v.agent ? { agent: v.agent } : {}),
     modelId: v.modelId.trim(),
     voice,
     protocol: v.protocol!,
@@ -101,14 +103,23 @@ export function isQwenRealtimeModel(id: string): boolean {
   return /^qwen-audio-3\.[01]-realtime-(plus|flash)$/.test(id);
 }
 
+// The dedicated translation and transcription services use different sessions.
+const OPENAI_CONVERSATIONAL_REALTIME_RE =
+  /^gpt-realtime(?:-(?:mini|\d+(?:\.\d+)*(?:-mini)?))?(?:-\d{4}-\d{2}-\d{2})?$|^gpt-4o(?:-mini)?-realtime-preview(?:-\d{4}-\d{2}-\d{2})?$/;
+
+export function isOpenAiConversationalRealtimeModel(
+  modelId: string,
+  allowNamespace = false,
+): boolean {
+  const id = allowNamespace && modelId.startsWith('openai/') ? modelId.slice('openai/'.length) : modelId;
+  return OPENAI_CONVERSATIONAL_REALTIME_RE.test(id);
+}
+
 /** An official route fixes the protocol. The Token Plan scope is independent. */
 export function officialRealtimeProtocol(base: URL, modelId: string): RealtimeProtocol | undefined {
   if (base.protocol !== 'https:' || base.port) return;
   if (base.hostname === 'api.openai.com') {
-    // The dedicated translation and transcription services use different sessions.
-    const conversational = /^gpt-realtime(?:-(?:mini|\d+(?:\.\d+)*(?:-mini)?))?(?:-\d{4}-\d{2}-\d{2})?$/
-      .test(modelId) || /^gpt-4o(?:-mini)?-realtime-preview(?:-\d{4}-\d{2}-\d{2})?$/.test(modelId);
-    return conversational ? 'openai-realtime' : undefined;
+    return isOpenAiConversationalRealtimeModel(modelId) ? 'openai-realtime' : undefined;
   }
   if (base.hostname === 'open.bigmodel.cn' && /^\/api\/paas\/v4\/?$/.test(base.pathname))
     return modelId === GLM_REALTIME_FLASH ? 'glm-realtime' : undefined;

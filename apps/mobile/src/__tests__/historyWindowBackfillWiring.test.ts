@@ -209,7 +209,7 @@ function readSessionScreenSource(): string {
 it('clears loading when a queued sync is blocked for a newly-created session', () => {
     const source = readSessionScreenSource();
     expect(source).toContain(
-      'if (shouldBlockSessionSync(sessionId)) {\n      if (!syncRun.isStale()) setLoading(false);\n      return;\n    }',
+      'if (shouldBlockSessionSync(sessionId, deviceId)) {\n      if (!syncRun.isStale()) setLoading(false);\n      return;\n    }',
     );
   });
 

@@ -9,12 +9,24 @@
     "stopAllHint": "包括其他人发起的",
     "step": "第 {{step}}/{{total}} 步"
   },
+  "newMessagesBoundary": "NEW",
   "title": "群聊",
   "memberSeparator": "、",
   "memberCount_one": "{{count}} 位成员",
   "memberCount_other": "{{count}} 位成员",
   "organizer": "负责人",
   "waitingConfirm": "{{name}}在等你确认",
+  "assistantDevice": {
+    "title": "群里的 Cindy 在等你选电脑",
+    "onlyYou": "只有你能看到",
+    "request": "「{{request}}」选好电脑后就开始做。",
+    "requestUnknown": "选好电脑后就开始做这条请求。",
+    "requests_one": "你有 {{count}} 条请求在等，选好电脑后就开始做。",
+    "requests_other": "你有 {{count}} 条请求在等，选好电脑后就开始做。",
+    "remember": "以后你在本群的请求都用这台电脑，可在群设置里更换。",
+    "cancel": "取消请求",
+    "continue": "继续"
+  },
   "loadFailedTitle": "无法加载这个群聊",
   "loadFailedDescription": "暂时读不到电脑上的这个群聊，可以重试，或返回伙伴页。",
   "unavailableTitle": "这个群聊已不可用",
@@ -45,6 +57,7 @@
     "all": "所有人",
     "allHint": "仅真人",
     "label": "点名伙伴",
+    "avatarHint": "在草稿末尾点名这位伙伴。",
     "allBots": "所有伙伴",
     "allBotsHint": "仅伙伴"
   },
@@ -177,6 +190,9 @@
       "GROUP_AUTHORIZATION_REQUIRED": "{{name}} 的工具调用未执行：群内授权已失效或不允许此操作。请由伙伴主人在当前群重新发起。",
       "GROUP_AUTHORIZATION_UNAVAILABLE": "暂时无法核验 {{name}} 的群聊授权，这次工具调用未执行。请在连接恢复后重试。",
       "ATTACHMENTS_UNAVAILABLE": "部分附件未交给 {{name}}（下载失败或数量限制）。请重新发送本次需要的附件。",
+      "ATTACHMENTS_DOWNLOAD_FAILED": "部分附件下载失败，未能交给 {{name}}。请重新发送需要的附件。",
+      "ATTACHMENTS_LIMIT_REACHED": "本轮附件数量超过上限，部分附件未能交给 {{name}}。请分批发送需要的附件。",
+      "ATTACHMENTS_DOWNLOAD_FAILED_AND_LIMIT_REACHED": "部分附件下载失败，另一些超出本轮数量上限，未能交给 {{name}}。请分批重新发送需要的附件。",
       "GROUP_ASSISTANT_UNAVAILABLE": "{{name}}，连接你的 Cindy 后才能让 Cindy 替你干活（你的电脑上现在没有在线的 Cindy）。",
       "GROUP_ASSISTANT_DEVICE_REQUIRED": "{{name}}，请先选择本群的执行电脑，选好后会继续这条请求。",
       "GROUP_ASSISTANT_DEVICE_OFFLINE": "{{name}} 在本群选的执行电脑已离线。"
@@ -688,5 +704,10 @@
     "externalFormatError": "请从原消息重新打开完整链接。"
   },
   "waitingForOwner": "等待主人确认",
-  "externalBadge": "外部"
+  "externalBadge": "外部",
+  "reaction": {
+    "add": "添加表情回应",
+    "count": "{{emoji}} · {{count}} 人回应",
+    "failed": "表情回应未能更新，请重试。"
+  }
 }

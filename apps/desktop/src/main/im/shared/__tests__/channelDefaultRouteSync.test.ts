@@ -243,6 +243,29 @@ describe('syncUnderLock', () => {
     expect((await rowOf('dm')).model).toBe(NEW.model);
   });
 
+  // Same route key as task creation: receiving a message must keep following the configured group model.
+  it.each(['telegram', 'discord', 'wecom', 'dingtalk'] as const)('uses the saved %s lane when choosing a follow-up model', async (source) => {
+    await insertTask('group', OLD, { source });
+    await db.update(sessions).set({ imUserId: 'group-lane' }).where(eq(sessions.id, 'group'));
+    const groupRoute = { ...NEW, model: 'group-model' };
+    mocks.fingerprint.mockImplementation((...args: unknown[]) => args[1] ? 'fp-group' : 'fp-new');
+    mocks.resolveDefaults.mockImplementation(async (...args: unknown[]) =>
+      args[3] ? { ...groupRoute, fingerprint: 'fp-group' } : { ...NEW, fingerprint: 'fp-new' });
+    const follower = createImChannelDefaultRouteSync({
+      source,
+      config: CONFIG,
+      isRouteUsable: async () => true,
+      routeOverrideFor: (botId, userId) =>
+        botId === 'bot' && userId === 'group-lane'
+          ? { ...groupRoute, effort: 'low', agentDeviceId: null }
+          : null,
+    });
+
+    await follower.syncUnderLock('group');
+
+    expect((await rowOf('group')).model).toBe(groupRoute.model);
+  });
+
   /**
    * 绑定项目的群(2026-11-23 用户裁决): 群任务在项目目录里时跟随「项目与模型」里那一行, 还在
    * 对话目录里的任务仍跟随渠道设置, 直到 `/new`。生产入口 createImChannelDefaultRouteSync 的
@@ -1064,5 +1087,35 @@ describe('official bot follows defaults without an extra control', () => {
     mocks.readPendingRoute.mockReturnValueOnce(undefined);
     expect(await (await officialFollower()).syncUnderLock('official')).toBe(true);
     expect(parseImDefaultRouteRecord((await rowOf('official')).imDefaultRoute)?.pendingRev).toBe(7);
+  });
+
+  // 2026-11-27: 插件引擎跟随切换必须把当前插件 providerId 传给 applySessionRouteUnderSendLock，
+  // 以便跨插件引擎(同样 agentKind='acp'、不同 providerId)正确识别为跨引擎切换。
+  it('passes current providerId when following away from a plugin engine session', async () => {
+    const oldAcp = {
+      agentKind: 'acp' as const,
+      model: 'deepseek-v4',
+      providerId: 'acp-plugin:dsh:dsh',
+      effort: '',
+    };
+    const nextAcp = {
+      agentKind: 'acp' as const,
+      model: 'gemini-3-pro',
+      providerId: 'acp-plugin:agy:agy',
+      effort: '',
+    };
+    await insertTask('official-acp', oldAcp, {
+      source: 'telegram',
+      marker: false,
+      record: buildImDefaultRouteRecord(hookFp, oldAcp),
+    });
+    mocks.resolveDefaults.mockResolvedValue({ ...nextAcp, fingerprint: nextHookFp });
+    await (await officialFollower()).syncUnderLock('official-acp');
+    expect(mocks.applyRoute).toHaveBeenCalledWith(
+      'official-acp',
+      { ...nextAcp, agentDeviceId: null, fastMode: false },
+      'acp',
+      oldAcp.providerId,
+    );
   });
 });

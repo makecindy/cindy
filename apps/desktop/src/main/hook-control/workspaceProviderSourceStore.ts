@@ -59,7 +59,8 @@ function isEntry(raw: unknown): raw is WorkspaceProviderSourceEntry {
     typeof r.providerId === 'string' &&
     r.providerId.length > 0 &&
     r.providerId.length <= 128 &&
-    (r.agentDeviceId == null || (typeof r.agentDeviceId === 'string' && /^[A-Za-z0-9_.:-]{1,128}$/.test(r.agentDeviceId)))
+    (r.agentDeviceId == null || (typeof r.agentDeviceId === 'string' && /^[A-Za-z0-9_.:-]{1,128}$/.test(r.agentDeviceId))) &&
+    (r.modelGroup == null || (typeof r.modelGroup === 'string' && r.modelGroup.length > 0 && r.modelGroup.length <= 128))
   );
 }
 
@@ -126,12 +127,15 @@ export function setWorkspaceProviderSource(
   workspace: string,
   providerId: string | null,
   agentDeviceId?: string | null,
+  modelGroup?: string | null,
 ): WorkspaceProviderSourceEntry[] {
   const fp = filePath();
   const rest = readFileEntries(fp).filter((e) => !sameKey(e, channel, teamId, workspace));
+  const trimmedGroup = typeof modelGroup === 'string' && modelGroup.trim() ? modelGroup.trim() : null;
   const next =
     providerId === null ? rest : [...rest, { channel, teamId, workspace, providerId,
-      ...(agentDeviceId ? { agentDeviceId } : {}) }];
+      ...(agentDeviceId ? { agentDeviceId } : {}),
+      ...(trimmedGroup ? { modelGroup: trimmedGroup } : {}) }];
   writeFileEntries(fp, next);
   return next;
 }

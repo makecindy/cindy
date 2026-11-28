@@ -53,40 +53,6 @@ const readActivity = (sessionId: string): RemoteSessionActivity | undefined =>
   activities.get(sessionId);
 
 describe('buildAgentIslandRemoteSessionInputs', () => {
-  it('keeps archived remote errors off the island until the task is restored', () => {
-    const deviceId = 'archive-test-device';
-    const target = remoteSession('remote-target', deviceId);
-    const other = remoteSession('remote-other', deviceId);
-    const state = createAgentIslandState();
-    const deliverError = (sessionId: string, compactDetail = 'Turn failed') =>
-      applyRemoteSessionActivity(deviceId, { sessionId, phase: 'error', attention: true, compactDetail });
-    const errorCards = () => {
-      const inputs = buildAgentIslandRemoteSessionInputs(
-        remoteProjectsStore.getVisibleMergedRemoteSessions(), MACHINE_ALL, getRemoteSessionActivity,
-      );
-      syncAgentIslandDeviceSessions(state, parseAgentIslandRemoteSessions(inputs)!, 2_000);
-      return buildAgentIslandDisplayState(state, 2_000).sessions
-        .filter((session) => session.phase === 'error').map((session) => session.sessionId).sort();
-    };
-    try {
-      remoteProjectsStore.setDeviceSessions(deviceId, 'Office Mac', [target, other]);
-      deliverError(target.id);
-      deliverError(other.id);
-      expect(errorCards()).toEqual([other.id, target.id]);
-
-      remoteProjectsStore.applyPatch(deviceId, target.id, { status: 'archived' });
-      expect(errorCards()).toEqual([other.id]);
-      deliverError(target.id, 'Late terminal event');
-      expect(errorCards()).toEqual([other.id]);
-
-      remoteProjectsStore.applyPatch(deviceId, target.id, { status: 'active' });
-      expect(errorCards()).toEqual([other.id, target.id]);
-    } finally {
-      remoteProjectsStore.removeDevice(deviceId);
-      clearRemoteSessionActivity();
-    }
-  });
-
   // PR #11120 regression (unit): the former receipt test checked only attention,
   // missing consumers that interpret any terminal activity as unread. Exercise
   // the actual lamp and renderer -> IPC -> island projection after read/reconnect.
@@ -348,5 +314,63 @@ describe('buildAgentIslandRemoteSessionInputs', () => {
         readActivity,
       ),
     ).toEqual([]);
+  });
+
+  // #13473: activity can remain in the mirror or arrive after an archive. Only restoring
+  // the task should make that activity eligible for the island again.
+  it('keeps archived remote errors off the island until the task is restored', () => {
+    clearRemoteSessionActivity();
+    const state = createAgentIslandState();
+    const deviceId = 'device-a';
+    remoteProjectsStore.setDeviceSessions(
+      deviceId,
+      'Mac device-a',
+      [remoteSession('a-1', deviceId), remoteSession('a-2', deviceId)],
+      'active',
+    );
+    try {
+      for (const sessionId of ['a-1', 'a-2']) {
+        applyRemoteSessionActivity(deviceId, {
+          sessionId,
+          phase: 'error',
+          attention: true,
+          compactDetail: 'Session closed before the current turn delivered a terminal event',
+        });
+      }
+      const sync = () => syncAgentIslandDeviceSessions(state, parseAgentIslandRemoteSessions(
+        buildAgentIslandRemoteSessionInputs(
+          remoteProjectsStore.getVisibleMergedRemoteSessions(),
+          MACHINE_ALL,
+          getRemoteSessionActivity,
+        ),
+      )!, 2_000);
+      const cardIds = () => buildAgentIslandDisplayState(state, 2_000).sessions
+        .map((session) => session.sessionId)
+        .sort();
+      sync();
+      expect(cardIds()).toEqual(['a-1', 'a-2']);
+
+      remoteProjectsStore.applyPatch(deviceId, 'a-1', { status: 'archived' });
+      // The error activity outlives the archive, exactly like the truncated turn does.
+      expect(getRemoteSessionActivity('a-1', deviceId)?.phase).toBe('error');
+      sync();
+      expect(cardIds()).toEqual(['a-2']);
+
+      applyRemoteSessionActivity(deviceId, {
+        sessionId: 'a-1',
+        phase: 'error',
+        attention: true,
+        compactDetail: 'Late terminal event',
+      });
+      sync();
+      expect(cardIds()).toEqual(['a-2']);
+
+      remoteProjectsStore.applyPatch(deviceId, 'a-1', { status: 'active' });
+      sync();
+      expect(cardIds()).toEqual(['a-1', 'a-2']);
+    } finally {
+      remoteProjectsStore.removeDevice(deviceId);
+      clearRemoteSessionActivity();
+    }
   });
 });
