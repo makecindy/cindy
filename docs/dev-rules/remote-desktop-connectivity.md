@@ -26,6 +26,11 @@ is not added. All configured nodes participate in ICE checks; a dead first node
 does not prevent using candidates from the others. URI ordering is not a promise
 of priority. Candidate statistics already distinguish direct, relay and JPEG paths.
 
+The managed V1 self-hosted service explicitly includes the two existing STUN
+URLs alongside its paired TURN/TLS endpoint so upgrades retain the previous
+direct candidates. Deployment, expiry, quotas and existing Nginx behavior are
+documented in [self-hosted media relay](protocol-compatibility/self-hosted-relay.md#自建媒体中继).
+
 Every existing bounded media retry fetches fresh configuration on both peers.
 No configuration cache, WSS reconnect or new global retry loop. All Desktop/Mobile
 video and file callers share the configuration budget in

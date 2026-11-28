@@ -24,6 +24,8 @@ import { BLOB_PATH_PREFIX, DEFAULT_MEDIA_LIMITS, MediaStore, type MediaLimits } 
 import { Pairing } from './pairing';
 import { normalizeName, RelayStore, type StoredDevice } from './store';
 import { RELAY_VERSION } from './version';
+import { turnIceConfig } from './turn';
+import { createTurnIngress } from './turnIngress';
 
 const API_PREFIX = '/api/device-link';
 const WS_PATH = `${API_PREFIX}/ws`;
@@ -43,6 +45,11 @@ export interface RelayServerOptions {
   tls?: { cert: string | Buffer; key: string | Buffer };
   /** 其他设备访问中转用的地址(如 https://1.2.3.4),用于生成媒体签名地址;不填时按请求推断。 */
   publicUrl?: string;
+  /** Installer-owned endpoint. Omitted for existing unmanaged deployments. */
+  turnUrl?: string;
+  turnReady?: (relayId: string) => Promise<boolean>;
+  /** Local socket owned by the managed media service; only used on a TLS listener. */
+  turnSocket?: string;
   /** 前置代理模式：按转发头推断外部地址；仅对回环代理使用单个 X-Forwarded-For IP 限流。默认 false。 */
   trustProxyHeaders?: boolean;
   media?: Partial<MediaLimits>;
@@ -262,11 +269,15 @@ export async function startRelayServer(options: RelayServerOptions): Promise<Rel
     sendJson(res, 200, { deleted: true });
   });
 
-  // ── 自建中转不提供的官方能力:给出客户端能平稳处理的响应 ─────────────────
-  // ICE:404 让远程桌面按现有逻辑退回公共 STUN。
-  route('GET', /^\/api\/device-link\/ice-servers$/, async ({ req }) => {
+  // Keep the legacy STUN fallback for unmanaged or unverified media endpoints.
+  route('GET', /^\/api\/device-link\/ice-servers$/, async ({ req, res }) => {
     authenticate(req);
-    throw new RelayError('NOT_FOUND', 'no ICE configuration on a self-hosted relay');
+    if (!options.turnUrl || (options.turnReady && !await options.turnReady(store.relayId))) {
+      throw new RelayError('NOT_FOUND', 'no ICE configuration on this relay');
+    }
+    // Reading the installer readiness marker can overlap removal or re-pairing.
+    const device = authenticate(req);
+    sendJson(res, 200, turnIceConfig(options.turnUrl, store.mediaSigningKey, device.deviceId, now()));
   });
   // 手机推送:推送凭据绑定官方 App,自建中转不保存 token,也不声明 notify 能力。
   route('PUT', /^\/api\/device-link\/push-token$/, async ({ req, res }) => {
@@ -352,12 +363,14 @@ export async function startRelayServer(options: RelayServerOptions): Promise<Rel
     }
   }
 
-  const server: Server = options.tls
+  const server: Server = options.tls && !options.turnSocket
     ? createHttpsServer({ cert: options.tls.cert, key: options.tls.key }, (req, res) => void handleRequest(req, res))
     : createHttpServer((req, res) => void handleRequest(req, res));
   // 长轮询最长 25 秒;大文件上传不能被整体请求超时打断,只限制请求头。
   server.requestTimeout = 0;
   server.headersTimeout = 30_000;
+  const ingress = options.tls && options.turnSocket ? createTurnIngress(options.tls, server, options.turnSocket) : null;
+  const listener = ingress?.server ?? server;
 
   const wss = new WebSocketServer({ noServer: true, maxPayload: WS_MAX_PAYLOAD_BYTES });
   const agentNetWss = new WebSocketServer({ noServer: true, maxPayload: AGENT_NET_MAX_FRAME_BYTES });
@@ -387,13 +400,13 @@ export async function startRelayServer(options: RelayServerOptions): Promise<Rel
 
   let boundPort = 0;
   await new Promise<void>((resolve, reject) => {
-    server.once('error', reject);
-    server.listen(options.port ?? 0, host, () => {
-      server.off('error', reject);
+    listener.once('error', reject);
+    listener.listen(options.port ?? 0, host, () => {
+      listener.off('error', reject);
       resolve();
     });
   });
-  boundPort = (server.address() as AddressInfo).port;
+  boundPort = (listener.address() as AddressInfo).port;
 
   const sweepTimer = setInterval(() => {
     void media.sweep().catch(() => logger.warn('media sweep failed'));
@@ -411,7 +424,7 @@ export async function startRelayServer(options: RelayServerOptions): Promise<Rel
     port: boundPort,
     updateTls(tls) {
       if (!options.tls) throw new Error('relay is not serving HTTPS');
-      (server as import('node:https').Server).setSecureContext({ cert: tls.cert, key: tls.key });
+      (listener as import('node:tls').Server).setSecureContext({ cert: tls.cert, key: tls.key });
       logger.info('certificate updated');
     },
     close(closeOptions) {
@@ -428,7 +441,8 @@ export async function startRelayServer(options: RelayServerOptions): Promise<Rel
           agentNetWss.close(() => resolve());
         });
         await new Promise<void>((resolve) => {
-          server.close(() => resolve());
+          listener.close(() => resolve());
+          ingress?.closeConnections();
           server.closeAllConnections?.();
         });
         await store.flush();

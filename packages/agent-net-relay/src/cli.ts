@@ -62,7 +62,8 @@ try {
   try {
     stage = 'gateway';
     if (legacyUpstream && material) gateway = await startRelayGateway({ host: value('--gateway-host') ?? '0.0.0.0', port: port('--gateway-port') ?? 443,
-      legacyUrl: legacyUpstream, agentNetUrl: relay.url, tls: material });
+      legacyUrl: legacyUpstream, agentNetUrl: relay.url, tls: material,
+      turnSocket: args.includes('--paired-turn') ? '/run/cindy-relay-turn.sock' : undefined });
   } catch (error) { await relay.close(); throw error; }
   let reloading = false;
   const timer = gateway && tlsMaterialFile ? setInterval(() => {
