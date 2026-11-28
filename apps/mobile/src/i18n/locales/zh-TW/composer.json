@@ -107,7 +107,8 @@
     "recognitionStalled": "語音辨識沒有繼續回傳結果，請重試。",
     "transcriptKept": "{{message}}（辨識出的文字已經保留，可以直接編輯）",
     "micPermission": "麥克風權限未開啟，請在系統設定裡允許 {{appName}} 使用麥克風。",
-    "realtimeAudioUnavailable": "目前版本不支援即時語音輸入，請安裝包含原生錄音模組的測試版。"
+    "realtimeAudioUnavailable": "目前版本不支援即時語音輸入，請安裝包含原生錄音模組的測試版。",
+    "retryRecognition": "重新辨識"
   },
   "incomingShare": {
     "title": "傳送到 Cindy",

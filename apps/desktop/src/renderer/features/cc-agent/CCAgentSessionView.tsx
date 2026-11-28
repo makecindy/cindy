@@ -6587,6 +6587,7 @@ function CCAgentSessionContent({
       agentKind={session?.agentKind}
       remoteHostId={session?.remoteHostId ?? null}
       ownerDeviceId={rightSidebarDeviceLinkDeviceId}
+      errorProviderDirectory={providers}
       sessionSource={session?.source}
       canConfigureAutoReview={Boolean(session) && !readOnly && !remoteDeviceId && !session?.remoteHostId && !session?.agentDeviceId}
       onDiagnoseError={canDiagnoseError ? handleDiagnoseError : undefined}

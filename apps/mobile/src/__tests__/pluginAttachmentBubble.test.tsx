@@ -25,6 +25,8 @@ vi.mock('expo-modules-core', () => ({
   requireNativeViewManager: () => () => null,
 }));
 vi.mock('@/session/NativeVideoPlayer', () => ({ NativeVideoPlayer: () => null }));
+// Explanation sheet behavior is covered separately; this suite checks message warnings.
+vi.mock('@/session/NoticeExplainSheet', () => ({ NoticeExplainButton: () => null, NoticeExplainSheet: () => null }));
 
 // Keep the production list, bubble gate, invocation header, and message model.
 // Only native surfaces and unrelated heavy viewers are replaced for Node rendering.

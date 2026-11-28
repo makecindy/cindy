@@ -21,18 +21,24 @@ import { isMemberBudgetPaused } from '../../../shared/providerShareBudget';
 
 import type { ErrorDiagnosisSource } from '@/lib/errorDiagnosisPrompt';
 import { ErrorNotice } from '@/components/ui/error-notice';
+import type { NoticeExplainContent } from '@/components/ui/notice-explain-popover';
+import { buildChatErrorExplain, resolveExternalErrorProviderName } from '@/lib/chatErrorExplain';
 import { renderProviderErrorExplanation } from './ProviderErrorExplanation';
 import { AutoReviewRecoveryActions } from './AutoReviewRecoveryActions';
 import { useTranslation } from 'react-i18next';
 import {
   isAccountUsageLimitReachedText,
   isCindyGatewayProxyTokenInvalidError,
+  isProviderSafetyRefusalError,
   isRemoteAgentResumeRejectedError,
   isResponsesLiteParallelToolCallsError,
   redactSensitiveText,
   parseGeminiInputRateLimit,
   localizeSubscriptionAccountError,
 } from '@cindy/maker-shared/error-redaction';
+import { isInvalidEncryptedContentError } from '@/utils/encryptedContentError';
+import { isOverloadErrorMessage } from '@/utils/overloadError';
+import { isQuotaExhaustedErrorMessage } from '@/utils/quotaError';
 import { isStreamInterruptedErrorMessage } from '@/utils/streamInterruptError';
 import { parseUpstreamStatusError } from '@/utils/upstreamStatusError';
 import { chatRemoteErrorGuidanceKey } from '../../lib/autoReviewUnavailableGuidance';
@@ -45,6 +51,8 @@ export function ErrorMessageCard({
   message,
   reason,
   providerId,
+  providerName,
+  providers,
   reconnectHandoff,
   toolLoop,
   outputLimit,
@@ -60,6 +68,8 @@ export function ErrorMessageCard({
   kind?: 'reply-error' | 'blocked-input';
   reason?: string;
   providerId?: string;
+  providerName?: string;
+  providers?: readonly { id: string; name?: string | null; auth?: { native?: string } }[];
   reconnectHandoff?: ReconnectHandoff;
   /** Structured details for a tool-loop terminal error (optional for legacy rows). */
   toolLoop?: ToolLoopErrorDetails;
@@ -71,6 +81,7 @@ export function ErrorMessageCard({
 }) {
   const { t, i18n } = useTranslation();
   const decoded = decodeRemoteErrorMessage(message);
+  const externalProviderName = resolveExternalErrorProviderName({ providerId, providerName, providers });
   const parsedRemoteKey = remoteErrorI18nKey(message);
   const remoteKey = isRemoteAgentResumeRejectedError(message) ? 'chat.remoteError.REMOTE_AGENT_RESUME_UNAVAILABLE'
     : isMemberBudgetPaused(message) ? 'providerShare.memberBudget.paused' : parsedRemoteKey === 'chat.remoteError.AUTO_REVIEW_UNAVAILABLE'
@@ -80,7 +91,9 @@ export function ErrorMessageCard({
     && remoteKey === 'chat.remoteError.DEVICE_LINK_MEDIA_ACCESS_DENIED';
   const remoteGuidance = remoteKey && i18n.exists(remoteKey) ? t(remoteKey) : undefined;
   const i18nKey = errorReasonI18nKey(reason, decoded);
-  const isStreamInterrupted = isStreamInterruptedErrorMessage(message, reason);
+  const isProviderSafetyRefusal = isProviderSafetyRefusalError(decoded, reason);
+  const isStreamInterrupted = !isProviderSafetyRefusal && isStreamInterruptedErrorMessage(message, reason);
+  const isOverloadError = !isProviderSafetyRefusal && isOverloadErrorMessage(decoded, undefined, reason);
   const isGatewayProxyTokenInvalid = isCindyGatewayProxyTokenInvalidError({
     reason,
     message: decoded,
@@ -100,7 +113,7 @@ export function ErrorMessageCard({
   const geminiGuidance = parseGeminiInputRateLimit(message) === null ? null :
     t(reason === 'gemini-input-retry-exhausted' ? 'chat.geminiRateLimit.exhausted' : 'chat.geminiRateLimit.title');
   // 历史错误行与实时横幅同一口径：上游 5xx（无正文）时点名状态，不落到通用兜底。
-  const upstreamStatusError = parseUpstreamStatusError(decoded);
+  const upstreamStatusError = !isProviderSafetyRefusal ? parseUpstreamStatusError(decoded) : null;
   // #12970 review: 「未发送」必须压过上游状态码。Pi 历史读取被拒时上游可能返回
   // 502/529，先命中状态文案会让历史行只说「回复未完成」，丢掉消息根本没发出去这个
   // 事实。与 ErrorBanner 的 piRetryHistoryKey 分支同一优先级。
@@ -109,22 +122,93 @@ export function ErrorMessageCard({
     || i18nKey === 'chat.errorBanner.piRetryHistoryTooLarge'
       ? i18nKey
       : undefined;
-  const fallbackText = isResponsesLiteParallelToolCallsError(decoded)
-    ? t('chat.errorBanner.requestFormatError')
-    : isStreamInterrupted
-      ? t('chat.errorBanner.streamInterruptedNoRetry')
-      : isGatewayProxyTokenInvalid
-        ? t('chat.errorBanner.gatewayProxyTokenInvalidNoRetry')
-        : (parsedRemoteKey?.startsWith('sharedTaskRecovery.') ? remoteGuidance : undefined)
-          ?? (piRetryHistoryKey ? t(piRetryHistoryKey) : undefined)
-          ?? (upstreamStatusError
-            ? t('chat.errorBanner.upstreamStatusError', { status: upstreamStatusError.status })
-            : undefined)
-          ?? localizedReasonError ?? remoteGuidance
-          ?? t(isAccountUsageLimitReachedText(decoded) ? 'chat.errorBanner.usageLimitReached' : 'chat.errorBanner.replyFailed');
+  const isInvalidEncrypted = !isProviderSafetyRefusal && isInvalidEncryptedContentError(decoded);
+  const isAccountUsageLimit = !isProviderSafetyRefusal
+    && (reason === 'acp-usage-limit' || isAccountUsageLimitReachedText(decoded));
+  const isExternalQuota = !isProviderSafetyRefusal
+    && !isAccountUsageLimit
+    && !geminiGuidance
+    && !subscriptionGuidance
+    && (providerId?.trim() || null) !== 'xd'
+    && isQuotaExhaustedErrorMessage(decoded);
+
+  let explain: NoticeExplainContent | undefined;
+  let fallbackText: string;
+  if (isProviderSafetyRefusal) {
+    fallbackText = externalProviderName
+      ? t('chat.errorBanner.providerSafetyRefusalWithProvider', { provider: externalProviderName })
+      : t('chat.errorBanner.providerSafetyRefusal');
+    explain = buildChatErrorExplain('providerSafetyRefusal', t, { providerName: externalProviderName });
+  } else if (isResponsesLiteParallelToolCallsError(decoded)) {
+    fallbackText = t('chat.errorBanner.requestFormatError');
+  } else if (isStreamInterrupted) {
+    fallbackText = externalProviderName
+      ? t('chat.errorBanner.streamInterruptedNoRetryWithProvider', { provider: externalProviderName })
+      : t('chat.errorBanner.streamInterruptedNoRetry');
+    explain = buildChatErrorExplain('streamInterrupted', t, { providerName: externalProviderName });
+  } else if (isGatewayProxyTokenInvalid) {
+    fallbackText = t('chat.errorBanner.gatewayProxyTokenInvalidNoRetry');
+  } else if (parsedRemoteKey?.startsWith('sharedTaskRecovery.') && remoteGuidance) {
+    fallbackText = remoteGuidance;
+  } else if (piRetryHistoryKey) {
+    fallbackText = t(piRetryHistoryKey);
+  } else if (i18nKey === 'chat.errorBanner.modelAccessDenied') {
+    fallbackText = externalProviderName
+      ? t('chat.errorBanner.modelAccessDeniedWithProvider', { provider: externalProviderName })
+      : t('chat.errorBanner.modelAccessDenied');
+    explain = buildChatErrorExplain('modelAccessDenied', t, { providerName: externalProviderName });
+  } else if (i18nKey === 'chat.errorBanner.remoteCompactEncryptedContent') {
+    fallbackText = t('chat.errorBanner.remoteCompactEncryptedContent');
+    explain = buildChatErrorExplain('encryptedContent', t, { providerName: externalProviderName });
+  } else if (isInvalidEncrypted && !remoteGuidance && !localizedReasonError) {
+    fallbackText = externalProviderName
+      ? t('chat.errorBanner.invalidEncryptedContentWithProvider', { provider: externalProviderName })
+      : t('chat.errorBanner.invalidEncryptedContent');
+    explain = buildChatErrorExplain('encryptedContent', t, { providerName: externalProviderName });
+  } else if (
+    isOverloadError &&
+    !remoteGuidance &&
+    (!localizedReasonError || i18nKey === 'chat.errorBanner.overloadBusyNoRetry')
+  ) {
+    fallbackText = externalProviderName
+      ? t('chat.errorBanner.overloadBusyNoRetryWithProvider', { provider: externalProviderName })
+      : t('chat.errorBanner.overloadBusyNoRetry');
+    explain = buildChatErrorExplain('overload', t, { providerName: externalProviderName });
+  } else if (upstreamStatusError && !remoteGuidance && !localizedReasonError) {
+    fallbackText = externalProviderName
+      ? t('chat.errorBanner.upstreamStatusErrorWithProvider', {
+          provider: externalProviderName,
+          status: upstreamStatusError.status,
+        })
+      : t('chat.errorBanner.upstreamStatusError', { status: upstreamStatusError.status });
+    explain = buildChatErrorExplain('upstreamStatus', t, {
+      providerName: externalProviderName,
+      status: upstreamStatusError.status,
+    });
+  } else if (
+    isAccountUsageLimit &&
+    !remoteGuidance &&
+    (!localizedReasonError || i18nKey === 'chat.errorBanner.usageLimitReached')
+  ) {
+    fallbackText = externalProviderName
+      ? t('chat.errorBanner.usageLimitReachedWithProvider', { provider: externalProviderName })
+      : t('chat.errorBanner.usageLimitReached');
+    explain = buildChatErrorExplain('usageLimit', t, { providerName: externalProviderName });
+  } else if (isExternalQuota && !remoteGuidance && !localizedReasonError) {
+    fallbackText = externalProviderName
+      ? t('chat.errorBanner.providerQuotaExhaustedWithProvider', { provider: externalProviderName })
+      : t('providerError.QUOTA_EXCEEDED');
+    explain = buildChatErrorExplain('providerQuotaExceeded', t, { providerName: externalProviderName });
+  } else {
+    fallbackText = localizedReasonError ?? remoteGuidance ?? t('chat.errorBanner.replyFailed');
+  }
   const text = kind === 'blocked-input'
     ? redactSensitiveText(decoded)
     : geminiGuidance ?? subscriptionGuidance ?? fallbackText;
+  const resolvedExplain =
+    kind === 'reply-error' && !isAttachmentAccessDenied && !geminiGuidance && !subscriptionGuidance
+      ? explain
+      : undefined;
   const showRawToggle = kind === 'reply-error' && Boolean(decoded);
 
   if (!text) return null;
@@ -135,6 +219,7 @@ export function ErrorMessageCard({
       message={isAttachmentAccessDenied ? t('chat.errorBanner.attachmentAccessDeniedTitle') : text}
       description={isAttachmentAccessDenied ? t('chat.errorBanner.attachmentAccessDeniedRecovery')
         : kind === 'reply-error' && renderProviderErrorExplanation(message, text, t)}
+      explain={resolvedExplain}
       details={showRawToggle ? modelFallbackDetails ?? message : undefined}
       actions={canConfigureAutoReview && parsedRemoteKey === 'chat.remoteError.AUTO_REVIEW_NO_AVAILABLE_MODEL'
         ? <AutoReviewRecoveryActions /> : undefined}

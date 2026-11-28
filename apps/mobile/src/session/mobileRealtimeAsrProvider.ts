@@ -1,4 +1,15 @@
-import { StopSoundActivity, type AsrEvent, type AsrProvider, type AudioTrace } from '@cindy/voice-input-core';
+import {
+  StopSoundActivity,
+  buildOpenAiTranscriptionPrompt,
+  buildQwenAsrCorpusText,
+  buildVolcengineSaucCorpusContext,
+  isUnsupportedOpenAiRealtimePromptError,
+  supportsOpenAiRealtimeTranscriptionPrompt,
+  type AsrEvent,
+  type AsrProvider,
+  type AsrRecognitionHints,
+  type AudioTrace,
+} from '@cindy/voice-input-core';
 import type { StoredMobileVoiceCredential } from '@/session/mobileVoiceCredentialStore';
 import { redactMobileVoiceCredentialText } from '@/session/mobileVoiceCredentialRedaction';
 import { isMobileVoiceRateLimited } from '@/session/mobileVoiceInput';
@@ -13,6 +24,7 @@ type MobileRealtimeProtocolProfile =
 type MobileRealtimeAsrProviderOptions = {
   credential: StoredMobileVoiceCredential;
   sourceLanguage?: string;
+  recognitionHints?: AsrRecognitionHints;
   websocketFactory?: WebSocketFactory;
   connectTimeoutMs?: number;
   flushTimeoutMs?: number;
@@ -240,6 +252,7 @@ function mobileAsrCredentialChain(
 export class MobileRealtimeAsrProvider implements AsrProvider {
   private readonly credential: StoredMobileVoiceCredential;
   private readonly sourceLanguage: string;
+  private readonly recognitionHints?: AsrRecognitionHints;
   private readonly websocketFactory: WebSocketFactory;
   private readonly connectTimeoutMs: number;
   private readonly flushTimeoutMs: number;
@@ -249,6 +262,9 @@ export class MobileRealtimeAsrProvider implements AsrProvider {
   private callback: (event: AsrEvent) => void = () => {};
   private socket: WebSocketLike | null = null;
   private sessionReady = false;
+  private promptFallbackActive = false;
+  private lastSessionUpdateIncludedPrompt = false;
+  private promptFallbackAttemptedForConnection = false;
   private bufferedMs = 0;
   private pendingCommitCount = 0;
   private nextAudioCommitId = 1;
@@ -272,6 +288,7 @@ export class MobileRealtimeAsrProvider implements AsrProvider {
   constructor(options: MobileRealtimeAsrProviderOptions) {
     this.credential = options.credential;
     this.sourceLanguage = options.sourceLanguage ?? this.credential.settings?.language ?? 'auto';
+    this.recognitionHints = options.recognitionHints;
     this.websocketFactory = options.websocketFactory ?? (globalThis.WebSocket as unknown as WebSocketFactory);
     this.connectTimeoutMs = options.connectTimeoutMs ?? DEFAULT_CONNECT_TIMEOUT_MS;
     this.flushTimeoutMs = options.flushTimeoutMs ?? DEFAULT_FLUSH_TIMEOUT_MS;
@@ -313,13 +330,14 @@ export class MobileRealtimeAsrProvider implements AsrProvider {
         { headers: { Authorization: `Bearer ${authorizationToken}` } },
       );
       this.socket = socket;
+      this.lastSessionUpdateIncludedPrompt = false;
+      this.promptFallbackAttemptedForConnection = false;
       let settled = false;
       let pendingConnect: PendingConnect | undefined;
       let pendingConnectError: Error | null = null;
       let pendingConnectErrorTimer: ReturnType<typeof setTimeout> | null = null;
       const timer = setTimeout(() => {
         fail(new Error(`Realtime ASR connection timed out after ${this.connectTimeoutMs}ms`));
-        socket.close();
       }, this.connectTimeoutMs);
       const cleanup = (): void => {
         clearTimeout(timer);
@@ -332,6 +350,7 @@ export class MobileRealtimeAsrProvider implements AsrProvider {
         cleanup();
         this.socket = null;
         this.sessionReady = false;
+        if (socket.readyState !== CLOSED) socket.close();
         reject(error);
       };
       const ready = (): void => {
@@ -348,7 +367,7 @@ export class MobileRealtimeAsrProvider implements AsrProvider {
       };
       socket.onmessage = (event) => {
         if (this.socket !== socket) return;
-        this.handleMessage(String(event.data), ready);
+        this.handleMessage(String(event.data), ready, fail);
       };
       socket.onerror = (event) => {
         if (this.socket !== socket) return;
@@ -450,11 +469,43 @@ export class MobileRealtimeAsrProvider implements AsrProvider {
   }
 
   private sendSessionUpdate(): void {
-    this.sendWs(buildSessionUpdateMessage(
+    const hints = this.protocolProfile === 'openai-transcription-manual' && this.promptFallbackActive
+      ? undefined
+      : this.recognitionHints;
+    const message = buildSessionUpdateMessage(
       this.credential.asr.model,
       this.sourceLanguage,
       this.pcmSampleRate,
       this.protocolProfile,
+      hints,
+    );
+    this.lastSessionUpdateIncludedPrompt =
+      this.protocolProfile === 'openai-transcription-manual'
+      && sessionUpdateIncludesOpenAiPrompt(message);
+    this.sendWs(message);
+  }
+
+  private tryFallbackWithoutPrompt(event: Record<string, unknown>): boolean {
+    if (this.sessionReady) return false;
+    if (this.protocolProfile !== 'openai-transcription-manual') return false;
+    if (!this.lastSessionUpdateIncludedPrompt || this.promptFallbackAttemptedForConnection) return false;
+    const errorPayload = isRecord(event.error)
+      ? event.error
+      : (typeof event.message === 'string' ? event.message : undefined);
+    if (!isUnsupportedOpenAiRealtimePromptError(errorPayload)) return false;
+    this.promptFallbackActive = true;
+    this.promptFallbackAttemptedForConnection = true;
+    this.lastSessionUpdateIncludedPrompt = false;
+    logMobileVoice('warn', 'realtime asr rejected transcription prompt; retrying without prompt', {
+      provider: this.credential.asr.provider,
+      model: this.credential.asr.model,
+    });
+    return this.sendWs(buildSessionUpdateMessage(
+      this.credential.asr.model,
+      this.sourceLanguage,
+      this.pcmSampleRate,
+      this.protocolProfile,
+      undefined,
     ));
   }
 
@@ -480,7 +531,7 @@ export class MobileRealtimeAsrProvider implements AsrProvider {
     }
   }
 
-  private handleMessage(raw: string, markReady?: () => void): void {
+  private handleMessage(raw: string, markReady?: () => void, markFailed?: (error: Error) => void): void {
     const event = parseJsonObject(raw);
     if (!isRecord(event) || typeof event.type !== 'string') return;
 
@@ -517,7 +568,14 @@ export class MobileRealtimeAsrProvider implements AsrProvider {
           this.resolveFlushWaiters();
           break;
         }
-        this.callback({ type: 'error', message, at: Date.now() });
+        if (this.tryFallbackWithoutPrompt(event)) {
+          break;
+        }
+        if (!this.sessionReady && markFailed) {
+          markFailed(new Error(message));
+        } else {
+          this.callback({ type: 'error', message, at: Date.now() });
+        }
         this.resolveFlushWaiters();
         break;
       }
@@ -775,6 +833,9 @@ export class MobileRealtimeAsrProvider implements AsrProvider {
 
   private resetTranscriptState(): void {
     this.sessionReady = false;
+    this.promptFallbackActive = false;
+    this.lastSessionUpdateIncludedPrompt = false;
+    this.promptFallbackAttemptedForConnection = false;
     this.bufferedMs = 0;
     this.pendingCommitCount = 0;
     this.nextAudioCommitId = 1;
@@ -802,6 +863,7 @@ type VolcengineFlushReason = 'final_response' | 'transport_closed' | 'transport_
 export class MobileVolcengineSaucAsrProvider implements AsrProvider {
   private readonly credential: StoredMobileVoiceCredential;
   private readonly sourceLanguage: string;
+  private readonly recognitionHints?: AsrRecognitionHints;
   private readonly websocketFactory: WebSocketFactory;
   private readonly connectTimeoutMs: number;
   private readonly flushTimeoutMs: number;
@@ -834,6 +896,7 @@ export class MobileVolcengineSaucAsrProvider implements AsrProvider {
   constructor(options: MobileRealtimeAsrProviderOptions) {
     this.credential = options.credential;
     this.sourceLanguage = options.sourceLanguage ?? this.credential.settings?.language ?? 'auto';
+    this.recognitionHints = options.recognitionHints;
     this.websocketFactory = options.websocketFactory ?? (globalThis.WebSocket as unknown as WebSocketFactory);
     this.connectTimeoutMs = options.connectTimeoutMs ?? DEFAULT_CONNECT_TIMEOUT_MS;
     this.flushTimeoutMs = options.flushTimeoutMs ?? DEFAULT_FLUSH_TIMEOUT_MS;
@@ -1041,6 +1104,7 @@ export class MobileVolcengineSaucAsrProvider implements AsrProvider {
   private sendInitialRequest(): void {
     const socket = this.socket;
     if (!socket) return;
+    const corpusContext = buildVolcengineSaucCorpusContext(this.recognitionHints);
     sendBinary(socket, encodeVolcengineFullClientRequest({
       user: { uid: 'xdt-maker' },
       audio: {
@@ -1061,6 +1125,7 @@ export class MobileVolcengineSaucAsrProvider implements AsrProvider {
         ...(this.sourceLanguage && this.sourceLanguage.toLowerCase() !== 'auto'
           ? { language: this.sourceLanguage }
           : {}),
+        ...(corpusContext ? { corpus: { context: corpusContext } } : {}),
       },
     }));
   }
@@ -1306,9 +1371,11 @@ export function buildSessionUpdateMessage(
   sourceLanguage: string,
   pcmSampleRate: number,
   protocolProfile: MobileRealtimeProtocolProfile,
+  recognitionHints?: AsrRecognitionHints,
 ): Record<string, unknown> {
   const language = openAiLanguageCode(sourceLanguage);
   if (protocolProfile === 'qwen-asr-server-vad') {
+    const corpusText = buildQwenAsrCorpusText(recognitionHints);
     return {
       event_id: buildRealtimeEventId('session_update'),
       type: 'session.update',
@@ -1318,6 +1385,7 @@ export function buildSessionUpdateMessage(
         sample_rate: pcmSampleRate,
         input_audio_transcription: {
           ...(language ? { language } : {}),
+          ...(corpusText ? { corpus: { text: corpusText } } : {}),
         },
         turn_detection: {
           type: 'server_vad',
@@ -1327,6 +1395,9 @@ export function buildSessionUpdateMessage(
       },
     };
   }
+  const prompt = supportsOpenAiRealtimeTranscriptionPrompt(model)
+    ? buildOpenAiTranscriptionPrompt(recognitionHints)
+    : undefined;
   return {
     type: 'session.update',
     session: {
@@ -1337,6 +1408,7 @@ export function buildSessionUpdateMessage(
           transcription: {
             model,
             ...(language ? { language } : {}),
+            ...(prompt ? { prompt } : {}),
           },
           turn_detection: null,
         },
@@ -1753,6 +1825,14 @@ function sendBinary(socket: WebSocketLike, bytes: Uint8Array): void {
 function toExactArrayBuffer(bytes: Uint8Array): ArrayBuffer {
   const view = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
   return view as ArrayBuffer;
+}
+
+function sessionUpdateIncludesOpenAiPrompt(message: Record<string, unknown>): boolean {
+  const session = isRecord(message.session) ? message.session : undefined;
+  const audio = isRecord(session?.audio) ? session.audio : undefined;
+  const input = isRecord(audio?.input) ? audio.input : undefined;
+  const transcription = isRecord(input?.transcription) ? input.transcription : undefined;
+  return typeof transcription?.prompt === 'string' && transcription.prompt.length > 0;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

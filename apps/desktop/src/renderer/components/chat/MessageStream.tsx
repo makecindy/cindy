@@ -487,6 +487,7 @@ interface MessageStreamProps {
    *  the caller). Local-only capabilities that read this machine's file system
    *  with the session working dir wait for null. */
   ownerDeviceId?: string | null;
+  errorProviderDirectory?: readonly { id: string; name?: string | null; auth?: { native?: string } }[];
   /** Task origin. Personal WeChat must not be told to switch to Full access. */
   sessionSource?: string | null;
   canConfigureAutoReview?: boolean;
@@ -3100,6 +3101,7 @@ function renderWorkGroupChild(
     sessionTitle?: string | null;
     agentKind?: 'cc' | 'codex' | 'pi';
     remoteHostId?: string | null;
+    errorProviderDirectory?: readonly { id: string; name?: string | null; auth?: { native?: string } }[];
     sessionSource?: string | null;
     canConfigureAutoReview?: boolean;
     onDiagnoseError?: (error: ErrorDiagnosisSource) => void;
@@ -3152,6 +3154,7 @@ function renderWorkGroupChild(
         sessionTitle={props.sessionTitle}
         agentKind={props.agentKind}
         remoteHostId={props.remoteHostId}
+        errorProviderDirectory={props.errorProviderDirectory}
         sessionSource={props.sessionSource}
         canConfigureAutoReview={props.canConfigureAutoReview}
         onDiagnoseError={props.onDiagnoseError}
@@ -3286,6 +3289,7 @@ export function MessageStream({
   agentKind,
   remoteHostId,
   ownerDeviceId,
+  errorProviderDirectory,
   sessionSource,
   canConfigureAutoReview,
   onDiagnoseError,
@@ -6762,6 +6766,7 @@ export function MessageStream({
       sessionTitle,
       agentKind,
       remoteHostId,
+      errorProviderDirectory,
       sessionSource,
       canConfigureAutoReview,
       onDiagnoseError,
@@ -6785,6 +6790,7 @@ export function MessageStream({
       sessionTitle,
       agentKind,
       remoteHostId,
+      errorProviderDirectory,
       sessionSource,
       canConfigureAutoReview,
       onDiagnoseError,
@@ -7218,6 +7224,7 @@ export function MessageStream({
                         sessionTitle={sessionTitle}
                         agentKind={agentKind}
                         remoteHostId={remoteHostId}
+                        errorProviderDirectory={errorProviderDirectory}
                         sessionRunning={isSessionStreaming}
                         assistantForkBlocked={shouldBlockAssistantFork(
                           isSessionStreaming,
@@ -7418,6 +7425,7 @@ const MessageItem = memo(function MessageItem({
   sessionTitle,
   agentKind,
   remoteHostId,
+  errorProviderDirectory,
   sessionRunning,
   assistantForkBlocked,
   assistantIsTurnFinal,
@@ -7447,6 +7455,7 @@ const MessageItem = memo(function MessageItem({
   /** Owning session's remote SSH host id; forwarded to User/AssistantMessage
    *  to gate Fork/Rewind (unsupported on remote cc daemon sessions). */
   remoteHostId?: string | null;
+  errorProviderDirectory?: readonly { id: string; name?: string | null; auth?: { native?: string } }[];
   /** Forwarded to User/AssistantMessage so they can read this agent's
    *  capabilities (gates Fork/Rewind icon visibility). */
   agentKind?: 'cc' | 'codex' | 'pi';
@@ -7680,6 +7689,7 @@ const MessageItem = memo(function MessageItem({
           message={message.content}
           reason={message.errorReason}
           providerId={message.errorProviderId}
+          providers={errorProviderDirectory}
           reconnectHandoff={message.reconnectHandoff}
           toolLoop={message.toolLoop}
           outputLimit={message.outputLimit}

@@ -19,6 +19,7 @@ import {
   activeImDefaultAgentSettings,
   type ImDefaultSettingsChannel,
 } from '../../../shared/imDefaultSettings';
+import { PLUGIN_ENGINE_DEFAULT_MODEL } from '../../../shared/pluginEngines';
 import type { ImDefaultSettingsSummary } from './ImDefaultSettingsSection';
 
 export function formatImDefaultRouteSummary(
@@ -30,7 +31,11 @@ export function formatImDefaultRouteSummary(
     summary.agentKind === 'acp'
       ? t('newChat.pluginEngines.genericName')
       : t(`settings.imBot.defaults.agents.${summary.agentKind}`);
-  return `${agentLabel} · ${summary.model}`;
+  const modelLabel =
+    summary.agentKind === 'acp' && summary.model === PLUGIN_ENGINE_DEFAULT_MODEL
+      ? t('newChat.pluginEngines.defaultModel')
+      : summary.model;
+  return `${agentLabel} · ${modelLabel}`;
 }
 
 export function useImChannelSettingsSummary(
@@ -44,9 +49,12 @@ export function useImChannelSettingsSummary(
       .imDefaultSettingsGet(channel)
       .then((settings) => {
         if (cancelled) return;
+        const active = activeImDefaultAgentSettings(settings);
         setSummary({
           agentKind: settings.agentKind,
-          model: activeImDefaultAgentSettings(settings).model,
+          model: active.model,
+          providerId: active.providerId,
+          agentDeviceId: active.agentDeviceId ?? null,
         });
       })
       .catch(() => {
@@ -69,6 +77,7 @@ export function ImChannelSettingsCard({
   headerAction,
   expanded,
   onToggle,
+  staticOpen = false,
   children,
 }: {
   id: string;
@@ -80,6 +89,8 @@ export function ImChannelSettingsCard({
   headerAction?: ReactNode;
   expanded: boolean;
   onToggle: () => void;
+  /** 单独成页时(聊天软件子页)始终展开: 头部不是按钮、没有折叠箭头。 */
+  staticOpen?: boolean;
   children: ReactNode;
 }) {
   const triggerId = `${id}-trigger`;
@@ -96,6 +107,23 @@ export function ImChannelSettingsCard({
     >
       {/* hover 高亮挂在整行容器上: headerAction 在按钮外, 挂按钮会让行尾
           (开关区)缺一截高亮 */}
+      {staticOpen ? (
+        <div className="flex items-center">
+          <div id={triggerId} className="flex min-h-[76px] min-w-0 flex-1 flex-wrap items-center gap-x-4 gap-y-2 px-4 py-3">
+            <span className="min-w-0 flex-[1_1_12rem] [overflow-wrap:anywhere]">
+              <span className="block text-14 font-medium leading-[1.3] text-[var(--settings-section-title)]">{title}</span>
+              <span className="mt-1 block text-12 leading-[1.45] text-[var(--settings-section-desc)]">{description}</span>
+            </span>
+            <span className="ml-auto flex min-w-0 max-w-full items-center justify-end gap-3">
+              {routeSummary ? (
+                <span className="min-w-0 max-w-[220px] flex-1 text-right text-12 text-[var(--text-secondary)] [overflow-wrap:anywhere]">{routeSummary}</span>
+              ) : null}
+              <span className="inline-flex shrink-0 whitespace-nowrap">{status}</span>
+            </span>
+          </div>
+          {headerAction ? <span className="flex shrink-0 items-center pr-4">{headerAction}</span> : null}
+        </div>
+      ) : (
       <div className="flex items-center transition-colors hover:bg-[var(--surface-hover-soft)]">
         <button
           type="button"
@@ -144,9 +172,10 @@ export function ImChannelSettingsCard({
           <span className="flex shrink-0 items-center pr-4">{headerAction}</span>
         ) : null}
       </div>
+      )}
 
       <Collapse
-        open={expanded}
+        open={staticOpen || expanded}
         id={panelId}
         role="region"
         aria-labelledby={triggerId}

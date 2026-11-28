@@ -164,3 +164,29 @@ it('cancels a realtime audition before audio and releases the socket and voice l
   await vi.waitFor(() => expect(f.server.clients.size).toBe(0));
   expect(hasVoiceConversationLease()).toBe(false);
 });
+
+it('runs native call and preview for an agentless Cindy AI Gateway realtime selection', async () => {
+  const f = await fixture('openai-realtime');
+  const gatewaySelection = {
+    mode: 'realtime' as const,
+    providerId: 'xd',
+    modelId: 'gpt-realtime-mini',
+    protocol: 'openai-realtime' as const,
+    voice: 'marin',
+    botId: 'buddy',
+    sessionId: 'canonical',
+  };
+  const preview = f.service.startPreview(1, { ...gatewaySelection, previewId: 'gw-sample', text: 'Hi' });
+  await vi.waitFor(() => expect(f.received.map(e => e.type)).toEqual([
+    'session.update', 'conversation.item.create', 'response.create',
+  ]));
+  f.send({ type: 'response.output_audio.delta', delta: 'AQI=' });
+  await expect(preview).resolves.toEqual({ sampleRate: 24000 });
+  f.service.stopPreview(1, 'gw-sample');
+  expect(hasVoiceConversationLease()).toBe(false);
+
+  await f.service.start(1, { ...gatewaySelection, callId: 'gw-call' });
+  expect(hasVoiceConversationLease()).toBe(true);
+  await f.service.end(1, 'gw-call');
+  expect(hasVoiceConversationLease()).toBe(false);
+});
