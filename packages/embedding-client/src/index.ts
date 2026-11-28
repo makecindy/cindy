@@ -8,6 +8,7 @@ export type {
   EmbeddingLogger,
   EmbedRequest,
   EmbedResponse,
+  OpenAiCompatibleEmbedRequest,
   EmbedDocumentsRequest,
   EmbedDocumentsResponse,
 } from './types.js';

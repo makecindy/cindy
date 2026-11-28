@@ -1,0 +1,31 @@
+{
+  "name": "@cindy/skill-index",
+  "version": "0.0.0",
+  "private": true,
+  "description": "On-demand local Skill discovery with optional semantic indexing",
+  "type": "module",
+  "license": "Apache-2.0",
+  "exports": {
+    ".": "./src/index.ts",
+    "./library": "./src/library.ts",
+    "./embedding": "./src/embedding.ts"
+  },
+  "bin": {
+    "cindy-skill-index": "dist/cli.cjs"
+  },
+  "scripts": {
+    "build": "tsc --noEmit && esbuild src/bin.ts --bundle --platform=node --target=node22 --format=cjs --outfile=dist/cli.cjs",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@cindy/embedding-client": "workspace:*",
+    "gray-matter": "^4.0.3"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.7.0",
+    "esbuild": "^0.25.0",
+    "vitest": "^3.2.4"
+  }
+}

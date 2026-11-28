@@ -7,6 +7,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { createLocalSkillLibraryCoordinator } from '../../skillhub/localSkillLibrary';
 
 const mockState = vi.hoisted(() => ({
   userDataDir: 'collab-send-outcome-test-user-data',
@@ -260,6 +261,7 @@ describe('Desktop providers across account changes', () => {
         commitVolatileAppSession('signed-out');
         resetPluginRegistry();
         const providers = createDesktopMcpProviders({
+          localSkillLibraryCoordinator: createLocalSkillLibraryCoordinator(),
           botCapabilities,
           getMakerMemoryManager: vi.fn(),
           lspPool: {} as never,
@@ -414,7 +416,7 @@ describe('collab send outcome semantics', () => {
         if (changeDuringInvite) mockState.invitationSession!.stablePermissionModeState.generation++;
         return { sharedTaskId: 'shared', invitation, invitationLink: 'https://relay.example.test/shared-task/join#' + invitation };
       });
-      createDesktopMcpProviders({ botCapabilities, getMakerMemoryManager: vi.fn(), lspPool: {} as never,
+      createDesktopMcpProviders({ localSkillLibraryCoordinator: createLocalSkillLibraryCoordinator(), botCapabilities, getMakerMemoryManager: vi.fn(), lspPool: {} as never,
         pluginRegistry: { isEnabled: () => true, getPlugins: () => [] } as never, invokeRemote: vi.fn(),
         captureSharedTaskCommand: () => command,
       });
@@ -440,7 +442,7 @@ describe('collab send outcome semantics', () => {
   });
 
   it('keeps cindy_orca registered when project policy is disabled at session startup', () => {
-    const providers = createDesktopMcpProviders({
+    const providers = createDesktopMcpProviders({ localSkillLibraryCoordinator: createLocalSkillLibraryCoordinator(),
       botCapabilities,
       getMakerMemoryManager: vi.fn(),
       lspPool: {} as never,
@@ -470,7 +472,7 @@ describe('collab send outcome semantics', () => {
       targetLastUserSendAt: null,
     }));
     mockState.collabService = createCollabService({ sendToWorker });
-    createDesktopMcpProviders({
+    createDesktopMcpProviders({ localSkillLibraryCoordinator: createLocalSkillLibraryCoordinator(),
       botCapabilities,
       getMakerMemoryManager: vi.fn(),
       lspPool: {} as never,
@@ -519,7 +521,7 @@ describe('collab send outcome semantics', () => {
       await client.exec("INSERT INTO sessions VALUES ('background-receipt', 'bot')");
       await client.exec("INSERT INTO bot_session_links VALUES ('background-receipt', 'bot-feishu', 'canonical')");
       setCurrentDbClient(client, 'feishu-test-owner');
-      createDesktopMcpProviders({
+      createDesktopMcpProviders({ localSkillLibraryCoordinator: createLocalSkillLibraryCoordinator(),
         botCapabilities,
         getMakerMemoryManager: vi.fn(),
         lspPool: {} as never,
@@ -599,7 +601,7 @@ describe('collab send outcome semantics', () => {
 
   it('rejects start_skill_learning after the built-in Learn Skill is disabled', async () => {
     mockState.learnEnabled = false;
-    createDesktopMcpProviders({
+    createDesktopMcpProviders({ localSkillLibraryCoordinator: createLocalSkillLibraryCoordinator(),
       botCapabilities,
       getMakerMemoryManager: vi.fn(),
       lspPool: {} as never,
@@ -627,7 +629,7 @@ describe('collab send outcome semantics', () => {
 
   it('authorizes Learn only for the live local Session instance bound to its dispatch grant', async () => {
     const isCurrentLocalSessionInstance = vi.fn(() => false);
-    createDesktopMcpProviders({
+    createDesktopMcpProviders({ localSkillLibraryCoordinator: createLocalSkillLibraryCoordinator(),
       botCapabilities,
       getMakerMemoryManager: vi.fn(),
       lspPool: {} as never,
@@ -673,7 +675,7 @@ describe('collab send outcome semantics', () => {
     const isCurrentLocalSessionInstance = vi.fn()
       .mockReturnValueOnce(true)
       .mockReturnValueOnce(false);
-    createDesktopMcpProviders({
+    createDesktopMcpProviders({ localSkillLibraryCoordinator: createLocalSkillLibraryCoordinator(),
       botCapabilities,
       getMakerMemoryManager: vi.fn(),
       lspPool: {} as never,
@@ -869,7 +871,7 @@ describe('collab send outcome semantics', () => {
       }),
     });
 
-    createDesktopMcpProviders({
+    createDesktopMcpProviders({ localSkillLibraryCoordinator: createLocalSkillLibraryCoordinator(),
       botCapabilities,
       getMakerMemoryManager: vi.fn(),
       lspPool: {} as never,
@@ -918,7 +920,7 @@ describe('collab send outcome semantics', () => {
       }),
     });
 
-    createDesktopMcpProviders({
+    createDesktopMcpProviders({ localSkillLibraryCoordinator: createLocalSkillLibraryCoordinator(),
       botCapabilities,
       getMakerMemoryManager: vi.fn(),
       lspPool: {} as never,
@@ -978,7 +980,7 @@ describe('collab send outcome semantics', () => {
       }),
     });
 
-    createDesktopMcpProviders({
+    createDesktopMcpProviders({ localSkillLibraryCoordinator: createLocalSkillLibraryCoordinator(),
       botCapabilities,
       getMakerMemoryManager: vi.fn(),
       lspPool: {} as never,
@@ -1035,7 +1037,7 @@ describe('collab send outcome semantics', () => {
       }),
     });
 
-    createDesktopMcpProviders({
+    createDesktopMcpProviders({ localSkillLibraryCoordinator: createLocalSkillLibraryCoordinator(),
       botCapabilities,
       getMakerMemoryManager: vi.fn(),
       lspPool: {} as never,
@@ -1071,7 +1073,7 @@ describe('collab send outcome semantics', () => {
       getSessionRuntime: vi.fn().mockRejectedValue(new Error('storage read failed')),
     });
 
-    createDesktopMcpProviders({
+    createDesktopMcpProviders({ localSkillLibraryCoordinator: createLocalSkillLibraryCoordinator(),
       botCapabilities,
       getMakerMemoryManager: vi.fn(),
       lspPool: {} as never,
@@ -1123,6 +1125,7 @@ it('admits only a live owner input targeting its own active private lane', async
     await db.exec(`INSERT INTO bot_session_links VALUES ('main','brief-bot','canonical',NULL,NULL),
       ('dm','brief-bot','channel','dm-route',NULL), ('foreign','other-bot','channel','dm-route',NULL), ('old','brief-bot','channel','dm-route',NULL)`);
     const provider = createDesktopMcpProviders({
+      localSkillLibraryCoordinator: createLocalSkillLibraryCoordinator(),
       botCapabilities,
       getMakerMemoryManager: vi.fn(),
       lspPool: {} as never,
