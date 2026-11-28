@@ -218,6 +218,7 @@ export function FileLightbox({
     >
       <div
         ref={overlay}
+        data-lightbox-layer
         tabIndex={-1}
         role="dialog"
         aria-modal="true"

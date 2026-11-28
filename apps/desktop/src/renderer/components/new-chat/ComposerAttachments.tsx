@@ -79,7 +79,7 @@ export function AttachmentRejectionStrip({
 // ── Thumbnail components (F-FI-3/4/5) ──
 
 /**
- * 标注编辑保存回调(惰性烧录):只把矢量笔迹写回附件——url/base64 保持原图
+ * 标注编辑写回回调(惰性烧录):每笔变化与最终保存都只把矢量笔迹写回附件——url/base64 保持原图
  * 不变,烧录位图在发送消息时由 materializeAnnotatedAttachmentsForSend 统一
  * 生成。空笔迹 = 清掉标注字段,附件回到普通图片。
  */
@@ -99,11 +99,14 @@ export function ThumbnailStrip({
   attachments,
   onRemove,
   onUpdate,
+  annotationDisabled = false,
 }: {
   attachments: AttachedFile[];
   onRemove: (id: string) => void;
   /** 标注编辑保存后就地替换附件(useAttachments.updateFile)。 */
   onUpdate: (id: string, patch: Partial<AttachedFile>) => void;
+  /** Composer mutation lock: keep annotation read-only instead of writing to a no-op callback. */
+  annotationDisabled?: boolean;
 }) {
   const collection: AttachmentCollectionItem[] = attachments.flatMap((file) => {
     const media = file.category === 'image' && Boolean(file.url || file.base64);
@@ -118,11 +121,17 @@ export function ThumbnailStrip({
             media,
             image: media
               ? {
-                  annotationEdit: {
-                    initialStrokes: file.annotationStrokes,
-                    onSave: (result: { strokes: ImageAnnotationStroke[] }) =>
-                      applyAnnotationEdit(file, result, onUpdate),
-                  },
+                  initialStrokes: file.annotationStrokes,
+                  annotationDisabled,
+                  annotationEdit: annotationDisabled
+                    ? undefined
+                    : {
+                        initialStrokes: file.annotationStrokes,
+                        onDraftChange: (result: { strokes: ImageAnnotationStroke[] }) =>
+                          applyAnnotationEdit(file, result, onUpdate),
+                        onSave: (result: { strokes: ImageAnnotationStroke[] }) =>
+                          applyAnnotationEdit(file, result, onUpdate),
+                      },
                 }
               : undefined,
           },
@@ -133,7 +142,13 @@ export function ThumbnailStrip({
     <AttachmentCollectionContext.Provider value={collection}>
       <div className="scrollbar-hide flex items-center gap-2 overflow-x-auto pb-2 pl-0 pr-2 pt-2">
       {attachments.map((file) => (
-        <ThumbnailItem key={file.id} file={file} onRemove={onRemove} onUpdate={onUpdate} />
+        <ThumbnailItem
+          key={file.id}
+          file={file}
+          onRemove={onRemove}
+          onUpdate={onUpdate}
+          annotationDisabled={annotationDisabled}
+        />
       ))}
     </div>
     </AttachmentCollectionContext.Provider>
@@ -144,10 +159,12 @@ function ThumbnailItem({
   file,
   onRemove,
   onUpdate,
+  annotationDisabled,
 }: {
   file: AttachedFile;
   onRemove: (id: string) => void;
   onUpdate: (id: string, patch: Partial<AttachedFile>) => void;
+  annotationDisabled: boolean;
 }) {
   const { t } = useTranslation();
   const [isHovered, setIsHovered] = useState(false);
@@ -377,13 +394,18 @@ function ThumbnailItem({
       {lightboxSrc && (
         <ImageLightbox
           src={lightboxSrc}
+          initialItemId={file.id}
           onClose={() => setLightboxSrc(null)}
+          onSourceChangeCancelled={(displayed) => setLightboxSrc(displayed.src)}
+          annotationDisabled={annotationDisabled}
+          initialStrokes={file.annotationStrokes}
           // 托盘图片的标注编辑:惰性烧录只写回矢量笔迹,不再依赖会话缓存,
           // 缓存附件与草稿 base64 附件统一支持。
           annotationEdit={
-            file.category === 'image' && (file.url || file.base64)
+            !annotationDisabled && file.category === 'image' && (file.url || file.base64)
               ? {
                   initialStrokes: file.annotationStrokes,
+                  onDraftChange: (result) => applyAnnotationEdit(file, result, onUpdate),
                   onSave: (result) => applyAnnotationEdit(file, result, onUpdate),
                 }
               : undefined

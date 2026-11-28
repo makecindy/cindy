@@ -265,7 +265,13 @@ export function GhostCardForm({
           </div>
         );
       })}
-      {preview && <ImageLightbox src={preview} onClose={() => setPreview(undefined)} />}
+      {preview && (
+        <ImageLightbox
+          src={preview}
+          onClose={() => setPreview(undefined)}
+          onSourceChangeCancelled={(displayed) => setPreview(displayed.src)}
+        />
+      )}
     </div>
   );
 }

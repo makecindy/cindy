@@ -13,14 +13,13 @@
  *     内嵌图同款规则 min(100%, 50vw, 480px) × min(40vh, 420px),带 tool-card
  *     border。消息流里只是预览(点开 lightbox 看全图),不该占掉半屏。
  *
- * lightbox state 自包含——每个 instance 自己 own 一个 ImageLightbox。
- * 因为 chat 流里同一时刻只可能开一个 lightbox(它会 lock 全局 scroll),所以
- * 让每个图自己管即可,父组件不用协调多个图共用一份 lightbox state。
+ * lightbox state 自包含——每个 instance 自己 own 一个 ImageLightbox。图片预览改为
+ * 非模态浮窗后,不同消息的图片可以同时打开用于对照;键盘快捷键与 Esc 由最上层
+ * 浮窗按焦点/叠放顺序归属,父组件不用协调多个图共用一份 lightbox state。
  *
  * 唯一例外是 UserMessage 里的"Markdown 链接 → ImageLightbox" 路径,那是从
  * 文本链接触发的,没有对应的图片组件实例,只能由 UserMessage 自己保留一份
- * lightbox state——和这里的 self-owned lightbox 共存(两者不会同时弹,因为都
- * 走 ImageLightbox 的全局 scroll lock)。
+ * lightbox state;它与聊天流图片预览共用同一套最上层归属规则。
  */
 
 import { DownloadImageMenuItem } from '@/components/chat/DownloadImageMenuItem';
@@ -81,6 +80,8 @@ interface ChatImageViewProps {
    */
   annotationSourceUrl?: string;
   annotationStrokes?: Array<{ points: Array<{ x: number; y: number }> }>;
+  /** Stable attachment ID for selecting the clicked item in a collection. */
+  itemId?: string;
   /**
    * Which repeat of this image address the row shows (structuredImageOccurrence), so
    * the task image gallery opens at this copy when the row shows it more than once.
@@ -125,6 +126,7 @@ export function ChatImageView({
   sessionId,
   annotationSourceUrl,
   annotationStrokes,
+  itemId,
   galleryOccurrence,
 }: ChatImageViewProps) {
   const { t } = useTranslation();
@@ -365,6 +367,7 @@ export function ChatImageView({
           <ImageLightbox
             filename={filename}
             src={annotationSourceUrl}
+            initialItemId={itemId}
             initialStrokes={annotationStrokes}
             annotationFallbackSrc={displaySrc}
             galleryOccurrence={galleryOccurrence}
@@ -375,6 +378,7 @@ export function ChatImageView({
           <ImageLightbox
             filename={filename}
             src={displaySrc}
+            initialItemId={itemId}
             galleryOccurrence={galleryOccurrence}
             enableGallery
             onClose={closePreview}

@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { ToolPayloadLightbox } from '@/components/chat/ToolPayloadLightbox';
 import { Tooltip } from '@/components/ui/tooltip';
+import { Z_INDEX_LAYERS } from '@/styles/generated/token-mappings';
 
 vi.mock('react-i18next', async (importOriginal) => {
   const actual = await importOriginal<typeof import('react-i18next')>();
@@ -162,6 +163,27 @@ describe('ToolPayloadLightbox editable text mode', () => {
 
     expect(textPreview.selectionStart).toBe(0);
     expect(textPreview.selectionEnd).toBe(textPreview.value.length);
+  });
+
+  // 测试价值
+  // - 生产入口与可观察结果：ToolPayloadLightbox 挂载后由 PreviewHeader 登记为激活的
+  //   前景层并抬到 modal 层级；旧图片预览不再盖住新查看器。
+  // - Bug／规则依据：#11952 round 10 review PRRT_kwDOTgdRUs66pjK-；
+  //   docs/dev-rules/engineering-conventions.md §3.2。
+  // - 现有覆盖缺口：既有工具载荷用例只测文本与复制，既有前景层用例未覆盖这个根节点。
+  // - 最小失败输入：仅挂载 ToolPayloadLightbox；修复前根节点没有 data-lightbox-layer。
+  // - tier：unit；复用现有 jsdom 文件，定向套件实测约 0.34s。
+  it('registers the viewer as the active foreground layer', () => {
+    vi.useFakeTimers();
+    renderEditable();
+
+    const overlay = document.querySelector<HTMLElement>(
+      '[data-tool-payload-lightbox-overlay]',
+    );
+    expect(overlay).not.toBeNull();
+    expect(overlay?.hasAttribute('data-lightbox-layer')).toBe(true);
+    expect(overlay?.hasAttribute('data-preview-active')).toBe(true);
+    expect(Number(overlay?.style.zIndex)).toBe(Z_INDEX_LAYERS['modal']);
   });
 });
 

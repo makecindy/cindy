@@ -1,53 +1,74 @@
-import { lazy, Suspense, useEffect, useRef, useState } from 'react';
+import { lazy, Suspense, useEffect, useRef, useState, type ReactNode } from 'react';
 import {
   AttachmentCollectionContext,
   ActivePreviewCollection,
+  normalizedLiveCollectionItem,
   type AttachmentCollectionItem,
+  type PreviewLeaveGuard,
 } from './AttachmentCollectionContext';
 export {
   AttachmentCollectionContext,
   ActivePreviewCollection,
   useOpeningCollection,
+  normalizedLiveCollectionItem,
   type AttachmentCollectionItem,
+  type PreviewLeaveGuard,
+  type PreviewLeaveOutcome,
 } from './AttachmentCollectionContext';
 import { ImageLightbox } from './ImageLightbox';
 import { VideoLightbox } from './VideoLightbox';
 import { createPortal } from 'react-dom';
 import { PREVIEW_PANEL_CLASS, PREVIEW_PANEL_STYLE, PreviewHeader, PreviewScrim } from './PreviewChrome';
 import { Spinner } from '@/components/ui/spinner';
+import { lightboxOwnsShortcutTarget } from '@/lib/lightboxLayer';
 const TextLightbox = lazy(() =>
   import('./TextLightbox').then((module) => ({ default: module.TextLightbox })),
 );
 import { ChatSessionFileProvider, useChatSessionFile } from './ChatSessionFileContext';
 import { ImageGalleryContext } from './ImageGalleryContext';
 
+export type CollectionImageProps = NonNullable<AttachmentCollectionItem['image']>;
+
 /** Snapshot the opening collection and file origin. Live messages cannot retarget an open viewer. */
 export function AttachmentCollectionPreview({
   items: openingItems,
   source,
+  initialItemId,
   onClose,
   initial,
   initialLine,
   triggerRef,
+  leaveGuardRef,
 }: {
   items: readonly AttachmentCollectionItem[];
   source: string;
+  initialItemId?: string;
   onClose(): void;
-  initial?: React.ReactNode;
+  initial?: ReactNode | ((imageProps: CollectionImageProps | undefined) => ReactNode);
   initialLine?: number;
   triggerRef?: React.RefObject<HTMLElement | null>;
+  leaveGuardRef?: { current: PreviewLeaveGuard | null };
 }) {
-  const [items] = useState(() => [...openingItems]);
-  const [start] = useState(() =>
-    Math.max(
-      0,
-      items.findIndex((item) => item.source === source),
-    ),
-  );
+  const [snapshot] = useState(() => [...openingItems]);
+  // Keep the opening order and identity, but read live annotation metadata for
+  // those stable ids so returning to an item does not restore a stale draft.
+  const items = snapshot.map((item) => {
+    const live = openingItems.find((next) => next.id === item.id);
+    return live ? normalizedLiveCollectionItem({ ...item, image: live.image }) : item;
+  });
+  const [start] = useState(() => {
+    const byId = initialItemId
+      ? snapshot.findIndex((item) => item.id === initialItemId)
+      : -1;
+    return byId >= 0
+      ? byId
+      : Math.max(0, snapshot.findIndex((item) => item.source === source));
+  });
   const [index, setIndex] = useState(start);
   const fileContext = useChatSessionFile();
   const [origin] = useState(fileContext);
-  const beforeLeave = useRef<((leave: () => void) => void) | null>(null);
+  const beforeLeave = useRef<PreviewLeaveGuard | null>(null);
+  const scopeRef = useRef<HTMLElement | null>(null);
   const item = items[index]!;
   const closing = useRef(false);
   const close = () => {
@@ -66,18 +87,40 @@ export function AttachmentCollectionPreview({
       beforeLeave.current = null;
       setIndex(next);
     };
-    if (beforeLeave.current) beforeLeave.current(leave);
+    if (beforeLeave.current) void beforeLeave.current(leave);
     else leave();
   };
   const selectRef = useRef(select);
   selectRef.current = select;
+  // Host source changes must settle through the currently mounted collection
+  // item, not the unmounted initial item's guard.
+  useEffect(() => {
+    if (!leaveGuardRef) return;
+    const guard: PreviewLeaveGuard = async (leave) => {
+      const current = beforeLeave.current;
+      if (!current) {
+        leave();
+        return 'applied';
+      }
+      return current(leave);
+    };
+    leaveGuardRef.current = guard;
+    return () => {
+      leaveGuardRef.current = null;
+    };
+  }, [leaveGuardRef]);
   useEffect(() => {
     const key = (event: KeyboardEvent) => {
       if (event.defaultPrevented || event.isComposing || document.fullscreenElement) return;
-      const target = event.target as HTMLElement;
-      if (target.closest('input, textarea, [contenteditable="true"], video, audio, [role="menu"]'))
+      const target = event.target instanceof Element ? event.target : null;
+      if (target?.closest('input, textarea, [contenteditable="true"], video, audio, [role="menu"]'))
         return;
       if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
+      // The image preview is non-modal: its collection arrows must not consume
+      // keys whose focus belongs to the conversation behind the float. Modal
+      // viewers keep their existing document-level navigation.
+      const panel = scopeRef.current;
+      if (panel && !lightboxOwnsShortcutTarget(event.target, panel)) return;
       event.preventDefault();
       selectRef.current(index + (event.key === 'ArrowLeft' ? -1 : 1));
     };
@@ -88,7 +131,7 @@ export function AttachmentCollectionPreview({
     <ChatSessionFileProvider value={origin}>
       <AttachmentCollectionContext.Provider value={null}>
         <ImageGalleryContext.Provider value={null}>
-          <ActivePreviewCollection.Provider value={{ items, index, select, beforeLeave, restoreFocus }}>
+          <ActivePreviewCollection.Provider value={{ items, index, select, beforeLeave, scopeRef, restoreFocus }}>
             <Suspense
               key={item.id}
               fallback={createPortal(
@@ -106,7 +149,9 @@ export function AttachmentCollectionPreview({
               )}
             >
               {index === start && initial ? (
-                initial
+                typeof initial === 'function'
+                  ? initial((items.find((entry) => entry.id === initialItemId) ?? item).image)
+                  : initial
               ) : item.media && item.kind === 'image' ? (
                 <ImageLightbox
                   src={item.source}

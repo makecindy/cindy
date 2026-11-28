@@ -10,16 +10,20 @@
  * the editor — FileBodyView is the natural place.
  */
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 import { AttachmentCollectionContext } from '@/components/chat/AttachmentCollectionContext';
 import { ImageGalleryContext } from '@/components/chat/ImageGalleryContext';
-import { ImageLightbox } from '@/components/chat/ImageLightbox';
+import { ImageLightbox, imageSourceSnapshotFields } from '@/components/chat/ImageLightbox';
 
 import {
   MD_IMAGE_LIGHTBOX_EVENT,
   type MdImageLightboxOpenDetail,
 } from './markdownImageLivePreview';
+
+type MarkdownImageLightboxState = ReturnType<typeof imageSourceSnapshotFields> & {
+  gallery: MdImageLightboxOpenDetail['gallery'] | null;
+};
 
 export function MarkdownImageLightboxHost({
   sessionId,
@@ -28,28 +32,40 @@ export function MarkdownImageLightboxHost({
    *  lightbox 才能启用"发送到对话"。不传则该动作不显示。 */
   sessionId?: string;
 }) {
-  const [opening, setOpening] = useState<MdImageLightboxOpenDetail | null>(null);
+  const sessionRef = useRef(sessionId);
+  sessionRef.current = sessionId;
+  const [opening, setOpening] = useState<MarkdownImageLightboxState | null>(null);
 
   useEffect(() => {
     const onOpen = (ev: Event) => {
       const detail = (ev as CustomEvent<MdImageLightboxOpenDetail>).detail;
-      if (detail?.src) setOpening(detail);
+      if (!detail?.src) return;
+      setOpening({
+        ...imageSourceSnapshotFields({
+          src: detail.src,
+          sessionId: sessionRef.current,
+          galleryId: detail.galleryId,
+          enableGallery: Boolean(detail.gallery && detail.gallery.length > 0),
+        }),
+        gallery: detail.gallery ?? null,
+      });
     };
     window.addEventListener(MD_IMAGE_LIGHTBOX_EVENT, onOpen);
     return () => window.removeEventListener(MD_IMAGE_LIGHTBOX_EVENT, onOpen);
   }, []);
 
   if (opening == null) return null;
-  const gallery = opening.gallery ?? null;
   return (
     <AttachmentCollectionContext.Provider value={null}>
-      <ImageGalleryContext.Provider value={gallery}>
+      <ImageGalleryContext.Provider value={opening.gallery ?? null}>
         <ImageLightbox
-          src={opening.src}
-          galleryId={opening.galleryId}
-          enableGallery={Boolean(gallery && gallery.length > 0)}
+          {...imageSourceSnapshotFields(opening)}
           onClose={() => setOpening(null)}
-          sessionId={sessionId}
+          onSourceChangeCancelled={(displayed) =>
+            setOpening((current) =>
+              current ? { ...current, ...imageSourceSnapshotFields(displayed) } : current,
+            )
+          }
         />
       </ImageGalleryContext.Provider>
     </AttachmentCollectionContext.Provider>

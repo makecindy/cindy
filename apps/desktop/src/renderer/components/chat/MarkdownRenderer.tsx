@@ -130,7 +130,7 @@ import {
 import { SessionHandoffCard } from './SessionHandoffCard';
 import { SessionLinkChip } from './SessionLinkChip';
 import { ProjectLinkChip } from './ProjectLinkChip';
-import { ImageLightbox } from './ImageLightbox';
+import { ImageLightbox, imageSourceSnapshotFields } from './ImageLightbox';
 import { splitQuestionReferences } from '@cindy/maker-shared/interaction';
 import { useImageClipboard } from './useImageClipboard';
 import { ImageHoverPreview } from './ImageHoverPreview';
@@ -1561,7 +1561,13 @@ export function QuestionReferenceText({ text, onPreviewOpenChange }: { text: str
         setModelLightboxPath={setModel}
       >{part.text}</MarkdownTargetLink>
     ) : part.text)}
-    {image && <ImageLightbox src={image} onClose={() => setImage(null)} />}
+    {image && (
+      <ImageLightbox
+        src={image}
+        onClose={() => setImage(null)}
+        onSourceChangeCancelled={(displayed) => setImage(displayed.src)}
+      />
+    )}
     {file && <TextLightbox filePath={file.path} fileName={file.name} initialLine={file.line} onClose={() => setFile(null)} />}
     {model && <ModelLightbox source={{ kind: 'local', absPath: model }} onClose={() => setModel(null)} />}
   </>;
@@ -2370,6 +2376,9 @@ const MarkdownRendererBase = memo(function MarkdownRendererBase({
           galleryOccurrence={lightbox.galleryOccurrence}
           enableGallery={lightbox.galleryTarget !== undefined}
           onClose={() => setLightbox(null)}
+          onSourceChangeCancelled={(displayed) =>
+            setLightbox(imageSourceSnapshotFields(displayed))
+          }
         />
       )}
       {/* ADR-4: triggerRef intentionally omitted — markdown links rendered by

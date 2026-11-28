@@ -475,7 +475,13 @@ function GeneratedFileChip({
         )}
       </button>
       {ctxMenu.menu}
-      {lightboxSrc && <ImageLightbox src={lightboxSrc} onClose={() => setLightboxSrc(null)} />}
+      {lightboxSrc && (
+        <ImageLightbox
+          src={lightboxSrc}
+          onClose={() => setLightboxSrc(null)}
+          onSourceChangeCancelled={(displayed) => setLightboxSrc(displayed.src)}
+        />
+      )}
       {textLightboxOpen && (
         <TextLightbox
           filePath={file.path}

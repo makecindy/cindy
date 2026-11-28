@@ -42,7 +42,7 @@ import { cn } from '@/lib/utils';
 import { isGlobalDropIntercepted } from '@/lib/globalDropIntercept';
 import { useFileBrowserPreference } from '@/hooks/useFileBrowserPreference';
 import { toast } from '@/lib/toast';
-import { ImageLightbox } from '@/components/chat/ImageLightbox';
+import { ImageLightbox, imageSourceSnapshotFields } from '@/components/chat/ImageLightbox';
 import {
   useSessionScopedTreeWidth,
   TREE_MIN_WIDTH,
@@ -171,7 +171,16 @@ function FileBrowserBodyWithWorkdir({
   const [directoryFilter, setDirectoryFilter] = useState('');
   const [grid, setGrid] = useState(false);
   const [externalFile, setExternalFile] = useState<ExternalFileSelection | null>(null);
-  const [imageLightboxSrc, setImageLightboxSrc] = useState<string | null>(null);
+  const [imageLightbox, setImageLightbox] = useState<{
+    src: string;
+    sessionId?: string;
+    galleryId?: string;
+    filename?: string;
+    enableGallery?: boolean;
+    annotationFallbackSrc?: string;
+    autoAnnotate?: boolean;
+    annotationDisabled?: boolean;
+  } | null>(null);
   const externalFileContent = useFileContent(externalFile?.workdir ?? workdir, externalFile?.relPath ?? null, null, null, visible);
   const fileDragDepthRef = useRef(0);
   const [isDraggingFile, setIsDraggingFile] = useState(false);
@@ -362,9 +371,9 @@ function FileBrowserBodyWithWorkdir({
         toast.warning(t('ccAgent.workdirBrowse.unrenderable.remoteNotSupported'));
         return;
       }
-      setImageLightboxSrc(src);
+      setImageLightbox({ src, sessionId: ctx.sessionId });
     },
-    [deviceId, remoteHostId, t, workdir],
+    [ctx.sessionId, deviceId, remoteHostId, t, workdir],
   );
 
   const handleRevealInFolder = useCallback(
@@ -800,11 +809,20 @@ function FileBrowserBodyWithWorkdir({
           aria-hidden="true"
         />
       )}
-      {imageLightboxSrc ? (
+      {imageLightbox ? (
         <ImageLightbox
-          src={imageLightboxSrc}
-          sessionId={ctx.sessionId}
-          onClose={() => setImageLightboxSrc(null)}
+          src={imageLightbox.src}
+          galleryId={imageLightbox.galleryId}
+          filename={imageLightbox.filename}
+          enableGallery={imageLightbox.enableGallery}
+          annotationFallbackSrc={imageLightbox.annotationFallbackSrc}
+          autoAnnotate={imageLightbox.autoAnnotate}
+          annotationDisabled={imageLightbox.annotationDisabled}
+          sessionId={imageLightbox.sessionId}
+          onClose={() => setImageLightbox(null)}
+          onSourceChangeCancelled={(displayed) =>
+            setImageLightbox(imageSourceSnapshotFields(displayed))
+          }
         />
       ) : null}
     </div>

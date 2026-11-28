@@ -21,11 +21,45 @@ import type { AttachedFile } from '../lib/fileTypes';
 
 // These adapters expose the lightbox boundary's actual props as DOM. Routing,
 // preview state and click handling all remain in the real ThumbnailStrip.
-vi.mock('@/components/chat/ImageLightbox', () => ({
-  ImageLightbox: ({ src, onClose }: { src: string; onClose: () => void }) =>
-    createElement('div', { role: 'dialog', 'aria-label': 'image preview' },
-      createElement('img', { src, alt: 'preview image' }),
-      createElement('button', { onClick: onClose }, 'Close preview')),
+vi.mock('@/components/chat/ImageLightbox', async () => {
+  const { useContext, useState } = await import('react');
+  const { AttachmentCollectionContext } = await import(
+    '../components/chat/AttachmentCollectionContext'
+  );
+  const { TextLightbox } = await import('../components/chat/TextLightbox');
+  return {
+    ImageLightbox: ({ src, onClose }: { src: string; onClose: () => void }) => {
+      const items = useContext(AttachmentCollectionContext);
+      const [index, setIndex] = useState(0);
+      const item = items?.[index];
+      const host = createElement(
+        'div',
+        { 'data-testid': 'collection-host', role: 'dialog', 'aria-label': 'image preview' },
+        item && item.kind !== 'image'
+          ? createElement(TextLightbox, {
+              filePath: item.source,
+              fileName: item.name,
+              onClose,
+            })
+          : createElement('img', { src, alt: 'preview image' }),
+        createElement(
+          'button',
+          { onClick: () => setIndex((current) => Math.min(current + 1, (items?.length ?? 1) - 1)) },
+          'Switch to next item',
+        ),
+        createElement('button', { onClick: onClose }, 'Close preview'),
+      );
+      return host;
+    },
+  };
+});
+vi.mock('../components/chat/TextLightbox', () => ({
+  TextLightbox: ({ filePath, fileName, onClose }: {
+    filePath: string; fileName: string; onClose: () => void;
+  }) => createElement('div', { role: 'dialog', 'aria-label': fileName },
+    createElement('output', null, filePath),
+    createElement('button', { onClick: onClose }, 'Close preview')),
+  formatBytes: vi.fn(() => 'fixture size'),
 }));
 vi.mock('@/components/chat/TextLightbox', () => ({
   TextLightbox: ({ filePath, fileName, onClose }: {
@@ -33,7 +67,6 @@ vi.mock('@/components/chat/TextLightbox', () => ({
   }) => createElement('div', { role: 'dialog', 'aria-label': fileName },
     createElement('output', null, filePath),
     createElement('button', { onClick: onClose }, 'Close preview')),
-  // Size formatting is outside this preview-routing regression.
   formatBytes: vi.fn(() => 'fixture size'),
 }));
 vi.mock('@/components/chat/ImageHoverPreview', () => ({ ImageHoverPreview: () => null }));
@@ -98,4 +131,25 @@ it('removes image and text attachments without bubbling or opening a preview', a
     expect(screen.queryByRole('dialog')).toBeNull();
   }
   expect(onRemove).toHaveBeenCalledTimes(2);
+});
+
+// 测试价值
+// - 生产入口与可观察结果：ThumbnailStrip 打开含图片与文档的混合集合；切到文档项后
+//   集合宿主仍挂载，文档查看器显示，而不是整个预览消失。
+// - Bug／规则依据：#11952 round 12 review PRRT_kwDOTgdRUs66qqGI；
+//   docs/dev-rules/engineering-conventions.md §3.2。
+// - 现有覆盖缺口：既有用例只验证单张缩略图打开/关闭，没有混合集合切到非图片项。
+// - 最小失败输入：图片 A + notes.txt，从 A 打开集合后点击“Switch to next item”；
+//   修复前 activePreviewId 被写成文档 ID，集合宿主卸载且没有文档查看器。
+// - tier：unit；复用现有 jsdom 文件，定向套件单独运行低于 5s。
+it('keeps the collection host mounted when a mixed collection switches to a document', () => {
+  render(createElement(ThumbnailStrip, {
+    attachments: [image, text], onRemove: vi.fn(), onUpdate: vi.fn(),
+  }));
+  fireEvent.click(screen.getByRole('button', { name: 'Preview shot.png' }));
+  const host = screen.getByTestId('collection-host');
+  fireEvent.click(within(host).getByRole('button', { name: 'Switch to next item' }));
+
+  expect(screen.getByTestId('collection-host')).toBe(host);
+  expect(screen.getByRole('dialog', { name: text.name })).toBeTruthy();
 });

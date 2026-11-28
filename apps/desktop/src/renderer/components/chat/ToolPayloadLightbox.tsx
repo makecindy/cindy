@@ -283,6 +283,7 @@ export function ToolPayloadLightbox({
 
   const overlay = (
     <div
+      data-lightbox-layer
       data-tool-payload-lightbox-overlay
       style={{
         position: 'fixed',

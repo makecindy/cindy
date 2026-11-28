@@ -41,24 +41,24 @@ import {
 } from '@/features/right-sidebar/lib/lastTurnChangedFiles';
 import { makerChatStore, type ChatMessage } from '@/lib/makerChatStore';
 
-import { ImageLightbox } from './ImageLightbox';
+import { ImageLightbox, imageSourceSnapshotFields } from './ImageLightbox';
 import { ImageGalleryContext, ImageGalleryScopeContext, type GalleryImage } from './ImageGalleryContext';
 import { AttachmentCollectionContext, type AttachmentCollectionItem } from './AttachmentCollectionContext';
 import { ChatSessionFileProvider, type ChatSessionFileContextValue, useChatSessionFile } from './ChatSessionFileContext';
 import { TextLightbox } from './lazyPreviewLightboxes';
 import { ToolPayloadLightbox, type ToolPayloadMode } from './ToolPayloadLightbox';
 
+type FilePreviewImageSource = ReturnType<typeof imageSourceSnapshotFields>;
+
 /** 一次「打开文件预览」的请求。 */
 export type FilePreviewRequest =
-  | {
+  | ({
       kind: 'image';
-      sessionId: string | undefined;
-      src: string;
       file: ChatSessionFileContextValue;
       images: readonly GalleryImage[] | null;
       scope: string | null;
       attachments: readonly AttachmentCollectionItem[] | null;
-    }
+    } & FilePreviewImageSource)
   | {
       kind: 'document';
       /** 会话 id:决定「文件已变更」看哪个会话的消息。 */
@@ -216,7 +216,20 @@ export function FilePreviewLightboxProvider({ children }: { children?: ReactNode
           <AttachmentCollectionContext.Provider value={preview.attachments}>
             <ImageGalleryContext.Provider value={preview.images}>
               <ImageGalleryScopeContext.Provider value={preview.scope}>
-                <ImageLightbox src={preview.src} onClose={close} />
+                <ImageLightbox
+                  {...imageSourceSnapshotFields(preview)}
+                  onClose={close}
+                  onSourceChangeCancelled={(displayed) =>
+                    setPreview((current) =>
+                      current?.kind === 'image'
+                        ? ({
+                            ...current,
+                            ...imageSourceSnapshotFields(displayed),
+                          } as FilePreviewRequest)
+                        : current,
+                    )
+                  }
+                />
               </ImageGalleryScopeContext.Provider>
             </ImageGalleryContext.Provider>
           </AttachmentCollectionContext.Provider>

@@ -52,6 +52,7 @@ export function BotGroupMessageAttachments({
       return (
         <ChatImageView
           key={slot.attachment.id}
+          itemId={slot.attachment.id}
           src={slot.url}
           filename={name}
           variant="user-attached"

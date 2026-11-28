@@ -8,20 +8,35 @@
  * - Esc / X:笔迹未偏离基线时行为同旧版(立即退出,不弹确认);有改动时经统一
  *   确认框,关闭确认框的那次 Esc 不会再次触发放弃;
  * - Space / 中键拖拽平移时不落笔;
+ * - 笔迹一经提交就写回待发附件草稿,发送/清空托盘不再依赖浮窗键盘守卫;
+ *   当前浮窗菜单的方向键 / Enter 与缩放快捷键互不抢事件;
+ *   离开确认锁在异步保存完成后才释放。
+ * - 逐笔草稿回写不触发换图确认；换图只由宿主请求的不同图片上下文驱动。
+ * - 集合重新挂载图片时读取最新草稿；宿主换图经过当前集合图片的离开守卫。
+ * - 附件更新被锁定时预览只读，不能把空回调当作保存成功；解锁后当前草稿
+ *   写入器恢复，once-bound 快捷键不会沿用锁定首帧的空写入器。
+ * - 异步换图保存期间返回当前图或再切到第三张时，结算最新宿主请求。
  * - 历史标注图原图丢失时退回烧录图,而不是提示丢失并关闭。
  */
 
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { useState } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { i18n } from '@/i18n';
 import { ChatSessionFileProvider } from '@/components/chat/ChatSessionFileContext';
 import { AttachmentCollectionPreview } from '@/components/chat/AttachmentCollection';
+import {
+  AttachmentCollectionContext,
+  type AttachmentCollectionItem,
+} from '@/components/chat/AttachmentCollectionContext';
 import { galleryImagePreviewItem } from '@/components/chat/ImageGalleryContext';
-import { ImageLightbox } from '@/components/chat/ImageLightbox';
+import { ImageLightbox, imageSourceSnapshotFields } from '@/components/chat/ImageLightbox';
 import { ConfirmDialogProvider } from '@/components/ui/confirm-dialog-provider';
 
 const SRC = 'cindy-media://blobs/source.png';
+const NEXT_SRC = 'cindy-media://blobs/next.png';
+const THIRD_SRC = 'cindy-media://blobs/third.png';
 
 type Stroke = { points: Array<{ x: number; y: number }> };
 
@@ -416,6 +431,900 @@ describe('ImageLightbox annotate mode', () => {
       vi.advanceTimersByTime(250);
     });
     expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('writes committed annotation edits to the owning attachment draft', () => {
+    const onDraftChange = vi.fn();
+    render(
+      <ImageLightbox
+        src={SRC}
+        onClose={vi.fn()}
+        annotationEdit={{ onSave: vi.fn(), onDraftChange }}
+      />,
+    );
+    loadImage(lightboxImage());
+    openAnnotate();
+    drawStroke({ x: 20, y: 20 }, { x: 100, y: 80 });
+    expect(onDraftChange).toHaveBeenLastCalledWith({
+      strokes: [{ points: [{ x: 0.1, y: 0.2 }, { x: 0.5, y: 0.8 }] }],
+    });
+    fireEvent.click(screen.getByRole('button', { name: label('chat.media.annotateUndo') }));
+    expect(onDraftChange).toHaveBeenLastCalledWith({ strokes: [] });
+  });
+
+  it('keeps the leave lock until annotation save settles', async () => {
+    let resolveSave!: () => void;
+    const save = new Promise<void>((resolve) => {
+      resolveSave = resolve;
+    });
+    const onSave = vi.fn(() => save);
+    render(
+      <ConfirmDialogProvider>
+        <ImageLightbox src={SRC} onClose={vi.fn()} annotationEdit={{ onSave }} />
+      </ConfirmDialogProvider>,
+    );
+    loadImage(lightboxImage());
+    openAnnotate();
+    drawStroke({ x: 10, y: 10 }, { x: 50, y: 50 });
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: label('chat.lightbox.close') }));
+    });
+    const dialog = await screen.findByRole('alertdialog');
+    await act(async () => {
+      fireEvent.click(within(dialog).getByRole('button', { name: label('chat.media.annotateSave') }));
+    });
+    await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: label('chat.lightbox.close') }));
+      // The broken early-unlock path needs the confirmation exit animation to finish.
+      // real-wait: confirmation exit animation must finish before another leave.
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    });
+    const secondDialog = screen.queryByRole('alertdialog');
+    if (secondDialog) {
+      await act(async () => {
+        fireEvent.click(
+          within(secondDialog).getByRole('button', { name: label('chat.media.annotateSave') }),
+        );
+      });
+    }
+    expect(onSave).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      resolveSave();
+      await save;
+    });
+  });
+
+  it('leaves portaled preview menu keys to the menu', () => {
+    render(<ImageLightbox src={SRC} onClose={vi.fn()} annotationEdit={{ onSave: vi.fn() }} />);
+    loadImage(lightboxImage());
+    openAnnotate();
+    drawStroke({ x: 20, y: 20 }, { x: 120, y: 80 });
+
+    // Minimal stand-in for a Radix menu portaled outside the preview panel.
+    const menu = document.createElement('div');
+    menu.setAttribute('role', 'menu');
+    document.body.append(menu);
+    for (const key of ['ArrowDown', 'Enter', '+']) {
+      const event = new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true });
+      menu.dispatchEvent(event);
+      expect(event.defaultPrevented).toBe(false);
+    }
+  });
+
+  it('restores the baseline annotation draft on close-discard', async () => {
+    const baseline: Stroke[] = [{ points: [{ x: 0.5, y: 0.5 }] }];
+    const onDraftChange = vi.fn();
+    render(
+      <ConfirmDialogProvider>
+        <ImageLightbox
+          src={SRC}
+          onClose={vi.fn()}
+          annotationEdit={{ initialStrokes: baseline, onDraftChange, onSave: vi.fn() }}
+        />
+      </ConfirmDialogProvider>,
+    );
+    loadImage(lightboxImage());
+    openAnnotate();
+    pressKey({ key: 'z', ctrlKey: true });
+    expect(onDraftChange).toHaveBeenLastCalledWith({ strokes: [] });
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: label('chat.lightbox.close') }));
+    });
+    const dialog = await screen.findByRole('alertdialog');
+    await act(async () => {
+      fireEvent.click(
+        within(dialog).getByRole('button', {
+          name: label('chat.media.annotateDiscardConfirmAction'),
+        }),
+      );
+    });
+    await waitFor(() =>
+      expect(onDraftChange).toHaveBeenLastCalledWith({
+        strokes: [{ points: [{ x: 0.5, y: 0.5 }] }],
+      }),
+    );
+  });
+
+  it('restores the full displayed source snapshot after a cancelled leave', async () => {
+    const onSourceChangeCancelled = vi.fn();
+    function Host() {
+      const [source, setSource] = useState<{ src: string; sessionId?: string }>({
+        src: SRC,
+        sessionId: 'task-A',
+      });
+      return (
+        <ConfirmDialogProvider>
+          <button type="button" onClick={() => setSource({ src: NEXT_SRC, sessionId: 'task-B' })}>
+            open next
+          </button>
+          <ImageLightbox
+            src={source.src}
+            sessionId={source.sessionId}
+            onClose={vi.fn()}
+            annotationEdit={{ onSave: vi.fn(), onDraftChange: vi.fn() }}
+            onSourceChangeCancelled={(displayed) => {
+              onSourceChangeCancelled(displayed);
+              setSource({ src: displayed.src, sessionId: displayed.sessionId });
+            }}
+          />
+        </ConfirmDialogProvider>
+      );
+    }
+    render(<Host />);
+    loadImage(lightboxImage());
+    openAnnotate();
+    drawStroke({ x: 10, y: 10 }, { x: 50, y: 50 });
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'open next' }));
+    });
+    const dialog = await screen.findByRole('alertdialog');
+    await act(async () => {
+      fireEvent.click(
+        within(dialog).getByRole('button', {
+          name: label('chat.media.annotateDiscardConfirmCancel'),
+        }),
+      );
+    });
+    await waitFor(() =>
+      expect(onSourceChangeCancelled).toHaveBeenCalledWith(
+        expect.objectContaining({ src: SRC, sessionId: 'task-A' }),
+      ),
+    );
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'open next' }));
+    });
+    expect(await screen.findByRole('alertdialog')).toBeTruthy();
+  });
+
+  it('keeps the newest source request while a save is busy', async () => {
+    let resolveSave: (() => void) | undefined;
+    const onSave = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveSave = resolve;
+        }),
+    );
+    const onSourceChangeCancelled = vi.fn();
+    function Host() {
+      const [source, setSource] = useState<{ src: string; sessionId?: string }>({
+        src: SRC,
+        sessionId: 'task-A',
+      });
+      return (
+        <ConfirmDialogProvider>
+          <button type="button" onClick={() => setSource({ src: NEXT_SRC, sessionId: 'task-A' })}>
+            open next
+          </button>
+          <button type="button" onClick={() => setSource({ src: THIRD_SRC, sessionId: 'task-A' })}>
+            open third
+          </button>
+          <ImageLightbox
+            src={source.src}
+            sessionId={source.sessionId}
+            onClose={vi.fn()}
+            annotationEdit={{ onSave, onDraftChange: vi.fn() }}
+            onSourceChangeCancelled={(displayed) => {
+              onSourceChangeCancelled(displayed);
+              setSource({ src: displayed.src, sessionId: displayed.sessionId });
+            }}
+          />
+        </ConfirmDialogProvider>
+      );
+    }
+    render(<Host />);
+    loadImage(lightboxImage());
+    openAnnotate();
+    drawStroke({ x: 10, y: 10 }, { x: 50, y: 50 });
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'open next' }));
+    });
+    const dialog = await screen.findByRole('alertdialog');
+    await act(async () => {
+      fireEvent.click(
+        within(dialog).getByRole('button', { name: label('chat.media.annotateSave') }),
+      );
+    });
+    await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'open third' }));
+    });
+    expect(onSourceChangeCancelled).not.toHaveBeenCalled();
+
+    await act(async () => {
+      resolveSave?.();
+    });
+    await waitFor(() => expect(lightboxImage().getAttribute('src')).toBe(THIRD_SRC));
+    expect(onSourceChangeCancelled).not.toHaveBeenCalled();
+  });
+
+  it('does not treat draft write-back as a source retarget', async () => {
+    function Host() {
+      const [strokes, setStrokes] = useState<Stroke[]>([]);
+      return (
+        <ConfirmDialogProvider>
+          <ImageLightbox
+            src={SRC}
+            onClose={vi.fn()}
+            annotationEdit={{
+              initialStrokes: strokes,
+              onDraftChange: ({ strokes: next }) => setStrokes(next),
+              onSave: vi.fn(),
+            }}
+          />
+        </ConfirmDialogProvider>
+      );
+    }
+    render(<Host />);
+    loadImage(lightboxImage());
+    openAnnotate();
+
+    drawStroke({ x: 10, y: 10 }, { x: 50, y: 50 });
+    await waitFor(() => expect(committedPaths('stroke')).toHaveLength(1));
+    expect(screen.queryByRole('alertdialog')).toBeNull();
+    expect(
+      screen.getByRole('button', { name: label('chat.media.annotateUndo') }),
+    ).toBeTruthy();
+
+    pressKey({ key: 'z', ctrlKey: true });
+    await waitFor(() => expect(committedPaths('stroke')).toHaveLength(0));
+    expect(screen.queryByRole('alertdialog')).toBeNull();
+    expect(
+      screen.getByRole('button', { name: label('chat.media.annotateUndo') }),
+    ).toBeTruthy();
+  });
+
+  it('returns to a collection image with the latest saved draft', async () => {
+    function Host() {
+      const [strokesA, setStrokesA] = useState<Stroke[]>([]);
+      const [strokesB, setStrokesB] = useState<Stroke[]>([]);
+      const editA = {
+        initialStrokes: strokesA,
+        onDraftChange: ({ strokes }: { strokes: Stroke[] }) => setStrokesA(strokes),
+        onSave: ({ strokes }: { strokes: Stroke[] }) => setStrokesA(strokes),
+      };
+      const editB = {
+        initialStrokes: strokesB,
+        onDraftChange: ({ strokes }: { strokes: Stroke[] }) => setStrokesB(strokes),
+        onSave: ({ strokes }: { strokes: Stroke[] }) => setStrokesB(strokes),
+      };
+      const items: AttachmentCollectionItem[] = [
+        {
+          id: 'a',
+          name: 'a.png',
+          source: SRC,
+          kind: 'image',
+          media: true,
+          image: { annotationEdit: editA },
+        },
+        {
+          id: 'b',
+          name: 'b.png',
+          source: NEXT_SRC,
+          kind: 'image',
+          media: true,
+          image: { annotationEdit: editB },
+        },
+      ];
+      return (
+        <ConfirmDialogProvider>
+          <AttachmentCollectionContext.Provider value={items}>
+            <ImageLightbox src={SRC} onClose={vi.fn()} annotationEdit={editA} />
+          </AttachmentCollectionContext.Provider>
+        </ConfirmDialogProvider>
+      );
+    }
+    render(<Host />);
+    loadImage(lightboxImage());
+    openAnnotate();
+    drawStroke({ x: 10, y: 10 }, { x: 50, y: 50 });
+    await waitFor(() => expect(committedPaths('stroke')).toHaveLength(1));
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: label('attachmentPreview.next') }));
+    });
+    const saveDialog = await screen.findByRole('alertdialog');
+    await act(async () => {
+      fireEvent.click(
+        within(saveDialog).getByRole('button', { name: label('chat.media.annotateSave') }),
+      );
+    });
+    await waitFor(() => expect(lightboxImage().getAttribute('src')).toBe(NEXT_SRC));
+    loadImage(lightboxImage());
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: label('attachmentPreview.previous') }));
+    });
+    await waitFor(() => expect(lightboxImage().getAttribute('src')).toBe(SRC));
+    loadImage(lightboxImage());
+    expect(committedPaths('stroke')).toHaveLength(1);
+  });
+
+  it('routes a host source request through the active collection item guard', async () => {
+    function Host() {
+      const [hostSrc, setHostSrc] = useState(SRC);
+      const [strokesA, setStrokesA] = useState<Stroke[]>([]);
+      const [strokesB, setStrokesB] = useState<Stroke[]>([]);
+      const editA = {
+        initialStrokes: strokesA,
+        onDraftChange: ({ strokes }: { strokes: Stroke[] }) => setStrokesA(strokes),
+        onSave: ({ strokes }: { strokes: Stroke[] }) => setStrokesA(strokes),
+      };
+      const editB = {
+        initialStrokes: strokesB,
+        onDraftChange: ({ strokes }: { strokes: Stroke[] }) => setStrokesB(strokes),
+        onSave: ({ strokes }: { strokes: Stroke[] }) => setStrokesB(strokes),
+      };
+      const items: AttachmentCollectionItem[] = [
+        {
+          id: 'a',
+          name: 'a.png',
+          source: SRC,
+          kind: 'image',
+          media: true,
+          image: { annotationEdit: editA },
+        },
+        {
+          id: 'b',
+          name: 'b.png',
+          source: NEXT_SRC,
+          kind: 'image',
+          media: true,
+          image: { annotationEdit: editB },
+        },
+      ];
+      return (
+        <ConfirmDialogProvider>
+          <AttachmentCollectionContext.Provider value={items}>
+            <button type="button" onClick={() => setHostSrc(THIRD_SRC)}>
+              open third
+            </button>
+            <ImageLightbox
+              src={hostSrc}
+              onClose={vi.fn()}
+              annotationEdit={editA}
+              onSourceChangeCancelled={(displayed) => setHostSrc(displayed.src)}
+            />
+          </AttachmentCollectionContext.Provider>
+        </ConfirmDialogProvider>
+      );
+    }
+    render(<Host />);
+    loadImage(lightboxImage());
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: label('attachmentPreview.next') }));
+    });
+    await waitFor(() => expect(lightboxImage().getAttribute('src')).toBe(NEXT_SRC));
+    loadImage(lightboxImage());
+    openAnnotate();
+    drawStroke({ x: 10, y: 10 }, { x: 50, y: 50 });
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'open third' }));
+    });
+    const guardDialog = await screen.findByRole('alertdialog');
+    await act(async () => {
+      fireEvent.click(
+        within(guardDialog).getByRole('button', {
+          name: label('chat.media.annotateDiscardConfirmCancel'),
+        }),
+      );
+    });
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
+    expect(lightboxImage().getAttribute('src')).toBe(NEXT_SRC);
+  });
+
+  // 测试价值
+  // - 生产入口与可观察结果：ImageLightbox 的宿主换图 effect；异步保存期间返回 A
+  //   或再切到 C 后，显示的图片与宿主 src 都等于最新请求。
+  // - Bug／规则依据：#11952 round 11 review PRRT_kwDOTgdRUs66qFSo；
+  //   docs/dev-rules/engineering-conventions.md §3.2。
+  // - 现有覆盖缺口：既有用例只覆盖 B->C 保存成功，未覆盖返回当前图与旧守卫取消。
+  // - 最小失败输入：A 有未保存笔迹 -> 请求 B 并保存 -> 保存未完成时请求 A/C；
+  //   修复前分别显示 B 或把宿主重置到 A。
+  // - tier：unit；复用现有 jsdom 文件，定向套件实测约 2.5s。
+  it('settles a save back to the latest host source when the request returns to the displayed image', async () => {
+    let resolveSave: (() => void) | undefined;
+    const onSave = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveSave = resolve;
+        }),
+    );
+    const onSourceChangeCancelled = vi.fn();
+    function Host() {
+      const [source, setSource] = useState(SRC);
+      return (
+        <ConfirmDialogProvider>
+          <button type="button" onClick={() => setSource(NEXT_SRC)}>
+            open next
+          </button>
+          <button type="button" onClick={() => setSource(SRC)}>
+            return first
+          </button>
+          <ImageLightbox
+            src={source}
+            onClose={vi.fn()}
+            annotationEdit={{ onSave, onDraftChange: vi.fn() }}
+            onSourceChangeCancelled={(displayed) => {
+              onSourceChangeCancelled(displayed);
+              setSource(displayed.src);
+            }}
+          />
+        </ConfirmDialogProvider>
+      );
+    }
+    render(<Host />);
+    loadImage(lightboxImage());
+    openAnnotate();
+    drawStroke({ x: 10, y: 10 }, { x: 50, y: 50 });
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'open next' }));
+    });
+    const dialog = await screen.findByRole('alertdialog');
+    await act(async () => {
+      fireEvent.click(
+        within(dialog).getByRole('button', { name: label('chat.media.annotateSave') }),
+      );
+    });
+    await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'return first' }));
+    });
+    await act(async () => {
+      resolveSave?.();
+    });
+    await waitFor(() => expect(lightboxImage().getAttribute('src')).toBe(SRC));
+    expect(onSourceChangeCancelled).not.toHaveBeenCalled();
+  });
+
+  it('keeps the newest source request after a stale leave guard is cancelled', async () => {
+    const onSourceChangeCancelled = vi.fn();
+    function Host() {
+      const [source, setSource] = useState(SRC);
+      return (
+        <ConfirmDialogProvider>
+          <button type="button" onClick={() => setSource(NEXT_SRC)}>
+            open next
+          </button>
+          <button type="button" onClick={() => setSource(THIRD_SRC)}>
+            open third
+          </button>
+          <ImageLightbox
+            src={source}
+            onClose={vi.fn()}
+            annotationEdit={{ onSave: vi.fn(), onDraftChange: vi.fn() }}
+            onSourceChangeCancelled={(displayed) => {
+              onSourceChangeCancelled(displayed);
+              setSource(displayed.src);
+            }}
+          />
+        </ConfirmDialogProvider>
+      );
+    }
+    render(<Host />);
+    loadImage(lightboxImage());
+    openAnnotate();
+    drawStroke({ x: 10, y: 10 }, { x: 50, y: 50 });
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'open next' }));
+    });
+    const firstDialog = await screen.findByRole('alertdialog');
+    await act(async () => {
+      fireEvent.click(screen.getByText('open third'));
+    });
+    await act(async () => {
+      fireEvent.click(
+        within(firstDialog).getByRole('button', {
+          name: label('chat.media.annotateDiscardConfirmCancel'),
+        }),
+      );
+    });
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).not.toBeNull());
+    const latestDialog = await screen.findByRole('alertdialog');
+    await act(async () => {
+      fireEvent.click(
+        within(latestDialog).getByRole('button', {
+          name: label('chat.media.annotateDiscardConfirmAction'),
+        }),
+      );
+    });
+    await waitFor(() => expect(lightboxImage().getAttribute('src')).toBe(THIRD_SRC));
+    expect(onSourceChangeCancelled).not.toHaveBeenCalled();
+  });
+
+  // 测试价值
+  // - 生产入口与可观察结果：ImageLightbox 拒绝换图后，宿主用完整显示快照恢复请求；
+  //   不会再因残留的 galleryId 触发第二次保存／放弃确认。
+  // - Bug／规则依据：#11952 round 12 review PRRT_kwDOTgdRUs66qqGK；
+  //   docs/dev-rules/engineering-conventions.md §3.2。
+  // - 现有覆盖缺口：既有取消用例只断言 src/sessionId，没有把 galleryId 纳入源身份。
+  // - 最小失败输入：A(gallery-A) 有未保存笔迹 -> 请求 B(gallery-B) -> 取消；
+  //   修复前宿主保留 gallery-B，换图守卫再次弹出。
+  // - tier：unit；复用现有 jsdom 文件，定向套件实测约 2.5s。
+  it('restores the full displayed source identity when a plugin image retarget is cancelled', async () => {
+    const onSourceChangeCancelled = vi.fn();
+    function Host() {
+      const [source, setSource] = useState(() =>
+        imageSourceSnapshotFields({ src: SRC, galleryId: 'gallery-A', sessionId: 'task-A' }),
+      );
+      return (
+        <ConfirmDialogProvider>
+          <button
+            type="button"
+            onClick={() =>
+              setSource(
+                imageSourceSnapshotFields({
+                  src: NEXT_SRC,
+                  galleryId: 'gallery-B',
+                  sessionId: 'task-A',
+                }),
+              )
+            }
+          >
+            open next
+          </button>
+          <ImageLightbox
+            {...source}
+            onClose={vi.fn()}
+            annotationEdit={{ onSave: vi.fn(), onDraftChange: vi.fn() }}
+            onSourceChangeCancelled={(displayed) => {
+              onSourceChangeCancelled(displayed);
+              setSource(imageSourceSnapshotFields(displayed));
+            }}
+          />
+        </ConfirmDialogProvider>
+      );
+    }
+    render(<Host />);
+    loadImage(lightboxImage());
+    openAnnotate();
+    drawStroke({ x: 10, y: 10 }, { x: 50, y: 50 });
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'open next' }));
+    });
+    const dialog = await screen.findByRole('alertdialog');
+    await act(async () => {
+      fireEvent.click(
+        within(dialog).getByRole('button', {
+          name: label('chat.media.annotateDiscardConfirmCancel'),
+        }),
+      );
+    });
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
+    expect(onSourceChangeCancelled).toHaveBeenCalledWith(
+      expect.objectContaining({ src: SRC, galleryId: 'gallery-A', sessionId: 'task-A' }),
+    );
+  });
+
+  // 测试价值
+  // - 生产入口与可观察结果：ImageLightbox 的附件集合宿主；删除无关附件后集合仍挂载，
+  //   当前笔迹不消失；同一 URL 的两个附件按 ID 使用各自的标注回调。
+  // - Bug／规则依据：#11952 round 13 review PRRT_kwDOTgdRUs66rONM、
+  //   PRRT_kwDOTgdRUs66rONO；docs/dev-rules/engineering-conventions.md §3.2。
+  // - 现有覆盖缺口：既有用例没有覆盖集合长度变化后的重挂载，也没有覆盖相同 URL 不同 ID。
+  // - 最小失败输入：A+B 集合画一笔后删除 B；或 A/B 同 URL 点击 B 并画一笔；
+  //   修复前分别丢失笔迹、写到 A 的回调。
+  // - tier：unit；复用现有 jsdom 文件，定向套件实测约 2.5s。
+  it('keeps an open collection and its draft when an unrelated attachment is removed', () => {
+    const onDraftChange = vi.fn();
+    const onSave = vi.fn();
+    const editA = { initialStrokes: [], onDraftChange, onSave };
+    function Host() {
+      const [items, setItems] = useState<AttachmentCollectionItem[]>([
+        { id: 'a', name: 'a.png', source: SRC, kind: 'image', media: true, image: { annotationEdit: editA } },
+        { id: 'b', name: 'b.txt', source: '/b.txt', kind: 'text' },
+      ]);
+      return (
+        <ConfirmDialogProvider>
+          <button type="button" onClick={() => setItems((current) => current.slice(0, 1))}>
+            remove b
+          </button>
+          <AttachmentCollectionContext.Provider value={items}>
+            <ImageLightbox src={SRC} initialItemId="a" onClose={vi.fn()} />
+          </AttachmentCollectionContext.Provider>
+        </ConfirmDialogProvider>
+      );
+    }
+    render(<Host />);
+    loadImage(lightboxImage());
+    openAnnotate();
+    drawStroke({ x: 10, y: 10 }, { x: 50, y: 50 });
+    expect(committedPaths('stroke')).toHaveLength(1);
+
+    fireEvent.click(screen.getByRole('button', { name: 'remove b' }));
+    expect(screen.getByRole('button', { name: label('attachmentPreview.next') })).toBeTruthy();
+    expect(committedPaths('stroke')).toHaveLength(1);
+    expect(onSave).not.toHaveBeenCalled();
+  });
+
+  it('uses the clicked attachment ID for initial metadata when URLs repeat', () => {
+    const editA = { initialStrokes: [], onDraftChange: vi.fn(), onSave: vi.fn() };
+    const editB = { initialStrokes: [], onDraftChange: vi.fn(), onSave: vi.fn() };
+    const items: AttachmentCollectionItem[] = [
+      { id: 'a', name: 'a.png', source: SRC, kind: 'image', media: true, image: { annotationEdit: editA } },
+      { id: 'b', name: 'b.png', source: SRC, kind: 'image', media: true, image: { annotationEdit: editB } },
+    ];
+    render(
+      <ConfirmDialogProvider>
+        <AttachmentCollectionContext.Provider value={items}>
+          <ImageLightbox src={SRC} initialItemId="b" onClose={vi.fn()} />
+        </AttachmentCollectionContext.Provider>
+      </ConfirmDialogProvider>,
+    );
+    loadImage(lightboxImage());
+    openAnnotate();
+    drawStroke({ x: 10, y: 10 }, { x: 50, y: 50 });
+
+    expect(editB.onDraftChange).toHaveBeenCalled();
+    expect(editA.onDraftChange).not.toHaveBeenCalled();
+  });
+
+  // 测试价值
+  // - 生产入口与可观察结果：ImageLightbox 的集合实时元数据与独立离开结算；清空草稿后返回
+  //   不复活旧笔迹；独立关闭保存期间的新宿主请求在保存完成后仍被应用。
+  // - Bug／规则依据：#11952 round 14 review PRRT_kwDOTgdRUs66r4HB、
+  //   PRRT_kwDOTgdRUs66r4HM；docs/dev-rules/engineering-conventions.md §3.2。
+  // - 现有覆盖缺口：既有用例只覆盖非空草稿回读和同源换图保存，未覆盖清空编码与关闭按钮路径。
+  // - 最小失败输入：A 有笔迹 -> 撤销到空 -> 切 B -> 返回 A；或关闭保存未完成时请求 B
+  //   并让保存完成。修复前分别复用冻结基线、丢失 B 请求。
+  // - tier：unit；复用现有 jsdom 文件，定向套件实测约 2.5s。
+  it('treats a cleared live collection draft as empty strokes', async () => {
+    function Host() {
+      const [strokesA, setStrokesA] = useState<Stroke[] | undefined>([
+        { points: [{ x: 0.5, y: 0.5 }] },
+      ]);
+      const editA = {
+        initialStrokes: strokesA,
+        onDraftChange: ({ strokes }: { strokes: Stroke[] }) =>
+          setStrokesA(strokes.length ? strokes : undefined),
+        onSave: ({ strokes }: { strokes: Stroke[] }) =>
+          setStrokesA(strokes.length ? strokes : undefined),
+      };
+      const editB = { initialStrokes: [], onDraftChange: vi.fn(), onSave: vi.fn() };
+      const items: AttachmentCollectionItem[] = [
+        {
+          id: 'a', name: 'a.png', source: SRC, kind: 'image', media: true,
+          image: { initialStrokes: strokesA, annotationEdit: editA },
+        },
+        {
+          id: 'b', name: 'b.png', source: NEXT_SRC, kind: 'image', media: true,
+          image: { annotationEdit: editB },
+        },
+      ];
+      return (
+        <ConfirmDialogProvider>
+          <AttachmentCollectionContext.Provider value={items}>
+            <ImageLightbox src={SRC} initialItemId="a" onClose={vi.fn()} annotationEdit={editA} />
+          </AttachmentCollectionContext.Provider>
+        </ConfirmDialogProvider>
+      );
+    }
+    render(<Host />);
+    loadImage(lightboxImage());
+    openAnnotate();
+    fireEvent.click(screen.getByRole('button', { name: label('chat.media.annotateUndo') }));
+    await waitFor(() => expect(committedPaths('stroke')).toHaveLength(0));
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: label('attachmentPreview.next') }));
+    });
+    const saveDialog = await screen.findByRole('alertdialog');
+    await act(async () => {
+      fireEvent.click(
+        within(saveDialog).getByRole('button', { name: label('chat.media.annotateSave') }),
+      );
+    });
+    await waitFor(() => expect(lightboxImage().getAttribute('src')).toBe(NEXT_SRC));
+    loadImage(lightboxImage());
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: label('attachmentPreview.previous') }));
+    });
+    await waitFor(() => expect(lightboxImage().getAttribute('src')).toBe(SRC));
+    loadImage(lightboxImage());
+    expect(committedPaths('stroke')).toHaveLength(0);
+  });
+
+  it('settles a pending source request after an independent close save completes', async () => {
+    let resolveSave: (() => void) | undefined;
+    const onSave = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveSave = resolve;
+        }),
+    );
+    const onClose = vi.fn();
+    function Host() {
+      const [source, setSource] = useState(SRC);
+      return (
+        <ConfirmDialogProvider>
+          <button type="button" onClick={() => setSource(NEXT_SRC)}>
+            open next
+          </button>
+          <ImageLightbox
+            src={source}
+            onClose={() => {
+              onClose();
+              setSource(SRC);
+            }}
+            annotationEdit={{ onSave, onDraftChange: vi.fn() }}
+            onSourceChangeCancelled={(displayed) => setSource(displayed.src)}
+          />
+        </ConfirmDialogProvider>
+      );
+    }
+    render(<Host />);
+    loadImage(lightboxImage());
+    openAnnotate();
+    drawStroke({ x: 10, y: 10 }, { x: 50, y: 50 });
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: label('chat.lightbox.close') }));
+    });
+    const dialog = await screen.findByRole('alertdialog');
+    await act(async () => {
+      fireEvent.click(
+        within(dialog).getByRole('button', { name: label('chat.media.annotateSave') }),
+      );
+    });
+    await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
+    await act(async () => {
+      fireEvent.click(screen.getByText('open next'));
+    });
+    await act(async () => {
+      resolveSave?.();
+    });
+    const pendingDialog = await screen.findByRole('alertdialog');
+    await act(async () => {
+      fireEvent.click(
+        within(pendingDialog).getByRole('button', {
+          name: label('chat.media.annotateDiscardConfirmAction'),
+        }),
+      );
+    });
+    await waitFor(() => expect(lightboxImage().getAttribute('src')).toBe(NEXT_SRC));
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it('keeps a locked attachment preview read-only', () => {
+    const onDraftChange = vi.fn();
+    const onSave = vi.fn();
+    const props = {
+      src: SRC,
+      onClose: vi.fn(),
+      annotationEdit: { initialStrokes: [], onDraftChange, onSave },
+    };
+    const view = render(
+      <ConfirmDialogProvider>
+        <ImageLightbox {...props} />
+      </ConfirmDialogProvider>,
+    );
+    loadImage(lightboxImage());
+    expect(
+      screen.getByRole('button', { name: label('chat.media.annotate') }),
+    ).toBeTruthy();
+
+    view.rerender(
+      <ConfirmDialogProvider>
+        <ImageLightbox {...props} annotationDisabled />
+      </ConfirmDialogProvider>,
+    );
+    expect(
+      screen.queryByRole('button', { name: label('chat.media.annotate') }),
+    ).toBeNull();
+    expect(onDraftChange).not.toHaveBeenCalled();
+    expect(onSave).not.toHaveBeenCalled();
+  });
+
+  // 测试价值
+  // - 生产入口与可观察结果：ImageLightbox 在同一张图锁定后解锁，标注入口恢复；
+  //   绘制与 Cmd/Ctrl+Z 都写回当前附件草稿，不会只剩浮窗内的笔迹。
+  // - Bug／规则依据：#11952 round 10 review PRRT_kwDOTgdRUs66pjK3、
+  //   PRRT_kwDOTgdRUs66pjK6；docs/dev-rules/engineering-conventions.md §3.2。
+  // - 现有覆盖缺口：既有只读测试只验证锁定态，既有撤销测试未在锁定首帧后解锁。
+  // - 最小失败输入：先以 annotationDisabled 挂载，再不换源解锁并画一笔／按 Ctrl+Z；
+  //   修复前分别缺少标注入口、快捷键沿用空写入器。
+  // - tier：unit；复用现有 jsdom 文件，定向套件实测约 2.4s。
+  it('restores annotation editing after a locked direct preview is unlocked', () => {
+    const onDraftChange = vi.fn();
+    const onSave = vi.fn();
+    const view = render(
+      <ConfirmDialogProvider>
+        <ImageLightbox src={SRC} onClose={vi.fn()} annotationDisabled initialStrokes={[]} />
+      </ConfirmDialogProvider>,
+    );
+    loadImage(lightboxImage());
+    expect(
+      screen.queryByRole('button', { name: label('chat.media.annotate') }),
+    ).toBeNull();
+
+    view.rerender(
+      <ConfirmDialogProvider>
+        <ImageLightbox
+          src={SRC}
+          onClose={vi.fn()}
+          annotationEdit={{ initialStrokes: [], onDraftChange, onSave }}
+        />
+      </ConfirmDialogProvider>,
+    );
+    openAnnotate();
+    drawStroke({ x: 10, y: 10 }, { x: 50, y: 50 });
+    expect(onDraftChange).toHaveBeenCalledWith({
+      strokes: [expect.objectContaining({ points: expect.any(Array) })],
+    });
+    expect(onSave).not.toHaveBeenCalled();
+  });
+
+  it('uses the current draft writer for annotation shortcuts after unlock', () => {
+    const lockedOnDraftChange = vi.fn();
+    const onDraftChange = vi.fn();
+    const onSave = vi.fn();
+    const view = render(
+      <ConfirmDialogProvider>
+        <ImageLightbox
+          src={SRC}
+          onClose={vi.fn()}
+          annotationDisabled
+          annotationEdit={{
+            initialStrokes: [],
+            onDraftChange: lockedOnDraftChange,
+            onSave: vi.fn(),
+          }}
+        />
+      </ConfirmDialogProvider>,
+    );
+    loadImage(lightboxImage());
+    view.rerender(
+      <ConfirmDialogProvider>
+        <ImageLightbox
+          src={SRC}
+          onClose={vi.fn()}
+          annotationEdit={{ initialStrokes: [], onDraftChange, onSave }}
+        />
+      </ConfirmDialogProvider>,
+    );
+    openAnnotate();
+    drawStroke({ x: 10, y: 10 }, { x: 50, y: 50 });
+    expect(onDraftChange).toHaveBeenCalledWith({
+      strokes: [expect.objectContaining({ points: expect.any(Array) })],
+    });
+    pressKey({ key: 'z', ctrlKey: true });
+    expect(onDraftChange).toHaveBeenLastCalledWith({ strokes: [] });
+    expect(committedPaths('stroke')).toHaveLength(0);
+    expect(lockedOnDraftChange).not.toHaveBeenCalled();
+    expect(onSave).not.toHaveBeenCalled();
   });
 });
 

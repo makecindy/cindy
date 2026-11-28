@@ -2,10 +2,11 @@ import { usePreviewFocusReturn } from './PreviewChrome';
 /**
  * ImageLightbox
  * ---------------------------------------------------------------------------
- * 通过 React Portal 渲染的全屏图片 lightbox。
+ * 通过 React Portal 渲染的非模态图片预览浮窗。
  *
- * - 遮罩：使用 `--overlay-lightbox` 主题 token，保持 lightbox 遮罩语义一致。
- * - 图片：`object-fit: contain`，四周保留 40px 安全边距。
+ * - 外壳：默认贴右的可拖动浮窗,可调尺寸,也能贴左或居中展开;背景对话保持可见、
+ *   可滚动、可选中、可复制。共享 PreviewChrome 的其它查看器仍用原来的模态外壳。
+ * - 图片：按浮窗可用宽高 `object-fit: contain`,不再固定四边 40px 全屏铺满。
  * - 缩放/平移(手势数学共用 `lightboxGestures`,与 MermaidLightbox 同一套):
  *   - 各平台一致:触控板双指捏合(macOS、Windows 精密触摸板的 pinch 都由 Chromium
  *     合成为带 ctrlKey 的 wheel 事件)/ Ctrl(⌘)+滚轮 / 鼠标滚轮 → 以光标为焦点缩放;
@@ -15,8 +16,8 @@ import { usePreviewFocusReturn } from './PreviewChrome';
  *   - 放大后左键拖拽平移;松手时若拖动超过阈值,该次 click 不触发关闭。
  *   - 键盘 +/- 步进缩放,0 重置。翻页(←/→ 或箭头按钮)时视口自动重置。
  *   - 缩放范围 1x(适配窗口)~ 8x,图片不缩到比适配尺寸更小。
- * - 关闭：点击黑色背景或按 Escape 关闭。点击图片本身**不再**关闭(为双击缩放
- *   让路,也符合常见图片查看器习惯;旧行为是点图片也关闭)。
+ * - 关闭：关闭按钮或由最上层浮窗消费的 Esc。点击预览窗内空白背景仍关闭;点击背景对话不会关闭,
+ *   以便选中/复制消息。点击图片本身**不再**关闭(为双击缩放让路)。
  * - 媒体动作(对齐手机版 lightbox 的功能集,底部胶囊操作栏 + 右键菜单双入口):
  *   复制图片 / 打开所在目录(右键) / 用默认应用打开 / 另存为 / 发送到对话。
  *   可用性按 src scheme 分层,见 `mediaActionCapabilities`:本地源
@@ -33,9 +34,14 @@ import { usePreviewFocusReturn } from './PreviewChrome';
  *   或中键拖拽平移;Esc / X 放弃——笔迹偏离基线时先经统一确认框确认。
  * - 右键：菜单关闭后的同一次背景点击不能顺带关闭 lightbox,见 `lastMenuCloseAt`。
  * - 动画：200ms 透明度淡入淡出。
- * - 焦点：FocusScope 打开时把焦点移入 overlay 并圈禁 Tab;卸载时还给打开前的焦点元素。
- * - 滚动锁定：打开期间给 `[data-scroll-container]` 设置 `overflowY: hidden`。
- * - 关闭按钮：按设计不显示 X 关闭按钮。
+ * - 焦点：打开时把焦点移入浮窗,但不圈禁 Tab;重新操作图片/标题栏会取回键盘焦点,
+ *   卸载时还给打开前的焦点元素。
+ * - 换图：宿主把 `src` 指向新图时先走同一套未保存标注确认,再以新源重建内容;
+ *   复制、另存、发送到对话始终指向当前显示的图。
+ * - 未保存标注：每笔提交、撤销、重做或放弃都立即写回待发附件草稿;发送/清空
+ *   托盘或卸载浮窗都不会只剩 viewer-local 笔迹,背景交互无需临时守卫。
+ * - 背景滚动：不锁定 `[data-scroll-container]`,预览窗之外的聊天仍可滚动。
+ * - 关闭按钮：标题栏常驻关闭按钮,避免非模态浮窗只能靠 Esc 退出。
  * - 会话画廊：`enableGallery` 开启后，可用 ←/→ 或屏幕箭头在会话图片间翻页，并显示
  *   “n / 总数”计数。列表来自 `ImageGalleryContext`(任务里是 MessageStream 从已加载
  *   历史派生的全部图片，跨回合)；起始位置见 `galleryOpeningIndex`。不在列表里的
@@ -44,13 +50,26 @@ import { usePreviewFocusReturn } from './PreviewChrome';
 
 import { saveImageAs } from './DownloadImageMenuItem';
 import { useImageClipboard } from './useImageClipboard';
-import { useCallback, useContext, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import {
+  useImagePreviewWindow,
+  type PreviewDockMode,
+  type PreviewResizeDirection,
+  type PreviewWindowMode,
+} from './imagePreviewWindow';
+import { useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { FocusScope } from '@radix-ui/react-focus-scope';
+import { Button } from '@/components/ui/button';
+import { Tip } from '@/components/ui/tooltip';
+import { WINDOW_NO_DRAG_STYLE } from '@/components/layout/windowDrag';
 import {
   Minus,
   Plus,
   Maximize,
+  Maximize2,
+  Grip,
+  PanelLeft,
+  PanelRight,
   Check,
   ChevronLeft,
   ChevronRight,
@@ -69,6 +88,11 @@ import { useTranslation } from 'react-i18next';
 import { toast } from '@/lib/toast';
 import { createLogger } from '@/lib/logger';
 import { isEditableKeyboardTarget } from '@/lib/editableKeyboardTarget';
+import {
+  activateLightboxLayer,
+  isLightboxCovered,
+  lightboxOwnsShortcutTarget,
+} from '@/lib/lightboxLayer';
 import { extractIpcError } from '@/utils/ipcError';
 import { getMimeType, extractExt, type AttachedFile } from '@/lib/fileTypes';
 import {
@@ -127,16 +151,20 @@ import { useWorkspaceMediaPath } from './useWorkspaceMediaPath';
 import {
   ActivePreviewCollection,
   AttachmentCollectionPreview,
-  useOpeningCollection,
+  type CollectionImageProps,
+  type PreviewLeaveGuard,
+  type PreviewLeaveOutcome,
 } from './AttachmentCollection';
 import {
+  AttachmentCollectionContext,
+  normalizedLiveCollectionItem,
+  type AttachmentCollectionItem,
+} from './AttachmentCollectionContext';
+import {
   PREVIEW_PANEL_CLASS,
-  PREVIEW_PANEL_STYLE,
   PreviewHeader,
   PreviewFooter,
   PreviewButton as LightboxToolbarButton,
-  PreviewScrim,
-  previewPanelSize,
 } from './PreviewChrome';
 import { previewAdjacentIndex, previewSourceName } from '@cindy/maker-shared/attachment-preview';
 import { Z_INDEX_LAYERS } from '@/styles/generated/token-mappings';
@@ -151,6 +179,114 @@ const DRAG_CLICK_SUPPRESS_PX = 4;
 const FIT_VIEWPORT: LightboxViewport = { scale: 1, tx: 0, ty: 0 };
 
 const log = createLogger('ImageLightbox');
+
+/** 新文案用稳定 key + 内联默认值,多语由 LQA 后续补齐。 */
+const DOCK_ACTIONS = [
+  {
+    mode: 'left',
+    key: 'chat.lightbox.dockLeft',
+    defaultValue: 'Dock preview left',
+    Icon: PanelLeft,
+  },
+  {
+    mode: 'right',
+    key: 'chat.lightbox.dockRight',
+    defaultValue: 'Dock preview right',
+    Icon: PanelRight,
+  },
+  {
+    mode: 'center',
+    key: 'chat.lightbox.expandPreview',
+    defaultValue: 'Expand preview',
+    Icon: Maximize2,
+  },
+] as const satisfies ReadonlyArray<{
+  mode: PreviewDockMode;
+  key: string;
+  defaultValue: string;
+  Icon: typeof PanelLeft;
+}>;
+
+function ImagePreviewWindowActions({
+  mode,
+  onDock,
+}: {
+  mode: PreviewWindowMode;
+  onDock: (mode: PreviewDockMode) => void;
+}) {
+  const { t } = useTranslation();
+  return (
+    <>
+      {DOCK_ACTIONS.map(({ mode: actionMode, key, defaultValue, Icon }) => {
+        const label = t(key, { defaultValue });
+        const active = mode === actionMode;
+        return (
+          <Tip key={key} text={label}>
+            <Button
+              type="button"
+              size="md"
+              variant={active ? 'primary' : 'secondary'}
+              tone={active ? 'default' : 'quiet'}
+              aria-label={label}
+              aria-pressed={active}
+              data-preview-dock={actionMode}
+              className="w-8 px-0"
+              style={WINDOW_NO_DRAG_STYLE}
+              onClick={() => onDock(actionMode)}
+            >
+              <Icon className="h-4 w-4" />
+            </Button>
+          </Tip>
+        );
+      })}
+    </>
+  );
+}
+
+function ImagePreviewResizeHandle({
+  onResizeStart,
+}: {
+  onResizeStart: (
+    clientX: number,
+    clientY: number,
+    pointerId: number,
+    direction: PreviewResizeDirection,
+    target: EventTarget | null,
+  ) => void;
+}) {
+  return (
+    // biome-ignore lint/a11y/noStaticElementInteractions: 仅承接调整浮窗尺寸的指针手势;键盘用户用停靠按钮。
+    <div
+      aria-hidden
+      data-preview-resize-handle="se"
+      style={{
+        position: 'absolute',
+        right: 0,
+        bottom: 0,
+        zIndex: 20,
+        width: 20,
+        height: 20,
+        display: 'flex',
+        alignItems: 'flex-end',
+        justifyContent: 'flex-end',
+        padding: 2,
+        color: 'var(--text-tertiary)',
+        cursor: 'nwse-resize',
+        touchAction: 'none',
+        ...WINDOW_NO_DRAG_STYLE,
+      }}
+      onPointerDown={(event) => {
+        if (event.button !== 0) return;
+        event.preventDefault();
+        event.stopPropagation();
+        onResizeStart(event.clientX, event.clientY, event.pointerId, 'se', event.currentTarget);
+      }}
+      onClick={(event) => event.stopPropagation()}
+    >
+      <Grip className="h-3 w-3" />
+    </div>
+  );
+}
 
 /** 标注层与图片盒严格同尺寸;事件由 transform 容器接管。 */
 const ANNOTATION_OVERLAY_STYLE: React.CSSProperties = {
@@ -185,6 +321,16 @@ function isSpacePanExemptTarget(target: EventTarget | null): boolean {
     target instanceof Element &&
     target.closest('button, a[href], [role="button"], [role="menuitem"], [role="checkbox"]') !==
       null
+  );
+}
+
+/** 标题栏的按钮、菜单与文件名区域:只有非交互区才启动"拖整个预览窗"。 */
+function isPreviewHeaderInteractiveTarget(target: EventTarget | null): boolean {
+  return (
+    target instanceof Element &&
+    target.closest(
+      'button, a[href], input, textarea, select, [role="button"], [role="menuitem"], [data-preview-drag-handle-ignore]',
+    ) !== null
   );
 }
 
@@ -234,6 +380,8 @@ interface ImageLightboxProps {
    */
   annotationEdit?: {
     initialStrokes?: readonly AnnotationStroke[];
+    /** 每笔提交、撤销、重做或放弃都先写回附件草稿;发送/清空托盘不会只剩浮窗里的笔迹。 */
+    onDraftChange?: (result: { strokes: AnnotationStroke[] }) => void;
     /** 保存 = 只回传矢量笔迹(空数组 = 撤光恢复原图)。惰性烧录:位图在
      *  发送消息时才由 materializeAnnotatedAttachmentsForSend 统一生成。 */
     onSave: (result: { strokes: AnnotationStroke[] }) => void | Promise<void>;
@@ -254,6 +402,61 @@ interface ImageLightboxProps {
    * 这类"光栅化后直奔涂画"的入口用它省一次点击;默认 false 不影响既有场景。
    */
   autoAnnotate?: boolean;
+  /** When the attachment owner cannot accept updates, the preview must stay read-only. */
+  annotationDisabled?: boolean;
+  /** Stable attachment ID used to select the initial item in a collection. */
+  initialItemId?: string;
+  /** Called when a source-retarget leave is rejected; hosts must restore their request to the displayed source snapshot. */
+  onSourceChangeCancelled?: (displayed: ImageSourceSnapshot) => void;
+}
+
+/** Source fields frozen until the mounted content accepts them. */
+export type ImageSourceSnapshot = Omit<
+  ImageLightboxProps,
+  'onClose' | 'onSourceChangeCancelled' | 'initialItemId'
+>;
+
+function sourceSnapshotFromProps({
+  onClose,
+  onSourceChangeCancelled,
+  initialItemId,
+  ...source
+}: ImageLightboxProps): ImageSourceSnapshot {
+  void onClose;
+  void onSourceChangeCancelled;
+  void initialItemId;
+  return source;
+}
+
+/** Immutable host identity only; draft strokes are owned by the mounted content. */
+function imageSourceKey(source: ImageSourceSnapshot): string {
+  return JSON.stringify([
+    source.src,
+    source.sessionId ?? null,
+    source.filename ?? null,
+    source.galleryId ?? null,
+    source.galleryTarget ?? null,
+    source.galleryOccurrence ?? null,
+    source.enableGallery ?? false,
+    source.annotationFallbackSrc ?? null,
+    source.autoAnnotate ?? false,
+  ]);
+}
+
+/** Single projection used by hosts to restore the displayed source identity after a rejected retarget. */
+export function imageSourceSnapshotFields(displayed: ImageSourceSnapshot) {
+  return {
+    src: displayed.src,
+    sessionId: displayed.sessionId,
+    filename: displayed.filename,
+    galleryId: displayed.galleryId,
+    galleryTarget: displayed.galleryTarget,
+    galleryOccurrence: displayed.galleryOccurrence,
+    enableGallery: displayed.enableGallery,
+    annotationFallbackSrc: displayed.annotationFallbackSrc,
+    autoAnnotate: displayed.autoAnnotate,
+    annotationDisabled: displayed.annotationDisabled,
+  };
 }
 
 /** `xdt-file://local/?path=<enc>` → 绝对路径;非该 scheme 或解析失败返回 null。 */
@@ -345,37 +548,237 @@ function useGalleryImageSrc(item: GalleryImage): { src: string; revision: number
   return { src: workspace.address(resolved.src) ?? item.src, revision };
 }
 
-/** 左右翻页圆形按钮的内联样式。lightbox overlay 不走 Tailwind,这里同样用内联。 */
+/** The mounted content owns unsaved annotation state; every source switch goes through it. */
+type ImageLightboxContentProps = Omit<ImageLightboxProps, 'onSourceChangeCancelled'> & {
+  leaveGuardRef?: { current: PreviewLeaveGuard | null };
+  onLeaveSettled?: () => void;
+  pendingSourceRef?: { current: ImageSourceSnapshot | null };
+};
+
+/**
+ * A host can retarget an already-mounted preview (Markdown editor, file tree).
+ * The source shown by the content is the single owner of that state: a new
+ * request is held until the content's leave guard has settled, then the content
+ * remounts with the accepted source so gallery, actions and annotations agree.
+ */
 export function ImageLightbox(props: ImageLightboxProps) {
-  const items = useOpeningCollection(props.annotationFallbackSrc ?? props.src);
+  const requestedSourceRef = useRef(sourceSnapshotFromProps(props));
+  requestedSourceRef.current = sourceSnapshotFromProps(props);
+  const requestedKey = imageSourceKey(requestedSourceRef.current);
+  const [activeSource, setActiveSource] = useState(() => sourceSnapshotFromProps(props));
+  const activeSourceRef = useRef(activeSource);
+  const pendingSourceRef = useRef<ImageSourceSnapshot | null>(null);
+  const sourceGuardInFlightRef = useRef(false);
+  const settleSourceRef = useRef<(() => void) | null>(null);
+  const sourceSettlementTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const requestSettleAfterLeave = useCallback(() => {
+    settleSourceRef.current?.();
+  }, []);
+  const contentLeaveGuardRef = useRef<PreviewLeaveGuard | null>(null);
+  const collectionLeaveGuardRef = useRef<PreviewLeaveGuard | null>(null);
+  const liveCollection = useContext(AttachmentCollectionContext);
   const sessionImages = useContext(ImageGalleryContext);
-  const scope = useContext(ImageGalleryScopeContext);
+  const galleryScope = useContext(ImageGalleryScopeContext);
   // A task image browses every loaded image, across turns. The message's own
   // attachment list still serves files and videos opened from that message.
-  // Even a task with a single image keeps to the task collection (no navigation),
-  // so the image never steps into its message's files.
   // Decided once: a reply finishing while the viewer is open must not swap the
-  // viewer (and drop zoom or an unsaved annotation).
+  // viewer into a different collection (and drop zoom or an unsaved annotation).
   const [browsesSession] = useState(
     () =>
-      props.enableGallery === true &&
+      activeSource.enableGallery === true &&
       galleryOpeningIndex(sessionImages, {
-        src: props.annotationFallbackSrc ?? props.src,
-        galleryId: props.galleryId,
-        target: props.galleryTarget,
-        occurrence: props.galleryOccurrence,
-        scope,
+        src: activeSource.annotationFallbackSrc ?? activeSource.src,
+        galleryId: activeSource.galleryId,
+        target: activeSource.galleryTarget,
+        occurrence: activeSource.galleryOccurrence,
+        scope: galleryScope,
       }) >= 0,
   );
+  const [openingCollection] = useState<readonly AttachmentCollectionItem[] | null>(() => {
+    const openingSource = activeSource.annotationFallbackSrc ?? activeSource.src;
+    return liveCollection &&
+      liveCollection.length > 1 &&
+      liveCollection.some((item) => item.source === openingSource)
+      ? liveCollection
+      : null;
+  });
+  const items: readonly AttachmentCollectionItem[] | null = useMemo(() => {
+    if (!openingCollection) return null;
+    return openingCollection.map((item): AttachmentCollectionItem => {
+      const live = liveCollection?.find((next) => next.id === item.id);
+      return live ? normalizedLiveCollectionItem({ ...item, image: live.image }) : item;
+    });
+  }, [openingCollection, liveCollection]);
+  const activeLeaveGuardRef = items ? collectionLeaveGuardRef : contentLeaveGuardRef;
+  const [sourceToken, setSourceToken] = useState(0);
+  const onSourceChangeCancelledRef = useRef(props.onSourceChangeCancelled);
+  onSourceChangeCancelledRef.current = props.onSourceChangeCancelled;
+  useEffect(
+    () => () => {
+      if (sourceSettlementTimerRef.current) clearTimeout(sourceSettlementTimerRef.current);
+    },
+    [],
+  );
+  useEffect(() => {
+    let disposed = false;
+    const scheduleSettle = () => {
+      if (sourceSettlementTimerRef.current) clearTimeout(sourceSettlementTimerRef.current);
+      sourceSettlementTimerRef.current = setTimeout(() => {
+        sourceSettlementTimerRef.current = null;
+        settleSourceRef.current?.();
+      }, 0);
+    };
+    const applySource = (next: ImageSourceSnapshot) => {
+      pendingSourceRef.current = null;
+      if (imageSourceKey(next) === imageSourceKey(activeSourceRef.current)) return;
+      activeSourceRef.current = next;
+      setActiveSource(next);
+      setSourceToken((token) => token + 1);
+    };
+    const settle = () => {
+      if (disposed) return;
+      const requested = requestedSourceRef.current;
+      pendingSourceRef.current = requested;
+      if (sourceGuardInFlightRef.current) return;
+      if (imageSourceKey(requested) === imageSourceKey(activeSourceRef.current)) {
+        pendingSourceRef.current = null;
+        return;
+      }
+      const leave = () => {
+        applySource(requestedSourceRef.current);
+      };
+      const guard = activeLeaveGuardRef.current;
+      if (!guard) {
+        leave();
+        return;
+      }
+      sourceGuardInFlightRef.current = true;
+      void guard(leave).then((outcome) => {
+        sourceGuardInFlightRef.current = false;
+        if (disposed) {
+          scheduleSettle();
+          return;
+        }
+        if (outcome === 'applied') {
+          if (pendingSourceRef.current) scheduleSettle();
+          return;
+        }
+        // A busy guard belongs to an independent leave operation. That
+        // operation calls requestSettleAfterLeave when its confirm lock clears;
+        // retrying here would only guess at its lifecycle.
+        if (outcome === 'busy') return;
+        pendingSourceRef.current = null;
+        onSourceChangeCancelledRef.current?.(activeSourceRef.current);
+      });
+    };
+    settleSourceRef.current = settle;
+    settle();
+    return () => {
+      disposed = true;
+      if (settleSourceRef.current === settle) settleSourceRef.current = null;
+    };
+  }, [requestedKey, activeLeaveGuardRef]);
+
+  const annotationDisabled = Boolean(requestedSourceRef.current.annotationDisabled);
+  const latestAnnotationEdit = requestedSourceRef.current.annotationEdit;
+  // The accepted source owns the stroke baseline; the current host owns the
+  // capability and callbacks. A composer lock may lift while this source is
+  // still mounted, so don't freeze a missing annotationEdit into the source.
+  const acceptedAnnotationEdit = activeSource.annotationEdit ?? latestAnnotationEdit;
+  const contentProps: ImageLightboxContentProps = {
+    ...activeSource,
+    onClose: props.onClose,
+    onLeaveSettled: requestSettleAfterLeave,
+    pendingSourceRef,
+    annotationDisabled,
+    initialStrokes: activeSource.initialStrokes ?? acceptedAnnotationEdit?.initialStrokes,
+    annotationEdit:
+      !annotationDisabled && acceptedAnnotationEdit
+        ? {
+            ...acceptedAnnotationEdit,
+            initialStrokes:
+              activeSource.annotationEdit?.initialStrokes ??
+              activeSource.initialStrokes ??
+              acceptedAnnotationEdit.initialStrokes,
+            onDraftChange:
+              latestAnnotationEdit?.onDraftChange ??
+              acceptedAnnotationEdit.onDraftChange,
+            onSave:
+              latestAnnotationEdit?.onSave ??
+              acceptedAnnotationEdit.onSave,
+          }
+        : undefined,
+  };
+  const mergeCollectionImageProps = (
+    imageProps: CollectionImageProps | undefined,
+  ): ImageLightboxContentProps => {
+    const collectionAnnotationDisabled = Boolean(
+      annotationDisabled || imageProps?.annotationDisabled,
+    );
+    // A live collection item owns its draft. Once it exists, a missing strokes
+    // field means the attachment was cleared to [], never "use the frozen
+    // opening baseline".
+    const hasLiveImageProps = imageProps !== undefined;
+    const baseAnnotationEdit = hasLiveImageProps ? undefined : contentProps.annotationEdit;
+    const collectionAnnotationEdit = imageProps?.annotationEdit;
+    const annotationEditSource =
+      collectionAnnotationEdit ?? baseAnnotationEdit ?? latestAnnotationEdit;
+    const liveInitialStrokes = hasLiveImageProps
+      ? imageProps.initialStrokes ?? collectionAnnotationEdit?.initialStrokes ?? []
+      : undefined;
+    const annotationEdit =
+      !collectionAnnotationDisabled && annotationEditSource
+        ? {
+            ...(baseAnnotationEdit ?? {}),
+            ...(collectionAnnotationEdit ?? {}),
+            ...(latestAnnotationEdit ?? {}),
+            initialStrokes:
+              liveInitialStrokes ??
+              baseAnnotationEdit?.initialStrokes ??
+              latestAnnotationEdit?.initialStrokes,
+            onDraftChange:
+              collectionAnnotationEdit?.onDraftChange ??
+              latestAnnotationEdit?.onDraftChange ??
+              baseAnnotationEdit?.onDraftChange,
+            onSave:
+              collectionAnnotationEdit?.onSave ??
+              latestAnnotationEdit?.onSave ??
+              baseAnnotationEdit?.onSave,
+          }
+        : undefined;
+    return {
+      ...contentProps,
+      ...imageProps,
+      onLeaveSettled: requestSettleAfterLeave,
+      pendingSourceRef,
+      annotationDisabled: collectionAnnotationDisabled,
+      initialStrokes: liveInitialStrokes ?? contentProps.initialStrokes,
+      annotationEdit,
+    } as ImageLightboxContentProps;
+  };
+  const contentKey = `${sourceToken}:${imageSourceKey(activeSource)}`;
   return items && !browsesSession ? (
     <AttachmentCollectionPreview
+      key={contentKey}
       items={items}
-      source={props.annotationFallbackSrc ?? props.src}
+      source={activeSource.annotationFallbackSrc ?? activeSource.src}
+      initialItemId={props.initialItemId}
       onClose={props.onClose}
-      initial={<ImageLightboxContent {...props} enableGallery={false} />}
+      leaveGuardRef={collectionLeaveGuardRef}
+      initial={(imageProps) => (
+        <ImageLightboxContent
+          key={contentKey}
+          {...mergeCollectionImageProps(imageProps)}
+          enableGallery={false}
+        />
+      )}
     />
   ) : (
-    <ImageLightboxContent {...props} />
+    <ImageLightboxContent
+      key={contentKey}
+      {...contentProps}
+      leaveGuardRef={contentLeaveGuardRef}
+    />
   );
 }
 
@@ -392,7 +795,11 @@ function ImageLightboxContent({
   initialStrokes,
   annotationFallbackSrc,
   autoAnnotate = false,
-}: ImageLightboxProps) {
+  annotationDisabled = false,
+  leaveGuardRef,
+  onLeaveSettled,
+  pendingSourceRef,
+}: ImageLightboxContentProps) {
   const { t } = useTranslation();
   // 会话全量图片列表(MessageStream 下发);非聊天场景无 Provider 时为 null。
   const restorePreviewFocus = usePreviewFocusReturn();
@@ -489,12 +896,41 @@ function ImageLightboxContent({
   const dragStartRef = useRef<{ x: number; y: number; tx: number; ty: number } | null>(null);
   // 本次按下-抬起手势是否发生过超阈值位移;为真时抑制随后的 overlay click 关闭。
   const dragMovedRef = useRef(false);
+  // 拖/调整浮窗松手后的 click 可能落在空白背景上;复用同一标记避免误关。
+  const suppressPanelGestureClick = useCallback(() => {
+    dragMovedRef.current = true;
+    setTimeout(() => {
+      dragMovedRef.current = false;
+    }, 0);
+  }, []);
+  const {
+    rect: panelRect,
+    mode: panelMode,
+    dock,
+    startDrag,
+    startResize,
+  } = useImagePreviewWindow({ onGestureEnd: suppressPanelGestureClick });
+  const focusPreviewPanel = useCallback(() => {
+    const panel = overlayRef.current;
+    if (!panel) return;
+    activateLightboxLayer(panel);
+    if (!panel.contains(document.activeElement)) panel.focus({ preventScroll: true });
+  }, []);
+  const handleHeaderPointerDown = useCallback(
+    (event: React.PointerEvent<HTMLElement>) => {
+      if (event.button !== 0 || isPreviewHeaderInteractiveTarget(event.target)) return;
+      event.preventDefault();
+      focusPreviewPanel();
+      startDrag(event.clientX, event.clientY, event.pointerId, event.currentTarget);
+    },
+    [focusPreviewPanel, startDrag],
+  );
   const isWheelingRef = useRef(false);
   const wheelIdleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // ---- 标注模式状态(鼠标当笔圈点) ----
   // autoAnnotate 只作初值:打开即进标注,退出/放弃后的行为与手动进入一致。
-  const [isAnnotating, setIsAnnotating] = useState(autoAnnotate);
+  const [isAnnotating, setIsAnnotating] = useState(!annotationDisabled && autoAnnotate);
   // 当前图打开时的基线笔迹:放弃标注(X / Esc)恢复到这里而非一律清空——
   // 画廊翻到持久化标注图后,基线是该图的持久化笔迹。翻页 effect 同步更新。
   const baselineStrokesRef = useRef<readonly AnnotationStroke[]>(
@@ -532,15 +968,27 @@ function ImageLightboxContent({
   const [naturalSize, setNaturalSize] = useState<{ src: string; w: number; h: number } | null>(
     null,
   );
-  const [viewportSize, setViewportSize] = useState(() =>
-    previewPanelSize({ width: window.innerWidth, height: window.innerHeight }),
-  );
+  // 图片适配尺寸跟随浮窗实际矩形;拖动、调整尺寸、贴边、窗口缩放都会重算。
+  const viewportSize = { width: panelRect.width, height: panelRect.height };
   const imgRef = useRef<HTMLImageElement>(null);
   // once-bound keydown handler 需要读到最新标注态,与 viewportRef 同一模式。
   const isAnnotatingRef = useRef(false);
+  const annotationDisabledRef = useRef(false);
+  const annotationEditRef = useRef(annotationEdit);
   const strokesRef = useRef<AnnotationStroke[]>([]);
   isAnnotatingRef.current = isAnnotating;
+  annotationDisabledRef.current = annotationDisabled;
+  annotationEditRef.current = annotationEdit;
   strokesRef.current = strokes;
+
+  // A background voice/send lock can arrive while the preview is open. Leave
+  // annotation mode immediately so no in-flight stroke can be saved into a
+  // no-op attachment callback.
+  useEffect(() => {
+    if (!annotationDisabled) return;
+    setIsAnnotating(false);
+    resetDraftStroke();
+  }, [annotationDisabled]);
 
   // 退出标注模式时复位 Space 平移修饰(keyup 可能落在模式切换之后)。
   useEffect(() => {
@@ -548,14 +996,6 @@ function ImageLightboxContent({
     spaceHeldRef.current = false;
     setSpaceHeld(false);
   }, [isAnnotating]);
-
-  useEffect(() => {
-    const updateViewportSize = () => {
-      setViewportSize(previewPanelSize({ width: window.innerWidth, height: window.innerHeight }));
-    };
-    window.addEventListener('resize', updateViewportSize);
-    return () => window.removeEventListener('resize', updateViewportSize);
-  }, []);
 
   // index 变化后的 effect 会在 commit 后清空状态；渲染阶段先按 src 校验，
   // 避免新图首帧沿用上一张图的宽高比（标注坐标也必须遵守同一约束）。
@@ -568,25 +1008,31 @@ function ImageLightboxContent({
       )
     : null;
 
-  /** 同步更新 ref 与 state:连续快捷键(按键连发)在重渲染前也读到最新笔迹。 */
-  const replaceStrokes = useCallback((next: AnnotationStroke[]) => {
+  /** Single writer for viewer strokes and the owning attachment draft. */
+  const syncAnnotationDraft = useCallback((next: AnnotationStroke[]) => {
     strokesRef.current = next;
     setStrokes(next);
+    if (annotationDisabledRef.current) return;
+    annotationEditRef.current?.onDraftChange?.({
+      strokes: next.map((stroke) => ({ points: [...stroke.points] })),
+    });
   }, []);
+  const syncAnnotationDraftRef = useRef(syncAnnotationDraft);
+  syncAnnotationDraftRef.current = syncAnnotationDraft;
 
   const undoLastStroke = useCallback(() => {
     const current = strokesRef.current;
     if (current.length === 0) return;
     setRedoStack([...redoStackRef.current, current[current.length - 1]]);
-    replaceStrokes(current.slice(0, -1));
-  }, [replaceStrokes, setRedoStack]);
+    syncAnnotationDraftRef.current(current.slice(0, -1));
+  }, [setRedoStack]);
 
   const redoStroke = useCallback(() => {
     const redo = redoStackRef.current;
     if (redo.length === 0) return;
     setRedoStack(redo.slice(0, -1));
-    replaceStrokes([...strokesRef.current, redo[redo.length - 1]]);
-  }, [replaceStrokes, setRedoStack]);
+    syncAnnotationDraftRef.current([...strokesRef.current, redo[redo.length - 1]]);
+  }, [setRedoStack]);
 
   /**
    * 放弃标注:恢复到打开时的笔迹(编辑模式=上次保存的;发送模式=空)并退出
@@ -603,8 +1049,20 @@ function ImageLightboxContent({
     }
     resetDraftStroke();
     setRedoStack([]);
-    replaceStrokes([...baselineStrokesRef.current]);
+    syncAnnotationDraftRef.current([...baselineStrokesRef.current]);
     setIsAnnotating(false);
+  };
+  // The once-bound keydown handler reads the current annotation writer through
+  // this ref, so a late capability unlock cannot use the locked first frame.
+  const annotationWriterRef = useRef({
+    undo: undoLastStroke,
+    redo: redoStroke,
+    discard: performDiscardAnnotation,
+  });
+  annotationWriterRef.current = {
+    undo: undoLastStroke,
+    redo: redoStroke,
+    discard: performDiscardAnnotation,
   };
 
   /**
@@ -628,7 +1086,7 @@ function ImageLightboxContent({
   const discardAnnotation = async (): Promise<void> => {
     if (confirmPendingRef.current) return;
     if (!confirmDialog || !hasUnsavedStrokeChanges()) {
-      performDiscardAnnotation();
+      annotationWriterRef.current.discard();
       return;
     }
     confirmPendingRef.current = true;
@@ -646,23 +1104,28 @@ function ImageLightboxContent({
       // 两个监听之间清空),立即解除会让本组件的 keydown 再放弃一次。
       setTimeout(() => {
         confirmPendingRef.current = false;
+        onLeaveSettled?.();
       }, 0);
     }
-    if (confirmed && mountedRef.current) performDiscardAnnotation();
+    if (confirmed && mountedRef.current) annotationWriterRef.current.discard();
   };
   // once-bound keydown handler 通过 ref 调用最新的放弃逻辑(依赖 confirmDialog 等
   // 每次渲染的值)。
   const activeCollection = useContext(ActivePreviewCollection);
-  const requestClose = async (leave = handleClose) => {
-    if (confirmPendingRef.current) return;
-    if (!hasUnsavedStrokeChanges()) {
+  /** Single leave guard for close, collection switch, source retarget and unmount. */
+  const requestClose = async (leave = handleClose): Promise<PreviewLeaveOutcome> => {
+    if (confirmPendingRef.current) return 'busy';
+    const unsaved = hasUnsavedStrokeChanges();
+    if (!unsaved) {
       leave();
-      return;
+      return 'applied';
     }
-    if (!confirmDialog) return;
+    if (annotationDisabledRef.current || !confirmDialog) return 'cancelled';
     confirmPendingRef.current = true;
     try {
-      const canSave = Boolean(annotationEdit || chatSessionId);
+      const canSave =
+        !annotationDisabledRef.current &&
+        Boolean(annotationEditRef.current || chatSessionId);
       const choice = canSave
         ? await confirmDialog.confirmThree({
             title: t('chat.media.annotateDiscardConfirmTitle'),
@@ -678,25 +1141,50 @@ function ImageLightboxContent({
             }))
           ? 'tertiary'
           : 'cancel';
-      if (!mountedRef.current) return;
-      if (choice === 'tertiary') leave();
-      if (choice === 'confirm') {
-        if (annotationEdit) await handleAnnotationSave(leave);
-        else await handleSendToChat(leave);
+      if (!mountedRef.current) return 'cancelled';
+      if (choice === 'tertiary') {
+        syncAnnotationDraftRef.current([...baselineStrokesRef.current]);
+        leave();
+        return 'applied';
       }
+      if (choice === 'confirm') {
+        if (annotationDisabledRef.current) return 'cancelled';
+        const saved = annotationEditRef.current
+          ? await handleAnnotationSave(leave)
+          : await handleSendToChat(leave);
+        return saved ? 'applied' : 'cancelled';
+      }
+      return 'cancelled';
     } finally {
       setTimeout(() => {
         confirmPendingRef.current = false;
+        onLeaveSettled?.();
       }, 0);
     }
   };
   const requestCloseRef = useRef(requestClose);
   requestCloseRef.current = requestClose;
   useEffect(() => {
-    if (!activeCollection) return;
-    activeCollection.beforeLeave.current = (leave) => {
-      void requestCloseRef.current(leave);
+    const scope = activeCollection?.scopeRef;
+    const panel = overlayRef.current;
+    if (!scope || !panel) return;
+    scope.current = panel;
+    // React clears the ref before passive-effect cleanup. Compare with the
+    // captured node so a mixed collection never keeps a removed image panel.
+    return () => {
+      if (scope.current === panel) scope.current = null;
     };
+  }, [activeCollection?.scopeRef]);
+  useEffect(() => {
+    if (!leaveGuardRef) return;
+    leaveGuardRef.current = (leave) => requestCloseRef.current(leave);
+    return () => {
+      leaveGuardRef.current = null;
+    };
+  }, [leaveGuardRef]);
+  useEffect(() => {
+    if (!activeCollection) return;
+    activeCollection.beforeLeave.current = (leave) => requestCloseRef.current(leave);
     return () => {
       activeCollection.beforeLeave.current = null;
     };
@@ -769,7 +1257,7 @@ function ImageLightboxContent({
     );
     resetDraftStroke();
     setRedoStack([]);
-    replaceStrokes([...baselineStrokesRef.current]);
+    syncAnnotationDraftRef.current([...baselineStrokesRef.current]);
     setNaturalSize(null);
     // biome-ignore lint/correctness/useExhaustiveDependencies: galleryItems 挂载时固定。
   }, [index, resetViewport]);
@@ -785,6 +1273,7 @@ function ImageLightboxContent({
     const trackWheelSource = createWheelSourceTracker();
     const onWheel = (e: globalThis.WheelEvent) => {
       e.preventDefault();
+      focusPreviewPanel();
       const current = viewportRef.current;
       const source =
         e.ctrlKey || e.metaKey
@@ -832,7 +1321,7 @@ function ImageLightboxContent({
     };
     overlay.addEventListener('wheel', onWheel, { passive: false });
     return () => overlay.removeEventListener('wheel', onWheel);
-  }, [applyViewport, markWheeling]);
+  }, [applyViewport, focusPreviewPanel, markWheeling]);
 
   /** 放大状态下开始拖拽平移(适配态没有可平移的范围,不响应)。 */
   function startPan(clientX: number, clientY: number) {
@@ -848,6 +1337,7 @@ function ImageLightboxContent({
     if (e.button !== 0) return;
     // preventDefault 同时抑制 <img> 的原生拖拽 ghost 与文字选区。
     e.preventDefault();
+    focusPreviewPanel();
     startPan(e.clientX, e.clientY);
   }
 
@@ -994,6 +1484,8 @@ function ImageLightboxContent({
    * 抑制原生拖拽 ghost、文字选区;画笔由 pointer 事件负责(鼠标 / 触屏 / 笔统一)。
    */
   function handleAnnotateMouseDown(e: React.MouseEvent) {
+    if (annotationDisabled || (e.button !== 0 && e.button !== 1)) return;
+    focusPreviewPanel();
     if (e.button === 1 || (e.button === 0 && spaceHeldRef.current)) {
       // 中键 preventDefault 同时阻止 Windows / Linux 的中键自动滚动。
       e.preventDefault();
@@ -1005,7 +1497,8 @@ function ImageLightboxContent({
 
   /** 画笔起笔:仅主键(鼠标左键 / 触屏 / 笔尖接触),平移修饰键按住时不画。 */
   function handleAnnotatePointerDown(e: React.PointerEvent<HTMLDivElement>) {
-    if (e.button !== 0 || spaceHeldRef.current) return;
+    if (annotationDisabled || e.button !== 0 || spaceHeldRef.current) return;
+    focusPreviewPanel();
     // 多点触控:已有指针在画时忽略其它手指。
     if (drawingPointerIdRef.current !== null) return;
     const point = pointFromClient(e.clientX, e.clientY);
@@ -1023,7 +1516,7 @@ function ImageLightboxContent({
   }
 
   function handleAnnotatePointerMove(e: React.PointerEvent<HTMLDivElement>) {
-    if (e.pointerId !== drawingPointerIdRef.current) return;
+    if (annotationDisabled || e.pointerId !== drawingPointerIdRef.current) return;
     const draft = draftStrokeRef.current;
     if (!draft) return;
     const point = pointFromClient(e.clientX, e.clientY);
@@ -1035,7 +1528,7 @@ function ImageLightboxContent({
 
   /** 收笔(pointerup / 失去 capture 走这里,较长的 pointercancel 也经此提交;幂等)。 */
   function finishAnnotateStroke(e: React.PointerEvent<HTMLDivElement>) {
-    if (e.pointerId !== drawingPointerIdRef.current) return;
+    if (annotationDisabled || e.pointerId !== drawingPointerIdRef.current) return;
     const draft = draftStrokeRef.current;
     drawingPointerIdRef.current = null;
     draftStrokeRef.current = null;
@@ -1045,7 +1538,7 @@ function ImageLightboxContent({
     }
     if (draft && draft.points.length > 0) {
       setRedoStack([]);
-      replaceStrokes([...strokesRef.current, draft]);
+      syncAnnotationDraftRef.current([...strokesRef.current, draft]);
     } else {
       draftPathCacheRef.current = null;
       writeDraftPath('');
@@ -1058,7 +1551,7 @@ function ImageLightboxContent({
    * 多指打断共用。
    */
   function cancelAnnotateStroke(e: React.PointerEvent<HTMLDivElement>) {
-    if (e.pointerId !== drawingPointerIdRef.current) return;
+    if (annotationDisabled || e.pointerId !== drawingPointerIdRef.current) return;
     const draft = draftStrokeRef.current;
     const rect = imgRef.current?.getBoundingClientRect();
     if (
@@ -1087,26 +1580,38 @@ function ImageLightboxContent({
     return () => cancelAnimationFrame(raf);
   }, []);
 
-  // Esc 关闭；+/-/0 缩放;开启会话画廊时用 ←/→ 翻图。
+  // Esc 由最上层浮窗消费一次;+/-/0 缩放;开启会话画廊时用 ←/→ 翻图。
   // biome-ignore lint/correctness/useExhaustiveDependencies: galleryItems 在挂载时固定；这里只订阅一次全局键盘事件，避免反复绑定 DOM listener。
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       // 放弃确认框打开期间,按键归确认框(含关闭它的那次 Esc)。
       if (confirmPendingRef.current || e.defaultPrevented || isEditableKeyboardTarget(e.target)) return;
+      // Portaled Radix menus own their keyboard work; do not turn menu
+      // arrows/Enter into image shortcuts or a second Escape close.
+      if (e.target instanceof Element && e.target.closest('[role="menu"]')) return;
+      const annotationShortcutsEnabled =
+        !annotationDisabledRef.current && isAnnotatingRef.current;
       if (e.key === 'Escape') {
+        const overlay = overlayRef.current;
+        if (!overlay || isLightboxCovered(overlay)) return;
         if (performance.now() - lastMenuCloseAt.current < 150) return;
+        // One Escape is consumed by the foreground preview only. Other mounted
+        // image previews observe defaultPrevented below and stay open.
+        e.preventDefault();
         // 标注模式中 Esc = 放弃标注(清笔迹退出),再按一次才关 lightbox。
-        if (isAnnotatingRef.current) {
-          if (!hasUnsavedStrokeChanges()) performDiscardAnnotation();
+        if (annotationShortcutsEnabled) {
+          if (!hasUnsavedStrokeChanges()) annotationWriterRef.current.discard();
           else void requestCloseRef.current();
           return;
         }
         handleClose();
         return;
       }
+      // 非模态:焦点已经移到背景对话时,缩放/翻页/标注快捷键不能抢走键盘。
+      if (!lightboxOwnsShortcutTarget(e.target, overlayRef.current)) return;
       // 标注模式按住 Space = 平移修饰键(焦点在输入 / 按钮类控件上时让位)。
       if (e.code === 'Space' || e.key === ' ') {
-        if (isAnnotatingRef.current && !isSpacePanExemptTarget(e.target)) {
+        if (annotationShortcutsEnabled && !isSpacePanExemptTarget(e.target)) {
           e.preventDefault();
           if (!spaceHeldRef.current) {
             spaceHeldRef.current = true;
@@ -1117,14 +1622,14 @@ function ImageLightboxContent({
       }
       // 标注模式撤销 / 重做(在修饰键放行守卫之前拦截):⌘/Ctrl+Z 撤销,
       // ⇧⌘Z / Ctrl+Shift+Z 重做,非 mac 另支持 Ctrl+Y。
-      if (isAnnotatingRef.current && (e.metaKey || e.ctrlKey) && (e.key === 'z' || e.key === 'Z')) {
+      if (annotationShortcutsEnabled && (e.metaKey || e.ctrlKey) && (e.key === 'z' || e.key === 'Z')) {
         e.preventDefault();
-        if (e.shiftKey) redoStroke();
-        else undoLastStroke();
+        if (e.shiftKey) annotationWriterRef.current.redo();
+        else annotationWriterRef.current.undo();
         return;
       }
       if (
-        isAnnotatingRef.current &&
+        annotationShortcutsEnabled &&
         !isMacPlatform() &&
         e.ctrlKey &&
         !e.metaKey &&
@@ -1132,7 +1637,7 @@ function ImageLightboxContent({
         (e.key === 'y' || e.key === 'Y')
       ) {
         e.preventDefault();
-        redoStroke();
+        annotationWriterRef.current.redo();
         return;
       }
       // 步进缩放。zoomBy / resetViewport 只读写 ref + 稳定 setter,首帧闭包即终身有效。
@@ -1157,7 +1662,7 @@ function ImageLightboxContent({
       // 稳定的 galleryItems(useState 初始化后不变),所以空依赖 effect 不会拿到
       // 过期的下标。环形翻页,到头/到尾自动绕回。
       // 标注模式中禁用翻页(翻页会清空笔迹,误触代价高)。
-      if (isAnnotatingRef.current) return;
+      if (annotationShortcutsEnabled) return;
       if (galleryItems.length <= 1) return;
       if (e.key === 'ArrowRight') {
         e.preventDefault();
@@ -1194,20 +1699,13 @@ function ImageLightboxContent({
     // 订阅一次是有意为之——每次渲染重订阅会带来无谓的 DOM listener 抖动。
   }, []);
 
-  // 打开期间锁住聊天滚动容器。
-  useEffect(() => {
-    const container = document.querySelector('[data-scroll-container]') as HTMLElement | null;
-    if (container) container.style.overflowY = 'hidden';
-    return () => {
-      if (container) container.style.overflowY = '';
-    };
-  }, []);
-
   function handleClose() {
-    if (isClosingRef.current) return;
+    if (isClosingRef.current || pendingSourceRef?.current) return;
     isClosingRef.current = true;
     setIsVisible(false);
-    setTimeout(() => onClose(), 200);
+    setTimeout(() => {
+      if (mountedRef.current) onClose();
+    }, 200);
   }
 
   const { copyImage } = useImageClipboard(currentSrc);
@@ -1240,7 +1738,8 @@ function ImageLightboxContent({
   // 出口是保存,不要求会话。源条件 = 字节可达(五种来源全覆盖:http/remote
   // 经 main 取字节进 canvas,无 taint 问题)。
   const canAnnotate =
-    (annotationEdit ? true : canSendToChat) &&
+    !annotationDisabled &&
+    (annotationEditRef.current ? true : canSendToChat) &&
     naturalSize !== null &&
     isImageBytesReachable(currentSrc);
 
@@ -1312,8 +1811,8 @@ function ImageLightboxContent({
    * useAttachments(刷新托盘)与 ChatInput(重设文本并聚焦末尾——正好把焦点
    * 交还输入框,与手机版"回会话页聚焦 composer"一致)。成功后关闭 lightbox。
    */
-  async function handleSendToChat(afterSave = handleClose): Promise<void> {
-    if (!chatSessionId) return;
+  async function handleSendToChat(afterSave = handleClose): Promise<boolean> {
+    if (!chatSessionId) return false;
     setMenuPos(null);
     try {
       const strokes = strokesRef.current;
@@ -1437,9 +1936,12 @@ function ImageLightboxContent({
         { preserveRemoteOptimisticRecovery: true },
       );
       toast.success(t('chat.media.sentToChat'));
+      if (!mountedRef.current) return false;
       afterSave();
+      return true;
     } catch (err) {
       toast.error(extractIpcError(err)?.message ?? t('chat.media.sendToChatFailed'));
+      return false;
     }
   }
 
@@ -1447,19 +1949,24 @@ function ImageLightboxContent({
    * 编辑模式出口:把当前笔迹(可能为空——用户撤光了之前的编辑)交回调用方
    * 更新托盘附件。惰性烧录:这里不产位图,发送消息时统一物化。
    */
-  async function handleAnnotationSave(afterSave = handleClose): Promise<void> {
-    if (!annotationEdit) return;
+  async function handleAnnotationSave(afterSave = handleClose): Promise<boolean> {
+    const writer = annotationEditRef.current;
+    if (annotationDisabledRef.current || !writer) return false;
     try {
-      await annotationEdit.onSave({
+      await writer.onSave({
         strokes: strokesRef.current.map((stroke) => ({ points: [...stroke.points] })),
       });
+      if (!mountedRef.current) return false;
       afterSave();
+      return true;
     } catch (err) {
       toast.error(extractIpcError(err)?.message ?? t('chat.media.annotateSaveFailed'));
+      return false;
     }
   }
 
-  // 点预览窗外的遮罩与点窗内空白背景同一套守卫:菜单刚关、标注中、拖拽平移松手都不关。
+  // 只点预览窗内空白背景才关闭;菜单刚关、标注中、图片/浮窗拖拽松手都不关。
+  // 退出时仍走标注保存/放弃确认,和标题栏按钮、集合翻页、换图一致。
   const closeFromBackdrop = () => {
     if (performance.now() - lastMenuCloseAt.current < 150) return;
     if (isAnnotating) return;
@@ -1467,44 +1974,50 @@ function ImageLightboxContent({
       dragMovedRef.current = false;
       return;
     }
-    handleClose();
+    void requestClose();
   };
 
-  // 遮罩颜色走统一 token，不再按 Light / Dark 分支判断。
+  const panelStyle = {
+    position: 'fixed',
+    left: panelRect.x,
+    top: panelRect.y,
+    width: panelRect.width,
+    height: panelRect.height,
+    overflow: 'hidden',
+    zIndex: Z_INDEX_LAYERS.fullscreen,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    transition: 'opacity 200ms ease',
+    opacity: isVisible ? 1 : 0,
+    cursor: 'default',
+    '--preview-width': `${panelRect.width}px`,
+    '--preview-height': `${panelRect.height}px`,
+    ...WINDOW_NO_DRAG_STYLE,
+  } as React.CSSProperties;
+
   const overlay = (
-    // FocusScope(trapped+loop):键盘打开后焦点进入弹窗并圈禁在内,Tab 不再
-    // 穿过被遮挡的聊天控件。挂载焦点给 overlay 根(tabIndex=-1 由 FocusScope
-    // 合入,全局 outline:none 保证不闪全屏焦点框):Enter 不触发任何动作,
-    // Tab 依次到达工具栏/翻页按钮;卸载时 FocusScope 默认把焦点还给打开前
-    // 的元素(ChatImageView 键盘路径 = 预览触发器,与 onClose 里的显式恢复
-    // 指向同一元素)。
-    <>
-    <PreviewScrim onClose={closeFromBackdrop} />
+    // FocusScope 只负责打开时把焦点移入浮窗、卸载时还给触发器;trapped=false
+    // 让 Tab 能穿过非模态浮窗进入背景对话。
     <FocusScope
       onUnmountAutoFocus={restorePreviewFocus}
       asChild
-      trapped
-      loop
       onMountAutoFocus={(event) => {
         event.preventDefault();
-        overlayRef.current?.focus();
+        focusPreviewPanel();
       }}
     >
-    {/* biome-ignore lint/a11y/noStaticElementInteractions lint/a11y/useKeyWithClickEvents: 全屏 overlay 的键盘关闭由全局 Escape 处理；点击关闭是 lightbox 本身的交互。 */}
+    {/* biome-ignore lint/a11y/noStaticElementInteractions lint/a11y/useKeyWithClickEvents: 非模态浮窗的键盘关闭由全局 Escape 处理；点击空白背景关闭是 lightbox 本身的交互。 */}
     <div
       ref={overlayRef}
       data-lightbox-layer
+      data-preview-window-mode={panelMode}
+      role="dialog"
+      aria-modal={false}
+      tabIndex={-1}
+      aria-label={filename ?? t('attachmentPreview.image')}
       className={PREVIEW_PANEL_CLASS}
-      style={{
-        ...PREVIEW_PANEL_STYLE,
-        zIndex: Z_INDEX_LAYERS.fullscreen,
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        transition: 'opacity 200ms ease',
-        opacity: isVisible ? 1 : 0,
-        cursor: 'default',
-      }}
+      style={panelStyle}
       onClick={(e) => {
         // 右键菜单刚关闭、标注模式(防误触丢笔迹)、拖拽平移松手时都不关闭;
         // 只有点在空白背景上才关闭,点在图片(或其它子元素)上不关,给双击缩放让路。
@@ -1527,6 +2040,9 @@ function ImageLightboxContent({
             void requestClose();
           }}
           onSave={canSaveAs ? handleSaveAs : undefined}
+          actions={<ImagePreviewWindowActions mode={panelMode} onDock={dock} />}
+          isDraggable
+          onPointerDown={handleHeaderPointerDown}
           onMenuClose={() => {
             lastMenuCloseAt.current = performance.now();
           }}
@@ -1657,7 +2173,7 @@ function ImageLightboxContent({
               baselineStrokesRef.current = EMPTY_STROKES;
               resetDraftStroke();
               setRedoStack([]);
-              replaceStrokes([]);
+              syncAnnotationDraftRef.current([]);
               return;
             }
               setLoadFailed(currentLoad);
@@ -1842,8 +2358,16 @@ function ImageLightboxContent({
             <Redo2 className="h-4 w-4" />
           </LightboxToolbarButton>
           <LightboxToolbarButton
-              onClick={() => void (annotationEdit ? handleAnnotationSave() : handleSendToChat())}
-              label={t(annotationEdit ? 'chat.media.annotateSave' : 'chat.media.sendToChat')}
+              onClick={() =>
+                void (annotationEditRef.current
+                  ? handleAnnotationSave()
+                  : handleSendToChat())
+              }
+              label={t(
+                annotationEditRef.current
+                  ? 'chat.media.annotateSave'
+                  : 'chat.media.sendToChat',
+              )}
               keepPointerFocus
             >
               <Check className="h-4 w-4" />
@@ -1917,9 +2441,9 @@ function ImageLightboxContent({
         </>
       ) : null}
         </PreviewFooter>
+        <ImagePreviewResizeHandle onResizeStart={startResize} />
       </div>
     </FocusScope>
-    </>
   );
 
   return createPortal(overlay, document.body);

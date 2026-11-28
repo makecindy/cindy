@@ -112,7 +112,7 @@ import {
 } from './activityRowChrome';
 import { ImageGalleryContext, ImageGalleryScopeContext } from './ImageGalleryContext';
 import { AttachmentCollectionContext } from './AttachmentCollectionContext';
-import { ImageLightbox } from './ImageLightbox';
+import { ImageLightbox, imageSourceSnapshotFields } from './ImageLightbox';
 import { TextLightbox } from './lazyPreviewLightboxes';
 import { ToolPayloadLightbox, type ToolPayloadMode } from './ToolPayloadLightbox';
 import { useFilePreviewLightbox } from './FilePreviewLightboxHost';
@@ -804,10 +804,11 @@ export interface AgentActionRowProps {
   onActivateOverride?: () => void;
 }
 
+type ImageLightboxState = ReturnType<typeof imageSourceSnapshotFields> & { kind: 'image' };
 type LightboxState =
   | { kind: 'none' }
   | { kind: 'file'; path: string; name: string }
-  | { kind: 'image'; src: string }
+  | ImageLightboxState
   | { kind: 'payload'; payload: ToolPayloadMode };
 
 function fileChangeVerbKey(descriptor: FileChangeDescriptor): string {
@@ -1087,10 +1088,21 @@ export function AgentActionRow({
           toLocalFileUrl(absPath),
           toRemoteMediaOrigin(fileCtx.origin, fileCtx.workingDir),
         );
+        const imageSource = imageSourceSnapshotFields({
+          src,
+          sessionId: fileCtx.sessionId,
+        });
         if (previewHost) {
-          previewHost.open({ kind: 'image', sessionId: fileCtx.sessionId, src, images, scope, attachments, file: fileCtx });
+          previewHost.open({
+            kind: 'image',
+            ...imageSource,
+            file: fileCtx,
+            images,
+            scope,
+            attachments,
+          });
         } else {
-          setLightbox({ kind: 'image', src });
+          setLightbox({ kind: 'image', ...imageSource });
         }
       } else {
         if (!(await shouldOpenTextLightboxForOrigin(fileCtx, absPath))) return;
@@ -1374,7 +1386,19 @@ export function AgentActionRow({
           onClose={closeLightbox}
         />
       )}
-      {lightbox.kind === 'image' && <ImageLightbox src={lightbox.src} onClose={closeLightbox} />}
+      {lightbox.kind === 'image' && (
+        <ImageLightbox
+          {...imageSourceSnapshotFields(lightbox)}
+          onClose={closeLightbox}
+          onSourceChangeCancelled={(displayed) =>
+            setLightbox((current) =>
+              current.kind === 'image'
+                ? { kind: 'image', ...imageSourceSnapshotFields(displayed) }
+                : current,
+            )
+          }
+        />
+      )}
       {lightbox.kind === 'payload' && (
         <ToolPayloadLightbox
           payload={lightbox.payload}

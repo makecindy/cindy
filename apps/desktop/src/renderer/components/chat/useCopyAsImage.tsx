@@ -106,7 +106,12 @@ export function useCopyAsImage(getPayload: () => Promise<CopyAsImagePayload>): {
 
   const annotateNode =
     annotateUrl != null ? (
-      <ImageLightbox src={annotateUrl} autoAnnotate onClose={() => setAnnotateUrl(null)} />
+      <ImageLightbox
+        src={annotateUrl}
+        autoAnnotate
+        onClose={() => setAnnotateUrl(null)}
+        onSourceChangeCancelled={(displayed) => setAnnotateUrl(displayed.src)}
+      />
     ) : null;
 
   return {

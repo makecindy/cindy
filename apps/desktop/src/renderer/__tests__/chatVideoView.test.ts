@@ -2,7 +2,8 @@
 /** Tier 1: the message player now stays inline. Preserve keyboard access and
  * delegate native playback keys without reopening the superseded lightbox.
  * Native decoder/transport behavior is covered by the actual desktop acceptance;
- * this suite covers focus traversal and event ownership through the real view. */
+ * this suite covers focus traversal, event ownership and video/audio lightbox
+ * foreground registration through the real view. */
 import React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
@@ -14,6 +15,7 @@ vi.mock('react-i18next', () => ({
 vi.mock('@/hooks/useRemoteMediaUrl', () => ({ useRemoteMediaUrl: (url: string) => url }));
 
 import { ChatVideoView } from '../components/chat/ChatVideoView';
+import { VideoLightbox } from '../components/chat/VideoLightbox';
 import { Tooltip } from '@/components/ui/tooltip';
 import { __resetMediaBusForTests } from '@/lib/mediaPlaybackBus';
 
@@ -93,6 +95,30 @@ describe('ChatVideoView 加载失败', () => {
     view.rerender(video('xdt-file://local/?path=%2Ftask%2Ffilm%2Fclip.mp4'));
     expect(screen.queryByText('chat.media.videoUnavailable')).toBeNull();
     expect(view.container.querySelector('video')?.getAttribute('src')).toBe('xdt-file://local/?path=%2Ftask%2Ffilm%2Fclip.mp4');
+  });
+});
+
+describe('VideoLightbox foreground layer', () => {
+  beforeEach(() => {
+    vi.spyOn(HTMLMediaElement.prototype, 'pause').mockImplementation(() => {});
+    vi.spyOn(HTMLMediaElement.prototype, 'load').mockImplementation(() => {});
+  });
+  afterEach(() => {
+    cleanup();
+    vi.restoreAllMocks();
+  });
+
+  // Non-modal image previews use the last mounted data-lightbox-layer to yield
+  // Esc/shortcuts; video/audio must join the same foreground registry.
+  it.each(['video', 'audio'] as const)('registers the %s preview as a foreground layer', (kind) => {
+    render(
+      React.createElement(VideoLightbox, {
+        src: 'xdt-video://control/clip.mp4',
+        kind,
+        onClose: vi.fn(),
+      }),
+    );
+    expect(document.querySelector('[data-lightbox-layer]')).not.toBeNull();
   });
 });
 
