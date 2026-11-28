@@ -37,6 +37,8 @@ export interface FileBrowserState {
   previewHtmlPath?: string | null;
   /** Workdir-relative location retained across task switches and window handoff. */
   currentDirectory?: string;
+  /** 当前文件要锚定的 1-based 行号(聊天文件链接里带的行号)。 */
+  selectedFileLine?: number | null;
   /**
    * 一次性目录定位请求(聊天目录 chip → openDirInSidebarFileBrowser 写入):
    * FileBrowserBody 消费后即清空。hydrateState 必须透传(TabBody 渲染前 state
@@ -52,6 +54,8 @@ export interface FileBrowserState {
   revealFilePath?: string | null;
   /** 文件定位请求序号:同一文件重复打开也要重新触发 reveal。 */
   revealFileNonce?: number;
+  /** 文件定位请求携带的 1-based 行号;缺失表示不锚定。 */
+  revealFileLine?: number | null;
   /**
    * 一次性外部文件打开请求(聊天文件 chip 右键 → workdir 外本地文件):
    * FileBrowserBody 复用原生文件拖入链路消费，不把绝对路径挂进项目文件树。
@@ -63,6 +67,7 @@ export interface FileBrowserState {
 
 const DEFAULT_STATE: FileBrowserState = {
   selectedFilePath: null,
+  selectedFileLine: null,
 };
 
 /** TabPill 上的标题:有选中文件 → 显示 basename;否则 → 走 i18n "文件浏览器"。 */
@@ -111,6 +116,9 @@ const plugin: TabKindPlugin<FileBrowserState> = {
       selectedFilePath: typeof path === 'string' ? path : null,
       ...(typeof path === 'string' && obj.previewHtmlPath === path ? { previewHtmlPath: path } : {}),
       ...(typeof obj.currentDirectory === 'string' ? { currentDirectory: obj.currentDirectory } : {}),
+      ...(typeof obj.selectedFileLine === 'number' && obj.selectedFileLine > 0
+        ? { selectedFileLine: obj.selectedFileLine }
+        : {}),
       // 目录定位请求透传(见字段注释);形状不合法按"无请求"。
       ...(typeof obj.revealDirPath === 'string' && obj.revealDirPath
         ? { revealDirPath: obj.revealDirPath }
@@ -120,6 +128,9 @@ const plugin: TabKindPlugin<FileBrowserState> = {
         ? { revealFilePath: obj.revealFilePath }
         : {}),
       ...(typeof obj.revealFileNonce === 'number' ? { revealFileNonce: obj.revealFileNonce } : {}),
+      ...(typeof obj.revealFileLine === 'number' && obj.revealFileLine > 0
+        ? { revealFileLine: obj.revealFileLine }
+        : {}),
       ...(typeof obj.externalFilePath === 'string' && obj.externalFilePath
         ? { externalFilePath: obj.externalFilePath }
         : {}),

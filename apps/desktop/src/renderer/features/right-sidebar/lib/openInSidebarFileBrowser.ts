@@ -57,16 +57,19 @@ export async function openDirInSidebarFileBrowser(
   requestRightSidebarVisibility('open', { sessionId });
 }
 
-/** 在指定 session 的侧边栏文件浏览器里打开 workdir 相对文件,并确保侧边栏可见。 */
+/** 在指定 session 的侧边栏文件浏览器里打开 workdir 相对文件,并确保侧边栏可见。
+ * `line` 为聊天文件链接里显式的 1-based 行号,侧边栏预览会滚动到该行。 */
 export async function openFileInSidebarFileBrowser(
   sessionId: string,
   relFilePath: string,
+  line?: number,
 ): Promise<void> {
   const routeResult = await routeSidebarCommand({
     type: 'open-file-browser',
     sessionId,
     relPath: relFilePath,
     targetKind: 'file',
+    ...(line !== undefined ? { line } : {}),
   });
   if (routeResult !== 'attached') {
     if (routeResult !== 'routed') return;
@@ -87,13 +90,16 @@ export async function openFileInSidebarFileBrowser(
       return {
         ...base,
         revealFilePath: relFilePath,
+        revealFileLine: line ?? null,
         revealFileNonce: nonce + 1,
       };
     });
   } else {
     await addTab(sessionId, 'file-browser', {
       selectedFilePath: relFilePath,
+      selectedFileLine: line ?? null,
       revealFilePath: relFilePath,
+      revealFileLine: line ?? null,
       revealFileNonce: 1,
     });
   }

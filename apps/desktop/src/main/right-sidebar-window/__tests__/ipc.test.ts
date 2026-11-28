@@ -438,6 +438,52 @@ describe('right-sidebar-window IPC', () => {
     ).rejects.toThrow(/command.absPath required/);
   });
 
+  it('forwards a positive file line and rejects malformed anchors', async () => {
+    const controller = makeController();
+    const { handler, mainWebContents } = registerController(controller);
+
+    await handler(
+      { sender: mainWebContents },
+      {
+        command: {
+          type: 'open-file-browser',
+          sessionId: 's1',
+          relPath: 'src/app.ts',
+          targetKind: 'file',
+          line: 42,
+        },
+        allowOpen: true,
+      },
+    );
+
+    expect(controller.routeCommand).toHaveBeenCalledWith({
+      command: {
+        type: 'open-file-browser',
+        sessionId: 's1',
+        relPath: 'src/app.ts',
+        targetKind: 'file',
+        line: 42,
+      },
+      allowOpen: true,
+    });
+
+    await expect(
+      handler(
+        { sender: mainWebContents },
+        {
+          command: {
+            type: 'open-file-browser',
+            sessionId: 's1',
+            relPath: 'src/app.ts',
+            targetKind: 'file',
+            line: 0,
+          },
+          allowOpen: true,
+        },
+      ),
+    ).rejects.toThrow(/command.line/);
+  });
+
   it('drops commands from secondary renderers but still validates their payloads', async () => {
     const controller = makeController();
     const { handler } = registerController(controller);

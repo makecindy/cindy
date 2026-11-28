@@ -186,7 +186,12 @@ export function useFileChipContextMenu({
         return;
       }
       if (rel) {
-        await openFileInSidebarFileBrowser(sessionId, rel);
+        // 右键显式入口：链接/引用自带行号时，侧边栏预览直接停在该行。
+        if (location?.line !== undefined) {
+          await openFileInSidebarFileBrowser(sessionId, rel, location.line);
+        } else {
+          await openFileInSidebarFileBrowser(sessionId, rel);
+        }
         return;
       }
       // 远程来源的绝对路径位于远端机器，不能按“本机外部拖入”读取；本地来源则
