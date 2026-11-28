@@ -2,6 +2,23 @@
 
 > 通用规则与 Review 清单见[跨端协议兼容](../protocol-compatibility.md)；本文件只记录这一项能力的协议约定。
 
+## 模型切换准备状态与逐条来源（2026-11-27）
+
+既有 `agentSwitchIntent` 推送与 `maker:get-session-agent-switch-intent` 响应追加可选
+`preparation: 'preparing' | 'failed'` 和经凭证／本机路径脱敏的 `preparationError`。
+省略状态仍表示下条消息应用；旧查看端忽略新字段，新查看端读取旧主机时保留原待生效展示。
+手机将插件目标拆到 `pluginEngineSwitchIntent` 时保留相同准备状态与失败原因，插件和内置目标共用状态提示。
+普通同设备跨引擎准备失败仍可沿旧来源继续发送，不扩大换电脑、同引擎与协同任务的原有准入范围。
+
+Desktop 与 Node Host 的共同发送事务在既有 user 行的 `agentMeta.dispatchRoute` 保存本次实际
+`agentKind/model/providerId/agentDeviceId`，仅当目标不同才附 `selected` 与可选 `switchError`。
+桌面与手机据此展示逐条来源和目标未就绪提示，不从当前选择器反推历史；旧消息缺失时不补猜。
+共享任务访客不接收这份含房主供应商／电脑身份的快照，沿用原脱敏边界。
+复用既有消息落库、历史读取及会话推送，无新 channel、网络探测或轮询；自建中转只透传原业务 payload，无需更新。
+回归见 `sessionAgentSwitchHandler.test.ts`、`makerSendTransaction.test.ts`、共享 `messageSource.test.ts`
+及手机 `sessionAgentSwitch.test.ts`、`pluginEngines.test.ts` 和 Host `input-queue.test.mjs` 的失败后继续发送场景；
+界面场景为 `composer-model-width` 的 `switch-preparing/switch-failed/switch-plugin-source`。
+
 分享组在 `open` 准入时选不出电脑，可在现有错误信封内返回
 `REMOTE_AGENT_GROUP_FULL` 或 `REMOTE_AGENT_GROUP_USAGE_LIMIT`。额度错误复用本地调度器的
 `resets_at: <unix ms>` 文本格式，控制端只在 Agent 未启动的错误边界恢复额度等待。旧端仍可将其展示为启动失败。
@@ -168,6 +185,12 @@ Codex/Pi 在受邀者原有隔离目录分叉；新原生会话登记到既有�
 同账号远程任务也保留此映射，连续分叉和运行端重启后仍有效。
 执行前后检查账号、分享与转分享权限。分叉是一次写操作，超时或断线不自动重发；
 失败不创建 Cindy 子任务，不回退本机，不重建共享连接或影响其它 peer。
+例外是 Claude Code 收到明确的 `REMOTE_AGENT_FORK_FAILED`：运行端在线、有权限，只是原生历史接不上
+(典型是压缩后底层对话换了编号，旧回复已不在当前原生记录里，运行端日志为 `Message <uuid> not found in session`)。
+控制端不再报错，改为复制可见历史并写入 `native-session-recovery` 交接，子任务保留原运行位置，
+首轮在运行端新开原生对话(2026-11-27)。本机 Claude 转录里找不到锚点、但复制范围内有 AI 回复时同样交接，
+不再误报「请在 AI 回复之后的提问上 fork」。超时、断线、无权限，以及旧运行端回的 `REMOTE_AGENT_UNAVAILABLE`
+仍按失败处理。实现见 `apps/desktop/src/main/maker-orchestration/fork.ts`，回归见 Desktop `fork.test.ts`。
 
 回归：`remoteAgent.test.ts`、Desktop `fork.test.ts`、`guestHost.test.ts`、
 `groupRelay.test.ts` 与数据库 `client/__tests__/tx.test.ts`；三引擎沿用原生分叉入口。
@@ -628,3 +651,11 @@ Codex 原生图片恢复（#6412）在既有 `maker:remote-agent:v1` 上追加�
 `sharedBuiltinOpenAiImage: true`。0.1.143 只报前者，接收端对这类分享端保留原有
 Codex 原生账号选项，隐藏内置订阅。供应商组选择内置 OpenAI 执行端时也复核新能力，
 缺少该声明则继续选择其他成员。两个字段都是可选能力，中转按原通道透传。
+
+### 共享 Codex 回合的订阅估值
+
+已授权的 OpenAI 订阅执行端可以在原 Codex 根回合的 `done.data.sharedTurnValue` 附带
+`{ amount, currency }`。金额为该执行端按本轮供应商、逐请求 token、缓存、档位与有效参考报价
+计算的订阅价值，币种仅限 USD / CNY。交互续跑的各个原生回合按原生回合 ID 分别计值，每个 ID 仅附一次金额。组中转沿原事件转发，拉取仍按既有序号去重。
+受邀端核对分享运行的本地归属后将估值挂到该轮消息。既有任务与自动化汇总从消息读取价值，实际开销为零；消息缺失时不直写调度账本。字段缺失、无效或归属不明时照常记录 token。
+旧发送端无需发字段，旧接收端忽略该字段；无需握手、额外 RPC、额度权限或中转服务变更。

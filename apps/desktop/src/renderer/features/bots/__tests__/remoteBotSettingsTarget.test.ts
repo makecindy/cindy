@@ -127,10 +127,11 @@ it.each([false, true])('saves model locations and restores defaults on old hosts
     return ok({ profile: saved });
   });
   await profiles.load();
-  for (const [chain, override, location] of [
-    [[local], null, null],
-    [[remote], [remote], 'share:one'],
-    [[local, remote], [local, remote], null],
+  // 2026-11-26 单模型决定：请求原样发给主机，读回的档案只保留第一条路由。
+  for (const [chain, override, location, expectedChain, expectedOverride] of [
+    [[local], null, null, [local], null],
+    [[remote], [remote], 'share:one', [remote], [remote]],
+    [[local, remote], [local, remote], null, [local], [local]],
   ] as const) {
     await target.profile.update('bot-1', { acceptModelSelection: true, capabilities: {
       ...local, agentDeviceId: location, modelChain: [...chain],
@@ -141,8 +142,8 @@ it.each([false, true])('saves model locations and restores defaults on old hosts
     expect(request.args?.patch).toMatchObject({ capabilities: { modelChain: chain, modelChainOverride: override } });
     expect((request.args?.patch as { capabilities: object }).capabilities).not.toHaveProperty('agentDeviceId');
     await profiles.refresh();
-    expect(profiles.get()?.capabilities.modelChain).toEqual(chain);
-    expect(profiles.get()?.capabilities.modelChainOverride).toEqual(override);
+    expect(profiles.get()?.capabilities.modelChain).toEqual(expectedChain);
+    expect(profiles.get()?.capabilities.modelChainOverride).toEqual(expectedOverride);
   }
 });
 

@@ -22,6 +22,11 @@ export interface AutoReviewUserReferences {
   /** Everything delivered with this message, including attachments a channel merged in from the quote. */
   readonly attachments?: { readonly images: number; readonly files: number };
   readonly quotedMessages?: readonly AutoReviewQuotedMessage[];
+  /**
+   * Exact Host-delivered managed attachment file paths for this turn only (never
+   * directory roots, never accepted from remote wire, never persisted across turns).
+   */
+  readonly readOnlyAttachmentPaths?: readonly string[];
 }
 
 export interface AutoReviewQuotedMessage {
@@ -32,6 +37,11 @@ export interface AutoReviewQuotedMessage {
   readonly attachmentCount?: number;
 }
 
+export interface ProjectAutoReviewReferencesOptions {
+  /** Set false when decoding untrusted/remote wire payloads so peers cannot inject local paths. */
+  readonly allowAttachmentPaths?: boolean;
+}
+
 /**
  * The single projection for review references. Channels map their Host-owned
  * reply/attachment facts into this shape; anything malformed is dropped and all
@@ -40,8 +50,9 @@ export interface AutoReviewQuotedMessage {
  */
 export function projectAutoReviewUserReferences(
   value: unknown,
+  options?: ProjectAutoReviewReferencesOptions,
 ): AutoReviewUserReferences | undefined {
-  return sharedProjection().projectReferences(value);
+  return sharedProjection().projectReferences(value, options);
 }
 
 /**
@@ -115,7 +126,71 @@ export function createAutoReviewIntentProjection() {
   const MAX_REFERENCED_QUOTE_CHARS = 600;
   const MAX_REFERENCED_QUOTES_TOTAL_CHARS = 1_200;
   const MAX_REFERENCED_COUNT = 99;
+  const MAX_READ_ONLY_ATTACHMENT_PATHS = 10;
+  const MAX_READ_ONLY_ATTACHMENT_PATH_CHARS = 512;
+  // eslint-disable-next-line no-control-regex
+  const ATTACHMENT_PATH_CONTROL_RE = /[\u0000-\u001f\u007f]/;
+  const ATTACHMENT_PATH_WINDOWS_DRIVE_RE = /^[A-Za-z]:[\\/]/;
+  const ATTACHMENT_PATH_SAFE_SEGMENT_RE = /^[A-Za-z0-9._-]+$/;
   const REFERENCE_TRUNCATED = "…[truncated]";
+
+  /**
+   * Strict managed attachment file validator (pure JS, no Node imports: evaluated in DB worker).
+   * Accepts ONLY exact file paths under Host-managed attachment trees, never directory roots
+   * or traversal segments:
+   *   - .../cindy-media/blobs/<file.ext>
+   *   - .../im-attachments/<channel>/staging/<file>
+   *   - .../im-attachments/<channel>/sessions/<sessionId>/<file>
+   *   - .../hook-attachments/<sessionId>/<file>
+   */
+  function isManagedReadOnlyAttachmentPath(value: unknown): value is string {
+    if (typeof value !== "string") return false;
+    if (value.length === 0 || value.length > MAX_READ_ONLY_ATTACHMENT_PATH_CHARS) return false;
+    if (ATTACHMENT_PATH_CONTROL_RE.test(value)) return false;
+    const isPosix = value.startsWith("/");
+    const isWin = ATTACHMENT_PATH_WINDOWS_DRIVE_RE.test(value);
+    if (!isPosix && !isWin) return false;
+    if (value.endsWith("/") || value.endsWith("\\")) return false;
+    const body = isWin ? value.slice(3) : value.slice(1);
+    if (!body) return false;
+    const segments = body.split(/[\\/]/);
+    if (segments.some((seg) => seg === "" || seg === "." || seg === "..")) return false;
+    const len = segments.length;
+    if (
+      len >= 3 &&
+      segments[len - 3] === "cindy-media" &&
+      segments[len - 2] === "blobs" &&
+      ATTACHMENT_PATH_SAFE_SEGMENT_RE.test(segments[len - 1]!) &&
+      segments[len - 1]!.includes(".")
+    ) {
+      return true;
+    }
+    if (
+      len >= 4 &&
+      segments[len - 4] === "im-attachments" &&
+      ATTACHMENT_PATH_SAFE_SEGMENT_RE.test(segments[len - 3]!) &&
+      segments[len - 2] === "staging"
+    ) {
+      return true;
+    }
+    if (
+      len >= 5 &&
+      segments[len - 5] === "im-attachments" &&
+      ATTACHMENT_PATH_SAFE_SEGMENT_RE.test(segments[len - 4]!) &&
+      segments[len - 3] === "sessions" &&
+      ATTACHMENT_PATH_SAFE_SEGMENT_RE.test(segments[len - 2]!)
+    ) {
+      return true;
+    }
+    if (
+      len >= 3 &&
+      segments[len - 3] === "hook-attachments" &&
+      ATTACHMENT_PATH_SAFE_SEGMENT_RE.test(segments[len - 2]!)
+    ) {
+      return true;
+    }
+    return false;
+  }
 
   function boundedReferenceText(value: string, maxChars: number): string {
     const text = value.trim();
@@ -132,6 +207,7 @@ export function createAutoReviewIntentProjection() {
 
   function projectAutoReviewUserReferences(
     value: unknown,
+    options?: ProjectAutoReviewReferencesOptions,
   ): AutoReviewUserReferences | undefined {
     if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
     const input = value as Record<string, unknown>;
@@ -164,10 +240,28 @@ export function createAutoReviewIntentProjection() {
         ...(attachmentCount > 0 ? { attachmentCount } : {}),
       });
     }
-    if (images === 0 && files === 0 && quotedMessages.length === 0) return undefined;
+    const readOnlyAttachmentPaths: string[] = [];
+    if (options?.allowAttachmentPaths !== false && Array.isArray(input.readOnlyAttachmentPaths)) {
+      const seenPaths = new Set<string>();
+      for (const rawPath of input.readOnlyAttachmentPaths) {
+        if (readOnlyAttachmentPaths.length >= MAX_READ_ONLY_ATTACHMENT_PATHS) break;
+        if (!isManagedReadOnlyAttachmentPath(rawPath) || seenPaths.has(rawPath)) continue;
+        seenPaths.add(rawPath);
+        readOnlyAttachmentPaths.push(rawPath);
+      }
+    }
+    if (
+      images === 0 &&
+      files === 0 &&
+      quotedMessages.length === 0 &&
+      readOnlyAttachmentPaths.length === 0
+    ) {
+      return undefined;
+    }
     return {
       ...(images > 0 || files > 0 ? { attachments: { images, files } } : {}),
       ...(quotedMessages.length > 0 ? { quotedMessages } : {}),
+      ...(readOnlyAttachmentPaths.length > 0 ? { readOnlyAttachmentPaths } : {}),
     };
   }
 

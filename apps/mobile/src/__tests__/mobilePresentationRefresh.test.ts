@@ -69,11 +69,13 @@ describe('mobile localized presentation refresh', () => {
     expect(source).toContain('[connectionError, i18nInstance.language]');
   });
 
-  it('keeps new-task authentication errors raw until render time', () => {
+  it('keeps immediate and recovered new-task errors raw until render time', () => {
     const source = read('app/sessions/new.tsx');
 
     expect(source).toContain('setError(raw)');
-    expect(source).toContain('{describeAgentAuthError(error) ?? error}');
+    expect(source).toContain('return creationError ? { creationError } : null');
+    expect(source).toContain('setError({ creationError: record.error })');
+    expect(source).toContain('<ErrorNotice message={describeNewSessionError(error)} />');
   });
 
   it('rebuilds localized session sections when the language changes', () => {

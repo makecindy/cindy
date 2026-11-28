@@ -58,6 +58,7 @@ vi.mock('../../logger.js', () => ({
 
 vi.mock('../../maker-ipc/register.js', () => ({
   tryGetOrcaCollabService: () => mockState.collabService,
+  readLocalTaskQueuePaused: () => undefined,
   isSessionInTurn: () => false,
   getTaskActionInputState: () => mockState.invitationInput ?? ({ key: 'owner-input', ownerInput: mockState.invitationOwner, boundary: 'runtime-1' }),
   getTaskActionSession: () => mockState.invitationSession ?? undefined,

@@ -22,6 +22,7 @@
 import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../appSessionState.js';
 import { readPool } from './store.js';
 import { accountProviderId, providerAccounts } from './placement.js';
+import { apiKeyPoolAllowsAutoSwitch, apiKeyPoolMembers, hasApiKeyPoolWithMultipleMembers } from './apiKeyMembers.js';
 import {
   acquireSubscriptionAccount,
   readRemoteSubscriptionAccountSwitch,
@@ -70,7 +71,9 @@ function boundAccount(sessionId: string, row: AccountFailoverSession): BoundAcco
   const task = readTaskPoolAccount(sessionId, row);
   if (!task) return null;
   const pool = readPool(task.provider);
-  if (!pool || (pool.disconnected && task.providerId === task.provider) || providerAccounts(task.provider, pool.accounts, task.providerId).length < 2) return null;
+  const keys = task.provider === 'openai' ? apiKeyPoolMembers(task.providerId).length : 0;
+  if (!pool || (keys && !apiKeyPoolAllowsAutoSwitch(task.providerId)) || (pool.disconnected && task.providerId === task.provider)
+    || providerAccounts(task.provider, pool.accounts, task.providerId).length + keys < 2) return null;
   return { ...task, model: row.model ?? undefined };
 }
 
@@ -80,6 +83,7 @@ async function routeAdmits(bound: BoundAccount): Promise<boolean> {
 }
 
 function hasMultiAccountPool(): boolean {
+  if (hasApiKeyPoolWithMultipleMembers()) return true;
   return (['anthropic', 'openai'] as const).some((provider) => {
     const pool = readPool(provider);
     if (!pool) return false;
@@ -87,6 +91,7 @@ function hasMultiAccountPool(): boolean {
     for (const account of pool.accounts) {
       const owner = accountProviderId(provider, account.id);
       if (pool.disconnected && owner === provider) continue;
+      if (provider === 'openai' && apiKeyPoolMembers(owner).length) return true;
       const count = (counts.get(owner) ?? 0) + 1;
       if (count > 1) return true;
       counts.set(owner, count);
@@ -117,12 +122,13 @@ export async function readSubscriptionAccountSwitch(
       : null;
   }
   const bound = local ? boundAccount(sessionId, row) : null;
-  const reason = bound && readSubscriptionAccountBlockReason(bound.provider, bound.accountId, bound.model);
+  const agent = row.agentKind === 'pi' ? 'pi' : 'codex';
+  const reason = bound && readSubscriptionAccountBlockReason(bound.provider, bound.accountId, bound.model, agent);
   if (!bound || !reason) return null;
   if (!(await routeAdmits(bound))) return null;
   try {
     await acquireSubscriptionAccount(bound.providerId, bound.model, [], false, {
-      exclude: new Set([bound.accountId]), planQuotaOnly: reason === 'plan-exhausted', dryRun: true,
+      includeApiKeys: true, agent, exclude: new Set([bound.accountId]), planQuotaOnly: reason === 'plan-exhausted', dryRun: true,
     });
     return `local#${bound.provider}:${bound.accountId}`;
   } catch {
@@ -137,6 +143,31 @@ export async function canSwitchSubscriptionAccount(
   invokeRemote?: RemoteSubscriptionInvoke,
 ): Promise<boolean> {
   return (await readSubscriptionAccountSwitch(sessionId, readSession, invokeRemote)) !== null;
+}
+
+/** Immediate Worker recovery may queue a send while the selected sibling loses
+ * admission. Recheck the actual durable binding after normal send preparation,
+ * so that an accepted continuation cannot fall back to the failed member. */
+export async function captureLocalAccountSwitchGuard(
+  sessionId: string,
+  readSession: AccountFailoverDeps['readSession'],
+): Promise<(() => Promise<void>) | null> {
+  const owner = activeOwnerScopeKey();
+  const row = await readSession(sessionId);
+  const original = row && readTaskPoolAccount(sessionId, row);
+  if (activeOwnerScopeKey() !== owner || isAppSessionBoundaryPending()
+    || !row || !original || original.provider !== 'openai') return null;
+  const model = row.model, agent = row.agentKind;
+  return async () => {
+    const latest = await readSession(sessionId);
+    const current = latest && readTaskPoolAccount(sessionId, latest);
+    if (activeOwnerScopeKey() !== owner || isAppSessionBoundaryPending()
+      || !latest || latest.model !== model || latest.agentKind !== agent
+      || !current || current.provider !== original.provider || current.providerId !== original.providerId
+      || current.accountId === original.accountId || !apiKeyPoolAllowsAutoSwitch(original.providerId)) {
+      throw new Error('[SUBSCRIPTION_ACCOUNT_UNAVAILABLE] The replacement account is no longer available');
+    }
+  };
 }
 
 /** Called under the ordinary send lock before lazy bootstrap or reuse of a live runtime. */
@@ -192,7 +223,8 @@ export async function prepareSubscriptionAccountFailover(
   if (!local) return false;
   const bound = row && boundAccount(sessionId, row);
   if (!bound || deps.isRunning(sessionId)) return false;
-  const reason = readSubscriptionAccountBlockReason(bound.provider, bound.accountId, bound.model);
+  const agent = row?.agentKind === 'pi' ? 'pi' : 'codex';
+  const reason = readSubscriptionAccountBlockReason(bound.provider, bound.accountId, bound.model, agent);
   if (!reason) return false;
   if (bound.previousProviderId && !deps.moveRoute) return false;
   if (!(await routeAdmits(bound))) return false;
@@ -201,10 +233,10 @@ export async function prepareSubscriptionAccountFailover(
   // None left (all blocked or full): keep the original account and let the send report it.
   // A ChatGPT account with a used-up plan window can still spend credits, so it only hands the
   // task to an account with plan quota left; otherwise the task keeps its native context.
-  let lease: Awaited<ReturnType<typeof acquireSubscriptionAccount>>;
+  let lease: import('./runtime.js').SubscriptionAccountLease | null;
   try {
     lease = await acquireSubscriptionAccount(bound.providerId, bound.model, [], false, {
-      exclude: new Set([bound.accountId]), planQuotaOnly: reason === 'plan-exhausted',
+      includeApiKeys: true, agent, exclude: new Set([bound.accountId]), planQuotaOnly: reason === 'plan-exhausted',
     });
   } catch {
     return false;

@@ -30,9 +30,10 @@ describe('Bot 对话的判定条件', () => {
     expect(sessionView).toContain('<BotAvatar bot={botChatIdentity} size="sm" />');
   });
 
-  it('伙伴对话换占位符并启用轻量输入框', () => {
+  it('伙伴对话换占位符并保留模型/智能路由切换控件', () => {
     expect(sessionView).toContain('botComposerPlaceholderKey(botChatIdentity.name)');
-    expect(sessionView).toContain('hideRuntimeControls={Boolean(botChatIdentity)}');
+    // 2026-11-27 用户裁决：伙伴对话支持中途切换模型与智能路由，不再隐藏运行时模型选择器。
+    expect(sessionView).not.toContain('hideRuntimeControls={Boolean(botChatIdentity)}');
     // 普通任务仍走原来的占位符。
     expect(sessionView).toContain("t('ccAgent.layout.chatPlaceholder')");
   });

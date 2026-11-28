@@ -14,7 +14,12 @@
  */
 import { useSyncExternalStore } from 'react';
 
-import { PROVIDER_METADATA_TRUST_MS, readProviderMetadataContinuity, type ProviderShareReceived } from '@cindy/device-link';
+import {
+  PROVIDER_METADATA_TRUST_MS,
+  providerSharePickerState,
+  readProviderMetadataContinuity,
+  type ProviderShareReceived,
+} from '@cindy/device-link';
 
 import { hasDeviceProvidersInterest, hasSubscriptionShareCatalog, isSubscriptionShareCatalogStale } from '@/hooks/useDeviceProviders';
 import { hasDeviceCapabilitiesInterest } from '@/hooks/useAgentCapabilities';
@@ -289,7 +294,14 @@ function invalidateShareCatalogs(
       if (mustClear || options?.retireShareIds?.has(shareId)) evictRemotePluginEngines(deviceId);
       else {
         markRemotePluginEnginesStale(deviceId);
-        if (hasRemotePluginEngineInterest(deviceId)) void prefetchRemotePluginEngines(deviceId);
+        if (
+          after
+          && providerSharePickerState(after) === 'available'
+          && after.hostCapable
+          && hasRemotePluginEngineInterest(deviceId)
+        ) {
+          void prefetchRemotePluginEngines(deviceId);
+        }
       }
       continue;
     }
@@ -311,7 +323,7 @@ function invalidateShareCatalogs(
   for (const share of next) {
     const deviceId = providerShareAgentDeviceId(share.shareId);
     if (pluginEngineKeyFromProviderId(share.providerId)) {
-      if (share.status === 'active' && share.hostOnline && share.hostCapable
+      if (providerSharePickerState(share) === 'available' && share.hostCapable
         && options?.refreshShareIds?.has(share.shareId) && !changed.includes(share.shareId)) {
         markRemotePluginEnginesStale(deviceId);
         if (hasRemotePluginEngineInterest(deviceId)) void prefetchRemotePluginEngines(deviceId);

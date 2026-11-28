@@ -28,6 +28,7 @@ import {
   MAX_FRAME_BYTES,
   REMOTE_AGENT_CHANNEL,
   isProviderAccessDeniedError,
+  DeviceLinkError,
   parseProviderSharePeer,
   providerShareGuestPeer,
   providerShareFavoriteSource,
@@ -97,6 +98,7 @@ import { captureProviderManagementScope } from '../provider-group/managementScop
 import { readProviderManagementShares } from '../provider-group/managementClient.js';
 import type { ProviderShareManagementCommand } from '../../shared/providerManagement.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
+import type { IpcErrorCode } from '../../shared/ipc-errors.js';
 import {
   abortProviderShareReshareRuns,
   getControllerDisplayName,
@@ -127,7 +129,11 @@ import {
   startProviderShareGuest,
   stopProviderShareGuest,
   withdrawProviderShareRequest,
+  getConfirmedReceivedShareIds,
 } from './providerShareGuest.js';
+import { agentNetSharingRoute } from './agentNetSharing.js';
+import { handleProviderShareAgentNetLink, linkReceivedProviderShares, reconcileLinkedProviderShares,
+  revokeLinkedProviderShareGuests } from './agentNetLinkedShares.js';
 import {
   configureProviderShareGuestPrefs,
   invalidateProviderShareGuestPrefsCache,
@@ -249,6 +255,9 @@ function revoke(match: (controller: string) => boolean, purge: boolean): void {
   void revokeProviderShareControllers(match, purge).catch((error) => {
     log.warn('provider share revoke failed', { purge, error: error instanceof Error ? error.message : String(error) });
   });
+  // A paused or removed guest also loses the Agent-Net lease of a share it moved off Device Link.
+  try { revokeLinkedProviderShareGuests(match); }
+  catch (error) { log.warn('linked share revoke failed', { error: error instanceof Error ? error.message : String(error) }); }
 }
 
 /** O's durable deletion queue survives offline M and an O restart. Only an ACK removes a target. */
@@ -530,6 +539,9 @@ export function startProviderShareRuntime(broadcast: Broadcast, options: { invok
       }, true);
       // 转分享记录按账号存放，只会属于这台电脑上的分享：已不在快照里的成员与分享一并删掉。
       pruneReshares((record) => !owned.get(record.shareId)?.has(record.memberId));
+      // 已删除的分享不再登记在 Agent-Net 上（尽力而为，不影响上面的清理）。
+      try { reconcileLinkedProviderShares(owned); }
+      catch (error) { log.warn('linked share cleanup failed', { error: error instanceof Error ? error.message : String(error) }); }
     },
   }, { readWatchedShares: readInvoke ? (hostDeviceId) => readProviderManagementShares(readInvoke, hostDeviceId) : undefined });
   startProviderShareGuest({
@@ -542,6 +554,14 @@ export function startProviderShareRuntime(broadcast: Broadcast, options: { invok
       emit(PROVIDER_SHARE_IPC.RECEIVED_CHANGED, received);
       // Pushed to every controlling computer; they re-read capabilities and rosters.
       if (changed) notifyControlledModelCatalogChanged(providerShareReceivedChangeSequence());
+      // Both computers on Agent-Net: move Device Link shares onto it, one background request per share.
+      // Best effort only: whatever happens here, the share list above has already been published.
+      try {
+        linkReceivedProviderShares({ received, confirmedShareIds: getConfirmedReceivedShareIds(), invoke: shareInvoke,
+          isAgentNetShare: (shareId) => { try { return !!agentNetSharingRoute('provider-share', shareId); } catch { return true; } } });
+      } catch (error) {
+        log.warn('moving received shares to Agent-Net failed', { error: error instanceof Error ? error.message : String(error) });
+      }
     },
     settled(state, preview) {
       emit(PROVIDER_SHARE_IPC.SETTLED, { state, preview });
@@ -1107,6 +1127,19 @@ async function createLink(
   return { link, expiresAt, ...(created.linkId ? { linkId: created.linkId } : {}) };
 }
 
+/** Fixed public categories for both local transport errors and remote refusal envelopes. */
+function insightsFailureCode(error: { code: unknown; message?: string }): IpcErrorCode {
+  const code = typeof error.code === 'string' ? error.code : '';
+  return code === 'CHANNEL_NOT_ALLOWED' ? 'UNSUPPORTED_CAPABILITY'
+    : code === 'BACKPRESSURE' ? 'DEVICE_LINK_BUSY'
+    : code === 'DEVICE_UNRESPONSIVE' ? 'DEVICE_LINK_DEVICE_UNRESPONSIVE'
+    : code === 'DEVICE_OFFLINE' ? 'DEVICE_LINK_DEVICE_OFFLINE'
+    : code === 'INVOKE_TIMEOUT' ? 'DEVICE_LINK_TIMEOUT'
+    : ['NOT_CONNECTED', 'LINK_NOT_OPEN', 'PEER_RESET'].includes(code) ? 'DEVICE_LINK_NOT_CONNECTED'
+    : isProviderAccessDeniedError(error) || code === 'REMOTE_DISABLED' ? 'PERMISSION_DENIED'
+    : 'DEVICE_LINK_UNAVAILABLE';
+}
+
 async function execute(command: ProviderShareCommand, assertCurrent: () => void = () => undefined): Promise<unknown> {
   assertCurrent();
   switch (command.action) {
@@ -1246,14 +1279,20 @@ async function execute(command: ProviderShareCommand, assertCurrent: () => void 
           throwIpcError('PERMISSION_DENIED', 'Provider share changed');
         }
       };
-      const response = await shareInvoke(`share:${command.shareId}`, PROVIDER_SHARE_INSIGHTS_CHANNEL, [{ version: 1, includeUsage: command.includeUsage }], { preSend: assertShare });
+      const response = await shareInvoke(`share:${command.shareId}`, PROVIDER_SHARE_INSIGHTS_CHANNEL, [{ version: 1, includeUsage: command.includeUsage }], { preSend: assertShare })
+        .catch(error => {
+          assertShare();
+          if (error instanceof DeviceLinkError
+            || (error instanceof Error && 'code' in error && error.code === 'DEVICE_UNRESPONSIVE')) {
+            throwIpcError(insightsFailureCode(error), 'Provider share insights are not available');
+          }
+          throw error;
+        });
       assertShare();
       if (!response.ok) {
-        throwIpcError(response.error.code === 'CHANNEL_NOT_ALLOWED' ? 'UNSUPPORTED_CAPABILITY'
-          : response.error.code === 'DEVICE_OFFLINE' ? 'DEVICE_LINK_DEVICE_OFFLINE'
-          : response.error.code === 'INVOKE_TIMEOUT' ? 'DEVICE_LINK_TIMEOUT'
-          : response.error.code === 'NOT_CONNECTED' || response.error.code === 'LINK_NOT_OPEN' ? 'DEVICE_LINK_NOT_CONNECTED'
-          : 'PERMISSION_DENIED', 'Provider share insights are not available');
+        // Congestion and a missing reply are not evidence of revoked permission.
+        // Keep fixed public messages; the upstream diagnostic may contain identity.
+        throwIpcError(insightsFailureCode(response.error), 'Provider share insights are not available');
       }
       const result = parseProviderShareInsights(response.result);
       if (!result || (command.includeUsage && result.status.usage === 'not-requested') || (!command.includeUsage && (result.usage !== null || !['disabled', 'not-requested'].includes(result.status.usage)))) {
@@ -1371,6 +1410,19 @@ export async function readReceivedProviderShareQuota(shareId: string): Promise<P
   const result = await execute({ action: 'insights', shareId, includeUsage: false }, assertCurrent);
   assertCurrent();
   return result as ProviderShareInsights;
+}
+
+/** Guest actions the owner's cloud instance settings page runs on that instance. */
+export type ProviderShareGuestCommand = Extract<
+  ProviderShareCommand,
+  { action: 'received' | 'get-credential-consent' | 'set-credential-consent' | 'leave' | 'insights' }
+>;
+/**
+ * Only for the instance owner's private cloud settings channel, which checks ownership first;
+ * the general command IPC stays local-only. Joining by link stays an account action elsewhere.
+ */
+export function executeProviderShareGuestCommand(command: ProviderShareGuestCommand): Promise<unknown> {
+  return execute(command);
 }
 
 /**
@@ -1532,6 +1584,7 @@ export function registerProviderShareIpc(): void {
     },
     insights,
     insightsCurrent: insights.isCurrent,
+    agentNetLink: handleProviderShareAgentNetLink,
     guestAccess: providerShareGuestAccess,
     catalogGuestAccess: ownedProviderShareGuestAccess,
     ensureKnown: ensureProviderSharePeerKnown,

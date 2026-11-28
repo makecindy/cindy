@@ -13,12 +13,13 @@ import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createElement } from 'react';
 
-const { useCodexRuntimeRouteMock } = vi.hoisted(() => ({
+const { useCodexRuntimeRouteMock, translateMock } = vi.hoisted(() => ({
   useCodexRuntimeRouteMock: vi.fn(),
+  translateMock: vi.fn((key: string, _opts?: Record<string, unknown>) => key),
 }));
 
 vi.mock('react-i18next', () => ({
-  useTranslation: () => ({ t: (key: string) => key, i18n: { exists: () => false, language: 'en' } }),
+  useTranslation: () => ({ t: translateMock, i18n: { exists: () => false, language: 'en' } }),
 }));
 
 vi.mock('@/components/ui/confirm-dialog-provider', () => ({
@@ -257,5 +258,119 @@ describe('ErrorBanner — Cindy AI 余额不足导流', () => {
     expect(screen.getByText(QUOTA_ERROR)).toBeTruthy();
     expect(screen.queryByText('chat.errorBanner.gatewayQuotaExhausted')).toBeNull();
     expect(screen.queryByTitle('chat.errorBanner.viewBalanceTitle')).toBeNull();
+  });
+
+  // Plugin-engine periodic quota errors must show usage-limit guidance (not balance QUOTA_EXCEEDED or replyFailed)
+  // in both live ErrorBanner and persisted ErrorTailErrorBanner, with the raw upstream message expandable.
+  it('shows periodic usage-limit copy instead of balance quota exhaustion for plugin-engine quota errors', async () => {
+    const raw =
+      'Individual quota reached. Please upgrade your subscription to increase your limits. Resets in 2h13m2s.';
+    const resetAtMs = Date.now() + 2 * 3600 * 1000;
+    const { rerender } = render(
+      createElement(ErrorBanner, {
+        error: raw,
+        errorReason: 'acp-usage-limit',
+        agentKind: 'acp',
+        usageLimitRecovery: { resetAtMs, isAccountUsageLimit: true },
+        onRetry: vi.fn(),
+      }),
+    );
+    expect(screen.getByText('chat.errorBanner.usageLimitReachedWithReset')).toBeTruthy();
+    expect(screen.queryByText('providerError.QUOTA_EXCEEDED')).toBeNull();
+    expect(screen.queryByText('chat.errorBanner.replyFailed')).toBeNull();
+    fireEvent.click(screen.getByText('chat.errorBanner.networkShowRaw'));
+    expect(screen.getByText(raw)).toBeTruthy();
+
+    rerender(
+      createElement(ErrorBanner, {
+        error: 'The plugin engine account has reached its usage limit.',
+        errorReason: 'acp-usage-limit',
+        agentKind: 'acp',
+        onRetry: vi.fn(),
+      }),
+    );
+    expect(screen.getByText('chat.errorBanner.usageLimitReachedNoReset')).toBeTruthy();
+    expect(screen.queryByText('providerError.QUOTA_EXCEEDED')).toBeNull();
+
+    cleanup();
+    const { ErrorTailErrorBanner } = await import('@/components/chat/InterruptedTurnBanner');
+    render(
+      createElement(ErrorTailErrorBanner, {
+        errorText: raw,
+        errorReason: 'acp-usage-limit',
+        agentKind: 'acp',
+        onContinue: vi.fn(),
+        onDismiss: vi.fn(),
+      }),
+    );
+    expect(screen.getByText('chat.errorBanner.usageLimitReachedWithReset')).toBeTruthy();
+    expect(screen.queryByText('providerError.QUOTA_EXCEEDED')).toBeNull();
+    fireEvent.click(screen.getByText('chat.errorBanner.networkShowRaw'));
+    expect(screen.getByText(raw)).toBeTruthy();
+  });
+
+  // Explicit HTTP 402 / billing errors must remain on providerError.QUOTA_EXCEEDED even when the message also says "Usage limit reached",
+  // and persisted ErrorTailErrorBanner relative countdowns must anchor to errorCreatedAt instead of drifting with Date.now().
+  it('keeps HTTP 402 payment errors on QUOTA_EXCEEDED and anchors persisted relative reset times to errorCreatedAt', async () => {
+    render(
+      createElement(ErrorBanner, {
+        error: 'HTTP 402: Usage limit reached',
+        providerId: 'custom',
+        errorSourceProviderId: 'custom',
+        onRetry: vi.fn(),
+      }),
+    );
+    expect(screen.getByText('providerError.QUOTA_EXCEEDED')).toBeTruthy();
+    expect(screen.queryByText('chat.errorBanner.usageLimitReachedNoReset')).toBeNull();
+    expect(screen.queryByText('chat.errorBanner.usageLimitReachedWithReset')).toBeNull();
+
+    cleanup();
+    const { ErrorTailErrorBanner } = await import('@/components/chat/InterruptedTurnBanner');
+    const createdAtIso = '2026-11-27T10:00:00.000Z';
+    const expectedResetMs = Date.parse(createdAtIso) + ((2 * 60 + 13) * 60 + 2) * 1000;
+    const expectedFormatted = new Intl.DateTimeFormat('en', {
+      dateStyle: 'medium',
+      timeStyle: 'short',
+    }).format(new Date(expectedResetMs));
+    const raw =
+      'Individual quota reached. Please upgrade your subscription to increase your limits. Resets in 2h13m2s.';
+
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date('2026-11-27T11:00:00.000Z'));
+      translateMock.mockClear();
+      render(
+        createElement(ErrorTailErrorBanner, {
+          errorText: raw,
+          errorReason: 'acp-usage-limit',
+          errorCreatedAt: createdAtIso,
+          agentKind: 'acp',
+          onContinue: vi.fn(),
+          onDismiss: vi.fn(),
+        }),
+      );
+      expect(translateMock).toHaveBeenCalledWith('chat.errorBanner.usageLimitReachedWithReset', {
+        resetAt: expectedFormatted,
+      });
+
+      cleanup();
+      vi.setSystemTime(new Date('2026-11-27T11:30:00.000Z'));
+      translateMock.mockClear();
+      render(
+        createElement(ErrorTailErrorBanner, {
+          errorText: raw,
+          errorReason: 'acp-usage-limit',
+          errorCreatedAt: createdAtIso,
+          agentKind: 'acp',
+          onContinue: vi.fn(),
+          onDismiss: vi.fn(),
+        }),
+      );
+      expect(translateMock).toHaveBeenCalledWith('chat.errorBanner.usageLimitReachedWithReset', {
+        resetAt: expectedFormatted,
+      });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

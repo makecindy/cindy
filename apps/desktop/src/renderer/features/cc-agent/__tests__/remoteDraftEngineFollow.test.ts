@@ -20,19 +20,33 @@ describe('remote draft engine follows the target computer', () => {
     expect(nextRemoteDraftEngine({ ...base, deviceId: null, currentVendor: 'cc' })).toBe('pi');
   });
 
-  it('keeps an engine the user picked before the defaults arrived', () => {
+  it('keeps an engine the user picked before the defaults arrived, but only on that computer', () => {
     nextRemoteDraftEngine({ ...base, deviceId: 'studio', currentVendor: 'pi' });
     expect(nextRemoteDraftEngine({
       ...base, deviceId: 'studio', currentVendor: 'codex', defaultsReady: true, selectedAgentKind: 'claude-code',
     })).toBeNull();
-    expect(nextRemoteDraftEngine({ ...base, deviceId: null, currentVendor: 'codex' })).toBeNull();
+    expect(nextRemoteDraftEngine({ ...base, deviceId: null, currentVendor: 'codex' })).toBe('pi');
   });
 
-  it('does not restore over an engine the user changed while targeting the remote computer', () => {
+  // 每台电脑记自己的选择：在远程电脑上换的引擎写回那台，回到本机恢复本机上次用的。
+  // 最小失败输入：本机 Pi → studio 跟随到 Claude → 手动换 Codex → 回本机，应回到 Pi。
+  it('restores the local engine after the user changed engines while targeting the remote computer', () => {
     nextRemoteDraftEngine({
       ...base, deviceId: 'studio', currentVendor: 'pi', defaultsReady: true, selectedAgentKind: 'claude-code',
     });
-    expect(nextRemoteDraftEngine({ ...base, deviceId: null, currentVendor: 'codex' })).toBeNull();
+    expect(nextRemoteDraftEngine({ ...base, deviceId: null, currentVendor: 'codex' })).toBe('pi');
+  });
+
+  it('keeps the original local engine across remote computers and follows each one', () => {
+    nextRemoteDraftEngine({
+      ...base, deviceId: 'studio', currentVendor: 'pi', defaultsReady: true, selectedAgentKind: 'claude-code',
+    });
+    // 在 studio 上手动换成 Codex 后去 laptop：laptop 按自己的选择跟随，回本机仍是 Pi。
+    nextRemoteDraftEngine({ ...base, deviceId: 'laptop', currentVendor: 'codex' });
+    expect(nextRemoteDraftEngine({
+      ...base, deviceId: 'laptop', currentVendor: 'codex', defaultsReady: true, selectedAgentKind: 'claude-code',
+    })).toBe('cc');
+    expect(nextRemoteDraftEngine({ ...base, deviceId: null, currentVendor: 'cc' })).toBe('pi');
   });
 
   it('leaves the engine alone for an older target that does not report one', () => {

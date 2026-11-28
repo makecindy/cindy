@@ -18,6 +18,7 @@ import {
 import type { PreparedSessionEvent } from './sessionEventPreparation.js';
 import type { SessionStreamResult } from './sessionEventStream.js';
 import { isSessionErrorSuppressed } from './sessionErrorSuppression.js';
+import { isSilencedSchedulerTurn } from '../scheduler-host/silent-output.js';
 export interface DeliverSessionEventDeps {
   readonly sessionListActivityTracker: SessionListActivityTracker;
   readonly attemptBotCompactRuntimeRefresh: (session: Session, reason: string) => void;
@@ -186,7 +187,9 @@ export function deliverSessionEvent(
     // status:isRunning=false 即逻辑 turn 结束(可重试 error 不发这个信号)。
     deps.markTurnEndedAfterPersistDrain(session.id, event);
     if (
-      wasInTurn && event.turnOrigin?.kind !== 'goal'
+      wasInTurn &&
+      event.turnOrigin?.kind !== 'goal' &&
+      !isSilencedSchedulerTurn(event.turnOrigin)
     ) {
       deps.sessionListActivityTracker.end(session.id, {
         identity: event.sessionTurnGeneration === undefined ? undefined

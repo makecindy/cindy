@@ -5,7 +5,7 @@ import type { ProviderGroupConfig } from '../../../src/shared/providerGroup';
 import type { ProviderShareMemberView, ProviderUsageHistoryView } from '../../../src/shared/providerShare';
 
 const group: ProviderGroupConfig = {
-  strategy: 'least', autoSwitch: true,
+  strategy: 'expiring', autoSwitch: true,
   members: [
     { key: 'local', kind: 'local', agentDeviceId: null, providerId: 'xd', limit: 4, weight: 1, paused: false },
     { key: 'device:studio:xd', kind: 'device', agentDeviceId: 'studio', providerId: 'xd', limit: 4, weight: 1, paused: false },

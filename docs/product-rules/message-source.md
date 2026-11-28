@@ -131,6 +131,29 @@
 - 幂等：只有带 `relay` 的请求把它算进 `tasks.send` 回执摘要，不带的请求摘要与旧版逐字节相同，旧 requestKey 照常重放。
   `targets.send` 不接受 `relay`。插件作者契约见 `cindy-plugin-creator/references/plugin-agent-tasks.md` §4.11.3。
 
+### 插件跟随的任务回信（2026-11-25）
+
+问题：微信里主人 @ Cindy 提问，那一轮用 `send_to_session` 开了一件任务去查；任务做完把结果发回微信任务后，那一轮的回答
+只留在 Cindy 里，Agent 还得问主人「要不要发到群里」，群里提问的人一直等不到。插件只读得到自己 `tasks.send` 的那一轮。
+
+做法与群里的任务卡（[伙伴群聊](bot-group-chat.md) 第 10 节「结果由开任务的那位回复」）相同：插件在 `tasks.send` 带
+`followUps: true` 的那一轮里新开的任务被记下；它之后发回来的每条消息，宿主都排成单独一轮并为插件记一条后续轮次，
+插件把这一轮的最后回答发回原提问所在的地方。
+
+- **只认那件任务的来信。** 主人在 Cindy 里对这个任务说的话、别的任务发来的消息、这一轮之外开的任务都不算，
+  因此 Cindy 里的对话不会被发到 IM。记录从开任务起 7 天有效。
+- **界面标签不变**，仍是「由任务「X」发送」；`origin`（session）多一个 `pluginReply`（插件 id、名字、开任务那一轮的
+  `relay`），只进 `[消息来源]`：在任务来信那句之后接上「这个任务是你回答插件「P」(plugin_id: …) 从 wechat 群「X」转来的
+  「Y」(user_id: …) 的消息时开的；这一轮最后的回答会由该插件发回那里，群里的人都能看到。不需要让那边知道时，整条回答只写
+  NO_REPLY。」。说明 NO_REPLY 是「只陈述事实」的有意例外，与来信附发送方式同理：不说出来，模型就没法让一条进度不进群。
+  共享任务访客的 session 来源整体脱敏为 `{ kind: 'session' }`，`pluginReply` 随之消失。
+- 每条来信一轮、一轮最多发一次，由 Agent 决定发不发；不是「只发第一条」：任务先发进度、后发结果时，结果不会因为进度先到
+  而漏掉。
+- 后续轮次不受插件派发检查拦截（那是别的任务的话，已经交给宿主投递），插件也不能撤回它；插件不再拥有任务时只是不再跟随。
+- 实现：`pluginTaskService.ts`（`noteOpenedTask`、`openFollowUp`）、`register.ts` 的 `sendToSession`、
+  `messageSource.ts`（`readMessageSourcePluginReply`、`describePluginReply`）；回归见 `pluginTaskService.test.ts`、
+  `messageSource.test.ts`、`taskSlot.test.ts`。
+
 ## 另一台电脑上的任务发来的消息
 
 Agent 用 `send_to_session` 把消息发给另一台电脑上的任务时（包括 2026-11-11 新增的 `device` 远程创建首条消息）（2026-10-14），接收电脑按任务来源

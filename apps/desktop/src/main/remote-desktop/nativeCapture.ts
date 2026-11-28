@@ -4,6 +4,7 @@ import {
   type RemoteDesktopCursorFrame,
   type RemoteDesktopVideoSettings,
 } from '@cindy/device-link';
+import { isStrictBase64Chars } from '@cindy/maker-shared';
 import { app, nativeImage, screen } from 'electron';
 import { execFile, spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -18,6 +19,8 @@ import { decodeWindowsCursorFrame } from './windowsCursorFrame';
 import { resolveLinuxCaptureBinary } from './linuxCapture';
 import { WAYLAND_DISPLAY_ID } from './waylandCapture';
 import { linuxMonitor } from './linuxDesktop';
+import { isX11Desktop, x11InputGeometry } from './linuxInput';
+import { GNOME_DISPLAY, gnomeMonitor, resolveGnomeCaptureBinary } from './gnomeDesktop';
 
 const log = createLogger('remote-desktop:native-capture');
 const exec = promisify(execFile);
@@ -154,7 +157,7 @@ export async function photographMacWindow(
       try {
         const frame = JSON.parse(text.slice(0, end)) as { jpeg?: unknown };
         const jpeg =
-          typeof frame.jpeg === 'string' && /^[A-Za-z0-9+/]+={0,2}$/.test(frame.jpeg)
+          typeof frame.jpeg === 'string' && isStrictBase64Chars(frame.jpeg)
             ? frame.jpeg
             : '';
         finish(jpeg ? Buffer.from(jpeg, 'base64') : null);
@@ -164,6 +167,24 @@ export async function photographMacWindow(
     });
     child.stdin.write('f');
   });
+}
+
+/** The X root pixel rectangle of one Electron display, shared with XTest input
+ * so pointer coordinates and cursor positions use the same mapping. Mixed
+ * scaling, and monitors beyond the helper's buffer bound (`x11_geometry` in
+ * linux-capture/x11.h: 8192 per side, 16777216 pixels), keep the existing
+ * Chromium capture instead of failing the cursor-overlay connection. */
+export function x11CaptureDisplay(display: string): { output: string; scale: number } | null {
+  try {
+    const displays = screen.getAllDisplays();
+    const geometry = x11InputGeometry(displays, display);
+    const [, , width, height] = geometry.map(Number);
+    if (width > 8192 || height > 8192 || width * height > 16_777_216) return null;
+    const scale = displays.find((item) => String(item.id) === display)?.scaleFactor ?? 1;
+    return { output: `x11:${geometry.join(',')}`, scale };
+  } catch {
+    return null;
+  }
 }
 
 /** One capture child for the current lease. No sockets, files, or frame history.
@@ -249,7 +270,7 @@ export class NativeDesktopCapture {
         }
         return generation === this.generation &&
           jpeg.length <= 240000 &&
-          /^[A-Za-z0-9+/]+={0,2}$/.test(jpeg)
+          isStrictBase64Chars(jpeg)
           ? jpeg
           : null;
       } catch {
@@ -265,9 +286,16 @@ export class NativeDesktopCapture {
         : '';
     if (this.child && this.config !== config) this.stop();
     const linux = process.platform === 'linux';
+    // X11 displays keep Electron's numeric IDs; the helper reads root pixels.
+    const x11 = linux && isX11Desktop() && /^[0-9]{1,20}$/.test(display);
+    // GNOME monitors are recorded by their Mutter connector (gnomeDesktop.ts).
+    const gnome = linux && GNOME_DISPLAY.test(display);
     if (
       linux
-        ? display !== WAYLAND_DISPLAY_ID && !/^hyprland:[A-Za-z0-9_.-]{1,80}$/.test(display)
+        ? !x11 &&
+          !gnome &&
+          display !== WAYLAND_DISPLAY_ID &&
+          !/^hyprland:[A-Za-z0-9_.-]{1,80}$/.test(display)
         : process.platform !== 'darwin' || !/^[0-9]{1,10}$/.test(display)
     )
       return null;
@@ -280,16 +308,34 @@ export class NativeDesktopCapture {
     try {
       const cold = !this.child;
       if (!this.child) {
-        const output = linux && display !== WAYLAND_DISPLAY_ID ? await linuxMonitor(display) : null;
-        const executable = await binary();
+        const x11Display = x11 ? x11CaptureDisplay(display) : null;
+        if (x11 && !x11Display) return null;
+        const gnomeOutput = gnome ? await gnomeMonitor(display) : null;
+        const output =
+          linux && !x11 && !gnome && display !== WAYLAND_DISPLAY_ID
+            ? await linuxMonitor(display)
+            : null;
+        const executable = gnome ? await resolveGnomeCaptureBinary() : await binary();
         if (generation !== this.generation) return null;
         const quality = profile.jpegQuality;
         const args = linux
           ? [
               overlay ? 'cursor-overlay' : 'video',
-              String(output?.scale ?? screen.getAllDisplays()[0]?.scaleFactor ?? 1),
+              String(
+                x11Display?.scale ??
+                  gnomeOutput?.scale ??
+                  output?.scale ??
+                  screen.getAllDisplays()[0]?.scaleFactor ??
+                  1,
+              ),
               String(Math.round(quality * 100)),
-              ...(output ? [output.name] : []),
+              ...(x11Display
+                ? [x11Display.output]
+                : gnomeOutput
+                  ? [display]
+                  : output
+                    ? [output.name]
+                    : []),
             ]
           : overlay
             ? [
@@ -303,6 +349,8 @@ export class NativeDesktopCapture {
             : [display];
         if (!linux && this.onlyWindow) args.push(this.onlyWindow);
         else if (!linux && this.excludedWindows) args.push(this.excludedWindows);
+        // X11 rebuilds local-only windows from what lies beneath them (x11.h).
+        else if (x11Display && this.excludedWindows) args.push(`exclude:${this.excludedWindows}`);
         const child = spawn(executable, args, { stdio: 'pipe' });
         this.child = child;
         this.display = display;
@@ -355,7 +403,7 @@ export class NativeDesktopCapture {
               if (
                 typeof value.jpeg !== 'string' ||
                 value.jpeg.length > jpegLimit ||
-                !/^[A-Za-z0-9+/]+={0,2}$/.test(value.jpeg) ||
+                !isStrictBase64Chars(value.jpeg) ||
                 (value.cursor !== null && !isRemoteDesktopCursor(value.cursor))
               )
                 throw new Error('INVALID_CURSOR_FRAME');
@@ -366,7 +414,7 @@ export class NativeDesktopCapture {
             return;
           }
           const jpeg = text.slice(0, -1);
-          if (!/^[A-Za-z0-9+/]+={0,2}$/.test(jpeg)) {
+          if (!isStrictBase64Chars(jpeg)) {
             this.stop();
             return;
           }

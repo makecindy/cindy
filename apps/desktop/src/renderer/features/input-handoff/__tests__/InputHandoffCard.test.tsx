@@ -320,6 +320,13 @@ describe('InputHandoffCard', () => {
         close: mocks.close,
       }));
 
+    it('opens the account verification code without a click on the strip', async () => {
+      answerWith('https://example.test/verify', 'https://example.test/verify');
+      render(<InputHandoffCard sessionId="task" snapshot={qrStep({ accountVerification: true })} />);
+      await waitFor(() => expect(mocks.openPicture).toHaveBeenCalledOnce());
+      expect(screen.getByRole('dialog')).toBeTruthy();
+    });
+
     it('shows the code from the computer, opens its link here first, copies it, and clicks it there', async () => {
       const link = 'https://login.example.com/qr?t=1';
       answerWith(link, link);

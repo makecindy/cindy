@@ -33,7 +33,7 @@ const runtime = createBrowserRuntime({ tempDir: () => app.getPath('temp'), setti
   recipes: { ...loader, ...writer }, secretIo: genericOAuthSecretIo,
   createEmbeddedBackend: createDesktopEmbeddedBackend,
 });
-export const { setBrowserSessionUploadRootResolver, setUserBrowserPageControlProvider, clearUserBrowserMarksForSession, setActiveBrowserBackendKind, setBrowserUseRealProfile, getBrowserMcpDeps, getBrowserAvailability, getActiveBrowserBackendKind, recoverActiveBrowserBackend, getBrowserBackendHealth, createBrowserSettingsHandlers, openBrowserForLogin, disposeBrowserRuntime } = runtime;
+export const { setBrowserSessionUploadRootResolver, setUserBrowserPageControlProvider, clearUserBrowserMarksForSession, setActiveBrowserBackendKind, setBrowserUseRealProfile, getBrowserMcpDeps, getBrowserAvailability, getActiveBrowserBackendKind, recoverActiveBrowserBackend, getBrowserBackendHealth, createBrowserSettingsHandlers, openBrowserForLogin, disposeBrowserRuntime, commitHostBrowserBackendKind } = runtime;
 let registered = false;
 export function registerBrowserBackendIpc() {
   if (registered) return;

@@ -43,7 +43,10 @@ export const LABEL_HOLD_MS = 15_000;
 /** 消息流向:out 本机发给它,in 它发给本机,both 双向都有。 */
 export type TopologyFlow = 'out' | 'in' | 'both';
 
-/** 本机到某台设备数据面的实际传输协议:Agent-Net 直连走 UDP,经中转随中转走 UDP 或 WS;Device Link 直连走 WebRTC,经中转走 WS。 */
+/**
+ * 一段链路的实际传输协议:Agent-Net 直连走 UDP,经中转时每台设备到中转各自走 UDP 或 WS;Device Link 直连走 WebRTC,
+ * 经中转走 WS。
+ */
 export type LinkTransport = 'udp' | 'websocket' | 'webrtc';
 
 export interface TopologyNode {
@@ -57,7 +60,10 @@ export interface TopologyNode {
   status: TopologyStatus;
   /** 本机到它的数据路径，尚未连通时为 null。 */
   path: 'direct' | 'relay' | null;
-  /** 本机到它的实际底层传输协议;未建链、离线或尚无法确定时为 null。 */
+  /**
+   * 它那一段的实际底层传输协议:直连时就是本机到它这一条;经中转时是它自己到中转那一段(Agent-Net 由它经控制流告诉本机，
+   * 本机到中转那段见 TopologyRelay.transport)。未建链、离线、或对方是旧版没说时为 null。
+   */
   transport?: LinkTransport | null;
   /** 远程控制链路的协商状态，供需要控制链路的操作使用。 */
   controlLinkOpen: boolean;
@@ -114,7 +120,7 @@ export interface TopologyStats {
 }
 
 export interface TopologyModel {
-  self: { name: string; platform: string | null } | null;
+  self: { name: string; platform: string | null; appVersion?: string | null } | null;
   nodes: TopologyNode[];
   byId: Map<string, TopologyNode>;
   groups: TopologyGroup[];
@@ -137,17 +143,20 @@ export interface BuildTopologyInput {
   showOffline: boolean;
 }
 
+/**
+ * 经中转的 Agent-Net 链路写对方到中转那一段(对方说的),不再跟着本机那段(2026-11-27 用户要求：两台电脑各写自己那段，
+ * 对照起来像是对不上)。对方没说时不写，不拿本机那段冒充。
+ */
 function deriveTransport(
   status: TopologyStatus,
   path: 'direct' | 'relay' | null,
   encrypted: boolean | undefined,
-  relayProtocol: DeviceLinkPeerLinksSnapshot['relayProtocol'],
-  relayTransport: DeviceLinkPeerLinksSnapshot['relayTransport'],
+  peerRelayVia: DeviceLinkAgentNetPeerRouteView['peerRelayVia'],
 ): LinkTransport | null {
   if (!path || status === 'offline' || encrypted === undefined) return null;
   if (encrypted) {
     if (path === 'direct') return 'udp';
-    return relayProtocol === 'agent-net' ? relayTransport ?? null : null;
+    return peerRelayVia ?? null;
   }
   return path === 'direct' ? 'webrtc' : 'websocket';
 }
@@ -156,8 +165,6 @@ function deriveNode(
   d: DeviceLinkDeviceView,
   link: DeviceLinkPeerLinkView | undefined,
   route: DeviceLinkAgentNetPeerRouteView | undefined,
-  relayProtocol: DeviceLinkPeerLinksSnapshot['relayProtocol'],
-  relayTransport: DeviceLinkPeerLinksSnapshot['relayTransport'],
   controlledBy: ReadonlySet<string>,
   unresponsive: ReadonlySet<string>,
 ): TopologyNode {
@@ -185,7 +192,7 @@ function deriveNode(
     isMobile,
     status,
     path,
-    transport: deriveTransport(status, path, encrypted, relayProtocol, relayTransport),
+    transport: deriveTransport(status, path, encrypted, route?.peerRelayVia),
     controlLinkOpen: control !== undefined,
     encrypted,
     rttMs: control ? control.rttMs : route?.rttMs ?? null,
@@ -267,8 +274,6 @@ export function buildTopology(input: BuildTopologyInput): TopologyModel {
         d,
         linkById.get(d.deviceId),
         routeById.get(d.deviceId),
-        input.relayProtocol,
-        input.relayTransport,
         controlledBy,
         unresponsive,
       ),
@@ -318,6 +323,7 @@ export function buildTopology(input: BuildTopologyInput): TopologyModel {
     self: self ? {
       name: selfDeviceName(self),
       platform: self.platform,
+      appVersion: self.appVersion ?? null,
     } : null,
     nodes,
     byId,

@@ -458,6 +458,11 @@ export class RoutedDeviceLinkClient extends DeviceLinkClient {
       connection => connection.onInboundPeerReleased(peer => { if (this.acceptsScopedEvent(connection, peer)) cb(peer); }));
   }
 
+  override onPeerSendProgress(cb: (peer: string) => void): () => void {
+    return this.both(super.onPeerSendProgress(peer => { if (this.acceptsScopedEvent(this, peer)) cb(peer); }),
+      connection => connection.onPeerSendProgress(peer => { if (this.acceptsScopedEvent(connection, peer)) cb(peer); }));
+  }
+
   override onReliableFrameBeforeLink(cb: (deviceId: string) => unknown): () => void {
     return this.both(super.onReliableFrameBeforeLink(peer => this.acceptsScopedEvent(this, peer) ? cb(peer) : undefined),
       connection => connection.onReliableFrameBeforeLink(peer => this.acceptsScopedEvent(connection, peer) ? cb(peer) : undefined));
@@ -499,6 +504,10 @@ export class RoutedDeviceLinkClient extends DeviceLinkClient {
 
   override getReliableSendQueueDepth(dst: string): number {
     return this.routed(dst)?.getReliableSendQueueDepth(dst) ?? super.getReliableSendQueueDepth(dst);
+  }
+
+  override hasReliableSendProgress(dst: string): boolean {
+    return this.routed(dst)?.hasReliableSendProgress(dst) ?? super.hasReliableSendProgress(dst);
   }
 
   /** 两条连接上的链路合在一起；跨账号 peer 只在专用连接上。relay 往返不覆盖：它是主连接的。 */

@@ -9,12 +9,13 @@ import imBotSearch from '../ImBotSection.settings-search';
 const authState = vi.hoisted(() => ({
   mode: 'cloud' as 'signed-out' | 'local' | 'cloud',
   membershipKind: 'org' as 'personal' | 'org' | null,
+  dataOwnerId: 'owner-1',
 }));
 
 vi.mock('@/contexts/AuthContext', () => ({
   useAuth: () => ({
     mode: authState.mode,
-    dataOwnerId: 'owner-1',
+    dataOwnerId: authState.dataOwnerId,
     user: { membershipKind: authState.membershipKind },
   }),
 }));
@@ -86,6 +87,7 @@ describe('ImBotSection', () => {
   beforeEach(() => {
     authState.mode = 'cloud';
     authState.membershipKind = 'org';
+    authState.dataOwnerId = 'owner-1';
     scrollIntoView.mockReset();
     Object.defineProperty(Element.prototype, 'scrollIntoView', {
       configurable: true,
@@ -160,6 +162,29 @@ describe('ImBotSection', () => {
     expect(scrollIntoView.mock.instances[0]).toBe(
       screen.getByRole('heading', { name: 'settings.imBot.groups.personal' }).closest('section'),
     );
+  });
+
+  // Unit/jsdom: the shared layout must retain the local identity boundary.
+  // Existing deep-link tests do not switch owners while a native editor is open.
+  it('resets the expanded editor and its draft when switching data owners', () => {
+    const view = render(<ImBotSection targetGroup={null} />);
+    fireEvent.click(screen.getByRole('button', { name: /settings.feishuBot.title/ }));
+    fireEvent.click(screen.getByRole('radio', { name: 'settings.feishuBot.services.lark' }));
+    expect(
+      screen
+        .getByRole('radio', { name: 'settings.feishuBot.services.lark' })
+        .getAttribute('aria-checked'),
+    ).toBe('true');
+
+    authState.dataOwnerId = 'owner-2';
+    view.rerender(<ImBotSection targetGroup={null} />);
+    expect(screen.queryByRole('radio', { name: 'settings.feishuBot.services.lark' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: /settings.feishuBot.title/ }));
+    expect(
+      screen
+        .getByRole('radio', { name: 'settings.feishuBot.services.feishu' })
+        .getAttribute('aria-checked'),
+    ).toBe('true');
   });
 
   it('shows only the personal section when the official group is unavailable', () => {

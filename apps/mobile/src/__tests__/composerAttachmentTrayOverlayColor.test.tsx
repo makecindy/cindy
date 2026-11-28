@@ -102,7 +102,7 @@ vi.mock("lucide-react-native", async () => {
     (name: string) =>
     ({ color }: { color: string }) =>
       createElement("i", { "data-testid": name, "data-color": color });
-  return { Pen: icon("pen"), RefreshCw: icon("retry-icon"), X: icon("x") };
+  return { Pen: icon("pen"), RefreshCw: icon("retry-icon"), X: icon("x"), Info: icon("info-icon") };
 });
 vi.mock("@/theme", async () => {
   const tokens = await import("@/theme/tokens");
@@ -459,6 +459,63 @@ describe("composer attachment tray overlay foreground", () => {
       );
       expect(plusN?.getAttribute("data-color")).toBe(colors.swipeActionText);
       expect(colors.swipeActionText).not.toBe(darkColors.ctaText);
+    },
+  );
+
+  // 上传挂着任务页 / App 前台两条生命周期:在途时常驻一行提示,失败卡已结算就不再提示。
+  // 断言保护的是「用户在上传中能看到不要锁屏/切走」与「窄屏换行不溢出」两个可观察结果。
+  it.each(["light", "dark"])(
+    "shows the stay-in-place hint only while an upload is in flight in %s mode",
+    async (mode) => {
+      theme.mode = mode;
+      const { darkColors, lightColors } = await import("@/theme/tokens");
+      const colors = mode === "light" ? lightColors : darkColors;
+      const render = (pendingUploads: PendingLocalAttachmentUpload[]) =>
+        act(() =>
+          root.render(
+            <ComposerAttachmentTray
+              attachments={[]}
+              previews={{}}
+              onRemove={() => {}}
+              onPreview={() => {}}
+              onPreviewPending={() => {}}
+              pendingUploads={pendingUploads}
+              testIDPrefix="t"
+            />,
+          ),
+        );
+
+      render([pending("uploading")]);
+      const hint = host.querySelector('[data-testid="t.attachmentUploadHint"]')!;
+      expect(hint).not.toBeNull();
+      // 独占托盘第一行;文字可伸展换行,320pt 窄屏靠换行而不是截断/溢出。
+      expect(JSON.parse(hint.getAttribute("data-layout")!).width).toBe("100%");
+      const hintText = [...host.querySelectorAll("span")].find(
+        (node) =>
+          node.textContent ===
+          i18n.t("composer.attachments.uploadInProgressHint"),
+      )!;
+      expect(hintText.textContent).toBe(
+        i18n.t("composer.attachments.uploadInProgressHint"),
+      );
+      expect(hintText.getAttribute("data-color")).toBe(colors.textSecondary);
+      // 文字不设宽也不截断:在 320pt 窄屏上换行,而不是溢出或被保成一行。
+      const textLayout = JSON.parse(hintText.getAttribute("data-layout")!);
+      expect(textLayout.flexShrink).toBe(1);
+      expect(textLayout.width).toBeUndefined();
+      // 图标与文字同一档次色,不另造一次性灰。
+      expect(colorOf('[data-testid="info-icon"]')).toBe(colors.textSecondary);
+      render([pending("failed", true)]);
+      expect(
+        host.querySelector('[data-testid="t.attachmentUploadHint"]'),
+      ).toBeNull();
+      // 失败卡照旧保留重试与删除,提示收起但入口不丢。
+      expect(
+        host.querySelector('[data-testid="t.attachmentPendingRetryButton"]'),
+      ).not.toBeNull();
+      expect(
+        host.querySelector('[data-testid="t.attachmentPendingRemoveButton"]'),
+      ).not.toBeNull();
     },
   );
 });
