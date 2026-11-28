@@ -5,6 +5,7 @@ import path from 'node:path';
 
 import { BUNDLED_CATALOG, buildUserProvider } from '@cindy/model-providers';
 import { setActiveCatalog } from '../active-catalog.js';
+import { captureCodexLocalAuthPolicy } from '../provider-route.js';
 import { createCodexSpawnConfig } from '../codexSpawnConfigCore.js';
 import { prepareCodexBrowserCompanion } from '../codex-browser-companion.js';
 import { prepareCodexCustomContextCatalog } from '../codex-custom-context-catalog.js';
@@ -321,6 +322,21 @@ describe('Codex launch requires its local route', () => {
     const config = await f.prepare([], { credentialMode: 'gateway-key' });
     expect(config.codexProxyActive).toBe(true);
     expect(config.codexCustomProviderRoutes).toEqual(expect.arrayContaining([expect.objectContaining({ providerId: provider.id })]));
+  });
+
+  // #13314: the native fixture supplies routes directly. Check that a real local fork
+  // receives the same provider identity from Desktop's isolated control-plane proxy.
+  it('declares the custom Responses identity on the local fork host', async () => {
+    const f = routeFixture();
+    f.ready();
+    const { policy } = await captureCodexLocalAuthPolicy(provider.id, 'fixture-model');
+    const config = await f.prepare([], { hostPurpose: 'control-plane', localAuthPolicy: policy,
+      hostScopeKey: 'local-fork:fixture', credentialMode: 'gateway-key' });
+    try {
+      expect(config.codexCustomProviderRoutes).toContainEqual(expect.objectContaining({
+        providerId: provider.id, responseModels: expect.arrayContaining(['fixture-model']),
+      }));
+    } finally { await config.onHostRetired?.(); }
   });
 
   it('freezes only granted models for previous-model compaction on a shared connection', async () => {
