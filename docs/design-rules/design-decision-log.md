@@ -1471,3 +1471,10 @@ DESIGN.md 瘦身 4a 把下列历史说明从正文移到这里，原文逐字保
 - **§2 Semantic & Accent：窄范围颜色例外**（现在在 [exceptions/color.md](./exceptions/color.md)）：`(owner decision 2026-10-31)` ×2；`(user decision 2026-11-11)`；`(2026-10-23)`；`(2026-09-20, refined 2026-09-21)`；`(finalized 2026-07-17)`；`(A-15)`；`(owner-approved 2026-09-08, extended 2026-09-09)`；`(owner approved the prototype)`；`(registered 2026-08-17)` ×2；`(registered 2026-10-30)`；`(registered 2026-10-26, owner-approved)`；`(registered 2026-11-20, maintainer ruling)`；`(2026-11-11)` ×2
 - **Semantic Exemption Colors (theme-invariant)**（现在在 [exceptions/color.md](./exceptions/color.md)）：`(2026-08-17)` ×3；`(finalized 2026-07-17)` ×4；`(registered 2026-11-11, A-14)`；`(2026-07-27)`；`(2026-09-29)`；`(2026-10-28)`；`(2026-09-08)`；`(2026-11-13)`；`(2026-08-06)`；`(user-approved 2026-11-09)`；`(user request, 2026-11-14)`
 - **15.4 Cross-Theme Exemptions (not covered by CINDY overrides)**（现在在 [exceptions/color.md](./exceptions/color.md)）：`(2026-07-17)`
+
+## 2026-11-29 · DESIGN.md 瘦身 4c：间距与内容形状例外搬出时移出的来源说明
+
+下列括号里的来源与日期说明，在间距与内容形状例外从 DESIGN.md 搬到登记文件时从正文移出，原文逐字记在这里。规则本身没有改。
+
+- **§5 Spacing System：间距例外与保留债务**（现在在 [exceptions/layout.md](./exceptions/layout.md)）：`(owner decision 2026-11-22)`
+- **§5 Content and unresolved shapes：已登记的内容形状**（现在在 [exceptions/layout.md](./exceptions/layout.md)）：`(owner decision 2026-11-22)` ×2；`(owner decision 2026-11-23)` ×2；`(owner decision 2026-11-25)` ×2

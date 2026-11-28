@@ -20,6 +20,7 @@
 | [输入框的发送与停止按钮](../design-rules/composer.md) | 改动输入框的发送 / 停止按钮、工作中光晕或伙伴私聊输入框的通话按钮之前 | 路径 |
 | [Cindy UI 设计系统治理合同](../design-rules/design-governance.md) | 新增或修改设计 Token、主题系统、标准 UI 组件（primitive / pattern）、视觉类门禁 脚本，或参与设计系统迁移 PR 之前；做 UI 圆角分类或点击目标尺寸审查时，同时读 `DESIGN.md` §5 与本文 §13（普通 UI 改动同样适用，不限于设计系统迁移 PR）。 | 路径 |
 | [颜色例外登记](../design-rules/exceptions/color.md) | 给界面加灰度以外的颜色、判断某个颜色能不能用，或改到已登记颜色例外的组件之前 | 主题 |
+| [间距与内容形状例外登记](../design-rules/exceptions/layout.md) | 写死间距值、给内容或自带形状的元素定圆角，或改到已登记例外的位置之前 | 主题 |
 | [排版例外登记](../design-rules/exceptions/typography.md) | 加字号、字重或行高例外，或改到已登记排版例外的文件之前 | 主题 |
 | [开始引导](../design-rules/first-run-guide.md) | 改动首次登录后的开始引导之前 | 路径 |
 | [新建任务页](../design-rules/new-task-home.md) | 改动新建任务页的内容位置、提示卡片或标题栏悬停之前 | 路径 |
