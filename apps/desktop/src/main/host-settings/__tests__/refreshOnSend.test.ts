@@ -9,6 +9,7 @@ function fixture(kind: 'pi' | 'claude-code' | 'codex' | 'acp' = 'pi', proxy = fa
     agentKind: kind, sdkSessionId: 'native-history', remoteHostId: null, agentDeviceId: null,
     hostStartupPreferences: { userPrompt: 'old', makerMemoryEnabled: true },
     codexUsesProxyInstructions: proxy,
+    codexThreadMayHaveRollout: true,
     getStatus: () => 'active' as const,
     isTurnRunning: vi.fn(() => false),
     hasPendingHostOperation: vi.fn(() => false),
@@ -78,6 +79,21 @@ describe('personal instructions at the next user send', () => {
     original.hasPendingHostOperation.mockReturnValue(false);
     original.hasLiveBackgroundWork.mockResolvedValue(false);
     expect((await send())?.hostStartupPreferences.userPrompt).toBe('new');
+  });
+
+  // Unit regression for PR #13620. A prewarmed Codex thread already has an ID,
+  // unlike the pending Claude case, but cannot resume before its first turn.
+  it('keeps the prewarmed Codex handle for the first send, then refreshes the same history', async () => {
+    const { original, deps, send } = fixture('codex', true);
+    original.codexThreadMayHaveRollout = false;
+
+    expect(await send()).toBe(original);
+    expect(deps.rebuild).not.toHaveBeenCalled();
+
+    original.codexThreadMayHaveRollout = true;
+    const refreshed = await send();
+    expect(refreshed?.sdkSessionId).toBe(original.sdkSessionId);
+    expect(refreshed?.hostStartupPreferences.userPrompt).toBe('new');
   });
 
   it('restores read-only directories and the host-owned library slot before rebuilding', async () => {

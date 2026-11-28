@@ -5,7 +5,7 @@ import { HostSettingsError } from './operations.js';
 
 type LiveSession = Pick<Session, 'agentKind' | 'agentDeviceId' | 'remoteHostId' | 'sdkSessionId'
   | 'hostStartupPreferences' | 'getStatus' | 'isTurnRunning' | 'codexUsesProxyInstructions'
-  | 'hasLiveBackgroundWork' | 'hasPendingHostOperation'>;
+  | 'codexThreadMayHaveRollout' | 'hasLiveBackgroundWork' | 'hasPendingHostOperation'>;
 
 interface PendingResume {
   nativeId: string;
@@ -43,11 +43,11 @@ export function createPersonalizationRefresh<Owner extends object, Live extends 
     const pending = pendingByOwner.get(owner);
     const previous = pending?.get(sessionId);
     if (!ownerInput && (!previous || live)) return live;
-    // Preserve live sessions that cannot safely replace their startup instructions.
-    // Normal reopening can pick up the saved value once their history is available.
-    if (live && (live.agentKind === 'acp' ||
-        (live.agentKind === 'codex' && !live.codexUsesProxyInstructions) ||
-        !live.sdkSessionId || live.sdkSessionId === '<pending>')) return live;
+    if (live && (live.agentKind === 'acp' || !live.sdkSessionId || live.sdkSessionId === '<pending>')) return live;
+    // A prewarmed Codex thread has an ID before the provider can resume it.
+    // Keep the live handle until a turn may have established its rollout.
+    if (live?.agentKind === 'codex' &&
+        (!live.codexUsesProxyInstructions || live.codexThreadMayHaveRollout !== true)) return live;
     if (!previous && (!live?.hostStartupPreferences || live.remoteHostId || live.agentDeviceId ||
         live.getStatus() !== 'active')) return live;
 
