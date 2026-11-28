@@ -1,18 +1,26 @@
-vi.mock('@/platform/AdaptiveWindowContext', () => ({ useAdaptiveWindow: () => native.window }));
+vi.mock('@/platform/AdaptiveWindowContext', () => ({ useAdaptiveWindow: () => ({
+  regularWidth: true, regularHeight: true, barEdge: 'none', regions: [], reservedRegionsSupported: false,
+  insets: { top: 0, bottom: 0, left: 0, right: 0 }, ...native.window,
+}) }));
+vi.mock('expo-router', () => ({ useSegments: () => ['sessions', '[sessionId]'] }));
+vi.mock('@/hooks/useLoopingAnimation', () => ({ AnimationVisibilityProvider: ({ children }: { children: ReactNode }) => children }));
+vi.mock('@/session/remoteSessionStore', () => ({ RemoteSessionStoreSubscriptionGate: ({ children }: { children: ReactNode }) => children }));
 vi.mock('@/session/TaskDrawerPresentation', () => ({ useTaskDrawerPresentation: () => null, TaskDrawerPresentation: () => null }));
 vi.mock('@/session/SharedTaskList', () => ({ useSharedTaskList: () => null, SharedTaskListContent: () => null }));
 vi.mock('@/session/SessionOptionsExpoSheet', () => ({ SessionOptionsPresenter: () => null }));
 vi.mock('@/session/RenameSessionModal', () => ({ RenameSessionModal: () => null }));
 vi.mock('@/auth/AuthContext', () => ({ useAuth: () => ({ user: { id: 'test-owner' } }) }));
 // @vitest-environment jsdom
-import { act, useLayoutEffect, type ReactNode } from 'react';
+import { act, useEffect, useLayoutEffect, type ReactNode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { rubberBand, SessionListDrawer, useSessionListDrawerMotion, useSessionListDrawerOpenGesture } from '@/session/SessionListDrawer';
 import { SessionFloatingDrawer, SessionTaskDrawerProvider } from '@/session/SessionTaskDrawer';
 import { motionDuration } from '@/theme/tokens';
 import type { MobileHomeProps } from '@/session/HomeSurface';
-const native = vi.hoisted(() => ({ window: { width: 669, height: 951 }, home: null as MobileHomeProps | null, widths: [] as number[], mounts: 0, unmounts: 0, instances: 0, residentAvailable: true, sharedAvailable: true, handoffAvailable: false, dock: null as (() => void) | null, activeEffects: 0, reduceMotion: true,
+import type { useSessionPaneDivider } from '@/session/SessionPaneDivider';
+import { ResidentHomeList, ResidentHomeListProvider, useResidentHomeList } from '@/session/ResidentHomeList';
+const native = vi.hoisted(() => ({ platform: 'ios', window: { width: 669, height: 951 }, home: null as MobileHomeProps | null, widths: [] as number[], mounts: 0, unmounts: 0, instances: 0, residentAvailable: true, sharedAvailable: true, handoffAvailable: false, dock: null as (() => void) | null, activeEffects: 0, reduceMotion: true,
   attachedGestures: new Set<unknown>(), routeFocused: true, routeListeners: {} as Record<string, Set<() => void>>,
   timings: [] as { to: number; config: { duration: number }; done?: (finished: boolean) => void }[], values: [] as { value: any }[], divider: null as any, pans: {} as Record<string, Record<string, (...args: any[]) => void>>, gesture: {} as Record<string, (event?: any) => void>, cancel: vi.fn() }));
 vi.mock('@/session/HomeSurface', async () => {
@@ -20,6 +28,7 @@ vi.mock('@/session/HomeSurface', async () => {
   const { NavigationContext } = await import('expo-router/react-navigation');
   return { MobileHome: (props: MobileHomeProps) => {
     const navigation = useContext(NavigationContext);
+    const resident = useResidentHomeList(props.width !== undefined);
     const subscribe = useCallback((callback: () => void) => {
       const a = navigation?.addListener('focus', callback);
       const b = navigation?.addListener('blur', callback);
@@ -30,7 +39,9 @@ vi.mock('@/session/HomeSurface', async () => {
     useState(() => ++native.instances);
     native.home = props; native.widths.push(props.width!);
     useEffect(() => { native.mounts++; return () => { native.unmounts++; }; }, []);
-    return <input data-testid="home.retainedSearch" defaultValue="" />;
+    const list = <><input data-testid="home.retainedSearch" defaultValue="" />
+      <button onClick={() => props.onSelectSession?.({ session: { id: 's9' } } as Parameters<NonNullable<MobileHomeProps['onSelectSession']>>[0])}>Task nine</button></>;
+    return resident.enabled ? <ResidentHomeList focused={focused} top={0} left={0} right={0}>{list}</ResidentHomeList> : list;
   } };
 });
 vi.mock('expo-router/react-navigation', async () => {
@@ -41,7 +52,6 @@ vi.mock('expo-router/react-navigation', async () => {
       set.add(listener); return () => { set.delete(listener); };
     } }) };
 });
-vi.mock('@/session/ResidentHomeList', () => ({ LocalHomeList: ({ children }: { children: ReactNode }) => children }));
 vi.mock('@/session/RecentMessageHistories', () => ({ MessageHistoryOverlay: ({ children }: { children: ReactNode }) => children }));
 vi.mock('@/session/NativeResidentHistory', async () => {
   const { View } = await import('react-native');
@@ -50,17 +60,19 @@ vi.mock('@/session/NativeResidentHistory', async () => {
     get NativeTaskDrawerHost() { return native.sharedAvailable ? View : null; },
     get NativeHistorySlot() { return native.residentAvailable ? Slot : null; } };
 });
-vi.mock('@/session/SessionPaneDivider', () => {
-  const gesture = {};
-  return { PaneEdgeInsetProvider: ({ children }: any) => children, usePaneEdgeInset: () => 0,
-    useSessionPaneDivider: (props: any) => {
+vi.mock('@/session/SessionPaneDivider', async () => {
+  // Hoisted mock factories run before this test module's React imports initialize.
+  const { useRef } = await import('react');
+  return { PaneEdgeInsetProvider: ({ children }: { children: ReactNode }) => children, usePaneEdgeInset: () => 0,
+    useSessionPaneDivider: (props: Parameters<typeof useSessionPaneDivider>[0]) => {
+      const gesture = useRef({}).current;
       native.divider = props;
       return { gesture, edge: props.enabled ? <div data-testid="session.paneDivider" /> : null, rowInset: props.enabled ? 24 : 0 };
     } };
 });
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
 vi.mock("react-native", async () => {
-  const { createElement } = await import("react");
+  const { createElement, useImperativeHandle, useRef } = await import("react");
   type Props = {
     children?: ReactNode;
     testID?: string;
@@ -70,6 +82,7 @@ vi.mock("react-native", async () => {
     accessibilityElementsHidden?: boolean;
     importantForAccessibility?: string;
     ref?: import("react").Ref<HTMLDivElement>;
+    onLayout?: () => void;
   };
   const View = ({
     children,
@@ -80,8 +93,15 @@ vi.mock("react-native", async () => {
     accessibilityElementsHidden,
     importantForAccessibility,
     ref,
-  }: Props) =>
-    createElement(
+    onLayout,
+  }: Props) => {
+    const element = useRef<HTMLDivElement>(null);
+    useImperativeHandle(ref, () => Object.assign(element.current!, {
+      measureInWindow: (callback: (x: number, y: number, width: number, height: number) => void) => callback(0, 0, 400, 800),
+    }), []);
+    // Native onLayout arrives after parent refs, not during child layout effects.
+    useEffect(() => { onLayout?.(); }, [onLayout]);
+    return createElement(
       "div",
       {
         "data-testid": testID,
@@ -90,10 +110,11 @@ vi.mock("react-native", async () => {
         "data-pointer-events": pointerEvents,
         "data-accessibility-hidden": accessibilityElementsHidden,
         "data-accessibility-importance": importantForAccessibility,
-        ref,
+        ref: element,
       },
       children,
     );
+  };
   return {
     View,
     Pressable: View,
@@ -113,8 +134,8 @@ vi.mock("react-native", async () => {
       absoluteFill: {},
     },
     Platform: {
-      OS: "ios",
-      select: (values: Record<string, unknown>) => values.ios ?? values.default,
+      get OS() { return native.platform; },
+      select: (values: Record<string, unknown>) => values[native.platform] ?? values.default,
     },
   };
 });
@@ -206,7 +227,7 @@ describe('shared Home drawer host', () => {
     onSelectSession: vi.fn(), runNavigation: vi.fn((action: () => void) => action()), open: true, width: 320 };
   beforeEach(() => {
     Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
-    native.window = { width: 669, height: 951 };
+    native.platform = 'ios'; native.window = { width: 669, height: 951 };
     native.home = null; native.widths = []; native.mounts = 0; native.unmounts = 0; native.instances = 0; native.residentAvailable = true; native.sharedAvailable = true; native.handoffAvailable = false; native.dock = null; native.activeEffects = 0;
     native.attachedGestures = new Set(); native.routeFocused = true; native.routeListeners = {};
     native.values = []; native.gesture = {}; native.divider = null; native.pans = {};
@@ -218,6 +239,35 @@ describe('shared Home drawer host', () => {
     container = document.createElement('div'); document.body.appendChild(container); root = createRoot(container);
   });
   afterEach(async () => { await act(async () => root.unmount()); container.remove(); vi.useRealTimers(); vi.unstubAllGlobals(); });
+  // #10989, unit: real drawer + resident ownership boundary. Previous tests
+  // replaced LocalHomeList with a passthrough and could not detect a list moved
+  // behind UIKit. Minimum failure: wide iOS window, persistent drawer, no
+  // retainedHeight. Native views and Home data are isolated in-memory fixtures.
+  it.each([
+    { platform: 'ios', retainedHeight: undefined, nativeHost: true, destination: 'panel' },
+    { platform: 'ios', retainedHeight: 800, nativeHost: false, destination: 'panel' },
+    { platform: 'ios', retainedHeight: 800, nativeHost: true, destination: 'retainedHost' },
+    { platform: 'android', retainedHeight: undefined, nativeHost: false, destination: 'root' },
+  ])('keeps selectable tasks and search in $destination on $platform (height=$retainedHeight, native=$nativeHost)', async ({ platform, retainedHeight, nativeHost, destination }) => {
+    native.platform = platform; native.window = { width: 1194, height: 834 };
+    native.residentAvailable = nativeHost;
+    const render = (currentSessionId: string) => root.render(<ResidentHomeListProvider>
+      <SessionListDrawer {...props} currentSessionId={currentSessionId} persistent width={400} retainedHeight={retainedHeight} />
+    </ResidentHomeListProvider>);
+    await act(async () => render('s1'));
+    const panel = container.querySelector('[data-testid="sessionDrawer.panel"]')!;
+    const retained = container.querySelector('[data-testid="sessionDrawer.retainedHost"]');
+    const search = container.querySelector<HTMLInputElement>('[data-testid="home.retainedSearch"]')!;
+    expect(search).not.toBeNull();
+    expect(panel.contains(search)).toBe(destination === 'panel');
+    expect(retained?.contains(search) ?? false).toBe(destination === 'retainedHost');
+    search.value = 'kept filter';
+    await act(async () => (container.querySelector('button') as HTMLButtonElement).click());
+    expect(props.onSelectSession).toHaveBeenCalledWith({ session: { id: 's9' } });
+    await act(async () => render('s2'));
+    expect(container.querySelector('[data-testid="home.retainedSearch"]')).toBe(search);
+    expect(search.value).toBe('kept filter');
+  });
   // Unit regression: the floating surface must cover the adaptive window on its
   // first commit, including reopen after rotation; existing tests only checked
   // that a Modal existed. Native frame timing remains a device-level check.
