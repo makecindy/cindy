@@ -3628,6 +3628,34 @@ describe('remoteSessionStore', () => {
     });
   });
 
+  // #4914 (unit): feed the actual Pi maker:event shape through the mobile push
+  // entry point. Marker-only retry coverage missed provider guidance and its lifetime.
+  it.each([
+    { type: 'done', data: { status: 'completed' } },
+    { type: 'error', data: { isTerminal: true, message: 'Provider refused' } },
+    { type: 'text', data: { text: 'Recovered', isFinal: true } },
+  ])('shows Pi region guidance until $type', endEvent => {
+    const sessionId = 's1';
+    const deviceId = 'dev-1';
+    const guidance = "This Go model requires Global regions. Select Global in your workspace's Privacy settings to use it.";
+    const push = (event: Record<string, unknown>) =>
+      remoteSessionStore.applyMakerEventPush({ sessionId, event: { source: 'pi', ...event } }, deviceId);
+    const status = { type: 'status', data: { isRunning: true } };
+    push(status);
+    push({
+      type: 'error',
+      data: { message: JSON.stringify({ message: guidance }), errorStatus: 400, isTerminal: false, willRetry: true },
+    });
+    expect(remoteSessionStore.getSessionRunStatus(sessionId)).toMatchObject({
+      isRunning: true, reconnectAttempt: null, providerRetryDiagnostic: guidance,
+    });
+    push(status);
+    expect(remoteSessionStore.getSessionRunStatus(sessionId).providerRetryDiagnostic).toBe(guidance);
+    push(endEvent);
+    expect(remoteSessionStore.getSessionRunStatus(sessionId).providerRetryDiagnostic).toBeUndefined();
+    expect(remoteSessionStore.isSessionRunning(sessionId)).toBe(endEvent.type === 'text');
+  });
+
   it('projects the overload auto-retry marker as an overload attempt', () => {
     // 上游过载退避与传输层重连共用同一个 attempt 字段, 但必须能分辨: 不认
     // `(auto-retry N/M)` 的话, 整个退避窗口(最长约 30s)手机端只显示笼统的「思考中」
