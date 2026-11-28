@@ -30,7 +30,8 @@
  * scheme check below skips regardless of order.
  */
 
-import type { Definition, Image, ImageReference, Link, Root } from 'mdast';
+import type { Definition, Root } from 'mdast';
+import type { Properties } from 'hast';
 import type { Plugin } from 'unified';
 import { visit } from 'unist-util-visit';
 
@@ -41,7 +42,7 @@ export const RAW_IMAGE_TARGET_PROP = 'data-cindy-image-target';
 const URL_SCHEME_RE = /^[a-z][a-z0-9+.-]*:/i;
 const WINDOWS_ABSOLUTE_PATH_RE = /^[A-Za-z]:[\\/]/;
 
-function isLocalDestination(url: string): boolean {
+export function isLocalDestination(url: string): boolean {
   return (
     WINDOWS_ABSOLUTE_PATH_RE.test(url) ||
     url.startsWith('file://') ||
@@ -55,10 +56,9 @@ const remarkPreserveRawLocalDestinations: Plugin<[], Root> = () => {
     visit(tree, 'definition', (node) => {
       if (!definitions.has(node.identifier)) definitions.set(node.identifier, node);
     });
-    visit(tree, ['image', 'imageReference', 'link'], (node) => {
-      const typed = node as Image | ImageReference | Link;
-      const target: Definition | Image | Link | undefined =
-        node.type === 'imageReference' ? definitions.get(node.identifier) : (typed as Image | Link);
+    visit(tree, ['image', 'imageReference', 'link', 'linkReference'], (node) => {
+      if (node.type !== 'image' && node.type !== 'imageReference' && node.type !== 'link' && node.type !== 'linkReference') return;
+      const target = 'identifier' in node ? definitions.get(node.identifier) : node;
       if (!target) return;
       const isImage = node.type === 'image' || node.type === 'imageReference';
       const hostlessImage =
@@ -66,10 +66,11 @@ const remarkPreserveRawLocalDestinations: Plugin<[], Root> = () => {
       const local = hostlessImage || isLocalDestination(target.url);
       if (!isImage && !local) return;
 
-      typed.data = {
-        ...typed.data,
+      const data: (typeof node.data & { hProperties?: Properties }) | undefined = node.data;
+      node.data = {
+        ...data,
         hProperties: {
-          ...(typed.data?.hProperties ?? {}),
+          ...data?.hProperties,
           ...(local ? { [isImage ? RAW_LOCAL_IMAGE_SRC_PROP : RAW_LOCAL_LINK_HREF_PROP]: target.url } : {}),
           ...(isImage ? { [RAW_IMAGE_TARGET_PROP]: target.url } : {}),
         },

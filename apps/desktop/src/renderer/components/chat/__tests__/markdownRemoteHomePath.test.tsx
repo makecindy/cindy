@@ -27,6 +27,18 @@ vi.mock('../messageLinkActions', async (original) => ({
 vi.mock('@/features/right-sidebar/lib/openInSidebarFileBrowser', () => ({ openDirInSidebarFileBrowser: vi.fn() }));
 vi.mock('@/lib/toast', () => ({ toast: { error: vi.fn() } }));
 
+const parsedMarkdownLengths = vi.hoisted(() => [] as number[]);
+vi.mock('react-markdown', async (original) => {
+  const module = await original<typeof import('react-markdown')>();
+  return {
+    ...module,
+    default: (props: Parameters<typeof module.default>[0]) => {
+      if (props.children) parsedMarkdownLengths.push(props.children.length);
+      return module.default(props);
+    },
+  };
+});
+
 // #11145: real MarkdownRenderer entry, unlike the pure stat-cache tests, must
 // turn an inline ~/ reference into an actionable file on its owning device.
 // Minimal failing input: `~/Documents/report.html` in /remote/project.
@@ -41,10 +53,10 @@ const events = new Map<string, Set<(value: any) => void>>();
 const eventNames = ['onPresenceChanged', 'onStatusChanged', 'onPeerLinkReopened', 'onResponsivenessChanged'];
 const emit = (name: string, value: unknown) => events.get(name)?.forEach(listener => listener(value));
 
-function reply(content = '`' + href + '`', deviceId = 'remote-a', workingDir = '/remote/project', origin?: SessionFileOrigin) {
+function reply(content = '`' + href + '`', deviceId = 'remote-a', workingDir = '/remote/project', origin?: SessionFileOrigin, isStreaming = false) {
   return <MemoryRouter><Tooltip.Provider>
     <ChatSessionFileProvider value={{ sessionId: 'session', workingDir, origin: origin ?? { kind: 'device', deviceId } }}>
-      <MarkdownRenderer content={content} workingDir={workingDir} currentSessionId="session" />
+      <MarkdownRenderer content={content} workingDir={workingDir} currentSessionId="session" isStreaming={isStreaming} />
     </ChatSessionFileProvider>
   </Tooltip.Provider></MemoryRouter>;
 }
@@ -298,6 +310,105 @@ describe('remote home references', () => {
       'session', '/repo/documents/demo.html', expect.any(Function),
       expect.objectContaining({ origin: { kind: 'local' } }), 'external',
     );
+  });
+
+  // #11851 unit/DOM: the real renderer must preserve the heading target and
+  // existing relative file reference when cross-paragraph labels expand.
+  it.each([false, true])('distinguishes same-name links across paragraphs without moving their targets (streaming=%s)', async isStreaming => {
+    const local = { kind: 'local' } as const;
+    const view = render(reply([
+      '## [guide.html](/workspace/A/docs/guide.html)',
+      '[guide.html](/workspace/B/docs/guide.html)',
+      '[intro.html](docs/intro.html) [Website](https://example.com/)',
+    ].join('\n\n'), 'unused', '/workspace/A', local, isStreaming));
+    await act(async () => {});
+    const links = view.getAllByRole('link');
+    expect(links.map(link => link.textContent)).toEqual(['A/docs/guide.html', 'B/docs/guide.html', 'intro.html', 'Website']);
+    expect(view.getByRole('heading').id).toBe('guidehtml');
+    localResolve.mockResolvedValueOnce({ status: 'unique', candidates: ['/workspace/B/docs/guide.html'], kind: 'file' });
+    await act(async () => fireEvent.click(view.getByRole('link', { name: 'B/docs/guide.html' })));
+    expect(openHtmlFileByPreference).toHaveBeenCalledWith(
+      'session', '/workspace/B/docs/guide.html', expect.any(Function),
+      expect.objectContaining({ origin: local }), undefined,
+    );
+    localResolve.mockResolvedValueOnce({ status: 'unique', candidates: ['/workspace/A/docs/intro.html'], kind: 'file' });
+    await act(async () => fireEvent.click(view.getByRole('link', { name: 'intro.html' })));
+    expect(openHtmlFileByPreference).toHaveBeenCalledWith(
+      'session', '/workspace/A/docs/intro.html', expect.any(Function),
+      expect.objectContaining({ origin: local }), undefined,
+    );
+  });
+
+  // #11851: the real renderer should reuse completed blocks on tail updates.
+  // The label tests do not detect reparses. DOM/unit tier, measured in characters.
+  it.each([
+    ['web links', '[first](https://example.com/a)', '[second](https://example.com/b)'],
+    ['images', '![first](/A/guide.png)', '![second](/B/guide.png)'],
+    ['fenced code', '~~~text\n[guide.html](/A/guide.html)\n~~~', '~~~text\n[guide.html](/B/guide.html)\n~~~'],
+    ['prose', 'First paragraph', 'Second paragraph'],
+    ['distinct files', '[a.html](/A/a.html)', '[b.html](/B/b.html)'],
+  ])('only reparses the growing tail after completed %s', (_label, first, second) => {
+    vi.useFakeTimers();
+    try {
+      const prefix = [first, 'Completed text. '.repeat(3_500), second, ''].join('\n\n');
+      const frame = (tail: string) => reply(prefix + tail, 'unused', '/workspace', { kind: 'local' }, true);
+      const view = render(frame('Tail'));
+      parsedMarkdownLengths.length = 0;
+      view.rerender(frame('Tail updated'));
+      act(() => vi.advanceTimersByTime(500));
+      expect(view.container.textContent?.endsWith('Tail updated')).toBe(true);
+      expect(parsedMarkdownLengths).toEqual(['Tail updated'.length]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it.each(['local', 'device'] as const)('opens the authored destination when clicking its code label on %s', async kind => {
+    const origin = kind === 'local' ? { kind } : { kind, deviceId: 'remote-a' };
+    const authored = '/external/A/guide.html';
+    const shadow = '/work/A/guide.html';
+    localResolve.mockImplementation(async ({ href: target }) => ({
+      status: 'unique', candidates: [target === 'A/guide.html' ? shadow : target], kind: 'file',
+    }));
+    chatStat.mockImplementation(async ({ absPath }) => ({ verdict: [authored, shadow].includes(absPath) ? 'file' : 'nonfile' }));
+    const view = render(reply('[`guide.html`](/external/A/guide.html) [`guide.html`](/external/B/guide.html)', 'remote-a', '/work', origin));
+    await act(async () => {});
+    await act(async () => fireEvent.click(view.getByText('A/guide.html', { selector: 'code' })));
+    expect(openHtmlFileByPreference).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(openHtmlFileByPreference).mock.calls[0]?.[1]).toBe(authored);
+  });
+
+  it.each([
+    ['file URL', '[guide.html](file:///workspace/A/guide.html) [guide.html](file://localhost/workspace/B/guide.html)'],
+    ['reference', '[guide.html][a] [guide.html][b]\n\n[a]: /workspace/A/guide.html\n[b]: /workspace/B/guide.html'],
+  ])('distinguishes same-name %s links', async (_kind, content) => {
+    const view = render(reply(content, 'unused', '/workspace', { kind: 'local' }));
+    await act(async () => {});
+    expect(view.getAllByRole('link').map(link => link.textContent)).toEqual(['A/guide.html', 'B/guide.html']);
+  });
+
+  it('keeps the original heading anchor when a file label is expanded', async () => {
+    const view = render(reply('## [guide.html](/a/guide.html)\n\n[guide.html](/b/guide.html) [Jump](#guidehtml)'));
+    await act(async () => {});
+    const heading = view.getByRole('heading', { name: 'a/guide.html' });
+    heading.scrollIntoView = vi.fn();
+    await act(async () => fireEvent.click(view.getByRole('link', { name: 'Jump' })));
+    expect(heading.scrollIntoView).toHaveBeenCalled();
+  });
+
+  it('avoids a label already used for a different file', async () => {
+    const view = render(reply('[guide.html](/work/A/guide.html) [guide.html](/work/B/guide.html) [A/guide.html](/else/A/guide.html)'));
+    await act(async () => {});
+    expect(view.getAllByRole('link').map(link => link.textContent)).toEqual(['work/A/guide.html', 'B/guide.html', 'A/guide.html']);
+  });
+
+  it('explains multiple matches when an authored local link is clicked', async () => {
+    const view = render(reply('[notes.html](docs/notes.html)', 'unused', '/workspace', { kind: 'local' }));
+    await act(async () => {});
+    localResolve.mockResolvedValueOnce({ status: 'multiple', candidates: ['/workspace/A/docs/notes.html', '/workspace/B/docs/notes.html'] });
+    await act(async () => fireEvent.click(view.getByRole('link', { name: 'notes.html' })));
+    expect(toast.error).toHaveBeenCalledWith('chat.markdownRenderer.duplicateFiles');
+    expect(openHtmlFileByPreference).not.toHaveBeenCalled();
   });
 
   it.each(['~/.config', '~/report.html'])('preserves resolved directory kind outside the workdir for %s', async directoryHref => {

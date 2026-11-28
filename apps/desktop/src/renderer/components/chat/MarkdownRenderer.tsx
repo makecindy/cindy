@@ -41,6 +41,7 @@ import remarkStrictInlineMath from './remarkStrictInlineMath';
 import { normalizeDisplayMathFences } from './normalizeDisplayMath';
 import { normalizeMathDelimiters } from '@cindy/maker-shared/math-markdown';
 import remarkLocalPathLinks, { BARE_PATH_ATTR } from './remarkLocalPathLinks';
+import rehypeDisambiguateLocalLinks, { LINK_CODE_LABEL_PROP } from './rehypeDisambiguateLocalLinks';
 import remarkHtmlImages from './remarkHtmlImages';
 import remarkBareSpaceLocalImages from './remarkBareSpaceLocalImages';
 import remarkPreserveRawLocalDestinations, {
@@ -59,7 +60,7 @@ import {
 } from './rehypeStreamWordFade';
 import { repairStreamingMarkdown } from './repairStreamingMarkdown';
 import { StreamingMarkdownChunk } from './StreamingMarkdownChunk';
-import { splitStreamingMarkdownChunks } from './streamingMarkdownChunks';
+import { splitStreamingMarkdownChunks, type StreamingLocalLinkCache } from './streamingMarkdownChunks';
 import { assignStreamingHeadingIds, rehypeMarkHeadingSlugText } from './streamingHeadingIds';
 import { useStreamingReveal } from './streamingReveal';
 import { useReducedMotion } from '@/hooks/useReducedMotion';
@@ -296,9 +297,17 @@ const REHYPE_PLUGINS: PluggableList = [
   rehypeHighlightShared,
   rehypeFencedCodeMarker,
 ];
+const REHYPE_PLUGINS_PRIVILEGED: PluggableList = [
+  rehypeSlug,
+  rehypeDisambiguateLocalLinks,
+  ...REHYPE_PLUGINS.slice(1),
+];
 // 流式分片各自解析，rehype-slug 的去重计数跨不了分片：同一位置改为只记录标题文本，
 // 提交后由 assignStreamingHeadingIds 按文档顺序统一分配 id（见 streamingHeadingIds.ts）。
 const STREAMING_REHYPE_PLUGINS: PluggableList = REHYPE_PLUGINS.map((plugin) =>
+  plugin === rehypeSlug ? rehypeMarkHeadingSlugText : plugin,
+);
+const STREAMING_REHYPE_PLUGINS_PRIVILEGED: PluggableList = REHYPE_PLUGINS_PRIVILEGED.map((plugin) =>
   plugin === rehypeSlug ? rehypeMarkHeadingSlugText : plugin,
 );
 
@@ -1961,12 +1970,16 @@ const MarkdownRendererBase = memo(function MarkdownRendererBase({
     () => normalizeMarkdownRendererContent(repairedContent, emitSourceLines),
     [repairedContent, emitSourceLines],
   );
+  const streamingLinkCache = useMemo<StreamingLocalLinkCache | undefined>(
+    () => isStreaming && allowPrivilegedLinks && !emitSourceLines ? new Map() : undefined,
+    [isStreaming, allowPrivilegedLinks, emitSourceLines],
+  );
   const streamingChunks = useMemo(
     () =>
       isStreaming && !emitSourceLines
-        ? splitStreamingMarkdownChunks(renderedContent)
+        ? splitStreamingMarkdownChunks(renderedContent, streamingLinkCache)
         : [{ start: 0, content: renderedContent }],
-    [emitSourceLines, isStreaming, renderedContent],
+    [emitSourceLines, isStreaming, renderedContent, streamingLinkCache],
   );
   const [lightbox, setLightbox] = useState<{
     src: string;
@@ -2196,7 +2209,8 @@ const MarkdownRendererBase = memo(function MarkdownRendererBase({
         // react-markdown gives us a node tree; nodeToText collapses it safely.
         const text = nodeToText(children);
         const safeProps = omitMarkdownInternalProps(props as Record<string, unknown>);
-        if (!allowPrivilegedLinks) {
+        delete safeProps[LINK_CODE_LABEL_PROP];
+        if (!allowPrivilegedLinks || node?.properties[LINK_CODE_LABEL_PROP]) {
           return (
             <code className={cn(INLINE_CODE_CLASS, INLINE_CODE_WRAP_CLASS)} {...safeProps}>
               {children}
@@ -2344,7 +2358,7 @@ const MarkdownRendererBase = memo(function MarkdownRendererBase({
             remarkPlugins={
               allowPrivilegedLinks ? REMARK_PLUGINS_PRIVILEGED : REMARK_PLUGINS
             }
-            rehypePlugins={STREAMING_REHYPE_PLUGINS}
+            rehypePlugins={allowPrivilegedLinks ? STREAMING_REHYPE_PLUGINS_PRIVILEGED : STREAMING_REHYPE_PLUGINS}
             components={components}
             urlTransform={urlTransform}
             wordFadeState={wordFadeState}
@@ -2355,7 +2369,7 @@ const MarkdownRendererBase = memo(function MarkdownRendererBase({
       ) : (
         <ReactMarkdown
           remarkPlugins={allowPrivilegedLinks ? REMARK_PLUGINS_PRIVILEGED : REMARK_PLUGINS}
-          rehypePlugins={REHYPE_PLUGINS}
+          rehypePlugins={allowPrivilegedLinks ? REHYPE_PLUGINS_PRIVILEGED : REHYPE_PLUGINS}
           components={components}
           urlTransform={urlTransform}
           skipHtml

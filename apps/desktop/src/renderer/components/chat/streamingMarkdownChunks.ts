@@ -1,7 +1,76 @@
+import remarkCjkFriendly from 'remark-cjk-friendly';
+import remarkGfm from 'remark-gfm';
+import remarkMath from 'remark-math';
+import remarkParse from 'remark-parse';
+import { unified } from 'unified';
+import { visit } from 'unist-util-visit';
+import { absoluteFileLabelName, localLinkLabelPath } from './rehypeDisambiguateLocalLinks';
+import { isLocalDestination } from './remarkPreserveRawLocalDestinations';
+
 export interface StreamingMarkdownChunk {
   /** 原文中的稳定起点，可直接作为 React key 与淡入状态分片 key。 */
   start: number;
   content: string;
+}
+
+interface ChunkLocalLinks {
+  hasLocalLink: boolean;
+  candidates: { name: string; path: string }[];
+}
+
+export type StreamingLocalLinkCache = Map<string, ChunkLocalLinks>;
+
+const linkParser = unified()
+  .use(remarkParse)
+  .use(remarkGfm, { singleTilde: false })
+  .use(remarkCjkFriendly)
+  .use(remarkMath);
+
+// Also admit escapes and entities that could encode an absolute destination.
+const POSSIBLE_ABSOLUTE_LINK = /\]\(\s*<?(?:\/|[a-z]:|file:|[a-z]*&|\\)/i;
+
+function readChunkLocalLinks(content: string): ChunkLocalLinks {
+  const result: ChunkLocalLinks = { hasLocalLink: false, candidates: [] };
+  visit(linkParser.parse(content), 'link', (link) => {
+    const [label] = link.children;
+    if (link.children.length !== 1 || (label?.type !== 'text' && label?.type !== 'inlineCode')) return;
+    if (!isLocalDestination(link.url)) return;
+    const path = localLinkLabelPath(link.url);
+    if (path === undefined) return;
+    result.hasLocalLink = true;
+    const name = absoluteFileLabelName(path, label.value);
+    if (name) result.candidates.push({ name, path });
+  });
+  return result;
+}
+
+function needsLocalLinkContext(chunks: StreamingMarkdownChunk[], cache: StreamingLocalLinkCache): boolean {
+  const linkChunks = chunks.filter(chunk => chunk.content.includes(']('));
+  // Parse only when an explicit absolute destination looks possible. The
+  // syntax tree distinguishes links from images and examples in code.
+  if (linkChunks.length < 2 || !linkChunks.some(chunk => POSSIBLE_ABSOLUTE_LINK.test(chunk.content))) {
+    cache.clear();
+    return false;
+  }
+  const retained = new Set(linkChunks.map(chunk => chunk.content));
+  for (const content of cache.keys()) if (!retained.has(content)) cache.delete(content);
+
+  const pathsByName = new Map<string, string>();
+  let hasConflict = false;
+  let localChunks = 0;
+  for (const { content } of linkChunks) {
+    const links = cache.get(content) ?? readChunkLocalLinks(content);
+    cache.set(content, links);
+    if (!links.hasLocalLink) continue;
+    localChunks += 1;
+    for (const { name, path } of links.candidates) {
+      const previousPath = pathsByName.get(name);
+      if (previousPath !== undefined && previousPath !== path) hasConflict = true;
+      pathsByName.set(name, path);
+    }
+    if (hasConflict && localChunks > 1) return true;
+  }
+  return false;
 }
 
 function isTopLevelContinuation(line: string): boolean {
@@ -93,11 +162,12 @@ export function getStreamingMarkdownThrottleInterval(markdown: string): number {
  * 缩进、列表和引用的续行不会被拆开。这样已封口块可由 React.memo 永久复用，
  * 后续 token 只会让最后一个块重新走 Markdown 解析。
  */
-export function splitStreamingMarkdownChunks(markdown: string): StreamingMarkdownChunk[] {
+export function splitStreamingMarkdownChunks(markdown: string, localLinkCache?: StreamingLocalLinkCache): StreamingMarkdownChunk[] {
   if (
     (!markdown.includes('\n\n') && !markdown.includes('\r\n\r\n')) ||
     needsWholeDocumentContext(markdown)
   ) {
+    localLinkCache?.clear();
     return [{ start: 0, content: markdown }];
   }
 
@@ -153,7 +223,10 @@ export function splitStreamingMarkdownChunks(markdown: string): StreamingMarkdow
     lineStart = nextLineStart;
   }
 
-  if (boundaries.length === 0) return [{ start: 0, content: markdown }];
+  if (boundaries.length === 0) {
+    localLinkCache?.clear();
+    return [{ start: 0, content: markdown }];
+  }
 
   const chunks: StreamingMarkdownChunk[] = [];
   let start = 0;
@@ -163,5 +236,8 @@ export function splitStreamingMarkdownChunks(markdown: string): StreamingMarkdow
     start = boundary;
   }
   chunks.push({ start, content: markdown.slice(start) });
+  if (localLinkCache && needsLocalLinkContext(chunks, localLinkCache)) {
+    return [{ start: 0, content: markdown }];
+  }
   return chunks;
 }
