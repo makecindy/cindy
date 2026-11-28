@@ -302,6 +302,7 @@
     }
   },
   "screen": {
+    "backgroundTasksRunning": "En cours en arrière-plan ({{taskCount}})…",
     "thinking": "Réflexion…",
     "tokenCount": "{{tokens}} tok",
     "tokenCountFull": "{{tokens}} jetons",
