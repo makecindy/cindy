@@ -5,7 +5,9 @@
  *   Agent 在那台运行，说明写在本机，选路记录提交给那台。
  * - 其余：本机。
  */
+import type { ProviderView } from '@cindy/model-providers';
 import {
+  type ModelGroupAgentKind,
   type ModelGroupResolveRequest,
   type ModelGroupResolveResult,
   type ModelGroupSelection,
@@ -19,6 +21,18 @@ export function modelGroupOwnerDevice(
   draftDeviceId: string | null | undefined,
 ): string | null {
   return draftDeviceId || selection.deviceId || null;
+}
+
+/** 本机选路失败时，草稿不能再用组成员的旧入口，或把跳过的账号交回同一个池重新分配。 */
+export function isExcludedDraftFallback(
+  providers: readonly ProviderView[],
+  fallback: { providerId?: string | null; model: string; persistedAgentKind: ModelGroupAgentKind },
+  result: ModelGroupResolveResult | null,
+): boolean {
+  if (providers.some(view => view.id === fallback.providerId && view.subscriptionPoolAlias)) return true;
+  return result?.outcome === 'unavailable' && result.trace.some(entry =>
+    !entry.agentDeviceId && entry.providerId === fallback.providerId && entry.model === fallback.model
+    && entry.agentKind === fallback.persistedAgentKind && (entry.accountId !== undefined || entry.why === 'off'));
 }
 
 export async function resolveDraftModelGroup(

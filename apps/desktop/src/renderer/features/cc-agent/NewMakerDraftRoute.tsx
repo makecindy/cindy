@@ -25,7 +25,7 @@ import {
   type PluginEngineSource,
 } from '@/lib/pluginEngineSelection';
 import { bindModelGroupSession, buildModelGroupRouteNote, commitModelGroupDecision, modelGroupLocationNameFrom, useModelGroups, writeModelGroupRouteNote } from '../model-groups/modelGroupsClient';
-import { modelGroupOwnerDevice, resolveDraftModelGroup } from '../model-groups/draftModelGroupRouting';
+import { isExcludedDraftFallback, modelGroupOwnerDevice, resolveDraftModelGroup } from '../model-groups/draftModelGroupRouting';
 import { implicitSourceRouteSelection, userDefinedModelGroupRoutes } from '../model-groups/sourceRouteProviders';
 import { bindDeviceModelGroupSession, commitDeviceModelGroupDecision, useDeviceModelGroups, useDevicesModelGroups, writeDeviceModelGroupRouteNote } from '../model-groups/remoteModelGroups';
 import { findModelGroupRoute, MODEL_GROUPS_DEFAULTS, type ModelGroupResolvedRoute, type ModelGroupSelection } from '../../../shared/modelGroups';
@@ -5980,6 +5980,11 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
           const routedTo: GhostModelRoute | ModelGroupResolvedRoute | null = pluginRoute?.outcome === 'routed'
             ? pluginRoute.route
             : modelGroupRoute?.outcome === 'routed' ? modelGroupRoute.route : keptPluginRoute;
+          if (modelGroupAtSend && !routedTo && !modelGroupOwner && !catalogDeviceId && !effectiveRemoteHostId
+            && isExcludedDraftFallback(providers, sendBaseRoute, modelGroupRoute)) {
+            toast.error(t('newChat.modelSelector.source.emptyTitle'));
+            return;
+          }
           // 输入框见到选着模型组或插件模型就不按原模型挡发送(ChatInput sendRoutesOwnModel)；这里没选出来源、
           // 沿用原模型时补上那道检查：原模型所在那台的目录要就绪，也要有已连接的来源。
           if ((activeModelGroup || activePluginModel) && !routedTo) {
@@ -7374,6 +7379,10 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
           ? pluginRoute.route
           : modelGroupRoute?.outcome === 'routed' ? modelGroupRoute.route : null;
         if (goalModelGroup && !routedTo) assertDraftCatalogReady();
+        if (goalModelGroup && !routedTo && !goalModelGroupOwner && !catalogDeviceId && !effectiveRemoteHostId
+          && isExcludedDraftFallback(providers, goalBaseRoute, modelGroupRoute)) {
+          throw new Error(t('newChat.modelSelector.source.emptyTitle'));
+        }
         // 同 handleSend：选了模型组或插件模型却沿用原模型时，原模型要有已连接的来源，
         // 否则不建目标任务、提示先连接来源(输入框这时不按原模型挡，见 ChatInput sendRoutesOwnModel)。
         if ((activeModelGroup || activePluginModel) && !routedTo) {
