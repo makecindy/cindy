@@ -4654,16 +4654,20 @@ export function applyDirectoryGrants(
         : maker.closeSession(sessionId)),
     });
     if (result.changed && axis === 'extraDirs' && sess?.requiresRuntimeRecycleForExtraDirs?.()) {
-      // ACP only accepts `additionalDirectories` on session/new, session/resume, and session/load.
-      // Recycle the live runtime (immediately when idle, or after the current turn) only when the
-      // session actually binds native `additionalDirectories` at session open.
-      await withRehydrateCloseSuppressed(sessionId, () =>
-        maker.closeSessionIfCurrent(
-          sess,
-          'runtime-refresh',
-          sess.isTurnRunning() ? { afterCurrentTurn: true } : undefined,
-        ),
-      );
+      // ACP only binds user `additionalDirectories` on session/new, session/resume, and
+      // session/load; host-owned plugin library slots are delivered per turn via
+      // `<cindy-library-native-read>` without mutating handshake `additionalDirectories`.
+      // Skip runtime recycle on focus-driven library slot sync so live ACP processes keep
+      // their prompt cache intact across tab switches.
+      if (!options.replaceLibrarySlot) {
+        await withRehydrateCloseSuppressed(sessionId, () =>
+          maker.closeSessionIfCurrent(
+            sess,
+            'runtime-refresh',
+            sess.isTurnRunning() ? { afterCurrentTurn: true } : undefined,
+          ),
+        );
+      }
     }
     if (result.changed || result.rejectedCount > 0) log.info(label, {
       sessionId,
@@ -13866,12 +13870,20 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       }
 
       lockStage = 'lazy-resume-bootstrap';
+      const storedEffort = dbRow.effort ?? meta.effort;
+      const storedFastMode = dbRow.fastMode ?? meta.fastMode;
       try {
         const createOpts = buildCreateOptsWithStderr({
           id: targetSessionId,
           agentKind: targetAgentKind,
           workingDir: meta.workDir,
           model: meta.model,
+          ...(storedEffort ? { effort: storedEffort as CreateOpts['effort'] } : {}),
+          ...(targetAgentKind === 'acp'
+            ? { fastMode: false }
+            : storedFastMode !== undefined && storedFastMode !== null
+              ? { fastMode: storedFastMode }
+              : {}),
           resumeSessionId: meta.sdkSessionId,
           // 插件任务的档位由用户在任务设置里给定(errand 还会再收窄),不能借 lazy-resume
           // 的缺省 bypass 提权;档位不一致还会让 errand 复用判定每轮都失败、另开新会话
