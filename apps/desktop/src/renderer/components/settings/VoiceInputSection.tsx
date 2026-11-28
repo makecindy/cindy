@@ -73,6 +73,7 @@ import {
   voiceInputShortcutNeedsMacNativeListener,
   type VoiceInputShortcut,
 } from '@/voice-input/shortcut';
+import { resolveVoiceInputReadinessRecovery } from '@/voice-input/readinessRecovery';
 import { requestRendererMicrophonePermission } from '@/voice-input/startGuards';
 import {
   canReuseVoiceInputCustomAsrCredential,
@@ -509,7 +510,9 @@ function VoiceInputServiceSourceCard({ modelSelection }: VoiceInputSectionProps)
     || localAsrSelected
     || readiness?.failureReason === 'codex-realtime-unsupported'
     || readiness?.failureReason === 'local-asr-model-missing'
-    || readiness?.failureReason === 'local-asr-unsupported';
+    || readiness?.failureReason === 'local-asr-unsupported'
+    || Boolean(byok && readiness && !readiness.ok
+      && resolveVoiceInputReadinessRecovery(readiness, 'byok').settingsTab === 'voice-input');
 
   const handleSaveCustomAsr = useCallback(async () => {
     const saved = await saveCustomAsr({
