@@ -55,9 +55,14 @@ import { modelNeedsReselection } from '@/session/modelReselection';
 
 import { completePrecreatedWorktreeRecovery } from '@/session/completePrecreatedWorktreeRecovery';
 
-import { mobileDurableOutbox, getCurrentMobileOutboxRecords } from '@/session/mobileDurableOutbox';
+import {
+  mobileDurableOutbox,
+  getCurrentMobileOutboxRecords,
+  retractSubmittedDialogueCreation,
+  type SubmittedDialogueTarget,
+} from '@/session/mobileDurableOutbox';
 
-import type { DurableOutboxRecord } from '@/session/durableOutbox';
+import { needsHostCreation, type DurableOutboxRecord } from '@/session/durableOutbox';
 import { stripTrailingPathSeparators } from '@cindy/maker-shared/path-text';
 import { workspacePathsEqual } from '@/session/workspaceSelection';
 import { isSharedTaskPeer } from '@cindy/device-link';
@@ -122,6 +127,7 @@ import {
   MessageCircle,
   Mic,
   Plus,
+  RotateCcw,
   Settings,
   Sparkles,
   Target,
@@ -143,7 +149,7 @@ import type {
   RemoteDirectoryEntry,
 } from '@/device-link/mobileMakerTransport';
 import { describeNewSessionError, formatRemoteError, humanizeRemoteError, type NewSessionError } from '@/device-link/remoteStatus';
-import { agentAuthGateHint, agentAuthGateVerdict } from '@/session/agentAuthGate';
+import { agentAuthGateHint, agentAuthGateVerdict, confirmNewSessionAgentAuth } from '@/session/agentAuthGate';
 import { connectedProvidersForAgent, getModel } from '@cindy/model-providers/registry';
 import { withTransientRemoteRetry } from '@/device-link/remoteRetry';
 import { useMobileMakerTransport } from '@/device-link/useMobileMakerTransport';
@@ -246,6 +252,7 @@ import {
   mergeSlashCommands,
 } from '@/session/composerPalette';
 import { mobileDebugLog } from '@/debug/mobileDebugLog';
+import { beginNewSessionBackgroundDelivery } from '@/session/newSessionBackgroundDelivery';
 import {
   applyPluginEnginePick,
   applyRemoteAgentPick,
@@ -394,10 +401,16 @@ import {
 } from '@/session/mobileVoiceCue';
 import {
   createMobileVoiceControllerSession,
+  replayMobileVoiceAudio,
   type MobileVoiceControllerSession,
 } from '@/session/mobileVoiceController';
 import { createMobileSpeakerGate, warmMobileSpeakerFilter } from '@/session/mobileSpeakerFilter';
+import { useMobileFailedVoiceRetry } from '@/session/useMobileFailedVoiceRetry';
 import { useSpeakerFilterNotice } from '@/session/useSpeakerFilterNotice';
+import {
+  applyMobileVoiceRefinementUndoToDraft,
+  useMobileVoiceRefinementUndo,
+} from '@/session/useMobileVoiceRefinementUndo';
 import {
   createMobileVoiceDictionaryLearningTracker,
   type MobileVoiceDictionaryLearningTracker,
@@ -417,7 +430,7 @@ import {
   buildHostModelGroupRouteNote,
   resolveHostModelGroup,
   useHostModelGroupPickerOptions,
-  useHostModelGroupsPayload,
+  useHostModelGroupsState,
   type HostModelGroupResult,
 } from '@/session/hostModelGroups';
 import { implicitMobileSourceRouteSelection } from '@/session/sourceRouteProviders';
@@ -590,6 +603,7 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
     getPresenceAvailability,
     invoke,
     openLink,
+    holdBackgroundConnection,
     subscribe,
     unsubscribe,
     onAgentsChanged,
@@ -770,7 +784,8 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
   // 开启协同时同样给新建的 Lead 选路。旧电脑读不到模式时整段不出现。
   const [modelGroupChoice, setModelGroupChoice] = useState<{ controlledDeviceId: string; id: string } | null>(null);
   const [attachedSourceRouteChoice, setAttachedSourceRouteChoice] = useState<{ controlledDeviceId: string; id: string } | null>(null);
-  const hostModelGroupsPayload = useHostModelGroupsPayload(selectedDeviceId, maker, pluginEngineDraftEligible);
+  const { payload: hostModelGroupsPayload, unsupported: hostModelGroupsUnsupported } =
+    useHostModelGroupsState(selectedDeviceId, maker, pluginEngineDraftEligible);
   const hostModelGroups = hostModelGroupsPayload?.groups ?? null;
   const activeHostModelGroup = useMemo(
     () => (modelGroupChoice && modelGroupChoice.controlledDeviceId === selectedDeviceId
@@ -1110,11 +1125,23 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
   const [voiceStartPending, setVoiceStartPending] = useState(false);
   const [voiceState, setVoiceStateInternal] = useState<MobileVoiceState>('idle');
   const [voiceError, setVoiceError] = useState<string | null>(null);
+  const failedVoiceRetry = useMobileFailedVoiceRetry(selectedDeviceId ?? undefined);
+  const voiceRetryRunSeqRef = useRef(0);
+  const voiceRetryAbortRef = useRef<AbortController | null>(null);
   const {
     visible: voiceSpeakerFiltered,
     show: showVoiceSpeakerFiltered,
     clear: clearVoiceSpeakerFiltered,
   } = useSpeakerFilterNotice();
+  const {
+    candidate: voiceRefinementUndoCandidate,
+    offer: offerVoiceRefinementUndo,
+    dismiss: dismissVoiceRefinementUndo,
+    inspectDraft: inspectVoiceRefinementUndoDraft,
+  } = useMobileVoiceRefinementUndo();
+  useEffect(() => {
+    inspectVoiceRefinementUndoDraft(draft.firstMessage);
+  }, [draft.firstMessage, inspectVoiceRefinementUndoDraft]);
   // 「语音结束保持展开」hold:语音真实收尾(busy → done/error)时布防,草稿仍有
   // 内容即生效、一行文字也不收(composerVoiceHoldActive);下拉收起 / 失焦 / 草稿清空解除。
   const [composerVoiceHoldArmed, setComposerVoiceHoldArmed] = useState(false);
@@ -1376,37 +1403,8 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
   // 空目录 / 拉取失败(旧被控端 / 瞬断)与 agentAuthGateVerdict 的 unknown 同语义,
   // fail-open 返回 unauthenticated=false 放行(review P2:不把空回包升级成硬拦截)。
   // fresh = 本次现拉的工作站目录(管线鉴权后联合校验用,codex review P2)。
-  const confirmAgentUnauthenticated = useCallback(async (agentKind: NewSessionAgentKind, deviceId: string) => {
-    try {
-      // 经 fetchDeviceProvidersFresh 拉取(codex review P2:将最终鉴权目录同步回
-      // 供应商缓存)——直接 listProviders 只把响应交给管线,不更新/驱逐缓存:提交
-      // guard 已缓存来源 A、建链后鉴权终检看到 B 并用 B 创建时,跳转后
-      // useDeviceProviders 命中仍为 A 的缓存并标记 ready:true,UI 与后续选择与
-      // 实际创建脱节。fresh 拉取会按设备与代际写回同一缓存并通知订阅者。
-      const fresh = await fetchDeviceProvidersFresh(deviceId, () => maker.listProviders());
-      // 丢弃已换代的最终目录响应(codex review P2):fresh 在途期间若收到
-      // provider-changed / 登出驱逐 / 重连驱逐,代际变化只让它跳过缓存回写,
-      // Promise 仍正常返回旧响应——核对响应是否被采纳(被采纳 ⟺ 缓存就是该
-      // 响应对象;fresh 成功且 isCurrent 时 cache.set 的就是这个 payload)。
-      // 未采纳 → 目录已失效,按 unknown 处理(不交给 revalidateDraftAfterAuth,
-      // 避免普通创建管线按已删除来源 A 创建;下一轮 guard/重连会取最新目录)。
-      if (getCachedDeviceProviders(deviceId) !== fresh) {
-        return { unauthenticated: false, fresh: null };
-      }
-      return {
-        unauthenticated: fresh.providers.length > 0
-          && connectedProvidersForAgent(fresh.providers, agentKind).length === 0,
-        fresh: {
-          providers: fresh.providers,
-          ...(fresh.modelVisibilityOverrides !== undefined
-            ? { modelVisibilityOverrides: fresh.modelVisibilityOverrides }
-            : {}),
-        },
-      };
-    } catch {
-      return { unauthenticated: false, fresh: null };
-    }
-  }, [maker]);
+  const confirmAgentUnauthenticated = useCallback((agentKind: NewSessionAgentKind, deviceId: string) =>
+    confirmNewSessionAgentAuth(deviceId, agentKind, () => maker.listProviders()), [maker]);
   // setDraft 函数式更新里拿不到最新 modelSections —— 用 ref 镜像当前高亮来源 id。
   const activeSourceIdRef = useRef<string | null>(null);
   activeSourceIdRef.current = modelSections.activeSourceId;
@@ -1807,7 +1805,8 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
   // 状态行只承载错误信息与声纹过滤提示(错误优先);「正在听 / 转写中」不再占一行,对齐桌面版——
   // 录音状态由输入框内的语音按钮形态(Mic / 红点计时胶囊 / spinner)表达。
   const voiceStatusText = voiceError ?? (voiceSpeakerFiltered ? t('composer.voice.speakerFiltered') : null);
-  const voiceStatusVisible = voiceUiAvailable && Boolean(voiceStatusText);
+  const voiceRefinementUndoVisible = voiceUiAvailable && !voiceStatusText && Boolean(voiceRefinementUndoCandidate);
+  const voiceStatusVisible = voiceUiAvailable && (Boolean(voiceStatusText) || voiceRefinementUndoVisible);
   const composerVoicePlacement = voiceUiAvailable
     ? resolveMobileComposerVoiceButtonPlacement({
       // 行尾有创建按钮时让位;附件-only(无文字)同样命中(composerShowCreateButton 含附件判定)。
@@ -2009,6 +2008,10 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
   }, []);
 
   const cancelVoiceForDeviceSwitch = useCallback(() => {
+    voiceRetryRunSeqRef.current += 1;
+    voiceRetryAbortRef.current?.abort();
+    voiceRetryAbortRef.current = null;
+    failedVoiceRetry.clear();
     voicePermissionRequestSeqRef.current += 1;
     voicePermissionRequestAbortRef.current?.abort();
     voicePermissionRequestAbortRef.current = null;
@@ -2024,7 +2027,7 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
     setVoiceError(null);
     discardPendingPrewarm();
     if (controller) void controller.cancel().catch(() => undefined);
-  }, [setVoiceState]);
+  }, [failedVoiceRetry, setVoiceState]);
 
   useEffect(() => {
     const subscription = AppState.addEventListener('change', (nextState) => {
@@ -2032,6 +2035,9 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
       // Android permission sheets can report `background`, but permission
       // resolution has not claimed audio resources and must survive that event.
       if (nextState !== 'background') return;
+      voiceRetryRunSeqRef.current += 1;
+      voiceRetryAbortRef.current?.abort();
+      voiceRetryAbortRef.current = null;
       if (shouldCancelMobileVoiceForBackground({
         startupInFlight: voiceStartupInFlightRef.current,
         recordingActive: voiceRecordingActiveRef.current,
@@ -2752,9 +2758,10 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
   }, [selectedDeviceId]);
   const draftModelGroupExtra = useMemo(() => ({
     sourceRoutesPayload: hostModelGroupsPayload,
+    unsupported: hostModelGroupsUnsupported,
     activeRouteId: activeDraftSourceRouteId,
     onAttach: attachSourceRouteForDraft,
-  }), [hostModelGroupsPayload, activeDraftSourceRouteId, attachSourceRouteForDraft]);
+  }), [hostModelGroupsPayload, hostModelGroupsUnsupported, activeDraftSourceRouteId, attachSourceRouteForDraft]);
   const draftModelGroupOptions = useHostModelGroupPickerOptions(
     hostModelGroups, activeHostModelGroup?.id ?? null, selectModelGroupForDraft, t, draftModelGroupExtra,
   );
@@ -3382,6 +3389,24 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
     setFirstMessageDraft,
   };
 
+  const undoVoiceRefinement = useCallback(() => {
+    if (!voiceRefinementUndoCandidate) return;
+    const result = applyMobileVoiceRefinementUndoToDraft(firstMessageRef.current, voiceRefinementUndoCandidate);
+    dismissVoiceRefinementUndo();
+    if (!result) return;
+    voiceDictionaryLearningTrackerRef.current?.noteRefinementUndone({
+      draft: result.nextDraft,
+      start: result.nextStart,
+      end: result.nextEnd,
+      rawTranscriptText: voiceRefinementUndoCandidate.rawTranscriptText,
+    });
+    const nextSelection = { start: result.nextEnd, end: result.nextEnd };
+    firstMessageSelectionRef.current = nextSelection;
+    setFirstMessageSelection(nextSelection);
+    setFirstMessageDraft(result.nextDraft);
+    voiceRefinementUndoCandidate.revertHistoryToRaw?.();
+  }, [dismissVoiceRefinementUndo, setFirstMessageDraft, voiceRefinementUndoCandidate]);
+
   const startVoiceRecording = useCallback(async () => {
     const requestedAt = Date.now();
     if (
@@ -3392,8 +3417,11 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
       || voiceState === 'listening'
       || voiceIsProcessing
     ) return;
+    const retryRunSeq = ++voiceRetryRunSeqRef.current;
+    failedVoiceRetry.clear();
     setVoiceError(null);
     clearVoiceSpeakerFiltered();
+    dismissVoiceRefinementUndo();
     let permissionRequestSeq: number | null = null;
     let permissionRequestAbortController: AbortController | null = null;
     let startupSeq: number | null = null;
@@ -3519,6 +3547,7 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
         refinerTargetProvider: (providerId: string, options?: { refreshAccessToken?: boolean }) =>
           voiceContext.createRefinerTarget(providerId, options),
         refineRequestBudget: () => voiceContext.refineRequestBudget(),
+        maxSessionMs: () => voiceContext.maxSessionMs(),
         warmRefiner: (input: { system: string; user: unknown; promptCacheKey: string;
         }) =>
           voiceContext.warmRefiner(input),
@@ -3543,6 +3572,11 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
           setVoiceState('error');
           setVoiceError(message);
         },
+        onRetainedFailedAudio: (audio) => {
+          if (voiceRetryRunSeqRef.current === retryRunSeq) {
+            failedVoiceRetry.retain(audio);
+          }
+        },
         // No start cue on mobile: playing a cue via expo-audio during capture
         // re-activates the AVAudioSession and stalls the record tap (see
         // mobileVoiceCue.ts). Only the end cue, which plays after capture stops,
@@ -3559,6 +3593,14 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
               credential.settings?.language,
               uiLanguage,
             ),
+          });
+          offerVoiceRefinementUndo({
+            draft: input.draft,
+            rawTranscriptText: input.rawTranscriptText,
+            refinedText: input.refinedText,
+            start: input.start,
+            end: input.end,
+            revertHistoryToRaw: input.revertHistoryToRaw,
           });
         },
       });
@@ -3605,11 +3647,118 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
       setVoiceState('error');
       setVoiceError(formatRemoteError(err));
     }
-  }, [clearVoiceSpeakerFiltered, openLink, selectedDeviceId, setFirstMessageDraft, showVoiceSpeakerFiltered, voiceIsProcessing, voiceState]);
+  }, [clearVoiceSpeakerFiltered, failedVoiceRetry, dismissVoiceRefinementUndo, offerVoiceRefinementUndo, openLink, selectedDeviceId, setFirstMessageDraft, showVoiceSpeakerFiltered, voiceIsProcessing, voiceState]);
 
   const finishVoiceRecording = useCallback(async (): Promise<string | null> => {
     return finishNewSessionVoiceRecording({ voiceStopInFlightRef, voiceControllerSessionRef, voiceRecordingActiveRef, voiceState, voiceStartupSeqRef, voiceStartupInFlightRef, firstMessageSelectionRef, firstMessageInputRef, setVoiceState, setVoiceError, requestAnimationFrame, formatRemoteError });
   }, [voiceState]);
+
+  const retryFailedVoiceRecording = useCallback(async () => {
+    if (
+      voicePermissionRequestInFlightRef.current
+      || voiceStartupInFlightRef.current
+      || voiceStopInFlightRef.current
+      || voiceRecordingActiveRef.current
+      || voiceState === 'listening'
+      || voiceIsProcessing
+    ) return;
+    if (!selectedDeviceId) return;
+    const retained = failedVoiceRetry.peek();
+    if (!retained) return;
+    const retryRunSeq = ++voiceRetryRunSeqRef.current;
+    const retryAbort = new AbortController();
+    voiceRetryAbortRef.current = retryAbort;
+    voiceStopInFlightRef.current = true;
+    setVoiceError(null);
+    clearVoiceSpeakerFiltered();
+    setVoiceState('submitting');
+    try {
+      const credential = createMobileCindyVoiceCredential(selectedDeviceId);
+      const voiceContext = new MobileCindyVoiceRunContext(
+        () => auth.getAccessToken(),
+        () => auth.refreshAccessToken(),
+        auth.apiFetch,
+        credential.settings?.language,
+        CINDY_MANAGED_REFINER_PROVIDER,
+      );
+      const [localVoiceInputHistory] = await Promise.all([
+        getMobileVoiceInputHistoryForHost(selectedDeviceId, credential.settings?.voiceInputHistory).catch(() => undefined),
+        hydrateMobileVoiceDictionary(selectedDeviceId).catch(() => undefined),
+      ]);
+      if (voiceRetryRunSeqRef.current !== retryRunSeq) return;
+      const currentDraft = firstMessageRef.current;
+      const initialSelection = { ...firstMessageSelectionRef.current };
+      const selectionBefore = takeRefinementContextTail(currentDraft.slice(0, initialSelection.start));
+      const selectionAfter = currentDraft.slice(initialSelection.end, initialSelection.end + 1200);
+      voiceStopGestureSelectionGuardRef.current = false;
+      voiceSelectionUserOwnedRef.current = false;
+      voicePendingSelectionEchoesRef.current = [];
+      await replayMobileVoiceAudio({
+        audio: retained,
+        signal: retryAbort.signal,
+        credential,
+        requestedAt: Date.now(),
+        connectionProvider: (providerId: string) => voiceContext.createAsrConnection(providerId),
+        refinerTargetProvider: (providerId: string, options?: { refreshAccessToken?: boolean }) =>
+          voiceContext.createRefinerTarget(providerId, options),
+        refineRequestBudget: () => voiceContext.refineRequestBudget(),
+        warmRefiner: (warmInput: { system: string; user: unknown; promptCacheKey: string }) =>
+          voiceContext.warmRefiner(warmInput),
+        initialDraft: currentDraft,
+        initialSelection,
+        refinementContext: {
+          selectionBefore: selectionBefore || undefined,
+          selectedText: currentDraft.slice(initialSelection.start, initialSelection.end).slice(0, 1200) || undefined,
+          selectionAfter: selectionAfter || undefined,
+        },
+        localVoiceInputHistory,
+        readCurrentDraft: () => firstMessageRef.current,
+        onDraftChanged: (text, selection, replacement) => {
+          if (voiceRetryRunSeqRef.current !== retryRunSeq) return;
+          publishNewSessionVoiceDraft(voiceSelectionInput, text, selection, replacement);
+        },
+        onStateChanged: (next) => {
+          if (voiceRetryRunSeqRef.current !== retryRunSeq) return;
+          setVoiceState(next);
+        },
+        onError: (message) => {
+          if (voiceRetryRunSeqRef.current !== retryRunSeq) return;
+          setVoiceState('error');
+          setVoiceError(message);
+        },
+        recordHistory: (text) => recordMobileVoiceInputHistoryForHost(selectedDeviceId, text),
+        updateHistoryEntry: (entryId, text) => updateMobileVoiceInputHistoryEntryForHost(selectedDeviceId, entryId, text),
+        onRefinementApplied: (refinementInput) => {
+          const uiLanguage = currentMobileVoiceUiLanguage();
+          voiceDictionaryLearningTrackerRef.current?.captureRefinedInsertion({
+            ...refinementInput,
+            uiLanguage,
+            sourceLanguage: resolveMobileVoiceRefinementSourceLanguage(
+              credential.settings?.language,
+              uiLanguage,
+            ),
+          });
+        },
+      });
+      if (voiceRetryRunSeqRef.current !== retryRunSeq) return;
+      failedVoiceRetry.clear();
+      setVoiceState('done');
+      setVoiceError(null);
+      requestAnimationFrame(() => {
+        firstMessageInputRef.current?.setNativeProps({
+          selection: firstMessageSelectionRef.current,
+        });
+      });
+    } catch (err) {
+      if (voiceRetryRunSeqRef.current === retryRunSeq) {
+        setVoiceState('error');
+        setVoiceError(formatRemoteError(err));
+      }
+    } finally {
+      if (voiceRetryAbortRef.current === retryAbort) voiceRetryAbortRef.current = null;
+      voiceStopInFlightRef.current = false;
+    }
+  }, [auth, clearVoiceSpeakerFiltered, failedVoiceRetry, selectedDeviceId, setVoiceState, voiceIsProcessing, voiceState]);
 
   const openVoiceSettings = useCallback(() => {
     void Linking.openSettings().catch((err) => {
@@ -3693,6 +3842,9 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
       voicePermissionRequestAbortRef.current = null;
       voicePermissionRequestInFlightRef.current = false;
       voiceStartupSeqRef.current += 1;
+      voiceRetryRunSeqRef.current += 1;
+      voiceRetryAbortRef.current?.abort();
+      voiceRetryAbortRef.current = null;
       voiceStartupInFlightRef.current = false;
       voiceStopInFlightRef.current = false;
       voiceRecordingActiveRef.current = false;
@@ -4374,6 +4526,8 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
     // 建出重复会话(codex review P2)。交接成功后锁保持到组件销毁;「返回编辑」
     // 回来的是新 mount,creatingRef 天然复位。
     let handedOff = false;
+    let endBackgroundDelivery: (() => void) | undefined;
+    let submittedDialogue: SubmittedDialogueTarget | null = null;
     const creationLeases: { precreated: (() => void) | null; durable: (() => void) | null;
     } = { precreated: null, durable: null };
     const accountIdAtCreate = auth.user?.id?.trim() ?? '';
@@ -4530,6 +4684,7 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
       // Recovery may have cancelled this creation while the editor was already open.
       const prepared = await prepareNewSessionCreation({
         effectiveDraft,
+        allowDialogueRecovery: !collabDraft && !onModelGroupSessionCreated,
         outboxRecoveryRef,
         selectedDeviceId,
         selectedDeviceName,
@@ -4598,10 +4753,9 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
             selectedProviderId: effectiveDraft.providerId,
           }).sections),
         });
-        const applyGuard = (g: SubmitGuardCatalog): void => {
-          effectiveDraft = reconcileNewSessionSubmitDraft(effectiveDraft, g,
-            () => targetAgentHasFast(guardDeviceId, effectiveDraft.agentKind), t);
-        };
+        const checkedDraft = (g: SubmitGuardCatalog) => reconcileNewSessionSubmitDraft(effectiveDraft, g,
+          () => targetAgentHasFast(guardDeviceId, effectiveDraft.agentKind), t);
+        const applyGuard = (g: SubmitGuardCatalog): void => { effectiveDraft = checkedDraft(g); };
         // 有界稳定循环:每轮 await 返回后同步核对 genAt,稳定才退出(≤3)。
         // 哨兵初值必被首轮循环覆盖(for 循环体至少执行一次),消除 null 收窄。
         let guardResult: SubmitGuardCatalog = {
@@ -4621,7 +4775,45 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
         // 循环后同步设备复核(不让出微任务):已切换则放弃,precreated ledger 保留交
         // recovery(不做 ACK 补偿,避免在循环末尾再引入可取消 await)。
         if (!ensureDeviceAlive()) return;
+        if (prepared.persistSubmittedDialogue) {
+          if (!await prepared.persistSubmittedDialogue(checkedDraft(guardResult))) return;
+          submittedDialogue = {
+            accountId: authOwnerAtCreate.accountKey,
+            deviceId: deviceIdSnapshot,
+            sessionId,
+            clientId: firstMessageClientId,
+          };
+          if (!isCurrentOwner() || !ensureDeviceAlive()) return;
+          if (getDeviceProvidersGen(guardDeviceId) !== guardResult.genAt) {
+            guardResult = await runGuard();
+            if (!isCurrentOwner() || !ensureDeviceAlive()) return;
+            if (getDeviceProvidersGen(guardDeviceId) !== guardResult.genAt) {
+              guardResult = { rows: [], providers: [], catalogKnown: false, genAt: getDeviceProvidersGen(guardDeviceId) };
+            }
+            const refreshedDraft = checkedDraft(guardResult);
+            const saved = getCurrentMobileOutboxRecords().find(
+              (record) => record.deviceId === submittedDialogue!.deviceId
+                && record.item.sessionId === submittedDialogue!.sessionId
+                && record.item.clientId === submittedDialogue!.clientId
+                && needsHostCreation(record),
+            );
+            if (saved) {
+              const updated = await mobileDurableOutbox.update(saved, {
+                creation: { ...saved.creation!, draft: refreshedDraft },
+              });
+              if (outboxRecoveryRef.current === saved) outboxRecoveryRef.current = updated;
+            }
+            if (!isCurrentOwner() || !ensureDeviceAlive()) return;
+          }
+        }
         applyGuard(guardResult);
+      }
+      if (useDurableCreation && effectiveDraft.workspaceKind === 'dialogue'
+        && !effectiveDraft.agentDeviceId && !effectiveDraft.pluginEngine
+        && !collabDraft && sendAttachments.length === 0) {
+        endBackgroundDelivery = beginNewSessionBackgroundDelivery(
+          authOwnerAtCreate, deviceIdSnapshot, sessionId, firstMessageClientId, holdBackgroundConnection,
+        );
       }
       startNewSessionCreation({
         startedAt,
@@ -4664,6 +4856,7 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
         authGateHint: agentAuthGateHint(agentKindSnapshot),
         onUnauthenticated: () => evictDeviceProviders(deviceIdSnapshot),
         isCurrentOwner,
+        endBackgroundDelivery,
         ...(onModelGroupSessionCreated ? { onSessionCreated: onModelGroupSessionCreated } : {}),
         transport: {
           maker,
@@ -4698,10 +4891,15 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
       // 首条消息已交接:收起输入框与软键盘(与任务页发送同口径),进入任务页时不带着键盘。
       setComposerVoiceHoldArmed(false);
       firstMessageInputRef.current?.blur();
-      router.replace({
-        pathname: '/sessions/[sessionId]',
-        params: { sessionId, deviceId: deviceIdSnapshot, deviceName: selectedDeviceName },
+      if (useDurableCreation) mobileDebugLog('debug', 'new-session', 'creation handed off', {
+        client: firstMessageClientId.slice(-8), elapsedMs: Date.now() - startedAt,
       });
+      if (navigation.isFocused()) {
+        router.replace({
+          pathname: '/sessions/[sessionId]',
+          params: { sessionId, deviceId: deviceIdSnapshot, deviceName: selectedDeviceName },
+        });
+      }
     } catch (err) {
       if (!isCurrentOwner()) return;
       // agent 未鉴权(电脑端没配 key / 没登录)是新任务失败的高频原因。
@@ -4709,9 +4907,23 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
       const raw = formatRemoteError(err);
       setError(raw);
     } finally {
+      if (!handedOff && submittedDialogue) {
+        // Retract an unhanded-off host-creation record before releasing the lease,
+        // so an aborted device switch, logout, or rejected guard cannot launch it in background.
+        const target = submittedDialogue;
+        await retractSubmittedDialogueCreation(target);
+        if (
+          outboxRecoveryRef.current?.deviceId === target.deviceId
+          && outboxRecoveryRef.current.item.sessionId === target.sessionId
+          && outboxRecoveryRef.current.item.clientId === target.clientId
+        ) {
+          outboxRecoveryRef.current = null;
+        }
+      }
       creationLeases.precreated?.();
       creationLeases.durable?.();
       if (!handedOff) {
+        endBackgroundDelivery?.();
         creatingRef.current = false;
         setCreating(false);
         setCreateStartedAt(null);
@@ -4744,6 +4956,8 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
     getPresenceAvailability,
     maker,
     openLink,
+    holdBackgroundConnection,
+    navigation,
     planModeCapability,
     planModeDraftOn,
     router,
@@ -6079,19 +6293,51 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
               <SlowSendNotice startedAt={creating ? createStartedAt : null} phase={createPhase} />
               {voiceStatusVisible ? (
                 <View style={styles.voiceStatusRow}>
-                  <Text style={styles.voiceStatusText} testID="newSession.voiceStatus">
-                    {voiceStatusText}
-                  </Text>
-                  {canOpenVoiceSettings ? (
+                  {voiceStatusText ? (
+                    <>
+                      <Text style={styles.voiceStatusText} testID="newSession.voiceStatus">
+                        {voiceStatusText}
+                      </Text>
+                      {canOpenVoiceSettings ? (
+                        <Pressable
+                          accessibilityLabel={t('session.common.openMicPermission')}
+                          accessibilityRole="button"
+                          hitSlop={10}
+                          onPress={openVoiceSettings}
+                          style={({ pressed }) => [styles.voiceStatusButton, pressed && styles.pressed]}
+                          testID="newSession.voiceSettingsButton"
+                        >
+                          <Settings color={colors.textSecondary} size={iconSize.md} strokeWidth={iconStroke.regular} />
+                        </Pressable>
+                      ) : null}
+                    </>
+                  ) : voiceRefinementUndoVisible ? (
                     <Pressable
-                      accessibilityLabel={t('session.common.openMicPermission')}
+                      accessibilityLabel={t('composer.voice.undoRefinement')}
                       accessibilityRole="button"
                       hitSlop={10}
-                      onPress={openVoiceSettings}
-                      style={({ pressed }) => [styles.voiceStatusButton, pressed && styles.pressed]}
-                      testID="newSession.voiceSettingsButton"
+                      onPress={undoVoiceRefinement}
+                      style={({ pressed }) => [
+                        styles.voiceUndoRefinementPill,
+                        pressed && styles.voiceUndoRefinementPillPressed,
+                      ]}
+                      testID="newSession.voiceUndoRefinementButton"
                     >
-                      <Settings color={colors.textSecondary} size={iconSize.md} strokeWidth={iconStroke.regular} />
+                      <RotateCcw color={colors.textSecondary} size={iconSize.xs} strokeWidth={iconStroke.regular} />
+                      <Text style={styles.voiceUndoRefinementText}>{t('composer.voice.undoRefinement')}</Text>
+                    </Pressable>
+                  ) : failedVoiceRetry.canRetry && voiceError && !voiceIsBusy && !voiceStartPending ? (
+                    <Pressable
+                      accessibilityLabel={t('composer.voice.retryRecognition')}
+                      accessibilityRole="button"
+                      hitSlop={10}
+                      onPress={() => { void retryFailedVoiceRecording(); }}
+                      style={({ pressed }) => [styles.voiceRetryButton, pressed && styles.pressed]}
+                      testID="newSession.voiceRetryButton"
+                    >
+                      <Text numberOfLines={1} style={styles.voiceRetryButtonText}>
+                        {t('composer.voice.retryRecognition')}
+                      </Text>
                     </Pressable>
                   ) : null}
                 </View>
@@ -7357,6 +7603,44 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     height: MOBILE_COMPOSER_CONTROL_SIZE,
     justifyContent: 'center',
     width: MOBILE_COMPOSER_CONTROL_SIZE,
+  },
+  voiceRetryButton: {
+    alignItems: 'center',
+    backgroundColor: colors.surfaceChip,
+    borderColor: colors.border,
+    borderRadius: radius.pill,
+    borderWidth: StyleSheet.hairlineWidth,
+    flexShrink: 0,
+    justifyContent: 'center',
+    minHeight: 28,
+    paddingHorizontal: spacing.sm,
+  },
+  voiceRetryButtonText: {
+    color: colors.textPrimary,
+    fontSize: typeScale.caption,
+    fontWeight: fontWeight.medium,
+    lineHeight: lineHeight.caption,
+  },
+  voiceUndoRefinementPill: {
+    alignItems: 'center',
+    backgroundColor: colors.surfaceChip,
+    borderColor: colors.border,
+    borderRadius: radius.pill,
+    borderWidth: StyleSheet.hairlineWidth,
+    flexDirection: 'row',
+    gap: spacing.xs,
+    minHeight: 28,
+    paddingHorizontal: spacing.sm,
+  },
+  voiceUndoRefinementPillPressed: {
+    backgroundColor: colors.surfaceElevated,
+    borderColor: colors.borderStrong,
+  },
+  voiceUndoRefinementText: {
+    color: colors.textSecondary,
+    fontSize: typeScale.footnote,
+    fontWeight: fontWeight.medium,
+    lineHeight: lineHeight.caption,
   },
   voiceDraftOverlay: {
     ...StyleSheet.absoluteFill,

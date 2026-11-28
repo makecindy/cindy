@@ -7,10 +7,15 @@
  * - the account cannot take the task's model right now (remembered failure, used-up quota, signed
  *   out): move when another account can take it, otherwise send to the original account.
  *
- * Only local tasks move here. The old native session stays bound to the account that owns its
- * history; only the task's binding changes. A running turn is never moved.
+ * Both local tasks and same-account remote Agent tasks move here (SSH and provider shares never
+ * move). For a remote Agent task, the controller asks the executing computer over the existing
+ * owner-only account channel; when confirmed, it hands off context so the next fresh start on the
+ * executing computer picks the replacement account. The old native session stays bound to the
+ * account that owns its history; only the task's binding changes. A running turn is never moved.
  */
+import { isProviderShareAgentDeviceId } from '../../shared/providerShare.js';
 import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../appSessionState.js';
+import type { RemoteSubscriptionInvoke } from '../subscription-accounts/runtime.js';
 import { parsePluginEngineProviderId, pluginEngineProviderId } from './ids.js';
 import {
   acquirePluginEngineAccount,
@@ -19,6 +24,7 @@ import {
   pluginEngineHasAccountPool,
   readPluginEngineAccountBlocked,
   readPluginEngineTaskAccount,
+  readRemotePluginEngineAccount,
   refreshPluginEngineAccountForSend,
 } from './runtime.js';
 import { effectivePluginEnginePool } from './store.js';
@@ -38,6 +44,8 @@ export interface PluginEngineFailoverDeps {
   isRunning(id: string): boolean;
   /** Retires the idle runtime and durably saves a context handoff; calls `assertCurrent` before committing. */
   rebuild(id: string, assertCurrent: () => void): Promise<void>;
+  /** Owner-only session-account read on the task's executing computer (same-account remote Agent). */
+  invokeRemote?: RemoteSubscriptionInvoke;
   log?(message: string, fields: Record<string, unknown>): void;
 }
 
@@ -111,10 +119,52 @@ async function handOff(
 
 /** Under the ordinary send lock, before a runtime is created or reused. */
 export async function preparePluginEngineAccountForSend(sessionId: string, deps: PluginEngineFailoverDeps): Promise<boolean> {
-  // Most computers have no engine with accounts: skip the task read on every send.
-  if (!anyPluginEngineAccountPool()) return false;
+  const local = anyPluginEngineAccountPool();
+  // Remote Agent tasks belong to their executing computer even when this computer has no local pool.
+  if (!local && !deps.invokeRemote) return false;
+  const owner = activeOwnerScopeKey();
+  const assertOwner = () => {
+    if (owner !== activeOwnerScopeKey() || isAppSessionBoundaryPending())
+      throw new Error('Subscription account owner changed');
+  };
   const read = await deps.readSession(sessionId);
+  assertOwner();
   const row = read && { ...read };
+  if (row && row.status !== 'deleted' && !row.remoteHostId && row.agentDeviceId
+    && !isProviderShareAgentDeviceId(row.agentDeviceId) && row.agentKind === 'acp') {
+    if (!deps.invokeRemote || !row.sdkSessionId || deps.isRunning(sessionId)) return false;
+    let remote: Awaited<ReturnType<typeof readRemotePluginEngineAccount>>;
+    try {
+      remote = await readRemotePluginEngineAccount(row, deps.invokeRemote);
+    } catch {
+      assertOwner();
+      return false;
+    }
+    assertOwner();
+    if (!remote) return false;
+    if (remote.disabled) {
+      if (!remote.available) throw new Error('No subscription account is available');
+    } else if (!remote.blocked || !remote.available) {
+      return false;
+    }
+    const assertCurrent = () => {
+      assertOwner();
+      if (deps.isRunning(sessionId)) throw new Error('Cannot switch a running task subscription account');
+    };
+    const current = await deps.readSession(sessionId);
+    assertCurrent();
+    if (!current || current.status === 'deleted' || current.providerId !== row.providerId
+      || current.agentDeviceId !== row.agentDeviceId || current.remoteHostId !== row.remoteHostId
+      || current.model !== row.model || current.sdkSessionId !== row.sdkSessionId)
+      throw new Error('The task route changed');
+    // Clearing native session after durable handoff lets the next fresh start on the executing computer pick the replacement.
+    await deps.rebuild(sessionId, assertCurrent);
+    deps.log?.('plugin engine account: moved remote task before send', {
+      sessionId, deviceId: row.agentDeviceId, reason: remote.disabled ? 'disabled' : 'blocked',
+    });
+    return true;
+  }
+  if (!local) return false;
   const task = taskAccount(sessionId, row);
   if (!row || !task) return false;
   const pool = effectivePluginEnginePool(task.engineKey);
@@ -143,10 +193,26 @@ export async function preparePluginEngineAccountForSend(sessionId: string, deps:
 export async function canSwitchPluginEngineTaskAccount(
   sessionId: string,
   readSession: PluginEngineFailoverDeps['readSession'],
+  invokeRemote?: RemoteSubscriptionInvoke,
 ): Promise<boolean> {
-  if (!anyPluginEngineAccountPool()) return false;
+  const local = anyPluginEngineAccountPool();
+  if (!local && !invokeRemote) return false;
   const row = await readSession(sessionId);
+  if (row && row.status !== 'deleted' && !row.remoteHostId && row.agentDeviceId
+    && !isProviderShareAgentDeviceId(row.agentDeviceId) && row.agentKind === 'acp') {
+    if (!invokeRemote || !row.sdkSessionId) return false;
+    try {
+      const remote = await readRemotePluginEngineAccount(row, invokeRemote);
+      return !!remote && remote.available && (remote.blocked || remote.disabled);
+    } catch {
+      return false;
+    }
+  }
+  if (!local) return false;
   const task = taskAccount(sessionId, row);
   if (!task || !readPluginEngineAccountBlocked(task.engineKey, task.accountId, task.model)) return false;
-  return canSwitchPluginEngineAccount(task.providerId, sessionId, task.model);
+  return canSwitchPluginEngineAccount(task.providerId, sessionId, task.model, {
+    nativeSessionId: row?.sdkSessionId ?? undefined,
+    accountId: task.accountId,
+  });
 }

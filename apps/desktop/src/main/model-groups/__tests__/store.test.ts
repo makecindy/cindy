@@ -106,6 +106,7 @@ describe('model groups store', () => {
       localAgents: () => ['codex', 'claude-code', 'pi'],
       harnessInstalled: async () => true,
       quotaWindows: async () => new Map(),
+      runningSessions: () => [],
       locations,
       remoteViews,
       remotePluginEngines,
@@ -164,6 +165,7 @@ describe('model groups store', () => {
       localAgents: () => ['codex', 'claude-code', 'pi'],
       harnessInstalled: async () => true,
       quotaWindows: async () => new Map(),
+      runningSessions: () => [],
       locations,
       remotePluginEngines: async (deviceId) => (
         deviceId === 'share:agy-1'

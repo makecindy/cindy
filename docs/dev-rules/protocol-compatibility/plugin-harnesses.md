@@ -205,9 +205,9 @@ renderer `scheduleFormLogic.test.ts`「plugin engine selection」。
    `acpHarnessKeyFromProviderId` 与新版注册表据此拆出引擎；旧端按引擎键查不到而判为不可用，不会落到其他引擎或账号。
    `maker:list-plugin-engines` 把它列为一项：`key` 为 `<引擎键>~<后缀>`，追加可选 `accountProviderOf`（所属引擎键），沿用引擎的模型与模式，
    `remoteUse` 恒为不支持（不对其他电脑与分享开放）；显示名、隐藏、停用按自己的键存在 `plugin-engine-prefs.json`。
-6. **Device Link 与 IPC**：账号管理沿用既有 `maker:subscription-accounts`（账号命令的 `providerId` 接受插件引擎 id，任务账号的 `session` 读取仍只接受内置供应商，`add`/`login` 追加可选
+6. **Device Link 与 IPC**：账号管理沿用既有 `maker:subscription-accounts`（账号命令与只读 `session` 探测的 `providerId` 均接受插件引擎 id；`session` 查询仅面向本机或同账号其他电脑，分享受邀者与共享任务访客一律 `PERMISSION_DENIED`，执行端仅在引擎开放远程调用且模型允许时回报绑定账号是否停用/移出/受限及是否有替换账号可接手，不带身份与目录；`add`/`login` 追加可选
    `methodId`；视图追加可选 `pluginEngine`、账号用量 `usage.plugin`、`authIssue: 'account-mismatch'`）与推送 `subscription-accounts:changed`
-   （插件引擎的 providerId 也会出现，旧界面按不认识的 providerId 忽略）。旧执行电脑以 `INVALID_PARAMS` 拒绝插件引擎 id，控制端按不支持处理。
+   （插件引擎的 providerId 也会出现，旧界面按不认识的 providerId 忽略）。旧执行电脑以 `INVALID_PARAMS` 拒绝插件引擎 id（含 `session` 探测），控制端按不支持降级为原路径（不交接上下文、不自动换号）。
    `maker:list-plugin-engines` 视图追加可选 `accounts`（登录方式，不含秘密）。`maker:get-plugin-engine-usage` 追加可选第二参数 `{ sessionId }`：
    读该任务所绑账号的用量（本机窗口：未分配时为空）；device-link 调用（手机、同账号远控）带上时，执行电脑认识这个任务就读它所绑账号，
    不认识就按原来的读法读引擎原有登录；旧 Host 忽略多余参数。

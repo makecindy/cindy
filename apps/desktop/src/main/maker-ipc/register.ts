@@ -8,6 +8,8 @@ import { desktopContextRecoveryAbortSignal } from './contextRecoveryAssembly.des
 import { createSessionContextWindowBudgetReconcile } from './sessionContextWindowBudgetReconcile.js';
 import { appliedContextWindowBudgets, pendingSessionContextWindowBudgetReconciles } from './sessionContextWindowBudgetState.js';
 import {
+  bindSessionSubscriptionAccount,
+  readSessionBoundSubscriptionAccount,
   needsSubscriptionAccountHandoff,
   hasRestoredPooledCodexQuota,
   readSubscriptionTaskUsage,
@@ -1137,7 +1139,9 @@ import {
 import { registerPrecreatedWorktreeDiscardHandler } from './precreatedWorktreeDiscardHandler.js';
 import { registerNewMakerWorktreePreferenceHandler } from './newMakerWorktreePreferenceHandler.js';
 import { registerNewMakerWorktreeBranchPreferenceHandler } from './newMakerWorktreeBranchPreferenceHandler.js';
+import { checkWorktreeBaseRefArg } from '../worktree/sourceRef.js';
 import {
+  resolveExplicitSourceRef,
   resolveFreshSourceBranch,
   getManagedWorktreeReadinessForSession,
   WorktreeManager as worktreeManager,
@@ -1531,7 +1535,7 @@ import {
   isModelGroupSessionDetachedForDispatch,
   peekModelGroupSessionBinding,
   projectModelGroupSessionBinding,
-  readModelGroupBindingForDispatch,
+  readActiveModelGroupBindingForDispatch,
   readModelGroupSessionBinding,
   subscribeModelGroupSessionBindings,
   unbindModelGroupSession,
@@ -2833,6 +2837,14 @@ type SendToSessionInternalResult =
       queuedMessageId?: string;
       /** create + useWorktree 成功时为新 session 的 worktree 绝对路径;其余情况 undefined。 */
       worktreePath?: string | null;
+      /** create + useWorktree:worktree 实际切出的基线(commit-ish)。 */
+      worktreeBaseRef?: string;
+      /** 基线没能从远端刷新时的原因:取自本机已有的副本,可能落后远端。 */
+      worktreeBaseStaleReason?: string;
+      /** create:新任务的模型由哪台电脑提供；null = 本机。SSH 任务没有这个概念,省略。 */
+      providerDeviceId?: string | null;
+      /** create:供应电脑继承自来源任务,而不是调用方点名的。 */
+      providerDeviceInherited?: true;
       projectDir?: string | null;
       /** The project was chosen because the requested execution directory is inside it. */
       projectFromWorkingDir?: true;
@@ -3023,6 +3035,8 @@ interface OrcaCollabService {
     title?: string;
     /** create 分支可选:true = 为新 session 预建独立 git worktree 并以其为 workingDir(jump 忽略)。 */
     useWorktree?: boolean;
+    /** create + useWorktree 可选:worktree 的显式基线；省略 = 远端默认分支或来源任务的在途分支。jump 忽略。 */
+    baseRef?: string;
     projectDir?: string | null;
     /** create 分支可选:新 session 的工作目录覆盖(绝对路径,须已存在;jump 忽略)。#811 */
     workingDir?: string;
@@ -4652,16 +4666,20 @@ export function applyDirectoryGrants(
         : maker.closeSession(sessionId)),
     });
     if (result.changed && axis === 'extraDirs' && sess?.requiresRuntimeRecycleForExtraDirs?.()) {
-      // ACP only accepts `additionalDirectories` on session/new, session/resume, and session/load.
-      // Recycle the live runtime (immediately when idle, or after the current turn) only when the
-      // session actually binds native `additionalDirectories` at session open.
-      await withRehydrateCloseSuppressed(sessionId, () =>
-        maker.closeSessionIfCurrent(
-          sess,
-          'runtime-refresh',
-          sess.isTurnRunning() ? { afterCurrentTurn: true } : undefined,
-        ),
-      );
+      // ACP only binds user `additionalDirectories` on session/new, session/resume, and
+      // session/load; host-owned plugin library slots are delivered per turn via
+      // `<cindy-library-native-read>` without mutating handshake `additionalDirectories`.
+      // Skip runtime recycle on focus-driven library slot sync so live ACP processes keep
+      // their prompt cache intact across tab switches.
+      if (!options.replaceLibrarySlot) {
+        await withRehydrateCloseSuppressed(sessionId, () =>
+          maker.closeSessionIfCurrent(
+            sess,
+            'runtime-refresh',
+            sess.isTurnRunning() ? { afterCurrentTurn: true } : undefined,
+          ),
+        );
+      }
     }
     if (result.changed || result.rejectedCount > 0) log.info(label, {
       sessionId,
@@ -5330,12 +5348,36 @@ export async function acquirePendingAgentSwitchForDirectSend(
  * 订阅账号的发送前换号共用同一套运行时判定与交接：暂停／移出走 prepareSend；绑定账号此刻接不了这个模型
  * (撞限、登录失效、过载)时按供应商组口径换到账号池选出的另一个账号(failover.ts，provider-groups.md §5/§6.1)。
  */
+/**
+ * 智能路由把任务落到本机某个来源(model-groups.md §3.5)：记下选中的账号槽位，解除同供应商旧电脑组的二次选路。
+ * `replace` 只在切换刚关闭旧原生会话后传入，任务才从原账号改绑到新账号。
+ */
+async function pinRoutedLocalSource(sessionId: string, providerId: string, accountId: string | undefined, replace = false): Promise<void> {
+  if (accountId) await bindSessionSubscriptionAccount(sessionId, providerId, accountId, { replace }).catch(() => false);
+  if (readProviderGroup(providerId)) await markProviderGroupReleased(sessionId, { providerId }).catch(() => undefined);
+}
+
+/** 换到本机来源的切换：任务已绑定的账号与选中的不同就要重建原生会话，切换提交后再改绑。 */
+function routedLocalAccountStep(
+  sessionId: string, providerId: string, accountId: string | undefined, changes = false, commitRoute?: () => void,
+) {
+  const bound = accountId ? readSessionBoundSubscriptionAccount(sessionId, providerId) : undefined;
+  const moves = changes || (!!accountId && !!bound && bound !== accountId);
+  return {
+    changes: moves,
+    commit: async () => {
+      await pinRoutedLocalSource(sessionId, providerId, accountId, moves);
+      commitRoute?.();
+    },
+  };
+}
+
 async function readSubscriptionRuntimeSession(id: string) {
   const owner = captureSessionRuntimeControlOwnerEpoch();
   const row = await getSessionRowSnapshotStrict(id);
   if (!sessionRuntimeControlOwnerEpochMatches(owner)) throw new Error('Subscription account owner changed');
   const effective = getSessionRuntimeControlSnapshot(id).effectiveOverride;
-  return row && effective && effective.agentKind === dbToMakerAgentKind(row.agentKind)
+  return row && effective && effective.agentKind === dbToMakerEngineKind(row.agentKind)
     && (effective.agentDeviceId ?? null) === (row.agentDeviceId ?? null)
     ? { ...row, model: effective.model, providerId: effective.providerId } : row;
 }
@@ -5375,7 +5417,7 @@ const subscriptionAccountRecoveryDeps = {
 
 /** 同池是否存在另一个此刻可接手该任务的健康账号（订阅池 / 混合池 / 插件引擎多账号池）。 */
 export async function canSwitchTaskAccount(sessionId: string): Promise<boolean> {
-  return (await canSwitchPluginEngineTaskAccount(sessionId, readSubscriptionRuntimeSession).catch(() => false))
+  return (await canSwitchPluginEngineTaskAccount(sessionId, readSubscriptionRuntimeSession, remoteBackgroundInvoke).catch(() => false))
     || canSwitchSubscriptionAccount(sessionId, readSubscriptionRuntimeSession, remoteBackgroundInvoke);
 }
 
@@ -5391,16 +5433,6 @@ async function prepareSessionAccountsAndHistory(
   sessionId: string,
   retry?: Parameters<NonNullable<typeof contextOverflowRolloverHolder>['prepareNativeSessionRecovery']>[4],
 ): Promise<boolean> {
-  // Plugin engine accounts (subscription-account-pools.md 插件引擎的账号) hand off the same way.
-  const pluginSwitched = await preparePluginEngineAccountForSend(sessionId, {
-    readSession: readSubscriptionRuntimeSession,
-    isRunning: subscriptionAccountRecoveryDeps.isRunning,
-    rebuild: async (id, assertCurrent) => {
-      await subscriptionAccountRecoveryDeps.rebuild(id, assertCurrent);
-      agentInputCoordinatorHolder?.cancelUsageLimitWait(id);
-    },
-    log: subscriptionAccountRecoveryDeps.log,
-  });
   const accountRecovery = retry ? {
     ...subscriptionAccountRecoveryDeps,
     rebuild: async (id: string, assertCurrent: () => void) => {
@@ -5410,6 +5442,17 @@ async function prepareSessionAccountsAndHistory(
         agentInputCoordinatorHolder?.getInputAbortSignal(id), retry);
     },
   } : subscriptionAccountRecoveryDeps;
+  // Plugin engine accounts (subscription-account-pools.md 插件引擎的账号) hand off the same way.
+  const pluginSwitched = await preparePluginEngineAccountForSend(sessionId, {
+    readSession: readSubscriptionRuntimeSession,
+    isRunning: accountRecovery.isRunning,
+    invokeRemote: accountRecovery.invokeRemote,
+    rebuild: async (id, assertCurrent) => {
+      await accountRecovery.rebuild(id, assertCurrent);
+      agentInputCoordinatorHolder?.cancelUsageLimitWait(id);
+    },
+    log: accountRecovery.log,
+  });
   const switched = pluginSwitched || await prepareSubscriptionAccountForSend(sessionId, {
     ...accountRecovery,
     resolveCodexHistoryHome: async threadId => (await readCodexThreadStorageReadOnly(threadId))?.historyHome,
@@ -11991,6 +12034,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     readSessionExtraDirsFromDb, bootstrapSession,
   });
 
+  const describePluginEngine = (providerId: string | null): string | null => {
+    const key = pluginEngineKeyFromProviderId(providerId);
+    // The name the user sees for it (their own display name when they gave one).
+    return key ? listPluginEngineViews().find((engine) => engine.key === key)?.name ?? null : null;
+  };
+
   const agentSwitchDeps: MakerSessionAgentSwitchHandlerDeps = {
     cancelPendingRemoteStart,
     readOwnerGeneration: () => getActiveAppSession().generation,
@@ -12046,11 +12095,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       }
       return admitPluginEngineSwitchTarget(target, parseOfferedPluginEngines(reply.result));
     },
-    describePluginEngine: (providerId) => {
-      const key = pluginEngineKeyFromProviderId(providerId);
-      // The name the user sees for it (their own display name when they gave one).
-      return key ? listPluginEngineViews().find((engine) => engine.key === key)?.name ?? null : null;
-    },
+    describePluginEngine,
     getSessionRow: readAgentSwitchSessionRow,
     getLiveSession: (sessionId) => maker.getSession(sessionId),
     closeSession: (sessionId) => maker.closeSession(sessionId, 'agent-switch'),
@@ -12995,6 +13040,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     dispatcherSessionId?: string;
     title?: string;
     useWorktree?: boolean;
+    /** create + useWorktree 可选:worktree 的显式基线(分支、远端引用或提交)。jump 忽略。 */
+    baseRef?: string;
     projectDir?: string | null;
     /** create 分支可选:新 session 的工作目录覆盖(绝对路径,须已存在;jump 忽略)。#811 */
     workingDir?: string;
@@ -13153,10 +13200,16 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             'current MCP call has none (typical: Codex global ctx)',
         };
       }
+      // 显式基线先于任何查询与创建校验:格式不对或没开 use_worktree 时什么都不建。
+      const checkedBaseRef = checkWorktreeBaseRefArg(params.baseRef, useWorktree);
+      if (!checkedBaseRef.ok) {
+        return { ok: false, errorCode: 'INVALID_ARGS', message: checkedBaseRef.message };
+      }
+      const baseRef = checkedBaseRef.value;
       let createdPreviewSessionId: string | null = null;
       let createdPreviewClientId: string | null = null;
       let createdPreviewStarted = false;
-      let handoffWorktree: { sessionId: string; meta: WorktreeMeta } | null = null;
+      let handoffWorktree: { sessionId: string; meta: WorktreeMeta; staleBaseReason?: string } | null = null;
       // 来源任务的 Agent 在另一台电脑运行：新任务继承同一台电脑(它的模型与来源都在那台)；
       // 显式 agentDeviceId 覆盖继承值。
       let inheritedAgentDeviceId: string | undefined;
@@ -13223,13 +13276,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             effort: (row?.effort ?? undefined) as SendToSessionCreateDefaults['effort'],
             fastMode: meta.agentKind === 'acp' ? false : (row?.fastMode ?? false),
             providerId: row?.providerId,
-            // working_dir 覆盖时强制继承来源会话的权限档(review 反馈):把新目录
-            // 以 Full access 打开是相对 dispatcher 的权限升级,跨项目 handoff
-            // 不应隐式发生;未覆盖时保持既有缺省(bypassPermissions)不变。
-            permissionMode:
-              inheritSourcePermissionMode || workingDirOverride !== undefined
-                ? permissionModeOrAsk(row?.permissionMode)
-                : 'bypassPermissions',
+            // 从来源会话经 send_to_session 新建任务一律继承来源会话权限档（与跨电脑创建
+            // 及插件创建保持一致），防止 ask / auto / plan 会话借新建任务或独立 worktree
+            // 静默提权到 bypassPermissions。
+            permissionMode: permissionModeOrAsk(row?.permissionMode),
           };
           const route = await resolveSendToSessionCreateRoute({
             source: {
@@ -13291,6 +13341,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
                 createWorktree: worktreeManager.createWorktree,
                 createId: () => randomUUID(),
                 resolveFreshSource: resolveFreshSourceBranch,
+                resolveExplicitSource: resolveExplicitSourceRef,
               },
               // working_dir 覆盖时不带 dispatcherSessionId:resolveHandoffBaseRepo
               // 的「dispatcher 自身 worktree」捷径按路径包含判定——覆盖目录若指向
@@ -13299,11 +13350,16 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
               // git 根;覆盖目录落在登记过的 worktree 内时,listAll 反查分支仍生效。
               workingDirOverride !== undefined ? undefined : dispatcherSessionId,
               resolvedWorkDir,
+              // 显式基线压过「跟随来源任务在途分支」与远端默认分支两种推导。
+              baseRef ? { sourceRef: baseRef } : undefined,
             );
             if (!prep.ok) {
-              return { ok: false, errorCode: 'WORKTREE_UNAVAILABLE', message: prep.message };
+              // 基线解析不了就在这里失败,不回退默认分支。
+              return { ok: false, errorCode: 'WORKTREE_UNAVAILABLE', message: baseRef
+                ? `Could not create the worktree from base_ref "${baseRef}": ${prep.message}` : prep.message };
             }
-            handoffWorktree = { sessionId: prep.sessionId, meta: prep.meta };
+            handoffWorktree = { sessionId: prep.sessionId, meta: prep.meta,
+              ...(prep.staleBaseReason ? { staleBaseReason: prep.staleBaseReason } : {}) };
           }
         } else {
           if (useWorktree) {
@@ -13431,6 +13487,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           newSessionId: session.id,
           agentKind: session.agentKind,
           worktreePath: handoffWorktree?.meta.path ?? null,
+          worktreeBaseRef: handoffWorktree?.meta.sourceBranch ?? null,
+          agentDeviceId: openedRow.agentDeviceId ?? null,
         });
         return {
           ok: true,
@@ -13440,6 +13498,17 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           targetTitle: newTitle,
           targetLastUserSendAt: null,
           worktreePath: handoffWorktree?.meta.path ?? null,
+          ...(handoffWorktree ? {
+            worktreeBaseRef: handoffWorktree.meta.sourceBranch,
+            ...(handoffWorktree.staleBaseReason ? { worktreeBaseStaleReason: handoffWorktree.staleBaseReason } : {}),
+          } : {}),
+          // 回报模型实际由哪台电脑提供:省略 provider_device_id 时它继承自来源任务,
+          // 调用方不看回执就分不清新任务用的是本机供应商还是另一台电脑的账号。
+          // 取落库的值,与上面回显的模型、供应商连接同源。
+          ...(session.remoteHostId ? {} : {
+            providerDeviceId: openedRow.agentDeviceId ?? null,
+            ...(openedRow.agentDeviceId && requestedAgentDeviceId === undefined ? { providerDeviceInherited: true as const } : {}),
+          }),
           projectDir: inherited.projectDir ?? null,
           workspaceKind: openedRow.workspaceKind,
           workingDir: openedRow.workingDir ?? createOpts.workingDir,
@@ -13841,12 +13910,20 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       }
 
       lockStage = 'lazy-resume-bootstrap';
+      const storedEffort = dbRow.effort ?? meta.effort;
+      const storedFastMode = dbRow.fastMode ?? meta.fastMode;
       try {
         const createOpts = buildCreateOptsWithStderr({
           id: targetSessionId,
           agentKind: targetAgentKind,
           workingDir: meta.workDir,
           model: meta.model,
+          ...(storedEffort ? { effort: storedEffort as CreateOpts['effort'] } : {}),
+          ...(targetAgentKind === 'acp'
+            ? { fastMode: false }
+            : storedFastMode !== undefined && storedFastMode !== null
+              ? { fastMode: storedFastMode }
+              : {}),
           resumeSessionId: meta.sdkSessionId,
           // 插件任务的档位由用户在任务设置里给定(errand 还会再收窄),不能借 lazy-resume
           // 的缺省 bypass 提权;档位不一致还会让 errand 复用判定每轮都失败、另开新会话
@@ -14179,15 +14256,17 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         readLocalPluginEngines: () => listPluginEngineViews(),
         readRemotePluginEngines: (id) => readOfferedRemotePluginEngines(id),
       }),
-      prepareWorktree: async (id, directory) => {
+      prepareWorktree: async (id, directory, baseRef) => {
         const prepared = await prepareHandoffWorktree({
           getForSession: worktreeManager.getForSession, listAll: worktreeManager.listAll,
           detectCwd: worktreeManager.detectCwd, suggestName: worktreeManager.suggestName,
           listBranches: worktreeManager.listBranches, resolveCommit: worktreeManager.revParseCommit,
           createWorktree: worktreeManager.createWorktree, createId: () => id,
-          resolveFreshSource: resolveFreshSourceBranch,
-        }, undefined, directory);
-        return prepared.ok ? { ok: true, path: prepared.meta.path }
+          resolveFreshSource: resolveFreshSourceBranch, resolveExplicitSource: resolveExplicitSourceRef,
+        }, undefined, directory, baseRef ? { sourceRef: baseRef } : undefined);
+        return prepared.ok
+          ? { ok: true, path: prepared.meta.path, baseRef: prepared.meta.sourceBranch,
+            ...(prepared.staleBaseReason ? { staleBaseReason: prepared.staleBaseReason } : {}) }
           : { ok: false, errorCode: 'WORKTREE_UNAVAILABLE', message: prepared.message };
       },
       discardWorktree: id => worktreeManager.removeWorktreeForSession(id),
@@ -18665,8 +18744,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       providerId: row.providerId,
       agentDeviceId: row.agentDeviceId || undefined,
     });
-    const binding = await readModelGroupBindingForDispatch(sessionId);
-    if (binding && binding.pickedKey === currentKey) return binding;
+    const binding = await readActiveModelGroupBindingForDispatch(sessionId, row);
+    if (binding) return binding;
     if (row.source === 'bot' && !(await isModelGroupSessionDetachedForDispatch(sessionId))) {
       const profileSelection = await readBotProfileModelGroupSelection(sessionId).catch(() => null);
       if (profileSelection) {
@@ -18758,7 +18837,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
               fastExplicit: Boolean(fastMode),
             },
           ),
-        performCrossSwitch: ({ sessionId: sid, targetAgentKind, agentDeviceId, model, providerId, effort, fastMode, skipBootstrap }) =>
+        performCrossSwitch: ({ sessionId: sid, targetAgentKind, agentDeviceId, model, providerId, effort, fastMode, skipBootstrap, accountId, accountChanges, commitLocalRoute }) =>
           performSessionAgentSwitch(agentSwitchDeps, {
             sessionId: sid,
             targetAgentKind,
@@ -18771,7 +18850,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             skipBootstrap,
             configStaged: true,
             preserveModelGroupBinding: true,
+            ...(!agentDeviceId ? {
+              localSubscriptionAccount: routedLocalAccountStep(sid, providerId, accountId, accountChanges === true, commitLocalRoute),
+            } : {}),
           }),
+        pinLocalSource: (sid, { providerId, accountId }) => pinRoutedLocalSource(sid, providerId, accountId),
         writeSwitchNote: async (sid, note, clientId) => {
           await createDbMessage(sid, {
             clientId,
@@ -18814,6 +18897,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           providerId: candidate.providerId,
           model: candidate.model,
           agentDeviceId: candidate.agentDeviceId ?? null,
+          accountId: candidate.accountId,
         }),
         current: {
           agentKind: makerToDbEngineKind(current.agentKind),
@@ -18824,15 +18908,21 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           fastMode: current.fastMode,
         },
       }));
-      if (!offer || (dbToMakerEngineKind(offer.agentKind) === current.agentKind &&
-        offer.providerId === current.providerId && offer.model === current.model &&
-        (offer.agentDeviceId ?? null) === (current.agentDeviceId ?? null))) return { candidate: null };
+      if (!offer) return { candidate: null };
+      // The account is bound only when this candidate's switch commits; a skipped candidate leaves it alone.
+      const localAccount = offer.agentDeviceId ? undefined : routedLocalAccountStep(sessionId, offer.providerId, offer.accountId);
+      if (dbToMakerEngineKind(offer.agentKind) === current.agentKind
+        && offer.providerId === current.providerId
+        && offer.model === current.model
+        && (offer.agentDeviceId ?? null) === (current.agentDeviceId ?? null)
+        && !localAccount?.changes) return { candidate: null };
       return {
         candidate: {
           agentKind: dbToMakerEngineKind(offer.agentKind),
           model: offer.model,
           providerId: offer.providerId,
           agentDeviceId: offer.agentDeviceId ?? null,
+          accountId: offer.accountId,
           effort: (offer.effort as SessionRuntimeProfile['effort']) ?? null,
           fastMode: offer.agentKind === 'acp' ? false : (offer.fastMode ?? false),
         },
@@ -18843,8 +18933,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             model: profile.model,
             providerId: profile.providerId,
             agentDeviceId: profile.agentDeviceId || undefined,
+            accountId: profile.accountId,
           }));
         },
+        ...(localAccount ? { localAccount } : {}),
       };
     },
     readSessionAgentDeviceId: (sessionId) => readSessionAgentDeviceId(sessionId),
@@ -19605,13 +19697,29 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       if (session) captureManualPiDispatch(session);
     },
     readDispatchRoute: (session, scheduled) => {
-      const actual = { agentKind: session.agentKind, model: session.model ?? '',
-        providerId: getSessionProvider(session.id), agentDeviceId: session.agentDeviceId ?? null };
       const intent = scheduled ? readScheduledPendingSwitch(session.id) : agentSwitchPending.get(session.id);
-      return captureMessageDispatchRoute(actual, intent ? {
-        agentKind: intent.targetAgentKind, model: intent.model, providerId: intent.providerId ?? null,
-        agentDeviceId: intent.targetAgentDeviceId === undefined ? actual.agentDeviceId : intent.targetAgentDeviceId,
-      } : undefined, intent?.preparationError);
+      if (!intent) return undefined;
+      const actualProviderId = getSessionProvider(session.id);
+      const actualDeviceId = session.agentDeviceId ?? null;
+      const targetProviderId = intent.providerId ?? null;
+      const targetDeviceId = intent.targetAgentDeviceId === undefined ? actualDeviceId : intent.targetAgentDeviceId;
+      return captureMessageDispatchRoute(
+        {
+          agentKind: session.agentKind,
+          model: session.model ?? '',
+          providerId: actualProviderId,
+          agentDeviceId: actualDeviceId,
+          ...(session.agentKind === 'acp' && !actualDeviceId ? { engineName: describePluginEngine(actualProviderId) ?? undefined } : {}),
+        },
+        {
+          agentKind: intent.targetAgentKind,
+          model: intent.model,
+          providerId: targetProviderId,
+          agentDeviceId: targetDeviceId,
+          ...(intent.targetAgentKind === 'acp' && !targetDeviceId ? { engineName: describePluginEngine(targetProviderId) ?? undefined } : {}),
+        },
+        intent.preparationError,
+      );
     },
     onUserProviderDispatch: (sessionId) => {
       const session = sessionBindings.getSession(sessionId);

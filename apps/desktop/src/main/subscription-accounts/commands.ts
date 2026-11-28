@@ -4,6 +4,7 @@ import {
   isPluginEngineProviderIdShape,
   isSubscriptionPoolProviderIdShape,
   isSubscriptionProvider,
+  type PluginEngineSessionAccountQuery,
   type SubscriptionAccountCommand,
   type SubscriptionSessionAccountQuery,
 } from '../../shared/subscriptionAccounts.js';
@@ -27,11 +28,12 @@ function pluginLoginFields(value: Record<string, unknown>, providerId: string): 
 export function parseSubscriptionSessionAccountQuery(
   raw: unknown,
   local = false,
-): SubscriptionSessionAccountQuery | null {
+): SubscriptionSessionAccountQuery | PluginEngineSessionAccountQuery | null {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
   const value = raw as Record<string, unknown>;
   if (value.action !== 'session') return null;
-  if (!isSubscriptionProvider(value.providerId))
+  const pluginEngine = isPluginEngineProviderIdShape(value.providerId);
+  if (!isSubscriptionProvider(value.providerId) && !pluginEngine)
     throwIpcError('INVALID_PARAMS', 'Invalid subscription provider');
   const id = (key: 'sessionId' | 'nativeSessionId') => {
     const item = value[key];
@@ -44,6 +46,23 @@ export function parseSubscriptionSessionAccountQuery(
   const nativeSessionId = id('nativeSessionId');
   const legacyProviderId = value.legacyProviderId;
   const routeProviderId = value.routeProviderId;
+  const model = value.model;
+  if (model !== undefined && model !== null
+    && (typeof model !== 'string' || !model.trim() || model.length > 512))
+    throwIpcError('INVALID_PARAMS', 'Invalid subscription model');
+  if (pluginEngine) {
+    if (legacyProviderId !== undefined || routeProviderId !== undefined)
+      throwIpcError('INVALID_PARAMS', 'Invalid subscription route');
+    if (!sessionId && !nativeSessionId)
+      throwIpcError('INVALID_PARAMS', 'Invalid subscription session');
+    return {
+      action: 'session',
+      providerId: value.providerId as string,
+      ...(sessionId ? { sessionId } : {}),
+      ...(nativeSessionId ? { nativeSessionId } : {}),
+      ...(typeof model === 'string' ? { model } : {}),
+    };
+  }
   if (routeProviderId !== undefined && (!isSubscriptionPoolProviderIdShape(routeProviderId) || legacyProviderId !== undefined))
     throwIpcError('INVALID_PARAMS', 'Invalid subscription route');
   if (legacyProviderId !== undefined
@@ -52,13 +71,9 @@ export function parseSubscriptionSessionAccountQuery(
     throwIpcError('INVALID_PARAMS', 'Invalid legacy subscription provider');
   if (!sessionId && !nativeSessionId && !legacyProviderId && !routeProviderId)
     throwIpcError('INVALID_PARAMS', 'Invalid subscription session');
-  const model = value.model;
-  if (model !== undefined && model !== null
-    && (typeof model !== 'string' || !model.trim() || model.length > 512))
-    throwIpcError('INVALID_PARAMS', 'Invalid subscription model');
   return {
     action: 'session',
-    providerId: value.providerId,
+    providerId: value.providerId as 'anthropic' | 'openai',
     ...(local && value.providerId === 'anthropic' && value.bindingOnly === true
       && !routeProviderId && !legacyProviderId && !model ? { bindingOnly: true as const } : {}),
     ...(sessionId ? { sessionId } : {}),

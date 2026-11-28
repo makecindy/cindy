@@ -356,6 +356,7 @@ import { SendDeliveryTip } from './SendDeliveryTip';
 import { usePromptRecommendationPreference } from '@/hooks/usePromptRecommendationPreference';
 import { usePromptRecommendationPrediction } from '@/hooks/usePromptRecommendationPrediction';
 import { predictPromptUntilDisabled } from '@/lib/predictPromptUntilDisabled';
+import { promptRecommendationAgentKind } from '@/lib/promptRecommendationAgentKind';
 import {
   dismissPromptRecommendation,
   usePromptRecommendation,
@@ -1541,6 +1542,7 @@ export function ChatInput({
 
   // ── ESC / history ref bridges for Tiptap handleKeyDown ────────────
   // Tiptap editorProps can't read React state, so we use refs.
+  const voiceInputHandleUndoKeyDownRef = useRef<((event: KeyboardEvent) => boolean) | null>(null);
   const onStopRef = useRef(onStop);
   onStopRef.current = onStop;
   const handleStop = useCallback(() => {
@@ -2826,6 +2828,12 @@ export function ChatInput({
           return true;
         }
 
+        // 语音听写润色后按 Cmd/Ctrl+Z 独立撤销回原始 ASR 文本（预润色上屏路径）。
+        if (voiceInputHandleUndoKeyDownRef.current?.(event)) {
+          event.preventDefault();
+          return true;
+        }
+
         // Delegate panel navigation keys (↑ ↓ Enter Esc Tab) when a
         // palette is open. We can't read React state from here directly,
         // but we expose a ref-based escape hatch via `panelBridgeRef`.
@@ -3637,9 +3645,12 @@ export function ChatInput({
   );
 
   const voiceShortcutRef = useRef(voiceInputSettings.shortcut);
+  const voiceInputSettingsRef = useRef(voiceInputSettings);
+  voiceInputSettingsRef.current = voiceInputSettings;
   const voiceInputStateRef = useRef(voiceInput.state);
   const voiceInputGetStateRef = useRef(voiceInput.getState);
   const voiceInputPrepareRef = useRef(voiceInput.prepare);
+  voiceInputHandleUndoKeyDownRef.current = voiceInput.handleUndoKeyDown;
   const voiceInputStopRef = useRef(handleVoiceInputStopWithRefinement);
   voiceInputBusyRef.current = voiceInput.isBusy;
   voiceDraftTextRef.current = voiceInput.draftText;
@@ -3688,6 +3699,7 @@ export function ChatInput({
     voiceInputStateRef.current = voiceInput.state;
     voiceInputGetStateRef.current = voiceInput.getState;
     voiceInputPrepareRef.current = voiceInput.prepare;
+    voiceInputHandleUndoKeyDownRef.current = voiceInput.handleUndoKeyDown;
     voiceInputStopRef.current = handleVoiceInputStopWithRefinement;
     voiceInputCancelRef.current = voiceInput.cancel;
     handleVoiceInputStartRef.current = handleVoiceInputStart;
@@ -3702,6 +3714,7 @@ export function ChatInput({
     handleVoiceInputStopWithRefinement,
     voiceInput.cancel,
     voiceInput.getState,
+    voiceInput.handleUndoKeyDown,
     voiceInput.prepare,
     voiceInput.state,
   ]);
@@ -3969,6 +3982,15 @@ export function ChatInput({
     const gesture = createComposerLongPressVoiceGesture({
       getState: () => voiceInputGetStateRef.current(),
       prepare: () => voiceInputPrepareRef.current?.(),
+      onHoldWarmup: () => {
+        const bridge = window.electronAPI?.voiceInput;
+        if (!bridge?.prewarmOnPress) return;
+        const { language, refinementEnabled } = voiceInputSettingsRef.current;
+        void bridge.prewarmOnPress({ sourceLanguage: language, refinementEnabled }).catch(() => undefined);
+        return () => {
+          void bridge.discardPressPrewarm?.().catch(() => undefined);
+        };
+      },
       start: () => handleVoiceInputStartRef.current(),
       stop: () => voiceInputStopRef.current(),
       onHoldStart: () => {
@@ -8601,7 +8623,6 @@ export function ChatInput({
             await enqueueEffortChange(effortChangeCoordinatorRef.current, sessionId, newEffort, {
               persist: (targetSessionId, effort) =>
                 window.electronAPI.maker.setEffort(targetSessionId, effort),
-              applyRuntime: async () => {}, // Main has already committed the runtime and its fields.
               onCommitted: (targetSessionId, effort) => {
                 if (activeModel)
                   syncSessionDraftModelPrefs(activeModel, { effort, fast: fastMode });
@@ -9358,20 +9379,28 @@ export function ChatInput({
     mutationLocked: composerMutationLocked || showStopButton,
   };
   const recommendationComposerReady = isComposerReadyForPromptRecommendation(recommendationComposerState);
+  // 预测用的「已确认会话引擎」：插件引擎(ACP)任务没有内置 Harness 身份(runtimeAgentKind 为
+  // null)，但会话已确认为 ACP 时 pluginEngineSession 在。启用条件、回调入口与 IPC 参数
+  // 共用这一个值；两者都没有 = 会话信息未就绪，等待，不拿模型选择器默认值补成 claude-code
+  // (#13694：错标的请求会被主进程按 DB 的 dbAgentKind 拒绝)。
+  const predictionAgentKind = promptRecommendationAgentKind({
+    isPluginEngineSession: !!pluginEngineSession,
+    runtimeAgentKind,
+  });
   usePromptRecommendationPrediction({
     sessionId,
     recommendation,
     canPredict:
       recommendationComposerReady && !!editor && !editor.isDestroyed &&
-      deviceLinkDeviceId !== undefined && runtimeAgentKind != null &&
+      deviceLinkDeviceId !== undefined && predictionAgentKind != null &&
       hasPredictionMessages && !remoteHostId,
     predict: async (revision, isCurrent) => {
-      if (!sessionId || runtimeAgentKind == null) return null;
+      if (!sessionId || predictionAgentKind == null) return null;
       // 素材仍由 Main 从 DB 读取；远程任务经 sticky 路由交给被控电脑。
       const result = await predictPromptUntilDisabled(makerApiForSticky(sessionId), {
         sessionId,
         // 插件引擎任务按 'acp' 请求：推荐只用辅助模型链，主进程据此核对任务没有换引擎。
-        agentKind: pluginEngineSession ? 'acp' : runtimeAgentKind,
+        agentKind: predictionAgentKind,
         messages: (messages ?? []).slice(-20).map(({ role, content }) => ({ role, content })),
         workingDir: workingDirRef.current ?? undefined,
         turnGen: turnGenRef.current,
@@ -9609,7 +9638,12 @@ export function ChatInput({
       {(voiceInput.lastError || showSpeakerFilteredNotice || rejections.length > 0) && (
         <div className="pointer-events-none absolute bottom-full left-0 right-0 z-page-float mb-2 flex flex-col items-center gap-1 px-3">
           {voiceInput.lastError ? (
-            <VoiceInputStatusNotice message={voiceInput.lastError} />
+            <VoiceInputStatusNotice
+              message={voiceInput.lastError}
+              actionLabel={voiceInput.canRetryRecognition ? t('voiceInputOverlay.retryRecognition') : undefined}
+              onAction={voiceInput.canRetryRecognition ? () => { voiceInput.retryRecognition(); } : undefined}
+              actionDisabled={voiceInput.isBusy}
+            />
           ) : showSpeakerFilteredNotice ? (
             <VoiceInputStatusNotice tone="info" message={t('voiceInputOverlay.speakerFiltered')} />
           ) : null}
@@ -10249,6 +10283,10 @@ export function ChatInput({
                     effort={activeEffort}
                     onModelChange={handleModelChange}
                     onEffortChange={handleEffortChange}
+                    showEffortShortcut={
+                      !!sessionId && deviceLinkDeviceId === null && !catalogDeviceId && !remoteHostId &&
+                      !noConnectedSource && !agentSwitchIntent
+                    }
                     fastMode={composerSelection.display.fastMode}
                     currentSelection={sessionId && runtimeAgentKind ? composerSelection.current : undefined}
                     onFastModeChange={handleFastModeChange}

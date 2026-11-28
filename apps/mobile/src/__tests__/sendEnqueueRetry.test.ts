@@ -39,12 +39,14 @@ describe('send enqueue weak-network retry ordering', () => {
     const delivery = readFileSync(resolve(process.cwd(), 'src/session/durableOutboxDelivery.ts'), 'utf8');
     expect(delivery).toContain('record.retrySafe && projection.inputDeliveryVersion === 1');
     const projectionRead = delivery.indexOf('projection = await deps.projection(record);');
-    const recheck = delivery.indexOf('const confirmed = await confirmMissing();');
+    const recheck = delivery.indexOf("if (retryWithDurableDelivery && await confirmHistory(true, true) === 'handled') return;");
+    const missCheck = delivery.indexOf('await confirmMissing();', recheck);
     const enqueue = delivery.indexOf('deps.enqueue(record');
     expect(projectionRead).toBeGreaterThan(-1);
     expect(recheck).toBeGreaterThan(-1);
+    expect(missCheck).toBeGreaterThan(recheck);
     expect(enqueue).toBeGreaterThan(projectionRead);
-    expect(enqueue).toBeGreaterThan(recheck);
+    expect(enqueue).toBeGreaterThan(missCheck);
     for (const loopBody of loops) {
       expect(loopBody).toContain('|| isInFlightDeviceLinkError(err)');
       expect(loopBody).toContain('|| !isRetryableEnqueueTransportError(err)');

@@ -1538,7 +1538,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     bindSession: (request: {
       sessionId: string;
       selection: import('../shared/modelGroups').ModelGroupSelection;
-      route: Pick<import('../shared/modelGroups').ModelGroupResolvedRoute, 'agentKind' | 'providerId' | 'model' | 'agentDeviceId'>;
+      route: Pick<import('../shared/modelGroups').ModelGroupResolvedRoute, 'agentKind' | 'providerId' | 'model' | 'agentDeviceId' | 'accountId'>;
     }): Promise<void> => ipcRenderer.invoke('model-groups:bind-session', request),
     /** 解除任务的智能路由持续托管，保留当前具体模型。 */
     unbindSession: (request: { sessionId: string }): Promise<{ ok: boolean; unbound: boolean }> =>
@@ -2060,6 +2060,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
       sourceLanguage?: string;
       refinementEnabled?: boolean;
     }): Promise<{ ok: true }> => ipcRenderer.invoke('voice-input:prewarm', payload),
+    prewarmOnPress: (payload?: {
+      sourceLanguage?: string;
+      refinementEnabled?: boolean;
+    }): Promise<{ ok: true }> => ipcRenderer.invoke('voice-input:press-prewarm', payload),
+    discardPressPrewarm: (): Promise<{ ok: true }> =>
+      ipcRenderer.invoke('voice-input:discard-press-prewarm'),
     getBenchmarkFixtureAudio: (): Promise<
       { ok: true; path: string; wav: ArrayBuffer } | { ok: false }
     > => ipcRenderer.invoke('voice-input:benchmark-fixture-audio'),
@@ -5967,6 +5973,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   worktreeCheckout: (req: import('../shared/worktreeCheckout').CheckoutRequest): Promise<import('../shared/worktreeCheckout').CheckoutReply> => ipcRenderer.invoke('worktree:checkout', req),
   worktreeBranchSyncStatus: (req: import('../shared/worktreeBranchSync').BranchSyncRequest): Promise<import('../shared/worktreeBranchSync').BranchSyncStatus> => ipcRenderer.invoke('worktree:branch-sync-status', req),
   worktreeSyncBranch: (req: import('../shared/worktreeBranchSync').BranchSyncRequest): Promise<import('../shared/worktreeBranchSync').BranchSyncReply> => ipcRenderer.invoke('worktree:sync-branch', req),
+  worktreeWorkspaceClutterSummary: (req: import('../shared/worktreeWorkspaceClutter').WorkspaceClutterRequest): Promise<import('../shared/worktreeWorkspaceClutter').WorkspaceClutterSummary> => ipcRenderer.invoke('worktree:workspace-clutter-summary', req),
   worktreeListBranches: (req: { baseRepo: string }): Promise<unknown> =>
     ipcRenderer.invoke('worktree:list-branches', req),
   // P1: 删除/归档确认预检(有无 worktree、是否有未提交更改)
@@ -6229,6 +6236,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     push: (params: {
       sessionId: string;
       confirmForce?: ReviewPushConfirmForce;
+      syncBeforePush?: boolean;
     }): Promise<ReviewPushResult> => ipcRenderer.invoke('git-review:push', params),
   },
 

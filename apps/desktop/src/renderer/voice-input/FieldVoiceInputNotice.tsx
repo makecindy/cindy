@@ -5,6 +5,8 @@ import { VoiceInputStatusNotice } from './VoiceInputStatusNotice';
 export interface FieldVoiceInputNoticeProps {
   error: string | null;
   speakerFiltered?: boolean;
+  onRetry?: () => void;
+  retryDisabled?: boolean;
   className?: string;
   maxWidthClassName?: string;
 }
@@ -16,6 +18,8 @@ export interface FieldVoiceInputNoticeProps {
 export function FieldVoiceInputNotice({
   error,
   speakerFiltered = false,
+  onRetry,
+  retryDisabled = false,
   className,
   maxWidthClassName,
 }: FieldVoiceInputNoticeProps) {
@@ -24,6 +28,9 @@ export function FieldVoiceInputNotice({
     return (
       <VoiceInputStatusNotice
         message={error}
+        actionLabel={onRetry ? t('voiceInputOverlay.retryRecognition') : undefined}
+        onAction={onRetry}
+        actionDisabled={retryDisabled}
         className={className}
         maxWidthClassName={maxWidthClassName}
       />

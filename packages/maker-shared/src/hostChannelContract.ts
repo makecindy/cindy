@@ -313,7 +313,7 @@ export const HOST_CONTRACT_CHANNELS: readonly HostChannelDef[] = [
     desktopChannel: 'maker:input:enqueue',
     webPath: 'maker.input.enqueue',
     hostPath: '/api/input/enqueue',
-    body: ([sessionId, item]) => ({ sessionId, item }),
+    body: ([sessionId, item, options]) => ({ sessionId, item, ...(options === undefined ? {} : { options }) }),
   },
   {
     desktopChannel: 'maker:input:stop',

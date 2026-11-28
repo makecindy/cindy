@@ -1,4 +1,9 @@
-import type { AsrEvent, AsrProvider } from '@cindy/voice-input-core';
+import {
+  buildOpenAiTranscriptionPrompt,
+  type AsrEvent,
+  type AsrProvider,
+  type AsrRecognitionHints,
+} from '@cindy/voice-input-core';
 
 import { outboundFetch } from '../maker-host/outbound-fetch.desktop.js';
 import { reportCindyGatewayKeyRejected } from '../model-access/gatewayKeyRejection.js';
@@ -9,6 +14,7 @@ type LiteLlmTranscriptionProviderOptions = {
   baseUrl: string;
   model?: string;
   sourceLanguage?: string;
+  recognitionHints?: AsrRecognitionHints;
 };
 
 export type LiteLlmAudioFileTranscriptionInput = {
@@ -16,6 +22,8 @@ export type LiteLlmAudioFileTranscriptionInput = {
   baseUrl: string;
   model?: string;
   sourceLanguage?: string;
+  prompt?: string;
+  recognitionHints?: AsrRecognitionHints;
   bytes: Buffer | Uint8Array;
   mimeType?: string;
   fileName?: string;
@@ -34,6 +42,7 @@ export class LiteLlmTranscriptionProvider implements AsrProvider {
   private readonly baseUrl: string;
   private readonly model: string;
   private readonly sourceLanguage: string;
+  private readonly recognitionHints?: AsrRecognitionHints;
   private chunks: Buffer[] = [];
   private callback: (event: AsrEvent) => void = () => {};
   private started = false;
@@ -43,6 +52,7 @@ export class LiteLlmTranscriptionProvider implements AsrProvider {
     this.baseUrl = options.baseUrl;
     this.model = options.model ?? 'elevenlabs/scribe_v2';
     this.sourceLanguage = options.sourceLanguage ?? 'auto';
+    this.recognitionHints = options.recognitionHints;
   }
 
   onEvent(callback: (event: AsrEvent) => void): void {
@@ -73,6 +83,7 @@ export class LiteLlmTranscriptionProvider implements AsrProvider {
       baseUrl: this.baseUrl,
       model: this.model,
       sourceLanguage: this.sourceLanguage,
+      recognitionHints: this.recognitionHints,
       bytes: wav,
       mimeType: 'audio/wav',
       fileName: 'dictation.wav',
@@ -105,6 +116,8 @@ export async function transcribeLiteLlmAudioFile(input: LiteLlmAudioFileTranscri
   form.set('model', input.model ?? 'elevenlabs/scribe_v2');
   const language = elevenLabsLanguageCode(input.sourceLanguage ?? 'auto');
   if (language) form.set('language', language);
+  const prompt = input.prompt?.trim() || buildOpenAiTranscriptionPrompt(input.recognitionHints);
+  if (prompt) form.set('prompt', prompt);
   form.set('file', new Blob([exact], { type: mimeType }), fileName);
 
   const response = await outboundFetch(joinProxyPath(input.baseUrl, '/v1/audio/transcriptions'), {

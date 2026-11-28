@@ -5,7 +5,7 @@ import { makerToDbEngineKind } from '../../../shared/agentKindConversion';
 import { Maker, type AgentSessionHandle, type BaseAgent, type SessionMeta, type SessionStorage, type StartSessionOptions } from '@cindy/maker-core';
 import { createRehydrateCloseSuppression } from '../../maker-host/rehydrateCloseSuppression';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { createClaudeIdleReleaseWatcher, createIdleReleaseRuntimeClose, createOrdinaryIdleReleaseTaskCheck, ORDINARY_CLAUDE_TASK_SQL, ORDINARY_CODEX_TASK_SQL, ORDINARY_PLUGIN_ENGINE_TASK_SQL, type IdleClaudeSession, type IdleReleaseAgentKind } from '../claudeIdleReleaseWatcher';
+import { createClaudeIdleReleaseWatcher, createIdleReleaseRuntimeClose, createOrdinaryIdleReleaseTaskCheck, DEFAULT_PLUGIN_ENGINE_IDLE_RELEASE_MINUTES, ORDINARY_CLAUDE_TASK_SQL, ORDINARY_CODEX_TASK_SQL, ORDINARY_PLUGIN_ENGINE_TASK_SQL, PLUGIN_ENGINE_KEEP_WARM_SCHEDULE_MAX_INTERVAL_MS, type IdleClaudeSession, type IdleReleaseAgentKind } from '../claudeIdleReleaseWatcher';
 import { AgentInputCoordinator } from '../agent-input-coordinator';
 import { hasIdleReleaseQueuedWork, hasPendingIdleReleaseInput, hasScheduledIdleReleaseAutoResume } from '../idleReleaseInputGates';
 import type { AgentInputQueuedMessage } from '../../../shared/agentInputQueue';
@@ -176,6 +176,7 @@ describe('ordinary Claude task eligibility in SQLite', () => {
       CREATE TABLE orca_workers (session_id TEXT);
       CREATE TABLE orca_teams (lead_session_id TEXT, status TEXT);
       CREATE TABLE session_goals (session_id TEXT, status TEXT);
+      CREATE TABLE schedules (id TEXT PRIMARY KEY, target_session_id TEXT, status TEXT, manual INTEGER, interval_ms INTEGER, pr_trigger TEXT, webhook_trigger TEXT);
       INSERT INTO sessions VALUES ('task', 'active', 'desktop', '${makerToDbEngineKind('claude-code')}', NULL, NULL, 'native-history', NULL, NULL);
     `);
     return db;
@@ -243,6 +244,35 @@ describe('ordinary Claude task eligibility in SQLite', () => {
       expect(eligible.get('task', 'native-history')).toEqual({ id: 'task' });
       expect(db.prepare(ORDINARY_CLAUDE_TASK_SQL).get('task', 'native-history')).toBeUndefined();
       db.exec("INSERT INTO orca_workers VALUES ('task')");
+      expect(eligible.get('task', 'native-history')).toBeUndefined();
+    } finally { db.close(); }
+  });
+  it('keeps ACP tasks warm for 90 minutes by default and while bound to active frequent or event-triggered schedules', () => {
+    expect(DEFAULT_PLUGIN_ENGINE_IDLE_RELEASE_MINUTES).toBe(90);
+    const db = database();
+    try {
+      db.exec(`UPDATE sessions SET agent_kind = '${makerToDbEngineKind('acp')}'`);
+      const eligible = db.prepare(ORDINARY_PLUGIN_ENGINE_TASK_SQL);
+      expect(eligible.get('task', 'native-history')).toEqual({ id: 'task' });
+
+      // Active short-interval schedule (e.g. 5m PR follow-up) keeps the ACP runtime warm.
+      db.exec(`INSERT INTO schedules VALUES ('s-short', 'task', 'active', 0, 300000, NULL, NULL)`);
+      expect(eligible.get('task', 'native-history')).toBeUndefined();
+
+      // Paused, expired, manual, or slow (>60m, no event trigger) schedules do not block reclamation.
+      db.exec(`UPDATE schedules SET status = 'paused' WHERE id = 's-short'`);
+      expect(eligible.get('task', 'native-history')).toEqual({ id: 'task' });
+      db.exec(`UPDATE schedules SET status = 'expired' WHERE id = 's-short'`);
+      expect(eligible.get('task', 'native-history')).toEqual({ id: 'task' });
+      db.exec(`UPDATE schedules SET status = 'active', manual = 1 WHERE id = 's-short'`);
+      expect(eligible.get('task', 'native-history')).toEqual({ id: 'task' });
+      db.exec(`UPDATE schedules SET manual = 0, interval_ms = ${PLUGIN_ENGINE_KEEP_WARM_SCHEDULE_MAX_INTERVAL_MS + 1} WHERE id = 's-short'`);
+      expect(eligible.get('task', 'native-history')).toEqual({ id: 'task' });
+
+      // Active PR-triggered and webhook-triggered schedules keep the ACP runtime warm even without a short interval.
+      db.exec(`UPDATE schedules SET interval_ms = NULL, pr_trigger = '{"repo":"o/r","pr":1}' WHERE id = 's-short'`);
+      expect(eligible.get('task', 'native-history')).toBeUndefined();
+      db.exec(`UPDATE schedules SET pr_trigger = NULL, webhook_trigger = '{"enabled":true}' WHERE id = 's-short'`);
       expect(eligible.get('task', 'native-history')).toBeUndefined();
     } finally { db.close(); }
   });
