@@ -11,7 +11,7 @@ import { tipsSettings } from './TipsSection.settings-search';
  *   2. ChatEmbeddingCell — 启用聊天记录语义索引 (chat-history-embedder)
  *   3. MessageNavRailCell — 显示提问导航条 (默认关闭)
  *   4. WorktreeModelNamingCell — 用模型给新建 worktree 取名 (默认关闭)
- *   5. LocalPathDropConfirmCell — 路径型文件拖拽先确认 (默认关闭)
+ *   5. LocalPathDropConfirmCell — 路径型文件拖拽先确认 (默认开启)
  *
  * 新增 cell 用 SettingsRow, 或包一层 SettingsBlock 取得分割线。
  */

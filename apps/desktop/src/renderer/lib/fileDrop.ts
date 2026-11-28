@@ -85,10 +85,12 @@ function dedupePaths(paths: readonly string[]): string[] {
  * ResourceURLs JSON list; Chromium gives an external Electron renderer those
  * text formats but no DataTransfer.files entries.
  *
- * Only absolute local paths are returned: dragging a code selection or a link
- * from VS Code must keep its existing text/link drop behaviour.
+ * Only absolute local paths are returned, and text/plain counts only as a
+ * whole path list (see below): dragging a code selection or a link from VS Code
+ * must keep its existing text/link drop behaviour.
  */
-export function getDroppedExternalFilePaths(dataTransfer: DataTransfer): string[] {
+export function getDroppedExternalFilePaths(dataTransfer: DataTransfer | null): string[] {
+  if (!dataTransfer) return [];
   // Cindy's own file tree already carries a typed mention payload. Its
   // text/plain fallback must not also become an attachment: the internal
   // mention path owns files, directories and remote paths.
@@ -139,15 +141,19 @@ export function getDroppedExternalFilePaths(dataTransfer: DataTransfer): string[
     }
   }
 
+  // text/plain is also what a code selection or a log line carries. Accept it
+  // as a path list only when every non-empty line is a local path or a file:
+  // URI: a snippet that merely contains one path line must stay text, or the
+  // drop silently turns into an attachment and the pasted text disappears.
   const plainText = safeGetData(dataTransfer, 'text/plain');
   if (plainText) {
-    for (const line of plainText.split(/\r?\n/)) {
-      const value = line.trim();
-      if (!value) continue;
-      if (/^file:\/\//i.test(value)) {
-        pushUri(value);
-      } else if (isAbsoluteLocalPath(value)) {
-        candidates.push(value);
+    const lines = plainText.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+    const isPathList = lines.length > 0
+      && lines.every((line) => /^file:\/\//i.test(line) || isAbsoluteLocalPath(line));
+    if (isPathList) {
+      for (const line of lines) {
+        if (/^file:\/\//i.test(line)) pushUri(line);
+        else candidates.push(line);
       }
     }
   }

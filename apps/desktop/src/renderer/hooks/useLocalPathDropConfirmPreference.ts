@@ -1,24 +1,28 @@
 /**
  * useLocalPathDropConfirmPreference — 路径型文件拖拽是否先确认。
  *
- * 默认关闭：从 VS Code 拖入文件时直接进入附件托盘。开启后，任何只带
- * text/plain / text/uri-list / ResourceURLs 等路径数据的拖拽都会先弹确认，
- * 避免网页伪造路径把未选择的本地文件加入附件。
+ * 默认开启：只带 text/plain / text/uri-list / ResourceURLs 等路径数据的拖拽
+ * 无法证明用户选中过那个文件（普通网页也能写这些格式），所以默认先弹确认，
+ * 避免伪造路径把用户没选择的本地文件读进附件链路。带 File 对象的系统文件
+ * 拖拽、内部 mention 拖拽和 MCP App 拖拽不经过这里。
+ *
+ * 用户在设置 → 个性化里关掉，或在确认弹窗里取消勾选，都能永久免询问；
+ * 弹窗默认勾选「拖入本地文件时先询问」，也就是每次路径拖拽都会问一次。
  *
  * 与 useMessageNavRailPreference 相同，localStorage 只保存非默认 override：
- * 关闭设置时删除 key，让未自定义用户继续跟随未来默认值。
+ * 恢复默认时删除 key，让未自定义用户继续跟随未来默认值。
  */
 
 import { useEffect, useState } from 'react';
 
 const STORAGE_KEY = 'composer.localPathDropConfirm.enabled';
-const DEFAULT_ENABLED = false;
-const STORED_ENABLED = 'true';
+const DEFAULT_ENABLED = true;
 
 function parseStored(raw: string | null): { value: boolean; customized: boolean } {
-  if (raw === 'true') return { value: true, customized: true };
-  if (raw === 'false') return { value: false, customized: true };
-  return { value: DEFAULT_ENABLED, customized: false };
+  if (raw !== 'true' && raw !== 'false') return { value: DEFAULT_ENABLED, customized: false };
+  const value = raw === 'true';
+  // 与默认值相同的存量 override 不算自定义：开关本来就在这个位置。
+  return { value, customized: value !== DEFAULT_ENABLED };
 }
 
 let memoryValue: boolean | null = null;
@@ -55,8 +59,9 @@ export function setLocalPathDropConfirmEnabled(next: boolean): void {
   memoryValue = next;
   memoryCustomized = next !== DEFAULT_ENABLED;
   try {
+    // 只存与默认值不同的 override：默认值(开启)不落 key。
     if (next === DEFAULT_ENABLED) localStorage.removeItem(STORAGE_KEY);
-    else localStorage.setItem(STORAGE_KEY, STORED_ENABLED);
+    else localStorage.setItem(STORAGE_KEY, next ? 'true' : 'false');
   } catch {
     // localStorage 不可用时保留本次内存状态。
   }

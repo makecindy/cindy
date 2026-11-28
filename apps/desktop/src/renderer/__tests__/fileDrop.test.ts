@@ -130,14 +130,28 @@ describe('getDroppedExternalFilePaths', () => {
     ).toEqual(['/Users/me/src/a.ts', '/Users/me/src/b.ts']);
   });
 
-  it('reads multiple plain-text paths and ignores relative paths', () => {
+  it('reads a plain-text path list', () => {
     expect(
       getDroppedExternalFilePaths(
         textTransfer({
-          'text/plain': 'C:\\work\\a.ts\r\nrelative\\b.ts\r\nD:\\work\\c.ts',
+          'text/plain': 'C:\\work\\a.ts\r\nD:\\work\\c.ts\r\n',
         }),
       ),
     ).toEqual(['C:\\work\\a.ts', 'D:\\work\\c.ts']);
+  });
+
+  it('keeps a text drop as text once any line is not a path', () => {
+    // 依据:代码片段/日志里常有一行独立路径,整段不是路径列表时不能变成附件。
+    expect(
+      getDroppedExternalFilePaths(
+        textTransfer({ 'text/plain': 'C:\\work\\a.ts\r\nconst answer = 42;\r\n' }),
+      ),
+    ).toEqual([]);
+    expect(
+      getDroppedExternalFilePaths(
+        textTransfer({ 'text/plain': 'C:\\work\\a.ts\r\nrelative\\b.ts' }),
+      ),
+    ).toEqual([]);
   });
 
   it('reads VS Code CodeFiles payloads', () => {

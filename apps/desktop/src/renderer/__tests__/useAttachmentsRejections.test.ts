@@ -129,6 +129,34 @@ describe('useAttachments inline rejections', () => {
     expect(getLocalPathDropConfirmEnabled()).toBe(false);
   });
 
+  it('asks before reading a path drop when no preference is stored', async () => {
+    // 依据:路径来源不可验证,默认必须先确认再读盘(设置默认开启)。
+    _resetLocalPathDropConfirmPreferenceForTests();
+    localStorage.removeItem('composer.localPathDropConfirm.enabled');
+    confirmPathDropWithCheckbox.mockResolvedValueOnce({ ok: true, checked: true });
+    const peekFileHeader = vi.fn(async () => ({
+      success: true,
+      actualBytes: 0,
+      totalSize: 12,
+    }));
+    (window as unknown as { electronAPI: Record<string, unknown> }).electronAPI = {
+      localDb: { sessionShare: { classifyPath: vi.fn(async () => ({ kind: 'other' })) } },
+      peekFileHeader,
+      cleanupCachedImages: vi.fn(async () => undefined),
+    };
+    const { result, unmount } = renderHook(() => useAttachments('default-confirm-path-drop'));
+
+    await act(async () => {
+      await result.current.addFilePaths(['C:\\work\\README.md']);
+    });
+
+    expect(getLocalPathDropConfirmEnabled()).toBe(true);
+    expect(confirmPathDropWithCheckbox).toHaveBeenCalledOnce();
+    expect(result.current.attachments).toHaveLength(1);
+    unmount();
+    clearDraft('default-confirm-path-drop');
+  });
+
   it('attaches a path-only drop coming from VS Code', async () => {
     const peekFileHeader = vi.fn(async () => ({
       success: true,

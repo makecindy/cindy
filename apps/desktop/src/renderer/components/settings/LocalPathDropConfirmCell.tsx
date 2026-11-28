@@ -1,6 +1,6 @@
 /**
  * LocalPathDropConfirmCell — 设置 → 个性化里的路径拖拽确认开关。
- * 纯 Renderer 本地偏好(localStorage，默认关闭)，切换立即生效，无 IPC。
+ * 纯 Renderer 本地偏好(localStorage，默认开启)，切换立即生效，无 IPC。
  */
 
 import { useTranslation } from 'react-i18next';
@@ -36,7 +36,7 @@ export function LocalPathDropConfirmCell() {
       hint={setting.description}
       trailing={
         <div className="flex items-center gap-2">
-          <DefaultOverrideControls isCustomized={isCustomized} onReset={() => setEnabled(false)} />
+          <DefaultOverrideControls isCustomized={isCustomized} onReset={() => setEnabled(true)} />
           <Switch
             {...setting.controlProps}
             checked={enabled}

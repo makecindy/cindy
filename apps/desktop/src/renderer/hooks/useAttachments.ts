@@ -173,6 +173,13 @@ function fileNameFromPath(filePath: string): string {
   return normalized.slice(normalized.lastIndexOf('/') + 1);
 }
 
+/**
+ * Path-only drops probe each path with one classifyPath + one peekFileHeader.
+ * Run them in bounded batches so a large multi-select cannot fire an unbounded
+ * number of IPC calls at once, while keeping the dropped order.
+ */
+const PATH_PROBE_BATCH = 8;
+
 function mergeAttachmentsById(
   existing: readonly AttachedFile[],
   incoming: readonly AttachedFile[],
@@ -885,10 +892,16 @@ export function useAttachments(sessionId?: string, draftKey?: string): UseAttach
 
       if (uniquePaths.length === 0) return;
       // A text/uri-list payload can be produced by any web page, so a path in
-      // it does not prove the user picked that local file. The optional setting
-      // asks before reading; the dialog itself can switch the setting off.
+      // it does not prove the user picked that local file. The confirmation
+      // setting (default on) asks before reading; the dialog itself can switch
+      // the setting off. Each drag asks again while it stays on.
       if (getLocalPathDropConfirmEnabled()) {
-        if (!confirmDialog) return;
+        if (!confirmDialog) {
+          // Without the shared dialog this read cannot be authorized: skip the
+          // drop instead of silently reading paths that nobody confirmed.
+          log.warn('path drop ignored: confirm dialog provider unavailable');
+          return;
+        }
         const result = await confirmDialog.confirmWithCheckbox({
           title: t('attachmentPathConfirm.title'),
           description: t('attachmentPathConfirm.description'),
@@ -917,42 +930,52 @@ export function useAttachments(sessionId?: string, draftKey?: string): UseAttach
         }
         : undefined;
 
-      for (const filePath of uniquePaths) {
+      type PathProbe =
+        | { kind: 'directory'; path: string }
+        | { kind: 'file'; raw: DroppedRawFile }
+        | { kind: 'error'; name: string; reason: string };
+
+      const probePath = async (filePath: string): Promise<PathProbe> => {
         let kind: 'share' | 'directory' | 'other' = 'other';
         try {
           kind = (await window.electronAPI.localDb.sessionShare.classifyPath({ path: filePath })).kind;
         } catch {
           // Classification is best-effort; let the attachment read report a real failure.
         }
-        if (!isAttachmentDraftScopeActive(operationScope)) return;
-        if (kind === 'directory') {
-          if (
-            options?.directories !== 'skip'
-            && isAttachmentOperationScopeCurrent(operationScope)
-          ) {
-            addFolderPath(filePath);
-          }
-          continue;
-        }
+        if (kind === 'directory') return { kind: 'directory', path: filePath };
 
         const name = fileNameFromPath(filePath);
-        if (!name) {
-          earlyErrors.push({ name: filePath, reason: t('logic.fileTypes.readFailed') });
-          continue;
-        }
+        if (!name) return { kind: 'error', name: filePath, reason: t('logic.fileTypes.readFailed') };
         try {
           const peek = await window.electronAPI.peekFileHeader({ filePath, bytes: 0 });
           if (!peek.success) {
-            earlyErrors.push({ name, reason: t('logic.fileTypes.readFailed') });
-            continue;
+            return { kind: 'error', name, reason: t('logic.fileTypes.readFailed') };
           }
           if (peek.totalSize === 0) {
-            earlyErrors.push({ name, reason: t('logic.fileTypes.fileEmpty') });
-            continue;
+            return { kind: 'error', name, reason: t('logic.fileTypes.fileEmpty') };
           }
-          rawFiles.push({ name, path: filePath, size: peek.totalSize, file: null });
+          return { kind: 'file', raw: { name, path: filePath, size: peek.totalSize, file: null } };
         } catch {
-          earlyErrors.push({ name, reason: t('logic.fileTypes.readFailed') });
+          return { kind: 'error', name, reason: t('logic.fileTypes.readFailed') };
+        }
+      };
+
+      for (let start = 0; start < uniquePaths.length; start += PATH_PROBE_BATCH) {
+        const probes = await Promise.all(
+          uniquePaths.slice(start, start + PATH_PROBE_BATCH).map(probePath),
+        );
+        if (!isAttachmentDraftScopeActive(operationScope)) return;
+        for (const probe of probes) {
+          if (probe.kind === 'file') {
+            rawFiles.push(probe.raw);
+          } else if (probe.kind === 'error') {
+            earlyErrors.push({ name: probe.name, reason: probe.reason });
+          } else if (
+            options?.directories !== 'skip'
+            && isAttachmentOperationScopeCurrent(operationScope)
+          ) {
+            addFolderPath(probe.path);
+          }
         }
       }
 
