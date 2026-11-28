@@ -20,6 +20,24 @@ async function sessionFile(lines: string[]): Promise<string> {
 }
 
 describe('scanPiSessionJsonl', () => {
+  it.each(['\\q', '\\u12XZ', '" ,]'])('rejects malformed complete oversized plan records: %s', invalid => {
+    return sessionFile(['{"type":"custom","customType":"plan-mode","data":{"enabled":true,"text":"' + 'x'.repeat(90000) + invalid + '"}}'])
+      .then(async file => expect(await scanPiSessionJsonl(file)).toBeNull());
+  });
+
+  it('validates escaped strings across streaming boundaries', async () => {
+    const text = '"\\\n\t你好'.repeat(20000);
+    const file = await sessionFile([JSON.stringify({ type: 'custom', customType: 'plan-mode', data: { enabled: true, text } })]);
+    expect((await scanPiSessionJsonl(file))?.lastPlanModeEnabled).toBe(true);
+  });
+  it.each([false, true])('rejects an incomplete last plan record (oversized=%s)', async oversized => {
+    const file = await sessionFile([JSON.stringify({ type: 'custom', customType: 'plan-mode', data: { enabled: false } })]);
+    await writeFile(file,
+      JSON.stringify({ type: 'custom', customType: 'plan-mode', data: { enabled: false } }) + '\n'
+      + '{"type":"custom","customType":"plan-mode","data":{"enabled":true,"todos":[{"text":"'
+      + (oversized ? 'x'.repeat(90000) : 'interrupted'));
+    expect(await scanPiSessionJsonl(file)).toBeNull();
+  });
   it('collects user entry ids and the last plan-mode flag without loading image payloads', async () => {
     const hugeImage = `{"type":"message","id":"img1","parentId":"root","message":{"role":"user","content":[{"type":"image","data":"${'A'.repeat(8000)}"}]}}`;
     const file = await sessionFile([
@@ -39,5 +57,28 @@ describe('scanPiSessionJsonl', () => {
 
   it('returns null when the session file is missing', async () => {
     await expect(scanPiSessionJsonl(path.join(os.tmpdir(), 'missing-pi-session.jsonl'))).resolves.toBeNull();
+  });
+  // #8976 review: full unnumbered plans exceed both the 64 KiB parse path
+  // and the stream's retained prefix. Old reads kept the previous plan flag.
+  // Unit tier; real production scanner, small isolated files, no real waits.
+  it.each([false, true])('reads enabled=%s from a large native plan-state entry', async enabled => {
+    const file = await sessionFile([
+      JSON.stringify({ type: 'custom', customType: 'plan-mode', data: { enabled: !enabled } }),
+      JSON.stringify({ type: 'custom', customType: 'plan-mode', data: {
+        notes: { enabled: !enabled }, enabled,
+        todos: [{ step: 1, text: '保留完整计划。'.repeat(10000), completed: false }],
+      } }),
+    ]);
+    expect((await scanPiSessionJsonl(file))?.lastPlanModeEnabled).toBe(enabled);
+  });
+
+  it('returns an unavailable scan rather than an old flag when metadata lies beyond the prefix', async () => {
+    const file = await sessionFile([
+      JSON.stringify({ type: 'custom', customType: 'plan-mode', data: { enabled: true } }),
+      JSON.stringify({ type: 'custom', customType: 'plan-mode', data: {
+        todos: [{ step: 1, text: 'x'.repeat(70000), completed: false }], enabled: false,
+      } }),
+    ]);
+    expect(await scanPiSessionJsonl(file)).toBeNull();
   });
 });
