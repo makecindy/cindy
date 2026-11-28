@@ -42,8 +42,13 @@ async function listen(server: Server): Promise<number> {
 }
 
 async function createFakeCdp(options: {
+  startupSetupRace?: 'gone' | 'live' | 'unavailable' | 'malformed';
   failAttachToTarget?: boolean;
   failFetchEnable?: boolean;
+  failTargetRecheck?: boolean;
+  detachFailedSession?: boolean;
+  malformedTargetRecheck?: unknown;
+  vanishedTarget?: string;
   failFetchEnableForSession?: string;
   failCloseTarget?: boolean;
   closeTargetNotFound?: boolean;
@@ -59,8 +64,10 @@ async function createFakeCdp(options: {
 } = {}) {
   const commands: CdpCommand[] = [];
   const closedTargets = new Set<string>();
+  const liveEvents = new Map<string, {targetId: string; type: string}>();
   let browserSocket: WebSocket | undefined;
   let getTargetsCalls = 0;
+  let startupFetch: CdpCommand | undefined;
   const wsServer = new WebSocketServer({ noServer: true });
   wsServer.on('connection', (socket) => {
     sockets.push(socket);
@@ -68,7 +75,15 @@ async function createFakeCdp(options: {
     socket.on('message', (raw) => {
       const command = JSON.parse(raw.toString()) as CdpCommand;
       commands.push(command);
-      if (command.method === 'Target.setAutoAttach' && options.emitWorkerAutoAttach && !command.sessionId) {
+      if (command.method === 'Target.setAutoAttach' && options.startupSetupRace && !command.sessionId) {
+        socket.send(JSON.stringify({method: 'Target.attachedToTarget', params: {
+          sessionId: 'startup-race-session', targetInfo: {targetId: 'page-1', type: 'page'},
+        }}));
+        socket.send(JSON.stringify({id: command.id, result: {}}));
+      } else if (command.method === 'Fetch.enable' && command.sessionId === 'startup-race-session') {
+        // Hold rejection until discovery has listed the same in-flight target.
+        startupFetch = command;
+      } else if (command.method === 'Target.setAutoAttach' && options.emitWorkerAutoAttach && !command.sessionId) {
         socket.send(JSON.stringify({
           method: 'Target.attachedToTarget',
           params: {
@@ -88,6 +103,28 @@ async function createFakeCdp(options: {
         socket.send(JSON.stringify({ id: command.id, result: {} }));
       } else if (command.method === 'Target.getTargets') {
         getTargetsCalls += 1;
+        if (options.startupSetupRace) {
+          if (getTargetsCalls === 1) {
+            socket.send(JSON.stringify({id: command.id, result: {targetInfos: [{targetId: 'page-1', type: 'page'}]}}));
+            if (!startupFetch) throw new Error('auto-attach setup must precede startup inventory');
+            socket.send(JSON.stringify({id: startupFetch.id, error: {message: 'setup failed'}}));
+          } else if (options.startupSetupRace === 'unavailable') {
+            socket.send(JSON.stringify({id: command.id, error: {message: 'inventory unavailable'}}));
+          } else {
+            socket.send(JSON.stringify({id: command.id, result: options.startupSetupRace === 'malformed'
+              ? {targetInfos: [{}]}
+              : {targetInfos: options.startupSetupRace === 'live' ? [{targetId: 'page-1', type: 'page'}] : []}}));
+          }
+          return;
+        }
+        if ('malformedTargetRecheck' in options && getTargetsCalls > 2) {
+          socket.send(JSON.stringify({ id: command.id, result: options.malformedTargetRecheck }));
+          return;
+        }
+        if (options.failTargetRecheck && getTargetsCalls > 2) {
+          socket.send(JSON.stringify({ id: command.id, error: { message: 'unavailable' } }));
+          return;
+        }
         if (options.emitAutoAttachBeforeReadyBarrier && getTargetsCalls === 2) {
           socket.send(JSON.stringify({
             method: 'Target.attachedToTarget',
@@ -103,6 +140,9 @@ async function createFakeCdp(options: {
             targetInfos: [
               ...(options.startupTargets ?? [{ targetId: 'page-1', type: 'page' }])
                 .filter(({ targetId }) => !closedTargets.has(targetId)),
+              ...(!closedTargets.has('page-2') && options.emitAutoAttachBeforeReadyBarrier && getTargetsCalls >= 2
+                ? [{targetId: 'page-2', type: 'page'}] : []),
+              ...Array.from(liveEvents.values()).filter(({targetId}) => targetId !== options.vanishedTarget && !closedTargets.has(targetId)),
               // Startup issues two getTargets calls; later ones are rechecks.
               ...(options.listWorkerAfterStart && getTargetsCalls > 2
                 ? [{ targetId: options.listWorkerAfterStart, type: 'worker' }]
@@ -126,6 +166,9 @@ async function createFakeCdp(options: {
         options.failFetchEnable
         || command.sessionId === options.failFetchEnableForSession
       )) {
+        if (options.detachFailedSession) socket.send(JSON.stringify({
+          method: 'Target.detachedFromTarget', params: {sessionId: command.sessionId},
+        }));
         socket.send(JSON.stringify({ id: command.id, error: { message: 'dummy secret must not escape' } }));
       } else if (command.method === 'Target.closeTarget' && options.rejectRepeatCloseTarget) {
         const id = (command.params as { targetId?: string } | undefined)?.targetId ?? '';
@@ -183,6 +226,10 @@ async function createFakeCdp(options: {
     commands,
     sendEvent(event: Record<string, unknown>) {
       if (!browserSocket) throw new Error('fake CDP browser socket is not connected');
+      if (event.method === 'Target.attachedToTarget') {
+        const info = (event.params as {targetInfo: {targetId: string; type: string}}).targetInfo;
+        if (info.type === 'page' || info.type === 'iframe') liveEvents.set(info.targetId, info);
+      }
       browserSocket.send(JSON.stringify(event));
     },
     disconnect() {
@@ -398,6 +445,78 @@ describe('BrowserProxyAuthCoordinator', () => {
     // DNS verdicts are cached per hostname across coordinators, so one test's
     // resolver would otherwise decide the next test's verdict for the same host.
     resetBrowserProxyDnsVerdictCache();
+  });
+
+  it.each(['gone', 'live', 'unavailable', 'malformed'] as const)(
+    'shares startup and auto-attach setup failure: %s', async (startupSetupRace) => {
+      const cdp = await createFakeCdp({startupSetupRace});
+      const onFailure = vi.fn();
+      const coordinator = new BrowserProxyAuthCoordinator({
+        mode: 'proxied', server: 'http://proxy.test:8080', allowedHostnames: ['allowed.example'],
+      }, {warn: vi.fn()}, onFailure, publicLookup);
+      try {
+        if (startupSetupRace === 'gone') {
+          await expect(coordinator.start(cdp.cdpUrl)).resolves.toBeUndefined();
+          expect(onFailure).not.toHaveBeenCalled();
+          expect(cdp.commands.some(({method}) => method === 'Browser.close')).toBe(false);
+        } else {
+          await expect(coordinator.start(cdp.cdpUrl)).rejects.toThrow();
+        }
+        // Proves startup joined auto-attach's setup instead of opening another session.
+        expect(cdp.commands.some(({method}) => method === 'Target.attachToTarget')).toBe(false);
+        expect(cdp.commands.some(({method}) => method === 'Runtime.runIfWaitingForDebugger')).toBe(false);
+      } finally {
+        await coordinator.dispose();
+      }
+    },
+  );
+
+  // Regression: a short-lived iframe can disappear while Fetch.enable is
+  // pending. Production start/event handling must preserve the main browser
+  // only after a successful target-list recheck proves the child is gone.
+  // Existing tests cover live failures, not this CDP lifecycle race (unit tier).
+  it.each([
+    { vanished: true, recheckFails: false, shouldClose: false },
+    { vanished: true, recheckFails: false, shouldClose: false, detached: true },
+    { vanished: false, recheckFails: false, shouldClose: true },
+    { vanished: true, recheckFails: true, shouldClose: true },
+    ...[null, {}, {targetInfos: null}, {targetInfos: [{}]}, {targetInfos: [{targetId: ''}]}, {targetInfos: [{targetId: '  '}]}].map((malformed) => ({vanished: true, recheckFails: false, shouldClose: true, malformed})),
+  ])('handles iframe setup race: vanished=$vanished recheckFails=$recheckFails', async (scenario) => {
+    const {vanished, recheckFails, shouldClose} = scenario;
+    const cdp = await createFakeCdp({
+      failFetchEnableForSession: 'iframe-session',
+      ...(vanished ? { vanishedTarget: 'iframe-child' } : {}),
+      failTargetRecheck: recheckFails,
+      detachFailedSession: 'detached' in scenario && scenario.detached,
+      ...('malformed' in scenario ? {malformedTargetRecheck: scenario.malformed} : {}),
+    });
+    const onFailure = vi.fn();
+    const logger = {warn: vi.fn()};
+    const coordinator = new BrowserProxyAuthCoordinator({
+      mode: 'proxied', server: 'http://proxy.test:8080',
+      allowedHostnames: ['allowed.example'],
+    }, logger, onFailure, publicLookup);
+    await coordinator.start(cdp.cdpUrl);
+    cdp.sendEvent({method: 'Target.attachedToTarget', params: {
+      sessionId: 'iframe-session', targetInfo: {targetId: 'iframe-child', type: 'iframe'},
+    }});
+    await vi.waitFor(() => {
+      if (shouldClose) expect(onFailure).toHaveBeenCalledTimes(1);
+      else expect(logger.warn).toHaveBeenCalledWith('browser proxy target disappeared during setup; browser preserved');
+    });
+    if (!shouldClose) {
+      cdp.sendEvent({method: 'Fetch.requestPaused', sessionId: 'session-1', params: {
+        requestId: 'surviving-page-request', request: {url: 'https://allowed.example/after-child-close'},
+      }});
+      await vi.waitFor(() => expect(cdp.commands).toContainEqual(expect.objectContaining({
+        method: 'Fetch.continueRequest', params: {requestId: 'surviving-page-request'},
+      })));
+    }
+    await coordinator.dispose();
+    expect(cdp.commands.some(({method}) => method === 'Browser.close')).toBe(shouldClose);
+    expect(cdp.commands.some(({method, sessionId}) =>
+      method === 'Runtime.runIfWaitingForDebugger' && sessionId === 'iframe-session')).toBe(false);
+    if (!shouldClose) expect(onFailure).not.toHaveBeenCalled();
   });
 
   it('answers only proxy challenges with decoded credentials and continues paused requests', async () => {
@@ -665,7 +784,8 @@ describe('BrowserProxyAuthCoordinator', () => {
     await expect(coordinator.start(cdp.cdpUrl)).rejects.toThrow(
       'CDP proxy authentication command failed',
     );
-    expect(cdp.commands.filter(({ method }) => method === 'Target.getTargets')).toHaveLength(2);
+    // Discovery, attach failure recheck, then strict startup failure containment.
+    expect(cdp.commands.filter(({ method }) => method === 'Target.getTargets')).toHaveLength(3);
     expect(cdp.commands.filter(({ method }) => method === 'Fetch.enable')).toHaveLength(0);
     await coordinator.dispose();
   });
