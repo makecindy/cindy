@@ -153,6 +153,87 @@ describe('Session close lifecycle', () => {
     expect(handle.send).toHaveBeenCalledOnce();
   });
 
+  // #12516: the same owned turn may or may not have delivered its real
+  // terminal when the host closes after an explicit context clear.
+  it.each(['before-close', 'after-close', 'missing'] as const)(
+    'settles a cleared Pi turn once when the provider terminal is %s',
+    async (terminalTiming) => {
+      const terminalGate = createDeferred();
+      const { session, handle, queue, seen } = liveTurn(false, terminalGate.promise);
+      await session.send('work', { turnAttemptToken: 12 });
+      const generation = session.getTurnGeneration();
+      queue.push({ type: 'text', source: 'pi', data: { text: 'saved reply', isFinal: true } });
+      queue.push({ type: 'tool_use', source: 'pi', data: { toolUseId: 'active-tool', name: 'read', input: {} } });
+      await vi.waitFor(() => expect(seen.map((event) => event.type)).toEqual(['text', 'tool_use']));
+
+      if (terminalTiming !== 'missing') {
+        queue.push({ type: 'done', source: 'pi', data: { status: 'completed' } });
+      }
+      if (terminalTiming === 'before-close') {
+        terminalGate.resolve();
+        await vi.waitFor(() => expect(seen).toHaveLength(3));
+      }
+      await session.close({ reason: 'navigation', contextClearGeneration: generation });
+      terminalGate.resolve();
+
+      expect(seen.filter((event) => event.type === 'error' || event.type === 'done')).toEqual([
+        expect.objectContaining({
+          type: 'done',
+          sessionTurnGeneration: generation,
+          turnAttemptToken: 12,
+          data: expect.objectContaining({ status: terminalTiming === 'before-close' ? 'completed' : 'cancelled' }),
+        }),
+      ]);
+      expect(handle.send).toHaveBeenCalledOnce();
+    },
+  );
+
+  // #12516: onAccepted can hold a reservation while Desktop clears its input boundary.
+  // The numeric generation is reused after rollback, so it cannot prove cancellation by itself.
+  it.each(['clear', 'unrelated cancellation', 'failed preparation', 'reused generation'] as const)(
+    'attributes reservation rollback only to the captured clear (%s)',
+    async (scenario) => {
+      const { session, handle, queue, seen, idle } = liveTurn(false);
+      await session.send('previous work');
+      idle();
+      queue.push({ type: 'done', source: 'pi', data: { status: 'completed' } });
+      await vi.waitFor(() => expect(seen).toHaveLength(1));
+      const prior = session.getTurnGeneration();
+
+      const entered = createDeferred();
+      const gate = createDeferred();
+      const controller = new AbortController();
+      const sending = session.send('reserved work', {
+        signal: controller.signal,
+        onAccepted: async () => {
+          entered.resolve();
+          await gate.promise;
+          if (scenario === 'failed preparation') throw new Error('preparation failed');
+        },
+      });
+      await entered.promise;
+      expect(session.getTurnGeneration()).toBe(prior + 1);
+      const clear = session.captureContextClearTurn();
+      if (scenario === 'unrelated cancellation') clear.confirmCancellation();
+      controller.abort();
+      if (scenario !== 'unrelated cancellation') clear.confirmCancellation();
+      gate.resolve();
+      if (scenario === 'failed preparation') {
+        await expect(sending).rejects.toThrow('preparation failed');
+      } else {
+        await expect(sending).resolves.toEqual({ accepted: false, reason: 'cancelled-before-dispatch' });
+      }
+      expect(session.getTurnGeneration()).toBe(prior);
+      expect(handle.send).toHaveBeenCalledOnce();
+      if (scenario === 'reused generation') {
+        await session.send('next work');
+        expect(session.getTurnGeneration()).toBe(prior + 1);
+      }
+      expect(clear.resolveGeneration()).toBe(scenario === 'clear' ? prior : null);
+      await session.close();
+    },
+  );
+
   it('preserves Stop as cancellation when retirement races a missing terminal', async () => {
     const { session, handle, seen } = liveTurn();
     await session.send('work', { turnAttemptToken: 9 });

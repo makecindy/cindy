@@ -929,7 +929,7 @@ import {
   rehydrateCloseSuppression,
   withRehydrateCloseSuppressed,
 } from '../maker-host/rehydrateCloseSuppression.js';
-import { handleCloseSessionRequest } from './closeSessionRequest.js';
+import { createContextClearSessionClose } from './closeSessionRequest.js';
 import {
   createOrcaIdleReleaseWatcher,
   createOrcaIdleRuntimeClose,
@@ -23642,9 +23642,18 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     },
   );
 
+  const contextClearSessionClose = createContextClearSessionClose({
+    getSession: getStableSessionForTurnBoundary,
+    closeSession: (sid) => maker.closeSession(sid),
+    closeSessionIfCurrent: async (live, generation) => {
+      await maker.closeSessionIfCurrent(live, 'requested', { contextClearGeneration: generation });
+    },
+    withRehydrateCloseSuppressed,
+    cleanupPendingInteractions: (sid) => cleanupPendingInteractionsForSession(sid, 'session_closed'),
+  });
   ipcMain.handle(
     MAKER_INVOKE.INPUT_CLEAR_SESSION,
-    async (_e, sessionId: unknown, clearedAt: unknown) => {
+    async (event, sessionId: unknown, clearedAt: unknown) => {
       if (
         clearedAt !== undefined &&
         (typeof clearedAt !== 'string' || !Number.isFinite(new Date(clearedAt).getTime()))
@@ -23663,7 +23672,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           clearedAt: typeof clearedAt === 'string' ? clearedAt : undefined,
           isRemoteInvoke: remoteInvoke,
         });
+        const confirmCancellation = contextClearSessionClose.noteClear(event.sender, sid, clearedAt, remoteInvoke);
         const projection = inputCoordinator.clearSession(sid, clearBoundary);
+        confirmCancellation?.();
         clearSessionRuntimeRouteChange(sid);
         cindyMakeManager.cancelTasksForSession(sid);
         workingDirectoryRecovery.discard(sid);
@@ -23765,7 +23776,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     if (!settledGoalPause.ok) throw settledGoalPause.error;
   });
 
-  ipcMain.handle(MAKER_INVOKE.CLOSE_SESSION, async (_e, sessionId: unknown, opts?: unknown) => {
+  ipcMain.handle(MAKER_INVOKE.CLOSE_SESSION, async (event, sessionId: unknown, opts?: unknown) => {
     if (typeof sessionId !== 'string') throwIpcError('INVALID_PARAMS', 'sessionId required');
     // F6 fallback 临时文件 + worktree 清理走 Maker.lifecycleHooks.onClose
     // (在 maker-host/index.ts 注入), Maker 在 status==='closed' 时自动调,
@@ -23773,16 +23784,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     // opts.preserveWorkspace=true(/clear、鉴权重连等软重启)时抑制这些重副作用,
     // 业务体与选项解析见 closeSessionRequest.ts。
     await withSendToSessionLock(sessionId, () =>
-      handleCloseSessionRequest(
-        {
-          closeSession: (sid) => maker.closeSession(sid),
-          withRehydrateCloseSuppressed,
-          cleanupPendingInteractions: (sid) =>
-            cleanupPendingInteractionsForSession(sid, 'session_closed'),
-        },
-        sessionId,
-        opts,
-      ),
+      contextClearSessionClose.close(event.sender, sessionId, opts, isDeviceLinkInvoke()),
     );
   });
 
