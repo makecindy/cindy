@@ -17,7 +17,11 @@ vi.mock('react-native', async () => {
     StyleSheet: { create: (s: unknown) => s, hairlineWidth: 1 } };
 });
 vi.mock('@/components/AppText', async () => ({ Text: (await import('react-native')).Text }));
-vi.mock('lucide-react-native', () => ({ Pause: () => null, Play: () => null, Split: () => null, CircleAlert: () => null, X: () => null, ChevronRight: () => null, ChevronDown: () => null }));
+vi.mock('lucide-react-native', () => ({ Pause: () => null, Play: () => null, Split: () => null, CircleAlert: () => null, X: () => null, ChevronRight: () => null, ChevronDown: () => null, Info: () => null }));
+vi.mock('@/session/NoticeExplainSheet', () => ({
+  NoticeExplainSheet: () => null,
+  NoticeExplainButton: () => null,
+}));
 vi.mock('react-i18next', async (importOriginal) => ({
   ...await importOriginal<typeof import('react-i18next')>(),
   useTranslation: () => ({ i18n: { language: 'en' }, t: (key: string, opts?: { seconds?: number }) => opts?.seconds === undefined ? key : key + ' ' + opts.seconds }),

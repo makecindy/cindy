@@ -61,6 +61,11 @@ interface SubscriptionAccountRouting extends Pick<AuthAdapter, 'getState'> {
   /** Codex can use an OAuth host while routing an implicit model elsewhere. */
   resolveDefaultProvider?(model?: string): string | null | Promise<string | null>;
   preparePool?(providerId: string): Promise<void>;
+  /**
+   * The local account Smart Routing chose for this task within this provider (model-groups.md §3.5).
+   * Read-only; undefined when the task is not on a routed account source.
+   */
+  routedAccount?(sessionId: string, providerId: string): Promise<string | undefined>;
 }
 
 /**
@@ -526,6 +531,20 @@ export function withSubscriptionAccounts<T extends BaseAgent>(agent: T, auth?: S
               }
             }
             imported ??= legacyConnectionAccount(options.providerId?.trim(), keys, target.kind, !!options.resumeSessionId);
+            // A task on a Smart Routing account source runs on that account only. If it cannot take the
+            // task, the start fails and the route moves on; the pool must not pick an account the route
+            // turned off. A resume keeps the account that owns its native history.
+            if (!imported && options.sessionId && !options.deviceHosted && auth?.routedAccount) {
+              const owner = activeOwnerScopeKey();
+              const routed = await auth.routedAccount(options.sessionId, options.providerId?.trim() || provider);
+              assertOwnerCurrent(owner);
+              const bound = routed ? keys.map(key => readAccountBinding(key, kind)).find(Boolean) : undefined;
+              if (routed && (!bound || bound.accountId === routed)) imported = routed;
+              else if (routed && !options.resumeSessionId) {
+                await writeAccountBindings(keys, kind, routed, ref?.providerId);
+                imported = routed;
+              }
+            }
             if (!imported && options.resumeSessionId && !keys.some(key => readAccountBinding(key, kind))) {
               // Unknown Codex homes retain their legacy route; never pick another account.
               if (kind === 'openai') return startLegacy();

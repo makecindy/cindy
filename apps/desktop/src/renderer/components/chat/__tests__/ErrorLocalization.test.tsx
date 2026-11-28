@@ -177,7 +177,7 @@ it.each(['live', 'history'] as const)('names the upstream status in %s', async s
   render(<I18nextProvider i18n={i18n}>{surface === 'history'
     ? <ErrorMessageCard message={message} />
     : <ErrorBanner error={message} agentKind="pi" retryText="原消息" onRetry={retry} />}</I18nextProvider>);
-  expect(screen.getByText('上游返回 550，本次回复未完成。')).toBeTruthy();
+  expect(screen.getByText('模型供应商服务返回异常（HTTP 550），本次回复未完成。')).toBeTruthy();
 });
 
 // #12924, unit: a Pi history read the upstream refused never reached the
@@ -212,7 +212,7 @@ it.each(['live', 'history'] as const)('keeps a refused Pi history read ahead of 
     expect(screen.getByText(zhCN.chat.errorBanner.piRetryHistoryUnavailable, { ignore: 'style,script' })).toBeTruthy();
     expect(screen.queryByText(zhCN.chat.errorBanner.networkUnreachable)).toBeNull();
     expect(screen.queryByText(zhCN.chat.errorBanner.overloadBusy)).toBeNull();
-    expect(screen.queryByText(/上游返回/)).toBeNull();
+    expect(screen.queryByText(/服务返回异常/)).toBeNull();
     unmount();
   }
 });
