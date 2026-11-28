@@ -11,8 +11,9 @@ import { isProviderShareAgentDeviceId } from '../../shared/providerShare.js';
 import type { ModelPricingCatalog } from '../../shared/regionalMoney.js';
 import { isPluginModelPickerRouteAvailable } from '../cindy-brain/ghostModelPicker.js';
 import { createLogger } from '../logger.js';
+import { getSessionProvider, hasSessionProvider } from '../maker-host/session-provider-store.js';
 import { recordModelGroupDecision } from './decisionLog.js';
-import type { AutoUsageProfileSnapshot } from './autoUsageProfile.js';
+import { autoUsageSourceKey, type AutoUsageProfileSnapshot } from './autoUsageProfile.js';
 import type { ModelGroupInnerQuota } from './pick.js';
 import { createModelGroupResolver, MODEL_GROUP_REMOTE_WAIT_MS } from './resolver.js';
 import { readModelGroupBindingForDispatch, readModelGroupSessionBinding } from './sessionBindings.js';
@@ -35,6 +36,13 @@ const pickLog = createLogger('model-groups:pick');
 const REMOTE_CATALOG_TTL_MS = 60_000;
 const LOCAL_CATALOG_TTL_MS = 1_000;
 
+export interface ModelGroupRunningSession {
+  id: string;
+  agentDeviceId?: string | null;
+  /** Fallback for a live task whose provider has not been registered in memory. */
+  providerId?: string;
+}
+
 export interface ModelGroupRuntimePorts {
   scope(): string;
   localViews(): Promise<ProviderView[]>;
@@ -44,7 +52,7 @@ export interface ModelGroupRuntimePorts {
   quotaWindows(options?: { cached?: boolean; dryRun?: boolean }): Promise<ReadonlyMap<string, readonly (ModelGroupTraceQuota & { scopedTo?: string | null })[]>>;
   innerQuota?(source: { providerId: string; model: string; agentKind: ModelGroupAgentKind }): Promise<ModelGroupInnerQuota | null>;
   usageProfile?(options?: { dryRun?: boolean }): AutoUsageProfileSnapshot | null | Promise<AutoUsageProfileSnapshot | null>;
-  runningCount?(source: { providerId: string; agentDeviceId?: string | null }): number;
+  runningSessions(): readonly ModelGroupRunningSession[];
   onCommitPick?(candidate: { providerId: string; agentDeviceId?: string | null; model: string }): void;
   onDispose?(): void;
   remoteInvocable?(providerId: string): boolean;
@@ -210,7 +218,16 @@ export function createModelGroupRuntime(ports: ModelGroupRuntimePorts) {
     quotaWindows: (options) => ports.quotaWindows(options),
     innerQuota: ports.innerQuota ? (source) => ports.innerQuota!(source) : undefined,
     usageProfile: ports.usageProfile ? (options) => ports.usageProfile!(options) : undefined,
-    runningCount: ports.runningCount ? (source) => ports.runningCount!(source) : undefined,
+    runningSourceCounts: () => {
+      const counts = new Map<string, number>();
+      for (const session of ports.runningSessions()) {
+        const providerId = hasSessionProvider(session.id) ? getSessionProvider(session.id) : session.providerId;
+        if (!providerId) continue;
+        const key = autoUsageSourceKey(session.agentDeviceId, providerId);
+        counts.set(key, (counts.get(key) ?? 0) + 1);
+      }
+      return counts;
+    },
     onCommitPick: ports.onCommitPick ? (candidate) => ports.onCommitPick!(candidate) : undefined,
     locations: ports.locations ? () => ports.locations!() : undefined,
     remoteViews: ports.remoteViews ? (agentDeviceId) => ports.remoteViews!(agentDeviceId) : undefined,

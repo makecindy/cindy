@@ -33,7 +33,7 @@ import {
   type ModelGroupHandlersPorts,
 } from '../../../desktop/src/main/model-groups/handlersCore.js';
 import type { ModelGroupRouteNotePorts } from '../../../desktop/src/main/model-groups/routeNote.js';
-import { createModelGroupRuntime } from '../../../desktop/src/main/model-groups/runtimeCore.js';
+import { createModelGroupRuntime, type ModelGroupRuntimePorts } from '../../../desktop/src/main/model-groups/runtimeCore.js';
 import {
   bindModelGroupSession,
   peekModelGroupSessionBinding,
@@ -56,6 +56,7 @@ const log = createLogger('host-model-groups');
 export interface HostModelGroupsPorts {
   listProviderViews(): Promise<ProviderView[]>;
   listLocalAgents(): readonly string[];
+  runningSessions: ModelGroupRuntimePorts['runningSessions'];
   readPricing(): Promise<{ gateway: ModelPricingCatalog | null; reference: ModelPricingCatalog | null }>;
   createDbMessage(sessionId: string, body: Record<string, unknown>): Promise<unknown>;
   readPendingSessionTarget?: ModelGroupHandlersPorts['readPendingSessionTarget'];
@@ -155,6 +156,7 @@ export function createHostModelGroups(ports: HostModelGroupsPorts) {
     },
     quotaWindows: async () => new Map(),
     usageProfile: (options) => (options?.dryRun ? autoUsageProfileStore.readForPreview(200) : autoUsageProfileStore.peek()),
+    runningSessions: () => ports.runningSessions(),
     onCommitPick: (candidate) => autoUsageProfileStore.recordPick(candidate),
     onDispose: () => autoUsageProfileStore.dispose(),
     pricing: () => ports.readPricing(),

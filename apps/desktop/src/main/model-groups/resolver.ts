@@ -33,7 +33,7 @@ import { isProviderShareAgentDeviceId } from '../../shared/providerShare.js';
 import { GHOST_REMOTE_AGENT_MODELS } from '../cindy-brain/ghostAgentModels.js';
 import { isGhostCardModelRouteAvailable, isPluginModelPickerRouteAvailable } from '../cindy-brain/ghostModelPicker.js';
 import { applyRouteWeightStep, type RouteWeightStep } from '../provider-group/scheduler.js';
-import type { AutoUsageProfileSnapshot } from './autoUsageProfile.js';
+import { autoUsageSourceKey, type AutoUsageProfileSnapshot } from './autoUsageProfile.js';
 import {
   pickModelGroupCandidate,
   type ModelGroupCandidateFacts,
@@ -72,8 +72,8 @@ export interface ModelGroupResolverDeps {
    * 正式选路时同步 0ms 返回；仅 dryRun（「试一下」）冷启动时允许短等预热。
    */
   usageProfile?(options?: { dryRun?: boolean }): AutoUsageProfileSnapshot | null | Promise<AutoUsageProfileSnapshot | null>;
-  /** 某来源此刻正在运行的任务数（纯内存 O(1) 读，0 表示空闲）。 */
-  runningCount?(source: { providerId: string; agentDeviceId?: string | null }): number;
+  /** 一次选路取一次内存快照，按 autoUsageSourceKey 查各来源正在运行的任务数。 */
+  runningSourceCounts?(): ReadonlyMap<string, number>;
   /** 本次选路正式采用后的回调（用于增量更新内存用量画像）。 */
   onCommitPick?(candidate: { providerId: string; agentDeviceId?: string | null; model: string }): void;
   /**
@@ -319,8 +319,11 @@ export function createModelGroupResolver(deps: ModelGroupResolverDeps) {
         !candidate.off && !candidate.agentDeviceId && candidate.agentKind !== 'acp').map(candidate => candidate.providerId));
       for (const id of localProviders) if (deps.billingUnavailable(id)) heldProviders.add(id);
     }
+    // SSH 目录里的连接不代表本机同 ID 的来源，不能用本机任务给它算负载。
+    const runningSourceCounts = route.strategy === 'expiring' && !sshHostId ? deps.runningSourceCounts?.() : undefined;
     return Promise.all(route.candidates.map(async (candidate) => {
       const { agentDeviceId } = candidate;
+      const running = runningSourceCounts?.get(autoUsageSourceKey(agentDeviceId, candidate.providerId)) ?? 0;
       if (candidate.agentKind === 'acp') {
         const key = pluginEngineKeyFromProviderId(candidate.providerId);
         const remoteEngines = agentDeviceId ? (await remote?.pluginEngines.get(agentDeviceId)) ?? null : null;
@@ -352,9 +355,6 @@ export function createModelGroupResolver(deps: ModelGroupResolverDeps) {
           && !!modelEntry?.efforts?.includes(wantedEffort);
         const detail = engine?.reportedModelDetails?.find((item) => item.modelId === candidate.model);
         const acceptsImage = detail?.imageInput === true;
-        const running = deps.runningCount
-          ? deps.runningCount({ providerId: candidate.providerId, agentDeviceId: agentDeviceId ?? null })
-          : 0;
         return {
           available,
           ...(effortSupported ? { effort: wantedEffort } : {}),
@@ -404,9 +404,6 @@ export function createModelGroupResolver(deps: ModelGroupResolverDeps) {
           : installed.get(agent) === true && isPluginModelPickerRouteAvailable(exact, views, agents));
       const isShare = !!agentDeviceId && isProviderShareAgentDeviceId(agentDeviceId);
       const payAsYouGo = !isShare && (view?.access?.kind === 'api' || view?.id === 'xd');
-      const running = deps.runningCount
-        ? deps.runningCount({ providerId: candidate.providerId, agentDeviceId: agentDeviceId ?? null })
-        : 0;
       return {
         available,
         ...(available && wantedEffort && isPluginModelPickerRouteAvailable(

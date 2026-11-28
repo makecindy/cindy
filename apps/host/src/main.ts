@@ -1365,6 +1365,7 @@ const hostAutoTitle = createHostAutoTitle({
 const hostModelGroups = createHostModelGroups({
   listProviderViews: async () => (await listProviders({ gateway: currentGateway(), ownerId: runtime.owner })).providers,
   listLocalAgents: () => agentGraph?.agents ?? [],
+  runningSessions: () => agentGraph?.maker.listActiveSessions().filter(session => session.isTurnRunning()) ?? [],
   readPricing: async () => ({
     gateway: await usagePricing.getGatewayModelPricing().catch(() => null),
     reference: usagePricing.readReferenceModelPricing(),

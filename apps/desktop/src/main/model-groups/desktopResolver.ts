@@ -14,7 +14,6 @@ import { getGoalController } from '../goal-host/index.js';
 import { getSessionRowSnapshot } from '../localDb/sessionDispatchSnapshot.js';
 import { getDesktopProviderService } from '../maker-host/createDesktopProviderService.js';
 import { isRemoteProviderInvocationAllowed } from '../maker-host/remote-provider-access-store.js';
-import { getSessionProvider, hasSessionProvider } from '../maker-host/session-provider-store.js';
 import * as pluginEnginesIpc from '../maker-ipc/pluginEnginesIpc.js';
 import { readWorkerAgentLocations } from '../maker-ipc/workerAgentLocations.js';
 import { getProviderGroupRouter } from '../provider-group/runtime.js';
@@ -28,7 +27,7 @@ import { getReferenceModelPricing } from '../usage/referenceModelPricing.js';
 import { createAutoUsageProfileStore, readLocalAutoUsageSamples } from './autoUsageProfile.js';
 import type { ModelGroupInnerQuota } from './pick.js';
 import { modelGroupQuotaKey, MODEL_GROUP_REMOTE_WAIT_MS } from './resolver.js';
-import { createModelGroupRuntime } from './runtimeCore.js';
+import { createModelGroupRuntime, type ModelGroupRunningSession } from './runtimeCore.js';
 
 /** 选路时让额度总览保持采集这么久；面板没开时它平时不采集。 */
 const QUOTA_LEASE_MS = 5 * 60_000;
@@ -77,24 +76,14 @@ async function quotaWindows(options?: { cached?: boolean; dryRun?: boolean }) {
   return byProvider;
 }
 
-/** O(1) 纯内存估算某来源此刻正在运行的本机任务数，不查 SQLite。 */
-function runningCountForSource(target: { providerId: string; agentDeviceId?: string | null }): number {
-  const activities = getAgentIslandService()?.getSessionActivitySnapshots();
-  if (!activities || activities.length === 0) return 0;
+/** 取本进程的任务活动和已缓存的执行位置，不为选路查库或询问对端。 */
+function runningSessions(): ModelGroupRunningSession[] {
+  const activities = getAgentIslandService()?.getSessionActivitySnapshots() ?? [];
+  if (activities.length === 0) return [];
   const routes = autoUsageProfileStore.peek()?.sessionRoutes;
-  const wantDevice = target.agentDeviceId ?? null;
-  let count = 0;
-  for (const activity of activities) {
-    if (!isSessionActivityRunning(activity)) continue;
-    const cachedRoute = routes?.get(activity.sessionId);
-    const providerId = hasSessionProvider(activity.sessionId)
-      ? getSessionProvider(activity.sessionId)
-      : cachedRoute?.providerId ?? null;
-    if (providerId !== target.providerId) continue;
-    const deviceId = cachedRoute?.agentDeviceId ?? null;
-    if (deviceId === wantDevice) count += 1;
-  }
-  return count;
+  return activities
+    .filter(activity => activity.currentTurnActive ?? isSessionActivityRunning(activity))
+    .map(({ sessionId }) => ({ id: sessionId, ...routes?.get(sessionId) }));
 }
 
 function innerQuota(source: { providerId: string; model: string; agentKind: ModelGroupAgentKind }): Promise<ModelGroupInnerQuota | null> {
@@ -169,6 +158,7 @@ export const desktopModelGroupRuntime = createModelGroupRuntime({
   quotaWindows: (options) => quotaWindows(options),
   innerQuota: (source) => innerQuota(source),
   usageProfile: (options) => (options?.dryRun ? autoUsageProfileStore.readForPreview(200) : autoUsageProfileStore.peek()),
+  runningSessions: () => runningSessions(),
   onCommitPick: (candidate) => autoUsageProfileStore.recordPick(candidate),
   onDispose: () => autoUsageProfileStore.dispose(),
   remoteInvocable: (providerId) => isRemoteProviderInvocationAllowed(providerId),

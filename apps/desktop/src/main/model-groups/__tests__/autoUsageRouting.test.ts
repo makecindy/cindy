@@ -93,6 +93,7 @@ describe('autoUsageProfile', () => {
       localAgents: () => [],
       harnessInstalled: async () => true,
       quotaWindows: async () => new Map(),
+      runningSessions: () => [],
       usageProfile: (options) => options?.dryRun ? usage.readForPreview() : usage.peek(),
       readSession: async () => null,
       isShared: () => false,
@@ -274,7 +275,7 @@ describe('modelGroupWhyText & remote privacy/protocol compatibility', () => {
     expect(restored.outcome === 'routed' && restored.why).toBe('usageHabit');
   });
 
-  it('resolver classifies api access as payAsYouGo and forwards usageProfile + runningCount end-to-end', async () => {
+  it('resolver classifies api access as payAsYouGo and uses the local usage profile to choose a subscription', async () => {
     const view = (id: string, kind: 'subscription' | 'api') => ({
       id,
       name: id,
@@ -309,7 +310,6 @@ describe('modelGroupWhyText & remote privacy/protocol compatibility', () => {
       harnessInstalled: async () => true,
       quotaWindows: async () => new Map([['sub-a', [week(20, 5 * 24)]], ['sub-b', [week(25, 5 * 24)]]]),
       usageProfile: () => profile,
-      runningCount: () => 0,
       onCommitPick,
       scope: () => 'owner',
       now: () => NOW,
