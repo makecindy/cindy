@@ -24,8 +24,14 @@ import type { HookPrefsPatch, HookWorkspacePrefs } from '../../../shared/hookCon
  * renderer 侧合法 agentKind 的单一来源(编辑器 UI 与本文件的归一化共用;与 main 侧
  * 派发 defaults.ts 的 AGENT_KINDS 同口径 —— 进程边界两侧各持一份,新增 agent 时同步)。
  */
-export const AGENT_KINDS = ['claude-code', 'codex', 'pi'] as const;
+export const BUILTIN_AGENT_KINDS = ['claude-code', 'codex', 'pi'] as const;
+export type BuiltinKnownAgent = (typeof BUILTIN_AGENT_KINDS)[number];
+export const AGENT_KINDS = ['claude-code', 'codex', 'pi', 'acp'] as const;
 export type KnownAgent = (typeof AGENT_KINDS)[number];
+
+export function isBuiltinKnownAgent(value: string | null): value is BuiltinKnownAgent {
+  return value !== null && (BUILTIN_AGENT_KINDS as readonly string[]).includes(value);
+}
 
 export function isKnownAgent(value: string | null): value is KnownAgent {
   return value !== null && (AGENT_KINDS as readonly string[]).includes(value);
@@ -133,12 +139,14 @@ export function resolveEffectiveRow(
   const caps = capsFor(effAgent);
   const draft = imDefaults?.agents[effAgent];
 
-  // model: 草稿默认在清单内用草稿, 否则清单第一个, 再否则裸草稿值
+  // model: 插件引擎沿用保存/继承的模型 id; 内置引擎按草稿默认在清单内用草稿, 否则清单第一个, 再否则裸草稿值
   const draftModel = draft?.model ?? null;
   const defaultModel =
-    draftModel !== null && (caps?.models.some((m) => m.id === draftModel) ?? false)
+    effAgent === 'acp'
       ? draftModel
-      : (caps?.models[0]?.id ?? draftModel);
+      : draftModel !== null && (caps?.models.some((m) => m.id === draftModel) ?? false)
+        ? draftModel
+        : (caps?.models[0]?.id ?? draftModel);
   const effModel = prefs.model ?? defaultModel;
 
   // effort: 生效模型支持调档时才有默认(草稿档合法用草稿, 否则模型默认档)

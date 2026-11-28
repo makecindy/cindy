@@ -15,8 +15,11 @@ vi.mock('react-i18next', async () => {
   const { default: common } = await import('../../../i18n/locales/en/common.json');
   return {
     useTranslation: () => ({
-      t: (key: string, options?: { value?: number; version?: string }) => {
+      t: (key: string, options?: { value?: number; version?: string; transport?: string }) => {
         if (key === 'settings.remoteControl.v2.ms') return `${options?.value} ms`;
+        if (key === 'settings.remoteControl.v2.popover.relayLegSelf' || key === 'settings.remoteControl.v2.popover.relayLegPeer') {
+          return `${key}(${options?.transport})`;
+        }
         if (key === 'settings.devices.apps.cindy') return common.settings.devices.apps.cindy;
         if (key === 'settings.devices.apps.cindyFriend') return common.settings.devices.apps.cindyFriend;
         if (key === 'settings.remoteControl.v2.popover.version') {
@@ -30,6 +33,8 @@ vi.mock('react-i18next', async () => {
 
 import { DeviceNodePopover, HubNodePopover } from '../DeviceNodePopover';
 import { RemoteSwitchBatch } from '../RemoteSwitchBatch';
+import { isNonDevAppVersion, peerUpdateStore, probePeerUpdate, startPeerUpdate } from '../peerAppUpdate';
+import { setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 import type { TopologyModel, TopologyNode } from '../topologyModel';
 
 function node(partial: Partial<TopologyNode> = {}): TopologyNode {
@@ -83,7 +88,7 @@ it.each([undefined, 'cindy'])('keeps the Cindy version label for app=%s', app =>
   expect(screen.getByText('Windows · Cindy 1.4.0')).toBeTruthy();
 });
 
-afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.useRealTimers(); });
+afterEach(() => { cleanup(); peerUpdateStore.resetForTest(); vi.unstubAllGlobals(); vi.useRealTimers(); });
 
 // 2026-11-12 用户裁决：单台与批量入口都须保留目标的仅加密选择。真实组件+状态探测，tier:unit。
 it.each([
@@ -195,15 +200,22 @@ describe('DeviceNodePopover', () => {
   });
 
   // 2026-11-19 用户要求：每台电脑之间的链接显示实际底层传输协议（UDP / WS / WebRTC）。
-  // 生产入口:DeviceNodePopover 路径行。覆盖缺口:此前设备卡片路径行只写协议和直连/中转,没有底层传输协议。
-  // 最小失败输入:Agent-Net 直连/经中转(UDP/WS)、Device Link 直连(WebRTC)/经中转(WS)与切换重连中。tier: unit。
+  // 2026-11-27 用户反馈：经中转的 Agent-Net 两段各走各的，卡片原来只写一种(跟着本机那段)。改为「本机 X · 对方 Y」,
+  // 与拓扑图上两段线一致;对方是旧版没说时只写本机那段。
+  // 生产入口:DeviceNodePopover「连接方式」行。最小失败输入:本机 WS、对方 UDP 的经中转 Agent-Net 设备(旧逻辑只写一种);
+  // 另含 Agent-Net 直连(UDP)、Device Link 直连(WebRTC)/经中转(WS)。tier: unit。
+  const ws = 'settings.remoteControl.v2.relayTransport.websocket';
+  const udp = 'settings.remoteControl.v2.relayTransport.udp';
+  const selfLeg = (transport: string) => `settings.remoteControl.v2.popover.relayLegSelf(${transport})`;
+  const peerLeg = (transport: string) => `settings.remoteControl.v2.popover.relayLegPeer(${transport})`;
   it.each([
-    ['Agent-Net direct UDP', { encrypted: true, path: 'direct' as const, transport: 'udp' as const }, 'settings.remoteControl.v2.relayTransport.udp'],
-    ['Agent-Net relay WS', { encrypted: true, path: 'relay' as const, status: 'relay' as const, transport: 'websocket' as const }, 'settings.remoteControl.v2.relayTransport.websocket'],
-    ['Device Link direct WebRTC', { encrypted: false, path: 'direct' as const, transport: 'webrtc' as const }, 'settings.remoteControl.v2.linkTransport.webrtc'],
-    ['Device Link relay WS', { encrypted: false, path: 'relay' as const, status: 'relay' as const, transport: 'websocket' as const }, 'settings.remoteControl.v2.relayTransport.websocket'],
-  ])('设备卡片路径行显示底层传输协议: %s', (_label, partial, expectedTransport) => {
-    render(<DeviceNodePopover node={node(partial)} relayName="Cindy" onRemoteDesktop={vi.fn()} />);
+    ['Agent-Net direct UDP', { encrypted: true, path: 'direct' as const, transport: 'udp' as const }, null, udp],
+    ['Agent-Net relay, this WS / peer UDP', { encrypted: true, path: 'relay' as const, status: 'relay' as const, transport: 'udp' as const }, 'websocket' as const, `${selfLeg(ws)} · ${peerLeg(udp)}`],
+    ['Agent-Net relay, peer silent', { encrypted: true, path: 'relay' as const, status: 'relay' as const, transport: null }, 'udp' as const, selfLeg(udp)],
+    ['Device Link direct WebRTC', { encrypted: false, path: 'direct' as const, transport: 'webrtc' as const }, null, 'settings.remoteControl.v2.linkTransport.webrtc'],
+    ['Device Link relay WS', { encrypted: false, path: 'relay' as const, status: 'relay' as const, transport: 'websocket' as const }, 'udp' as const, ws],
+  ])('设备卡片连接方式显示底层传输协议: %s', (_label, partial, selfRelayTransport, expectedTransport) => {
+    render(<DeviceNodePopover node={node(partial)} relayName="Cindy" selfRelayTransport={selfRelayTransport} onRemoteDesktop={vi.fn()} />);
     expect(screen.getByText(`· ${expectedTransport}`)).toBeTruthy();
   });
 });
@@ -328,5 +340,199 @@ describe('HubNodePopover', () => {
     );
     expect(screen.queryByRole('radiogroup', { name: 'settings.remoteControl.v2.popover.routePreference' })).toBeNull();
     expect(screen.getByText('86 ms · settings.remoteControl.v2.popover.rttNote')).toBeTruthy();
+  });
+
+  // 2026-11-26 用户需求：非 dev 版本卡片版本号旁检查是否有新版本，有则显示图标，点击走二次确认再触发内置更新。
+  // 最小失败输入：dev 版本(0.0.0 / 0.1.0-dev)、老版本对端(CHANNEL_NOT_ALLOWED)、有新版本的普通桌面端、本机卡片。tier: unit。
+  it('shows update icon beside non-dev version and invokes onUpdate for secondary confirmation', async () => {
+    const command = vi.fn(async (input: { type: string; deviceId?: string; request?: { action: string } }) => {
+      if (input.type === 'peer-app-update' && input.deviceId === 'mac-peer') {
+        return {
+          state: {},
+          peerUpdate: {
+            ok: true,
+            result: {
+              version: 1,
+              state: 'available',
+              currentVersion: '0.1.143',
+              targetVersion: '0.1.145',
+              busy: true,
+              platform: 'darwin',
+            },
+          },
+        };
+      }
+      if (input.type === 'self-app-update') {
+        return {
+          state: {},
+          peerUpdate: {
+            ok: true,
+            result: {
+              version: 1,
+              state: 'ready',
+              currentVersion: '0.1.143',
+              targetVersion: '0.1.145',
+              busy: false,
+              platform: 'darwin',
+            },
+          },
+        };
+      }
+      return { state: {}, peerUpdate: { ok: false, code: 'CHANNEL_NOT_ALLOWED', message: 'not allowed' } };
+    });
+    vi.stubGlobal('electronAPI', { selfHostedRelay: { command } });
+
+    const onUpdate = vi.fn();
+    const { unmount } = render(
+      <DeviceNodePopover
+        node={node({ id: 'mac-peer', name: 'XDMBP', platform: 'darwin', appVersion: '0.1.143', busy: true })}
+        relayName="Cindy"
+        onRemoteDesktop={vi.fn()}
+        onUpdate={onUpdate}
+      />,
+    );
+
+    const btn = await screen.findByRole('button', { name: 'settings.remoteControl.v2.peerUpdate.availableTip' });
+    fireEvent.click(btn);
+    expect(onUpdate).toHaveBeenCalledWith({
+      targetId: 'mac-peer',
+      isSelf: false,
+      deviceName: 'XDMBP',
+      currentVersion: '0.1.143',
+      targetVersion: '0.1.145',
+      busy: true,
+      platform: 'darwin',
+    });
+    unmount();
+
+    // Self HubNodePopover shows version and update icon when non-dev and newer version is available.
+    const onSelfUpdate = vi.fn();
+    render(
+      <HubNodePopover
+        model={{ ...model, self: { name: 'Studio Mac', platform: 'darwin', appVersion: '0.1.143' } }}
+        linkStatus="online"
+        issue={null}
+        standby={false}
+        onUpdate={onSelfUpdate}
+      />,
+    );
+    expect(screen.getByText('macOS · Cindy 0.1.143')).toBeTruthy();
+    const selfBtn = await screen.findByRole('button', { name: 'settings.remoteControl.v2.peerUpdate.availableTip' });
+    fireEvent.click(selfBtn);
+    expect(onSelfUpdate).toHaveBeenCalledWith({
+      targetId: '__self__',
+      isSelf: true,
+      deviceName: 'Studio Mac',
+      currentVersion: '0.1.143',
+      targetVersion: '0.1.145',
+      busy: false,
+      platform: 'darwin',
+    });
+  });
+
+  it('skips probing dev versions and hides icon when older peer returns CHANNEL_NOT_ALLOWED', async () => {
+    expect(isNonDevAppVersion('0.0.0')).toBe(false);
+    expect(isNonDevAppVersion('0.0.0-dev')).toBe(false);
+    expect(isNonDevAppVersion('0.1.143-dev.1')).toBe(false);
+    expect(isNonDevAppVersion('0.1.143')).toBe(true);
+    expect(isNonDevAppVersion('0.1.143-beta.2')).toBe(true);
+
+    const command = vi.fn(async () => ({
+      state: {},
+      peerUpdate: { ok: false, code: 'CHANNEL_NOT_ALLOWED', message: 'unsupported' },
+    }));
+    vi.stubGlobal('electronAPI', { selfHostedRelay: { command } });
+
+    const { rerender } = render(
+      <DeviceNodePopover
+        node={node({ id: 'dev-peer', appVersion: '0.0.0' })}
+        relayName="Cindy"
+        onRemoteDesktop={vi.fn()}
+        onUpdate={vi.fn()}
+      />,
+    );
+    expect(command).not.toHaveBeenCalled();
+
+    rerender(
+      <DeviceNodePopover
+        node={node({ id: 'old-peer', appVersion: '0.1.120' })}
+        relayName="Cindy"
+        onRemoteDesktop={vi.fn()}
+        onUpdate={vi.fn()}
+      />,
+    );
+    await act(async () => { await Promise.resolve(); });
+    expect(command).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole('button', { name: 'settings.remoteControl.v2.peerUpdate.availableTip' })).toBeNull();
+  });
+
+  it('transitions to updating spinner after confirmed install and surfaces background failure', async () => {
+    vi.useFakeTimers();
+    let polls = 0;
+    const command = vi.fn(async (input: { type: string; request: { action: string; expectedVersion?: string } }) => {
+      if (input.request.action === 'install') {
+        return { state: {}, peerUpdate: { ok: true, result: { version: 1, accepted: true, state: 'downloading', targetVersion: '0.1.145' } } };
+      }
+      polls += 1;
+      return {
+        state: {},
+        peerUpdate: {
+          ok: true,
+          result: {
+            version: 1,
+            state: 'available',
+            currentVersion: '0.1.143',
+            targetVersion: '0.1.145',
+            lastErrorCode: 'download_failed',
+          },
+        },
+      };
+    });
+    vi.stubGlobal('electronAPI', { selfHostedRelay: { command } });
+
+    const onError = vi.fn();
+    const res = await startPeerUpdate('peer-x', '0.1.145', '0.1.143', onError);
+    expect(res).toEqual({ ok: true, state: 'downloading', targetVersion: '0.1.145' });
+    expect(peerUpdateStore.getSnapshot().entries.get('peer-x')).toMatchObject({ kind: 'updating', phase: 'downloading' });
+
+    await vi.advanceTimersByTimeAsync(3_500);
+    expect(polls).toBe(1);
+    expect(onError).toHaveBeenCalledWith('download_failed');
+    expect(peerUpdateStore.getSnapshot().entries.get('peer-x')).toMatchObject({ kind: 'available', targetVersion: '0.1.145' });
+  });
+
+  it('re-probes unwatched downloading state on reopen and clears caches/watchers on account switch', async () => {
+    vi.useFakeTimers();
+    let state: 'downloading' | 'ready' = 'downloading';
+    const command = vi.fn(async (_input: { request: { action: string } }): Promise<Record<string, unknown>> => ({
+      state: {},
+      peerUpdate: {
+        ok: true,
+        result: { version: 1, state, currentVersion: '0.1.143', targetVersion: '0.1.145', busy: false },
+      },
+    }));
+    vi.stubGlobal('electronAPI', { selfHostedRelay: { command } });
+
+    // Read-only probe sees peer downloading on its own; next probe must re-query and see ready.
+    const first = await probePeerUpdate('peer-bg');
+    expect(first).toMatchObject({ kind: 'updating', phase: 'downloading' });
+    state = 'ready';
+    const second = await probePeerUpdate('peer-bg');
+    expect(second).toMatchObject({ kind: 'available', targetVersion: '0.1.145', ready: true });
+    expect(command).toHaveBeenCalledTimes(2);
+
+    // Account switch clears cached state and stops active watchers.
+    command.mockImplementation(async (input: { request: { action: string } }) => (
+      input.request.action === 'install'
+        ? { state: {}, peerUpdate: { ok: true, result: { version: 1, accepted: true, state: 'downloading', targetVersion: '0.1.145' } } }
+        : { state: {}, peerUpdate: { ok: true, result: { version: 1, state: 'downloading', currentVersion: '0.1.143', targetVersion: '0.1.145' } } }
+    ));
+    await startPeerUpdate('__self__', '0.1.145', '0.1.143');
+    expect(peerUpdateStore.getSnapshot().entries.has('__self__')).toBe(true);
+    const callsBeforeSwitch = command.mock.calls.length;
+    setDataOwnerGeneration('account-next');
+    expect(peerUpdateStore.getSnapshot().entries.size).toBe(0);
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(command).toHaveBeenCalledTimes(callsBeforeSwitch);
   });
 });

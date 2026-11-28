@@ -74,7 +74,8 @@ export function FeishuConflictDialog({
             {appId ? (
               <>
                 {' '}
-                <code className="rounded bg-[var(--msg-code-inline-bg)] px-1 py-0.5 text-12">
+                {/* design: intrinsic-geometry — 行内代码，与 Markdown 行内代码同为 6px（DESIGN.md §5 内容排版） */}
+                <code className="rounded-[6px] bg-[var(--msg-code-inline-bg)] px-1 py-0.5 text-12">
                   {appId}
                 </code>{' '}
               </>

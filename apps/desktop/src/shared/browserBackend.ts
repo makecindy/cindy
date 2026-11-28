@@ -1,4 +1,10 @@
-export type BrowserBackendKind = 'external' | 'rsb-webview' | 'user-browser';
+export const BROWSER_BACKEND_KINDS = ['external', 'rsb-webview', 'user-browser'] as const;
+
+export type BrowserBackendKind = (typeof BROWSER_BACKEND_KINDS)[number];
+
+export function isBrowserBackendKind(value: unknown): value is BrowserBackendKind {
+  return typeof value === 'string' && (BROWSER_BACKEND_KINDS as readonly string[]).includes(value);
+}
 
 /** Optional profile stores; warning payloads never carry paths or native errors. */
 export const OPTIONAL_BROWSER_PROFILE_DATABASES = [

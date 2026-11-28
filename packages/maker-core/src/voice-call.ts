@@ -1,31 +1,5 @@
-/**
- * A bounded, call-local dialogue. The host supplies its existing model transport
- * and task dispatcher; this context has no filesystem, shell, memory-write or
- * permission tools. Work is always accepted by the ordinary task runtime.
- */
-export type VoiceCallTurn = {
-  id: string;
-  role: "user" | "assistant";
-  text: string;
-  createdAt: number;
-  complete: boolean;
-  failed?: boolean;
-};
-export type VoiceCallHandoff = {
-  id: string;
-  inputId: string;
-  text: string;
-  state: "sending" | "accepted" | "failed" | "completed";
-  result?: string;
-};
-export type VoiceCallRecord = {
-  version: 1;
-  callId: string;
-  startedAt: number;
-  endedAt?: number;
-  turns: VoiceCallTurn[];
-  handoffs: VoiceCallHandoff[];
-};
+import type { VoiceCallHandoff, VoiceCallRecord, VoiceCallTurn } from '@cindy/maker-shared/voice-call-record';
+export type { VoiceCallHandoff, VoiceCallRecord, VoiceCallTurn } from '@cindy/maker-shared/voice-call-record';
 
 /** Instructions for the native speech transport of the same independent call. */
 export function nativeVoiceCallInstructions(reference: string): string {
@@ -104,6 +78,11 @@ function parseReply(text: string): Action[] {
   }
 }
 
+/**
+ * A bounded, call-local dialogue. The host supplies its existing model transport
+ * and task dispatcher; this context has no filesystem, shell, memory-write or
+ * permission tools. Work is always accepted by the ordinary task runtime.
+ */
 export class VoiceCallContext {
   readonly record: VoiceCallRecord;
   private stopped = false;

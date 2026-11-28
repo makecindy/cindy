@@ -58,8 +58,8 @@ async function list(ctx: ScanContext): Promise<SourceListResult> {
       if (obj?.role !== 'user' || !isRecord(obj.message) || !Array.isArray(obj.message.content)) continue;
       const raw = obj.message.content.map((b) => (isRecord(b) ? str(b.text) : '')).join('\n');
       const { text, at } = unwrapCursorUserText(raw);
-      if (text) {
-        title = makeTitle(text, '');
+      title = makeTitle(text, '');
+      if (title) {
         firstAt = at;
         break;
       }

@@ -31,6 +31,7 @@ import {
   type ProviderGroupConfig,
   type ProviderGroupMember,
 } from '../../../shared/providerGroup';
+import { DEFAULT_ROUTE_STRATEGY } from '../../../shared/routeStrategy';
 import { groupProviderGroupItems } from './providerGroupPresentation';
 import { Checkbox } from '@/components/ui/checkbox';
 
@@ -93,7 +94,7 @@ export function ProviderGroupAddDialog({
     }));
     // 第一次建组：本机默认在组里(可以在组里关掉)。
     const base: ProviderGroupConfig = config ?? {
-      strategy: 'least',
+      strategy: DEFAULT_ROUTE_STRATEGY,
       autoSwitch: true,
       members: [{
         key: PROVIDER_GROUP_LOCAL_MEMBER_KEY,

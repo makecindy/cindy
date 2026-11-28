@@ -20,6 +20,15 @@ describe('working directory diagnostics scope', () => {
   });
 });
 
+describe('session start timing scope', () => {
+  it('allows only the numeric timing scope, not future children or the maker-ipc root', () => {
+    expect(isAllowedScope('session-start-timing')).toBe(true);
+    for (const scope of ['session-start-timing:detail', 'session-start-timing/x', 'r:session-start-timing', 'session-start', 'maker-ipc']) {
+      expect(isAllowedScope(scope)).toBe(false);
+    }
+  });
+});
+
 describe('memory usage scope', () => {
   it('allows only the numeric sample scope, not future children', () => {
     expect(isAllowedScope('memory-usage')).toBe(true);

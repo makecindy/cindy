@@ -110,6 +110,31 @@ describe('runtime-configs', () => {
     expect(route('xd', 'gateway-key')).toBe('chatgpt/gpt-5.5');
   });
 
+  // 2026-11-26 用户裁决(Subagent 也能选智能路由) / unit：失效后果是存下的 route:<id> 原样当成模型名注入，Claude Code
+  // 用不存在的模型开子代理；或者用了路由里另一个供应商的模型(子代理跑在主任务的来源上，用不了)。
+  // 最小输入：一条两个成员(Cindy AI 上的 a、Anthropic 上的 b)的路由，主任务分别在 xd 与 anthropic 上。
+  it('Subagent 选了智能路由时用路由里与主任务同一个供应商的成员', async () => {
+    vi.doMock('../memory-settings-store.js', () => ({ readMemorySettings: () => memorySettings }));
+    vi.doMock('../subagent-model-settings-store.js', () => ({
+      readSubagentModelSettings: () => ({ claudeCode: 'route:cheap' }),
+    }));
+    vi.doMock('../model-disable-store.js', () => ({ readModelDisableOverrides: () => ({}) }));
+    vi.doMock('../../utility-model/auxiliaryRouteRefs.js', () => ({
+      localRouteCandidatesInPickOrder: (id: string) => (id === 'cheap' ? [
+        { agentKind: 'cc', providerId: 'xd', model: 'deepseek/deepseek-v4-flash' },
+        { agentKind: 'codex', providerId: 'openai', model: 'gpt-6-luna' },
+        { agentKind: 'cc', providerId: 'anthropic', model: 'claude-haiku-5-5' },
+      ] : []),
+    }));
+    const { buildDesktopClaudeRuntimeConfig } = await import('../runtime-configs.js');
+    const route = buildDesktopClaudeRuntimeConfig(() => 'http://127.0.0.1:1234').subagentModelForRoute!;
+
+    expect(route('xd', 'gateway-key')).toBe('deepseek/deepseek-v4-flash');
+    expect(route(null, 'oauth-bearer')).toBe('claude-haiku-5-5');
+    // 主任务所在的供应商不在路由里：不注入，用 Claude Code 自己的默认。
+    expect(route('byok-7', 'gateway-key')).toBeUndefined();
+  });
+
   it('places generic Cindy-side Skill precedence in Claude and Codex only', async () => {
     vi.doMock('../memory-settings-store.js', () => ({
       readMemorySettings: () => memorySettings,

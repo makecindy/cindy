@@ -11,6 +11,7 @@ import { recordSessionTurnSpend } from '../sessionSpendBroadcaster.js';
 import { recordSchedulerTurnCost, recordTurnUsageOnMessage } from '../turnCostBroadcaster.js';
 import { recordModelMismatchOnMessage } from '../modelMismatchBroadcaster.js';
 import { triggerClaudeAccountUsageRefresh } from '../usage/claudeAccountUsage.js';
+import { recordProviderAccountActivity } from '../maker-host/provider-account-usage.js';
 import { getGatewayAccountCurrency, getGatewayModelPricingForModel } from '../usage/modelPricing.js';
 import { triggerClaudeSubscriptionUsageRefresh, triggerCodexAccountUsageRefresh, triggerXaiSubscriptionUsageRefresh } from './usage.js';
 import { rebroadcastTodaySpend, recordModelTurnUsage, recordTurnSpend } from '../usageBroadcaster.js';
@@ -25,6 +26,7 @@ bindTurnUsagePorts({
   recordTurnUsageOnMessage: (...args) => recordTurnUsageOnMessage(...args),
   recordModelMismatchOnMessage: (...args) => recordModelMismatchOnMessage(...args),
   triggerClaudeAccountUsageRefresh: (...args) => triggerClaudeAccountUsageRefresh(...args),
+  recordProviderAccountActivity: (...args) => recordProviderAccountActivity(...args),
   getGatewayAccountCurrency: (...args) => getGatewayAccountCurrency(...args),
   getGatewayModelPricingForModel: (...args) => getGatewayModelPricingForModel(...args),
   triggerClaudeSubscriptionUsageRefresh: (...args) => triggerClaudeSubscriptionUsageRefresh(...args),

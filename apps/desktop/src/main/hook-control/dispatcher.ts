@@ -96,8 +96,10 @@ import type { AutoReviewQuotedMessage } from '@cindy/maker-shared/auto-review-in
 import { HOOK_CHAT_WORKSPACE_ALIAS } from '../../shared/hookControlIpc.js';
 import { captureImContext, type ImContextSnapshot } from '../../shared/imMessageSource.js';
 import type { GroupHistoryAccessScope } from '../im/shared/groupHistoryAccess.js';
+import type { GroupContextAssembly } from '../im/shared/groupWindowCore.js';
+import { buildHistoryMediaNote } from '../im/shared/replyContext.js';
 import { hookReplyTarget } from '../im/shared/autoReviewReferences.js';
-import { quotaFailureNoticePrefix } from '../im/shared/turnRetryNotice.js';
+import { overloadFailureNotice, quotaFailureNoticePrefix } from '../im/shared/turnRetryNotice.js';
 import { imText } from '../im/shared/imText.js';
 import { groupHistoryAccessForExternalKey } from './groupHistoryScope.js';
 import { isPathWithin } from './paths.js';
@@ -217,6 +219,8 @@ export interface HookRunRequest {
    * 只有这个账本能告诉 runner「用户已喊停」。未注入 = 无取消通道。
    */
   isCancelRequested?: () => boolean;
+  /** 用户喊停或账号切换边界触发时立即 abort，供 runner 中断退避等待而不必等完延迟。 */
+  cancelSignal?: AbortSignal;
   /** Untruncated user body for persistence; source.userText is only a bounded display preview. */
   userText?: string;
   /** Local display snapshot; not part of the server wire protocol. */
@@ -268,6 +272,13 @@ export interface HookRunRequest {
   prompt: string;
   /** 本次派发携带的入站附件(base64); 无则省略。runner 解码落盘后喂给 agent。 */
   attachments?: TaskAttachment[];
+  /** 随群上下文窗口补齐的近期历史图片(仅送本轮模型, 不落持久化用户消息附件)。 */
+  contextImages?: Array<{
+    absPath: string;
+    originalName: string;
+    mimeType: string;
+    author: string;
+  }>;
   /** 来源标注(落 user 消息 agentMeta + turnOrigin)。 */
   origin: { connectionId: string; connectionName: string; externalKey: string };
   /** IM 来源元数据(平台 + thread 上下文); 省略 = 旧 server 不发。 */
@@ -330,6 +341,8 @@ export interface HookRunOutcome {
   status: 'ok' | 'error';
   finalText: string;
   errorMessage: string | null;
+  /** Structured maker-core error reason (internal logging/diagnostics only; never sent over wire). */
+  errorReason?: string | null;
   durationMs: number;
   /** 出站附件(agent 产图/产文件, runner 收集编码; 无则省略), 随 turn.end 回传。 */
   attachments?: TaskAttachment[];
@@ -347,8 +360,15 @@ export type PrepareWorktreeResult =
   | { ok: true; sessionId: string; path: string; cleanup: () => Promise<void> }
   | { ok: false; message: string };
 
+/** 能交给伙伴的官方渠道与其任务标题前缀。 */
+const COMPANION_PROVIDERS = new Set(['slack', 'telegram', 'feishu', 'discord', 'x']);
+const COMPANION_TOPIC_CHANNEL: Record<string, string> = {
+  x: 'X', slack: 'Slack', telegram: 'Telegram', feishu: '飞书', discord: 'Discord',
+};
+
 export interface HookDispatcherDeps {
-  resolveCompanionTarget?: (botId: string, externalKey: string, subject?: string) => Promise<{
+  /** 官方渠道交给伙伴时的落点(provider = 连接 id 末段, 与 source.im 一致)。 */
+  resolveCompanionTarget?: (botId: string, externalKey: string, subject: string | undefined, provider: string) => Promise<{
     sessionId: string;
     workingDir: string;
     initialTopicTitle?: string;
@@ -375,12 +395,27 @@ export interface HookDispatcherDeps {
   buildContextPrefix?: (payload: TaskDispatchPayload) => Promise<{
     prefix: string;
     messageCount?: number;
+    imageMessages?: GroupContextAssembly['imageMessages'];
+    triggerAuthor?: string;
+    triggerSentAt?: number;
     commit: (
       guard?: () => boolean | Promise<boolean>,
     ) =>
       | void
       | { rollback(): void | Promise<void> }
       | Promise<void | { rollback(): void | Promise<void> }>;
+  }>;
+  /**
+   * 可选: 为官方 Telegram 群轮次补齐群上下文里近期(≤2 分钟、最多 2 张)图片。
+   * 仅送模型不落库; 失败静默降级, 绝不阻断派发。
+   */
+  collectGroupHistoryImages?: (
+    payload: TaskDispatchPayload,
+    assembly: Pick<GroupContextAssembly, 'imageMessages' | 'triggerAuthor' | 'triggerSentAt'>,
+    isCurrent: () => boolean,
+  ) => Promise<{
+    images: NonNullable<HookRunRequest['contextImages']>;
+    unavailable: string[];
   }>;
   /**
    * 可选: 内置「对话」伪目录(chat 保留别名)的解析面。rootDir 在每次
@@ -544,10 +579,54 @@ export interface HookDispatcher {
  */
 export const HOOK_ROUTE_UNAVAILABLE_PREFIX = 'hook session route unavailable:';
 
-function hookFailureReasonForLog(errorMessage: string | null | undefined): string {
+/**
+ * 白名单化的结构化失败 reason，允许原样进主日志（不含用户内容、路径或上游原文）。
+ * 少量别名在此归一，避免同一故障拆成多个日志标签。
+ */
+const HOOK_LOGGABLE_ERROR_REASONS: ReadonlyMap<string, string> = new Map([
+  ['upstream-overload', 'upstream-overload'],
+  ['UPSTREAM_OVERLOADED', 'upstream-overload'],
+  ['codex_reconnect_stalled', 'codex_reconnect_stalled'],
+  ['upstream_response_idle_timeout', 'upstream_response_idle_timeout'],
+  ['bridge_upstream_response_idle_timeout', 'upstream_response_idle_timeout'],
+  ['turn_no_event_timeout', 'turn_no_event_timeout'],
+  ['bridge_turn_no_event_timeout', 'turn_no_event_timeout'],
+  ['provider_quota_limit', 'provider-quota-exhausted'],
+  ['output-limit', 'output-limit'],
+  ['context-overflow', 'context-overflow'],
+  ['codex_history_oversized', 'codex_history_oversized'],
+  ['tool_use_loop_detected', 'tool_use_loop_detected'],
+  ['empty-response', 'empty-response'],
+  ['turn-failed', 'turn-failed'],
+  ['silent-stop-exhausted', 'silent-stop-exhausted'],
+  ['user_model_access_denied', 'user_model_access_denied'],
+  ['provider_safety_refusal', 'provider_safety_refusal'],
+  ['remote_agent_lost', 'remote_agent_lost'],
+  ['remote_agent_closed', 'remote_agent_closed'],
+  ['app-server-force-retired', 'app-server-force-retired'],
+]);
+
+const CODEX_RECONNECT_STALLED_MESSAGE_RE =
+  /\bcodex_reconnect_stalled\b|model connection has been retrying for \d+s without making progress/i;
+const UPSTREAM_IDLE_TIMEOUT_MESSAGE_RE =
+  /upstream response has been silent for \d+s/i;
+
+function hookFailureReasonForLog(
+  errorMessage: string | null | undefined,
+  errorReason?: string | null,
+): string {
+  const mappedReason = typeof errorReason === 'string'
+    ? HOOK_LOGGABLE_ERROR_REASONS.get(errorReason)
+    : undefined;
+  if (mappedReason) return mappedReason;
   const message = errorMessage ?? '';
   // 额度说明里带供应商名与上游原文, 日志只记类别。
   if (message.startsWith(quotaFailureNoticePrefix())) return 'provider-quota-exhausted';
+  if (message === imText('imBot.text.shared.retry.overloadFailed') || overloadFailureNotice(message) !== null) {
+    return 'upstream-overload';
+  }
+  if (CODEX_RECONNECT_STALLED_MESSAGE_RE.test(message)) return 'codex_reconnect_stalled';
+  if (UPSTREAM_IDLE_TIMEOUT_MESSAGE_RE.test(message)) return 'upstream_response_idle_timeout';
   if (!message.startsWith(HOOK_ROUTE_UNAVAILABLE_PREFIX)) return 'unclassified';
   return message.replace(/\s+/g, ' ').slice(0, 300);
 }
@@ -752,6 +831,7 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
     runner,
     prepareWorktree,
     buildContextPrefix,
+    collectGroupHistoryImages,
     dialogue,
     abortSession,
     stopSessionExplicitly,
@@ -907,7 +987,7 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
   const queues = new Map<string, PendingTask[]>();
   /** connectionId + requestId -> 正在执行它的 session(cancel 定位与归属校验用, 收口即清)。 */
   const runningByRequest = new Map<string, {
-    sessionId: string; connectionId: string; observing?: boolean; relayAbort?: AbortController; relayInFlight?: boolean;
+    sessionId: string; connectionId: string; observing?: boolean; relayAbort?: AbortController; cancelAbort?: AbortController; relayInFlight?: boolean;
   }>();
   /**
    * 已开始执行但 provider 尚未受理的 Telegram 群任务。账号边界必须把其
@@ -1908,7 +1988,7 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
     // 发收口帧把那条旧消息定稿; 但不再记待续跑(它已经不是"最新一轮"了)。
     dropContinuation(sessionId, { silent: false, remember: false });
     const runningEntry = {
-      sessionId, connectionId: task.connectionId, observing: true, relayAbort: new AbortController(), relayInFlight: false,
+      sessionId, connectionId: task.connectionId, observing: true, relayAbort: new AbortController(), cancelAbort: new AbortController(), relayInFlight: false,
     };
     runningByRequest.set(requestKey, runningEntry);
     const messageLifecycle = telegramLegacyLifecycle(
@@ -2053,6 +2133,7 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
           ...xVideoRelayOption(task, runningEntry),
           // 取消探针:runner 在回收/重建窗口后发送前查询,喊停不落进新进程执行。
           isCancelRequested: () => cancelRequested.has(requestKey),
+          cancelSignal: runningEntry.cancelAbort.signal,
           onTurnTerminal: () => { runningEntry.observing = false; },
           onProgress,
           ...(task.run.source?.im === 'telegram' ? {
@@ -2129,7 +2210,7 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
     if (isError) {
       // 失败原因原先只进 request ledger, 主日志里只有 dispatch / delivered 两行(issue #5912)。
       log.warn(
-        `hook task ${task.requestId} failed: im=${task.run.source?.im ?? 'none'} via=${runnerThrew ? 'throw' : 'outcome'} reason=${hookFailureReasonForLog(outcome.errorMessage)}`,
+        `hook task ${task.requestId} failed: im=${task.run.source?.im ?? 'none'} via=${runnerThrew ? 'throw' : 'outcome'} reason=${hookFailureReasonForLog(outcome.errorMessage, outcome.errorReason)}`,
       );
     }
     let turnEnd: TurnEndPayload = {
@@ -2381,10 +2462,12 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
       externalKey: payload.externalKey,
     };
     if (config.companionBotId) {
-      if (!connectionId.endsWith(':x') || payload.source?.im !== 'x' || !deps.resolveCompanionTarget) {
+      // 交给伙伴的只接来源与这条连接同一渠道的派发(官方机器人只派主人本人的消息到这台电脑)。
+      const provider = connectionId.split(':').at(-1) ?? '';
+      if (!COMPANION_PROVIDERS.has(provider) || payload.source?.im !== provider || !deps.resolveCompanionTarget) {
         return { reject: 'disabled' };
       }
-      const target = await deps.resolveCompanionTarget(config.companionBotId, payload.externalKey, payload.source.userText);
+      const target = await deps.resolveCompanionTarget(config.companionBotId, payload.externalKey, payload.source.userText, provider);
       if (!isCurrentGeneration(generation)
         || getConnection(connectionId)?.companionBotId !== config.companionBotId) {
         return { reject: 'disabled' };
@@ -2393,7 +2476,7 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
       bindings.set(connectionId, payload.externalKey, target.sessionId);
       return { run: {
         sessionId: target.sessionId, workingDir: target.workingDir, companionBotId: config.companionBotId, isNew: false,
-        ...(target.initialTopicTitle ? { topicNaming: { initialTitle: target.initialTopicTitle, channel: 'X' } } : {}),
+        ...(target.initialTopicTitle ? { topicNaming: { initialTitle: target.initialTopicTitle, channel: COMPANION_TOPIC_CHANNEL[provider] ?? provider } } : {}),
         agentKind: null, model: null, effort: null, permissionMode: null,
         title: null, prompt: payload.prompt, attachments: payload.attachments, origin,
       } };
@@ -2970,14 +3053,46 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
     serializeByKey(`${connectionId} ${payload.externalKey}`, async () => {
       try {
         let contextPrefix = '';
+        let contextDisplayGroupPrefix = '';
         let groupMessageCount: number | undefined;
         let commitContextCursor: ContextCursorCommit | undefined;
+        let contextImages: HookRunRequest['contextImages'];
         if (buildContextPrefix) {
           try {
             const assembly = await buildContextPrefix(dispatchPayload);
             contextPrefix = assembly.prefix;
+            contextDisplayGroupPrefix = assembly.prefix;
             groupMessageCount = assembly.messageCount;
             commitContextCursor = assembly.commit;
+            if (collectGroupHistoryImages && (assembly.imageMessages?.length ?? 0) > 0) {
+              const collected = await collectGroupHistoryImages(
+                dispatchPayload,
+                assembly,
+                () => isCurrentGeneration(admittedGeneration),
+              ).catch((error) => {
+                log.warn(
+                  `official group history images failed, dispatching without them: ${String(error)}`,
+                );
+                return { images: [], unavailable: [] };
+              });
+              if (!isCurrentGeneration(admittedGeneration)) return;
+              if (collected.images.length > 0) {
+                contextImages = collected.images;
+              }
+              const historyMediaNote = buildHistoryMediaNote({
+                provided: collected.images,
+                unavailable: collected.unavailable,
+              });
+              if (historyMediaNote.modelText) {
+                contextPrefix = `${contextPrefix}${historyMediaNote.modelText}`;
+              }
+              if (historyMediaNote.displayText) {
+                contextDisplayGroupPrefix = contextDisplayGroupPrefix.replace(
+                  '\n</group_chat_context>',
+                  () => `\n${historyMediaNote.displayText}\n</group_chat_context>`,
+                );
+              }
+            }
           } catch (error) {
             log.warn(`group context prefix failed, dispatching without it: ${String(error)}`);
           }
@@ -3006,10 +3121,11 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
           run: {
             ...resolved.run,
             ...(contextPrefix ? { prompt: `${contextPrefix}${resolved.run.prompt}` } : {}),
+            ...(contextImages?.length ? { contextImages } : {}),
             contextSnapshot: captureImContext({
               // Only the host-produced prefix is context; user text may contain
               // identical tags without becoming an attached background group.
-              groupPrefix: contextPrefix,
+              groupPrefix: contextDisplayGroupPrefix,
               groupMessageCount,
             }),
             ...(source ? { source } : {}),
@@ -3166,7 +3282,10 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
       // 命中, 但留着会让 supportsReopen 对"同名连接"给出上一个账号的答案。
       serverFeatures.clear();
       xMediaRelay.failAll();
-      for (const entry of runningByRequest.values()) entry.relayAbort?.abort();
+      for (const entry of runningByRequest.values()) {
+        entry.relayAbort?.abort();
+        entry.cancelAbort?.abort();
+      }
       // ack 的待补发与可回落表随账号走 —— 换账号后它们指向的连接与消息都不再
       // 属于当前主人, 留着既补不出去也是一份只涨不落的内存。
       ackReactions.reset();
@@ -3455,6 +3574,7 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
         const sessionId = runningEntry.sessionId;
         cancelRequested.add(requestKey);
         runningEntry.relayAbort?.abort();
+        runningEntry.cancelAbort?.abort();
         log.info(`hook task ${requestId} cancel requested (stopping session ${sessionId})`);
         // 渠道里的 /stop 是用户明确喊停: 与桌面 Stop 同一套清理, 不只是 abort ——
         // 否则已排期的自动续跑会在喊停后原地复活, 进行中的 Goal 也会接着跑。
@@ -3521,7 +3641,10 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
       latestPromptBySession.clear();
       serverFeatures.clear();
       xMediaRelay.failAll();
-      for (const entry of runningByRequest.values()) entry.relayAbort?.abort();
+      for (const entry of runningByRequest.values()) {
+        entry.relayAbort?.abort();
+        entry.cancelAbort?.abort();
+      }
       sendFns.clear();
       pendingTurnEnds.clear();
       for (const key of [...pendingDeliveryTurnEnds.keys()]) clearPendingDelivery(key);

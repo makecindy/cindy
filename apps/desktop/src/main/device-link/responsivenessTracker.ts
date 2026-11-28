@@ -120,13 +120,15 @@ export const BREAKER_NEUTRAL_INVOKE_CHANNELS: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * Renderer 启动时会在同一轮并发预取这些只读信息。一次链路抖动导致整批超时只应
+ * Renderer 启动或打开草稿时会并发查询这些只读信息。一次链路抖动导致整批超时只应
  * 贡献一次 strike；其它通道仍按独立请求计数，避免把无关的重叠故障吞成一批。
  */
 const BOOTSTRAP_FAN_OUT_CHANNELS: ReadonlySet<string> = new Set([
   'maker:get-capabilities',
   'maker:provider:list',
   'maker:git-safety:get',
+  'maker:list-agent-skills',
+  'maker:scan-at-resources',
 ]);
 const BOOTSTRAP_FAN_OUT_COHORT_WINDOW_MS = 250;
 /**

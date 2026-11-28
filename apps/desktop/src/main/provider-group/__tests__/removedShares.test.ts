@@ -23,8 +23,8 @@ const FROM_D = member('share:d1:anthropic', 'share', 'share:d1');
 
 function setup(received: ReadonlySet<string> | null) {
   let groups: Record<string, ProviderGroupConfig> = {
-    anthropic: { strategy: 'least', autoSwitch: true, members: [LOCAL, MINI, FROM_A, FROM_D] },
-    openai: { strategy: 'least', autoSwitch: true, members: [{ ...LOCAL, providerId: 'openai' }] },
+    anthropic: { strategy: 'expiring', autoSwitch: true, members: [LOCAL, MINI, FROM_A, FROM_D] },
+    openai: { strategy: 'expiring', autoSwitch: true, members: [{ ...LOCAL, providerId: 'openai' }] },
   };
   const writeGroup = vi.fn(async (providerId: string, config: unknown) => {
     groups = { ...groups, [providerId]: config as ProviderGroupConfig };
@@ -101,8 +101,8 @@ describe('removing computers whose share is gone', () => {
 describe('recording the computer of shared-in members', () => {
   function setupHosts(hosts: ReadonlyMap<string, string>) {
     let groups: Record<string, ProviderGroupConfig> = {
-      anthropic: { strategy: 'least', autoSwitch: true, members: [LOCAL, MINI, FROM_A, { ...FROM_D, hostDeviceId: 'host-d' }] },
-      openai: { strategy: 'least', autoSwitch: true, members: [{ ...LOCAL, providerId: 'openai' }] },
+      anthropic: { strategy: 'expiring', autoSwitch: true, members: [LOCAL, MINI, FROM_A, { ...FROM_D, hostDeviceId: 'host-d' }] },
+      openai: { strategy: 'expiring', autoSwitch: true, members: [{ ...LOCAL, providerId: 'openai' }] },
     };
     const updateGroup = vi.fn<RecordShareHostsDeps['updateGroup']>(async (providerId, updater) => {
       const current = groups[providerId] ?? null;
@@ -167,7 +167,7 @@ describe('recording the computer of shared-in members', () => {
     env.updateGroup.mockImplementationOnce(async (providerId, updater) => {
       const latest = {
         ...initial.anthropic,
-        strategy: 'round',
+        strategy: 'rotate',
         members: [...initial.anthropic.members, { ...LOCAL, key: 'new-local' }],
       } satisfies ProviderGroupConfig;
       env.setGroups({ ...initial, anthropic: latest });
@@ -184,7 +184,7 @@ describe('recording the computer of shared-in members', () => {
     });
 
     expect(await recordShareHosts(env.deps)).toEqual(['anthropic']);
-    expect(env.groups().anthropic.strategy).toBe('round');
+    expect(env.groups().anthropic.strategy).toBe('rotate');
     expect(env.groups().anthropic.members.map((m) => m.key)).toContain('new-local');
     expect(env.groups().anthropic.members.find((m) => m.key === FROM_A.key)?.hostDeviceId).toBe('host-a');
     expect(env.groups().openai).toBeUndefined();

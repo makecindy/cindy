@@ -7,14 +7,16 @@
  *     标记的分类与清理
  *   - scanCrashDumps 的递归扫描、时间窗过滤与排序
  *
- * 全部走 os.tmpdir 下的临时目录(规则 23:测试不落仓库工作区),electron 仅为
- * 满足模块加载 mock 成空壳 —— 被测核心不依赖它。
+ * 全部走 os.tmpdir 下的临时目录，启动入口测试用 Electron stub 提供隔离路径。
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { app } from 'electron';
+
+const { warn } = vi.hoisted(() => ({ warn: vi.fn() }));
 
 vi.mock('electron', () => ({
   app: {
@@ -27,7 +29,7 @@ vi.mock('electron', () => ({
 vi.mock('../logger', () => ({
   createLogger: () => ({
     info: vi.fn(),
-    warn: vi.fn(),
+    warn,
     error: vi.fn(),
     debug: vi.fn(),
   }),
@@ -321,11 +323,87 @@ describe('scanCrashDumps', () => {
     fs.utimesSync(fresh2, new Date(now - 5000), new Date(now - 5000));
     fs.utimesSync(stale, new Date(now - 30 * 24 * 3600 * 1000), new Date(now - 30 * 24 * 3600 * 1000));
 
-    const found = scanCrashDumps(tmpDir, now - 14 * 24 * 3600 * 1000);
-    expect(found.map((d) => d.path)).toEqual([fresh1, fresh2]);
+    const { dumps, errorCode } = scanCrashDumps(tmpDir, now - 14 * 24 * 3600 * 1000);
+    expect(dumps.map((d) => d.path)).toEqual([fresh1, fresh2]);
+    expect(errorCode).toBeNull();
   });
 
-  it('returns [] for a missing directory', () => {
-    expect(scanCrashDumps(path.join(tmpDir, 'nope'), 0)).toEqual([]);
+  it('reports ENOENT for a missing directory', () => {
+    expect(scanCrashDumps(path.join(tmpDir, 'nope'), 0)).toEqual({ dumps: [], errorCode: 'ENOENT' });
   });
+});
+
+describe('startup crash dump diagnostics', () => {
+  it.each(['empty', 'unreadable', 'recent dump', 'partial scan'] as const)(
+    'reports the scan result at startup (%s)',
+    async (scenario) => {
+      const dumpDir = path.join(tmpDir, 'Crashpad');
+      const markerDir = path.join(tmpDir, 'diagnostics', 'run-markers');
+      fs.mkdirSync(markerDir, { recursive: true });
+      // 损坏的旧标记会触发同一 dump 扫描入口，无需探测真实进程。
+      fs.writeFileSync(path.join(markerDir, 'run-123.json'), '{');
+
+      if (scenario === 'unreadable') {
+        fs.writeFileSync(dumpDir, 'not a directory');
+      } else {
+        fs.mkdirSync(dumpDir);
+      }
+      const dumpFile = path.join(dumpDir, 'recent.dmp');
+      if (scenario === 'recent dump' || scenario === 'partial scan') {
+        fs.writeFileSync(dumpFile, 'synthetic dump');
+      }
+
+      const blockedDir = path.join(dumpDir, 'blocked');
+      if (scenario === 'partial scan') {
+        fs.mkdirSync(blockedDir);
+        const readdirWithBlockedChild = new Proxy(fs.readdirSync, {
+          apply(readDir, receiver, args) {
+            if (args[0] === blockedDir) {
+              throw Object.assign(new Error(`cannot read ${blockedDir}`), {
+                code: 'EACCES',
+                path: blockedDir,
+              });
+            }
+            return Reflect.apply(readDir, receiver, args);
+          },
+        });
+        vi.spyOn(fs, 'readdirSync').mockImplementation(readdirWithBlockedChild);
+      }
+
+      const getPath = vi.mocked(app.getPath);
+      getPath.mockImplementation((name) => (name === 'crashDumps' ? dumpDir : tmpDir));
+      warn.mockClear();
+      const exitListeners = new Set(process.listeners('exit'));
+      vi.useFakeTimers();
+      try {
+        // reset-modules: 每组输入独立模拟一次启动，重建幂等的诊断单例。
+        vi.resetModules();
+        const { initStartupDiagnostics } = await import('../startup-diagnostics');
+        initStartupDiagnostics();
+
+        if (scenario === 'unreadable' || scenario === 'partial scan') {
+          const code = scenario === 'unreadable' ? 'ENOTDIR' : 'EACCES';
+          expect(warn).toHaveBeenCalledWith(`[exit-diagnosis] crash dump scan incomplete (code=${code})`);
+        }
+        if (scenario === 'empty') {
+          expect(warn).toHaveBeenCalledWith(
+            `[exit-diagnosis] no crash dumps found under ${dumpDir} in the last 14 days`,
+          );
+        } else {
+          expect(warn).not.toHaveBeenCalledWith(expect.stringContaining('no crash dumps found'));
+        }
+        if (scenario === 'recent dump' || scenario === 'partial scan') {
+          expect(warn).toHaveBeenCalledWith(expect.stringContaining(dumpFile));
+        }
+      } finally {
+        for (const listener of process.listeners('exit')) {
+          if (!exitListeners.has(listener)) process.off('exit', listener);
+        }
+        vi.clearAllTimers();
+        vi.useRealTimers();
+        getPath.mockReset();
+        vi.restoreAllMocks();
+      }
+    },
+  );
 });
