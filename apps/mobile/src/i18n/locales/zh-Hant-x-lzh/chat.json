@@ -159,6 +159,23 @@
     "status": {
       "running": "方行",
       "done": "已畢"
+    },
+    "collab": {
+      "wait": "候 Subagent",
+      "waitCount_one": "候 {{count}} Subagent",
+      "waitCount_other": "候 {{count}} Subagent",
+      "sendInput": "傳諭 Subagent",
+      "sendInputCount_one": "傳諭 {{count}} Subagent",
+      "sendInputCount_other": "傳諭 {{count}} Subagent",
+      "resume": "復啟 Subagent",
+      "resumeCount_one": "復啟 {{count}} Subagent",
+      "resumeCount_other": "復啟 {{count}} Subagent",
+      "close": "罷 Subagent",
+      "closeCount_one": "罷 {{count}} Subagent",
+      "closeCount_other": "罷 {{count}} Subagent",
+      "spawn": "啟 Subagent",
+      "spawnCount_one": "啟 {{count}} Subagent",
+      "spawnCount_other": "啟 {{count}} Subagent"
     }
   },
   "agentActions": {

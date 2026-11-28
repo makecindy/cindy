@@ -108,6 +108,7 @@
   "selectFolder": "选择此文件夹",
   "automationDraft": "新建自动化",
   "automationDraftHint": "确认内容、时间和模型后保存，才会创建自动化。",
+  "automationCheck": "让{{name}}先检查，再决定是否使用模型",
   "automationName": "名称",
   "automationPrompt": "要执行的内容",
   "automationInterval": "间隔（分钟）",

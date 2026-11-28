@@ -120,7 +120,9 @@ function compile(expression: string, bindings: Record<string, unknown>) {
   const context = {
     readDeviceLinkModelSelectionOrigin: () => undefined,
     isProviderShareAgentDeviceId: () => false,
-    getSessionRowSnapshotStrict: async () => null, ...bindings,
+    getSessionRowSnapshotStrict: async () => null,
+    runDesktopModelGroupBeforeSend: async () => ({ switched: false }),
+    ...bindings,
   };
   return new Function(...Object.keys(context), js)(...Object.values(context));
 }

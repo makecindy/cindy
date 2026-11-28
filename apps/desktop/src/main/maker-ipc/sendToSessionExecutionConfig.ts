@@ -61,6 +61,8 @@ export type SendToSessionExecutionConfigResult =
         | 'BUDGET_MODEL_REQUIRES_API_MODE'
         | 'PROVIDER_ROUTE_UNAVAILABLE';
       message: string;
+      /** Internal admission reason; a missing model can share INVALID_ARGS with bad tuning. */
+      modelMissing?: true;
     };
 
 export type SendToSessionCreateConfigResult =
@@ -197,6 +199,7 @@ export function resolveSendToSessionExecutionConfig(params: {
   if (!modelCapabilities) {
     return {
       ok: false,
+      modelMissing: true,
       errorCode: params.locationChanged ? 'PROVIDER_ROUTE_UNAVAILABLE' : 'INVALID_ARGS',
       message:
         `model "${model}" not available for ${agentKind}`
@@ -663,5 +666,6 @@ export async function resolveSendToSessionCreateRoute(
     locationChanged,
     forceRouteChanged: fromPluginEngine,
   });
-  return resolved.ok ? { ok: true, agentDeviceId, config: resolved.config } : resolved;
+  return resolved.ok ? { ok: true, agentDeviceId, config: resolved.config }
+    : { ok: false, errorCode: resolved.errorCode, message: resolved.message };
 }

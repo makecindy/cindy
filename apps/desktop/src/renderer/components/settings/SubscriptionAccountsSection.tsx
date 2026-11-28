@@ -4,7 +4,9 @@ import {
   ChartNoAxesColumn,
   ChevronRight,
   CircleMinus,
+  CircleSlash,
   FolderOpen,
+  KeyRound,
   LogIn,
   MoreHorizontal,
   Plus,
@@ -288,7 +290,8 @@ export function SubscriptionAccountsSection({
     if (inFlight.current) return;
     inFlight.current = true;
     setBusy(true);
-    if (command.action === 'add' || command.action === 'login') login.current = command.loginKey;
+    if (command.action === 'add' || command.action === 'login' || command.action === 'token-login')
+      login.current = command.loginKey;
     try {
       await window.electronAPI.subscriptionAccounts.command(command);
       await refresh();
@@ -514,6 +517,8 @@ export function SubscriptionAccountsSection({
                 const running = t('providerGroup.member.runningCount', { count: account.running });
                 const state = account.authIssue === 'claude-account-mismatch' || account.authIssue === 'account-mismatch'
                   ? t('subscriptionAccounts.loginIdentityMismatchStatus')
+                  : account.authIssue === 'claude-token-account-mismatch'
+                  ? t('subscriptionAccounts.longLivedToken.mismatchStatus')
                   : account.paused
                   ? t('providerGroup.member.status.paused')
                   : account.status === 'ready'
@@ -531,8 +536,47 @@ export function SubscriptionAccountsSection({
                 const expiresAt = account.loginExpiresAt ? Date.parse(account.loginExpiresAt) : NaN;
                 const remaining = expiresAt - Date.now();
                 const expiryKnown = Number.isFinite(expiresAt);
+                // A long-lived token keeps tasks running after the ordinary sign-in ends, so that
+                // sign-in's own expiry is no longer urgent: the row reports the token instead.
+                const token = !plugin && kind === 'anthropic' ? account.longLivedToken : undefined;
+                const tokenExpiresAt = token?.expiresAt ? Date.parse(token.expiresAt) : NaN;
+                const tokenRemaining = tokenExpiresAt - Date.now();
+                const tokenExpiryKnown = Number.isFinite(tokenExpiresAt);
+                const formatDate = (value: number) => new Intl.DateTimeFormat(
+                  isClassicalLocale(locale) ? modernLocaleOf(locale) : locale, { dateStyle: 'medium', timeStyle: 'short' },
+                ).format(value);
+                const tokenText = !token ? '' : !tokenExpiryKnown
+                  ? t('subscriptionAccounts.longLivedToken.active')
+                  : tokenRemaining <= 0
+                    ? t('subscriptionAccounts.longLivedToken.mayHaveExpired')
+                    : t('subscriptionAccounts.longLivedToken.expiresInDays', { days: Math.ceil(tokenRemaining / 86_400_000) });
+                const tokenDetail = !token ? '' : [
+                  tokenExpiryKnown ? t('subscriptionAccounts.longLivedToken.detailExpiry', { date: formatDate(tokenExpiresAt) }) : '',
+                  t(token.storedLogin ? 'subscriptionAccounts.longLivedToken.detailLoginActive'
+                    : 'subscriptionAccounts.longLivedToken.detailLoginEnded'),
+                  token.verification === 'pending' ? t('subscriptionAccounts.longLivedToken.detailPending') : '',
+                  token.settingsOnly ? t('subscriptionAccounts.longLivedToken.detailSettingsOnly') : '',
+                ].filter(Boolean).join(' ');
+                const tokenExpiring = tokenExpiryKnown && tokenRemaining <= 30 * 86_400_000;
+                const changeToken = (action: 'token-login' | 'token-remove') => {
+                  const creating = action === 'token-login';
+                  void confirm({
+                    title: t(creating ? 'subscriptionAccounts.longLivedToken.confirmTitle'
+                      : 'subscriptionAccounts.longLivedToken.removeTitle', { name }),
+                    description: t(creating ? 'subscriptionAccounts.longLivedToken.confirmDescription'
+                      : 'subscriptionAccounts.longLivedToken.removeDescription'),
+                    confirmText: t(creating ? 'subscriptionAccounts.longLivedToken.confirmAction'
+                      : 'subscriptionAccounts.longLivedToken.removeAction'),
+                    ...(creating ? {} : { confirmVariant: 'destructive' as const }),
+                  }).then((ok) => {
+                    if (!ok) return;
+                    void run(creating
+                      ? { action, providerId, accountId: account.id, loginKey: crypto.randomUUID() }
+                      : { action, providerId, accountId: account.id });
+                  });
+                };
                 // The CLI supplies an estimate; passing it never changes the auth status.
-                const expiring = expiryKnown && remaining <= 7 * 86_400_000;
+                const expiring = !token && expiryKnown && remaining <= 7 * 86_400_000;
                 const expiryText = !expiryKnown
                   ? t('subscriptionAccounts.loginExpiryUnknown')
                   : remaining <= 0
@@ -541,8 +585,7 @@ export function SubscriptionAccountsSection({
                       ? t('subscriptionAccounts.loginExpiresSoon')
                       : t('subscriptionAccounts.loginExpiresInDays', { days: Math.ceil(remaining / 86_400_000) });
                 const expiryDetail = expiryKnown ? t('subscriptionAccounts.loginExpiryDetail', {
-                  date: new Intl.DateTimeFormat(isClassicalLocale(locale) ? modernLocaleOf(locale) : locale,
-                    { dateStyle: 'medium', timeStyle: 'short' }).format(expiresAt),
+                  date: formatDate(expiresAt),
                 }) : expiryText;
                 const signIn = () => void signInFields(t('subscriptionAccounts.loginAccountAria', { name })).then((fields) => {
                   if (fields) void run({
@@ -595,6 +638,7 @@ export function SubscriptionAccountsSection({
                               {name}
                             </span>
                             {plan && <AccountTag>{plan}</AccountTag>}
+                            {token && <AccountTag>{t('subscriptionAccounts.longLivedToken.tag')}</AccountTag>}
                           </div>
                           <div className="mt-0.5 flex min-w-0 flex-wrap items-center gap-x-1.5 text-12 text-[var(--text-secondary)]">
                             <span className="inline-flex min-w-0 items-center gap-1.5">
@@ -610,13 +654,17 @@ export function SubscriptionAccountsSection({
                               <span title={status} className="min-w-0 truncate">{status}</span>
                             </span>
                             {!plugin && kind === 'anthropic' && connected && (
-                              <Tip text={expiryDetail}>
-                                <span className={cn('min-w-0', expiring && 'text-[var(--warning-fg)]')}>
-                                  {expiryText}
+                              <Tip text={token ? tokenDetail : expiryDetail}>
+                                <span
+                                  data-testid={token ? 'subscription-account-token-expiry' : undefined}
+                                  className={cn('min-w-0', (token ? tokenExpiring : expiring) && 'text-[var(--warning-fg)]')}
+                                >
+                                  {token ? tokenText : expiryText}
                                 </span>
                               </Tip>
                             )}
-                            {!identityOnly && (account.status === 'signed-out' || (!plugin && kind === 'anthropic' && connected && expiring)) && (
+                            {!identityOnly && account.authIssue !== 'claude-token-account-mismatch'
+                              && (account.status === 'signed-out' || (!plugin && kind === 'anthropic' && connected && expiring)) && (
                               <Button
                                 data-settings-search-action="Sign in again to this subscription account"
                                 variant="secondary"
@@ -749,6 +797,18 @@ export function SubscriptionAccountsSection({
                                   : 'subscriptionAccounts.login',
                               )}
                             </DropdownMenuItem>
+                            {!plugin && kind === 'anthropic' && (connected || token) && (
+                              <DropdownMenuItem disabled={busy} onSelect={() => changeToken('token-login')}>
+                                <KeyRound size={18} className="mr-2.5" />
+                                {t(token ? 'subscriptionAccounts.longLivedToken.renew' : 'subscriptionAccounts.longLivedToken.use')}
+                              </DropdownMenuItem>
+                            )}
+                            {token && (
+                              <DropdownMenuItem disabled={busy} onSelect={() => changeToken('token-remove')}>
+                                <CircleSlash size={18} className="mr-2.5" />
+                                {t('subscriptionAccounts.longLivedToken.remove')}
+                              </DropdownMenuItem>
+                            )}
                             <DropdownMenuItem
                               title={account.directory}
                               onSelect={() => void openDirectory(account.directory)}

@@ -47,6 +47,7 @@ export interface FeishuSharedProjectResolution {
   providerId: string | null;
   agentDeviceId?: string | null;
   fingerprint: string;
+  modelGroupStart?: string;
 }
 
 export interface FeishuGroupProjectPorts {
@@ -59,7 +60,7 @@ export interface FeishuGroupProjectPorts {
   /** 这一行的默认设置指纹，与 resolveProject 结果的 fingerprint 同一口径。 */
   projectFingerprint(alias: string): string;
   /** 按这一行解析新任务的路由；模型不可用时抛错。 */
-  resolveProject(alias: string, providers?: ProviderView[]): Promise<FeishuSharedProjectResolution>;
+  resolveProject(alias: string, providers?: ProviderView[], options?: { dryRun?: boolean }): Promise<FeishuSharedProjectResolution>;
   /** 一次读取供应商目录，供一次解析多个项目时共用。 */
   listProviders(): Promise<ProviderView[] | null>;
 }
@@ -117,6 +118,15 @@ export function feishuProjectPermissionMode(alias: string): ImDefaultPermissionM
 /** 把「项目与模型」的解析结果换成群设置用的路由；Agent 不认识时返回 null。 */
 function routeOf(resolved: FeishuSharedProjectResolution): FeishuGroupRoute | null {
   if (!isImDefaultAgentKind(resolved.agentKind) || !resolved.model) return null;
+  if (resolved.agentKind === 'acp') {
+    return {
+      agentKind: 'acp',
+      model: resolved.model,
+      providerId: resolved.providerId,
+      agentDeviceId: resolved.agentDeviceId ?? null,
+      effort: isImDefaultEffort(resolved.effort) ? resolved.effort : '',
+    };
+  }
   // 那一行没给推理强度时才按模型的默认强度补上。
   let effort: ImDefaultEffort = 'high';
   if (isImDefaultEffort(resolved.effort)) effort = resolved.effort;
@@ -140,7 +150,7 @@ export async function resolveFeishuProjectRoute(
 ): Promise<FeishuGroupRoute | null> {
   if (!ports) return null;
   try {
-    return routeOf(await ports.resolveProject(alias, providers ?? undefined));
+    return routeOf(await ports.resolveProject(alias, providers ?? undefined, { dryRun: true }));
   } catch (err) {
     log.warn(`group project route unavailable: ${err instanceof Error ? err.message : String(err)}`);
     return null;
@@ -185,8 +195,10 @@ export function feishuGroupProjectDefaults(
   return {
     fingerprint: `feishu-group-project:${bound.projectFingerprint(alias)}`,
     permissionMode,
-    async resolve(providerSnapshot): Promise<ResolvedImSessionDefaults> {
-      const resolved = await bound.resolveProject(alias, providerSnapshot ?? undefined);
+    async resolve(providerSnapshot, options): Promise<ResolvedImSessionDefaults> {
+      const resolved = options
+        ? await bound.resolveProject(alias, providerSnapshot ?? undefined, options)
+        : await bound.resolveProject(alias, providerSnapshot ?? undefined);
       const route = routeOf(resolved);
       if (!route) throw new Error('The selected project model is unavailable');
       return {
@@ -194,6 +206,7 @@ export function feishuGroupProjectDefaults(
         permissionMode: feishuGroupPermissionMode(botAppId, chatId, permissionMode),
         fastMode: false,
         fingerprint: `feishu-group-project:${resolved.fingerprint}`,
+        ...(resolved.modelGroupStart ? { modelGroupStart: resolved.modelGroupStart } : {}),
       };
     },
   };

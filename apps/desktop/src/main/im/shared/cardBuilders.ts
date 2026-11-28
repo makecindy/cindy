@@ -20,6 +20,7 @@ import type {
   InteractionRequest,
   AgentKind,
   Effort,
+  EngineKind,
   PermissionModeDescriptor,
 } from '@cindy/maker-core';
 import type { ProviderSection } from '@cindy/model-providers';
@@ -93,7 +94,7 @@ export interface ImCardBuilders {
   buildModelPickerCard(args: {
     sessionId: string;
     /** 当前 IM session 的 agent;用于按 agent 派生 model 默认 effort。 */
-    agentKind: AgentKind;
+    agentKind: EngineKind;
     /** 按供应商分段的模型列表(与应用内选择器同源,每行 = (供应商, 模型))。 */
     sections: ProviderSection[];
     currentModelId: string;
@@ -105,7 +106,7 @@ export interface ImCardBuilders {
   buildPermissionModePickerCard(args: {
     sessionId: string;
     /** 'acp' = plugin-engine task: the pick validates against that engine's own modes. */
-    agentKind: AgentKind | 'acp';
+    agentKind: EngineKind;
     modes: PermissionModeDescriptor[];
     currentMode: string;
   }): InteractiveCardSpec;
@@ -142,7 +143,7 @@ export interface ImCardBuilders {
   /** 「群会话不能用完全访问」失败时的私聊修复卡(仅提供 permissionModeFix 文案的渠道)。 */
   buildPermissionModeFixCard(args: {
     sessionId: string;
-    agentKind: AgentKind;
+    agentKind: EngineKind;
     sessionTitle: string;
   }): InteractiveCardSpec;
   /** 授权卡收口: 保留原始正文 + 追加决策结果, 去掉按钮。 */
@@ -380,7 +381,9 @@ export function createCardBuilders(
         // model:pick 据此 setSessionProvider 锁定路由源。同模型多供应商时各自成行、互不冲突。
         buttons: sections.flatMap((sec) =>
           sec.models.map((m) => {
-            const effort = defaultEffortByModel?.[m.id] ?? getDefaultEffortFor(m.id, agentKind);
+            const effort =
+              defaultEffortByModel?.[m.id] ??
+              (agentKind === 'acp' ? '' : getDefaultEffortFor(m.id, agentKind));
             const isCurrent = m.id === currentModelId && sec.provider.id === currentProviderId;
             return {
               id: 'model:pick',
@@ -677,7 +680,7 @@ export function createCardBuilders(
      */
     buildPermissionModeFixCard(args: {
       sessionId: string;
-      agentKind: AgentKind;
+      agentKind: EngineKind;
       sessionTitle: string;
     }): InteractiveCardSpec {
       const fixUi = ui.cards.permissionModeFix;

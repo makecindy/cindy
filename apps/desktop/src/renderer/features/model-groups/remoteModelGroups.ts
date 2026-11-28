@@ -23,12 +23,14 @@ import {
   MODEL_GROUPS_IPC,
   modelGroupResolveResultFromRemote,
   modelGroupSelectionForOwner,
-  normalizeModelGroupsConfig,
+  modelGroupsConfigFromRemote,
   type ModelGroupResolveRequest,
   type ModelGroupResolveResult,
   type ModelGroupRouteNote,
   type ModelGroupSelection,
+  type ModelGroupSessionBindingView,
   type ModelGroupsConfig,
+  type ModelGroupSwitchOffer,
 } from '../../../shared/modelGroups';
 import { isProviderShareAgentDeviceId } from '../../../shared/providerShare';
 
@@ -57,8 +59,16 @@ export function isModelGroupsUnsupportedError(error: unknown): boolean {
   return extractRemoteOptionalReadMiss(error, MODEL_GROUPS_IPC.GET) !== null;
 }
 
+function readDeviceLink(): NonNullable<Window['electronAPI']>['deviceLink'] | undefined {
+  try {
+    return typeof window !== 'undefined' ? window.electronAPI?.deviceLink : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 function invoke<T>(deviceId: string, channel: string, args: unknown[]): Promise<T> {
-  const api = window.electronAPI?.deviceLink;
+  const api = readDeviceLink();
   if (!api?.invoke) return Promise.reject(new Error('device link unavailable'));
   return api.invoke(deviceId, channel, args) as Promise<T>;
 }
@@ -82,7 +92,7 @@ function evictAllCurrentOwnerDeviceModelGroups(): void {
  * 升级、改了模式或换了版本后，下次打开选择器或目录恢复时重新读。常规同版本在线心跳不触发重读。
  */
 function watchReconnects(): void {
-  const link = typeof window !== 'undefined' ? window.electronAPI?.deviceLink : undefined;
+  const link = readDeviceLink();
   if (link === observedLink) return;
   const hadPrevious = observedLink !== undefined;
   detachReconnectWatch?.();
@@ -188,11 +198,11 @@ function deviceGroups(owner: DataOwnerGeneration, deviceId: string): DeviceGroup
         return Promise.resolve();
       }
       const readGeneration = generation;
-      const run = invoke<unknown>(deviceId, MODEL_GROUPS_IPC.GET, [])
+      const run = invoke<unknown>(deviceId, MODEL_GROUPS_IPC.GET, [{ includeSourceRoutes: true }])
         .then((reply) => {
           if (!isDataOwnerGenerationCurrent(owner) || readGeneration !== generation) return;
           readAt = Date.now();
-          const config = normalizeModelGroupsConfig(reply);
+          const config = modelGroupsConfigFromRemote(reply);
           if (!current.unsupported && current.config && JSON.stringify(current.config) === JSON.stringify(config)) return;
           publish({ config, unsupported: false });
         })
@@ -262,7 +272,7 @@ export function useDeviceModelGroups(deviceId: string | null | undefined, readOn
   const entry = useMemo(() => (deviceId ? deviceGroups(owner, deviceId) : null), [owner, deviceId]);
   const read = useCallback(() => { void entry?.read(); }, [entry]);
   useEffect(() => {
-    if (!readOnEntry || !owner.dataOwnerId || !deviceId || isScopedPeer(deviceId) || isProviderShareAgentDeviceId(deviceId)) return;
+    if (!readOnEntry || !owner.dataOwnerId || !deviceId || !readDeviceLink() || isScopedPeer(deviceId) || isProviderShareAgentDeviceId(deviceId)) return;
     read();
     return subscribeDeviceProviders(deviceId, (event) => {
       if (event.status === 'ready') read();
@@ -309,7 +319,7 @@ export async function resolveDeviceModelGroup(
   selection: ModelGroupSelection,
   context?: ModelGroupResolveRequest['context'],
   location?: ModelGroupResolveRequest['location'],
-  options?: { remoteInvocableOnly?: boolean },
+  options?: { remoteInvocableOnly?: boolean; sshHostId?: string },
 ): Promise<ModelGroupResolveResult | null> {
   try {
     const request: ModelGroupResolveRequest = {
@@ -317,6 +327,7 @@ export async function resolveDeviceModelGroup(
       ...(context ? { context } : {}),
       ...(location ? { location } : {}),
       ...(options?.remoteInvocableOnly ? { remoteInvocableOnly: true } : {}),
+      ...(options?.sshHostId ? { sshHostId: options.sshHostId } : {}),
     };
     const result = await invoke<ModelGroupResolveResult>(deviceId, MODEL_GROUPS_IPC.RESOLVE, [request]);
     return result && typeof result === 'object' ? modelGroupResolveResultFromRemote(result) : result;
@@ -336,11 +347,11 @@ export async function bindDeviceModelGroupSession(
   deviceId: string,
   sessionId: string,
   selection: ModelGroupSelection,
-  result: ModelGroupResolveResult | null,
+  result: ModelGroupResolveResult | Pick<ModelGroupSwitchOffer, 'agentKind' | 'providerId' | 'model' | 'agentDeviceId'> | null,
 ): Promise<void> {
-  commitDeviceModelGroupDecision(deviceId, result);
-  if (result?.outcome !== 'routed') return;
-  const { route } = result;
+  if (result && 'outcome' in result) commitDeviceModelGroupDecision(deviceId, result);
+  const route = !result ? null : 'outcome' in result ? (result.outcome === 'routed' ? result.route : null) : result;
+  if (!route) return;
   await invoke(deviceId, MODEL_GROUPS_IPC.BIND_SESSION, [{
     sessionId,
     selection: modelGroupSelectionForOwner(selection),
@@ -349,6 +360,42 @@ export async function bindDeviceModelGroupSession(
       ...(route.agentDeviceId ? { agentDeviceId: route.agentDeviceId } : {}),
     },
   }]).catch((err: unknown) => log.warn('device model group binding failed', err));
+}
+
+export async function unbindDeviceModelGroupSession(deviceId: string, sessionId: string): Promise<boolean> {
+  try {
+    const reply = await invoke<{ ok?: boolean; unbound?: boolean }>(deviceId, MODEL_GROUPS_IPC.UNBIND_SESSION, [{ sessionId }]);
+    return reply?.unbound === true;
+  } catch (err) {
+    log.warn('device model group unbind failed', err);
+    return false;
+  }
+}
+
+export async function getDeviceModelGroupSessionBinding(
+  deviceId: string,
+  sessionId: string,
+): Promise<ModelGroupSessionBindingView | null> {
+  try {
+    const reply = await invoke<ModelGroupSessionBindingView | null>(deviceId, MODEL_GROUPS_IPC.GET_SESSION_BINDING, [{ sessionId }]);
+    return reply && typeof reply === 'object' ? reply : null;
+  } catch (err) {
+    log.warn('device model group session binding read failed', err);
+    return null;
+  }
+}
+
+export async function getDeviceModelGroupSwitchOffer(
+  deviceId: string,
+  sessionId: string,
+): Promise<ModelGroupSwitchOffer | null> {
+  try {
+    const reply = await invoke<ModelGroupSwitchOffer | null>(deviceId, MODEL_GROUPS_IPC.SWITCH_OFFER, [{ sessionId }]);
+    return reply && typeof reply === 'object' ? reply : null;
+  } catch (err) {
+    log.warn('device model group switch offer unavailable', err);
+    return null;
+  }
 }
 
 /** 请那台电脑在任务里写那一行说明；文字由这一端按自己的语言写好。 */

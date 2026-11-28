@@ -8426,4 +8426,54 @@ describe('灵动岛点击优先唤起已拖出的副窗口', () => {
       setDeepLinkMainWindow(null);
     }
   });
+
+  // Regression (P0-4.2): `handleAgentEvent` must reuse cached AgentIslandStrings across
+  // streaming deltas in the same locale and rebuild them when `refreshLocalization()` runs.
+  it('reuses cached localized strings across streaming events and refreshes on locale switch', async () => {
+    vi.useFakeTimers();
+    try {
+      const { setMainLocale } = await import('../../i18n.desktop.js');
+      const { AgentIslandService } = await import('../service.js');
+      setMainLocale('en');
+      const published: AgentIslandDisplayState[] = [];
+      const service = new AgentIslandService({
+        getMainWindow: () => null,
+        nativeHost: {
+          failed: false,
+          publish: (state) => {
+            published.push(state);
+            return true;
+          },
+          suspend: () => undefined,
+        },
+      });
+      service.setEnabled(true);
+      const meta = { sessionId: 'sess-locale-cache', agentKind: 'claude-code' };
+      service.handleAgentEvent(meta, {
+        type: 'status',
+        source: 'claude-code',
+        data: { isRunning: true, status: 'Running' },
+      });
+      const initialStrings = published.at(-1)?.strings;
+      expect(initialStrings).toBeDefined();
+
+      for (let i = 0; i < 100; i += 1) {
+        service.handleAgentEvent(meta, textEvent(`chunk-${i} `, false));
+      }
+      vi.advanceTimersByTime(300);
+
+      // Same cached AgentIslandStrings reference reused across the entire streaming burst.
+      expect(published.at(-1)?.strings).toBe(initialStrings);
+
+      setMainLocale('zh-CN');
+      service.refreshLocalization();
+      const refreshedStrings = published.at(-1)?.strings;
+      expect(refreshedStrings).toBeDefined();
+      expect(refreshedStrings).not.toBe(initialStrings);
+      expect(refreshedStrings?.running).not.toBe(initialStrings?.running);
+      setMainLocale('en');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

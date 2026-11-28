@@ -1,4 +1,4 @@
-import { groupAutomationListItems } from '@cindy/maker-shared/session-list';
+import { groupAutomationListItems, isAutomationSidebarSession } from '@cindy/maker-shared/session-list';
 import { mobilePresentationLocalizer } from '@/i18n/presentationLocalizer';
 import {
   activeContentFilterCount,
@@ -34,7 +34,7 @@ export function createHomeContentFilter(
     ? null
     : nowMs - LAST_ACTIVITY_DAYS[filters.lastActivity] * DAY_MS;
   const keep = (item: RemoteSessionListItem): boolean => {
-    if (filters.hideAutomations && item.session.source === 'scheduler') return false;
+    if (filters.hideAutomations && isAutomationSidebarSession(item.session)) return false;
     if (filters.teammates === 'none') {
       if (filters.teammateKey?.(item)) return false;
     } else if (filters.teammates && filters.teammates !== 'all'

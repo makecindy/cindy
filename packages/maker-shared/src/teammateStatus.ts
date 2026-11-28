@@ -45,7 +45,8 @@ export function resolveTeammateStatus(input: {
   return input.unread ? 'unread' : 'idle';
 }
 
-/** Group plans remain actionable until the owner answers, including between steps. */
+/** Group plans remain actionable until the owner answers, including between steps.
+ *  In-progress group executions stay inside the chat and do not project a running state outside. */
 export function teammateGroupActivity(group: {
   teammateActivity?: TeammateActivity;
   archived?: boolean;
@@ -58,21 +59,19 @@ export function teammateGroupActivity(group: {
   lastMessage?: { authorKind: string } | null;
 }): TeammateActivity {
   if (group.archived) return { phase: 'idle' };
-  if (group.teammateActivity) return group.teammateActivity;
+  if (group.teammateActivity) {
+    return group.teammateActivity.phase === 'running'
+      ? { phase: group.lastMessage?.authorKind === 'bot' ? 'completed' : 'idle' }
+      : group.teammateActivity;
+  }
   const plan = group.openPlan;
   if (plan?.status === 'proposed' || plan?.status === 'waiting') return { phase: 'needs-interaction' };
   if (plan?.currentStepStatus === 'failed') return { phase: 'error' };
-  const hasOwnSpeaker = !group.serverBacked
-    ? group.speakingBotIds.length > 0
-    : group.round
-      ? group.round.speakers.some(speaker => isOwnBotGroupSpeaker({ serverBacked: true, members: group.members ?? [] }, speaker))
-      : group.speakingBotIds.some(botId => isOwnBotGroupWork(group.members?.find(member => member.botId === botId), false));
-  const ownPlanRunning = plan?.status === 'running' && (!group.serverBacked || hasOwnSpeaker);
-  if (hasOwnSpeaker || group.planningBotId || ownPlanRunning) return { phase: 'running' };
   return { phase: group.lastMessage?.authorKind === 'bot' ? 'completed' : 'idle' };
 }
 
-/** Server groups use the same execution and plan states on desktop and mobile. */
+/** Server groups use the same actionable and completion states on desktop and mobile;
+ *  in-progress executions stay inside the group chat. */
 export function teammateChatActivity(input: {
   executions: readonly {
     status: string;
@@ -92,28 +91,8 @@ export function teammateChatActivity(input: {
   lastMessageAt?: number;
   planning?: boolean;
   archived?: boolean;
-  /**
-   * When provided, only executions and running plan steps driven by this account's own agent
-   * (owned companion or self-requested group Cindy) report the `running` roster status.
-   */
-  isOwnWork?: (work: { botId?: string; requesterId?: string; maskOwnerId?: string }) => boolean;
 }): TeammateActivity {
   if (input.archived) return { phase: 'idle' };
-  const isOwnExecution = (row: { bot_id?: string; requester_id?: string; mask_owner_id?: string }) =>
-    !input.isOwnWork || input.isOwnWork({ botId: row.bot_id, requesterId: row.requester_id, maskOwnerId: row.mask_owner_id });
-  const isOwnRunningPlan = (plan: {
-    status: string;
-    creator_id?: string;
-    current_step?: number | null;
-    steps?: readonly { position: number; botId: string; status: string }[];
-  }) => {
-    if (plan.status !== 'running') return false;
-    if (!input.isOwnWork) return true;
-    const step = (plan.current_step !== null && plan.current_step !== undefined
-      ? plan.steps?.find(candidate => candidate.position === plan.current_step)
-      : undefined) ?? plan.steps?.find(candidate => candidate.status === 'running');
-    return !!step && input.isOwnWork({ botId: step.botId, requesterId: plan.creator_id });
-  };
   if (input.executions.some(row => row.status === 'needs_input')
     || input.plans.some(plan => plan.status === 'proposed' || plan.status === 'waiting')) return { phase: 'needs-interaction' };
   const recent = input.executions.filter(row => row.updated_at && Number.isFinite(Date.parse(row.updated_at))
@@ -124,8 +103,6 @@ export function teammateChatActivity(input: {
   const closedPlans = new Set(input.plans.filter(plan => plan.id
     && ['done', 'stopped', 'dismissed', 'superseded'].includes(plan.status)).map(plan => plan.id));
   if (recent.some(row => row.status === 'failed' && (!row.plan_id || !closedPlans.has(row.plan_id)))) return { phase: 'error' };
-  if (input.planning || input.executions.some(row => ['queued', 'running', 'stopping'].includes(row.status) && isOwnExecution(row))
-    || input.plans.some(isOwnRunningPlan)) return { phase: 'running' };
   if (recent.some(row => row.status === 'succeeded')) return { phase: 'completed' };
   return { phase: 'idle' };
 }

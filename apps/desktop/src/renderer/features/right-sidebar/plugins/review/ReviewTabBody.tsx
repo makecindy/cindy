@@ -78,7 +78,6 @@ import { makerChatStore } from '@/lib/makerChatStore';
 import { extractIpcError } from '@/utils/ipcError';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
 import {
   COMPOSER_MENU_ROW,
   MenuHighlightLayer,
@@ -4272,9 +4271,9 @@ export function BranchBaseDropdown({
           inputRef.current?.focus();
         }}
       >
-        <Input
+        <SearchInput
+          surface="panel"
           inputRef={inputRef}
-          size="sm"
           className="m-1 shrink-0"
           role="combobox"
           aria-expanded={open}

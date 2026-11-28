@@ -81,20 +81,14 @@ function compactSlotEvent(item: StagedScheduleEvent): StagedScheduleEvent {
   if (item.bytes <= OVERFLOW_SLOT_MAX_BYTES) return item;
   const ev = item.proj.event;
   if (ev.type === 'failed') {
-    const compactPayload = ev.sessionId
-      ? {
-          type: 'failed' as const,
-          scheduleId: ev.scheduleId,
-          runId: ev.runId,
-          error: ev.error.slice(0, 256),
-          sessionId: ev.sessionId,
-        }
-      : {
-          type: 'failed' as const,
-          scheduleId: ev.scheduleId,
-          runId: ev.runId,
-          error: ev.error.slice(0, 256),
-        };
+    const compactPayload = {
+      type: 'failed' as const,
+      scheduleId: ev.scheduleId,
+      runId: ev.runId,
+      error: ev.error.slice(0, 256),
+      ...(ev.sessionId ? { sessionId: ev.sessionId } : {}),
+      ...(ev.silenced ? { silenced: true as const } : {}),
+    };
     return makeStagedEvent(compactPayload);
   }
   if (ev.type === 'unknown') return RESYNC_STAGED_EVENT;

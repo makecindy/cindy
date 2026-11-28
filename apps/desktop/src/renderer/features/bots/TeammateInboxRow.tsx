@@ -6,7 +6,12 @@ import type { TaskInboxSection } from '@cindy/maker-shared/live-task-priority';
 
 import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
-import { SessionAction, SidebarTitleMarquee } from '@/features/cc-agent/sidebar/SessionItem';
+import { isNestedSessionRowAction, SessionAction, SidebarTitleMarquee } from '@/features/cc-agent/sidebar/SessionItem';
+import {
+  isSidebarNewWindowActivation,
+  openTargetInNewWindow,
+  preventMiddleClickAutoscroll,
+} from '@/lib/sidebarNewWindowActivation';
 import { SessionSnoozeAction, type SnoozeAction } from '@/features/cc-agent/sidebar/SessionSnoozeAction';
 import { SidebarRightStatusIndicator } from '@/features/cc-agent/sidebar/SidebarRightStatusIndicator';
 import { BotAvatar } from './BotAvatar';
@@ -70,10 +75,33 @@ export function TeammateInboxRow({
       // The title marquee listens for hover on a row carrying this marker.
       data-sidebar-navigation-row="true"
       {...companionDragProps(entry.route, entry.name)}
-      onClick={() => navigate(entry.route)}
+      onMouseDown={(event) => {
+        if (!isNestedSessionRowAction(event.target, event.currentTarget)) {
+          preventMiddleClickAutoscroll(event);
+        }
+      }}
+      onClick={(event) => {
+        if (isNestedSessionRowAction(event.target, event.currentTarget)) return;
+        if (isSidebarNewWindowActivation(event)) {
+          event.preventDefault();
+          void openTargetInNewWindow(entry.route);
+          return;
+        }
+        navigate(entry.route);
+      }}
+      onAuxClick={(event) => {
+        if (event.button !== 1 || isNestedSessionRowAction(event.target, event.currentTarget)) return;
+        event.preventDefault();
+        event.stopPropagation();
+        void openTargetInNewWindow(entry.route);
+      }}
       onKeyDown={(event) => {
         if (event.target !== event.currentTarget || (event.key !== 'Enter' && event.key !== ' ')) return;
         event.preventDefault();
+        if (isSidebarNewWindowActivation(event)) {
+          void openTargetInNewWindow(entry.route);
+          return;
+        }
         navigate(entry.route);
       }}
       className={cn(

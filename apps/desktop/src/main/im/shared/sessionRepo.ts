@@ -17,7 +17,7 @@ import { randomUUID } from 'node:crypto';
 
 import { and, desc, eq, sql } from 'drizzle-orm';
 import type { IdentityKey } from '@cindy/im';
-import type { AgentKind, EngineKind, Effort, PermissionMode } from '@cindy/maker-core';
+import type { AgentKind, Effort, EngineKind, PermissionMode } from '@cindy/maker-core';
 import type { ProviderView } from '@cindy/model-providers';
 import { permissionModeOrAsk } from '@cindy/maker-shared/permission-mode';
 
@@ -36,6 +36,7 @@ import {
 import { buildImDefaultRouteRecord } from './channelDefaultRoute';
 import { broadcastSessionCreated, broadcastSessionPatched } from './sessionBroadcast';
 import { captureChannelAccount, openChannelSession } from './openChannelSession';
+import { getModelGroupStartBridge } from '../../model-groups/startBridge.js';
 import type { ImOrchestratorConfig, ImSessionNamespace } from './types';
 
 const log = createLogger('im:repo');
@@ -67,8 +68,8 @@ export interface ImSessionRow {
   agentKind: EngineKind;
   workingDir: string;
   model: string;
-  /** Latest persisted effort (may be changed by user via /model card later). */
-  effort: Effort;
+  /** Latest persisted effort (may be changed by user via /model card later; '' for acp default). */
+  effort: Effort | '';
   /** Latest persisted permission mode. */
   permissionMode: PermissionMode;
   fastMode: boolean | 'ultrafast';
@@ -98,12 +99,14 @@ export interface ImSessionRow {
    * 仅 prepareNewSession 产出的行带: `/new` 使用该路由键的项目或渠道对话目录。
    */
   laneWorkingDir?: boolean;
+  /** 仅 prepareNewSession 产出的行带: 智能路由启动凭据，建会话后 attach 绑定。 */
+  modelGroupStart?: string;
 }
 
 export interface SessionModelRouteSnapshot {
   agentDeviceId?: string | null;
   model: string;
-  effort: Effort;
+  effort: Effort | '';
   providerId: string | null;
 }
 
@@ -496,7 +499,7 @@ export function createImSessionRepo(
                 : {}),
               workingDir: row.workingDir,
               model: row.model,
-              effort: row.effort,
+              effort: row.effort as Effort,
               permissionMode: row.permissionMode,
               fastMode: row.fastMode,
               status: 'active',
@@ -558,6 +561,9 @@ export function createImSessionRepo(
           `provider=${result.providerId ?? 'default'} permissionMode=${result.permissionMode}`,
       );
       // 通知 renderer sidebar / device-link 控制端有新会话行,否则要手动刷新才出现
+      if (persisted?.isFreshInsert && defaults.modelGroupStart) {
+        getModelGroupStartBridge()?.attach(result.id, defaults.modelGroupStart);
+      }
       broadcastSessionCreated(result.id);
       // Native group/channel names are authoritative only while this fresh row still has its draft title.
       if (ns.resolveSessionTitle && persisted?.isFreshInsert) {
@@ -670,7 +676,10 @@ export function createImSessionRepo(
             },
             now,
           });
-          if (fresh.providerId) setSessionProvider(fresh.id, fresh.providerId);
+          if (fresh.providerId && fresh.agentKind !== 'acp') setSessionProvider(fresh.id, fresh.providerId);
+          if (defaults.modelGroupStart) {
+            getModelGroupStartBridge()?.attach(fresh.id, defaults.modelGroupStart);
+          }
           log.info(
             `created fresh ${ns.source} session id=${fresh.id} workingDir=${maskPath(fresh.workingDir)} ` +
               `agent=${fresh.agentKind} model=${fresh.model} effort=${fresh.effort} ` +
@@ -703,7 +712,8 @@ function rowFromDefaults(
     agentKind: defaults.agentKind,
     workingDir,
     model: defaults.model,
-    effort: defaults.effort,
+    // Plugin engines without effort modes use '' in storage (matching pluginEngineSessionAdmission).
+    effort: defaults.effort as Effort,
     permissionMode: defaults.permissionMode,
     fastMode: defaults.fastMode,
     sdkSessionId: null,
@@ -711,13 +721,13 @@ function rowFromDefaults(
     providerId: defaults.providerId,
     agentDeviceId: defaults.agentDeviceId ?? null,
     defaultRouteFingerprint: defaults.fingerprint,
+    ...(defaults.modelGroupStart ? { modelGroupStart: defaults.modelGroupStart } : {}),
   };
 }
 
 /** 按渠道默认建出 / 重置的行对应的跟随记录; 非默认来源的行返回 null。 */
 function defaultRouteRecordFor(row: ImSessionRow): string | null {
-  // Channel defaults are built-in routes; a task on a plugin engine never follows them.
-  if (!row.defaultRouteFingerprint || row.agentKind === 'acp') return null;
+  if (!row.defaultRouteFingerprint) return null;
   return buildImDefaultRouteRecord(row.defaultRouteFingerprint, {
     agentKind: row.agentKind,
     model: row.model,
@@ -794,7 +804,7 @@ export async function resetSessionToDefaults(
     .set({
       agentKind: toDbAgentKind(defaults.agentKind),
       model: defaults.model,
-      effort: defaults.effort,
+      effort: defaults.effort as Effort,
       providerId: defaults.providerId,
       agentDeviceId: defaults.agentDeviceId ?? null,
       permissionMode: defaults.permissionMode,
@@ -813,6 +823,9 @@ export async function resetSessionToDefaults(
       listPreviewRole: null,
     })
     .where(eq(sessions.id, sessionId));
+  if (defaults.modelGroupStart) {
+    getModelGroupStartBridge()?.attach(sessionId, defaults.modelGroupStart);
+  }
   setSessionProvider(sessionId, defaults.providerId);
   // 目录变动后侧栏要换分组，沿用 switchSessionWorkingDir 的刷新方式。
   if (laneWorkspace && (
@@ -889,7 +902,7 @@ export async function readModelRouteSnapshot(
 export async function updateModelEffort(
   sessionId: string,
   model: string,
-  effort: Effort,
+  effort: Effort | '',
   providerId?: string | null,
 ): Promise<void> {
   const db = getDbClient().drizzle;
@@ -897,7 +910,7 @@ export async function updateModelEffort(
     .update(sessions)
     .set({
       model,
-      effort,
+      effort: effort as Effort,
       ...(providerId !== undefined ? { providerId } : {}),
       updatedAt: Date.now(),
     })
