@@ -57,6 +57,8 @@ describe('ThreadPickerInline 会话引用状态', () => {
       { id: 'worker-a', title: 'Analyst', agentKind: 'codex', orcaLeadSessionId: 'lead-a' },
       { id: 'worker-b', title: 'Analyst', agentKind: 'codex', orcaLeadSessionId: 'lead-b' },
       { id: 'worker-unmapped', title: 'Unmapped analyst', agentKind: 'codex', orcaLeadSessionId: 'lead-missing' },
+      { id: 'worker-empty', title: 'Empty lead analyst', agentKind: 'codex', orcaLeadSessionId: 'lead-empty' },
+      { id: 'lead-empty', title: '', agentKind: 'codex' },
       { id: 'lead-b', title: 'Lead Beacon', agentKind: 'codex' },
       { id: 'lead-a', title: 'Lead Atlas', agentKind: 'codex' },
     ]);
@@ -67,6 +69,7 @@ describe('ThreadPickerInline 会话引用状态', () => {
     const atlas = screen.getByRole<HTMLOptionElement>('option', { name: 'Analyst · Codex · Lead Atlas' });
     const beacon = screen.getByRole<HTMLOptionElement>('option', { name: 'Analyst · Codex · Lead Beacon' });
     expect(screen.getByRole('option', { name: 'Unmapped analyst · Codex' })).toBeDefined();
+    expect(screen.getByRole('option', { name: 'Empty lead analyst · Codex' })).toBeDefined();
 
     fireEvent.change(picker, { target: { value: atlas.value } });
     expect(onSelect).toHaveBeenLastCalledWith(expect.objectContaining({ id: 'worker-a' }));
