@@ -9,7 +9,7 @@ export interface PluginSettingsEntry {
   assertCurrent(): void;
 }
 export interface PluginSettingsStore {
-  read(instance: string): Record<string, unknown>;
+  readStrict(instance: string): Record<string, unknown>;
   write(instance: string, value: Record<string, unknown>): void;
 }
 function settingSchema(field: GhostHostUiSetting): z.ZodType {
@@ -26,6 +26,15 @@ function settingSchema(field: GhostHostUiSetting): z.ZodType {
 export function createPluginSettingsSections(entries: readonly PluginSettingsEntry[], store: PluginSettingsStore): AppSettingsSection[] {
   return entries.filter(entry => entry.settings.length).map(entry => {
     const defaults = Object.fromEntries(entry.settings.map(field => [field.id, field.default]));
+    function readSavedSettings(): Record<string, unknown> {
+      try {
+        return store.readStrict(entry.instance);
+      } catch {
+        // Save and reset merge into the same file as the plugin's private KV.
+        // A failed read must not turn either operation into a full replacement.
+        throw new Error('MCP_APP_SETTINGS_UNAVAILABLE');
+      }
+    }
     return {
       id: `plugins.${entry.instance}`, title: entry.title,
       description: entry.settings.map(field => `${field.title} ${field.description ?? ''}`).join(' '), effective: 'immediate',
@@ -34,14 +43,14 @@ export function createPluginSettingsSections(entries: readonly PluginSettingsEnt
       ]))),
       read() {
         entry.assertCurrent();
-        const saved = store.read(entry.instance);
+        const saved = readSavedSettings();
         const overrides = Object.fromEntries(entry.settings.filter(field => Object.hasOwn(saved, field.id) &&
           isGhostHostUiSettingValue(field, saved[field.id])).map(field => [field.id, saved[field.id]]));
         return { value: { ...defaults, ...overrides }, defaults, customizedKeys: Object.keys(overrides) };
       },
       update(patch) {
         entry.assertCurrent();
-        const next = { ...store.read(entry.instance) };
+        const next = { ...readSavedSettings() };
         for (const field of entry.settings) {
           if (Object.hasOwn(next, field.id) && !isGhostHostUiSettingValue(field, next[field.id])) delete next[field.id];
         }
@@ -51,7 +60,7 @@ export function createPluginSettingsSections(entries: readonly PluginSettingsEnt
       },
       reset() {
         entry.assertCurrent();
-        const next = { ...store.read(entry.instance) };
+        const next = { ...readSavedSettings() };
         for (const field of entry.settings) delete next[field.id];
         entry.assertCurrent();
         store.write(entry.instance, next);

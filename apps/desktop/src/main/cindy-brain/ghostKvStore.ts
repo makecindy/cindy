@@ -37,10 +37,9 @@ export interface GhostKvStore {
   /** 读某意识的 KV;无文件 / 损坏 → {}(永不抛)。 */
   read(instanceKey: string): Record<string, unknown>;
   /**
-   * 严格读:无文件 → {},但 IO 异常 / JSON 损坏**原样上抛**。setup 就绪
-   * 检查(ghosts:setup-status)专用——「查询失败」≠「未配置」,不能拿
-   * read 的宽松口径把存储层故障误判成缺配置去拦用户;设置页协议端点
-   * 仍走 read(损坏不炸设置页的语义不变)。
+   * 严格读:无文件 → {},但 IO 异常 / JSON 损坏原样上抛。用于 setup 就绪检查、
+   * 宿主存储服务和统一插件设置。合并写入应先严格读取,以免覆盖未读到的配置。
+   * 旧 /kv 协议读取仍走 read。
    */
   readStrict(instanceKey: string): Record<string, unknown>;
   /**

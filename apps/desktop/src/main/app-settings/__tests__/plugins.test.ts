@@ -1,5 +1,9 @@
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { expect, it } from 'vitest';
 import { isGhostHostUiSettingValue } from '@cindy/plugin-protocol';
+import { createGhostKvStore } from '../../cindy-brain/ghostKvStore';
 import { createAppSettingsService } from '../service';
 import { createPluginSettingsSections } from '../plugins';
 
@@ -13,7 +17,7 @@ it('shares plugin overrides with KV, isolates namesakes and resets only register
   const entries = ['local__example', '_root__example'].map(instance => ({ instance, title: 'Example', settings,
     assertCurrent() { if (!current) throw new Error('revoked'); } }));
   const sections = createPluginSettingsSections(entries, {
-    read: instance => values.get(instance) ?? {}, write: (instance, next) => { values.set(instance, next); },
+    readStrict: instance => values.get(instance) ?? {}, write: (instance, next) => { values.set(instance, next); },
   });
   const service = createAppSettingsService(sections);
   const invoke = (operation: 'get' | 'update' | 'reset', patch?: Record<string, unknown>) =>
@@ -44,7 +48,7 @@ it('drops invalid registered overrides before saving another setting after an up
   const service = createAppSettingsService(createPluginSettingsSections([
     { instance: 'local__example', title: 'Example', settings, assertCurrent() {} },
   ], {
-    read: () => saved,
+    readStrict: () => saved,
     write: (_instance, next) => {
       // Same registered-value guard used by the existing KV write port.
       if (settings.some(field => Object.hasOwn(next, field.id) && !isGhostHostUiSettingValue(field, next[field.id]))) {
@@ -58,4 +62,35 @@ it('drops invalid registered overrides before saving another setting after an up
   expect(await service({ operation: 'update', section: 'plugins.local__example', patch: { enabled: true } }, async () => {}))
     .toMatchObject({ state: { value: { size: 12, enabled: true, label: 'custom' } } });
   expect(saved).toEqual({ private: 'keep', enabled: true, label: 'custom' });
+});
+
+// Unit: the real settings service and KV store must preserve the original
+// file when a read fails. Existing tests only cover readable saved objects.
+it.each(['update', 'reset'] as const)('preserves unreadable plugin KV on %s', async operation => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'plugin-settings-test-'));
+  try {
+    const instance = '_ns__local__example';
+    const file = path.join(root, `${instance}.json`);
+    const unreadable = '{"private":"keep"';
+    fs.writeFileSync(file, unreadable);
+    const store = createGhostKvStore({ getRootDir: () => root });
+    const settings = [{ id: 'enabled', title: 'Enabled', type: 'boolean' as const, default: false }];
+    const service = createAppSettingsService(createPluginSettingsSections([
+      { instance, title: 'Example', settings, assertCurrent() {} },
+    ], store));
+    const request = { operation, section: `plugins.${instance}`, patch: { enabled: true } };
+
+    await expect(service(request, async () => {})).rejects.toThrow('MCP_APP_SETTINGS_UNAVAILABLE');
+    expect(fs.readFileSync(file, 'utf8')).toBe(unreadable);
+
+    store.write(instance, { enabled: false, private: 'keep' });
+    await expect(service(request, async () => {})).resolves.toMatchObject({
+      state: { value: { enabled: operation === 'update' } },
+    });
+    expect(store.readStrict(instance)).toEqual(operation === 'update'
+      ? { enabled: true, private: 'keep' }
+      : { private: 'keep' });
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });
