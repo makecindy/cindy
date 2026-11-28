@@ -587,8 +587,14 @@ function InteractionItem({
       remoteSessionStore.getVisiblePendingInteractions(sessionId).includes(item) &&
       (inputProjection.queuePaused || !remoteSessionStore.getInputProjection(sessionId).queuePaused)
     );
-    if (optimisticDismiss) remoteSessionStore.beginOptimisticInteractionDismiss(sessionId, currentRequestId);
+    if (optimisticDismiss) {
+      remoteSessionStore.beginOptimisticInteractionDismiss(sessionId, currentRequestId, {
+        item: itemSnapshot,
+        decision,
+      });
+    }
     try {
+      let retainedDraftUsedSupplement = false;
       if (item.retainedDraft) {
         const needsSupplement = await asyncQuestionNeedsSupplement(
           () => maker.resolveInteraction(currentRequestId, decision),
@@ -602,6 +608,7 @@ function InteractionItem({
         const text = formatAsyncQuestionSupplement(normalizeAskQuestions(item.request.questions),
           (decision.answers ?? {}) as Record<string, string>, { late: !runStatus.isRunning });
         if (needsSupplement && text) {
+          retainedDraftUsedSupplement = true;
           const session = await maker.getSession(sessionId);
           if (!current()) return;
           // Delivery context can change after a lost receipt; user-answer identity cannot.
@@ -632,6 +639,9 @@ function InteractionItem({
         await resolveInteractionResilient(maker, sessionId, currentRequestId, decision);
       }
       if (item.retainedDraft) {
+        if (!retainedDraftUsedSupplement) {
+          remoteSessionStore.applyOptimisticInteractionResolution(sessionId, currentRequestId, itemSnapshot, decision);
+        }
         remoteSessionStore.confirmProtectedQuestion(sessionId, currentRequestId);
       }
       remoteSessionStore.releaseProtectedQuestion(sessionId, currentRequestId);
