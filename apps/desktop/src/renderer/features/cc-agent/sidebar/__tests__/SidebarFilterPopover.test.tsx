@@ -255,8 +255,8 @@ describe('sidebar display settings menu', () => {
     expect(await screen.findByRole('dialog', { name: '认识收件箱' })).not.toBeNull();
   });
   // 2026-11-28 user decision: viewing archived tasks no longer marks the button (the status is
-  // on the menu's first level). The dot is left for inbox filters and hidden kinds.
-  it('marks the trigger only for an inbox filter, not for archived tasks', () => {
+  // on the menu's first level). Inbox filters and hidden kinds no longer mark it either.
+  it('does not mark display settings for archived tasks, inbox filters or hidden kinds', () => {
     const dot = (filter: UseSidebarFilterReturn) => {
       const { unmount } = render(<SidebarFilterPopover filter={filter} allKnownProjects={[]} open={false} />);
       const found = screen.getByRole('button', { name: /^侧边栏显示设置/ }).querySelector('[data-filter-reminder]') !== null;
@@ -266,7 +266,9 @@ describe('sidebar display settings menu', () => {
     expect(dot(makeFilter({ status: 'archived' }))).toBe(false);
     const mode = renderHook(useTaskListMode);
     act(() => mode.result.current.setMode('inbox'));
-    expect([dot(makeFilter()), dot(makeFilter({ hideAutomations: true }))]).toEqual([false, true]);
+    for (const overrides of [{}, { hideAutomations: true }, { hideTaskCreated: true }, { creators: 'none' }, { vendor: ['codex'] }] satisfies Partial<UseSidebarFilterReturn>[]) {
+      expect(dot(makeFilter(overrides))).toBe(false);
+    }
   });
   it('hides unavailable grouping choices and their summary without clearing saved device preference', async () => {
     const filter = makeFilter({ groupBy: 'flat' });

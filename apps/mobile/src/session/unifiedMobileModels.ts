@@ -20,9 +20,20 @@ export const modelKey = (providerId: string, modelId: string) => JSON.stringify(
 export function matchesEntry(entry: UnifiedModelEntry, modelId: string) {
   return entry.modelId === modelId || Object.values(entry.capabilities).some(c => c?.wireModelId === modelId);
 }
-export function mobileUnifiedEntries(providers: readonly ProviderView[], agents: readonly AgentKind[], visibility: Record<string, boolean> | undefined, existing: boolean, keepModel?: {providerId: string | null; modelId: string; agent: AgentKind}) {
+export function mobileUnifiedEntries(
+  providers: readonly ProviderView[],
+  agents: readonly AgentKind[],
+  visibility: Record<string, boolean> | undefined,
+  existing: boolean,
+  keepModel?: { providerId: string | null; modelId: string; agent: AgentKind },
+  isVisibleOverride?: (providerId: string, model: { id: string; defaultEnabled?: boolean }, agent: AgentKind) => boolean | null,
+) {
   return unifiedModelEntries({ providers: providers.map(withEffectiveModelContextWindows), agents, scope: existing ? 'session' : 'draft', keepModel,
-    isVisible: (providerId, model, agent) => visibility === undefined || isModelVisible(visibility[`${agent}:${providerId}:${model.id}`], model.defaultEnabled),
+    isVisible: (providerId, model, agent) => {
+      const overridden = isVisibleOverride?.(providerId, model, agent);
+      if (overridden !== null && overridden !== undefined) return overridden;
+      return visibility === undefined || isModelVisible(visibility[`${agent}:${providerId}:${model.id}`], model.defaultEnabled);
+    },
     // This list is also what favorites and saved picks resolve against. A provider hidden from the
     // picker is still callable, so it stays here; the regular list folds it with listedMobileEntries.
     includeHiddenProviders: true,
