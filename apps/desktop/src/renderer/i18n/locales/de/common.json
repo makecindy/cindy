@@ -17057,6 +17057,21 @@
       "signingIn": "Die Anmeldung für das Abonnementkonto dieser Aufgabe läuft. Versuche es nach Abschluss der Anmeldung erneut.",
       "unavailable": "Das dieser Aufgabe zugewiesene Abonnementkonto kann für diese Anfrage nicht verwendet werden. Prüfe das Konto in den Modellanbieter-Einstellungen auf dem ausführenden Computer oder wähle eine andere Modellquelle.",
       "legacy": "Das dieser Aufgabe zugewiesene Abonnementkonto ist nicht verfügbar. Prüfe Anmeldung und Nutzung auf dem ausführenden Computer oder wähle eine andere Modellquelle. Das Konto wird nicht automatisch gewechselt."
+    },
+    "forkRecovery": {
+      "choose": "Mit anderem Anbieter fortfahren",
+      "continue": "Aufgabe aus Chatverlauf starten",
+      "handoffDescription": "Die neue Aufgabe nutzt den Chatverlauf bis zu dieser Stelle und den gewählten Anbieter. Aufgabe und Dateien bleiben auf dem Aufgabencomputer. Die Übergabe ist begrenzt und kann ältere Inhalte auslassen; native Denk- und Werkzeugzustände bleiben nicht erhalten.",
+      "selectModel": "Modell und Anbieter auswählen",
+      "pendingTitle": "Neue Aufgabe wird geprüft",
+      "pendingDescription": "Das Ergebnis ist noch unbestätigt. Prüfe dieselbe Anfrage, um die Aufgabe ohne Duplikat zu finden. Bei einem anderen Anbieter kann die ursprüngliche Anfrage dennoch fertig werden.",
+      "check": "Ergebnis prüfen",
+      "retry": "Verzweigung wiederholen",
+      "update": "Cindy auf dem Aufgabencomputer aktualisieren",
+      "unavailableTitle": "Dieser Verlauf ist nicht verfügbar",
+      "unavailableDescription": "Der Computer mit diesem nativen Verlauf ist nicht verfügbar oder kann ihn nicht verzweigen. Der Chatverlauf bleibt auf dem Aufgabencomputer. Versuche es erneut oder wähle einen anderen Anbieter.",
+      "nativeSuccess": "Neue Aufgabe aus nativem Verlauf erstellt",
+      "handoffSuccess": "Neue Aufgabe mit Chatverlauf-Übergabe erstellt"
     }
   },
   "ccAgent": {

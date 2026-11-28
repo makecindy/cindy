@@ -60,6 +60,18 @@ describe('side chat IPC caller boundary', () => {
     await expect(invoke(channels[1], event())).resolves.toEqual([{ id: 'child', source: 'side-chat' }]);
     expect(mocks.broadcast).toHaveBeenCalledExactlyOnceWith('child');
   });
+  // New fork envelopes must fail before reading/writing on untrusted frames or
+  // shared-task guests. Legacy side-chat cases do not exercise this channel.
+  it('probes fork capabilities only through a trusted owner channel and validates target options', async () => {
+    const handler = mocks.handlers.get(MAKER_INVOKE.FORK)!;
+    await expect(handler(event('external'), { action: 'capabilities' })).rejects.toThrow('PERMISSION_DENIED');
+    await expect(runDeviceLinkInvokeContext({ channel: MAKER_INVOKE.FORK, controllerDeviceId: 'phone', sharedTask: {} as never },
+      () => handler({}, { action: 'capabilities' }))).rejects.toThrow('PERMISSION_DENIED');
+    await expect(handler(event(), { action: 'capabilities' })).resolves.toMatchObject({ forkRequestVersion: 1 });
+    await expect(handler(event(), { version: 1, action: 'create', requestId: 'not-a-uuid',
+      sourceSessionId: 'source', messageClientId: 'anchor', target: { agentKind: 'pi', model: 'model' } })).rejects.toThrow('INVALID_PARAMS');
+    expect(mocks.broadcast).not.toHaveBeenCalled();
+  });
 
   it('validates the reserved UUID before starting a fork', async () => {
     const handler = mocks.handlers.get(MAKER_INVOKE.SIDE_CHAT)!;

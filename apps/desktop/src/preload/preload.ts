@@ -8917,7 +8917,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ): Promise<unknown> => ipcRenderer.invoke('maker:rewind:commit', sessionId, clientId, opts),
     createSideChat: (sourceSessionId: string) => ipcRenderer.invoke('maker:side-chat:v1', sourceSessionId),
     listSideChats: (sourceSessionId: string) => ipcRenderer.invoke('maker:side-chat:list:v1', sourceSessionId),
-    fork: (sourceSessionId: string, messageClientId: string): Promise<unknown> =>
+    fork: (sourceSessionId: string | import('@cindy/maker-shared/fork-request').ForkRequest | { action: 'capabilities' }, messageClientId?: string): Promise<unknown> =>
       ipcRenderer.invoke('maker:fork', sourceSessionId, messageClientId),
     forkStripEncrypted: (sourceSessionId: string): Promise<unknown> =>
       ipcRenderer.invoke('maker:fork-strip-encrypted', sourceSessionId),

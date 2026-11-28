@@ -17217,6 +17217,21 @@
       "signingIn": "La connexion au compte avec abonnement utilisé par cette tâche est en cours. Réessayez une fois la connexion terminée.",
       "unavailable": "Le compte avec abonnement affecté à cette tâche ne peut pas être utilisé pour cette demande. Vérifiez le compte dans les paramètres du fournisseur de modèles sur l’ordinateur d’exécution, ou choisissez une autre source de modèles.",
       "legacy": "Le compte avec abonnement affecté à cette tâche est indisponible. Vérifiez sa connexion et son utilisation sur l’ordinateur d’exécution, ou choisissez une autre source de modèles. Le compte n’est pas changé automatiquement."
+    },
+    "forkRecovery": {
+      "choose": "Continuer avec un autre fournisseur",
+      "continue": "Créer une tâche depuis le chat",
+      "handoffDescription": "La nouvelle tâche utilise le chat jusqu’à ce point et le fournisseur choisi. La tâche et les fichiers restent sur l’ordinateur de la tâche. Le transfert est limité et peut omettre du contenu ancien ; les états natifs de raisonnement et des outils ne sont pas conservés.",
+      "selectModel": "Choisir un modèle et un fournisseur",
+      "pendingTitle": "Vérification de la nouvelle tâche",
+      "pendingDescription": "Le résultat n’est pas confirmé. Vérifiez la même demande pour retrouver la tâche sans créer de doublon. Avec un autre fournisseur, la demande initiale peut encore aboutir.",
+      "check": "Vérifier le résultat",
+      "retry": "Réessayer la bifurcation",
+      "update": "Mettre à jour Cindy sur l’ordinateur de la tâche",
+      "unavailableTitle": "Cet historique est indisponible",
+      "unavailableDescription": "L’ordinateur qui conserve cet historique natif est indisponible ou ne peut pas le bifurquer. Le chat reste sur l’ordinateur de la tâche. Réessayez ou choisissez un autre fournisseur.",
+      "nativeSuccess": "Nouvelle tâche créée depuis l’historique natif",
+      "handoffSuccess": "Nouvelle tâche créée avec transfert du chat"
     }
   },
   "ccAgent": {

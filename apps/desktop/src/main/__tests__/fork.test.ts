@@ -37,6 +37,9 @@ import { commitContextRebuildWithPorts } from '../localDb/contextRebuildPersiste
 import { writeMessageRow } from '../localDb/messageWrite.js';
 import { messageToCamel } from '../localDb/mapper.js';
 import { admitTaskAction } from '../maker-ipc/taskActionAuthorization.js';
+import { configureOwnerContext } from '../ownerContext.js';
+import { runDeviceLinkInvokeContext } from '../device-link/invoke-context.js';
+import type { ForkRequest, ForkTarget } from '@cindy/maker-shared/fork-request';
 import {
   pruneSessionContextWindowBudget,
   readSessionContextWindowBudget,
@@ -191,6 +194,7 @@ const userDataDirRef: { current: string } = { current: '' };
 // Keep per-case filesystem isolation and the existing hook timeout unchanged.
 const { forkSessionAtMessage, createSideChat, listSideChats, forkSessionStripEncrypted } =
   await import('../maker-orchestration/fork');
+const { runForkRequest, configureForkTargetAdmission } = await import('../maker-orchestration/fork-request');
 
 beforeEach(async () => {
   readBoundClaudeConfigDirMock.mockReset();
@@ -305,6 +309,141 @@ async function writeClaudeJsonlInConfigDir(
 }
 
 // ── tests ──────────────────────────────────────────────────────────────────
+
+async function withForkReceiptDb(operation: (db: ReturnType<typeof drizzle>) => Promise<void>) {
+  const sqlite = new Database(':memory:');
+  configureOwnerContext({ read: () => ({ dataOwnerId: 'fixture-owner', generation: 1, boundaryPending: false }),
+    fallbackBaseDir: () => userDataDirRef.current });
+  try {
+    for (const table of [sessions, messages]) {
+      const config = getTableConfig(table);
+      sqlite.exec(`CREATE TABLE "${config.name}" (${config.columns.map(column =>
+        `"${column.name}" ${column.getSQLType()}${column.primary ? ' PRIMARY KEY' : ''}`).join(', ')})`);
+    }
+    const db = drizzle(sqlite, { schema });
+    db.insert(sessions).values({ id: 'src-session', title: 'Fork fixture', workingDir: '/fixture-work',
+      sdkSessionId: 'native-source', agentKind: 'pi', agentDeviceId: null,
+      model: 'source-model', providerId: 'source-provider', createdAt: 1, updatedAt: 1 }).run();
+    db.insert(messages).values([
+      { id: 'q', clientId: 'q', sessionId: 'src-session', role: 'user', content: '"question"', createdAt: 100 },
+      { id: 'a', clientId: 'a', sessionId: 'src-session', role: 'assistant', content: '"answer"', createdAt: 101 },
+      { id: 'next', clientId: 'next', sessionId: 'src-session', role: 'user', content: '"excluded turn"', createdAt: 200 },
+    ]).run();
+    snapshotClient = createDbClientForHandle({ db: sqlite, drizzle: db });
+    configureForkTargetAdmission(async target => target);
+    await operation(db);
+  } finally {
+    await snapshotClient?.dispose(); snapshotClient = null; sqlite.close();
+    configureOwnerContext({ read: () => ({ dataOwnerId: null, generation: 0, boundaryPending: false }),
+      fallbackBaseDir: () => userDataDirRef.current });
+  }
+}
+
+const receiptRequest = (target?: ForkTarget): ForkRequest => ({ version: 1, action: 'create', requestId: randomUUID(),
+  sourceSessionId: 'src-session', messageClientId: 'a', ...(target ? { target } : {}) });
+
+describe('recoverable fork requests', () => {
+  // Public creation/status entry + isolated real SQLite and per-test receipt files.
+  // Old fork had no request identity or alternate target: offline B / current C,
+  // a dropped response or a repeated click could not recover one complete child.
+  // Tier unit; native work is deferred or rejected in-process, with no live peer.
+  it.each([null, 'device-d', 'share:fixture'] as const)('hands an old offline segment to the explicit target %s', async device => {
+    await withForkReceiptDb(async db => {
+      db.update(sessions).set({ agentDeviceId: 'device-c' }).run();
+      db.insert(messages).values({ id: 'switch', clientId: 'switch', sessionId: 'src-session', role: 'agent_switch',
+        content: JSON.stringify({ fromAgentKind: 'cc', toAgentKind: 'pi', fromAgentDeviceId: 'device-b',
+          fromSdkSessionId: 'native-on-offline-b', fromModel: 'old-model', fromProviderId: 'old-provider' }), createdAt: 150 }).run();
+      const request = receiptRequest({ agentKind: 'codex', model: 'chosen-model', providerId: 'chosen-provider', agentDeviceId: device });
+      const result = await runForkRequest(request);
+      expect(result).toMatchObject({ state: 'complete', outcome: 'history-handoff', session: {
+        sdkSessionId: null, agentDeviceId: device, model: 'chosen-model', providerId: 'chosen-provider', workingDir: '/fixture-work',
+      } });
+      const handoff = await findPendingAgentHandoff(result.session!.id);
+      expect(handoff).toContain('question'); expect(handoff).toContain('answer');
+      expect(handoff).not.toContain('excluded turn'); expect(handoff).not.toContain('native-on-offline-b');
+      expect(db.select().from(sessions).all()).toHaveLength(2);
+      expect(remoteInvokeMock).not.toHaveBeenCalled(); expect(forkSdkSessionMock).not.toHaveBeenCalled();
+      const recovered = await runForkRequest({ ...request, action: 'status' });
+      expect(recovered.session?.id).toBe(result.session?.id);
+      expect((await runForkRequest(request)).session?.id).toBe(result.session?.id);
+      await expect(runForkRequest({ ...request, target: { ...request.target!, model: 'another-model' } })).rejects.toThrow('does not match');
+    });
+  });
+
+  it('resolves a lost acknowledgement and duplicate click to the single reserved child', async () => {
+    await withForkReceiptDb(async db => {
+      let finish!: (value: unknown) => void;
+      let started!: () => void;
+      const nativeStarted = new Promise<void>(resolve => { started = resolve; });
+      forkSdkSessionMock.mockImplementationOnce(() => { started(); return new Promise(resolve => { finish = resolve; }); });
+      const request = receiptRequest();
+      const first = runForkRequest(request);
+      await nativeStarted;
+      await expect(runForkRequest(request)).resolves.toMatchObject({ state: 'pending' });
+      await expect(runForkRequest({ ...request, action: 'status' })).resolves.toMatchObject({ state: 'pending' });
+      finish({ newSdkSessionId: 'native-child', uuidMap: new Map() });
+      const completed = await first;
+      expect(completed).toMatchObject({ state: 'complete', outcome: 'native' });
+      const found = await runForkRequest({ ...request, action: 'status' });
+      expect(found.session?.id).toBe(completed.session?.id);
+      expect(db.select().from(sessions).all()).toHaveLength(2);
+      expect(forkSdkSessionMock).toHaveBeenCalledTimes(1);
+      await expect(runDeviceLinkInvokeContext({ channel: 'maker:fork', controllerDeviceId: 'different-caller' },
+        () => runForkRequest({ ...request, action: 'status' }))).resolves.toEqual({ state: 'not-sent' });
+    });
+  });
+
+  it('keeps the handoff outcome when its completion receipt is lost and the child later runs', async () => {
+    // A committed child's SDK ID changes on its first turn. It cannot identify
+    // how the fork was created after losing the final receipt write (unit).
+    await withForkReceiptDb(async db => {
+      const rename = fs.rename.bind(fs);
+      const write = vi.spyOn(fs, 'rename').mockImplementation(async (from, to) => {
+        if (String(to).includes('fork-requests')) {
+          const record = JSON.parse(await fs.readFile(from, 'utf8'));
+          if (record.phase === 'complete') throw new Error('lost completion receipt');
+        }
+        await rename(from, to);
+      });
+      try {
+        const request = receiptRequest({ agentKind: 'pi', model: 'other-model', providerId: 'other-provider', agentDeviceId: null });
+        const completed = await runForkRequest(request);
+        expect(completed.state).toBe('complete');
+        db.update(sessions).set({ sdkSessionId: 'first-turn-native-id' }).run();
+        expect(await runForkRequest({ ...request, action: 'status' })).toMatchObject({
+          state: 'complete', outcome: 'history-handoff', session: { id: completed.session!.id },
+        });
+      } finally { write.mockRestore(); }
+    });
+  });
+
+  it('keeps an unknown native result across retries without resending the write', async () => {
+    await withForkReceiptDb(async db => {
+      forkSdkSessionMock.mockRejectedValueOnce(new Error('native reply lost'));
+      const request = receiptRequest();
+      await expect(runForkRequest(request)).resolves.toEqual({ state: 'unknown' });
+      await expect(runForkRequest(request)).resolves.toMatchObject({ state: 'unknown' });
+      expect(forkSdkSessionMock).toHaveBeenCalledTimes(1);
+      expect(db.select().from(sessions).all()).toHaveLength(1);
+    });
+  });
+
+  it.each(['denied', 'clear', 'rewind', 'account'] as const)('does not create a child after %s invalidates preparation', async failure => {
+    await withForkReceiptDb(async db => {
+      configureForkTargetAdmission(async target => {
+        if (failure === 'denied') throw new Error('target permission denied');
+        if (failure === 'account') configureOwnerContext({ read: () => ({ dataOwnerId: 'different-owner', generation: 2, boundaryPending: false }),
+          fallbackBaseDir: () => userDataDirRef.current });
+        if (failure === 'clear') db.update(sessions).set({ clearedAt: 500 }).run();
+        if (failure === 'rewind') db.update(messages).set({ rewindAt: 500 }).run();
+        return target;
+      });
+      await expect(runForkRequest(receiptRequest({ agentKind: 'pi', model: 'new-model', providerId: 'new-provider', agentDeviceId: null }))).rejects.toThrow();
+      expect(db.select().from(sessions).all()).toHaveLength(1);
+      expect(forkSdkSessionMock).not.toHaveBeenCalled();
+    });
+  });
+});
 
 describe('disabled Cindy Make fork boundaries', () => {
   const cases = ['cindy-make', 'cindy-make-merge'].flatMap((source) =>

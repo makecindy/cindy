@@ -916,5 +916,20 @@
     "uploadsPending": "尚有附件上傳，待其畢，再修此訊。",
     "rollbackHint": "遣之，將撤上一輪對 {{count}} 卷之改動",
     "conversationOnlyHint": "遣之不復原案中之卷，上一輪之卷改動仍存"
+  },
+  "forkRecovery": {
+    "choose": "擇他供方以續",
+    "continue": "據言談錄另開差事",
+    "handoffDescription": "新差事據所選處以前之言談錄，交所擇供方。差事與檔案仍存差事電腦。交接篇幅有限，舊文或有所略，原生推理與工具狀態不能盡存。",
+    "selectModel": "請選擇模型與供方",
+    "pendingTitle": "正核新差事",
+    "pendingDescription": "建立結果未明。查同次請求可尋回差事，免於重建。若擇他供方，原請求仍或完成。",
+    "check": "查建立結果",
+    "retry": "重試分叉",
+    "update": "請更新差事電腦之 Cindy",
+    "unavailableTitle": "此段歷史暫不可用",
+    "unavailableDescription": "存此原生歷史之電腦不可用，或不能分叉。言談錄仍存差事電腦。可重試，或擇他供方據言談錄續行。",
+    "nativeSuccess": "已據原生歷史另建差事",
+    "handoffSuccess": "已據言談錄交接另建差事"
   }
 }

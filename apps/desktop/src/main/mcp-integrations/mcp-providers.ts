@@ -1162,6 +1162,30 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
         const remote = split > 0;
         try {
           let result: { id: string };
+          const forkRequest = params.kind === 'fork' && params.requestId ? {
+            version: 1 as const, action: params.checkResult ? 'status' as const : 'create' as const,
+            requestId: params.requestId, sourceSessionId: remote ? params.sessionId.slice(split + 2) : params.sessionId,
+            messageClientId: params.messageClientId, ...(params.target ? { target: params.target } : {}),
+          } : undefined;
+          if (forkRequest) {
+            let receipt;
+            if (remote) {
+              if (!deps.historyRemote) return { ok: false as const, errorCode: 'REMOTE_UNSUPPORTED', message: 'Remote task control is unavailable.' };
+              const access = deps.historyRemote.captureAccess();
+              const action = captureTaskActionSyncGuard();
+              const response = await deps.invokeRemote(params.sessionId.slice(0, split), MAKER_INVOKE.FORK,
+                [forkRequest], { preSend: () => { access(); action?.(); } });
+              await assertCurrent();
+              if (!response.ok) return { ok: false as const, ...remoteSessionMutationFailure(response.error.code, response.error.message) };
+              receipt = response.result as import('@cindy/maker-shared/fork-request').ForkReceipt<{ id: string }>;
+            } else receipt = await forkTaskAtMessage(params.sessionId, params.messageClientId, forkRequest);
+            if (!receipt || receipt.state !== 'complete' || !receipt.session) return {
+              ok: false as const, errorCode: receipt?.state === 'failed' ? 'FORK_FAILED' : 'REMOTE_RESULT_UNKNOWN',
+              message: `Fork request ${params.requestId}: ${receipt?.state ?? 'unsupported'}. Query the same request_id; do not resend a native write with a new ID.`,
+            };
+            return { ok: true as const, sessionId: remote ? `${params.sessionId.slice(0, split)}::${receipt.session.id}` : receipt.session.id,
+              forkOutcome: receipt.outcome };
+          }
           if (remote) {
             if (!deps.historyRemote) return { ok: false as const, errorCode: 'REMOTE_UNSUPPORTED', message: 'Remote task control is unavailable.' };
             const access = deps.historyRemote.captureAccess();

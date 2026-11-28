@@ -425,6 +425,25 @@ it.each(['fork_session', 'rewind_session'] as const)('routes %s to the existing 
 });
 
 // Unit, real shared handler: ordinary tasks and plugins need the account directory,
+// Fork parity regression: the real tool registry must carry the same request and
+// explicit target to creation/status; missing IDs cannot silently use legacy fork.
+it('carries fork recovery identity and target through the public tool', async () => {
+  const sessionHistory = vi.fn(async () => ({ ok: true as const, sessionId: 'child', forkOutcome: 'history-handoff' as const }));
+  const server = createXdtHelperMcpServer({ sessionHistory }, { agentKind: 'codex', workingDir: '', sessionId: 'caller' });
+  const request = { session_id: 'computer::source', message_client_id: 'anchor', request_id: '1262e2db-f2b9-408d-9523-ee4e4d781409',
+    target: { agentKind: 'pi', model: 'chosen', providerId: 'provider', agentDeviceId: null } };
+  expect(parsePayload(await server.hostTools.call('fork_session', request))).toMatchObject({ ok: true,
+    session_id: 'child', fork_outcome: 'history-handoff', request_id: request.request_id });
+  await server.hostTools.call('fork_session', { ...request, check_result: true });
+  expect(sessionHistory).toHaveBeenLastCalledWith({ kind: 'fork', callerSessionId: 'caller', sessionId: request.session_id,
+    messageClientId: 'anchor', requestId: request.request_id, target: request.target, checkResult: true });
+  expect(parsePayload(await server.hostTools.call('fork_session', { ...request, request_id: undefined })))
+    .toMatchObject({ ok: false, errorCode: 'INVALID_ARGS' });
+  expect(sessionHistory).toHaveBeenCalledTimes(2);
+  await server.close();
+});
+
+// Unit, real shared handler: ordinary tasks and plugins need the account directory,
 // including paused/hidden companions and stored relationships, without a bot identity.
 it('discovers the complete teammate directory through history for task and plugin callers', async () => {
   const listTeammates = vi.fn(async () => ({ ok: true as const, page: { items: [{ id: 'paused', status: 'paused', hiddenAt: 1 }],

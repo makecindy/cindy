@@ -1,10 +1,21 @@
 import { EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES } from '@/cindy-brain/PluginUiContributions';
 import { useState } from 'react';
-import { mountPage } from '../../ui-page/harness';
+import { mountPage, subscription } from '../../ui-page/harness';
+import { beginProvidersRefresh, commitProvidersSnapshot } from '../../../src/renderer/lib/providersSnapshotStore';
+import { getDataOwnerGeneration } from '../../../src/renderer/contexts/dataOwnerGeneration';
+import type { ProviderView } from '@cindy/model-providers';
 import { UserMessage } from '../../../src/renderer/components/chat/UserMessage';
 import { AssistantMessage } from '../../../src/renderer/components/chat/AssistantMessage';
 import { MessageReadAloudContext } from '../../../src/renderer/components/chat/MessageReadAloudContext';
 import { ThreadPanel } from '../../../src/renderer/features/bots/ThreadPanel';
+
+const provider = { id: 'fixture-provider', name: 'Example Provider', source: 'user', auth: { method: 'none' },
+  connected: true, agents: ['codex'], routing: { codex: {} },
+  models: { codex: [{ id: 'fixture-model', name: 'Example Model', mode: 'chat', contextWindow: 128000,
+    efforts: ['low', 'medium', 'high'], defaultEffort: 'medium' }] } } as unknown as ProviderView;
+const owner = getDataOwnerGeneration();
+const catalog = { dataOwnerId: owner.dataOwnerId, ownerGeneration: owner.generation, providers: [provider], providerOrder: [provider.id] };
+commitProvidersSnapshot(beginProvidersRefresh(), catalog);
 
 function CompanionReply() {
   const [reading, setReading] = useState(false);
@@ -21,7 +32,26 @@ function CompanionReply() {
 
 void mountPage({
   route: '/cc-agent/shared-task',
-  host: { maker: { getCapabilities: async () => ({ availableModels: [], hasFastMode: false, effortLevels: [], permissionModes: [], fork: { supported: true }, rewind: { supported: false } }) } },
+  host: {
+    safeStorageRead: async () => null,
+    deviceLink: {
+      listDevices: async () => [], getState: async () => ({ remoteControlEnabled: false, linkStatus: 'stopped' }),
+      onPresenceChanged: subscription('presence'), onStatusChanged: subscription('linkStatus'),
+      onControlTargetChanged: subscription('controlTargets'), onRemotePush: subscription('remotePush'),
+    },
+    maker: {
+      listProviders: async () => catalog, requestProviderModelsAutoRefresh: async () => undefined,
+      listAvailableAgents: async () => ['codex'], onProvidersChanged: subscription('providersChanged'),
+      getModelContextLimit: async () => ({ limit: 128000, isCustomized: false }),
+      fork: async (request: { action: string; target?: unknown }) => {
+        if (request.action === 'capabilities') return { forkRequestVersion: 1, historyHandoff: true };
+        if (request.action === 'status') return { state: 'failed' };
+        if (request.target) return { state: 'complete', session: { id: 'fixture-child' }, outcome: 'history-handoff' };
+        throw new Error('[REMOTE_AGENT_UNAVAILABLE] fixture native history is offline');
+      },
+      getCapabilities: async () => ({ availableModels: [], hasFastMode: false, effortLevels: [], permissionModes: [], fork: { supported: true }, rewind: { supported: false } }),
+    },
+  },
   render: (ctx) => ctx.case === 'companion-thread'
     ? <div className="flex h-screen" data-ui-page-subject><div className="flex-1" /><ThreadPanel onClose={() => undefined}>
         <div className="min-h-0 flex-1 overflow-y-auto p-4"><CompanionReply />

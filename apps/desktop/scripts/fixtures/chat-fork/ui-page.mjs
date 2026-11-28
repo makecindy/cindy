@@ -4,9 +4,12 @@ export default {
   real: 'UserMessage, AssistantMessage, MessageActionBar, companion read-aloud actions and useForkAtMessage with native fork capabilities',
   notCovered: 'Native remote execution, database writes and real speech playback; plugin cards are absent from these messages',
   stubs: {
+    'src/renderer/contexts/AuthContext': { partial: 'export const useAuth = () => ({ mode: "local", deviceId: null, user: null });' },
     'src/renderer/components/chat/GhostToolCard': 'export const CARD_EXPAND_TOGGLE_EVENT = "xdt-card-expand-toggle"; export const GhostToolCard = () => null; export const MailCardEditor = () => null;',
   },
   cases: {
+    recovery: { about: 'Offline native history offers retry and an explicit provider choice', viewport: { width: 560, height: 820 } },
+    'recovery-narrow': { about: 'History handoff model picker and description at 320px', viewport: { width: 320, height: 820 } },
     default: { about: 'Task using a shared model: fork from a user message or an assistant reply' },
     ssh: { about: 'SSH workspaces still hide the unsupported fork action' },
     companion: { about: 'Completed companion replies retain read-aloud and stop in the persistent message footer' },
@@ -51,6 +54,23 @@ export default {
     await forks.last().click();
     await page.getByRole('alertdialog').waitFor();
     await ui.capture('fork-confirm');
+    if (ui.case.startsWith('recovery')) {
+      await page.getByRole('button', { name: await ui.t('chat.messageActionBar.forkConfirm'), exact: true }).click();
+      await page.getByRole('button', { name: await ui.t('chat.forkRecovery.choose'), exact: true }).waitFor();
+      await ui.capture('offline-recovery');
+      await page.getByRole('button', { name: await ui.t('chat.forkRecovery.choose'), exact: true }).click();
+      await page.getByText('Example Model', { exact: true }).waitFor();
+      const overflow = await page.getByRole('alertdialog').evaluate(dialog =>
+        [dialog, ...dialog.querySelectorAll('*')].filter(node => {
+          const style = getComputedStyle(node);
+          return ['auto', 'scroll'].includes(style.overflowX) && node.scrollWidth > node.clientWidth + 1;
+        }).map(node => node.className));
+      assert.deepEqual(overflow, [], 'recovery picker fits the dialog without horizontal scrolling');
+      await ui.capture('history-target-picker');
+      await page.getByText('Example Model', { exact: true }).click();
+      await ui.capture('selected-target');
+      return;
+    }
     await page.getByRole('button', { name: await ui.t('chat.messageActionBar.forkCancel'), exact: true }).click();
     await page.getByText('技术上能想办法实现吗？', { exact: true }).hover();
     await forks.first().click();

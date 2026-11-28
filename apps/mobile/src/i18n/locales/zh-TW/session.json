@@ -916,5 +916,20 @@
     "uploadsPending": "還有附件正在上傳，等上傳完成後再編輯訊息。",
     "rollbackHint": "傳送將撤銷上一輪對 {{count}} 個檔案的改動",
     "conversationOnlyHint": "傳送不會恢復專案檔案，上一輪的檔案改動會保留"
+  },
+  "forkRecovery": {
+    "choose": "選擇其他供應商繼續",
+    "continue": "從對話記錄開啟新任務",
+    "handoffDescription": "新任務將使用所選位置之前的對話記錄與你選擇的供應商，任務與檔案仍在任務電腦上。交接有長度限制，可能省略較早內容，無法保留完整的原生推理與工具狀態。",
+    "selectModel": "請選擇模型與供應商",
+    "pendingTitle": "正在確認新任務",
+    "pendingDescription": "建立結果尚未確認。查詢同一次請求可找回任務，不會重複建立。若選擇其他供應商，原請求仍可能完成。",
+    "check": "查詢建立結果",
+    "retry": "重試分叉",
+    "update": "請更新任務電腦上的 Cindy",
+    "unavailableTitle": "這段歷史暫不可用",
+    "unavailableDescription": "儲存這段原生歷史的電腦無法使用，或無法分叉。對話記錄仍保留在任務電腦，可以重試，或選擇其他供應商從對話記錄繼續。",
+    "nativeSuccess": "已從原生歷史建立新任務",
+    "handoffSuccess": "已透過對話記錄交接建立新任務"
   }
 }

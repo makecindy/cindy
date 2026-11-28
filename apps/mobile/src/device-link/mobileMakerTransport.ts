@@ -796,6 +796,8 @@ export interface MobileMakerTransport {
     sourceSessionId: string,
     messageClientId: string,
   ): Promise<RemoteSession>;
+  getForkCapabilities(): Promise<{ forkRequestVersion?: number; historyHandoff?: boolean }>;
+  requestFork(request: import('@cindy/maker-shared/fork-request').ForkRequest): Promise<import('@cindy/maker-shared/fork-request').ForkReceipt<RemoteSession>>;
   forkStripEncrypted(sourceSessionId: string): Promise<RemoteSession>;
   rewindPreview(
     sessionId: string,
@@ -1555,6 +1557,8 @@ export function createMobileMakerTransport({
       call("maker:get-context-usage", [sessionId, createOpts]),
     fork: (sourceSessionId, messageClientId) =>
       call("maker:fork", [sourceSessionId, messageClientId]),
+    getForkCapabilities: () => call('maker:fork', [{ action: 'capabilities' }]),
+    requestFork: (request) => call('maker:fork', [request]),
     forkStripEncrypted: (sourceSessionId) =>
       call("maker:fork-strip-encrypted", [sourceSessionId]),
     rewindPreview: (sessionId, clientId) =>

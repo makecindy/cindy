@@ -202,6 +202,45 @@ Codex/Pi 在受邀者原有隔离目录分叉；新原生会话登记到既有�
 回归：`remoteAgent.test.ts`、Desktop `fork.test.ts`、`guestHost.test.ts`、
 `groupRelay.test.ts` 与数据库 `client/__tests__/tx.test.ts`；三引擎沿用原生分叉入口。
 
+### 指定目标的聊天记录交接与 Fork 回执
+
+`maker:fork` 增量接受首参对象。先用 `{action:'capabilities'}` 探测，返回
+`forkRequestVersion:1`；`historyHandoff:true` 表示目标准入已接好。新版控制端才使用
+`{version:1,action:'create'|'status',requestId,sourceSessionId,messageClientId,target?}`。
+旧宿主把首参对象拒为非法参数，不能把未知 `target` 当成旧式原生分叉；旧控制端的两个字符串
+参数保持原行为。旧 Host 没有此能力时提示更新任务电脑，不在控制端本机创建替代任务。
+
+Desktop 和 Mobile 在原生历史不可用时提供重试与「选择其他供应商继续」，复用普通模型／电脑
+选择目录。`target` 仅在显式选择后发送，包含引擎、模型、供应商与 Agent 位置；`null` 位置明确
+指任务电脑。任务与工作目录仍在原任务电脑，历史复制边界沿用原有 user／assistant、切换片段、
+clear 与 rewind 判据。目标按切模型所用的实时目录、远程调用与分享许可准入，不向旧电脑申请
+原生分叉，不向新电脑发送旧原生会话 ID。首次继续仍走目标的正常启动授权。SSH 与共享任务
+访客不因本次扩展获得新的分叉权限。
+
+交接复用 `fork.session` 事务，一起保存子任务、所选历史、pending handoff 与恢复卡；事务还
+核对锚点仍可见。交接有长度预算，可能压缩旧记录，不代表恢复全部原生推理、工具或供应商内部
+状态；回执用 `outcome:'native'|'history-handoff'` 区分两种结果。没有已知窗口的插件目标沿用
+交接构造器的有界未知窗口预算，不继承原供应商的窗口数值。
+
+普通界面分叉在发请求前保存 UUID，离开任务或重开后仍使用同一 UUID。任务电脑在 owner 隔离
+目录的 `fork-requests/` 中存每次请求的小型回执，绑定已认证调用方、源任务、锚点与目标指纹，
+预留唯一子任务 ID；源历史摘要在准备时冻结。原生写入前先落盘阶段标记，同一请求并发只执行
+一次。`status` 不重放写入，返回 `not-sent`、`pending`、`unknown`、`failed` 或 `complete`；已提交
+子任务是最终见证，即使完成回执写入或返回丢失，也按预留 ID 找回。账号代次、删除、clear、
+rewind 或历史修改会阻止过期创建，不以另一账号、任务或目标复用回执。查询不扫描历史或轮询
+其它电脑，界面只在用户点击时查询。
+
+外部原生写入与 SQLite 不构成分布式事务。原生写入已开始、但没有可核对的 Cindy 子任务时保留
+`unknown`，包括运行端回包丢失或进程在保存前退出；重试不盲目再做原生写入，不自动清除过期
+回执。用户可明确选择新的聊天记录交接请求，界面告知原请求仍可能完成。此次不提供后台原生
+备份、原生迁移或对旧供应商原生状态的恢复承诺。
+
+Agent 工具 `fork_session` 可传 `request_id`、`check_result`、`target`，复用同一业务入口；交接与
+查询必须带请求 ID，旧的无选项调用保持兼容。无新增 Device Link channel、relay kind、服务端
+字段或数据库 migration；自建中转对现有 IPC args 作透明转发，客户端／自建中转互通测试覆盖
+新旧 SDK、加密加入与重连。回归入口为 Desktop `fork.test.ts`、`sideChatIpc.test.ts`、
+`useForkAtMessage.test.ts`、Mobile `useForkRecovery.test.tsx` 和工具 registry 测试。
+
 Codex 原生图片恢复（#6412）在既有 `maker:remote-agent:v1` 上追加可选
 `caps.imageRecovery: true` 与 `op: images`，不改变已有事件行格式与协议版本：
 

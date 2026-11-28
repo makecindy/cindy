@@ -916,5 +916,20 @@
     "uploadsPending": "Es werden noch Anhänge hochgeladen. Warte, bis der Upload abgeschlossen ist, und bearbeite die Nachricht dann.",
     "rollbackHint": "Beim Senden werden Änderungen an {{count}} Datei(en) aus der letzten Runde rückgängig gemacht",
     "conversationOnlyHint": "Beim Senden werden Projektdateien nicht wiederhergestellt; bisherige Dateiänderungen bleiben erhalten"
+  },
+  "forkRecovery": {
+    "choose": "Mit anderem Anbieter fortfahren",
+    "continue": "Aufgabe aus Chatverlauf starten",
+    "handoffDescription": "Die neue Aufgabe nutzt den Chatverlauf bis zu dieser Stelle und den gewählten Anbieter. Aufgabe und Dateien bleiben auf dem Aufgabencomputer. Die Übergabe ist begrenzt und kann ältere Inhalte auslassen; native Denk- und Werkzeugzustände bleiben nicht erhalten.",
+    "selectModel": "Modell und Anbieter auswählen",
+    "pendingTitle": "Neue Aufgabe wird geprüft",
+    "pendingDescription": "Das Ergebnis ist noch unbestätigt. Prüfe dieselbe Anfrage, um die Aufgabe ohne Duplikat zu finden. Bei einem anderen Anbieter kann die ursprüngliche Anfrage dennoch fertig werden.",
+    "check": "Ergebnis prüfen",
+    "retry": "Verzweigung wiederholen",
+    "update": "Cindy auf dem Aufgabencomputer aktualisieren",
+    "unavailableTitle": "Dieser Verlauf ist nicht verfügbar",
+    "unavailableDescription": "Der Computer mit diesem nativen Verlauf ist nicht verfügbar oder kann ihn nicht verzweigen. Der Chatverlauf bleibt auf dem Aufgabencomputer. Versuche es erneut oder wähle einen anderen Anbieter.",
+    "nativeSuccess": "Neue Aufgabe aus nativem Verlauf erstellt",
+    "handoffSuccess": "Neue Aufgabe mit Chatverlauf-Übergabe erstellt"
   }
 }

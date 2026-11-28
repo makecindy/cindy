@@ -7522,9 +7522,9 @@ interface ElectronAPI {
     createSideChat: (sourceSessionId: string) => Promise<import('./lib/ccAgent.types').Session>;
     listSideChats: (sourceSessionId: string) => Promise<Array<{ id: string }>>;
     fork: (
-      sourceSessionId: string,
-      messageClientId: string,
-    ) => Promise<import('@/lib/ccAgent.types').Session>;
+      sourceSessionId: string | import('@cindy/maker-shared/fork-request').ForkRequest | { action: 'capabilities' },
+      messageClientId?: string,
+    ) => Promise<unknown>;
 
     /* ── Agent 鉴权 (取代老 codex.auth.*) ── */
     auth: {

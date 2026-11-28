@@ -17217,6 +17217,21 @@
       "signingIn": "O início de sessão na conta de subscrição desta tarefa está em curso. Tenta novamente quando terminar.",
       "unavailable": "A conta de subscrição atribuída a esta tarefa não pode ser utilizada neste pedido. Verifica a conta nas definições do fornecedor de modelos no computador que executa a tarefa ou escolhe outra origem de modelos.",
       "legacy": "A conta de subscrição atribuída a esta tarefa não está disponível. Verifica o início de sessão e a utilização no computador que executa a tarefa ou escolhe outra origem de modelos. A conta não muda automaticamente."
+    },
+    "forkRecovery": {
+      "choose": "Continuar com outro fornecedor",
+      "continue": "Criar tarefa a partir do chat",
+      "handoffDescription": "A nova tarefa utiliza o chat até este ponto e o fornecedor escolhido. A tarefa e os ficheiros ficam no computador da tarefa. A passagem tem um limite e pode omitir conteúdo antigo; não preserva o raciocínio nativo nem o estado das ferramentas.",
+      "selectModel": "Selecione modelo e fornecedor",
+      "pendingTitle": "A verificar a nova tarefa",
+      "pendingDescription": "O resultado ainda não foi confirmado. Consulte o mesmo pedido para encontrar a tarefa sem a duplicar. Com outro fornecedor, o pedido original ainda pode ser concluído.",
+      "check": "Consultar resultado",
+      "retry": "Repetir bifurcação",
+      "update": "Atualize o Cindy no computador da tarefa",
+      "unavailableTitle": "Este histórico está indisponível",
+      "unavailableDescription": "O computador que guarda este histórico nativo está indisponível ou não o pode bifurcar. O chat continua no computador da tarefa. Tente novamente ou escolha outro fornecedor.",
+      "nativeSuccess": "Nova tarefa criada a partir do histórico nativo",
+      "handoffSuccess": "Nova tarefa criada com passagem do chat"
     }
   },
   "ccAgent": {

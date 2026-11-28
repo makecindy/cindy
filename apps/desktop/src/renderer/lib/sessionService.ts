@@ -14,6 +14,7 @@ import type {
   WorkspaceKind,
 } from '@/lib/ccAgent.types';
 import { ApiError } from '@/lib/httpClient';
+import type { ForkRequest, ForkReceipt } from '@cindy/maker-shared/fork-request';
 import { extractIpcError } from '@/utils/ipcError';
 // device-link 透明对等:fork / rewind 按 sessionId 来源路由(本机 → 本地 maker,
 // 远程 device-link 会话 → 隧道)。makerApiFor 是 channel 映射的唯一来源(手机版同此契约)。
@@ -354,6 +355,37 @@ export async function forkAtMessage(
   return wrap(
     makerApiFor(sourceSessionId).fork(sourceSessionId, messageClientId) as Promise<Session>,
   );
+}
+
+export async function getForkCapabilities(sourceSessionId: string): Promise<{ forkRequestVersion?: number; historyHandoff?: boolean }> {
+  try {
+    return await wrap(makerApiFor(sourceSessionId).fork({ action: 'capabilities' })) as { forkRequestVersion?: number; historyHandoff?: boolean };
+  } catch (error) {
+    const code = error instanceof ApiError ? error.code : undefined;
+    if (code === 'INVALID_PARAMS' || code === 'CHANNEL_NOT_ALLOWED' || code === 'UNSUPPORTED_CAPABILITY') return {};
+    throw error;
+  }
+}
+
+export async function requestFork(request: ForkRequest): Promise<ForkReceipt<Session>> {
+  let result: ForkReceipt<Session>;
+  try {
+    result = await wrap(makerApiFor(request.sourceSessionId).fork(request)) as ForkReceipt<Session>;
+  } catch (error) {
+    if (request.action === 'status') throw error;
+    try {
+      const receipt = await requestFork({ ...request, action: 'status' });
+      if (receipt.state === 'failed' || receipt.state === 'not-sent') throw error;
+      return receipt;
+    } catch (lookupError) {
+      if (lookupError === error) throw error;
+      return { state: 'unknown' };
+    }
+  }
+  if (!result || !['not-sent', 'pending', 'unknown', 'failed', 'complete'].includes(result.state)) {
+    throw new ApiError('UNSUPPORTED_CAPABILITY', 0, 'Update Cindy on the task computer to recover this fork');
+  }
+  return result;
 }
 
 export async function forkStripEncrypted(sourceSessionId: string): Promise<Session> {

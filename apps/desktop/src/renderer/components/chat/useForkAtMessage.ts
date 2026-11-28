@@ -11,13 +11,15 @@
  * renderer 只负责传 clientId；draftText 由调用方按各自语义传入。
  */
 
-import { useCallback } from 'react';
+import { createElement, useCallback, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { toast } from '@/lib/toast';
 import { ApiError } from '@/lib/httpClient';
-import { forkAtMessage } from '@/lib/sessionService';
+import { forkAtMessage, getForkCapabilities, requestFork } from '@/lib/sessionService';
+import { createForkRequestId, type ForkRequest, type ForkTarget, type ForkOutcome } from '@cindy/maker-shared/fork-request';
+import { ForkTargetPicker } from './ForkTargetPicker';
 import { saveDraft as saveComposerDraft } from '@/lib/composerDraftStore';
 import type { JSONContent } from '@tiptap/core';
 import { emitRefresh as emitSessionsRefresh } from '@/lib/sessionsBus';
@@ -30,6 +32,7 @@ import {
 import { createLogger } from '@/lib/logger';
 import { isCodexResumeNotReadyProjectionError } from '@cindy/maker-shared/agent-input-projection';
 import { remoteAgentErrorCode } from '@cindy/device-link';
+import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
 
 const log = createLogger('useForkAtMessage');
 
@@ -78,13 +81,33 @@ export function useForkAtMessage({
   draftDocument,
 }: UseForkAtMessageOptions): (options?: ForkAtMessageRunOptions) => Promise<void> {
   const { t } = useTranslation();
-  const { confirm } = useConfirmDialog();
+  const { confirm, confirmThree } = useConfirmDialog();
   const navigate = useNavigate();
   const navigationMode = useSessionNavigationMode();
   const reportSessionNavigation = useSessionNavigationIntent();
+  const active = useRef(false);
+  const generation = useRef(0);
+  const request = useRef<ForkRequest | undefined>(undefined);
+  const sourceKey = `${sessionId ?? ''}\u0000${messageClientId ?? ''}`;
+  const sourceKeyRef = useRef(sourceKey);
+  sourceKeyRef.current = sourceKey;
+  useEffect(() => {
+    generation.current += 1;
+    request.current = undefined;
+    return () => { generation.current += 1; };
+  }, [sessionId, messageClientId]);
 
   return useCallback(async (options?: ForkAtMessageRunOptions) => {
-    if (!sessionId || !messageClientId) return;
+    if (!sessionId || !messageClientId || active.current) return;
+    const captured = generation.current;
+    const owner = getDataOwnerGeneration();
+    const current = () => generation.current === captured && sourceKeyRef.current === sourceKey && isDataOwnerGenerationCurrent(owner);
+    const storageKey = `cindy.fork-request.v1:${JSON.stringify([owner.dataOwnerId, getSessionDeviceId(sessionId), sessionId, messageClientId])}`;
+    const remember = (next: ForkRequest) => {
+      if (!current()) return;
+      localStorage.setItem(storageKey, JSON.stringify(next));
+      request.current = next;
+    };
     if (navigationMode === 'sidebar-embedded') {
       log.info('message fork ignored by embedded sidebar view', { sessionId, messageClientId });
       return;
@@ -101,9 +124,87 @@ export function useForkAtMessage({
       autoFocusConfirm: true,
     });
     if (!confirmed) return;
+    if (!current() || active.current) return;
+    active.current = true;
     options?.onConfirmed?.();
     try {
-      const newSession = await forkAtMessage(sessionId, messageClientId);
+      const capabilities = await getForkCapabilities(sessionId);
+      if (!current()) return;
+      let outcome: ForkOutcome | undefined;
+      const chooseTarget = async () => {
+        let target: ForkTarget | undefined;
+        const accepted = await confirm({
+          title: t('chat.forkRecovery.choose'), description: t('chat.forkRecovery.handoffDescription'),
+          confirmText: t('chat.forkRecovery.continue'), maxWidth: 460,
+          content: createElement(ForkTargetPicker, {
+            deviceId: getSessionDeviceId(sessionId) ?? undefined,
+            onChange: (selection: ForkTarget) => { target = selection; },
+          }),
+        });
+        if (!accepted || !current()) return false;
+        if (!target) { toast.error(t('chat.forkRecovery.selectModel')); return false; }
+        remember({ version: 1, action: 'create', requestId: createForkRequestId(), sourceSessionId: sessionId,
+          messageClientId, target });
+        return true;
+      };
+      let newSession;
+      if (capabilities.forkRequestVersion === 1) {
+        const saved = localStorage.getItem(storageKey);
+        if (!request.current && saved) {
+          if (saved.length > 8192) throw new Error(t('chat.forkRecovery.pendingDescription'));
+          const prior = JSON.parse(saved) as ForkRequest;
+          if (prior.version !== 1 || prior.sourceSessionId !== sessionId || prior.messageClientId !== messageClientId || !prior.requestId) {
+            throw new Error(t('chat.forkRecovery.pendingDescription'));
+          }
+          request.current = prior;
+        }
+        if (!request.current) remember({ version: 1, action: 'create', requestId: createForkRequestId(), sourceSessionId: sessionId, messageClientId });
+        while (current()) {
+          try {
+            const receipt = await requestFork(request.current!);
+            if (!current()) return;
+            if (receipt.state === 'complete' && receipt.session) {
+              newSession = receipt.session; outcome = receipt.outcome;
+              try {
+                if (JSON.parse(localStorage.getItem(storageKey) ?? 'null')?.requestId === request.current?.requestId) localStorage.removeItem(storageKey);
+              } catch { /* A committed child stays successful even if local cleanup fails. */ }
+              request.current = undefined; break;
+            }
+            const choice = await confirmThree({ title: t('chat.forkRecovery.pendingTitle'),
+              description: t('chat.forkRecovery.pendingDescription'),
+              confirmText: t(receipt.state === 'failed' || receipt.state === 'not-sent' ? 'chat.forkRecovery.retry' : 'chat.forkRecovery.check'),
+              tertiaryText: capabilities.historyHandoff ? t('chat.forkRecovery.choose') : t('chat.forkRecovery.update'),
+              cancelText: t('chat.messageActionBar.forkCancel') });
+            if (!current() || choice === 'cancel') return;
+            if (choice === 'tertiary') {
+              if (!capabilities.historyHandoff || !await chooseTarget()) return;
+            } else request.current = { ...request.current!, action: receipt.state === 'failed' || receipt.state === 'not-sent' ? 'create' : 'status' };
+          } catch (error) {
+            if (!current()) return;
+            const targetFailure = Boolean(request.current?.target);
+            if (!targetFailure && !remoteAgentErrorCode(error instanceof Error ? error.message : String(error))) throw error;
+            const choice = await confirmThree({ title: t(targetFailure ? 'chat.forkRecovery.choose' : 'chat.forkRecovery.unavailableTitle'),
+              description: t(targetFailure ? 'settings.ghosts.modelPicker.unavailable' : 'chat.forkRecovery.unavailableDescription'), confirmText: t('chat.forkRecovery.retry'),
+              tertiaryText: capabilities.historyHandoff ? t('chat.forkRecovery.choose') : t('chat.forkRecovery.update'),
+              cancelText: t('chat.messageActionBar.forkCancel') });
+            if (!current() || choice === 'cancel') return;
+            if (choice === 'tertiary') {
+              if (!capabilities.historyHandoff) { toast.error(t('chat.forkRecovery.update')); return; }
+              if (!await chooseTarget()) return;
+            } else request.current = { ...request.current!, action: 'create' };
+          }
+        }
+      } else {
+        try { newSession = await forkAtMessage(sessionId, messageClientId); }
+        catch (error) {
+          if (remoteAgentErrorCode(error instanceof Error ? error.message : String(error))) {
+            if (current()) toast.error(t('chat.forkRecovery.update'));
+            return;
+          }
+          throw error;
+        }
+      }
+      if (!newSession || !current()) return;
       // Pre-fill the new session's composer so the user lands on a
       // ready-to-edit prompt. saveDraft MUST happen before navigate,
       // otherwise ChatInput's mount effect reads `undefined` first and the
@@ -126,9 +227,12 @@ export function useForkAtMessage({
       // remoteProjectsStore 注册新 sessionId,否则 navigate 会把它当本地会话 404(等轮询太慢)。
       const deviceId = getSessionDeviceId(sessionId);
       if (deviceId) await refreshRemoteDeviceSessions(deviceId);
+      if (!current()) return;
       reportSessionNavigation?.(newSession.id, newSession.id);
       navigate(`/cc-agent/${newSession.id}`);
+      if (outcome) toast.success(t(outcome === 'native' ? 'chat.forkRecovery.nativeSuccess' : 'chat.forkRecovery.handoffSuccess'));
     } catch (err) {
+      if (!current()) return;
       const code = err instanceof ApiError ? err.code : 'UNKNOWN';
       const detail = err instanceof Error ? err.message : String(err);
       const remoteCode = remoteAgentErrorCode(detail);
@@ -150,6 +254,8 @@ export function useForkAtMessage({
       // Re-throw so MessageActionBar's `forking` state knows to clear via
       // its finally{} (it doesn't actually re-throw further — just resets).
       throw err;
+    } finally {
+      active.current = false;
     }
   }, [
     sessionId,
@@ -160,6 +266,7 @@ export function useForkAtMessage({
     draftText,
     draftDocument,
     confirm,
+    confirmThree,
     navigate,
     t,
   ]);

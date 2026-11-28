@@ -17217,6 +17217,21 @@
       "signingIn": "O login na conta de assinatura desta tarefa está em andamento. Tente de novo quando terminar.",
       "unavailable": "A conta de assinatura atribuída a esta tarefa não pode ser usada nesta solicitação. Verifique a conta nas configurações do provedor de modelos no computador que executa a tarefa ou escolha outra origem de modelos.",
       "legacy": "A conta de assinatura atribuída a esta tarefa não está disponível. Verifique o login e o uso no computador que executa a tarefa ou escolha outra origem de modelos. A conta não muda automaticamente."
+    },
+    "forkRecovery": {
+      "choose": "Continuar com outro provedor",
+      "continue": "Criar tarefa a partir do chat",
+      "handoffDescription": "A nova tarefa usa o chat até este ponto e o provedor escolhido. A tarefa e os arquivos ficam no computador da tarefa. A transferência tem limite e pode omitir conteúdo antigo; não preserva o raciocínio nativo nem o estado das ferramentas.",
+      "selectModel": "Selecione modelo e provedor",
+      "pendingTitle": "Verificando a nova tarefa",
+      "pendingDescription": "O resultado ainda não foi confirmado. Consulte a mesma solicitação para encontrar a tarefa sem duplicá-la. Com outro provedor, a solicitação original ainda pode ser concluída.",
+      "check": "Consultar resultado",
+      "retry": "Tentar bifurcação novamente",
+      "update": "Atualize o Cindy no computador da tarefa",
+      "unavailableTitle": "Este histórico está indisponível",
+      "unavailableDescription": "O computador que guarda este histórico nativo está indisponível ou não pode bifurcá-lo. O chat continua no computador da tarefa. Tente novamente ou escolha outro provedor.",
+      "nativeSuccess": "Nova tarefa criada a partir do histórico nativo",
+      "handoffSuccess": "Nova tarefa criada com transferência do chat"
     }
   },
   "ccAgent": {

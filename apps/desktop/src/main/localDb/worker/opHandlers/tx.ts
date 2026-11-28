@@ -3007,6 +3007,14 @@ function forkSession(db: Database.Database, args: unknown): { messageCount: numb
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)`,
   );
   const transaction = db.transaction(() => {
+    if (payload.sourceAnchorClientId != null && !db.prepare(
+      `SELECT 1 FROM sessions s JOIN messages m ON m.session_id = s.id
+       WHERE s.id = ? AND s.status != 'deleted' AND s.cleared_at IS ?
+         AND m.client_id = ? AND m.rewind_at IS NULL AND m.role IN ('user', 'assistant')
+         AND (s.cleared_at IS NULL OR m.created_at > s.cleared_at)`,
+    ).get(sourceSessionId, sourceClearedAt, expectString(payload.sourceAnchorClientId, 'sourceAnchorClientId'))) {
+      throw invalidArgs('Source fork point changed while preparing fork');
+    }
     if (newSession.source === 'side-chat' && !db.prepare(
       "SELECT 1 FROM sessions WHERE id = ? AND status = 'active' AND cleared_at IS ?",
     ).get(sourceSessionId, sourceClearedAt)) {

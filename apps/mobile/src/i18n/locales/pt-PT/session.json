@@ -921,5 +921,20 @@
     "uploadsPending": "Ainda há anexos a ser carregados. Aguarde até terminarem antes de editar a mensagem.",
     "rollbackHint": "O envio irá anular as alterações em {{count}} ficheiro(s) da última interação",
     "conversationOnlyHint": "O envio não irá restaurar os ficheiros do projeto; as alterações anteriores serão mantidas"
+  },
+  "forkRecovery": {
+    "choose": "Continuar com outro fornecedor",
+    "continue": "Criar tarefa a partir do chat",
+    "handoffDescription": "A nova tarefa utiliza o chat até este ponto e o fornecedor escolhido. A tarefa e os ficheiros ficam no computador da tarefa. A passagem tem um limite e pode omitir conteúdo antigo; não preserva o raciocínio nativo nem o estado das ferramentas.",
+    "selectModel": "Selecione modelo e fornecedor",
+    "pendingTitle": "A verificar a nova tarefa",
+    "pendingDescription": "O resultado ainda não foi confirmado. Consulte o mesmo pedido para encontrar a tarefa sem a duplicar. Com outro fornecedor, o pedido original ainda pode ser concluído.",
+    "check": "Consultar resultado",
+    "retry": "Repetir bifurcação",
+    "update": "Atualize o Cindy no computador da tarefa",
+    "unavailableTitle": "Este histórico está indisponível",
+    "unavailableDescription": "O computador que guarda este histórico nativo está indisponível ou não o pode bifurcar. O chat continua no computador da tarefa. Tente novamente ou escolha outro fornecedor.",
+    "nativeSuccess": "Nova tarefa criada a partir do histórico nativo",
+    "handoffSuccess": "Nova tarefa criada com passagem do chat"
   }
 }

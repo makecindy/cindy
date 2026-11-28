@@ -210,9 +210,7 @@ export function MessageActionBar({
   const pluginMenuEntries = align === 'right' ? pluginUi.userMenu : pluginUi.assistantMenu;
   const [copied, setCopied] = useState(false);
   const [forking, setForking] = useState(false);
-  // 用户确认开启新任务后，到创建结束前提示与操作栏常驻，不随鼠标移开消失；
-  // 确认框打开期间仍按普通 hover 驱动，避免提示压在确认框背后。
-  const [forkConfirmed, setForkConfirmed] = useState(false);
+  // 创建期间保留操作栏；提示在点击后收起，避免遮住确认或恢复选项。
   const [forkTipHovered, setForkTipHovered] = useState(false);
   const [menuActionPending, setMenuActionPending] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
@@ -289,15 +287,15 @@ export function MessageActionBar({
     async () => {
       if (!onFork || forking) return;
       setForking(true);
+      setForkTipHovered(false);
       try {
-        await onFork({ onConfirmed: () => setForkConfirmed(true) });
+        await onFork();
       } catch {
         // useForkAtMessage already maps the error to a user-facing toast.
       } finally {
         // Reset regardless of outcome — caller toasts on failure, and on
         // success we usually navigate away anyway so unmount handles it.
         setForking(false);
-        setForkConfirmed(false);
         setForkTipHovered(false);
       }
     },
@@ -404,7 +402,7 @@ export function MessageActionBar({
   );
 
   const forkBtn = !simplifiedBotConversation && onFork && (
-    <Tooltip.Root key="fork" open={forkConfirmed || forkTipHovered} onOpenChange={setForkTipHovered}>
+    <Tooltip.Root key="fork" open={!forking && forkTipHovered} onOpenChange={setForkTipHovered}>
       <Tooltip.Trigger asChild>
         <button
           type="button"
@@ -953,7 +951,7 @@ export function MessageActionBar({
         // Hover re-enters mid-fade interpolate from the current opacity
         // (browser CSS transition behavior — no replay from 0).
         'transition-opacity duration-[var(--motion-enter)] ease-[var(--motion-ease-out)] motion-reduce:transition-none',
-        simplifiedBotConversation || visible || menuOpen || forkConfirmed || reactionAction?.open
+        simplifiedBotConversation || visible || menuOpen || forking || reactionAction?.open
           ? 'opacity-100'
           : 'opacity-0 pointer-events-none focus-within:opacity-100 focus-within:pointer-events-auto',
         // Menu-owned actions dim the entire bar and block clicks. Fork only
