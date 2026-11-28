@@ -27,7 +27,6 @@ import { getDbClient } from '../localDb/client/current';
 import { sessions, messages } from '../localDb/schema';
 import { sessionToCamel } from '../localDb/mapper';
 import { computeForkSourceMessagesDigest } from '../localDb/forkRecoverySnapshot.js';
-import { commitContextRebuild, createMessage } from '../localDb/ipc/messages.js';
 import { getMaker } from '../maker-host/index.js';
 import { resolveDesktopHandoffWindow } from '../maker-host/model-context-settings.js';
 import { inferProviderIdForModel } from '../maker-host/provider-route.js';
@@ -36,8 +35,8 @@ import { dbToMakerAgentKind, normalizeDbAgentKind } from '../../shared/agentKind
 import { pluginEngineKeyFromProviderId } from '../../shared/pluginEngines.js';
 import { copySessionContextWindowBudget, pruneSessionContextWindowBudget } from '../maker-host/session-context-budget-store.js';
 import { readBoundClaudeConfigDir } from '../subscription-accounts/store.js';
-import type { AgentMeta, Session } from '../../renderer/lib/ccAgent.types';
-import { buildHandoff, handoffPreviewText, type HandoffSourceMessage } from '../maker-ipc/agentHandoff.js';
+import type { Session } from '../../renderer/lib/ccAgent.types';
+import { buildHandoff, handoffPreviewText } from '../maker-ipc/agentHandoff.js';
 import { assertTaskActionCurrent } from '../maker-ipc/taskActionAuthorization.js';
 import {
   type ClaudeTranscriptAnchorIndex,
@@ -205,26 +204,34 @@ function parseJsonContent(content: string): unknown {
 }
 
 /** 用实际复制的前缀建立交接，和子任务、恢复卡一起原子保存。 */
-function buildCodexForkRecoveryMarker(opts: {
+function buildForkRecoveryMarker(opts: {
   source: { model: string; providerId: string | null; sdkSessionId: string | null };
+  agentKind: ForkEngineKind;
+  reason: NonNullable<ForkNativeSource['rebuildReason']>;
   rows: Array<Pick<ForkTimelineMessage, 'clientId' | 'role' | 'content' | 'createdAt' | 'toolUseId' | 'agentMeta' | 'agentKind'>>;
   targetContextWindow?: number | null;
   newMessageIds: Array<{ clientId: string }>;
   sessionId: string;
   now: number;
 }) {
-  const replay = buildHandoff(opts.rows.filter((row) => row.role !== 'error').map((row) => ({
+  const label = opts.agentKind === 'codex' ? 'Codex' : opts.agentKind === 'pi' ? 'Pi'
+    : opts.agentKind === 'acp' ? 'plugin' : 'Claude Code';
+  const nativeCodexRecovery = opts.agentKind === 'codex' && opts.reason === 'native-session-recovery';
+  const handoffRows = opts.rows.filter((row) => row.role !== 'error'
+    && (nativeCodexRecovery || (row.role !== 'context_rebuild' && row.role !== 'agent_switch')));
+  const replay = buildHandoff(handoffRows.map((row) => ({
     role: row.role,
     content: parseJsonContent(row.content),
     createdAt: row.createdAt,
     toolUseId: row.toolUseId,
     agentMeta: row.agentMeta,
   })), {
-    fromLabel: 'Codex',
-    toLabel: 'Codex',
+    fromLabel: label,
+    toLabel: label,
     targetContextWindow: opts.targetContextWindow,
     sessionId: opts.sessionId,
-    reason: 'native-session-recovery',
+    // 新任务不知道原来的空闲间隔，沿用通用的新原生会话交接口径。
+    reason: opts.reason === 'idle-gap' ? 'native-session-recovery' : opts.reason,
   });
   return {
     id: createId(),
@@ -233,75 +240,17 @@ function buildCodexForkRecoveryMarker(opts: {
     // 导入历史可能有晚于墙钟的合成时间；恢复边界必须排在复制内容之后。
     createdAt: opts.rows.reduce((latest, row) => Math.max(latest, row.createdAt), opts.now),
     content: JSON.stringify({
-      reason: 'native-session-recovery',
+      reason: opts.reason,
       consumed: false,
-      sourceAgentKind: 'codex',
+      sourceAgentKind: opts.agentKind,
       sourceModel: opts.source.model,
       sourceProviderId: opts.source.providerId,
-      sourceSdkSessionId: opts.source.sdkSessionId,
+      ...(nativeCodexRecovery ? { sourceSdkSessionId: opts.source.sdkSessionId } : {}),
       sourceUserClientId: opts.newMessageIds[opts.rows.findLastIndex((row) => row.role === 'user')]?.clientId ?? null,
       ...replay,
       handoffPreview: handoffPreviewText(replay.handoff),
     }),
   };
-}
-
-async function seedForkHandoffAfterSameEngineRebuild(opts: {
-  sessionId: string;
-  rows: ForkTimelineMessage[];
-  agentKind: ForkEngineKind;
-  model: string;
-  providerId: string | null;
-  targetContextWindow?: number | null;
-  reason: 'context-overflow' | 'model-window-switch' | 'pi-prompt-timeout' | 'native-session-recovery' | 'idle-gap';
-}): Promise<void> {
-  const handoffMessages: HandoffSourceMessage[] = opts.rows
-    .filter(
-      (row) =>
-        row.role !== 'error' && row.role !== 'context_rebuild' && row.role !== 'agent_switch',
-    )
-    .map((row) => ({
-      role: row.role,
-      content: parseJsonContent(row.content),
-      createdAt: row.createdAt,
-      toolUseId: row.toolUseId,
-      agentMeta: row.agentMeta,
-    }));
-  const lastUser = [...opts.rows].reverse().find((row) => row.role === 'user');
-  // Rebuild framing does not name the engine; plugin engines keep the generic switch-handoff label.
-  const label =
-    opts.agentKind === 'codex' ? 'Codex'
-      : opts.agentKind === 'pi' ? 'Pi'
-        : opts.agentKind === 'acp' ? 'plugin' : 'Claude Code';
-  const { handoff, handoffCoverage } = buildHandoff(handoffMessages, {
-    targetContextWindow: opts.targetContextWindow,
-    fromLabel: label,
-    toLabel: label,
-    sessionId: opts.sessionId,
-    // fork 出的新任务不知道原来隔了多久,空闲间隔边界按「换了干净原生会话」的通用口径交接。
-    reason: opts.reason === 'idle-gap' ? 'native-session-recovery' : opts.reason,
-  });
-  await commitContextRebuild(opts.sessionId, handoff, {
-    reason: opts.reason,
-    handoffCoverage,
-    sourceUserClientId: lastUser?.clientId ?? null,
-    sourceAgentKind: opts.agentKind,
-    sourceModel: opts.model,
-    sourceProviderId: opts.providerId,
-  });
-  await createMessage(opts.sessionId, {
-    clientId: `context-rebuild-card:${createId()}`,
-    role: 'assistant',
-    content: '',
-    agentKind: opts.agentKind === 'cc' ? 'cc' : opts.agentKind,
-    agentMeta: {
-      contextRebuild: {
-        reason: opts.reason,
-        handoff: handoffPreviewText(handoff),
-        handoffCoverage,
-      },
-    } as AgentMeta,
-  });
 }
 
 interface ParsedContextRebuildBoundary {
@@ -1293,7 +1242,13 @@ export async function forkSessionAtMessage(
     ? { createdAt: lastSourceMessage.createdAt, rowid: lastSourceMessage.rowid + 1 }
     : copyBoundary;
   const forkContextTokens = normalizePositiveInt(initialContextTokens);
-  const forkContextWindow = needsHistoryRecovery ? 0 : normalizePositiveInt(source.contextWindow);
+  const pluginEngineFork = forkSource.agentKind === 'acp';
+  const handoffReason = needsHistoryRecovery || claudeHistoryHandoff
+    ? 'native-session-recovery' as const
+    : !forkSource.reuseVendorSession ? forkSource.rebuildReason : undefined;
+  // A plugin fork before its first message has no history to hand over.
+  const needsHandoff = handoffReason && (!pluginEngineFork || sourceMessages.length > 0);
+  const forkContextWindow = needsHandoff ? 0 : normalizePositiveInt(source.contextWindow);
   const sameContextRoute = forkSource.agentKind === forkEngineKind(source.agentKind) &&
     forkSource.model === source.model && forkSource.providerId === source.providerId;
 
@@ -1303,11 +1258,17 @@ export async function forkSessionAtMessage(
   // A long prefix needs two fresh opaque IDs per row. Use native UUIDs to
   // avoid hashing twice per row on the main thread before the DB worker runs.
   const newMessageIds = sourceMessages.map(() => ({ id: randomUUID(), clientId: randomUUID() }));
-  const recoveryMarker = needsHistoryRecovery ? buildCodexForkRecoveryMarker({
+  // Prepare before creating the child: prefix, pending handoff and recovery card must
+  // commit together. A model-window lookup or any insert failure leaves no partial task.
+  const recoveryMarker = needsHandoff ? buildForkRecoveryMarker({
     source: forkSource, rows: sourceMessages, newMessageIds, sessionId: newSessionId, now,
-    targetContextWindow: await resolveDesktopHandoffWindow(sourceSessionId, {
-      ...forkSource, agentKind: dbToMakerAgentKind(forkSource.agentKind), remoteHostId: source.remoteHostId,
-    }),
+    agentKind: forkSource.agentKind,
+    reason: handoffReason,
+    targetContextWindow: pluginEngineFork
+      ? (source.contextWindow && source.contextWindow > 0 ? source.contextWindow : null)
+      : await resolveDesktopHandoffWindow(sourceSessionId, {
+          ...forkSource, agentKind: dbToMakerAgentKind(forkSource.agentKind), remoteHostId: source.remoteHostId,
+        }),
   }) : undefined;
   // pi 与 codex 一样:uuidMap 空、无 Claude transcript 锚点,跳过 Claude 专用的
   // synthetic uuid 补全 / parentUuid 采集(只有 Claude cc 需要)。
@@ -1401,32 +1362,11 @@ export async function forkSessionAtMessage(
   if (!row) {
     throw new Error('Fork session 创建后查询失败');
   }
-  const pluginEngineFork = forkSource.agentKind === 'acp';
-  const handoffReason = claudeHistoryHandoff
-    ? 'native-session-recovery' as const
-    : !needsHistoryRecovery && !forkSource.reuseVendorSession ? forkSource.rebuildReason : undefined;
   if (claudeHistoryHandoff) {
     log.warn('fork: Claude native anchor unavailable, handing off from chat history', {
       sourceSessionId,
       remote: Boolean(forkSource.agentDeviceId),
       copiedMessages: sourceMessages.length,
-    });
-  }
-  // A plugin engine fork before the first copied message has no history to hand over.
-  if (handoffReason && (!pluginEngineFork || sourceMessages.length > 0)) {
-    await assertTaskActionCurrent();
-    await seedForkHandoffAfterSameEngineRebuild({
-      sessionId: newSessionId,
-      rows: sourceMessages,
-      agentKind: forkSource.agentKind,
-      model: forkSource.model,
-      providerId: forkSource.providerId,
-      targetContextWindow: pluginEngineFork
-        ? (source.contextWindow && source.contextWindow > 0 ? source.contextWindow : null)
-        : await resolveDesktopHandoffWindow(newSessionId, {
-            ...forkSource, agentKind: dbToMakerAgentKind(forkSource.agentKind), remoteHostId: source.remoteHostId,
-          }),
-      reason: handoffReason,
     });
   }
   return sessionToCamel({ ...row, messageCount: sourceMessages.length + (recoveryMarker ? 1 : 0) });
@@ -1547,8 +1487,9 @@ export async function forkSessionStripEncrypted(sourceSessionId: string): Promis
   const now = Date.now();
   const newSessionId = createBusinessSessionId();
   const newMessageIds = sourceMessages.map(() => ({ id: createId(), clientId: createId() }));
-  const recoveryMarker = newSdkSessionId === null ? buildCodexForkRecoveryMarker({
+  const recoveryMarker = newSdkSessionId === null ? buildForkRecoveryMarker({
     source, rows: sourceMessages, newMessageIds, sessionId: newSessionId, now,
+    agentKind: 'codex', reason: 'native-session-recovery',
     targetContextWindow: await resolveDesktopHandoffWindow(sourceSessionId, { ...source, agentKind: 'codex' }),
   }) : undefined;
   // 任务级窗口档位与普通 fork 同口径继承（同一条任务意图）；这是偏好文件里的条目，

@@ -192,6 +192,13 @@ Codex/Pi 在受邀者原有隔离目录分叉；新原生会话登记到既有�
 不再误报「请在 AI 回复之后的提问上 fork」。超时、断线、无权限，以及旧运行端回的 `REMOTE_AGENT_UNAVAILABLE`
 仍按失败处理。实现见 `apps/desktop/src/main/maker-orchestration/fork.ts`，回归见 Desktop `fork.test.ts`。
 
+从聊天记录交接的分叉（Claude 缺锚点、同引擎重建后历史、ACP）与 Codex 原生历史恢复
+共用 `fork.session` 的原子保存：先按所选前缀准备交接，再将子任务、复制消息、隐藏的待发送
+交接和恢复卡一并提交。任一写入失败全部回滚，不留下缺交接的子任务；交接引用子任务自己的
+用户消息 ID，排序不早于复制历史，首轮仍由既有 pending-handoff 读取。数据库结构与远程
+请求均不变，旧运行端、自建中转无需升级；`fork.test.ts` 经真实入口与隔离 SQLite 覆盖
+交接／恢复卡写失败、前缀边界和待发送交接读取。
+
 回归：`remoteAgent.test.ts`、Desktop `fork.test.ts`、`guestHost.test.ts`、
 `groupRelay.test.ts` 与数据库 `client/__tests__/tx.test.ts`；三引擎沿用原生分叉入口。
 
