@@ -398,6 +398,60 @@ describe('switching a task onto a plugin engine', () => {
     expect(pendingSwitches.get('s1')).toBeUndefined();
   });
 
+  // 测试价值
+  // - 生产入口与可观察结果：performSessionAgentSwitch / applyPendingAgentSwitchIfIdle 提交切到插件引擎(acp)时
+  //   清除旧的供应商组绑定；仅登记意图或准入失败时不动绑定，DB 已提交后清绑定失败不推翻切换。
+  // - Bug／规则依据：2026-11-28 实机反馈（供应商组任务切到远程 Antigravity 因旧绑定未清导致远程 open
+  //   带 groupAssigned: true 被拒）；docs/product-rules/provider-groups.md §6、docs/dev-rules/acp-plugin-harness.md。
+  // - 现有覆盖缺口：已有用例只验证切入组时的 commitBinding，未覆盖切到插件引擎时清除既有组绑定。
+  // - 最小失败输入：内置任务(cc on mini)切到本地或远程插件引擎(acp)并提交。
+  // - tier：unit（与本文件同 harness 依赖注入）。
+  it.each([
+    { label: 'local plugin engine', targetDeviceId: undefined, failClear: false },
+    { label: 'remote plugin engine', targetDeviceId: 'studio', failClear: false },
+    { label: 'binding clear failure after DB commit', targetDeviceId: 'studio', failClear: true },
+  ])('clears stale provider-group binding only after committing switch to $label', async ({ targetDeviceId, failClear }) => {
+    const order: string[] = [];
+    const clearProviderGroupBinding = vi.fn(async () => {
+      order.push('clear');
+      if (failClear) throw new Error('binding file lock timeout');
+    });
+    const admitRemotePluginEngineTarget = vi.fn(async () => ({
+      model: 'gemini-4-neon',
+      effort: 'high',
+      permissionMode: 'default',
+      engineName: 'Antigravity',
+    }));
+    const { deps } = makeDeps(makeRow({ agentDeviceId: 'mini', providerId: 'anthropic' }), {
+      clearProviderGroupBinding,
+      ...(targetDeviceId ? { admitRemotePluginEngineTarget } : {}),
+      applyAgentSwitchToDb: vi.fn(async () => {
+        order.push('db');
+      }),
+    });
+
+    // Staging intent must not clear the binding before the switch actually commits.
+    await performSessionAgentSwitch(deps, {
+      sessionId: 's1',
+      targetAgentKind: 'acp',
+      model: targetDeviceId ? 'gemini-4-neon' : 'deepseek-v4',
+      providerId: ENGINE,
+      ...(targetDeviceId ? { agentDeviceId: targetDeviceId } : {}),
+    });
+    expect(clearProviderGroupBinding).not.toHaveBeenCalled();
+
+    await applyPendingAgentSwitchIfIdle(deps, 's1');
+    expect(clearProviderGroupBinding).toHaveBeenCalledTimes(1);
+    expect(clearProviderGroupBinding).toHaveBeenCalledWith('s1');
+    expect(order).toEqual(['db', 'clear']);
+    if (failClear) {
+      expect(deps.log.warn).toHaveBeenCalledWith(
+        'agent-switch: provider group binding clear failed after switch committed',
+        expect.objectContaining({ sessionId: 's1' }),
+      );
+    }
+  });
+
   it('switches to a shared plugin engine via remote admission, while rejecting raw wire peers or unwired remote targets', async () => {
     const admitRemotePluginEngineTarget = vi.fn(async () => ({
       model: 'deepseek-v4', effort: 'high', permissionMode: 'default', engineName: 'DeepSeek Harness',

@@ -414,6 +414,7 @@ export function createHostRuntimeSelection(deps: HostRuntimeSelectionDeps) {
     // switch with a non-empty agentDeviceId at its entry and refuses tasks running elsewhere at send,
     // so these are never reached; written out so a new one is a decision (explicit-ports.ts).
     resolveProviderGroupTarget: undefined,
+    clearProviderGroupBinding: undefined,
     assertAgentDeviceRouteUsable: undefined,
     describeAgentDevice: undefined,
     cancelPendingRemoteStart: undefined,

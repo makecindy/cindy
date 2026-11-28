@@ -273,6 +273,11 @@ export interface MakerSessionAgentSwitchHandlerDeps {
      */
     commitBinding?: () => Promise<void>;
   } | null>;
+  /**
+   * 切到不归内置供应商组管理的引擎(如插件引擎 `acp`)提交成功后清除旧的供应商组绑定，
+   * 避免残留绑定继续给远程打开打上 `groupAssigned` 或污染组状态。缺省 = 跳过。
+   */
+  clearProviderGroupBinding?(sessionId: string): Promise<void>;
   /** Same-engine choices use SET_MODEL validation; only the send boundary applies them. Caller owns the session lock. */
   selectSameAgentModel?(
     sessionId: string,
@@ -1106,6 +1111,16 @@ export async function performSessionAgentSwitch(
       });
     }
   }
+  async function clearBindingAfterSwitch(): Promise<void> {
+    try {
+      await deps.clearProviderGroupBinding?.(sessionId);
+    } catch (error) {
+      deps.log.warn('agent-switch: provider group binding clear failed after switch committed', {
+        sessionId,
+        err: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
   if (
     builtinTarget &&
     params.applyNow === true &&
@@ -1584,6 +1599,8 @@ export async function performSessionAgentSwitch(
     // (chatgpt-codex-connector P2, PR #5792 review)。
     if (commitProviderGroupBinding) {
       await commitBindingAfterSwitch();
+    } else if (toDbKind === 'acp') {
+      await clearBindingAfterSwitch();
     }
     if (!params.configStaged && !params.providerGroupRelocation && !params.scheduledModelSwitch && !params.preserveModelGroupBinding) {
       unbindModelGroupSession(sessionId);
