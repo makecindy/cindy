@@ -12180,6 +12180,17 @@
       "memberCount_other": "{{count}} Mitglieder",
       "nameLabel": "Gruppenname",
       "waitingConfirm": "{{name}} wartet auf dein Okay",
+      "assistantDevice": {
+        "title": "Die Gruppen-Cindy wartet, bis du einen Computer auswählst",
+        "onlyYou": "Nur für dich sichtbar",
+        "request": "„{{request}}“ startet, sobald du einen Computer auswählst.",
+        "requestUnknown": "Deine Anfrage startet, sobald du einen Computer auswählst.",
+        "requests_one": "{{count}} Anfrage wartet und startet, sobald du einen Computer auswählst.",
+        "requests_other": "{{count}} Anfragen warten und starten, sobald du einen Computer auswählst.",
+        "remember": "Deine weiteren Anfragen in dieser Gruppe nutzen denselben Computer. Du kannst ihn in den Gruppeneinstellungen ändern.",
+        "cancel": "Anfrage abbrechen",
+        "continue": "Weiter"
+      },
       "loadFailedTitle": "Dieser Gruppenchat konnte nicht geladen werden",
       "loadFailedDescription": "Cindy kann diesen Gruppenchat gerade nicht lesen. Versuch es erneut oder geh zurück zu den Freunden.",
       "unavailableTitle": "Dieser Gruppenchat ist nicht mehr verfügbar",
