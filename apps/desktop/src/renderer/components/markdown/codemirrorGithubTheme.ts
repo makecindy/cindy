@@ -224,6 +224,16 @@ function makeEditorTheme(c: typeof githubLightColors, isDark: boolean) {
         color: c.comment,
         // **不要**改 fontSize / lineHeight —— 见 .cm-gutters 上的注释。
       },
+      '.cm-hex-color-swatch': {
+        display: 'inline-block',
+        width: '0.9em',
+        height: '0.9em',
+        marginRight: '0.35em',
+        verticalAlign: '-0.12em',
+        border: '1px solid var(--border-default)',
+        borderRadius: '2px',
+        boxSizing: 'border-box',
+      },
       // Cursor color matches text color.
       '.cm-cursor, .cm-dropCursor': { borderLeftColor: c.text },
     },
