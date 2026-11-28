@@ -278,6 +278,7 @@ export function PluginTaskPrefs({
               disabled={saving || disabled}
               unifiedAgents={pickerAgents}
               pluginEngines={pluginEngines}
+              readModelGroupDevices={remote ? remoteGroups.read : undefined}
               {...(groupsAvailable ? {
                 modelGroups: {
                   config: groupsConfig,

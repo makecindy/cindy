@@ -14,6 +14,12 @@
  * - tier：unit(依赖注入，与 sessionAgentSwitchHandler.test.ts 同一套 harness 形状)。
  */
 import { describe, expect, it, vi } from 'vitest';
+import { estimateHandoffTokens } from '../agentHandoff';
+import {
+  getPluginEngineHandoffWindow,
+  observePluginEngineContextWindow,
+  resetPluginHarnessModelCacheForTests,
+} from '../../maker-host/pluginEngineModelCache';
 import { providerShareGuestPeer } from '@cindy/device-link';
 import { runDeviceLinkInvokeContext } from '../../device-link/invoke-context';
 
@@ -76,6 +82,73 @@ function makeDeps(row: AgentSwitchSessionRow, overrides: Partial<MakerSessionAge
   };
   return { deps, pendingSwitches };
 }
+
+describe('handoff budget when switching engines', () => {
+  const model = 'fixture-model';
+  // The shared builder must trim long history rather than only passing through a short fixture.
+  const history = Array.from({ length: 48 }, (_, index) => ({
+    role: 'user' as const, content: `[fixture:${index}] ${'文'.repeat(3950)}`, createdAt: index,
+  }));
+
+  async function switchWithHistory(
+    targetAgentKind: 'acp' | 'codex',
+    options: { windows?: number[]; nextInputChars?: number; observedProvider?: string;
+      observedModel?: string; agentDeviceId?: string } = {},
+  ): Promise<string> {
+    resetPluginHarnessModelCacheForTests();
+    const observe = observePluginEngineContextWindow(options.observedProvider ?? ENGINE);
+    for (const size of options.windows ?? []) observe(options.observedModel ?? model, size);
+    const row = makeRow();
+    const { deps } = makeDeps(row, {
+      listMessagesForHandoff: async () => history,
+      resolveLocalPluginHandoffWindow: getPluginEngineHandoffWindow,
+      resolveHandoffWindow: async () => 100_000,
+      admitRemotePluginEngineTarget: async (_device, target) => ({
+        model: target.model, effort: '', permissionMode: 'default', engineName: 'Fixture engine',
+      }),
+    });
+    await performSessionAgentSwitch(deps, {
+      sessionId: row.id,
+      targetAgentKind,
+      model,
+      providerId: targetAgentKind === 'acp' ? ENGINE : 'fixture-provider',
+      agentDeviceId: options.agentDeviceId,
+    });
+    await applyPendingAgentSwitchIfIdle(deps, row.id, { nextInputChars: options.nextInputChars });
+    const handoff = vi.mocked(deps.setPendingHandoff).mock.calls.at(-1)?.[1];
+    expect(handoff).toBeTruthy();
+    return handoff!;
+  }
+
+  it.each([
+    { name: 'reported million-token window', target: 'acp', windows: [1_000_000], min: 90_000, cap: 100_000 },
+    { name: 'latest valid report and next input reserve', target: 'acp',
+      windows: [1_000_000, 100_000, 4_000_001], nextInputChars: 40_000, min: 20_000, cap: 25_000 },
+    { name: 'unchanged built-in path', target: 'codex',
+      windows: [1_000_000], nextInputChars: 40_000, min: 26_000, cap: 30_000 },
+  ] satisfies Array<{ name: string; target: 'acp' | 'codex'; windows: number[];
+    nextInputChars?: number; min: number; cap: number }>)('uses the expected budget: $name', async (example) => {
+    const text = await switchWithHistory(example.target, example);
+    expect(estimateHandoffTokens(text)).toBeGreaterThan(example.min);
+    expect(estimateHandoffTokens(text)).toBeLessThanOrEqual(example.cap);
+  });
+
+  it.each([
+    { name: 'no report' },
+    { name: 'zero', windows: [0] },
+    { name: 'negative', windows: [-1] },
+    { name: 'non-finite', windows: [Infinity, NaN] },
+    { name: 'overlarge', windows: [4_000_001] },
+    { name: 'another model', windows: [1_000_000], observedModel: 'other-model' },
+    { name: 'another provider', windows: [1_000_000], observedProvider: 'acp-plugin:fixture:other' },
+    { name: 'remote target', windows: [1_000_000], agentDeviceId: 'fixture-remote' },
+    { name: 'shared target', windows: [1_000_000], agentDeviceId: 'share:fixture' },
+  ])('keeps the 16,000-character fallback: $name', async (example) => {
+    const text = await switchWithHistory('acp', example);
+    expect(text.length).toBeGreaterThan(12_000);
+    expect(text.length).toBeLessThanOrEqual(16_000);
+  });
+});
 
 describe('switching a task onto a plugin engine', () => {
   // #12397: a finished, separate automation task keeps its conversation and
@@ -396,6 +469,60 @@ describe('switching a task onto a plugin engine', () => {
     }));
     expect(deps.applyAgentSwitchToDb).not.toHaveBeenCalledWith('s1', expect.objectContaining({ agentDeviceId: null }));
     expect(pendingSwitches.get('s1')).toBeUndefined();
+  });
+
+  // 测试价值
+  // - 生产入口与可观察结果：performSessionAgentSwitch / applyPendingAgentSwitchIfIdle 提交切到插件引擎(acp)时
+  //   清除旧的供应商组绑定；仅登记意图或准入失败时不动绑定，DB 已提交后清绑定失败不推翻切换。
+  // - Bug／规则依据：2026-11-28 实机反馈（供应商组任务切到远程 Antigravity 因旧绑定未清导致远程 open
+  //   带 groupAssigned: true 被拒）；docs/product-rules/provider-groups.md §6、docs/dev-rules/acp-plugin-harness.md。
+  // - 现有覆盖缺口：已有用例只验证切入组时的 commitBinding，未覆盖切到插件引擎时清除既有组绑定。
+  // - 最小失败输入：内置任务(cc on mini)切到本地或远程插件引擎(acp)并提交。
+  // - tier：unit（与本文件同 harness 依赖注入）。
+  it.each([
+    { label: 'local plugin engine', targetDeviceId: undefined, failClear: false },
+    { label: 'remote plugin engine', targetDeviceId: 'studio', failClear: false },
+    { label: 'binding clear failure after DB commit', targetDeviceId: 'studio', failClear: true },
+  ])('clears stale provider-group binding only after committing switch to $label', async ({ targetDeviceId, failClear }) => {
+    const order: string[] = [];
+    const clearProviderGroupBinding = vi.fn(async () => {
+      order.push('clear');
+      if (failClear) throw new Error('binding file lock timeout');
+    });
+    const admitRemotePluginEngineTarget = vi.fn(async () => ({
+      model: 'gemini-4-neon',
+      effort: 'high',
+      permissionMode: 'default',
+      engineName: 'Antigravity',
+    }));
+    const { deps } = makeDeps(makeRow({ agentDeviceId: 'mini', providerId: 'anthropic' }), {
+      clearProviderGroupBinding,
+      ...(targetDeviceId ? { admitRemotePluginEngineTarget } : {}),
+      applyAgentSwitchToDb: vi.fn(async () => {
+        order.push('db');
+      }),
+    });
+
+    // Staging intent must not clear the binding before the switch actually commits.
+    await performSessionAgentSwitch(deps, {
+      sessionId: 's1',
+      targetAgentKind: 'acp',
+      model: targetDeviceId ? 'gemini-4-neon' : 'deepseek-v4',
+      providerId: ENGINE,
+      ...(targetDeviceId ? { agentDeviceId: targetDeviceId } : {}),
+    });
+    expect(clearProviderGroupBinding).not.toHaveBeenCalled();
+
+    await applyPendingAgentSwitchIfIdle(deps, 's1');
+    expect(clearProviderGroupBinding).toHaveBeenCalledTimes(1);
+    expect(clearProviderGroupBinding).toHaveBeenCalledWith('s1');
+    expect(order).toEqual(['db', 'clear']);
+    if (failClear) {
+      expect(deps.log.warn).toHaveBeenCalledWith(
+        'agent-switch: provider group binding clear failed after switch committed',
+        expect.objectContaining({ sessionId: 's1' }),
+      );
+    }
   });
 
   it('switches to a shared plugin engine via remote admission, while rejecting raw wire peers or unwired remote targets', async () => {

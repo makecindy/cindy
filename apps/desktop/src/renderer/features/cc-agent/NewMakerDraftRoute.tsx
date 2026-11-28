@@ -26,7 +26,7 @@ import {
 } from '@/lib/pluginEngineSelection';
 import { bindModelGroupSession, buildModelGroupRouteNote, commitModelGroupDecision, modelGroupLocationNameFrom, useModelGroups, writeModelGroupRouteNote } from '../model-groups/modelGroupsClient';
 import { modelGroupOwnerDevice, resolveDraftModelGroup } from '../model-groups/draftModelGroupRouting';
-import { implicitSourceRouteSelection } from '../model-groups/sourceRouteProviders';
+import { implicitSourceRouteSelection, userDefinedModelGroupRoutes } from '../model-groups/sourceRouteProviders';
 import { bindDeviceModelGroupSession, commitDeviceModelGroupDecision, useDeviceModelGroups, useDevicesModelGroups, writeDeviceModelGroupRouteNote } from '../model-groups/remoteModelGroups';
 import { findModelGroupRoute, MODEL_GROUPS_DEFAULTS, type ModelGroupResolvedRoute, type ModelGroupSelection } from '../../../shared/modelGroups';
 import { isPluginEngineEffort, isPluginEnginePermissionModeId } from '../../../shared/pluginEngines';
@@ -103,9 +103,13 @@ import { ChatInput } from '@/components/new-chat/ChatInput';
 import { useTaskBotMentions } from './hooks/useTaskBotMentions';
 import {
   WorktreeChipsRow,
+  type DivergedBranchResolveInfo,
+  type WorkspaceCleanupRequestInfo,
   type WorktreeDefaultSource,
   type CheckoutBranchView,
 } from '@/components/new-chat/WorktreeChipsRow';
+import { buildBranchConflictResolvePrompt } from '@/lib/branchConflictPrompt';
+import { buildBranchCleanupPrompt } from '@/lib/branchCleanupPrompt';
 import { checkDraftBranchBeforeStart } from './newMakerDraftBranchCheck';
 import {
   FolderPickerPopover,
@@ -162,6 +166,7 @@ import {
   patchVendorPrefs,
   patchVendorPrefsPreservingModelChoice,
   applySuggestedDefaultTuple,
+  applySilentSwitchDraftTuple,
   fallbackUnavailableVendor,
   markDefaultTupleCustomized,
   clearDefaultTupleTuningCustomization,
@@ -231,7 +236,7 @@ import {
   resolveDraftSessionProviderId,
   type DraftModelCalibrationResult,
 } from '@/lib/draftModelCalibration';
-import { resolveNewMakerDefaultTuple } from '@/lib/newMakerDefaultTuple';
+import { resolveNewMakerDefaultTuple, resolveSilentSwitchDraftTuple } from '@/lib/newMakerDefaultTuple';
 import { RUN_LOCATION_LOCAL } from '@/lib/providerRunLocation';
 import { useProviderBorrow } from '@/hooks/useProviderBorrow';
 import { showWorktreeError } from '@/lib/worktreeToast';
@@ -319,6 +324,7 @@ import { isGlobalDropIntercepted } from '@/lib/globalDropIntercept';
 import { classifyUnclassifiedDroppedItems, getDroppedFileItems } from '@/lib/fileDrop';
 import { createLogger } from '@/lib/logger';
 import { getRemoteWorkingDirErrorMessage } from './remoteWorkingDirErrors';
+import { isRemoteEngineMissing } from '@/lib/remoteCapabilityNotices';
 import {
   classifyRemoteWorktreeDiscardFailure,
   createRemoteSessionWithPrecreatedWorktree,
@@ -1599,9 +1605,9 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
   }, [rememberedModelGroupDeviceId, readDevicesModelGroups]);
   const modelGroupDevices = useMemo(
     () => modelGroupDeviceIds.flatMap((deviceId) => {
-      const config = devicesModelGroups.get(deviceId)?.config;
-      return config && config.routes.length > 0
-        ? [{ deviceId, name: deviceDisplayName(deviceId, undefined, selectableDevices), config }]
+      const routes = userDefinedModelGroupRoutes(devicesModelGroups.get(deviceId)?.config);
+      return routes.length > 0
+        ? [{ deviceId, name: deviceDisplayName(deviceId, undefined, selectableDevices), config: { routes } }]
         : [];
     }),
     [modelGroupDeviceIds, devicesModelGroups, selectableDevices],
@@ -1901,6 +1907,30 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
     draft.remoteHostId,
     hasLegacyDefaultChoice,
   ]);
+  // A remembered Cindy AI model that the catalog moved to another engine (silentSwitch) follows
+  // it, including customized drafts; otherwise the saved route blocks task creation. Local only:
+  // remote targets resolve engines in their own catalog.
+  const savedDraftPrefs = savedDraft.lastByVendor[savedDraft.vendor];
+  const silentSwitchDraftTuple = useMemo(
+    () =>
+      catalogDeviceId || savedDraft.remoteHostId || savedDraft.pluginEngine || localAlternate
+        ? null
+        : resolveSilentSwitchDraftTuple({
+            providers: localProviders,
+            providersLoading: localProvidersLoading,
+            availableAgents: availableVendors,
+            availableAgentsLoaded,
+            vendor: savedDraft.vendor,
+            model: savedDraftPrefs.model,
+            providerId: savedDraftPrefs.providerId ?? null,
+          }),
+    [catalogDeviceId, savedDraft.remoteHostId, savedDraft.pluginEngine, localAlternate, localProviders,
+      localProvidersLoading, availableVendors, availableAgentsLoaded, savedDraft.vendor, savedDraftPrefs.model,
+      savedDraftPrefs.providerId],
+  );
+  useEffect(() => {
+    if (silentSwitchDraftTuple) applySilentSwitchDraftTuple(savedDraft.vendor, silentSwitchDraftTuple);
+  }, [silentSwitchDraftTuple, savedDraft.vendor]);
   const {
     providers: deviceProviders,
     loading: deviceProvidersLoading,
@@ -2997,11 +3027,14 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
           // 「管理模型组」只在本机：另一台电脑的模式在那台上改。
           ...(isDeviceLinkDraft ? {} : { onManage: () => navigate('/settings?tab=model-groups') }),
           ...(modelGroupDevices.length > 0 ? { devices: modelGroupDevices } : {}),
-          ...(modelGroupDeviceIds.length > 0 ? { readDevices: readDevicesModelGroups } : {}),
         }
       : undefined,
-    [modelGroupsAllowed, modelGroupsConfig, effectiveDisplayModelGroup, navigate, isDeviceLinkDraft, effectiveRemoteHostId, modelGroupDevices, modelGroupDeviceIds, readDevicesModelGroups, setAlternateModel, forgetRemoteAlternateDraftModel],
+    [modelGroupsAllowed, modelGroupsConfig, effectiveDisplayModelGroup, navigate, isDeviceLinkDraft, effectiveRemoteHostId, modelGroupDevices, setAlternateModel, forgetRemoteAlternateDraftModel],
   );
+
+  const readModelGroupDevices = deviceLinkModelGroupsId
+    ? deviceModelGroups.read
+    : modelGroupDeviceIds.length > 0 ? readDevicesModelGroups : undefined;
 
   // 选中来源与型号之后的**档位**:按目标目录里该型号的档位表解析 —— 用户上次在这台设备
   // 为**这个型号**选的档 > 该型号自己记住的档 > 本机偏好(该模型支持才保留)> 模型默认档。
@@ -5651,7 +5684,8 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
             });
           } else {
             toast.error(
-              getRemoteWorkingDirErrorMessage(err, t) ?? t('ccAgent.draft.createSessionFailed'),
+              isRemoteEngineMissing(err) ? t('logic.errors.remoteEngineMissing')
+                : getRemoteWorkingDirErrorMessage(err, t) ?? t('ccAgent.draft.createSessionFailed'),
             );
           }
         } finally {
@@ -7087,7 +7121,9 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
             toast.error(
               extractIpcError(err)?.code === 'REMOTE_CODEX_SOURCE_UNSUPPORTED'
                 ? t('settings.remote.startSession.unsupportedCodexSource')
-                : (getRemoteWorkingDirErrorMessage(err, t) ?? t('ccAgent.draft.createSessionFailed')),
+                : isRemoteEngineMissing(err)
+                  ? t('logic.errors.remoteEngineMissing')
+                  : getRemoteWorkingDirErrorMessage(err, t) ?? t('ccAgent.draft.createSessionFailed'),
             );
           }
         } finally {
@@ -7584,6 +7620,10 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
                   return created?.sessionId;
                 })
           ).catch((err) => {
+            if (isRemoteEngineMissing(err)) {
+              log.warn('[draft goal] remote create-session has no available engine', err);
+              throw new Error(t('logic.errors.remoteEngineMissing'));
+            }
             const remoteWorkdirMessage = getRemoteWorkingDirErrorMessage(err, t);
             if (remoteWorkdirMessage) throw new Error(remoteWorkdirMessage);
             throw err;
@@ -8031,6 +8071,37 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
     });
     return true;
   }, []);
+  const handleResolveBranchConflict = useCallback(
+    (info: DivergedBranchResolveInfo) => {
+      const prompt = buildBranchConflictResolvePrompt(t, {
+        branch: info.branch,
+        remoteRef: `${info.remote}/${info.remoteBranch}`,
+        ahead: info.ahead,
+        behind: info.behind,
+        dirtyFiles: info.dirtyFiles,
+        conflictFiles: info.conflictFiles,
+        pushAfterSync: false,
+      });
+      if (fillComposerWithSuggestion(prompt)) {
+        toast.info(t('newChat.branchSync.agentPromptFilled'));
+      }
+    },
+    [fillComposerWithSuggestion, t],
+  );
+  const handleOrganizeWorkspace = useCallback(
+    (info: WorkspaceCleanupRequestInfo) => {
+      const prompt = buildBranchCleanupPrompt(t, {
+        scopes: info.scopes,
+        protectedWorktreePaths: info.protectedWorktreePaths,
+      });
+      // Explicit user action: run workspace cleanup directly in the primary repo instead of spawning another worktree.
+      if (wtEnabled) handleWtEnabledChange(false);
+      if (fillComposerWithSuggestion(prompt)) {
+        toast.info(t('newChat.workspaceCleanup.agentPromptFilled'));
+      }
+    },
+    [fillComposerWithSuggestion, handleWtEnabledChange, t, wtEnabled],
+  );
   // 一条建议的预览与读屏描述:内容与点击填入的 pluginSuggestionComposerText 一致,
   // 只是同名限定符按输入框胶囊的规则收起。插件可用时带 $指令(或插件调用说明);需要
   // 先安装的插件点击后走安装引导、不会立即填入,只显示建议本身。插件清单变化时随之重算。
@@ -8489,6 +8560,8 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
                   disabled={wtCreating || sendInFlight || directoryRecoverySelecting}
                   branchDisabled={wtBranchPreferenceLoading || wtBranchPreferenceSaving}
                   checkboxDisabled={wtPreferenceSaving}
+                  onResolveBranchConflict={handleResolveBranchConflict}
+                  onOrganizeWorkspace={handleOrganizeWorkspace}
                 />
               </div>
 
@@ -8572,6 +8645,7 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
                     onUnifiedDraftSelect={handleUnifiedDraftSelect}
                     {...(pluginModelsProps ? { pluginModels: pluginModelsProps } : {})}
                     {...(modelGroupsProps ? { modelGroups: modelGroupsProps } : {})}
+                    readModelGroupDevices={readModelGroupDevices}
                     {...(pluginEnginesProps ? { pluginEngines: pluginEnginesProps } : {})}
                     selectedFavoriteUid={selectedFavoriteUid}
                     // 「+」菜单协同模式项:普通 Lead 的项目/对话 draft 都可用 —— eligible 由

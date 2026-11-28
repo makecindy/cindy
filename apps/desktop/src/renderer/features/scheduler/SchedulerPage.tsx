@@ -754,6 +754,7 @@ export function SchedulerPage() {
             {selected && (
               <RunHistoryPane
                 schedule={selected}
+                deferral={runtimeSnapshot?.deferredSchedules?.find((item) => item.scheduleId === selected.id)}
                 connectionSetupVisible={!formOpen}
                 onRunNow={handleRunNow}
                 onTogglePause={handleTogglePause}

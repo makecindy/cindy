@@ -1,7 +1,7 @@
-import { modelRouteLocationKey } from '@cindy/maker-shared/model-route';
 import type { AgentKind, Effort, EngineKind } from '@cindy/maker-core';
 import type { Session as RendererSession } from '../../renderer/lib/ccAgent.types';
 import { makerToDbAgentKind } from '../../shared/agentKindConversion.js';
+import { modelGroupCandidateKey } from '../../shared/modelGroups.js';
 import { clearAllSessionProviders } from '../maker-host/session-provider-store.js';
 import { clearAllSessionRuntimeAxes } from '../maker-host/session-effort-store.js';
 import {
@@ -24,7 +24,11 @@ export interface SessionRuntimeProfile {
 }
 
 /** Plugin routes persist on the session row; only built-in engines use a temporary runtime override. */
-export type FallbackRouteProfile = SessionRuntimeProfile | (Omit<SessionRuntimeProfile, 'agentKind'> & { agentKind: 'acp' });
+export type FallbackRouteProfile = (SessionRuntimeProfile | (Omit<SessionRuntimeProfile, 'agentKind'> & { agentKind: 'acp' })) & {
+  /** Internal recovery-source identity, not part of the projected runtime profile. */
+  accountId?: string;
+};
+type FallbackRouteIdentity = Pick<FallbackRouteProfile, 'agentKind' | 'providerId' | 'model' | 'agentDeviceId' | 'accountId'>;
 
 export interface PendingSessionRuntimeMutation {
   generation: number;
@@ -120,10 +124,8 @@ interface SessionRuntimeControlState {
 const states = new Map<string, SessionRuntimeControlState>();
 let ownerEpoch = 0;
 
-function routeKey(
-  profile: Pick<SessionRuntimeProfile, 'providerId' | 'model' | 'agentDeviceId'> & { agentKind: EngineKind },
-): string {
-  return `${profile.agentKind}\u0000${profile.providerId ?? ''}\u0000${profile.model}${modelRouteLocationKey(profile.agentDeviceId)}`;
+function routeKey(profile: FallbackRouteIdentity): string {
+  return modelGroupCandidateKey({ ...profile, providerId: profile.providerId ?? '' });
 }
 
 function stateFor(sessionId: string): SessionRuntimeControlState {
@@ -357,12 +359,17 @@ export function acceptSessionRuntimeMutation(params: {
   const acceptedThinking =
     params.thinking ??
     (params.deferred && samePendingTarget ? previousPending?.thinking : undefined);
-  const accepted: PendingSessionRuntimeMutation | null = params.profile.agentKind === 'acp' ? null : {
-    generation: state.generation,
-    source: params.source,
-    profile: params.profile,
-    ...(acceptedThinking !== undefined ? { thinking: acceptedThinking } : {}),
-  };
+  let accepted: PendingSessionRuntimeMutation | null = null;
+  const candidate: FallbackRouteProfile = params.profile;
+  if (candidate.agentKind !== 'acp') {
+    const { accountId: _accountId, ...profile } = candidate;
+    accepted = {
+      generation: state.generation,
+      source: params.source,
+      profile,
+      ...(acceptedThinking !== undefined ? { thinking: acceptedThinking } : {}),
+    };
+  }
   state.pending = params.deferred ? accepted : null;
   state.pendingRouteExplicit = true;
   if (!params.deferred) state.effectiveOverride = accepted?.profile ?? null;
@@ -389,7 +396,7 @@ export function startSessionRuntimeFallbackTurn(sessionId: string): void {
 export function recordFailedSessionRuntimeFallbackCandidate(
   sessionId: string,
   expectedGeneration: number,
-  profile: Pick<SessionRuntimeProfile, 'providerId' | 'model' | 'agentDeviceId'> & { agentKind: EngineKind },
+  profile: FallbackRouteIdentity,
 ): boolean {
   const state = stateFor(sessionId);
   if (state.generation !== expectedGeneration) return false;

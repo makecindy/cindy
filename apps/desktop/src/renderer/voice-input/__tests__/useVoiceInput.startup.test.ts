@@ -626,9 +626,13 @@ describe('local voice capture independent of startup checks and cloud', () => {
       h.connection.resolve({ ok: true, runId: 'run' });
       await starting;
     });
-    expect(h.api.appendAudio.mock.calls.map(([frame]) => frame)).toEqual(frames);
+    expect(h.api.appendAudio.mock.calls.map(([frame]) => frame.pcm16k)).toEqual(frames.map((frame) => frame.pcm16k));
+    expect(h.api.appendAudio.mock.calls.map(([frame]) => frame.trace.chunkIndex)).toEqual(frames.map((frame) => frame.trace.chunkIndex));
     act(() => mocks.engines[0].emit(chunk(200)));
-    expect(h.api.appendAudio).toHaveBeenLastCalledWith(chunk(200));
+    expect(h.api.appendAudio).toHaveBeenLastCalledWith({
+      pcm16k: chunk(200).pcm16k,
+      trace: expect.objectContaining(chunk(200).trace),
+    });
     h.mute.resolve({ ok: true });
   });
 
@@ -682,7 +686,13 @@ describe('local voice capture independent of startup checks and cloud', () => {
       await starting;
       mocks.engines[0].emit(chunk(0));
     });
-    expect(h.api.appendAudio).toHaveBeenCalledExactlyOnceWith(chunk(0));
+    expect(h.api.appendAudio).toHaveBeenCalledExactlyOnceWith({
+      pcm16k: chunk(0).pcm16k,
+      trace: expect.objectContaining({
+        ...chunk(0).trace,
+        startCueEchoWindow: true,
+      }),
+    });
     expect(cue).toHaveBeenCalledTimes(1);
   });
 
@@ -707,7 +717,14 @@ describe('local voice capture independent of startup checks and cloud', () => {
       h.mute.resolve({ ok: true });
       await starting;
     });
-    expect(h.api.appendAudio.mock.calls.map(([frame]) => frame)).toEqual([chunk(0), chunk(1)]);
+    expect(h.api.appendAudio.mock.calls.map(([frame]) => ({
+      pcm16k: frame.pcm16k,
+      chunkIndex: frame.trace.chunkIndex,
+    }))).toEqual([
+      { pcm16k: chunk(0).pcm16k, chunkIndex: 0 },
+      { pcm16k: chunk(1).pcm16k, chunkIndex: 1 },
+    ]);
+    expect(h.api.appendAudio.mock.calls[1][0].trace.startCueEchoWindow).toBe(true);
   });
 
   it('closes a late microphone after cancellation, never plays the start cue and restores audio without waiting for the cap', async () => {

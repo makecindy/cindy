@@ -56,9 +56,17 @@ const routed = {
 describe('the host computer\'s model groups over device-link', () => {
   it('treats an older computer without the channel as having no model groups', async () => {
     const invoke = vi.fn(async () => {
-      throw Object.assign(new Error('[CHANNEL_NOT_ALLOWED] model-groups:get'), { code: 'CHANNEL_NOT_ALLOWED' });
+      throw Object.assign(new Error("channel 'model-groups:get' not allowed remotely"), { code: 'CHANNEL_NOT_ALLOWED' });
     }) as unknown as RemoteInvoke;
     await expect(createMobileMakerTransport({ deviceId: 'old-desk', invoke }).listModelGroups()).resolves.toBeNull();
+  });
+
+  // Cloud status gap 7 / unit: a local policy refusal must not become an
+  // unsupported section. Exercise the same read as the model picker.
+  it('does not treat a transport refusal as a missing model groups capability', async () => {
+    const error = Object.assign(new Error('Encrypted transport is required'), { code: 'CHANNEL_NOT_ALLOWED' });
+    const invoke = vi.fn().mockRejectedValue(error) as unknown as RemoteInvoke;
+    await expect(createMobileMakerTransport({ deviceId: 'desk', invoke }).listModelGroups()).rejects.toBe(error);
   });
 
   it('asks an older computer again after a while, so an upgrade shows its modes without reopening the app', async () => {
@@ -184,6 +192,15 @@ describe('host model group strategies', () => {
       modelName: 'GPT', sourceName: 'A', why: 'order', pickWhy: 'drainNext', quota: null, trace: [],
     });
     expect(buildHostModelGroupRouteNote(fromNewHost, 'Kept', t, 'en', () => '')?.reason).toBe('models.modelGroups.why.drainNext');
+    const usageHabitFromHost = parseHostModelGroupResult({
+      outcome: 'routed', groupName: 'G', route: { agentKind: 'codex', providerId: 'a', model: 'gpt' },
+      modelName: 'GPT', sourceName: 'A', why: 'expiring', pickWhy: 'usageHabit', quota: { usedPercent: 30, resetAtMs: null }, trace: [],
+    });
+    expect(buildHostModelGroupRouteNote(usageHabitFromHost, 'Kept', t, 'en', () => '')?.reason).toBe('models.modelGroups.why.usageHabitQuota:70');
+    expect(reason('usageHabit')).toBe('models.modelGroups.why.usageHabit');
+    expect(reason('autoBalance')).toBe('models.modelGroups.why.autoBalance');
+    expect(reason('lessBusy')).toBe('models.modelGroups.why.lessBusy');
+    expect(reason('paygFallback')).toBe('models.modelGroups.why.paygFallback');
   });
 
   it('preserves route fastMode, parses sourceRoutes + expandedRoutes, and parses binding / switchOffer', async () => {
@@ -364,5 +381,66 @@ describe('host model group strategies', () => {
     );
     expect(managed.providers.map((item) => item.id)).toEqual(['sroute:auto:openai']);
     expect(managed.shownModelId('byok-1', 'byok/gpt-6', 'src:gpt-6')).toBe('gpt-6');
+  });
+
+  // 测试价值
+  // - 生产入口与可观察结果：parseHostModelGroupsPayload 与 withMobileSourceRouteProviders / isModelVisible。
+  // - Bug／规则依据：2026-11-28 对齐桌面端 MODEL_GROUP_EXPANDED_LIMIT(512) 避免截断，并防止首成员 hidden/suspended
+  //   污染合并供应商及按真实成员判定模型可见性。
+  // - 现有覆盖缺口：此前用例未测试超过 128 条展开路由、首成员隐藏/停用及成员级可见性覆盖。
+  // - 最小失败输入：150 条 expandedRoutes 被旧上限 128 截断；首成员 hidden=true/suspended=true 导致合并条目继承隐藏态。
+  // - tier：unit（纯函数，Node 环境）。
+  it('retains up to 512 expanded routes, ignores hidden/suspended first member, and evaluates member visibility on mobile', () => {
+    const manyExpanded = Array.from({ length: 150 }, (_, index) => ({
+      id: `src:m-${index}`,
+      name: `Model ${index}`,
+      parent: { id: 'auto:openai', name: 'OpenAI' },
+      candidates: [{ agentKind: 'codex' as const, providerId: 'openai', model: `m-${index}` }],
+    }));
+    const bigPayload = parseHostModelGroupsPayload({
+      routes: [],
+      sourceRoutes: [{ id: 'auto:openai', name: 'OpenAI', sources: [{ providerId: 'openai' }] }],
+      expandedRoutes: manyExpanded,
+    });
+    expect(bigPayload?.expandedRoutes).toHaveLength(150);
+
+    const hiddenFirst = {
+      id: 'openai', name: 'OpenAI', source: 'builtin', agents: ['codex'], auth: { method: 'api-key' },
+      connected: true, hidden: true, suspended: true, subscriptionAccountPool: 'openai',
+      routing: { codex: {} },
+      models: { codex: [{ id: 'gpt-6', name: 'GPT-6', defaultEnabled: false, efforts: [] }] },
+    } as unknown as import('@cindy/model-providers').ProviderView;
+    const healthySecond = {
+      id: 'byok-1', name: 'BYOK', source: 'builtin', agents: ['codex'], auth: { method: 'api-key' },
+      connected: true, routing: { codex: {} },
+      models: { codex: [{ id: 'byok/gpt-6', name: 'GPT-6', defaultEnabled: false, efforts: [] }] },
+    } as unknown as import('@cindy/model-providers').ProviderView;
+    const payload = parseHostModelGroupsPayload({
+      routes: [],
+      sourceRoutes: [{ id: 'auto:openai', name: 'OpenAI', sources: [{ providerId: 'openai' }, { providerId: 'byok-1' }] }],
+      expandedRoutes: [{
+        id: 'src:gpt-6',
+        name: 'GPT-6',
+        parent: { id: 'auto:openai', name: 'OpenAI' },
+        candidates: [
+          { agentKind: 'codex', providerId: 'openai', model: 'gpt-6' },
+          { agentKind: 'codex', providerId: 'byok-1', model: 'byok/gpt-6' },
+        ],
+      }],
+    });
+    const listed = withMobileSourceRouteProviders([hiddenFirst, healthySecond], payload);
+    const merged = listed.providers.find((item) => item.id === 'sroute:auto:openai')!;
+    expect(merged.hidden).toBeUndefined();
+    expect(merged.suspended).toBeUndefined();
+    expect(merged.subscriptionAccountPool).toBeUndefined();
+    expect(merged.connected).toBe(true);
+    expect(listed.hit('sroute:auto:openai', 'byok/gpt-6')?.candidate.providerId).toBe('byok-1');
+    expect(listed.usageMember('sroute:auto:openai')?.provider.id).toBe('byok-1');
+    expect(
+      listed.isModelVisible('sroute:auto:openai', 'byok/gpt-6', 'codex', (member) => member.providerId === 'byok-1'),
+    ).toBe(true);
+    expect(
+      listed.isModelVisible('sroute:auto:openai', 'byok/gpt-6', 'codex', () => false),
+    ).toBe(false);
   });
 });

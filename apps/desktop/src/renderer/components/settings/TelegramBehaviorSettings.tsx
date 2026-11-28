@@ -58,8 +58,6 @@ function SegmentedRow<T extends string>(props: {
         value={props.value}
         onValueChange={props.onChange}
         fullWidth
-        height={36}
-        optionHeight={30}
         options={props.options.map((option) => ({
           value: option,
           label: props.optionLabel(option),
@@ -86,9 +84,12 @@ function SettingsRequestError(props: { message: string; retryLabel: string; onRe
 export function TelegramBehaviorSettings({
   source = 'personal',
   bindingId,
+  hideTitle = false,
 }: {
   source?: SettingsSource;
   bindingId?: string;
+  /** 单独成页时页标题已经说了这是什么。 */
+  hideTitle?: boolean;
 }) {
   const { t } = useTranslation();
   const { api } = useSettingsTarget();
@@ -248,6 +249,7 @@ export function TelegramBehaviorSettings({
       source={source}
       behavior={behavior}
       patch={patch}
+      hideTitle={hideTitle}
       notice={
         error !== null && (
           <SettingsRequestError
@@ -265,19 +267,23 @@ export function TelegramBehaviorSettingsView({
   behavior,
   patch,
   notice,
+  hideTitle = false,
 }: {
   source?: SettingsSource;
   behavior: Behavior;
   patch(change: Partial<Behavior>): void;
   notice?: ReactNode;
+  hideTitle?: boolean;
 }) {
   const { t } = useTranslation();
   const root = i18nRoot(source);
   return (
     <div className="flex flex-col gap-4">
-      <div className="text-13 font-medium text-[var(--settings-section-title)]">
-        {t(`${root}.behavior.title`)}
-      </div>
+      {hideTitle ? null : (
+        <div className="text-13 font-medium text-[var(--settings-section-title)]">
+          {t(`${root}.behavior.title`)}
+        </div>
+      )}
       {notice}
       <SegmentedRow
         source={source}
@@ -326,7 +332,7 @@ async function persistTelegramPersona(
   }
 }
 
-export function TelegramPersonaSettings() {
+export function TelegramPersonaSettings({ hideTitle = false }: { hideTitle?: boolean } = {}) {
   const { t } = useTranslation();
   const { api } = useSettingsTarget();
   // The close-time save runs in an unmount cleanup; read the current translator there.
@@ -391,9 +397,9 @@ export function TelegramPersonaSettings() {
 
   return (
     <div className="flex flex-col gap-3">
-      <div className="text-13 font-medium text-[var(--settings-section-title)]">
+      {hideTitle ? null : <div className="text-13 font-medium text-[var(--settings-section-title)]">
         {t('settings.telegramBot.persona.title')}
-      </div>
+      </div>}
       <label
         className="text-12 font-medium text-[var(--settings-section-desc)]"
         style={{ letterSpacing: '0.12px' }}
@@ -460,7 +466,11 @@ export function TelegramPersonaSettings() {
 }
 
 /** 「群聊」节: bot 进过的群逐行切换参与模式(仅@ / 全响应·自主判断)。 */
-export function TelegramGroupActivationSettings() {
+export function TelegramGroupActivationSettings({
+  hideTitle = false,
+}: {
+  hideTitle?: boolean;
+} = {}) {
   const { t } = useTranslation();
   const { api } = useSettingsTarget();
   const [groups, setGroups] = useState<TelegramHookKnownGroup[] | null>(null);
@@ -577,6 +587,7 @@ export function TelegramGroupActivationSettings() {
     <TelegramGroupActivationSettingsView
       groups={groups}
       setMode={setMode}
+      hideTitle={hideTitle}
       notice={
         error !== null && (
           <SettingsRequestError
@@ -594,19 +605,21 @@ export function TelegramGroupActivationSettingsView({
   setMode,
   notice,
   contactsHint,
+  hideTitle = false,
 }: {
   groups: readonly TelegramHookKnownGroup[];
   setMode(id: string, mode: TelegramHookGroupActivationMode): void;
   notice?: ReactNode;
   contactsHint?: ReactNode;
+  hideTitle?: boolean;
 }) {
   const { t } = useTranslation();
   const root = i18nRoot('personal');
   return (
     <div className="flex flex-col gap-3">
-      <div className="text-13 font-medium text-[var(--settings-section-title)]">
+      {hideTitle ? null : <div className="text-13 font-medium text-[var(--settings-section-title)]">
         {t(`${root}.groups.title`)}
-      </div>
+      </div>}
       <div className="text-11 leading-[1.5] text-[var(--text-secondary)]">
         {t(`${root}.groups.hint`)}
       </div>
@@ -632,8 +645,6 @@ export function TelegramGroupActivationSettingsView({
               aria-label={`${group.chatName || group.chatId} · ${t(`${root}.groups.title`)}`}
               value={group.activation}
               onValueChange={(mode) => setMode(group.chatId, mode)}
-              height={34}
-              optionHeight={28}
               optionClassName="text-11"
               options={(['mention', 'always'] as const).map((mode) => ({
                 value: mode,

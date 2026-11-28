@@ -169,3 +169,15 @@ it('still bounds active work and releases its quota when the operations finish',
   await vi.advanceTimersByTimeAsync(5 * 60_000);
   expect(vi.getTimerCount()).toBe(0);
 });
+
+it('validates and forwards explicit rebase strategy on sync requests', async () => {
+  expect(() => handlers.sync({}, { ...req, strategy: 'hard-reset' })).toThrow('INVALID_PARAMS');
+  expect(calls.sync).not.toHaveBeenCalled();
+
+  calls.sync.mockResolvedValue({ updated: 2, syncedMode: 'rebase' });
+  expect(await handlers.sync({}, { ...req, strategy: 'rebase' })).toEqual({
+    updated: 2,
+    syncedMode: 'rebase',
+  });
+  expect(calls.sync).toHaveBeenCalledWith({ ...req, strategy: 'rebase' });
+});

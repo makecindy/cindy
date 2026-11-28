@@ -1,6 +1,8 @@
-// Own-window backdrop only. No screen capture, global input, or foreign window IDs.
-// CGS is private SPI: resolve at runtime and report failure to the material fallback.
+// Own-window backdrop and fullscreen-space inspection only. No screen capture,
+// global input, or foreign window IDs.
+// CGS is private SPI: resolve at runtime and report failure to the caller's fallback.
 #import <Cocoa/Cocoa.h>
+#import <CoreGraphics/CoreGraphics.h>
 #import <QuartzCore/QuartzCore.h>
 #include <node_api.h>
 #include <dlfcn.h>
@@ -12,6 +14,10 @@
 
 using Connection = uint32_t (*)(void);
 using SetBlur = int32_t (*)(uint32_t, uint32_t, uint32_t);
+using CopySpacesForWindows = CFArrayRef (*)(uint32_t, uint32_t, CFArrayRef);
+using SpaceGetType = int32_t (*)(uint32_t, uint64_t);
+
+static constexpr uint32_t kCGSAllSpacesMask = 0x7;
 
 static char originalBackgroundKey;
 static char sidebarKey;
@@ -206,11 +212,123 @@ static napi_value Apply(napi_env env, napi_callback_info info) {
   return result;
 }
 
+static napi_value InspectFullscreen(napi_env env, napi_callback_info info) {
+  size_t argc = 1, length = 0;
+  napi_value args[1], result;
+  void *bytes = nullptr;
+  bool isBuffer = false;
+  napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+  if (argc != 1 || napi_is_buffer(env, args[0], &isBuffer) != napi_ok || !isBuffer ||
+      napi_get_buffer_info(env, args[0], &bytes, &length) != napi_ok || length != sizeof(void *)) {
+    napi_throw_type_error(env, nullptr, "Invalid window handle");
+    return nullptr;
+  }
+  if (![NSThread isMainThread]) {
+    napi_get_null(env, &result);
+    return result;
+  }
+  @autoreleasepool {
+    NSWindow *target = OwnedWindow(bytes);
+    if (!target) {
+      napi_get_null(env, &result);
+      return result;
+    }
+
+    bool styleMaskFullScreen = (target.styleMask & NSWindowStyleMaskFullScreen) != 0;
+    bool onActiveSpace = [target isOnActiveSpace];
+    bool visible = [target isVisible];
+    NSInteger winNum = target.windowNumber;
+
+    napi_value obj;
+    napi_create_object(env, &obj);
+
+    napi_value styleVal, activeVal, visibleVal;
+    napi_get_boolean(env, styleMaskFullScreen, &styleVal);
+    napi_get_boolean(env, onActiveSpace, &activeVal);
+    napi_get_boolean(env, visible, &visibleVal);
+    napi_set_named_property(env, obj, "styleMaskFullScreen", styleVal);
+    napi_set_named_property(env, obj, "onActiveSpace", activeVal);
+    napi_set_named_property(env, obj, "visible", visibleVal);
+
+    static void *library = dlopen(
+      "/System/Library/Frameworks/ApplicationServices.framework/ApplicationServices", RTLD_LAZY);
+    static Connection connection = library ? (Connection)dlsym(library, "CGSMainConnectionID") : nullptr;
+    static CopySpacesForWindows copySpaces =
+      library ? (CopySpacesForWindows)dlsym(library, "CGSCopySpacesForWindows") : nullptr;
+    static SpaceGetType spaceGetType =
+      library ? (SpaceGetType)dlsym(library, "CGSSpaceGetType") : nullptr;
+
+    napi_value spaceTypesVal;
+    if (connection && copySpaces && spaceGetType) {
+      if (winNum <= 0) {
+        // Window is not realized by WindowServer yet; treat as empty, not a failed query.
+        napi_create_array(env, &spaceTypesVal);
+      } else {
+        uint32_t cid = connection();
+        CFArrayRef rawSpaces = cid != 0
+          ? copySpaces(cid, kCGSAllSpacesMask, (__bridge CFArrayRef)@[@((uint64_t)winNum)])
+          : nullptr;
+        if (!rawSpaces) {
+          // Query failed: return null so the caller falls back to public CGWindowBounds.
+          napi_get_null(env, &spaceTypesVal);
+        } else {
+          NSArray *spaces = CFBridgingRelease(rawSpaces);
+          napi_create_array(env, &spaceTypesVal);
+          uint32_t index = 0;
+          for (id item in spaces) {
+            if (![item isKindOfClass:[NSNumber class]]) continue;
+            int32_t spaceType = spaceGetType(cid, [(NSNumber *)item unsignedLongLongValue]);
+            napi_value numVal;
+            napi_create_int32(env, spaceType, &numVal);
+            napi_set_element(env, spaceTypesVal, index++, numVal);
+          }
+        }
+      }
+    } else {
+      napi_get_null(env, &spaceTypesVal);
+    }
+    napi_set_named_property(env, obj, "spaceTypes", spaceTypesVal);
+
+    napi_value cgBoundsVal, cgOnScreenVal;
+    napi_get_null(env, &cgBoundsVal);
+    napi_get_null(env, &cgOnScreenVal);
+    if (winNum > 0) {
+      CFArrayRef rawList =
+        CGWindowListCopyWindowInfo(kCGWindowListOptionIncludingWindow, (CGWindowID)winNum);
+      NSArray *list = rawList ? CFBridgingRelease(rawList) : nil;
+      if (list.count > 0 && [list.firstObject isKindOfClass:[NSDictionary class]]) {
+        NSDictionary *entry = list.firstObject;
+        CFDictionaryRef boundsDict = (__bridge CFDictionaryRef)entry[(id)kCGWindowBounds];
+        CGRect rect = CGRectZero;
+        if (boundsDict && CGRectMakeWithDictionaryRepresentation(boundsDict, &rect)) {
+          napi_create_object(env, &cgBoundsVal);
+          napi_value xVal, yVal, wVal, hVal;
+          napi_create_double(env, rect.origin.x, &xVal);
+          napi_create_double(env, rect.origin.y, &yVal);
+          napi_create_double(env, rect.size.width, &wVal);
+          napi_create_double(env, rect.size.height, &hVal);
+          napi_set_named_property(env, cgBoundsVal, "x", xVal);
+          napi_set_named_property(env, cgBoundsVal, "y", yVal);
+          napi_set_named_property(env, cgBoundsVal, "width", wVal);
+          napi_set_named_property(env, cgBoundsVal, "height", hVal);
+        }
+        NSNumber *onScreenNum = entry[(id)kCGWindowIsOnscreen];
+        napi_get_boolean(env, onScreenNum != nil && [onScreenNum boolValue], &cgOnScreenVal);
+      }
+    }
+    napi_set_named_property(env, obj, "cgBounds", cgBoundsVal);
+    napi_set_named_property(env, obj, "cgOnScreen", cgOnScreenVal);
+
+    return obj;
+  }
+}
+
 NAPI_MODULE_INIT() {
   napi_property_descriptor properties[] = {
     {"apply", nullptr, Apply, nullptr, nullptr, nullptr, napi_default, nullptr},
     {"setSidebar", nullptr, SetSidebar, nullptr, nullptr, nullptr, napi_default, nullptr},
+    {"inspectFullscreen", nullptr, InspectFullscreen, nullptr, nullptr, nullptr, napi_default, nullptr},
   };
-  napi_define_properties(env, exports, 2, properties);
+  napi_define_properties(env, exports, 3, properties);
   return exports;
 }

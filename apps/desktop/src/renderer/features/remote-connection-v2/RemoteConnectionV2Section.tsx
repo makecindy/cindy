@@ -255,8 +255,7 @@ export function RemoteConnectionV2Section({
       value={effectiveTab}
       onValueChange={setActiveTab}
       aria-label={t('settings.remoteControl.v2.tabs.aria')}
-      height={28}
-      optionHeight={24}
+      density="sm"
       options={[
         { value: 'devices', label: t('settings.remoteControl.v2.tabs.devices') },
         { value: 'providers', label: t('settings.remoteControl.v2.tabs.providers') },
