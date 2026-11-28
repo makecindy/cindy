@@ -378,7 +378,7 @@ import {
 } from '../appSessionState.js';
 import { touchRecentWorkdir } from '../localDb/ipc/recentWorkdirs.js';
 import { createRemoteSessionOpener, createRemoteSessionExecutionResolver } from './remoteSessionCreation.js';
-import { projectForNewTask, registeredTaskProject, listVisibleRegisteredProjectPaths } from '../mcp-integrations/projectManagementCore.js';
+import { projectForNewTask, registeredTaskProject, validateGroupProjectDir, listVisibleRegisteredProjectPaths } from '../mcp-integrations/projectManagementCore.js';
 import { teammateWorkspaceDir } from './botProjectMemory.js';
 import { resolveSessionProject, listProjects } from '../mcp-integrations/projectManagement.js';
 import { isRetainableProjectSession } from '../../shared/sessionSource.js';
@@ -14355,16 +14355,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     hasPendingInteraction: (sessionId) => hasPendingAgentInteractionForSession(sessionId),
     decidePlan: createBotGroupPlanDecider((prompt, opts) => requestUtilityText(maker, prompt, { ...opts, source: 'group-planning' })),
     workDir: botGroupWorkDir,
-    validateProjectDir: async (dir) => {
-      try {
-        const checked = await registeredTaskProject(dir);
-        return checked
-          ? { ok: true as const, dir: checked }
-          : { ok: false as const, message: '这个文件夹不能用作项目文件夹' };
-      } catch {
-        return { ok: false as const, message: '项目文件夹不存在' };
-      }
-    },
+    validateProjectDir: validateGroupProjectDir,
     // The group's Cindy (bot-group-chat.md §9): one ordinary visible task per group, opened
     // like a new task of this user's (new-task model and permission).
     ensureGroupAssistantSession: async ({ sessionId, title, projectDir }) => {

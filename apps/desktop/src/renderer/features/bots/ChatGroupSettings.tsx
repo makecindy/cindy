@@ -219,8 +219,10 @@ export function ChatGroupSettings({ group }: { group: BotGroupSummary }) {
     try {
       const result = await window.electronAPI.maker.updateBotGroup({ groupId: group.id, ...input });
       if (!isDataOwnerGenerationCurrent(generation)) return;
-      if (!result.ok) setError(t('repository' in input ? key('githubRepoSaveFailed') : 'bots.groupChat.settings.projectDirSaveFailed'));
-      else {
+      if (!result.ok) {
+        const folderHint = result.errorCode === 'PROJECT_NOT_REGISTERED' ? 'projectDirNotRegistered' : 'projectDirSaveFailed';
+        setError(t('repository' in input ? key('githubRepoSaveFailed') : shared(folderHint)));
+      } else {
         if (result.folderRepository) setProjectNotice(t(key(result.folderRepository.filled ? 'folderRepoFilled' : 'folderRepoDiffers'), { repo: result.folderRepository.repo }));
         refreshBotGroups();
       }
