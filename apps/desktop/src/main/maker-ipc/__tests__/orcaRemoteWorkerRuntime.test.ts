@@ -1026,6 +1026,29 @@ describe('orca remote worker runtime', () => {
     expect(runtime.isReachable('proxy-1')).toBe(true);
   });
 
+  // #13619, unit: a lost ACK with no delivery evidence must retain the input for later reconciliation.
+  it.each(['unknown', 'old-peer', 'read-error'])('reconciles the original input after %s', async reason => {
+    const { runtime, state, deps, invoke } = setup({ enqueueError: Object.assign(new Error('lost'), { inFlight: true }) });
+    const original = invoke.getMockImplementation()!;
+    let awaitingReceipt = true;
+    invoke.mockImplementation(async (device, channel, args) => {
+      if (awaitingReceipt && channel === 'maker:input:get-projection') {
+        if (reason === 'read-error') throw new Error('unavailable');
+        if (reason === 'old-peer') return {};
+      }
+      return original(device, channel, args);
+    });
+    await expect(runtime.dispatch({ proxySessionId: 'proxy-1', rawContent: 'work', clientId: 'c-1' }))
+      .resolves.toMatchObject({ mode: 'unknown' });
+    expect(runtime.hasPendingReport('proxy-1')).toBe(true);
+    awaitingReceipt = false;
+    state.receipts['c-1'] = 'accepted';
+    state.running = true;
+    await runtime.pollNow();
+    expect(deps.onTurnStarted).toHaveBeenCalledOnce();
+    expect(invoke.mock.calls.filter(([, channel]) => channel === 'maker:input:enqueue')).toHaveLength(1);
+  });
+
   it('recovers the accepting Agent after a lost enqueue acknowledgement without resending', async () => {
     const lost = Object.assign(new Error('[INVOKE_TIMEOUT] no reply'), { inFlight: true });
     const { runtime, invoke } = setup({ agentKind: 'cc', enqueueError: lost,

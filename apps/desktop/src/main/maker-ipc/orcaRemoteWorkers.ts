@@ -817,6 +817,18 @@ export function createOrcaRemoteWorkers(deps: OrcaRemoteWorkersDeps) {
             }
             await params.onAcceptedCommit?.();
             runtime.confirmDispatchAccepted(params.targetSessionId, clientId);
+            if (result.mode === 'unknown') {
+              return {
+                ok: false,
+                dispatchOutcome: {
+                  ...meta,
+                  kind: 'host-send',
+                  accepted: false,
+                  code: 'DELIVERY_UNKNOWN',
+                  message: '远端未确认消息是否送达，正在按原消息核对，请勿重复派发。',
+                },
+              };
+            }
             return {
               ok: true,
               mode: result.mode,

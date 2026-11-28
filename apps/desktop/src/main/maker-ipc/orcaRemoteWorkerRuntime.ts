@@ -55,7 +55,7 @@ type SettleReport = (commit: (markWorkerDone: boolean) => Promise<boolean>) => P
 export type RemoteWorkerDispatchResult =
   | {
       ok: true;
-      mode: 'dispatched' | 'queued';
+      mode: 'dispatched' | 'queued' | 'unknown';
       /** Accepted input's Agent; queued deliveries retain the pre-enqueue Agent. */
       agentKind: AgentInputCreateOpts['agentKind'];
     }
@@ -937,15 +937,15 @@ export function createOrcaRemoteWorkerRuntime(deps: OrcaRemoteWorkerRuntimeDeps)
         }
         if (!current(state) || state.awaiting !== prepared)
           throw new Error('remote worker owner or dispatch changed');
-        const accept = async (): Promise<RemoteWorkerDispatchResult> => {
+        const resolveReceipt = async (fallback: 'queued' | 'unknown'): Promise<RemoteWorkerDispatchResult> => {
           setReachable(ref.deviceId, true);
           schedule();
           // Enqueue only acknowledges durable delivery. The send boundary can
           // still be applying a harness switch; neither the earlier session row
           // nor the last running-state poll identifies the accepting runtime.
           // Read the engine stamped on this exact accepted input, even if the
-          // session has since switched again. Missing/old-peer evidence stays
-          // queued and must never turn an already delivered input into a retry.
+          // session has since switched again. Without that evidence, retain the
+          // enqueue or projection result and keep tracking this clientId.
           try {
             const rows = await deps.invoke(ref.deviceId, 'local-db:messages:around-client-id', [
               ref.remoteSessionId, params.clientId, { radius: 0, contentCharLimit: 1 },
@@ -961,7 +961,7 @@ export function createOrcaRemoteWorkerRuntime(deps: OrcaRemoteWorkerRuntimeDeps)
             // The input may still be queued, or this read may be unavailable.
             // Existing polling owns recovery; do not re-enqueue or tear down the link.
           }
-          return { ok: true, mode: 'queued', agentKind: createOpts.agentKind };
+          return { ok: true, mode: fallback, agentKind: createOpts.agentKind };
         };
         try {
           await deps.invoke(ref.deviceId, 'maker:input:enqueue', [ref.remoteSessionId, item]);
@@ -974,13 +974,13 @@ export function createOrcaRemoteWorkerRuntime(deps: OrcaRemoteWorkerRuntimeDeps)
           ) {
             const delivery = await readDelivery(ref, [params.clientId]).catch(() => null);
             const delivered = delivery?.states[0] ?? 'unknown';
-            if (delivered === 'pending' || delivered === 'accepted') return accept();
+            if (delivered === 'pending' || delivered === 'accepted') return resolveReceipt('queued');
             // 已发出但无法确认的请求保留身份，后续轮询核对，不让调用方重派同一工作。
-            if (delivered === 'unknown') return accept();
+            if (delivered !== 'removed') return resolveReceipt('unknown');
           }
           throw err;
         }
-        return accept();
+        return resolveReceipt('queued');
       } catch (err) {
         if (prepared && current(state) && state.awaiting === prepared) {
           state.awaiting = prepared.previous;

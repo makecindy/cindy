@@ -57,7 +57,7 @@ export interface OrcaWorkerLinkSnapshot {
 
 /** send_to_worker 对外允许暴露的错误码，内部 host-send code 必须在 service 边界归一。 */
 export type SendToWorkerFailureCode =
-  'NOT_FOUND' | 'ARCHIVED' | 'DELETED' | 'BUSY' | 'AGENT_NOT_READY' | 'INVALID_ARGS' | 'INTERNAL';
+  'NOT_FOUND' | 'ARCHIVED' | 'DELETED' | 'BUSY' | 'AGENT_NOT_READY' | 'INVALID_ARGS' | 'INTERNAL' | 'DELIVERY_UNKNOWN';
 
 /** provider / IPC 共享的 send_to_worker 结果；worker 派活不允许创建新 session。 */
 export type SendToWorkerResult =
@@ -1147,6 +1147,8 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
     if (outcome.kind === 'host-send') {
       const errorCode: SendToWorkerFailureCode = (() => {
         switch (outcome.code) {
+          case 'DELIVERY_UNKNOWN':
+            return 'DELIVERY_UNKNOWN';
           case 'SESSION_NOT_FOUND':
             return 'NOT_FOUND';
           case 'SESSION_RUNNING':
@@ -1469,7 +1471,9 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
       }
 
       if (!result.ok) {
-        await rollbackAccepted();
+        if (!(result.dispatchOutcome.kind === 'host-send' && result.dispatchOutcome.code === 'DELIVERY_UNKNOWN')) {
+          await rollbackAccepted();
+        }
         return { result, wasLiveBeforeDispatch };
       }
       if (result.mode === 'dispatched') {
