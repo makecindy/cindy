@@ -3769,6 +3769,22 @@ describe('computer mcp integration', () => {
     });
   });
 
+  // Tier: unit. A mirror bootstrap miss must re-evaluate PAC for GitHub.
+  it('uses the upstream proxy after the direct regional bootstrap fails to download', async () => {
+    setPlatform('linux');
+    resolveDesktopOutboundProxyMock.mockResolvedValueOnce(null).mockResolvedValueOnce('http://127.0.0.1:7897');
+    mockDriverSpawn({ exitCode: 75 });
+    mockDriverSpawn({ stdout: 'installed\n' });
+    mockDriverSpawn({ stdout: 'cua-driver 0.5.8\n' });
+    mockDriverSpawn({ stdout: 'Cua Driver daemon is running\n' });
+
+    await expect(installComputerDriver()).resolves.toMatchObject({ ok: true });
+    expect(spawnMock.mock.calls[0]?.[2]?.env).not.toHaveProperty('HTTPS_PROXY');
+    expect(resolveDesktopOutboundProxyMock).toHaveBeenNthCalledWith(2,
+      'https://raw.githubusercontent.com/trycua/cua/main/libs/cua-driver/scripts/install.sh');
+    expect(spawnMock.mock.calls[1]?.[2]?.env?.HTTPS_PROXY).toBe('http://127.0.0.1:7897');
+  });
+
   it('continues the POSIX install when system proxy resolution fails', async () => {
     setPlatform('linux');
     resolveDesktopOutboundProxyMock.mockRejectedValue(new Error('resolver unavailable'));

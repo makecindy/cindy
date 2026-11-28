@@ -645,6 +645,8 @@ const cuaDriverSessionNames = new Map<string, string>();
 let cuaDriverNamedRunSequence = 0;
 const cuaMcpSessionCloseVersions = new Map<string, number>();
 
+const INSTALL_SCRIPT_FETCH_FAILED = 75;
+
 function getInstallCommand(useUpstream = false): string {
   if (process.platform === 'win32') {
     const url = useUpstream ? `${upstreamScripts}/install.ps1` : windowsInstallUrl;
@@ -1076,10 +1078,7 @@ async function runInstallCommand(
 ): Promise<ExecResult> {
   clearStaleCuaInstallLock();
   const useUpstream = Boolean(targetVersion && targetVersion === upstreamFallbackVersion);
-  let extraEnv = process.platform === 'win32'
-    ? undefined
-    : await resolveCuaInstallerProxyEnv(useUpstream ? `${upstreamScripts}/install.sh` : unixInstallUrl);
-  if (targetVersion) extraEnv = { ...extraEnv, CUA_DRIVER_RS_VERSION: targetVersion };
+  const versionEnv: Record<string, string> = targetVersion ? { CUA_DRIVER_RS_VERSION: targetVersion } : {};
   const activityOptions: ActivityTimeoutOptions = {
     idleTimeoutMs: installIdleTimeoutForPlatform(),
     hardTimeoutMs: INSTALL_HARD_TIMEOUT_MS,
@@ -1088,7 +1087,7 @@ async function runInstallCommand(
     // 更新场景把检测到的版本 pin 给上游脚本(env 是其最高优先级版本源)。
     // 不 pin 时上游会用脚本内 baked 默认值,该值可能滞后于真实最新版,
     // 导致「更新到 0.7.0」实际装回旧版(review P1)。
-    ...(extraEnv ? { extraEnv } : {}),
+    extraEnv: versionEnv,
   };
   if (process.platform === 'win32') {
     return runProcessWithActivityTimeout(
@@ -1103,11 +1102,30 @@ async function runInstallCommand(
       activityOptions,
     );
   }
-  return runProcessWithActivityTimeout(
-    '/bin/bash',
-    ['-c', getInstallCommand(useUpstream)],
-    activityOptions,
-  );
+  // A PAC can choose a different proxy for each origin. Keep the bootstrap
+  // fetch and its installer in the same environment, scoped to this attempt.
+  const deadline = Date.now() + INSTALL_HARD_TIMEOUT_MS;
+  const runFrom = async (url: string) => {
+    const proxyEnv = await resolveCuaInstallerProxyEnv(url);
+    // Reserve one status for bootstrap fetch failure. Once an installer starts,
+    // even a signature failure or an identical exit code must never retry it.
+    const command = `cua_script="$(curl -fsSL '${url}')" || exit ${INSTALL_SCRIPT_FETCH_FAILED}
+      /bin/bash -c "$cua_script"
+      status=$?
+      [ "$status" -ne ${INSTALL_SCRIPT_FETCH_FAILED} ] || exit 1
+      exit "$status"`;
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) throw new ComputerDriverError('CuaDriver installer timed out');
+    return runProcessWithActivityTimeout('/bin/bash', ['-c', command], {
+      ...activityOptions,
+      hardTimeoutMs: remaining,
+      extraEnv: { ...proxyEnv, ...versionEnv },
+    });
+  };
+  const upstreamUrl = `${upstreamScripts}/install.sh`;
+  if (useUpstream || !mirrorBase) return runFrom(upstreamUrl);
+  const regional = await runFrom(unixInstallUrl);
+  return regional.exitCode === INSTALL_SCRIPT_FETCH_FAILED ? runFrom(upstreamUrl) : regional;
 }
 
 function sleep(ms: number): Promise<void> {
@@ -3542,6 +3560,7 @@ async function updateComputerDriver(
       }
       try {
         const result = await installComputerDriver((pid) => {
+          stopSampler();
           if (report) stopSampler = startInstallProgressSampler(pid, report);
         }, targetVersion);
         const installedVersion = extractDriverSemver(result.status.version);
