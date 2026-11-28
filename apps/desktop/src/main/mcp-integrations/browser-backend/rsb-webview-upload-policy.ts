@@ -5,6 +5,12 @@ const MAX_FILE_COUNT = 20;
 const MAX_FILE_BYTES = 100 * 1024 * 1024;
 const MAX_TOTAL_BYTES = 500 * 1024 * 1024;
 
+export class UploadSizeError extends Error {
+  constructor(readonly scope: 'file' | 'batch', readonly limit: number, message: string) {
+    super(message);
+  }
+}
+
 function isInside(parent: string, child: string): boolean {
   const fold = (value: string) =>
     process.platform === 'win32' ? value.toLowerCase() : value;
@@ -88,6 +94,15 @@ export function resolveUploadFilesSync(
   maxBytes = MAX_FILE_BYTES,
   maxTotalBytes = MAX_TOTAL_BYTES,
 ): string[] {
+  return resolveUploadBatchSync(candidates, allowedRoots, maxBytes, maxTotalBytes).files;
+}
+
+export function resolveUploadBatchSync(
+  candidates: unknown,
+  allowedRoots: string[],
+  maxBytes: number,
+  maxTotalBytes: number,
+): { files: string[]; totalBytes: number } {
   if (!Array.isArray(candidates) || candidates.length === 0) {
     throw new Error('paths must contain at least one file');
   }
@@ -131,13 +146,14 @@ export function resolveUploadFilesSync(
       throw new Error('upload files must stay inside the current session directory');
     }
     if (stat.size > maxBytes) {
-      throw new Error(`upload file exceeds ${maxBytes} bytes: ${path.basename(resolved)}`);
+      throw new UploadSizeError('file', maxBytes, `upload file exceeds ${maxBytes} bytes: ${path.basename(resolved)}`);
     }
     totalBytes += stat.size;
-    if (totalBytes > maxTotalBytes) {
-      throw new Error(`upload batch exceeds ${maxTotalBytes} bytes`);
-    }
     files.push(resolved);
   }
-  return files;
+  // Check the batch last so a later oversized file gets the actionable single-file error.
+  if (totalBytes > maxTotalBytes) {
+    throw new UploadSizeError('batch', maxTotalBytes, `upload batch exceeds ${maxTotalBytes} bytes`);
+  }
+  return { files, totalBytes };
 }

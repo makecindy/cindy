@@ -1,3 +1,4 @@
+import type { CreationPreview } from '@/features/device-link/remoteProjectsStore';
 import { isOrdinaryTaskListSession } from '../../shared/sessionSource';
 import { applySessionRebalancePreferencePatch } from '@/features/provider-group/sessionRebalanceCache';
 import { emitTaskTagCatalog } from '@/features/task-tags/taskTagEvents';
@@ -145,11 +146,30 @@ function notify(change: StoreChange = 'updated'): void {
   subs.forEach((fn) => fn(change));
 }
 
+/** 归一化 Session.updatedAt：只接受 ISO 字符串或有限 ms 时间戳，非法值忽略以免覆盖已有字符串。 */
+function normalizeUpdatedAtValue(value: unknown): string | undefined {
+  if (typeof value === 'string') return value;
+  if (typeof value === 'number' && Number.isFinite(value)) return new Date(value).toISOString();
+  return undefined;
+}
+
+function sanitizeSessionPatch(patch: Partial<Session>): Partial<Session> {
+  if (!Object.prototype.hasOwnProperty.call(patch, 'updatedAt')) return patch;
+  const raw = (patch as Record<string, unknown>).updatedAt;
+  if (typeof raw === 'string') return patch;
+  const normalized = normalizeUpdatedAtValue(raw);
+  const next = { ...patch };
+  if (normalized !== undefined) next.updatedAt = normalized;
+  else delete next.updatedAt;
+  return next;
+}
+
 /**
  * 浅合并 patch 到 session，处理 _count 嵌套对象的合并语义
  * （patch._count = { messages: 1 } 不应清掉同级 _count.tokens 等）。
  */
-function mergeSession(prev: Session, patch: Partial<Session>): Session {
+function mergeSession(prev: Session, rawPatch: Partial<Session>): Session {
+  const patch = sanitizeSessionPatch(rawPatch);
   const next: Session = { ...prev, ...patch };
   if (patch._count) {
     next._count = { ...prev._count, ...patch._count };
@@ -159,8 +179,9 @@ function mergeSession(prev: Session, patch: Partial<Session>): Session {
 
 function mergeSessionPatch(
   prev: Partial<Session>,
-  patch: Partial<Session>,
+  rawPatch: Partial<Session>,
 ): Partial<Session> {
+  const patch = sanitizeSessionPatch(rawPatch);
   const next = { ...prev, ...patch };
   if (patch._count) {
     next._count = { ...prev._count, ...patch._count };
@@ -774,7 +795,25 @@ function applyAuthoritativeStatusSession(
   for (const filter of toBackfill) requestFilterBackfill(filter);
 }
 
+// A local plugin checkout has no committed task row until its directory is ready.
+// Only project it into UI list reads. Refreshes and DB mutations still use the real rows.
+const creationPreviews = new Map<string, CreationPreview>();
+let previewLists = new WeakMap<Session[], Session[]>();
+
 export const sessionsStore = {
+  setCreationPreview(preview: CreationPreview): void {
+    if (creationPreviews.get(preview.row.id)?.row !== preview.row) previewLists = new WeakMap();
+    creationPreviews.set(preview.row.id, preview);
+    notify();
+  },
+  getCreationPreview(id?: string): CreationPreview | undefined {
+    return id ? creationPreviews.get(id) : undefined;
+  },
+  clearCreationPreview(id: string): void {
+    if (!creationPreviews.delete(id)) return;
+    previewLists = new WeakMap();
+    notify();
+  },
   /** Original list mutations, including rows outside a consumer's loaded window. */
   subscribePatches(fn: SessionPatchListener): () => void {
     patchSubs.add(fn);
@@ -789,7 +828,15 @@ export const sessionsStore = {
 
   /** 当前桶快照；null 表示该桶尚未加载过（hook 据此判定 isLoading 初值）。 */
   getByFilter(filter: ListStatusFilter): Session[] | null {
-    return cache.get(filter) ?? null;
+    const rows = cache.get(filter);
+    if (!rows || filter === 'archived' || !creationPreviews.size) return rows ?? null;
+    const previous = previewLists.get(rows);
+    if (previous) return previous;
+    const pending = [...creationPreviews.values()].reverse()
+      .filter(preview => !rows.some(row => row.id === preview.row.id));
+    const visible = pending.length ? [...pending.map(preview => preview.row), ...rows] : rows;
+    previewLists.set(rows, visible);
+    return visible;
   },
 
   /**
@@ -924,6 +971,7 @@ export const sessionsStore = {
         source?.status ??
         (patch.status === 'archived' ? 'active' : patch.status === 'active' ? 'archived' : 'active'),
       ...(patch.pinnedAt !== undefined ? { pinnedAt: source?.pinnedAt } : {}),
+      ...(patch.archivedAt !== undefined ? { archivedAt: source?.archivedAt ?? null } : {}),
     };
     pendingStatusTransitions.set(id, {
       tokens: new Set([token]),
@@ -1105,8 +1153,9 @@ export const sessionsStore = {
    *     updatedAt 时，再定向补查目标桶以校正排序和 1000 条边界。
    * deleted 从所有桶移除即可；旧在途请求由 status override 过滤，不再取消并重启。
    */
-  patchLocal(id: string, patch: Partial<Session>): void {
-    if (!id || !patch) return;
+  patchLocal(id: string, rawPatch: Partial<Session>): void {
+    if (!id || !rawPatch) return;
+    const patch = sanitizeSessionPatch(rawPatch);
     // 插件把任务转入后台(hiddenAt 非空):主进程列表已排除它,这里与删除一样从所有桶
     // 就地移除;再整体重拉一次,补齐满桶空位并压过转入后台前发出的旧列表请求。
     // 不论当时是否在缓存里都登记,挡住随后到达的旧列表响应。恢复显示的 hiddenAt:null
@@ -1306,6 +1355,8 @@ export const sessionsStore = {
 
   /** 仅供测试 / 登出清理。 */
   reset(): void {
+    creationPreviews.clear();
+    previewLists = new WeakMap();
     cache.clear();
     inflight.clear();
     sessionSpendOverrides.clear();

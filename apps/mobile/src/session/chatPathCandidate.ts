@@ -48,11 +48,20 @@ export interface ChatPathLineSuffix {
   column?: number;
 }
 
-/** 拆 `path:line[:column]` / `path:start-end` 后缀(与桌面 splitLocalLineSuffix 同语义)。 */
-export function splitChatPathLineSuffix(raw: string): ChatPathLineSuffix {
+/** 拆本地路径的位置后缀，区间沿用预览页的起始行定位。 */
+export function splitChatPathLineSuffix(raw: string, allowFragment = true): ChatPathLineSuffix {
   const href = raw.trim();
   if (!href) return { href };
   if (URL_SCHEME_RE.test(href) && !href.toLowerCase().startsWith('file://')) {
+    return { href };
+  }
+
+  const anchor = allowFragment && /#L([1-9]\d{0,6})(?:-L([1-9]\d{0,6}))?$/.exec(href);
+  if (anchor && anchor.index > 0) {
+    const line = Number(anchor[1]);
+    if (anchor[2] === undefined || Number(anchor[2]) >= line) {
+      return { href: href.slice(0, anchor.index), line };
+    }
     return { href };
   }
 
@@ -252,7 +261,8 @@ export function classifyInlineCodePathCandidate(text: string): ChatPathCandidate
  */
 export function classifyChatPathLinkTarget(url: string): ChatPathCandidate | null {
   let raw = url.trim();
-  if (/^xdt-file:\/\//i.test(raw)) {
+  const managedFile = /^xdt-file:\/\//i.test(raw);
+  if (managedFile) {
     try {
       // Parse triple-slash spelling directly: Electron's standard-scheme URL parser can
       // incorrectly treat the first path component as a hostname.
@@ -268,7 +278,8 @@ export function classifyChatPathLinkTarget(url: string): ChatPathCandidate | nul
   if (raw.startsWith('#')) return null;
   if (hasUnsupportedScheme(raw)) return null;
 
-  const lineInfo = splitChatPathLineSuffix(raw);
+  // A decoded xdt-file path can contain a literal percent-encoded '#'.
+  const lineInfo = splitChatPathLineSuffix(raw, !managedFile);
   const href = lineInfo.href;
   if (looksLikeDirectoryPath(href)) {
     const stripped = href.replace(/[\\/]+$/, '');

@@ -159,6 +159,23 @@
     "status": {
       "running": "実行中",
       "done": "完了"
+    },
+    "collab": {
+      "wait": "サブエージェントを待機",
+      "waitCount_one": "{{count}} 件のサブエージェントを待機",
+      "waitCount_other": "{{count}} 件のサブエージェントを待機",
+      "sendInput": "サブエージェントに指示を送信",
+      "sendInputCount_one": "{{count}} 件のサブエージェントに指示を送信",
+      "sendInputCount_other": "{{count}} 件のサブエージェントに指示を送信",
+      "resume": "サブエージェントを再開",
+      "resumeCount_one": "{{count}} 件のサブエージェントを再開",
+      "resumeCount_other": "{{count}} 件のサブエージェントを再開",
+      "close": "サブエージェントを終了",
+      "closeCount_one": "{{count}} 件のサブエージェントを終了",
+      "closeCount_other": "{{count}} 件のサブエージェントを終了",
+      "spawn": "サブエージェントを起動",
+      "spawnCount_one": "{{count}} 件のサブエージェントを起動",
+      "spawnCount_other": "{{count}} 件のサブエージェントを起動"
     }
   },
   "agentActions": {
@@ -197,6 +214,8 @@
     "retryIn": "{{seconds}} 秒後に自動で再試行"
   },
   "subscriptionAccountError": {
+    "unreachable": "一時的に Codex アカウントサービスに接続できません。",
+    "rechecking": "一時的に Codex アカウントサービスに接続できません。{{resetAt}} に再試行します。",
     "poolModelLimited": "このモデルのサブスクリプション利用枠が上限に達しました。別のモデルに切り替えられます。",
     "poolRetryUntil": "{{resetAt}} 以降に再試行できます。",
     "poolOtherSignedOut": "別のサブスクリプションアカウントはログアウトしています。タスクを実行するコンピューターでログインして再試行できます。",

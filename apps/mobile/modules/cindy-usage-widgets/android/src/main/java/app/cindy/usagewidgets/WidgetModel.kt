@@ -12,11 +12,25 @@ import java.util.Locale
 // Mirrors `UsageWidgetStore` / `MobileUsageWidgetSnapshot` in the app (TypeScript) and the iOS
 // widget model. The app writes the store into the app's files directory; the providers read it.
 
+private val antigravitySourceId = Regex(
+  "(?:^|:)acp-plugin:(?:_root__|_ns__[a-z0-9-]+__)?(?:agy|agy-acp|agy-plugin|cindy-antigravity-acp|cindy-antigravity-plugin|antigravity):(?:agy|antigravity)(?:~[^:]+)?$",
+  RegexOption.IGNORE_CASE,
+)
+
+private val pluginSourceId = Regex("(?:^|:)acp-plugin:[^:]+:[^:~]+(?:~[^:]+)?$", RegexOption.IGNORE_CASE)
+
+fun widgetDisplayLogo(id: String, name: String, logo: String?, detailTitle: String? = null): String? {
+  val legacy = (name.trim().equals("antigravity", ignoreCase = true) ||
+    detailTitle?.trim().equals("antigravity", ignoreCase = true)) && pluginSourceId.containsMatchIn(id)
+  return if (antigravitySourceId.containsMatchIn(id) || legacy) "antigravity" else logo
+}
+
 class WidgetSource(json: JSONObject) {
   val id: String = json.getString("id")
   val kind: String = json.getString("kind")
   val name: String = json.getString("name")
   val logo: String? = json.nullableString("logo")
+  val displayLogo: String? get() = widgetDisplayLogo(id, name, logo, detail?.title)
   val monogram: String = json.optString("monogram")
   val value: String? = json.nullableString("value")
   val unit: String? = json.nullableString("unit")

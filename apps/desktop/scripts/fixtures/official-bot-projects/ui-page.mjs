@@ -112,7 +112,8 @@ export default {
     if (ui.data.kind === 'card-expanded') {
       await page.locator('#cindy-im-telegram-panel').waitFor();
       const panel = page.locator('#cindy-im-telegram-panel');
-      assert.equal(await panel.getByRole('radio').count(), 0);
+      await panel.getByRole('radio', { name: await ui.t('settings.remoteControl.hook.telegram.behavior.emojiOption.minimal'), exact: true }).waitFor();
+      assert.equal(await panel.getByRole('radio').count(), 8);
       assert.equal(await blocks.count(), 1);
       // 卡片里留一行指路, 点了回到页面上唯一的那一处。
       assert.ok(await panel.getByText(await ui.t('settings.remoteControl.hook.form.sharedSettingsPointer'), { exact: true }).isVisible());

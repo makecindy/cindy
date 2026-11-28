@@ -41,6 +41,14 @@ import { resolveSessionCardBody } from './sessionCardPreview';
 import { aggregateRailActivity, dotToneOf, remoteLampOf } from './railActivity';
 import { sortPinnedSidebarEntries } from '../lib/pinnedSidebarOrder';
 import type { PinnedSortBy } from '../hooks/helpers/sidebarFilterCore';
+import { isRemoteSessionWriteBlocked } from '../lib/remoteSessionWriteGuard';
+import {
+  isSidebarNewWindowActivation,
+  openTargetInNewWindow,
+  preventMiddleClickAutoscroll,
+  type SidebarClickModifiers,
+} from '@/lib/sidebarNewWindowActivation';
+import { toast } from '@/lib/toast';
 export { remoteLampOf } from './railActivity';
 
 /** 预览卡宽度(px)——旧 RailFlyout 同宽。 */
@@ -254,14 +262,22 @@ export function RailNav({
   const [preview, setPreview] = useState<PreviewState | null>(null);
 
   const handlePinnedClick = useCallback(
-    async (id: string) => {
+    async (id: string, modifiers?: SidebarClickModifiers) => {
       setPreview(null);
       railPanelStore.closeAll();
-      if (id === activeSessionId) return;
       const target = sessions.find((s) => s.id === id);
+      if (modifiers && isSidebarNewWindowActivation(modifiers)) {
+        if (target && isRemoteSessionWriteBlocked(target)) {
+          toast.warning(t('ccAgent.remoteSession.actionsUnavailable'));
+          return;
+        }
+        void openTargetInNewWindow(id, target?.deviceLinkDeviceId);
+        return;
+      }
+      if (id === activeSessionId) return;
       navigate(await resolveSessionRoute(id, target));
     },
-    [activeSessionId, navigate, sessions],
+    [activeSessionId, navigate, sessions, t],
   );
 
   const openSectionAt = useCallback(
@@ -307,7 +323,14 @@ export function RailNav({
             key={session.id}
             aria-label={displayTitle}
             aria-current={isActive ? 'page' : undefined}
-            onClick={() => void handlePinnedClick(session.id)}
+            onMouseDown={preventMiddleClickAutoscroll}
+            onClick={(e) => void handlePinnedClick(session.id, e)}
+            onAuxClick={(e) => {
+              if (e.button !== 1) return;
+              e.preventDefault();
+              e.stopPropagation();
+              void handlePinnedClick(session.id, e);
+            }}
             onMouseEnter={(e) => {
               const rect = e.currentTarget.getBoundingClientRect();
               setPreview({

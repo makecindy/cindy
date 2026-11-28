@@ -14,12 +14,13 @@ import type { RemoteSession } from './types';
 import { fontWeight, lineHeight, spacing, typeScale, useTheme, useThemedStyles, type ThemeColors } from '@/theme';
 
 /** This picker only owns selection; the existing task page owns every editor. */
-export function SideChatsSheet({ visible, session, maker, onClose, onCreate, onSelect }: {
+export function SideChatsSheet({ visible, session, maker, onClose, onCreate, onSelect, readPending }: {
   visible: boolean;
   session: RemoteSession;
   maker: Pick<MobileMakerTransport, 'listSideChats' | 'getSession'>;
   onClose(): void;
-  onCreate(): Promise<RemoteSession | null>;
+  onCreate(parent: RemoteSession): Promise<RemoteSession | null>;
+  readPending?(parent: RemoteSession, hostIds: ReadonlySet<string>): Promise<RemoteSession[]>;
   onSelect(session: RemoteSession): void;
 }) {
   const { t } = useTranslation();
@@ -31,18 +32,23 @@ export function SideChatsSheet({ visible, session, maker, onClose, onCreate, onS
   const heights = useMemo(() => computeContextSheetSnapHeights({ safeAreaTopInset: insets.top, screenHeight: height }), [height, insets.top]);
   const parentId = session.source === 'side-chat' ? session.parentSessionId : session.id;
   const [rows, setRows] = useState<RemoteSession[]>([]);
-  const [parent, setParent] = useState<RemoteSession | null>(null);
+  const [loadedParent, setParent] = useState<RemoteSession | null>(null);
+  const parent = session.id === parentId ? (session.status === 'active' ? session : null) : loadedParent;
   const [loading, setLoading] = useState(false);
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [attempt, setAttempt] = useState(0);
   const selected = useRef<RemoteSession | null>(null);
+  const creatingRef = useRef(false);
   const generation = useRef(0);
 
+  const sessionRef = useRef(session);
+  sessionRef.current = session;
   useEffect(() => {
     const epoch = ++generation.current;
     if (!visible || !parentId) return;
     selected.current = null;
+    creatingRef.current = false;
     setLoading(true);
     setCreating(false);
     setError(null);
@@ -50,18 +56,25 @@ export function SideChatsSheet({ visible, session, maker, onClose, onCreate, onS
     setParent(null);
     setSnap('half');
     void Promise.all([
-      maker.getSession(parentId),
-      maker.listSideChats(parentId).then(ids => Promise.all(ids.map(({ id }) => maker.getSession(id)))),
-    ]).then(([main, children]) => {
+      (sessionRef.current.id === parentId ? Promise.resolve(sessionRef.current) : maker.getSession(parentId)).then(main => {
+        if (generation.current === epoch) setParent(main?.status === 'active' ? main : null);
+        return main;
+      }),
+      maker.listSideChats(parentId).then(ids => Promise.all(ids.map(({ id }) => maker.getSession(id)))).catch(() => {
+        if (generation.current === epoch) setError(t('session.sideChat.loadFailed'));
+        return [];
+      }),
+    ]).then(async ([main, children]) => {
       if (generation.current !== epoch) return;
-      setParent(main?.status === 'active' ? main : null);
-      setRows(children.filter(row => (row?.status === 'active' || row?.status === 'archived')
+      const pending = main && readPending ? await readPending(main, new Set(children.map(row => row?.id))) : [];
+      if (generation.current !== epoch) return;
+      setRows([...children, ...pending].filter(row => (row?.status === 'active' || row?.status === 'archived')
         && row.source === 'side-chat' && row.parentSessionId === parentId));
     }).catch(() => {
       if (generation.current === epoch) setError(t('session.sideChat.loadFailed'));
     }).finally(() => { if (generation.current === epoch) setLoading(false); });
     return () => { ++generation.current; };
-  }, [visible, parentId, maker, attempt, t]);
+  }, [visible, parentId, session.id, maker, attempt, readPending, t]);
 
   const choose = useCallback((row: RemoteSession) => {
     selected.current = row;
@@ -73,11 +86,13 @@ export function SideChatsSheet({ visible, session, maker, onClose, onCreate, onS
     if (row) onSelect(row);
   };
   const create = async () => {
-    if (creating || !parent) return;
+    if (creatingRef.current || selected.current || !parent) return;
+    creatingRef.current = true;
     const epoch = generation.current;
     setCreating(true);
-    const row = await onCreate();
+    const row = await onCreate(parent).catch(() => null);
     if (generation.current !== epoch) return;
+    creatingRef.current = false;
     setCreating(false);
     if (row) choose(row);
     else setError(t('session.sideChat.createFailed'));
@@ -88,7 +103,7 @@ export function SideChatsSheet({ visible, session, maker, onClose, onCreate, onS
       onPress: () => choose(parent),
     }] : []),
     { label: t('session.sideChat.create'), testID: 'session.sideChat.create',
-      disabled: loading || creating || !parent, onPress: () => void create() },
+      disabled: creating || !parent, onPress: () => void create() },
     ...rows.map((row, index) => ({
       label: `${t('session.sideChat.item', { index: index + 1 })}${row.status === 'archived' ? ` · ${t('session.menu.chipArchived')}` : ''}${row.id === session.id ? ` · ${t('session.sideChat.current')}` : ''}`,
       testID: `session.sideChat.open.${row.id}`, disabled: row.id === session.id || creating,

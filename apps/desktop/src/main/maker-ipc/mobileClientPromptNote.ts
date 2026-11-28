@@ -111,12 +111,21 @@ export function shouldPrependMobileClientPromptNote(
   // execute installed commands (or treat unknown ones as literal text). A plugin
   // engine's `/<skill>` is expanded by maker-core before the engine sees it
   // (acp/skill-invocation.ts, same opening text), and the engine reads its own commands.
-  if (agentKind === 'pi' || agentKind === 'acp') {
+  if (agentKind === 'pi') {
     const content = message && typeof message === 'object'
       ? (message as { content?: unknown }).content : null;
     const parts = Array.isArray(content) ? content : [];
     const firstText = parts.find((part) => part?.type === 'text' && typeof part.text === 'string')?.text;
     return !(text ?? firstText ?? '').trimStart().startsWith('/');
+  }
+  // Plugin ACP engines execute leading `/command` inputs natively; keep them at
+  // the start of the prompt, while still allowing multi-segment paths (`/tmp/...`).
+  if (agentKind === 'acp') {
+    const content = message && typeof message === 'object'
+      ? (message as { content?: unknown }).content : null;
+    const parts = Array.isArray(content) ? content : [];
+    const firstText = parts.find((part) => part?.type === 'text' && typeof part.text === 'string')?.text;
+    return !/^\s*\/[A-Za-z][A-Za-z0-9_-]*(?::[A-Za-z][A-Za-z0-9_-]*)?(?:\s|$)/.test(text ?? firstText ?? '');
   }
   if (agentKind !== 'claude-code') return true;
   if (text === null) return true;

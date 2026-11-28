@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import type { ReactNode } from 'react';
-import { afterEach, beforeEach, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Schedule, ScheduleTemplate } from '@cindy/maker-scheduler';
 import type { ProviderView } from '@cindy/model-providers';
 import { __resetForTest as resetDraft } from '@/state/newMakerDraft';
@@ -65,6 +65,9 @@ vi.mock('@/hooks/useDeviceProviders', () => ({
     models: { codex: state.loading ? state.localModels : state.remoteModels } }] : [], loading: state.loading,
     unsupported: state.remoteCatalogStatus === 'unsupported',
     error: state.remoteCatalogStatus === 'ready' ? null : 'catalog unavailable' }),
+}));
+vi.mock('@/hooks/useModelRouteDevices', () => ({
+  useModelRouteDevices: () => ({ leadAgentDeviceId: null, devices: [] }),
 }));
 vi.mock('@/hooks/useFeishuBot', () => ({ useFeishuBot: () => ({ status: 'disconnected' }) }));
 vi.mock('@/hooks/useWecomGroupNotificationSettings', () => ({ useWecomGroupNotificationSettings: () => ({}) }));
@@ -277,12 +280,13 @@ it('sends the explicit local Harness and location when generating a bound hook',
   })));
 });
 
-// A saved Webhook remains visible but cannot be configured while signed out.
+// A saved Webhook remains selected but its address settings cannot be configured while signed out.
 // Saving unrelated fields must preserve it so receiving resumes after signing in.
 it('keeps the saved Webhook trigger while signed out', async () => {
   vi.stubGlobal('electronAPI', { maker: { schedule: { webhookReceiver: async () => 'signed-out' } } });
   const form = mount(schedule({ webhookTrigger: { endpointId: 'endpoint', events: ['check_suite'] } }));
-  expect(screen.getByRole('radio', { name: 'scheduler.cell.tagWebhook' }).hasAttribute('disabled')).toBe(true);
+  expect(screen.getByRole('radio', { name: 'scheduler.editor.trigger.event' }).getAttribute('aria-checked')).toBe('true');
+  expect(screen.queryByRole('combobox', { name: 'scheduler.editor.webhook.sourceLabel' })).toBeNull();
   form.save();
   // 没有保存过发送方的任务按默认的 GitHub 写回，接收行为不变。
   await waitFor(() => expect(form.onSubmit).toHaveBeenCalledWith(expect.objectContaining({
@@ -290,20 +294,55 @@ it('keeps the saved Webhook trigger while signed out', async () => {
   }), true));
 });
 
-// 2026-11-04 product decision, unit/jsdom: Webhook and timed triggering are separate
-// choices. Exercise the real form in both execution modes; saving an existing
-// trigger alone cannot catch the removed combined-trigger UI or mode switching.
-it.each(['agent', 'script'] as const)('keeps Webhook and timed triggering separate for %s execution', async (executionMode) => {
+// docs/product-rules/plugin-event-triggers.md, unit/jsdom: plugin events need no account. Signed
+// out with an event-declaring plugin installed, the event trigger stays available, offers only
+// plugin events, and saves the chosen plugin without a stale top-level event filter.
+it('offers plugin events while signed out and saves the chosen plugin', async () => {
+  const listEventSources = vi.fn(async () => [{ plugin: 'public/chat', name: 'Chat', state: 'listening',
+    events: [{ type: 'message.received', name: 'Message', fields: ['chatId'] }, { type: 'mention', name: 'Mention', fields: [] }] }]);
+  vi.stubGlobal('electronAPI', {
+    maker: { schedule: { webhookReceiver: async () => 'signed-out' } },
+    ghosts: { listEventSources, onChanged: () => () => undefined },
+  });
+  const form = mount(schedule());
+  const trigger = await screen.findByRole('radio', { name: 'scheduler.editor.trigger.event' });
+  // Before the plugin list arrives a single PR is the only usable source; wait for the plugins.
+  await waitFor(() => expect(listEventSources).toHaveBeenCalled());
+  await act(async () => { await listEventSources.mock.results[0]!.value; });
+  fireEvent.click(trigger);
+  fireEvent.click(await screen.findByRole('checkbox', { name: 'Mention' }));
+  form.save();
+  await waitFor(() => expect(form.onSubmit).toHaveBeenLastCalledWith(expect.objectContaining({
+    manual: true, webhookTrigger: { events: [], source: { preset: 'plugin', sources: [{ plugin: 'public/chat', events: ['mention'] }] } },
+  }), true));
+  // Narrow to one chat; an empty condition row is not saved.
+  fireEvent.click(screen.getByRole('button', { name: 'scheduler.editor.webhook.plugin.filterAdd' }));
+  fireEvent.click(screen.getByRole('button', { name: 'scheduler.editor.webhook.plugin.filterAdd' }));
+  fireEvent.change(screen.getAllByRole('textbox', { name: 'scheduler.editor.webhook.plugin.filterValue' })[0]!, { target: { value: 'c1' } });
+  form.save();
+  await waitFor(() => expect(form.onSubmit).toHaveBeenLastCalledWith(expect.objectContaining({
+    webhookTrigger: { events: [], source: { preset: 'plugin', sources: [{ plugin: 'public/chat', events: ['mention'],
+      filters: [{ field: 'chatId', operator: 'equals', value: 'c1' }] }] } },
+  }), true));
+});
+
+// 2026-11-24 product decision (supersedes 2026-11-04), unit/jsdom: every event source may add a
+// timed check as a fallback. Exercise the real form in both execution modes, including switching
+// back to timed and manual, which must clear the event trigger.
+it.each(['agent', 'script'] as const)('lets an event trigger add timed checks for %s execution', async (executionMode) => {
   const form = mount(schedule({ executionMode,
     ...(executionMode === 'script' ? { workspaceKind: 'project' as const, workingDir: '/test-project', scriptConfig: { command: 'node check.cjs', capabilities: [] } } : {}),
   }));
-  fireEvent.click(await screen.findByRole('radio', { name: 'scheduler.cell.tagWebhook' }));
+  fireEvent.click(await screen.findByRole('radio', { name: 'scheduler.editor.trigger.event' }));
   form.save();
   await waitFor(() => expect(form.onSubmit).toHaveBeenLastCalledWith(expect.objectContaining({
     manual: true, webhookTrigger: expect.objectContaining({ source: { preset: 'github' } }), executionMode,
   }), true));
-  fireEvent.click(screen.getByRole('button', { name: 'routines.advancedSettings' }));
-  expect(screen.queryByRole('switch', { name: 'scheduler.editor.webhook.timedFallback' })).toBeNull();
+  fireEvent.click(screen.getByRole('checkbox', { name: 'scheduler.prTrigger.timed' }));
+  form.save();
+  await waitFor(() => expect(form.onSubmit).toHaveBeenLastCalledWith(expect.objectContaining({
+    manual: false, recurring: true, webhookTrigger: expect.objectContaining({ source: { preset: 'github' } }), executionMode,
+  }), true));
   fireEvent.click(screen.getByRole('radio', { name: 'scheduler.editor.trigger.timed' }));
   form.save();
   await waitFor(() => expect(form.onSubmit).toHaveBeenLastCalledWith(expect.objectContaining({
@@ -316,12 +355,15 @@ it.each(['agent', 'script'] as const)('keeps Webhook and timed triggering separa
   }), true));
 });
 
-// UI regression: choosing an exact PR must round-trip independently of time and Webhook settings.
+// 2026-11-24: a single PR is the narrower scope of the GitHub event source. Choosing it must save
+// prTrigger (not a Webhook), round-trip timed checks, and switching away must remove the rule.
 it('saves a single PR with optional timed checks and can remove the rule', async () => {
   const form = mount(schedule({}));
-  fireEvent.click(screen.getByRole('radio', { name: 'scheduler.prTrigger.label' }));
+  fireEvent.click(await screen.findByRole('radio', { name: 'scheduler.editor.trigger.event' }));
+  // GitHub is one sender; one PR or Issue is its narrower scope, entered in a single field.
+  fireEvent.click(screen.getByRole('radio', { name: 'scheduler.editor.webhook.scope.item' }));
   const url = 'https://github.com/example/project/pull/23';
-  fireEvent.change(screen.getByRole('textbox', { name: 'scheduler.prTrigger.url' }), { target: { value: url } });
+  fireEvent.change(screen.getByRole('textbox', { name: 'scheduler.editor.webhook.item.label' }), { target: { value: url } });
   form.save();
   await waitFor(() => expect(form.onSubmit).toHaveBeenLastCalledWith(expect.objectContaining({
     manual: true, prTrigger: { url, change: 'any' }, webhookTrigger: null,
@@ -331,23 +373,220 @@ it('saves a single PR with optional timed checks and can remove the rule', async
   await waitFor(() => expect(form.onSubmit).toHaveBeenLastCalledWith(expect.objectContaining({
     manual: false, prTrigger: { url, change: 'any' },
   }), true));
+  // Back to the repository scope restores the previous repository connection (here the default
+  // manual Webhook), not a stale PR rule.
+  fireEvent.click(screen.getByRole('radio', { name: 'scheduler.editor.webhook.scope.repository' }));
+  form.save();
+  await waitFor(() => expect(form.onSubmit).toHaveBeenLastCalledWith(expect.objectContaining({
+    prTrigger: null, webhookTrigger: expect.objectContaining({ source: { preset: 'github' } }),
+  }), true));
   fireEvent.click(screen.getByRole('radio', { name: 'scheduler.editor.trigger.timed' }));
   form.save();
-  await waitFor(() => expect(form.onSubmit).toHaveBeenLastCalledWith(expect.objectContaining({ prTrigger: null }), true));
+  await waitFor(() => expect(form.onSubmit).toHaveBeenLastCalledWith(expect.objectContaining({ prTrigger: null, webhookTrigger: null }), true));
 });
 
-// PR 12168, unit/jsdom: an MR needs a background check even with the task page closed.
-it('enables periodic checks when a GitLab MR is entered in the PR editor', async () => {
+// 2026-11-24: PR and Issue share numbers, so one field takes a number or link and Cindy asks GitHub
+// which it is. An Issue saves the App source narrowed to that number with its condition's events.
+it('identifies an Issue from owner/repo#number and saves it as a numbered GitHub App source', async () => {
+  const resolveGithubItem = vi.fn(async () => ({ ok: true, kind: 'issue', title: 'Crash on start', state: 'open' }));
+  vi.stubGlobal('electronAPI', { gitContext: { githubAppStatus: async () => ({ available: true, login: null }), resolveGithubItem },
+    maker: { schedule: { webhookReceiver: async () => 'cloud', scriptCapabilityStatus: async () => ({ statuses: [] }) } } });
   const form = mount(schedule({}));
-  fireEvent.click(screen.getByRole('radio', { name: 'scheduler.prTrigger.label' }));
+  fireEvent.click(await screen.findByRole('radio', { name: 'scheduler.editor.trigger.event' }));
+  fireEvent.click(screen.getByRole('radio', { name: 'scheduler.editor.webhook.scope.item' }));
+  fireEvent.change(screen.getByRole('textbox', { name: 'scheduler.editor.webhook.item.label' }), { target: { value: 'Example/Project#7' } });
+  await waitFor(() => expect(resolveGithubItem).toHaveBeenCalledWith('example/project', 7));
+  await screen.findByRole('combobox', { name: 'scheduler.prTrigger.condition' });
+  form.save();
+  await waitFor(() => expect(form.onSubmit).toHaveBeenLastCalledWith(expect.objectContaining({
+    webhookTrigger: { events: ['issues', 'issue_comment'], source: { preset: 'github-app', repositories: ['example/project'], number: 7 } },
+  }), true));
+  expect((form.onSubmit.mock.lastCall?.[0] as { prTrigger?: unknown } | undefined)?.prTrigger ?? null).toBeNull();
+});
+
+it('clears a previously saved GitHub item as soon as the input is edited and blocks saving until re-identified', async () => {
+  let finishLookup!: (result: { ok: true; kind: 'issue'; title: string; state: 'open' }) => void;
+  const resolveGithubItem = vi.fn((_repo: string, num: number) => num === 99
+    ? new Promise((resolve) => { finishLookup = resolve; })
+    : Promise.resolve({ ok: true, kind: 'pr', title: 'Old PR', state: 'open' }));
+  vi.stubGlobal('electronAPI', { gitContext: { githubAppStatus: async () => ({ available: true, login: null }), resolveGithubItem },
+    maker: { schedule: { webhookReceiver: async () => 'cloud', scriptCapabilityStatus: async () => ({ statuses: [] }) } } });
+  const form = mount(schedule({ manual: true, prTrigger: { url: 'https://github.com/example/project/pull/1', change: 'any' } }));
+  const input = await screen.findByRole('textbox', { name: 'scheduler.editor.webhook.item.label' });
+  fireEvent.change(input, { target: { value: 'Example/Project#99' } });
+  // Clicking Save immediately (before the 400ms debounce or network response) must not persist PR #1.
+  form.save();
+  expect(form.onSubmit).not.toHaveBeenCalled();
+  expect(screen.getByText('scheduler.editor.webhook.item.resolving')).toBeTruthy();
+  await waitFor(() => expect(resolveGithubItem).toHaveBeenCalledWith('example/project', 99));
+  finishLookup({ ok: true, kind: 'issue', title: 'Replacement issue', state: 'open' });
+  await screen.findByRole('combobox', { name: 'scheduler.prTrigger.condition' });
+  form.save();
+  await waitFor(() => expect(form.onSubmit).toHaveBeenLastCalledWith(expect.objectContaining({
+    prTrigger: null,
+    webhookTrigger: { events: ['issues', 'issue_comment'], source: { preset: 'github-app', repositories: ['example/project'], number: 99 } },
+  }), true));
+});
+
+// 2026-11-24: GitLab is one sender like GitHub. A specific MR (link) becomes a state-followed prTrigger with
+// a timed check switched on (GitLab has no push); a specific issue an address sender narrowed to project + number.
+it.each([
+  ['https://gitlab.example.com/Group/App/-/merge_requests/12', {
+    manual: false, recurring: true, cronExpr: '*/10 * * * *',
+    prTrigger: { url: 'https://gitlab.example.com/group/app/-/merge_requests/12', change: 'any' },
+  }],
+  ['https://gitlab.example.com/group/app/-/issues/3', {
+    manual: true,
+    webhookTrigger: { events: ['issue'], source: { preset: 'gitlab', repository: 'group/app', number: 3 } },
+  }],
+] as const)('saves a specific GitLab item from %s', async (link, expected) => {
+  const form = mount(schedule({}));
+  fireEvent.click(await screen.findByRole('radio', { name: 'scheduler.editor.trigger.event' }));
+  fireEvent.click(screen.getByRole('combobox', { name: 'scheduler.editor.webhook.sourceLabel' }));
+  fireEvent.click(screen.getByRole('option', { name: 'GitLab' }));
+  fireEvent.click(screen.getByRole('radio', { name: 'scheduler.editor.webhook.scope.gitlabItem' }));
+  fireEvent.change(screen.getByRole('textbox', { name: 'scheduler.editor.webhook.gitlabItem.label' }), { target: { value: link } });
+  form.save();
+  await waitFor(() => expect(form.onSubmit).toHaveBeenLastCalledWith(expect.objectContaining(expected), true));
+});
+
+// 2026-11-24: with the GitLab plugin installed, GitLab works without a Cindy account or Webhook setup:
+// a whole project or a specific issue is saved as the GitLab plugin's event source with conditions.
+describe('GitLab through the GitLab plugin', () => {
+  const gitlabPlugin = () => {
+    const listEventSources = vi.fn(async () => [{ plugin: 'cindy-gitlab', name: 'GitLab', state: 'listening', events: [
+      { type: 'merge_request.merged', name: 'MR merged', fields: ['project'] },
+      { type: 'issue.comment', name: 'Issue comment', fields: ['project'] },
+    ] }]);
+    vi.stubGlobal('electronAPI', {
+      maker: { schedule: { webhookReceiver: async () => 'signed-out' } },
+      ghosts: { listEventSources, onChanged: () => () => undefined },
+    });
+    return listEventSources;
+  };
+  const chooseGitlab = async (listEventSources: ReturnType<typeof gitlabPlugin>) => {
+    const trigger = await screen.findByRole('radio', { name: 'scheduler.editor.trigger.event' });
+    await waitFor(() => expect(listEventSources).toHaveBeenCalled());
+    await act(async () => { await listEventSources.mock.results[0]!.value; });
+    fireEvent.click(trigger);
+    fireEvent.click(screen.getByRole('combobox', { name: 'scheduler.editor.webhook.sourceLabel' }));
+    fireEvent.click(screen.getByRole('option', { name: 'GitLab' }));
+  };
+
+  it('watches a whole project while signed out', async () => {
+    const listEventSources = gitlabPlugin();
+    const form = mount(schedule());
+    await chooseGitlab(listEventSources);
+    expect((screen.getByRole('radio', { name: 'scheduler.editor.webhook.gitlabPluginConnection' }) as HTMLInputElement).checked).toBe(true);
+    fireEvent.change(screen.getByRole('textbox', { name: 'scheduler.editor.webhook.gitlabPlugin.projectLabel' }),
+      { target: { value: 'https://git.example.com/Group/App' } });
+    fireEvent.click(screen.getByRole('checkbox', { name: 'MR merged' }));
+    form.save();
+    await waitFor(() => expect(form.onSubmit).toHaveBeenLastCalledWith(expect.objectContaining({
+      webhookTrigger: { events: [], source: { preset: 'plugin', sources: [{ plugin: 'cindy-gitlab', events: ['merge_request.merged'], filters: [
+        { field: 'host', operator: 'equals', value: 'git.example.com' },
+        { field: 'project', operator: 'equals', value: 'group/app' },
+      ] }] } },
+    }), true));
+  });
+
+  it('watches one issue, including new comments', async () => {
+    const listEventSources = gitlabPlugin();
+    const form = mount(schedule());
+    await chooseGitlab(listEventSources);
+    fireEvent.click(screen.getByRole('radio', { name: 'scheduler.editor.webhook.scope.gitlabItem' }));
+    fireEvent.change(screen.getByRole('textbox', { name: 'scheduler.editor.webhook.gitlabItem.label' }), { target: { value: 'group/app#3' } });
+    fireEvent.click(await screen.findByRole('combobox', { name: 'scheduler.prTrigger.condition' }));
+    fireEvent.click(screen.getByRole('option', { name: 'scheduler.editor.webhook.gitlabItem.issueChange.comment' }));
+    form.save();
+    await waitFor(() => expect(form.onSubmit).toHaveBeenLastCalledWith(expect.objectContaining({
+      webhookTrigger: { events: [], source: { preset: 'plugin', sources: [{ plugin: 'cindy-gitlab', events: ['issue.comment'], filters: [
+        { field: 'project', operator: 'equals', value: 'group/app' },
+        { field: 'iid', operator: 'equals', value: '3' },
+        { field: 'kind', operator: 'equals', value: 'issue' },
+      ] }] } },
+    }), true));
+  });
+
+  it('defaults a specific MR to the GitLab plugin', async () => {
+    const listEventSources = gitlabPlugin();
+    const form = mount(schedule());
+    await chooseGitlab(listEventSources);
+    fireEvent.click(screen.getByRole('radio', { name: 'scheduler.editor.webhook.scope.gitlabItem' }));
+    fireEvent.change(screen.getByRole('textbox', { name: 'scheduler.editor.webhook.gitlabItem.label' }),
+      { target: { value: 'https://git.example.com/Group/App/-/merge_requests/12' } });
+    expect((await screen.findByRole('radio', { name: 'scheduler.editor.webhook.gitlabPluginConnection' }) as HTMLInputElement).checked).toBe(true);
+    fireEvent.click(screen.getByRole('combobox', { name: 'scheduler.prTrigger.condition' }));
+    fireEvent.click(screen.getByRole('option', { name: 'scheduler.editor.webhook.gitlabItem.mrChange.merged' }));
+    form.save();
+    await waitFor(() => expect(form.onSubmit).toHaveBeenLastCalledWith(expect.objectContaining({
+      manual: true,
+      webhookTrigger: { events: [], source: { preset: 'plugin', sources: [{ plugin: 'cindy-gitlab', events: ['merge_request.merged'], filters: [
+        { field: 'host', operator: 'equals', value: 'git.example.com' },
+        { field: 'project', operator: 'equals', value: 'group/app' },
+        { field: 'iid', operator: 'equals', value: '12' },
+        { field: 'kind', operator: 'equals', value: 'mr' },
+      ] }] } },
+    }), true));
+  });
+
+  it('keeps timed state check selected when reopening a saved GitLab MR prTrigger, and allows switching to the plugin', async () => {
+    const listEventSources = gitlabPlugin();
+    const existing = mount(schedule({
+      manual: false,
+      prTrigger: { url: 'https://git.example.com/group/app/-/merge_requests/12', change: 'merged' },
+    }));
+    await waitFor(() => expect(listEventSources).toHaveBeenCalled());
+    await act(async () => { await listEventSources.mock.results[0]!.value; });
+    expect((await screen.findByRole('radio', { name: 'scheduler.editor.webhook.gitlabMrPollConnection' }) as HTMLInputElement).checked).toBe(true);
+    fireEvent.click(screen.getByRole('radio', { name: 'scheduler.editor.webhook.gitlabPluginConnection' }));
+    existing.save();
+    await waitFor(() => expect(existing.onSubmit).toHaveBeenLastCalledWith(expect.objectContaining({
+      prTrigger: null,
+      webhookTrigger: { events: [], source: { preset: 'plugin', sources: [{ plugin: 'cindy-gitlab', events: ['merge_request.merged'], filters: [
+        { field: 'host', operator: 'equals', value: 'git.example.com' },
+        { field: 'project', operator: 'equals', value: 'group/app' },
+        { field: 'iid', operator: 'equals', value: '12' },
+        { field: 'kind', operator: 'equals', value: 'mr' },
+      ] }] } },
+    }), true));
+  });
+});
+
+it('asks for a sigil when a GitLab item is only a number', async () => {
+  const form = mount(schedule({}));
+  fireEvent.click(await screen.findByRole('radio', { name: 'scheduler.editor.trigger.event' }));
+  fireEvent.click(screen.getByRole('combobox', { name: 'scheduler.editor.webhook.sourceLabel' }));
+  fireEvent.click(screen.getByRole('option', { name: 'GitLab' }));
+  fireEvent.click(screen.getByRole('radio', { name: 'scheduler.editor.webhook.scope.gitlabItem' }));
+  fireEvent.change(screen.getByRole('textbox', { name: 'scheduler.editor.webhook.gitlabItem.label' }), { target: { value: '12' } });
+  expect(await screen.findByText('scheduler.editor.webhook.gitlabItem.errors.ambiguous')).toBeTruthy();
+  form.save();
+  await waitFor(() => expect(form.onSubmit).not.toHaveBeenCalled());
+});
+
+// Without an account or event plugins, the event trigger falls back to the source that needs neither.
+it('offers a single PR as the event source while signed out without event plugins', async () => {
+  vi.stubGlobal('electronAPI', { gitContext: { githubAppStatus: async () => ({ available: true, login: null }) },
+    maker: { schedule: { webhookReceiver: async () => 'signed-out' } } });
+  const form = mount(schedule({}));
+  fireEvent.click(await screen.findByRole('radio', { name: 'scheduler.editor.trigger.event' }));
+  const url = 'https://github.com/example/project/pull/7';
+  fireEvent.change(await screen.findByRole('textbox', { name: 'scheduler.editor.webhook.item.label' }), { target: { value: url } });
+  form.save();
+  await waitFor(() => expect(form.onSubmit).toHaveBeenLastCalledWith(expect.objectContaining({
+    manual: true, prTrigger: { url, change: 'any' }, webhookTrigger: null,
+  }), true));
+});
+
+// PR 12168, unit/jsdom: an MR prTrigger needs a background timed check even if saved with manual=true.
+it('enables periodic checks when reopening a manual GitLab MR prTrigger', async () => {
   const url = 'https://git.example.test/team/repo/-/merge_requests/7';
-  fireEvent.change(screen.getByRole('textbox', { name: 'scheduler.prTrigger.url' }), { target: { value: url } });
-  const timed = screen.getByRole('checkbox', { name: 'scheduler.prTrigger.timed' }) as HTMLInputElement;
-  expect(timed.checked).toBe(true);
-  expect(timed.disabled).toBe(true);
+  const form = mount(schedule({ manual: true, recurring: false, prTrigger: { url, change: 'any' } }));
+  await screen.findByRole('radio', { name: 'scheduler.editor.trigger.event' });
   form.save();
   await waitFor(() => expect(form.onSubmit).toHaveBeenCalledWith(expect.objectContaining({
-    manual: false, recurring: true, intervalMs: 300_000, cronExpr: '*/5 * * * *', prTrigger: { url, change: 'any' },
+    manual: false, recurring: true, cronExpr: '*/10 * * * *', prTrigger: { url, change: 'any' },
   }), true));
 });
 
@@ -370,7 +609,7 @@ it('preserves both triggers when editing an existing timed Webhook', async () =>
   const form = mount(schedule({ preRunHook: { command: 'node check.mjs https://github.com/example/project/pull/85' },
     webhookTrigger: { endpointId: 'existing', events: ['issues.opened'], source: { preset: 'github' } } }));
   await screen.findByRole('button', { name: 'routines.advancedSettings' });
-  expect(screen.getByRole('radio', { name: 'scheduler.cell.tagWebhook' }).getAttribute('aria-checked')).toBe('true');
+  expect(screen.getByRole('radio', { name: 'scheduler.editor.trigger.event' }).getAttribute('aria-checked')).toBe('true');
   form.save();
   await waitFor(() => expect(form.onSubmit).toHaveBeenCalledWith(expect.objectContaining({
     manual: false, recurring: true, cronExpr: '0 9 * * *', webhookTrigger: { events: ['issues.opened'], source: { preset: 'github' } },

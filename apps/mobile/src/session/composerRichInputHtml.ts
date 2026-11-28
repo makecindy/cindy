@@ -516,6 +516,13 @@ export function buildComposerRichInputHtml(config: ComposerRichInputConfig): str
     selection.addRange(range);
   };
 
+  // Android can hide the WebView before an injected Send read runs. Deliver a
+  // final DOM read at that transition, with the same pending-paste barrier.
+  if (config.platform === 'android') document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) return;
+    const pendingPaste = Array.from(pasteMarkers.values()).some(({ marker }) => root.contains(marker));
+    post({ type: 'hidden-snapshot', capturedAt: Date.now(), documentId, document: readDocument(), pendingPaste });
+  });
   root.addEventListener('input', notify);
   root.addEventListener('compositionstart', () => { composing = true; });
   root.addEventListener('compositionend', () => { composing = false; notify(); });

@@ -11,7 +11,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import { toast } from '@/lib/toast';
 import type { AuxiliaryModelHealthEvent } from '../../../shared/auxiliaryModelHealth';
 
-const SETTINGS_PATH = '/settings?tab=personalization&section=personalization.auxiliaryModels';
+const SETTINGS_PATH = '/settings?tab=model-groups&section=personalization.auxiliaryModels';
 
 function noticeKind(row: AuxiliaryModelHealthEvent) {
   if (row.status === 'recovered') return 'recovered';

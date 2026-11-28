@@ -163,7 +163,7 @@ describe('createStdioTransport process observer', () => {
     const onProcessSpawned = vi.fn(() => dispose);
     const transport = createStdioTransport({ binaryPath: '/codex', onProcessSpawned });
 
-    expect(onProcessSpawned).toHaveBeenCalledWith(4321);
+    expect(onProcessSpawned).toHaveBeenCalledWith(4321, child);
     const onClose = vi.fn();
     const onLine = vi.fn();
     transport.onClose(onClose);

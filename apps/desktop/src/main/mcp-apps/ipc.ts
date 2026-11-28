@@ -11,7 +11,7 @@ import { bindPluginUiResource, finishPluginUiAction, hasComposerAttachmentInWind
 import { readPluginHostUi } from '../mcp-integrations/plugin-app-registry.js';
 import { nativePluginUi, parsePluginUiInterests } from './nativeRuntime.js';
 import { manageAppSettings } from '../app-settings/sections.js';
-import { matchesGhostHostUiAttachment, type GhostHostUiContribution } from '@cindy/plugin-protocol';
+import { matchesGhostHostUiAttachment, isDynamicComposerContribution, type GhostHostUiContribution } from '@cindy/plugin-protocol';
 import { preparePluginAttachmentResult } from './pluginAttachment.js';
 import { getActiveAppSession } from '../appSessionState.js';
 import { stageLocalFileToCache, cleanupOwnedUnpersistedStagedChatAttachments } from '../file-browser/remote-file-cache.js';
@@ -266,14 +266,23 @@ export function registerMcpAppsIpc(
           const signal = controller ? AbortSignal.any([controller.signal, timeout]) : timeout;
           const owner = currentOwner();
           const scope = sessionId === null ? undefined : await assertSession(sessionId);
+          const dynamic = action.kind !== 'command' && isDynamicComposerContribution(declaration as GhostHostUiContribution);
           const assertCurrent = async () => {
             signal.throwIfAborted();
             if (owner !== currentOwner() || readPluginHostUi(action.instanceId as string) !== entry || event.sender.isDestroyed()) throw new Error('MCP_APP_SOURCE_UNAVAILABLE');
             entry.config.plugin!.assertCurrent(sessionId ?? undefined);
             if (scope && sessionId !== null) {
               const latest = await assertSession(sessionId);
-              if (latest.owner !== scope.owner || latest.session.clearedAt !== scope.session.clearedAt || latest.session.remoteHostId)
+              if (latest.owner !== scope.owner || latest.session.clearedAt !== scope.session.clearedAt || latest.session.remoteHostId ||
+                  dynamic && latest.session.agentDeviceId)
                 throw new Error('MCP_APP_SESSION_UNAVAILABLE');
+            }
+            if (dynamic) {
+              if (sessionId === null) throw new Error('MCP_APP_SESSION_UNAVAILABLE');
+              const state = nativePluginUi.snapshot(caller, { instanceId: action.instanceId as string, id: action.id as string, sessionId });
+              const item = state?.items?.find(item => item.id === action.value);
+              if (typeof action.value !== 'string' || (state?.visible ?? (declaration as GhostHostUiContribution).visible) !== true ||
+                  state?.disabled || !item || item.visible === false || item.disabled) throw new Error('MCP_APP_INVALID_REQUEST');
             }
             signal.throwIfAborted();
           };
@@ -281,8 +290,8 @@ export function registerMcpAppsIpc(
           if (sessionId !== null && (await assertSession(sessionId)).session.remoteHostId) throw new Error('MCP_APP_OWNER_ONLY');
           let value: string | undefined;
           if (action.value !== undefined) {
-            if (!('options' in declaration) || !Array.isArray(declaration.options) || typeof action.value !== 'string' ||
-                !declaration.options.some(option => option.value === action.value)) throw new Error('MCP_APP_INVALID_REQUEST');
+            const allowed = dynamic || 'options' in declaration && Array.isArray(declaration.options) && declaration.options.some(option => option.value === action.value);
+            if (typeof action.value !== 'string' || !allowed) throw new Error('MCP_APP_INVALID_REQUEST');
             value = action.value;
           }
           const args: Record<string, unknown> = { ...declaration.arguments, ...(value === undefined ? {} : { value }) };
@@ -350,15 +359,18 @@ export function registerMcpAppsIpc(
           remote
             ? undefined
             : {
-                resource: async (source) => {
+                resource: async (source, openId) => {
                   const scope = sessionId === null ? undefined : await assertSession(sessionId);
-                  if (scope?.session.remoteHostId) throw new Error('MCP_APP_OWNER_ONLY');
+                  if (scope?.session.remoteHostId || source.composerAction && scope?.session.agentDeviceId)
+                    throw new Error('MCP_APP_OWNER_ONLY');
                   return bindPluginUiResource(caller, sessionId, source.instanceId, source.viewId, config => host.serverRevision(config), async () => {
                     if (!scope || sessionId === null) return;
                     const latest = await assertSession(sessionId);
-                    if (latest.owner !== scope.owner || latest.session.clearedAt !== scope.session.clearedAt || latest.session.remoteHostId)
+                    if (latest.owner !== scope.owner || latest.session.clearedAt !== scope.session.clearedAt ||
+                        latest.session.remoteHostId || source.composerAction && latest.session.agentDeviceId)
                       throw new Error('MCP_APP_SESSION_UNAVAILABLE');
-                  }, scope ? { title: scope.session.title, workingDir: scope.session.workingDir, model: scope.session.model } : undefined);
+                  }, scope ? { title: scope.session.title, workingDir: scope.session.workingDir, model: scope.session.model } : undefined,
+                  source.composerAction && openId ? { ...source.composerAction, openId } : undefined);
                 },
                 supply: (document, boundCaller, hostContext) =>
                   supplyMcpAppDocument(document, boundCaller, (input) =>

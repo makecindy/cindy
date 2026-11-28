@@ -70,7 +70,7 @@ export function createHostMessageStore(deps: {
           typeof input.toolUseId === "string" ? input.toolUseId : undefined,
         agentMeta: input.agentMeta as AgentMeta | null | undefined,
         agentKind:
-          agentKind === "cc" || agentKind === "codex" || agentKind === "pi"
+          agentKind === "cc" || agentKind === "codex" || agentKind === "pi" || agentKind === "acp"
             ? agentKind
             : null,
         ...(typeof createdAt === "number" && Number.isFinite(createdAt)

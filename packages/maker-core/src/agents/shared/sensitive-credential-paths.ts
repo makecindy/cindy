@@ -47,6 +47,27 @@ export const SENSITIVE_CREDENTIAL_PATH_PATTERN_SPECS = [
   // daemon env-file、codex-home 凭证、cc-manager 配置等真值 —— LLM 无合法
   // 读取场景,任一 harness 一律拦截(R5 安全审计 C-1)。
   { source: String.raw`(?:^|[\\/\s'"~])\.xdt-server\b`, flags: "i" },
+  // Cindy 托管的插件引擎隔离账号目录(<userData>/owners/<account>/plugin-engine-accounts/...)
+  // 内含插件引擎的本地文件型登录凭证(例如 Antigravity 隔离账号的 OAuth token);
+  // 锚定 owners/<account>/plugin-engine-accounts 与 cindy-<owner摘要>- 避免误伤本仓源码路径。
+  {
+    source: String.raw`(?:^|[\\/\s'"~])owners[\\/][^\\/\s'"]+[\\/]plugin-engine-accounts(?:[\\/\s'"]|$)`,
+    flags: "i",
+  },
+  {
+    source: String.raw`(?:^|[\\/\s'"~])plugin-engine-accounts[\\/][^\\/\s'"]+[\\/][^\\/\s'"]+[\\/]cindy-[a-f0-9]{12}-`,
+    flags: "i",
+  },
+  // Antigravity CLI 应用数据目录及其文件型 OAuth 凭证(原生 ~/.gemini/antigravity-cli 与
+  // 隔离账号目录内的 .gemini/antigravity-cli 均受保护)。
+  {
+    source: String.raw`(?:^|[\\/\s'"~])\.gemini[\\/]antigravity-cli(?:[\\/\s'"]|$)`,
+    flags: "i",
+  },
+  {
+    source: String.raw`(?:^|[\\/\s'"~])antigravity-oauth-token(?:[\s'"]|$)`,
+    flags: "i",
+  },
 ] as const;
 
 /**
@@ -96,7 +117,16 @@ export const SENSITIVE_CREDENTIAL_GLOB_PATTERNS = [
   "**/.docker/**",
   "**/.azure/**",
   "**/.claude/**",
+  "**/.claude-cindy-*/**",
   "**/.codex/**",
+  "**/.codex-cindy-*/**",
+  "**/.gemini/antigravity-cli",
+  "**/.gemini/antigravity-cli/**",
+  "**/antigravity-oauth-token",
+  "**/owners/*/plugin-engine-accounts",
+  "**/owners/*/plugin-engine-accounts/**",
+  "**/plugin-engine-accounts/*/*/cindy-*",
+  "**/plugin-engine-accounts/*/*/cindy-*/**",
   "**/.netrc",
   "**/.npmrc",
   "**/.pgpass",

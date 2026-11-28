@@ -40,7 +40,7 @@ import {
   requestXaiSubscriptionRefresh,
 } from '@/hooks/useXaiSubscriptionUsage';
 import { isXaiWeeklyUsageCurrent } from '../../../shared/xaiSubscriptionUsage';
-import { providerWeeklyQuotaSource } from '../new-chat/useProviderWeeklyQuota';
+import { providerUsageReaderSource } from '../new-chat/useProviderWeeklyQuota';
 import {
   buildOpenCodeGoUsageCard,
   buildKimiUsageCard,
@@ -109,7 +109,7 @@ export function useProviderSubscriptionCard(
 ): UsageCardAccount | null {
   const { t, i18n } = useTranslation();
   // Suspension only disables routing; settings must still show the saved account.
-  const source = provider ? providerWeeklyQuotaSource({ ...provider, suspended: false }) : null;
+  const source = provider ? providerUsageReaderSource({ ...provider, suspended: false }) : null;
   const providerId = provider?.id ?? 'openai';
   const { snapshot, failed, refreshing, refresh } = useCodexRateLimits(source === 'codex', providerId, options);
   const account = useAccountUsage(
@@ -158,7 +158,7 @@ function useRemoteProviderSubscriptionCard(
   refreshEpoch: number,
 ): UsageCardAccount | null {
   const { t, i18n } = useTranslation();
-  const source = provider && deviceId ? providerWeeklyQuotaSource({ ...provider, suspended: false }) : null;
+  const source = provider && deviceId ? providerUsageReaderSource({ ...provider, suspended: false }) : null;
   const providerId = provider?.id ?? 'openai';
   const liveObservation = groupLive ? { live: true, refreshEpoch } : { live: false };
   // Ordinary cards keep the upstream shared minute reader; expanded group cards
@@ -222,7 +222,7 @@ export function useDeviceProviderSubscriptionCard(
   const active = !options.live || (options.active !== false && foreground);
   const activeProvider = active ? provider : undefined;
   const source = activeProvider
-    ? providerWeeklyQuotaSource({ ...activeProvider, suspended: false })
+    ? providerUsageReaderSource({ ...activeProvider, suspended: false })
     : null;
   const providerId = activeProvider?.id;
   const epoch = useDeviceLinkReconnectEpoch(
@@ -286,7 +286,7 @@ export function useDeviceProviderSubscriptionCard(
 }
 
 function refreshSubscriptionCard(
-  source: NonNullable<ReturnType<typeof providerWeeklyQuotaSource>>,
+  source: NonNullable<ReturnType<typeof providerUsageReaderSource>>,
   providerId: string,
   deviceId: string | null,
   scheduling?: { background?: boolean },

@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { RemotePluginUiEnablePrompt } from '@/components/new-chat/RemotePluginUiEnablePrompt';
@@ -8,6 +8,7 @@ import { resetPluginCatalogMemoryForTest } from '../lib/pluginCatalogMemory';
 import { setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 import { projectPluginUiConsent } from '../../../../shared/pluginUiConsent';
 import { ghostInstallApprovalToken, ghostPermissionItems } from '../../../../shared/ghost';
+import type { PluginMarketItem } from '../../../../shared/pluginMarket';
 const { invoke, confirm, localGhosts, notices, directoryMode } = vi.hoisted(() => ({
   directoryMode: { real: false },
   notices: { success: vi.fn(), info: vi.fn(), error: vi.fn(), warning: vi.fn(), dismiss: vi.fn() },
@@ -58,8 +59,16 @@ vi.mock('@/components/ui/confirm-dialog-provider', () => ({
   useConfirmDialog: () => ({ confirm }),
 }));
 vi.mock('../GhostPluginPage', () => ({
-  GhostPluginCard: ({ item, onManage }: { item: { name: string }; onManage(): void }) => (
-    <button onClick={onManage}>{item.name}</button>
+  GhostPluginCard: ({ item, onManage, updateVersion, onUpdate }: {
+    item: { name: string };
+    onManage(): void;
+    updateVersion?: string;
+    onUpdate?: () => void;
+  }) => (
+    <>
+      <button onClick={onManage}>{item.name}</button>
+      {updateVersion && onUpdate ? <button onClick={onUpdate}>Update to {updateVersion}</button> : null}
+    </>
   ),
   MarketPluginCard: ({ item }: { item: { name: string } }) => <output>{item.name}</output>,
 }));
@@ -169,6 +178,7 @@ const configurationResource = (state = 'configured', id = 'weather') => ({
 beforeEach(() => {
   resetPluginCatalogMemoryForTest();
   vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} });
+  Element.prototype.scrollIntoView = vi.fn();
   // Supply the actual scroller geometry omitted by jsdom now that only real
   // virtual rows are rendered.
   vi.spyOn(HTMLElement.prototype, 'offsetWidth', 'get').mockReturnValue(800);
@@ -210,7 +220,37 @@ afterEach(() => {
   vi.useRealTimers();
   vi.unstubAllGlobals();
 });
+function openSourceMenu() {
+  fireEvent.keyDown(screen.getByRole('combobox', { name: /^settings\.ghosts\.page\.filtersAria/ }), { key: 'ArrowDown' });
+}
+
 describe('selected plugin host', () => {
+  it('updates the installed row from its matching update after a conflicting custom market', async () => {
+    const normal = invoke.getMockImplementation()!;
+    const ownSnapshot = snapshot('Computer weather');
+    const conflict: PluginMarketItem = {
+      pluginId: 'conflicting-weather', ghostId: 'weather', namespace: null, name: 'Weather', description: null,
+      author: null, scope: 'public', organizationId: null, defaultInstall: false, releaseId: 'different-release',
+      version: '3.0.0', publishedAt: '2026-11-25T00:00:00Z', icon: null, installState: 'conflict',
+      sourceType: 'git-market', sourceMarketName: 'Other market', enabled: true,
+    };
+    const update: PluginMarketItem = {
+      ...conflict, pluginId: 'installed-weather-update', releaseId: 'matching-release',
+      version: '2.0.0', installState: 'update-available', sourceMarketName: 'Installed market',
+    };
+    invoke.mockImplementation(async (device, channel, args) => {
+      if (args?.[0]?.actionId === 'management:snapshot' && !args[0].input?.read) {
+        return { effects: [], result: { ...ownSnapshot, market: { ...ownSnapshot.market, items: [conflict, update] } } };
+      }
+      return normal(device, channel, args);
+    });
+    render(<RemotePluginPage device={{ deviceId: 'computer-a', name: 'A' }} online />);
+    await screen.findByText('Computer weather');
+    fireEvent.click(screen.getByRole('button', { name: 'Update to 2.0.0' }));
+    expect(invoke.mock.calls.filter(call => call[2]?.[0]?.actionId === 'management:market-detail')
+      .map(call => call[2][0].input.pluginId)).toEqual([update.pluginId]);
+  });
+
   it('previews the selected computer version and checks the original submission after a lost reply', async () => {
     const normal = invoke.getMockImplementation()!;
     const selectedVersion = '2.0.0';
@@ -289,8 +329,9 @@ describe('selected plugin host', () => {
       return normal(device, channel, args);
     });
     render(<RemotePluginPage device={{ deviceId: 'computer-a', name: 'A' }} online />);
+    fireEvent.click(screen.getByRole('tab', { name: /^settings.ghosts.page.marketSection/ }));
     const pending = screen.getByText('settings.ghosts.page.todayRecommendations').closest('section')!;
-    expect(pending.querySelectorAll('[aria-hidden="true"]')).toHaveLength(3);
+    expect(pending.querySelectorAll('[data-recommendation-placeholder][aria-hidden="true"]')).toHaveLength(3);
     await act(async () => { finish(); });
     await screen.findByText('computer-a');
     expect(screen.queryByText('settings.ghosts.page.todayRecommendations')).toBeNull();
@@ -311,8 +352,9 @@ describe('selected plugin host', () => {
     });
     render(<RemotePluginPage device={{ deviceId: 'computer-a', name: 'A' }} online />);
     await screen.findByText('computer-a');
+    fireEvent.click(screen.getByRole('tab', { name: /^settings.ghosts.page.marketSection/ }));
     const section = screen.getByText('settings.ghosts.page.todayRecommendations').closest('section')!;
-    expect(section.querySelectorAll('[aria-hidden="true"]')).toHaveLength(3);
+    expect(section.querySelectorAll('[data-recommendation-placeholder][aria-hidden="true"]')).toHaveLength(3);
     const items = Array.from({ length: 3 }, (_, index) => ({ pluginId: `rec-${index}`, ghostId: `rec-${index}`, name: `Recommendation ${index}`,
       scope: 'public', publisherKind: 'official', releaseId: `release-${index}`, installState: 'not-installed' }));
     await act(async () => {
@@ -321,7 +363,7 @@ describe('selected plugin host', () => {
     });
     if (outcome === 'success') {
       expect(screen.getByText('Recommendation 0')).toBeTruthy();
-      expect(section.querySelectorAll('[aria-hidden="true"]')).toHaveLength(0);
+      expect(section.querySelectorAll('[data-recommendation-placeholder]')).toHaveLength(0);
     } else expect(screen.queryByText('settings.ghosts.page.todayRecommendations')).toBeNull();
   });
 
@@ -346,11 +388,14 @@ describe('selected plugin host', () => {
     const view = (readable: boolean) => <RemotePluginPage device={{ deviceId: 'computer-a', name: 'A' }}
       active={blocked !== 'hidden' || readable} online={blocked !== 'offline' || readable} />;
     const warm = render(view(true));
+    fireEvent.click(screen.getByRole('tab', { name: /^settings.ghosts.page.marketSection/ }));
     await screen.findByText('Recommendation 0');
     warm.unmount();
     clock.mockReturnValue(41_000);
     fail = true;
     const mounted = render(view(false));
+    expect(screen.getByRole('tab', { name: /^settings.ghosts.page.installedSection/ }).getAttribute('aria-selected')).toBe('true');
+    fireEvent.click(screen.getByRole('tab', { name: /^settings.ghosts.page.marketSection/ }));
     await act(async () => {});
     expect(recommendations).toHaveBeenCalledTimes(1);
     expect(screen.getByText('Recommendation 0')).toBeTruthy();
@@ -396,6 +441,7 @@ describe('selected plugin host', () => {
     clock.mockReturnValue(131_000);
     vi.useFakeTimers();
     const mounted = render(view(false));
+    fireEvent.click(screen.getByRole('tab', { name: /^settings.ghosts.page.marketSection/ }));
     await act(async () => { await vi.advanceTimersByTimeAsync(0); });
     expect(catalog).not.toHaveBeenCalled();
     name = 'Fresh remote market';
@@ -473,7 +519,8 @@ describe('selected plugin host', () => {
     const mounted = render(view(true));
     await screen.findByText('computer-a');
     fireEvent.click(screen.getByRole('tab', { name: /^settings.ghosts.page.marketSection/ }));
-    fireEvent.click(screen.getByRole('radio', { name: /settings.ghosts.page.filterAll/ }));
+    openSourceMenu();
+    fireEvent.click(screen.getByRole('option', { name: 'settings.ghosts.page.filterAll' }));
     await screen.findByText('Old market release');
     mounted.rerender(view(false));
     marketName = 'New market release';
@@ -792,9 +839,9 @@ describe('selected plugin host', () => {
     render(<RemotePluginPage device={{ deviceId: 'computer-b', name: 'B' }} online />);
     await screen.findByText('computer-b');
     expect(screen.queryByText('settings.ghosts.remote.import')).toBeNull();
-    fireEvent.keyDown(screen.getByRole('button', { name: 'settings.ghosts.page.addPluginAria' }), {
-      key: 'ArrowDown',
-    });
+    const add = screen.getByRole('button', { name: 'settings.ghosts.page.addPluginAria' });
+    expect(add.textContent).toBe('settings.ghosts.page.addPlugin');
+    fireEvent.keyDown(add, { key: 'ArrowDown' });
     fireEvent.click(await screen.findByRole('menuitem', { name: 'settings.ghosts.install' }));
     await waitFor(() => expect(pick).toHaveBeenCalledWith('computer-b'));
     await waitFor(() =>
@@ -1120,10 +1167,14 @@ describe('selected plugin host', () => {
     render(<RemotePluginPage device={{ deviceId: 'old-a', name: 'A' }} online />);
     fireEvent.click(await screen.findByText('Team notes'));
     await screen.findByText('Full description from A');
-    expect(screen.getByRole('heading', { name: 'Team notes' })).toBeTruthy();
-    expect(screen.getByText('v1.2.3')).toBeTruthy();
-    expect(screen.getByText('Example Team')).toBeTruthy();
-    expect(screen.getByText('read_notes')).toBeTruthy();
+    const hero = screen.getByRole('heading', { name: 'Team notes' }).closest('header')!;
+    expect(within(hero).getByText('Example Team')).toBeTruthy();
+    const summary = screen.getByText('settings.ghosts.detail.infoTitle');
+    fireEvent.click(summary);
+    const facts = within(summary.closest('details')!);
+    expect(facts.getByText('v1.2.3')).toBeTruthy();
+    expect(facts.getByText('Example Team')).toBeTruthy();
+    expect(facts.getByText('read_notes')).toBeTruthy();
     expect(screen.getByText('Access notes service')).toBeTruthy();
     expect(screen.queryByRole('switch')).toBeNull();
     expect(screen.queryByText('settings.ghosts.remote.configure')).toBeNull();
@@ -1663,12 +1714,13 @@ it.each([[120, 50], [-50, 0]])('switches a remote source without forcing an unpi
   render(<RemotePluginPage device={{ deviceId: 'computer-a', name: 'A' }} online />);
   await screen.findByText('computer-a');
   fireEvent.click(screen.getByRole('tab', { name: /^settings.ghosts.page.marketSection/ }));
-  expect(await screen.findByRole('radio', { name: /settings.ghosts.market.publisherKind.official/, checked: true })).toBeTruthy();
-  const radio = screen.getByRole('radio', { name: /settings.ghosts.market.publisherKind.community/ });
-  const marker = radio.closest('[role="radiogroup"]')!.parentElement!.parentElement!.previousElementSibling!;
+  const marker = document.querySelector('[data-catalog-region="heading"]')!.previousElementSibling!;
   const root = screen.getByRole('main');
+  openSourceMenu();
+  expect(screen.getByRole('option', { name: 'settings.ghosts.market.publisherKind.official' }).getAttribute('data-state')).toBe('checked');
+  const option = screen.getByRole('option', { name: 'settings.ghosts.market.publisherKind.community' });
   vi.spyOn(root, 'getBoundingClientRect').mockReturnValue(new DOMRect(0, 0, 800, 800));
   vi.spyOn(marker, 'getBoundingClientRect').mockReturnValue(new DOMRect(0, top, 800, 0));
-  root.scrollTop = 50; fireEvent.click(radio);
+  root.scrollTop = 50; fireEvent.click(option);
   expect(root.scrollTop).toBe(expected);
 });

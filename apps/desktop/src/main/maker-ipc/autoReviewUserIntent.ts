@@ -8,12 +8,15 @@ import { projectPersistedAgentFacingUserText, readAgentInputReferences } from '@
 export { AUTO_REVIEW_DELEGATED_CONTINUATION };
 
 export type { AutoReviewHistoryMessage } from '@cindy/maker-shared/auto-review-intent';
+export type AutoReviewHistory =
+  | readonly AutoReviewHistoryMessage[]
+  | { messages: readonly AutoReviewHistoryMessage[]; complete: boolean };
 const intentProjection = createAutoReviewIntentProjection();
 /** Both queued and direct steers may reach a freshly reattached harness. */
 export async function restoreAutoReviewSteerIntent(
   content: string | ReadonlyArray<{ type: string; [key: string]: unknown }>,
   options: SendOptions & { readonly [AUTO_REVIEW_DELEGATED_CONTINUATION]?: true },
-  readHistory: () => Promise<AutoReviewHistoryMessage[]>,
+  readHistory: () => Promise<AutoReviewHistory>,
 ): Promise<AutoReviewUserIntent | undefined> {
   options.signal?.throwIfAborted();
   // Resource changes already carry an explicit replacement, including an empty one.
@@ -87,4 +90,9 @@ export function currentAutoReviewResourceIntent(
 }
 
 /** Restore a bounded suffix of actual owner messages, without promoting assistant handoffs to consent. */
-export const restoreAutoReviewUserIntent = intentProjection.restore;
+export function restoreAutoReviewUserIntent(
+  history: AutoReviewHistory, current?: Parameters<typeof intentProjection.restore>[1],
+) {
+  if (!('messages' in history)) return intentProjection.restore(history, current);
+  return intentProjection.withOmission(intentProjection.restore(history.messages, current), !history.complete);
+}

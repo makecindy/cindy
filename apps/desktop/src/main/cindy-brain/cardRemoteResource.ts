@@ -163,6 +163,33 @@ export async function omitEndedPrOpenOnly(html: string, ended: (key: string) => 
   return out;
 }
 
+/**
+ * Merge buttons marked `data-ghost-pr-merge-ready="owner/repo#N"` track live PR merge readiness:
+ * show them only while the PR is open and CLEAN, hide them when live status says otherwise, and fall
+ * back to the plugin's initial `display:none` visibility when live status is unavailable or legacy.
+ */
+export async function omitUnreadyPrMergeButtons(
+  html: string,
+  verdict: (key: string) => Promise<'show' | 'hide' | 'fallback'>,
+): Promise<string> {
+  const verdicts = new Map<string, Promise<'show' | 'hide' | 'fallback'>>();
+  const drop: Array<[number, number]> = [];
+  for (const el of markedElements(html, /(?:^|\s)data-ghost-pr-merge-ready="[^"]+"/)) {
+    const key = prSlotKey(readAttr(el.attrs, 'data-ghost-pr-merge-ready') ?? '');
+    if (!key) continue;
+    if (!verdicts.has(key)) verdicts.set(key, verdict(key).catch(() => 'fallback'));
+    const decision = await verdicts.get(key);
+    const hiddenByPlugin = /(?:^|;)\s*display\s*:\s*none\b/i.test(readAttr(el.attrs, 'style') ?? '');
+    if (decision === 'hide' || (decision === 'fallback' && hiddenByPlugin)) {
+      drop.push([el.start, el.end]);
+    }
+  }
+  drop.sort((x, y) => x[0] - y[0]);
+  let out = html;
+  for (let i = drop.length - 1; i >= 0; i -= 1) out = out.slice(0, drop[i][0]) + out.slice(drop[i][1]);
+  return out;
+}
+
 export interface RichCardParts {
   /** Card HTML with the structured parts' contents removed, for the text block. */
   textHtml: string;
@@ -311,12 +338,31 @@ export function createGhostCardRemoteProvider(deps: {
     async list() { return { collectionId: COLLECTION, revision: '1', items: [] }; },
     async get(_context, request) {
       const { card, revision } = await read(request.ref.id);
-      const html = deps.prStatus
+      const prStatusCache = new Map<string, Promise<PrStatusResult | undefined>>();
+      const readPrStatus = deps.prStatus
+        ? (key: string) => {
+          let pending = prStatusCache.get(key);
+          if (!pending) {
+            pending = deps.prStatus!(card.sessionId!, key).catch(() => undefined);
+            prStatusCache.set(key, pending);
+          }
+          return pending;
+        }
+        : undefined;
+      const openHtml = readPrStatus
         ? await omitEndedPrOpenOnly(card.html, async (key) => {
-          const status = await deps.prStatus!(card.sessionId!, key);
+          const status = await readPrStatus(key);
           return status?.ok === true && (status.status === 'merged' || status.status === 'closed');
         })
         : card.html;
+      const html = await omitUnreadyPrMergeButtons(openHtml, async (key) => {
+        if (!readPrStatus) return 'fallback';
+        const status = await readPrStatus(key);
+        if (status?.ok !== true) return 'fallback';
+        if (status.status === 'open' && status.mergeState === 'CLEAN') return 'show';
+        if (status.status !== 'open' || status.mergeState !== undefined) return 'hide';
+        return 'fallback';
+      });
       const supportsForms = Boolean(deps.interactions) && request.client.primitives.includes('plugin-card-actions') && request.client.primitives.includes('plugin-card-forms');
       // Link addresses leave the text only when an actions block will carry them as controls; a client
       // without that primitive keeps the address in the text.
@@ -331,14 +377,14 @@ export function createGhostCardRemoteProvider(deps: {
       const textSource = rich?.textHtml ?? html;
       const blocks = supportsForms && (mail || legacyMail) ? [] : projectGhostCardBlocks(supportsForms ? omitGhostCardFormPreview(textSource) : textSource, { inlineLinks: externalLinks && linksAsActions });
       const prStatus = rich && !supersededBy ? await Promise.all(rich.prStatus.map(async (slot) => {
-        const status = await deps.prStatus?.(card.sessionId!, slot.key).catch(() => undefined);
+        const status = await readPrStatus?.(slot.key);
         return { ...slot, ...(status?.ok ? { status } : {}) };
       })) : undefined;
       // The archive button shows only when this card's PR and every other PR of the task are merged (desktop's rule).
       // `auto` adds the leave-time auto-archive, which a task taken over by an IM channel never gets.
       const archiveButton = rich && !obsolete && deps.taskArchive ? readTaskArchiveButton(card.html) : undefined;
       const taskArchive = archiveButton ? await (async () => {
-        const status = await deps.prStatus?.(card.sessionId!, archiveButton.key).catch(() => undefined);
+        const status = await readPrStatus?.(archiveButton.key);
         if (status?.ok !== true || status.status !== 'merged') return undefined;
         const facts = await deps.taskArchive!(card.sessionId!).catch(() => undefined);
         return facts?.allMerged ? { auto: archiveButton.auto && !facts.attached } : undefined;
@@ -346,7 +392,7 @@ export function createGhostCardRemoteProvider(deps: {
       const items = obsolete ? [] : await Promise.all(projectGhostCardActions(html, externalLinks, rich,
         request.client.primitives.includes('plugin-card-session-links')).map(async (action) => {
         const prKey = rich && action.url ? githubPrKey(action.url) : undefined;
-        const status = prKey ? await deps.prStatus?.(card.sessionId!, prKey).catch(() => undefined) : undefined;
+        const status = prKey ? await readPrStatus?.(prKey) : undefined;
         const next = action.submit && !supportsForms ? { ...action, disabled: true } : action;
         return status?.ok ? { ...next, prState: status.status } : next;
       }));

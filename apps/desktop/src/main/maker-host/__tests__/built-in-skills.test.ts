@@ -357,10 +357,14 @@ describe('built-in Skills', () => {
     const older = await prepareBuiltInSkills({ ...input, bundleVersion: 1 });
     expect(fs.readFileSync(path.join(descriptor.absolutePath, 'SKILL.md'), 'utf8')).toBe(installed);
     expect(older.warnings.join('\n')).toContain('only carries older bundle 1');
+    expect(older.persistentWarnings).toEqual([
+      'kept built-in Skill bundle 2; this build only carries older bundle 1',
+    ]);
 
     const conflicting = await prepareBuiltInSkills({ ...input, bundleVersion: 2 });
     expect(fs.readFileSync(path.join(descriptor.absolutePath, 'SKILL.md'), 'utf8')).toBe(installed);
     expect(conflicting.warnings.join('\n')).toContain('bundle version 2 was reused');
+    expect(conflicting.persistentWarnings).toEqual([]);
   });
 
   it('fails closed when an existing bundle manifest is corrupt', async () => {

@@ -10,10 +10,11 @@ import {
 } from '@/lib/issueConfirmPayload';
 
 describe('issue runtime metadata parsers', () => {
-  it('只接受三个公开 Harness 全名', () => {
+  it('只接受公开 Harness 标识并保留 ACP 反馈环境', () => {
     expect(parseIssueEnvHarness('Claude Code')).toBe('Claude Code');
     expect(parseIssueEnvHarness('Codex')).toBe('Codex');
     expect(parseIssueEnvHarness('Pi')).toBe('Pi');
+    expect(parseIssueEnvHarness('ACP')).toBe('ACP');
     expect(parseIssueEnvHarness('cc')).toBeUndefined();
     expect(parseIssueEnvHarness('cx')).toBeUndefined();
     expect(parseIssueEnvHarness(undefined)).toBeUndefined();
