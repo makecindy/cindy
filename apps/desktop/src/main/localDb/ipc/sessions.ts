@@ -1549,10 +1549,18 @@ export function registerSessionIpc(
       selectSessionsByIds(db, ids),
       selectImAttachedSessionIds(db, ids),
     ]);
-    return rows.map((row) => ({
-      ...projectSessionReadResult(row, opts.resolveContextWindow),
-      imAttached: attachedIds.has(row.id),
-    }));
+    return rows.map((row) => {
+      const projected = projectSessionReadResult(row, opts.resolveContextWindow);
+      return {
+        ...projected,
+        // A missed clear push must still revoke an older route change on the
+        // controller. The batch path does not scan history for every row.
+        ...(row.clearedAt != null && !projected.runtimeLastRouteChange
+          ? { runtimeLastRouteChange: null }
+          : {}),
+        imAttached: attachedIds.has(row.id),
+      };
+    });
   });
 
   ipcMain.handle('local-db:sessions:get', async (_e, id: unknown) => {
@@ -1574,7 +1582,9 @@ export function registerSessionIpc(
       ? candidateRouteChange : null;
     return {
       ...projected,
-      runtimeLastRouteChange,
+      ...(runtimeLastRouteChange || candidateRouteChange || row.clearedAt != null
+        ? { runtimeLastRouteChange }
+        : {}),
       imAttached,
     };
   });
