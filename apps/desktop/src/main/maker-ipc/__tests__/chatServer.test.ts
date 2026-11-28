@@ -1758,9 +1758,17 @@ describe('Chat Server result delivery and refresh', () => {
         members: [{ id: selfId, kind: 'human', name: 'Me', ownerActorId: selfId, state: 'joined', role }], messages: [], cursor: '1' } };
       return response(route);
     });
+    // #13603: selecting an unregistered folder reports the remedy without replacing the saved choice.
+    const validate = deps.validateProjectDir!;
+    deps.validateProjectDir = dir => dir === '/work/new'
+      ? Promise.resolve({ ok: false, errorCode: 'PROJECT_NOT_REGISTERED', message: '' })
+      : validate(dir);
     const patches = () => fixture.handle.mock.calls.filter(([route, method]) => route === `/conversations/${roomId}` && method === 'PATCH').map(call => call[2]);
     expect(await service.updateGroup({ groupId: roomId, projectDir: '/work/fork' })).toEqual({ ok: true, folderRepository: { repo: 'makecindy/cindy', filled: true } });
     expect(patches()).toEqual([expect.objectContaining({ project: { kind: 'github', repo: 'makecindy/cindy' } })]);
+    expect(workspaceSettings.get(roomId)).toMatchObject({ projectDir: '/work/fork' });
+    expect(await service.updateGroup({ groupId: roomId, projectDir: '/work/new' }))
+      .toMatchObject({ ok: false, errorCode: 'PROJECT_NOT_REGISTERED' });
     expect(workspaceSettings.get(roomId)).toMatchObject({ projectDir: '/work/fork' });
     role = 'member';
     expect(await service.updateGroup({ groupId: roomId, projectDir: '/work/fork' })).toEqual({ ok: true });

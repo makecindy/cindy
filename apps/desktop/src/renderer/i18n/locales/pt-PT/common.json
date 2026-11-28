@@ -12412,6 +12412,7 @@
         "projectDirClear": "Limpar pasta",
         "projectDirNote": "Escolha um projeto existente neste computador. Sem seleção, será usado o projeto do repositório ou o do companheiro que executar a tarefa. A divisão de trabalho em Git usa uma árvore de trabalho própria.",
         "autoContinueSaveFailed": "Não foi possível guardar as transições entre passos. Tente novamente.",
+        "projectDirNotRegistered": "Adicione esta pasta como projeto no Cindy e volte a selecioná-la.",
         "projectDirSaveFailed": "Não foi possível guardar a pasta do projeto. Certifique-se de que a pasta ainda existe e tente novamente.",
         "allowMemberInvites": "Permitir que todos convidem amigos",
         "allowMemberInvitesHint": "Quando ativado, todos os membros do grupo podem convidar amigos. Só o proprietário e os administradores podem alterar esta opção.",

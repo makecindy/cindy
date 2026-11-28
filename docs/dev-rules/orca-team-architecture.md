@@ -149,6 +149,8 @@ PR #101 之后，Orca 的 main 侧业务由独立 service 承接，`register.ts`
   （同一台电脑的另一个目录）／`other_computer`（运行设备），后三类附一句 `handoff_hint`。按创建参数与
   实际落点判定，不读 Lead 目录。
 
+跨电脑创建时，Lead 按首条任务的 clientId 查询运行设备的投递回执。运行设备仅在引擎已接手该输入时返回 `dispatchedInput`；消息已落库、查询失败或旧运行设备缺少回执字段时，创建结果保守显示 `queued`，由现有回报通道继续核对。
+
 实现见 `create_worker.ts` 的 `initialTaskState` / `workerHandoffPayload`，回归见
 `createWorkersTool.test.ts`。任务正文要自包含写在这两个工具与 `send_to_worker` 的工具说明里，不进系统提示词。
 

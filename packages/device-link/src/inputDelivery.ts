@@ -7,6 +7,8 @@ export interface InputDeliveryReceipt {
 export interface InputDeliveryProjection {
   inputDeliveryVersion?: 1;
   deliveryReceipts?: InputDeliveryReceipt[];
+  /** Present only for a requested input the active engine has started. */
+  dispatchedInput?: { clientId: string; agentKind: string };
 }
 
 /** Bound work before querying durable delivery state. No message content is returned. */

@@ -791,6 +791,7 @@ export function createOrcaRemoteWorkers(deps: OrcaRemoteWorkersDeps) {
             const result = await runtime.dispatch({
               proxySessionId: params.targetSessionId,
               rawContent: params.message,
+              initialTask: params.initialTask,
               clientId,
               beforeEnqueue: async () => {
                 if (!params.onAccepted) return;
@@ -832,7 +833,6 @@ export function createOrcaRemoteWorkers(deps: OrcaRemoteWorkersDeps) {
             return {
               ok: true,
               mode: result.mode,
-              ...(result.acceptedWithoutAgent ? { acceptedWithoutAgent: true } : {}),
               ...(result.mode !== 'queued' ? { agentKind: result.agentKind } : {}),
               clientId,
               dispatchOutcome:

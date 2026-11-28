@@ -1038,7 +1038,7 @@ describe('orca remote worker runtime', () => {
       }
       return original(device, channel, args);
     });
-    await expect(runtime.dispatch({ proxySessionId: 'proxy-1', rawContent: 'work', clientId: 'c-1' }))
+    await expect(runtime.dispatch({ proxySessionId: 'proxy-1', rawContent: 'work', clientId: 'c-1', initialTask: true }))
       .resolves.toMatchObject({ mode: 'unknown' });
     expect(runtime.hasPendingReport('proxy-1')).toBe(true);
     awaitingReceipt = false;

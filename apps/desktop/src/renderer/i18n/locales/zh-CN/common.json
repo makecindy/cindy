@@ -12274,6 +12274,7 @@
         "projectDirClear": "清除",
         "projectDirNote": "可以选择这台电脑上的已有项目。留空时，优先使用仓库对应的项目，其次使用执行伙伴自己的项目。Git 项目分工使用独立 worktree。",
         "autoContinueSaveFailed": "分工交接没能保存，请再试一次",
+        "projectDirNotRegistered": "先在 Cindy 中将这个文件夹添加为项目，再重新选择。",
         "projectDirSaveFailed": "项目文件夹没能保存，确认文件夹还在后再试",
         "allowMemberInvites": "允许所有成员邀请朋友",
         "allowMemberInvitesHint": "开启后，已加入的所有成员都可邀请朋友。仅群主和管理员可更改。",

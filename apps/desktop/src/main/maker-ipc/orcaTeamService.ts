@@ -100,7 +100,6 @@ export type DispatchWorkerMessageResult =
   | {
       ok: true;
       mode: 'dispatched' | 'queued' | 'steered';
-      acceptedWithoutAgent?: true;
       /** Accepting runtime locally; remote delivery reports the execution device's Agent at enqueue. */
       agentKind?: EngineKind;
       /** 底层 dispatcher 为该消息生成的 clientId;queued 模式下即队列内寻址句柄。 */
@@ -128,7 +127,7 @@ export interface DispatchWorkerTaskParams {
 }
 
 /** worker 派活的 domain 结果，保留 queued 与 dispatchOutcome 供不同 adapter 自行翻译。 */
-type WorkerDispatchWithRuntime =
+export type DispatchWorkerTaskResult =
   | {
       dispatched: true;
       queued?: false;
@@ -155,13 +154,6 @@ type WorkerDispatchWithRuntime =
       queued?: false;
       dispatchOutcome: CollabDispatchFailureOutcome;
     };
-
-// Creation only needs the input receipt. A peer may confirm acceptance without identifying the Agent.
-export type DispatchWorkerTaskResult = WorkerDispatchWithRuntime | {
-  dispatched: true;
-  queued?: false;
-  dispatchOutcome: CollabDispatchSuccessOutcome;
-};
 
 /** 简单生命周期操作的 domain result，供 IPC 与 MCP adapter 各自翻译。 */
 export type OrcaOkResult =
@@ -494,6 +486,7 @@ export interface OrcaTeamServiceDeps {
     message: string;
     workerId: string;
     delivery?: 'queue' | 'steer';
+    initialTask?: boolean;
     imagePaths?: string[];
     dispatchMeta: {
       source: string;
@@ -1229,16 +1222,10 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
       ...(params.imagePaths ? { imagePaths: params.imagePaths } : {}),
       dispatchMeta: params.dispatchMeta,
       assertCurrent,
+      initialTask: true,
       // Creation can queue its first task too; acceptance then lands after this call.
       assertDeliveryCurrent: await deps.captureDeliveryAuthority?.(link.leadSessionId),
     });
-    const { result } = execution;
-    if (result.ok && result.acceptedWithoutAgent) {
-      return {
-        dispatched: true,
-        dispatchOutcome: { kind: 'session-dispatch', dispatched: true, source: params.dispatchMeta.source },
-      };
-    }
     return mapNormalDispatchResult(target, execution);
   }
 
@@ -1259,7 +1246,7 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
   function mapNormalDispatchResult(
     target: OrcaWorkerRecordSnapshot,
     execution: ResolvedWorkerDispatchExecution,
-  ): WorkerDispatchWithRuntime {
+  ): DispatchWorkerTaskResult {
     const { result } = execution;
     if (!result.ok) {
       return { dispatched: false, dispatchOutcome: result.dispatchOutcome };
@@ -1295,6 +1282,7 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
     resolved: ResolvedWorker;
     message: string;
     mode: 'normal' | 'interrupt';
+    initialTask?: boolean;
     delivery?: 'queue' | 'steer';
     imagePaths?: string[];
     dispatchMeta: DispatchWorkerTaskParams['dispatchMeta'];
@@ -1442,6 +1430,7 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
             targetSessionId: target.sessionId,
             message: params.message,
             workerId: link.workerId,
+            ...(params.initialTask ? { initialTask: true } : {}),
             ...(params.delivery ? { delivery: params.delivery } : {}),
             ...(params.imagePaths ? { imagePaths: params.imagePaths } : {}),
             dispatchMeta: params.dispatchMeta,
