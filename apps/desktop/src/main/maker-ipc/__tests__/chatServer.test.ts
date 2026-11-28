@@ -3204,6 +3204,31 @@ describe('Chat Server result delivery and refresh', () => {
         ? [{ executionId: request(60).id, sourceMessageId: source.id, requestText: 'Sort out the weekly report' }] : undefined);
     });
 
+    // #13638: the existing notice test always has a visible source in the same page.
+    // Unit: real group and thread reads return the pagination boundary for all-hidden pages.
+    it.each(['group', 'thread'])('retains the boundary of an all-hidden %s page', async scope => {
+      const root = message(1, peerId, 'Earlier message');
+      const threadRootId = scope === 'thread' ? root.id : null;
+      const hidden = Array.from({ length: threadRootId ? 50 : 1 }, (_, i) => message(100 - i, cindyId, '', {
+        threadRootId, origin: 'bot', content: [{ type: 'card', namespace: 'cindy.group-assistant', schemaRevision: 1,
+          fallback: 'notice', data: { type: 'executor_unavailable', reason: 'offline', requesterId: peerId, sourceMessageId: root.id } }],
+      }));
+      const previous = fixture.handle.getMockImplementation()!;
+      fixture.handle.mockImplementation((route, method, body) => {
+        if (route.endsWith('/snapshot')) return { body: { room: room(roomId), members, messages: [root, ...hidden], cursor: '100' } };
+        if (route.includes('/messages?')) return { body: hidden };
+        if (route.endsWith(`/messages/${root.id}`)) return { body: root };
+        return previous(route, method, body);
+      });
+      if (threadRootId) {
+        expect(await service.chatServer!.thread({ groupId: roomId, rootId: threadRootId }))
+          .toMatchObject({ ok: true, replies: [], hasMore: true, pageOldestSequence: 51 });
+      } else {
+        expect(await service.getGroup(roomId, { limit: 1 }))
+          .toMatchObject({ ok: true, group: { messages: [], hasMoreBefore: true, pageOldestSequence: 100 } });
+      }
+    });
+
     // The card's cancel ends only this account's own request that has not started; a settled one needs no write.
     it.each([[selfId, 'needs_input', { ok: true }], [peerId, 'needs_input', { ok: false, errorCode: 'ROLE_REQUIRED' }], [selfId, 'cancelled', { ok: true }]] as const)(
       'cancels a waiting request of %s in %s only when it is its own', async (requester, status, expected) => {

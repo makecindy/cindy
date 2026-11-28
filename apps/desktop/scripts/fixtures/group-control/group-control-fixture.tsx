@@ -25,6 +25,7 @@ if (!crypto.randomUUID) {
 
 interface GroupData {
   topicPreview?: boolean;
+  noAssistantComputers?: boolean;
   /** #9398: message-only push, then an explicitly released full plan read. */
   planRead?: 'talk' | 'work' | 'missing';
   processRecord?: boolean;
@@ -360,7 +361,7 @@ function groupFrom(data: GroupData) {
     ...(data.bubbles || data.arrangement || data.division || data.readReceipts || data.planningForeign ? { serverBacked: true } : {}),
     // The requester's own group-Cindy requests held until they choose a computer (bot-group-chat.md 第 9 节).
     ...(data.assistantDeviceWaits ? { serverBacked: true, assistantDeviceId: null,
-      assistantComputers: [{ id: 'mac', name: 'MacBook Pro' }, { id: 'studio', name: 'Studio · A very long computer name for layout verification' }],
+      assistantComputers: data.noAssistantComputers ? [] : [{ id: 'mac', name: 'MacBook Pro' }, { id: 'studio', name: 'Studio · A very long computer name for layout verification' }],
       assistantDeviceWaits: Array.from({ length: data.assistantDeviceWaits }, (_, i) => ({ executionId: `wait-${i}`, sourceMessageId: `m${i}`,
         requestText: '@Cindy 帮我把这周的周报整理一下，按项目分组，再列出下周的风险' })) } : {}),
     ...(data.readReceipts ? { supportsMessageReaders: true } : {}),

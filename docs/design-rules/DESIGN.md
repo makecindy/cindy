@@ -863,7 +863,8 @@ two 13px `--text-secondary` lines: the request (or how many are waiting) and the
 requests use the same computer. Separate lines are needed because sentence joining differs by language.
 Bottom row: a compact `Select` of computers, plus a right-aligned secondary 「取消请求」 and primary
 「继续」 that wrap together as one group. Mobile uses the same order with `BotGroupMenu` and two
-equal-width compact `MainWindowActionButton`s. Real-component regression:
+equal-width compact `MainWindowActionButton`s. When there are no computers, both clients show the
+request and the cancel action. Real-component regression:
 `scripts/fixtures/group-control` cases `assistant-device-wait` and `assistant-device-wait-narrow`.
 
 ### Desktop hidden channel records

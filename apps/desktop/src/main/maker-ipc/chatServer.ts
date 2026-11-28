@@ -2424,8 +2424,14 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       operationId: randomUUID(), threadRootId: rootId, readSeq: read?.read_seq ?? '0', following: next });
     return written.following;
   }
+  /** Use the raw page boundary even when the entire page is hidden. */
+  function hiddenNoticePageBoundary(page: readonly Message[], visibleCount: number) {
+    if (page.length === visibleCount) return {};
+    const sequences = page.map(message => Number(message.seq));
+    return { pageOldestSequence: Math.min(...sequences), pageNewestSequence: Math.max(...sequences) };
+  }
   async function threadDetail(input: Parameters<ChatServerApi['thread']>[0], attempt = 0): Promise<{
-    root: BotGroupMessageView; replies: BotGroupMessageView[]; hasMore: boolean; historyRevision?: string;
+    root: BotGroupMessageView; replies: BotGroupMessageView[]; hasMore: boolean; pageOldestSequence?: number; pageNewestSequence?: number; historyRevision?: string;
     messageUpdates?: BotGroupMessageView[]; executionFailures: BotGroupExecutionFailureView[]; readBefore?: number; following?: boolean;
   }> {
     const i = z.object({ groupId: id, rootId: id, before: z.number().int().positive().optional(), sourceMessageIds: z.array(id).optional(),
@@ -2470,6 +2476,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       const readBefore = i.markRead && !i.before ? await markThreadRead(i.groupId, root, page, cache ? s : undefined) : undefined;
       if (revision && cache?.generation(i.groupId) !== revision) return retry();
       return { root: rootViews[0]!, executionFailures, replies, hasMore: page.length === 50,
+        ...hiddenNoticePageBoundary(page, replies.length),
         ...(revision ? { historyRevision: revision, messageUpdates } : {}),
         ...(readBefore !== undefined ? { readBefore } : {}), ...(following !== undefined ? { following } : {}) };
     } catch (error) {
@@ -2704,7 +2711,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       ...(unread ? { serverUnread: { count: Math.min(99, unread.length), mentioned: unread.some(m => m.mentions?.includes(selfId) && !s.mentionReadIds?.includes(m.id)) } } : {}),
       createdAt: Date.parse(s.room.created_at), updatedAt: Date.parse(s.room.updated_at ?? s.room.created_at),
       ...(metadataRetryAt ? { metadataRetryAt } : {}),
-      messages, ...(projection ? { historyRevision: projection.generation, messageUpdates } : {}), executionFailures, ...(threadShareUpdates && Object.keys(threadShareUpdates).length ? { threadShareUpdates } : {}),
+      messages, ...(!summaryOnly ? hiddenNoticePageBoundary(fullPage, page.length) : {}), ...(projection ? { historyRevision: projection.generation, messageUpdates } : {}), executionFailures, ...(threadShareUpdates && Object.keys(threadShareUpdates).length ? { threadShareUpdates } : {}),
       ...(shares ? { threadShareVersion: shares.version } : {}), ...(threadList ? { threads: threadList } : {}), ...(threadsSyncing ? { threadsSyncing: true } : {}), ...(!summaryOnly && s.reads ? { readSequence: mainRead?.read_seq ?? '0' } : {}), hasMoreBefore: fullPage.length === (o.limit ?? 100), plans,
       ...(assistantDeviceWaits.length ? { assistantDeviceWaits } : {}),
       round: { canStop: !!deciding || serverPlans.some(p => canStopBotGroupPlan(p, selfId, (bot, requester) => mayStopWork(s.members, bot, requester)) && ['proposed', 'running', 'waiting'].includes(p.status)) || groupWork.some(e => ['queued', 'running', 'needs_input'].includes(e.status)

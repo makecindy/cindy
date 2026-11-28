@@ -49,6 +49,9 @@ export default {
       data: { ...base, members: [{ botId: 'a', name: 'Cindy', assistant: true, isOwned: false }], sidebar: false, messages: 1, workState: 'unknown', canStop: false } },
     'assistant-device-wait': { about: 'Your own group-Cindy request waiting for a computer: private card above the composer, no running state',
       data: { ...base, members: [{ botId: 'a', name: 'Cindy', assistant: true, isOwned: false }], sidebar: false, messages: 1, assistantDeviceWaits: 1 } },
+    'assistant-device-wait-no-computers': { about: 'A waiting request can still be cancelled when no computers are available',
+      viewport: { width: 480, height: 640 },
+      data: { ...base, members: [{ botId: 'a', name: 'Cindy', assistant: true, isOwned: false }], sidebar: false, messages: 1, assistantDeviceWaits: 1, noAssistantComputers: true } },
     'assistant-device-wait-narrow': { about: 'Two waiting requests at narrow width: the card wraps without overflowing',
       viewport: { width: 480, height: 640 },
       data: { ...base, members: [{ botId: 'a', name: 'Cindy', assistant: true, isOwned: false }], sidebar: false, messages: 2, assistantDeviceWaits: 2 } },
@@ -406,7 +409,9 @@ export default {
     if (ui.case.startsWith('assistant-device-wait')) {
       const card = page.getByTestId('bot-group-assistant-device');
       await card.waitFor();
-      await card.getByRole('button', { name: await ui.t('bots.groupChat.assistantDevice.continue'), exact: true }).waitFor();
+      const continueButton = card.getByRole('button', { name: await ui.t('bots.groupChat.assistantDevice.continue'), exact: true });
+      if (definition.data.noAssistantComputers) assert.equal(await continueButton.count(), 0);
+      else await continueButton.waitFor();
       await card.getByRole('button', { name: await ui.t('bots.groupChat.assistantDevice.cancel'), exact: true }).waitFor();
       // A wait is not group activity: no progress entry or stop control.
       assert.equal(await page.getByTestId('bot-group-work').count(), 0);

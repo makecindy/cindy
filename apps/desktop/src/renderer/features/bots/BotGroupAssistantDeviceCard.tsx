@@ -28,7 +28,7 @@ export function BotGroupAssistantDeviceCard({ group }: { group: Group }) {
   const mounted = useRef(true);
   useEffect(() => () => { mounted.current = false; }, []);
   const chosen = computers.some(computer => computer.id === deviceId) ? deviceId : computers[0]?.id ?? '';
-  if (!waits.length || !computers.length) return null;
+  if (!waits.length) return null;
 
   const run = async (kind: 'continue' | 'cancel', actions: ChatGroupAction[]) => {
     if (pending) return;
@@ -57,33 +57,33 @@ export function BotGroupAssistantDeviceCard({ group }: { group: Group }) {
     <section data-testid="bot-group-assistant-device" aria-labelledby="bot-group-assistant-device-title"
       className="mb-2 w-full rounded-xl border border-[var(--chat-input-border)] bg-[var(--chat-input-bg)] px-4 py-3">
       <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
-        <h2 id="bot-group-assistant-device-title" className="min-w-0 text-15 font-medium leading-6 text-[var(--text-primary)]">
+        <h2 id="bot-group-assistant-device-title" className="min-w-0 text-15 font-medium leading-[1.6] text-[var(--text-primary)]">
           {t(key('title'))}
         </h2>
-        <span className="inline-flex shrink-0 items-center gap-1 text-12 leading-5 text-[var(--text-tertiary)]">
+        <span className="inline-flex shrink-0 items-center gap-1 text-12 leading-[1.667] text-[var(--text-tertiary)]">
           <EyeOff size={12} aria-hidden />{t(key('onlyYou'))}
         </span>
       </div>
       {/* Two sentences, two lines: languages join sentences differently (no space in Chinese or Japanese). */}
-      <p className="mt-1 break-words text-13 leading-5 text-[var(--text-secondary)] [overflow-wrap:anywhere]">{request}</p>
-      <p className="break-words text-13 leading-5 text-[var(--text-secondary)]">{t(key('remember'))}</p>
+      <p className="mt-1 break-words text-13 leading-[1.54] text-[var(--text-secondary)] [overflow-wrap:anywhere]">{request}</p>
+      {chosen ? <p className="break-words text-13 leading-[1.54] text-[var(--text-secondary)]">{t(key('remember'))}</p> : null}
       <div className="mt-3 flex flex-wrap items-center justify-end gap-2">
-        <Select size="compact" label={t('bots.groupChat.server.settings.assistantComputer')} value={chosen}
+        {chosen ? <Select size="compact" label={t('bots.groupChat.server.settings.assistantComputer')} value={chosen}
           className="mr-auto w-[220px] max-w-full" truncateOptions disabled={!!pending}
-          options={computers.map(computer => ({ value: computer.id, label: computer.name }))} onValueChange={setDeviceId} />
+          options={computers.map(computer => ({ value: computer.id, label: computer.name }))} onValueChange={setDeviceId} /> : null}
         {/* The two answers wrap together, never one per line. */}
         <div className="ml-auto flex shrink-0 items-center gap-2">
           <Button type="button" variant="secondary" size="sm" disabled={!!pending} loading={pending === 'cancel'}
             onClick={() => void run('cancel', waits.map(wait => ({ type: 'cancelAssistantDeviceWait', executionId: wait.executionId })))}>
             {t(key('cancel'))}
           </Button>
-          <Button type="button" variant="primary" size="sm" disabled={!!pending || !chosen} loading={pending === 'continue'}
+          {chosen ? <Button type="button" variant="primary" size="sm" disabled={!!pending} loading={pending === 'continue'}
             onClick={() => void run('continue', [{ type: 'assistantDevice', deviceId: chosen }])}>
             {t(key('continue'))}
-          </Button>
+          </Button> : null}
         </div>
       </div>
-      {error ? <p role="alert" className="mt-2 text-12 leading-5 text-[var(--error-fg)]">{error}</p> : null}
+      {error ? <p role="alert" className="mt-2 text-12 leading-[1.667] text-[var(--error-fg)]">{error}</p> : null}
     </section>
   );
 }

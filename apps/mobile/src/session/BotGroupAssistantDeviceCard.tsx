@@ -34,7 +34,7 @@ export function BotGroupAssistantDeviceCard({ group, online, act }: {
   const mounted = useRef(true);
   useEffect(() => () => { mounted.current = false; }, []);
   const chosen = computers.find(computer => computer.id === deviceId) ?? computers[0];
-  if (!waits.length || !chosen) return null;
+  if (!waits.length) return null;
 
   const run = async (kind: 'continue' | 'cancel', calls: Array<[BotGroupRemoteActionId, Record<string, unknown>]>) => {
     if (pending) return;
@@ -60,22 +60,22 @@ export function BotGroupAssistantDeviceCard({ group, online, act }: {
       {/* Two sentences, two lines: languages join sentences differently (no space in Chinese or Japanese). */}
       <View>
         <Text style={styles.body}>{request}</Text>
-        <Text style={styles.body}>{t('groupChat.assistantDevice.remember')}</Text>
+        {chosen ? <Text style={styles.body}>{t('groupChat.assistantDevice.remember')}</Text> : null}
       </View>
-      <BotGroupMenu testID="botGroup.assistantDevice.computer" title={label} accessibilityLabel={label} disabled={disabled}
+      {chosen ? <BotGroupMenu testID="botGroup.assistantDevice.computer" title={label} accessibilityLabel={label} disabled={disabled}
         sections={[{ id: 'computer', options: computers.map(computer => ({ id: computer.id, title: computer.name, selected: computer.id === chosen.id })) }]}
         onSelect={setDeviceId}>
         {open => <MainWindowActionButton density="compact" style={styles.picker}
           action={{ label: chosen.name, accessibilityLabel: `${label}: ${chosen.name}`, disabled, onPress: open, testID: 'botGroup.assistantDevice.computerButton' }}
           textStyle={styles.pickerText} />}
-      </BotGroupMenu>
+      </BotGroupMenu> : null}
       <View style={styles.actions}>
         <MainWindowActionButton density="compact" grow action={{ label: t('groupChat.assistantDevice.cancel'), disabled, busy: pending === 'cancel',
           testID: 'botGroup.assistantDevice.cancel',
           onPress: () => void run('cancel', waits.map(wait => ['cancelAssistantDeviceWait', { executionId: wait.executionId }])) }} />
-        <MainWindowActionButton density="compact" grow action={{ label: t('groupChat.assistantDevice.continue'), tone: 'primary', disabled, busy: pending === 'continue',
+        {chosen ? <MainWindowActionButton density="compact" grow action={{ label: t('groupChat.assistantDevice.continue'), tone: 'primary', disabled, busy: pending === 'continue',
           testID: 'botGroup.assistantDevice.continue',
-          onPress: () => void run('continue', [['assistantDevice', { deviceId: chosen.id }]]) }} />
+          onPress: () => void run('continue', [['assistantDevice', { deviceId: chosen.id }]]) }} /> : null}
       </View>
       {error ? <Text style={styles.error} accessibilityRole="alert">{error}</Text> : null}
     </View>

@@ -1273,6 +1273,17 @@ describe('group timeline', () => {
     expect(h.chat.act.mock.calls.slice(-2)).toEqual([['cancelAssistantDeviceWait', { executionId: 'e1' }], ['cancelAssistantDeviceWait', { executionId: 'e2' }]]);
   });
 
+  // #13638: an empty computer list hid the only cancel action. The ordinary
+  // picker test always has computers. Unit: the live chat screen still offers cancellation.
+  it('lets the requester cancel a waiting request when there are no computers', async () => {
+    await render(group({ serverBacked: true, assistantDeviceId: null, assistantComputers: [],
+      assistantDeviceWaits: [{ executionId: 'e1', sourceMessageId: 'm1', requestText: 'Weekly report' }] }));
+    expect(byId('botGroup.assistantDevice')?.textContent).toContain('Weekly report');
+    expect(byId('botGroup.assistantDevice.computerButton')).toBeNull();
+    await click('botGroup.assistantDevice.cancel');
+    expect(h.chat.act).toHaveBeenCalledWith('cancelAssistantDeviceWait', { executionId: 'e1' });
+  });
+
   it('starts, dismisses and edits a proposed plan through the group actions', async () => {
     await render();
     expect(byId('botGroup.plan.proposed')).not.toBeNull();

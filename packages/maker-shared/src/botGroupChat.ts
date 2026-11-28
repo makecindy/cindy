@@ -856,6 +856,10 @@ export interface BotGroupDetail extends BotGroupSummary {
   /** Raised by every edit, deletion or reset; an older share view may no longer be true. */
   threadShareVersion?: number;
   hasMoreBefore: boolean;
+  /** Oldest sequence in the server page when notices were hidden, even if no visible rows remain. */
+  pageOldestSequence?: number;
+  /** Newest sequence in that same page, for detecting gaps on refresh. */
+  pageNewestSequence?: number;
   round: BotGroupRoundView;
   /** Plans referenced by the loaded messages, plus the open plan. */
   plans: BotGroupPlanView[];
@@ -1348,6 +1352,9 @@ export interface ChatServerApi {
    */
   thread(input: { groupId: string; rootId: string; before?: number; sourceMessageIds?: string[]; markRead?: boolean }): Promise<ChatServerResult<{
     root: BotGroupMessageView; replies: BotGroupMessageView[]; hasMore: boolean;
+    /** Oldest sequence before filtering hidden notices. */
+    pageOldestSequence?: number;
+    pageNewestSequence?: number;
     /** Same room generation as the main timeline; reset before merging older pages. */
     historyRevision?: string;
     messageUpdates?: BotGroupMessageView[];
