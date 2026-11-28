@@ -100,7 +100,6 @@ import {
   Sparkles,
   Timer,
   Trash2,
-  TriangleAlert,
   Undo2,
   X,
 } from 'lucide-react-native';
@@ -156,6 +155,10 @@ import {
 } from '@/platform/chrome';
 import { MessageActionSheet } from '@/session/MessageActionSheet';
 import { MessageUsageCost } from '@/session/MessageUsageCost';
+import { FailedSamplingNotice } from '@/session/FailedSamplingNotice';
+import { ModelMismatchNotice } from '@/session/ModelMismatchNotice';
+import { NoticeExplainButton } from '@/session/NoticeExplainSheet';
+import { resolveMobileErrorExplain } from '@/session/chatErrorExplain';
 import { messageCostParts } from '@cindy/maker-shared/usage-cost-details';
 import { buildMobileMessageMenu, type MobileMessageMenuActionId } from '@/session/messageActionMenu';
 import { isShareableMessage } from '@/session/shareSelectionStore';
@@ -242,7 +245,6 @@ import {
   formatMessageRelativeTime,
   formatMessageTurnCost,
   formatMessageTurnTokens,
-  formatModelShortLabel,
   mobileMessageShowsActionBar,
   writeClipboardText,
   type MobileMessageControlActionId,
@@ -4433,19 +4435,29 @@ function MessageBubble({
           {messageDispatchRouteLabel(dispatchRoute, t('models.pluginEngines.genericName'))}
         </Text>
       ) : null}
-      {item.message.failedSamplingAttempt ? (
-        <Text style={styles.failedSamplingAttemptText}>
-          {t('message.renderer.failedSamplingAttempt')}
-        </Text>
-      ) : null}
+      {item.message.failedSamplingAttempt ? <FailedSamplingNotice /> : null}
       {item.message.role === 'error' ? (
         <ErrorNotice message={displayBubbleBody}>
-          {item.message.rawError ? (
-            <AgentErrorDetails key={item.message.key} message={item.message.rawError}
-            onDiagnose={actions.onDiagnoseError ? () => actions.onDiagnoseError!({
-              message: displayBubbleBody, details: item.message.rawError!,
-            }) : undefined} />
-          ) : null}
+          {item.message.rawError ? (() => {
+            const explain = resolveMobileErrorExplain(
+              {
+                message: item.message.rawError,
+                reason: item.message.errorReason,
+                providerId: item.message.errorProviderId,
+              },
+              t,
+            );
+            return (
+              <AgentErrorDetails
+                key={item.message.key}
+                message={item.message.rawError}
+                explainButton={explain ? <NoticeExplainButton content={explain} /> : undefined}
+                onDiagnose={actions.onDiagnoseError ? () => actions.onDiagnoseError!({
+                  message: displayBubbleBody, details: item.message.rawError!,
+                }) : undefined}
+              />
+            );
+          })() : null}
         </ErrorNotice>
       ) : bubbleShown ? (
         bubble
@@ -4469,17 +4481,7 @@ function MessageBubble({
                 )} />
         )) : null}
       {item.message.kind === 'assistant' && item.message.modelMismatch ? (
-        // 模型降级提示(对齐桌面 AssistantMessage):所选模型本轮被上游静默替换,
-        // 常显在气泡下方,icon 用 warning 橙、文字保持 tertiary 灰阶。
-        <View style={styles.modelMismatchRow} testID="message.modelMismatch">
-          <TriangleAlert color={colors.statusAccent} size={iconSize.xs} strokeWidth={iconStroke.thin} />
-          <Text numberOfLines={2} style={styles.modelMismatchText}>
-            {t('message.renderer.modelMismatch', {
-              actual: formatModelShortLabel(item.message.modelMismatch.actual) || item.message.modelMismatch.actual,
-              selected: formatModelShortLabel(item.message.modelMismatch.selected) || item.message.modelMismatch.selected,
-            })}
-          </Text>
-        </View>
+        <ModelMismatchNotice mismatch={item.message.modelMismatch} />
       ) : null}
       {item.historyConfirmation && actions.pendingSend ? (
         <OutboxHistoryConfirmationRow clientId={clientId} requested={item.historyConfirmation === 'requested'}
@@ -9713,23 +9715,11 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   sourceLabelStackUser: {
     alignItems: 'flex-end',
   },
-  modelMismatchRow: {
-    alignItems: 'center',
-    flexDirection: 'row',
-    gap: 4,
-    maxWidth: '86%',
-  },
   failedSamplingAttemptText: {
     color: colors.textSecondary,
     fontSize: typeScale.footnote,
     lineHeight: lineHeight.caption,
     fontWeight: fontWeight.regular,
-  },
-  modelMismatchText: {
-    color: colors.textTertiary,
-    flexShrink: 1,
-    fontSize: typeScale.footnote,
-    lineHeight: lineHeight.caption,
   },
   collapseMeasureWrap: {
     // left/right 与 `bubble` 基础样式的水平 padding(spacing.md)绑定——

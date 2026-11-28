@@ -47,6 +47,8 @@ export interface SessionTailErrorBanner {
   rawError?: string;
   /** 错误行的稳定 reason key，供诊断提示带上。 */
   reason?: string | null;
+  /** 错误来源 providerId（优先错误行快照，回退会话当前 providerId），供点名供应商与说明面板使用。 */
+  providerId?: string | null;
   summaryKey?: string;
   /** 主按钮语义:中断标记行 →「继续任务」;普通失败行 →「重试」。 */
   continueKind: 'interrupted' | 'error';
@@ -65,7 +67,7 @@ export type SessionTailBannerState = SessionTailErrorBanner | SessionTailInterru
 
 export interface ResolveSessionTailBannerInput {
   messages: readonly RemoteMessage[];
-  session: Pick<RemoteSession, 'activeTurnStartedAt' | 'lastTurnEndedAt' | 'clearedAt' | 'source'> | null;
+  session: Pick<RemoteSession, 'activeTurnStartedAt' | 'lastTurnEndedAt' | 'clearedAt' | 'source' | 'providerId'> | null;
   projection: Pick<InputProjection, 'error' | 'credentialSwitchWait' | 'autoResumePending'>;
   isSessionStreaming: boolean;
   /**
@@ -106,14 +108,23 @@ export function resolveSessionTailBanner(input: ResolveSessionTailBannerInput): 
 
   const tail = findErrorTailMessage(input.messages);
   if (tail && !input.hiddenErrorClientIds.has(tail.clientId)) {
+    const errorProviderId = tail.providerId ?? input.session?.providerId ?? null;
     const nonRetryableGuidance = describeNonRetryableAgentError(tail.text, tail.reason);
-    const agentErrorGuidance = localizeAgentError(tail.reason, tail.toolLoop, tail.text, tail.outputLimit, tail.reconnectHandoff);
+    const agentErrorGuidance = localizeAgentError(
+      tail.reason,
+      tail.toolLoop,
+      tail.text,
+      tail.outputLimit,
+      tail.reconnectHandoff,
+      { providerId: errorProviderId },
+    );
     return {
       kind: 'error-tail',
       clientId: tail.clientId,
       text: nonRetryableGuidance ?? agentErrorGuidance ?? localizeUnclassifiedAgentError(tail.text, input.session?.source),
       rawError: tail.text,
       reason: tail.reason,
+      ...(errorProviderId ? { providerId: errorProviderId } : {}),
       ...(!nonRetryableGuidance && !agentErrorGuidance ? { summaryKey: unclassifiedAgentErrorI18nKey(tail.text, input.session?.source) } : {}),
       continueKind: tail.reason === APP_EXIT_INTERRUPTED_REASON ? 'interrupted' : 'error',
       retryable: nonRetryableGuidance === null && !requiresAgentErrorConfigurationChange(tail.text),
@@ -139,6 +150,7 @@ interface ErrorTailMessage {
   clientId: string;
   text: string;
   reason: string | null;
+  providerId: string | null;
   toolLoop: MobileToolLoopErrorDetails | null;
   outputLimit: OutputLimitDetails | null;
   reconnectHandoff?: unknown;
@@ -174,6 +186,10 @@ function findErrorTailMessage(messages: readonly RemoteMessage[]): ErrorTailMess
       clientId: message.clientId,
       text: rawText,
       reason: typeof content?.reason === 'string' ? content.reason : null,
+      providerId:
+        (typeof content?.providerId === 'string' && content.providerId.trim()) ||
+        (typeof message.agentMeta?.errorProviderId === 'string' && message.agentMeta.errorProviderId.trim()) ||
+        null,
       toolLoop: parseMobileToolLoopErrorDetails(content?.toolLoop),
       reconnectHandoff: content?.reconnectHandoff,
       outputLimit: parseOutputLimitDetails(content?.outputLimit) ?? null,

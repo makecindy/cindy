@@ -11,6 +11,8 @@ import { ErrorNotice, ErrorNoticeAction } from '@/components/ErrorNotice';
  *  - 右上角关闭 → error-tail 持久化 dismiss / interrupted 写 ack,不再提示。
  */
 import { AgentErrorDetails } from './AgentErrorDetails';
+import { resolveMobileErrorExplain } from './chatErrorExplain';
+import { NoticeExplainButton } from './NoticeExplainSheet';
 import { ReadableHistoryRecovery } from './ReadableHistoryRecovery';
 import { StyleSheet, View } from 'react-native';
 import { useTranslation } from 'react-i18next';
@@ -22,6 +24,8 @@ import { spacing } from '@/theme/tokens';
 export interface SessionTailBannerProps {
   state: NonNullable<SessionTailBannerState>;
   busy?: boolean;
+  providerId?: string | null;
+  providerName?: string | null;
   onRecoverHistory?: () => void;
   /** 展开详情后的「诊断」：上层带着错误与出错任务去新任务里排查。 */
   onDiagnose?: (error: ErrorDiagnosisSource) => void;
@@ -34,6 +38,8 @@ export interface SessionTailBannerProps {
 export function SessionTailBanner({
   state,
   busy,
+  providerId,
+  providerName,
   onContinue,
   onDismiss,
   onRecoverHistory,
@@ -49,6 +55,18 @@ export function SessionTailBanner({
         ? t(state.summaryKey)
         : state.text
       : t('session.tail.interrupted');
+  const errorExplain =
+    state.kind === 'error-tail' && state.rawError && !isInterrupted
+      ? resolveMobileErrorExplain(
+          {
+            message: state.rawError,
+            reason: state.reason,
+            providerId: state.providerId ?? providerId,
+            providerName,
+          },
+          t,
+        )
+      : null;
   const showContinue = state.kind === 'interrupted' || state.retryable;
   const actions = (
     <>
@@ -102,6 +120,7 @@ export function SessionTailBanner({
         <AgentErrorDetails
           message={state.rawError}
           actions={actions}
+          explainButton={errorExplain ? <NoticeExplainButton content={errorExplain} /> : undefined}
           onDiagnose={
             onDiagnose
               ? () => onDiagnose({ message: text, details: state.rawError ?? '', reason: state.reason })

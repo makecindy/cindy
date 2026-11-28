@@ -11687,6 +11687,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
                         {tailBannerState ? (
                           <SessionTailBanner
                             busy={tailBannerBusy || historyRecoveryBusy}
+                            providerId={currentSession?.providerId}
                             modelGroupSwitchOffer={
                               tailBannerState.kind === 'error-tail' && sessionModelGroupSwitchOffer
                                 ? {
@@ -11731,6 +11732,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
                           }
                           onRecoverHistory={canRecoverHistory ? () => void recoverReadableHistory() : undefined}
                           sessionSource={currentSession?.source}
+                          providerId={currentSession?.providerId}
                           onClearError={clearQueueError}
                           onCancelUsageLimitWait={cancelUsageLimitWait}
                           onResume={resumeQueue}
