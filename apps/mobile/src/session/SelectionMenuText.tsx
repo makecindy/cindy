@@ -5,6 +5,7 @@ import { requireOptionalNativeModule } from 'expo-modules-core';
 
 import { Text } from '@/components/AppText';
 import { i18n } from '@/i18n';
+import { MessageHistoryActive } from './messageHistoryActivity';
 import { commitSelectionMenuAction, SelectionQuoteContext, selectionQuoteMenuLabel } from './selectionQuote';
 
 interface SelectionMenuNative {
@@ -21,6 +22,7 @@ let nextRegistration = 0;
 /** Keeps RN Text as the native carrier; old installations retain their system copy menu. */
 export function SelectionMenuText({ onLayout, ...props }: TextProps) {
   const ctx = useContext(SelectionQuoteContext);
+  const historyActive = useContext(MessageHistoryActive);
   const latestContext = useRef(ctx);
   useLayoutEffect(() => { latestContext.current = ctx; }, [ctx]);
   // The quote callback identifies the host/draft scope. A changing side-chat
@@ -28,12 +30,15 @@ export function SelectionMenuText({ onLayout, ...props }: TextProps) {
   const quoteCallback = ctx?.commitQuote;
   const textRef = useRef<TextInstance>(null);
   const [tag, setTag] = useState<number | null>(null);
-  const quoteLabel = selectionQuoteMenuLabel();
+  const quoteLabel = quoteCallback ? selectionQuoteMenuLabel() : '';
   const sideChatLabel = ctx?.askInSideChat ? i18n.t('session.sideChat.title') : '';
   useEffect(() => {
-    if (!native || !tag || !props.selectable || !quoteCallback) return;
+    // Retained history stays mounted on navigation. Release the native
+    // selection binding when it hides, including in read-only sessions.
+    if (!native || !tag || !props.selectable || historyActive === false ||
+      (historyActive === undefined && !quoteCallback)) return;
     const registration = String(++nextRegistration);
-    const subscription = native.addListener('onAction', (event) => {
+    const subscription = quoteCallback && native.addListener('onAction', (event) => {
       const current = latestContext.current;
       if (event.registration === registration && current?.commitQuote === quoteCallback) {
         commitSelectionMenuAction(event.action, event.text, current);
@@ -43,10 +48,10 @@ export function SelectionMenuText({ onLayout, ...props }: TextProps) {
     // A view disappearing during navigation must not produce an unhandled rejection.
     void native.attach(tag, registration, quoteLabel, sideChatLabel).catch(() => {});
     return () => {
-      subscription.remove();
+      subscription?.remove();
       void native.detach(registration).catch(() => {});
     };
-  }, [tag, props.selectable, quoteCallback, quoteLabel, sideChatLabel]);
+  }, [tag, props.selectable, historyActive, quoteCallback, quoteLabel, sideChatLabel]);
 
   return <Text {...props} ref={textRef} onLayout={(event) => {
     // Cache the laid-out view even while streaming or read-only. Enabling
