@@ -118,7 +118,12 @@ export function registerMcpHandlers(registry: IpcHandlerRegistry, deps: McpHandl
     deps.broadcastChanged();
     return { ok: true };
   });
-  registry.handle(MAKER_INVOKE.MCP_CUSTOM_LIST, async (_event, context: unknown) => {
+  registry.handle(MAKER_INVOKE.MCP_CUSTOM_LIST, async (event, context: unknown) => {
+    // This payload carries what the settings form edits: HTTP headers and a local
+    // command's args/env, decrypted so the user can see their own configuration. It is
+    // only for the app's own renderer — plugin frames and remote senders must not read
+    // credentials that the store encrypted for Main.
+    assertTrustedAppRendererEvent(event as Parameters<typeof assertTrustedAppRendererEvent>[0]);
     const parsed = context === undefined ? undefined : listContextSchema.safeParse(context);
     if (parsed && !parsed.success) throwIpcError('INVALID_PARAMS', 'Invalid MCP catalog context');
     const input = parsed?.data;
@@ -168,7 +173,10 @@ export function registerMcpHandlers(registry: IpcHandlerRegistry, deps: McpHandl
     await afterChange();
   }
 
-  registry.handle(MAKER_INVOKE.MCP_CUSTOM_CREATE, async (_event, input: unknown) => {
+  registry.handle(MAKER_INVOKE.MCP_CUSTOM_CREATE, async (event, input: unknown) => {
+    if ((input as Partial<CustomMcpConfig> | null)?.transport === 'stdio') {
+      assertTrustedAppRendererEvent(event as Parameters<typeof assertTrustedAppRendererEvent>[0]);
+    }
     await createServer(input, null);
     return { ok: true };
   });
@@ -193,7 +201,10 @@ export function registerMcpHandlers(registry: IpcHandlerRegistry, deps: McpHandl
     return { configurationSaved: true, token: tokenResult, refreshError };
   };
 
-  registry.handle(MAKER_INVOKE.MCP_CUSTOM_UPDATE, async (_event, input: unknown) => {
+  registry.handle(MAKER_INVOKE.MCP_CUSTOM_UPDATE, async (event, input: unknown) => {
+    if ((input as Partial<CustomMcpConfig> | null)?.transport === 'stdio') {
+      assertTrustedAppRendererEvent(event as Parameters<typeof assertTrustedAppRendererEvent>[0]);
+    }
     const v = validateCustomMcpConfig(input, deps.getReservedMcpIds?.() ?? []);
     if (!v.ok) throwIpcError(v.code, v.message);
     const config = input as CustomMcpConfig;

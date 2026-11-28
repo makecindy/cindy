@@ -3,15 +3,19 @@
  * ---------------------------------------------------------------------------
  * 用户自定义 MCP 服务器配置的类型 SSoT —— main（store / provider）、preload、renderer 共用。
  *
- * 仅远程 transport（http/sse）。bearer token 不在本类型里，单独走 safeStorage
+ * 支持 http/sse/stdio。bearer token 不在本类型里，单独走 safeStorage
  * （`mcp_token_<id>`，见 providerSecrets 的 customMcpSecretStorageKey）。
  */
 
 import type { AgentKind } from '@cindy/maker-core';
 import type { BotModelRoute } from './botModelChain.js';
+import type { StdioMcpConfig } from './stdioMcp.js';
+
+export { isStdioMcpConfig } from './stdioMcp.js';
+export type { StdioMcpConfig } from './stdioMcp.js';
 
 /** 支持的 transport 类型。 */
-export const MCP_TRANSPORTS = ['http', 'sse'] as const;
+export const MCP_TRANSPORTS = ['http', 'sse', 'stdio'] as const;
 export type McpTransport = (typeof MCP_TRANSPORTS)[number];
 
 /** 一条自定义 MCP 配置（不含 token）。 */
@@ -20,12 +24,16 @@ export interface CustomMcpConfig {
   id: string;
   /** 展示名。 */
   name: string;
-  /** transport 类型：'http' | 'sse'。 */
+  /** transport 类型。 */
   transport: McpTransport;
-  /** 远程 MCP 端点 URL（http(s)）。 */
+  /** 远程 MCP 端点 URL；stdio 为留空字符串。 */
   url: string;
   /** 额外请求头（不含鉴权 token）。 */
   headers: Record<string, string>;
+  /** Required for stdio; encrypted as a unit at rest (arguments can contain secrets). */
+  stdio?: StdioMcpConfig;
+  /** Read-only Settings projection; never eligible for runtime registration. */
+  readError?: 'stdio-unreadable';
 }
 
 /** Optional runtime projection for capability pickers; omitted for configuration CRUD. */

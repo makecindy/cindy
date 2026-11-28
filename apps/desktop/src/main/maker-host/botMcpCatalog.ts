@@ -13,6 +13,7 @@ function isCustomMcpAvailable(input: {
   // The Apps facade is carried by the authenticated Host bridge for every
   // harness, including SSH. Direct-transport limitations do not apply to it.
   if (input.provider instanceof CustomMcpProvider && input.provider.supportsApps) return true;
+  if (input.custom?.transport === 'stdio') return false;
   // SSH Codex receives only REMOTE_ALLOWED_SERVER_NAMES; user configs are not
   // written into its daemon. Remote Claude serializes http/sse into startParams.
   // Remote Pi connects to custom HTTP MCPs directly (`s.remote` is not tunneled).

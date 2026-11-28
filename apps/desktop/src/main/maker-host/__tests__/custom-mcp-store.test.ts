@@ -58,6 +58,7 @@ const CREATE_SQL = `
     transport TEXT NOT NULL,
     url TEXT NOT NULL,
     headers TEXT NOT NULL DEFAULT '{}',
+    stdio TEXT,
     sort_order INTEGER NOT NULL DEFAULT 0,
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL
@@ -104,6 +105,15 @@ afterEach(() => {
 });
 
 describe('validateCustomMcpConfig', () => {
+  // Regression: a local MCP could only be configured in an engine's private file.
+  // Unit: the shared settings admission must accept a local command for all harnesses.
+  it('accepts a local stdio server through the shared configuration boundary', () => {
+    expect(validateCustomMcpConfig({
+      ...valid, transport: 'stdio', url: '',
+      stdio: { command: 'npx', args: ['-y', 'example-mcp'], env: {} },
+    })).toEqual({ ok: true });
+  });
+
   it('accepts a valid http config', () => {
     expect(validateCustomMcpConfig(valid)).toEqual({ ok: true });
   });
@@ -447,5 +457,54 @@ describe('stored MCP credentials versus transfer bounds', () => {
     const parsed = parseSetupSecretBundle({ mcpServers: [{ id: saved.id, url: saved.url, headers: saved.headers, token: null }], builtinKeys: [{ id: 'brave', value: 'fake-brave' }] });
     expect(parsed.mcpServers).toEqual([]);
     expect(parsed.builtinKeys).toEqual([{ id: 'brave', value: 'fake-brave' }]);
+  });
+});
+
+// Unit: local command secrets must round-trip only through safeStorage; failures
+// must preserve the previous configuration, just as existing HTTP headers do.
+describe('local MCP persistence', () => {
+  const local: CustomMcpConfig = { ...valid, transport: 'stdio', url: '',
+    stdio: { command: 'node', args: ['fixture', 'fake-argument-secret'], env: { KEY: 'fake-env-secret' } } };
+  it('encrypts the full command and preserves existing remote rows', async () => {
+    mountDb();
+    await createCustomMcpServer(valid);
+    await createCustomMcpServer({ ...local, id: 'local' });
+    expect(await getCustomMcpServer(valid.id)).toEqual(valid);
+    expect(await getCustomMcpServer('local')).toEqual({ ...local, id: 'local' });
+    const disk = JSON.stringify(raw!.prepare('SELECT * FROM custom_mcp_servers').all());
+    expect(disk).not.toContain('fake-argument-secret');
+    expect(disk).not.toContain('fake-env-secret');
+    vi.spyOn(safeStorage, 'encryptString').mockImplementation(() => { throw new Error('fake-env-secret'); });
+    await expect(updateCustomMcpServer('local', { ...local, name: 'changed' })).rejects.toThrow('MCP local configuration encryption failed');
+    expect(await getCustomMcpServer('local')).toEqual({ ...local, id: 'local' });
+  });
+  it('reports unreadable local data without falling back to another transport', async () => {
+    mountDb();
+    await createCustomMcpServer(local);
+    raw!.prepare('UPDATE custom_mcp_servers SET stdio = ?').run('corrupt');
+    await expect(getCustomMcpServer(local.id)).rejects.toThrow('MCP local configuration is unreadable');
+  });
+  // Review regression: an unavailable keychain must not hide healthy rows or
+  // prevent deletion of the unreadable local configuration from Settings.
+  it.each(['keychain', 'corrupt'])('isolates an unreadable local row (%s) and permits deletion', async failure => {
+    mountDb();
+    await createCustomMcpServer(valid);
+    await createCustomMcpServer({ ...local, id: 'local' });
+    if (failure === 'keychain') vi.mocked(safeStorage.isEncryptionAvailable).mockReturnValue(false);
+    else raw!.prepare('UPDATE custom_mcp_servers SET stdio = ? WHERE id = ?').run('corrupt', 'local');
+    const listed = await listCustomMcpServers();
+    expect(listed).toEqual([valid, { id: 'local', name: local.name, transport: 'stdio', url: '', headers: {}, readError: 'stdio-unreadable' }]);
+    expect(validateCustomMcpConfig(listed[1]).ok).toBe(false);
+    await deleteCustomMcpServer('local');
+    expect(await listCustomMcpServers()).toEqual([valid]);
+  });
+  it.each([
+    { command: '', args: [], env: {} },
+    { command: 'node', args: '--flag', env: {} },
+    { command: 'node', args: [], env: { KEY: 1 } },
+    { command: 'node', args: ['bad\0value'], env: {} },
+    { command: 'node', args: [], env: {}, cwd: '/project' },
+  ])('rejects malformed or unsupported local options before persistence', stdio => {
+    expect(validateCustomMcpConfig({ ...local, stdio }).ok).toBe(false);
   });
 });

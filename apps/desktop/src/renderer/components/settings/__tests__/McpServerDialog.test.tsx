@@ -189,6 +189,22 @@ it('embeds the same Settings form and uses its existing save path with user-edit
     url: 'http://example.test/mcp?key=public', headers: { 'X-Test': 'test-invalid-header' } }, 'test-invalid-token');
 });
 
+// Unit, real form: local setup previously could only save remote endpoints.
+it('saves a proposed local program without stale HTTP credentials and validates JSON', async () => {
+  const onSaved = vi.fn();
+  render(<McpServerDialog proposal={{ name: 'Local', transport: 'stdio', command: 'npx', args: ['-y', 'example-mcp'] }} onSaved={onSaved} onClose={vi.fn()} />);
+  expect(screen.queryByLabelText('settings.mcp.fields.token')).toBeNull();
+  change('localConfig', '{invalid');
+  fireEvent.click(save());
+  expect(document.activeElement).toBe(field('localConfig'));
+  expect(api.create).not.toHaveBeenCalled();
+  const stdio = { command: 'npx', args: ['-y', 'example-mcp'], env: { KEY: 'fixture-secret' } };
+  change('localConfig', JSON.stringify(stdio));
+  fireEvent.click(save());
+  await waitFor(() => expect(onSaved).toHaveBeenCalledOnce());
+  expect(api.create).toHaveBeenCalledWith({ id: 'custom_local', name: 'Local', transport: 'stdio', url: '', headers: {}, stdio }, '');
+});
+
 it('saves through a supplied persistence without touching this computer or its credentials', async () => {
   const persistence = { create: vi.fn(async () => {}), update: vi.fn(async () => {}) };
   const onSaved = vi.fn();
