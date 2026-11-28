@@ -12,7 +12,7 @@ import { opencodeGoUsageWindowMinutes } from '../../shared/opencodeGoUsage.js';
  * that fails only drops its own source; the rest of the panel still renders.
  */
 
-import type { GhostHarnessUsage } from '@cindy/plugin-protocol';
+import { parseGhostHarnessUsage, type GhostHarnessUsage } from '@cindy/plugin-protocol';
 import { actualSourceIdForModel, type ProviderView } from '@cindy/model-providers';
 import { CINDY_MAKE_ENABLED, isCindyMakeSource } from '@cindy/maker-shared/cindy-make-feature';
 import { matchCodexBucketForModel } from '@cindy/maker-shared/codex-usage-buckets';
@@ -25,7 +25,7 @@ import { isSessionActivityRunning, type SessionActivitySnapshot } from '@cindy/m
 
 import type { MenubarModelUsage, MenubarUsageScope, MenubarUsageScopeData } from '../../shared/menubarQuota.js';
 import { dbToMakerAgentKind } from '../../shared/agentKindConversion.js';
-import { isPluginEngineKind, type PluginEngineView } from '../../shared/pluginEngines.js';
+import { isPluginEngineKind, pluginEngineProviderId, type PluginEngineView } from '../../shared/pluginEngines.js';
 import { providerUsageReaderSource } from '../../shared/providerQuotaSource.js';
 import { isSubscriptionProvider, isUnusedDefaultAccount, type SubscriptionAccountUsage, type SubscriptionPoolView } from '../../shared/subscriptionAccounts.js';
 import { formatModelShort } from '../../shared/usageModelLabel.js';
@@ -95,6 +95,7 @@ export interface MenubarCollectDeps {
   readCodexResets?(providerId: string): Promise<MenubarResetCredits | null>;
   /** Installed plugin engines on this computer; absent in tests that do not cover them. */
   listPluginEngines?(): Promise<readonly PluginEngineView[]> | readonly PluginEngineView[];
+  readPluginEnginePool?(providerId: string): Promise<SubscriptionPoolView>;
   /** Reads one plugin engine's current account usage; null when unreadable or empty. */
   readPluginEngineUsage?(key: string): Promise<GhostHarnessUsage | null>;
   /** Subscriptions on the user's other computers, already read and mapped. */
@@ -194,15 +195,20 @@ export async function collectMenubarInputs(deps: MenubarCollectDeps): Promise<Me
     }
     return paygSource(provider);
   });
-  const pluginEngineReads = deps.readPluginEngineUsage
-    ? pluginEngines.map(async (engine): Promise<MenubarSubscriptionInput | null> => {
-        if (engine.suspended || engine.availability.state === 'unavailable' || engine.reportsUsage !== true) return null;
-        const usage = await safe(`plugin:${engine.key}`, () => deps.readPluginEngineUsage!(engine.key), null);
-        if (!usage) return null;
-        return pluginEngineSource(engine, usage, deps.nowMs);
-      })
-    : [];
-  for (const source of [...(await Promise.all(subscriptionReads)).flat(), ...(await Promise.all(pluginEngineReads))]) {
+  const pluginEngineReads = pluginEngines.map(async (engine): Promise<MenubarSubscriptionInput[]> => {
+    if (engine.suspended || engine.availability.state === 'unavailable' || !engine.reportsUsage) return [];
+    if (engine.accounts?.methods.length) {
+      const pool = await safe(`plugin-pool:${engine.key}`, async () => deps.readPluginEnginePool?.(engine.providerId), null);
+      if (!pool) return [];
+      const base = engine.accountProviderOf && pluginEngines.find(view => view.key === engine.accountProviderOf);
+      // A detached provider's generated name can contain its literal login. Only the
+      // account field goes through the panel and widget's privacy mask.
+      return pluginEnginePoolSources(base ? { ...engine, name: base.name } : engine, pool, deps.nowMs);
+    }
+    const usage = await safe(`plugin:${engine.key}`, async () => deps.readPluginEngineUsage?.(engine.key), null);
+    return usage ? [pluginEngineSource(engine, usage, deps.nowMs)] : [];
+  });
+  for (const source of [...(await Promise.all(subscriptionReads)).flat(), ...(await Promise.all(pluginEngineReads)).flat()]) {
     if (source) sources.push(source);
   }
 
@@ -935,6 +941,31 @@ export function zhipuSource(provider: ProviderView, result: ProviderAccountUsage
     windows, credits: null, creditsUnlimited: false, prepaidUsd: null,
     updatedAtMs: windows.length > 0 ? snapshot?.fetchedAt ?? null : null,
   };
+}
+
+/** Account ids belong to the base engine and survive moves between its providers. */
+export function pluginEnginePoolSources(
+  engine: PluginEngineView, pool: SubscriptionPoolView, nowMs: number, scopeKey = 'local',
+): MenubarSubscriptionInput[] {
+  if (pool.providerId !== engine.providerId) return [];
+  const baseKey = engine.accountProviderOf ?? engine.key;
+  const baseId = pluginEngineProviderId(baseKey);
+  return pool.accounts.flatMap(account => {
+    if (account.paused || (account.status !== 'ready' && account.status !== 'limited')) return [];
+    const usage = parseGhostHarnessUsage(account.usage?.plugin);
+    if (!usage) return [];
+    const source = pluginEngineSource(engine, usage, nowMs, scopeKey);
+    if (!source.windows.length && !source.balances?.length) return [];
+    return [{
+      ...source,
+      id: account.id === 'default' ? baseId : `${baseId}:account:${account.id}`,
+      account: typeof account.identity === 'string' ? account.identity.trim() || null : null,
+      plan: typeof account.plan === 'string' ? account.plan : null,
+      accountKeys: [`plugin:account:${scopeKey}:${baseKey}:${account.id}`],
+      pooled: true,
+      consuming: account.running > 0,
+    }];
+  });
 }
 
 /**
