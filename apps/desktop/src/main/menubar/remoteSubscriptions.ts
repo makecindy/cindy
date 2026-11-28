@@ -1,3 +1,4 @@
+import { isProviderSharePeer, isSharedTaskPeer } from '@cindy/device-link';
 import { remoteProviderDisableKey, isProviderDisabled } from '@cindy/model-providers';
 import { readModelDisableOverrides } from '../maker-host/model-disable-store.js';
 import { parseKimiAccountUsageResult, parseZhipuAccountUsageResult } from '../../shared/providerAccountUsage.js';
@@ -33,7 +34,7 @@ import { DEFAULT_ACCOUNT_USAGE_SCOPE, SUBSCRIPTION_ACCOUNTS_CHANNEL, isSubscript
 import { readDeviceProviderViews } from '../remote-agent/controller/deviceCatalog.js';
 import { mayServeBackgroundRead } from '../usage/peerUsageSync.js';
 import type { CodexAccountUsagePayload } from '../usageBroadcaster.js';
-import { claudeSource, codexSource, opencodeGoSource, pluginEngineSource, subscriptionPoolSources, xaiSource } from './collect.js';
+import { claudeSource, codexSource, opencodeGoSource, pluginEnginePoolSources, pluginEngineSource, subscriptionPoolSources, xaiSource } from './collect.js';
 import type { MenubarRemoteDevice, MenubarSubscriptionInput } from './snapshot.js';
 
 const MOBILE_PLATFORMS = new Set(['ios', 'android']);
@@ -52,7 +53,8 @@ export interface RemoteSubscriptionDeps {
 
 /** A computer whose accounts the user lets this one read, whether or not it is online now. */
 function isQuotaPeer(device: DeviceLinkDeviceView): boolean {
-  return !device.isSelf && device.remoteControlEnabled && device.controlEnabled && !MOBILE_PLATFORMS.has(device.platform ?? '');
+  return !device.isSelf && !isProviderSharePeer(device.deviceId) && !isSharedTaskPeer(device.deviceId)
+    && device.remoteControlEnabled && device.controlEnabled && !MOBILE_PLATFORMS.has(device.platform ?? '');
 }
 
 /** Same admission as the picker's other-computer providers and the cross-device usage sync. */
@@ -102,6 +104,17 @@ async function readUsage(
   return value;
 }
 
+function parsePool(pool: unknown, providerId: string): SubscriptionPoolView {
+  if (!isRecord(pool) || pool.providerId !== providerId || typeof pool.configured !== 'boolean' ||
+      !Array.isArray(pool.accounts) || !pool.accounts.every(account =>
+        isRecord(account) && typeof account.id === 'string' && account.id.length > 0 &&
+        typeof account.paused === 'boolean' && typeof account.running === 'number' &&
+        ['ready', 'limited', 'signed-out', 'unavailable'].includes(String(account.status)))) {
+    throw new Error('Invalid subscription pool response');
+  }
+  return pool as unknown as SubscriptionPoolView;
+}
+
 async function readAccount(
   deps: RemoteSubscriptionDeps,
   device: MenubarRemoteDevice,
@@ -110,15 +123,8 @@ async function readAccount(
   if (isSubscriptionProvider(provider.id) || provider.subscriptionPool || provider.subscriptionAccountPool) {
     const response = await deps.invoke(device.id, SUBSCRIPTION_ACCOUNTS_CHANNEL, [{ action: 'read', providerId: provider.id }]);
     if (response.ok) {
-      const pool = response.result;
-      if (!isRecord(pool) || pool.providerId !== provider.id || typeof pool.configured !== 'boolean' ||
-          !Array.isArray(pool.accounts) || !pool.accounts.every(account =>
-            isRecord(account) && typeof account.id === 'string' && account.id.length > 0 &&
-            typeof account.paused === 'boolean' && typeof account.running === 'number' &&
-            ['ready', 'limited', 'signed-out', 'unavailable'].includes(String(account.status)))) {
-        throw new Error('Invalid subscription pool response');
-      }
-      if (pool.configured) return subscriptionPoolSources(provider, pool as unknown as SubscriptionPoolView, deps.nowMs)
+      const pool = parsePool(response.result, provider.id);
+      if (pool.configured) return subscriptionPoolSources(provider, pool, deps.nowMs)
         .map(source => ({ ...source, id: `remote:${device.id}:${source.id}`, device, consuming: false }));
     } else if (response.error.code !== 'CHANNEL_NOT_ALLOWED') {
       throw Object.assign(new Error(response.error.message), { code: response.error.code });
@@ -169,7 +175,7 @@ async function readRemotePluginEngineList(
     }
     return {
       ok: true,
-      engines: parseOfferedPluginEngines(response.result).filter((engine) => engine.reportsUsage === true),
+      engines: parseOfferedPluginEngines(response.result).filter((engine) => engine.reportsUsage === true && !engine.accountProviderOf && !engine.key.includes('~')),
     };
   } catch (error) {
     deps.onError?.(`remote:${deviceId}:plugin-engines`, error);
@@ -217,31 +223,41 @@ async function readDevice(
       }),
     ),
     Promise.all(
-      pluginEngines.map(async (engine): Promise<MenubarSubscriptionInput | null> => {
+      pluginEngines.map(async (engine): Promise<MenubarSubscriptionInput[]> => {
         const key = `remote:${device.id}:${engine.providerId}`;
         try {
+          if (engine.accounts?.methods.length) {
+            const response = await deps.invoke(device.id, SUBSCRIPTION_ACCOUNTS_CHANNEL, [{ action: 'read', providerId: engine.providerId }]);
+            if (!response.ok) {
+              if (response.error.code === 'CHANNEL_NOT_ALLOWED' || response.error.code === 'PERMISSION_DENIED') return [];
+              throw new Error(response.error.message);
+            }
+            const pool = parsePool(response.result, engine.providerId);
+            return pluginEnginePoolSources(engine, pool, deps.nowMs, device.id)
+              .map(source => ({ ...source, id: `remote:${device.id}:${source.id}`, device, consuming: false }));
+          }
           const response = await deps.invoke(device.id, PLUGIN_ENGINES_INVOKE.USAGE, [engine.key]);
           if (!response.ok) {
-            if (response.error.code === 'CHANNEL_NOT_ALLOWED') return null;
+            if (response.error.code === 'CHANNEL_NOT_ALLOWED') return [];
             throw Object.assign(new Error(response.error.message), { code: response.error.code });
           }
           const usage = parseGhostHarnessUsage(response.result);
-          if (!usage) return null;
-          return {
+          if (!usage) return [];
+          return [{
             ...pluginEngineSource(engine, usage, deps.nowMs, device.id),
             id: key,
             device,
-          };
+          }];
         } catch (error) {
           deps.onError?.(key, error);
           failed.push(key);
-          return null;
+          return [];
         }
       }),
     ),
   ]);
   return {
-    sources: [...read.flatMap((source) => source ?? []), ...pluginRead.filter((source): source is MenubarSubscriptionInput => source !== null)],
+    sources: [...read.flatMap((source) => source ?? []), ...pluginRead.flat()],
     failed,
   };
 }

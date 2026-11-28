@@ -1,4 +1,6 @@
 import type { ProviderView } from '@cindy/model-providers';
+import { providerShareHostPeer } from '@cindy/device-link';
+import { buildUsageWidgetSnapshot } from '../../quota-overview/widgetSnapshot';
 import { codexAccountDisplayKey } from '../../maker-host/codex-auth-identity';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { remoteProviderDisableKey } from '@cindy/model-providers';
@@ -183,6 +185,67 @@ describe('collectMenubarInputs', () => {
       t: createMenubarTranslate('en', raw),
     });
   }
+
+  // Unit (#13768): the overview and widget consume the same account slots before
+  // and after a move; only same-owner, remotely offered pools enter peer reads.
+  it('projects eligible Antigravity accounts once across panel, widget and remote overview', async () => {
+    const engine = {
+      key: 'agy:agy', providerId: 'acp-plugin:agy:agy', ghostId: 'agy', harnessId: 'agy',
+      name: 'Antigravity', reportsUsage: true as const, availability: { state: 'available' as const },
+      models: [], permissionModes: [], defaultPermissionMode: 'ask' as const,
+      accounts: { methods: [{ id: 'oauth', label: 'Login', kind: 'browser' as const }] },
+      remoteUse: { supported: true, enabled: true },
+    };
+    const separate = { ...engine, key: engine.key + '~aaaaaaaa', providerId: engine.providerId + '~aaaaaaaa',
+      accountProviderOf: engine.key, name: 'Antigravity · bravo@example.test', remoteUse: { supported: false, enabled: false } };
+    const account = (id: string, remainingPercent: number) => ({
+      id, identity: id + '@example.test', plan: 'Pro', paused: id === 'default', running: 0,
+      status: 'ready' as const, limit: 1, weight: 1, directory: '',
+      usage: { plugin: { updatedAt: NOW, windows: [{ label: 'Weekly', remainingPercent, resetsAt: NOW + 86_400_000 }] } },
+    });
+    const original = account('default', 7);
+    const alpha = account('alpha', 61);
+    const bravo = account('bravo', 23);
+    const pool = (providerId: string, accounts: SubscriptionPoolView['accounts']): SubscriptionPoolView =>
+      ({ providerId, configured: true, strategy: 'rotate', accounts });
+    let split = false;
+    const list = () => split ? [engine, separate] : [engine];
+    const collectDeps = deps({
+      listProviders: async () => [], listPluginEngines: list,
+      readPluginEngineUsage: async key => key === engine.key ? original.usage.plugin : null,
+      readPluginEnginePool: async id => pool(id, id === separate.providerId ? [bravo] : split ? [original, alpha] : [original, alpha, bravo]),
+    });
+    const ids = [alpha, bravo].map(row => engine.providerId + ':account:' + row.id);
+    const readWidget = async (hidden: string[] = []) => {
+      const raw = (key: string) => rawMainString(key, 'en');
+      const view = buildMenubarView({ ...await collectMenubarInputs(collectDeps), nowMs: NOW, locale: 'en', moneySymbol: '$',
+        settings: { ...DEFAULT_MENUBAR_SETTINGS, privacy: true, hidden }, harnessLogos: MENUBAR_HARNESS_LOGOS,
+        uiStrings: buildMenubarUiStrings(mainStringKeysUnder('menubar.ui'), raw, 'en'), t: createMenubarTranslate('en', raw) });
+      return buildUsageWidgetSnapshot(view, NOW, raw)!.sources;
+    };
+    for (const moved of [false, true]) {
+      split = moved;
+      const visible = await readWidget();
+      expect(visible.map(row => [row.id, row.value]).sort()).toEqual([[ids[0], '61'], [ids[1], '23']]);
+      expect(new Set(visible.map(row => row.name)).size).toBe(2);
+      expect(JSON.stringify(visible)).not.toContain('bravo@example.test');
+    }
+    expect((await readWidget([ids[0]!])).map(row => row.id)).toEqual([ids[1]]);
+    const peer = { deviceId: 'peer', name: 'Peer', platform: 'darwin', online: true, remoteControlEnabled: true,
+      isSelf: false, controlEnabled: true, appVersion: '9.0.0' };
+    const remote = await readRemoteSubscriptions({
+      nowMs: NOW, listDevices: async () => ({ devices: [peer, { ...peer, deviceId: providerShareHostPeer('share', 'other') }] as never }),
+      invoke: async (deviceId, channel, args) => {
+        expect(deviceId).toBe('peer');
+        if (channel === 'maker:provider:list') return { ok: true, result: { providers: [] } };
+        if (channel === 'maker:list-plugin-engines') return { ok: true, result: list() };
+        expect([channel, args]).toEqual(['maker:subscription-accounts', [{ action: 'read', providerId: engine.providerId }]]);
+        return { ok: true, result: pool(engine.providerId, [original, alpha]) };
+      },
+    });
+    expect(remote.incomplete).toBe(false);
+    expect(remote.sources.map(row => [row.id, row.account])).toEqual([['remote:peer:' + ids[0], alpha.identity]]);
+  });
 
   it.each([
     { label: 'a missing 5-hour reset', reading: ready(), value: '65', fills: [0.8, 0.65], resets: ['Weekly resets'], plan: '' },
