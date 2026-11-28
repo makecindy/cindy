@@ -2,6 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { VoiceInputController } from "../VoiceInputController";
 import { VoiceTimelineLogger } from "../VoiceTimelineLogger";
 import {
+  endsWithSentenceBoundary,
+  extractRecentRefinedContext,
   hasAdditionalSentence,
   LEGACY_MANAGED_REFINE_REQUEST_LIMIT,
   resolveManagedRefineRequestLimit,
@@ -114,6 +116,28 @@ describe("sentence growth", () => {
     expect(hasAdditionalSentence("Use 3.14.", "Use 3.14. Next sentence.")).toBe(
       true,
     );
+  });
+});
+
+// 测试价值：经句末判断和最近句子提取的公开入口，保护长口述中重复标点/空格的线性处理及原有语境输出。
+// 依据：PR #13667 CodeQL 告警 564、565；旧正则在不受控 ASR 文本上可发生多项式回溯。
+// 缺口：现有停顿润色测试只覆盖短句，未覆盖大段重复标点、空格及换行的边界分组。
+// 最小输入：重复 ! 和空格各 10,000 字符，夹带两句及闭合引号；tier: unit，纯字符串处理。
+describe("long dictation sentence boundaries", () => {
+  it("recognizes terminal punctuation before closing quotes without backtracking", () => {
+    expect(endsWithSentenceBoundary(`内容${"!".repeat(10_000)}”`)).toBe(true);
+    expect(endsWithSentenceBoundary(`内容${"!".repeat(10_000)}”尾`)).toBe(false);
+    expect(endsWithSentenceBoundary(`内容.${"'".repeat(10_000)}`)).toBe(true);
+  });
+
+  it("keeps only the recent sentences across long spaces, punctuation and newlines", () => {
+    const spaces = " ".repeat(10_000);
+    const punctuation = "!".repeat(10_000);
+    const context = extractRecentRefinedContext(`旧句。${spaces}第二句${punctuation}\n第三句。`);
+    expect(context.length).toBe(240);
+    expect(context.endsWith(" 第三句。")).toBe(true);
+    expect(context).not.toContain("旧句");
+    expect(extractRecentRefinedContext("首句。第二句！\n第三句。", 2)).toBe("第二句！ 第三句。");
   });
 });
 

@@ -42,7 +42,9 @@ export function resolveManagedRefineRequestLimit(value: unknown): number {
 export function endsWithSentenceBoundary(text: string): boolean {
   const trimmed = text.trim();
   if (!trimmed) return false;
-  return /(?:[。！？!?…]+|\.)["”’'）】》」』]*$/u.test(trimmed);
+  let cursor = trimmed.length - 1;
+  while (cursor >= 0 && '"”’\'）】》」』'.includes(trimmed[cursor])) cursor -= 1;
+  return cursor >= 0 && '。！？!?….'.includes(trimmed[cursor]);
 }
 
 /**
@@ -91,10 +93,29 @@ export function extractRecentRefinedContext(
 ): string {
   const trimmed = cumulativeRefined.trim();
   if (!trimmed || maxSentences <= 0 || maxChars <= 0) return '';
-  const sentences = trimmed
-    .match(/[^。！？!?\n]+(?:[。！？!?]+|\n+|$)/gu)
-    ?.map((part) => part.trim())
-    .filter(Boolean) ?? [trimmed];
+  const sentences: string[] = [];
+  let cursor = 0;
+  while (cursor < trimmed.length) {
+    // Match the previous grouping: punctuation/newlines before any text do not
+    // form a sentence; a run after text belongs to that sentence.
+    while (cursor < trimmed.length && ('。！？!?\n'.includes(trimmed[cursor]))) cursor += 1;
+    const start = cursor;
+    while (cursor < trimmed.length && !'。！？!?\n'.includes(trimmed[cursor])) cursor += 1;
+    if (start === cursor) break;
+    if (cursor < trimmed.length) {
+      const boundary = trimmed[cursor] === '\n' ? '\n' : 'punctuation';
+      while (
+        cursor < trimmed.length
+        && (boundary === '\n' ? trimmed[cursor] === '\n' : '。！？!?'.includes(trimmed[cursor]))
+      ) cursor += 1;
+    }
+    const sentence = trimmed.slice(start, cursor).trim();
+    if (sentence) {
+      sentences.push(sentence);
+      if (sentences.length > maxSentences) sentences.shift();
+    }
+  }
+  if (sentences.length === 0) sentences.push(trimmed);
   const tail = sentences.slice(-maxSentences).join(' ').trim();
   if (tail.length <= maxChars) return tail;
   return tail.slice(tail.length - maxChars).trim();
