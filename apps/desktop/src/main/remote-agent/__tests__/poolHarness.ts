@@ -7,6 +7,7 @@
  *  - 上限 2：本机计数没到上限、对方以名额拒绝 → 让一个再重试一次；
  *  - 上限 5：到水位线(4)后台按最久没活动让出。
  */
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -29,6 +30,8 @@ import { relocateForFreshStart } from '../../maker-ipc/sessionAgentSwitchHandler
 import { withSharedSessionResumeRecovery } from '../../maker-ipc/sharedSessionResumeRecovery';
 import { isProviderShareAgentDeviceId, providerShareIdOfAgentDeviceId } from '../../../shared/providerShare';
 import { RuntimePluginControlError } from '../../cindy-brain/runtimeControl';
+import { readDeviceLinkModelSelectionOrigin } from '../../device-link/invoke-context.js';
+import type { PersonalizationCallerScope } from '../../host-settings/startup.js';
 import { SessionCreationCleanupPendingError } from '@cindy/maker-core';
 
 import { createAcpLeadBriefingHandoff, prepareAcpRoleBriefingForStart } from '../../maker-ipc/orcaSessionStartOptions';
@@ -193,6 +196,11 @@ export function sharedAccountRegisterWiring(ports: Record<string, unknown> & {
     resolveAgentSendToSessionHint,
     applySessionRuntimeOverrideForStart: noop,
     applyPersistedReviewMode: noop,
+    queuedPersonalization: new AsyncLocalStorage<{ sessionId: string; scope: PersonalizationCallerScope }>(),
+    readDeviceLinkModelSelectionOrigin,
+    isSessionSharedTaskActive: () => false,
+    // This harness runs without an Electron preferences window.
+    captureHostPersonalization: noop,
     applyOrcaInstructions: () => false,
     prepareAcpRoleBriefingForStart,
     acpLeadBriefings: createAcpLeadBriefingHandoff({ currentOwner: () => null, readActiveTeamId: async () => undefined, readRole: async () => null }),

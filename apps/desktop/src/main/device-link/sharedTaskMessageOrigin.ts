@@ -103,6 +103,14 @@ export function redactQueueItemForSharedGuest<T>(item: T): T {
     delete entry.sourcePlugin;
     delete entry.botTaskCoordination;
   }
+  const createOpts = entry.createOpts;
+  if (createOpts && typeof createOpts === 'object' && !Array.isArray(createOpts) &&
+      ('userPrompt' in createOpts || 'hostStartupPreferences' in createOpts)) {
+    const visibleOpts = { ...createOpts } as Record<string, unknown>;
+    delete visibleOpts.userPrompt;
+    delete visibleOpts.hostStartupPreferences;
+    entry = { ...entry, createOpts: visibleOpts };
+  }
   const origin = entry.origin;
   if (!origin || typeof origin !== 'object' || Array.isArray(origin)) {
     return (entry === original ? item : entry) as T;

@@ -1159,8 +1159,9 @@ import { resolveOrcaImageAttachmentInput } from './orcaImageAttachments.js';
 import { buildOrcaQueueDispatchNote } from './orcaQueueNote.js';
 import { createOrcaWorkerReportQueue, type OrcaWorkerReportQueue } from './orcaWorkerReportQueue.js';
 import { OrcaWorkerPermissionConfirmBridge } from './orcaWorkerPermissionConfirmBridge.js';
-import { captureHostPersonalization } from '../host-settings/startup.js';
-import { getInstanceConfig } from '../instance-runtime/config.js';
+import { captureHostPersonalization, type PersonalizationCallerScope } from '../host-settings/startup.js';
+import { windowUserPrompt } from '../host-settings/personalization.js';
+import { createPersonalizationRefresh } from '../host-settings/refreshOnSend.js';
 import { assertTaskActionCurrent, runTaskActionRequest, runTaskActionRewindBoundary, captureTaskActionGuard, bindTaskActionInput, hasTaskActionAuthorization, taskActionInputGuard, settleTaskActionInput, type TaskActionDeliveryGuard, type TaskActionConfirmation } from './taskActionAuthorization.js';
 import {
   getOrcaWorkspaceInfoReadOnly,
@@ -9497,8 +9498,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       maker, ghostTaskSystemPrompt, readSessionRuntimeProfiles: id => readSessionRuntimeProfiles(id),
     });
 
+  const queuedPersonalization = new AsyncLocalStorage<{ sessionId: string; scope: PersonalizationCallerScope }>();
+
   async function bootstrapSession(o: CreateOpts, assertAccess?: () => void, nativeHistoryResume = false,
-    reconnect?: SharedReconnectRecovery): Promise<{
+    reconnect?: SharedReconnectRecovery, personalizationRefresh?: { userPrompt: string }): Promise<{
     session: Awaited<ReturnType<typeof maker.createSession>>;
     didInjectOrcaInstructions: boolean;
     didInjectProjectContext: boolean;
@@ -9574,13 +9577,6 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         });
       });
     }
-    o.hostStartupPreferences = {
-      userPrompt: o.userPrompt,
-      makerMemoryEnabled: o.makerMemoryEnabled,
-      displayReasoning: o.displayReasoning,
-    };
-    // 托管云实例用实例自己保存的个性化正文，不用控制端传来的副本。
-    if (getInstanceConfig()) await captureHostPersonalization(o);
     startTimer.lap('workdir');
     assertAccess?.();
     // Plugin engines bring their own models and sign-in: never wait on (or fail with) the Cindy
@@ -9596,6 +9592,16 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     assertAccess?.();
     await applyPersistedReviewMode(o);
     assertAccess?.();
+    const queued = queuedPersonalization.getStore();
+    const shared = !!o.id && isSessionSharedTaskActive(o.id);
+    const callerScope = queued && queued.sessionId === o.id ? queued.scope : readDeviceLinkModelSelectionOrigin();
+    if (personalizationRefresh && (o.reviewMode || shared || agentOnOtherDevice || o.remoteHostId)) {
+      throw new Error('Task access changed before updating personal instructions.');
+    }
+    // A shared task keeps the host owner's settings regardless of who initiated this turn.
+    await captureHostPersonalization(o, callerScope, personalizationRefresh?.userPrompt, shared);
+    assertAccess?.();
+    creationSignal?.throwIfAborted();
     const didInjectOrcaInstructions = o.reviewMode === true ? false : await applyOrcaInstructions(o);
     // Plugin engines do not receive collaboration instructions as system text. Collaboration
     // Lead and Worker role instructions travel ahead of the first message; ordinary local owner
@@ -9705,6 +9711,13 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           session = undefined;
           await maker.closeSessionIfCurrent(cancelledSession, 'requested');
           throw error;
+        }
+        if (personalizationRefresh && (session.sdkSessionId !== o.resumeSessionId ||
+            (session.agentKind === 'codex' && !session.codexUsesProxyInstructions))) {
+          const opened = session;
+          session = undefined;
+          await maker.closeSessionIfCurrent(opened, 'runtime-refresh');
+          throw new Error('The engine could not resume this history with the updated personal instructions.');
         }
         if (nativeRelocation?.nativeId && session.sdkSessionId !== nativeRelocation.nativeId) {
           const opened = session;
@@ -19686,6 +19699,77 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     resolveGhostControlPointPlugin, writeRuntimePluginSettings, broadcastSessionPatched,
   }));
 
+  async function readWorkingDirectoryRecoveryCreateOpts(sessionId: string): Promise<CreateOpts> {
+    const [row] = await getDbClient().drizzle.select().from(sessions)
+      .where(eq(sessions.id, sessionId)).limit(1);
+    if (!row?.workingDir) throw new Error(`Session ${sessionId} has no working directory`);
+    return {
+      id: sessionId,
+      agentKind: dbToMakerEngineKind(row.agentKind),
+      workingDir: row.workingDir,
+      workspaceKind: row.workspaceKind,
+      model: row.model ?? undefined,
+      providerId: row.providerId,
+      effort: (row.effort ?? undefined) as CreateOpts['effort'],
+      fastMode: (row.fastMode ?? false),
+      permissionMode: permissionModeOrAsk(row.permissionMode),
+      planMode: !!row.planModeEnabled,
+      title: row.title ?? undefined,
+      resumeSessionId: row.sdkSessionId ?? undefined,
+      remoteHostId: row.remoteHostId ?? undefined,
+      agentDeviceId: row.agentDeviceId ?? undefined,
+      orcaRole: row.orcaRole as CreateOpts['orcaRole'],
+      codexHistoryHasProductPrompt: row.codexHistoryHasProductPrompt ?? undefined,
+    };
+  }
+
+  const directPersonalizationInput = new AsyncLocalStorage<string>();
+  const personalizationTaskScope = new AsyncLocalStorage<string>();
+  const refreshPersonalization = createPersonalizationRefresh({
+    getOwner: getCurrentDbClientSnapshot,
+    getSession: sessionId => maker.getSession(sessionId),
+    readPrompt: () => windowUserPrompt(1),
+    readCreateOpts: readWorkingDirectoryRecoveryCreateOpts,
+    readExtraDirs: readSessionExtraDirsFromDb,
+    rebuild: async ({ sessionId, opts, live, userPrompt, assertCurrent, beforeClose }) => {
+      const co = buildCreateOptsWithStderr(opts);
+      const ready = await checkWorkDirExists(sessionId, co.workingDir, co.agentKind, co.remoteHostId);
+      assertCurrent();
+      if (!ready) {
+        if (live) return live;
+        throw new Error('The working directory is unavailable for restoring the original Agent history.');
+      }
+      co.workingDir = workingDirectoryRecovery.resolve(sessionId, co.workingDir);
+      await synthesizeOrcaVendorOptionsFromDb(sessionId, co);
+      const assertBeforeResume = () => {
+        assertCurrent();
+        assertSessionCreationCurrent();
+      };
+      return runSessionCreationAttempt(sessionId, getDbClient, () => withRehydrateCloseSuppressed(sessionId, async () => {
+        assertBeforeResume();
+        const canClose = await beforeClose();
+        assertBeforeResume();
+        if (live) {
+          const closed = canClose && await maker.closeSessionIfCurrent(live, 'runtime-refresh',
+            live.getStatus() === 'error' ? undefined : { onlyIfIdle: true });
+          if (closed !== 'closed') {
+            if (maker.getSession(sessionId) !== live || live.hasStartedClosing()) {
+              throw new Error('The Agent changed before personal instructions could be updated.');
+            }
+            return live;
+          }
+        }
+        assertBeforeResume();
+        try {
+          return (await bootstrapSession(co, assertBeforeResume, true, undefined, { userPrompt })).session;
+        } catch {
+          assertBeforeResume();
+          throw new Error('Could not resume the original Agent history with the updated personal instructions.');
+        }
+      }));
+    },
+  });
+
   const {
     sendToAgentAccepted: sendToAgentAcceptedUnlocked,
     preparePiSkillRuntime,
@@ -19743,6 +19827,21 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           }
         : undefined;
     },
+    refreshPersonalizationBeforeSend: async (sessionId, live, sendOpts) => {
+      const active = maker.getSession(sessionId);
+      const ownerInput = personalizationTaskScope.getStore() === sessionId &&
+        !isSessionSharedTaskActive(sessionId) &&
+        (directPersonalizationInput.getStore() === sessionId || inputCoordinator.isActiveInputOwnerSend(sessionId));
+      return refreshPersonalization(sessionId, live === active ? active : undefined, ownerInput, () => {
+        sendOpts.signal?.throwIfAborted();
+        if (isAppSessionBoundaryPending() || isSessionSharedTaskActive(sessionId)) {
+          throw new Error('Task access changed before updating personal instructions.');
+        }
+        const boundary = readRemoteInputClearBoundaryPrecondition(sendOpts);
+        if (boundary.present) assertCurrentInputClearBoundary(sessionId, boundary.expected);
+        assertCurrentInputGeneration(sessionId, readExpectedInputGeneration(sendOpts));
+      });
+    },
     readAutoReviewHistory,
     readScheduledPermissions: getSessionFsSnapshot,
     assertScheduledDispatchRoute: async (sessionId) => {
@@ -19779,29 +19878,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     isPersistedWorktreeFallback: (dir) => dialogueWorkspaceRoots().some((root) =>
       path.dirname(path.resolve(dir)) === path.join(root, 'worktree-recovery')),
     preflightBotRuntimeResources: async (opts) => { await preflightBotRuntimeResources(opts); },
-    readWorkingDirectoryRecoveryCreateOpts: async (sessionId) => {
-      const [row] = await getDbClient().drizzle.select().from(sessions)
-        .where(eq(sessions.id, sessionId)).limit(1);
-      if (!row?.workingDir) throw new Error(`Session ${sessionId} has no working directory`);
-      return {
-        id: sessionId,
-        agentKind: dbToMakerEngineKind(row.agentKind),
-        workingDir: row.workingDir,
-        workspaceKind: row.workspaceKind,
-        model: row.model ?? undefined,
-        providerId: row.providerId,
-        effort: (row.effort ?? undefined) as CreateOpts['effort'],
-        fastMode: (row.fastMode ?? false),
-        permissionMode: permissionModeOrAsk(row.permissionMode),
-        planMode: !!row.planModeEnabled,
-        title: row.title ?? undefined,
-        resumeSessionId: row.sdkSessionId ?? undefined,
-        remoteHostId: row.remoteHostId ?? undefined,
-        agentDeviceId: row.agentDeviceId ?? undefined,
-        orcaRole: row.orcaRole as CreateOpts['orcaRole'],
-        codexHistoryHasProductPrompt: row.codexHistoryHasProductPrompt ?? undefined,
-      };
-    },
+    readWorkingDirectoryRecoveryCreateOpts,
     peekWorkingDirectoryRecoveryNote: (sessionId, workingDir) => workingDirectoryRecovery.peek(sessionId, workingDir),
     consumeWorkingDirectoryRecoveryNote: (sessionId, note) =>
       workingDirectoryRecovery.consume(sessionId, note),
@@ -20242,8 +20319,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         ?.persistUserMessage?.clientId;
       await runSchedulerQueuedPreparation(queuedClientId, schedulerQueuedPromptPreparations,
         () => { if (queuedClientId) schedulerQueuedPromptDiscardWatchers.delete(queuedClientId); });
-      return botInput?.remoteHostId ? sendToAgentAcceptedUnlocked(...args)
-        : withCindyMakeProjectUse(app.getPath('userData'), botInput?.workingDir, () => sendToAgentAcceptedUnlocked(...args));
+      if (botInput?.remoteHostId) return sendToAgentAcceptedUnlocked(...args);
+      const send = () => withCindyMakeProjectUse(app.getPath('userData'), botInput?.workingDir,
+        () => sendToAgentAcceptedUnlocked(...args));
+      return botInput?.source === 'desktop' ? personalizationTaskScope.run(sessionId, send) : send();
     });
   };
   prepareBotSessionForImSendHolder = async (sessionId) => {
@@ -20631,7 +20710,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         const owner = getCurrentDbClientSnapshot();
         await withSessionPermissionChange(sessionId, async () => undefined);
         if (!owner || owner !== getCurrentDbClientSnapshot()) throwIpcError('PRECONDITION_FAILED', 'Account changed before input');
-        return sendToAgentAccepted(
+        const send = () => sendToAgentAccepted(
           sessionId,
           message,
           createOpts,
@@ -20641,6 +20720,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             ? stampDirectSendSourceDevice(sendOpts, readDeviceLinkInvokeSourceDevice())
             : attachTrustedDesktopSendContext(message, sendOpts),
         );
+        const caller = readDeviceLinkModelSelectionOrigin();
+        return caller === 'scoped' ? send() : directPersonalizationInput.run(sessionId, send);
       },
       assertRemoteInputControlBoundary: (sessionId, opts) =>
         assertRemoteInputControlBoundary(sessionId, isDeviceLinkInvoke(), opts),
@@ -21324,10 +21405,16 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     sendToAgent: async (sessionId, message, createOpts, sendOpts) => {
       try {
         let runtimePreparationStarted = false;
-        const send = () => sendToAgentAccepted(sessionId, message, createOpts, {
-          ...sendOpts,
-          onRuntimePreparation: () => { runtimePreparationStarted = true; },
-        });
+        const scope = sendOpts.persistUserMessage?.sharedTaskAuthor ? 'scoped'
+          : sendOpts.fromDeviceLinkClient ? 'owner' : undefined;
+        const send = () => {
+          const dispatch = () => sendToAgentAccepted(sessionId, message, createOpts, {
+            ...sendOpts,
+            onRuntimePreparation: () => { runtimePreparationStarted = true; },
+          });
+          // A queue drain can outlive the invoke. Use only the provenance stamped by Main.
+          return scope ? queuedPersonalization.run({ sessionId, scope }, dispatch) : dispatch();
+        };
         // Welcome-only: ordinary/user/plugin requests retain their existing failure
         // semantics. Selected runtime plugins can have preparation side effects.
         const noRuntimePlugins = () => !Object.values(readRuntimePluginSettings(sessionId) ?? {})
@@ -22916,7 +23003,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       return inputCoordinator.compact(
         sid,
         typedCreateOpts,
-        opts && typeof opts === 'object' ? (opts as { userName?: string }) : undefined,
+        {
+          userName: opts && typeof opts === 'object' ? (opts as { userName?: string }).userName : undefined,
+          fromDeviceLinkClient: remote,
+        },
       );
     },
   );

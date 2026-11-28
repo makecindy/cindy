@@ -14366,6 +14366,7 @@ assertRouteCurrent();
       agentKind: 'codex',
       get model() { return mutableModel; },
       get codexProxyActive() { return hostUsesCodexProxy; },
+      get codexUsesProxyInstructions() { return useProxyChannel && opts.codexHistoryHasProductPrompt !== true; },
       get codexHostKey() { return currentHostKey; },
       get codexThreadModelProviderId() { return codexThreadModelProviderId; },
       get codexThreadMayHaveRollout() { return threadMayHaveRollout; },

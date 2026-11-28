@@ -809,6 +809,7 @@ interface ActiveTurn {
 
 interface PendingCompactRequest {
   createOpts: AgentInputCreateOpts;
+  fromDeviceLinkClient?: boolean;
   userName?: string;
   beforeMutation?: () => Promise<void>;
   waitForClientIds: string[];
@@ -1605,6 +1606,11 @@ export class AgentInputCoordinator {
     return this.activeInputHasOwnerAuthor(sessionId, false);
   }
 
+  /** A fresh owner send may contain only attachments and need no text authorization. */
+  isActiveInputOwnerSend(sessionId: string): boolean {
+    return this.inputHasOwnerAuthor(this.states.get(sessionId)?.activeTurn?.item, false, false, true);
+  }
+
   /**
    * Teammate principal only: an automatic resume/retry of the owner's own accepted input
    * still speaks for that owner request, and so does a host envelope (a companion group
@@ -1671,7 +1677,7 @@ export class AgentInputCoordinator {
   }
 
   private inputHasOwnerAuthor(item: AgentInputQueuedMessage | null | undefined, allowContinuation: boolean,
-    allowHostEnvelope = false): boolean {
+    allowHostEnvelope = false, allowAttachmentOnly = false): boolean {
     // A trusted Desktop receipt (`origin.kind === 'desktop'`) is still owner input.
     const originKind = (item?.origin as { kind?: unknown } | undefined)?.kind;
     if (!item || (originKind !== undefined && originKind !== 'desktop')) return false;
@@ -1691,6 +1697,9 @@ export class AgentInputCoordinator {
     // Automatic continuations and zero-output retries are never fresh owner input.
     if (item.autoResume && !continuation) return false;
     const text = item.autoReviewUserText;
+    if (allowAttachmentOnly && (text === undefined || (typeof text === 'string' && !text.trim()))) {
+      return !!item.files?.length;
+    }
     return typeof text === 'string' && !!text.trim() && !text.startsWith('[UI_ACTION_TRIGGER]');
   }
 
@@ -2612,7 +2621,7 @@ export class AgentInputCoordinator {
   async compact(
     sessionId: string,
     createOpts: AgentInputCreateOpts,
-    opts?: { userName?: string; beforeMutation?: () => Promise<void> },
+    opts?: { userName?: string; beforeMutation?: () => Promise<void>; fromDeviceLinkClient?: boolean },
   ): Promise<AgentInputProjection> {
     const state = this.getState(sessionId);
     // 手动 /compact 是用户接管，与 composer 新消息同语义。先撤掉尚未跨过
@@ -2636,6 +2645,7 @@ export class AgentInputCoordinator {
 
     const request: PendingCompactRequest = {
       createOpts,
+      fromDeviceLinkClient: opts?.fromDeviceLinkClient,
       userName: opts?.userName,
       beforeMutation: opts?.beforeMutation,
       waitForClientIds: state.pendingQueue.map((item) => item.clientId),
@@ -2700,6 +2710,7 @@ export class AgentInputCoordinator {
         request.createOpts,
         {
           messageUuid: active.messageUuid,
+          ...(request.fromDeviceLinkClient ? { fromDeviceLinkClient: true } : {}),
           userName: request.userName,
           throwOnStartFailure: true,
           expectedClearBoundaryMs: active.clearBoundaryMs,

@@ -3529,6 +3529,18 @@ describe('AgentInputCoordinator send transaction', () => {
     expect(h.coordinator.getAcceptedInputProvenance(sid)).toMatchObject({ clientId: 'human', authoredText: 'New direction', originKind: undefined });
   });
 
+  it('counts an attachment-only owner send for personalization without authorizing owner-only text actions', async () => {
+    const h = createHarness(), sid = 'owner-attachment-input';
+    h.sendToAgent.mockImplementationOnce(async () => { h.setRunning(true); return sendSuccess(); });
+    h.coordinator.enqueue(sid, makeItem('attachment', '', { files: [{
+      id: 'picture', name: 'picture.png', path: '/fixture/picture.png',
+      ext: '.png', category: 'image', mimeType: 'image/png', size: 128,
+    }] }));
+    await flush();
+    expect(h.coordinator.isActiveInputOwnerSend(sid)).toBe(true);
+    expect(h.coordinator.isActiveInputOwnerAuthored(sid)).toBe(false);
+  });
+
   it.each([
     ['owner-typed text', {}, true],
     ['another task', { origin: { kind: 'session' as const, senderSessionId: 'other', displayText: 'update' } }, false],
@@ -5084,13 +5096,16 @@ describe('AgentInputCoordinator send transaction', () => {
     expect(h.sendToAgent.mock.calls[1]?.[1]).toEqual({ type: 'user', content: 'next' });
   });
 
-  it('queues silent compact requested during an active turn and dispatches it after that turn', async () => {
+  // A remote compact queued behind a running turn must carry its origin into
+  // the later startup. The immediate path still has the original invoke context.
+  it('queues a remote silent compact during an active turn and preserves its origin at dispatch', async () => {
     const h = createHarness();
     const sid = 'compact-queued-during-active-turn';
     h.setRunning(true);
 
     await h.coordinator.compact(sid, makeItem('q-compact', 'ignored').createOpts, {
       userName: 'Carol',
+      fromDeviceLinkClient: true,
     });
     await flush();
 
@@ -5107,7 +5122,7 @@ describe('AgentInputCoordinator send transaction', () => {
       sid,
       { type: 'user', content: '/compact' },
       expect.anything(),
-      expect.objectContaining({ userName: 'Carol', throwOnStartFailure: true }),
+      expect.objectContaining({ userName: 'Carol', throwOnStartFailure: true, fromDeviceLinkClient: true }),
     );
     expect(h.sendToAgent.mock.calls[0]?.[3].persistUserMessage).toBeUndefined();
     expect(mocks.createMessage).not.toHaveBeenCalled();

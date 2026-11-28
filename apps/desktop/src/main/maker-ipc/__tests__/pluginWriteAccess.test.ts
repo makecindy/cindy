@@ -1,4 +1,5 @@
 import { Session } from '../../../../../../packages/maker-core/src/session.js';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { readFileSync } from 'node:fs';
 import { describe, expect, it, vi } from 'vitest';
 import ts from 'typescript';
@@ -7,6 +8,7 @@ import { isPluginTaskPermissionAllowed, PluginTaskError } from '../pluginTaskSer
 import { PluginWriteAccessGate } from '../pluginWriteAccessGate.js';
 import { withSessionPermissionChange } from '../sessionPermissionChange.js';
 import { changeSessionPermissionMode } from '../../im/shared/permissionModeControl.js';
+import { readDeviceLinkModelSelectionOrigin } from '../../device-link/invoke-context.js';
 import type { PermissionMode } from '@cindy/maker-core';
 import { forgetCredentialGrants, watchCredentialGrantRevocation } from '../../remote-agent/executor/credentialGrants.js';
 import { parseScheduledModelBaseline } from '../../../shared/scheduledModelBaseline.js';
@@ -568,7 +570,8 @@ describe('new user input waits outside execution fences',()=>{
   await vi.waitFor(()=>expect(release).toBeTypeOf('function'));
   const dispatch=vi.fn(async()=>({}));
   const deps={withSessionPermissionChange,getCurrentDbClientSnapshot:()=>ownership.current,throwIpcError:(code:string,message:string)=>{throw Object.assign(Error(message),{code});},sendToAgentAccepted:dispatch,isDeviceLinkInvoke:()=>false,attachTrustedDesktopSendContext:(_m:unknown,o:unknown)=>o,requireSessionId:(id:string)=>id,assertReviewExternalInputAllowed:async()=>{},assertTrustedAppRendererEvent:()=>{},prepareSharedTaskInput:dispatch,requireQueuedMessage:(x:unknown)=>x};
-  const run=new Function(...Object.keys(deps),entry==='send'?sendJs:enqueueJs)(...Object.values(deps));
+  const bindings = { ...deps, readDeviceLinkModelSelectionOrigin, directPersonalizationInput: new AsyncLocalStorage<string>() };
+  const run=new Function(...Object.keys(bindings),entry==='send'?sendJs:enqueueJs)(...Object.values(bindings));
   const result=(entry==='send'?run('task','hello',{},{}):run({},'task',{})).then((v:unknown)=>v,(e:Error)=>e);
   await Promise.resolve();await Promise.resolve();expect(dispatch).not.toHaveBeenCalled();
   // Completion/continuation can use the normal send fence while input waits.

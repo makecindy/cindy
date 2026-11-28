@@ -1241,22 +1241,22 @@ describe('远程交互接线不变式', () => {
     expect(src).not.toContain('electronAPI.maker.resolveInteraction');
   });
 
-  it('makerChatStore 不向 device-link 远程 session 透传本地 Maker Memory 开关;SSH 跟随全局设置', () => {
+  it('makerChatStore 仅在本机和 SSH 任务中发送本机个性化指令与 Maker Memory 开关', () => {
     const src = read('lib/makerChatStore.ts');
     expect(src).toContain('const deviceLinkRemote = isRemoteSessionSticky(sessionId);');
     // 该表达式可能被 prettier 折成多行:先把空白折叠成单空格,只锁 token 序列。
     // SSH remote 与本地同语义 (memory 按 hostId+远端路径 scope 存本机),
-    // 不再出现 ssh 强制 false 的三元;device-link 仍整体省略该字段。
+    // device-link 的任务由归属设备提供这两项设置，控制端发送时一起省略。
     expect(src.replace(/\s+/g, ' ')).toContain(
-      '...(deviceLinkRemote ? {} : { makerMemoryEnabled: getMakerMemoryEnabled() })',
+      '...(deviceLinkRemote ? {} : { userPrompt: getUserPrompt(), makerMemoryEnabled: getMakerMemoryEnabled() })',
     );
     expect(src).not.toContain('sshRemote ? false');
   });
 
-  it('context usage 对 SSH 跟随全局 Maker Memory 设置,对 device-link 仍省略', () => {
+  it('context usage 仅在本机和 SSH 任务中发送本机个性化指令与 Maker Memory 开关', () => {
     const src = read('features/cc-agent/CCAgentSessionView.tsx');
     expect(src.replace(/\s+/g, ' ')).toContain(
-      '...(remoteDeviceId ? {} : { makerMemoryEnabled: getMakerMemoryEnabled() })',
+      '...(remoteDeviceId ? {} : { userPrompt: getUserPrompt(), makerMemoryEnabled: getMakerMemoryEnabled() })',
     );
     expect(src).not.toContain('makerMemoryEnabled: session.remoteHostId ? false');
   });
