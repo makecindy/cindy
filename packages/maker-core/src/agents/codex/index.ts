@@ -42,7 +42,7 @@ import { randomUUID } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import { structuredPatch } from 'diff';
 import { syncCodexArchiveState } from './archive-state.js';
-import { readCodexThreadMcpServerTools, readCodexThreadMcpServersTools } from './mcp-server-tools.js';
+import { readCodexThreadMcpServerTools } from './mcp-server-tools.js';
 import { CODEX_ACCOUNT_RATE_LIMITS_TIMEOUT_MS, readAccountRateLimitsWithRefresh } from './app-server/account-rate-limits.js';
 
 import {
@@ -7459,14 +7459,16 @@ assertRouteCurrent();
     let expectedMcpNeedsRecheck = false;
     let mcpRecoveryAttempts = 0;
     let mcpRecoveryNotBefore = 0;
+    let orcaProbeNotBefore = 0;
     let mcpRecoveryAbort: AbortController | undefined;
     let mcpRecoveryPending: Promise<void> | null = null;
     let reportedHelperState: string | undefined;
-    const expectedGatewayNames = ['cindy_helper', 'cindy'];
+    const expectedGatewayNames = ['cindy_helper', 'cindy', 'cindy_orca'];
     const expectedRuntimeMcpConfig = (): Record<string, unknown> | null => {
       const config = currentThreadWorkspaceConfig().config;
       if (!config || reviewMode) return null;
-      const expected = expectedGatewayNames.filter(name => config[`mcp_servers.${name}.enabled`] !== false
+      const expected = expectedGatewayNames.filter(name => (name !== 'cindy_orca' || vo.orcaRole === 'lead')
+        && config[`mcp_servers.${name}.enabled`] !== false
         && ['url', 'command'].some(key => {
           const value = config[`mcp_servers.${name}.${key}`];
           return typeof value === 'string' && value.trim().length > 0;
@@ -7474,10 +7476,16 @@ assertRouteCurrent();
       if (!expected.length) return null;
       return Object.fromEntries(Object.entries(config).filter(([key]) => expected.some(name => key.startsWith(`mcp_servers.${name}.`))));
     };
-    const readExpectedMcpTools = (config: Record<string, unknown>) => readCodexThreadMcpServersTools(
-      (method, params, requestOpts) => host.request(method, params, requestOpts), threadId,
-      expectedGatewayNames.filter(name => Object.keys(config).some(key => key.startsWith(`mcp_servers.${name}.`))),
-    );
+    const readExpectedMcpTools = async (config: Record<string, unknown>, respectOrcaBackoff = false) => {
+      const expected = expectedGatewayNames.filter(name => Object.keys(config).some(key => key.startsWith(`mcp_servers.${name}.`)));
+      const deadline = Date.now() + 5_000;
+      const reports = await Promise.all(expected.map(async name => [name,
+        respectOrcaBackoff && name === 'cindy_orca' && Date.now() < orcaProbeNotBefore ? null : await readCodexThreadMcpServerTools(
+          (method, params, requestOpts) => host.request(method, params, requestOpts), threadId, name, deadline - Date.now(),
+        ).catch(() => undefined),
+      ] as const));
+      return new Map(reports);
+    };
     const reportExpectedRuntimeMcpAvailability = async (
       knownReports?: Awaited<ReturnType<typeof readExpectedMcpTools>>, signal?: AbortSignal,
     ): Promise<void> => {
@@ -7494,7 +7502,10 @@ assertRouteCurrent();
       }
       if (closed || threadId !== checkedThreadId || !isCurrentHost()
         || JSON.stringify(expectedRuntimeMcpConfig()) !== JSON.stringify(mcpConfig)) return;
-      expectedMcpNeedsRecheck = !reports || [...reports.values()].some(report => report.state === 'failed' || report.state === 'pending');
+      if (reports?.has('cindy_orca') && reports.get('cindy_orca') === undefined) {
+        orcaProbeNotBefore = Date.now() + 30_000;
+      }
+      expectedMcpNeedsRecheck = !reports || [...reports.values()].some(report => !report || report.state === 'failed' || report.state === 'pending');
       // A healthy helper does not prove that the plugin gateway initialized.
       // Keep its independently failed client eligible for the same cold resume.
       const helperExpected = Object.keys(mcpConfig).some(key => key.startsWith('mcp_servers.cindy_helper.'));
@@ -8314,12 +8325,17 @@ assertRouteCurrent();
           assertRecoveryCurrent();
           let reports;
           try {
-            reports = await awaitCodexRouteSelection(readExpectedMcpTools(expectedRuntimeMcpConfig()!), recoverySignal);
+            reports = await awaitCodexRouteSelection(readExpectedMcpTools(expectedRuntimeMcpConfig()!, true), recoverySignal);
           } catch { assertRecoveryCurrent(); return; }
           assertRecoveryCurrent();
           await reportExpectedRuntimeMcpAvailability(reports, recoverySignal);
           assertRecoveryCurrent();
-          if (![...reports.values()].some(report => report.state === 'failed')) return;
+          if (![...reports.values()].some(report => report?.state === 'failed')) {
+            const onlyOrcaNeedsRecheck = reports.has('cindy_orca') && !reports.get('cindy_orca')
+              && [...reports].every(([name, report]) => name === 'cindy_orca' || (report && report.state !== 'pending'));
+            if (onlyOrcaNeedsRecheck) mcpRecoveryNotBefore = orcaProbeNotBefore;
+            return;
+          }
           // Unloading a thread also stops native children/terminals. Leave those
           // intact, and unknown background state is busy, just as idle cleanup.
           if (await awaitCodexRouteSelection(handle.hasLiveBackgroundWork!().catch(() => true), recoverySignal)) return;
@@ -8328,7 +8344,7 @@ assertRouteCurrent();
           mcpRecoveryNotBefore = Date.now() + 30_000 * mcpRecoveryAttempts;
           log.info('recovering failed Codex task MCP', {
             threadId, attempt: mcpRecoveryAttempts,
-            servers: [...reports].filter(([, report]) => report.state === 'failed').map(([name]) => name),
+            servers: [...reports].filter(([, report]) => report?.state === 'failed').map(([name]) => name),
           });
           await withMcpDiscoveryContext(async () => {
             assertRecoveryCurrent();
@@ -15843,6 +15859,7 @@ assertRouteCurrent();
       async setVendorOptions(patch: Record<string, unknown>) {
         // Keep the same vendorOptions object so active MCP handlers and the
         // host bridge see runtime Orca role/workflow updates by reference.
+        if (patch.orcaRole === 'lead' && vo.orcaRole !== 'lead') expectedMcpNeedsRecheck = true;
         Object.assign(vo, patch);
         registerRootCodexMcpContext();
         for (const descendantThreadId of descendantMcpThreadIds) {
