@@ -65,10 +65,24 @@ export interface AttachmentRejection {
 
 export type PendingFolder = string | { path: string; source: 'task' } | { path: string; source: 'local'; file: File };
 
+interface DroppedRawFile {
+  name: string;
+  path: string;
+  size: number;
+  file: File | null;
+}
+
+export interface AddFilePathsOptions {
+  /** Whether a dropped directory becomes an @dir mention (default) or is left to window-level routing. */
+  directories?: 'mention' | 'skip';
+}
+
 export interface UseAttachmentsReturn {
   attachments: AttachedFile[];
   hasAttachments: boolean;
   addFiles: (fileList: FileList | readonly File[]) => Promise<void>;
+  /** Attach files by absolute path, for drops whose source exposes no native File objects (VS Code). */
+  addFilePaths: (paths: readonly string[], options?: AddFilePathsOptions) => Promise<void>;
   addClipboardImage: (blob: Blob) => Promise<void>;
   /**
    * Files rejected on the most recent add attempt (oversize / empty / blocked
@@ -143,6 +157,11 @@ function isSameAttachmentOperationScope(
   right: AttachmentOperationScope,
 ): boolean {
   return left.sessionId === right.sessionId && isSameAttachmentDraftScope(left, right);
+}
+
+function fileNameFromPath(filePath: string): string {
+  const normalized = filePath.replace(/\\/g, '/');
+  return normalized.slice(normalized.lastIndexOf('/') + 1);
 }
 
 function mergeAttachmentsById(
@@ -533,46 +552,17 @@ export function useAttachments(sessionId?: string, draftKey?: string): UseAttach
     return payloads;
   }, []);
 
-  const addFiles = useCallback(
-    async (fileList: FileList | readonly File[]) => {
+  const addRawFiles = useCallback(
+    async (
+      rawFiles: DroppedRawFile[],
+      earlyErrors: { name: string; reason: string }[],
+    ) => {
       const operationScope = attachmentOperationScopeRef.current;
       const attachmentCountAtStart = attachmentsRef.current.length;
-      // Fresh attempt: clear stale rejections so the inline strip reflects only
-      // this drop's failures.
-      setRejections([]);
-      // ── Step 1: collect rawFiles, intercept obvious failure cases up-front ──
-      // In sandboxed Electron (20+), File.path is unavailable — use
-      // webUtils.getPathForFile() exposed via preload bridge instead.
-      type RawFile = { name: string; path: string; size: number; file: File };
-      const rawFiles: RawFile[] = [];
-      const earlyErrors: { name: string; reason: string }[] = [];
-      for (const f of Array.from(fileList)) {
-        let filePath = '';
-        try {
-          filePath = window.electronAPI.getFilePath(f);
-        } catch {
-          // Fallback: try legacy File.path (non-sandboxed builds)
-          filePath = (f as File & { path?: string }).path ?? '';
-        }
-        if (!filePath) {
-          pushScopedRejections(operationScope, [
-            t('logic.toasts.attachmentLocalOnly', { name: f.name }),
-          ]);
-          continue;
-        }
-        // F-FI-8 spec step 1: 0-byte files are intercepted here so they never
-        // reach the peek IPC (would otherwise produce an "无法识别" instead of
-        // the more accurate "文件为空" error).
-        if (f.size === 0) {
-          earlyErrors.push({ name: f.name, reason: t('logic.fileTypes.fileEmpty') });
-          continue;
-        }
-        rawFiles.push({ name: f.name, path: filePath, size: f.size, file: f });
-      }
 
       // ── Step 2: split into known / unknown by extension/filename ──
-      const knownRaw: RawFile[] = [];
-      const unknownRaw: RawFile[] = [];
+      const knownRaw: DroppedRawFile[] = [];
+      const unknownRaw: DroppedRawFile[] = [];
       for (const raw of rawFiles) {
         const ext = extractExt(raw.name);
         const category = ext ? categorizeFile(ext) : categorizeByFilename(raw.name);
@@ -586,7 +576,7 @@ export function useAttachments(sessionId?: string, draftKey?: string): UseAttach
       // ── Step 3: enrich unknown files via peek-IPC + magic/UTF-8 inference ──
       // Promise.all is fine: max 20 files per drop, IPC pressure negligible.
       type EnrichResult =
-        { ok: true; raw: RawFile; ext: string } | { ok: false; raw: RawFile; reason: string };
+        { ok: true; raw: DroppedRawFile; ext: string } | { ok: false; raw: DroppedRawFile; reason: string };
 
       const enrichmentResults: EnrichResult[] = await Promise.all(
         unknownRaw.map(async (r): Promise<EnrichResult> => {
@@ -656,8 +646,12 @@ export function useAttachments(sessionId?: string, draftKey?: string): UseAttach
 
       // IPC read for each valid file
       const newAttachments: AttachedFile[] = [];
-      const pluginSources = readPluginUiEntries('composer.attachment').length
-        ? new Map<string, Blob>(rawFiles.map(raw => [raw.path, raw.file])) : undefined;
+      const pluginSourceEntries: Array<[string, Blob]> = rawFiles.flatMap((raw) =>
+        raw.file ? [[raw.path, raw.file] as [string, Blob]] : [],
+      );
+      const pluginSources = pluginSourceEntries.length > 0
+        && readPluginUiEntries('composer.attachment').length
+        ? new Map<string, Blob>(pluginSourceEntries) : undefined;
       const currentSessionId = operationScope.sessionId;
 
       for (const item of valid) {
@@ -794,6 +788,127 @@ export function useAttachments(sessionId?: string, draftKey?: string): UseAttach
       settleUserAddedAttachments(operationScope, newAttachments, pluginSources);
     },
     [isAttachmentOperationScopeCurrent, pushScopedRejections, settleUserAddedAttachments, t],
+  );
+
+  const addFiles = useCallback(
+    async (fileList: FileList | readonly File[]) => {
+      const operationScope = attachmentOperationScopeRef.current;
+      // Fresh attempt: clear stale rejections so the inline strip reflects only
+      // this drop's failures.
+      setRejections([]);
+      // ── Step 1: collect rawFiles, intercept obvious failure cases up-front ──
+      // In sandboxed Electron (20+), File.path is unavailable — use
+      // webUtils.getPathForFile() exposed via preload bridge instead.
+      const rawFiles: DroppedRawFile[] = [];
+      const earlyErrors: { name: string; reason: string }[] = [];
+      for (const f of Array.from(fileList)) {
+        let filePath = '';
+        try {
+          filePath = window.electronAPI.getFilePath(f);
+        } catch {
+          // Fallback: try legacy File.path (non-sandboxed builds)
+          filePath = (f as File & { path?: string }).path ?? '';
+        }
+        if (!filePath) {
+          pushScopedRejections(operationScope, [
+            t('logic.toasts.attachmentLocalOnly', { name: f.name }),
+          ]);
+          continue;
+        }
+        // F-FI-8 spec step 1: 0-byte files are intercepted here so they never
+        // reach the peek IPC (would otherwise produce an "无法识别" instead of
+        // the more accurate "文件为空" error).
+        if (f.size === 0) {
+          earlyErrors.push({ name: f.name, reason: t('logic.fileTypes.fileEmpty') });
+          continue;
+        }
+        rawFiles.push({ name: f.name, path: filePath, size: f.size, file: f });
+      }
+      if (rawFiles.length === 0) {
+        if (earlyErrors.length > 0) {
+          pushScopedRejections(
+            operationScope,
+            earlyErrors.map((err) =>
+              t('logic.toasts.attachmentReadError', { name: err.name, reason: err.reason }),
+            ),
+          );
+        }
+        return;
+      }
+      await addRawFiles(rawFiles, earlyErrors);
+    },
+    [addRawFiles, pushScopedRejections, t],
+  );
+
+  /**
+   * Attach files whose drag payload only exposed paths. VS Code's explorer
+   * provides ResourceURLs / text/plain instead of native File objects, so the
+   * renderer cannot obtain a File with Electron path metadata.
+   */
+  const addFilePaths = useCallback(
+    async (paths: readonly string[], options?: AddFilePathsOptions) => {
+      const operationScope = attachmentOperationScopeRef.current;
+      setRejections([]);
+      const rawFiles: DroppedRawFile[] = [];
+      const earlyErrors: { name: string; reason: string }[] = [];
+      const seen = new Set<string>();
+
+      for (const input of paths) {
+        const filePath = input.trim();
+        if (!filePath) continue;
+        const key = /^[A-Za-z]:/.test(filePath) || filePath.startsWith('\\\\')
+          ? filePath.toLowerCase()
+          : filePath;
+        if (seen.has(key)) continue;
+        seen.add(key);
+
+        let kind: 'share' | 'directory' | 'other' = 'other';
+        try {
+          kind = (await window.electronAPI.localDb.sessionShare.classifyPath({ path: filePath })).kind;
+        } catch {
+          // Classification is best-effort; let the attachment read report a real failure.
+        }
+        if (kind === 'directory') {
+          if (options?.directories !== 'skip') addFolderPath(filePath);
+          continue;
+        }
+
+        const name = fileNameFromPath(filePath);
+        if (!name) {
+          earlyErrors.push({ name: filePath, reason: t('logic.fileTypes.readFailed') });
+          continue;
+        }
+        try {
+          const peek = await window.electronAPI.peekFileHeader({ filePath, bytes: 0 });
+          if (!peek.success) {
+            earlyErrors.push({ name, reason: t('logic.fileTypes.readFailed') });
+            continue;
+          }
+          if (peek.totalSize === 0) {
+            earlyErrors.push({ name, reason: t('logic.fileTypes.fileEmpty') });
+            continue;
+          }
+          rawFiles.push({ name, path: filePath, size: peek.totalSize, file: null });
+        } catch {
+          earlyErrors.push({ name, reason: t('logic.fileTypes.readFailed') });
+        }
+      }
+
+      if (!isDataOwnerGenerationCurrent(operationScope.dataOwner)) return;
+      if (rawFiles.length === 0) {
+        if (earlyErrors.length > 0) {
+          pushScopedRejections(
+            operationScope,
+            earlyErrors.map((err) =>
+              t('logic.toasts.attachmentReadError', { name: err.name, reason: err.reason }),
+            ),
+          );
+        }
+        return;
+      }
+      await addRawFiles(rawFiles, earlyErrors);
+    },
+    [addFolderPath, addRawFiles, isDataOwnerGenerationCurrent, pushScopedRejections, t],
   );
 
   /**
@@ -948,6 +1063,7 @@ export function useAttachments(sessionId?: string, draftKey?: string): UseAttach
     attachments,
     hasAttachments: attachments.length > 0,
     addFiles,
+    addFilePaths,
     addClipboardImage,
     rejections,
     dismissRejection,

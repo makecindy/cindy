@@ -144,7 +144,7 @@ const api: typeof window.electronAPI = new Proxy({} as typeof window.electronAPI
   return new Proxy(() => Promise.resolve(undefined), { get: (_fn, nested) => Reflect.get(api, nested) });
 } });
 const attachments: ComponentProps<typeof ChatInput>['attachmentState'] = {
-  attachments: [], hasAttachments: false, addFiles: vi.fn(), addClipboardImage: vi.fn(),
+  attachments: [], hasAttachments: false, addFiles: vi.fn(), addFilePaths: vi.fn(), addClipboardImage: vi.fn(),
   rejections: [], dismissRejection: noOp, clearRejections: noOp, addFolderPath: noOp,
   pendingFoldersVersion: 0, consumePendingFolders: () => [], addFileMention: noOp,
   pendingFileMentionsVersion: 0, consumePendingFileMentions: () => [],

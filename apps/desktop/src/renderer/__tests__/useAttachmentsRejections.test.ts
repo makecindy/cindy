@@ -102,6 +102,35 @@ afterEach(() => {
 });
 
 describe('useAttachments inline rejections', () => {
+  it('attaches a path-only drop coming from VS Code', async () => {
+    const peekFileHeader = vi.fn(async () => ({
+      success: true,
+      actualBytes: 0,
+      totalSize: 12,
+    }));
+    (window as unknown as { electronAPI: Record<string, unknown> }).electronAPI = {
+      localDb: { sessionShare: { classifyPath: vi.fn(async () => ({ kind: 'other' })) } },
+      peekFileHeader,
+      cleanupCachedImages: vi.fn(async () => undefined),
+    };
+    const { result, unmount } = renderHook(() => useAttachments('vscode-path-drop'));
+
+    await act(async () => {
+      await result.current.addFilePaths(['C:\\work\\README.md']);
+    });
+
+    expect(result.current.attachments).toEqual([
+      expect.objectContaining({
+        name: 'README.md',
+        path: 'C:\\work\\README.md',
+        size: 12,
+      }),
+    ]);
+    expect(peekFileHeader).toHaveBeenCalledWith({ filePath: 'C:\\work\\README.md', bytes: 0 });
+    unmount();
+    clearDraft('vscode-path-drop');
+  });
+
   // Tier: unit at the production MCP App → composer boundary. The mounted
   // composer must mirror a Main-delivered attachment written through the same
   // helper used by McpAppCard, while preserving the existing text draft.

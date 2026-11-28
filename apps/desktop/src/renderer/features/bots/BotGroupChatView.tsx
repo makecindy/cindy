@@ -59,6 +59,7 @@ import { captureDraftRecoveryScope, discardDraftTree } from '@/lib/composerDraft
 import {
   classifyUnclassifiedDroppedItems,
   getDroppedFileItems,
+  getDroppedExternalFilePaths,
   type DroppedFileItems,
 } from '@/lib/fileDrop';
 import { isGlobalDropIntercepted } from '@/lib/globalDropIntercept';
@@ -207,7 +208,7 @@ function useStableRows<T extends { id: string }>(rows: T[]): T[] {
  */
 function isAttachmentDrag(event: DragEvent): boolean {
   const types = Array.from(event.dataTransfer.types);
-  return types.includes('Files') || types.includes('text/uri-list');
+  return types.includes('Files') || types.includes('text/uri-list') || types.includes('ResourceURLs');
 }
 
 export function BotGroupChatView() {
@@ -1479,6 +1480,10 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
         getFilePath: (file) => window.electronAPI.getFilePath(file),
         classifyPath: (path) => window.electronAPI.localDb.sessionShare.classifyPath({ path }),
       }).then(attach);
+    }
+    const externalPaths = getDroppedExternalFilePaths(event.dataTransfer);
+    if (externalPaths.length > 0) {
+      void attachmentState.addFilePaths(externalPaths, { directories: 'skip' });
     }
   };
 
