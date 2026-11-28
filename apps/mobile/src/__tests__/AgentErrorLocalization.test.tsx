@@ -24,7 +24,24 @@ vi.mock('react-native', async () => {
     StyleSheet: { create: (s: unknown) => s, hairlineWidth: 1 } };
 });
 vi.mock('@/components/AppText', async () => ({ Text: (await import('react-native')).Text }));
-vi.mock('lucide-react-native', () => ({ Pause: () => null, Play: () => null, CircleAlert: () => null, Split: () => null, X: () => null, ChevronRight: () => null, ChevronDown: () => null, Stethoscope: () => null }));
+vi.mock('lucide-react-native', () => ({ Pause: () => null, Play: () => null, CircleAlert: () => null, Split: () => null, X: () => null, ChevronRight: () => null, ChevronDown: () => null, Stethoscope: () => null, Info: () => null }));
+vi.mock('@/session/NoticeExplainSheet', async () => {
+  const { createElement, useState } = await import('react');
+  const { i18n: mobileI18n } = await import('@/i18n');
+  return {
+    NoticeExplainSheet: ({ visible, content }: { visible: boolean; content: { title: string; summary: string } }) =>
+      visible ? createElement('div', { 'data-testid': 'notice-explain-details' }, content.title, ' ', content.summary) : null,
+    NoticeExplainButton: ({ content, label }: { content: { title: string; summary: string }; label?: string }) => {
+      const [open, setOpen] = useState(false);
+      return createElement(
+        'div',
+        null,
+        createElement('button', { 'data-testid': 'agentError.explain', onClick: () => setOpen(true) }, label ?? mobileI18n.t('message.modelMismatch.infoLink')),
+        open ? createElement('div', { 'data-testid': 'notice-explain-details' }, content.title, ' ', content.summary) : null,
+      );
+    },
+  };
+});
 vi.mock('@/theme', async () => {
   const tokens = await import('@/theme/tokens');
   return { ...tokens, useTheme: () => ({ colors: tokens.lightColors }),
@@ -195,6 +212,29 @@ describe.each(SUPPORTED_LOCALES)('mobile errors in %s', locale => {
     expect(host.textContent).toContain(summary);
     expect(host.textContent).not.toContain(i18n.t('session.tail.replyFailed'));
     expect(host.querySelector('[data-testid="queue.inline.usageLimitWait"]')).toBeTruthy();
+  });
+
+  // Plugin-engine account errors (`acp-usage-limit` / `acp-overloaded` / `acp-auth-required` and quota-reached copy)
+  // must localize across history and live surfaces instead of collapsing into replyFailed.
+  it('localizes plugin-engine quota, overload and auth errors in history and live surfaces', async () => {
+    await i18n.changeLanguage(locale);
+    const quotaRaw =
+      'Individual quota reached. Please upgrade your subscription to increase your limits. Resets in 2h13m2s.';
+    const [quotaByReason, quotaByText, overloaded, authRequired] = normalizeRemoteMessages([
+      { ...row(quotaRaw), id: 'acp-limit', clientId: 'acp-limit', content: JSON.stringify({ message: quotaRaw, reason: 'acp-usage-limit' }) },
+      { ...row(quotaRaw), id: 'acp-text', clientId: 'acp-text' },
+      { ...row('Upstream busy'), id: 'acp-busy', clientId: 'acp-busy', content: JSON.stringify({ message: 'Upstream busy', reason: 'acp-overloaded' }) },
+      { ...row('Sign in again'), id: 'acp-auth', clientId: 'acp-auth', content: JSON.stringify({ message: 'Sign in again', reason: 'acp-auth-required' }) },
+    ]);
+    expect(quotaByReason.body).toBe(i18n.t('session.tail.usageLimitReached'));
+    expect(quotaByText.body).toBe(i18n.t('session.tail.usageLimitReached'));
+    expect(overloaded.body).toBe(i18n.t('interaction.contextSheet.goalStatus.capacityLimited'));
+    expect(authRequired.body).toBe(i18n.t('chat.subscriptionAccountError.loginRequired'));
+    await act(async () => root.render(<InlineQueueSection
+      projection={{ error: quotaRaw, errorReason: 'acp-usage-limit', errorRetryText: 'original' } as InputProjection}
+      readOnlyReason={null} onRetryError={vi.fn()} onClearError={vi.fn()} onResume={vi.fn()} />));
+    expect(host.textContent).toContain(i18n.t('session.tail.usageLimitReached'));
+    expect(host.textContent).not.toContain(i18n.t('session.tail.replyFailed'));
   });
 
   it('localizes historical errors and only discloses redacted unknown diagnostics', async () => {

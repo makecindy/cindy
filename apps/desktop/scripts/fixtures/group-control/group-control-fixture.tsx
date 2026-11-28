@@ -25,6 +25,7 @@ if (!crypto.randomUUID) {
 
 interface GroupData {
   topicPreview?: boolean;
+  noAssistantComputers?: boolean;
   /** #9398: message-only push, then an explicitly released full plan read. */
   planRead?: 'talk' | 'work' | 'missing';
   processRecord?: boolean;
@@ -54,6 +55,7 @@ interface GroupData {
   /** A server group with teammates' bubbles: quote, reactions, thread entry and a task card. */
   bubbles?: boolean;
   wrappedReactions?: boolean;
+  reactionMotion?: boolean;
   replyComposer?: boolean;
   /** A single-speaker server group: nobody was named, so everyone answers in turn (bot-group-chat.md §4.0/§7.0). */
   arrangement?: Queue;
@@ -207,7 +209,6 @@ function bubbleMessages(wrappedReactions = false) {
         { id: 'r3', authorKind: 'bot', authorBotId: 'b', authorName: 'Nova', text: '已经记下了', attachments: [], createdAt: T0 + 10 * MINUTE },
       ] },
     }),
-    // Short messages with more reactions than the text is wide: the bubble widens to carry them.
     message({
       id: 'a2', sequence: 6, authorKind: 'bot', authorBotId: 'a', authorName: 'Aster', createdAt: T0 + 10 * MINUTE, content: '好',
       reactions: wrappedReactions ? manyReactions : ['👍', '🎉', '👀', '🙏'].map((emoji, i) => ({ emoji, count: i + 1, me: i === 0 })),
@@ -358,6 +359,11 @@ function groupFrom(data: GroupData) {
       : data.arrangement === 'running' ? { id: 'p1', status: 'running', currentStep: 1, stepCount: 2, currentBotName: 'Nova', currentStepStatus: 'running', kind: planKind } : null,
       singleSpeaker: true } : {}),
     ...(data.bubbles || data.arrangement || data.division || data.readReceipts || data.planningForeign ? { serverBacked: true } : {}),
+    // The requester's own group-Cindy requests held until they choose a computer (bot-group-chat.md 第 9 节).
+    ...(data.assistantDeviceWaits ? { serverBacked: true, assistantDeviceId: null,
+      assistantComputers: data.noAssistantComputers ? [] : [{ id: 'mac', name: 'MacBook Pro' }, { id: 'studio', name: 'Studio · A very long computer name for layout verification' }],
+      assistantDeviceWaits: Array.from({ length: data.assistantDeviceWaits }, (_, i) => ({ executionId: `wait-${i}`, sourceMessageId: `m${i}`,
+        requestText: '@Cindy 帮我把这周的周报整理一下，按项目分组，再列出下周的风险' })) } : {}),
     ...(data.readReceipts ? { supportsMessageReaders: true } : {}),
     ...(data.settings ? { autoContinue: false } : {}),
     ...(data.threadUnread ? { threads: threadSummaries() } : {}),
@@ -509,7 +515,7 @@ void mountPage({
               : input.messageId.endsWith('short-sent') ? [] : [{ actorId: 'g', name: 'Ada', readAt: T0 + 5 * MINUTE, formerMember: false }];
             return { ok: true, readers: { messageId: input.messageId, eligibleCount: 6, readCount: readers.length, listed: true, readers } };
           },
-          react: forbid('maker.chatServer.react'),
+          react: data.reactionMotion ? async () => ({ ok: false, errorCode: 'SERVICE_ERROR' }) : forbid('maker.chatServer.react'),
           ownedBots: async () => ({ ok: true, bots: [] }),
           manage: forbid('maker.chatServer.manage'),
           ...(data.threadPanel || data.readReceipts || data.topicPreview ? { thread, followThread } : {}),

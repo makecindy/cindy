@@ -68,7 +68,7 @@ import { mobileDebugLog } from '@/debug/mobileDebugLog';
 import { getMobileAuthOwner, isMobileAuthOwnerCurrent, subscribeMobileAuthOwner } from '@/auth/authOwnerGeneration';
 import { mobileDurableOutbox, durableOutboxDisplayItem, getCurrentMobileOutboxRecords, reconcileMobileOutboxDrafts } from '@/session/mobileDurableOutbox';
 import { retainOutboxFile, durableOutboxUploadUri, removeOutboxFiles, outboxAttachmentNeedsLocalBytes } from '@/session/durableOutboxFiles';
-import { isDurableOutboxSettled, observeDurableOutboxSending, type DurableOutboxRecord } from '@/session/durableOutbox';
+import { hasUncreatedHostSession, isDurableOutboxHandedOff, isDurableOutboxSettled, isPendingHostDialogueCreation, observeDurableOutboxSending, type DurableOutboxRecord } from '@/session/durableOutbox';
 import { isInFlightDeviceLinkError, isSharedTaskPeer, isScopedPeer, resolveRemoteText } from '@cindy/device-link';
 import { takeRefinementContextTail, truncateRefinementReply } from '@cindy/voice-input-core';
 import {
@@ -93,6 +93,7 @@ import {
   Pin,
   Plus,
   RefreshCw,
+  RotateCcw,
   Search,
   Settings,
   Square,
@@ -314,7 +315,9 @@ import {
   applyHostModelGroupResult,
   resolveHostModelGroup,
   useHostModelGroupPickerOptions,
-  useHostModelGroups,
+  useHostModelGroupsPayload,
+  useHostModelGroupSwitchOffer,
+  type HostModelGroupSwitchOffer,
 } from '@/session/hostModelGroups';
 import { MobileModelIconMark } from '@/session/MobileProviderMark';
 import { getModel, type ProviderView } from '@cindy/model-providers/registry';
@@ -654,10 +657,16 @@ import {
 } from '@/session/mobileVoiceCue';
 import {
   createMobileVoiceControllerSession,
+  replayMobileVoiceAudio,
   type MobileVoiceControllerSession,
 } from '@/session/mobileVoiceController';
 import { createMobileSpeakerGate, warmMobileSpeakerFilter } from '@/session/mobileSpeakerFilter';
+import { useMobileFailedVoiceRetry } from '@/session/useMobileFailedVoiceRetry';
 import { useSpeakerFilterNotice } from '@/session/useSpeakerFilterNotice';
+import {
+  applyMobileVoiceRefinementUndoToDraft,
+  useMobileVoiceRefinementUndo,
+} from '@/session/useMobileVoiceRefinementUndo';
 import {
   createMobileVoiceDictionaryLearningTracker,
   type MobileVoiceDictionaryLearningTracker,
@@ -1289,6 +1298,9 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
   // existing link/subscription path to establish reachability instead of
   // blocking both history and sync until a presence change happens to arrive.
   const currentSession = useRemoteSessionDetail(deviceId, sessionId);
+  const creationTask = useNewSessionCreationTask(sessionId);
+  const creationBlocksReads = currentSession?.pendingLocalCreation === true
+    || creationTask?.status === 'running' || creationTask?.status === 'create-failed';
   const sideChatPending = currentSession?.source === 'side-chat' && currentSession.pendingLocalCreation === true;
   const remoteHistoryAvailable = !sideChatPending && status === 'online' && getPresenceAvailability(deviceId) !== false;
   // Unknown presence while connecting is loading, not evidence of a lost computer.
@@ -1297,7 +1309,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       : '');
   const sideChatBoundary = mobileSessionHistoryBoundary(currentSession);
   const unfilteredHistoryView = useRemoteHistoryView(deviceId, sessionId, maker,
-    () => messageScreenFocusedRef.current && messageAppActiveRef.current, remoteHistoryAvailable);
+    () => messageScreenFocusedRef.current && messageAppActiveRef.current, remoteHistoryAvailable && !creationBlocksReads);
   const historyView = useMemo(() => ({ ...unfilteredHistoryView,
     snapshot: historyAfter(unfilteredHistoryView.snapshot, sideChatBoundary)!,
   }), [unfilteredHistoryView.view, unfilteredHistoryView.snapshot, unfilteredHistoryView.cacheRestoring, sideChatBoundary]);
@@ -1576,11 +1588,20 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       || voiceState === 'submitting' || voiceState === 'refining',
   });
   const [voiceError, setVoiceError] = useState<string | null>(null);
+  const failedVoiceRetry = useMobileFailedVoiceRetry(`${deviceId ?? ''}:${sessionId}`);
+  const voiceRetryRunSeqRef = useRef(0);
+  const voiceRetryAbortRef = useRef<AbortController | null>(null);
   const {
     visible: voiceSpeakerFiltered,
     show: showVoiceSpeakerFiltered,
     clear: clearVoiceSpeakerFiltered,
   } = useSpeakerFilterNotice();
+  const {
+    candidate: voiceRefinementUndoCandidate,
+    offer: offerVoiceRefinementUndo,
+    dismiss: dismissVoiceRefinementUndo,
+    inspectDraft: inspectVoiceRefinementUndoDraft,
+  } = useMobileVoiceRefinementUndo();
   const [voiceReleaseToSendActive, setVoiceReleaseToSendActive] = useState(false);
   // 听写期间原生光标停在插入前的位置;停止后要等最终识别与润色完成才定位到插入末尾。
   // 这段时间继续隐藏光标,避免先在文字中间闪现再跳到末尾。
@@ -1855,9 +1876,10 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
   const sendInFlightRef = useRef(false);
   const rawOutboxRecords = useSyncExternalStore(mobileDurableOutbox.subscribe, mobileDurableOutbox.getSnapshot);
   const durableOutboxRecords = useMemo(() => rawOutboxRecords.filter((record) => record.accountId === outboxOwner.accountKey && !isDurableOutboxSettled(record)), [rawOutboxRecords, outboxOwner]);
-  const outboxItems = useMemo(() => durableOutboxRecords
-    .filter((r) => r.deviceId === deviceId && r.item.sessionId === sessionId && r.accountId === getMobileAuthOwner().accountKey)
-    .map(durableOutboxDisplayItem), [durableOutboxRecords, deviceId, sessionId]);
+  const taskOutboxRecords = useMemo(() => durableOutboxRecords
+    .filter((r) => r.deviceId === deviceId && r.item.sessionId === sessionId && r.accountId === getMobileAuthOwner().accountKey),
+    [durableOutboxRecords, deviceId, sessionId]);
+  const outboxItems = useMemo(() => taskOutboxRecords.map(durableOutboxDisplayItem), [taskOutboxRecords]);
   const outboxRef = useRef<readonly MobileOutboxItem[]>(outboxItems);
   outboxRef.current = outboxItems;
   useEffect(() => observeDurableOutboxSending(mobileDurableOutbox, deviceId, sessionId, (record) => {
@@ -1956,11 +1978,10 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
   const currentPluginEngineIsRemote = !!currentSession?.agentDeviceId && currentSession.agentDeviceId !== deviceId;
   const pluginEngineTargetId = pluginEngineExecutionDeviceId(currentSession?.agentDeviceId, pluginEngineSwitchIntent);
   const pluginEngineTargetIsRemote = !!pluginEngineTargetId && pluginEngineTargetId !== deviceId;
-  // 换到 / 换出插件引擎与 Desktop 切换准入一致（支持桌面、伙伴、官方 hook 与个人 IM 任务）。
+  // 与 Desktop 切换准入一致：放开所有非只读、非归档、非 SSH、非 review、非共享访客会话的插件引擎切换。
   const pluginEngineSwitchEligible = !!currentSession && !!deviceId && !isSharedTaskPeer(deviceId)
     // Agent 在另一台电脑的任务照样可以：选插件引擎时 Agent 回到被控电脑(被控端负责换位置)。
     && !currentSession.remoteHostId
-    && !currentSession.orcaRole && !currentSession.orcaRemoteLead
     && isPluginEngineSwitchSourceAllowed(currentSession.source)
     && currentSession.status !== 'archived';
   const pluginEngines = usePluginEngines(maker, deviceId, pluginEngineTask || pluginEngineSwitchEligible);
@@ -2392,6 +2413,17 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     runningModel?.deviceId === deviceId ? runningModel.route : undefined,
     pendingModel?.deviceId === deviceId ? pendingModel.route : undefined,
   );
+  const errorProviderName = (providerId?: string | null): string | undefined => {
+    if (!providerId || providerId === 'xd') return undefined;
+    const catalogDeviceId = runningModel?.deviceId ?? currentSession?.agentDeviceId ?? deviceId;
+    const catalog = catalogDeviceId === deviceId
+      ? composerDeviceProviders.ready ? composerDeviceProviders.providers : []
+      : remoteAgentCatalogs.find((item) => item.deviceId === catalogDeviceId)?.providers ?? [];
+    const provider = catalog.find((item) => item.id === providerId);
+    if (provider?.auth?.native === 'claude') return 'Anthropic';
+    if (provider?.auth?.native === 'codex') return 'OpenAI';
+    return provider?.name?.trim() || undefined;
+  };
   const collabWorkerDeviceId = collab.workerForm.form.executionDeviceId ?? deviceId;
   const collabDeviceProviders = useDeviceProviders(collabWorkerDeviceId || undefined, collab.workerForm.modelPicker.open);
   const collabModelPricing = useDeviceModelPricing(collabWorkerDeviceId || undefined);
@@ -2803,7 +2835,6 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       setPendingPlanViewerState('half');
     }
   }, [activePendingKind, activePendingRequestId, sessionOperationLayout.composerSlot]);
-  const creationTask = useNewSessionCreationTask(sessionId);
   // A failed chat is handing its composer to the editor. Running creation still
   // keeps the normal composer; stop further edits only during this handoff.
   const canUseComposer = sessionOperationLayout.canUseComposer && !sessionResourceCards.blocked && companionEntry.canCompose
@@ -2812,7 +2843,6 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     && !sessionSettingsLocked
     && !remoteRealtimeControlsUnavailable;
   const canConfigureSessionModel = canUseRemoteSessionControls
-    && !sessionManagedByHost
     && !isSharedTaskPeer(deviceId);
   // 共享模型自造的那两条禁发理由是中文直出,而它会经 composer 与队列行的
   // accessibility hint 读给用户 —— 按 locale 翻译后再用,否则读屏在 en / ja / ko
@@ -3039,10 +3069,14 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     () => currentSession ? buildSessionRuntimeOptions(currentSession, capabilities) : null,
     [capabilities, currentSession],
   );
-  // 任务菜单用量卡的模型名:能力目录 / 供应商目录里的展示名,找不到时由卡片自行兜底(不直接露原始 id)。
+  // 任务菜单用量卡的模型名:能力目录 / 插件引擎目录 / 供应商目录里的展示名,找不到时由卡片自行兜底(不直接露原始 id)。
   const sessionModelDisplayName = useMemo((): string | null => {
     const model = currentSession?.model?.trim();
     if (!model) return null;
+    if (pluginEngineTask) {
+      const fromPlugin = pluginEngineModelName(currentPluginEngine, model)?.trim();
+      if (fromPlugin) return fromPlugin;
+    }
     const fromRuntime = runtimeOptions?.currentModel?.label?.trim();
     if (fromRuntime && fromRuntime !== model) return fromRuntime;
     const providers = currentAgentCatalog.providers;
@@ -3058,7 +3092,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       }
     }
     return null;
-  }, [currentAgentCatalog.providers, currentSession?.model, currentSession?.providerId, runtimeOptions]);
+  }, [currentAgentCatalog.providers, currentPluginEngine, currentSession?.model, currentSession?.providerId, pluginEngineTask, runtimeOptions]);
   // pending intent 只覆盖 composer / selector 的展示，不改 RemoteSession 的真实 DB 字段；
   // main 在下一条消息发送时提交切换，sessions:patched 回流后展示自然交回真实行。
   const composerDisplaySession = useMemo(() => {
@@ -3238,7 +3272,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
         agentKind: sessionAgentKind,
         hasFastModeCap: capabilities?.hasFastMode === true,
       }) && (currentSession?.fastMode ?? false);
-  const composerRuntimeLabel = composerRuntimeSummary
+  const composerTargetLabel = composerRuntimeSummary
     ? agentSwitchIntent && composerSwitchesAgent
       ? `${mobileAgentLabel(agentSwitchIntent.targetAgentKind)} · ${composerRuntimeSummary.modelSummary}`
       : composerRuntimeSummary.modelSummary
@@ -3289,14 +3323,24 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       ? deviceDisplayName(pluginEngineTargetId, remoteAgentCatalogs.find((catalog) => catalog.deviceId === pluginEngineTargetId)?.name)
       : null;
     const source = executionDeviceName ? `${name} · ${executionDeviceName}` : name;
-    const label = pending || pluginEngineTargetIsRemote ? `${source} · ${modelSummary}` : modelSummary;
+    // 与内置远程任务及新建任务草稿一致：非待切状态药丸只显示「模型 · 深度」（远程标记画在图标角标），
+    // 引擎名在读屏标签里保留；远程电脑名由下方 nextAgentDeviceName 统一拼到读屏，避免重复。
+    const label = pending ? `${source} · ${modelSummary}` : modelSummary;
     return {
       label,
-      accessibility: pending ? t('session.screen.nextAgentSwitch', { agent: source, model: modelSummary }) : label,
+      accessibility: pending
+        ? t('session.screen.nextAgentSwitch', { agent: source, model: modelSummary })
+        : `${name} · ${modelSummary}`,
       iconDataUrl: engine?.iconDataUrl ?? null,
     };
   })();
-  // 按钮省去时机前缀，读屏仍说明待生效选择，避免被误认为当前运行配置。
+  const composerPreparationIntent = pluginEngineSwitchIntent ?? agentSwitchIntent;
+  const composerPreparationLabel = composerPreparationIntent
+    ? t(`session.screen.modelSwitchPreparation.${composerPreparationIntent.preparation ?? 'pending'}`)
+    : '';
+  const composerRuntimeLabel = [composerPreparationLabel, composerPluginEngineLabel?.label ?? composerTargetLabel]
+    .filter(Boolean).join(' · ');
+  // 插件和内置引擎使用同一准备状态，读屏仍补充待生效选择的时机与目标。
   const composerRuntimeAccessibilitySummary = composerPluginEngineLabel
     ? composerPluginEngineLabel.accessibility
     : composerRuntimeSummary && agentSwitchIntent
@@ -3304,15 +3348,17 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
         agent: mobileAgentLabel(agentSwitchIntent.targetAgentKind),
         model: composerRuntimeSummary.modelSummary,
       })
-    : composerRuntimeLabel;
+    : composerTargetLabel;
   // 下一条消息时 Agent 所在的另一台电脑名(药丸带远程标记,读屏一并读出);目录在缺名时以 deviceId
   // 兜底,那种情况不读出来。
   const nextAgentDeviceName = nextAgentDeviceId
     ? (remoteAgentCatalogs.find((item) => item.deviceId === nextAgentDeviceId)?.name ?? null)
     : null;
-  const composerRuntimeAccessibilityLabel = nextAgentDeviceName && nextAgentDeviceName !== nextAgentDeviceId
+  const composerRuntimeAccessibilityTarget = nextAgentDeviceName && nextAgentDeviceName !== nextAgentDeviceId
     ? [composerRuntimeAccessibilitySummary, nextAgentDeviceName].filter(Boolean).join(', ')
     : composerRuntimeAccessibilitySummary;
+  const composerRuntimeAccessibilityLabel = [composerPreparationLabel, composerRuntimeAccessibilityTarget]
+    .filter(Boolean).join(' · ');
   // 选择器说明里使用被控电脑的展示名，缺名时不显示设备 ID。
   const controlledComputerName = (() => {
     const name = currentSession?.deviceLinkDeviceName?.trim();
@@ -3535,13 +3581,14 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     }
     composerDraftSource.setDocument(value);
     voiceDictionaryLearningTrackerRef.current?.inspectDraft(projected);
+    inspectVoiceRefinementUndoDraft(projected);
     if (options?.persist !== false) {
       saveComposerDocumentDraft(sessionId, value);
       // Keep the legacy string mirror during the one-way migration window so
       // older builds do not turn a rich draft into an empty composer.
       saveComposerDraft(sessionId, projected);
     }
-  }, [composerDraftSource, sessionId]);
+  }, [composerDraftSource, inspectVoiceRefinementUndoDraft, sessionId]);
 
   const applyComposerDraft = useCallback((value: string, options?: { persist?: boolean }) => {
     const document = reconcileComposerProjectedText(composerDocumentRef.current, value);
@@ -3620,6 +3667,34 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
   const writeVoiceDraft = useComposerVoiceDraftWriter(sessionId, (update: ComposerVoiceDraftUpdate) => {
     applyRichComposerChange(reconcileComposerVoiceDraft(composerDocumentRef.current, update));
   });
+
+  const undoVoiceRefinement = useCallback(() => {
+    if (!voiceRefinementUndoCandidate) return;
+    const result = applyMobileVoiceRefinementUndoToDraft(draftRef.current, voiceRefinementUndoCandidate);
+    dismissVoiceRefinementUndo();
+    if (!result) return;
+    voiceDictionaryLearningTrackerRef.current?.noteRefinementUndone({
+      draft: result.nextDraft,
+      start: result.nextStart,
+      end: result.nextEnd,
+      rawTranscriptText: voiceRefinementUndoCandidate.rawTranscriptText,
+    });
+    composerInputRef.current?.rememberSelection(result.nextDraft, {
+      start: result.nextEnd,
+      end: result.nextEnd,
+    });
+    writeVoiceDraft({
+      draft: result.nextDraft,
+      initialDocument: composerDocumentRef.current,
+      initialSelection: {
+        start: voiceRefinementUndoCandidate.start,
+        end: voiceRefinementUndoCandidate.end,
+      },
+      insertionEnd: result.nextEnd,
+      replacement: result.replacement,
+    });
+    voiceRefinementUndoCandidate.revertHistoryToRaw?.();
+  }, [dismissVoiceRefinementUndo, voiceRefinementUndoCandidate, writeVoiceDraft]);
 
   useEffect(() => {
     const tracker = createMobileVoiceDictionaryLearningTracker({
@@ -3752,7 +3827,6 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
   useEffect(() => {
     if (!sessionManagedByHost) return;
     setSettingsOpen(false);
-    setModelSheetOpen(false);
     if (contextSheetView !== 'main') {
       setContextSheetView('main');
       setContextSheetOpen(false);
@@ -4049,7 +4123,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
   ]);
 
   useEffect(() => {
-    if (!deviceId || !sessionAgentSwitchSupported) {
+    if (creationBlocksReads || !deviceId || !sessionAgentSwitchSupported) {
       agentSwitchIntentLoadSeqRef.current += 1;
       return;
     }
@@ -4075,7 +4149,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     return () => {
       cancelled = true;
     };
-  }, [connectionEpoch, deviceId, lastSyncedAt, maker, openLink, sessionAgentSwitchSupported, sessionId]);
+  }, [connectionEpoch, creationBlocksReads, deviceId, lastSyncedAt, maker, openLink, sessionAgentSwitchSupported, sessionId]);
 
   const syncSession = useCallback(async (syncRun: RemoteSyncRun) => {
     const snapshotStartedAt = Date.now();
@@ -4089,7 +4163,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     // 新建会话乐观管线在途(running / create-failed):被控端可能还没有这个会话,
     // getSession 会 NOT_FOUND 报错横幅。统一在这里挡掉全部 load 触发点;管线完成
     // (task 移除)后由下方 effect 触发一轮真正的同步。
-    if (shouldBlockSessionSync(sessionId)) {
+    if (shouldBlockSessionSync(sessionId, deviceId)) {
       if (!syncRun.isStale()) setLoading(false);
       return;
     }
@@ -4556,10 +4630,15 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       }
     },
   });
+  const pendingHostCreationStatus = useMemo(() => {
+    const record = durableOutboxRecords.find((r) => r.deviceId === deviceId && r.item.sessionId === sessionId && isPendingHostDialogueCreation(r));
+    if (!record) return null;
+    return record.state === 'failed' ? 'create-failed' : 'running';
+  }, [durableOutboxRecords, deviceId, sessionId]);
   const prevCreationStatusRef = useRef<string | null>(null);
-  useEffect(() => {
+  useEffect(function syncAfterCreationTransition() {
     const prev = prevCreationStatusRef.current;
-    const status = creationTask?.status ?? null;
+    const status = creationTask?.status ?? pendingHostCreationStatus;
     prevCreationStatusRef.current = status;
     if (status === prev) return;
     if (status === null) {
@@ -4578,6 +4657,8 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
         }).catch((err) => {
           if (isMobileAuthOwnerCurrent(owner) && outboxSessionAliveRef.current === sessionId) setError(formatRemoteError(err));
         });
+        // Creation succeeded: refresh the open page while the outbox recovers the first input.
+        void load();
         return;
       }
       // 首条消息没发出,而创建期间用户可能已经发了后续消息(composer 全程可用)。
@@ -4618,7 +4699,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       dismissNewSessionCreation(sessionId);
       void load();
     }
-  }, [creationTask, deviceId, deviceName, load, navigation, router, sessionId, setComposerDraft]);
+  }, [creationTask, deviceId, deviceName, load, navigation, pendingHostCreationStatus, router, sessionId, setComposerDraft]);
 
   // 排队行里该显示「在途转圈」的 clientId:本页 enqueue 在途的条目,加上新建会话
   // 乐观管线仍在跑(create + 首条 enqueue 都还没确认)时的首条消息——它同样是
@@ -4898,10 +4979,18 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
   // 已进被控端队列的消息归队列管,不再算交接。已回流进历史、且后面已有回复(turn 已跑过)
   // 的消息也不算,否则快速 turn 结束后活动条要等后台对账才熄灭。只「已确认」不排除:
   // 被控端先落库用户消息、再跑派发前钩子,这段还没有运行信号。
-  const handoffSettledClientIds = useMemo(() => new Set([
-    ...inputProjection.pendingQueue.map((item) => item.clientId),
-    ...repliedHistoryUserClientIds(historyView.snapshot, rawMessages),
-  ]), [inputProjection.pendingQueue, historyView.snapshot, rawMessages]);
+  const rawHistoryDeviceId = remoteSessionStore.getSessionDeviceId(sessionId);
+  const handoffSettledClientIds = useMemo(() => {
+    // 活动条可以用同设备已确认的发送和实时终态收尾，待发记录仍等离线历史缓存完成。
+    const confirmedOutbox = rawHistoryDeviceId === deviceId ? {
+      sessionId,
+      clientIds: new Set(taskOutboxRecords.filter((record) => record.historyConfirmed).map((record) => record.item.clientId)),
+    } : undefined;
+    return new Set([
+      ...inputProjection.pendingQueue.map((item) => item.clientId),
+      ...repliedHistoryUserClientIds(historyView.snapshot, rawMessages, confirmedOutbox),
+    ]);
+  }, [inputProjection.pendingQueue, historyView.snapshot, rawMessages, rawHistoryDeviceId, deviceId, sessionId, taskOutboxRecords]);
   const messageHandoffActive = hasActiveOutboxHandoff(
     durableOutboxRecords,
     { deviceId, sessionId },
@@ -5154,7 +5243,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       ...sendingQueueClientIds,
       ...settlingItemsForRender.map((item) => item.clientId),
       ...durableOutboxRecords.filter((record) => record.deviceId === deviceId
-        && record.item.sessionId === sessionId && record.state !== 'failed'
+        && record.item.sessionId === sessionId && (record.state !== 'failed' || record.historyConfirmation)
         && !record.cancelRequested && !record.suspended).map((record) => record.item.clientId),
     ]);
     // Only the enqueue path can reserve a transcript position. A vanished
@@ -5743,7 +5832,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     && !isSharedTaskPeer(deviceId) && !['bot', 'review'].includes(currentSession.source ?? '')
     && !currentSession.pendingLocalCreation;
   const sideChatCount = useSideChatCount({ deviceId, sessionId, maker, owner: outboxOwner,
-    enabled: canUseSideChats && currentSession?.source !== 'side-chat' && remoteHistoryAvailable,
+    enabled: !creationBlocksReads && canUseSideChats && currentSession?.source !== 'side-chat' && remoteHistoryAvailable,
     refreshKey: `${connectionEpoch}:${sideChatsOpen}`,
   });
   const openSideChat = useCallback((row: RemoteSession) => {
@@ -5854,9 +5943,12 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     ) return;
     // 开始语音输入和打字一样，是要发消息的信号。
     prewarmAgentOnTyping();
+    const retryRunSeq = ++voiceRetryRunSeqRef.current;
+    failedVoiceRetry.clear();
     voiceStopAfterStartRef.current = false;
     setVoiceError(null);
     clearVoiceSpeakerFiltered();
+    dismissVoiceRefinementUndo();
     setVoiceReleaseToSendActive(false);
     let claimedPrewarm: PrewarmedMobileVoiceAsr | null = null;
     let permissionRequestSeq: number | null = null;
@@ -5987,6 +6079,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
           refinerTargetProvider: (providerId: string, options?: { refreshAccessToken?: boolean }) =>
             voiceContext.createRefinerTarget(providerId, options),
           refineRequestBudget: () => voiceContext.refineRequestBudget(),
+          maxSessionMs: () => voiceContext.maxSessionMs(),
           warmRefiner: (input: { system: string; user: unknown; promptCacheKey: string;
           }) =>
             voiceContext.warmRefiner(input),
@@ -6010,6 +6103,11 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
             setVoiceState('error');
             setVoiceError(message);
           },
+          onRetainedFailedAudio: (audio) => {
+            if (voiceRetryRunSeqRef.current === retryRunSeq) {
+              failedVoiceRetry.retain(audio);
+            }
+          },
           // No start cue on mobile: playing a cue via expo-audio during capture
           // re-activates the AVAudioSession and stalls the record tap (see
           // mobileVoiceCue.ts). Only the end cue, which plays after capture
@@ -6026,6 +6124,14 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
                 credential.settings?.language,
                 uiLanguage,
               ),
+            });
+            offerVoiceRefinementUndo({
+              draft: input.draft,
+              rawTranscriptText: input.rawTranscriptText,
+              refinedText: input.refinedText,
+              start: input.start,
+              end: input.end,
+              revertHistoryToRaw: input.revertHistoryToRaw,
             });
           },
         });
@@ -6090,9 +6196,12 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       setVoiceState('error');
       setVoiceError(formatRemoteError(err));
     }
-  }, [clearVoiceSpeakerFiltered, deviceId, openLink, prewarmAgentOnTyping, renderItems, showVoiceSpeakerFiltered, t, voiceIsProcessing, voiceState, writeVoiceDraft]);
+  }, [clearVoiceSpeakerFiltered, failedVoiceRetry, deviceId, dismissVoiceRefinementUndo, offerVoiceRefinementUndo, openLink, prewarmAgentOnTyping, renderItems, showVoiceSpeakerFiltered, t, voiceIsProcessing, voiceState, writeVoiceDraft]);
 
   const cancelVoiceForAppBackground = useCallback(() => {
+    voiceRetryRunSeqRef.current += 1;
+    voiceRetryAbortRef.current?.abort();
+    voiceRetryAbortRef.current = null;
     const controller = voiceControllerSessionRef.current;
     const ownsActiveRun = shouldCancelMobileVoiceForBackground({
       startupInFlight: voiceStartupInFlightRef.current,
@@ -6106,6 +6215,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       return;
     }
 
+    failedVoiceRetry.clear();
     voiceStartupSeqRef.current += 1;
     voiceControllerSessionRef.current = null;
     voiceStartupInFlightRef.current = false;
@@ -6120,7 +6230,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     setVoiceError(null);
     discardPendingPrewarm();
     if (controller) void controller.cancel().catch(() => undefined);
-  }, [setVoiceState]);
+  }, [failedVoiceRetry, setVoiceState]);
 
   useEffect(() => {
     const subscription = AppState.addEventListener('change', (nextState) => {
@@ -6157,6 +6267,9 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       voicePermissionRequestAbortRef.current = null;
       voicePermissionRequestInFlightRef.current = false;
       voiceStartupSeqRef.current += 1;
+      voiceRetryRunSeqRef.current += 1;
+      voiceRetryAbortRef.current?.abort();
+      voiceRetryAbortRef.current = null;
       voiceStartupInFlightRef.current = false;
       voiceStopInFlightRef.current = false;
       voiceRecordingActiveRef.current = false;
@@ -6164,6 +6277,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       voiceSuppressNextPressRef.current = false;
       voiceStopAfterStartRef.current = false;
       voiceDictionaryLearningTrackerRef.current?.dispose();
+      dismissVoiceRefinementUndo();
       // 语音结束 hold 属于上一个会话的输入现场;切会话时连同迁移基点一并复位,
       // 被 cancel 的 run 迟到的状态回调不会在新会话上误布防。
       // 不依赖旧 controller 的迟到 done 回调来复位新页面。
@@ -6230,6 +6344,113 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       voiceStopInFlightRef.current = false;
     }
   }, [attachments.length, t, voiceState]);
+
+  const retryFailedVoiceRecording = useCallback(async () => {
+    if (
+      voicePermissionRequestInFlightRef.current
+      || voiceStartupInFlightRef.current
+      || voiceStopInFlightRef.current
+      || voiceRecordingActiveRef.current
+      || voiceState === 'listening'
+      || voiceIsProcessing
+    ) return;
+    if (!deviceId) return;
+    const retained = failedVoiceRetry.peek();
+    if (!retained) return;
+    const retryRunSeq = ++voiceRetryRunSeqRef.current;
+    const retryAbort = new AbortController();
+    voiceRetryAbortRef.current = retryAbort;
+    voiceStopInFlightRef.current = true;
+    const caretPlacementSeq = ++voiceCaretPlacementSeqRef.current;
+    setVoiceCaretPlacementPending(true);
+    setVoiceError(null);
+    clearVoiceSpeakerFiltered();
+    setVoiceState('submitting');
+    try {
+      const credential = createMobileCindyVoiceCredential(deviceId);
+      const voiceContext = new MobileCindyVoiceRunContext(
+        () => auth.getAccessToken(),
+        () => auth.refreshAccessToken(),
+        auth.apiFetch,
+        credential.settings?.language,
+        CINDY_MANAGED_REFINER_PROVIDER,
+      );
+      const [localVoiceInputHistory] = await Promise.all([
+        getMobileVoiceInputHistoryForHost(deviceId, credential.settings?.voiceInputHistory).catch(() => undefined),
+        hydrateMobileVoiceDictionary(deviceId).catch(() => undefined),
+      ]);
+      if (voiceRetryRunSeqRef.current !== retryRunSeq) return;
+      const initialDraft = draftRef.current;
+      const initialDocument = composerDocumentRef.current;
+      const input = composerInputRef.current;
+      const initialSelection = input?.getSelection(initialDraft)
+        ?? { start: initialDraft.length, end: initialDraft.length };
+      const latestDraft = await replayMobileVoiceAudio({
+        audio: retained,
+        signal: retryAbort.signal,
+        credential,
+        requestedAt: Date.now(),
+        connectionProvider: (providerId: string) => voiceContext.createAsrConnection(providerId),
+        refinerTargetProvider: (providerId: string, options?: { refreshAccessToken?: boolean }) =>
+          voiceContext.createRefinerTarget(providerId, options),
+        refineRequestBudget: () => voiceContext.refineRequestBudget(),
+        warmRefiner: (warmInput: { system: string; user: unknown; promptCacheKey: string }) =>
+          voiceContext.warmRefiner(warmInput),
+        initialDraft,
+        initialSelection,
+        refinementContext: buildMobileVoiceSessionRefinementContext(initialDraft, renderItems, initialSelection),
+        localVoiceInputHistory,
+        readCurrentDraft: () => draftRef.current,
+        onDraftChanged: (text, selection, replacement) => {
+          if (voiceRetryRunSeqRef.current !== retryRunSeq) return;
+          if (selection) input?.rememberSelection(text, selection);
+          writeVoiceDraft({ draft: text, initialDocument, initialSelection, insertionEnd: selection?.end, replacement });
+        },
+        onStateChanged: (next) => {
+          if (voiceRetryRunSeqRef.current !== retryRunSeq) return;
+          setVoiceState(next);
+        },
+        onError: (message) => {
+          if (voiceRetryRunSeqRef.current !== retryRunSeq) return;
+          setVoiceState('error');
+          setVoiceError(message);
+        },
+        recordHistory: (text) => recordMobileVoiceInputHistoryForHost(deviceId, text),
+        updateHistoryEntry: (entryId, text) => updateMobileVoiceInputHistoryEntryForHost(deviceId, entryId, text),
+        onRefinementApplied: (refinementInput) => {
+          const uiLanguage = currentMobileVoiceUiLanguage();
+          voiceDictionaryLearningTrackerRef.current?.captureRefinedInsertion({
+            ...refinementInput,
+            uiLanguage,
+            sourceLanguage: resolveMobileVoiceRefinementSourceLanguage(
+              credential.settings?.language,
+              uiLanguage,
+            ),
+          });
+        },
+      });
+      if (voiceRetryRunSeqRef.current !== retryRunSeq) return;
+      failedVoiceRetry.clear();
+      setVoiceState('done');
+      setVoiceError(null);
+      const insertionEnd = composerInputRef.current?.getSelection(latestDraft).end ?? latestDraft.length;
+      requestAnimationFrame(() => {
+        if (input && composerInputRef.current === input && draftRef.current === latestDraft) {
+          input.applyDocumentAndSetSelection(composerDocumentRef.current, insertionEnd);
+        }
+        if (voiceCaretPlacementSeqRef.current === caretPlacementSeq) setVoiceCaretPlacementPending(false);
+      });
+    } catch (err) {
+      if (voiceCaretPlacementSeqRef.current === caretPlacementSeq) setVoiceCaretPlacementPending(false);
+      if (voiceRetryRunSeqRef.current === retryRunSeq) {
+        setVoiceState('error');
+        setVoiceError(formatRemoteError(err));
+      }
+    } finally {
+      if (voiceRetryAbortRef.current === retryAbort) voiceRetryAbortRef.current = null;
+      voiceStopInFlightRef.current = false;
+    }
+  }, [auth, clearVoiceSpeakerFiltered, deviceId, failedVoiceRetry, renderItems, setVoiceState, voiceIsProcessing, voiceState, writeVoiceDraft]);
 
   const openVoiceSettings = useCallback(() => {
     void Linking.openSettings().catch((err) => {
@@ -6418,19 +6639,22 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       || getNewSessionCreationTask(sessionId) !== null
     );
   };
-  const { findDurableOutboxRecord, retryOutboxItem, removeOutboxItem } = usePendingOutboxActions({
+  const { retryOutboxItem, removeOutboxItem } = usePendingOutboxActions({
     deviceId, deviceName, sessionId, router, outboxSessionAliveRef,
     setError, setQueueSelectedClientId, t,
   });
   const outboxLeftVersion = useSyncExternalStore(subscribeOutboxLeftInBackground, getOutboxLeftInBackgroundVersion);
-  const outboxDisplayItems = useMemo(() => outboxItems.map((item) => {
-    const record = findDurableOutboxRecord(item.clientId);
-    return {
-      ...outboxDisplayItem(item),
-      ...(record ? { sentAt: record.createdAt, pendingDelivery: isPendingDeliveryAfterLeaving(record) } : {}),
-      canCancel: !(record?.creation && !record.prepared && !record.template),
-    };
-  }), [outboxItems, deviceId, sessionId, outboxLeftVersion]);
+  const outboxDisplayItems = useMemo(() => {
+    const head = taskOutboxRecords.findIndex((record) => !isDurableOutboxHandedOff(record));
+    return taskOutboxRecords.map((record, index) => ({
+      ...outboxDisplayItem(outboxItems[index]!),
+      sentAt: record.createdAt,
+      pendingDelivery: isPendingDeliveryAfterLeaving(record),
+      historyConfirmation: record.historyConfirmation,
+      waitingForPrevious: head !== -1 && index > head && !isDurableOutboxHandedOff(record),
+      canCancel: !record.historyConfirmation && !hasUncreatedHostSession(record),
+    }));
+  }, [taskOutboxRecords, outboxItems, outboxLeftVersion]);
 
   // Legacy creation tasks have no app-owned first record. Never downgrade durable follow-ups
   // into the old ephemeral draft recovery; new creation tasks use the branch above.
@@ -7881,12 +8105,12 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
             testID="session.planModeChip"
           />
         ) : null}
-        {!sessionManagedByHost && composerRuntimeSummary ? (
+        {composerRuntimeSummary ? (
           <ComposerRuntimePill
             disabled={controlBusy || !canConfigureSessionModel}
             accessibilityLabel={composerRuntimeAccessibilityLabel}
             fastOn={composerPluginEngineLabel ? false : composerPillFastOn}
-            label={composerPluginEngineLabel?.label ?? composerRuntimeLabel}
+            label={composerRuntimeLabel}
             leading={composerPluginEngineLabel ? (
               <PluginEngineMark
                 iconDataUrl={composerPluginEngineLabel.iconDataUrl}
@@ -7902,7 +8126,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
             ) : composerPillSourceId ? (
               // 正常态显示真正生效来源；断开态显示 DB 中的真实来源并使用状态色，
               // 不静默换成 activeSourceId 的默认回退 Logo。
-              // Agent(下一条消息起)在另一台电脑运行:与桌面 trigger 同一个远程标记。
+              // 智能路由持续托管时叠路由角标；否则 Agent(下一条消息起)在另一台电脑运行叠远程标记。
               <MobileModelIconMark
                 color={composerSelectedSourceDisconnected ? colors.statusError : undefined}
                 icon={composerCatalogModel?.icon}
@@ -7912,6 +8136,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
                 logoKind={composerPillSourceProvider?.logoKind}
                 customIcon={composerPillSourceProvider?.customIcon}
                 remote={Boolean(nextAgentDeviceId)}
+                routed={Boolean(activeSessionModelGroupBinding)}
               />
             ) : null}
             onPress={toggleComposerModelPicker}
@@ -9245,7 +9470,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
   // push 继续负责增量；打开菜单与动作结束时再读取权威状态。
   const goalStatus = useSessionGoalStatus(sessionId);
   useFocusEffect(useCallback(() => {
-    if (!appStateActive || !remoteHistoryAvailable || !deviceId || !sessionId || isSharedTaskPeer(deviceId)) return;
+    if (creationBlocksReads || !appStateActive || !remoteHistoryAvailable || !deviceId || !sessionId || isSharedTaskPeer(deviceId)) return;
     let cancelled = false;
     void (async () => {
       try {
@@ -9261,7 +9486,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     return () => {
       cancelled = true;
     };
-  }, [appStateActive, connectionEpoch, contextSheetOpen, contextSheetView, deviceId, maker, remoteHistoryAvailable, sessionId]));
+  }, [appStateActive, connectionEpoch, contextSheetOpen, contextSheetView, creationBlocksReads, deviceId, maker, remoteHistoryAvailable, sessionId]));
   // 暂停 / 继续 / 结束目标:先乐观切本地状态镜像(面板当帧反馈,不等往返),
   // RPC 后台;成功回读权威收敛(既有语义)。失败时报错并还原:优先回读权威状态,
   // 回读也失败(离线 / 超时,与 action 同因高概率连败)则还原到乐观前的快照——
@@ -9613,7 +9838,9 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
   // 选中插件引擎的一行(Desktop docs/plans/acp-plugin-bridge.md)：同一个引擎内换模型 / 思考深度立即
   // 生效(set-model 带 selection；插件引擎没有 Fast)；换到另一个引擎——从内置引擎或别的插件引擎——
   // 与内置引擎之间一样登记意图，下一条消息交接。
-  const selectComposerPluginEngine = useCallback(async (selection: MobilePluginEngineSelection): Promise<boolean> => {
+  const selectComposerPluginEngine = useCallback(async (
+    selection: MobilePluginEngineSelection,
+  ): Promise<boolean> => {
     if (!canUseRemoteSessionControls || !currentSession || controlBusy || !deviceId) return false;
     const targetDeviceId = selection.deviceId ?? null;
     const currentDeviceId = currentPluginEngineIsRemote ? (currentSession.agentDeviceId ?? null) : null;
@@ -9624,7 +9851,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     if (sameRunningEngine) {
       const effort = selection.effort ?? null;
       return runControlAction(async () => {
-        // 选回当前引擎 = 撤销挂着的切换(desktop 按同引擎处理，只清意图)。
+        // 选回当前引擎与运行位置 = 撤销挂着的切换(desktop 按同引擎处理，只清意图)。
         if (currentSession.agentSwitchIntent || currentSession.pluginEngineSwitchIntent) {
           await maker.switchSessionAgent(
             sessionId, 'acp', selection.modelId, selection.providerId, effort ?? '', false,
@@ -9713,46 +9940,148 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     pluginEngineSwitchEligible, pluginEngineSwitchIntent, pluginEngineTask, pluginEngineTargetId,
     pluginEngineTargetIsRemote, refreshSessionPluginEngines, selectComposerPluginEngine]);
 
-  // 模型组(model-groups.md §6.3)：列出被控电脑的模式；选一个，就请那台按它的规则、只在任务此刻所在的位置里
-  // 挑一个来源，再走选模型的同一条路径换过去(跨引擎、换位置按既有意图登记)。不留选中态，之后不会自己再换。
-  // 分享来的任务、SSH、伙伴等非 Desktop 任务不提供；那台是旧版本时整段不出现。
+  // 模型组与供应商合并路由(model-groups.md §6.3)：普通/伙伴/SSH/目标/Orca/IM 等所有归属被控电脑的任务均可在
+  // 任务中间随时切入智能路由并持续托管(发前预检、配额失败自动降级、带图切视觉、缓存过期重选，支持跨位置无缝交接)。
+  // 分享来的他人任务不提供；旧电脑读不到模式时整段不出现。
   const sessionModelGroupsEligible = !!currentSession && !!deviceId && !isSharedTaskPeer(deviceId)
-    && !currentSession.remoteHostId && (!pluginEngineTask || sessionAgentSwitchSupported)
-    && (currentSession.source == null || currentSession.source === 'desktop')
+    && (!pluginEngineTask || sessionAgentSwitchSupported)
+    && currentSession.source !== 'review'
     && currentSession.status !== 'archived';
-  const sessionHostModelGroups = useHostModelGroups(deviceId, maker, sessionModelGroupsEligible && modelSheetOpen);
-  const switchSessionByModelGroup = useCallback(async (id: string): Promise<boolean> => {
+  const activeSessionModelGroupBinding = sessionModelGroupsEligible
+    ? (currentSession?.modelGroupBinding ?? null)
+    : null;
+  const sessionHostModelGroupsPayload = useHostModelGroupsPayload(deviceId, maker, sessionModelGroupsEligible && modelSheetOpen);
+  const sessionHostModelGroups = sessionHostModelGroupsPayload?.groups ?? null;
+  const switchSessionByModelGroup = useCallback(async (
+    id: string,
+    overrides?: { effort?: string; fast?: boolean | 'ultrafast' },
+  ): Promise<boolean> => {
     if (!currentSession || !canUseRemoteSessionControls || controlBusy) return false;
     const group = sessionHostModelGroups?.find((item) => item.id === id);
     const deviceAtStart = deviceId;
-    // 已挂着「下一条消息换到另一台电脑」时按那台挑：换模型会沿用它，两边必须是同一台(与电脑端一致)。
-    const result = await resolveHostModelGroup(maker, id, undefined, { agentDeviceId: nextAgentDeviceId ?? null });
+    const sshHostId = currentSession.remoteHostId || undefined;
+    // SSH 任务限定在主机可用来源；支持跨位置交接的普通任务不锁死旧位置，允许路由在本机/分享/其他电脑间挑选。
+    const location = sshHostId
+      ? { agentDeviceId: null, sshHostId }
+      : (!agentLocationMovable ? { agentDeviceId: nextAgentDeviceId ?? null } : undefined);
+    const result = await resolveHostModelGroup(
+      maker,
+      id,
+      overrides ? { effort: overrides.effort || undefined, fastMode: overrides.fast } : undefined,
+      location,
+    );
     if (deviceIdRef.current !== deviceAtStart) return false;
     if (!result || result.outcome !== 'routed') {
       showTransientNotice(t('models.modelGroups.picker.switchUnavailable', { name: result?.groupName || group?.name || '' }));
       return false;
     }
     const { route } = result;
-    const applied = await selectUnifiedComposerModel(
-      {
-        agent: route.agentKind === 'cc' ? 'claude-code' : route.agentKind,
-        modelId: route.model,
-        providerId: route.providerId,
-        effort: route.effort ?? '',
-        fast: false,
-      },
-      route.agentDeviceId ? { deviceId: route.agentDeviceId } : undefined,
-    );
+    const applied = route.agentKind === 'acp'
+      ? await selectComposerPluginEngine({
+          providerId: route.providerId,
+          modelId: route.model,
+          ...(route.agentDeviceId ? { deviceId: route.agentDeviceId } : {}),
+          ...(isPluginEngineEffort(route.effort) ? { effort: route.effort } : {}),
+        })
+      : await selectUnifiedComposerModel(
+          {
+            agent: route.agentKind === 'cc' ? 'claude-code' : route.agentKind,
+            modelId: route.model,
+            providerId: route.providerId,
+            effort: route.effort ?? overrides?.effort ?? '',
+            fast: route.fastMode ?? overrides?.fast ?? false,
+          },
+          route.agentDeviceId ? { deviceId: route.agentDeviceId } : undefined,
+        );
     if (!applied) return false;
-    // 记下是经哪个模式换的：那台之后撞配额时据此提议同一模式里的下一个来源。
-    applyHostModelGroupResult(maker, sessionId, id, result, null);
+    // 记下是经哪个路由换的，有界等待绑定落盘，使下一轮发送起立即进入持续托管。
+    await applyHostModelGroupResult(maker, sessionId, id, result, null);
     showTransientNotice(t('models.modelGroups.picker.switched', { name: result.groupName, model: `${result.modelName} · ${result.sourceName}` }));
     return true;
   }, [currentSession, canUseRemoteSessionControls, controlBusy, sessionHostModelGroups, deviceId, maker, nextAgentDeviceId,
-    selectUnifiedComposerModel, sessionId, showTransientNotice, t]);
+    agentLocationMovable, selectComposerPluginEngine, selectUnifiedComposerModel, sessionId, showTransientNotice, t]);
+  const detachSessionModelGroup = useCallback(async (): Promise<boolean> => {
+    if (!sessionId || !deviceId || !canUseRemoteSessionControls || controlBusy) return false;
+    const res = await maker.unbindModelGroupSession(sessionId);
+    if (res.unbound) {
+      remoteSessionStore.applySessionPatch(deviceId, sessionId, { modelGroupBinding: null });
+      showTransientNotice(t('models.modelGroups.picker.detached'));
+      return true;
+    }
+    return false;
+  }, [sessionId, deviceId, canUseRemoteSessionControls, controlBusy, maker, showTransientNotice, t]);
+  const composerModelGroupExtra = useMemo(() => ({
+    managedMeta: activeSessionModelGroupBinding
+      ? {
+          routeName: activeSessionModelGroupBinding.parentName ?? activeSessionModelGroupBinding.routeName,
+          isSourceRoute: activeSessionModelGroupBinding.isSourceRoute,
+        }
+      : null,
+    onDetach: activeSessionModelGroupBinding ? detachSessionModelGroup : undefined,
+    sourceRoutesPayload: sessionHostModelGroupsPayload,
+    activeRouteId: activeSessionModelGroupBinding?.selection.id ?? null,
+    onPickMerged: (routeId: string, config: MobileModelConfiguration) =>
+      switchSessionByModelGroup(routeId, { effort: config.effort, fast: config.fast }),
+  }), [activeSessionModelGroupBinding, detachSessionModelGroup, sessionHostModelGroupsPayload, switchSessionByModelGroup]);
   const composerModelGroupOptions = useHostModelGroupPickerOptions(
-    sessionModelGroupsEligible ? sessionHostModelGroups : null, null, switchSessionByModelGroup, t,
+    sessionModelGroupsEligible ? sessionHostModelGroups : null,
+    activeSessionModelGroupBinding?.isSourceRoute ? null : (activeSessionModelGroupBinding?.selection.id ?? null),
+    (id) => switchSessionByModelGroup(id),
+    t,
+    composerModelGroupExtra,
   );
+  const errorBannerShowing = Boolean(inputProjection.error) || tailBannerState?.kind === 'error-tail';
+  const sessionModelGroupSwitchOffer = useHostModelGroupSwitchOffer(
+    sessionId,
+    sessionModelGroupsEligible && canConfigureSessionModel && errorBannerShowing,
+    maker,
+    `${inputProjection.error ?? ''}:${tailBannerState?.kind === 'error-tail' ? tailBannerState.clientId : ''}:${currentSession?.model ?? ''}:${currentSession?.providerId ?? ''}:${currentSession?.agentDeviceId ?? ''}`,
+  );
+  const applyModelGroupSwitchOffer = useCallback(async (offer: HostModelGroupSwitchOffer, source: 'queue' | 'tail') => {
+    if (!currentSession || !canConfigureSessionModel || controlBusy) return;
+    const applied = offer.agentKind === 'acp'
+      ? await selectComposerPluginEngine({
+          providerId: offer.providerId,
+          modelId: offer.model,
+          ...(offer.agentDeviceId ? { deviceId: offer.agentDeviceId } : {}),
+          ...(isPluginEngineEffort(offer.effort) ? { effort: offer.effort } : {}),
+        })
+      : await selectUnifiedComposerModel(
+          {
+            agent: offer.agentKind === 'cc' ? 'claude-code' : offer.agentKind,
+            modelId: offer.model,
+            providerId: offer.providerId,
+            effort: offer.effort ?? '',
+            fast: offer.fastMode ?? false,
+          },
+          offer.agentDeviceId ? { deviceId: offer.agentDeviceId } : undefined,
+        );
+    if (!applied) return;
+    await maker.bindModelGroupSession({
+      sessionId,
+      selection: offer.selection,
+      route: {
+        agentKind: offer.agentKind,
+        providerId: offer.providerId,
+        model: offer.model,
+        ...(offer.agentDeviceId ? { agentDeviceId: offer.agentDeviceId } : {}),
+      },
+    }).catch(() => undefined);
+    if (source === 'tail') {
+      await continueTailBanner();
+    } else if (inputProjection.errorRetryText) {
+      retryQueueError();
+    } else if (canContinueError) {
+      continueQueueError();
+    }
+  }, [currentSession, canConfigureSessionModel, controlBusy, selectComposerPluginEngine, selectUnifiedComposerModel, maker, sessionId,
+    continueTailBanner, inputProjection.errorRetryText, retryQueueError, canContinueError, continueQueueError]);
+  const formatSwitchOfferLabel = useCallback((offer: HostModelGroupSwitchOffer) => (
+    t('models.modelGroups.switchOffer.button', {
+      model: `${offer.modelName} · ${offer.sourceName}`,
+      defaultValue: `Switch to ${offer.modelName} · ${offer.sourceName}`,
+    })
+  ), [t]);
 
   const selectComposerFlatModel = useCallback((option: MobileModelOption) => {
     setModelSheetOpen(false);
@@ -11566,6 +11895,16 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
                         {tailBannerState ? (
                           <SessionTailBanner
                             busy={tailBannerBusy || historyRecoveryBusy}
+                            providerId={currentSession?.providerId}
+                            providerName={errorProviderName(tailBannerState.kind === 'error-tail' ? tailBannerState.providerId ?? currentSession?.providerId : currentSession?.providerId)}
+                            modelGroupSwitchOffer={
+                              tailBannerState.kind === 'error-tail' && sessionModelGroupSwitchOffer
+                                ? {
+                                    label: formatSwitchOfferLabel(sessionModelGroupSwitchOffer),
+                                    onPress: () => void applyModelGroupSwitchOffer(sessionModelGroupSwitchOffer, 'tail'),
+                                  }
+                                : null
+                            }
                             onRecoverHistory={canRecoverHistory ? () => void recoverReadableHistory() : undefined}
                             onContinue={() => void continueTailBanner()}
                             onDismiss={dismissTailBanner}
@@ -11592,8 +11931,18 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
                         <InlineQueueSection
                           busy={queueBusy || historyRecoveryBusy}
                           isRunning={remoteSessionRunning || isSessionStreaming}
+                          modelGroupSwitchOffer={
+                            inputProjection.error && sessionModelGroupSwitchOffer
+                              ? {
+                                  label: formatSwitchOfferLabel(sessionModelGroupSwitchOffer),
+                                  onPress: () => void applyModelGroupSwitchOffer(sessionModelGroupSwitchOffer, 'queue'),
+                                }
+                              : null
+                          }
                           onRecoverHistory={canRecoverHistory ? () => void recoverReadableHistory() : undefined}
                           sessionSource={currentSession?.source}
+                          providerId={currentSession?.providerId}
+                          providerName={errorProviderName(currentSession?.providerId)}
                           onClearError={clearQueueError}
                           onCancelUsageLimitWait={cancelUsageLimitWait}
                           onResume={resumeQueue}
@@ -11932,6 +12281,8 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
                       generationReliable={remoteSessionRunStatus.generationReliable}
                       tokenSpeed={remoteSessionRunStatus.tokenSpeed}
                       generationActive={remoteSessionRunStatus.generationActive}
+                      replyStreaming={makerTurnRunning && currentTurnStreaming
+                        && /^generating(?:…|\.\.\.)?$/i.test(remoteSessionRunStatus.status.trim())}
                       visible={showComposerActivity}
                       slowSendPhase={creationSlowPhase}
                     />
@@ -12130,6 +12481,10 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
                 voiceCaretPlacementPending={voiceCaretPlacementPending}
                 voiceError={voiceError}
                 voiceSpeakerFiltered={voiceSpeakerFiltered}
+                canRetryVoice={failedVoiceRetry.canRetry}
+                retryVoiceRecording={retryFailedVoiceRecording}
+                canUndoVoiceRefinement={Boolean(voiceRefinementUndoCandidate)}
+                onUndoVoiceRefinement={undoVoiceRefinement}
                 composerVoiceHoldArmed={composerVoiceHoldArmed}
                 setComposerVoiceHoldArmed={setComposerVoiceHoldArmed}
                 modelSheetOpen={modelSheetOpen}
@@ -13057,6 +13412,11 @@ interface SessionComposerInputProps {
   voiceError: string | null;
   /** The voiceprint filter just muted someone else's speech. */
   voiceSpeakerFiltered: boolean;
+  canRetryVoice: boolean;
+  retryVoiceRecording: () => void;
+  /** Lightweight post-refinement "restore original" action is currently available. */
+  canUndoVoiceRefinement: boolean;
+  onUndoVoiceRefinement: () => void;
   composerVoiceHoldArmed: boolean;
   setComposerVoiceHoldArmed: (value: boolean) => void;
   modelSheetOpen: boolean;
@@ -13090,7 +13450,7 @@ interface SessionComposerInputProps {
 function SessionComposerInput({
   promptRecommendation,
   onDismissPromptRecommendation,
-  source, sessionId, composerInputRef, canUseComposer, canStopComposer, canUseRemoteSessionControls, remoteUnavailableReason, voiceState, voiceStartPending, voiceCaretPlacementPending, voiceError, voiceSpeakerFiltered, composerVoiceHoldArmed, setComposerVoiceHoldArmed, modelSheetOpen, permissionSheetOpen, sending, queueBusy, nativeShellLayout, composerTouchLayout, keyboardState, attachmentError, visualFocusComposer, applyRichComposerChange, setComposerDraft, handleComposerInputPressIn, beginPastePlaceholders, failPastePlaceholders, resolvePastedSessionLinkLabel, openVoiceSettings,
+  source, sessionId, composerInputRef, canUseComposer, canStopComposer, canUseRemoteSessionControls, remoteUnavailableReason, voiceState, voiceStartPending, voiceCaretPlacementPending, voiceError, voiceSpeakerFiltered, canRetryVoice, retryVoiceRecording, canUndoVoiceRefinement, onUndoVoiceRefinement, composerVoiceHoldArmed, setComposerVoiceHoldArmed, modelSheetOpen, permissionSheetOpen, sending, queueBusy, nativeShellLayout, composerTouchLayout, keyboardState, attachmentError, visualFocusComposer, applyRichComposerChange, setComposerDraft, handleComposerInputPressIn, beginPastePlaceholders, failPastePlaceholders, resolvePastedSessionLinkLabel, openVoiceSettings,
   composerSendUnavailableReason, attachmentCount, pendingUploadCount,
   onPasteImages, onDragActiveChange, onInputTopLayout, composerPullThrough, renderControls,
 }: SessionComposerInputProps) {
@@ -13202,7 +13562,8 @@ function SessionComposerInput({
   // 状态行只承载错误信息与声纹过滤提示(错误优先);「正在听 / 转写中」不再占一行,对齐桌面版——
   // 录音状态由输入框内的语音按钮形态(Mic / 红点计时胶囊 / spinner)表达。
   const voiceStatusText = voiceError ?? (voiceSpeakerFiltered ? t('composer.voice.speakerFiltered') : null);
-  const voiceStatusVisible = voiceUiAvailable && Boolean(voiceStatusText);
+  const voiceRefinementUndoVisible = voiceUiAvailable && !voiceStatusText && canUndoVoiceRefinement;
+  const voiceStatusVisible = voiceUiAvailable && (Boolean(voiceStatusText) || voiceRefinementUndoVisible);
 
   // 聚焦 / 面板打开 / 语音中呈现卡片形态（输入区全宽 + 底部工具排），其余保持单行简洁态。
   // 注意不看 composerLayout.density：有草稿 / 会话运行中未聚焦时也应收回简洁态，
@@ -13450,19 +13811,51 @@ function SessionComposerInput({
               >
                 {voiceStatusVisible ? (
                   <View style={styles.voiceStatusRow}>
-                    <Text style={styles.voiceStatusText} testID="session.voiceStatus">
-                      {voiceStatusText}
-                    </Text>
-                    {canOpenVoiceSettings ? (
-                      <RouteActionButton
-                        accessibilityLabel={t('session.common.openMicPermission')}
+                    {voiceStatusText ? (
+                      <>
+                        <Text style={styles.voiceStatusText} testID="session.voiceStatus">
+                          {voiceStatusText}
+                        </Text>
+                        {canOpenVoiceSettings ? (
+                          <RouteActionButton
+                            accessibilityLabel={t('session.common.openMicPermission')}
+                            hitSlop={COMPOSER_CONTROL_HIT_SLOP}
+                            onPress={openVoiceSettings}
+                            style={styles.voiceCancelButton}
+                            testID="session.voiceSettingsButton"
+                          >
+                            <Settings color={colors.textSecondary} size={iconSize.md} strokeWidth={iconStroke.regular} />
+                          </RouteActionButton>
+                        ) : canRetryVoice && voiceError && !voiceIsBusy && !voiceStartPending ? (
+                      <Pressable
+                        accessibilityLabel={t('composer.voice.retryRecognition')}
+                        accessibilityRole="button"
                         hitSlop={COMPOSER_CONTROL_HIT_SLOP}
-                        onPress={openVoiceSettings}
-                        style={styles.voiceCancelButton}
-                        testID="session.voiceSettingsButton"
+                        onPress={retryVoiceRecording}
+                        style={({ pressed }) => [styles.voiceRetryButton, pressed && styles.voiceRetryButtonPressed]}
+                        testID="session.voiceRetryButton"
                       >
-                        <Settings color={colors.textSecondary} size={iconSize.md} strokeWidth={iconStroke.regular} />
-                      </RouteActionButton>
+                        <Text numberOfLines={1} style={styles.voiceRetryButtonText}>
+                          {t('composer.voice.retryRecognition')}
+                        </Text>
+                      </Pressable>
+                        ) : null}
+                      </>
+                    ) : voiceRefinementUndoVisible ? (
+                      <Pressable
+                        accessibilityLabel={t('composer.voice.undoRefinement')}
+                        accessibilityRole="button"
+                        hitSlop={COMPOSER_CONTROL_HIT_SLOP}
+                        onPress={onUndoVoiceRefinement}
+                        style={({ pressed }) => [
+                          styles.voiceUndoRefinementPill,
+                          pressed && styles.voiceUndoRefinementPillPressed,
+                        ]}
+                        testID="session.voiceUndoRefinementButton"
+                      >
+                        <RotateCcw color={colors.textSecondary} size={iconSize.xs} strokeWidth={iconStroke.regular} />
+                        <Text style={styles.voiceUndoRefinementText}>{t('composer.voice.undoRefinement')}</Text>
+                      </Pressable>
                     ) : null}
                   </View>
                 ) : null}
@@ -14043,6 +14436,7 @@ function ComposerActivityStatus({
   generationReliable: reportedGenerationReliable,
   tokenSpeed,
   generationActive,
+  replyStreaming,
   visible,
   slowSendPhase = null,
 }: {
@@ -14063,6 +14457,7 @@ function ComposerActivityStatus({
   /** Host-measured live tok/s; replaces the usage-counter estimate when present. */
   tokenSpeed?: TokenSpeedSnapshot;
   generationActive: boolean;
+  replyStreaming: boolean;
   visible: boolean;
   /** Set once a new task's creation has waited past the slow-send delay. */
   slowSendPhase?: SlowSendPhase | null;
@@ -14187,6 +14582,7 @@ function ComposerActivityStatus({
       )
     : // 发送等待超过阈值时,同一行先说明卡在哪一步;创建完成后回到「思考中」。
       slowSendPhase ? t(`session.new.slowSend.${slowSendPhase}`)
+    : replyStreaming && !sideTaskRunning ? t('session.screen.replyStreaming')
     : t('session.screen.thinking');
 
   return (
@@ -14733,6 +15129,47 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     height: 28,
     justifyContent: 'center',
     width: 28,
+  },
+  voiceRetryButton: {
+    alignItems: 'center',
+    backgroundColor: colors.surfaceChip,
+    borderColor: colors.border,
+    borderRadius: radius.pill,
+    borderWidth: StyleSheet.hairlineWidth,
+    flexShrink: 0,
+    justifyContent: 'center',
+    minHeight: 28,
+    paddingHorizontal: spacing.sm,
+  },
+  voiceRetryButtonPressed: {
+    opacity: 0.7,
+  },
+  voiceRetryButtonText: {
+    color: colors.textPrimary,
+    fontSize: typeScale.caption,
+    fontWeight: fontWeight.medium,
+    lineHeight: lineHeight.caption,
+  },
+  voiceUndoRefinementPill: {
+    alignItems: 'center',
+    backgroundColor: colors.surfaceChip,
+    borderColor: colors.border,
+    borderRadius: radius.pill,
+    borderWidth: StyleSheet.hairlineWidth,
+    flexDirection: 'row',
+    gap: spacing.xs,
+    minHeight: 28,
+    paddingHorizontal: spacing.sm,
+  },
+  voiceUndoRefinementPillPressed: {
+    backgroundColor: colors.surfaceElevated,
+    borderColor: colors.borderStrong,
+  },
+  voiceUndoRefinementText: {
+    color: colors.textSecondary,
+    fontSize: typeScale.footnote,
+    fontWeight: fontWeight.medium,
+    lineHeight: lineHeight.caption,
   },
   // 语音按钮撑满 VoicePillWidthFrame,宽度由外框的过渡驱动;裁剪保证展开初段
   // 红点 + 计时尚未装下时不会溢出盖住左邻控件。

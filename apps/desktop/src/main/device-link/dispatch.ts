@@ -9,6 +9,7 @@ import type { readKimiCodingAccountUsage, readOpenCodeGoAccountUsage, readZhipuC
 import { PROVIDER_SHARE_INSIGHTS_CHANNEL } from '../../shared/providerShareInsights.js';
 import { PROVIDER_SHARE_AGENT_NET_LINK_CHANNEL } from '../../shared/providerShareAgentNetLink.js';
 import { sharedTaskRecoveryError } from '../../shared/sharedTaskRecovery.js';
+import { isIpcError } from '../../shared/ipc-errors.js';
 import { hasRichAnswer, compactRichAnswer, richAnswerText } from '@cindy/maker-shared/rich-answer';
 import type { RemoteAgentLimitUsage } from '../../shared/remoteAgentLimits.js';
 import type { executeTaskTags, TASK_TAG_CHANNEL } from '../localDb/ipc/taskTags.js';
@@ -115,6 +116,7 @@ import {
   CONTROLLER_CAPABILITY_MAKER_EVENT_BATCH_V1,
   CONTROLLER_CAPABILITY_PLUGIN_ENGINE_SWITCH_INTENT_V1,
   CONTROLLER_CAPABILITY_SESSION_TEXT_SNAPSHOT_V1,
+  CONTROLLER_CAPABILITY_EXACT_MESSAGE_NOT_FOUND_V1,
   DEVICE_LINK_CAPABILITY_COMPACT_MESSAGE_HISTORY_V1,
   DEVICE_LINK_CAPABILITY_HISTORY_VIEW_V1,
   DEVICE_LINK_CAPABILITY_GITHUB_READ_V1,
@@ -1197,6 +1199,10 @@ function projectInvokeResultForTunnel(
       manual: row.manual,
       recurring: row.recurring,
       intervalMs: row.intervalMs,
+      // 保留来源，让控制端归档确认区分可删的用户自动化与不可删的仓库/项目自动化。
+      ...(row.source === 'user' || row.source === 'project' || row.source === 'bot'
+        ? { source: row.source }
+        : {}),
       // 保留运行模式与旧控制端兼容；当前归档提醒包含持续会话，运行时恢复原普通任务。
       ...(row.persistentSession === true ? { persistentSession: true } : {}),
     }));
@@ -5785,6 +5791,11 @@ async function executeRemoteInvoke(src: string, payload: InvokePayload | undefin
     const message = err instanceof Error ? err.message : String(err);
     if (isDbWorkerOverloadedError(message) && (!handlerCompleted || isCompletedInvokeRetryableReadChannel(payload.channel))) {
       return { ok: false, error: { code: 'BACKPRESSURE', message } };
+    }
+    if (!handlerCompleted && payload.channel === 'local-db:messages:around-client-id'
+        && subscriptions.controllerSupports(src, CONTROLLER_CAPABILITY_EXACT_MESSAGE_NOT_FOUND_V1)
+        && (err instanceof DeviceLinkError || isIpcError(err)) && err.code === 'NOT_FOUND') {
+      return { ok: false, error: { code: err.code, message } };
     }
     return { ok: false, error: { code: 'IPC_ERROR', message } };
   }

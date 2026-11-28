@@ -197,6 +197,8 @@ export interface MobileOutboxThumb {
 
 /** InlineQueueSection 渲染 outbox 行所需的最小视图数据。 */
 export interface MobileOutboxDisplayItem {
+  waitingForPrevious?: boolean;
+  historyConfirmation?: import('./durableOutbox').OutboxHistoryConfirmation;
   clientId: string;
   text: string;
   quotesEncoded: boolean;

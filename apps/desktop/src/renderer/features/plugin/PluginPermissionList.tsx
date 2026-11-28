@@ -30,7 +30,7 @@ export function usePluginPermissionFacts(items: readonly GhostPermissionItem[]):
       title: hosts.length > 1 && host ? t('settings.ghosts.perm.networkHosts') : t('settings.ghosts.perm.' + item.labelKey, item.labelArgs),
       descriptions: [hosts.length > 1 && host ? hostText : '', detail, item.detail].filter((value): value is string => Boolean(value)),
       icon: permissionItemIcon(item),
-      highRisk: item.detailKey === 'nodeRuntimeDetail' || item.detailKey === 'nodeMcpDetail' ||
+      highRisk: item.detailKey === 'nodeRuntimeDetail' || item.detailKey === 'nodeMcpDetail' || item.detailKey === 'nodeInheritEnvDetail' ||
         detail?.startsWith('高风险') || detail?.startsWith('高風險') || detail?.startsWith('High risk'),
     }];
   });

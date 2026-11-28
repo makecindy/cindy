@@ -10,7 +10,8 @@
 本文治理 Cindy 连接 Claude／Codex／Pi／ACP（插件执行引擎）等 Agent 的编排核心
 `packages/maker-core`。它是所有 Agent 会话的事件流与 prompt 组装中枢，这里的改动会在用户
 无感知的情况下影响线上行为与质量。启动失败清理、事件流暂停、上下文溢出续接、后台命令与
-usage 计量须同时兼顾内置三引擎与第四种引擎 `acp`（ACP 不接入 Cindy system prompt，专用
+usage 计量须同时兼顾内置三引擎与第四种引擎 `acp`（ACP 不接入 Cindy system prompt，只经 ACP
+`systemPrompt` 协商交出启动时冻结的用户自定义提示词，专用
 协议扩展与不变量见 [`acp-plugin-harness.md`](acp-plugin-harness.md)）。进程边界与 IPC 另见
 [`electron-security-and-process-boundaries.md`](electron-security-and-process-boundaries.md)，
 Orca 多 Agent 协同另见 [`orca-team-architecture.md`](orca-team-architecture.md)。
@@ -215,6 +216,8 @@ UI、usage 与 digest 投影，不再向 Pi 注入 host 自动 compact RPC。
 宿主按实际目标 Harness、模型、供应商和执行电脑核实窗口。目录条目须标记 `contextWindowVerified: true`，
 任务和模型级工作预算只在已核实路由上参与窗口收敛。旧版目录缺字段、供应商未申报窗口、远程目录只剩缓存、
 分享组尚未确定执行电脑、SSH 无可核实路由或读取失败时，走 16,000 字符预算。
+
+跨引擎切换到本机 ACP 时，目标窗口来自此前同供应商、同模型的运行期报告，不从目录推断；远程和分享执行没有这个窗口，仍按 16,000 字符回退。验证范围见[插件引擎交接](acp-plugin-harness.md#5-briefing斜杠指令与协议扩展不变量)。
 
 已核实的重放预算为目标窗口的 30%，最多 100,000 估算 token 和 250,000 字符。ASCII 按每字符
 0.4 token 计，为常见英文和代码留出余量。非 ASCII 按每 UTF-16 单元 1 token 计，emoji 的代理对计两个单元。

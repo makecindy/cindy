@@ -19,10 +19,13 @@ import { lineHeight, radius, spacing, typeScale } from '@/theme/tokens';
 export function AgentErrorDetails({
   message,
   actions,
+  explainButton,
   onDiagnose,
 }: {
   message: string;
   actions?: ReactNode;
+  /** 面向用户的「了解原因」按钮（由调用方注入，避免所有使用方都拉入 SheetModal）。 */
+  explainButton?: ReactNode;
   /** Offered only after the user expands details; the caller decides where diagnosis happens. */
   onDiagnose?: () => void;
 }) {
@@ -37,6 +40,7 @@ export function AgentErrorDetails({
     <View>
       <View style={styles.actions}>
         {actions}
+        {explainButton}
         <Pressable
           accessibilityRole="button"
           accessibilityState={{ expanded }}

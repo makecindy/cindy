@@ -14,6 +14,7 @@ import {
   type RefObject,
   type ReactNode,
 } from 'react';
+import { createPortal } from 'react-dom';
 import { isScopedPeer, isSharedTaskPeer } from '@cindy/device-link';
 import { isProviderShareAgentDeviceId } from '../../../shared/providerShare';
 import { useNavigate } from 'react-router-dom';
@@ -135,7 +136,8 @@ import {
   takeComposerSubmitRequest,
 } from '@/lib/composerActionsBus';
 import { resolveComposerModelSelection } from './composerModelSelection';
-import { PluginUiSlot, usePluginUiComposerCandidates } from '@/cindy-brain/PluginUiContributions';
+import { PluginUiComposerActionScope, PluginUiComposerActionStatus, PluginUiSlot, usePluginUiComposerCandidates } from '@/cindy-brain/PluginUiContributions';
+import { usePluginUiRegions } from '@/cindy-brain/pluginUiVisibility';
 import { PluginUiCompletionBridge, type PluginUiCompletionResult, type PluginUiCompletionRequest } from '@/cindy-brain/PluginUiCompletionBridge';
 import { registerPluginUiDraftEditor } from '@/cindy-brain/pluginUiContext';
 import type { SessionRuntimeProfileProjection, SessionRuntimePendingProjection } from '@/lib/ccAgent.types';
@@ -233,6 +235,7 @@ import { pluginSuggestionComposerText } from '@/features/cc-agent/pluginHomeSugg
 import { useInstalledGhosts } from '@/cindy-brain/useInstalledGhosts';
 import { useRemoteComposerGhosts } from '@/cindy-brain/useRemoteComposerGhosts';
 import { projectGhostComposerEntries, type GhostCommandSource } from '../../../shared/ghostComposer';
+import { MAX_SESSION_REFERENCES, reconcileSessionRefsForText } from '../../../shared/agentInputQueue';
 import {
   attachGhostMediaToSession,
   getGhostMediaHandoverFromDataTransfer,
@@ -353,6 +356,7 @@ import { SendDeliveryTip } from './SendDeliveryTip';
 import { usePromptRecommendationPreference } from '@/hooks/usePromptRecommendationPreference';
 import { usePromptRecommendationPrediction } from '@/hooks/usePromptRecommendationPrediction';
 import { predictPromptUntilDisabled } from '@/lib/predictPromptUntilDisabled';
+import { promptRecommendationAgentKind } from '@/lib/promptRecommendationAgentKind';
 import {
   dismissPromptRecommendation,
   usePromptRecommendation,
@@ -536,6 +540,10 @@ export type SessionModelPick = (pick: {
   modelId: string;
   /** 同时换到这一档推理强度(模型组的模式指定了时)；省略 = 按选择器原有规则。 */
   effort?: Effort;
+  /** 同时设置 Fast 模式(合并供应商路由或路由指定了时)。 */
+  fastMode?: boolean | 'ultrafast';
+  /** 跨运行位置切换目标(null = 本机，string = 另一台电脑或分享来源；省略 = 保持当前运行位置)。 */
+  agentDeviceId?: string | null;
 }) => Promise<boolean>;
 
 interface ChatInputProps {
@@ -936,6 +944,8 @@ interface ChatInputProps {
    * with a hairline divider.
    */
   topSlot?: React.ReactNode;
+  /** An owning task view can place header controls inside its native running-status row. */
+  composerHeaderTarget?: HTMLElement | null;
   /**
    * 协同模式入口 (Claude / Codex Lead session 中途 toggle Worker)。
    * 提供时:与目标模式、计划模式同级渲染在 composer「+」菜单;
@@ -950,6 +960,7 @@ interface ChatInputProps {
   pluginModels?: PluginModelsPickerProps;
   /** 新任务的模型组(只有新任务草稿传)。 */
   modelGroups?: ModelGroupsPickerProps;
+  readModelGroupDevices?(): void;
   /**
    * 插件提供的执行引擎(docs/plans/acp-plugin-bridge.md)。只有本机新任务草稿在至少有一个引擎时传。
    * 选中引擎时：模型 pill 显示引擎与模型，权限只给引擎的两档，计划模式等内置引擎专属入口不出现，
@@ -1307,11 +1318,13 @@ export function ChatInput({
   middleToolbarSlot,
   compactMiddleToolbarSlot,
   topSlot,
+  composerHeaderTarget,
   collaboration,
   botMentions = [],
   onUnifiedDraftSelect,
   pluginModels,
   modelGroups,
+  readModelGroupDevices,
   pluginEngines,
   pluginEngineSession,
   selectedFavoriteUid = null,
@@ -1447,7 +1460,10 @@ export function ChatInput({
   // call sites keep working unchanged; NewMakerDraftRoute passes an explicit
   // sentinel to keep the transient draft alive across sidebar switches.
   const storageKey = draftKey ?? sessionId;
-  const pluginUiCandidates = usePluginUiComposerCandidates();
+  const composerActionSessionId = sessionId && storageKey === sessionId && deviceLinkDeviceId === null &&
+    !remoteHostId && !effectiveAgentDeviceId && !sharedGuest && !getSessionDeviceId(sessionId) ? sessionId : null;
+  const pluginUiCandidates = usePluginUiComposerCandidates(composerActionSessionId !== null);
+  const composerRegionVisible = usePluginUiRegions().composer;
   const hasPluginToolbar = pluginUiCandidates.toolbar;
   const [pluginCompletionResult, setPluginCompletionResult] = useState<PluginUiCompletionResult | null>(null);
   const pluginCompletionKeyRef = useRef('');
@@ -1526,6 +1542,7 @@ export function ChatInput({
 
   // ── ESC / history ref bridges for Tiptap handleKeyDown ────────────
   // Tiptap editorProps can't read React state, so we use refs.
+  const voiceInputHandleUndoKeyDownRef = useRef<((event: KeyboardEvent) => boolean) | null>(null);
   const onStopRef = useRef(onStop);
   onStopRef.current = onStop;
   const handleStop = useCallback(() => {
@@ -2811,6 +2828,12 @@ export function ChatInput({
           return true;
         }
 
+        // 语音听写润色后按 Cmd/Ctrl+Z 独立撤销回原始 ASR 文本（预润色上屏路径）。
+        if (voiceInputHandleUndoKeyDownRef.current?.(event)) {
+          event.preventDefault();
+          return true;
+        }
+
         // Delegate panel navigation keys (↑ ↓ Enter Esc Tab) when a
         // palette is open. We can't read React state from here directly,
         // but we expose a ref-based escape hatch via `panelBridgeRef`.
@@ -3622,9 +3645,12 @@ export function ChatInput({
   );
 
   const voiceShortcutRef = useRef(voiceInputSettings.shortcut);
+  const voiceInputSettingsRef = useRef(voiceInputSettings);
+  voiceInputSettingsRef.current = voiceInputSettings;
   const voiceInputStateRef = useRef(voiceInput.state);
   const voiceInputGetStateRef = useRef(voiceInput.getState);
   const voiceInputPrepareRef = useRef(voiceInput.prepare);
+  voiceInputHandleUndoKeyDownRef.current = voiceInput.handleUndoKeyDown;
   const voiceInputStopRef = useRef(handleVoiceInputStopWithRefinement);
   voiceInputBusyRef.current = voiceInput.isBusy;
   voiceDraftTextRef.current = voiceInput.draftText;
@@ -3673,6 +3699,7 @@ export function ChatInput({
     voiceInputStateRef.current = voiceInput.state;
     voiceInputGetStateRef.current = voiceInput.getState;
     voiceInputPrepareRef.current = voiceInput.prepare;
+    voiceInputHandleUndoKeyDownRef.current = voiceInput.handleUndoKeyDown;
     voiceInputStopRef.current = handleVoiceInputStopWithRefinement;
     voiceInputCancelRef.current = voiceInput.cancel;
     handleVoiceInputStartRef.current = handleVoiceInputStart;
@@ -3687,6 +3714,7 @@ export function ChatInput({
     handleVoiceInputStopWithRefinement,
     voiceInput.cancel,
     voiceInput.getState,
+    voiceInput.handleUndoKeyDown,
     voiceInput.prepare,
     voiceInput.state,
   ]);
@@ -3954,6 +3982,15 @@ export function ChatInput({
     const gesture = createComposerLongPressVoiceGesture({
       getState: () => voiceInputGetStateRef.current(),
       prepare: () => voiceInputPrepareRef.current?.(),
+      onHoldWarmup: () => {
+        const bridge = window.electronAPI?.voiceInput;
+        if (!bridge?.prewarmOnPress) return;
+        const { language, refinementEnabled } = voiceInputSettingsRef.current;
+        void bridge.prewarmOnPress({ sourceLanguage: language, refinementEnabled }).catch(() => undefined);
+        return () => {
+          void bridge.discardPressPrewarm?.().catch(() => undefined);
+        };
+      },
       start: () => handleVoiceInputStartRef.current(),
       stop: () => voiceInputStopRef.current(),
       onHoldStart: () => {
@@ -4736,7 +4773,7 @@ export function ChatInput({
   // 插件引擎在列清单的这台电脑上运行(本机，或正在远控的那台)时，`/` 列出它能展开的 Cindy 技能；
   // Agent 在另一台电脑上的任务，引擎那边没有技能来源，与首轮技能清单一致不列。
   const pluginEngineDeviceId = pluginEngineSession
-    ? pluginEngineSession.engine?.deviceId
+    ? (pluginEngineSession.engine?.deviceId ?? pluginEngineSession.agentDeviceId ?? undefined)
     : !sessionId ? pluginEngines?.active?.deviceId : undefined;
   const pluginEngineSkillsListed = pluginEngineActive
     && (!pluginEngineDeviceId || pluginEngineDeviceId === deviceLinkDeviceId);
@@ -5754,6 +5791,11 @@ export function ChatInput({
   const dispatchSendRef = useRef<(deliveryMode?: MessageDeliveryMode) => void | Promise<void>>(
     () => {},
   );
+  const taskReferencesFit = useCallback((text: string) => {
+    if (reconcileSessionRefsForText(text, undefined).length <= MAX_SESSION_REFERENCES) return true;
+    toast.error(t('newChat.chatInput.tooManyTaskReferences', { max: MAX_SESSION_REFERENCES }));
+    return false;
+  }, [t]);
   const dispatchSend = useCallback(
     async (deliveryMode: MessageDeliveryMode = 'queue') => {
       if (!editor) return;
@@ -6198,6 +6240,7 @@ export function ChatInput({
           slashCommandRanges = rebaseInlineRangesAfterSlashCommandRewrite(slashCommandRanges, routedText, rewritten);
           routedText = rewritten;
         }
+        if (!taskReferencesFit(routedText)) return;
         let recentUsageMarked = false;
         const markRecentPluginUsage = () => {
           if (!usedGhost || recentUsageMarked || sourceRemoteGhosts) return;
@@ -6659,6 +6702,7 @@ export function ChatInput({
       navigate,
       planModeEntry,
       captureSendFocusForRestore,
+      taskReferencesFit,
       slashCommandsReady,
       mergedCommands,
     ],
@@ -6692,6 +6736,7 @@ export function ChatInput({
     const content = serializeEditorContent(editor);
     const completedAttachments = [...latestAttachmentsRef.current];
     if (content.text.trim().length === 0 && completedAttachments.length === 0) return;
+    if (!taskReferencesFit(content.text)) return;
 
     setSendDispatchInFlight(true);
     try {
@@ -6715,6 +6760,7 @@ export function ChatInput({
     sendDispatchInFlight,
     waitForFolders,
     folderTransfers.hasPending,
+    taskReferencesFit,
     t,
     voiceBusyOnCurrentComposer,
   ]);
@@ -8577,7 +8623,6 @@ export function ChatInput({
             await enqueueEffortChange(effortChangeCoordinatorRef.current, sessionId, newEffort, {
               persist: (targetSessionId, effort) =>
                 window.electronAPI.maker.setEffort(targetSessionId, effort),
-              applyRuntime: async () => {}, // Main has already committed the runtime and its fields.
               onCommitted: (targetSessionId, effort) => {
                 if (activeModel)
                   syncSessionDraftModelPrefs(activeModel, { effort, fast: fastMode });
@@ -9204,18 +9249,34 @@ export function ChatInput({
   // 每次渲染后换成最新闭包(与 performAgentSwitchRef 同理)；卸载时收回，横幅不会调到已离开的任务。
   useEffect(() => {
     if (!sessionModelPickRef || !sessionId) return;
-    const pick: SessionModelPick = async ({ agent, providerId, modelId, effort }) => {
+    const pick: SessionModelPick = async ({ agent, providerId, modelId, effort, fastMode: targetFastMode, agentDeviceId: targetAgentDeviceId }) => {
+      const targetLocation = targetAgentDeviceId === undefined ? effectiveAgentDeviceId : targetAgentDeviceId;
+      const crossLocation = targetLocation !== effectiveAgentDeviceId;
+      if (crossLocation) {
+        if (!sessionAgentSwitchSupported || remoteHostId) return false;
+        return performAgentSwitchRef.current(agent, modelId, providerId, {
+          ...(effort ? { effort } : {}),
+          ...(targetFastMode !== undefined ? { fastMode: targetFastMode } : {}),
+          agentDeviceId: targetLocation,
+        });
+      }
       if (!sessionEngineFilter) {
         if (agent !== runtimeAgentKind) return false;
-        return (await handleProviderChange(providerId, modelId, effort)) !== false;
+        return (await handleProviderChange(providerId, modelId, effort, undefined, targetFastMode)) !== false;
       }
       const runtime = sessionEngineFilter.runtimeAgent;
       const pending = sessionEngineFilter.pendingTarget;
       const crossEngine = runtime === undefined || agent !== runtime || (pending !== undefined && pending !== runtime);
       if (crossEngine) {
-        return sessionEngineFilter.onCrossEngineSelect({ providerId, modelId, targetAgent: agent, effort: effort ?? '' });
+        return sessionEngineFilter.onCrossEngineSelect({
+          providerId,
+          modelId,
+          targetAgent: agent,
+          effort: effort ?? '',
+          ...(targetFastMode !== undefined ? { fast: targetFastMode } : {}),
+        });
       }
-      return (await handleProviderChange(providerId, modelId, effort)) !== false;
+      return (await handleProviderChange(providerId, modelId, effort, undefined, targetFastMode)) !== false;
     };
     sessionModelPickRef.current = pick;
     return () => {
@@ -9318,20 +9379,28 @@ export function ChatInput({
     mutationLocked: composerMutationLocked || showStopButton,
   };
   const recommendationComposerReady = isComposerReadyForPromptRecommendation(recommendationComposerState);
+  // 预测用的「已确认会话引擎」：插件引擎(ACP)任务没有内置 Harness 身份(runtimeAgentKind 为
+  // null)，但会话已确认为 ACP 时 pluginEngineSession 在。启用条件、回调入口与 IPC 参数
+  // 共用这一个值；两者都没有 = 会话信息未就绪，等待，不拿模型选择器默认值补成 claude-code
+  // (#13694：错标的请求会被主进程按 DB 的 dbAgentKind 拒绝)。
+  const predictionAgentKind = promptRecommendationAgentKind({
+    isPluginEngineSession: !!pluginEngineSession,
+    runtimeAgentKind,
+  });
   usePromptRecommendationPrediction({
     sessionId,
     recommendation,
     canPredict:
       recommendationComposerReady && !!editor && !editor.isDestroyed &&
-      deviceLinkDeviceId !== undefined && runtimeAgentKind != null &&
+      deviceLinkDeviceId !== undefined && predictionAgentKind != null &&
       hasPredictionMessages && !remoteHostId,
     predict: async (revision, isCurrent) => {
-      if (!sessionId || runtimeAgentKind == null) return null;
+      if (!sessionId || predictionAgentKind == null) return null;
       // 素材仍由 Main 从 DB 读取；远程任务经 sticky 路由交给被控电脑。
       const result = await predictPromptUntilDisabled(makerApiForSticky(sessionId), {
         sessionId,
         // 插件引擎任务按 'acp' 请求：推荐只用辅助模型链，主进程据此核对任务没有换引擎。
-        agentKind: pluginEngineSession ? 'acp' : runtimeAgentKind,
+        agentKind: predictionAgentKind,
         messages: (messages ?? []).slice(-20).map(({ role, content }) => ({ role, content })),
         workingDir: workingDirRef.current ?? undefined,
         turnGen: turnGenRef.current,
@@ -9533,9 +9602,11 @@ export function ChatInput({
   const allowToolbarWrap = toolbarWidthMode === 'tight' ||
     (useUltraCompactToolbar && voiceInput.isListening) ||
     (hasPluginToolbar && (useUltraCompactToolbar || voiceBusyOnCurrentComposer || showSecondaryStop));
+  const pluginHeader = pluginUiCandidates.header && !remoteHostId && !deviceLinkDeviceId
+    ? <PluginUiSlot position="composer.header" sessionId={sessionId} /> : null;
 
-  return (
-    <div className="relative flex w-full flex-col items-center gap-4" data-chat-input-root>
+  return <PluginUiComposerActionScope sessionId={composerActionSessionId} editor={editor} disabled={composerMutationLocked}>
+    <div className="relative flex w-full flex-col items-center gap-4 [&>[data-plugin-composer-header]]:-mb-2" data-chat-input-root>
       {pluginUiCandidates.completion.length > 0 && <PluginUiCompletionBridge
         entries={pluginUiCandidates.completion} sessionId={sessionId ?? null} onResult={setPluginCompletionResult}
         request={pluginCompletionKey && !composerMutationLocked && (slashOpen || typedAtOpen) && trigger.kind !== 'none'
@@ -9567,7 +9638,12 @@ export function ChatInput({
       {(voiceInput.lastError || showSpeakerFilteredNotice || rejections.length > 0) && (
         <div className="pointer-events-none absolute bottom-full left-0 right-0 z-page-float mb-2 flex flex-col items-center gap-1 px-3">
           {voiceInput.lastError ? (
-            <VoiceInputStatusNotice message={voiceInput.lastError} />
+            <VoiceInputStatusNotice
+              message={voiceInput.lastError}
+              actionLabel={voiceInput.canRetryRecognition ? t('voiceInputOverlay.retryRecognition') : undefined}
+              onAction={voiceInput.canRetryRecognition ? () => { voiceInput.retryRecognition(); } : undefined}
+              actionDisabled={voiceInput.isBusy}
+            />
           ) : showSpeakerFilteredNotice ? (
             <VoiceInputStatusNotice tone="info" message={t('voiceInputOverlay.speakerFiltered')} />
           ) : null}
@@ -9576,9 +9652,8 @@ export function ChatInput({
           )}
         </div>
       )}
-      {pluginUiCandidates.header && !remoteHostId && !deviceLinkDeviceId && (
-        <PluginUiSlot position="composer.header" sessionId={sessionId} />
-      )}
+      {composerHeaderTarget === undefined ? pluginHeader : composerRegionVisible && pluginHeader &&
+        composerHeaderTarget && createPortal(pluginHeader, composerHeaderTarget)}
       {/* When the pending-queue panel is visible, the wrapper div owns the
           border + corner radius + focus-within highlight. Both inner halves
           (panel + input card) become borderless sections, so a focus on the
@@ -10026,6 +10101,7 @@ export function ChatInput({
               )}
             >
               <div
+                data-composer-left-controls=""
                 className={cn(
                   useNarrowToolbar
                     ? 'flex min-w-min shrink items-center gap-1'
@@ -10136,13 +10212,16 @@ export function ChatInput({
                     visualVariant={isCreateAgentVariant ? 'create-agent' : 'default'}
                   />
                 </div>
+                {pluginUiCandidates.inlineToolbar && (
+                  <PluginUiSlot position="composer.toolbar" toolbarGroup="inline" sessionId={sessionId} />
+                )}
                 {useNarrowToolbar && !useCompactMiddleToolbar && <>{middleToolbarSlot}</>}
               </div>
               {hasPluginToolbar && (
                 // Keep a scrollable share for actual controls, without reserving a fixed
                 // minimum for remote tasks or plugins that hide all their contributions.
                 <div
-                  className={cn('mx-1 w-max min-w-0 shrink-0 overflow-x-auto',
+                  className={cn('mx-1 w-max min-w-0 shrink-0 overflow-x-auto [&:has([data-plugin-composer-toolbar]:empty)]:hidden',
                     allowToolbarWrap ? 'max-w-[60%]' : useNarrowToolbar ? 'max-w-[33%]' : 'max-w-[50%]')}
                   onFocus={(event) => {
                     if (event.target instanceof HTMLElement) {
@@ -10151,7 +10230,7 @@ export function ChatInput({
                   }}
                 >
                   <div className="w-max">
-                    <PluginUiSlot position="composer.toolbar" sessionId={sessionId} />
+                    <PluginUiSlot position="composer.toolbar" toolbarGroup="legacy" sessionId={sessionId} />
                   </div>
                 </div>
               )}
@@ -10204,6 +10283,10 @@ export function ChatInput({
                     effort={activeEffort}
                     onModelChange={handleModelChange}
                     onEffortChange={handleEffortChange}
+                    showEffortShortcut={
+                      !!sessionId && deviceLinkDeviceId === null && !catalogDeviceId && !remoteHostId &&
+                      !noConnectedSource && !agentSwitchIntent
+                    }
                     fastMode={composerSelection.display.fastMode}
                     currentSelection={sessionId && runtimeAgentKind ? composerSelection.current : undefined}
                     onFastModeChange={handleFastModeChange}
@@ -10283,6 +10366,7 @@ export function ChatInput({
                         ? composerAgentIdentity
                         : undefined
                     }
+                    selectionPreparation={storedAgentSwitchIntent ? storedAgentSwitchIntent.preparation ?? 'pending' : undefined}
                     // 统一模型选择器(M5 新会话 / M6 会话内)。composer 是它的两个真实入口;
                     // 其余 7 个消费者(scheduler / IM / Hook / Subagent / Worker /
                     // GhostErrand / 设置)本版一律不开。
@@ -10311,6 +10395,7 @@ export function ChatInput({
                     }
                     {...(!sessionId && unifiedPanelActive && pluginModels ? { pluginModels } : {})}
                     {...(unifiedPanelActive && modelGroups ? { modelGroups } : {})}
+                    readModelGroupDevices={unifiedPanelActive ? readModelGroupDevices : undefined}
                     // 已建普通任务也能换到 / 换出任务所属电脑的插件引擎。
                     {...(unifiedPanelActive && pluginEngines && (!sessionId || sessionAgentSwitchSupported)
                       ? { pluginEngines } : {})}
@@ -10661,6 +10746,7 @@ export function ChatInput({
         </div>
       </div>
 
+      {composerActionSessionId !== null && (pluginUiCandidates.header || pluginUiCandidates.inlineToolbar) && <PluginUiComposerActionStatus />}
       {/* 长文本粘贴 chip 的编辑弹窗(editorProps.handleClickOn 打开)。 */}
       {pastedTextEditTarget != null && (
         <ToolPayloadLightbox
@@ -10716,5 +10802,5 @@ export function ChatInput({
         </div>
       )}
     </div>
-  );
+  </PluginUiComposerActionScope>;
 }

@@ -63,7 +63,7 @@ export interface AcpUpdateTranslatorOptions {
 }
 
 export type AcpTurnOutcome =
-  | { stopReason: AcpStopReason; usage?: AcpTurnUsage; usageModel?: string }
+  | { stopReason: AcpStopReason }
   /** `signals`: structured failure fields (usage limit, sign-in, overload) the agent classified. */
   | { error: string; reason?: string; signals?: Record<string, unknown> };
 
@@ -160,6 +160,16 @@ export class AcpUpdateTranslator {
 
   constructor(private readonly options: AcpUpdateTranslatorOptions) {
     this.now = options.now ?? Date.now;
+  }
+
+  verificationWarning(): boolean {
+    return /^⚠\uFE0F?\s+Verification Required$/.test((this.segmentText || this.lastText).trim());
+  }
+
+  finishVerificationWarning(): AgentEvent[] {
+    const events = this.flushPending();
+    this.lastText = '';
+    return events;
   }
 
   /** Latest plan published in this turn. */
@@ -276,7 +286,7 @@ export class AcpUpdateTranslator {
    * or failed turn marks unfinished calls as interrupted; other stop reasons keep
    * the earlier rule and treat them as done.
    */
-  finish(outcome: AcpTurnOutcome): AgentEvent[] {
+  finish(outcome: AcpTurnOutcome, receipt?: { usage: AcpTurnUsage; usageModel?: string }): AgentEvent[] {
     const events = this.flushPending();
     this.planTurnSeq += 1;
     const interrupted = 'error' in outcome || outcome.stopReason === 'cancelled';
@@ -296,6 +306,7 @@ export class AcpUpdateTranslator {
         type: 'error',
         data: {
           ...(outcome.signals ?? {}),
+          ...(receipt && { type: 'acp/prompt_end', ...receipt }),
           message: outcome.error,
           isTerminal: true,
           ...(reason ? { reason } : {}),
@@ -310,9 +321,7 @@ export class AcpUpdateTranslator {
         status: outcome.stopReason === 'cancelled' ? 'cancelled' : 'completed',
         result: outcome.stopReason === 'cancelled' ? '' : result,
         stopReason: outcome.stopReason,
-        // A cancelled turn still spent the tokens the agent reports for it.
-        ...(outcome.usage ? { usage: outcome.usage } : {}),
-        ...(outcome.usageModel ? { usageModel: outcome.usageModel } : {}),
+        ...receipt,
       },
     });
     return events;
@@ -345,6 +354,11 @@ export class AcpUpdateTranslator {
       this.emitToolUse(tool, events);
     } else {
       // Later updates replace only the fields they carry.
+      const namingChanged = !tool.settled && (
+        (fields.name !== undefined && fields.name !== tool.name)
+        || (fields.title !== undefined && fields.title !== tool.title)
+      );
+      const wasMountedMcp = namingChanged && this.mountedMcpTool(tool) !== null;
       if (fields.title !== undefined) tool.title = fields.title;
       if (fields.name !== undefined) tool.name = fields.name;
       if (fields.kind !== undefined) tool.kind = fields.kind;
@@ -352,8 +366,9 @@ export class AcpUpdateTranslator {
       if (fields.content !== undefined) tool.content = fields.content;
       if (fields.locations !== undefined) tool.locations = fields.locations;
       if (fields.rawOutput !== undefined) tool.rawOutput = fields.rawOutput;
-      if (!tool.settled && fields.rawInput !== undefined && !isDeepStrictEqual(fields.rawInput, tool.rawInput)) {
-        tool.rawInput = fields.rawInput;
+      const inputChanged = fields.rawInput !== undefined && !isDeepStrictEqual(fields.rawInput, tool.rawInput);
+      if (!tool.settled && (inputChanged || (namingChanged && (wasMountedMcp || this.mountedMcpTool(tool))))) {
+        if (inputChanged) tool.rawInput = fields.rawInput;
         this.emitToolUse(tool, events, true);
       }
     }
@@ -363,19 +378,33 @@ export class AcpUpdateTranslator {
     return tool;
   }
 
+  private mountedMcpTool(tool: ToolState): ReturnType<typeof parseAcpMcpToolName> {
+    const mounted = this.options.mcpServerNames;
+    if (!mounted?.length) return null;
+    for (const candidate of [tool.name, tool.title]) {
+      if (!candidate) continue;
+      const parsed = parseAcpMcpToolName(candidate, mounted);
+      if (parsed && mounted.includes(parsed.serverName)) return parsed;
+    }
+    return null;
+  }
+
   private emitToolUse(tool: ToolState, events: AgentEvent[], inputPatch = false): void {
     const input = tool.rawInput !== null && typeof tool.rawInput === 'object'
       ? tool.rawInput
       : tool.rawInput === undefined ? {} : { value: tool.rawInput };
+    const mcp = this.mountedMcpTool(tool);
+    const toolName = acpToolDisplayName(tool);
     events.push({
       type: 'tool_use',
       data: {
         ...parseMessageToolUse({
           role: 'tool_use',
-          content: { toolName: acpToolDisplayName(tool), input },
+          content: { toolName, input },
           toolUseId: tool.toolCallId,
         }),
         toolUseId: tool.toolCallId,
+        ...(mcp ? { mcpToolName: `mcp:${mcp.serverName}:${mcp.toolName}` } : {}),
         ...(tool.kind ? { acpKind: tool.kind } : {}),
         ...(tool.locations?.length ? { acpLocations: tool.locations } : {}),
         ...(inputPatch ? { acpInputPatch: true } : {}),

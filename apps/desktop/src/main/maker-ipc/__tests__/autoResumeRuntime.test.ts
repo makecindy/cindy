@@ -113,7 +113,7 @@ describe('auto-resume runtime', () => {
 
     expect(rt.ports.restoreAutoResumeRecovery).toHaveBeenCalledWith(SID, 'quota', null);
     expect(rt.ports.finishScheduledUsageLimitWait).toHaveBeenCalledWith(SID, 'quota');
-    expect(rt.ports.settleProviderGroupContinuation).toHaveBeenCalledWith(SID, false);
+    expect(rt.ports.settleProviderGroupContinuation).toHaveBeenCalledWith(SID, false, true);
     expect(rt.ports.bookkeeping.markOutcome).not.toHaveBeenCalled();
   });
 

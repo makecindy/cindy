@@ -117,11 +117,27 @@ beforeEach(() => {
 });
 afterEach(() => {
   cleanup();
+  window.localStorage.clear();
   vi.unstubAllGlobals();
   vi.useRealTimers();
 });
 const branchButton = () => screen.getByRole('button', { name: 'newChat.branchChip.label' });
-const refreshButton = () => screen.getByRole('button', { name: /newChat.branchSync.action/ });
+const branchName = () => screen.getByTestId('create-agent-branch-name').textContent;
+const openPopover = async () => {
+  if (branchButton().getAttribute('aria-expanded') !== 'true') {
+    await act(async () => {
+      fireEvent.click(branchButton());
+    });
+  }
+};
+const toggleWorktreeSwitch = async () => {
+  await openPopover();
+  await act(async () => {
+    fireEvent.click(screen.getByTestId('create-agent-worktree-chip'));
+  });
+};
+const refreshButton = () => screen.getByTestId('workspace-sync-header-btn');
+const syncButton = () => screen.getByRole('button', { name: 'newChat.workspaceCapsule.syncNow' });
 // Regression: remote Git continues after the old 90s request budget; follow the
 // operation handle rather than repeating the mutation. Unit tier, real hook/UI.
 it('continues waiting for the same remote fetch and shows its final result', async () => {
@@ -135,16 +151,15 @@ it('continues waiting for the same remote fetch and shows its final result', asy
     channel === 'worktree:sync-branch' ? replies.shift() : baseStatus,
   );
   render(<BranchWorktreeChip {...props} deviceId="remote-a" />);
-  // The action exists while the initial status is still loading; wait until a
-  // user can click it before checking remote operation continuation.
+  await openPopover();
   await waitFor(() => expect(refreshButton().hasAttribute('disabled')).toBe(false));
-  fireEvent.click(refreshButton());
-  await screen.findByRole('button', { name: /newChat.branchSync.updated/ });
+  fireEvent.click(syncButton());
+  await waitFor(() => expect(invoke.mock.calls.filter((call) => call[1] === 'worktree:sync-branch')).toHaveLength(3));
   const writes = invoke.mock.calls.filter((call) => call[1] === 'worktree:sync-branch');
   expect(writes.map((call) => call[2])).toEqual([
-    [{ baseRepo: '/repo', branch: 'main', waitForResult: true }],
-    [{ baseRepo: '/repo', branch: 'main', waitForResult: true, operationId }],
-    [{ baseRepo: '/repo', branch: 'main', waitForResult: true, operationId }],
+    [{ baseRepo: '/repo', branch: 'main', waitForResult: true, strategy: 'ff-only' }],
+    [{ baseRepo: '/repo', branch: 'main', waitForResult: true, strategy: 'ff-only', operationId }],
+    [{ baseRepo: '/repo', branch: 'main', waitForResult: true, strategy: 'ff-only', operationId }],
   ]);
   expect(mocks.toast).not.toHaveBeenCalled();
 });
@@ -165,30 +180,30 @@ it.each(['transport', 'terminal', 'selection-change'] as const)(
       return { status: baseStatus, updated: 3 };
     });
     const view = render(<BranchWorktreeChip {...props} deviceId="remote-a" />);
+    await openPopover();
     await waitFor(() => expect(refreshButton().hasAttribute('disabled')).toBe(false));
-    fireEvent.click(refreshButton());
-    let retry = await screen.findByRole('button', { name: /newChat.branchSync.failed/ });
+    fireEvent.click(syncButton());
+    await waitFor(() => expect(polls).toBe(2));
+    await waitFor(() => expect(mocks.toast).toHaveBeenCalled());
+    let retry = syncButton();
+    await waitFor(() => expect(retry.hasAttribute('disabled')).toBe(false));
     expect(polls).toBe(2);
     if (failure === 'selection-change') {
       view.rerender(<BranchWorktreeChip {...props} branchLabel="next" deviceId="remote-a" />);
       await waitFor(() => expect(refreshButton().hasAttribute('disabled')).toBe(false));
-      retry = await screen.findByRole('button', { name: /newChat.branchSync.action/ });
+      retry = syncButton();
     }
     fireEvent.click(retry);
-    await screen.findByRole('button', { name: /newChat.branchSync.updated/ });
+    await waitFor(() => expect(polls).toBe(3));
     expect(invoke.mock.calls.filter((call) => call[1] === 'worktree:sync-branch')[2][2]).toEqual([
       {
         baseRepo: '/repo',
         branch: failure === 'selection-change' ? 'next' : 'main',
         waitForResult: true,
+        strategy: 'ff-only',
         ...(failure === 'transport' ? { operationId } : {}),
       },
     ]);
-    fireEvent.click(screen.getByRole('button', { name: /newChat.branchSync.updated/ }));
-    await waitFor(() => expect(polls).toBe(4));
-    expect(
-      invoke.mock.calls.filter((call) => call[1] === 'worktree:sync-branch')[3][2][0],
-    ).not.toHaveProperty('operationId');
   },
 );
 
@@ -361,23 +376,20 @@ it('combines diverged counts into one status segment and keeps dirty files', asy
 });
 it('offers origin sources and remote refresh while unchecked', async () => {
   render(<BranchWorktreeChip {...props} checked={false} />);
-  await act(async () => {
-    fireEvent.click(branchButton());
-  });
+  await openPopover();
   expect(screen.getByRole('group', { name: 'newChat.branchSync.remoteGroup' })).toBeTruthy();
   await waitFor(() => expect(refreshButton().hasAttribute('disabled')).toBe(false));
   fireEvent.click(refreshButton());
-  await screen.findByRole('button', { name: /newChat.branchSync.updated/ });
-  expect(sync).toHaveBeenCalled();
-  fireEvent.click(screen.getAllByRole('option', { name: 'origin/main' })[0]);
+  await waitFor(() => expect(status).toHaveBeenCalledTimes(3));
+  expect(sync).not.toHaveBeenCalled();
+  fireEvent.click(screen.getAllByRole('option', { name: /origin\/main/ })[0]);
   expect(props.onPick).toHaveBeenCalledWith('refs/remotes/origin/main');
 });
 it('hides the action when an old controlled host rejects the status channel', async () => {
   invoke.mockRejectedValue(new Error('[DEVICE_LINK_CHANNEL_NOT_ALLOWED] Old host'));
   render(<BranchWorktreeChip {...props} remoteDefaultBranch={undefined} deviceId="old-pc" />);
-  await waitFor(() =>
-    expect(screen.queryByRole('button', { name: /newChat.branchSync/ })).toBeNull(),
-  );
+  await openPopover();
+  await waitFor(() => expect(screen.queryByTestId('workspace-sync-header-btn')).toBeNull());
   expect(status).not.toHaveBeenCalled();
   expect(invoke).toHaveBeenCalledWith('old-pc', 'worktree:branch-sync-status', [
     { baseRepo: '/repo', branch: 'main' },
@@ -392,41 +404,44 @@ it('blocks duplicate refresh clicks while leaving branch selection usable', asyn
     }),
   );
   render(<BranchWorktreeChip {...props} />);
+  await openPopover();
   await waitFor(() => expect(refreshButton().hasAttribute('disabled')).toBe(false));
+  fireEvent.click(syncButton());
   fireEvent.click(refreshButton());
-  fireEvent.click(screen.getByRole('button', { name: /newChat.branchSync.fetching/ }));
-  await act(async () => {
-    fireEvent.click(branchButton());
-  });
   expect(screen.getByRole('combobox')).toBeTruthy();
   expect(sync).toHaveBeenCalledOnce();
   await act(async () => resolve({ status: baseStatus, updated: 3 }));
-  expect(screen.getByRole('button', { name: /newChat.branchSync.updated/ })).toBeTruthy();
+  expect(refreshButton()).toBeTruthy();
 });
 it('explains a disabled conflict, then rechecks locally on hover', async () => {
-  status.mockResolvedValueOnce({ ...baseStatus, blocked: 'conflict' });
+  status.mockResolvedValue({ ...baseStatus, blocked: 'conflict' });
   render(<BranchWorktreeChip {...props} />);
-  const button = await screen.findByRole('button', { name: /newChat.branchSync.conflict/ });
-  expect(button.getAttribute('aria-disabled')).toBe('true');
-  expect(button.parentElement?.tabIndex).toBe(0);
+  await waitFor(() => expect(status).toHaveBeenCalledTimes(1));
+  await openPopover();
+  const notice = await screen.findByText(/newChat.branchSync.conflict/);
+  expect(notice).toBeTruthy();
   expect(mocks.warning).not.toHaveBeenCalled();
+  status.mockResolvedValue(baseStatus);
   vi.useFakeTimers();
-  fireEvent.mouseEnter(button.parentElement!);
+  fireEvent.mouseEnter(branchButton());
   await act(async () => vi.advanceTimersByTime(250));
-  expect(status).toHaveBeenCalledTimes(2);
+  expect(status).toHaveBeenCalledTimes(3);
   expect(refreshButton().hasAttribute('disabled')).toBe(false);
   expect(mocks.warning).not.toHaveBeenCalled();
 });
 it('reports failed fetches in a toast and permits retry without selecting anything', async () => {
   sync.mockRejectedValueOnce(new Error('[INTERNAL] Authentication failed'));
   render(<BranchWorktreeChip {...props} />);
+  await openPopover();
   await waitFor(() => expect(refreshButton().hasAttribute('disabled')).toBe(false));
-  fireEvent.click(refreshButton());
-  const retry = await screen.findByRole('button', { name: /newChat.branchSync.failed/ });
+  fireEvent.click(syncButton());
+  await waitFor(() => expect(mocks.toast).toHaveBeenCalledOnce());
+  const retry = syncButton();
+  await waitFor(() => expect(retry.hasAttribute('disabled')).toBe(false));
   expect(mocks.toast).toHaveBeenCalledOnce();
   expect(retry.hasAttribute('disabled')).toBe(false);
   fireEvent.click(retry);
-  await screen.findByRole('button', { name: /newChat.branchSync.updated/ });
+  await waitFor(() => expect(sync).toHaveBeenCalledTimes(2));
   expect(props.onPick).not.toHaveBeenCalled();
 });
 it('routes to the selected device and discards a late status from the previous branch', async () => {
@@ -446,34 +461,34 @@ it('routes to the selected device and discards a late status from the previous b
     ]),
   );
   await act(async () => resolve({ ...baseStatus, blocked: 'conflict' }));
+  await openPopover();
   expect(screen.queryByRole('button', { name: /newChat.branchSync.conflict/ })).toBeNull();
   fireEvent.click(refreshButton());
   await waitFor(() =>
-    expect(invoke).toHaveBeenLastCalledWith('pc', 'worktree:sync-branch', [
-      { baseRepo: '/repo', branch: 'next', waitForResult: true },
+    expect(invoke).toHaveBeenLastCalledWith('pc', 'worktree:branch-sync-status', [
+      { baseRepo: '/repo', branch: 'next' },
     ]),
   );
   expect(status).not.toHaveBeenCalled();
+  expect(invoke.mock.calls.some((call) => call[1] === 'worktree:sync-branch')).toBe(false);
 });
 
 it('keeps a fetched missing-remote result disabled across local rechecks, but clears it after changing branch', async () => {
   sync.mockResolvedValue({ status: { ...baseStatus, blocked: 'missing-remote' }, updated: 0 });
   const view = render(<BranchWorktreeChip {...props} />);
+  await openPopover();
   await waitFor(() => expect(refreshButton().hasAttribute('disabled')).toBe(false));
-  fireEvent.click(refreshButton());
-  const blocked = await screen.findByRole('button', { name: /newChat.branchSync.missing-remote/ });
-  expect(mocks.warning).toHaveBeenCalledExactlyOnceWith(blocked.getAttribute('aria-label'));
+  fireEvent.click(syncButton());
+  const blocked = await screen.findByText(/newChat.branchSync.missing-remote/);
+  expect(blocked).toBeTruthy();
   expect(mocks.toast).not.toHaveBeenCalled();
+  // Close and reopen popover to trigger local recheck
   await act(async () => {
     fireEvent.click(branchButton());
   });
-  await waitFor(() => expect(status).toHaveBeenCalledTimes(2));
-  expect(mocks.warning).toHaveBeenCalledOnce();
-  expect(
-    screen
-      .getByRole('button', { name: /newChat.branchSync.missing-remote/ })
-      .hasAttribute('disabled'),
-  ).toBe(true);
+  await openPopover();
+  await waitFor(() => expect(status).toHaveBeenCalledTimes(3));
+  expect(screen.getByText(/newChat.branchSync.missing-remote/)).toBeTruthy();
   view.rerender(<BranchWorktreeChip {...props} branchLabel="other" />);
   await waitFor(() => expect(refreshButton().hasAttribute('disabled')).toBe(false));
 });
@@ -488,6 +503,7 @@ it('does not warn for a blocked click result after changing branch or project', 
     }),
   );
   const view = render(<BranchWorktreeChip {...props} />);
+  await openPopover();
   await waitFor(() => expect(refreshButton().hasAttribute('disabled')).toBe(false));
   fireEvent.click(refreshButton());
   view.rerender(<BranchWorktreeChip {...props} baseRepo="/other" branchLabel="other" />);
@@ -577,31 +593,31 @@ it('shows pending checkout until its reply arrives and prevents duplicate branch
     return { status: checkoutStatus };
   });
   render(<CheckoutRow />);
-  await waitFor(() => expect(branchButton().textContent).toBe('main'));
-  await act(async () => {
-    fireEvent.click(branchButton());
-  });
+  await waitFor(() => expect(branchName()).toBe('main'));
+  await openPopover();
   await act(async () => {
     fireEvent.click(await screen.findByRole('option', { name: 'feature' }));
   });
   await waitFor(() => expect(branchButton().getAttribute('aria-busy')).toBe('true'));
   expect(branchButton().getAttribute('aria-disabled')).toBe('true');
-  expect(branchButton().textContent).toBe('main');
+  expect(branchName()).toBe('main');
   fireEvent.click(branchButton());
   expect(screen.queryByRole('listbox')).toBeNull();
   expect(checkout.mock.calls.filter(([req]) => req.action === 'switch')).toHaveLength(1);
   await act(async () => resolve({ status: { ...checkoutStatus, current: 'feature' } }));
   await waitFor(() => expect(branchButton().getAttribute('aria-busy')).toBeNull());
   expect(branchButton().getAttribute('aria-disabled')).toBe('false');
-  expect(branchButton().textContent).toBe('feature');
+  expect(branchName()).toBe('feature');
 });
-it('keeps remote refresh available while worktree is off and disables it during checkout', async () => {
+it('keeps remote refresh available while worktree is off and disables capsule during checkout', async () => {
   const checkout = setupCheckout();
   render(<CheckoutRow />);
+  await waitFor(() => expect(branchName()).toBe('main'));
+  await openPopover();
   await waitFor(() => expect(refreshButton().hasAttribute('disabled')).toBe(false));
   fireEvent.click(refreshButton());
-  await screen.findByRole('button', { name: /newChat.branchSync.updated/ });
-  expect(sync).toHaveBeenCalled();
+  await waitFor(() => expect(status).toHaveBeenCalledTimes(3));
+  expect(sync).not.toHaveBeenCalled();
 
   let resolve!: (reply: unknown) => void;
   checkout.mockImplementation(async (req) => {
@@ -612,28 +628,23 @@ it('keeps remote refresh available while worktree is off and disables it during 
     return { status: checkoutStatus };
   });
   await act(async () => {
-    fireEvent.click(branchButton());
     fireEvent.click(await screen.findByRole('option', { name: 'feature' }));
   });
   await waitFor(() => expect(branchButton().getAttribute('aria-busy')).toBe('true'));
-  expect(screen.getByRole('button', { name: /newChat.branchSync/ }).hasAttribute('disabled')).toBe(
-    true,
-  );
+  expect(branchButton().getAttribute('aria-disabled')).toBe('true');
   await act(async () => resolve({ status: { ...checkoutStatus, current: 'feature' } }));
 });
 it('lazy-loads branches on menu open and does not refetch them on focus', async () => {
   const checkout = setupCheckout();
   const listBranches = vi.mocked(window.electronAPI.worktreeListBranches);
   render(<CheckoutRow />);
-  await waitFor(() => expect(branchButton().textContent).toBe('main'));
+  await waitFor(() => expect(branchName()).toBe('main'));
   expect(listBranches).not.toHaveBeenCalled();
   await act(async () => {
     window.dispatchEvent(new Event('focus'));
   });
   expect(listBranches).not.toHaveBeenCalled();
-  await act(async () => {
-    fireEvent.click(branchButton());
-  });
+  await openPopover();
   await waitFor(() => expect(listBranches).toHaveBeenCalledTimes(1));
   await act(async () => {
     window.dispatchEvent(new Event('focus'));
@@ -645,22 +656,18 @@ it('shows actual checkout when off and the remembered source when on; toggles ne
   const checkout = setupCheckout();
   const branchView = vi.fn();
   render(<CheckoutRow branchView={branchView} />);
-  await waitFor(() => expect(branchButton().textContent).toBe('main'));
-  await act(async () => {
-    fireEvent.click(screen.getByTestId('create-agent-worktree-chip'));
-  });
-  await waitFor(() => expect(branchButton().textContent).toBe('remembered-source'));
-  await act(async () => {
-    fireEvent.click(screen.getByTestId('create-agent-worktree-chip'));
-  });
-  expect(branchButton().textContent).toBe('main');
+  await waitFor(() => expect(branchName()).toBe('main'));
+  await toggleWorktreeSwitch();
+  await waitFor(() => expect(branchName()).toBe('remembered-source'));
+  await toggleWorktreeSwitch();
+  expect(branchName()).toBe('main');
   expect(checkout.mock.calls.every(([req]) => req.action === 'status')).toBe(true);
   // The explicit-start check must read the same OFF label and refresh that row
   // after an external checkout; source preference remains independent.
-  expect(branchView.mock.lastCall?.[0]?.displayedBranch).toBe(branchButton().textContent);
+  expect(branchView.mock.lastCall?.[0]?.displayedBranch).toBe(branchName());
   checkout.mockResolvedValue({ status: { ...checkoutStatus, current: 'feature' } });
   await act(async () => branchView.mock.lastCall?.[0]?.refresh());
-  await waitFor(() => expect(branchButton().textContent).toBe('feature'));
+  await waitFor(() => expect(branchName()).toBe('feature'));
   expect(branchView.mock.lastCall?.[0]?.displayedBranch).toBe('feature');
 });
 it('disables checkout choices while a task is running; explicit worktree keeps the menu open', async () => {
@@ -669,10 +676,8 @@ it('disables checkout choices while a task is running; explicit worktree keeps t
     sessions: [{ id: 'a', name: 'Active', running: true }],
   });
   render(<CheckoutRow />);
-  await waitFor(() => expect(branchButton().textContent).toBe('main'));
-  await act(async () => {
-    fireEvent.click(branchButton());
-  });
+  await waitFor(() => expect(branchName()).toBe('main'));
+  await openPopover();
   await waitFor(() =>
     expect(screen.getByRole('option', { name: /feature/ }).getAttribute('aria-disabled')).toBe(
       'true',
@@ -689,12 +694,11 @@ it('disables checkout choices while a task is running; explicit worktree keeps t
     fireEvent.click(screen.getByRole('button', { name: 'newChat.checkout.startWorktree' }));
   });
   expect(screen.getByRole('listbox')).toBeTruthy();
-  expect(branchButton().textContent).toBe('remembered-source');
+  expect(branchName()).toBe('remembered-source');
   expect(mocks.info).not.toHaveBeenCalled();
   expect(
-    (screen.getByRole('checkbox', { name: 'newChat.worktree.toggleAria' }) as HTMLInputElement)
-      .checked,
-  ).toBe(true);
+    screen.getByRole('switch', { name: 'newChat.worktree.toggleAria' }).getAttribute('aria-checked'),
+  ).toBe('true');
   expect(screen.getByRole('option', { name: 'feature' }).getAttribute('aria-disabled')).toBe(
     'false',
   );
@@ -702,10 +706,8 @@ it('disables checkout choices while a task is running; explicit worktree keeps t
 it('lets the user cancel dirty checkout or choose worktree without any Git mutation', async () => {
   const checkout = setupCheckout(true, { files: ['changed.txt'] });
   render(<CheckoutRow />);
-  await waitFor(() => expect(branchButton().textContent).toBe('main'));
-  await act(async () => {
-    fireEvent.click(branchButton());
-  });
+  await waitFor(() => expect(branchName()).toBe('main'));
+  await openPopover();
   await act(async () => {
     fireEvent.click(await screen.findByRole('option', { name: 'feature' }));
   });
@@ -714,9 +716,7 @@ it('lets the user cancel dirty checkout or choose worktree without any Git mutat
     fireEvent.click(screen.getByRole('button', { name: 'commonUi.confirmDialog.cancel' }));
   });
   expect(screen.queryByRole('dialog')).toBeNull();
-  await act(async () => {
-    fireEvent.click(branchButton());
-  });
+  await openPopover();
   await act(async () => {
     fireEvent.click(await screen.findByRole('option', { name: 'feature' }));
   });
@@ -728,7 +728,7 @@ it('lets the user cancel dirty checkout or choose worktree without any Git mutat
     fireEvent.click(screen.getByRole('button', { name: 'newChat.checkout.startWorktree' }));
   });
   expect(screen.queryByRole('dialog')).toBeNull();
-  expect(branchButton().textContent).toBe('feature');
+  expect(branchName()).toBe('feature');
   expect(mocks.info).not.toHaveBeenCalled();
   expect(checkout.mock.calls.every(([req]) => req.action === 'status')).toBe(true);
 });
@@ -748,10 +748,8 @@ it('explains ignored-only collisions before any checkout or stash request', asyn
     },
   }));
   render(<CheckoutRow />);
-  await waitFor(() => expect(branchButton().textContent).toBe('main'));
-  await act(async () => {
-    fireEvent.click(branchButton());
-  });
+  await waitFor(() => expect(branchName()).toBe('main'));
+  await openPopover();
   await act(async () => {
     fireEvent.click(await screen.findByRole('option', { name: 'feature' }));
   });
@@ -761,14 +759,13 @@ it('explains ignored-only collisions before any checkout or stash request', asyn
   expect(explanation).toContain('"count":2');
   expect(screen.queryByRole('dialog')).toBeNull();
   expect(checkout.mock.calls.every(([req]) => req.action === 'status')).toBe(true);
-  expect(branchButton().textContent).toBe('main');
+  expect(branchName()).toBe('main');
 });
-it('keeps an old execution host read-only and never invokes the new channel', async () => {
+it('keeps an old execution host branch list read-only while letting worktree switch open and never invokes checkout', async () => {
   const checkout = setupCheckout(false);
   const branchView = vi.fn();
   render(<CheckoutRow branchView={branchView} />);
-  await waitFor(() => expect(branchButton().textContent).toBe('main'));
-  expect(branchButton().getAttribute('aria-disabled')).toBe('true');
+  await waitFor(() => expect(branchName()).toBe('main'));
   expect(checkout).not.toHaveBeenCalled();
   // An explicit start can detect an external checkout even on a legacy host.
   // Refresh its label through detect-cwd, never the unsupported checkout channel.
@@ -781,7 +778,9 @@ it('keeps an old execution host read-only and never invokes the new channel', as
     supportsCheckout: false,
   });
   await act(async () => branchView.mock.lastCall?.[0]?.refresh());
-  await waitFor(() => expect(branchButton().textContent).toBe('feature'));
+  await waitFor(() => expect(branchName()).toBe('feature'));
+  await openPopover();
+  expect(screen.getByText(/newChat.workspaceCapsule.branchSwitchReadOnly/)).toBeTruthy();
   expect(checkout).not.toHaveBeenCalled();
 });
 
@@ -834,14 +833,12 @@ it.each(['direct', 'lost-write', 'lost-result', 'unreachable'])(
     });
     const onSourceChange = vi.fn();
     render(<CheckoutRow deviceId="execution-pc" onSourceChange={onSourceChange} />);
-    await waitFor(() => expect(branchButton().textContent).toBe('main'));
-    await act(async () => {
-      fireEvent.click(branchButton());
-    });
+    await waitFor(() => expect(branchName()).toBe('main'));
+    await openPopover();
     await act(async () => {
       fireEvent.click(await screen.findByRole('option', { name: 'feature' }));
     });
-    await waitFor(() => expect(branchButton().textContent).toBe('feature'));
+    await waitFor(() => expect(branchName()).toBe('feature'));
     expect(checkout.mock.calls.filter(([req]) => req.action === 'switch')).toHaveLength(1);
     expect(checkout).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -853,22 +850,18 @@ it.each(['direct', 'lost-write', 'lost-result', 'unreachable'])(
     );
     expect(resultReads).toBe(mode === 'direct' ? 0 : 2);
     expect(invoke.mock.calls.every(([deviceId]) => deviceId === 'execution-pc')).toBe(true);
-    await act(async () => {
-      fireEvent.click(screen.getByTestId('create-agent-worktree-chip'));
-    });
+    await toggleWorktreeSwitch();
     if (mode === 'unreachable') {
-      expect(branchButton().textContent).toBe('remembered-source');
+      expect(branchName()).toBe('remembered-source');
       expect(screen.queryByRole('button', { name: 'newChat.checkout.undo' })).toBeNull();
       expect(mocks.toast).toHaveBeenCalledWith('newChat.checkout.errors.git');
       expect(mocks.success).not.toHaveBeenCalled();
       expect(checkout.mock.calls.at(-1)?.[0].action).toBe('status');
       return;
     }
-    expect(branchButton().textContent).toBe('remembered-source');
+    expect(branchName()).toBe('remembered-source');
     expect(onSourceChange).not.toHaveBeenCalled();
-    await act(async () => {
-      fireEvent.click(screen.getByTestId('create-agent-worktree-chip'));
-    });
+    await toggleWorktreeSwitch();
     await act(async () => {
       const [message, options] = mocks.success.mock.calls.at(-1)!;
       expect(message).toContain('newChat.checkout.switched');
@@ -876,13 +869,11 @@ it.each(['direct', 'lost-write', 'lost-result', 'unreachable'])(
       expect(options.action.label).toBe('newChat.checkout.undo');
       options.action.onClick();
     });
-    await waitFor(() => expect(branchButton().textContent).toBe('main'));
+    await waitFor(() => expect(branchName()).toBe('main'));
     expect(mocks.success).toHaveBeenLastCalledWith('newChat.checkout.undone');
     expect(onSourceChange).not.toHaveBeenCalled();
-    await act(async () => {
-      fireEvent.click(screen.getByTestId('create-agent-worktree-chip'));
-    });
-    expect(branchButton().textContent).toBe('remembered-source');
+    await toggleWorktreeSwitch();
+    expect(branchName()).toBe('remembered-source');
   },
 );
 
@@ -962,10 +953,8 @@ it('allows picking an occupied branch and reports its name only after preflight'
     },
   }));
   render(<CheckoutRow />);
-  await waitFor(() => expect(branchButton().textContent).toBe('main'));
-  await act(async () => {
-    fireEvent.click(branchButton());
-  });
+  await waitFor(() => expect(branchName()).toBe('main'));
+  await openPopover();
   const option = await screen.findByRole('option', { name: 'feature' });
   expect(option.getAttribute('aria-disabled')).toBe('false');
   expect(mocks.toast).not.toHaveBeenCalled();
@@ -973,7 +962,7 @@ it('allows picking an occupied branch and reports its name only after preflight'
     fireEvent.click(option);
   });
   expect(mocks.toast).toHaveBeenCalledWith('newChat.checkout.errors.occupied{"branch":"feature"}');
-  expect(branchButton().textContent).toBe('main');
+  expect(branchName()).toBe('main');
   expect(checkout.mock.calls.every(([req]) => req.action === 'status')).toBe(true);
 });
 
@@ -993,14 +982,14 @@ it('dismisses the previous checkout error when another branch switch starts', as
     };
   });
   render(<CheckoutRow />);
-  await waitFor(() => expect(branchButton().textContent).toBe('before'));
+  await waitFor(() => expect(branchName()).toBe('before'));
   fireEvent.click(branchButton());
   fireEvent.click(await screen.findByRole('option', { name: 'feature' }));
   await waitFor(() => expect(mocks.toast).toHaveBeenCalledOnce());
   expect(mocks.dismiss).not.toHaveBeenCalledWith('checkout-error-toast');
   fireEvent.click(branchButton());
   fireEvent.click(await screen.findByRole('option', { name: 'main' }));
-  await waitFor(() => expect(branchButton().textContent).toBe('main'));
+  await waitFor(() => expect(branchName()).toBe('main'));
   expect(mocks.dismiss).toHaveBeenCalledWith('checkout-error-toast');
   expect(mocks.toast).toHaveBeenCalledOnce();
 });
@@ -1034,14 +1023,12 @@ it.each(['plain', 'carry', 'stash', 'idle', 'fetched'])(
       return { status: { ...checkoutStatus, current, files: hadChanges ? ['changed.txt'] : [] } };
     });
     render(<CheckoutRow />);
-    await waitFor(() => expect(branchButton().textContent).toBe('main'));
-    await act(async () => {
-      fireEvent.click(branchButton());
-    });
+    await waitFor(() => expect(branchName()).toBe('main'));
+    await openPopover();
     await act(async () => {
       fireEvent.click(
         await screen.findByRole('option', {
-          name: mode === 'fetched' ? 'origin/main' : target,
+          name: mode === 'fetched' ? /^origin\/main/ : target,
         }),
       );
     });
@@ -1066,7 +1053,7 @@ it.each(['plain', 'carry', 'stash', 'idle', 'fetched'])(
       expect(checkout.mock.calls.filter(([req]) => req.action === 'switch')).toHaveLength(1),
     );
     if (mode === 'plain') {
-      expect(branchButton().textContent).toBe('feature');
+      expect(branchName()).toBe('feature');
       expect(mocks.success).not.toHaveBeenCalled();
       expect(screen.queryByRole('button', { name: 'newChat.checkout.undo' })).toBeNull();
     } else {
@@ -1123,11 +1110,9 @@ it.each([
         defaultSource={defaultSource}
       />,
     );
-    await waitFor(() => expect(branchButton().textContent).toBe('feature'));
-    await act(async () => {
-      fireEvent.click(screen.getByTestId('create-agent-worktree-chip'));
-    });
-    await waitFor(() => expect(branchButton().textContent).toBe(expected));
+    await waitFor(() => expect(branchName()).toBe('feature'));
+    await toggleWorktreeSwitch();
+    await waitFor(() => expect(branchName()).toBe(expected));
     expect(defaultSource).toHaveBeenLastCalledWith({
       baseRepo: '/repo',
       deviceId: null,
@@ -1143,7 +1128,7 @@ it.each([true, false])(
   async (carryAllowed) => {
     const checkout = setupCheckout(true, { files: ['file.txt'], carryAllowed });
     render(<CheckoutRow />);
-    await waitFor(() => expect(branchButton().textContent).toBe('main'));
+    await waitFor(() => expect(branchName()).toBe('main'));
     fireEvent.click(branchButton());
     fireEvent.click(await screen.findByRole('option', { name: 'feature' }));
     await screen.findByRole('dialog');
@@ -1169,7 +1154,7 @@ it.each([true, false])(
 it('places one busy notice outside the scrollable branch list', async () => {
   setupCheckout(true, { blocked: 'busy' });
   render(<CheckoutRow />);
-  await waitFor(() => expect(branchButton().textContent).toBe('main'));
+  await waitFor(() => expect(branchName()).toBe('main'));
   fireEvent.click(branchButton());
   const option = await screen.findByRole('option', { name: 'feature' });
   expect(option.getAttribute('aria-disabled')).toBe('true');
@@ -1192,8 +1177,8 @@ it.each(['busy', 'recover'])(
         : { stashes: [{ id: 'saved', branch: 'main' }] },
     );
     render(<CheckoutRow />);
-    await waitFor(() => expect(branchButton().textContent).toBe('main'));
-    await waitFor(() => expect(refreshButton().hasAttribute('disabled')).toBe(false));
+    await waitFor(() => expect(branchName()).toBe('main'));
+    await waitFor(() => expect(status).toHaveBeenCalledOnce());
     let resolveStatus: (value: object) => void = () => {};
     status.mockReturnValue(
       new Promise((resolve) => {
@@ -1220,7 +1205,9 @@ it.each(['busy', 'recover'])(
       fireEvent.click(action);
     });
     if (kind === 'busy')
-      expect((screen.getByRole('checkbox') as HTMLInputElement).checked).toBe(true);
+      expect(
+        screen.getByRole('switch', { name: 'newChat.worktree.toggleAria' }).getAttribute('aria-checked'),
+      ).toBe('true');
     else
       await waitFor(() =>
         expect(checkout).toHaveBeenCalledWith(
@@ -1230,10 +1217,14 @@ it.each(['busy', 'recover'])(
   },
 );
 
-it('explains the worktree checkbox with the shared short description', async () => {
+it('explains worktree isolation directly inside the popover with expandable comparison', async () => {
   render(<BranchWorktreeChip {...props} />);
-  fireEvent.focus(screen.getByRole('checkbox'));
-  expect((await screen.findByRole('tooltip')).textContent).toBe('newChat.worktree.chipTooltip');
+  await openPopover();
+  expect(screen.getByText('newChat.workspaceCapsule.worktreeTitle')).toBeTruthy();
+  expect(screen.getByText('newChat.workspaceCapsule.worktreeOnDesc')).toBeTruthy();
+  fireEvent.click(screen.getByRole('button', { name: 'newChat.workspaceCapsule.worktreeCompareToggle' }));
+  expect(screen.getByText('newChat.workspaceCapsule.compareDirectTitle')).toBeTruthy();
+  expect(screen.getByText('newChat.workspaceCapsule.compareIsolatedTitle')).toBeTruthy();
 });
 
 // Large dirty checkouts show a stable sample, not a scrollable full file list.
@@ -1398,7 +1389,7 @@ it('refreshes mismatched undo receipts, reports failure, and disables toast acti
       expect.objectContaining({ action: expect.objectContaining({ disabled: true }) }),
     ),
   );
-  expect(refreshButton().hasAttribute('disabled')).toBe(true);
+  expect(branchButton().getAttribute('aria-disabled')).toBe('true');
   await act(async () => {
     action.onClick();
   });
@@ -1526,7 +1517,7 @@ it('refreshes an open checkout menu on relevant running edges and coalesces burs
     const beforeToggle = checkout.mock.calls.length;
     mocks.running.set('a', { isRunning: false });
     notify(); // A queued refresh is cancelled when worktree is enabled.
-    fireEvent.click(screen.getByRole('checkbox', { name: 'newChat.worktree.toggleAria' }));
+    fireEvent.click(screen.getByRole('switch', { name: 'newChat.worktree.toggleAria' }));
     expect(mocks.activityListeners.size).toBe(0);
     await act(async () => {
       notify();
@@ -1629,3 +1620,141 @@ it.each([{ current: 'abc123', head: 'abc123' }, { current: 'HEAD', head: '' }])(
     expect(branchView.mock.lastCall?.[0]?.displayedBranch).toBe('HEAD');
   },
 );
+
+it.each([
+  ['local status timeout', new Error('[INTERNAL] checkout:timeout')],
+  ['remote invoke timeout', new Error('[DEVICE_LINK_TIMEOUT] invoke timed out')],
+])('surfaces timeout guidance separately from generic git errors (%s)', async (_label, error) => {
+  const checkout = setupCheckout();
+  checkout.mockRejectedValueOnce(error);
+  render(<CheckoutRow />);
+  await waitFor(() => expect(mocks.toast).toHaveBeenCalledWith('newChat.checkout.errors.timeout'));
+  expect(mocks.toast).not.toHaveBeenCalledWith('newChat.checkout.errors.git');
+});
+
+// Feature: zero-token clean rebase on diverged branch and one-click Agent handoff on conflicts.
+// Unit tier: exercises BranchWorktreeChip + useBranchSync directly against mocked IPC.
+it('enables one-click rebase sync when a diverged branch is clean and conflict-free', async () => {
+  status.mockResolvedValue({
+    ...baseStatus,
+    ahead: 2,
+    behind: 3,
+    dirtyFiles: 0,
+    blocked: 'diverged',
+    divergedConflict: false,
+  });
+  sync.mockResolvedValue({
+    status: { ...baseStatus, ahead: 2, behind: 0, dirtyFiles: 0 },
+    updated: 3,
+    syncedMode: 'rebase',
+  });
+  render(<BranchWorktreeChip {...props} />);
+  await waitFor(() => expect(status).toHaveBeenCalledOnce());
+  await openPopover();
+  const rebaseButton = screen.getByRole('button', {
+    name: 'newChat.branchSync.rebaseNow',
+  });
+  expect(rebaseButton.hasAttribute('disabled')).toBe(false);
+  fireEvent.click(rebaseButton);
+  await waitFor(() =>
+    expect(sync).toHaveBeenCalledWith({
+      baseRepo: '/repo',
+      branch: 'main',
+      waitForResult: true,
+      strategy: 'rebase',
+    }),
+  );
+});
+
+it('opens conflict details and invokes Agent handoff when a diverged branch has conflicts', async () => {
+  status.mockResolvedValue({
+    ...baseStatus,
+    ahead: 2,
+    behind: 1,
+    dirtyFiles: 0,
+    blocked: 'diverged',
+    divergedConflict: true,
+    divergedConflictFiles: ['src/auth.ts', 'src/sync.ts'],
+  });
+  const onResolveBranchConflict = vi.fn();
+  render(
+    <BranchWorktreeChip {...props} onResolveBranchConflict={onResolveBranchConflict} />,
+  );
+  await waitFor(() => expect(status).toHaveBeenCalledOnce());
+  await openPopover();
+  const resolveBtn = await screen.findByRole('button', {
+    name: 'newChat.branchSync.askAgentResolve',
+  });
+  fireEvent.click(resolveBtn);
+  expect(onResolveBranchConflict).toHaveBeenCalledWith({
+    baseRepo: '/repo',
+    branch: 'main',
+    remote: 'origin',
+    remoteBranch: 'main',
+    ahead: 2,
+    behind: 1,
+    dirtyFiles: 0,
+    hasConflict: true,
+    conflictFiles: ['src/auth.ts', 'src/sync.ts'],
+  });
+});
+
+it('progressively reveals AI workspace cleanup by clutter tier, supports 7-day red-dot snooze, and opens inline guide', async () => {
+  const onOrganizeWorkspace = vi.fn();
+  const clutterApi = vi.fn();
+  Object.assign(window.electronAPI, { worktreeWorkspaceClutterSummary: clutterApi });
+
+  // L0 healthy -> hidden cleanup entry, no red dot
+  clutterApi.mockResolvedValueOnce({
+    localBranchCount: 4,
+    cindyBranchCount: 1,
+    worktreeCount: 1,
+    idleWorktreeCount: 0,
+    activeWorktreeCount: 1,
+    failedCleanupCount: 0,
+    protectedWorktreePaths: ['/repo/.cindy-worktrees/live'],
+    tier: 'healthy',
+  });
+  const view = render(<BranchWorktreeChip {...props} onOrganizeWorkspace={onOrganizeWorkspace} />);
+  await waitFor(() => expect(clutterApi).toHaveBeenCalledOnce());
+  expect(screen.queryByTestId('workspace-clutter-red-dot')).toBeNull();
+  await openPopover();
+  expect(screen.queryByTestId('workspace-cleanup-entry')).toBeNull();
+
+  // Open inline 30-second visual guide and return cleanly
+  fireEvent.click(screen.getByTestId('workspace-guide-footer-btn'));
+  expect(screen.getByTestId('workspace-guide-pane')).toBeTruthy();
+  fireEvent.click(screen.getByRole('button', { name: 'newChat.workspaceCapsule.back' }));
+  expect(screen.queryByTestId('workspace-guide-pane')).toBeNull();
+
+  // L2 urgent -> red dot visible on capsule, snoozable for 7 days, and triggers organize callback
+  clutterApi.mockResolvedValue({
+    localBranchCount: 24,
+    cindyBranchCount: 16,
+    worktreeCount: 7,
+    idleWorktreeCount: 6,
+    activeWorktreeCount: 1,
+    failedCleanupCount: 1,
+    protectedWorktreePaths: ['/repo/.cindy-worktrees/live'],
+    tier: 'urgent',
+  });
+  view.rerender(<BranchWorktreeChip {...props} baseRepo="/repo-heavy" onOrganizeWorkspace={onOrganizeWorkspace} />);
+  await waitFor(() => expect(screen.getByTestId('workspace-clutter-red-dot')).toBeTruthy());
+  const cleanupEntry = await screen.findByTestId('workspace-cleanup-entry');
+  fireEvent.click(cleanupEntry);
+  expect(screen.getByTestId('workspace-cleanup-pane')).toBeTruthy();
+
+  // Snooze red dot for 7 days
+  fireEvent.click(screen.getByTestId('snooze-cleanup-red-dot-btn'));
+  expect(screen.queryByTestId('workspace-clutter-red-dot')).toBeNull();
+  expect(mocks.info).toHaveBeenCalledWith('newChat.workspaceCleanup.snoozedToast');
+
+  // Entry remains available inside popover and starts cleanup audit
+  fireEvent.click(screen.getByTestId('workspace-cleanup-entry'));
+  fireEvent.click(screen.getByTestId('start-ai-cleanup-btn'));
+  expect(onOrganizeWorkspace).toHaveBeenCalledWith({
+    baseRepo: '/repo-heavy',
+    scopes: { merged: true, worktrees: true, unpushed: false },
+    protectedWorktreePaths: ['/repo/.cindy-worktrees/live'],
+  });
+});

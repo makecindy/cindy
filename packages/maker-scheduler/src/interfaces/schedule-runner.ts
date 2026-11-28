@@ -1,5 +1,10 @@
 import type { PreRunHookRunResult, RunStatus, Schedule, ScheduleWebhookEvent, ScheduleRunTrigger } from '../types.js';
 
+export interface PreRunHookCompletionOutcome {
+  /** True when a transient precheck failure is kept quiet (no external notify or session bump). */
+  quietFailure?: boolean;
+}
+
 export interface ChildRunInput {
   sessionId?: string;
   status: RunStatus;
@@ -78,8 +83,11 @@ export interface FireContext {
   /**
    * 前置检查结束后立即持久化结果。检查发生在 session / agent 创建之前，不能等
    * fire() 返回后再保存，否则 fail-closed 的抛错路径会丢失诊断信息。
+   * 返回 `quietFailure: true` 时表示该瞬时检查失败在静默期内，runner 不应触发外发通知或顶起任务。
    */
-  onPreRunHookCompleted?: (result: PreRunHookRunResult) => Promise<void> | void;
+  onPreRunHookCompleted?: (
+    result: PreRunHookRunResult,
+  ) => Promise<PreRunHookCompletionOutcome | void> | PreRunHookCompletionOutcome | void;
   /**
    * Runner 进入「纯等待」状态时上报。目前唯一的纯等待场景:心跳 prompt 撞上正忙的
    * 目标会话被排进队列,等会话空闲后派发 —— 此刻没有 agent 子进程、没有 MCP 注册、

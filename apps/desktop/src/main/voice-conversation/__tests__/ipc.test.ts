@@ -321,6 +321,53 @@ it('keeps realtime preferences behind the trusted owner and separate from TTS se
   expect(await call('preference', 'buddy')).not.toHaveProperty('realtimeSelection');
 });
 
+it('lists, validates and persists Cindy AI Gateway realtime selections over IPC without leaking keys', async () => {
+  h.catalog = {
+    ...BUNDLED_CATALOG,
+    providers: [
+      {
+        id: 'xd',
+        name: 'Cindy AI',
+        audioModels: [
+          { id: 'gpt-realtime-mini', name: 'GPT Realtime Mini', mode: 'realtime', availability: 'available' },
+          { id: 'qwen3-asr-flash-realtime', name: 'ASR', mode: 'realtime', availability: 'available' },
+        ],
+      } as unknown as Catalog['providers'][number],
+    ],
+  };
+  const listed = await call('realtime-models');
+  expect(listed).toEqual([
+    expect.objectContaining({
+      id: 'gpt-realtime-mini',
+      providerId: 'xd',
+      protocol: 'openai-realtime',
+      protocolLocked: true,
+    }),
+  ]);
+  expect(JSON.stringify(listed)).not.toContain('test-key');
+  const gatewaySelection = {
+    mode: 'realtime',
+    providerId: 'xd',
+    modelId: 'gpt-realtime-mini',
+    protocol: 'openai-realtime',
+    voice: 'marin',
+  };
+  await call('set-realtime-preference', 'buddy', gatewaySelection);
+  expect(await call('preference', 'buddy')).toMatchObject({
+    selection: null,
+    realtimeSelection: gatewaySelection,
+  });
+  await expect(
+    call('set-realtime-preference', 'buddy', { ...gatewaySelection, agent: 'codex' }),
+  ).rejects.toThrow();
+  await expect(
+    call('set-realtime-preference', 'buddy', { ...gatewaySelection, protocol: 'qwen-audio-realtime' }),
+  ).rejects.toThrow();
+  await expect(
+    call('realtime-custom-voices', { providerId: 'xd', modelId: 'gpt-realtime-mini' }, 'req-1'),
+  ).rejects.toThrow();
+});
+
 it.each([NaN, Infinity, '1.2', 0.1, 4.1])('rejects invalid speed %s without replacing the saved preference', async (speed) => {
   const choice = { modelId: 'voice-test', voice: 'alloy', speed: 1.15 };
   await call('set-preference', 'bot', choice);

@@ -335,7 +335,7 @@ function createDb(filename = ':memory:'): void {
       fast_mode INTEGER NOT NULL DEFAULT 0,
       plan_mode_enabled INTEGER NOT NULL DEFAULT 0,
       cleared_at INTEGER,
-      pinned_at INTEGER, snoozed_until INTEGER, snoozed_at INTEGER,
+      pinned_at INTEGER, snoozed_until INTEGER, snoozed_at INTEGER, archived_at INTEGER,
       hidden_at INTEGER,
       notifications_muted INTEGER NOT NULL DEFAULT 0,
       summary TEXT,
@@ -1211,7 +1211,7 @@ describe('Bot canonical Session lifecycle', () => {
         botId: 'bot-follow', expectedCanonicalSessionId: null, expectedProfileVersion: 1 });
       try {
         await expect(createMain()).rejects.toThrow('请先连接模型供应商或选择伙伴模型');
-        await expect(createMain()).rejects.toThrow('请先连接模型供应商或选择伙伴模型');
+        await expect(createMain()).rejects.toMatchObject({ code: 'PRECONDITION_FAILED', reason: 'BOT_MODEL_REQUIRED' });
         // Host-only explicit take-over path creates the canonical session with missingModel so cloud history
         // can be imported and demotion lifted even before the owner picks a default model; IPC stays strict.
         const { ensureBotCanonicalSession } = await import('../../../maker-ipc/botCanonicalSessionEnsure');
