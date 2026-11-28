@@ -502,6 +502,8 @@ describe('PluginMarketService 自定义市场聚合', () => {
     const [server, custom] = snapshot.items;
     expect(server?.sourceType).toBe('server');
     expect(server?.sourceMarketName).toBeNull();
+    expect(server?.sizeBytes).toBe(serverSummary().currentRelease.sizeBytes);
+    expect(custom).not.toHaveProperty('sizeBytes');
     expect(custom).toMatchObject({
       pluginId: customMarketPluginId('team-lib', 'alpha'),
       ghostId: 'alpha',

@@ -11,6 +11,7 @@ import { getCodexProxyAuthInjection } from '../maker-host/codex-proxy-host.deskt
 import { recordSessionTurnSpend, recordSessionTurnTokens } from '../sessionSpendBroadcaster.js';
 import { codexUsageToTokens, recordSchedulerTurnCost, recordTurnUsageOnMessage } from '../turnCostBroadcaster.js';
 import { triggerClaudeAccountUsageRefresh } from '../usage/claudeAccountUsage.js';
+import { recordProviderAccountActivity } from '../maker-host/provider-account-usage.js';
 import { getGatewayModelPricingForModel, getModelPriceQuote } from '../usage/modelPricing.js';
 import { triggerClaudeSubscriptionUsageRefresh, triggerXaiSubscriptionUsageRefresh } from './usage.js';
 import { rebroadcastCodexTodayUsage, recordCodexTurnUsage, recordModelTurnUsage, recordTurnSpend } from '../usageBroadcaster.js';
@@ -26,6 +27,7 @@ bindTurnUsagePorts({
   recordSchedulerTurnCost: (...args) => recordSchedulerTurnCost(...args),
   recordTurnUsageOnMessage: (...args) => recordTurnUsageOnMessage(...args),
   triggerClaudeAccountUsageRefresh: (...args) => triggerClaudeAccountUsageRefresh(...args),
+  recordProviderAccountActivity: (...args) => recordProviderAccountActivity(...args),
   getGatewayModelPricingForModel: (...args) => getGatewayModelPricingForModel(...args),
   getModelPriceQuote: (...args) => getModelPriceQuote(...args),
   triggerClaudeSubscriptionUsageRefresh: (...args) => triggerClaudeSubscriptionUsageRefresh(...args),

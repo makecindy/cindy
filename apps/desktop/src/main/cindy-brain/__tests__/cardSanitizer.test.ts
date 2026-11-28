@@ -470,6 +470,15 @@ describe('sanitizeGhostCardHtml · PR 状态位(data-ghost-pr-status)', () => {
       .toBe('<button data-ghost-task-archive="o/r#9" type="button">a</button><div>b</div>');
   });
 
+  it('在带动作的 button 上放行 data-ghost-pr-merge-ready,并将合法休眠合并动作提升为 data-ghost-action', () => {
+    expect(ok('<button data-ghost-action="pr:merge" data-ghost-pr-merge-ready="o/r#9" aria-label="合并"></button>'))
+      .toBe('<button data-ghost-action="pr:merge" data-ghost-pr-merge-ready="o/r#9" type="button" aria-label="合并"></button>');
+    expect(ok('<button data-ghost-pr-merge-ready="o/r#9" data-ghost-pr-merge-action="pr:merge" style="display:none" aria-label="合并"></button>'))
+      .toBe('<button style="display:none" data-ghost-action="pr:merge" data-ghost-pr-merge-ready="o/r#9" type="button" aria-label="合并"></button>');
+    expect(ok('<button data-ghost-pr-merge-ready="o/r#9">a</button><button data-ghost-pr-merge-action="pr:merge">b</button><div data-ghost-pr-merge-ready="o/r#9" data-ghost-pr-merge-action="pr:merge">c</div>'))
+      .toBe('<button type="button">a</button><button type="button">b</button><div>c</div>');
+  });
+
   // Rule (2026-11-14): the copy-link button writes to the user's clipboard through the host, so the value
   // must be a whole http(s) link (no task links or free text) and the button must not also act, link or archive.
   it('只在普通 button 上放行整串 http(s) 的 data-ghost-copy-link', () => {

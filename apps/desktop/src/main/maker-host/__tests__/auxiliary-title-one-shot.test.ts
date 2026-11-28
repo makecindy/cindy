@@ -133,6 +133,16 @@ describe('auxiliary task-title routing', () => {
     );
   });
 
+  // Plugin-engine tasks (agentKind null, 2026-11-25) are named by the auxiliary chain only: when it is
+  // exhausted, their conversation never goes to a built-in engine's one-shot. Minimal input: agentKind null.
+  it('never falls back to another engine for a plugin-engine task', async () => {
+    h.requestText.mockResolvedValue({ ok: false, reason: 'all_candidates_failed', attempts: [] });
+    await expect(generateTitleWithAuxiliaryModel({ ...REQUEST, agentKind: null }, {}, runtimeDeps())).resolves.toBeNull();
+    expect(h.oneShot).not.toHaveBeenCalled();
+    h.requestText.mockResolvedValue({ ok: true, text: '插件引擎任务命名' });
+    await expect(generateTitleWithAuxiliaryModel({ ...REQUEST, agentKind: null }, {}, runtimeDeps())).resolves.toBe('插件引擎任务命名');
+  });
+
   it('lets a latency-bound caller skip the session-agent fallback, while the default keeps it', async () => {
     h.requestText.mockResolvedValue({ ok: false, reason: 'all_candidates_failed', attempts: [] });
     const request = {

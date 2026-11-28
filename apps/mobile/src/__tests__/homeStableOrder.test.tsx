@@ -108,13 +108,20 @@ describe('Home display order during incremental loading', () => {
 
   it('preserves settled device order while folded even when activity reorders the candidates', () => {
     const app = setup();
-    const device = (...ids: string[]) => ({ ...projects(...ids)[0], key: 'device:mac' });
-    const other = { ...projects('c')[0], key: 'device:pc' };
+    const device = (...ids: string[]) => ({ ...projects(...ids)[0], key: 'device:mac', title: 'Mac' });
+    const other = { ...projects('c')[0], key: 'device:pc', title: 'PC' };
     app.render({ sections: [device('a', 'b'), other], settled: true });
     app.render({ sections: [device('b', 'a'), other], collapsedGroups: ['device:mac'] });
     expect(app.result().map(section => section.data.length)).toEqual([0, 1]);
     app.render({ collapsedGroups: [] });
     expect(app.result()[0].data.map(row => row.key)).toEqual(keys('a', 'b'));
+  });
+
+  it('keeps a hidden single-device section expanded after a previous collapse', () => {
+    const app = setup();
+    const hidden = { ...projects('a', 'b')[0], key: 'device:mac', title: null };
+    app.render({ sections: [hidden], settled: true, collapsedGroups: ['device:mac'] });
+    expect(app.result()[0].data).toHaveLength(2);
   });
 
   it('keeps device sections in place across presence changes until an explicit refresh', () => {

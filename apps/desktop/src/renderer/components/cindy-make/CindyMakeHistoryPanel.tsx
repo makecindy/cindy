@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { Button } from '@/components/ui/button';
 import { Spinner } from '@/components/ui/spinner';
-import { Input } from '@/components/ui/input';
+import { SearchInput } from '@/components/ui/search-input';
 import { Select } from '@/components/ui/select';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import {
@@ -607,8 +607,7 @@ export function CindyMakeHistoryPanel({
                 size="compact"
                 width="sm"
               />
-              <Input
-                size="sm"
+              <SearchInput
                 value={query}
                 onChange={search}
                 aria-label={t('settings.cindyMake.tasks.search')}

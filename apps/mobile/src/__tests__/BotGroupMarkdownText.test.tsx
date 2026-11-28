@@ -99,12 +99,13 @@ beforeEach(() => {
 });
 
 // Unit / A04：补齐完整群正文的链接覆盖；HTTP(S) 可打开，本机及任务链接保持不可操作。
+// 裸链接显示两端共用的短标签（externalLinkLabel），点开仍是完整地址；作者写的文字不变。
 it('opens HTTP(S) links in rich group bodies while local and task links stay inert', async () => {
   await act(async () => root.render(createElement(BotGroupMarkdownText, {
     richContent: true,
     content: '[网页](https://example.com/a) http://example.com/b [文件](/private/report.md) [任务](cindy://session/private)',
   })));
-  for (const label of ['网页', 'http://example.com/b']) {
+  for (const label of ['网页', 'example.com/b']) {
     const span = [...node.querySelectorAll('span')].filter(el => el.textContent === label).at(-1)!;
     await act(async () => span.click());
     expect(styleOf(label).textDecorationLine).toBe('underline');
@@ -116,6 +117,19 @@ it('opens HTTP(S) links in rich group bodies while local and task links stay ine
     expect(styleOf(label).textDecorationLine).toBeUndefined();
   }
   expect(actions.open).toHaveBeenCalledTimes(2);
+});
+
+// Unit：裸 GitHub 链接显示与桌面胶囊同一短写法，并带会话链接 chip 的底色；点开仍是完整地址。
+it('shows bare GitHub links as chip-filled short references in rich group bodies', async () => {
+  await act(async () => root.render(createElement(BotGroupMarkdownText, {
+    richContent: true,
+    content: '看 https://github.com/makecindy/cindy/pull/13638 和 https://example.com/a',
+  })));
+  expect(styleOf('makecindy/cindy#13638')).toMatchObject({ textDecorationLine: 'underline', backgroundColor: palettes.light.surfaceChip });
+  expect(styleOf('example.com/a').backgroundColor).toBeUndefined();
+  const span = [...node.querySelectorAll('span')].filter(el => el.textContent === 'makecindy/cindy#13638').at(-1)!;
+  await act(async () => span.click());
+  expect(actions.open.mock.calls.map(call => call[0])).toEqual(['https://github.com/makecindy/cindy/pull/13638']);
 });
 
 // Unit / A04：复制不含围栏、图表传递原文、公式挂载现有 WebView；原生宿主用 fake 替代。
@@ -141,10 +155,13 @@ it('keeps group image selection free of link, code-copy and diagram actions', as
   const openDiagram = vi.fn();
   await act(async () => root.render(createElement(BotGroupMarkdownText, {
     richContent: true, interactive: false, onOpenDiagram: openDiagram,
-    content: '[网页](https://example.com)\n\n```js\nconst a = 1;\n```\n\n```mermaid\ngraph LR\nA --> B\n```',
+    content: '[网页](https://example.com) https://github.com/makecindy/cindy/pull/13638\n\n```js\nconst a = 1;\n```\n\n```mermaid\ngraph LR\nA --> B\n```',
   })));
   await act(async () => [...node.querySelectorAll('span')].filter(el => el.textContent === '网页').at(-1)!.click());
+  await act(async () => [...node.querySelectorAll('span')].filter(el => el.textContent === 'makecindy/cindy#13638').at(-1)!.click());
   expect(actions.open).not.toHaveBeenCalled();
+  expect(styleOf('makecindy/cindy#13638').backgroundColor).toBe(palettes.light.surfaceChip);
+  expect(styleOf('makecindy/cindy#13638').textDecorationLine).toBeUndefined();
   expect(node.querySelector('[data-testid="message.markdownCodeCopyButton"]')).toBeNull();
   expect(node.querySelector('[data-testid="botGroup.openDiagram"]')).toBeNull();
   expect(styleOf('const').color).toBe(palettes.light.syntaxKeyword);
@@ -192,6 +209,22 @@ it('expands a short table to the measured message width without changing code bl
   const widths = [...row.children].map(cell => JSON.parse(cell.getAttribute('data-style')!).width);
   expect(widths.reduce((a, b) => a + b, 0)).toBe(280);
   expect(styleOf('a | b').fontFamily).toBe('Menlo');
+});
+
+// Full group table: two long URL tokens would overflow the viewport if width
+// were measured from the source instead of the rendered GitHub references.
+it('fits a group table to the visible link labels, including in image selection', async () => {
+  const repo = 'https://github.com/a/b';
+  const url = `${repo}/blob/main/${'folder/'.repeat(12)}`;
+  const content = `| PR | 文件 |\n| --- | --- |\n| ${repo}/pull/42 | ${url}a.md |`;
+  const props = { content, richContent: true };
+  for (const interactive of [true, false]) {
+    await act(async () => root.render(createElement(BotGroupMarkdownText, { ...props, interactive })));
+    const table = node.querySelector('section')!.firstElementChild!;
+    const cells = [...table.lastElementChild!.children];
+    expect(cells.map(cell => cell.textContent)).toEqual(['a/b#42', 'a/b/a.md']);
+    expect(cells.reduce((sum, cell) => sum + JSON.parse(cell.getAttribute('data-style')!).width, 0)).toBe(280);
+  }
 });
 afterEach(() => {
   act(() => root.unmount());
@@ -328,6 +361,40 @@ it.each([['ios', 'light'], ['ios', 'dark'], ['android', 'light'], ['android', 'd
     await act(async () => { links()[0]!.dispatchEvent(touch); links()[0]!.click(); });
     expect(onPress).toHaveBeenLastCalledWith(ann, { x: 108, y: 246 });
     expect(node.textContent).toBe('@Ann mail@Ann.test @Anna @Unknown 正文');
+    await renderBody('@Ann 你好 @Ann', { members: [ann] });
+    expect(links().map(span => span.textContent)).toEqual(['@Ann', '@Ann']);
+    await renderBody('@Ann 你好 @Team @Ann', {
+      members: [ann, member('team', 'Team @Ann')], labels: ['Ann', 'Team @Ann'],
+      mentions: { all: false, botIds: ['ann-1', 'team'] },
+    });
+    expect(links().map(span => span.textContent)).toEqual(['@Ann']);
+    expect(node.textContent).toBe('@Ann 你好 @Team @Ann');
+    await renderBody('@Ann @Bob 你好', {
+      members: [ann, member('bob', 'Robert')], labels: ['Ann', 'Robert'],
+      mentions: { all: false, botIds: ['ann-1', 'bob'] },
+    });
+    expect(links().map(span => span.textContent)).toEqual(['@Ann']);
+    expect(node.textContent).toBe('@Ann @Bob 你好');
+    await renderBody('@Ann @Bob 你好', {
+      members: [ann], labels: ['Ann'], mentions: { all: false, botIds: ['ann-1', 'bob'] },
+    });
+    expect(links().map(span => span.textContent)).toEqual(['@Ann']);
+    expect(node.textContent).toBe('@Ann @Bob 你好');
+    await renderBody('@Ann 你好', {
+      members: [ann, member('bob', 'Bob')], labels: ['Ann', 'Bob'],
+      mentions: { all: false, botIds: ['ann-1', 'bob'] },
+    });
+    expect(links().map(span => span.textContent)).toEqual(['@Ann']);
+    for (const second of ['@所有人', '@all']) {
+      await renderBody(`@Ann @所有人 再说 ${second}`, {
+        members: [ann], labels: ['Ann', '所有人', 'all'], allLabels: ['所有人', 'all'],
+        mentions: { all: true, botIds: ['ann-1'] },
+      });
+      const painted = [...node.querySelectorAll('span[data-style]')].filter(span =>
+        JSON.parse(span.getAttribute('data-style')!).color === palettes[theme.mode].groupMentionText);
+      expect(painted.map(span => span.textContent)).toEqual(['@Ann', '@所有人', second]);
+      expect(links().map(span => span.textContent)).toEqual(['@Ann']);
+    }
     await renderBody('@Ann', { mentions: { all: false, botIds: ['ann-1', 'ann-2'] } });
     expect(links()).toHaveLength(0);
     await renderBody('@Ann', { serverBacked: true, mentions: { all: false, botIds: [] } });
@@ -350,8 +417,14 @@ it.each([['ios', 'light'], ['ios', 'dark'], ['android', 'light'], ['android', 'd
     expect(links()).toHaveLength(0);
     await renderBody('@Todos los compañeros', { ...spanish, mentions: { all: false, botIds: ['todos'] } });
     expect(links()).toHaveLength(1); // Without broadcast intent the explicit person remains clickable.
+    const markdown = '**@Ann** `@Ann` [website](https://example.test)\n\n~~~text\n@Ann\n~~~';
     await act(async () => root.render(createElement(BotGroupMarkdownText, {
-      content: '**@Ann** `@Ann` [website](https://example.test)\n\n~~~text\n@Ann\n~~~', mentionContext: context,
+      content: markdown, mentionContext: context,
+    })));
+    // One saved ID does not identify which source occurrence was selected.
+    expect(links()).toHaveLength(0);
+    await act(async () => root.render(createElement(BotGroupMarkdownText, {
+      content: markdown, mentionContext: { ...context, members: [ann], serverBacked: true, mentions: { all: false, botIds: [] } },
     })));
     expect(links().map(span => span.textContent)).toEqual(['@Ann']);
     expect(JSON.parse(links()[0]!.getAttribute('data-style')!)).toMatchObject({ fontWeight: '600', color: palettes[theme.mode].groupMentionText });
@@ -462,4 +535,31 @@ it('keeps nested plain group lists indented in both themes', async () => {
     expect(markers.map(e => e.textContent)).toEqual(['•', '◦', '▪']);
     expect(markers.map(e => JSON.parse(e.parentElement!.dataset.style!).paddingLeft)).toEqual([0, 17, 34]);
   }
+});
+
+it.each([
+  ['two paragraphs', '@Ann 你好\n\n第二段', ['ann'], ['@Ann']],
+  ['code block', '@Ann 帮我看下：\n\n~~~js\nx()\n~~~', ['ann'], ['@Ann']],
+  ['inline bold', '@Ann 请看 **这里**', ['ann'], ['@Ann']],
+  ['inline code', '@Ann 请看 `foo()` 这里', ['ann'], ['@Ann']],
+  ['link label', '@Ann 看 [文档](https://example.com)', ['ann'], ['@Ann']],
+  ['bare URL', '@Ann 看这个 https://example.com/a_b', ['ann'], ['@Ann']],
+  ['quote', '> @Ann 引用里点名', ['ann'], ['@Ann']],
+  ['ordered list', '1. @Ann 做甲\n2. @Ann 做乙', ['ann'], ['@Ann', '@Ann']],
+  ['mixed bot reply', '## 分工\n- @Ann 看 `tool()` 和 [指南](https://example.com)\n\n~~~js\nx()\n~~~\n\n- @Ann 第二项', ['ann'], ['@Ann', '@Ann'], 'bot'],
+  ['list', '- @Ann 做甲\n- 第二项', ['ann'], ['@Ann']],
+  ['soft line break', '@Ann\n帮我看下', ['ann'], ['@Ann']],
+  ['recipients in different paragraphs', '@Ann 段一\n\n@Bob 段二', ['ann', 'bob'], ['@Ann', '@Bob']],
+  ['overlap in second paragraph', '第一段\n\n@Team @Ann @Team @Ann', ['ann', 'team'], []],
+  ['visible Markdown spelling', '@A**nn**\n\n@Ann', ['ann'], ['@A', 'nn', '@Ann']],
+] as const)('matches unambiguous recipient links in visible Markdown for %s', async (_case, content, botIds, expected, authorKind: 'user' | 'bot' = 'user') => {
+  const members = [
+    { botId: 'ann', name: 'Ann' }, { botId: 'bob', name: 'Bob' }, { botId: 'team', name: 'Team @Ann' },
+  ].map(member => ({ ...member, avatar: '', avatarColor: '', status: 'active' as const }));
+  await act(async () => root.render(createElement(BotGroupMarkdownText, {
+    content, authorKind,
+    mentionContext: { members, mentions: { all: false, botIds: [...botIds] }, allLabels: [], allBotsLabels: [],
+      labels: members.map(member => member.name), serverBacked: true, onPress: vi.fn() },
+  })));
+  expect([...node.querySelectorAll('[data-role="link"]')].map(link => link.textContent)).toEqual(expected);
 });

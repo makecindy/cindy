@@ -85,7 +85,7 @@ interface TurnChangeActionStateV1 {
   states: Record<string, { workspaceState: TurnChangeWorkspaceState; updatedAt: number }>;
 }
 
-const PROVIDERS = new Set<TurnChangeProvider>(['codex', 'claude-code', 'pi']);
+const PROVIDERS = new Set<TurnChangeProvider>(['codex', 'claude-code', 'pi', 'acp']);
 const STATES = new Set<TurnChangeSetState>(['complete', 'partial']);
 const WORKSPACE_STATES = new Set<TurnChangeWorkspaceState>(['applied', 'undone']);
 const INCOMPLETE_REASONS = new Set<TurnChangeIncompleteReason>([
@@ -117,6 +117,16 @@ export interface KnownFileWriteCapture {
   provider: TurnChangeProvider;
   cwd: string;
   targetPath: string;
+  remote?: boolean;
+}
+
+export interface KnownFilePreimageCapture {
+  sessionId: string;
+  provider: TurnChangeProvider;
+  cwd: string;
+  targetPath: string;
+  beforeExists: boolean;
+  beforeText: string;
   remote?: boolean;
 }
 
@@ -968,7 +978,73 @@ export async function captureKnownFileBefore(input: KnownFileWriteCapture): Prom
       beforeMode: before.mode,
     });
     pending.capturedBytes += captureBytes;
-  })().finally(() => pending.captureTasks.delete(captureKey));
+  })().finally(() => {
+    if (pending.captureTasks.get(captureKey) === captureTask) {
+      pending.captureTasks.delete(captureKey);
+    }
+  });
+  pending.captureTasks.set(captureKey, captureTask);
+  return captureTask;
+}
+
+/**
+ * Records an exact text preimage supplied by a structured diff (for example ACP
+ * `tool_call_update` content diffs under `bypassPermissions`). Honors all workspace
+ * containment, sensitivity, file-count and byte-budget guards, and never overwrites
+ * an earlier authoritative preimage for the same file within the same turn.
+ */
+export async function recordKnownFilePreimage(input: KnownFilePreimageCapture): Promise<void> {
+  if (input.remote) return;
+  const pending = ensurePending(input.sessionId, input.provider, input.cwd);
+  const target = safeRelativeTarget(input.cwd, input.targetPath);
+  if (!target) {
+    return;
+  }
+  if (detectSensitivePath(target.relativePath, { allowEnvTemplates: true })) {
+    addIncompleteReason(pending, 'sensitive-file');
+    return;
+  }
+  const captureKey = captureFileKey(target.absolutePath);
+  if (pending.capturedFiles.has(captureKey)) return;
+  const inFlight = pending.captureTasks.get(captureKey);
+  if (inFlight) return inFlight;
+  const captureTask = (async () => {
+    if (pending.capturedFiles.has(captureKey)) return;
+    if (!await isRealTargetInsideWorkspace(input.cwd, target.absolutePath)) {
+      addIncompleteReason(pending, 'outside-workspace');
+      return;
+    }
+    if (pending.capturedFiles.size >= MAX_CAPTURED_FILES) {
+      addIncompleteReason(pending, 'diff-too-large');
+      return;
+    }
+    const beforeText = input.beforeExists ? input.beforeText : '';
+    const captureBytes = byteLength(beforeText);
+    if (captureBytes > MAX_CAPTURE_FILE_BYTES) {
+      addIncompleteReason(pending, 'file-too-large');
+      return;
+    }
+    if (pending.capturedBytes + captureBytes > MAX_CAPTURE_TOTAL_BYTES) {
+      addIncompleteReason(pending, 'diff-too-large');
+      return;
+    }
+    let beforeMode: number | null = null;
+    if (input.beforeExists) {
+      const stat = await fs.stat(target.absolutePath).catch(() => null);
+      beforeMode = stat?.isFile() ? stat.mode : null;
+    }
+    pending.capturedFiles.set(captureKey, {
+      ...target,
+      beforeExists: input.beforeExists,
+      beforeText,
+      beforeMode,
+    });
+    pending.capturedBytes += captureBytes;
+  })().finally(() => {
+    if (pending.captureTasks.get(captureKey) === captureTask) {
+      pending.captureTasks.delete(captureKey);
+    }
+  });
   pending.captureTasks.set(captureKey, captureTask);
   return captureTask;
 }

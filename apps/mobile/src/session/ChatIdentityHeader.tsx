@@ -27,7 +27,7 @@ export const CHAT_HEADER_BLUR_FADE_INSIDE = 0;
  * 设置。点身份区默认与设置按钮打开同一份资料 / 设置；伙伴私聊的身份区打开近况（onOpenIdentity）。
  */
 export function ChatIdentityHeader({
-  nativeHeader = false, showBack = true, accessory, mark, title, subtitle, identityLabel, identityHint, controlsReady = true, onBack, onOpenSettings, onOpenIdentity, settingsLabel, testIDPrefix, settingsTestID,
+  nativeHeader = false, showBack = true, accessory, mark, title, titleBadge, subtitle, identityLabel, identityHint, controlsReady = true, onBack, onOpenSettings, onOpenIdentity, settingsLabel, testIDPrefix, settingsTestID,
 }: {
   /** The caller reserves the measured iOS navigation bar height, including the status area. */
   nativeHeader?: boolean;
@@ -36,6 +36,8 @@ export function ChatIdentityHeader({
   accessory?: ReactNode;
   mark: ReactNode;
   title: string;
+  /** Compact inline badge beside the title (e.g. External group mark for enterprise viewers). */
+  titleBadge?: ReactNode;
   /** A short line under the title: presence + computer name, or member names. */
   subtitle: ReactNode;
   identityLabel: string;
@@ -67,7 +69,10 @@ export function ChatIdentityHeader({
       disabled={!controlsReady || !identityAction} onPress={openIdentity} testID={`${testIDPrefix}.identity`}>
       {mark ? <View style={styles.mark}>{mark}</View> : null}
       <View style={styles.identityText}>
-        <Text numberOfLines={1} style={styles.title}>{title}</Text>
+        {titleBadge ? <View style={styles.titleRow}>
+          <Text numberOfLines={1} style={[styles.title, styles.titleFlexible]}>{title}</Text>
+          {titleBadge}
+        </View> : <Text numberOfLines={1} style={styles.title}>{title}</Text>}
         {typeof subtitle === 'string' ? <Text numberOfLines={1} style={styles.subtitle}>{subtitle}</Text> : subtitle}
       </View>
     </Pressable>;
@@ -130,7 +135,9 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   pressed: { opacity: 0.72 },
   mark: { width: CHAT_HEADER_MARK_SIZE, height: CHAT_HEADER_MARK_SIZE },
   identityText: { flex: 1, minWidth: 0 },
+  titleRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.xs },
   title: { color: colors.textPrimary, fontSize: typeScale.body, lineHeight: lineHeight.body, fontWeight: fontWeight.semibold },
+  titleFlexible: { flexShrink: 1 },
   subtitle: { color: colors.textTertiary, fontSize: typeScale.caption, lineHeight: lineHeight.caption },
   subtitleFlexible: { flexShrink: 1 },
 });

@@ -5,6 +5,7 @@
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 
+import { ANTIGRAVITY_MARK_PATH, isAntigravityPluginId, isAntigravityPluginName } from '@cindy/maker-shared/branding';
 import {
   CalendarDays,
   Code2,
@@ -69,6 +70,7 @@ export function GhostPluginIcon({
   iconDataUrl,
   iconId,
   iconName,
+  officialCatalog = false,
   fallbackKind,
   iconContainerRef,
   onIconLoad,
@@ -78,6 +80,7 @@ export function GhostPluginIcon({
   iconDataUrl?: string;
   iconId: string;
   iconName: string;
+  officialCatalog?: boolean;
   fallbackKind?: GhostFallbackIconKind;
   iconContainerRef?: Ref<HTMLSpanElement>;
   onIconLoad?: () => void;
@@ -91,7 +94,8 @@ export function GhostPluginIcon({
     setImageState({ source: iconDataUrl, failed: false });
   }
   const failed = imageState.source === iconDataUrl && imageState.failed;
-  const resolvedIconDataUrl = !failed ? ghostPluginIconSource(iconDataUrl) : undefined;
+  const antigravity = isAntigravityPluginId(iconId) || (officialCatalog && isAntigravityPluginName(iconName));
+  const resolvedIconDataUrl = !antigravity && !failed ? ghostPluginIconSource(iconDataUrl) : undefined;
   const svg = resolvedIconDataUrl ? isSvgIconSrc(resolvedIconDataUrl) : false;
   const FallbackIcon = FALLBACK_ICONS[fallbackKind ?? ghostFallbackIconKind(iconName, iconId)];
 
@@ -106,7 +110,11 @@ export function GhostPluginIcon({
         CONTAINER_CLASSES[size],
       )}
     >
-      {resolvedIconDataUrl ? (
+      {antigravity ? (
+        <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden className={SVG_ICON_CLASSES[size]}>
+          <path d={ANTIGRAVITY_MARK_PATH} />
+        </svg>
+      ) : resolvedIconDataUrl ? (
         <img
           src={resolvedIconDataUrl}
           alt=""

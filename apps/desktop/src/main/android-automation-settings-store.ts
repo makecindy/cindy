@@ -1,3 +1,5 @@
+import { validateOptionalSettingsFields } from './maker-host/settings-inspection.js';
+import { inspectSettingsJson } from './maker-host/inspect-settings-json.js';
 /**
  * Stores Android automation choices that affect new agent sessions globally.
  *
@@ -51,6 +53,14 @@ const store = createOverrideSettingsFile<AndroidAutomationSettings>({
   log,
   label: 'android-automation',
 });
+
+export function inspectAndroidAutomationSettings(root: string) {
+  return inspectSettingsJson(path.join(root, 'android-automation-settings.json'), raw => {
+    const nullableString = (value: unknown) => value === null || typeof value === 'string';
+    validateOptionalSettingsFields(raw, { defaultDeviceSerial: nullableString, adbPathOverride: nullableString });
+    return normalize(raw);
+  });
+}
 
 export function readAndroidAutomationSettings(): AndroidAutomationSettings {
   return store.read();

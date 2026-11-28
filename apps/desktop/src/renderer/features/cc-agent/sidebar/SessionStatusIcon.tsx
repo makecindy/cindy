@@ -18,6 +18,7 @@
  */
 
 import type { ReactNode } from 'react';
+import { isSharedTaskPeer, providerSharePickerState } from '@cindy/device-link';
 import { Archive, Pencil, RadioTower, UsersRound } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
@@ -40,10 +41,16 @@ import {
   type EngineIconKind,
 } from '@/components/sidebar/VendorIcon';
 import { useDeviceLinkDeviceList } from '@/features/device-link/useDeviceLinkDeviceList';
+import { useProviderShareReceived } from '@/features/provider-share/providerShareStore';
 import { useProviderShareAgentDevices } from '@/features/provider-share/useProviderShareAgentDevices';
 import { useOptionalAuthDeviceId } from '@/contexts/AuthContext';
 import { usePluginEngineIdentity } from '@/hooks/usePluginEngines';
-import { isProviderShareAgentDeviceId } from '../../../../shared/providerShare';
+import { modelCatalogKey } from '../../../../shared/controlledModelCatalog';
+import { pluginEngineKeyFromProviderId } from '../../../../shared/pluginEngines';
+import {
+  isProviderShareAgentDeviceId,
+  providerShareIdOfAgentDeviceId,
+} from '../../../../shared/providerShare';
 import { SidebarRightStatusIndicator } from './SidebarRightStatusIndicator';
 import { useCindyMakeActivity } from './useCindyMakeActivity';
 
@@ -71,6 +78,45 @@ function PluginEngineVendorIcon({
   const selfDeviceId = useOptionalAuthDeviceId();
   // Remote task whose plugin engine runs on THIS computer: read the local list instead of calling ourselves over Device Link.
   const effectiveDeviceId = deviceId && deviceId === selfDeviceId ? undefined : deviceId;
+  const { name, iconDataUrl } = usePluginEngineIdentity(providerId, effectiveDeviceId, { readRemote });
+  return <VendorIcon {...iconProps} vendor="acp" title={name} {...(iconDataUrl ? { iconDataUrl } : {})} />;
+}
+
+/**
+ * 别人分享的插件引擎任务(agent_kind = 'acp' 且 agentDeviceId = 'share:<id>')的身份图标：
+ * 单独成组件，只有这类行才订阅已收到分享名单，按分享在线/启用状态共用一次共享插件目录读取；
+ * 远控场景下若本机权威名单里没有该分享(如仅被控电脑开启了跨区分享)，改经被控电脑的
+ * maker:model-catalog:read 读取。
+ */
+function SharedPluginEngineVendorIcon({
+  providerId,
+  shareDeviceId,
+  taskDeviceId,
+  taskDeviceConnected,
+  ...iconProps
+}: {
+  providerId: string | null | undefined;
+  shareDeviceId: string;
+  /** 任务所在的被控电脑；缺省 = 本机任务。 */
+  taskDeviceId?: string;
+  taskDeviceConnected: boolean;
+  remote?: boolean;
+  size: number;
+  running: boolean;
+  colorClassName?: string;
+}) {
+  const { received, loaded } = useProviderShareReceived();
+  const shareId = providerShareIdOfAgentDeviceId(shareDeviceId);
+  const share = shareId ? received.find((entry) => entry.shareId === shareId) : undefined;
+  const directReadable = Boolean(
+    share
+    && providerSharePickerState(share) === 'available'
+    && share.hostCapable
+    && pluginEngineKeyFromProviderId(share.providerId) !== null,
+  );
+  const routed = Boolean(taskDeviceId && loaded && !share);
+  const effectiveDeviceId = routed ? modelCatalogKey(shareDeviceId, taskDeviceId) : shareDeviceId;
+  const readRemote = routed ? taskDeviceConnected : directReadable;
   const { name, iconDataUrl } = usePluginEngineIdentity(providerId, effectiveDeviceId, { readRemote });
   return <VendorIcon {...iconProps} vendor="acp" title={name} {...(iconDataUrl ? { iconDataUrl } : {})} />;
 }
@@ -181,6 +227,15 @@ export function SessionStatusIcon({
   // 被控电脑)。两种都用同一个波纹标识(2026-10-09 用户裁决)。SSH 任务整件在远端，没有这一说。
   const agentDeviceId =
     session.agentDeviceId && !session.remoteHostId ? session.agentDeviceId : null;
+  const taskDeviceId = session.deviceLinkDeviceId ?? undefined;
+  const isSharedTask = isSharedTaskPeer(taskDeviceId);
+  const taskDeviceConnected =
+    session.deviceLinkConnectionStatus !== 'disconnected'
+    && session.deviceLinkConnectionStatus !== 'connecting';
+  const sharedPluginDeviceId =
+    !isSharedTask && agentDeviceId && isProviderShareAgentDeviceId(agentDeviceId)
+      ? agentDeviceId
+      : null;
   const isOrcaLead = isOrcaLeadSession(session);
   const isArchived = session.status === 'archived';
   // 角标 tone:error(含定时任务失败的 urgency context)红 > awaiting 蓝 > 完成未读绿。
@@ -213,7 +268,7 @@ export function SessionStatusIcon({
   if (hideVendor && !showRunningIndicator && !showDraftIndicator && !(showAttentionDot && hasAttentionDot)) return null;
 
   return (
-    <span className={cn("relative shrink-0 inline-flex items-center justify-center", identityIcon ? "size-[18px]" : "size-3")} aria-hidden={showRunningIndicator ? undefined : true}>
+    <span className={cn("relative shrink-0 inline-flex items-center justify-center", identityIcon ? (size ? undefined : "size-[18px]") : "size-3")} aria-hidden={showRunningIndicator ? undefined : true}>
       {identityIcon ?? (isArchived ? (
         <Archive
           size={size ?? 12}
@@ -257,23 +312,30 @@ export function SessionStatusIcon({
           <RadioTower size={size ?? 12} strokeWidth={1.75} className="shrink-0" />
         </span>
       ) : hideVendor ? null : vendor === 'acp' ? (
-        <PluginEngineVendorIcon
-          providerId={session.providerId}
-          // 引擎在自己的另一台电脑上(Agent 在那台，任务在这台)：名称与图标读那台的列表。别人分享的
-          // 来源不提供插件引擎，不当作引擎所在的电脑。
-          deviceId={(agentDeviceId && !isProviderShareAgentDeviceId(agentDeviceId) ? agentDeviceId : null)
-            ?? session.deviceLinkDeviceId ?? undefined}
-          readRemote={
-            agentDeviceId && !isProviderShareAgentDeviceId(agentDeviceId)
-              ? true
-              : session.deviceLinkConnectionStatus !== 'disconnected'
-                && session.deviceLinkConnectionStatus !== 'connecting'
-          }
-          remote={!!agentDeviceId && !(showAttentionDot && hasAttentionDot)}
-          size={size ?? 12}
-          running={isRunning}
-          colorClassName={isActive ? 'text-[var(--sidebar-item-active-foreground)]' : undefined}
-        />
+        sharedPluginDeviceId ? (
+          <SharedPluginEngineVendorIcon
+            providerId={session.providerId}
+            shareDeviceId={sharedPluginDeviceId}
+            taskDeviceId={taskDeviceId}
+            taskDeviceConnected={taskDeviceConnected}
+            remote={!(showAttentionDot && hasAttentionDot)}
+            size={size ?? 12}
+            running={isRunning}
+            colorClassName={isActive ? 'text-[var(--sidebar-item-active-foreground)]' : undefined}
+          />
+        ) : (
+          <PluginEngineVendorIcon
+            providerId={session.providerId}
+            // 共享任务保持 fail-closed，不读本机或第三方插件目录；
+            // 引擎在自己的另一台电脑上(Agent 在那台，任务在这台)时，名称与图标读那台的列表。
+            deviceId={isSharedTask ? taskDeviceId : (agentDeviceId ?? taskDeviceId)}
+            readRemote={isSharedTask ? false : (agentDeviceId ? true : taskDeviceConnected)}
+            remote={!!agentDeviceId && !(showAttentionDot && hasAttentionDot)}
+            size={size ?? 12}
+            running={isRunning}
+            colorClassName={isActive ? 'text-[var(--sidebar-item-active-foreground)]' : undefined}
+          />
+        )
       ) : agentDeviceId ? (
         <AgentDeviceVendorIcon
           deviceId={agentDeviceId}

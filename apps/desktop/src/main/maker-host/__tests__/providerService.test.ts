@@ -47,13 +47,14 @@ describe('createProviderService', () => {
       ] }),
       connection: { xd: () => false, anthropic: () => false, openai: () => false, xai: () => false },
       getOrganizationProviderLogoKind: p => organizationProviderLogoKind(p, user),
+      getProviderConnectionIcons: () => ({ 'byok-test': 'personal', 'user-test': 'work' }),
       getProviderPresentation: () => ({ name: 'Stale local name', removed: true, logoKind: 'xd' }),
     });
     const read = () => svc.listProviders({ snapshotOnly: true });
     const xd = await read();
     expect(xd[0]).toMatchObject({ name: 'Enterprise Codex', logoKind: 'openai-spectrum' });
     expect(xd[0].removed).not.toBe(true);
-    expect(xd.slice(1).map(p => p.logoKind)).toEqual([undefined, undefined]);
+    expect(xd.slice(1).map(p => p.logoKind)).toEqual([undefined, 'work']);
     user = { membershipKind: 'org', orgSlug: 'other', orgName: 'XD' };
     expect((await read())[0].logoKind).toBeUndefined();
     user = null;

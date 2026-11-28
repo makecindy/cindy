@@ -7,6 +7,7 @@
 
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { spawn, type ChildProcess } from 'node:child_process';
+import { getDeviceLinkInvokeContext } from '../device-link/invoke-context.js';
 
 export interface GitRunResult {
   stdout: string;
@@ -363,12 +364,21 @@ async function runGitBufferOnce(args: readonly string[], opts: GitRunBufferOptio
   });
 }
 
+async function localReviewArgs(args: readonly string[], opts: GitRunOptions): Promise<readonly string[]> {
+  if (!getDeviceLinkInvokeContext()?.sharedTask) return args;
+  const { gitDriverIsolationArgs, snapshotGitIsolationArgs } = await import('../git-snapshot/isolatedGitExec.js');
+  const base = snapshotGitIsolationArgs(process.platform === 'win32' ? 'NUL' : '/dev/null');
+  const keys = await runGitOnce([...base, 'config', '--null', '--name-only', '--list'], { cwd: opts.cwd });
+  const command = args[0] === 'diff' ? ['diff', '--no-textconv', '--no-ext-diff', ...args.slice(1)] : args;
+  return ['--no-optional-locks', ...base, ...gitDriverIsolationArgs(keys.stdout), ...command];
+}
+
 export async function runGit(args: readonly string[], opts: GitRunOptions = {}): Promise<GitRunResult> {
   const backend = executionBackend.getStore();
-  return backend ? backend.run(args, opts) : runGitOnce(args, opts);
+  return backend ? backend.run(args, opts) : runGitOnce(await localReviewArgs(args, opts), opts);
 }
 
 export async function runGitBuffer(args: readonly string[], opts: GitRunBufferOptions = {}): Promise<GitRunBufferResult> {
   const backend = executionBackend.getStore();
-  return backend ? backend.runBuffer(args, opts) : runGitBufferOnce(args, opts);
+  return backend ? backend.runBuffer(args, opts) : runGitBufferOnce(await localReviewArgs(args, opts), opts);
 }

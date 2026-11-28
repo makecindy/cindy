@@ -190,9 +190,18 @@ function imageFromNode(node: JsonNode, format: WireFormat): { raw: string; mimeT
   if (source?.kind !== 'string' || typeof source.value !== 'string') return null;
   const raw = source.value;
   if (/^https?:\/\//i.test(raw)) return null;
-  const data = /^data:([\w.+/-]+);base64,([A-Za-z0-9+/]*={0,2})$/i.exec(raw);
-  if (data) { mimeType = data[1]; return { raw: data[2], mimeType, textType }; }
-  if (!/^[A-Za-z0-9+/]+={0,2}$/.test(raw)) return null;
+  if (raw.length >= 6 && raw.slice(0, 5).toLowerCase() === 'data:') {
+    const comma = raw.indexOf(',');
+    const header = comma >= 5 && comma <= 2048
+      ? /^data:([\w.+/-]+);base64$/i.exec(raw.slice(0, comma))
+      : null;
+    if (!header) return null;
+    const payload = raw.slice(comma + 1);
+    if (!isStrictBase64Chars(payload, true)) return null;
+    mimeType = header[1];
+    return { raw: payload, mimeType, textType };
+  }
+  if (!isStrictBase64Chars(raw, false)) return null;
   return { raw, mimeType, textType };
 }
 
@@ -297,9 +306,26 @@ function replacementText(path: string, seenAssistant: boolean): string {
   return `Media omitted from this request. ${seenAssistant ? 'An assistant response occurred before this media was removed.' : 'No assistant response occurred before this media was removed; it may be unseen.'} Preserved local file: ${JSON.stringify(path)}. Read that file with an image/file-reading tool when needed. Do not read all previously omitted media back into the request.`;
 }
 
+function isStrictBase64Chars(value: string, allowEmpty: boolean): boolean {
+  const pad = value.endsWith('==') ? 2 : value.endsWith('=') ? 1 : 0;
+  const end = value.length - pad;
+  if (!allowEmpty && end === 0) return false;
+  for (let index = 0; index < end; index += 1) {
+    const code = value.charCodeAt(index);
+    if (
+      (code >= 0x41 && code <= 0x5a)
+      || (code >= 0x61 && code <= 0x7a)
+      || (code >= 0x30 && code <= 0x39)
+      || code === 0x2b
+      || code === 0x2f
+    ) continue;
+    return false;
+  }
+  return true;
+}
+
 function decodeBase64(value: string): Buffer {
-  if (!value || value.length % 4 === 1 || !/^[A-Za-z0-9+/]*={0,2}$/.test(value)) throw new Error('invalid image base64');
-  if (value.length % 4 !== 0) throw new Error('invalid image base64');
+  if (!value || value.length % 4 !== 0 || !isStrictBase64Chars(value, true)) throw new Error('invalid image base64');
   return Buffer.from(value, 'base64');
 }
 

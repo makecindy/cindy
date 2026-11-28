@@ -185,7 +185,7 @@ describe('BotMemorySettings', () => {
     await openDetail();
     fireEvent.click(screen.getByRole('button', { name: 'bots.memory.edit' }));
     fireEvent.change(screen.getByRole('textbox', { name: 'bots.memory.bodyLabel' }), {
-      target: { value: '字'.repeat(3000) },
+      target: { value: '字'.repeat(20000) },
     });
     expect(screen.getByText('bots.memory.tooLong')).toBeTruthy();
     mocks.confirm.mockResolvedValueOnce(false);

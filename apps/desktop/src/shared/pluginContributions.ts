@@ -63,6 +63,7 @@ export type MyPluginLocalInstallation =
 export interface MyPluginView {
   pluginId: string;
   name: string;
+  description?: string | null;
   displayAuthor?: string | null;
   authorSettings?: { anonymous: boolean; canEdit: boolean } | null;
   publisherKind?: 'official' | 'personal' | null;

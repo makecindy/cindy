@@ -745,6 +745,39 @@ describe('BotChannelsPage for a teammate on another computer', () => {
     expect(await screen.findByText(/bots\.remoteSettings\.finishOnHost:.*Studio/)).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'bots.channels.officialX.bind' })).toBeNull();
   });
+
+  // Same rule as this computer's X card: once a teammate handles X questions, the risk names the
+  // teammate's memory and directories; before that, X tasks use the default project of the X connection.
+  it.each([
+    [null, 'settings.remoteControl.hook.x.guide.riskWorkdirBody'],
+    ['bot-1', 'bots.channels.officialX.riskBody'],
+  ])('explains how X questions work and that replies are public, naming the computer that runs them (assigned to %s)', async (companionBotId, riskKey) => {
+    const x = {
+      get: vi.fn(async () => ({ available: true, enabled: true, connected: true, companionBotId })),
+      setCompanion: vi.fn(),
+    };
+    renderRemote(remoteApi(), { x });
+    const card = await screen.findByRole('region', { name: 'settings.tina.prefs.providerX' });
+    expect(within(card).getByText('settings.remoteControl.hook.x.guide.riskPublicBody')).toBeTruthy();
+    expect(within(card).getByText(riskKey)).toBeTruthy();
+    expect(within(card).getByText('settings.remoteControl.hook.x.guide.withdrawBody')).toBeTruthy();
+    // The questions run on the teammate's computer, so the usage line names it instead of "this device".
+    expect(within(card).getByText(/settings\.remoteControl\.hook\.x\.guide\.usageBodyOnDevice:.*Studio/)).toBeTruthy();
+    expect(within(card).queryByText('settings.remoteControl.hook.x.guide.usageBody')).toBeNull();
+  });
+
+  it('keeps the other computer’s X assignment when the confirmation is cancelled', async () => {
+    const x = {
+      get: vi.fn(async () => ({ available: true, enabled: true, connected: true, companionBotId: null as string | null })),
+      setCompanion: vi.fn(),
+    };
+    mocks.confirm.mockResolvedValueOnce(false);
+    renderRemote(remoteApi(), { x });
+    fireEvent.click(await screen.findByRole('button', { name: 'bots.channels.officialX.bind' }));
+    await waitFor(() => expect(mocks.confirm).toHaveBeenCalled());
+    expect(x.setCompanion).not.toHaveBeenCalled();
+    expect((screen.getByRole('button', { name: 'bots.channels.officialX.bind' }) as HTMLButtonElement).disabled).toBe(false);
+  });
 });
 
 // Tier 1: the existing connection must open a populated editor, never add/remove to change a port.

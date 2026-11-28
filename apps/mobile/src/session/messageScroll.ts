@@ -114,9 +114,39 @@ export interface MobileFollowUnpinInput {
  */
 export function shouldUnpinMobileFollowOnDrag(input: MobileFollowUnpinInput): boolean {
   if (!input.dragging || input.dragStartOffsetY === null) return false;
-  const { contentHeight, offsetY, viewportHeight } = input.metrics;
-  if (contentHeight - viewportHeight <= MOBILE_FOLLOW_MIN_SCROLLABLE_PX) return false;
-  return offsetY < input.dragStartOffsetY - MOBILE_FOLLOW_UNPIN_DRAG_DEAD_ZONE;
+  const endOffset = mobileMessageListEndOffset(input.metrics);
+  if (endOffset <= MOBILE_FOLLOW_MIN_SCROLLABLE_PX) return false;
+  // Dragging back from iOS bottom overscroll (offsetY > endOffset) is not scrolling up into
+  // older history. Measure upward travel from the clamped tail edge so a bounce release does
+  // not leave the list stuck at dist=0 with nearBottom=false.
+  const effectiveStartOffsetY = Math.min(input.dragStartOffsetY, endOffset);
+  return input.metrics.offsetY < effectiveStartOffsetY - MOBILE_FOLLOW_UNPIN_DRAG_DEAD_ZONE;
+}
+
+export interface MobileViewportExpandRepinInput {
+  previousViewportHeight: number;
+  nextViewportHeight: number;
+  contentHeight: number;
+  offsetY: number;
+}
+
+/**
+ * Dismissing the keyboard (or rotating to a taller viewport) can expand the viewport so that
+ * the current scroll position is clamped back to the absolute end of the conversation. Native
+ * reports a negative offsetY delta when clamping, which normal downward-only repin ignores.
+ * Re-pin follow when the expansion physically lands on the tail edge, while keeping deliberate
+ * history positions above the new end offset unpinned.
+ */
+export function shouldRepinMobileFollowOnViewportExpand(
+  input: MobileViewportExpandRepinInput,
+): boolean {
+  if (
+    input.previousViewportHeight <= 0
+    || input.nextViewportHeight <= input.previousViewportHeight + MOBILE_ANCHOR_VERIFY_TOLERANCE
+    || input.contentHeight <= 0
+  ) return false;
+  const nextEndOffset = Math.max(0, input.contentHeight - input.nextViewportHeight);
+  return input.offsetY >= nextEndOffset - MOBILE_ANCHOR_VERIFY_TOLERANCE;
 }
 
 export interface MobileNearBottomResolveInput {

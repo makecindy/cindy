@@ -47,6 +47,7 @@ import { ScheduleBindingBadge } from '@/features/cc-agent/sidebar/ScheduleBindin
 import { remoteProjectsStore } from '@/features/device-link/remoteProjectsStore';
 import { refreshRemoteDeviceSessions } from '@/features/device-link/refreshRemoteSessions';
 import { parseScheduleBindings } from '@/features/scheduler/lib/scheduleBindingIndex';
+import { setCurrentAuthDeviceId } from '@/lib/authDeviceIdStore';
 
 const binding = (overrides: Partial<ScheduleBinding> = {}): ScheduleBinding => ({
   id: 'remote',
@@ -208,6 +209,27 @@ describe('remote schedule binding badges', () => {
     expect(parseScheduleBindings([{ ...binding(), persistentSession: false }])).toEqual([binding()]);
   });
 
+  // PR #13451 P1 regression: preserve known schedule source values through parseScheduleBindings
+  // so remote archive confirmation can distinguish user vs project automations and fail closed
+  // when an older peer omits source or sends an unknown value (unit tier).
+  it('preserves known schedule source values and omits absent or unknown sources', () => {
+    expect(
+      parseScheduleBindings([
+        { ...binding(), id: 'u', source: 'user' },
+        { ...binding(), id: 'p', source: 'project' },
+        { ...binding(), id: 'b', source: 'bot' },
+        { ...binding(), id: 'legacy' },
+        { ...binding(), id: 'future', source: 'future-kind' },
+      ]),
+    ).toEqual([
+      { ...binding(), id: 'u', source: 'user' },
+      { ...binding(), id: 'p', source: 'project' },
+      { ...binding(), id: 'b', source: 'bot' },
+      { ...binding(), id: 'legacy' },
+      { ...binding(), id: 'future' },
+    ]);
+  });
+
   it.each([
     [{ intervalMs: 600_000 }, 'Every 10 minutes'],
     [{ intervalMs: 1_680_000 }, 'Every 28 minutes'],
@@ -276,4 +298,51 @@ it('updates follow-up grouping when bindings pause, resume, retarget or disappea
   expect(screen.getByTestId('following').textContent).toBe('local,B');
   act(() => remoteProjectsStore.removeDevice('B'));
   expect(screen.getByTestId('following').textContent).toBe('local');
+});
+
+// 规则：task-inbox.md；此前 useActiveFollowUpSessions 只查 Lead 自身绑定，
+// 协同 Worker（同机或跨设备）绑了启用中自动化时 Lead 不会进入「进行中」。
+it('marks an Orca Lead as following when its active local or remote Worker has an active automation', () => {
+  setCurrentAuthDeviceId('self-mac');
+  try {
+    const leadA = { id: 'lead-a', status: 'active', orcaRole: 'lead', deviceLinkDeviceId: 'A' } as Session;
+    const leadLocal = { id: 'lead-local', status: 'active', orcaRole: 'lead' } as Session;
+    const workerOnA = {
+      id: 'worker-a',
+      status: 'active',
+      orcaRole: 'worker',
+      orcaLeadSessionId: 'lead-a',
+      deviceLinkDeviceId: 'A',
+    } as Session;
+    const remoteWorkerOnB = {
+      id: 'worker-b',
+      status: 'active',
+      deviceLinkDeviceId: 'B',
+      orcaRemoteLead: {
+        leadDeviceId: 'self-mac',
+        leadDeviceName: 'Self',
+        leadSessionId: 'lead-local',
+        leadTitle: 'Local Lead',
+        workerLabel: 'relay',
+      },
+    } as Session;
+    remoteProjectsStore.setDeviceSessions('A', 'A', [leadA, workerOnA]);
+    remoteProjectsStore.setDeviceSessions('B', 'B', [remoteWorkerOnB]);
+    const sessions = [leadA, leadLocal];
+    function Following() {
+      const active = useActiveFollowUpSessions(sessions);
+      return <div data-testid="orca-following">{sessions.filter((s) => active.has(s)).map((s) => s.id).join(',')}</div>;
+    }
+    render(<Following />);
+    expect(screen.getByTestId('orca-following').textContent).toBe('');
+    act(() => remoteProjectsStore.setDeviceScheduleBindings('A', [binding({ id: 's-a', targetSessionId: 'worker-a' })]));
+    expect(screen.getByTestId('orca-following').textContent).toBe('lead-a');
+    act(() => remoteProjectsStore.setDeviceScheduleBindings('B', [binding({ id: 's-b', targetSessionId: 'worker-b' })]));
+    expect(screen.getByTestId('orca-following').textContent).toBe('lead-a,lead-local');
+    act(() => remoteProjectsStore.setDeviceScheduleBindings('A', [binding({ id: 's-a', targetSessionId: 'worker-a', status: 'paused' })]));
+    expect(screen.getByTestId('orca-following').textContent).toBe('lead-local');
+  } finally {
+    cleanup();
+    setCurrentAuthDeviceId(null);
+  }
 });

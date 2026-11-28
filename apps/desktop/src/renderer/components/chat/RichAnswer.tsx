@@ -35,7 +35,9 @@ import {
   RichAnswerStream,
   RichInteractionMemory,
   RichSubmissionController,
-  richSendText,
+  richSendPreview,
+  RICH_EXPRESSION_ARGUMENT_LIMIT,
+  type RichSendIssue,
   richAction,
   richChart,
   richLinePlot,
@@ -57,6 +59,18 @@ import { Input } from '@/components/ui/input';
 import { Slider } from '@/components/ui/slider';
 import { useSessionQuickSend } from './SessionQuickSendContext';
 import './rich-answer.css';
+
+/**
+ * A component image whose cindy-media address is a placeholder or truncated: it renders
+ * the invalid-image status instead of an image (and stays out of the task gallery).
+ * Both media namespaces are served by the Desktop protocol; reloading such a
+ * reference cannot recover the existing image.
+ */
+export function isInvalidRichImageSource(source: string): boolean {
+  return /^cindy-media:/i.test(source)
+    && !/^cindy-media:\/\/blobs\/[a-f0-9]{64}\.[a-zA-Z0-9]+$/.test(source)
+    && !/^cindy-media:\/\/client-wallpaper\/[a-f0-9]{64}\.(webp|mp4)$/.test(source);
+}
 
 /** Answer colors are Cindy theme tokens, so they follow the mode without re-rendering. */
 const palette: RichPalette = {
@@ -96,8 +110,8 @@ const memory = new RichInteractionMemory({
 });
 const submissions = new RichSubmissionController(memory);
 
-function RichSendAction({ node, text, receiptKey, ready, style }: {
-  node: RichNode; text: string | undefined; receiptKey: string; ready: boolean;
+function RichSendAction({ node, text, issue, receiptKey, ready, style }: {
+  node: RichNode; text?: string; issue?: RichSendIssue; receiptKey: string; ready: boolean;
   style?: CSSProperties;
 }) {
   const { t } = useTranslation();
@@ -110,6 +124,9 @@ function RichSendAction({ node, text, receiptKey, ready, style }: {
       onClick={() => { if (!disabled) void submissions.submit(receiptKey, text, value => sender.send(value, { literalText: true, independent: true })); }}>
       {status === 'sending' ? t('richAnswer.sending') : status === 'sent' ? t('richAnswer.sent') : richString(node, 'label', richString(node, 'text')) || t('richAnswer.send')}
     </Button>
+    {ready && sender && issue && <p className="rich-answer-caption" role="status">
+      {t(`richAnswer.${issue}`, { limit: RICH_EXPRESSION_ARGUMENT_LIMIT })}
+    </p>}
     {status === 'failed' && <p className="rich-answer-caption" role="alert">{t('richAnswer.sendFailed')}</p>}
   </div>;
 }
@@ -205,11 +222,7 @@ function RichAnswerDocument({
     const node = doc.nodes.get(id);
     if (!node) return null;
     const imageSource = node.kind === 'image' ? richString(node, 'src').trim() : '';
-    // Both media namespaces are served by the Desktop protocol. Reloading a
-    // placeholder or truncated reference cannot recover the existing image.
-    if (/^cindy-media:/i.test(imageSource)
-      && !/^cindy-media:\/\/blobs\/[a-f0-9]{64}\.[a-zA-Z0-9]+$/.test(imageSource)
-      && !/^cindy-media:\/\/client-wallpaper\/[a-f0-9]{64}\.(webp|mp4)$/.test(imageSource)) {
+    if (isInvalidRichImageSource(imageSource)) {
       const message = t('richAnswer.requestImageAgainMessage', {
         name: JSON.stringify(richString(node, 'alt', id)),
         source: JSON.stringify(imageSource),
@@ -397,7 +410,7 @@ function RichAnswerDocument({
         );
       case 'button':
         if (Object.prototype.hasOwnProperty.call(node.props, 'send'))
-          return <RichSendAction node={node} text={richSendText(node, values)} receiptKey={`${stateKey}:sent:${id}`} ready={complete && !doc.issues} />;
+          return <RichSendAction node={node} {...richSendPreview(node, values)} receiptKey={`${stateKey}:sent:${id}`} ready={complete && !doc.issues} />;
         return (
           <Button type="button" variant="secondary" tone="quiet" onClick={() => apply(node)}>
             {label || richString(node, 'text')}
@@ -405,7 +418,7 @@ function RichAnswerDocument({
         );
       case 'form':
         if (Object.prototype.hasOwnProperty.call(node.props, 'send'))
-          return <div className="rich-answer-layout rich-answer-stack">{children}<RichSendAction node={node} text={richSendText(node, values)} receiptKey={`${stateKey}:sent:${id}`} ready={complete && !doc.issues} /></div>;
+          return <div className="rich-answer-layout rich-answer-stack">{children}<RichSendAction node={node} {...richSendPreview(node, values)} receiptKey={`${stateKey}:sent:${id}`} ready={complete && !doc.issues} /></div>;
         return (
           <form
             className="rich-answer-layout rich-answer-stack"

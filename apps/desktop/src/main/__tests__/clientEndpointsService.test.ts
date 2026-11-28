@@ -73,6 +73,7 @@ import {
   getClientEndpointForRealm,
   getResolvedClientEndpoints,
   initClientEndpoints,
+  isCloudInstanceServiceConfigured,
   loadClientEndpointsForRealm,
   isUsingCachedClientEndpoints,
   registerClientEndpointsIpc,
@@ -1757,5 +1758,56 @@ describe('getter / IPC', () => {
       authApiBaseUrl: 'https://auth.global.example.com',
     });
     expect(netRequest).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('isCloudInstanceServiceConfigured', () => {
+  const withService = (url: string) => ({ ...TEST_CLIENT_ENDPOINTS, cloudInstanceApiBaseUrl: url });
+
+  it('is false before startup and for a manifest without the endpoint', () => {
+    expect(isCloudInstanceServiceConfigured()).toBe(false);
+    resetClientEndpointsForTest(TEST_CLIENT_ENDPOINTS, { buildRegion: 'cn' });
+    expect(isCloudInstanceServiceConfigured()).toBe(false);
+  });
+
+  it('follows any loaded region and never reads the network', () => {
+    resetClientEndpointsForTest(withService('https://cis.example.com'), { buildRegion: 'cn' });
+    expect(isCloudInstanceServiceConfigured()).toBe(true);
+    resetClientEndpointsForTest(TEST_CLIENT_ENDPOINTS, {
+      buildRegion: 'cn',
+      realmEndpoints: { global: withService('https://cis.example.com') },
+    });
+    expect(isCloudInstanceServiceConfigured()).toBe(true);
+    expect(netRequest).not.toHaveBeenCalled();
+  });
+});
+
+// A private manifest keeps its cloud endpoint across restarts and same-region account switches;
+// the other region never inherits it.
+describe('cloud instance endpoint in a local manifest', () => {
+  it('survives restarts and same-region account switches only', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cloud-endpoint-manifest-'));
+    const file = path.join(root, 'endpoint.json');
+    vi.stubEnv('XDT_ENDPOINT_MANIFEST_FILE', file);
+    vi.stubEnv('XDT_ENDPOINTS_CDN', '0');
+    fs.writeFileSync(file, JSON.stringify({ ...JSON.parse(FULL_MANIFEST), cloudInstanceApiBaseUrl: 'https://cis.example.com' }));
+    try {
+      for (let launch = 0; launch < 2; launch++) {
+        resetClientEndpointsForTest();
+        expect(await initClientEndpoints()).toBe(true);
+        const { buildRegion } = (await import('../clientEndpointsService')).getClientEndpointRealmConfig();
+        for (let account = 0; account < 3; account++) {
+          resetClientEndpointRealm();
+          await loadClientEndpointsForRealm(buildRegion);
+          activateClientEndpointRealm(buildRegion);
+          expect(getClientEndpointForRealm(buildRegion, 'cloudInstanceApiBaseUrl')).toBe('https://cis.example.com');
+        }
+        expect(() => getClientEndpointForRealm(buildRegion === 'cn' ? 'global' : 'cn', 'cloudInstanceApiBaseUrl')).toThrow(/not loaded/);
+        expect(netRequest).not.toHaveBeenCalled();
+      }
+    } finally {
+      vi.unstubAllEnvs();
+      fs.rmSync(root, { recursive: true, force: true });
+    }
   });
 });

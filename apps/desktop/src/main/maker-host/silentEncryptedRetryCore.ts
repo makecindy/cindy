@@ -7,6 +7,8 @@ import {
   portableOverrideSettings,
   type OverrideSettingsState,
 } from './override-settings-file.js';
+import { validateAdditionalSettingsOverrides } from '../../shared/settingsEditableCatalog.js';
+import { inspectSettingsFile, isSettingBoolean, validateOptionalSettingsFields } from './settings-inspection.js';
 
 
 export interface SilentEncryptedRetrySettings {
@@ -38,6 +40,7 @@ function normalize(raw: unknown): SilentEncryptedRetrySettings {
 }
 
 const store = createOverrideSettingsFile<SilentEncryptedRetrySettings>({
+  validateOverrides: raw => validateAdditionalSettingsOverrides('silentEncryptedRetry', raw),
   filePath: settingsFilePath,
   defaults: DEFAULTS,
   normalize,
@@ -53,5 +56,12 @@ const store = createOverrideSettingsFile<SilentEncryptedRetrySettings>({
 } function resetSilentEncryptedRetrySettings(): SilentEncryptedRetrySettings {
   return store.reset();
 } const silentEncryptedRetryPortableSettings = portableOverrideSettings(store);
-return { readSilentEncryptedRetrySettings, readSilentEncryptedRetrySettingsState, writeSilentEncryptedRetryEnabled, resetSilentEncryptedRetrySettings, silentEncryptedRetryPortableSettings };
+function inspectSilentEncryptedRetrySettings() {
+  return inspectSettingsFile({ filePath: settingsFilePath, defaults: DEFAULTS, normalize,
+    validate: (raw) => validateOptionalSettingsFields(raw, { enabled: isSettingBoolean }),
+  });
+}
+/** Internal Host settings adapter; no new IPC or persistence location. */
+function getSilentEncryptedRetrySettingsStore() { return store; }
+return { readSilentEncryptedRetrySettings, readSilentEncryptedRetrySettingsState, writeSilentEncryptedRetryEnabled, resetSilentEncryptedRetrySettings, silentEncryptedRetryPortableSettings, inspectSilentEncryptedRetrySettings, getSilentEncryptedRetrySettingsStore };
 }

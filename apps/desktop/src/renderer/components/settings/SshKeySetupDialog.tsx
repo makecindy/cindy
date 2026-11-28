@@ -228,9 +228,10 @@ export function SshKeySetupDialog({ hostId, hostInline, open, onOpenChange, onKe
             </Dialog.Title>
             <Dialog.Close asChild>
               <button
+                data-settings-search-action="Closes the SSH key dialog; changes no setting"
                 type="button"
                 aria-label={t('settings.remote.keys.close')}
-                className="flex h-6 w-6 items-center justify-center rounded-md transition-colors hover:bg-[var(--surface-chip,#f5f5f5)]"
+                className="flex h-6 w-6 items-center justify-center rounded-lg transition-colors hover:bg-[var(--surface-chip)]"
                 style={{ color: 'var(--text-secondary, #737373)' }}
               >
                 <X size={16} />
@@ -403,7 +404,7 @@ function KeyList({
                       {key.privateKeyPath.split(/[/\\]/).pop()}
                     </span>
                     <span
-                      className="text-11 leading-none rounded px-1.5 py-0.5 inline-flex items-center"
+                      className="text-11 leading-none rounded-full px-1.5 py-0.5 inline-flex items-center"
                       style={{
                         backgroundColor: 'var(--surface-chip, #f5f5f5)',
                         color: 'var(--settings-integration-subtitle)',
@@ -413,7 +414,7 @@ function KeyList({
                     </span>
                     {key.inAgent ? (
                       <span
-                        className="text-11 leading-none rounded px-1.5 py-0.5 inline-flex items-center gap-1"
+                        className="text-11 leading-none rounded-full px-1.5 py-0.5 inline-flex items-center gap-1"
                         style={{
                           backgroundColor: 'var(--surface-chip, #f5f5f5)',
                           color: 'var(--settings-section-title)',
@@ -424,7 +425,7 @@ function KeyList({
                       </span>
                     ) : (
                       <span
-                        className="text-11 leading-none rounded px-1.5 py-0.5 inline-flex items-center gap-1"
+                        className="text-11 leading-none rounded-full px-1.5 py-0.5 inline-flex items-center gap-1"
                         style={{
                           backgroundColor: 'var(--surface-chip, #f5f5f5)',
                           color: 'var(--settings-integration-warning, #b45309)',
@@ -515,12 +516,13 @@ function GenerateForm({ generating, onSubmit, onCancel }: GenerateFormProps) {
           {t('settings.remote.keys.nameLabel')}
         </span>
         <input
+          data-settings-search-action="Names the SSH key that is about to be generated"
           type="text"
           value={name}
           onChange={(e) => setName(e.target.value)}
           placeholder="cindy"
           disabled={generating}
-          className="h-8 rounded-md border bg-transparent px-2 text-12 outline-none"
+          className="h-8 rounded-full border bg-transparent px-2 text-12 outline-none"
           style={{
             borderColor: 'var(--settings-theme-card-border)',
             color: 'var(--settings-section-title)',
@@ -653,8 +655,8 @@ function UnlockDialog({ privateKeyPath, onClose, onSubmit }: UnlockDialogProps) 
               {t('settings.remote.keys.unlockTitle', { name: fileName })}
             </Dialog.Title>
             <Dialog.Close asChild>
-              <button type="button" aria-label={t('settings.remote.keys.close')}
-                      className="flex h-6 w-6 items-center justify-center rounded-md transition-colors hover:bg-[var(--surface-chip,#f5f5f5)]"
+              <button type="button" data-settings-search-action="Closes the SSH key unlock dialog; changes no setting" aria-label={t('settings.remote.keys.close')}
+                      className="flex h-6 w-6 items-center justify-center rounded-lg transition-colors hover:bg-[var(--surface-chip)]"
                       style={{ color: 'var(--text-secondary, #737373)' }}>
                 <X size={14} />
               </button>
@@ -737,7 +739,7 @@ function PasswordInput({
         {label}
       </span>
       <div
-        className="flex items-center rounded-md border"
+        className="flex items-center rounded-full border"
         style={{ borderColor: errorText
           ? 'var(--settings-integration-warning, #b45309)'
           : 'var(--settings-theme-card-border)' }}
@@ -897,7 +899,7 @@ function CodeBlock({
         </Button>
       </div>
       <pre
-        className="max-h-32 overflow-auto rounded-md border p-2.5 text-11 leading-relaxed whitespace-pre-wrap break-all"
+        className="max-h-32 overflow-auto rounded-lg border p-2.5 text-11 leading-relaxed whitespace-pre-wrap break-all"
         style={{
           backgroundColor: 'var(--settings-input-bg, #faf9f5)',
           borderColor: 'var(--settings-input-border, #d7d7d4)',
@@ -1014,9 +1016,10 @@ function AgentTroubleDialog({ state, onClose }: AgentTroubleDialogProps) {
             </Dialog.Title>
             <Dialog.Close asChild>
               <button
+                data-settings-search-action="Closes the SSH agent troubleshooting dialog; changes no setting"
                 type="button"
                 aria-label={t('settings.remote.keys.close')}
-                className="flex h-6 w-6 items-center justify-center rounded-md transition-colors hover:bg-[var(--surface-chip,#f5f5f5)]"
+                className="flex h-6 w-6 items-center justify-center rounded-lg transition-colors hover:bg-[var(--surface-chip)]"
                 style={{ color: 'var(--text-secondary, #737373)' }}
               >
                 <X size={14} />

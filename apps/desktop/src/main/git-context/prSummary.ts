@@ -1,6 +1,6 @@
 import type { GithubClient } from '@cindy/github-client';
 import type { PrChecksSummary } from '@cindy/maker-shared';
-import type { PrStatusQuery } from './prStatusService';
+import type { PrRemoteState, PrStatusQuery } from './prStatusService';
 
 interface StateCount {
   state: string;
@@ -196,5 +196,219 @@ export async function fetchPrSummary(
     checks,
     mergeState: pr.mergeStateStatus ?? null,
     reviewDecision: pr.reviewDecision ?? null,
+  };
+}
+
+const PR_REMOTE_QUERY = `query($owner: String!, $repo: String!, $number: Int!) {
+  repository(owner: $owner, name: $repo) {
+    pullRequest(number: $number) {
+      state
+      isDraft
+      merged
+      mergedAt
+      title
+      url
+      body
+      updatedAt
+      headRefName
+      headRefOid
+      baseRefName
+      baseRefOid
+      mergeable
+      mergeStateStatus
+      reviewDecision
+      author { login avatarUrl url }
+      labels(first: 20) { nodes { name color } }
+      reviewRequests(first: 20) {
+        nodes {
+          requestedReviewer {
+            __typename
+            ... on User { login }
+            ... on Team { slug name }
+          }
+        }
+      }
+      reviewThreads(first: 100) { nodes { isResolved } pageInfo { hasNextPage } }
+      commits(last: 1) { nodes { commit { oid statusCheckRollup {
+        contexts(first: 100) {
+          totalCount checkRunCountsByState { state count } statusContextCountsByState { state count }
+          nodes { __typename ... on CheckRun { databaseId name status conclusion
+            checkSuite { databaseId app { slug } workflowRun { workflow { databaseId } } } } }
+          pageInfo { hasNextPage }
+        }
+      } } } }
+    }
+  }
+}`;
+
+interface PrRemoteGraphqlResponse {
+  repository: {
+    pullRequest: {
+      state: 'OPEN' | 'CLOSED' | 'MERGED' | string;
+      isDraft?: boolean | null;
+      merged?: boolean | null;
+      mergedAt?: string | null;
+      title?: string | null;
+      url?: string | null;
+      body?: string | null;
+      updatedAt?: string | null;
+      headRefName?: string | null;
+      headRefOid?: string | null;
+      baseRefName?: string | null;
+      baseRefOid?: string | null;
+      mergeable?: 'MERGEABLE' | 'CONFLICTING' | 'UNKNOWN' | string | null;
+      mergeStateStatus?: string | null;
+      reviewDecision?: string | null;
+      author?: { login?: string | null; avatarUrl?: string | null; url?: string | null } | null;
+      labels?: { nodes?: Array<{ name?: string | null; color?: string | null } | null> | null } | null;
+      reviewRequests?: {
+        nodes?: Array<{
+          requestedReviewer?: { __typename?: string; login?: string | null; slug?: string | null; name?: string | null } | null;
+        } | null> | null;
+      } | null;
+      reviewThreads?: { nodes: { isResolved: boolean }[]; pageInfo: { hasNextPage: boolean } } | null;
+      commits?: {
+        nodes: { commit: { oid: string; statusCheckRollup: { contexts: RollupCounts } | null } }[];
+      } | null;
+    } | null;
+  } | null;
+}
+
+function mapGraphqlMergeable(value: string | null | undefined): boolean | null {
+  if (value === 'MERGEABLE') return true;
+  if (value === 'CONFLICTING') return false;
+  return null;
+}
+
+/**
+ * Single-request GraphQL PR status + summary read (0 REST core quota).
+ * Returns null only when GraphQL returned an empty repository/PR shape is converted to 404.
+ */
+export async function fetchPrRemoteGraphql(
+  client: GithubClient,
+  q: PrStatusQuery,
+): Promise<PrRemoteState> {
+  const data = await client.graphql<PrRemoteGraphqlResponse>(PR_REMOTE_QUERY, {
+    owner: q.owner,
+    repo: q.repo,
+    number: q.prNumber,
+  });
+  const pr = data.repository?.pullRequest;
+  if (!pr) {
+    throw Object.assign(new Error('NOT_FOUND'), { status: 404 });
+  }
+  const headSha = pr.headRefOid ?? '';
+  const commit = pr.commits?.nodes?.[0]?.commit;
+  const checks =
+    headSha && commit?.oid === headSha
+      ? commit.statusCheckRollup
+        ? summarizeChecks(commit.statusCheckRollup.contexts)
+        : { total: 0, failed: 0, passed: 0, pending: 0, skipped: 0 }
+      : null;
+  const threads = pr.reviewThreads;
+  const unresolved = !threads || threads.pageInfo.hasNextPage
+    ? null
+    : threads.nodes.filter((n) => !n.isResolved).length;
+  const merged = Boolean(pr.merged || pr.state === 'MERGED');
+  const mergeable = mapGraphqlMergeable(pr.mergeable);
+  const reviewRequests: Array<{ login: string } | { slug: string; name?: string }> = [];
+  for (const node of pr.reviewRequests?.nodes ?? []) {
+    const reviewer = node?.requestedReviewer;
+    if (!reviewer) continue;
+    if (reviewer.login) reviewRequests.push({ login: reviewer.login });
+    else if (reviewer.slug) {
+      reviewRequests.push({ slug: reviewer.slug, ...(reviewer.name ? { name: reviewer.name } : {}) });
+    }
+  }
+  const labels = (pr.labels?.nodes ?? []).flatMap((label) =>
+    label?.name ? [{ name: label.name, ...(label.color ? { color: label.color } : {}) }] : [],
+  );
+  return {
+    metadata: {
+      body: pr.body ?? null,
+      author: pr.author?.login
+        ? {
+            login: pr.author.login,
+            ...(pr.author.avatarUrl ? { avatar_url: pr.author.avatarUrl } : {}),
+            ...(pr.author.url ? { html_url: pr.author.url } : {}),
+          }
+        : null,
+      base_sha: pr.baseRefOid ?? null,
+      mergeable,
+      merge_state: pr.mergeStateStatus ? pr.mergeStateStatus.toLowerCase() : null,
+      updated_at: pr.updatedAt ?? null,
+      merged_at: pr.mergedAt ?? null,
+      labels,
+      review_requests: reviewRequests,
+    },
+    state: pr.state === 'OPEN' ? 'open' : 'closed',
+    draft: Boolean(pr.isDraft),
+    merged,
+    merged_at: pr.mergedAt ?? null,
+    title: pr.title ?? '',
+    html_url: pr.url ?? `https://github.com/${q.owner}/${q.repo}/pull/${q.prNumber}`,
+    branch: pr.headRefName ?? '',
+    head_sha: headSha,
+    base_branch: pr.baseRefName ?? '',
+    review_decision: pr.reviewDecision ?? null,
+    unresolved_count: unresolved,
+    checks,
+    merge_state: pr.mergeStateStatus ?? null,
+  };
+}
+
+/**
+ * GraphQL-first PR status fetch (1 GraphQL call, 0 REST core calls), falling back to REST
+ * `getPullRequest` only when GraphQL is unsupported or unavailable (e.g. legacy fine-grained PAT
+ * or exhausted GraphQL bucket while REST remains available). Auth 401 and clean 404 short-circuit.
+ */
+export async function fetchPrRemoteWithFallback(
+  client: GithubClient,
+  q: PrStatusQuery,
+  log?: { debug?: (msg: string, meta?: unknown) => void },
+): Promise<PrRemoteState> {
+  try {
+    return await fetchPrRemoteGraphql(client, q);
+  } catch (err) {
+    const status = (err as { status?: unknown })?.status;
+    if (status === 401 || status === 404) throw err;
+    log?.debug?.('PR GraphQL remote fetch failed, falling back to REST', {
+      key: `${q.owner}/${q.repo}#${q.prNumber}`,
+      err: String(err),
+    });
+  }
+  const pr = await client.getPullRequest(q.prNumber);
+  const metadata = pr as typeof pr & {
+    mergeable?: boolean | null;
+    mergeable_state?: string;
+    updated_at?: string;
+    labels?: unknown[];
+    requested_reviewers?: unknown[];
+  };
+  return {
+    metadata: {
+      body: pr.body,
+      author: pr.user,
+      base_sha: pr.base.sha ?? null,
+      mergeable: metadata.mergeable ?? null,
+      merge_state: metadata.mergeable_state ?? null,
+      updated_at: metadata.updated_at ?? null,
+      merged_at: pr.merged_at ?? null,
+      labels: metadata.labels ?? [],
+      review_requests: metadata.requested_reviewers ?? [],
+    },
+    state: pr.state,
+    draft: pr.draft,
+    merged: pr.merged,
+    merged_at: pr.merged_at,
+    title: pr.title,
+    html_url: pr.html_url,
+    branch: pr.head.ref,
+    head_sha: pr.head.sha,
+    base_branch: pr.base.ref,
+    review_decision: null,
+    unresolved_count: null,
+    checks: null,
+    merge_state: null,
   };
 }

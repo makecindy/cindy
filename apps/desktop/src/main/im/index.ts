@@ -1,4 +1,5 @@
 import { wireIMessageOrchestrator } from './imessage/adapter';
+import { configureCloudWechatManagement } from '../host-settings/managementBots.js';
 /**
  * main/im/index.ts
  * ---------------------------------------------------------------------------
@@ -92,6 +93,7 @@ import { listTelegramKnownGroups } from './telegram/groupWindow';
 import { wireDingTalkOrchestrator } from './dingtalk';
 import { wireWechatOrchestrator } from './wechat';
 import { wireWecomOrchestrator } from './wecom';
+import { registerPersonalImChatSources } from './chatSourcesWiring';
 import { resetTelegramGroupContextCursors } from './telegram/groupWindow';
 import { resetChannelGroupContextCursors } from './shared/channelGroupWindow';
 import { getImOrchestrator, listImOrchestrators } from './shared/orchestrator';
@@ -108,6 +110,7 @@ import {
 } from './shared/botImPersonalAdoption';
 import { readTelegramBehavior } from './telegram/behaviorStore';
 import { readBotImConnection, secretKeyPrefixFor } from './shared/botImConnectionStore';
+import { activeOwnerScopeKey } from '../appSessionState.js';
 import { ownerScopedImSecrets } from './ownerScopedStorage';
 import { backfillLegacyImDefaultRoutes, backfillLegacyImDefaultRoutesAtStartup } from './shared/channelDefaultRouteSync';
 import type { ImDefaultSettingsChannel } from '../../shared/imDefaultSettings';
@@ -128,7 +131,15 @@ import { getUpdateStatus, isUpdateRelaunchImminent } from '../updateService';
 
 import { createLogger } from '../logger';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer';
+import { readPersonalChannelChoice } from './shared/personalChannelStore';
+import {
+  broadcastPersonalChannelState,
+  clearPersonalChannelState,
+  registerPersonalChannelIpc,
+} from './shared/personalChannelIpc';
 import { throwIpcError } from '../utils/ipcValidate';
+import { registerCloudDomainCall } from '../host-settings/managementCalls';
+import { CLOUD_WECHAT_WORKING_DIR_SET } from '../../shared/cloudImSettings';
 import {
   readWechatChannelSettings,
   resetWechatWorkingDir,
@@ -139,6 +150,7 @@ import {
 export function registerBotImConnectionIpc(): void {
   registerBotImConnectionRuntimeIpc();
   registerBotImPersonalAdoptionIpc();
+  registerPersonalChannelIpc();
 }
 export {
   registerTelegramBotConfigIpc,
@@ -276,13 +288,23 @@ export function startImOrchestrators(): void {
     }
   });
 
-  wireFeishuOrchestrator(feishuIm, FEISHU_CONFIG);
-  wireDiscordOrchestrator(discordIm, DISCORD_CONFIG);
-  wireTelegramOrchestrator(telegramIm, TELEGRAM_CONFIG);
-  wireDingTalkOrchestrator(dingtalkIm, DINGTALK_CONFIG);
+  // 设置页那份个人机器人: 「谁来回复」选了伙伴时消息交给伙伴(凭证不动, 每条消息现读)。
+  const personalCompanion = (channel: 'feishu' | 'discord' | 'telegram' | 'dingtalk' | 'wecom') =>
+    () => readPersonalChannelChoice(channel).companionBotId;
+  wireFeishuOrchestrator(feishuIm, FEISHU_CONFIG, { companionBotId: personalCompanion('feishu') });
+  wireDiscordOrchestrator(discordIm, DISCORD_CONFIG, { companionBotId: personalCompanion('discord') });
+  wireTelegramOrchestrator(telegramIm, TELEGRAM_CONFIG, { companionBotId: personalCompanion('telegram') });
+  wireDingTalkOrchestrator(dingtalkIm, DINGTALK_CONFIG, { companionBotId: personalCompanion('dingtalk') });
   wireWechatOrchestrator(wechatIm, WECHAT_CONFIG);
-  wireWecomOrchestrator(wecomIm, WECOM_CONFIG);
+  wireWecomOrchestrator(wecomIm, WECOM_CONFIG, { companionBotId: personalCompanion('wecom') });
+  // 设置页「群聊」总表的群名单来源(各平台的个人机器人)。
+  registerPersonalImChatSources();
 
+  configureCloudWechatManagement({
+    state: () => wechatIm.getState(),
+    authorize: signal => connectionLifecycle.runWhileStarted(() => wechatIm.authorize(signal)),
+    unbind: () => connectionLifecycle.runWhileStarted(() => wechatIm.unbind()),
+  });
   // 伙伴自有 IM 连接: 每条记录一份传输层 + 编排器, 与上面设置页那份并存。
   // 实例在 initializeImConnection 里按记录起, 这里只注入装配方式。
   configureBotImConnectionRuntime({
@@ -369,6 +391,7 @@ export function startImOrchestrators(): void {
       record.channel === 'telegram' && record.botContextId
         ? listTelegramKnownGroups(record.botContextId)
         : Promise.resolve([]),
+    personalFeishuIm: () => feishuIm,
   });
 
   // 把设置页那份个人 bot 移给伙伴: 停 = 与登出同一个 dispose(静默、凭证保留),
@@ -378,24 +401,28 @@ export function startImOrchestrators(): void {
   configureBotImPersonalAdoption({
     isReady: () => connectionLifecycle.isStarted(),
     telegramGroupActivation: () => readTelegramBehavior().groupActivation,
+    onPersonalChannelCleared: (channel) => broadcastPersonalChannelState(channel),
     personal: {
       telegram: {
         identity: () => {
           const username = telegramIm.getConfigState().botUsername;
           return username ? `@${username}` : null;
         },
+        isBusy: () => getImOrchestrator('telegram')?.turnRunner.hasActiveWork() === true,
         stop: () => telegramIm.dispose(),
         start: () => telegramIm.init(),
         clear: () => telegramIm.init(),
       },
       feishu: {
         identity: () => feishuIm.getBotAppId() ?? (ownerScopedImSecrets.read('feishu_bot_app_id')?.trim() || null),
+        isBusy: () => getImOrchestrator('feishu')?.turnRunner.hasActiveWork() === true,
         stop: () => feishuIm.dispose(),
         start: () => feishuIm.init(),
         clear: () => feishuIm.clearCredentials(),
       },
       wecom: {
         identity: () => wecomIm.getConfigState().botId,
+        isBusy: () => getImOrchestrator('wecom')?.turnRunner.hasActiveWork() === true,
         stop: () => wecomIm.dispose(),
         start: () => wecomIm.init(),
         clear: async () => {
@@ -404,6 +431,7 @@ export function startImOrchestrators(): void {
       },
       dingtalk: {
         identity: () => dingtalkIm.getPublicState().appKey,
+        isBusy: () => getImOrchestrator('dingtalk')?.turnRunner.hasActiveWork() === true,
         stop: () => dingtalkIm.dispose(),
         start: () => dingtalkIm.init(),
         clear: () => dingtalkIm.clearCredentials(),
@@ -413,6 +441,7 @@ export function startImOrchestrators(): void {
           const status = discordIm.getStatus();
           return status.kind === 'connected' && status.appId ? status.appId : null;
         },
+        isBusy: () => getImOrchestrator('discord')?.turnRunner.hasActiveWork() === true,
         stop: () => discordIm.dispose(),
         start: () => discordIm.init(),
         clear: () => discordIm.init(),
@@ -420,7 +449,7 @@ export function startImOrchestrators(): void {
     },
   });
 
-  const setWechatCompanion = (botId: string | null) =>
+  const setWechatCompanion = (botId: string | null, options?: { allowReassign?: boolean }) =>
     connectionLifecycle.runWhileStarted(async () => {
       const generation = captureImAccountGeneration();
       if (generation === null) throwIpcError('PRECONDITION_FAILED', 'Account unavailable');
@@ -428,7 +457,7 @@ export function startImOrchestrators(): void {
         await setWechatCompanionBinding(botId, (commit) => wechatIm.updateCompanionBinding(() => {
           if (!isImAccountGenerationCurrent(generation)) throw new Error('ACCOUNT_CHANGED');
           commit();
-        }));
+        }), options);
       } catch (error) {
         const code = error instanceof Error ? error.message : '';
         throwIpcError('PRECONDITION_FAILED',
@@ -442,7 +471,9 @@ export function startImOrchestrators(): void {
     });
   const unbindWechat = () =>
     connectionLifecycle.runWhileStarted(async () => {
+      const ownerKey = activeOwnerScopeKey();
       await wechatIm.unbind();
+      await clearPersonalChannelState('wechat', ownerKey);
       return { ok: true };
     });
   // The teammate settings host (a remote Desktop's pages) uses the same operations; browser
@@ -476,12 +507,15 @@ export function startImOrchestrators(): void {
     assertTrustedAppRendererEvent(event);
     return readWechatChannelSettings();
   });
-  ipcMain.handle('wechatBot:set-companion', (event, botId: unknown) => {
+  ipcMain.handle('wechatBot:set-companion', (event, botId: unknown, options?: unknown) => {
     assertTrustedAppRendererEvent(event);
     if (botId !== null && (typeof botId !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(botId))) {
       throwIpcError('INVALID_ARGUMENT', 'Invalid buddy');
     }
-    return setWechatCompanion(botId as string | null);
+    const allowReassign = Boolean(
+      options && typeof options === 'object' && (options as { allowReassign?: unknown }).allowReassign === true,
+    );
+    return setWechatCompanion(botId as string | null, allowReassign ? { allowReassign: true } : undefined);
   });
   ipcMain.handle('wechatBot:choose-working-directory', async (event) => {
     assertTrustedAppRendererEvent(event);
@@ -518,6 +552,25 @@ export function startImOrchestrators(): void {
       return resetWechatWorkingDir();
     } catch {
       throw new Error('WECHAT_WORKING_DIR_UPDATE_FAILED');
+    }
+  });
+  // The owner's cloud settings page reads and resets the same settings, and sets a directory
+  // chosen in this instance's directory browser (there is no dialog to show here).
+  registerCloudDomainCall('wechatBot:get-channel-settings', () => readWechatChannelSettings());
+  registerCloudDomainCall('wechatBot:reset-working-directory', () => {
+    try {
+      return resetWechatWorkingDir();
+    } catch {
+      throwIpcError('INTERNAL', 'WECHAT_WORKING_DIR_UPDATE_FAILED');
+    }
+  });
+  registerCloudDomainCall(CLOUD_WECHAT_WORKING_DIR_SET, (selected) => {
+    if (typeof selected !== 'string' || selected.length > 4096)
+      throwIpcError('INVALID_PARAMS', 'a directory path is required');
+    try {
+      return writeWechatWorkingDir(selected as string);
+    } catch {
+      throwIpcError('INVALID_PARAMS', 'WECHAT_WORKING_DIR_INVALID');
     }
   });
 

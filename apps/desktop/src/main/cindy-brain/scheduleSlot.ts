@@ -34,12 +34,14 @@
 import { randomUUID } from 'node:crypto';
 
 import { hasDeliveryNamespace, pluginAutomationHostKey } from '../../shared/pluginIdentity.js';
+import { installedGhostStoragePart } from '../../shared/pluginIdentity.js';
 
 import {
   GHOST_SCHEDULE_DRAFT_MIN_INTERVAL_MS,
   GHOST_SCHEDULE_DRAFT_MIN_INTERVAL_SUGGESTION_MS,
   GHOST_SCHEDULE_DRAFT_NAME_MAX_CHARS,
   GHOST_SCHEDULE_DRAFT_PROMPT_MAX_CHARS,
+  ghostControlPointActive,
   type GhostPipeScheduleDraftResult,
   type GhostScheduleDraftPush,
   type InstalledGhost,
@@ -57,7 +59,7 @@ export interface ScheduleSlotDeps {
    * 保存成多条自动化。装配处负责选窗(focused ?? 第一个),本槽只管投一次。
    */
   sendToWindow(payload: GhostScheduleDraftPush): boolean;
-  sendToMobile?(pageId: string, payload: GhostScheduleDraftPush): boolean;
+  sendToMobile?(pageId: string, payload: GhostScheduleDraftPush, instanceId: string): boolean;
   now?(): number;
   /** 仅测试注入;生产用 randomUUID。 */
   newRequestId?(): string;
@@ -122,6 +124,13 @@ export function isMainShellWindowUrl(rawUrl: string): boolean {
     // utility 窗的统一约定:按 key 排除,不枚举取值(见上方第 2 条)。
     parsed.searchParams.has('view') ||
     parsed.searchParams.has('sidebarWindow') ||
+    // Remote transport peers use a separate renderer (and dev-server port).
+    ['direct', 'files', 'recording'].includes(parsed.searchParams.get('mode') ?? '') ||
+    // These renderer/index.tsx entries never mount MainLayout. In particular the
+    // prewarmed resource window may precede the visible main window in Electron.
+    ['cloudLoginWindow', 'recordingPreview', 'remoteDesktopViewer', 'resourceUsageWindow',
+      'regionScreenshot', 'regionScreenshotEditor', 'regionScreenshotPin', 'quotaTray']
+      .some(key => parsed.searchParams.get(key) === '1') ||
     // 会话副窗:挂完整壳、技术上接得住,但它不是用户建任务时看的那个窗口。
     // 取 === '1' 而不是 has():带 secondaryWindow=0 的主窗不该被误排除。
     parsed.searchParams.get('secondaryWindow') === '1'
@@ -155,6 +164,10 @@ export class GhostScheduleSlot {
       return fail('INVALID_REQUEST', 'schedule-request 载荷必须是对象');
     }
     const request = payload as Record<string, unknown>;
+    if (request.preRunCheck !== undefined && typeof request.preRunCheck !== 'boolean')
+      return fail('INVALID_REQUEST', 'preRunCheck must be boolean');
+    if (request.preRunCheck === true && !ghostControlPointActive(ghost, 'will-schedule-run'))
+      return fail('PERMISSION_DENIED', 'The plugin has not been approved for automation checks');
     if (request.mobilePageId !== undefined && (typeof request.mobilePageId !== 'string' || request.mobilePageId.length > 128)) return fail('INVALID_REQUEST', 'Invalid mobile page context');
     if (typeof request.name !== 'string' || request.name.trim().length === 0) {
       return fail('INVALID_REQUEST', 'name 必填且必须是非空字符串(预填的任务名)');
@@ -230,11 +243,12 @@ export class GhostScheduleSlot {
       name,
       prompt: prompt + address,
       ...(intervalMs !== undefined ? { intervalMs } : {}),
+      ...(request.preRunCheck === true ? { preRunPlugin: { pluginId: installedGhostStoragePart(ghost), onFailure: 'allow' as const } } : {}),
     };
     // Older controllers save only the edited name and prompt. The bound draft belongs to the
     // execution computer, whose native editor round-trips its immutable binding.
     const delivered = !primaryHostKey && typeof request.mobilePageId === 'string'
-      ? this.deps.sendToMobile?.(request.mobilePageId, draft) : this.deps.sendToWindow(draft);
+      ? this.deps.sendToMobile?.(request.mobilePageId, draft, installedGhostStoragePart(ghost)) : this.deps.sendToWindow(draft);
     if (!delivered) {
       return fail('HOST_NOT_READY', '当前没有可用的宿主窗口');
     }

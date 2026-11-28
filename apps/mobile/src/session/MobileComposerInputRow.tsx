@@ -94,6 +94,11 @@ export interface MobileComposerInputRowProps {
   onEntryTransitionComplete?(): void;
   /** Compact (non-card) outer height; on the iOS composer dock it matches the new-task button. */
   collapsedHeight?: number;
+  /**
+   * Text that no longer fits the one-line collapsed pill. Shown from its start on one line, ending in an
+   * ellipsis, instead of the native input scrolled to its last line with the line above cut in half.
+   */
+  collapsedOverflowText?: string;
   /** When set, a tap on the compact input calls this instead of focusing directly. */
   onCollapsedPress?(): void;
   /** See ComposerFrame; changes when onCollapsedPress opens the pill. */
@@ -222,6 +227,7 @@ export function MobileComposerInputRow({
   entryTransitionId,
   onEntryTransitionComplete,
   collapsedHeight,
+  collapsedOverflowText,
   onCollapsedPress,
   expandToken,
   accessibilityHint,
@@ -288,6 +294,17 @@ export function MobileComposerInputRow({
   // The collapsed viewport is one line, but a multiline native input wraps its
   // placeholder. Draw an ellipsized hint without changing/remounting the editor.
   const collapsedPlaceholder = geometricSingleLine && inputElement == null && value.length === 0 && !!placeholder;
+  const collapsedPreview = geometricSingleLine && inputElement == null && value.length > 0 && !!collapsedOverflowText;
+  // The row's own opaque surface, from the same source as the row: its base colour, or the caller's rowStyle
+  // override (which must then be opaque too). A native glass frame (iOS 26+; never on Android) leaves the row
+  // transparent, so there is none. Only resolved while the preview shows.
+  const rowSurface = !collapsedPreview || nativeComposerFrameAvailable
+    ? null
+    : (StyleSheet.flatten(rowStyle)?.backgroundColor ?? styles.row.backgroundColor);
+  const focusInputKeepingSelection = () => {
+    if (editable === false) return;
+    (inputRef as { current?: { focus?(): void } | null } | undefined)?.current?.focus?.();
+  };
   // iOS composer dock pill: every end control sits concentric with the pill,
   // i.e. its visible circle is as far from the pill edge as from the top and
   // bottom. The leading attachment keeps its 44pt hit area (its visible 34pt
@@ -358,10 +375,36 @@ export function MobileComposerInputRow({
         geometricSingleLine && styles.inputGeometricSingleLine,
         { maxHeight },
         inputStyle,
+        // Only without an opaque row surface to cover it: the native text stays laid out, its glyphs hidden.
+        collapsedPreview && rowSurface == null && styles.inputUnderPreview,
       ]}
       testID={inputTestID}
       value={value}
     />
+  );
+  const inputContent = (
+    <>
+      {inputElement ?? (onPasteImages && !isExpoGo ? (
+        <TextInputWrapper onPaste={handleNativePaste} style={styles.pasteWrapper}>
+          {textInputElement}
+        </TextInputWrapper>
+      ) : textInputElement)}
+      {collapsedPlaceholder ? <Text
+        accessible={false} importantForAccessibility="no-hide-descendants" pointerEvents="none"
+        numberOfLines={1} ellipsizeMode="tail"
+        style={[styles.input, styles.inputGeometricSingleLine, inputStyle, StyleSheet.absoluteFill, { color: placeholderTextColor }]}
+      >{placeholder}</Text> : null}
+      {collapsedPreview ? <Text
+        accessible={false} importantForAccessibility="no-hide-descendants" pointerEvents="none"
+        numberOfLines={1} ellipsizeMode="tail"
+        // On the row's opaque surface the preview covers everything the native input draws there (glyphs,
+        // emoji, spell-check and link decorations, autofill highlight, scroll bar), while the input itself
+        // stays visible to screen readers and focusable. It is gone once the row opens.
+        style={[styles.input, styles.inputGeometricSingleLine, inputStyle, StyleSheet.absoluteFill,
+          rowSurface != null && { backgroundColor: rowSurface }]}
+        testID={`${inputTestID}.collapsedPreview`}
+      >{collapsedOverflowText}</Text> : null}
+    </>
   );
   const inputBody = (
     <>
@@ -387,25 +430,31 @@ export function MobileComposerInputRow({
             // 收起单行与 34pt + 并排：输入盒在行内居中。
             geometricSingleLine && inputFrameMinHeight == null && styles.inputFrameSingleLine,
             inputFrameMinHeight != null && { minHeight: inputFrameMinHeight },
+            // Under an opaque preview the frame clips to a capsule, so the cover stays clear of the pill's rounded
+            // ends and border even with no leading control beside it. A glass frame has no cover and is left as is.
+            rowSurface != null && styles.inputFramePreviewClip,
             resolvedInputFrameHeight != null && { height: resolvedInputFrameHeight },
             inputFrameAnimatedStyle,
           ]}
         >
-          {inputElement ?? (onPasteImages && !isExpoGo ? (
-            <TextInputWrapper onPaste={handleNativePaste} style={styles.pasteWrapper}>
-              {textInputElement}
-            </TextInputWrapper>
-          ) : textInputElement)}
-          {collapsedPlaceholder ? <Text
-            accessible={false} importantForAccessibility="no-hide-descendants" pointerEvents="none"
-            numberOfLines={1} ellipsizeMode="tail"
-            style={[styles.input, styles.inputGeometricSingleLine, inputStyle, StyleSheet.absoluteFill, { color: placeholderTextColor }]}
-          >{placeholder}</Text> : null}
+          {Platform.OS === 'android' ? (
+            // Android clips each child of the capsule frame separately on its anti-aliased edge, so the native
+            // input would still blend into the edge pixels under the cover. While the opaque cover shows, input and
+            // cover are drawn into one offscreen layer first and the frame clips that single image instead.
+            // Never flattened, so the native input keeps its parent when the layer turns on or off.
+            <View collapsable={false} renderToHardwareTextureAndroid={rowSurface != null}
+              style={[styles.inputLayer, geometricSingleLine && inputFrameMinHeight == null && styles.inputFrameSingleLine]}>
+              {inputContent}
+            </View>
+          ) : inputContent}
           {inputOverlay}
-          {!cardLayout && onCollapsedPress ? (
-            // VoiceOver still reaches the input itself and focuses it directly.
-            <Pressable accessible={false} importantForAccessibility="no-hide-descendants"
-              onPress={onCollapsedPress} style={StyleSheet.absoluteFill} testID={testID ? `${testID}.collapsedOpen` : undefined} />
+          {!cardLayout && (onCollapsedPress || collapsedPreview) ? (
+            // Screen readers skip this layer and reach the input itself (it only hides its glyphs, never its view),
+            // which they focus directly. Keyboard focus skips it too. Over a preview the first tap only opens the
+            // input; the hidden native text would otherwise take the tap at an unseen spot. Without the pill entry
+            // (Android, Reduce Motion) it focuses the input directly, keeping its selection.
+            <Pressable accessible={false} importantForAccessibility="no-hide-descendants" focusable={false}
+              onPress={onCollapsedPress ?? focusInputKeepingSelection} style={StyleSheet.absoluteFill} testID={testID ? `${testID}.collapsedOpen` : undefined} />
           ) : null}
         </Reanimated.View>
         {cardLayout ? null : trailing}
@@ -792,6 +841,15 @@ const makeMobileComposerInputRowStyles = (colors: ThemeColors) => ({
     minWidth: 0,
     position: 'relative',
   },
+  inputFramePreviewClip: { borderRadius: radius.pill, overflow: 'hidden' as const },
+  // Android only: fills the frame exactly like its children did, so wrapping them changes no layout.
+  inputLayer: {
+    alignSelf: 'stretch',
+    flex: 1,
+    flexDirection: 'row',
+    minWidth: 0,
+    position: 'relative',
+  },
   inputFrameSingleLine: {
     alignItems: 'center',
   },
@@ -854,6 +912,10 @@ const makeMobileComposerInputRowStyles = (colors: ThemeColors) => ({
     paddingTop: COMPOSER_TEXT_PADDING_TOP,
     textAlignVertical: 'top',
   },
+  // Glass frame only (iOS): no opaque surface to cover with, so the native glyphs are hidden instead; the input
+  // stays laid out, tappable and the screen reader's node. Not view opacity: below 0.01 iOS stops taps, and
+  // Android's alpha 0 marks the node invisible to TalkBack.
+  inputUnderPreview: { color: 'transparent' },
   inputGeometricSingleLine: {
     paddingBottom: COMPOSER_TEXT_GEOMETRIC_PADDING_BOTTOM,
     paddingTop: COMPOSER_TEXT_GEOMETRIC_PADDING_TOP,

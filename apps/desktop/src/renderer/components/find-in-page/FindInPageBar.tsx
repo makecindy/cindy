@@ -824,7 +824,7 @@ export function FindInPageBar() {
         disabled={!text}
         onClick={() => moveActive(-1)}
         className={cn(
-          'flex h-6 w-6 items-center justify-center rounded',
+          'flex h-6 w-6 items-center justify-center rounded-lg',
           'hover:bg-titlebar-button-hover',
           'disabled:opacity-40 disabled:hover:bg-transparent',
           'focus-visible:outline-none',
@@ -838,7 +838,7 @@ export function FindInPageBar() {
         disabled={!text}
         onClick={() => moveActive(1)}
         className={cn(
-          'flex h-6 w-6 items-center justify-center rounded',
+          'flex h-6 w-6 items-center justify-center rounded-lg',
           'hover:bg-titlebar-button-hover',
           'disabled:opacity-40 disabled:hover:bg-transparent',
           'focus-visible:outline-none',
@@ -851,7 +851,7 @@ export function FindInPageBar() {
         aria-label={t('findInPage.close')}
         onClick={close}
         className={cn(
-          'flex h-6 w-6 items-center justify-center rounded',
+          'flex h-6 w-6 items-center justify-center rounded-lg',
           'hover:bg-titlebar-button-hover',
           'focus-visible:outline-none',
         )}

@@ -40,6 +40,8 @@ const bot = z.object({
   /** The same per value for the companion store (store.ts), whose revisions are its own. */
   stored: z.record(z.string(), pref).optional(),
   storeSeeded: z.boolean().optional(),
+  /** Local restore failed for these cloud keys. No local value or deletion may replace them. */
+  restoreBlockedKeys: z.array(z.string()).optional(),
   /** This computer gave the companion away; never re-register it as home here. */
   demoted: z.boolean().optional(),
   /** Cloud history was added while the canonical Session was busy; rebuild at the next idle point. */
@@ -58,7 +60,7 @@ const bot = z.object({
    * What the last take-over could not keep of the old setup (cloud-companions.md §2): shown once
    * after the move, then cleared by the owner.
    */
-  arrivalNotices: z.array(z.enum(['permissions', 'model'])).optional(),
+  arrivalNotices: z.array(z.enum(['permissions', 'model', 'model_setup', 'partial_content'])).optional(),
   /** Room file holding each skill file's content (by sha256), so unchanged files are not sent again. */
   skillFileMedia: z.record(z.string(), z.string()).optional(),
   /** Skill files the cloud does not have, learned at take-over; passed on until this computer has them. */
