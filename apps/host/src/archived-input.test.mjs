@@ -8,6 +8,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 import Database from 'better-sqlite3';
+import { ownerScopedPath } from '../../desktop/src/main/dataOwnerPath.ts';
 import { readHostEndpoint, readHostProcessStatus, requestHostStop } from './control.mjs';
 import { ownerDatabasePath } from './profile-path.mjs';
 
@@ -26,6 +27,11 @@ test('production input restores an archived task only for an admitted new client
     await writeFile(path.join(endpoints, 'endpoint.global.json'), JSON.stringify({
       authApiBaseUrl: 'https://fixture.invalid', modelAccessApiBaseUrl: 'https://fixture.invalid', deviceLinkApiBaseUrl: 'https://fixture.invalid',
     }));
+    // The fixture uses a fake engine. Use the normal opt-out so startup does
+    // not spend the readiness budget trying to obtain gateway credentials.
+    const ownerRoot = ownerScopedPath(profile, owner);
+    await mkdir(ownerRoot, { recursive: true });
+    await writeFile(path.join(ownerRoot, 'model-disable-prefs.json'), JSON.stringify({ disabledProviders: { xd: true } }));
     const env = Object.fromEntries(Object.entries(process.env).filter(([key]) =>
       /^(path|systemroot|tmpdir|tmp|temp|lang|lc_all|lc_ctype)$/i.test(key)));
     child = spawn(process.execPath, ['--import', 'tsx', '--import', './src/loaders/register-raw.mjs',

@@ -422,14 +422,14 @@ export function createInputQueue(deps) {
         }
       },
     });
-    function command(id, fn) {
+    function command(id, fn, { restoreQueue = true } = {}) {
       const state = stateFor(id);
       const admission = state.admission;
       const result = state.commands.catch(() => {}).then(async () => {
         if (closing && !ownerStopping) refuseWhileHeld();
         if (closing || state.closed) throw new Error('session is closed');
         assertCurrent();
-        await coordinator.ensureQueueRestored(id);
+        if (restoreQueue) await coordinator.ensureQueueRestored(id);
         assertCurrent();
         holdIfHeld(id);
         if (state.admission !== admission) throw new Error('input cancelled before acceptance');
@@ -611,7 +611,7 @@ export function createInputQueue(deps) {
       async enqueue(id, item, handoff, userInputOptions) {
         const admission = stateFor(id).admission;
         const ordinaryInput = !handoff && userInputOptions !== undefined && !getDeviceLinkInvokeContext()?.sharedTask;
-        const generation = ordinaryInput ? coordinator.getGeneration(id) : undefined;
+        const generation = ordinaryInput || handoff ? coordinator.getGeneration(id) : undefined;
         const expectedClearBoundary = readExpectedClearBoundary(userInputOptions);
         let wakeAfterRouteLock = false;
         const assertAdmitted = state => {
@@ -623,7 +623,7 @@ export function createInputQueue(deps) {
           }
           assertExpectedClearBoundary(id, expectedClearBoundary);
         };
-        const enqueue = async (state, archiveRouteSignal) => {
+        const enqueue = async (state, routeSignal) => {
           if (coordinator.hasKnownClientId(id, item?.clientId)) {
             handoff?.onQueueAcceptanceStarted?.();
             await flushed(id);
@@ -645,7 +645,7 @@ export function createInputQueue(deps) {
           }
           const restore = ordinaryInput && stored.status === 'archived';
           if (restore) {
-            if (!archiveRouteSignal) return NEEDS_ARCHIVE_RESTORE_LOCK;
+            if (!routeSignal) return NEEDS_ARCHIVE_RESTORE_LOCK;
             assertHostTaskExecutionSupported(stored);
             deps.assertProviderExecutionSupported?.(id, stored.providerId, stored.sdkSessionId);
           }
@@ -660,7 +660,7 @@ export function createInputQueue(deps) {
             if (restore) {
               await deps.restoreArchivedSessionForSend(id, {
                 assertAdmitted: check,
-                signal: archiveRouteSignal,
+                signal: routeSignal,
               });
               // The restore is a durable task transition. If admission changes
               // after it commits, leave the task active without accepting this input.
@@ -677,7 +677,7 @@ export function createInputQueue(deps) {
             await attachmentOwnership.markDurable(id, item.clientId, prepared.ownerId ?? undefined);
             commitAutoTitle?.();
             if (!state.persistenceError) {
-              if (archiveRouteSignal) wakeAfterRouteLock = true;
+              if (routeSignal) wakeAfterRouteLock = true;
               else unpause(id);
             }
             return api.projection(id);
@@ -685,34 +685,44 @@ export function createInputQueue(deps) {
             if (!accepted && prepared.ownerId) await attachmentOwnership.discardSpecific(id, item.clientId, prepared.ownerId);
           }
         };
-        const result = await command(id, state => enqueue(state));
-        if (result !== NEEDS_ARCHIVE_RESTORE_LOCK) return result;
-        // Start-like operations and direct sends take command -> route lock.
+        if (!handoff) {
+          const result = await command(id, state => enqueue(state));
+          if (result !== NEEDS_ARCHIVE_RESTORE_LOCK) return result;
+        }
+        // Handoff, runtime starts, and direct sends take command -> route lock.
         // Deletion takes the route lock first; its Stop cancels lock admission
         // before draining the commands. A write that already holds the lock
         // must finish its own admission checks and release it normally.
-        const projection = await command(id, async state => {
+        const result = await command(id, async state => {
           assertAdmitted(state);
           const signal = inputRouteSignal(id, generation);
           let acquired = false;
           try {
-            return await withSessionRouteLock(id, () => {
+            return await withSessionRouteLock(id, async () => {
               acquired = true;
-              return enqueue(state, signal);
+              if (!handoff) return enqueue(state, signal);
+              const target = await handoff.validateTarget();
+              if (!target.ok) return target;
+              assertAdmitted(state);
+              // A refused target must not load or reconcile its durable queue.
+              await coordinator.ensureQueueRestored(id);
+              assertAdmitted(state);
+              const queued = await enqueue(state, signal);
+              return queued?.ok === false ? queued : target;
             }, signal);
           } catch (error) {
             if (!acquired && signal.aborted) assertAdmitted(state);
             throw error;
           }
-        });
+        }, { restoreQueue: !handoff });
         const state = states.get(id);
         // A drain scheduled inside the route lock inherits its async context.
         // Start it after release so its send takes the lock as an independent operation.
         if (!wakeAfterRouteLock || !state || !isCurrent() || closing || state.closed
             || state.persistenceError || state.admission !== admission
-            || !coordinator.isGenerationCurrent(id, generation)) return projection;
+            || !coordinator.isGenerationCurrent(id, generation)) return result;
         unpause(id);
-        return api.projection(id);
+        return handoff ? result : api.projection(id);
       },
       /**
        * Capture the input epoch before any asynchronous preparation. The stamp is

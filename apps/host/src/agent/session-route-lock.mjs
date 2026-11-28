@@ -8,7 +8,7 @@ import { withSendToSessionLock } from '../../../desktop/src/main/maker-ipc/sendT
  * next input is queued (the send transaction's applyPendingAgentSwitch); reading that intent and
  * stopping a turn do not take the lock (a stop must interrupt whoever holds it).
  *
- * Sends and runtime starts enter the input command chain before waiting for this lock.
+ * Sends, handoffs, and runtime starts enter the input command chain before waiting for this lock.
  * Deletion holds the lock while stopping the task: Stop aborts pending lock admission
  * before waiting for the command chain. A held lock is still released by its owner.
  */

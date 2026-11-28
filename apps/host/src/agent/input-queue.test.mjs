@@ -45,6 +45,7 @@ import { createHostContextRecoveryWiring } from './context-recovery-wiring.ts';
 import { CODEX_HISTORY_OVERSIZED_REASON, CODEX_LIVE_TAIL_OVERSIZED_BYTES } from '@cindy/maker-core';
 import { createHostContextRecoveryRollover } from './context-recovery-assembly.ts';
 import { createHostAgentHandoffPending } from './handoff-pending.ts';
+import { createHostSessionHandoff } from './session-handoff.ts';
 import { markCodexPlanInterrupted, writeCodexPlanUpdate } from '../../../desktop/src/main/localDb/codexPlanState.ts';
 import { buildPlanReconcileNote } from '../../../desktop/src/main/maker-ipc/planReconcile.ts';
 import { buildGoalInactiveNote } from '../../../desktop/src/main/goal-host/inactiveNote.ts';
@@ -638,6 +639,7 @@ test('a remote task handoff expires while queued and is discarded before executi
   }, { onSettled: async () => { settled = true; } });
   const clientId = 'remote-task-action:revoked-while-queued';
   await h.queue.enqueue('handoff-task', { clientId, text: 'delegated follow-up' }, {
+    validateTarget: async () => ({ ok: true }),
     taskActionDeliveryGuard: guard,
     origin: { kind: 'session', senderSessionId: 'other-computer::source-task', displayText: 'delegated follow-up' },
     autoReviewUserText: { kind: 'agent-request', request: { userText: null } },
@@ -660,7 +662,8 @@ test('a remote task handoff returns NOT_FOUND if its target disappears before en
   const rejected = await h.queue.enqueue('missing-task', {
     clientId: 'remote-task-action:missing-before-enqueue',
     text: 'delegated follow-up',
-  }, { taskActionDeliveryGuard: async () => assert.fail('Missing target must not be admitted') });
+  }, { validateTarget: async () => ({ ok: true }),
+    taskActionDeliveryGuard: async () => assert.fail('Missing target must not be admitted') });
   assert.deepEqual(rejected, { ok: false, errorCode: 'NOT_FOUND', message: 'Session does not exist' });
   assert.equal(h.queue.projection('missing-task').pendingQueue.length, 0);
   assert.deepEqual(h.persisted, []);
@@ -679,6 +682,7 @@ test('remote task handoff inherits the target Plan intent only for plugin delega
     const id = plugin ? 'plugin-handoff' : 'ordinary-handoff';
     const text = 'delegated message';
     await enqueueUntilSent(h, id, { clientId: `remote-task-action:${id}`, text }, 1, {
+      validateTarget: async () => ({ ok: true }),
       taskActionDeliveryGuard: async () => {},
       ...(plugin ? {
         inheritTargetPlanMode: true,
@@ -3044,12 +3048,84 @@ test('archived enqueue and direct send cannot wait on each other', { timeout: 10
   assert.ok(h.maker.getSession(id)?.sent.includes('direct follow-up'));
 });
 
+// Unit, PR #13672: the production handoff adapter must let an earlier runtime
+// command finish before validating and queueing a message. Existing archive
+// and direct-send cases don't enter this adapter. Park the runtime command at
+// queue hydration, just before it needs the route lock.
+for (const { name, agentKind, prepare } of [
+  { name: 'plugin page restore', agentKind: 'claude-code',
+    prepare: (queue, id) => queue.restoreSession(id, async () => {}) },
+  { name: 'Pi prewarm', agentKind: 'pi',
+    prepare: (queue, id) => queue.preparePiSkillRuntime(id, os.tmpdir()) },
+]) {
+  test(`handoff delivers once behind an earlier ${name} command`, { timeout: 10_000 }, async t => {
+    const id = `handoff-after-${agentKind}`;
+    const clientId = `remote-task-action:${id}`;
+    const hydrating = Promise.withResolvers();
+    const continueHydration = Promise.withResolvers();
+    const cleanupWaiters = new AbortController();
+    const order = [];
+    const stored = { id, title: 'Handoff target', status: 'active', source: 'desktop',
+      agentKind, model: 'stored-model', workingDir: os.tmpdir(), providerId: 'xd' };
+    const h = createHarness({
+      readSession: async () => stored,
+      loadQueueSnapshot: async () => {
+        hydrating.resolve();
+        await continueHydration.promise;
+        return [];
+      },
+    });
+    await unitDatabase.exec('INSERT INTO sessions(id,title,source,status,agent_kind,working_dir,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)',
+      [id, stored.title, stored.source, stored.status, agentKind, stored.workingDir, 1, 1]);
+    setSessionRouteLockImplementation((sessionId, run, stage, signal) => withSendToSessionLock(
+      sessionId, run, stage, AbortSignal.any(signal ? [signal, cleanupWaiters.signal] : [cleanupWaiters.signal]),
+    ));
+    t.after(async () => {
+      setSessionRouteLockImplementation(null);
+      await h.queue.dispose();
+      await unitDatabase.exec('DELETE FROM sessions WHERE id = ?', [id]);
+    });
+    const handoff = createHostSessionHandoff({
+      input: h.queue, worktree: {}, agents: () => [agentKind], readProviders: async () => [],
+      isSelfDeviceId: () => true, hasCindyAiApiKey: () => false, broadcastCreated() {},
+      assertProviderExecutionSupported() { order.push('target validated'); },
+    });
+    const preparation = prepare(h.queue, id).then(() => { order.push('runtime prepared'); });
+    preparation.catch(() => {});
+    await hydrating.promise;
+    const delivery = handoff.send({
+      targetSessionId: id, clientId, message: 'delegated follow-up', autoReviewUserText: 'delegated follow-up',
+      resumeWithStoredPermissionMode: true, taskActionDeliveryGuard: async () => {},
+    });
+    delivery.catch(() => {});
+    try {
+      await new Promise(resolve => setImmediate(resolve));
+      assert.deepEqual(order, [], 'handoff must leave the route lock available to the earlier command');
+      continueHydration.resolve();
+      const [result] = await Promise.all([delivery, preparation]);
+      assert.deepEqual(order, ['runtime prepared', 'target validated']);
+      assert.deepEqual(result, { ok: true, agentKind, wakeKind: 'queued',
+        targetTitle: stored.title, targetLastUserSendAt: null });
+      await waitFor(() => h.maker.getSession(id)?.sent.length === 1);
+      assert.deepEqual(h.persisted.filter(row => row.clientId === clientId).map(row => row.clientId), [clientId]);
+    } finally {
+      cleanupWaiters.abort();
+      continueHydration.resolve();
+      await Promise.allSettled([delivery, preparation]);
+    }
+  });
+}
+
 // Unit, PR #13672: delete and provisional discard hold the route lock while
 // calling disposeSession. Put a production command into its lock wait before
 // calling Stop. First-phase enqueue and Stop after restore don't cover this cycle.
-for (const { name, run, archived, pi } of [
+for (const { name, run, archived, handoff, pi } of [
   { name: 'archived enqueue', archived: true,
     run: (queue, id) => queue.enqueue(id, { clientId: 'archived-1', text: 'continue' }, undefined, {}) },
+  { name: 'handoff enqueue', handoff: true,
+    run: (queue, id) => queue.enqueue(id, { clientId: 'handoff-1', text: 'delegated follow-up' }, {
+      validateTarget: async () => assert.fail('A stopped waiter cannot validate or accept the input'),
+    }) },
   { name: 'direct send', run: (queue, id) => queue.send(id, 'continue', {}) },
   { name: 'plugin page restore', run: (queue, id) => queue.restoreSession(id, async () => {}) },
   { name: 'Pi prewarm', pi: true, run: (queue, id) => queue.preparePiSkillRuntime(id, os.tmpdir()) },
@@ -3087,7 +3163,7 @@ for (const { name, run, archived, pi } of [
       assert.equal(deleted, true, 'deletion must finish with its own route lock still held');
       const [result] = await commandSettled;
       assert.equal(result.status, 'rejected');
-      if (archived) {
+      if (archived || handoff) {
         assert.equal(result.reason.code, 'PRECONDITION_FAILED');
         assert.match(result.reason.message, /superseded/);
       } else assert.equal(result.reason.name, 'AbortError');

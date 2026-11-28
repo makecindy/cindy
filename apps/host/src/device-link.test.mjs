@@ -232,8 +232,11 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
   } };
   const handoffQueue = [];
   let enqueueHandoff = async (id, item, handoff) => {
+    const target = await handoff.validateTarget();
+    if (!target.ok) return target;
     await handoff.taskActionDeliveryGuard();
     handoffQueue.push({ id, item, handoff });
+    return target;
   };
   let holdAfterHandoffCreation;
   const handoffProviders = [{
