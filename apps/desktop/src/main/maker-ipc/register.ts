@@ -731,7 +731,7 @@ import {
   sessions,
   schedules,
 } from '../localDb/schema.js';
-import { botModelRouteIndex, nextBotModelRoute, normalizeBotModelChain, type BotModelRoute } from '../../shared/botModelChain.js';
+import { selectBotFallbackRoute, normalizeBotModelChain, type BotModelRoute } from '../../shared/botModelChain.js';
 import { createBotModelRouteApplier, createBotModelRouteReconciler } from './botModelRouteReconciler.js';
 import { createBotRouteAppliedStore } from './botRouteAppliedStore.js';
 import {
@@ -1225,6 +1225,7 @@ import {
 } from './orcaTeamService.js';
 import {
   agentDeviceCatalogFailure,
+  buildOrcaLeadSessionSnapshot,
   createOrcaWorkerCreationService,
   pickWorkerAgentDeviceId,
 } from './orcaWorkerCreationService.js';
@@ -1243,8 +1244,10 @@ import {
 import {
   applyOrcaInstructions,
   ORCA_DIRECT_TASK_CREATE,
-  renderOrcaRoleInstructions,
   synthesizeOrcaVendorOptionsFromDb,
+  acpLeadBriefings,
+  applyLeadVendorOptions,
+  prepareAcpRoleBriefingForStart,
 } from './orcaSessionStartOptions.js';
 import {
   clearManualInterrupt,
@@ -1424,7 +1427,8 @@ import {
   normalizeSessionProviderId,
   setSessionProvider,
 } from '../maker-host/session-provider-store.js';
-import { getActiveCatalog, setDiscoveredProviderModels } from '../maker-host/active-catalog.js';
+import { getActiveCatalog, getXdGatewayModelAccessSnapshot, setDiscoveredProviderModels } from '../maker-host/active-catalog.js';
+import { createSilentGatewaySwitchForSend } from './silentGatewaySwitch.js';
 import { createSubscriptionFastPolicy } from '../maker-host/subscription-fast-policy.js';
 import { DEFAULT_MODEL_COMPACTION_PCT, modelCompactionTarget } from '../../shared/modelContextLimit.js';
 import { resolveModelDefaultContextWindow } from '../maker-host/catalog-to-descriptors.js';
@@ -5144,9 +5148,26 @@ export interface AutomationUserTurnGitBaselineHooks {
   onUndispatchedUserTurn(sessionId: string): void;
 }
 
+/**
+ * 本机 ACP 插件引擎在首轮 `session/prompt` 前等待受管 worktree 后台 full checkout 完成；
+ * 远程/共享 ACP（`agentDeviceId` 非空）延后到 `RemoteExecutor` 首次访问工作树工具前再等。
+ */
+async function awaitLocalAcpWorktreeCheckoutIfNeeded(
+  sessionId: string,
+  signal?: AbortSignal,
+): Promise<void> {
+  const live = getMakerIfReady()?.getSession(sessionId);
+  if (live?.agentKind === 'acp' && !live.agentDeviceId && !live.remoteHostId) {
+    await worktreeManager.ensureBackgroundCheckoutReady(sessionId, signal);
+  }
+}
+
 export function createAutomationUserTurnGitBaselineHooks(): AutomationUserTurnGitBaselineHooks {
   return {
-    beforeDispatchUserTurn: (sessionId, signal) => gitSnapshotCoordinator?.onTurnStart(sessionId, signal),
+    beforeDispatchUserTurn: async (sessionId, signal) => {
+      await awaitLocalAcpWorktreeCheckoutIfNeeded(sessionId, signal);
+      await gitSnapshotCoordinator?.onTurnStart(sessionId, signal);
+    },
     onUndispatchedUserTurn: (sessionId) => gitSnapshotCoordinator?.onTurnAbort(sessionId),
   };
 }
@@ -9521,14 +9542,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     // Lead and Worker role instructions travel ahead of the first message; ordinary local owner
     // tasks (non-bot, non-review, non-hosted) trust the plugin engine as a whole so Orca Lead /
     // Worker tools and Cindy async user question tools work seamlessly.
+    const promotedLeadBriefing = await prepareAcpRoleBriefingForStart(o, acpLeadBriefings);
+    assertAccess?.();
     if (o.agentKind === 'acp' && o.reviewMode !== true) {
-      if (o.vendorOptions?.orcaRole === 'worker' || o.vendorOptions?.orcaRole === 'lead') {
-        const briefing = renderOrcaRoleInstructions(o);
-        if (briefing) {
-          o.pluginEngineBriefing = briefing;
-          o.pluginEngineTrustedCaller = true;
-        }
-      }
       if (!o.deviceHosted && !o.botRuntimeProfile) {
         o.pluginEngineTrustedCaller = true;
       }
@@ -9595,7 +9611,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         delete vendorOptions._cindyRequireNativeResume;
         if (nativeHistoryResume || nativeRelocation?.nativeId) vendorOptions._cindyRequireNativeResume = true;
         o.vendorOptions = vendorOptions;
-        const start = () => createSessionWithRuntimePlugins(o, creationSignal);
+        const start = () => {
+          // Provider-group fallback may have changed the route since the instructions were prepared.
+          o.readPluginEngineRoleBriefing = o.agentDeviceId ? undefined : promotedLeadBriefing;
+          return createSessionWithRuntimePlugins(o, creationSignal);
+        };
         const open = async () => nativeHistoryResume || nativeRelocation?.nativeId
           ? await start()
           : await withSharedSessionResumeRecovery(o, start, {
@@ -12033,6 +12053,34 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     },
     log,
   };
+  const applySilentGatewaySwitchForSend = createSilentGatewaySwitchForSend({
+    getOwner: getCurrentDbClientSnapshot,
+    isRemoteInvoke: isDeviceLinkInvoke,
+    hasPendingAgentSwitch: sessionId => Boolean(agentSwitchPending.get(sessionId)),
+    isTurnRunning: sessionId => maker.getSession(sessionId)?.isTurnRunning() === true,
+    hasPendingInteraction: hasPendingAgentInteractionForSession,
+    getCatalog: getXdGatewayModelAccessSnapshot,
+    getSessionRow: getSessionRowSnapshotStrict,
+    toBuiltinAgent: agentKind => (isPluginEngineKind(agentKind) ? undefined : dbToMakerAgentKind(agentKind)),
+    listAvailableAgents: () => maker.listAvailableAgents(),
+    canUseRoute: async (agent, modelId) => (await verdictForModelRoute(agent, modelId, 'xd')).kind === 'pass',
+    switchAgent: ({ sessionId, targetAgentKind, model, effort, signal, assertSelectionCurrent }) =>
+      performSessionAgentSwitch(agentSwitchDeps, {
+        sessionId,
+        targetAgentKind,
+        model,
+        providerId: 'xd',
+        effort,
+        fastMode: false,
+        configStaged: true,
+        applyNow: true,
+        skipBootstrap: true,
+        signal,
+        assertSelectionCurrent,
+      }),
+    log,
+  });
+
   registerMakerSessionAgentSwitchHandler(makerSessionRegistry, agentSwitchDeps, (event, sessionId) => {
     if (!isDeviceLinkInvoke()) assertTrustedAppRendererEvent(event as Parameters<typeof assertTrustedAppRendererEvent>[0]);
     providerGroupService?.noteUserAction(sessionId);
@@ -12668,9 +12716,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     workerPermissionMode: OrcaWorkerPermissionMode;
     dispatchOutcome?: CollabDispatchOutcome;
   }> {
-    await assertLeadCollabProjectEnabled(leadSessionId);
+    const admittedLeadAgentKind = await assertLeadCollabProjectEnabled(leadSessionId);
     const result = await orcaLifecycleService.enableTeam({
       leadSessionId,
+      admittedLeadAgentKind,
       workerAgent: opts.workerAgent,
       role: opts.role,
       label: opts.label,
@@ -12711,7 +12760,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     };
   }
 
-  async function assertLeadCollabProjectEnabled(leadSessionId: string): Promise<void> {
+  async function assertLeadCollabProjectEnabled(leadSessionId: string): Promise<EngineKind | undefined> {
     await assertReviewSettingsUnlocked(leadSessionId);
     const lead = maker.getSession(leadSessionId);
     const leadRow = await getSessionRowSnapshot(leadSessionId);
@@ -12741,6 +12790,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       (pluginId, workingDir) => getPluginRegistry().isEnabled(pluginId, workingDir),
       isManagedDialogueWorkspace,
     );
+    return lead?.agentKind ?? (leadRow ? dbToMakerEngineKind(leadRow.agentKind) : undefined);
   }
 
   async function sendUserMessageWithAwaitedGitBaseline(
@@ -15622,7 +15672,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   };
   const startOrcaTeamForCaller = async (leadSessionId: string, workerPermissionMode?: OrcaWorkerPermissionMode, assertCurrent?: (activationStarted?: boolean) => Promise<void>, completeOperation?: PluginTaskService['completeOperation']) => {
       try {
-        await assertLeadCollabProjectEnabled(leadSessionId);
+        const admittedLeadAgentKind = await assertLeadCollabProjectEnabled(leadSessionId);
         return await startOrcaTeamWithPermissionGate(
           { leadSessionId, workerPermissionMode },
           {
@@ -15635,7 +15685,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             startTeam: async (params) => {
               const start = async () => {
                 await assertCurrent?.();
-                return orcaLifecycleService.startTeam(params, assertCurrent ? () => assertCurrent(true) : undefined);
+                return orcaLifecycleService.startTeam({ ...params, admittedLeadAgentKind }, assertCurrent ? () => assertCurrent(true) : undefined);
               };
               // Track only admitted native work, never the permission dialog.
               return completeOperation ? completeOperation(start) : start();
@@ -16721,6 +16771,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     peekPendingHandoff: (sessionId) => agentHandoffPending.peek(sessionId),
     consumePendingHandoff: (sessionId) => agentHandoffPending.consume(sessionId),
     shouldQueueNewTurn: (sessionId, orcaReport): boolean => inputCoordinator.shouldQueueNewTurn(sessionId, orcaReport),
+    needsOrcaRuntimeRefresh: (sessionId) => {
+      const live = maker.getSession(sessionId);
+      return live?.agentKind === 'acp' && !live.agentDeviceId &&
+        (acpLeadBriefings.hasPending(sessionId) || !isOrcaMcpHydrated(sessionId));
+    },
     steerControlInput: (sessionId, item, expectedTurn) =>
       inputCoordinator.steerControlInput(sessionId, { item }, expectedTurn),
     hasSendToSessionLock: (sessionId) => sendToSessionLocks.has(sessionId),
@@ -16970,6 +17025,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     await assertCurrent?.();
     if (persistRole) await setSessionOrcaRole(leadSessionId, null);
     knownNonOrcaSessionIds.delete(leadSessionId);
+    acpLeadBriefings.revoke(leadSessionId);
 
     const leadSess = maker.getSession(leadSessionId);
     if (leadSess) {
@@ -17715,23 +17771,24 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         .where(eq(sessions.id, leadSessionId))
         .limit(1);
       if (!leadRow) return null;
-      const isAcpLead = leadRow.agentKind === 'acp';
-      return {
-        ...readLeadProviderGroupEntry(leadRow.id, leadRow.remoteHostId),
-        id: leadRow.id,
-        // 走引擎转换正本:pi / acp lead 不能被压成 claude-code,否则 input.agent===lead.agentKind
-        // 判等失效,会导致内置 Worker 误继承插件引擎的 model/providerId,或 pi-lead 走错默认分支。
-        agentKind: dbToMakerEngineKind(leadRow.agentKind),
-        workspaceKind: leadRow.workspaceKind,
-        workingDir: leadRow.workingDir,
-        model: isAcpLead ? '' : leadRow.model,
-        effort: isAcpLead ? '' : leadRow.effort,
-        permissionMode: leadRow.permissionMode,
-        fastMode: isAcpLead ? false : (leadRow.fastMode ?? false),
-        providerId: isAcpLead ? null : (leadRow.providerId ?? null),
-        remoteHostId: leadRow.remoteHostId ?? null,
-        ...(leadRow.agentDeviceId && !leadRow.remoteHostId ? { agentDeviceId: leadRow.agentDeviceId } : {}),
-      };
+      return buildOrcaLeadSessionSnapshot(
+        {
+          id: leadRow.id,
+          // 走引擎转换正本:pi / acp lead 不能被压成 claude-code,否则 input.agent===lead.agentKind
+          // 判等失效,会导致内置 Worker 误继承插件引擎的 model/providerId,或 pi-lead 走错默认分支。
+          agentKind: dbToMakerEngineKind(leadRow.agentKind),
+          workspaceKind: leadRow.workspaceKind,
+          workingDir: leadRow.workingDir,
+          model: leadRow.model,
+          effort: leadRow.effort,
+          permissionMode: leadRow.permissionMode,
+          fastMode: leadRow.fastMode,
+          providerId: leadRow.providerId,
+          remoteHostId: leadRow.remoteHostId,
+          agentDeviceId: leadRow.agentDeviceId,
+        },
+        readLeadProviderGroupEntry(leadRow.id, leadRow.remoteHostId),
+      );
     },
     getWorkerDefaults: getWorkerDefaultsFromNewMaker,
     modelGroupStart: modelGroupSessionStart,
@@ -17847,30 +17904,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     clearKnownNonOrcaSession: (sessionId) => {
       knownNonOrcaSessionIds.delete(sessionId);
     },
-    setLeadVendorOptions: async ({ leadSessionId, teamId, workerId, workerSessionId }) => {
-      const leadSess = maker.getSession(leadSessionId);
-      if (!leadSess) return;
-      const patch: Record<string, unknown> = {
-        orcaRole: 'lead',
-        orcaWorkflowId: teamId,
-        orcaLeadSessionId: leadSessionId,
-        ...(workerId && workerSessionId
-          ? { initialWorker: { workerId, sessionId: workerSessionId } }
-          : {}),
-      };
-      if (leadSess.agentKind === 'acp') {
-        const briefing = renderOrcaRoleInstructions({
-          id: leadSessionId,
-          agentKind: 'acp',
-          workingDir: leadSess.workDir,
-          model: '',
-          vendorOptions: patch,
-        });
-        if (briefing) patch.pluginEngineRoleBriefing = briefing;
-      }
-      await leadSess.setVendorOptions(patch);
+    setLeadVendorOptions: async (input) => {
+      const live = maker.getSession(input.leadSessionId);
+      await applyLeadVendorOptions(acpLeadBriefings, input, live, clearOrcaMcpHydrated);
     },
     clearLeadVendorOptions: async (leadSessionId) => {
+      acpLeadBriefings.revoke(leadSessionId);
       const leadSess = maker.getSession(leadSessionId);
       if (!leadSess) return;
       await leadSess.setVendorOptions({
@@ -18525,14 +18564,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     const currentRoute: Pick<BotModelRoute, 'harness' | 'model' | 'providerId' | 'agentDeviceId'> = {
       harness: currentHarness, model: current.model, providerId: current.providerId, agentDeviceId: current.agentDeviceId,
     };
-    const usable = (candidate: BotModelRoute) =>
-      (!controlSession?.remoteHostId || (candidate.harness !== 'acp' && candidate.harness === currentHarness)) &&
-      (!eligibleForSchedule || eligibleForSchedule(candidate));
-    const currentIndex = botModelRouteIndex(chain, currentRoute);
-    if (eligibleForSchedule && currentIndex < 0) return { isBot: true, candidate: null };
-    const route = nextBotModelRoute(chain, currentRoute, control.visitedRoutes, usable);
-    // No other usable route is configured at all: nothing can be exhausted.
-    const routeLocked = !chain.some((candidate, index) => index !== currentIndex && usable(candidate));
+    const { route, routeLocked } = selectBotFallbackRoute(
+      chain, currentRoute, control.visitedRoutes, controlSession?.remoteHostId, readMergedProviderAccount, eligibleForSchedule,
+    );
     return {
       isBot: true,
       routeLocked,
@@ -19729,7 +19763,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       enqueueDurableWrite(`pi-entry-link:${sessionId}:${clientId}`, () =>
         patchMessageAgentMeta(sessionId, clientId, { piEntryId }),
       ),
-    beforeDispatchDirectUserTurn: (sessionId, signal) => gitSnapshotCoordinator?.onTurnStart(sessionId, signal),
+    beforeDispatchDirectUserTurn: async (sessionId, signal) => {
+      await awaitLocalAcpWorktreeCheckoutIfNeeded(sessionId, signal);
+      await gitSnapshotCoordinator?.onTurnStart(sessionId, signal);
+    },
     onModelDispatched: recordDispatchedModelHolder = withModelGroupStartSettlement(createTurnModelAttribution({
       captureModelChoice,
       maker, getSessionProvider, captureDataOwnerBroadcastScope, isDataOwnerBroadcastScopeCurrent,
@@ -19847,7 +19884,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           .from(schedules).where(eq(schedules.id, quotaOrigin.scheduleId)).limit(1);
         if (!isQuotaScheduleCurrent(schedule, sessionId)) throwIpcError('PRECONDITION_FAILED', 'Schedule is no longer active for this task');
       }
-      if (!scheduled) await scheduledModelScope.restore(sessionId);
+      if (!scheduled) {
+        await scheduledModelScope.restore(sessionId);
+        await applySilentGatewaySwitchForSend(sessionId, options?.signal);
+      }
       const expectedSwitch = agentInputCoordinatorHolder?.takeRetrySwitchRevision(sessionId, options?.clientId);
       await applyPendingAgentSwitchIfIdle(agentSwitchDeps, sessionId, {
         signal: options?.signal, expectedRevision: expectedSwitch, nextInputChars: options?.nextInputChars, scheduled,
@@ -21675,6 +21715,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     beforeDispatchUserTurn: async (sessionId, item, signal) => {
       if (isRetiredGroupWelcomeInput(item)) throw new Error('INVALID_EXECUTION_TRIGGER');
       if (item.botTaskCoordination) await assertBotTaskCoordination(sessionId, item.botTaskCoordination);
+      await awaitLocalAcpWorktreeCheckoutIfNeeded(sessionId, signal);
       autoResumeBookkeeping.markReplacementDispatching(sessionId, item.clientId);
       const liveSession = maker.getSession(sessionId);
       if (liveSession) {

@@ -4260,6 +4260,7 @@
           "supported": "支援",
           "unsupported": "不支援",
           "undeclared": "未宣告",
+          "ultrafastDeclaredUnavailable": "供應商已宣告，目前的 Codex 連線無法使用",
           "pricing": "報價",
           "pricingLabel": "報價",
           "noPricing": "此路由沒有報價資料",
@@ -12231,6 +12232,9 @@
           "GROUP_AUTHORIZATION_REQUIRED": "{{name}} 的工具呼叫未執行：群內授權已失效或不允許此操作。請由夥伴主人在目前群組重新發起。",
           "GROUP_AUTHORIZATION_UNAVAILABLE": "暫時無法核驗 {{name}} 的群聊授權，這次工具呼叫未執行。請在連線恢復後重試。",
           "ATTACHMENTS_UNAVAILABLE": "部分附件未交給 {{name}}（下載失敗或數量限制）。請重新傳送這次需要的附件。",
+          "ATTACHMENTS_DOWNLOAD_FAILED": "部分附件下載失敗，未能交給 {{name}}。請重新傳送需要的附件。",
+          "ATTACHMENTS_LIMIT_REACHED": "本輪附件數量超過上限，部分附件未能交給 {{name}}。請分批傳送需要的附件。",
+          "ATTACHMENTS_DOWNLOAD_FAILED_AND_LIMIT_REACHED": "部分附件下載失敗，另一些超出本輪數量上限，未能交給 {{name}}。請分批重新傳送需要的附件。",
           "GROUP_ASSISTANT_UNAVAILABLE": "{{name}}，連接你的 Cindy 後才能讓 Cindy 替你工作（你的電腦上現在沒有在線的 Cindy）。",
           "GROUP_ASSISTANT_DEVICE_REQUIRED": "{{name}}，請先選擇本群組的執行電腦，選好後會繼續這項請求。",
           "GROUP_ASSISTANT_DEVICE_OFFLINE": "{{name}} 在本群組選擇的執行電腦已離線。"
@@ -18460,7 +18464,11 @@
       "openWorkdirFailed": "開啟資料夾失敗"
     },
     "runs": {
-      "boundPluginEngineRecovery": "自動化未執行。繫結到插件引擎任務的自動化會沿用任務自己的模型，並在這台電腦上執行。如果自動化裡指定了模型，請先移除，再重新執行。",
+      "boundPluginEngineRecovery": "自動化未能使用插件引擎執行。展開錯誤詳情查看原因。",
+      "boundPluginEngineSshRecovery": "SSH 任務必須沿用目前的引擎。若要使用插件引擎，請將自動化繫結到相容的非 SSH 任務。",
+      "boundPluginEngineSelectionLocationRecovery": "所選插件引擎的位置不支援執行此自動化。請在自動化的模型設定中選擇受支援電腦上的引擎。",
+      "boundPluginEngineTaskLocationRecovery": "繫結任務的插件引擎所在位置不支援執行此自動化。請將任務的引擎切換到受支援的電腦，或繫結相容的任務。",
+      "boundPluginEngineModelRecovery": "自動化的模型設定與繫結任務的插件引擎不符。請將自動化設為沿用任務的模型。",
       "queueWaitTimeoutRecovery": "排隊等待逾時，提示詞未傳送。目標任務閒置後可點擊「{{action}}」補跑。",
       "status": {
         "running": "執行中",
@@ -22560,6 +22568,9 @@
     "send": "傳送訊息",
     "sending": "正在傳送…",
     "sent": "已提交",
+    "sendTooManyArguments": "這則訊息一次處理的內容超過 {{limit}} 項。請讓助理分組處理後重新產生。",
+    "sendValueUnavailable": "這則訊息需要的值無法讀取。請讓助理檢查表單欄位。",
+    "sendTextUnavailable": "無法產生要傳送的訊息。",
     "sendFailed": "訊息未提交，已保留填寫內容",
     "playVideo": "播放影片",
     "openVideoSource": "開啟原影片",

@@ -4260,6 +4260,7 @@
           "supported": "可",
           "unsupported": "不可",
           "undeclared": "未宣",
+          "ultrafastDeclaredUnavailable": "供应商已宣，此 Codex 连线不可用",
           "pricing": "价目",
           "pricingLabel": "价目",
           "noPricing": "此路由无报价数据",
@@ -12231,6 +12232,9 @@
           "GROUP_AUTHORIZATION_REQUIRED": "{{name}} 的工具调用未执行：群内授权已失效或不允许此操作。请由伙伴主人在当前群重新发起。",
           "GROUP_AUTHORIZATION_UNAVAILABLE": "暂时无法核验 {{name}} 的群聊授权，这次工具调用未执行。请在连接恢复后重试。",
           "ATTACHMENTS_UNAVAILABLE": "部分附件未交给 {{name}}（下载失败或数量限制）。请重新发送本次需要的附件。",
+          "ATTACHMENTS_DOWNLOAD_FAILED": "部分附件下载失败，未能交给 {{name}}。请重新发送需要的附件。",
+          "ATTACHMENTS_LIMIT_REACHED": "本轮附件数量超过上限，部分附件未能交给 {{name}}。请分批发送需要的附件。",
+          "ATTACHMENTS_DOWNLOAD_FAILED_AND_LIMIT_REACHED": "部分附件下载失败，另一些超出本轮数量上限，未能交给 {{name}}。请分批重新发送需要的附件。",
           "GROUP_ASSISTANT_UNAVAILABLE": "{{name}}，连君之 Cindy，而后 Cindy 可代君行事（君之电脑今无在线之 Cindy）。",
           "GROUP_ASSISTANT_DEVICE_REQUIRED": "{{name}}，请择本群执行之机，既择即续此事。",
           "GROUP_ASSISTANT_DEVICE_OFFLINE": "{{name}} 于本群所择之机已离线。"
@@ -18460,7 +18464,11 @@
       "openWorkdirFailed": "启卷匣未成"
     },
     "runs": {
-      "boundPluginEngineRecovery": "自动之务未行。系于法器引擎之务者，循其务之模型，行于此机。若自动之务另择模型，宜去之，复行之。",
+      "boundPluginEngineRecovery": "自运未能用法器引擎而行。展开错误详情，可察其故。",
+      "boundPluginEngineSshRecovery": "SSH 差事须循其原用引擎。欲用法器引擎，宜系自运于相容之非 SSH 差事。",
+      "boundPluginEngineSelectionLocationRecovery": "所选法器引擎之所在不可行此自运。宜于自运模型设定中择可用电脑之引擎。",
+      "boundPluginEngineTaskLocationRecovery": "所系差事之法器引擎所在不可行此自运。宜移其引擎至可用之电脑，或另系相容差事。",
+      "boundPluginEngineModelRecovery": "自运所设模型与所系差事之法器引擎不合。宜设自运循差事之模型。",
       "queueWaitTimeoutRecovery": "排候逾时，提示词未发。待所系任务闲，按「{{action}}」补行。",
       "status": {
         "running": "方行",
@@ -22560,6 +22568,9 @@
     "send": "遣讯",
     "sending": "方遣…",
     "sent": "已呈",
+    "sendTooManyArguments": "此讯一次所理逾 {{limit}} 项，请助理分组重拟。",
+    "sendValueUnavailable": "此讯所需之值不可得，请助理核查表单栏位。",
+    "sendTextUnavailable": "未能拟就待传之讯。",
     "sendFailed": "讯未呈，所填之内容仍存",
     "playVideo": "播影",
     "openVideoSource": "启原影",

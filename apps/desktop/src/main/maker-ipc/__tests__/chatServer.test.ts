@@ -2675,7 +2675,8 @@ describe('Chat Server result delivery and refresh', () => {
         await ask(4, 'Please check');
         expect(fixture.download.mock.calls).toEqual([2, 1].map(n => [roomId, file(n).mediaId]));
         expect(dispatched()[0]!.attachments).toEqual([downloaded(1)]);
-        expect(dispatched()[0]!.message).toContain(t('bots.groupChat.notice.capability.ATTACHMENTS_UNAVAILABLE').replaceAll('{{name}}', 'Cindy'));
+        expect(notices()[0]?.[2].content[0].data).toEqual({ code: 'ATTACHMENTS_DOWNLOAD_FAILED' });
+        expect(dispatched()[0]!.message).toContain(t('bots.groupChat.notice.capability.ATTACHMENTS_DOWNLOAD_FAILED').replaceAll('{{name}}', 'Cindy'));
         expect(notices()).toHaveLength(1);
       });
 
@@ -2706,7 +2707,7 @@ describe('Chat Server result delivery and refresh', () => {
         expect(input.attachments).toEqual(expected);
         expect(fixture.download).toHaveBeenCalledTimes(expected.length);
         expect(notices()).toHaveLength(count === 1 ? 0 : 1);
-        if (count === 20) expect(input.message).toContain(t('bots.groupChat.notice.capability.ATTACHMENTS_UNAVAILABLE').replaceAll('{{name}}', 'Cindy'));
+        if (count === 20) expect(input.message).toContain(t('bots.groupChat.notice.capability.ATTACHMENTS_LIMIT_REACHED').replaceAll('{{name}}', 'Cindy'));
       });
 
       it.each(['deleted', 'forbidden', 'missing', 'gone', 'other-thread', 'future'] as const)('does not deliver an unavailable quoted original: %s', async state => {
@@ -2739,7 +2740,7 @@ describe('Chat Server result delivery and refresh', () => {
         expect(input?.attachments).toEqual([downloaded(2)]);
         expect(verifiedOwnerRequestText(input.autoReviewUserText)).toContain('@Cindy read the lessons');
         expect(notices()).toHaveLength(failure === 'text-only' ? 0 : 1);
-        if (failure !== 'text-only') expect(input.message).toContain(t('bots.groupChat.notice.capability.ATTACHMENTS_UNAVAILABLE').replaceAll('{{name}}', 'Cindy'));
+        if (failure !== 'text-only') expect(input.message).toContain(t('bots.groupChat.notice.capability.ATTACHMENTS_DOWNLOAD_FAILED').replaceAll('{{name}}', 'Cindy'));
         expect(fixture.handle.mock.calls.filter(([route]) => route === `/conversations/${roomId}/messages/${message(1, peerId, '').id}`)).toHaveLength(1);
       });
 

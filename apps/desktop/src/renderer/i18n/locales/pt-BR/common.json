@@ -4356,6 +4356,7 @@
           "supported": "Compatível",
           "unsupported": "Não compatível",
           "undeclared": "Não declarado",
+          "ultrafastDeclaredUnavailable": "Declarado pelo provedor · Indisponível nesta conexão do Codex",
           "pricing": "Preços",
           "pricingLabel": "Preços",
           "noPricing": "Sem dados de preços para esta rota",
@@ -12369,6 +12370,9 @@
           "GROUP_AUTHORIZATION_REQUIRED": "{{name}} não pôde executar a ferramenta: a autorização do grupo expirou ou não permite esta ação. O proprietário do amigo pode repetir o pedido neste grupo.",
           "GROUP_AUTHORIZATION_UNAVAILABLE": "Não foi possível verificar a autorização de grupo de {{name}}, por isso a ferramenta não foi executada. Tente novamente quando a conexão for restabelecida.",
           "ATTACHMENTS_UNAVAILABLE": "Alguns anexos não foram entregues a {{name}} devido a uma falha no download ou ao limite de anexos. Reenvie os anexos necessários para este pedido.",
+          "ATTACHMENTS_DOWNLOAD_FAILED": "Alguns anexos não foram entregues a {{name}} devido a uma falha no download. Reenvie os anexos necessários para este pedido.",
+          "ATTACHMENTS_LIMIT_REACHED": "Alguns anexos não foram entregues a {{name}} devido ao limite de anexos. Reenvie os anexos necessários para este pedido.",
+          "ATTACHMENTS_DOWNLOAD_FAILED_AND_LIMIT_REACHED": "Alguns anexos não foram entregues a {{name}} devido a uma falha no download e ao limite de anexos. Reenvie os anexos necessários para este pedido.",
           "GROUP_ASSISTANT_UNAVAILABLE": "{{name}}, conecte seu Cindy para que o Cindy possa trabalhar por você (nenhum Cindy seu está online agora).",
           "GROUP_ASSISTANT_DEVICE_REQUIRED": "{{name}}, escolha um computador para este grupo para continuar a solicitação.",
           "GROUP_ASSISTANT_DEVICE_OFFLINE": "O computador que {{name}} escolheu para este grupo está offline."
@@ -18713,7 +18717,11 @@
       "openWorkdirFailed": "Falha ao abrir pasta"
     },
     "runs": {
-      "boundPluginEngineRecovery": "A automação não foi executada. Uma automação vinculada a uma tarefa com mecanismo de plug-in usa o modelo da própria tarefa e é executada neste computador. Se a automação escolher um modelo, remova-o e execute-a novamente.",
+      "boundPluginEngineRecovery": "A automação não pôde ser executada com o mecanismo de plug-in. Abra os detalhes do erro para ver o motivo.",
+      "boundPluginEngineSshRecovery": "As tarefas SSH precisam manter o mecanismo atual. Para usar um mecanismo de plug-in, vincule a automação a uma tarefa compatível fora do SSH.",
+      "boundPluginEngineSelectionLocationRecovery": "A automação não pode ser executada no local do mecanismo de plug-in selecionado. Nas configurações de modelo da automação, escolha um mecanismo em um computador compatível.",
+      "boundPluginEngineTaskLocationRecovery": "A automação não pode ser executada no local do mecanismo de plug-in da tarefa vinculada. Mova o mecanismo da tarefa para um computador compatível ou vincule uma tarefa compatível.",
+      "boundPluginEngineModelRecovery": "As configurações de modelo da automação são incompatíveis com o mecanismo de plug-in da tarefa vinculada. Configure a automação para usar o modelo da tarefa.",
       "queueWaitTimeoutRecovery": "O tempo de espera expirou antes do envio da mensagem. Quando a sessão de destino estiver livre, escolha {{action}} para executá-la.",
       "status": {
         "running": "Em execução",
@@ -22858,6 +22866,9 @@
     "send": "Enviar mensagem",
     "sending": "Enviando…",
     "sent": "Enviado",
+    "sendTooManyArguments": "Esta mensagem usa mais de {{limit}} itens em uma só etapa. Peça ao assistente para dividi-los em grupos menores.",
+    "sendValueUnavailable": "Um valor usado nesta mensagem não está disponível. Peça ao assistente para verificar os campos do formulário.",
+    "sendTextUnavailable": "Não foi possível preparar a mensagem para envio.",
     "sendFailed": "A mensagem não foi enviada. O que você digitou continua aqui.",
     "playVideo": "Reproduzir vídeo",
     "openVideoSource": "Abrir vídeo original",

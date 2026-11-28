@@ -4302,6 +4302,7 @@
           "supported": "Supported",
           "unsupported": "Not supported",
           "undeclared": "Not declared",
+          "ultrafastDeclaredUnavailable": "Declared by the provider · Unavailable on this Codex connection",
           "pricing": "Pricing",
           "pricingLabel": "Pricing",
           "noPricing": "No pricing data for this route",
@@ -12277,6 +12278,9 @@
           "GROUP_AUTHORIZATION_REQUIRED": "{{name}} could not run this tool: group authorization has expired or does not allow this action. The buddy’s owner can make the request again in this group.",
           "GROUP_AUTHORIZATION_UNAVAILABLE": "Group authorization for {{name}} could not be verified, so this tool did not run. Try again after the connection recovers.",
           "ATTACHMENTS_UNAVAILABLE": "Some attachments were not delivered to {{name}} because of a download failure or attachment limit. Resend the attachments needed for this request.",
+          "ATTACHMENTS_DOWNLOAD_FAILED": "Some attachments were not delivered to {{name}} because of a download failure. Resend the attachments needed for this request.",
+          "ATTACHMENTS_LIMIT_REACHED": "Some attachments were not delivered to {{name}} because of the attachment limit. Resend the attachments needed for this request.",
+          "ATTACHMENTS_DOWNLOAD_FAILED_AND_LIMIT_REACHED": "Some attachments were not delivered to {{name}} because of a download failure and the attachment limit. Resend the attachments needed for this request.",
           "GROUP_ASSISTANT_UNAVAILABLE": "{{name}}, connect your Cindy so Cindy can work for you (none of your computers has Cindy online right now).",
           "GROUP_ASSISTANT_DEVICE_REQUIRED": "Choose the computer that should handle this request for {{name}}.",
           "GROUP_ASSISTANT_DEVICE_OFFLINE": "The computer {{name}} selected for this group is offline."
@@ -18535,7 +18539,11 @@
       "openWorkdirFailed": "Failed to open folder"
     },
     "runs": {
-      "boundPluginEngineRecovery": "This automation didn’t run. An automation linked to a plugin engine task uses the task’s own model and runs on this computer. If the automation chooses a model, remove it, then run it again.",
+      "boundPluginEngineRecovery": "The automation could not run with the plugin engine. Open the error details to check the reason.",
+      "boundPluginEngineSshRecovery": "SSH tasks must keep their current engine. To use a plugin engine, link the automation to a compatible task outside SSH.",
+      "boundPluginEngineSelectionLocationRecovery": "The selected plugin engine location cannot run this automation. In the automation’s model settings, choose an engine on a supported computer.",
+      "boundPluginEngineTaskLocationRecovery": "The linked task’s plugin engine location cannot run this automation. Move the task’s engine to a supported computer or link a compatible task.",
+      "boundPluginEngineModelRecovery": "The automation’s model settings do not match the linked task’s plugin engine. Set the automation to follow the task’s model.",
       "queueWaitTimeoutRecovery": "Queue wait expired before the prompt was sent. When the target session is idle, choose {{action}} to run it.",
       "status": {
         "running": "Running",
@@ -22648,6 +22656,9 @@
     "send": "Send Message",
     "sending": "Sending…",
     "sent": "Submitted",
+    "sendTooManyArguments": "This message uses more than {{limit}} items in one step. Ask the assistant to split them into smaller groups.",
+    "sendValueUnavailable": "A value this message uses is unavailable. Ask the assistant to check the form fields.",
+    "sendTextUnavailable": "Could not prepare the message to send.",
     "sendFailed": "The message was not submitted. Your entries are still here.",
     "playVideo": "Play video",
     "openVideoSource": "Open original video",

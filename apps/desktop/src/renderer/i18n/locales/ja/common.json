@@ -4260,6 +4260,7 @@
           "supported": "対応",
           "unsupported": "非対応",
           "undeclared": "宣言なし",
+          "ultrafastDeclaredUnavailable": "プロバイダーは対応を宣言済み。この Codex 接続では利用不可",
           "pricing": "料金",
           "pricingLabel": "料金",
           "noPricing": "このルートの料金データがありません",
@@ -12231,6 +12232,9 @@
           "GROUP_AUTHORIZATION_REQUIRED": "{{name}} のツールは実行されませんでした。グループの許可が失効しているか、この操作が許可されていません。仲間の所有者がこのグループで改めて依頼してください。",
           "GROUP_AUTHORIZATION_UNAVAILABLE": "{{name}} のグループでの許可を確認できず、ツールは実行されませんでした。接続が回復してから再試行してください。",
           "ATTACHMENTS_UNAVAILABLE": "ダウンロードの失敗または添付数の上限により、一部の添付ファイルを {{name}} に渡せませんでした。今回必要なファイルを再送してください。",
+          "ATTACHMENTS_DOWNLOAD_FAILED": "ダウンロードの失敗により、一部の添付ファイルを {{name}} に渡せませんでした。今回必要なファイルを再送してください。",
+          "ATTACHMENTS_LIMIT_REACHED": "添付数の上限により、一部の添付ファイルを {{name}} に渡せませんでした。今回必要なファイルを再送してください。",
+          "ATTACHMENTS_DOWNLOAD_FAILED_AND_LIMIT_REACHED": "ダウンロードの失敗と添付数の上限により、一部の添付ファイルを {{name}} に渡せませんでした。今回必要なファイルを再送してください。",
           "GROUP_ASSISTANT_UNAVAILABLE": "{{name}} さん、Cindy に代わりに作業してもらうには、あなたの Cindy を接続してください（現在オンラインの Cindy がありません）。",
           "GROUP_ASSISTANT_DEVICE_REQUIRED": "{{name}}さん、このグループで使うコンピュータを選ぶと、この依頼を続行できます。",
           "GROUP_ASSISTANT_DEVICE_OFFLINE": "{{name}}さんがこのグループで選んだコンピュータはオフラインです。"
@@ -18460,7 +18464,11 @@
       "openWorkdirFailed": "フォルダを開けませんでした"
     },
     "runs": {
-      "boundPluginEngineRecovery": "自動化は実行されませんでした。プラグインエンジンのタスクに紐づけた自動化は、タスク自身のモデルを使い、このコンピュータで実行されます。自動化でモデルを指定している場合は外してから、もう一度実行してください。",
+      "boundPluginEngineRecovery": "プラグインエンジンで自動化を実行できませんでした。エラーの詳細を開いて原因を確認してください。",
+      "boundPluginEngineSshRecovery": "SSH タスクでは現在のエンジンを使う必要があります。プラグインエンジンを使うには、対応する非 SSH タスクに自動化を紐づけてください。",
+      "boundPluginEngineSelectionLocationRecovery": "選択したプラグインエンジンの実行場所では、この自動化を実行できません。自動化のモデル設定で、対応するコンピューター上のエンジンを選んでください。",
+      "boundPluginEngineTaskLocationRecovery": "紐づけたタスクのプラグインエンジンの実行場所では、この自動化を実行できません。タスクのエンジンを対応するコンピューターに移すか、対応するタスクに紐づけてください。",
+      "boundPluginEngineModelRecovery": "自動化のモデル設定が、紐づけたタスクのプラグインエンジンに対応していません。自動化でタスクのモデルを使うように設定してください。",
       "queueWaitTimeoutRecovery": "待機時間を超えたため、プロンプトは送信されませんでした。対象のセッションが空いたら「{{action}}」で実行できます。",
       "status": {
         "running": "実行中",
@@ -22560,6 +22568,9 @@
     "send": "メッセージを送信",
     "sending": "送信中…",
     "sent": "送信済み",
+    "sendTooManyArguments": "このメッセージでは一度に {{limit}} 個を超える項目を処理しています。アシスタントに項目を小分けにするよう依頼してください。",
+    "sendValueUnavailable": "このメッセージに必要な値を取得できません。アシスタントにフォームの項目を確認するよう依頼してください。",
+    "sendTextUnavailable": "送信するメッセージを作成できませんでした。",
     "sendFailed": "メッセージを送信できませんでした。入力内容は保持されています。",
     "playVideo": "動画を再生",
     "openVideoSource": "元の動画を開く",
