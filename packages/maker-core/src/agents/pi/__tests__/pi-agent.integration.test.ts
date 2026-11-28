@@ -2828,6 +2828,44 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
     },
   );
 
+  // #13612: only the real Google serializer can distinguish a completed Hydrogen
+  // turn from a locally rejected xhigh mapping. Exercise the custom-provider route.
+  it.each(['high', 'xhigh'] as const)('sends Hydrogen %s through a custom Google connection', async (effort) => {
+    const model = 'gemini-4-hydrogen';
+    const providerId = 'hydrogen-fixture';
+    const deps = buildDeps();
+    deps.capabilityAdditions = { availableModels: [{
+      id: model, displayName: model, contextWindow: 65536, efforts: ['high', 'xhigh'], defaultEffort: 'high',
+    }] };
+    deps.resolvePiNativeProviders = async () => ({
+      providers: [{
+        id: providerId, name: 'Local Google', baseUrl: endpoint, api: 'google-generative-ai',
+        apiKeyEnvVar: 'CINDY_PI_API_KEY', models: [{ id: model, reasoning: true,
+          thinkingLevelMap: { high: 'high', xhigh: 'xhigh' } }],
+      }], env: {},
+    });
+    const workingDir = mkdtempSync(path.join(tmpdir(), 'pi-hydrogen-'));
+    const before = seenRequests.length;
+    let handle: AgentSessionHandle | undefined;
+    try {
+      handle = await new PiAgent(deps).startSession({ sessionId: `hydrogen-${effort}`, workingDir, providerId, model, effort });
+      const done = (async () => {
+        for await (const event of handle!.events()) {
+          if (event.type === 'done') return event.data;
+        }
+      })();
+      await handle.send({ type: 'user', content: 'reply briefly' });
+      expect(await done).toMatchObject({ status: 'completed' });
+      const requests = seenRequests.slice(before);
+      expect(requests).toHaveLength(1);
+      expect(requests[0]?.url).toContain(model + ':streamGenerateContent');
+      expect(JSON.parse(requests[0]!.body).generationConfig.thinkingConfig.thinkingLevel).toBe(effort.toUpperCase());
+    } finally {
+      await handle?.close();
+      rmSync(workingDir, { recursive: true, force: true });
+    }
+  }, 30_000);
+
   // #9037: verify the adapter's ultra alias against real Pi and the final Responses payload.
   it('keeps native ultra at max after scheduled-style controls and model switching', { timeout: 30_000 }, async () => {
     const deps = buildDeps();
