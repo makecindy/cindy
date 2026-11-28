@@ -343,6 +343,7 @@ import {
   hasConnectedSubscriptionPool,
   hasCreatedOpenAiImageAuth,
   lastConfirmedSubscriptionModelsAt,
+  listSubscriptionPoolSources,
   subscriptionProviderAccountKeys,
   observeSubscriptionAccountUsage,
   pooledCodexResetTarget,
@@ -2355,6 +2356,28 @@ describe('owner-only subscription identity', () => {
     expect(JSON.stringify(keys)).not.toContain('secret-token');
     h.pools.openai.accounts[1].paused = true;
     expect(subscriptionProviderAccountKeys('openai')).toBeUndefined();
+  });
+
+  // Unit regression: on cold start before readSubscriptionPool caches auth, a bound default slot
+  // without persisted lastConfirmedIdentity was filtered out as "unused", leaving length 1 so
+  // Smart Routing skipped warming and failed to flatten the two accounts.
+  it('keeps bound default slot on cold start and drops it only after cache confirms signed-out', async () => {
+    h.pools.openai = { strategy: 'expiring', accounts: [account('default'), account('second')] };
+    h.owner += ':cold-sources';
+    const cold = listSubscriptionPoolSources('openai');
+    expect(cold?.map(a => a.id)).toEqual(['default', 'second']);
+
+    h.read.mockImplementation(async (_provider: string, directory: string) => (
+      directory.endsWith('/second')
+        ? { authenticated: true, identity: 'second@example.test' }
+        : { authenticated: false }
+    ));
+    h.tokens.mockResolvedValue({ chatgptAccountId: 'ws-second', canDispatch: () => true });
+    await readSubscriptionPool('openai');
+    const warmed = listSubscriptionPoolSources('openai');
+    expect(warmed?.map(a => ({ id: a.id, label: a.label }))).toEqual([
+      { id: 'second', label: 'second@example.test' },
+    ]);
   });
 });
 

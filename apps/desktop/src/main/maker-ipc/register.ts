@@ -8,6 +8,7 @@ import { desktopContextRecoveryAbortSignal } from './contextRecoveryAssembly.des
 import { createSessionContextWindowBudgetReconcile } from './sessionContextWindowBudgetReconcile.js';
 import { appliedContextWindowBudgets, pendingSessionContextWindowBudgetReconciles } from './sessionContextWindowBudgetState.js';
 import {
+  bindSessionSubscriptionAccount,
   needsSubscriptionAccountHandoff,
   hasRestoredPooledCodexQuota,
   readSubscriptionTaskUsage,
@@ -18738,6 +18739,14 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             configStaged: true,
             preserveModelGroupBinding: true,
           }),
+        pinLocalSource: async (sid, { providerId, accountId }) => {
+          if (accountId) {
+            await bindSessionSubscriptionAccount(sid, providerId, accountId).catch(() => undefined);
+          }
+          if (readProviderGroup(providerId)) {
+            await markProviderGroupReleased(sid, { providerId }).catch(() => undefined);
+          }
+        },
         writeSwitchNote: async (sid, note, clientId) => {
           await createDbMessage(sid, {
             clientId,
@@ -18790,9 +18799,20 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           fastMode: current.fastMode,
         },
       }));
-      if (!offer || (dbToMakerEngineKind(offer.agentKind) === current.agentKind &&
-        offer.providerId === current.providerId && offer.model === current.model &&
-        (offer.agentDeviceId ?? null) === (current.agentDeviceId ?? null))) return { candidate: null };
+      const sameRouteWithoutAccountChange = dbToMakerEngineKind(offer?.agentKind ?? 'cc') === current.agentKind
+        && offer?.providerId === current.providerId
+        && offer?.model === current.model
+        && (offer?.agentDeviceId ?? null) === (current.agentDeviceId ?? null)
+        && !offer?.accountId;
+      if (!offer || sameRouteWithoutAccountChange) return { candidate: null };
+      if (!offer.agentDeviceId) {
+        if (offer.accountId) {
+          await bindSessionSubscriptionAccount(sessionId, offer.providerId, offer.accountId).catch(() => undefined);
+        }
+        if (readProviderGroup(offer.providerId)) {
+          await markProviderGroupReleased(sessionId, { providerId: offer.providerId }).catch(() => undefined);
+        }
+      }
       return {
         candidate: {
           agentKind: dbToMakerEngineKind(offer.agentKind),
@@ -18809,6 +18829,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             model: profile.model,
             providerId: profile.providerId,
             agentDeviceId: profile.agentDeviceId || undefined,
+            ...(offer.accountId ? { accountId: offer.accountId } : {}),
           }));
         },
       };

@@ -10,6 +10,7 @@ import {
   findModelGroupRoute,
   MODEL_GROUP_LIMITS,
   modelGroupAutoSwitchOn,
+  modelGroupCandidateBaseKey,
   modelGroupCandidateKey,
   sanitizeModelGroupSelection,
   type ModelGroupAgentKind,
@@ -26,8 +27,8 @@ const log = createLogger('model-group-session-bindings');
 const FILE_NAME = 'model-group-session-bindings.json';
 export const MODEL_GROUP_SESSION_BINDINGS_MAX = 2000;
 const SESSION_ID_MAX = 256;
-/** 候选键 = 引擎、供应商连接 ID、模型，另一台电脑或分享来的再加运行位置；各段上限与配置相同。 */
-const PICKED_KEY_MAX = MODEL_GROUP_LIMITS.field * 3 + 16;
+/** 候选键 = 引擎、供应商连接 ID、模型，加上可选运行位置或本机账号槽位后缀；各段上限与配置相同。 */
+const PICKED_KEY_MAX = MODEL_GROUP_LIMITS.field * 4 + 32;
 
 export interface ModelGroupSessionBinding {
   selection: ModelGroupSelection;
@@ -274,6 +275,7 @@ export interface ModelGroupSessionTarget {
   providerId?: string | null;
   model?: string | null;
   agentDeviceId?: string | null;
+  accountId?: string | null;
 }
 
 export interface PendingModelGroupTarget extends ModelGroupSessionTarget {
@@ -285,12 +287,21 @@ function targetMatchesPickedKey(pickedKey: string, target?: ModelGroupSessionTar
   if (!target || !target.providerId || !target.model) return false;
   const kind = target.agentKind === 'claude-code' ? 'cc' : target.agentKind;
   if (kind !== 'cc' && kind !== 'codex' && kind !== 'pi' && kind !== 'acp') return false;
+  if (target.accountId) {
+    return modelGroupCandidateKey({
+      agentKind: kind as ModelGroupAgentKind,
+      providerId: target.providerId,
+      model: target.model,
+      agentDeviceId: target.agentDeviceId || undefined,
+      accountId: target.accountId,
+    }) === pickedKey;
+  }
   return modelGroupCandidateKey({
     agentKind: kind as ModelGroupAgentKind,
     providerId: target.providerId,
     model: target.model,
     agentDeviceId: target.agentDeviceId || undefined,
-  }) === pickedKey;
+  }) === modelGroupCandidateBaseKey(pickedKey);
 }
 
 /** 当前任务的智能路由绑定是否正是为了切到这个目标（用于发前落地 pending intent 时保留绑定）。 */

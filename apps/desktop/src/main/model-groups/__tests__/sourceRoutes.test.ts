@@ -141,6 +141,56 @@ describe('provider routes', () => {
     const where = childrenOf(config, 'auto:openai').flatMap((route) => route.candidates.map((item) => item.agentDeviceId ?? 'local'));
     expect(where).not.toContain('mbp');
     expect(where).not.toContain('mini');
+    // newer 因多了 gpt-6-sol 保留为成员，但在本机已覆盖的 gpt-6-luna / gpt-5.5 上不再重复展开同一账号。
+    const byModel = new Map(childrenOf(config, 'auto:openai').map((route) => [route.name, route.candidates.map((item) => item.agentDeviceId ?? 'local')]));
+    expect(byModel.get('GPT-6-SOL')).toEqual(['newer']);
+    expect(byModel.get('GPT-6-LUNA')).not.toContain('newer');
+    expect(byModel.get('GPT-5.5')).not.toContain('newer');
+  });
+
+  // 2026-11-28 用户验收反馈：真实多机下 MBP-M5 关闭了 Fast（allowFast: false / supportsFastMode: false）而本机开启了 Fast，
+  // 且远端历史自定义连接带有不同目录元数据（effortsUnknown、imageModels 差异）或多了 1 个旧型号（gpt-5.3-codex-spark）。
+  // 失效后果：此前复用浏览列表的 subscriptionModelsCoveredBy 对 allowFast 做严格相等 ===，导致 MBP-M5 无法被去重；
+  // 仅靠成员级去重也让多 1 个旧型号的远端在共同模型上重复成为候选。
+  // 最小输入：本机池 [A, B]（allowFast: true、含 imageModels）+ mbp [A]（allowFast: false、无 imageModels）+ mini [B]（多 1 个旧模型）。
+  it('deduplicates across Fast policy and metadata differences and avoids duplicate candidates on shared models', () => {
+    const local = view('openai', 'OpenAI', 'codex', ['gpt-6.2-sol', 'gpt-6.2-astra'], {
+      subscriptionAccountKeys: ['acct-a', 'acct-b'],
+      subscriptionFastPolicy: { allowFast: true, groupAllowsFast: true },
+      imageModels: [{ id: 'openai/gpt-image-2', name: 'GPT Image Gen' }],
+    });
+    local.models.codex = local.models.codex!.map((model) => ({
+      ...model, supportsFastMode: true, supportsUltrafastMode: true, effortsUnknown: false,
+    }));
+    const mbp = view('openai-cb758b11', 'OpenAI · a', 'codex', ['gpt-6.2-sol', 'gpt-6.2-astra'], {
+      source: 'user',
+      logoKind: 'openai',
+      subscriptionAccountKeys: ['acct-a'],
+      subscriptionFastPolicy: { allowFast: false, groupAllowsFast: true },
+    });
+    mbp.models.codex = mbp.models.codex!.map((model) => ({
+      ...model, supportsFastMode: false, supportsUltrafastMode: false,
+    }));
+    const mini = view('openai-bdd7f10c', 'OpenAI · b', 'codex', ['gpt-6.2-sol', 'gpt-6.2-astra', 'gpt-5.3-codex-spark'], {
+      source: 'user',
+      logoKind: 'openai',
+      subscriptionAccountKeys: ['acct-b'],
+      subscriptionFastPolicy: { allowFast: true, groupAllowsFast: true },
+    });
+
+    const config = effectiveModelGroupsConfig({ routes: [] }, {
+      views: [local, ORGANIZATION], agents: AGENTS, available: () => true,
+      remote: new Map([['mbp', [mbp]], ['mini', [mini]]]),
+    });
+    expect(config.sourceRoutes?.[0].sources).toEqual([
+      { providerId: 'openai' },
+      { providerId: 'byok-1' },
+      { providerId: 'openai-bdd7f10c', agentDeviceId: 'mini' },
+    ]);
+    const expanded = new Map(childrenOf(config, 'auto:openai').map((route) => [route.name, route.candidates.map((item) => item.agentDeviceId ?? 'local')]));
+    expect(expanded.get('GPT-6.2-SOL')).toEqual(['local']);
+    expect(expanded.get('GPT-6.2-ASTRA')).toEqual(['local']);
+    expect(expanded.get('GPT-5.3-CODEX-SPARK')).toEqual(['mini']);
   });
 
   // 2026-11-27 review(Greptile P1)：去重不能让已停用(off: true)或本机无法运行对应引擎的成员充当保留方，
@@ -349,5 +399,124 @@ describe('provider routes', () => {
     const mixChildren = childrenOf(manual, 'sr-mix');
     expect(mixChildren.some((item) => item.candidates.some((c) => c.agentKind === 'acp' && c.model === 'gemini-4-neon'))).toBe(true);
     expect(mixChildren.some((item) => item.candidates.some((c) => c.model === 'local-only'))).toBe(false);
+  });
+
+  // 2026-11-28 用户裁决：路由选项里不出现再次合并的嵌套自动来源（无两层自动）。
+  // 本机多账号订阅池直接拆平为单账号来源，可逐个开关/排序/权重，并按单账号与本机并集对同账号远端去重。
+  // 失效后果：多账号池被包成单个 opaque 成员或无法单独关掉其中一个账号。
+  // 最小输入：本机 OpenAI 2 个账号 + OpenAI-Codex + 同账号远端 MBP-M5 + 带旧型号的远端 Mac mini + 分享来源。
+  it('flattens local multi-account pools into individual toggleable route sources and deduplicates covered remotes', () => {
+    const localOpenAi = view('openai', 'OpenAI', 'codex', ['gpt-6.2-sol', 'gpt-6.2-astra'], {
+      subscriptionAccountKeys: ['acct-a', 'acct-b'],
+      subscriptionFastPolicy: { allowFast: true },
+    });
+    const mbp = view('openai-cb758b11', 'OpenAI', 'codex', ['gpt-6.2-sol', 'gpt-6.2-astra'], {
+      logoKind: 'openai',
+      subscriptionAccountKeys: ['acct-a'],
+      subscriptionFastPolicy: { allowFast: false },
+    });
+    const mini = view('openai-bdd7f10c', 'OpenAI', 'codex', ['gpt-6.2-sol', 'gpt-5.3-codex-spark'], {
+      logoKind: 'openai',
+      subscriptionAccountKeys: ['acct-b'],
+    });
+    const shareAlex = view('openai', 'OpenAI', 'codex', ['gpt-6.2-sol'], { logoKind: 'openai' });
+    const byok = view('byok-1', 'OpenAI-Codex', 'codex', ['byok-codex/gpt-6.2-sol'], {
+      source: 'organization',
+      logoKind: 'openai-spectrum',
+    });
+    const localAccounts = new Map([
+      ['openai', [
+        { id: 'default', label: 'chrisz83@gmail.com', accountKey: 'acct-a', usable: true },
+        { id: 'second', label: 'zkyous1@gmail.com', accountKey: 'acct-b', usable: true },
+      ]],
+    ]);
+
+    const config = effectiveModelGroupsConfig({ routes: [] }, {
+      views: [localOpenAi, byok],
+      localAccounts,
+      agents: AGENTS,
+      remote: new Map([
+        ['mbp', [mbp]],
+        ['mini', [mini]],
+        ['share:alex', [shareAlex]],
+      ]),
+      available: () => true,
+    });
+    // 本机 2 个账号拆平为 2 个独立来源；MBP-M5 被本机 default 覆盖而剔除；mini 因多了旧型号保留；分享与 BYOK 各自独立。
+    expect(config.sourceRoutes?.[0]?.sources).toEqual([
+      { providerId: 'openai', accountId: 'default' },
+      { providerId: 'openai', accountId: 'second' },
+      { providerId: 'byok-1' },
+      { providerId: 'openai-bdd7f10c', agentDeviceId: 'mini' },
+      { providerId: 'openai', agentDeviceId: 'share:alex' },
+    ]);
+    // 共同模型 gpt-6.2-sol 上 mini 的重复配额被剔除，只剩 4 个不重不漏的扁平来源。
+    const expanded = new Map(childrenOf(config, 'auto:openai').map((route) => [route.name, route.candidates]));
+    expect(expanded.get('GPT-6.2-SOL')?.map((c) => [c.providerId, c.accountId ?? null, c.agentDeviceId ?? null])).toEqual([
+      ['openai', 'default', null],
+      ['openai', 'second', null],
+      ['byok-1', null, null],
+      ['openai', null, 'share:alex'],
+    ]);
+    expect(expanded.get('GPT-5.3-CODEX-SPARK')?.map((c) => c.agentDeviceId)).toEqual(['mini']);
+
+    // 单独关掉第 2 个本机账号：只停用该账号，第 1 个账号与其余来源照常启用。
+    const withSecondOff = effectiveModelGroupsConfig({
+      routes: [],
+      autoSources: {
+        'auto:openai': [
+          { providerId: 'openai', accountId: 'default' },
+          { providerId: 'openai', accountId: 'second', off: true },
+          { providerId: 'byok-1' },
+        ],
+      },
+    }, {
+      views: [localOpenAi, byok],
+      localAccounts,
+      agents: AGENTS,
+      available: () => true,
+    });
+    expect(withSecondOff.sourceRoutes?.[0]?.sources).toEqual([
+      { providerId: 'openai', accountId: 'default' },
+      { providerId: 'openai', accountId: 'second', off: true },
+      { providerId: 'byok-1' },
+    ]);
+    const solWithOff = childrenOf(withSecondOff, 'auto:openai').find((r) => r.name === 'GPT-6.2-SOL');
+    expect(solWithOff?.candidates.map((c) => [c.providerId, c.accountId ?? null, c.off === true])).toEqual([
+      ['openai', 'default', false],
+      ['openai', 'second', true],
+      ['byok-1', null, false],
+    ]);
+
+    // 仅本机一个供应商但有 2 个账号时，也直接拆平合成单层 auto:openai，不再留两层自动。
+    const twoAccountsOnly = effectiveModelGroupsConfig({ routes: [] }, {
+      views: [localOpenAi],
+      localAccounts,
+      agents: AGENTS,
+      available: () => true,
+    });
+    expect(twoAccountsOnly.sourceRoutes?.[0]?.sources).toEqual([
+      { providerId: 'openai', accountId: 'default' },
+      { providerId: 'openai', accountId: 'second' },
+    ]);
+
+    // 手动建的供应商路由若仍引用未拆平的本机多账号供应商，读取时同样拆平并继承开关与权重。
+    const manualFlattened = effectiveModelGroupsConfig({
+      routes: [],
+      sourceRoutes: [{
+        id: 'custom-gpt', name: 'My GPT', strategy: 'weighted',
+        sources: [{ providerId: 'openai', weight: 3 }, { providerId: 'byok-1' }],
+      }],
+    }, {
+      views: [localOpenAi, byok],
+      localAccounts,
+      agents: AGENTS,
+      available: () => true,
+    });
+    expect(manualFlattened.sourceRoutes?.find((r) => r.id === 'custom-gpt')?.sources).toEqual([
+      { providerId: 'openai', accountId: 'default', weight: 3 },
+      { providerId: 'openai', accountId: 'second', weight: 3 },
+      { providerId: 'byok-1' },
+    ]);
   });
 });

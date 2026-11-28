@@ -11,6 +11,8 @@
 import {
   DEFAULT_PROMPT_CACHE_TTL_MS,
   modelGroupAutoSwitchFor,
+  modelGroupCandidateAccountId,
+  modelGroupCandidateBaseKey,
   modelGroupCandidateKey,
   promptCacheTtlMsForProvider,
   type ModelGroupAgentKind,
@@ -69,11 +71,14 @@ export interface ModelGroupTurnDecisionSwitch {
     providerId: string;
     model: string;
     agentDeviceId: string | null;
+    accountId?: string;
     effort?: string;
     fastMode?: true | 'ultrafast';
   };
   crossEngine: boolean;
   crossLocation: boolean;
+  /** 本机多账号拆平后在同供应商内切换到另一个账号槽位（需先绑定新账号再交接）。 */
+  crossAccount?: boolean;
   /** 目标窗口装不下已知上下文时标记，提示执行方优先走有界交接而非阻塞确认弹窗。 */
   requiresHandoffForWindow?: boolean;
 }
@@ -110,7 +115,7 @@ export async function evaluateModelGroupBeforeSend(
     return { action: 'keep', reason: 'excluded-source' };
   }
   const currentLocation = current.agentDeviceId || undefined;
-  const currentKey = modelGroupCandidateKey({
+  const currentBaseKey = modelGroupCandidateKey({
     agentKind: current.agentKind,
     providerId: current.providerId,
     model: current.model,
@@ -118,7 +123,9 @@ export async function evaluateModelGroupBeforeSend(
   });
 
   const storedBinding = await deps.readBinding(sessionId);
-  const bindingActive = !!storedBinding && storedBinding.pickedKey === currentKey;
+  const bindingActive = !!storedBinding && modelGroupCandidateBaseKey(storedBinding.pickedKey) === currentBaseKey;
+  const currentAccountId = bindingActive ? modelGroupCandidateAccountId(storedBinding.pickedKey) : undefined;
+  const currentKey = bindingActive ? storedBinding.pickedKey : currentBaseKey;
   const selection = bindingActive ? storedBinding.selection : (turn.overrideSelection ?? null);
   if (!selection) {
     return { action: 'keep', reason: 'unbound' };
@@ -233,7 +240,9 @@ export async function evaluateModelGroupBeforeSend(
   let picked: ReturnType<typeof pickModelGroupCandidate> | null = null;
   if (cause === 'preflight-unavailable') {
     const sameExhaustedSource = isLimitedInTrace(currentTrace)
-      ? (c: ModelGroupCandidate) => c.providerId === current.providerId && (c.agentDeviceId || undefined) === currentLocation
+      ? (c: ModelGroupCandidate) => c.providerId === current.providerId
+        && (c.agentDeviceId || undefined) === currentLocation
+        && (!currentAccountId || !c.accountId || c.accountId === currentAccountId)
       : () => false;
     const eligible = (c: ModelGroupCandidate) =>
       modelGroupCandidateKey(c) !== currentKey && !sameExhaustedSource(c);
@@ -299,6 +308,9 @@ export async function evaluateModelGroupBeforeSend(
   const toLabel = `${chosenTrace.modelName} · ${chosenTrace.sourceName}`;
   const crossEngine = !isSameEngine(chosen, current);
   const crossLocation = (chosen.agentDeviceId || undefined) !== currentLocation;
+  const crossAccount = !crossLocation && chosen.providerId === current.providerId
+    && (chosen.accountId ?? null) !== (currentAccountId ?? null)
+    && Boolean(chosen.accountId || currentAccountId);
   const requiresHandoffForWindow = !fitsContext(picked.index);
 
   return {
@@ -313,11 +325,13 @@ export async function evaluateModelGroupBeforeSend(
       providerId: chosen.providerId,
       model: chosen.model,
       agentDeviceId: chosen.agentDeviceId ?? null,
+      ...(chosen.accountId ? { accountId: chosen.accountId } : {}),
       ...(chosenFact?.effort ? { effort: chosenFact.effort } : {}),
       ...(chosenFact?.fastMode ? { fastMode: chosenFact.fastMode } : {}),
     },
     crossEngine,
     crossLocation,
+    ...(crossAccount ? { crossAccount: true } : {}),
     ...(requiresHandoffForWindow ? { requiresHandoffForWindow: true } : {}),
   };
 }

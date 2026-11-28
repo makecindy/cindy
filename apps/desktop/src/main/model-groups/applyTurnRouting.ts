@@ -99,6 +99,7 @@ export interface RunModelGroupBeforeSendPorts {
     fastMode?: boolean | 'ultrafast';
     skipBootstrap: boolean;
   }): Promise<{ switched: boolean }>;
+  pinLocalSource?(sessionId: string, route: { providerId: string; accountId?: string }): Promise<void> | void;
   writeSwitchNote?(sessionId: string, note: ModelGroupRouteNote, clientId: string): Promise<void>;
   describeCause?(cause: ModelGroupTurnDecisionSwitch['cause']): string;
   runAsOwner?<T>(work: () => Promise<T>): Promise<T>;
@@ -174,7 +175,14 @@ export async function runModelGroupBeforeSend(
       ? false
       : (decision.target.fastMode ?? row.fastMode ?? false);
 
-    const useCrossPath = decision.crossEngine || decision.crossLocation || decision.requiresHandoffForWindow === true;
+    if (!decision.target.agentDeviceId && ports.pinLocalSource) {
+      await ports.pinLocalSource(sessionId, {
+        providerId: decision.target.providerId,
+        ...(decision.target.accountId ? { accountId: decision.target.accountId } : {}),
+      });
+    }
+
+    const useCrossPath = decision.crossEngine || decision.crossLocation || decision.crossAccount === true || decision.requiresHandoffForWindow === true;
     if (!useCrossPath) {
       const sameRes = await ports.applySameEngineRoute({
         sessionId,
@@ -225,6 +233,7 @@ export async function runModelGroupBeforeSend(
         providerId: committedProviderId,
         model: committedModel,
         agentDeviceId: decision.target.agentDeviceId || undefined,
+        accountId: decision.target.accountId,
       }),
     );
 
