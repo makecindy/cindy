@@ -103,6 +103,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { PassThrough } from 'node:stream';
 import { createCodexCollaborationMarkerTransform } from './codex-collaboration-marker.js';
+import { createInvalidImageBlockNoticeTransform } from './invalid-image-block-notice.js';
 import {
   getActiveCatalog,
   getCatalogModelContextWindow,
@@ -3811,6 +3812,10 @@ function createTransformRequestChain(
     execAdapter.releaseResponse(requestId);
   };
   const transforms: RequestTransform[] = [
+    // A truncated inline image in a tool result otherwise poisons every later
+    // request (upstream 400). Rewrite the bad block on the wire before any
+    // provider-specific transform sees it.
+    createInvalidImageBlockNoticeTransform(),
     createArmedHttpRecoveryStripTransform(),
     createActiveStripTransform({
       controller: encryptedStripController,
