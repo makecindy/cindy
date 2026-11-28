@@ -1531,6 +1531,97 @@ test('keeps compatibility app callers alive when only the Agent-Net connection d
   assert.deepEqual(releasedAuth, ['device:desktop', 'device:phone']);
 });
 
+// §3.2 integration: drive the Host's real dispatch over one simulated relay.
+// A backpressured reply must stay in the outbox while its route is known offline.
+// Removing either offline notification wiring allows the next full sweep to
+// write to that peer. Another controller and the directed relink flush stay live.
+for (const offlineSignal of ['presence', 'relay error']) {
+  test(`Host outbox skips an offline controller after ${offlineSignal} and flushes it on relink`, async t => {
+    const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-host-offline-outbox-'));
+    configureAppDataDir(profile);
+    configureHostOwner({ userDataDir: profile, ownerId: 'test-offline-outbox' });
+    const sockets = [];
+    const attempts = [];
+    const released = [];
+    class Wire extends EventEmitter {
+      sent = [];
+      bufferedAmount = 0;
+      send(data) {
+        const frame = JSON.parse(data);
+        if (frame.kind === 'invoke-result') {
+          attempts.push(frame.id);
+          if (frame.id === 'waiting-a' && attempts.filter(id => id === 'waiting-a').length === 1)
+            throw new DeviceLinkError('BACKPRESSURE', 'fixture write is full');
+        }
+        this.sent.push(frame);
+        if (frame.kind === 'hello') queueMicrotask(() => this.push({ kind: 'hello-ack',
+          payload: { serverProtocolVersion: PROTOCOL_VERSION, deviceId: 'host', userId: 'test-offline-outbox' } }));
+      }
+      push(frame) { this.emit('message', JSON.stringify({ v: PROTOCOL_VERSION, ...frame })); }
+      close(code = 1000) { this.emit('close', code); }
+    }
+    const host = createHostDeviceLink({
+      profileDir: profile, worktree: createHostWorktreeLifecycle(profile), version: 'test',
+      getWsUrl: () => 'ws://127.0.0.1:9', getToken: async () => 'synthetic-host', canRegister: () => true,
+      invoke: async () => ({ status: 200, body: {} }), subscribe: () => () => {},
+      createRuntimeSession: async () => ({}), closeRuntimeSession: async () => {}, disableShareAvailability: async () => {},
+      releaseAuthCaller: caller => released.push(caller),
+      createWebSocket: () => {
+        const socket = new Wire();
+        sockets.push(socket);
+        setImmediate(() => socket.emit('open'));
+        return socket;
+      },
+    });
+    t.after(async () => {
+      await host.stop();
+      commitVolatileAppSession('signed-out', null, true);
+      fs.rmSync(profile, { recursive: true, force: true });
+    });
+
+    await host.setEnabled(true);
+    await waitFor(() => host.state().status === 'online');
+    const [relay] = sockets;
+    const open = (src, id) => relay.push({ kind: 'link-open', src, id,
+      payload: { controllerName: src, protocolVersion: PROTOCOL_VERSION, appVersion: 'test' } });
+    const subscribe = (src, id) => relay.push({ kind: 'invoke', src, id,
+      payload: { channel: 'device-link:subscribe', args: [{ topics: ['sessions'] }] } });
+    const reply = id => relay.sent.find(frame => frame.kind === 'invoke-result' && frame.id === id);
+    const settle = () => new Promise(resolve => setImmediate(resolve));
+    open('peer-a', 'a-open');
+    open('peer-b', 'b-open');
+    await waitFor(() => relay.sent.filter(frame => frame.kind === 'link-accept').length === 2);
+    t.mock.timers.enable({ apis: ['setTimeout'] });
+    subscribe('peer-a', 'a-probe');
+    subscribe('peer-a', 'waiting-a');
+    await settle();
+    assert.equal(reply('a-probe')?.payload.ok, true);
+    assert.deepEqual(attempts, ['a-probe', 'waiting-a']);
+
+    if (offlineSignal === 'presence') {
+      relay.push({ kind: 'presence-changed', payload: { deviceId: 'peer-a', online: false } });
+    } else {
+      relay.push({ kind: 'relay-error', id: 'a-probe',
+        payload: { dst: 'peer-a', code: 'DEVICE_OFFLINE', message: 'device offline' } });
+    }
+    t.mock.timers.tick(500);
+    await settle();
+    assert.equal(attempts.filter(id => id === 'waiting-a').length, 1, 'no blind outbox write while offline');
+    assert.deepEqual(released, ['device:peer-a']);
+    subscribe('peer-b', 'b-live');
+    await settle();
+    assert.equal(reply('b-live')?.payload.ok, true);
+
+    open('peer-a', 'a-reopen');
+    await settle();
+    assert.equal(reply('waiting-a')?.payload.ok, true);
+    t.mock.timers.tick(500);
+    assert.deepEqual(attempts, ['a-probe', 'waiting-a', 'b-live', 'waiting-a']);
+    assert.deepEqual(sockets, [relay]);
+    assert.equal(relay.sent.filter(frame => frame.kind === 'link-accept' && frame.dst === 'peer-b').length, 1);
+  });
+}
+
 // Unit: the authenticated transport determines who can ask Desktop Main for project
 // evidence. Persisted profile fields never select the privileged write adapter.
 test('routes project writes by their authenticated caller', async () => {

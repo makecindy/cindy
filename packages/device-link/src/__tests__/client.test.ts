@@ -8754,7 +8754,7 @@ describe('DeviceLinkClient', () => {
       }
     });
 
-    it('A:link 断开状态下 pending 滞留超阈值 → 新帧入队前整队放弃,不再 BACKPRESSURE', async () => {
+    it('A:link 断开状态下陈旧的 push 前缀腾出空间,不再 BACKPRESSURE', async () => {
       const proto = DeviceLinkClient.prototype as unknown as { monotonicNow(): number };
       let nowMs = 1_000_000;
       const clock = vi.spyOn(proto, 'monotonicNow').mockImplementation(() => nowMs);
@@ -8773,11 +8773,145 @@ describe('DeviceLinkClient', () => {
         // 第 65 条:队头未过滞留阈值 → latest-wins 驱逐最旧 push 腾位入队,
         // 不再 BACKPRESSURE(link 恢复后仍可交付较新镜像)
         expect(() => h.client.sendPush('ctrl-1', 'maker:event', { overflow: true })).not.toThrow();
-        // 滞留超阈值后:入队前整队放弃,新帧不再被顶回
+        // 滞留超阈值后:入队前移除可丢弃的队头,新帧不再被顶回
         nowMs += 51;
         expect(() => h.client.sendPush('ctrl-1', 'maker:event', { after: true })).not.toThrow();
         h.client.stop();
       } finally {
+        clock.mockRestore();
+      }
+    });
+
+    // Unit, two controllers on one relay. A current reply must survive a queue
+    // older than 60s both before and during relink, without making B reconnect.
+    // Minimal regression: abandon the queue when the live reply passes 60s.
+    it.each(['down', 'awaiting-confirm'] as const)('keeps live replies past 60s in %s and replays them in order', async phase => {
+      const warn = vi.fn();
+      const h = makeHarness({
+        logger: { debug: vi.fn(), info: vi.fn(), warn, error: vi.fn() },
+        timing: { pingIntervalMs: 600_000, requestTimeoutMs: 600_000, transportRetryIntervalMs: 600_000 },
+      });
+      let nowMs = 1_000_000;
+      const clock = vi.spyOn(h.client as unknown as { monotonicNow(): number }, 'monotonicNow')
+        .mockImplementation(() => nowMs);
+      h.client.start();
+      try {
+        await tick();
+        const ws = h.current();
+        ws.ack();
+        const abilities = [
+          DEVICE_LINK_CAPABILITY_RELIABLE_TRANSPORT,
+          DEVICE_LINK_CAPABILITY_RELIABLE_LINK_CONFIRM,
+          DEVICE_LINK_CAPABILITY_READ_DEADLINE_V1,
+        ];
+        const reopen = async () => {
+          await establishInboundReliableLink(h, 'a-stream', 1, 'peer-a', abilities);
+          return ws.sent.filter(frame => frame.kind === 'link-accept' && frame.dst === 'peer-a').at(-1)!;
+        };
+        const ack = (accept: Envelope, ackSeq = ((accept.payload as LinkAcceptPayload).transportBaseSeq ?? 1) - 1) => {
+          ws.push({ v: PROTOCOL_VERSION, kind: 'push', src: 'peer-a',
+            payload: { channel: DEVICE_LINK_TRANSPORT_ACK_CHANNEL,
+              payload: { streamId: (accept.payload as LinkAcceptPayload).transportStreamId, ackSeq, linkRequestId: accept.id } } });
+        };
+        const receive = (seq: number, id: string, channel: string, deadlineMs?: number) => {
+          const [frame] = encodeReliableFrames({
+            v: PROTOCOL_VERSION, kind: 'invoke', id, dst: 'dev-self', payload: { channel, args: [] },
+          }, 'a-stream', seq, 1, deadlineMs);
+          ws.push({ ...frame!, src: 'peer-a' });
+        };
+        ack(await reopen());
+        await establishInboundReliableLink(h, 'b-stream', 1, 'peer-b');
+        const neighborGeneration = h.client.getPeerLinkGeneration('peer-b');
+        const neighbor = h.client.invoke('peer-b', { channel: 'local-db:sessions:list', args: [1] });
+        const neighborRequest = ws.sent.find(frame => frame.kind === 'invoke' && frame.dst === 'peer-b')!;
+
+        receive(1, 'expired-read', 'local-db:messages:view', 10_000);
+        receive(2, 'live-read', 'local-db:sessions:list', 90_000);
+        await tick();
+        h.client.sendInvokeResult('peer-a', 'expired-read', { ok: true, result: 'private-fixture-result' });
+        h.client.sendInvokeResult('peer-a', 'live-read', { ok: true, result: ['live'] });
+        const expired = ws.sent.find(frame => frame.id === 'expired-read')!;
+        const live = ws.sent.find(frame => frame.id === 'live-read')!;
+        expect(parseTransportPayload(expired.payload)?.meta.seq).toBe(1);
+        expect(parseTransportPayload(live.payload)?.meta.seq).toBe(2);
+        ws.push({ v: PROTOCOL_VERSION, kind: 'relay-error', id: expired.id,
+          payload: { code: 'DEVICE_OFFLINE', message: 'fixture peer offline', dst: 'peer-a' } });
+        expect(h.client.isLinkReady('peer-a')).toBe(false);
+        const offlineStart = ws.sent.length;
+        nowMs += 60_001;
+        ws.push({ v: PROTOCOL_VERSION, kind: 'invoke-result', src: 'peer-b', id: neighborRequest.id,
+          payload: { ok: true, result: ['neighbor-ok'] } });
+        await expect(neighbor).resolves.toEqual({ ok: true, result: ['neighbor-ok'] });
+
+        if (phase === 'down') {
+          h.client.sendPush('peer-a', 'private-fixture-channel', { text: 'private-fixture-payload' });
+        }
+        expect(ws.sent.slice(offlineStart).filter(frame => frame.dst === 'peer-a')).toEqual([]);
+        const accept = await reopen();
+        receive(3, 'subscribe', 'device-link:subscribe');
+        await tick();
+        h.client.sendInvokeResult('peer-a', 'subscribe', { ok: true, result: { topics: ['sessions'] } });
+        // The existing legacy result bypass still answers before confirmation.
+        const bare = ws.sent.find(frame => frame.id === 'subscribe');
+        expect(bare?.payload).toEqual({ ok: true, result: { topics: ['sessions'] } });
+        const replayStart = ws.sent.length;
+        ack(accept);
+        const replayed = ws.sent.slice(replayStart).filter(frame => frame.dst === 'peer-a' && frame.kind === 'invoke-result');
+        expect(replayed.map(frame => [frame.id, parseTransportPayload(frame.payload)?.meta.baseSeq]))
+          .toEqual([['live-read', 2], ['subscribe', 2]]);
+        expect((accept.payload as LinkAcceptPayload).transportBaseSeq).toBe(2);
+        const last = parseTransportPayload(replayed.at(-1)?.payload)!;
+        ack(accept, last.meta.seq);
+        expect(h.client.getReliableSendQueueDepth('peer-a')).toBe(0);
+        expect(h.client.getPeerLinkGeneration('peer-b')).toBe(neighborGeneration);
+        expect(h.client.isLinkReady('peer-b')).toBe(true);
+        expect(h.sockets).toEqual([ws]);
+        const warnings = warn.mock.calls.map(([line]) => String(line)).join('\n');
+        if (phase === 'down') {
+          expect(warnings).toContain('trigger=push:unknown sendPhase=down');
+          expect(warnings).toContain('result:local-db:messages:view=1');
+          expect(warnings).toContain('result:local-db:sessions:list=1');
+        }
+        expect(warnings).not.toContain('private-fixture');
+      } finally {
+        h.client.stop();
+        clock.mockRestore();
+      }
+    });
+
+    // Unit, same real send path. Preserve the legacy escape hatch for a down
+    // link with only stale traffic. Dropping only pushes leaves the invoke
+    // frozen at the front and never settles its caller.
+    it('abandons an all-stale down queue with no live replies', async () => {
+      const warn = vi.fn();
+      const h = makeHarness({
+        logger: { debug: vi.fn(), info: vi.fn(), warn, error: vi.fn() },
+        timing: { pingIntervalMs: 600_000, requestTimeoutMs: 600_000, transportRetryIntervalMs: 600_000 },
+      });
+      let nowMs = 1_000_000;
+      const clock = vi.spyOn(h.client as unknown as { monotonicNow(): number }, 'monotonicNow')
+        .mockImplementation(() => nowMs);
+      h.client.start();
+      try {
+        await tick();
+        const ws = h.current();
+        ws.ack();
+        await establishInboundReliableLink(h, 'peer-stream', 1, 'peer-a');
+        const invoke = h.client.invoke('peer-a', { channel: 'local-db:sessions:list', args: [] });
+        const rejected = expect(invoke).rejects.toMatchObject({ code: 'NOT_CONNECTED' });
+        h.client.sendPush('peer-a', 'maker:event', { event: 'fixture' });
+        const push = ws.sent.find(frame => frame.kind === 'push' && frame.dst === 'peer-a')!;
+        ws.push({ v: PROTOCOL_VERSION, kind: 'relay-error', id: push.id,
+          payload: { code: 'DEVICE_OFFLINE', message: 'fixture peer offline', dst: 'peer-a' } });
+        nowMs += 60_001;
+        h.client.sendPush('peer-a', 'maker:event', { event: 'new' });
+        await rejected;
+        expect(h.client.getReliableSendQueueDepth('peer-a')).toBe(1);
+        expect(warn).toHaveBeenCalledWith(expect.stringContaining(
+          'trigger=push:maker:event sendPhase=down queue=[invoke:local-db:sessions:list=1,push:maker:event=1]',
+        ));
+      } finally {
+        h.client.stop();
         clock.mockRestore();
       }
     });
