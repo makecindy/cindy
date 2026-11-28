@@ -2003,8 +2003,13 @@ const MarkdownRendererBase = memo(function MarkdownRendererBase({
   // 传入 remoteMediaOrigin prop。ssh 的 workdir 取 context 的 workingDir(与 props 的
   // workingDir 同源,聊天调用方都由 session 传入)。
   const sessionFileCtx = useChatSessionFile();
-  // 占位文案(远程取不到时说明原因)要用;放在组件顶层,components 闭包里取。
+  // 占位文案(远程取不到时说明原因)要在 components 闭包里取。
+  // 先在顶层算成字符串再进闭包:useTranslation 的 t 在每次渲染都可能是新引用
+  // (测试里就是这么替的),把 t 放进 components 的依赖会让 memo 每帧重建,
+  // 流式词淡入动画被重置、同名标题的节点被重建。字符串按值比较,依赖稳定。
   const { t } = useTranslation();
+  const remoteOutsideWorkdirText = t('chat.remoteFile.outsideWorkdir');
+  const remoteDeviceImageText = t('chat.imageMissing.remote');
   const remoteMediaOrigin = useMemo(
     () =>
       remoteMediaOriginProp !== undefined
@@ -2165,8 +2170,8 @@ const MarkdownRendererBase = memo(function MarkdownRendererBase({
                     status="unavailable"
                     message={
                       mediaOrigin.kind === 'ssh'
-                        ? t('chat.remoteFile.outsideWorkdir')
-                        : t('chat.imageMissing.remote')
+                        ? remoteOutsideWorkdirText
+                        : remoteDeviceImageText
                     }
                   />
                 );
@@ -2337,7 +2342,8 @@ const MarkdownRendererBase = memo(function MarkdownRendererBase({
       clickedOccurrence,
       setLightboxSrc,
       sessionFileCtx.localConfirmed,
-      t,
+      remoteOutsideWorkdirText,
+      remoteDeviceImageText,
     ],
   );
   const markdownRootRef = useRef<HTMLDivElement>(null);
