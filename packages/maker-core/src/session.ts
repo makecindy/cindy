@@ -3225,6 +3225,11 @@ export class Session {
     if (event.sessionInstanceId === undefined) {
       event.sessionInstanceId = this.instanceId;
     }
+    const preDispatchReservation = this.isPreDispatchReservation();
+    const unsettledPriorDuringPreDispatch =
+      preDispatchReservation &&
+      this.pendingPriorGeneration !== null &&
+      this.pendingPriorGeneration === this.turnGeneration - 1;
     this.lastResolvedInFlightSend = false;
     if (event.sessionTurnGeneration === undefined) {
       event.sessionTurnGeneration = this.resolveSessionTurnGeneration(
@@ -3234,12 +3239,14 @@ export class Session {
       );
     }
     const resolvedGeneration = event.sessionTurnGeneration ?? observedGeneration;
+    const settlesUnsettledPriorDuringPreDispatch =
+      unsettledPriorDuringPreDispatch &&
+      resolvedGeneration === this.turnGeneration - 1;
     // Both the source stamp and the dequeued wait must name this turn.
     // A leftover tail can be stamped N while next() recaptures N+1, or the
     // reverse when an in-flight start-failure adopts the new generation from
     // an older wait. Current-turn cleanup requires agreement, and a reservation
     // still awaiting pre-dispatch hooks can never own a provider event.
-    const preDispatchReservation = this.isPreDispatchReservation();
     const isCurrentGeneration =
       !preDispatchReservation &&
       resolvedGeneration === this.turnGeneration &&
@@ -3307,6 +3314,7 @@ export class Session {
     const reservationWindowLeftover =
       isTerminal &&
       !isBackgroundEvent &&
+      !settlesUnsettledPriorDuringPreDispatch &&
       this.isUnacceptedCurrentSend() &&
       resolvedGeneration !== this.turnGeneration &&
       (
@@ -3398,8 +3406,14 @@ export class Session {
       this.unsolicitedTurnGeneration = null;
       this.clearTurnControl(resolvedGeneration);
     }
+    // A prior turn whose own terminal had not arrived before the next send was
+    // reserved (`phase === 'accepting'`) must still finish settling (usage,
+    // leases, listeners) on its prior generation while the next send has not
+    // yet crossed into `dispatching`. Unsolicited pre-first-turn terminals
+    // (`pendingPriorGeneration === null`) and duplicate tails remain fenced.
     const isLeftoverProductTerminal =
       !isBackgroundEvent &&
+      !settlesUnsettledPriorDuringPreDispatch &&
       (
         resolvedGeneration < this.turnGeneration ||
         preDispatchReservation ||
@@ -3948,10 +3962,20 @@ export class Session {
     try {
       const iterator = this.handle.events()[Symbol.asyncIterator]();
       while (true) {
-        const awaitingGeneration = this.turnGeneration;
+        // While a send reservation is still in pre-dispatch (`accepting`),
+        // `this.turnGeneration` has been reserved ahead of `handle.send()`.
+        // Anchor `awaitingGeneration` to the prior generation across multi-event
+        // bursts so follow-up events cannot adopt `turnGeneration` early. Once
+        // the prior turn has settled (`pendingPriorGeneration === null`), the
+        // parked wait may adopt `turnGeneration` as soon as dispatch begins.
+        const preDispatch = this.isPreDispatchReservation();
+        const awaitingGeneration = preDispatch
+          ? Math.max(0, this.turnGeneration - 1)
+          : this.turnGeneration;
         const awaitingCanAdoptNextGeneration =
           awaitingGeneration === 0 ||
-          this.terminalEventObservedGeneration === awaitingGeneration;
+          this.terminalEventObservedGeneration === awaitingGeneration ||
+          (preDispatch && this.pendingPriorGeneration === null);
         this.eventLoopAwaiting = true;
         let result: IteratorResult<AgentEvent>;
         try {
@@ -4125,9 +4149,17 @@ export class Session {
   ): boolean {
     // Only a wait that already saw N's terminal can mis-adopt leftover done as N+1.
     if (awaitingGeneration <= 0) return false;
-    if (this.lastObservedTerminalGeneration !== awaitingGeneration) return false;
     // Only an error-then-paired-done leftover can look like N+1 success.
-    if (this.lastObservedTerminalKind !== 'error') return false;
+    const priorObservedError =
+      (
+        this.lastObservedTerminalGeneration === awaitingGeneration &&
+        this.lastObservedTerminalKind === 'error'
+      ) ||
+      (
+        this.terminalObservedDuringReservation?.kind === 'error' &&
+        awaitingGeneration === this.turnGeneration - 1
+      );
+    if (!priorObservedError) return false;
     if (this.isNewTurnProgressEvent(event) || this.isForegroundRunningStatus(event)) {
       return false;
     }

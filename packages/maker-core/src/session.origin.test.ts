@@ -2351,4 +2351,69 @@ describe("Host per-turn settings refresh", () => {
       await session.close();
     }
   });
+
+  // Regression: an unsettled prior turn's real terminal arriving while the next
+  // send is only reserved (`accepting`, not yet dispatching) must still settle
+  // on the prior generation, fence any duplicate tail, and let the next turn
+  // adopt its own generation once dispatched.
+  // Unit tier: in-memory controllable handle, no real SDK or timers.
+  it("settles an unsettled prior turn during pre-dispatch reservation without polluting the next turn", async () => {
+    const h = createControllableHandle();
+    const session = makeSession(h.handle, "claude-code");
+    const seen: AgentEvent[] = [];
+    const terminals: Array<{ turnGeneration: number; isCurrentGeneration: boolean }> = [];
+    session.onEvent((event) => seen.push({ ...event }));
+    session.setTurnLifecycleObserver({
+      beforeProviderStart() {},
+      onUndispatched() {},
+      onTerminal({ turnGeneration, isCurrentGeneration }) {
+        terminals.push({ turnGeneration, isCurrentGeneration });
+      },
+    });
+    let releaseAccepted!: () => void;
+    const acceptedGate = new Promise<void>((resolve) => {
+      releaseAccepted = resolve;
+    });
+
+    try {
+      await expect(session.send("first")).resolves.toEqual({ accepted: true });
+      h.setTurnRunning(false);
+
+      const secondSend = session.send("second", {
+        origin: SCHED_ORIGIN,
+        onAccepted: () => acceptedGate,
+      });
+      await vi.waitFor(() => expect(session.getTurnGeneration()).toBe(2));
+
+      // Turn 1's real terminal arrives while Turn 2 is still in `accepting`.
+      await h.emit({ type: "done", data: { turn: 1 }, source: "claude-code" });
+      // A duplicate stray tail during the same `accepting` window must be fenced.
+      await h.emit({ type: "done", data: { turn: "dup" }, source: "claude-code" });
+
+      const priorDones = seen.filter((event) => event.type === "done");
+      expect(priorDones).toHaveLength(1);
+      expect(priorDones[0]?.sessionTurnGeneration).toBe(1);
+      expect(priorDones[0]?.turnOrigin).toBeUndefined();
+      expect(terminals).toEqual([{ turnGeneration: 1, isCurrentGeneration: false }]);
+      expect(session.getObservedCurrentTurnTerminal()).toEqual({ kind: "none" });
+
+      releaseAccepted();
+      await expect(secondSend).resolves.toEqual({ accepted: true });
+
+      // Result-only Turn 2 still adopts generation 2 and carries its own origin.
+      await h.emit({ type: "done", data: { turn: 2 }, source: "claude-code" });
+
+      const allDones = seen.filter((event) => event.type === "done");
+      expect(allDones).toHaveLength(2);
+      expect(allDones[1]?.sessionTurnGeneration).toBe(2);
+      expect(allDones[1]?.turnOrigin).toEqual(SCHED_ORIGIN);
+      expect(terminals).toEqual([
+        { turnGeneration: 1, isCurrentGeneration: false },
+        { turnGeneration: 2, isCurrentGeneration: true },
+      ]);
+      expect(session.getObservedCurrentTurnTerminal()).toMatchObject({ kind: "done", generation: 2 });
+    } finally {
+      await session.close();
+    }
+  });
 });
