@@ -1,4 +1,4 @@
-export type IssueAgentKind = 'claude-code' | 'codex' | 'pi';
+export type IssueAgentKind = 'claude-code' | 'codex' | 'pi' | 'acp';
 
 export type IssueHarness = 'Claude Code' | 'Codex' | 'Pi' | 'ACP';
 
@@ -6,6 +6,7 @@ const ISSUE_HARNESS_BY_AGENT_KIND: Record<IssueAgentKind, IssueHarness> = {
   'claude-code': 'Claude Code',
   codex: 'Codex',
   pi: 'Pi',
+  acp: 'ACP',
 };
 
 export const ISSUE_MODEL_ID_MAX = 200;

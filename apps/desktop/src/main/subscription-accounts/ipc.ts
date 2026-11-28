@@ -39,6 +39,7 @@ const log = desktopMakerLogger.child('subscription-accounts');
 const KNOWN_FAILURE_REASONS = new Set([
   'login_cancelled', 'login_failed', 'login_in_progress', 'not_a_subscription',
   'codex_provider_managed_auth', 'account_mismatch', 'account_identity_unknown',
+  'timeout', 'local_unavailable', 'not_signed_in', 'token_not_permitted', 'token_unsupported',
   'Account is in use', 'Account not found', 'Too many subscription accounts',
   'Subscription accounts changed', 'Codex CLI unavailable',
 ]);
@@ -177,6 +178,12 @@ export function registerSubscriptionAccountsIpc(): void {
           'SUBSCRIPTION_CLAUDE_IDENTITY_UNKNOWN',
           'The selected Claude account identity could not be confirmed',
         );
+      if (reason === 'not_signed_in')
+        throwIpcError('SUBSCRIPTION_CLAUDE_TOKEN_NEEDS_LOGIN', 'Sign in to the Claude account before creating its long-lived token');
+      if (reason === 'token_not_permitted')
+        throwIpcError('SUBSCRIPTION_CLAUDE_TOKEN_NOT_PERMITTED', 'The organization does not permit long-lived Claude tokens');
+      if (reason === 'token_unsupported')
+        throwIpcError('SUBSCRIPTION_CLAUDE_TOKEN_UNSUPPORTED', 'This account cannot use a long-lived Claude token here');
       throwIpcError(
         reason === 'login_cancelled'
           ? 'SUBSCRIPTION_LOGIN_CANCELLED'

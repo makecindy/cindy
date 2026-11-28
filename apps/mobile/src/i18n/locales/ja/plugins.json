@@ -108,6 +108,7 @@
   "selectFolder": "このフォルダを選択",
   "automationDraft": "自動化を新規作成",
   "automationDraftHint": "内容、時刻、モデルを確認し、保存すると自動化が作成されます。",
+  "automationCheck": "モデルを使う前に{{name}}で確認",
   "automationName": "名前",
   "automationPrompt": "実行する内容",
   "automationInterval": "間隔（分）",

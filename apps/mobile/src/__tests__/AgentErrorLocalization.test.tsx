@@ -197,6 +197,29 @@ describe.each(SUPPORTED_LOCALES)('mobile errors in %s', locale => {
     expect(host.querySelector('[data-testid="queue.inline.usageLimitWait"]')).toBeTruthy();
   });
 
+  // Plugin-engine account errors (`acp-usage-limit` / `acp-overloaded` / `acp-auth-required` and quota-reached copy)
+  // must localize across history and live surfaces instead of collapsing into replyFailed.
+  it('localizes plugin-engine quota, overload and auth errors in history and live surfaces', async () => {
+    await i18n.changeLanguage(locale);
+    const quotaRaw =
+      'Individual quota reached. Please upgrade your subscription to increase your limits. Resets in 2h13m2s.';
+    const [quotaByReason, quotaByText, overloaded, authRequired] = normalizeRemoteMessages([
+      { ...row(quotaRaw), id: 'acp-limit', clientId: 'acp-limit', content: JSON.stringify({ message: quotaRaw, reason: 'acp-usage-limit' }) },
+      { ...row(quotaRaw), id: 'acp-text', clientId: 'acp-text' },
+      { ...row('Upstream busy'), id: 'acp-busy', clientId: 'acp-busy', content: JSON.stringify({ message: 'Upstream busy', reason: 'acp-overloaded' }) },
+      { ...row('Sign in again'), id: 'acp-auth', clientId: 'acp-auth', content: JSON.stringify({ message: 'Sign in again', reason: 'acp-auth-required' }) },
+    ]);
+    expect(quotaByReason.body).toBe(i18n.t('session.tail.usageLimitReached'));
+    expect(quotaByText.body).toBe(i18n.t('session.tail.usageLimitReached'));
+    expect(overloaded.body).toBe(i18n.t('interaction.contextSheet.goalStatus.capacityLimited'));
+    expect(authRequired.body).toBe(i18n.t('chat.subscriptionAccountError.loginRequired'));
+    await act(async () => root.render(<InlineQueueSection
+      projection={{ error: quotaRaw, errorReason: 'acp-usage-limit', errorRetryText: 'original' } as InputProjection}
+      readOnlyReason={null} onRetryError={vi.fn()} onClearError={vi.fn()} onResume={vi.fn()} />));
+    expect(host.textContent).toContain(i18n.t('session.tail.usageLimitReached'));
+    expect(host.textContent).not.toContain(i18n.t('session.tail.replyFailed'));
+  });
+
   it('localizes historical errors and only discloses redacted unknown diagnostics', async () => {
     await i18n.changeLanguage(locale);
     const [lite, unknown] = normalizeRemoteMessages([row(raw), { ...row('Provider exploded; api_key=private-test-value'), id: 'unknown', clientId: 'unknown' }]);

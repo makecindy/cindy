@@ -49,9 +49,17 @@ export const nativeWorkspaceProviderSettings = {
     const keys = new Map([...raw.value.entries, ...(context?.targets ?? [])].map(row => [idFor(row), row]));
     const entries = desired.map(row => {
       const key = keys.get(row.workspaceId); if (!key) throw new HostSettingsError('UNSUPPORTED_CAPABILITY');
-      if (!before.value.entries.some(old => settingsValuesEqual(row, old)) && (!(context?.targets ?? []).some(target => idFor(target) === row.workspaceId)
+      const changed = !before.value.entries.some(old => settingsValuesEqual(row, old));
+      if (changed && (!(context?.targets ?? []).some(target => idFor(target) === row.workspaceId)
         || !catalog.providers.some(provider => provider.id === row.providerId && provider.connected && !provider.suspended && !provider.modelDiscoveryFailure))) throw new HostSettingsError('MODEL_UNAVAILABLE');
-      return { channel: key.channel, teamId: key.teamId, workspace: key.workspace, providerId: row.providerId };
+      // 仅对本次改动了供应商的行清掉智能路由；未改动的行由 commitHostWorkspaceProviderSources 保留原元数据。
+      return {
+        channel: key.channel,
+        teamId: key.teamId,
+        workspace: key.workspace,
+        providerId: row.providerId,
+        ...(changed ? { modelGroup: undefined } : {}),
+      };
     });
     const kept = raw.value.entries.filter(row => !shared(row));
     const edited = [...new Set([...before.value.entries, ...desired].filter(row => !before.value.entries.some(old => settingsValuesEqual(old, row)) || !desired.some(next => settingsValuesEqual(next, row))).map(row => keys.get(row.workspaceId)?.workspace).filter((name): name is string => name !== undefined))];

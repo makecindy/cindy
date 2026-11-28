@@ -42,37 +42,67 @@ const binaryName =
     ? 'cindy-macos-screenshot-snapshot'
     : 'cindy-windows-screenshot-snapshot.exe';
 
+interface DevSourceTarget {
+  root: string;
+  files: string[];
+  directory: string;
+  binary: string;
+}
+
+type DevCacheProbeResult =
+  | { kind: 'hit'; binary: string }
+  | { kind: 'miss'; target: DevSourceTarget }
+  | { kind: 'error' };
+
+let devCacheProbe: Promise<DevCacheProbeResult> | null = null;
 let devBuild: Promise<string | null> | null = null;
 let devBinary: string | null = null;
+
+/** @internal 仅单测隔离模块级 Dev 缓存状态使用。 */
+export function resetDevSnapshotBinaryCacheForTest(): void {
+  devCacheProbe = null;
+  devBuild = null;
+  devBinary = null;
+}
 
 function cargoCommand(): string {
   const candidate = path.join(os.homedir(), '.cargo', 'bin', 'cargo.exe');
   return candidate;
 }
 
-async function buildFromSource(): Promise<string | null> {
-  const root = path.join(app.getAppPath(), 'native', 'region-screenshot');
-  const files =
-    process.platform === 'darwin'
-      ? [path.join(root, 'macos-snapshot.swift')]
-      : ['src/main.rs', 'Cargo.toml', 'Cargo.lock'].map((f) =>
-          path.join(root, 'windows-snapshot', f),
-        );
-  const digest = createHash('sha256').update(process.arch).update('v1');
-  for (const file of files) digest.update(await fs.readFile(file));
-  const directory = path.join(
-    app.getPath('userData'),
-    'region-screenshot',
-    'native',
-    digest.digest('hex'),
-  );
-  const binary = path.join(directory, binaryName);
+async function probeCachedBinary(): Promise<DevCacheProbeResult> {
   try {
-    await fs.access(binary);
-    return binary;
-  } catch {
-    /* build this source version */
+    const root = path.join(app.getAppPath(), 'native', 'region-screenshot');
+    const files =
+      process.platform === 'darwin'
+        ? [path.join(root, 'macos-snapshot.swift')]
+        : ['src/main.rs', 'Cargo.toml', 'Cargo.lock'].map((f) =>
+            path.join(root, 'windows-snapshot', f),
+          );
+    const digest = createHash('sha256').update(process.arch).update('v1');
+    for (const file of files) digest.update(await fs.readFile(file));
+    const directory = path.join(
+      app.getPath('userData'),
+      'region-screenshot',
+      'native',
+      digest.digest('hex'),
+    );
+    const binary = path.join(directory, binaryName);
+    try {
+      await fs.access(binary);
+      devBinary = binary;
+      return { kind: 'hit', binary };
+    } catch {
+      return { kind: 'miss', target: { root, files, directory, binary } };
+    }
+  } catch (error: unknown) {
+    log.warn('snapshot helper build failed; snapping disabled in this run', { error });
+    return { kind: 'error' };
   }
+}
+
+async function compileFromSource(target: DevSourceTarget): Promise<string | null> {
+  const { root, files, directory, binary } = target;
   await fs.mkdir(directory, { recursive: true });
   const temporary = `${binary}.${process.pid}.tmp`;
   if (process.platform === 'darwin') {
@@ -111,16 +141,24 @@ export function resolveSnapshotBinary(waitForBuild = true): Promise<string | nul
       path.join(process.resourcesPath, 'tools', 'region-screenshot', binaryName),
     );
   }
-  devBuild ??= buildFromSource()
-    .then((binary) => {
-      devBinary = binary;
-      return binary;
+  if (devBinary) return Promise.resolve(devBinary);
+  devCacheProbe ??= probeCachedBinary();
+  devBuild ??= devCacheProbe
+    .then((probe) => {
+      if (probe.kind === 'hit') return probe.binary;
+      if (probe.kind === 'error') return null;
+      return compileFromSource(probe.target).then((binary) => {
+        devBinary = binary;
+        return binary;
+      });
     })
     .catch((error: unknown) => {
       log.warn('snapshot helper build failed; snapping disabled in this run', { error });
       return null;
     });
-  return waitForBuild ? devBuild : Promise.resolve(devBinary);
+  if (waitForBuild) return devBuild;
+  // 已有指纹缓存时等待毫秒级的磁盘校验直接命中；仅在真正需要后台编译时跳过等待。
+  return devCacheProbe.then((probe) => (probe.kind === 'hit' ? probe.binary : devBinary));
 }
 
 interface Pending {

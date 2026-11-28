@@ -43,6 +43,11 @@ export interface WorktreeRecycleRecord {
   archive?: WorktreeRecoveryArchive;
   /** The one fresh retry budget for a request an older client paused over its archive. */
   legacyArchiveRetry?: true;
+  /**
+   * The one fresh retry budget for a request paused before its snapshot, when Git listings of a
+   * very large repository (~1M files) still exceeded the default output ceiling.
+   */
+  largeListingRetry?: true;
   /** When deletion was first allowed to start; files written since stop a resumed removal. */
   removingSince?: number;
   /** Ignored and nested paths a snapshot left out, captured when removal began. */

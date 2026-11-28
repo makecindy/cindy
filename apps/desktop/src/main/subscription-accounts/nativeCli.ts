@@ -11,8 +11,11 @@ import { getReadyBinaryPath } from '../agent-binaries/index.js';
 import {
   refreshClaudeCliLoginStatus,
   readClaudeCliPlanUsage,
+  removeClaudeCliLongLivedToken,
   runClaudeCliLogin,
+  runClaudeCliLongLivedToken,
 } from '../maker-host/claude-native-cli.desktop.js';
+import type { ClaudeLongLivedTokenSource } from '@cindy/maker-core/claude-cli-login-status';
 import { parseClaudeOAuthUsageResponse } from '../../shared/claudeSubscriptionUsage.js';
 import { providerGroupCodexUsageFromReads } from '../provider-group/usage.js';
 import type { SubscriptionProvider } from '../../shared/subscriptionAccounts.js';
@@ -93,11 +96,32 @@ function codexProfileEnv(directory: string): Record<string, string> {
   return env;
 }
 
+export type NativeAccountState = AuthState & {
+  plan?: string; planTier?: string; planDisplayName?: string; planType?: string; loginExpiresAt?: string;
+  /**
+   * Claude: tasks run on a long-lived token. Identity, plan and `loginExpiresAt` then come from the
+   * ordinary login kept beside it; `storedLogin` says whether that login is still signed in.
+   */
+  longLivedToken?: { source: ClaudeLongLivedTokenSource; storedLogin?: boolean; version?: string };
+};
+
+const claudeConfigDir = (directory: string) => directory === path.join(homedir(), '.claude') ? undefined : directory;
+
+/** Run the official `claude setup-token` for this account and keep its token in the account directory. */
+export async function createNativeLongLivedToken(directory: string, signal: AbortSignal): Promise<void> {
+  const result = await runClaudeCliLongLivedToken(signal, claudeConfigDir(directory));
+  if (!result.ok) throw new Error(result.reason);
+}
+
+export async function removeNativeLongLivedToken(directory: string): Promise<void> {
+  await removeClaudeCliLongLivedToken(claudeConfigDir(directory));
+}
+
 export async function readNativeAccount(
   provider: SubscriptionProvider,
   directory: string,
   options?: { force?: boolean; codexCanDispatch?: () => boolean | Promise<boolean> },
-): Promise<AuthState & { plan?: string; planTier?: string; planDisplayName?: string; planType?: string; loginExpiresAt?: string }> {
+): Promise<NativeAccountState> {
   if (provider === 'anthropic') {
     const result = await refreshClaudeCliLoginStatus({
       configDir: directory === path.join(homedir(), '.claude') ? undefined : directory,
@@ -111,6 +135,15 @@ export async function readNativeAccount(
       planTier: result.planTier,
       planDisplayName: result.planDisplayName,
       ...(result.loginExpiresAt ? { loginExpiresAt: result.loginExpiresAt } : {}),
+      ...(result.loggedIn && result.longLivedToken
+        ? {
+            longLivedToken: {
+              source: result.longLivedToken,
+              ...(result.storedLogin !== undefined ? { storedLogin: result.storedLogin } : {}),
+              ...(result.longLivedTokenVersion ? { version: result.longLivedTokenVersion } : {}),
+            },
+          }
+        : {}),
     };
   }
   return parseNativeCodexAccount(await codexAccountRpc(directory, 'account/read', { refreshToken: false }, options?.codexCanDispatch));

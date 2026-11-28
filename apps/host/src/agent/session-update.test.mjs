@@ -459,8 +459,8 @@ test('restore: the task list and a send make an archived task active through the
   }
   // One event per route: the task list's carries its whole patch, a send's the new status.
   assert.deepEqual(f.events.map(e => [e.sessionId, e.patch]), [
-    ['restore-list', { status: 'active', title: 'Back', snoozedUntil: null, snoozedAt: null }],
-    ['restore-send', { status: 'active', snoozedUntil: null, snoozedAt: null }],
+    ['restore-list', { status: 'active', title: 'Back', archivedAt: null, snoozedUntil: null, snoozedAt: null }],
+    ['restore-send', { status: 'active', archivedAt: null, snoozedUntil: null, snoozedAt: null }],
   ]);
   assert.deepEqual(f.restoreCalls, [['task list', 'restore-list']]);
   // An active task is left as it is by a send.
@@ -1028,9 +1028,17 @@ test('task snooze: the Host update saves, rejects and clears the date like the d
   await update({ snoozedUntil });
   const { body: archived } = await update({ status: 'archived' });
   assert.deepEqual([archived.status, archived.snoozedUntil, archived.snoozedAt], ['archived', null, null]);
+  assert.equal(typeof archived.archivedAt, 'string');
   const archivedRow = await f.row(id);
   assert.deepEqual([archivedRow.snoozedUntil, archivedRow.snoozedAt], [null, null]);
-  assert.deepEqual(movedEvents(f, id).at(-1).patch, { status: 'archived', snoozedUntil: null, snoozedAt: null });
+  assert.ok(archivedRow.archivedAt > 0, 'manual archive stamps archived_at');
+  assert.equal(archived.archivedAt, new Date(archivedRow.archivedAt).toISOString());
+  assert.deepEqual(movedEvents(f, id).at(-1).patch, {
+    status: 'archived',
+    archivedAt: archived.archivedAt,
+    snoozedUntil: null,
+    snoozedAt: null,
+  });
 });
 
 // df520e3564: a send in an unregistered directory must neither add a project nor push a project refresh.

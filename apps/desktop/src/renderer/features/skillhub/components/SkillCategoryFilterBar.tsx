@@ -35,8 +35,6 @@ export function SkillCategoryFilterBar({
         className="skill-category-tags shrink-0 !max-w-none"
         role="radiogroup"
         aria-label={ariaLabel}
-        height={32}
-        optionHeight={32}
         optionClassName="max-w-40 px-3 text-12"
         value={selectedCategory}
         onValueChange={onSelectCategory}

@@ -28,12 +28,29 @@ export default {
     'card-expanded': { about: '展开某个机器人的卡片: 卡片里不再有项目与模型', viewport: { width: 860, height: 1500 }, storage, data: { kind: 'card-expanded' } },
     narrow: { about: '窄窗口(480px): 名称、路径与选择器换行', viewport: { width: 480, height: 1500 }, storage, data: { kind: 'all-bots' } },
     'model-open': { about: '点开某个项目的模型选择', storage, data: { kind: 'all-bots' } },
+    'app-page': { about: '新结构: 飞书子页只有「谁来回复」与「项目」下拉, 不嵌项目表', storage, data: { kind: 'all-bots', show: 'feishu' } },
+    'app-page-chat': { about: '新结构: 飞书子页, 默认项目是「对话」(完全访问时下方有提示)', storage, data: { kind: 'default-chat', show: 'feishu' } },
+    'projects-page': { about: '新结构: 「项目与模型」页只管每个项目的模型与权限, 没有默认项目单选', storage, data: { kind: 'all-bots', show: 'projects' } },
     'plugin-only': { about: '没开官方机器人，只装了声明 imEntrance 的 IM 插件：插件卡片与「项目与模型」都显示', viewport: { width: 860, height: 1300 }, storage, data: { kind: 'plugin-only' } },
   },
   async ready(page) {
-    await page.locator('#cindy-im-telegram, #cindy-im-slack').first().waitFor();
+    await page.locator('#cindy-im-telegram, #cindy-im-slack, #cindy-im-feishu, [data-im-projects]').first().waitFor();
   },
   async check(page, ui) {
+    if (ui.data.show === 'feishu') {
+      const project = page.getByRole('combobox', { name: await ui.t('settings.imBot.rows.project') });
+      await project.waitFor();
+      assert.equal(await page.locator('#cindy-im-projects-heading').count(), 0);
+      assert.ok((await project.innerText()).includes(ui.data.kind === 'default-chat' ? await ui.t('settings.imBot.rows.projectDialogue') : 'orbit-garden'));
+      return;
+    }
+    if (ui.data.show === 'projects') {
+      await page.locator('[data-im-projects]').waitFor();
+      // 页头已是「项目与模型」, 区块不再重复组名; 也没有默认项目单选。
+      assert.equal(await page.locator('#cindy-im-projects-heading').count(), 0);
+      assert.equal(await page.getByRole('radio').count(), 0);
+      return;
+    }
     if (ui.case.startsWith('model-layout')) {
       const heading = page.locator('#cindy-im-projects-heading');
       await heading.evaluate(element => element.scrollIntoView({ block: 'start' }));

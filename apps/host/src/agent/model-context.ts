@@ -15,6 +15,8 @@ import { setGuestProviderModelCatalogReader } from '../../../desktop/src/main/ma
 export interface HostModelContext {
   /** The catalog Host resolves models against; read on every call. */
   getSelectableCatalog(): Catalog;
+  /** Full routing membership retains metadata needed by bound historical tasks. */
+  getRoutingCatalog(): Catalog;
   resolveContextProviderId: ModelContextProviderResolver;
 }
 
@@ -51,6 +53,7 @@ export function createHostModelContext(ports: {
   setGuestProviderModelCatalogReader(() => readCatalog(true));
   return {
     getSelectableCatalog: () => readCatalog(),
+    getRoutingCatalog: () => readCatalog(true),
     resolveContextProviderId: createModelContextProviderResolver({
       readGatewayKey: ports.readGatewayKey, hasClaudeNativeLogin, hasCodexOAuthLogin: ports.hasCodexOAuthLogin,
     }),

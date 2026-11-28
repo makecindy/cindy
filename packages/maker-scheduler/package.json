@@ -15,7 +15,8 @@
     "./template-engine": "./src/engine/template.ts",
     "./webhook-formats": "./src/webhook-formats.ts",
     "./plugin-events": "./src/plugin-events.ts",
-    "./github-item": "./src/github-item.ts"
+    "./github-item": "./src/github-item.ts",
+    "./precheck-transient": "./src/precheck-transient.ts"
   },
   "scripts": {
     "build": "tsc --noEmit",

@@ -41,6 +41,7 @@ type Act = (actionId: BotGroupRemoteActionId, input?: Record<string, unknown>) =
 type SettingsProps = {
   visible: boolean;
   onMask?(): void;
+  onMentionHistory?(): void;
   /** The personal AI 代答 state, shown on the shared group's settings. */
   mask?: GroupPersonalMask;
   /** The screen talks to the chat service directly (no computer in between). */
@@ -69,7 +70,7 @@ export function BotGroupSettingsSheet(props: SettingsProps) {
 function DirectGroupSettings(props: SettingsProps) {
   const management = useBotGroupSettingsManagement(props.group, props.visible);
   // Settings reads contain metadata only; execution activity stays with the live chat subscription.
-  const group = management.group ? { ...management.group, round: props.group.round } : props.group;
+  const group = management.group ? { ...management.group, round: props.group.round } : management.shown;
   const lookup = useBotGroupIdentities('');
   // Settings writes refresh the chat like lifecycle actions do.
   const refreshing = { ...management, act: async (...args: Parameters<typeof management.act>) => {
