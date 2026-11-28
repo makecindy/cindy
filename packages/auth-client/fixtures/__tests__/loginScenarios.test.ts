@@ -204,6 +204,14 @@ describe("完整 happy path 全 endpoint 走查(真实 client + 默认前置)", 
     const me = await client.getMe("token");
     expect(me.identities).toHaveLength(2);
     await expect(client.logout("token")).resolves.toBeUndefined();
+    // 手机扫码认领后等待电脑允许：认领与轮询都按真实 schema 返回。
+    const claimed = await client.claimQrHandoff({
+      handoffId: "scenario-handoff-0001",
+      scanToken: "scenario-scan-token-00000000000001",
+      pollSecretHash: "c".repeat(43),
+    });
+    expect(claimed.status).toBe("claimed");
+    await expect(client.pollQrHandoff("scenario-handoff-0001", "secret")).resolves.toMatchObject({ status: "pending" });
   });
 });
 

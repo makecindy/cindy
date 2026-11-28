@@ -21,7 +21,7 @@ import type { MobileAgentCapabilities } from "./agentCapabilities";
 import type { ModelPickerSheetProps } from "./ModelPickerSheet";
 import {
   buildPluginEngineGroups,
-  formatPluginEngineModelQuotaLabel,
+  formatPluginEngineModelQuota,
   formatPluginEnginePickerQuota,
   isPluginEngineFavoriteProviderId,
   isPluginEngineProviderId,
@@ -507,6 +507,7 @@ export function UnifiedModelPickerSheet(
     for (const catalog of remoteCatalogs) map.set(catalog.deviceId, catalog.providers);
     return map;
   }, [remoteCatalogs]);
+  const keepCurrentMember = !!modelGroupOptions?.onPickMerged && !modelGroupOptions?.activeRouteId;
   const sourceRoutes = useMemo(
     () =>
       withMobileSourceRouteProviders(
@@ -516,6 +517,7 @@ export function UnifiedModelPickerSheet(
           providerId: p.selectedProviderId,
           modelId: p.activeModelId,
           agentDeviceId: selectedDeviceId,
+          keepMember: keepCurrentMember,
         },
         remoteProvidersByDevice,
         (name, count) =>
@@ -531,6 +533,7 @@ export function UnifiedModelPickerSheet(
       p.selectedProviderId,
       p.activeModelId,
       selectedDeviceId,
+      keepCurrentMember,
       remoteProvidersByDevice,
       t,
     ],
@@ -541,13 +544,21 @@ export function UnifiedModelPickerSheet(
     modelGroupOptions?.activeRouteId,
     selectedDeviceId,
   );
+  const shownMergedModelId = shownMergedSourceId
+    ? sourceRoutes.shownModelId(
+        p.selectedProviderId,
+        p.activeModelId,
+        modelGroupOptions?.activeRouteId,
+        selectedDeviceId,
+      )
+    : null;
   const keepModel = useMemo(
     () => ({
       providerId: shownMergedSourceId ?? p.selectedProviderId,
-      modelId: p.activeModelId,
+      modelId: shownMergedModelId ?? p.activeModelId,
       agent: p.agentKind,
     }),
-    [shownMergedSourceId, p.selectedProviderId, p.activeModelId, p.agentKind],
+    [shownMergedSourceId, shownMergedModelId, p.selectedProviderId, p.activeModelId, p.agentKind],
   );
   // 供应商组(provider-groups.md §10):组里其他电脑上的这个供应商收进组那一项,只列组那一项。
   const hostDeviceId = p.unified.remote?.hostDeviceId;
@@ -994,19 +1005,20 @@ export function UnifiedModelPickerSheet(
   const pluginEngineCountdown = (
     resetsAtSeconds: number,
     currentNow: number,
-    windowMinutes: number | null = null,
-  ) => formatQuotaResetCountdown(resetsAtSeconds, currentNow, t, windowMinutes);
-  const pluginEngineModelQuota = (engine: MobilePluginEngine, modelId: string): string | null => {
-    const model = engine.models.find((candidate) => candidate.id === modelId);
-    return (
-      formatPluginEngineModelQuotaLabel(
-        pluginEngineQuotas?.[pluginEngineChoiceKey(engine)],
-        { id: modelId, name: model?.displayName },
-        now,
-        pluginEngineCountdown,
-      ) ?? null
+    windowMinutes?: number | null,
+  ) => formatQuotaResetCountdown(resetsAtSeconds, currentNow, t, windowMinutes ?? null);
+  const pluginEngineModelQuota = (
+    engine: MobilePluginEngine,
+    modelId: string,
+    modelName?: string,
+  ) =>
+    formatPluginEngineModelQuota(
+      pluginEngineQuotas?.[pluginEngineChoiceKey(engine)],
+      modelId,
+      now,
+      pluginEngineCountdown,
+      modelName ?? engine.models.find((candidate) => candidate.id === modelId)?.displayName,
     );
-  };
   const pluginEngineLabels = {
     defaultModel: t("models.pluginEngines.defaultModel"),
     effort: (effort: PluginEngineEffort) =>
@@ -1166,6 +1178,19 @@ export function UnifiedModelPickerSheet(
       now,
       i18n?.language ?? "en",
       pluginEngineCountdown,
+      {
+        formatRemaining: (percent) => t("session.menu.usage.remaining", { percent }),
+        formatResetIn: (duration) => t("models.unified.quotaResetIn", { duration }),
+        resetSoonLabel: t("models.unified.quotaResetSoon"),
+        fallbackWindowLabel: (windowMinutes, rawLabel) =>
+          windowMinutes === 10080
+            ? t("session.menu.usage.week")
+            : windowMinutes && windowMinutes % 60 === 0
+              ? t("session.menu.usage.hours", { count: windowMinutes / 60 })
+              : windowMinutes
+                ? t("session.menu.usage.minutes", { count: windowMinutes })
+                : rawLabel || t("session.menu.usage.quota"),
+      },
     );
   const matchingPluginEngines = pluginEngineOptions
     ? all
@@ -1860,15 +1885,10 @@ export function UnifiedModelPickerSheet(
   for (const engine of visiblePluginEnginesForSources) {
     const choiceKey = pluginEngineChoiceKey(engine);
     const quota = pluginEngineQuotaOf(choiceKey);
-    const filterRemaining =
-      quota?.remaining ??
-      (quota?.groups?.length
-        ? Math.min(...quota.groups.map((group) => group.remaining))
-        : undefined);
     const filterQuota = quota
       ? {
-          ...(filterRemaining !== undefined ? { remaining: filterRemaining } : {}),
-          label: quota.summary,
+          ...(quota.remaining !== undefined ? { remaining: quota.remaining } : {}),
+          label: quota.sourceLabel ?? quota.summary,
         }
       : undefined;
     const pluginEngineMark = {

@@ -124,6 +124,7 @@ import {
 import { absorbSessionStarting, useStartingSessionIds } from '@/lib/sessionStartingStore';
 import type { DialogueDeviceTarget } from '../../lib/dialogueCreateTarget';
 import { MainListScopeHeader } from '../MainListScopeHeader';
+import type { SidebarPluginHarness } from '../SidebarFilterPopover';
 import { DeviceSectionHeader } from '../DeviceSectionHeader';
 import { SectionCollapse } from '../SectionCollapse';
 import { SessionEntryList, SessionEntryRows } from '../SessionEntryList';
@@ -222,6 +223,8 @@ export interface ProjectsSectionProps {
   allKnownProjects: ProjectNodeData[];
   /** 项目筛选前的无项目任务数,供菜单「对话」选项用。 */
   dialogueCount?: number;
+  /** 当前范围内任务用到的插件 Harness,供菜单的 Harness 筛选列出。 */
+  pluginHarnesses?: readonly SidebarPluginHarness[];
   /**
    * 原始项目全集的规范 key。手动排序以此为 baseline，保证隐藏项目的
    * 位置记忆不会因用户拖动其它可见项目而被 GC。
@@ -306,6 +309,7 @@ export function ProjectsSection({
   dialogueActionSessions = dialogues,
   allKnownProjects,
   dialogueCount = 0,
+  pluginHarnesses,
   allProjectKeysForOrder,
   filter,
   collapsed,
@@ -1174,6 +1178,7 @@ export function ProjectsSection({
         filter={filter}
         allKnownProjects={allKnownProjects}
         dialogueCount={dialogueCount}
+        pluginHarnesses={pluginHarnesses}
         hasRemoteDevices={deviceGroupingAvailable}
         fold={
           taskListMode === 'tasks' && hasMainListContent && foldState !== null

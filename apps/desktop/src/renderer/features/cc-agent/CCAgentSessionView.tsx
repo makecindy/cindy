@@ -63,6 +63,7 @@ import {
   findPluginEngine,
   requestPluginEnginesRefresh,
   useDevicesPluginEngines,
+  usePluginEngineIdentity,
   usePluginEngines,
   useRemotePluginEngines,
 } from '@/hooks/usePluginEngines';
@@ -70,6 +71,7 @@ import {
   PLUGIN_ENGINE_DEFAULT_MODEL,
   controlledPluginEngineSources,
   isSamePluginEngineChoice,
+  pluginEngineModelName,
   remotePluginEngineChoices,
   resolvePluginEngineSessionSwitchEffort,
   type PluginEngineChoice,
@@ -2958,7 +2960,7 @@ function CCAgentSessionContent({
     agentKind: session?.agentKind,
     active: viewVisible && ownsHardwareTaskActions && !readOnly && !botChatIdentity
       && !isStreaming && !agentStatus.isRunning && !errorIsRecoverable
-      && !syntheticContinuationPending && !usageLimitWait,
+      && !syntheticContinuationPending && !usageLimitWait && !activeReconnect,
   });
   // 模型组(model-groups.md §6.1)：经路线建的本机任务撞了配额，横幅多给一个「换到下一个来源继续」。
   // 只在撞配额的横幅挂着时问一次；点了走输入框里选择器同一条换模型路径，换成了再走横幅原有的重试。
@@ -3053,11 +3055,11 @@ function CCAgentSessionContent({
     selection: ModelGroupSelection,
     /** 在合并条目下点的那一行：用户在那里选的思考深度与 Fast(成员支持时带上)。 */
     context?: { effort?: string; fastMode?: true | 'ultrafast' },
-  ) => {
-    if (!sessionId) return;
+  ): Promise<boolean> => {
+    if (!sessionId) return false;
     // 和在选择器里点一行同一个顺序保证：已经点了发送就不再换；选路期间占住这个任务的切换门，
     // 这时点发送会等换完，而不是先用旧模型发出去。
-    if (hasPendingAgentSendDispatch(sessionId)) return;
+    if (hasPendingAgentSendDispatch(sessionId)) return false;
     const finishSwitch = beginAgentSwitchOperation(sessionId);
     try {
       // 选路期间切到了别的任务：换模型的入口已属于那个任务，这次作废，不动任何一个。
@@ -3067,15 +3069,15 @@ function CCAgentSessionContent({
       const result = modelGroupsTaskDeviceId
         ? await resolveDeviceModelGroup(modelGroupsTaskDeviceId, selection, context, undefined, sshHostId ? { sshHostId } : undefined)
         : await resolveModelGroup(selection, context, undefined, sshHostId ? { sshHostId } : undefined);
-      if (sessionNavigationVersionRef.current !== navigationVersion) return;
+      if (sessionNavigationVersionRef.current !== navigationVersion) return false;
       if (!result || result.outcome !== 'routed') {
         if (result) toast.warning(t('modelGroups.picker.switchUnavailable', { name: result.groupName }));
-        return;
+        return false;
       }
       let applied: boolean;
       if (result.route.agentKind === 'acp') {
         const switchPlugin = pluginEngineSwitchSelectRef.current;
-        if (!switchPlugin) return;
+        if (!switchPlugin) return false;
         applied = await switchPlugin({
           providerId: result.route.providerId,
           modelId: result.route.model,
@@ -3084,7 +3086,7 @@ function CCAgentSessionContent({
         }, { alreadyLocked: true });
       } else {
         const pick = sessionModelPickRef.current;
-        if (!pick) return;
+        if (!pick) return false;
         applied = await pick({
           agent: dbToMakerAgentKind(result.route.agentKind), providerId: result.route.providerId, modelId: result.route.model,
           // 模式指定了推理强度 / Fast 且选中的模型支持时一起换(选路时已按目录核对过)。
@@ -3093,12 +3095,13 @@ function CCAgentSessionContent({
           ...(!sshHostId ? { agentDeviceId: result.route.agentDeviceId ?? null } : {}),
         });
       }
-      if (!applied) return;
+      if (!applied) return false;
       setDetachedBindingKey(null);
       // 记下是经哪个智能路由切入的：之后每轮按该路由持续托管(预检、图片切视觉、缓存过期重评、故障接替)。
       if (modelGroupsTaskDeviceId) await bindDeviceModelGroupSession(modelGroupsTaskDeviceId, sessionId, selection, result);
       else await bindModelGroupSession(sessionId, selection, result);
       toast.success(t('modelGroups.picker.switched', { name: result.groupName, model: `${result.modelName} · ${result.sourceName}` }));
+      return true;
     } finally {
       finishSwitch();
     }
@@ -3112,9 +3115,8 @@ function CCAgentSessionContent({
         onSelect: (selection: ModelGroupSelection) => { void switchTaskByModelGroup(selection); },
         // 合并整个供应商的路由也像一个供应商列出来(SSH 除外)：点其中一个模型 = 按这条路由挑成员换过去并纳入持续托管。
         ...(session?.remoteHostId ? {} : {
-          onPickMerged: (selection: ModelGroupSelection, context: { effort?: string; fastMode?: true | 'ultrafast' }) => {
-            void switchTaskByModelGroup(selection, context);
-          },
+          onPickMerged: (selection: ModelGroupSelection, context: { effort?: string; fastMode?: true | 'ultrafast' }) =>
+            switchTaskByModelGroup(selection, context),
         }),
         // 管理入口只在本机：另一台电脑的模式在那台上改。
         ...(modelGroupsTaskDeviceId ? {} : { onManage: () => navigate('/settings?tab=model-groups') }),
@@ -3526,8 +3528,12 @@ function CCAgentSessionContent({
   const showOrcaLeadIdentityBar = ownsRoute && collabEnabled;
   const leadAgentKind = normalizeOrcaDisplayAgentKind(session?.agentKind);
   const leadVendor = orcaVendorForAgentKind(leadAgentKind);
+  const leadPluginIdentity = usePluginEngineIdentity(
+    leadAgentKind === 'acp' ? session?.providerId : null,
+    session?.agentDeviceId || remoteDeviceId || undefined,
+  );
   const leadPaneLabel = t('orca.split.leadLabel', {
-    agent: orcaAgentLabel(leadAgentKind),
+    agent: orcaAgentLabel(leadAgentKind, leadPluginIdentity.name),
   });
   const passiveOrcaWorkersRevealSessionRef = useRef<string | null>(null);
   const routeWorkerHint = useMemo(() => {
@@ -3978,6 +3984,7 @@ function CCAgentSessionContent({
       pluginEngineTask && session
         ? {
             providerId: session.providerId ?? '',
+            agentDeviceId: session.agentDeviceId ?? null,
             engine: pluginEngine,
             // 引擎在另一台电脑上时名字带着电脑名(与模型面板里那台电脑的来源同一写法)。
             engineName: pluginEngine ? pluginEngineChoiceLabel(pluginEngine) : t('newChat.pluginEngines.genericName'),
@@ -6809,6 +6816,7 @@ function CCAgentSessionContent({
                 vendor={leadVendor}
                 size={leadVendor === 'cc' ? 14 : 13}
                 className="text-current"
+                iconDataUrl={leadAgentKind === 'acp' ? leadPluginIdentity.iconDataUrl : undefined}
               />
               <span className="min-w-0 truncate">{leadPaneLabel}</span>
             </span>
@@ -7518,6 +7526,8 @@ function CCAgentSessionContent({
                       && usageAccount.kind !== 'unreadable' && (usageEngine?.reportsUsage || !usageCatalogue) && (
                       <PluginEngineUsageChip key={JSON.stringify([dataOwnerGeneration, taskAccountDeviceId, pluginUsageKey])}
                         engineKey={pluginUsageKey} name={usageEngine?.name} deviceId={taskAccountDeviceId}
+                        modelId={pluginEngineSwitchIntent?.model ?? session?.model ?? null}
+                        modelName={pluginEngineModelName(usageEngine, pluginEngineSwitchIntent?.model ?? session?.model ?? '') ?? null}
                         running={agentStatus.isRunning} {...(sessionId ? { sessionId } : {})} />
                     )}
                     {!pluginUsageKey && (!pluginEngineTask || agentSwitchIntent) && (

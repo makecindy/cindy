@@ -116,7 +116,8 @@ import { BotGroupThreadListSheet } from './BotGroupThreadListSheet';
 import { SessionHeaderNativeBlur } from './SessionHeaderNativeControls';
 import { CompanionEntering } from './CompanionEntering';
 import { BotGroupRuntimeFailureNotice } from './BotGroupRuntimeFailureNotice';
-import { BotGroupComposer, type BotGroupSendInput } from './BotGroupComposer';
+import { BotGroupComposer, type BotGroupComposerHandle, type BotGroupSendInput } from './BotGroupComposer';
+import { BotGroupAuthorAvatar } from './BotGroupAuthorAvatar';
 import { BotGroupMessageAttachments } from './BotGroupMessageAttachments';
 import { MessageListVisibilityContext, useMessageListItemVisible, useScrollViewMessageVisibility } from './messageListVisibility';
 import { BotGroupTaskCard } from './BotGroupTaskCard';
@@ -151,7 +152,8 @@ import type { ResolveRemoteMediaFn } from './remoteMedia';
 import { useBotGroupChat } from './useBotGroupChat';
 import { useBotGroupRemoteMedia } from './useBotGroupRemoteMedia';
 import { botGroupRoute } from './botGroupNavigation';
-import { BotGroupThreadEntry, BotGroupThreadFollow, BotGroupThreadShare, BotGroupThreadPosted, BotGroupMessageActions } from './BotGroupThreadViews';
+import { BotGroupThreadEntry, BotGroupThreadFollow, BotGroupThreadShare, BotGroupThreadPosted, BotGroupMessageActions, BotGroupMessageReactions } from './BotGroupThreadViews';
+import { toggleReaction } from '@/chat/optimisticReactions';
 import { compactMessageBubble, messageBubbleBase, userMessageBubble } from './messageBubbleStyles';
 
 type MobilePlanAction = BotGroupPlanAction | 'auto-continue';
@@ -217,6 +219,8 @@ function BotGroupChatContent({ deviceId, deviceName, groupId, messageId, notific
   const identity = useBotGroupIdentities(deviceId);
   const resolveMedia = useBotGroupRemoteMedia(deviceId);
   const focused = useIsFocused();
+  const composerRef = useRef<BotGroupComposerHandle>(null);
+  const mentionBot = useCallback((botId: string) => composerRef.current?.mentionBot(botId), []);
   // Direct stops are cancelled on blur; the computer bridge keeps its request in flight.
   const stopFocused = !!deviceId || focused;
   const stopOwner = useMemo(() => ({ accountGeneration, deviceId, groupId, threadRootId }), [accountGeneration, deviceId, groupId, threadRootId, stopFocused]);
@@ -232,8 +236,8 @@ function BotGroupChatContent({ deviceId, deviceName, groupId, messageId, notific
   const openGroupSettings = useCallback(() => setSettings(true), []);
   const [threadsOpen, setThreadsOpen] = useState(false);
   const [threadListFilter, setThreadListFilter] = useState<BotGroupThreadFilter>('mine');
-  const [maskSettings, setMaskSettings] = useState(false), [catchup, setCatchup] = useState(false);
-  const openMaskAfterSettings = useRef(false), locateAfterCatchup = useRef<ChatMaskMention | null>(null);
+  const [maskSettings, setMaskSettings] = useState(false), [catchup, setCatchup] = useState<'unread' | 'history' | null>(null);
+  const afterSettings = useRef<'mask' | 'history' | null>(null), locateAfterCatchup = useRef<ChatMaskMention | null>(null);
   const openThreadAfterIndex = useRef<{ rootId: string; messageId?: string } | null>(null);
   const [readTarget, setReadTarget] = useState(messageId ?? '');
   const [replyTo, setReplyTo] = useState<BotGroupQuoteView | null>(null);
@@ -683,6 +687,20 @@ function BotGroupChatContent({ deviceId, deviceName, groupId, messageId, notific
   const shareToMain = useCallback((id: string) => {
     void chat.shareToMain?.(id).catch(error => report(error, 'groupChat.thread.shareFailed'));
   }, [chat.shareToMain, report]);
+  // Reactions show at once and save behind; a failure takes the local change back and says why.
+  const react = useCallback((messageId: string, emoji: string, present: boolean) => {
+    const send = chat.react, groupId = group?.id;
+    if (!send || !groupId) return;
+    let failure: unknown = null;
+    toggleReaction(async input => {
+      try { await send(input.messageId, input.emoji, input.present); return { ok: true }; }
+      catch (error) { failure = error; return { ok: false, errorCode: 'REQUEST_FAILED' }; }
+    }, groupId, messageId, emoji, present, {
+      // A successful save already re-reads the page.
+      onChanged: () => {},
+      onFailed: () => { report(failure, 'groupChat.reaction.failed'); chat.reload(); },
+    });
+  }, [chat.react, chat.reload, group?.id, report]);
   const shareImage = useCallback((id: string) => {
     Keyboard.dismiss(); shareSelectionStore.enter(shareScope, id);
   }, [shareScope]);
@@ -877,6 +895,9 @@ function BotGroupChatContent({ deviceId, deviceName, groupId, messageId, notific
       </MainWindowEmptyState>
     </View>;
   } else {
+    const composerEditable = (chat.online || !!chat.canQueue) && !group.archived && !group.dissolvedAt
+      && (!threadRootId || group.messages.some(message => message.id === threadRootId && !message.deleted));
+    const onMentionBot = composerEditable && focused && foreground && !direct && !imageSelectionActive ? mentionBot : undefined;
     const timelineScroll: GroupTimelineScrollConfig = {
       listRef: scrollRef, renderScrollComponent: renderGroupScroll, onMessageUnmount: messageUnmount,
       alignItemsAtEnd: !threadRootId && processLeadingSpace === null,
@@ -937,14 +958,15 @@ function BotGroupChatContent({ deviceId, deviceName, groupId, messageId, notific
       <MessageListVisibilityContext.Provider value={previewVisibility}>
         <GroupTimelineScrollContext.Provider value={timelineScroll}>
         <SessionQuickSendProvider value={!imageSelectionActive && !group.archived && !group.dissolvedAt && (chat.online || chat.canQueue) ? sendRichAnswer : null}>
-        <BotGroupWorkArea enabled={!imageSelectionActive} onStop={stop} stopping={stopping} group={group} deviceId={deviceId} online={chat.online} identityFor={identityFor}
+        <BotGroupWorkArea enabled={!imageSelectionActive} onMentionBot={onMentionBot} onStop={stop} stopping={stopping} group={group} deviceId={deviceId} online={chat.online} identityFor={identityFor}
           onError={message => { if (message) Alert.alert(message); }}>
         {workRows => <BotGroupTimeline onChooseComputer={openGroupSettings} workRows={imageSelectionActive ? undefined : workRows} onOpenDiagram={openDiagram} active={focused && foreground} threadRootId={threadRootId} onOpenThread={!threadRootId && !deviceId && chat.server && !direct ? openThread : undefined} group={group} deviceId={deviceId} online={chat.online} identityFor={identityFor}
-          onRetrySource={chat.reload}
+          onRetrySource={chat.reload} onMentionBot={onMentionBot}
           onOpenTopic={!deviceId && chat.server ? openTopic : undefined} onRevealShare={revealShare}
           onShare={chat.shareToMain ? shareToMain : undefined}
           selectedImages={selectedImages} imageShareBusy={imageShareBusy}
           onShareImage={!deviceId && chat.server ? shareImage : undefined}
+          onReact={!deviceId && chat.server && !direct && chat.react ? react : undefined}
           sharedReplies={chat.threadMeta?.shares} readBefore={initialRead.current.sequence} unreadBoundary={visit.boundary} olderError={olderError}
           highlightId={highlightId} onLocateMessage={locateMessage}
           pending={chat.pending} onPendingAction={pendingAction}
@@ -982,7 +1004,7 @@ function BotGroupChatContent({ deviceId, deviceName, groupId, messageId, notific
             scrollRef.current?.scrollToEnd({ animated: true });
           }} /> : null}
         {mask.mentions.length > 0 ? <MainWindowActionButton density="compact" style={styles.newMessagesButton} action={{
-          label: `@ · ${mask.mentions.length}`, accessibilityLabel: t('groupChat.mask.catchup.title'), testID: 'botGroup.mentions', onPress: () => setCatchup(true),
+          label: `@ · ${mask.mentions.length}`, accessibilityLabel: t('groupChat.mask.catchup.title'), testID: 'botGroup.mentions', onPress: () => setCatchup('unread'),
         }} /> : actionableThreads.length > 0 ? <MainWindowActionButton density="compact" style={styles.newMessagesButton} action={{
           label: actionableThreads.some(thread => thread.unread.mentioned)
             ? `@ · ${actionableThreads.length}`
@@ -1021,7 +1043,7 @@ function BotGroupChatContent({ deviceId, deviceName, groupId, messageId, notific
       <BotGroupTopicImageShare key={shareScope} selectionScope={shareScope} messages={selectedMessages} allIds={shareableIds}
         resolveMedia={chat.media} onBusyChange={setImageShareBusy} />
       <View style={selectedImages ? styles.hiddenComposer : undefined} testID="botGroup.composerContainer">
-        <BotGroupComposer conversationKind={direct ? 'direct' : undefined} pullThrough={composerPullThrough} allowMentionAll={canMentionAllInBotGroup(group)} allowMentionAllBots={group.supportsMentionAudiences === true && group.allowMentionAllBots === true} key={`${viewportOwner}:composer`} topic={!!threadRootId} onParticipate={replyControls?.participate} maskIndicator={replyControls?.state?.settings.companionId ? <GroupMaskStatus mask={mask} deviceId={deviceId} onPress={() => setMaskSettings(true)} /> : undefined} members={group.members} identityFor={identityFor} deviceId={deviceId} online={(chat.online || !!chat.canQueue) && !group.archived && !group.dissolvedAt && (!threadRootId || group.messages.some(message => message.id === threadRootId && !message.deleted))}
+        <BotGroupComposer ref={composerRef} conversationKind={direct ? 'direct' : undefined} pullThrough={composerPullThrough} allowMentionAll={canMentionAllInBotGroup(group)} allowMentionAllBots={group.supportsMentionAudiences === true && group.allowMentionAllBots === true} key={`${viewportOwner}:composer`} topic={!!threadRootId} onParticipate={replyControls?.participate} maskIndicator={replyControls?.state?.settings.companionId ? <GroupMaskStatus mask={mask} deviceId={deviceId} onPress={() => setMaskSettings(true)} /> : undefined} members={group.members} identityFor={identityFor} deviceId={deviceId} online={composerEditable}
         quoteMessageId={replyTo?.messageId} focusRequest={replyFocusRequest}
         placeholder={threadRootId ? t('groupChat.thread.placeholder') : undefined}
         stopPending={stopping || group.round.status === 'running' && group.round.speakers.length > 0 && group.round.speakers.every(speaker => speaker.stopping || speaker.executionStatus === 'stopping')}
@@ -1069,10 +1091,16 @@ function BotGroupChatContent({ deviceId, deviceName, groupId, messageId, notific
     </>}
     {/* Settings apply to the whole group, including requests in other topics. */}
     {group && !direct ? <BotGroupSettingsSheet readOnly={chat.server} visible={settings} group={chat.state.kind === 'ready' ? chat.state.group : group} host={host} identityFor={identityFor} online={chat.online}
-      mask={replyControls ?? undefined} onMask={replyControls ? () => { openMaskAfterSettings.current = true; setSettings(false); } : undefined}
+      mask={replyControls ?? undefined} onMask={replyControls ? () => { afterSettings.current = 'mask'; setSettings(false); } : undefined}
+      onMentionHistory={group.supportsPersonalMentionHistory ? () => { afterSettings.current = 'history'; setSettings(false); } : undefined}
       act={actFromSettings} onClose={() => setSettings(false)}
       onRefresh={chat.reload}
-      onClosed={() => { if (openMaskAfterSettings.current) { openMaskAfterSettings.current = false; setMaskSettings(true); } if (leaveAfterSettings.current) { leaveAfterSettings.current = false; leave(); } }}
+      onClosed={() => {
+        if (afterSettings.current === 'mask') setMaskSettings(true);
+        if (afterSettings.current === 'history') setCatchup('history');
+        afterSettings.current = null;
+        if (leaveAfterSettings.current) { leaveAfterSettings.current = false; leave(); }
+      }}
       onDeleted={onGroupDeleted} /> : null}
     {canBrowseThreads ? (
       <BotGroupThreadListSheet
@@ -1095,8 +1123,10 @@ function BotGroupChatContent({ deviceId, deviceName, groupId, messageId, notific
       />
     ) : null}
     <GroupMaskSettingsSheet visible={maskSettings && !!replyControls} mask={mask} onClose={() => setMaskSettings(false)} />
-    <GroupMaskCatchupSheet visible={catchup} mask={mask} onClose={() => setCatchup(false)}
-      onLocate={mention => { locateAfterCatchup.current = mention; setCatchup(false); }} onClosed={() => {
+    <GroupMaskCatchupSheet key={viewportOwner} history={catchup === 'history'} visible={catchup !== null} mask={mask} onClose={() => setCatchup(null)}
+      hasOriginalOnScreen={mention => (mention.threadRootId ?? '') === (threadRootId ?? '')
+        && !!group?.messages.some(message => message.id === mention.messageId)}
+      onLocate={mention => { locateAfterCatchup.current = mention; setCatchup(null); }} onClosed={() => {
         const mention = locateAfterCatchup.current; locateAfterCatchup.current = null;
         if (!mention) return;
         if ((mention.threadRootId ?? '') === (threadRootId ?? '')) locateMessage(mention.messageId);
@@ -1214,7 +1244,7 @@ function BotGroupVirtualList({ data, firstNewId, renderItem, keyExtractor, heade
 export const BotGroupTimeline = memo(function BotGroupTimeline({
   group, workRows = [], deviceId, online, identityFor, resolveMedia, resolveServerMedia, loadOlder, loadingOlder, continuing, planPending, onContinue, onPlanAction, onEditStep,
   onMessageLayout, onLocateMessage, highlightId, onReply, onOpenThread, threadRootId, pending = EMPTY_PENDING, onPendingAction, onOpenDiagram, onChooseComputer, active = true,
-  onOpenTopic, onRevealShare, onShare, sharedReplies, readBefore, unreadBoundary, olderError, onRetrySource, onShareImage, selectedImages, imageShareBusy,
+  onOpenTopic, onRevealShare, onShare, sharedReplies, readBefore, unreadBoundary, olderError, onRetrySource, onShareImage, selectedImages, imageShareBusy, onReact, onMentionBot,
 }: {
   group: BotGroupRemoteChatData;
   workRows?: BotGroupWorkRow[];
@@ -1237,6 +1267,7 @@ export const BotGroupTimeline = memo(function BotGroupTimeline({
   onLocateMessage?: (id: string) => void;
   highlightId?: string;
   onReply?: (message: BotGroupMessageView) => void;
+  onMentionBot?: (botId: string) => void;
   onOpenThread?: (message: BotGroupMessageView) => void;
   onChooseComputer?: () => void;
   onOpenDiagram?: (source: string, message: BotGroupMessageView) => void;
@@ -1247,6 +1278,8 @@ export const BotGroupTimeline = memo(function BotGroupTimeline({
   onShare?: (messageId: string) => void;
   onRetrySource?: () => void;
   selectedImages?: string[]; imageShareBusy?: boolean; onShareImage?: (messageId: string) => void;
+  /** Adds or removes your reaction on a server group message; absent where reactions are not offered. */
+  onReact?: (messageId: string, emoji: string, present: boolean) => void;
   sharedReplies?: Record<string, { messageId: string; bySelf: boolean }>;
   readBefore?: string;
   unreadBoundary?: BotGroupUnreadBoundary | null;
@@ -1364,7 +1397,8 @@ export const BotGroupTimeline = memo(function BotGroupTimeline({
             onQuote={onReply && isBotGroupMessageQuotable(message) ? () => onReply(message) : undefined}
             onThread={onOpenThread && !message.threadRootId ? () => onOpenThread(message) : undefined}
             onShare={onShare && !isRoot && message.threadRootId ? () => onShare(message.id) : undefined}
-            shared={shared} onReveal={revealShare} />;
+            shared={shared} onReveal={revealShare} reactionGroupId={onReact ? group.id : undefined} onReact={onReact} />;
+      const readOnly = !!group.archived || !!group.dissolvedAt;
       const key = rowKey(message.id);
       const selectable = selectedImages && !queued && message.kind === 'message' && !message.deleted
         && (!message.threadShare || message.threadShare.status === 'available');
@@ -1389,8 +1423,11 @@ export const BotGroupTimeline = memo(function BotGroupTimeline({
         {shared ?
           <BotGroupThreadPosted messageId={message.id} shared={shared} onPress={revealShare} />
         : null}
+        {onReact ? <BotGroupMessageReactions groupId={group.id} message={message} align={ownMessage ? 'right' : 'left'}
+          disabled={readOnly || !online} onReact={onReact} /> : null}
         {actions}
         </View>} topic={!!threadRootId} isRoot={isRoot} active={active} interactive={!selectedImages && (!longRoot || expandedRoot)} onOpenDiagram={onOpenDiagram ? source => onOpenDiagram(source, message) : undefined} onRetrySource={onRetrySource} message={displayMessage} continued={continued} member={message.authorBotId ? memberById.get(message.authorBotId) : undefined}
+          onMentionBot={onMentionBot}
           quoteDisplay={message.quote ? resolveBotGroupQuote(message.quote, messages) : undefined}
           onLocateQuote={message.quote && onLocateMessage ? () => onLocateMessage(message.quote!.messageId) : undefined}
           members={group.members} deviceId={deviceId} online={online} identityFor={identityFor} mentionLabels={mentionLabels}
@@ -1446,12 +1483,13 @@ export const BotGroupTimeline = memo(function BotGroupTimeline({
 
 function BotGroupTimelineItem({
   groupId, message, footer, topic = false, isRoot = false, onRetrySource, continued = false, quoteDisplay, onLocateQuote, member, members, deviceId, online, identityFor, mentionLabels, mentionContext, resolveMedia, resolveServerMedia, canContinue, continuing, onContinue,
-  plan, planMessages, runningSince, planActionable, planReassignable, planPending, onPlanAction, onEditStep, onPlanAutoContinue, onOpenDiagram, onChooseComputer, interactive = true, active = true,
+  plan, planMessages, runningSince, planActionable, planReassignable, planPending, onPlanAction, onEditStep, onPlanAutoContinue, onOpenDiagram, onChooseComputer, onMentionBot, interactive = true, active = true,
   joinedNames, joinedExpanded = false, onToggleJoinedExpanded,
 }: {
   onChooseComputer?: () => void;
   groupId: string;
   onOpenDiagram?: (source: string) => void;
+  onMentionBot?: (botId: string) => void;
   interactive?: boolean;
   active?: boolean;
   message: BotGroupMessageView;
@@ -1609,9 +1647,10 @@ function BotGroupTimelineItem({
     : identityFor(message.authorBotId ?? '', authorDisplayName);
   if (isPlanCard || message.maskAttribution) continued = false;
   return <View style={[styles.botRow, continued && styles.botRowContinued]} testID={isPlanCard ? 'botGroup.message.plan' : 'botGroup.message.bot'}>
-    {continued ? <View style={styles.avatarSpacer} /> : <View style={styles.avatarSlot}>
-      {message.maskAttribution ? <GroupMaskAvatar {...message.maskAttribution} deviceId={deviceId} /> : <BotGroupAvatar deviceId={deviceId} identity={author} size={BOT_GROUP_MESSAGE_AVATAR_SIZE} online={online} />}
-    </View>}
+    {continued ? <View style={styles.avatarSpacer} /> : message.maskAttribution
+      ? <View style={styles.avatarSlot}><GroupMaskAvatar {...message.maskAttribution} deviceId={deviceId} /></View>
+      : <BotGroupAuthorAvatar style={styles.avatarSlot} deviceId={deviceId} identity={author} online={online}
+        member={member} onMention={message.kind === 'message' && message.authorKind === 'bot' && !message.deleted ? onMentionBot : undefined} />}
     <View style={styles.botColumn}>
       {continued ? null : <View style={[styles.authorRow, topic && styles.topicAuthorRow]}>
         <Text numberOfLines={1} style={styles.authorName}>{authorDisplayName || author.name}</Text>

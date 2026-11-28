@@ -1,6 +1,6 @@
 import { hostname } from 'node:os';
 import { createChatWorkPolling, createWorkRequestGate, WorkRequestDeferred } from './chatWorkPolling.js';
-import { BOT_GROUP_PERSONAL_REPLIES_ENABLED, chatGroupNotificationPreference, botGroupStopRunEpoch, canStopBotGroupWork, canStopBotGroupPlan } from '@cindy/maker-shared/botGroupChat';
+import { BOT_GROUP_PERSONAL_REPLIES_ENABLED, chatGroupNotificationPreference, botGroupStopRunEpoch, canStopBotGroupWork, canStopBotGroupPlan, patchBotGroupMessageAttachments } from '@cindy/maker-shared/botGroupChat';
 import { extractPlainText } from './agentHandoff.js';
 import { teammateChatActivity } from '@cindy/maker-shared/teammate-status';
 import { prepareChatReplyFiles } from './chatServerReplyFiles.js';
@@ -21,8 +21,7 @@ import { parseChatInvitationShareId, parseChatInvitationToken } from '@cindy/dev
 import { CURRENT_CINDY_REGION } from '../../shared/brandRegion.js';
 import { existsSync, readFileSync, promises as fsp } from 'node:fs';
 import { MIRROR_ATTACHMENT_MAX_BYTES } from '../companion-cloud/mirror.js';
-import { request as httpRequest } from 'node:http';
-import { request as httpsRequest } from 'node:https';
+import { isTransientGetTransportReset, performChatHttpRequest } from './chatServerTransport.js';
 import { migrateLocalGroups, type ChatContentBlock } from './chatServerMigration.js';
 import { chatErrorDiagnostic, chatGroupFailure, chatRequestCaller, chatRetryDeadline, chatRouteNonIds, contentShapes, detailsDiagnostic, missingGroupCode } from './chatServerErrors.js';
 import { chatInviteShareBase, createChatInviteShare, notifyChatInviteRevoked, resolveChatInviteShare } from './chatInviteShares.js';
@@ -559,7 +558,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
   };
   personalList.subscribe(row => {
     if (!current()) return;
-    if (row.hidden) { incompleteDetails.delete(row.conversationId); displayHistory.forget(row.conversationId); sendJournal.forgetRoom(row.conversationId); clearGroupAttention(row.conversationId); }
+    if (row.hidden) { clearRoomAttachmentTimers(row.conversationId); incompleteDetails.delete(row.conversationId); displayHistory.forget(row.conversationId); sendJournal.forgetRoom(row.conversationId); clearGroupAttention(row.conversationId); }
     deps.onChanged?.({ groupId: row.conversationId, change: 'list', listState: row }, scope);
     for (const [source, target] of upgradedGroups) if (target === row.conversationId)
       deps.onChanged?.({ groupId: source, change: 'list', listState: row }, scope);
@@ -615,6 +614,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
   const importedMaskReports = new Map<string, string>();
   const importingMaskReports = new Set<string>();
   let supportsMaskHistory = false;
+  let supportsPersonalMentionHistory = false;
   let personalMask = false;
   let personalMaskTools = false;
   /** One teammate per request; several take turns on an arrangement (server capability groupSingleSpeaker). */
@@ -896,7 +896,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     if (subscribed) pendingSnapshots.set(key, read);
     return read;
   }
-  function request<T>(route: string, method: string, data?: unknown, actorId?: string, retried = false, successStatus?: number, gate?: typeof workGate): Promise<T> {
+  function request<T>(route: string, method: string, data?: unknown, actorId?: string, retried = false, successStatus?: number, gate?: typeof workGate, transportRetried = false): Promise<T> {
     if (!current()) return Promise.reject(new Error('OWNER_CHANGED'));
     try { gate?.check(); } catch (error) { return Promise.reject(error); }
     if (!config.baseUrl) return Promise.reject(new Error('CHAT_ENDPOINT_UNAVAILABLE'));
@@ -907,53 +907,42 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     const started = Date.now();
     // Read only when the server refuses the request as malformed (see the failure log below).
     const callSite = new Error();
-    return new Promise<T>((resolve, reject) => {
-      const req = (url.protocol === 'https:' ? httpsRequest : httpRequest)(url, {
-        method, headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', 'X-Chat-Desktop': '1',
-          ...(actorId ? { 'X-Chat-Actor': actorId } : {}) }, timeout: 15000,
-      }, res => {
-        const chunks: Buffer[] = []; let size = 0;
-        res.on('data', (chunk: Buffer) => {
-          size += chunk.length;
-          if (size > 8 * 1024 * 1024) res.destroy(new Error('RESPONSE_TOO_LARGE'));
-          else chunks.push(chunk);
-        });
-        res.on('error', reject);
-        res.on('end', async () => {
-          try {
-            if (!current()) throw new Error('OWNER_CHANGED');
-            if ((res.statusCode ?? 500) >= 300 && (res.statusCode ?? 500) < 400) throw new Error('CHAT_REDIRECT_REFUSED');
-            const status = res.statusCode ?? 500;
-            const deadline = (status === 429 || status === 503) ? retryAfterDeadline({ headers: {
-              get: name => { const header = res.headers[name.toLowerCase()]; return typeof header === 'string' ? header : null; },
-            } }) : undefined;
-            const retryAt = status === 429 ? deadline : undefined;
-            // Only consumers that compare absolute deadlines opt in to 503 cooldowns.
-            const serviceRetryAt = status === 503 ? deadline : undefined;
-            let value;
-            try { value = JSON.parse(Buffer.concat(chunks).toString('utf8')); }
-            catch {
-              // Older servers may return a non-JSON 404 for an unknown route.
-              if (successStatus && status >= 400) throw new ChatResponseError('REQUEST_FAILED', status, retryAt, undefined, serviceRetryAt);
-              if (successStatus) throw new Error('CHAT_RESPONSE_INVALID');
-              throw new ChatResponseError('INVALID_CHAT_RESPONSE', status >= 400 ? status : 502, retryAt, undefined, serviceRetryAt);
-            }
-            const code = typeof value?.error?.code === 'string' ? value.error.code : 'REQUEST_FAILED';
-            if (res.statusCode === 401 && !retried && CHAT_REFRESHABLE_ERROR_CODES.has(code)) {
-              if (await refreshRejectedToken(token, !!gate) && current()) {
-                resolve(request<T>(route, method, data, actorId, true, successStatus, gate)); return;
-              }
-            }
-            if (status >= 400) throw new ChatResponseError(code, status, retryAt, value?.error?.details, serviceRetryAt);
-            if (successStatus && status !== successStatus) throw new Error('CHAT_RESPONSE_INVALID');
-            resolve(value);
-          } catch (error) { reject(error); }
-        });
-      });
-      req.on('timeout', () => req.destroy(new Error('REQUEST_TIMEOUT')));
-      req.on('error', reject);
-      req.end(data === undefined ? undefined : JSON.stringify(data));
+    const headers: Record<string, string> = {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+      'X-Chat-Desktop': '1',
+      ...(actorId ? { 'X-Chat-Actor': actorId } : {}),
+    };
+    const body = data === undefined ? undefined : JSON.stringify(data);
+    return performChatHttpRequest({ url, method, headers, body }).then(async res => {
+      if (!current()) throw new Error('OWNER_CHANGED');
+      const status = res.status;
+      const deadline = (status === 429 || status === 503) ? retryAfterDeadline({ headers: res.headers }) : undefined;
+      const retryAt = status === 429 ? deadline : undefined;
+      // Only consumers that compare absolute deadlines opt in to 503 cooldowns.
+      const serviceRetryAt = status === 503 ? deadline : undefined;
+      let value;
+      try { value = JSON.parse(res.body.toString('utf8')); }
+      catch {
+        // Older servers may return a non-JSON 404 for an unknown route.
+        if (successStatus && status >= 400) throw new ChatResponseError('REQUEST_FAILED', status, retryAt, undefined, serviceRetryAt);
+        if (successStatus) throw new Error('CHAT_RESPONSE_INVALID');
+        throw new ChatResponseError('INVALID_CHAT_RESPONSE', status >= 400 ? status : 502, retryAt, undefined, serviceRetryAt);
+      }
+      const code = typeof value?.error?.code === 'string' ? value.error.code : 'REQUEST_FAILED';
+      if (status === 401 && !retried && CHAT_REFRESHABLE_ERROR_CODES.has(code)) {
+        if (await refreshRejectedToken(token, !!gate) && current()) {
+          return request<T>(route, method, data, actorId, true, successStatus, gate, transportRetried);
+        }
+      }
+      if (status >= 400) throw new ChatResponseError(code, status, retryAt, value?.error?.details, serviceRetryAt);
+      if (successStatus && status !== successStatus) throw new Error('CHAT_RESPONSE_INVALID');
+      return value as T;
     }).catch(error => {
+      // Idempotent GETs recover transparently from one idle/mid-flight socket or HTTP/2 stream reset.
+      if (method === 'GET' && !transportRetried && current() && isTransientGetTransportReset(error)) {
+        return request<T>(route, method, data, actorId, retried, successStatus, gate, true);
+      }
       gate?.observe(error);
       if (error instanceof WorkRequestDeferred) throw error;
       const routeTemplate = route.split('?')[0].split('/').map(part =>
@@ -1301,9 +1290,10 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       const profileRevision = localProfilesRevision;
       profiles = await getDbClient().drizzle.select().from(botProfiles).where(undefined);
       localProfilesRead = profileRevision;
-      const me = await request<{ actor: Actor; deviceId?: string | null; capabilities?: { messageReaders?: number; groupDiscussionParity?: number; groupSingleSpeaker?: number; independentReplies?: number; companionHome?: boolean; directRoomClaim?: boolean; groupLifecycleVersion?: number; conversationListStateVersion?: number; groupMemberAvatar?: number; groupMentionAudiences?: number; groupMemberMentionAll?: number; groupMemberInvites?: number; groupAssistantDevice?: number; groupNotificationSettings?: number; workAvailabilityVersion?: number; workNotificationsVersion?: number } }>('/me'); selfId = me.actor.id;
+      const me = await request<{ actor: Actor; deviceId?: string | null; capabilities?: { personalMentionHistory?: number; messageReaders?: number; groupDiscussionParity?: number; groupSingleSpeaker?: number; independentReplies?: number; companionHome?: boolean; directRoomClaim?: boolean; groupLifecycleVersion?: number; conversationListStateVersion?: number; groupMemberAvatar?: number; groupMentionAudiences?: number; groupMemberMentionAll?: number; groupMemberInvites?: number; groupAssistantDevice?: number; groupNotificationSettings?: number; workAvailabilityVersion?: number; workNotificationsVersion?: number } }>('/me'); selfId = me.actor.id;
       supportsMessageReaders = me.capabilities?.messageReaders === 1;
       supportsExecutor = (me.capabilities as { executionExecutor?: number } | undefined)?.executionExecutor === 1;
+      supportsPersonalMentionHistory = me.capabilities?.personalMentionHistory === 1;
       personalMaskTools = (me.capabilities as { personalMaskTools?: number } | undefined)?.personalMaskTools === 1;
       supportsMaskHistory = (me.capabilities as { personalMask?: number } | undefined)?.personalMask === 1;
       personalMask = BOT_GROUP_PERSONAL_REPLIES_ENABLED && supportsMaskHistory;
@@ -1702,6 +1692,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
             rooms.delete(roomId);
             othersRead.forget(roomId); forgetMessageReaders(roomId);
             clearGroupAttention(roomId);
+            clearRoomAttachmentTimers(roomId);
             displayHistory.forget(roomId); sendJournal.forgetRoom(roomId);
             // Access may come back with a narrower history; re-read every reference.
             threads.reset();
@@ -2115,19 +2106,156 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       ...(quoted.author.kind === 'bot' ? { recipientActorId: quoted.authorId } : {}) };
   }
   // Attachments are independent of the text projection. A failed object store
-  // request never rejects a room/Thread; subsequent reads retry after a backoff.
+  // request never rejects a room/Thread; subsequent reads retry after a bounded backoff.
   // Until the bytes are here the view keeps a named placeholder in its place, so
   // a slow or failed download is shown as such instead of disappearing.
-  const downloads = new Map<string, { value?: BotGroupAttachment; retryAt: number; generation: number; imageCacheCleared?: boolean }>();
-  // A page's attachments settle close together; one re-read of the room and sidebar shows
-  // them all instead of one full re-read per file.
+  const ATTACHMENT_RETRY_BACKOFF_MS = [2_000, 5_000, 15_000, 30_000] as const;
+  const MAX_ATTACHMENT_CLEANUP_RETRIES = 2;
+  const attachmentRetryDelayMs = (error: unknown, failures: number): number => {
+    const status = (error as { status?: unknown } | null)?.status;
+    if (typeof status === 'number' && status >= 400 && status < 500 && status !== 408 && status !== 429) return 30_000;
+    return ATTACHMENT_RETRY_BACKOFF_MS[Math.min(Math.max(0, failures - 1), ATTACHMENT_RETRY_BACKOFF_MS.length - 1)]!;
+  };
+  const attachmentPlaceholder = (mediaId: string, name: string, state: 'loading' | 'unavailable'): BotGroupAttachment => ({
+    id: mediaId, name, category: 'file', mimeType: '', size: 0, url: null, path: null, state,
+  });
+  const downloads = new Map<string, { value?: BotGroupAttachment; retryAt: number; generation: number; failures: number; cleanupRetries: number; imageCacheCleared?: boolean }>();
+  // A page's attachments settle close together; coalesce them into one incremental
+  // `attachments` push instead of re-reading the whole room and sidebar list per file.
   const attachmentRefreshes = new Map<string, ReturnType<typeof setTimeout>>();
-  function attachmentsChanged(roomId: string) {
-    if (!current() || attachmentRefreshes.has(roomId)) return;
+  const pendingAttachmentUpdates = new Map<string, Map<string, BotGroupAttachment>>();
+  const attachmentCleanupRetries = new Map<string, ReturnType<typeof setTimeout>>();
+  function clearRoomAttachmentTimers(roomId: string) {
+    const refresh = attachmentRefreshes.get(roomId);
+    if (refresh) {
+      clearTimeout(refresh);
+      attachmentRefreshes.delete(roomId);
+    }
+    pendingAttachmentUpdates.delete(roomId);
+    const prefix = `${roomId}:`;
+    for (const [key, timer] of attachmentCleanupRetries) {
+      if (key.startsWith(prefix)) {
+        clearTimeout(timer);
+        attachmentCleanupRetries.delete(key);
+        downloads.delete(key);
+      }
+    }
+  }
+  function scheduleCleanupRetry(roomId: string, mediaId: string, fallbackName: string, entry: { retryAt: number; generation: number; failures: number; cleanupRetries: number }) {
+    const key = `${roomId}:${mediaId}`;
+    const existing = attachmentCleanupRetries.get(key);
+    if (existing) clearTimeout(existing);
+    entry.cleanupRetries += 1;
+    entry.retryAt = Infinity;
+    entry.failures = 0;
+    const timer = setTimeout(() => {
+      attachmentCleanupRetries.delete(key);
+      if (!current() || downloads.get(key) !== entry) return;
+      entry.retryAt = 0;
+      ensureAttachmentDownload(roomId, mediaId, fallbackName);
+    }, ATTACHMENT_REFRESH_COALESCE_MS);
+    timer.unref?.();
+    attachmentCleanupRetries.set(key, timer);
+  }
+  function patchDisplayHistoryAttachments(roomId: string, updates: ReadonlyMap<string, BotGroupAttachment>) {
+    if (updates.size === 0) return;
+    const cachedGroup = displayHistory.read(roomId);
+    if (!cachedGroup) return;
+    const patchedMessages = patchBotGroupMessageAttachments(cachedGroup.messages, updates);
+    if (patchedMessages !== cachedGroup.messages) {
+      displayHistory.save(roomId, { ...cachedGroup, messages: patchedMessages });
+    }
+  }
+  function emitAttachments(roomId: string, updates: ReadonlyMap<string, BotGroupAttachment>) {
+    if (!current() || personalList.hidden(roomId)) return;
+    patchDisplayHistoryAttachments(roomId, updates);
+    const attachments = updates.size > 0 ? [...updates.values()] : undefined;
+    deps.onChanged?.({ groupId: roomId, change: 'attachments', ...(attachments ? { attachments } : {}) }, scope);
+    for (const [source, target] of upgradedGroups) {
+      if (target === roomId) deps.onChanged?.({ groupId: source, change: 'attachments', ...(attachments ? { attachments } : {}) }, scope);
+    }
+  }
+  function attachmentsChanged(roomId: string, settled?: BotGroupAttachment) {
+    if (!current()) return;
+    if (settled) {
+      let bucket = pendingAttachmentUpdates.get(roomId);
+      if (!bucket) {
+        bucket = new Map();
+        pendingAttachmentUpdates.set(roomId, bucket);
+      }
+      bucket.set(settled.id, settled);
+    }
+    if (attachmentRefreshes.has(roomId)) return;
     attachmentRefreshes.set(roomId, setTimeout(() => {
       attachmentRefreshes.delete(roomId);
-      changed(roomId);
+      const updates = pendingAttachmentUpdates.get(roomId) ?? new Map<string, BotGroupAttachment>();
+      pendingAttachmentUpdates.delete(roomId);
+      emitAttachments(roomId, updates);
     }, ATTACHMENT_REFRESH_COALESCE_MS));
+  }
+  function ensureAttachmentDownload(roomId: string, mediaId: string, fallbackName: string, forceRetry = false): BotGroupAttachment {
+    const key = `${roomId}:${mediaId}`;
+    let cached = downloads.get(key);
+    const priorCleanupRetries = forceRetry || cached?.value?.category === 'image' ? 0 : (cached?.cleanupRetries ?? 0);
+    // Image cleanup does not own ordinary files, including still-pending transfers.
+    if (cached && cached.generation !== media.cacheGeneration
+      && (cached.value?.category === 'image' || (cached.imageCacheCleared && cached.cleanupRetries < MAX_ATTACHMENT_CLEANUP_RETRIES))
+      && !attachmentCleanupRetries.has(key)) cached = undefined;
+    if (forceRetry && cached && !cached.value && (cached.retryAt !== Infinity || attachmentCleanupRetries.has(key))) {
+      cached = undefined;
+    }
+    if (!cached || (!cached.value && Date.now() >= cached.retryAt)) {
+      const pendingRetry = attachmentCleanupRetries.get(key);
+      if (pendingRetry) {
+        clearTimeout(pendingRetry);
+        attachmentCleanupRetries.delete(key);
+      }
+      const priorFailures = forceRetry ? 0 : (cached?.failures ?? 0);
+      cached = { retryAt: Infinity, generation: media.cacheGeneration, failures: priorFailures, cleanupRetries: priorCleanupRetries };
+      downloads.set(key, cached);
+      const entry = cached;
+      void media.download(roomId, mediaId).then(value => {
+        if (!current() || downloads.get(key) !== entry) return;
+        if (value.category === 'image' && entry.generation !== media.cacheGeneration) {
+          if (entry.cleanupRetries < MAX_ATTACHMENT_CLEANUP_RETRIES) {
+            scheduleCleanupRetry(roomId, mediaId, fallbackName, entry);
+            attachmentsChanged(roomId, attachmentPlaceholder(mediaId, fallbackName, 'loading'));
+          } else {
+            entry.failures += 1;
+            entry.retryAt = Date.now() + attachmentRetryDelayMs(new Error('REMOTE_MEDIA_CACHE_CLEARED'), entry.failures);
+            attachmentsChanged(roomId, attachmentPlaceholder(mediaId, fallbackName, 'unavailable'));
+          }
+        } else {
+          entry.value = value;
+          entry.failures = 0;
+          entry.cleanupRetries = 0;
+          attachmentsChanged(roomId, value);
+        }
+      }).catch(error => {
+        if (!current() || downloads.get(key) !== entry) return;
+        entry.imageCacheCleared = error instanceof Error && error.message === 'REMOTE_MEDIA_CACHE_CLEARED';
+        if (entry.imageCacheCleared && entry.generation !== media.cacheGeneration && entry.cleanupRetries < MAX_ATTACHMENT_CLEANUP_RETRIES) {
+          scheduleCleanupRetry(roomId, mediaId, fallbackName, entry);
+          attachmentsChanged(roomId, attachmentPlaceholder(mediaId, fallbackName, 'loading'));
+          return;
+        }
+        entry.failures += 1;
+        entry.retryAt = Date.now() + attachmentRetryDelayMs(error, entry.failures);
+        attachmentsChanged(roomId, attachmentPlaceholder(mediaId, fallbackName, 'unavailable'));
+      });
+    }
+    return cached.value ?? attachmentPlaceholder(mediaId, fallbackName, cached.retryAt === Infinity ? 'loading' : 'unavailable');
+  }
+  function prefetchMessageMedia(roomId: string, messages: readonly Message[]) {
+    for (const message of messages) {
+      if (message.deleted) continue;
+      for (const block of message.content) {
+        if (block.type !== 'media' || !block.mediaId) continue;
+        const parsed = id.safeParse(block.mediaId);
+        if (!parsed.success) continue;
+        ensureAttachmentDownload(roomId, parsed.data, attachmentName(block));
+      }
+    }
   }
   /**
    * Takes the read positions of a snapshot as soon as it is in hand. A receipt that comes while the rest of a read is still
@@ -2152,31 +2280,10 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     return messages.map(message => {
       const view = messageView(message, members, ownerMembers);
       for (const block of message.content) if (!message.deleted && block.type === 'media' && block.mediaId) {
-        const placeholder = (state: 'loading' | 'unavailable'): BotGroupAttachment => ({ id: block.mediaId!, name: attachmentName(block),
-          category: 'file', mimeType: '', size: 0, url: null, path: null, state });
+        const name = attachmentName(block);
         const parsed = id.safeParse(block.mediaId);
-        if (!parsed.success) { view.attachments.push(placeholder('unavailable')); continue; }
-        const mediaId = parsed.data;
-        const key = `${roomId}:${mediaId}`;
-        let cached = downloads.get(key);
-        // Image cleanup does not own ordinary files, including still-pending transfers.
-        if (cached && cached.generation !== media.cacheGeneration
-          && (cached.value?.category === 'image' || cached.imageCacheCleared)) cached = undefined;
-        if (!cached || (!cached.value && Date.now() >= cached.retryAt)) {
-          cached = { retryAt: Infinity, generation: media.cacheGeneration };
-          downloads.set(key, cached);
-          const entry = cached;
-          void media.download(roomId, mediaId).then(value => {
-            if (!current()) return;
-            if (value.category === 'image' && entry.generation !== media.cacheGeneration) entry.retryAt = 0;
-            else entry.value = value;
-          }).catch(error => {
-            entry.imageCacheCleared = error instanceof Error && error.message === 'REMOTE_MEDIA_CACHE_CLEARED';
-            entry.retryAt = entry.generation !== media.cacheGeneration ? 0 : Date.now() + 30000;
-          })
-            .finally(() => attachmentsChanged(roomId));
-        }
-        view.attachments.push(cached.value ?? placeholder(cached.retryAt === Infinity ? 'loading' : 'unavailable'));
+        if (!parsed.success) { view.attachments.push(attachmentPlaceholder(block.mediaId, name, 'unavailable')); continue; }
+        view.attachments.push(ensureAttachmentDownload(roomId, parsed.data, name));
       }
       return view;
     });
@@ -2403,11 +2510,22 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     const revision = JSON.stringify([attentionConnection, attentionGeneration, s.cursor, cacheGeneration]);
     const savedPage = previous?.revision === revision && previous.page?.query === query.toString() ? previous.page : undefined;
     const page = summaryOnly ? s.messages : savedPage?.messages ?? await (messagesRead ?? readMessages());
+    // Start downloading authorized page media immediately instead of waiting for executions/plans/failures.
+    if (!summaryOnly) prefetchMessageMedia(roomId, page);
     const ownerMembers = direct ? [] : s.members;
     const metadata: DetailMetadata | undefined = direct || summaryOnly ? undefined
       : previous?.revision === revision ? previous
       : { revision, executions: { retryAt: previous?.executions.retryAt }, failures: { retryAt: previous?.failures.retryAt }, plans: { retryAt: previous?.plans.retryAt } };
-    const executions = direct ? [] : await readDetailMetadata(metadata?.executions, roomId, () => executionsRead ?? readExecutions());
+    const executionsPromise = direct ? Promise.resolve([] as Execution[]) : readDetailMetadata(metadata?.executions, roomId, () => executionsRead ?? readExecutions());
+    executionsPromise.catch(() => undefined);
+    const sourceIds = [...new Set([...(o.sourceMessageIds ?? []), ...page.map(m => m.id)])];
+    // Modern servers read execution failures independently of /executions; start in parallel with /executions
+    // and await in the former order so error precedence (executions → failures → plans) stays unchanged.
+    const executionFailuresRead = summaryOnly || direct ? Promise.resolve(undefined)
+      : readDetailMetadata(metadata?.failures, sourceIds.join(','),
+        () => failureSnapshot(roomId, s.members, sourceIds, () => executionsPromise, () => { if (metadata?.executions.retryAt) metadata.failures.key = undefined; }));
+    executionFailuresRead.catch(() => undefined);
+    const executions = await executionsPromise;
     // A failed execution may outlive its plan card's message window. Read that
     // plan in the same request so its terminal state can retire the alert.
     const ids = [...new Set([
@@ -2417,9 +2535,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     const planRoute = `/conversations/${roomId}/plans${ids.length ? `?ids=${ids.join(',')}` : ''}`;
     const plansRead = direct ? Promise.resolve([] as ServerPlan[]) : readDetailMetadata(metadata?.plans, planRoute, () => request<ServerPlan[]>(planRoute));
     plansRead.catch(() => undefined);
-    const sourceIds = [...new Set([...(o.sourceMessageIds ?? []), ...page.map(m => m.id)])];
-    const executionFailures = summaryOnly || direct ? undefined : await readDetailMetadata(metadata?.failures, sourceIds.join(','),
-      () => failureSnapshot(roomId, s.members, sourceIds, executions, () => { if (metadata?.executions.retryAt) metadata.failures.key = undefined; }));
+    const executionFailures = await executionFailuresRead;
     const serverPlans = await plansRead;
     const metadataRetryAt = Math.max(metadata?.executions.retryAt ?? 0, metadata?.failures.retryAt ?? 0, metadata?.plans.retryAt ?? 0);
     if (metadata && current() && generation(roomId) === attentionGeneration && snapshotConnection === attentionConnection) {
@@ -2509,7 +2625,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       device.id === selfDeviceId && device.name === device.id ? { ...device, name: hostname() || device.name } : device);
     if (assistantComputers && selfDeviceId && !assistantComputers.some(device => device.id === selfDeviceId))
       assistantComputers.unshift({ id: selfDeviceId, name: hostname() || selfDeviceId });
-    return { ...(!direct && boundAssistantDevice && assistantComputers ? { assistantComputers, assistantDeviceId: s.room.assistant_device_id ?? null } : {}), conversationKind: direct ? 'direct' : 'group', serverBacked: true, reactionRevision: reactionRevisions.get(roomId)?.room ?? runtimeReactionRevision, reactionRevisions: { ...reactionRevisions.get(roomId)?.messages }, supportsGroupLeave: !direct, supportsDissolve: !direct && supportsDissolve, supportsListRemoval, supportsMemberAvatar: !direct && supportsMemberAvatar, ...(!direct && supportsMessageReaders ? { supportsMessageReaders: true } : {}), supportsNotificationSettings: !direct && supportsNotificationSettings, ...(!direct && supportsNotificationSettings && s.reads ? chatGroupNotificationPreference(s.room, mainRead) : {}), supportsMemberInvites: !direct && supportsMemberInvites, allowMemberInvites: !direct && s.room.allow_member_invites === true, supportsMemberMentionAll: !direct && supportsMemberMentionAll, allowMemberMentionAll: !direct && s.room.allow_member_mention_all === true, supportsMentionAudiences: !direct && supportsMentionAudiences, allowMentionAllBots: !direct && s.room.allow_mention_all_bots === true, dissolvedAt: s.room.dissolved_at ?? null, migrationPending: [...upgradeErrors.keys()].some(source => upgradedGroups.get(source) === roomId), archived: s.room.archived, selfActorId: selfId, topic: s.room.topic, description: s.room.description, revision: s.room.revision, canInvite: !direct && !s.room.archived && !s.room.dissolved_at && !!invitationActor(s), canStopAll: false, supportsOwnedStop: true, ...(!direct && independentReplies ? { independentReplies: true } : {}), ...(!direct && singleSpeaker ? { singleSpeaker: true, ...(!independentReplies ? { supportsDivision: true } : {}) } : {}), id: s.room.id, name: direct ? s.members.filter(m => m.state === 'joined' && m.id !== selfId).map(member => memberName(member, [])).join(', ') || s.room.name : s.room.name, ...(!direct && s.room.org_name ? { orgName: s.room.org_name } : {}), ...(!direct && s.room.external === true ? { external: true } : {}), replyMode: s.room.response_mode, speakingMode: s.room.speaking_mode,
+    return { ...(!direct && boundAssistantDevice && assistantComputers ? { assistantComputers, assistantDeviceId: s.room.assistant_device_id ?? null } : {}), conversationKind: direct ? 'direct' : 'group', serverBacked: true, supportsPersonalMentionHistory: !direct && supportsPersonalMentionHistory, reactionRevision: reactionRevisions.get(roomId)?.room ?? runtimeReactionRevision, reactionRevisions: { ...reactionRevisions.get(roomId)?.messages }, supportsGroupLeave: !direct, supportsDissolve: !direct && supportsDissolve, supportsListRemoval, supportsMemberAvatar: !direct && supportsMemberAvatar, ...(!direct && supportsMessageReaders ? { supportsMessageReaders: true } : {}), supportsNotificationSettings: !direct && supportsNotificationSettings, ...(!direct && supportsNotificationSettings && s.reads ? chatGroupNotificationPreference(s.room, mainRead) : {}), supportsMemberInvites: !direct && supportsMemberInvites, allowMemberInvites: !direct && s.room.allow_member_invites === true, supportsMemberMentionAll: !direct && supportsMemberMentionAll, allowMemberMentionAll: !direct && s.room.allow_member_mention_all === true, supportsMentionAudiences: !direct && supportsMentionAudiences, allowMentionAllBots: !direct && s.room.allow_mention_all_bots === true, dissolvedAt: s.room.dissolved_at ?? null, migrationPending: [...upgradeErrors.keys()].some(source => upgradedGroups.get(source) === roomId), archived: s.room.archived, selfActorId: selfId, topic: s.room.topic, description: s.room.description, revision: s.room.revision, canInvite: !direct && !s.room.archived && !s.room.dissolved_at && !!invitationActor(s), canStopAll: false, supportsOwnedStop: true, ...(!direct && independentReplies ? { independentReplies: true } : {}), ...(!direct && singleSpeaker ? { singleSpeaker: true, ...(!independentReplies ? { supportsDivision: true } : {}) } : {}), id: s.room.id, name: direct ? s.members.filter(m => m.state === 'joined' && m.id !== selfId).map(member => memberName(member, [])).join(', ') || s.room.name : s.room.name, ...(!direct && s.room.org_name ? { orgName: s.room.org_name } : {}), ...(!direct && s.room.external === true ? { external: true } : {}), replyMode: s.room.response_mode, speakingMode: s.room.speaking_mode,
       teammateActivity: teammateChatActivity({ executions, plans: serverPlans, planning: !!deciding,
         archived: s.room.archived, lastMessageAt: last ? Date.parse(last.createdAt) : 0 }),
       members: s.members.filter(m => m.state === 'joined').map(m => {
@@ -2887,7 +3003,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
   // Compatibility cache for servers which do not yet return failure_code.
   // The server execution status still owns whether a notice is displayed.
   const failureCodes = new Map<string, BotGroupRuntimeFailureCode>();
-  async function failureSnapshot(roomId: string, members: Member[], sourceIds: string[], recent?: Execution[], onLegacy?: () => void): Promise<BotGroupExecutionFailureView[]> {
+  async function failureSnapshot(roomId: string, members: Member[], sourceIds: string[], recent?: Execution[] | (() => Promise<Execution[]>), onLegacy?: () => void): Promise<BotGroupExecutionFailureView[]> {
     const sources = new Set(sourceIds);
     let rows: unknown[] = [];
     try {
@@ -2903,8 +3019,8 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       // Only a missing route may use the old server's bounded execution list.
       // Permission and network failures must go through normal read recovery.
       if (!(error instanceof ChatResponseError) || error.status !== 404) throw error;
+      rows = (typeof recent === 'function' ? await recent() : recent) ?? await api<Execution[]>(`/conversations/${roomId}/executions`);
       onLegacy?.();
-      rows = recent ?? await api<Execution[]>(`/conversations/${roomId}/executions`);
     }
     if (!Array.isArray(rows)) throw new Error('INVALID_CHAT_RESPONSE');
     return rows.flatMap(row => {
@@ -4374,6 +4490,13 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     // Old servers have no broadcast marker: keep an empty human broadcast directed.
     return mentions.all && !resolved.length && !supportsMentionAudiences ? [selfId] : resolved;
   }
+  // Desktop sends the expanded audience for older dispatchers. Preserve individual
+  // picks separately when the server can distinguish them in personal history.
+  function namedBroadcastMentions(mention: BotGroupMention, recipients: string[]) {
+    if (!supportsPersonalMentionHistory || !mention.all || !mention.botIds.length) return {};
+    const picked = new Set(mention.botIds);
+    return { namedMentions: recipients.filter(id => picked.has(id) || picked.has(localBot(id)?.id ?? id)) };
+  }
   const result = async <T>(fn: () => Promise<T>) => {
     try { return { ok: true as const, ...await fn() }; }
     catch (error) { return { ok: false as const, errorCode: error instanceof z.ZodError ? 'INVALID_INPUT' : error instanceof Error ? missingGroupCode(error.message) : 'REQUEST_FAILED' }; }
@@ -4438,11 +4561,21 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     mentions: input => result(async () => {
       await register('foreground');
       if (!supportsMaskHistory) throw new Error('UNSUPPORTED_OPERATION');
+      if (input.history && !supportsPersonalMentionHistory) throw new Error('UNSUPPORTED_OPERATION');
+      const scope = supportsPersonalMentionHistory ? `&scope=${input.history ? 'personal-history' : 'personal-unread'}` : '';
       const groupId=id.parse(input.groupId), before=input.before === undefined ? undefined : z.string().regex(/^[0-9]{1,19}$/).parse(input.before);
+      if (input.originalId !== undefined) {
+        if (!supportsPersonalMentionHistory) throw new Error('UNSUPPORTED_OPERATION');
+        const originalId = id.parse(input.originalId);
+        const message = await api<Message>(`/conversations/${groupId}/messages/${originalId}`);
+        return { mentions: [], hasMore: false, original: {
+          messageId: message.id, authorName: message.author.name, text: message.deleted ? '' : bodyText(message), deleted: message.deleted,
+        } };
+      }
       if (input.readIds) await api(`/conversations/${groupId}/mentions/read`,'POST',{
         operationId:operationId.parse(input.operationId),messageIds:z.array(id).min(1).max(100).parse(input.readIds)});
       if (input.readIds) changed(groupId);
-      const page=await api<{messages:Array<Message & {reply?:{content:Message['content'];maskAttribution:NonNullable<Message['maskAttribution']>} | null}>;hasMore:boolean}>(`/conversations/${groupId}/mentions?limit=100${before ? `&before=${before}` : ''}`);
+      const page=await api<{messages:Array<Message & {reply?:{content:Message['content'];maskAttribution:NonNullable<Message['maskAttribution']>} | null}>;hasMore:boolean}>(`/conversations/${groupId}/mentions?limit=100${scope}${before ? `&before=${before}` : ''}`);
       const threadMentions = page.messages.filter(m => !!m.threadRootId);
       if (threadMentions.length && rememberThreadMessages(mentionThreadMessages, groupId, threadMentions) > 0) changed(groupId);
       const mentions:ChatMaskMention[]=page.messages.map(m=>({messageId:m.id,sequence:m.seq,threadRootId:m.threadRootId ?? undefined,
@@ -4480,9 +4613,16 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
         z.object({ type: z.literal('hide') }).strict(),
         z.object({ type: z.literal('dissolve'), expectedRevision: z.number().int().positive() }).strict(),
         z.object({ type: z.literal('archive'), archived: z.boolean(), expectedRevision: z.number().int().positive() }).strict(),
+        z.object({ type: z.literal('retryAttachment'), mediaId: id, name: z.string().max(500).optional() }).strict(),
       ]).parse(input.action);
       const target = action.type === 'read' && action.conversationKind === 'direct'
         ? (await directSnapshot(requested)).room.id : await resolveGroup(requested);
+      if (action.type === 'retryAttachment') {
+        if (personalList.hidden(target)) throw new Error('CONVERSATION_NOT_FOUND');
+        const next = ensureAttachmentDownload(target, action.mediaId, action.name ?? '', true);
+        emitAttachments(target, new Map([[next.id, next]]));
+        return {};
+      }
       if (action.type === 'read') {
         const snapshot = await recentSnapshot(target);
         if (!snapshot.reads) return {};
@@ -4650,6 +4790,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
           post = { body: { operationId: i.clientId, threadRootId: i.rootId,
             ...(independentReplies ? { independentReplies: true } : {}),
             content: [...(i.text ? [{ type: 'text', text: i.text }] : []), ...uploaded], mentions: recipients,
+            ...namedBroadcastMentions(i.mentions, recipients),
             ...(supportsMentionAudiences && botGroupMentionAudience(i.mentions) ? { mentionAudience: botGroupMentionAudience(i.mentions) } : {}) },
             prepared: prepared?.ok ? prepared : undefined };
           postedThreads.set(key, post);
@@ -4882,6 +5023,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       const body = recovered?.body ?? {
         operationId: i.clientId, content: [ ...(quote ? [buildBotGroupQuoteCard(quote)] : []), ...(i.text ? [{ type: 'text', text: i.text }] : []),
           ...uploaded ], mentions, deferExecution: shouldPlan,
+          ...namedBroadcastMentions(i.mentions, mentions),
           ...(independentSend ? { independentReplies: true } : {}),
           ...(!direct && supportsMentionAudiences && botGroupMentionAudience(i.mentions) ? { mentionAudience: botGroupMentionAudience(i.mentions) } : {}), ...(!direct && groupDiscussionParity ? { mentionsAll: i.mentions.allBots === true, planningMode: i.division || proposed ? 'explicit' : 'auto' } : {}),
       };
@@ -4988,6 +5130,8 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       catch (error) {
         const failure = chatGroupFailure(error);
         if (['NOT_FOUND', 'PERMISSION_DENIED'].includes(failure.errorCode)) {
+          clearRoomAttachmentTimers(id.parse(roomId));
+          clearRoomAttachmentTimers(target);
           incompleteDetails.delete(target);
           displayHistory.forget(id.parse(roomId)); displayHistory.forget(target); sendJournal.forgetRoom(target);
         }
@@ -5220,6 +5364,9 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       companion?.dispose(); companion = undefined; deps.companionCloud?.homes.reset();
       for (const refresh of attachmentRefreshes.values()) clearTimeout(refresh);
       attachmentRefreshes.clear();
+      pendingAttachmentUpdates.clear();
+      for (const retry of attachmentCleanupRetries.values()) clearTimeout(retry);
+      attachmentCleanupRetries.clear();
       for (const pending of pendingChanges.values()) clearTimeout(pending);
       pendingChanges.clear();
       for (const pending of pendingReceiptRefresh.values()) clearTimeout(pending);
