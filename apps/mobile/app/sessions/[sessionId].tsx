@@ -7325,7 +7325,8 @@ function SessionScreenContent({ beforeSessionSwitchRef, deferSendNavigationRef, 
       documentAtSend,
       resolvePastedSessionLinkLabel,
     );
-    if (!sendScopeStillAlive() || !isMobileAuthOwnerCurrent(ownerAtSend)) {
+    if (!isMobileAuthOwnerCurrent(ownerAtSend)) return;
+    if (!sendScopeStillAlive()) {
       recoverCapturedDraftForScopeExit();
       sendInFlightRef.current = false;
       setSending(false);
