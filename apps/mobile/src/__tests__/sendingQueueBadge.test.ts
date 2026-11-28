@@ -37,6 +37,8 @@ describe('mobile sending queue badge', () => {
 
     expect(source).toContain('sendingClientIds: sendingQueueBadgeClientIds,');
     expect(source).toContain("record.state !== 'host-owned'");
+    // The first send retains its local presentation; the durable receipt hides its badge.
+    expect(source).toContain('record.creation && !record.cancelRequested');
     expect(source).toContain('sending.add(record.item.clientId)');
     // 兼容直发路径用临时标记；持久发送直接从 app 级记录派生。
     expect(source.match(/markQueueItemSending\(queued\);/g)).toHaveLength(1);

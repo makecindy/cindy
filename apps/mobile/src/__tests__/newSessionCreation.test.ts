@@ -12,7 +12,10 @@ import type { MobileMakerTransport } from '@/device-link/mobileMakerTransport';
 import type { RemoteSerializedAttachment } from '@/session/types';
 import { createDurableOutbox, type DurableOutboxRecord } from '@/session/durableOutbox';
 import { buildOutboxItem } from '@/session/sessionOutbox';
-import { createOutboxMessageLeases, outboxNeedsReconciliation, outboxSessionIsHidden } from '@/session/mobileOutboxSessionAdapter';
+import { DeviceLinkTopicRegistry } from '@/device-link/topicRegistry';
+import { createOutboxMessageLeases, createOutboxSessionAccess, outboxNeedsReconciliation, outboxSessionIsHidden } from '@/session/mobileOutboxSessionAdapter';
+import { createDurableOutboxDelivery, type DeliveryProjection } from '@/session/durableOutboxDelivery';
+import { EMPTY_INPUT_PROJECTION } from '@/session/inputProjection';
 
 const recoveryStorage = vi.hoisted(() => new Map<string, string>());
 const persistCancelledDraft = vi.hoisted(() => vi.fn(async () => {}));
@@ -60,12 +63,14 @@ import {
   shouldBlockSessionSync,
   stashNewSessionDraftForEdit,
   startNewSessionCreation,
+  subscribeNewSessionCreationTasks,
   withNewSessionCreationRemoval,
   type NewSessionCreationParams,
 } from '@/session/newSessionCreation';
 import { remoteSessionStore } from '@/session/remoteSessionStore';
 import { takeOrcaStartFailure } from '@/session/orcaTeam';
 import { sessionFromCreateResult, type NewSessionDraft } from '@/session/newSession';
+import { handoffFirstSendSession, readFirstSendProjection, readFirstSendSession, rememberFirstSendSession, type FirstSendSessionSnapshot } from '@/session/firstSendSessionSnapshot';
 import {
   __testing as recoveryTesting,
   listPendingPrecreatedWorktrees,
@@ -178,6 +183,63 @@ async function flushPipeline(): Promise<void> {
 }
 
 describe('newSessionCreation pipeline', () => {
+  // Unit: a durable handoff must wake delivery on completion, without scanning on UI-only progress.
+  it('publishes creation progress to the screen and completion to the outbox', async () => {
+    const params = makeParams('wake-first', makeMaker());
+    params.transport.handoffFirstMessage = async () => {};
+    const screen: string[] = [];
+    const delivery: string[] = [];
+    const phase = () => getNewSessionCreationTask(params.sessionId)?.phase ?? 'finished';
+    const offScreen = subscribeNewSessionCreationTasks(() => screen.push(phase()));
+    const offDelivery = subscribeNewSessionCreationTasks(() => delivery.push(phase()), 'delivery');
+    try {
+      startNewSessionCreation(params);
+      await flushPipeline();
+      expect(screen).toEqual(['connecting', 'checkingModel', 'creating', 'sending', 'finished']);
+      expect(delivery).toEqual(['connecting', 'finished']);
+    } finally {
+      offScreen();
+      offDelivery();
+    }
+  });
+
+  // Unit, PR 11841 offline R08–10: a transient create error used to reopen the editor.
+  // A committed send keeps its original IDs and background window available to the outbox,
+  // and keeps blocking session sync even if host creation later enters a failed state.
+  it('releases a submitted dialogue for delivery after a transient creation failure', async () => {
+    const record = recoveryOutboxRecord('pending-dialogue');
+    record.state = 'queued';
+    record.creation = { ...record.creation!, draft: { ...DRAFT, workspaceKind: 'dialogue' }, needsHostCreation: true };
+    editOutbox.records.mockReturnValue([record]);
+    try {
+      const endBackgroundDelivery = vi.fn();
+      const maker = makeMaker({ createSession: vi.fn(async () => { throw new Error('[NOT_CONNECTED] offline'); }) });
+      const params = makeParams(record.item.sessionId, maker, {
+        firstMessageClientId: record.item.clientId,
+        endBackgroundDelivery,
+      });
+      params.transport.handoffFirstMessage = vi.fn();
+      startNewSessionCreation(params);
+      await flushPipeline();
+      expect(maker.createSession).toHaveBeenCalled();
+      expect(getNewSessionCreationTask(record.item.sessionId)).toBeNull();
+      expect(endBackgroundDelivery).not.toHaveBeenCalled();
+      expect(shouldBlockSessionSync(record.item.sessionId, record.deviceId)).toBe(true);
+      expect(editOutbox.update).not.toHaveBeenCalledWith(record, expect.objectContaining({ state: 'failed' }));
+      // A subsequent permanent create failure must keep blocking sync instead of triggering NOT_FOUND.
+      editOutbox.records.mockReturnValue([{ ...record, state: 'failed', error: 'unauthenticated' }]);
+      expect(shouldBlockSessionSync(record.item.sessionId, record.deviceId)).toBe(true);
+      // Once host creation is confirmed, sync is allowed again even before prepared is written.
+      editOutbox.records.mockReturnValue([{
+        ...record, state: 'failed',
+        creation: { ...record.creation!, needsHostCreation: undefined, hostCreated: true },
+      }]);
+      expect(shouldBlockSessionSync(record.item.sessionId, record.deviceId)).toBe(false);
+    } finally {
+      editOutbox.records.mockReturnValue([]);
+    }
+  });
+
   it('carries unsent composer text and files through legacy memory recovery', async () => {
     const maker = makeMaker({ createSession: vi.fn(async () => { throw new Error('[MODEL_UNAVAILABLE] unavailable'); }) });
     startNewSessionCreation(makeParams('s1', maker));
@@ -774,6 +836,113 @@ describe('newSessionCreation pipeline', () => {
       { ...sessionFromCreateResult({ sessionId: 's2' }, DRAFT), title: '登录失败排查' },
     ]);
     expect(remoteSessionStore.getSessions().find((s) => s.id === 's2')?.title).toBe('登录失败排查');
+  });
+
+  // Unit regression: a delayed subscription ACK and redundant session read used
+  // to block the first message, even after the host had durably opened the task.
+  it('sends a deferred dialogue using the returned session while subscription ACKs are pending', async () => {
+    const session = { ...sessionFromCreateResult({ sessionId: 's11', workDir: '/allocated/dialogue-dir' }, {
+      ...DRAFT, workspaceKind: 'dialogue', workingDir: '',
+    }), source: null };
+    const maker = makeMaker({
+      createSession: vi.fn(async () => ({ sessionId: 's11', workDir: session.workingDir, session })),
+      getSession: vi.fn(() => new Promise(() => {})),
+    });
+    const params = makeParams('s11', maker, { draft: { ...DRAFT, workspaceKind: 'dialogue', workingDir: '' } });
+    params.transport.subscribe = vi.fn(() => new Promise<void>(() => {}));
+    startNewSessionCreation(params);
+    await flushPipeline();
+    expect(maker.createSession).toHaveBeenCalledWith(expect.objectContaining({ deferRuntimeStart: true }));
+    expect(maker.input.enqueue).toHaveBeenCalledWith('s11', expect.objectContaining({
+      workingDir: '/allocated/dialogue-dir', createOpts: expect.objectContaining({ workingDir: '/allocated/dialogue-dir' }),
+    }), expect.anything());
+    expect(maker.getSession).not.toHaveBeenCalled();
+    expect(getNewSessionCreationTask('s11')).toBeNull();
+    expect(remoteSessionStore.getSessions().find(s => s.id === 's11')?.pendingLocalCreation).toBe(false);
+  });
+
+  // Unit regression r4651047066: exercise the real creation pipeline and topic
+  // registry. Pending ACK tests did not release owners during an async gap.
+  // Neither delayed linking nor subscription backoff may resurrect a released
+  // page owner; another peer must retain its own subscription throughout.
+  it.each(['link', 'backoff'])(
+    'does not resurrect released page subscriptions after %s', async (gap) => {
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+      try {
+        const registry = new DeviceLinkTopicRegistry();
+        registry.trackSubscribe('new-session:dev-1', 'dev-1', ['sessions']);
+        registry.trackSubscribe('home', 'dev-2', ['sessions']);
+        const maker = makeMaker();
+        const params = makeParams('s11', maker);
+        let finishLink!: () => void;
+        const linking = new Promise<void>(resolve => { finishLink = resolve; });
+        params.transport.openLink = async () => { if (gap === 'link') await linking; };
+        params.transport.subscribe = async (owner, device, topics) => {
+          registry.trackSubscribe(owner, device, topics);
+          if (owner.startsWith('new-session:')) throw new Error('BACKPRESSURE');
+        };
+        startNewSessionCreation(params);
+        await flushPipeline();
+        // Releasing the form must retain the task page's shared list topic.
+        expect(registry.untrackSubscribe('new-session:dev-1', 'dev-1')).toEqual([]);
+        expect(registry.hasTopic('dev-1', 'sessions')).toBe(true);
+        registry.untrackSubscribe('session:s11', 'dev-1');
+        finishLink();
+        await flushPipeline();
+        expect(maker.input.enqueue).toHaveBeenCalledOnce();
+        expect(getNewSessionCreationTask('s11')).toBeNull();
+        await vi.advanceTimersByTimeAsync(10_000);
+        expect(registry.snapshotDevice('dev-1')).toBeNull();
+        expect(registry.hasTopic('dev-2', 'sessions')).toBe(true);
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it('acknowledges a new dialogue within four 200ms round trips, independently of Agent startup', async () => {
+    // Deterministic unit latency budget, not a real-network benchmark. No sleeps
+    // or native runtime: each required RPC costs 200ms; optional reads never settle.
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    try {
+      const rpc = <T,>(value: T) => new Promise<T>(resolve => setTimeout(() => resolve(value), 200));
+      const session = { ...sessionFromCreateResult({ sessionId: 's11', workDir: '/dialogue' }, DRAFT), source: null };
+      const maker = makeMaker({
+        createSession: vi.fn(() => rpc({ sessionId: 's11', workDir: '/dialogue', session })),
+        getSession: vi.fn(() => new Promise(() => {})),
+      });
+      maker.input.enqueue.mockImplementation(() => rpc({ sessionId: 's11', pendingQueue: [] }));
+      const params = makeParams('s11', maker, {
+        draft: { ...DRAFT, workspaceKind: 'dialogue', workingDir: '' },
+        confirmUnauthenticated: () => rpc({ unauthenticated: false, fresh: null }),
+      });
+      params.transport.openLink = () => rpc(undefined);
+      params.transport.subscribe = () => new Promise(() => {});
+      startNewSessionCreation(params);
+      await vi.advanceTimersByTimeAsync(799);
+      expect(getNewSessionCreationTask('s11')?.status).toBe('running');
+      await vi.advanceTimersByTimeAsync(1);
+      expect(getNewSessionCreationTask('s11')).toBeNull();
+      expect(remoteSessionStore.getSessions().find(s => s.id === 's11')?.pendingLocalCreation).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it.each([
+    { id: 'another-task', workingDir: '/dialogue' },
+    { id: 's11', workingDir: '/wrong-directory' },
+  ])('queries the host instead of adopting a mismatched inline task: %j', async (inline) => {
+    const session = { ...sessionFromCreateResult({ sessionId: 's11', workDir: '/dialogue' }, DRAFT), source: null };
+    const maker = makeMaker({
+      createSession: vi.fn(async () => ({ sessionId: 's11', workDir: '/dialogue', session: inline })),
+      getSession: vi.fn(async () => session),
+    });
+    startNewSessionCreation(makeParams('s11', maker, { draft: { ...DRAFT, workspaceKind: 'dialogue', workingDir: '' } }));
+    await flushPipeline();
+    expect(maker.getSession).toHaveBeenCalledWith('s11');
+    expect(maker.input.enqueue).toHaveBeenCalledWith('s11', expect.objectContaining({ workingDir: '/dialogue' }), expect.anything());
+    expect(getNewSessionCreationTask('s11')).toBeNull();
   });
 
   it('首条消息 enqueue 前应用手机控制端准备的可信引用快照', async () => {
@@ -1670,12 +1839,142 @@ describe('newSessionCreation pipeline', () => {
     params.transport.handoffFirstMessage = handoff;
     startNewSessionCreation(params);
     await flushPipeline();
-    expect(handoff).toHaveBeenCalledWith(expect.objectContaining({ clientId: 'persisted-first-id', text: DRAFT.firstMessage }));
+    expect(handoff).toHaveBeenCalledWith(expect.objectContaining({ clientId: 'persisted-first-id', text: DRAFT.firstMessage }), undefined);
     expect(maker.input.enqueue).not.toHaveBeenCalled();
     expect(maker.setPlanMode).not.toHaveBeenCalled();
     expect(getNewSessionCreationTask('durable-first')).toBeNull();
     expect(remoteSessionStore.getSessions().find((session) => session.id === 'durable-first')?.pendingLocalCreation).toBe(false);
   });
+  // A create reply removes a remote read only for that exact ledger revision and link.
+  it.each([false, true])('reuses the prepared dialogue row when reconnecting=%s', async (reconnecting) => {
+    const sessionId = 'prepared-first';
+    const draft = { ...DRAFT, workspaceKind: 'dialogue' as const, workingDir: '' };
+    const session = sessionFromCreateResult({ sessionId, workDir: '/dialogue/first' }, draft);
+    let epoch = 4;
+    const maker = makeMaker({
+      createSession: vi.fn(async () => {
+        if (reconnecting) epoch += 1;
+        return { sessionId, workDir: session.workingDir, session,
+          inputDelivery: { inputDeliveryVersion: 1, clearBoundaryMs: null } };
+      }),
+    });
+    const params = makeParams(sessionId, maker, { draft });
+    const record: DurableOutboxRecord = { ...recoveryOutboxRecord(sessionId), state: 'queued' };
+    params.transport.getConnectionEpoch = () => epoch;
+    const handoff = vi.fn(async (_item, snapshot?: FirstSendSessionSnapshot) => {
+      if (snapshot) rememberFirstSendSession(record, snapshot);
+    });
+    params.transport.handoffFirstMessage = handoff;
+    startNewSessionCreation(params);
+    await flushPipeline();
+
+    expect(handoff).toHaveBeenCalledTimes(1);
+    expect(maker.getSession).not.toHaveBeenCalled();
+    expect(readFirstSendSession(record, epoch)).toBe(reconnecting ? undefined : session);
+    expect(readFirstSendSession(record, epoch + 1)).toBeUndefined();
+    expect(readFirstSendSession({ ...record }, epoch)).toBeUndefined();
+    const snapshot = handoff.mock.calls[0]?.[1];
+    if (!reconnecting) expect(snapshot).toMatchObject({
+      inputDelivery: { inputDeliveryVersion: 1, clearBoundaryMs: null },
+    });
+    if (snapshot) {
+      const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 5_000);
+      try {
+        expect(readFirstSendSession(record, epoch)).toBeUndefined();
+      } finally {
+        clock.mockRestore();
+      }
+    }
+  });
+
+  // Unit, #11841: the older 800ms test bypassed durable handoff and its projection RPC.
+  // Use the real creation pipeline, outbox storage, access policy and delivery runner.
+  // A held enqueue receipt must retain phone ownership; a fresh create reply saves one RPC.
+  it.each(['fresh', 'slow-handoff', 'legacy', 'reconnected', 'expired', 'edited', 'owner-changed', 'cleared'] as const)(
+    'delivers a newly created dialogue through the durable outbox: %s', async (mode) => {
+      const sessionId = 's2';
+      const draft = { ...DRAFT, workspaceKind: 'dialogue' as const, workingDir: '' };
+      const session = { ...sessionFromCreateResult({ sessionId, workDir: '/dialogue/first' }, draft), source: null };
+      // Unit, R16: time spent persisting the handoff must not consume its reuse window.
+      let clockNow = Date.now();
+      const handoffClock = mode === 'slow-handoff' ? vi.spyOn(Date, 'now').mockImplementation(() => clockNow) : undefined;
+      const data = new Map<string, string>();
+      const store = createDurableOutbox({
+        getAllKeys: async () => [...data.keys()], getItem: async key => data.get(key) ?? null,
+        setItem: async (key, value) => {
+          if (mode === 'slow-handoff' && JSON.parse(value).suspended === false) clockNow += 6_639;
+          data.set(key, value);
+        }, removeItem: async key => { data.delete(key); },
+      });
+      await store.activate('owner-a');
+      await store.add({ ...recoveryOutboxRecord(sessionId), state: 'queued', suspended: true });
+      editOutbox.records.mockImplementation(() => [...store.getSnapshot()]);
+      const maker = makeMaker({ createSession: vi.fn(async () => ({
+        sessionId, workDir: session.workingDir, session,
+        ...(mode === 'legacy' ? {} : { inputDelivery: { inputDeliveryVersion: 1, clearBoundaryMs: null } }),
+      })) });
+      let epoch = 4;
+      let current = true;
+      const params = makeParams(sessionId, maker, { draft, firstMessageClientId: `message-${sessionId}` });
+      params.transport.getConnectionEpoch = () => epoch;
+      params.transport.handoffFirstMessage = async (template, snapshot) => {
+        await handoffFirstSendSession(store, store.getSnapshot()[0]!, template, snapshot, () => current);
+      };
+      startNewSessionCreation(params);
+      await flushPipeline();
+      expect(getNewSessionCreationTask(sessionId)).toBeNull();
+      if (mode === 'reconnected') epoch += 1;
+      if (mode === 'edited') await store.update(store.getSnapshot()[0]!, { error: undefined });
+      if (mode === 'owner-changed') current = false;
+      const now = Date.now();
+      const clock = mode === 'expired' ? vi.spyOn(Date, 'now').mockReturnValue(now + 5_000) : undefined;
+      const access = createOutboxSessionAccess({
+        getSessions: () => remoteSessionStore.getSessions(), getRecords: () => store.getSnapshot(),
+        isCurrent: () => current, guard: () => { if (!current) throw new Error('owner changed'); },
+        invoke: vi.fn(), readSession: async () => session,
+        freshSession: r => readFirstSendSession(r, epoch), isForeground: () => true,
+        canConnect: () => true, isCreationHeld: () => false,
+        hasCreationTask: id => getNewSessionCreationTask(id) !== null, needsReconciliation: () => true,
+      });
+      const projection: DeliveryProjection = { ...EMPTY_INPUT_PROJECTION, sessionId,
+        inputDeliveryVersion: 1, clearBoundaryMs: null };
+      const readProjection = vi.fn(async () => mode === 'cleared' ? { ...projection, clearBoundaryMs: 9 } : projection);
+      let acknowledge!: (value: DeliveryProjection) => void;
+      const receipt = new Promise<DeliveryProjection>(resolve => { acknowledge = resolve; });
+      const enqueue = vi.fn(async () => receipt);
+      const cleared = new Error('REMOTE_OPTIMISTIC_INPUT_CLEARED');
+      if (mode === 'cleared') enqueue.mockRejectedValueOnce(cleared);
+      const runner = createDurableOutboxDelivery({
+        store, isCurrent: () => current, canRun: access.canRun, sessionPolicy: access.sessionPolicy,
+        knownProjection: r => readFirstSendProjection(r, epoch), projection: readProjection,
+        staleClearBoundary: error => error === cleared,
+        session: async () => session, prepare: async r => r.template!, enqueue,
+        upload: async () => { throw new Error('unexpected upload'); },
+        cancel: async () => false, history: async () => false, bindProjection: () => () => {},
+        cleanup: async () => {}, discardUploads: () => {}, retryable: () => false,
+        describe: String, confirmationMessage: 'unconfirmed', clearedMessage: 'cleared',
+      });
+      const delivery = runner.run();
+      try {
+        await flushPipeline();
+        expect(readProjection).toHaveBeenCalledTimes(mode === 'fresh' || mode === 'slow-handoff' || mode === 'owner-changed' ? 0 : 1);
+        expect(enqueue).toHaveBeenCalledTimes(mode === 'owner-changed' ? 0 : 1);
+        expect(store.getSnapshot()[0]?.state).toBe(mode === 'owner-changed' ? 'queued' : mode === 'cleared' ? 'failed' : 'sending');
+        acknowledge(projection);
+        await delivery;
+        expect(store.getSnapshot()[0]?.state).toBe(mode === 'owner-changed' ? 'queued' : mode === 'cleared' ? 'failed' : 'host-owned');
+        if (mode === 'cleared') expect(store.getSnapshot()[0]).toMatchObject({ clearBoundaryMs: null, error: 'cleared' });
+        expect(maker.input.enqueue).not.toHaveBeenCalled();
+      } finally {
+        acknowledge(projection);
+        await delivery;
+        runner.stop();
+        clock?.mockRestore();
+        handoffClock?.mockRestore();
+      }
+    },
+  );
+
   it('keeps the creation task recoverable when saving the first-message handoff fails', async () => {
     const maker = makeMaker(); const params = makeParams('durable-first-failed', maker, { firstMessageClientId: 'saved-id' });
     params.transport.handoffFirstMessage = async () => { throw new Error('disk full'); };

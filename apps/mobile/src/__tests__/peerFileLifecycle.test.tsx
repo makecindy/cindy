@@ -3,6 +3,8 @@ import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { PeerFileTransport } from "@/device-link/peerFileTransport";
+import { DirectLinkTransport } from "@/device-link/DirectLinkTransport";
+import { createDirectRuntimeBridge } from "@cindy/device-link";
 import { installPeerStreamTransport } from "@/device-link/peerFileRegistry";
 
 const state = vi.hoisted(() => ({
@@ -207,6 +209,34 @@ beforeEach(() => {
 afterEach(() => {
   act(() => root.unmount());
   vi.useRealTimers();
+});
+
+// #11841 unit regression: the business WebView can freeze as soon as Android
+// backgrounds. Existing file-transfer tests advance timers and miss this window.
+// Exercise the mounted production component and real bridge without firing timers:
+// pending work must be released to DeviceLink's existing relay fallback immediately.
+it("releases the business direct path on background before any timer can run", async () => {
+  const bridge = createDirectRuntimeBridge();
+  act(() => root.render(createElement(DirectLinkTransport, { bridge, enabled: true, owner: "a" })));
+  act(() => message({ type: "ready" }));
+  const closed = vi.fn();
+  const session = bridge.runtime.create("first-send", {
+    open() {}, message() {}, drained() {}, closed,
+  });
+  const offered = session.offer().catch(error => error.message);
+  act(() => { state.app = "inactive"; state.change("inactive"); });
+  expect(closed).not.toHaveBeenCalled();
+  const lateMessage = state.props.onMessage;
+  act(() => { state.app = "background"; state.change("background"); });
+  expect(closed).toHaveBeenCalledWith("runtime-unavailable");
+  expect(await offered).toBe("DIRECT_CHANNEL_CLOSED");
+  act(() => lateMessage({ nativeEvent: { data: JSON.stringify({ type: "ready" }) } }));
+  expect(() => bridge.runtime.create("late", { open() {}, message() {}, drained() {}, closed() {} }))
+    .toThrow("DIRECT_RUNTIME_UNAVAILABLE");
+  act(() => { state.app = "active"; state.change("active"); });
+  act(() => message({ type: "ready" }));
+  const restored = bridge.runtime.create("restored", { open() {}, message() {}, drained() {}, closed() {} });
+  restored.close();
 });
 
 it("opens lazily, keeps negotiated connection idle and releases the host on background", async () => {

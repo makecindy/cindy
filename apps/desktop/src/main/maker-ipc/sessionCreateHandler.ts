@@ -56,6 +56,14 @@ export interface MakerSessionCreateHandlerDeps<
   /** Captured per creation; prevents another account with the same UUID cancelling it. */
   creationOwner?: () => object;
   closeCancelledSession?: (session: TSession) => Promise<void>;
+  /** Persist a new ordinary dialogue; returning null keeps the native create path. */
+  prepareSession?: (opts: MakerSessionCreateOpts) => Promise<{
+    sessionId: string;
+    agentKind: string;
+    workDir: string;
+    session: unknown;
+    inputDelivery?: { inputDeliveryVersion: 1; clearBoundaryMs: number | null };
+  } | null>;
   bootstrapSession(opts: MakerSessionCreateOpts): Promise<{
     session: TSession;
     didInjectOrcaInstructions: boolean;
@@ -96,6 +104,31 @@ export function registerMakerSessionCreateHandler<TSession extends MakerSessionC
 
     const run = async () => {
       assertSessionCreationCurrent();
+      // Mobile only needs a durable task before handing off its first input.
+      // Starting the runtime here made the send ACK wait on native thread/start.
+      // First-send bootstrap still owns all runtime, credential and workspace guards.
+      if (o.deferRuntimeStart === true && o.id && o.workspaceKind === 'dialogue'
+        && !o.remoteHostId && !o.agentDeviceId && !o.orcaRole && !o.resumeSessionId
+        && o.agentKind !== 'acp' && deps.prepareSession) {
+        const prepared = await deps.prepareSession(o);
+        assertSessionCreationCurrent();
+        if (prepared) {
+          deps.logCreateSession({
+            agentKind: o.agentKind,
+            model: o.model,
+            fastMode: o.fastMode ?? 'default',
+            workDir: prepared.workDir,
+            providedId: true,
+            usedOrcaInstructions: false,
+            usedProjectContext: false,
+            extraDirsCount: o.extraDirs?.length ?? 0,
+            deferredRuntimeStart: true,
+          });
+          deps.markKnownNonOrcaIfApplicable(prepared.sessionId, o);
+          deps.broadcastSessionCreated(prepared.sessionId);
+          return prepared;
+        }
+      }
       let bootstrapped: Awaited<ReturnType<typeof deps.bootstrapSession>>;
       try {
         bootstrapped = await deps.bootstrapSession(o);

@@ -28,6 +28,8 @@ import type { CreateWorktreeReq, CreateWorktreeResp } from '../../worktree/types
 
 const log = createLogger('local-db-sessions');
 export interface UserSessionCreatePorts {
+  /** Optional launcher lifecycle guard, also checked immediately before persistence. */
+  assertCurrent?: () => void;
   senderId: number;
   userDataDir: string;
   notifyPluginSessionCreated(input: { sessionId: string; workdir?: string }): void;
@@ -54,6 +56,7 @@ export async function withWorktreeMutation<T>(resources: string[], task: () => P
 export async function createUserSession(body: unknown, ports: UserSessionCreatePorts) {
     const owner = getCurrentDbClientSnapshot();
     const assertOwner = () => {
+      ports.assertCurrent?.();
       if (!owner || getCurrentDbClientSnapshot() !== owner) throwIpcError('PRECONDITION_FAILED', 'Account changed; create the task again');
     };
     assertOwner();

@@ -37,11 +37,14 @@ import {
   uploadMobileAttachmentFromFile,
   discardMobileUploadedAttachment,
 } from "./mobileAttachmentUpload";
-import { resolveNewSessionSkillDraft } from "./newSession";
+import { buildRemoteCreateSessionOptions, normalizeCreateSessionResult, resolveNewSessionSkillDraft } from "./newSession";
+import { agentAuthGateHint, confirmNewSessionAgentAuth } from './agentAuthGate';
+import { buildAgentCapabilitiesCacheKey, getCachedAgentCapabilities } from './agentCapabilitiesCache';
+import { revalidateNewSessionDraftAfterAuth } from './newSessionRuntimeReconciliation';
 import { buildQueuedMessageForEngine, EMPTY_INPUT_PROJECTION } from "./inputProjection";
 import { mobileDebugLog } from "@/debug/mobileDebugLog";
 import { outboxItemAttachments } from "./sessionOutbox";
-import { dismissRecoveredPrecreatedSession, getNewSessionCreationTask, restoreNewSessionDurableEdit } from "./newSessionCreation";
+import { dismissRecoveredPrecreatedSession, getNewSessionCreationTask, restoreNewSessionDurableEdit, subscribeNewSessionCreationTasks } from "./newSessionCreation";
 import {
   MobileSessionReferenceError,
   prepareMobileQueuedSessionReferences,
@@ -54,6 +57,9 @@ import { validateOutboxResourceBinding } from './outboxResourceBinding';
 import { findRemoteHistoryView } from "./remoteHistoryViews";
 import { endOutboxBackgroundSend, hasOutboxBackgroundSend, syncOutboxLeftInBackground } from './outboxBackgroundSend';
 import type { DurableOutboxRecord } from "./durableOutbox";
+import type { RemoteSession } from "./types";
+import { canDeliverNewSessionInBackground, endNewSessionBackgroundDelivery } from "./newSessionBackgroundDelivery";
+import { readFirstSendProjection, readFirstSendSession } from "./firstSendSessionSnapshot";
 import {
   canConnectOutboxPeer,
   createOutboxMessageLeases,
@@ -99,6 +105,10 @@ export function MobileOutboxBridge() {
     const needsReconciliation = (record: DurableOutboxRecord) =>
       outboxNeedsReconciliation(record,
         findRemoteHistoryView(record.deviceId, record.item.sessionId)?.isActive() === true);
+    const connectionEpochFor = (deviceId: string) =>
+      latest.current.link.getConnectionState?.(deviceId).connectionEpoch ?? latest.current.link.connectionEpoch;
+    const freshSession = (record: DurableOutboxRecord) =>
+      readFirstSendSession(record, connectionEpochFor(record.deviceId));
     const { hidden, invokeOwned, readSessionOnce, canRun, sessionPolicy } = createOutboxSessionAccess({
       getSessions: () => remoteSessionStore.getSessions(),
       getRecords: () => mobileDurableOutbox.getSnapshot(),
@@ -106,8 +116,9 @@ export function MobileOutboxBridge() {
       guard,
       invoke: (deviceId, channel, args, options) => latest.current.link.invoke(deviceId, channel, args, options),
       readSession: (record) => maker(record).getSession(record.item.sessionId),
+      freshSession,
       isForeground: () => AppState.currentState !== "background" && AppState.currentState !== "inactive",
-      canContinueInBackground: hasOutboxBackgroundSend,
+      canContinueInBackground: (record) => canDeliverNewSessionInBackground(record) || hasOutboxBackgroundSend(record),
       canConnect: (deviceId) => canConnectOutboxPeer(latest.current.link, deviceId),
       isCreationHeld: isDurableOutboxCreationHeld,
       hasCreationTask: (sessionId) => getNewSessionCreationTask(sessionId) !== null,
@@ -135,8 +146,6 @@ export function MobileOutboxBridge() {
     const knownClearBoundaries = new Map<string, { epoch: number; value: number | null }>();
     // What a host answered belongs to the connection it answered on: a host that
     // restarted or was replaced by an older build must be asked again.
-    const connectionEpochFor = (deviceId: string) =>
-      latest.current.link.getConnectionState?.(deviceId).connectionEpoch ?? latest.current.link.connectionEpoch;
     const learnProjection = (r: DurableOutboxRecord, projection: unknown, epoch: number) => {
       if (!projection || typeof projection !== 'object') return;
       const value = projection as { inputDeliveryVersion?: unknown; clearBoundaryMs?: unknown };
@@ -159,6 +168,46 @@ export function MobileOutboxBridge() {
       store: mobileDurableOutbox,
       isCurrent,
       canRun,
+      createMissingDialogue: async (record) => {
+        if (hidden(record)) return false;
+        const draft = record.creation!.draft;
+        const host = maker(record);
+        const auth = await confirmNewSessionAgentAuth(record.deviceId, draft.agentKind, () => host.listProviders());
+        if (auth.unauthenticated) throw new Error(agentAuthGateHint(draft.agentKind));
+        const route = auth.fresh && revalidateNewSessionDraftAfterAuth(draft, auth.fresh,
+          () => getCachedAgentCapabilities(buildAgentCapabilitiesCacheKey(record.deviceId, draft.agentKind))?.hasFastMode === true,
+          (key, values) => i18n.t(key, values));
+        if (!canRun(record) || hidden(record)) return false;
+        const result = normalizeCreateSessionResult(await host.createSession({
+          ...buildRemoteCreateSessionOptions({ ...draft, ...route }),
+          id: record.item.sessionId, deferRuntimeStart: true,
+        }));
+        if (result?.sessionId !== record.item.sessionId) throw new Error(i18n.t('session.new.sessionIdNotAdopted'));
+        if (result.session) {
+          remoteSessionStore.upsertDeviceSession(record.deviceId, record.creation!.deviceName, {
+            ...result.session,
+            pendingLocalCreation: false,
+          });
+        } else {
+          remoteSessionStore.applySessionPatch(record.deviceId, record.item.sessionId, {
+            pendingLocalCreation: false,
+            ...(result.workDir ? { workingDir: result.workDir } : {}),
+          });
+        }
+        return true;
+      },
+      onHostSessionReady: (record, session) => {
+        if ('workingDir' in session) {
+          remoteSessionStore.upsertDeviceSession(record.deviceId, record.creation?.deviceName ?? '', {
+            ...(session as RemoteSession),
+            pendingLocalCreation: false,
+          });
+        } else {
+          remoteSessionStore.applySessionPatch(record.deviceId, record.item.sessionId, {
+            pendingLocalCreation: false,
+          });
+        }
+      },
       sessionPolicy,
       connectionEpoch: connectionEpochFor,
       projection: async (r, fresh) => {
@@ -175,6 +224,8 @@ export function MobileOutboxBridge() {
       },
       knownProjection: (r) => {
         const epoch = connectionEpochFor(r.deviceId);
+        const created = readFirstSendProjection(r, epoch);
+        if (created) return created;
         const boundary = knownClearBoundaries.get(outboxSessionKey(r));
         if (durableHosts.get(r.deviceId) !== epoch || boundary?.epoch !== epoch) return undefined;
         return {
@@ -186,7 +237,9 @@ export function MobileOutboxBridge() {
       },
       staleClearBoundary: (error) =>
         formatRemoteError(error).includes("REMOTE_OPTIMISTIC_INPUT_CLEARED"),
-      trace: (event, fields) => mobileDebugLog("debug", "device-link", event, fields),
+      trace: (event, fields) => mobileDebugLog("debug", "device-link", event, {
+        ...fields, appState: AppState.currentState,
+      }),
       session: (r) => maker(r).getSession(r.item.sessionId),
       bindProjection: (r) => {
         const apply = bindOutboxProjection(
@@ -198,8 +251,13 @@ export function MobileOutboxBridge() {
           if (epoch !== undefined) learnProjection(r, projection, epoch);
         };
       },
-      prepare: async (r) => {
-        const session = await readSessionOnce(r);
+      readSessionForPreparation: (record) => freshSession(record) ? undefined : readSessionOnce(record),
+      prepare: async (r, prefetchedSession) => {
+        const createdSession = freshSession(r);
+        const session = createdSession ?? prefetchedSession ?? await readSessionOnce(r);
+        if (createdSession) mobileDebugLog("debug", "device-link", "send reused created session", {
+          client: r.item.clientId.slice(-8),
+        });
         guard();
         if (!session?.workingDir)
           throw new Error(i18n.t("session.screen.missingWorkingDir"));
@@ -279,13 +337,12 @@ export function MobileOutboxBridge() {
             }
           : attachment;
       },
-      beforeEnqueue: async (r) => {
-        if (r.resourceRef) {
-          await latest.current.link.openLink(r.deviceId);
-          guard();
-          await validateOutboxResourceBinding(invokeOwned(r), r.deviceId, r.item.sessionId, r.resourceRef, i18n.language);
-          guard();
-        }
+      onHandedOff: endNewSessionBackgroundDelivery,
+      validateResource: async (r, ref) => {
+        await latest.current.link.openLink(r.deviceId);
+        guard();
+        await validateOutboxResourceBinding(invokeOwned(r), r.deviceId, r.item.sessionId, ref, i18n.language);
+        guard();
       },
       // A later projection can confirm delivery even if the enqueue reply was lost.
       accepted: async (record) => { endOutboxBackgroundSend(record); },
@@ -382,21 +439,36 @@ export function MobileOutboxBridge() {
       clearedMessage: i18n.t("session.outbox.taskCleared"),
     });
     runnerRef.current = delivery;
+    let scheduled = false;
     const run = () => {
-      messageLeases.refresh();
-      // Scavenging failure blocks new copies, not already-owned messages' delivery.
-      void initializeOutboxFiles()
-        .catch(() => undefined)
-        .then(() => delivery.run())
-        .catch(() => undefined);
+      if (scheduled || !isCurrent()) return;
+      scheduled = true;
+      queueMicrotask(() => {
+        scheduled = false;
+        if (!isCurrent()) return;
+        messageLeases.refresh();
+        // User cancellation can settle a record outside the delivery runner.
+        for (const record of mobileDurableOutbox.getSnapshot()) {
+          if (record.cleanupOutcome === "cancelled") {
+            endNewSessionBackgroundDelivery(record);
+            endOutboxBackgroundSend(record);
+          }
+        }
+        void delivery.run().catch(() => undefined);
+      });
     };
     void mobileDurableOutbox
       .activate(accountId)
-      .then(run)
+      .then(() => {
+        if (!isCurrent()) return;
+        // New file copies await this same sweep in retainOutboxFile.
+        void initializeOutboxFiles().catch(() => undefined);
+        run();
+      })
       .catch(() => {
         if (isCurrent()) Alert.alert(i18n.t("session.outbox.restoreFailed"));
       });
-    const off = mobileDurableOutbox.subscribe(run);
+    const off = subscribeNewSessionCreationTasks(run, "delivery");
     const offSessions = remoteSessionStore.subscribe(run);
     const timer = setInterval(run, 2_000);
     const appState = AppState.addEventListener("change", (state) => {

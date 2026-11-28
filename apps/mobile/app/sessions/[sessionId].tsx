@@ -68,7 +68,7 @@ import { mobileDebugLog } from '@/debug/mobileDebugLog';
 import { getMobileAuthOwner, isMobileAuthOwnerCurrent, subscribeMobileAuthOwner } from '@/auth/authOwnerGeneration';
 import { mobileDurableOutbox, durableOutboxDisplayItem, getCurrentMobileOutboxRecords, reconcileMobileOutboxDrafts } from '@/session/mobileDurableOutbox';
 import { retainOutboxFile, durableOutboxUploadUri, removeOutboxFiles, outboxAttachmentNeedsLocalBytes } from '@/session/durableOutboxFiles';
-import { isDurableOutboxSettled, observeDurableOutboxSending, type DurableOutboxRecord } from '@/session/durableOutbox';
+import { hasUncreatedHostSession, isDurableOutboxHandedOff, isDurableOutboxSettled, isPendingHostDialogueCreation, observeDurableOutboxSending, type DurableOutboxRecord } from '@/session/durableOutbox';
 import { isInFlightDeviceLinkError, isSharedTaskPeer, isScopedPeer, resolveRemoteText } from '@cindy/device-link';
 import { takeRefinementContextTail, truncateRefinementReply } from '@cindy/voice-input-core';
 import {
@@ -145,6 +145,7 @@ import { usePromptRecommendation } from '@/session/usePromptRecommendation';
 import { PromptRecommendation } from '@/session/PromptRecommendation';
 import { usePromptRecommendationVisibility } from '@/session/usePromptRecommendationVisibility';
 import { useGuardedBack } from '@/utils/useGuardedBack';
+import { useSessionSendNavigation } from '@/session/useSessionSendNavigation';
 import { useGuardedPush } from '@/utils/useGuardedPush';
 import { useStableValue } from '@/utils/useStableValue';
 import { sameArrayIdentity } from '@/utils/valueEquality';
@@ -1127,7 +1128,7 @@ export default function SessionScreen() {
   );
 }
 
-function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: SessionTaskChrome) {
+function SessionScreenContent({ beforeSessionSwitchRef, deferSendNavigationRef, newSessionActionRef }: SessionTaskChrome) {
   const styles = useThemedStyles(makeStyles);
   const composerPullThrough = useComposerPullThroughBridge();
   const renderMessageScroll = useCallback(
@@ -1291,6 +1292,9 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
   // existing link/subscription path to establish reachability instead of
   // blocking both history and sync until a presence change happens to arrive.
   const currentSession = useRemoteSessionDetail(deviceId, sessionId);
+  const creationTask = useNewSessionCreationTask(sessionId);
+  const creationBlocksReads = currentSession?.pendingLocalCreation === true
+    || creationTask?.status === 'running' || creationTask?.status === 'create-failed';
   const sideChatPending = currentSession?.source === 'side-chat' && currentSession.pendingLocalCreation === true;
   const remoteHistoryAvailable = !sideChatPending && status === 'online' && getPresenceAvailability(deviceId) !== false;
   // Unknown presence while connecting is loading, not evidence of a lost computer.
@@ -1299,7 +1303,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       : '');
   const sideChatBoundary = mobileSessionHistoryBoundary(currentSession);
   const unfilteredHistoryView = useRemoteHistoryView(deviceId, sessionId, maker,
-    () => messageScreenFocusedRef.current && messageAppActiveRef.current, remoteHistoryAvailable);
+    () => messageScreenFocusedRef.current && messageAppActiveRef.current, remoteHistoryAvailable && !creationBlocksReads);
   const historyView = useMemo(() => ({ ...unfilteredHistoryView,
     snapshot: historyAfter(unfilteredHistoryView.snapshot, sideChatBoundary)!,
   }), [unfilteredHistoryView.view, unfilteredHistoryView.snapshot, unfilteredHistoryView.cacheRestoring, sideChatBoundary]);
@@ -2804,7 +2808,6 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       setPendingPlanViewerState('half');
     }
   }, [activePendingKind, activePendingRequestId, sessionOperationLayout.composerSlot]);
-  const creationTask = useNewSessionCreationTask(sessionId);
   // A failed chat is handing its composer to the editor. Running creation still
   // keeps the normal composer; stop further edits only during this handoff.
   const canUseComposer = sessionOperationLayout.canUseComposer && !sessionResourceCards.blocked && companionEntry.canCompose
@@ -3402,11 +3405,30 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
   // 自愈返回:canGoBack 与真实栈不一致时(reload 恢复深路由 / 重复压栈残留),
   // GO_BACK 会被静默吞掉,生产表现为"点返回永远没反应"——校验兜底见 useGuardedBack。
   const goBackOneLevel = useGuardedBack();
+  const { beginSendHandoff, deferSendNavigation } = useSessionSendNavigation(
+    JSON.stringify([auth.accountGeneration, deviceId, sessionId]),
+  );
+  useLayoutEffect(() => {
+    deferSendNavigationRef.current = deferSendNavigation;
+    return () => {
+      if (deferSendNavigationRef.current === deferSendNavigation) deferSendNavigationRef.current = null;
+    };
+  }, [deferSendNavigation, deferSendNavigationRef]);
+  // Android may deliver Back in the same JS turn as the press, before the
+  // navigator has committed usePreventRemove. The handoff ref is synchronous.
+  useFocusEffect(useCallback(() => {
+    if (Platform.OS !== 'android') return;
+    const sub = BackHandler.addEventListener('hardwareBackPress', () => deferSendNavigation(goBackOneLevel));
+    return () => sub.remove();
+  }, [goBackOneLevel, deferSendNavigation]));
+  const deferredGoBackOneLevel = useCallback(() => {
+    if (!deferSendNavigation(goBackOneLevel)) goBackOneLevel();
+  }, [deferSendNavigation, goBackOneLevel]);
   // 退出宽屏后 layout.drawerWidth 会变 0;退场期间继续用最后一个有效宽度,避免面板几何跳变。
   const { sessionListDrawerOpen, sessionListDrawerOverlayMounted, sessionListDrawerWidthRef, sessionListDrawerClosingRef, pendingDrawerNavigationRef, openSessionListDrawer, closeSessionListDrawer, stackGestureEnabled, sessionListDrawerFloating, sessionListDrawerMotion, sessionListDrawerPullGesture, queueDrawerNavigation, handleSessionListDrawerClosed } = useConversationTaskDrawer({
     enabled: wideSessionNav.enabled, persistent: paneLayout.persistent, width: wideSessionNav.drawerWidth,
     onSwipeBack: windowDimensions.height > windowDimensions.width && swipeReturnsToSource
-      && router.canGoBack() ? goBackOneLevel : undefined,
+      && router.canGoBack() ? deferredGoBackOneLevel : undefined,
   });
   const handleDrawerSelectSession = useCallback((item: RemoteSessionListItem) => {
     const targetSession = item.session as RemoteSession;
@@ -3430,14 +3452,15 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     // 上次仅延后到抽屉卸载后仍未消除 crash / 白屏。当前 SessionScreen 已完整支持
     // sessionId 原地换代，replaceParams 保持栈与 native Screen 不动，并整包替换 params
     // 以清掉旧任务的 draft / goal / focus 等一次性参数。
-    queueDrawerNavigation(() => {
+    const switchSession = () => queueDrawerNavigation(() => {
       // 必须早于 replaceParams：同一同步段先清 A 的附件与在途上传，再让页面看到 B。
       // 否则上传完成回调会经 optionsRef 的最新闭包把 A 的产物追加进 B 的 composer。
       discardAllPendingUploadsForScopeChange();
       discardSessionComposerAttachmentStateRef.current();
       switchDrawerSessionInPlace(navigation, destination);
     });
-  }, [closeSessionListDrawer, navigation, queueDrawerNavigation, sessionId, t]);
+    if (!deferSendNavigation(switchSession)) switchSession();
+  }, [closeSessionListDrawer, deferSendNavigation, navigation, queueDrawerNavigation, sessionId, t]);
   // 前进导航防连点:快速双击「新建」会把 /sessions/new 压栈两层(返回要退两次),
   // 与首页各入口同一把 guardedPush 锁。
   const guardedPush = useGuardedPush();
@@ -3458,11 +3481,14 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
   };
   const homeNewSessionActionRef = newSessionActionRef;
   const handleDrawerNewSession = useCallback(() => {
-    if (homeNewSessionActionRef.current) { homeNewSessionActionRef.current(); return; }
-    queueDrawerNavigation(() => {
-      guardedPush({ pathname: '/sessions/new', params: { deviceId, deviceName } });
-    });
-  }, [deviceId, deviceName, guardedPush, queueDrawerNavigation]);
+    const openNew = () => {
+      if (homeNewSessionActionRef.current) { homeNewSessionActionRef.current(); return; }
+      queueDrawerNavigation(() => {
+        guardedPush({ pathname: '/sessions/new', params: { deviceId, deviceName } });
+      });
+    };
+    if (!deferSendNavigation(openNew)) openNew();
+  }, [deferSendNavigation, deviceId, deviceName, guardedPush, queueDrawerNavigation]);
   // 诊断任务建在出错任务所在的电脑上，链接不带 device；共享任务的访客读不到原任务，不提供。
   const canDiagnoseError = !!deviceId && !!sessionId && !isSharedTaskPeer(deviceId);
   const handleDiagnoseError = useCallback((source: ErrorDiagnosisSource) => {
@@ -4064,7 +4090,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
   ]);
 
   useEffect(() => {
-    if (!deviceId || !sessionAgentSwitchSupported) {
+    if (creationBlocksReads || !deviceId || !sessionAgentSwitchSupported) {
       agentSwitchIntentLoadSeqRef.current += 1;
       return;
     }
@@ -4090,7 +4116,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     return () => {
       cancelled = true;
     };
-  }, [connectionEpoch, deviceId, lastSyncedAt, maker, openLink, sessionAgentSwitchSupported, sessionId]);
+  }, [connectionEpoch, creationBlocksReads, deviceId, lastSyncedAt, maker, openLink, sessionAgentSwitchSupported, sessionId]);
 
   const syncSession = useCallback(async (syncRun: RemoteSyncRun) => {
     const snapshotStartedAt = Date.now();
@@ -4104,7 +4130,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     // 新建会话乐观管线在途(running / create-failed):被控端可能还没有这个会话,
     // getSession 会 NOT_FOUND 报错横幅。统一在这里挡掉全部 load 触发点;管线完成
     // (task 移除)后由下方 effect 触发一轮真正的同步。
-    if (shouldBlockSessionSync(sessionId)) {
+    if (shouldBlockSessionSync(sessionId, deviceId)) {
       if (!syncRun.isStale()) setLoading(false);
       return;
     }
@@ -4571,10 +4597,15 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       }
     },
   });
+  const pendingHostCreationStatus = useMemo(() => {
+    const record = durableOutboxRecords.find((r) => r.deviceId === deviceId && r.item.sessionId === sessionId && isPendingHostDialogueCreation(r));
+    if (!record) return null;
+    return record.state === 'failed' ? 'create-failed' : 'running';
+  }, [durableOutboxRecords, deviceId, sessionId]);
   const prevCreationStatusRef = useRef<string | null>(null);
-  useEffect(() => {
+  useEffect(function syncAfterCreationTransition() {
     const prev = prevCreationStatusRef.current;
-    const status = creationTask?.status ?? null;
+    const status = creationTask?.status ?? pendingHostCreationStatus;
     prevCreationStatusRef.current = status;
     if (status === prev) return;
     if (status === null) {
@@ -4593,6 +4624,8 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
         }).catch((err) => {
           if (isMobileAuthOwnerCurrent(owner) && outboxSessionAliveRef.current === sessionId) setError(formatRemoteError(err));
         });
+        // Creation succeeded: refresh the open page while the outbox recovers the first input.
+        void load();
         return;
       }
       // 首条消息没发出,而创建期间用户可能已经发了后续消息(composer 全程可用)。
@@ -4633,7 +4666,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       dismissNewSessionCreation(sessionId);
       void load();
     }
-  }, [creationTask, deviceId, deviceName, load, navigation, router, sessionId, setComposerDraft]);
+  }, [creationTask, deviceId, deviceName, load, navigation, pendingHostCreationStatus, router, sessionId, setComposerDraft]);
 
   // 排队行里该显示「在途转圈」的 clientId:本页 enqueue 在途的条目,加上新建会话
   // 乐观管线仍在跑(create + 首条 enqueue 都还没确认)时的首条消息——它同样是
@@ -4644,7 +4677,12 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       : null;
     const sending = new Set(sendingQueueClientIds);
     for (const record of durableOutboxRecords) {
-      if (record.item.sessionId === sessionId && record.deviceId === deviceId && record.state !== 'host-owned') sending.add(record.item.clientId);
+      if (record.item.sessionId !== sessionId || record.deviceId !== deviceId) continue;
+      // The first bubble remains a local send presentation until history arrives,
+      // even if the computer briefly exposes its input in the queue.
+      if (record.state !== 'host-owned' || (record.creation && !record.cancelRequested)) {
+        sending.add(record.item.clientId);
+      }
     }
     if (!creationPendingClientId || sending.has(creationPendingClientId)) {
       return sending;
@@ -5758,7 +5796,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     && !isSharedTaskPeer(deviceId) && !['bot', 'review'].includes(currentSession.source ?? '')
     && !currentSession.pendingLocalCreation;
   const sideChatCount = useSideChatCount({ deviceId, sessionId, maker, owner: outboxOwner,
-    enabled: canUseSideChats && currentSession?.source !== 'side-chat' && remoteHistoryAvailable,
+    enabled: !creationBlocksReads && canUseSideChats && currentSession?.source !== 'side-chat' && remoteHistoryAvailable,
     refreshKey: `${connectionEpoch}:${sideChatsOpen}`,
   });
   const openSideChat = useCallback((row: RemoteSession) => {
@@ -6444,7 +6482,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       ...outboxDisplayItem(item),
       ...(record ? { sentAt: record.createdAt, pendingDelivery: isPendingDeliveryAfterLeaving(record) } : {}),
       historyConfirmation: record?.historyConfirmation,
-      canCancel: !record?.historyConfirmation && !(record?.creation && !record.prepared && !record.template),
+      canCancel: !record?.historyConfirmation && !(record && hasUncreatedHostSession(record)),
     };
   }), [outboxItems, deviceId, sessionId, outboxLeftVersion]);
 
@@ -6509,6 +6547,10 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
         queue: inputProjection.pendingQueue,
         settling: settlingItemsForRender,
         outbox: outboxDisplayItems,
+        acceptedFirstSendClientIds: new Set(durableOutboxRecords
+          .filter((record) => record.deviceId === deviceId && record.item.sessionId === sessionId
+            && record.creation && !record.cancelRequested && isDurableOutboxHandedOff(record))
+          .map((record) => record.item.clientId)),
         hiddenClientIds: queueHiddenClientIds,
         sendingClientIds: sendingQueueBadgeClientIds,
         editingClientId: queueEditing?.clientId ?? null,
@@ -6527,6 +6569,8 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       livePendingSendClientIds,
       outboxItems,
       outboxDisplayItems,
+      durableOutboxRecords,
+      deviceId,
       outboxWaitingFor,
       queueBusy,
       queueEditing?.clientId,
@@ -6851,22 +6895,26 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     sendInFlightRef.current = true;
     setSending(true);
     const messageWorkLease = remoteSessionStore.acquireSessionMessageWork(sessionId, true);
+    const ownerAtSend = getMobileAuthOwner();
+    let finishHandoff = !independent && !options.messageEditResend ? beginSendHandoff() : undefined;
+    let keepScreenForFeedback = false;
     try {
     let visibleDocument: ComposerDocument | undefined;
     const inputAtSend = composerInputRef.current;
     if (!independent && options.documentOverride === undefined && options.draftOverride === undefined && !inputAtSend) {
+      keepScreenForFeedback = true;
       Alert.alert(t('session.screen.operationFailed'), t('session.screen.inputSyncFailed'));
       return;
     }
     if (!independent && options.documentOverride === undefined && options.draftOverride === undefined && inputAtSend?.flushDocument) {
-      const ownerAtFlush = getMobileAuthOwner();
       const queueEditAtFlush = queueEditingRef.current;
-      const flushScopeAlive = () => isMobileAuthOwnerCurrent(ownerAtFlush)
+      const flushScopeAlive = () => isMobileAuthOwnerCurrent(ownerAtSend)
         && outboxSessionAliveRef.current === sessionId && deviceIdRef.current === deviceId
         && composerInputRef.current === inputAtSend && queueEditingRef.current === queueEditAtFlush;
       try {
         visibleDocument = await inputAtSend.flushDocument(flushScopeAlive);
       } catch {
+        keepScreenForFeedback = true;
         if (flushScopeAlive()) Alert.alert(t('session.screen.operationFailed'), t('session.screen.inputSyncFailed'));
         return;
       }
@@ -6904,6 +6952,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       return;
     }
     if (!currentSession) {
+      keepScreenForFeedback = true;
       setError(t('session.screen.sessionNotFoundResync'));
       if (options.documentOverride) applyComposerDocument(options.documentOverride);
       return;
@@ -6932,6 +6981,11 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       && pendingSkillAtSend.name === eligibleDesktopCommand.name
         ? null
         : eligibleDesktopCommand;
+    // Commands, queue edits and attachment preparation keep their own
+    // cancellation semantics once the editor has supplied its authoritative text.
+    if (finishHandoff && (!outboxEligible || earlyDesktopCommand || earlyLocalCommand || willHaveAttachments || hasPastePlaceholders())) {
+      if (finishHandoff()) return;
+    }
     if (outboxEligible && earlyDesktopCommand?.name === 'side') {
       if (!canUseSideChats) { setError(t('session.sideChat.unavailable')); return; }
       if (willHaveAttachments || hasAttachmentInput()) { setError(t('session.sideChat.commandAttachments')); return; }
@@ -6992,6 +7046,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       && blockedSessionModelAtSend(sessionAtSend, deviceId, composerDeviceProviders.retainedCatalog, composerDeviceProviders.pendingCatalog,
         remoteRetainedCatalog, remotePendingCatalog);
     if (blockedModel) {
+      keepScreenForFeedback = true;
       setError(blockedModel.reason === 'hidden'
         ? t('session.common.modelHiddenReselect', { model: blockedModel.modelId }) : t('models.picker.loadingDefault'));
       // 与手动打开入口一致：面板按「待切换目标 / 当前任务引擎」浏览，才能把已关闭的
@@ -7041,6 +7096,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       return;
     }
     const useDurableOutbox = outboxEligible && !earlyLocalCommand && !earlyDesktopCommand && !legacyPlanRequiresLiveDispatch;
+    if (!useDurableOutbox && finishHandoff?.()) return;
     const outboxClientId = useDurableOutbox ? createOutboxClientId() : undefined;
     const planModeAtSend = runtimeOptions?.planModeSupported === true
       ? (readSessionRowNow() ?? currentSession).planModeEnabled === true
@@ -7056,9 +7112,29 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       && !currentTurnStreaming
       && !isRemoteSessionMissing(readSessionRowNow())
     ) {
-      await offerMobileSessionRebalance({ invoke, hostDeviceId: deviceId, sessionId, clientId: outboxClientId!, ask: askMobileSessionRebalance });
+      let leftBeforeRebalance = false;
+      await offerMobileSessionRebalance({
+        invoke,
+        hostDeviceId: deviceId,
+        sessionId,
+        clientId: outboxClientId!,
+        ask: async (suggestion) => {
+          // The rebalance modal is interactive: release any navigation hold while it is open
+          // so leaving during the dialog still cancels this send instead of queuing a departure.
+          if (finishHandoff?.()) {
+            leftBeforeRebalance = true;
+            return 'cancel';
+          }
+          finishHandoff = undefined;
+          const choice = await askMobileSessionRebalance(suggestion);
+          if (outboxSessionAliveRef.current === sessionId && !independent && !options.messageEditResend) {
+            finishHandoff = beginSendHandoff();
+          }
+          return choice;
+        },
+      });
       // 弹窗期间离开了这个任务：草稿还没清空，留在原处，不发。
-      if (outboxSessionAliveRef.current !== sessionId) return;
+      if (leftBeforeRebalance || outboxSessionAliveRef.current !== sessionId) return;
     }
     if (!independent) {
       pendingSkillSelectionRef.current = null;
@@ -7196,6 +7272,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
         // 被控端在创建时分配,合成行此刻本就为空,而 dispatchOutboxItem 会在真正派发
         // 时重读 store 拿权威值并自行校验。
         if (!dispatchBlockedAtSend && !currentSession.workingDir) {
+          keepScreenForFeedback = true;
           setError(t('session.screen.missingWorkingDir'));
           restoreDraftAfterFailure();
           return;
@@ -7211,7 +7288,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
             return;
           }
         }
-        const ownerAtSend = getMobileAuthOwner();
+        if (!isMobileAuthOwnerCurrent(ownerAtSend)) return;
         const handoff = independent ? null : await beginOutboxAttachmentHandoff();
         let record: DurableOutboxRecord | undefined;
         let committed = false;
@@ -7270,8 +7347,10 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
           });
           if (replyQuoteAtSend) clearSentCompanionReplyQuote(pendingReplyScope, replyQuoteAtSend);
           handoff?.release(true);
-          // Durable ownership precedes clearing the composer or deleting annotation sources.
-          if (!isMobileAuthOwnerCurrent(ownerAtSend) || !sendScopeStillAlive()) {
+          // A completed old-account write belongs to its ledger. Draft and quote
+          // stores now refer to the active account, even for the same session ID.
+          if (!isMobileAuthOwnerCurrent(ownerAtSend)) return messageAccepted;
+          if (!sendScopeStillAlive()) {
             const stored = readComposerDocumentDraftSync(sessionId);
             if (!independent && stored && composerDocumentsEqual(stored, documentBeforeSend)) {
               saveComposerDraft(sessionId, '');
@@ -7323,6 +7402,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
           if (!committed && record) await removeOutboxFiles(record).catch(() => undefined);
         }
       } catch (err) {
+        keepScreenForFeedback = true;
         setError(formatRemoteError(err));
       } finally {
         sendInFlightRef.current = false;
@@ -7746,6 +7826,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       sendInFlightRef.current = false;
       setSending(false);
       messageWorkLease.release();
+      finishHandoff?.(!keepScreenForFeedback);
     }
     return messageAccepted;
   }
@@ -9262,7 +9343,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
   // push 继续负责增量；打开菜单与动作结束时再读取权威状态。
   const goalStatus = useSessionGoalStatus(sessionId);
   useFocusEffect(useCallback(() => {
-    if (!appStateActive || !remoteHistoryAvailable || !deviceId || !sessionId || isSharedTaskPeer(deviceId)) return;
+    if (creationBlocksReads || !appStateActive || !remoteHistoryAvailable || !deviceId || !sessionId || isSharedTaskPeer(deviceId)) return;
     let cancelled = false;
     void (async () => {
       try {
@@ -9278,7 +9359,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     return () => {
       cancelled = true;
     };
-  }, [appStateActive, connectionEpoch, contextSheetOpen, contextSheetView, deviceId, maker, remoteHistoryAvailable, sessionId]));
+  }, [appStateActive, connectionEpoch, contextSheetOpen, contextSheetView, creationBlocksReads, deviceId, maker, remoteHistoryAvailable, sessionId]));
   // 暂停 / 继续 / 结束目标:先乐观切本地状态镜像(面板当帧反馈,不等往返),
   // RPC 后台;成功回读权威收敛(既有语义)。失败时报错并还原:优先回读权威状态,
   // 回读也失败(离线 / 超时,与 action 同因高概率连败)则还原到乐观前的快照——
@@ -10111,6 +10192,9 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
 
   const backToTaskList = useTaskListBack();
   const goBackToHome = companionChat && !companionEntry.threadRootSessionId ? backToTaskList : goBackOneLevel;
+  const deferredGoBackToHome = useCallback(() => {
+    if (!deferSendNavigation(goBackToHome)) goBackToHome();
+  }, [deferSendNavigation, goBackToHome]);
   // Dragging the floating list on to full screen is a way back: the list
   // becomes Home where it is, so this pop skips the slide.
   const [sessionListDrawerDismissingToHome, setSessionListDrawerDismissingToHome] = useState(false);
@@ -10894,7 +10978,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       {companionEntry.threadRootSessionId ? (
             <ChatIdentityHeader nativeHeader={horizontalSystemHeader}
         testIDPrefix="companion.thread" mark={companionPortrait(32)} title={t('groupChat.thread.title')}
-        subtitle={companionName} identityLabel={t('groupChat.thread.title')} onBack={goBackToHome} />
+        subtitle={companionName} identityLabel={t('groupChat.thread.title')} onBack={deferredGoBackToHome} />
           ) : (
             <CompanionHeader key={`${auth.accountGeneration}:${deviceId}:${companionResource.ref.id}`}
         nativeHeader={horizontalSystemHeader}
@@ -10903,7 +10987,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
         working={!!companionWorkingLabel}
         sessionId={sessionId ?? ''}
         onSearch={() => setSearchOpen(true)}
-        onBack={goBackToHome} />
+        onBack={deferredGoBackToHome} />
           )}
     </>
       ) : (
@@ -10925,7 +11009,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
               syncingImmediately={showSyncingImmediately}
               messageCount={Math.max(messages.length, currentSession?._count?.messages ?? 0)}
               messageOnly={sessionManagedByHost}
-              onBack={sessionListDrawerOverlayMounted ? closeSessionListDrawer : goBackToHome}
+              onBack={sessionListDrawerOverlayMounted ? closeSessionListDrawer : deferredGoBackToHome}
               noticeOverride={currentSession?.source === 'side-chat'
                 ? t('session.sideChat.fromMain', { title: sideChatParent?.title || t('session.sideChat.mainTask') }) : undefined}
               onOpenSessionList={!paneLayout.persistent && wideSessionNav.enabled ? openSessionListDrawer : undefined}

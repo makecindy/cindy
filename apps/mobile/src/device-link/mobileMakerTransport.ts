@@ -113,6 +113,8 @@ export interface SendOptions {
 }
 
 export interface CreateSessionOptions {
+  /** New hosts may persist ordinary dialogues without waiting for Agent startup. */
+  deferRuntimeStart?: boolean;
   /**
    * 'acp' = 插件引擎(Desktop docs/plans/acp-plugin-bridge.md)：必须同时带 `acp-plugin:` providerId，
    * 且不带远程字段；只用于从 listPluginEngines 读到的引擎(旧电脑没有该 channel，手机不会发出)。
@@ -143,6 +145,8 @@ export interface CreateSessionOptions {
 
 export interface CreateSessionResult {
   sessionId: string;
+  /** Authoritative task from deferred creation; older hosts omit it. */
+  session?: RemoteSession;
   agentKind?: string;
   workDir?: string;
   capabilities?: unknown;

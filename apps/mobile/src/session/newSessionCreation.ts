@@ -5,7 +5,7 @@
  * `maker:create-session` 自手机远控首版起支持 opts.id 透传,maker-core 对
  * provided id 幂等——active 复用 / storage 命中跳过 insert),因此乐观会话行、
  * projection、路由参数、订阅 topic 从一开始就是最终 id,无需 rekey 对账。
- * openLink / createSession / 首条消息 enqueue 全部在本模块后台串行完成。
+ * openLink / createSession / 首条消息 enqueue 在本模块后台完成；订阅 ACK 不阻塞发送。
  *
  * 状态机:running → done(task 移除)
  *              → create-failed(保留草稿与附件，自动返回编辑)
@@ -13,7 +13,7 @@
  *                                用户走正常 handleSend 重发)
  *
  * 幂等与重试口径:
- *  - openLink / subscribe 幂等,走 withTransientRemoteRetry;
+ *  - openLink 幂等,走 withTransientRemoteRetry；订阅恢复由挂载页面的既有流程负责；
  *  - createSession **不盲重**:瞬态失败先 probe getSession(id)——命中说明上一次
  *    invoke 已在被控端生效只是回执丢了,直接继续;NOT_FOUND 才退避重建(串行,
  *    防 maker-core spawn 窗口内同 id 并发双起 SDK 进程);
@@ -26,6 +26,7 @@
  *    会被 dedup 静默吞掉,丢消息比双发更糟)。
  */
 import { useSyncExternalStore } from 'react';
+import { mobileDebugLog } from '@/debug/mobileDebugLog';
 import { getMobileAuthOwner, isMobileAuthOwnerCurrent, subscribeMobileAuthOwner, type MobileAuthOwnerGeneration } from '@/auth/authOwnerGeneration';
 import type { SlowSendPhase } from '@/session/SlowSendNotice';
 import * as ExpoCrypto from 'expo-crypto';
@@ -33,7 +34,7 @@ import { isPreconditionFailedRemoteError } from '@cindy/maker-shared/device-link
 import { DEFAULT_DRAFT_SESSION_TITLE } from '@cindy/maker-shared/session-title';
 import { i18n } from '@/i18n';
 import { isTransientRemoteError, withTransientRemoteRetry } from '@/device-link/remoteRetry';
-import { formatRemoteError } from '@/device-link/remoteStatus';
+import { formatRemoteError, isAutoRecoveringRemoteError } from '@/device-link/remoteStatus';
 import type { MobileMakerTransport, MobileOrcaEnableOptions } from '@/device-link/mobileMakerTransport';
 import { describeOrcaError, enableOrcaTeam, rememberOrcaStartFailure, type OrcaWorkerFormValue } from '@/session/orcaTeam';
 import { buildQueuedTextMessage } from '@/session/inputProjection';
@@ -52,11 +53,12 @@ import {
 import type { DeviceProvidersPayload } from '@/device-link/deviceProvidersCache';
 import { remoteSessionStore } from '@/session/remoteSessionStore';
 import { getCurrentMobileOutboxRecords, holdDurableOutboxCreation, isDurableOutboxCreationHeld, mobileDurableOutbox, persistCancelledCreationDraft, suspendCreationDraftForCleanup } from './mobileDurableOutbox';
-import { isDurableCreationDraft, type DurableOutboxRecord } from './durableOutbox';
+import { isDurableCreationDraft, isPendingHostDialogueCreation, needsHostCreation, type DurableOutboxRecord } from './durableOutbox';
 import { isExplicitRemoteNotFoundError } from './newSessionWorktree';
 import { mergeAttachmentsWithinLimit } from './attachments';
 import type { MobileLocalAttachmentUploadCandidate } from './mobileLocalAttachmentUpload';
 import { noteLocalSend } from './localSendMotion';
+import type { FirstSendSessionSnapshot } from './firstSendSessionSnapshot';
 import {
   logNewSessionCreationTiming,
   startNewSessionCreationTimer,
@@ -78,7 +80,8 @@ export type NewSessionCreationStatus = 'running' | 'create-failed' | 'enqueue-fa
 
 export interface NewSessionCreationTransport {
   maker: MobileMakerTransport;
-  handoffFirstMessage?: (item: QueuedRemoteMessage) => Promise<void>;
+  handoffFirstMessage?: (item: QueuedRemoteMessage, snapshot?: FirstSendSessionSnapshot) => Promise<void>;
+  getConnectionEpoch?: () => number | undefined;
   openLink: (deviceId: string) => Promise<unknown>;
   subscribe: (owner: string, deviceId: string, topics: string[]) => Promise<void>;
   /** 手机控制端在首条消息越过 device-link 前读取各引用来源的可信历史快照。 */
@@ -138,6 +141,7 @@ export interface NewSessionCreationParams {
   revalidateDraftAfterAuth?: (fresh: DeviceProvidersPayload) => Promise<Partial<NewSessionDraft> | null>;
   /** Account-generation fence captured before the create flow starts. */
   isCurrentOwner?: () => boolean;
+  endBackgroundDelivery?: () => void;
   transport: NewSessionCreationTransport;
   /** 退避 / 轮询的 sleep 注入点(单测替换为立即返回;对齐 resolveInteractionResilient 的 opts.sleep 模式)。 */
   sleep?: (ms: number) => Promise<void>;
@@ -193,6 +197,7 @@ interface InternalTask extends NewSessionCreationTask {
 
 const tasks = new Map<string, InternalTask>();
 const subs = new Set<() => void>();
+const deliverySubs = new Set<() => void>();
 // useSyncExternalStore 的快照必须引用稳定:每次变更 bump 版本并重建缓存数组。
 let snapshotVersion = 0;
 const taskSnapshots = new Map<string, NewSessionCreationTask | null>();
@@ -205,10 +210,11 @@ function durableEditKey(record: DurableOutboxRecord): string {
   return JSON.stringify([record.accountId, record.deviceId, record.storageSessionId ?? record.item.sessionId, record.item.clientId]);
 }
 
-function emit(): void {
+function emit(change: 'task' | 'progress' = 'task'): void {
   snapshotVersion += 1;
   taskSnapshots.clear();
   for (const sub of subs) sub();
+  if (change === 'task') for (const sub of deliverySubs) sub();
 }
 
 // Failed pipelines have no pending continuation to retire them on account change.
@@ -417,9 +423,13 @@ export function retryNewSessionCreation(sessionId: string): void {
  * removeSyntheticRow = true 时把乐观合成行从列表隐藏(仅 create-failed:会话在
  * 被控端不存在,残行点进去只会再挂一次)。
  */
-export function dismissNewSessionCreation(sessionId: string, opts: { removeSyntheticRow?: boolean } = {}): void {
+export function dismissNewSessionCreation(
+  sessionId: string,
+  opts: { removeSyntheticRow?: boolean; keepBackgroundDelivery?: boolean } = {},
+): void {
   const task = tasks.get(sessionId);
   if (!task) return;
+  if (!opts.keepBackgroundDelivery) task.params.endBackgroundDelivery?.();
   tasks.delete(sessionId);
   if (opts.removeSyntheticRow) {
     remoteSessionStore.applySessionPatch(task.deviceId, sessionId, { status: 'deleted' });
@@ -718,17 +728,23 @@ export function dismissRecoveredPrecreatedSession(record: { sessionId: string; d
  * NOT_FOUND 报错横幅)与 create-failed(确定不存在)都要跳过同步;
  * enqueue-failed / done 时会话已建成,照常同步。
  */
-export function shouldBlockSessionSync(sessionId: string): boolean {
+export function shouldBlockSessionSync(sessionId: string, deviceId?: string): boolean {
   const status = getNewSessionCreationTask(sessionId)?.status;
-  return status === 'running' || status === 'create-failed';
+  if (status === 'running' || status === 'create-failed') return true;
+  return getCurrentMobileOutboxRecords().some(
+    (record) => record.item.sessionId === sessionId
+      && (!deviceId || record.deviceId === deviceId)
+      && isPendingHostDialogueCreation(record),
+  );
 }
 
-export function subscribeNewSessionCreationTasks(callback: () => void): () => void {
-  subs.add(callback);
+export function subscribeNewSessionCreationTasks(callback: () => void, mode: 'all' | 'delivery' = 'all'): () => void {
+  const listeners = mode === 'delivery' ? deliverySubs : subs;
+  listeners.add(callback);
   const offOutbox = mobileDurableOutbox.subscribe(callback);
   return () => {
     offOutbox();
-    subs.delete(callback);
+    listeners.delete(callback);
   };
 }
 
@@ -926,6 +942,7 @@ export function completeNewSessionDurableEdit(sessionId: string, deviceId: strin
 // ---------------------------------------------------------------------------
 
 function failTask(task: InternalTask, status: 'create-failed' | 'enqueue-failed', error: string): void {
+  task.params.endBackgroundDelivery?.();
   // task 可能已被 dismiss(用户返回编辑)——不要复活。
   if (!tasks.has(task.sessionId)) return;
   if (!isTaskOwnerCurrent(task)) {
@@ -1006,7 +1023,7 @@ async function persistPrecreatedSessionCreateStarted(task: InternalTask): Promis
 async function createSessionIdempotent(
   task: InternalTask,
   effectiveDraft: NewSessionDraft,
-): Promise<{ workDir: string | null; finalDraft: NewSessionDraft }> {
+): Promise<{ workDir: string | null; finalDraft: NewSessionDraft; session?: RemoteSession; inputDelivery?: FirstSendSessionSnapshot['inputDelivery'] }> {
   const { maker } = task.params.transport;
   const sleep = task.params.sleep ?? realSleep;
   // 鉴权后联合校验的最终草稿(codex review P2):只影响本次创建,不改 task.draft
@@ -1015,6 +1032,9 @@ async function createSessionIdempotent(
   let createOpts = {
     ...buildRemoteCreateSessionOptions(effectiveDraft, task.precreatedWorktree?.originalWorkingDir),
     id: task.sessionId,
+    ...(effectiveDraft.workspaceKind === 'dialogue' && !task.precreatedWorktree && !task.params.orcaEnable
+      && !effectiveDraft.agentDeviceId && !effectiveDraft.pluginEngine
+      ? { deferRuntimeStart: true } : {}),
   };
 
   if (task.precreatedWorktree) {
@@ -1104,7 +1124,7 @@ async function createSessionIdempotent(
       if (!result || result.sessionId !== task.sessionId) {
         throw new Error(i18n.t('session.new.worktreeCleanupPending'));
       }
-      return { workDir: result.workDir ?? null, finalDraft: effectiveDraft };
+      return { workDir: result.workDir ?? null, finalDraft: effectiveDraft, session: result.session, inputDelivery: result.inputDelivery };
     } catch (error) {
       if (isStaleNewSessionOwnerError(error)) throw error;
       try {
@@ -1156,7 +1176,7 @@ async function createSessionIdempotent(
         // 错误会话。按确定性失败收敛到重试面(不自动重试,避免再建一个空会话)。
         throw new Error(i18n.t('session.new.sessionIdNotAdopted'));
       }
-      return { workDir: result.workDir ?? null, finalDraft: effectiveDraft };
+      return { workDir: result.workDir ?? null, finalDraft: effectiveDraft, session: result.session, inputDelivery: result.inputDelivery };
     } catch (err) {
       if (isStaleNewSessionOwnerError(err)) throw err;
       // 确定性失败(鉴权 / 参数 / 路径 guard 等)重试无意义,直接抛给重试面;
@@ -1278,7 +1298,11 @@ async function runPipeline(task: InternalTask, retry = false): Promise<void> {
 async function runPipelineSteps(task: InternalTask, timer: NewSessionCreationTimer): Promise<void> {
   const phase = (value: SlowSendPhase) => {
     task.phase = value;
-    emit();
+    mobileDebugLog('debug', 'new-session', 'creation phase', {
+      client: task.firstMessageClientId.slice(-8), phase: value,
+      elapsedMs: Date.now() - task.startedAt,
+    });
+    emit('progress');
   };
   const { params } = task;
   const { maker, openLink, subscribe } = params.transport;
@@ -1308,17 +1332,19 @@ async function runPipelineSteps(task: InternalTask, timer: NewSessionCreationTim
         assertTaskOwnerCurrent(task);
       }
     }
+    mobileDebugLog('debug', 'new-session', 'creation linking', { client: task.firstMessageClientId.slice(-8) });
     timer.lap('claim');
     await withTransientRemoteRetry(async () => {
       assertTaskOwnerCurrent(task);
       await openLink(params.deviceId);
       assertTaskOwnerCurrent(task);
-      await subscribe(`new-session:${params.deviceId}`, params.deviceId, ['sessions']);
-      assertTaskOwnerCurrent(task);
     });
     timer.lap('link');
-    // 建链/订阅完成后再启动鉴权 fresh revalidate(codex review P2:将最终目录
-    // 刷新放到建链和订阅之后)——与建链并行启动时,listProviders 可能在建链完成
+    // The synchronous session owner above already holds `sessions`. Do not
+    // acquire the New Session route's owner here: the form may have unmounted
+    // while linking. Mounted pages own their existing cancellable ACK recovery.
+    // 建链完成、订阅意图登记后再启动鉴权 fresh revalidate。无需等待订阅 ACK，
+    // 但不能与建链并行：listProviders 可能在建链完成
     // 前就返回旧目录快照(来源 A),而建链期间工作站已替换为 B,后续拿旧 A 快照
     // 重验仍会向已删除来源创建。改为建链后拉取,终检目录是「建链后最新」。
     phase('checkingModel');
@@ -1337,8 +1363,7 @@ async function runPipelineSteps(task: InternalTask, timer: NewSessionCreationTim
     assertTaskOwnerCurrent(task);
     if (auth?.unauthenticated) {
       params.onUnauthenticated();
-      failTask(task, 'create-failed', params.authGateHint);
-      return;
+      throw new Error(params.authGateHint);
     }
     // 鉴权 fresh revalidate 之后、createSession 之前,用工作站当前目录联合校验
     // (model, providerId)(codex review P2):终检在 handoff 前完成,建链/鉴权期间
@@ -1360,6 +1385,7 @@ async function runPipelineSteps(task: InternalTask, timer: NewSessionCreationTim
       : await resolveNewSessionSkillDraft(finalDraft, params.deviceId, maker);
     timer.lap('skill');
     assertTaskOwnerCurrent(task);
+    const createEpoch = params.transport.getConnectionEpoch?.();
     const createOutcome = await createSessionIdempotent(task, creationDraft);
     timer.lap('create');
     // started 写盘后二次重验可能修正草稿(codex review P2:将 started 后修正的
@@ -1389,7 +1415,7 @@ async function runPipelineSteps(task: InternalTask, timer: NewSessionCreationTim
     let freshSession: RemoteSession | null = null;
     try {
       assertTaskOwnerCurrent(task);
-      freshSession = await maker.getSession(sessionId);
+      freshSession = createOutcome.session ?? await maker.getSession(sessionId);
       assertTaskOwnerCurrent(task);
       // 权威行落地时**保留** pendingLocalCreation 禁发标:enqueue 还没发生,此刻
       // 解禁的话,getSession → (setPlanMode) → enqueue 的弱网窗口(可达一两个往返)
@@ -1475,7 +1501,16 @@ async function runPipelineSteps(task: InternalTask, timer: NewSessionCreationTim
     ), task.firstMessageSessionRefs);
     if (params.transport.handoffFirstMessage) {
       try {
-        await params.transport.handoffFirstMessage(queuedDraft);
+        const snapshot = freshSession && freshSession === createOutcome.session
+          && createEpoch !== undefined && params.transport.getConnectionEpoch?.() === createEpoch
+          && effectiveFinalDraft.workspaceKind === 'dialogue' && !task.precreatedWorktree
+          && !params.orcaEnable && !effectiveFinalDraft.agentDeviceId && !effectiveFinalDraft.pluginEngine
+          && params.attachments.length === 0
+          ? { session: freshSession, connectionEpoch: createEpoch, inputDelivery: createOutcome.inputDelivery }
+          : undefined;
+        mobileDebugLog('debug', 'new-session', 'first input handoff started', { client: task.firstMessageClientId.slice(-8) });
+        await params.transport.handoffFirstMessage(queuedDraft, snapshot);
+        mobileDebugLog('debug', 'new-session', 'first input handoff persisted', { client: task.firstMessageClientId.slice(-8) });
         timer.lap('handoff');
         assertTaskOwnerCurrent(task);
         remoteSessionStore.applySessionPatch(params.deviceId, sessionId, { pendingLocalCreation: false });
@@ -1570,6 +1605,20 @@ async function runPipelineSteps(task: InternalTask, timer: NewSessionCreationTim
     if (isStaleNewSessionOwnerError(err) || !isTaskOwnerCurrent(task)) {
       cancelStaleOwnerTask(task);
       return;
+    }
+    const pending = getCurrentMobileOutboxRecords().find(record => record.deviceId === task.deviceId
+      && record.item.sessionId === sessionId && record.item.clientId === task.firstMessageClientId
+      && needsHostCreation(record));
+    if (pending && isAutoRecoveringRemoteError(err)) {
+      // The persisted send still owns these IDs. Release the live task so the outbox
+      // can resume after reconnect while keeping the bounded background delivery window alive.
+      dismissNewSessionCreation(sessionId, { keepBackgroundDelivery: true });
+      return;
+    }
+    if (pending) {
+      // Keep the editor recovery path even when its ledger write races cancellation.
+      await mobileDurableOutbox.update(pending, { state: 'failed', error: formatRemoteError(err) }).catch(() => undefined);
+      if (tasks.get(sessionId) !== task || !isTaskOwnerCurrent(task)) return;
     }
     failTask(task, 'create-failed', formatRemoteError(err));
   }

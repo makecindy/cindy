@@ -125,6 +125,55 @@ function harness(previous: DurableOutboxRecord | null = null) {
   return { bindings, run };
 }
 
+// Unit, PR 11841 force-stop R01: only a submitted plain dialogue may create its
+// missing host task after restart. Earlier tests persist worktree drafts before submission.
+it('persists the validated dialogue and its original IDs before the live creation starts', async () => {
+  const { bindings } = harness();
+  const releases: Array<() => void> = [];
+  try {
+    const prepared = await prepareNewSessionCreation({
+      ...bindings, effectiveDraft: { ...bindings.effectiveDraft, workspaceKind: 'dialogue' },
+      creatingWorktree: false, allowDialogueRecovery: true, sendAttachments: [],
+      worktreeIntent: { ...bindings.worktreeIntent, applicable: false },
+      onHoldDurableCreation: release => releases.push(release), onHoldPrecreatedRegistration: vi.fn(),
+    }, { ...newSessionCreationPreparationServices, ...bindings });
+    expect(getCurrentMobileOutboxRecords()).toHaveLength(0);
+    const draft = { ...prepared!.effectiveDraft, model: 'checked-model' };
+    expect(await prepared!.persistSubmittedDialogue!(draft)).toBe(true);
+    await mobileDurableOutbox.activate('');
+    await mobileDurableOutbox.activate(getMobileAuthOwner().accountKey);
+    expect(getCurrentMobileOutboxRecords()).toEqual([expect.objectContaining({
+      creation: expect.objectContaining({ needsHostCreation: true, draft }),
+      item: expect.objectContaining({ sessionId: prepared!.sessionId, clientId: prepared!.firstMessageClientId, text: draft.firstMessage }),
+    })]);
+    expect(getCurrentMobileOutboxRecords()[0]?.clearBoundaryMs).toBeUndefined();
+  } finally {
+    for (const release of releases) release();
+  }
+});
+
+// Unit, PR #11841 review: switching target device during dialogue persistence must retract
+// the unhanded-off needsHostCreation record so MobileOutboxBridge never launches it.
+it('retracts a persisted needsHostCreation record when the target device changes before handoff', async () => {
+  const { bindings } = harness();
+  let deviceChecks = 0;
+  bindings.ensureDeviceAlive = () => ++deviceChecks <= 1;
+  const releases: Array<() => void> = [];
+  try {
+    const prepared = await prepareNewSessionCreation({
+      ...bindings, effectiveDraft: { ...bindings.effectiveDraft, workspaceKind: 'dialogue' },
+      creatingWorktree: false, allowDialogueRecovery: true, sendAttachments: [],
+      worktreeIntent: { ...bindings.worktreeIntent, applicable: false },
+      onHoldDurableCreation: release => releases.push(release), onHoldPrecreatedRegistration: vi.fn(),
+    }, { ...newSessionCreationPreparationServices, ...bindings });
+    expect(await prepared!.persistSubmittedDialogue!(prepared!.effectiveDraft)).toBe(false);
+    expect(getCurrentMobileOutboxRecords()).toHaveLength(0);
+    expect(bindings.outboxRecoveryRef.current).toBeNull();
+  } finally {
+    for (const release of releases) release();
+  }
+});
+
 it.each(['reservation-fails', 'create-rejected', 'reply-lost', 'leaves-during-create'] as const)(
   'keeps the latest restored draft reachable when resubmission stops before handoff: %s', async scenario => {
     await harness().run();
