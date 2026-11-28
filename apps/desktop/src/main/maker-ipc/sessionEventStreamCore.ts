@@ -40,9 +40,11 @@ export function persistSessionStreamEventCore(
   } = deps.persistence;
   const { broadcastSubagentRunsChanged } = deps;
   const { event, eventAgentMeta } = prepared;
+  const routeClaudeByParent = event.source === 'claude-code' && !session.remoteHostId;
   let persistId: string | undefined;
   let resolvedContent: string | undefined;
   let persistedOnly = false;
+  let deviceHostedRootDelta = false;
   if (
     event.source === 'codex' &&
     event.turnScope !== 'background' &&
@@ -68,7 +70,12 @@ export function persistSessionStreamEventCore(
     }
   }
   if (event.type === 'text') {
-    const td = event.data as { text?: unknown; isFinal?: unknown; isFullText?: unknown } | null;
+    const td = event.data as {
+      text?: unknown;
+      isFinal?: unknown;
+      isFullText?: unknown;
+      agentMessageId?: unknown;
+    };
     // A Host runtime-recovery notice (#4349) is not the worker's reply: it is
     // persisted and broadcast like any assistant text below, but must never be
     // captured as an Orca worker result. Otherwise an error terminal that lacks
@@ -88,17 +95,16 @@ export function persistSessionStreamEventCore(
       && ((event.source === 'codex' && textPhase === 'commentary' && td.isFullText === true)
         || (event.source === 'claude-code' && eventAgentMeta?.stopReason === 'tool_use')
         || (event.source === 'pi' && eventAgentMeta?.stopReason === 'toolUse'));
-    persistId = onAssistantTextEvent(
-      session.id,
-      event.data as {
-        text?: unknown;
-        isFinal?: unknown;
-        isFullText?: unknown;
-        agentMessageId?: unknown;
-      },
-      pluginProgress ? { ...eventAgentMeta, pluginProgressInputId: progressInput } : eventAgentMeta,
-      event.turnScope,
-    );
+    const textMeta = pluginProgress
+      ? { ...eventAgentMeta, pluginProgressInputId: progressInput }
+      : eventAgentMeta;
+    persistId = routeClaudeByParent
+      ? onAssistantTextEvent(session.id, td, textMeta, event.turnScope, true)
+      : onAssistantTextEvent(session.id, td, textMeta, event.turnScope);
+    // Device-hosted events lose SDK symbols in JSON. The writer still knows
+    // which buffer it chose for this ordinary delta and can project that lane.
+    deviceHostedRootDelta = Boolean(routeClaudeByParent && session.agentDeviceId &&
+      persistId && td?.isFinal === false && td.isFullText !== true && !textMeta?.parentUuid);
     // Codex commentary carries a complete item snapshot. Keep Claude's block
     // confirmations buffered until tool_use so later blocks cannot be written twice.
     // A late Codex snapshot must not flush a newer streaming answer.
@@ -127,7 +133,13 @@ export function persistSessionStreamEventCore(
     const data = event.data as { toolUseId?: unknown; toolName?: unknown; input?: unknown; acpInputPatch?: unknown };
     const acpTool = session.agentKind === 'acp';
     persistedOnly = acpTool && data.acpInputPatch === true;
-    if (!persistedOnly && event.turnScope !== 'background') flushAssistantBlock(session.id, eventAgentMeta);
+    if (!persistedOnly && event.turnScope !== 'background') {
+      if (routeClaudeByParent) {
+        flushAssistantBlock(session.id, eventAgentMeta, eventAgentMeta?.parentUuid ?? null);
+      } else {
+        flushAssistantBlock(session.id, eventAgentMeta);
+      }
+    }
     persistId = onToolUseEvent(
       session.id,
       data,
@@ -222,7 +234,8 @@ export function persistSessionStreamEventCore(
         });
       });
   }
-  return { persistId, resolvedContent, ...(persistedOnly ? { persistedOnly: true } : {}) };
+  return { persistId, resolvedContent, ...(persistedOnly ? { persistedOnly: true } : {}),
+    ...(deviceHostedRootDelta ? { deviceHostedRootDelta: true } : {}) };
 }
 
 export type SessionStreamResult = ReturnType<typeof persistSessionStreamEventCore>;

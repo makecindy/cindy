@@ -143,10 +143,13 @@ export function createMessagePersistence(deps: MessagePersistencePorts) {
     /** Provider message identity; a changed identity is an assistant block boundary. */
     agentMessageId?: string;
     agentMeta: AgentMeta | null;
+    localClaude: boolean;
     createdAt: number;
   }
 
   const assistantBlocks = new Map<string, AssistantBlock>();
+  // Local Claude's SDK multiplexes the root and child tool streams in one query.
+  const claudeChildAssistantBlocks = new Map<string, Map<string, AssistantBlock>>();
   /** Exact provider item → durable row links, scoped to the current product turn. */
   const assistantItemPersistIds = new Map<string, Map<string, string>>();
   /** Native items whose response can still be invalidated by a sampling disconnect. */
@@ -344,7 +347,7 @@ export function createMessagePersistence(deps: MessagePersistencePorts) {
    * snapshot drains. Keep that exact SDK identity outside per-turn reset state so
    * the late snapshot can update/reuse the same row instead of creating another.
    */
-  const sealedAssistantLateFinalBySession = new Map<string, SealedAssistantLateFinalCandidate>();
+  const sealedAssistantLateFinalBySession = new Map<string, Map<string, SealedAssistantLateFinalCandidate>>();
 
   /**
    * 最近一次边界(tool_use / interaction / done)flush 掉的 assistant block 身份。
@@ -370,7 +373,7 @@ export function createMessagePersistence(deps: MessagePersistencePorts) {
    */
   const lastBoundaryFlushedAssistantBySession = new Map<
     string,
-    { persistId: string; text: string; agentMessageId?: string }
+    { persistId: string; text: string; agentMessageId?: string; parentUuid?: string }
   >();
 
   function matchesSealedAssistantIdentity(
@@ -596,7 +599,7 @@ export function createMessagePersistence(deps: MessagePersistencePorts) {
    */
   const lastPersistedMsgBySession = new Map<
     string,
-    { role: string; text: string; persistId: string; agentMessageId?: string }
+    { role: string; text: string; persistId: string; agentMessageId?: string; parentUuid?: string }
   >();
 
   function notePersistedMessage(
@@ -605,6 +608,7 @@ export function createMessagePersistence(deps: MessagePersistencePorts) {
     persistId: string,
     text = '',
     agentMessageId?: string,
+    parentUuid?: string,
   ): void {
     // 边界复用候选只在"交互行紧随 flush 落库"时有效:flushAssistantBlock 与
     // onInteractionMessage 在同一段同步代码里先后落库,所以 flush 之后第一条落库的不是
@@ -614,7 +618,7 @@ export function createMessagePersistence(deps: MessagePersistencePorts) {
     if (role !== 'ask_user' && role !== 'plan_review') {
       lastBoundaryFlushedAssistantBySession.delete(sessionId);
     }
-    lastPersistedMsgBySession.set(sessionId, { role, text, persistId, agentMessageId });
+    lastPersistedMsgBySession.set(sessionId, { role, text, persistId, agentMessageId, parentUuid });
   }
 
   /**
@@ -995,7 +999,7 @@ export function createMessagePersistence(deps: MessagePersistencePorts) {
         : (agentMeta ?? null),
       createdAt,
     });
-    notePersistedMessage(sessionId, 'assistant', clientId, content, agentMessageId);
+    notePersistedMessage(sessionId, 'assistant', clientId, content, agentMessageId, agentMeta?.parentUuid);
     lastAssistantPersistIdBySession.set(sessionId, clientId);
     if (
       isTopLevelTitleAssistant(
@@ -2709,6 +2713,7 @@ export function createMessagePersistence(deps: MessagePersistencePorts) {
     },
     agentMeta: AgentMeta | null,
     turnScope?: 'turn' | 'background',
+    localClaude = false,
   ): string | undefined {
     if (
       getSessionDbAgentKind(sessionId) === 'codex' &&
@@ -2726,7 +2731,7 @@ export function createMessagePersistence(deps: MessagePersistencePorts) {
         pending.add(itemId);
       }
     }
-    const persistId = assembleAssistantTextEvent(sessionId, data, agentMeta, turnScope);
+    const persistId = assembleAssistantTextEvent(sessionId, data, agentMeta, turnScope, localClaude);
     if (persistId && typeof data.agentMessageId === 'string' && turnScope !== 'background') {
       let links = assistantItemPersistIds.get(sessionId);
       if (!links) {
@@ -2750,6 +2755,7 @@ export function createMessagePersistence(deps: MessagePersistencePorts) {
     },
     agentMeta: AgentMeta | null,
     turnScope?: 'turn' | 'background',
+    localClaude = false,
   ): string | undefined {
     if (typeof data.phase === 'string' || data.runtimeRecovery === true) {
       agentMeta = {
@@ -2765,7 +2771,10 @@ export function createMessagePersistence(deps: MessagePersistencePorts) {
         ? data.agentMessageId
         : undefined;
 
-    const activeBlock = assistantBlocks.get(sessionId);
+    const parentUuid = localClaude ? agentMeta?.parentUuid || undefined : undefined;
+    const blockKey = parentUuid ?? sessionId;
+    const getBlock = () => (parentUuid ? claudeChildAssistantBlocks.get(sessionId) : assistantBlocks)?.get(blockKey);
+    const activeBlock = getBlock();
     const linkedPersistId =
       agentMessageId && turnScope !== 'background'
         ? assistantItemPersistIds.get(sessionId)?.get(agentMessageId)
@@ -2830,12 +2839,12 @@ export function createMessagePersistence(deps: MessagePersistencePorts) {
       agentMessageId &&
       activeBlock.agentMessageId !== agentMessageId
     ) {
-      flushAssistantBlock(sessionId);
+      flushAssistantBlockInternal(sessionId, null, parentUuid);
     }
 
     if (isFinal) {
       const visible = stripInternalWebCitations(rawText);
-      const lateFinalCandidate = sealedAssistantLateFinalBySession.get(sessionId);
+      const lateFinalCandidate = sealedAssistantLateFinalBySession.get(sessionId)?.get(parentUuid ?? '');
       if (
         lateFinalCandidate &&
         visible.length > 0 &&
@@ -2872,7 +2881,7 @@ export function createMessagePersistence(deps: MessagePersistencePorts) {
         return lateFinalCandidate.persistId;
       }
 
-      const block = assistantBlocks.get(sessionId);
+      const block = getBlock();
       if (block) {
         // 流式确认:不落库,留给边界 flush。显式 isFullText 表示 SDK 权威全文；
         // Claude Code 的 local text block 没有该标记，但在 text_delta 丢失时仍可能携带
@@ -2911,6 +2920,7 @@ export function createMessagePersistence(deps: MessagePersistencePorts) {
         boundaryFlushed &&
         visible &&
         atInteractionBoundary &&
+        (!localClaude || boundaryFlushed.parentUuid === parentUuid) &&
         (!agentMessageId || boundaryFlushed.agentMessageId === agentMessageId) &&
         (boundaryFlushed.text === visible || isFullText)
       ) {
@@ -2981,6 +2991,7 @@ export function createMessagePersistence(deps: MessagePersistencePorts) {
           last &&
           last.role === 'assistant' &&
           last.text === visible &&
+          (!localClaude || last.parentUuid === parentUuid) &&
           (!agentMessageId || last.agentMessageId === agentMessageId)
         ) {
           return last.persistId;
@@ -3000,7 +3011,7 @@ export function createMessagePersistence(deps: MessagePersistencePorts) {
     }
 
     // delta: accumulate the raw snapshot; strip only the completed block.
-    let block = assistantBlocks.get(sessionId);
+    let block = getBlock();
     if (!block) {
       // 新的 delta block 已开始:上一条边界 flush 的身份不再可复用(它的全文快照
       // 已经过去,或会走 block 分支),避免吞掉这条新消息。
@@ -3010,9 +3021,13 @@ export function createMessagePersistence(deps: MessagePersistencePorts) {
         text: rawText,
         agentMessageId,
         agentMeta,
+        localClaude,
         createdAt: Date.now(),
       };
-      assistantBlocks.set(sessionId, block);
+      const blocks = parentUuid
+        ? getOrCreateSessionMap(claudeChildAssistantBlocks, sessionId)
+        : assistantBlocks;
+      blocks.set(blockKey, block);
     } else {
       block.text += rawText;
       stampBlockAfterTurnStart(sessionId, block, turnScope);
@@ -3032,13 +3047,20 @@ export function createMessagePersistence(deps: MessagePersistencePorts) {
   function flushAssistantBlock(
     sessionId: string,
     agentMetaFallback: AgentMeta | null = null,
+    claudeToolParent?: string | null,
   ): void {
-    flushAssistantBlockInternal(sessionId, agentMetaFallback);
+    if (claudeToolParent === undefined) {
+      for (const parent of claudeChildAssistantBlocks.get(sessionId)?.keys() ?? []) {
+        flushAssistantBlockInternal(sessionId, null, parent);
+      }
+    }
+    flushAssistantBlockInternal(sessionId, agentMetaFallback, claudeToolParent ?? undefined);
   }
 
   function flushAssistantBlockInternal(
     sessionId: string,
     agentMetaFallback: AgentMeta | null,
+    parentUuid?: string,
   ):
     | {
         persistId: string;
@@ -3047,9 +3069,12 @@ export function createMessagePersistence(deps: MessagePersistencePorts) {
         agentMeta: AgentMeta | null;
       }
     | undefined {
-    const block = assistantBlocks.get(sessionId);
-    if (!block) return undefined;
-    assistantBlocks.delete(sessionId);
+    const blocks = parentUuid ? claudeChildAssistantBlocks.get(sessionId) : assistantBlocks;
+    const blockKey = parentUuid ?? sessionId;
+    const block = blocks?.get(blockKey);
+    if (!blocks || !block) return undefined;
+    blocks.delete(blockKey);
+    if (parentUuid && blocks.size === 0) claudeChildAssistantBlocks.delete(sessionId);
     const visible = stripInternalWebCitations(block.text);
     if (!visible) {
       // No row was queued for this block, so a later full snapshot must create
@@ -3063,8 +3088,11 @@ export function createMessagePersistence(deps: MessagePersistencePorts) {
     }
     // 三级兜底,对齐 renderer 老逻辑:本 block 自带 meta → 边界事件 meta(tool_use/done
     // 同属或携带这条 assistant 的 meta)→ 会话最近一次非空 meta(interaction 边界靠这级)。
-    const meta =
-      block.agentMeta ?? agentMetaFallback ?? lastAgentMetaBySession.get(sessionId) ?? null;
+    // The local SDK already supplied the lane on this text event. A boundary
+    // or most-recent event may be from a different request or child.
+    const meta = block.localClaude
+      ? block.agentMeta
+      : block.agentMeta ?? agentMetaFallback ?? lastAgentMetaBySession.get(sessionId) ?? null;
     enqueuePersistAssistant(
       sessionId,
       block.persistId,
@@ -3078,6 +3106,7 @@ export function createMessagePersistence(deps: MessagePersistencePorts) {
     lastBoundaryFlushedAssistantBySession.set(sessionId, {
       persistId: block.persistId,
       text: visible,
+      parentUuid: meta?.parentUuid,
       ...(block.agentMessageId ? { agentMessageId: block.agentMessageId } : {}),
     });
     return {
@@ -3097,19 +3126,27 @@ export function createMessagePersistence(deps: MessagePersistencePorts) {
     sessionId: string,
     agentMetaFallback: AgentMeta | null = null,
   ): void {
-    const flushed = flushAssistantBlockInternal(sessionId, agentMetaFallback);
-    if (!flushed) return;
-    sealedAssistantLateFinalBySession.delete(sessionId);
-    const requestId = flushed.agentMeta?.requestId;
-    const uuid = flushed.agentMeta?.uuid;
-    if (!requestId && !uuid) return;
-    sealedAssistantLateFinalBySession.set(sessionId, {
-      persistId: flushed.persistId,
-      text: flushed.text,
-      ...(flushed.agentMessageId ? { agentMessageId: flushed.agentMessageId } : {}),
-      ...(requestId ? { requestId } : {}),
-      ...(uuid ? { uuid } : {}),
-    });
+    if (!assistantBlocks.has(sessionId) && !claudeChildAssistantBlocks.has(sessionId)) return;
+    const candidates = new Map<string, SealedAssistantLateFinalCandidate>();
+    const remember = (flushed: ReturnType<typeof flushAssistantBlockInternal>, parent: string) => {
+      if (!flushed) return;
+      const requestId = flushed.agentMeta?.requestId;
+      const uuid = flushed.agentMeta?.uuid;
+      if (!requestId && !uuid) return;
+      candidates.set(parent, {
+        persistId: flushed.persistId,
+        text: flushed.text,
+        ...(flushed.agentMessageId ? { agentMessageId: flushed.agentMessageId } : {}),
+        ...(requestId ? { requestId } : {}),
+        ...(uuid ? { uuid } : {}),
+      });
+    };
+    for (const parent of claudeChildAssistantBlocks.get(sessionId)?.keys() ?? []) {
+      remember(flushAssistantBlockInternal(sessionId, null, parent), parent);
+    }
+    remember(flushAssistantBlockInternal(sessionId, agentMetaFallback), '');
+    if (candidates.size) sealedAssistantLateFinalBySession.set(sessionId, candidates);
+    else sealedAssistantLateFinalBySession.delete(sessionId);
   }
 
   /**
@@ -3588,6 +3625,7 @@ export function createMessagePersistence(deps: MessagePersistencePorts) {
     clearSessionThinkingSnapshots(sessionId);
     clearCodexPlanRowsForSession(sessionId);
     assistantBlocks.delete(sessionId);
+    claudeChildAssistantBlocks.delete(sessionId);
     sealedAssistantLateFinalBySession.delete(sessionId);
     backgroundTurnPersistStatesBySession.delete(sessionId);
     lastAgentMetaBySession.delete(sessionId);

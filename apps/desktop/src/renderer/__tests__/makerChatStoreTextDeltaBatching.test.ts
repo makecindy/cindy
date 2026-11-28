@@ -2299,6 +2299,202 @@ describe('makerChatStore text delta batching', () => {
     ]);
   });
 
+  // #1743 / unit: different Claude parents may have independent live rows.
+  // Exercise maker:event and DB echo; existing item-boundary tests cover
+  // consecutive assistant items, not resumed deltas after a sibling final.
+  it.each([
+    { label: 'root and child', finalParent: 'toolu_b', preserve: true },
+    { label: 'parallel children', activeParent: 'toolu_a', finalParent: 'toolu_b', preserve: true },
+    { label: 'same child', activeParent: 'toolu_a', finalParent: 'toolu_a', preserve: false },
+    { label: 'proven root final during child', activeParent: 'toolu_a', finalParent: null, preserve: true },
+    { label: 'proven root final during root', finalParent: null, preserve: false },
+    { label: 'remote root final during child', remote: true, activeParent: 'toolu_a', finalParent: null, preserve: false },
+    { label: 'legacy final', activeParent: 'toolu_a', preserve: false },
+    { label: 'another engine', source: 'codex', activeParent: 'toolu_a', finalParent: 'toolu_b', preserve: false },
+    { label: 'remote children', remote: true, activeParent: 'toolu_a', finalParent: 'toolu_b', preserve: true },
+    { label: 'same remote child', remote: true, activeParent: 'toolu_a', finalParent: 'toolu_a', preserve: false },
+    { label: 'remote legacy final', remote: true, activeParent: 'toolu_a', preserve: false },
+  ])('handles an independent final during a live stream ($label)', ({ activeParent, finalParent, preserve, source = 'claude-code', remote }) => {
+    if (remote) remoteProjectsStore.pinSessionOrigin('device-1', SESSION_ID);
+    const send = (persistId: string, text: string, isFinal: boolean, parentUuid?: string | null) => {
+      const payload = { sessionId: SESSION_ID, persistId, event: {
+        type: 'text', source, data: { text, isFinal }, ...(parentUuid !== undefined ? { agentMeta: { parentUuid } } : {}),
+      } };
+      if (remote) onRemotePush?.({ deviceId: 'device-1', channel: 'maker:event', payload });
+      else onEvent?.(payload);
+    };
+    send('active', 'prefix', false, activeParent);
+    vi.advanceTimersByTime(32);
+    send('finished', 'complete reply', true, finalParent);
+    const message = {
+      id: 'finished-db', clientId: 'finished', role: 'assistant', content: 'complete reply',
+      createdAt: new Date().toISOString(), agentMeta: finalParent ? { parentUuid: finalParent } : {},
+    };
+    if (remote) onRemotePush?.({ deviceId: 'device-1', channel: 'local-db:messages:created', payload: { sessionId: SESSION_ID, message } });
+    else onDbMessageCreated?.({ sessionId: SESSION_ID, message });
+    send('active', ' suffix', false, activeParent);
+    vi.advanceTimersByTime(32);
+    const rows = makerChatStore.getSnapshot(SESSION_ID).messages;
+    expect(rows).toHaveLength(2);
+    expect(rows).toEqual(expect.arrayContaining([
+      expect.objectContaining({ clientId: 'active', content: preserve ? 'prefix suffix' : 'prefix', isStreaming: preserve }),
+      expect.objectContaining({ clientId: 'finished', content: 'complete reply', isStreaming: false }),
+    ]));
+    expect(rows.find(row => row.clientId === 'finished')?.parentToolUseId).toBe(finalParent ?? undefined);
+  });
+
+  // #1743 / unit: the production IPC listener previously sealed the first
+  // row on the second delta. Revisit both exact IDs, close just one tool lane,
+  // then finish the turn and ignore a late delta to the sealed row.
+  it.each([
+    [null, 'toolu_child'], ['toolu_child', null], ['toolu_a', 'toolu_b'],
+  ])('keeps Claude deltas live across both lane switches (%s to %s)', (first, second) => {
+    const send = (type: string, persistId: string, data: unknown, parentUuid?: string | null) => {
+      onEvent?.({ sessionId: SESSION_ID, persistId, event: {
+        type, source: 'claude-code', data, agentMeta: { parentUuid },
+      } });
+      vi.advanceTimersByTime(32);
+    };
+    const delta = (id: string, text: string, parent: string | null) =>
+      send('text', id, { text, isFinal: false }, parent);
+    delta('a', 'one', first);
+    delta('b', 'two', second);
+    delta('a', ' more', first);
+    delta('b', ' later', second);
+    let rows = makerChatStore.getSnapshot(SESSION_ID).messages;
+    expect(rows).toEqual([
+      expect.objectContaining({ clientId: 'a', content: 'one more', isStreaming: true }),
+      expect.objectContaining({ clientId: 'b', content: 'two later', isStreaming: true }),
+    ]);
+    send('tool_use', 'tool', { toolUseId: 'toolu_test', toolName: 'Read', input: {} }, first);
+    delta('b', ' again', second);
+    delta('a', ' late', first);
+    rows = makerChatStore.getSnapshot(SESSION_ID).messages;
+    expect(rows.find(row => row.clientId === 'a')).toMatchObject({ content: 'one more', isStreaming: false });
+    expect(rows.find(row => row.clientId === 'b')).toMatchObject({ content: 'two later again', isStreaming: true });
+    delta('c', 'fresh item', first);
+    expect(makerChatStore.getSnapshot(SESSION_ID).messages.filter(row => row.isStreaming)).toHaveLength(2);
+    send('done', 'done', {});
+    expect(makerChatStore.getSnapshot(SESSION_ID).messages.some(row => row.isStreaming)).toBe(false);
+  });
+
+  // #1743 / unit: real remote ingress previously sealed A on B's ordinary
+  // delta. Replay both stable IDs within one batch window, before any DB echo.
+  it.each([
+    { label: 'owned Claude child streams', preserve: true },
+    { label: 'missing ownership', missingParent: true },
+    { label: 'unknown root ownership', nullParent: true },
+    { label: 'missing message identity', missingId: true },
+    { label: 'incomplete batch ownership', mixedBatch: true },
+    { label: 'another engine', source: 'codex' },
+    { label: 'Claude over SSH', remoteHostId: 'ssh-host' },
+  ])('assembles interleaved Desktop push deltas ($label)', ({
+    preserve, missingParent, nullParent, missingId, mixedBatch, source = 'claude-code', remoteHostId,
+  }) => {
+    remoteProjectsStore.pinSessionOrigin('device-1', SESSION_ID);
+    if (remoteHostId) makerChatStore.setSessionRuntime(SESSION_ID, { remoteHostId });
+    const push = (persistId: string | undefined, type: string, data: unknown, parentUuid?: string | null) => {
+      onRemotePush?.({ deviceId: 'device-1', channel: 'maker:event', payload: {
+        sessionId: SESSION_ID, persistId, event: { type, source, data, agentMeta: { parentUuid } },
+      } });
+    };
+    const delta = (id: string | undefined, text: string, parent?: string | null) =>
+      push(id, 'text', { text, isFinal: false }, parent);
+    const siblingParent = missingParent ? undefined : nullParent ? null : 'toolu_b';
+    delta('a', 'prefix', 'toolu_a');
+    if (mixedBatch) delta('a', ' partial', undefined);
+    // Deliver identity-less frames in separate batches to keep the legacy
+    // timer behavior independent of the interleaved-ID path.
+    if (missingId) vi.advanceTimersByTime(32);
+    delta(missingId ? undefined : 'b', 'sibling', siblingParent);
+    if (missingId) vi.advanceTimersByTime(32);
+    delta('a', ' suffix', 'toolu_a');
+    vi.advanceTimersByTime(32);
+    const rows = makerChatStore.getSnapshot(SESSION_ID).messages;
+    if (missingId) {
+      expect(rows).toHaveLength(1);
+      expect(rows.find(row => row.clientId === 'a')).toMatchObject({
+        content: 'prefixsibling suffix', isStreaming: true,
+      });
+      return;
+    }
+    expect(rows).toEqual([
+      expect.objectContaining({
+        clientId: 'a', content: preserve ? 'prefix suffix' : mixedBatch ? 'prefix partial' : 'prefix',
+        isStreaming: preserve === true,
+      }),
+      expect.objectContaining({ clientId: 'b', content: 'sibling', isStreaming: true }),
+    ]);
+    if (!preserve) return;
+
+    push('tool-b', 'tool_use', { toolUseId: 'toolu_read', toolName: 'Read', input: {} }, 'toolu_b');
+    delta('b', ' late', 'toolu_b');
+    delta('a', ' again', 'toolu_a');
+    vi.advanceTimersByTime(32);
+    const afterTool = makerChatStore.getSnapshot(SESSION_ID).messages;
+    expect(afterTool.find(row => row.clientId === 'a')).toMatchObject({
+      content: 'prefix suffix again', isStreaming: true,
+    });
+    expect(afterTool.find(row => row.clientId === 'b')).toMatchObject({
+      content: 'sibling', isStreaming: false,
+    });
+  });
+
+  it('keeps the ordinary Claude item boundary for deltas without SDK ownership', () => {
+    for (const [persistId, text] of [['old', 'prefix'], ['new', 'new item'], ['old', ' late']]) {
+      onEvent?.({ sessionId: SESSION_ID, persistId,
+        event: { type: 'text', source: 'claude-code', data: { text, isFinal: false } } });
+      vi.advanceTimersByTime(32);
+    }
+    expect(makerChatStore.getSnapshot(SESSION_ID).messages).toEqual([
+      expect.objectContaining({ clientId: 'old', content: 'prefix', isStreaming: false }),
+      expect.objectContaining({ clientId: 'new', content: 'new item', isStreaming: true }),
+    ]);
+  });
+
+  // #1743 / unit: a child tool boundary must seal only the matching live row.
+  // Exercise local maker:event ingress; the child-final regression above does
+  // not cover tool events or the ordinary root tool boundary.
+  it.each([
+    { label: 'child tool during root', toolParent: 'toolu_child', preserve: true },
+    { label: 'tool of the active child', activeParent: 'toolu_child', toolParent: 'toolu_child', preserve: false },
+    { label: 'tool of another child', activeParent: 'toolu_other', toolParent: 'toolu_child', preserve: true },
+    { label: 'proven root tool during child', activeParent: 'toolu_child', toolParent: null, preserve: true },
+    { label: 'proven root tool during root', toolParent: null, preserve: false },
+    { label: 'legacy tool during child', activeParent: 'toolu_child', preserve: false },
+    { label: 'another engine with null', source: 'codex', activeParent: 'toolu_child', toolParent: null, preserve: false },
+    { label: 'remote frame with null', remote: true, activeParent: 'toolu_child', toolParent: null, preserve: false },
+    { label: 'ordinary root tool', preserve: false },
+    { label: 'transcript edge only', transcriptParent: 'toolu_child', preserve: false },
+  ])('applies the Claude boundary to the owning stream ($label)', ({ activeParent, toolParent, transcriptParent, preserve, source = 'claude-code', remote }) => {
+    if (remote) remoteProjectsStore.pinSessionOrigin('device-1', SESSION_ID);
+    const send = (type: string, persistId: string, data: unknown, agentMeta?: object) => {
+      const payload = { sessionId: SESSION_ID, persistId, event: { type, source, data, agentMeta } };
+      if (remote) onRemotePush?.({ deviceId: 'device-1', channel: 'maker:event', payload });
+      else onEvent?.(payload);
+    };
+    send('text', 'before', { text: 'prefix', isFinal: false }, activeParent ? { parentUuid: activeParent } : undefined);
+    vi.advanceTimersByTime(32);
+    send('tool_use', 'tool-row', { toolUseId: 'toolu_read', toolName: 'Read', input: {} },
+      toolParent !== undefined ? { parentUuid: toolParent } : transcriptParent ? { transcriptParentUuid: transcriptParent } : undefined);
+    send('text', preserve ? 'before' : 'after', { text: ' suffix', isFinal: false },
+      activeParent ? { parentUuid: activeParent } : undefined);
+    vi.advanceTimersByTime(32);
+
+    const rows = makerChatStore.getSnapshot(SESSION_ID).messages;
+    expect(rows.find(row => row.clientId === 'before')).toMatchObject({
+      content: preserve ? 'prefix suffix' : 'prefix', isStreaming: preserve,
+    });
+    expect(rows.find(row => row.clientId === 'tool-row')).toMatchObject({ role: 'tool_use', toolUseId: 'toolu_read' });
+    if (!preserve) expect(rows.find(row => row.clientId === 'after')).toMatchObject({ content: ' suffix', isStreaming: true });
+
+    send('done', 'terminal', {});
+    send('text', 'next', { text: 'next reply', isFinal: false });
+    vi.advanceTimersByTime(32);
+    expect(makerChatStore.getSnapshot(SESSION_ID).messages.filter(row => row.isStreaming))
+      .toEqual([expect.objectContaining({ clientId: 'next', content: 'next reply' })]);
+  });
+
   it.each(['local', 'remote'] as const)('preserves newer queued text when an older item is retracted through %s ingress', (source) => {
     if (source === 'remote') remoteProjectsStore.pinSessionOrigin('device-1', SESSION_ID);
     const send = (channel: string, payload: unknown) => {

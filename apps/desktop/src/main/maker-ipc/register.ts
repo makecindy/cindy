@@ -25212,6 +25212,7 @@ function broadcastToAllWindows(
   channel: string,
   payload: unknown,
   ownerScope?: ReturnType<typeof captureDataOwnerBroadcastScope>,
+  localPayload: unknown = payload,
 ): void {
   if (ownerScope && !isDataOwnerBroadcastScopeCurrent(ownerScope)) return;
   const ownerStamp = ownerScope ? ownerScope.ownerStamp : getActiveDataOwnerPushStamp();
@@ -25239,8 +25240,8 @@ function broadcastToAllWindows(
   }
   for (const win of selectMakerBroadcastTargets(BrowserWindow.getAllWindows())) {
     try {
-      if (ownerStamp === undefined) win.webContents.send(channel, payload);
-      else win.webContents.send(channel, payload, ownerStamp);
+      if (ownerStamp === undefined) win.webContents.send(channel, localPayload);
+      else win.webContents.send(channel, localPayload, ownerStamp);
     } catch (e) {
       log.warn(`broadcast to window failed: ${String(e)}`);
     }

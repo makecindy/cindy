@@ -504,6 +504,8 @@ function parseReconnectHandoff(reason: unknown, value: unknown): ReconnectHandof
 }
 
 export interface ChatMessage {
+  /** In-flight text with explicit Claude SDK stream ownership. */
+  claudeScopedStream?: true;
   /** Local durable-push order, retained by the display cache. */
   cacheReceipt?: HistoryCacheReceipt;
   /** Private Bot reply provenance, projected from persisted/live agent metadata. */
@@ -6502,6 +6504,7 @@ function isRetiredVisionNotice(event: { type: string; source?: unknown; data?: u
 export function handleStreamEvent(
   inputState: SessionChatState,
   event: CCAgentStreamEvent,
+  ingress?: 'local' | 'remote',
 ): SessionChatState {
   if (isRetiredVisionNotice(event)) return inputState;
   const reconnectAttempt =
@@ -6567,6 +6570,11 @@ export function handleStreamEvent(
     ...(typeof incomingMeta?.replyToClientId === 'string' && incomingMeta.replyToClientId
       ? { replyToClientId: incomingMeta.replyToClientId } : {}),
   };
+  const claudeParent = incomingMeta?.parentUuid === null ? null : assistantMetaFields.parentToolUseId;
+  const scopedClaudeParent = event.source === 'claude-code' && state.remoteHostId === null &&
+    (ingress === 'local' || (ingress === 'remote' && typeof claudeParent === 'string'))
+    ? claudeParent
+    : undefined;
   switch (event.type) {
     case 'text': {
       const { text, isFinal, isFullText } = event.data as {
@@ -6576,6 +6584,7 @@ export function handleStreamEvent(
       };
       const snapshot = readRemoteTextSnapshot(event);
       if (snapshot?.truncated) return state;
+      const scopedDelta = !isFinal && !isFullText && event.persistId && scopedClaudeParent !== undefined;
       // Persistence can finish the row before the turn clears streamingClientId.
       // The row, rather than that assembly pointer, owns durable precedence.
       if (snapshot && event.persistId && state.messages.some((message) =>
@@ -6613,6 +6622,18 @@ export function handleStreamEvent(
           (message) => message.clientId === event.persistId && message.role === 'assistant',
         );
         if (existing) {
+          if (scopedDelta && existing.isStreaming && existing.claudeScopedStream &&
+              (existing.parentToolUseId ?? null) === scopedClaudeParent) {
+            const content = existing.content + text;
+            return {
+              ...state,
+              streamingClientId: existing.clientId,
+              streamingText: content,
+              lastAgentMeta: incomingMeta ?? state.lastAgentMeta,
+              messages: replaceMessage(state.messages, (message) => message === existing,
+                () => ({ ...existing, content })),
+            };
+          }
           // Persisted/finalized text already includes these late deltas. Only an
           // explicitly authoritative full-text event may calibrate it again.
           if (!isFinal) {
@@ -6665,11 +6686,40 @@ export function handleStreamEvent(
         state.streamingClientId &&
         event.persistId !== state.streamingClientId,
       );
-      const textState = itemBoundary ? finalizeStreamingInState(state) : state;
+      // A final can arrive while another SDK parent still owns the active row.
+      const finalParent = claudeParent;
+      const independentFinal = Boolean(
+        itemBoundary && isFinal && text &&
+        event.source === 'claude-code' && state.remoteHostId === null &&
+        finalParent !== undefined &&
+        state.messages.some((message) =>
+          message.clientId === state.streamingClientId &&
+          message.role === 'assistant' && message.isStreaming &&
+          (message.parentToolUseId ?? null) !== finalParent),
+      );
+      const active = scopedClaudeParent !== undefined && event.persistId !== state.streamingClientId && (itemBoundary || scopedDelta)
+        ? state.messages.find((message) => message.clientId === state.streamingClientId && message.isStreaming)
+        : undefined;
+      let textState = state;
+      if (scopedDelta && event.persistId !== state.streamingClientId) {
+        // A new persistId ends the previous item in this lane, and starts a
+        // separate row while items owned by other streams stay open.
+        textState = {
+          ...finalizeStreamingInState(state, active?.claudeScopedStream || !active ? scopedClaudeParent : undefined),
+          streamingClientId: null,
+        };
+      } else if (itemBoundary) {
+        if (scopedClaudeParent !== undefined && active?.claudeScopedStream) {
+          textState = finalizeStreamingInState(state, scopedClaudeParent);
+        } else if (!independentFinal) {
+          textState = finalizeStreamingInState(state);
+        }
+      }
 
       if (isFinal) {
         // Confirmation of streamed text, or a non-streaming final burst.
-        if (!textState.streamingClientId && text) {
+        if ((!textState.streamingClientId || independentFinal ||
+             (itemBoundary && scopedClaudeParent !== undefined && active?.claudeScopedStream)) && text) {
           // Guard: if the last message is an assistant with identical content,
           // this is a duplicate isFinal event from the SDK — skip it.
           const last = textState.messages[textState.messages.length - 1];
@@ -6690,7 +6740,9 @@ export function handleStreamEvent(
 
           return {
             ...textState,
-            lastAgentMeta: incomingMeta ?? textState.lastAgentMeta,
+            lastAgentMeta: independentFinal
+              ? textState.lastAgentMeta
+              : incomingMeta ?? textState.lastAgentMeta,
             messages: [
               ...textState.messages,
               {
@@ -6760,6 +6812,7 @@ export function handleStreamEvent(
               role: 'assistant',
               content: text,
               isStreaming: true,
+              ...(scopedDelta ? { claudeScopedStream: true } : {}),
               createdAt: snapshot?.createdAt ?? new Date().toISOString(),
               ...assistantMetaFields,
             },
@@ -7022,8 +7075,19 @@ export function handleStreamEvent(
       // F1-a: 在飞 assistant 文本 + tool_use 的落库都已收口 main(messagePersistBroadcaster
       // 在 tool_use 边界先 flushAssistantBlock 再落 tool_use),renderer 这里只做 UI:
       // finalize 在飞气泡 + 用 main 下发的 persistId 建 tool_use 气泡(onCreated 同 id dedup)。
-      // Finalize any in-flight assistant message first
-      const finalized = finalizeStreamingInState(state);
+      // The local host sends null only for an SDK-confirmed root tool.
+      // Older tools without ownership keep the ordinary boundary.
+      const toolParent = claudeParent;
+      const separateClaudeStream = toolParent !== undefined && event.persistId && state.streamingClientId &&
+        event.source === 'claude-code' && state.remoteHostId === null &&
+        state.messages.some((message) =>
+          message.clientId === state.streamingClientId &&
+          message.role === 'assistant' && message.isStreaming &&
+          (message.parentToolUseId ?? null) !== toolParent);
+      const finalized = scopedClaudeParent !== undefined && event.persistId &&
+        state.messages.some((message) => message.isStreaming && message.claudeScopedStream)
+        ? finalizeStreamingInState(state, scopedClaudeParent)
+        : separateClaudeStream ? state : finalizeStreamingInState(state);
       const clientId = event.persistId ?? crypto.randomUUID();
 
       const existingUpdatableToolIdx =
@@ -7855,14 +7919,21 @@ export function handleStreamEvent(
   }
 }
 
-function finalizeStreamingInState(state: SessionChatState): SessionChatState {
+function finalizeStreamingInState(state: SessionChatState, parent?: string | null): SessionChatState {
   const id = state.streamingClientId;
-  if (!id) return state;
+  const shouldFinalize = (message: ChatMessage) =>
+    (message.clientId === id || (message.claudeScopedStream && message.isStreaming)) &&
+    (parent === undefined || (message.parentToolUseId ?? null) === parent);
+  if (!state.messages.some(shouldFinalize) && (parent !== undefined || !id)) return state;
+  const messages = state.messages.map((message) =>
+    shouldFinalize(message) ? { ...message, isStreaming: false } : message);
+  const current = messages.find((message) => message.clientId === id && message.isStreaming);
+  const remaining = current ?? messages.findLast((message) => message.claudeScopedStream && message.isStreaming);
   return {
     ...state,
-    messages: state.messages.map((m) => (m.clientId === id ? { ...m, isStreaming: false } : m)),
-    streamingClientId: null,
-    // Keep streamingText until caller (e.g. 'done') has consumed it
+    messages,
+    streamingClientId: remaining?.clientId ?? null,
+    ...(remaining ? { streamingText: remaining.content } : {}),
   };
 }
 
@@ -8368,6 +8439,7 @@ type PendingTextDeltaBatch = {
   dataOwner: DataOwnerGeneration;
   ingress: LiveIngressContext;
   source?: 'claude-code' | 'codex' | 'pi';
+  remoteClaudeParent?: string;
   persistId?: string;
   agentMeta?: Record<string, unknown>;
 };
@@ -8608,6 +8680,7 @@ function dispatchStreamEventPayload(
   persistId?: string,
   resolvedContent?: string,
   deferNotification = false,
+  ingress?: 'local' | 'remote',
 ): void {
   if (!event) return;
   const streamEvent = {
@@ -8625,7 +8698,7 @@ function dispatchStreamEventPayload(
     resolvedContent,
   } as CCAgentStreamEvent;
   supersedeInputProjectionOnTerminalEvent(sessionId, streamEvent);
-  setState(sessionId, (s) => handleStreamEvent(s, streamEvent), { deferNotification });
+  setState(sessionId, (s) => handleStreamEvent(s, streamEvent, ingress), { deferNotification });
   scheduleWakeBridgeReconciliation(sessionId);
 }
 
@@ -8678,6 +8751,7 @@ function flushPendingTextDeltaOnly(sessionId: string, deferNotification = false)
     pending.persistId,
     undefined,
     deferNotification,
+    pending.ingress.remoteDeviceId ? (pending.remoteClaudeParent ? 'remote' : undefined) : 'local',
   );
 }
 
@@ -8770,7 +8844,14 @@ function enqueueTextDeltaPayload(
     flushPendingTextDeltaOnly(sessionId);
     existing = undefined;
   }
+  const parent = event.agentMeta?.parentUuid;
+  const remoteClaudeParent = ingress.remoteDeviceId && persistId && event.source === 'claude-code' &&
+    typeof parent === 'string' && parent ? parent : undefined;
   if (existing) {
+    // Only scope batches whose every frame declares the same stream and message.
+    if (existing.remoteClaudeParent !== remoteClaudeParent || existing.persistId !== persistId) {
+      existing.remoteClaudeParent = undefined;
+    }
     existing.text += text;
     if (!existing.persistId && persistId) existing.persistId = persistId;
     if (event.source) existing.source = event.source;
@@ -8782,6 +8863,7 @@ function enqueueTextDeltaPayload(
       dataOwner,
       ingress,
       source: event.source,
+      remoteClaudeParent,
       persistId,
       agentMeta: { ...event.agentMeta, ...(phase ? { assistantPhase: phase } : {}) },
     });
@@ -9406,7 +9488,15 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
       }
     }
 
-    dispatchStreamEventPayload(sessionId, event, persistId, resolvedContent, deferNotification);
+    // Explicit root ownership is projected by the local Electron host only.
+    const displayEvent = ingress.remoteDeviceId && (event.type === 'tool_use' || event.type === 'text') && event.agentMeta?.parentUuid === null
+      ? { ...event, agentMeta: { ...event.agentMeta, parentUuid: undefined } }
+      : event;
+    const streamIngress = ingress.remoteDeviceId
+      ? (displayEvent.type === 'tool_use' || (displayEvent.type === 'text' && (displayEvent.data as { isFinal?: boolean })?.isFinal === true)
+        ? 'remote' : undefined)
+      : 'local';
+    dispatchStreamEventPayload(sessionId, displayEvent, persistId, resolvedContent, deferNotification, streamIngress);
     if (persistDeferredAfterDispatch) {
       persistTurnErrorDeferredTracked(
         sessionId,
@@ -17550,7 +17640,9 @@ function stopSession(
     // F7.6 / FP-3: expire any pending ask_user + plan_review messages on stop
     const msgs = removeResumePendingCards(
       s.messages.map((m) => {
-        if (id && m.clientId === id) return { ...m, isStreaming: false };
+        if ((id && m.clientId === id) || (m.claudeScopedStream && m.isStreaming)) {
+          return { ...m, isStreaming: false };
+        }
         if (m.role === 'ask_user' && m.askUserStatus === 'pending') {
           return { ...m, askUserStatus: 'expired' as const };
         }

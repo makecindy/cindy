@@ -344,7 +344,9 @@ it('makes completed plugin progress readable before the next event without flush
 // Unit, PR #12557: the stream writer must persist one plugin progress row at
 // the Claude tool boundary. The Codex test above covers whole-item snapshots;
 // Claude can stream two text blocks and then confirm each separately.
-it('persists Claude multi-block plugin progress once at the tool boundary', async () => {
+// #1743: a sibling child must keep its buffer and remain private while root
+// progress is committed by the root tool.
+it.each([false, true])('persists Claude multi-block plugin progress once (interleaved child: %s)', async (withChild) => {
   const { persistSessionStreamEventCore } = await import('../maker-ipc/sessionEventStreamCore.js');
   const persistence = await import('../messagePersistBroadcaster.desktop.js');
   type Args = Parameters<typeof persistSessionStreamEventCore>;
@@ -361,9 +363,13 @@ it('persists Claude multi-block plugin progress once at the tool boundary', asyn
       event, eventAgentMeta, groupLaneInputClientId: inputId,
     });
   const meta = { stopReason: 'tool_use', replyToClientId: inputId };
-  for (const text of ['First. ', 'Second.']) {
-    emit({ type: 'text', source: 'claude-code', data: { text, isFinal: false } }, null);
-  }
+  const childMeta = { ...meta, parentUuid: 'child-owner' };
+  const textEvent = (text: string, isFinal: boolean) => ({
+    type: 'text' as const, source: 'claude-code' as const, data: { text, isFinal },
+  });
+  emit(textEvent('First. ', false), null);
+  if (withChild) emit(textEvent('Child', false), childMeta);
+  emit(textEvent('Second.', false), null);
   for (const text of ['First. ', 'Second.']) {
     emit({ type: 'text', source: 'claude-code', data: { text, isFinal: true } }, meta);
   }
@@ -381,6 +387,27 @@ it('persists Claude multi-block plugin progress once at the tool boundary', asyn
       agentMeta: expect.objectContaining({ pluginProgressInputId: inputId }),
     }),
   ]);
+  if (withChild) {
+    emit(textEvent(' continuation.', false), childMeta);
+    emit(textEvent('Child continuation.', true), childMeta);
+    emit({ type: 'tool_use', source: 'claude-code', data: {
+      toolUseId: 'child-tool', toolName: 'Read', input: {},
+    } }, childMeta);
+    await drainPersistQueue();
+
+    const rows = vi.mocked(createMessage).mock.calls.map(([, row]) => row);
+    const assistant = rows.filter(row => row.role === 'assistant');
+    expect(assistant).toHaveLength(2);
+    expect(assistant[1]).toMatchObject({
+      content: 'Child continuation.',
+      agentMeta: { parentUuid: 'child-owner' },
+    });
+    expect(assistant[1]?.agentMeta).not.toHaveProperty('pluginProgressInputId');
+    const tools = rows.filter(row => row.role === 'tool_use');
+    expect(tools).toHaveLength(2);
+    expect(tools[0]?.agentMeta?.parentUuid).toBeUndefined();
+    expect(tools[1]?.agentMeta?.parentUuid).toBe('child-owner');
+  }
 });
 
 describe('Codex done completion boundary', () => {
@@ -3237,6 +3264,62 @@ describe('assistant isFinal burst DUP-SKIP(P1:main 对称去重,防重复 isFina
 });
 
 describe('stale-idle assistant late final identity', () => {
+  // #1743, unit. The SDK interleaves root deltas with child envelopes. Existing
+  // stale-idle coverage used one stream, so it missed a child rewriting the root row.
+  it('keeps local Claude text and late snapshots with their SDK parents', async () => {
+    const root = { requestId: 'msg_root' };
+    const child = { requestId: 'msg_child', parentUuid: 'toolu_child' };
+    const other = { requestId: 'msg_other', parentUuid: 'toolu_other' };
+    const delta = (text: string, meta: typeof root) =>
+      onAssistantTextEvent(SESSION, { text }, meta, 'turn', true);
+    const final = (text: string, meta: typeof root) =>
+      onAssistantTextEvent(SESSION, { text, isFinal: true }, meta, 'turn', true);
+
+    const rootId = delta('root draft', root);
+    const childId = final('child reply', child);
+    const otherId = delta('other draft', other);
+    sealAssistantBlockForLateFinal(SESSION);
+    resetTurnPersistState(SESSION);
+
+    expect(final('root draft complete', root)).toBe(rootId);
+    expect(final('other draft complete', other)).toBe(otherId);
+    await drainPersistQueue();
+    expect(final('root draft complete', root)).toBe(rootId);
+    expect(updateMessageContent).toHaveBeenCalledTimes(2);
+    expect(updateMessageContent).toHaveBeenCalledWith(
+      SESSION, rootId, 'root draft complete', undefined, expect.anything(),
+    );
+
+    noteTurnStarted(SESSION);
+    const next = { requestId: 'msg_next', uuid: 'next-assistant' };
+    const nextId = delta('root draft', next);
+    expect(nextId).not.toBe(rootId);
+    expect(final('root draft complete', next)).toBe(nextId);
+    flushAssistantBlock(SESSION);
+    await drainPersistQueue();
+    const rows = vi.mocked(createMessage).mock.calls.map(([, row]) => row);
+    expect(rows).toHaveLength(4);
+    expect(rows).toEqual(expect.arrayContaining([
+      expect.objectContaining({ clientId: rootId, content: 'root draft', agentMeta: root }),
+      expect.objectContaining({ clientId: childId, content: 'child reply', agentMeta: child }),
+      expect.objectContaining({ clientId: otherId, content: 'other draft', agentMeta: other }),
+      expect.objectContaining({ content: 'root draft complete', agentMeta: next }),
+    ]));
+  });
+
+  it('does not borrow a child parent for local Claude root text without SDK metadata', async () => {
+    const child = { requestId: 'msg_child', parentUuid: 'toolu_child' };
+    const rootId = onAssistantTextEvent(SESSION, { text: 'root draft' }, null, 'turn', true);
+    noteAgentMeta(SESSION, child);
+    flushAssistantBlock(SESSION, child, child.parentUuid);
+    expect(getSessionTextSnapshot(SESSION)?.persistId).toBe(rootId);
+    sealAssistantBlockForLateFinal(SESSION);
+    await drainPersistQueue();
+    expect(createMessage).toHaveBeenCalledWith(SESSION, expect.objectContaining({
+      clientId: rootId, content: 'root draft', agentMeta: null,
+    }), expect.anything());
+  });
+
   it('reuses the sealed row for the same SDK request after per-turn reset', async () => {
     const meta = { requestId: 'req-stale-idle', uuid: 'assistant-stale-idle' };
     const persistId = onAssistantTextEvent(
