@@ -205,7 +205,7 @@ describe.skipIf(!available)('remote agent with a real Codex', () => {
     }
   });
 
-  it('lists the Skills this computer manages, once each, and reads them from here', { timeout: 180_000 }, async () => {
+  it.each(['directory', 'symlink'])('lists and reads managed Skills with a project skill root that is a %s', { timeout: 180_000 }, async (layout) => {
     const skill = (dir: string, name: string, description: string) => {
       fs.mkdirSync(dir, { recursive: true });
       fs.writeFileSync(path.join(dir, 'SKILL.md'), `---\nname: ${name}\ndescription: ${description}\n---\n\n${description}-BODY\n`);
@@ -216,13 +216,18 @@ describe.skipIf(!available)('remote agent with a real Codex', () => {
     const ownLearn = skill(path.join(root, 'controller-builtin', 'learn'), 'learn', 'CONTROLLER-LEARN');
     // Agent 所在电脑自己装的同名 pr：共用的 CODEX_HOME 里有，对这个任务停用。
     const runnerPr = skill(path.join(root, 'runner-plugins', 'github', 'pr'), 'pr', 'RUNNER-PR');
-    const runnerHome = path.join(root, 'codex-home-managed-skills');
+    const runnerHome = path.join(root, `codex-home-managed-skills-${layout}`);
     fs.mkdirSync(path.join(runnerHome, 'skills'), { recursive: true });
     fs.symlinkSync(runnerPr, path.join(runnerHome, 'skills', 'cindy-cindy-plugin-cindy-github%3Apr'));
-    const project = path.join(root, 'project-managed-skills');
-    const hostRoot = path.join(root, 'host-managed-skills');
+    const project = path.join(root, `project-managed-skills-${layout}`);
+    const hostRoot = path.join(root, `host-managed-skills-${layout}`);
     // 项目自己的 Skill 照常列出。
-    skill(path.join(project, '.agents', 'skills', 'release-notes'), 'release-notes', 'PROJECT-SKILL');
+    const projectSkillRoot = layout === 'symlink' ? '.claude' : '.agents';
+    skill(path.join(project, projectSkillRoot, 'skills', 'release-notes'), 'release-notes', 'PROJECT-SKILL');
+    if (layout === 'symlink') {
+      fs.mkdirSync(path.join(project, '.agents'));
+      fs.symlinkSync('../.claude/skills', path.join(project, '.agents', 'skills'), 'dir');
+    }
     const deps = codexDeps(runnerHome);
     deps.getManagedSkills = async () => [{
       kind: 'agent-skill', name: 'pr', source: 'skill', scope: 'user', enabled: true,
@@ -237,17 +242,20 @@ describe.skipIf(!available)('remote agent with a real Codex', () => {
       isOwnerCurrent: () => true,
       runsRoot: hostRoot,
     });
-    // 模型照首轮清单里的位置读 pr 的 SKILL.md(命令在这台电脑执行)。
-    const skillFile = () => {
-      const roots = [...bodies[0].matchAll(/- `(r\d+)` = `([^`]+)`/g)].map((match) => ({ alias: match[1], dir: match[2] }));
-      const listed = /- pr: CONTROLLER-PR \(file: (r\d+)\/([^)]+)\)/.exec(bodies[0]);
-      const dir = roots.find((item) => item.alias === listed?.[1])?.dir;
-      return `cat '${dir}/${listed?.[2]}'`;
-    };
-    steps = [{ kind: 'exec', cmd: skillFile }];
+    // 模型照首轮清单里的位置逐条读 SKILL.md(命令在这台电脑执行)。
+    steps = (['pr', 'learn'] as const).map((name) => ({
+      kind: 'exec',
+      cmd: () => {
+        const first = bodies[0];
+        const listed = new RegExp(`- ${name}: CONTROLLER-${name.toUpperCase()} \\(file: (r\\d+)\\/([^)]+)\\)`).exec(first);
+        const dir = [...first.matchAll(/- `(r\d+)` = `([^`]+)`/g)].find((match) => match[1] === listed?.[1])?.[2];
+        return dir && listed ? `cat '${dir}/${listed[2]}'` : 'true';
+      },
+    }));
     bodies.length = 0;
+    // The fixture task explicitly grants access to its .claude directory before thread/start.
     const handle = await startRemoteAgentSession('codex', {
-      sessionId: 'codex-hosted-managed-skills', workingDir: project, model: 'gpt-5.5', permissionMode: 'default',
+      sessionId: `codex-hosted-managed-skills-${layout}`, workingDir: project, model: 'gpt-5.5', permissionMode: 'bypassPermissions',
     }, {
       invoke: async (args) => JSON.parse(JSON.stringify(await host.handle('controller-1', JSON.parse(JSON.stringify(args[0]))) ?? null)),
       rgPath: RG,
@@ -282,17 +290,18 @@ describe.skipIf(!available)('remote agent with a real Codex', () => {
 
     const first = bodies[0];
     const listed = first.slice(first.indexOf('### Available skills'), first.indexOf('### How to use skills'));
+    expect(listed).toContain('- release-notes: PROJECT-SKILL');
     expect((listed.match(/- pr: /g) ?? []).length).toBe(1);
     expect((listed.match(/- learn: /g) ?? []).length).toBe(1);
     expect(listed).toContain('- pr: CONTROLLER-PR');
     expect(listed).toContain('- learn: CONTROLLER-LEARN');
-    expect(listed).toContain('- release-notes: PROJECT-SKILL');
     expect(first).not.toContain('RUNNER-PR');
     // 清单里的位置在对方的影子目录里，不是这台电脑的路径。
     const managedRoot = /- `r\d+` = `([^`]+\/\.agents\/skills)`/.exec(first)?.[1] ?? '';
     expect(managedRoot.startsWith(hostRoot) || managedRoot.startsWith(fs.realpathSync(hostRoot))).toBe(true);
     // 读到的是这台电脑上 GitHub 插件的那份，读取不要本机确认。
     expect(bodies.at(-1)).toContain('CONTROLLER-PR-BODY');
+    expect(bodies.at(-1)).toContain('CONTROLLER-LEARN-BODY');
     expect(asked).toEqual([]);
   });
 
