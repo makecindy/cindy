@@ -1,0 +1,48 @@
+.plugin-publish-list {
+  container: plugin-publish-list / inline-size;
+}
+
+.plugin-publish-list-row {
+  grid-template-columns: var(--space-12) minmax(0, 1fr) 148px var(--space-4);
+  column-gap: var(--space-4);
+}
+
+.plugin-publish-list-info {
+  padding-inline-end: var(--space-4);
+}
+
+.plugin-publish-list-revision-meta {
+  padding-inline-start: calc(var(--space-4) + var(--space-1_5));
+}
+
+@container plugin-publish-list (width < 640px) {
+  .plugin-publish-list-row {
+    grid-template-columns: var(--space-12) minmax(0, 1fr) var(--space-4);
+    column-gap: var(--space-3_5);
+  }
+
+  .plugin-publish-list-icon {
+    align-self: start;
+  }
+
+  .plugin-publish-list-info {
+    padding-inline-end: 0;
+  }
+
+  .plugin-publish-list-revision {
+    grid-area: 2 / 2;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    column-gap: var(--space-2_5);
+    margin-block-start: var(--space-1);
+  }
+
+  .plugin-publish-list-revision-meta {
+    padding-inline-start: 0;
+  }
+
+  .plugin-publish-list-chevron {
+    grid-area: 1 / 3 / span 2;
+  }
+}

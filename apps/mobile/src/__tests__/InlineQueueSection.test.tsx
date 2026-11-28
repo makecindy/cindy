@@ -161,3 +161,39 @@ it('counts down the executing host’s Gemini retry and offers cancellation', as
     expect(host.textContent).not.toContain('chat.geminiRateLimit.retryIn');
   } finally { vi.useRealTimers(); }
 });
+
+it('shows the steer-unsupported notice only while running with queued items and not paused or aborting', async () => {
+  const base = {
+    sessionId: 's1',
+    pendingQueue: [{ clientId: 'q1' }],
+    steerUnsupported: true,
+    steeringQueueClientIds: [],
+    queuePaused: false,
+    queueExpanded: false,
+    queueInteractionLocks: [],
+    queueEditLocks: [],
+    queueAbortPending: false,
+    error: null,
+    errorRetryText: null,
+    credentialSwitchWait: null,
+  } as unknown as InputProjection;
+  const notice = () => host.querySelector('[data-testid="queue.inline.steerUnsupportedNotice"]');
+
+  await show({ projection: base, isRunning: true });
+  expect(notice()?.textContent).toBe('message.queue.steerUnsupportedNotice');
+
+  await show({ projection: base, isRunning: false });
+  expect(notice()).toBeNull();
+
+  await show({ projection: { ...base, pendingQueue: [] }, isRunning: true });
+  expect(notice()).toBeNull();
+
+  await show({ projection: { ...base, queuePaused: true }, isRunning: true });
+  expect(notice()).toBeNull();
+
+  await show({ projection: { ...base, queueAbortPending: true }, isRunning: true });
+  expect(notice()).toBeNull();
+
+  await show({ projection: { ...base, steerUnsupported: false }, isRunning: true });
+  expect(notice()).toBeNull();
+});

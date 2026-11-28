@@ -15,18 +15,11 @@ import { createHash } from 'node:crypto';
 import { constants as fsConstants, promises as fs } from 'node:fs';
 import path from 'node:path';
 
-import { BrowserWindow } from 'electron';
-
-import { getActiveDataOwnerPushStamp } from '../appSessionState.js';
-import { getDbPathForUser } from '../localDb/index.js';
-import { getCurrentDbClientUserId } from '../localDb/client/current.js';
 import { MEMORY_STORAGE_MIGRATION_RECEIPT, parseFilename } from '@cindy/maker-core';
 import { createSnapshotDetailed } from '../git-snapshot/gitSnapshotService.js';
 import { listProjectAliases, upsertProjectAlias } from '../localDb/ipc/projectAliases.js';
-import { normalizeRecentWorkdirPath, upsertRecentWorkdir } from '../localDb/ipc/recentWorkdirs.js';
+import { normalizeRecentWorkdirPath } from '../localDb/ipc/recentWorkdirs.js';
 import { createLogger } from '../logger.js';
-import { isTrustedAppRendererWindow } from '../security/trustedAppRenderer.js';
-import { restoreLocalProjectVisibility } from '../sidebarSettingsStore.js';
 import { gitExec, GitExecError } from '../worktree/gitExec.js';
 import { detectCwd } from '../worktree/WorktreeManager.js';
 import { botProfileDir, botProfileMemoryDir, ensureBotWorkspaceDir } from './botProfileFolder.js';
@@ -40,7 +33,6 @@ import {
 import { BOT_PROJECT_GITIGNORE, ensureTeammateProjectIgnored, isTeammateProjectIgnoreReady } from './botProjectGitignore.js';
 import { setBotProjectSkillsDir } from './botSkillStore.js';
 import { TEAMMATE_TEMPLATE_VERSION, applyTeammateTemplate, type ReadPreviousTemplate } from './botProjectTemplate.js';
-import { ensureMemoryReviewHook, MEMORY_REVIEW_HOOK_COMMAND, LEGACY_MEMORY_REVIEW_HOOK_COMMAND } from './botProjectMemoryReview.js';
 import type { ProjectScheduleConfig } from '../scheduler-host/project-automation-loader.js';
 import type { BotModelRoute } from '../../shared/botModelChain.js';
 import type { BotProjectRepositoryStatus } from '../../shared/botProjectMode.js';
@@ -392,28 +384,10 @@ async function createInitialWorkspaceSnapshot(workspace: string): Promise<void> 
   if (!snapshot.commit) throw new Error('Buddy initial version was not created');
 }
 
-function broadcastProjectRegistered(workingDir: string): void {
-  const owner = getActiveDataOwnerPushStamp();
-  for (const window of BrowserWindow.getAllWindows()) {
-    if (!isTrustedAppRendererWindow(window)) continue;
-    try {
-      window.webContents.send('local-db:recent-workdirs:changed', { path: workingDir }, owner);
-    } catch (error) {
-      log.warn('teammate project registered but window refresh failed', { error: String(error) });
-    }
-  }
-}
-
-/** The project's own nightly review: an ordinary project automation, not a host job. */
+/** Legacy per-teammate nightly review ID (retired in favor of unified Global Memory Tidy). */
 export const BOT_PROJECT_MEMORY_REVIEW_ID = 'teammate-memory-review';
 
 const MEMORY_REVIEW_INSTRUCTIONS = `. Keep only durable, useful knowledge in this project's memory and reusable, proven procedures in its skills. Search existing files first: update a related record or skill instead of adding a duplicate. Review related existing material for duplication, contradictions, obsolete status and unnecessary detail; keep concise facts and actionable steps, not conversation logs or one-off task progress. Preserve the owner's rules and intent. Before merging or removing content, verify the evidence and keep a recoverable copy or a targeted Git commit; leave uncertain items intact. Read .cindy/memory/README.md before memory maintenance. Skills live in .agents/skills; keep SKILL.md focused and move detailed examples to on-demand references when useful. Do not invent a skill just because a review ran. If no meaningful improvement is justified, finish quietly.`;
-/** Exactly the supplied prompt from before its check counted since the last review. Any edit,
- * including the review's scope or a name from before a rename, keeps the owner's text. */
-function isLastDayReviewPrompt(prompt: string | undefined, input: { botId: string; displayName: string }): boolean {
-  const name = input.displayName.trim() || input.botId;
-  return prompt === `Review ${name}'s conversations from the last day (teammate id ${input.botId})${MEMORY_REVIEW_INSTRUCTIONS}`;
-}
 
 /** Default Bot tasks inherit at creation; their definitions never contain a model snapshot. */
 export type BotDefaultProjectSchedule = Omit<ProjectScheduleConfig,
@@ -450,46 +424,20 @@ export function botProjectMemoryReview(input: {
   };
 }
 
-/** Upgrade only the supplied old prompt; preserve edits, schedule/model choices and removal. */
-export async function ensureBotProjectAutomations(input: {
+/**
+ * Retired: Cindy no longer installs one daily `teammate-memory-review` automation per teammate.
+ * Memory and skill maintenance is handled by the unified, cadence-controlled Global Memory Tidy
+ * (`globalMemoryTidy.ts`), and untouched legacy per-teammate reviews are cleaned up on startup by
+ * `retireLegacyTeammateMemoryReviews` (`botMemoryTidyMigration.ts`).
+ */
+export async function ensureBotProjectAutomations(_input: {
   botId: string;
   displayName: string;
   workingDir: string;
   route?: BotModelRoute | null;
-  /** Receipt path: do not resurrect a review removed after the initial V2 upgrade. */
   addMissing?: boolean;
 }): Promise<boolean> {
-  // Loaded on use: the scheduler host is not part of the teammate profile store's import graph.
-  const [{ getProjectAutomationLoader }, { t }] = await Promise.all([
-    import('../scheduler-host/index.desktop.js'), import('../i18n.desktop.js'),
-  ]);
-  const loader = getProjectAutomationLoader();
-  const existing = await loader.loadProjectSchedules(input.workingDir);
-  const current = existing?.find((config) => config.id === BOT_PROJECT_MEMORY_REVIEW_ID);
-  if (!current && input.addMissing === false) return false;
-  const suppliedHook = current?.preRunHook?.command === MEMORY_REVIEW_HOOK_COMMAND;
-  const legacyHook = current?.preRunHook?.command === LEGACY_MEMORY_REVIEW_HOOK_COMMAND;
-  if (current && !suppliedHook && !legacyHook && (current.preRunHook || !current.prompt?.startsWith('Look back at ')
-    || !current.prompt.endsWith(`'s conversations from the last day (teammate id ${input.botId}) and keep what is worth remembering in this project's memory and skills. If nothing new is worth keeping, finish quietly.`))) return false;
-  const userId = getCurrentDbClientUserId();
-  if (!userId) throw new Error('Memory review requires the active account database');
-  const databasePath = getDbPathForUser(userId);
-  const { bundledCheck, ...preRunHook } = await ensureMemoryReviewHook({ ...input, databasePath, previousCommand: current?.preRunHook?.command });
-  // The supplied check now counts since the last review; its untouched last-day prompt follows.
-  const upgradePrompt = bundledCheck && isLastDayReviewPrompt(current?.prompt, input);
-  if ((suppliedHook || (legacyHook && preRunHook.command === current?.preRunHook?.command)) && !upgradePrompt) return false;
-  // An existing file that cannot be read whole is kept: the upgrade fails and retries next start.
-  const defaults = botProjectMemoryReview({
-    ...input,
-    timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC',
-    title: t('bots.homeFolder.projectMode.memoryReviewName'),
-  });
-  await loader.upsertSchedule(input.workingDir, {
-    ...createBotDefaultProjectSchedule(defaults, current),
-    prompt: legacyHook && !upgradePrompt ? current!.prompt : defaults.prompt,
-    preRunHook: { ...preRunHook, ...current?.preRunHook, command: preRunHook.command },
-  }, { keepUnreadable: true });
-  return true;
+  return false;
 }
 
 /** Turning project mode off removes the project's memory review. */
@@ -550,17 +498,14 @@ export async function prepareBotProjectWorkspace(input: {
     log.warn('teammate project repository setup failed', { botId: input.botId, error: String(error) });
     repository = 'failed';
   }
+  // Do not register empty teammate workspaces in `recentWorkdirs`: they stay managed under the
+  // teammate itself rather than appearing as extra project folders in the sidebar/pickers.
+  // Still record the standard display alias so if the user ever opens it explicitly, it reads nicely.
   const projectDir = normalizeRecentWorkdirPath(workspace);
-  const registered = projectDir ? await upsertRecentWorkdir(projectDir) : false;
-  if (projectDir && registered) {
-    const owner = getActiveDataOwnerPushStamp();
-    await restoreLocalProjectVisibility(projectDir, owner).catch((error) => {
-      log.warn('teammate project visibility restore failed', { botId: input.botId, error: String(error) });
-    });
+  if (projectDir) {
     await nameBotProject(input.botId, projectDir, input.displayName);
-    broadcastProjectRegistered(projectDir);
   }
-  return { workingDir: workspace, repository, registered, memoriesCopied, skillsCopied: skills.copied, skippedSkillLinks: skills.skippedLinks };
+  return { workingDir: workspace, repository, registered: false, memoriesCopied, skillsCopied: skills.copied, skippedSkillLinks: skills.skippedLinks };
 }
 
 /** One recognisable name for every teammate project, so it never reads like a same-named repo. */

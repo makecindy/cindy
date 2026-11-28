@@ -361,6 +361,93 @@ it.each(['fresh', 'offline', 'other-source', 'legacy', 'checkout-fails'] as cons
   30_000,
 );
 
+// 测试价值
+// - 生产入口与可观察结果：真实 Git 仓库下 createWorktree({ trackBackgroundCheckout: true }) +
+//   AcpAgent.startSession(session/new) + ensureBackgroundCheckoutReady + session.send(session/prompt)；
+//   验证本机 ACP 可在后台 full checkout 期间提前启动，并在首轮 prompt 前等到完整树落盘。
+// - 规则依据：#11956 叠加本机 ACP 延迟全量检出到 session/prompt 前。
+// - 现有覆盖缺口：上方用例走 awaitFullCheckout: true，未覆盖 trackBackgroundCheckout + ensureBackgroundCheckoutReady。
+// - 最小失败输入：仅通过 stageCheckout 创建 worktree 后，若不在 prompt 前等 ensureBackgroundCheckoutReady，
+//   或后台检出失败被吞掉，则 marker.txt 读取会缺文件或静默失败。
+// - tier：git-integration（真实 Git 仓库与 AcpAgent 传输层）。
+it('defers local ACP full checkout until ensureBackgroundCheckoutReady before session/prompt', async () => {
+  fixture = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-acp-deferred-wt-'));
+  vi.spyOn(app, 'getPath').mockReturnValue(fixture);
+  const repo = path.join(fixture, 'repo');
+  await fs.mkdir(repo);
+  const git = async (cwd: string, ...args: string[]) =>
+    (await exec('git', args, { cwd, windowsHide: true })).stdout.trim();
+  await git(repo, 'init', '-b', 'main');
+  await git(repo, 'config', 'user.name', 'Test');
+  await git(repo, 'config', 'user.email', 'test@example.com');
+  await fs.writeFile(path.join(repo, 'AGENTS.md'), '# rules\n');
+  await fs.writeFile(path.join(repo, 'marker.txt'), 'deferred full checkout content');
+  await git(repo, 'add', 'AGENTS.md', 'marker.txt');
+  await git(repo, 'commit', '-m', 'init');
+
+  const { createWorktree, ensureBackgroundCheckoutReady } = await import('../worktree/WorktreeManager');
+  const created = await createWorktree(
+    { sessionId: 'local-acp-deferred', baseRepo: repo, name: 'local-acp', sourceBranch: 'main' },
+    { trackBackgroundCheckout: true },
+  );
+  expect(created.ok).toBe(true);
+  if (!created.ok) return;
+  // Startup instruction file is checked out synchronously during stageCheckout.
+  expect(await fs.readFile(path.join(created.meta.path, 'AGENTS.md'), 'utf8')).toBe('# rules\n');
+
+  const read = Promise.withResolvers<string>();
+  const logger: Logger = {
+    trace() {}, debug() {}, info() {}, warn() {}, error() {}, fatal() {}, child: () => logger,
+  };
+  let onLine: ((line: string) => void) | undefined;
+  let pluginCwd = '';
+  const transport: AcpLineTransport = {
+    write(line) {
+      const { id, method, params } = JSON.parse(line);
+      const reply = (result: object) => queueMicrotask(() => {
+        onLine?.(JSON.stringify({ jsonrpc: '2.0', id, result }));
+      });
+      if (method === 'initialize') reply({ protocolVersion: 1, agentCapabilities: {}, authMethods: [] });
+      if (method === 'session/new') {
+        pluginCwd = params.cwd;
+        reply({ sessionId: 'deferred-fixture-session' });
+      }
+      if (method === 'session/prompt') {
+        void fs.readFile(path.join(pluginCwd, 'marker.txt'), 'utf8').then((content) => {
+          read.resolve(content);
+          reply({ stopReason: 'end_turn' });
+        }, read.reject);
+      }
+    },
+    onLine(listener) {
+      onLine = listener;
+      return () => { onLine = undefined; };
+    },
+    onClose: () => () => {},
+    close: async () => {},
+  };
+  const agent = new AcpAgent({
+    auth: {
+      getState: async () => ({ authenticated: true }),
+      triggerLogin: async () => ({ authenticated: true }),
+      logout: async () => {},
+      getAuthEnv: async () => ({}),
+    },
+    binaryPath: '', runtimeConfig: {}, logger, clientInfo: { name: 'fixture', version: '1' },
+    endpoints: { connect: async () => transport },
+  });
+  const session = await agent.startSession({
+    workingDir: created.meta.path, providerId: 'acp-plugin:fixture:marker', model: '',
+  });
+  try {
+    await ensureBackgroundCheckoutReady('local-acp-deferred');
+    await session.send({ type: 'user', content: 'Read marker.txt' });
+    await expect(read.promise).resolves.toBe('deferred full checkout content');
+  } finally {
+    await session.close();
+  }
+}, 30_000);
+
 // Orca Workers based on the origin default used to skip the refresh, so whole
 // batches started behind main. Tool calls name it as `origin/main`, which the
 // Desktop-only refresh did not recognize. Minimal failure: the remote advances

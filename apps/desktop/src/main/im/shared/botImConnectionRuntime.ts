@@ -67,6 +67,7 @@ import {
 import { companionConnectionRouteKeyPrefix } from './imBotBindingRoute';
 import { archiveBotImConnectionLane, listBotImConnectionLanes, resetBotImConnectionLane } from './botImLaneRuntime';
 import type { ImOrchestrator } from './orchestrator';
+import { readPersonalChannelChoice } from './personalChannelStore';
 
 const log = createLogger('im:bot-connections');
 
@@ -96,6 +97,8 @@ export interface BotImConnectionRuntimeDeps {
   settingsIdentity(): BotImSettingsIdentity;
   /** 这个机器人进过的群(群窗口表里出现过的 chat); 没有群参与模式的渠道返回空。 */
   listKnownGroups(record: BotImConnectionRecord): Promise<Array<{ chatId: string; chatName: string | null }>>;
+  /** 设置页那份个人飞书机器人(通过「谁来回复」交给伙伴时供该伙伴主对话出站使用)。 */
+  personalFeishuIm?: () => FeishuIM | null;
 }
 
 interface LiveInstance {
@@ -360,6 +363,14 @@ export function getBotFeishuTransport(botId: string, ownerOpenId?: string): Feis
     // through a different owner's connection after a disconnect/reconfiguration.
     if (ownerOpenId && owner !== ownerOpenId) continue;
     return im;
+  }
+  // 设置 → IM 机器人 → 飞书 里通过「谁来回复」交给这位伙伴的个人飞书机器人。
+  if (readPersonalChannelChoice('feishu').companionBotId === botId) {
+    const im = deps?.personalFeishuIm?.() ?? null;
+    const owner = im?.getOwnerOpenId();
+    if (im && im.getStatus().kind === 'connected' && owner && (!ownerOpenId || owner === ownerOpenId)) {
+      return im;
+    }
   }
   return null;
 }
@@ -883,17 +894,21 @@ export async function removeBotImConnection(id: string): Promise<BotImConnection
 export async function setWechatCompanionBinding(
   botId: string | null,
   apply: (commit: () => void) => Promise<void>,
+  options?: { allowReassign?: boolean },
 ): Promise<void> {
+  const allowReassign = options?.allowReassign === true;
   const run = async () => {
     if (botId) {
       if (await readBotProfileStatus(botId) !== 'active') throw new Error('BOT_INACTIVE');
       const current = readWechatChannelSettings().companionBotId;
-      if (current && current !== botId) throw new Error('WECHAT_COMPANION_IN_USE');
+      if (!allowReassign && current && current !== botId) throw new Error('WECHAT_COMPANION_IN_USE');
     }
     await apply(() => { writeWechatCompanionBinding(botId); });
   };
   // Match deletion lock order: profile first, then the WeChat transport lifecycle.
-  await withBotProfileLocks(botId ? [botId] : [], run);
+  const current = allowReassign ? readWechatChannelSettings().companionBotId : undefined;
+  const lockIds = [...new Set([botId, current].filter((id): id is string => Boolean(id)))].sort();
+  await withBotProfileLocks(lockIds, run);
 }
 
 /** 伙伴被删除 / 归档时带走它的全部连接。 */

@@ -11,7 +11,6 @@ import type { Capabilities, CapabilityStatus, EffortDescriptor, ModelDescriptor,
 import type { Effort, PermissionMode } from '../../types/common.js';
 import type { AcpConfigOption, AcpInitializeResult } from './protocol.js';
 
-const NOT_IMPLEMENTED: CapabilityStatus = { supported: false, reason: 'not-implemented' };
 const SDK_MISSING: CapabilityStatus = { supported: false, reason: 'sdk-missing', upstreamRef: 'Agent Client Protocol v1' };
 const SUPPORTED: CapabilityStatus = { supported: true };
 
@@ -25,7 +24,7 @@ const MAPPABLE_EFFORTS: readonly Effort[] = ['minimal', 'low', 'medium', 'high',
 export const ACP_PERMISSION_MODES: readonly PermissionModeDescriptor[] = [
   {
     id: 'ask',
-    displayName: 'Ask each time',
+    displayName: 'Default permissions',
     description: 'Every permission request from the agent is shown to you for a decision.',
   },
   {
@@ -147,6 +146,8 @@ export function buildAcpCapabilities(init: AcpInitializeResult, options: readonl
   const modelOption = findModelOption(options);
   const effortLevels: EffortDescriptor[] = mapEffortValues(findEffortOption(options))
     .map((mapped) => ({ id: mapped.effort, displayName: mapped.name }));
+  const permissionModes = acpPermissionModes(options);
+  const hasPlanMode = permissionModes.some((mode) => mode.id === 'plan');
   const { promptCapabilities } = init.agentCapabilities;
   return {
     switchModel: modelOption && modelOption.options.length > 0 ? SUPPORTED : SDK_MISSING,
@@ -155,9 +156,9 @@ export function buildAcpCapabilities(init: AcpInitializeResult, options: readonl
     effort: effortLevels.length > 0 ? SUPPORTED : SDK_MISSING,
     effortLevels,
     reasoningDisplay: ['full'],
-    permissionModes: acpPermissionModes(options),
+    permissionModes,
     setPermissionModeMidSession: SUPPORTED,
-    planMode: SDK_MISSING,
+    planMode: hasPlanMode ? SUPPORTED : SDK_MISSING,
     multimodal: {
       text: SUPPORTED,
       // Without image support the attachment is still passed as a resource link.
@@ -173,9 +174,15 @@ export function buildAcpCapabilities(init: AcpInitializeResult, options: readonl
     // `_session/steering` extension take input into the running turn.
     sameTurnSteer: init.steering ? SUPPORTED : SDK_MISSING,
     memory: { supported: SDK_MISSING },
-    extraDirs: NOT_IMPLEMENTED,
-    writableDirs: NOT_IMPLEMENTED,
+    extraDirs: SUPPORTED,
+    writableDirs: SUPPORTED,
     sessionHtmlExport: SDK_MISSING,
     manualCompact: SDK_MISSING,
+    // Host turn policies (IM groups, personal WeChat) need an agent that asks before every tool
+    // call of such a turn (`_meta.permissionGate`). Full access would approve those requests.
+    turnPermissionPolicy: {
+      supported: init.permissionGate ? SUPPORTED : SDK_MISSING,
+      unsupportedPermissionModes: ['bypassPermissions'],
+    },
   };
 }

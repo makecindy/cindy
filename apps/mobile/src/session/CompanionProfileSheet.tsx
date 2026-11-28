@@ -580,7 +580,7 @@ function CompanionCreateSheetContent({ visible, onClose, onClosed, deviceId, dev
       setBusy(false);
     }
   };
-  const models = supportsModel ? <CompanionModelChain single deviceId={deviceId} values={modelValues}
+  const models = supportsModel ? <CompanionModelChain deviceId={deviceId} values={modelValues}
     disabled={busy || !online || unconfirmed} onChange={next => { if (!unconfirmed) setModelValues(next); }}
     onPick={() => setModelStage('closing-form')} modelGroups={data?.panels[0]?.modelGroups} /> : null;
   const modelPicker = <CompanionModelPicker visible={visible && modelStage === 'picker'} deviceId={deviceId} route={modelChain[0]}

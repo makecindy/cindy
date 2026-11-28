@@ -25,6 +25,7 @@
  */
 
 import { createHash } from 'node:crypto';
+import { posix } from 'node:path';
 import { StringDecoder } from 'node:string_decoder';
 
 import { redactSensitiveText } from '@cindy/maker-shared/error-redaction';
@@ -127,6 +128,24 @@ export async function resolveRemotePiBinaryPath(host: RemoteHost): Promise<strin
   return probe.binaryPath;
 }
 
+const REMOTE_STAT_REASONS = new Map([
+  ['EACCES', 'permission denied'],
+  ['EPERM', 'operation not permitted'],
+  ['ENOTDIR', 'a path component is not a directory'],
+  ['ELOOP', 'too many symbolic links'],
+  ['ENAMETOOLONG', 'file name too long'],
+  ['EIO', 'file system input/output error'],
+  ['ESTALE', 'stale file handle'],
+  ['STAT_NOT_FOUND', 'stat is not available on the remote PATH'],
+  ['STAT_PROBE_FAILED', 'neither GNU nor BSD stat options worked on the remote root'],
+  ['STAT_UNKNOWN', 'unrecognized stat error'],
+]);
+
+// A path component can contain private data, including the final filename.
+const REMOTE_STAT_TARGET_NAMES = new Set([
+  'AGENTS.override.md', 'AGENTS.md', 'AGENTS.MD', 'CLAUDE.md', 'CLAUDE.MD', 'SKILL.md', '.git',
+]);
+
 /**
  * 远端 pi agentHome 文件操作原语(host 侧 SSH 实现)。
  *
@@ -147,6 +166,63 @@ export function createRemotePiFileOps(remoteHost: RemoteHost): PiRemoteFileOps {
     }
     return result.stdout;
   }
+
+  async function inspectPath(file: string, operation: 'stat' | 'lstat') {
+    // First launch cannot assume Node is installed, and shell -f/-e can't
+    // distinguish a missing path from one that can't be searched.
+    const follow = operation === 'stat' ? '-L ' : '';
+    const script = `
+P=${shellQuote(file)}
+case "$P" in '$HOME'/*) H=$(printf '%s' "$HOME"); [ "\${P#\\\$HOME}" != "$P" ] && P="\${H}\${P#\\\$HOME}";; esac
+fail() { printf '%s' "$1" >&2; exit 1; }
+command -v stat >/dev/null 2>&1 || fail STAT_NOT_FOUND
+if LC_ALL=C stat ${follow}-c '%F' -- / >/dev/null 2>&1; then
+  set -- -c '%F'
+else
+  set -- -f '%HT'
+fi
+if RESULT=$(LC_ALL=C stat ${follow}"$@" -- "$P" 2>&1); then
+  case "$RESULT" in
+    'regular file'|'regular empty file'|'Regular File') printf 'FILE\\n' ;;
+    'symbolic link'|'Symbolic Link') printf 'SYMLINK\\n' ;;
+    *) printf 'OTHER\\n' ;;
+  esac
+else
+  case "$RESULT" in
+    *': No such file or directory') printf 'MISSING\\n' ;;
+    *': Permission denied') fail EACCES ;;
+    *': Operation not permitted') fail EPERM ;;
+    *': Not a directory') fail ENOTDIR ;;
+    *': Too many levels of symbolic links') fail ELOOP ;;
+    *': File name too long') fail ENAMETOOLONG ;;
+    *': Input/output error') fail EIO ;;
+    *': Stale file handle'|*': Stale NFS file handle') fail ESTALE ;;
+    *)
+      LC_ALL=C stat ${follow}"$@" -- / >/dev/null 2>&1 || fail STAT_PROBE_FAILED
+      fail STAT_UNKNOWN
+      ;;
+  esac
+fi
+`;
+    const result = await remoteHost.exec(`bash -c ${shellQuote(script)}`, {
+      timeoutMs: 10_000,
+      label: `pi-remote-${operation}`,
+    });
+    if (result.exitCode !== 0) {
+      // The remote host may write arbitrary text to stderr. Only expose the
+      // diagnostics we explicitly recognize, along with a safe target name.
+      const code = result.stderr.trim();
+      const reason = REMOTE_STAT_REASONS.get(code);
+      const name = posix.basename(file);
+      const target = REMOTE_STAT_TARGET_NAMES.has(name) ? name : 'a remote path';
+      const detail = reason ? `: ${code} (${reason})` : '';
+      throw new Error(`remote ${operation} failed (exit ${result.exitCode})${detail} while checking ${target}`);
+    }
+    const kind = result.stdout.trim();
+    if (kind === 'FILE' || kind === 'OTHER' || kind === 'SYMLINK' || kind === 'MISSING') return kind;
+    throw new Error(`remote ${operation} returned an invalid response`);
+  }
+
   return {
     async mkdirp(dir: string): Promise<void> {
       // 轮 22 CRITICAL:远端 agentHome 是字面 $HOME/... —— 必须用**远端** HOME
@@ -191,90 +267,16 @@ export function createRemotePiFileOps(remoteHost: RemoteHost): PiRemoteFileOps {
     },
 
     async stat(file: string): Promise<{ isFile: boolean } | null> {
-      // Shell -f/-e cannot distinguish ENOENT from an unsearchable parent.
-      // Bootstrap can reach this before bundled Node is installed. Use the
-      // platform stat utility (GNU/Linux or BSD/macOS), with C-locale errno
-      // suffixes, and only treat an explicit ENOENT diagnostic as missing.
-      // 轮 43 P1(codex-connector):eval 换 H=$(printf) + 参数替换, 无注入风险。
-      const script = `
-P=${shellQuote(file)}
-case "$P" in '$HOME'/*) H=$(printf '%s' "$HOME"); [ "\${P#\\\$HOME}" != "$P" ] && P="\${H}\${P#\\\$HOME}";; esac
-if stat -c '%F' / >/dev/null 2>&1; then
-  RESULT=$(LC_ALL=C stat -L -c '%F' -- "$P" 2>&1)
-else
-  RESULT=$(LC_ALL=C stat -L -f '%HT' -- "$P" 2>&1)
-fi
-STATUS=$?
-if [ "$STATUS" -ne 0 ]; then
-  case "$RESULT" in
-    *': No such file or directory') printf 'MISSING\\n' ;;
-    *': Permission denied') printf 'EACCES' >&2; exit 1 ;;
-    *) exit 1 ;;
-  esac
-else
-  case "$RESULT" in
-    'regular file'|'regular empty file'|'Regular File') printf 'FILE\\n' ;;
-    # BSD stat -L falls back to lstat only when the link target is missing.
-    'Symbolic Link') printf 'MISSING\\n' ;;
-    *) printf 'DIR\\n' ;;
-  esac
-fi
-`;
-      const result = await remoteHost.exec(`bash -c ${shellQuote(script)}`, {
-        timeoutMs: 10_000,
-        label: 'pi-remote-stat',
-      });
-      if (result.exitCode !== 0) {
-        const code = result.stderr.trim();
-        const reason = /^E[A-Z0-9]+$/.test(code) ? `: ${code}` : '';
-        throw new Error(`remote stat failed (exit ${result.exitCode})${reason}`);
-      }
-      const kind = result.stdout.trim();
-      if (kind === 'FILE') return { isFile: true };
-      if (kind === 'DIR') return { isFile: false };
-      if (kind === 'MISSING') return null;
-      throw new Error('remote stat returned an invalid response');
+      const kind = await inspectPath(file, 'stat');
+      // BSD stat -L falls back to lstat when the link target is missing.
+      if (kind === 'MISSING' || kind === 'SYMLINK') return null;
+      return { isFile: kind === 'FILE' };
     },
 
     async lstat(file: string): Promise<{ isSymbolicLink: boolean } | null> {
-      // No `-L`: the only question is whether the namespace entry itself is a
-      // link, so a broken link still reports `symbolic link` instead of ENOENT.
-      const script = `
-P=${shellQuote(file)}
-case "$P" in '$HOME'/*) H=$(printf '%s' "$HOME"); [ "\${P#\\$HOME}" != "$P" ] && P="\${H}\${P#\\$HOME}";; esac
-if stat -c '%F' / >/dev/null 2>&1; then
-  RESULT=$(LC_ALL=C stat -c '%F' -- "$P" 2>&1)
-else
-  RESULT=$(LC_ALL=C stat -f '%HT' -- "$P" 2>&1)
-fi
-STATUS=$?
-if [ "$STATUS" -ne 0 ]; then
-  case "$RESULT" in
-    *': No such file or directory') printf 'MISSING\\n' ;;
-    *': Permission denied') printf 'EACCES' >&2; exit 1 ;;
-    *) exit 1 ;;
-  esac
-else
-  case "$RESULT" in
-    'symbolic link'|'Symbolic Link') printf 'SYMLINK\\n' ;;
-    *) printf 'OTHER\\n' ;;
-  esac
-fi
-`;
-      const result = await remoteHost.exec(`bash -c ${shellQuote(script)}`, {
-        timeoutMs: 10_000,
-        label: 'pi-remote-lstat',
-      });
-      if (result.exitCode !== 0) {
-        const code = result.stderr.trim();
-        const reason = /^E[A-Z0-9]+$/.test(code) ? `: ${code}` : '';
-        throw new Error(`remote lstat failed (exit ${result.exitCode})${reason}`);
-      }
-      const kind = result.stdout.trim();
-      if (kind === 'SYMLINK') return { isSymbolicLink: true };
-      if (kind === 'OTHER') return { isSymbolicLink: false };
+      const kind = await inspectPath(file, 'lstat');
       if (kind === 'MISSING') return null;
-      throw new Error('remote lstat returned an invalid response');
+      return { isSymbolicLink: kind === 'SYMLINK' };
     },
 
     readFile: (file, maxBytes = 1_048_576) => readBounded(file, maxBytes, false),

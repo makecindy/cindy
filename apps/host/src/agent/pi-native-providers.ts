@@ -39,6 +39,7 @@ export async function hostManagedLocalModelNotReady(input: { providerId: string;
 export function createHostPiNativeProviders(options: {
   userDataDir: string;
   piBinaryPath: string | null;
+  getCatalog: PiNativeProviderPorts['getCatalog'];
   /** Endpoint snapshot; the resolver checks readiness before using it for local proxy routes. */
   endpoint: () => string;
   claudeProxy: { isReady(): boolean; ready?(): Promise<void> } | null | undefined;
@@ -56,6 +57,7 @@ export function createHostPiNativeProviders(options: {
 }) {
   const config = options.providerConfig;
   const resolver = createPiNativeProviderResolver({
+    getCatalog: () => options.getCatalog(),
     getClaudeEndpoint: () => options.endpoint(),
     isAnthropicCompatProxyHandleReady: () => options.claudeProxy?.isReady() ?? false,
     ensureAnthropicCompatProxyReady: () => options.claudeProxy?.ready?.() ?? Promise.resolve(),

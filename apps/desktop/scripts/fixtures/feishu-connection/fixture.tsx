@@ -1,8 +1,10 @@
-import { FeishuBotSection } from '../../../src/renderer/components/settings/FeishuBotSection';
+import { FeishuBotSettings } from '../../../src/renderer/components/settings/FeishuBotSection';
+import { ConfirmDialogProvider } from '../../../src/renderer/components/ui/confirm-dialog-provider';
 import { mountPage, subscription, forbid } from '../../ui-page/harness';
 
 // Exercise the real hook, host subscriptions and connection card without a live bot.
 void mountPage({
+  route: '/settings?tab=im-bot',
   host: (ctx) => ({
     maker: {
       imDefaultSettingsGet: async () => ({
@@ -28,8 +30,11 @@ void mountPage({
     },
   }),
   render: () => (
-    <div className="min-h-screen bg-[var(--surface)] p-4 text-[var(--text-primary)]">
-      <FeishuBotSection expanded onToggle={() => {}} />
-    </div>
+    <ConfirmDialogProvider>
+      <div className="min-h-screen bg-[var(--surface)] p-4 text-[var(--text-primary)]">
+        {/* 设置 → IM 机器人 → 飞书 子页里「你自己的机器人」那一组(本地模式, 只有这一种方式)。 */}
+        <FeishuBotSettings />
+      </div>
+    </ConfirmDialogProvider>
   ),
 });

@@ -231,6 +231,9 @@ describe('usage limit recovery detection', () => {
     expect(
       extractUsageLimitRecoveryHint({ message: 'insufficient_quota: add billing credits' }, NOW),
     ).toBeNull();
+    expect(
+      extractUsageLimitRecoveryHint({ message: 'HTTP 402: Usage limit reached' }, NOW),
+    ).toBeNull();
   });
 
   it('keeps an upstream overload that also says "rate limit exceeded" out of the limit path', () => {
@@ -239,6 +242,47 @@ describe('usage limit recovery detection', () => {
     expect(
       extractUsageLimitRecoveryHint(
         { message: 'rate limit exceeded: The engine is currently overloaded, please try again later' },
+        NOW,
+      ),
+    ).toBeNull();
+  });
+
+  it('uses structured OpenAI codes before rate, billing or overload wording', () => {
+    expect(extractUsageLimitRecoveryHint({
+      errorStatus: 429, message: '{"error":{"code":"credit_balance_exhausted","message":"upstream overloaded"}}',
+    }, NOW)).toBeNull();
+    expect(extractUsageLimitRecoveryHint({
+      errorStatus: 429, message: '{"error":{"code":"rate_limit_exceeded","type":"insufficient_quota"}}',
+    }, NOW)).toEqual({ resetAtMs: null });
+  });
+
+  // Plugin-engine usage limits carry `reason: 'acp-usage-limit'` or quota-reached text with relative reset countdowns;
+  // `acp-overloaded` must stay out of the periodic usage-limit recovery path.
+  it('recognizes plugin-engine quota limits and excludes plugin overload', () => {
+    const expectedReset = NOW + (2 * 3600 + 13 * 60 + 2) * 1000;
+    expect(
+      extractUsageLimitRecoveryHint(
+        {
+          message:
+            'Individual quota reached. Please upgrade your subscription to increase your limits. Resets in 2h13m2s.',
+        },
+        NOW,
+      ),
+    ).toEqual({ resetAtMs: expectedReset });
+    expect(
+      extractUsageLimitRecoveryHint(
+        {
+          reason: 'acp-usage-limit',
+          usageLimit: true,
+          usageResetAt: expectedReset,
+          message: 'Individual quota reached.',
+        },
+        NOW,
+      ),
+    ).toEqual({ resetAtMs: expectedReset, isAccountUsageLimit: true });
+    expect(
+      extractUsageLimitRecoveryHint(
+        { reason: 'acp-overloaded', message: 'The plugin engine service is temporarily busy.' },
         NOW,
       ),
     ).toBeNull();

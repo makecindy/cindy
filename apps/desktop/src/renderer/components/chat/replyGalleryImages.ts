@@ -16,7 +16,10 @@ import {
 import { rewriteToRemoteMediaOrigin } from '../../../shared/remoteMediaUrl';
 import { replySectionId, type GalleryImage } from './ImageGalleryContext';
 import { markdownImageAddress, type MarkdownImageAddressOptions } from './MarkdownRenderer';
-import { extractMarkdownGalleryImages } from './markdownImageTargets';
+import {
+  assignMarkdownGalleryOccurrences,
+  extractMarkdownGalleryImages,
+} from './markdownImageTargets';
 import { isInvalidRichImageSource } from './RichAnswer';
 import { peekWorkspaceMediaSrc, usesWorkspaceLookup } from './useWorkspaceMediaPath';
 
@@ -69,12 +72,7 @@ function richImageMarkdown(doc: RichDocument): { id: string; markdown: string }[
 }
 
 function sectionImages(markdown: string, section: string): ReplyImageRef[] {
-  const seen = new Map<string, number>();
-  return extractMarkdownGalleryImages(markdown).map(({ target }) => {
-    const occurrence = seen.get(target) ?? 0;
-    seen.set(target, occurrence + 1);
-    return { target, section, occurrence };
-  });
+  return assignMarkdownGalleryOccurrences(extractMarkdownGalleryImages(markdown), section);
 }
 
 /** Images a completed reply renders, in order, with their destinations as written. */

@@ -1,7 +1,7 @@
 // Real C ABI gate: a missing host library/Python must fail, never silently skip
 // the native interoperability suite. App builds remain separate native gates.
 import { spawn, spawnSync } from 'node:child_process';
-import { closeSync, existsSync, mkdtempSync, openSync, readFileSync } from 'node:fs';
+import { closeSync, copyFileSync, existsSync, mkdtempSync, openSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -20,6 +20,15 @@ const filename = process.platform === 'win32' ? 'cindy_agent_net_native.dll'
   : process.platform === 'darwin' ? 'libcindy_agent_net_native.dylib' : 'libcindy_agent_net_native.so';
 const library = path.join(native, 'target', host, 'debug', filename);
 if (!existsSync(library)) throw new Error('AGENT_NET_NATIVE_LIBRARY_MISSING');
+// The Desktop's Node module around the same engine (packages/agent-net-native/node), loaded by nodeNative.integration.test.ts.
+await runBounded('cargo', ['build', '--locked', '--target', host, '--manifest-path', path.join(native, 'node', 'Cargo.toml')], { env }, 8 * 60_000);
+const nodeFilename = process.platform === 'win32' ? 'cindy_agent_net_node.dll'
+  : process.platform === 'darwin' ? 'libcindy_agent_net_node.dylib' : 'libcindy_agent_net_node.so';
+const nodeBuilt = path.join(native, 'target', host, 'debug', nodeFilename);
+if (!existsSync(nodeBuilt)) throw new Error('AGENT_NET_NODE_BINDING_MISSING');
+// Node loads a native module only under the .node extension.
+const nodeBinding = path.join(mkdtempSync(path.join(tmpdir(), 'agent-net-node-')), 'agent-net.node');
+copyFileSync(nodeBuilt, nodeBinding);
 const python = process.env.PYTHON || (process.platform === 'win32' ? 'python' : 'python3');
 run(python, ['--version']);
 const pnpm = (args, extraEnv = env, options = {}) => process.env.npm_execpath
@@ -67,7 +76,7 @@ function killTree(pid) {
 // Match the integration tier: real native processes and transport timers run
 // in one worker, rather than competing with another socket suite in this gate.
 const vitest = ['--filter', '@cindy/agent-net', 'exec', 'vitest', 'run', '--pool=forks', '--maxWorkers=1', '--reporter=verbose'];
-const testEnv = { ...env, CINDY_AGENT_NET_NATIVE_LIBRARY: library, PYTHON: python };
+const testEnv = { ...env, CINDY_AGENT_NET_NATIVE_LIBRARY: library, CINDY_AGENT_NET_NODE_BINDING: nodeBinding, PYTHON: python };
 await (process.env.npm_execpath
   ? runBounded(process.execPath, [process.env.npm_execpath, ...vitest], { env: testEnv }, 10 * 60_000)
   : runBounded(process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm', vitest, { env: testEnv, shell: process.platform === 'win32' }, 10 * 60_000));

@@ -19,6 +19,22 @@ function compile(source: string, bindings: Record<string, unknown>) {
   }).outputText;
   return new Function(...Object.keys(bindings), code)(...Object.values(bindings));
 }
+
+function readProjectScopeBlock() {
+  const path = resolve(__dirname, '../features/plugin/GhostPluginPage.tsx');
+  const page = ts.createSourceFile(path, readFileSync(path, 'utf8'), ts.ScriptTarget.Latest);
+  const component = page.statements.filter(ts.isFunctionDeclaration)
+    .find(statement => statement.name?.text === 'LocalPluginCatalogSource');
+  const statements = component?.body?.statements.filter(ts.isVariableStatement);
+  const first = statements?.find(statement => statement.getText(page).startsWith('const [scopeDir, setScopeDir]'));
+  const last = statements?.find(statement => statement.getText(page).startsWith('const effectiveEnabled ='));
+  if (!first || !last || first.end >= last.pos) {
+    throw new Error('Could not locate the project scope state and callbacks in GhostPluginPage.tsx');
+  }
+  // Stop at the scope callback itself so adjacent state and JSX stay out of the compiled block.
+  return page.text.slice(first.getStart(page), last.end);
+}
+
 afterEach(() => vi.unstubAllGlobals());
 
 describe('plugin recommendation recovery', () => {
@@ -202,8 +218,7 @@ describe('plugin recommendation recovery', () => {
   });
 
   it('retains project scope for the recommended organization alongside its root sibling', () => {
-    const source = readFileSync(resolve(__dirname, '../features/plugin/GhostPluginPage.tsx'), 'utf8');
-    const block = source.slice(source.indexOf('  const [scopeDir, setScopeDir]'), source.indexOf('  const [recentGhostIds, setRecentGhostIds]'));
+    const block = readProjectScopeBlock();
     const workdirPrefsSync = vi.fn(() => ({ disabled: ['_ns__acme__helper'] }));
     vi.stubGlobal('electronAPI', { ghosts: { workdirPrefsSync } });
     const useScope = compile('return function useScope() { ' + block + '\nreturn {scopeDir, effectiveEnabled}; }', {
@@ -245,14 +260,7 @@ describe('plugin recommendation recovery', () => {
   });
 
   it('loads project overrides on entry and clears them when choosing global scope', () => {
-    const source = readFileSync(
-      resolve(__dirname, '../features/plugin/GhostPluginPage.tsx'),
-      'utf8',
-    );
-    const block = source.slice(
-      source.indexOf('  const [scopeDir, setScopeDir]'),
-      source.indexOf('  const [recentGhostIds, setRecentGhostIds]'),
-    );
+    const block = readProjectScopeBlock();
     const workdirPrefsSync = vi.fn(() => ({ disabled: ['mail'] }));
     vi.stubGlobal('electronAPI', { ghosts: { workdirPrefsSync } });
     const useScope = compile(

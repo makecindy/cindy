@@ -25,6 +25,7 @@ import {
   teammateMemoryDirs,
   teammateProjectMemoryDir,
   teammateWorkspaceDir,
+  teammateProjectMemoryStorageDir,
 } from '../botProjectMemory.js';
 
 let root = '';
@@ -55,12 +56,12 @@ it('uploads a V2 teammate\'s project memories, with not-yet-copied earlier ones 
 
   expect(await read(false)).toEqual({ 'user_tea.md': 'old version', 'project_launch.md': 'not copied yet' });
   expect(await read(true)).toEqual({
-    'user_tea.md': 'project version', 'feedback_tone.md': 'not moved yet', 'project_launch.md': 'not copied yet',
+    'MEMORY.md': 'index', 'user_tea.md': 'project version', 'feedback_tone.md': 'not moved yet', 'project_launch.md': 'not copied yet',
   });
   await writeFile(path.join(botProfileDir(root, 'bot_mia'), TEAMMATE_V2_RECEIPT_FILE), '{}');
-  expect(await read(true)).toEqual({ 'user_tea.md': 'project version', 'feedback_tone.md': 'not moved yet' });
+  expect(await read(true)).toEqual({ 'MEMORY.md': 'index', 'user_tea.md': 'project version', 'feedback_tone.md': 'not moved yet' });
   await writeFile(path.join(botProfileDir(root, 'bot_mia'), TEAMMATE_MEMORY_MOVE_RECEIPT_FILE), '{}');
-  expect(await read(true)).toEqual({ 'user_tea.md': 'project version' });
+  expect(await read(true)).toEqual({ 'MEMORY.md': 'index', 'user_tea.md': 'project version' });
 });
 
 // PR #9314 review: the cloud upload followed a project memory folder (or `.cindy`) that is a link
@@ -73,4 +74,23 @@ it('refuses to read a project memory folder that is a link', async () => {
   await mkdir(path.join(workspace, '.cindy'), { recursive: true });
   await symlink(outside, teammateProjectMemoryDir(workspace), process.platform === 'win32' ? 'junction' : 'dir');
   await expect(teammateMemoryDirs(root, 'bot_mia', true)).rejects.toThrow('link');
+});
+
+// #10568: root-workspace relocation preserves the owner-shaped scope and the
+// project memory path, without weakening the existing .cindy/memory link refusal.
+it('reads and writes V2 project memory through a relocated workspace root', async () => {
+  root = await mkdtemp(path.join(os.tmpdir(), 'teammate-memory-moved-'));
+  const owner = path.join(root, 'owners', 'owner');
+  const workspace = teammateWorkspaceDir(owner, 'bot_mia');
+  const target = path.join(root, 'data-disk');
+  await put(path.join(target, '.cindy', 'memory'), 'project_notes.md', 'moved memory');
+  await mkdir(path.dirname(workspace), { recursive: true });
+  await symlink(target, workspace, process.platform === 'win32' ? 'junction' : 'dir');
+  const memory = teammateProjectMemoryStorageDir(workspace, owner);
+  expect(memory).toBe(teammateProjectMemoryDir(workspace));
+  expect(await readTeammateMemories([memory!])).toEqual([{ filename: 'project_notes.md', content: 'moved memory' }]);
+  await put(memory!, 'project_later.md', 'after restart');
+  expect(await readTeammateMemories([path.join(target, '.cindy', 'memory')])).toEqual([
+    { filename: 'project_later.md', content: 'after restart' }, { filename: 'project_notes.md', content: 'moved memory' },
+  ]);
 });

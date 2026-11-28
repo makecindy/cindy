@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { linuxDisplaySocket, openLinuxDisplay } from '../linuxDisplay';
+import { linuxDisplaySocket, openLinuxDisplay, openLinuxX11Socket } from '../linuxDisplay';
 
 const fixture = vi.hoisted(() => ({
   access: vi.fn(),
@@ -26,8 +26,26 @@ describe('Linux display binding', () => {
     [{ DISPLAY: 'host:0' }, null],
     [{ DISPLAY: ':99; echo bad' }, null],
     [{ DISPLAY: ':99', WAYLAND_DISPLAY: 'wayland-0' }, null],
+    [{ DISPLAY: ':99', XDG_SESSION_TYPE: 'wayland' }, null],
   ])('selects only an explicit local X11 display', (environment, expected) => {
     expect(linuxDisplaySocket(environment)).toBe(expected);
+  });
+
+  // Production entry: openLinuxX11Socket pins an X11 socket without requiring xdotool
+  // (ordinary Ubuntu/XFCE desktops and cloud desktops omit xdotool).
+  it('pins a local X11 socket without requiring xdotool and rejects Wayland/socket swaps', async () => {
+    fixture.access.mockRejectedValue(new Error('ENOENT'));
+    const environment: NodeJS.ProcessEnv = { DISPLAY: ':99', XDG_SESSION_TYPE: 'x11', TOKEN: 'secret' };
+    const pinned = await openLinuxX11Socket(environment);
+    expect(pinned.environment).not.toHaveProperty('TOKEN');
+    await expect(pinned.current()).resolves.toBe(true);
+    expect(fixture.exec).not.toHaveBeenCalled();
+    expect(fixture.access).not.toHaveBeenCalled();
+    environment.XDG_SESSION_TYPE = 'wayland';
+    await expect(pinned.current()).resolves.toBe(false);
+    environment.XDG_SESSION_TYPE = 'x11';
+    fixture.stat.mockResolvedValue({ ...fixture.info, ino: 42 });
+    await expect(pinned.current()).resolves.toBe(false);
   });
 
   it('pins the display and strips unrelated credentials from the child environment', async () => {

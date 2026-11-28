@@ -1,4 +1,4 @@
-import type { AgentEvent, Session } from '@cindy/maker-core';
+import { isTerminalAgentErrorEvent, type AgentEvent, type Session } from '@cindy/maker-core';
 import { captureDataOwnerBroadcastScope } from '../device-link/broadcast-tap.js';
 import { rebroadcastTodaySpend, recordModelTurnUsage } from '../usageBroadcaster.js';
 import { mayRecordTurnUsage } from '../usage/turnUsageAdmission.js';
@@ -12,7 +12,7 @@ function isTokenCount(value: unknown): value is number {
 export function recordSessionAcpTurnUsage(session: Session, event: AgentEvent): void {
   // The controller owns the task ledger even when another device hosts its engine.
   if (session.agentKind !== 'acp' || session.remoteHostId ||
-      event.type !== 'done' || event.turnScope === 'background' || event.runtimeRecovery) return;
+      (event.type !== 'done' && !isTerminalAgentErrorEvent(event)) || event.turnScope === 'background' || event.runtimeRecovery) return;
   const data = event.data as { type?: string; usage?: Record<string, unknown>; usageModel?: unknown } | undefined;
   if (data?.type !== 'acp/prompt_end' || !data.usage) return;
   const { inputTokens, outputTokens, cacheReadTokens, cacheCreationTokens } = data.usage;

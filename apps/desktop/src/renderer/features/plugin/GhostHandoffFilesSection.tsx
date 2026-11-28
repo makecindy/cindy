@@ -16,6 +16,7 @@ import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
 import { shouldShowOpenPathError } from '../../../shared/openPathResult';
 import type { GhostHandoffFile } from '../../../shared/ghost';
+import { PluginLimitedList } from './PluginPermissionList';
 
 const SECTION_CLASS = 'mt-10';
 const SURFACE_CLASS =
@@ -171,8 +172,7 @@ function HandoffFilesBody({
         ) : files === null ? null : files.length === 0 ? (
           <p className="p-4 text-13 text-[var(--text-tertiary)]">{t('settings.ghosts.handoff.empty')}</p>
         ) : (
-          <ul>
-            {files.map((file) => (
+          <PluginLimitedList items={files} choiceKey="handoffFiles" buttonClassName="mx-4 mb-3" renderItem={file => (
               <li
                 key={file.ref}
                 className="flex items-center justify-between gap-4 border-b border-[var(--border-default)] px-4 py-3 last:border-b-0"
@@ -199,8 +199,7 @@ function HandoffFilesBody({
                   {t('settings.ghosts.handoff.delete')}
                 </button>
               </li>
-            ))}
-          </ul>
+          )} />
         )}
       </div>
     </section>
