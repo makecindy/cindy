@@ -38,8 +38,11 @@ const ast = ts.createSourceFile(
 const component = ast.statements.find(
   (node) => ts.isFunctionDeclaration(node) && node.name?.text === 'RunningStatusBar',
 );
-if (!component) throw new Error('RunningStatusBar not found');
-const compiled = ts.transpileModule(component.getText(ast).replace(/^export\s+/, ''), {
+const centerGroup = ast.statements.find(
+  (node) => ts.isFunctionDeclaration(node) && node.name?.text === 'ComposerCenterGroup',
+);
+if (!component || !centerGroup) throw new Error('RunningStatusBar components not found');
+const compiled = ts.transpileModule([centerGroup, component].map(node => node.getText(ast).replace(/^export\s+/, '')).join('\n'), {
   compilerOptions: { jsx: ts.JsxEmit.React, target: ts.ScriptTarget.ES2022 },
 }).outputText;
 const Icon = () => null;
@@ -80,6 +83,8 @@ const RunningStatusBar = new Function(
   backgroundTasksRunning?: boolean;
   onStopBackgroundTasks?: () => void;
   rightLeadingSlot?: React.ReactNode;
+  centeredSlot?: React.ReactNode;
+  composerHeaderRef?: React.Ref<HTMLDivElement>;
   status: string;
   reconnectStatus?: string | null;
   startedAt: number;
@@ -91,6 +96,30 @@ const RunningStatusBar = new Function(
 }>;
 
 afterEach(cleanup);
+
+// Unit: the composer owns its live plugin anchor across runtime suppression.
+// The old null-return/source checks missed idle controls and plan preservation.
+it('keeps the composer anchor and centered controls mounted while runtime content appears and disappears', () => {
+  const anchor = React.createRef<HTMLDivElement>();
+  const props = { visible: false, status: 'Done', startedAt: 1, tokenUsage: 0,
+    outputTokens: 0, generationDurationMs: 0, composerHeaderRef: anchor,
+    centeredSlot: <button>Plan control</button> };
+  const { container, rerender } = render(<RunningStatusBar {...props} />);
+  const mounted = anchor.current;
+  expect(mounted?.isConnected).toBe(true);
+  expect(screen.getByRole('button', { name: 'Plan control' })).toBeTruthy();
+  expect(container.querySelector('[data-running-status-label]')).toBeNull();
+  rerender(<RunningStatusBar {...props} visible status="Running" />);
+  expect(anchor.current).toBe(mounted);
+  expect(container.querySelector('[data-running-status-label]')?.textContent).toBe('Running');
+  rerender(<RunningStatusBar {...props} suppressContent />);
+  expect(anchor.current).toBe(mounted);
+  expect(screen.getAllByRole('button', { name: 'Plan control' })).toHaveLength(1);
+  expect(container.querySelector('[data-running-status-label]')).toBeNull();
+  expect(container.querySelector('[data-running-status-meta]')).toBeNull();
+  rerender(<RunningStatusBar {...props} suppressContent centeredSlot={null} composerHeaderRef={undefined} />);
+  expect(container.firstChild).toBeNull();
+});
 
 it('keeps background stop available during remote preparation without displaying old metrics', () => {
   const stop = vi.fn();

@@ -18,6 +18,7 @@
 
 import type { UnifiedCommand, AgentKind } from '@cindy/maker-core';
 import { leadingSlashInvocation } from '@cindy/maker-shared';
+import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
 import type { PiPackageCommandRuntimeStatus } from '@/../shared/piPackages';
 import { isCindyBuiltInSkillMetadata } from '@/../shared/cindyBuiltInSkills';
 import type { BuiltInSkillDraftIntent } from './composerDraftStore';
@@ -416,11 +417,15 @@ export function filterSlashCommands(
 }
 
 type SkillListResult = { success: boolean; skills?: unknown[] };
-const pendingSkillLists = new WeakMap<object, Map<string, Promise<SkillListResult>>>();
+interface PendingSkillList {
+  result: Promise<SkillListResult>;
+  queued: boolean;
+}
+const pendingSkillLists = new WeakMap<object, Map<string, PendingSkillList>>();
 
 /** Share only outstanding reads; edits and activation changes remain live. */
 function loadPendingSkills(
-  key: string | null,
+  key: string,
   forceReload: boolean,
   load: () => Promise<SkillListResult>,
 ): Promise<SkillListResult> {
@@ -430,16 +435,23 @@ function loadPendingSkills(
     pending = new Map();
     pendingSkillLists.set(owner, pending);
   }
-  if (key !== null && !forceReload) {
-    const existing = pending.get(key);
-    if (existing) return existing;
-  }
-  const request = load().catch(() => ({ success: false })).finally(() => {
-    // An older request must not evict an in-flight forced refresh.
-    if (key !== null && pending.get(key) === request) pending.delete(key);
-  });
-  if (key !== null) pending.set(key, request);
-  return request;
+  const existing = pending.get(key);
+  if (existing && (!forceReload || existing.queued)) return existing.result;
+  const generation = getDataOwnerGeneration();
+  const start = () => {
+    flight.queued = false;
+    return isDataOwnerGenerationCurrent(generation) ? load() : Promise.resolve({ success: false });
+  };
+  // Changes during a read need one fresh scan. Further notifications can join
+  // that scan until it starts, including when the preceding read fails.
+  const flight: PendingSkillList = {
+    queued: !!existing,
+    result: (existing ? existing.result.then(start) : load()).catch(() => ({ success: false })).finally(() => {
+      if (pending.get(key) === flight) pending.delete(key);
+    }),
+  };
+  pending.set(key, flight);
+  return flight.result;
 }
 
 /**
@@ -521,7 +533,7 @@ export async function loadAllCommands(
   };
   const skillP: Promise<SkillListResult> = shouldLoadSkills
     ? loadPendingSkills(
-        opts?.sessionId ? JSON.stringify([skillAgentKind, deviceId || null, workingDir || null, opts.sessionId]) : null,
+        JSON.stringify([getDataOwnerGeneration(), skillAgentKind, deviceId || null, workingDir || null, opts?.sessionId ?? null]),
         opts?.forceReload === true,
         () => deviceId
           ? (window.electronAPI.deviceLink.invoke(deviceId, 'maker:list-agent-skills', [

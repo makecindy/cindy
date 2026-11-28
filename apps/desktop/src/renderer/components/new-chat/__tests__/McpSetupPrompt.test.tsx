@@ -49,14 +49,20 @@ it('saves through the existing Settings helper and resolves with only the server
   expect(JSON.stringify(api.resolveInteraction.mock.calls)).not.toContain('test-invalid-token');
 });
 
-// Teammates get the tools in this chat on the next message, so they must not see "start a new session".
+// Unit: a chat-opened form needs review and save guidance even when the proposal is blank
+// or partially filled. Keep the activation hint specific to the current task or buddy.
 it.each([
-  [true, 'settings.mcp.dialog.teammateDesc', 'settings.mcp.dialog.desc'],
-  [false, 'settings.mcp.dialog.desc', 'settings.mcp.dialog.teammateDesc'],
-] as const)('teammate=%s shows only its own form hint', async (teammate, shown, hidden) => {
-  render(<McpSetupPrompt request={request} teammate={teammate} />);
+  [true, 'Example', 'settings.mcp.dialog.teammateDesc', 'settings.mcp.dialog.desc'],
+  [false, '', 'settings.mcp.dialog.desc', 'settings.mcp.dialog.teammateDesc'],
+] as const)('teammate=%s shows setup guidance and its own activation hint', async (teammate, name, shown, hidden) => {
+  render(<McpSetupPrompt request={{ ...request, proposal: name ? { name } : {} }} teammate={teammate} />);
+  const nameField = await screen.findByLabelText<HTMLInputElement>('settings.mcp.fields.name');
+  expect(nameField.value).toBe(name);
+  expect(screen.getByLabelText<HTMLInputElement>('settings.mcp.fields.url').value).toBe('');
+  expect(screen.getByText('settings.mcp.dialog.embeddedGuide')).toBeTruthy();
   expect(await screen.findByText(shown)).toBeTruthy();
   expect(screen.queryByText(hidden)).toBeNull();
+  expect(api.createCustomMcpServer).not.toHaveBeenCalled();
 });
 
 function Probe({ sessionId = 'task', enabled = true }: { sessionId?: string; enabled?: boolean }) {

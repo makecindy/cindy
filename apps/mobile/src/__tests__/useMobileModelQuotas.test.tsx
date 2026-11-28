@@ -394,3 +394,91 @@ it("keeps a stable empty pluginEngineQuotas reference and does not loop renders 
   });
   expect(renders).toBe(countAfterMount + 1);
 });
+
+// Regression (#13331 review P2): maker:model-catalog:read strips reportsUsage from all remote
+// plugin engines. Same-account remote computers must check their direct plugin-engine catalogue
+// once and fetch usage directly when reportsUsage=true; shares must never be queried.
+it("discovers reportsUsage directly for same-account remote plugin engines while keeping shares disabled", async () => {
+  setMobileAuthOwner("remote-plugin-quota-acct");
+  const updatedAt = 1_700_000_000_000;
+  h.invoke.mockImplementation(async (device, channel, args) => {
+    if (device === "studio-quota" && channel === "maker:list-plugin-engines") {
+      return [
+        {
+          key: "dsh:dsh",
+          providerId: "acp-plugin:dsh:dsh",
+          name: "DeepSeek Harness",
+          reportsUsage: true,
+          availability: { state: "available" },
+          models: [],
+          permissionModes: [],
+          defaultPermissionMode: "ask",
+        },
+        {
+          key: "silent:cli",
+          providerId: "acp-plugin:silent:cli",
+          name: "Silent CLI",
+          availability: { state: "available" },
+          models: [],
+          permissionModes: [],
+          defaultPermissionMode: "ask",
+        },
+      ];
+    }
+    if (device === "studio-quota" && channel === "maker:get-plugin-engine-usage" && args?.[0] === "dsh:dsh") {
+      return {
+        updatedAt,
+        windows: [{ label: "Weekly", remainingPercent: 64, resetsAt: updatedAt + 3_600_000 }],
+      };
+    }
+    return null;
+  });
+  // Remote entries come from maker:model-catalog:read with reportsUsage stripped.
+  const remoteEngines: MobilePluginEngine[] = [
+    {
+      key: "dsh:dsh",
+      providerId: "acp-plugin:dsh:dsh",
+      deviceId: "studio-quota",
+      deviceName: "Studio",
+      name: "DeepSeek Harness",
+      availability: { state: "available" },
+      models: [],
+      permissionModes: [],
+      defaultPermissionMode: "ask",
+    },
+    {
+      key: "silent:cli",
+      providerId: "acp-plugin:silent:cli",
+      deviceId: "studio-quota",
+      deviceName: "Studio",
+      name: "Silent CLI",
+      availability: { state: "available" },
+      models: [],
+      permissionModes: [],
+      defaultPermissionMode: "ask",
+    },
+    {
+      key: "dsh:dsh",
+      providerId: "acp-plugin:dsh:dsh",
+      deviceId: "share:alice-1",
+      deviceName: "Alice Share",
+      name: "DeepSeek Harness",
+      availability: { state: "available" },
+      models: [],
+      permissionModes: [],
+      defaultPermissionMode: "ask",
+    },
+  ];
+  await act(async () => {
+    root.render(createElement(Probe, { sources: [], visible: true, pluginEngines: remoteEngines }));
+  });
+  expect(h.invoke).toHaveBeenCalledWith("studio-quota", "maker:list-plugin-engines", []);
+  expect(h.invoke).toHaveBeenCalledWith("studio-quota", "maker:get-plugin-engine-usage", ["dsh:dsh"]);
+  expect(h.invoke.mock.calls.some(([device]) => device === "share:alice-1")).toBe(false);
+  expect(h.invoke.mock.calls.some(([, channel, args]) => channel === "maker:get-plugin-engine-usage" && args?.[0] === "silent:cli")).toBe(false);
+  expect(view.pluginEngineQuotas["studio-quota\nacp-plugin:dsh:dsh"]).toMatchObject({
+    updatedAt,
+    windows: [{ label: "Weekly", remainingPercent: 64 }],
+  });
+  expect(view.pluginEngineQuotas["share:alice-1\nacp-plugin:dsh:dsh"]).toBeUndefined();
+});

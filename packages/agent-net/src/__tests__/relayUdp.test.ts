@@ -456,18 +456,32 @@ it('sends STUN binding requests to the resolved real IP instead of a Fake-IP and
   client.close();
 });
 
-// 2026-11-22 真机跨国直连（上海电信 163 ↔ 新加坡 StarHub 220ms vs 阿里云上海中转 86ms）：
-// 自动选路只在直连明显慢于中转（>1.5x 且慢 >=40ms）时选中转，并用滞回+冷却防止来回抖动。tier: unit。
-it('selects relay in auto mode only when direct is significantly slower, with hysteresis and cooldown', () => {
+// 自动选路第一性原理规则：优先走明显更快的路径（切中转需快 clamp(25ms, relay*25%, 50ms)，
+// 回直连需追近到 <= relay + 15ms），常规切换 30s 冷却，严重劣化（慢 >=2x 且 >=100ms）跳过冷却秒切。tier: unit。
+it('selects faster path in auto mode with capped margin, hysteresis, cooldown, and severe-degradation bypass', () => {
+  // Missing sample preserves current path
   expect(decideAutoPreferRelay({ currentPreferRelay: false, directRttMs: 220, relayRttMs: null, msSinceLastSwitch: Infinity })).toBe(false);
   expect(decideAutoPreferRelay({ currentPreferRelay: true, directRttMs: null, relayRttMs: 86, msSinceLastSwitch: Infinity })).toBe(true);
+  // Low-RTT direct bias: 10ms gain stays direct; 30ms gain (>=25ms min margin) switches to relay
   expect(decideAutoPreferRelay({ currentPreferRelay: false, directRttMs: 25, relayRttMs: 15, msSinceLastSwitch: Infinity })).toBe(false);
+  expect(decideAutoPreferRelay({ currentPreferRelay: false, directRttMs: 45, relayRttMs: 15, msSinceLastSwitch: Infinity })).toBe(true);
+  // Mid-RTT: 9ms stays direct; 34ms (>=25ms) switches to relay; 220 vs 86 switches
   expect(decideAutoPreferRelay({ currentPreferRelay: false, directRttMs: 95, relayRttMs: 86, msSinceLastSwitch: Infinity })).toBe(false);
-  expect(decideAutoPreferRelay({ currentPreferRelay: false, directRttMs: 120, relayRttMs: 86, msSinceLastSwitch: Infinity })).toBe(false);
+  expect(decideAutoPreferRelay({ currentPreferRelay: false, directRttMs: 120, relayRttMs: 86, msSinceLastSwitch: Infinity })).toBe(true);
   expect(decideAutoPreferRelay({ currentPreferRelay: false, directRttMs: 220, relayRttMs: 86, msSinceLastSwitch: Infinity })).toBe(true);
+  // High-RTT capped margin: relay 160ms -> margin 40ms (not old 1.5x = 240ms); 205ms switches cleanly
+  expect(decideAutoPreferRelay({ currentPreferRelay: false, directRttMs: 190, relayRttMs: 160, msSinceLastSwitch: Infinity })).toBe(false);
+  expect(decideAutoPreferRelay({ currentPreferRelay: false, directRttMs: 205, relayRttMs: 160, msSinceLastSwitch: Infinity })).toBe(true);
+  // Relay 240ms -> margin caps at 50ms; 295ms switches (old 1.5x waited until 360ms)
+  expect(decideAutoPreferRelay({ currentPreferRelay: false, directRttMs: 295, relayRttMs: 240, msSinceLastSwitch: Infinity })).toBe(true);
+  // Normal cooldown protects against mild flapping
   expect(decideAutoPreferRelay({ currentPreferRelay: true, directRttMs: 60, relayRttMs: 86, msSinceLastSwitch: AUTO_SWITCH_COOLDOWN_MS - 1 })).toBe(true);
-  expect(decideAutoPreferRelay({ currentPreferRelay: true, directRttMs: 140, relayRttMs: 86, msSinceLastSwitch: AUTO_SWITCH_COOLDOWN_MS })).toBe(true);
-  expect(decideAutoPreferRelay({ currentPreferRelay: true, directRttMs: 105, relayRttMs: 86, msSinceLastSwitch: AUTO_SWITCH_COOLDOWN_MS })).toBe(false);
+  // Hysteresis on recovery: direct must get within relay + 15ms
+  expect(decideAutoPreferRelay({ currentPreferRelay: true, directRttMs: 110, relayRttMs: 86, msSinceLastSwitch: AUTO_SWITCH_COOLDOWN_MS })).toBe(true);
+  expect(decideAutoPreferRelay({ currentPreferRelay: true, directRttMs: 100, relayRttMs: 86, msSinceLastSwitch: AUTO_SWITCH_COOLDOWN_MS })).toBe(false);
+  // Severe degradation (>=2x and >=100ms worse) bypasses cooldown immediately in both directions
+  expect(decideAutoPreferRelay({ currentPreferRelay: false, directRttMs: 298, relayRttMs: 81, msSinceLastSwitch: 1_000 })).toBe(true);
+  expect(decideAutoPreferRelay({ currentPreferRelay: true, directRttMs: 80, relayRttMs: 298, msSinceLastSwitch: 1_000 })).toBe(false);
 });
 
 // 测试价值（2026-11-25 治本回归：满尺寸第 1 跳探针与单对端隔离）
@@ -552,9 +566,21 @@ it('gates relay UDP admission on full-size probe, never blames hop 1 when probe 
   // Turning VPN off (networkChanged) immediately clears suspension and re-probes back to UDP within 1s.
   answerProbes = true;
   path.networkChanged();
+  expect(path.unackedDurationMs()).toBeLessThan(100);
   step(1_000);
   expect(path.suspension).toBeNull();
   expect(path.send('member', new Uint8Array(100))).toBe(true);
+  expect(path.unackedDurationMs()).toBe(0);
+  expect(path.verifiedAt).toBeGreaterThan(0);
+
+  // Explicit lightweight probe sends a registration even while idle without suspending UDP.
+  step(1_000);
+  const beforeProbe = registrations().length;
+  path.probeRegistrationNow();
+  expect(registrations().length).toBe(beforeProbe + 1);
+  expect(path.unackedDurationMs()).toBeGreaterThanOrEqual(0);
+  step(250);
+  expect(path.unackedDurationMs()).toBe(0);
 });
 
 it('does not suspend legacy relay UDP when one peer stalls while another relayed peer acknowledges cleanly, and resets backoff across idle gaps', async () => {

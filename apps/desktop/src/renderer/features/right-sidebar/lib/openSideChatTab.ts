@@ -26,7 +26,6 @@ import {
 } from '@/contexts/dataOwnerGeneration';
 import { isDeviceLinkRemotePushCurrent } from '@/lib/remoteDataOwnerPushFence';
 import { isSharedTaskPeer, remoteAgentErrorCode } from '@cindy/device-link';
-import { isPluginEngineKind } from '../../../../shared/pluginEngines';
 import type { Session } from '@/lib/ccAgent.types';
 import { readSessionBatch } from '@/lib/sessionBatchRead';
 import { standardSessionRoute } from '@/lib/orcaSessionIdentity';
@@ -406,10 +405,6 @@ export async function openSideChatTab(
     const unavailableKey = sideChatUnavailableKey(parentSession, deviceId);
     if (unavailableKey) {
       toast.info(i18n.t(unavailableKey));
-      return false;
-    }
-    if (isPluginEngineKind(parentSession.agentKind)) {
-      toast.error(i18n.t('chat.sideChat.failed'));
       return false;
     }
     if (parentSession.remoteHostId) {

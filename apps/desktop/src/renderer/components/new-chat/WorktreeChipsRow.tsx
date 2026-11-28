@@ -34,19 +34,12 @@ import {
   useId,
   type KeyboardEvent,
 } from 'react';
-import {
-  GitBranch,
-  ChevronDown,
-  Folder,
-  MessageCircle,
-  Search,
-  RefreshCw,
-  Check,
-} from 'lucide-react';
+import { GitBranch, ChevronDown, Folder, MessageCircle, RefreshCw, Check } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
+import { SearchInput } from '@/components/ui/search-input';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Tip, Tooltip } from '@/components/ui/tooltip';
@@ -889,43 +882,27 @@ export function BranchWorktreeChip({
         ) : (
           <>
             <div className="shrink-0 bg-popover pb-1">
-              <div className="relative">
-                <Search
-                  size={12}
-                  className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground"
-                />
-                <input
-                  ref={focusBranchSearch}
-                  role="combobox"
-                  aria-expanded
-                  aria-autocomplete="list"
-                  aria-controls={listboxId}
-                  aria-activedescendant={
-                    clampedActiveIndex >= 0
-                      ? `${listboxId}-option-${clampedActiveIndex}`
-                      : undefined
-                  }
-                  value={branchQuery}
-                  onChange={(e) => {
-                    autoLocate.current = false;
-                    setBranchQuery(e.target.value);
-                    // 过滤集合变了,高亮回到首项,避免停留在已不可见的位置。
-                    setActiveBranchIndex(0);
-                  }}
-                  onKeyDown={onSearchKeyDown}
-                  placeholder={t('newChat.branchChip.searchPlaceholder')}
-                  aria-label={t('newChat.branchChip.searchPlaceholder')}
-                  className={cn(
-                    'h-8 w-full rounded-full border border-border bg-transparent',
-                    'pl-7 pr-2 text-13 text-foreground outline-none',
-                    // DESIGN.md §4 Inputs & Forms:单行 input 一律 pill 圆角;
-                    // placeholder 走 --text-placeholder(过浅会像已填写内容);
-                    // focus 走 --focus-ring 一对 token(对齐 FileFilterInput)。
-                    'placeholder:text-[var(--text-placeholder)]',
-                    'focus:border-[var(--focus-ring)] focus:ring-1 focus:ring-[var(--focus-ring-soft)]',
-                  )}
-                />
-              </div>
+              <SearchInput
+                surface="panel"
+                inputRef={focusBranchSearch}
+                role="combobox"
+                aria-expanded
+                aria-autocomplete="list"
+                aria-controls={listboxId}
+                aria-activedescendant={
+                  clampedActiveIndex >= 0 ? `${listboxId}-option-${clampedActiveIndex}` : undefined
+                }
+                value={branchQuery}
+                onChange={(value) => {
+                  autoLocate.current = false;
+                  setBranchQuery(value);
+                  // 过滤集合变了,高亮回到首项,避免停留在已不可见的位置。
+                  setActiveBranchIndex(0);
+                }}
+                onKeyDown={onSearchKeyDown}
+                placeholder={t('newChat.branchChip.searchPlaceholder')}
+                aria-label={t('newChat.branchChip.searchPlaceholder')}
+              />
             </div>
             <div
               ref={listboxRef}

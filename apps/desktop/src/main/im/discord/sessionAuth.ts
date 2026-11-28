@@ -1,11 +1,12 @@
 import { ipcMain } from 'electron';
 
-import type { AgentKind } from '@cindy/maker-core';
+import type { EngineKind } from '@cindy/maker-core';
 import type { ProviderView } from '@cindy/model-providers';
 
 import { createLogger } from '../../logger';
 import { getMaker } from '../../maker-host';
 import { getDesktopProviderService } from '../../maker-host/createDesktopProviderService';
+import { listPluginEngineViews } from '../../maker-ipc/pluginEnginesIpc.js';
 import { assertTrustedAppRendererEvent } from '../../security/trustedAppRenderer';
 import { hasCustomProviderKey } from '../../maker-host/provider-route';
 import {
@@ -29,7 +30,7 @@ type AuthCheckFn = (
 export interface DiscordSessionAuthCheckResult {
   ok: boolean;
   missing: ImAuthMissing | null;
-  agentKind: AgentKind;
+  agentKind: EngineKind;
   model: string;
   providerId: string | null;
   providerLabel: string | null;
@@ -59,9 +60,11 @@ export async function checkDiscordSessionAuth(
   };
   const auth = await checkAuth(row, undefined, cached.authDeps);
   const providers = await cached.loadProviderSnapshot();
-  const providerLabel = row.providerId
-    ? (providers?.find((provider) => provider.id === row.providerId)?.name ?? null)
-    : null;
+  const providerLabel = !row.providerId
+    ? null
+    : row.agentKind === 'acp'
+      ? (listPluginEngineViews().find((engine) => engine.providerId === row.providerId)?.name ?? null)
+      : (providers?.find((provider) => provider.id === row.providerId)?.name ?? null);
 
   return {
     ok: auth.ok,

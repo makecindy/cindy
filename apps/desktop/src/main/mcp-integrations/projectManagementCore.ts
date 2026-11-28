@@ -15,6 +15,7 @@ import { workingDirEquals } from '../../shared/workingDir.js';
 import type { ProjectsRootState } from '../../shared/projectsRoot.js';
 import { readProjectsRootDirectory } from '../projects-root-settings.js';
 import type { DbClient } from '../localDb/client/DbClient.js';
+import { isIpcError } from '../../shared/ipc-errors.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
 import {
   validateLocalProjectDirectory,
@@ -208,6 +209,23 @@ export async function validateTaskProject(context: LocalProjectContext, selected
   if (!checked.ok) return checked;
   context.assertCurrent();
   return { ok: true as const, projectDir };
+}
+
+/** Preserve a catalog miss before the account wrapper also maps filesystem ENOENT to NOT_FOUND. */
+export async function validateGroupProjectDir(dir: string) {
+  const checked = await withLocalProjectContext(undefined, async context => {
+    try {
+      return await validateTaskProject(context, dir);
+    } catch (error) {
+      if (isIpcError(error) && error.code === 'NOT_FOUND')
+        return { ok: false as const, errorCode: 'PROJECT_NOT_REGISTERED', message: '先将这个文件夹添加为项目，再重新选择。' };
+      throw error;
+    }
+  });
+  if (checked.ok) return { ok: true as const, dir: checked.projectDir };
+  if (checked.errorCode === 'PROJECT_NOT_REGISTERED')
+    return { ok: false as const, errorCode: 'PROJECT_NOT_REGISTERED' as const, message: checked.message };
+  return { ok: false as const, errorCode: 'INVALID_PARAMS' as const, message: '项目文件夹不可用' };
 }
 
 /** Automatic fallback skips missing or hidden projects. Storage and account failures stop the request. */

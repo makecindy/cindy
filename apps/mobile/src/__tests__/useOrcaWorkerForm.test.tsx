@@ -184,7 +184,9 @@ it.each(['agent-pc', 'share:s1', null])('remembers the submitted model route ind
   // PR #6453：Android 已选 Agent pill 也触发 onChange；原用例漏了同值重复选择。
   // unit 最小输入：恢复完整路线后重复选当前 Agent，不能清模型/来源/位置/档位/Fast/显式标记。
   const restored = latest!.form;
-  await act(async () => { latest!.changeAgent(restored.agent); await flush(); });
+  const restoredAgent = restored.agent;
+  if (restoredAgent === 'acp') throw new Error('expected built-in agent');
+  await act(async () => { latest!.changeAgent(restoredAgent); await flush(); });
   expect(latest!.form).toEqual(restored);
   await act(async () => { latest!.remember(latest!.form); await flush(); });
   await act(async () => root.render(null));
@@ -1258,4 +1260,78 @@ it('applies Full access immediately without opening an alert', async () => {
   await act(async () => { latest!.changePermission('bypassPermissions'); });
   expect(latest!.form.permissionMode).toBe('bypassPermissions');
   expect(Alert.alert).not.toHaveBeenCalled();
+});
+
+// Regression (#13331 review P1): selecting a host model group after picking a plugin engine Worker
+// must clear agent='acp' and the plugin model so Desktop does not reject creation with UNSUPPORTED_CAPABILITY.
+it('switches back to a built-in agent and clears the plugin model when choosing a model group', async () => {
+  const { setMobileAuthOwner } = await import('@/auth/authOwnerGeneration');
+  const { clearPluginEngineCache } = await import('@/session/pluginEngines');
+  const { resetHostModelGroupsCacheForTests } = await import('@/session/hostModelGroups');
+  setMobileAuthOwner('orca-acp-group-owner');
+  clearPluginEngineCache();
+  resetHostModelGroupsCacheForTests();
+  try {
+    const maker = {
+      ...fakeMaker(),
+      listPluginEngines: vi.fn(async () => [{
+        key: 'dsh:dsh',
+        providerId: 'acp-plugin:dsh:dsh',
+        name: 'DeepSeek Harness',
+        availability: { state: 'available' },
+        models: [{ id: 'deepseek-v4', displayName: 'DeepSeek V4', efforts: ['high'] }],
+        permissionModes: [{ id: 'default', displayName: 'Default' }],
+        defaultPermissionMode: 'default',
+      }]),
+      refreshPluginEngines: vi.fn(async () => undefined),
+      listModelGroups: vi.fn(async () => ({
+        routes: [{
+          id: 'smart',
+          name: 'Smart Route',
+          strategy: 'order',
+          candidates: [{ agentKind: 'codex', model: 'codex/gpt-5.5', providerId: 'openai' }],
+        }],
+      })),
+    } as unknown as MobileMakerTransport;
+    function Host() {
+      latest = useOrcaWorkerForm({
+        maker,
+        taskHostDeviceId: 'host-acp-group',
+        prefsScope: 'user-1',
+        active: true,
+        modelGroupSelectable: true,
+        setSheetOpen: () => undefined,
+      });
+      return null;
+    }
+    await act(async () => { root.render(<Host />); await flush(); });
+    await act(async () => { latest!.modelPicker.openPicker(); await flush(); });
+    expect(latest!.modelPicker.pluginEngines?.engines).toHaveLength(1);
+    expect(latest!.modelPicker.modelGroups?.rows).toHaveLength(1);
+
+    await act(async () => {
+      latest!.modelPicker.pluginEngines!.onSelect({
+        providerId: 'acp-plugin:dsh:dsh',
+        modelId: 'deepseek-v4',
+        effort: 'high',
+      });
+      await flush();
+    });
+    expect(latest!.form.agent).toBe('acp');
+    expect(latest!.form.model).toMatchObject({ id: 'deepseek-v4', providerId: 'acp-plugin:dsh:dsh' });
+    expect(latest!.valid).toBe(true);
+
+    await act(async () => {
+      latest!.modelPicker.modelGroups!.onSelect('smart');
+      await flush();
+    });
+    expect(latest!.form.agent).toBe('claude-code');
+    expect(latest!.form.model).toBeNull();
+    expect(latest!.form.modelGroup).toEqual({ id: 'smart', name: 'Smart Route' });
+    expect(latest!.valid).toBe(true);
+  } finally {
+    clearPluginEngineCache();
+    resetHostModelGroupsCacheForTests();
+    setMobileAuthOwner(null);
+  }
 });

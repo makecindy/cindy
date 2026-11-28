@@ -1,6 +1,6 @@
-import { and, desc, eq, gt, isNull, sql } from 'drizzle-orm';
+import { and, desc, eq, gt, isNull } from 'drizzle-orm';
 import { getDbClient } from './client/current.js';
-import { messages, schedules, sessions } from './schema.js';
+import { messages, sessions } from './schema.js';
 import { messageRowid } from './retriedUserTurnSupersede.js';
 import { messageToCamel, persistableSessionEffort, projectSessionRuntimeFields } from './mapper.js';
 import { isPluginEngineKind, normalizeDbAgentKind, type DbEngineKind } from '../../shared/agentKindConversion.js';
@@ -88,22 +88,13 @@ export async function applyAgentSwitchToSessionRowWithPorts<OwnerScope>(
   }
   // RETURNING keeps the projection tied to this committed write, including axes
   // omitted by the caller. A later SELECT could observe a newer selection.
-  const pluginTarget = isPluginEngineKind(patch.agentKind);
-  // Pair with the guarded schedule writes. SQLite arbitrates the two writes
-  // even when different desktop instances share the same profile.
-  const condition = pluginTarget ? sql`NOT EXISTS (
-    SELECT 1 FROM ${schedules} WHERE ${sessions.source} = 'scheduler' AND ${schedules.targetSessionId} = ${sessions.id}
-  )` : undefined;
-  const [committed] = await db.update(sessions).set(setObj).where(and(eq(sessions.id, sessionId), condition))
+  const [committed] = await db.update(sessions).set(setObj).where(eq(sessions.id, sessionId))
     .returning({
       id: sessions.id, agentKind: sessions.agentKind, model: sessions.model,
       agentDeviceId: sessions.agentDeviceId,
       providerId: sessions.providerId, effort: sessions.effort, fastMode: sessions.fastMode,
       scheduledModelBaseline: sessions.scheduledModelBaseline,
     });
-  if (!committed && pluginTarget) {
-    throwIpcError('PRECONDITION_FAILED', 'this task no longer accepts a plugin engine');
-  }
   if (!committed || !isOwnerScopeCurrent(ownerScope)) return;
   broadcastSessionPatched(
     sessionId,

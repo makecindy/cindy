@@ -14,6 +14,7 @@ import type { SuppressedTurnError } from '../../../desktop/src/main/maker-ipc/au
 import { readInterruptedTurnAutoResumeSettingsFrom } from '../../../desktop/src/main/maker-host/interruptedTurnAutoResumeSettingsCore.ts';
 import { readSilentStopAutoResumeSettingsFrom } from '../../../desktop/src/main/maker-host/silentStopAutoResumeSettingsCore.ts';
 import { createSessionRuntimeFallbackSettingsFile } from '../../../desktop/src/main/maker-host/sessionRuntimeFallbackSettingsCore.ts';
+import { startSessionRuntimeFallbackTurn } from '../../../desktop/src/main/maker-ipc/sessionRuntimeControl.ts';
 import { explicitPorts } from './explicit-ports.ts';
 import type { HostProductTurn } from './product-turn.ts';
 
@@ -51,11 +52,14 @@ export interface HostAutoResumePorts {
   maybeApplySessionRuntimeFallback?: InterruptedTurnAutoResumeHookPorts<Session>['maybeApplySessionRuntimeFallback'];
   /** The rebuild leases the route change marks on the runtime it switched (sessionRuntimeFallback.ts). */
   pendingSessionRuntimeFallbackRebuilds?: InterruptedTurnAutoResumeHookPorts<Session>['pendingSessionRuntimeFallbackRebuilds'];
+  /** Smart-routing auto-switch mode captured per dispatched input createOpts. */
+  readModelGroupInputMode?: (createOpts: object) => 'enabled' | 'disabled' | undefined;
   /**
    * A takeover ended without a resumed turn to answer its input: the held error row was written, or
    * the takeover was dropped (Host-only; input-queue.mjs ends that input's /api/chat stream).
    */
-  onTakeoverReleased?(sessionId: string): void;
+  onTakeoverReleased?(sessionId: string, reason?: 'error-surfaced' | 'abandoned'): void;
+  onSuppressedErrorSurfaced?(sessionId: string, detail?: unknown): void;
   /**
    * Coexistence plan A (input-queue.mjs holdForDesktop): a desktop that opens this profile's database
    * is running. A resume that comes due then answers as superseded: the interrupted turn ends with its
@@ -94,20 +98,20 @@ export function createHostAutoResume(ports: HostAutoResumePorts) {
       // As register.ts (agentMeta null): the held error row, written once the takeover gives up.
       persistSuppressedError: (sessionId, detail) => {
         ports.history(sessionId).onTurnErrorEvent(sessionId, detail, null);
-        ports.onTakeoverReleased?.(sessionId);
+        ports.onTakeoverReleased?.(sessionId, 'error-surfaced');
       },
       // As register.ts: once the held error row is written (persistSuppressedError, just before this,
       // exactly once), the deferred product-turn failure is settled (settleDeferredProductTurnFailure):
       // the held activity of the turn that failed is committed if that turn is still the current one
       // (product-turn.ts). The desktop also shows the error in its Agent Island, which the Host has not.
-      surfaceSuppressedError: (sessionId) => { ports.productTurn?.()?.settleDeferred(sessionId); },
+      surfaceSuppressedError: (sessionId, detail) => { ports.productTurn?.()?.settleDeferred(sessionId); ports.onSuppressedErrorSurfaced?.(sessionId, detail); },
       // Orca and Teammate tasks are refused at Host admission: nothing is held for them.
       finalizeOrcaSuppressedTerminal: undefined,
       finalizeBotGroupSuppressedTerminal: undefined,
       markOutcome: (sessionId, clientId, outcome) => { void ports.history(sessionId).markAutoResumeOutcome(sessionId, clientId, outcome); },
       abandonTakeover: (sessionId, message, attemptToken) => {
         ports.coordinator().abandonAutoResume(sessionId, message, attemptToken);
-        ports.onTakeoverReleased?.(sessionId);
+        ports.onTakeoverReleased?.(sessionId, 'abandoned');
       },
       // Scheduler (see above): no run is waiting on this attempt.
       onAutoResumeFailed: undefined,
@@ -137,8 +141,12 @@ export function createHostAutoResume(ports: HostAutoResumePorts) {
     autoResumeBookkeeping,
     // Teammate tasks are refused at admission: no input carries a Teammate route to fall back from.
     botFallbackInputs: { has: () => false },
-    // Configured model groups are bound at dispatch in the desktop only.
-    modelGroupInputs: undefined,
+    modelGroupInputs: ports.readModelGroupInputMode
+      ? {
+          get: (createOpts) => ports.readModelGroupInputMode!(createOpts),
+          isInterruptedTurnAutoResumeEnabled: () => readInterruptedTurnAutoResumeSettingsFrom(ports.userDataDir()).enabled,
+        }
+      : undefined,
     resumeQuotaWait: undefined,
     // The Host has no Orca worker dispatch or scheduled remote teammate quota waits.
     workerInputs: undefined,
@@ -173,6 +181,7 @@ export function createHostAutoResume(ports: HostAutoResumePorts) {
       // The usage-limit resume arrives with the third batch; until then a person's message has no
       // usage-limit wait to restart.
       usageLimitAutoResume: { noteUserAction: () => {} },
+      startFallbackTurn: startSessionRuntimeFallbackTurn,
       // Provider-group tasks are refused at admission (see above).
       getProviderGroupService: () => null,
       // Behind the task's reply rows, as on the desktop, and with the desktop's failure handling: the

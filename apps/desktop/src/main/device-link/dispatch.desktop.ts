@@ -2,7 +2,8 @@
 import type { readUsageWidgetSnapshot } from '../quota-overview/service.js';
 import { configureStandbyGuestCleanup } from './providerShareAvailabilityGuests.js';
 import { prepareShareAvailability } from './providerShareAvailability.js';
-import { readKimiCodingAccountUsage, readOpenCodeGoAccountUsage } from '../maker-host/provider-account-usage.js';
+import { isRemoteProviderInvocationAllowed } from '../maker-host/remote-provider-access-store.js';
+import { readKimiCodingAccountUsage, readOpenCodeGoAccountUsage, readZhipuCodingPlanAccountUsage } from '../maker-host/provider-account-usage.js';
 import { executeTaskTags, TASK_TAG_CHANNEL } from '../localDb/ipc/taskTags.js';
 import { requestFilePeer, stopFilePeers } from './filePeer';
 import { requestTaskMigration } from '../task-migration/service';
@@ -67,6 +68,7 @@ export const {
   setSetupSnapshotRemoteHandler,
   setSetupTransferRemoteHandler,
   setAgentNetSwitchRemoteHandler,
+  setPeerAppUpdateRemoteHandler,
   setRemoteTurnChangeAction,
   setRemoteSubscriptionPoolQuotaReader,
   setRemoteClaudeSubscriptionUsageReader,
@@ -114,6 +116,8 @@ export const {
   },
   configureStandbyGuestCleanup,
   prepareShareAvailability,
+  isRemoteProviderInvocationAllowed,
+  readZhipuCodingPlanAccountUsage,
   readKimiCodingAccountUsage,
   readOpenCodeGoAccountUsage,
   executeTaskTags: (...args) => executeTaskTags(...args),

@@ -2,10 +2,12 @@ import { TASK_ACTIVITY_CAPABILITY, TASK_ACTIVITY_SNAPSHOT, type ForegroundHostTa
 import type { readUsageWidgetSnapshot } from '../quota-overview/service.js';
 import type { configureStandbyGuestCleanup } from './providerShareAvailabilityGuests.js';
 import type { prepareShareAvailability } from './providerShareAvailability.js';
+import { isZhipuCodingPlanRoute, parseZhipuAccountUsageResult } from '../../shared/providerAccountUsage.js';
 import { parseKimiUsageRequest, isKimiCodingProvider } from '../../shared/kimiCodingUsage.js';
 import { isOpenCodeGoProvider, parseOpenCodeGoUsageRequest } from '../../shared/opencodeGoUsage.js';
-import type { readKimiCodingAccountUsage, readOpenCodeGoAccountUsage } from '../maker-host/provider-account-usage.js';
+import type { readKimiCodingAccountUsage, readOpenCodeGoAccountUsage, readZhipuCodingPlanAccountUsage } from '../maker-host/provider-account-usage.js';
 import { PROVIDER_SHARE_INSIGHTS_CHANNEL } from '../../shared/providerShareInsights.js';
+import { PROVIDER_SHARE_AGENT_NET_LINK_CHANNEL } from '../../shared/providerShareAgentNetLink.js';
 import { sharedTaskRecoveryError } from '../../shared/sharedTaskRecovery.js';
 import { hasRichAnswer, compactRichAnswer, richAnswerText } from '@cindy/maker-shared/rich-answer';
 import type { RemoteAgentLimitUsage } from '../../shared/remoteAgentLimits.js';
@@ -15,6 +17,7 @@ import type { TaskTagRequest } from '@cindy/maker-shared';
 import type { TokenSpeedSnapshot } from '@cindy/maker-shared/usage-format';
 import {
   AGENT_NET_SWITCH_CHANNEL,
+  PEER_APP_UPDATE_CHANNEL,
   FILE_PEER_CHANNEL,
   isFilePeerStreamTransfer,
   REMOTE_AGENT_CHANNEL,
@@ -137,6 +140,7 @@ import {
   type MobileVoiceDictionaryLearningRequest,
 } from '@cindy/maker-shared/device-link-contract';
 import {
+  isProviderConnectionIcon, isProviderConnectionImage,
   resolveProviderLogoKind,
   type ProviderLogoKind,
   type ProviderLogoRouting,
@@ -170,6 +174,7 @@ import { getDeviceLinkInvokeContext, runDeviceLinkInvokeContext } from './invoke
 import {
   redactInputProjectionForSharedGuest,
   redactMessageRowForSharedGuest,
+  redactSessionRowForSharedGuest,
   redactSharedGuestPush,
 } from './sharedTaskMessageOrigin';
 import { isProviderSharePeer, isScopedPeer, isSharedTaskPeer, parseProviderSharePeer, PROVIDER_SHARE_RELAY_CAPABILITY, SHARED_TASK_CAPABILITY } from '@cindy/device-link';
@@ -225,6 +230,8 @@ export interface ProviderShareAccessPort {
   refreshPluginEngine?(providerId: string): void;
   insights?(controller: string, request: unknown): Promise<unknown>;
   insightsCurrent?(controller: string, result: unknown): boolean;
+  /** 受邀者请求让这个 Device Link 分享改走 Agent-Net（agentNetLinkedShares.ts）。 */
+  agentNetLink?(controller: string, request: unknown): Promise<unknown>;
   guestAccess(controller: string): { shareId: string; memberId: string; providerId: string } | null;
   /** Catalog invalidation comes only from the share owner, never a delegated executor. */
   catalogGuestAccess?(controller: string): { shareId: string; memberId: string; providerId: string } | null;
@@ -291,6 +298,14 @@ export interface SetupTransferRemoteHandler {
  * 能不能打开 Agent-Net、请它打开 / 关闭。Main 在 bootstrap 注入，未就绪时明确拒绝。
  */
 export interface AgentNetSwitchRemoteHandler {
+  handle(raw: unknown, controllerDeviceId: string, controllerName: string): Promise<unknown>;
+}
+
+/**
+ * 远程应用更新检查与触发(2026-11-26 用户确认):同账号电脑查询这台电脑是否有可安装的
+ * Cindy 新版本，并在二次确认后触发内置更新链路。Main 在 bootstrap 注入，未就绪时明确拒绝。
+ */
+export interface PeerAppUpdateRemoteHandler {
   handle(raw: unknown, controllerDeviceId: string, controllerName: string): Promise<unknown>;
 }
 
@@ -457,6 +472,8 @@ export interface InboundDispatchPorts {
   readUsageWidgetSnapshot?: typeof readUsageWidgetSnapshot;
   configureStandbyGuestCleanup?: typeof configureStandbyGuestCleanup;
   prepareShareAvailability?: typeof prepareShareAvailability;
+  readZhipuCodingPlanAccountUsage?: typeof readZhipuCodingPlanAccountUsage;
+  isRemoteProviderInvocationAllowed?: (providerId: string) => boolean;
   readKimiCodingAccountUsage?: typeof readKimiCodingAccountUsage;
   readOpenCodeGoAccountUsage?: typeof readOpenCodeGoAccountUsage;
   executeTaskTags: typeof executeTaskTags;
@@ -537,6 +554,8 @@ export function createInboundDispatch(ports: InboundDispatchPorts) {
     readUsageWidgetSnapshot = unavailable('readUsageWidgetSnapshot'),
     configureStandbyGuestCleanup,
     prepareShareAvailability = unavailable('prepareShareAvailability'),
+    readZhipuCodingPlanAccountUsage,
+    isRemoteProviderInvocationAllowed,
     readKimiCodingAccountUsage = unavailable('readKimiCodingAccountUsage'),
     readOpenCodeGoAccountUsage = unavailable('readOpenCodeGoAccountUsage'),
     executeTaskTags,
@@ -888,6 +907,11 @@ let agentNetSwitchRemoteHandler: AgentNetSwitchRemoteHandler | null = null;
 function setAgentNetSwitchRemoteHandler(handler: AgentNetSwitchRemoteHandler | null): void {
   agentNetSwitchRemoteHandler = handler;
 }
+let peerAppUpdateRemoteHandler: PeerAppUpdateRemoteHandler | null = null;
+
+function setPeerAppUpdateRemoteHandler(handler: PeerAppUpdateRemoteHandler | null): void {
+  peerAppUpdateRemoteHandler = handler;
+}
 
 const cloudPrivateInvokeHandlers = new Map<string, CloudPrivateInvokeHandler>();
 /** Registers one channel; null removes them all (runtime teardown). */
@@ -1186,6 +1210,10 @@ function projectInvokeResultForTunnel(
       manual: row.manual,
       recurring: row.recurring,
       intervalMs: row.intervalMs,
+      // 保留来源，让控制端归档确认区分可删的用户自动化与不可删的仓库/项目自动化。
+      ...(row.source === 'user' || row.source === 'project' || row.source === 'bot'
+        ? { source: row.source }
+        : {}),
       // 保留运行模式与旧控制端兼容；当前归档提醒包含持续会话，运行时恢复原普通任务。
       ...(row.persistentSession === true ? { persistentSession: true } : {}),
     }));
@@ -1214,7 +1242,8 @@ function projectInvokeResultForTunnel(
     : {};
   const providers = (r.providers as Record<string, unknown>[]).map((p) => {
     const rest = { ...p };
-    if (!sameAccountController || p.source !== 'organization') delete rest.customIcon;
+    const userThumbnail = supportsFullLogoKinds && p.source === 'user' && isProviderConnectionImage(p.customIcon);
+    if (!sameAccountController || (p.source !== 'organization' && !userThumbnail)) delete rest.customIcon;
     if (!sameAccountController) {
       delete rest.subscriptionPoolTarget;
       delete rest.subscriptionAccountKeys;
@@ -1237,6 +1266,8 @@ function projectInvokeResultForTunnel(
       ? 'xd'
       : sameAccountController && p.source === 'organization' && p.logoKind === 'openai-spectrum'
       ? 'openai-spectrum'
+      : sameAccountController && supportsFullLogoKinds && p.source === 'user' && isProviderConnectionIcon(p.logoKind)
+      ? p.logoKind
       : typeof p.id === 'string'
         ? resolveProviderLogoKind(p.id, p.routing as ProviderLogoRouting | undefined)
         : null;
@@ -1261,6 +1292,11 @@ function projectInvokeResultForTunnel(
       if (Array.isArray(p[field])) rest[field] = projectVisibleModelList(p[field], providerId, mediaAgent, visibility);
     }
     // A display-only capability survives route redaction. Never forward a stored hint.
+    delete rest.zhipuCodingPlanUsage;
+    const view = p as unknown as import('@cindy/model-providers').ProviderView;
+    if (sameAccountController && readZhipuCodingPlanAccountUsage && view.remoteInvocationEnabled === true
+      && view.connected && !view.suspended && !view.removed && view.auth?.method === 'apiKey'
+      && Object.values(view.routing ?? {}).some(isZhipuCodingPlanRoute)) rest.zhipuCodingPlanUsage = true;
     delete rest.kimiCodingUsageAgents;
     const kimiAgents = (['claude-code', 'codex', 'pi'] as const)
       .filter(agent => isKimiCodingProvider(p as unknown as import('@cindy/model-providers').Provider, agent));
@@ -4032,6 +4068,10 @@ function sanitizeMessageInvokeResult(
     const sanitized = sanitizeRemoteMessage(record);
     return sharedTaskGuest ? redactMessageRowForSharedGuest(sanitized) : sanitized;
   };
+  if (sharedTaskGuest && result.ok && channel === 'local-db:sessions:get') {
+    const redacted = redactSessionRowForSharedGuest(result.result);
+    return redacted === result.result ? result : { ok: true, result: redacted };
+  }
   if (sharedTaskGuest && result.ok && channel === 'maker:input:get-projection') {
     const projection = redactInputProjectionForSharedGuest(result.result);
     return projection === result.result ? result : { ok: true, result: projection };
@@ -4939,6 +4979,7 @@ function providerShareInvokeAccessFailure(src: string): InvokeResultPayload {
  */
 const PROVIDER_SHARE_CHANNELS: ReadonlySet<string> = new Set([
   PROVIDER_SHARE_INSIGHTS_CHANNEL,
+  PROVIDER_SHARE_AGENT_NET_LINK_CHANNEL,
   REMOTE_AGENT_CHANNEL,
   'maker:provider:list',
   'maker:get-capabilities',
@@ -5157,6 +5198,21 @@ async function runProviderShareInvoke(
       return { ok: true, result };
     } catch {
       return { ok: false, error: { code: 'IPC_ERROR', message: '[PERMISSION_DENIED] Provider share insights are unavailable or access changed' } };
+    }
+  }
+  if (payload.channel === PROVIDER_SHARE_AGENT_NET_LINK_CHANNEL) {
+    // Only the share owner's own guest (never a delegated executor, refused above) registers its Agent-Net key here.
+    if (!providerShareAccess?.agentNetLink || !providerShareAccess.catalogGuestAccess?.(src)) {
+      return { ok: false, error: { code: 'CHANNEL_NOT_ALLOWED', message: 'Moving this share to Agent-Net is not supported' } };
+    }
+    try {
+      if (args.length !== 1) throw new Error('[INVALID_PARAMS] Expected one link request');
+      const result = await providerShareAccess.agentNetLink(src, args[0]);
+      if (!providerShareGuestAccess(src)) return providerShareInvokeAccessFailure(src);
+      return { ok: true, result };
+    } catch (error) {
+      log.warn(`provider-share Agent-Net link from ${shortId(src)} failed: ${error instanceof Error ? error.message : String(error)}`);
+      return { ok: true, result: { unavailable: 'link-failed' } };
     }
   }
   if (PROVIDER_SHARE_AGENT_ARG_CHANNELS.has(payload.channel) && !PROVIDER_SHARE_AGENT_KINDS.has(String(args[0]))) {
@@ -5387,6 +5443,26 @@ async function executeRemoteInvoke(src: string, payload: InvokePayload | undefin
       return { ok: false, error: { code: 'IPC_ERROR', message: `[${code}] ssh access request failed` } };
     }
   }
+  if (payload.channel === PEER_APP_UPDATE_CHANNEL) {
+    // 只给同账号电脑：共享任务访客与供应商分享受邀者无权检查或触发这台电脑的应用更新。
+    if (!isSameAccountController(src)) {
+      return { ok: false, error: { code: 'CHANNEL_NOT_ALLOWED', message: `channel '${payload.channel}' not allowed` } };
+    }
+    const handler = peerAppUpdateRemoteHandler;
+    if (!handler) return { ok: false, error: { code: 'IPC_ERROR', message: '[PEER_APP_UPDATE_UNAVAILABLE] not ready yet' } };
+    try {
+      const name = resolveControllerName(src, undefined) ?? src.slice(0, 8);
+      const result = await runDeviceLinkInvokeContext(
+        { controllerDeviceId: src, channel: payload.channel },
+        () => timing.measure('handler', () => handler.handle(payload.args?.[0], src, name)),
+      );
+      return { ok: true, result };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '';
+      const code = /\bPEER_APP_UPDATE_[A-Z_]+\b/.exec(message)?.[0] ?? 'PEER_APP_UPDATE_UNAVAILABLE';
+      return { ok: false, error: { code: 'IPC_ERROR', message: `[${code}] peer app update failed` } };
+    }
+  }
   if (payload.channel === PLUGIN_OAUTH_CHANNEL) {
     if (payload.args?.length !== 1) return { ok: false, error: { code: 'IPC_ERROR', message: '[INVALID_PARAMS] Invalid OAuth transaction' } };
     try { return { ok: true, result: await requestPluginOauth(src, payload.args[0]) }; }
@@ -5485,6 +5561,14 @@ async function executeRemoteInvoke(src: string, payload: InvokePayload | undefin
   // Subscription IPC validates local senders (Claude for named accounts, xAI always).
   // Keep that check; authorized device-link reads use the same injected data readers.
   // 直读注入的 usage reader(cached-first,只读快照,无副作用)。已过三道 gate。
+  if (payload.channel === 'maker:usage:zhipu-coding-plan') {
+    const request = parseKimiUsageRequest(payload.args?.[0]);
+    if (!request) return { ok: false, error: { code: 'IPC_ERROR', message: '[INVALID_PARAMS] invalid GLM usage query' } };
+    const allowed = () => isSameAccountController(src) && isRemoteProviderInvocationAllowed?.(request.providerId);
+    if (!readZhipuCodingPlanAccountUsage || !allowed()) return { ok: true, result: { status: 'unsupported' } };
+    const result = await readZhipuCodingPlanAccountUsage({ providerId: request.providerId });
+    return { ok: true, result: allowed() ? parseZhipuAccountUsageResult(result) : { status: 'unsupported' } };
+  }
   if (payload.channel === 'maker:usage:kimi-coding') {
     const request = parseKimiUsageRequest((payload.args ?? [])[0]);
     if (!request) return { ok: false, error: { code: 'IPC_ERROR', message: '[INVALID_PARAMS] invalid Kimi usage query' } };
@@ -5737,6 +5821,9 @@ async function executeRemoteInvoke(src: string, payload: InvokePayload | undefin
     if (isDbWorkerOverloadedError(message) && (!handlerCompleted || isCompletedInvokeRetryableReadChannel(payload.channel))) {
       return { ok: false, error: { code: 'BACKPRESSURE', message } };
     }
+    if (payload.channel === 'local-db:messages:around-client-id' && err instanceof DeviceLinkError && err.code === 'NOT_FOUND') {
+      return { ok: false, error: { code: err.code, message } };
+    }
     return { ok: false, error: { code: 'IPC_ERROR', message } };
   }
 }
@@ -5937,6 +6024,7 @@ return {
   setSetupSnapshotRemoteHandler,
   setSetupTransferRemoteHandler,
   setAgentNetSwitchRemoteHandler,
+  setPeerAppUpdateRemoteHandler,
   setRemoteTurnChangeAction,
   setRemoteSubscriptionPoolQuotaReader,
   setRemoteClaudeSubscriptionUsageReader,

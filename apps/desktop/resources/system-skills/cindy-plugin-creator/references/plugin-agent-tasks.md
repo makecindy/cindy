@@ -539,7 +539,7 @@ instanceId、generation、outcome（completed/failed/cancelled/interrupted）及
   返回 `{tasks:[{id,title,agentKind,archived,status,lastActivityAt}]}`，按最近活动倒序，最多 200 条；包含已归档任务和该项目 worktree 下的任务。
   `status` 为 `running | awaiting | error | done | idle`，与侧边栏右侧状态同源（团队主任务同样带上本机 Worker 的出错/待处理）；`lastActivityAt` 为毫秒时间戳。
   用户拒绝首次确认后，可在插件详情页点「确认任务查看权限」重新允许；插件不要反复调用来触发确认。
-  不含消息、计划、文件或费用；不含对话、伙伴、Worker、隐藏、远程及其他电脑上的任务。未登记或已删除的项目返回 `TARGET_UNAVAILABLE`。
+  不含消息、计划、文件或费用；不含对话、伙伴、Worker、隐藏、SSH 远程及记录在其他电脑上的任务。只把 Agent 执行来源换到其他电脑或供应商分享的本机任务照常列出。未登记或已删除的项目返回 `TARGET_UNAVAILABLE`。
 - `openTask({taskId})`：在主窗口打开该任务；Cindy 未在前台时不抢焦点。只接受 `projectTasks` 能列出的任务，否则返回 `TARGET_UNAVAILABLE`。返回 `{opened:true}`。
 - 只读，不能发送消息、修改、归档或停止任务；需要这些操作请改用 `cindy.tasks` / `cindy.targets` 并声明对应权限。状态变化不推送，插件自行按需刷新。
 

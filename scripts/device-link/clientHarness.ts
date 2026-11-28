@@ -36,7 +36,7 @@ export function createHost(client: DeviceLinkClient) {
   const executions = new Map<string, number>();
   const received: Envelope[] = [];
   let paused = false;
-  let failNextSubscribe = false;
+  let failNextSubscribe: boolean | string = false;
   let heldResult: (() => void) | undefined;
   const off = client.onFrame((env) => {
     received.push(env);
@@ -54,7 +54,7 @@ export function createHost(client: DeviceLinkClient) {
     let result: unknown;
     switch (channel) {
       case "device-link:subscribe":
-        if (failNextSubscribe) {
+        if (failNextSubscribe === true || failNextSubscribe === env.src) {
           failNextSubscribe = false;
           client.sendInvokeResult(env.src, env.id, {
             ok: false,
@@ -111,8 +111,8 @@ export function createHost(client: DeviceLinkClient) {
     setPaused(value: boolean) {
       paused = value;
     },
-    failSubscriptionOnce() {
-      failNextSubscribe = true;
+    failSubscriptionOnce(deviceId?: string) {
+      failNextSubscribe = deviceId ?? true;
     },
     get hasHeldResult() {
       return Boolean(heldResult);
