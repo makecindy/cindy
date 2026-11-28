@@ -211,8 +211,10 @@ public static class CindyBarrierWindowFixture {
       let output = '';
       let errors = '';
       // Bound fixture setup so even a hung compiler reaches our child cleanup.
-      // This does not change any production barrier or Vitest timeout.
-      const setupSignal = AbortSignal.timeout(30_000);
+      // Windows GHA runs eight shards in parallel: this fixture's once-only
+      // Add-Type compile can exceed 30s under that load. The per-test timeout
+      // below still bounds the whole case.
+      const setupSignal = AbortSignal.timeout(45_000);
       let stopWaitingForSetup = (): void => {};
       try {
         const ownerPid = await new Promise<number>((resolve, reject) => {
@@ -259,5 +261,6 @@ public static class CindyBarrierWindowFixture {
         await afterExit.release();
       }
     },
+    120_000,
   );
 });

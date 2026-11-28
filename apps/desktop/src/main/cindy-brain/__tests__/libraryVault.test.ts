@@ -22,6 +22,21 @@ import {
 import { initCustomLibraryTree, openExistingCustomLibrary, parseExistingStdout, PROVABLE_STAGING_NAME } from '../libraryDirFd.js';
 import { relocateLibraryMetaOwner } from '../libraryBinding.js';
 
+/**
+ * Windows GHA runs eight desktop unit shards in parallel: the first Add-Type
+ * compile inside the inline PowerShell helper can exceed the production 15s
+ * deadline. Only tests use this budget; production keeps failing closed at 15s.
+ */
+const CI_LIBRARY_HELPER_TIMEOUT_MS = 45_000;
+const withInitHelperBudget = (req: { parentFd: number; ghostId: string; metaJson: string }) => ({
+  ...req,
+  helperTimeoutMs: CI_LIBRARY_HELPER_TIMEOUT_MS,
+});
+const withOpenHelperBudget = (req: { parentFd: number; ghostId: string }) => ({
+  ...req,
+  helperTimeoutMs: CI_LIBRARY_HELPER_TIMEOUT_MS,
+});
+
 const nativeReplace = vi.hoisted(() => vi.fn<(source: string, destination: string) => Promise<void>>());
 vi.mock('../../windowsAtomicRename.js', () => ({ atomicReplaceWindowsDirectoryEntry: nativeReplace }));
 // Forward the named ESM export too: changing fs.promises alone does not replace its bound rename.
@@ -70,6 +85,8 @@ describe('LibraryVault', () => {
       getDiskFreeBytes: async () => diskFree,
       locationKind: 'default',
       limits: limitsOverride,
+      initCustomTree: req => initCustomLibraryTree(withInitHelperBudget(req)),
+      openExistingCustom: req => openExistingCustomLibrary(withOpenHelperBudget(req)),
       ...over,
     };
     return new LibraryVault(deps);
@@ -400,7 +417,7 @@ describe('LibraryVault', () => {
             injected = true;
             if (fs.existsSync(parent)) await fs.promises.rename(parent, parked);
           }
-          return openExistingCustomLibrary(req);
+          return openExistingCustomLibrary(withOpenHelperBudget(req));
         },
       });
       const missing = await raced.open();
@@ -436,7 +453,7 @@ describe('LibraryVault', () => {
             if (fs.existsSync(parent)) await fs.promises.rename(parent, parked);
             await fs.promises.mkdir(parent);
           }
-          return openExistingCustomLibrary(req);
+          return openExistingCustomLibrary(withOpenHelperBudget(req));
         },
       });
       const opened = await raced.open();
@@ -487,7 +504,7 @@ describe('LibraryVault', () => {
         customParentGrant: grant,
         ghostId: 'mivo-canvas',
         initCustomTree: async (req) => {
-          const r = await initCustomLibraryTree(req);
+          const r = await initCustomLibraryTree(withInitHelperBudget(req));
           afterInit = true;
           return r;
         },
