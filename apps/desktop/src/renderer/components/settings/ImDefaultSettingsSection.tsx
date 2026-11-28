@@ -64,6 +64,8 @@ function agentKindOfVendor(vendor: string): ImDefaultBuiltinAgentKind {
 export interface ImDefaultSettingsSummary {
   agentKind: ImDefaultAgentKind;
   model: string;
+  providerId?: string | null;
+  agentDeviceId?: string | null;
 }
 
 export function ImDefaultSettingsSection({
@@ -133,9 +135,13 @@ export function ImDefaultSettingsSection({
 
   useEffect(() => {
     if (!settings) return;
+    const active = activeImDefaultAgentSettings(settings);
     onSummaryChange?.({
       agentKind: settings.agentKind,
-      model: activeImDefaultAgentSettings(settings).model,
+      model: active.model,
+      ...(settings.agentKind === 'acp'
+        ? { providerId: active.providerId, agentDeviceId: active.agentDeviceId ?? null }
+        : {}),
     });
   }, [onSummaryChange, settings]);
 

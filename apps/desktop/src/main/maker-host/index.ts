@@ -290,6 +290,7 @@ import {
 import { ensureCurrentAccountProviderReadiness } from './account-provider-readiness-ensure.js';
 import { ACCOUNT_PROVIDER_NOT_READY_CODE } from '../../shared/accountProviderReadiness.js';
 import { listBotImConnectionsForBot } from '../im/shared/botImConnectionStore.js';
+import { listPersonalChannelsForCompanion } from '../im/shared/personalChannelStore.js';
 import {
   getRejectedCodexDownshiftModel,
   getObservedCodexUpstreamCapacity,
@@ -2504,8 +2505,13 @@ export function getMaker(): Maker {
         agentKind: companionToolAgentKind(input.agentKind),
       }),
       // 伙伴绑了哪些平台的机器人(不含凭证): 主任务据此挂渠道原生 API 工具(见 hydrate 内注释)。
-      listBotImChannels: ({ botId }) =>
-        [...new Set(listBotImConnectionsForBot(botId).map((connection) => connection.channel))],
+      // 同时覆盖伙伴自有连接(bot-im-connections)与设置里通过「谁来回复」交给这位伙伴的个人机器人。
+      listBotImChannels: ({ botId }) => [
+        ...new Set([
+          ...listBotImConnectionsForBot(botId).map((connection) => connection.channel),
+          ...listPersonalChannelsForCompanion(botId),
+        ]),
+      ],
       listToolsets: async ({ botId, agentKind, workingDir, remoteHostId }) => {
         const registry = getPluginRegistry();
         return Promise.all(

@@ -108,7 +108,8 @@
     "recognitionStalled": "O reconhecimento de voz deixou de devolver resultados. Tente novamente.",
     "transcriptKept": "{{message}} O texto reconhecido até agora foi mantido — pode editá-lo diretamente.",
     "micPermission": "O acesso ao microfone está desativado. Permita que {{appName}} utilize o microfone nas definições do sistema.",
-    "realtimeAudioUnavailable": "Esta compilação não suporta introdução por voz em tempo real. Instale uma compilação de teste que inclua o módulo de gravação nativo."
+    "realtimeAudioUnavailable": "Esta compilação não suporta introdução por voz em tempo real. Instale uma compilação de teste que inclua o módulo de gravação nativo.",
+    "retryRecognition": "Reconhecer novamente"
   },
   "incomingShare": {
     "title": "Enviar para Cindy",

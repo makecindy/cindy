@@ -1,6 +1,12 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { getMobileAuthOwner, isMobileAuthOwnerCurrent, type MobileAuthOwnerGeneration } from '@/auth/authOwnerGeneration';
-import { createDurableOutbox, isDurableOutboxSettled, type DurableOutboxRecord } from "./durableOutbox";
+import {
+  createDurableOutbox,
+  isDurableOutboxSettled,
+  needsHostCreation,
+  type DurableOutboxRecord,
+  type DurableOutboxStore,
+} from "./durableOutbox";
 import { durableOutboxUploadUri, removeOutboxFiles } from "./durableOutboxFiles";
 import { outboxItemAttachments, type MobileOutboxItem } from "./sessionOutbox";
 import { discardMobileUploadedAttachment } from "./mobileAttachmentUpload";
@@ -142,4 +148,175 @@ export function holdDurableOutboxCreation(sessionId: string): () => void {
 }
 export function isDurableOutboxCreationHeld(sessionId: string): boolean {
   return creationHolds.has(sessionId);
+}
+
+export interface SubmittedDialogueTarget {
+  accountId: string;
+  deviceId: string;
+  sessionId: string;
+  clientId: string;
+}
+
+const RETRACT_INITIAL_RETRY_MS = 500;
+const RETRACT_MAX_RETRY_MS = 5_000;
+const activeDialogueRetractions = new Map<string, () => void>();
+
+const dialogueRetractionKey = (target: SubmittedDialogueTarget): string =>
+  JSON.stringify([target.accountId, target.deviceId, target.sessionId, target.clientId]);
+
+async function tryRetractSubmittedDialogueOnce(
+  target: SubmittedDialogueTarget,
+  store: DurableOutboxStore,
+): Promise<boolean> {
+  if (store.getAccountId() !== target.accountId) return false;
+  try {
+    await store.ready();
+  } catch {
+    return false;
+  }
+  if (store.getAccountId() !== target.accountId) return false;
+  const find = () =>
+    store.getSnapshot().find(
+      (record) =>
+        record.accountId === target.accountId &&
+        record.deviceId === target.deviceId &&
+        record.item.sessionId === target.sessionId &&
+        record.item.clientId === target.clientId &&
+        needsHostCreation(record),
+    );
+  const current = find();
+  if (!current) return true;
+  try {
+    await store.remove(current);
+    return true;
+  } catch {
+    // Physical removal failed (or the record changed concurrently). Fall back to
+    // durably marking the record settled/cancelled so delivery will never launch
+    // it and finish() will retry removal, including across app restarts.
+  }
+  if (store.getAccountId() !== target.accountId) return false;
+  const latest = find();
+  if (!latest) return true;
+  try {
+    await store.update(latest, {
+      suspended: true,
+      state: "host-owned",
+      cleanupOutcome: "cancelled",
+      cancelRequested: true,
+      error: undefined,
+      creation: { ...latest.creation!, needsHostCreation: undefined, cancelled: true },
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Retract an unhanded-off `needsHostCreation` record before releasing creation ownership.
+ * If removal fails, falls back to durably settling the record as cancelled. If both
+ * writes fail (or the account switched away mid-write), acquires an independent creation
+ * hold on `sessionId` before returning so releasing the caller's lease never unblocks
+ * background delivery, and retries until the record is durably removed or settled.
+ */
+export async function retractSubmittedDialogueCreation(
+  target: SubmittedDialogueTarget,
+  options?: {
+    store?: DurableOutboxStore;
+    holdCreation?: (sessionId: string) => () => void;
+    initialRetryMs?: number;
+    maxRetryMs?: number;
+  },
+): Promise<boolean> {
+  const store = options?.store ?? mobileDurableOutbox;
+  const holdCreation = options?.holdCreation ?? holdDurableOutboxCreation;
+  const key = dialogueRetractionKey(target);
+
+  if (activeDialogueRetractions.has(key)) return false;
+  if (await tryRetractSubmittedDialogueOnce(target, store)) return true;
+  if (activeDialogueRetractions.has(key)) return false;
+
+  const releaseHold = holdCreation(target.sessionId);
+  const initialDelay = options?.initialRetryMs ?? RETRACT_INITIAL_RETRY_MS;
+  const maxDelay = options?.maxRetryMs ?? RETRACT_MAX_RETRY_MS;
+  let delayMs = initialDelay;
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  let running = false;
+  let rerun = false;
+  let done = false;
+
+  const finish = () => {
+    if (done) return;
+    done = true;
+    if (timer !== null) {
+      clearTimeout(timer);
+      timer = null;
+    }
+    unsubscribe();
+    activeDialogueRetractions.delete(key);
+    releaseHold();
+  };
+
+  const scheduleRetry = () => {
+    if (done || timer !== null || store.getAccountId() !== target.accountId) return;
+    const wait = delayMs;
+    delayMs = Math.min(maxDelay, delayMs * 2);
+    timer = setTimeout(() => {
+      timer = null;
+      void attempt();
+    }, wait);
+  };
+
+  const attempt = async () => {
+    if (done) return;
+    if (running) {
+      rerun = true;
+      return;
+    }
+    running = true;
+    try {
+      do {
+        rerun = false;
+        if (done) return;
+        if (store.getAccountId() !== target.accountId) {
+          if (timer !== null) {
+            clearTimeout(timer);
+            timer = null;
+          }
+          return;
+        }
+        if (await tryRetractSubmittedDialogueOnce(target, store)) {
+          finish();
+          return;
+        }
+      } while (rerun && !done);
+      scheduleRetry();
+    } finally {
+      running = false;
+    }
+  };
+
+  const unsubscribe = store.subscribe(() => {
+    if (done) return;
+    if (store.getAccountId() === target.accountId) {
+      delayMs = initialDelay;
+      if (timer !== null) {
+        clearTimeout(timer);
+        timer = null;
+      }
+      // Defer past synchronous activate() emit so store.ready() points to the new load promise.
+      queueMicrotask(() => {
+        if (!done) void attempt();
+      });
+    } else if (timer !== null) {
+      clearTimeout(timer);
+      timer = null;
+    }
+  });
+
+  activeDialogueRetractions.set(key, finish);
+  if (store.getAccountId() === target.accountId) {
+    scheduleRetry();
+  }
+  return false;
 }

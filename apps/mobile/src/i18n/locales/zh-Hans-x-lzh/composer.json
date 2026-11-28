@@ -108,7 +108,8 @@
     "recognitionStalled": "语音识别未续返结果，请再试。",
     "transcriptKept": "{{message}}（所识之文字已存，可径修之）",
     "micPermission": "麦克风权限未开，请于系统设置中允许 {{appName}} 使用麦克风。",
-    "realtimeAudioUnavailable": "此安装包不支持实时声之输入，请安装含原生录音模块之测试版。"
+    "realtimeAudioUnavailable": "此安装包不支持实时声之输入，请安装含原生录音模块之测试版。",
+    "retryRecognition": "重辨"
   },
   "incomingShare": {
     "title": "遣至 Cindy",

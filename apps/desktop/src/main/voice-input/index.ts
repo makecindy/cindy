@@ -9,10 +9,14 @@ import {
   DictationRefiner,
   VoiceInputController,
   VoiceTimelineLogger,
+  buildAsrRecognitionHints,
+  hasAsrRecognitionHints,
+  sanitizeActiveAppContext,
   takeRefinementContextHead,
   takeRefinementContextTail,
   truncateRefinementReply,
   getDictationDictionaryAdviceSkipReason,
+  type AsrRecognitionHints,
   type DictationDictionaryAdviceInput,
   type DictationDictionaryAdviceResult,
   type EditableRange,
@@ -101,7 +105,8 @@ import {
 import { systemAudioMuteGuard } from './SystemAudioMuteGuard.js';
 import { VoiceInputOperationQueue } from './VoiceInputOperationQueue.js';
 import {
-  awaitGlobalOverlayPasteContext,
+  awaitGlobalOverlayPasteSnapshot,
+  getGlobalOverlayPasteTarget,
   getVoiceInputAccessibilityPermissionSnapshot,
   getVoiceInputInputMonitoringPermissionCachedSnapshot,
   isGlobalVoiceInputOverlaySender,
@@ -606,6 +611,7 @@ function normalizeRefinementContext(
   // Preserve this key order through main before DictationRefiner rebuilds the
   // final request. Keep stable user settings before voice history, and keep
   // cursor-local / per-request fields after that.
+  const activeApp = sanitizeActiveAppContext(context?.activeApp);
   return {
     uiLanguage: truncateText(context?.uiLanguage ?? app.getLocale(), 32),
     sourceLanguage: truncateText(effectiveSourceLanguage, 32),
@@ -619,6 +625,7 @@ function normalizeRefinementContext(
     selectionBefore: takeTail(context?.selectionBefore ?? '', MAX_REFINEMENT_SIDE_CONTEXT_CHARS),
     selectedText: takeHead(context?.selectedText ?? '', MAX_REFINEMENT_SIDE_CONTEXT_CHARS),
     selectionAfter: takeHead(context?.selectionAfter ?? '', MAX_REFINEMENT_SIDE_CONTEXT_CHARS),
+    ...(activeApp ? { activeApp } : {}),
     replyToMessage: truncateRefinementReply(
       context?.replyToMessage ?? '',
       MAX_REFINEMENT_REPLY_TO_MESSAGE_CHARS,
@@ -626,16 +633,20 @@ function normalizeRefinementContext(
   };
 }
 
-// Fires off the overlay AX-context capture wait WITHOUT blocking the caller,
-// and mutates `targetContext` in place when it resolves. Returning a promise
-// lets callers optionally await for tests; production code fires-and-forgets
-// because we don't want to delay ASR provider creation on the slow path.
-//
-// The previous implementation awaited up to 800ms here BEFORE the WS dial,
-// regressing voice-input start latency in exchange for richer refine context.
-// Now the dial proceeds immediately; on the rare race where refine fires
-// before AX capture completes, the run falls back to history-only refinement
-// — same as life before the feature.
+function omitActiveAppFromRefinementContext(
+  context: DictationRefinementContext,
+): DictationRefinementContext {
+  if (!context.activeApp) return context;
+  const { activeApp, ...rest } = context;
+  void activeApp;
+  return rest;
+}
+
+// Fires off the overlay AX-context + foreground app capture wait WITHOUT
+// blocking the caller, and mutates `targetContext` in place when it resolves.
+// Returning a promise lets callers optionally await for tests; production code
+// fires-and-forgets because we don't want to delay ASR provider creation on the
+// slow path.
 function beginOverlayContextInjection(
   rendererContext: DictationRefinementContext | undefined,
   sender: Electron.WebContents,
@@ -646,6 +657,15 @@ function beginOverlayContextInjection(
   // (which can outlive an overlay close on the paste path).
   if (!isGlobalVoiceInputOverlaySender(sender)) return null;
 
+  // If capture already finished before voice-input:start arrived, populate the
+  // sanitized foreground app synchronously so prompt-cache warmup sees it too.
+  if (!targetContext.activeApp) {
+    const syncActiveApp = sanitizeActiveAppContext(getGlobalOverlayPasteTarget());
+    if (syncActiveApp) {
+      targetContext.activeApp = syncActiveApp;
+    }
+  }
+
   // If the overlay caller somehow already supplied selection fields, trust
   // them — leave room for future overrides from that side.
   const hasAnySelection = Boolean(
@@ -653,11 +673,17 @@ function beginOverlayContextInjection(
     rendererContext?.selectedText ||
     rendererContext?.selectionAfter,
   );
-  if (hasAnySelection) return null;
+  if (hasAnySelection && targetContext.activeApp) return null;
 
-  return awaitGlobalOverlayPasteContext({ timeoutMs: 800 })
-    .then((overlayContext) => {
-      if (!overlayContext) return;
+  return awaitGlobalOverlayPasteSnapshot({ timeoutMs: 800 })
+    .then(({ context: overlayContext, target: overlayTarget }) => {
+      if (!targetContext.activeApp && overlayTarget) {
+        const sanitizedApp = sanitizeActiveAppContext(overlayTarget);
+        if (sanitizedApp) {
+          targetContext.activeApp = sanitizedApp;
+        }
+      }
+      if (hasAnySelection || !overlayContext) return;
       // Apply the same length caps as normalizeRefinementContext does for
       // synchronous fields, so prompt sizing stays predictable regardless
       // of whether overlay capture won the race.
@@ -680,6 +706,7 @@ function summarizeRefinementContext(context: DictationRefinementContext): {
   beforeChars: number;
   selectedChars: number;
   afterChars: number;
+  hasActiveApp: boolean;
   replyToMessageChars: number;
   sourceLanguage?: string;
 } {
@@ -691,6 +718,7 @@ function summarizeRefinementContext(context: DictationRefinementContext): {
     beforeChars: context.selectionBefore?.length ?? 0,
     selectedChars: context.selectedText?.length ?? 0,
     afterChars: context.selectionAfter?.length ?? 0,
+    hasActiveApp: Boolean(context.activeApp),
     replyToMessageChars: context.replyToMessage?.length ?? 0,
     sourceLanguage: context.sourceLanguage,
   };
@@ -1157,6 +1185,17 @@ async function prewarmVoiceInputRefiner(profiles: readonly VoiceInputRefinerProf
   await Promise.all(warmups);
 }
 
+function readCurrentAsrRecognitionHints(): AsrRecognitionHints | undefined {
+  const settings = voiceInputDataStore.getSettings?.();
+  const history = voiceInputDataStore.getHistory?.(6) ?? [];
+  const hints = buildAsrRecognitionHints({
+    dictionaryEntries: settings?.dictionaryEntries,
+    recentHistory: history.map((entry) => entry.text),
+    recentHistoryOrder: 'newest-first',
+  });
+  return hasAsrRecognitionHints(hints) ? hints : undefined;
+}
+
 function buildRealtimeAsrProviderOptions(
   profile: VoiceInputAsrProfile,
   sourceLanguage: string | undefined,
@@ -1164,6 +1203,7 @@ function buildRealtimeAsrProviderOptions(
   proxyBaseUrl?: string,
   connectionProvider?: () => Promise<CindyVoiceAsrConnection>,
   proxyHintUrl?: string,
+  recognitionHints?: AsrRecognitionHints,
 ): RealtimeAsrWebSocketProviderOptions {
   if (profile.mode !== 'realtime-websocket' || !profile.realtime) {
     throw new Error(`Voice input provider ${profile.id} is not a realtime ASR provider.`);
@@ -1172,6 +1212,7 @@ function buildRealtimeAsrProviderOptions(
     accessTokenProvider,
     model: profile.model,
     sourceLanguage,
+    recognitionHints,
     pcmSampleRate: profile.realtime.pcmSampleRate,
     protocolProfile: profile.realtime.protocolProfile,
     providerKind: profile.id,
@@ -1191,6 +1232,7 @@ function buildRealtimeAsrProviderOptions(
 function buildCustomRealtimeAsrProviderOptions(
   config: VoiceInputCustomAsrConfig,
   sourceLanguage: string | undefined,
+  recognitionHints?: AsrRecognitionHints,
 ): RealtimeAsrWebSocketProviderOptions {
   const profile = getVoiceInputAsrProfile('custom-realtime-asr');
   const openAiProtocol = config.protocol === 'openai-realtime';
@@ -1204,6 +1246,7 @@ function buildCustomRealtimeAsrProviderOptions(
     model: config.model,
     realtimeUrl: resolveVoiceInputCustomAsrWebsocketUrl(config),
     sourceLanguage,
+    recognitionHints,
     pcmSampleRate: openAiProtocol ? 24_000 : 16_000,
     protocolProfile: openAiProtocol ? 'openai-transcription-manual' : 'qwen-asr-server-vad',
     providerKind: 'custom-realtime-asr',
@@ -1563,6 +1606,7 @@ export async function prewarmVoiceInputProvider(options?: {
       // preconnect so the first audio frame does not wait behind TLS +
       // session.update.
       if (byokMode && profile.mode === 'realtime-websocket' && profile.realtime?.prewarmable && !disableRealtimePreconnect) {
+        const recognitionHints = readCurrentAsrRecognitionHints();
         if (provider === 'custom-realtime-asr') {
           const customAsr = readActiveVoiceInputModelSelection('custom-asr-prewarm').customAsr;
           const customAsrKey = getProviderSecretStore().get('voice-asr');
@@ -1570,6 +1614,7 @@ export async function prewarmVoiceInputProvider(options?: {
             await prewarmRealtimeAsrWebSocketSession(buildCustomRealtimeAsrProviderOptions(
               customAsr,
               asrLanguageHint,
+              recognitionHints,
             ));
           }
         } else if (profile.auth === 'codex') {
@@ -1579,6 +1624,10 @@ export async function prewarmVoiceInputProvider(options?: {
               profile,
               asrLanguageHint,
               () => Promise.resolve(token),
+              undefined,
+              undefined,
+              undefined,
+              recognitionHints,
             ));
           }
         } else if (profile.realtime.endpointPath) {
@@ -1589,6 +1638,9 @@ export async function prewarmVoiceInputProvider(options?: {
               asrLanguageHint,
               () => Promise.resolve(proxyApiKey),
               proxyBaseUrl,
+              undefined,
+              undefined,
+              recognitionHints,
             ));
           }
         }
@@ -2076,8 +2128,10 @@ async function createVoiceInputProvider(
     return new RealtimeAsrWebSocketProvider(buildCustomRealtimeAsrProviderOptions(
       customAsr,
       sourceLanguage,
+      readCurrentAsrRecognitionHints(),
     ));
   }
+  const recognitionHints = readCurrentAsrRecognitionHints();
   if (profile.mode === 'realtime-websocket') {
     const realtimeConfig = profile.realtime;
     if (!realtimeConfig) throw new Error(`Voice input provider ${provider} is missing realtime config.`);
@@ -2086,6 +2140,10 @@ async function createVoiceInputProvider(
         profile,
         sourceLanguage,
         () => desktopCodexAuthAdapter.getAccessToken(),
+        undefined,
+        undefined,
+        undefined,
+        recognitionHints,
       ));
     }
     if (realtimeConfig.endpointPath) {
@@ -2097,6 +2155,7 @@ async function createVoiceInputProvider(
           undefined,
           () => voiceContext.createAsrConnection(provider),
           getVoiceApiWebSocketOriginHint(),
+          recognitionHints,
         ));
       }
       if (!isVoiceInputByokMode()) {
@@ -2110,6 +2169,9 @@ async function createVoiceInputProvider(
           sourceLanguage,
           () => Promise.resolve(proxyApiKey),
           proxyBaseUrl,
+          undefined,
+          undefined,
+          recognitionHints,
         ),
         // 这条直连网关的 WebSocket 携带 Cindy AI Key;握手 401 时上报 Key 失效。
         onAuthorizationRejected: reportCindyGatewayKeyRejected,
@@ -2129,6 +2191,7 @@ async function createVoiceInputProvider(
           resourceId: nativeConfig.resourceId,
           pcmSampleRate: nativeConfig.pcmSampleRate,
           sourceLanguage,
+          recognitionHints,
           missingCredentialMessage: profile.missingCredentialMessage,
           errorFallbackMessage: profile.errorFallbackMessage,
         });
@@ -2145,6 +2208,7 @@ async function createVoiceInputProvider(
         resourceId: nativeConfig.resourceId,
         pcmSampleRate: nativeConfig.pcmSampleRate,
         sourceLanguage,
+        recognitionHints,
         missingCredentialMessage: profile.missingCredentialMessage,
         errorFallbackMessage: profile.errorFallbackMessage,
         // 这条直连网关的 WebSocket 携带 Cindy AI Key;握手 401 时上报 Key 失效。
@@ -2165,6 +2229,7 @@ async function createVoiceInputProvider(
       baseUrl: proxyBaseUrl,
       model: profile.model,
       sourceLanguage,
+      recognitionHints,
     });
   }
 
@@ -2178,6 +2243,7 @@ async function createVoiceInputProvider(
       apiKey: directApiKey,
       baseUrl: readElevenLabsBaseUrl(),
       sourceLanguage,
+      recognitionHints,
     });
   }
 
@@ -2209,6 +2275,7 @@ export async function transcribeVoiceInputAudioFile(
     baseUrl: proxyBaseUrl,
     model: profile.model,
     sourceLanguage: input.sourceLanguage,
+    recognitionHints: readCurrentAsrRecognitionHints(),
     bytes: input.bytes,
     mimeType: input.mimeType,
     fileName: input.fileName,
@@ -2721,7 +2788,15 @@ export function registerVoiceInputIpc(): void {
               },
             }),
             model: CINDY_MANAGED_REFINER_PROVIDER,
-            contextProvider: () => refinementContext,
+            // Legacy managed voice-server validates context with `.strict()` and
+            // rejects unknown keys with HTTP 400. Forward `activeApp` only when
+            // the allocated session explicitly declares support for it; this
+            // gates both refine-warmup and refine identically.
+            contextProvider: () => (
+              voiceContext.supportsRefinementContextField?.('activeApp')
+                ? refinementContext
+                : omitActiveAppFromRefinementContext(refinementContext)
+            ),
             promptCacheScope: customCacheScope
               ?? `${VOICE_INPUT_REFINEMENT_CACHE_SCOPE}:${CINDY_MANAGED_REFINER_PROVIDER}`,
           });

@@ -134,8 +134,7 @@ export function GhostCardPromptPanel({
           </div>
         </div>
         <FieldVoiceInputNotice
-          error={voice.lastError}
-          speakerFiltered={voice.speakerFiltered}
+          {...voice.noticeProps}
           className="mt-1.5"
         />
         <div className="mt-1.5 flex items-center justify-end gap-1.5">

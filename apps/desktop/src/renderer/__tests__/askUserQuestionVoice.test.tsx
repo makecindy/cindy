@@ -27,6 +27,7 @@ vi.mock('../components/new-chat/useAskUserDictation', () => ({
       isBusy: state === 'listening',
       liveText: null,
       lastError: null,
+      canRetryRecognition: false,
       handleUndoKeyDown: () => false,
       start: () => {
         start();
@@ -41,6 +42,7 @@ vi.mock('../components/new-chat/useAskUserDictation', () => ({
         return ok;
       },
       cancel: async () => { await cancel(); setState('idle'); },
+      retryRecognition: async () => false,
     };
   },
 }));

@@ -44,6 +44,8 @@ describe.each(['new.tsx', '[sessionId].tsx'])('%s speaker gate startup', page =>
       voicePermissionRequestInFlightRef: { current: false },
       voicePermissionRequestSeqRef: { current: 0 }, voicePermissionRequestAbortRef: { current: null },
       voiceStartupInFlightRef: { current: false }, voiceStartupSeqRef: startupSeq,
+      voiceRetryRunSeqRef: { current: 0 },
+      failedVoiceRetry: { clear: vi.fn(), retain: vi.fn() },
       voiceStopInFlightRef: { current: false }, voiceRecordingActiveRef: { current: false },
       voiceStopAfterStartRef: { current: false }, voiceLongPressActiveRef: { current: false },
       voiceControllerSessionRef: { current: null }, finishVoiceRecordingRef: { current: null },

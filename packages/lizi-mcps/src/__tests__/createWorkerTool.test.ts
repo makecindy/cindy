@@ -173,6 +173,21 @@ describe('create_worker tool', () => {
     expect(createWorker).not.toHaveBeenCalled();
   });
 
+  // #13619, unit: a created Worker can have either a rejected or an unconfirmed first input.
+  it.each([['DELIVERY_UNKNOWN', 'unknown'], ['SEND_FAILED', 'not_delivered']])(
+    'reports the first task separately from creation for %s', async (code, expected) => {
+      const { registry, createWorker } = setup();
+      createWorker.mockResolvedValueOnce({ ok: true, workerId: 'w', workerSessionId: 's', dispatched: false,
+        dispatchOutcome: { kind: 'host-send', source: 'orca', context: 'initial_task', accepted: false,
+          code, message: 'remote receipt' } });
+      const result = parse(await registry.call('create_worker', {
+        role: 'developer', label: 'worker', initial_task: 'review',
+      }));
+      expect(result).toMatchObject({ worker_id: 'w', initial_task_state: expected, dispatched: false });
+      expect(result).not.toHaveProperty('queued_message_id');
+    },
+  );
+
   it('describes the subagent distinction before creating a worker', () => {
     const { registry } = setup();
 

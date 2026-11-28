@@ -132,6 +132,51 @@ describe('VolcengineSaucAsrProvider protocol helpers', () => {
     expect(packet.length).toBeGreaterThan(8);
   });
 
+  it('sends dictionary hotwords and recent dialog context in initial SAUC corpus.context when provided', async () => {
+    const server = new WebSocketServer({ host: '127.0.0.1', port: 0 });
+    let initialRequestPayload: Record<string, unknown> | undefined;
+    let socket: WebSocket | undefined;
+    server.on('connection', (client) => {
+      socket = client;
+      client.on('message', (data) => {
+        const buf = Buffer.isBuffer(data) ? data : Buffer.from(data as ArrayBuffer);
+        const decoded = decodeVolcengineMessage(buf);
+        if (decoded.messageType === 0x1 && !initialRequestPayload) {
+          initialRequestPayload = decoded.payload as Record<string, unknown>;
+          client.send(serverAckPacket());
+        }
+      });
+    });
+    let provider: VolcengineSaucAsrProvider | undefined;
+    try {
+      await waitFor(() => server.address() !== null);
+      const address = server.address();
+      if (!address || typeof address === 'string') throw new Error('Expected loopback address.');
+      provider = new VolcengineSaucAsrProvider({
+        proxyApiKey: 'test-key',
+        baseUrl: `http://127.0.0.1:${address.port}`,
+        endpointPath: '/asr',
+        resourceId: 'volc.test',
+        recognitionHints: {
+          hotwords: ['PostgreSQL', 'LiteLLM'],
+          recentContext: ['排查语音识别热词'],
+        },
+      });
+      await provider.start();
+      const request = initialRequestPayload?.request as { corpus?: { context?: string } } | undefined;
+      expect(request?.corpus?.context).toBeDefined();
+      expect(JSON.parse(request!.corpus!.context!)).toEqual({
+        hotwords: [{ word: 'PostgreSQL' }, { word: 'LiteLLM' }],
+        context_type: 'dialog_ctx',
+        context_data: [{ text: '排查语音识别热词' }],
+      });
+    } finally {
+      await provider?.stop();
+      socket?.terminate();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
   it('encodes audio chunks with positive and negative sequence numbers', () => {
     const audio = encodeAudioOnlyRequest(Buffer.from([1, 2, 3, 4]), 7);
     const final = encodeAudioOnlyRequest(Buffer.alloc(0), -8);

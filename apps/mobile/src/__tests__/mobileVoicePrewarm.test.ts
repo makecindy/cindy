@@ -4,12 +4,21 @@ import { ApiError } from '@/api/client';
 
 const prewarmMobileRealtimeAudio = vi.fn();
 const createProvider = vi.fn();
+const readHistory = vi.fn(async (_deviceId: string, _synced?: readonly string[]) => [] as string[]);
 
+vi.mock('@/auth/secureStorage', () => ({
+  getSecureItem: vi.fn(async () => null),
+  setSecureItem: vi.fn(async () => undefined),
+  deleteSecureItem: vi.fn(async () => undefined),
+}));
 vi.mock('@/session/mobileRealtimeAudio', () => ({
   prewarmMobileRealtimeAudio: (...args: unknown[]) => prewarmMobileRealtimeAudio(...args),
 }));
 vi.mock('@/session/mobileRealtimeAsrProvider', () => ({
   createMobileAsrProvider: (...args: unknown[]) => createProvider(...args),
+}));
+vi.mock('@/session/mobileVoiceHistoryStore', () => ({
+  getMobileVoiceInputHistoryForHost: (deviceId: string, synced?: readonly string[]) => readHistory(deviceId, synced),
 }));
 const createCindyCredential = vi.fn();
 vi.mock('@/session/mobileCindyVoiceSession', () => ({
@@ -122,6 +131,22 @@ describe('mobileVoicePrewarm', () => {
     // A later run on the same session starts the provider normally.
     void claimed!.asr.start();
     expect(provider.startCalls).toBe(2);
+  });
+
+  // Regression: a claimed speculative connection must carry history in its
+  // first ASR request; the recording cannot update that request afterward.
+  it('feeds recent voice history into a prewarmed ASR connection', async () => {
+    const provider = new FakeProvider();
+    createCindyCredential.mockReturnValue(CREDENTIAL);
+    createProvider.mockReturnValue(provider);
+    readHistory.mockResolvedValueOnce(['刚才提到 Mivo Canvas']);
+
+    prewarmMobileVoiceStart('device-1', AUTH);
+    await settle();
+    expect(createProvider.mock.calls[0]?.[1]?.recognitionHints?.recentContext)
+      .toEqual(['刚才提到 Mivo Canvas']);
+    discardPendingPrewarm();
+    provider.resolveStart();
   });
 
   it('does not hand a prewarmed connection to a different device', async () => {

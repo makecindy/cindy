@@ -169,6 +169,30 @@ describe('CindyVoiceRunContext', () => {
     await expect(first).rejects.toThrow('superseded by a newer provider attempt');
   });
 
+  it('tracks optional server-declared supportedContextFields and defaults to false on legacy servers', async () => {
+    serverApiFetch.mockReset();
+    serverApiFetch
+      .mockResolvedValueOnce(SESSION)
+      .mockResolvedValueOnce({
+        ...SESSION,
+        sessionId: 'session-2',
+        refiner: {
+          enabled: true,
+          provider: 'auto',
+          supportedContextFields: ['activeApp'],
+        },
+      });
+    const context = new CindyVoiceRunContext('zh-CN', 'auto');
+
+    expect(context.supportsRefinementContextField('activeApp')).toBe(false);
+    await context.createAsrConnection('qwen-asr-flash-realtime');
+    expect(context.supportsRefinementContextField('activeApp')).toBe(false);
+
+    await context.createAsrConnection('qwen-asr-flash-realtime');
+    expect(context.supportsRefinementContextField('activeApp')).toBe(true);
+    expect(context.supportsRefinementContextField('unknownField')).toBe(false);
+  });
+
   // 测试价值：验证服务端 maxSessionMs 与预留单步 Upgrade 响应头协商可动态更新会话上限与预算。
   // 依据：长语音主动无感会话轮换与单步 WS Upgrade 预留能力要求响应头可覆盖 sessionId/maxSessionMs/maxRefineRequests。
   // 缺口：既有用例未覆盖 maxSessionMs() 及 onUpgradeResponse 头解析与代次隔离。

@@ -649,6 +649,39 @@ describe('PI native subscription forwarding', () => {
     expect(Buffer.concat(res.chunks).toString('utf8')).toContain('event: done');
   });
 
+  it('captures served model on OpenAI subscription Pi responses without overriding priceVariant', async () => {
+    const resolveObserved = registerUsagePricing('session-openai-model', true);
+    const wire = 'data: ' + JSON.stringify({
+      type: 'response.completed',
+      response: {
+        model: 'gpt-5.4',
+        usage: { input_tokens: 45, output_tokens: 9, input_tokens_details: { cached_tokens: 12 } },
+      },
+    }) + '\n\n';
+    const injected = deps({
+      fetch: vi.fn(async () => new Response(wire, {
+        status: 200,
+        headers: { 'content-type': 'text/event-stream' },
+      })) as PiNativeSubscriptionHandlerDeps['fetch'],
+    });
+    const parsedBody = { model: 'gpt-5.4', input: 'hello' };
+    const res = responseRecorder();
+    try {
+      await getPiNativeSubscriptionHandler('openai', 'session-openai-model', injected)({
+        rawBody: Buffer.from(JSON.stringify(parsedBody)),
+        parsedBody,
+        ctx: { reqId: 1, method: 'POST', url: '/codex/responses', headers: { 'content-type': 'application/json' } },
+        res,
+      } as never);
+      expect(res.status).toBe(200);
+      expect(resolveObserved({ inputTokens: 45, outputTokens: 9, cacheReadTokens: 12 })).toEqual({
+        model: 'gpt-5.4',
+      });
+    } finally {
+      clearUsagePricing('session-openai-model');
+    }
+  });
+
   it('keeps Pi 1M as a distinct local model but sends the official bare id upstream', async () => {
     const fetchMock = vi.fn(async (_input: string | URL | Request, _init?: RequestInit) => new Response('event: done\n\n', {
       status: 200,

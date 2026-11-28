@@ -1,4 +1,5 @@
 import type { DictationRefinementContext, RefinementResult } from './types';
+import { sanitizeActiveAppContext } from './activeAppContext';
 import { buildFuzzyUserDictionaryMatches } from './dictionaryFuzzyMatch';
 import { joinRefinedSegments } from './pauseRefinement';
 import { takeRefinementContextHead, takeRefinementContextTail, truncateRefinementReply } from './refinementContext';
@@ -236,6 +237,7 @@ export class DictationRefiner {
       base.voiceInputHistory,
       this.historyProvider?.(),
     );
+    const activeApp = sanitizeActiveAppContext(base.activeApp);
     const userDictionary = normalizeBoundedOptionalMultilineText(
       base.userDictionary,
       MAX_USER_DICTIONARY_CHARS,
@@ -246,7 +248,8 @@ export class DictationRefiner {
     // The object key order is part of the prompt-cache strategy. Put stable
     // user settings before the single voice-history block, and keep volatile
     // cursor / per-request fields later so repeated refinements can reuse a
-    // longer provider prefix.
+    // longer provider prefix. `activeApp` is appended only when present so
+    // in-app callers and legacy strict servers see byte-identical payloads.
     return {
       uiLanguage: normalizeOptionalText(base.uiLanguage),
       sourceLanguage: normalizeOptionalText(base.sourceLanguage),
@@ -259,6 +262,7 @@ export class DictationRefiner {
       selectionBefore: takeRefinementContextTail(rawSelectionBefore, MAX_SELECTION_CONTEXT_CHARS) || undefined,
       selectedText: takeRefinementContextHead(base.selectedText ?? '', MAX_SELECTION_CONTEXT_CHARS) || undefined,
       selectionAfter: takeRefinementContextHead(base.selectionAfter ?? '', MAX_SELECTION_CONTEXT_CHARS) || undefined,
+      ...(activeApp ? { activeApp } : {}),
       replyToMessage: truncateRefinementReply(base.replyToMessage ?? '', MAX_REPLY_TO_MESSAGE_CHARS) || undefined,
       userDictionaryMatches: buildUserDictionaryMatches(dictationText, base.dictionaryAliasHints, userDictionary),
     };

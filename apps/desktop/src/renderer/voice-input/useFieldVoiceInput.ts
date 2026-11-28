@@ -132,6 +132,7 @@ export function useFieldVoiceInput<T extends FieldVoiceInputElement = HTMLTextAr
 
   const owner = useRef<ReturnType<typeof getDataOwnerGeneration> | null>(null);
   const startedDraft = useRef<string | null>(null);
+  const observedDraftKey = useRef(draftKey);
   const runGeneration = useRef(0);
   const expectedText = useRef('');
   const caret = useRef<number | null>(null);
@@ -157,6 +158,9 @@ export function useFieldVoiceInput<T extends FieldVoiceInputElement = HTMLTextAr
     return () => {
       mounted.current = false;
       runGeneration.current += 1;
+      if (owner.current !== null && !isDataOwnerGenerationCurrent(owner.current)) {
+        latest.current?.voice.discardDictionaryLearningWatches();
+      }
       if (activeFieldVoiceOwner === identity) activeFieldVoiceOwner = null;
     };
   }, [identity]);
@@ -272,6 +276,27 @@ export function useFieldVoiceInput<T extends FieldVoiceInputElement = HTMLTextAr
     return start();
   }, [inputRef, start]);
 
+  const retryRecognition = useCallback((): boolean => {
+    if (
+      current.current.disabled ||
+      !mounted.current ||
+      (activeFieldVoiceOwner !== null && activeFieldVoiceOwner !== identity)
+    ) {
+      return false;
+    }
+    owner.current = getDataOwnerGeneration();
+    startedDraft.current = current.current.draftKey;
+    expectedText.current = current.current.value;
+    caret.current = null;
+    const claimed = latest.current.voice.retryRecognition();
+    if (claimed) {
+      runGeneration.current += 1;
+      activeFieldVoiceOwner = identity;
+      tooLongNotified.current = false;
+    }
+    return claimed;
+  }, [identity]);
+
   const cancel = useCallback(async (): Promise<void> => {
     runGeneration.current += 1;
     await latest.current.voice.cancel();
@@ -326,6 +351,24 @@ export function useFieldVoiceInput<T extends FieldVoiceInputElement = HTMLTextAr
       void cancel();
     }
   }, [canApply, cancel, draftKey, effectiveDisabled, value, voice.isBusy]);
+
+  useEffect(() => {
+    if (owner.current !== null && !isDataOwnerGenerationCurrent(owner.current)) {
+      observedDraftKey.current = draftKey;
+      latest.current.voice.discardDictionaryLearningWatches();
+      latest.current.voice.clearRetainedFailedAudio();
+      return;
+    }
+    if (observedDraftKey.current !== draftKey) {
+      observedDraftKey.current = draftKey;
+      latest.current.voice.flushDictionaryLearningWatches();
+      latest.current.voice.clearRetainedFailedAudio();
+      return;
+    }
+    if (!effectiveDisabled) {
+      latest.current.voice.inspectTextTargetValue(value);
+    }
+  }, [draftKey, effectiveDisabled, value]);
 
   // ── Keyboard shortcut + Escape cancel ──
   useEffect(() => {
@@ -601,9 +644,17 @@ export function useFieldVoiceInput<T extends FieldVoiceInputElement = HTMLTextAr
     onHoldChange: setHolding,
   };
 
+  const noticeProps = {
+    error: voice.lastError,
+    speakerFiltered: voice.speakerFiltered,
+    onRetry: voice.canRetryRecognition ? () => { retryRecognition(); } : undefined,
+    retryDisabled: voice.isBusy || effectiveDisabled,
+  };
+
   return {
     ...voice,
     cancel,
+    retryRecognition,
     samplesRef: recordingSamplesRef,
     start,
     startFromButton,
@@ -614,5 +665,6 @@ export function useFieldVoiceInput<T extends FieldVoiceInputElement = HTMLTextAr
     shortcutLabel,
     holding,
     buttonProps,
+    noticeProps,
   };
 }

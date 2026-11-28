@@ -7,7 +7,16 @@
  * textarea and the composer is unmounted while the card is showing.
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { VoiceInputErrorCode, VoiceInputRendererEvent, VoiceInputState } from '@cindy/voice-input-core';
+import {
+  FailedVoiceAudioAccumulator,
+  FAILED_VOICE_AUDIO_TTL_MS,
+  isRetainedFailedVoiceAudioExpired,
+  shouldRetainFailedVoiceAudio,
+  type RetainedFailedVoiceAudio,
+  type VoiceInputErrorCode,
+  type VoiceInputRendererEvent,
+  type VoiceInputState,
+} from '@cindy/voice-input-core';
 
 import { getVoiceInputSettings } from '@/hooks/useVoiceInputSettings';
 import {
@@ -26,6 +35,7 @@ import {
 } from '@/voice-input/refinementContext';
 import { resolveVoiceInputStartGuards } from '@/voice-input/startGuards';
 import { startVoiceInputCaptureSession } from '@/voice-input/captureSession';
+import { streamRetainedAudioToMain } from '@/voice-input/failedAudioReplay';
 import { getVoiceInputWorkletUrl } from '@/voice-input/workletUrl';
 import {
   createStartCueEchoTracker,
@@ -92,6 +102,7 @@ export function useAskUserDictation(
   isBusy: boolean;
   liveText: string | null;
   lastError: string | null;
+  canRetryRecognition: boolean;
   /** The voiceprint filter just muted someone else's speech in this run. */
   speakerFiltered: boolean;
   canUndoRefinement: boolean;
@@ -99,6 +110,7 @@ export function useAskUserDictation(
   handleUndoKeyDown: (event: KeyboardEvent) => boolean;
   samplesRef: RecordingSamplesRef;
   start: () => boolean;
+  retryRecognition: () => boolean;
   stop: () => Promise<boolean>;
   cancel: () => Promise<void>;
 } {
@@ -107,6 +119,7 @@ export function useAskUserDictation(
   const [captureReady, setCaptureReady] = useState(false);
   const [liveText, setLiveText] = useState<string | null>(null);
   const [lastError, setLastError] = useState<string | null>(null);
+  const [canRetryRecognition, setCanRetryRecognition] = useState(false);
   const {
     visible: speakerFiltered,
     show: showSpeakerFiltered,
@@ -131,8 +144,74 @@ export function useAskUserDictation(
   const mutedRef = useRef(false);
   const pendingMuteRef = useRef<Promise<void> | null>(null);
   const samplesRef = useRef<RecordingSamplesRef['current']>(null);
+  const audioAccumulatorRef = useRef(new FailedVoiceAudioAccumulator());
+  const retainedAudioRef = useRef<RetainedFailedVoiceAudio | null>(null);
+  const retainedAudioTimerRef = useRef<number | null>(null);
+  const retryingRef = useRef(false);
   targetRef.current = target;
   optionsRef.current = options;
+
+  const clearRetainedAudio = useCallback(() => {
+    if (retainedAudioTimerRef.current !== null) {
+      window.clearTimeout(retainedAudioTimerRef.current);
+      retainedAudioTimerRef.current = null;
+    }
+    retainedAudioRef.current = null;
+    retryingRef.current = false;
+    setCanRetryRecognition(false);
+  }, []);
+
+  const retainFailedAudioIfEligible = useCallback((flags?: {
+    cancelled?: boolean;
+    permissionDenied?: boolean;
+    captureFailed?: boolean;
+  }) => {
+    if (retryingRef.current) {
+      retryingRef.current = false;
+      if (retainedAudioRef.current && !isRetainedFailedVoiceAudioExpired(retainedAudioRef.current)) {
+        setCanRetryRecognition(true);
+        return;
+      }
+      clearRetainedAudio();
+      return;
+    }
+    const attemptKey = `ask-${attemptRef.current}`;
+    if (
+      !flags?.cancelled &&
+      !flags?.permissionDenied &&
+      !flags?.captureFailed &&
+      retainedAudioRef.current?.id === attemptKey &&
+      !isRetainedFailedVoiceAudioExpired(retainedAudioRef.current)
+    ) {
+      setCanRetryRecognition(true);
+      return;
+    }
+    const eligible = shouldRetainFailedVoiceAudio({
+      hasSound: audioAccumulatorRef.current.hasSound,
+      transcriptLanded: submittedRef.current !== null,
+      cancelled: Boolean(flags?.cancelled),
+      permissionDenied: flags?.permissionDenied,
+      captureFailed: flags?.captureFailed,
+    });
+    const snapshot = eligible
+      ? audioAccumulatorRef.current.snapshot(attemptKey)
+      : null;
+    audioAccumulatorRef.current.clear();
+    if (!snapshot) {
+      clearRetainedAudio();
+      return;
+    }
+    if (retainedAudioTimerRef.current !== null) {
+      window.clearTimeout(retainedAudioTimerRef.current);
+    }
+    retainedAudioRef.current = snapshot;
+    setCanRetryRecognition(true);
+    retainedAudioTimerRef.current = window.setTimeout(() => {
+      retainedAudioTimerRef.current = null;
+      retainedAudioRef.current = null;
+      setCanRetryRecognition(false);
+    }, FAILED_VOICE_AUDIO_TTL_MS);
+  }, [clearRetainedAudio]);
 
   const setVoiceState = useCallback((next: VoiceInputState) => {
     if (next === 'error' && !submittedRef.current && draftTextRef.current !== null) {
@@ -196,22 +275,23 @@ export function useAskUserDictation(
     }
   }, []);
 
-  const fail = useCallback(async (message: string) => {
+  const fail = useCallback(async (message: string, flags?: { captureFailed?: boolean; permissionDenied?: boolean }) => {
     attemptRef.current += 1;
     const runId = runIdRef.current;
     runIdRef.current = null;
     anchorRef.current = null;
     setLiveText(null);
+    await stopEngine();
+    retainFailedAudioIfEligible(flags);
     setVoiceState('error');
     reportError(message);
-    await stopEngine();
     await restoreMute();
     try {
       if (runId) await window.electronAPI.voiceInput.cancel({ runId });
     } catch {
       /* The run may never have started. */
     }
-  }, [reportError, restoreMute, setVoiceState, stopEngine]);
+  }, [reportError, restoreMute, retainFailedAudioIfEligible, setVoiceState, stopEngine]);
 
   useEffect(() => {
     const subscribe = window.electronAPI?.voiceInput?.onEvent;
@@ -270,6 +350,8 @@ export function useAskUserDictation(
         anchorRef.current = { text: next.value, range: next.range };
         targetRef.current.setText(next.value);
         setLiveText(next.value);
+        audioAccumulatorRef.current.clear();
+        clearRetainedAudio();
         return;
       }
       if (event.type === 'refinement-preview') {
@@ -332,6 +414,7 @@ export function useAskUserDictation(
       if (event.type === 'error') {
         const kept = event.transcriptKept === true && submittedRef.current !== null;
         const message = formatError(event.message, event.code);
+        retainFailedAudioIfEligible();
         reportError(kept ? t('voiceInputOverlay.transcriptKept', { message }) : message);
         setVoiceState('error');
         setLiveText(null);
@@ -344,7 +427,7 @@ export function useAskUserDictation(
       subscribed = false;
       unsubscribe();
     };
-  }, [formatError, reportError, restoreMute, setVoiceState, showSpeakerFiltered, stopEngine, t]);
+  }, [clearRetainedAudio, formatError, reportError, restoreMute, retainFailedAudioIfEligible, setVoiceState, showSpeakerFiltered, stopEngine, t]);
 
   const start = useCallback((): boolean => {
     const api = window.electronAPI?.voiceInput;
@@ -369,6 +452,8 @@ export function useAskUserDictation(
     const completion = new Promise<boolean>((resolve) => { resolveCompletion = resolve; });
     completionRef.current = { promise: completion, resolve: resolveCompletion };
     runIdRef.current = null;
+    audioAccumulatorRef.current.clear();
+    clearRetainedAudio();
     setLastError(null);
     clearSpeakerFiltered();
     setCaptureReady(false);
@@ -401,10 +486,11 @@ export function useAskUserDictation(
           cueGate.release();
           if (attemptRef.current === attempt && stateRef.current === 'listening') setCaptureReady(true);
         },
+        onPcmCaptured: (pcm) => audioAccumulatorRef.current.append(pcm),
         isInStartCueEchoWindow: () => cueEchoTracker.isInEchoWindow(),
         onSamples: (pcm) => samplesRef.current?.(pcm),
         appendAudioChunk: (chunk) => { api.appendAudio(chunk); },
-        onInterrupted: (message) => { if (attemptRef.current === attempt) void fail(message); },
+        onInterrupted: (message) => { if (attemptRef.current === attempt) void fail(message, { captureFailed: true }); },
         onStateChange: () => undefined,
         getFallbackMessage: () => t('settings.voiceInput.microphone.errors.fallbackToAuto'),
         onFallback: (message) => toast.warning(message),
@@ -501,11 +587,13 @@ export function useAskUserDictation(
         if (capture.permissionDenied) {
           setVoiceState('error');
           anchorRef.current = null;
+          audioAccumulatorRef.current.clear();
+          clearRetainedAudio();
           await optionsRef.current?.onPermissionRequired?.(capture.error);
           await restoreMute();
           return;
         }
-        await fail(capture.error);
+        await fail(capture.error, { captureFailed: true });
         return;
       }
 
@@ -527,7 +615,94 @@ export function useAskUserDictation(
       }
     })();
     return true;
-  }, [clearSpeakerFiltered, fail, formatError, reportError, restoreMute, setVoiceState, stopEngine, t]);
+  }, [clearRetainedAudio, clearSpeakerFiltered, fail, formatError, reportError, restoreMute, setVoiceState, stopEngine, t]);
+
+  const retryRecognition = useCallback((): boolean => {
+    const api = window.electronAPI?.voiceInput;
+    const retained = retainedAudioRef.current;
+    if (!api?.start || !retained || isRetainedFailedVoiceAudioExpired(retained)) {
+      clearRetainedAudio();
+      return false;
+    }
+    const current = stateRef.current;
+    if (
+      stopInFlightRef.current
+      || current === 'listening'
+      || current === 'submitting'
+      || current === 'refining'
+    ) return false;
+
+    const attempt = attemptRef.current + 1;
+    attemptRef.current = attempt;
+    const selection = targetRef.current.getSelection();
+    anchorRef.current = { text: targetRef.current.getText(), range: selection };
+    submittedRef.current = null;
+    draftTextRef.current = null;
+    retryingRef.current = true;
+    let resolveCompletion!: (ok: boolean) => void;
+    const completion = new Promise<boolean>((resolve) => { resolveCompletion = resolve; });
+    completionRef.current = { promise: completion, resolve: resolveCompletion };
+    runIdRef.current = null;
+    setLastError(null);
+    clearSpeakerFiltered();
+    setCaptureReady(false);
+    setLiveText(null);
+    setVoiceState('submitting');
+    let resolveStartReady: () => void = () => undefined;
+    startReadyRef.current = new Promise<void>((resolve) => {
+      resolveStartReady = resolve;
+    });
+
+    void (async () => {
+      try {
+        const settings = getVoiceInputSettings();
+        const anchor = anchorRef.current;
+        const text = anchor?.text ?? '';
+        const range = anchor?.range ?? { start: text.length, end: text.length };
+        const baseContext = buildBaseVoiceInputRefinementContext({ settings });
+        let started: { ok: true; runId: string } | { ok: false; error: string };
+        try {
+          started = await api.start({
+            sourceLanguage: settings.language,
+            refinementEnabled: settings.refinementEnabled,
+            refinementCacheScope: VOICE_INPUT_REFINEMENT_CACHE_SCOPE,
+            refinementContext: settings.refinementEnabled
+              ? {
+                  ...baseContext,
+                  selectionBefore: takeContextTail(text.slice(0, range.start), MAX_REFINEMENT_SIDE_CONTEXT_CHARS),
+                  selectedText: takeContextHead(text.slice(range.start, range.end), MAX_REFINEMENT_SIDE_CONTEXT_CHARS),
+                  selectionAfter: takeContextHead(text.slice(range.end), MAX_REFINEMENT_SIDE_CONTEXT_CHARS),
+                }
+              : undefined,
+          });
+        } catch (error) {
+          started = { ok: false, error: error instanceof Error ? error.message : String(error) };
+        }
+        if (attemptRef.current !== attempt) {
+          if (started.ok) void api.cancel({ runId: started.runId });
+          return;
+        }
+        if (!started.ok) {
+          await fail(formatError(started.error));
+          return;
+        }
+        runIdRef.current = started.runId;
+        resolveStartReady();
+        const streamed = await streamRetainedAudioToMain(retained, () => attemptRef.current === attempt);
+        if (!streamed || attemptRef.current !== attempt) return;
+        const stopResult = await api.stop();
+        if (attemptRef.current !== attempt) return;
+        if (!stopResult.ok) {
+          await fail(formatError(stopResult.error));
+        }
+      } catch (error) {
+        if (attemptRef.current === attempt) await fail(formatError(error instanceof Error ? error.message : String(error)));
+      } finally {
+        resolveStartReady();
+      }
+    })();
+    return true;
+  }, [clearRetainedAudio, clearSpeakerFiltered, fail, formatError, setVoiceState]);
 
   const stop = useCallback(async () => {
     if (stopInFlightRef.current) return stopInFlightRef.current;
@@ -583,6 +758,8 @@ export function useAskUserDictation(
     runIdRef.current = null;
     anchorRef.current = null;
     draftTextRef.current = null;
+    audioAccumulatorRef.current.clear();
+    clearRetainedAudio();
     completionRef.current?.resolve(false);
     setLiveText(null);
     // Retain committed text, discard only the unsubmitted live preview.
@@ -605,13 +782,15 @@ export function useAskUserDictation(
     attemptRef.current += 1;
     stateRef.current = 'idle';
     anchorRef.current = null;
+    audioAccumulatorRef.current.clear();
+    clearRetainedAudio();
     completionRef.current?.resolve(false);
     const runId = runIdRef.current;
     runIdRef.current = null;
     void stopEngine();
     void restoreMute();
     if (runId) void window.electronAPI?.voiceInput?.cancel?.({ runId });
-  }, [restoreMute, stopEngine]);
+  }, [clearRetainedAudio, restoreMute, stopEngine]);
 
   const undoRefinement = useCallback((): boolean => {
     const current = undoStateRef.current;
@@ -668,12 +847,14 @@ export function useAskUserDictation(
     isBusy: state === 'listening' || state === 'submitting' || state === 'refining',
     liveText,
     lastError,
+    canRetryRecognition,
     speakerFiltered,
     canUndoRefinement,
     undoRefinement,
     handleUndoKeyDown,
     samplesRef,
     start,
+    retryRecognition,
     stop,
     cancel,
   };

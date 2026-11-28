@@ -1,6 +1,16 @@
 import WebSocket from 'ws';
 import type { ClientRequest, IncomingMessage } from 'node:http';
-import type { AsrEvent, AsrProvider, AudioTrace } from '@cindy/voice-input-core';
+import {
+  asrRecognitionHintsFingerprint,
+  buildOpenAiTranscriptionPrompt,
+  buildQwenAsrCorpusText,
+  isUnsupportedOpenAiRealtimePromptError,
+  supportsOpenAiRealtimeTranscriptionPrompt,
+  type AsrEvent,
+  type AsrProvider,
+  type AsrRecognitionHints,
+  type AudioTrace,
+} from '@cindy/voice-input-core';
 import type { VoiceInputRealtimeProtocolProfile } from '../../shared/voiceInputAsrProfiles.js';
 import { createLogger } from '../logger.js';
 import { createOutboundHttpAgent } from '../maker-host/outbound-fetch.desktop.js';
@@ -20,6 +30,7 @@ export type RealtimeAsrWebSocketProviderOptions = {
   /** Optional WS origin hint so system proxy resolution can overlap connectionProvider(). */
   proxyHintUrl?: string;
   sourceLanguage?: string;
+  recognitionHints?: AsrRecognitionHints;
   model?: string;
   realtimeUrl?: string;
   extraHeaders?: Record<string, string>;
@@ -86,10 +97,12 @@ type WarmRealtimeSession = {
   credentialCacheKey: string;
   model: string;
   languageCode: string | undefined;
+  hintsFingerprint: string;
   pcmSampleRate: number;
   protocolProfile: VoiceInputRealtimeProtocolProfile;
   createdAt: number;
   ready: boolean;
+  promptFallbackActive: boolean;
   // Resolves when session.updated has been received (so the socket is
   // actually usable for transcription), rejects on handshake error / close.
   // Stored so a second prewarm call with matching config awaits the existing
@@ -104,6 +117,7 @@ type WarmRealtimeSession = {
 type TakenWarmRealtimeSession = {
   socket: WebSocket;
   needsSessionUpdate: boolean;
+  promptFallbackActive: boolean;
   ageMs: number;
 };
 
@@ -176,10 +190,11 @@ function warmConfigKey(
   credentialCacheKey: string,
   model: string,
   languageCode: string | undefined,
+  hintsFingerprint: string,
   pcmSampleRate: number,
   protocolProfile: VoiceInputRealtimeProtocolProfile,
 ): string {
-  return `${connectionKey}::credential-${credentialCacheKey}::${model}::${languageCode ?? ''}::pcm-${pcmSampleRate}::${protocolProfile}`;
+  return `${connectionKey}::credential-${credentialCacheKey}::${model}::${languageCode ?? ''}::hints-${hintsFingerprint}::pcm-${pcmSampleRate}::${protocolProfile}`;
 }
 
 function isExistingWarmMatch(
@@ -188,6 +203,7 @@ function isExistingWarmMatch(
   credentialCacheKey: string,
   model: string,
   languageCode: string | undefined,
+  hintsFingerprint: string,
   pcmSampleRate: number,
   protocolProfile: VoiceInputRealtimeProtocolProfile,
 ): boolean {
@@ -196,6 +212,7 @@ function isExistingWarmMatch(
   if (existing.credentialCacheKey !== credentialCacheKey) return false;
   if (existing.model !== model) return false;
   if (existing.languageCode !== languageCode) return false;
+  if (existing.hintsFingerprint !== hintsFingerprint) return false;
   if (existing.pcmSampleRate !== pcmSampleRate) return false;
   if (existing.protocolProfile !== protocolProfile) return false;
   if (existing.socket.readyState === WebSocket.CLOSING) return false;
@@ -208,6 +225,7 @@ export function prewarmRealtimeAsrWebSocketSession(options: RealtimeAsrWebSocket
   const model = options.model ?? OPENAI_REALTIME_WHISPER_MODEL;
   const sourceLanguage = options.sourceLanguage ?? 'auto';
   const languageCode = openAiLanguageCode(sourceLanguage);
+  const hintsFingerprint = asrRecognitionHintsFingerprint(options.recognitionHints);
   const pcmSampleRate = options.pcmSampleRate ?? DEFAULT_REALTIME_PCM_SAMPLE_RATE;
   const protocolProfile = options.protocolProfile ?? 'openai-transcription-manual';
   const credentialCacheKey = options.credentialCacheKey ?? '';
@@ -217,6 +235,7 @@ export function prewarmRealtimeAsrWebSocketSession(options: RealtimeAsrWebSocket
     credentialCacheKey,
     model,
     languageCode,
+    hintsFingerprint,
     pcmSampleRate,
     protocolProfile,
   );
@@ -228,6 +247,7 @@ export function prewarmRealtimeAsrWebSocketSession(options: RealtimeAsrWebSocket
     credentialCacheKey,
     model,
     languageCode,
+    hintsFingerprint,
     pcmSampleRate,
     protocolProfile,
   )) {
@@ -253,6 +273,7 @@ export function prewarmRealtimeAsrWebSocketSession(options: RealtimeAsrWebSocket
       credentialCacheKey,
       model,
       languageCode,
+      hintsFingerprint,
       pcmSampleRate,
       protocolProfile,
     )) {
@@ -270,6 +291,7 @@ export function prewarmRealtimeAsrWebSocketSession(options: RealtimeAsrWebSocket
       model,
       sourceLanguage,
       languageCode,
+      hintsFingerprint,
       pcmSampleRate,
       protocolProfile,
     );
@@ -289,6 +311,7 @@ function takeWarmRealtimeSession(
   credentialCacheKey: string,
   model: string,
   sourceLanguage: string,
+  hintsFingerprint: string,
   pcmSampleRate: number,
   protocolProfile: VoiceInputRealtimeProtocolProfile,
 ): TakenWarmRealtimeSession | null {
@@ -320,7 +343,10 @@ function takeWarmRealtimeSession(
   const languageCode = openAiLanguageCode(sourceLanguage);
   return {
     socket: warm.socket,
-    needsSessionUpdate: warm.languageCode !== languageCode,
+    needsSessionUpdate:
+      warm.languageCode !== languageCode
+      || (!warm.promptFallbackActive && warm.hintsFingerprint !== hintsFingerprint),
+    promptFallbackActive: warm.promptFallbackActive,
     ageMs: Date.now() - warm.createdAt,
   };
 }
@@ -333,6 +359,7 @@ function createWarmRealtimeSession(
   model: string,
   sourceLanguage: string,
   languageCode: string | undefined,
+  hintsFingerprint: string,
   pcmSampleRate: number,
   protocolProfile: VoiceInputRealtimeProtocolProfile,
 ): Promise<void> {
@@ -451,8 +478,29 @@ function createWarmRealtimeSession(
           }
         }, KEEPALIVE_PING_INTERVAL_MS);
       };
+      let lastSessionUpdateIncludedPrompt = false;
+      let promptFallbackAttempted = false;
+      let promptFallbackActive = false;
+      const sendWarmSessionUpdate = (omitPrompt: boolean): boolean => {
+        if (socket.readyState !== WebSocket.OPEN) return false;
+        const hints = protocolProfile === 'openai-transcription-manual' && omitPrompt
+          ? undefined
+          : options.recognitionHints;
+        const message = buildSessionUpdateMessage(
+          model,
+          sourceLanguage,
+          pcmSampleRate,
+          protocolProfile,
+          hints,
+        );
+        lastSessionUpdateIncludedPrompt =
+          protocolProfile === 'openai-transcription-manual'
+          && sessionUpdateIncludesOpenAiPrompt(message);
+        socket.send(JSON.stringify(message));
+        return true;
+      };
       const onOpen = (): void => {
-        socket.send(JSON.stringify(buildSessionUpdateMessage(model, sourceLanguage, pcmSampleRate, protocolProfile)));
+        sendWarmSessionUpdate(false);
       };
       const onPong = (): void => {
         clearPongTimeout();
@@ -467,7 +515,10 @@ function createWarmRealtimeSession(
         if (!isRecord(event) || typeof event.type !== 'string') return;
         if (event.type === 'session.updated') {
           const warm = warmRealtimeSession;
-          if (warm?.socket === socket) warm.ready = true;
+          if (warm?.socket === socket) {
+            warm.ready = true;
+            warm.promptFallbackActive = promptFallbackActive;
+          }
           log.debug('prewarmed realtime session ready', {
             model,
             languageCode,
@@ -475,6 +526,26 @@ function createWarmRealtimeSession(
           });
           resolveOnce();
         } else if (event.type === 'error') {
+          const errorPayload = isRecord(event.error)
+            ? event.error
+            : (typeof event.message === 'string' ? event.message : undefined);
+          if (
+            !settled
+            && protocolProfile === 'openai-transcription-manual'
+            && lastSessionUpdateIncludedPrompt
+            && !promptFallbackAttempted
+            && isUnsupportedOpenAiRealtimePromptError(errorPayload)
+          ) {
+            promptFallbackAttempted = true;
+            promptFallbackActive = true;
+            lastSessionUpdateIncludedPrompt = false;
+            log.warn('prewarm realtime session rejected transcription prompt; retrying without prompt', {
+              model,
+            });
+            if (sendWarmSessionUpdate(true)) {
+              return;
+            }
+          }
           rejectOnce(new Error(realtimeErrorMessage(
             event,
             options.errorFallbackMessage ?? 'OpenAI realtime transcription failed.',
@@ -513,10 +584,12 @@ function createWarmRealtimeSession(
         credentialCacheKey,
         model,
         languageCode,
+        hintsFingerprint,
         pcmSampleRate,
         protocolProfile,
         createdAt: Date.now(),
         ready: false,
+        promptFallbackActive: false,
         readyPromise,
         detach,
         close,
@@ -545,9 +618,11 @@ export function buildSessionUpdateMessage(
   sourceLanguage: string,
   pcmSampleRate = DEFAULT_REALTIME_PCM_SAMPLE_RATE,
   protocolProfile: VoiceInputRealtimeProtocolProfile = 'openai-transcription-manual',
+  recognitionHints?: AsrRecognitionHints,
 ): Record<string, unknown> {
   const language = openAiLanguageCode(sourceLanguage);
   if (protocolProfile === 'qwen-asr-server-vad') {
+    const corpusText = buildQwenAsrCorpusText(recognitionHints);
     // DashScope realtime ASR is not wire-compatible with OpenAI's nested
     // transcription session schema. It also uses DashScope's audio format
     // label (`pcm`) rather than OpenAI's `pcm16`; LiteLLM passes this value
@@ -564,6 +639,7 @@ export function buildSessionUpdateMessage(
         sample_rate: pcmSampleRate,
         input_audio_transcription: {
           ...(language ? { language } : {}),
+          ...(corpusText ? { corpus: { text: corpusText } } : {}),
         },
         turn_detection: {
           type: 'server_vad',
@@ -573,6 +649,9 @@ export function buildSessionUpdateMessage(
       },
     };
   }
+  const prompt = supportsOpenAiRealtimeTranscriptionPrompt(model)
+    ? buildOpenAiTranscriptionPrompt(recognitionHints)
+    : undefined;
   return {
     type: 'session.update',
     session: {
@@ -583,6 +662,7 @@ export function buildSessionUpdateMessage(
           transcription: {
             model,
             ...(language ? { language } : {}),
+            ...(prompt ? { prompt } : {}),
           },
           turn_detection: null,
         },
@@ -635,6 +715,8 @@ export class RealtimeAsrWebSocketProvider implements AsrProvider {
   private readonly connectionProvider?: () => Promise<CindyVoiceAsrConnection>;
   private readonly proxyHintUrl?: string;
   private readonly sourceLanguage: string;
+  private readonly recognitionHints?: AsrRecognitionHints;
+  private readonly hintsFingerprint: string;
   private readonly model: string;
   private readonly realtimeUrl: string;
   private activeRealtimeUrl: string;
@@ -653,6 +735,9 @@ export class RealtimeAsrWebSocketProvider implements AsrProvider {
   private callback: (event: AsrEvent) => void = () => {};
   private connected = false;
   private sessionReady = false;
+  private promptFallbackActive = false;
+  private lastSessionUpdateIncludedPrompt = false;
+  private promptFallbackAttemptedForConnection = false;
   private bufferedMs = 0;
   private pendingCommitCount = 0;
   private flushResolvers: Array<() => void> = [];
@@ -710,6 +795,8 @@ export class RealtimeAsrWebSocketProvider implements AsrProvider {
     this.proxyHintUrl = options.proxyHintUrl;
     this.onAuthorizationRejected = options.onAuthorizationRejected;
     this.sourceLanguage = options.sourceLanguage ?? 'auto';
+    this.recognitionHints = options.recognitionHints;
+    this.hintsFingerprint = asrRecognitionHintsFingerprint(options.recognitionHints);
     this.model = options.model ?? OPENAI_REALTIME_WHISPER_MODEL;
     this.pcmSampleRate = options.pcmSampleRate ?? DEFAULT_REALTIME_PCM_SAMPLE_RATE;
     this.protocolProfile = options.protocolProfile ?? 'openai-transcription-manual';
@@ -786,12 +873,14 @@ export class RealtimeAsrWebSocketProvider implements AsrProvider {
       this.credentialCacheKey,
       this.model,
       this.sourceLanguage,
+      this.hintsFingerprint,
       this.pcmSampleRate,
       this.protocolProfile,
     );
     if (warm) {
       const socket = warm.socket;
       this.socket = socket;
+      this.promptFallbackActive = warm.promptFallbackActive;
       this.attachSocketHandlers(socket);
       this.connected = true;
       this.startKeepAlive();
@@ -1178,11 +1267,43 @@ export class RealtimeAsrWebSocketProvider implements AsrProvider {
   }
 
   private sendSessionUpdate(): void {
-    this.sendWs(buildSessionUpdateMessage(
+    const hints = this.protocolProfile === 'openai-transcription-manual' && this.promptFallbackActive
+      ? undefined
+      : this.recognitionHints;
+    const message = buildSessionUpdateMessage(
       this.model,
       this.sourceLanguage,
       this.pcmSampleRate,
       this.protocolProfile,
+      hints,
+    );
+    this.lastSessionUpdateIncludedPrompt =
+      this.protocolProfile === 'openai-transcription-manual'
+      && sessionUpdateIncludesOpenAiPrompt(message);
+    this.sendWs(message);
+  }
+
+  private tryFallbackWithoutPrompt(event: Record<string, unknown>): boolean {
+    if (this.sessionReady) return false;
+    if (this.protocolProfile !== 'openai-transcription-manual') return false;
+    if (!this.lastSessionUpdateIncludedPrompt || this.promptFallbackAttemptedForConnection) return false;
+    const errorPayload = isRecord(event.error)
+      ? event.error
+      : (typeof event.message === 'string' ? event.message : undefined);
+    if (!isUnsupportedOpenAiRealtimePromptError(errorPayload)) return false;
+    this.promptFallbackActive = true;
+    this.promptFallbackAttemptedForConnection = true;
+    this.lastSessionUpdateIncludedPrompt = false;
+    log.warn('realtime asr rejected transcription prompt; retrying session.update without prompt', {
+      providerKind: this.providerKind,
+      model: this.model,
+    });
+    return this.sendWs(buildSessionUpdateMessage(
+      this.model,
+      this.sourceLanguage,
+      this.pcmSampleRate,
+      this.protocolProfile,
+      undefined,
     ));
   }
 
@@ -1297,6 +1418,9 @@ export class RealtimeAsrWebSocketProvider implements AsrProvider {
               aggregateChars: this.aggregateTranscript().length,
             });
             this.resolveFlushWaiters();
+            break;
+          }
+          if (this.tryFallbackWithoutPrompt(event)) {
             break;
           }
           const message = this.redactUpstreamErrors
@@ -1417,6 +1541,9 @@ export class RealtimeAsrWebSocketProvider implements AsrProvider {
   private resetTranscriptState(): void {
     this.connected = false;
     this.sessionReady = false;
+    this.lastSessionUpdateIncludedPrompt = false;
+    this.promptFallbackAttemptedForConnection = false;
+    if (!this.inRecovery) this.promptFallbackActive = false;
     this.bufferedMs = 0;
     this.pendingCommitCount = 0;
     this.flushResolvers = [];
@@ -1874,6 +2001,14 @@ export function realtimeErrorMessage(
   const error = event.error;
   if (isRecord(error) && typeof error.message === 'string') return error.message;
   return fallbackMessage;
+}
+
+function sessionUpdateIncludesOpenAiPrompt(message: Record<string, unknown>): boolean {
+  const session = isRecord(message.session) ? message.session : undefined;
+  const audio = isRecord(session?.audio) ? session.audio : undefined;
+  const input = isRecord(audio?.input) ? audio.input : undefined;
+  const transcription = isRecord(input?.transcription) ? input.transcription : undefined;
+  return typeof transcription?.prompt === 'string' && transcription.prompt.length > 0;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

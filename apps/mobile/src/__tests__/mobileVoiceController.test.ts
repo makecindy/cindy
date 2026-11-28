@@ -12,9 +12,13 @@ import type {
   AudioTrace,
   AudioGate,
   RefinementResult,
+  RetainedFailedVoiceAudio,
 } from '@cindy/voice-input-core';
 import type { StoredMobileVoiceCredential } from '@/session/mobileVoiceCredentialStore';
-import { createMobileVoiceControllerSession } from '@/session/mobileVoiceController';
+import {
+  createMobileVoiceControllerSession,
+  replayMobileVoiceAudio,
+} from '@/session/mobileVoiceController';
 import { mobileVoiceEmptyTranscriptError } from '@/session/mobileVoiceInput';
 import { composerDocumentProjectedText, reconcileComposerVoiceDraft, serializeComposerDocument, type ComposerDocument } from '@/session/composerDocument';
 
@@ -1465,5 +1469,208 @@ describe('mobileVoiceController', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it('retains voiced PCM on ASR failure and replays it without reopening the microphone', async () => {
+    const retained: RetainedFailedVoiceAudio[] = [];
+    const baseCred = credential();
+    const noRefineCred: StoredMobileVoiceCredential = {
+      ...baseCred,
+      settings: { ...baseCred.settings!, refinementEnabled: false },
+    };
+    const startSubstantialAudibleAudio = async ({ onChunk }: {
+      onChunk: (chunk: { pcm16: ArrayBuffer; trace: AudioTrace }) => void;
+    }): Promise<() => Promise<void>> => {
+      onChunk({
+        pcm16: new Int16Array(6_000).fill(2_000).buffer,
+        trace: { capturedAt: 1, convertedAt: 2, chunkIndex: 1, sampleRate: 24_000, durationMs: 250 },
+      });
+      return async () => undefined;
+    };
+    const failingAsr = new EmptyTranscriptAsrProvider();
+    const session = createMobileVoiceControllerSession({
+      credential: noRefineCred,
+      initialDraft: '前文：',
+      asr: failingAsr,
+      startAudio: startSubstantialAudibleAudio,
+      onDraftChanged: () => {},
+      onRetainedFailedAudio: (audio) => retained.push(audio),
+    });
+
+    await session.start();
+    await expect(session.stop()).rejects.toThrow();
+    expect(retained).toHaveLength(1);
+    expect(retained[0]!.durationMs).toBeGreaterThanOrEqual(200);
+
+    const replayAsr = new GatedStartAsrProvider();
+    const states: string[] = [];
+    const drafts: string[] = [];
+    const replayPromise = replayMobileVoiceAudio({
+      audio: retained[0]!,
+      credential: baseCred,
+      initialDraft: '前文：',
+      initialSelection: { start: 3, end: 3 },
+      asr: replayAsr,
+      refiner: {
+        async refine(input): Promise<RefinementResult> {
+          return {
+            accepted: true,
+            sourceSegmentIds: input.segmentIds,
+            basedOnText: input.text,
+            refinedText: '重放识别成功。',
+            elapsedMs: 1,
+          };
+        },
+      },
+      onDraftChanged: (draft) => drafts.push(draft),
+      onStateChanged: (next) => states.push(next),
+    });
+    replayAsr.resolveStart();
+    await expect(replayPromise).resolves.toBe('前文：重放识别成功。');
+    expect(replayAsr.appended.length).toBeGreaterThan(0);
+    expect(replayAsr.flushCalls).toBe(1);
+    expect(states).not.toContain('listening');
+    expect(drafts.at(-1)).toBe('前文：重放识别成功。');
+  });
+
+  // Regression: retry must never upload speech that the speaker gate muted.
+  it('retains only speaker-filtered PCM for failed-audio replay', async () => {
+    const retained: RetainedFailedVoiceAudio[] = [];
+    const base = credential();
+    let emit!: (chunk: ArrayBuffer, trace?: AudioTrace) => void;
+    let chunkCount = 0;
+    const gate: AudioGate = {
+      begin: (callback) => { emit = callback; },
+      push: (chunk, trace) => {
+        chunkCount += 1;
+        emit(chunkCount === 1 ? new ArrayBuffer(chunk.byteLength) : chunk, trace);
+      },
+      finish: async () => undefined,
+      abort: () => undefined,
+    };
+    const session = createMobileVoiceControllerSession({
+      credential: { ...base, settings: { ...base.settings!, refinementEnabled: false } },
+      initialDraft: '',
+      asr: new EmptyTranscriptAsrProvider(),
+      audioGate: gate,
+      startAudio: async ({ onChunk }) => {
+        for (let index = 0; index < 2; index += 1) {
+          onChunk({
+            pcm16: new Int16Array(4_000).fill(index === 0 ? 1_000 : 2_000).buffer,
+            trace: { capturedAt: 1, convertedAt: 1, chunkIndex: index, sampleRate: 16_000, durationMs: 250 },
+          });
+        }
+        return async () => undefined;
+      },
+      onDraftChanged: () => undefined,
+      onRetainedFailedAudio: (audio) => retained.push(audio),
+    });
+    await session.start();
+    await expect(session.stop()).rejects.toThrow();
+    expect(retained).toHaveLength(1);
+    expect(new Int16Array(retained[0]!.chunks[0]!.buffer).every((sample) => sample === 0)).toBe(true);
+    expect(new Int16Array(retained[0]!.chunks[1]!.buffer).every((sample) => sample === 2_000)).toBe(true);
+  });
+
+  // Regression: leaving a screen while a replay handshake is pending must
+  // release that voice session without waiting for the network to answer.
+  it('cancels an in-flight replay when its owner aborts', async () => {
+    const asr = new GatedStartAsrProvider();
+    const start = vi.spyOn(asr, 'start');
+    const abort = new AbortController();
+    const replay = replayMobileVoiceAudio({
+      audio: {
+        id: 'failed-voice', sampleRate: 16_000,
+        chunks: [new Uint8Array(new Int16Array(4_000).fill(2_000).buffer)],
+        totalBytes: 8_000, durationMs: 250, capturedAt: Date.now(), expiresAt: Date.now() + 60_000,
+      },
+      signal: abort.signal,
+      credential: credential(),
+      initialDraft: '',
+      asr,
+      refiner: null,
+      onDraftChanged: () => undefined,
+    });
+    for (let index = 0; index < 10 && start.mock.calls.length === 0; index += 1) await Promise.resolve();
+    expect(start).toHaveBeenCalledOnce();
+    abort.abort();
+    await expect(replay).rejects.toThrow('Voice replay cancelled');
+    asr.resolveStart();
+    await vi.waitFor(() => expect(asr.stopCalls).toBeGreaterThan(0));
+  });
+
+  it('does not retain failed audio on silent takes, explicit cancel, or mic capture error', async () => {
+    const retained: RetainedFailedVoiceAudio[] = [];
+    const baseCred = credential();
+    const noRefineCredential: StoredMobileVoiceCredential = {
+      ...baseCred,
+      settings: { ...baseCred.settings!, refinementEnabled: false },
+    };
+
+    // 1. Silent take
+    const silentAsr = new EmptyTranscriptAsrProvider();
+    const silentSession = createMobileVoiceControllerSession({
+      credential: noRefineCredential,
+      initialDraft: '',
+      asr: silentAsr,
+      startAudio: async ({ onChunk }) => {
+        onChunk({
+          pcm16: new Int16Array(4_000).buffer,
+          trace: { capturedAt: 1, convertedAt: 1, chunkIndex: 1, sampleRate: 16_000, durationMs: 250 },
+        });
+        return async () => undefined;
+      },
+      onDraftChanged: () => {},
+      onRetainedFailedAudio: (audio) => retained.push(audio),
+    });
+    await silentSession.start();
+    await expect(silentSession.stop()).resolves.toBe('');
+    expect(retained).toHaveLength(0);
+
+    // 2. Explicit user cancel
+    const cancelAsr = new FakeAsrProvider();
+    const cancelSession = createMobileVoiceControllerSession({
+      credential: noRefineCredential,
+      initialDraft: '',
+      asr: cancelAsr,
+      startAudio: async ({ onChunk }) => {
+        onChunk({
+          pcm16: new Int16Array(4_000).fill(2_000).buffer,
+          trace: { capturedAt: 1, convertedAt: 1, chunkIndex: 1, sampleRate: 16_000, durationMs: 250 },
+        });
+        return async () => undefined;
+      },
+      onDraftChanged: () => {},
+      onRetainedFailedAudio: (audio) => retained.push(audio),
+    });
+    await cancelSession.start();
+    await cancelSession.cancel();
+    expect(retained).toHaveLength(0);
+
+    // 3. Mic capture error
+    let triggerMicError: ((err: Error) => void) | undefined;
+    const micErrAsr = new FakeAsrProvider();
+    const micErrSession = createMobileVoiceControllerSession({
+      credential: noRefineCredential,
+      initialDraft: '',
+      asr: micErrAsr,
+      startAudio: async ({ onChunk, onError }) => {
+        triggerMicError = onError;
+        const pcm = new Int16Array(4_000);
+        pcm.fill(2_000);
+        onChunk({
+          pcm16: pcm.buffer,
+          trace: { capturedAt: 1, convertedAt: 1, chunkIndex: 1, sampleRate: 16_000, durationMs: 250 },
+        });
+        return async () => undefined;
+      },
+      onDraftChanged: () => {},
+      onRetainedFailedAudio: (audio) => retained.push(audio),
+    });
+    await micErrSession.start();
+    const emitMicError = triggerMicError as ((err: Error) => void) | undefined;
+    emitMicError?.(new Error('microphone interrupted'));
+    await Promise.resolve();
+    expect(retained).toHaveLength(0);
   });
 });

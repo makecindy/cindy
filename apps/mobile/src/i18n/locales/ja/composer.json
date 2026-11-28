@@ -108,7 +108,8 @@
     "recognitionStalled": "音声認識の結果が返ってこなくなりました。もう一度お試しください。",
     "transcriptKept": "{{message}}（ここまで認識したテキストは保持しており、そのまま編集できます）",
     "micPermission": "マイクの権限が許可されていません。システム設定で {{appName}} にマイクの使用を許可してください。",
-    "realtimeAudioUnavailable": "現在のビルドはリアルタイム音声入力に対応していません。ネイティブ録音モジュールを含むテストビルドをインストールしてください。"
+    "realtimeAudioUnavailable": "現在のビルドはリアルタイム音声入力に対応していません。ネイティブ録音モジュールを含むテストビルドをインストールしてください。",
+    "retryRecognition": "再認識"
   },
   "incomingShare": {
     "title": "Cindy に送る",

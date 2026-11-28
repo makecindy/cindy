@@ -15,6 +15,9 @@ export * from './dictionaryLearningPolicy';
 export * from './dictionary-sync';
 export * from './streamingJson';
 export * from './refinementContext';
+export * from './activeAppContext';
+export * from './asrHints';
+export * from './failedAudioBuffer';
 export * from './pcmActivity';
 export {
   DEFAULT_MAX_REFINE_CHUNK_CHARS,

@@ -9630,7 +9630,12 @@ export function ChatInput({
       {(voiceInput.lastError || showSpeakerFilteredNotice || rejections.length > 0) && (
         <div className="pointer-events-none absolute bottom-full left-0 right-0 z-page-float mb-2 flex flex-col items-center gap-1 px-3">
           {voiceInput.lastError ? (
-            <VoiceInputStatusNotice message={voiceInput.lastError} />
+            <VoiceInputStatusNotice
+              message={voiceInput.lastError}
+              actionLabel={voiceInput.canRetryRecognition ? t('voiceInputOverlay.retryRecognition') : undefined}
+              onAction={voiceInput.canRetryRecognition ? () => { voiceInput.retryRecognition(); } : undefined}
+              actionDisabled={voiceInput.isBusy}
+            />
           ) : showSpeakerFilteredNotice ? (
             <VoiceInputStatusNotice tone="info" message={t('voiceInputOverlay.speakerFiltered')} />
           ) : null}
