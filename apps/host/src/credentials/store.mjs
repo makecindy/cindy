@@ -36,17 +36,44 @@ export class SafeStorageUnavailableError extends Error {
  * Resolve the OS key once, then expose the same synchronous semantics the
  * Desktop credential helpers use.
  *
- * @param {{userDataDir: string, keyringApplication?: string, keyPromise?: Promise<Buffer>}} options
+ * On Linux without a Secret Service (servers, containers, NAS apps), the keyring
+ * secret can instead come from an owner-only file: `options.credentialKeyFile`,
+ * defaulting to `CINDY_HOST_CREDENTIAL_KEY_FILE`. The key derivation is the same,
+ * so records stay v11 and a secret exported from a keyring decrypts them.
+ *
+ * @param {{userDataDir: string, keyringApplication?: string, keyPromise?: Promise<Buffer>, credentialKeyFile?: string}} options
  * @returns {Promise<CredentialStore>}
  */
+/**
+ * Read the keyring secret from a credential key file. Any problem is fatal and
+ * named precisely: the store never falls back to the keyring or to plaintext.
+ */
+function readCredentialKeyFile(file) {
+  let secret;
+  try {
+    const stat = fs.statSync(file);
+    if (!stat.isFile()) throw new Error('not a regular file');
+    if (stat.mode & 0o077) throw new Error('readable or writable by group or others; run chmod 600 on it');
+    secret = fs.readFileSync(file, 'utf8').trim();
+  } catch (error) {
+    throw new SafeStorageUnavailableError(`Cannot use credential key file ${file}: ${error.message}`);
+  }
+  if (!secret) throw new SafeStorageUnavailableError(`Credential key file ${file} is empty`);
+  return secret;
+}
+
 export async function createCredentialStore(options) {
   const platform = options.platform ?? process.platform;
   let codec = options.codec;
   if (!codec) {
     if (platform === 'linux') {
-      const key = await (options.keyPromise
-        ?? readLinuxKeyringSecret(options.keyringApplication).then(deriveLinuxOsCryptKey)
-      ).catch(() => { throw new SafeStorageUnavailableError('Unlock the system keyring before connecting Cindy Host.'); });
+      const keyFile = options.credentialKeyFile ?? process.env.CINDY_HOST_CREDENTIAL_KEY_FILE?.trim();
+      // Kept outside the keyring catch below so a bad key file reports its own cause.
+      const key = keyFile && !options.keyPromise
+        ? deriveLinuxOsCryptKey(readCredentialKeyFile(keyFile))
+        : await (options.keyPromise
+          ?? readLinuxKeyringSecret(options.keyringApplication).then(deriveLinuxOsCryptKey)
+        ).catch(() => { throw new SafeStorageUnavailableError('Unlock the system keyring before connecting Cindy Host.'); });
       codec = { encrypt: value => encryptOsCryptPayload(value, key), decrypt: value => decryptOsCryptPayload(value, key) };
     } else if (platform === 'darwin' || platform === 'win32') {
       codec = createNativeCredentialCodec(options);
