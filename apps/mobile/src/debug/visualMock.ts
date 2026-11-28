@@ -8,6 +8,7 @@ import { githubPrVisualFixture } from './githubPrVisualFixture';
 import { groupMaskVisualFixture } from './groupMaskVisualFixture';
 import { groupSettingsVisualFixture } from './groupSettingsVisualFixture';
 import { groupMentionVisualFixture } from './groupMentionVisualFixture';
+import { groupLinkVisualFixture } from './groupLinkVisualFixture';
 import { sessionImportVisualFixture } from './sessionImportVisualFixture';
 import { SHARED_REMOTE_CONTROL_FIXTURE } from '@cindy/maker-shared/fixtures';
 import { buildUiMockRows, UI_MOCK_PI_CONTEXT_USAGE, UI_MOCK_SHOWCASE_PROJECTS, type UiMockSessionRow } from '@cindy/maker-shared/ui-mock';
@@ -400,6 +401,8 @@ async function visualMockInvoke<T = unknown>(
   if (groupSettings !== undefined) return groupSettings as T;
   const groupMention = groupMentionVisualFixture(channel, args[0]);
   if (groupMention !== undefined) return groupMention as T;
+  const groupLinks = groupLinkVisualFixture(channel, args[0]);
+  if (groupLinks !== undefined) return groupLinks as T;
   const sessionImport = sessionImportVisualFixture(channel, args[0]);
   if (sessionImport !== undefined) return sessionImport as T;
   if (channel === REMOTE_RESOURCE_GET_CHANNEL) {

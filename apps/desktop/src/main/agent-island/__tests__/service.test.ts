@@ -105,6 +105,7 @@ const mocks = vi.hoisted(() => ({
     workspaceKind: string | null;
     source?: string | null;
   } | null>>(() => Promise.resolve(null)),
+  readSessionInboxFacts: vi.fn<(sessionId: string) => Promise<import('../../localDb/sessionInboxFacts.js').SessionInboxFacts | null>>(() => Promise.resolve(null)),
   /** 「消息免打扰」同步索引:默认不静音,用例按需覆写。 */
   isSessionNotificationsMutedSync: vi.fn((_sessionId: string) => false),
   readAgentIslandCompanion: vi.fn<(sessionId: string) => Promise<AgentIslandCompanionIdentity | null>>(() => Promise.resolve(null)),
@@ -187,6 +188,8 @@ vi.mock('../../localDb/ipc/sessions.js', () => ({
   patchSessionMetaInDb: mocks.patchSessionMetaInDb,
 }));
 
+vi.mock('../../localDb/sessionInboxFacts.js', () => ({ readSessionInboxFacts: mocks.readSessionInboxFacts }));
+
 vi.mock('../../localDb/sessionFlagRegistry', () => ({
   isSessionNotificationsMutedSync: mocks.isSessionNotificationsMutedSync,
 }));
@@ -249,6 +252,8 @@ beforeEach(async () => {
   takePendingDeepLink();
   mocks.getSessionRowSnapshot.mockReset();
   mocks.getSessionRowSnapshot.mockResolvedValue(null);
+  mocks.readSessionInboxFacts.mockReset();
+  mocks.readSessionInboxFacts.mockResolvedValue(null);
   mocks.readAgentIslandCompanion.mockReset();
   mocks.readAgentIslandCompanion.mockResolvedValue(null);
   mocks.companionAvatarThumbnail.mockReset();
@@ -1644,6 +1649,46 @@ describe('AgentIslandService native publishing', () => {
       SESSION_ACTIVITY_CHANNEL,
       expect.objectContaining({ sessionId: 's1', phase: 'completed' }),
     );
+  });
+
+  // Unit (2026-11-28 product rule: every phone-counted task must be clearable in the inbox).
+  // Production entry: getForegroundTaskActivity / subscribeTaskOverview, the snapshot and upload
+  // trigger. Gap: the phone share counted snoozed tasks. Minimal failing input: one unread result
+  // whose task is snoozed until later; it must drop once its facts load and return when it wakes.
+  it('drops a snoozed result from the phone share and restores it when the snooze ends', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-01-01T00:00:00.000Z'));
+    try {
+      const { AgentIslandService } = await import('../service.js');
+      mocks.readSessionInboxFacts.mockResolvedValue({
+        status: 'active', snoozedUntil: '2026-01-01T01:00:00.000Z', snoozedAt: '2026-01-01T00:00:00.000Z',
+        userSendAt: null, kind: 'task',
+      });
+      const service = new AgentIslandService({
+        getMainWindow: () => null,
+        nativeHost: { failed: false, headless: true, publish: () => true, suspend: () => undefined },
+      });
+      service.setEnabled(false);
+      const changed = vi.fn();
+      service.subscribeTaskOverview(changed);
+      service.handleUserPrompt({ sessionId: 's1', agentKind: 'codex' }, 'run tests');
+      service.handleAgentEvent({ sessionId: 's1', agentKind: 'codex' }, textEvent('Tests pass.', true));
+      service.handleAgentEvent({ sessionId: 's1', agentKind: 'codex' }, doneEvent());
+      // Facts not loaded yet: the result keeps counting rather than vanishing on a slow read.
+      expect(service.getForegroundTaskActivity()).toMatchObject({ unreadCount: 1 });
+      changed.mockClear();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(changed).toHaveBeenCalled();
+      expect(service.getForegroundTaskActivity()).toMatchObject({ unreadCount: 0, selected: null });
+      expect(service.getTaskOverview()).toHaveLength(1);
+
+      changed.mockClear();
+      await vi.advanceTimersByTimeAsync(60 * 60 * 1000);
+      expect(changed).toHaveBeenCalled();
+      expect(service.getForegroundTaskActivity()).toMatchObject({ unreadCount: 1, selected: { sessionId: 's1' } });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('hides unread completion from the island at TTL while remote attention stays until ack even when island UI is off', async () => {
@@ -7546,6 +7591,35 @@ describe('AgentIslandService island-entry alert disposal', () => {
 });
 
 describe('会话关闭原因决定条目去留', () => {
+  it('removes an archived error card and ignores a trailing error until the task is restored', async () => {
+    const { AgentIslandService } = await import('../service.js');
+    const publish = vi.fn((_frame: AgentIslandDisplayState) => true);
+    const service = new AgentIslandService({
+      getMainWindow: () => null,
+      nativeHost: { failed: false, publish },
+    });
+    syncEnabledForTest(service, publish);
+    const meta = { sessionId: 'archived-task', agentKind: 'codex' } as const;
+    const error = terminalErrorEvent('Session closed before the current turn delivered a terminal event');
+    const errorCards = () => service.getTaskOverview()
+      .filter((session) => session.phase === 'error').map((session) => session.sessionId).sort();
+
+    service.handleAgentEvent(meta, error);
+    expect(publish.mock.calls.at(-1)?.[0].sessions[0]).toMatchObject({ sessionId: meta.sessionId, phase: 'error' });
+    service.handleAgentEvent({ sessionId: 'other-task' }, error);
+    expect(errorCards()).toEqual(['archived-task', 'other-task']);
+    service.handleSessionStatusChanged(meta.sessionId, 'archived');
+    expect(errorCards()).toEqual(['other-task']);
+    service.handleAgentEvent(meta, error);
+    service.handleSessionClosed(meta.sessionId, { reason: 'process-closed' });
+    expect(errorCards()).toEqual(['other-task']);
+
+    service.handleSessionStatusChanged(meta.sessionId, 'active');
+    expect(errorCards()).toEqual(['other-task']);
+    service.handleAgentEvent(meta, terminalErrorEvent('A later turn failed'));
+    expect(errorCards()).toEqual(['archived-task', 'other-task']);
+  });
+
   it('进程关闭保留仍在展示的完成卡片,归档/删除照常硬删', async () => {
     const { AgentIslandService } = await import('../service.js');
     const publish = vi.fn(() => true);

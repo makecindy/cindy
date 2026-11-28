@@ -130,6 +130,30 @@ describe('Maker: agent on another computer', () => {
     await maker.shutdown();
   });
 
+  // 测试价值：引擎在另一台电脑时 Maker 经 startDeviceAgentSession 转发的 userPrompt，执行端插件引擎会把它作为
+  // ACP systemPrompt 发出。依据：#13564 审查 P1，隔离伙伴档案不过线，执行端无法排除，只能在这里决定。
+  // 缺口：此前只测执行端 AcpAgent。最小失败输入：acp + agentDeviceId + 隔离伙伴 + 冻结的主人个性化。unit tier。
+  const isolated = { mode: 'allowlist' as const, configured: [], catalog: [] };
+  it.each([
+    { name: 'an ordinary task', extra: {}, expected: 'OWNER PERSONAL' },
+    { name: 'an isolated companion', extra: {
+      botRuntimeProfile: { botId: 'b', profileVersion: 1, skillPolicy: isolated, mcpPolicy: isolated, toolsetPolicy: isolated },
+    }, expected: undefined },
+    { name: 'a read-only review', extra: { reviewMode: true as const }, expected: undefined },
+  ])('forwards to a plugin engine on another computer the personal instructions of $name: $expected', async ({ extra, expected }) => {
+    const remote = { ...handle('remote-acp'), agentKind: 'acp' as const, negotiatedCapabilities: {} as Capabilities } as unknown as AgentSessionHandle;
+    const startDeviceAgentSession = vi.fn<(input: { agentKind: string; deviceId: string; options: { userPrompt?: string } }) => Promise<AgentSessionHandle>>(
+      async () => remote,
+    );
+    const maker = new Maker({ agents: {}, storage: storage(), logger, startDeviceAgentSession });
+    await maker.createSession({
+      id: 'task-remote-prompt', agentKind: 'acp', workingDir: '/repo', model: 'm', providerId: 'acp-plugin:p:h', agentDeviceId: 'dev-b',
+      userPrompt: 'OWNER PERSONAL\n\nPROJECT CONTEXT', hostStartupPreferences: { userPrompt: 'OWNER PERSONAL' }, ...extra,
+    });
+    expect(startDeviceAgentSession.mock.lastCall?.[0].options.userPrompt).toBe(expected);
+    await maker.shutdown();
+  });
+
   it('offers rewind when the agent computer forwards conversation truncation', async () => {
     const agent = localAgent();
     const remote = { ...handle('remote-sdk'), commitRewindFiles: vi.fn(async () => ({ ok: true })) } as unknown as AgentSessionHandle;

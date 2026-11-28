@@ -30,10 +30,14 @@ sources, tasks executed on another computer and SSH runtimes retain their existi
 lifecycle. Mobile/device-link controllers of an
 eligible Desktop task share its normal resume path; no new wire API is introduced.
 
-Codex and plugin engine (ACP) tasks use the same watcher, scope and gates with a
-fixed 30 minutes and no override; both also wait for `hasLiveBackgroundWork` to
-report no provider work. A plugin engine task holds one engine process (a few hundred
-MB each); without release every task ever opened kept its process. Plugins once had a
+Codex uses the same watcher, scope and gates with a fixed 30 minutes and no
+override; plugin engine (ACP) tasks use a fixed 90 minutes (and stay warm while
+bound to an active non-manual schedule with a PR/webhook trigger or interval
+<= 60 minutes, such as PR auto-follow) to avoid recycling processes and wiping
+provider prompt caches across ordinary pauses. Both Codex and plugin engines also
+wait for `hasLiveBackgroundWork` to report no provider work. A plugin engine task
+holds one engine process (a few hundred MB each); without release every task ever
+opened kept its process. Plugins once had a
 fixed 8-process cap, so idle tasks also blocked new ones from starting (2026-11-25);
 #12798 removed that cap, so release is now what keeps idle processes from piling up.
 A plugin engine runtime is released only when its agent advertised `session/resume` or

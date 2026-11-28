@@ -168,8 +168,14 @@ vi.mock('../../../security/trustedAppRenderer.js', () => ({
   isTrustedAppRendererWindow: (w: { trusted?: boolean; isDestroyed: () => boolean }) =>
     !w.isDestroyed() && w.trusted !== false,
 }));
-vi.mock('../../agentIslandSessionPatch', () => ({ notifyAgentIslandSessionPatch: vi.fn() }));
-vi.mock('../../../messagePersistBroadcaster.desktop', () => ({ noteSessionClearBoundary: vi.fn() }));
+vi.mock('../../agentIslandSessionPatch', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../../agentIslandSessionPatch')>(),
+  notifyAgentIslandSessionPatch: vi.fn(),
+}));
+vi.mock('../../../messagePersistBroadcaster.desktop', () => ({
+  noteSessionClearBoundary: vi.fn(),
+  backgroundTurnPredatesSessionClear: vi.fn(() => false),
+}));
 vi.mock('../../toolResultCompaction.js', () => ({
   compactSessionToolResultsBestEffort: h.compactSessionToolResultsBestEffort,
 }));
@@ -237,6 +243,9 @@ import { createRemoteSessionsStatusSetter } from '../../../mcp-integrations/sess
 import * as sessionQueries from '../../sessionQueries';
 import { getDbClient } from '../../client/current';
 import { sessionToCamel, setSessionRuntimeProjector } from '../../mapper';
+import { readSessionInboxFacts } from '../../sessionInboxFacts';
+import { keepInboxCountedTasks, projectHostTaskActivity } from '../../../device-link/taskActivity';
+import type { AgentIslandSessionSnapshot } from '../../../../shared/agentIsland';
 
 function createDb(): void {
   const sqlite = new Database(':memory:');
@@ -583,6 +592,36 @@ it('makes a follow-up independently visible only when its worker exists', async 
   });
   const raw = h.sqlite!.prepare("SELECT source, side_chat_promoted FROM sessions WHERE id = 'codex-local'").get();
   expect(raw).toEqual({ source: 'side-chat', side_chat_promoted: 1 });
+});
+
+// Value: the existing single-session IPC read carries persisted switch attribution
+// to remote task digests after a host restart, without another device-link RPC.
+// Gap: previous tests covered the in-memory projection and DB reader separately.
+// Minimal input: one post-clear agent_switch row and an empty runtime state; tier: db.
+it('recovers route attribution through single-session read after restart', async () => {
+  const content = JSON.stringify({
+    fromAgentKind: 'cc', toAgentKind: 'codex',
+    fromModel: 'claude-opus-4-6', toModel: 'gpt-5.6',
+    fromProviderId: 'anthropic', toProviderId: 'openai',
+    toAgentDeviceId: 'studio',
+    attribution: { at: '2026-11-28T10:00:00.000Z', by: 'agent', reason: 'explicit' },
+  });
+  h.sqlite!.prepare("INSERT INTO messages (id, client_id, session_id, role, content, created_at) VALUES ('switch-route', 'switch-route', 'codex-local', 'agent_switch', ?, 1000)")
+    .run(content);
+  clearSessionRuntimeControlState('codex-local');
+  const read = () => h.handlers.get('local-db:sessions:get')!({}, 'codex-local');
+  expect(await read()).toMatchObject({ runtimeLastRouteChange: {
+    by: 'agent', reason: 'explicit',
+    from: { agentKind: 'claude-code', model: 'claude-opus-4-6' },
+    to: { agentKind: 'codex', model: 'gpt-5.6', agentDeviceId: 'studio' },
+  } });
+  // The host's in-memory clear fence must hide a stale DB row before the
+  // cleared_at write finishes (or when that write fails).
+  const { backgroundTurnPredatesSessionClear } = await import('../../../messagePersistBroadcaster.desktop.js');
+  vi.mocked(backgroundTurnPredatesSessionClear).mockReturnValueOnce(true);
+  expect(await read()).toMatchObject({ runtimeLastRouteChange: null });
+  h.sqlite!.prepare("UPDATE sessions SET cleared_at = 1500 WHERE id = 'codex-local'").run();
+  expect(await read()).toMatchObject({ runtimeLastRouteChange: null });
 });
 
 // DB tier: the remote preview must cover the owning project even when only one task
@@ -2875,6 +2914,32 @@ describe('a budget-only change through updateSessionInDb and through persistSess
   });
 });
 
+// DB tier: a main conversation in its teammate's workspace stays in the
+// phone summary while unread, unlike a channel in that same workspace. The real
+// DB reader and summary projection cover the link role, not a preclassified mock.
+it('counts an unread teammate main conversation without counting its channel result', async () => {
+  const dir = '/cindy-test/owners/owner/bots/teammate/workspace';
+  const insert = h.sqlite!.prepare(
+    "INSERT INTO sessions (id, source, working_dir, created_at, updated_at) VALUES (?, 'bot', ?, 1, 1)",
+  );
+  insert.run('main-chat', dir);
+  insert.run('channel-chat', dir);
+  const link = h.sqlite!.prepare("INSERT INTO bot_session_links (session_id, bot_id, role) VALUES (?, 'teammate', ?)");
+  link.run('main-chat', 'canonical');
+  link.run('channel-chat', 'channel');
+  const rows = ['main-chat', 'channel-chat'].map((sessionId) => ({
+    sessionId, title: sessionId, phase: 'completed', attention: true,
+  }) as AgentIslandSessionSnapshot);
+  const facts = new Map(await Promise.all(rows.map(async ({ sessionId }) =>
+    [sessionId, await readSessionInboxFacts(sessionId)] as const)));
+  const summary = (candidates: AgentIslandSessionSnapshot[]) =>
+    projectHostTaskActivity(keepInboxCountedTasks(candidates, (id) => facts.get(id), 10));
+  expect(summary(rows)).toMatchObject({ unreadCount: 1, selected: { sessionId: 'main-chat' } });
+  expect(summary([{ ...rows[0]!, attention: false }, rows[1]!])).toMatchObject({
+    unreadCount: 0, selected: null,
+  });
+});
+
 // DB tier: exercise both production write channels and their authoritative persisted/broadcast pair.
 describe('task snooze persistence', () => {
   it.each([invokeUpdate, invokePatchMeta])('saves deferral without activity or lifecycle effects', async (invoke) => {
@@ -2937,5 +3002,69 @@ describe('task snooze persistence', () => {
   it.each(['not-a-date', '2000-01-01T00:00:00.000Z', 123])('rejects invalid deferral %s without writing', async snoozedUntil => {
     await expect(invokePatchMeta('codex-local', { snoozedUntil })).rejects.toThrow();
     expect(h.sqlite!.prepare('SELECT snoozed_until AS until FROM sessions WHERE id = ?').get('codex-local')).toEqual({ until: null });
+  });
+
+  // 2026-11-27 回归：ACP 任务切入智能路由或从路由切到 ACP 后，broadcastSessionRuntimeProjection
+  // 与 createSessionRuntimeProjector 此前对 agent_kind='acp' 早退，导致持续托管提示不出现/不消失。
+  it('broadcasts and projects modelGroupBinding updates for ACP sessions without inventing built-in runtime fields', async () => {
+    const sessionId = 'acp-managed';
+    h.sqlite!.prepare(
+      `INSERT INTO sessions (id, title, status, agent_kind, model, provider_id, created_at, updated_at)
+       VALUES (?, 'ACP task', 'active', 'acp', 'default', 'acp-plugin:echo:echo', 1, 1)`,
+    ).run(sessionId);
+    const activeBinding = {
+      selection: { type: 'route' as const, id: 'r-openai' },
+      routeName: 'OpenAI 合并',
+      autoSwitch: true,
+      pendingSwitch: true as const,
+    };
+    let currentBinding: typeof activeBinding | null = activeBinding;
+    const projectModelGroupBinding = vi.fn(
+      (_id: string, _target: { agentKind?: string | null; providerId?: string | null; model?: string | null; agentDeviceId?: string | null }) =>
+        currentBinding,
+    );
+    const projection = createSessionRuntimeProjection({
+      broadcastSessionPatched,
+      projectModelGroupBinding,
+    });
+    const projector = createSessionRuntimeProjector({
+      projectScheduledPreferences: projection.projectScheduledPreferences,
+      runtimePluginsSelected: () => false,
+      projectModelGroupBinding: (id, target) => projectModelGroupBinding(id, target) ?? undefined,
+    });
+    setSessionRuntimeProjector(projector);
+    try {
+      await projection.broadcastSessionRuntimeProjection(sessionId);
+      expect(h.tapWindowBroadcast).toHaveBeenLastCalledWith('local-db:sessions:patched', {
+        sessionId,
+        patch: { modelGroupBinding: activeBinding },
+      });
+      const row = await sessionQueries.selectSessionWithCount(getDbClient().drizzle, sessionId);
+      const mapped = sessionToCamel(row!);
+      expect(mapped.agentKind).toBe('acp');
+      expect(mapped.runtimeEffective).toBeUndefined();
+      expect(mapped.modelGroupBinding).toEqual(activeBinding);
+
+      // 解除托管或从路由切到 ACP 后必须显式广播 modelGroupBinding: null 清除界面提示。
+      currentBinding = null;
+      await projection.broadcastSessionRuntimeProjection(sessionId);
+      expect(h.tapWindowBroadcast).toHaveBeenLastCalledWith('local-db:sessions:patched', {
+        sessionId,
+        patch: { modelGroupBinding: null },
+      });
+    } finally {
+      setSessionRuntimeProjector(null);
+    }
+  });
+
+  // 2026-11-27 回归：globalMemoryTidyRuntime 曾向 broadcastSessionPatched 传数字 updatedAt，
+  // 落进 renderer 后触发 useCCSessionsAllStatuses 的 b.updatedAt.localeCompare 崩溃。
+  it('normalizes numeric updatedAt timestamps to ISO strings in broadcastSessionPatched', () => {
+    const ts = 1_786_500_050_000;
+    broadcastSessionPatched('cc-local', { status: 'archived', updatedAt: ts });
+    expect(h.tapWindowBroadcast).toHaveBeenLastCalledWith('local-db:sessions:patched', {
+      sessionId: 'cc-local',
+      patch: { status: 'archived', updatedAt: new Date(ts).toISOString() },
+    });
   });
 });

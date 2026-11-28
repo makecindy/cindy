@@ -164,9 +164,13 @@ export function MergeProviderButton({
   const { t } = useTranslation();
   const { confirm } = useConfirmDialog();
   const loadedTargets = useSubscriptionPlacementTargets(givenTargets ? null : kind ?? null, providerId);
-  const targets = givenTargets ?? loadedTargets;
-  const source = openAiAccounts?.find(account => account.id === providerId && account.connected);
-  const mixedTargets = source ? openAiAccounts?.filter(account => account.mergeTarget) ?? [] : [];
+  const source = openAiAccounts?.find(account => account.id === providerId);
+  const mixedTargets = source?.connected ? openAiAccounts?.filter(account => account.mergeTarget) ?? [] : [];
+  const mixedIds = new Set(mixedTargets.map(target => target.id));
+  // An API connection can also own a subscription pool. The mixed-account
+  // command, not whole-subscription placement, is the one for this pair.
+  const targets = source?.kind === 'apiKey' ? []
+    : (givenTargets ?? loadedTargets).filter(target => !mixedIds.has(target.id));
   const [merging, setMerging] = useState(false);
   if (targets.length === 0 && mixedTargets.length === 0) return null;
   const merge = async (target: PlacementTarget, apiKeyName?: string) => {

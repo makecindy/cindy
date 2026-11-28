@@ -361,6 +361,93 @@ it.each(['fresh', 'offline', 'other-source', 'legacy', 'checkout-fails'] as cons
   30_000,
 );
 
+// 测试价值
+// - 生产入口与可观察结果：真实 Git 仓库下 createWorktree({ trackBackgroundCheckout: true }) +
+//   AcpAgent.startSession(session/new) + ensureBackgroundCheckoutReady + session.send(session/prompt)；
+//   验证本机 ACP 可在后台 full checkout 期间提前启动，并在首轮 prompt 前等到完整树落盘。
+// - 规则依据：#11956 叠加本机 ACP 延迟全量检出到 session/prompt 前。
+// - 现有覆盖缺口：上方用例走 awaitFullCheckout: true，未覆盖 trackBackgroundCheckout + ensureBackgroundCheckoutReady。
+// - 最小失败输入：仅通过 stageCheckout 创建 worktree 后，若不在 prompt 前等 ensureBackgroundCheckoutReady，
+//   或后台检出失败被吞掉，则 marker.txt 读取会缺文件或静默失败。
+// - tier：git-integration（真实 Git 仓库与 AcpAgent 传输层）。
+it('defers local ACP full checkout until ensureBackgroundCheckoutReady before session/prompt', async () => {
+  fixture = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-acp-deferred-wt-'));
+  vi.spyOn(app, 'getPath').mockReturnValue(fixture);
+  const repo = path.join(fixture, 'repo');
+  await fs.mkdir(repo);
+  const git = async (cwd: string, ...args: string[]) =>
+    (await exec('git', args, { cwd, windowsHide: true })).stdout.trim();
+  await git(repo, 'init', '-b', 'main');
+  await git(repo, 'config', 'user.name', 'Test');
+  await git(repo, 'config', 'user.email', 'test@example.com');
+  await fs.writeFile(path.join(repo, 'AGENTS.md'), '# rules\n');
+  await fs.writeFile(path.join(repo, 'marker.txt'), 'deferred full checkout content');
+  await git(repo, 'add', 'AGENTS.md', 'marker.txt');
+  await git(repo, 'commit', '-m', 'init');
+
+  const { createWorktree, ensureBackgroundCheckoutReady } = await import('../worktree/WorktreeManager');
+  const created = await createWorktree(
+    { sessionId: 'local-acp-deferred', baseRepo: repo, name: 'local-acp', sourceBranch: 'main' },
+    { trackBackgroundCheckout: true },
+  );
+  expect(created.ok).toBe(true);
+  if (!created.ok) return;
+  // Startup instruction file is checked out synchronously during stageCheckout.
+  expect(await fs.readFile(path.join(created.meta.path, 'AGENTS.md'), 'utf8')).toBe('# rules\n');
+
+  const read = Promise.withResolvers<string>();
+  const logger: Logger = {
+    trace() {}, debug() {}, info() {}, warn() {}, error() {}, fatal() {}, child: () => logger,
+  };
+  let onLine: ((line: string) => void) | undefined;
+  let pluginCwd = '';
+  const transport: AcpLineTransport = {
+    write(line) {
+      const { id, method, params } = JSON.parse(line);
+      const reply = (result: object) => queueMicrotask(() => {
+        onLine?.(JSON.stringify({ jsonrpc: '2.0', id, result }));
+      });
+      if (method === 'initialize') reply({ protocolVersion: 1, agentCapabilities: {}, authMethods: [] });
+      if (method === 'session/new') {
+        pluginCwd = params.cwd;
+        reply({ sessionId: 'deferred-fixture-session' });
+      }
+      if (method === 'session/prompt') {
+        void fs.readFile(path.join(pluginCwd, 'marker.txt'), 'utf8').then((content) => {
+          read.resolve(content);
+          reply({ stopReason: 'end_turn' });
+        }, read.reject);
+      }
+    },
+    onLine(listener) {
+      onLine = listener;
+      return () => { onLine = undefined; };
+    },
+    onClose: () => () => {},
+    close: async () => {},
+  };
+  const agent = new AcpAgent({
+    auth: {
+      getState: async () => ({ authenticated: true }),
+      triggerLogin: async () => ({ authenticated: true }),
+      logout: async () => {},
+      getAuthEnv: async () => ({}),
+    },
+    binaryPath: '', runtimeConfig: {}, logger, clientInfo: { name: 'fixture', version: '1' },
+    endpoints: { connect: async () => transport },
+  });
+  const session = await agent.startSession({
+    workingDir: created.meta.path, providerId: 'acp-plugin:fixture:marker', model: '',
+  });
+  try {
+    await ensureBackgroundCheckoutReady('local-acp-deferred');
+    await session.send({ type: 'user', content: 'Read marker.txt' });
+    await expect(read.promise).resolves.toBe('deferred full checkout content');
+  } finally {
+    await session.close();
+  }
+}, 30_000);
+
 // Orca Workers based on the origin default used to skip the refresh, so whole
 // batches started behind main. Tool calls name it as `origin/main`, which the
 // Desktop-only refresh did not recognize. Minimal failure: the remote advances
@@ -468,4 +555,105 @@ it('completes staged checkout with inherited submodule recursion', async () => {
   expect(await git(result.meta.path, 'status', '--porcelain=v1')).toBe('');
   expect(await fs.readFile(path.join(result.meta.path, 'tracked.txt'), 'utf8')).toBe('fixture\n');
   expect(await git(repo, 'config', '--local', 'submodule.recurse')).toBe('true');
+});
+
+// 测试价值
+// - 生产入口与可观察结果：prepareHandoffWorktree（send_to_session 与 create_task_worktree 的 base_ref
+//   共用入口）+ 真实 resolveExplicitSourceRef + createWorktree；观察新 worktree 的 HEAD、登记的源引用、
+//   是否回报「没能刷新」，以及解析不了时的报错。
+// - 规则依据：2026-11-28 多机协作复盘。工作分支不是默认分支的项目里，新任务只能从默认分支起步再
+//   整树切一次分支；另一台电脑刚 push 的分支在任务电脑上还没 fetch 时，本地引用缺失或停在旧提交。
+// - 现有覆盖缺口：单测把 git 换成 mock，看不到 fetch 是否真的取回刚 push 的提交、git 对「远端没有
+//   这条分支」的报错是否被识别、同名本地分支是否仍然优先。
+// - 最小失败输入：一个 bare 远端、一份在 push 之前克隆的仓库、另一份负责 push 的仓库。
+// - tier：git-integration（真实 Git 引用与 fetch 语义；远端是本地路径，不联网）。
+it('cuts a task worktree from an explicit base, fetching a remote branch another computer just pushed', async () => {
+  fixture = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-explicit-base-'));
+  vi.spyOn(app, 'getPath').mockReturnValue(fixture);
+  const git = async (cwd: string, ...args: string[]) =>
+    (await exec('git', args, { cwd, windowsHide: true, timeout: 10_000 })).stdout.trim();
+  const identify = async (cwd: string) => {
+    await git(cwd, 'config', 'user.name', 'Test');
+    await git(cwd, 'config', 'user.email', 'test@example.invalid');
+  };
+  const seed = path.join(fixture, 'seed');
+  await fs.mkdir(seed);
+  await git(seed, 'init', '--initial-branch=main');
+  await identify(seed);
+  await fs.writeFile(path.join(seed, 'tracked.txt'), 'base');
+  await git(seed, 'add', 'tracked.txt');
+  await git(seed, 'commit', '-m', 'base');
+  const remote = path.join(fixture, 'remote.git');
+  await git(fixture, 'clone', '--bare', seed, remote);
+  // `repo` 是任务所在电脑的检出；`other` 是另一台电脑。
+  const repo = path.join(fixture, 'repo');
+  const other = path.join(fixture, 'other');
+  await git(fixture, 'clone', remote, repo);
+  await git(fixture, 'clone', remote, other);
+  await identify(other);
+  const push = async (branch: string, content: string) => {
+    await git(other, 'checkout', '-B', branch);
+    await fs.writeFile(path.join(other, 'tracked.txt'), content);
+    await git(other, 'commit', '-am', content);
+    await git(other, 'push', 'origin', branch);
+    return git(other, 'rev-parse', 'HEAD');
+  };
+  const { prepareHandoffWorktree } = await import('../maker-ipc/handoffWorktree');
+  const { resolveExplicitSourceRef } = await import('../worktree/freshBase');
+  const { listBranches, revParseCommit } = await import('../worktree/WorktreeManager');
+  let sequence = 0;
+  const prepare = (sourceRef: string) => prepareHandoffWorktree({
+    getForSession: () => null, listAll: () => [], detectCwd, listBranches, resolveCommit: revParseCommit,
+    suggestName: async () => `base-${++sequence}`, createId: () => `explicit-base-${sequence}`,
+    createWorktree: (request) => createWorktree(request, { awaitFullCheckout: true }),
+    resolveExplicitSource: resolveExplicitSourceRef,
+  }, undefined, repo, { sourceRef });
+
+  // 任务电脑拿到过旧提交，之后另一台电脑又 push 了一次：必须从新提交切出。
+  await push('team/work', 'first push');
+  await git(repo, 'fetch', 'origin');
+  const latest = await push('team/work', 'second push');
+  expect(await git(repo, 'rev-parse', 'refs/remotes/origin/team/work')).not.toBe(latest);
+  const created = await prepare('origin/team/work');
+  expect(created.ok, JSON.stringify(created)).toBe(true);
+  if (!created.ok) return;
+  expect(created.meta.sourceBranch).toBe('refs/remotes/origin/team/work');
+  expect(created.staleBaseReason).toBeUndefined();
+  expect(await git(created.meta.path, 'rev-parse', 'HEAD')).toBe(latest);
+  expect(await fs.readFile(path.join(created.meta.path, 'tracked.txt'), 'utf8')).toBe('second push');
+  // 主检出不动：仍在默认分支，没有被切走。
+  expect(await git(repo, 'branch', '--show-current')).toBe('main');
+
+  // 任务电脑从没见过的分支：fetch 之后才存在。
+  const fresh = await push('team/fresh', 'never fetched');
+  expect(await resolveExplicitSourceRef(repo, 'origin/team/fresh'))
+    .toEqual({ sourceBranch: 'refs/remotes/origin/team/fresh', fetched: true });
+  expect(await git(repo, 'rev-parse', 'refs/remotes/origin/team/fresh')).toBe(fresh);
+
+  // 解析不了的基线不回退默认分支，也不留下工作区；报错带下一步。
+  const before = metadata.size;
+  const bare = await prepare('team/fresh');
+  expect(bare.ok === false && bare.message).toContain('pass it as "origin/<branch>"');
+  const missing = await prepare('origin/team/missing');
+  expect(missing.ok === false && missing.message).toContain('The remote has no such branch');
+  expect(metadata.size).toBe(before);
+
+  // 远端已删除、本机还留着旧副本：沿用副本，并说明原因。
+  await git(repo, 'update-ref', 'refs/remotes/origin/team/gone', latest);
+  expect(await resolveExplicitSourceRef(repo, 'origin/team/gone'))
+    .toEqual({ sourceBranch: 'refs/remotes/origin/team/gone', fetched: false, reason: 'not-on-remote' });
+
+  // 本地分支、提交和同名本地分支按 git 自己的解析顺序使用，不联网、不改写。
+  await git(repo, 'branch', 'origin/team/work', 'main');
+  for (const ref of ['main', latest, 'origin/team/work', 'refs/heads/main', 'origin/HEAD', 'origin/team/fresh~0']) {
+    expect(await resolveExplicitSourceRef(repo, ref)).toEqual({ sourceBranch: ref });
+  }
+  // 写全名时仍指远端分支。
+  expect(await resolveExplicitSourceRef(repo, 'refs/remotes/origin/team/work'))
+    .toEqual({ sourceBranch: 'refs/remotes/origin/team/work', fetched: true });
+
+  // 远端连不上：沿用本机副本并回报没能刷新，不阻塞创建。
+  await git(repo, 'remote', 'set-url', 'origin', path.join(fixture, 'unreachable.git'));
+  expect(await resolveExplicitSourceRef(repo, 'refs/remotes/origin/team/work'))
+    .toEqual({ sourceBranch: 'refs/remotes/origin/team/work', fetched: false, reason: 'fetch-failed' });
 });

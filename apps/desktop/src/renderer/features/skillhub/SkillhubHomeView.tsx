@@ -356,6 +356,8 @@ export function SkillhubHomeContent({
                   className="skill-catalog-source-tabs min-w-0"
                   role="radiogroup"
                   aria-label={t('skillhub.home.catalogFiltersAria')}
+                  // Underline-styled tabs keep an explicit size; density presets would detach the
+                  // underline from the divider (DESIGN.md §4 Tabs).
                   height={40}
                   optionHeight={40}
                   optionClassName="px-1 text-13"

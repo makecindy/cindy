@@ -163,7 +163,15 @@ export function modelGroupsConfigFromRemote(raw: unknown): ModelGroupsConfig {
  * 真实原因放在 pickWhy；新版先读 pickWhy(modelGroupResolveResultFromRemote)。
  */
 const LEGACY_WHY: Partial<Record<ModelGroupTraceWhy, ModelGroupTraceWhy>> = {
-  drain: 'order', drainNext: 'order', headroom: 'expiring', weighted: 'rotate',
+  drain: 'order',
+  drainNext: 'order',
+  headroom: 'expiring',
+  weighted: 'rotate',
+  usageHabit: 'expiring',
+  autoBalance: 'expiring',
+  lessBusy: 'expiring',
+  paygFallback: 'order',
+  paygReserve: 'standby',
 };
 
 type WithPickWhy<T> = T & { pickWhy?: ModelGroupTraceWhy };
@@ -205,6 +213,8 @@ export interface ModelGroupCandidate {
    * 选中它的新任务，Agent 在这个位置运行；供应商与模型属于那里的目录。
    */
   agentDeviceId?: string;
+  /** 本机多账号订阅池里的具体账号槽位 id（例如 `default` / `acct-...` / `api:...`）。省略 = 不区分账号。 */
+  accountId?: string;
   /** 用户暂时不让这条路线用它；保留在列表里。 */
   off?: boolean;
   /** 「按权重」时这个来源的权重，1–1000；不设为 1。别的选法下保留不用。 */
@@ -243,11 +253,13 @@ export interface ModelGroupRoute {
   hidden?: true;
 }
 
-/** 供应商路由的成员：一整个供应商(它提供的全部模型)，不指定模型。 */
+/** 供应商路由的成员：一整个供应商(它提供的全部模型)，或本机多账号池里的单个账号，不指定模型。 */
 export interface ModelGroupSource {
   providerId: string;
   /** 运行位置：另一台电脑的设备 id，或分享来的供应商(`share:<id>`)。省略 = 本机。与 ModelGroupCandidate 同义。 */
   agentDeviceId?: string;
+  /** 本机多账号订阅池里的具体账号槽位 id；省略 = 整个供应商连接。 */
+  accountId?: string;
   /** 用户暂时不让这条路由用它；保留在列表里。 */
   off?: boolean;
   /** 「按权重」时的权重，1–1000；不设为 1。 */
@@ -293,6 +305,12 @@ export interface ModelGroupsConfig {
   autoSources?: Record<string, ModelGroupSource[]>;
   /** 用户给自动供应商路由加的例外：键是路由 id。 */
   autoExceptions?: Record<string, ModelGroupException[]>;
+  /**
+   * 仅本机主进程内存下发的 Auto 展示优先级（规范化模型 ID -> 0..1 相对权重）：
+   * 用于模型选择器在 Auto 合并路由下把平时高频模型排到靠前位置；
+   * 绝不落盘（normalizeModelGroupsConfig 忽略）、绝不跨 device-link 下发（modelGroupsConfigForRemote 忽略）。
+   */
+  autoModelPriorities?: Record<string, number>;
 }
 
 /** 用了这个模式的任务出问题时是否自动换来源(默认开)。 */
@@ -345,15 +363,18 @@ export interface ModelGroupRouteNote {
 export type ModelGroupTraceState = 'picked' | 'standby' | 'skipped';
 /**
  * picked：expiring / order / rotate / cheapest / drain / headroom / weighted 对应选法(cheapestFree = 还有订阅配额，不另外花钱；
- * drainNext = 上一个用完或用不了，换到了它)；
+ * drainNext = 上一个用完或用不了，换到了它；usageHabit = 自动模式下结合本机平时用量优先选它；autoBalance = 自动模式下按余量与均衡分担；
+ * lessBusy = 自动模式下其他来源正在跑任务，先用空闲的它；paygFallback = 订阅与共享不可用，按量付费来源兜底)；
  * only = 只有它能用；soonest = 全都用完了，选最早恢复的。
- * standby：这次没轮到。skipped：off = 已停用；unavailable = 没连接或模型已不可选；limited = 额度用完；
+ * standby：这次没轮到；paygReserve = 按量付费来源，订阅与共享不可用时再兜底。
+ * skipped：off = 已停用；unavailable = 没连接或模型已不可选；limited = 额度用完；
  * tight = 5 小时额度快满、离重置还早；noVision = 消息里有图片而它看不了图。
  */
 export type ModelGroupTraceWhy =
   | 'expiring' | 'order' | 'rotate' | 'cheapest' | 'cheapestFree' | 'only' | 'soonest'
   | 'drain' | 'drainNext' | 'headroom' | 'weighted'
-  | 'standby'
+  | 'usageHabit' | 'autoBalance' | 'lessBusy' | 'paygFallback'
+  | 'standby' | 'paygReserve'
   | 'off' | 'unavailable' | 'limited' | 'tight' | 'noVision';
 
 export interface ModelGroupTraceQuota {
@@ -369,6 +390,8 @@ export interface ModelGroupTraceEntry {
   model: string;
   /** 运行位置；本机省略。 */
   agentDeviceId?: string;
+  /** 本机多账号订阅池里的具体账号槽位 id；不区分账号时省略。 */
+  accountId?: string;
   modelName: string;
   sourceName: string;
   state: ModelGroupTraceState;
@@ -385,6 +408,8 @@ export interface ModelGroupResolvedRoute {
   model: string;
   /** 选中的来源在另一台电脑或是分享来的：新任务的 Agent 在那里运行。本机省略。 */
   agentDeviceId?: string;
+  /** 本机多账号订阅池里选中的具体账号槽位 id；本机单账号或远程来源省略。 */
+  accountId?: string;
   effort?: string;
   /** 用户要的 Fast，且选中的来源支持；否则省略。 */
   fastMode?: true | 'ultrafast';
@@ -428,6 +453,8 @@ export interface ModelGroupSwitchOffer {
   model: string;
   /** 目标运行位置：另一台电脑或分享来的供应商(`share:<id>`)；本机省略。 */
   agentDeviceId?: string;
+  /** 本机多账号订阅池里的目标账号槽位 id；本机单账号或远程来源省略。 */
+  accountId?: string;
   /** 路由指定的推理强度(若目标模型支持)。 */
   effort?: string;
   /** 目标模型的 Fast 档位(若支持)。 */
@@ -454,7 +481,7 @@ export interface ModelGroupResolveRequest {
    * effort / fastMode = 用户在选择器里给这个模型选的思考深度与 Fast：只对供应商路由展开出来的路由生效
    * (它们在选择器里就是普通模型行，这两项用户照常能调)，选中的来源不支持时不带。
    */
-  context?: { hasImages?: boolean; effort?: string; fastMode?: true | 'ultrafast' };
+  context?: { scheduled?: boolean; hasImages?: boolean; effort?: string; fastMode?: true | 'ultrafast' };
   /**
    * 只在这个运行位置的来源里选(agentDeviceId null = 本机)。省略 = 不限(含跨本地、分享与远程位置)。
    */
@@ -493,10 +520,17 @@ function candidate(raw: unknown): ModelGroupCandidate | null {
     agentDeviceId = modelGroupAgentDeviceId(value.agentDeviceId) ?? undefined;
     if (!agentDeviceId) return null;
   }
+  let accountId: string | undefined;
+  if (value.accountId !== undefined && value.accountId !== null) {
+    if (agentDeviceId) return null;
+    accountId = modelGroupAccountId(value.accountId) ?? undefined;
+    if (!accountId) return null;
+  }
   const weight = modelGroupWeight(value.weight);
   return {
     agentKind: kind, providerId, model,
     ...(agentDeviceId ? { agentDeviceId } : {}),
+    ...(accountId ? { accountId } : {}),
     ...(value.off === true ? { off: true } : {}),
     ...(weight !== 1 ? { weight } : {}),
   };
@@ -515,15 +549,39 @@ export function modelGroupAgentDeviceId(value: unknown): string | null {
   return id && id.length <= MODEL_GROUP_LIMITS.field ? id : null;
 }
 
+const ACCOUNT_ID_PATTERN = /^[a-zA-Z0-9:._-]{1,128}$/;
+
+/** 本机多账号槽位 id（非凭证/邮箱，仅限安全标识符）；格式不对为 null。 */
+export function modelGroupAccountId(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const id = value.trim();
+  return ACCOUNT_ID_PATTERN.test(id) ? id : null;
+}
+
+const CANDIDATE_ACCOUNT_MARKER = '\u0000\u0000acct:';
+
 /**
- * 候选的身份：引擎 + 供应商连接 + 模型，在另一台电脑或分享来的再加上运行位置——同一个模型在两台电脑上是两个来源。
- * 本机的键不带位置，与旧版存下的轮流位置和任务记录一致。
+ * 候选的身份：引擎 + 供应商连接 + 模型，在另一台电脑或分享来的再加上运行位置——同一个模型在两台电脑上是两个来源；
+ * 本机多账号池拆平后的单个账号再附账号后缀。本机未拆账号的键与旧版存下的轮流位置和任务记录一致。
  */
 export function modelGroupCandidateKey(
-  value: Pick<ModelGroupCandidate, 'agentKind' | 'providerId' | 'model'> & { agentDeviceId?: string | null },
+  value: Pick<ModelGroupCandidate, 'providerId' | 'model'> & { agentKind: ModelGroupAgentKind | 'claude-code'; agentDeviceId?: string | null; accountId?: string | null },
 ): string {
   const base = `${value.agentKind}\u0000${value.providerId}\u0000${value.model}`;
-  return value.agentDeviceId ? `${base}\u0000${value.agentDeviceId}` : base;
+  const located = value.agentDeviceId ? `${base}\u0000${value.agentDeviceId}` : base;
+  return value.accountId ? `${located}${CANDIDATE_ACCOUNT_MARKER}${value.accountId}` : located;
+}
+
+/** 去掉本机账号后缀后的候选键，用于和只存到供应商级别的会话行比对。 */
+export function modelGroupCandidateBaseKey(key: string): string {
+  const marker = key.indexOf(CANDIDATE_ACCOUNT_MARKER);
+  return marker >= 0 ? key.slice(0, marker) : key;
+}
+
+/** 从候选键里读出本机账号槽位 id（若带了账号后缀）。 */
+export function modelGroupCandidateAccountId(key: string): string | undefined {
+  const marker = key.indexOf(CANDIDATE_ACCOUNT_MARKER);
+  return marker >= 0 ? key.slice(marker + CANDIDATE_ACCOUNT_MARKER.length) || undefined : undefined;
 }
 
 function normalizeModelGroupRoute(raw: unknown): ModelGroupRoute | null {
@@ -562,9 +620,10 @@ function normalizeModelGroupRoute(raw: unknown): ModelGroupRoute | null {
   };
 }
 
-/** 供应商路由的成员在配置里的身份：运行位置 + 供应商连接。 */
-export function modelGroupSourceKey(source: Pick<ModelGroupSource, 'providerId' | 'agentDeviceId'>): string {
-  return `${source.agentDeviceId ?? ''}\u0000${source.providerId}`;
+/** 供应商路由的成员在配置里的身份：运行位置 + 供应商连接（本机多账号拆平后再加上账号槽位 id）。 */
+export function modelGroupSourceKey(source: Pick<ModelGroupSource, 'providerId' | 'agentDeviceId' | 'accountId'>): string {
+  const base = `${source.agentDeviceId ?? ''}\u0000${source.providerId}`;
+  return source.accountId ? `${base}\u0000${source.accountId}` : base;
 }
 
 function normalizeSources(raw: unknown): ModelGroupSource[] {
@@ -575,13 +634,20 @@ function normalizeSources(raw: unknown): ModelGroupSource[] {
     // 运行位置格式不对的整条丢弃，不悄悄变成本机。
     const location = entry && entry.agentDeviceId !== undefined && entry.agentDeviceId !== null
       ? modelGroupAgentDeviceId(entry.agentDeviceId) : undefined;
-    const key = `${location ?? ''}\u0000${providerId}`;
-    if (!entry || !providerId || location === null || seen.has(key)) return [];
+    const account = entry && entry.accountId !== undefined && entry.accountId !== null
+      ? (location ? null : modelGroupAccountId(entry.accountId))
+      : undefined;
+    if (!entry || !providerId || location === null || account === null) return [];
+    const key = modelGroupSourceKey({ providerId, ...(location ? { agentDeviceId: location } : {}), ...(account ? { accountId: account } : {}) });
+    if (seen.has(key)) return [];
     seen.add(key);
     const weight = modelGroupWeight(entry.weight);
     return [{
-      providerId, ...(location ? { agentDeviceId: location } : {}),
-      ...(entry.off === true ? { off: true } : {}), ...(weight !== 1 ? { weight } : {}),
+      providerId,
+      ...(location ? { agentDeviceId: location } : {}),
+      ...(account ? { accountId: account } : {}),
+      ...(entry.off === true ? { off: true } : {}),
+      ...(weight !== 1 ? { weight } : {}),
     }];
   }).slice(0, MODEL_GROUP_LIMITS.candidates);
 }

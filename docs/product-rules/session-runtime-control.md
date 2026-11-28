@@ -21,23 +21,34 @@ Cindy 允许 Agent 通过统一会话控制面查询和临时调整当前任务�
 ## Agent 控制面
 
 - `get_session_runtime`：`session_id` 可省略；省略时查询当前任务。返回活动状态、baseline、
-  effective、pending、generation 和自动降级开关。
-- `set_session_runtime`：`session_id` 可省略；原子提交来源、模型、推理强度与 Fast 的任意子集。
+  effective、pending（均含 `provider_device_id` 供应电脑，`"local"` 表示任务所在本机）、
+  脱敏来源投影 `route_source`（`kind`: `local`/`device`/`share`、`provider_device_id`、
+  `provider_device_name`（分享来源固定 `null`，不暴露分享者电脑名）、本机订阅槽位 `account_id`
+  （与 `get_subscription_usage` 同空间、不含邮箱/路径/凭据）以及路由托管方 `managed_by`）、
+  最近一次已提交路由切换归因 `last_route_change`（`at` / `by` / 受限原因码 `reason` / `from` → `to`）、
+  generation 和自动降级开关。
+- `set_session_runtime`：`session_id` 可省略；原子提交供应电脑（`provider_device_id`，兼容别名 `agent_device_id`）、
+  来源、模型、推理强度与 Fast 的任意子集。
 - 当前或目标任务忙碌时不修改进行中的 turn，返回 `deferred`，在下一个 turn 边界生效。
-- 省略 `harness` 时，Agent 的修改不写回任务 baseline。语义失败是否提高推理强度或换更强模型，由 Agent 或 Skill 明确请求。
+- 省略 `harness` 与 `provider_device_id` 时，Agent 的修改不写回任务 baseline。语义失败是否提高推理强度或换更强模型，由 Agent 或 Skill 明确请求。
 - 显式提供 `harness`（内置 `claude-code` / `codex` / `pi`）时必须同时指定 `model`，表示完整的任务执行选择；
   即使选回当前 Harness，也复用模型选择器的完整选择语义。目标模型、来源、推理强度和 Fast 在登记前一起校验，
   省略来源时按目标 Harness 的模型解析默认来源，不沿用旧 Harness 的来源。
+- 显式提供 `provider_device_id`（`"local"` 表示本机，或取 `list_available_models.locations[].agent_device_id`；
+  同时传入本机自身 deviceId 时自动归一为本机）时，可单独切换供应电脑（省略 `harness`/`model` 时沿用当前或已暂存的引擎与模型，
+  跨电脑切换绝不沿用旧电脑的 `provider_id`，省略 `provider_id` 时按目标电脑目录解析默认来源），也可搭配 `harness`/`model`/`provider_id`
+  一并提交。`set_worker_runtime` 支持同样的 `provider_device_id`（兼容 `agent_device_id`）能力。
+  显式路由／供应电脑选择被接受后，同步撤销该任务陈旧的额度等待与供应商组自动重试，避免旧等待抢占新选择。
 - **插件执行引擎（`acp`）边界**：任务新建（`send_to_session`）与绑定自动化临时切换支持 `acp` + `providerId`（`acp-plugin:...`），
   并在绑定自动化切回原引擎时连带恢复 `permissionMode` 与 `agentDeviceId`；`set_worker_runtime` 对插件引擎 Worker 返回
   `UNSUPPORTED_CAPABILITY`；任何尚未支持插件引擎的运行时控制入口必须显式拒绝，不得静默回落成内置引擎。全场景边界见
   [插件引擎与插件模型](plugin-engines-and-models.md)。
-- 完整选择返回 `deferred` / `effective_boundary: next_send`，清除此前临时调整；`get_session_runtime.pending`
-  显示目标 Harness，`effective` 仍表示当前运行组合。空闲和忙碌任务均在下一条消息发送时消费意图，
+- 完整选择（含显式 `harness` 或 `provider_device_id`）返回 `deferred` / `effective_boundary: next_send`，清除此前临时调整；`get_session_runtime.pending`
+  显示目标 Harness 与 `provider_device_id`，`effective` 仍表示当前运行组合。空闲和忙碌任务均在下一条消息发送时消费意图，
   复用现有历史交接与原生绑定切换事务，更新该任务 baseline，但不修改全局默认设置。
-  切换失败时保留待切换选择并阻止该次发送，不继续使用旧引擎。
-- SSH 远程、Orca、Review 和归档任务不支持此完整选择。存在待切换 Harness 时如需修改目标，
-  重新读取 generation 并再次提交完整 `harness` + `model`；普通临时调整不会覆盖待切换选择。
+  切换失败时保留待切换选择并阻止该次发送，不继续使用旧引擎或旧供应电脑。
+- SSH 远程、Review 和归档任务不支持此完整选择；Orca 任务支持完整选择与供应电脑切换（运行在另一台电脑上的远端 Worker 仍由该电脑本地管理）。
+  存在待切换选择时如需修改目标，重新读取 generation 并再次提交修改；普通临时调整不会覆盖待切换选择。
 
 ## 自动降级
 

@@ -153,4 +153,58 @@ describe('get_task_digest', () => {
   it('is not offered by hosts that cannot build a digest', () => {
     expect(setup({}).has('get_task_digest')).toBe(false);
   });
+
+  // Value: boundTaskDigest preserves provider_device_id and last_route_change normally,
+  // and sheds optional attribution / device name under extreme byte pressure without mutating raw input.
+  // Gap: prior budget tests had no route-source or last_route_change fields.
+  // Minimal input: normal digest with route attribution, plus oversized model ID forcing graceful shedding.
+  // Tier: unit.
+  it('preserves route source and last_route_change normally, and sheds them cleanly under 2KB pressure', async () => {
+    const withAttribution: TaskDigestWire = {
+      ...digest,
+      title: '跨机任务',
+      last_user_ask: '继续跑',
+      last_assistant_line: '已切换',
+      pending_question: null,
+      error: null,
+      pr_status: null,
+      current_route: {
+        ...digest.current_route!,
+        provider_device_id: 'mac-studio',
+        source_kind: 'device',
+        provider_device_name: 'Mac Studio',
+      },
+      last_route_change: {
+        at: '2026-11-28T10:00:00.000Z',
+        by: 'model-group',
+        reason: 'provider_safety_refusal',
+        from: { harness: 'claude-code', model: 'claude-opus-4-6', provider_id: 'anthropic', provider_device_id: 'local' },
+        to: { harness: 'codex', model: 'gpt-5.5', provider_id: 'openai', provider_device_id: 'mac-studio' },
+      },
+    };
+    const reg = setup({ taskDigest: async () => ({ ok: true as const, digest: withAttribution }) });
+    const normal = parse(await reg.call('get_task_digest', { session_id: withAttribution.session_id }));
+    expect(new TextEncoder().encode(normal.text).length).toBeLessThanOrEqual(TASK_DIGEST_MAX_BYTES);
+    expect(normal.json).toMatchObject({
+      ok: true,
+      current_route: { provider_device_id: 'mac-studio', source_kind: 'device', provider_device_name: 'Mac Studio' },
+      last_route_change: { by: 'model-group', reason: 'provider_safety_refusal' },
+    });
+
+    const tight: TaskDigestWire = {
+      ...withAttribution,
+      current_route: { ...withAttribution.current_route!, model: 'm'.repeat(1450) },
+    };
+    const tightReg = setup({ taskDigest: async () => ({ ok: true as const, digest: tight }) });
+    const squeezed = parse(await tightReg.call('get_task_digest', { session_id: tight.session_id }));
+    expect(new TextEncoder().encode(squeezed.text).length).toBeLessThanOrEqual(TASK_DIGEST_MAX_BYTES);
+    expect(squeezed.json).toMatchObject({
+      ok: true,
+      current_route: { provider_device_id: 'mac-studio', source_kind: 'device' },
+    });
+    expect(squeezed.json).not.toHaveProperty('last_route_change');
+    expect(squeezed.json.current_route).not.toHaveProperty('provider_device_name');
+    // Caller's nested object must remain unmutated.
+    expect(tight.current_route?.provider_device_name).toBe('Mac Studio');
+  });
 });

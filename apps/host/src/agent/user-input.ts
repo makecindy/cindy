@@ -10,12 +10,12 @@ import { throwIpcError } from '../../../desktop/src/main/utils/ipcValidate.ts';
  */
 export function createUserInputEnqueue<T>(ports: {
   getOwner(): unknown;
-  enqueue(sessionId: string, input: unknown): Promise<T>;
+  enqueue(sessionId: string, input: unknown, options: unknown): Promise<T>;
 }) {
-  return async (sessionId: string, input: unknown): Promise<T> => {
+  return async (sessionId: string, input: unknown, options: unknown = {}): Promise<T> => {
     const owner = ports.getOwner();
     await withSessionPermissionChange(sessionId, async () => undefined);
     if (!owner || owner !== ports.getOwner()) throwIpcError('PRECONDITION_FAILED', 'Account changed before input');
-    return ports.enqueue(sessionId, input);
+    return ports.enqueue(sessionId, input, options ?? {});
   };
 }

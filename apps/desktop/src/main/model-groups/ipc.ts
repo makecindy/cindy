@@ -10,18 +10,18 @@ import { getDbClient } from '../localDb/client/current.js';
 import { createMessage } from '../localDb/ipc/messages.js';
 import { messages } from '../localDb/schema.js';
 import { getSessionRowSnapshot, getSessionRowSnapshotStrict } from '../localDb/sessionDispatchSnapshot.js';
+import { markProviderGroupReleased } from '../provider-group/bindings.desktop.js';
+import { readProviderGroup } from '../provider-group/store.js';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
-import { desktopModelGroupRuntime } from './desktopResolver.js';
-import { createModelGroupHandlers, type ModelGroupHandlersSessionTarget } from './handlersCore.js';
+import { bindSessionSubscriptionAccount } from '../subscription-accounts/runtime.js';
+import { desktopModelGroupRuntime, warmDesktopAutoUsageProfile } from './desktopResolver.js';
+import { createModelGroupHandlers, type ModelGroupHandlersPorts } from './handlersCore.js';
 import type { ModelGroupRouteNotePorts } from './routeNote.js';
 
-let pendingSessionTargetReader: ((sessionId: string) => ModelGroupHandlersSessionTarget | null) | null = null;
+let pendingSelectionPorts: Pick<ModelGroupHandlersPorts, 'readPendingSessionTarget' | 'markPendingModelGroupPick'> = {};
 
-/** 允许 maker-ipc/register.ts 注入待生效跨引擎/换位切换意图读取器，让托管投影兼容 pending intent。 */
-export function registerModelGroupPendingTargetReader(
-  reader: (sessionId: string) => ModelGroupHandlersSessionTarget | null,
-): void {
-  pendingSessionTargetReader = reader;
+export function registerModelGroupPendingSelection(ports: typeof pendingSelectionPorts): void {
+  pendingSelectionPorts = ports;
 }
 
 const routeNotePorts: ModelGroupRouteNotePorts = {
@@ -53,13 +53,24 @@ export const desktopModelGroupHandlers = createModelGroupHandlers({
   isDeviceLink: () => isDeviceLinkInvoke(),
   deviceLinkOrigin: () => readDeviceLinkModelSelectionOrigin(),
   readSessionTarget: (sessionId) => getSessionRowSnapshot(sessionId),
-  readPendingSessionTarget: (sessionId) => pendingSessionTargetReader?.(sessionId) ?? null,
+  readPendingSessionTarget: (sessionId) => pendingSelectionPorts.readPendingSessionTarget?.(sessionId) ?? null,
+  markPendingModelGroupPick: (sessionId, pickedKey) => pendingSelectionPorts.markPendingModelGroupPick?.(sessionId, pickedKey),
+  pinLocalSource: async (sessionId, { providerId, accountId }) => {
+    if (accountId) {
+      await bindSessionSubscriptionAccount(sessionId, providerId, accountId).catch(() => undefined);
+    }
+    if (readProviderGroup(providerId)) {
+      await markProviderGroupReleased(sessionId, { providerId }).catch(() => undefined);
+    }
+  },
   routeNotePorts,
 });
 
 export function registerModelGroupsIpc(): void {
   // 启动后先读一次目录：重启前就在用供应商路由的任务，第一条消息之前就要认得它的路由。
   void desktopModelGroupRuntime.refreshAutoModelGroupRoutes();
+  // 后台异步预热近 14 天本机用量画像，不阻塞启动和首次选模型。
+  setTimeout(() => warmDesktopAutoUsageProfile(), 1_500).unref();
   ipcMain.handle(MODEL_GROUPS_IPC.GET, (event, rawOptions?: unknown) =>
     desktopModelGroupHandlers.get(rawOptions, () => assertTrustedAppRendererEvent(event)));
   ipcMain.handle(MODEL_GROUPS_IPC.SET, (event, raw: unknown) =>

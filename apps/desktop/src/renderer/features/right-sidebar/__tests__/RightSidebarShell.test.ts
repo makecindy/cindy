@@ -69,6 +69,8 @@ vi.mock('../lib/rsbBrowserBridge', async () => {
   };
 });
 
+import { openSubagentsTab } from '../lib/openSubagentsTab';
+import { startSubagentTabDiscovery } from '../../cc-agent/subagentTabDiscovery';
 import { RightSidebarShell } from '../RightSidebarShell';
 import { sharedTaskHostPeer } from '@cindy/device-link';
 import '../plugins/plugin-task';
@@ -360,6 +362,48 @@ describe('RightSidebarShell empty state', () => {
       }
     } finally {
       unregisterTabKind('review');
+    }
+  });
+
+  // #13737, unit: after re-entry the empty task bucket has no selection. Exercise
+  // discovery against the shell to distinguish its displayed page from stored focus.
+  it.each(['natural', 'selected', 'empty'])('discovers Pi history in a %s sidebar', async (initial) => {
+    installedGhostsMock.list = [
+      { manifest: { id: 'alpha', name: 'Alpha', panel: { html: 'p.html' } }, enabled: true },
+    ];
+    const plugin = initial === 'empty' ? null : addGlobalPluginTab('alpha');
+    const displayed = vi.fn();
+    render(createElement(RightSidebarShell, {
+      sessionId: 's1', workdir: '/tmp/repo', remoteHostId: null, isMac: true,
+      subagentsAvailable: true, onActiveTabChange: displayed,
+    }));
+    await waitFor(() => expect(getBucket('s1').hydrated).toBe(true));
+    expect(displayed).toHaveBeenLastCalledWith(plugin?.id ?? null);
+    if (initial === 'selected') fireEvent.click(screen.getByText('rightSidebar.tabs.kinds.pluginView'));
+
+    const stop = startSubagentTabDiscovery({
+      sessionId: 's1',
+      listLocal: async () => ({ supported: true, runs: [{
+        id: 'child', parentSessionId: 's1', provider: 'pi', logicalAgentId: 'child',
+        identityAliases: [], providerRunIds: [], status: 'completed',
+        startedAt: 1, updatedAt: 2, endedAt: 2,
+        capabilities: { viewActivity: true, viewReturnedResult: true, viewFullTranscript: false,
+          resume: false, steer: false, stop: false, parentContext: 'none' },
+      }] }),
+      listRemote: vi.fn(), subscribeLocalChanges: () => () => {},
+      isRequestOwnerCurrent: () => true,
+      registerTab: () => openSubagentsTab('s1', { focusTab: false, revealSidebar: false, userInitiated: false }),
+    });
+    try {
+      await screen.findByText('rightSidebar.tabs.kinds.subagents');
+      const subagentsId = getBucket('s1').tabs[0]?.id;
+      expect(displayed).toHaveBeenLastCalledWith(plugin?.id ?? subagentsId);
+      expect(getBucket('s1').activeTabId).toBe(plugin ? null : subagentsId);
+      expect(getActiveGlobalTabId()).toBe(initial === 'selected' ? plugin?.id : null);
+      await act(() => openSubagentsTab('s1', { focusRunId: 'child', focusProvider: 'pi' }));
+      expect(displayed).toHaveBeenLastCalledWith(getBucket('s1').tabs[0]?.id);
+    } finally {
+      stop();
     }
   });
 

@@ -2211,7 +2211,7 @@ export interface StartSessionOptions {
     inputTokens: number;
     outputTokens: number;
     cacheReadTokens: number;
-  }) => 'standard' | 'priority' | { priceVariant: 'standard' | 'priority'; model?: string } | undefined;
+  }) => 'standard' | 'priority' | { priceVariant?: 'standard' | 'priority'; model?: string } | undefined;
   /** Pi + thinking-toggle 模型：false 时启动即关思考。缺省保持模型默认（开）。 */
   thinkingEnabled?: boolean;
   /**
@@ -2229,6 +2229,12 @@ export interface StartSessionOptions {
    * the task cannot work without (collaboration Workers) travel this way. Other engines ignore it.
    */
   pluginEngineBriefing?: string;
+  /** Bind the host's pending discovery note to a successfully opened local ACP conversation. */
+  bindPluginEngineOrcaDiscoveryBriefing?: (
+    opened: { nativeId: string; fresh: boolean; hasOrca: boolean },
+  ) => (() => { text: string; onSent: () => void } | undefined) | undefined;
+  /** Host-owned role briefing that survives replacing a native session handle. */
+  readPluginEngineRoleBriefing?: () => { text: string; onSent: () => void } | undefined;
   /**
    * Plugin engines only: Cindy cannot tell the engine's own sub-agents from the engine itself.
    * true = the host trusts the engine as a whole, so its tool calls count as the task's own

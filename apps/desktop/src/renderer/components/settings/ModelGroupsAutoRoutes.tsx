@@ -6,7 +6,7 @@
  * 一个供应商里的几个账号、几台电脑上同一个供应商合成的组，也是同一套选法、同一个选择函数，选法在这里改。
  * 成员可以是本机的供应商，也可以是其他电脑上的或别人分享来的。
  */
-import { Fragment, lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ArrowDown, ArrowUp, Sparkles, X } from 'lucide-react';
 import { useInRouterContext } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
@@ -48,6 +48,7 @@ import {
   MODEL_GROUP_LIMITS,
   MODEL_GROUP_STRATEGIES,
   modelGroupAutoSwitchOn,
+  modelGroupSourceKey,
   modelGroupWeight,
   type ModelGroupException,
   type ModelGroupsConfig,
@@ -109,7 +110,7 @@ function ProviderLead({ provider, pluginEngine }: { provider?: Provider; pluginE
  * 一个供应商里的几个账号。只在确实有两个以上账号时出现；`plain` 是它作为某条供应商路由的成员时，
  * 账号不足两个或还没读到时显示的那一行(成员本身始终要列出来)。
  */
-function AccountsRouteRow({ provider, plain = null }: { provider: Provider; plain?: ReactNode }) {
+function AccountsRouteRow({ provider }: { provider: Provider }) {
   const { t } = useTranslation();
   const [view, setView] = useState<SubscriptionPoolView | null>(null);
   const [saving, setSaving] = useState(false);
@@ -148,7 +149,7 @@ function AccountsRouteRow({ provider, plain = null }: { provider: Provider; plai
       reading.current = null;
     };
   }, [provider.id, read]);
-  if (!view || view.accounts.length < 2) return <>{plain}</>;
+  if (!view || view.accounts.length < 2) return null;
   const change = async (strategy: RouteStrategy) => {
     setSaving(true);
     try {
@@ -191,16 +192,13 @@ function AccountsRouteRow({ provider, plain = null }: { provider: Provider; plai
   const listed = view.strategy === 'weighted' || view.strategy === 'order';
   return (
     <>
-      {plain}
       <SettingsRow
         media
         wrap
         data-auto-route={`accounts:${provider.id}`}
         lead={<ProviderLead provider={provider} />}
-        title={plain ? t('modelGroups.auto.accounts', { count: view.accounts.length }) : provider.name}
-        hint={plain
-          ? t(`modelGroups.strategy.${view.strategy}.hint`)
-          : `${t('modelGroups.auto.accounts', { count: view.accounts.length })} · ${t(`modelGroups.strategy.${view.strategy}.hint`)}`}
+        title={provider.name}
+        hint={`${t('modelGroups.auto.accounts', { count: view.accounts.length })} · ${t(`modelGroups.strategy.${view.strategy}.hint`)}`}
         trailing={<StrategySelect label={t('modelGroups.auto.pickFor', { name: provider.name })} value={view.strategy} disabled={saving} onChange={(next) => void change(next)} />}
       />
       {listed && view.accounts.map((account, index) => {
@@ -365,26 +363,30 @@ function swap<T>(items: readonly T[], from: number, to: number): T[] {
   return next;
 }
 
-/** 可以整个加进路由的供应商：本机已连接的(含插件执行引擎)，加上其他电脑上允许远程调用的、别人分享来的。 */
+/** 可以加进供应商路由的独立来源：本机单账号供应商、本机多账号池拆平后的各个账号、插件执行引擎，以及其他电脑与分享来的来源。 */
 export interface SourceOption {
   key: string;
   providerId: string;
   agentDeviceId?: string;
+  accountId?: string;
   label: string;
   provider?: Provider;
   pluginEngine?: PluginEngineView;
   /** 现在能用(已连接、没暂停)。不能用的也列着，只为成员行照样显示名字、标出「未连接」，不能新加。 */
   usable: boolean;
+  /** 本机多账号供应商已拆平为多个单账号项时，原整供应商项仅作历史回退显示，不再放进「添加来源」下拉（避免嵌套两层自动）。 */
+  fallbackOnly?: boolean;
 }
 
-const optionKey = (source: Pick<ModelGroupSource, 'providerId' | 'agentDeviceId'>) => `${source.agentDeviceId ?? ''}\u0000${source.providerId}`;
-const usableProvider = (provider: Provider) => provider.connected && !provider.suspended && !provider.removed;
+const optionKey = (source: Pick<ModelGroupSource, 'providerId' | 'agentDeviceId' | 'accountId'>) => modelGroupSourceKey(source);
+const usableProvider = (provider: Provider) => provider.connected && !provider.suspended && !provider.removed && !provider.subscriptionPoolAlias;
 const usableLocalPluginEngine = (engine: PluginEngineView) =>
   !engine.suspended && isPluginEngineSelectable(engine) && (engine.models.length > 0 || engine.defaultModelAllowed !== false);
 const usableRemotePluginEngine = (engine: PluginEngineView) =>
   isPluginEngineOfferedRemotely(engine) && (engine.models.length > 0 || engine.defaultModelAllowed !== false);
 
 export function useSourceOptions(): SourceOption[] {
+  const { t } = useTranslation();
   const { providers } = useProviders();
   const { devices } = useModelRouteDevices({ controlledDeviceId: null, leadAgentDeviceId: null });
   const deviceIds = useMemo(() => (devices ?? []).map((device) => device.deviceId), [devices]);
@@ -403,10 +405,82 @@ export function useSourceOptions(): SourceOption[] {
   useEffect(() => {
     if (pluginDeviceIds.length > 0) readRemotePluginCatalogues();
   }, [pluginDeviceIds, readRemotePluginCatalogues]);
+
+  // 读取本机多账号订阅池的账号列表，把每个账号平铺成独立来源选项，彻底消除两层自动。
+  const poolProviderKey = useMemo(() => providers
+    .filter((provider) => !provider.removed && !provider.subscriptionPoolAlias && ((provider.subscriptionAccountKeys?.length ?? 0) >= 2 || Boolean(provider.subscriptionPool) || Boolean(provider.subscriptionAccountPool)))
+    .map((provider) => provider.id)
+    .sort()
+    .join('\n'), [providers]);
+  const [poolViews, setPoolViews] = useState<Record<string, SubscriptionPoolView>>({});
+  useEffect(() => {
+    const api = window.electronAPI?.subscriptionAccounts;
+    const ids = poolProviderKey ? poolProviderKey.split('\n') : [];
+    if (!api || ids.length === 0) {
+      setPoolViews({});
+      return;
+    }
+    let cancelled = false;
+    const readOne = async (providerId: string) => {
+      try {
+        const view = await api.command({ action: 'read', providerId });
+        if (!cancelled && view) {
+          setPoolViews((previous) => ({ ...previous, [providerId]: view }));
+        }
+      } catch {
+        // 读不到时保持原供应商显示，不阻断页面。
+      }
+    };
+    for (const id of ids) void readOne(id);
+    const off = api.onChanged?.((event) => {
+      if (ids.includes(event.providerId)) void readOne(event.providerId);
+    });
+    return () => {
+      cancelled = true;
+      off?.();
+    };
+  }, [poolProviderKey]);
+
   return useMemo(() => [
-    ...providers.filter((provider) => !provider.removed).map((provider): SourceOption => ({
-      key: optionKey({ providerId: provider.id }), providerId: provider.id, label: provider.name, provider, usable: usableProvider(provider),
-    })),
+    ...providers.filter((provider) => !provider.removed).flatMap((provider): SourceOption[] => {
+      // A detached Key may still have a cached pool view, but no longer owns it.
+      const pool = !provider.subscriptionPoolAlias && (provider.subscriptionPool || provider.subscriptionAccountPool || (provider.subscriptionAccountKeys?.length ?? 0) >= 2)
+        ? poolViews[provider.id] : undefined;
+      // 与主进程拆平口径一致：按账号数决定是否拆开，只列未暂停的账号。
+      const activeAccounts = pool?.accounts.filter((account) => !account.paused) ?? [];
+      if ((pool?.accounts.length ?? 0) >= 2 && activeAccounts.length > 0) {
+        const accountOptions = activeAccounts.map((account, index): SourceOption => {
+          const identity = account.identity?.trim() || t('providerGroup.member.accountFallback', { index: index + 1 });
+          const label = identity === provider.name ? identity : `${provider.name} · ${identity}`;
+          return {
+            key: optionKey({ providerId: provider.id, accountId: account.id }),
+            providerId: provider.id,
+            accountId: account.id,
+            label,
+            provider,
+            usable: usableProvider(provider) && account.status !== 'signed-out' && account.status !== 'unavailable',
+          };
+        });
+        return [
+          ...accountOptions,
+          {
+            key: optionKey({ providerId: provider.id }),
+            providerId: provider.id,
+            label: provider.name,
+            provider,
+            usable: usableProvider(provider),
+            fallbackOnly: true,
+          },
+        ];
+      }
+      return [{
+        key: optionKey({ providerId: provider.id }),
+        providerId: provider.id,
+        label: provider.name,
+        provider,
+        usable: usableProvider(provider),
+      }];
+    }),
     ...localPluginEngines.map((engine): SourceOption => ({
       key: optionKey({ providerId: engine.providerId }),
       providerId: engine.providerId,
@@ -434,14 +508,17 @@ export function useSourceOptions(): SourceOption[] {
         label: device.name ? `${engine.name} · ${device.name}` : engine.name,
         pluginEngine: engine,
       }))),
-  ], [providers, localPluginEngines, devices, catalogs, pluginDeviceList, remotePluginCatalogues]);
+  ], [providers, poolViews, localPluginEngines, devices, catalogs, pluginDeviceList, remotePluginCatalogues, t]);
 }
 
 /** 还没并进任何路由的供应商里，有几个账号或几台电脑的：它们之间怎么分在这一行改。 */
 export function ProviderAllocationRows({ config }: { config: ModelGroupsConfig }) {
   const { providers } = useProviders();
   const groups = useLocalProviderGroups();
-  const members = new Set((config.sourceRoutes ?? []).flatMap((route) => route.sources.filter((source) => !source.agentDeviceId).map((source) => source.providerId)));
+  // 已隐藏的供应商路由或被取消参与(source.off)的成员恢复独立显示，其账号/电脑分配行一并恢复。
+  const members = new Set((config.sourceRoutes ?? [])
+    .filter((route) => !route.hidden)
+    .flatMap((route) => route.sources.filter((source) => !source.off && !source.agentDeviceId).map((source) => source.providerId)));
   return (
     <>
       {providers.filter(usableProvider).flatMap((provider) => {
@@ -462,7 +539,10 @@ export function SourceRouteRow({ route, config, options, onOpen }: {
   route: ModelGroupSourceRoute; config: ModelGroupsConfig; options: readonly SourceOption[]; onOpen(): void;
 }) {
   const { t } = useTranslation();
-  const first = route.sources.map((source) => options.find((option) => option.key === optionKey(source))).find(Boolean);
+  const activeSources = route.sources.filter((source) => !source.off);
+  const first = (activeSources.length > 0 ? activeSources : route.sources)
+    .map((source) => options.find((option) => option.key === optionKey(source)))
+    .find(Boolean);
   const models = config.routes.filter((item) => item.parent?.id === route.id).length;
   return (
     <SettingsRow
@@ -472,7 +552,7 @@ export function SourceRouteRow({ route, config, options, onOpen }: {
       title={route.name}
       tag={route.hidden ? t('modelGroups.auto.hiddenTag') : route.auto ? t('modelGroups.sources.autoTag') : undefined}
       hint={[
-        t('modelGroups.sources.providers', { count: route.sources.length }),
+        t('modelGroups.sources.providers', { count: activeSources.length }),
         t('modelGroups.sources.models', { count: models }),
         t(`modelGroups.strategy.${route.strategy}.title`),
       ].join(' · ')}
@@ -490,7 +570,7 @@ export function WholeProviderAddRow({ options, taken, onAdd }: {
   options: readonly SourceOption[]; taken: readonly ModelGroupSource[]; onAdd(source: ModelGroupSource): void;
 }) {
   const { t } = useTranslation();
-  const addable = options.filter((option) => option.usable && !taken.some((source) => optionKey(source) === option.key));
+  const addable = options.filter((option) => option.usable && !option.fallbackOnly && !taken.some((source) => optionKey(source) === option.key));
   if (addable.length === 0) return null;
   return (
     <SettingsRow
@@ -501,7 +581,13 @@ export function WholeProviderAddRow({ options, taken, onAdd }: {
           options={[{ value: ADD_NONE, label: t('modelGroups.sources.chooseProvider') }, ...addable.map((option) => ({ value: option.key, label: option.label }))]}
           onValueChange={(key) => {
             const option = addable.find((item) => item.key === key);
-            if (option) onAdd({ providerId: option.providerId, ...(option.agentDeviceId ? { agentDeviceId: option.agentDeviceId } : {}) });
+            if (option) {
+              onAdd({
+                providerId: option.providerId,
+                ...(option.agentDeviceId ? { agentDeviceId: option.agentDeviceId } : {}),
+                ...(option.accountId ? { accountId: option.accountId } : {}),
+              });
+            }
           }} />
       }
     />
@@ -521,7 +607,6 @@ export function SourceRouteDetail({ route, config, options, save, onBack, onSwit
 }) {
   const { t } = useTranslation();
   const { confirm } = useConfirmDialog();
-  const localGroups = useLocalProviderGroups();
   const patchOwn = (patch: (current: ModelGroupSourceRoute) => ModelGroupSourceRoute) => save((latest) => ({
     ...latest, sourceRoutes: (latest.sourceRoutes ?? []).map((item) => (item.id === route.id ? patch(item) : item)),
   }));
@@ -639,14 +724,18 @@ export function SourceRouteDetail({ route, config, options, save, onBack, onSwit
             <SettingsCard>
               {route.sources.map((source, index) => {
                 const key = optionKey(source);
-                const option = options.find((item) => item.key === key);
+                const option = options.find((item) => item.key === key)
+                  ?? (source.accountId ? options.find((item) => item.key === optionKey({ providerId: source.providerId })) : undefined);
                 const label = option?.label ?? source.providerId;
                 // 与按模型排的路由里来源那一行同一套：序号、(按权重时)权重、上移下移、(自己建的)移出、启用开关。
-                const member = (
+                // 所有真实来源（本机单账号、本机多账号拆平后的每个账号、其他电脑、分享来源）一律平铺在这一张卡片里，
+                // 逐个可控开关与先后，绝不嵌套第二层自动选路。
+                return (
                   <SettingsRow
                     key={key}
                     media
                     data-source-route-member={index}
+                    data-source-route-provider={!source.agentDeviceId ? source.providerId : undefined}
                     lead={
                       <span className="flex items-center gap-3">
                         <span className="w-4 text-center text-12 tabular-nums leading-[1.33] text-[var(--text-tertiary)]">{index + 1}</span>
@@ -654,7 +743,7 @@ export function SourceRouteDetail({ route, config, options, save, onBack, onSwit
                       </span>
                     }
                     title={label}
-                    tag={option?.usable ? undefined : t('modelGroups.settings.notConnected')}
+                    tag={!option?.usable ? t('modelGroups.settings.notConnected') : undefined}
                     className={cn(source.off && '[&>span:nth-child(-n+2)]:opacity-60')}
                     trailing={
                       <span className="flex shrink-0 items-center gap-1">
@@ -694,16 +783,6 @@ export function SourceRouteDetail({ route, config, options, save, onBack, onSwit
                       </span>
                     }
                   />
-                );
-                // 本机成员自己有几个账号、或几台电脑合成了组时，怎么分紧跟在它下面改(这里是它们唯一能改选法的地方)。
-                if (!option || !option.provider || source.agentDeviceId) return member;
-                const localGroup = localGroups[option.provider.id];
-                const accounts = (option.provider.subscriptionAccountKeys?.length ?? 0) >= 2;
-                return (
-                  <Fragment key={key}>
-                    {accounts ? <AccountsRouteRow provider={option.provider} plain={member} /> : member}
-                    {localGroup && <ComputersRouteRow provider={option.provider} initial={localGroup} />}
-                  </Fragment>
                 );
               })}
               {route.sources.length === 0 && (

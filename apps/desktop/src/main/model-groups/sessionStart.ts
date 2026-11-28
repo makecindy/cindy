@@ -26,6 +26,8 @@ export interface ModelGroupSessionStartPorts {
   resolve(request: ModelGroupResolveRequest): Promise<ModelGroupResolveResult>;
   commit(decisionId: string): void;
   bind(sessionId: string, selection: ModelGroupSelection, pickedKey: string): void;
+  /** 本机选路固定到具体账号槽位，并解除同供应商的电脑组二次选路。 */
+  pinLocalSource?(sessionId: string, route: { providerId: string; accountId?: string }): Promise<void> | void;
   /** 说明写在这个任务 clientId 为 `anchorClientId` 的那条用户消息下面。 */
   writeNote(sessionId: string, note: ModelGroupRouteNoteBody, options: { clientId: string; anchorClientId: string }): void;
   t: ModelGroupTranslate;
@@ -51,6 +53,7 @@ export interface ModelGroupStartRoute {
   effort?: string;
   fastMode?: boolean | 'ultrafast';
   agentDeviceId: string | null;
+  accountId?: string;
 }
 
 export interface ModelGroupStartPrepared {
@@ -86,12 +89,13 @@ export function createModelGroupSessionStart(ports: ModelGroupSessionStartPorts)
      * `localOnly`：只在本机的来源里选(只在本机运行的自动化)。
      * `sshHostId`：SSH 远程主机 id，仅允许目标 SSH 主机可运行的来源。
      */
-    async prepare(groupId: string, options: { keptModelName: string; localOnly?: boolean; sshHostId?: string }): Promise<ModelGroupStartPrepared | null> {
+    async prepare(groupId: string, options: { keptModelName: string; scheduled?: boolean; localOnly?: boolean; sshHostId?: string }): Promise<ModelGroupStartPrepared | null> {
       const selection: ModelGroupSelection = { type: 'route', id: groupId };
       let result: ModelGroupResolveResult;
       try {
         result = await ports.resolve({
           selection,
+          ...(options.scheduled ? { context: { scheduled: true } } : {}),
           ...(options.localOnly ? { location: { agentDeviceId: null } } : {}),
           ...(options.sshHostId ? { sshHostId: options.sshHostId } : {}),
         });
@@ -115,6 +119,7 @@ export function createModelGroupSessionStart(ports: ModelGroupSessionStartPorts)
           ...(route.effort ? { effort: route.effort } : {}),
           ...(route.fastMode ? { fastMode: route.fastMode } : {}),
           agentDeviceId: route.agentDeviceId ?? null,
+          ...(route.accountId ? { accountId: route.accountId } : {}),
         },
         token,
       };
@@ -147,6 +152,12 @@ export function createModelGroupSessionStart(ports: ModelGroupSessionStartPorts)
       if (item.result.outcome === 'routed') {
         try {
           ports.bind(sessionId, item.selection, modelGroupCandidateKey(item.result.route));
+          if (!item.result.route.agentDeviceId && ports.pinLocalSource) {
+            void Promise.resolve(ports.pinLocalSource(sessionId, {
+              providerId: item.result.route.providerId,
+              ...(item.result.route.accountId ? { accountId: item.result.route.accountId } : {}),
+            })).catch(() => undefined);
+          }
         } catch {
           // 记录只影响接替与提议；建任务照常。
         }
@@ -166,7 +177,7 @@ export function createModelGroupSessionStart(ports: ModelGroupSessionStartPorts)
             anchorClientId: clientId,
           });
           const route = item.result.outcome === 'routed' ? item.result.route : null;
-          if (!route || route.agentDeviceId || !ports.innerChoice) write(note);
+          if (!route || route.agentDeviceId || route.accountId || !ports.innerChoice) write(note);
           else {
             let timer: ReturnType<typeof setTimeout> | undefined;
             void Promise.race([

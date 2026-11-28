@@ -118,7 +118,7 @@ import { createHostProviderConfig } from './agent/provider-config.js';
 import { createProviderRouteResolver } from './agent/provider-credentials.mjs';
 import { createHostHistoryReader, dismissHostErrorMessage, readHostHistoryView, readHostSessionActivityMeta, readHostWorkDetails, readMessagesList, readMessagesAroundClientId } from './agent/history.js';
 import { requireString } from '../../desktop/src/main/utils/ipcValidate.js';
-import { runLoginCommand } from './login-cli.mjs';
+import { reportLoginCommandFailure, runLoginCommand } from './login-cli.mjs';
 import { readOrCreateApiToken } from './api-token.mjs';
 import { CindyAuthClient } from '@cindy/auth-client';
 import { hostAuthFetch } from './auth-fetch.mjs';
@@ -335,8 +335,7 @@ if (command === '--help' || command === '-h') {
     await proxyWarmup;
     await runLoginCommand(process.argv.slice(3));
   } catch (error) {
-    console.error(`cindy-host login failed: ${error instanceof Error ? error.message : String(error)}`);
-    process.exitCode = 1;
+    process.exitCode = reportLoginCommandFailure(error);
   }
 } else if (command !== undefined && command !== 'serve') {
   console.error(
@@ -1007,8 +1006,8 @@ async function ensureRuntime(ownerId: string): Promise<void> {
   pluginGateway = createHostPluginGateway({ runtime: plugins, profileDir: dataDir, ownerId,
     version: layout.version, credentials, fileConfirmation,
     getSession: id => agentGraph?.maker.getSession(id),
-    // Under the task's send lock, as the desktop's plugin page restore (register.ts).
-    restoreSession: lockSessionRoute((id: string, check: () => Promise<void>) => inputQueue.restoreSession(id, check)),
+    // The input queue acquires the task's send lock after entering its command chain.
+    restoreSession: (id, check) => inputQueue.restoreSession(id, check),
     requestHostPermission: async (id, instance, request, signal) => {
       const session = agentGraph?.maker.getSession(id);
       if (!session || session.instanceId !== instance) return null;
@@ -1247,13 +1246,18 @@ const hostProviderGroups = createProviderGroupStore({
 const hostProviderBindings = createProviderGroupBindings(hostProviderGroups);
 // The send path and the Device Link create entry refuse provider group tasks with this one check.
 const assertProviderExecutionSupported = createHostProviderExecutionCheck({ hostProviderBindings, hostProviderGroups });
-const readSessionForRun = async (sessionId: string, { forHandoff = false } = {}) => {
+const readSessionForRun = async (sessionId: string, { forHandoff = false, forUserInput = false } = {}) => {
   const db = getDbClient();
   const rows = await db.drizzle.select().from(sessionTable)
     .where(eq(sessionTable.id, sessionId)).limit(1);
   const row = rows[0];
   if (forHandoff && (!row || row.status !== 'active' || row.hiddenAt != null || row.source === 'bot')) return null;
-  if (!row || row.status !== 'active') throw new Error('session is not active');
+  if (forUserInput && (!row || row.status === 'deleted' || (row.status === 'archived' && row.hiddenAt != null))) {
+    throwIpcError('NOT_FOUND', `Session ${sessionId} not found`);
+  }
+  if (!row || (row.status !== 'active' && !(forUserInput && row.status === 'archived'))) {
+    throw new Error('session is not active');
+  }
   const [botLink] = await db.drizzle.select({ botId: botSessionLinks.botId })
     .from(botSessionLinks).where(eq(botSessionLinks.sessionId, sessionId)).limit(1);
   if (forHandoff && botLink) return null;
@@ -1365,12 +1369,14 @@ const hostAutoTitle = createHostAutoTitle({
 const hostModelGroups = createHostModelGroups({
   listProviderViews: async () => (await listProviders({ gateway: currentGateway(), ownerId: runtime.owner })).providers,
   listLocalAgents: () => agentGraph?.agents ?? [],
+  runningSessions: () => agentGraph?.maker.listActiveSessions().filter(session => session.isTurnRunning()) ?? [],
   readPricing: async () => ({
     gateway: await usagePricing.getGatewayModelPricing().catch(() => null),
     reference: usagePricing.readReferenceModelPricing(),
   }),
   createDbMessage: (sessionId, body) => insertSessionMessage(sessionId, body),
   readPendingSessionTarget: (sessionId) => runtimeSelection.readPendingTarget(sessionId),
+  markPendingModelGroupPick: (sessionId, pickedKey) => runtimeSelection.markPendingModelGroupPick(sessionId, pickedKey),
   onBindingChanged: (sessionId) => runtimeSelection.broadcastBindingProjection(sessionId),
 });
 const inputQueue = createInputQueue({
@@ -1464,7 +1470,7 @@ const hostHistoryReader = createHostHistoryReader({
 // as the desktop's maker:send and INPUT_ENQUEUE (agent/user-input.ts).
 const enqueueUserInput = createUserInputEnqueue({
   getOwner: getCurrentDbClientSnapshot,
-  enqueue: (sessionId: string, input: unknown) => inputQueue.enqueue(sessionId, input),
+  enqueue: (sessionId: string, input: unknown, options: unknown) => inputQueue.enqueue(sessionId, input, undefined, options),
 });
 
 // A task's model and engine changes, with the desktop's steps (runtime-selection.ts): the shared
@@ -2458,10 +2464,10 @@ function startDeviceLink(): void {
     },
     preparePiSkillRuntime: (id, workingDir, route) => {
       const assertPreparationCurrent = inputQueue.capturePiSkillPreparation(id);
-      return withSendToSessionLock(id, () => inputQueue.preparePiSkillRuntime(id, workingDir, {
+      return inputQueue.preparePiSkillRuntime(id, workingDir, {
         assertPreparationCurrent,
         ...(route ? { applyPendingOwnerSelection: true, expectedPiModel: route.model, nextInputChars: route.nextInputChars } : {}),
-      }));
+      });
     },
     // The Device Link create entry, with the runtime start admission (agent/create-runtime-session.ts).
     // Coexistence plan A: a new task's runtime and a plugin page's calls are refused while held (device-link.ts).

@@ -19,6 +19,8 @@ import { i18n } from '@/i18n';
 import { AskCardAuthContext } from '@/session/askCardAuth';
 import { darkColors, lightColors } from '@/theme/tokens';
 
+vi.mock('@/platform/haptics', () => ({ playHaptic: vi.fn() }));
+
 // Markdown rendering/native media are exercised by the simulator; these tests cover decisions.
 vi.mock('@/session/MessageRenderer', () => ({ MarkdownBody: ({ text }: { text: string }) => <span>{text}</span> }));
 

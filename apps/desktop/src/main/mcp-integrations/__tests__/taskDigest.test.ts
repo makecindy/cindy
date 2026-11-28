@@ -169,4 +169,95 @@ describe('task digest assembly', () => {
     ).toBe('MR git.example.com/team/subgroup/project!7 状态未知');
     expect(formatPrStatuses([])).toBeNull();
   });
+
+  // Value: digest projects provider_device_id, privacy-safe provider_device_name (null for share:,
+  // omitted for shared_task), and last_route_change for both local and remote tasks.
+  // Gap: prior digest tests omitted agentDeviceId and runtimeLastRouteChange.
+  // Minimal input: local/device/share/shared rows with runtimeLastRouteChange; tier: unit.
+  it('projects provider_device_id, redacted device names, and last_route_change while isolating shared tasks', async () => {
+    const remoteChange = {
+      at: '2026-11-28T10:00:00.000Z',
+      by: 'model-group' as const,
+      reason: 'provider_safety_refusal',
+      from: { agentKind: 'claude-code', model: 'claude-opus-4-6', providerId: 'anthropic', agentDeviceId: null },
+      to: { agentKind: 'codex', model: 'gpt-5.6', providerId: 'openai', agentDeviceId: 'studio-2' },
+    };
+    const remoteFacts = sessionFactsFromRow({
+      title: '远程任务',
+      status: 'active',
+      agentKind: 'codex',
+      agentDeviceId: 'studio-2',
+      model: 'gpt-5.6',
+      providerId: 'openai',
+      effort: 'high',
+      fastMode: false,
+      runtimeLastRouteChange: remoteChange,
+    });
+    expect(remoteFacts).toMatchObject({
+      route: { provider_device_id: 'studio-2', source_kind: 'device' },
+      lastRouteChange: {
+        by: 'model-group',
+        reason: 'provider_safety_refusal',
+        from: { harness: 'claude-code', provider_device_id: 'local' },
+        to: { harness: 'codex', provider_device_id: 'studio-2' },
+      },
+    });
+
+    const shareFacts = sessionFactsFromRow({
+      title: '分享源任务',
+      status: 'active',
+      agentKind: 'codex',
+      agentDeviceId: 'share:team-alpha',
+      model: 'gpt-5.6',
+      providerId: 'openai',
+      effort: 'high',
+      fastMode: false,
+    });
+    expect(shareFacts?.route).toMatchObject({ provider_device_id: 'share:team-alpha', source_kind: 'share' });
+
+    const sharedGuestFacts = sessionFactsFromRow({
+      title: '访客共享任务',
+      status: 'active',
+      source: 'shared',
+      agentKind: 'codex',
+      agentDeviceId: 'studio-2',
+      model: 'gpt-5.6',
+      providerId: 'openai',
+      effort: 'high',
+      fastMode: false,
+      runtimeLastRouteChange: remoteChange,
+    });
+    expect(sharedGuestFacts?.shared).toBe(true);
+    expect(sharedGuestFacts?.lastRouteChange).toBeUndefined();
+
+    const deviceNames: Record<string, string> = { laptop: 'MacBook', 'studio-2': 'Mac Studio' };
+    const { read, deps } = setup();
+    deps.remote!.deviceName = async (id) => deviceNames[id] ?? null;
+    deps.remote!.readSession = async (_dev, sid) =>
+      sid === 'share-s' ? shareFacts : sid === 'shared-guest' ? sharedGuestFacts : remoteFacts;
+
+    // Remote own-device delegation resolves peer name & preserves last_route_change.
+    expect(await read({ sessionId: 'laptop::s-1' })).toMatchObject({
+      ok: true,
+      digest: {
+        device: 'MacBook',
+        current_route: { provider_device_id: 'studio-2', source_kind: 'device', provider_device_name: 'Mac Studio' },
+        last_route_change: { by: 'model-group', reason: 'provider_safety_refusal' },
+      },
+    });
+    // Share source strictly yields provider_device_name: null (never sharer computer name).
+    expect(await read({ sessionId: 'laptop::share-s' })).toMatchObject({
+      ok: true,
+      digest: {
+        current_route: { provider_device_id: 'share:team-alpha', source_kind: 'share', provider_device_name: null },
+      },
+    });
+    // Shared-with-guest task omits host device name and route-change history.
+    const guestDigest = await read({ sessionId: 'laptop::shared-guest' });
+    expect(guestDigest).toMatchObject({ ok: true, digest: { shared_task: true } });
+    if (guestDigest.ok) {
+      expect(guestDigest.digest).not.toHaveProperty('last_route_change');
+      expect(guestDigest.digest.current_route).not.toHaveProperty('provider_device_name');
+    }
+  });
 });

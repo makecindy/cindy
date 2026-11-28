@@ -32,7 +32,13 @@ import { createTurnRunner, type ImTurnRunner } from './turnRunner';
 import { createSlashHandlers } from './slashCommands';
 import { createMessageHandler } from './messageHandler';
 import { createCardActionHandler } from './cardActionHandler';
-import type { ImChannelAdapter, ImChannelName } from './types';
+import type { ImChannelAdapter, ImChannelName, ImSessionNamespace } from './types';
+import { personalChannelProjectDefaults, personalChannelProjectDir } from './imProjectPorts';
+import { isPersonalChannel, type PersonalChannel } from './personalChannelStore';
+import { withImChatOverrides } from './chatOverrides';
+import { createPersonalGuestGate } from './guestGate';
+import { imText } from './imText';
+import { IM_CHAT_MEMBER_QUEUE_LIMIT, isImChatSettingsChannel } from '../../../shared/imChatSettings';
 
 const log = createLogger('im:orchestrator');
 
@@ -126,6 +132,25 @@ onChannelTurn(async (session, phase, source) => {
 });
 
 /**
+ * 在渠道自己的路由键项目(个人飞书的按群项目)之上补平台默认项目: 路由键选了项目就用它;
+ * 没选(对话目录或不按路由键指定)时, 平台设了默认项目就放进那个项目, 否则保持渠道原样。
+ */
+function withPersonalChannelProject(channel: PersonalChannel, ns: ImSessionNamespace): ImSessionNamespace {
+  const ownDir = ns.laneWorkingDirFor?.bind(ns);
+  const ownDefaults = ns.laneProjectDefaultsFor?.bind(ns);
+  const wrapped = Object.create(ns) as ImSessionNamespace;
+  wrapped.laneWorkingDirFor = async (botContextId, userId) => {
+    const own = ownDir ? await ownDir(botContextId, userId) : undefined;
+    if (typeof own === 'string') return own;
+    const projectDir = await personalChannelProjectDir(channel);
+    return typeof projectDir === 'string' ? projectDir : own;
+  };
+  wrapped.laneProjectDefaultsFor = (botContextId, userId, workingDir) =>
+    ownDefaults?.(botContextId, userId, workingDir) ?? personalChannelProjectDefaults(channel, workingDir);
+  return wrapped;
+}
+
+/**
  * 创建并接线一个渠道编排器:所有渠道订阅 im.onMessage；只有 rich-card
  * 渠道订阅 onCardAction。每个渠道只允许调一次(重复调说明 wiring 层 bug,
  * 直接抛)。
@@ -161,21 +186,35 @@ export function createImOrchestrator(
     );
   }
 
-  const repo = createImSessionRepo(adapter.config, adapter.sessions, {
+  // 设置页那份个人机器人: 新任务放进平台的默认项目(设置 → IM 机器人 → 某平台 →「项目」),
+  // 模型与权限跟随这个项目在「项目与模型」里的那一行。伙伴自有连接(固定归属)不读。
+  const channelProject = typeof options.companionBotId !== 'string' && isPersonalChannel(adapter.channel)
+    ? adapter.channel : null;
+  // 同一份个人机器人的「群聊」总表(按群的项目、模型、权限、群成员也能提问)。交给伙伴回复期间不读。
+  const chatChannel = typeof options.companionBotId !== 'string' && isImChatSettingsChannel(adapter.channel)
+    ? adapter.channel : null;
+  const companionReplies = () => typeof options.companionBotId === 'function' && Boolean(options.companionBotId());
+  const chatSessions = chatChannel ? withImChatOverrides(chatChannel, adapter.sessions, companionReplies) : adapter.sessions;
+  const sessions = channelProject ? withPersonalChannelProject(channelProject, chatSessions) : chatSessions;
+  const repo = createImSessionRepo(adapter.config, sessions, {
     // 归属能否按路径推断, 取决于这个渠道有没有 `/project` —— 唯一真相在 adapter 上,
     // 不在 sessions 里再抄一份, 免得两处漂移。
     projectSwitching: adapter.projectSwitching === true,
   });
   const cards = createCardBuilders(adapter.ui, repo.getDefaultEffortFor);
-  const routeOverrideFor = adapter.sessions.routeOverrideFor?.bind(adapter.sessions);
-  const laneProjectDefaultsFor = adapter.sessions.laneProjectDefaultsFor?.bind(adapter.sessions);
+  const routeOverrideFor = sessions.routeOverrideFor?.bind(sessions);
+  const laneProjectDefaultsFor = sessions.laneProjectDefaultsFor?.bind(sessions);
   const defaultRouteSync = createImChannelDefaultRouteSync({
     source: adapter.sessions.source,
     config: adapter.config,
     isRouteUsable: (route) => turnRunner.hasAuthForRoute(route),
-    // 个人飞书 bot 的按群设置: 群里仍跟随默认的任务跟随这个群固定的模型, 或群绑定项目的设置。
+    // 个人机器人的「群聊」总表: 群里仍跟随默认的任务跟随这个群固定的模型, 或群所在项目的设置。
     ...(routeOverrideFor ? { routeOverrideFor } : {}),
     ...(laneProjectDefaultsFor ? { laneProjectDefaultsFor } : {}),
+    // 落在平台默认项目里的任务跟随这个项目的设置。
+    ...(channelProject
+      ? { channelProjectDefaultsFor: (workingDir: string) => personalChannelProjectDefaults(channelProject, workingDir) }
+      : {}),
   });
   const turnRunner = createTurnRunner(adapter, repo, cards, {
     acquirePendingAgentSwitch: (sessionId, opts) =>
@@ -190,13 +229,16 @@ export function createImOrchestrator(
     ...(options.companionBotId
       ? { companion: createImCompanionRouteDeps(options.companionBotId) }
       : {}),
+    ...(chatChannel ? { personalGuests: { queueLimit: IM_CHAT_MEMBER_QUEUE_LIMIT } } : {}),
   });
   // 切换引擎重建会话时补回本渠道的 vendorOptions(bot 专属工具依赖它)。
   const unregisterVendorOptionsResolver = registerSwitchedSessionVendorOptionsResolver(
     (sessionId) => turnRunner.vendorOptionsForSession(sessionId),
   );
   const slash = createSlashHandlers(adapter, repo, cards, turnRunner);
-  const attachMessageHandler = createMessageHandler(adapter, slash, turnRunner);
+  const attachMessageHandler = createMessageHandler(adapter, slash, turnRunner, chatChannel
+    ? { guestGate: createPersonalGuestGate(chatChannel, () => imText('imBot.text.shared.membersPaused')) }
+    : {});
 
   attachMessageHandler(adapter.im);
   if (adapter.output.kind === 'rich-card') {

@@ -1658,7 +1658,8 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
     }
     // 控制端提供的托管 Skill(字段存在即由控制端决定，本机的不再加载)。Claude Code 以插件挂载，保持 `cindy:pr`
     // 这样的命名：从项目 Skill 目录整体挪进插件目录，同一个 Skill 不出现两次。Codex / Pi 本来就不带插件前缀，
-    // 留在项目 Skill 目录加载。
+    // 留在项目 Skill 目录加载(Codex 经执行环境在任务所在电脑上找项目 Skill，那边的中继补齐这些目录，见
+    // controller/managedSkillOverlay.ts)。
     let controllerManagedSkills: { claudePluginRoots: string[] } | undefined;
     if (personal.managedSkills) {
       const pluginRoots = new Set<string>();
@@ -3988,7 +3989,7 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
           // 能按受邀者隔离运行(供应商级授权与出站边界都已接上)，才接受组所在电脑中转过来的受邀者任务。
           ...(deps.providerAccess && deps.bindGuestProviderRoute ? { guestRelay: true } : {}),
           ...(deps.directGuestExecution && deps.providerAccess && deps.bindGuestProviderRoute
-            ? { directGuestExecution: true } : {}),
+            ? { directGuestExecution: true, linkedShareExecutor: true as const } : {}),
           ...(deps.directGuestExecution?.admitStandby ? { directGuestStandby: true as const } : {}),
           ...(!guest && deps.groupContinuity?.() ? { groupContinuity: true as const } : {}),
           ...(deps.providerAccess && deps.bindGuestProviderRoute ? { relayModelAccess: true } : {}),

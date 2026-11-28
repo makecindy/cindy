@@ -52,6 +52,7 @@ import {
   AgentStartupStoppedError,
   AgentStartupResourcesReleasedError,
   LOCAL_AGENT_CLIENT,
+  isolatedBotProfile,
 } from './agents/base-agent.js';
 import type {
   AgentSessionHandle,
@@ -93,8 +94,8 @@ export interface SessionStartFailureContext {
 }
 
 export interface SessionLifecycleHooks {
-  /** Host-owned per-turn settings, refreshed only after a turn has reserved the session. */
-  beforeTurn?: (session: Session) => Promise<void>;
+  /** Host-owned per-turn preparation, run only after a turn has reserved the session. */
+  beforeTurn?: (session: Session, signal?: AbortSignal) => Promise<void>;
   /**
    * Agent 启动前补齐 start options。该步骤属于正确启动的前置条件，失败会阻断创建。
    * 允许直接修改 options；Maker 会把同一个对象传给 agent 和成功钩子。
@@ -915,6 +916,17 @@ export class Maker {
       }
       agentStartAttempted = true;
       if (startOpts.fastModePolicy && !(startOpts.fastModePolicy.isRequestAllowed?.() ?? startOpts.fastModePolicy.isAllowed())) startOpts.fastMode = false;
+      // Desktop enriches userPrompt for built-in engines (project context; collaboration role
+      // instructions from prepareStartOptions, also on starts that bypass bootstrap such as goal
+      // restore). A plugin engine gets it as its ACP system prompt, so it receives only the
+      // personal instructions frozen before any of that, and none when a start froze none.
+      // Isolated companions and read-only reviews get none, decided here: an engine on another
+      // computer sees only the remote-agent start options, which carry no companion profile.
+      if (opts.agentKind === 'acp') {
+        startOpts.userPrompt = startOpts.reviewMode || isolatedBotProfile(startOpts.botRuntimeProfile)
+          ? undefined
+          : startOpts.hostStartupPreferences?.userPrompt;
+      }
       if (startOpts.agentDeviceId) {
         if (startOpts.remoteHostId) {
           throw new Error('A session cannot run its agent on another computer and on an SSH host at the same time');

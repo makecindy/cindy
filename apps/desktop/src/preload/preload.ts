@@ -66,6 +66,11 @@ import {
   type VoiceSpeakerEnrollResult,
   type VoiceSpeakerFilterStatus,
 } from '../shared/voiceSpeakerFilter';
+import {
+  VOICE_LOCAL_ASR_CHANNELS,
+  type VoiceLocalAsrChooseDirResult,
+  type VoiceLocalAsrStatus,
+} from '../shared/voiceLocalAsr';
 import type { MobileCodexRateLimitsResult, MobileCodexRateLimitResetResult } from '@cindy/maker-shared/device-link-contract';
 import type { AppearanceSettings } from '../shared/appearanceSettings';
 import type { DialogueWorkspaceSettingsState } from '../shared/dialogueWorkspaceSettings';
@@ -245,10 +250,11 @@ import type {
   ImDefaultSettingsState,
 } from '../shared/imDefaultSettings';
 import type {
-  FeishuGroupSettingsList,
-  FeishuGroupSettingsPatch,
-  FeishuGroupSettingsView,
-} from '../shared/feishuGroupSettings';
+  ImChatSettingsChannel,
+  ImChatSettingsList,
+  ImChatSettingsPatch,
+  ImChatSettingsView,
+} from '../shared/imChatSettings';
 import type {
   SubagentModelSettingsPatch,
   SubagentModelSettingsState,
@@ -439,12 +445,16 @@ type VoiceInputReadinessWire = {
   serviceMode: 'cindy' | 'byok';
   provider: VoiceInputProviderKind;
   providerModel: string;
-  auth: 'api-key' | 'codex';
+  auth: 'api-key' | 'codex' | 'local';
   settingsTab: 'api-keys' | 'connections' | 'providers';
   error?: string;
   authErrorReason?: string;
   failureReason?:
-    'custom-asr-config-missing' | 'custom-asr-key-missing' | 'codex-realtime-unsupported';
+    | 'custom-asr-config-missing'
+    | 'custom-asr-key-missing'
+    | 'codex-realtime-unsupported'
+    | 'local-asr-model-missing'
+    | 'local-asr-unsupported';
 };
 type VoiceInputModelSelectionWire = {
   serviceMode: 'cindy' | 'byok';
@@ -469,7 +479,7 @@ type VoiceInputModelSelectionResultWire = {
     id: VoiceInputProviderKind;
     model: string;
     mode: VoiceInputAsrMode;
-    auth: 'api-key' | 'codex';
+    auth: 'api-key' | 'codex' | 'local';
   }>;
   refinerProfiles: Array<{
     id: VoiceInputRefinerProviderKind;
@@ -796,6 +806,7 @@ const fanOutVoiceInputDictionaryLearningEvidence = createIpcFanOut(
 );
 const fanOutVoiceInputDataChanged = createIpcFanOut('voice-input:data-changed');
 const fanOutVoiceSpeakerStatusChanged = createIpcFanOut(VOICE_SPEAKER_FILTER_CHANNELS.statusChanged);
+const fanOutVoiceLocalAsrStatusChanged = createIpcFanOut(VOICE_LOCAL_ASR_CHANNELS.statusChanged);
 // 挂起/锁屏 → renderer 释放 fast activation 的保活麦克风(见 shared/voiceInputPowerIpc)。
 const fanOutVoiceInputPowerStateChange = createIpcFanOut(VOICE_INPUT_POWER_STATE_CHANNEL);
 // 应用级快捷键 override 变化广播 (设置页改绑 / reset 后 main 推全量 overrides,
@@ -1537,7 +1548,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     bindSession: (request: {
       sessionId: string;
       selection: import('../shared/modelGroups').ModelGroupSelection;
-      route: Pick<import('../shared/modelGroups').ModelGroupResolvedRoute, 'agentKind' | 'providerId' | 'model' | 'agentDeviceId'>;
+      route: Pick<import('../shared/modelGroups').ModelGroupResolvedRoute, 'agentKind' | 'providerId' | 'model' | 'agentDeviceId' | 'accountId'>;
     }): Promise<void> => ipcRenderer.invoke('model-groups:bind-session', request),
     /** 解除任务的智能路由持续托管，保留当前具体模型。 */
     unbindSession: (request: { sessionId: string }): Promise<{ ok: boolean; unbound: boolean }> =>
@@ -2059,6 +2070,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
       sourceLanguage?: string;
       refinementEnabled?: boolean;
     }): Promise<{ ok: true }> => ipcRenderer.invoke('voice-input:prewarm', payload),
+    prewarmOnPress: (payload?: {
+      sourceLanguage?: string;
+      refinementEnabled?: boolean;
+    }): Promise<{ ok: true }> => ipcRenderer.invoke('voice-input:press-prewarm', payload),
+    discardPressPrewarm: (): Promise<{ ok: true }> =>
+      ipcRenderer.invoke('voice-input:discard-press-prewarm'),
     getBenchmarkFixtureAudio: (): Promise<
       { ok: true; path: string; wav: ArrayBuffer } | { ok: false }
     > => ipcRenderer.invoke('voice-input:benchmark-fixture-audio'),
@@ -2111,6 +2128,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('voice-input:open-settings', tab),
     start: (params?: {
       recordingId?: string;
+      mode?: 'dictation' | 'rewrite';
       sourceLanguage?: string;
       refinementEnabled?: boolean;
       refinementCacheScope?: string;
@@ -2156,8 +2174,20 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('voice-input:dictionary:delete-entries', entryIds),
     addDictionaryEntry: (text: string): Promise<unknown> =>
       ipcRenderer.invoke('voice-input:dictionary:add-entry', text),
-    importDictionaryEntries: (texts: string[]): Promise<unknown> =>
-      ipcRenderer.invoke('voice-input:dictionary:import-entries', texts),
+    importDictionaryEntries: (entries: Array<string | { text: string; aliases?: string[] }>): Promise<unknown> =>
+      ipcRenderer.invoke('voice-input:dictionary:import-entries', entries),
+    promoteDictionaryCandidate: (text: string): Promise<unknown> =>
+      ipcRenderer.invoke('voice-input:dictionary:promote-candidate', text),
+    deleteDictionaryCandidate: (text: string): Promise<unknown> =>
+      ipcRenderer.invoke('voice-input:dictionary:delete-candidate', text),
+    restoreSuppressedDictionaryTerm: (
+      text: string,
+      options?: { addToDictionary?: boolean },
+    ): Promise<unknown> =>
+      ipcRenderer.invoke('voice-input:dictionary:restore-suppressed', {
+        text,
+        addToDictionary: options?.addToDictionary === true,
+      }),
     renameDictionaryEntry: (entryId: string, text: string): Promise<unknown> =>
       ipcRenderer.invoke('voice-input:dictionary:rename-entry', { entryId, text }),
     editDictionaryEntry: (entryId: string, text: string, aliases: string[]): Promise<unknown> =>
@@ -2179,8 +2209,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
       throwVoiceInputSyncError(result);
       return result as string | null;
     },
-    updateHistoryEntry: (id: string, text: string): void => {
-      const result = ipcRenderer.sendSync('voice-input:history:update', { id, text });
+    updateHistoryEntry: (id: string, text: string, rawText?: string): void => {
+      const result = ipcRenderer.sendSync('voice-input:history:update', { id, text, rawText });
       throwVoiceInputSyncError(result);
     },
     deleteHistoryEntry: (id: string): void => {
@@ -2200,6 +2230,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
       deleteProfile: (): Promise<VoiceSpeakerFilterStatus> =>
         ipcRenderer.invoke(VOICE_SPEAKER_FILTER_CHANNELS.deleteProfile),
       onStatusChanged: fanOutVoiceSpeakerStatusChanged,
+    },
+    localAsr: {
+      getStatus: (): Promise<VoiceLocalAsrStatus> =>
+        ipcRenderer.invoke(VOICE_LOCAL_ASR_CHANNELS.getStatus),
+      chooseModelDir: (): Promise<VoiceLocalAsrChooseDirResult> =>
+        ipcRenderer.invoke(VOICE_LOCAL_ASR_CHANNELS.chooseModelDir),
+      clearModelDir: (): Promise<VoiceLocalAsrStatus> =>
+        ipcRenderer.invoke(VOICE_LOCAL_ASR_CHANNELS.clearModelDir),
+      onStatusChanged: fanOutVoiceLocalAsrStatusChanged,
     },
     // options.suspend 表示「录制期挂起」这个意图。main 侧会丢掉与存盘不一致的同步请求
     // (过时的广播回声),而挂起传的 null 恰恰故意与存盘不同,必须能区分开。
@@ -2908,6 +2947,29 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // ── 伙伴自有 IM 机器人连接(Telegram / 飞书, 伙伴设置「消息平台」页)──
   // 凭证只进 main 的安全存储, 不回传; 记录按连接 id 管理。
   botImConnection: {
+    getPersonalChannel: (payload: { channel: string }): Promise<import('../shared/botImConnection').PersonalChannelState> =>
+      ipcRenderer.invoke('imPersonalChannel:get', payload),
+    setPersonalChannelProject: (payload: { channel: string; projectDir: string | null }): Promise<import('../shared/botImConnection').PersonalChannelState> =>
+      ipcRenderer.invoke('imPersonalChannel:set-project', payload),
+    getPersonalReplyTarget: async (payload: { channel: string }) => {
+      const state: import('../shared/botImConnection').PersonalChannelState = await ipcRenderer.invoke('imPersonalChannel:get', payload);
+      return { channel: state.channel, companionBotId: state.companionBotId };
+    },
+    setPersonalReplyTarget: async (payload: { channel: string; companionBotId: string | null }) => {
+      const state: import('../shared/botImConnection').PersonalChannelState = await ipcRenderer.invoke('imPersonalChannel:set-companion', payload);
+      return { channel: state.channel, companionBotId: state.companionBotId };
+    },
+    onPersonalChannelChanged: (listener: (state: import('../shared/botImConnection').PersonalChannelState) => void): (() => void) => {
+      const handler = (_event: unknown, state: import('../shared/botImConnection').PersonalChannelState) => listener(state);
+      ipcRenderer.on('imPersonalChannel:changed', handler);
+      return () => { ipcRenderer.removeListener('imPersonalChannel:changed', handler); };
+    },
+    onPersonalReplyTargetChanged: (listener: (state: { channel: string; companionBotId: string | null }) => void): (() => void) => {
+      const handler = (_event: unknown, state: import('../shared/botImConnection').PersonalChannelState) =>
+        listener({ channel: state.channel, companionBotId: state.companionBotId });
+      ipcRenderer.on('imPersonalChannel:changed', handler);
+      return () => { ipcRenderer.removeListener('imPersonalChannel:changed', handler); };
+    },
     getIMessageConfig: (payload: { id: string }): Promise<import('../shared/botImConnection').BotIMessageConfig> => ipcRenderer.invoke('botImConnection:get-imessage-config', payload),
     updateIMessageConfig: (payload: { id: string; config: import('../shared/botImConnection').BotIMessageUpdateInput }): Promise<import('../shared/botImConnection').BotImConnectionListPayload> => ipcRenderer.invoke('botImConnection:update-imessage-config', payload),
 
@@ -3099,9 +3161,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
       workingDir: string | null;
       workingDirAvailable: boolean; companionBotId?: string;
     }> => ipcRenderer.invoke('wechatBot:get-channel-settings'),
-    setCompanion: (botId: string | null): Promise<{
+    setCompanion: (botId: string | null, options?: { allowReassign?: boolean }): Promise<{
       version: 1; workingDir: string | null; workingDirAvailable: boolean; companionBotId?: string;
-    }> => ipcRenderer.invoke('wechatBot:set-companion', botId),
+    }> => ipcRenderer.invoke('wechatBot:set-companion', botId, options),
     chooseWorkingDirectory: (): Promise<{
       canceled: boolean;
       state: { version: 1; workingDir: string | null; workingDirAvailable: boolean; companionBotId?: string };
@@ -5943,6 +6005,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   worktreeCheckout: (req: import('../shared/worktreeCheckout').CheckoutRequest): Promise<import('../shared/worktreeCheckout').CheckoutReply> => ipcRenderer.invoke('worktree:checkout', req),
   worktreeBranchSyncStatus: (req: import('../shared/worktreeBranchSync').BranchSyncRequest): Promise<import('../shared/worktreeBranchSync').BranchSyncStatus> => ipcRenderer.invoke('worktree:branch-sync-status', req),
   worktreeSyncBranch: (req: import('../shared/worktreeBranchSync').BranchSyncRequest): Promise<import('../shared/worktreeBranchSync').BranchSyncReply> => ipcRenderer.invoke('worktree:sync-branch', req),
+  worktreeWorkspaceClutterSummary: (req: import('../shared/worktreeWorkspaceClutter').WorkspaceClutterRequest): Promise<import('../shared/worktreeWorkspaceClutter').WorkspaceClutterSummary> => ipcRenderer.invoke('worktree:workspace-clutter-summary', req),
   worktreeListBranches: (req: { baseRepo: string }): Promise<unknown> =>
     ipcRenderer.invoke('worktree:list-branches', req),
   // P1: 删除/归档确认预检(有无 worktree、是否有未提交更改)
@@ -5977,6 +6040,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('maker:hook-control:add-project', { directory }),
     setXCompanion: (botId: string | null, expectedBotId: string | null): Promise<{ hook: unknown }> =>
       ipcRenderer.invoke('maker:hook-control:set-x-companion', { botId, expectedBotId }),
+    setProviderCompanion: (
+      provider: 'slack' | 'telegram' | 'feishu' | 'discord' | 'x',
+      botId: string | null,
+      expectedBotId: string | null,
+    ): Promise<{ hook: unknown }> =>
+      ipcRenderer.invoke('maker:hook-control:set-provider-companion', { provider, botId, expectedBotId }),
     setProviderDefaultWorkspace: (
       provider: 'telegram' | 'x' | 'feishu' | 'discord',
       alias: string | null,
@@ -6199,6 +6268,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     push: (params: {
       sessionId: string;
       confirmForce?: ReviewPushConfirmForce;
+      syncBeforePush?: boolean;
     }): Promise<ReviewPushResult> => ipcRenderer.invoke('git-review:push', params),
   },
 
@@ -8438,18 +8508,28 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('maker:im-default-settings:set', patch, channel),
     imDefaultSettingsReset: (channel?: ImDefaultSettingsChannel): Promise<ImDefaultSettingsState> =>
       ipcRenderer.invoke('maker:im-default-settings:reset', channel),
-    /** 个人飞书 / Lark 机器人所在的群与各群单独的项目、模型、权限。 */
-    feishuGroupSettingsList: (options?: { refresh?: boolean; summary?: boolean }): Promise<FeishuGroupSettingsList> =>
-      ipcRenderer.invoke('maker:feishu-group-settings:list', {
+    /** 个人 IM 机器人的「群聊」总表: 所在的群与各群单独的项目、模型、权限、群成员也能提问。 */
+    imChatSettingsList: (
+      channel: ImChatSettingsChannel,
+      options?: { refresh?: boolean; summary?: boolean },
+    ): Promise<ImChatSettingsList> =>
+      ipcRenderer.invoke('maker:im-chat-settings:list', channel, {
         refresh: options?.refresh === true,
         summary: options?.summary === true,
       }),
-    feishuGroupSettingsSet: (
+    imChatSettingsSet: (
+      channel: ImChatSettingsChannel,
       chatId: string,
-      patch: FeishuGroupSettingsPatch,
+      patch: ImChatSettingsPatch,
       name: string | null,
-    ): Promise<FeishuGroupSettingsView> =>
-      ipcRenderer.invoke('maker:feishu-group-settings:set', chatId, patch, name),
+    ): Promise<ImChatSettingsView> =>
+      ipcRenderer.invoke('maker:im-chat-settings:set', channel, chatId, patch, name),
+    imChatSettingsResumeMembers: (
+      channel: ImChatSettingsChannel,
+      chatId: string,
+      name: string | null,
+    ): Promise<ImChatSettingsView> =>
+      ipcRenderer.invoke('maker:im-chat-settings:resume-members', channel, chatId, name),
 
     /**
      * 子代理模型覆盖与 Codex 子代理护栏。null 表示不注入覆盖。Claude 字段对新建

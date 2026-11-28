@@ -3,6 +3,7 @@
  * 统一封装：本机/远程目录刷新与合成、resolver 解析器、故障恢复与横幅提议、任务中间发前持续托管评估、
  * 伙伴/定时任务选路，以及切账号时的状态释放。
  */
+import { scheduledBillingHold } from '../scheduler-host/billingHolds.js';
 import type { ProviderView } from '@cindy/model-providers';
 import type { ModelGroupAgentKind, ModelGroupResolveRequest, ModelGroupTraceQuota } from '../../shared/modelGroups.js';
 import { pluginEngineKeyFromProviderId, type PluginEngineView } from '../../shared/pluginEngines.js';
@@ -10,10 +11,13 @@ import { isProviderShareAgentDeviceId } from '../../shared/providerShare.js';
 import type { ModelPricingCatalog } from '../../shared/regionalMoney.js';
 import { isPluginModelPickerRouteAvailable } from '../cindy-brain/ghostModelPicker.js';
 import { createLogger } from '../logger.js';
+import { getSessionProvider, hasSessionProvider } from '../maker-host/session-provider-store.js';
 import { recordModelGroupDecision } from './decisionLog.js';
+import { autoUsageSourceKey, type AutoUsageProfileSnapshot } from './autoUsageProfile.js';
 import type { ModelGroupInnerQuota } from './pick.js';
-import { createModelGroupResolver, MODEL_GROUP_REMOTE_WAIT_MS } from './resolver.js';
+import { createModelGroupResolver, MODEL_GROUP_REMOTE_WAIT_MS, type ModelGroupResolverDeps } from './resolver.js';
 import { readModelGroupBindingForDispatch, readModelGroupSessionBinding } from './sessionBindings.js';
+import type { SourceCatalogAccount } from './sourceRoutes.js';
 import { createSshModelGroupSupport } from './sshFilter.js';
 import { readModelGroupsConfigForSelected, setModelGroupSourceCatalog } from './store.js';
 import {
@@ -33,14 +37,31 @@ const pickLog = createLogger('model-groups:pick');
 const REMOTE_CATALOG_TTL_MS = 60_000;
 const LOCAL_CATALOG_TTL_MS = 1_000;
 
+export interface ModelGroupRunningSession {
+  id: string;
+  agentDeviceId?: string | null;
+  /** Fallback for a live task whose provider has not been registered in memory. */
+  providerId?: string;
+}
+
 export interface ModelGroupRuntimePorts {
   scope(): string;
   localViews(): Promise<ProviderView[]>;
+  localAccounts?(views: readonly ProviderView[]): ReadonlyMap<string, readonly SourceCatalogAccount[]>;
+  warmLocalAccounts?(views: readonly ProviderView[]): Promise<void>;
+  localAccount?: ModelGroupResolverDeps['localAccount'];
+  localCandidateAvailable?: ModelGroupResolverDeps['localCandidateAvailable'];
+  /** 任务在本机账号池里实际绑定的账号(订阅账号池的任务绑定)。 */
+  taskAccount?(sessionId: string, providerId: string): string | undefined;
   pluginEngines?(): readonly PluginEngineView[];
   localAgents(): readonly string[];
   harnessInstalled(agent: string, agentDeviceId?: string): Promise<boolean>;
-  quotaWindows(options?: { cached?: boolean }): Promise<ReadonlyMap<string, readonly (ModelGroupTraceQuota & { scopedTo?: string | null })[]>>;
+  quotaWindows(options?: { cached?: boolean; dryRun?: boolean }): Promise<ReadonlyMap<string, readonly (ModelGroupTraceQuota & { scopedTo?: string | null })[]>>;
   innerQuota?(source: { providerId: string; model: string; agentKind: ModelGroupAgentKind }): Promise<ModelGroupInnerQuota | null>;
+  usageProfile?(options?: { dryRun?: boolean }): AutoUsageProfileSnapshot | null | Promise<AutoUsageProfileSnapshot | null>;
+  runningSessions(): readonly ModelGroupRunningSession[];
+  onCommitPick?(candidate: { providerId: string; agentDeviceId?: string | null; model: string }): void;
+  onDispose?(): void;
   remoteInvocable?(providerId: string): boolean;
   locations?(): Promise<{
     status?: 'complete' | 'degraded';
@@ -74,8 +95,10 @@ export function createModelGroupRuntime(ports: ModelGroupRuntimePorts) {
     const scope = ports.scope();
     if (lastLocal?.scope !== scope) return;
     const { views, pluginEngines } = lastLocal;
+    const localAccounts = ports.localAccounts ? ports.localAccounts(views) : undefined;
     setModelGroupSourceCatalog({
       views,
+      ...(localAccounts && localAccounts.size > 0 ? { localAccounts } : {}),
       pluginEngines,
       agents: ports.localAgents(),
       ...(remoteCatalogs?.scope === scope ? {
@@ -93,6 +116,13 @@ export function createModelGroupRuntime(ports: ModelGroupRuntimePorts) {
     const scope = ports.scope();
     if (lastLocal?.scope === scope && ports.pluginEngines) {
       lastLocal = { ...lastLocal, pluginEngines: ports.pluginEngines() };
+      publishCatalog();
+    }
+  }
+
+  function refreshLocalAccounts(): void {
+    const scope = ports.scope();
+    if (lastLocal?.scope === scope) {
       publishCatalog();
     }
   }
@@ -167,8 +197,13 @@ export function createModelGroupRuntime(ports: ModelGroupRuntimePorts) {
 
   async function readLocalViews(): Promise<ProviderView[]> {
     const views = await ports.localViews();
-    lastLocal = { scope: ports.scope(), views, pluginEngines: ports.pluginEngines ? ports.pluginEngines() : [] };
+    const scope = ports.scope();
+    lastLocal = { scope, views, pluginEngines: ports.pluginEngines ? ports.pluginEngines() : [] };
     publishCatalog();
+    if (ports.warmLocalAccounts) {
+      await ports.warmLocalAccounts(views).catch(() => undefined);
+      if (lastLocal?.scope === scope) publishCatalog();
+    }
     void readRemoteCatalogs();
     return views;
   }
@@ -193,6 +228,7 @@ export function createModelGroupRuntime(ports: ModelGroupRuntimePorts) {
   });
 
   const resolver = createModelGroupResolver({
+    billingUnavailable: id => !!scheduledBillingHold(id),
     config: readModelGroupsConfigForSelected,
     recordDecision: recordModelGroupDecision,
     views: readLocalViews,
@@ -201,7 +237,21 @@ export function createModelGroupRuntime(ports: ModelGroupRuntimePorts) {
     agents: () => ports.localAgents(),
     harnessInstalled: (agent, agentDeviceId) => ports.harnessInstalled(agent, agentDeviceId),
     quotaWindows: (options) => ports.quotaWindows(options),
+    localCandidateAvailable: ports.localCandidateAvailable ? (view, agent) => ports.localCandidateAvailable!(view, agent) : undefined,
+    localAccount: ports.localAccount ? (providerId, accountId, model, agent) => ports.localAccount!(providerId, accountId, model, agent) : undefined,
     innerQuota: ports.innerQuota ? (source) => ports.innerQuota!(source) : undefined,
+    usageProfile: ports.usageProfile ? (options) => ports.usageProfile!(options) : undefined,
+    runningSourceCounts: () => {
+      const counts = new Map<string, number>();
+      for (const session of ports.runningSessions()) {
+        const providerId = hasSessionProvider(session.id) ? getSessionProvider(session.id) : session.providerId;
+        if (!providerId) continue;
+        const key = autoUsageSourceKey(session.agentDeviceId, providerId);
+        counts.set(key, (counts.get(key) ?? 0) + 1);
+      }
+      return counts;
+    },
+    onCommitPick: ports.onCommitPick ? (candidate) => ports.onCommitPick!(candidate) : undefined,
     locations: ports.locations ? () => ports.locations!() : undefined,
     remoteViews: ports.remoteViews ? (agentDeviceId) => ports.remoteViews!(agentDeviceId) : undefined,
     remotePluginEngines: ports.remotePluginEngines ? (agentDeviceId) => ports.remotePluginEngines!(agentDeviceId) : undefined,
@@ -237,6 +287,7 @@ export function createModelGroupRuntime(ports: ModelGroupRuntimePorts) {
     return evaluateModelGroupBeforeSend(
       {
         readBinding: readModelGroupBindingForDispatch,
+        ...(ports.taskAccount ? { readTaskAccount: ports.taskAccount } : {}),
         config: readModelGroupsConfigForSelected,
         candidateFacts: (route, context, options) => resolver.candidateFacts(route, context, options),
         now,
@@ -272,6 +323,15 @@ export function createModelGroupRuntime(ports: ModelGroupRuntimePorts) {
     };
   }
 
+  /** 本机配置首读可等画像预热，发送仍走 resolver 的同步缓存读取。 */
+  async function autoModelPriorities(): Promise<Record<string, number> | undefined> {
+    const scope = ports.scope();
+    const cached = await ports.usageProfile?.();
+    const profile = cached ?? await ports.usageProfile?.({ dryRun: true });
+    const map = profile?.modelPriorities;
+    return scope === ports.scope() && map && Object.keys(map).length > 0 ? map : undefined;
+  }
+
   function dispose(): void {
     remoteCatalogs = null;
     remoteReading = null;
@@ -279,12 +339,15 @@ export function createModelGroupRuntime(ports: ModelGroupRuntimePorts) {
     refreshing = null;
     refreshedAt = 0;
     resolver.dispose();
+    ports.onDispose?.();
   }
 
   return {
     resolver,
     localProviderView,
+    autoModelPriorities,
     refreshLocalPluginEngines,
+    refreshLocalAccounts,
     refreshAutoModelGroupRoutes,
     readModelGroupRecoveryOffer,
     evaluateTurnRouting,

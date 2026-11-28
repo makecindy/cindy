@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
-import { canonicalModelFamilyKey, detectClaudeModelMismatch } from '../modelMismatch';
+import {
+  canonicalModelFamilyKey,
+  detectClaudeModelMismatch,
+  resolveModelMismatchProviderName,
+} from '../modelMismatch';
 
 describe('canonicalModelFamilyKey', () => {
   it('剥掉 [1m] 后缀、日期尾缀、vendor 前缀与 claude- 前缀', () => {
@@ -90,5 +94,45 @@ describe('detectClaudeModelMismatch', () => {
       { model: 'claude-sonnet-5' },
     ]);
     expect(r?.actual).toBe('claude-opus-4-8');
+  });
+
+  it('命中时透传外部供应商名(空白忽略),并识别 mythos 家族', () => {
+    expect(
+      detectClaudeModelMismatch(
+        'claude-fable-5-2',
+        [{ model: 'claude-opus-4-8', outputTokens: 500 }],
+        '  Anthropic  ',
+      ),
+    ).toEqual({
+      selected: 'claude-fable-5-2',
+      actual: 'claude-opus-4-8',
+      providerName: 'Anthropic',
+    });
+    expect(
+      detectClaudeModelMismatch(
+        'claude-mythos-5',
+        [{ model: 'claude-opus-4-8', outputTokens: 200 }],
+        '   ',
+      ),
+    ).toEqual({
+      selected: 'claude-mythos-5',
+      actual: 'claude-opus-4-8',
+    });
+  });
+});
+
+// 保护「直连 Anthropic / 第三方供应商点名，Cindy AI 网关与未知来源走通用保底」的归因契约。
+describe('resolveModelMismatchProviderName', () => {
+  it.each([
+    ['Claude 订阅忽略本机账号别名统一返回 Anthropic', { providerId: 'claude-sub-1', providerName: 'Work Claude', subscriptionKind: 'claude' as const, billingRoute: 'subscription' as const }, 'Anthropic'],
+    ['官方 Anthropic API 返回 Anthropic', { providerId: 'custom-anthropic', providerName: 'My Key', officialAnthropicApi: true, billingRoute: 'provider-api' as const }, 'Anthropic'],
+    ['隐式订阅路由返回 Anthropic', { providerId: null, observedClaudeRoute: 'subscription' as const }, 'Anthropic'],
+    ['第三方供应商返回展示名', { providerId: 'openrouter', providerName: ' OpenRouter ', billingRoute: 'provider-api' as const }, 'OpenRouter'],
+    ['Cindy AI 网关不点名 Cindy 走通用保底', { providerId: 'xd', providerName: 'Cindy AI', billingRoute: 'xd-gateway' as const }, undefined],
+    ['网关路由纵使带展示名也走通用保底', { providerId: null, providerName: 'Cindy AI', observedClaudeRoute: 'gateway' as const, billingRoute: 'xd-gateway' as const }, undefined],
+    ['命名为 Cindy 的自定义项不误导成 Cindy 自行改派', { providerId: 'custom-1', providerName: 'Cindy', billingRoute: 'provider-api' as const }, undefined],
+    ['未知路由无展示名返回 undefined', { providerId: null, billingRoute: 'unknown' as const }, undefined],
+  ])('%s', (_label, ctx, expected) => {
+    expect(resolveModelMismatchProviderName(ctx)).toBe(expected);
   });
 });
