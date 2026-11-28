@@ -1,4 +1,5 @@
 import { createAuxiliaryUsageRecorder } from '../usage/auxiliaryUsage.js';
+import { NATIVE_SUBSCRIPTION_ACCOUNT, OneShotError, type NativeSubscriptionTextOptions } from '@cindy/maker-core';
 // The one-shot requests live in oneShotCandidatesCore.ts (shared with the Node Host). This
 // module builds the single Desktop instance; its ports resolve the Desktop modules when
 // called, never when this module loads.
@@ -17,7 +18,7 @@ import { getUtilityModelChainProfiles } from './UtilityModelSelection.js';
 import { getEffectiveAuxiliaryModelChain } from './resolveAuxiliaryModelChain.js';
 import { reportAuxiliaryChainOutcome } from './auxiliaryChainOutcomeSink.js';
 // After the Desktop modules, so module evaluation keeps the former order.
-import { createOneShotCandidates } from './oneShotCandidatesCore.js';
+import { createOneShotCandidates, fenceStreamedText } from './oneShotCandidatesCore.js';
 import { getDesktopSelectableCatalog } from '../maker-host/createDesktopProviderService.js';
 import { acquireSubscriptionAccount } from '../subscription-accounts/runtime.js';
 import { accountProviderId } from '../subscription-accounts/placement.js';
@@ -35,6 +36,17 @@ export type {
   UtilityTextDispatchRoute,
   UtilityTextRequestOptions,
 } from './oneShotCandidatesCore.js';
+
+type NativeSubscriptionTextRunner = (prompt: string, opts: NativeSubscriptionTextOptions) => Promise<string>;
+let nativeSubscriptionTextRunner: NativeSubscriptionTextRunner | null = null;
+
+/**
+ * The Maker host registers its Claude Code entry once the Maker exists. Registration
+ * (instead of importing the Maker host here) keeps this module out of that import graph.
+ */
+export function setNativeSubscriptionTextRunner(runner: NativeSubscriptionTextRunner | null): void {
+  nativeSubscriptionTextRunner = runner;
+}
 
 const desktopOneShot = createOneShotCandidates({
   getCatalog: () => getDesktopSelectableCatalog(),
@@ -68,6 +80,64 @@ const desktopOneShot = createOneShotCandidates({
   isAuxiliaryModelTemporarilyUnavailable,
   captureAuxiliaryHealthObserver,
   reportAuxiliaryChainOutcome: (...args) => reportAuxiliaryChainOutcome(...args),
+  requestNativeSubscriptionText: async ({ prompt, sessionId, providerId, onText, signal, ...request }) => {
+    const run = nativeSubscriptionTextRunner;
+    if (!run) throw new Error('Claude Code is not ready');
+    // Pick within the selected provider (built-in or an independent Claude connection),
+    // following the companion task's bound account. Read-only: no binding is written.
+    const lease = await acquireSubscriptionAccount(
+      providerId, request.model, sessionId ? [`task:${sessionId}`] : [], false, { resuming: false },
+    );
+    // Without a pool only the built-in provider may use the CLI's default login; an
+    // independent connection must never be answered by another account.
+    if (!lease && providerId !== 'anthropic') throw new Error('No subscription account is available');
+    try {
+      // A one-shot keeps the provider it was leased for, like the OpenAI path above.
+      const membership = lease && accountProviderId('anthropic', lease.accountId);
+      const dispatchable = () => {
+        if (!lease) return true;
+        try {
+          lease.assertDispatchable();
+          return accountProviderId('anthropic', lease.accountId) === membership;
+        } catch { return false; }
+      };
+      if (lease) {
+        lease.assertDispatchable();
+        lease.running(true);
+      }
+      // Streamed lines are spoken at once, so each one needs the account too.
+      const stream = fenceStreamedText(onText, signal, dispatchable);
+      let text: string;
+      try {
+        text = await run(prompt, {
+          ...request,
+          signal: stream.signal,
+          onText: stream.onText,
+          beforeDispatch: async () => {
+            if (!dispatchable()) return false;
+            if (request.beforeDispatch && !(await request.beforeDispatch())) return false;
+            // The awaited route/owner read can outlive a pause, disconnect or provider move.
+            return dispatchable();
+          },
+          ...(lease ? { [NATIVE_SUBSCRIPTION_ACCOUNT]: lease.account } : {}),
+        });
+      } catch (error) {
+        // Like subscription sends: report the CLI's failure (sign-in, overload, usage
+        // limit) so the pool cools this account. A cancellation says nothing about it.
+        if (lease && !stream.stale() && !stream.signal?.aborted) {
+          lease.observeFailure(error instanceof OneShotError && error.failure ? error.failure : error, request.model, 'run');
+        }
+        throw error;
+      }
+      // A reply cannot outlive the account that produced it (the HTTP path rechecks
+      // its credential after the full response the same way); the core reports it as
+      // request_failed, so nothing is spoken.
+      if (stream.stale() || !dispatchable()) throw new Error('The subscription account changed before the reply was accepted');
+      return text;
+    } finally {
+      lease?.release();
+    }
+  },
 });
 type Instance = typeof desktopOneShot;
 export const captureAuxiliaryRoutes = desktopOneShot.captureAuxiliaryRoutes;

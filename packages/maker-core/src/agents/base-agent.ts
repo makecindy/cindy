@@ -1775,6 +1775,34 @@ export interface OneShotOptions {
 }
 
 /**
+ * Stateless, tool-free text request answered by the agent's own native CLI login
+ * (currently only the Claude subscription). The host never reads or forwards that
+ * credential; it only starts the CLI with an empty workspace, no tools, no settings,
+ * no MCP servers and no persisted transcript, then reads the text reply.
+ */
+export interface NativeSubscriptionTextOptions {
+  /** Exact catalog model the caller selected; never substituted. */
+  model: string;
+  systemPrompt?: string;
+  /** Whole-request budget including CLI start-up. */
+  timeoutMs?: number;
+  signal?: AbortSignal;
+  /** Ask for no extended thinking (latency-sensitive callers). */
+  disableReasoning?: boolean;
+  /** Receives the accumulated reply text while it streams. */
+  onText?: (text: string) => void;
+  /** Ownership/configuration fence checked right before the CLI is started. */
+  beforeDispatch?: () => boolean | Promise<boolean>;
+  /**
+   * Token usage the CLI reported for this request, once per model it used. The host
+   * records it in its own ledger; observer failures never fail the request.
+   */
+  onUsage?: (usage: OneShotUsage) => void | Promise<void>;
+  /** Host-selected account home when the user has several subscription accounts. */
+  [NATIVE_SUBSCRIPTION_ACCOUNT]?: NativeSubscriptionAccount;
+}
+
+/**
  * oneShot 失败抛此 error,reason 跟 skillReview ReviewServiceUnavailableError 对齐
  * (timeout / auth / network / malformed),便于上层一对一映射 errorCode。
  *
@@ -1787,10 +1815,23 @@ export interface OneShotOptions {
  */
 export type OneShotErrorReason = 'timeout' | 'auth' | 'network' | 'malformed';
 
+/**
+ * Non-secret failure detail of a native subscription request (`nativeSubscriptionText`):
+ * the host's account pool reads it, like a terminal turn error, to decide whether to
+ * cool the account (sign-in failed, overloaded, usage limit).
+ */
+export interface OneShotFailureSignals {
+  message: string;
+  sdkError?: string;
+  errorStatus?: number;
+  usageLimit?: boolean;
+}
+
 export class OneShotError extends Error {
   constructor(
     public readonly reason: OneShotErrorReason,
     msg?: string,
+    public readonly failure?: OneShotFailureSignals,
   ) {
     super(msg ?? `oneshot-failed:${reason}`);
     this.name = 'OneShotError';
@@ -3265,6 +3306,15 @@ export abstract class BaseAgent {
   async oneShot(prompt: string, opts?: OneShotOptions): Promise<string> {
     void prompt; void opts;
     return this.throwNotSupported('oneShot', 'not-implemented');
+  }
+
+  /**
+   * Stateless text reply through the agent's own native subscription login.
+   * Only agents whose subscription may be used solely by their CLI implement it.
+   */
+  async nativeSubscriptionText(prompt: string, opts: NativeSubscriptionTextOptions): Promise<string> {
+    void prompt; void opts;
+    return this.throwNotSupported('nativeSubscriptionText', 'not-implemented');
   }
 
   /**

@@ -2,7 +2,7 @@ import { auxiliaryNoticeOperation, type AuxiliaryNoticeOperation } from '../../s
 import { attachUpstreamMessage, extractUpstreamMessage, errorFrames, copyUpstreamDetail } from './auxiliaryUpstreamError.js';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { matchesDeterministicUsageExhaustionText } from '@cindy/maker-shared/error-redaction';
-import { parseAuxiliaryTokens, parseAuxiliaryResponse, type AuxiliaryUsageRecorder, type AuxiliaryAttribution } from '../../shared/auxiliaryUsage.js';
+import { parseAuxiliaryTokens, parseAuxiliaryResponse, type AuxiliaryUsageRecorder, type AuxiliaryAttribution, type AuxiliaryTokens } from '../../shared/auxiliaryUsage.js';
 /**
  * Direct one-shot text requests (the auxiliary-model chain and the dedicated Auto-review
  * candidates), shared by Desktop and the Node Host. Moved verbatim from oneShotCandidates.ts,
@@ -128,6 +128,14 @@ export type UtilityTextRequestOptions = {
   pinnedProfileId?: string;
   /** Configuration tests may retry a model that was isolated after runtime failures. */
   bypassAuxiliaryModelHealth?: boolean;
+  /**
+   * Explicit routes only: when the selected route is the Claude subscription, let the
+   * bundled Claude Code CLI answer with its own login (stateless, tool-free) instead
+   * of reporting the route as unusable. Cindy still never reads that credential. Opt-in
+   * because each request starts a CLI process (slower than direct HTTP); callers with
+   * tight budgets such as the 2-second voice exit classifier must not use it.
+   */
+  nativeSubscriptionCli?: boolean;
 };
 
 /**
@@ -210,6 +218,51 @@ export interface OneShotCandidatesPorts {
    * Desktop only: the Node Host has no surface to show it and leaves it unset.
    */
   reportAuxiliaryChainOutcome?: (outcome: 'success' | 'no_candidate' | 'failed') => void;
+  /**
+   * Claude subscription text through the local Claude Code CLI login (see
+   * `UtilityTextRequestOptions.nativeSubscriptionCli`). Desktop only; when unset the
+   * subscription route stays unavailable to direct requests, as before.
+   */
+  requestNativeSubscriptionText?: (input: {
+    prompt: string;
+    /** The selected catalog provider: built-in `anthropic` or an independent Claude connection. */
+    providerId: string;
+    model: string;
+    sessionId?: string;
+    systemPrompt?: string;
+    timeoutMs?: number;
+    signal?: AbortSignal;
+    disableReasoning?: boolean;
+    onText?: (text: string) => void;
+    beforeDispatch?: () => Promise<boolean>;
+    /** Tokens the CLI reported, per model; recorded in the auxiliary usage ledger. */
+    onUsage?: (usage: AuxiliaryTokens & { model?: string }) => Promise<void>;
+  }) => Promise<string>;
+}
+
+/**
+ * Streamed CLI text reaches the caller only while `current()` holds: a voice call speaks
+ * each complete line at once, and rejecting the final reply cannot take it back. The
+ * first stale update stops forwarding for good and cancels the request.
+ */
+export function fenceStreamedText(
+  onText: ((text: string) => void) | undefined,
+  signal: AbortSignal | undefined,
+  current: () => boolean,
+): { onText?: (text: string) => void; signal?: AbortSignal; stale: () => boolean } {
+  if (!onText) return { signal, stale: () => false };
+  const controller = new AbortController();
+  let stale = false;
+  return {
+    onText: (text) => {
+      if (stale) return;
+      if (current()) return onText(text);
+      stale = true;
+      controller.abort();
+    },
+    signal: signal ? AbortSignal.any([signal, controller.signal]) : controller.signal,
+    stale: () => stale,
+  };
 }
 
 /** One instance per launcher. */
@@ -321,6 +374,9 @@ function metered<Args extends unknown[], Result>(fn: (...args: Args) => Promise<
     return usageContext.run({ record, route }, () => fn(...args)).finally(() => { try { record.close(); } catch { log.warn('auxiliary usage recorder cleanup failed'); } });
   };
 }
+
+/** Usage-ledger transport label for subscription text answered by the Claude Code CLI. */
+const NATIVE_SUBSCRIPTION_CLI_TRANSPORT = 'claude-code-cli';
 
 const XD_UTILITY_ROUTE_AGENTS: readonly AgentKind[] = ['claude-code', 'codex', 'pi'];
 
@@ -1207,6 +1263,8 @@ async function requestExplicitProviderText(
       validateResponse: opts.validateResponse,
       beforeDispatch: opts.beforeDispatch,
       routeStillCurrent,
+      nativeSubscriptionCli: opts.nativeSubscriptionCli,
+      sessionId: opts.sessionId,
     });
   }
 
@@ -1405,6 +1463,8 @@ async function requestBuiltinProviderText(
     validateResponse?: (text: string) => boolean;
     beforeDispatch?: (route: UtilityTextDispatchRoute) => Promise<boolean>;
     routeStillCurrent?: () => boolean;
+    nativeSubscriptionCli?: boolean;
+    sessionId?: string;
   },
 ): Promise<UtilityTextResult> {
   const profile: UtilityModelProfile = {
@@ -1517,7 +1577,56 @@ async function requestBuiltinProviderText(
   if (providerCatalogId(input.provider) === 'anthropic') {
     // Claude 订阅只供内置 Claude Code CLI 用它自己的登录发起请求;Cindy 进程不持有也不借用
     // 这份凭证,辅助模型 / 标题等直连调用不走它(调用方按候选链回落到其它来源)。
-    return { ok: false, reason: 'no_candidate', attempts: [skippedAttempt(profile, 'not_authenticated')] };
+    // 显式选择了该路由且明确允许走 CLI 的调用方(伙伴语音通话),由 CLI 无工具、无状态地
+    // 作答;凭证仍只在 CLI 内部。
+    const requestNative = ports.requestNativeSubscriptionText;
+    if (!input.nativeSubscriptionCli || input.agentKind !== 'claude-code' || !requestNative) {
+      return { ok: false, reason: 'no_candidate', attempts: [skippedAttempt(profile, 'not_authenticated')] };
+    }
+    return executeCandidates([{
+      providerId: input.provider.id,
+      model: input.model,
+      transport: input.transport,
+      profile,
+      execute: async (text, requestOpts) => {
+        const guard = requestOpts?.beforeDispatch;
+        const routeCurrent = () => input.routeStillCurrent?.() ?? true;
+        // The caller's own route read (a voice call rereads the companion's provider/model).
+        const callerRouteCurrent = async () => !guard || await guard({
+          providerId: input.provider.id,
+          agentKind: input.agentKind,
+          model: input.model,
+        });
+        const stream = fenceStreamedText(requestOpts?.onText, requestOpts?.signal ?? input.signal, routeCurrent);
+        let reply: string;
+        try {
+          reply = await requestNative({
+            prompt: text,
+            providerId: input.provider.id,
+            model: input.model,
+            sessionId: input.sessionId,
+            systemPrompt: requestOpts?.systemPrompt,
+            timeoutMs: requestOpts?.timeoutMs ?? input.timeoutMs,
+            signal: stream.signal,
+            disableReasoning: requestOpts?.disableReasoning ?? input.disableReasoning,
+            onText: stream.onText,
+            beforeDispatch: async () => routeCurrent() && await callerRouteCurrent() && routeCurrent(),
+            // Runs inside the metered context: keeps the caller's source and task.
+            onUsage: ({ model, ...tokens }) => recordUsage(tokens, NATIVE_SUBSCRIPTION_CLI_TRANSPORT, input.model, model),
+          });
+        } catch (error) {
+          if (stream.stale()) throw new UtilityTextExecutionError({ reason: 'request_failed' });
+          throw error;
+        }
+        // Like the HTTP path: a complete reply cannot outlive the route that sent it,
+        // whether the catalog route (provider disabled, reconfigured or its model
+        // removed) or the caller's route (another provider or model selected).
+        if (stream.stale() || !routeCurrent() || !(await callerRouteCurrent()) || !routeCurrent()) {
+          throw new UtilityTextExecutionError({ reason: 'request_failed' });
+        }
+        return reply;
+      },
+    }], prompt, [], input);
   }
 
   if (isOpenAiSubscriptionProvider(input.provider)) {

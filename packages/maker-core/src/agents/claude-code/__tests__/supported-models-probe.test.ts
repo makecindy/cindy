@@ -5,7 +5,7 @@ import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { AgentDeps } from '../../base-agent.js';
-import type { AuthAdapter } from '../../../interfaces/auth-adapter.js';
+import { NATIVE_SUBSCRIPTION_ACCOUNT, type AuthAdapter } from '../../../interfaces/auth-adapter.js';
 import type { Logger } from '../../../interfaces/logger.js';
 
 const sdkMock = vi.hoisted(() => ({
@@ -18,7 +18,8 @@ vi.mock('@anthropic-ai/claude-agent-sdk', () => ({
   query: sdkMock.query,
 }));
 
-import { ClaudeCodeAgent, setClaudeSupportedModelsListener } from '../index.js';
+import { ClaudeCodeAgent, setClaudeRateLimitInfoListener, setClaudeSupportedModelsListener } from '../index.js';
+import { OneShotError } from '../../base-agent.js';
 
 function createNoopLogger(): Logger {
   const logger: Logger = {
@@ -152,5 +153,139 @@ describe('ClaudeCodeAgent.refreshLocalModels(主动读取订阅模型清单)', (
     // Unit #11880: hosts need the original failure to classify it; legacy callers keep false.
     await expect(agent.refreshLocalModels({ throwOnError: true })).rejects.toBe(failure);
     expect(q.close).toHaveBeenCalledTimes(2);
+  });
+});
+
+// 测试价值:伙伴语音通话选 Claude 订阅时,回复只能由 Claude Code CLI 用自己的登录作答
+// (Cindy 不经手订阅凭证)。经公开入口 nativeSubscriptionText 断言:CLI 在空目录里无工具、
+// 无设置、无 MCP、不落盘地跑一轮,流式文本与最终结果交回调用方;未登录或派发守卫拒绝时
+// 不起 CLI;CLI 报错结果映射为 OneShotError。unit:SDK query 为内存 fake。
+function fakeTextQuery(messages: unknown[]) {
+  return Object.assign((async function* () { yield* messages; })(), { close: vi.fn() });
+}
+
+describe('ClaudeCodeAgent.nativeSubscriptionText(订阅登录的无状态文本请求)', () => {
+  it('隔离运行一轮:无工具/设置/MCP/会话落盘,流式文本与结果交回,结束后清理', async () => {
+    const q = fakeTextQuery([
+      { type: 'stream_event', parent_tool_use_id: null, event: { type: 'content_block_delta', delta: { type: 'text_delta', text: '{"say":' } } },
+      { type: 'stream_event', parent_tool_use_id: null, event: { type: 'content_block_delta', delta: { type: 'text_delta', text: '"hi"}' } } },
+      {
+        type: 'result', subtype: 'success', is_error: false, result: ' {"say":"hi"} ',
+        modelUsage: { 'claude-opus-4-5': { inputTokens: 40, outputTokens: 9, cacheReadInputTokens: 5, cacheCreationInputTokens: 0 } },
+      },
+    ]);
+    sdkMock.query.mockReturnValue(q);
+    const { agent, getState } = createAgent(true);
+    const onText = vi.fn();
+    const beforeDispatch = vi.fn(async () => true);
+    const onUsage = vi.fn();
+
+    await expect(agent.nativeSubscriptionText('user words', {
+      model: 'claude-opus-4-5', systemPrompt: 'call rules', disableReasoning: true, onText, beforeDispatch, onUsage,
+    })).resolves.toBe('{"say":"hi"}');
+    // Greptile P2 (PR #12756): the CLI's token usage reaches the host ledger.
+    expect(onUsage).toHaveBeenCalledWith({
+      model: 'claude-opus-4-5', inputTokens: 40, outputTokens: 9, cacheReadTokens: 5, cacheCreateTokens: 0,
+    });
+
+    expect(getState).toHaveBeenCalledWith({ credentialMode: 'oauth-bearer' });
+    expect(beforeDispatch).toHaveBeenCalledTimes(1);
+    expect(onText.mock.calls.map(([text]) => text)).toEqual(['{"say":', '{"say":"hi"}']);
+    const [{ prompt, options }] = sdkMock.query.mock.calls[0] as [{ prompt: string; options: Record<string, unknown> }];
+    expect(prompt).toBe('user words');
+    expect(options).toMatchObject({
+      model: 'claude-opus-4-5',
+      systemPrompt: 'call rules',
+      tools: [],
+      mcpServers: {},
+      strictMcpConfig: true,
+      settingSources: [],
+      persistSession: false,
+      maxTurns: 1,
+      includePartialMessages: true,
+      thinking: { type: 'disabled' },
+      pathToClaudeCodeExecutable: process.execPath,
+    });
+    expect(path.basename(options.cwd as string)).toMatch(/^cindy-claude-text-/);
+    await expect(fs.access(options.cwd as string)).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(q.close).toHaveBeenCalledTimes(1);
+  });
+
+  // Codex P2 (PR #12756, 653a319): like subscription sessions, the quota event reaches
+  // the host with the leased account, so quota display and pool scheduling stay current.
+  it('把订阅的 rate_limit_event 连同所用账号转交给宿主', async () => {
+    const info = { status: 'allowed_warning', rateLimitType: 'five_hour', utilization: 0.92 };
+    sdkMock.query.mockReturnValue(fakeTextQuery([
+      { type: 'rate_limit_event', rate_limit_info: info, session_id: 'sdk' },
+      { type: 'result', subtype: 'success', is_error: false, result: 'ok' },
+    ]));
+    const seen: unknown[][] = [];
+    setClaudeRateLimitInfoListener((value, account) => { seen.push([value, account?.id]); });
+    const account = { id: 'acct-1', configDir: os.tmpdir(), assertCurrent: vi.fn(), readState: vi.fn() };
+    const { agent } = createAgent(true);
+    try {
+      await expect(agent.nativeSubscriptionText('x', {
+        model: 'claude-opus-4-5', [NATIVE_SUBSCRIPTION_ACCOUNT]: account,
+      })).resolves.toBe('ok');
+    } finally {
+      setClaudeRateLimitInfoListener(null);
+    }
+    expect(seen).toEqual([[info, 'acct-1']]);
+  });
+
+  it('未登录订阅或派发守卫拒绝时不起 CLI', async () => {
+    const { agent: unauthed } = createAgent(false);
+    await expect(unauthed.nativeSubscriptionText('x', { model: 'claude-opus-4-5' }))
+      .rejects.toMatchObject({ name: 'OneShotError', reason: 'auth' });
+
+    const { agent } = createAgent(true);
+    await expect(agent.nativeSubscriptionText('x', { model: 'claude-opus-4-5', beforeDispatch: async () => false }))
+      .rejects.toBeInstanceOf(OneShotError);
+
+    expect(sdkMock.query).not.toHaveBeenCalled();
+  });
+
+  it('CLI 以错误结果结束时抛 OneShotError,不返回空文本', async () => {
+    const q = fakeTextQuery([{
+      type: 'result', subtype: 'error_during_execution', is_error: true,
+      usage: { input_tokens: 30, output_tokens: 0, cache_read_input_tokens: null, cache_creation_input_tokens: null },
+    }]);
+    sdkMock.query.mockReturnValue(q);
+    const { agent } = createAgent(true);
+    const onUsage = vi.fn();
+
+    await expect(agent.nativeSubscriptionText('x', { model: 'claude-opus-4-5', onUsage }))
+      .rejects.toMatchObject({ name: 'OneShotError', reason: 'network' });
+    // Tokens already consumed by a failed turn are still reported (main-loop usage fallback).
+    expect(onUsage).toHaveBeenCalledWith(expect.objectContaining({ model: 'claude-opus-4-5', inputTokens: 30 }));
+    expect(q.close).toHaveBeenCalledTimes(1);
+  });
+
+  // Codex P2 (PR #12756, 26afa31): without a rate_limit_event, the CLI's own failure detail
+  // is the only evidence the host's account pool has to cool a signed-out, overloaded or
+  // exhausted account; the error used to carry only the result subtype.
+  it.each([
+    {
+      name: 'API 错误 envelope(登录失效)',
+      messages: [
+        { type: 'assistant', parent_tool_use_id: null, error: 'authentication_failed',
+          message: { content: [{ type: 'text', text: 'Invalid API key · Please run /login' }] } },
+        { type: 'result', subtype: 'success', is_error: true, result: 'Invalid API key · Please run /login' },
+      ],
+      failure: { message: 'Invalid API key · Please run /login', sdkError: 'authentication_failed' },
+    },
+    {
+      name: '重试用尽(过载)',
+      messages: [
+        { type: 'system', subtype: 'api_retry', attempt: 10, max_retries: 10, retry_delay_ms: 0, error_status: 529, error: 'overloaded' },
+        { type: 'result', subtype: 'error_during_execution', is_error: true, errors: ['Overloaded'] },
+      ],
+      failure: { sdkError: 'overloaded', errorStatus: 529 },
+    },
+  ])('CLI 失败结果把非敏感失败信号随 OneShotError 交回:$name', async ({ messages, failure }) => {
+    sdkMock.query.mockReturnValue(fakeTextQuery(messages));
+    const { agent } = createAgent(true);
+    await expect(agent.nativeSubscriptionText('x', { model: 'claude-opus-4-5' }))
+      .rejects.toMatchObject({ name: 'OneShotError', reason: 'network', failure: expect.objectContaining(failure) });
   });
 });

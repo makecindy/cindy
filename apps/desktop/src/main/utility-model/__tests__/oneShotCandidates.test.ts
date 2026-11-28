@@ -125,7 +125,7 @@ vi.mock('../../model-access/gatewayKeyRejection.js', () => ({
   reportCindyGatewayKeyRejected: vi.fn(),
 }));
 
-import type { Maker } from '@cindy/maker-core';
+import { NATIVE_SUBSCRIPTION_ACCOUNT, OneShotError, type Maker } from '@cindy/maker-core';
 // model-compat's own profile table; one test adds a temporary gateway-object
 // profile because the only real one (cline-pass) shares its address with a
 // conflicting profile and never resolves.
@@ -159,6 +159,7 @@ import {
   requestDedicatedAutoReviewCandidateText,
   requestExplicitUtilityText,
   requestUtilityText,
+  setNativeSubscriptionTextRunner,
   toAnthropicApiModelId,
 } from '../oneShotCandidates.js';
 import { __testing as health, dismissAuxiliaryModelNotice, setAuxiliaryModelHealthBroadcaster, getAuxiliaryModelHealthSnapshot } from '../auxiliary-model-health.js';
@@ -3060,6 +3061,312 @@ describe('utility one-shot candidates', () => {
       attempts: [expect.objectContaining({ status: 'skipped', reason: 'not_authenticated' })],
     });
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  // 测试价值:伙伴语音通话(voice-dialogue)显式选 Claude 订阅路由时,旧实现在发请求前就
+  // 返回 no_candidate,通话每句都以 task_cancelled 结束(2026-11-24 v0.1.145 现象)。经公开入口
+  // requestExplicitUtilityText 断言:回复由 Claude Code CLI 入口作答、不发 HTTP、派发前的归属
+  // 守卫仍生效;多账号时跟随伙伴任务绑定的账号。unit:runner 为内存 fake。
+  describe('Claude 订阅显式路由允许 CLI 作答(伙伴语音通话)', () => {
+    const subscriptionCatalog = {
+      providers: [{
+        id: 'anthropic',
+        name: 'Anthropic',
+        source: 'builtin',
+        agents: ['claude-code'],
+        auth: { method: 'oauth' },
+        routing: {
+          'claude-code': { upstream: 'https://anthropic.example/api/v1', authStrategy: 'oauth-passthrough' },
+        },
+        models: {
+          'claude-code': [{ id: 'claude-opus-4-5', name: 'Opus', contextWindow: 200_000, maxOutput: 64_000 }],
+        },
+      }],
+    } as never;
+    afterEach(() => setNativeSubscriptionTextRunner(null));
+
+    it('opt-in 请求由 CLI 入口作答,派发守卫拒绝时不启动请求', async () => {
+      activeCatalog.mockReturnValue(subscriptionCatalog);
+      let allow = true;
+      const routes: unknown[] = [];
+      const runner = vi.fn(async (prompt: string, opts: import('@cindy/maker-core').NativeSubscriptionTextOptions) => {
+        if (opts.beforeDispatch && !(await opts.beforeDispatch())) throw new Error('guard rejected');
+        opts.onText?.('{"say":"你好"}');
+        return `reply:${prompt}`;
+      });
+      setNativeSubscriptionTextRunner(runner);
+      const onText = vi.fn();
+      const request = () => requestExplicitUtilityText('hello', {
+        source: 'voice-dialogue',
+        sessionId: 'companion-task',
+        providerId: 'anthropic',
+        agentKind: 'claude-code',
+        model: 'claude-opus-4-5',
+        systemPrompt: 'call rules',
+        disableReasoning: true,
+        timeoutMs: 60_000,
+        onText,
+        nativeSubscriptionCli: true,
+        beforeDispatch: async (route) => { routes.push(route); return allow; },
+      });
+
+      expect(await request()).toMatchObject({ ok: true, text: 'reply:hello', providerId: 'anthropic' });
+      expect(runner).toHaveBeenCalledWith('hello', expect.objectContaining({
+        model: 'claude-opus-4-5', systemPrompt: 'call rules', disableReasoning: true, timeoutMs: 60_000,
+      }));
+      expect(onText).toHaveBeenCalledWith('{"say":"你好"}');
+      // Checked before dispatch and again before the reply is accepted.
+      expect(routes).toEqual(Array(2).fill({ providerId: 'anthropic', agentKind: 'claude-code', model: 'claude-opus-4-5' }));
+      expect(acquireAccount).toHaveBeenCalledWith('anthropic', 'claude-opus-4-5', ['task:companion-task'], false, { resuming: false });
+
+      allow = false;
+      expect(await request()).toMatchObject({ ok: false });
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    // Greptile P1(PR #12756):独立 Claude 订阅连接曾按内置 anthropic 取账号,丢掉任务绑定。
+    it('独立 Claude 订阅连接在该连接内取账号,取不到账号时不借用默认登录', async () => {
+      activeCatalog.mockReturnValue({
+        providers: [{
+          id: 'claude-team', name: 'Claude Team', source: 'builtin', subscriptionPool: 'anthropic',
+          agents: ['claude-code'], auth: { method: 'oauth' },
+          routing: { 'claude-code': { upstream: 'https://anthropic.example/api/v1', authStrategy: 'oauth-passthrough' } },
+          models: { 'claude-code': [{ id: 'claude-opus-4-5', name: 'Opus', contextWindow: 200_000 }] },
+        }],
+      } as never);
+      const account = { id: 'team-acct', configDir: '/tmp/team-acct', assertCurrent: vi.fn(), readState: vi.fn() };
+      const lease = {
+        account, accountId: 'team-acct', pinned: true, assertDispatchable: vi.fn(), running: vi.fn(), release: vi.fn(),
+        observeFailure: vi.fn(), changeModel: vi.fn(), bind: vi.fn(), reserveForTask: vi.fn(),
+      };
+      const seen: unknown[] = [];
+      const runner = vi.fn(async (_prompt: string, opts: import('@cindy/maker-core').NativeSubscriptionTextOptions) => {
+        seen.push(opts[NATIVE_SUBSCRIPTION_ACCOUNT]);
+        return 'ok';
+      });
+      setNativeSubscriptionTextRunner(runner);
+      const request = () => requestExplicitUtilityText('hello', {
+        sessionId: 'companion-task', providerId: 'claude-team', agentKind: 'claude-code',
+        model: 'claude-opus-4-5', nativeSubscriptionCli: true,
+      });
+
+      acquireAccount.mockResolvedValueOnce(lease as never);
+      expect(await request()).toMatchObject({ ok: true, text: 'ok', providerId: 'claude-team' });
+      expect(acquireAccount).toHaveBeenCalledWith('claude-team', 'claude-opus-4-5', ['task:companion-task'], false, { resuming: false });
+      expect(seen).toEqual([account]);
+
+      acquireAccount.mockResolvedValueOnce(null);
+      expect(await request()).toMatchObject({ ok: false });
+      expect(runner).toHaveBeenCalledTimes(1);
+    });
+
+    // Greptile P2(PR #12756):CLI 作答的用量曾被丢弃,不进辅助用量账本。
+    it('CLI 报告的用量按调用方来源和任务记入用量账本', async () => {
+      activeCatalog.mockReturnValue(subscriptionCatalog);
+      setNativeSubscriptionTextRunner(async (_prompt, opts) => {
+        await opts.onUsage?.({ model: 'claude-opus-4-5', inputTokens: 12, outputTokens: 7, cacheReadTokens: 3 });
+        return 'ok';
+      });
+
+      expect(await requestExplicitUtilityText('hello', {
+        source: 'voice-dialogue', sessionId: 'companion-task', providerId: 'anthropic', agentKind: 'claude-code',
+        model: 'claude-opus-4-5', nativeSubscriptionCli: true,
+      })).toMatchObject({ ok: true });
+      expect(usageSink.record).toHaveBeenCalledWith(
+        expect.objectContaining({ inputTokens: 12, outputTokens: 7, cacheReadTokens: 3 }),
+        expect.objectContaining({
+          source: 'voice-dialogue', sessionId: 'companion-task', providerId: 'anthropic',
+          model: 'claude-opus-4-5', transport: 'claude-code-cli',
+        }),
+      );
+      expect(usageSink.close).toHaveBeenCalledOnce();
+    });
+
+    // Codex P2(PR #12756,653a319):账号在等待路由守卫期间、或在 CLI 作答期间失效／换来源,
+    // 以及路由在作答期间失效时,不能派发或交出回复(按 request_failed,通话不会念出)。
+    it('等待守卫期间账号失效不派发;作答期间账号或路由变化时拒绝回复', async () => {
+      activeCatalog.mockReturnValue(subscriptionCatalog);
+      const account = { id: 'acct-1', configDir: '/tmp/acct-1', assertCurrent: vi.fn(), readState: vi.fn() };
+      let usable = true;
+      const lease = {
+        account, accountId: 'acct-1', pinned: true,
+        assertDispatchable: vi.fn(() => { if (!usable) throw new Error('account paused'); }),
+        running: vi.fn(), release: vi.fn(),
+        observeFailure: vi.fn(), changeModel: vi.fn(), bind: vi.fn(), reserveForTask: vi.fn(),
+      };
+      acquireAccount.mockResolvedValue(lease as never);
+      let dispatched = 0;
+      let duringTurn: () => void = () => {};
+      setNativeSubscriptionTextRunner(async (_prompt, opts) => {
+        if (opts.beforeDispatch && !(await opts.beforeDispatch())) throw new Error('guard rejected');
+        dispatched += 1;
+        duringTurn();
+        return '{"say":"hi"}';
+      });
+      let pauseWhileGuarding = false;
+      const request = () => requestExplicitUtilityText('hello', {
+        sessionId: 'companion-task', providerId: 'anthropic', agentKind: 'claude-code',
+        model: 'claude-opus-4-5', nativeSubscriptionCli: true,
+        beforeDispatch: async () => {
+          if (pauseWhileGuarding) usable = false;
+          return true;
+        },
+      });
+
+      // 1. Paused while the caller's async route/owner guard was running.
+      pauseWhileGuarding = true;
+      expect(await request()).toMatchObject({ ok: false });
+      expect(dispatched).toBe(0);
+
+      // 2. Account paused while the CLI was answering: the reply is rejected.
+      pauseWhileGuarding = false;
+      usable = true;
+      duringTurn = () => { usable = false; };
+      expect(await request()).toMatchObject({
+        ok: false, attempts: [expect.objectContaining({ status: 'failed', reason: 'request_failed' })],
+      });
+      expect(dispatched).toBe(1);
+
+      // 3. Route disabled while the CLI was answering (model removed from the catalog).
+      usable = true;
+      duringTurn = () => {
+        activeCatalog.mockReturnValue({
+          providers: [{ ...(subscriptionCatalog as { providers: Record<string, unknown>[] }).providers[0], models: { 'claude-code': [] } }],
+        } as never);
+      };
+      expect(await request()).toMatchObject({
+        ok: false, attempts: [expect.objectContaining({ status: 'failed', reason: 'request_failed' })],
+      });
+      expect(dispatched).toBe(2);
+      expect(lease.release).toHaveBeenCalledTimes(3);
+    });
+
+    it('有账号池时使用伙伴任务绑定的账号,账号失效则不派发', async () => {
+      activeCatalog.mockReturnValue(subscriptionCatalog);
+      const account = { id: 'acct-1', configDir: '/tmp/acct-1', assertCurrent: vi.fn(), readState: vi.fn() };
+      let dispatchable = true;
+      const lease = {
+        account, accountId: 'acct-1', pinned: true,
+        assertDispatchable: vi.fn(() => { if (!dispatchable) throw new Error('account disabled'); }),
+        running: vi.fn(), release: vi.fn(),
+        observeFailure: vi.fn(), changeModel: vi.fn(), bind: vi.fn(), reserveForTask: vi.fn(),
+      };
+      acquireAccount.mockResolvedValue(lease as never);
+      const seen: unknown[] = [];
+      setNativeSubscriptionTextRunner(async (_prompt, opts) => {
+        seen.push(opts[NATIVE_SUBSCRIPTION_ACCOUNT]);
+        if (opts.beforeDispatch && !(await opts.beforeDispatch())) throw new Error('guard rejected');
+        return 'ok';
+      });
+      const request = () => requestExplicitUtilityText('hello', {
+        sessionId: 'companion-task', providerId: 'anthropic', agentKind: 'claude-code',
+        model: 'claude-opus-4-5', nativeSubscriptionCli: true,
+      });
+
+      expect(await request()).toMatchObject({ ok: true, text: 'ok' });
+      expect(seen).toEqual([account]);
+      expect(lease.running).toHaveBeenCalledWith(true);
+      expect(lease.release).toHaveBeenCalledTimes(1);
+
+      // The account is checked once when leased; it becomes unusable before dispatch.
+      lease.assertDispatchable.mockImplementationOnce(() => {}).mockImplementation(() => {
+        if (!dispatchable) throw new Error('account disabled');
+      });
+      dispatchable = false;
+      expect(await request()).toMatchObject({ ok: false });
+      expect(lease.release).toHaveBeenCalledTimes(2);
+    });
+
+    function poolLease() {
+      let usable = true;
+      const lease = {
+        account: { id: 'acct-1', configDir: '/tmp/acct-1', assertCurrent: vi.fn(), readState: vi.fn() },
+        accountId: 'acct-1', pinned: true,
+        assertDispatchable: vi.fn(() => { if (!usable) throw new Error('account paused'); }),
+        running: vi.fn(), release: vi.fn(),
+        observeFailure: vi.fn(() => true), changeModel: vi.fn(), bind: vi.fn(), reserveForTask: vi.fn(),
+      };
+      acquireAccount.mockResolvedValue(lease as never);
+      return { lease, pause: () => { usable = false; } };
+    }
+
+    // Codex P2 (PR #12756, 26afa31): with sentence playback, each complete streamed line is
+    // spoken at once, so a line streamed after the account was paused or the route was
+    // reconfigured must not reach the call; the request is cancelled and the reply rejected.
+    it.each(['account', 'route'] as const)('流式文本在%s失效后不再转给通话,并取消请求', async (invalidated) => {
+      activeCatalog.mockReturnValue(subscriptionCatalog);
+      const { pause } = poolLease();
+      const invalidate = invalidated === 'account' ? pause : () => {
+        activeCatalog.mockReturnValue({
+          providers: [{ ...(subscriptionCatalog as { providers: Record<string, unknown>[] }).providers[0], models: { 'claude-code': [] } }],
+        } as never);
+      };
+      let cancelled: boolean | undefined;
+      setNativeSubscriptionTextRunner(async (_prompt, opts) => {
+        if (opts.beforeDispatch && !(await opts.beforeDispatch())) throw new Error('guard rejected');
+        opts.onText?.('{"say":"一"}\n');
+        invalidate();
+        opts.onText?.('{"say":"一"}\n{"say":"二"}\n');
+        cancelled = opts.signal?.aborted;
+        return '{"say":"一"}\n{"say":"二"}';
+      });
+      const onText = vi.fn();
+
+      expect(await requestExplicitUtilityText('hello', {
+        sessionId: 'companion-task', providerId: 'anthropic', agentKind: 'claude-code',
+        model: 'claude-opus-4-5', nativeSubscriptionCli: true, onText,
+      })).toMatchObject({ ok: false, attempts: [expect.objectContaining({ status: 'failed', reason: 'request_failed' })] });
+      expect(onText.mock.calls).toEqual([['{"say":"一"}\n']]);
+      expect(cancelled).toBe(true);
+    });
+
+    // Codex P2 (PR #12756, 26afa31): the companion's provider/model can change during the
+    // CLI turn while the old provider stays enabled; only the caller's guard sees that.
+    it('作答期间伙伴换了来源或模型时,回复按 request_failed 拒绝', async () => {
+      activeCatalog.mockReturnValue(subscriptionCatalog);
+      let answered = false;
+      setNativeSubscriptionTextRunner(async (_prompt, opts) => {
+        if (opts.beforeDispatch && !(await opts.beforeDispatch())) throw new Error('guard rejected');
+        answered = true;
+        return '{"say":"hi"}';
+      });
+      const guard = vi.fn(async () => !answered);
+
+      expect(await requestExplicitUtilityText('hello', {
+        sessionId: 'companion-task', providerId: 'anthropic', agentKind: 'claude-code',
+        model: 'claude-opus-4-5', nativeSubscriptionCli: true, beforeDispatch: guard,
+      })).toMatchObject({ ok: false, attempts: [expect.objectContaining({ status: 'failed', reason: 'request_failed' })] });
+      expect(guard).toHaveBeenCalledTimes(2);
+    });
+
+    // Codex P2 (PR #12756, 26afa31): a CLI auth/overload/usage-limit failure without a
+    // rate_limit_event must reach the lease before it is released, so the pool cools the
+    // account instead of admitting it again; a cancelled request reports nothing.
+    it('CLI 失败信号在释放租约前交给账号池,取消的请求不上报', async () => {
+      activeCatalog.mockReturnValue(subscriptionCatalog);
+      const { lease } = poolLease();
+      const failure = { message: 'API Error: 401 authentication_error', sdkError: 'authentication_failed', errorStatus: 401 };
+      setNativeSubscriptionTextRunner(async () => {
+        throw new OneShotError('network', 'Claude subscription request ended: success', failure);
+      });
+      const request = (signal?: AbortSignal) => requestExplicitUtilityText('hello', {
+        sessionId: 'companion-task', providerId: 'anthropic', agentKind: 'claude-code',
+        model: 'claude-opus-4-5', nativeSubscriptionCli: true, signal,
+      });
+
+      expect(await request()).toMatchObject({ ok: false });
+      expect(lease.observeFailure).toHaveBeenCalledWith(failure, 'claude-opus-4-5', 'run');
+      expect(lease.observeFailure.mock.invocationCallOrder[0]).toBeLessThan(lease.release.mock.invocationCallOrder[0]);
+
+      const controller = new AbortController();
+      setNativeSubscriptionTextRunner(async () => {
+        controller.abort();
+        throw new Error('aborted');
+      });
+      expect(await request(controller.signal)).toMatchObject({ ok: false });
+      expect(lease.observeFailure).toHaveBeenCalledTimes(1);
+      expect(lease.release).toHaveBeenCalledTimes(2);
+    });
   });
 
   it('toAnthropicApiModelId:剥掉尾部 [1m],其余 id 原样返回(防御显示 id 泄入)', () => {
