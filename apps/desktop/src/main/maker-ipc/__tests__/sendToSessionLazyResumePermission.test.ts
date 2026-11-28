@@ -86,10 +86,13 @@ describe('sendToSessionInternal lazy-resume permission mode', () => {
     expect(registerSource.slice(call, close)).toContain('resumeWithStoredPermissionMode: true,');
   });
 
-  it('reads the persisted permission mode in the row snapshot used by lazy resume', () => {
+  it('reads the persisted permission mode, effort, and fastMode in the row snapshot used by lazy resume', () => {
     const sessionsSource = readFileSync(resolve(__dirname, '..', '..', 'localDb', 'sessionDispatchSnapshot.ts'), 'utf8');
     const select = sessionsSource.slice(sessionsSource.indexOf('async function selectSessionRowSnapshot('));
-    expect(select.slice(0, select.indexOf('.from(sessions)'))).toContain('permissionMode: sessions.permissionMode,');
+    const fields = select.slice(0, select.indexOf('.from(sessions)'));
+    expect(fields).toContain('permissionMode: sessions.permissionMode,');
+    expect(fields).toContain('effort: sessions.effort,');
+    expect(fields).toContain('fastMode: sessions.fastMode,');
   });
 
   it('refreshes permissionMode from DB before a queued follow-up starts the harness', async () => {
@@ -168,7 +171,7 @@ const loadBotTaskDispatch = new Function(
 };
 
 function botTaskDispatchHarness(
-  rows: Record<string, { permissionMode: string | null; planModeEnabled: boolean }>,
+  rows: Record<string, { permissionMode: string | null; planModeEnabled: boolean; effort?: string | null; fastMode?: boolean | string | null; providerId?: string | null }>,
   live: Record<string, object> = {},
   overrides: Record<string, unknown> = {},
 ) {
@@ -434,6 +437,62 @@ it.each(['continue', 'fork'] as const)('preserves stored permissions through plu
     expect(h.bootstrapped[0]).toMatchObject({ id: target, permissionMode, planMode: rows[target]!.planModeEnabled });
     expect(h.sentTo).toEqual([{ sessionId: target, planMode: false }]);
   }
+});
+
+// Regression (guard): clicking Publish on a PR card (`cindy.agent.run` mode='continue') or
+// any `sendToSessionInternal` lazy-resume previously omitted `effort` and `fastMode`, silently
+// downgrading ACP tasks (e.g. gemini-4-neon xhigh -> high) and wiping prompt cache twice.
+// Minimal failing input: cold ACP/built-in row with stored effort='xhigh' resumed via continue. tier: guard.
+it.each([
+  { agentKind: 'acp' as const, storedEffort: 'xhigh', storedFastMode: true, expectedFastMode: false },
+  { agentKind: 'codex' as const, storedEffort: 'xhigh', storedFastMode: true, expectedFastMode: true },
+])('preserves stored effort and fastMode on $agentKind lazy resume via plugin continue', async ({ agentKind, storedEffort, storedFastMode, expectedFastMode }) => {
+  const rows = {
+    source: {
+      permissionMode: 'bypassPermissions',
+      planModeEnabled: false,
+      effort: storedEffort,
+      fastMode: storedFastMode,
+      providerId: agentKind === 'acp' ? 'acp-plugin:_root__cindy-antigravity-acp:agy' : 'openai',
+    },
+  };
+  const getSessionMeta = async (id: string) => ({
+    id,
+    agentKind,
+    workDir: '/tmp/fixture/source',
+    model: agentKind === 'acp' ? 'gemini-4-neon' : 'gpt-6.2-sol',
+    providerId: rows.source.providerId,
+    agentDeviceId: undefined,
+    remoteHostId: undefined,
+    sdkSessionId: `sdk-${id}`,
+  });
+  const h = botTaskDispatchHarness(rows, {}, {
+    maker: { getSession: () => undefined, getSessionMeta },
+  });
+  const runner = createGhostAgentTurnRunner({
+    readSessionMeta: getSessionMeta,
+    admitLocalSession: async () => undefined,
+    readPluginName: () => 'GitHub',
+    send: h.sendToSessionInternal,
+    readLatestAssistant: async () => undefined,
+    forkSessionAtMessage: async () => { throw new Error('Not a fork'); },
+    broadcastSessionCreated: () => {},
+  });
+  expect(await runner({
+    ghostId: 'cindy-github',
+    ghostVersion: '1.5.5',
+    sourceSessionId: 'source',
+    mode: 'continue',
+    prompt: 'Publish PR',
+    persistedContent: 'Publish PR',
+  })).toEqual({ ok: true, sessionId: 'source', disposition: 'resumed' });
+  expect(h.bootstrapped).toHaveLength(1);
+  expect(h.bootstrapped[0]).toMatchObject({
+    id: 'source',
+    agentKind,
+    effort: storedEffort,
+    fastMode: expectedFastMode,
+  });
 });
 
 // #9489 acceptance gap (guard): a mocked runner send result cannot prove that
@@ -1202,6 +1261,49 @@ describe('unbound Codex pre-send history wiring', () => {
     expect(rebuild).toHaveBeenCalledExactlyOnceWith('old-task', assertCurrent);
     expect(cancelUsageLimitWait).toHaveBeenCalledExactlyOnceWith('old-task');
     expect(order).toEqual(['durable-handoff', 'cancel-wait']);
+    expect(failover).not.toHaveBeenCalled();
+  });
+
+  // 2026-11-28 regression: plugin engine account handoffs must forward `retry` (so zero-progress
+  // auto-retries do not duplicate the user message in context handoff) and `invokeRemote` (remote Agent).
+  it('forwards retry context and invokeRemote to plugin engine account handoffs before cancelling the usage wait', async () => {
+    const start = registerSource.indexOf('export async function prepareUnhealthySessionForSend(');
+    const end = registerSource.indexOf('let runtimePluginBudgetClearer:', start);
+    const body = ts.transpileModule(registerSource.slice(start, end).replace('export ', ''), {
+      compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None },
+    }).outputText;
+    const assertCurrent = vi.fn();
+    const prepareNativeSessionRecovery = vi.fn(async (_id: string, _mode: string, check: () => void) => { check(); });
+    const cancelUsageLimitWait = vi.fn();
+    const invokeRemote = vi.fn();
+    const retry = { clientId: 'retry-1', text: 'continue' };
+    const pluginPrepare = vi.fn(async (id: string, deps: {
+      invokeRemote?: unknown;
+      rebuild(id: string, check: () => void): Promise<void>;
+    }) => {
+      expect(deps.invokeRemote).toBe(invokeRemote);
+      await deps.rebuild(id, assertCurrent);
+      return true;
+    });
+    const prepare = vi.fn();
+    const failover = vi.fn();
+    const ports = {
+      withRemoteAccountReads,
+      subscriptionAccountRecoveryDeps: { rebuild: vi.fn(), invokeRemote, isRunning: vi.fn(), log: vi.fn() },
+      readCodexThreadStorageReadOnly: vi.fn(),
+      preparePluginEngineAccountForSend: pluginPrepare,
+      readSubscriptionRuntimeSession: vi.fn(),
+      prepareSubscriptionAccountForSend: prepare,
+      prepareSubscriptionAccountFailover: failover,
+      agentInputCoordinatorHolder: { cancelUsageLimitWait, getInputAbortSignal: () => undefined },
+      contextOverflowRolloverHolder: { prepareNativeSessionRecovery },
+    };
+    const run = new Function(...Object.keys(ports), `${body}; return prepareUnhealthySessionForSend;`)(...Object.values(ports));
+    expect(await run('acp-task', retry)).toBe(true);
+    expect(pluginPrepare).toHaveBeenCalledOnce();
+    expect(prepareNativeSessionRecovery).toHaveBeenCalledExactlyOnceWith('acp-task', 'retain-route', assertCurrent, undefined, retry);
+    expect(cancelUsageLimitWait).toHaveBeenCalledExactlyOnceWith('acp-task');
+    expect(prepare).not.toHaveBeenCalled();
     expect(failover).not.toHaveBeenCalled();
   });
 });

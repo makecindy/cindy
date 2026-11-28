@@ -4654,16 +4654,20 @@ export function applyDirectoryGrants(
         : maker.closeSession(sessionId)),
     });
     if (result.changed && axis === 'extraDirs' && sess?.requiresRuntimeRecycleForExtraDirs?.()) {
-      // ACP only accepts `additionalDirectories` on session/new, session/resume, and session/load.
-      // Recycle the live runtime (immediately when idle, or after the current turn) only when the
-      // session actually binds native `additionalDirectories` at session open.
-      await withRehydrateCloseSuppressed(sessionId, () =>
-        maker.closeSessionIfCurrent(
-          sess,
-          'runtime-refresh',
-          sess.isTurnRunning() ? { afterCurrentTurn: true } : undefined,
-        ),
-      );
+      // ACP only binds user `additionalDirectories` on session/new, session/resume, and
+      // session/load; host-owned plugin library slots are delivered per turn via
+      // `<cindy-library-native-read>` without mutating handshake `additionalDirectories`.
+      // Skip runtime recycle on focus-driven library slot sync so live ACP processes keep
+      // their prompt cache intact across tab switches.
+      if (!options.replaceLibrarySlot) {
+        await withRehydrateCloseSuppressed(sessionId, () =>
+          maker.closeSessionIfCurrent(
+            sess,
+            'runtime-refresh',
+            sess.isTurnRunning() ? { afterCurrentTurn: true } : undefined,
+          ),
+        );
+      }
     }
     if (result.changed || result.rejectedCount > 0) log.info(label, {
       sessionId,
@@ -5361,7 +5365,7 @@ async function readSubscriptionRuntimeSession(id: string) {
   const row = await getSessionRowSnapshotStrict(id);
   if (!sessionRuntimeControlOwnerEpochMatches(owner)) throw new Error('Subscription account owner changed');
   const effective = getSessionRuntimeControlSnapshot(id).effectiveOverride;
-  return row && effective && effective.agentKind === dbToMakerAgentKind(row.agentKind)
+  return row && effective && effective.agentKind === dbToMakerEngineKind(row.agentKind)
     && (effective.agentDeviceId ?? null) === (row.agentDeviceId ?? null)
     ? { ...row, model: effective.model, providerId: effective.providerId } : row;
 }
@@ -5401,7 +5405,7 @@ const subscriptionAccountRecoveryDeps = {
 
 /** 同池是否存在另一个此刻可接手该任务的健康账号（订阅池 / 混合池 / 插件引擎多账号池）。 */
 export async function canSwitchTaskAccount(sessionId: string): Promise<boolean> {
-  return (await canSwitchPluginEngineTaskAccount(sessionId, readSubscriptionRuntimeSession).catch(() => false))
+  return (await canSwitchPluginEngineTaskAccount(sessionId, readSubscriptionRuntimeSession, remoteBackgroundInvoke).catch(() => false))
     || canSwitchSubscriptionAccount(sessionId, readSubscriptionRuntimeSession, remoteBackgroundInvoke);
 }
 
@@ -5417,16 +5421,6 @@ async function prepareSessionAccountsAndHistory(
   sessionId: string,
   retry?: Parameters<NonNullable<typeof contextOverflowRolloverHolder>['prepareNativeSessionRecovery']>[4],
 ): Promise<boolean> {
-  // Plugin engine accounts (subscription-account-pools.md 插件引擎的账号) hand off the same way.
-  const pluginSwitched = await preparePluginEngineAccountForSend(sessionId, {
-    readSession: readSubscriptionRuntimeSession,
-    isRunning: subscriptionAccountRecoveryDeps.isRunning,
-    rebuild: async (id, assertCurrent) => {
-      await subscriptionAccountRecoveryDeps.rebuild(id, assertCurrent);
-      agentInputCoordinatorHolder?.cancelUsageLimitWait(id);
-    },
-    log: subscriptionAccountRecoveryDeps.log,
-  });
   const accountRecovery = retry ? {
     ...subscriptionAccountRecoveryDeps,
     rebuild: async (id: string, assertCurrent: () => void) => {
@@ -5436,6 +5430,17 @@ async function prepareSessionAccountsAndHistory(
         agentInputCoordinatorHolder?.getInputAbortSignal(id), retry);
     },
   } : subscriptionAccountRecoveryDeps;
+  // Plugin engine accounts (subscription-account-pools.md 插件引擎的账号) hand off the same way.
+  const pluginSwitched = await preparePluginEngineAccountForSend(sessionId, {
+    readSession: readSubscriptionRuntimeSession,
+    isRunning: accountRecovery.isRunning,
+    invokeRemote: accountRecovery.invokeRemote,
+    rebuild: async (id, assertCurrent) => {
+      await accountRecovery.rebuild(id, assertCurrent);
+      agentInputCoordinatorHolder?.cancelUsageLimitWait(id);
+    },
+    log: accountRecovery.log,
+  });
   const switched = pluginSwitched || await prepareSubscriptionAccountForSend(sessionId, {
     ...accountRecovery,
     resolveCodexHistoryHome: async threadId => (await readCodexThreadStorageReadOnly(threadId))?.historyHome,
@@ -13866,12 +13871,20 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       }
 
       lockStage = 'lazy-resume-bootstrap';
+      const storedEffort = dbRow.effort ?? meta.effort;
+      const storedFastMode = dbRow.fastMode ?? meta.fastMode;
       try {
         const createOpts = buildCreateOptsWithStderr({
           id: targetSessionId,
           agentKind: targetAgentKind,
           workingDir: meta.workDir,
           model: meta.model,
+          ...(storedEffort ? { effort: storedEffort as CreateOpts['effort'] } : {}),
+          ...(targetAgentKind === 'acp'
+            ? { fastMode: false }
+            : storedFastMode !== undefined && storedFastMode !== null
+              ? { fastMode: storedFastMode }
+              : {}),
           resumeSessionId: meta.sdkSessionId,
           // 插件任务的档位由用户在任务设置里给定(errand 还会再收窄),不能借 lazy-resume
           // 的缺省 bypass 提权;档位不一致还会让 errand 复用判定每轮都失败、另开新会话

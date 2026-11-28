@@ -775,19 +775,19 @@ import type {
   MobileSessionAgentSwitchIntent,
 } from '@cindy/maker-shared/device-link-contract';
 import {
-  REMOTE_MEDIA_NEVER_EXPIRES,
-  cacheInlineRemoteMedia,
-  localCopyResolvedMedia,
-  resolveMobileRemoteMedia,
   type MobileRemoteMediaPresignResult,
   type MobileResolvedRemoteMedia,
 } from '@/session/remoteMedia';
 import {
-  createRemoteMediaResolveQueue,
   type RemoteMediaRequest,
   type RemoteMediaRequestOptions,
-  type RemoteMediaResolveHooks,
 } from '@/session/remoteMediaResolveQueue';
+import {
+  createCachedRemoteMediaQueue,
+  remoteMediaDiskSource,
+  sharedRemoteMediaDiskCache,
+  type CachedRemoteMediaQueue,
+} from '@/session/cachedRemoteMediaQueue';
 import { ChatFilePathContext, type ChatFilePathContextValue, type ChatFilePathTarget } from '@/session/chatFilePathContext';
 import { pathDisplayName } from '@/session/chatPathCandidate';
 import { fetchRemoteAbsFileToUrl } from '@/session/remoteAbsFileFetch';
@@ -804,10 +804,8 @@ import { mergePathIntoComposerDraft, shareMimeForFileName } from '@/session/file
 import { exportRemoteFileToUrl } from '@/session/fileBrowserExport';
 import { normalizeRemoteOpDirEntries, parentRelPath } from '@/session/fileBrowserGrid';
 import * as Clipboard from 'expo-clipboard';
-import { createRemoteMediaDiskCache, imageMimeFromUrl, type RemoteMediaDiskCache } from '@/session/remoteMediaDiskCache';
-import { createExpoRemoteMediaDiskCacheIO, downloadRemoteMediaShareTemp } from '@/session/remoteMediaDiskCacheExpo';
-import { Paths } from 'expo-file-system';
-import { PEER_FILE_DISK_RESERVE_BYTES } from '@/device-link/peerFileRegistry';
+import { imageMimeFromUrl } from '@/session/remoteMediaDiskCache';
+import { downloadRemoteMediaShareTemp } from '@/session/remoteMediaDiskCacheExpo';
 import {
   buildRewindPreviewState,
   isCommitReadyRewindState,
@@ -2135,16 +2133,8 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
   useLayoutEffect(() => {
     remoteMediaDepsRef.current = { auth, maker };
   }, [auth, maker]);
-  // 图片磁盘缓存(跨会话屏 / 跨启动):命中直接回本地 file://,零取件零桌面上传;
-  // 未命中取件成功后后台落盘。forceRefresh(skipCache)时绕过并覆盖写自愈。
-  const remoteMediaDiskCacheRef = useRef<RemoteMediaDiskCache | null>(null);
-  remoteMediaDiskCacheRef.current ??= createRemoteMediaDiskCache(createExpoRemoteMediaDiskCacheIO(), {
-    availableBytes: () => Paths.availableDiskSpace,
-    reserveBytes: PEER_FILE_DISK_RESERVE_BYTES,
-    // Preserve manual image retention; only the new regenerable video copies
-    // join pressure cleanup, with mounted players holding a protection lease.
-    canEvict: (mimeType) => mimeType.startsWith('video/'),
-  });
+  // 图片磁盘缓存(跨会话屏 / 跨启动,全 App 共用一份,见 cachedRemoteMediaQueue):命中直接回
+  // 本地 file://,零取件零桌面上传;未命中取件成功后后台落盘。forceRefresh(skipCache)时绕过并覆盖写自愈。
   // 磁盘缓存源键加设备命名空间:缓存跨账号/设备存续,不同被控端可能产生相同的
   // xdt-image:// url 字符串,裸 url 作键会把上一账号/设备的缓存文件当命中返回
   // (隐私 + 内容错乱)。经 ref 读当前 deviceId,队列工厂闭包不依赖它重建。
@@ -2154,135 +2144,24 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
   useLayoutEffect(() => {
     deviceIdRef.current = deviceId;
   }, [deviceId]);
-  // 命名空间同时含账号与设备:桌面 deviceId 是跨登录存续的机器 id,登出也不清
-  // remote-media 缓存目录——同一台手机 + 同一台桌面换账号,仅设备命名空间仍会
-  // 命中上一账号的缓存文件。账号 id 经 deps ref 读(layout effect 已同步刷新)。
+  // 账号 id 经 deps ref 读(layout effect 已同步刷新)。
   const diskCacheSourceOf = useCallback(
-    (url: string) => {
-      const userId = remoteMediaDepsRef.current.auth.user?.id || 'unknown-user';
-      return `${userId}\u0000${deviceIdRef.current || 'unknown-device'}\u0000${url}`;
-    },
+    (url: string) => remoteMediaDiskSource(remoteMediaDepsRef.current.auth.user?.id, deviceIdRef.current, url),
     [],
   );
-  // 后台落盘中的 ossKey → store promise:DELETE 该 key 前先等对应落盘结束,
-  // 避免「离开前最后取件成功的图」store 下载撞上 DELETE 404、白丢缓存下次又要桌面端重传。
-  const pendingDiskStoresRef = useRef(new Map<string, Promise<unknown>>());
-  // DELETE 一个已取件的 OSS 对象;若其字节仍在后台落盘,等落盘结束(成败皆可)再删。
-  const deleteRemoteMediaObject = useCallback((media: MobileResolvedRemoteMedia) => {
-    if (!media.ossKey) return; // 磁盘缓存命中的条目没有在世 OSS 对象
-    const doDelete = (): void => {
-      void remoteMediaDepsRef.current.auth.apiFetch('/api/device-link/media', {
-        baseUrl: deviceLinkMediaApiBaseUrl(media.ossKey),
-        method: 'DELETE',
-        body: { key: media.ossKey },
-      }).catch(() => undefined);
-    };
-    const pending = pendingDiskStoresRef.current.get(media.ossKey);
-    if (pending) void pending.then(doDelete, doDelete);
-    else doDelete();
-  }, []);
-  const remoteMediaQueueRef = useRef<ReturnType<typeof createRemoteMediaResolveQueue> | null>(null);
+  const remoteMediaQueueRef = useRef<CachedRemoteMediaQueue | null>(null);
   // 队列工厂:本屏切 sessionId 不重挂载,换会话时旧队列 releaseAll 后必须换全新
   // 实例(released 标志一次性,释放过的队列不再回填缓存)。
-  const createRemoteMediaQueue = useCallback(() => createRemoteMediaResolveQueue({
-      resolve: async (
-        media: RemoteMediaRequest,
-        opts?: { skipCache?: boolean },
-        hooks?: RemoteMediaResolveHooks,
-      ) => {
-        const deps = remoteMediaDepsRef.current;
-        const diskCache = remoteMediaDiskCacheRef.current;
-        // 命名空间键与 deps 同一时刻捕获(首个 await 之前):切设备/账号时在飞的
-        // 取件按旧 deps 取到的字节必须落进旧命名空间,await 之后再算键会把上一
-        // 设备/账号的图写进新命名空间、之后被当命中返回。
-        // 缩略图与原图是同 url 的不同产物,磁盘键同样分离(与取件队列的分键一致);
-        // 但「回落原图」(gif/svg/老被控端缩不了图)一律落裸键(见下),因此缩略图
-        // 查找带裸键兜底——原图字节既已在盘上,缩略图直接用它,不再二次下载。
-        const bareDiskSource = diskCacheSourceOf(media.url);
-        const diskSource = (media.thumbnail ? 'thumb\u0000' : '') + bareDiskSource;
-        if (media.kind === 'image' && !opts?.skipCache && diskCache) {
-          const hit =
-                (await diskCache.lookup(diskSource).catch(() => null))
-            ?? (media.thumbnail ? await diskCache.lookup(bareDiskSource).catch(() => null) : null);
-          if (hit) {
-            return {
-              url: hit.uri,
-              // 本地缓存命中没有对应的在世 OSS 对象;空 ossKey 让退屏清理跳过 DELETE。
-              ossKey: '',
-              mimeType: hit.mimeType,
-              size: hit.size,
-              // 本地文件不过期;若被 LRU/OS 清掉,Image onError → forceRefresh 重取自愈。
-              expiresAt: REMOTE_MEDIA_NEVER_EXPIRES,
-              previewable: hit.mimeType.startsWith('image/'),
-            };
-          }
-        }
-        let retainedImage = false;
-        const resolved = await resolveMobileRemoteMedia(media, {
-          fetchRemoteMedia: deps.maker.fetchRemoteMedia,
-          ...(diskCache ? { retainLocalImage: async (image: MobileResolvedRemoteMedia) => {
-            const stored = await diskCache.store(bareDiskSource, image.url, image.mimeType, image.size);
-            const copy = stored ? await diskCache.lookup(bareDiskSource) : null;
-            if (!copy) throw new Error('IMAGE_CACHE_FAILED');
-            retainedImage = true;
-            return { ...image, url: copy.uri, expiresAt: REMOTE_MEDIA_NEVER_EXPIRES };
-          } } : {}),
-          ...(diskCache ? { retainLocalVideo: async (video: MobileResolvedRemoteMedia) => {
-            const stored = await diskCache.store(bareDiskSource, video.url, video.mimeType, video.size);
-            const copy = stored ? await diskCache.lookup(bareDiskSource) : null;
-            if (!copy) throw new Error('VIDEO_CACHE_FAILED');
-            return { ...video, url: copy.uri, expiresAt: REMOTE_MEDIA_NEVER_EXPIRES,
-              protectLocalFile: () => diskCache.protect(bareDiskSource) };
-          } } : {}),
-          presignGet: (ossKey) => deps.auth.apiFetch<MobileRemoteMediaPresignResult>(
-            '/api/device-link/media/presign-get',
-            { baseUrl: deviceLinkMediaApiBaseUrl(ossKey), method: 'POST', body: { key: ossKey } },
-          ),
-        }, { ...opts, ...(media.thumbnail ? { thumbnail: true } : {}) });
-        if (resolved.inlineBase64 && diskCache) {
-          return cacheInlineRemoteMedia(media.kind, resolved, diskCache, diskSource);
-        }
-        if (media.kind === 'image' && resolved.previewable && diskCache && !retainedImage) {
-          // 登记落盘 promise(按 ossKey):退屏 DELETE 会先等它结束再删对象。
-          // 传 size:超出缓存预算的对象直接跳过落盘,不白下载整个对象。
-          // 走到这里的都是完整原图字节(inline 缩略图已在上面 return):即便请求方
-          // 要的是缩略图(被控端缩不了回落原图),也落**裸键**——lightbox 后续按裸键
-          // 取原图直接磁盘命中,不再对同一张原图二次下载、双份落盘。
-          const store = diskCache.store(bareDiskSource, resolved.url, resolved.mimeType, resolved.size)
-            .catch(() => false);
-          if (resolved.ossKey) {
-            const key = resolved.ossKey;
-            pendingDiskStoresRef.current.set(key, store.finally(() => {
-              pendingDiskStoresRef.current.delete(key);
-            }));
-          }
-          // 落盘成功后把队列缓存条目升级成本地 file://:presign 地址会被队列当 fresh
-          // 结果缓存,在有效期内同键请求一律直接命中它、再也不会重进磁盘 lookup,
-          // 于是「已经打开过的原图,关掉再打开又从 OSS 重下一整张」,盘上那份副本
-          // 永远轮不到用(用户实测 + PR #1125 review)。
-          // 这里刻意**不同步等待**落盘:调用方立即拿到可渲染的 presign 地址。取件队列
-          // maxConcurrent=2 且看不到 front,同步等待会让 lightbox 的相邻页预取同样
-          // 占住槽位,把用户正在看的那张排到已翻过去的图的后台下载之后。
-          // store 的返回值是「本次是否真的写入了新字节」:超预算跳过 / 下载失败(现存
-          // 同名旧文件被刻意保留)/ 落成 0 字节都为 false,此时绝不能改用本地文件——
-          // 否则会把**已被 onError 证伪的旧文件**当本次结果并标成永不过期。
-          void store
-            .then(async (stored) => {
-              if (!stored) return;
-              const hit = await diskCache.lookup(bareDiskSource).catch(() => null);
-              const local = localCopyResolvedMedia(resolved, hit);
-              if (local) hooks?.onLocalCopy(local);
-            })
-            .catch(() => undefined);
-        }
-        return resolved;
-      },
-      // 退屏后才完成的 in-flight 取件:缓存已被 releaseAll 清空接管不到,这里直接
-      // 补 DELETE,避免「退出时正在取件」的对象漏出退屏统一清理悬到生命周期兜底。
-      onOrphanResolved: (media) => deleteRemoteMediaObject(media),
-    }, {
-      maxCacheBytes: 16 * 1024 * 1024,
-    }), [deleteRemoteMediaObject]);
+  const createRemoteMediaQueue = useCallback(() => createCachedRemoteMediaQueue(() => {
+    const deps = remoteMediaDepsRef.current;
+    return {
+      apiFetch: deps.auth.apiFetch,
+      fetchRemoteMedia: deps.maker.fetchRemoteMedia,
+      diskSource: diskCacheSourceOf,
+    };
+  }, {
+    maxCacheBytes: 16 * 1024 * 1024,
+  }), [diskCacheSourceOf]);
   remoteMediaQueueRef.current ??= createRemoteMediaQueue();
   const voiceRecordingActiveRef = useRef(false);
   const voicePermissionRequestInFlightRef = useRef(false);
@@ -5489,7 +5368,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
   // 换会话会换队列实例,消费方一律从 ref 实时取,避免闭包捏着已 release 的旧队列。
   const resolveRemoteMedia = useCallback(
     (media: RemoteMediaRequest, opts?: RemoteMediaRequestOptions) =>
-      (remoteMediaQueueRef.current ??= createRemoteMediaQueue()).request(media, opts),
+      (remoteMediaQueueRef.current ??= createRemoteMediaQueue()).queue.request(media, opts),
     [createRemoteMediaQueue],
   );
 
@@ -5499,7 +5378,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     sourceUrl: string,
     _media: MobileResolvedRemoteMedia,
   ) => {
-    remoteMediaQueueRef.current?.evict(sourceUrl);
+    remoteMediaQueueRef.current?.queue.evict(sourceUrl);
   }, []);
 
   // 全屏查看器的分享:确保拿到本地 file://(磁盘缓存命中或先落盘)再唤起系统分享单。
@@ -5516,7 +5395,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       // 避免一律按 .jpg 落地导致分享目标按扩展名误判 PNG/WebP/GIF。
       const effectiveMime = mimeType ?? imageMimeFromUrl(displayUri) ?? undefined;
       let localUri = displayUri.startsWith('file://') ? displayUri : null;
-      const diskCache = remoteMediaDiskCacheRef.current;
+      const diskCache = localUri ? null : await sharedRemoteMediaDiskCache().catch(() => null);
       if (!localUri && diskCache) {
         // 与取件落盘共用设备命名空间键:裸 url 键会命中不了既有缓存(白下载),
         // 更会重新引入跨账号/设备串味(裸键写入被下一账号同名 url 命中)。
@@ -5558,14 +5437,11 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
   // cleanup 的情况由 OSS 生命周期规则兜底)。队列实例带一次性 released 标志,
   // 下个会话首次取件时由 resolveRemoteMedia 懒创建新实例。
   const releaseRemoteMediaQueue = useCallback(() => {
-    const released = remoteMediaQueueRef.current?.releaseAll() ?? [];
-    for (const media of released) {
-      // 仍在后台落盘的对象等落盘结束再删,避免 DELETE 抢先把落盘下载打成 404;
-      // 磁盘缓存命中的空 ossKey 条目在 deleteRemoteMediaObject 内跳过。
-      deleteRemoteMediaObject(media);
-    }
+    // 仍在后台落盘的对象等落盘结束再删,避免 DELETE 抢先把落盘下载打成 404;
+    // 磁盘缓存命中的空 ossKey 条目跳过。
+    remoteMediaQueueRef.current?.releaseAll();
     remoteMediaQueueRef.current = null;
-  }, [deleteRemoteMediaObject]);
+  }, []);
 
   useEffect(() => () => {
     releaseRemoteMediaQueue();
