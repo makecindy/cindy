@@ -85,6 +85,7 @@ import { useOwnTopNavScrollableRows, useSidebarCollapsedState } from '../feature
 import { SidebarRailNavigation, SidebarTopNav } from '@/components/sidebar/SidebarTopNav';
 import { SidebarFilterPopover, type SidebarPluginHarness } from './sidebar/SidebarFilterPopover';
 import { MainListScopeHeader } from './sidebar/MainListScopeHeader';
+import { useEnvironmentHealthAlerts } from './sidebar/useEnvironmentHealthAlerts';
 import { SharedTasksSection } from '@/features/device-link/SharedTasksSection';
 import { TeammatesSection } from '@/features/bots/TeammatesSection';
 import { TeammateSearchResults, useTeammateSearchMatches } from '@/features/bots/TeammateSearchResults';
@@ -2310,6 +2311,10 @@ function ExpandedView({
   const { now: inboxNow, hasUnread } = useInboxUnread(
     inboxSessions, projectPriorityProjection.base, isInboxTeammateTask,
   );
+  const inboxEnvironmentHealth = useEnvironmentHealthAlerts({
+    enabled: taskListMode === 'inbox',
+    localSessions: inboxSessions,
+  });
   const reportUnread = useContext(InboxUnreadReporter);
   useLayoutEffect(() => {
     reportUnread?.(hasUnread);
@@ -4129,6 +4134,9 @@ function ExpandedView({
                   inboxSessions={inboxSessions}
                   inboxNow={inboxNow}
                   isInboxTeammateTask={isInboxTeammateTask}
+                  inboxHealthAlerts={inboxEnvironmentHealth.alerts}
+                  onInboxHealthAlertAction={inboxEnvironmentHealth.onAction}
+                  onDismissInboxHealthAlert={inboxEnvironmentHealth.onDismiss}
                   unclassified={visibleUnclassified}
                   projects={visibleProjectsWithVendor}
                   dialogues={visibleDialogues}
@@ -4194,6 +4202,7 @@ function ExpandedView({
         }}
       />
 
+      {inboxEnvironmentHealth.githubSetupDialog}
       {newProjectSessionId && (
         <NewProjectFromTaskDialog
           sessionId={newProjectSessionId}

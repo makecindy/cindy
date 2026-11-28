@@ -8,6 +8,8 @@ import { desktopContextRecoveryAbortSignal } from './contextRecoveryAssembly.des
 import { createSessionContextWindowBudgetReconcile } from './sessionContextWindowBudgetReconcile.js';
 import { appliedContextWindowBudgets, pendingSessionContextWindowBudgetReconciles } from './sessionContextWindowBudgetState.js';
 import {
+  bindSessionSubscriptionAccount,
+  readSessionBoundSubscriptionAccount,
   needsSubscriptionAccountHandoff,
   hasRestoredPooledCodexQuota,
   readSubscriptionTaskUsage,
@@ -1531,7 +1533,7 @@ import {
   isModelGroupSessionDetachedForDispatch,
   peekModelGroupSessionBinding,
   projectModelGroupSessionBinding,
-  readModelGroupBindingForDispatch,
+  readActiveModelGroupBindingForDispatch,
   readModelGroupSessionBinding,
   subscribeModelGroupSessionBindings,
   unbindModelGroupSession,
@@ -5330,6 +5332,30 @@ export async function acquirePendingAgentSwitchForDirectSend(
  * 订阅账号的发送前换号共用同一套运行时判定与交接：暂停／移出走 prepareSend；绑定账号此刻接不了这个模型
  * (撞限、登录失效、过载)时按供应商组口径换到账号池选出的另一个账号(failover.ts，provider-groups.md §5/§6.1)。
  */
+/**
+ * 智能路由把任务落到本机某个来源(model-groups.md §3.5)：记下选中的账号槽位，解除同供应商旧电脑组的二次选路。
+ * `replace` 只在切换刚关闭旧原生会话后传入，任务才从原账号改绑到新账号。
+ */
+async function pinRoutedLocalSource(sessionId: string, providerId: string, accountId: string | undefined, replace = false): Promise<void> {
+  if (accountId) await bindSessionSubscriptionAccount(sessionId, providerId, accountId, { replace }).catch(() => false);
+  if (readProviderGroup(providerId)) await markProviderGroupReleased(sessionId, { providerId }).catch(() => undefined);
+}
+
+/** 换到本机来源的切换：任务已绑定的账号与选中的不同就要重建原生会话，切换提交后再改绑。 */
+function routedLocalAccountStep(
+  sessionId: string, providerId: string, accountId: string | undefined, changes = false, commitRoute?: () => void,
+) {
+  const bound = accountId ? readSessionBoundSubscriptionAccount(sessionId, providerId) : undefined;
+  const moves = changes || (!!accountId && !!bound && bound !== accountId);
+  return {
+    changes: moves,
+    commit: async () => {
+      await pinRoutedLocalSource(sessionId, providerId, accountId, moves);
+      commitRoute?.();
+    },
+  };
+}
+
 async function readSubscriptionRuntimeSession(id: string) {
   const owner = captureSessionRuntimeControlOwnerEpoch();
   const row = await getSessionRowSnapshotStrict(id);
@@ -13225,13 +13251,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             effort: (row?.effort ?? undefined) as SendToSessionCreateDefaults['effort'],
             fastMode: meta.agentKind === 'acp' ? false : (row?.fastMode ?? false),
             providerId: row?.providerId,
-            // working_dir 覆盖时强制继承来源会话的权限档(review 反馈):把新目录
-            // 以 Full access 打开是相对 dispatcher 的权限升级,跨项目 handoff
-            // 不应隐式发生;未覆盖时保持既有缺省(bypassPermissions)不变。
-            permissionMode:
-              inheritSourcePermissionMode || workingDirOverride !== undefined
-                ? permissionModeOrAsk(row?.permissionMode)
-                : 'bypassPermissions',
+            // 从来源会话经 send_to_session 新建任务一律继承来源会话权限档（与跨电脑创建
+            // 及插件创建保持一致），防止 ask / auto / plan 会话借新建任务或独立 worktree
+            // 静默提权到 bypassPermissions。
+            permissionMode: permissionModeOrAsk(row?.permissionMode),
           };
           const route = await resolveSendToSessionCreateRoute({
             source: {
@@ -18667,8 +18690,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       providerId: row.providerId,
       agentDeviceId: row.agentDeviceId || undefined,
     });
-    const binding = await readModelGroupBindingForDispatch(sessionId);
-    if (binding && binding.pickedKey === currentKey) return binding;
+    const binding = await readActiveModelGroupBindingForDispatch(sessionId, row);
+    if (binding) return binding;
     if (row.source === 'bot' && !(await isModelGroupSessionDetachedForDispatch(sessionId))) {
       const profileSelection = await readBotProfileModelGroupSelection(sessionId).catch(() => null);
       if (profileSelection) {
@@ -18760,7 +18783,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
               fastExplicit: Boolean(fastMode),
             },
           ),
-        performCrossSwitch: ({ sessionId: sid, targetAgentKind, agentDeviceId, model, providerId, effort, fastMode, skipBootstrap }) =>
+        performCrossSwitch: ({ sessionId: sid, targetAgentKind, agentDeviceId, model, providerId, effort, fastMode, skipBootstrap, accountId, accountChanges, commitLocalRoute }) =>
           performSessionAgentSwitch(agentSwitchDeps, {
             sessionId: sid,
             targetAgentKind,
@@ -18773,7 +18796,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             skipBootstrap,
             configStaged: true,
             preserveModelGroupBinding: true,
+            ...(!agentDeviceId ? {
+              localSubscriptionAccount: routedLocalAccountStep(sid, providerId, accountId, accountChanges === true, commitLocalRoute),
+            } : {}),
           }),
+        pinLocalSource: (sid, { providerId, accountId }) => pinRoutedLocalSource(sid, providerId, accountId),
         writeSwitchNote: async (sid, note, clientId) => {
           await createDbMessage(sid, {
             clientId,
@@ -18816,6 +18843,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           providerId: candidate.providerId,
           model: candidate.model,
           agentDeviceId: candidate.agentDeviceId ?? null,
+          accountId: candidate.accountId,
         }),
         current: {
           agentKind: makerToDbEngineKind(current.agentKind),
@@ -18826,15 +18854,21 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           fastMode: current.fastMode,
         },
       }));
-      if (!offer || (dbToMakerEngineKind(offer.agentKind) === current.agentKind &&
-        offer.providerId === current.providerId && offer.model === current.model &&
-        (offer.agentDeviceId ?? null) === (current.agentDeviceId ?? null))) return { candidate: null };
+      if (!offer) return { candidate: null };
+      // The account is bound only when this candidate's switch commits; a skipped candidate leaves it alone.
+      const localAccount = offer.agentDeviceId ? undefined : routedLocalAccountStep(sessionId, offer.providerId, offer.accountId);
+      if (dbToMakerEngineKind(offer.agentKind) === current.agentKind
+        && offer.providerId === current.providerId
+        && offer.model === current.model
+        && (offer.agentDeviceId ?? null) === (current.agentDeviceId ?? null)
+        && !localAccount?.changes) return { candidate: null };
       return {
         candidate: {
           agentKind: dbToMakerEngineKind(offer.agentKind),
           model: offer.model,
           providerId: offer.providerId,
           agentDeviceId: offer.agentDeviceId ?? null,
+          accountId: offer.accountId,
           effort: (offer.effort as SessionRuntimeProfile['effort']) ?? null,
           fastMode: offer.agentKind === 'acp' ? false : (offer.fastMode ?? false),
         },
@@ -18845,8 +18879,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             model: profile.model,
             providerId: profile.providerId,
             agentDeviceId: profile.agentDeviceId || undefined,
+            accountId: profile.accountId,
           }));
         },
+        ...(localAccount ? { localAccount } : {}),
       };
     },
     readSessionAgentDeviceId: (sessionId) => readSessionAgentDeviceId(sessionId),

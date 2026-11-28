@@ -2071,8 +2071,8 @@ export function createProviderGroupService(deps: ProviderGroupServiceDeps): Prov
       const groupProviderId = row.providerId ?? (await deps.resolveImplicitProvider(agentKind, model));
       const config = groupProviderId ? await localSource.readGroup(groupProviderId) : null;
       if (!groupProviderId || !config) return null;
-      if (row.providerId && deps.isLocalApiAccount?.(row.providerId)
-        && deps.isReleased(sessionId, { providerId: groupProviderId })) return null;
+      // 已经明确解除过这个组的任务（含经智能路由显式选定本机来源、避免两层自动叠加）不再交由电脑组二次选路。
+      if (deps.isReleased(sessionId, { providerId: groupProviderId })) return null;
       // 已经运行过的任务(建组前就在用、回退或清空等清掉了原生会话)不按策略挪走：留在本机并纳入组。
       // live session 仍在时之后的运行中错误走 failover；要重新打开时这次启动失败换下一台(要续接的先带交接)。
       const hasRun = Boolean(row.sdkSessionId || (await deps.hasAssistantHistory(sessionId)));
