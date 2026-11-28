@@ -2,6 +2,7 @@ import { holdError, releaseFailure } from './profile-hold.ts';
 import { AgentInputCoordinator } from '../../../desktop/src/main/maker-ipc/agent-input-coordinator.ts';
 import { isDeviceLinkInvoke, isMobileControllerInvoke, readDeviceLinkInvokeSourceDevice } from '../../../desktop/src/main/device-link/invoke-context.ts';
 import { stampTrustedDeviceLinkQueuedOrigin, stampTrustedDesktopQueuedOrigin } from '../../../desktop/src/main/maker-ipc/queuedInputOrigin.ts';
+import { stampMobileClientOrigin } from '../../../desktop/src/main/maker-ipc/mobileClientPromptNote.ts';
 import { createTurnExecutor } from './turn-executor.mjs';
 import { hostCoordinatorDeps } from './coordinator-deps.ts';
 import { createHostAutoResume } from './auto-resume.ts';
@@ -422,15 +423,42 @@ export function createInputQueue(deps) {
       state.commands = result;
       return result;
     }
-    async function mutate(id, fn) {
+    function parseControlBoundary(id, opts) {
+      const expectedInputGeneration = coordinator.getGeneration(id);
+      const hasExpectedBoundary = Boolean(opts && typeof opts === 'object'
+        && Object.prototype.hasOwnProperty.call(opts, 'expectedClearBoundaryMs'));
+      const expectedBoundary = hasExpectedBoundary
+        ? normalizeAgentInputClearBoundaryMs(opts.expectedClearBoundaryMs)
+        : undefined;
+      if (hasExpectedBoundary && expectedBoundary === undefined) {
+        throwIpcError('INVALID_PARAMS', 'expectedClearBoundaryMs must be null or a non-negative finite number');
+      }
+      return { expectedInputGeneration, hasExpectedBoundary, expectedBoundary };
+    }
+    function assertControlBoundary(id, check) {
+      if (!coordinator.isGenerationCurrent(id, check.expectedInputGeneration)) {
+        throwIpcError('PRECONDITION_FAILED', 'REMOTE_OPTIMISTIC_INPUT_SUPERSEDED: input preparation was superseded');
+      }
+      const currentBoundary = coordinator.getClearBoundaryMs(id);
+      if (check.hasExpectedBoundary && check.expectedBoundary !== currentBoundary) {
+        throwIpcError('PRECONDITION_FAILED',
+          `REMOTE_OPTIMISTIC_INPUT_CLEARED: expectedClearBoundaryMs=${check.expectedBoundary ?? 'null'}; currentClearBoundaryMs=${currentBoundary ?? 'null'}`);
+      }
+      return currentBoundary;
+    }
+    async function mutate(id, fn, boundary) {
       return command(id, async state => {
         // Editing, removing or moving a queued input writes the queue the desktop may be using.
         refuseWhileHeld();
+        if (boundary) assertControlBoundary(id, boundary);
         coordinator.setExecutionPaused(id, true);
-        const result = fn();
-        await flushed(id);
-        if (!state.persistenceError) unpause(id);
-        return project(result);
+        try {
+          const result = fn();
+          await flushed(id);
+          return project(result);
+        } finally {
+          if (!state.persistenceError) unpause(id);
+        }
       });
     }
     async function stop(id, options = { keepQueue: true, pauseQueue: true }) {
@@ -637,28 +665,13 @@ export function createInputQueue(deps) {
        * attached by the Device Link adapter and checked again by the turn executor.
        */
       assertRemoteInputControlBoundary(id, opts) {
-        const expectedInputGeneration = coordinator.getGeneration(id);
-        const hasExpectedBoundary = opts && typeof opts === 'object'
-          && Object.prototype.hasOwnProperty.call(opts, 'expectedClearBoundaryMs');
-        const expectedBoundary = hasExpectedBoundary
-          ? normalizeAgentInputClearBoundaryMs(opts.expectedClearBoundaryMs)
-          : undefined;
-        if (hasExpectedBoundary && expectedBoundary === undefined) {
-          throwIpcError('INVALID_PARAMS', 'expectedClearBoundaryMs must be null or a non-negative finite number');
-        }
+        const check = parseControlBoundary(id, opts);
         return command(id, () => {
-          if (!coordinator.isGenerationCurrent(id, expectedInputGeneration)) {
-            throwIpcError('PRECONDITION_FAILED', 'REMOTE_OPTIMISTIC_INPUT_SUPERSEDED: input preparation was superseded');
-          }
-          const currentBoundary = coordinator.getClearBoundaryMs(id);
-          if (hasExpectedBoundary && expectedBoundary !== currentBoundary) {
-            throwIpcError('PRECONDITION_FAILED',
-              `REMOTE_OPTIMISTIC_INPUT_CLEARED: expectedClearBoundaryMs=${expectedBoundary ?? 'null'}; currentClearBoundaryMs=${currentBoundary ?? 'null'}`);
-          }
+          const currentBoundary = assertControlBoundary(id, check);
           return {
             expectedClearBoundaryMs: currentBoundary,
-            expectedInputGeneration,
-            inputAbortSignal: coordinator.getInputAbortSignal(id, expectedInputGeneration),
+            expectedInputGeneration: check.expectedInputGeneration,
+            inputAbortSignal: coordinator.getInputAbortSignal(id, check.expectedInputGeneration),
           };
         });
       },
@@ -718,7 +731,18 @@ export function createInputQueue(deps) {
         }
         return res;
       }),
-      updateText: (id, clientId, text) => mutate(id, () => coordinator.updateText(id, clientId, text)),
+      async updateText(id, clientId, text, opts) {
+        if (typeof text !== 'string') throwIpcError('INVALID_PARAMS', 'newText required');
+        const remote = isDeviceLinkInvoke();
+        const source = readDeviceLinkInvokeSourceDevice();
+        const mobile = isMobileControllerInvoke();
+        // Host advertises no reference snapshots. Keep remote links as literal text.
+        return mutate(id, () => coordinator.updateText(id, clientId, text, undefined, undefined, remote,
+          remote ? updated => {
+            const edited = stampTrustedDesktopQueuedOrigin(stampMobileClientOrigin(updated, mobile), true, true);
+            return stampTrustedDeviceLinkQueuedOrigin(edited, true, source);
+          } : undefined), parseControlBoundary(id, opts));
+      },
       updateContent(id, clientId, item) {
         return command(id, async (state, admission) => {
           refuseWhileHeld();
@@ -751,7 +775,14 @@ export function createInputQueue(deps) {
       move: (id, clientId, index) => mutate(id, () => coordinator.move(id, clientId, index)),
       setExpanded: (id, expanded) => command(id, () => coordinator.setExpanded(id, expanded)),
       setInteractionLock: (id, lock, locked) => command(id, () => coordinator.setInteractionLock(id, lock, locked)),
-      setEditLock: (id, clientId, locked) => command(id, () => coordinator.setEditLock(id, clientId, locked)),
+      setEditLock(id, clientId, locked, opts) {
+        const boundary = parseControlBoundary(id, opts);
+        return command(id, () => {
+          refuseWhileHeld();
+          assertControlBoundary(id, boundary);
+          return coordinator.setEditLock(id, clientId, locked);
+        });
+      },
       // This endpoint clears pending inputs, not persisted history. Only the
       // history service may advance the durable conversation clear boundary.
       clearSession: id => stop(id, { keepQueue: false }),

@@ -296,6 +296,12 @@ export function createHostDeviceLink(deps: HostDeviceLinkPorts) {
       return contract.map ? contract.map(result) : result;
     });
   }
+  registry.register('maker:input:update-text', ([sessionId, clientId, newText, , , opts]) =>
+    call('/api/input/update-text', { sessionId, clientId, newText, opts }));
+  registry.register('maker:input:set-edit-lock', ([sessionId, clientId, locked, opts]) => {
+    if (typeof locked !== 'boolean') throwIpcError('INVALID_PARAMS', 'locked must be a boolean');
+    return call('/api/input/set-edit-lock', { sessionId, clientId, locked, opts });
+  });
   const readMachineStatus = deps.readMachineStatus;
   if (readMachineStatus) registry.register(MACHINE_STATUS_CHANNEL, () => {
     if (getDeviceLinkInvokeContext()?.sharedTask) throwIpcError('PERMISSION_DENIED', 'not available to shared task guests');

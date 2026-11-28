@@ -376,7 +376,7 @@ export function createHostService(deps) {
         return { status: 200, body: await deps.input.updateContent(String(body.sessionId ?? ''), String(body.clientId ?? ''), body.item ?? {}) };
     }
     if (url.pathname === '/api/input/update-text') {
-        return { status: 200, body: await deps.input.updateText(String(body.sessionId ?? ''), String(body.clientId ?? ''), body.newText) };
+        return { status: 200, body: await deps.input.updateText(String(body.sessionId ?? ''), String(body.clientId ?? ''), body.newText, body.opts) };
     }
     if (url.pathname === '/api/input/move') {
         return { status: 200, body: await deps.input.move(String(body.sessionId ?? ''), String(body.clientId ?? ''), Number(body.targetIndex ?? 0)) };
@@ -388,7 +388,7 @@ export function createHostService(deps) {
         return { status: 200, body: await deps.input.setInteractionLock(String(body.sessionId ?? ''), String(body.lockId ?? ''), Boolean(body.locked)) };
     }
     if (url.pathname === '/api/input/set-edit-lock') {
-        return { status: 200, body: await deps.input.setEditLock(String(body.sessionId ?? ''), String(body.clientId ?? ''), Boolean(body.locked)) };
+        return { status: 200, body: await deps.input.setEditLock(String(body.sessionId ?? ''), String(body.clientId ?? ''), Boolean(body.locked), body.opts) };
     }
     if (url.pathname === '/api/input/clear-session') {
         return { status: 200, body: await deps.input.clearSession(String(body.sessionId ?? '')) };

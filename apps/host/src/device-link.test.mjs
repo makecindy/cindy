@@ -208,6 +208,8 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
       return { deferred: true };
     },
     input: {
+      updateText: async (sessionId, clientId, text, opts) => ({ sessionId, clientId, text, opts }),
+      setEditLock: async (sessionId, clientId, locked, opts) => ({ sessionId, clientId, locked, opts }),
       projection: async sessionId => ({
         sessionId, pendingQueue: sessionId === 'outbox-task' ? outboxPending : [],
         turnInProgress: false, clearBoundaryMs: null,
@@ -515,6 +517,17 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
   const unsupported = await clients[2].invoke('host', { channel: 'maker:session:prewarm',
     args: ['task', { purpose: 'pi-skill-dispatch', workingDir: '/project', model: 'pi-test', pendingPiRoute: { agentDeviceId: 'other' } }] });
   assert.equal(unsupported.ok, false);
+
+  // PR 13686 / integration: Desktop falls back to update-text after full editing is declined.
+  const editOpts = { expectedClearBoundaryMs: null };
+  const editArgs = ['task', 'queued'];
+  const controller = clients[2];
+  const fullEdit = await controller.invoke('host', { channel: 'maker:input:update-content', args: [...editArgs, { text: 'edited' }] });
+  assert.equal(fullEdit.error?.code, 'CHANNEL_NOT_ALLOWED');
+  const editLock = await controller.invoke('host', { channel: 'maker:input:set-edit-lock', args: [...editArgs, true, editOpts] });
+  assert.deepEqual(editLock.result, { sessionId: 'task', clientId: 'queued', locked: true, opts: editOpts });
+  const edit = await controller.invoke('host', { channel: 'maker:input:update-text', args: [...editArgs, 'edited', null, null, editOpts] });
+  assert.deepEqual(edit.result, { sessionId: 'task', clientId: 'queued', text: 'edited', opts: editOpts });
 
   // A phone asks the v1 channel, as the desktop answers it: flat USD fields, CNY quotes left out.
   const v1 = await clients[0].invoke('host', { channel: 'maker:usage:model-pricing', args: [] });

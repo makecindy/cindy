@@ -1702,6 +1702,29 @@ test('Host sends managed local images and files and steers through the same norm
   assert.deepEqual(readFileSync(image.path), attachmentPng);
 });
 
+// PR 13686 / db: a text-only remote save must preserve the Host image through dispatch.
+test('remote text edit preserves the attachment and dispatches the edit on unlock', async t => {
+  const h = attachmentHarness(t);
+  const id = 'attachments';
+  const opts = { expectedClearBoundaryMs: null };
+  await h.queue.setEditLock(id, 'queued', true, opts);
+  await h.queue.enqueue(id, h.attached('queued'));
+  const [before] = h.queue.projection(id).pendingQueue;
+  const remote = fn => runDeviceLinkInvokeContext({
+    controllerDeviceId: 'desktop', controllerPlatform: 'darwin', channel: 'maker:input:update-text',
+  }, fn);
+  await assert.rejects(remote(() => h.queue.updateText(id, 'queued', 'stale', { expectedClearBoundaryMs: 400 })),
+    /REMOTE_OPTIMISTIC_INPUT_CLEARED/);
+  const saved = await remote(() => h.queue.updateText(id, 'queued', 'edited text', opts));
+  assert.equal(saved.pendingQueue[0].sourceDevice.deviceId, 'desktop');
+  assert.deepEqual(saved.pendingQueue[0].files, before.files);
+  await h.queue.setEditLock(id, 'queued', false, opts);
+  await waitFor(() => h.maker.getSession(id)?.sent.length === 1);
+  const [blocks] = h.maker.getSession(id).sent;
+  assert.ok(blocks.some(block => block.type === 'text' && block.text.includes('edited text')));
+  assert.ok(blocks.some(block => block.type === 'image'));
+});
+
 test('Host queue edits keep referenced images and release dropped copies only after a durable snapshot', async t => {
   let failSnapshot = false;
   const h = attachmentHarness(t, { persistQueueSnapshot: async () => {
