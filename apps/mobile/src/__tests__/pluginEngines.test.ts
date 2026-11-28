@@ -25,7 +25,6 @@ import { applyPluginEnginePick, buildRemoteCreateSessionOptions, type NewSession
 import {
   buildPluginEngineGroups,
   formatPluginEngineModelQuota,
-  formatPluginEngineModelQuotaLabel,
   formatPluginEnginePickerQuota,
   getCachedControlledPluginEngines,
   getCachedPluginEngines,
@@ -218,6 +217,22 @@ describe('the pending engine switch the computer projects', () => {
       .toEqual({ agentSwitchIntent: null, pluginEngineSwitchIntent: null });
   });
 
+  // PR #13360, unit: the public patch used by history and push must preserve
+  // progress for the plugin picker too. Existing location cases never carried
+  // preparation fields; one preparing -> failed patch covers the dropped state.
+  it('retains preparation progress and failure details in the plugin selection patch', () => {
+    const choice = { targetAgentKind: 'acp', model: 'deepseek-v4', providerId: DSH };
+    for (const preparation of ['preparing', 'failed'] as const) {
+      const { agentSwitchIntent, pluginEngineSwitchIntent } = sessionAgentSwitchIntentPatch({
+        ...choice, preparation, ...(preparation === 'failed' ? { preparationError: 'target unavailable' } : {}),
+        resumeFallbackRecovery: { handoff: 'host-only' },
+      });
+      expect(agentSwitchIntent).toBeNull();
+      expect(pluginEngineSwitchIntent).toEqual({ providerId: DSH, model: choice.model, preparation,
+        ...(preparation === 'failed' ? { preparationError: 'target unavailable' } : {}) });
+    }
+  });
+
   // The store receives a scoped ACP intent over the existing task patch. The picker must
   // distinguish another computer from an explicit return home or a legacy omitted device.
   it.each([
@@ -339,10 +354,11 @@ describe('a task running on a plugin engine', () => {
     expect(picker({ providerId: DSH, modelId: 'deepseek-v4' })).toEqual(['DeepSeek Harness', 'Antigravity']);
   });
 
-  // Unit: Mobile model picker plugin engine group header quota formatting (windows, expired
-  // windows falling back to balances, and depleted balance warning). Minimal failing input:
-  // tightest window not chosen or balance-only plugin returns undefined.
-  it('formats plugin engine picker quota from tightest unexpired window or currency balance', () => {
+  // Unit: Mobile model picker plugin engine group header + Sources quota formatting aligned
+  // with built-in subscription providers (weekly primary %, reset-soon countdown, Sources
+  // `[countdown, remaining]` order, expired fallback to currency balance, and depleted warning).
+  // Minimal failing input: weekly window ignored in favor of 5h or balance-only returns undefined.
+  it('formats plugin engine picker quota from weekly window (with reset-soon metadata) or currency balance', () => {
     const now = 1_700_000_000_000;
     const countdown = (resetsAtSec: number) => `${Math.round((resetsAtSec * 1000 - now) / 3_600_000)}h`;
     expect(formatPluginEnginePickerQuota({
@@ -352,22 +368,20 @@ describe('a task running on a plugin engine', () => {
         { label: '5h', remainingPercent: 20, resetsAt: now + 2 * 3_600_000 },
         { label: 'Expired', remainingPercent: 0, resetsAt: now - 1000 },
       ],
-    }, now, 'en-US', countdown)).toEqual({
-      summary: '20% · 2h',
-      remaining: 20,
-      level: 'warn',
-      accessibilityLabel: '5h · 20% · 2h',
-      groups: [
-        {
-          id: 'default',
-          label: '5h',
-          remaining: 20,
-          level: 'warn',
-          reset: '2h',
-          summary: '20% · 2h',
-          accessibilityLabel: '5h · 20% · 2h',
-        },
-      ],
+    }, now, 'en-US', countdown, {
+      formatRemaining: (percent) => `${percent}% left`,
+      formatResetIn: (duration) => `Resets in ${duration}`,
+      resetSoonLabel: 'Resets soon',
+    })).toEqual({
+      summary: '80%',
+      sourceLabel: '24h · 80% left',
+      remaining: 80,
+      level: 'normal',
+      resetSoon: true,
+      reset: { remaining: 80, time: '24h', level: 'warn' },
+      resetParts: ['Resets in ', ''],
+      resetDescription: 'Resets in 24h · 80% left',
+      accessibilityLabel: 'Weekly · 80% left · Resets soon · Resets in 24h',
     });
 
     // Multi-group plugin engine (Antigravity): Gemini and Claude & GPT stay separate.
@@ -380,20 +394,23 @@ describe('a task running on a plugin engine', () => {
         { label: 'Claude and GPT models · 5h', remainingPercent: 100 },
       ],
     };
+    // Each pool keeps its own weekly-first value; Gemini's 5h at 8% only raises that pool to warn.
     expect(formatPluginEnginePickerQuota(agyUsage, now, 'en-US', countdown)).toEqual({
-      summary: 'Gemini 8% · Claude & GPT 84%',
-      level: 'crit',
-      accessibilityLabel: 'Gemini · 8% · 1h · Claude & GPT · 84% · 144h',
+      summary: 'Gemini 89% · Claude & GPT 84%',
+      sourceLabel: 'Gemini 89% · Claude & GPT 84%',
+      remaining: 84,
+      level: 'warn',
+      accessibilityLabel: 'Gemini · 89% · 144h · Claude & GPT · 84% · 144h',
       isMultiGroup: true,
       groups: [
         {
           id: 'label:gemini models',
           label: 'Gemini',
-          remaining: 8,
-          level: 'crit',
-          reset: '1h',
-          summary: '8% · 1h',
-          accessibilityLabel: 'Gemini · 8% · 1h',
+          remaining: 89,
+          level: 'warn',
+          reset: '144h',
+          summary: '89% · 144h',
+          accessibilityLabel: 'Gemini · 89% · 144h',
         },
         {
           id: 'label:claude and gpt models',
@@ -406,10 +423,11 @@ describe('a task running on a plugin engine', () => {
         },
       ],
     });
-    expect(formatPluginEngineModelQuotaLabel(agyUsage, { id: 'gemini-4-neon', name: 'Gemini 4 Neon' }, now, countdown)).toBe('1h · 8%');
-    expect(formatPluginEngineModelQuotaLabel(agyUsage, { id: 'gemini-pro-orchestrator-neon', name: 'Orchestrator (Neon)' }, now, countdown)).toBe('1h · 8%');
-    expect(formatPluginEngineModelQuotaLabel(agyUsage, { id: 'claude-sonnet-5-5', name: 'Claude Sonnet 5.5' }, now, countdown)).toBe('144h · 84%');
-    expect(formatPluginEngineModelQuotaLabel(agyUsage, { id: 'gpt-oss-120b-medium', name: 'GPT-OSS 120B (Medium)' }, now, countdown)).toBe('144h · 84%');
+    // Model rows follow their own pool (weekly-first on Mobile) and never borrow the other pool.
+    expect(formatPluginEngineModelQuota(agyUsage, 'gemini-4-neon', now, countdown, 'Gemini 4 Neon')).toBe('144h · 89%');
+    expect(formatPluginEngineModelQuota(agyUsage, 'gemini-pro-orchestrator-neon', now, countdown, 'Orchestrator (Neon)')).toBe('144h · 89%');
+    expect(formatPluginEngineModelQuota(agyUsage, 'claude-sonnet-5-5', now, countdown, 'Claude Sonnet 5.5')).toBe('144h · 84%');
+    expect(formatPluginEngineModelQuota(agyUsage, 'gpt-oss-120b-medium', now, countdown, 'GPT-OSS 120B (Medium)')).toBe('144h · 84%');
 
     expect(formatPluginEnginePickerQuota({
       updatedAt: now,
@@ -418,6 +436,7 @@ describe('a task running on a plugin engine', () => {
     }, now, 'en-US', countdown)).toMatchObject({
       level: 'normal',
       summary: expect.stringContaining('12.50'),
+      sourceLabel: expect.stringContaining('12.50'),
     });
 
     expect(formatPluginEnginePickerQuota({
@@ -430,8 +449,7 @@ describe('a task running on a plugin engine', () => {
     expect(formatPluginEnginePickerQuota(null, now, 'en-US', countdown)).toBeUndefined();
   });
 
-  // 回归：Mobile 会话页的模型选择器需对 IM 与官方 hook 来源(x/feishu/telegram 等)开放插件引擎切换，
-  // 同时保持 review/learn/cindy-make/scheduler 关闭。最小失败输入：source='x' 或 'feishu' 被判 false。
+  // 回归：Mobile 会话页的模型选择器需与 Desktop 保持一致，对除 review 外的所有任务来源开放插件引擎切换。
   it.each([
     ['desktop', true],
     ['bot', true],
@@ -445,11 +463,11 @@ describe('a task running on a plugin engine', () => {
     ['dingtalk', true],
     ['wecom', true],
     ['imessage', true],
+    ['learn', true],
+    ['cindy-make', true],
+    ['scheduler', true],
     [null, true],
     ['review', false],
-    ['learn', false],
-    ['cindy-make', false],
-    ['scheduler', false],
   ] as const)('switch source allowlist: %s -> %s', (source, allowed) => {
     expect(isPluginEngineSwitchSourceAllowed(source)).toBe(allowed);
   });
@@ -582,7 +600,10 @@ describe('a task running on a plugin engine', () => {
     }
 
     const now = 1_700_000_000_000;
-    const countdown = (resetsAtSec: number) => `${Math.round((resetsAtSec * 1000 - now) / 3_600_000)}h`;
+    const countdown = (resetsAtSec: number) => {
+      const hours = Math.round((resetsAtSec * 1000 - now) / 3_600_000);
+      return hours >= 24 ? `${Math.round(hours / 24)}d` : `${hours}h`;
+    };
     const usage = {
       updatedAt: now,
       windows: [
@@ -591,8 +612,40 @@ describe('a task running on a plugin engine', () => {
       ],
     };
     expect(formatPluginEngineModelQuota(usage, 'deepseek-v4', now, countdown)).toBe('3h · 42%');
-    expect(formatPluginEngineModelQuota(usage, 'other-model', now, countdown)).toBeNull();
+    // Models outside explicit scopes inherit the engine's unscoped Global window, matching built-in Claude/Codex.
+    expect(formatPluginEngineModelQuota(usage, 'other-model', now, countdown)).toBe('5h · 80%');
     expect(formatPluginEngineModelQuota(usage, 'default', now, countdown)).toBeNull();
+    // Strictly model-scoped snapshots never borrow another model's window.
+    expect(formatPluginEngineModelQuota({
+      updatedAt: now,
+      windows: [{ label: 'V4-5h', remainingPercent: 42, resetsAt: now + 3 * 3_600_000, models: ['deepseek-v4'] }],
+    }, 'other-model', now, countdown)).toBeNull();
+    // Multi-group snapshots without `models[]` (Antigravity v0.5.0): prefer each model group's weekly window.
+    const antigravityUsage = {
+      updatedAt: now,
+      windows: [
+        { label: 'Gemini Models · weekly', windowMinutes: 10080, remainingPercent: 95, resetsAt: now + 7 * 24 * 3_600_000 },
+        { label: 'Gemini Models · 5h', windowMinutes: 300, remainingPercent: 80, resetsAt: now + 4 * 3_600_000 },
+        { label: 'Claude and GPT models · weekly', windowMinutes: 10080, remainingPercent: 60, resetsAt: now + 6 * 24 * 3_600_000 },
+        { label: 'Claude and GPT models · 5h', windowMinutes: 300, remainingPercent: 20, resetsAt: now + 2 * 3_600_000 },
+      ],
+    };
+    expect(formatPluginEngineModelQuota(antigravityUsage, 'gemini-4-neon', now, countdown, 'Gemini 4 Neon')).toBe('7d · 95%');
+    expect(formatPluginEngineModelQuota(antigravityUsage, 'claude-opus-4-7', now, countdown, 'Claude Opus 4.7')).toBe('6d · 60%');
+    expect(formatPluginEngineModelQuota(antigravityUsage, 'unknown-model', now, countdown, 'Mystery')).toBeNull();
+    // When Gemini's windows all expire while Claude/GPT stays live, Gemini and unmatched rows must return null, never Claude's quota.
+    const geminiExpiredUsage = {
+      updatedAt: now,
+      windows: [
+        { label: 'Gemini Models · weekly', windowMinutes: 10080, remainingPercent: 10, resetsAt: now - 60_000 },
+        { label: 'Gemini Models · 5h', windowMinutes: 300, remainingPercent: 0, resetsAt: now - 60_000 },
+        { label: 'Claude and GPT models · weekly', windowMinutes: 10080, remainingPercent: 60, resetsAt: now + 6 * 24 * 3_600_000 },
+        { label: 'Claude and GPT models · 5h', windowMinutes: 300, remainingPercent: 20, resetsAt: now + 2 * 3_600_000 },
+      ],
+    };
+    expect(formatPluginEngineModelQuota(geminiExpiredUsage, 'gemini-4-neon', now, countdown, 'Gemini 4 Neon')).toBeNull();
+    expect(formatPluginEngineModelQuota(geminiExpiredUsage, 'unknown-model', now, countdown, 'Mystery')).toBeNull();
+    expect(formatPluginEngineModelQuota(geminiExpiredUsage, 'claude-opus-4-7', now, countdown, 'Claude Opus 4.7')).toBe('6d · 60%');
 
     const remoteCreateOpts = buildRemoteCreateSessionOptions(applyPluginEnginePick({
       agentKind: 'claude-code', workspaceKind: 'project', workingDir: '/repo', model: 'claude-fable-5',

@@ -9,6 +9,8 @@ import { Badge } from '@/components/ui/badge';
 import { FileTypeIcon } from '@/components/ui/file-type-icon';
 import type { ImMessageSource } from '../../../shared/imMessageSource';
 import { isSharedTaskPeer } from '@cindy/device-link';
+import { messageDispatchRouteLabel, messageDispatchRouteMismatch, type MessageDispatchRoute } from '@cindy/maker-shared/message-source';
+import { ErrorNotice } from '@/components/ui/error-notice';
 import { hasEmbeddedImPrompt } from './userMessageDisplayText';
 /**
  * UserMessage
@@ -229,6 +231,7 @@ interface UserMessageProps {
   hookSource?: ImMessageSource;
   /** 手机 / 另一台电脑远程发来时的发送设备;查看者就是该设备时不显示标签。 */
   sourceDevice?: MessageSourceDevice;
+  dispatchRoute?: MessageDispatchRoute;
   /** 插件任务派发的消息来源。 */
   sourcePlugin?: MessageSourcePlugin;
   /** /goal 目标设定/更新标记:在气泡上方渲一个「目标 / 目标已更新」徽标。 */
@@ -871,6 +874,7 @@ export function UserMessage({
   automationOrigin,
   hookSource,
   sourceDevice,
+  dispatchRoute,
   sourcePlugin,
   goalBadge,
   blockedByGhost,
@@ -1431,6 +1435,19 @@ export function UserMessage({
                 : 'max-w-[488px] items-end',
         )}
       >
+        {dispatchRoute && messageDispatchRouteMismatch(dispatchRoute) && dispatchRoute.selected ? (
+          <ErrorNotice
+            message={t('newChat.modelSelector.preparation.usingPrevious', {
+              actual: messageDispatchRouteLabel(dispatchRoute, t('newChat.pluginEngines.genericName')),
+              target: messageDispatchRouteLabel(dispatchRoute.selected, t('newChat.pluginEngines.genericName')),
+            })}
+            details={dispatchRoute.switchError}
+          />
+        ) : dispatchRoute && (
+          <span className="max-w-full break-words text-12 text-[var(--text-secondary)]" title={dispatchRoute.agentDeviceId ?? undefined}>
+            {messageDispatchRouteLabel(dispatchRoute, t('newChat.pluginEngines.genericName'))}
+          </span>
+        )}
         {sharedAuthorName && (
           <span
             {...{ [SHARE_SOURCE_ATTR]: '' }}

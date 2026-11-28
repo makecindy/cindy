@@ -6403,4 +6403,28 @@ describe('official X companion assignment', () => {
     expect(out.last('task.ack')?.payload.result).toBe('rejected');
     dispatcher.dispose();
   });
+  // 2026-11-24: 其它官方渠道也能交给伙伴。落点按连接所属的渠道取(resolver 收到 provider),
+  // 来源渠道与连接不符的派发拒收, 不落进伙伴的专线(unit)。
+  it.each(['telegram', 'feishu', 'discord', 'slack'] as const)(
+    'routes a %s dispatch to the companion lane of that channel',
+    async (provider) => {
+      const config = { ...CONFIG, id: `account:${provider}`, workspaces: {}, companionBotId: 'bot-one' };
+      const fake = fakeRunner();
+      const out = collector();
+      const resolver = vi.fn(async () => ({ sessionId: 'companion-lane', workingDir: '/companion/home' }));
+      const dispatcher = createHookDispatcher({ getConnection: () => config, bindings: memoryBindings(),
+        runner: fake.runner, resolveCompanionTarget: resolver, log: noopLog });
+      dispatcher.handleDispatch(config.id, dispatch({ externalKey: `${provider}:dm:principal`, source: { im: provider } }), out.send);
+      await tick(30);
+      expect(resolver).toHaveBeenCalledWith('bot-one', `${provider}:dm:principal`, undefined, provider);
+      expect(fake.calls[0]).toMatchObject({ sessionId: 'companion-lane', companionBotId: 'bot-one', isNew: false });
+      dispatcher.handleDispatch(config.id, dispatch({ requestId: 'req-other', externalKey: 'x:thread:principal', source: { im: 'x' } }), out.send);
+      await tick(30);
+      expect(fake.calls).toHaveLength(1);
+      expect(resolver).toHaveBeenCalledTimes(1);
+      fake.finish();
+      await tick(30);
+      dispatcher.dispose();
+    },
+  );
 });

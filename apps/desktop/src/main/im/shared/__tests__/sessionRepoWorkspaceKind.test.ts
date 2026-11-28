@@ -326,7 +326,7 @@ describe('workspaceKind 在复活 / upsert 冲突时的归属', () => {
     const followsProject = await laneRepo.prepareNewSession('bot1', 'g/oc_1');
     expect(followsProject).toMatchObject({ model: 'claude-opus-5-5', effort: 'xhigh', permissionMode: 'bypassPermissions' });
     expect(followsProject.defaultRouteFingerprint).toBe('fp-project');
-    expect(permissionModeFor).toHaveBeenLastCalledWith('g/oc_1', 'bypassPermissions');
+    expect(permissionModeFor).toHaveBeenLastCalledWith('g/oc_1', 'bypassPermissions', 'bot1');
 
     fixedRoute = { agentKind: 'codex', model: 'gpt-6.2-sol', providerId: null, agentDeviceId: null, effort: 'low' };
     resolveProject.mockClear();

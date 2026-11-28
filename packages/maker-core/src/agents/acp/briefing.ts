@@ -4,7 +4,9 @@
  * Plugin engines get no Cindy system prompt (docs/plans/acp-plugin-bridge.md), so without this
  * they cannot know which plugins and Skills the user installed: the built-in engines learn the
  * plugin roster from their system prompt and the Skills from their native Skill loading. The
- * user chose (2026-11-24) to send only these two lists, nothing else from the system prompt.
+ * user chose (2026-11-24) to send these two capability lists, not the Cindy system prompt.
+ * On 2026-11-27 the user also approved the shared Orca discovery note for eligible new local
+ * ordinary tasks with cindy_orca, in place of (not alongside) role-specific instructions.
  */
 
 /** The Cindy MCP server that carries the installed-plugin gateway (ghost_list / ghost_info / ghost_call). */
@@ -315,6 +317,71 @@ export interface PluginEngineCapabilityBriefingInput {
   /** The host's installed-plugin roster, the same text the built-in engines get. */
   pluginRoster: string;
   skills: readonly PluginEngineBriefingSkill[];
+}
+
+/**
+ * Formats extra reference and writable directory grants for a plugin engine
+ * briefing, matching the built-in Pi directory tags and keeping the host-owned
+ * plugin library root out of the general reference list.
+ */
+export function formatPluginEngineDirectoryGrants(
+  readOnlyDirs: readonly string[],
+  writableDirs: readonly string[],
+  libraryRoot?: string | null,
+): string {
+  const sections: string[] = [];
+  const dedupReadOnly = [...new Set(readOnlyDirs.map((dir) => dir.trim()).filter(Boolean))];
+  if (dedupReadOnly.length > 0) {
+    const userDirs = typeof libraryRoot === 'string'
+      ? dedupReadOnly.filter((dir) => dir !== libraryRoot)
+      : dedupReadOnly;
+    sections.push(
+      '<cindy-extra-reference-directories>',
+      'This task can read extra references as read-only. If a plugin library root is authorized as a host-owned extraDir, resolve the latest library:assets/<2>/<hash>/blob.<ext> relative key against that root; do not cache roots across directory changes. Do not modify them.',
+      ...userDirs.map((dir) => `- ${dir}`),
+      '</cindy-extra-reference-directories>',
+    );
+  }
+  const dedupWritable = [...new Set(writableDirs.map((dir) => dir.trim()).filter(Boolean))];
+  if (dedupWritable.length > 0) {
+    sections.push(
+      '<cindy-extra-writable-directories>',
+      'The user explicitly allowed additional writable locations for this task. Stay inside those grants; do not write the plugin library root.',
+      ...dedupWritable.map((dir) => `- ${dir}`),
+      '</cindy-extra-writable-directories>',
+    );
+  }
+  return sections.join('\n');
+}
+
+/**
+ * Formats a mid-session directory grant update (including explicit revocations)
+ * prepended to the next prompt after `setExtraDirs` / `setWritableDirs`.
+ */
+export function formatPluginEngineDirectoryGrantsUpdate(
+  readOnlyDirs: readonly string[],
+  writableDirs: readonly string[],
+  libraryRoot?: string | null,
+): string {
+  const formatted = formatPluginEngineDirectoryGrants(readOnlyDirs, writableDirs, libraryRoot);
+  if (!formatted) {
+    return [
+      '<cindy-directory-grants-update>',
+      'Updated task directory grants (replaces earlier extra reference and extra writable directory grants).',
+      'No extra reference directories or extra writable directories are currently authorized; stay within the task working directory.',
+      '</cindy-directory-grants-update>',
+    ].join('\n');
+  }
+  const dedupReadOnly = readOnlyDirs.some((dir) => dir.trim().length > 0);
+  const dedupWritable = writableDirs.some((dir) => dir.trim().length > 0);
+  const notes: string[] = [
+    '<cindy-directory-grants-update>',
+    'Updated task directory grants (replaces earlier extra reference and extra writable directory grants).',
+    ...(dedupReadOnly ? [] : ['No extra reference directories are currently authorized.']),
+    ...(dedupWritable ? [] : ['No extra writable directories are currently authorized; do not write outside the task working directory.']),
+    '</cindy-directory-grants-update>',
+  ];
+  return `${notes.join('\n')}\n${formatted}`;
 }
 
 /**

@@ -66,6 +66,7 @@ import { toast } from '@/lib/toast';
 import { ControlledBanner, useControlledBy, useComposerCollapsed } from '@/features/remote-device/ControlledBanner';
 import { useAgentIslandActivity } from '@/state/agentIslandActivity';
 import type {
+  BotGroupAttachment,
   BotGroupMemberView,
   BotGroupDetail,
   BotGroupMessageView,
@@ -74,13 +75,15 @@ import type {
   BotGroupQuoteDisplay,
   BotGroupQuoteView,
 } from '../../../shared/botGroupChat';
-import { botGroupQuoteFromMessage, isBotGroupMessageQuotable, resolveBotGroupQuote } from '../../../shared/botGroupChat';
+import { botGroupQuoteFromMessage, isBotGroupMessageQuotable, patchBotGroupMessageAttachments, resolveBotGroupQuote } from '../../../shared/botGroupChat';
+import { canMentionAllInBotGroup } from './botGroupPresentation';
 import { useSplitPaneFocus } from '../cc-agent/splitPaneFocus';
 import { useRegisterContentHeader } from '../feature-context';
 import { BotGroupAvatarStack } from './BotGroupAvatars';
 import { botGroupAttachmentScope, refreshPendingBotGroupAttachments } from './botGroupAttachments';
 import { BOT_GROUP_BOT_BROADCAST_LABELS } from './BotGroupMentionCard';
 import { BotGroupComposer } from './BotGroupComposer';
+import { BotGroupAssistantDeviceCard } from './BotGroupAssistantDeviceCard';
 import { focusBotGroupComposer } from './botGroupTextInput';
 import { BotGroupThreadHint } from './BotGroupThreadHint';
 import { findThreadMessageElement, flashThreadTarget } from './BotGroupThreadViews';
@@ -92,8 +95,10 @@ import {
   botGroupHeaderStatus,
   type BotGroupLiveSpeaker,
 } from './BotGroupLiveStatus';
+import { ChatReactionReads } from './useChatReactions';
 import { messageReactionRevision } from './ChatServerControls';
 import { ChatGroupInviteMenu } from './ChatGroupInviteMenu';
+import { GroupMentionHistoryButton } from './GroupMentionHistoryButton';
 import { ChatThreadListPanel } from './ChatThreadListPanel';
 import { animateThreadPanel, ChatThreadPanel } from './ChatThreadPanel';
 import {
@@ -101,7 +106,7 @@ import {
   type BotGroupFollowUpAction,
   type BotGroupPlanCardAction,
 } from './BotGroupPlan';
-import { BotGroupDateDivider, BotGroupTimelineItem } from './BotGroupTimelineItem';
+import { BotGroupDateDivider, BotGroupTimelineItem, BotGroupUnreadDivider } from './BotGroupTimelineItem';
 import { BotGroupExternalBadge } from './BotGroupExternalBadge';
 import {
   botGroupHandoffStepNumbers,
@@ -125,13 +130,16 @@ import {
   botGroupPlanFollowUp,
   collapseBotGroupMemberJoined,
   continuableRoundEndId,
+  findFirstUnreadBotGroupMessageId,
+  hasUnreadBotGroupMessages,
   mergeBotGroupMessages,
   projectBotGroupExecutionFailures,
   mergeBotGroupPlans,
   openBotGroupPlan,
+  type BotGroupUnreadBoundary,
 } from './botGroupPresentation';
 import { botGroupApi, editBotGroupPlanStep, runBotGroupPlanAction, setBotGroupAutoContinue, useBotGroupSummary } from './botGroupStore';
-import { botGroupReadKey, markBotRead } from './botReadState';
+import { botGroupReadKey, getBotLastReadAt, markBotRead } from './botReadState';
 import { useGroupMentionHistory, useReadLocatedMention, type GroupMaskMention } from './groupMaskPresentation';
 import {
   enqueueBotGroupSend, botGroupSendSignature, beginBotGroupTimelineRead, discardBotGroupOutbox, getBotGroupOutboxClaims,
@@ -144,6 +152,11 @@ type GroupViewState =
   | ({ kind: 'ready'; readToken: number } & BotGroupLoadedTimeline)
   | { kind: 'missing' }
   | { kind: 'error' };
+
+function timelineHasMoreBefore(timeline: BotGroupLoadedTimeline): boolean {
+  return timeline.olderBeforeSequence !== undefined || timeline.older.length > 0
+    ? timeline.olderHasMore : timeline.group.hasMoreBefore;
+}
 
 /** Toast copy when a plan action fails without a more specific cause. */
 const PLAN_ACTION_FAILED: Record<BotGroupPlanAction, string> = {
@@ -297,6 +310,7 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
     };
   }, []);
 
+  const [reactionReads] = useState(() => new ChatReactionReads());
   const [reloadVersion, setReloadVersion] = useState(0);
   const [loadingOlder, setLoadingOlder] = useState(false);
   const [continuing, setContinuing] = useState(false);
@@ -333,6 +347,16 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
   };
   const [seenThrough, setSeenThrough] = useState<string | null>(null);
   const readOwner = useRef(getDataOwnerGeneration());
+  const entryLocalReadRef = useRef<{ owner: ReturnType<typeof getDataOwnerGeneration>; at: number | null }>({
+    owner: getDataOwnerGeneration(),
+    at: getBotLastReadAt(botGroupReadKey(groupId)),
+  });
+  /** Unread boundary captured on entry and held fixed while this group stays open. */
+  const unreadBoundaryRef = useRef<{
+    owner: ReturnType<typeof getDataOwnerGeneration>;
+    finalized: boolean;
+    boundary: BotGroupUnreadBoundary | null;
+  }>({ owner: getDataOwnerGeneration(), finalized: false, boundary: null });
   const prependAnchorRef = useRef<{ height: number; top: number } | null>(null);
   const attachmentScope = botGroupAttachmentScope(groupId);
   const attachmentState = useAttachments(attachmentScope, attachmentScope);
@@ -364,6 +388,31 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
   const loadingOlderRef = useRef(false);
   const locatingRef = useRef(false);
   const quoteLocateGeneration = useRef(0);
+  // Buffer incremental `attachments` pushes with a monotonic sequence so a push that
+  // settles while `getBotGroup()` is still in flight is not overwritten by a stale
+  // `loading` placeholder when the IPC response returns.
+  const attachmentSeqRef = useRef(0);
+  const bufferedAttachmentsRef = useRef(new Map<string, { attachment: BotGroupAttachment; seq: number }>());
+  const applyBufferedAttachments = useCallback((messages: BotGroupMessageView[], sinceSeq: number) => {
+    if (bufferedAttachmentsRef.current.size === 0 || messages.length === 0) return messages;
+    const newer = new Map<string, BotGroupAttachment>();
+    for (const [id, entry] of bufferedAttachmentsRef.current) {
+      if (entry.seq > sinceSeq) newer.set(id, entry.attachment);
+    }
+    return newer.size > 0 ? patchBotGroupMessageAttachments(messages, newer) : messages;
+  }, []);
+  const applyBufferedAttachmentsToGroup = useCallback((detail: BotGroupDetail, sinceSeq: number): BotGroupDetail => {
+    const nextMessages = applyBufferedAttachments(detail.messages, sinceSeq);
+    const nextUpdates = detail.messageUpdates
+      ? applyBufferedAttachments(detail.messageUpdates, sinceSeq)
+      : detail.messageUpdates;
+    if (nextMessages === detail.messages && nextUpdates === detail.messageUpdates) return detail;
+    return {
+      ...detail,
+      messages: nextMessages,
+      ...(nextUpdates !== undefined ? { messageUpdates: nextUpdates } : {}),
+    };
+  }, [applyBufferedAttachments]);
 
   // Every older-page read belongs to the generation visible when it started. A
   // reset discovered here must also cancel in-flight latest-page/auxiliary reads.
@@ -417,6 +466,7 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
       const current = ++version;
       const readDeltaVersion = deltaVersion;
       const readToken = beginBotGroupTimelineRead();
+      const settleReactions = reactionReads.beginRead();
       const owner = getDataOwnerGeneration();
       const api = botGroupApi();
       const isCurrent = () => !cancelled && current === version && isDataOwnerGenerationCurrent(owner);
@@ -429,10 +479,12 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
           return;
         }
         const displayed = stateRef.current;
+        const readAttachmentSeq = attachmentSeqRef.current;
         if (!hasTimeline && reloadVersion === 0) void api.getBotGroup(groupId, { cacheOnly: true, ...(direct ? { conversationKind: 'direct' } : {}) }).then(cached => {
           if (!cached.ok || hasTimeline || !isCurrent()) return;
           hasTimeline = true;
-          setState({ kind: 'ready', group: cached.group, older: [], olderPlans: [], olderHasMore: cached.group.hasMoreBefore, readToken: 0 });
+          const cachedGroup = applyBufferedAttachmentsToGroup(cached.group, readAttachmentSeq);
+          setState({ kind: 'ready', group: cachedGroup, older: [], olderPlans: [], olderHasMore: cachedGroup.hasMoreBefore, readToken: 0 });
         }).catch(() => undefined);
         const shown = displayed.kind === 'ready' && displayed.group.id === groupId;
         const sourceMessageIds = [...new Set([...(shown
@@ -454,34 +506,44 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
         if (result.ok && readDeltaVersion !== deltaVersion) return;
         if (result.ok) {
           hasTimeline = true;
-          if (result.group.metadataRetryAt) retryRead(owner, additionalSources, changedIds, result.group.metadataRetryAt);
+          const nextGroup = applyBufferedAttachmentsToGroup(result.group, readAttachmentSeq);
+          if (nextGroup.metadataRetryAt) retryRead(owner, additionalSources, changedIds, nextGroup.metadataRetryAt);
           readOwner.current = owner;
+          settleReactions(nextGroup.messages);
+          if (nextGroup.messageUpdates) settleReactions(nextGroup.messageUpdates);
           const shown = stateRef.current;
           setState((previous) => {
             if (previous.kind !== 'ready') {
-              return { kind: 'ready', group: result.group, older: [], olderPlans: [], olderHasMore: result.group.hasMoreBefore, readToken };
+              return { kind: 'ready', group: nextGroup, older: [], olderPlans: [], olderHasMore: nextGroup.hasMoreBefore, readToken };
             }
-            const merged = mergeBotGroupLatestPage(previous, result.group);
-            merged.older = applyBotGroupThreadShareUpdates(merged.older, result.group);
+            const merged = mergeBotGroupLatestPage(previous, nextGroup);
+            merged.older = applyBufferedAttachments(applyBotGroupThreadShareUpdates(merged.older, nextGroup), readAttachmentSeq);
             return { kind: 'ready', ...merged, readToken };
           });
           if (shown.kind === 'ready') {
-            const quoted = quotedOlderOriginals([...shown.older, ...shown.group.messages], result.group.messages);
+            const quoted = quotedOlderOriginals([...shown.older, ...shown.group.messages], nextGroup.messages);
             // A message changed here (a reaction) that sits only on an opened older page: the
             // latest page cannot refresh its copy, so its page is re-read like a quoted original's.
-            const latestIds = new Set(result.group.messages.map((message) => message.id));
+            const latestIds = new Set(nextGroup.messages.map((message) => message.id));
             const changed = shown.older.filter((message) => changedIds.includes(message.id)
               && !latestIds.has(message.id) && !quoted.some((target) => target.id === message.id));
             const targets = [...quoted, ...changed].sort((a, b) => b.sequence - a.sequence);
-            if (targets.length > 0) void recheckOlderCopies(api, targets, result.group.historyRevision, isCurrent);
+            if (targets.length > 0) void recheckOlderCopies(api, targets, nextGroup.historyRevision, isCurrent);
           }
-          if (displayed.kind === 'ready' && displayed.group.id === groupId && result.group.messages.length > 0) {
-            const latestFrom = Math.min(...result.group.messages.map((message) => message.sequence));
+          if (displayed.kind === 'ready' && displayed.group.id === groupId && nextGroup.messages.length > 0) {
+            const latestFrom = Math.min(...nextGroup.messages.map((message) => message.sequence));
+            const settleAttachments = reactionReads.beginRead();
+            const received = new Set<BotGroupMessageView>();
             const refreshed = await refreshPendingBotGroupAttachments(displayed.older, latestFrom, async (before) => {
+              const pageSeq = attachmentSeqRef.current;
               const page = await api.getBotGroup(groupId, { ...(direct ? { conversationKind: 'direct' as const } : {}), beforeSequence: before });
-              return page.ok && isCurrent() && acceptHistoryPage(page.group, result.group.historyRevision) ? page.group.messages : null;
+              if (!page.ok || !isCurrent() || !acceptHistoryPage(page.group, nextGroup.historyRevision)) return null;
+              const patched = applyBufferedAttachments(page.group.messages, pageSeq);
+              for (const message of patched) received.add(message);
+              return patched;
             });
             if (refreshed && isCurrent()) {
+              settleAttachments(refreshed.filter(message => received.has(message)));
               const fresh = new Map(refreshed.map((message) => [message.sequence, message]));
               setState((previous) => previous.kind === 'ready' && previous.group.id === groupId
                 ? { ...previous, older: previous.older.map((message) => fresh.get(message.sequence) ?? message) }
@@ -493,6 +555,7 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
           // It must never restore a conversation whose access was just revoked.
           version += 1;
           hasTimeline = false;
+          bufferedAttachmentsRef.current.clear();
           discardDraftTree(botGroupAttachmentScope(groupId));
           discardOutbox();
           setState({ kind: 'missing' });
@@ -546,8 +609,12 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
       for (let page = 0; remaining.length > 0 && page < targets.length; page += 1) {
         let messages: BotGroupMessageView[] | null = null;
         try {
+          const pageSeq = attachmentSeqRef.current;
+          const settlePage = reactionReads.beginRead();
           const read = await api.getBotGroup(groupId, { ...(direct ? { conversationKind: 'direct' as const } : {}), beforeSequence: remaining[0]!.sequence + 1 });
-          messages = read.ok && isCurrent() && acceptHistoryPage(read.group, historyRevision) ? read.group.messages : null;
+          messages = read.ok && isCurrent() && acceptHistoryPage(read.group, historyRevision)
+            ? applyBufferedAttachments(read.group.messages, pageSeq) : null;
+          if (messages) settlePage(messages);
         } catch {
           messages = null;
         }
@@ -573,12 +640,12 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
       cancelled = true;
       queued = null;
       clearRetry();
+      bufferedAttachmentsRef.current.clear();
       prependAnchorRef.current = null;
       stateRef.current = { kind: 'loading' };
       setState(stateRef.current);
       setReloadVersion(value => value + 1);
     };
-    load();
     const unsubscribe =
       botGroupApi()?.onBotGroupChanged?.((payload, ownerStamp) => {
         if (cancelled || !isDataOwnerPushCurrent(ownerStamp) || payload.groupId !== groupId) return;
@@ -586,6 +653,7 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
           cancelled = true;
           queued = null;
           clearRetry();
+          bufferedAttachmentsRef.current.clear();
           // Unsent attachments go with the group (staged copies included).
           discardDraftTree(botGroupAttachmentScope(groupId));
           discardOutbox();
@@ -593,6 +661,33 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
           // The authoritative hide can unmount the drawer before its IPC reply.
           // This mounted page owns selection, so clear the route here as well.
           if (payload.change === 'list') navigate('/bots');
+          return;
+        }
+        if (payload.change === 'attachments') {
+          if (payload.attachments?.length) {
+            const updates = new Map<string, BotGroupAttachment>();
+            for (const item of payload.attachments) {
+              updates.set(item.id, item);
+              bufferedAttachmentsRef.current.delete(item.id);
+              bufferedAttachmentsRef.current.set(item.id, { attachment: item, seq: ++attachmentSeqRef.current });
+              if (bufferedAttachmentsRef.current.size > 256) {
+                bufferedAttachmentsRef.current.delete(bufferedAttachmentsRef.current.keys().next().value!);
+              }
+            }
+            setState((previous) => {
+              if (previous.kind !== 'ready') return previous;
+              const nextMessages = patchBotGroupMessageAttachments(previous.group.messages, updates);
+              const nextOlder = patchBotGroupMessageAttachments(previous.older, updates);
+              if (nextMessages === previous.group.messages && nextOlder === previous.older) return previous;
+              return {
+                ...previous,
+                group: nextMessages === previous.group.messages
+                  ? previous.group
+                  : { ...previous.group, messages: nextMessages },
+                older: nextOlder,
+              };
+            });
+          }
           return;
         }
         const shown = stateRef.current;
@@ -603,7 +698,7 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
             ? { ...previous,
               // A single confirmed row proves no coverage between it and the previous page.
               // Preserve that page's boundary across every delta until a full read reconciles it.
-              latestPageCeiling: previous.latestPageCeiling
+              latestPageCeiling: previous.latestPageCeiling ?? previous.group.pageNewestSequence
                 ?? previous.group.messages.reduce((max, message) => Math.max(max, message.sequence), Number.NEGATIVE_INFINITY),
               group: { ...previous.group,
               // Plan messages reference details absent from a message-only push. Adopt them
@@ -614,16 +709,18 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
         }
         load();
       }) ?? (() => {});
+    load();
     return () => {
       cancelled = true;
       queued = null;
       clearRetry();
+      bufferedAttachmentsRef.current.clear();
       version += 1;
       loadRef.current = () => {};
       resetHistoryRef.current = () => {};
       unsubscribe();
     };
-  }, [groupId, reloadVersion, navigate, acceptHistoryPage]);
+  }, [groupId, reloadVersion, navigate, acceptHistoryPage, reactionReads, applyBufferedAttachments, applyBufferedAttachmentsToGroup]);
 
   // An older page may land across a refresh. Recheck that set once per version; source
   // and attachment completion pushes then refresh every displayed share together.
@@ -756,11 +853,37 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
     if (state.kind === 'ready') setSeenThrough(previous => previous ?? latestSequence);
   }, [state.kind, latestSequence]);
   const newMessageCount = botGroupNewMessageCount(realMessages, seenThrough);
+  const currentReadOwner = getDataOwnerGeneration();
+  if (!isDataOwnerGenerationCurrent(entryLocalReadRef.current.owner)) {
+    entryLocalReadRef.current = { owner: currentReadOwner, at: getBotLastReadAt(botGroupReadKey(groupId)) };
+  }
+  if (!isDataOwnerGenerationCurrent(unreadBoundaryRef.current.owner)) {
+    unreadBoundaryRef.current = { owner: currentReadOwner, finalized: false, boundary: null };
+  }
+  // A cached server cursor may predate reads on another device. Capture it from the
+  // first fresh page before this visit sends its own read receipt.
+  const waitingForServerRead = !direct && state.kind === 'ready' && !!state.group.serverBacked && state.readToken === 0;
+  if (!direct && state.kind === 'ready' && !waitingForServerRead && !unreadBoundaryRef.current.finalized) {
+    const throughSequence = BigInt(latestSequence);
+    const candidate: BotGroupUnreadBoundary | null = state.group.readSequence !== undefined
+      ? { kind: 'sequence', sequence: state.group.readSequence, throughSequence }
+      : !state.group.serverBacked && entryLocalReadRef.current.at !== null
+        ? { kind: 'time', at: entryLocalReadRef.current.at, throughSequence }
+        : null;
+    if (state.readToken > 0 || hasUnreadBotGroupMessages(realMessages, candidate)) {
+      unreadBoundaryRef.current = { owner: currentReadOwner, finalized: true, boundary: candidate };
+    }
+  }
+  const unreadBoundary = unreadBoundaryRef.current.boundary;
+  const firstUnreadId = useMemo(
+    () => findFirstUnreadBotGroupMessageId(rows, unreadBoundary),
+    [rows, unreadBoundary],
+  );
   const messageNavigationVisible = !sharing && !nearBottom && (newMessageCount > 0 || jumpDown.visible);
   const readRequest = useRef<string | null>(null);
   const readMessages = useRef(realMessages); readMessages.current = realMessages;
   const acknowledge = useCallback(() => {
-    if (!isDataOwnerGenerationCurrent(readOwner.current) || !stickToBottomRef.current || document.visibilityState !== 'visible' || !document.hasFocus()) return;
+    if (waitingForServerRead || !isDataOwnerGenerationCurrent(readOwner.current) || !stickToBottomRef.current || document.visibilityState !== 'visible' || !document.hasFocus()) return;
     const element = scrollRef.current;
     if (!element || element.scrollHeight - element.scrollTop - element.clientHeight >= STICK_TO_BOTTOM_PX) return;
     setSeenThrough(latestSequenceRef.current);
@@ -774,7 +897,7 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
         .then(result => { if (!result.ok && readRequest.current === latest.id) readRequest.current = null; })
         .catch(() => { if (readRequest.current === latest.id) readRequest.current = null; });
     }
-  }, [groupId]);
+  }, [groupId, direct, waitingForServerRead]);
   const lastAcknowledgeRef = useRef(0);
   const acknowledgeTimerRef = useRef<number | null>(null);
   /** Leading-edge throttle for scroll: the first event marks at once, a burst marks once more after. */
@@ -805,7 +928,7 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
     [state],
   );
   const hasMoreBefore =
-    state.kind === 'ready' && (state.older.length > 0 ? state.olderHasMore : state.group.hasMoreBefore);
+    state.kind === 'ready' && timelineHasMoreBefore(state);
 
   const openSettings = useCallback(() => {
     if (direct) return;
@@ -946,6 +1069,33 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
   const mentionHistory = useGroupMentionHistory(groupId);
   const readLocatedMention = useReadLocatedMention(groupId);
   const showInviteMenu = !!headerGroup?.serverBacked && !direct && !headerGroup.dissolvedAt && !headerGroup.archived;
+  const onOpenThread = useCallback((messageId: string, focusMessageId?: string) => {
+    threadOpenerRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    if (threadCloseAnimationRef.current) {
+      threadCloseAnimationRef.current.cancel();
+      threadCloseAnimationRef.current = null;
+      const panel = threadLayoutRef.current?.querySelector('aside');
+      if (panel) panel.inert = false;
+      if (messageId === threadRootIdRef.current) {
+        focusBotGroupComposer(panel);
+      }
+    }
+    setThreadListOpen(false);
+    setThreadOpenedFromList(false);
+    setThreadRootId(messageId);
+    setThreadFocus(focusMessageId ? { messageId: focusMessageId, nonce: ++threadFocusNonce.current } : null);
+  }, []);
+  const locateMention = useCallback((entry: GroupMaskMention) => {
+    if (entry.threadRootId) onOpenThread(entry.threadRootId, entry.messageId);
+    else void actionsRef.current.locateQuoted({ messageId: entry.messageId, sequence: null });
+  }, [onOpenThread]);
+  const locateLoadedHistoryMention = useCallback((entry: GroupMaskMention) => {
+    const current = stateRef.current;
+    if (entry.threadRootId || current.kind !== 'ready' ||
+      !current.group.messages.some(message => message.id === entry.messageId && !message.threadRootId)) return false;
+    locateMention(entry);
+    return true;
+  }, [locateMention]);
   const threadsLabel = t('bots.groupChat.server.thread.openIndex');
   const hasUnreadThreads = hasActionableGroupThreads(group?.threads, threadRootId);
   const header = useMemo(() => {
@@ -959,7 +1109,7 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
     // The header shows the group size or live activity. The settings drawer lists members.
     const summary = direct ? names : t('bots.groupChat.memberCount', { count: members.length });
     return (
-      <div ref={threadHeaderRef} data-testid="bot-group-content-header" className="flex h-full w-full min-w-0 items-center gap-2 pr-2">
+      <div ref={threadHeaderRef} data-testid="bot-group-content-header" className="[container-type:inline-size] flex h-full w-full min-w-0 items-center gap-2 pr-2">
         <button
           type="button"
           onClick={direct ? undefined : openSettings}
@@ -968,7 +1118,7 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
           className="flex min-w-0 items-center gap-2 rounded-xl px-2 py-1 text-left hover:bg-[var(--surface-hover)]"
           style={WINDOW_NO_DRAG_STYLE}
         >
-          <BotGroupAvatarStack members={shown} />
+          <BotGroupAvatarStack members={shown} className="[@container(max-width:239px)]:hidden" />
           <span className="flex min-w-0 flex-col">
             <span className="flex min-w-0 items-center gap-1.5">
               <span className="min-w-0 truncate text-13 font-medium leading-5 text-[var(--text-primary)]">{headerGroup.name}</span>
@@ -984,6 +1134,9 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
           {showInviteMenu &&
             <ChatGroupInviteMenu key={headerGroup.id} group={{ id: headerGroup.id, members, canInvite: headerGroup.canInvite }}
               variant="icon" consumeAutoOpen={canAutoOpenInviteMenu ? consumeInviteMenuRequest : undefined} />}
+          {headerGroup.supportsPersonalMentionHistory && !direct && (
+            <GroupMentionHistoryButton key={`mentions-${headerGroup.id}`} groupId={headerGroup.id} onLocate={locateLoadedHistoryMention} />
+          )}
           {headerGroup.serverBacked && !direct && (
             <Tip text={threadsLabel}>
               <button
@@ -1025,7 +1178,7 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
         </div>
       </div>
     );
-  }, [direct, headerGroup?.name, headerGroup?.external, headerGroup?.id, headerGroup?.serverBacked, headerGroup?.canInvite, showInviteMenu, canAutoOpenInviteMenu, consumeInviteMenuRequest, members, headerStatus, openSettings, separator, settingsLabel, threadsLabel, toggleThreadList, threadPanelKey, hasUnreadThreads, threadListOpen, t]);
+  }, [direct, headerGroup?.name, headerGroup?.external, headerGroup?.id, headerGroup?.serverBacked, headerGroup?.canInvite, headerGroup?.supportsPersonalMentionHistory, showInviteMenu, canAutoOpenInviteMenu, consumeInviteMenuRequest, members, headerStatus, openSettings, separator, settingsLabel, threadsLabel, toggleThreadList, locateLoadedHistoryMention, threadPanelKey, hasUnreadThreads, threadListOpen, t]);
   useRegisterContentHeader(header);
 
   // Group-level stopping remains available even when all visible work belongs to topics.
@@ -1067,12 +1220,14 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
     return () => observer.disconnect();
   }, [ready]);
 
-  /** Reads one older page; returns it so 引用 can keep paging toward the original. */
-  const loadOlder = async (beforeSequence?: number): Promise<{ messages: BotGroupMessageView[]; hasMore: boolean } | null> => {
+  /** Reads one older page; returns its boundary so 引用 can keep paging toward the original. */
+  const loadOlder = async (beforeSequence?: number, rereadOnly = false): Promise<{ messages: BotGroupMessageView[]; nextBefore: number | null } | null> => {
     const base = stateRef.current;
     if (base.kind !== 'ready' || loadingOlderRef.current) return null;
     const loaded = mergeBotGroupMessages(base.older, base.group.messages);
-    const before = beforeSequence ?? loaded[0]?.sequence;
+    const historyBefore = base.olderBeforeSequence !== undefined ? base.olderBeforeSequence
+      : base.older.length ? loaded[0]?.sequence : base.group.pageOldestSequence ?? loaded[0]?.sequence;
+    const before = beforeSequence ?? historyBefore;
     const anchorId = loaded[0]?.id;
     const api = botGroupApi();
     if (!before || !api) return null;
@@ -1080,14 +1235,19 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
     loadingOlderRef.current = true;
     setLoadingOlder(true);
     try {
+      const settlePage = reactionReads.beginRead();
       const sourceMessageIds = loaded.map(message => message.id);
+      const readAttachmentSeq = attachmentSeqRef.current;
       const result = await api.getBotGroup(groupId, { ...(direct ? { conversationKind: 'direct' as const } : {}), beforeSequence: before, sourceMessageIds });
       if (!isDataOwnerGenerationCurrent(owner)) return null;
       if (!result.ok) {
         toast.error(t('bots.groupChat.timeline.loadEarlierFailed'));
         return null;
       }
-      if (!acceptHistoryPage(result.group, base.group.historyRevision)) return null;
+      const nextGroup = applyBufferedAttachmentsToGroup(result.group, readAttachmentSeq);
+      if (!acceptHistoryPage(nextGroup, base.group.historyRevision)) return null;
+      const oldest = nextGroup.pageOldestSequence ?? Math.min(...nextGroup.messages.map(message => message.sequence));
+      const nextBefore = nextGroup.hasMoreBefore && oldest && oldest < before ? oldest : null;
       // The latest page started over meanwhile (more than a page arrived): this page was read
       // below a timeline that is gone and would sit under the new one with the gap still in it.
       const stillLoaded = (timeline: GroupViewState) => timeline.kind === 'ready'
@@ -1098,32 +1258,37 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
       const current = stateRef.current;
       const shownFirst = current.kind === 'ready' ? mergeBotGroupMessages(current.older, current.group.messages)[0]?.sequence : undefined;
       // Only rows that land above the first one move the content; a re-read in place does not.
-      const prepends = result.group.messages.some((message) => shownFirst === undefined || message.sequence < shownFirst);
+      const prepends = nextGroup.messages.some((message) => shownFirst === undefined || message.sequence < shownFirst);
       if (element && prepends) prependAnchorRef.current = { height: element.scrollHeight, top: element.scrollTop };
       const newerRefresh = current.kind === 'ready' && current.group !== base.group;
+      if (!newerRefresh) {
+        settlePage(nextGroup.messages);
+        if (nextGroup.messageUpdates) settlePage(nextGroup.messageUpdates);
+      }
       setState((previous) => {
         if (previous.kind !== 'ready' || !stillLoaded(previous)) return previous;
         // A newer push refresh wins over an older in-flight pagination request.
         const executionFailures = previous.group === base.group
-          ? result.group.executionFailures ?? previous.group.executionFailures
+          ? nextGroup.executionFailures ?? previous.group.executionFailures
           : previous.group.executionFailures;
-        const updates = new Map(previous.group === base.group ? result.group.messageUpdates?.map(message => [message.id, message]) : []);
+        const updates = new Map(previous.group === base.group ? nextGroup.messageUpdates?.map(message => [message.id, message]) : []);
         const applyUpdates = (messages: BotGroupMessageView[]) => updates.size
           ? messages.map(message => updates.get(message.id) ?? message) : messages;
         const older = previous.group === base.group
-          ? mergeBotGroupMessages(previous.older, result.group.messages)
-          : mergeBotGroupMessages(result.group.messages, previous.older);
+          ? mergeBotGroupMessages(previous.older, nextGroup.messages)
+          : mergeBotGroupMessages(nextGroup.messages, previous.older);
         return {
           ...previous,
           group: { ...previous.group, messages: applyUpdates(previous.group.messages), executionFailures },
           older: applyUpdates(older),
-          olderPlans: mergeBotGroupPlans(result.group.plans, previous.olderPlans),
-          olderHasMore: result.group.hasMoreBefore,
+          olderPlans: mergeBotGroupPlans(nextGroup.plans, previous.olderPlans),
+          ...(!rereadOnly
+            ? { olderHasMore: nextBefore !== null, olderBeforeSequence: nextBefore } : {}),
         };
       });
       // A push may have refreshed before these sources were displayed. Reconcile their current state too.
-      if (newerRefresh) loadRef.current(result.group.messages.map(message => message.id));
-      return { messages: result.group.messages, hasMore: result.group.hasMoreBefore };
+      if (newerRefresh) loadRef.current(nextGroup.messages.map(message => message.id));
+      return { messages: nextGroup.messages, nextBefore };
     } catch {
       toast.error(t('bots.groupChat.timeline.loadEarlierFailed'));
       return null;
@@ -1156,7 +1321,7 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
     if (paged) {
       try {
         // A failed re-read is not a verified original: stay put rather than jump to a stale copy.
-        const read = await loadOlder(paged.sequence + 1);
+        const read = await loadOlder(paged.sequence + 1, true);
         if (!read || generation !== quoteLocateGeneration.current) return;
         const original = find(read.messages);
         if (original) setUnverifiedOriginals((previous) => {
@@ -1172,16 +1337,15 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
       return;
     }
     try {
-      let hasMore = base.older.length > 0 ? base.olderHasMore : base.group.hasMoreBefore;
+      let hasMore = timelineHasMoreBefore(base);
       let before: number | undefined;
       for (let page = 0; hasMore && page < QUOTE_LOCATE_MAX_PAGES; page += 1) {
         const read = await loadOlder(before);
         if (!read || generation !== quoteLocateGeneration.current) return;
         const original = find(read.messages);
         if (original) { settle(original); return; }
-        const oldest = read.messages.reduce((min, message) => Math.min(min, message.sequence), Number.POSITIVE_INFINITY);
-        hasMore = read.hasMore && Number.isFinite(oldest) && (quote.sequence === null || oldest > quote.sequence);
-        before = Number.isFinite(oldest) ? oldest : undefined;
+        hasMore = read.nextBefore !== null && (quote.sequence === null || read.nextBefore > quote.sequence);
+        before = read.nextBefore ?? undefined;
       }
       settle(undefined);
     } finally {
@@ -1320,22 +1484,6 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
     const message = messageByIdRef.current.get(messageId);
     if (message) setQuoteDraft(botGroupQuoteFromMessage(message));
   }, []);
-  const onOpenThread = useCallback((messageId: string, focusMessageId?: string) => {
-    threadOpenerRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    if (threadCloseAnimationRef.current) {
-      threadCloseAnimationRef.current.cancel();
-      threadCloseAnimationRef.current = null;
-      const panel = threadLayoutRef.current?.querySelector('aside');
-      if (panel) panel.inert = false;
-      if (messageId === threadRootIdRef.current) {
-        focusBotGroupComposer(panel);
-      }
-    }
-    setThreadListOpen(false);
-    setThreadOpenedFromList(false);
-    setThreadRootId(messageId);
-    setThreadFocus(focusMessageId ? { messageId: focusMessageId, nonce: ++threadFocusNonce.current } : null);
-  }, []);
   const openThreadFromList = useCallback((messageId: string, focusMessageId?: string) => {
     setThreadListOpen(false);
     setThreadOpenedFromList(true);
@@ -1345,10 +1493,6 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
   const locateThreadRoot = useCallback((rootId: string) => {
     void actionsRef.current.locateQuoted({ messageId: rootId, sequence: null });
   }, []);
-  const locateMention = useCallback((entry: GroupMaskMention) => {
-    if (entry.threadRootId) onOpenThread(entry.threadRootId, entry.messageId);
-    else void actionsRef.current.locateQuoted({ messageId: entry.messageId, sequence: null });
-  }, [onOpenThread]);
   const onSending = resumeBottomFollow;
   const sendRichAnswer = useCallback(async (text: string) => {
     const current = stateRef.current;
@@ -1647,11 +1791,11 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
             return (
               <Fragment key={adoptedKeysRef.current.get(message.id) ?? message.id}>
                 {rowLayout?.dateDivider != null ? <BotGroupDateDivider timestamp={rowLayout.dateDivider} locale={locale} /> : null}
+                {message.id === firstUnreadId ? <BotGroupUnreadDivider /> : null}
                 <BotGroupTimelineItem
-                  showDeviceChoice={!!group.assistantComputers && !group.assistantDeviceId}
                   pluginUi={pluginUi}
                   message={message}
-                  continued={timeline[timelineIndex - 1]?.kind !== 'work' && (rowLayout?.continued ?? false)}
+                  continued={timeline[timelineIndex - 1]?.kind !== 'work' && message.id !== firstUnreadId && (rowLayout?.continued ?? false)}
                   authorName={authorName}
                   avatar={identity ? avatarById.get(identity.botId) : undefined}
                   ownerOf={owned || undefined}
@@ -1665,7 +1809,9 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
                   shareScope={shareScope}
                   sharing={sharing}
                   reactionGroupId={group.serverBacked && !direct ? group.id : undefined}
+                  attachmentGroupId={group.serverBacked ? group.id : undefined}
                   readersEnabled={group.serverBacked && !direct && group.supportsMessageReaders === true}
+                  reactionReads={reactionReads}
                   reactionRevision={messageReactionRevision(group, message.id)}
                   readOnly={Boolean(group.archived || group.dissolvedAt)}
                   onRichSend={sendRichAnswer}
@@ -1751,7 +1897,7 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
         </div>}
         <div data-chat-composer-stack className={sharing ? 'flex justify-center' : undefined}>
           {sharing ? <ShareSelectionBar sessionId={shareScope} barWidth="var(--cindy-input-width)"
-            getContentWidth={() => contentRef.current?.querySelector('article')?.getBoundingClientRect().width ?? 914} /> : group.archived || group.dissolvedAt ? <p className="border-t border-[var(--border-default)] p-4 text-center text-13 text-[var(--text-tertiary)]">{t(group.dissolvedAt ? 'bots.groupChat.lifecycle.dissolved' : 'bots.groupChat.server.settings.archived')}</p> : <BotGroupComposer allowMentionAllBots={group.supportsMentionAudiences === true && group.allowMentionAllBots === true}
+            getContentWidth={() => contentRef.current?.querySelector('article')?.getBoundingClientRect().width ?? 914} /> : group.archived || group.dissolvedAt ? <p className="border-t border-[var(--border-default)] p-4 text-center text-13 text-[var(--text-tertiary)]">{t(group.dissolvedAt ? 'bots.groupChat.lifecycle.dissolved' : 'bots.groupChat.server.settings.archived')}</p> : <BotGroupComposer allowMentionAll={canMentionAllInBotGroup(group)} allowMentionAllBots={group.supportsMentionAudiences === true && group.allowMentionAllBots === true}
             groupId={group.id}
             conversationKind={direct ? 'direct' : undefined}
             draftKey={attachmentScope}
@@ -1766,6 +1912,7 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
             onQuoteChange={setQuoteDraft}
             onQuoteAccepted={acceptQuote}
             onSending={onSending}
+            aboveCard={group.assistantDeviceWaits?.length ? <BotGroupAssistantDeviceCard group={group} /> : null}
           />}
         </div>
       </div>

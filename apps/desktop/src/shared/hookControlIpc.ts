@@ -42,6 +42,8 @@ export const HOOK_CONTROL_INVOKE = {
    */
   SET_PROVIDER_DEFAULT_WORKSPACE: 'maker:hook-control:set-provider-default-workspace',
   SET_X_COMPANION: 'maker:hook-control:set-x-companion',
+  /** 官方渠道交给哪位伙伴(slack / telegram / feishu / discord / x), 比较后写入。 */
+  SET_PROVIDER_COMPANION: 'maker:hook-control:set-provider-companion',
   /** 发起 Slack 账号绑定(bind.start; SIWS OIDC, 无参数)。 */
   BIND_START: 'maker:hook-control:bind-start',
   /** 解除 Slack 账号绑定(bind.revoke)。 */
@@ -160,7 +162,7 @@ export interface FeishuAppView {
 
 export interface ProviderHookView {
   applications?: FeishuAppView[];
-  /** Local companion assignment, currently only used by the official X provider. */
+  /** 本机的伙伴归属(设置 → IM 机器人 → 某平台 →「谁来回复」); null = 普通任务。 */
   companionBotId?: string | null;
   enabled: boolean;
   /** 该 provider 平级 hook 服务的运行期端点；空值表示当前环境尚未部署。 */
@@ -317,6 +319,8 @@ export type HookConnectionStatus = 'disabled' | 'connecting' | 'connected' | 'st
 /** 渲染层可见的 Cindy IM 快照；顶层字段保持 Slack 兼容。 */
 export interface SlackHookView {
   enabled: boolean;
+  /** 官方 Slack 交给的伙伴; 缺省 / null = 普通任务。 */
+  companionBotId?: string | null;
   /** Slack Bot 是否发送本设备上下线私聊通知。 */
   lifecycleAnnouncement: boolean;
   /** 实际生效的服务器地址(默认内置值; 被 urlOverride 覆写时为覆写值)。 */
@@ -393,6 +397,8 @@ export interface HookWorkspaceProviderSourceEntry {
   teamId: string | null;
   workspace: string;
   providerId: string;
+  /** 可选智能路由 id(仅存本机，绝不镜像到 hook server)；命中有值时新任务按路由选源并持续托管。 */
+  modelGroup?: string;
 }
 
 export interface HookWorkspacePrefs {

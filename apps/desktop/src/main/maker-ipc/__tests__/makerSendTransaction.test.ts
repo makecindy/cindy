@@ -13,6 +13,9 @@ import { withSharedSessionResumeRecovery, type SharedSessionResumeRecoveryDeps }
 import { createAgentHandoffPendingRegistry } from '../agentHandoff.js';
 import { ROUTINE_TRIGGER_DATA_LEAD } from '../../../shared/botAutonomy.js';
 import {
+  AcpAgent,
+  createConsoleLogger,
+  type AcpLineTransport,
   AgentStartupStoppedError,
   CodexResumePreparationBlockedError,
   PI_CACHE_RECOVERY_EXPECTATION,
@@ -30,10 +33,15 @@ import {
   type SessionSendResult,
   type UserMessage,
 } from '@cindy/maker-core';
+import { Client as McpClient } from '@modelcontextprotocol/sdk/client/index.js';
+import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
+import { createOrcaMcpServer, type OrcaMcpDeps } from '../../../../../../packages/lizi-mcps/src/orca/server.js';
+import { applyLeadVendorOptions, createAcpLeadBriefingHandoff, prepareAcpRoleBriefingForStart, renderOrcaRoleInstructions } from '../orcaSessionStartOptions.js';
 import { CODEX_RESUME_NOT_READY_WIRE_MESSAGE, projectPersistedAgentFacingUserText } from '@cindy/maker-shared/agent-input-projection';
 import { formatQuotesForSend, stripChatQuoteMarkerLines } from '@cindy/maker-shared/chat-quotes';
 import type { AgentInputQueuedMessage } from '../../../shared/agentInputQueue';
 import { parseOrcaRemoteLead } from '../../../shared/orcaRemoteWorker';
+import { captureMessageDispatchRoute, messageDispatchRouteMismatch, readMessageDispatchRoute } from '@cindy/maker-shared/message-source';
 import { describe, expect, it, vi } from 'vitest';
 import { GitSnapshotCoordinator } from '../../git-snapshot/gitSnapshotCoordinator';
 import { AUTO_REVIEW_DELEGATED_CONTINUATION, restoreAutoReviewUserIntent, type AutoReviewHistoryMessage } from '../autoReviewUserIntent.js';
@@ -75,6 +83,12 @@ import {
   type AgentSwitchSessionRow,
   type MakerSessionAgentSwitchHandlerDeps,
 } from '../sessionAgentSwitchHandler';
+import { createSilentGatewaySwitchForSend } from '../silentGatewaySwitch';
+import {
+  getXdGatewayModelAccessSnapshot,
+  setXdGatewayModels,
+  type XdGatewayModelInfo,
+} from '../../maker-host/active-catalog.js';
 
 function ordinaryUserMessage(content: string): { type: 'user'; content: string } {
   return { type: 'user', content };
@@ -1769,6 +1783,53 @@ describe('maker SEND transaction', () => {
       | { agentMeta?: Record<string, unknown> }
       | undefined;
     expect(persisted?.agentMeta).not.toHaveProperty('autoResume');
+  });
+
+  // Production send + pending switch, unit: repeated preparation failure must
+  // continue on the old runtime and persist a warning on EACH dispatched input.
+  // Old queue tests covered blocking collaboration, not ordinary paid fallback.
+  it('persists the actual old source and failed target on each fallback, independent of later picks', async () => {
+    const pending = createPendingAgentSwitchRegistry();
+    const intent = { targetAgentKind: 'codex' as const, model: 'gpt-5.5', providerId: 'openai' };
+    pending.set('session-1', intent);
+    const session = createSession({ agentKind: 'pi', model: 'gpt-5.5' });
+    const switchDeps: MakerSessionAgentSwitchHandlerDeps = {
+      pendingSwitches: pending,
+      getLiveSession: () => session,
+      getSessionRow: async () => ({ id: session.id, agentKind: 'pi', model: 'gpt-5.5', providerId: 'xd',
+        status: 'active', remoteHostId: null, orcaRole: null, sdkSessionId: 'old-pi' }),
+      assertModelRouteUsable: async () => { throw new Error('[DEVICE_LINK_TIMEOUT] OpenAI preparation timed out'); },
+      closeSession: vi.fn(), listMessagesForHandoff: async () => [], applyAgentSwitchToDb: vi.fn(),
+      setSessionProvider: vi.fn(), insertBoundaryMessage: async () => 'boundary',
+      applyResumeFallbackAtomically: vi.fn(), setPendingHandoff: vi.fn(), bootstrapSwitchedSession: vi.fn(),
+      withCloseSuppressed: (_id, run) => run(), log: { info: vi.fn(), warn: vi.fn() },
+    };
+    const { deps } = createDeps({
+      applyPendingAgentSwitch: (id, options) => applyPendingAgentSwitchIfIdle(switchDeps, id, options),
+      readDispatchRoute: current => {
+        const target = pending.get(current.id);
+        return captureMessageDispatchRoute({ agentKind: current.agentKind, model: current.model!, providerId: 'xd', agentDeviceId: null },
+          target ? { agentKind: target.targetAgentKind, model: target.model, providerId: target.providerId ?? null, agentDeviceId: null } : undefined,
+          target?.preparationError);
+      },
+    }, session);
+    const transaction = createMakerSendTransaction(deps);
+    for (const clientId of ['first', 'second']) {
+      await expect(transaction.sendToAgentAccepted(session.id, 'Continue', undefined,
+        { persistUserMessage: { clientId, content: 'Continue' } })).resolves.toMatchObject({ accepted: true });
+    }
+    pending.set(session.id, { targetAgentKind: 'pi', model: 'later', providerId: 'different' });
+    const rows = vi.mocked(deps.createDbMessage).mock.calls;
+    expect(rows).toHaveLength(2);
+    for (const [, row] of rows) {
+      const route = readMessageDispatchRoute(row.agentMeta);
+      expect(route).toMatchObject({ agentKind: 'pi', providerId: 'xd', model: 'gpt-5.5',
+        selected: { agentKind: 'codex', providerId: 'openai', model: 'gpt-5.5' },
+        switchError: expect.stringContaining('OpenAI preparation timed out') });
+      expect(messageDispatchRouteMismatch(route!)).toBe(true);
+    }
+    expect(session.send).toHaveBeenCalledTimes(2);
+    expect(switchDeps.closeSession).not.toHaveBeenCalled();
   });
 
   it('awaits the direct-send baseline hook before vendor dispatch', async () => {
@@ -3638,6 +3699,125 @@ describe('maker SEND transaction', () => {
     expect(deps.bootstrapSession).toHaveBeenCalledTimes(1);
   });
 
+  // ACP harness §4–5; unit through both send-transaction entries and the actual
+  // ACP engine and Orca MCP tool. Previously closing the live handle discarded
+  // the only copy of the promotion. Use in-process protocol peers, no sockets.
+  it.each(['ordinary send', 'Worker report'] as const)('rehydrates the same ACP Lead and its Orca tools before %s', async entry => {
+    const id = 'acp-lead';
+    const workDir = path.join(os.tmpdir(), 'acp-lead-fixture');
+    const nativeId = 'native-history-id';
+    const history: unknown[] = [];
+    const calls: Array<{ method: string; params: Record<string, unknown> }> = [];
+    let hasOrca = false;
+    let role: 'lead' | null = null;
+    let hydrated = false;
+    let live: MakerSendTransactionSession | undefined;
+    const handoff = createAcpLeadBriefingHandoff({
+      currentOwner: () => 'owner', readActiveTeamId: async () => 'team', readRole: async () => role,
+    });
+    const getWorkspaceInfo = vi.fn<OrcaMcpDeps['getWorkspaceInfo']>(async ({ leadSessionId }) => ({
+      ok: true, workflow: { workflow_id: 'team', lead_session_id: leadSessionId, status: 'active' },
+      ui_capacity: 1, worker_count: 0, workers: [],
+    }));
+    const mcp = createOrcaMcpServer({ getWorkspaceInfo } as unknown as OrcaMcpDeps, { sessionId: id, agentKind: 'pi', workingDir: workDir });
+    const client = new McpClient({ name: 'acp-test', version: '1' });
+    const [clientTx, serverTx] = InMemoryTransport.createLinkedPair();
+    await Promise.all([client.connect(clientTx), mcp.connect(serverTx)]);
+    const toolResults: Array<ReturnType<McpClient['callTool']>> = [];
+    const connect = (): AcpLineTransport => {
+      let onLine: ((line: string) => void) | undefined;
+      return {
+        write(line) {
+          const request = JSON.parse(line) as { id?: number; method: string; params: Record<string, unknown> };
+          calls.push(request);
+          const reply = (result: object) => queueMicrotask(() => onLine?.(JSON.stringify({ jsonrpc: '2.0', id: request.id, result })));
+          const { method, params } = request;
+          if (method === 'initialize') reply({ protocolVersion: 1, agentCapabilities: { mcpCapabilities: { http: true }, sessionCapabilities: { resume: {} } } });
+          if (method === 'session/new') reply({ sessionId: nativeId });
+          if (method === 'session/resume') {
+            hasOrca = (params.mcpServers as Array<{ name: string }>).some(server => server.name === 'cindy_orca');
+            reply({});
+          }
+          if (method === 'session/prompt') {
+            history.push(params.prompt);
+            if (hasOrca) toolResults.push(client.callTool({ name: 'get_workspace_info', arguments: {} }));
+            reply({ stopReason: 'end_turn' });
+          }
+        },
+        onLine(listener) { onLine = listener; return () => { onLine = undefined; }; },
+        onClose: () => () => {},
+        close: async () => {},
+      };
+    };
+    const engine = new AcpAgent({
+      auth: { getState: async () => ({ authenticated: true }), triggerLogin: async () => ({ authenticated: true }), logout: async () => {}, getAuthEnv: async () => ({}) },
+      runtimeConfig: {}, binaryPath: '', logger: createConsoleLogger('acp-test'), clientInfo: { name: 'test', version: '1' },
+      endpoints: { connect: async () => connect() },
+      preparePiExtraSpawnConfig: async (_providers, ctx) => ctx?.vendorOptions?.orcaRole === 'lead' ? {
+        mcpBridge: { token: 'fixture', servers: [{ name: 'cindy_orca', url: 'http://127.0.0.1:1/mcp/cindy_orca' }] },
+      } : null,
+    });
+    const opts = { id, agentKind: 'acp' as const, workDir, workingDir: workDir, model: '', providerId: 'acp-plugin:example:example' };
+    let handle = await engine.startSession(opts);
+    const liveAdapter = () => createSession({
+      id, workDir, agentKind: 'acp',
+      isTurnRunning: () => handle.isTurnRunning?.() ?? false,
+      send: async (message, sendOpts) => {
+        await sendOpts?.onAccepted?.();
+        await handle.send(typeof message === 'string' ? ordinaryUserMessage(message) : message, sendOpts);
+        return { accepted: true };
+      },
+    });
+    try {
+      live = liveAdapter();
+      await handle.send(ordinaryUserMessage('original native transcript'));
+      await vi.waitFor(() => expect(handle.isTurnRunning?.()).toBe(false));
+      role = 'lead';
+      const vendorOptions = { orcaRole: role, orcaWorkflowId: 'team', orcaLeadSessionId: id };
+      const briefing = renderOrcaRoleInstructions({ ...opts, vendorOptions })!;
+      await applyLeadVendorOptions(handoff, { leadSessionId: id, teamId: 'team', newTeam: true }, {
+        agentKind: 'acp', workDir,
+        setVendorOptions: patch => handle.setVendorOptions!(patch),
+      }, () => { hydrated = false; });
+      const { deps } = createDeps({
+        getSession: () => live, closeSession: async () => { await handle.close(); live = undefined; },
+        isOrcaMcpHydrated: () => hydrated,
+        synthesizeOrcaVendorOptionsFromDb: async (_id, next) => { next.orcaRole = 'lead'; next.vendorOptions = vendorOptions; return true; },
+        reconcileCreateOptsWithDb: async (_id, next) => { next.resumeSessionId = nativeId; },
+        bootstrapSession: async next => {
+          await prepareAcpRoleBriefingForStart(next, handoff);
+          handle = await engine.startSession(next);
+          hydrated = true;
+          live = liveAdapter();
+          return { session: live, didInjectOrcaInstructions: true, didInjectProjectContext: false };
+        },
+      });
+      const tx = createMakerSendTransaction(deps);
+      if (entry !== 'Worker report') {
+        await expect(tx.sendToAgentAccepted(id, entry, opts)).resolves.toMatchObject({ accepted: true });
+      } else {
+        await expect(tx.hydrateActiveOrcaSession(id, opts)).resolves.toBe(true);
+        await live!.send(ordinaryUserMessage(entry));
+      }
+      expect(calls.filter(call => call.method === 'session/new')).toHaveLength(1);
+      expect(calls.find(call => call.method === 'session/resume')?.params.sessionId).toBe(nativeId);
+      expect(history[0]).toEqual([{ type: 'text', text: 'original native transcript' }]);
+      expect(history[1]).toEqual([{ type: 'text', text: briefing }, { type: 'text', text: entry }]);
+      const results = await Promise.all(toolResults);
+      expect(results).toHaveLength(1);
+      const resultText = (results[0]?.content as Array<{ text: string }>)[0]!.text;
+      expect(JSON.parse(resultText)).toMatchObject({ ok: true, workflow: { workflow_id: 'team' } });
+      expect(getWorkspaceInfo).toHaveBeenCalledWith({ leadSessionId: id });
+      await live!.send(ordinaryUserMessage('next'));
+      expect(history[2]).toEqual([{ type: 'text', text: 'next' }]);
+    } finally {
+      await handle.close();
+      await Promise.allSettled(toolResults);
+      await client.close();
+      await mcp.close();
+    }
+  });
+
   it('reconciles createOpts against DB before closing the old runtime on active Orca rehydrate (#2882)', async () => {
     const oldSession = createSession({ id: 'orca-session', workDir: 'C:\\repo' });
     const newSession = createSession({ id: 'orca-session', workDir: 'C:\\repo' });
@@ -4096,6 +4276,18 @@ describe('mobile client prompt note', () => {
 
     const sent = vi.mocked(session.send).mock.calls[0]?.[0];
     expect(sent).toBe(`${buildMobileClientPromptNote()}\n\n/compact`);
+  });
+
+  // #12353 / unit: a queued human message from the phone can prove Pi billing recovery.
+  // The scheduler and automatic continuations share this dispatch entry but cannot provide that evidence.
+  it('captures recovery evidence for a manually dispatched mobile Pi message', async () => {
+    const session = createSession({ agentKind: 'pi' });
+    const onManualPiDispatch = vi.fn();
+    const { deps } = createDeps({ getSession: () => session, onManualPiDispatch });
+    await createMakerSendTransaction(deps).sendToAgentAccepted(session.id, 'hello', undefined, {
+      fromMobileClient: true, persistUserMessage: { clientId: 'manual-mobile', content: 'hello' },
+    });
+    expect(onManualPiDispatch).toHaveBeenCalledExactlyOnceWith(session.id);
   });
 
   it('applies the same command bypass to coordinator-drained mobile messages', async () => {
@@ -5248,6 +5440,7 @@ describe('session-agent-switch handoff injection', () => {
       const beforeSend = vi.fn(async () => undefined);
       const bindings = {
         scheduledModelScope: { restore: vi.fn(async () => undefined) },
+        applySilentGatewaySwitchForSend: vi.fn(async () => undefined),
         // UI-origin cross-engine preparation can return without clearing the intent.
         applyPendingAgentSwitchIfIdle: vi.fn(async () => undefined),
         recoverRenamedSessionModelOnSend: vi.fn(async () => undefined),
@@ -5259,6 +5452,7 @@ describe('session-agent-switch handoff injection', () => {
         log: { warn: vi.fn() },
         // 同一段适配器里还有预算重放（只在有未完成意图时跑）；本用例只关心切换守卫。
         replayPendingSessionContextWindowBudgetUnderLock: vi.fn(async () => undefined),
+        runDesktopModelGroupBeforeSend: vi.fn(async () => ({ switched: false })),
       };
       const compiled = ts.transpileModule(`return ({${adapter}}).applyPendingAgentSwitch;`,
         { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
@@ -5370,6 +5564,175 @@ describe('session-agent-switch handoff injection', () => {
     }), undefined);
     expect(deps.consumePendingHandoff).toHaveBeenCalledExactlyOnceWith('session-1');
     expect(handoff).toBeNull();
+  });
+
+  // docs/dev-rules/protocol-compatibility/model-access-silent-switch.md, PR #13427 review: the
+  // send-time switch used to decide once per task, so a task switched on joining the pilot stayed on
+  // Codex after leaving it. Real silent switch + real agent switch + real send transaction, wired as
+  // register.ts does; only storage and engines are fakes.
+  function silentSwitchSendHarness(options: { failHandoffOnce?: boolean } = {}) {
+    let failHandoff = options.failHandoffOnce === true;
+    const pendingSwitches = createPendingAgentSwitchRegistry();
+    let current: MakerSendTransactionSession | undefined = createSession({ agentKind: 'pi' });
+    let row: AgentSwitchSessionRow = {
+      id: 'session-1', agentKind: 'pi', model: 'auto', providerId: 'xd', status: 'active', remoteHostId: null,
+      orcaRole: null, sdkSessionId: 'pi-native-session', source: 'desktop',
+    };
+    let handoff: string | null = null;
+    let persisted: () => string[] = () => [];
+    const switchDeps: MakerSessionAgentSwitchHandlerDeps = {
+      pendingSwitches,
+      getSessionRow: async () => ({ ...row }),
+      getLiveSession: () => current,
+      closeSession: vi.fn(async () => { current = undefined; }),
+      // The handoff carries what the conversation actually stored so far.
+      listMessagesForHandoff: async () => {
+        if (failHandoff) {
+          failHandoff = false;
+          throw new Error('handoff history unavailable');
+        }
+        return persisted().map((content, index) => ({ role: 'user', content, createdAt: index + 1 }));
+      },
+      applyAgentSwitchToDb: vi.fn(async (_id, patch) => {
+        row = { ...row, ...patch, providerId: patch.providerId ?? null, sdkSessionId: patch.sdkSessionId ?? null };
+      }),
+      setSessionProvider: vi.fn(),
+      insertBoundaryMessage: vi.fn(async () => 'switch-boundary'),
+      applyResumeFallbackAtomically: vi.fn(async () => { throw new Error('fresh target has no parked session'); }),
+      setPendingHandoff: (_id, text) => { handoff = text; },
+      bootstrapSwitchedSession: vi.fn(async () => { throw new Error('send must bootstrap through the transaction'); }),
+      withCloseSuppressed: (_id, fn) => fn(),
+      log: { info: vi.fn(), warn: vi.fn() },
+    };
+    const silentSwitch = createSilentGatewaySwitchForSend({
+      getOwner: () => switchDeps, isRemoteInvoke: () => false,
+      hasPendingAgentSwitch: id => Boolean(pendingSwitches.get(id)),
+      isTurnRunning: () => current?.isTurnRunning() === true, hasPendingInteraction: () => false,
+      getCatalog: getXdGatewayModelAccessSnapshot, getSessionRow: async () => ({ ...row }),
+      toBuiltinAgent: kind => (kind === 'cc' ? 'claude-code' : kind as AgentKind),
+      listAvailableAgents: () => ['pi', 'codex'], canUseRoute: async () => true,
+      switchAgent: ({ sessionId, targetAgentKind, model, effort, signal, assertSelectionCurrent }) =>
+        performSessionAgentSwitch(switchDeps, { sessionId, targetAgentKind, model, providerId: 'xd', effort,
+          fastMode: false, configStaged: true, applyNow: true, skipBootstrap: true, signal, assertSelectionCurrent }),
+      log: { warn: vi.fn() },
+    });
+    const sessions: MakerSendTransactionSession[] = [current];
+    const { deps } = createDeps({
+      getSession: () => current,
+      applyPendingAgentSwitch: async (id, options) => {
+        await silentSwitch(id, options?.signal);
+        await applyPendingAgentSwitchIfIdle(switchDeps, id, options);
+      },
+      reconcileCreateOptsWithDb: vi.fn(async (_id, opts) => {
+        opts.agentKind = row.agentKind as AgentKind;
+        opts.model = row.model ?? undefined;
+        opts.providerId = row.providerId;
+        opts.resumeSessionId = row.sdkSessionId ?? undefined;
+      }),
+      bootstrapSession: vi.fn(async (opts) => {
+        current = createSession({ agentKind: opts.agentKind as AgentKind, workDir: opts.workingDir });
+        sessions.push(current);
+        return { session: current, didInjectOrcaInstructions: false, didInjectProjectContext: false };
+      }),
+      peekPendingHandoff: async () => handoff,
+      consumePendingHandoff: vi.fn(() => { handoff = null; }),
+    });
+    persisted = () => vi.mocked(deps.createDbMessage).mock.calls.map(([, message]) => String(message.content));
+    const transaction = createMakerSendTransaction(deps);
+    const send = (content: string) => transaction.sendToAgentAccepted('session-1', { type: 'user', content },
+      { agentKind: 'pi', workingDir: path.join(os.tmpdir(), 'silent-switch-fixture'), model: 'auto', providerId: 'xd' },
+      { persistUserMessage: { clientId: content, content } });
+    /** Messages each engine actually received, in engine order. */
+    const delivered = () => sessions.map(session =>
+      vi.mocked(session.send).mock.calls.map(([message]) => (message as UserMessage).content));
+    return { send, row: () => row, sessions, deps, persisted, delivered };
+  }
+
+  // The directory an XD member sees for Cindy AI `auto`: one engine, optionally flagged silentSwitch.
+  const xdAuto = (agent: 'pi' | 'codex', silentSwitch?: boolean): XdGatewayModelInfo => ({
+    id: 'auto', name: 'Auto', contextWindow: 128_000, availability: 'available', agents: [agent],
+    perAgent: { [agent]: { wireProtocol: 'openai-responses' } },
+    ...(silentSwitch === undefined ? {} : { silentSwitch }),
+  });
+
+  it('one auto conversation follows the pilot catalog Pi → Codex → Pi without a restart, sending each message once', async () => {
+    const harness = silentSwitchSendHarness();
+    try {
+      // Organization default before the member joins: Pi only, flagged.
+      setXdGatewayModels([xdAuto('pi', true)], { authoritative: true });
+      await expect(harness.send('On Pi')).resolves.toMatchObject({ accepted: true });
+      expect(harness.row()).toMatchObject({ agentKind: 'pi', model: 'auto' });
+
+      // Pilot override: Codex only, flagged.
+      setXdGatewayModels([xdAuto('codex', true)], { authoritative: true });
+      await expect(harness.send('Joined the pilot')).resolves.toMatchObject({ accepted: true });
+      expect(harness.row()).toMatchObject({ agentKind: 'codex', model: 'auto', providerId: 'xd' });
+
+      // Override removed: the member inherits the flagged Pi-only default again.
+      setXdGatewayModels([xdAuto('pi', true)], { authoritative: true });
+      await expect(harness.send('Left the pilot')).resolves.toMatchObject({ accepted: true });
+      expect(harness.row()).toMatchObject({ agentKind: 'pi', model: 'auto', providerId: 'xd' });
+
+      expect(harness.sessions.map(session => session.agentKind)).toEqual(['pi', 'codex', 'pi']);
+      expect(vi.mocked(harness.deps.bootstrapSession).mock.calls.map(([opts]) => [opts.agentKind, opts.model]))
+        .toEqual([['codex', 'auto'], ['pi', 'auto']]);
+      const [firstPi, codex, secondPi] = harness.delivered();
+      expect(firstPi).toEqual(['On Pi']);
+      // Each engine gets exactly one turn, and the handoff carries the stored history forward.
+      expect(codex).toHaveLength(1);
+      expect(codex![0]).toContain('On Pi');
+      expect(codex![0]).toContain('Joined the pilot');
+      expect(secondPi).toHaveLength(1);
+      expect(secondPi![0]).toContain('On Pi');
+      expect(secondPi![0]).toContain('Joined the pilot');
+      expect(secondPi![0]).toContain('Left the pilot');
+      expect(harness.persisted()).toEqual(['On Pi', 'Joined the pilot', 'Left the pilot']);
+    } finally {
+      setXdGatewayModels([], { authoritative: false });
+    }
+  });
+
+  it('only withdrawing silentSwitch keeps the task on its current engine', async () => {
+    const harness = silentSwitchSendHarness();
+    try {
+      setXdGatewayModels([xdAuto('codex', true)], { authoritative: true });
+      await expect(harness.send('Joined the pilot')).resolves.toMatchObject({ accepted: true });
+      expect(harness.row()).toMatchObject({ agentKind: 'codex', model: 'auto' });
+
+      // Same Pi-only directory, but the flag is gone: no silent switch back.
+      setXdGatewayModels([xdAuto('pi')], { authoritative: true });
+      await expect(harness.send('Flag withdrawn')).resolves.toMatchObject({ accepted: true });
+      expect(harness.row()).toMatchObject({ agentKind: 'codex', model: 'auto' });
+      expect(harness.sessions.map(session => session.agentKind)).toEqual(['pi', 'codex']);
+      expect(harness.delivered()[1]).toHaveLength(2);
+      expect(harness.delivered()[1]![1]).toBe('Flag withdrawn');
+      expect(harness.persisted()).toEqual(['Joined the pilot', 'Flag withdrawn']);
+    } finally {
+      setXdGatewayModels([], { authoritative: false });
+    }
+  });
+
+  it('a failed handoff stops the send with the input kept; the retry reaches Codex exactly once and Pi never', async () => {
+    const harness = silentSwitchSendHarness({ failHandoffOnce: true });
+    try {
+      setXdGatewayModels([xdAuto('codex', true)], { authoritative: true });
+      await expect(harness.send('Original question')).rejects.toMatchObject({ code: 'HARNESS_SWITCH_NOT_READY' });
+      // Nothing went out or was stored, and the task is still on Pi for the retry.
+      expect(harness.delivered().flat()).toEqual([]);
+      expect(harness.persisted()).toEqual([]);
+      expect(harness.row()).toMatchObject({ agentKind: 'pi', model: 'auto' });
+
+      await expect(harness.send('Original question')).resolves.toMatchObject({ accepted: true });
+      expect(harness.row()).toMatchObject({ agentKind: 'codex', model: 'auto', providerId: 'xd' });
+      expect(harness.sessions.map(session => session.agentKind)).toEqual(['pi', 'codex']);
+      const [pi, codex] = harness.delivered();
+      expect(pi).toEqual([]);
+      expect(codex).toHaveLength(1);
+      expect(codex![0]).toContain('Original question');
+      expect(harness.persisted()).toEqual(['Original question']);
+    } finally {
+      setXdGatewayModels([], { authoritative: false });
+    }
   });
 
   it('排队 drain 端到端:切换在派发时刻落实(关旧引擎)→ createOpts 按 DB 对齐新引擎 → 交接注入新引擎首条 + scheduler origin 透传', async () => {
