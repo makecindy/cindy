@@ -560,6 +560,9 @@ describe('codexHttpBridge', () => {
   });
 
   it('accepts an additional bearer token (remote daemon) and rejects unknown tokens', async () => {
+    const warnings: string[] = [];
+    const logger = noopLogger();
+    logger.warn = (message: unknown) => { warnings.push(String(message)); };
     bridge = await startCodexHttpBridge({
       serverFactories: {
         cindy_orca: createTestServer,
@@ -567,7 +570,7 @@ describe('codexHttpBridge', () => {
         cindy_memory: createTestServer,
       },
       additionalBearerTokens: () => ['remote-persistent-token'],
-      logger: noopLogger(),
+      logger,
     });
 
     const initBody = JSON.stringify({
@@ -618,6 +621,19 @@ describe('codexHttpBridge', () => {
     const badResp = await postInit('cindy_orca', 'not-a-real-token');
     expect(badResp.status).toBe(401);
     await badResp.text();
+    const warningsBeforeProbe = [...warnings];
+    expect(warningsBeforeProbe).toContain('rejected unauthenticated request');
+
+    // 401 后客户端不带 token 探测 OAuth 元数据并反复重试;一台机器 6 小时记下近 4 千条
+    // warn。本桥没有 OAuth:404 结束探测,不写 warn。
+    const origin = new URL(bridge.url('cindy_orca')).origin;
+    for (const probe of ['/.well-known/oauth-protected-resource', '/.well-known/oauth-protected-resource/mcp/cindy_orca', '/.well-known/oauth-authorization-server']) {
+      const probed = await fetch(`${origin}${probe}`);
+      expect(probed.status).toBe(404);
+      expect(probed.headers.get('www-authenticate')).toBeNull();
+      await probed.text();
+    }
+    expect(warnings).toEqual(warningsBeforeProbe);
   });
 
   it('routes tool calls by JSON-RPC params._meta.threadId', async () => {

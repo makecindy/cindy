@@ -23,6 +23,12 @@ const CLOSE_REPLACED = 4409;
 
 /** 服务器偶发错误或账号被封停，都不值得频繁重试。 */
 const RECONCILE_RETRY_MS = 60_000;
+/**
+ * 同步连续失败时按 1、2、4…分钟退避，最长 15 分钟（带 20% 抖动，避免同一故障下所有客户端
+ * 同时回来）。服务器持续 500 时，固定 60 秒重试叠加任务变化触发的同步，一台机器 6 小时
+ * 打了 659 次失败请求。
+ */
+const RECONCILE_RETRY_MAX_MS = 15 * 60_000;
 // The existing server pings every 30s. A quiet repository is healthy; a silent socket is not.
 const SOCKET_HEALTH_MS = 70_000;
 /** Coalesce repeated webhook-server overflow batches into at most one full PR sweep per window. */
@@ -214,6 +220,8 @@ export class ScheduleWebhookRemote {
   private refreshedAfterRejection = false;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private retryTimer: ReturnType<typeof setTimeout> | null = null;
+  /** 连续同步失败次数；成功、暂停或停止后清零。 */
+  private reconcileFailures = 0;
   private identities: Map<string, string>;
 
   constructor(private readonly deps: ScheduleWebhookRemoteDeps) {
@@ -265,6 +273,8 @@ export class ScheduleWebhookRemote {
     ) {
       return this.work;
     }
+    // 退避期间任务变化不再立刻请求服务器：上面已记下最新的期望状态，到点的重试按它同步。
+    if (this.running && this.backingOff()) return this.work;
     this.running = true;
     return this.enqueueReconcile();
   }
@@ -508,7 +518,8 @@ export class ScheduleWebhookRemote {
   }
 
   private refreshGithubHealth(): void {
-    if (!this.running || !this.github.login || this.githubHealthQueued || Date.now() - this.githubCheckedAt < 60_000) return;
+    if (!this.running || !this.github.login || this.githubHealthQueued || this.backingOff()
+      || Date.now() - this.githubCheckedAt < 60_000) return;
     const generation = this.generation;
     this.githubHealthQueued = true;
     // Reuse server pings: one cached status read per minute, without re-registering
@@ -557,8 +568,14 @@ export class ScheduleWebhookRemote {
     });
   }
 
-  /** 打开详情、回到窗口或服务器通知时读取最新状态；不增加常驻轮询。 */
-  async refresh(): Promise<void> {
+  /**
+   * 打开详情、回到窗口或服务器通知时读取最新状态；不增加常驻轮询。
+   * passive 用于投递前核对这类后台读取：同步连续失败、正在退避时直接沿用当前状态（未同步时
+   * 不会投递，留在队列里稍后再试），等退避到点再请求。打开状态面板、服务器通知和用户操作不传
+   * passive，照常立即重试。
+   */
+  async refresh(options: { passive?: boolean } = {}): Promise<void> {
+    if (options.passive && this.backingOff()) return;
     await this.enqueue(async () => {
       this.loaded = false;
       this.localSyncKey = '';
@@ -718,6 +735,13 @@ export class ScheduleWebhookRemote {
       }
       if (generation !== this.generation) return;
       this.suspended = false;
+      this.reconcileFailures = 0;
+      // A manual refresh may recover before the previous failure's timer fires.
+      // Keep a retry scheduled for a separate GitHub sync failure.
+      if (!this.githubError && this.retryTimer) {
+        clearTimeout(this.retryTimer);
+        this.retryTimer = null;
+      }
       const latestKey = computeLocalSyncKey(this.githubPrs, this.githubAutomations, this.wanted);
       this.localSyncKey = this.loaded && !this.githubError && latestKey === snapshotSyncKey
         ? snapshotSyncKey
@@ -727,7 +751,8 @@ export class ScheduleWebhookRemote {
       this.loaded = false;
       this.localSyncKey = '';
       if (error instanceof RemoteRequestError && error.code === 'WEBHOOK_ACCOUNT_SUSPENDED') this.suspended = true;
-      this.deps.logger.warn?.('[schedule-webhook] sync failed', { error: String(error) });
+      this.reconcileFailures += 1;
+      this.deps.logger.warn?.('[schedule-webhook] sync failed', { error: String(error), failures: this.reconcileFailures });
       this.scheduleRetry();
     }
     this.deps.onChanged?.();
@@ -794,11 +819,19 @@ export class ScheduleWebhookRemote {
 
   private scheduleRetry(): void {
     if (this.retryTimer) return;
+    const delayMs = this.reconcileFailures > 0
+      ? connectionBackoffDelayMs(this.reconcileFailures - 1, { baseMs: RECONCILE_RETRY_MS, maxMs: RECONCILE_RETRY_MAX_MS })
+      : RECONCILE_RETRY_MS;
     this.retryTimer = setTimeout(() => {
       this.retryTimer = null;
       void this.enqueueReconcile().catch(() => undefined);
-    }, RECONCILE_RETRY_MS);
+    }, delayMs);
     this.retryTimer.unref?.();
+  }
+
+  /** 同步已连续失败且重试计时器在等：此时的被动同步请求只会再撞一次同样的故障。 */
+  private backingOff(): boolean {
+    return this.reconcileFailures > 0 && this.retryTimer !== null;
   }
 
   /** 只有需要接收事件时才保持连接。 */
@@ -1077,6 +1110,7 @@ export class ScheduleWebhookRemote {
     if (this.retryTimer) clearTimeout(this.retryTimer);
     this.reconnectTimer = null;
     this.retryTimer = null;
+    this.reconcileFailures = 0;
     this.clearGithubOverflowState();
     this.attempt = 0;
     this.refreshedAfterRejection = false;

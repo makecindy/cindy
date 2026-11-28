@@ -193,7 +193,7 @@ export class ScheduleWebhookHost {
         // Plugin events never pass the server; they only need the local queue and scheduler.
         if (this.remote && !this.options.local && !isPluginSource(await scheduler.get(id))) {
           // Offline disk backlog must observe account release before starting a new run.
-          await this.remote.refresh();
+          await this.remote.refresh({ passive: true });
           if (this.remote.problem(id) === 'released') return {};
           if (!this.remote.canDeliver(id)) return { deferred: true };
         }

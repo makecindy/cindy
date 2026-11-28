@@ -105,6 +105,12 @@ function session(id: string, partial: Partial<Session> = {}): Session {
   return { id, ...partial } as Session;
 }
 
+/** 让在途读取越过变化通知的合并上限（2 秒），之后的通知改为取代它。只伪造 Date。 */
+function ageInFlightReads(): void {
+  vi.useFakeTimers({ toFake: ['Date'] });
+  vi.setSystemTime(Date.now() + 2_001);
+}
+
 describe('sessionsStore account boundaries', () => {
   it('keeps the visible Host task list and fences a recovery that disconnected again', async () => {
     const a = session('a', { status: 'active' });
@@ -131,6 +137,7 @@ describe('sessionsStore account boundaries', () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     cleanup();
     sessionsStore.reset();
     dataOwnerTesting.reset();
@@ -210,6 +217,7 @@ describe('sessionsStore account boundaries', () => {
     const freshRead = deferred<Session[]>();
     mocks.list.mockReturnValueOnce(oldRead.promise).mockReturnValueOnce(freshRead.promise);
     const view = renderHook(() => useCCSessions());
+    ageInFlightReads();
     act(() => emitRefresh());
     const refresh = sessionsStore.ensureByFilter('active').catch((error: unknown) => error);
     if (oldFirst) await act(async () => { oldRead.resolve([session('old')]); });
@@ -235,6 +243,7 @@ describe('sessionsStore account boundaries', () => {
     const freshRead = deferred<Session[]>();
     mocks.list.mockReturnValueOnce(oldRead.promise).mockReturnValueOnce(freshRead.promise);
     const view = renderHook(() => useCCSessions());
+    ageInFlightReads();
     act(() => emitRefresh());
     const refresh = sessionsStore.ensureByFilter('active');
     if (oldFirst) {
@@ -260,8 +269,10 @@ describe('sessionsStore account boundaries', () => {
     mocks.list.mockReturnValueOnce(oldRead.promise)
       .mockReturnValueOnce(middleRead.promise).mockReturnValueOnce(latestRead.promise);
     const view = renderHook(() => [useCCSessions(), useCCSessions()]);
+    ageInFlightReads();
     act(() => emitRefresh());
     const firstRefresh = sessionsStore.ensureByFilter('active').catch((error: unknown) => error);
+    ageInFlightReads();
     act(() => mocks.emitSessionCreated('new', { dataOwnerId: 'owner-a', ownerGeneration: 1 }));
     const lastRefresh = sessionsStore.ensureByFilter('active').catch((error: unknown) => error);
     const failure = new Error('latest read failed');
@@ -283,6 +294,42 @@ describe('sessionsStore account boundaries', () => {
       expect(hook.sessions).toEqual([]);
     }
     expect(mocks.list).toHaveBeenCalledTimes(3);
+  });
+
+  // engineering-conventions §8.6：一串变化通知（定时任务、Worker 连续新建任务）在请求进行中
+  // 只记一笔待刷新。旧实现每条通知都丢弃在途请求另起一轮，被丢弃的请求在 main 端照样执行，
+  // 后台任务密集时列表查询叠到每个桶十余个并发。最小失败输入：在途读取期间连发 5 条通知，
+  // 旧实现发出 5 次新读取，现在只补读 1 次且读到最后一次变化。
+  it('coalesces a burst of change notifications into one trailing read per bucket', async () => {
+    setDataOwnerGeneration('owner-a', 1);
+    const a = session('a', { status: 'active' });
+    const z = session('z', { status: 'archived' });
+    mocks.list.mockResolvedValueOnce([a]).mockResolvedValueOnce([z]);
+    await sessionsStore.ensureByFilter('active');
+    await sessionsStore.ensureByFilter('archived');
+    mocks.list.mockReset();
+    const activeRead = deferred<Session[]>();
+    const archivedRead = deferred<Session[]>();
+    mocks.list.mockImplementation((_limit, filter) =>
+      filter === 'active' ? activeRead.promise : archivedRead.promise);
+    emitRefresh();
+    expect(mocks.list.mock.calls.map((call) => call[1])).toEqual(['active', 'archived']);
+    for (let index = 0; index < 5; index += 1) {
+      if (index % 2) emitRefresh();
+      else mocks.emitSessionCreated(`n${index}`, { dataOwnerId: 'owner-a', ownerGeneration: 1 });
+    }
+    expect(mocks.list).toHaveBeenCalledTimes(2);
+
+    const b = session('b', { status: 'active' });
+    mocks.list.mockImplementation(async (_limit, filter) => filter === 'active' ? [b, a] : [z]);
+    await act(async () => {
+      activeRead.resolve([a]);
+      archivedRead.resolve([z]);
+    });
+    await waitFor(() => expect(sessionsStore.getByFilter('active')?.map(({ id }) => id)).toEqual(['b', 'a']));
+    expect(mocks.list.mock.calls.map((call) => call[1]).sort()).toEqual(['active', 'active', 'archived', 'archived']);
+    expect(mocks.list).toHaveBeenLastCalledWith(1000, expect.any(String), { fresh: true });
+    expect(sessionsStore.getByFilter('all')).toBeNull();
   });
 
   it('refreshes cached and pending filters once each without loading untouched filters', async () => {

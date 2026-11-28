@@ -488,6 +488,15 @@ async function startCodexHttpBridge(
       // 白名单 (协同、记忆、伙伴 helper；helper 另有 Session 实例与能力面校验)。
       // URL 解析提前:per-session token 匹配需要 session query,纯解析无副作用。
       const url = new URL(req.url ?? '/', 'http://127.0.0.1');
+      // MCP 客户端遇到 401 + WWW-Authenticate 后会不带 token 探测 OAuth 元数据
+      // (/.well-known/oauth-protected-resource 等),并按自己的节奏反复重试。本桥只认
+      // 预置 bearer token、不提供 OAuth,这类路径也从未被路由:直接 404 告诉客户端没有
+      // OAuth 元数据,不走鉴权、不写 warn。鉴权前返回不比 401 多暴露任何信息。
+      if (url.pathname.startsWith('/.well-known/')) {
+        res.statusCode = 404;
+        res.end();
+        return;
+      }
       const sessionQuery = url.searchParams.get('session');
       const auth = req.headers['authorization'];
       const presented =

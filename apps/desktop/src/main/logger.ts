@@ -25,8 +25,10 @@
  *   - Default level: dev=trace (everything), packaged=info
  *   - Override priority (highest first):
  *       1. process.env.LOG_LEVEL
- *       2. `<userData>/log-config.json` → { "level": "debug" }   ← persistent
- *          across restarts without touching OS env
+ *       2. `log-config.json` → { "level": "debug" }   ← persistent
+ *          across restarts without touching OS env. Packaged: `<userData>/`.
+ *          Dev: the checkout's `apps/desktop/logs/` first, then `<userData>/`
+ *          (个人版每次更新换一份新 checkout,只放在 checkout 里的设置会随更新丢失)
  *       3. Default for current mode
  *
  * Renderer logs come in via IPC `renderer:log` and route through this same
@@ -442,6 +444,25 @@ function readLevelFromConfigFile(userDataDir: string): LogLevel | undefined {
   return undefined;
 }
 
+/**
+ * 启动日志级别: env > log-config.json > opts.level > 模式默认(dev=trace, packaged=info)。
+ * dev 先读 checkout 日志目录里的配置,再读 `<userData>/log-config.json`:
+ * 个人版每次更新都换一份新 checkout,用户在数据目录里定的级别要能跨更新保留。
+ */
+export function resolveInitialLogLevel(input: {
+  envLevel: string | undefined;
+  isDev: boolean;
+  configDirs: readonly string[];
+  optsLevel?: LogLevel;
+}): LogLevel {
+  let fileLevel: LogLevel | undefined;
+  for (const dir of input.configDirs) {
+    fileLevel = readLevelFromConfigFile(dir);
+    if (fileLevel) break;
+  }
+  return parseLevel(input.envLevel, fileLevel ?? input.optsLevel ?? (input.isDev ? 'trace' : 'info'));
+}
+
 /** Packaged logging has no safe default: callers must name the real profile. */
 function requireUserDataDir(userDataDir: string | undefined): string {
   if (!userDataDir) {
@@ -464,13 +485,14 @@ export function initLogger(opts?: InitOptions): void {
     : path.join(requireUserDataDir(opts?.userDataDir), 'logs'));
 
   // Level resolution: env > config file > opts.level > built-in default.
-  // log-config.json: dev 放 apps/desktop/logs/, packaged 放 <userData>/。
+  // log-config.json: dev 先 apps/desktop/logs/ 再 <userData>/, packaged 放 <userData>/。
   const cfgDir = isDevMode ? logDir : path.dirname(logDir);
-  const fileLevel = readLevelFromConfigFile(cfgDir);
-  currentLevel = parseLevel(
-    process.env.LOG_LEVEL,
-    fileLevel ?? opts?.level ?? (isDevMode ? 'trace' : 'info'),
-  );
+  currentLevel = resolveInitialLogLevel({
+    envLevel: process.env.LOG_LEVEL,
+    isDev: isDevMode,
+    configDirs: isDevMode && opts?.userDataDir ? [cfgDir, opts.userDataDir] : [cfgDir],
+    optsLevel: opts?.level,
+  });
 
   // File output: 两种模式都开文件; dev 额外保留终端输出 (见 emit())。按天 rotate:
   //   main-<date>.log              — electron / IPC / vendor / console (纯文本)

@@ -33,17 +33,17 @@ import { normalizeTaskTags, reconcileTaskTags } from '@cindy/maker-shared';
  *                                   保留旧 createSession 的"省一次 IPC"优化。
  *   - forceRefresh(filter)         单桶强制重拉，drop 桶 + 走 ensure。
  *   - forceRefreshAll()            重拉已缓存或正在加载的桶，未访问桶不动。
- *                                   sessionsBus.onRefresh / sessionsPush.onCreated
- *                                   走这条，且带 isCurrent：重拉期间保留旧列表。
+ *                                   标签目录变化走这条，且带 isCurrent：重拉期间保留旧列表。
+ *   - refreshAllAfterChange()      变化通知后的重读：空闲桶立即读，在途桶只记一笔补读。
  *
  * 自订阅（模块加载时一次性挂上，hook 不再重复订阅）：
  *   - sessionsBus.onPatch                → patchLocal
- *   - sessionsBus.onRefresh              → forceRefreshAll
+ *   - sessionsBus.onRefresh              → refreshAllAfterChange（在途合并，见该方法）
  *   - electronAPI.sessionsPush.onPatched → patchLocal
- *   - electronAPI.sessionsPush.onCreated → forceRefreshAll
+ *   - electronAPI.sessionsPush.onCreated → refreshAllAfterChange
  *     （payload 只带 sessionId 不带完整 row，无法 prepend，需要重拉）
  *   - electronAPI.onUsageSessionSpendChanged → patchLocal(totalCostUsd)
- *   - maker.schedule.onEvent session-bound → forceRefreshAll
+ *   - maker.schedule.onEvent session-bound → refreshAllAfterChange
  *     （scheduler runner 在 main 进程创建 session，不一定走 localDb sessionsPush）
  */
 
@@ -95,6 +95,8 @@ class SessionBucketCache extends Map<ListStatusFilter, Session[]> {
 
 const cache = new SessionBucketCache();
 interface FilterRequest {
+  /** 发起时刻（Date.now）；变化通知据此判断在途请求能否合并。 */
+  startedAt: number;
   promise: Promise<void>;
   resolve: (replacement?: PromiseLike<void>) => void;
   reject: (reason: unknown) => void;
@@ -359,8 +361,23 @@ function clearPendingStatusTransition(
   waiters?.forEach((resolve) => resolve());
 }
 
-/** 同桶补查已有请求在途时只记一个 dirty 位，请求结束后最多追加一轮 fresh。 */
-const trailingFilterRefreshes = new Set<ListStatusFilter>();
+/**
+ * 变化通知合并在途请求的上限：在途请求发出不到这么久时只记一笔补读；更老的请求视为可能卡住，
+ * 由新请求取代，避免一个挂起的读取让列表永远不再刷新。持续通知下每个桶每 2 秒最多新起一轮。
+ */
+const NOTIFICATION_REFRESH_COALESCE_MAX_AGE_MS = 2_000;
+
+/**
+ * 同桶补查已有请求在途时只记一个 dirty 位，请求结束后最多追加一轮 fresh。值是补读提交前的
+ * 归属校验（变化通知带账号代次）；undefined 表示无条件提交。
+ */
+const trailingFilterRefreshes = new Map<ListStatusFilter, (() => boolean) | undefined>();
+
+function markTrailingFilterRefresh(filter: ListStatusFilter, isCurrent?: () => boolean): void {
+  // 已登记的无条件补读不被带校验的覆盖；同为带校验时用最新一次的代次。
+  const keepUnconditional = trailingFilterRefreshes.has(filter) && !trailingFilterRefreshes.get(filter);
+  trailingFilterRefreshes.set(filter, keepUnconditional ? undefined : isCurrent);
+}
 
 function belongsInFilter(status: Session['status'], filter: ListStatusFilter): boolean {
   if (status === 'deleted') return false;
@@ -669,8 +686,8 @@ async function fetchFilter(
   return result;
 }
 
-function runFilterBackfill(filter: ListStatusFilter): void {
-  void sessionsStore.ensureByFilter(filter, { fresh: true }).catch(() => {
+function runFilterBackfill(filter: ListStatusFilter, isCurrent?: () => boolean): void {
+  void sessionsStore.ensureByFilter(filter, { fresh: true, isCurrent }).catch(() => {
     /* 静默：后续状态广播、主动操作或 refresh 会再次兜底。 */
   });
 }
@@ -679,17 +696,19 @@ function runFilterBackfill(filter: ListStatusFilter): void {
  * 缺少完整 row 时只补查需要包含它的桶。同桶若已有请求在途，不取消、不并发重启，
  * 只保留一个尾部 fresh；这样连续归档不会把每个状态事件放大成一轮列表查询。
  */
-function requestFilterBackfill(filter: ListStatusFilter): void {
+function requestFilterBackfill(filter: ListStatusFilter, isCurrent?: () => boolean): void {
   if (inflight.has(filter)) {
-    trailingFilterRefreshes.add(filter);
+    markTrailingFilterRefresh(filter, isCurrent);
     return;
   }
-  runFilterBackfill(filter);
+  runFilterBackfill(filter, isCurrent);
 }
 
 function runTrailingFilterBackfill(filter: ListStatusFilter): void {
-  if (!trailingFilterRefreshes.delete(filter)) return;
-  runFilterBackfill(filter);
+  if (!trailingFilterRefreshes.has(filter)) return;
+  const isCurrent = trailingFilterRefreshes.get(filter);
+  trailingFilterRefreshes.delete(filter);
+  runFilterBackfill(filter, isCurrent);
 }
 
 function recordSessionPinSummaryOverrides(
@@ -886,7 +905,7 @@ export const sessionsStore = {
         resolve = onResolve;
         reject = onReject;
       });
-      const request = { promise, resolve, reject };
+      const request = { startedAt: Date.now(), promise, resolve, reject };
       pending = request;
       inflight.set(filter, request);
       void fetchFilter(filter, opts)
@@ -940,6 +959,31 @@ export const sessionsStore = {
     const filters = Array.from(new Set([...cache.keys(), ...inflight.keys()]));
     if (filters.length === 0) return;
     await Promise.all(filters.map((f) => this.forceRefresh(f, isCurrent)));
+  },
+
+  /**
+   * 列表成员变化通知后的重读（engineering-conventions §8.6）：桶空闲时立即重读；已有请求
+   * 发出不到 2 秒时只记一笔待刷新，在途请求结束后再补读一次，保证最后一次变化一定被读到。
+   *
+   * 不走 forceRefreshAll：那条路径每次都丢弃在途请求另起一轮，而被丢弃的请求在 main 端
+   * 照样跑完整列表查询。后台任务密集时（定时任务、Orca Worker 不断新建任务）每条通知都给
+   * 每个已加载的桶（all / archived 各上千行）叠一轮查询；一台高负载机器上 6 小时触发近两千次列表读取，
+   * 慢的拖到数秒。合并后一串通知最多变成「当前一轮 + 一轮补读」。
+   */
+  refreshAllAfterChange(isCurrent?: () => boolean): void {
+    const now = Date.now();
+    for (const filter of new Set([...cache.keys(), ...inflight.keys()])) {
+      const pending = inflight.get(filter);
+      if (pending && now - pending.startedAt < NOTIFICATION_REFRESH_COALESCE_MAX_AGE_MS) {
+        markTrailingFilterRefresh(filter, isCurrent);
+        continue;
+      }
+      // 空闲桶，或在途请求已超过合并上限（可能卡在断连的 Host 上）：按原路径取代它，
+      // 等待者转到新请求，失败照常交给等待者。
+      void this.forceRefresh(filter, isCurrent).catch(() => {
+        // 事件通知没有接收返回值的调用方；等待者会收到当前请求的错误。
+      });
+    }
   },
 
   /**
@@ -1386,6 +1430,13 @@ function refreshAfterNotification(): void {
   // 先清桶会让 findById 在重拉的这段时间里查不到任何任务，正在显示的任务（例如协同侧栏
   // 里刚收到消息的 Worker）会被整块卸载再重新挂载。账号切换由 reset 清空，这里只防迟到的
   // 读结果写进另一个账号的缓存；同账号的代次变化不丢弃这次刷新。
+  // 连续通知在途合并（见 refreshAllAfterChange）；读取失败静默，等下一次通知或用户操作。
+  const owner = getDataOwnerGeneration();
+  sessionsStore.refreshAllAfterChange(() => isDataOwnerIdCurrent(owner));
+}
+
+/** 目录变更（标签）必须压过变更前发出的旧列表读：旧响应会把刚对齐的标签冲回去。 */
+function supersedeAfterDirectoryChange(): void {
   const owner = getDataOwnerGeneration();
   void sessionsStore.forceRefreshAll(() => isDataOwnerIdCurrent(owner)).catch(() => {
     // 加载等待者会收到当前请求的错误；事件通知本身没有接收返回值的调用方。
@@ -1463,7 +1514,7 @@ if (typeof window !== 'undefined') {
       );
     notify();
     // Supersede list reads which started before this directory mutation.
-    refreshAfterNotification();
+    supersedeAfterDirectoryChange();
     },
   );
 

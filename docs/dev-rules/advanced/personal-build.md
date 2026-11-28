@@ -927,6 +927,11 @@ its environment. Both paths use a single `script` PTY with a bounded
 `apps/desktop/logs/dev-terminal.log` drain. Keep the launch runner's terminal open while the
 app is running. A failed or cancelled generation cannot start the fixed app after a late build.
 A nonzero wrapper exit immediately fails acceptance even if a main PID remains.
+The personal build runs as an unpacked development app, so its log level defaults to `trace`
+and every line is also mirrored to that terminal. Each update starts from a fresh checkout, so a
+`log-config.json` under the checkout's `apps/desktop/logs/` does not survive it; put
+`{ "level": "info" }` (or another level) in `<userData>/log-config.json` to keep a level across
+updates. `LOG_LEVEL` and the checkout file still take precedence.
 A successful wrapper exit means readiness only, not the end of the running app. For supervised
 prebuilt launches, Forge disables `VitePlugin` and the main window loads the verified local page;
 there is no interface development server to inspect. Ordinary development retains `VitePlugin`
