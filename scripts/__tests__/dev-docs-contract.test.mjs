@@ -341,19 +341,42 @@ function assertCompleteShardMatrix(job) {
 
 test("client CI keeps the complete sharded unit gate on Windows", () => {
 	const workflow = readText(".github/workflows/ci.yml");
+	const changes = workflowJob(workflow, "changes");
+	assert.ok(changes, "client CI must define the lightweight change classifier");
+	assert.match(changes, /^        run: node scripts\/ci-changes\.mjs$/m);
+	assert.doesNotMatch(changes, /fetch-depth:\s*0/);
+
 	const shards = workflowJob(workflow, "windows-unit-shards");
-	assert.ok(shards, "client CI must define Windows unit shards");
+	assert.ok(shards, "client CI must define Windows desktop unit shards");
+	assert.match(shards, /^    needs: changes$/m);
+	assert.match(shards, /^    if: needs\.changes\.outputs\.unit_desktop == 'true'$/m);
 	assert.match(shards, /^    runs-on: windows-latest$/m);
 	assertCompleteShardMatrix(shards);
-	assert.match(shards, /^        run: pnpm run test:workspaces --tier unit$/m);
+	assert.match(shards, /^        run: pnpm run test:workspaces --tier unit --workspace desktop$/m);
 	assert.doesNotMatch(shards, /pnpm test:unit(?:\s|$)/);
 	assert.doesNotMatch(shards, /pnpm test:runner/);
+
+	const mobileUnit = workflowJob(workflow, "windows-mobile-unit");
+	assert.ok(mobileUnit, "client CI must define Windows mobile unit tests");
+	assert.match(mobileUnit, /^    needs: changes$/m);
+	assert.match(mobileUnit, /^    if: needs\.changes\.outputs\.unit_mobile == 'true'$/m);
+	assert.match(mobileUnit, /^    runs-on: windows-latest$/m);
+	assertCompleteShardMatrix(mobileUnit);
+	assert.match(mobileUnit, /^        run: pnpm run test:workspaces --tier unit --workspace mobile$/m);
+
+	const packagesUnit = workflowJob(workflow, "windows-packages-unit");
+	assert.ok(packagesUnit, "client CI must define Windows package unit tests");
+	assert.match(packagesUnit, /^    needs: changes$/m);
+	assert.match(packagesUnit, /^    if: needs\.changes\.outputs\.unit_packages == 'true'$/m);
+	assert.match(packagesUnit, /^    runs-on: windows-latest$/m);
+	assert.match(packagesUnit, /^        run: pnpm run test:workspaces --tier unit --exclude-workspace desktop,mobile$/m);
 
 	// One-off Windows checks run once, in parallel, outside the shard critical path.
 	const runnerChecks = workflowJob(workflow, "windows-runner-checks");
 	assert.ok(runnerChecks, "client CI must run Windows runner self-tests once");
+	assert.match(runnerChecks, /^    needs: changes$/m);
+	assert.match(runnerChecks, /^    if: needs\.changes\.outputs\.windows_runner_checks == 'true'$/m);
 	assert.match(runnerChecks, /^    runs-on: windows-latest$/m);
-	assert.doesNotMatch(runnerChecks, /^    needs:/m);
 	assert.doesNotMatch(runnerChecks, /^    strategy:/m);
 	assert.equal([...runnerChecks.matchAll(/^        run: pnpm test:runner$/gm)].length, 1);
 	assert.match(runnerChecks, /botCanonicalSession\.test\.ts/);
@@ -369,24 +392,26 @@ test("client CI keeps the complete sharded unit gate on Windows", () => {
 		assert.match(events, new RegExp(`^  ${event}:`, 'm'));
 	}
 	assert.doesNotMatch(events, /paths(?:-ignore)?:/);
+	assert.match(workflow, /^  cancel-in-progress: \$\{\{ github\.event_name != 'push' \}\}$/m);
 
 	const gate = workflowJob(workflow, "windows-unit");
 	assert.ok(gate, "client CI must preserve the stable Windows unit check");
 	assert.match(gate, /^    name: Windows unit tests$/m);
 	assert.match(gate, /^    if: \$\{\{ always\(\) \}\}$/m);
-	assert.match(gate, /^      - windows-unit-shards$/m);
-	assert.match(gate, /^      - windows-runner-checks$/m);
-	assert.match(gate, /^          WINDOWS_UNIT_SHARDS_RESULT: \$\{\{ needs\.windows-unit-shards\.result \}\}$/m);
-	assert.match(gate, /^          WINDOWS_RUNNER_CHECKS_RESULT: \$\{\{ needs\.windows-runner-checks\.result \}\}$/m);
-	assert.match(gate, /^          test "\$WINDOWS_UNIT_SHARDS_RESULT" = "success"$/m);
-	assert.match(gate, /^          test "\$WINDOWS_RUNNER_CHECKS_RESULT" = "success"$/m);
+	for (const dep of ["changes", "windows-unit-shards", "windows-mobile-unit", "windows-packages-unit", "windows-runner-checks"]) {
+		assert.match(gate, new RegExp(`^      - ${dep}$`, "m"));
+	}
+	assert.match(gate, /^          CHANGES_RESULT: \$\{\{ needs\.changes\.result \}\}$/m);
+	assert.match(gate, /^          test "\$CHANGES_RESULT" = "success"$/m);
+	assert.match(gate, /true:success\|false:skipped/);
 });
 
 test("client CI runs Linux checks and complete unit shards in parallel behind stable verify", () => {
 	const workflow = readText(".github/workflows/ci.yml");
 	const checks = workflowJob(workflow, "verify-checks");
 	assert.ok(checks, "client CI must define independent Linux verification checks");
-	assert.doesNotMatch(checks, /^    needs:/m);
+	assert.match(checks, /^    needs: changes$/m);
+	assert.match(checks, /^    if: needs\.changes\.outputs\.verify_checks == 'true'$/m);
 	assert.match(checks, /^        run: pnpm test:runner$/m);
 	assert.match(
 		checks,
@@ -397,44 +422,73 @@ test("client CI runs Linux checks and complete unit shards in parallel behind st
 	assert.match(checks, /^      - name: Check unit test hygiene\r?\n        run: pnpm check:test-hygiene$/m);
 	assert.doesNotMatch(checks, /node scripts\/test-workspaces\.mjs --tier unit/);
 
-	// Typecheck runs beside verify-checks; both package typechecks must stay behind verify.
-	const typecheck = workflowJob(workflow, "typecheck");
-	assert.ok(typecheck, "client CI must run typechecks in their own parallel job");
-	assert.doesNotMatch(typecheck, /^    needs:/m);
-	assert.match(typecheck, /^        run: pnpm --filter desktop typecheck$/m);
-	assert.match(typecheck, /^        run: pnpm --filter mobile typecheck$/m);
+	// Typecheck runs in three parallel jobs (Desktop main, Desktop renderer, Mobile) behind verify.
+	const tcMain = workflowJob(workflow, "typecheck-desktop-main");
+	assert.ok(tcMain, "client CI must run Desktop main typecheck in parallel");
+	assert.match(tcMain, /^    needs: changes$/m);
+	assert.match(tcMain, /^    if: needs\.changes\.outputs\.typecheck_desktop == 'true'$/m);
+	assert.match(tcMain, /node scripts\/check-typecheck-shards\.mjs/);
+	assert.match(tcMain, /pnpm exec tsc --noEmit -p tsconfig\.main\.json/);
+
+	const tcRenderer = workflowJob(workflow, "typecheck-desktop-renderer");
+	assert.ok(tcRenderer, "client CI must run Desktop renderer typecheck in parallel");
+	assert.match(tcRenderer, /^    needs: changes$/m);
+	assert.match(tcRenderer, /^    if: needs\.changes\.outputs\.typecheck_desktop == 'true'$/m);
+	assert.match(tcRenderer, /node scripts\/check-typecheck-shards\.mjs/);
+	assert.match(tcRenderer, /pnpm exec tsc --noEmit -p tsconfig\.renderer\.json/);
+
+	const tcMobile = workflowJob(workflow, "typecheck-mobile");
+	assert.ok(tcMobile, "client CI must run Mobile typecheck in parallel");
+	assert.match(tcMobile, /^    needs: changes$/m);
+	assert.match(tcMobile, /^    if: needs\.changes\.outputs\.typecheck_mobile == 'true'$/m);
+	assert.match(tcMobile, /^        run: pnpm --filter mobile typecheck$/m);
 
 	const shards = workflowJob(workflow, "linux-unit-shards");
-	assert.ok(shards, "client CI must define Linux unit shards");
+	assert.ok(shards, "client CI must define Linux desktop unit shards");
+	assert.match(shards, /^    needs: changes$/m);
+	assert.match(shards, /^    if: needs\.changes\.outputs\.unit_desktop == 'true'$/m);
 	assert.match(shards, /^    runs-on: ubuntu-latest$/m);
-	assert.doesNotMatch(shards, /^    needs:/m);
 	assertCompleteShardMatrix(shards);
-	assert.match(shards, /^        run: pnpm run test:workspaces --tier unit$/m);
+	assert.match(shards, /^        run: pnpm run test:workspaces --tier unit --workspace desktop$/m);
 	assert.doesNotMatch(shards, /pnpm test:(?:unit|runner)/);
-	assert.equal([...shards.matchAll(/--tier integration --workspace @cindy\/maker-pi-manager/g)].length, 1);
-	assert.match(shards, /^      - name: Run Pi manager integration tests\r?\n        if: matrix\.shard == 1\r?\n        run: pnpm run test:workspaces --tier integration --workspace @cindy\/maker-pi-manager$/m);
+
+	const mobileUnit = workflowJob(workflow, "linux-mobile-unit");
+	assert.ok(mobileUnit, "client CI must define Linux mobile unit tests");
+	assert.match(mobileUnit, /^    needs: changes$/m);
+	assert.match(mobileUnit, /^    if: needs\.changes\.outputs\.unit_mobile == 'true'$/m);
+	assert.match(mobileUnit, /^        run: pnpm run test:workspaces --tier unit --workspace mobile$/m);
+
+	const packagesUnit = workflowJob(workflow, "linux-packages-unit");
+	assert.ok(packagesUnit, "client CI must define Linux package unit tests");
+	assert.match(packagesUnit, /^    needs: changes$/m);
+	assert.match(packagesUnit, /^    if: needs\.changes\.outputs\.unit_packages == 'true'$/m);
+	assert.match(packagesUnit, /^        run: pnpm run test:workspaces --tier unit --exclude-workspace desktop,mobile$/m);
+	assert.equal([...packagesUnit.matchAll(/--tier integration --workspace @cindy\/maker-pi-manager/g)].length, 1);
 
 	const gate = workflowJob(workflow, "verify");
 	assert.ok(gate, "client CI must preserve the stable verify check");
 	assert.match(gate, /^    name: verify$/m);
 	assert.match(gate, /^    if: \$\{\{ always\(\) \}\}$/m);
-	assert.match(gate, /^      - verify-checks$/m);
-	assert.match(gate, /^      - typecheck$/m);
-	assert.match(gate, /^      - linux-unit-shards$/m);
-	assert.match(gate, /^      - host-regressions$/m);
-	assert.match(gate, /^          VERIFY_CHECKS_RESULT: \$\{\{ needs\.verify-checks\.result \}\}$/m);
-	assert.match(gate, /^          TYPECHECK_RESULT: \$\{\{ needs\.typecheck\.result \}\}$/m);
-	assert.match(gate, /^          test "\$TYPECHECK_RESULT" = "success"$/m);
-	assert.match(gate, /^          LINUX_UNIT_SHARDS_RESULT: \$\{\{ needs\.linux-unit-shards\.result \}\}$/m);
-	assert.match(gate, /^          test "\$VERIFY_CHECKS_RESULT" = "success"$/m);
-	assert.match(gate, /^          test "\$LINUX_UNIT_SHARDS_RESULT" = "success"$/m);
-	assert.match(gate, /^          HOST_REGRESSIONS_RESULT: \$\{\{ needs\.host-regressions\.result \}\}$/m);
-	assert.match(gate, /^      - host-changes$/m);
-	assert.match(gate, /^          test "\$HOST_CHANGES_RESULT" = "success"$/m);
+	for (const dep of [
+		"changes",
+		"verify-checks",
+		"typecheck-desktop-main",
+		"typecheck-desktop-renderer",
+		"typecheck-mobile",
+		"linux-unit-shards",
+		"linux-mobile-unit",
+		"linux-packages-unit",
+		"host-regressions",
+	]) {
+		assert.match(gate, new RegExp(`^      - ${dep}$`, "m"));
+	}
+	assert.match(gate, /^          CHANGES_RESULT: \$\{\{ needs\.changes\.result \}\}$/m);
+	assert.match(gate, /^          test "\$CHANGES_RESULT" = "success"$/m);
 	assert.match(gate, /true:success\|false:skipped/);
 	const host = workflowJob(workflow, "host-regressions");
-	assert.match(host, /^    needs: host-changes$/m);
-	assert.match(host, /^    if: needs\.host-changes\.outputs\.required == 'true'$/m);
+	assert.match(host, /^    needs: changes$/m);
+	assert.match(host, /^    if: needs\.changes\.outputs\.host == 'true'$/m);
+	assert.match(host, /^      - name: Load Host acceptance scripts \(imports only\)\r?\n        if: matrix\.os == 'ubuntu-latest'/m);
 });
 
 // ── 规则索引（docs/dev-rules/development-workflow.md §4「规则文档声明何时要读」）──

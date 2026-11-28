@@ -70,23 +70,184 @@ import {
 	requireDatabasePlatform,
 } from "../ci-database-tests.mjs";
 
-import { detectHostChanges, needsHostTests } from "../ci-host-tests.mjs";
+import { detectHostChanges, hostRendererEntrypoints, needsHostTests } from "../ci-host-tests.mjs";
+import {
+	allRequiredChanges,
+	classifyCiChanges,
+	detectCiChanges,
+	fetchChangedFilesFromGitHubApi,
+} from "../ci-changes.mjs";
 
 // Runner tier: the experimental Host must not allocate three OS jobs for a
-// mobile/docs-only change, or silently skip shared inputs/deletions/unknown
-// event ranges. Existing DB selection tests do not cover this new CI entry.
+// mobile/docs/pure-renderer/pure-test change, or silently skip shared inputs,
+// Host-imported renderer files, fixtures, deletions or unknown event ranges.
 test("Host CI selects shared runtime and infrastructure but skips unrelated changes", () => {
+	const rendererEntrypoints = hostRendererEntrypoints();
+	assert.ok(rendererEntrypoints && rendererEntrypoints.size > 0, "apps/host renderer references must be discoverable");
 	for (const file of [
 		"apps/host/src/main.ts", "apps/web/shim.js",
-		"apps/desktop/src/main/localDb/schema.ts", "apps/desktop/src/renderer/main.tsx",
+		"apps/desktop/src/main/localDb/schema.ts",
+		"apps/desktop/src/renderer/lib/ccAgent.types.ts",
+		"apps/desktop/src/renderer/features/cc-agent/lib/modelWindowConfirmation.ts",
+		"apps/desktop/src/renderer/vite-env.d.ts",
+		"apps/desktop/src/main/cindy-brain/__tests__/cindyPackageFixture.ts",
 		"apps/desktop/drizzle/0145.sql", "apps/desktop/native/sqlite-vec/vec0.dll",
 		"apps/codex-package-bin/package.json", "packages/maker-core/src/index.ts",
 		"packages/auth-client/src/index.ts", "scripts/ci-host-tests.mjs",
 		"scripts/shared/pnpm-invocation.mjs", "patches/tsx.patch",
 		"pnpm-lock.yaml", "package.json", "pnpm-workspace.yaml", ".npmrc", ".github/workflows/ci.yml",
-	]) assert.equal(needsHostTests([file]), true, file);
-	assert.equal(needsHostTests(["README.md", "docs/host/basic-web.md", "apps/mobile/app/index.tsx", ".github/ISSUE_TEMPLATE/bug.yml"]), false);
-	assert.equal(needsHostTests([]), false);
+	]) assert.equal(needsHostTests([file], rendererEntrypoints), true, file);
+	for (const file of [
+		"README.md",
+		"docs/host/basic-web.md",
+		"apps/mobile/app/index.tsx",
+		".github/ISSUE_TEMPLATE/bug.yml",
+		"apps/desktop/src/renderer/main.tsx",
+		"apps/desktop/src/capture-renderer/index.tsx",
+		"apps/desktop/src/main/__tests__/example.test.ts",
+	]) assert.equal(needsHostTests([file], rendererEntrypoints), false, file);
+	// When apps/host cannot be scanned, renderer paths fail safe to required.
+	assert.equal(needsHostTests(["apps/desktop/src/renderer/main.tsx"], null), true);
+	assert.equal(needsHostTests([], rendererEntrypoints), false);
+});
+
+// Runner tier: unified CI classifier must skip provably unaffected job groups
+// (non-CI workflows, docs, mobile-only, desktop-only, renderer-only) while
+// failing safe on shared packages, infra, unknown paths, API errors and truncation.
+test("CI change classifier routes non-code, docs, mobile, desktop and infra paths safely", () => {
+	const rendererEntrypoints = hostRendererEntrypoints();
+	assert.deepEqual(
+		classifyCiChanges([".github/workflows/dependency-download-check.yml", "README.md"], { rendererEntrypoints }),
+		{
+			verify_checks: false,
+			typecheck_desktop: false,
+			typecheck_mobile: false,
+			unit_desktop: false,
+			unit_mobile: false,
+			unit_packages: false,
+			windows_runner_checks: false,
+			git_integration: false,
+			host: false,
+		},
+	);
+	assert.deepEqual(
+		classifyCiChanges(["docs/dev-rules/repo-map.md", "AGENTS.md"], { rendererEntrypoints }),
+		{
+			verify_checks: true,
+			typecheck_desktop: false,
+			typecheck_mobile: false,
+			unit_desktop: false,
+			unit_mobile: false,
+			unit_packages: false,
+			windows_runner_checks: false,
+			git_integration: false,
+			host: false,
+		},
+	);
+	assert.deepEqual(
+		classifyCiChanges(["apps/mobile/src/session/RemoteSourceMark.tsx"], { rendererEntrypoints }),
+		{
+			verify_checks: true,
+			typecheck_desktop: false,
+			typecheck_mobile: true,
+			unit_desktop: false,
+			unit_mobile: true,
+			unit_packages: false,
+			windows_runner_checks: false,
+			git_integration: false,
+			host: false,
+		},
+	);
+	assert.equal(
+		classifyCiChanges(["apps/mobile/src/device-link/rehydrate.ts"], { rendererEntrypoints }).unit_desktop,
+		true,
+	);
+	assert.deepEqual(
+		classifyCiChanges(["apps/desktop/src/renderer/components/Button.tsx"], { rendererEntrypoints }),
+		{
+			verify_checks: true,
+			typecheck_desktop: true,
+			typecheck_mobile: false,
+			unit_desktop: true,
+			unit_mobile: false,
+			unit_packages: true,
+			windows_runner_checks: true,
+			git_integration: false,
+			host: false,
+		},
+	);
+	assert.equal(
+		classifyCiChanges(["apps/desktop/src/renderer/lib/ccAgent.types.ts"], { rendererEntrypoints }).host,
+		true,
+	);
+	assert.deepEqual(
+		classifyCiChanges(["apps/desktop/src/main/session.ts"], { rendererEntrypoints }),
+		{
+			verify_checks: true,
+			typecheck_desktop: true,
+			typecheck_mobile: false,
+			unit_desktop: true,
+			unit_mobile: false,
+			unit_packages: true,
+			windows_runner_checks: true,
+			git_integration: true,
+			host: true,
+		},
+	);
+	for (const wide of [
+		".github/workflows/ci.yml",
+		"pnpm-lock.yaml",
+		"packages/maker-core/src/index.ts",
+		"scripts/ci-changes.mjs",
+		"unknown-top-level-dir/file.ts",
+	]) {
+		assert.deepEqual(classifyCiChanges([wide], { rendererEntrypoints }), allRequiredChanges(), wide);
+	}
+});
+
+test("CI change detection uses GitHub API including renames and fails safe on errors or truncation", async () => {
+	const base = "a".repeat(40), head = "b".repeat(40);
+	const prRes = await detectCiChanges({
+		eventName: "pull_request",
+		event: { pull_request: { number: 13710, base: { sha: base } } },
+		head,
+		repository: "makecindy/cindy",
+		token: "tok",
+		fetchImpl: async () => ({
+			ok: true,
+			json: async () => [
+				{ filename: "docs/moved.md", previous_filename: "apps/mobile/src/old.ts" },
+			],
+		}),
+	});
+	assert.equal(prRes.changes.unit_mobile, true);
+	assert.equal(prRes.changes.unit_desktop, false);
+
+	const compareCapped = await fetchChangedFilesFromGitHubApi({
+		eventName: "push",
+		event: { before: base },
+		head,
+		repository: "makecindy/cindy",
+		token: "tok",
+		fetchImpl: async () => ({
+			ok: true,
+			json: async () => ({ status: "ahead", files: Array.from({ length: 300 }, (_, i) => ({ filename: `docs/${i}.md` })) }),
+		}),
+	});
+	assert.equal(compareCapped, null);
+
+	const apiFailure = await detectCiChanges({
+		eventName: "pull_request",
+		event: { pull_request: { number: 1, base: { sha: base } } },
+		head,
+		repository: "makecindy/cindy",
+		token: "tok",
+		fetchImpl: async () => ({ ok: false, status: 500 }),
+	});
+	assert.deepEqual(apiFailure.changes, allRequiredChanges());
+
+	const manual = await detectCiChanges({ eventName: "workflow_dispatch", event: {}, head });
+	assert.deepEqual(manual.changes, allRequiredChanges());
 });
 
 test("Host CI compares PR, merge queue and push ranges without losing deleted paths", () => {
@@ -371,10 +532,11 @@ test("client CI owns the complete Desktop Git integration tier", () => {
 	).replace(/\r\n/g, "\n");
 	const job = workflow.match(/\n  git-integration:\n([\s\S]*)$/);
 	assert.ok(job, "client CI must define an independent git-integration job");
-	assert.match(
-		job[1],
-		/^\s{6}- name: Run Desktop Git integration tests\n\s{8}run: pnpm test:git-integration$/m,
-	);
+	assert.match(job[1], /^    needs: changes$/m);
+	assert.match(job[1], /^    if: needs\.changes\.outputs\.git_integration == 'true'$/m);
+	assert.match(job[1], /node scripts\/test-workspaces\.mjs --tier git-integration/);
+	assert.match(job[1], /node --test scripts\/__tests__\/dev-migration-policy\.git-integration\.test\.ts/);
+	assert.doesNotMatch(job[1], /pnpm test:(?:git-integration|runner)/);
 	const windowsChecks = workflow.match(/\n  windows-runner-checks:\n([\s\S]*?)(?=\n  [\w-]+:)/);
 	assert.ok(windowsChecks);
 	assert.match(
