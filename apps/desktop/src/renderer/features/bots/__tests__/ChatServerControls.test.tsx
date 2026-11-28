@@ -619,6 +619,18 @@ describe('chat interaction controls', () => {
     expect(screen.getByText('Root message')).toBeTruthy();
   });
 
+  // #13638: unlike the existing tests, the newest reply page has no visible rows.
+  // Unit: the real Thread panel must use the raw page boundary to open the older reply.
+  it('loads an earlier Thread reply below a page of hidden notices', async () => {
+    mocks.thread.mockResolvedValueOnce({ ok: true, root: message, replies: [], hasMore: true, pageOldestSequence: 100 })
+      .mockResolvedValueOnce({ ok: true, root: message, replies: [{ ...message, id: 'earlier-reply', sequence: 99, content: 'Earlier visible reply' }], hasMore: false });
+    render(<ChatThreadPanel group={group} rootId="root" onClose={vi.fn()} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'bots.groupChat.timeline.loadEarlier' }));
+    expect(await screen.findByText('Earlier visible reply')).toBeTruthy();
+    expect(mocks.thread).toHaveBeenLastCalledWith(expect.objectContaining({ before: 100 }));
+    expect(screen.queryByRole('button', { name: 'bots.groupChat.timeline.loadEarlier' })).toBeNull();
+  });
+
   it('retains the loaded Thread when a full adjacent page of replies arrives', async () => {
     const replies = (start: number) => Array.from({ length: 50 }, (_, i) => ({
       ...message, id: `reply-${start + i}`, sequence: start + i, content: `Reply ${start + i}`, reactions: [],
