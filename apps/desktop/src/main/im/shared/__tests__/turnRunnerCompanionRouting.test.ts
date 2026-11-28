@@ -958,6 +958,20 @@ describe('turnRunner: connection handed to a companion bot', () => {
     expect(warnings).toHaveLength(1);
   });
 
+  // Durable inboxes (personal WeChat) decide before staging: the route lookup must hand back
+  // the composed notice and never create the channel's own task for an unavailable buddy.
+  it('reports an unavailable buddy to route lookups instead of creating a channel task', async () => {
+    companion.resolveSession.mockResolvedValue({ ok: false, errorCode: 'TARGET_BOT_INACTIVE', message: 'paused' });
+    await expect(runner.resolveRouteTargetOrUnavailable!(BOT_CONTEXT, OWNER)).resolves.toEqual({
+      unavailable: expect.stringContaining('Bot 当前未启用'),
+    });
+    await expect(runner.resolveRouteTarget(BOT_CONTEXT, OWNER)).resolves.toBeNull();
+    expect(fakeRepo.createSession).not.toHaveBeenCalled();
+    binding = null;
+    await expect(runner.resolveRouteTargetOrUnavailable!(BOT_CONTEXT, OWNER))
+      .resolves.toMatchObject({ row: { id: legacyIdFor(BOT_CONTEXT, OWNER) } });
+  });
+
   // #12116 keeps an explicitly delegated iMessage group on its recipient: when that buddy is
   // unavailable the route fails with GROUP_RECIPIENT_UNAVAILABLE. Merging this PR must keep that
   // maintainer behavior (no transient retry, no notice, no channel task) while other groups

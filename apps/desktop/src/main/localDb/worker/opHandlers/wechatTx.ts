@@ -151,7 +151,7 @@ export function wechatCommitPollBatch(
         received_at, platform_created_at, expires_at, status, lease_until,
         session_id, conversation_epoch, payload_json, context_nonce,
         context_ciphertext, context_tag, attempts, last_error_code
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, 0, NULL)`,
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, 0, ?)`,
     );
     const findDuplicate = db.prepare(
       `SELECT id FROM wechat_inbox
@@ -162,8 +162,10 @@ export function wechatCommitPollBatch(
     for (let index = 0; index < messages.length; index += 1) {
       const message = parsePollMessage(messages[index], index);
       const isControlCommand = isWechatControlCommand(message.payloadJson);
-      const status: WechatInboxStatus =
-        queuedTasks >= maxQueuedTasks && !isControlCommand ? 'rejected_overload' : 'pending';
+      // 收到时就被拒绝(伙伴不可用): 不占队列、不挂任务, 带回复直接等出箱送达。
+      const status: WechatInboxStatus = message.rejectReply
+        ? 'delivery_pending'
+        : queuedTasks >= maxQueuedTasks && !isControlCommand ? 'rejected_overload' : 'pending';
       const result = insertInbox.run(
         message.id,
         bindingEpoch,
@@ -180,6 +182,7 @@ export function wechatCommitPollBatch(
         message.context.nonce,
         message.context.ciphertext,
         message.context.tag,
+        message.rejectReply?.errorCode ?? null,
       );
       if (result.changes === 0) {
         const existing = findDuplicate.get(bindingEpoch, message.platformMessageId) as
@@ -197,6 +200,22 @@ export function wechatCommitPollBatch(
       }
 
       rejectedTaskIds.push(message.id);
+      if (message.rejectReply) {
+        insertOutboxChunk(
+          insertOutbox,
+          bindingEpoch,
+          message.id,
+          {
+            id: message.rejectReply.outboxId,
+            clientId: message.rejectReply.clientId,
+            kind: 'error',
+            chunkIndex: 0,
+            text: message.rejectReply.text,
+          },
+          now,
+        );
+        continue;
+      }
       if (!message.overloadReply) {
         throw invalidArgs(`messages.${index}.overloadReply is required when queue is full`);
       }
@@ -956,6 +975,10 @@ function parsePollMessage(value: unknown, index: number) {
     item.overloadReply === undefined
       ? undefined
       : asRecord(item.overloadReply, `${label}.overloadReply`);
+  const rejectRaw =
+    item.rejectReply === undefined
+      ? undefined
+      : asRecord(item.rejectReply, `${label}.rejectReply`);
   const receivedAt = expectTimestamp(item.receivedAt, `${label}.receivedAt`);
   const expiresAt = expectTimestamp(item.expiresAt, `${label}.expiresAt`);
   if (expiresAt < receivedAt) {
@@ -969,7 +992,10 @@ function parsePollMessage(value: unknown, index: number) {
     receivedAt,
     platformCreatedAt: expectTimestamp(item.platformCreatedAt, `${label}.platformCreatedAt`),
     expiresAt,
-    sessionId: expectId(item.sessionId, `${label}.sessionId`),
+    // 只有收到时就被拒绝的消息可以不挂任务; 其余消息必须带任务(租约按任务串行)。
+    sessionId: rejectRaw
+      ? nullableId(item.sessionId, `${label}.sessionId`)
+      : expectId(item.sessionId, `${label}.sessionId`),
     conversationEpoch: expectInteger(item.conversationEpoch, `${label}.conversationEpoch`, 0),
     payloadJson: expectString(item.payloadJson, `${label}.payloadJson`, 4 * 1024 * 1024),
     context,
@@ -978,6 +1004,14 @@ function parsePollMessage(value: unknown, index: number) {
           outboxId: expectId(overloadRaw.outboxId, `${label}.overloadReply.outboxId`),
           clientId: expectId(overloadRaw.clientId, `${label}.overloadReply.clientId`),
           text: expectString(overloadRaw.text, `${label}.overloadReply.text`, 16_384),
+        }
+      : undefined,
+    rejectReply: rejectRaw
+      ? {
+          outboxId: expectId(rejectRaw.outboxId, `${label}.rejectReply.outboxId`),
+          clientId: expectId(rejectRaw.clientId, `${label}.rejectReply.clientId`),
+          text: expectString(rejectRaw.text, `${label}.rejectReply.text`, 16_384),
+          errorCode: expectMachineCode(rejectRaw.errorCode, `${label}.rejectReply.errorCode`),
         }
       : undefined,
   };
