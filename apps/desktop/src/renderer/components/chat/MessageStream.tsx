@@ -5420,6 +5420,8 @@ export function MessageStream({
           clientWidth: root.clientWidth,
         })
       ) {
+        // A pending history jump can resolve after the thumb is pressed but before it moves.
+        railJumpSeqRef.current += 1;
         scrollbarDragStartTopRef.current = root.scrollTop;
       }
     };
