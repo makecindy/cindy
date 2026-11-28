@@ -1547,6 +1547,7 @@ function TextPreviewPage({
             }}
           >
             <TextDocumentPreview
+              fileName={item.name}
               text={state.lines.join("\n")}
               initialLine={targetLine}
               testID={visible ? 'filePreview.sourceReady' : undefined}
