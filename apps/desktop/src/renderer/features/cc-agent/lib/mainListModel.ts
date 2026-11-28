@@ -51,7 +51,7 @@ export type MainListEntry =
   | { kind: 'project'; project: ProjectNode }
   | { kind: 'dialogue-group'; sessions: Session[] }
   | { kind: 'cindy-make-group'; sessions: Session[] }
-  /** 「自动化」组:自动化运行出来的任务(项目里的与无项目的),组内再按每条自动化收文件夹。 */
+  /** 「自动化」组:从项目或散排抽出的自动化任务,组内再按每条自动化收文件夹。 */
   | { kind: 'automations-group'; sessions: Session[] }
   | SidebarSessionEntry;
 
@@ -301,7 +301,7 @@ export interface BuildMainListEntriesInput {
   groupBy: 'project' | 'flat';
   /** true = 散排对话收进单个「对话组」条目。 */
   groupDialogue: boolean;
-  /** true = 自动化运行的任务从项目 / 散排里抽出,收进单个「自动化」组条目。 */
+  /** true = 将未留在伙伴项目下的自动化运行收进单个「自动化」组。 */
   groupAutomation?: boolean;
   sortBy: FilterSortBy;
   projectOrder?: FilterProjectOrder;
@@ -355,19 +355,21 @@ export function partitionCindyMakeSessions({
 }
 
 /**
- * 「自动化归为一组」:按来源(自动化运行 / 旧伙伴例行任务专线)抽出任务,不看标题或目录。
+ * 「自动化归为一组」:按来源抽出任务；项目模式保留已明确归属伙伴项目的运行。
  * 只因抽走任务而变空的项目随之消失(与 Cindy Make 同口径);本机登记过的持久项目
  * 本来就允许零任务显示,保留。
  */
-export function partitionAutomationSessions({
+function partitionAutomationSessions({
   projects,
   dialogues,
   unclassified,
+  groupBy,
   scheduleSessionIndex,
 }: {
   projects: readonly ProjectNode[];
   dialogues: readonly Session[];
   unclassified: readonly Session[];
+  groupBy: BuildMainListEntriesInput['groupBy'];
   scheduleSessionIndex?: ReadonlyMap<string, AutomationScheduleSessionInfo>;
 }): {
   projects: ProjectNode[];
@@ -376,22 +378,27 @@ export function partitionAutomationSessions({
   automations: Session[];
 } {
   const automations = new Map<string, Session>();
-  const regular = (sessions: readonly Session[]) =>
-    sessions.filter((session) => {
-      if (!getAutomationSidebarGroupInfo(session, scheduleSessionIndex)) return true;
-      // 不同电脑上可能有同 id 的任务(恢复 / 复制的数据库),按设备 + id 区分,与 sessionRowKey 同口径。
-      automations.set(sessionRowKey(session), session);
-      return false;
-    });
+  const collectAutomation = (session: Session) => {
+    if (!getAutomationSidebarGroupInfo(session, scheduleSessionIndex)) return true;
+    // 不同电脑上可能有同 id 的任务(恢复 / 复制的数据库),按设备 + id 区分,与 sessionRowKey 同口径。
+    automations.set(sessionRowKey(session), session);
+    return false;
+  };
   const regularProjects = projects.flatMap((project) => {
-    const sessions = regular(project.sessions);
+    const keepBuddyRuns = groupBy === 'project' && isTeammateProjectPath(project.workingDir);
+    // The host assigns projectDir for registered projects; a Buddy-shaped execution cwd alone does not qualify.
+    const sessions = project.sessions.filter(
+      keepBuddyRuns
+        ? (session) => isTeammateProjectPath(session.projectDir) || collectAutomation(session)
+        : collectAutomation,
+    );
     if (sessions.length === project.sessions.length) return [project];
     return sessions.length || project.isPersistentLocal ? [{ ...project, sessions }] : [];
   });
   return {
     projects: regularProjects,
-    dialogues: regular(dialogues),
-    unclassified: regular(unclassified),
+    dialogues: dialogues.filter(collectAutomation),
+    unclassified: unclassified.filter(collectAutomation),
     automations: [...automations.values()],
   };
 }
@@ -478,6 +485,7 @@ export function buildMainListEntries({
       projects,
       dialogues,
       unclassified,
+      groupBy,
       scheduleSessionIndex,
     });
     projects = automationPartition.projects;
