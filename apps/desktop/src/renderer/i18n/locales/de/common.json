@@ -15817,6 +15817,7 @@
     "imageMissing": {
       "title": "Bild fehlt",
       "unavailable": "Bild nicht verfügbar",
+      "remote": "Das Bild liegt auf einem anderen Gerät und kann hier nicht angezeigt werden",
       "loading": "Bild wird geladen…"
     },
     "newMessageIndicator": {
@@ -16196,7 +16197,7 @@
       "fetching": "Datei wird vom Remote-Gerät abgerufen…",
       "fetchFailed": "Datei konnte nicht vom Remote-Gerät abgerufen werden",
       "notFound": "Datei auf dem Remote-Gerät nicht gefunden",
-      "outsideWorkdir": "Diese Datei liegt außerhalb des Arbeitsverzeichnisses der Sitzung und ist in Remote-Sitzungen noch nicht zugänglich",
+      "outsideWorkdir": "Diese Datei liegt außerhalb des Arbeitsverzeichnisses der Sitzung und ist in Remote-Sitzungen noch nicht zugänglich; lege eine Kopie im Arbeitsverzeichnis der Sitzung ab, um sie zu öffnen",
       "staleCopy": "Remote-Verbindung nicht verfügbar — lokale Cache-Kopie wird angezeigt (möglicherweise veraltet)",
       "staleBadge": "Cache-Kopie",
       "downloadToLocal": "Auf diesen Computer herunterladen",

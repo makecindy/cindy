@@ -3,6 +3,7 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { useState } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { Tooltip } from '@/components/ui/tooltip';
 
 afterEach(cleanup);
 
@@ -523,9 +524,19 @@ describe('MarkdownRenderer hostless media ownership', () => {
   it.each(scenarios)('keeps %s inside the SSH workdir and rejects outside paths', (label, kind, extension, scheme) => {
     const origin = { kind: 'ssh', remoteHostId: 'remote', workdir: '/task' } as const;
     sessionFile.current = { sessionId: 's1', workingDir: '/task', origin, localConfirmed: false };
-    const view = render(<MarkdownRenderer workingDir="/task" currentSessionId="s1" content={contentFor(label, kind, extension, scheme)} renderRichAnswers />);
+    // 工作目录之外的图片现在渲染成显式占位(说明「在远端工作目录之外」),占位卡里的
+    // 文件名用 Radix Tooltip,需要 Provider —— 应用顶层本就包了一层(#13676)。
+    const view = render(
+      <Tooltip.Provider>
+        <MarkdownRenderer workingDir="/task" currentSessionId="s1" content={contentFor(label, kind, extension, scheme)} renderRichAnswers />
+      </Tooltip.Provider>,
+    );
     expect(loadedSource(view.container)).toBeNull();
-    view.rerender(<MarkdownRenderer workingDir="/task" currentSessionId="s1" content={contentFor(label, kind, extension, scheme, '/task')} renderRichAnswers />);
+    view.rerender(
+      <Tooltip.Provider>
+        <MarkdownRenderer workingDir="/task" currentSessionId="s1" content={contentFor(label, kind, extension, scheme, '/task')} renderRichAnswers />
+      </Tooltip.Provider>,
+    );
     expect(parseRemoteMediaUrl(loadedSource(view.container) ?? '')).toEqual({
       origin,
       origUrl: `${kind === 'audio' ? 'xdt-audio' : 'xdt-file'}://local/?path=${encodeURIComponent(`/task/My%20Pictures/100%.${extension}`)}`,

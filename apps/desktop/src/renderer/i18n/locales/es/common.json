@@ -15947,6 +15947,7 @@
     "imageMissing": {
       "title": "Falta la imagen",
       "unavailable": "Imagen no disponible",
+      "remote": "Esta imagen está en otro dispositivo y no se puede mostrar aquí",
       "loading": "Cargando imagen…"
     },
     "newMessageIndicator": {
@@ -16341,7 +16342,7 @@
       "fetching": "Obteniendo archivo remoto…",
       "fetchFailed": "No se pudo obtener el archivo remoto",
       "notFound": "No se encontró el archivo remoto",
-      "outsideWorkdir": "Este archivo está fuera del directorio de trabajo de la sesión y aún no se puede acceder a él en sesiones remotas",
+      "outsideWorkdir": "Este archivo está fuera del directorio de trabajo de la sesión y aún no se puede acceder a él en sesiones remotas; copia una copia al directorio de trabajo de la sesión para abrirlo",
       "staleCopy": "Conexión remota no disponible: se muestra una copia local en caché (puede estar desactualizada)",
       "staleBadge": "Copia en caché",
       "downloadToLocal": "Descargar en esta computadora",
