@@ -1,12 +1,17 @@
-import type { BillingCatalogProduct, BillingPurchaseOption } from '../../../shared/billing';
+import { BILLING_CHANNEL_IDS, type BillingCatalogProduct, type BillingPurchaseOption } from '../../../shared/billing';
 
-export type SupportedBillingProvider = 'alipay' | 'stripe';
+export type SupportedBillingProvider = (typeof BILLING_CHANNEL_IDS)[number];
 
 export type SupportedPurchaseOption = BillingPurchaseOption & {
   provider: SupportedBillingProvider;
 };
 
-export const SUPPORTED_BILLING_PROVIDERS = new Set<SupportedBillingProvider>(['alipay', 'stripe']);
+export const SUPPORTED_BILLING_PROVIDERS = new Set<SupportedBillingProvider>(BILLING_CHANNEL_IDS);
+
+export function supportsBillingPlanChangeProvider(provider: string | null | undefined): boolean {
+  // 保留未返回渠道的旧订阅入口。Antom 已支持购买，但尚未支持改档。
+  return provider !== 'antom_alipay_cn' && provider !== 'antom_alipay_hk';
+}
 
 const SUPPORTED_PAYMENT_ACTIONS = new Set<BillingPurchaseOption['paymentAction']>([
   'QR_CODE',

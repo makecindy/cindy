@@ -29,12 +29,13 @@ import {
   formatBillingAmount,
   formatBillingMinorAmount as formatPlanChangeMinorAmount,
 } from './money';
+import type { SupportedBillingProvider } from './purchaseSupport';
 import type { PlanChangeState } from './usePlanChange';
 
 export type PlanChangeCandidate = {
   product: BillingCatalogProduct;
   offer: BillingCatalogOffer;
-  providers: Array<'alipay' | 'stripe'>;
+  providers: SupportedBillingProvider[];
   available?: boolean;
   unavailableReason?: BillingCatalogOfferUnavailableReason | null;
   /**
