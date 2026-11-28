@@ -128,6 +128,41 @@ export function subscribeMobileVoiceDictionaryCache(listener: () => void): () =>
   return () => cacheListeners.delete(listener);
 }
 
+/**
+ * 列出内存与盘上已知的词典 host 设备 ID。
+ * 用于离线场景：即便 REST 设备目录尚未返回或完全离线，仍可定位并水合本账号缓存过的词典快照。
+ */
+export async function listCachedMobileVoiceDictionaryHosts(): Promise<string[]> {
+  const [ownHosts, historyHosts] = await Promise.all([
+    readHostIndex(),
+    listMobileVoiceHistoryHosts().catch(() => [] as string[]),
+  ]);
+  const hosts = new Set<string>();
+  for (const host of memoryCache.keys()) {
+    if (host) hosts.add(host);
+  }
+  for (const host of ownHosts.hosts) {
+    const normalized = normalizeHostDeviceId(host);
+    if (normalized) hosts.add(normalized);
+  }
+  for (const host of historyHosts) {
+    const normalized = normalizeHostDeviceId(host);
+    if (normalized) hosts.add(normalized);
+  }
+  return [...hosts];
+}
+
+/**
+ * 水合当前账号分区下盘上缓存过的全部 host 词典快照，并返回实际有内容的 host ID 列表。
+ * `hydrateMobileVoiceDictionary` 按当前 `accountScope` 寻址，不会跨账号读取其它用户的快照。
+ */
+export async function hydrateAllCachedMobileVoiceDictionaries(): Promise<string[]> {
+  const hosts = await listCachedMobileVoiceDictionaryHosts();
+  if (hosts.length === 0) return [];
+  await Promise.all(hosts.map((host) => hydrateMobileVoiceDictionary(host)));
+  return hosts.filter((host) => readCachedMobileVoiceDictionarySnapshot(host).fetchedAt > 0);
+}
+
 /** 从盘上恢复缓存(App 启动或首次用到该 host 时调用一次)。 */
 export async function hydrateMobileVoiceDictionary(hostDeviceId: string): Promise<void> {
   const host = normalizeHostDeviceId(hostDeviceId);

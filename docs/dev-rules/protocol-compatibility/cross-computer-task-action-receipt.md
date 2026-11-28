@@ -70,11 +70,39 @@
   不经 preload 暴露、不给共享访客开放。无新 channel、relay 载荷类型、服务端或数据库 migration；
   自建中转仍透传原有加密 invoke，对新旧两端都不增加中转要求。
 
+## 新任务 worktree 的基线与回执中的实际位置（2026-11-28）
+
+`action: create` 的 `create` 增加可选 `baseRef`：新任务 worktree 的显式基线（分支、远端引用或提交），
+只在 `useWorktree` 为真时有意义。接收端在同一次能力查询返回 `ordinaryCreateBaseRef: 1`。
+
+- 创建选项是严格解析的，旧接收端会拒绝未知字段。新发送端只在调用方传了基线时才带 `baseRef`，
+  并且先看能力位：目标没有 `ordinaryCreateBaseRef` 时返回 `REMOTE_UNSUPPORTED`，不发送创建请求，
+  也不去掉基线改从默认分支创建。没传基线的创建请求与此前逐字相同，新旧两端照常互通。
+- `baseRef` 是创建配置的一部分，随 `operation` 一起绑定到行动回执，接收端在准备 worktree 和首次
+  持久化前照常核对，同一正文不能被换成另一条基线。
+- 接收端不信任对端：再次校验格式（不允许以 `-` 开头或含控制字符），有 `baseRef` 而没有
+  `useWorktree` 返回 `INVALID_ARGS`。基线在任务所在电脑上解析；点名远端分支时先在同一份有界网络
+  预算内拉取这一条分支。解析不了返回 `WORKTREE_UNAVAILABLE`，不创建任务、不回退默认分支。
+- 创建成功的回包增加三个可选字段，均为追加，旧发送端忽略：
+  - `worktreeBaseRef`：worktree 实际切出的引用，建了 worktree 时出现（没传基线时为默认基线）。
+  - `worktreeBaseStaleReason`：基线没能从远端刷新，取自任务所在电脑上已有的副本。
+  - `agentDeviceId`：模型由哪台电脑提供，`null` 为任务所在电脑自己。
+- 旧接收端不返回这些字段。发送端按缺失处理：工具回执不给出 `provider_device_id`，并说明位置未知，
+  不推断为目标电脑自己的供应商。
+- Desktop 接收端与 Node Host 共用同一份创建实现，两者都声明 `ordinaryCreateBaseRef: 1`。
+  没有新 channel、relay 载荷类型、服务端或数据库 migration；自建中转仍透传原有加密 invoke，
+  对新旧两端都不增加中转要求。
+
+回归覆盖 `apps/desktop/src/main/maker-ipc/__tests__/sessionHandoffIpc.test.ts`（接收端）、
+`apps/desktop/src/main/mcp-integrations/__tests__/sessionHandoffRemote.test.ts`（发送端协商与旧端回包）、
+`apps/host/src/device-link.test.mjs`（真实回环连接上的 Node Host 创建），以及
+`apps/desktop/src/main/__tests__/worktreeDetectCwd.git-integration.test.ts`（真实 Git 的远端基线拉取）。
+
 ## Node Host 接收普通任务
 
 Node Host 在同账号 Device Link 注册同一组 `maker:session:handoff` 操作，声明
 `taskActionVersion: 1`、`plainRequestBody: 1`、`pluginCaller: 1`、
-`ordinaryCreateVersion: 1` 和 `projectCatalogVersion: 1`。控制桌面沿用现有的能力探测和参数；
+`ordinaryCreateVersion: 1`、`ordinaryCreateBaseRef: 1` 和 `projectCatalogVersion: 1`。控制桌面沿用现有的能力探测和参数；
 未接入的旧 Host 仍拒绝此通道。Host 未声明 `ordinaryCreateAutoTitle`，控制端沿用生成短标题的兼容路径。
 回执复核沿原通道向发送电脑请求，使用现有后台链路，不订阅推送。关远控、撤权、换账号或换资料所有权后，
 先前入队的消息无法继续通过复核。目标在最终入队检查中已不存在或不可用时返回

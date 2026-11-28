@@ -26,11 +26,12 @@ export function notifyAgentIslandSessionPatch(
       if (patch.notificationsMuted !== undefined) {
         service.handleNotificationMuteChanged();
       }
-      if (
-        patch.status === 'archived' ||
-        patch.status === 'deleted' ||
-        (patch.hiddenAt !== undefined && patch.hiddenAt !== null)
-      ) {
+      const { status } = patch;
+      if (status === 'active' || status === 'archived' || status === 'deleted') {
+        service.handleSessionStatusChanged(sessionId, status);
+        if (status !== 'active') return;
+      }
+      if (patch.hiddenAt !== undefined && patch.hiddenAt !== null) {
         service.handleSessionClosed(sessionId);
         return;
       }

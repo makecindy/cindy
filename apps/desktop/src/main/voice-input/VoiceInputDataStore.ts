@@ -10,10 +10,12 @@ import {
   dictionaryTermKey,
   isSpeakerGateStrictness,
   materializeDictionary,
+  promoteTermToEntry,
   recordLearningEvent,
   renameTerm,
   replaceTermAliases,
   termKeyFromMaterializedId,
+  unsuppressTerm,
   type DictationDictionaryLearningAction,
   type MaterializedDictionary,
 } from '@cindy/voice-input-core';
@@ -175,26 +177,98 @@ export class VoiceInputDataStore {
     );
   }
 
-  /** CSV 导入:整批按手动词条认领,单条失败不影响其余。 */
-  importManualDictionaryEntries(texts: string[]): VoiceInputSettings {
+  /** CSV / JSON 导入:整批按手动词条认领（可选保留别名）,单条失败不影响其余。 */
+  importManualDictionaryEntries(
+    entries: Array<string | { text: string; aliases?: string[] }>,
+  ): VoiceInputSettings {
     // 已有多少条也要算进上限:否则对着一份满词典反复导入,记录数可以无限增长,
     // 撑过物化上限与 relay 单帧上限(同步会因此永久停摆)。
-    const existing = this.load().settings.dictionaryEntries.length;
-    const budget = Math.max(0, MAX_VOICE_INPUT_DICTIONARY_ENTRIES - existing);
-    if (budget === 0) return cloneSettings(this.load().settings);
-    const accepted = texts.slice(0, budget);
+    const existingEntries = this.load().settings.dictionaryEntries;
+    const existingKeys = new Set(existingEntries.map((entry) => dictionaryTermKey(entry.text)));
+    let remainingBudget = Math.max(0, MAX_VOICE_INPUT_DICTIONARY_ENTRIES - existingEntries.length);
+    const normalizedItems: Array<{ text: string; aliases: string[] }> = [];
+    for (const rawItem of entries) {
+      const text = typeof rawItem === 'string' ? rawItem : rawItem.text;
+      const aliases = typeof rawItem === 'string' ? [] : (rawItem.aliases ?? []);
+      const key = dictionaryTermKey(text);
+      if (!key) continue;
+      if (!existingKeys.has(key)) {
+        if (remainingBudget <= 0) continue;
+        existingKeys.add(key);
+        remainingBudget -= 1;
+      } else if (aliases.length === 0) {
+        continue;
+      }
+      normalizedItems.push({ text, aliases });
+    }
+    if (normalizedItems.length === 0) return cloneSettings(this.load().settings);
     return this.applyDictionaryMutation((current, clock) => {
       let state = current;
       let nextClock = clock;
       let changed = false;
       const nowMs = Date.now();
-      for (const text of accepted) {
-        const result = addManualEntry(state, nextClock, { text, nowMs });
-        state = result.state;
-        nextClock = result.clock;
-        changed = changed || result.changed;
+      for (const item of normalizedItems) {
+        const added = addManualEntry(state, nextClock, { text: item.text, nowMs });
+        state = added.state;
+        nextClock = added.clock;
+        changed = changed || added.changed;
+        if (item.aliases.length > 0) {
+          const termKey = dictionaryTermKey(item.text);
+          const materialized = materializeDictionary(state, {
+            ...DEFAULT_MATERIALIZE_LIMITS,
+            maxAliases: Number.MAX_SAFE_INTEGER,
+          }).entries.find((entry) => dictionaryTermKey(entry.text) === termKey);
+          const mergedAliases = [
+            ...(materialized?.aliases.map((alias) => alias.text) ?? []),
+            ...item.aliases,
+          ];
+          const aliased = replaceTermAliases(state, nextClock, {
+            termKey,
+            primaryText: materialized?.text ?? item.text,
+            aliases: mergedAliases,
+            nowMs,
+          });
+          state = aliased.state;
+          nextClock = aliased.clock;
+          changed = changed || aliased.changed;
+        }
       }
       return { state, clock: nextClock, changed };
+    });
+  }
+
+  promoteDictionaryCandidate(text: string): VoiceInputSettings {
+    const termKey = dictionaryTermKey(text);
+    if (!termKey) return cloneSettings(this.load().settings);
+    return this.applyDictionaryMutation((current, clock) =>
+      promoteTermToEntry(current, clock, { termKey, nowMs: Date.now(), markManual: true }),
+    );
+  }
+
+  deleteDictionaryCandidate(text: string): VoiceInputSettings {
+    const termKey = dictionaryTermKey(text);
+    if (!termKey) return cloneSettings(this.load().settings);
+    return this.applyDictionaryMutation((current, clock) =>
+      deleteTerms(current, clock, { termKeys: [termKey], nowMs: Date.now(), suppressAutomatic: true }),
+    );
+  }
+
+  restoreSuppressedDictionaryTerm(
+    text: string,
+    options?: { addToDictionary?: boolean },
+  ): VoiceInputSettings {
+    const termKey = dictionaryTermKey(text);
+    if (!termKey) return cloneSettings(this.load().settings);
+    return this.applyDictionaryMutation((current, clock) => {
+      const nowMs = Date.now();
+      const restored = unsuppressTerm(current, clock, { termKey, nowMs });
+      if (!options?.addToDictionary) return restored;
+      const added = addManualEntry(restored.state, restored.clock, { text, nowMs });
+      return {
+        state: added.state,
+        clock: added.clock,
+        changed: restored.changed || added.changed,
+      };
     });
   }
 
@@ -389,19 +463,26 @@ export class VoiceInputDataStore {
     return entry.id;
   }
 
-  updateHistoryEntry(id: string, text: string): void {
+  updateHistoryEntry(id: string, text: string, rawText?: string): void {
     const normalizedText = text.trim();
     if (!id || !normalizedText) return;
     const current = this.load();
     const entry = current.history.find((candidate) => candidate.id === id);
     if (!entry) return;
+    const normalizedRaw = typeof rawText === 'string' && rawText.trim()
+      ? rawText.trim()
+      : undefined;
+    const preservedRawText = entry.rawText ?? normalizedRaw ?? entry.text;
+    const nextEntry: VoiceInputHistoryEntry = {
+      id: entry.id,
+      text: normalizedText,
+      ...(preservedRawText && preservedRawText !== normalizedText ? { rawText: preservedRawText } : {}),
+      createdAt: entry.createdAt,
+    };
     this.replaceState({
       ...current,
       history: normalizeVoiceInputHistory([
-        {
-          ...entry,
-          text: normalizedText,
-        },
+        nextEntry,
         ...current.history.filter((candidate) => candidate.id !== id),
       ]),
     });
@@ -823,23 +904,75 @@ export function registerVoiceInputDataStoreIpc(): void {
     }
   });
 
-  ipcMain.handle('voice-input:dictionary:import-entries', (event, texts: unknown): VoiceInputSettings => {
+  ipcMain.handle('voice-input:dictionary:import-entries', (event, entries: unknown): VoiceInputSettings => {
     try {
       assertTrustedAppRendererEvent(event);
-      // renderer 直连时可以绕开 CSV UI 的容量裁决,这里必须自己兜底。三重上限
+      // renderer 直连时可以绕开导入 UI 的容量裁决,这里必须自己兜底。三重上限
       // 缺一不可:只限入参条数的话,对着已经装满的词典再灌 1000 条照样能撑爆
-      // sidecar,而超长单条也能用少量条目做到同一件事。
-      const list = Array.isArray(texts)
-        ? texts
-            .filter((item): item is string => typeof item === 'string')
-            .map((item) => item.slice(0, MAX_VOICE_INPUT_DICTIONARY_ENTRY_CHARS))
-            .slice(0, MAX_VOICE_INPUT_DICTIONARY_ENTRIES)
-        : [];
+      // sidecar,而超长单条或超大别名列表也能用少量条目做到同一件事。
+      const list: Array<string | { text: string; aliases?: string[] }> = [];
+      if (Array.isArray(entries)) {
+        for (const item of entries) {
+          if (typeof item === 'string') {
+            list.push(item.slice(0, MAX_VOICE_INPUT_DICTIONARY_ENTRY_CHARS));
+          } else if (item && typeof item === 'object' && typeof (item as { text?: unknown }).text === 'string') {
+            const candidate = item as { text: string; aliases?: unknown };
+            list.push({
+              text: candidate.text.slice(0, MAX_VOICE_INPUT_DICTIONARY_ENTRY_CHARS),
+              aliases: sanitizeLearningAliases(candidate.aliases),
+            });
+          }
+          if (list.length >= MAX_VOICE_INPUT_DICTIONARY_ENTRIES) break;
+        }
+      }
       return voiceInputDataStore.importManualDictionaryEntries(list);
     } catch (error) {
       throwVoiceInputDataStoreIpcError(error);
     }
   });
+
+  ipcMain.handle('voice-input:dictionary:promote-candidate', (event, text: unknown): VoiceInputSettings => {
+    try {
+      assertTrustedAppRendererEvent(event);
+      const value = typeof text === 'string' ? text.slice(0, MAX_VOICE_INPUT_DICTIONARY_ENTRY_CHARS) : '';
+      return voiceInputDataStore.promoteDictionaryCandidate(value);
+    } catch (error) {
+      throwVoiceInputDataStoreIpcError(error);
+    }
+  });
+
+  ipcMain.handle('voice-input:dictionary:delete-candidate', (event, text: unknown): VoiceInputSettings => {
+    try {
+      assertTrustedAppRendererEvent(event);
+      const value = typeof text === 'string' ? text.slice(0, MAX_VOICE_INPUT_DICTIONARY_ENTRY_CHARS) : '';
+      return voiceInputDataStore.deleteDictionaryCandidate(value);
+    } catch (error) {
+      throwVoiceInputDataStoreIpcError(error);
+    }
+  });
+
+  ipcMain.handle(
+    'voice-input:dictionary:restore-suppressed',
+    (event, payload: { text?: unknown; addToDictionary?: unknown } | unknown): VoiceInputSettings => {
+      try {
+        assertTrustedAppRendererEvent(event);
+        const rawText = typeof payload === 'string'
+          ? payload
+          : (payload && typeof payload === 'object' && typeof (payload as { text?: unknown }).text === 'string'
+            ? (payload as { text: string }).text
+            : '');
+        const addToDictionary = Boolean(
+          payload && typeof payload === 'object' && (payload as { addToDictionary?: unknown }).addToDictionary === true,
+        );
+        return voiceInputDataStore.restoreSuppressedDictionaryTerm(
+          rawText.slice(0, MAX_VOICE_INPUT_DICTIONARY_ENTRY_CHARS),
+          { addToDictionary },
+        );
+      } catch (error) {
+        throwVoiceInputDataStoreIpcError(error);
+      }
+    },
+  );
 
   ipcMain.handle(
     'voice-input:dictionary:rename-entry',
@@ -917,10 +1050,14 @@ export function registerVoiceInputDataStoreIpc(): void {
     }
   });
 
-  ipcMain.on('voice-input:history:update', (event, payload: { id?: string; text?: string }) => {
+  ipcMain.on('voice-input:history:update', (event, payload: { id?: string; text?: string; rawText?: string }) => {
     try {
       if (typeof payload?.id === 'string' && typeof payload.text === 'string') {
-        voiceInputDataStore.updateHistoryEntry(payload.id, payload.text);
+        voiceInputDataStore.updateHistoryEntry(
+          payload.id,
+          payload.text,
+          typeof payload.rawText === 'string' ? payload.rawText : undefined,
+        );
       }
       // Every ipcRenderer.sendSync caller must receive a value. Leaving the
       // success path unset blocks the renderer forever after refinement.

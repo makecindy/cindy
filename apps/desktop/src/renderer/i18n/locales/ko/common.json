@@ -1149,7 +1149,7 @@
     "permissionMissing": "허용되지 않음",
     "openPermissionSettings": "권한 허용",
     "recheckPermissions": "다시 확인",
-    "permissionActionFailed": "권한 안내를 열지 못했습니다. 컴퓨터의 원격 제어 설정에서 다시 시도하세요.",
+    "permissionActionFailed": "권한 안내를 열지 못했습니다. 컴퓨터의 「설정 → 원격 연결」에서 다시 시도하세요.",
     "permissionCheckFailed": "권한을 확인하지 못했습니다. 컴퓨터가 온라인인지 확인하고 다시 시도하세요.",
     "openGuideOnComputer": "컴퓨터에서 권한 안내 열기",
     "permissionGuideOpened": "컴퓨터에 권한 안내를 표시했습니다. 컴퓨터에서 계속하세요.",
@@ -3154,7 +3154,8 @@
           "gatewayKey": "AI 게이트웨이가 선택한 실시간 ASR 경로를 지원해야 합니다",
           "codexLogin": "Codex 로그인 사용",
           "elevenlabsKey": "ElevenLabs 키 사용(환경 변수)",
-          "codexRealtimeUnsupported": "사용 불가: Codex 로그인은 OpenAI API Realtime 인증 정보가 아닙니다"
+          "codexRealtimeUnsupported": "사용 불가: Codex 로그인은 OpenAI API Realtime 인증 정보가 아닙니다",
+          "localOffline": "이 기기에서 오프라인 실행(계정·API 키 불필요)"
         },
         "credentialError": {
           "gatewayMissing": "사용 가능한 AI 게이트웨이 키가 없어 이 모델을 사용할 수 없습니다.",
@@ -3162,10 +3163,24 @@
           "elevenlabsMissing": "ElevenLabs 키(환경 변수)가 설정되지 않아 이 모델을 사용할 수 없습니다.",
           "customAsrConfigMissing": "음성 입력을 시작하기 전에 실시간 ASR 서비스 설정을 모두 입력하고 저장하세요.",
           "customAsrKeyMissing": "사용자 지정 실시간 ASR 서비스의 API 키를 입력하고 저장하세요.",
-          "codexRealtimeUnsupported": "Codex 로그인은 실시간 음성 인식에 사용할 수 없습니다. 지원되는 ASR 서비스를 선택하세요."
+          "codexRealtimeUnsupported": "Codex 로그인은 실시간 음성 인식에 사용할 수 없습니다. 지원되는 ASR 서비스를 선택하세요.",
+          "localAsrModelMissing": "오프라인 음성 입력을 시작하기 전에 로컬 sherpa-onnx ASR 모델 폴더를 선택하세요.",
+          "localAsrUnsupported": "이 컴퓨터 아키텍처에서는 로컬 오프라인 음성 인식을 지원하지 않습니다."
         },
         "manageProviders": "모델 제공자 열기",
-        "reset": "기본값으로 복원"
+        "reset": "기본값으로 복원",
+        "localAsr": {
+          "optionLabel": "로컬 오프라인 인식(sherpa-onnx)",
+          "optionDescription": "온디바이스 ONNX 인식. 계정·API 키 없이 완전 오프라인 작동",
+          "notice": "로컬 sherpa-onnx 오프라인 모델 폴더(tokens.txt 및 .onnx 가중치가 포함된 SenseVoice, Paraformer, Whisper 또는 Transducer)를 선택하세요. 오디오는 이 컴퓨터 밖으로 전송되지 않습니다.",
+          "modelDirLabel": "로컬 모델 폴더",
+          "readyStatus": "준비됨 · {{kind}}({{folder}})",
+          "unsupportedStatus": "이 플랫폼에서는 지원되지 않습니다",
+          "notConfiguredStatus": "모델 폴더가 선택되지 않았습니다",
+          "clearFolder": "지우기",
+          "chooseFolder": "모델 폴더 선택",
+          "invalidFolder": "선택한 폴더에 지원되는 sherpa-onnx 모델(tokens.txt 및 .onnx 파일)이 없습니다."
+        }
       },
       "historyToggle": {
         "show": "최근 기록 펼치기",
@@ -3313,7 +3328,9 @@
           "filters": {
             "all": "전체",
             "automatic": "자동 추가",
-            "manual": "수동 추가"
+            "manual": "수동 추가",
+            "candidates": "후보",
+            "suppressed": "제외됨"
           },
           "sources": {
             "automatic": "자동",
@@ -3326,6 +3343,28 @@
             "automaticAddedMultiple": "사전에 자동 추가됨: {{term}} 외 {{count}}개",
             "delete": "삭제",
             "deleteAriaLabel": "자동 추가된 단어 삭제: {{term}}"
+          },
+          "export": {
+            "csv": "CSV 내보내기",
+            "json": "JSON 내보내기",
+            "successCsv": "사전을 CSV로 내보냈습니다",
+            "successJson": "사전을 JSON으로 내보냈습니다"
+          },
+          "candidates": {
+            "hint": "수동 수정에서 감지되었지만 아직 자동 승격되지 않은 후보 용어입니다. 바로 사전에 추가하거나 삭제할 수 있습니다.",
+            "evidenceCount": "{{count}}회 감지됨",
+            "promote": "사전에 추가",
+            "promoteTooltip": "이 후보를 사전에 즉시 추가합니다",
+            "promotedToast": "“{{term}}”을(를) 사전에 추가했습니다",
+            "empty": "후보 용어가 아직 없습니다."
+          },
+          "suppressed": {
+            "hint": "삭제한 자동 학습 용어는 다시 자동 추가되지 않도록 제외됩니다. 학습을 다시 허용하거나 사전에 바로 추가할 수 있습니다.",
+            "restore": "자동 학습 허용",
+            "addToDictionary": "사전에 다시 추가",
+            "restoredToast": "“{{term}}”의 자동 학습을 다시 허용했습니다",
+            "addedToast": "“{{term}}”을(를) 사전에 다시 추가했습니다",
+            "empty": "제외된 용어가 없습니다."
           }
         }
       },
@@ -3370,7 +3409,15 @@
         "toast": {
           "copied": "복사되었습니다",
           "copyFailed": "복사에 실패했습니다"
-        }
+        },
+        "searchAriaLabel": "음성 기록 검색",
+        "searchPlaceholder": "받아쓰기 또는 원본 인식 텍스트 검색…",
+        "showRawComparison": "원본 인식 비교",
+        "hideRawComparison": "비교 접기",
+        "rawLabel": "원본 인식",
+        "refinedLabel": "다듬기 후",
+        "loadMore": "더 보기({{count}}개 남음)",
+        "noSearchResults": "일치하는 음성 기록이 없습니다."
       },
       "speakerFilter": {
         "label": "내 목소리 인식",
@@ -10999,12 +11046,14 @@
       "fileCount_other": "{{count}}개 파일",
       "emptyTitle": "아직 변경 사항이 없습니다",
       "emptyDesc": "이 세션에서는 아직 파일이 편집되지 않았습니다. Agent의 변경 사항이 여기에 표시됩니다.",
+      "emptyDescSvn": "버전 관리 중인 파일이 SVN 기준 리비전과 일치합니다.",
+      "svnSelectFile": "파일을 선택해 변경 사항을 확인하세요.",
       "emptyDescGit": "현재 git worktree에 staged 또는 unstaged 변경 사항이 없습니다.",
       "filterEmptyTitle": "이 필터에 변경 사항이 없습니다",
-      "filterEmptyDesc": "현재 필터 또는 설정에서 표시할 git 변경 사항이 없습니다.",
+      "filterEmptyDesc": "현재 필터 또는 설정에서 표시할 변경 사항이 없습니다.",
       "noSessionTitle": "세션 없음",
       "noSessionDesc": "로컬 세션을 선택하면 git worktree 변경 사항을 검토할 수 있습니다.",
-      "loadingTitle": "git 변경 사항을 읽는 중",
+      "loadingTitle": "변경 사항을 읽는 중",
       "loadingDesc": "새로고침이 끝날 때까지 이전 내용을 유지합니다.",
       "errorTitle": "변경 사항 읽기 실패",
       "refresh": "새로고침",
@@ -11278,6 +11327,10 @@
         "non-git": {
           "title": "git 저장소가 아님",
           "desc": "현재 작업 디렉터리에 사용할 수 있는 git 저장소가 없습니다."
+        },
+        "svn-unavailable": {
+          "title": "SVN을 찾을 수 없음",
+          "desc": "작업 사본의 변경 사항을 보려면 Subversion 명령줄 클라이언트를 설치하세요."
         },
         "git-unavailable": {
           "title": "git 사용 불가",
@@ -15250,6 +15303,24 @@
       "removeFromList": "목록에서 제거",
       "missingDir": "폴더를 찾을 수 없음"
     },
+    "remoteOutbox": {
+      "notSent": "전송 안 됨",
+      "retry": "재시도",
+      "delete": "삭제",
+      "deliveryUnconfirmed": "전송 결과 미확인",
+      "recheckDelivery": "다시 확인",
+      "waitingForPrevious": "이전 메시지 대기 중",
+      "taskInactive": "이 작업은 현재 메시지를 받을 수 없습니다.",
+      "inputNotSupported": "이 컴퓨터는 이 작업에 이런 유형의 메시지를 보내는 기능을 지원하지 않습니다.",
+      "taskClearedBeforeSend": "작업이 비워졌거나 비워지는 중입니다. 메시지는 이 기기에 저장되어 있습니다.",
+      "invalidInput": "내용이 올바르지 않아 컴퓨터에서 메시지를 거부했습니다.",
+      "profileInUseByDesktop": "이 데이터는 단독으로 실행 중인 Cindy 데스크톱 앱이 사용하고 있습니다. 앱을 종료한 후 다시 보내세요.",
+      "other": "이 작업이 끝나지 않았습니다. 잠시 후 다시 시도해 주세요.",
+      "deleteConfirmTitle": "이 메시지를 삭제할까요?",
+      "deleteConfirmBody": "이 메시지는 전송되지 않았습니다. 삭제하면 되돌릴 수 없습니다.",
+      "deleteUnconfirmedBody": "컴퓨터가 이미 이 메시지를 받았을 수 있습니다. 삭제하면 이 기기에서 대기 중인 메시지만 사라집니다. 컴퓨터가 이미 받았다면 대화 기록에 계속 표시됩니다.",
+      "cancel": "취소"
+    },
     "pendingQueue": {
       "waitingForDevice": "미전송 · 다른 컴퓨터가 다시 연결되면 보냅니다",
       "stopping": "중지 처리 중",
@@ -15369,7 +15440,11 @@
           "description": "마이크 접근을 허용한 뒤 음성 입력을 다시 클릭하세요.",
           "confirm": "권한 허용",
           "cancel": "취소"
-        }
+        },
+        "rewriteSelected": "음성으로 다시 쓰기",
+        "rewriteSelectedTooltip": "선택한 텍스트를 다시 쓰도록 음성으로 지시합니다(실패 시 원본 유지)",
+        "rewriteSelectedAria": "선택한 텍스트 음성으로 다시 쓰기",
+        "rewriteFailed": "음성 다시 쓰기를 완료하지 못했습니다. 선택한 원본 텍스트는 그대로 유지되었습니다."
       },
       "remoteSwitchFailed": "원격 설정 변경 실패: 적용되지 않음",
       "switchFailed": "설정 변경 실패: 적용되지 않음",
@@ -20857,6 +20932,8 @@
     },
     "errors": {
       "piStartupCloudFile": "클라우드에만 있는 지침 파일 때문에 Pi 시작이 지연될 수 있습니다: {{path}}. Finder에서 이 파일을 다운로드하고 로컬에서 사용할 수 있는지 확인한 후 다시 시도하세요. 시간 초과의 원인이 다를 수도 있습니다.",
+      "remoteEngineMissing": "원격 컴퓨터에 사용할 수 있는 엔진이 없습니다. 해당 컴퓨터에 엔진을 설치하고 Cindy를 다시 시작한 뒤 다시 시도하세요.",
+      "remoteCapabilityUnavailable": "현재 서버 또는 컴퓨터에서 아직 이 작업을 지원하지 않습니다.",
       "hostProfileInUseByDesktop": "이 데이터는 단독으로 실행 중인 Cindy 데스크톱 앱이 사용하고 있습니다. 앱을 종료한 후 다시 보내세요.",
       "hostProfileInUseByDesktopAtStart": "이 데이터는 단독으로 실행 중인 Cindy 데스크톱 앱이 사용하고 있어 Cindy 백그라운드 서비스가 시작되지 않았습니다. 그 앱을 종료하고 Cindy 백그라운드 서비스를 다시 시작한 후 지금 이 Cindy 창을 다시 여세요.",
       "hostProfileInUseByDesktopRetry": "이 데이터는 단독으로 실행 중인 Cindy 데스크톱 앱이 사용하고 있어 지금은 변경할 수 없습니다. 앱을 종료한 후 다시 시도하세요.",
@@ -23803,7 +23880,15 @@
       "exceptionImage": "메시지에 이미지가 있어 이미지를 볼 수 있는 소스 중에서 선택",
       "exceptionImageFallback": "메시지에 이미지가 있지만 이미지를 볼 수 있는 소스가 없어 평소대로 선택",
       "exceptionHours": "이 시간대에는 '{{name}}' 사용",
-      "separator": "; "
+      "separator": "; ",
+      "usageHabit": "평소 사용 패턴에 따라 우선 선택",
+      "usageHabitQuota": "평소 사용 패턴에 따라 우선 선택(할당량 {{left}}% 남음)",
+      "autoBalance": "다른 소스의 여유가 부족하거나 사용 중이어서 분산 선택",
+      "autoBalanceQuota": "여유 할당량과 부하를 고려해 우선 선택({{left}}% 남음)",
+      "lessBusy": "다른 소스가 작업 실행 중이어서 여유 있는 이 소스를 먼저 사용",
+      "paygFallback": "구독 및 공유 소스를 사용할 수 없어 종량제 소스로 대체",
+      "paygReserve": "종량제 예비 소스(다른 소스를 사용할 수 없을 때만 사용)",
+      "standbyQuotaNeutral": "할당량 {{left}}% 남음({{reset}} 초기화 예정), 이번에는 미선택"
     },
     "settings": {
       "autoSwitch": {

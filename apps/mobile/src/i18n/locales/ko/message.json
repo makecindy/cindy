@@ -286,6 +286,7 @@
     "pendingDelivery": "전송 대기 중",
     "pendingDeliveryHint": "이 휴대폰에 저장했습니다. 컴퓨터의 확인을 기다리고 있습니다.",
     "waitingForComputer": "컴퓨터가 연결되면 전송",
+    "waitingForPrevious": "이전 메시지 대기 중",
     "waitingForNetwork": "네트워크가 돌아오면 전송",
     "queued": "대기 중",
     "retryImage": "이 이미지 다시 올리기",

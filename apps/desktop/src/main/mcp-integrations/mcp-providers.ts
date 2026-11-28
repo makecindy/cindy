@@ -60,6 +60,7 @@ import { resolveHelperSurface } from './helperSurface.js';
 import { createProject } from './createProject.js';
 import { createMoveSession } from './moveSession.js';
 import { createTaskWorktreeHost } from './createTaskWorktree.js';
+import { checkWorktreeBaseRefArg } from '../worktree/sourceRef.js';
 import { sessionImportCallbacks } from '../session-import/agentTools.js';
 import { createDesktopSessionShareCallbacks } from '../session-share/sessionShareTools.desktop.js';
 import { renameProject, removeProject, readCurrentSessionProject } from './projectManagement.js';
@@ -1302,6 +1303,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
         dispatcherSessionId,
         title,
         useWorktree,
+        baseRef,
         workingDir,
         projectDir,
         agentKind,
@@ -1312,6 +1314,10 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
         agentDeviceId,
       }) => {
         if (!targetSessionId && device && device !== 'local' && device !== getDeviceId()) {
+          // Checked here so a malformed baseline fails without contacting the other computer;
+          // the destination checks again.
+          const checkedBaseRef = checkWorktreeBaseRefArg(baseRef, useWorktree);
+          if (!checkedBaseRef.ok) return { ok: false, errorCode: 'INVALID_ARGS', message: checkedBaseRef.message };
           if (providerId !== undefined && agentKind !== 'acp')
             return { ok: false, errorCode: 'INVALID_ARGS', message: 'provider_id 仅支持本机供应商连接；远程新建任务时仅用于插件引擎(agent_kind="acp")。' };
           if (agentKind === 'acp') {
@@ -1340,14 +1346,18 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
               if (!source) throw new Error('Source task is unavailable');
               recordCreation = await captureBotCreatedTaskResponsibility(dispatcherSessionId, { remoteDeviceId: device });
               return { title: title?.trim() || undefined, projectDir, workingDir,
-                useWorktree, agentKind, ...(agentKind === 'acp' && providerId ? { providerId } : {}), model, effort, fast, agentDeviceId,
+                useWorktree, ...(baseRef !== undefined ? { baseRef } : {}),
+                agentKind, ...(agentKind === 'acp' && providerId ? { providerId } : {}), model, effort, fast, agentDeviceId,
                 permissionMode: permissionModeOrAsk(source.permissionMode) };
             },
           });
           if (!result.ok) return { ...result,
             ...(['DELIVERY_UNKNOWN', 'CREATED_NOT_DELIVERED'].includes(result.errorCode)
               ? { recoverySessionId: qualifiedId, message: `${result.message} Recovery target_session_id: ${qualifiedId}. Do not repeat create.` } : {}) };
-          const accepted = { ...result, targetSessionId: qualifiedId, targetDeviceId: device };
+          // The destination reports the provider location relative to itself (null = its own provider).
+          // An older destination reports nothing: keep it unknown.
+          const accepted = { ...result, targetSessionId: qualifiedId, targetDeviceId: device,
+            ...(result.agentDeviceId !== undefined ? { providerDeviceId: result.agentDeviceId } : {}) };
           // Opened from a group: the group shows the task as a card (bot-group-chat.md §10).
           reportGroupTaskCreated(dispatcherSessionId, { taskId: id, deviceId: device, title: result.targetTitle || title?.trim() || normalizeAutoTitle(message) });
           if (recordCreation) {
@@ -1374,6 +1384,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
             dispatcherSessionId,
             title,
             useWorktree,
+            ...(baseRef !== undefined ? { baseRef } : {}),
             workingDir,
             projectDir,
             ...(hasExecutionOverrides

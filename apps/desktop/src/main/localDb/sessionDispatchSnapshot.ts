@@ -1,3 +1,4 @@
+import type { FastMode } from '@cindy/maker-shared';
 import { eq } from 'drizzle-orm';
 import { sessions } from './schema.js';
 import { getDbClient } from './client/current.js';
@@ -40,6 +41,10 @@ export interface SessionRowSnapshot {
   sideChatPromoted?: boolean;
   /** 会话当前模型;限额判定据此只看该模型的额度窗口。 */
   model?: string | null;
+  /** Stored reasoning effort preserved across cold resumes (`sendToSessionInternal`, etc.). */
+  effort?: string | null;
+  /** Stored speed setting preserved across cold resumes for built-in engines. */
+  fastMode?: FastMode | null;
   /** Native id used by the execution host to resolve the task's subscription account. */
   sdkSessionId?: string | null;
   /** Authoritative `/clear` visibility boundary (unix ms). */
@@ -76,6 +81,8 @@ async function selectSessionRowSnapshot(id: string): Promise<SessionRowSnapshot 
       source: sessions.source,
       sideChatPromoted: sessions.sideChatPromoted,
       model: sessions.model,
+      effort: sessions.effort,
+      fastMode: sessions.fastMode,
       sdkSessionId: sessions.sdkSessionId,
       lastTurnEndedAt: sessions.lastTurnEndedAt,
       activeTurnStartedAt: sessions.activeTurnStartedAt,

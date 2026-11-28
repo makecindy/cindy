@@ -1149,7 +1149,7 @@
     "permissionMissing": "未許可",
     "openPermissionSettings": "権限を許可",
     "recheckPermissions": "再確認",
-    "permissionActionFailed": "権限ガイドを開けませんでした。コンピューターのリモート操作設定で再試行してください。",
+    "permissionActionFailed": "権限ガイドを開けませんでした。コンピューターの「設定 → リモート接続」で再試行してください。",
     "permissionCheckFailed": "権限を確認できません。コンピューターがオンラインか確認して再試行してください。",
     "openGuideOnComputer": "コンピューターでガイドを開く",
     "permissionGuideOpened": "コンピューターに権限ガイドを表示しました。そちらで続けてください。",
@@ -3154,7 +3154,8 @@
           "gatewayKey": "AI ゲートウェイが選択したリアルタイム ASR ルートに対応している必要があります",
           "codexLogin": "Codex ログインを使用",
           "elevenlabsKey": "ElevenLabs キーを使用（環境変数）",
-          "codexRealtimeUnsupported": "利用不可：Codex ログインは OpenAI API Realtime の認証情報ではありません"
+          "codexRealtimeUnsupported": "利用不可：Codex ログインは OpenAI API Realtime の認証情報ではありません",
+          "localOffline": "このデバイスでオフライン実行（アカウント・API キー不要）"
         },
         "credentialError": {
           "gatewayMissing": "利用可能な AI ゲートウェイキーが見つからないため、このモデルは使用できません。",
@@ -3162,10 +3163,24 @@
           "elevenlabsMissing": "ElevenLabs キー（環境変数）が未設定のため、このモデルは使用できません。",
           "customAsrConfigMissing": "音声入力を開始する前に、リアルタイム ASR サービスの設定をすべて入力して保存してください。",
           "customAsrKeyMissing": "カスタムリアルタイム ASR サービスの API キーを入力して保存してください。",
-          "codexRealtimeUnsupported": "Codex ログインはリアルタイム音声認識には使用できません。対応する ASR サービスを選択してください。"
+          "codexRealtimeUnsupported": "Codex ログインはリアルタイム音声認識には使用できません。対応する ASR サービスを選択してください。",
+          "localAsrModelMissing": "オフライン音声入力を開始する前に、ローカルの sherpa-onnx ASR モデルフォルダを選択してください。",
+          "localAsrUnsupported": "このコンピューターのアーキテクチャではローカルオフライン音声認識はサポートされていません。"
         },
         "manageProviders": "モデルプロバイダーを開く",
-        "reset": "既定に戻す"
+        "reset": "既定に戻す",
+        "localAsr": {
+          "optionLabel": "ローカルオフライン認識（sherpa-onnx）",
+          "optionDescription": "端末内 ONNX 認識。アカウントや API キーなしで完全オフライン動作",
+          "notice": "ローカルの sherpa-onnx オフラインモデルフォルダ（tokens.txt と .onnx を含む SenseVoice / Paraformer / Whisper / Transducer）を選択してください。音声はこのコンピューターから送信されません。",
+          "modelDirLabel": "ローカルモデルフォルダ",
+          "readyStatus": "準備完了 · {{kind}}（{{folder}}）",
+          "unsupportedStatus": "このプラットフォームでは非対応です",
+          "notConfiguredStatus": "モデルフォルダが未選択です",
+          "clearFolder": "クリア",
+          "chooseFolder": "モデルフォルダを選択",
+          "invalidFolder": "選択したフォルダにサポート対象の sherpa-onnx モデル（tokens.txt および .onnx ファイル）が見つかりません。"
+        }
       },
       "historyToggle": {
         "show": "履歴を表示",
@@ -3313,7 +3328,9 @@
           "filters": {
             "all": "すべて",
             "automatic": "自動追加",
-            "manual": "手動追加"
+            "manual": "手動追加",
+            "candidates": "候補",
+            "suppressed": "除外済み"
           },
           "sources": {
             "automatic": "自動",
@@ -3326,6 +3343,28 @@
             "automaticAddedMultiple": "辞書に自動追加しました：{{term}} ほか {{count}} 件",
             "delete": "削除",
             "deleteAriaLabel": "自動追加された語を削除：{{term}}"
+          },
+          "export": {
+            "csv": "CSV 書き出し",
+            "json": "JSON 書き出し",
+            "successCsv": "辞書を CSV で書き出しました",
+            "successJson": "辞書を JSON で書き出しました"
+          },
+          "candidates": {
+            "hint": "手動修正から検出され、まだ自動追加されていない候補語です。今すぐ辞書へ昇格するか削除できます。",
+            "evidenceCount": "検出 {{count}} 回",
+            "promote": "辞書に追加",
+            "promoteTooltip": "この候補をすぐに辞書へ追加します",
+            "promotedToast": "「{{term}}」を辞書に追加しました",
+            "empty": "候補語はまだありません。"
+          },
+          "suppressed": {
+            "hint": "削除された自動学習語は再追加されないよう除外されています。学習対象へ戻すか、辞書へ再追加できます。",
+            "restore": "学習を許可",
+            "addToDictionary": "辞書に戻す",
+            "restoredToast": "「{{term}}」の自動学習を再許可しました",
+            "addedToast": "「{{term}}」を辞書に戻しました",
+            "empty": "除外済みの用語はありません。"
           }
         }
       },
@@ -3370,7 +3409,15 @@
         "toast": {
           "copied": "コピーしました",
           "copyFailed": "コピーに失敗しました"
-        }
+        },
+        "searchAriaLabel": "音声履歴を検索",
+        "searchPlaceholder": "文字起こしや生の認識結果を検索…",
+        "showRawComparison": "生テキストと比較",
+        "hideRawComparison": "比較を閉じる",
+        "rawLabel": "元の認識",
+        "refinedLabel": "整形後",
+        "loadMore": "さらに表示（残り {{count}} 件）",
+        "noSearchResults": "一致する音声履歴はありません。"
       },
       "speakerFilter": {
         "label": "自分の声を認識",
@@ -10999,12 +11046,14 @@
       "fileCount_other": "{{count}} ファイル",
       "emptyTitle": "変更はまだありません",
       "emptyDesc": "このセッションではまだファイルが編集されていません。Agent による変更がここに表示されます。",
+      "emptyDescSvn": "バージョン管理下のファイルは SVN の BASE リビジョンと一致しています。",
+      "svnSelectFile": "ファイルを選んで差分を表示します。",
       "emptyDescGit": "現在の git worktree には staged / unstaged の変更がありません。",
       "filterEmptyTitle": "このフィルターに変更はありません",
-      "filterEmptyDesc": "現在のフィルターまたは設定で表示できる git 変更はありません。",
+      "filterEmptyDesc": "現在のフィルターまたは設定で表示できる 変更はありません。",
       "noSessionTitle": "セッションがありません",
       "noSessionDesc": "ローカルセッションを選択すると git worktree の変更を確認できます。",
-      "loadingTitle": "git 変更を読み込み中",
+      "loadingTitle": "変更を読み込み中",
       "loadingDesc": "読み込みが完了するまで前回の内容を保持します。",
       "errorTitle": "変更の読み込みに失敗しました",
       "refresh": "更新",
@@ -11278,6 +11327,10 @@
         "non-git": {
           "title": "git リポジトリではありません",
           "desc": "現在の作業ディレクトリに利用可能な git リポジトリがありません。"
+        },
+        "svn-unavailable": {
+          "title": "SVN が見つかりません",
+          "desc": "作業コピーの差分を表示するには、Subversion のコマンドラインクライアントをインストールしてください。"
         },
         "git-unavailable": {
           "title": "git を利用できません",
@@ -15250,6 +15303,24 @@
       "removeFromList": "リストから削除",
       "missingDir": "フォルダが見つかりません"
     },
+    "remoteOutbox": {
+      "notSent": "未送信",
+      "retry": "再試行",
+      "delete": "削除",
+      "deliveryUnconfirmed": "送信結果は未確認です",
+      "recheckDelivery": "再確認",
+      "waitingForPrevious": "前のメッセージを待機中",
+      "taskInactive": "このタスクは現在メッセージを受信できません。",
+      "inputNotSupported": "このコンピューターでは、このタスクにこの種類のメッセージを送信できません。",
+      "taskClearedBeforeSend": "タスクはクリア済みか、クリア中です。メッセージはこの端末に保存されています。",
+      "invalidInput": "内容が無効なため、コンピューターはメッセージを受け付けませんでした。",
+      "profileInUseByDesktop": "このデータは単独で起動している Cindy デスクトップアプリが使用中です。アプリを終了してから、もう一度送信してください。",
+      "other": "この操作は完了しませんでした。しばらくしてからもう一度お試しください。",
+      "deleteConfirmTitle": "このメッセージを削除しますか？",
+      "deleteConfirmBody": "このメッセージは送信されていません。削除すると元に戻せません。",
+      "deleteUnconfirmedBody": "コンピューターがこのメッセージをすでに受信している可能性があります。削除すると、この端末の送信待ちメッセージだけが消えます。受信済みの場合は、会話履歴に引き続き表示されます。",
+      "cancel": "キャンセル"
+    },
     "pendingQueue": {
       "waitingForDevice": "未送信 · もう一方のコンピュータが再接続したら送信します",
       "stopping": "停止処理中",
@@ -15369,7 +15440,11 @@
           "description": "マイクへのアクセスを許可してから、もう一度音声入力をクリックしてください。",
           "confirm": "権限を許可",
           "cancel": "キャンセル"
-        }
+        },
+        "rewriteSelected": "音声で書き換え",
+        "rewriteSelectedTooltip": "選択中のテキストを書き換える指示を音声で伝えます（失敗時は元のテキストを保持）",
+        "rewriteSelectedAria": "選択テキストを音声で書き換え",
+        "rewriteFailed": "音声による書き換えを完了できませんでした。選択中のテキストはそのまま保持されています。"
       },
       "remoteSwitchFailed": "リモート設定の変更に失敗しました(未適用)",
       "switchFailed": "設定の変更に失敗しました(未適用)",
@@ -20857,6 +20932,8 @@
     },
     "errors": {
       "piStartupCloudFile": "クラウド上にのみある指示ファイルが Pi の起動を遅らせている可能性があります：{{path}}。Finder でこのファイルをダウンロードし、ローカルで利用できることを確認してから再試行してください。タイムアウトには別の原因がある可能性もあります。",
+      "remoteEngineMissing": "リモートのコンピューターに利用できるエンジンがありません。そのコンピューターにエンジンをインストールし、Cindy を再起動してから再試行してください。",
+      "remoteCapabilityUnavailable": "現在のサーバーまたはコンピューターは、この操作にまだ対応していません。",
       "hostProfileInUseByDesktop": "このデータは単独で起動している Cindy デスクトップアプリが使用中です。アプリを終了してから、もう一度送信してください。",
       "hostProfileInUseByDesktopAtStart": "このデータは単独で起動している Cindy デスクトップアプリが使用中のため、Cindy バックグラウンドサービスは起動しませんでした。そのアプリを終了し、Cindy バックグラウンドサービスを再起動してから、この Cindy ウィンドウを開き直してください。",
       "hostProfileInUseByDesktopRetry": "このデータは単独で起動している Cindy デスクトップアプリが使用中のため、今は変更できません。アプリを終了してから、もう一度お試しください。",
@@ -23803,7 +23880,15 @@
       "exceptionImage": "メッセージに画像があるため、画像を扱えるソースの中から選択",
       "exceptionImageFallback": "メッセージに画像がありますが、画像を扱えるソースがないため通常どおり選択",
       "exceptionHours": "この時間帯は「{{name}}」を使用",
-      "separator": "、"
+      "separator": "、",
+      "usageHabit": "普段の利用傾向から優先して選択",
+      "usageHabitQuota": "普段の利用傾向から優先して選択（残り {{left}}%）",
+      "autoBalance": "他のソースの余裕が少ないため負荷分散で選択",
+      "autoBalanceQuota": "クォータの余裕と負荷を考慮して優先（残り {{left}}%）",
+      "lessBusy": "他のソースが実行中のため空いているこちらを先に使用",
+      "paygFallback": "サブスクリプションや共有ソースが使えないため従量課金へフォールバック",
+      "paygReserve": "従量課金ソース（他のソースが使えないときの予備）",
+      "standbyQuotaNeutral": "残り {{left}}%、{{reset}} にリセット予定（今回は見送り）"
     },
     "settings": {
       "autoSwitch": {

@@ -108,4 +108,34 @@ describe('resolveVoiceInputReadinessRecovery', () => {
       settingsTab: 'voice-input',
     });
   });
+
+  it('routes missing or unsupported local offline ASR back to voice input settings', () => {
+    expect(
+      resolveVoiceInputReadinessRecovery(
+        {
+          auth: 'local',
+          provider: 'local-sherpa-onnx',
+          failureReason: 'local-asr-model-missing',
+        },
+        'byok',
+      ),
+    ).toEqual({
+      messageKey: 'settings.voiceInput.serviceSource.credentialError.localAsrModelMissing',
+      settingsTab: 'voice-input',
+    });
+
+    expect(
+      resolveVoiceInputReadinessRecovery(
+        {
+          auth: 'local',
+          provider: 'local-sherpa-onnx',
+          failureReason: 'local-asr-unsupported',
+        },
+        'byok',
+      ),
+    ).toEqual({
+      messageKey: 'settings.voiceInput.serviceSource.credentialError.localAsrUnsupported',
+      settingsTab: 'voice-input',
+    });
+  });
 });

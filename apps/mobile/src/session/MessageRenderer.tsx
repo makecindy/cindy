@@ -4490,7 +4490,7 @@ function MessageBubble({
       ) : null}
       {item.historyConfirmation && actions.pendingSend ? (
         <OutboxHistoryConfirmationRow clientId={clientId} requested={item.historyConfirmation === 'requested'}
-          onConfirm={actions.pendingSend.onRetryOutbox} />
+          onConfirm={actions.pendingSend.onRetryOutbox} onRemove={actions.pendingSend.onRemoveOutbox} />
       ) : hasActions && actions.companion ? (
         <CompanionMessageActions user={isUser} copied={copyState === 'copied'} copying={copyState === 'copying'} disabled={disabled}
         onCopy={canCopy ? copyMessage : undefined}

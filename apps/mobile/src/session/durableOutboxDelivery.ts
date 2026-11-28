@@ -1,4 +1,4 @@
-import type { InputDeliveryProjection } from "@cindy/device-link";
+import { projectionContainsInput, type InputDeliveryProjection } from "@cindy/device-link";
 import { isExplicitRemoteNotFoundError } from "./newSessionWorktree";
 import type { remoteSessionStore } from "./remoteSessionStore";
 import {
@@ -57,6 +57,8 @@ export interface DurableOutboxDeliveryDeps {
   onHandedOff?(record: DurableOutboxRecord): void;
   cancel(record: DurableOutboxRecord): Promise<boolean>;
   history(record: DurableOutboxRecord, fresh?: boolean): Promise<boolean>;
+  /** Positive, in-memory user row for this task and original client ID. Never treats absence as a miss. */
+  observedHistory?(record: DurableOutboxRecord): boolean;
   /** One compatible page read after an explicit denial of the exact-ID read. */
   legacyHistory?(record: DurableOutboxRecord): Promise<boolean>;
   /** A remote row alone cannot release the local bubble before offline history owns it. */
@@ -68,6 +70,8 @@ export interface DurableOutboxDeliveryDeps {
   mediaFailed?(error: unknown): boolean;
   retryable(error: unknown): boolean;
   describe(error: unknown): string;
+  /** This rejection is known to precede acceptance of the enqueue RPC. */
+  isEnqueueRefusal?(error: unknown): boolean;
   confirmationMessage: string;
   clearedMessage: string;
 }
@@ -93,19 +97,6 @@ export function bindOutboxProjection(
 
 function hasRemoteCode(error: unknown, code: string): boolean {
   return !!error && typeof error === 'object' && 'code' in error && error.code === code;
-}
-
-function projectionContainsInput(projection: DeliveryProjection, clientId: string): boolean {
-  const recovery = projection.recovery as { clientId?: string; item?: { clientId?: string } } | null | undefined;
-  return Boolean(projection.pendingQueue.some((item) => item.clientId === clientId)
-    || projection.steeringQueueClientIds?.includes(clientId)
-    || projection.queueSnapshot?.pendingSteerClientIds?.includes(clientId)
-    || projection.queueSnapshot?.dispatchClientId === clientId
-    || projection.continuationTurnClientId === clientId
-    || projection.continuationInFlightClientId === clientId
-    || recovery?.clientId === clientId || recovery?.item?.clientId === clientId
-    || projection.withdrawnQueueClientIds?.includes(clientId)
-    || projection.deliveryReceipts?.some((receipt) => receipt.clientId === clientId && receipt.state !== 'unknown'));
 }
 
 /** One owner for writes; pages only add records or request retry/cancellation. */
@@ -150,6 +141,7 @@ export function createDurableOutboxDelivery(deps: DurableOutboxDeliveryDeps) {
   async function deliver(initial: DurableOutboxRecord) {
     let record = initial;
     let resending = false;
+    let retryWithDurableDelivery = false;
     // The upload in progress when an attempt throws is the image that did not get through.
     let uploadingSlot: number | undefined;
     let preparation: Partial<DurableOutboxRecord> | undefined;
@@ -203,18 +195,22 @@ export function createDurableOutboxDelivery(deps: DurableOutboxDeliveryDeps) {
       error: undefined,
       failedUploadSlot: undefined,
     });
-    const confirmHistory = async (fresh?: boolean) => {
+    const confirmHistory = async (fresh?: boolean, tolerateUnknown = false) => {
       let history;
       try {
         history = await readHistory(record, fresh);
       } catch (error) {
         // The explicit wire code says this peer lacks the exact read. A timeout,
         // refusal for another reason, or error text alone cannot select a new read.
-        if (!deps.legacyHistory || !hasRemoteCode(error, 'CHANNEL_NOT_ALLOWED')) throw error;
+        if (!deps.legacyHistory || !hasRemoteCode(error, 'CHANNEL_NOT_ALLOWED')) {
+          if (tolerateUnknown) return 'unknown';
+          throw error;
+        }
         if (!current(record)) return 'handled';
         const found = deps.canRun(record) && await deps.legacyHistory(record).catch(() => false);
         if (!current(record)) return 'handled';
         if (!found) {
+          if (tolerateUnknown) return 'unknown';
           await holdForHistoryConfirmation();
           return 'handled';
         }
@@ -278,6 +274,14 @@ export function createDurableOutboxDelivery(deps: DurableOutboxDeliveryDeps) {
         record = reconciled;
       }
       stage('draftHandoff');
+      if (record.historyConfirmation === 'unconfirmed') {
+        // An uncertain write must never be replayed by the background runner.
+        // A later history push may nevertheless prove that the original ID was
+        // accepted. Persist the history view when possible; otherwise mark
+        // host ownership so a lagging local disk view cannot block FIFO.
+        if (deps.observedHistory?.(record)) await finishHistory();
+        return;
+      }
       // Persisted completion never re-enters delivery, even after missing files or lost host history.
       if (isDurableOutboxSettled(record)) return await finish();
       if (record.retryAfterConfirmedMiss && record.state === 'sending') return await holdForHistoryConfirmation();
@@ -331,7 +335,16 @@ export function createDurableOutboxDelivery(deps: DurableOutboxDeliveryDeps) {
       if (resending) {
         // Verify again on the current connection, including after app restart
         // or peer replacement between the user's two taps.
-        const confirmed = await confirmMissing();
+        confirmationEpoch = deps.connectionEpoch?.(record.deviceId);
+        // A v1 host reconciles known and persisted IDs atomically with enqueue.
+        // An older Desktop may report its exact history miss as IPC_ERROR.
+        const fresh = record.retrySafe ? await deps.projection(record, true) : undefined;
+        if (record.retrySafe && !confirmationIsCurrent()) return;
+        retryWithDurableDelivery = fresh?.sessionId === record.item.sessionId
+          && Array.isArray(fresh.pendingQueue) && fresh.inputDeliveryVersion === 1;
+        if (retryWithDurableDelivery && await confirmHistory(true, true) === 'handled') return;
+        const confirmed = retryWithDurableDelivery && confirmationIsCurrent() ? fresh
+          : retryWithDurableDelivery ? undefined : await confirmMissing();
         if (!confirmed) {
           if (current(record) && record.retryAfterConfirmedMiss && record.state === 'queued') {
             await holdForHistoryConfirmation();
@@ -405,9 +418,9 @@ export function createDurableOutboxDelivery(deps: DurableOutboxDeliveryDeps) {
       }
       if (state === "removed") return await finish();
       if (
-        record.clearBoundaryMs !== undefined &&
         projection.clearBoundaryMs !== undefined &&
-        record.clearBoundaryMs !== projection.clearBoundaryMs
+        record.clearBoundaryMs !== projection.clearBoundaryMs &&
+        (record.clearBoundaryMs !== undefined || (resending && typeof projection.clearBoundaryMs === 'number'))
       ) {
         if (durableOwnership)
           return await finish();
@@ -419,13 +432,13 @@ export function createDurableOutboxDelivery(deps: DurableOutboxDeliveryDeps) {
         if (!current(record)) return;
         // The receipt may release the last background connection. Save host
         // ownership now and read history when the bridge can run again.
-        if (deps.canRun(record) && await hasHistory(record)) {
+        if (!hasDurableOwnership(record) || record.error)
+          await update({ state: "host-owned", retrySafe: true, retryAfterConfirmedMiss: undefined, error: undefined });
+        resending = false;
+        if (current(record) && deps.canRun(record) && await hasHistory(record)) {
           await finishHistory();
           return;
         }
-        if (!current(record)) return;
-        if (!hasDurableOwnership(record) || record.error)
-          await update({ state: "host-owned", retrySafe: true, error: undefined });
         due.set(id(record), Date.now() + 5_000);
         return;
       }
@@ -434,18 +447,18 @@ export function createDurableOutboxDelivery(deps: DurableOutboxDeliveryDeps) {
         || state === "pending" || state === "accepted";
       if (!resending && needsHistory && await confirmHistory() === 'handled') return;
       if (!current(record) || record.state === "failed") return;
-      if (state === "pending" || state === "accepted" || record.state === "host-owned") {
-        await update({ state: state === "pending" ? "confirming" : "failed", error: deps.confirmationMessage });
+      if (state === "pending") {
+        if (record.state !== "confirming") await update({ state: "confirming", error: undefined });
         return;
       }
+      if (state === "accepted" || record.state === "host-owned") return await holdForHistoryConfirmation();
       if (
         record.prepared &&
         (record.state === "sending" || record.state === "confirming") &&
         !record.refreshUploads &&
         !(record.retrySafe && projection.inputDeliveryVersion === 1)
       ) {
-        await update({ state: "failed", error: deps.confirmationMessage });
-        return;
+        return await holdForHistoryConfirmation();
       }
       if (record.refreshUploads && record.uploads.length) {
         const superseded = record.item.attachmentSlots.filter((attachment, slot): attachment is RemoteSerializedAttachment =>
@@ -530,14 +543,19 @@ export function createDurableOutboxDelivery(deps: DurableOutboxDeliveryDeps) {
         return;
       }
       const assertResendCurrent = () => {
-        if (!confirmationIsCurrent() || record.prepared?.clientId !== record.item.clientId) {
+        const prepared = preparation?.prepared ?? record.prepared;
+        if (!confirmationIsCurrent() || prepared?.clientId !== record.item.clientId) {
           throw new Error('OUTBOX_STALE_WRITE');
         }
       };
       if (resending) assertResendCurrent();
+      const hadNeverEnqueued = isDurableOutboxUnsent(record);
       // This write precedes every external enqueue. Crash recovery therefore knows it must reconcile.
+      const preparedForDelivery = preparation?.prepared ?? record.prepared;
       await update({ ...preparation, state: "sending", enqueueStarted: true, error: undefined,
-        ...(resending ? { retrySafe: false } : {}) });
+        ...(retryWithDurableDelivery ? {
+          prepared: preparedForDelivery && { ...preparedForDelivery, durableDelivery: true },
+        } : resending ? { retrySafe: false } : {}) });
       preparation = undefined;
       const applyEnqueueProjection = deps.bindProjection(record);
       let result: InputProjection;
@@ -564,6 +582,17 @@ export function createDurableOutboxDelivery(deps: DurableOutboxDeliveryDeps) {
           trace("send known boundary rejected", { client: record.item.clientId.slice(-8) });
           return;
         }
+        if (current(record) && deps.isEnqueueRefusal?.(error)) {
+          // A fresh refusal only describes its own attempt. If an earlier
+          // attempt may have landed, retain the original confirmation.
+          if (!hadNeverEnqueued && !resending) return await holdForHistoryConfirmation();
+          due.delete(id(record));
+          await update({
+            state: "failed", error: deps.describe(error), retryAfterConfirmedMiss: undefined,
+            enqueueStarted: !hadNeverEnqueued,
+          });
+          return;
+        }
         throw error;
       }
       if (!current(record)) return;
@@ -573,7 +602,7 @@ export function createDurableOutboxDelivery(deps: DurableOutboxDeliveryDeps) {
       if (durableEnqueue) await deps.accepted?.(record);
       await update(durableEnqueue
         ? { state: "host-owned", retryAfterConfirmedMiss: undefined, retrySafe: resending ? true : record.retrySafe }
-        : { state: "confirming", retryAfterConfirmedMiss: undefined, error: deps.confirmationMessage });
+        : { state: "confirming", retryAfterConfirmedMiss: undefined, error: undefined });
       attempts.delete(id(record));
       due.set(id(record), Date.now() + 1_000);
       stage('enqueue');
@@ -588,7 +617,8 @@ export function createDurableOutboxDelivery(deps: DurableOutboxDeliveryDeps) {
       });
     } catch (error) {
       if (!current(record)) return;
-      if (resending) {
+      if (resending || (record.state === "confirming" && !record.cancelRequested
+        && !record.retrySafe && !isDurableOutboxUnsent(record) && !deps.retryable(error))) {
         await holdForHistoryConfirmation().catch(() => undefined);
         return;
       }
@@ -662,9 +692,10 @@ export function createDurableOutboxDelivery(deps: DurableOutboxDeliveryDeps) {
             ...group.filter(isDurableOutboxHandedOff),
           ];
         })
-        .filter((r) => r.historyConfirmation !== 'unconfirmed' && !inFlight.has(id(r)) && deps.canRun(r)
-          && !(r.retryAfterConfirmedMiss && r.state === 'failed' && !r.cancelRequested)
-          && (r.historyConfirmation === 'requested' || (due.get(id(r)) ?? 0) <= Date.now()));
+        .filter((r) => !inFlight.has(id(r)) && deps.canRun(r)
+          && !(r.state === 'failed' && !r.cancelRequested && (r.retryAfterConfirmedMiss || isDurableOutboxUnsent(r)))
+          && (r.historyConfirmation === 'requested' || (r.retryAfterConfirmedMiss && r.state === 'queued')
+            || (due.get(id(r)) ?? 0) <= Date.now()));
       // Round robin prevents one failed head starving peers.
       const capacity = Math.min(MAX_IN_FLIGHT - inFlight.size, candidates.length);
       for (let n = 0; n < capacity; n++) {

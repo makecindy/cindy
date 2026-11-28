@@ -10,6 +10,7 @@ import { getOrCreateHostDeviceId, readSessionDeviceId } from './auth/device-iden
 
 import { spawn } from 'node:child_process';
 import path from 'node:path';
+import { createInterface } from 'node:readline/promises';
 
 
 
@@ -80,6 +81,52 @@ function openInSystemBrowser(url) {
   });
 }
 
+const PERSONAL_PROVIDER_NAMES = { apple: 'Apple', google: 'Google', wechat: 'WeChat' };
+
+export class LoginMethodRequiredError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = 'LoginMethodRequiredError';
+    this.code = 'LOGIN_METHOD_REQUIRED';
+    this.exitCode = 2;
+  }
+}
+
+/** Use the Desktop's English social-button labels and browser-step description. */
+async function choosePersonalLoginMethod(methods, io, out) {
+  out('Choose how to sign in:');
+  methods.forEach((method, index) => {
+    out(`  ${index + 1}. Continue with ${PERSONAL_PROVIDER_NAMES[method] ?? method} — Complete verification in your browser. (--method=${method})`);
+  });
+  const input = io.stdin ?? process.stdin;
+  const output = io.stdoutStream ?? process.stdout;
+  if (!input.isTTY || !output.isTTY) {
+    throw new LoginMethodRequiredError('Choose a method with cindy-host login --method=<id>.');
+  }
+  const terminal = createInterface({ input, output });
+  try {
+    while (true) {
+      let answer;
+      try { answer = (await terminal.question(`Select a method [1-${methods.length}]: `)).trim(); }
+      catch { throw new LoginMethodRequiredError('No method selected. Rerun with --method=<id>.'); }
+      const index = Number(answer);
+      if (answer && Number.isInteger(index) && index >= 1 && index <= methods.length) {
+        return methods[index - 1];
+      }
+      out(`Enter a number from 1 to ${methods.length}.`);
+    }
+  } finally {
+    terminal.close();
+  }
+}
+
+/** Keep all other login errors and their exit status unchanged. */
+export function reportLoginCommandFailure(error, write = (line) => console.error(line)) {
+  const needsMethod = error instanceof LoginMethodRequiredError;
+  write(`cindy-host login failed: ${needsMethod ? `[${error.code}] ` : ''}${error instanceof Error ? error.message : String(error)}`);
+  return needsMethod ? error.exitCode : 1;
+}
+
 export function parseLoginArgs(argv) {
   const regionArg = argv.find((arg) => arg === '--region' || arg.startsWith('--region='));
   const region = regionArg?.slice('--region='.length);
@@ -92,7 +139,8 @@ export function parseLoginArgs(argv) {
 
 /**
  * @param {string[]} argv arguments after `login`
- * @param {{stdout?: (line: string) => void, stderr?: (line: string) => void}} [io]
+ * @param {{stdout?: (line: string) => void, stderr?: (line: string) => void,
+ *   stdin?: import('node:stream').Readable, stdoutStream?: import('node:stream').Writable}} [io]
  */
 export async function runLoginCommand(argv, io = {}) {
   const out = io.stdout ?? ((line) => console.log(line));
@@ -186,7 +234,6 @@ export async function runLoginCommand(argv, io = {}) {
       throw new Error('Cloud guest enrollment has already been used. Run cindy-host login to sign in to this profile.');
     cloudGuest = { guest, grant: await cloudGuestAuthorization(guest, deviceId, endpoints.authApiBaseUrl, guestStore, hostAuthFetch) };
   }
-  if (!cloudGuest) out(noOpen ? 'Open the following Cindy login page on a device with a browser.' : 'Opening the Cindy login page in your browser…');
   const result = await runHostLogin({
     cloudGuest,
     organization,
@@ -224,6 +271,13 @@ export async function runLoginCommand(argv, io = {}) {
     },
     hostedCallbackUrl: endpoints.authDesktopCallbackUrl,
     openBrowser: async (url) => {
+      out(organization
+        ? noOpen
+          ? 'Open the following Cindy login page on a device with a browser.'
+          : 'Opening the Cindy login page in your browser…'
+        : noOpen
+          ? 'Complete verification in your browser. Open the Cindy sign-in link below on a device with a browser.'
+          : 'Complete verification in your browser. Opening the Cindy sign-in page…');
       out(`If it does not open, visit:\n${url}`);
       if (!noOpen) {
         try { await openInSystemBrowser(url); }
@@ -231,6 +285,9 @@ export async function runLoginCommand(argv, io = {}) {
       }
     },
     method,
+    choosePersonalMethod: !organization && !cloudGuest && !method
+      ? (methods) => choosePersonalLoginMethod(methods, io, out)
+      : undefined,
     // A Host removed from the account in Device Link registers again only with this fresh sign-in (serve starts from a
     // refreshed token, which cannot): say hello once with it (auth/device-link-registration.mjs).
     onSignedIn: async (token) => {

@@ -5,6 +5,8 @@ import type { DbTransport } from '../client/DbTransport';
 
 const state = vi.hoisted(() => ({ db: null as unknown }));
 vi.mock('../client/current.js', () => ({ getDbClient: () => ({ drizzle: state.db, query: async (sql: string, params: unknown[]) => sqlite.prepare(sql).all(...params) }) }));
+import { buildAutoUsageProfile, readLocalAutoUsageSamples } from '../../model-groups/autoUsageProfile';
+import { localDayKey } from '../dailySpend';
 import { getSessionUsageSince, getUsageTaskMeta } from '../dailySessionUsage';
 
 let sqlite: Database.Database;
@@ -16,7 +18,7 @@ beforeEach(() => {
       id TEXT PRIMARY KEY, title TEXT NOT NULL, model TEXT NOT NULL, provider_id TEXT,
       status TEXT NOT NULL, context_tokens INTEGER NOT NULL DEFAULT 0,
       context_window INTEGER NOT NULL DEFAULT 0, user_send_at INTEGER, updated_at INTEGER NOT NULL,
-      source TEXT
+      source TEXT, agent_device_id TEXT
     );
     CREATE TABLE auxiliary_usage_receipts (
       receipt_id TEXT PRIMARY KEY, day TEXT, session_id TEXT,
@@ -27,10 +29,10 @@ beforeEach(() => {
       updated_at INTEGER NOT NULL, PRIMARY KEY (day, session_id)
     );
     INSERT INTO sessions VALUES
-      ('old', 'Renamed later', 'gpt-5.5', 'openai', 'active', 10, 100, 50, 40, NULL),
-      ('recent', 'Recent', 'claude', NULL, 'archived', 0, 0, NULL, 70, NULL),
-      ('gone', 'Deleted', 'gpt-5.5', NULL, 'deleted', 0, 0, NULL, 80, NULL),
-      ('unused', 'No usage', 'gpt-5.5', NULL, 'active', 0, 0, NULL, 90, NULL);
+      ('old', 'Renamed later', 'gpt-5.5', 'openai', 'active', 10, 100, 50, 40, NULL, NULL),
+      ('recent', 'Recent', 'claude', NULL, 'archived', 0, 0, NULL, 70, NULL, NULL),
+      ('gone', 'Deleted', 'gpt-5.5', NULL, 'deleted', 0, 0, NULL, 80, NULL, NULL),
+      ('unused', 'No usage', 'gpt-5.5', NULL, 'active', 0, 0, NULL, 90, NULL, NULL);
     INSERT INTO daily_session_usage VALUES
       ('2026-09-01', 'old', 5, 1), ('2026-09-01', 'gone', 6, 1),
       ('2026-09-25', 'recent', 7, 1), ('2026-09-25', 'gone', 8, 1);
@@ -94,4 +96,25 @@ it('adds auxiliary usage only to its real non-deleted task, including receipt-on
   ]));
   expect(result.rows).toHaveLength(2);
   expect(result.tasks.some(task => task.sessionId === 'unused')).toBe(true);
+});
+
+// DB tier: the routing reader must feed each day to the profile. Two days of
+// usage on one task used to collapse into the most recent day and its weight.
+it('builds the Auto profile with the original days and volume of an ongoing task', async () => {
+  const earlier = new Date(2026, 9, 19, 12).getTime();
+  const later = new Date(2026, 9, 26, 12).getTime();
+  const now = new Date(2026, 9, 27, 12).getTime();
+  sqlite.prepare("UPDATE sessions SET updated_at = ?, user_send_at = ? WHERE id = 'old'").run(later, later);
+  const insert = sqlite.prepare("INSERT INTO daily_session_usage VALUES (?, 'old', ?, ?)");
+  insert.run(localDayKey(earlier), 50_000, earlier);
+  insert.run(localDayKey(later), 10_000, later);
+
+  const samples = await readLocalAutoUsageSamples(new Date(2026, 9, 13, 12).getTime(), now);
+  expect(samples).toEqual([
+    expect.objectContaining({ sessionId: 'old', atMs: earlier, tokens: 50_000 }),
+    expect.objectContaining({ sessionId: 'old', atMs: later, tokens: 10_000 }),
+  ]);
+  const profile = buildAutoUsageProfile(samples, now);
+  expect(profile.activeDays).toBe(2);
+  expect(profile.byModel.get('gpt-5.5')?.weight).toBeCloseTo(0.4 * (1 + Math.log10(6)) + 1 + Math.log10(2));
 });

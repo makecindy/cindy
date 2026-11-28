@@ -241,9 +241,12 @@ export function UnifiedModelPickerView(p: UnifiedMobilePickerViewProps) {
       ...(modelGroupList?.managedMeta
         ? [{ kind: "modelGroupManaged" as const, key: "model-group:managed", managedMeta: modelGroupList.managedMeta }]
         : []),
-      ...(modelGroupList?.rows.length
+      ...(modelGroupList && (modelGroupList.rows.length || modelGroupList.unsupportedNotice)
         ? [
             { kind: "modelGroupHeader" as const, key: "header:model-groups", title: modelGroupList.title },
+            ...(modelGroupList.unsupportedNotice ? [{
+              kind: "modelGroupNotice" as const, key: "model-group:unsupported", text: modelGroupList.unsupportedNotice,
+            }] : []),
             ...modelGroupList.rows.map((row, index) => ({
               kind: "modelGroup" as const,
               key: `model-group:${row.id}`,
@@ -1261,8 +1264,11 @@ export function UnifiedModelPickerView(p: UnifiedMobilePickerViewProps) {
           </Group>
         ) : null}
         {modelGroupManagedRow}
-        {p.modelGroups?.rows.length ? (
+        {p.modelGroups && (p.modelGroups.rows.length || p.modelGroups.unsupportedNotice) ? (
           <Group testID={`${p.testID}.group.model-groups`} title={p.modelGroups.title}>
+            {p.modelGroups.unsupportedNotice ? (
+              <Text style={styles.empty}>{p.modelGroups.unsupportedNotice}</Text>
+            ) : null}
             {p.modelGroups.rows.map(modelGroupRow)}
           </Group>
         ) : null}
@@ -1354,6 +1360,8 @@ export function UnifiedModelPickerView(p: UnifiedMobilePickerViewProps) {
                         <View style={styles.group} testID={`${p.testID}.group.model-groups`}>
                           <Text style={styles.groupLabel}>{item.title}</Text>
                         </View>
+                      ) : item.kind === "modelGroupNotice" ? (
+                        <Text style={styles.empty}>{item.text}</Text>
                       ) : item.kind === "modelGroup" ? (
                         <View>
                           {item.separator ? <View style={styles.separator} /> : null}

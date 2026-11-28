@@ -407,8 +407,13 @@ export function UnifiedModelPickerView(p: UnifiedMobilePickerViewProps) {
         </Section>
       ) : null}
       {/* 模型组(被控电脑上的)：一段，列在收藏之后、插件引擎与内置模型之前；点了由被控电脑按组的规则选来源。 */}
-      {p.modelGroups?.rows.length ? (
+      {p.modelGroups && (p.modelGroups.rows.length || p.modelGroups.unsupportedNotice) ? (
         <Section title={p.modelGroups.title}>
+          {p.modelGroups.unsupportedNotice ? (
+            <Text modifiers={[font({ textStyle: "footnote" }), foregroundStyle(colors.textSecondary)]}>
+              {p.modelGroups.unsupportedNotice}
+            </Text>
+          ) : null}
           {p.modelGroups.rows.map((row) => (
             <ComposerNativeRow
               key={row.id}

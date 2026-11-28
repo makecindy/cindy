@@ -3154,7 +3154,8 @@
           "gatewayKey": "須 AI 閘道器支援所擇即時 ASR 路由",
           "codexLogin": "用 Codex 登門",
           "elevenlabsKey": "用 ElevenLabs Key（環境變數）",
-          "codexRealtimeUnsupported": "不可用：Codex 登門非 OpenAI API Realtime 憑證"
+          "codexRealtimeUnsupported": "不可用：Codex 登門非 OpenAI API Realtime 憑證",
+          "localOffline": "本機離線而行，無需帳號與密鑰"
         },
         "credentialError": {
           "gatewayMissing": "未見可用之 AI 閘道器 Key，今模型不可用。",
@@ -3162,10 +3163,24 @@
           "elevenlabsMissing": "未設 ElevenLabs Key（環境變數），今模型不可用。",
           "customAsrConfigMissing": "請先完填並存即時 ASR 服務之設，再始語音輸入。",
           "customAsrKeyMissing": "請為自定即時 ASR 服務填並存 API Key。",
-          "codexRealtimeUnsupported": "Codex 登門不可用於即時語音識別，請擇受支援之 ASR 服務。"
+          "codexRealtimeUnsupported": "Codex 登門不可用於即時語音識別，請擇受支援之 ASR 服務。",
+          "localAsrModelMissing": "請先擇本機 sherpa-onnx 語音辨識模型目錄，乃可離線語音輸入。",
+          "localAsrUnsupported": "此機平台暫未支援本機離線語音辨識。"
         },
         "manageProviders": "往模型供方",
-        "reset": "復預設"
+        "reset": "復預設",
+        "localAsr": {
+          "optionLabel": "本機離線辨識（sherpa-onnx）",
+          "optionDescription": "端側 ONNX 離線轉寫，無需雲端帳號與密鑰",
+          "notice": "請擇本機 sherpa-onnx 離線模型目錄（支援 SenseVoice、Paraformer、Whisper 或 Transducer，須含 tokens.txt 及 .onnx 權重）。音訊盡留本機。",
+          "modelDirLabel": "本機模型目錄",
+          "readyStatus": "已備 · {{kind}}（{{folder}}）",
+          "unsupportedStatus": "此平台暫未支援",
+          "notConfiguredStatus": "尚未擇模型目錄",
+          "clearFolder": "清除",
+          "chooseFolder": "擇模型目錄",
+          "invalidFolder": "所擇目錄未見受支援之 sherpa-onnx 模型檔案（須含 tokens.txt 與 .onnx）。"
+        }
       },
       "historyToggle": {
         "show": "展近期歷史",
@@ -3313,7 +3328,9 @@
           "filters": {
             "all": "全",
             "automatic": "自增",
-            "manual": "手增"
+            "manual": "手增",
+            "candidates": "候選",
+            "suppressed": "已抑"
           },
           "sources": {
             "automatic": "自增",
@@ -3326,6 +3343,28 @@
             "automaticAddedMultiple": "已自入詞典：{{term}} 等 {{count}} 詞",
             "delete": "刪",
             "deleteAriaLabel": "刪自入之詞：{{term}}"
+          },
+          "export": {
+            "csv": "出 CSV",
+            "json": "出 JSON",
+            "successCsv": "已出 CSV 詞典",
+            "successJson": "已出 JSON 詞典"
+          },
+          "candidates": {
+            "hint": "自手改中察得之候選詞，尚未自動收錄；可一鍵收之或刪去。",
+            "evidenceCount": "察得 {{count}} 次",
+            "promote": "收錄",
+            "promoteTooltip": "一鍵將此候選詞收為正式詞條",
+            "promotedToast": "已收錄「{{term}}」入詞典",
+            "empty": "尚無候選詞。"
+          },
+          "suppressed": {
+            "hint": "前刪之自學習詞已抑止，免其復入；可復其自習之格，或徑收還詞典。",
+            "restore": "復允許自習",
+            "addToDictionary": "復入詞典",
+            "restoredToast": "已復「{{term}}」自習之格",
+            "addedToast": "已將「{{term}}」復入詞典",
+            "empty": "無已抑詞條。"
           }
         }
       },
@@ -3370,7 +3409,15 @@
         "toast": {
           "copied": "已錄",
           "copyFailed": "錄之未成"
-        }
+        },
+        "searchAriaLabel": "搜尋語音舊錄",
+        "searchPlaceholder": "搜尋轉寫或原始辨識之文…",
+        "showRawComparison": "照原識之文",
+        "hideRawComparison": "收對照",
+        "rawLabel": "原識",
+        "refinedLabel": "潤色後",
+        "loadMore": "續載其餘（餘 {{count}} 條）",
+        "noSearchResults": "未見相合之舊錄。"
       },
       "speakerFilter": {
         "label": "辨吾之聲",
@@ -10999,12 +11046,14 @@
       "fileCount_other": "{{count}} 卷",
       "emptyTitle": "一字未動",
       "emptyDesc": "此差事尚未動一卷。待 Agent 落筆修卷或立卷，即現於此。",
+      "emptyDescSvn": "所錄諸檔，與 SVN 底本相同。",
+      "svnSelectFile": "擇檔以觀異同。",
       "emptyDescGit": "當前 git worktree 無 staged 或 unstaged 改動。",
       "filterEmptyTitle": "此篩之下，一無所見",
-      "filterEmptyDesc": "當前篩選或設定之下，無可顯之 git 改動。",
+      "filterEmptyDesc": "當前篩選或設定之下，無可顯之改動。",
       "noSessionTitle": "尚無差事",
       "noSessionDesc": "擇一本機差事，即可察其 git worktree 改動。",
-      "loadingTitle": "方讀 git 改動",
+      "loadingTitle": "方讀改動",
       "loadingDesc": "面板暫留前次內容，讀畢即重整。",
       "errorTitle": "讀取未成",
       "refresh": "重整",
@@ -11278,6 +11327,10 @@
         "non-git": {
           "title": "非 git 倉庫",
           "desc": "當前工作目錄下無可用之 git 倉庫。"
+        },
+        "svn-unavailable": {
+          "title": "未見 SVN",
+          "desc": "請裝 Subversion 命令列程式，以觀副本異同。"
         },
         "git-unavailable": {
           "title": "git 弗能用",
@@ -15250,6 +15303,24 @@
       "removeFromList": "自錄中除之",
       "missingDir": "目錄不存"
     },
+    "remoteOutbox": {
+      "notSent": "未遣",
+      "retry": "再試",
+      "delete": "刪",
+      "deliveryUnconfirmed": "傳送未驗",
+      "recheckDelivery": "再驗",
+      "waitingForPrevious": "俟前訊",
+      "taskInactive": "此差事今不能收訊。",
+      "inputNotSupported": "此機尚不能向此差事傳此類之訊。",
+      "taskClearedBeforeSend": "差事已清或方清，訊猶存於此機。",
+      "invalidInput": "此訊有誤，此機未收。",
+      "profileInUseByDesktop": "此資料為獨行之 Cindy 電腦端所用。先退其程，再傳訊。",
+      "other": "此操作未畢。請稍後再試。",
+      "deleteConfirmTitle": "刪此訊？",
+      "deleteConfirmBody": "此訊未能遣出，刪之則不可復原。",
+      "deleteUnconfirmedBody": "彼機或已收此訊。刪之，唯去此機待遣之訊。彼機若已收，訊仍見於對談之錄。",
+      "cancel": "罷"
+    },
     "pendingQueue": {
       "waitingForDevice": "尚未發，俟彼機復通乃發",
       "stopping": "方止",
@@ -15369,7 +15440,11 @@
           "description": "請開麥克風權柄，再點語音輸入",
           "confirm": "往授權",
           "cancel": "罷"
-        }
+        },
+        "rewriteSelected": "語音改寫",
+        "rewriteSelectedTooltip": "口授意旨以改寫所選之文；若不成則仍存原文",
+        "rewriteSelectedAria": "語音改寫所選之文",
+        "rewriteFailed": "語音改寫未竟，所選原文無損。"
       },
       "remoteSwitchFailed": "遠端之設切換未成，未生效",
       "switchFailed": "設定切換未成，未生效",
@@ -20857,6 +20932,8 @@
     },
     "errors": {
       "piStartupCloudFile": "發現僅在雲端的指令檔案：{{path}}。它可能使 Pi 啟動等待。請在 Finder 中下載該檔案，確認已儲存在本機後重試；逾時也可能另有原因。",
+      "remoteEngineMissing": "彼端電腦無可用之引擎。請於彼端安裝引擎，重啟 Cindy 後再試。",
+      "remoteCapabilityUnavailable": "當前伺服器或電腦尚不支此操作。",
       "hostProfileInUseByDesktop": "這份資料正被單獨執行的 Cindy 電腦端使用。請先結束它，再傳送。",
       "hostProfileInUseByDesktopAtStart": "這份資料正被單獨執行的 Cindy 電腦端使用，Cindy 後臺服務沒有啟動。請先結束它，重新啟動 Cindy 後臺服務，然後重新開啟目前這個 Cindy 視窗。",
       "hostProfileInUseByDesktopRetry": "這份資料正被單獨執行的 Cindy 電腦端使用，暫時不能修改。請先結束它，再試一次。",
@@ -23803,7 +23880,15 @@
       "exceptionImage": "訊中有圖，唯於能觀圖之源中擇",
       "exceptionImageFallback": "訊中有圖，然無能觀圖之源，照常擇之",
       "exceptionHours": "此時段改行「{{name}}」",
-      "separator": "；"
+      "separator": "；",
+      "usageHabit": "循平素所用之慣，先擇此源",
+      "usageHabitQuota": "循平素所用之慣，先擇此源（尚餘 {{left}}%）",
+      "autoBalance": "他源限額偏緊或正繁忙，故先以此分擔",
+      "autoBalanceQuota": "權衡餘量與負載，先擇此源（尚餘 {{left}}%）",
+      "lessBusy": "他源方有事務在行，先用此閒源",
+      "paygFallback": "訂閱與共享皆暫不可用，暫以按量之源兜底",
+      "paygReserve": "按量計費之源，待他源皆不可用再啟",
+      "standbyQuotaNeutral": "限額尚餘 {{left}}%，{{reset}} 重設，今次未輪及"
     },
     "settings": {
       "autoSwitch": {
