@@ -738,6 +738,8 @@ export interface ImTurnRunner {
   prewireAttachedSession(botContextId: string, userId: string, scopeKey?: string): Promise<void>;
   /** 接管 detach 清理(原 detachFeishuFromSession)— binding cleanup hook 调用。 */
   detachFromSession(sessionId: string): void;
+  /** 这个渠道此刻是否有正在执行、排队、接线或仍在回传中的消息(切「谁来回复」前用于拦截)。 */
+  hasActiveWork(): boolean;
   disposeAllSessions(): Promise<void>;
   detachIdleCompanionGroup(botContextId: string, chatId: string): void;
   disposeOneSession(sessionId: string): Promise<void>;
@@ -5682,6 +5684,21 @@ export function createTurnRunner(
     getAuthStatusForRoute: (row) => checkImRouteAuthDetailed(row, undefined, authCheckDeps()),
     prewireAttachedSession,
     detachFromSession,
+    hasActiveWork() {
+      if (wiringInFlight.size > 0 || runtimePreparations.size > 0) return true;
+      for (const state of sessionStates.values()) {
+        if (
+          state.queue.length > 0 ||
+          state.sendQueue.length > 0 ||
+          state.scheduledTranspond !== null ||
+          state.pendingTranspondFinals > 0 ||
+          state.dispatchRetryTimer !== null
+        ) {
+          return true;
+        }
+      }
+      return false;
+    },
     disposeAllSessions,
     detachIdleCompanionGroup(botContextId, chatId) {
       if (bindingStore.get({ channel, botContextId, userId: chatId })) throw new Error('GROUP_HAS_TASK_BINDING');

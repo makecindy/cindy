@@ -407,18 +407,21 @@ export function startImOrchestrators(): void {
           const username = telegramIm.getConfigState().botUsername;
           return username ? `@${username}` : null;
         },
+        isBusy: () => getImOrchestrator('telegram')?.turnRunner.hasActiveWork() === true,
         stop: () => telegramIm.dispose(),
         start: () => telegramIm.init(),
         clear: () => telegramIm.init(),
       },
       feishu: {
         identity: () => feishuIm.getBotAppId() ?? (ownerScopedImSecrets.read('feishu_bot_app_id')?.trim() || null),
+        isBusy: () => getImOrchestrator('feishu')?.turnRunner.hasActiveWork() === true,
         stop: () => feishuIm.dispose(),
         start: () => feishuIm.init(),
         clear: () => feishuIm.clearCredentials(),
       },
       wecom: {
         identity: () => wecomIm.getConfigState().botId,
+        isBusy: () => getImOrchestrator('wecom')?.turnRunner.hasActiveWork() === true,
         stop: () => wecomIm.dispose(),
         start: () => wecomIm.init(),
         clear: async () => {
@@ -427,6 +430,7 @@ export function startImOrchestrators(): void {
       },
       dingtalk: {
         identity: () => dingtalkIm.getPublicState().appKey,
+        isBusy: () => getImOrchestrator('dingtalk')?.turnRunner.hasActiveWork() === true,
         stop: () => dingtalkIm.dispose(),
         start: () => dingtalkIm.init(),
         clear: () => dingtalkIm.clearCredentials(),
@@ -436,6 +440,7 @@ export function startImOrchestrators(): void {
           const status = discordIm.getStatus();
           return status.kind === 'connected' && status.appId ? status.appId : null;
         },
+        isBusy: () => getImOrchestrator('discord')?.turnRunner.hasActiveWork() === true,
         stop: () => discordIm.dispose(),
         start: () => discordIm.init(),
         clear: () => discordIm.init(),

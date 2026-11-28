@@ -126,7 +126,7 @@ export async function clearPersonalChannelsForCompanion(botId: string): Promise<
         }
       };
       try {
-        await switchPersonalBotReplyTarget(channel, clear);
+        await switchPersonalBotReplyTarget(channel, clear, { allowWhileBusy: true });
       } catch {
         // 传输层尚未启动或正在切换时直接落盘，不阻塞伙伴删除。
         clear();

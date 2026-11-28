@@ -50,6 +50,8 @@ const log = createLogger('im:bot-adopt');
 export interface PersonalBotTransport {
   /** 给人看的身份(Telegram @用户名 / Discord bot 标签等); 读不到为 null。不含凭证。 */
   identity(): string | null;
+  /** 此刻是否还有消息正在回复 / 排队 / 回传(切「谁来回复」时先拦截，避免中途重连打断流式卡片)。 */
+  isBusy?(): boolean;
   /** 静默停掉: 让出轮询 / 长连接, 凭证保留, 不通知主人。 */
   stop(): Promise<void>;
   /** 按安全存储里现有的凭证重新起(回滚时恢复原样)。 */
@@ -211,15 +213,22 @@ function carriedGroupActivation(channel: BotImChannel): Record<string, 'always'>
 }
 
 /**
- * 「谁来回复」切换(设置 → IM 机器人 → 某平台): 凭证不动, 只改归属。配好了的个人 bot 先静默停下,
- * 写归属, 再按原凭证起来 —— 停着的这段不收消息, 没有一条消息一半按旧归属、一半按新归属处理。
- * 已受理的轮次照常在原任务里跑完。没配好的平台直接写。
+ * 「谁来回复」切换(设置 → IM 机器人 → 某平台): 凭证不动, 只改归属。若此刻该渠道有消息正在回复
+ * 或排队, 直接报 PRECONDITION_FAILED(与微信一致), 避免重连打断正在发送的卡片; 伙伴删除清理时
+ * 传 `allowWhileBusy: true` 跳过拦截。空闲时静默停下 → 写归属 → 按原凭证起来。没配好的平台直接写。
  */
-export async function switchPersonalBotReplyTarget(channel: BotImChannel, apply: () => void): Promise<void> {
+export async function switchPersonalBotReplyTarget(
+  channel: BotImChannel,
+  apply: () => void,
+  options?: { allowWhileBusy?: boolean },
+): Promise<void> {
   const current = deps;
   if (!current?.isReady()) throwIpcError('PRECONDITION_FAILED', 'IM_NOT_READY');
   if (inFlight) throwIpcError('PRECONDITION_FAILED', 'ADOPT_IN_PROGRESS');
   const personal = readPersonalCredentials(channel, '') ? current.personal[channel] : undefined;
+  if (!options?.allowWhileBusy && personal?.isBusy?.()) {
+    throwIpcError('PRECONDITION_FAILED', 'PERSONAL_BOT_BUSY');
+  }
   inFlight = true;
   try {
     if (personal) await personal.stop();

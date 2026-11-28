@@ -117,6 +117,7 @@ import { readPersonalChannelChoice, writePersonalChannelChoice } from '../person
 import {
   adoptPersonalBot,
   configureBotImPersonalAdoption,
+  switchPersonalBotReplyTarget,
   __testing as adoptionTesting,
   type PersonalBotTransport,
 } from '../botImPersonalAdoption';
@@ -1198,6 +1199,39 @@ describe('bot im connection runtime', () => {
       expect(getBotFeishuTransport('bot-mia', 'ou_owner_1')).toBe(personalFeishu);
       expect(getBotFeishuTransport('bot-mia', 'ou_other')).toBeNull();
       expect(getBotFeishuTransport('bot-other')).toBeNull();
+    });
+
+    it('blocks reply-target switching while a personal bot has active or queued work unless allowWhileBusy is set', async () => {
+      let busy = true;
+      const stop = vi.fn(async () => undefined);
+      const start = vi.fn(async () => undefined);
+      configureBotImPersonalAdoption({
+        isReady: () => true,
+        telegramGroupActivation: () => undefined,
+        personal: {
+          feishu: { identity: () => 'cli_1', isBusy: () => busy, stop, start, clear: vi.fn(async () => undefined) },
+        },
+      });
+      h.secrets.set('feishu_bot_app_id', 'cli_1');
+      h.secrets.set('feishu_bot_app_secret', 'sec_1');
+      const apply = vi.fn();
+
+      await expect(switchPersonalBotReplyTarget('feishu', apply)).rejects.toThrow(/PERSONAL_BOT_BUSY/);
+      expect(stop).not.toHaveBeenCalled();
+      expect(apply).not.toHaveBeenCalled();
+
+      // Deletion cleanup can force-clear even while busy.
+      await switchPersonalBotReplyTarget('feishu', apply, { allowWhileBusy: true });
+      expect(stop).toHaveBeenCalledTimes(1);
+      expect(apply).toHaveBeenCalledTimes(1);
+      expect(start).toHaveBeenCalledTimes(1);
+
+      // Idle channel switches normally.
+      busy = false;
+      await switchPersonalBotReplyTarget('feishu', apply);
+      expect(stop).toHaveBeenCalledTimes(2);
+      expect(apply).toHaveBeenCalledTimes(2);
+      expect(start).toHaveBeenCalledTimes(2);
     });
   });
 });
