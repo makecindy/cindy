@@ -5,8 +5,7 @@
  *      agent 侧截断信息 → 调 SDK fork → SQLite 事务 insert + bulk copy messages。
  *
  * SDK 调用必须在事务外——确定性历史损坏可从 Cindy 消息恢复；其它失败不写 DB。
- * DB 失败时 SDK jsonl 已落盘
- * 变成"孤儿 jsonl"，可接受（数量极少，留给后续清理脚本）。
+ * Worker 回执丢失时按子会话标识对账；恢复本地事务时复用原生分叉。
  */
 
 import { randomUUID } from 'node:crypto';
@@ -24,6 +23,7 @@ import {
   authorizeSharedTaskHistory, authorizeSharedTaskExecutor, releaseSharedTaskAuthorization,
 } from '../remote-agent/controller/providerShareTaskLocation.js';
 import { getDbClient } from '../localDb/client/current';
+import { DB_TRANSPORT_NOT_SENT, isDbTransportOutcomeUnknown } from '../localDb/client/DbTransport.js';
 import { sessions, messages } from '../localDb/schema';
 import { sessionToCamel } from '../localDb/mapper';
 import { computeForkSourceMessagesDigest } from '../localDb/forkRecoverySnapshot.js';
@@ -1329,8 +1329,7 @@ export async function forkSessionAtMessage(
   // 事务失败则把刚写的条目撤掉，不留指向不存在任务的孤儿条目。
   await assertTaskActionCurrent();
   const inheritedBudget = copySessionContextWindowBudget(sourceSessionId, newSessionId);
-  try {
-    await dbClient.tx('fork.session', {
+  const persistChild = () => dbClient.tx('fork.session', {
       sourceSessionId,
       sourceClearedAt: source.clearedAt,
       targetCreatedAt: snapshotBoundary.createdAt,
@@ -1382,22 +1381,46 @@ export async function forkSessionAtMessage(
       newMessageIds,
       recoveryMarker,
     });
+  const readChild = async () => (await db.select().from(sessions).where(eq(sessions.id, newSessionId)))[0];
+  let row: Awaited<ReturnType<typeof readChild>> | undefined;
+  try {
+    for (let attempt = 0; ; attempt++) {
+      try {
+        await persistChild();
+        break;
+      } catch (err) {
+        if (!isDbTransportOutcomeUnknown(err)) {
+          if (attempt === 0 && err instanceof Error && 'code' in err && err.code === DB_TRANSPORT_NOT_SENT) {
+            await assertTaskActionCurrent();
+            continue;
+          }
+          if (inheritedBudget !== null) pruneSessionContextWindowBudget(newSessionId);
+          throw err;
+        }
+        row = await readChild();
+        if (row) {
+          if (row.parentSessionId !== sourceSessionId || row.sdkSessionId !== newSdkSessionId
+            || row.forkedAtMessageId !== messageClientId || row.createdAt !== now) throw err;
+          break;
+        }
+        if (attempt > 0) {
+          if (inheritedBudget !== null) pruneSessionContextWindowBudget(newSessionId);
+          throw err;
+        }
+        await assertTaskActionCurrent();
+      }
+    }
   } catch (err) {
-    // 轮 40-w4-t13 HIGH:SDK 侧已创建新 session file(forkSdkSession), DB 事务
-    // 失败时该文件成孤儿 —— 调用方收到失败, 但孤儿累积不可达。至少记录
-    // 可恢复线索(sdkSessionId), 供诊断/清理; 错误照常上抛。
-    if (inheritedBudget !== null) pruneSessionContextWindowBudget(newSessionId);
-    if (newSdkSessionId) {
-      console.error(
-        `[fork] SDK session ${newSdkSessionId} created but DB transaction failed — orphan session file left behind`,
-        { sourceSessionId, error: err instanceof Error ? err.message : String(err) },
-      );
+    log.warn('fork: local persistence failed to confirm child', { sourceSessionId, newSessionId, newSdkSessionId });
+    if (newSdkSessionId && err instanceof Error) {
+      const recovery = new Error(`${err.message} (fork session: ${newSessionId}, native session: ${newSdkSessionId})`, { cause: err });
+      if ('code' in err) Object.assign(recovery, { code: err.code });
+      throw recovery;
     }
     throw err;
   }
 
-  // 7. 返回 mapper 转过的新 session（含 messageCount）
-  const [row] = await db.select().from(sessions).where(eq(sessions.id, newSessionId));
+  row ??= await readChild();
   if (!row) {
     throw new Error('Fork session 创建后查询失败');
   }
