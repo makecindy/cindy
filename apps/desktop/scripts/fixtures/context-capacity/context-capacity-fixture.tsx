@@ -5,6 +5,14 @@ import { ContextCapacityRing } from '../../../src/renderer/components/status/Con
 mountPage({
   route: '/cc-agent/fixture-session',
   host: (ctx) => ({
+    deviceLink: {
+      invoke: async (device: string, channel: string, [key, task]: [string, { sessionId?: string }?]) => {
+        if (device !== 'quota-host' || channel !== 'maker:get-plugin-engine-usage' || key !== 'example:acp') return null;
+        return { updatedAt: Date.now(), windows: [{
+          label: 'Gemini', remainingPercent: task?.sessionId === 'fixture-session' ? 98 : 66,
+        }] };
+      },
+    },
     maker: {
       getPluginEngineUsage: async () => {
         const updatedAt = Date.now();
@@ -69,7 +77,7 @@ mountPage({
       <div className="flex items-center gap-3" data-testid="context-footer">
         {Boolean(ctx.data.usage) && <PluginEngineUsageChip engineKey="example:acp"
           name={ctx.data.usage === 'balance' ? 'DeepSeek Harness' : 'Antigravity'}
-          deviceId={null} running={false} />}
+          deviceId={ctx.data.usage === 'remote' ? 'quota-host' : null} sessionId="fixture-session" running={false} />}
         <ContextCapacityRing
           reportedOnly={Boolean(ctx.data.usage)}
           sessionId="fixture-session"
