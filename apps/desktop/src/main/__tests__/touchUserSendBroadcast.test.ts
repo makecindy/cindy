@@ -139,7 +139,8 @@ import {
 import { setSessionRuntimeProjector } from '../localDb/mapper';
 import { dbToMakerAgentKind, makerToDbAgentKind } from '../../shared/agentKindConversion';
 import {
-  clearAllSessionRuntimeControlStates, projectSessionRuntimeControl, recordUserSessionRuntimeMutation,
+  clearAllSessionRuntimeControlStates, getSessionRuntimeControlSnapshot, projectSessionRuntimeControl,
+  recordSessionRuntimeRouteChange, recordUserSessionRuntimeMutation,
   type SessionRuntimeProfile,
 } from '../maker-ipc/sessionRuntimeControl';
 import {
@@ -457,6 +458,24 @@ describe('touchUserSendInDb 广播 sessions:patched(device-link 项目归属收�
 });
 
 describe('clearSessionContextInDb 广播 sessions:patched(device-link /clear 收敛)', () => {
+  // Value: /clear revokes the prior route explanation even if the DB write
+  // fails, while retaining the session's runtime selection. Tier: unit.
+  it('removes in-memory route attribution before awaiting the clear write', async () => {
+    const sessionId = 'sess-clear-route';
+    recordSessionRuntimeRouteChange(sessionId, {
+      by: 'agent', reason: 'explicit',
+      from: { agentKind: 'claude-code', model: 'old', providerId: 'anthropic', agentDeviceId: null },
+      to: { agentKind: 'codex', model: 'new', providerId: 'openai', agentDeviceId: 'studio' },
+    });
+    expect(getSessionRuntimeControlSnapshot(sessionId).lastRouteChange).not.toBeNull();
+    h.updateErrors.push(new Error('db unavailable'));
+    await expect(clearSessionContextInDb(sessionId, Date.now())).rejects.toThrow('db unavailable');
+    expect(getSessionRuntimeControlSnapshot(sessionId).lastRouteChange).toBeNull();
+    expect(projectSessionRuntimeControl(sessionId, {
+      agentKind: 'codex', model: 'new', providerId: 'openai', agentDeviceId: 'studio',
+      effort: null, fastMode: false,
+    })).not.toHaveProperty('runtimeLastRouteChange');
+  });
   it('写 clearedAt + sdkSessionId=null,并用 ISO clearedAt 广播给本机窗口和控制端镜像', async () => {
     const atMs = 1_700_000_123_000;
     // Drizzle's MAX/COALESCE expressions are not JavaScript numbers.  Mock the
@@ -472,11 +491,11 @@ describe('clearSessionContextInDb 广播 sessions:patched(device-link /clear 收
     const iso = new Date(atMs).toISOString();
     expect(h.webContentsSend).toHaveBeenCalledWith('local-db:sessions:patched', {
       sessionId: 'sess-clear',
-      patch: { sdkSessionId: null, clearedAt: iso, updatedAt: iso, preview: null },
+      patch: { sdkSessionId: null, clearedAt: iso, updatedAt: iso, preview: null, runtimeLastRouteChange: null },
     });
     expect(h.tapWindowBroadcast).toHaveBeenCalledWith('local-db:sessions:patched', {
       sessionId: 'sess-clear',
-      patch: { sdkSessionId: null, clearedAt: iso, updatedAt: iso, preview: null },
+      patch: { sdkSessionId: null, clearedAt: iso, updatedAt: iso, preview: null, runtimeLastRouteChange: null },
     });
     expect(h.broadcastSubagentRunsInvalidated).toHaveBeenCalledWith('sess-clear', null);
   });

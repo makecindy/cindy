@@ -332,6 +332,8 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
       const svc = tryGetOrcaCollabService();
       return svc ? svc.getSessionRuntime({ targetSessionId: sessionId }) : { ok: false as const };
     },
+    readPersistedRouteChange: async (sessionId) =>
+      (await import('../localDb/agentSwitchRows.js')).readLatestAgentSwitchAttribution(sessionId),
     listSessionQueuedCounts: async (sessionIds) => {
       const svc = tryGetOrcaCollabService();
       return svc ? svc.listSessionQueuedCounts(sessionIds) : { ok: false as const };

@@ -461,6 +461,11 @@ describe('bounded reconciliation read', () => {
     const result = await runDeviceLinkInvokeContext({ controllerDeviceId: 'phone', channel: 'local-db:sessions:get-many' },
       () => batch({}, ['target', 'missing', 'target']));
     expect(result).toEqual([expected]);
+    // A controller that missed the clear push must still drop any cached route attribution.
+    h.sqlite!.prepare("UPDATE sessions SET cleared_at = 100 WHERE id = 'target'").run();
+    const afterClear = await runDeviceLinkInvokeContext({ controllerDeviceId: 'phone', channel: 'local-db:sessions:get-many' },
+      () => batch({}, ['target'])) as Array<Record<string, unknown>>;
+    expect(afterClear[0]).toHaveProperty('runtimeLastRouteChange', null);
   });
   it('rejects untrusted local callers and oversized remote batches before querying', async () => {
     const { runDeviceLinkInvokeContext } = await import('../../../device-link/invoke-context.js');
