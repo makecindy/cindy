@@ -587,6 +587,7 @@ export function TelegramGroupActivationSettings({
     <TelegramGroupActivationSettingsView
       groups={groups}
       setMode={setMode}
+      hideTitle={hideTitle}
       notice={
         error !== null && (
           <SettingsRequestError
@@ -604,11 +605,13 @@ export function TelegramGroupActivationSettingsView({
   setMode,
   notice,
   contactsHint,
+  hideTitle = false,
 }: {
   groups: readonly TelegramHookKnownGroup[];
   setMode(id: string, mode: TelegramHookGroupActivationMode): void;
   notice?: ReactNode;
   contactsHint?: ReactNode;
+  hideTitle?: boolean;
 }) {
   const { t } = useTranslation();
   const root = i18nRoot('personal');

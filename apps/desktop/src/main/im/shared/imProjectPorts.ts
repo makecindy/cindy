@@ -40,6 +40,7 @@ export interface ImSharedProjectResolution {
   providerId: string | null;
   agentDeviceId?: string | null;
   fingerprint: string;
+  modelGroupStart?: string;
 }
 
 export interface ImProjectPorts {
@@ -52,7 +53,11 @@ export interface ImProjectPorts {
   /** 这一行的默认设置指纹, 与 resolveProject 结果的 fingerprint 同一口径。 */
   projectFingerprint(alias: string): string;
   /** 按这一行解析新任务的路由; 模型不可用时抛错。 */
-  resolveProject(alias: string, providers?: ProviderView[]): Promise<ImSharedProjectResolution>;
+  resolveProject(
+    alias: string,
+    providers?: ProviderView[],
+    options?: { dryRun?: boolean },
+  ): Promise<ImSharedProjectResolution>;
   /** 一次读取供应商目录, 供一次解析多个项目时共用。 */
   listProviders(): Promise<ProviderView[] | null>;
 }
@@ -92,12 +97,21 @@ export interface ImProjectRoute {
   model: string;
   providerId: string | null;
   agentDeviceId: string | null;
-  effort: ImDefaultEffort;
+  effort: ImDefaultEffort | '';
 }
 
 /** 把「项目与模型」的解析结果换成新任务的路由; Agent 不认识时返回 null。 */
 export function imProjectRouteOf(resolved: ImSharedProjectResolution): ImProjectRoute | null {
   if (!isImDefaultAgentKind(resolved.agentKind) || !resolved.model) return null;
+  if (resolved.agentKind === 'acp') {
+    return {
+      agentKind: 'acp',
+      model: resolved.model,
+      providerId: resolved.providerId,
+      agentDeviceId: resolved.agentDeviceId ?? null,
+      effort: isImDefaultEffort(resolved.effort) ? resolved.effort : '',
+    };
+  }
   // 那一行没给推理强度时才按模型的默认强度补上。
   let effort: ImDefaultEffort = 'high';
   if (isImDefaultEffort(resolved.effort)) effort = resolved.effort;
@@ -141,8 +155,10 @@ export function imProjectDefaultsForDir(
   return {
     fingerprint: `${label}:${bound.projectFingerprint(alias)}`,
     permissionMode,
-    async resolve(providerSnapshot): Promise<ResolvedImSessionDefaults> {
-      const resolved = await bound.resolveProject(alias, providerSnapshot ?? undefined);
+    async resolve(providerSnapshot, options): Promise<ResolvedImSessionDefaults> {
+      const resolved = options
+        ? await bound.resolveProject(alias, providerSnapshot ?? undefined, options)
+        : await bound.resolveProject(alias, providerSnapshot ?? undefined);
       const route = imProjectRouteOf(resolved);
       if (!route) throw new Error('The selected project model is unavailable');
       return {
@@ -150,6 +166,7 @@ export function imProjectDefaultsForDir(
         permissionMode: permission(permissionMode),
         fastMode: false,
         fingerprint: `${label}:${resolved.fingerprint}`,
+        ...(resolved.modelGroupStart ? { modelGroupStart: resolved.modelGroupStart } : {}),
       };
     },
   };

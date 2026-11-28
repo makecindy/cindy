@@ -19,6 +19,7 @@ import {
   activeImDefaultAgentSettings,
   type ImDefaultSettingsChannel,
 } from '../../../shared/imDefaultSettings';
+import { PLUGIN_ENGINE_DEFAULT_MODEL } from '../../../shared/pluginEngines';
 import type { ImDefaultSettingsSummary } from './ImDefaultSettingsSection';
 
 export function formatImDefaultRouteSummary(
@@ -30,7 +31,11 @@ export function formatImDefaultRouteSummary(
     summary.agentKind === 'acp'
       ? t('newChat.pluginEngines.genericName')
       : t(`settings.imBot.defaults.agents.${summary.agentKind}`);
-  return `${agentLabel} · ${summary.model}`;
+  const modelLabel =
+    summary.agentKind === 'acp' && summary.model === PLUGIN_ENGINE_DEFAULT_MODEL
+      ? t('newChat.pluginEngines.defaultModel')
+      : summary.model;
+  return `${agentLabel} · ${modelLabel}`;
 }
 
 export function useImChannelSettingsSummary(
@@ -44,9 +49,12 @@ export function useImChannelSettingsSummary(
       .imDefaultSettingsGet(channel)
       .then((settings) => {
         if (cancelled) return;
+        const active = activeImDefaultAgentSettings(settings);
         setSummary({
           agentKind: settings.agentKind,
-          model: activeImDefaultAgentSettings(settings).model,
+          model: active.model,
+          providerId: active.providerId,
+          agentDeviceId: active.agentDeviceId ?? null,
         });
       })
       .catch(() => {

@@ -17,15 +17,21 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next';
 
 import { ModelSelector } from '@/components/new-chat/ModelSelector';
+import { previewModelGroup, useModelGroups } from '@/features/model-groups/modelGroupsClient';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Collapse } from '@/components/ui/collapse';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
-import { Input } from '@/components/ui/input';
+import { SearchInput } from '@/components/ui/search-input';
 import { Select, type SelectOption } from '@/components/ui/select';
 import { SettingsCard, SettingsNotice } from '@/components/ui/settings-rows';
 import { useModelPickerAgents } from '@/hooks/useAvailableAgents';
 import { useModelRouteDevices } from '@/hooks/useModelRouteDevices';
+import {
+  PLUGIN_ENGINE_FALLBACK_PERMISSION_MODES,
+  type PluginEngineChoice,
+  type PluginEngineSelection,
+} from '@/lib/pluginEngineSelection';
 import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
 import {
@@ -38,12 +44,20 @@ import {
   type ImChatSettingsView,
 } from '../../../shared/imChatSettings';
 import {
+  activeImDefaultAgentSettings,
   isImDefaultEffort,
   isImDefaultPermissionMode,
   type ImDefaultAgentKind,
+  type ImDefaultBuiltinAgentKind,
   type ImDefaultPermissionMode,
   type ImDefaultSettingsState,
 } from '../../../shared/imDefaultSettings';
+import type { ModelGroupSelection } from '../../../shared/modelGroups';
+import {
+  PLUGIN_ENGINE_DEFAULT_MODEL,
+  isPluginEngineEffort,
+} from '../../../shared/pluginEngines';
+import { useSettingsPluginEngines } from './useSettingsPluginEngines';
 
 const FOLLOW = '__follow__';
 const MISSING = '__missing__';
@@ -54,16 +68,27 @@ const STACK_LIMIT = 6;
 const K = 'settings.imBot.chats';
 
 function vendorKeyFor(agentKind: ImDefaultAgentKind): 'cc' | 'codex' | 'pi' {
-  return agentKind === 'claude-code' ? 'cc' : agentKind;
+  return agentKind === 'codex' ? 'codex' : agentKind === 'pi' ? 'pi' : 'cc';
 }
 
-function agentKindOfVendor(vendor: string): ImDefaultAgentKind {
+function agentKindOfVendor(vendor: string): ImDefaultBuiltinAgentKind {
   return vendor === 'cc' ? 'claude-code' : vendor === 'pi' ? 'pi' : 'codex';
 }
 
 /** 各引擎在 IM 里可选的权限档（与新对话的权限选择同一套文案）。 */
-function permissionModesFor(agentKind: ImDefaultAgentKind): ImDefaultPermissionMode[] {
-  return agentKind === 'claude-code' ? ['ask', 'acceptEdits', 'auto', 'bypassPermissions'] : ['ask', 'auto', 'bypassPermissions'];
+function permissionModesFor(
+  agentKind: ImDefaultAgentKind,
+  pluginEngine?: PluginEngineChoice | null,
+): ImDefaultPermissionMode[] {
+  if (agentKind === 'acp') {
+    const modes = (pluginEngine?.permissionModes ?? PLUGIN_ENGINE_FALLBACK_PERMISSION_MODES)
+      .map((mode) => mode.id)
+      .filter((id): id is ImDefaultPermissionMode => isImDefaultPermissionMode(id));
+    return modes.length > 0 ? modes : ['ask', 'bypassPermissions'];
+  }
+  return agentKind === 'claude-code'
+    ? ['ask', 'acceptEdits', 'auto', 'bypassPermissions']
+    : ['ask', 'auto', 'bypassPermissions'];
 }
 
 function hasOverrides(chat: ImChatSettingsView): boolean {
@@ -76,13 +101,14 @@ function overriddenIds(chats: readonly ImChatSettingsView[]): ReadonlySet<string
 
 /** 渠道「新对话配置」此刻给出的路由（自动选择时是解析后的模型），群跟随时显示与继承的就是它。 */
 function channelRoute(defaults: ImDefaultSettingsState): ImChatRoute {
-  const agent = defaults.agents[defaults.agentKind];
+  const agent = activeImDefaultAgentSettings(defaults);
   return {
     agentKind: defaults.agentKind,
     model: agent.model,
     providerId: agent.providerId,
     agentDeviceId: agent.agentDeviceId ?? null,
     effort: agent.effort,
+    ...(defaults.modelGroup ? { modelGroup: defaults.modelGroup } : {}),
   };
 }
 
@@ -300,11 +326,10 @@ export function ImChatSettingsCard({ channel }: { channel: ImChatSettingsChannel
                   </SettingsNotice>
                 )}
                 {list.chats.length > 0 && (
-                  <Input
+                  <SearchInput
                     data-settings-search-action="Filter groups in the current list"
                     value={query}
                     onChange={setQuery}
-                    type="search"
                     ariaLabel={t(`${K}.searchLabel`)}
                     placeholder={t(channels ? `${K}.searchPlaceholderChannels` : `${K}.searchPlaceholder`)}
                   />
@@ -498,9 +523,25 @@ function ChatEditor({
     : channelRoute(defaults);
   const route = chat.route ?? inheritedRoute;
   const customizedRoute = chat.route !== null;
+  const isPluginEngineRoute = route.agentKind === 'acp' && !!route.providerId;
   const agentDeviceId = route.agentDeviceId;
-  const routeDevices = useModelRouteDevices({ controlledDeviceId: null, leadAgentDeviceId: agentDeviceId });
-  const pickerAgents = useModelPickerAgents(route.agentKind, agentDeviceId);
+  const builtinAgentDeviceId = isPluginEngineRoute ? null : agentDeviceId;
+  const routeDevices = useModelRouteDevices({ controlledDeviceId: null, leadAgentDeviceId: builtinAgentDeviceId });
+  const settingsPluginEngines = useSettingsPluginEngines(isPluginEngineRoute ? agentDeviceId : null);
+  const activePluginEngine = isPluginEngineRoute
+    ? settingsPluginEngines.engines.find(
+        (engine) =>
+          engine.providerId === route.providerId &&
+          (engine.deviceId ?? null) === (agentDeviceId ?? null),
+      ) ?? null
+    : null;
+  const pickerAgents = useModelPickerAgents(
+    route.agentKind === 'acp' ? 'claude-code' : route.agentKind,
+    builtinAgentDeviceId,
+  );
+  const showPluginEngines = settingsPluginEngines.hasSources || isPluginEngineRoute;
+  const { config: modelGroupsConfig } = useModelGroups();
+  const lastUnifiedRouteRef = useRef<ImChatRoute | null>(null);
 
   const projectOptions: SelectOption[] = [
     {
@@ -518,6 +559,26 @@ function ChatEditor({
 
   // 渠道是「自动选择」却暂时没有可用模型时，继承来的模型是空的，不能拿它存成群设置。
   const saveRoute = (next: ImChatRoute) => (next.model.trim() ? onSave({ route: next }) : false);
+  const selectChatModelGroup = async (selection: ModelGroupSelection) => {
+    const item = modelGroupsConfig.routes.find((r) => r.id === selection.id);
+    const preview = await previewModelGroup(selection);
+    if (preview?.outcome !== 'routed') {
+      toast.warning(t('modelGroups.picker.chooseUnavailable', { name: item?.name ?? '' }));
+      return;
+    }
+    const agentKind: ImDefaultAgentKind =
+      preview.route.agentKind === 'cc' ? 'claude-code' : preview.route.agentKind;
+    await saveRoute({
+      agentKind,
+      model: preview.route.model || (agentKind === 'acp' ? PLUGIN_ENGINE_DEFAULT_MODEL : ''),
+      providerId: preview.route.providerId,
+      agentDeviceId: preview.route.agentDeviceId ?? null,
+      effort: agentKind === 'acp'
+        ? (isImDefaultEffort(preview.route.effort) ? preview.route.effort : '')
+        : (isImDefaultEffort(preview.route.effort) ? preview.route.effort : (isImDefaultEffort(route.effort) ? route.effort : 'high')),
+      modelGroup: selection.id,
+    });
+  };
 
   const fallbackPermission = channelPermission(channel, defaults);
   const inheritedPermission = followedProject?.permissionMode ?? fallbackPermission;
@@ -526,7 +587,7 @@ function ChatEditor({
     const key = `newChat.permissionSelector.modes.${route.agentKind}.${mode}.label`;
     return i18n.exists(key) ? t(key) : mode;
   };
-  const modes = permissionModesFor(route.agentKind);
+  const modes = permissionModesFor(route.agentKind, activePluginEngine);
   if (chat.permissionMode && !modes.includes(chat.permissionMode)) modes.push(chat.permissionMode);
   const permissionOptions: SelectOption[] = [
     { value: FOLLOW, label: t(`${K}.permission.followWith`, { mode: permissionLabel(inheritedPermission) }) },
@@ -589,29 +650,67 @@ function ChatEditor({
       </Field>
       <Field label={t(`${K}.model.label`)}>
         <ModelSelector
-          remoteAgent={routeDevices.devices && { devices: routeDevices.devices, selectedDeviceId: agentDeviceId }}
-          deviceId={agentDeviceId ?? undefined}
+          remoteAgent={routeDevices.devices && { devices: routeDevices.devices, selectedDeviceId: builtinAgentDeviceId }}
+          deviceId={builtinAgentDeviceId ?? undefined}
           agentDevice={
-            agentDeviceId
-              ? { deviceId: agentDeviceId, name: routeDevices.devices?.find((device) => device.deviceId === agentDeviceId)?.name ?? null }
+            builtinAgentDeviceId
+              ? { deviceId: builtinAgentDeviceId, name: routeDevices.devices?.find((device) => device.deviceId === builtinAgentDeviceId)?.name ?? null }
               : null
           }
           fastModeConfigurable={false}
           unifiedAgents={pickerAgents}
+          pluginEngines={showPluginEngines ? {
+            engines: settingsPluginEngines.engines,
+            active: isPluginEngineRoute && route.model
+              ? {
+                  providerId: route.providerId!,
+                  ...(agentDeviceId ? { deviceId: agentDeviceId } : {}),
+                  modelId: route.model,
+                  ...(isPluginEngineEffort(route.effort) ? { effort: route.effort } : {}),
+                }
+              : null,
+            readCatalogue: settingsPluginEngines.readCatalogue,
+            onSelect: (selection: PluginEngineSelection) => {
+              void saveRoute({
+                agentKind: 'acp',
+                providerId: selection.providerId,
+                model: selection.modelId || PLUGIN_ENGINE_DEFAULT_MODEL,
+                agentDeviceId: selection.deviceId ?? null,
+                effort: selection.effort ?? '',
+                modelGroup: null,
+              });
+            },
+          } : undefined}
           // 跟随时显示的是继承来的模型；点它也要落成这个群的设置（同 IM 工作区偏好）。
           reselectEmitsChange
-          onUnifiedSelect={({ engine, modelId, providerId, effort, agentDevice }) =>
-            saveRoute({
+          modelGroups={{
+            config: modelGroupsConfig,
+            active: route.modelGroup && modelGroupsConfig.routes.some((r) => r.id === route.modelGroup)
+              ? { type: 'route', id: route.modelGroup }
+              : null,
+            onSelect: (selection) => { void selectChatModelGroup(selection); },
+            onAttach: (selection) => {
+              const last = lastUnifiedRouteRef.current;
+              lastUnifiedRouteRef.current = null;
+              if (last) void saveRoute({ ...last, modelGroup: selection.id });
+            },
+            onManage: () => { window.location.hash = '#/settings?tab=model-groups'; },
+          }}
+          onUnifiedSelect={({ engine, modelId, providerId, effort, agentDevice }) => {
+            const next: ImChatRoute = {
               agentKind: agentKindOfVendor(engine),
               model: modelId,
               providerId,
               agentDeviceId: agentDevice?.deviceId ?? null,
-              effort: isImDefaultEffort(effort) ? effort : route.effort,
-            })
-          }
+              effort: isImDefaultEffort(effort) ? effort : (isImDefaultEffort(route.effort) ? route.effort : 'high'),
+              modelGroup: null,
+            };
+            lastUnifiedRouteRef.current = next;
+            return saveRoute(next);
+          }}
           modelId={route.model}
           effort={route.effort}
-          onModelChange={(modelId) => saveRoute({ ...route, model: modelId })}
+          onModelChange={(modelId) => saveRoute({ ...route, model: modelId, modelGroup: null })}
           onEffortChange={(effort) => {
             if (!isImDefaultEffort(effort) || (customizedRoute && effort === route.effort)) return;
             return saveRoute({ ...route, effort });
@@ -622,10 +721,11 @@ function ChatEditor({
               providerId,
               model: modelId ?? route.model,
               effort: isImDefaultEffort(reconciledEffort) ? reconciledEffort : route.effort,
+              modelGroup: null,
             })
           }
           vendorKey={vendorKeyFor(route.agentKind)}
-          currentProviderId={route.providerId}
+          currentProviderId={isPluginEngineRoute ? null : route.providerId}
           switching={disabled}
           triggerVariant="field"
           popoverSide="bottom"

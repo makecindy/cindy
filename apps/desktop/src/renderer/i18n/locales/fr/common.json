@@ -7789,7 +7789,9 @@
         },
         "statusCustom": "Réglages propres",
         "shownHint": "{{shown}} sur {{total}} affichés. Tapez un nom pour filtrer.",
-        "fieldsNote": "Les changements de projet, de modèle et d’autorisations s’appliquent à la prochaine tâche créée dans ce groupe ; les tâches en cours ne sont pas déplacées."
+        "fieldsNote": "Les changements de projet, de modèle et d’autorisations s’appliquent à la prochaine tâche créée dans ce groupe ; les tâches en cours ne sont pas déplacées.",
+        "channelCount_many": "{{count}} canaux",
+        "membersCount_many": "{{count}} ouverts aux membres"
       }
     },
     "shortcuts": {

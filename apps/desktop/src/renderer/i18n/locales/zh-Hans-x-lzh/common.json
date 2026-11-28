@@ -7522,15 +7522,15 @@
       "nav": {
         "back": "返"
       },
-      "pageDescription": "于微信、飞书、Telegram 诸聊天之器，传言于 Cindy 或汝之同伴。",
+      "pageDescription": "于微信、飞书、Telegram 诸传讯之器，传言于 Cindy 或汝之同伴。",
       "list": {
         "connected": "已连",
         "available": "尚可连者",
-        "choose": "择一聊天之器",
+        "choose": "择一传讯之器",
         "cindyReplies": "Cindy 应答",
         "official": "官方机器人：{{status}}",
         "projects": "项目与模型",
-        "projectsHint": "聊天之器或法器于项目中启新差事时，各项目所用之模型与权柄",
+        "projectsHint": "传讯之器或法器于项目中启新差事时，各项目所用之模型与权柄",
         "hint": {
           "both": "官方机器人，或汝自建之机器人",
           "slack": "用 Cindy 官方机器人，登 Slack 即可",

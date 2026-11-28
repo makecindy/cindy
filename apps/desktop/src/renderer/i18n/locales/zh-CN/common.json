@@ -7522,15 +7522,15 @@
       "nav": {
         "back": "返回"
       },
-      "pageDescription": "在微信、飞书、Telegram 这些聊天软件里，给 Cindy 或你的伙伴发消息。",
+      "pageDescription": "在微信、飞书、Telegram 这些消息应用里，给 Cindy 或你的伙伴发消息。",
       "list": {
         "connected": "已连接",
         "available": "还可以连接",
-        "choose": "选一个聊天软件",
+        "choose": "选一个消息应用",
         "cindyReplies": "Cindy 回复",
         "official": "官方机器人：{{status}}",
         "projects": "项目与模型",
-        "projectsHint": "聊天软件或插件在项目里开新任务时，每个项目用的模型与权限",
+        "projectsHint": "消息应用或插件在项目里开新任务时，每个项目用的模型与权限",
         "hint": {
           "both": "官方机器人，或你自己创建的机器人",
           "slack": "用 Cindy 官方机器人，登录 Slack 就能用",

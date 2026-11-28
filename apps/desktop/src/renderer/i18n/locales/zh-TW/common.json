@@ -7522,15 +7522,15 @@
       "nav": {
         "back": "返回"
       },
-      "pageDescription": "在微信、飛書、Telegram 這些聊天軟體裡，傳訊息給 Cindy 或你的夥伴。",
+      "pageDescription": "在微信、飛書、Telegram 這些訊息應用裡，傳訊息給 Cindy 或你的夥伴。",
       "list": {
         "connected": "已連線",
         "available": "還可以連線",
-        "choose": "選一個聊天軟體",
+        "choose": "選一個訊息應用",
         "cindyReplies": "Cindy 回覆",
         "official": "官方機器人：{{status}}",
         "projects": "專案與模型",
-        "projectsHint": "聊天軟體或插件在專案裡開新任務時，每個專案使用的模型與權限",
+        "projectsHint": "訊息應用或插件在專案裡開新任務時，每個專案使用的模型與權限",
         "hint": {
           "both": "官方機器人，或你自己建立的機器人",
           "slack": "用 Cindy 官方機器人，登入 Slack 就能用",

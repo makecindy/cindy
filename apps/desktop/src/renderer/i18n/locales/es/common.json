@@ -7789,7 +7789,9 @@
         },
         "statusCustom": "Ajustes propios",
         "shownHint": "Mostrando {{shown}} de {{total}}. Escribe un nombre para filtrar.",
-        "fieldsNote": "Los cambios de proyecto, modelo y permisos se aplican cuando empieza la siguiente tarea en este grupo; las tareas en curso no se mueven."
+        "fieldsNote": "Los cambios de proyecto, modelo y permisos se aplican cuando empieza la siguiente tarea en este grupo; las tareas en curso no se mueven.",
+        "channelCount_many": "{{count}} canales",
+        "membersCount_many": "{{count}} abiertos a miembros"
       }
     },
     "shortcuts": {

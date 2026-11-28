@@ -18,8 +18,11 @@ import {
   SettingsRow,
   SettingsSection,
 } from '@/components/ui/settings-rows';
+import { pluginEngineModelName } from '@/lib/pluginEngineSelection';
 import type { ImDefaultSettingsChannel } from '../../../shared/imDefaultSettings';
+import { PLUGIN_ENGINE_DEFAULT_MODEL } from '../../../shared/pluginEngines';
 import { useImChannelSettingsSummary } from './ImChannelSettingsCard';
+import { useSettingsPluginEngines } from './useSettingsPluginEngines';
 
 export interface ImBotNav {
   /** 当前打开的更深一层页面; null = 聊天软件子页本身。 */
@@ -159,14 +162,35 @@ export function ImBotModelRow({ channel, settingId }: { channel: ImDefaultSettin
   const { t } = useTranslation();
   const nav = useImBotNav();
   const [summary] = useImChannelSettingsSummary(channel);
+  const isPluginEngine = summary?.agentKind === 'acp';
+  const pluginEngines = useSettingsPluginEngines(isPluginEngine ? (summary.agentDeviceId ?? null) : null);
+  const matchedEngine = isPluginEngine && summary?.providerId
+    ? pluginEngines.engines.find(
+        (engine) =>
+          engine.providerId === summary.providerId &&
+          (engine.deviceId ?? null) === (summary.agentDeviceId ?? null),
+      ) ?? null
+    : null;
+  const agentLabel = summary
+    ? isPluginEngine
+      ? matchedEngine?.name ?? t('newChat.pluginEngines.genericName')
+      : t(`settings.imBot.defaults.agents.${summary.agentKind}`)
+    : null;
+  const modelLabel = summary
+    ? isPluginEngine && summary.model === PLUGIN_ENGINE_DEFAULT_MODEL
+      ? t('newChat.pluginEngines.defaultModel')
+      : isPluginEngine
+        ? pluginEngineModelName(matchedEngine, summary.model) ?? summary.model
+        : summary.model
+    : null;
   return (
     <SettingsRow
       data-setting-id={settingId}
       title={t('settings.imBot.rows.model')}
       // Agent 与模型各自不断行: 窄窗口里只在「·」处换行, 不把模型名拦腰截断。
-      value={summary ? <>
-        <span className="whitespace-nowrap">{t(`settings.imBot.defaults.agents.${summary.agentKind}`)} ·</span>{' '}
-        <span className="whitespace-nowrap">{summary.model}</span>
+      value={summary && agentLabel && modelLabel ? <>
+        <span className="whitespace-nowrap">{agentLabel} ·</span>{' '}
+        <span className="whitespace-nowrap">{modelLabel}</span>
       </> : undefined}
       chevron
       onClick={() => nav.open('model')}

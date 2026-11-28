@@ -7789,7 +7789,9 @@
         },
         "statusCustom": "Definições próprias",
         "shownHint": "A mostrar {{shown}} de {{total}}. Escreva um nome para filtrar.",
-        "fieldsNote": "As alterações de projeto, modelo e permissões aplicam-se à próxima tarefa criada neste grupo; as tarefas em curso não são movidas."
+        "fieldsNote": "As alterações de projeto, modelo e permissões aplicam-se à próxima tarefa criada neste grupo; as tarefas em curso não são movidas.",
+        "channelCount_many": "{{count}} canais",
+        "membersCount_many": "{{count}} abertos a membros"
       }
     },
     "shortcuts": {

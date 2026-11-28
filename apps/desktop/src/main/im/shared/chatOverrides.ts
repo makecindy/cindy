@@ -61,7 +61,7 @@ export async function resolveImProjectRoute(alias: string, providers?: ProviderV
   const ports = getImProjectPorts();
   if (!ports) return null;
   try {
-    return imProjectRouteOf(await ports.resolveProject(alias, providers ?? undefined));
+    return imProjectRouteOf(await ports.resolveProject(alias, providers ?? undefined, { dryRun: true }));
   } catch (err) {
     log.warn(`chat project route unavailable: ${err instanceof Error ? err.message : String(err)}`);
     return null;

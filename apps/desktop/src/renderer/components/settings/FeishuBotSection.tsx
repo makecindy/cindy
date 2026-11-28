@@ -626,6 +626,7 @@ export function FeishuBotSettings({
 
   const manualConfig = (
     <ManualConfig
+      services={FEISHU_SERVICES}
       service={service}
       setService={setService}
       appId={appId}

@@ -7789,7 +7789,9 @@
         },
         "statusCustom": "Ajustes próprios",
         "shownHint": "Mostrando {{shown}} de {{total}}. Digite um nome para filtrar.",
-        "fieldsNote": "Mudanças de projeto, modelo e permissões valem a partir da próxima tarefa criada neste grupo; tarefas em andamento não são movidas."
+        "fieldsNote": "Mudanças de projeto, modelo e permissões valem a partir da próxima tarefa criada neste grupo; tarefas em andamento não são movidas.",
+        "channelCount_many": "{{count}} canais",
+        "membersCount_many": "{{count}} abertos a membros"
       }
     },
     "shortcuts": {

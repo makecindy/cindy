@@ -40,7 +40,10 @@ vi.mock('../../../logger', () => ({
 let db: ReturnType<typeof drizzle>;
 vi.mock('../../../localDb/client/current', () => ({ getDbClient: () => ({ drizzle: db }) }));
 
+const { encodeFeishuLaneUserId } = await import('@cindy/im');
 const { sessions } = await import('../../../localDb/schema');
+const { parseImChatSettingsPatch } = await import('../../../../shared/imChatSettings');
+const { imChatRouteOverride } = await import('../chatOverrides');
 const { listImChatSettingsForUi, saveImChatSettings, resumeImChatMembers, ImChatSettingsError } =
   await import('../chatSettingsService');
 const { projectToken } = await import('../projectToken');
@@ -298,5 +301,29 @@ describe('im chat settings service', () => {
 
     writeImChatSettings('feishu', 'cli_bot', 'oc_g1', { membersPaused: true }, null);
     expect(await saveImChatSettings('feishu', 'oc_g1', { members: false }, '项目群')).toMatchObject({ members: false, membersPaused: false });
+  });
+
+  // 依据: 群聊覆盖路由支持插件引擎(acp, 允许 effort='' 且强校验 providerId 必须为 acp-plugin:*)。
+  // 缺口: 上述用例只覆盖内置模型覆盖，未验证 acp 路由持久化与非法 providerId fail-closed。
+  // 最小失败输入: 保存合法 Antigravity acp 路由后回读，以及传入无 acp-plugin 前缀的 acp 路由被拒。
+  // tier: unit
+  it('按群模型支持保存和回读插件引擎(acp)路由并拒绝非法 providerId', async () => {
+    fakeIm(async () => ({ data: { items: [{ chat_id: 'oc_g1', name: '项目群' }], has_more: false } }));
+    const acpRoute = {
+      agentKind: 'acp' as const,
+      model: 'gemini-3-pro',
+      providerId: 'acp-plugin:cindy-antigravity:antigravity',
+      agentDeviceId: null,
+      effort: '' as const,
+    };
+    const saved = await saveImChatSettings('feishu', 'oc_g1', { route: acpRoute }, '项目群');
+    expect(saved.route).toEqual(acpRoute);
+    expect(imChatRouteOverride('feishu', 'cli_bot', encodeFeishuLaneUserId('oc_g1'))).toEqual(acpRoute);
+
+    expect(() =>
+      parseImChatSettingsPatch({
+        route: { ...acpRoute, providerId: 'not-a-plugin-provider' },
+      }),
+    ).toThrow('IM_CHAT_SETTINGS_INVALID');
   });
 });

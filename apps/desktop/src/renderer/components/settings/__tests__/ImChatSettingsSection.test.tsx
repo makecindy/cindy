@@ -37,15 +37,58 @@ vi.mock('@/components/ui/confirm-dialog-provider', () => ({
 }));
 vi.mock('@/hooks/useAvailableAgents', () => ({ useModelPickerAgents: () => ['claude-code', 'codex', 'pi'] }));
 vi.mock('@/hooks/useModelRouteDevices', () => ({ useModelRouteDevices: () => ({ devices: [] }) }));
+vi.mock('@/features/model-groups/modelGroupsClient', () => ({
+  useModelGroups: () => ({ config: { routes: [], defaultRouteId: null } }),
+  previewModelGroup: vi.fn(),
+}));
+vi.mock('../useSettingsPluginEngines', () => ({
+  useSettingsPluginEngines: () => ({
+    engines: [
+      {
+        key: 'cindy-antigravity:antigravity',
+        providerId: 'acp-plugin:cindy-antigravity:antigravity',
+        ghostId: 'cindy-antigravity',
+        harnessId: 'antigravity',
+        name: 'Antigravity',
+        availability: { state: 'available' },
+        models: [{ id: 'gemini-3-pro', displayName: 'Gemini 3 Pro', efforts: ['low', 'high'] }],
+        permissionModes: [
+          { id: 'ask', displayName: 'Default permissions' },
+          { id: 'bypassPermissions', displayName: 'Full access' },
+        ],
+      },
+    ],
+    readCatalogue: vi.fn(),
+    hasSources: true,
+  }),
+}));
 vi.mock('@/components/new-chat/ModelSelector', () => ({
-  ModelSelector: ({ modelId, effort, onEffortChange }: {
+  ModelSelector: ({ modelId, effort, onEffortChange, pluginEngines }: {
     modelId: string;
     effort: string;
     onEffortChange: (effort: string) => void;
+    pluginEngines?: {
+      active: { providerId: string; modelId: string; effort?: string } | null;
+      onSelect: (selection: { providerId: string; modelId: string; effort?: string; deviceId?: string }) => void;
+    };
   }) => (
     <>
       <span data-testid="model-trigger">{`${modelId}|${effort}`}</span>
+      <span data-testid="plugin-engine-active">
+        {pluginEngines?.active ? `${pluginEngines.active.providerId}|${pluginEngines.active.modelId}|${pluginEngines.active.effort ?? ''}` : 'none'}
+      </span>
       <button type="button" onClick={() => onEffortChange('low')}>pick-low-effort</button>
+      {pluginEngines && (
+        <button
+          type="button"
+          onClick={() => pluginEngines.onSelect({
+            providerId: 'acp-plugin:cindy-antigravity:antigravity',
+            modelId: 'gemini-3-pro',
+          })}
+        >
+          pick-antigravity
+        </button>
+      )}
     </>
   ),
 }));
@@ -195,7 +238,7 @@ it('单独设置过的群排在前面; 不搜索时先显示 20 个, 搜索时�
   expect(rows).toHaveLength(20);
   expect(screen.getByText('settings.imBot.chats.shownHint:22')).toBeTruthy();
 
-  fireEvent.change(screen.getByRole('searchbox'), { target: { value: '跟随群20' } });
+  fireEvent.change(screen.getByLabelText('settings.imBot.chats.searchLabel'), { target: { value: '跟随群20' } });
   expect(await screen.findByRole('button', { name: 'settings.imBot.chats.expandAria:跟随群20' })).toBeTruthy();
 });
 
@@ -295,4 +338,53 @@ it('Telegram: 跟随的权限是机器人自己的档位', async () => {
   await pick(permission, /permissionSelector\.modes\.codex\.ask/);
   await waitFor(() => expect(state.set).toHaveBeenCalledWith('telegram', 'oc_group1', { permissionMode: 'ask' }, '项目群'));
   expect(state.confirm).not.toHaveBeenCalled();
+});
+
+// 依据: 插件引擎(如 Antigravity, agentKind='acp') 与内置引擎同等开放到个人 IM 群聊模型设置。
+// 缺口: 上述用例只覆盖内置模型，未覆盖按群选用插件引擎及继承渠道 acp 默认路由。
+// 最小失败输入: 展开一个跟随群点选 Antigravity 插件引擎模型，以及渠道默认本身为 acp 时展开编辑区。
+// tier: unit(jsdom)
+it('群聊模型支持选择 Antigravity 插件引擎，且渠道默认是插件引擎时不崩溃并透传 active', async () => {
+  await openGroup();
+  fireEvent.click(screen.getByRole('button', { name: 'pick-antigravity' }));
+  await waitFor(() =>
+    expect(state.set).toHaveBeenCalledExactlyOnceWith(
+      'feishu',
+      'oc_group1',
+      {
+        route: {
+          agentKind: 'acp',
+          providerId: 'acp-plugin:cindy-antigravity:antigravity',
+          model: 'gemini-3-pro',
+          agentDeviceId: null,
+          effort: '',
+          modelGroup: null,
+        },
+      },
+      '项目群',
+    ),
+  );
+
+  cleanup();
+  vi.clearAllMocks();
+  state.list.mockResolvedValue(listOf([FOLLOWING]));
+  state.defaultsGet.mockResolvedValue({
+    agentKind: 'acp',
+    groupPermissionMode: 'ask',
+    permissionMode: 'ask',
+    agents: {
+      'claude-code': { providerId: null, model: 'claude-sonnet-4-6', effort: 'high' },
+      codex: { providerId: null, model: 'gpt-5.4', effort: 'high' },
+      pi: { providerId: null, model: 'gpt-5.4', effort: 'high' },
+      acp: {
+        providerId: 'acp-plugin:cindy-antigravity:antigravity',
+        model: 'gemini-3-pro',
+        effort: '',
+      },
+    },
+  });
+  await openGroup();
+  expect(screen.getByTestId('plugin-engine-active').textContent).toBe(
+    'acp-plugin:cindy-antigravity:antigravity|gemini-3-pro|',
+  );
 });
