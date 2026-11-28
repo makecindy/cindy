@@ -16,6 +16,8 @@ export const APP_ATTENTION_COUNT_CHANNEL = 'notification:set-app-attention-count
 
 export interface AppAttentionSnapshot {
   count: number;
+  /** Whether this Windows snapshot contains new attention eligible to flash. */
+  windowsHasNewAttention?: boolean;
   sessionIds: string[];
   dataOwnerId: string | null;
   ownerGeneration: number;

@@ -1,10 +1,20 @@
+import { cloudCliAuthorization } from '../host-settings/managementCliAuthorization.js';
+import { cloudManagementExecution } from '../host-settings/managementCalls.js';
 import { spawn, type ChildProcess } from 'node:child_process';
+import { homedir } from 'node:os';
 
 import { cleanProcessEnv } from '@cindy/maker-core';
+import { claudeLongLivedTokenFile } from '@cindy/maker-core/claude-cli-login-status';
 import { hasProxyEnvConfig, parseOutboundProxyUrl } from '@cindy/anthropic-compat-proxy';
 
 import { createLogger } from '../logger.js';
 import { ensureCliProxyBridge } from './cli-proxy-bridge.js';
+import {
+  removeClaudeLongLivedToken,
+  replaceClaudeLongLivedToken,
+  type PendingClaudeLongLivedToken,
+} from './claude-long-lived-token.js';
+import { runClaudeSetupToken, type SpawnSetupTokenTerminal } from './claude-setup-token.js';
 import {
   isClaudeCliLoginStatusFresh,
   peekClaudeCliLoginStatus,
@@ -33,11 +43,20 @@ export type ClaudeCliLoginResult =
       ok: false;
       reason: 'login_cancelled' | 'timeout' | 'local_unavailable' | 'login_failed' | 'not_a_subscription' | 'account_mismatch';
     };
+export type ClaudeCliLongLivedTokenResult =
+  | { ok: true; status: ClaudeCliLoginStatus }
+  | {
+      ok: false;
+      reason: 'login_cancelled' | 'timeout' | 'local_unavailable' | 'login_failed' | 'not_signed_in'
+        | 'token_not_permitted' | 'token_unsupported';
+    };
 /** Shared official CLI lifecycle; launchers supply binary discovery and status IO. */
 export function createClaudeNativeCli(ports: {
   binaryPath(): string | null;
   resolveOutboundProxy(url: string): string | null | undefined | Promise<string | null | undefined>;
-  readStatus(options: { binary: string; env: NodeJS.ProcessEnv; timeoutMs: number }): Promise<ClaudeCliLoginStatus | null>;
+  readStatus(options: { binary: string; env: NodeJS.ProcessEnv; timeoutMs: number; oauthTokenFile?: string }): Promise<ClaudeCliLoginStatus | null>;
+  /** Pseudo-terminal launcher for `claude setup-token`. Hosts without one cannot create long-lived tokens. */
+  spawnTerminal?: SpawnSetupTokenTerminal;
 }) {
 const log = createLogger('claude-native-cli');
 setClaudeCliLoginStatusListenerErrorHandler((err) => {
@@ -107,7 +126,7 @@ async function cliEnv(options: { network: boolean; configDir?: string }): Promis
 
 function runCli(
   args: string[],
-  options: { env: NodeJS.ProcessEnv; timeoutMs: number; signal?: AbortSignal },
+  options: { env: NodeJS.ProcessEnv; timeoutMs: number; signal?: AbortSignal; cloudLogin?: boolean },
 ): Promise<{ code: number | null; stdout: string; stderr: string; reason?: 'timeout' | 'cancelled' }> {
   const binary = cliBinaryPath();
   if (!binary) return Promise.reject(new Error('claude cli unavailable'));
@@ -131,8 +150,13 @@ function runCli(
     const onAbort = () => stop('cancelled');
     if (options.signal?.aborted) onAbort();
     else options.signal?.addEventListener('abort', onAbort, { once: true });
+    const present = options.cloudLogin ? cloudCliAuthorization((line) => child.stdin?.write(line)) : undefined;
+    child.stdin?.on('error', () => stop('cancelled'));
     child.stdout?.on('data', (chunk: Buffer) => {
-      stdout += chunk.toString('utf8');
+      if (present) {
+        void present(chunk.toString('utf8')).catch(() => stop('cancelled'));
+      }
+      stdout = (stdout + chunk.toString('utf8')).slice(-65_536);
     });
     child.stderr?.on('data', (chunk: Buffer) => {
       stderr += chunk.toString('utf8');
@@ -175,8 +199,10 @@ function readProfileStatus(configDir: string, force = false): Promise<ClaudeCliL
   const flight = (async () => {
     const binary = cliBinaryPath();
     if (!binary) throw new Error('claude cli unavailable');
+    const oauthTokenFile = claudeLongLivedTokenFile(configDir);
     const status = await ports.readStatus({
       binary, env: await cliEnv({ network: false, configDir }), timeoutMs: STATUS_TIMEOUT_MS,
+      ...(oauthTokenFile ? { oauthTokenFile } : {}),
     });
     if (!status) throw new Error('claude auth status unavailable');
     entry.value = status;
@@ -216,10 +242,12 @@ function refreshClaudeCliLoginStatus(options?: { force?: boolean; configDir?: st
   }
   const flight = (async () => {
     try {
+      const oauthTokenFile = claudeLongLivedTokenFile();
       const status = await ports.readStatus({
         binary: cliBinaryPath()!,
         env: await cliEnv({ network: false }),
         timeoutMs: STATUS_TIMEOUT_MS,
+        ...(oauthTokenFile ? { oauthTokenFile } : {}),
       });
         if (!status) {
         lastStatusFailureAt = Date.now();
@@ -271,22 +299,30 @@ async function readClaudeCliLoginStatus(options?: {
 // ── 套餐余量 ──────────────────────────────────────────────────────────────────
 
 const PLAN_USAGE_TIMEOUT_MS = 20_000;
+const PLAN_USAGE_EXIT_GRACE_MS = 3_000;
 const PLAN_USAGE_REQUEST_ID = 'cindy-plan-usage';
 
 
 /**
  * 读 Claude 订阅套餐余量:拉起内置 CLI 的 SDK 模式,发 `get_usage` 控制请求(CLI 的
- * /usage 同源,结构化返回),拿到响应即结束进程。请求由 CLI 用自己的登录发出,Cindy
- * 不接触凭证;不发用户消息,不产生模型调用。
+ * /usage 同源,结构化返回),拿到响应后发送 EOF,给 CLI 留出收尾退出的时间。
+ * 请求由 CLI 用自己的登录发出,Cindy 不接触凭证;不发用户消息,不产生模型调用。
  *
  * `get_usage` 是 CLI 标注为 Experimental 的控制请求,响应形状可能变化 —— 这里只取
  * `rate_limits` 原样交给调用方解析。CLI 明确声明当前账号没有套餐余量
  * (`rate_limits_available: false`)时返回 null;启动失败、超时、控制请求报错或响应缺
  * `rate_limits` 时抛错,由调用方退避。
+ *
+ * 账号改用长期令牌后,余量仍由它旁边那份普通登录来查(长期令牌只有模型请求权限,查不了):
+ * 这里不交令牌句柄;令牌在用户设置里时跳过用户设置,让 CLI 改读存着的普通登录。普通登录
+ * 已退出或到期时抛错,调用方沿用任务运行时带回的余量,不把「查不了」当成「没有套餐」。
  */
 async function readClaudeCliPlanUsage(configDir?: string): Promise<ClaudeCliPlanUsage | null> {
   const binary = cliBinaryPath();
   if (!binary) throw new Error('claude cli unavailable');
+  const status = configDir ? profileStatuses.get(configDir)?.value : peekClaudeCliLoginStatus();
+  if (status?.longLivedToken && status.storedLogin === false) throw new Error('claude stored login unavailable');
+  const viaStoredLogin = !!status?.longLivedToken;
   const env = await cliEnv({ network: true, configDir });
   // --setting-sources user:不读工作区的项目级设置(它们可改写上游 / 鉴权);
   // --strict-mcp-config:不拉起用户配置的 MCP server;--no-session-persistence:不落会话记录。
@@ -297,7 +333,7 @@ async function readClaudeCliPlanUsage(configDir?: string): Promise<ClaudeCliPlan
     '--verbose',
     '--no-session-persistence',
     '--strict-mcp-config',
-    '--setting-sources', 'user',
+    '--setting-sources', status?.longLivedToken === 'settings' ? '' : 'user',
   ];
   return new Promise((resolve, reject) => {
     let child: ChildProcess;
@@ -309,21 +345,30 @@ async function readClaudeCliPlanUsage(configDir?: string): Promise<ClaudeCliPlan
     }
     let settled = false;
     let buffer = '';
+    let exitTimer: ReturnType<typeof setTimeout> | undefined;
     const finish = (err: Error | null, value?: ClaudeCliPlanUsage | null) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      child.kill();
       if (err) reject(err);
       else resolve(value ?? null);
     };
-    const timer = setTimeout(() => finish(new Error('claude get_usage timed out')), PLAN_USAGE_TIMEOUT_MS);
-    child.once('error', (err) => finish(err));
-    child.once('close', (code) => finish(new Error(`claude cli exited before get_usage response (code ${code})`)));
+    const fail = (err: Error) => {
+      if (settled) return;
+      finish(err);
+      child.kill();
+    };
+    const timer = setTimeout(() => fail(new Error('claude get_usage timed out')), PLAN_USAGE_TIMEOUT_MS);
+    child.once('error', fail);
+    child.once('close', (code) => {
+      clearTimeout(exitTimer);
+      finish(new Error(`claude cli exited before get_usage response (code ${code})`));
+    });
     child.stdin?.on('error', () => {
       /* 进程提前退出时写 stdin 会 EPIPE,由 close 分支给结论。 */
     });
     child.stdout?.on('data', (chunk: Buffer) => {
+      if (settled) return;
       buffer += chunk.toString('utf8');
       let newline: number;
       while ((newline = buffer.indexOf('\n')) >= 0) {
@@ -331,7 +376,18 @@ async function readClaudeCliPlanUsage(configDir?: string): Promise<ClaudeCliPlan
         buffer = buffer.slice(newline + 1);
         if (!line) continue;
         const outcome = parseClaudeCliPlanUsageLine(line);
-        if (outcome) finish(outcome.error ? new Error(outcome.error) : null, outcome.usage);
+        if (!outcome) continue;
+        if (outcome.error) {
+          fail(new Error(outcome.error));
+          return;
+        }
+        // Quota readers have their own deadlines. Return the reply while EOF
+        // lets the SDK process finish outstanding writes before exiting.
+        if (viaStoredLogin && !outcome.usage) finish(new Error('claude stored login has no plan usage'));
+        else finish(null, outcome.usage);
+        exitTimer = setTimeout(() => child.kill('SIGKILL'), PLAN_USAGE_EXIT_GRACE_MS);
+        child.stdin?.end();
+        return;
       }
     });
     const write = (message: unknown) => child.stdin?.write(`${JSON.stringify(message)}\n`);
@@ -425,7 +481,9 @@ async function runClaudeCliLogin(
   try {
     // --email is only a browser hint. Verify the returned identity below as well.
     const result = await runCli(['auth', 'login', '--claudeai', ...(expectedEmail ? ['--email', expectedEmail] : [])], {
-      env: await cliEnv({ network: true, configDir }),
+      env: { ...await cliEnv({ network: true, configDir }),
+        ...(cloudManagementExecution() && process.platform === 'linux' ? { BROWSER: '/bin/true' } : {}) },
+      cloudLogin: !!cloudManagementExecution(),
       timeoutMs: LOGIN_TIMEOUT_MS,
       signal,
     });
@@ -453,6 +511,71 @@ async function runClaudeCliLogin(
   return { ok: false, reason: after.notSubscription ? 'not_a_subscription' : 'login_failed' };
 }
 
+// ── 长期令牌 ──────────────────────────────────────────────────────────────────
+
+/**
+ * 给已登录的账号换上长期令牌:在伪终端里跑官方 `claude setup-token`,浏览器授权由 CLI 打开,
+ * 授权后把令牌写进该账号的配置目录,再重读登录态作为结论。令牌不经过本函数之外的任何地方。
+ *
+ * 只接受已有普通登录的账号:长期令牌说不出自己属于谁,账号的邮箱与套餐靠那份普通登录来认。
+ */
+async function runClaudeCliLongLivedToken(
+  signal: AbortSignal,
+  configDir?: string,
+): Promise<ClaudeCliLongLivedTokenResult> {
+  const binary = cliBinaryPath();
+  if (!binary) return { ok: false, reason: 'local_unavailable' };
+  if (!ports.spawnTerminal) return { ok: false, reason: 'token_unsupported' };
+  let before: ClaudeCliLoginStatus;
+  try {
+    before = await refreshClaudeCliLoginStatus({ requireFresh: true, configDir });
+  } catch {
+    return { ok: false, reason: 'local_unavailable' };
+  }
+  if (signal.aborted) return { ok: false, reason: 'login_cancelled' };
+  // An account already on a token whose ordinary login has ended is signed in, but nameless.
+  if (!before.loggedIn || (before.longLivedToken && before.storedLogin !== true))
+    return { ok: false, reason: 'not_signed_in' };
+  const minted = await runClaudeSetupToken({
+    binary,
+    env: await cliEnv({ network: true, configDir }),
+    cwd: homedir(),
+    signal,
+    timeoutMs: LOGIN_TIMEOUT_MS,
+    spawn: ports.spawnTerminal,
+  });
+  if (!minted.ok) return minted;
+  if (signal.aborted) return { ok: false, reason: 'login_cancelled' };
+  let pending: PendingClaudeLongLivedToken;
+  try {
+    pending = await replaceClaudeLongLivedToken(configDir, minted.token);
+  } catch (err) {
+    // The error of a failed write names the path only, never the token.
+    log.warn('claude long-lived token could not be saved', { error: err instanceof Error ? err.name : typeof err });
+    return { ok: false, reason: 'login_failed' };
+  }
+  let after: ClaudeCliLoginStatus | null = null;
+  try {
+    after = await refreshClaudeCliLoginStatus({ requireFresh: true, configDir });
+  } catch {
+    after = null;
+  }
+  if (!signal.aborted && after?.longLivedToken) {
+    await pending.commit();
+    return { ok: true, status: after };
+  }
+  // Cancelled, or the CLI does not confirm the new token: restore any previous token (or remove the new one).
+  await pending.rollback().catch(() => {});
+  await refreshClaudeCliLoginStatus({ force: true, configDir }).catch(() => {});
+  return { ok: false, reason: signal.aborted ? 'login_cancelled' : after ? 'login_failed' : 'local_unavailable' };
+}
+
+/** 拿掉账号的长期令牌,回到它的普通登录。令牌在 Anthropic 那边仍有效到期满,官方没有作废命令。 */
+async function removeClaudeCliLongLivedToken(configDir?: string): Promise<ClaudeCliLoginStatus> {
+  await removeClaudeLongLivedToken(configDir);
+  return refreshClaudeCliLoginStatus({ requireFresh: true, configDir });
+}
+
 /** @internal 单测用。 */
 function resetClaudeNativeCliForTest(): void {
   resetClaudeCliLoginStatusForTest();
@@ -462,5 +585,5 @@ function resetClaudeNativeCliForTest(): void {
   profileStatuses.clear();
 }
 
-return { claudeCliNetworkEnv, refreshClaudeCliLoginStatus, readClaudeCliLoginStatus, readClaudeCliPlanUsage, parseClaudeCliPlanUsageLine, beginClaudeCliLogin, cancelClaudeCliLogin, runClaudeCliLogin, resetClaudeNativeCliForTest };
+return { claudeCliNetworkEnv, refreshClaudeCliLoginStatus, readClaudeCliLoginStatus, readClaudeCliPlanUsage, parseClaudeCliPlanUsageLine, beginClaudeCliLogin, cancelClaudeCliLogin, runClaudeCliLogin, runClaudeCliLongLivedToken, removeClaudeCliLongLivedToken, resetClaudeNativeCliForTest };
 }

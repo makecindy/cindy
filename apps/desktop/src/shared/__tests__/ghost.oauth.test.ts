@@ -486,6 +486,40 @@ describe('ghost · oauth 凭证声明校验', () => {
       ).toBe(false);
     }
   });
+
+  // 设备码登录(RFC 8628):新字段只在声明时出现,且固定插在 tokenUrl 之后——市场能力上限
+  // 按归一化 JSON 逐字比较,字段位置变化会让同一清单被判超限;未声明时存量清单输出必须逐字不变。
+  it('deviceAuthorizationUrl:合法通过并固定位置保留;未声明时归一化结果不变;越白名单 / 与 broker 同用 → 拒', () => {
+    const base = {
+      authorizeUrl: 'https://accounts.example.com/authorize',
+      tokenUrl: 'https://accounts.example.com/token',
+      scopes: ['read.a', 'write.b'],
+    };
+    const legacy = validateGhostManifest(oauthManifest({ oauth: base }));
+    expect(legacy.ok).toBe(true);
+    if (legacy.ok) {
+      expect(JSON.stringify(legacy.manifest.network?.secrets?.[0]?.oauth)).toBe(JSON.stringify(base));
+    }
+    const device = validateGhostManifest(
+      oauthManifest({ oauth: { ...base, deviceAuthorizationUrl: 'https://api.example.com/device' } }),
+    );
+    expect(device.ok).toBe(true);
+    if (device.ok) {
+      expect(Object.keys(device.manifest.network?.secrets?.[0]?.oauth ?? {})).toEqual([
+        'authorizeUrl',
+        'tokenUrl',
+        'deviceAuthorizationUrl',
+        'scopes',
+      ]);
+    }
+    for (const bad of [
+      { ...base, deviceAuthorizationUrl: 'https://evil.example.net/device' },
+      { ...base, deviceAuthorizationUrl: 'http://accounts.example.com/device' },
+      { ...base, deviceAuthorizationUrl: 'https://accounts.example.com/device', tokenBroker: 'feishu', redirectPort: 53684 },
+    ]) {
+      expect(validateGhostManifest(oauthManifest({ oauth: bad })).ok, JSON.stringify(bad)).toBe(false);
+    }
+  });
 });
 describe('ghost · oauth 确认框条目', () => {
   it('展示授权域名 + scopes 原文逐条', () => {
@@ -519,5 +553,23 @@ describe('ghost · oauth 确认框条目', () => {
       (i) => i.key === 'network:secret:acct',
     );
     expect(item?.detail).toBeUndefined();
+  });
+
+  it('设备码登录展示设备码端点域名(用户实际确认授权的服务)', () => {
+    const result = validateGhostManifest(
+      oauthManifest({
+        oauth: {
+          authorizeUrl: 'https://accounts.example.com/authorize',
+          tokenUrl: 'https://accounts.example.com/token',
+          deviceAuthorizationUrl: 'https://api.example.com/device',
+        },
+      }),
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const item = ghostPermissionItems(result.manifest as GhostManifest).find(
+      (i) => i.key === 'network:secret:acct',
+    );
+    expect(item?.labelArgs).toMatchObject({ host: 'api.example.com' });
   });
 });

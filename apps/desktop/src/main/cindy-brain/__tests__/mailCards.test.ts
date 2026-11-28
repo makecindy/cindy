@@ -137,9 +137,17 @@ it('persists larger HTML drafts as inert metadata without rendering source in th
 });
 it('publishes undo/send-now only while waiting and removes the deadline after cancellation', async () => {
   const f = fixture(); f.register('card'); await f.publish('card');
+  expect((await f.service.handle('gmail', { callId: 'card', statusOnly: { state: 'sending', status: 'Syncing before sending…', cancelLabel: 'Undo' } }, () => true)).ok).toBe(true);
+  const preparingHtml = f.rows.get('card')!.html;
+  expect(readMailCard(preparingHtml)?.cancelLabel).toBe('Undo');
+  expect(preparingHtml).toContain('mail:cancel:');
+  expect(preparingHtml).not.toContain('mail:now:');
+  expect(preparingHtml).not.toContain('mail:send:');
+  expect(preparingHtml).not.toContain('data-ghost-change');
   const pendingSend = { deadline: Date.now() + 10000, label: '{seconds}s', cancelLabel: 'Undo', sendNowLabel: 'Send now' };
   expect((await f.service.handle('gmail', { callId: 'card', statusOnly: { state: 'sending', status: 'Waiting', pendingSend } }, () => true)).ok).toBe(true);
   const html = f.rows.get('card')!.html;
+  expect(readMailCard(html)?.cancelLabel).toBeUndefined();
   expect(readMailCard(html)?.pendingSend).toEqual(pendingSend);
   expect(html).toContain('mail:cancel:');
   expect(html).toContain('mail:now:');

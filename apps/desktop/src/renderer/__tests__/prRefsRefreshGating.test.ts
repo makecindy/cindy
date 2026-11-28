@@ -45,7 +45,7 @@ describe('PR 状态刷新的省流门控', () => {
     expect(prRefsSource).toContain(
       'if (deviceId && isRemoteDeviceMarkedDisconnected(deviceId)) return;',
     );
-    expect(prRefsSource).toContain('store.applyStatuses(sessionId, results)');
+    expect(prRefsSource).toContain('store.applyStatuses(sessionId, results, resultReadSeqs)');
   });
 
   it('断线判定只认明确的 disconnected 标记(fail-open)', () => {

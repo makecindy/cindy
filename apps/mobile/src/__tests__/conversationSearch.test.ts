@@ -41,6 +41,16 @@ function session(partial: Partial<RemoteSession> & Pick<RemoteSession, 'id' | 't
   };
 }
 
+// Unit: an offline title must honor explicit syntax, rather than requiring
+// literal quotes or a plus sign in the cached title.
+it('honors exact phrases and all keywords in cached titles', () => {
+  const sessions = [session({ id: 'exact', title: 'login error cache' }), session({ id: 'gap', title: 'login other error' })];
+  const origin = { deviceId: 'dev-a', deviceName: 'Studio', reachable: false };
+  for (const query of ['"login error"', 'login + cache']) {
+    expect(searchCachedDeviceSessions(origin, { query }, sessions).results.map((item) => item.session.id)).toEqual(['exact']);
+  }
+});
+
 function indexedPage(ids: string[]): ConversationSearchResponse {
   return {
     query: 'needle',

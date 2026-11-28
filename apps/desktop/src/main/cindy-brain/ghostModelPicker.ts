@@ -11,6 +11,12 @@ import {
   type PluginModelPickerResult,
   type PluginModelPickerRoute,
 } from '../../shared/pluginModelPicker.js';
+import {
+  PLUGIN_ENGINE_DEFAULT_MODEL,
+  isPluginEngineEffort,
+  pluginEngineKeyFromProviderId,
+  type PluginEngineView,
+} from '../../shared/pluginEngines.js';
 import { GHOST_REMOTE_AGENT_MODELS } from './ghostAgentModels.js';
 
 /** Read the exact execution location; an unavailable remote source never borrows local models. */
@@ -37,6 +43,14 @@ export function setPluginModelPickerAgentProvider(provider: () => readonly strin
 }
 export function getPluginModelPickerAgents(): readonly string[] {
   return agentProvider();
+}
+
+let pluginEnginesProvider: () => readonly PluginEngineView[] = () => [];
+export function setPluginModelPickerPluginEnginesProvider(provider: () => readonly PluginEngineView[]): void {
+  pluginEnginesProvider = provider;
+}
+export function getPluginModelPickerPluginEngines(): readonly PluginEngineView[] {
+  return pluginEnginesProvider();
 }
 
 /**
@@ -90,12 +104,41 @@ export interface PluginModelPickerTarget {
   dismiss(requestId: string): void;
 }
 
+/** Recheck an exact plugin-engine (`acp`) route against the offered engines of that computer. */
+export function isPluginEngineModelRouteAvailable(
+  route: PluginModelPickerRoute,
+  engines: readonly PluginEngineView[],
+): boolean {
+  if (route.agentKind !== 'acp' || route.fastMode !== false) return false;
+  const key = pluginEngineKeyFromProviderId(route.providerId);
+  if (!key) return false;
+  const engine = engines.find((item) => item.key === key || item.providerId === route.providerId);
+  if (!engine || engine.suspended || engine.availability.state === 'unavailable') return false;
+  const model = route.model.trim();
+  if (!model) return false;
+  if (engine.disabledModels?.some((item) => item.id === model)) return false;
+  if (model === PLUGIN_ENGINE_DEFAULT_MODEL) {
+    if (engine.defaultModelAllowed === false) return false;
+  } else if (!engine.models.some((item) => item.id === model)) {
+    return false;
+  }
+  if (route.effort) {
+    const offered = engine.models.find((item) => item.id === model)?.efforts ?? [];
+    if (!isPluginEngineEffort(route.effort) || !offered.includes(route.effort)) return false;
+  }
+  return true;
+}
+
 /** Recheck the exact route without discovery, credential claims or inference. */
 export function isPluginModelPickerRouteAvailable(
   route: PluginModelPickerRoute,
   views: ProviderView[],
   agents: readonly string[],
+  pluginEngines?: readonly PluginEngineView[],
 ): boolean {
+  if (route.agentKind === 'acp') {
+    return isPluginEngineModelRouteAvailable(route, pluginEngines ?? []);
+  }
   const agent = route.agentKind === 'cc' ? 'claude-code' : route.agentKind;
   if (!agents.includes(agent)) return false;
   const provider = connectedProvidersForAgent(views, agent).find((p) => p.id === route.providerId);
@@ -121,11 +164,22 @@ export async function isGhostCardModelRouteAvailable(
   sources: {
     localViews(): Promise<ProviderView[]>;
     localAgents(): readonly string[];
+    localPluginEngines?: () => readonly PluginEngineView[];
     locations?: (() => Promise<{ locations: readonly { agentDeviceId: string }[] }>) | null;
     remoteViews?: ((agentDeviceId: string) => Promise<ProviderView[]>) | null;
+    remotePluginEngines?: ((agentDeviceId: string) => Promise<readonly PluginEngineView[]>) | null;
   },
 ): Promise<boolean> {
   const { agentDeviceId, ...base } = route;
+  if (base.agentKind === 'acp') {
+    if (!agentDeviceId) {
+      return isPluginEngineModelRouteAvailable(base, sources.localPluginEngines?.() ?? []);
+    }
+    if (!sources.locations || !sources.remotePluginEngines) return false;
+    const { locations } = await sources.locations();
+    if (!locations.some((location) => location.agentDeviceId === agentDeviceId)) return false;
+    return isPluginEngineModelRouteAvailable(base, await sources.remotePluginEngines(agentDeviceId));
+  }
   if (!agentDeviceId) return isPluginModelPickerRouteAvailable(base, await sources.localViews(), sources.localAgents());
   if (!sources.locations || !sources.remoteViews) return false;
   const { locations } = await sources.locations();

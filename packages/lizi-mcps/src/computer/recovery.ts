@@ -23,6 +23,28 @@ export function isWindowIdentityFailure(value: unknown): boolean {
   );
 }
 
+// AXError -25211 (kAXErrorAPIDisabled): macOS refused the driver accessibility
+// access to this target. Measured on macOS 27.3 beta 2 (26C5047e): an app
+// outside the person's "Choose Apps" list answers this at once, and so does an
+// "Ask First" app while macOS shows its own prompt (allowed reads work right
+// after). Earlier systems only return it while accessibility is off for the
+// driver. The driver reports it in prose (e.g. ax_window_unresolved evidence),
+// never as a code of its own.
+const AX_API_DISABLED = /\bkAXErrorAPIDisabled\b|\bAXError -25211\b/;
+
+/** Whether a driver result or error says macOS refused control of the target app. */
+export function isAppControlDenied(value: unknown): boolean {
+  if (value instanceof Error) return AX_API_DISABLED.test(value.message);
+  if (!value || typeof value !== "object") return false;
+  const result = value as Record<string, unknown>;
+  return [result.degraded_reason, result.message, result.error].some(
+    (text) => typeof text === "string" && AX_API_DISABLED.test(text),
+  );
+}
+
+export const APP_CONTROL_DENIED_HINT =
+  "macOS refused CuaDriver accessibility access to this app (kAXErrorAPIDisabled). Call check_permissions once. If accessibility is missing, ask the person to turn it on in Cindy's Computer Use settings. If it is granted, the person has probably allowed CuaDriver to control only selected apps (macOS 27.3 and later: System Settings > Privacy & Security > System & App Protection Override > CuaDriver). If this app is set to Ask First, macOS has just shown its own prompt on this Mac; once the person allows it, the same read works. Otherwise tell them which app needs to be allowed, or continue in an app that is already allowed. Do not retry the same call in a loop, and do not work around it with shell input or by silently switching to another app.";
+
 /** A single best-effort read with its own deadline; failures never replace the primary result. */
 export async function readForRecovery(
   deps: ComputerMcpDeps,

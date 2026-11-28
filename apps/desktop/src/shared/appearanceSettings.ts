@@ -206,6 +206,32 @@ export function clampAppearanceWallpaperOverlay(
   );
 }
 
+const MAX_APPEARANCE_FONT_FAMILY_LENGTH = 256;
+
+/** 持久 override 与 Host 工具共用严格边界；旧 UI 的夹取与取整仍由 normalize 负责。 */
+export function isValidAppearanceSetting(key: string, value: unknown): value is string | number | null {
+  if (key === 'appIcon') return isAppIcon(value);
+  if (key === 'desktopVisibility') {
+    return value === null || (typeof value === 'number' && Number.isFinite(value)
+      && value >= APPEARANCE_LIMITS.wallpaperVisibility.min && value <= APPEARANCE_LIMITS.wallpaperVisibility.max);
+  }
+  if (key === 'uiFamily' || key === 'codeFamily' || key === 'terminalFamily') {
+    return typeof value === 'string' && value.length <= MAX_APPEARANCE_FONT_FAMILY_LENGTH
+      // eslint-disable-next-line no-control-regex
+      && !/[\x00-\x1f]/.test(value);
+  }
+  if (key === 'wallpaperId') return (WALLPAPER_IDS as readonly unknown[]).includes(value);
+  if (key === 'wallpaperMotion') return value === 'static' || value === 'dynamic';
+  if (key === 'wallpaperOverlay' || key === 'wallpaperVisibility' || key === 'wallpaperBlur') {
+    const limits = APPEARANCE_LIMITS[key];
+    return typeof value === 'number' && Number.isFinite(value) && value >= limits.min && value <= limits.max;
+  }
+  if (key !== 'uiSize' && key !== 'codeSize' && key !== 'terminalSize' && key !== 'windowZoom') return false;
+  const limits = APPEARANCE_LIMITS[key];
+  return typeof value === 'number' && Number.isFinite(value) && value >= limits.min && value <= limits.max
+    && (key === 'windowZoom' || Number.isInteger(value));
+}
+
 export function clampAppearanceUiSize(
   value: number,
   fallback = DEFAULT_APPEARANCE_SETTINGS.uiSize,
@@ -309,7 +335,7 @@ function normalizeWallpaperId(value: unknown): WallpaperId {
 }
 
 function normalizeFamily(value: unknown): string {
-  return typeof value === 'string' ? value.trim().slice(0, 256) : '';
+  return typeof value === 'string' ? value.trim().slice(0, MAX_APPEARANCE_FONT_FAMILY_LENGTH) : '';
 }
 
 function clampInteger(value: number, min: number, max: number, fallback: number): number {

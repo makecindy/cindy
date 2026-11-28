@@ -45,6 +45,41 @@ describe('session send outcome', () => {
     );
   });
 
+  // #12924, unit: a Pi history read that the upstream refused is a definite
+  // non-dispatch. The outcome must say "not sent" and keep the bounded cause
+  // so the UI can explain it instead of showing the generic "reply failed".
+  it('names a failed Pi history read with its bounded upstream status', () => {
+    const result: SessionSendResult = {
+      accepted: false,
+      reason: 'provider-rejected-before-dispatch',
+      diagnostic: 'pi-retry-history-unavailable',
+      upstreamStatus: 550,
+    };
+    const context = 'pi/session-9/retry';
+
+    expect(toSessionDispatchOutcome(result, context)).toEqual({
+      dispatched: false,
+      reason: 'provider-rejected-before-dispatch',
+      context,
+      message: '[PI_RETRY_HISTORY_UNAVAILABLE] Your message was not sent. Pi could not read the history needed to send it (status 550). You can retry, or continue in a new task.',
+    });
+  });
+
+  it('keeps a failed Pi history read actionable without an upstream status', () => {
+    const result: SessionSendResult = {
+      accepted: false,
+      reason: 'provider-rejected-before-dispatch',
+      diagnostic: 'pi-retry-history-unavailable',
+    };
+
+    expect(toSessionDispatchOutcome(result, 'pi/session-10/retry')).toEqual({
+      dispatched: false,
+      reason: 'provider-rejected-before-dispatch',
+      context: 'pi/session-10/retry',
+      message: '[PI_RETRY_HISTORY_UNAVAILABLE] Your message was not sent. Pi could not read the history needed to send it. You can retry, or continue in a new task.',
+    });
+  });
+
   it('asserts dispatched only when send result was accepted', () => {
     const accepted: SessionSendResult = { accepted: true };
     const cancelled: SessionSendResult = {

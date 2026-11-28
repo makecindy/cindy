@@ -36,6 +36,7 @@ import { joinAnthropicMessagesUrl } from '@cindy/responses-anthropic-bridge';
 import {
   classifyProviderError,
   providerNetworkErrorCode,
+  providerRetryAfterAt,
   type ProviderErrorClassification,
   type ProviderErrorCode,
 } from '../../shared/providerErrors.js';
@@ -135,6 +136,10 @@ export interface ProviderProbeSpec {
   nativeModel?: ProviderModelRecord;
   /** 非标准推理端点的精确相对路径。 */
   requestPath?: string;
+  /** Main-only opt-in for a verified official model that accepts reasoning.effort=none. */
+  disableReasoning?: boolean;
+  /** Official account-group checks require evidence that the Responses API generated output. */
+  requireResponsesGeneration?: boolean;
   /** 用户 API key；缺省 = 不注入鉴权头（端点可能靠自定义 headers 鉴权）。 */
   apiKey?: string | null;
   /** 附加请求头（自定义供应商的 headers 配置）。 */
@@ -265,6 +270,7 @@ export function buildProbeRequest(spec: ProviderProbeSpec): { url: string; init:
         max_output_tokens: 16,
         stream: false,
         store: false,
+        ...(spec.disableReasoning ? { reasoning: { effort: 'none' } } : {}),
       }),
     },
   };
@@ -272,6 +278,41 @@ export function buildProbeRequest(spec: ProviderProbeSpec): { url: string; init:
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/** A token-limited ping can spend its entire budget on reasoning before emitting text. */
+function responsesProbeFailure(raw: string): ProviderErrorCode | undefined {
+  let response: unknown;
+  try { response = JSON.parse(raw); }
+  catch { return 'INVALID_PROBE_RESPONSE'; }
+  if (!isPlainObject(response) || !Array.isArray(response.output)) return 'INVALID_PROBE_RESPONSE';
+  const { status, error, output, incomplete_details: incomplete, usage } = response;
+  if (status === 'failed') return 'UPSTREAM_ERROR';
+  if (error != null) return 'INVALID_PROBE_RESPONSE';
+
+  let hasOutputText = false;
+  for (const item of output) {
+    if (!isPlainObject(item)) return 'INVALID_PROBE_RESPONSE';
+    if (item.type !== 'message' && item.content === undefined) continue;
+    if (!Array.isArray(item.content)) return 'INVALID_PROBE_RESPONSE';
+    for (const part of item.content) {
+      if (!isPlainObject(part)) return 'INVALID_PROBE_RESPONSE';
+      if (part.type === 'refusal') return 'PROBE_REFUSED';
+      if (part.type === 'output_text' && typeof part.text === 'string' && part.text.trim()) hasOutputText = true;
+    }
+  }
+
+  if (status === 'completed') return hasOutputText ? undefined : 'PROBE_NO_OUTPUT';
+  if (status === 'incomplete' && isPlainObject(incomplete)) {
+    if (incomplete.reason === 'content_filter') return 'PROBE_REFUSED';
+    const outputTokens = isPlainObject(usage) ? usage.output_tokens : undefined;
+    if (incomplete.reason === 'max_output_tokens' && typeof outputTokens === 'number'
+      && Number.isSafeInteger(outputTokens) && outputTokens > 0) return undefined;
+  }
+  if (status === 'incomplete' || status === 'cancelled' || status === 'queued' || status === 'in_progress') {
+    return 'PROBE_NO_OUTPUT';
+  }
+  return 'INVALID_PROBE_RESPONSE';
 }
 
 /** Keep the first payload for protocol validation, while draining later usage frames. */
@@ -379,7 +420,7 @@ function sanitizeProbeDetail(detail: string | undefined): string | undefined {
  */
 function logProbeFailure(spec: ProviderProbeSpec, result: ProviderTestResult): ProviderTestResult {
   if (result.ok) return result;
-  const detail = sanitizeProbeDetail(result.detail);
+  const detail = spec.requireResponsesGeneration ? undefined : sanitizeProbeDetail(result.detail);
   log.warn('provider connection probe failed', {
     agent: spec.agent,
     provider: spec.catalogPresetId ?? 'custom',
@@ -483,7 +524,8 @@ async function runProviderProbeUnlogged(
   const { url, init } = buildProbeRequest(spec);
   let res: Response;
   try {
-    res = await fetchImpl(url, { ...init, signal: AbortSignal.timeout(PROBE_TIMEOUT_MS) });
+    res = await fetchImpl(url, { ...init, signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
+      ...(spec.requireResponsesGeneration ? { redirect: 'error' } : {}) });
   } catch (err) {
     const cls = classifyProviderError({ networkErrorCode: providerNetworkErrorCode(err) });
     return { ok: false, code: cls.code, latencyMs: Date.now() - start, detail: cls.detail };
@@ -540,26 +582,46 @@ async function runProviderProbeUnlogged(
     }
     // Observe this existing response within the original request timeout; never issue a
     // second generation solely to recover metering.
+    if (spec.requireResponsesGeneration) {
+      const raw = await readBoundedResponseText(res, MAX_ERROR_BODY_BYTES).catch(() => '');
+      const code = responsesProbeFailure(raw);
+      if (code) return { ok: false, code, status: res.status, latencyMs };
+      await observe(raw).catch(() => {});
+      return { ok: true, latencyMs };
+    }
     try { await observe(await readBoundedResponseText(res, MAX_ERROR_BODY_BYTES)); }
     catch { /* Connection classification remains independent of optional metering. */ }
     return { ok: true, latencyMs };
   }
   let bodyText = '';
   try {
-    bodyText = (await res.text()).slice(0, MAX_ERROR_BODY_BYTES);
+    bodyText = spec.requireResponsesGeneration ? await readBoundedResponseText(res, MAX_ERROR_BODY_BYTES)
+      : (await res.text()).slice(0, MAX_ERROR_BODY_BYTES);
     await observe(bodyText);
   } catch {
     /* 读体失败按空体分类 */
   }
-  const cls = classifyProviderError({ status: res.status, bodyText });
-  return { ok: false, code: cls.code, status: res.status, latencyMs, detail: cls.detail };
+  let cls = classifyProviderError({ status: res.status, bodyText });
+  if (spec.requireResponsesGeneration && res.status === 403 && !cls.billingCode) {
+    try {
+      const body: unknown = JSON.parse(bodyText);
+      if (isPlainObject(body) && isPlainObject(body.error)
+        && typeof body.error.code === 'string'
+        && ['model_not_found', 'model_access_denied', 'model_not_allowed'].includes(body.error.code)) {
+        cls = { code: 'MODEL_NOT_FOUND', retryable: false };
+      }
+    } catch { /* An unstructured 403 stays a connection permission failure. */ }
+  }
+  const retryAt = cls.code === 'RATE_LIMITED' ? providerRetryAfterAt(res.headers.get('retry-after'), Date.now()) : undefined;
+  return { ok: false, code: cls.code, status: res.status, latencyMs, detail: cls.detail,
+    ...(cls.billingCode ? { billingCode: cls.billingCode } : {}), ...(retryAt !== undefined ? { retryAt } : {}) };
 }
 
 /**
  * 解析 saved 入参 → 探测 spec。仅支持自定义(user)供应商 —— 内置 OAuth / 网关来源的连接态
  * 由各自鉴权通道保证，不在此探测。解析失败抛 Error（handler 映射 INVALID_PARAMS）。
  */
-export async function resolveSavedProbeSpec(providerId: string, agent: AgentKind): Promise<ProviderProbeSpec> {
+export async function resolveSavedProbeSpec(providerId: string, agent: AgentKind, probeModelId?: string): Promise<ProviderProbeSpec> {
   const provider = getActiveCatalog().providers.find((p) => p.id === providerId);
   if (!provider) throw new Error(`provider '${providerId}' not found`);
   if (provider.source !== 'user')
@@ -590,7 +652,9 @@ export async function resolveSavedProbeSpec(providerId: string, agent: AgentKind
     explicitlyShown = undefined;
     notHidden = undefined;
   }
-  const model = explicitlyShown ?? notHidden ?? candidates.find(selectable);
+  const model = probeModelId
+    ? candidates.find(candidate => candidate.id === probeModelId && selectable(candidate))
+    : explicitlyShown ?? notHidden ?? candidates.find(selectable);
   if (!model) throw new Error(`provider '${providerId}' has no chat models for '${agent}'`);
   // Pi's HTTP-only route helper intentionally excludes SDK transports. A native
   // probe must keep the SDK route instead of treating that exclusion as failure.

@@ -272,4 +272,18 @@ describe('persistent history integration', () => {
     resolve(snapshot('stale disk')); await reading;
     expect(JSON.stringify(view.getSnapshot())).not.toContain('stale disk');
   });
+  // 测试价值：验证 mountRemoteHistoryView 在磁盘缓存检查（命中/未命中）结束后才触发 onCacheSettled，
+  // 防止重进常驻对话时在读盘空窗期提前把截断的 rawMessages 灌入列表；覆盖缺口：此前无 onCacheSettled 契约测试，tier unit。
+  it.each([true, false])('signals cache settlement after disk restore completes (hit=%s)', async (hit) => {
+    setMobileAuthOwner('cache-settle');
+    if (hit) await writeHistoryDisk(historyDiskAuthority('d', 's'), snapshot('disk copy'));
+    const source = transport();
+    const entry = getRemoteHistoryView('d', 's', source);
+    let settled = false;
+    const release = mountRemoteHistoryView(entry, source, true, () => { settled = true; });
+    releases.push(release);
+    await vi.waitFor(() => expect(settled).toBe(true));
+    expect(entry.view.getSnapshot().ready).toBe(hit);
+    if (hit) expect(JSON.stringify(entry.view.getSnapshot().items)).toContain('disk copy');
+  });
 });

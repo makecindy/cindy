@@ -42,6 +42,47 @@ const raw = JSON.stringify({ error: {
 } });
 afterEach(cleanup);
 
+// #12924, unit: the live and historical notices name an upstream 5xx status —
+// the exact empty HTTP 550 and any other message naming "550 status code" get
+// the same upstream-status notice (#12970) — while the dispatch refusal keeps
+// its own "not sent" text.
+const upstream550 = zhCN.chat.errorBanner.upstreamStatusError.replace('{{status}}', '550');
+it.each([
+  ['550 status code (no body)', upstream550],
+  ['ordinary failure mentioning 550 status code (no body)', upstream550],
+  ['provider-rejected-before-dispatch: Provider rejected the Session send before dispatch: SEND/task/send',
+    zhCN.chat.errorBanner.messageNotSent],
+])('names the upstream 5xx status and keeps the dispatch refusal (%s)', async (message, expected) => {
+  const i18n = createInstance();
+  await i18n.init({ lng: 'zh-CN', resources: { 'zh-CN': { translation: zhCN } } });
+  const { rerender } = render(<I18nextProvider i18n={i18n}>
+    <ErrorBanner error={message} agentKind="pi" onRetry={vi.fn()} />
+  </I18nextProvider>);
+  expect(screen.getByText(expected)).toBeTruthy();
+  rerender(<I18nextProvider i18n={i18n}>
+    <ErrorMessageCard message={message} />
+  </I18nextProvider>);
+  expect(screen.getByText(expected)).toBeTruthy();
+});
+
+// #12240, unit: the live banner must explain both options for a retained
+// queue head. The same network error without that recovery cannot promise
+// that the original input is still waiting to be sent.
+it.each([true, false])('describes the original input only for a queue-head retry (%s)', async queuedSendRecovery => {
+  const i18n = createInstance();
+  await i18n.init({ lng: 'en', resources: { en: { translation: en } } });
+  const retry = vi.fn();
+  render(<I18nextProvider i18n={i18n}>
+    <ErrorBanner error="LAZY_CREATE_FAILED: [REMOTE_AGENT_UNAVAILABLE] not online within 1500ms"
+      agentKind="codex" agentDeviceId="other-computer" queuedSendRecovery={queuedSendRecovery}
+      retryText="original input" onRetry={retry} />
+  </I18nextProvider>);
+  const hint = screen.queryByText('Your message wasn’t sent. Select Retry to send it as is. Sending a new message will replace it.');
+  expect(Boolean(hint)).toBe(queuedSendRecovery);
+  fireEvent.click(screen.getByRole('button', { name: en.chat.errorBanner.retry }));
+  expect(retry).toHaveBeenCalledExactlyOnceWith('original input');
+});
+
 // L343 / unit: a short input skipped after a context overflow uses the same
 // notice as any skipped input. Exercise the real bubble with its locale bundle.
 it('shows the context-full notice on a skipped short input', async () => {
@@ -70,6 +111,80 @@ it.each(['live', 'history'] as const)('reports a clean Codex transport exit as a
   if (surface === 'live') {
     fireEvent.click(screen.getByRole('button', { name: en.chat.errorBanner.retry }));
     expect(retry).toHaveBeenCalledOnce();
+  }
+});
+
+// #10161 / unit: a stalled local dispatch record used to look like a model
+// reply failure. Both error surfaces use real localized copy after the host
+// identifies that boundary. An unclassified timeout still has generic copy.
+it.each(['live', 'history', 'unclassified'] as const)('attributes a send preparation deadline in %s', async surface => {
+  const i18n = createInstance();
+  await i18n.init({ lng: 'zh-CN', resources: { 'zh-CN': { translation: zhCN } } });
+  const raw = 'Snapshot operation deadline exceeded';
+  const message = surface === 'unclassified'
+    ? raw
+    : `[SNAPSHOT_DISPATCH_INTENT_TIMEOUT] ${raw} before confirming the send record. The message was not sent.`;
+  const retry = vi.fn();
+  render(<I18nextProvider i18n={i18n}>{surface === 'history'
+    ? <ErrorMessageCard message={message} />
+    : <ErrorBanner error={message} agentKind="codex" retryText="原消息" onRetry={retry} />}</I18nextProvider>);
+  expect(screen.getByText(surface === 'unclassified'
+    ? zhCN.chat.errorBanner.replyFailed
+    : '未发送消息，Cindy 未能及时确认安全记录')).toBeTruthy();
+  if (surface === 'live') {
+    fireEvent.click(screen.getByRole('button', { name: zhCN.chat.errorBanner.retry }));
+    expect(retry).toHaveBeenCalledWith('原消息');
+  }
+});
+
+// #12924, unit: an upstream 5xx without a body must name the status in both
+// error surfaces. The generic "reply failed" copy hides that the upstream
+// refused the request.
+it.each(['live', 'history'] as const)('names the upstream status in %s', async surface => {
+  const i18n = createInstance();
+  await i18n.init({ lng: 'zh-CN', resources: { 'zh-CN': { translation: zhCN } } });
+  const message = '550 status code (no body)';
+  const retry = vi.fn();
+  render(<I18nextProvider i18n={i18n}>{surface === 'history'
+    ? <ErrorMessageCard message={message} />
+    : <ErrorBanner error={message} agentKind="pi" retryText="原消息" onRetry={retry} />}</I18nextProvider>);
+  expect(screen.getByText('上游返回 550，本次回复未完成。')).toBeTruthy();
+});
+
+// #12924, unit: a Pi history read the upstream refused never reached the
+// provider. Both surfaces must say "not sent" and name that reason instead of
+// the generic "reply failed".
+it.each(['live', 'history'] as const)('explains a refused Pi history read in %s', async surface => {
+  const i18n = createInstance();
+  await i18n.init({ lng: 'zh-CN', resources: { 'zh-CN': { translation: zhCN } } });
+  const message = 'provider-rejected-before-dispatch: [PI_RETRY_HISTORY_UNAVAILABLE] Your message was not sent. Pi could not read the history needed to send it (status 550). You can retry, or continue in a new task.';
+  const retry = vi.fn();
+  render(<I18nextProvider i18n={i18n}>{surface === 'history'
+    ? <ErrorMessageCard message={message} />
+    : <ErrorBanner error={message} agentKind="pi" retryText="原消息" onRetry={retry} />}</I18nextProvider>);
+  expect(screen.getByText(zhCN.chat.errorBanner.piRetryHistoryUnavailable)).toBeTruthy();
+});
+
+// #12970, unit: the refused-history-read cause must outrank every broad status
+// matcher. 502/503/504 read as network-unreachable and 529 as overloaded, so a
+// banner that let them win would hide that the message was never sent at all.
+// Minimal failure input: the same synthesized message with a non-550 status.
+it.each(['live', 'history'] as const)('keeps a refused Pi history read ahead of broad matchers in %s', async surface => {
+  // 500/413 never reached the competing copy, but pin them so a future branch
+  // added ahead of this one cannot quietly swallow the "not sent" fact either.
+  for (const status of ['502', '503', '504', '529', '500', '413']) {
+    const i18n = createInstance();
+    await i18n.init({ lng: 'zh-CN', resources: { 'zh-CN': { translation: zhCN } } });
+    const message = `provider-rejected-before-dispatch: [PI_RETRY_HISTORY_UNAVAILABLE] Your message was not sent. Pi could not read the history needed to send it (status ${status}). You can retry, or continue in a new task.`;
+    const retry = vi.fn();
+    const { unmount } = render(<I18nextProvider i18n={i18n}>{surface === 'history'
+      ? <ErrorMessageCard message={message} />
+      : <ErrorBanner error={message} agentKind="pi" retryText="原消息" onRetry={retry} />}</I18nextProvider>);
+    expect(screen.getByText(zhCN.chat.errorBanner.piRetryHistoryUnavailable, { ignore: 'style,script' })).toBeTruthy();
+    expect(screen.queryByText(zhCN.chat.errorBanner.networkUnreachable)).toBeNull();
+    expect(screen.queryByText(zhCN.chat.errorBanner.overloadBusy)).toBeNull();
+    expect(screen.queryByText(/上游返回/)).toBeNull();
+    unmount();
   }
 });
 
@@ -396,135 +511,130 @@ it.each(['live', 'tail', 'history'] as const)('localizes quota exhaustion on %s 
   expect(screen.queryByText(/PRIVATE_UPSTREAM_BODY|完全访问/)).toBeNull();
 });
 
-// #8100, unit: sequence_number=502 exercised the network fallback in live and
-// tail notices. The same envelope must keep the output-block summary and
-// collapsed diagnostics in all three production surfaces.
-it.each(['live', 'live-http', 'tail', 'history'] as const)('explains an upstream output block in %s', async surface => {
-  const i18n = createInstance();
-  await i18n.init({ lng: 'en', resources: { en: { translation: en } } });
-  const technicalMessage = 'Synthetic plugin blocked the output stream. api_key=fixture-private-value fixture-end.';
-  const error = JSON.stringify({ error: {
-    type: 'invalid_request_error', code: 'safety_violation', message: technicalMessage,
-  }, sequence_number: 502 });
-  const diagnose = vi.fn();
-  const live = surface.startsWith('live') ? handleStreamEvent({ ...EMPTY_SESSION_STATE, isStreaming: true }, {
-    sessionId: 'output-block-copy', type: 'error', source: 'codex',
-    data: {
-      message: error, reason: 'turn-failed', isTerminal: true,
-      ...(surface === 'live-http' ? { errorStatus: 400 } : {}),
-    },
-  } as Parameters<typeof handleStreamEvent>[1]) : null;
-  render(<I18nextProvider i18n={i18n}>{live
-    ? <ErrorBanner error={live.error!} errorReason={live.errorReason} agentKind="codex" onRetry={vi.fn()} onDiagnose={diagnose} />
-    : surface === 'tail'
-      ? <ErrorTailErrorBanner errorText={error} errorReason="turn-failed" agentKind="codex" onContinue={vi.fn()} onDismiss={vi.fn()} />
-      : <ErrorMessageCard message={error} reason="turn-failed" />}</I18nextProvider>);
-
-  expect(screen.getByText('The model service stopped this reply under its safety rules. Check whether any progress was saved.')).toBeTruthy();
-  expect(screen.queryByText(/plugin blocked/)).toBeNull();
-  fireEvent.click(screen.getByRole('button', { name: en.chat.errorBanner.networkShowRaw }));
-  const details = screen.getByText(/"sequence_number":502/).textContent;
-  expect(details).toContain('safety_violation');
-  expect(details).toContain('plugin blocked');
-  expect(details).toContain('[REDACTED]');
-  expect(details).not.toContain('fixture-private-value');
-  if (live) {
-    fireEvent.click(screen.getByRole('button', { name: en.chat.errorBanner.diagnose }));
-    expect(diagnose).toHaveBeenCalledWith(expect.objectContaining({
-      details: expect.stringContaining('[REDACTED]'),
-      reason: 'turn-failed',
-    }));
-    expect(diagnose.mock.calls[0][0].details).not.toContain('fixture-private-value');
-  }
-});
-
-it.each(['live', 'tail'] as const)('keeps a terminal HTTP 502 on the network path in %s', async surface => {
-  const i18n = createInstance();
-  await i18n.init({ lng: 'en', resources: { en: { translation: en } } });
-  const error = 'Unexpected status HTTP 502 Bad Gateway. api_key=fixture-private-value fixture-end.';
-  render(<I18nextProvider i18n={i18n}>{surface === 'live'
-    ? <ErrorBanner error={error} agentKind="codex" retryText="original input" onRetry={vi.fn()} />
-    : <ErrorTailErrorBanner errorText={error} agentKind="codex" onContinue={vi.fn()} onDismiss={vi.fn()} />}
-  </I18nextProvider>);
-  expect(screen.getByText(en.chat.errorBanner.networkUnreachable)).toBeTruthy();
-  fireEvent.click(screen.getByRole('button', { name: en.chat.errorBanner.networkShowRaw }));
-  const details = screen.getByText(/HTTP 502 Bad Gateway/).textContent;
-  expect(details).toContain('[REDACTED]');
-  expect(details).not.toContain('fixture-private-value');
-});
-
-// #8100 P2 (unit): the existing 502 cases exercise network copy. In ErrorBanner's
-// SSH/OpenAI context, sequence_number: 401 also used to select Sync auth and hide
-// Retry. Compare it with a genuine HTTP 401 and verify that both retain diagnostics.
-it.each([
-  {
-    kind: 'output block',
-    error: JSON.stringify({ error: {
-      type: 'invalid_request_error', code: 'safety_violation',
-      message: 'Synthetic plugin blocked the output stream. api_key=fixture-private-value fixture-end.',
-    }, sequence_number: 401 }),
-    summary: en.chat.errorBanner.upstreamOutputBlocked,
-    raw: /"sequence_number":401/,
-    showSync: false,
+// 测试价值：依据供应商安全拦截应准确解释、保留其决定且不提供重试/换号绕过的要求；此前 live/tail/history 三处错误面会把安全拦截落回
+// 通用「回复未完成」或被载荷里的状态码误导成鉴权/网络恢复，并暴露原样重发按钮；生产入口 ErrorBanner / ErrorTailErrorBanner / ErrorMessageCard；
+// 最小失败输入为带 sequence_number:401 与 safety_violation 的上游拦截负载；tier: unit。
+it.each(['live', 'tail', 'history'] as const)(
+  'explains provider safety refusal on %s without offering Retry or auth/computer bypass',
+  async (surface) => {
+    const i18n = createInstance();
+    await i18n.init({ lng: 'zh-CN', resources: { 'zh-CN': { translation: zhCN } } });
+    const rawSafetyError = JSON.stringify({
+      type: 'error',
+      sequence_number: 401,
+      error: {
+        type: 'invalid_request_error',
+        code: 'safety_violation',
+        message: 'Output blocked by upstream safety policy; api_key=sk-secret-value-12345',
+      },
+    });
+    const retry = vi.fn();
+    const chooseComputer = vi.fn();
+    render(
+      <I18nextProvider i18n={i18n}>
+        {surface === 'live' ? (
+          <ErrorBanner
+            error={rawSafetyError}
+            errorReason="provider-safety-refusal"
+            agentKind="codex"
+            agentDeviceId="share:peer"
+            retryText="blocked-prompt"
+            onRetry={retry}
+            onChooseComputer={chooseComputer}
+            modelGroupSwitch={{ label: '换到其他模型继续', onSwitch: async () => true }}
+          />
+        ) : surface === 'tail' ? (
+          <ErrorTailErrorBanner
+            errorText={rawSafetyError}
+            errorReason="provider-safety-refusal"
+            agentKind="codex"
+            agentDeviceId="share:peer"
+            onContinue={retry}
+            onDismiss={vi.fn()}
+            onChooseComputer={chooseComputer}
+          />
+        ) : (
+          <ErrorMessageCard message={rawSafetyError} reason="provider-safety-refusal" />
+        )}
+      </I18nextProvider>,
+    );
+    expect(screen.getByText(zhCN.chat.errorBanner.providerSafetyRefusal)).toBeTruthy();
+    expect(screen.getByText(/Output blocked by upstream safety policy/)).toBeTruthy();
+    expect(screen.queryByText(/sk-secret-value-12345/)).toBeNull();
+    expect(screen.queryByTitle(zhCN.chat.errorBanner.retryTitle)).toBeNull();
+    expect(screen.queryByText('换到其他模型继续')).toBeNull();
+    expect(screen.queryByText(zhCN.sharedTaskRecovery.choose)).toBeNull();
+    fireEvent.click(screen.getByText(zhCN.chat.errorBanner.networkShowRaw));
+    expect(screen.getByText(/safety_violation/)).toBeTruthy();
   },
-  {
-    kind: 'credential failure',
-    error: 'Unexpected status HTTP 401 Unauthorized: Missing bearer. api_key=fixture-private-value fixture-end.',
-    summary: en.chat.errorBanner.codexAuthMissing,
-    raw: /HTTP 401 Unauthorized/,
-    showSync: true,
+);
+
+it.each(['live', 'tail', 'history'] as const)(
+  'explains the Claude cybersecurity refusal log example on %s (including legacy rows without safety reason) and keeps #12371 plugin wording collapsed',
+  async (surface) => {
+    const i18n = createInstance();
+    await i18n.init({ lng: 'zh-CN', resources: { 'zh-CN': { translation: zhCN } } });
+    const cyberRefusal = 'This request was flagged for possible cybersecurity risk.';
+    const retry = vi.fn();
+    render(
+      <I18nextProvider i18n={i18n}>
+        {surface === 'live' ? (
+          <ErrorBanner
+            error={cyberRefusal}
+            errorReason="provider-safety-refusal"
+            agentKind="cc"
+            retryText="blocked-prompt"
+            onRetry={retry}
+            modelGroupSwitch={{ label: '换到其他模型继续', onSwitch: async () => true }}
+          />
+        ) : surface === 'tail' ? (
+          <ErrorTailErrorBanner
+            errorText={cyberRefusal}
+            errorReason="turn-failed"
+            agentKind="cc"
+            onContinue={retry}
+            onDismiss={vi.fn()}
+          />
+        ) : (
+          <ErrorMessageCard message={cyberRefusal} reason="turn-failed" />
+        )}
+      </I18nextProvider>,
+    );
+    expect(screen.getByText(zhCN.chat.errorBanner.providerSafetyRefusal)).toBeTruthy();
+    expect(screen.queryByTitle(zhCN.chat.errorBanner.retryTitle)).toBeNull();
+    expect(screen.queryByText('换到其他模型继续')).toBeNull();
+    expect(screen.queryByText(cyberRefusal)).toBeNull();
+    fireEvent.click(screen.getByText(zhCN.chat.errorBanner.networkShowRaw));
+    expect(screen.getByText(cyberRefusal)).toBeTruthy();
+
+    cleanup();
+    const codexOutputBlock = JSON.stringify({
+      error: {
+        type: 'invalid_request_error',
+        code: 'safety_violation',
+        message: 'Synthetic plugin blocked the output stream. api_key=sk-secret-value-99999',
+      },
+      sequence_number: 502,
+    });
+    render(
+      <I18nextProvider i18n={i18n}>
+        <ErrorBanner error={codexOutputBlock} errorReason="turn-failed" agentKind="codex" onRetry={retry} />
+      </I18nextProvider>,
+    );
+    expect(screen.getByText(zhCN.chat.errorBanner.providerSafetyRefusal)).toBeTruthy();
+    expect(screen.queryByText(/plugin blocked the output stream/)).toBeNull();
+    fireEvent.click(screen.getByText(zhCN.chat.errorBanner.networkShowRaw));
+    expect(screen.getByText(/plugin blocked the output stream/)).toBeTruthy();
+    expect(screen.queryByText(/sk-secret-value-99999/)).toBeNull();
+
+    cleanup();
+    const localPluginError = `Local plugin hook failed: "${cyberRefusal}"`;
+    render(
+      <I18nextProvider i18n={i18n}>
+        <ErrorBanner error={localPluginError} retryText="retry-ok" onRetry={retry} />
+      </I18nextProvider>,
+    );
+    expect(screen.getByText(zhCN.chat.errorBanner.replyFailed)).toBeTruthy();
+    expect(screen.getByTitle(zhCN.chat.errorBanner.retryTitle)).toBeTruthy();
   },
-])('shows the correct SSH OpenAI recovery actions for $kind', async ({ error, summary, raw, showSync }) => {
-  const i18n = createInstance();
-  await i18n.init({ lng: 'en', resources: { en: { translation: en } } });
-  render(<I18nextProvider i18n={i18n}>
-    <ErrorBanner error={error} agentKind="codex" remoteHostId="fixture-ssh"
-      errorSourceProviderId="openai" retryText="original input" onRetry={vi.fn()} />
-  </I18nextProvider>);
-
-  expect(screen.getByText(summary)).toBeTruthy();
-  expect(Boolean(screen.queryByRole('button', { name: en.chat.errorBanner.syncAuth }))).toBe(showSync);
-  expect(Boolean(screen.queryByRole('button', { name: en.chat.errorBanner.retry }))).toBe(!showSync);
-  expect(screen.queryByText(raw)).toBeNull();
-  fireEvent.click(screen.getByRole('button', { name: en.chat.errorBanner.networkShowRaw }));
-  const details = screen.getByText(raw).textContent;
-  expect(details).toContain('[REDACTED]');
-  expect(details).not.toContain('fixture-private-value');
-});
-
-// #8100 P2: an inline explanation can be suppressed by the display policy
-// while the live event still carries meaningful diagnostics.
-it.each([
-  { message: 'Synthetic invalid argument.', explanation: true },
-  { message: 'Synthetic transport failure.\n    at request (fixture.js:1:1)', explanation: false },
-])('keeps structured diagnostics on first arrival (%#)', async ({ message, explanation }) => {
-  const i18n = createInstance();
-  await i18n.init({ lng: 'en', resources: { en: { translation: en } } });
-  const error = JSON.stringify({ error: { code: 'invalid_argument', message } });
-  const state = handleStreamEvent({ ...EMPTY_SESSION_STATE, isStreaming: true }, {
-    sessionId: 'structured-error-copy', type: 'error', source: 'codex',
-    data: { message: error, reason: 'turn-failed', errorStatus: 400, isTerminal: true },
-  } as Parameters<typeof handleStreamEvent>[1]);
-  expect(state.error).toBe(`${error} (HTTP 400)`);
-  render(<I18nextProvider i18n={i18n}>
-    <ErrorBanner error={state.error!} errorReason={state.errorReason} agentKind="codex" onRetry={vi.fn()} />
-  </I18nextProvider>);
-  expect(Boolean(screen.queryByText(message.split('\n')[0]))).toBe(explanation);
-  fireEvent.click(screen.getByRole('button', { name: en.chat.errorBanner.networkShowRaw }));
-  expect(screen.getByText(/"code":"invalid_argument"/).textContent).toContain(message.split('\n')[0]);
-});
-
-it.each([
-  'Synthetic local plugin startup failed: safety_violation label in plugin metadata.',
-  JSON.stringify({ error: {
-    type: 'invalid_request_error', code: 'invalid_argument', message: 'Synthetic plugin blocked the output stream.',
-  } }),
-  JSON.stringify({ error: {
-    type: 'invalid_request_error', code: 'safety_violation', message: 'Synthetic input rejected.',
-  } }),
-])('keeps other failures on the existing error path (%#)', async error => {
-  const i18n = createInstance();
-  await i18n.init({ lng: 'en', resources: { en: { translation: en } } });
-  render(<I18nextProvider i18n={i18n}><ErrorBanner error={error} agentKind="codex" onRetry={vi.fn()} /></I18nextProvider>);
-  expect(screen.getByText(en.chat.errorBanner.replyFailed)).toBeTruthy();
-});
+);

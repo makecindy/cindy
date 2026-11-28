@@ -133,7 +133,7 @@ export function LearnReviewPanel({ open, onClose, run, contextSessionId }: Learn
           {/* 提示条:敏感内容 warning(redaction 第二层防线)+ 覆盖已装版本提示。
               蒸馏说明与迭代都在会话本身 —— 面板只做 diff 核对 + 落盘闸门。 */}
           {run.redactionWarnings && run.redactionWarnings.length > 0 && (
-            <div className="mx-3 mt-3 flex items-start gap-2 rounded-md bg-[var(--warning-bg-soft)] px-3 py-2">
+            <div className="mx-3 mt-3 flex items-start gap-2 rounded-lg bg-[var(--warning-bg-soft)] px-3 py-2">
               <ShieldAlert size={14} className="mt-0.5 shrink-0 text-muted-foreground" />
               <p className="text-xs text-muted-foreground">
                 {t('learn.review.redactionWarning', {
@@ -143,7 +143,7 @@ export function LearnReviewPanel({ open, onClose, run, contextSessionId }: Learn
             </div>
           )}
           {state.kind === 'ready' && state.targetExists && (
-            <div className="mx-3 mt-3 flex items-start gap-2 rounded-md bg-[var(--warning-bg-soft)] px-3 py-2">
+            <div className="mx-3 mt-3 flex items-start gap-2 rounded-lg bg-[var(--warning-bg-soft)] px-3 py-2">
               <Replace size={14} className="mt-0.5 shrink-0 text-muted-foreground" />
               <p className="text-xs text-muted-foreground">{t('learn.review.overwriteWarning')}</p>
             </div>

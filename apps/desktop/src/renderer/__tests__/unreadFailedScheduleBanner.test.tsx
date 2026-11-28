@@ -104,6 +104,16 @@ describe('historical failed schedule notice', () => {
     expect(screen.getByText('chat.unreadFailedScheduleBanner.rateLimited')).toBeTruthy();
     expect(screen.queryByTestId('unread-failed-schedule-banner')).not.toBeNull();
   });
+  // #10609: legacy error prefixes also classify as precheck, but only a
+  // structured block confirms that this run never reached execution.
+  it.each([
+    [true, 'preRunBlocked'],
+    [undefined, 'precheck'],
+  ] as const)('uses the confirmed stage only with a structured block (%s)', (preRunBlocked, key) => {
+    render(<UnreadFailedScheduleBanner dataOwnerId="owner" sessionId="session"
+      latestFailedRun={{ runId: 'failed', firedAt: 1, failureKind: 'precheck', preRunBlocked }} />);
+    expect(screen.getByText(`chat.unreadFailedScheduleBanner.${key}`)).toBeTruthy();
+  });
   // Uninstalling a plugin removed its check script; the banner must say which plugin and
   // let the user install it (previously only "checks blocked" plus an exit code). Since
   // 2026-11-17 that happens right here, without opening the plugin page.

@@ -1,3 +1,4 @@
+import { acceptSharedTurnValue } from '../sharedTurnValue.js';
 import { lookupShareAvailability, allocateShareAvailability, reportShareAvailabilityStatus } from '../../device-link/providerShareAvailability.js';
 /**
  * 远程 Agent 的控制端接线：Maker 遇到「Agent 在另一台电脑上运行」的任务时调用这里。
@@ -30,7 +31,9 @@ import type {
 import {
   LOCAL_AGENT_CLIENT,
   AgentStartupStoppedError,
+  AgentStartupResourcesReleasedError,
   isolatedBotProfile,
+  readProjectCoreMemoryIndex,
   resolveAllowedManagedSkills,
   resolveMemoryScopeKey,
   snapshotManagedSkillGrants,
@@ -38,9 +41,12 @@ import {
 import { isProviderSharePeer, parseProviderSharePeer, providerShareHostPeer } from '@cindy/device-link';
 import { createLogger } from '../../logger.js';
 import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../../appSessionState.js';
+import { getClientEndpoint } from '../../clientEndpointsService.js';
+import { canSwitchSharedHistoryOnRestoreFailure } from '../../../shared/sharedTaskRecovery.js';
 import { findReceivedShare, findReceivedShareForExecution, parseProviderShareAgentDeviceId, providerShareAccessEpoch,
   onProviderShareReceivedChanged } from '../../device-link/providerShareGuest.js';
-import { getRemoteLinkCloseEpoch, onRemoteLinkClosed } from '../../device-link/index.js';
+import { hasLinkedProviderShareGuest, noteLinkedProviderShareExecutor } from '../../device-link/agentNetLinkedShares.js';
+import { getRemoteLinkCloseEpoch, isPeerDeliveringBusinessTraffic, onRemoteLinkClosed } from '../../device-link/index.js';
 import { isTemporaryProviderMetadataFailure } from '../../device-link/providerMetadataContinuity.js';
 import { credentialGrantFor } from '../executor/credentialGrants';
 import type { ExecutorCaptureHooks } from '../executor/executor';
@@ -91,8 +97,8 @@ export interface DeviceAgentServiceDeps {
   managedSkills?: AgentDeps['getManagedSkills'];
   /** 本机停用的 Skill(与本机任务同一份偏好)。 */
   disabledSkillPaths?(): readonly string[];
-  captureKnownFileBefore(input: { sessionId: string; provider: 'claude-code' | 'pi'; cwd: string; targetPath: string }): Promise<void>;
-  noteOpaqueTurnChange(input: { sessionId: string; provider: 'claude-code' | 'pi'; cwd: string }): void;
+  captureKnownFileBefore(input: { sessionId: string; provider: 'claude-code' | 'pi' | 'acp'; cwd: string; targetPath: string }): Promise<void>;
+  noteOpaqueTurnChange(input: { sessionId: string; provider: 'claude-code' | 'pi' | 'acp'; cwd: string }): void;
   /** 改写来自对方的事件(如 Claude Code 的 Cindy 工具名换回自带工具名)。 */
   mapEvent?: (kind: AgentKind) => ((event: AgentEvent) => AgentEvent) | undefined;
   /** Read 读 PDF 时取文字。 */
@@ -118,6 +124,8 @@ export interface DeviceAgentServiceDeps {
   webFetch?: GuardedFetch;
   /** 受邀者任务里凭证类操作确认卡上的说明(按界面语言)。 */
   sharedProviderCredentialNotice?(): string;
+  /** 远程执行器访问本机工作树前等待后台 worktree 完整检出就绪。 */
+  ensureWorktreeReady?(sessionId: string, signal?: AbortSignal): Promise<void>;
   logger: Logger;
 }
 
@@ -217,7 +225,12 @@ export function remoteAgentPollerFor(
   }
   let poller = byDevice.get(deviceId);
   if (!poller) {
-    poller = new RemoteAgentPoller(remoteAgentInvoker(deviceId, remoteInvoke), log);
+    poller = new RemoteAgentPoller(
+      remoteAgentInvoker(deviceId, remoteInvoke),
+      log,
+      Date.now,
+      () => isPeerDeliveringBusinessTraffic(deviceId),
+    );
     byDevice.set(deviceId, poller);
   }
   return poller;
@@ -261,9 +274,12 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
     attempt: ReturnType<typeof registerPendingRemoteStart>, recoverLostHistoryGrant = true,
     reissuedHistory = false): Promise<AgentSessionHandle> => {
     const initialShareId = parseProviderShareAgentDeviceId(input.deviceId);
+    const pluginEngine = input.agentKind === 'acp';
     // 下面的分享组分配、直连与备用记录只认内置引擎；插件引擎走分享者本机直连，这里给内置分支一个兜底种类。
     const agentKind: AgentKind = input.agentKind === 'acp' ? 'pi' : input.agentKind;
     const ownerScope = activeOwnerScopeKey();
+    const initialEndpoint = getClientEndpoint('deviceLinkApiBaseUrl');
+    const initialRouteCloseEpoch = getRemoteLinkCloseEpoch(input.deviceId);
     const initialOwner = initialShareId ? findReceivedShareForExecution(initialShareId) : null;
     const initialOwnerPeer = initialShareId && initialOwner?.hostDeviceId
       ? providerShareHostPeer(initialShareId, initialOwner.hostDeviceId) : undefined;
@@ -292,9 +308,14 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
         try {
           const manager = deps.makerMemory();
           opts.makerMemoryProjectDir = manager?.getProjectMemoryDirectory(scopeKey);
-          const store = opts.makerMemoryProjectDir ? undefined : await manager?.getStore(scopeKey);
-          requireCurrent();
-          opts.makerMemoryIndexSnapshot = await store?.getIndex() ?? '';
+          if (opts.makerMemoryProjectDir) {
+            opts.makerMemoryIndexSnapshot = await readProjectCoreMemoryIndex(opts.makerMemoryProjectDir);
+            requireCurrent();
+          } else {
+            const store = await manager?.getStore(scopeKey);
+            requireCurrent();
+            opts.makerMemoryIndexSnapshot = await store?.getIndex() ?? '';
+          }
         } catch (error) {
           requireCurrent();
           log.warn('remote agent: memory index unavailable; starting without it', { error: String(error) });
@@ -317,9 +338,14 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
     }
     requireCurrent();
     const sessionId = opts.sessionId;
-    const groupSwitch = sessionId && deps.groupSwitch ? deps.groupSwitch : null;
+    // 插件引擎不参与供应商组分配与组内换机：即使任务此前归属过供应商组且残留绑定或换机凭证，
+    // 打开插件引擎时也不携带 groupAssigned / groupSwitch，避免被远端宿主按协议拒绝。
+    const groupSwitch = !pluginEngine && sessionId && deps.groupSwitch ? deps.groupSwitch : null;
     const switchToken = groupSwitch && sessionId && !opts.resumeSessionId ? groupSwitch.takeForOpen(sessionId) : undefined;
-    if (switchToken && sessionId) directTasks.delete(`${parseProviderShareAgentDeviceId(input.deviceId) ?? ''}:${sessionId}`);
+    if (switchToken && sessionId) {
+      directTasks.delete(`${parseProviderShareAgentDeviceId(input.deviceId) ?? ''}:${sessionId}`);
+      forgetSharedTaskAuthorization(input.deviceId, sessionId);
+    }
     // 受邀者任务(分享来的供应商)：可直连组内执行电脑；不可达时由分享者的电脑中转。
     //  - Agent 自带的 WebFetch 在分享者电脑上已关闭，改由本机抓取；
     //  - 凭证类文件不随启动同步，任务中读写凭证类文件、执行读取凭证的命令不论权限档都要本机确认。
@@ -366,6 +392,68 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
     };
     const standbyPlacement = input.agentKind !== 'acp' && shareId && sessionId ? await readAgentNetStandbyPlacement(shareId, sessionId) : undefined;
     const handoffPlacement = switchToken ? standbyPlacement : undefined;
+    const registerHistoricalRestoreSwitchRecovery = (error: unknown): void => {
+      if (!opts.resumeSessionId || standbyPlacement || !shareId || !sessionId || !groupSwitch
+        || initialAccessEpoch === undefined || attempt.signal.aborted
+        || !canSwitchSharedHistoryOnRestoreFailure(error)) return;
+      try { requireCurrent(); } catch { return; }
+      const initialShare = findReceivedShare(shareId);
+      if (initialShare?.status !== 'active'
+        || providerShareAccessEpoch(shareId) !== initialAccessEpoch
+        || getClientEndpoint('deviceLinkApiBaseUrl') !== initialEndpoint
+        || getRemoteLinkCloseEpoch(input.deviceId) !== initialRouteCloseEpoch
+        || (initialOwnerPeer && initialOwnerCloseEpoch !== undefined
+          && getRemoteLinkCloseEpoch(initialOwnerPeer) !== initialOwnerCloseEpoch)) return;
+      const shareIdentity = JSON.stringify([initialShare.memberId, initialShare.hostDeviceId, initialShare.providerId]);
+      const recoveryIdentity = {};
+      const pending = registerPendingRemoteStart(sessionId);
+      let active = true;
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const dispose = () => {
+        if (!active) return;
+        active = false;
+        if (timer) clearTimeout(timer);
+        pending.signal.removeEventListener('abort', dispose);
+        pending.dispose();
+        if (liveDirectGuestSessions.get(sessionId)?.identity === recoveryIdentity) {
+          liveDirectGuestSessions.delete(sessionId);
+        }
+      };
+      const isCurrent = () => {
+        const nowShare = findReceivedShare(shareId);
+        if (active && !pending.signal.aborted && !isAppSessionBoundaryPending()
+          && activeOwnerScopeKey() === ownerScope
+          && getClientEndpoint('deviceLinkApiBaseUrl') === initialEndpoint
+          && nowShare?.status === 'active'
+          && JSON.stringify([nowShare.memberId, nowShare.hostDeviceId, nowShare.providerId]) === shareIdentity
+          && providerShareAccessEpoch(shareId) === initialAccessEpoch
+          && getRemoteLinkCloseEpoch(input.deviceId) === initialRouteCloseEpoch
+          && (!initialOwnerPeer || initialOwnerCloseEpoch === undefined
+            || getRemoteLinkCloseEpoch(initialOwnerPeer) === initialOwnerCloseEpoch)) {
+          return true;
+        }
+        dispose();
+        return false;
+      };
+      const recovery: DirectGuestRecovery = {
+        ownerRoute: input.deviceId, isCurrent, dispose,
+        async requestSwitch() {
+          if (!isCurrent()) return undefined;
+          const result = await remoteAgentInvoker(input.deviceId, deps.remoteInvoke)([{
+            op: 'direct-switch', sessionId,
+          }]);
+          if (!isCurrent()) return undefined;
+          const reply = result && typeof result === 'object'
+            ? result as { token?: unknown } : null;
+          return typeof reply?.token === 'string' ? reply.token : undefined;
+        },
+      };
+      liveDirectGuestSessions.set(sessionId, { identity: recoveryIdentity,
+        ...recovery, captureRecovery: () => isCurrent() ? recovery : null, failedStartCleanup: dispose });
+      pending.signal.addEventListener('abort', dispose, { once: true });
+      timer = setTimeout(dispose, 30_000);
+      (timer as { unref?: () => void }).unref?.();
+    };
     requireCurrent();
     if (input.agentKind === 'acp' && shareId) {
       if (initialOwnerPeer && (initialOwner?.hostDeviceOnline ?? initialOwner?.hostOnline)) {
@@ -384,8 +472,14 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
       const allocationStartedAt = Date.now();
       const allocationStartedMonotonic = performance.now();
       requireCurrent();
-      const history = await authorizeSharedTaskHistory(input.deviceId, sessionId, agentKind, opts.model,
-        attempt.signal, standbyPlacement ?? null);
+      let history: Awaited<ReturnType<typeof authorizeSharedTaskHistory>>;
+      try {
+        history = await authorizeSharedTaskHistory(input.deviceId, sessionId, agentKind, opts.model,
+          attempt.signal, standbyPlacement ?? null);
+      } catch (error) {
+        registerHistoricalRestoreSwitchRecovery(error);
+        throw error;
+      }
       if (attempt.signal.aborted) void releaseFailedDirectAllocation(history.generation);
       requireCurrent();
       const authorization = reissuedHistory ? { ...history, reused: false } : history;
@@ -556,10 +650,11 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
             ? await allocateShareAvailability(shareId, sessionId, agentKind, opts.model)
             : await remoteAgentInvoker(input.deviceId, deps.remoteInvoke)([{
               op: 'allocate', agentKind: agentKind, model: opts.model, sessionId, prepareStandby: true,
+              ...(hasLinkedProviderShareGuest(shareId) ? { linkedShareExecutor: true as const } : {}),
             }]);
           let row = allocation && typeof allocation === 'object'
             ? allocation as { deviceId?: unknown; generation?: unknown; directStatusBatch?: unknown; standby?: unknown;
-              standbyRetry?: unknown; canPrepareStandby?: unknown } : null;
+              standbyRetry?: unknown; canPrepareStandby?: unknown; linkedShareExecutor?: unknown } : null;
           if (attempt.signal.aborted) {
             const generation = typeof row?.generation === 'string' && DIRECT_GRANT_ID.test(row.generation) ? row.generation : undefined;
             void releaseFailedDirectAllocation(generation);
@@ -592,13 +687,17 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
               const sourceSessionId = randomUUID(), mono = performance.now(), wall = Date.now();
               const value = await remoteAgentInvoker(input.deviceId, deps.remoteInvoke)([{
                 op: 'standby-prepare', agentKind: agentKind, model: opts.model, sessionId: sourceSessionId, excludeExecutorDeviceId,
+                ...(hasLinkedProviderShareGuest(shareId) ? { linkedShareExecutor: true as const } : {}),
               }], { beforeDispatch: current });
               current();
-              const prepared = value as { deviceId?: unknown; standby?: unknown } | null;
+              const prepared = value as { deviceId?: unknown; standby?: unknown; linkedShareExecutor?: unknown } | null;
               if (prepared?.standby !== true || typeof prepared.deviceId !== 'string'
                 || prepared.deviceId === owner.hostDeviceId || prepared.deviceId === excludeExecutorDeviceId) return;
               const leaseDeadline = sharedTaskLeaseDeadline(value, mono) ?? mono;
               if (leaseDeadline <= performance.now()) return;
+              if (prepared.linkedShareExecutor === true) {
+                noteLinkedProviderShareExecutor(shareId, prepared.deviceId, wall + leaseDeadline - mono);
+              }
               const executor = providerShareHostPeer(shareId, prepared.deviceId);
               standbyPreparationAt.set(key, Math.max(performance.now() + 60_000, leaseDeadline - 5 * 60_000));
               rememberStandbySource({ scope: ownerScope, shareId, memberId: owner.memberId, ownerDeviceId: owner.hostDeviceId,
@@ -617,6 +716,10 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
               if (typeof row.deviceId !== 'string') throw new Error('[REMOTE_AGENT_INVALID] invalid shared executor');
               proposed = providerShareHostPeer(shareId, row.deviceId);
               leaseDeadline = sharedTaskLeaseDeadline(allocation, allocationStartedMonotonic) ?? allocationStartedMonotonic + 30 * 60_000;
+              if (row.linkedShareExecutor === true) {
+                noteLinkedProviderShareExecutor(shareId, row.deviceId,
+                  allocationStartedAt + Math.max(0, leaseDeadline - allocationStartedMonotonic));
+              }
               // A fresh task grant does not refresh G's cached transport state.
               // Confirm only this executor, using the share's existing relay.
               await deps.renewSharedProviderLink?.(proposed);
@@ -714,6 +817,7 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
     const webFetch = deps.webFetch && shared ? deps.webFetch : undefined;
     const collect = { skipCredentials: shared };
     let cancelPreparedHandle: (() => void) | undefined;
+    let preparedCleanup: Promise<void> | undefined;
     let restartedHistory = false;
     // The executor can stall before confirming startup. Feed changes into the
     // existing attempt cancellation so close/release/local cleanup do not wait for it.
@@ -736,13 +840,15 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
       readImageDeliveryEpoch: deps.readImageDeliveryEpoch,
       attachmentPreservation: deps.attachmentPreservation,
       attachmentStorageRoots: deps.attachmentStorageRoots,
+      ...(deps.ensureWorktreeReady ? { ensureWorktreeReady: deps.ensureWorktreeReady } : {}),
       invoke: poller.invoke,
       poller,
       pool: poolFor(target),
       rgPath: deps.rgPath(),
       codexPath: () => deps.codexPath?.(),
       ...(target !== input.deviceId
-        || (!handoffPlacement && (opts[LOCAL_AGENT_CLIENT]?.groupAssigned || (sessionId && deps.isGroupAssigned?.(sessionId))))
+        || (!handoffPlacement && (opts[LOCAL_AGENT_CLIENT]?.groupAssigned
+          || (!pluginEngine && sessionId && deps.isGroupAssigned?.(sessionId))))
         ? { groupAssigned: true } : {}),
       ...(groupSwitch && sessionId
         ? {
@@ -783,16 +889,18 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
           vendorOptions,
           mcpCallerKind: 'root',
           mcpCallerAttested: true,
+          ...(input.agentKind === 'acp' ? { recordMcpToolResults: true } : {}),
         });
         return {
           servers: mcpTargets(extra),
           dispose: () => extra?.disposeSessionCtx?.(),
           closeSessionInstance: () => extra?.closeSessionInstance?.(),
+          ...(extra?.takeMcpToolResult ? { takeMcpToolResult: extra.takeMcpToolResult } : {}),
         };
       },
       capture: ({ kind, opts: startOpts }): ExecutorCaptureHooks | undefined => {
         if (startOpts[LOCAL_AGENT_CLIENT]) return undefined;
-        // Codex 自己报告每轮改动；Claude Code 与 Pi 的写入由执行器在写之前抓取。
+        // Codex 自己报告每轮改动；Claude Code、Pi 与插件引擎(acp)的写入由执行器在写之前抓取。
         if (kind === 'codex' || !startOpts.sessionId) return undefined;
         const sessionId = startOpts.sessionId;
         const provider = kind;
@@ -835,7 +943,16 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
       collectImports: (imports) => collectInstructionImports(imports, collect),
       isGitRepo,
       ...(deps.extractPdfText ? { extractPdfText: deps.extractPdfText } : {}),
-      mapEvent: deps.mapEvent ?? remoteAgentEventMapper,
+      mapEvent: kind => {
+        const map = (deps.mapEvent ?? remoteAgentEventMapper)(kind);
+        if (kind !== 'codex' || !sessionId || !initialShareId || initialAccessEpoch === undefined) return map;
+        return event => {
+          const mapped = map?.(event) ?? event;
+          return mapped.type === 'done' && activeOwnerScopeKey() === ownerScope && !isAppSessionBoundaryPending()
+            && providerShareAccessEpoch(initialShareId) === initialAccessEpoch
+            ? acceptSharedTurnValue(mapped, sessionId, input.deviceId) : mapped;
+        };
+      },
       newId: randomUUID,
       log: {
         debug: (message, fields) => startupLog.debug(message, fields),
@@ -846,12 +963,13 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
       offStartupPermission?.();
       offStartupLink?.();
       offStandbyOwner?.();
-    }).then(handle => {
+    }).then(async handle => {
       // Keep cancellation attached until the service finishes its optional early renewal.
-      cancelPreparedHandle = () => { void handle.close({ reason: 'account-boundary' }).catch(() => undefined); };
+      const closePrepared = () => preparedCleanup ??= handle.close({ reason: 'account-boundary' });
+      cancelPreparedHandle = () => { void closePrepared().catch(() => undefined); };
       attempt.signal.addEventListener('abort', cancelPreparedHandle, { once: true });
       if (startupAbort.signal.aborted) {
-        cancelPreparedHandle();
+        await closePrepared();
         throw startupAbort.signal.reason;
       }
       return handle;
@@ -869,9 +987,17 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
             clearDirectIdentity();
             // M restarted and lost its memory-only grant. Reissue only for the
             // original M through O; never send native history to another peer.
-            const reauthorized = await authorizeSharedTaskExecutor(input.deviceId, sessionId,
-              agentKind, opts.model, original.deviceId, false, attempt.signal,
-              openingDirectRoute?.reused ? { ...openingDirectRoute, direct: true } : undefined);
+            let reauthorized: Awaited<ReturnType<typeof authorizeSharedTaskExecutor>>;
+            try {
+              reauthorized = await authorizeSharedTaskExecutor(input.deviceId, sessionId,
+                agentKind, opts.model, original.deviceId, false, attempt.signal,
+                openingDirectRoute?.reused ? { ...openingDirectRoute, direct: true } : undefined);
+            } catch (reauthError) {
+              const taskKey = `${shareId}:${sessionId}`;
+              if (directTasks.get(taskKey) === openingDirectRoute) directTasks.delete(taskKey);
+              registerHistoricalRestoreSwitchRecovery(reauthError);
+              throw reauthError;
+            }
             if (!reauthorized.direct || reauthorized.target !== target) throw error;
             requireCurrent();
             restartedHistory = true;
@@ -971,7 +1097,7 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
         directTasks.delete(shareId + ':' + sessionId);
         void releaseFailedDirectAllocation(openingDirectGeneration);
       }
-      void handle.close({ reason: 'account-boundary' }).catch(() => undefined);
+      await (preparedCleanup ?? handle.close({ reason: 'account-boundary' }));
       throw attempt.signal.reason;
     }
     // The recursive attempt already owns its lease and lifecycle. Wrapping it
@@ -1049,9 +1175,10 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
           : await remoteAgentInvoker(input.deviceId, deps.remoteInvoke)([{
             op: 'allocate', agentKind: agentKind, model, sessionId,
             preferredExecutorDeviceId: targetDeviceId,
+            ...(hasLinkedProviderShareGuest(shareId) ? { linkedShareExecutor: true as const } : {}),
           }]);
         const row = value && typeof value === 'object'
-          ? value as { deviceId?: unknown; generation?: unknown; standby?: unknown; directStatusBatch?: unknown } : null;
+          ? value as { deviceId?: unknown; generation?: unknown; standby?: unknown; directStatusBatch?: unknown; linkedShareExecutor?: unknown } : null;
         if (row?.deviceId !== targetDeviceId) {
           directTasks.delete(taskKey);
           throw new Error('[REMOTE_AGENT_UNAVAILABLE] current shared executor cannot accept this model');
@@ -1063,6 +1190,11 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
         };
         if (stopped || !isCurrent() || performance.now() >= leaseDeadline
           || providerShareAccessEpoch(shareId) !== allocationAccessEpoch) return releaseStoppedGrant();
+        const nextLeaseDeadline = sharedTaskLeaseDeadline(value, allocationStartedMonotonic) ?? allocationStartedMonotonic + 30 * 60_000;
+        if (row.linkedShareExecutor === true) {
+          noteLinkedProviderShareExecutor(shareId, targetDeviceId,
+            allocationStartedAt + Math.max(0, nextLeaseDeadline - allocationStartedMonotonic));
+        }
         try { await deps.renewSharedProviderLink(target); }
         catch (error) {
           if (stopped || !isCurrent() || performance.now() >= leaseDeadline) return releaseStoppedGrant();
@@ -1070,7 +1202,6 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
         }
         if (stopped || !isCurrent() || performance.now() >= leaseDeadline
           || providerShareAccessEpoch(shareId) !== allocationAccessEpoch) return releaseStoppedGrant();
-        const nextLeaseDeadline = sharedTaskLeaseDeadline(value, allocationStartedMonotonic) ?? allocationStartedMonotonic + 30 * 60_000;
         const generation = typeof row.generation === 'string' && DIRECT_GRANT_ID.test(row.generation) ? row.generation : undefined;
         updateStatusGrant(generation, row.directStatusBatch === true);
         directTasks.set(taskKey, { target, agentKind: agentKind, model, availability: selectedDirectRoute?.availability, standby: false,
@@ -1317,6 +1448,12 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
             nextRenewAt = Date.now() + 60_000;
           } else {
             stop();
+            // Renewal can fail with a new "closed" error after cancellation.
+            // Preserve the prepared handle's actual cleanup proof, including failure.
+            if (attempt.signal.aborted && preparedCleanup) {
+              await preparedCleanup;
+              throw new AgentStartupResourcesReleasedError(attempt.signal.reason);
+            }
             await close().catch(() => undefined);
             throw error;
           }
@@ -1343,24 +1480,32 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
       if (cancelPreparedHandle) attempt.signal.removeEventListener('abort', cancelPreparedHandle);
     }
     if (prepareStandby) void prepareStandby().catch(() => undefined);
+    if (preparedCleanup) await preparedCleanup;
     return handle;
   };
   return async (input: StartInput): Promise<AgentSessionHandle> => {
     if (!input.options.sessionId) throw new Error('remote agent sessions require a session id');
     liveDirectGuestSessions.get(input.options.sessionId)?.failedStartCleanup?.();
     const attempt = registerPendingRemoteStart(input.options.sessionId);
-    let ready: AgentSessionHandle | undefined;
+    let startup!: Promise<AgentSessionHandle>;
     let rejectCancelled!: (error: unknown) => void;
     const cancelled = new Promise<never>((_, reject) => { rejectCancelled = reject; });
-    const closeCancelled = () => { void ready?.close({ reason: 'account-boundary' }).catch(() => undefined); };
-    const onCancel = () => { closeCancelled(); rejectCancelled(attempt.signal.reason); };
+    const onCancel = () => { rejectCancelled(attempt.cancellationError(Promise.resolve().then(() => startup))); };
     attempt.signal.addEventListener('abort', onCancel, { once: true });
     try {
-      return await Promise.race([startAttempt(input, false, attempt).then(handle => {
-        ready = handle;
-        if (attempt.signal.aborted) { closeCancelled(); throw attempt.signal.reason; }
+      startup = startAttempt(input, false, attempt).then(async handle => {
+        if (attempt.signal.aborted) {
+          await handle.close({ reason: 'account-boundary' });
+          throw new AgentStartupResourcesReleasedError(attempt.signal.reason);
+        }
         return handle;
-      }), cancelled]);
+      }, error => {
+        // Before the remote starter (or after awaited handle teardown), the
+        // attempt's own abort reason carries no remaining local resources.
+        if (attempt.signal.aborted && error === attempt.signal.reason) throw new AgentStartupResourcesReleasedError(error);
+        throw error;
+      });
+      return await Promise.race([startup, cancelled]);
     } catch (error) {
       // M proved that it never started a process or has stopped it, and
       // startRemote has finished G's local cleanup. Preserve that evidence as

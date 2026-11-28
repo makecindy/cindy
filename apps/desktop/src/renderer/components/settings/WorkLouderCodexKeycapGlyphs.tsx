@@ -555,6 +555,7 @@ export function WorkLouderCodexKeycapGlyph({
     return (
       <span
         aria-hidden="true"
+        // 插画内部的形状，不是控件框（DESIGN.md §5 插画登记）
         className="size-3 rounded-sm border border-[var(--border-default)]"
       />
     );

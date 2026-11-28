@@ -14,6 +14,7 @@ export default {
   cases: {
     default: { about: 'Snapshot-only restore with a later system row and an unrelated historical error' },
     narrow: { about: 'Same restore at 320 px', viewport: { width: 320, height: 640 } },
+    'automatic-reconnect': { about: 'A scheduled continuation shows its own attempt count after the model connection times out', data: { autoResume: true }, viewport: { width: 360, height: 200 } },
     terminal: { about: '#10744: zero assistant output, reconnect timeout, then a restored-location card', data: { terminal: true } },
     'terminal-dismiss': { about: 'Dismissed timeout stays dismissed across later location records', data: { terminal: true, action: 'dismiss' } },
     'terminal-retry': { about: 'Accepted recovery input retires the old timeout banner', data: { terminal: true, action: 'retry' } },
@@ -23,12 +24,18 @@ export default {
     'terminal-pending': { about: 'A queued continuation hides the recovery banner, not the historical failure', data: { terminal: true, mode: 'pending' } },
   },
   async ready(page) {
-    await page.getByTestId('tail-error').or(page.getByTestId('restore')).waitFor();
+    await page.getByTestId('tail-error').or(page.getByTestId('restore')).or(page.getByTestId('auto-resume')).waitFor();
   },
   async check(page, ui) {
+    if (ui.data.autoResume) {
+      const card = page.getByTestId('auto-resume');
+      await card.getByText(await ui.t('chat.systemCard.autoResumePending.continuingWithProgress', { attempt: 1, total: 5 })).waitFor();
+      await card.getByText(await ui.t('logic.errors.codexReconnectStalled')).waitFor();
+      return;
+    }
     if (ui.data.terminal) {
       const banner = page.getByTestId('tail-error');
-      const timeout = await ui.t('logic.errors.upstreamResponseIdleTimeout');
+      const timeout = await ui.t('logic.errors.codexReconnectStalled');
       if (['readonly', 'standalone', 'pending'].includes(ui.data.mode)) {
         const historyError = page.locator('[data-message-client-id="timeout"]');
         await historyError.getByText(timeout, { exact: true }).waitFor();
@@ -40,7 +47,7 @@ export default {
       await banner.getByText(timeout, { exact: true }).waitFor();
       assert.equal(await page.getByText(timeout, { exact: true }).count(), 1, 'the timeout must have one actionable owner');
       assert.equal(await page.locator('[data-message-client-id="location"]').count(), 1);
-      await banner.getByRole('button', { name: await ui.t('chat.errorBanner.retry'), exact: true }).waitFor();
+      await banner.getByRole('button', { name: await ui.t('chat.errorBanner.silentStopContinueTitle'), exact: true }).waitFor();
       await ui.capture('terminal-error');
       if (ui.data.mode === 'live') {
         await page.getByTestId('disconnect').click();
@@ -54,7 +61,7 @@ export default {
         return;
       }
       if (ui.data.action) {
-        const key = ui.data.action === 'dismiss' ? 'chat.errorBanner.cancelTitle' : 'chat.errorBanner.retry';
+        const key = ui.data.action === 'dismiss' ? 'chat.errorBanner.cancelTitle' : 'chat.errorBanner.silentStopContinueTitle';
         await banner.getByRole('button', { name: await ui.t(key), exact: true }).click();
         await banner.getByText(timeout, { exact: true }).waitFor({ state: 'hidden' });
         await page.getByTestId('boundary').click();

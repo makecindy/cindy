@@ -2097,24 +2097,36 @@ describe('Session host event-stream hold', () => {
   });
 
   it('stops waiting after the hold limit and still delivers the provider done', async () => {
+    const holdMs = 1;
     const h = createControllableHandle();
-    const session = makeHoldSession(h.handle, 1);
+    const session = makeHoldSession(h.handle, holdMs);
     const pending = deferred<readonly AgentEvent[]>();
+    const holdAccepted = deferred<boolean>();
     const seen: AgentEvent[] = [];
     session.onEvent((event) => {
       seen.push(event);
-      if (event.type === 'image') session.holdEventStream(pending.promise);
+      if (event.type === 'image') holdAccepted.resolve(session.holdEventStream(pending.promise));
     });
 
-    await session.send('draw it');
-    h.queue(imageEvent);
-    h.queue({ type: 'done', data: {} });
-    await new Promise((resolve) => setTimeout(resolve, 10));
-    pending.resolve(followUps);
-    await flush();
+    vi.useFakeTimers();
+    try {
+      await session.send('draw it');
+      h.queue(imageEvent);
+      h.queue({ type: 'done', data: {} });
+      // Enqueueing the image does not start the hold. Wait for its listener first.
+      expect(await holdAccepted.promise).toBe(true);
+      expect(seen.map((event) => event.type)).toEqual(['image']);
 
-    expect(seen.map((event) => event.type)).toEqual(['image', 'done']);
-    await session.close();
+      await vi.advanceTimersByTimeAsync(holdMs);
+      expect(seen.map((event) => event.type)).toEqual(['image', 'done']);
+
+      pending.resolve(followUps);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(seen.map((event) => event.type)).toEqual(['image', 'done']);
+    } finally {
+      vi.useRealTimers();
+      await session.close();
+    }
   });
 
   it('keeps send admission fenced until the held turn done is consumed', async () => {
@@ -2265,7 +2277,141 @@ describe("Host per-turn settings refresh", () => {
       await h.emit({ type: "done", data: {} } as AgentEvent);
       await session.send("next");
       expect(prepare).toHaveBeenCalledTimes(3);
-      expect(prepare).toHaveBeenLastCalledWith(session);
+      expect(prepare).toHaveBeenLastCalledWith(session, expect.any(AbortSignal));
+    } finally {
+      await session.close();
+    }
+  });
+
+  // Regression: a resumed/fresh Session (turnGeneration 0 -> 1) awaiting onAccepted
+  // must fence unsolicited idle/done/error terminals (including multi-event bursts
+  // across event-loop iterations) instead of promoting waitStartGeneration 0 to 1.
+  // Unit tier: in-memory controllable handle, no real SDK or timers.
+  it("fences unsolicited startup terminals arriving while the first send awaits onAccepted", async () => {
+    const h = createControllableHandle();
+    const session = makeSession(h.handle, "claude-code");
+    const seen: AgentEvent[] = [];
+    const terminals: number[] = [];
+    session.onEvent((event) => seen.push({ ...event }));
+    session.setTurnLifecycleObserver({
+      beforeProviderStart() {},
+      onUndispatched() {},
+      onTerminal({ turnGeneration }) {
+        terminals.push(turnGeneration);
+      },
+    });
+    let releaseAccepted!: () => void;
+    const acceptedGate = new Promise<void>((resolve) => {
+      releaseAccepted = resolve;
+    });
+
+    try {
+      const sending = session.send("scheduled prompt", {
+        origin: SCHED_ORIGIN,
+        onAccepted: () => acceptedGate,
+      });
+      await vi.waitFor(() => expect(session.getTurnGeneration()).toBe(1));
+
+      // Emit session_id + idle status + done while onAccepted is still blocked,
+      // exercising both the initial wait (generation 0) and subsequent loop iterations.
+      await h.emit({ type: "session_id", data: "sdk-resumed-1", source: "claude-code" });
+      await h.emit({ type: "status", data: { status: "Done", isRunning: false }, source: "claude-code" });
+      await h.emit({ type: "done", data: {}, source: "claude-code" });
+
+      expect(seen.some((event) => event.type === "done")).toBe(false);
+      expect(
+        seen.some(
+          (event) =>
+            event.type === "status" &&
+            (event.data as { isRunning?: unknown } | undefined)?.isRunning === false,
+        ),
+      ).toBe(false);
+      const sidEvent = seen.find((event) => event.type === "session_id");
+      expect(sidEvent?.sessionTurnGeneration).toBe(0);
+      expect(sidEvent?.turnOrigin).toBeUndefined();
+      expect(terminals).toEqual([]);
+      expect(session.getObservedCurrentTurnTerminal()).toEqual({ kind: "none" });
+
+      releaseAccepted();
+      await expect(sending).resolves.toEqual({ accepted: true });
+
+      // Real turn after handle.send() completes with generation 1 and its origin intact.
+      await h.emit({ type: "text", data: { text: "real reply", isFinal: false }, source: "claude-code" });
+      await h.emit({ type: "done", data: {}, source: "claude-code" });
+
+      const reply = seen.find((event) => event.type === "text");
+      const done = seen.find((event) => event.type === "done");
+      expect(reply?.sessionTurnGeneration).toBe(1);
+      expect(reply?.turnOrigin).toEqual(SCHED_ORIGIN);
+      expect(done?.sessionTurnGeneration).toBe(1);
+      expect(done?.turnOrigin).toEqual(SCHED_ORIGIN);
+      expect(terminals).toEqual([1]);
+      expect(session.getObservedCurrentTurnTerminal()).toMatchObject({ kind: "done", generation: 1 });
+    } finally {
+      await session.close();
+    }
+  });
+
+  // Regression: an unsettled prior turn's real terminal arriving while the next
+  // send is only reserved (`accepting`, not yet dispatching) must still settle
+  // on the prior generation, fence any duplicate tail, and let the next turn
+  // adopt its own generation once dispatched.
+  // Unit tier: in-memory controllable handle, no real SDK or timers.
+  it("settles an unsettled prior turn during pre-dispatch reservation without polluting the next turn", async () => {
+    const h = createControllableHandle();
+    const session = makeSession(h.handle, "claude-code");
+    const seen: AgentEvent[] = [];
+    const terminals: Array<{ turnGeneration: number; isCurrentGeneration: boolean }> = [];
+    session.onEvent((event) => seen.push({ ...event }));
+    session.setTurnLifecycleObserver({
+      beforeProviderStart() {},
+      onUndispatched() {},
+      onTerminal({ turnGeneration, isCurrentGeneration }) {
+        terminals.push({ turnGeneration, isCurrentGeneration });
+      },
+    });
+    let releaseAccepted!: () => void;
+    const acceptedGate = new Promise<void>((resolve) => {
+      releaseAccepted = resolve;
+    });
+
+    try {
+      await expect(session.send("first")).resolves.toEqual({ accepted: true });
+      h.setTurnRunning(false);
+
+      const secondSend = session.send("second", {
+        origin: SCHED_ORIGIN,
+        onAccepted: () => acceptedGate,
+      });
+      await vi.waitFor(() => expect(session.getTurnGeneration()).toBe(2));
+
+      // Turn 1's real terminal arrives while Turn 2 is still in `accepting`.
+      await h.emit({ type: "done", data: { turn: 1 }, source: "claude-code" });
+      // A duplicate stray tail during the same `accepting` window must be fenced.
+      await h.emit({ type: "done", data: { turn: "dup" }, source: "claude-code" });
+
+      const priorDones = seen.filter((event) => event.type === "done");
+      expect(priorDones).toHaveLength(1);
+      expect(priorDones[0]?.sessionTurnGeneration).toBe(1);
+      expect(priorDones[0]?.turnOrigin).toBeUndefined();
+      expect(terminals).toEqual([{ turnGeneration: 1, isCurrentGeneration: false }]);
+      expect(session.getObservedCurrentTurnTerminal()).toEqual({ kind: "none" });
+
+      releaseAccepted();
+      await expect(secondSend).resolves.toEqual({ accepted: true });
+
+      // Result-only Turn 2 still adopts generation 2 and carries its own origin.
+      await h.emit({ type: "done", data: { turn: 2 }, source: "claude-code" });
+
+      const allDones = seen.filter((event) => event.type === "done");
+      expect(allDones).toHaveLength(2);
+      expect(allDones[1]?.sessionTurnGeneration).toBe(2);
+      expect(allDones[1]?.turnOrigin).toEqual(SCHED_ORIGIN);
+      expect(terminals).toEqual([
+        { turnGeneration: 1, isCurrentGeneration: false },
+        { turnGeneration: 2, isCurrentGeneration: true },
+      ]);
+      expect(session.getObservedCurrentTurnTerminal()).toMatchObject({ kind: "done", generation: 2 });
     } finally {
       await session.close();
     }

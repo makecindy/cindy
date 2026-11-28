@@ -41,8 +41,8 @@ async function renderDialog() {
   return { onOpenChange, onCreated };
 }
 
-function checkbox(name: string): HTMLButtonElement {
-  return screen.getByRole('checkbox', { name: new RegExp(name) }) as HTMLButtonElement;
+function checkbox(name: string): HTMLInputElement {
+  return screen.getByRole('checkbox', { name: new RegExp(name) }) as HTMLInputElement;
 }
 
 beforeEach(() => {
@@ -66,27 +66,20 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe('BotGroupCreateDialog', () => {
-  it('retries a failed roster request without losing the group name', async () => {
-    mocks.status.mockResolvedValue({ enabled: true });
-    mocks.ownedBots.mockRejectedValueOnce(new Error('Network unavailable'))
-      .mockResolvedValueOnce({ ok: true, bots: [{ actorId: 'actor-linux', botId: 'linux', name: 'Linux' }] });
-    render(<BotGroupCreateDialog onOpenChange={vi.fn()} onCreated={vi.fn()} />);
+  it('retries a failed chat status check without losing the group name', async () => {
+    mocks.status.mockRejectedValueOnce(new Error('Network unavailable')).mockResolvedValue({ enabled: true });
+    const onCreated = vi.fn();
+    render(<BotGroupCreateDialog onOpenChange={vi.fn()} onCreated={onCreated} />);
     fireEvent.change(screen.getByRole('textbox'), { target: { value: 'Keep my group name' } });
     fireEvent.click(await screen.findByRole('button', { name: 'commonUi.retry' }));
-    fireEvent.click(await screen.findByRole('checkbox', { name: 'Linux' }));
+    const submit = screen.getByRole('button', { name: 'bots.groupChat.create.submit' });
+    await waitFor(() => expect(submit).toHaveProperty('disabled', false));
     expect(screen.getByRole('textbox')).toHaveProperty('value', 'Keep my group name');
-    fireEvent.click(screen.getByRole('button', { name: 'bots.groupChat.create.submit' }));
-    await waitFor(() => expect(mocks.createBotGroup).toHaveBeenCalledWith({ name: 'Keep my group name', botIds: ['linux'] }));
+    fireEvent.click(submit);
+    await waitFor(() => expect(onCreated).toHaveBeenCalledWith('g-new', true));
+    expect(mocks.createBotGroup).toHaveBeenCalledExactlyOnceWith({ name: 'Keep my group name', botIds: [] });
   });
-  it('creates with an owned companion that only exists on another computer', async () => {
-    mocks.status.mockResolvedValue({ enabled: true });
-    mocks.ownedBots.mockResolvedValue({ ok: true, bots: [{ actorId: 'actor-linux', botId: 'linux', name: 'Linux' }] });
-    await renderDialog();
-    fireEvent.click(await screen.findByRole('checkbox', { name: 'Linux' }));
-    fireEvent.change(screen.getByRole('textbox'), { target: { value: 'Cross device' } });
-    fireEvent.click(screen.getByRole('button', { name: 'bots.groupChat.create.submit' }));
-    await waitFor(() => expect(mocks.createBotGroup).toHaveBeenCalledWith({ name: 'Cross device', botIds: ['linux'] }));
-  });
+
   it('creates from a private chat with only its teammate and no member picker', async () => {
     mocks.status.mockResolvedValue({ enabled: true });
     const onCreated = vi.fn();
@@ -95,7 +88,7 @@ describe('BotGroupCreateDialog', () => {
     expect(document.activeElement).toBe(screen.getByRole('textbox'));
     fireEvent.change(screen.getByRole('textbox'), { target: { value: '  项目讨论  ' } });
     fireEvent.click(screen.getByRole('button', { name: 'bots.groupChat.create.submit' }));
-    await waitFor(() => expect(onCreated).toHaveBeenCalledWith('g-new'));
+    await waitFor(() => expect(onCreated).toHaveBeenCalledWith('g-new', true));
     expect(mocks.createBotGroup).toHaveBeenCalledExactlyOnceWith({ name: '项目讨论', botIds: ['c'] });
   });
 
@@ -135,10 +128,10 @@ describe('BotGroupCreateDialog', () => {
     fireEvent.change(screen.getByRole('textbox'), { target: { value: '  周末出游 ' } });
     for (const id of ['f', 'a', 'c', 'b', 'e', 'd']) fireEvent.click(checkbox(`Bot ${id}`));
     expect(checkbox('Bot g').disabled).toBe(true);
-    expect(checkbox('Bot a').getAttribute('aria-checked')).toBe('true');
+    expect(checkbox('Bot a').checked).toBe(true);
 
     fireEvent.click(screen.getByRole('button', { name: 'bots.groupChat.create.submit' }));
-    await waitFor(() => expect(onCreated).toHaveBeenCalledWith('g-new'));
+    await waitFor(() => expect(onCreated).toHaveBeenCalledWith('g-new', false));
     expect(mocks.createBotGroup).toHaveBeenCalledWith({
       name: '周末出游',
       botIds: ['a', 'b', 'c', 'd', 'e', 'f'],
@@ -165,12 +158,16 @@ describe('BotGroupCreateDialog', () => {
 });
 
 
-it('lets a server group start without bots so people can join by invitation', async () => {
+// Unit, reviewed desktop creation design: a cloud create with a nonempty owned roster
+// uses the name-only form and an empty member payload. The legacy local minimum is covered above.
+it('creates a cloud group by name without waiting for or showing its owned buddies', async () => {
   mocks.status.mockResolvedValue({ enabled: true });
-  mocks.profiles = [];
-  await renderDialog();
-  await screen.findByText('bots.groupChat.server.createDescription');
+  mocks.ownedBots.mockResolvedValue({ ok: true, bots: [{ actorId: 'actor-linux', botId: 'linux', name: 'Linux' }] });
+  const { onCreated } = await renderDialog();
+  expect(screen.queryAllByRole('checkbox')).toHaveLength(0);
+  expect(mocks.ownedBots).not.toHaveBeenCalled();
   fireEvent.change(screen.getByRole('textbox'), { target: { value: 'People first' } });
   fireEvent.click(screen.getByRole('button', { name: 'bots.groupChat.create.submit' }));
-  await waitFor(() => expect(mocks.createBotGroup).toHaveBeenCalledWith({ name: 'People first', botIds: [] }));
+  await waitFor(() => expect(onCreated).toHaveBeenCalledWith('g-new', true));
+  expect(mocks.createBotGroup).toHaveBeenCalledExactlyOnceWith({ name: 'People first', botIds: [] });
 });

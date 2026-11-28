@@ -133,6 +133,19 @@ export function resolveSettingsSearchTarget(tab: SettingsTab, section: string | 
 }
 
 /**
+ * Subagent 模型与辅助模型原在「个性化」，现在在「模型供应商 → 智能路由」页。旧版本、帮助文档和别处存下的
+ * 深链(?tab=personalization&section=personalization.auxiliaryModels 等)在个性化里已解析不到、
+ * 但能在智能路由页解析到时，落到智能路由页。
+ */
+export function isLegacyModelSettingsDeepLink(rawTab: string | null, section: string | null): boolean {
+  return (
+    rawTab === 'personalization' &&
+    resolveSettingsSearchEntry('personalization', section) === null &&
+    resolveSettingsSearchEntry('model-groups', section) !== null
+  );
+}
+
+/**
  * 外观设置原在「通用」、回复动效原在「个性化」。拆出「外观」分区后,旧 section 深链
  * (如 ?section=appearance、?tab=personalization&section=streamFade)在原分区已解析
  * 不到、但能在外观分区解析到时,应落到外观分区。

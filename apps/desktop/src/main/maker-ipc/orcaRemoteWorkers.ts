@@ -12,6 +12,7 @@ import { createId } from '@paralleldrive/cuid2';
 import { readInputDeliveryReceipts } from '../localDb/agentInputQueueSnapshots.js';
 import {
   DeviceLinkError,
+  ORCA_REMOTE_WORKER_ARCHIVE_CHANNEL,
   ORCA_REMOTE_WORKER_CAPS_CHANNEL,
   ORCA_REMOTE_WORKER_MODELS_CHANNEL,
   ORCA_REMOTE_WORKER_OPEN_CHANNEL,
@@ -23,7 +24,7 @@ import {
   type OrcaRemoteWorkerOpenResult as DeviceOpenResult,
 } from '@cindy/device-link';
 import { isMobilePlatform } from '@cindy/maker-shared/device-list';
-import type { AgentKind } from '@cindy/maker-core';
+import type { EngineKind } from '@cindy/maker-core';
 
 import type { DeviceLinkDeviceView } from '../../shared/deviceLinkIpc.js';
 import {
@@ -375,6 +376,7 @@ export function createOrcaRemoteWorkers(deps: OrcaRemoteWorkersDeps) {
                   platform: device.platform,
                   supported: supported[index] !== false,
                   ...((supported[index] as OrcaRemoteWorkerCaps)?.agentDevice === true ? { supportsAgentDevice: true } : {}),
+                  ...((supported[index] as OrcaRemoteWorkerCaps)?.modelGroup === true ? { supportsModelGroup: true } : {}),
                 },
               ],
         )
@@ -433,6 +435,10 @@ export function createOrcaRemoteWorkers(deps: OrcaRemoteWorkersDeps) {
         return { ok: false, errorCode: 'UNSUPPORTED_CAPABILITY',
           message: `${name} 需要更新后才能为跨设备 Worker 选择 Agent 所在电脑。` };
       }
+      if (input.modelGroup && supported.modelGroup !== true) {
+        return { ok: false, errorCode: 'UNSUPPORTED_CAPABILITY',
+          message: 'The execution computer does not support Worker model groups' };
+      }
       const remoteSessionId = createId();
       let opened: DeviceOpenResult | undefined;
       let uncertainOpen = false;
@@ -445,6 +451,7 @@ export function createOrcaRemoteWorkers(deps: OrcaRemoteWorkersDeps) {
             sessionId: remoteSessionId,
             agentKind: input.agent,
             ...(input.model ? { model: input.model } : {}),
+            ...(input.modelGroup ? { modelGroup: input.modelGroup } : {}),
             ...(input.providerId ? { providerId: input.providerId } : {}),
             ...(input.agentDeviceId !== undefined ? { agentDeviceId: input.agentDeviceId } : {}),
             ...(input.effort ? { effort: input.effort } : {}),
@@ -540,7 +547,7 @@ export function createOrcaRemoteWorkers(deps: OrcaRemoteWorkersDeps) {
         if (!opened) opening.delete(remoteSessionId);
       }
       const proxySessionId = createId();
-      const agent: AgentKind = opened.agentKind ?? input.agent;
+      const agent: EngineKind = opened.agentKind ?? input.agent;
       // open 与关联之间尚未创建本机代理，退出后只需按持久 open 身份解除远端标记。
       assertOwner(owner);
       const proxySession = {
@@ -552,6 +559,7 @@ export function createOrcaRemoteWorkers(deps: OrcaRemoteWorkersDeps) {
           : input.effort && EFFORTS.has(input.effort) ? input.effort : null,
         permissionMode: input.permissionMode,
         fastMode: opened.fastMode ?? (input.fast ?? false),
+        ...(opened.providerId !== undefined || input.providerId ? { providerId: opened.providerId ?? input.providerId ?? null } : {}),
         ...(opened.agentDeviceId !== undefined ? { agentDeviceId: opened.agentDeviceId } : {}),
       };
       creationOwners.set(proxySessionId, owner);
@@ -679,13 +687,31 @@ export function createOrcaRemoteWorkers(deps: OrcaRemoteWorkersDeps) {
     assertOwner(owner);
     const row = await getRemoteWorkerByProxySession(proxySessionId);
     assertOwner(owner);
+    if (!row) throw new Error('Remote Worker route unavailable');
+    await beforeMutation?.();
+    assertOwner(owner);
+    const receipt = await invoke(row.deviceId, ORCA_REMOTE_WORKER_ARCHIVE_CHANNEL, [{ sessionId: row.remoteSessionId }])
+      .catch(err => {
+        if (codeOf(err) === 'CHANNEL_NOT_ALLOWED') {
+          throw new Error('请更新 Worker 所在电脑上的 Cindy 后重试归档。');
+        }
+        throw err;
+      });
+    if (!receipt || typeof receipt !== 'object' || !('runtimeClosed' in receipt) || receipt.runtimeClosed !== true) {
+      throw new Error('运行设备尚未确认 Worker 已关闭，请重试归档。');
+    }
+    await beforeMutation?.();
+    assertOwner(owner);
+    await markWorkerRemoteStopConfirmed(row.workerId);
+    assertOwner(owner);
+    await markWorkerRemoteReleased(row.workerId);
+    assertOwner(owner);
     await archiveSingleWorkerSession(proxySessionId, async () => {
       await beforeMutation?.();
       assertOwner(owner);
     });
     assertOwner(owner);
     runtime.untrack(proxySessionId);
-    if (row) await releaseAndMark(row);
   }
 
   /**
@@ -717,10 +743,11 @@ export function createOrcaRemoteWorkers(deps: OrcaRemoteWorkersDeps) {
         if (await isRemoteWorker(worker.sessionId)) return;
         await base.resumeWorkerSession(worker, link);
       },
-      closeWorkerSession: async (sessionId, beforeClose) => {
+      closeWorkerSession: async (sessionId, beforeClose, intent) => {
         if (!(await isRemoteWorker(sessionId))) return base.closeWorkerSession(sessionId, beforeClose);
         await beforeClose?.();
-        await runtime.abort(sessionId);
+        // Archive closes under the execution host’s ownership check and send lock.
+        if (intent !== 'archive') await runtime.abort(sessionId);
       },
       closeWorkerSessionIfIdle: async (sessionId, sendLockHeld, options) =>
         (await isRemoteWorker(sessionId))
@@ -736,7 +763,7 @@ export function createOrcaRemoteWorkers(deps: OrcaRemoteWorkersDeps) {
           : base.hasPendingWorkerInput(sessionId),
       archiveWorkerSession: async (sessionId, beforeMutation) => {
         if (!(await isRemoteWorker(sessionId))) return base.archiveWorkerSession(sessionId, beforeMutation);
-        await archive(sessionId, beforeMutation);
+        await base.withSessionSendLock(sessionId, () => archive(sessionId, beforeMutation));
       },
       dispatchWorkerMessage: async (params) => {
         if (!(await isRemoteWorker(params.targetSessionId))) return base.dispatchWorkerMessage(params);
@@ -784,6 +811,7 @@ export function createOrcaRemoteWorkers(deps: OrcaRemoteWorkersDeps) {
             const result = await runtime.dispatch({
               proxySessionId: params.targetSessionId,
               rawContent: params.message,
+              initialTask: params.initialTask,
               clientId,
               beforeEnqueue: async () => {
                 if (!params.onAccepted) return;

@@ -48,6 +48,7 @@ export function useDeleteMessage({
       description: t('chat.messageActionBar.deleteConfirmDescription'),
       confirmText: t('chat.messageActionBar.deleteConfirm'),
       cancelText: t('chat.messageActionBar.deleteCancel'),
+      confirmVariant: 'destructive',
     });
     if (!ok) return;
 

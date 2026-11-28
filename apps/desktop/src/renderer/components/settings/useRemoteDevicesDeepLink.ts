@@ -13,11 +13,18 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react
 import { useLocation, useNavigate } from 'react-router-dom';
 
 import { useSettingsSearchNavigation } from './SettingsSearchNavigation';
+import { REMOTE_CLOUD_INSTANCES_SECTION } from '@/features/cloud-settings/cloudInstancesLink';
 
-const DEVICES_SECTION_PARAMS = ['devices', 'remoteControl.devices'];
+// 旧「云实例」分类的深链与搜索也落到「我的设备」(云端 Cindy 是其中的设备卡)。
+const DEVICES_SECTION_PARAMS = ['devices', 'remoteControl.devices', REMOTE_CLOUD_INSTANCES_SECTION];
 
 export function isDevicesSection(search: string): boolean {
   return DEVICES_SECTION_PARAMS.includes(new URLSearchParams(search).get('section') ?? '');
+}
+
+/** 从云端 Cindy 设置返回:恢复展开态,但不滚动、不高亮(见 remoteControlReturnPath)。 */
+function restoresDevicesOpen(search: string): boolean {
+  return new URLSearchParams(search).get('devices') === 'open';
 }
 
 export function focusDeviceParam(search: string): string | null {
@@ -38,7 +45,9 @@ export function useRemoteDevicesDeepLink(): RemoteDevicesDeepLink {
   const navigate = useNavigate();
 
   // 深链必须在首帧就是展开态:放到 effect 里会先画一帧收起,再把下方内容顶开一格。
-  const [devicesOpen, setDevicesOpen] = useState(() => isDevicesSection(location.search));
+  const [devicesOpen, setDevicesOpen] = useState(
+    () => isDevicesSection(location.search) || restoresDevicesOpen(location.search),
+  );
 
   useEffect(() => {
     if (isDevicesSection(location.search)) setDevicesOpen(true);
@@ -69,8 +78,9 @@ export function useRemoteDevicesDeepLink(): RemoteDevicesDeepLink {
     collapseRequestedRef.current = false;
 
     const next = new URLSearchParams(location.search);
-    if (!DEVICES_SECTION_PARAMS.includes(next.get('section') ?? '')) return;
+    if (!DEVICES_SECTION_PARAMS.includes(next.get('section') ?? '') && !next.has('devices')) return;
     next.delete('section');
+    next.delete('devices');
     // device 聚焦参数只依附于 devices 段深链,一并摘掉。
     next.delete('device');
     const search = next.toString();

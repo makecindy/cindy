@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
   auth: { mode: 'cloud', dataOwnerId: 'owner' as string | null, ownerGeneration: 1, user: { id: 'member', membershipKind: 'org' } },
   authListeners: new Set<(state: { isAuthenticated: boolean }) => void>(),
   sharedRead: vi.fn(), sharedChanged: null as null | (() => void), sharedAccessEpoch: 0,
+  balanceFetch: vi.fn(),
   revision: 0, listeners: new Set<() => void>(), refresh: vi.fn(), collect: vi.fn(),
   quota: null as null | { spend: number; maxBudget: number; currency: string; fetchedAt: number; todaySpend: null },
   activities: [] as AgentIslandSessionSnapshot[], attentionListeners: new Set<() => void>(), publish: vi.fn(),
@@ -43,11 +44,11 @@ vi.mock('../../appSessionState.js', async importOriginal => {
     getActiveAppSession: () => ({ dataOwnerId: mocks.auth.dataOwnerId, mode: mocks.auth.mode, generation: mocks.auth.ownerGeneration }),
   };
 });
-vi.mock('../../authManager.js', () => ({ getAuthState: () => mocks.auth, onAuthStateChange: (changed: (state: { isAuthenticated: boolean }) => void) => {
+vi.mock('../../authManager.js', () => ({ getActiveAuthRealm: () => 'global', getAuthState: () => mocks.auth, onAuthStateChange: (changed: (state: { isAuthenticated: boolean }) => void) => {
   mocks.authListeners.add(changed); return () => { mocks.authListeners.delete(changed); };
 } }));
-vi.mock('../../billing/projection.js', () => ({}));
-vi.mock('../../clientEndpointsService.js', () => ({}));
+vi.mock('../../billing/projection.js', async importOriginal => importOriginal());
+vi.mock('../../clientEndpointsService.js', () => ({ getClientEndpoint: () => 'https://credits.example.test' }));
 vi.mock('../../deepLink.js', () => ({ openMainWindowRemoteControlSettings: mocks.openRemoteSettings, openMainWindowSession: mocks.openLocalSession }));
 vi.mock('../../device-link/providerShareGuest.js', () => ({
   providerShareAccessEpoch: () => mocks.sharedAccessEpoch,
@@ -85,7 +86,7 @@ vi.mock('../../maker-ipc/appDefaultModelControl.js', () => ({}));
 vi.mock('../../maker-ipc/register.js', () => ({ applyNewMakerDraftRoute: (route: unknown) => mocks.applyDraftRoute(route) }));
 vi.mock('../../maker-ipc/usage.js', () => ({}));
 vi.mock('../../notificationService.js', () => ({}));
-vi.mock('../../serverApiClient.desktop.js', () => ({}));
+vi.mock('../../serverApiClient.desktop.js', () => ({ serverApiFetch: (...args: unknown[]) => mocks.balanceFetch(...args) }));
 vi.mock('../../usage/claudeAccountUsage.js', () => ({ readClaudeAccountUsageRevision: () => mocks.revision, observeClaudeAccountUsage: (listener: () => void) => { mocks.listeners.add(listener); return () => { mocks.listeners.delete(listener); }; }, triggerClaudeAccountUsageRefresh: () => mocks.refresh(), readClaudeAccountUsageSnapshot: () => mocks.quota }));
 vi.mock('../../usage/ledgerCurrency.js', () => ({ currentLedgerCurrency: () => 'USD' }));
 vi.mock('../../usage/usageHistory.js', () => ({}));
@@ -95,7 +96,7 @@ vi.mock('../MacMenubarNativeHost.js', () => ({ MacMenubarNativeHost: class {
   constructor(options: { onMessage: (message: MenubarHelperMessage) => void }) { mocks.onHelperMessage = options.onMessage; }
   resetFailure() {} prepare() {} suspend() {} stop() {} publish(view: unknown) { mocks.publish(view); }
 } }));
-vi.mock('../creditSamples.js', () => ({ CreditSampleStore: class { record() { return []; } }, estimateDailyBurn: () => null }));
+vi.mock('../creditSamples.js', () => ({ CreditSampleStore: class { record() { return []; } }, estimateDailyBurn: () => null, largestCreditSample: () => null }));
 vi.mock('../collect.js', async (importOriginal) => ({ ...await importOriginal<typeof import('../collect')>(), collectMenubarInputs: (...args: unknown[]) => mocks.collect(...args) }));
 import { MenubarService } from '../service';
 import { QuotaPanelController } from '../../quota-overview/panelController';
@@ -108,6 +109,7 @@ beforeEach(() => {
   mocks.app.isPackaged = true;
   vi.useFakeTimers(); mocks.revision = 0; mocks.listeners.clear(); mocks.refresh.mockReset(); mocks.collect.mockReset();
   mocks.sharedRead.mockReset(); mocks.sharedChanged = null; mocks.sharedAccessEpoch = 0;
+  mocks.balanceFetch.mockReset(); mocks.auth.user.membershipKind = 'org';
   mocks.authListeners.clear();
   mocks.auth.mode = 'cloud'; mocks.auth.dataOwnerId = 'owner'; mocks.auth.ownerGeneration = 1;
   mocks.activities = []; mocks.attentionListeners.clear(); mocks.publish.mockReset();
@@ -121,13 +123,53 @@ beforeEach(() => {
 });
 afterEach(() => { vi.clearAllTimers(); vi.useRealTimers(); });
 
+// Unit, engineering-conventions §3.2: acquire -> real collector -> balance read.
+// Existing overview tests replaced the balance reader, missing the extra HTTP
+// fallback after 429. Minimal input: a personal account and one 429 response.
+it.each([429, 404])('handles credit usage HTTP %s without bypassing rate limits', async statusCode => {
+  mocks.auth.user.membershipKind = 'personal';
+  mocks.balanceFetch.mockRejectedValueOnce(Object.assign(new Error('unavailable'), { statusCode }));
+  mocks.balanceFetch.mockResolvedValue({ available: '7', planCredits: '7', purchasedCredits: '0', promotionalCredits: '0',
+    scale: 9, observedAt: new Date().toISOString() });
+  mocks.collect.mockImplementation((deps: MenubarCollectDeps) => collectActual({ ...deps,
+    readUsage: async () => null, activities: () => [],
+  }));
+  const release = overview.acquire();
+  try {
+    await vi.advanceTimersByTimeAsync(0);
+    expect(mocks.balanceFetch.mock.calls.map(([path]) => path)).toEqual(statusCode === 429
+      ? ['/api/model-access/credit-usage'] : ['/api/model-access/credit-usage', '/api/model-access/balance']);
+    expect(overview.latest()?.input.sources.filter(source => source.kind === 'balance')).toHaveLength(statusCode === 429 ? 0 : 1);
+  } finally { release(); }
+});
+
+// Same public collection path: a generation change during credit reading must
+// stop the old collection before it asks /balance using the newer account state.
+it('does not fall back to balance after the account generation changes during a credit read', async () => {
+  mocks.auth.user.membershipKind = 'personal';
+  let reject!: (reason: Error) => void;
+  mocks.balanceFetch.mockImplementationOnce(() => new Promise((_resolve, no) => { reject = no; }));
+  mocks.collect.mockImplementation((deps: MenubarCollectDeps) => collectActual({ ...deps,
+    readUsage: async () => null, activities: () => [],
+  }));
+  const release = overview.acquire();
+  try {
+    await vi.advanceTimersByTimeAsync(0);
+    mocks.auth.ownerGeneration++;
+    reject(new Error('obsolete read'));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(mocks.balanceFetch.mock.calls.map(([path]) => path)).toEqual(['/api/model-access/credit-usage']);
+    expect(overview.latest()).toBeNull();
+  } finally { release(); }
+});
+
 // #10110 review, unit: real native refresh message -> overview -> collector ->
 // panel/widget. A cached DTO alone never exercises the explicit-refresh path;
 // runtime.test.ts separately covers the real 30s/180s cache and native reads.
 // #10405 extends the same user entry to a named target; readPool only accepts kinds,
 // so the old overview gate discarded it before the collector could show its accounts.
 it.each(['openai', 'legacy-target'])('refreshes the %s account pool through the native refresh button', async providerId => {
-  mocks.pool = { providerId, kind: 'openai', configured: true, strategy: 'round', accounts: [{
+  mocks.pool = { providerId, kind: 'openai', configured: true, strategy: 'rotate', accounts: [{
     id: 'extra', paused: false, limit: 4, weight: 1, directory: '/fixture/extra', running: 0,
     identity: 'extra@example.com', status: 'ready', usage: { codex: { credits: null, buckets: { codex: {
       limitId: 'codex', limitName: null, updatedAt: Date.now(), primary: null,
@@ -157,7 +199,7 @@ it.each(['openai', 'legacy-target'])('refreshes the %s account pool through the 
 // account changes. Earlier tests mocked the collector and only covered ledger invalidation.
 // Minimal input: one pooled account changes its quota, then is removed during a read.
 it('refreshes pooled quota in panel and widgets and rejects a read overtaken by account removal', async () => {
-  mocks.pool = { providerId: 'openai', configured: true, strategy: 'round', accounts: [{
+  mocks.pool = { providerId: 'openai', configured: true, strategy: 'rotate', accounts: [{
     id: 'extra', paused: false, limit: 4, weight: 1, directory: '/fixture/extra', running: 0,
     identity: 'extra@example.com', plan: 'pro', status: 'ready', usage: { codex: { credits: null, buckets: {
       codex: { limitId: 'codex', limitName: null, updatedAt: Date.now(), primary: null,

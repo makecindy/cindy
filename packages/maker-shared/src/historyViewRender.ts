@@ -2,6 +2,18 @@ import { historyViewLeaves, historyWorkSummaries, type HistoryFileArtifact, type
 import type { HistoryViewController, HistoryViewSnapshot } from './historyViewController.js';
 import { liveContentWithHistoryOrder } from './historyViewHandoff.js';
 
+const historyArtifactsByItems = new WeakMap<object, readonly HistoryFileArtifact[]>();
+
+function historyArtifactsFor<T extends HistoryMessageSource>(snapshot: HistoryViewSnapshot<T>): readonly HistoryFileArtifact[] {
+  const key = snapshot.items;
+  let cached = historyArtifactsByItems.get(key);
+  if (!cached) {
+    cached = historyWorkSummaries(key).flatMap((summary) => summary.artifacts ?? []);
+    historyArtifactsByItems.set(key, cached);
+  }
+  return cached;
+}
+
 /** The original renderer owns all grouping. References only substitute unread bodies. */
 export function renderHistoryView<T extends HistoryMessageSource, TItem>(options: {
   view: HistoryViewController<T>;
@@ -28,8 +40,17 @@ export function renderHistoryView<T extends HistoryMessageSource, TItem>(options
   // An expanded full range owns the display. A running range read can split into
   // a group that requests the folded preview; if that request switched this range
   // to the preview, the split group would vanish, release it and reappear (React #185).
-  const readsPreview = (summary: HistoryWorkSummary, expanded: ReadonlySet<string>) =>
-    !!summary.preview && expanded.has(summary.preview.key) && !expanded.has(summary.key);
+  const readsPreview = (summary: HistoryWorkSummary, current: HistoryViewSnapshot<T>) => {
+    const preview = summary.preview;
+    if (!preview || current.expanded.has(summary.key)) return false;
+    if (current.expanded.has(preview.key)) return true;
+    // A card can replace the last activity in a group and release its preview
+    // hold. Keep the finished read visible so the placeholder cannot remount
+    // the group and start the same cycle again. New revisions still need a hold.
+    const cached = current.details.get(preview.key);
+    return summary.isStreaming && !summary.lines && cached?.complete === true
+      && cached.revision === preview.revision;
+  };
   const rows: T[] = [];
   const seen = new Set<string>();
   const placeholders = new Set<string>();
@@ -71,7 +92,7 @@ export function renderHistoryView<T extends HistoryMessageSource, TItem>(options
     const summary = item.summary;
     const full = snapshot.details.get(summary.key);
     const preview = !(full?.complete && full.revision === summary.revision)
-      && readsPreview(summary, snapshot.expanded);
+      && readsPreview(summary, snapshot);
     const range = preview ? summary.preview! : summary;
     const state = snapshot.details.get(range.key);
     const cached = state?.messages ?? [];
@@ -163,7 +184,7 @@ export function renderHistoryView<T extends HistoryMessageSource, TItem>(options
     const summaries = [...refs.values()];
     const expanded = summaries.some((summary) => snapshot.expanded.has(summary.key));
     const states = summaries.map((summary) => snapshot.details.get(
-      readsPreview(summary, snapshot.expanded) ? summary.preview!.key : summary.key));
+      readsPreview(summary, snapshot) ? summary.preview!.key : summary.key));
     const lines = [...summaries].reverse().find((summary) => summary.lines)?.lines;
     // A read preview can end in prose that seals this group in the regrouped render.
     // Deciding from that render would collapse and reopen the preview without end.
@@ -182,8 +203,8 @@ export function renderHistoryView<T extends HistoryMessageSource, TItem>(options
       setVisible,
       toggle: () => { for (const summary of summaries) view.setExpanded(summary.key, !expanded); },
       retry: () => { for (const summary of summaries) void view.loadDetails(
-        readsPreview(summary, view.getSnapshot().expanded) ? summary.preview! : summary); },
+        readsPreview(summary, view.getSnapshot()) ? summary.preview! : summary); },
     });
   };
-  return options.build(rows, options.streaming, historyWorkSummaries(snapshot.items).flatMap((summary) => summary.artifacts ?? [])).map(bind);
+  return options.build(rows, options.streaming, historyArtifactsFor(snapshot)).map(bind);
 }

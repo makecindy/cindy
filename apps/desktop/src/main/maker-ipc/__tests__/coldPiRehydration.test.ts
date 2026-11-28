@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { PiByomRouteAbsentError } from '@cindy/maker-core';
 import { createIpcError } from '../../../shared/ipc-errors';
 import {
   classifyColdPiRehydrationOutcome,
@@ -7,6 +8,7 @@ import {
 } from '../coldPiRehydration';
 import {
   ColdPiRehydrationError,
+  describeMissingColdPiConnection,
   reportColdPiRehydrationFailure,
 } from '../coldPiRehydrationFailure';
 
@@ -75,6 +77,25 @@ async function failure(run: Promise<unknown>): Promise<ColdPiRehydrationError> {
 }
 
 describe('cold Pi rehydration for window verification (#5508)', () => {
+  it('distinguishes a missing saved BYOM connection from an unverifiable cold runtime (#12632)', async () => {
+    const providerId = 'old-connection';
+    const { rehydrate } = harness({ bootstrapSession: async () => {
+      throw new PiByomRouteAbsentError(providerId, 'native route absent');
+    } });
+    const input = {
+      error: await failure(rehydrate('s-1')), currentProviderId: providerId,
+      providers: [], providerExists: async () => false, applyingOnSend: true,
+    };
+    await expect(describeMissingColdPiConnection(input)).resolves.toEqual({
+      category: 'current-provider-missing',
+      detail: "the previous model connection 'old-connection' is missing on this computer; the message was not sent",
+    });
+    await expect(describeMissingColdPiConnection({ ...input, providerExists: async () => true })).resolves.toBeNull();
+    await expect(describeMissingColdPiConnection({ ...input, providerExists: async () => { throw new Error('busy'); } })).resolves.toBeNull();
+    await expect(describeMissingColdPiConnection({ ...input, providers: [{ id: providerId }] })).resolves.toBeNull();
+    await expect(describeMissingColdPiConnection({ ...input, error: new Error('timeout') })).resolves.toBeNull();
+  });
+
   it('does nothing when the runtime is already live', async () => {
     const { deps, rehydrate } = harness({ hasLiveSession: vi.fn(() => true) });
     await expect(rehydrate('s-1')).resolves.toBeUndefined();

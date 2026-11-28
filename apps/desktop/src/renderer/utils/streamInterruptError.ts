@@ -16,23 +16,6 @@ export function isStreamInterruptedErrorMessage(message: string, reason?: string
   return STREAM_INTERRUPTED_RE.test(message);
 }
 
-/** Codex forwards this HTTP error as a JSON body. Require an explicit output block. */
-export function isUpstreamOutputBlockedErrorMessage(raw: string): boolean {
-  if (raw.length > 64_000 || !raw.includes('"safety_violation"')) return false;
-  try {
-    // Live events may append the known HTTP status to the diagnostic body.
-    const json = raw.replace(/ \(HTTP 400\)$/, '');
-    const body = JSON.parse(json) as { error?: { type?: unknown; code?: unknown; message?: unknown } } | null;
-    const error = body?.error;
-    return error?.type === 'invalid_request_error'
-      && error.code === 'safety_violation'
-      && typeof error.message === 'string'
-      && /\bblocked the output stream\b/i.test(error.message);
-  } catch {
-    return false;
-  }
-}
-
 const OPENAI_API_ERROR_PREFIX = /^(?:Azure )?OpenAI API error \(\d+\):\s*/i;
 const LITELLM_ERROR_PREFIX = /^litellm\.\w+Error:\s*/;
 const VENDOR_JSON_EXCEPTION_RE = /^([A-Za-z][\w.]*)\s*-\s*(\{[\s\S]*\})$/;
@@ -94,9 +77,24 @@ export function hasProviderErrorDetails(raw: string): boolean {
   return structuredProviderErrorMessage(raw) !== null;
 }
 
+function hasMisleadingSafetyPluginOutputBlockWording(raw: string): boolean {
+  if (raw.length > 64_000 || !raw.includes('"safety_violation"')) return false;
+  const parsed = embeddedErrorObject(raw) as {
+    error?: { code?: unknown; message?: unknown };
+  } | null;
+  const error = parsed?.error;
+  return (
+    error?.code === 'safety_violation' &&
+    typeof error.message === 'string' &&
+    /\bplugin\b[\s\S]*\bblocked the output stream\b/i.test(error.message)
+  );
+}
+
 /** Only promote a bounded message field, never the transport wrapper or a stack trace. */
 export function providerErrorExplanation(raw: string): string | null {
-  if (isUpstreamOutputBlockedErrorMessage(raw)) return null;
+  // #8100 / #12371: OpenAI's internal moderation stream message says "plugin blocked the output stream",
+  // which misleads users into troubleshooting local Cindy plugins; keep that raw wording in collapsed details.
+  if (hasMisleadingSafetyPluginOutputBlockWording(raw)) return null;
   const message = structuredProviderErrorMessage(raw);
   if (!message || message.length > 1500 || /(?:^\s*[\[{]|\n\s*at\s)/.test(message)) return null;
   return message;
