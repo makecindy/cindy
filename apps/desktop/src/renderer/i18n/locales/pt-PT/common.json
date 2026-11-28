@@ -13283,6 +13283,7 @@
       "arrivalPermissions": "{{name}} utiliza agora as permissões predefinidas deste computador.",
       "arrivalModel": "O modelo guardado de {{name}} não está disponível neste computador, pelo que segue o modelo predefinido deste computador.",
       "arrivalModelSetup": "{{name}} chegou a este computador, mas ainda não tem um modelo utilizável. Ligue um fornecedor de modelos ou defina o modelo predefinido dos parceiros em Fornecedores → Roteamento inteligente.",
+      "modelSetupHint": "Este computador não tem um modelo disponível para parceiros. Defina o modelo predefinido dos parceiros em Fornecedores → Roteamento inteligente. A Cindy voltará a tentar automaticamente.",
       "arrivalPartialContent": "{{name}} funciona agora neste computador, mas alguns itens sincronizados não puderam ser restaurados. As cópias na nuvem mantêm-se intactas.",
       "missingProfileTitle": "Continuar {{name}} com o perfil predefinido?",
       "missingProfileDescription": "O computador principal original ainda não enviou o perfil de {{name}}. Se esse computador foi reinstalado ou não pode ser recuperado, pode continuar aqui com o perfil predefinido mantendo as conversas e os conteúdos já sincronizados.",
