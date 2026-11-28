@@ -8,7 +8,12 @@ import { cn } from '@/lib/utils';
 import { isLightboxCovered } from '@/lib/lightboxLayer';
 import { useAppShortcut } from '@/hooks/useAppShortcut';
 import { WINDOW_NO_DRAG_STYLE } from '@/components/layout/windowDrag';
-import { getTextPreviewSearchHost, isFindInPageClaimed, isPreviewPopupKeyEvent } from './findInPageOwnership';
+import {
+  getActivePreviewFindHost,
+  getTextPreviewSearchHost,
+  isFindInPageClaimed,
+  isPreviewPopupKeyEvent,
+} from './findInPageOwnership';
 import { acquirePageTextAccess, requestPageTextNavigation } from '@/lib/pageTextAccess';
 
 const MATCH_HIGHLIGHT_NAME = 'cindy-find-in-page-match';
@@ -353,7 +358,7 @@ function collectTextMatches(query: string, excludedRoot: HTMLElement | null): Te
   // Keep off-screen and scrollable content searchable. Geometry-based clipping
   // guesses cannot distinguish a closed drawer from history outside a scroll
   // viewport, so only explicit hidden styles are excluded here.
-  const preview = getTextPreviewSearchHost();
+  const preview = getActivePreviewFindHost();
   const searchRoot = preview
     ? preview.querySelector('[data-text-lightbox-search-root]')
     : document.body;
@@ -412,6 +417,10 @@ export function FindInPageBar() {
   const rootRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const previewOpenerRef = useRef<HTMLElement | null>(null);
+  // Ctrl/Cmd+F from the conversation behind a preview searches the page, even
+  // though a preview host exists. Keep that choice until the bar closes so the
+  // preview-sync observer does not retarget it into the preview.
+  const pageSearchRef = useRef(false);
   const rangesRef = useRef<TextMatch[]>([]);
   const activeRef = useRef(0);
   const pendingScrollFrameRef = useRef<number | null>(null);
@@ -495,6 +504,7 @@ export function FindInPageBar() {
 
   const close = useCallback(() => {
     cancelPendingScroll();
+    pageSearchRef.current = false;
     setOpen(false);
     setText('');
     setPreviewHost(null);
@@ -521,7 +531,7 @@ export function FindInPageBar() {
   useLayoutEffect(() => {
     if (!open) return;
     const syncPreview = () => {
-      const nextHost = getTextPreviewSearchHost();
+      const nextHost = pageSearchRef.current ? null : getTextPreviewSearchHost();
       if (nextHost && isLightboxCovered(nextHost)) {
         close();
         return;
@@ -615,7 +625,7 @@ export function FindInPageBar() {
       if (isComposingRef.current) return;
       // A query entered before the preview body loads must reveal its first
       // result when it arrives. Later refreshes preserve the reader's scroll.
-      const revealLoadedMatch = Boolean(getTextPreviewSearchHost()) && rangesRef.current.length === 0;
+      const revealLoadedMatch = Boolean(getActivePreviewFindHost()) && rangesRef.current.length === 0;
       applySearch(text, activeRef.current, revealLoadedMatch);
     };
     const scheduleRefresh = () => {
@@ -704,9 +714,12 @@ export function FindInPageBar() {
   // the chord before the global bar sees it.
   useAppShortcut('find-in-page', () => {
     // 局部接管者(如 doc 模式的 FileBodyView)存在时让位。
-    const preview = getTextPreviewSearchHost();
+    const preview = getActivePreviewFindHost();
     if (preview && (isLightboxCovered(preview) || preview.contains(document.fullscreenElement))) return false;
     if (!preview && isFindInPageClaimed()) return false;
+    const foregroundPreview = getTextPreviewSearchHost();
+    pageSearchRef.current =
+      !preview && foregroundPreview !== null && !isLightboxCovered(foregroundPreview);
     if (!open || previewHost !== preview) rememberPreviewOpener(preview);
     setPreviewHost(preview);
     setOpen(true);
@@ -742,6 +755,9 @@ export function FindInPageBar() {
       // 里必须排在承载页面路由的 LoginHandoffHost 之后,别把它挪到路由前面。
       style={WINDOW_NO_DRAG_STYLE}
       role="dialog"
+      // The bar is portaled outside the preview panel; while searching a
+      // preview, focus here still belongs to that preview.
+      data-preview-window-popup={previewHost ? '' : undefined}
       aria-label={t('findInPage.dialogAriaLabel')}
     >
       <style>{`

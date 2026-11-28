@@ -88,7 +88,7 @@ describe('ToolPayloadLightbox editable text mode', () => {
     expect(writeText).toHaveBeenCalledWith('new draft');
   });
 
-  it.each(['cancel', 'escape', 'close', 'backdrop'] as const)(
+  it.each(['cancel', 'escape', 'close', 'background'] as const)(
     '%s closes without saving',
     (closeMethod) => {
       vi.useFakeTimers();
@@ -105,10 +105,12 @@ describe('ToolPayloadLightbox editable text mode', () => {
         const closeButtons = screen.getAllByLabelText('chat.lightbox.close');
         fireEvent.click(closeButtons[closeButtons.length - 1]);
       } else {
-        const overlay = document.querySelector('[data-tool-payload-lightbox-overlay]');
-        const backdrop = overlay?.querySelector(':scope > [data-preview-scrim]');
-        expect(backdrop).toBeInstanceOf(HTMLElement);
-        fireEvent.click(backdrop as HTMLElement);
+        // The shared non-modal window closes on a click on its bare panel
+        // background; there is no full-window scrim any more.
+        const panel = document.querySelector('[data-preview-window-panel]');
+        expect(panel).toBeInstanceOf(HTMLElement);
+        expect(document.querySelector('[data-preview-scrim]')).toBeNull();
+        fireEvent.click(panel as HTMLElement);
       }
 
       expect(onSave).not.toHaveBeenCalled();
@@ -116,6 +118,49 @@ describe('ToolPayloadLightbox editable text mode', () => {
       expect(onClose).toHaveBeenCalledTimes(1);
     },
   );
+
+  // Regression (review P1): a non-modal preview must not pull focus back from
+  // the conversation when the user selects text in the message bar.
+  it('leaves Ctrl/Cmd+A to a focused background input', () => {
+    vi.useFakeTimers();
+    render(
+      <Tooltip.Provider>
+        <input aria-label="composer" />
+        <ToolPayloadLightbox
+          payload={{ kind: 'text', title: 'Pasted Text', text: 'preview text' }}
+          onClose={vi.fn()}
+        />
+      </Tooltip.Provider>,
+    );
+    const composer = screen.getByLabelText('composer') as HTMLInputElement;
+    composer.focus();
+    expect(fireEvent.keyDown(document, { key: 'a', metaKey: true })).toBe(true);
+    expect(document.activeElement).toBe(composer);
+
+    // Focus inside the preview still selects its own text.
+    const previewText = screen.getByRole('textbox', { name: 'Pasted Text' });
+    previewText.focus();
+    expect(fireEvent.keyDown(document, { key: 'a', metaKey: true })).toBe(false);
+    expect(document.activeElement).toBe(previewText);
+  });
+
+  // Regression (review P1): two non-modal previews can be open; one Escape must
+  // close only the foreground one, never an older one with unsaved edits.
+  it('closes only the foreground preview on one Escape', () => {
+    vi.useFakeTimers();
+    const older = vi.fn();
+    const newer = vi.fn();
+    render(
+      <Tooltip.Provider>
+        <ToolPayloadLightbox payload={{ kind: 'text', title: 'Older', text: 'one' }} onClose={older} />
+        <ToolPayloadLightbox payload={{ kind: 'text', title: 'Newer', text: 'two' }} onClose={newer} />
+      </Tooltip.Provider>,
+    );
+    fireEvent.keyDown(document, { key: 'Escape' });
+    act(() => vi.advanceTimersByTime(200));
+    expect(newer).toHaveBeenCalledTimes(1);
+    expect(older).not.toHaveBeenCalled();
+  });
 
   it('keeps ordinary text and JSON payloads read-only', () => {
     vi.useFakeTimers();

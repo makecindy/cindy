@@ -1,3 +1,6 @@
+import { isLightboxCovered } from '@/lib/lightboxLayer';
+import { previewOwnsKeyboardFocus } from '@/components/chat/previewWindowKeyOwnership';
+
 /**
  * findInPageOwnership — Ctrl/Cmd+F 接管令牌。
  *
@@ -15,20 +18,38 @@
  * 都不影响。计数而非布尔是为了保证嵌套/并发的 mount 也能正确 release。
  */
 
-let claimCount = 0;
+type FindClaim = { isActive?: () => boolean };
+const findClaims = new Set<FindClaim>();
 
-export function acquireFindInPage(): () => void {
-  claimCount += 1;
+/**
+ * A claim can be scoped to a live predicate: a non-modal preview only owns
+ * find while keyboard focus is inside it, so Ctrl/Cmd+F in the conversation
+ * behind it still opens the ordinary page search. Claims without a predicate
+ * (doc-mode FileBodyView) keep the old mount-lifetime behaviour.
+ */
+export function acquireFindInPage(isActive?: () => boolean): () => void {
+  const claim: FindClaim = { isActive };
+  findClaims.add(claim);
   let released = false;
   return () => {
     if (released) return;
     released = true;
-    claimCount = Math.max(0, claimCount - 1);
+    findClaims.delete(claim);
   };
 }
 
 export function isFindInPageClaimed(): boolean {
-  return claimCount > 0;
+  for (const claim of findClaims) {
+    if (!claim.isActive || claim.isActive()) return true;
+  }
+  return false;
+}
+
+/** The preview find host that currently owns keyboard focus, or null. */
+export function getActivePreviewFindHost(): HTMLElement | null {
+  const host = getTextPreviewSearchHost();
+  if (!host || isLightboxCovered(host) || !previewOwnsKeyboardFocus(host)) return null;
+  return host;
 }
 
 /** The foreground Markdown preview owns find even when an editor remains behind it. */

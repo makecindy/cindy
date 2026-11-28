@@ -1,8 +1,8 @@
-import { usePreviewFocusReturn } from './PreviewChrome';
-import { ActivePreviewCollection } from './AttachmentCollectionContext';
 import { useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
-import { createPortal } from 'react-dom';
-import { FocusScope } from '@radix-ui/react-focus-scope';
+import { PreviewHeader, PreviewFooter } from './PreviewChrome';
+import { PreviewWindow } from './PreviewWindow';
+import { claimPreviewWindowEscape } from './previewWindowKeyOwnership';
+import { ActivePreviewCollection } from './AttachmentCollectionContext';
 import { useTranslation } from 'react-i18next';
 import { attachmentPreviewKind } from '@cindy/maker-shared/attachment-preview';
 import { DropdownMenuItem } from '@/components/ui/dropdown-menu';
@@ -28,14 +28,6 @@ import {
   saveChatAttachmentWithToasts,
 } from '@/lib/chatAttachmentSave';
 import { useChatSessionFile } from './ChatSessionFileContext';
-import {
-  PREVIEW_PANEL_CLASS,
-  PREVIEW_PANEL_STYLE,
-  PreviewHeader,
-  PreviewFooter,
-  PreviewScrim,
-  previewCompactPanelStyle,
-} from './PreviewChrome';
 import { ImageLightbox } from './ImageLightbox';
 import { VideoLightbox } from './VideoLightbox';
 import { ModelLightbox } from './ModelLightbox';
@@ -65,7 +57,6 @@ export function FileLightbox({
   onRefreshed?: (fresh: boolean) => void;
 }) {
   const { t } = useTranslation();
-  const restorePreviewFocus = usePreviewFocusReturn();
   const collection = useContext(ActivePreviewCollection);
   const ctx = useChatSessionFile();
   const remote = isRemoteFileOrigin(ctx.origin) ? ctx.origin : null;
@@ -133,15 +124,10 @@ export function FileLightbox({
   }, [onClose, triggerRef]);
   useEffect(() => {
     const key = (event: KeyboardEvent) => {
-      if (
-        event.key === 'Escape' &&
-        !event.defaultPrevented &&
-        !document.fullscreenElement &&
-        !document.querySelector('[data-radix-popper-content-wrapper]')
-      ) {
-        event.preventDefault();
-        close();
-      }
+      if (event.key !== 'Escape' || document.fullscreenElement ||
+          document.querySelector('[data-radix-popper-content-wrapper]')) return;
+      // Only the foreground preview closes on this key.
+      if (claimPreviewWindowEscape(event, overlay.current)) close();
     };
     // Media viewers own their own keyboard scope.
     if (local && ['image', 'video', 'audio', 'model'].includes(kind)) return;
@@ -203,28 +189,15 @@ export function FileLightbox({
     return (
       <ModelLightbox filename={name} source={{ kind: 'local', absPath: local }} onClose={close} />
     );
-  return createPortal(
-    <>
-    <PreviewScrim onClose={close} />
-    <FocusScope
-      onUnmountAutoFocus={restorePreviewFocus}
-      trapped
-      loop
-      asChild
-      onMountAutoFocus={(event) => {
-        event.preventDefault();
-        overlay.current?.focus();
-      }}
+  return (
+    <PreviewWindow
+      ariaLabel={name}
+      compact={unrenderable}
+      extraHeight={unrenderable && collection ? 64 : 0}
+      panelRef={overlay}
+      onBackgroundClick={close}
+      className="text-[var(--text-primary)] outline-none"
     >
-      <div
-        ref={overlay}
-        tabIndex={-1}
-        role="dialog"
-        aria-modal="true"
-        aria-label={name}
-        className={`z-fullscreen text-[var(--text-primary)] outline-none ${PREVIEW_PANEL_CLASS}`}
-        style={unrenderable ? previewCompactPanelStyle(collection ? 64 : 0) : PREVIEW_PANEL_STYLE}
-      >
         <div className={`absolute inset-0 pt-16 ${collection && kind !== 'pdf' ? 'pb-16' : ''}`}>
           {unrenderable ? (
             <div className="flex h-full flex-col items-center justify-center gap-5 overflow-y-auto px-6 py-4 text-center">
@@ -309,10 +282,7 @@ export function FileLightbox({
             </>
           }
         />
-      </div>
-    </FocusScope>
-    </>,
-    document.body,
+    </PreviewWindow>
   );
 }
 

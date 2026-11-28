@@ -23,8 +23,8 @@ const toastContainerSource = readFileSync(
   'utf8',
 );
 
-const textLightboxSource = readFileSync(
-  resolve(__dirname, '..', 'components', 'chat', 'TextLightbox.tsx'),
+const previewWindowSource = readFileSync(
+  resolve(__dirname, '..', 'components', 'chat', 'PreviewWindow.tsx'),
   'utf8',
 );
 
@@ -43,10 +43,11 @@ describe('Toast z-index — sits above all overlays (symptom #1)', () => {
     }
   });
 
-  it('TextLightbox overlay still uses the fullscreen layer (below toast layer)', () => {
-    // The strict ordering is what guarantees the Toast wins even when the
-    // Lightbox Portal mounts later in document.body.
-    expect(textLightboxSource).toMatch(/TEXT_LIGHTBOX_OVERLAY_Z_INDEX\s*=\s*Z_INDEX_LAYERS\.fullscreen\b/);
+  it('shared preview window layer uses the fullscreen layer (below toast layer)', () => {
+    // TextLightbox and the other non-modal viewers portal through this shared
+    // layer; its ordering is what guarantees a Toast wins even when the
+    // portal mounts later in document.body.
+    expect(previewWindowSource).toMatch(/zIndex:\s*Z_INDEX_LAYERS\.fullscreen\b/);
   });
 
   it('ImageLightbox overlay still uses the fullscreen layer (below toast layer)', () => {
