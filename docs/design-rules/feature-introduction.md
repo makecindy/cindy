@@ -1,7 +1,7 @@
 # 功能介绍：带小动画的一页引导
 
 > `DESIGN.md` 专题，规范效力相同。文中未注明文档的 `§N` 均指 [DESIGN.md](./DESIGN.md)。
-> 动效参数只在 §14.4「Get-started guide entrance」登记，本文不重复数值。
+> 动效参数只在[开始引导](./first-run-guide.md#get-started-guide-entrance)「Get-started guide entrance」登记，本文不重复数值。
 
 用户第一次用到某个功能时，弹出一页介绍：一个标识、一句标题、一句话说明、三张各带一段小动画的
 卡片，和一个开始按钮。它来自新装 Cindy 的开始引导欢迎页（2026-11-11 定稿），2026-11-18 用户
@@ -59,7 +59,7 @@
   不用通用图标代替场景，不加装饰色。
 - **每段只讲一个动作**：例如「任务带着绿点、蓝点一条条到来」「顶上一行打勾离开，下面的上移补位」
   「任务挂上时钟，过一会儿带着绿点回来」。
-- **只用登记过的几种动作**（`globals.css` 的 `.first-run-*`，参数见 §14.4）：
+- **只用登记过的几种动作**（`globals.css` 的 `.first-run-*`，参数见[开始引导入场](./first-run-guide.md#get-started-guide-entrance)）：
   - `pop`：弹出（淡入并从小放大），用于点、图标、整块出现。
   - `draw`：从左画出，用于文字横条。
   - `leave`：淡出，用于被替换或离开的元素。
@@ -72,8 +72,8 @@
 - 动作放在 HTML 外层元素上，不直接动 SVG 图标；只动 `transform` 和 `opacity`。
 - 小动画只是示意，不能拿来显示真实任务、供应商或设备的状态。
 
-需要新的动作类型（例如旋转、路径动画）时，先按[设计治理](design-governance.md)登记到 §14.4，
-不要在单个介绍里自行加关键帧。
+需要新的动作类型（例如旋转、路径动画）时，先按[设计治理](design-governance.md)登记到[动效例外登记](exceptions/motion.md)的「开始引导入场」一类，
+参数写进[开始引导入场](./first-run-guide.md#get-started-guide-entrance)，不要在单个介绍里自行加关键帧。
 
 ## 文案
 

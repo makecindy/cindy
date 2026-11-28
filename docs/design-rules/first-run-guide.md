@@ -33,7 +33,7 @@ differences from the general multi-step dialog rule:
   next) rather than a Cancel action; Esc also closes. The scrim never closes it.
 - **No decoration beyond the cover's brand block**: no illustration, gradient, shadow or colour
   outside the semantic tokens; icons are lucide glyphs in `--text-primary` / `--text-secondary`.
-- **Motion.** Step content arrives with the registered get-started guide entrance (§14.4); the
+- **Motion.** Step content arrives with the registered get-started guide entrance ([below](#get-started-guide-entrance)); the
   window itself keeps the shared modal entrance and nothing loops.
 
 Other wizards keep the registered rule; this entry does not authorize removing step chips,

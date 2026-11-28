@@ -440,7 +440,7 @@ Owner decisions, 2026-11-08. They apply to every Settings page, drawer and setti
 The one-page introduction shown the first time someone uses a feature, built like the get-started
 guide's cover and meant to be reused wherever a feature needs one. When to use it, when it appears,
 the page structure, how to make its scenes and how to add one: [feature-introduction.md](./feature-introduction.md).
-Its motion is registered in §14.4 (get-started guide entrance).
+Its motion is the get-started guide entrance: [first-run-guide.md](./first-run-guide.md#get-started-guide-entrance).
 
 ### Inputs & Forms
 
