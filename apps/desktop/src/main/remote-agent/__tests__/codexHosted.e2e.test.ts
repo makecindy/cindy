@@ -11,8 +11,11 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { CodexAgent, type AgentDeps, type AgentEvent, type InteractionRequest, type Logger } from '@cindy/maker-core';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
+import { AppServerHost } from '../../../../../../packages/maker-core/src/agents/codex/app-server/host';
+import type { SkillsListResponse } from '../../../../../../packages/maker-core/src/agents/codex/app-server/protocol';
+import { collectPersonalConfig } from '../controller/projectFiles';
 import { startRemoteAgentSession } from '../controller/startRemote';
 import { createRemoteAgentHost } from '../host/runHost';
 import { hostedStartOptions } from '../host/service';
@@ -20,7 +23,7 @@ import { exerciseConnectionPool } from './poolHarness';
 
 const REPO = path.resolve(__dirname, '../../../../../..');
 const ARCH = `${process.platform}-${process.arch}`;
-const CODEX = path.join(REPO, 'apps', 'codex-package-bin', ARCH, 'bin', process.platform === 'win32' ? 'codex.exe' : 'codex');
+const CODEX = process.env.CINDY_TEST_CODEX_BINARY || path.join(REPO, 'apps', 'codex-package-bin', ARCH, 'bin', process.platform === 'win32' ? 'codex.exe' : 'codex');
 const RG = path.join(REPO, 'apps', 'ripgrep-bin', ARCH, process.platform === 'win32' ? 'rg.exe' : 'rg');
 const available = fs.existsSync(CODEX) && fs.existsSync(RG) && process.platform !== 'win32';
 
@@ -111,16 +114,42 @@ describe.skipIf(!available)('remote agent with a real Codex', () => {
     } as AgentDeps;
   }
 
-  async function run(permissionMode: 'bypassPermissions' | 'default', resolve?: (request: InteractionRequest) => boolean) {
-    const project = path.join(root, `project-${permissionMode}`);
-    const hostRoot = path.join(root, `host-${permissionMode}`);
+  async function run(permissionMode: 'bypassPermissions' | 'default', resolve?: (request: InteractionRequest) => boolean, skillRoot?: 'missing' | 'project' | 'denied') {
+    const id = skillRoot ?? permissionMode;
+    const project = path.join(root, `project-${id}`);
+    const hostRoot = path.join(root, `host-${id}`);
     fs.mkdirSync(project, { recursive: true });
     fs.writeFileSync(path.join(project, 'hello.txt'), 'hello from the controller\n');
     fs.writeFileSync(path.join(project, 'AGENTS.md'), '# Rules\nKeep answers short.\n');
-    const agent = new CodexAgent(codexDeps(path.join(root, `codex-home-${permissionMode}`)));
+    const home = path.join(root, `codex-home-${id}`);
+    const deps = codexDeps(home);
+    const repoRoot = path.join(project, '.agents', 'skills');
+    if (skillRoot === 'project' || skillRoot === 'denied') {
+      fs.mkdirSync(path.join(repoRoot, 'repo'), { recursive: true });
+      fs.writeFileSync(path.join(repoRoot, 'repo', 'SKILL.md'), '---\nname: repo\ndescription: Project fixture\n---\n');
+      if (skillRoot === 'denied') fs.chmodSync(repoRoot, 0);
+    }
+    const managedSkills = (skillRoot ? ['pr', 'learn'] : []).map((name) => {
+      const dir = path.join(root, 'controller-skills', name);
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(path.join(dir, 'SKILL.md'), `---\nname: ${name}\ndescription: Controller ${name} fixture\n---\n`);
+      return { command: name === 'pr' ? 'cindy-plugin-cindy-github:pr' : 'cindy:learn', dir };
+    });
+    if (skillRoot) {
+      const hostSkill = path.join(home, 'skills', 'cindy-pr', 'SKILL.md');
+      fs.mkdirSync(path.dirname(hostSkill), { recursive: true });
+      fs.writeFileSync(hostSkill, '---\nname: pr\ndescription: Host pr fixture\n---\n');
+      deps.getManagedSkills = async () => [{ kind: 'agent-skill', source: 'skill', name: 'pr', claudeCommandName: 'cindy:pr', path: hostSkill }];
+    }
+    const agent = new CodexAgent(deps);
+    const requests = skillRoot ? vi.spyOn(AppServerHost.prototype, 'request') : undefined;
+    let shadowDir = '';
     const host = createRemoteAgentHost({
       isAgentAvailable: (kind) => kind === 'codex',
-      startHosted: (input) => agent.startSession(hostedStartOptions(input)),
+      startHosted: (input) => {
+        shadowDir = input.shadowDir;
+        return agent.startSession(hostedStartOptions(input));
+      },
       isControllerAuthorized: () => true,
       captureOwner: () => 'owner',
       isOwnerCurrent: () => true,
@@ -137,6 +166,9 @@ describe.skipIf(!available)('remote agent with a real Codex', () => {
       codexPath: () => CODEX,
       prepareMcp: async () => ({ servers: new Map(), dispose() {} }),
       collectProjectFiles: async () => [],
+      collectPersonal: skillRoot ? (kind, files, caps) => collectPersonalConfig(kind, files, {
+        env: {}, home: path.join(root, 'controller-home'), managedSkills, agentDigests: caps?.managedSkillDigests,
+      }) : undefined,
       isGitRepo: async () => false,
       newId: randomUUID,
     });
@@ -158,10 +190,24 @@ describe.skipIf(!available)('remote agent with a real Codex', () => {
     })();
     await handle.send({ type: 'user', content: 'Do the scripted work.' }, { throwOnStartFailure: true });
     await done;
+    let native: SkillsListResponse | undefined;
+    if (requests) {
+      try {
+        const index = requests.mock.calls.findIndex(([method]) => method === 'thread/start');
+        expect(requests.mock.calls[index]?.[1]).toMatchObject({
+          config: { 'skills.config': expect.arrayContaining([{ path: path.join(home, 'skills', 'cindy-pr', 'SKILL.md'), enabled: false }]) },
+        });
+        const server = requests.mock.contexts[index] as AppServerHost;
+        native = await server.request<SkillsListResponse>('skills/list', { cwds: [shadowDir], forceReload: true });
+      } finally {
+        requests.mockRestore();
+      }
+    }
+    if (skillRoot === 'denied') fs.chmodSync(repoRoot, 0o700);
     await handle.close({ reason: 'navigation' });
     agent.dispose?.();
     host.dispose();
-    return { project, hostRoot, events, asked };
+    return { project, hostRoot, events, asked, native };
   }
 
   it('runs commands and patches on the controller through the native exec-server environment', { timeout: 180_000 }, async () => {
@@ -183,6 +229,21 @@ describe.skipIf(!available)('remote agent with a real Codex', () => {
     expect(bodies[0]).toContain('Keep answers short.');
     const hostFiles = fs.readdirSync(hostRoot, { recursive: true }).map(String);
     expect(hostFiles.some((file) => file.endsWith('made-by-codex.txt'))).toBe(false);
+  });
+
+  // #13718: skills/list scans the shadow cwd, while the thread discovers project skills through exec-server.
+  it.each(['missing', 'project', 'denied'] as const)('discovers controller skills with a %s project skill root', { timeout: 180_000 }, async skillRoot => {
+    steps = [];
+    bodies.length = 0;
+    const { native, hostRoot } = await run('bypassPermissions', undefined, skillRoot);
+    for (const name of ['pr', 'learn']) {
+      expect(native?.data[0]?.errors).toEqual([]);
+      const matches = native?.data[0]?.skills.filter(skill => skill.name === name && skill.enabled && skill.path?.startsWith(hostRoot));
+      expect(matches).toHaveLength(1);
+      expect(bodies[0].split(`Controller ${name} fixture`).length - 1).toBe(skillRoot === 'denied' ? 0 : 1);
+    }
+    expect(bodies[0].includes('Project fixture')).toBe(skillRoot === 'project');
+    expect(bodies[0]).not.toContain('Host pr fixture');
   });
 
   it('releases an idle task under slot pressure and resumes the same Codex thread', { timeout: 300_000 }, async () => {
