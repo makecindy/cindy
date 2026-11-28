@@ -273,6 +273,11 @@ export interface MakerSessionAgentSwitchHandlerDeps {
      */
     commitBinding?: () => Promise<void>;
   } | null>;
+  /**
+   * 切到不归内置供应商组管理的引擎(如插件引擎 `acp`)提交成功后清除旧的供应商组绑定，
+   * 避免残留绑定继续给远程打开打上 `groupAssigned` 或污染组状态。缺省 = 跳过。
+   */
+  clearProviderGroupBinding?(sessionId: string): Promise<void>;
   /** Same-engine choices use SET_MODEL validation; only the send boundary applies them. Caller owns the session lock. */
   selectSameAgentModel?(
     sessionId: string,
@@ -360,6 +365,7 @@ export interface MakerSessionAgentSwitchHandlerDeps {
     sessionId: string; agent: 'claude-code' | 'codex' | 'pi'; model: string;
     providerId: string | null; agentDeviceId: string | null;
   }): Promise<number | null>;
+  resolveLocalPluginHandoffWindow?(providerId: string, modelId: string): number | null;
   listCompanionSessionIds?(sessionId: string): Promise<{ sessionIds: string[]; chatsTruncated: boolean } | undefined>;
   relocateNativeHistory?(input: {
     sessionId: string; kind: 'claude-code' | 'codex' | 'pi'; nativeId: string; workingDir: string;
@@ -954,6 +960,8 @@ export async function performSessionAgentSwitch(
      */
     forceRelocation?: boolean;
     retryClientId?: string;
+    /** Length of the next input, known only to the internal send path. */
+    nextInputChars?: number;
     /**
      * 仅限 main 内部(不接受 IPC 传入)：供应商组为这个任务换电脑——引擎与模型不变、只换 Agent 所在位置
      * (docs/product-rules/provider-groups.md §6.1)。只在 applyNow 时生效。
@@ -1101,6 +1109,16 @@ export async function performSessionAgentSwitch(
       await commitProviderGroupBinding?.();
     } catch (error) {
       deps.log.warn('agent-switch: provider group binding save failed after switch committed', {
+        sessionId,
+        err: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+  async function clearBindingAfterSwitch(): Promise<void> {
+    try {
+      await deps.clearProviderGroupBinding?.(sessionId);
+    } catch (error) {
+      deps.log.warn('agent-switch: provider group binding clear failed after switch committed', {
         sessionId,
         err: error instanceof Error ? error.message : String(error),
       });
@@ -1333,9 +1351,11 @@ export async function performSessionAgentSwitch(
     // 附带早期原文检索指引(get_chat_history / search_chat_history 定向到本会话)。
     sessionId,
     reason: 'agent-switch' as const,
-    // 插件引擎不报上下文窗口，交接按默认上限截取。
+    // Only the local ACP endpoint's reports are available here; remote and shared targets keep the fallback.
     targetContextWindow: !builtinTarget
-      ? null
+      ? (!targetAgentDeviceId && pluginTarget && typeof normalizedProviderId === 'string'
+        ? deps.resolveLocalPluginHandoffWindow?.(normalizedProviderId, pluginTarget.model) ?? null
+        : null)
       : targetAgentDeviceId
         ? remoteHandoffWindow ?? null
         : await readBeforeAgentSwitch(deps.resolveHandoffWindow?.({
@@ -1343,6 +1363,7 @@ export async function performSessionAgentSwitch(
             providerId: normalizedProviderId === undefined ? row.providerId : normalizedProviderId,
             agentDeviceId: null,
           }), signal),
+    ...(!builtinTarget ? { nextInputChars: params.nextInputChars } : {}),
     ...(await readBeforeAgentSwitch(switchCompanionRecall(deps, sessionId), signal)),
   };
   let full: ReturnType<typeof buildHandoff> | undefined;
@@ -1584,6 +1605,8 @@ export async function performSessionAgentSwitch(
     // (chatgpt-codex-connector P2, PR #5792 review)。
     if (commitProviderGroupBinding) {
       await commitBindingAfterSwitch();
+    } else if (toDbKind === 'acp') {
+      await clearBindingAfterSwitch();
     }
     if (!params.configStaged && !params.providerGroupRelocation && !params.scheduledModelSwitch && !params.preserveModelGroupBinding) {
       unbindModelGroupSession(sessionId);
@@ -1987,6 +2010,7 @@ export function applyPendingAgentSwitchIfIdle(
         fastMode: intent.fastMode,
         thinking: intent.thinking,
         agentDeviceId: intent.targetAgentDeviceId,
+        nextInputChars: opts?.nextInputChars,
         // 普通 maker send 随后会按 DB 真源 lazy-create,无需在 apply 内多 spawn 一次;
         // Goal / IM / scheduler 三条直发路径没有该 lazy-create 事务,必须先把新引擎
         // bootstrap 好再拿 live session 发送,否则会继续持有已关闭的旧 session。

@@ -153,6 +153,7 @@ import { runBotProjectsTool } from '../maker-ipc/botLinkedProjects.js';
 import { createTaskDigestReader } from './taskDigest.js';
 import { createDesktopTaskDigestDeps } from './taskDigestHost.js';
 import { createTaskToolCallAuthorizer } from '../maker-ipc/taskToolCallAuthorizer.js';
+import { isTaskBusyForArchive } from '../task-management/service.js';
 import { createHistoryToolCallbacks } from './historyToolCallbacks.js';
 import { authorizePluginHostToolCall, getPluginHostToolCaller, hostServiceCatalog, setHostToolProviders } from './hostToolCaller.js';
 import { createHostServiceToolExecutor } from '../cindy-brain/hostServiceCatalog.js';
@@ -1195,7 +1196,10 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
           return { ok: false, errorCode: 'HOST_NOT_READY', message: 'localDb not ready' };
         }
         try {
-          const changed = await setSessionsStatusInDb(sessionIds, status, assertTaskActionCurrent);
+          const changed = await setSessionsStatusInDb(sessionIds, status, {
+            isBusyForArchive: isTaskBusyForArchive,
+            beforeMutation: assertTaskActionCurrent,
+          });
           return { ok: true, changed };
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);

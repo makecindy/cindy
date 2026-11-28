@@ -124,6 +124,8 @@ export interface DeviceAgentServiceDeps {
   webFetch?: GuardedFetch;
   /** 受邀者任务里凭证类操作确认卡上的说明(按界面语言)。 */
   sharedProviderCredentialNotice?(): string;
+  /** 远程执行器访问本机工作树前等待后台 worktree 完整检出就绪。 */
+  ensureWorktreeReady?(sessionId: string, signal?: AbortSignal): Promise<void>;
   logger: Logger;
 }
 
@@ -272,6 +274,7 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
     attempt: ReturnType<typeof registerPendingRemoteStart>, recoverLostHistoryGrant = true,
     reissuedHistory = false): Promise<AgentSessionHandle> => {
     const initialShareId = parseProviderShareAgentDeviceId(input.deviceId);
+    const pluginEngine = input.agentKind === 'acp';
     // 下面的分享组分配、直连与备用记录只认内置引擎；插件引擎走分享者本机直连，这里给内置分支一个兜底种类。
     const agentKind: AgentKind = input.agentKind === 'acp' ? 'pi' : input.agentKind;
     const ownerScope = activeOwnerScopeKey();
@@ -335,7 +338,9 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
     }
     requireCurrent();
     const sessionId = opts.sessionId;
-    const groupSwitch = sessionId && deps.groupSwitch ? deps.groupSwitch : null;
+    // 插件引擎不参与供应商组分配与组内换机：即使任务此前归属过供应商组且残留绑定或换机凭证，
+    // 打开插件引擎时也不携带 groupAssigned / groupSwitch，避免被远端宿主按协议拒绝。
+    const groupSwitch = !pluginEngine && sessionId && deps.groupSwitch ? deps.groupSwitch : null;
     const switchToken = groupSwitch && sessionId && !opts.resumeSessionId ? groupSwitch.takeForOpen(sessionId) : undefined;
     if (switchToken && sessionId) {
       directTasks.delete(`${parseProviderShareAgentDeviceId(input.deviceId) ?? ''}:${sessionId}`);
@@ -835,13 +840,15 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
       readImageDeliveryEpoch: deps.readImageDeliveryEpoch,
       attachmentPreservation: deps.attachmentPreservation,
       attachmentStorageRoots: deps.attachmentStorageRoots,
+      ...(deps.ensureWorktreeReady ? { ensureWorktreeReady: deps.ensureWorktreeReady } : {}),
       invoke: poller.invoke,
       poller,
       pool: poolFor(target),
       rgPath: deps.rgPath(),
       codexPath: () => deps.codexPath?.(),
       ...(target !== input.deviceId
-        || (!handoffPlacement && (opts[LOCAL_AGENT_CLIENT]?.groupAssigned || (sessionId && deps.isGroupAssigned?.(sessionId))))
+        || (!handoffPlacement && (opts[LOCAL_AGENT_CLIENT]?.groupAssigned
+          || (!pluginEngine && sessionId && deps.isGroupAssigned?.(sessionId))))
         ? { groupAssigned: true } : {}),
       ...(groupSwitch && sessionId
         ? {

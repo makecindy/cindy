@@ -486,6 +486,7 @@ export interface OrcaTeamServiceDeps {
     message: string;
     workerId: string;
     delivery?: 'queue' | 'steer';
+    initialTask?: boolean;
     imagePaths?: string[];
     dispatchMeta: {
       source: string;
@@ -1219,6 +1220,7 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
       ...(params.imagePaths ? { imagePaths: params.imagePaths } : {}),
       dispatchMeta: params.dispatchMeta,
       assertCurrent,
+      initialTask: true,
       // Creation can queue its first task too; acceptance then lands after this call.
       assertDeliveryCurrent: await deps.captureDeliveryAuthority?.(link.leadSessionId),
     });
@@ -1278,6 +1280,7 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
     resolved: ResolvedWorker;
     message: string;
     mode: 'normal' | 'interrupt';
+    initialTask?: boolean;
     delivery?: 'queue' | 'steer';
     imagePaths?: string[];
     dispatchMeta: DispatchWorkerTaskParams['dispatchMeta'];
@@ -1425,6 +1428,7 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
             targetSessionId: target.sessionId,
             message: params.message,
             workerId: link.workerId,
+            ...(params.initialTask ? { initialTask: true } : {}),
             ...(params.delivery ? { delivery: params.delivery } : {}),
             ...(params.imagePaths ? { imagePaths: params.imagePaths } : {}),
             dispatchMeta: params.dispatchMeta,

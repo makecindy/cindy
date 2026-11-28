@@ -649,8 +649,8 @@ function sanitize(raw: unknown): NewMakerDraft {
 }
 
 /**
- * 只认 `acp-plugin:<插件>:<引擎>` 形态的来源；模型值是引擎给的不透明字符串。`deviceId` 是引擎所在的
- * 另一台自己的电脑(设备 id 形态)：别人分享的来源不提供插件引擎，读到就整项作废，不悄悄改成本机的同名引擎。
+ * 只认 `acp-plugin:<插件>:<引擎>` 形态的来源；模型值是引擎给的不透明字符串。`deviceId` 可指向
+ * 另一台电脑或收到的分享。这里只恢复来源标识，能否使用由当前目录及分享准入判定。
  */
 function sanitizePluginEngine(value: unknown): NewMakerDraft['pluginEngine'] {
   if (!value || typeof value !== 'object') return null;
@@ -658,7 +658,9 @@ function sanitizePluginEngine(value: unknown): NewMakerDraft['pluginEngine'] {
     providerId?: unknown; modelId?: unknown; permissionMode?: unknown; effort?: unknown; deviceId?: unknown;
   };
   if (deviceId !== undefined && (
-    typeof deviceId !== 'string' || !/^[A-Za-z0-9_.:-]{1,128}$/.test(deviceId) || isProviderShareAgentDeviceId(deviceId)
+    typeof deviceId !== 'string' || !/^[A-Za-z0-9_.:-]{1,128}$/.test(deviceId)
+    // Combine the common length/character check with the share parser's alphanumeric first character.
+    || (isProviderShareAgentDeviceId(deviceId) && !/^share:[A-Za-z0-9]/.test(deviceId))
   )) return null;
   if (
     typeof providerId !== 'string' || providerId.length > 512 || !pluginEngineKeyFromProviderId(providerId)
@@ -1382,6 +1384,37 @@ export function applySuggestedDefaultTuple(tuple: SuggestedDefaultTuple): boolea
     ...currentDraft,
     vendor: tuple.vendor,
     lastByVendor: { ...currentDraft.lastByVendor, [tuple.vendor]: nextPrefs },
+  };
+  scheduleWrite({ preserveStoredDefaultTuplePreference: false });
+  emit();
+  return true;
+}
+
+/**
+ * Cindy AI 目录把草稿记着的模型静默指定给另一个引擎（`silentSwitch`）时，把草稿换到那个引擎，
+ * 模型 id 不变。自定义过的草稿同样换，否则新建任务会停在「当前引擎没有这个模型」。
+ * 用户在原引擎上的选择标记随模型带到目标引擎，避免校准把这次选择当成默认值改写；原引擎槽位
+ * 保持不动，目录撤回标记后切回原引擎仍是原来的选择。
+ */
+export function applySilentSwitchDraftTuple(from: MakerVendor, tuple: SuggestedDefaultTuple): boolean {
+  rebaseStoredDefaultTuplePreference();
+  // Read the module draft: the product default may already have moved it this frame.
+  if (currentDraft.vendor !== from || currentDraft.lastByVendor[from].model !== tuple.model) return false;
+  const previous = currentDraft.lastByVendor[tuple.vendor];
+  const chosen = currentDraft.modelChosenByVendor[from] === true;
+  currentDraft = {
+    ...currentDraft,
+    vendor: tuple.vendor,
+    lastByVendor: {
+      ...currentDraft.lastByVendor,
+      [tuple.vendor]: {
+        ...previous,
+        model: tuple.model,
+        providerId: tuple.providerId,
+        ...(tuple.effort ? { effort: tuple.effort } : {}),
+      },
+    },
+    ...(chosen ? { modelChosenByVendor: { ...currentDraft.modelChosenByVendor, [tuple.vendor]: true } } : {}),
   };
   scheduleWrite({ preserveStoredDefaultTuplePreference: false });
   emit();

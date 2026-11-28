@@ -18,6 +18,8 @@
  */
 
 import { describe, it, expect, beforeAll, beforeEach, vi } from 'vitest';
+import { pluginEngineSessionCreateFields, remotePluginEngineChoices, resolveActivePluginEngine } from '@/lib/pluginEngineSelection';
+import type { PluginEngineView } from '../../shared/pluginEngines';
 
 class MemLocalStorage {
   private store = new Map<string, string>();
@@ -229,6 +231,38 @@ describe('newMakerDraft store', () => {
     expect(getDraft().vendor).toBe('cc');
     expect(getDraft().defaultTupleCustomized).toBe(true);
     expect(getDraft().defaultTupleSelectionCustomized).toBe(true);
+  });
+
+  // docs/dev-rules/protocol-compatibility/model-access-silent-switch.md: a draft the user set to
+  // Pi + auto used to stay blocked ("model") once the catalog moved auto to Codex only, because the
+  // product default never overrides a customized draft. It now follows the flagged engine.
+  it('自选的 Pi + auto 草稿随目录静默指定换到 Codex，不再被拦下，Pi 槽位保留', async () => {
+    const { resolveSilentSwitchDraftTuple } = await import('@/lib/newMakerDefaultTuple');
+    const { savedDraftModelIssue } = await import('../features/cc-agent/newMakerDraftModelPrefs');
+    const { applySilentSwitchDraftTuple, getDraft, patchVendorPrefs, switchVendor } = await loadModule();
+    const gateway: import('@cindy/model-providers').ProviderView = {
+      id: 'xd', name: 'Cindy AI', source: 'builtin', connected: true, agents: ['pi', 'codex'],
+      auth: { method: 'managed' }, access: { kind: 'managed' },
+      routing: { pi: { upstream: 'https://provider.invalid', authStrategy: 'none' },
+        codex: { upstream: 'https://provider.invalid', authStrategy: 'none' } },
+      models: { pi: [], codex: [{ id: 'auto', name: 'Auto', contextWindow: 200000, efforts: ['medium', 'high'],
+        defaultEffort: 'medium', silentSwitch: true }] },
+    };
+    switchVendor('pi');
+    patchVendorPrefs('pi', { model: 'auto', providerId: 'xd' });
+    const issue = (agent: 'pi' | 'codex') => savedDraftModelIssue({ agent, engineAvailable: true, enginesLoaded: true,
+      enginesLoading: false, model: getDraft().lastByVendor[agent].model, providerId: 'xd', providers: [gateway],
+      providersLoading: false, providersLoadFailed: false });
+    expect(issue('pi')).toBe('model');
+    const tuple = resolveSilentSwitchDraftTuple({ providers: [gateway], providersLoading: false,
+      availableAgents: new Set(['cc', 'codex', 'pi']), availableAgentsLoaded: true, vendor: 'pi', model: 'auto', providerId: 'xd' });
+    expect(applySilentSwitchDraftTuple('pi', tuple!)).toBe(true);
+    const draft = (await reloadModule()).getDraft();
+    expect(draft).toMatchObject({ vendor: 'codex', defaultTupleSelectionCustomized: true,
+      lastByVendor: { codex: { model: 'auto', providerId: 'xd', effort: 'medium' }, pi: { model: 'auto', providerId: 'xd' } } });
+    expect(draft.modelChosenByVendor.codex).toBe(true);
+    expect(issue('codex')).toBeNull();
+    expect(applySilentSwitchDraftTuple('pi', tuple!)).toBe(false);
   });
 
   it('恢复推荐只撤销 effort/Fast 调档，不清除模型/来源/Harness 选择', async () => {
@@ -663,6 +697,7 @@ describe('newMakerDraft store', () => {
       { providerId: 'acp-plugin:agy-plugin:agy', modelId: 'gemini-4-neon', permissionMode: 'plan', effort: 'xhigh' }],
     ['不是插件引擎来源', { providerId: 'anthropic', modelId: 'claude-opus-5' }, null],
     ['缺模型', { providerId: 'acp-plugin:dsh-plugin:dsh', modelId: '' }, null],
+    ['缺分享 ID', { providerId: 'acp-plugin:dsh-plugin:dsh', modelId: 'default', deviceId: 'share:' }, null],
   ])('插件引擎选择跨重启保留,脏值丢弃:%s', async (_label, stored, expected) => {
     const m1 = await loadModule();
     const ccBefore = m1.getDraft().lastByVendor.cc;
@@ -670,6 +705,40 @@ describe('newMakerDraft store', () => {
     const m2 = await reloadModule();
     expect(m2.getDraft().pluginEngine).toEqual(expected);
     expect(m2.getDraft().lastByVendor.cc).toEqual(ccBefore);
+  });
+
+  // #13442（unit）：原有草稿用例只覆盖本机引擎。用一条授权目录中的分享 ACP 模型通过
+  // patchDraft 保存并重载，验证任务路由仍指向该分享；目录不再授权时，同名本机引擎也不能接替。
+  it('restores the shared ACP engine only through its own offered catalogue', async () => {
+    const deviceId = 'share:synthetic-share';
+    const engine: PluginEngineView = {
+      key: 'test-plugin:test-engine',
+      providerId: 'acp-plugin:test-plugin:test-engine',
+      ghostId: 'test-plugin',
+      harnessId: 'test-engine',
+      name: 'Synthetic ACP',
+      availability: { state: 'available' },
+      models: [{ id: 'selected-model', displayName: 'Selected model' }],
+      permissionModes: [{ id: 'default', displayName: 'Default' }],
+      defaultPermissionMode: 'default',
+      remoteUse: { supported: true, shareSupported: true, enabled: true },
+    };
+    const selection = { deviceId, providerId: engine.providerId, modelId: 'selected-model' };
+    const choices = (catalogue: readonly PluginEngineView[] | null) => [
+      engine,
+      ...remotePluginEngineChoices([{ deviceId }], new Map([[deviceId, catalogue]]), (id) => id),
+    ];
+
+    (await loadModule()).patchDraft({ pluginEngine: selection });
+    const restored = (await reloadModule()).getDraft().pluginEngine;
+    expect(restored).toEqual(selection);
+    const active = resolveActivePluginEngine(choices([engine]), restored);
+    expect(active && pluginEngineSessionCreateFields(active)).toMatchObject({
+      agentKind: 'acp', agentDeviceId: deviceId, providerId: engine.providerId, model: selection.modelId,
+    });
+
+    expect(resolveActivePluginEngine(choices(null), restored)).toBeNull();
+    expect(resolveActivePluginEngine(choices([{ ...engine, models: [], defaultModelAllowed: false }]), restored)).toBeNull();
   });
 
   it('extraDirs 不跨重启还原:运行内生效,重启后一律空(引用目录=单次草稿授权)', async () => {
