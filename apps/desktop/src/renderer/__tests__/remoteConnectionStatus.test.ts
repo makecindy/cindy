@@ -165,7 +165,7 @@ describe('useOutboundProxyVerdict (#9537 degraded 诊断)', () => {
     // 探测被拒:判定保持清空,不回退成上一家的旧值。
     hook.rerender({ deviceId: 'peer-c' });
     await act(async () => {});
-    const rejectProbe = resolveProbe;
+    const rejectProbe: ((v: DeviceLinkProxyVerdict | null) => void) | null = resolveProbe;
     await act(async () => { rejectProbe?.(Promise.reject(new Error('probe failed')) as never); });
     await act(async () => {});
     expect(hook.result.current).toBeNull();
