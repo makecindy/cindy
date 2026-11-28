@@ -312,13 +312,14 @@ const COMPUTER_TOOL_DEFINITIONS: readonly ComputerToolDef[] = [
   {
     name: 'set_value',
     description:
-      'Set a text field value through accessibility, without focus or keystrokes. Preferred for Electron/browser/web-content text fields (verified on Cindy\'s own composer: the field updates and its send button enables) and for minimized/background fields. Requires element_token from the latest get_window_state (query:"AXTextArea" or "AXTextField" finds it). Replaces the whole value; confirm with observe:{}.',
+      'Set a text field value, preferring a focus-free accessibility write. Use a fresh field element_token from get_window_state for Electron/browser/web content. On Linux X11, a field without an accessibility write route may require delivery_mode:"foreground" for the driver\'s keyboard fallback with value readback; use that mode only when the user authorized foreground control. A refusal does not authorize an automatic retry or mode change. Replaces the whole value; confirm with observe:{}.',
     inputShape: {
       pid: z.number().int().positive(),
       window_id: z.number().int().nonnegative(),
       element_index: z.number().int().nonnegative().optional(),
       element_token: ELEMENT_TOKEN_ARG,
       value: z.string(),
+      delivery_mode: z.enum(['background', 'foreground']).optional(),
       snapshot_id: SNAPSHOT_ID_ARG,
       session: z.string().optional(),
     },
