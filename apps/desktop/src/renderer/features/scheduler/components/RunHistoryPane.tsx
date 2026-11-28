@@ -59,7 +59,7 @@ interface Props {
   runNowBusy?: boolean;
   /** The editor owns connection setup while its modal covers this pane. */
   connectionSetupVisible?: boolean;
-  /** 本调度当前因目标任务忙碌连续顺延时的运行期状态。 */
+  /** 本调度当前连续顺延时的运行期状态。 */
   deferral?: SchedulerDeferredSchedule;
 }
 

@@ -80,7 +80,7 @@ interface Props {
    * 的"没抢到槽"是两回事：不区分的话，用户会看到任务挂"运行中"几小时而无从判断。
    */
   queuedForSession?: boolean;
-  /** 目标会话持续忙碌导致本任务连续顺延重试时的瞬时诊断状态。 */
+  /** 本任务连续顺延重试时的瞬时诊断状态。 */
   deferredForSession?: { count: number; firstAt: number; lastReason?: string };
 }
 

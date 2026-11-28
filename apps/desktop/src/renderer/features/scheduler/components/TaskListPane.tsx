@@ -118,7 +118,7 @@ export function TaskListPane({
       ),
     [runtimeSnapshot],
   );
-  // 连续被顺延的任务（目标会话持续忙碌或活跃礼让）：不占执行槽，也没有运行记录，
+  // 连续被顺延的任务（原因见 lastReason）：不占执行槽，也没有运行记录，
   // 单独投影到副标题，避免长时间顺延时界面看起来像正常静默等待下次触发。
   const deferredByScheduleId = useMemo(
     () => new Map((runtimeSnapshot?.deferredSchedules ?? []).map((item) => [item.scheduleId, item])),
