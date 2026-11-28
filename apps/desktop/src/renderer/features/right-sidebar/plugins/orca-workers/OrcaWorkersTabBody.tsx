@@ -15,6 +15,11 @@ import { mergeSessionSources } from '@/features/cc-agent/lib/mergeSessionSources
 import { useDocumentVisible, useWindowVisible } from '@/hooks/useWindowVisible';
 import { isSidebarWindow } from '@/lib/sidebarWindow';
 import { createLogger } from '@/lib/logger';
+import { get as getLocalSession } from '@/lib/sessionService';
+import { getSessionOnDevice } from '@/lib/makerTransport';
+import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
+import { withOrcaTabLifecycle } from '@/features/cc-agent/lib/orcaWorkersRevealRetry';
+import { closeTab } from '../../store';
 import { mergeSidebarWindowBack } from '../../lib/mergeSidebarWindowBack';
 import { SidebarHostSessionProvider } from '../../lib/sidebarHostSession';
 import type { TabKindBodyProps } from '../../types';
@@ -66,6 +71,25 @@ export function OrcaWorkersTabBody({
       (candidate) => candidate.id === ctx.sessionId,
     ) ?? null;
   const closeDecision = getOrcaWorkersCloseDecision({ isLoading, leadSession });
+  // A restored tab can outlive the team without this window ever seeing a role transition.
+  // The list may also predate a new team. Confirm the role before closing this exact tab.
+  const { sessionId, tabId, deviceLinkDeviceId } = ctx;
+  useEffect(() => {
+    if (isLoading || closeDecision === 'stop-team' || deviceLinkDeviceId === undefined) return;
+    const owner = getDataOwnerGeneration();
+    let cancelled = false;
+    void withOrcaTabLifecycle(sessionId, 'reconcile', async () => {
+      if (cancelled || !isDataOwnerGenerationCurrent(owner)) return;
+      const current = await (deviceLinkDeviceId
+        ? getSessionOnDevice(sessionId, deviceLinkDeviceId)
+        : getLocalSession(sessionId));
+      if (cancelled || !isDataOwnerGenerationCurrent(owner)) return;
+      if (current.id === sessionId && current.orcaRole === null) {
+        await closeTab(sessionId, tabId, { skipBeforeClose: true });
+      }
+    }).catch(err => log.warn('reconcile restored collaboration tab failed', err));
+    return () => { cancelled = true; };
+  }, [closeDecision, deviceLinkDeviceId, isLoading, sessionId, tabId]);
   const { requestStop } = useStopOrcaCollabWithoutNavigation({
     leadSessionId: ctx.sessionId,
   });
