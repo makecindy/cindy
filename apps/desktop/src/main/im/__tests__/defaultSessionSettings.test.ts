@@ -204,6 +204,60 @@ describe('resolveImSessionDefaults', () => {
     mocks.listProviders.mockResolvedValue(providers);
   });
 
+  // 生产入口与可观察结果：resolveImSessionDefaults 对本地与远程 acp 插件引擎默认配置的解析与不完整路由拦截。
+  // 规则依据：IM 渠道默认设置放开插件引擎；不经内置供应商目录，完整路由透传给 openChannelSession 做实时准入。
+  // 最小失败输入与 tier：unit，设置 agentKind='acp' + 本地/远程路由及缺失 providerId/model 校验。
+  it('resolves local and remote plugin engine (acp) IM defaults without consulting built-in providers', async () => {
+    const DSH = 'acp-plugin:dsh-acp:dsh';
+    mocks.readImDefaultSettings.mockReturnValue({
+      ...IM_DEFAULT_SETTINGS,
+      agentKind: 'acp',
+      permissionMode: 'bypassPermissions',
+      agents: {
+        ...IM_DEFAULT_SETTINGS.agents,
+        acp: { providerId: DSH, model: 'deepseek-v4', effort: 'high' },
+      },
+    });
+    await expect(resolveImSessionDefaults(config)).resolves.toMatchObject({
+      agentKind: 'acp',
+      providerId: DSH,
+      model: 'deepseek-v4',
+      effort: 'high',
+      permissionMode: 'bypassPermissions',
+      fastMode: false,
+    });
+    expect(mocks.listProviders).not.toHaveBeenCalled();
+
+    mocks.readImDefaultSettings.mockReturnValue({
+      ...IM_DEFAULT_SETTINGS,
+      agentKind: 'acp',
+      permissionMode: 'auto',
+      agents: {
+        ...IM_DEFAULT_SETTINGS.agents,
+        acp: { providerId: DSH, model: 'deepseek-v4', effort: '', agentDeviceId: 'studio' },
+      },
+    });
+    await expect(resolveImSessionDefaults(config)).resolves.toMatchObject({
+      agentKind: 'acp',
+      agentDeviceId: 'studio',
+      providerId: DSH,
+      model: 'deepseek-v4',
+      effort: '',
+      permissionMode: 'auto',
+      fastMode: false,
+    });
+
+    mocks.readImDefaultSettings.mockReturnValue({
+      ...IM_DEFAULT_SETTINGS,
+      agentKind: 'acp',
+      agents: {
+        ...IM_DEFAULT_SETTINGS.agents,
+        acp: { providerId: null, model: '', effort: '' },
+      },
+    });
+    await expect(resolveImSessionDefaults(config)).rejects.toThrow('plugin engine route is incomplete');
+  });
+
   it('preserves an explicitly saved older model and effort', async () => {
     mocks.readImDefaultSettings.mockReturnValue({
       agentKind: 'claude-code',

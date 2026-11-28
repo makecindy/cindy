@@ -5,7 +5,7 @@ import { readSubscriptionSessionAccount, readSubscriptionUsage } from '../subscr
 import { resolveSubscriptionPoolProvider } from '../subscription-accounts/placement.js';
 import { SUBSCRIPTION_ACCOUNTS_CHANNEL } from '../../shared/subscriptionAccounts.js';
 import { pluginEngineKeyFromProviderId } from '../../shared/pluginEngines.js';
-import { dbToMakerAgentKind } from '../../shared/agentKindConversion.js';
+import { dbToMakerAgentKind, isPluginEngineKind } from '../../shared/agentKindConversion.js';
 import { getSessionRuntimeControlSnapshot } from '../maker-ipc/sessionRuntimeControl.js';
 import { pluginEngineDescriptors } from '../maker-ipc/pluginEnginesIpc.js';
 import { isDisallowedPluginEngineDeviceId } from '../maker-ipc/pluginEngineSessionAdmission.js';
@@ -60,6 +60,7 @@ import { resolveHelperSurface } from './helperSurface.js';
 import { createProject } from './createProject.js';
 import { createMoveSession } from './moveSession.js';
 import { createTaskWorktreeHost } from './createTaskWorktree.js';
+import { checkWorktreeBaseRefArg } from '../worktree/sourceRef.js';
 import { sessionImportCallbacks } from '../session-import/agentTools.js';
 import { createDesktopSessionShareCallbacks } from '../session-share/sessionShareTools.desktop.js';
 import { renameProject, removeProject, readCurrentSessionProject } from './projectManagement.js';
@@ -153,6 +154,7 @@ import { runBotProjectsTool } from '../maker-ipc/botLinkedProjects.js';
 import { createTaskDigestReader } from './taskDigest.js';
 import { createDesktopTaskDigestDeps } from './taskDigestHost.js';
 import { createTaskToolCallAuthorizer } from '../maker-ipc/taskToolCallAuthorizer.js';
+import { isTaskBusyForArchive } from '../task-management/service.js';
 import { createHistoryToolCallbacks } from './historyToolCallbacks.js';
 import { authorizePluginHostToolCall, getPluginHostToolCaller, hostServiceCatalog, setHostToolProviders } from './hostToolCaller.js';
 import { createHostServiceToolExecutor } from '../cindy-brain/hostServiceCatalog.js';
@@ -332,6 +334,8 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
       const svc = tryGetOrcaCollabService();
       return svc ? svc.getSessionRuntime({ targetSessionId: sessionId }) : { ok: false as const };
     },
+    readPersistedRouteChange: async (sessionId) =>
+      (await import('../localDb/agentSwitchRows.js')).readLatestAgentSwitchAttribution(sessionId),
     listSessionQueuedCounts: async (sessionIds) => {
       const svc = tryGetOrcaCollabService();
       return svc ? svc.listSessionQueuedCounts(sessionIds) : { ok: false as const };
@@ -830,7 +834,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
           return readSessionQuota(sessionId, {
             readRoute: async id => {
               const row = await getSessionRowSnapshotStrict(id);
-              if (!row) return null;
+              if (!row || isPluginEngineKind(row.agentKind)) return null;
               const kind = dbToMakerAgentKind(row.agentKind);
               const override = getSessionRuntimeControlSnapshot(id).effectiveOverride;
               if (override && (override.agentKind !== kind
@@ -1199,7 +1203,10 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
           return { ok: false, errorCode: 'HOST_NOT_READY', message: 'localDb not ready' };
         }
         try {
-          const changed = await setSessionsStatusInDb(sessionIds, status, assertTaskActionCurrent);
+          const changed = await setSessionsStatusInDb(sessionIds, status, {
+            isBusyForArchive: isTaskBusyForArchive,
+            beforeMutation: assertTaskActionCurrent,
+          });
           return { ok: true, changed };
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
@@ -1300,6 +1307,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
         dispatcherSessionId,
         title,
         useWorktree,
+        baseRef,
         workingDir,
         projectDir,
         agentKind,
@@ -1310,6 +1318,10 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
         agentDeviceId,
       }) => {
         if (!targetSessionId && device && device !== 'local' && device !== getDeviceId()) {
+          // Checked here so a malformed baseline fails without contacting the other computer;
+          // the destination checks again.
+          const checkedBaseRef = checkWorktreeBaseRefArg(baseRef, useWorktree);
+          if (!checkedBaseRef.ok) return { ok: false, errorCode: 'INVALID_ARGS', message: checkedBaseRef.message };
           if (providerId !== undefined && agentKind !== 'acp')
             return { ok: false, errorCode: 'INVALID_ARGS', message: 'provider_id 仅支持本机供应商连接；远程新建任务时仅用于插件引擎(agent_kind="acp")。' };
           if (agentKind === 'acp') {
@@ -1338,14 +1350,18 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
               if (!source) throw new Error('Source task is unavailable');
               recordCreation = await captureBotCreatedTaskResponsibility(dispatcherSessionId, { remoteDeviceId: device });
               return { title: title?.trim() || undefined, projectDir, workingDir,
-                useWorktree, agentKind, ...(agentKind === 'acp' && providerId ? { providerId } : {}), model, effort, fast, agentDeviceId,
+                useWorktree, ...(baseRef !== undefined ? { baseRef } : {}),
+                agentKind, ...(agentKind === 'acp' && providerId ? { providerId } : {}), model, effort, fast, agentDeviceId,
                 permissionMode: permissionModeOrAsk(source.permissionMode) };
             },
           });
           if (!result.ok) return { ...result,
             ...(['DELIVERY_UNKNOWN', 'CREATED_NOT_DELIVERED'].includes(result.errorCode)
               ? { recoverySessionId: qualifiedId, message: `${result.message} Recovery target_session_id: ${qualifiedId}. Do not repeat create.` } : {}) };
-          const accepted = { ...result, targetSessionId: qualifiedId, targetDeviceId: device };
+          // The destination reports the provider location relative to itself (null = its own provider).
+          // An older destination reports nothing: keep it unknown.
+          const accepted = { ...result, targetSessionId: qualifiedId, targetDeviceId: device,
+            ...(result.agentDeviceId !== undefined ? { providerDeviceId: result.agentDeviceId } : {}) };
           // Opened from a group: the group shows the task as a card (bot-group-chat.md §10).
           reportGroupTaskCreated(dispatcherSessionId, { taskId: id, deviceId: device, title: result.targetTitle || title?.trim() || normalizeAutoTitle(message) });
           if (recordCreation) {
@@ -1372,6 +1388,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
             dispatcherSessionId,
             title,
             useWorktree,
+            ...(baseRef !== undefined ? { baseRef } : {}),
             workingDir,
             projectDir,
             ...(hasExecutionOverrides

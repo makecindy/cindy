@@ -16,9 +16,6 @@ vi.mock('../SessionEntryList', () => ({ SessionEntryRows: ({ entries, onAction }
   entries: { session: Session }[]; onAction: (id: string, action: 'complete') => unknown;
 }) => <div data-testid="row" data-device={entries[0].session.deviceLinkDeviceId}>{entries[0].session.id}<button data-inbox-complete aria-label={`complete:${entries[0].session.id}`}
   onClick={() => { void onAction(entries[0].session.id, 'complete'); }} /></div> }));
-vi.mock('@/features/bots/TeammateInboxRow', () => ({ TeammateInboxRow: ({ entry }: { entry: { key: string } }) =>
-  <div data-testid="row">{entry.key}<button data-inbox-complete aria-label={`complete:${entry.key}`} /></div> }));
-import type { TeammateInboxEntry } from '@/features/bots/teammateInbox';
 import { markSessionStarting, clearSessionStarting } from '@/lib/sessionStartingStore';
 import { TaskInbox } from '../TaskInbox';
 import { useInboxUnread } from '../useInboxUnread';
@@ -209,37 +206,6 @@ it('keeps the new viewed task settled when an older completion returns late', as
   expect(pendingRows()).toHaveLength(0);
 });
 
-// 2026-11-20 user decision (task-inbox.md「伙伴主对话」): a teammate's main conversation is one
-// row placed by whose turn it is. No earlier test rendered a teammate in the inbox. Unit: real
-// placement, counts and Done-hover freeze with a stub row; minimal input is one teammate per state.
-it('places teammate conversations with the tasks and removes a read one even while Done is hovered', () => {
-  const teammate = (key: string, status: TeammateInboxEntry['status'], snoozedUntil: string | null = null) => ({
-    key, status, snooze: { snoozedUntil, snoozedAt: snoozedUntil && new Date().toISOString(), userSendAt: null },
-  }) as TeammateInboxEntry;
-  const props: Parameters<typeof TaskInbox>[0] = {
-    sessions: [{ id: 'task', title: 'Task', status: 'active' } as Session],
-    priorityContext: { runningSessionIds: new Set(), attentionSessionIds: new Set() },
-    runningSessionIds: new Set(), attachedSessionIds: new Set(), notifications: new Set(),
-    onSessionClick: () => {}, onAction: () => {}, onRename: () => {}, onTogglePin: () => {}, onScheduleAction: () => {},
-  };
-  const later = new Date(Date.now() + 3_600_000).toISOString();
-  const view = render(<TaskInbox {...props} teammates={[
-    teammate('unread', 'unread'), teammate('running', 'running'), teammate('idle', 'idle'), teammate('later', 'awaiting', later),
-  ]} />);
-  const rows = () => Array.from(view.container.querySelectorAll('section'), section =>
-    Array.from(section.querySelectorAll('[data-testid="row"]'), row => row.textContent));
-  expect(rows()).toEqual([['unread', 'task'], ['running'], ['later'], []]);
-  expect(Array.from(view.container.querySelectorAll('section > button'), button => button.lastElementChild?.textContent))
-    .toEqual(['2', '1', '1', '0']);
-  fireEvent.mouseOver(screen.getByRole('button', { name: 'complete:task' }));
-  view.rerender(<TaskInbox {...props} teammates={[teammate('unread', 'idle'), teammate('running', 'unread')]} />);
-  // Read leaves at once; a reply that arrived meanwhile waits for the pointer like any other move.
-  expect(rows()).toEqual([['task'], ['running'], [], []]);
-  fireEvent.mouseOut(screen.getByRole('button', { name: 'complete:task' }));
-  expect(rows()).toEqual([['running', 'task'], [], [], []]);
-});
-
-
 // 2026-11-25 user decision (task-inbox.md「分区与动作」): rows inside a section follow time alone.
 // Before, the inbox reused the list's priority sort, so week-old unread archives sat above a task
 // archived a minute ago. Unit: real grouping; minimal input is an older unread and a newer read
@@ -261,6 +227,24 @@ it('orders each section by latest activity, whether or not a task is unread', ()
     .toEqual([['new-read', 'old-unread'], [], [], ['new-read-done', 'old-unread-done']]);
 });
 
+// 2026-11-27 user decision (task-inbox.md「分区与动作」): Done rows sort by archivedAt
+// descending so a long-quiet task completed just now rises to the top, while legacy rows
+// without archivedAt fall back to regular activity time. Unit: real TaskInbox sorting.
+it('orders the archived section by archivedAt descending with activity fallback for legacy rows', () => {
+  const at = (hoursAgo: number) => new Date(Date.now() - hoursAgo * 3_600_000).toISOString();
+  const sessions = [
+    { id: 'active-earlier-archived', title: 'active-earlier-archived', status: 'archived', lastActivityAt: at(1), archivedAt: at(3) },
+    { id: 'old-just-archived', title: 'old-just-archived', status: 'archived', lastActivityAt: at(48), archivedAt: at(0) },
+    { id: 'legacy-no-archived-at', title: 'legacy-no-archived-at', status: 'archived', lastActivityAt: at(2), archivedAt: null },
+  ] as Session[];
+  const view = render(<TaskInbox sessions={sessions}
+    priorityContext={{ runningSessionIds: new Set(), attentionSessionIds: new Set() }}
+    runningSessionIds={new Set()} attachedSessionIds={new Set()} notifications={new Set()}
+    onSessionClick={() => {}} onAction={() => {}} onRename={() => {}} onTogglePin={() => {}} onScheduleAction={() => {}} />);
+  expect(Array.from(view.container.querySelectorAll('section')[3].querySelectorAll('[data-testid="row"]'), row => row.textContent))
+    .toEqual(['old-just-archived', 'legacy-no-archived-at', 'active-earlier-archived']);
+});
+
 // Unit: task-inbox.md. Row placement tests cannot see the closed inbox's indicator.
 // A snoozed remote result wakes on time and clears on read despite the open row's held rank.
 it('lights for a due remote result and clears as soon as the host acknowledges it', () => {
@@ -273,7 +257,7 @@ it('lights for a due remote result and clears as soon as the host acknowledges i
     const publish = (attention: boolean) => act(() => applyRemoteSessionActivity('studio', {
       sessionId: 'remote', phase: 'completed', attention,
     }));
-    const view = renderHook(() => useInboxUnread([session], [], priority, () => false));
+    const view = renderHook(() => useInboxUnread([session], priority, () => false));
     publish(true);
     expect(view.result.current.hasUnread).toBe(false);
     act(() => vi.advanceTimersByTime(1000));
@@ -283,4 +267,70 @@ it('lights for a due remote result and clears as soon as the host acknowledges i
   } finally {
     vi.useRealTimers();
   }
+});
+
+// Feature: Desktop Inbox aggregated environment health strip.
+// Unit tier: verifies zero footprint when healthy, collapsible multi-alert aggregation,
+// direct repair action callback, and per-alert dismissal without disturbing Inbox section DOM.
+it('renders EnvironmentHealthStrip only when alerts exist, supports expand, action, and dismiss', () => {
+  const onAction = vi.fn();
+  const onDismiss = vi.fn();
+  const baseProps: Parameters<typeof TaskInbox>[0] = {
+    sessions: [{ id: 't1', title: 'Task 1', status: 'active' } as Session],
+    priorityContext: { runningSessionIds: new Set(), attentionSessionIds: new Set(['t1']) },
+    runningSessionIds: new Set(),
+    attachedSessionIds: new Set(),
+    notifications: new Set(),
+    onSessionClick: () => {},
+    onAction: () => {},
+    onRename: () => {},
+    onTogglePin: () => {},
+    onScheduleAction: () => {},
+    onHealthAlertAction: onAction,
+    onDismissHealthAlert: onDismiss,
+  };
+
+  const view = render(<TaskInbox {...baseProps} healthAlerts={[]} />);
+  expect(screen.queryByTestId('inbox-environment-health')).toBeNull();
+
+  const alerts = [
+    {
+      id: 'provider-auth',
+      kind: 'provider-auth' as const,
+      severity: 'error' as const,
+      fingerprint: 'provider-auth:openai',
+      titleKey: 'ccAgent.sidebar.inbox.health.providerAuthSingleTitle',
+      titleParams: { name: 'Codex' },
+      descriptionKey: 'ccAgent.sidebar.inbox.health.providerAuthSingleDesc',
+      actionLabelKey: 'ccAgent.sidebar.inbox.health.actions.reconnect',
+      action: { type: 'navigate' as const, path: '/settings?tab=providers&connect=openai' },
+    },
+    {
+      id: 'github-auth',
+      kind: 'github-auth' as const,
+      severity: 'warning' as const,
+      fingerprint: 'github-auth:gh-not-logged-in:3',
+      titleKey: 'ccAgent.sidebar.inbox.health.githubNotLoggedInTitle',
+      descriptionKey: 'ccAgent.sidebar.inbox.health.prAffectedDesc',
+      descriptionParams: { count: 3 },
+      actionLabelKey: 'ccAgent.sidebar.inbox.health.actions.connectGithub',
+      action: { type: 'open-github-connect' as const },
+    },
+  ];
+
+  view.rerender(<TaskInbox {...baseProps} healthAlerts={alerts} />);
+  // Does not pollute Inbox <section> list.
+  expect(view.container.querySelectorAll('section')).toHaveLength(4);
+  const strip = screen.getByTestId('inbox-environment-health');
+  const toggle = strip.querySelector('button[aria-expanded]')!;
+  expect(toggle.getAttribute('aria-expanded')).toBe('false');
+  fireEvent.click(toggle);
+  expect(toggle.getAttribute('aria-expanded')).toBe('true');
+
+  fireEvent.click(screen.getByRole('button', { name: 'ccAgent.sidebar.inbox.health.actions.connectGithub' }));
+  expect(onAction).toHaveBeenCalledWith(alerts[1].action, alerts[1]);
+
+  const dismissButtons = screen.getAllByRole('button', { name: 'ccAgent.sidebar.inbox.health.dismiss' });
+  fireEvent.click(dismissButtons[0]);
+  expect(onDismiss).toHaveBeenCalledWith('provider-auth:openai');
 });

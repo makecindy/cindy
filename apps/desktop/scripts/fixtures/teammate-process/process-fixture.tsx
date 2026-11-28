@@ -34,6 +34,12 @@ const retryMessages: ChatMessage[] = [
   { ...text('retry-two-result', '{"isError":true,"content":[{"type":"text","text":"Unavailable"}]}'), role: 'tool_result', toolUseId: 'retry-two' },
   { ...text('retry-active', ''), role: 'tool_use', toolName: 'Read', toolInput: { file_path: '/repo/skills.md' }, toolUseId: 'retry-active' },
 ];
+// ACP can supply the whole command as the tool name without separate input.
+const commandTitle = ["python3 - <<'PY'", ...Array.from({ length: 24 }, (_, i) => `print("sample ${i}")`), 'END_13720'].join('\n');
+const commandMessages: ChatMessage[] = [
+  { ...text('command-request', 'Inspect command'), role: 'user' },
+  { ...text('command', ''), role: 'tool_use', toolName: commandTitle, toolUseId: 'command', toolInput: {} },
+];
 const artifactMessages: ChatMessage[] = [
   { ...text('ask-artifacts', '整理这周的交付清单，生成表格并保留整理脚本。'), role: 'user' },
   { ...text('make-sheet', ''), role: 'tool_use', toolName: 'make_xlsx', toolUseId: 'make-sheet', toolInput: {
@@ -175,10 +181,10 @@ function FeishuReplyColumns({ editing }: { editing: boolean }) {
   </div>;
 }
 
-function Subject({ done, retry, artifactCase, refresh, disclosure, switched, columns, ordinary, unread }: { done: boolean; retry: boolean; switched?: boolean; artifactCase?: string; refresh?: boolean; disclosure?: boolean; columns?: boolean; ordinary?: boolean; unread?: boolean }) {
+function Subject({ done, longTitle, retry, artifactCase, refresh, disclosure, switched, columns, ordinary, unread }: { done: boolean; longTitle?: boolean; retry: boolean; switched?: boolean; artifactCase?: string; refresh?: boolean; disclosure?: boolean; columns?: boolean; ordinary?: boolean; unread?: boolean }) {
   const [finished, setFinished] = useState(done);
   const [revision, setRevision] = useState(0);
-  const rows = retry ? retryMessages : switched ? [...messages.slice(0, 7), { ...text('model-switch', ''), systemCardType: 'agent-switch' as const, systemCardData: { modelOnly: true, fromModel: 'quota-test', toModel: 'gpt-6.1-sol', fromAgentKind: 'pi', toAgentKind: 'codex' } }, ...messages.slice(7)] : messages;
+  const rows = longTitle ? commandMessages : retry ? retryMessages : switched ? [...messages.slice(0, 7), { ...text('model-switch', ''), systemCardType: 'agent-switch' as const, systemCardData: { modelOnly: true, fromModel: 'quota-test', toModel: 'gpt-6.1-sol', fromAgentKind: 'pi', toAgentKind: 'codex' } }, ...messages.slice(7)] : messages;
   if (columns) return <ReplyColumns ordinary={ordinary === true} />;
   if (refresh) return <RefreshingProcess running={!done} />;
   if (artifactCase) return <ArtifactStream artifactCase={artifactCase} />;
@@ -215,5 +221,5 @@ void mountPage({
       return { kind: missing ? 'missing' : 'file', birthtimeMs: Date.now() - 46000, mtimeMs: Date.now() - 46000 };
     } },
   }),
-  render: ctx => ctx.case.startsWith('feishu-') ? <FeishuReplyColumns editing={ctx.case === 'feishu-edit'} /> : <Subject columns={ctx.data.columns === true} ordinary={ctx.data.ordinary === true} unread={ctx.data.unread === true} switched={ctx.data.switched === true} done={ctx.data.done === true} retry={ctx.data.retry === true} refresh={ctx.data.refresh === true} disclosure={ctx.data.disclosure === true} artifactCase={ctx.case.startsWith('artifacts-') ? ctx.case : undefined} />,
+  render: ctx => ctx.case.startsWith('feishu-') ? <FeishuReplyColumns editing={ctx.case === 'feishu-edit'} /> : <Subject longTitle={ctx.case === 'long-tool-title'} columns={ctx.data.columns === true} ordinary={ctx.data.ordinary === true} unread={ctx.data.unread === true} switched={ctx.data.switched === true} done={ctx.data.done === true} retry={ctx.data.retry === true} refresh={ctx.data.refresh === true} disclosure={ctx.data.disclosure === true} artifactCase={ctx.case.startsWith('artifacts-') ? ctx.case : undefined} />,
 });

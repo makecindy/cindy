@@ -14,6 +14,9 @@ const readTextLf = (...args: Parameters<typeof readFileSync>): string =>
 describe('mobile message media thumbnail wiring', () => {
   const rendererSource = readTextLf(resolve(process.cwd(), 'src/session/MessageRenderer.tsx'), 'utf8');
   const screenSource = readTextLf(resolve(process.cwd(), 'app/sessions/[sessionId].tsx'), 'utf8');
+  // 会话页与群聊共用的带磁盘缓存取件队列;下面的磁盘缓存接线断言针对它。
+  const cachedQueueSource = readTextLf(resolve(process.cwd(), 'src/session/cachedRemoteMediaQueue.ts'), 'utf8');
+  const groupMediaSource = readTextLf(resolve(process.cwd(), 'src/session/useBotGroupRemoteMedia.ts'), 'utf8');
 
   it('seeds restored outbox identities before visible rows and authoritative queue captures', () => {
     const pendingItems = screenSource.slice(
@@ -148,16 +151,19 @@ describe('mobile message media thumbnail wiring', () => {
   });
 
   it('routes session-screen resolution through the resolve queue with per-session cleanup', () => {
-    expect(screenSource).toContain('createRemoteMediaResolveQueue');
+    expect(cachedQueueSource).toContain('createRemoteMediaResolveQueue');
+    // 群聊与会话页走同一个带磁盘缓存的队列,不再各自维护一份只在内存里的队列。
+    expect(screenSource).toContain('createCachedRemoteMediaQueue');
+    expect(groupMediaSource).toContain('createCachedRemoteMediaQueue');
     expect(screenSource).toContain('.request(media, opts)');
     expect(screenSource).toContain('releaseAll()');
     // 切 sessionId(本屏不重挂载)与页面卸载共用最终清理;下次取件懒建新队列。
     expect(screenSource).toContain('[releaseRemoteMediaQueue, sessionId]');
-    expect(screenSource).toContain('(remoteMediaQueueRef.current ??= createRemoteMediaQueue()).request(media, opts)');
+    expect(screenSource).toContain('(remoteMediaQueueRef.current ??= createRemoteMediaQueue()).queue.request(media, opts)');
     const releaseStart = screenSource.indexOf('const releaseRemoteMedia = useCallback');
     const releaseEnd = screenSource.indexOf('const shareLightboxImage', releaseStart);
     const releaseBlock = screenSource.slice(releaseStart, releaseEnd);
-    expect(releaseBlock).toContain('remoteMediaQueueRef.current?.evict(sourceUrl)');
+    expect(releaseBlock).toContain('remoteMediaQueueRef.current?.queue.evict(sourceUrl)');
     expect(releaseBlock).not.toContain("method: 'DELETE'");
   });
 
@@ -228,7 +234,7 @@ describe('mobile message media thumbnail wiring', () => {
     // 垫底预取只吃缓存:不许触发新取件(gif/老被控端会回落成整图下载,叠成双下载)
     expect(lightboxSource).toContain('cachedOnly: true');
     // 退屏后完成的 in-flight 取件经 orphan 回调补 DELETE
-    expect(screenSource).toContain('onOrphanResolved');
+    expect(cachedQueueSource).toContain('onOrphanResolved');
     // 取件成功但 mime 非图片 → 视为失败给重试按钮,不停留在永久 spinner
     expect(lightboxSource).toContain('resolvedUnsupported');
     // 取件中 / 失败分支单击同样切换 chrome(关闭按钮在 chrome 里,不能困在全屏 Modal)
@@ -243,23 +249,26 @@ describe('mobile message media thumbnail wiring', () => {
     // 旋转(宽度变化)时按 activeIndex 重锚 FlatList,页码 / 分享目标不错位
     expect(lightboxSource).toContain('scrollToOffset');
     // 退屏 DELETE 前等待后台落盘完成,不把 store 下载打成 404 白丢缓存
-    expect(screenSource).toContain('pendingDiskStoresRef');
-    expect(screenSource).toContain('deleteRemoteMediaObject');
+    expect(cachedQueueSource).toContain('pendingDiskStores.get(media.ossKey)');
+    expect(cachedQueueSource).toContain('const deleteObject');
     const queueSource = readTextLf(resolve(process.cwd(), 'src/session/remoteMediaResolveQueue.ts'), 'utf8');
     expect(queueSource).toContain('onOrphanResolved?.(resolved)');
   });
 
   it('layers the image disk cache in front of remote fetch with empty-ossKey release exemption', () => {
-    expect(screenSource).toContain('createRemoteMediaDiskCache');
-    expect(screenSource).toContain('createExpoRemoteMediaDiskCacheIO');
+    expect(cachedQueueSource).toContain('createRemoteMediaDiskCache');
+    expect(cachedQueueSource).toContain('createExpoRemoteMediaDiskCacheIO');
+    // 全 App 一个实例:多实例共用目录时初始化对账会互删对方文件。
+    expect(screenSource).not.toContain('createRemoteMediaDiskCache(');
+    expect(groupMediaSource).not.toContain('createRemoteMediaDiskCache(');
     // 源键带设备命名空间:不同账号/设备的同名 url 不互相命中(隐私 + 内容错乱);
     // 缩略图与原图是同 url 的不同产物,磁盘键按 thumbnail 变体再分离。
-    expect(screenSource).toContain("const diskSource = (media.thumbnail ? 'thumb\\u0000' : '') + bareDiskSource;");
-    expect(screenSource).toContain('diskCache.lookup(diskSource)');
+    expect(cachedQueueSource).toContain("const diskSource = (media.thumbnail ? 'thumb\\u0000' : '') + bareDiskSource;");
+    expect(cachedQueueSource).toContain('diskCache.lookup(diskSource)');
     // 缩略图查找带裸键兜底:回落原图(gif/老被控端)只落裸键,缩略图直接复用不二次下载
-    expect(screenSource).toContain('media.thumbnail ? await diskCache.lookup(bareDiskSource)');
+    expect(cachedQueueSource).toContain('media.thumbnail ? await diskCache.lookup(bareDiskSource)');
     // 带 size:超缓存预算的对象跳过落盘,不白下载
-    expect(screenSource).toContain('diskCache.store(bareDiskSource, resolved.url, resolved.mimeType, resolved.size)');
+    expect(cachedQueueSource).toContain('diskCache.store(bareDiskSource, resolved.url, resolved.mimeType, resolved.size)');
     expect(screenSource).toContain('deviceIdRef.current');
     // ref 同步用 layout effect:子组件被动 effect 起跑前 deps/命名空间已切到新会话
     expect(screenSource).toContain('useLayoutEffect(() => {\n    remoteMediaDepsRef.current = { auth, maker };');
@@ -272,7 +281,7 @@ describe('mobile message media thumbnail wiring', () => {
     // 分享超预算对象:store 被 LRU 立即逐出时,绕开 LRU 走一次性临时文件
     expect(screenSource).toContain('downloadRemoteMediaShareTemp');
     // 空 ossKey(磁盘缓存命中)豁免 DELETE 收敛在 deleteRemoteMediaObject 内
-    expect(screenSource).toContain('if (!media.ossKey) return;');
+    expect(cachedQueueSource).toContain('if (!media.ossKey) return;');
     // Expo 适配层下载原子落位:临时名下载、正尺寸后 moveSync 顶替,失败不动现有好文件
     const expoIoSource = readTextLf(resolve(process.cwd(), 'src/session/remoteMediaDiskCacheExpo.ts'), 'utf8');
     expect(expoIoSource).toContain('.dl.tmp');

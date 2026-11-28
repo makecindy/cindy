@@ -42,6 +42,7 @@ import { SHARE_EXCLUDE_ATTR, SHARE_MESSAGE_ATTR, SHARE_SESSION_ATTR } from '@/li
 import { ChatReadReceipt } from './ChatMessageReaders';
 import { cn } from '@/lib/utils';
 import type {
+  BotGroupAttachment,
   BotGroupMention,
   BotGroupMemberView,
   BotGroupPlanStepView,
@@ -69,6 +70,7 @@ import { BotGroupQuoteBlock } from './BotGroupQuote';
 import { BotGroupRuntimeFailureNotice } from './BotGroupRuntimeFailureNotice';
 import { BotGroupLiveTaskCard, BotGroupTaskCard } from './BotGroupTaskCard';
 import type { BotGroupTimelineMessage } from './BotGroupTimelineModel';
+import { type ChatReactionReads, useChatReactions } from './useChatReactions';
 import { ChatMessageHoverActions, ChatMessageReactions } from './ChatServerControls';
 
 // ---- @ mention highlight ----------------------------------------------------------------
@@ -176,8 +178,10 @@ function ReadTailRow() {
   return <div aria-hidden {...{ [SHARE_EXCLUDE_ATTR]: '' }} className="h-5 shrink-0" />;
 }
 
-function BotGroupMessageText({ content, mentionLabels, members, mentions, serverBacked, authorKind, messageKey, onRichSend, sharing, readTail = false }: {
+function BotGroupMessageText({ content, mentionLabels, members, mentions, serverBacked, authorKind, messageKey, onRichSend, sharing, readTail = false, readableLinks = false }: {
   messageKey?: string;
+  /** Others' messages show bare URLs as short labels; my own keep the text as typed (bot-group-chat.md). */
+  readableLinks?: boolean;
   onRichSend?: (text: string) => Promise<boolean>;
   /** Reserve room for the read check at the end of the last line. */
   readTail?: boolean;
@@ -265,7 +269,7 @@ function BotGroupMessageText({ content, mentionLabels, members, mentions, server
       onPointerLeave={() => { if (ref.current) ref.current.style.cursor = ''; scheduleClose(); }}>
       <SessionQuickSendProvider value={authorKind === 'bot' ? sender : null}>
         {folded ? <InlineReferenceChip icon={<FileText aria-hidden />} label={t('newChat.pastedText.chipLabel', { lines: countPasteLines(content) })}
-          onClick={() => setTextPreview(true)} /> : <MarkdownRenderer workingDir="" content={content} allowPrivilegedLinks={false}
+          onClick={() => setTextPreview(true)} /> : <MarkdownRenderer workingDir="" content={content} allowPrivilegedLinks={false} readableBareLinks={readableLinks}
           renderRichAnswers={authorKind === 'bot'} streamFadeKey={messageKey} />}
       </SessionQuickSendProvider>
       {textPreview && <ToolPayloadLightbox payload={{ kind: 'text', title: t('newChat.pastedText.previewTitle'), text: content }}
@@ -299,10 +303,29 @@ export function BotGroupDateDivider({ timestamp, locale }: { timestamp: number; 
   );
 }
 
+/** Unread boundary on the group main timeline, matching the 1:1 companion chat's NEW divider. */
+export function BotGroupUnreadDivider({ thread = false }: { thread?: boolean }) {
+  const { t } = useTranslation();
+  return (
+    <div
+      data-testid={thread ? 'bot-group-thread-new-replies' : 'bot-group-new-messages'}
+      data-selection-quote-scope=""
+      className="mt-4 flex select-none items-center gap-3 first:mt-0"
+      role="separator"
+      aria-label={t('bots.chat.newMessagesBoundary')}
+    >
+      {!thread && <div className="h-px flex-1 bg-[var(--bot-unread-bg)] opacity-30" />}
+      <span className="shrink-0 text-11 font-medium tracking-[0.08em] text-[var(--bot-unread-bg)]">
+        {t('bots.chat.newMessagesBoundary')}
+      </span>
+      <div className="h-px flex-1 bg-[var(--bot-unread-bg)] opacity-30" />
+    </div>
+  );
+}
+
 // ---- The row ---------------------------------------------------------------------------
 
 export interface BotGroupTimelineItemProps {
-  showDeviceChoice?: boolean;
   pluginUi: import('@/cindy-brain/PluginUiContributions').PluginUiMessageCandidates;
   message: BotGroupTimelineMessage;
   /** Same author as the row above within five minutes: no avatar or name. */
@@ -330,10 +353,13 @@ export interface BotGroupTimelineItemProps {
   showActions?: boolean;
   /** Server group id: reactions and the toolbar's reaction picker. */
   reactionGroupId?: string;
+  /** Server conversation id for attachment retry (covers both groups and direct chats). */
+  attachmentGroupId?: string;
   /** The group's server lists who has read a message (`supportsMessageReaders`). */
   readersEnabled?: boolean;
   /** The message's reaction version (`messageReactionRevision`): who reacted is re-read when it moves. */
   reactionRevision?: string;
+  reactionReads?: ChatReactionReads;
   quoteDisplay?: BotGroupQuoteDisplay;
   onLocateQuote?: (quote: BotGroupQuoteView) => void;
   onQuote?: (messageId: string) => void;
@@ -451,6 +477,7 @@ function BotGroupTimelineItemImpl(props: BotGroupTimelineItemProps) {
   const mask = useGroupMask();
   const { t } = useTranslation();
   const { message, authorName, members, mentionLabels, locale, shareScope, sharing } = props;
+  const controls = useChatReactions(props.reactionGroupId, message, props.onChanged, props.reactionReads);
   const attribution = message.maskAttribution ? { self: maskIdentity(message.maskAttribution.self), companion: maskIdentity(message.maskAttribution.companion) }
     : mask?.attributions[message.id];
   const continued = props.continued && !attribution;
@@ -487,7 +514,7 @@ function BotGroupTimelineItemImpl(props: BotGroupTimelineItemProps) {
   if (message.kind === 'notice' || message.authorKind === 'system') {
     const name = message.authorName.trim() || authorName;
     if (isBotGroupCapabilityNoticeCode(message.capabilityNoticeCode)) return <Row {...rowProps} block="system">
-      <BotGroupCapabilityNotice name={name} code={message.capabilityNoticeCode} chooseDevice={props.showDeviceChoice && message.canChooseAssistantDevice} />
+      <BotGroupCapabilityNotice name={name} code={message.capabilityNoticeCode} />
     </Row>;
     if (isBotGroupRuntimeFailureCode(message.runtimeFailureCode)) {
       return (
@@ -517,7 +544,6 @@ function BotGroupTimelineItemImpl(props: BotGroupTimelineItemProps) {
   const hasText = message.content.trim().length > 0;
   const hasAttachments = (message.attachments?.length ?? 0) > 0;
   const self = message.authorKind === 'user' && message.isSelf !== false;
-  const hasReactions = !message.pending && (message.reactions?.length ?? 0) > 0;
   // One check once sent, two once another member has read it; not while sending or after a failed send.
   // It sits inside the bubble at the bottom right, at the end of the last line when there is room (the
   // text reserves that space, see `placeReadTail`). In a server group it opens who has read the message.
@@ -526,8 +552,7 @@ function BotGroupTimelineItemImpl(props: BotGroupTimelineItemProps) {
     <ChatReadReceipt groupId={props.reactionGroupId} messageId={message.id} read={message.readByOthers!} members={members}
       interactive={props.readersEnabled === true && !sharing} />
   ) : null;
-  // Your own message's reactions hang over the left corner of its bubble, or of its first block without text.
-  const reactions = hasReactions ? <ChatMessageReactions corner groupId={props.reactionGroupId} message={message} members={members} reactionRevision={props.reactionRevision} align="right" onChanged={props.onChanged} /> : null;
+  const reactions = !message.pending ? <ChatMessageReactions groupId={props.reactionGroupId} message={message} members={members} reactionRevision={props.reactionRevision} align={self ? 'right' : 'left'} controls={controls} /> : null;
   const quote = props.quoteDisplay ? (
     <BotGroupQuoteBlock
       display={props.quoteDisplay}
@@ -536,6 +561,15 @@ function BotGroupTimelineItemImpl(props: BotGroupTimelineItemProps) {
       align={self && (message.threadShare || (!hasText && !hasAttachments)) ? 'right' : 'left'}
     />
   ) : null;
+  const attachmentGroupId = props.attachmentGroupId ?? props.reactionGroupId;
+  const retryAttachment = attachmentGroupId
+    ? (attachment: BotGroupAttachment) => {
+        void window.electronAPI?.maker?.chatServer?.manage?.({
+          groupId: attachmentGroupId,
+          action: { type: 'retryAttachment', mediaId: attachment.id, name: attachment.name },
+        });
+      }
+    : undefined;
   const share = message.threadShare;
   const threadPreview = !message.pending && props.onOpenThread && (message.replyCount ?? 0) > 0 ? (
     <BotGroupThreadPreview message={message} members={members}
@@ -544,8 +578,8 @@ function BotGroupTimelineItemImpl(props: BotGroupTimelineItemProps) {
   const shareBody = share ? <>
     <p className="flex select-none items-center gap-1 text-12 text-[var(--text-tertiary)]">
       <CornerDownRight size={12} aria-hidden />{sending ? t('bots.groupChat.timeline.sending') : botGroupThreadShareLabel(share, t)}</p>
-    <BotGroupThreadShareQuote share={share} members={members} inset={!self} richScope={props.reactionGroupId ?? shareScope}
-      attachments={<BotGroupMessageAttachments attachments={share.attachments} align="start" />}
+    <BotGroupThreadShareQuote corner={self ? reactions : undefined} share={share} members={members} inset={!self} richScope={props.reactionGroupId ?? shareScope}
+      attachments={<BotGroupMessageAttachments attachments={share.attachments} align="start" onRetryAttachment={retryAttachment} />}
       onOpenThread={!message.pending && props.onOpenThread ? () => props.onOpenThread!(share.threadRootId, share.messageId) : undefined} />
   </> : null;
   // Keep every action slot while awaiting the server id; inert prevents premature interaction.
@@ -558,10 +592,9 @@ function BotGroupTimelineItemImpl(props: BotGroupTimelineItemProps) {
         message={message}
         members={members}
         align={self ? 'right' : 'left'}
-        besideReactions={hasReactions}
         onQuote={props.onQuote ? () => props.onQuote!(message.id) : undefined}
         onReply={props.onOpenThread ? () => props.onOpenThread!(message.id) : undefined}
-        onChanged={props.onChanged}
+        controls={controls}
         copyText={share ? share.status === 'available' ? share.content : '' : undefined}
         replyCountShown={Boolean(threadPreview)}
         menuActions={props.menuActions}
@@ -581,14 +614,11 @@ function BotGroupTimelineItemImpl(props: BotGroupTimelineItemProps) {
         >
           {sharing && shareable ? <ShareMessageCheckbox clientId={message.id} /> : null}
           <div className={cn('flex min-w-0 flex-col items-end gap-1.5 transition-opacity', share ? 'chat-bubble-column max-w-[min(560px,calc(100%-var(--chat-bubble-gutter,120px)))]' : CHAT_BUBBLE_COLUMN_CLASS, sending && message.outbox?.status !== 'failed' && 'opacity-60')}>
-            {/* The toolbar and the reaction corner hang off the message's own content. */}
-            <div className={cn("relative flex min-w-0 max-w-full flex-col items-end gap-1.5", threadPreview && "self-stretch")}>
-              {share ? <>{reactions}<div className="relative flex w-full min-w-0 max-w-full flex-col items-end gap-1.5">{quote}{shareBody}{actions}</div></> : null}
+            <div data-reaction-anchor="" className={cn("relative flex min-w-0 max-w-full flex-col items-end gap-1.5", threadPreview && "self-stretch")}>
+              {share ? <div className="relative flex w-full min-w-0 max-w-full flex-col items-end gap-1.5">{quote}{shareBody}{actions}</div> : null}
               {/* A short root and its wider thread entry share the column width and both edges. */}
               {!share && (hasText || hasAttachments) ? (
                 <div className={cn("flex min-w-0 max-w-full flex-col", threadPreview ? "w-full" : "w-fit")}>
-                  {reactions}
-                  {/* Keep actions outside the read-receipt anchor and below reaction rows. */}
                   <div className="relative min-w-0 max-w-full">
                     <ChatBubble speaker="user"
                       data-testid="bot-group-self-bubble"
@@ -596,7 +626,7 @@ function BotGroupTimelineItemImpl(props: BotGroupTimelineItemProps) {
                     >
                       {quote}
                       {hasText ? <BotGroupMessageText content={message.content} mentionLabels={mentionLabels} members={members} mentions={message.mentions ?? NO_MENTIONS} serverBacked={Boolean(props.reactionGroupId)} sharing={sharing} readTail={hasReadMark && !hasAttachments} /> : null}
-                      <BotGroupMessageAttachments attachments={message.attachments ?? []} align="start" />
+                      <BotGroupMessageAttachments attachments={message.attachments ?? []} align="start" onRetryAttachment={retryAttachment} />
                       {hasReadMark && hasAttachments ? <ReadTailRow /> : null}
                       {readMark}
                     </ChatBubble>
@@ -604,7 +634,8 @@ function BotGroupTimelineItemImpl(props: BotGroupTimelineItemProps) {
                   </div>
                 </div>
               ) : null}
-              {!share && !hasText && !hasAttachments ? <>{reactions}<div className="relative">{quote}{actions}</div></> : null}
+              {!share && !hasText && !hasAttachments ? <div className="relative">{quote}{actions}</div> : null}
+              {!share && reactions}
             </div>
             {threadPreview}
             {props.footer}
@@ -690,10 +721,9 @@ function BotGroupTimelineItemImpl(props: BotGroupTimelineItemProps) {
           ) : null}
           <div className={cn('relative flex min-w-0 flex-col', CHAT_BUBBLE_COLUMN_CLASS,
             message.authorKind === 'bot' && hasRichAnswer(share?.content ?? message.content) && 'w-full')}>
-            <ChatMessageReactions corner groupId={props.reactionGroupId} message={message} members={members} reactionRevision={props.reactionRevision} onChanged={props.onChanged} />
             {message.process && message.process.groupId === props.reactionGroupId ? <BotGroupProcess process={message.process}
               member={members.find(member => member.botId === message.authorBotId)} /> : null}
-            <ChatBubble data-testid="bot-group-bubble" className="flex flex-col gap-2">
+            <ChatBubble data-reaction-anchor="" data-testid="bot-group-bubble" className="flex flex-col gap-2">
               {isPlanCard ? (
                 <div>
                   <BotGroupPlanCard
@@ -718,7 +748,7 @@ function BotGroupTimelineItemImpl(props: BotGroupTimelineItemProps) {
                   {shareBody}
                   {!share && hasText ? (
                     <div className="min-w-0">
-                      <BotGroupMessageText sharing={sharing} authorKind={message.authorKind} messageKey={`group:${props.reactionGroupId ?? shareScope}:${message.id}`}
+                      <BotGroupMessageText sharing={sharing} authorKind={message.authorKind} readableLinks messageKey={`group:${props.reactionGroupId ?? shareScope}:${message.id}`}
                         onRichSend={!props.readOnly && !sharing ? props.onRichSend : undefined} content={message.content} mentionLabels={mentionLabels} members={members} mentions={message.mentions ?? NO_MENTIONS} serverBacked={Boolean(props.reactionGroupId)} />
                     </div>
                   ) : null}
@@ -730,11 +760,12 @@ function BotGroupTimelineItemImpl(props: BotGroupTimelineItemProps) {
                       botId={message.authorBotId} />
                   ) : null}
                   {!share && message.liveTask ? <BotGroupLiveTaskCard task={message.liveTask} /> : null}
-                  {!share && <BotGroupMessageAttachments attachments={message.attachments ?? []} align="start" />}
+                  {!share && <BotGroupMessageAttachments attachments={message.attachments ?? []} align="start" onRetryAttachment={retryAttachment} />}
                   <BotGroupHandoffFiles files={message.files ?? []} workDir={props.plan?.workDir ?? null} />
                 </>
               )}
               {actions}
+              {reactions}
             </ChatBubble>
           </div>
           {threadPreview}

@@ -162,6 +162,10 @@ export {
   type SessionQueueControlErrorCode,
   type SessionQueueSteerReason,
   type SessionRuntimeProfile,
+  type SessionRuntimeRouteChange,
+  type SessionRuntimeRouteChangeActor,
+  type SessionRuntimeRouteEndpoint,
+  type SessionRuntimeRouteSource,
   type SessionRuntimeSnapshot,
   type SessionSteerErrorCode,
   type SessionStopErrorCode,
@@ -194,6 +198,8 @@ export {
   type TaskDigestCurrentRoute,
   type TaskDigestPhase,
   type TaskDigestRoute,
+  type TaskDigestRouteChange,
+  type TaskDigestRouteEndpoint,
   type TaskDigestWire,
 } from './get_task_digest.js';
 export {

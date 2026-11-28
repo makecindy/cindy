@@ -8,7 +8,7 @@
  */
 import { agentOptionOf } from '@/components/new-chat/agentOptions';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { ChevronDown, Waypoints } from 'lucide-react';
+import { ChevronDown, Sparkles } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { ProviderMark } from '@/components/new-chat/ModelSelector';
@@ -18,9 +18,11 @@ import { modelGroupWhyText, useModelGroupCandidateNames } from '@/features/model
 import { createLogger } from '@/lib/logger';
 import { cn } from '@/lib/utils';
 
+import { modelGroupHarnessLabel } from '../../../shared/modelGroupRouteNoteText';
 import type { ModelGroupDecision } from '../../../shared/modelGroupDecisions';
 import {
   modelGroupCandidateKey,
+  modelGroupSourceKey,
   type ModelGroupCandidate,
   type ModelGroupRoute,
   type ModelGroupsConfig,
@@ -33,13 +35,19 @@ const RECENT_ROWS = 10;
 /** 余量到这一档以下按「快见底」着色（DESIGN.md §2 语义色）。 */
 const LOW_LEFT_PERCENT = 15;
 
-type CandidateRef = Pick<ModelGroupCandidate, 'agentKind' | 'providerId' | 'model' | 'agentDeviceId'>;
+type CandidateRef = Pick<ModelGroupCandidate, 'agentKind' | 'providerId' | 'model' | 'agentDeviceId' | 'accountId'>;
 type CandidateNames = ReturnType<typeof useModelGroupCandidateNames>;
 
 /** 「最近的选择」里一条记录选中的来源；不是选中(沿用原来的)或记录不全时为 null。 */
 function decisionCandidate(item: ModelGroupDecision): CandidateRef | null {
   return item.outcome === 'routed' && item.agentKind && item.providerId && item.model
-    ? { agentKind: item.agentKind, providerId: item.providerId, model: item.model, ...(item.agentDeviceId ? { agentDeviceId: item.agentDeviceId } : {}) }
+    ? {
+        agentKind: item.agentKind,
+        providerId: item.providerId,
+        model: item.model,
+        ...(item.agentDeviceId ? { agentDeviceId: item.agentDeviceId } : {}),
+        ...(item.accountId ? { accountId: item.accountId } : {}),
+      }
     : null;
 }
 
@@ -63,7 +71,7 @@ interface MapNode {
 /** 合并整个供应商的路由，连同它在每个模型上展开出的那些路由。 */
 interface ProviderRouteView { route: ModelGroupSourceRoute; children: ModelGroupRoute[] }
 
-const memberKey = (item: { agentDeviceId?: string; providerId: string }) => `${item.agentDeviceId ?? ''}\u0000${item.providerId}`;
+const memberKey = (item: { agentDeviceId?: string; providerId: string; accountId?: string }) => modelGroupSourceKey(item);
 
 /**
  * 读余量时要解析哪些路由：用户按模型排的每条都读；合并整个供应商的只挑刚好覆盖全部成员的几条展开(通常一两条)，
@@ -138,8 +146,14 @@ function remainingFor(
  * 读两遍：先要手头已有的读数(立刻回来，打开就有数)，再照常读一遍(额度没读全时最多等两秒)把数换成新的。
  * 只在路线或来源变了时重读，不轮询。
  */
-function useLiveSourceQuota(routes: readonly ModelGroupRoute[]): ReadonlyMap<string, ModelGroupTraceQuota | null> {
-  const [live, setLive] = useState<ReadonlyMap<string, ModelGroupTraceQuota | null>>(() => new Map());
+function useLiveSourceQuota(routes: readonly ModelGroupRoute[]): {
+  quota: ReadonlyMap<string, ModelGroupTraceQuota | null>;
+  names: ReadonlyMap<string, string>;
+} {
+  const [live, setLive] = useState<{
+    quota: ReadonlyMap<string, ModelGroupTraceQuota | null>;
+    names: ReadonlyMap<string, string>;
+  }>(() => ({ quota: new Map(), names: new Map() }));
   const routesKey = routes
     .map((route) => `${route.id}\u0001${route.candidates.map((candidate) => modelGroupCandidateKey(candidate)).join('\u0002')}`)
     .join('\u0003');
@@ -154,19 +168,25 @@ function useLiveSourceQuota(routes: readonly ModelGroupRoute[]): ReadonlyMap<str
         // 手头的读数晚于新读数回来时不盖掉新的。
         if (cancelled || (cachedQuota && settled)) return;
         if (!cachedQuota) settled = true;
-        const next = new Map<string, ModelGroupTraceQuota | null>();
+        const nextQuota = new Map<string, ModelGroupTraceQuota | null>();
+        const nextNames = new Map<string, string>();
         for (const result of results) {
           for (const entry of result?.trace ?? []) {
             const key = modelGroupCandidateKey(entry);
-            if (!next.get(key)) next.set(key, entry.quota ?? null);
+            if (!nextQuota.get(key)) nextQuota.set(key, entry.quota ?? null);
+            if (entry.sourceName && !nextNames.has(memberKey(entry))) {
+              nextNames.set(memberKey(entry), entry.sourceName);
+            }
           }
         }
         // 新读数里读不到的来源，沿用手头那份里有的：不让已经显示的数又消失。
         // 手头读数(cachedQuota)同样合并：改了来源以后，已经显示的百分比不先消失再出现(2026-11-26 排查)。
         setLive((previous) => {
-          const merged = new Map(previous);
-          for (const [key, value] of next) if (value || !merged.get(key)) merged.set(key, value);
-          return merged;
+          const mergedQuota = new Map(previous.quota);
+          for (const [key, value] of nextQuota) if (value || !mergedQuota.get(key)) mergedQuota.set(key, value);
+          const mergedNames = new Map(previous.names);
+          for (const [key, value] of nextNames) mergedNames.set(key, value);
+          return { quota: mergedQuota, names: mergedNames };
         });
       });
     void read(true);
@@ -197,7 +217,7 @@ function MapNodeButton({ node, active, latest, enterDelayMs, onHover, register, 
 }) {
   const names = node.candidate ? providers(node.candidate) : null;
   const icon = node.kind === 'route' && !node.candidate
-    ? <Waypoints size={14} aria-hidden className="shrink-0 text-[var(--text-secondary)]" />
+    ? <Sparkles size={14} aria-hidden className="shrink-0 text-[var(--text-secondary)]" />
     : node.candidate
       ? <ProviderMark providerId={node.candidate.providerId} name={names?.provider?.name} routing={names?.provider?.routing}
           logoKind={names?.provider?.logoKind} customIcon={names?.provider?.customIcon}
@@ -238,11 +258,12 @@ function MapNodeButton({ node, active, latest, enterDelayMs, onHover, register, 
   );
 }
 
-function RelationMap({ userRoutes, providerRoutes, decisions, liveQuota, onOpenRoute, onOpenSourceRoute, namesOf }: {
+function RelationMap({ userRoutes, providerRoutes, decisions, liveQuota, liveNames, onOpenRoute, onOpenSourceRoute, namesOf }: {
   userRoutes: readonly ModelGroupRoute[];
   providerRoutes: readonly ProviderRouteView[];
   decisions: readonly ModelGroupDecision[];
   liveQuota: ReadonlyMap<string, ModelGroupTraceQuota | null>;
+  liveNames: ReadonlyMap<string, string>;
   onOpenRoute(id: string): void;
   onOpenSourceRoute?(id: string): void;
   namesOf: CandidateNames;
@@ -286,8 +307,13 @@ function RelationMap({ userRoutes, providerRoutes, decisions, liveQuota, onOpenR
             .filter((item) => memberKey(item) === key)
             .map((item) => remainingFor(item, liveQuota, decisions, now))
             .filter((value): value is number => value !== null);
+          const fallbackSourceName = liveNames.get(key);
           members.set(key, {
-            id: nodeId('source', `provider\u0000${key}`), kind: 'source', name: namesOf(candidate).sourceLabel, candidate, provider: true,
+            id: nodeId('source', `provider\u0000${key}`),
+            kind: 'source',
+            name: namesOf(candidate, fallbackSourceName ? { sourceName: fallbackSourceName } : undefined).sourceLabel,
+            candidate,
+            provider: true,
             left: readings.length > 0 ? Math.min(...readings) : null,
           });
         }
@@ -310,7 +336,7 @@ function RelationMap({ userRoutes, providerRoutes, decisions, liveQuota, onOpenR
       edges: list,
       parents,
     };
-  }, [userRoutes, providerRoutes, decisions, liveQuota, namesOf, onOpenRoute, onOpenSourceRoute, t]);
+  }, [userRoutes, providerRoutes, decisions, liveQuota, liveNames, namesOf, onOpenRoute, onOpenSourceRoute, t]);
 
   const containerRef = useRef<HTMLDivElement | null>(null);
   const nodeRefs = useRef(new Map<string, HTMLButtonElement>());
@@ -469,7 +495,7 @@ function RecentDecisions({ decisions, namesOf }: { decisions: readonly ModelGrou
           : t('modelGroups.overview.keptOriginal');
         const effort = item.effort ? t(`effortLevels.${item.effort}`, { defaultValue: item.effort }) : '';
         // 本机的照旧写记录时的来源名；别的电脑或分享来的连同位置一起写。
-        const detail = [item.agentDeviceId ? names?.sourceLabel : item.sourceName, effort].filter(Boolean).join(' · ');
+        const detail = [item.agentDeviceId ? names?.sourceLabel : item.sourceName, picked ? modelGroupHarnessLabel(picked.agentKind) : null, effort].filter(Boolean).join(' · ');
         return (
           <SettingsBlock
             key={`${item.at}:${item.groupType}:${item.groupId}`}
@@ -509,7 +535,14 @@ function withEngineWhenAmbiguous(nodes: MapNode[]): MapNode[] {
   const seen = new Map<string, number>();
   for (const node of nodes) seen.set(node.name, (seen.get(node.name) ?? 0) + 1);
   return nodes.map((node) => (node.candidate && !node.provider && (seen.get(node.name) ?? 0) > 1
-    ? { ...node, name: `${node.name} · ${agentOptionOf(node.candidate.agentKind).label}` }
+    ? {
+        ...node,
+        name: `${node.name} · ${
+          node.candidate.agentKind === 'acp'
+            ? node.candidate.providerId
+            : agentOptionOf(node.candidate.agentKind).label
+        }`,
+      }
     : node));
 }
 
@@ -534,7 +567,7 @@ export function ModelGroupsOverview({ config, onOpenRoute, onOpenSourceRoute }: 
   ], [config, decisions]);
   const namesOf = useModelGroupCandidateNames(candidates);
   const probes = useMemo(() => quotaProbes(userRoutes, providerRoutes), [userRoutes, providerRoutes]);
-  const liveQuota = useLiveSourceQuota(probes);
+  const live = useLiveSourceQuota(probes);
 
   useEffect(() => {
     let cancelled = false;
@@ -552,7 +585,7 @@ export function ModelGroupsOverview({ config, onOpenRoute, onOpenSourceRoute }: 
   return (
     <SettingsSection title={t('modelGroups.overview.mapTitle')} description={t('modelGroups.overview.mapDescription')}>
       <SettingsCard>
-        <RelationMap userRoutes={userRoutes} providerRoutes={providerRoutes} decisions={decisions ?? []} liveQuota={liveQuota}
+        <RelationMap userRoutes={userRoutes} providerRoutes={providerRoutes} decisions={decisions ?? []} liveQuota={live.quota} liveNames={live.names}
           onOpenRoute={onOpenRoute} onOpenSourceRoute={onOpenSourceRoute} namesOf={namesOf} />
         {decisions && (
           <>

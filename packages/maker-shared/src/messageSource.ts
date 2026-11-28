@@ -17,6 +17,87 @@ export { forwardedRequestDisplayText } from './forwardedRequestDisplay.js';
 
 export type MessageSourceDevicePlatform = 'mobile' | 'desktop';
 
+/** Executor snapshot for one dispatched input. Never infer it from a later picker. */
+export interface MessageRoute {
+  agentKind: 'claude-code' | 'codex' | 'pi' | 'acp';
+  model: string;
+  providerId: string | null;
+  agentDeviceId: string | null;
+  /** Optional display name snapshot for plugin engines (`agentKind === 'acp'`). */
+  engineName?: string;
+}
+
+export interface MessageDispatchRoute extends MessageRoute {
+  selected?: MessageRoute;
+  switchError?: string;
+}
+
+export function readMessageDispatchRoute(meta: unknown): MessageDispatchRoute | undefined {
+  const raw = asRecord(asRecord(meta)?.dispatchRoute);
+  if (!raw || !['claude-code', 'codex', 'pi', 'acp'].includes(String(raw.agentKind))
+    || typeof raw.model !== 'string' || !raw.model || raw.model.length > 1024
+    || (raw.providerId !== null && typeof raw.providerId !== 'string')
+    || (raw.agentDeviceId !== null && typeof raw.agentDeviceId !== 'string')) return undefined;
+  const engineName = sanitizeSourceName(raw.engineName);
+  const selected = raw.selected ? readMessageDispatchRoute({ dispatchRoute: { ...asRecord(raw.selected), selected: undefined } }) : undefined;
+  return {
+    agentKind: raw.agentKind as MessageRoute['agentKind'],
+    model: raw.model,
+    providerId: raw.providerId as string | null,
+    agentDeviceId: raw.agentDeviceId as string | null,
+    ...(engineName ? { engineName } : {}),
+    ...(selected ? { selected } : {}),
+    ...(typeof raw.switchError === 'string' ? { switchError: raw.switchError.slice(0, 4000) } : {}),
+  };
+}
+
+export function messageDispatchRouteMismatch(route: MessageDispatchRoute): boolean {
+  const target = route.selected;
+  return !!target && (route.agentKind !== target.agentKind || route.model !== target.model
+    || route.providerId !== target.providerId || route.agentDeviceId !== target.agentDeviceId);
+}
+
+function normalizeMessageRoute(route: MessageRoute): MessageRoute {
+  const engineName = sanitizeSourceName(route.engineName);
+  return {
+    agentKind: route.agentKind,
+    model: route.model,
+    providerId: route.providerId,
+    agentDeviceId: route.agentDeviceId,
+    ...(engineName ? { engineName } : {}),
+  };
+}
+
+/** Final in-memory comparison at dispatch; returns a snapshot only when actual differs from selected. */
+export function captureMessageDispatchRoute(
+  actual: MessageRoute,
+  selected?: MessageRoute,
+  switchError?: string,
+): MessageDispatchRoute | undefined {
+  if (!selected) return undefined;
+  const snapshot: MessageDispatchRoute = {
+    ...normalizeMessageRoute(actual),
+    selected: normalizeMessageRoute(selected),
+  };
+  return messageDispatchRouteMismatch(snapshot)
+    ? { ...snapshot, ...(switchError ? { switchError } : {}) }
+    : undefined;
+}
+
+export function messageDispatchRouteLabel(
+  route: MessageRoute,
+  pluginEngineName = 'ACP',
+  defaultPluginModelName?: string,
+): string {
+  if (route.agentKind === 'acp') {
+    const engine = sanitizeSourceName(route.engineName) || pluginEngineName;
+    const model = route.model === 'default' && defaultPluginModelName ? defaultPluginModelName : route.model;
+    return [engine, model].filter(Boolean).join(' · ');
+  }
+  const agent = route.agentKind === 'claude-code' ? 'Claude Code' : route.agentKind === 'codex' ? 'Codex' : 'Pi';
+  return [agent, route.providerId, route.model].filter(Boolean).join(' · ');
+}
+
 /** 被控端在 device-link 入口盖章的控制端设备（agentMeta.sourceDevice）。 */
 export interface MessageSourceDevice {
   /** 服务端认证过的控制端设备 id。 */

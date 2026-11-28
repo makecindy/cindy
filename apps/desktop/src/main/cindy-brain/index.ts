@@ -112,9 +112,22 @@ import {
 import { createGhostModelPreferencesProvider } from './ghostModelPreferences.js';
 import { applyHostModelFavorite, readHostModelPreferences } from '../maker-ipc/modelFavoritesSync.js';
 import { modelDescriptionKey } from '../../shared/modelDescriptionKey.js';
-import { GhostModelPicker, chooseModelPickerWindow, readPluginModelRouteCatalog, getPluginModelPickerAgents, isPluginModelPickerRouteAvailable, isPluginRouteHarnessInstalled, type RemotePluginRouteAgentStatus } from './ghostModelPicker.js';
+import {
+  GhostModelPicker,
+  chooseModelPickerWindow,
+  readPluginModelRouteCatalog,
+  getPluginModelPickerAgents,
+  getPluginModelPickerPluginEngines,
+  isPluginEngineModelRouteAvailable,
+  isPluginModelPickerRouteAvailable,
+  isPluginRouteHarnessInstalled,
+  type RemotePluginRouteAgentStatus,
+} from './ghostModelPicker.js';
+import type { PluginEngineView } from '../../shared/pluginEngines.js';
 import { installGhostPageModelPicker } from './ghostPageModelPicker.js';
 import { getDesktopProviderService } from '../maker-host/createDesktopProviderService.js';
+import { readModelGroupsConfig } from '../model-groups/store.js';
+import { localRouteCandidatesInPickOrder } from '../utility-model/auxiliaryRouteRefs.js';
 import { PluginDownloadSlot } from './downloadSlot.js';
 import { createDownloader } from '../downloader/index.js';
 import { handlePluginTaskRequest, type PluginTaskHandler } from './taskSlot.js';
@@ -409,6 +422,7 @@ import {
   setGhostKvStore,
   setGhostModelsHandler,
   setGhostHarnessesHandler,
+  setGhostEngineSettingsHandler,
   setGhostMediaModelsProvider,
   setGhostAgentModelsProvider,
   setGhostModelPreferencesProvider,
@@ -422,7 +436,8 @@ import { CURRENT_CINDY_REGION } from '../../shared/brandRegion.js';
 import { createGhostKvStore, removeGhostKvBestEffort, type GhostKvStore } from './ghostKvStore.js';
 import { handleGhostModelsRequest } from './runtime/ghostModelsEndpoint.js';
 import { handleGhostHarnessesRequest } from './runtime/ghostHarnessesEndpoint.js';
-import { configurePluginHarnessRegistry, PLUGIN_USAGE_WORKER_FAILURE, reconcilePluginHarnesses } from './pluginHarnesses.js';
+import { handleGhostEngineSettingsRequest } from './runtime/ghostEngineSettingsEndpoint.js';
+import { configurePluginHarnessRegistry, getPluginHarnessRegistry, PLUGIN_USAGE_WORKER_FAILURE, reconcilePluginHarnesses } from './pluginHarnesses.js';
 import { pluginEngineAccountRoot } from '../plugin-engine-accounts/paths.js';
 import { forgetPluginEngineAccountsOfPlugin } from '../plugin-engine-accounts/store.js';
 import { ghostPublishedModelText, parseGhostPublishedModels } from '@cindy/plugin-protocol';
@@ -461,7 +476,7 @@ import { GhostConnectionManager, normalizeGhostConnectionHost } from './ghostCon
 import { getResolvedMainLocale, rawMainString, t } from '../i18n.desktop.js';
 import { refreshGhostLocalizationIfChanged } from './ghostLocalizationRefresh.js';
 import type { SupportedLocale } from '../../shared/locale.js';
-import { getDeepLinkMainWindow } from '../deepLink.js';
+import { getDeepLinkMainWindow, openMainWindowPluginEngineSettings } from '../deepLink.js';
 import { reconcileGhostSkillLinks, removeGhostSkillLinksForRoots, ghostSkillPluginRoot } from './skillSlot.js';
 import { diagnoseScheduleHookPlugin } from './scheduleHookPluginDiagnosis.js';
 import type { PreRunHookMissingPlugin } from '@cindy/maker-scheduler';
@@ -2699,16 +2714,19 @@ export function setGhostAgentTurnRunner(runner: GhostAgentTurnRunner | null): vo
 const ghostAgentModelsCache = createGhostAgentModelsCache();
 let listGhostAgentLocations: (() => Promise<GhostAgentLocationsReadResult>) | null = null;
 let readGhostAgentRemoteViews: ((agentDeviceId: string) => Promise<ProviderView[]>) | null = null;
+let readGhostAgentRemotePluginEngines: ((agentDeviceId: string) => Promise<readonly PluginEngineView[]>) | null = null;
 let readGhostAgentRemoteStatus: RemotePluginRouteAgentStatus | null = null;
 
 /** maker-ipc 注入设备列表与跨设备目录读取；静态 import device-link 会成环。 */
 export function setGhostAgentModelLocationSources(sources: {
   listLocations: () => Promise<GhostAgentLocationsReadResult>;
   readRemoteViews: (agentDeviceId: string) => Promise<ProviderView[]>;
+  readRemotePluginEngines?: (agentDeviceId: string) => Promise<readonly PluginEngineView[]>;
   readRemoteStatus?: RemotePluginRouteAgentStatus;
 } | null): void {
   listGhostAgentLocations = sources?.listLocations ?? null;
   readGhostAgentRemoteViews = sources?.readRemoteViews ?? null;
+  readGhostAgentRemotePluginEngines = sources?.readRemotePluginEngines ?? null;
   readGhostAgentRemoteStatus = sources?.readRemoteStatus ?? null;
 }
 
@@ -2889,6 +2907,13 @@ export function getGhostNodeRuntimeBroker(): GhostNodeRuntimeBroker {
     nodeRuntimeBrokerSingleton = new GhostNodeRuntimeBroker({
       getGhost: findGhostForInstanceId,
       startBlockedReason: libraryRestartRequiredReason,
+      // 更新/卸载等因旧进程迟迟不退而失败：旧版本仍在原位，进程真正退出后回到它该在的状态。
+      onStopSettledLate: (instanceId) => {
+        const ghost = findGhostForInstanceId(instanceId);
+        if (!ghost) return;
+        log.info('plugin processes exited after a timed-out stop; restoring presence', { instanceId });
+        spawnIfResident(ghost);
+      },
       getCallSignal: (ghostId, callId) =>
         getGhostPipeDispatcher().getPendingCallSignal(ghostId, callId),
       getCallSessionId: (ghostId, callId) =>
@@ -3149,7 +3174,11 @@ const runtimePluginHost = createDesktopRuntimePluginHost({
     && (getAppCapabilities().canUseCindyAccountServices || !ghostRequiresCindyAccount(ghost.manifest)),
   sendToGhostLogic, broadcastGhostWindowPush, ghostOwnerScope, log, getGhostOwnerPushStamp,
   isGhostOwnerStampCurrent, findGhostForInstanceId,
-  remoteSources: () => ({ locations: listGhostAgentLocations, remoteViews: readGhostAgentRemoteViews }),
+  remoteSources: () => ({
+    locations: listGhostAgentLocations,
+    remoteViews: readGhostAgentRemoteViews,
+    remotePluginEngines: readGhostAgentRemotePluginEngines,
+  }),
 });
 const { isGhostEligibleSession } = runtimePluginHost;
 export const { getGhostSubscriptionGateway, hasEnabledUserMessageHookGhost, screenGhostUserMessage,
@@ -4641,6 +4670,12 @@ export function getGhostModelPicker(): GhostModelPicker {
     },
     available: async route => {
       const owner = activeOwnerScopeKey();
+      if (route.agentKind === 'acp') {
+        const engines = route.agentDeviceId
+          ? await readGhostAgentRemotePluginEngines?.(route.agentDeviceId).catch(() => []) ?? []
+          : getPluginModelPickerPluginEngines();
+        return owner === activeOwnerScopeKey() && isPluginEngineModelRouteAvailable(route, engines);
+      }
       const { views, agents } = await readPluginModelRouteCatalog(route, {
         local: () => getDesktopProviderService({ allowSideEffects: false }).listProviders({ allowSideEffects: false, snapshotOnly: true }),
         remote: readGhostAgentRemoteViews, localAgents: getPluginModelPickerAgents,
@@ -6220,6 +6255,28 @@ function getPluginOneshotModelSelection(
   ghostId: string,
 ): { providerId?: string; agentKind: AgentKind; model: string } | null {
   const config = getPluginTaskDefaults(ghostId) ?? {};
+  // 插件引擎任务与远程任务一样不用于本机一次性快问快答：快问快答回落系统辅助模型链。
+  if (config.agentKind === 'acp') return null;
+  if (config.modelGroup) {
+    for (const candidate of localRouteCandidatesInPickOrder(config.modelGroup)) {
+      if (candidate.agentKind === 'pi') {
+        const resolved = resolveOneshotCatalogModel(
+          getActiveCatalog(),
+          readModelDisableOverrides(),
+          candidate.model,
+          [candidate.providerId, ...readProviderOrder()],
+          hasOneshotProviderCredential,
+        );
+        if (resolved && resolved.providerId === candidate.providerId) return resolved;
+        continue;
+      }
+      return {
+        agentKind: candidate.agentKind === 'cc' ? 'claude-code' : candidate.agentKind,
+        model: candidate.model,
+        providerId: candidate.providerId,
+      };
+    }
+  }
   if (!config.model || config.agentDeviceId) return null;
   if (!config.agentKind || config.agentKind === 'pi') {
     // 两种情况按目录解析一条快问快答可路由的 供应商×agent×模型:
@@ -8381,6 +8438,27 @@ function readLocalGhostUpdateSource(
 }
 
 /**
+ * 原位更新前停止旧插件的 Node 进程。等不到退出时更新放弃、旧版本原样留着；此时不能马上恢复
+ * (旧进程可能仍在，会出现两份后台进程)，但也不能让插件一直停着：等这些进程真正退出后，
+ * 若装着的仍是同一份旧版本，就走「该在场了」的统一入口恢复它，并解除任务引擎的启动闸。
+ */
+async function stopGhostNodeRuntimeForUpdate(previousGhost: InstalledGhost): Promise<void> {
+  const instanceId = installedGhostStoragePart(previousGhost);
+  const broker = getGhostNodeRuntimeBroker();
+  try {
+    await broker.stopAndWait(instanceId);
+  } catch (error) {
+    broker.whenProcessesExited(instanceId, () => {
+      const current = findInstalledGhostByInstanceId(getGhostManager().list(), instanceId);
+      if (!current || current.dir !== previousGhost.dir) return;
+      log.info('restoring plugin after its processes exited following a failed update stop', { ghostId: instanceId });
+      spawnIfResident(current);
+    });
+    throw error;
+  }
+}
+
+/**
  * 本地包原位更新的共享事务。调用方必须已经持有 owner lease 和对应 ghostId
  * 的安装锁；Renderer 导入与 Forge 显式安装共用，避免两条路径在运行时、OAuth、
  * 市场来源解绑和失败恢复上产生漂移。
@@ -8437,7 +8515,7 @@ async function updateLocalGhostPackageLocked(
     // 等待失败表示旧进程仍可能存活；此时不能恢复 resident，否则会产生
     // 两份后台进程。仅在确认退出后的更新阶段失败时恢复旧版本。
     await stopPluginAppInstance(instanceId);
-    await getGhostNodeRuntimeBroker().stopAndWait(instanceId);
+    await stopGhostNodeRuntimeForUpdate(previousGhost);
     // 用户已明确选择了这份本地真实包：同 id 可以原位替换，市场来源不是永久所有权。
     // 替换前先切断旧市场更新路由；用户状态由安装事务隔离归档，落位失败再恢复。
     const detachMarketRecord = Boolean(marketRecord?.installed);
@@ -8845,6 +8923,8 @@ export async function installOrUpdateMarketGhostPackage(
     /** 自定义 Git/本地市场在打包前读取的 Manifest，用于防止打包窗口内能力扩张。 */
     manifestCap?: GhostManifest;
     beforeCommitInLock?: () => void;
+    /** Automatic updates recheck activity immediately before stopping the runtime. */
+    beforeRuntimeStopInLock?: () => void;
     /** Caller owner/peer/cancellation guard, valid after the directory swap. */
     assertCurrent?: () => void;
     /** 新包已经原子换位；后续异常不能再按落位失败回滚来源路由。 */
@@ -8891,6 +8971,7 @@ async function installOrUpdateMarketGhostPackageLocked(
     reclaimLegacyBareInstance?: boolean;
     manifestCap?: GhostManifest;
     beforeCommitInLock?: () => void;
+    beforeRuntimeStopInLock?: () => void;
     assertCurrent?: () => void;
     /** 新包已经原子换位；后续异常不能再按落位失败回滚来源路由。 */
     onPackagePlacedInLock?: () => void;
@@ -9061,11 +9142,19 @@ async function installOrUpdateMarketGhostPackageLocked(
     expected.assertCurrent?.();
     const runtime = getGhostRuntime();
     releaseSync = pluginDeviceSync.beginMutation(installedGhostStoragePart(installed));
+    // No await between this last activity check and stopping the engine. A turn
+    // accepted while prepareUpdate waited must defer an automatic update.
+    expected.beforeRuntimeStopInLock?.();
     runtime.stop(installedGhostStoragePart(installed));
+    await stopGhostNodeRuntimeForUpdate(installed);
     // 无法确认旧进程已退出时保持停止态，不能启动第二份 resident。只有旧进程
     // 已确认退出、后续目录更新失败时，才恢复原版本。
-    await stopPluginAppInstance(installedGhostStoragePart(installed));
-    await getGhostNodeRuntimeBroker().stopAndWait(installedGhostStoragePart(installed));
+    try {
+      await stopPluginAppInstance(installedGhostStoragePart(installed));
+    } catch (error) {
+      spawnIfResident(installed);
+      throw error;
+    }
     let result: Awaited<ReturnType<typeof manager.update>>;
     let packagePlaced = false;
     try {
@@ -9667,6 +9756,7 @@ export function registerGhostIpc(): void {
       read: readPluginTaskConfig, write: writePluginTaskConfig, validate: validatePluginTaskConfig,
       providers: () => getDesktopProviderService({ allowSideEffects: false }).listProviders({ allowSideEffects: false, snapshotOnly: true }),
       agents: async () => { const { getMakerIfReady } = await import('../maker-host/index.js'); return getMakerIfReady()?.listAvailableAgents() ?? []; },
+      pluginEngines: getPluginModelPickerPluginEngines,
     });
   remotePluginManagement = new RemotePluginManagement({
     list: availableGhosts,
@@ -9862,12 +9952,27 @@ export function registerGhostIpc(): void {
     const projected = withGhostModelDescriptions(
       projectGhostAgentModels(views, maker.listAvailableAgents(), getModelVisibilityOverride), describeGhostModel);
     if (!projected.ok) return projected;
-    if (!listGhostAgentLocations) return { ...projected, supportsRemoteRoutes: true };
+    let modelGroupsSummary: Array<{ id: string; name: string; strategy: string; candidateCount: number; effort?: string }> = [];
+    try {
+      modelGroupsSummary = readModelGroupsConfig().routes
+        .filter((route) => !route.hidden && !route.parent)
+        .map((route) => ({
+          id: route.id,
+          name: route.name,
+          strategy: route.strategy,
+          candidateCount: route.candidates.filter((c) => !c.off).length,
+          ...(route.effort ? { effort: route.effort } : {}),
+        }));
+    } catch {
+      modelGroupsSummary = [];
+    }
+    const withGroups = modelGroupsSummary.length > 0 ? { modelGroups: modelGroupsSummary } : {};
+    if (!listGhostAgentLocations) return { ...projected, supportsRemoteRoutes: true, ...withGroups };
     const locations = await ghostAgentModelsCache.locations(owner, listGhostAgentLocations);
     if (owner !== activeOwnerScopeKey() || !findGhostForInstanceId(instanceId)?.enabled) {
       return { ok: false, errorCode: 'NOT_AVAILABLE', message: 'Plugin unavailable' };
     }
-    return { ...projected, supportsRemoteRoutes: true, ...(locations ? { locations } : {}) };
+    return { ...projected, supportsRemoteRoutes: true, ...withGroups, ...(locations ? { locations } : {}) };
   });
   // agent.modelPreferences:收藏读写/最近使用只读,复用 device-link 同一条 owner 围栏的
   // renderer 收藏桥(maker-ipc/modelFavoritesSync),不建第二份收藏或最近使用存储。
@@ -9945,6 +10050,22 @@ export function registerGhostIpc(): void {
       declared: () => (ghost ? ghost.manifest.harnesses : null),
       store: publishedHarnessesStore(),
       onChanged: () => reconcilePluginHarnesses(),
+    });
+  });
+  // /harnesses/open-settings：页面在用户点击后请宿主打开自己某个引擎的供应商设置页。引擎须在当前
+  // 注册表里(已启用、已批准、已声明)；只导航，不改任何设置。
+  setGhostEngineSettingsHandler(({ ghostId, method, readBodyText, isCurrent }) => {
+    const ghost = findGhostForInstanceId(ghostId);
+    return handleGhostEngineSettingsRequest({
+      method, readBodyText, isCurrent,
+      declared: () => (ghost ? ghost.manifest.harnesses : null),
+      consumeUserGesture: () => getGhostErrandSlot().consumeUserGesture(ghostId),
+      open: (harnessId) => {
+        const engine = getPluginHarnessRegistry().list()
+          .find((harness) => harness.ghostId === ghostId && harness.harnessId === harnessId);
+        if (!engine || !isCurrent()) return false;
+        return openMainWindowPluginEngineSettings(engine.key);
+      },
     });
   });
   configurePluginHarnessRegistry({

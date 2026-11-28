@@ -1,3 +1,4 @@
+import path from 'node:path';
 import { holdError, type ProfileHold } from './agent/profile-hold.js';
 /** Node assembly of the existing Device Link host. Identity, admission, replay,
  * visibility and revocation remain in the same dispatcher as desktop. */
@@ -5,12 +6,16 @@ import { requestPluginOauth, invalidatePluginOauth, supportsRemotePluginOauth } 
 import WebSocket from 'ws';
 import { AGENT_ISLAND_SESSION_SNAPSHOTS_CHANNEL } from '../../desktop/src/shared/agentIsland.js';
 import {
+  CONTROLLER_CAPABILITY_PLUGIN_ENGINE_SWITCH_INTENT_V1,
   CONTROLLER_CAPABILITY_SET_MODEL_EXPLICIT_PROVIDER_NULL_V1, DEVICE_LINK_CAPABILITY_BACKGROUND_LINK_V1, DEVICE_LINK_CAPABILITY_HISTORY_VIEW_V1,
   DL_HISTORY_MESSAGES_CHANNEL, DL_SESSION_HANDOFF_CHANNEL, MACHINE_STATUS_CHANNEL, ORCA_REMOTE_WORKER_MODELS_CHANNEL,
-  SESSION_ACTIVITY_CHANNEL, TASK_ACTIVITY_SNAPSHOT,
-  DeviceLinkClient, RoutedDeviceLinkClient, isScopedPeer, resolveRemoteInvokeTimeoutMs,
-  type DeviceInfo, type DeviceLinkClientOptions, type LinkAcceptPayload, type MachineStatus,
+  REMOTE_AGENT_PLUGIN_ENGINE_KIND, SESSION_ACTIVITY_CHANNEL, TASK_ACTIVITY_SNAPSHOT,
+  DeviceLinkClient, RoutedDeviceLinkClient, isProviderSharePeer, isScopedPeer, resolveRemoteInvokeTimeoutMs,
+  type DeviceInfo, type DeviceLinkClientOptions, type DeviceLinkPeerRouteStateChanged, type LinkAcceptPayload, type MachineStatus,
 } from '@cindy/device-link';
+import type { Maker } from '@cindy/maker-core';
+import { createRemoteAgentHost, type RemoteAgentHost } from '../../desktop/src/main/remote-agent/host/runHost.js';
+import { hostedStartOptions } from '../../desktop/src/main/remote-agent/host/hostedStartOptions.js';
 import { createAgentNetNode, type AgentNetNodePorts } from '../../desktop/src/main/device-link/agentNetNode.js';
 import { rejoinRemovedDevice } from '../../desktop/src/main/device-link/deviceRejoin.js';
 import { AgentNetSessionLinks, agentNetSessionLane, routeSessionPeers, type PeerLinks } from '@cindy/agent-net';
@@ -137,6 +142,7 @@ export const HOST_DISPATCH_PORTS_WHILE_HELD = Object.freeze({
   setTelegramRemoteOnline: 'unbound',
   adviseAndRecordVoiceInputDictionaryLearning: 'unbound',
   buildMobileDictionarySnapshot: 'unbound',
+  mutateMobileDictionary: 'unbound',
   setBroadcastTapListener: 'read',
   broadcastTap: 'read',
   RECOVERY_CHECKPOINT_MARKER: 'read',
@@ -223,6 +229,16 @@ export interface HostDeviceLinkPorts {
    * Absent: `cindy-host remote rejoin` reports that this Host cannot rejoin.
    */
   officialDeviceLinkFetch?(path: string, opts: { method: 'POST'; body: Record<string, never>; timeoutMs: number }): Promise<unknown>;
+  /**
+   * Same-account remote plugin-engine hosting (`maker:remote-agent:v1` with `pluginEngines: true`):
+   * lets another computer of this account run its tasks on plugin engines this Host opened for remote use.
+   */
+  remoteAgentPluginEngines?: {
+    getMaker(): Pick<Maker, 'startHostedAgentSession'> | null;
+    isOffered(providerId: string, model?: string): boolean;
+    onAccessChanged?(listener: () => void): () => void;
+    managedSkills?(): Promise<Array<{ command: string; dir: string }>>;
+  };
 }
 
 function readGitSafetyWire() {
@@ -289,8 +305,7 @@ export function createHostDeviceLink(deps: HostDeviceLinkPorts) {
   // The desktop answers `maker:usage:model-pricing` (device-link v1) with the flat USD projection and
   // `-v2` with the native quotes (usageHandlers.ts). Both contract entries share one Host path, which
   // answers v2 for the renderer; v2 is not on the device-link allowlist, so v1 is projected here.
-  const readRemoteHistory = createRemoteHistoryHandler();
-  registry.register(DL_HISTORY_MESSAGES_CHANNEL, ([request]) => {
+  const assertSameAccountHistoryAccess = () => {
     const context = getDeviceLinkInvokeContext();
     if (!context || context.sharedTask || isScopedPeer(context.controllerDeviceId)) {
       throwIpcError('PERMISSION_DENIED', 'An authorized device link is required');
@@ -298,7 +313,15 @@ export function createHostDeviceLink(deps: HostDeviceLinkPorts) {
     if (!botBoundary.hasRemoteBotSessionLookup()) {
       throwIpcError('PRECONDITION_FAILED', 'Task visibility is not ready');
     }
+  };
+  const readRemoteHistory = createRemoteHistoryHandler();
+  registry.register(DL_HISTORY_MESSAGES_CHANNEL, ([request]) => {
+    assertSameAccountHistoryAccess();
     return readRemoteHistory(request);
+  });
+  registry.register('local-db:messages:around-client-id', ([sessionId, clientId, opts]) => {
+    assertSameAccountHistoryAccess();
+    return call('/api/messages/around-client-id', { sessionId, clientId, opts });
   });
   registry.register('maker:usage:model-pricing', async () => toLegacyUsdModelPricing(await call('/api/usage/model-pricing', {})));
   // Coexistence plan A: while a desktop uses this profile, a new task's runtime and a plugin page's
@@ -461,17 +484,22 @@ export function createHostDeviceLink(deps: HostDeviceLinkPorts) {
               deviceGeneration !== access.deviceAccessGeneration(peer)) {
             throw new Error('TASK_ACTION_AUTHORIZATION_EXPIRED');
           }
-          refuseWhileHeld();
         };
       },
       validate: async (peer, input, assertAccess) => {
-        assertAccess?.();
+        const assertValidationAccess = () => {
+          assertAccess?.();
+          // Releasing an existing receipt changes no task data on this computer.
+          // A held profile still refuses new handoffs and validates no delivery.
+          if (!input.release) refuseWhileHeld();
+        };
+        assertValidationAccess();
         await openReceiptLink(peer);
         const args = [{ action: 'validate-task-action', ...input }];
         const response = await client.invoke(peer, { channel: DL_SESSION_HANDOFF_CHANNEL, args },
           resolveRemoteInvokeTimeoutMs(DL_SESSION_HANDOFF_CHANNEL, args, 'desktop'),
-          { preSend: assertAccess, background: true });
-        assertAccess?.();
+          { preSend: assertValidationAccess, background: true });
+        assertValidationAccess();
         const result = response.ok ? response.result as { valid?: unknown; released?: unknown } | null : null;
         return result?.valid === true && (!input.release || result.released === true);
       },
@@ -703,8 +731,22 @@ export function createHostDeviceLink(deps: HostDeviceLinkPorts) {
     return call('/api/sessions/switch-agent', { sessionId, targetAgentKind, model, providerId, effort, fastMode,
       options, thinking });
   });
-  registry.register(MAKER_INVOKE.GET_SESSION_AGENT_SWITCH_INTENT, ([sessionId]) =>
-    call('/api/sessions/agent-switch-intent', { sessionId }));
+  registry.register(MAKER_INVOKE.GET_SESSION_AGENT_SWITCH_INTENT, async ([sessionId]) => {
+    const intent = await call('/api/sessions/agent-switch-intent', { sessionId });
+    if (intent && typeof intent === 'object'
+      && (intent as { targetAgentKind?: unknown }).targetAgentKind === 'acp'
+      && !deviceLinkInvokeControllerSupports(CONTROLLER_CAPABILITY_PLUGIN_ENGINE_SWITCH_INTENT_V1)) {
+      return null;
+    }
+    return intent;
+  });
+  registry.register('model-groups:route-note', ([raw]) => {
+    refuseWhileHeld();
+    if (readDeviceLinkModelSelectionOrigin() !== 'owner') {
+      throwIpcError('PRECONDITION_FAILED', 'model group route notes require an owner controller');
+    }
+    return call('/api/model-groups/route-note', raw ?? {});
+  });
   registry.register('maker:session:prewarm', async ([id, input]) => {
     assertCurrent();
     if (readDeviceLinkModelSelectionOrigin() !== 'owner') throw new Error('[PRECONDITION_FAILED] Task owner required');
@@ -1005,13 +1047,104 @@ export function createHostDeviceLink(deps: HostDeviceLinkPorts) {
   }
   // Turning Agent-Net on or off reconnects the main connection: it is opened on the node or on the relay accordingly.
   let agentNetWasActive = agentNet?.active() ?? false;
+  let remoteAgentHost: RemoteAgentHost | null = null;
+  let offRemoteAgentAccess: (() => void) | null = null;
+  if (deps.remoteAgentPluginEngines) {
+    const pluginHost = deps.remoteAgentPluginEngines;
+    const isControllerAuthorized = (controller: string): boolean => {
+      if (!current() || isProviderSharePeer(controller)) return false;
+      return settings.readDeviceLinkSettings().remoteControlEnabled && access.isControllerAccessAllowed(controller);
+    };
+    remoteAgentHost = createRemoteAgentHost({
+      // Node Host hosts same-account plugin engines; built-in remote agent hosting stays off until M3.
+      isAgentAvailable: () => false,
+      startHosted: async () => {
+        throw new Error('[REMOTE_AGENT_UNSUPPORTED] Built-in remote agent hosting is not available on Node Host');
+      },
+      pluginEngines: {
+        canUse: (controller) => !isProviderSharePeer(controller) && isControllerAuthorized(controller),
+        isOffered: (providerId, controller, model) =>
+          !isProviderSharePeer(controller)
+          && !deps.profileHold?.()
+          && isControllerAuthorized(controller)
+          && pluginHost.isOffered(providerId, model),
+        start: (input) => {
+          refuseWhileHeld();
+          assertCurrent();
+          const maker = pluginHost.getMaker();
+          if (!maker) throw new Error('[REMOTE_AGENT_UNAVAILABLE] Agent runtime is unavailable');
+          return maker.startHostedAgentSession(REMOTE_AGENT_PLUGIN_ENGINE_KIND, hostedStartOptions(input));
+        },
+      },
+      ...(pluginHost.managedSkills ? { managedSkills: pluginHost.managedSkills } : {}),
+      isControllerAuthorized,
+      controllerTrust: (controller) => (isProviderSharePeer(controller) ? 'guest' : 'owner'),
+      captureOwner: () => broadcastTap.captureDataOwnerBroadcastScope(),
+      isOwnerCurrent: (scope) =>
+        current() && broadcastTap.isDataOwnerBroadcastScopeCurrent(scope as ReturnType<typeof broadcastTap.captureDataOwnerBroadcastScope>),
+      runsRoot: path.join(deps.profileDir, 'remote-agent'),
+      log,
+    });
+    const host = remoteAgentHost;
+    dispatch.setRemoteAgentHandler({
+      handle: async (controller, raw) => {
+        assertCurrent();
+        const op = raw && typeof raw === 'object' ? (raw as { op?: unknown }).op : undefined;
+        // Let read-only probes, polls, closes and replies for an already running turn drain while held.
+        if (op !== 'caps' && op !== 'poll' && op !== 'close' && op !== 'reply') refuseWhileHeld();
+        return host.handle(controller, raw);
+      },
+      abortAll: (reason) => { void host.abortAll(reason); },
+      abortControllers: (match) => host.abortControllers(match),
+      revalidateModelAccess: () => host.revalidateModelAccess(),
+      activeControllers: () => host.activeControllers(),
+      limitUsage: () => host.limitUsage(),
+      turnRunningControllers: () => host.turnRunningControllers(),
+    });
+    offRemoteAgentAccess = pluginHost.onAccessChanged?.(() => {
+      void host.revalidateModelAccess();
+    }) ?? null;
+  }
   const unbind = dispatch.wireInboundDispatch(client);
+  const offlineControllers = new Map<string, { connection: PeerLinks; connectionEpoch: number; linkGeneration: number }>();
+  function noteControllerOffline(deviceId: string, change?: DeviceLinkPeerRouteStateChanged) {
+    const connection = client.connectionFor(deviceId);
+    const connectionEpoch = connection.getConnectionEpoch();
+    const linkGeneration = connection.getPeerLinkGeneration(deviceId);
+    if (change && (change.connectionEpoch !== connectionEpoch || change.linkGeneration !== linkGeneration)) return;
+    // An owner boundary forbids recording an outbox gate for the next owner,
+    // but does not defer cleanup of the controller that just went offline.
+    if (current()) offlineControllers.set(deviceId, { connection, connectionEpoch, linkGeneration });
+    setControllerPlatform(deviceId, null);
+    releaseAppsInBackground([deviceId]);
+    dispatch.handleControllerOffline(deviceId, change);
+  }
+  // Presence is incremental. An offline observation only applies to the
+  // connection and peer link that supplied it. The shared dispatcher keeps
+  // the peer's outbox and uses a directed flush when it opens a new link.
+  dispatch.setDispatchPresenceOfflineCheck(deviceId => {
+    const offline = offlineControllers.get(deviceId);
+    if (!offline || !current()) return false;
+    const connection = client.connectionFor(deviceId);
+    if (offline.connection !== connection || offline.connectionEpoch !== connection.getConnectionEpoch()
+      || offline.linkGeneration !== connection.getPeerLinkGeneration(deviceId)) {
+      offlineControllers.delete(deviceId);
+      return false;
+    }
+    return !client.hasOfflineDirectPath(deviceId);
+  });
+  const offPeerRoute = client.onPeerRouteStateChanged(change => {
+    if (change.state === 'offline') noteControllerOffline(change.deviceId, change);
+  });
   const offStatus = client.onStatusChange(status => {
     if (status !== 'online') {
       // Like the Desktop: while Agent-Net is on, controllers carried by another connection (phones and older Desktops on the
       // Device Link relay, cross-account peers on their own) are outside the main connection's fault; 2026-11-17 review: an
       // Agent-Net drop logged every phone out of this Host. Off, every controller as before.
       const keepController = agentNet?.active() ? (id: string) => client.connectionFor(id) !== client : undefined;
+      for (const id of offlineControllers.keys()) {
+        if (!keepController?.(id)) offlineControllers.delete(id);
+      }
       releaseAppsInBackground(keepController ? [...appCallers].filter(id => !keepController(id)) : undefined);
       dispatch.deactivateAllControllers('relay-disconnected', 'all', keepController);
       clearControllerPlatforms();
@@ -1044,12 +1177,11 @@ export function createHostDeviceLink(deps: HostDeviceLinkPorts) {
   });
   const offPresence = client.onPresenceChanged(value => {
     if (value.online) {
+      offlineControllers.delete(value.deviceId);
       setControllerPlatform(value.deviceId, value.platform ?? null);
       if (value.deviceName) dispatch.setControllerDisplayName(value.deviceId, value.deviceName);
     } else {
-      setControllerPlatform(value.deviceId, null);
-      releaseAppsInBackground([value.deviceId]);
-      dispatch.handleControllerOffline(value.deviceId);
+      noteControllerOffline(value.deviceId);
     }
   });
   const offEvents = deps.subscribe(event => {
@@ -1158,17 +1290,26 @@ export function createHostDeviceLink(deps: HostDeviceLinkPorts) {
       } else await settings.writeDeviceLinkSetting('remoteControlEnabled', false);
       sync(); return this.state();
     },
-    /** This Host's 「Agent-Net (Beta)」 setting (off by default); the main connection follows it right away. */
+    /**
+     * This Host's 「Agent-Net (Beta)」 setting (off by default); the main connection follows it right away. Turning it on when the
+     * official service says this Host was removed from the account first runs `rejoin` below (2026-11-26: a removed device must be
+     * able to come back; signing in again restores only Device Link), then turns it on whatever that answered — a Host refused
+     * by Agent-Net runs on the Device Link relay. The rejoin outcome and its hint come back as `rejoin`.
+     */
     async setAgentNetEnabled(enabled: boolean) {
       assertCurrent();
       refuseWhileHeld();
       if (!agentNet) throw new Error('Agent-Net is not available on this Host.');
+      const removed = enabled && settings.readDeviceLinkSettings().agentNetEnabled !== true && await agentNet.removedFromAccount();
+      assertCurrent();
+      const rejoin = removed ? (await this.rejoin({ agentNet: true })).rejoin : undefined;
+      assertCurrent();
       await settings.updateDeviceLinkSetting('agentNetEnabled', () => {
         assertCurrent();
         refuseWhileHeld();
         return enabled;
       });
-      sync(); return this.state();
+      sync(); return { ...this.state(), ...(rejoin ? { rejoin } : {}) };
     },
     /**
      * 「重新加入」 (`cindy-host remote rejoin`): this Host was removed from the account in Cindy and comes back without signing in
@@ -1176,7 +1317,7 @@ export function createHostDeviceLink(deps: HostDeviceLinkPorts) {
      * Agent-Net, then only this Host's own connection. Every outcome comes back as `rejoin` with a hint for the command line,
      * which does not receive thrown messages from the control channel.
      */
-    async rejoin() {
+    async rejoin(options?: { agentNet?: boolean }) {
       try {
         assertCurrent();
         refuseWhileHeld();
@@ -1187,7 +1328,7 @@ export function createHostDeviceLink(deps: HostDeviceLinkPorts) {
           // This launcher stays on the account's official service (agentNetNode.ts scope).
           selfHostedRelaySelected: () => false,
           officialFetch: (path, opts) => officialFetch(path, opts),
-          rejoinAgentNet: async () => (agentNet ? agentNet.rejoin() : 'skipped'),
+          rejoinAgentNet: async () => (agentNet ? agentNet.rejoin({ force: options?.agentNet === true }) : 'skipped'),
           // A refused Agent-Net identity always falls back to the Device Link relay on this launcher (agentNetNode.ts `refusedFor`).
           agentNetRequired: () => false,
           // Only the main connection stopped itself on 4410; sync starts it again while remote control is on, and leaves
@@ -1221,10 +1362,14 @@ export function createHostDeviceLink(deps: HostDeviceLinkPorts) {
     async stop() {
       if (closed) return;
       closed = true; cancelPluginOauth();
-      clearInterval(poll); offSettings(); offEvents(); offPresence(); offIssue(); offCompatibilityIssue?.(); offStatus(); unbind();
+      offRemoteAgentAccess?.(); offRemoteAgentAccess = null;
+      dispatch.setRemoteAgentHandler(null);
+      clearInterval(poll); offSettings(); offEvents(); offPresence(); offPeerRoute(); offIssue(); offCompatibilityIssue?.(); offStatus(); unbind();
+      offlineControllers.clear(); dispatch.setDispatchPresenceOfflineCheck(null);
       dispatch.setSessionsSubscribedListener(null); dispatch.setHistoryToolNameReader(() => ''); activityTracker.dispose();
       dispatch.dropAllControllers(client, 'shutdown'); client.stop(); agentNet?.close(); registry.clear(); clearControllerPlatforms();
-      await releaseApps();
+      await Promise.allSettled([releaseApps(), remoteAgentHost?.dispose()]);
+      remoteAgentHost = null;
       // Admission is closed before waiting; no handler may write after storage closes.
       await Promise.allSettled([...pending, dispatch.drainInboundExecutions()]);
       botBoundary.setRemoteBotSessionLookup(null);

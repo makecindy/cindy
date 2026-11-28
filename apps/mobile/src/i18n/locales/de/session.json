@@ -303,6 +303,7 @@
   },
   "screen": {
     "thinking": "Denkt nach…",
+    "replyStreaming": "Wird generiert…",
     "tokenCount": "{{tokens}} tok",
     "tokenCountFull": "{{tokens}} Token",
     "tokenRate": "{{rate}} tok/s",
@@ -398,7 +399,13 @@
     "forkConfirmTitle": "Hier eine neue Sitzung starten?",
     "forkConfirmDescription": "Mit dem Kontext an dieser Stelle wird eine separate Sitzung erstellt. Die ursprüngliche Sitzung bleibt unverändert. Künftige Nachrichten in einer Sitzung beeinflussen die andere nicht.",
     "forkConfirm": "Neue Sitzung starten",
-    "forkCancel": "Abbrechen"
+    "forkCancel": "Abbrechen",
+    "modelSwitchPreparation": {
+      "pending": "Nächste Nachricht",
+      "preparing": "Wird vorbereitet…",
+      "failed": "Wechsel fehlgeschlagen",
+      "usingPrevious": "Diese Nachricht verwendet {{actual}}; {{target}} ist noch nicht bereit."
+    }
   },
   "shareImage": {
     "title": "Unterhaltung teilen",
@@ -497,7 +504,8 @@
     "worktreeUnsupported": "Cindy auf deinem Computer kann Worktrees nicht sicher erstellen. Deaktiviere Worktree, um fortzufahren, oder aktualisiere Cindy auf deinem Computer.",
     "worktreeCreateFailed": "Worktree konnte nicht erstellt werden: {{message}}",
     "worktreeRecoveryStateFailed": "Der Wiederherstellungsstatus des Worktrees konnte nicht gespeichert werden. Versuch es erneut.",
-    "worktreeCleanupPending": "Der vorherige Worktree wartet noch auf die Bereinigung. Verbinde das Gerät erneut und versuch es noch einmal."
+    "worktreeCleanupPending": "Der vorherige Worktree wartet noch auf die Bereinigung. Verbinde das Gerät erneut und versuch es noch einmal.",
+    "createRejectedResend": "Dein Inhalt ist wieder da. Passe ihn bei Bedarf an und sende ihn erneut."
   },
   "menu": {
     "moveToProject": "Aufgabe verschieben",
@@ -664,7 +672,20 @@
     "toolUseLoopDetectedRotationWithCount": "Das Modell hat Tool-Aufrufe wiederholt im Kreis ausgeführt. Cindy hat diese Runde nach {{count}} erkannten Aufrufen in der Schleife gestoppt. Sende eine neue Nachricht, um fortzufahren.",
     "codexThreadLost": "Der Codex-Authentifizierungsmodus hat sich geändert. Diese Sitzung kann daher nicht fortgesetzt werden. Starte eine neue Sitzung.",
     "remoteCompactEncryptedContent": "Die Kontextkomprimierung ist fehlgeschlagen, weil das Modell den verschlüsselten Verlauf nicht lesen konnte. Die automatische Fortsetzung wurde nicht abgeschlossen. Wiederhole den Vorgang, um eine Wiederherstellung zu versuchen.",
-    "encryptedContentInvalid": "Durch den Anbieterwechsel ist die Verschlüsselung nicht mehr verfügbar. Diese Sitzung funktioniert daher nur mit dem ursprünglichen Anbieter. Bearbeite sie am Computer (nutze „Neue Sitzung ab hier starten“, um die verschlüsselten Protokollinhalte zu verwerfen und in einer neuen Sitzung fortzufahren)."
+    "encryptedContentInvalid": "Durch den Anbieterwechsel ist die Verschlüsselung nicht mehr verfügbar. Diese Sitzung funktioniert daher nur mit dem ursprünglichen Anbieter. Bearbeite sie am Computer (nutze „Neue Sitzung ab hier starten“, um die verschlüsselten Protokollinhalte zu verwerfen und in einer neuen Sitzung fortzufahren).",
+    "providerSafetyRefusal": "Die Sicherheitsrichtlinie des Modellanbieters hat diese Antwort blockiert. Passe deine Anfrage an und sende sie erneut.",
+    "providerSafetyRefusalWithProvider": "Die Sicherheitsrichtlinie von {{provider}} hat diese Antwort blockiert. Passe deine Anfrage an und sende sie erneut.",
+    "overloadBusy": "Der Modellanbieter ist vorübergehend ausgelastet und hat keine freie Kapazität. Versuche es später erneut oder wechsle das Modell.",
+    "overloadBusyWithProvider": "{{provider}} ist vorübergehend ausgelastet und hat keine freie Kapazität. Versuche es später erneut oder wechsle das Modell.",
+    "streamInterrupted": "Die Antwortübertragung des Modellanbieters wurde unterbrochen. Bitte versuche es später erneut.",
+    "streamInterruptedWithProvider": "Die Antwortübertragung von {{provider}} wurde unterbrochen. Bitte versuche es später erneut.",
+    "upstreamStatusError": "Der Dienst des Modellanbieters meldete einen Fehler (HTTP {{status}}). Diese Antwort wurde nicht abgeschlossen.",
+    "upstreamStatusErrorWithProvider": "Der Dienst von {{provider}} meldete einen Fehler (HTTP {{status}}). Diese Antwort wurde nicht abgeschlossen.",
+    "modelAccessDenied": "Dein aktuelles Modellanbieter-Konto hat keinen Zugriff auf dieses Modell. Wechsle das Modell oder prüfe die Zugriffsrechte.",
+    "modelAccessDeniedWithProvider": "Dein {{provider}}-Konto hat keinen Zugriff auf dieses Modell. Wechsle das Modell oder prüfe die Zugriffsrechte.",
+    "providerQuotaExhausted": "Nicht genügend Kontingent oder Guthaben im Modellanbieter-Konto. Bitte prüfe dein Konto.",
+    "providerQuotaExhaustedWithProvider": "Dein {{provider}}-Konto hat nicht genügend Kontingent oder Guthaben. Bitte prüfe dein Konto.",
+    "usageLimitReachedWithProvider": "Dein {{provider}}-Konto hat das Nutzungslimit erreicht"
   },
   "row": {
     "markRead": "Als gelesen markieren",
@@ -680,9 +701,15 @@
   "outbox": {
     "deleteConfirmTitle": "Diese Nachricht löschen?",
     "deleteConfirmBody": "Diese Nachricht wurde nicht gesendet. Das Löschen kann nicht rückgängig gemacht werden.",
+    "deleteUnconfirmedBody": "Der Computer hat diese Nachricht möglicherweise schon empfangen. Beim Löschen wird nur die ausstehende Nachricht auf diesem Gerät entfernt. Hat der Computer sie empfangen, ist sie weiterhin im Gesprächsverlauf zu sehen.",
     "legacyPlanRecovery": "Dieser Computer kann gespeicherte Nachrichten im Planmodus nicht wiederherstellen. Deaktiviere den Planmodus oder aktualisiere Cindy auf dem Computer und versuche es erneut.",
     "creationRecoveryRequired": "Versuche erneut, diese Aufgabe zu erstellen, bevor du ihre erste Nachricht löschst. Diese Nachricht enthält die Wiederherstellungsdaten für deine späteren Nachrichten.",
     "confirmationRequired": "Dieser Computer kann nicht bestätigen, ob die Nachricht empfangen wurde. Prüfe seinen Verlauf oder aktualisiere Cindy, bevor du es erneut versuchst.",
+    "profileInUseByDesktop": "Diese Daten werden von der eigenständig laufenden Cindy-Desktop-App verwendet. Beende sie und sende dann erneut.",
+    "taskInactive": "Diese Aufgabe kann gerade keine Nachrichten empfangen.",
+    "inputNotSupported": "Dieser Computer unterstützt diesen Nachrichtentyp für die Aufgabe nicht.",
+    "invalidInput": "Der Computer hat die Nachricht wegen ungültiger Inhalte abgelehnt.",
+    "taskClearedBeforeSend": "Die Aufgabe wurde oder wird gerade geleert. Die Nachricht bleibt auf diesem Gerät gespeichert.",
     "taskCleared": "Diese Aufgabe wurde nach dem Senden der Nachricht geleert. Die gespeicherte Nachricht wurde zur Prüfung aufbewahrt.",
     "restoreFailed": "Gespeicherte Nachrichten konnten nicht wiederhergestellt werden. Sie wurden nicht gelöscht. Starte die App neu und versuche es erneut.",
     "recoveryTarget": "Behalte beim Wiederherstellen dieser Aufgabe den ursprünglichen Computer bei. Die späteren Nachrichten sind noch gespeichert.",

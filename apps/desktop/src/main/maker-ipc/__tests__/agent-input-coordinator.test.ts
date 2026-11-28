@@ -1,3 +1,4 @@
+import { createBotModelRouteApplier } from '../botModelRouteReconciler.js';
 import { BotCapabilityRefreshDeferredError } from '../botCompactRuntimeRefresh.js';
 import { sharedTaskHostPeer } from '@cindy/device-link';
 import { createSharedTaskDelivery } from '../../mcp-integrations/sharedTaskDelivery.js';
@@ -3077,6 +3078,48 @@ describe('AgentInputCoordinator trusted session reference snapshots', () => {
 });
 
 describe('AgentInputCoordinator send transaction', () => {
+  // #13437, unit: drive a real cross-harness route through send admission while a
+  // background job owns the runtime. A switch that fails once idle stays retryable.
+  it.each([true, false])('keeps the pending companion route queued until idle (switch succeeds: %s)', async (succeeds) => {
+    const h = createHarness();
+    const sid = 'pending-route';
+    let idle = false;
+    let pending = true;
+    let switchSucceeds = succeeds;
+    const apply = createBotModelRouteApplier({
+      isIdle: () => idle, stage: async () => {}, hasPendingSwitch: () => pending,
+      applyPendingSwitch: async () => { pending = !switchSucceeds; }, onApplied: async () => {},
+    });
+    const send = h.sendToAgent.getMockImplementation()!;
+    h.sendToAgent.mockImplementation(async (...args) => {
+      const current = { agentKind: 'claude-code' as const, model: 'old', providerId: null, effort: null, fastMode: false };
+      await apply(sid, { ...current, agentKind: 'codex', model: 'new' }, current);
+      return send(...args);
+    });
+    h.coordinator.enqueue(sid, makeItem('original', 'hello'));
+    await flush();
+    expect(h.coordinator.getProjection(sid)).toMatchObject({
+      error: null, recovery: null, pendingQueue: [expect.objectContaining({ clientId: 'original' })],
+    });
+    h.coordinator.wakeSession(sid, 'unrelated-wake');
+    await flush();
+    expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+    idle = true;
+    h.coordinator.onBotRouteIdleBoundary(sid);
+    h.coordinator.onBotCapabilityRefreshReady(sid);
+    await flush();
+    if (!succeeds) {
+      expect(h.coordinator.getProjection(sid).recovery).toMatchObject({ kind: 'queue-head', clientId: 'original' });
+      expect(h.onDispatchedUserTurn).not.toHaveBeenCalled();
+      switchSucceeds = true;
+      await h.coordinator.retryLastError(sid);
+      await flush();
+    }
+    expect(h.sendToAgent.mock.lastCall?.[3].persistUserMessage?.clientId).toBe('original');
+    expect(h.onDispatchedUserTurn).toHaveBeenCalledOnce();
+    expect(h.coordinator.getProjection(sid).pendingQueue).toEqual([]);
+  });
+
   it.each(['text', 'content', 'replace'])('dispatches edited companion input after a refresh wait (%s)', async (edit) => {
     vi.useFakeTimers();
     try {
@@ -3853,12 +3896,15 @@ describe('AgentInputCoordinator send transaction', () => {
     expect(h.coordinator.getActiveInputClientId(sid)).toBeNull();
     h.sendToAgent.mockImplementationOnce(async () => {
       expect(h.coordinator.getActiveInputClientId(sid)).toBe('bot-dm:thread:delivery');
+      expect(h.coordinator.getDispatchedInput(sid, ['bot-dm:thread:delivery'])).toBeUndefined();
       h.setRunning(true);
       return sendSuccess();
     });
     h.coordinator.enqueue(sid, makeItem('bot-dm:thread:delivery', 'private message'));
     await flush();
     expect(h.coordinator.getActiveInputClientId(sid)).toBe('bot-dm:thread:delivery');
+    expect(h.coordinator.getDispatchedInput(sid, ['other'])).toBeUndefined();
+    expect(h.coordinator.getDispatchedInput(sid, ['bot-dm:thread:delivery'])).toEqual({ clientId: 'bot-dm:thread:delivery', agentKind: 'claude-code' });
     h.setRunning(false);
     h.coordinator.onTurnEvent(sid, 'done');
     await flush();
@@ -7356,6 +7402,93 @@ describe('AgentInputCoordinator send transaction', () => {
     await flush();
     expect(h.sendToAgent).toHaveBeenCalledTimes(2);
     expect(h.sendToAgent.mock.calls[1]?.[1]).toEqual({ type: 'user', content: 'second' });
+  });
+
+  // Regression: after user-message persistence, beforeDispatchUserTurn / onAcceptedQueuedMessage
+  // still run before vendor handle.send() (`dispatchLifecycle === 'awaiting-dispatch-hooks'`).
+  // A stray done or terminal error landing in this window must NOT wipe activeTurn and cancel
+  // the pending dispatch, while a legitimate fast done after onPersisted ('sending') still settles.
+  it.each(['done', 'error'] as const)(
+    'ignores a stray %s while a persisted turn awaits pre-dispatch hooks',
+    async (strayType) => {
+      const h = createHarness();
+      const sid = `send-stray-${strayType}-awaiting-hooks`;
+      const beforeDispatchGate = deferred<void>();
+      const scheduled = makeItem('sched-1', 'scheduled heartbeat', {
+        origin: {
+          kind: 'scheduler',
+          scheduleId: 'sched-id-1',
+          scheduleName: 'scheduled-check',
+          runId: 'run-id-1',
+        },
+      });
+      const followUp = makeItem('q-2', 'follow-up');
+      h.beforeDispatchUserTurn.mockImplementationOnce(() => beforeDispatchGate.promise);
+
+      h.coordinator.enqueue(sid, scheduled);
+      await flush();
+
+      expect(mocks.createMessage).toHaveBeenCalledTimes(1);
+      expect(h.beforeDispatchUserTurn).toHaveBeenCalledTimes(1);
+      expect(h.onAcceptedQueuedMessage).not.toHaveBeenCalled();
+
+      if (strayType === 'done') {
+        h.coordinator.onTurnEvent(sid, 'done');
+      } else {
+        h.coordinator.onTurnEvent(sid, 'error', 'stray startup error');
+      }
+      await flush();
+
+      expect(h.coordinator.getProjection(sid).error).toBeNull();
+      expect(h.coordinator.getProjection(sid).recovery).toBeNull();
+
+      beforeDispatchGate.resolve();
+      await flush();
+
+      expect(h.onAcceptedQueuedMessage).toHaveBeenCalledTimes(1);
+      expect(h.onAcceptedQueuedMessage).toHaveBeenCalledWith(
+        sid,
+        expect.objectContaining({ clientId: 'sched-1' }),
+      );
+      expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+
+      // activeTurn must remain owned until the real turn finishes.
+      h.coordinator.enqueue(sid, followUp);
+      await flush();
+      expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+
+      h.setRunning(false);
+      h.coordinator.onTurnEvent(sid, 'done');
+      await flush();
+      expect(h.sendToAgent).toHaveBeenCalledTimes(2);
+      expect(h.sendToAgent.mock.calls[1]?.[1]).toEqual({ type: 'user', content: 'follow-up' });
+    },
+  );
+
+  it('still settles a fast done emitted during vendor handle.send after dispatch hooks finish', async () => {
+    const h = createHarness();
+    const sid = 'send-fast-done-during-vendor-send';
+    const first = makeItem('q-1', 'fast turn');
+    const second = makeItem('q-2', 'queued next');
+    const vendorGate = deferred<void>();
+    h.sendToAgent.mockImplementationOnce(async (sessionId, _message, _createOpts, sendOpts) => {
+      await persistQueuedUserMessage(sessionId, sendOpts);
+      // onPersisted has returned -> dispatchLifecycle is now 'sending' (inside vendor send).
+      h.coordinator.onTurnEvent(sessionId, 'done');
+      await vendorGate.promise;
+      return sendSuccess();
+    });
+
+    h.coordinator.enqueue(sid, first);
+    await flush();
+    expect(h.onAcceptedQueuedMessage).toHaveBeenCalledTimes(1);
+
+    h.coordinator.enqueue(sid, second);
+    vendorGate.resolve();
+    await flush();
+
+    expect(h.sendToAgent).toHaveBeenCalledTimes(2);
+    expect(h.sendToAgent.mock.calls[1]?.[1]).toEqual({ type: 'user', content: 'queued next' });
   });
 
   it('drains FIFO only after the accepted turn reaches a done boundary', async () => {
@@ -15036,7 +15169,7 @@ describe('Bot subscription startup admission', () => {
       expect(h.attemptCurrent).not.toHaveBeenCalled();
       await vi.advanceTimersByTimeAsync(30_000);
       await flush();
-      expect(h.fallback).toHaveBeenCalledWith(h.sid, 1, expect.any(Number), true, expect.any(Function));
+      expect(h.fallback).toHaveBeenCalledWith(h.sid, 1, expect.any(Number), true, expect.any(Function), undefined, 'bot-subscription-startup-admission');
       expect(h.attemptCurrent).toHaveBeenCalledWith(h.sid, 1);
       expect(h.session.send).toHaveBeenCalledOnce();
       expect(h.onUserMessagePersisted).toHaveBeenCalledOnce();
@@ -16680,7 +16813,12 @@ describe('AgentInputCoordinator 中断自动续跑', () => {
             now: Date.now, config: () => ({ routes: [{ id: 'group', name: 'group', strategy: 'order', candidates }] }),
             candidateFacts: async () => candidates.map(c => ({ available: true, modelName: c.model, sourceName: c.providerId, windows: null })),
           }, id, { ...recovery, current, visited, recordUnavailable: c => visited.add(modelGroupCandidateKey(c)) });
-          return { candidate: offer && { ...offer, agentKind: offer.agentKind === 'cc' ? 'claude-code' : offer.agentKind, effort: null, fastMode: false } };
+          return {
+            candidate:
+              offer
+                ? { ...offer, agentKind: offer.agentKind === 'cc' ? 'claude-code' : offer.agentKind, effort: null, fastMode: false }
+                : null,
+          };
         },
       }),
     });

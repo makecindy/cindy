@@ -42,6 +42,7 @@ export function createHostAutoReview(options: {
   reportGatewayKeyRejected?(key: string): void;
   providerConfig: ReturnType<typeof createHostProviderConfig>;
   bridge?: (() => SubscriptionBridge | null) | null;
+  expandRouteRef?: (routeId: string) => string[];
   logger: AutoReviewLogger;
 }) {
   const config = options.providerConfig;
@@ -50,7 +51,10 @@ export function createHostAutoReview(options: {
     if (!value) throw new Error('The ChatGPT subscription bridge needs the Host Codex runtime');
     return value;
   };
-  const { settings, chain } = createHostAuxiliaryModelChain({ userDataDir: options.userDataDir });
+  const { settings, chain } = createHostAuxiliaryModelChain({
+    userDataDir: options.userDataDir,
+    expandRouteRef: options.expandRouteRef,
+  });
   const listRouteGuardProviders = () => config.publicViews(Boolean(options.gateway?.credential));
   const isOneShotRouteDisabled = createOneShotRouteGuard({
     listRouteGuardProviders,

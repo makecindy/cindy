@@ -51,7 +51,7 @@ vi.mock('@/components/AppText', async () => {
 vi.mock('react-native-safe-area-context', () => ({ useSafeAreaInsets: () => ({ top: 40, bottom: 20 }) }));
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
 vi.mock('lucide-react-native', () => ({
-  ...Object.fromEntries(['Clock3', 'Brain', 'Puzzle', 'SlidersHorizontal', 'Check', 'Zap', 'LayoutGrid', 'Search', 'X', 'ChevronDown', 'ChevronRight', 'ChevronsUpDown', 'CircleAlert', 'Waypoints'].map(key => [key, () => null])),
+  ...Object.fromEntries(['Clock3', 'Brain', 'Puzzle', 'SlidersHorizontal', 'Check', 'Zap', 'LayoutGrid', 'Search', 'X', 'ChevronDown', 'ChevronRight', 'ChevronsUpDown', 'CircleAlert', 'Sparkles'].map(key => [key, () => null])),
   Star: ({ fill, color }: any) => createElement('span', { 'data-star-fill': fill, 'data-star-color': color }),
 }));
 vi.mock('react-native-svg', () => ({
@@ -521,6 +521,19 @@ it.each([['Android', UnifiedModelPickerView], ['iOS', IosModelPickerView]] as co
   },
 );
 
+// Cloud status gap 7 / unit: a confirmed missing model-groups endpoint keeps
+// the section and its explanation visible on each model picker view.
+it.each([['Android', UnifiedModelPickerView], ['iOS', IosModelPickerView]] as const)(
+  'shows the unavailable model groups section on %s', async (_platform, Component) => {
+    await act(async () => root.render(createElement(Component, {
+      visible: true, testID: 'picker', query: '', filter: 'all', groups: [], filters: [],
+      modelGroups: { title: 'Model groups', rows: [], unsupportedNotice: 'Not supported', onSelect: vi.fn() },
+    } as any)));
+    expect(host.textContent).toContain('Model groups');
+    expect(host.textContent).toContain('Not supported');
+  },
+);
+
 // 生产入口：Android(UnifiedModelPickerView) 与 iOS(UnifiedModelPickerView.ios)；
 // 可观察结果：Antigravity 多配额分组在双端分组头内联分开显示 Gemini 与 Claude & GPT（与内置分组头一致，不画多余进度条），
 // 且各模型行分别渲染所属配额池的 quotaLabel。
@@ -642,7 +655,8 @@ it.each([['Android', UnifiedModelPickerView], ['iOS', IosModelPickerView]] as co
     expect(host.textContent).toContain('24%');
     expect(host.textContent).toContain('1h · 57%');
     expect(host.textContent).toContain('4d · 24%');
-    expect(host.textContent).toContain('64% · 2h');
+    // A single-pool engine keeps the weekly-first header value (reset details come from quota.reset).
+    expect(host.textContent).toContain('64%');
   },
 );
 

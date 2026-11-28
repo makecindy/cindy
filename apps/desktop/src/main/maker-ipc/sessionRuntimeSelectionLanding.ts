@@ -13,7 +13,7 @@
  */
 import type { Maker } from '@cindy/maker-core';
 import { eq } from 'drizzle-orm';
-import { dbToMakerAgentKind } from '../../shared/agentKindConversion.js';
+import { dbToMakerAgentKind, isPluginEngineKind } from '../../shared/agentKindConversion.js';
 import { hasBuiltinAgentKind } from '../maker-host/engineKind.js';
 import { getDbClient } from '../localDb/client/current.js';
 import { sessions } from '../localDb/schema.js';
@@ -48,6 +48,9 @@ export function createSelectSameAgentModel(ports: {
       ...(intent.confirmedContextWindow ? { confirmedContextWindow: intent.confirmedContextWindow } : {}),
     }, { source: 'user', sessionLockHeld: true, applyingUserSelectionOnSend: applyNow,
       runtimeSource: intent.runtimeSource, configStaged: intent.configStaged === true,
+      ...(intent.preserveModelGroupBinding === true ? { preserveModelGroupBinding: true } : {}),
+      ...(intent.modelGroupPickedKey ? { modelGroupPickedKey: intent.modelGroupPickedKey } : {}),
+      ...(intent.routeChangeAttribution ? { routeChangeAttribution: intent.routeChangeAttribution } : {}),
       credentialSelectionAxes: intent.credentialSelectionAxes ?? {
         effort: !intent.configStaged && intent.effort !== undefined,
         fastMode: !intent.configStaged && intent.fastMode !== undefined,
@@ -84,6 +87,7 @@ export function createReadSessionRuntimeProfiles(ports: {
     // Plugin-engine tasks have no catalog runtime profile; their model lives on the task row.
     if (!meta || !hasBuiltinAgentKind(meta)) return null;
     let baseline: SessionRuntimeProfile = {
+      agentDeviceId: null,
       agentKind: meta.agentKind,
       model: meta.model,
       providerId: null,
@@ -106,7 +110,7 @@ export function createReadSessionRuntimeProfiles(ports: {
       if (row) {
         baseline = {
           agentKind: dbToMakerAgentKind(row.agentKind),
-          agentDeviceId: row.agentDeviceId,
+          agentDeviceId: row.agentDeviceId ?? null,
           model: row.model,
           providerId: row.providerId?.trim() || null,
           effort: row.effort,
@@ -121,17 +125,22 @@ export function createReadSessionRuntimeProfiles(ports: {
     }
     const control = getSessionRuntimeControlSnapshot(sessionId);
     const live = maker.getSession(sessionId);
-    const effective: SessionRuntimeProfile = control.effectiveOverride ?? {
-      agentDeviceId: baseline.agentDeviceId,
-      agentKind: live && hasBuiltinAgentKind(live) ? live.agentKind : meta.agentKind,
-      model: live?.model ?? meta.model,
-      providerId: hasSessionProvider(sessionId)
-        ? getSessionProvider(sessionId)
-        : baseline.providerId,
-      effort:
-        (getSessionEffort(sessionId) as SessionRuntimeProfile['effort']) ?? meta.effort ?? null,
-      fastMode: live ? getSessionFastMode(sessionId) : (meta.fastMode ?? false),
-    };
+    const effective: SessionRuntimeProfile = control.effectiveOverride
+      ? {
+          ...control.effectiveOverride,
+          agentDeviceId: control.effectiveOverride.agentDeviceId ?? baseline.agentDeviceId ?? null,
+        }
+      : {
+          agentDeviceId: baseline.agentDeviceId ?? null,
+          agentKind: live && hasBuiltinAgentKind(live) ? live.agentKind : meta.agentKind,
+          model: live?.model ?? meta.model,
+          providerId: hasSessionProvider(sessionId)
+            ? getSessionProvider(sessionId)
+            : baseline.providerId,
+          effort:
+            (getSessionEffort(sessionId) as SessionRuntimeProfile['effort']) ?? meta.effort ?? null,
+          fastMode: live ? getSessionFastMode(sessionId) : (meta.fastMode ?? false),
+        };
     const pendingMutation = pendingHarnessRuntimeMutation(agentSwitchPending.get(sessionId), control.generation, effective.agentDeviceId)
       ?? control.pending;
     return { baseline, effective, control, pendingMutation };
@@ -160,7 +169,7 @@ export function createRecoverRenamedSessionModelOnSend(ports: {
       fastMode: sessions.fastMode,
     }).from(sessions).where(eq(sessions.id, sessionId)).limit(1);
     if (!row || row.status !== 'active' || !row.providerId ||
-        row.remoteHostId || row.agentDeviceId) return;
+        row.remoteHostId || row.agentDeviceId || isPluginEngineKind(row.agentKind)) return;
     const providers = await getDesktopProviderService().listProviders({
       allowSideEffects: false,
       catalog: getActiveCatalog(),

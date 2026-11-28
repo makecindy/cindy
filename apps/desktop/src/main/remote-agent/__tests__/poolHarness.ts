@@ -31,6 +31,7 @@ import { isProviderShareAgentDeviceId, providerShareIdOfAgentDeviceId } from '..
 import { RuntimePluginControlError } from '../../cindy-brain/runtimeControl';
 import { SessionCreationCleanupPendingError } from '@cindy/maker-core';
 
+import { createAcpLeadBriefingHandoff, prepareAcpRoleBriefingForStart } from '../../maker-ipc/orcaSessionStartOptions';
 import { resolveAgentSendToSessionHint } from '@cindy/maker-shared/agent-input-projection';
 import { dbToMakerEngineKind } from '../../../shared/agentKindConversion.js';
 import { applySessionRuntimeOverrideForStart } from '../../maker-ipc/sessionRuntimeControl.js';
@@ -125,6 +126,7 @@ export function sharedAccountSessionTool(dispatcherSessionId: string, ports: Rec
     withPluginTaskService: none, getSessionActiveInputClientIds: () => [],
     extractPlainText: String, assertReviewExternalInputAllowed: none, syncBotLanePermission: none,
     reconcileBotModelRoute: none, refreshBotCapabilityEpochBeforeSend: none, assertSessionNotRestarting: noop,
+    runDesktopModelGroupBeforeSend: async () => ({ switched: false }),
     sendToSessionLocks: new Map(), waitForSendToSessionLock: none,
     trackSendToSessionLockRun: (_id: string, run: Promise<unknown>) => run,
     scheduledModelScope: { restore: none }, agentSwitchPending: new Map(), BOT_GROUP_CLIENT_ID_PREFIX: 'bot-group:',
@@ -192,6 +194,8 @@ export function sharedAccountRegisterWiring(ports: Record<string, unknown> & {
     applySessionRuntimeOverrideForStart: noop,
     applyPersistedReviewMode: noop,
     applyOrcaInstructions: () => false,
+    prepareAcpRoleBriefingForStart,
+    acpLeadBriefings: createAcpLeadBriefingHandoff({ currentOwner: () => null, readActiveTeamId: async () => undefined, readRole: async () => null }),
     applyProjectContextInjection: () => false,
     prepareDirectoryGrantsForBootstrap: noop,
     readSessionWritableDirsFromDb: none,

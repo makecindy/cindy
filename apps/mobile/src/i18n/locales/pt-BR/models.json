@@ -147,14 +147,29 @@
       "exceptionImage": "A mensagem tem imagens, então só foram consideradas as fontes que conseguem vê-las",
       "exceptionImageFallback": "A mensagem tem imagens, mas nenhuma fonte consegue vê-las, então escolheu como de costume",
       "exceptionHours": "Neste horário usa “{{name}}”",
-      "separator": "; "
+      "separator": "; ",
+      "usageHabit": "Escolhida primeiro com base no seu uso habitual",
+      "usageHabitQuota": "Escolhida primeiro com base no seu uso habitual ({{left}}% de cota restante)",
+      "autoBalance": "Assumindo a carga enquanto outras fontes estão apertadas ou ocupadas",
+      "autoBalanceQuota": "Balanceada por folga de cota e carga ({{left}}% de cota restante)",
+      "lessBusy": "Outras fontes estão executando tarefas, então esta livre vai primeiro",
+      "paygFallback": "Assinaturas e fontes compartilhadas indisponíveis; usando pagamento por uso"
     },
     "picker": {
       "switched": "“{{name}}” trocou esta tarefa para {{model}}",
       "switchUnavailable": "“{{name}}” não tem agora nenhuma fonte que esta tarefa possa usar. O modelo não foi alterado.",
-      "chooseUnavailable": "“{{name}}” não tem agora nenhuma fonte utilizável, então não foi selecionado."
+      "chooseUnavailable": "“{{name}}” não tem agora nenhuma fonte utilizável, então não foi selecionado.",
+      "managedBy": "Gerenciado por “{{name}}”",
+      "detach": "Desvincular",
+      "detached": "Desvinculado do roteamento inteligente. Mantendo o modelo atual."
     },
-    "anotherDevice": "Outro computador"
+    "anotherDevice": "Outro computador",
+    "sourceRouteTitle_one": "{{name}} · Rota inteligente ({{count}} fonte)",
+    "sourceRouteTitle_many": "{{name}} · Rota inteligente ({{count}} fontes)",
+    "sourceRouteTitle_other": "{{name}} · Rota inteligente ({{count}} fontes)",
+    "switchOffer": {
+      "button": "Trocar para {{model}} e continuar"
+    }
   },
   "pluginEngines": {
     "genericName": "Mecanismo de plugin",

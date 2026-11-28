@@ -15,7 +15,59 @@ import {
   sanitizeSourceName,
   shouldShowSourceDevice,
   splitPluginMessage,
+  readMessageDispatchRoute,
+  captureMessageDispatchRoute,
+  messageDispatchRouteMismatch,
+  messageDispatchRouteLabel,
 } from '../messageSource';
+
+// Unit: history reads the executor's message snapshot, including billing source.
+// Previous source labels described the sender, not the route that ran the input.
+describe('dispatch route snapshots', () => {
+  const actual = { agentKind: 'pi' as const, model: 'same-model', providerId: 'xd', agentDeviceId: null };
+  // PR #13360 follow-up, unit: history uses this formatter on both clients. ACP
+  // previously leaked raw internal `acp-plugin:...` ids into the UI label.
+  it('labels a plugin route with its display name or localized fallback without exposing raw acp-plugin ids', () => {
+    const named = { ...actual, agentKind: 'acp' as const, providerId: 'acp-plugin:fixture:engine', engineName: 'Antigravity' };
+    const unnamed = { ...actual, agentKind: 'acp' as const, providerId: 'acp-plugin:fixture:engine' };
+    expect(messageDispatchRouteLabel(named, '插件引擎')).toBe('Antigravity · same-model');
+    expect(messageDispatchRouteLabel(unnamed, '插件引擎')).toBe('插件引擎 · same-model');
+    expect(messageDispatchRouteLabel({ ...named, model: 'default' }, '插件引擎', '默认模型')).toBe('Antigravity · 默认模型');
+  });
+  it('captures a dispatchRoute snapshot only when actual differs from the pending selection', () => {
+    expect(captureMessageDispatchRoute(actual)).toBeUndefined();
+    expect(captureMessageDispatchRoute(actual, { ...actual })).toBeUndefined();
+    const acpActual = {
+      agentKind: 'acp' as const, model: 'gemini-4-neon', providerId: 'acp-plugin:fixture:engine',
+      agentDeviceId: null, engineName: 'Antigravity',
+    };
+    expect(captureMessageDispatchRoute(acpActual, { ...acpActual, engineName: 'Renamed' })).toBeUndefined();
+    const mismatch = captureMessageDispatchRoute(
+      acpActual,
+      { agentKind: 'codex', model: 'gpt-6-astra', providerId: 'openai', agentDeviceId: null },
+      'target failed',
+    );
+    expect(mismatch).toEqual({
+      ...acpActual,
+      selected: { agentKind: 'codex', model: 'gpt-6-astra', providerId: 'openai', agentDeviceId: null },
+      switchError: 'target failed',
+    });
+    expect(readMessageDispatchRoute({ dispatchRoute: mismatch })).toEqual(mismatch);
+  });
+  it.each(['agentKind', 'model', 'providerId', 'agentDeviceId'] as const)('detects a different %s even when the other axes match', axis => {
+    const selected = { ...actual, [axis]: axis === 'agentKind' ? 'codex' : 'different' };
+    const snapshot = readMessageDispatchRoute({ dispatchRoute: { ...actual, selected, switchError: 'target failed' } });
+    expect(snapshot).toBeDefined();
+    expect(messageDispatchRouteMismatch(snapshot!)).toBe(true);
+    selected.providerId = 'later-selection';
+    expect(snapshot?.selected?.providerId).not.toBe('later-selection');
+  });
+  it('does not invent attribution for old or malformed messages or a matching selection', () => {
+    expect(readMessageDispatchRoute({})).toBeUndefined();
+    expect(readMessageDispatchRoute({ dispatchRoute: { ...actual, providerId: 123 } })).toBeUndefined();
+    expect(messageDispatchRouteMismatch({ ...actual, selected: actual })).toBe(false);
+  });
+});
 
 describe('sanitizeSourceName', () => {
   it('collapses control characters and line breaks into single spaces', () => {

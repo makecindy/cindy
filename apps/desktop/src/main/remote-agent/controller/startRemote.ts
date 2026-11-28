@@ -72,6 +72,7 @@ import {
   type SharedReconnectSendEvidence,
 } from './proxyHandle';
 import { ExecServerRelay } from './execServerRelay';
+import type { ManagedSkillOverlay } from './managedSkillOverlay';
 import { createReverseHttpRouter, type LocalMcpTarget } from './router';
 import { RemoteAgentPoller, RemoteAgentRemoteError, RemoteAgentRunClient, type RemoteAgentInvoke } from './runClient';
 import { isSharedTaskAuthorizationDenied } from './poller';
@@ -185,6 +186,8 @@ export interface StartRemoteAgentDeps {
   isGitRepo(workingDir: string): Promise<boolean>;
   /** Read 读 PDF 时取文字(Claude Code)。 */
   extractPdfText?: PdfTextExtractor;
+  /** 远程执行器访问本机工作树（文件/命令工具）前等待后台 worktree 完整检出就绪。 */
+  ensureWorktreeReady?(sessionId: string, signal?: AbortSignal): Promise<void>;
   /**
    * 在本机抓取网页的出站通道：给 Claude Code 提供 WebFetch(供应商分享的受邀者任务，自带的
    * WebFetch 在对方电脑上已关闭)。缺省时不提供。
@@ -553,6 +556,9 @@ async function prepareAndStartRemoteAgentSession(
     gate,
     rgPath: deps.rgPath,
     capture: deps.capture?.({ kind, opts }),
+    ...(opts.sessionId && deps.ensureWorktreeReady
+      ? { beforeWorktreeAccess: (execSignal) => deps.ensureWorktreeReady!(opts.sessionId!, execSignal) }
+      : {}),
     ...(deps.extractPdfText ? { extractPdfText: deps.extractPdfText } : {}),
     // 只有 Claude Code 经 cindy_exec 使用这组工具。
     ...(kind === 'claude-code' && deps.webFetch ? { webFetch: deps.webFetch } : {}),
@@ -646,6 +652,8 @@ async function prepareAndStartRemoteAgentSession(
   let personalRoots: Array<{ relative: string; local: string; managed?: true }> = [];
   /** 上一次打开时托管 Skill 的映射来源：这次不再有的要撤掉。 */
   let managedAliasFroms = new Set<string>();
+  /** 托管 Skill 在对方影子目录里的位置 → 本机目录(Codex 经执行环境找 Skill 时补齐上级目录，见 managedSkillOverlay)。 */
+  let managedSkillOverlays: ManagedSkillOverlay[] = [];
   /** 正在连或连着的那条连接(Codex 的执行环境帧经它推给对方)。 */
   let active: RemoteAgentRunClient | null = null;
   let linkState: LinkState = 'connecting';
@@ -685,6 +693,7 @@ async function prepareAndStartRemoteAgentSession(
         log: deps.log,
         // 后台终端跑完：闲置从这时算起。
         onProcessesEnded: () => touch(),
+        managedSkillOverlays: () => managedSkillOverlays,
       })
     : null;
 
@@ -812,6 +821,8 @@ async function prepareAndStartRemoteAgentSession(
         workspace.addAliases(aliases, new Set([...managedAliasFroms, ...managed]));
       } else workspace.setAliases(aliases);
       managedAliasFroms = managed;
+      const shadow = projection.shadowDir.replace(/[\\/]+$/, '');
+      managedSkillOverlays = personalRoots.filter((root) => root.managed).map((root) => ({ agentDir: `${shadow}/${root.relative}`, localDir: root.local }));
       workspace.setVirtualRoot(virtualRoot);
       if (virtualRoot && attachmentRoots) {
         const native = /^[A-Za-z]:|^\\\\/.test(virtualRoot) ? path.win32 : path.posix;
@@ -1243,8 +1254,8 @@ async function prepareAndStartRemoteAgentSession(
    * (目录没给到，消息里的虚拟路径就落空；自动审查兜底没恢复则少了一道安全设置)。
    * 目录：打开时给的是第一次的列表，之后的增减在这里按运行中改目录的方式补发，与一直连着时的效果一致。
    */
-  async function reapply(client: RemoteAgentRunClient): Promise<void> {
-    const methods = new Set(firstStarted?.methods ?? []);
+  async function reapply(client: RemoteAgentRunClient, started: RemoteStartedInfo | null = firstStarted): Promise<void> {
+    const methods = new Set((started ?? firstStarted)?.methods ?? []);
     const steps: Array<[RemoteAgentMethod, unknown[]]> = [];
     const same = (a: readonly string[], b: readonly string[]) => a.length === b.length && a.every((dir, index) => dir === b[index]);
     if (Object.keys(vendorPatches).length && methods.has('setVendorOptions')) steps.push(['setVendorOptions', [vendorPatches]]);
@@ -1285,7 +1296,9 @@ async function prepareAndStartRemoteAgentSession(
       const connectOnce = async (skipAuthorization = false): Promise<RemoteAgentRunClient> => {
         if (!skipAuthorization) await deps.reconnectAuthorization?.(() => stateNow() !== 'closed');
         requireOpen();
+        let reconnectedStarted: RemoteStartedInfo | null = null;
         const client = await connect(true, (started) => {
+          reconnectedStarted = started;
           controller?.onReconnected(started);
         });
         // M's task-scoped open is the confirmation that the current grant is
@@ -1297,7 +1310,7 @@ async function prepareAndStartRemoteAgentSession(
         touch();
         deps.log?.info('remote agent reconnected', { kind, runId: client.runId });
         try {
-          await reapply(client);
+          await reapply(client, reconnectedStarted);
         } catch (error) {
           deps.onTaskGrantRenewable?.(false);
           // 补发失败：关掉这次开的进程、还回名额，保持已让出；待补发的内容都还在，下次调用重新连回再补。

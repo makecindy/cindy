@@ -68,6 +68,7 @@ export function buildPreviewSideChatSession(
     pinnedAt: null,
     userSendAt: nowIso,
     agentKind: parentSession?.agentKind ?? 'cc',
+    agentDeviceId: parentSession?.agentDeviceId ?? null,
     workspaceKind: parentSession?.workspaceKind ?? 'project',
     source: 'side-chat',
     parentSessionId,

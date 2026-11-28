@@ -60,13 +60,15 @@ export function buildImChannelNote(channel: string, source: ImChannelNoteSource)
   const where = source.chatKind === 'group' ? `${label}群${chatRef}` : `${label}私聊${chatRef}`;
   const guestDm = source.chatKind === 'direct' && source.senderIsOwner === false;
   const groupOwner = source.chatKind === 'group' && source.senderIsOwner === true;
+  // 群成员也能提问时, 群里非主人的发言同样写明「不是主人」(他们的请求不代表主人的授权)。
+  const notOwner = guestDm || (source.chatKind === 'group' && source.senderIsOwner === false);
   const senderRef =
     source.chatKind === 'group' || guestDm
       ? formatSourceRef(source.senderName, 'user_id', source.senderId)
       : '';
   const sender = senderRef
-    ? `，发言人${senderRef}${guestDm ? '，不是主人' : groupOwner ? '，是主人' : ''}`
-    : guestDm
+    ? `，发言人${senderRef}${notOwner ? '，不是主人' : groupOwner ? '，是主人' : ''}`
+    : notOwner
       ? '，发言人不是主人'
       : groupOwner
         ? '，发言人是主人'

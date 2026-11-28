@@ -51,3 +51,15 @@ Native Messaging 临时注册失败由宿主按 5 秒、15 秒、30 秒、1 分�
 扩展只显示阶段；线协议版本不变。插件侧来源为 `tasks.getRun().preview`（见
 [插件任务流式预览](plugin-task-run-preview.md)）。实现见 `bridge.ts` `relayProgress`，回归见
 `bridge.test.ts`。
+
+WebSocket 保活与即时唤醒（2026-11-28）：`/health` 的 `capabilities` 新增 `'ws-v1'`，线协议版本保持
+`0.4.13` 不变。宿主在原回环端口新增 `POST /ws/ticket`（沿用现有自定义头与会话鉴权，发放一次性
+15 秒有效期、绑定 `clientId`/`origin`/`session` 的短票据）、`GET /poll?nowait=1`（无任务立即返回
+`{job: null}`）以及 `GET /ws` WebSocket 升级入口（仅接受 `127.0.0.1` Host 且持有有效票据的扩展
+Origin；首帧校验 `{type: 'auth', clientId, session, ticket}` 后进入长连）。宿主每 15 秒发送
+`{type: 'ping', ts}` 保活（扩展回 `{type: 'pong', ts}` 以刷新 `seen` 并重置 Chrome MV3 30 秒空闲
+回收计时），有任务入队时主动推送 `{type: 'job_available'}` 触发扩展立即通过 `/poll?nowait=1` 取任务；
+无在途任务且无 HTTP `/poll` 等待者时，WS 异常断开会立即失效该客户端租约，避免 macOS 零窗口 Profile
+卸载后继续误判在线 35 秒。旧扩展无视 `ws-v1` 照常走 HTTP `/poll` 与 `/health`；新扩展在旧宿主
+（`capabilities` 不含 `ws-v1`）或 WS 握手/断连失败时自动回落到既有 HTTP 长轮询，不要求同步升级。
+实现见 `main/browser-extension/bridge.ts`，回归见 `bridge.test.ts`。

@@ -10,8 +10,28 @@
  * (i18nCompleteness 静态扫描认不出 `t(变量)`)。
  */
 
-import type { CommandIntentAction } from '@cindy/maker-shared';
+import type { CollabToolAction, CommandIntentAction } from '@cindy/maker-shared';
 import type { ToolRowVerbKey } from '@cindy/maker-shared/message-presentation';
+
+export type KnownCollabToolAction = Exclude<CollabToolAction, 'other'>;
+
+/** Codex multi-agent collaboration row labels (no explicit count). */
+export const COLLAB_ROW_VERB_KEY: Record<KnownCollabToolAction, string> = {
+  wait: 'chat.agentActionRow.collab.wait',
+  sendInput: 'chat.agentActionRow.collab.sendInput',
+  resume: 'chat.agentActionRow.collab.resume',
+  close: 'chat.agentActionRow.collab.close',
+  spawn: 'chat.agentActionRow.collab.spawn',
+};
+
+/** Codex multi-agent collaboration row labels with pluralized Subagent count. */
+export const COLLAB_ROW_COUNT_VERB_KEY: Record<KnownCollabToolAction, string> = {
+  wait: 'chat.agentActionRow.collab.waitCount',
+  sendInput: 'chat.agentActionRow.collab.sendInputCount',
+  resume: 'chat.agentActionRow.collab.resumeCount',
+  close: 'chat.agentActionRow.collab.closeCount',
+  spawn: 'chat.agentActionRow.collab.spawnCount',
+};
 
 /**
  * command intent(代码解析的命令意图,issue #450 codex 人话)→ 行级动词 key。

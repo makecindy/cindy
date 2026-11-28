@@ -24,7 +24,24 @@ vi.mock('react-native', async () => {
     StyleSheet: { create: (s: unknown) => s, hairlineWidth: 1 } };
 });
 vi.mock('@/components/AppText', async () => ({ Text: (await import('react-native')).Text }));
-vi.mock('lucide-react-native', () => ({ Pause: () => null, Play: () => null, CircleAlert: () => null, Split: () => null, X: () => null, ChevronRight: () => null, ChevronDown: () => null, Stethoscope: () => null }));
+vi.mock('lucide-react-native', () => ({ Pause: () => null, Play: () => null, CircleAlert: () => null, Split: () => null, X: () => null, ChevronRight: () => null, ChevronDown: () => null, Stethoscope: () => null, Info: () => null }));
+vi.mock('@/session/NoticeExplainSheet', async () => {
+  const { createElement, useState } = await import('react');
+  const { i18n: mobileI18n } = await import('@/i18n');
+  return {
+    NoticeExplainSheet: ({ visible, content }: { visible: boolean; content: { title: string; summary: string } }) =>
+      visible ? createElement('div', { 'data-testid': 'notice-explain-details' }, content.title, ' ', content.summary) : null,
+    NoticeExplainButton: ({ content, label }: { content: { title: string; summary: string }; label?: string }) => {
+      const [open, setOpen] = useState(false);
+      return createElement(
+        'div',
+        null,
+        createElement('button', { 'data-testid': 'agentError.explain', onClick: () => setOpen(true) }, label ?? mobileI18n.t('message.modelMismatch.infoLink')),
+        open ? createElement('div', { 'data-testid': 'notice-explain-details' }, content.title, ' ', content.summary) : null,
+      );
+    },
+  };
+});
 vi.mock('@/theme', async () => {
   const tokens = await import('@/theme/tokens');
   return { ...tokens, useTheme: () => ({ colors: tokens.lightColors }),

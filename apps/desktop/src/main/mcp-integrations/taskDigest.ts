@@ -8,8 +8,16 @@
  */
 import { redactSensitiveText } from '@cindy/maker-shared/error-redaction';
 import { redactLocalPathText } from '../maker-ipc/coldPiRehydrationFailure.js';
-import type { TaskDigestCurrentRoute, TaskDigestPhase, TaskDigestRoute, TaskDigestWire } from '@cindy/mcps';
+import type {
+  TaskDigestCurrentRoute,
+  TaskDigestPhase,
+  TaskDigestRoute,
+  TaskDigestRouteChange,
+  TaskDigestRouteEndpoint,
+  TaskDigestWire,
+} from '@cindy/mcps';
 import type { WatchedSession } from '../../shared/botAutonomy.js';
+import { isProviderShareAgentDeviceId } from '../../shared/providerShare.js';
 
 type Failure = { ok: false; errorCode: 'NOT_FOUND' | 'REMOTE_UNAVAILABLE' | 'INVALID_ARGS' | 'HOST_NOT_READY' | 'INTERNAL'; message: string };
 
@@ -18,7 +26,8 @@ export interface TaskDigestSessionFacts {
   title: string;
   status: string;
   route: TaskDigestCurrentRoute | null;
-  /** 共享给访客的任务(来源 shared):摘要不带对话原文。 */
+  lastRouteChange?: TaskDigestRouteChange | null;
+  /** 共享给访客的任务(来源 shared):摘要不带对话原文与宿主来源细节。 */
   shared?: boolean;
   clearedAt?: number | null;
   startedAtMs?: number | null;
@@ -33,6 +42,7 @@ export interface TaskDigestActivity {
   lastActivityAtMs?: number | null;
   runtimeGeneration?: number | null;
   route?: TaskDigestCurrentRoute | null;
+  lastRouteChange?: TaskDigestRouteChange | null;
 }
 
 export interface TaskDigestExchange {
@@ -215,10 +225,23 @@ export function createTaskDigestReader(deps: TaskDigestDeps) {
       const error = !facts.shared && (phase === 'errored' || (activity?.phase === 'idle' && !watched))
         ? await settle(() => remote.readError?.(deviceId, sessionId, activity, facts) ?? Promise.resolve(null), null)
         : null;
+      const remoteRoute = facts.route ? { ...facts.route } : null;
+      if (remoteRoute && !facts.shared && remoteRoute.provider_device_id && remoteRoute.provider_device_name === undefined) {
+        if (remoteRoute.source_kind === 'share') {
+          remoteRoute.provider_device_name = null;
+        } else if (remoteRoute.source_kind === 'local') {
+          remoteRoute.provider_device_name = watched?.deviceName ?? deviceName ?? null;
+        } else if (remoteRoute.source_kind === 'device') {
+          remoteRoute.provider_device_name = remoteRoute.provider_device_id === deviceId
+            ? (watched?.deviceName ?? deviceName ?? null)
+            : await settle(() => remote.deviceName(remoteRoute.provider_device_id!), null);
+        }
+      }
+      const remoteFacts = remoteRoute === facts.route ? facts : { ...facts, route: remoteRoute };
       return {
         ok: true,
         digest: assemble({
-          key, now, watched, facts,
+          key, now, watched, facts: remoteFacts,
           activity: error && activity?.phase === 'idle' ? { ...activity, phase: 'error' } : activity,
           exchange, prStatus, error,
           local: false,
@@ -291,6 +314,18 @@ function assemble(input: {
     : phase === 'running'
       ? (activity?.startedAtMs ?? activity?.lastActivityAtMs)
       : activity?.lastActivityAtMs;
+  const rawRoute = activity?.route ?? input.facts.route;
+  const currentRoute = rawRoute && input.facts.shared && 'provider_device_name' in rawRoute
+    ? (() => {
+        const { provider_device_name: _omitted, ...safeRoute } = rawRoute;
+        return safeRoute;
+      })()
+    : rawRoute;
+  const lastRouteChange = input.facts.shared
+    ? null
+    : (activity && 'lastRouteChange' in activity
+      ? activity.lastRouteChange ?? null
+      : input.facts.lastRouteChange ?? null);
   return {
     session_id: input.key,
     device: input.device,
@@ -304,7 +339,8 @@ function assemble(input: {
     last_assistant_line: input.facts.shared ? null : input.exchange.lastAssistantLine,
     pending_question: watched?.pendingQuestion ?? null,
     error: input.facts.shared ? null : taskDigestErrorSummary(watched?.error ?? input.error),
-    current_route: activity?.route ?? input.facts.route,
+    current_route: currentRoute,
+    ...(lastRouteChange ? { last_route_change: lastRouteChange } : {}),
     runtime_generation: input.runtimeGeneration,
     suggested_route: input.suggestedRoute,
     pr_status: input.prStatus,
@@ -335,6 +371,55 @@ export function historyContentText(content: unknown): string {
   return '';
 }
 
+const VALID_ROUTE_CHANGE_ACTORS = new Set<TaskDigestRouteChange['by']>([
+  'user',
+  'agent',
+  'fallback',
+  'model-group',
+  'provider-group',
+  'config-sync',
+  'scheduler',
+  'unknown',
+]);
+const SAFE_DIGEST_REASON = /^[A-Za-z0-9_.:-]{1,64}$/;
+
+/** Parse internal or wire route-change attribution into the bounded digest shape. */
+export function parseTaskDigestRouteChange(value: unknown): TaskDigestRouteChange | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const record = value as Record<string, unknown>;
+  const at = typeof record.at === 'string' && Number.isFinite(Date.parse(record.at)) ? record.at : null;
+  const by = typeof record.by === 'string' && VALID_ROUTE_CHANGE_ACTORS.has(record.by as TaskDigestRouteChange['by'])
+    ? (record.by as TaskDigestRouteChange['by'])
+    : null;
+  if (!at || !by) return null;
+  const parseEndpoint = (raw: unknown): TaskDigestRouteEndpoint | null => {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+    const ep = raw as Record<string, unknown>;
+    const rawKind = typeof ep.agentKind === 'string' ? ep.agentKind : typeof ep.harness === 'string' ? ep.harness : null;
+    const harness: TaskDigestRouteEndpoint['harness'] | null =
+      rawKind === 'codex' || rawKind === 'pi' || rawKind === 'acp' || rawKind === 'claude-code'
+        ? rawKind
+        : rawKind === 'cc'
+          ? 'claude-code'
+          : null;
+    if (!harness) return null;
+    const opt = (v: unknown) => (typeof v === 'string' && v.trim() ? v.trim() : null);
+    const device = opt(ep.provider_device_id) ?? opt(ep.agentDeviceId) ?? 'local';
+    return {
+      harness,
+      model: opt(ep.model),
+      provider_id: opt(ep.provider_id) ?? opt(ep.providerId),
+      provider_device_id: device,
+    };
+  };
+  const from = parseEndpoint(record.from);
+  const to = parseEndpoint(record.to);
+  if (!from || !to) return null;
+  const rawReason = typeof record.reason === 'string' ? record.reason.trim() : null;
+  const reason = rawReason && SAFE_DIGEST_REASON.test(rawReason) ? rawReason : null;
+  return { at, by, reason, from, to };
+}
+
 /** RendererSession(本机或跨电脑 local-db:sessions:get)→ 摘要用的任务事实。 */
 export function sessionFactsFromRow(row: unknown): TaskDigestSessionFacts | null {
   if (!row || typeof row !== 'object' || Array.isArray(row)) return null;
@@ -345,6 +430,17 @@ export function sessionFactsFromRow(row: unknown): TaskDigestSessionFacts | null
     ? agentKind
     : agentKind ? 'claude-code' : null;
   const model = text(record.model);
+  const hasAgentDevice = 'agentDeviceId' in record && record.agentDeviceId !== undefined;
+  const rawAgentDeviceId = hasAgentDevice ? text(record.agentDeviceId) : undefined;
+  const sourceKind: 'local' | 'device' | 'share' | undefined = !hasAgentDevice
+    ? undefined
+    : !rawAgentDeviceId
+      ? 'local'
+      : isProviderShareAgentDeviceId(rawAgentDeviceId)
+        ? 'share'
+        : 'device';
+  const shared = text(record.source) === 'shared';
+  const lastRouteChange = shared ? null : parseTaskDigestRouteChange(record.runtimeLastRouteChange);
   // local DB rows use unix ms; the existing remote session mapper returns ISO.
   const clearedAt = typeof record.clearedAt === 'number' ? record.clearedAt
     : typeof record.clearedAt === 'string' ? Date.parse(record.clearedAt) : NaN;
@@ -355,7 +451,8 @@ export function sessionFactsFromRow(row: unknown): TaskDigestSessionFacts | null
     ...(Number.isFinite(clearedAt) ? { clearedAt } : {}),
     ...(typeof record.activeTurnStartedAt === 'number' && Number.isFinite(record.activeTurnStartedAt) ? { startedAtMs: record.activeTurnStartedAt } : {}),
     ...(typeof record.lastTurnEndedAt === 'number' && Number.isFinite(record.lastTurnEndedAt) ? { endedAtMs: record.lastTurnEndedAt } : {}),
-    ...(text(record.source) === 'shared' ? { shared: true } : {}),
+    ...(shared ? { shared: true } : {}),
+    ...(lastRouteChange ? { lastRouteChange } : {}),
     route: harness && model
       ? {
           harness,
@@ -363,6 +460,12 @@ export function sessionFactsFromRow(row: unknown): TaskDigestSessionFacts | null
           provider_id: text(record.providerId),
           effort: text(record.effort),
           fast: (record.fastMode === 'ultrafast' ? 'ultrafast' : record.fastMode === true),
+          ...(hasAgentDevice
+            ? {
+                provider_device_id: rawAgentDeviceId ?? 'local',
+                source_kind: sourceKind,
+              }
+            : {}),
         }
       : null,
   };

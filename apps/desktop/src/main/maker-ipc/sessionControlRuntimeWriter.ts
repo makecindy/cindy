@@ -19,6 +19,10 @@ type RuntimeRoutePorts = Pick<SessionRuntimeSelectionPorts,
   shouldApplyExclusiveProviderRerouteLive: typeof import('../maker-host/model-route-guard-live.js').shouldApplyExclusiveProviderRerouteLive;
   applySessionRuntimeSelection: ApplySessionRuntimeSelection;
   runtimeSelectionRequiresModelWindowConfirmation: (result: Awaited<ReturnType<ApplySessionRuntimeSelection>>) => boolean;
+  /** True when an explicit provider device ID points to this task's own computer; normalized to null. */
+  isSelfDeviceId?: (deviceId: string) => boolean;
+  /** Called once an explicit route/device selection is accepted so stale recovery waits yield to it. */
+  onExplicitRouteSelected?: (sessionId: string) => void;
 };
 
 /** The runtime writer of the session control service. The selection function is bound lazily
@@ -26,12 +30,25 @@ type RuntimeRoutePorts = Pick<SessionRuntimeSelectionPorts,
 export function createSessionControlRuntimeWriter(ports: RuntimeRoutePorts): SessionControlServiceDeps['setSessionRuntime'] {
   const { agentSwitchPending, agentSwitchDeps, assertModelRouteUsable, getDesktopProviderService,
     reconcileBotModelRoute, updateScheduledPreference, readSessionRuntimeProfiles, readUsableAgentDeviceProviders,
-    shouldApplyExclusiveProviderRerouteLive, applySessionRuntimeSelection, runtimeSelectionRequiresModelWindowConfirmation } = ports;
+    shouldApplyExclusiveProviderRerouteLive, applySessionRuntimeSelection, runtimeSelectionRequiresModelWindowConfirmation,
+    isSelfDeviceId, onExplicitRouteSelected } = ports;
   return async ({ targetSessionId, expectedGeneration, patch, beforeMutation }) => {
+    const normalizedAgentDeviceId =
+      typeof patch.agentDeviceId === 'string' && isSelfDeviceId?.(patch.agentDeviceId)
+        ? null
+        : patch.agentDeviceId;
+    const normalizedPatch = normalizedAgentDeviceId === patch.agentDeviceId
+      ? patch
+      : { ...patch, agentDeviceId: normalizedAgentDeviceId };
+    const changesRoute = normalizedPatch.harness !== undefined ||
+      normalizedPatch.agentDeviceId !== undefined ||
+      normalizedPatch.model !== undefined ||
+      normalizedPatch.providerId !== undefined;
     // A deliberate model choice becomes the task's own, like a choice in the composer:
     // an earlier automation's saved route must not restore over it on the next run.
     const keepAsTaskChoice = async <T extends { ok: boolean }>(result: T): Promise<T> => {
       if (result.ok) {
+        if (changesRoute) onExplicitRouteSelected?.(targetSessionId);
         await updateScheduledPreference(targetSessionId, null).catch(() => false);
         await reconcileBotModelRoute.acceptTaskChoice(targetSessionId).catch(() => {});
       }
@@ -40,15 +57,9 @@ export function createSessionControlRuntimeWriter(ports: RuntimeRoutePorts): Ses
     // A selection staged for the next send (by the user's picker or a complete agent selection)
     // owns the next route boundary; the turn-end override path would only be superseded by it.
     // Revise that selection instead, as choosing again in the picker does.
-    const revisesStagedSelection = patch.harness === undefined && patch.agentDeviceId === undefined &&
+    const revisesStagedSelection = normalizedPatch.harness === undefined && normalizedPatch.agentDeviceId === undefined &&
       stagedSelectionProfile(agentSwitchPending.get(targetSessionId)) !== null;
-    if (patch.harness !== undefined || patch.agentDeviceId !== undefined || revisesStagedSelection) {
-      const harness = patch.harness ?? (revisesStagedSelection
-        ? undefined
-        : (await readSessionRuntimeProfiles(targetSessionId))?.effective.agentKind);
-      if (!harness && !revisesStagedSelection) {
-        return { ok: false, errorCode: 'NOT_FOUND', message: 'Task runtime is unavailable' };
-      }
+    if (normalizedPatch.harness !== undefined || normalizedPatch.agentDeviceId !== undefined || revisesStagedSelection) {
       return keepAsTaskChoice(await setSessionRuntimeHarness({
         withSessionLock: withSendToSessionLock,
         ownerEpoch: captureSessionRuntimeControlOwnerEpoch,
@@ -82,11 +93,12 @@ export function createSessionControlRuntimeWriter(ports: RuntimeRoutePorts): Ses
             sessionId: id, targetAgentKind: profile.agentKind, model: profile.model,
             providerId: profile.providerId, effort: profile.effort, fastMode: profile.fastMode,
             ...(profile.agentDeviceId !== undefined ? { agentDeviceId: profile.agentDeviceId } : {}),
-            runtimeSource: source === 'user' ? undefined : 'agent', assertSelectionCurrent, beforeMutation,
+            runtimeSource: source === 'user' ? undefined : 'agent',
+            routeChangeAttribution: { by: source === 'user' ? 'user' : 'agent', reason: 'explicit' },
+            assertSelectionCurrent, beforeMutation,
           });
         },
-      }, { targetSessionId, expectedGeneration, beforeMutation,
-        patch: { ...patch, ...(harness !== undefined ? { harness } : {}) } }));
+      }, { targetSessionId, expectedGeneration, beforeMutation, patch: normalizedPatch }));
     }
     const profiles = await readSessionRuntimeProfiles(targetSessionId);
     if (beforeMutation) await beforeMutation();
@@ -118,17 +130,28 @@ export function createSessionControlRuntimeWriter(ports: RuntimeRoutePorts): Ses
           effortExplicit: patch.effort !== undefined,
           fastExplicit: patch.fastMode !== undefined,
           routeExplicit,
+          routeChangeAttribution: { by: 'agent', reason: 'explicit' },
         },
       );
     } catch (error) {
       const code = (error as { code?: unknown }).code;
       if (
         code === 'INVALID_PARAMS' ||
+        code === 'PRECONDITION_FAILED' ||
+        code === 'MODEL_SELECTION_UNAVAILABLE' ||
         code === 'CREDENTIAL_SWITCH_BUSY' ||
         code === 'REMOTE_MODEL_SWITCH_ROUTE_CHANGE' ||
         code === 'REMOTE_PROVIDER_UPDATING' ||
         code === 'REMOTE_PROVIDER_UNSUPPORTED' ||
-        code === 'REMOTE_NATIVE_OAUTH_UNAVAILABLE'
+        code === 'REMOTE_NATIVE_OAUTH_UNAVAILABLE' ||
+        code === 'PROVIDER_ROUTE_UNAVAILABLE' ||
+        code === 'PROVIDER_GROUP_UNAVAILABLE' ||
+        code === 'REMOTE_AGENT_DEVICE_UNREACHABLE' ||
+        code === 'REMOTE_AGENT_MODEL_UNAVAILABLE' ||
+        code === 'REMOTE_AGENT_SHARE_PAUSED' ||
+        code === 'REMOTE_AGENT_SHARE_REMOVED' ||
+        code === 'REMOTE_AGENT_SHARE_UNAVAILABLE' ||
+        code === 'REMOTE_AGENT_SHARE_LEGACY_DISABLED'
       ) {
         return {
           ok: false,

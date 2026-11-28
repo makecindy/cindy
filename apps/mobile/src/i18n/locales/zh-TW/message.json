@@ -8,6 +8,19 @@
       "selected": "已選取"
     }
   },
+  "voiceCall": {
+    "title": "語音通話",
+    "saved": "記錄已儲存",
+    "you": "你",
+    "companion": "夥伴",
+    "sendFailed": "傳送失敗，原話已保留。",
+    "handoff": {
+      "sending": "正在交接…",
+      "accepted": "已交給夥伴處理",
+      "failed": "交接失敗，原話已保留",
+      "completed": "結果已返回"
+    }
+  },
   "renderer": {
     "sourceLocalApp": "由本機應用程式「{{name}}」傳送",
     "sourceLocalAppId": "應用程式 ID：{{id}}",
@@ -67,7 +80,6 @@
       "dingtalk": "釘釘",
       "imessage": "iMessage"
     },
-    "modelMismatch": "本輪由 {{actual}} 回應，而非所選的 {{selected}}（伺服器端臨時降級）",
     "copyStateCopying": "複製中",
     "copyStateCopied": "已複製",
     "copyStateFailed": "複製失敗",
@@ -185,7 +197,8 @@
     "groupSent": "從群聊傳送",
     "sourceGroupId": "群聊 ID：{{id}}",
     "selectText": "選取文字",
-    "you": "你"
+    "you": "你",
+    "recentActivity": "最近活動"
   },
   "actions": {
     "attachmentsPrefix": "附件：{{names}}",
@@ -264,6 +277,8 @@
     "delete": "刪除",
     "retry": "重試",
     "notSent": "未傳送",
+    "deliveryUnconfirmed": "傳送結果未確認",
+    "recheckDelivery": "重新確認",
     "imagesNotUploaded_one": "{{count}} 張圖片沒傳上去",
     "imagesNotUploaded_other": "{{count}} 張圖片沒傳上去",
     "waitingForNamedComputer": "連上{{name}}後自動傳送",
@@ -271,6 +286,7 @@
     "pendingDelivery": "待送達",
     "pendingDeliveryHint": "訊息已儲存在手機上，正在等待電腦確認。",
     "waitingForComputer": "等電腦連上後傳送",
+    "waitingForPrevious": "等待前一則訊息",
     "waitingForNetwork": "等網路恢復後傳送",
     "queued": "排隊中",
     "retryImage": "重新上傳這張圖片",
@@ -443,6 +459,9 @@
     "send": "傳送訊息",
     "sending": "正在傳送…",
     "sent": "已提交",
+    "sendTooManyArguments": "這則訊息一次處理的內容超過 {{limit}} 項。請讓助理分組處理後重新產生。",
+    "sendValueUnavailable": "這則訊息需要的值無法讀取。請讓助理檢查表單欄位。",
+    "sendTextUnavailable": "無法產生要傳送的訊息。",
     "sendFailed": "訊息未提交，已保留填寫內容",
     "playVideo": "播放影片",
     "downloadVideo": "下載影片",
@@ -499,5 +518,103 @@
     "wrap": "自動換行",
     "lineNumbers": "行號",
     "rendered": "查看文件"
+  },
+  "modelMismatch": {
+    "notice": "模型供應商將本輪改由 {{actual}} 回應（原選 {{selected}}）",
+    "noticeWithProvider": "{{provider}} 將本輪改由 {{actual}} 回應（原選 {{selected}}）",
+    "infoLink": "了解原因",
+    "infoTitle": "為什麼實際回應的模型不同",
+    "infoSummary": "Cindy 已按你選擇的 {{selected}} 傳送本輪請求，但模型供應商實際由 {{actual}} 回傳了結果。",
+    "infoSummaryWithProvider": "Cindy 已按你選擇的 {{selected}} 傳送本輪請求，但 {{provider}} 實際由 {{actual}} 回傳了結果。",
+    "infoCausesTitle": "常見原因",
+    "infoCausePolicy": "模型觸發安全或內容政策回退（例如部分新模型在拒答時會自動改由舊版模型繼續回應）。",
+    "infoCauseLoad": "模型供應商尖峰時段高負載，暫時將請求分流至備用模型。",
+    "infoCauseGateway": "第三方或自建模型閘道將模型名稱對應到了其他模型。",
+    "infoActionsTitle": "可以怎麼處理",
+    "infoActionContinue": "無需重新設定：這只影響本輪，後續訊息仍會繼續請求 {{selected}}。",
+    "infoActionRetry": "如果本輪結果不符合預期，可調整提問後重新傳送，或暫時切換到其他可用模型。",
+    "infoActionCheckProvider": "如果多輪持續出現，可檢查目前模型供應商的配額狀態或閘道對應設定。"
+  },
+  "errorExplain": {
+    "providerSafetyRefusal": {
+      "title": "為什麼回覆被攔截",
+      "summary": "Cindy 已原樣傳送你的請求，但模型供應商內建的安全與內容政策阻止了本次輸出。這不是 Cindy 的審核或本機插件攔截。",
+      "summaryWithProvider": "Cindy 已原樣傳送你的請求，但 {{provider}} 內建的安全與內容政策阻止了本次輸出。這不是 Cindy 的審核或本機插件攔截。",
+      "cause1": "請求內容、附件或前文上下文觸發了供應商的安全審查規則。",
+      "cause2": "模型在生成中途觸發輸出安全過濾並中斷了回傳。",
+      "action1": "原樣重試通常會再次被攔，請先調整措辭，或去掉可能觸發審查的片段後再傳送。",
+      "action2": "如果前文上下文已觸發攔截，可新建任務繼續，或切換其他可用模型。"
+    },
+    "overload": {
+      "title": "為什麼提示服務繁忙",
+      "summary": "模型供應商目前運算資源緊張（例如尖峰期過載或回傳 HTTP 529），暫時無法接納本輪請求。這與 Cindy 本身及你的本機網路無關。",
+      "summaryWithProvider": "{{provider}} 目前運算資源緊張（例如尖峰期過載或回傳 HTTP 529），暫時無法接納本輪請求。這與 Cindy 本身及你的本機網路無關。",
+      "cause1": "該模型在尖峰時段請求量激增，供應商算力暫時滿載。",
+      "cause2": "供應商臨時維護或限流調度，目前沒有可用容量。",
+      "action1": "無需重新啟動 Cindy 或調整網路設定，稍等片刻後點擊「重試」即可。",
+      "action2": "如需立即繼續，可臨時切換到其他模型，或換用模型組中的其他來源。"
+    },
+    "streamInterrupted": {
+      "title": "為什麼輸出中途斷線",
+      "summary": "模型供應商在串流回傳結果的過程中意外中斷了連線。Cindy 本身沒有當機，已完成的步驟與對話紀錄均已保留。",
+      "summaryWithProvider": "{{provider}} 在串流回傳結果的過程中意外中斷了連線。Cindy 本身沒有當機，已完成的步驟與對話紀錄均已保留。",
+      "cause1": "模型供應商伺服器端在生成中途發生臨時異常或主動斷流。",
+      "cause2": "第三方中轉閘道在長回覆傳輸中途逾時斷開。",
+      "action1": "直接點擊「重試」，或傳送「繼續」讓模型接著完成。",
+      "action2": "如果連續多輪中斷，可臨時換用其他模型，或檢查自訂閘道的逾時設定。"
+    },
+    "upstreamStatus": {
+      "title": "為什麼回傳服務異常",
+      "summary": "Cindy 已成功發出請求，但模型供應商服務回傳了 HTTP {{status}} 內部錯誤（無詳細錯誤內文），屬於外部服務異常而非 Cindy 故障。",
+      "summaryWithProvider": "Cindy 已成功發出請求，但 {{provider}} 服務回傳了 HTTP {{status}} 內部錯誤（無詳細錯誤內文），屬於外部服務異常而非 Cindy 故障。",
+      "cause1": "模型供應商介面暫時出現伺服器端內部故障。",
+      "cause2": "第三方或自建模型閘道轉發請求失敗，或攔截後回傳了自訂 5xx 狀態碼。",
+      "action1": "稍後點擊「重試」；如果是臨時波動，通常很快就會恢復。",
+      "action2": "如果使用第三方或自建閘道，可查看該閘道的服務狀態與日誌，或先切換其他模型供應商。"
+    },
+    "modelAccessDenied": {
+      "title": "為什麼無權存取此模型",
+      "summary": "模型供應商拒絕了目前帳號對該模型的存取請求，Cindy 無法繞過供應商端的模型權限控管。",
+      "summaryWithProvider": "{{provider}} 拒絕了目前帳號對該模型的存取請求，Cindy 無法繞過 {{provider}} 的模型權限控管。",
+      "cause1": "目前訂閱方案等級或 API 金鑰尚未開通該模型權限。",
+      "cause2": "組織管理員限制了可用模型清單，或目前帳號所在地區暫不支援該模型。",
+      "action1": "切換到目前帳號已開通的其他模型繼續任務。",
+      "action2": "前往模型供應商主控台或訂閱頁面確認權限；如剛升級方案，重新連接帳號後再試。"
+    },
+    "providerQuotaExceeded": {
+      "title": "為什麼提示配額或餘額不足",
+      "summary": "目前使用的外部模型供應商帳戶可用餘額或配額已耗盡，供應商拒絕了本次計費請求。這與 Cindy 帳戶本身無關。",
+      "summaryWithProvider": "你連接的 {{provider}} 帳戶可用餘額或配額已耗盡，{{provider}} 拒絕了本次計費請求。這與 Cindy 帳戶本身無關。",
+      "cause1": "該供應商帳戶的預付餘額已用完，或尚未設定有效付款方式。",
+      "cause2": "該 API 金鑰設定了消費上限，或組織配額已達上限。",
+      "action1": "前往對應模型供應商的計費頁面儲值或提高限額後，再點擊「重試」。",
+      "action2": "也可以在模型選擇器中切換到其他有可用配額的模型供應商繼續。"
+    },
+    "usageLimit": {
+      "title": "為什麼達到用量上限",
+      "summary": "目前連接的模型帳號已觸發模型供應商設定的週期用量視窗上限，暫時無法繼續處理新請求。這不是 Cindy 施加的限制。",
+      "summaryWithProvider": "目前連接的 {{provider}} 帳號已觸發 {{provider}} 設定的週期用量視窗上限，暫時無法繼續處理新請求。這不是 Cindy 施加的限制。",
+      "cause1": "訂閱帳號在目前時間視窗（如 5 小時或每週週期）內的用量已用滿。",
+      "cause2": "同一帳號在多個任務或裝置上同時使用，共享同一個週期配額視窗。",
+      "action1": "等待配額視窗重設後重試；如果已開啟自動繼續，重設後任務會自動接續。",
+      "action2": "如需馬上繼續，可臨時切換到其他模型、其他已連接的訂閱帳號或 API 供應商。"
+    },
+    "encryptedContent": {
+      "title": "為什麼無法讀取部分歷史內容",
+      "summary": "部分模型會把內部推理狀態加密儲存在對話歷史中，且僅限原供應商與原帳號解密。更換供應商、帳號或遠端整理上下文時，目前模型供應商可能無法讀取舊加密片段。",
+      "summaryWithProvider": "部分模型會把內部推理狀態加密儲存在對話歷史中，且僅限原供應商與原帳號解密。更換供應商、帳號或遠端整理上下文時，{{provider}} 可能無法讀取舊加密片段。",
+      "cause1": "中途切換了不同的模型供應商或帳號，新供應商無法解密先前的加密推理內容。",
+      "cause2": "遠端上下文整理或跨端點路由時，加密狀態與目前請求目標不相符。",
+      "action1": "切回原先使用的模型供應商或帳號，即可繼續目前任務。",
+      "action2": "或點擊「在新任務中繼續」，Cindy 會保留可讀對話紀錄並移除無法解密的加密片段，原任務不受影響。"
+    },
+    "failedSamplingAttempt": {
+      "title": "為什麼會顯示未完成的回覆",
+      "summary": "模型在生成這則回覆時中途失敗或被中斷，只輸出了前半段內容。Cindy 保留了已生成的片段方便你參考，避免已給出的思路直接消失。",
+      "cause1": "模型在串流輸出過程中遇到供應商報錯、網路中斷或安全政策攔截。",
+      "cause2": "任務在回覆完全收尾前觸發了錯誤或被停止。",
+      "action1": "查看下方的錯誤提示了解具體中斷原因，並確認是否需要重試。",
+      "action2": "可以直接點擊重試或傳送新訊息繼續，已保留的內容仍可作參考，無需從頭說明。"
+    }
   }
 }

@@ -104,6 +104,8 @@ export interface NodeWorkerProcess {
   stdin: NodeWorkerWritable;
   stdout: NodeWorkerReadable;
   stderr: NodeWorkerReadable;
+  /** 宿主日志消费者须隐藏原始 stderr；不改变字节流或业务中继。 */
+  redactStderr?: boolean;
   pid?: number;
   killed?: boolean;
   /** Confirm OS absence and emit the existing exit lifecycle once, when supported. */
@@ -174,19 +176,25 @@ export interface GhostNodeRuntimeBrokerDeps {
   hostToolRequest?: (ghostId: string, payload: unknown, current: () => boolean) => Promise<unknown>;
   /** Explicit disable/update/uninstall releases Host-owned resources; idle worker exit does not. */
   onStopped?(ghostId: string): void;
+  /**
+   * stopAndWait 超时后，旧进程最终都已退出，且没有更新的 stop 接手。宿主据此恢复插件的
+   * 在场状态(解除执行引擎启动闸、常驻实例重新点火)，自查启用与可用性。
+   */
+  onStopSettledLate?(ghostId: string): void;
   networkRequest?: (ghostId: string, payload: Record<string, unknown>) => Promise<unknown>;
   secretSaved?: (ghostId: string, secretKey: string) => boolean;
   /** 只解析本插件显式引用的 OAuth 槽；不交付 refresh token。 */
   resolveOauthSecret?: (ghostId: string, secretKey: string, accountId?: string) => Promise<
     { ok: true; accessToken: string } | { ok: false; error: string }
   >;
-  spawnProcess: (entryPath: string, cwd: string, ghostId: string) => NodeWorkerProcess;
+  spawnProcess: (entryPath: string, cwd: string, ghostId: string, inheritEnv?: boolean) => NodeWorkerProcess;
   /** 代启原样 stdio 子进程(childSpawn;缺省用 utilityProcess 适配器)。 */
   spawnChildProcess: (
     entryPath: string,
     cwd: string,
     ghostId: string,
     args: string[],
+    inheritEnv?: boolean,
   ) => NodeWorkerProcess;
   sendToGhost?: (ghostId: string, payload: GhostPipeEventPush) => void;
   now?: () => number;
@@ -1252,6 +1260,7 @@ export class GhostNodeRuntimeBroker {
         root,
         ghostId,
         message.args ?? [],
+        entry.ghost.manifest.node?.inheritEnv === true,
       );
     } catch (error) {
       fail(error instanceof Error ? error.message : '子进程启动失败');
@@ -1475,7 +1484,7 @@ export class GhostNodeRuntimeBroker {
             : []),
         ...(options?.accountDir ? [GHOST_HARNESS_ACCOUNT_DIR_ARG, options.accountDir] : []),
       ];
-      proc = this.deps.spawnChildProcess(resolved.entryPath, resolved.root, ghostId, entryArgs);
+      proc = this.deps.spawnChildProcess(resolved.entryPath, resolved.root, ghostId, entryArgs, ghost.manifest.node?.inheritEnv === true);
     } catch (error) {
       return reject(error instanceof Error ? error.message : 'Task engine failed to start');
     }
@@ -1496,6 +1505,7 @@ export class GhostNodeRuntimeBroker {
     // error 不是退出证明:开始有界停止,记账保留到真实 exit。
     proc.on('error', () => this.stopHarnessProcess(entry, true));
     try {
+      proc.redactStderr = ghost.manifest.node?.inheritEnv === true;
       this.logHarnessStderr(entry);
       await new Promise<void>((resolve, fail) => {
         let settled = false;
@@ -1566,7 +1576,7 @@ export class GhostNodeRuntimeBroker {
       const decoded = decoder.write(typeof chunk === 'string' ? Buffer.from(chunk) : chunk);
       const remaining = HARNESS_STDERR_LOG_CAP - seen;
       seen += decoded.length;
-      const text = decoded.trim().slice(0, Math.min(4_096, remaining));
+      const text = (entry.proc.redactStderr && decoded ? '[REDACTED]' : decoded.trim()).slice(0, Math.min(4_096, remaining));
       if (text) this.deps.log?.warn('ghost harness stderr', { ghostId: entry.ghostId, harnessId: entry.harnessId, text });
       if (seen >= HARNESS_STDERR_LOG_CAP) {
         truncated = true;
@@ -1640,7 +1650,52 @@ export class GhostNodeRuntimeBroker {
     const processes = new Set(this.liveProcesses.get(ghostId) ?? []);
     const exited = [...processes].map((process) => this.waitForProcessExit(process, ghostId));
     this.stop(ghostId);
-    await Promise.all(exited);
+    const generation = this.stopGeneration.get(ghostId) ?? 0;
+    try {
+      await Promise.all(exited);
+    } catch (error) {
+      this.notifyWhenStopSettlesLate(ghostId, processes, generation);
+      throw error;
+    }
+  }
+
+  /**
+   * stopAndWait 超时后，调用方按约定保持停止态(不替换目录、不起第二份进程)，执行引擎
+   * 启动闸也随之关闭。旧进程之后真正退出时，若期间没有新的 stop 接手，就请宿主按
+   * 「该在场了」入口恢复；否则插件仍是启用状态，却会一直拒绝启动任务，直到重启应用。
+   */
+  private notifyWhenStopSettlesLate(
+    ghostId: string,
+    processes: ReadonlySet<NodeWorkerProcess>,
+    generation: number,
+  ): void {
+    const live = this.liveProcesses.get(ghostId);
+    const pending = [...processes].filter((process) => live?.has(process));
+    const exits = pending.map((process) => new Promise<void>((resolve) => process.once('exit', () => resolve())));
+    void Promise.all(exits).then(() => {
+      // 放到下一轮：失败的那次更新/卸载先走完自己的 finally，释放变更锁。
+      this.setTimer(() => {
+        if (this.destroyed || (this.stopGeneration.get(ghostId) ?? 0) !== generation) return;
+        this.deps.onStopSettledLate?.(ghostId);
+      }, 0);
+    });
+  }
+
+  /**
+   * stopAndWait 等不到退出而放弃更新后调用：此刻仍在世的进程全部真实退出时回调一次(已无
+   * 在世进程则在下一个微任务回调)，由上层恢复旧版本并解除引擎启动闸。期间若又开始新的停止
+   * (再次更新、停用、卸载)，由那次操作负责收尾，本次回调作废；broker 销毁后也不回调。
+   */
+  whenProcessesExited(ghostId: string, onExited: () => void): void {
+    const generation = this.stopGeneration.get(ghostId) ?? 0;
+    this.reconcileProcessExits(ghostId);
+    const exits = [...(this.liveProcesses.get(ghostId) ?? [])].map(
+      (process) => new Promise<void>((resolve) => process.once('exit', () => resolve())),
+    );
+    void Promise.all(exits).then(() => {
+      if (this.destroyed || (this.stopGeneration.get(ghostId) ?? 0) !== generation) return;
+      onExited();
+    });
   }
 
   /** 原位更新时，进程异常或强杀后仍不退出都必须阻止目录替换。 */
@@ -1971,7 +2026,7 @@ export class GhostNodeRuntimeBroker {
     const forkStartedAt = this.diagnosticNow();
     let child: NodeWorkerProcess;
     try {
-      child = this.deps.spawnProcess(entryPath, root, ghost.manifest.id);
+      child = this.deps.spawnProcess(entryPath, root, ghost.manifest.id, node.inheritEnv === true);
     } catch (error) {
       throw new WorkerStartError(
         error instanceof Error ? error.message : String(error),
@@ -2615,7 +2670,7 @@ export class GhostNodeRuntimeBroker {
     }
     const ghostId = GhostNodeRuntimeBroker.instanceId(entry.ghost);
     const exitHint = this.exitStderrHint(entry, exitedAt);
-    const detail = `${this.redactSecrets(entry, error?.message ?? `code=${code}, signal=${signal ?? 'none'}`)}${
+    const detail = `${error ? this.redactSecrets(entry, error.message) : `code=${code}, signal=${signal ?? 'none'}`}${
       exitHint ? `:${exitHint}` : ''
     }`;
     for (const pending of entry.pending.values()) {
@@ -2690,6 +2745,7 @@ export class GhostNodeRuntimeBroker {
   }
 
   private redactSecrets(entry: WorkerEntry, text: string): string {
+    if (entry.ghost.manifest.node?.inheritEnv === true) return text ? '[REDACTED]' : text;
     if (!entry.exposedSecretValues.size) return text;
     const sorted = [...entry.exposedSecretValues].sort((a, b) => b.length - a.length);
     for (const secret of sorted) {
@@ -2699,10 +2755,10 @@ export class GhostNodeRuntimeBroker {
   }
 
   private redactStderrChunk(entry: WorkerEntry, chunk: string): string {
-    // 接收过凭据的 Worker 可能打印截断、分块或编码后的令牌，字符串匹配
+    // 继承完整环境或接收过凭据的 Worker 可能打印截断、分块或编码后的令牌，字符串匹配
     // 无法保证安全。整个 stderr 不落日志/诊断缓存，仅保留输出发生的标记；
     // 未注入凭据的 Worker 保留原始诊断，RPC 返回结果不受影响。
-    return chunk && entry.exposedSecretValues.size > 0 ? '[REDACTED]' : chunk;
+    return chunk && (entry.ghost.manifest.node?.inheritEnv === true || entry.exposedSecretValues.size > 0) ? '[REDACTED]' : chunk;
   }
 
   private scheduleIdleStop(entry: WorkerEntry): void {

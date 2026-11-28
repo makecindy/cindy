@@ -12,12 +12,14 @@
  * - tier：unit（进程内假对端，无真实等待；宽限期用 fake timers）。
  */
 
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { AgentEvent, InteractionDecision, InteractionRequest } from '../../types/events.js';
+import { NotSupportedError } from '../../types/capabilities.js';
+import { LIBRARY_READ_ROOT } from '../shared/library-native-read.js';
 import { AcpLineDecoder, AcpLineTooLongError, type AcpLineTransport, type AcpTransportClosed } from './line-transport.js';
 import {
   AcpAccountError,
@@ -259,6 +261,37 @@ describe('openAcpSession handshake', () => {
     expect(session.resumeOutcome).toBe('new');
   });
 
+  // Unit: ACP v1 Session Setup requires capability gating. Exercise the real handshake
+  // with a one-character instruction to catch missing or misplaced lifecycle fields.
+  it.each([
+    { method: 'session/new', supported: true, text: 'x', expected: { mode: 'append', content: [{ type: 'text', text: 'x' }] } },
+    { method: 'session/load', supported: true, text: 'x', expected: { mode: 'append', content: [{ type: 'text', text: 'x' }] } },
+    { method: 'session/resume', supported: true, text: 'x', expected: { mode: 'append', content: [{ type: 'text', text: 'x' }] } },
+    { method: 'session/resume', supported: true, text: undefined, expected: undefined },
+    { method: 'session/new', supported: false, text: 'x', expected: undefined },
+  ])('sends the personal system prompt on $method when supported ($supported, $text)', async ({
+    method, supported, text, expected,
+  }) => {
+    const isNew = method === 'session/new';
+    const agent = createFakeAgent({
+      agentCapabilities: {
+        loadSession: method === 'session/load',
+        sessionCapabilities: {
+          ...(method === 'session/resume' ? { resume: {} } : {}),
+          ...(supported ? { systemPrompt: {} } : {}),
+        },
+      },
+      handlers: isNew ? {} : { [method]: () => ({}) },
+    });
+    const { session } = await open(agent, {
+      personalSystemPrompt: text,
+      ...(!isNew ? { resumeSessionId: 'old-1' } : {}),
+    });
+    expect(agent.methods()).toEqual(['initialize', method]);
+    expect((agent.sent[1]!.params as AcpRecord).systemPrompt).toEqual(expected);
+    await session.close();
+  });
+
   it('maps auth-required to a typed error and closes the endpoint', async () => {
     const agent = createFakeAgent({
       authMethods: [{ id: 'login', name: 'Sign in' }],
@@ -383,6 +416,82 @@ describe('AcpSession turns', () => {
     });
     expect(agent.prompts).toHaveLength(1);
     await session.close();
+  });
+
+  // ACP harness §4, unit: ordinary verification tests don't change the role
+  // while awaiting the account check. Exercise the live vendor-options and
+  // transport boundaries so recovery cannot send in a task missing its role tools.
+  it.each(['promoted to Lead', 'still independent'] as const)('checks collaboration tools before verification recovery (%s)', async (state) => {
+    const agent = createFakeAgent({ handlers: { '_cindy/checkAccountVerification': () => ({ status: 'ready' }) } });
+    const waiting = deferred<void>();
+    const verified = deferred<void>();
+    const engine = new AcpAgent({
+      auth: { getState: async () => ({ authenticated: true }), triggerLogin: async () => ({ authenticated: true }), logout: async () => {}, getAuthEnv: async () => ({}) },
+      runtimeConfig: {}, logger: silentLogger, binaryPath: '', clientInfo: { name: 'cindy', version: 'test' },
+      endpoints: { connect: async () => agent.transport },
+      verificationForTask: () => async (probe) => {
+        waiting.resolve();
+        await verified.promise;
+        return (await probe()).status === 'ready' ? 'ready' : 'unavailable';
+      },
+    });
+    const session = await engine.startSession({
+      sessionId: 'verification-task', workingDir: '/w', model: '',
+      providerId: 'acp-plugin:test:verification', pluginEngineBriefing: 'Initial briefing.',
+    });
+    const events: AgentEvent[] = [];
+    const terminal = deferred<AgentEvent>();
+    const ended = (async () => {
+      for await (const event of session.events()) {
+        events.push(event);
+        if (event.type === 'done' || event.type === 'error') terminal.resolve(event);
+      }
+    })();
+    const usage = { inputTokens: 20, outputTokens: 5 };
+    try {
+      expect(agent.sent.find(message => message.method === 'session/new')?.params).toMatchObject({ mcpServers: [] });
+      await session.send({ type: 'user', content: 'edit-once' });
+      expect(agent.prompts[0]!.params.prompt).toEqual([
+        { type: 'text', text: 'Initial briefing.' }, { type: 'text', text: 'edit-once' },
+      ]);
+      agent.update({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: '⚠ Verification Required' } });
+      agent.prompts[0]!.settle.resolve({ stopReason: 'end_turn', usage });
+      await waiting.promise;
+
+      const consumeRoleBriefing = vi.fn();
+      if (state === 'promoted to Lead') {
+        await session.setVendorOptions!({
+          orcaRole: 'lead',
+          pluginEngineRoleBriefing: () => ({ text: 'New Lead briefing.', onSent: consumeRoleBriefing }),
+        });
+        await expect(session.send({ type: 'user', content: 'new input' })).rejects.toThrow(/cindy_orca/);
+      }
+      verified.resolve();
+      // Recovery either writes a new prompt immediately after the probe or
+      // exits through finishTurn. Drain that microtask chain before counting.
+      await new Promise(resolve => setImmediate(resolve));
+      const prompts = agent.sent.filter(message => message.method === 'session/prompt');
+      if (state === 'promoted to Lead') {
+        expect(prompts).toHaveLength(1);
+        expect(await terminal.promise).toMatchObject({ type: 'error', data: {
+          type: 'acp/prompt_end', isTerminal: true, message: expect.stringContaining('cindy_orca'),
+          usage: { ...usage, cacheReadTokens: 0, cacheCreationTokens: 0 },
+        } });
+        expect(consumeRoleBriefing).not.toHaveBeenCalled();
+      } else {
+        expect(prompts).toHaveLength(2);
+        expect(prompts[1]!.params).toMatchObject({ sessionId: 'sess-1', prompt: [{
+          type: 'text', text: expect.stringContaining('Continue the interrupted task'),
+        }] });
+        expect(JSON.stringify(prompts[1])).not.toMatch(/Initial briefing|edit-once/);
+        agent.prompts[1]!.settle.resolve({ stopReason: 'end_turn' });
+        expect(await terminal.promise).toMatchObject({ type: 'done', data: { usage } });
+      }
+      expect(events.filter(event => event.type === 'done' || event.type === 'error')).toHaveLength(1);
+    } finally {
+      await session.close();
+      await ended;
+    }
   });
 
   it('leaves a quota warning out of verification recovery', async () => {
@@ -821,7 +930,7 @@ describe('AcpSession per-turn permission gate', () => {
   });
 
   async function openGated(extra: Partial<OpenAcpSessionOptions> = {}) {
-    const agent = createFakeAgent({ handlers: { initialize: gateInit } });
+    const agent = createFakeAgent({ handlers: { initialize: () => ({ ...gateInit(), agentCapabilities: { mcpCapabilities: { http: true } } }) } });
     const opened = await open(agent, extra);
     const asked: InteractionRequest[] = [];
     opened.session.setInteractionResolver(async (request) => {
@@ -848,7 +957,9 @@ describe('AcpSession per-turn permission gate', () => {
   });
 
   it('gates a policy turn: routine calls the policy allows run unasked, the rest go to you under channel names', async () => {
-    const { agent, session, asked } = await openGated({ permissionMode: 'acceptEdits' });
+    const { agent, session, asked } = await openGated({ permissionMode: 'acceptEdits', mcpServers: [
+      { name: 'cindy', type: 'http', url: 'http://127.0.0.1:1/mcp/cindy', headers: [] },
+    ] });
     expect(session.capabilities.turnPermissionPolicy).toEqual({ supported: { supported: true }, unsupportedPermissionModes: ['bypassPermissions'] });
     await session.send({ type: 'user', content: 'from the group' }, { turnPermissionPolicy: channelPolicy() });
     await vi.waitFor(() => expect(agent.prompts).toHaveLength(1));
@@ -857,7 +968,7 @@ describe('AcpSession per-turn permission gate', () => {
     // ACP can report the fields first, then refer to the same call by ID for approval.
     agent.update({ sessionUpdate: 'tool_call', toolCallId: 'r1', title: 'Read a.ts', kind: 'read', rawInput: { path: 'a.ts' } });
     const read = await agent.requestPermission({ toolCall: { toolCallId: 'r1' }, options: PERMISSION_OPTIONS, ...requestMeta(agent, 0) });
-    const shell = await agent.requestPermission({ toolCall: { toolCallId: 'x1', title: 'Run rm -rf build', kind: 'execute', rawInput: { command: 'rm -rf build' } }, options: PERMISSION_OPTIONS, ...requestMeta(agent, 0) });
+    const shell = await agent.requestPermission({ toolCall: { toolCallId: 'x1', name: 'mcp_cindy_ghost_call', title: 'Run a plugin', kind: 'execute', rawInput: { command: 'rm -rf build' } }, options: PERMISSION_OPTIONS, ...requestMeta(agent, 0) });
     const unmarked = await agent.requestPermission({ toolCall: { toolCallId: 'r2', title: 'Read a second file', kind: 'read' }, options: PERMISSION_OPTIONS, ...requestMeta(agent, 0, false) });
     expect([read, shell, unmarked]).toEqual([
       { outcome: { outcome: 'selected', optionId: 'yes' } },
@@ -866,7 +977,7 @@ describe('AcpSession per-turn permission gate', () => {
     ]);
     // The channel's own checks (destructive guard, card) see the call as a shell command.
     expect(asked.map((request) => [request.kind === 'permission' && request.toolName, request.kind === 'permission' && request.displayName])).toEqual([
-      ['Bash', 'Run rm -rf build'],
+      ['Bash', 'Run a plugin'],
       ['Read', 'Read a second file'],
     ]);
     agent.prompts[0]!.settle.resolve({ stopReason: 'end_turn' });
@@ -1038,6 +1149,46 @@ describe('AcpSession stop and failure', () => {
     await expect(session.send({ type: 'user', content: 'again' })).rejects.toThrow('closed');
   });
 
+  // 测试价值：AcpAgent.startSession 发出的 session/new 是否带 ACP `systemPrompt`。依据 #13515：远程供应商与
+  // 分享供应商的插件引擎任务收不到用户的自定义提示词。托管任务的 `userPrompt` 是任务所在电脑随任务发来的
+  // （remote-agent 启动参数，见 mirror.test.ts），不是执行端自己的设置，所以同账号与受邀者都要带上；
+  // 隔离伙伴与只读 /review 不带（#13564 审查 P1：审查隔离只清 userPrompt，Maker 会从冻结的启动偏好取回）。
+  // 缺口：原用例只有本机与隔离伙伴。最小失败输入：带 deviceHosted 的启动；带 userPrompt 的 reviewMode 启动。unit tier。
+  const isolatedPolicy = { mode: 'allowlist' as const, configured: [], catalog: [] };
+  it.each([
+    { name: 'a local task', extra: {}, sent: true },
+    { name: 'a read-only review', extra: { reviewMode: true as const }, sent: false },
+    { name: 'an isolated companion', extra: {
+      botRuntimeProfile: { botId: 'test', profileVersion: 1, skillPolicy: isolatedPolicy, mcpPolicy: isolatedPolicy, toolsetPolicy: isolatedPolicy },
+    }, sent: false },
+    { name: 'a task hosted for another computer of the account', extra: {
+      deviceHosted: {
+        workingDir: '/shadow/p', extraDirs: [], writableDirs: [], platform: 'darwin' as const, shell: 'zsh', isGitRepo: true,
+        tunnelUrl: 'http://127.0.0.1:4711/', tunnelToken: 't', mcpServers: [],
+      },
+    }, sent: true },
+    { name: 'a task hosted for a provider-share guest', extra: {
+      deviceHosted: {
+        workingDir: '/shadow/p', extraDirs: [], writableDirs: [], platform: 'darwin' as const, shell: 'zsh', isGitRepo: true,
+        tunnelUrl: 'http://127.0.0.1:4711/', tunnelToken: 't', mcpServers: [], guest: true,
+      },
+    }, sent: true },
+  ])('passes the personal instructions the task came with to $name as the ACP system prompt: $sent', async ({ extra, sent }) => {
+    // The per-turn permission gate is what a read-only review requires of the agent; the other cases ignore it.
+    const agent = createFakeAgent({ handlers: { initialize: () => ({
+      protocolVersion: 1, authMethods: [], _meta: { permissionGate: { supported: true } },
+      agentCapabilities: { mcpCapabilities: { http: true }, sessionCapabilities: { systemPrompt: {} } },
+    }) } });
+    // A review resolves its working directory on disk, so the task needs a real one.
+    const handle = await createAcpAgent(() => agent.transport).startSession({
+      workingDir: tmpdir(), model: '', providerId: 'acp-plugin:test:engine', userPrompt: '  x  ', ...extra,
+    });
+    expect((agent.sent.find((message) => message.method === 'session/new')!.params as AcpRecord).systemPrompt).toEqual(
+      sent ? { mode: 'append', content: [{ type: 'text', text: 'x' }] } : undefined,
+    );
+    await handle.close();
+  });
+
   // 引擎账号：运行中的额度用完、服务繁忙带上 Cindy 失败判定认得的字段并保留上游原文；不认识的 kind 照普通错误处理。
   it.each([
     {
@@ -1145,7 +1296,8 @@ describe('AcpSession model and effort', () => {
       configOptions,
       handlers: { 'session/set_config_option': () => choice.promise },
     });
-    const { session, ended } = await open(agent);
+    const observeContextWindow = vi.fn();
+    const { session, ended } = await open(agent, { observeContextWindow });
     const report = vi.fn();
     session.observeReportedModelDetails(report);
     expect(report).toHaveBeenLastCalledWith({ modelId: 'v4-flash', imageInput: false });
@@ -1161,6 +1313,12 @@ describe('AcpSession model and effort', () => {
     expect(report).toHaveBeenLastCalledWith({ modelId: 'v4-pro', imageInput: false });
     agent.update({ sessionUpdate: 'usage_update', size: 256000, used: 130 });
     expect(report).toHaveBeenLastCalledWith({ modelId: 'v4-pro', imageInput: false, contextWindow: 256000 });
+    agent.update({ sessionUpdate: 'usage_update', size: 0, used: 0 });
+    agent.update({ sessionUpdate: 'usage_update', size: -1, used: 0 });
+    agent.update({ sessionUpdate: 'usage_update', size: Infinity, used: 0 });
+    expect(observeContextWindow.mock.calls).toEqual([
+      ['v4-flash', 524288], ['v4-flash', 524288], ['v4-pro', 256000],
+    ]);
     agent.exit();
     await ended;
     expect(report).toHaveBeenLastCalledWith(undefined);
@@ -1226,6 +1384,20 @@ describe('AcpSession model and effort', () => {
 // 2026-11-19:Antigravity(agy 1.5.12)在 configOptions 里公布 mode = default / accept-edits / auto / plan；
 // 用户决定权限菜单显示 Agent 的模式并保留「全部允许」，插件基座通用。
 describe('AcpSession agent modes', () => {
+  // Unit: role promotion after enqueue must not write a prompt without cindy_orca.
+  it('rejects a queued prompt before writing it after becoming a Lead without role tools', async () => {
+    let role: 'lead' | undefined;
+    const agent = createFakeAgent();
+    const { session, events } = await open(agent, { getOrcaRole: () => role });
+    await session.send({ type: 'user', content: 'running input' });
+    await session.send({ type: 'user', content: 'queued input' });
+    role = 'lead';
+    agent.prompts[0]!.settle.resolve({ stopReason: 'end_turn' });
+    await vi.waitFor(() => expect(events).toContainEqual(expect.objectContaining({ type: 'error', data: expect.objectContaining({ reason: 'acp-prompt-not-sent', message: expect.stringMatching(/not sent/i) }) })));
+    expect(agent.prompts).toHaveLength(1);
+    await session.close();
+  });
+
   const configOptions = [
     {
       id: 'mode', name: 'Mode', category: 'mode', type: 'select', currentValue: 'default',
@@ -2112,6 +2284,7 @@ describe('AcpAgent (the acp engine)', () => {
             servers: [
               { name: 'cindy', url: 'http://127.0.0.1:1/mcp/cindy' },
               { name: 'cindy_helper', url: 'http://127.0.0.1:1/mcp/cindy_helper' },
+              { name: 'cindy_orca', url: 'http://127.0.0.1:1/mcp/cindy_orca' },
             ],
           },
           takeMcpToolResult: (query) => bucket.take(query),
@@ -2139,13 +2312,15 @@ describe('AcpAgent (the acp engine)', () => {
     agent.update({
       sessionUpdate: 'tool_call',
       toolCallId: 'call-pr',
-      title: 'mcp__cindy__ghost_call',
+      name: 'mcp__cindy__ghost_call',
+      title: 'Open pull request',
       rawInput: { args: { pr: '12880', repo: 'makecindy/cindy' }, ghost_id: 'cindy-github', namespace: null, tool: 'pr_card' },
     });
     agent.update({
       sessionUpdate: 'tool_call',
       toolCallId: 'call-search',
-      title: 'mcp__cindy__ghost_call',
+      name: 'mcp_cindy_ghost_call',
+      title: 'Search documents',
       rawInput: { args: { q: 'foo' }, ghost_id: 'xd-feishu', namespace: 'xd', tool: 'search' },
     });
     agent.update({
@@ -2190,6 +2365,30 @@ describe('AcpAgent (the acp engine)', () => {
       isError: false,
     });
 
+    // The existing prefixed cases don't cover droid's unprefixed model name:
+    // a friendly title plus cindy___ghost_call must yield both the card identity
+    // and the matching Host receipt when ACP omits output (ACP harness §4).
+    agent.update({
+      sessionUpdate: 'tool_call',
+      toolCallId: 'call-triple',
+      name: 'cindy___ghost_call',
+      title: 'Open a Factory card',
+      rawInput: { ghost_id: 'fixture', tool: 'card' },
+    });
+    agent.update({ sessionUpdate: 'tool_call', toolCallId: 'call-unmounted', name: 'foo___bar', title: 'Run another tool' });
+    agent.update({ sessionUpdate: 'tool_call', toolCallId: 'call-orca', name: 'cindy_orca___start_team', title: 'Start a team' });
+    const tripleJson = '{"ok":true,"xdt_card_id":"triple-card"}';
+    bucket.record({
+      serverName: 'cindy',
+      toolName: 'ghost_call',
+      input: { ghost_id: 'fixture', tool: 'card' },
+      fullText: tripleJson,
+      isError: false,
+    });
+    for (const toolCallId of ['call-triple', 'call-unmounted', 'call-orca']) {
+      agent.update({ sessionUpdate: 'tool_call_update', toolCallId, status: 'completed' });
+    }
+
     // Finish search before pr_card, both with empty ACP content/rawOutput.
     agent.update({ sessionUpdate: 'tool_call_update', toolCallId: 'call-search', status: 'completed' });
     agent.update({ sessionUpdate: 'tool_call_update', toolCallId: 'call-pr', status: 'completed' });
@@ -2215,6 +2414,18 @@ describe('AcpAgent (the acp engine)', () => {
         .map((e) => [((e.data as AcpRecord).toolUseIds as string[])[0]!, (e.data as AcpRecord).summary as string]),
     );
 
+    // Simultaneous mounted-gateway cards are matched by machine identity, not the friendly title.
+    const toolUses = events.filter((e) => e.type === 'tool_use').map((e) => e.data as AcpRecord);
+    expect(toolUses).toEqual(expect.arrayContaining([
+      expect.objectContaining({ toolUseId: 'call-triple', mcpToolName: 'mcp:cindy:ghost_call', toolName: 'Open a Factory card' }),
+      expect.objectContaining({ toolUseId: 'call-orca', mcpToolName: 'mcp:cindy_orca:start_team', toolName: 'Start a team' }),
+      expect.objectContaining({ toolUseId: 'call-pr', mcpToolName: 'mcp:cindy:ghost_call', toolName: 'Open pull request' }),
+      expect.objectContaining({ toolUseId: 'call-search', mcpToolName: 'mcp:cindy:ghost_call', toolName: 'Search documents' }),
+    ]));
+    const unmounted = toolUses.find((event) => event.toolUseId === 'call-unmounted');
+    expect(unmounted).toMatchObject({ toolName: 'Run another tool' });
+    expect(unmounted).not.toHaveProperty('mcpToolName');
+    expect(fullById.get('call-triple')).toEqual({ toolUseId: 'call-triple', fullText: tripleJson, isError: false });
     expect(fullById.get('call-pr')).toEqual({ toolUseId: 'call-pr', fullText: prCardJson, isError: false });
     expect(fullById.get('call-search')).toEqual({ toolUseId: 'call-search', fullText: searchJson, isError: false });
     expect(fullById.get('call-err')).toEqual({ toolUseId: 'call-err', fullText: errJson, isError: true });
@@ -2288,6 +2499,12 @@ describe('AcpAgent (the acp engine)', () => {
       serverName: 'cindy_helper',
       toolName: 'call_tool',
     });
+
+    expect(parseAcpMcpToolName('cindy___orca___start_team', ['cindy', 'cindy___orca'])).toEqual({
+      serverName: 'cindy___orca',
+      toolName: 'start_team',
+    });
+    expect(parseAcpMcpToolName('cindy___ghost_call')).toBeNull();
 
     const bucket = createMcpToolResultBucket();
     const cardText = '{"ok":true,"xdt_card_id":"remote-card-1"}';
@@ -2383,6 +2600,635 @@ describe('AcpAgent (the acp engine)', () => {
       fullText: '{"ok":true,"xdt_card_id":"fresh-card"}',
       isError: false,
     });
+  });
+});
+
+// 测试价值
+// - 生产入口与可观察结果：AcpAgent.startSession / openAcpSession / AcpSession.setExtraDirs / setWritableDirs /
+//   decidePermission；断言能力声明、目录说明与撤销注入、非完全访问下 routine 写目录边界校验，以及完全访问（bypassPermissions）放行。
+// - 规则依据：docs/dev-rules/protocol-compatibility/plugin-harnesses.md「附加目录、只读 /review 与共享任务」与
+//   docs/dev-rules/pi-full-access-native-parity.md（完全访问与内置引擎一致放行，非完全访问校验可写边界）。
+// - 现有覆盖缺口：此前 ACP 的 extraDirs/writableDirs 标为 not-implemented 且缺少目录边界与完全访问放行回归覆盖。
+// - 最小失败输入与 tier：unit；非完全访问下越界写/大小写路径键/软链逃逸/悬空链接/凭据路径/Library 根写入/并发撤权，以及完全访问下工作目录外写。
+describe('AcpSession extraDirs and writableDirs', () => {
+  const gateInit = () => ({
+    protocolVersion: 1,
+    agentCapabilities: { promptCapabilities: {}, mcpCapabilities: {}, sessionCapabilities: {} },
+    _meta: { permissionGate: { supported: true } },
+  });
+  const requestMeta = (agent: ReturnType<typeof createFakeAgent>, index: number, routine = true) => {
+    const { turnId } = asRecord(asRecord(agent.prompts[index]!.params._meta).permissionGate);
+    return { _meta: { permissionGate: { turnId, routine } } };
+  };
+  const routineDesktopPolicy = (): TurnPermissionPolicy => ({
+    origin: { kind: 'desktop' },
+    confirmationSurface: 'desktop',
+    forceConfirmToolCall: () => false,
+  });
+
+  it('advertises directory grant capabilities, includes briefing sections, excludes libraryRoot from general list, and emits mid-session updates', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'acp-dirs-briefing-'));
+    try {
+      const workDir = join(root, 'workspace');
+      const refDir = join(root, 'refs');
+      const writeDir = join(root, 'writable');
+      const libRoot = join(root, 'library');
+      mkdirSync(workDir, { recursive: true });
+      mkdirSync(refDir, { recursive: true });
+      mkdirSync(writeDir, { recursive: true });
+      mkdirSync(libRoot, { recursive: true });
+
+      const agent = createFakeAgent({ handlers: { initialize: gateInit } });
+      const engine = new AcpAgent(
+        {
+          auth: { getState: async () => ({ authenticated: true }), triggerLogin: async () => ({ authenticated: true }), logout: async () => {}, getAuthEnv: async () => ({}) },
+          runtimeConfig: {},
+          binaryPath: '',
+          logger: silentLogger,
+          mcpProviders: [],
+          clientInfo: { name: 'cindy-test', version: '0.0.0' },
+          endpoints: { connect: async () => agent.transport },
+        },
+      );
+      const handle = await engine.startSession({
+        workingDir: workDir,
+        model: '',
+        providerId: 'acp-plugin:dsh:dsh',
+        extraDirs: [refDir, libRoot],
+        writableDirs: [writeDir],
+        [LIBRARY_READ_ROOT]: libRoot,
+      });
+
+      expect(handle.negotiatedCapabilities?.extraDirs).toEqual({ supported: true });
+      expect(handle.negotiatedCapabilities?.writableDirs).toEqual({ supported: true });
+
+      const assetRef = `library:assets/ab/${'ab'.repeat(32)}/blob.png`;
+      await handle.send({ type: 'user', content: `Inspect ${assetRef}` });
+      await vi.waitFor(() => expect(agent.prompts).toHaveLength(1));
+      const turn1Blocks = agent.prompts[0]!.params.prompt as Array<{ type: string; text?: string }>;
+      expect(turn1Blocks[0]!.text).toContain('<cindy-extra-reference-directories>');
+      expect(turn1Blocks[0]!.text).toContain(`- ${refDir}`);
+      expect(turn1Blocks[0]!.text).not.toContain(`- ${libRoot}`);
+      expect(turn1Blocks[0]!.text).toContain('<cindy-extra-writable-directories>');
+      expect(turn1Blocks[0]!.text).toContain(`- ${writeDir}`);
+      const libBlock = turn1Blocks.at(-1)?.text ?? '';
+      expect(libBlock).toContain('<cindy-library-native-read>');
+      expect(libBlock).toContain(JSON.stringify({ libraryRoot: libRoot }));
+      expect(libBlock).toContain(assetRef);
+      agent.prompts[0]!.settle.resolve({ stopReason: 'end_turn' });
+
+      // Revoke all extra & writable dirs and library root mid-session.
+      await handle.setExtraDirs?.([], null);
+      await handle.setWritableDirs?.([]);
+      await handle.send({ type: 'user', content: 'Continue after revoke' });
+      await vi.waitFor(() => expect(agent.prompts).toHaveLength(2));
+      const turn2Blocks = agent.prompts[1]!.params.prompt as Array<{ type: string; text?: string }>;
+      expect(turn2Blocks[0]!.text).toContain('<cindy-directory-grants-update>');
+      expect(turn2Blocks[0]!.text).toContain('No extra reference directories or extra writable directories are currently authorized');
+      expect(turn2Blocks.at(-1)?.text ?? '').toContain(JSON.stringify({ libraryRoot: null }));
+      agent.prompts[1]!.settle.resolve({ stopReason: 'end_turn' });
+      await handle.close();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('enforces realpath-verified write directory boundaries and immediate revocation for routine policy auto-approval', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'acp-write-bounds-'));
+    try {
+      const workDir = join(root, 'workspace');
+      const writableDir = join(root, 'writable');
+      const outsideDir = join(root, 'outside');
+      const libraryDir = join(root, 'library');
+      mkdirSync(workDir, { recursive: true });
+      mkdirSync(writableDir, { recursive: true });
+      mkdirSync(outsideDir, { recursive: true });
+      mkdirSync(libraryDir, { recursive: true });
+      const insideFile = join(workDir, 'app.ts');
+      const outsideFile = join(outsideDir, 'secret.txt');
+      writeFileSync(insideFile, 'ok');
+      writeFileSync(outsideFile, 'nope');
+
+      const escapingLink = join(writableDir, 'escape.txt');
+      const danglingLink = join(writableDir, 'dangling.txt');
+      let symlinksReady = true;
+      try {
+        symlinkSync(outsideFile, escapingLink);
+        symlinkSync(join(outsideDir, 'missing.txt'), danglingLink);
+      } catch {
+        symlinksReady = false;
+      }
+
+      const agent = createFakeAgent({ handlers: { initialize: gateInit } });
+      const { session } = await open(agent, {
+        cwd: workDir,
+        permissionMode: 'ask',
+        extraDirs: [libraryDir],
+        libraryRoot: libraryDir,
+      });
+      const asked: InteractionRequest[] = [];
+      session.setInteractionResolver(async (request) => {
+        asked.push(request);
+        return { kind: 'permission', behavior: 'deny' };
+      });
+
+      await session.send({ type: 'user', content: 'Edit files' }, { turnPermissionPolicy: routineDesktopPolicy() });
+      await vi.waitFor(() => expect(agent.prompts).toHaveLength(1));
+
+      // Inside cwd -> auto-approved for routine policy calls.
+      const inside = await agent.requestPermission({
+        toolCall: { toolCallId: 'w-in', kind: 'edit', rawInput: { path: 'app.ts' } },
+        options: PERMISSION_OPTIONS,
+        ...requestMeta(agent, 0),
+      });
+      expect(inside).toEqual({ outcome: { outcome: 'selected', optionId: 'yes' } });
+      expect(asked).toHaveLength(0);
+
+      // Outside cwd before grant (including PascalCase `Path` key without locations) -> escalated to resolver.
+      const outsideBefore = await agent.requestPermission({
+        toolCall: { toolCallId: 'w-out-1', kind: 'edit', rawInput: { path: outsideFile } },
+        options: PERMISSION_OPTIONS,
+        ...requestMeta(agent, 0),
+      });
+      const outsidePascalCase = await agent.requestPermission({
+        toolCall: { toolCallId: 'w-out-pascal', kind: 'edit', rawInput: { Path: outsideFile } },
+        options: PERMISSION_OPTIONS,
+        ...requestMeta(agent, 0),
+      });
+      expect([outsideBefore, outsidePascalCase]).toEqual([
+        { outcome: { outcome: 'selected', optionId: 'no' } },
+        { outcome: { outcome: 'selected', optionId: 'no' } },
+      ]);
+      expect(asked).toHaveLength(2);
+
+      // Grant writableDir -> existing or non-existent nested file inside writableDir is auto-approved (case-insensitive keys).
+      await session.setWritableDirs([writableDir]);
+      const grantedNested = await agent.requestPermission({
+        toolCall: { toolCallId: 'w-grant', kind: 'edit', rawInput: { file_path: join(writableDir, 'nested', 'new.ts') } },
+        options: PERMISSION_OPTIONS,
+        ...requestMeta(agent, 0),
+      });
+      const grantedPascalCase = await agent.requestPermission({
+        toolCall: { toolCallId: 'w-grant-pascal', kind: 'edit', rawInput: { Path: join(writableDir, 'nested', 'other.ts') } },
+        options: PERMISSION_OPTIONS,
+        ...requestMeta(agent, 0),
+      });
+      expect([grantedNested, grantedPascalCase]).toEqual([
+        { outcome: { outcome: 'selected', optionId: 'yes' } },
+        { outcome: { outcome: 'selected', optionId: 'yes' } },
+      ]);
+      expect(asked).toHaveLength(2);
+
+      // Symlink escape and dangling symlink inside writableDir -> fail closed (escalated, not auto-approved).
+      if (symlinksReady) {
+        const escaped = await agent.requestPermission({
+          toolCall: { toolCallId: 'w-sym', kind: 'edit', rawInput: { path: escapingLink } },
+          options: PERMISSION_OPTIONS,
+          ...requestMeta(agent, 0),
+        });
+        const dangling = await agent.requestPermission({
+          toolCall: { toolCallId: 'w-dang', kind: 'edit', rawInput: { path: danglingLink } },
+          options: PERMISSION_OPTIONS,
+          ...requestMeta(agent, 0),
+        });
+        expect(escaped).toEqual({ outcome: { outcome: 'selected', optionId: 'no' } });
+        expect(dangling).toEqual({ outcome: { outcome: 'selected', optionId: 'no' } });
+      }
+
+      // Move from writableDir to outsideDir -> fail closed (destination outside).
+      const crossMove = await agent.requestPermission({
+        toolCall: {
+          toolCallId: 'w-move',
+          kind: 'move',
+          rawInput: { from: join(writableDir, 'a.ts'), to: join(outsideDir, 'b.ts') },
+        },
+        options: PERMISSION_OPTIONS,
+        ...requestMeta(agent, 0),
+      });
+      expect(crossMove).toEqual({ outcome: { outcome: 'selected', optionId: 'no' } });
+
+      // Sensitive credential path inside cwd and read-only libraryRoot -> never auto-approved.
+      const envEdit = await agent.requestPermission({
+        toolCall: { toolCallId: 'w-env', kind: 'edit', rawInput: { path: join(workDir, '.env') } },
+        options: PERMISSION_OPTIONS,
+        ...requestMeta(agent, 0),
+      });
+      const libEdit = await agent.requestPermission({
+        toolCall: { toolCallId: 'w-lib', kind: 'delete', rawInput: { path: join(libraryDir, 'blob.png') } },
+        options: PERMISSION_OPTIONS,
+        ...requestMeta(agent, 0),
+      });
+      // Missing path under permissionGate -> never auto-approved.
+      const blindWrite = await agent.requestPermission({
+        toolCall: { toolCallId: 'w-blind', kind: 'edit', rawInput: {} },
+        options: PERMISSION_OPTIONS,
+        ...requestMeta(agent, 0),
+      });
+      expect([envEdit, libEdit, blindWrite]).toEqual([
+        { outcome: { outcome: 'selected', optionId: 'no' } },
+        { outcome: { outcome: 'selected', optionId: 'no' } },
+        { outcome: { outcome: 'selected', optionId: 'no' } },
+      ]);
+
+      // Immediate revocation via setWritableDirs([]) blocks the previously allowed dir right away.
+      await session.setWritableDirs([]);
+      const askedBeforeRevoke = asked.length;
+      const afterRevoke = await agent.requestPermission({
+        toolCall: { toolCallId: 'w-revoked', kind: 'edit', rawInput: { file_path: join(writableDir, 'nested', 'new.ts') } },
+        options: PERMISSION_OPTIONS,
+        ...requestMeta(agent, 0),
+      });
+      expect(afterRevoke).toEqual({ outcome: { outcome: 'selected', optionId: 'no' } });
+      expect(asked.length).toBe(askedBeforeRevoke + 1);
+
+      agent.prompts[0]!.settle.resolve({ stopReason: 'end_turn' });
+      await session.close();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('auto-approves writes outside cwd and writableDirs under bypassPermissions (Full access)', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'acp-full-access-writes-'));
+    try {
+      const workDir = join(root, 'workspace');
+      const outsideDir = join(root, 'outside');
+      const libraryDir = join(root, 'library');
+      mkdirSync(workDir, { recursive: true });
+      mkdirSync(outsideDir, { recursive: true });
+      mkdirSync(libraryDir, { recursive: true });
+      const outsideFile = join(outsideDir, 'worktree-file.ts');
+      writeFileSync(outsideFile, 'export const a = 1;\n');
+
+      for (const withGate of [false, true]) {
+        const agent = createFakeAgent(withGate ? { handlers: { initialize: gateInit } } : undefined);
+        const { session } = await open(agent, {
+          cwd: workDir,
+          permissionMode: 'bypassPermissions',
+          extraDirs: [libraryDir],
+          libraryRoot: libraryDir,
+        });
+        const asked: InteractionRequest[] = [];
+        session.setInteractionResolver(async (request) => {
+          asked.push(request);
+          return { kind: 'permission', behavior: 'deny' };
+        });
+
+        await session.send({ type: 'user', content: 'Edit files across directories' });
+        await vi.waitFor(() => expect(agent.prompts).toHaveLength(1));
+        const meta = withGate ? requestMeta(agent, 0) : {};
+
+        const outsideEdit = await agent.requestPermission({
+          toolCall: {
+            toolCallId: 'fa-out',
+            kind: 'edit',
+            locations: [{ path: outsideFile }],
+            rawInput: { Path: outsideFile, Target: 'a = 1', Replacement: 'a = 2' },
+          },
+          options: PERMISSION_OPTIONS,
+          ...meta,
+        });
+        const envEdit = await agent.requestPermission({
+          toolCall: { toolCallId: 'fa-env', kind: 'edit', rawInput: { path: join(workDir, '.env') } },
+          options: PERMISSION_OPTIONS,
+          ...meta,
+        });
+        const libDelete = await agent.requestPermission({
+          toolCall: { toolCallId: 'fa-lib', kind: 'delete', rawInput: { path: join(libraryDir, 'blob.png') } },
+          options: PERMISSION_OPTIONS,
+          ...meta,
+        });
+        const crossMove = await agent.requestPermission({
+          toolCall: {
+            toolCallId: 'fa-move',
+            kind: 'move',
+            rawInput: { from: join(workDir, 'a.ts'), to: join(outsideDir, 'b.ts') },
+          },
+          options: PERMISSION_OPTIONS,
+          ...meta,
+        });
+
+        expect([outsideEdit, envEdit, libDelete, crossMove]).toEqual([
+          { outcome: { outcome: 'selected', optionId: 'yes' } },
+          { outcome: { outcome: 'selected', optionId: 'yes' } },
+          { outcome: { outcome: 'selected', optionId: 'yes' } },
+          { outcome: { outcome: 'selected', optionId: 'yes' } },
+        ]);
+        expect(asked).toHaveLength(0);
+
+        agent.prompts[0]!.settle.resolve({ stopReason: 'end_turn' });
+        await session.close();
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('never auto-approves routine policy writes when writableDirs is revoked during a second async directory recheck', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'acp-write-race-'));
+    try {
+      const workDir = join(root, 'workspace');
+      const writableDir = join(root, 'writable');
+      const extraWritableDir = join(root, 'writable-2');
+      mkdirSync(workDir, { recursive: true });
+      mkdirSync(writableDir, { recursive: true });
+      mkdirSync(extraWritableDir, { recursive: true });
+      const targetFile = join(writableDir, 'race.ts');
+      writeFileSync(targetFile, 'initial\n');
+
+      const agent = createFakeAgent({ handlers: { initialize: gateInit } });
+      const { session } = await open(agent, {
+        cwd: workDir,
+        permissionMode: 'ask',
+        writableDirs: [writableDir],
+      });
+      const asked: InteractionRequest[] = [];
+      session.setInteractionResolver(async (request) => {
+        asked.push(request);
+        return { kind: 'permission', behavior: 'deny' };
+      });
+
+      await session.send(
+        { type: 'user', content: 'Edit file under concurrent revoke' },
+        { turnPermissionPolicy: routineDesktopPolicy() },
+      );
+      await vi.waitFor(() => expect(agent.prompts).toHaveLength(1));
+
+      const fsPromises = (await import('node:fs')).promises;
+      const realRealpath = fsPromises.realpath.bind(fsPromises);
+      let targetChecks = 0;
+      const realpathSpy = vi.spyOn(fsPromises, 'realpath').mockImplementation(async (p, ...rest) => {
+        const resolved = await realRealpath(p, ...rest);
+        if (String(p) === targetFile) {
+          targetChecks += 1;
+          if (targetChecks === 1) {
+            // Generation bumps during attempt 1 while writableDir is still granted.
+            await session.setWritableDirs([writableDir, extraWritableDir]);
+          } else if (targetChecks === 2) {
+            // User revokes writableDir while attempt 2 is already in flight with the stale array.
+            await session.setWritableDirs([]);
+          }
+        }
+        return resolved;
+      });
+      try {
+        const outcome = await agent.requestPermission({
+          toolCall: { toolCallId: 'w-race', kind: 'edit', rawInput: { path: targetFile } },
+          options: PERMISSION_OPTIONS,
+          ...requestMeta(agent, 0),
+        });
+        expect(outcome).toEqual({ outcome: { outcome: 'selected', optionId: 'no' } });
+        expect(asked).toHaveLength(1);
+        expect(targetChecks).toBeGreaterThanOrEqual(2);
+      } finally {
+        realpathSpy.mockRestore();
+      }
+
+      agent.prompts[0]!.settle.resolve({ stopReason: 'end_turn' });
+      await session.close();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+// 测试价值
+// - 生产入口与可观察结果：AcpAgent.startSession({ reviewMode: true, reviewReadPaths }) 与 AcpSession.decidePermission / send；
+//   断言缺少 permissionGate 时 fail-closed 关停并抛 AgentStartupStoppedError(NotSupportedError)、剥离全部 MCP/花名册/Skill/说明、
+//   每轮强制 scope=all-tool-calls 及不可绕过的只读审查闸。
+// - 规则依据：docs/dev-rules/protocol-compatibility/plugin-harnesses.md「只读 /review 沙盒」与 claude-code/pi 的 reviewMode 不变量。
+// - 现有覆盖缺口：此前 AcpAgent 在握手前硬拒绝所有 reviewMode，无只读审查沙盒与 fail-closed 覆盖。
+// - 最小失败输入与 tier：unit；无 permissionGate 的对端、bypassPermissions 下的写/命令/联网/凭据/越界读/逃逸 glob 与越界附件。
+describe('AcpAgent and AcpSession read-only /review sandbox', () => {
+  const gateInit = () => ({
+    protocolVersion: 1,
+    agentCapabilities: { promptCapabilities: { image: true }, mcpCapabilities: { http: true }, sessionCapabilities: {} },
+    _meta: { permissionGate: { supported: true } },
+  });
+  const requestMeta = (agent: ReturnType<typeof createFakeAgent>, index: number) => {
+    const { turnId } = asRecord(asRecord(agent.prompts[index]!.params._meta).permissionGate);
+    return { _meta: { permissionGate: { turnId, routine: true } } };
+  };
+
+  it('fails closed and closes the endpoint when the ACP agent does not advertise permissionGate', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'acp-review-nogate-'));
+    try {
+      const workDir = join(root, 'repo');
+      mkdirSync(workDir, { recursive: true });
+      const agent = createFakeAgent();
+      const closeSpy = vi.spyOn(agent.transport, 'close');
+      const prepareBridge = vi.fn();
+      const engine = new AcpAgent({
+        auth: { getState: async () => ({ authenticated: true }), triggerLogin: async () => ({ authenticated: true }), logout: async () => {}, getAuthEnv: async () => ({}) },
+        runtimeConfig: {},
+        binaryPath: '',
+        logger: silentLogger,
+        mcpProviders: [],
+        preparePiExtraSpawnConfig: prepareBridge,
+        clientInfo: { name: 'cindy-test', version: '0.0.0' },
+        endpoints: { connect: async () => agent.transport },
+      });
+
+      let caught: unknown;
+      try {
+        await engine.startSession({
+          workingDir: workDir,
+          model: '',
+          providerId: 'acp-plugin:dsh:dsh',
+          reviewMode: true,
+        });
+      } catch (error) {
+        caught = error;
+      }
+
+      expect(caught).toBeInstanceOf(AgentStartupStoppedError);
+      const cause = (caught as AgentStartupStoppedError).cause;
+      expect(cause).toBeInstanceOf(NotSupportedError);
+      expect((cause as NotSupportedError).capability).toBe('reviewMode');
+      expect((cause as NotSupportedError).status).toMatchObject({ supported: false, reason: 'sdk-missing' });
+      expect(closeSpy).toHaveBeenCalled();
+      expect(prepareBridge).not.toHaveBeenCalled();
+      expect(agent.methods()).toEqual(['initialize']);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('strips all MCP/context/skills, forces permissionGate every turn, and enforces an unbypassable read-only sandbox', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'acp-review-sandbox-'));
+    try {
+      const workDir = join(root, 'repo');
+      const extraRepo = join(root, 'extra-repo');
+      const artifactDir = join(root, 'artifacts');
+      const outsideDir = join(root, 'outside');
+      mkdirSync(join(workDir, 'src'), { recursive: true });
+      mkdirSync(join(workDir, '.git'), { recursive: true });
+      mkdirSync(extraRepo, { recursive: true });
+      mkdirSync(artifactDir, { recursive: true });
+      mkdirSync(outsideDir, { recursive: true });
+      const srcFile = join(workDir, 'src', 'index.ts');
+      const envFile = join(workDir, '.env');
+      const privateKeyFile = join(workDir, 'private.key');
+      const gitConfig = join(workDir, '.git', 'config');
+      const extraRepoFile = join(extraRepo, 'lib.ts');
+      const allowedArtifact = join(artifactDir, 'report.md');
+      const siblingArtifact = join(artifactDir, 'other.md');
+      const outsideFile = join(outsideDir, 'secret.txt');
+      writeFileSync(srcFile, 'export const ok = true;\n');
+      writeFileSync(envFile, 'FIXTURE_ENV_VAR=placeholder\n');
+      writeFileSync(privateKeyFile, 'synthetic-key-fixture-not-a-real-key\n');
+      writeFileSync(gitConfig, '[core]\n');
+      writeFileSync(extraRepoFile, 'export const lib = 1;\n');
+      writeFileSync(allowedArtifact, '# report\n');
+      writeFileSync(siblingArtifact, '# sibling\n');
+      writeFileSync(outsideFile, 'top-secret\n');
+
+      const symlinkInRepo = join(workDir, 'src', 'leak.txt');
+      let symlinksReady = true;
+      try {
+        symlinkSync(outsideFile, symlinkInRepo);
+      } catch {
+        symlinksReady = false;
+      }
+
+      const agent = createFakeAgent({ handlers: { initialize: gateInit } });
+      const prepareBridge = vi.fn();
+      const readRoster = vi.fn(() => '<ghost-roster>should-not-appear</ghost-roster>');
+      const listSkills = vi.fn(async () => [{ name: 'pr', path: join(workDir, 'SKILL.md') }]);
+      const engine = new AcpAgent({
+        auth: { getState: async () => ({ authenticated: true }), triggerLogin: async () => ({ authenticated: true }), logout: async () => {}, getAuthEnv: async () => ({}) },
+        runtimeConfig: {},
+        binaryPath: '',
+        logger: silentLogger,
+        mcpProviders: [],
+        preparePiExtraSpawnConfig: prepareBridge,
+        getGhostRosterPrompt: readRoster,
+        listSessionSkills: listSkills,
+        clientInfo: { name: 'cindy-test', version: '0.0.0' },
+        endpoints: { connect: async () => agent.transport },
+      });
+
+      const handle = await engine.startSession({
+        workingDir: workDir,
+        model: '',
+        providerId: 'acp-plugin:dsh:dsh',
+        permissionMode: 'bypassPermissions',
+        reviewMode: true,
+        reviewReadPaths: [extraRepo, allowedArtifact],
+        extraDirs: [outsideDir],
+        writableDirs: [outsideDir],
+        pluginEngineBriefing: 'Worker briefing should be stripped',
+        botRuntimeProfile: { botId: 'b1', mode: 'project', mcpPolicy: { allow: [] } } as never,
+        botProfilePrompt: 'Bot prompt should be stripped',
+        makerMemoryEnabled: true,
+        makerMemoryIndexSnapshot: 'Memory should be stripped',
+      });
+
+      expect(prepareBridge).not.toHaveBeenCalled();
+      expect(readRoster).not.toHaveBeenCalled();
+      expect(listSkills).not.toHaveBeenCalled();
+      const sessionNewCall = agent.sent.find((req) => req.method === 'session/new');
+      expect(asRecord(sessionNewCall?.params).mcpServers).toEqual([]);
+
+      // Even attempting to elevate permission mode or directories mid-session stays a no-op.
+      await handle.setPermissionMode?.('bypassPermissions');
+      await handle.setWritableDirs?.([outsideDir]);
+      await handle.setExtraDirs?.([outsideDir]);
+
+      // Direct attachments outside reviewReadPaths or sensitive paths are refused before send.
+      await expect(handle.send({
+        type: 'user',
+        content: [{ type: 'text', text: 'check' }, { type: 'file', path: outsideFile }],
+      })).rejects.toThrow();
+      await expect(handle.send({
+        type: 'user',
+        content: [{ type: 'text', text: 'check' }, { type: 'file', path: envFile }],
+      })).rejects.toThrow();
+
+      const asked: InteractionRequest[] = [];
+      handle.setInteractionResolver(async (request) => {
+        asked.push(request);
+        return { kind: 'permission', behavior: 'allow' };
+      });
+
+      await handle.send({
+        type: 'user',
+        content: [{ type: 'text', text: 'Review changes' }, { type: 'file', path: allowedArtifact }],
+      });
+      await vi.waitFor(() => expect(agent.prompts).toHaveLength(1));
+      expect(agent.prompts[0]!.params._meta).toEqual({
+        permissionGate: { turnId: expect.any(String), scope: 'all-tool-calls' },
+      });
+      // Prompt has no stripped briefing/roster/skills/memory/dir notes.
+      const promptBlocks = agent.prompts[0]!.params.prompt as Array<{ type: string; text?: string }>;
+      expect(promptBlocks[0]).toEqual({ type: 'text', text: 'Review changes' });
+
+      // Allowed reads and single-file searches within cwd + reviewReadPaths.
+      const allowedCalls = await Promise.all([
+        agent.requestPermission({
+          toolCall: { toolCallId: 'r-cwd', kind: 'read', rawInput: { file_path: 'src/index.ts' } },
+          options: PERMISSION_OPTIONS,
+          ...requestMeta(agent, 0),
+        }),
+        agent.requestPermission({
+          toolCall: { toolCallId: 'r-extra', kind: 'read', locations: [{ path: extraRepoFile }] },
+          options: PERMISSION_OPTIONS,
+          ...requestMeta(agent, 0),
+        }),
+        agent.requestPermission({
+          toolCall: { toolCallId: 'r-exact', kind: 'read', rawInput: { path: allowedArtifact } },
+          options: PERMISSION_OPTIONS,
+          ...requestMeta(agent, 0),
+        }),
+        agent.requestPermission({
+          toolCall: { toolCallId: 's-grep-file', kind: 'search', name: 'Grep', rawInput: { pattern: 'export const', path: 'src/index.ts' } },
+          options: PERMISSION_OPTIONS,
+          ...requestMeta(agent, 0),
+        }),
+      ]);
+      expect(allowedCalls).toEqual(Array(4).fill({ outcome: { outcome: 'selected', optionId: 'yes' } }));
+
+      // Denied calls: writes, deletes, moves, execute, fetch, unknown, outside reads, sibling of exact file,
+      // credentials, directory-wide searches/reads (which cannot filter private.key/.env/symlinks in external harnesses), and escaping globs.
+      const deniedToolCalls: AcpRecord[] = [
+        { toolCallId: 'd-edit', kind: 'edit', rawInput: { path: srcFile } },
+        { toolCallId: 'd-del', kind: 'delete', rawInput: { path: srcFile } },
+        { toolCallId: 'd-move', kind: 'move', rawInput: { from: srcFile, to: join(workDir, 'src', 'b.ts') } },
+        { toolCallId: 'd-exec', kind: 'execute', rawInput: { command: 'ls' } },
+        { toolCallId: 'd-fetch', kind: 'fetch', rawInput: { url: 'https://example.com' } },
+        { toolCallId: 'd-other', kind: 'other', rawInput: { path: srcFile } },
+        { toolCallId: 'd-nopath', kind: 'read', rawInput: {} },
+        { toolCallId: 'd-read-dir', kind: 'read', rawInput: { path: workDir } },
+        { toolCallId: 'd-outside', kind: 'read', rawInput: { path: outsideFile } },
+        { toolCallId: 'd-sibling', kind: 'read', rawInput: { path: siblingArtifact } },
+        { toolCallId: 'd-env', kind: 'read', rawInput: { path: envFile } },
+        { toolCallId: 'd-key', kind: 'read', rawInput: { path: privateKeyFile } },
+        { toolCallId: 'd-git', kind: 'read', rawInput: { path: gitConfig } },
+        { toolCallId: 'd-grep-root', kind: 'search', name: 'Grep', rawInput: { path: '.', pattern: 'synthetic-key-fixture' } },
+        { toolCallId: 'd-grep-dir', kind: 'search', name: 'Grep', rawInput: { pattern: 'export const', path: 'src', glob: '*.ts' } },
+        { toolCallId: 'd-grep-nopath', kind: 'search', name: 'Grep', rawInput: { pattern: 'synthetic-key-fixture' } },
+        { toolCallId: 'd-glob-dir', kind: 'search', name: 'Glob', rawInput: { pattern: 'src/**/*.ts' } },
+        { toolCallId: 'd-grep-key', kind: 'search', name: 'Grep', rawInput: { path: privateKeyFile, pattern: 'synthetic-key-fixture' } },
+        { toolCallId: 'd-glob-escape', kind: 'search', name: 'Glob', rawInput: { pattern: '../outside/*' } },
+        { toolCallId: 'd-grep-env', kind: 'search', name: 'Grep', rawInput: { pattern: 'FIXTURE_ENV_VAR', glob: '**/.env*' } },
+        ...(symlinksReady ? [{ toolCallId: 'd-sym', kind: 'read', rawInput: { path: symlinkInRepo } }] : []),
+      ];
+      for (const toolCall of deniedToolCalls) {
+        const outcome = await agent.requestPermission({
+          toolCall,
+          options: PERMISSION_OPTIONS,
+          ...requestMeta(agent, 0),
+        });
+        expect(outcome, String(toolCall.toolCallId)).toEqual({ outcome: { outcome: 'selected', optionId: 'no' } });
+      }
+      // Review gate never escalates to interactive resolver (even if resolver would approve).
+      expect(asked).toHaveLength(0);
+
+      agent.prompts[0]!.settle.resolve({ stopReason: 'end_turn' });
+      await handle.close();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });
 
@@ -2951,7 +3797,35 @@ describe('AcpSession form elicitation, plans, additionalDirectories, planMode an
     const { session: unresumableSession } = await open(nonResumable, { extraDirs: ['/extra/a'] });
     await expect(unresumableSession.setExtraDirs(['/extra/a'])).resolves.toBeUndefined();
     await expect(unresumableSession.setExtraDirs(['/extra/b'])).rejects.toThrow();
+    // Host-owned library-slot grant/revoke does not alter handshake additionalDirectories,
+    // so it stays in-process even on non-resumable engines.
+    await expect(unresumableSession.setExtraDirs(['/extra/a', '/lib/mivo'], '/lib/mivo')).resolves.toBeUndefined();
+    await expect(unresumableSession.setExtraDirs(['/extra/a'], null)).resolves.toBeUndefined();
     await unresumableSession.close();
+
+    // Handshake additionalDirectories omits the single host-owned library slot while preserving
+    // user dirs (including an explicit user grant targeting the same directory as the library root).
+    const libOnlyAgent = createFakeAgent({
+      agentCapabilities: { sessionCapabilities: { additionalDirectories: {}, resume: {} } },
+    });
+    const { session: libOnlySession } = await open(libOnlyAgent, {
+      extraDirs: ['/lib/mivo'],
+      libraryRoot: '/lib/mivo',
+    });
+    const libOnlyNew = libOnlyAgent.sent.find((m) => m.method === 'session/new');
+    expect((libOnlyNew?.params as AcpRecord).additionalDirectories).toBeUndefined();
+    await libOnlySession.close();
+
+    const sharedDirAgent = createFakeAgent({
+      agentCapabilities: { sessionCapabilities: { additionalDirectories: {}, resume: {} } },
+    });
+    const { session: sharedDirSession } = await open(sharedDirAgent, {
+      extraDirs: ['/extra/user', '/lib/shared', '/lib/shared'],
+      libraryRoot: '/lib/shared',
+    });
+    const sharedDirNew = sharedDirAgent.sent.find((m) => m.method === 'session/new');
+    expect((sharedDirNew?.params as AcpRecord).additionalDirectories).toEqual(['/extra/user', '/lib/shared']);
+    await sharedDirSession.close();
 
     // Context usage is unavailable before the agent reports a context window, then reflects `usage_update` + turn usage.
     await expect(session.getContextUsage()).rejects.toThrow();
@@ -2982,7 +3856,7 @@ describe('AcpSession form elicitation, plans, additionalDirectories, planMode an
   });
 
   it('mutates live vendorOptions in-place and queues role briefing on setVendorOptions', async () => {
-    const agent = createFakeAgent();
+    const agent = createFakeAgent({ agentCapabilities: { mcpCapabilities: { http: true } } });
     const capturedContexts: Array<Record<string, unknown>> = [];
     const engine = new AcpAgent({
       auth: { getState: async () => ({ authenticated: true }), triggerLogin: async () => ({ authenticated: true }), logout: async () => {}, getAuthEnv: async () => ({}) },
@@ -2993,7 +3867,7 @@ describe('AcpSession form elicitation, plans, additionalDirectories, planMode an
       endpoints: { connect: async () => agent.transport },
       preparePiExtraSpawnConfig: async (_providers, ctx) => {
         capturedContexts.push(ctx as unknown as Record<string, unknown>);
-        return null;
+        return { mcpBridge: { token: 'fixture', servers: [{ name: 'cindy_orca', url: 'http://127.0.0.1:1/mcp/cindy_orca' }] } };
       },
     });
     const session = await engine.startSession({
@@ -3026,10 +3900,53 @@ describe('AcpSession form elicitation, plans, additionalDirectories, planMode an
     agent.prompts[0]!.settle.resolve({ stopReason: 'end_turn' });
     await vi.waitFor(() => expect(session.isTurnRunning?.()).toBe(false));
 
-    await session.setVendorOptions!({ orcaRole: null, orcaWorkflowId: null, orcaLeadSessionId: null });
+    // A stale controller may still send the old text together with the revocation.
+    await session.setVendorOptions!({
+      orcaRole: null, orcaWorkflowId: null, orcaLeadSessionId: null,
+      pluginEngineRoleBriefing: 'You are now the Orca Lead.',
+    });
     expect(vendorOptions).toEqual({});
+    await session.send({ type: 'user', content: 'continue without a team' });
+    expect(agent.prompts[1]!.params.prompt).toEqual([{ type: 'text', text: 'continue without a team' }]);
     await session.close();
   });
+
+  // ACP harness §4, unit through AcpAgent: missing host descriptors or an
+  // incompatible HTTP transport must never start a Worker that can't report.
+  it.each(['bridge throws', 'missing descriptor', 'HTTP unsupported'])(
+    'rejects a Worker without role tools (%s) but allows an independent task', async (state) => {
+      const agent = createFakeAgent({ agentCapabilities: { mcpCapabilities: { http: state !== 'HTTP unsupported' } } });
+      const connect = vi.fn(async () => agent.transport);
+      const dispose = vi.fn();
+      const engine = new AcpAgent({
+        auth: { getState: async () => ({ authenticated: true }), triggerLogin: async () => ({ authenticated: true }), logout: async () => {}, getAuthEnv: async () => ({}) },
+        runtimeConfig: {}, logger: silentLogger, binaryPath: '', clientInfo: { name: 'cindy', version: 'test' },
+        endpoints: { connect },
+        preparePiExtraSpawnConfig: async () => {
+          if (state === 'bridge throws') throw new Error('bridge down');
+          const names = state === 'missing descriptor' ? ['cindy_orca'] : ['cindy_orca', 'orca_worker_bridge'];
+          return { disposeSessionCtx: dispose, mcpBridge: { token: 'fixture', servers: names.map(name => ({ name, url: 'http://127.0.0.1:1/mcp/' + name })) } };
+        },
+      });
+      const opts = { workingDir: '/repo', model: '', providerId: 'acp-plugin:example:example' };
+      if (state !== 'HTTP unsupported') {
+        const err = await engine.startSession({ ...opts, vendorOptions: { orcaRole: 'worker' } }).catch(error => error);
+        expect(err).toBeInstanceOf(AgentStartupStoppedError);
+        expect(err.cause.message).toContain('orca_worker_bridge');
+        expect(connect).not.toHaveBeenCalled();
+        const ordinary = await engine.startSession(opts);
+        await ordinary.send({ type: 'user', content: 'ordinary task' });
+        expect(agent.prompts).toHaveLength(1);
+        await ordinary.close();
+      } else {
+        const err = await engine.startSession({ ...opts, vendorOptions: { orcaRole: 'worker' } }).catch(error => error);
+        expect(err.cause.message).toContain('orca_worker_bridge');
+        expect(agent.closedByClient).toBe(true);
+        expect(dispose).toHaveBeenCalledOnce();
+        expect(agent.methods()).not.toContain('session/new');
+      }
+    },
+  );
 
   it('enforces elicitation schema invariants: required choices, multi-select custom text, and minItems/maxItems', async () => {
     const agent = createFakeAgent();

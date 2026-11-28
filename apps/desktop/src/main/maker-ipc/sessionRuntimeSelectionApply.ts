@@ -26,7 +26,7 @@ import { PLUGIN_ENGINE_DEFAULT_MODEL, isPluginEngineEffort } from '../../shared/
 import { getSessionFastMode, getSessionEffort, setSessionEffort, setSessionFastMode } from '../maker-host/session-effort-store.js';
 import { customProviderExists } from '../maker-host/custom-provider-store.js';
 import { getActiveCatalog } from '../maker-host/active-catalog.js';
-import { sessionRuntimeControlOwnerEpochMatches, acceptSessionRuntimeMutation, getSessionRuntimeControlSnapshot, captureSessionRuntimeControlOwnerEpoch, resolveSessionRuntimeRefreshEffort, resolveSessionRuntimeAxes, deferSessionRuntimeAxisMutation, recordRecoveredSessionRuntimeMutation, recordRecoveredSessionRuntimeAxisMutation, recordUserSessionRuntimeMutation, settlePendingSessionRuntimeMutation, acceptSessionRuntimeAxisMutation } from './sessionRuntimeControl.js';
+import { sessionRuntimeControlOwnerEpochMatches, acceptSessionRuntimeMutation, getSessionRuntimeControlSnapshot, captureSessionRuntimeControlOwnerEpoch, resolveSessionRuntimeRefreshEffort, resolveSessionRuntimeAxes, deferSessionRuntimeAxisMutation, recordRecoveredSessionRuntimeMutation, recordRecoveredSessionRuntimeAxisMutation, recordUserSessionRuntimeMutation, settlePendingSessionRuntimeMutation, acceptSessionRuntimeAxisMutation, recordSessionRuntimeRouteChange } from './sessionRuntimeControl.js';
 import { withRehydrateCloseSuppressed } from '../maker-host/rehydrateCloseSuppression.js';
 import { eq } from 'drizzle-orm';
 import { buildDeferredRuntimeSelectionProfile, shouldSkipColdPiWindowRehydration, planUserRuntimeModelSwitch } from '../../shared/runtimeModelSwitchGate.js';
@@ -52,7 +52,7 @@ import { CredentialModeSwitchBusyError } from '../maker-host/codex-credential-sw
 import { withSendToSessionLock } from './sendToSessionLock.js';
 import type { ModelWindowSwitchPreparationResult } from './contextOverflowRollover.js';
 import type { createContextOverflowRollover } from './contextOverflowRollover.js';
-import type { FallbackRouteProfile, SessionRuntimeAxisPatch, SessionRuntimeMutationSource, SessionRuntimeProfile } from './sessionRuntimeControl.js';
+import type { FallbackRouteProfile, SessionRuntimeAxisPatch, SessionRuntimeMutationSource, SessionRuntimeProfile, SessionRuntimeRouteChangeActor, SessionRuntimeRouteChangeAttribution } from './sessionRuntimeControl.js';
 import type { MakerSessionAgentSwitchHandlerDeps, PendingAgentSwitchRegistry } from './sessionAgentSwitchHandler.js';
 import type { createSharedTaskSettingGuard } from './sharedTaskSetting.js';
 import {
@@ -66,6 +66,7 @@ import type { IpcErrorCode } from '../../shared/ipc-errors.js';
 import type { Logger } from '../logger.js';
 import type { createColdPiRehydrationForWindowVerification } from './coldPiRehydration.js';
 import type { createBotModelRouteReconciler } from './botModelRouteReconciler.js';
+import { unbindModelGroupSession } from '../model-groups/sessionBindings.js';
 import type { ScheduledModelSelection } from './scheduledModelSelection.js';
 
 /** Moved from register.ts (registerMakerIpc). */
@@ -102,6 +103,13 @@ export type InternalRuntimeSelectionOptions = {
   routeExplicit?: boolean;
   /** A send-time ID rename must persist even without a user picker transaction. */
   persistRenamedSessionModel?: boolean;
+  /** 智能路由预检/故障恢复切源时要求强制落库，确保 DB、effective 与绑定三者一致。 */
+  persistRoute?: boolean;
+  /** 本次用户切换属于智能路由选路发起，保留/随后覆盖绑定而不主动解绑。 */
+  preserveModelGroupBinding?: boolean;
+  modelGroupPickedKey?: string;
+  /** 仅限内部：本次路由切换的归因（发起方与原因码）。 */
+  routeChangeAttribution?: SessionRuntimeRouteChangeAttribution;
 };
 /** The type of register.ts `applySessionRuntimeSelection` (moved from its declaration). */
 export type ApplySessionRuntimeSelection = (
@@ -415,6 +423,7 @@ export function createHandleSetModel(bindPorts: () => SessionRuntimeSelectionPor
           throwIpcError('INVALID_PARAMS', 'Fast is unavailable for plugin engines');
         }
         // Keep the same owner, write authorization and send lock across the ACP round trip.
+        if (internalOptions.beforeMutation) await internalOptions.beforeMutation();
         assertRuntimeOwnerCurrent();
         assertSharedTaskCurrent.admit();
         const target = engineElsewhere
@@ -436,6 +445,9 @@ export function createHandleSetModel(bindPorts: () => SessionRuntimeSelectionPor
         await persistSessionFields(sessionId, { model: target.model, effort: effort ?? '' }, { allowEmptyEffort: true });
         if (internalOptions.source === 'user' && internalOptions.configStaged !== true) {
           await updateScheduledPreference(sessionId, null);
+          if (!internalOptions.preserveModelGroupBinding) {
+            unbindModelGroupSession(sessionId);
+          }
         }
         assertRuntimeOwnerCurrent();
         const generation = internalOptions.source === 'fallback'
@@ -445,6 +457,36 @@ export function createHandleSetModel(bindPorts: () => SessionRuntimeSelectionPor
                 model: target.model, effort: effort ?? null, fastMode: false },
             })
           : recordUserSessionRuntimeMutation(sessionId);
+        recordSessionRuntimeRouteChange(sessionId, {
+          by:
+            internalOptions.routeChangeAttribution?.by ??
+            (internalOptions.source === 'fallback'
+              ? 'fallback'
+              : internalOptions.runtimeSource === 'agent'
+                ? 'agent'
+                : internalOptions.configStaged
+                  ? 'config-sync'
+                  : 'user'),
+          reason:
+            internalOptions.routeChangeAttribution?.reason ??
+            (internalOptions.source === 'fallback'
+              ? 'fallback'
+              : internalOptions.configStaged
+                ? 'config-sync'
+                : 'explicit'),
+          from: {
+            agentKind: 'acp',
+            model: runtimeStatus.model,
+            providerId: runtimeStatus.providerId,
+            agentDeviceId: runtimeStatus.agentDeviceId ?? null,
+          },
+          to: {
+            agentKind: 'acp',
+            model: target.model,
+            providerId: runtimeStatus.providerId,
+            agentDeviceId: runtimeStatus.agentDeviceId ?? null,
+          },
+        });
         const response = {
           deferred: false,
           superseded: false,
@@ -662,6 +704,8 @@ export function createHandleSetModel(bindPorts: () => SessionRuntimeSelectionPor
           ...(deviceLinkModelSelectionOrigin ? { deviceLinkModelSelectionOrigin } : {}),
           ...(internalOptions.runtimeSource ? { runtimeSource: internalOptions.runtimeSource } : {}),
           ...(internalOptions.configStaged === true ? { configStaged: true } : {}),
+          ...(internalOptions.modelGroupPickedKey ? { modelGroupPickedKey: internalOptions.modelGroupPickedKey } : {}),
+          ...(internalOptions.routeChangeAttribution ? { routeChangeAttribution: internalOptions.routeChangeAttribution } : {}),
           sameAgentSelection: true,
           credentialSelectionAxes,
           targetAgentKind: dbToMakerAgentKind(runtimeStatus.agentKind),
@@ -711,6 +755,9 @@ export function createHandleSetModel(bindPorts: () => SessionRuntimeSelectionPor
               ...(atomicSelection?.thinking !== undefined
                 ? { thinking: atomicSelection.thinking }
                 : {}),
+              ...(internalOptions.routeChangeAttribution
+                ? { routeChangeAttribution: internalOptions.routeChangeAttribution }
+                : {}),
               profile: buildDeferredRuntimeSelectionProfile({
                 agentKind: maker.getSession(sessionId)?.agentKind ?? meta.agentKind,
                 model,
@@ -736,6 +783,9 @@ export function createHandleSetModel(bindPorts: () => SessionRuntimeSelectionPor
               pendingPatch: pendingAxisPatch,
               ...(atomicSelection?.thinking !== undefined
                 ? { thinking: atomicSelection.thinking }
+                : {}),
+              ...(internalOptions.routeChangeAttribution
+                ? { routeChangeAttribution: internalOptions.routeChangeAttribution }
                 : {}),
             });
         // A later accepted route supersedes an earlier context-only rebuild.
@@ -1689,6 +1739,7 @@ export function createHandleSetModel(bindPorts: () => SessionRuntimeSelectionPor
           (modelWindowRebuilt ||
             (runtimeAgentKind === 'pi' && (runtimeRouteChanged || piConfigurationRefresh)) ||
             internalOptions.persistRenamedSessionModel === true ||
+            internalOptions.persistRoute === true ||
             (internalOptions.source === 'user' && (isDeviceLinkInvoke() || atomicSelection)))
         ) {
           // device-link 的通用持久化原本发生在 handler 返回、session 锁释放之后；
@@ -1791,6 +1842,10 @@ export function createHandleSetModel(bindPorts: () => SessionRuntimeSelectionPor
           if (!internalOptions.configStaged) {
             await updateScheduledPreference(sessionId, null);
             await reconcileBotModelRoute.acceptTaskChoice(sessionId).catch(() => {});
+            // 用户手动选择具体模型时解除智能路由托管(即使重选当前模型也显式退出托管)。
+            if (!internalOptions.preserveModelGroupBinding) {
+              unbindModelGroupSession(sessionId);
+            }
           }
           generation = recordUserSessionRuntimeMutation(sessionId);
         } else if (internalOptions.applyingPendingGeneration !== undefined) {
@@ -1837,6 +1892,50 @@ export function createHandleSetModel(bindPorts: () => SessionRuntimeSelectionPor
               currentEffort,
               currentFastMode: getSessionFastMode(sessionId),
             }),
+          });
+        }
+        if (!response.deferred) {
+          const committedProviderId =
+            effectiveProviderId === undefined
+              ? currentProviderId
+              : normalizeSessionProviderId(effectiveProviderId) ?? null;
+          const commitActor: SessionRuntimeRouteChangeActor =
+            internalOptions.routeChangeAttribution?.by ??
+            (internalOptions.source === 'fallback'
+              ? 'fallback'
+              : internalOptions.source === 'agent'
+                ? (internalOptions.persistRenamedSessionModel ? 'config-sync' : 'agent')
+                : internalOptions.runtimeSource === 'agent'
+                  ? 'agent'
+                  : internalOptions.configStaged
+                    ? 'config-sync'
+                    : 'user');
+          const commitReason =
+            internalOptions.routeChangeAttribution?.reason ??
+            (internalOptions.source === 'fallback'
+              ? 'fallback'
+              : internalOptions.persistRenamedSessionModel
+                ? 'model-renamed'
+                : internalOptions.refreshPiConfiguration
+                  ? 'pi-config-refresh'
+                  : internalOptions.configStaged
+                    ? 'config-sync'
+                    : 'explicit');
+          recordSessionRuntimeRouteChange(sessionId, {
+            by: commitActor,
+            reason: commitReason,
+            from: {
+              agentKind: currentAgentKind,
+              model: currentModelId,
+              providerId: currentProviderId,
+              agentDeviceId: runtimeStatus.agentDeviceId ?? null,
+            },
+            to: {
+              agentKind: currentAgentKind,
+              model,
+              providerId: committedProviderId,
+              agentDeviceId: runtimeStatus.agentDeviceId ?? null,
+            },
           });
         }
         if (!internalOptions.applyingPiCredentialPending && (rebuildLiveOrcaWorker || modelWindowRebuilt || atomicSelection ||

@@ -35,3 +35,21 @@ export function checkWorktreeSourceRef(ref: string | null | undefined): Worktree
   }
   return { ok: true, value };
 }
+
+/**
+ * 新建任务时 `base_ref` 入参的共同判定（本机创建、跨电脑发送端与接收端共用）。
+ *
+ * 基线只对同时新建的 worktree 有意义：没开 `use_worktree` 时拒绝而不是忽略，否则调用方以为
+ * 任务在点名的分支上，实际落在共享工作树的当前分支。省略时原样通过，由调用方走默认基线。
+ */
+export function checkWorktreeBaseRefArg(
+  baseRef: string | undefined,
+  useWorktree: boolean | undefined,
+): { ok: true; value: string | undefined } | { ok: false; message: string } {
+  if (baseRef === undefined) return { ok: true, value: undefined };
+  if (!useWorktree) return { ok: false, message: 'base_ref requires use_worktree=true.' };
+  const checked = checkWorktreeSourceRef(baseRef);
+  return checked.ok
+    ? { ok: true, value: checked.value }
+    : { ok: false, message: `base_ref ${checked.message}.` };
+}

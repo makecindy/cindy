@@ -266,13 +266,23 @@ export interface UnifiedModelPanelProps {
   providerGroupUsage?: ProviderGroupUsageOf;
   /** 合并整个供应商的路由那一格显示谁的额度(sourceRouteProviders.ts 的 usageMember)。 */
   routeUsageMember?: (providerId: string) => { provider: ProviderView; agentDeviceId: string | null } | null;
+  /** 已存收藏 / 最近记录的来源别名解析(如本机成员并入 `sroute:` 后映射到合并条目)。 */
+  resolveStoredProviderAlias?: (
+    providerId: string,
+    modelId: string,
+  ) => { providerId: string; modelId: string } | null;
+  /** 把虚拟供应商行身份(`sroute:`)映射回收藏 / 最近落盘用的真实成员身份。 */
+  resolveStoredIdentity?: (
+    providerId: string,
+    modelId: string,
+  ) => { providerId: string; modelId: string } | null;
   /** 保留付费模型为锁定展示行，并把点击交给统一付费提示。 */
   includePaymentRequired?: boolean;
   paymentRequiredLabel?: string;
   paymentRequiredUnlockLabel?: string;
   onPaymentRequired?: () => void;
-  /** false = 只选模型,不出配置浮层(设置类入口的 configurationEnabled)。 */
-  configurationEnabled?: boolean;
+  /** Settings can pick a Harness without editing model preferences. */
+  configurationEnabled?: boolean | 'harness';
   /**
    * 选择真的应用成功后,把该模型记进「最近使用」(见 state/recentModels 的语义边界)。
    * **默认关**:统一面板被对话之外的入口(定时任务 / IM 默认 / Bot / Hook / Worker /
@@ -481,10 +491,23 @@ export function UnifiedModelPanel(props: UnifiedModelPanelProps) {
       count + Object.values(provider.models).reduce((sum, models) => sum + models.length, 0), 0);
     const remoteRows = props.remoteSources?.groups.reduce((count, group) => count + group.entries.length, 0) ?? 0;
     if (localRows + remoteRows >= 80) {
-      return <div ref={panelRoot} role="status" style={{ height: props.listMaxHeight ?? 428 }} className="flex min-h-0 shrink items-center justify-center gap-1.5 px-3 text-13 text-[var(--text-tertiary)]">
-        <Spinner size={14} />
-        {t('newChat.modelSelector.trigger.loading')}
-      </div>;
+      // In a toolbar morph the real rows are not available for intrinsic
+      // measurement yet. Reserve the compact pane’s capped width in its
+      // first measurement so stickyWidth holds it when the rows arrive.
+      return (
+        <div
+          ref={panelRoot}
+          role="status"
+          style={{ height: props.listMaxHeight ?? 428 }}
+          className={cn(
+            'flex min-h-0 shrink items-center justify-center gap-1.5 px-3 text-13 text-[var(--text-tertiary)]',
+            '[[data-morph-side]_&]:w-[min(460px,calc(100vw-48px))] [[data-morph-side]_&]:max-w-full',
+          )}
+        >
+          <Spinner size={14} />
+          {t('newChat.modelSelector.trigger.loading')}
+        </div>
+      );
     }
   }
   return <UnifiedModelPanelContent {...props} panelRoot={panelRoot} />;
@@ -532,6 +555,8 @@ function UnifiedModelPanelContent({
   providerUsage = null,
   providerGroupUsage,
   routeUsageMember,
+  resolveStoredProviderAlias,
+  resolveStoredIdentity,
   includePaymentRequired = false,
   paymentRequiredLabel,
   paymentRequiredUnlockLabel,
@@ -599,18 +624,26 @@ function UnifiedModelPanelContent({
     if (pluginEngineTabsProp) return pluginEngineTabsProp;
     if (!visiblePluginEngines || visiblePluginEngines.engines.length === 0) return undefined;
     return visiblePluginEngines.engines.map((engine) => ({
-      key: engine.key,
       providerId: engine.providerId,
       ...(engine.deviceId ? { deviceId: engine.deviceId } : {}),
       name: pluginEngineChoiceLabel(engine),
       ...(engine.iconDataUrl ? { iconDataUrl: engine.iconDataUrl } : {}),
-      ...(engine.reportsUsage ? { reportsUsage: true as const } : {}),
-      selectable: isPluginEngineSelectable(engine),
+      key: engine.key,
+      ...(isPluginEngineSelectable(engine) && engine.reportsUsage ? { reportsUsage: true } : {}),
     }));
   }, [pluginEngineTabsProp, visiblePluginEngines, pluginEngineChoiceLabel]);
-  const pluginEngineHostDeviceId = remoteSources
-    ? (remoteSources.localUsageDeviceId ?? null)
-    : (providerUsage?.deviceId ?? null);
+  // Plugin engines without an explicit engine.deviceId belong to the task host computer
+  // (controlled computer in Device Link, local computer otherwise), independent of remote browsing.
+  const pluginUsageScope = useMemo<ProviderUsageScope | null>(
+    () =>
+      providerUsage === null
+        ? null
+        : {
+            deviceId: remoteSources ? (remoteSources.localUsageDeviceId ?? null) : (providerUsage.deviceId ?? null),
+            taskId: providerUsage.taskId,
+          },
+    [providerUsage, remoteSources],
+  );
   const agentDeviceFavorites = useAgentDeviceFavorites({
     deviceId: remoteSources?.active && !isSharedProvider ? deviceId : undefined,
     homeDeviceId: favoritesHomeDeviceId,
@@ -871,12 +904,22 @@ function UnifiedModelPanelContent({
     [liveEngineAgent, selected.modelId, selected.providerId],
   );
 
+  const resolveStoredEntryWithAlias = useCallback(
+    (providerId: string, modelId: string) => {
+      const direct = resolveStoredModelEntry(resolvableEntries, providerId, modelId);
+      if (direct) return direct;
+      const alias = resolveStoredProviderAlias?.(providerId, modelId);
+      return alias ? resolveStoredModelEntry(resolvableEntries, alias.providerId, alias.modelId) : null;
+    },
+    [resolvableEntries, resolveStoredProviderAlias],
+  );
+
   // 收藏编辑与任务配置分开持久化；选中标记必须核对完整组合，不能只认历史 uid。
   // selected / liveEngineAgent / effort / fast 必须描述同一份实际配置。
   const activeFavoriteUid = useMemo(() => {
     const item = favorites.find((favorite) => favorite.uid === selectedFavoriteUid);
     if (!item) return null;
-    const entry = resolveStoredModelEntry(resolvableEntries, item.providerId, item.modelId);
+    const entry = resolveStoredEntryWithAlias(item.providerId, item.modelId);
     return entry &&
       favoriteMatchesSelection({
         entry,
@@ -890,7 +933,7 @@ function UnifiedModelPanelContent({
       ? item.uid
       : null;
   }, [
-    resolvableEntries,
+    resolveStoredEntryWithAlias,
     favorites,
     selectedFavoriteUid,
     selected.providerId,
@@ -1128,11 +1171,12 @@ function UnifiedModelPanelContent({
         providerOrder,
         ...(foldedProviderIds?.size ? { listHiddenProviderIds: foldedProviderIds } : {}),
         ...(resolvableEntries !== entries ? { resolveEntries: resolvableEntries } : {}),
+        ...(resolveStoredProviderAlias ? { resolveStoredProviderAlias } : {}),
         ...(scope === 'session' && liveEngineAgent
           ? { recommendation: { agent: liveEngineAgent, ...selected } }
           : {}),
       }),
-    [entries, resolvableEntries, favorites, recentModels, resolveDeviceFavorite, resolvePluginFavorite, matchesPluginFavorite, query, effectiveRail, effectiveEngineOf, providerOrder, t, scope, liveEngineAgent, selected.modelId, selected.providerId, foldedProviderIds],
+    [entries, resolvableEntries, resolveStoredProviderAlias, favorites, recentModels, resolveDeviceFavorite, resolvePluginFavorite, matchesPluginFavorite, query, effectiveRail, effectiveEngineOf, providerOrder, t, scope, liveEngineAgent, selected.modelId, selected.providerId, foldedProviderIds],
   );
   // 已隐藏区只跟「全部」与某个供应商的视图走(收藏 / 最近 / 模型组是另一种清单);
   // 搜索时 effectiveRail 已回到「全部」,所以搜索天然覆盖所有被隐藏的模型。
@@ -1249,6 +1293,7 @@ function UnifiedModelPanelContent({
     onFavoriteError: () => toast.error(t('newChat.modelSelector.unified.favoritesSaveFailed')),
     interactionDisabled,
     recordRecentUsage,
+    resolveStoredIdentity,
     isLiveRow,
     // 两笔实时写入(深度 + Fast)里第二笔失败时回滚第一笔用的原值,以及收藏 live 判定
     // 要比的实时深度 / Fast —— 与 configOf 里「选中行读 live 值」取的是同一个格子。
@@ -1397,10 +1442,12 @@ function UnifiedModelPanelContent({
             });
           },
           justFavoritedKey: justFavorited,
-          configurationEnabled,
+          configurationEnabled: configurationEnabled === true,
           interactionDisabled: interactionDisabled || actionPending,
         }
       : undefined;
+
+  const harnessOnly = configurationEnabled === 'harness';
 
   // ── 浮层 ─────────────────────────────────────────────────────────────────
   const flyTarget = useMemo(() => {
@@ -1856,9 +1903,10 @@ function UnifiedModelPanelContent({
             effectiveEngineOf,
             providerOrder,
             ...(listHiddenProviderIds?.size ? { listHiddenProviderIds } : {}),
+            ...(resolveStoredProviderAlias ? { resolveStoredProviderAlias } : {}),
           })
         : [],
-    [widthSizerActive, resolvableEntries, favorites, recentModels, resolveDeviceFavorite, resolvePluginFavorite, effectiveEngineOf, providerOrder, listHiddenProviderIds],
+    [widthSizerActive, resolvableEntries, resolveStoredProviderAlias, favorites, recentModels, resolveDeviceFavorite, resolvePluginFavorite, effectiveEngineOf, providerOrder, listHiddenProviderIds],
   );
   const widthSizerRef = useRef<HTMLDivElement>(null);
   const [widthMeasure, setWidthMeasure] = useState<ReturnType<typeof createWidthMeasure> | null>(null);
@@ -1902,8 +1950,8 @@ function UnifiedModelPanelContent({
           : configOf(entry, row.favorite ?? row.recent, RAIL_ALL);
         const price = row.agentDeviceId ? null : priceDisplayOf(entry, config);
         const name = widthMeasure(localizedModelName(entry.displayName, t), 14, 500);
-        const effort = configurationEnabled && config.effort ? 4 + widthMeasure(effortLabelOf(config.agent, config.effort), 12, 400) : 0;
-        const fast = configurationEnabled && config.fast ? 15 : 0;
+        const effort = configurationEnabled === true && config.effort ? 4 + widthMeasure(effortLabelOf(config.agent, config.effort), 12, 400) : 0;
+        const fast = configurationEnabled === true && config.fast ? 15 : 0;
         const star = selectionPolicy === 'personalized' ? 28 : 0;
         const customize = configurationEnabled && !row.agentDeviceId && !row.recent ? 28 : 0;
         const badge = price?.kind === 'free'
@@ -1962,7 +2010,8 @@ function UnifiedModelPanelContent({
           anchor={row.anchor}
           active={sameAnchor(flyAnchor, row.anchor)}
           readable={readableRows}
-          configurationEnabled={configurationEnabled}
+          usageScope={pluginUsageScope}
+          configurationEnabled={configurationEnabled === true}
           interactionDisabled={interactionDisabled || actionPending}
           onSelect={() => selectPluginEngineFavorite(row.pluginEngine!)}
           {...(selectionPolicy === 'personalized' && pluginEngineFavoritesController
@@ -1992,8 +2041,7 @@ function UnifiedModelPanelContent({
      */
     const matchingFavorite = row.recent
       ? favorites.find((favorite) => {
-          if (favorite.providerId !== row.entry.providerId) return false;
-          if (resolveStoredModelEntry(resolvableEntries, favorite.providerId, favorite.modelId) !== row.entry) return false;
+          if (resolveStoredEntryWithAlias(favorite.providerId, favorite.modelId) !== row.entry) return false;
           const favoriteConfig = resolveFavoriteRowConfig({
             entry: row.entry,
             item: favorite,
@@ -2035,7 +2083,7 @@ function UnifiedModelPanelContent({
         // (引擎 / 深度 / Fast 由记录时的选择决定,改配置走模型行或收藏)。
         // 不出配置浮层的行(最近行只读副本、设置类入口)一律 customizable=false：
         // 按钮、← 快捷键与右键浮层都由这一个闸门收掉，不宣告存在却无响应。
-        customizable={configurationEnabled && !recentRow}
+        customizable={!!configurationEnabled && !recentRow}
         interactionDisabled={rowIsDisabled(row, config)}
         paymentRequired={row.entry.availability === 'requires_payment'}
         {...(paymentRequiredLabel ? { paymentRequiredLabel } : {})}
@@ -2149,7 +2197,8 @@ function UnifiedModelPanelContent({
             <PluginEnginesSection
               picker={visiblePluginEngines}
               query={query}
-              hostDeviceId={pluginEngineHostDeviceId}
+              usageScope={pluginUsageScope}
+              showsSourceRow={showsSourceRow}
               onPicked={() => onPluginEnginePicked?.()}
               {...(pluginEngineFavoritesController ? { favorites: pluginEngineFavoritesController } : {})}
               panelElement={panelElement}
@@ -2256,7 +2305,8 @@ function UnifiedModelPanelContent({
                     ),
                   }}
                   query=""
-                  hostDeviceId={pluginEngineHostDeviceId}
+                  usageScope={pluginUsageScope}
+                  showsSourceRow={false}
                   onPicked={() => onPluginEnginePicked?.()}
                   {...(pluginEngineFavoritesController ? { favorites: pluginEngineFavoritesController } : {})}
                   panelElement={panelElement}
@@ -2284,7 +2334,8 @@ function UnifiedModelPanelContent({
                 <PluginEnginesSection
                   picker={visiblePluginEngines}
                   query={query}
-                  hostDeviceId={pluginEngineHostDeviceId}
+                  usageScope={pluginUsageScope}
+                  showsSourceRow={showsSourceRow}
                   onPicked={() => onPluginEnginePicked?.()}
                   {...(pluginEngineFavoritesController ? { favorites: pluginEngineFavoritesController } : {})}
                   panelElement={panelElement}
@@ -2382,7 +2433,7 @@ function UnifiedModelPanelContent({
                         anchor={row.anchor}
                         active={false}
                         measurementOnly
-                        configurationEnabled={configurationEnabled}
+                        configurationEnabled={configurationEnabled === true}
                         interactionDisabled
                         onSelect={noop}
                         onRemove={noop}
@@ -2409,7 +2460,7 @@ function UnifiedModelPanelContent({
                       {...(priceDisplay ? { priceDisplay } : {})}
 
                       configurationEnabled={configurationEnabled}
-                      customizable={configurationEnabled && !row.recent}
+                      customizable={!!configurationEnabled && !row.recent}
                       interactionDisabled
                       paymentRequired={row.entry.availability === 'requires_payment'}
                       {...(paymentRequiredLabel ? { paymentRequiredLabel } : {})}
@@ -2497,8 +2548,16 @@ function UnifiedModelPanelContent({
                     config.agent,
                   )
                 }
-                engineLocked={effectiveRail.kind === 'engine'}
+                harnessOnly={harnessOnly}
+                engineLocked={!harnessOnly && effectiveRail.kind === 'engine'}
                 onEngineChange={(engine) => {
+                  if (harnessOnly) {
+                    const next = resolveUnifiedRowConfig({ entry: target.entry, forceEngine: engine });
+                    if (next.engine !== engine || rowIsDisabled(target, next)) return;
+                    // Use the same selection path as the model row, including its wire id and device.
+                    void selectRow(target.anchor, next, undefined, target.entry);
+                    return;
+                  }
                   if (effectiveRail.kind === 'engine') return;
                   applyEngine(target.anchor, target.entry, config, engine);
                 }}

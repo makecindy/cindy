@@ -17,13 +17,30 @@ import { buildSessionCreatedBy, parseSessionCreatedBy } from '../../../shared/se
 import { sessionCreateToRow, sessionToCamel } from '../../localDb/mapper';
 import { coerceCachedSession } from '../mirrorCacheStore';
 import { projectRemoteSessionResult, setRemoteBotSessionLookup } from '../remoteBotSessionBoundary';
-import { redactSessionRowForSharedGuest, redactSharedGuestPush } from '../sharedTaskMessageOrigin';
+import { redactMessageRowForSharedGuest, redactSessionRowForSharedGuest, redactSharedGuestPush } from '../sharedTaskMessageOrigin';
 
 afterEach(() => {
   setRemoteBotSessionLookup(null);
 });
 
 describe('session-level origin persistence and privacy boundaries', () => {
+  // Value: shared-task message history and live pushes retain the handoff while
+  // hiding host-only route attribution. Before this fix, both paths disclosed it.
+  // Minimal input: one agent_switch JSON boundary with attribution; tier: unit.
+  it('removes route attribution from shared guest history and message pushes', () => {
+    const content = JSON.stringify({ handoff: 'Continue task', attribution: {
+      by: 'provider-group', reason: 'quota_rebalance',
+      from: { agentDeviceId: 'private-device' }, to: { agentDeviceId: 'studio' },
+    } });
+    const message = { id: 'switch-1', role: 'agent_switch', content, agentMeta: null };
+    const history = redactMessageRowForSharedGuest(message);
+    expect(JSON.parse(history.content)).toEqual({ handoff: 'Continue task' });
+    expect(message.content).toBe(content);
+    expect(redactSharedGuestPush('local-db:messages:created', { sessionId: 'shared-1', message }))
+      .toEqual({ sessionId: 'shared-1', message: history });
+    expect(redactMessageRowForSharedGuest({ ...message, content: JSON.parse(content) }).content)
+      .toEqual({ handoff: 'Continue task' });
+  });
   it('round-trips createdBySession through mapper without touching parentSessionId and tolerates corrupted JSON', () => {
     const origin = buildSessionCreatedBy({
       sessionId: 'origin-task-1',
@@ -96,7 +113,7 @@ describe('session-level origin persistence and privacy boundaries', () => {
     expect(parseSessionCreatedBy({ kind: 'session', sessionId: '' })).toBeNull();
   });
 
-  it('strips createdBySession and orcaRemoteLead from shared-task guest reads and pushes', () => {
+  it('strips createdBySession, orcaRemoteLead, and modelGroupBinding from shared-task guest reads and pushes', () => {
     const row = {
       id: 'shared-1',
       title: 'Shared task',
@@ -108,17 +125,34 @@ describe('session-level origin persistence and privacy boundaries', () => {
         leadTitle: 'Secret team',
         workerLabel: 'worker-a',
       },
+      modelGroupBinding: {
+        selection: { type: 'route', id: 'private-route' },
+        routeName: 'Private Pool',
+        autoSwitch: true,
+      },
+      runtimeLastRouteChange: {
+        at: '2026-11-28T10:00:00.000Z',
+        by: 'model-group',
+        reason: 'provider_safety_refusal',
+        from: { agentKind: 'claude-code', model: 'claude-opus-4-6', providerId: 'anthropic', agentDeviceId: null },
+        to: { agentKind: 'codex', model: 'gpt-5.6', providerId: 'openai', agentDeviceId: 'mac-studio' },
+      },
     };
-    expect(redactSessionRowForSharedGuest(row)).toMatchObject({
+    const redactedRow = redactSessionRowForSharedGuest(row);
+    expect(redactedRow).toMatchObject({
       id: 'shared-1',
       createdBySession: null,
       orcaRemoteLead: null,
     });
+    expect(redactedRow).not.toHaveProperty('modelGroupBinding');
+    expect(redactedRow).not.toHaveProperty('runtimeLastRouteChange');
     expect(redactSharedGuestPush('local-db:sessions:created', { session: row })).toEqual({
       session: { id: 'shared-1', title: 'Shared task', createdBySession: null, orcaRemoteLead: null },
     });
-    expect(redactSharedGuestPush('local-db:sessions:patched', { sessionId: 'shared-1', patch: { createdBySession: row.createdBySession } }))
-      .toEqual({ sessionId: 'shared-1', patch: { createdBySession: null } });
+    expect(redactSharedGuestPush('local-db:sessions:patched', {
+      sessionId: 'shared-1',
+      patch: { createdBySession: row.createdBySession, modelGroupBinding: row.modelGroupBinding, runtimeLastRouteChange: row.runtimeLastRouteChange },
+    })).toEqual({ sessionId: 'shared-1', patch: { createdBySession: null } });
   });
 
   it('preserves valid orcaRemoteLead and createdBySession in offline mirror cache and drops invalid payloads', () => {

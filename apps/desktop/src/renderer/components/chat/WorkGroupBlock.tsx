@@ -35,6 +35,7 @@ import {
 } from 'react';
 import { ChevronRight, Layers, Sparkles, Terminal } from 'lucide-react';
 import { TOOL_ROW_VERB_I18N_KEY, INTENT_ROW_VERB_KEY, UPDATED_VERB_I18N_KEY, FILE_CHANGE_FILES_I18N_KEY } from '../../../shared/agentActionVerbKeys';
+import { formatCollabRowLabel } from '@/lib/agent-actions/verbAggregator';
 import { useStableTranslation as useTranslation } from '@/hooks/useStableTranslation';
 
 import { cn } from '@/lib/utils';
@@ -137,6 +138,7 @@ function ToolActivityRow({ activity, pluginUi }: { activity: ProjectedToolActivi
         showRawCommand
         status={activity.status}
         intentOverride={activity.intentOverride}
+        repeatCount={activity.repeatCount}
       />
     </div>
   );
@@ -246,6 +248,7 @@ function ToolLineRow({
         message={message}
         showRawCommand
         status={line.status}
+        repeatCount={line.repeatCount}
         descriptorOverride={line.descriptor}
         onActivateOverride={onActivate}
       />
@@ -449,11 +452,13 @@ export function TeammateWorkSegment({ blockId, childItems, active = false, onIns
     verb: key => t(TOOL_ROW_VERB_I18N_KEY[key]),
     intentVerb: action => t(INTENT_ROW_VERB_KEY[action]),
     updateFilesLabel: count => `${t(UPDATED_VERB_I18N_KEY)} ${t(FILE_CHANGE_FILES_I18N_KEY, { count })}`,
+    collabLabel: descriptor => formatCollabRowLabel(descriptor, t),
   });
   const tools = childItems.filter(child => child.kind === 'tools');
   const icon = active && (summary.running || !summary.toolCount) ? <Spinner size={14} />
     : summary.toolCount ? <Terminal size={14} /> : <Sparkles size={14} />;
-  const content = <><span aria-hidden className="inline-flex w-4 shrink-0 items-center justify-center">{icon}</span><span className="min-w-0 break-words">{title}</span></>;
+  const content = <><span aria-hidden className="inline-flex w-4 shrink-0 items-center justify-center">{icon}</span>
+    <span className={cn('min-w-0', tools.length && !memory.expanded ? 'truncate' : 'break-words')}>{title}</span></>;
   return <div className="min-w-0" data-teammate-segment="">
     {tools.length ? <button type="button" aria-expanded={memory.expanded} data-scroll-disclosure-header=""
       onClick={() => { memory.setExpanded(value => !value); (onInspect ?? inspectParent)?.(); }}

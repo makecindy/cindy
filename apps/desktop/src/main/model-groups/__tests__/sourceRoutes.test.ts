@@ -118,6 +118,121 @@ describe('provider routes', () => {
     expect(childrenOf(config, 'auto:anthropic').map((route) => route.candidates.map((item) => item.agentDeviceId))).toEqual([['share:a', 'share:b']]);
   });
 
+  // 2026-11-27 用户反馈：本机 OpenAI 有 A、B 两个账号，自己的另两台电脑各登着 A、B，自动路由却列成本机加两台电脑三个成员，
+  // 同一份配额被当成两个来源(按额度挑时重复计算，A 满了还会换到另一台电脑上的 A)。只差账号集合是否完全相等的旧规则合不掉它们。
+  // 失效后果：另一台电脑上的同一个账号仍是成员。最小输入：本机两个账号，两台电脑各一个其中的账号；另有一台登着别的账号、
+  // 一台登着同一个账号但多一个本机没有的模型——这两台都要留下。
+  it('leaves out another computer whose accounts are all already in a member on this computer', () => {
+    const accounts = (keys: string[], models = ['gpt-6-luna', 'gpt-5.5']) =>
+      view('openai', 'OpenAI', 'codex', models, { subscriptionAccountKeys: keys });
+    const config = effectiveModelGroupsConfig({ routes: [] }, {
+      views: [accounts(['acct-a', 'acct-b']), ORGANIZATION], agents: AGENTS, available: () => true,
+      remote: new Map([
+        ['laptop', [accounts(['acct-a'])]],
+        ['mini', [accounts(['acct-b'])]],
+        ['other', [accounts(['acct-c'])]],
+        ['newer', [accounts(['acct-a'], ['gpt-6-luna', 'gpt-5.5', 'gpt-6-sol'])]],
+      ]),
+    });
+    expect(config.sourceRoutes?.[0].sources).toEqual([
+      { providerId: 'openai' }, { providerId: 'byok-1' },
+      { providerId: 'openai', agentDeviceId: 'other' }, { providerId: 'openai', agentDeviceId: 'newer' },
+    ]);
+    const where = childrenOf(config, 'auto:openai').flatMap((route) => route.candidates.map((item) => item.agentDeviceId ?? 'local'));
+    expect(where).not.toContain('laptop');
+    expect(where).not.toContain('mini');
+    // newer 因多了 gpt-6-sol 保留为成员，但在本机已覆盖的 gpt-6-luna / gpt-5.5 上不再重复展开同一账号。
+    const byModel = new Map(childrenOf(config, 'auto:openai').map((route) => [route.name, route.candidates.map((item) => item.agentDeviceId ?? 'local')]));
+    expect(byModel.get('GPT-6-SOL')).toEqual(['newer']);
+    expect(byModel.get('GPT-6-LUNA')).not.toContain('newer');
+    expect(byModel.get('GPT-5.5')).not.toContain('newer');
+  });
+
+  // 2026-11-28 用户验收反馈：真实多机下 另一台电脑 关闭了 Fast（allowFast: false / supportsFastMode: false）而本机开启了 Fast，
+  // 且远端历史自定义连接带有不同目录元数据（effortsUnknown、imageModels 差异）或多了 1 个旧型号（gpt-5.3-codex-spark）。
+  // 失效后果：此前复用浏览列表的 subscriptionModelsCoveredBy 对 allowFast 做严格相等 ===，导致 另一台电脑 无法被去重；
+  // 仅靠成员级去重也让多 1 个旧型号的远端在共同模型上重复成为候选。
+  // 最小输入：本机池 [A, B]（allowFast: true、含 imageModels）+ laptop [A]（allowFast: false、无 imageModels）+ mini [B]（多 1 个旧模型）。
+  it('deduplicates across Fast policy and metadata differences and avoids duplicate candidates on shared models', () => {
+    const local = view('openai', 'OpenAI', 'codex', ['gpt-6.2-sol', 'gpt-6.2-astra'], {
+      subscriptionAccountKeys: ['acct-a', 'acct-b'],
+      subscriptionFastPolicy: { allowFast: true, groupAllowsFast: true },
+      imageModels: [{ id: 'openai/gpt-image-2', name: 'GPT Image Gen' }],
+    });
+    local.models.codex = local.models.codex!.map((model) => ({
+      ...model, supportsFastMode: true, supportsUltrafastMode: true, effortsUnknown: false,
+    }));
+    const laptop = view('openai-remote-a', 'OpenAI · a', 'codex', ['gpt-6.2-sol', 'gpt-6.2-astra'], {
+      source: 'user',
+      logoKind: 'openai',
+      subscriptionAccountKeys: ['acct-a'],
+      subscriptionFastPolicy: { allowFast: false, groupAllowsFast: true },
+    });
+    laptop.models.codex = laptop.models.codex!.map((model) => ({
+      ...model, supportsFastMode: false, supportsUltrafastMode: false,
+    }));
+    const mini = view('openai-remote-b', 'OpenAI · b', 'codex', ['gpt-6.2-sol', 'gpt-6.2-astra', 'gpt-5.3-codex-spark'], {
+      source: 'user',
+      logoKind: 'openai',
+      subscriptionAccountKeys: ['acct-b'],
+      subscriptionFastPolicy: { allowFast: true, groupAllowsFast: true },
+    });
+
+    const config = effectiveModelGroupsConfig({ routes: [] }, {
+      views: [local, ORGANIZATION], agents: AGENTS, available: () => true,
+      remote: new Map([['laptop', [laptop]], ['mini', [mini]]]),
+    });
+    expect(config.sourceRoutes?.[0].sources).toEqual([
+      { providerId: 'openai' },
+      { providerId: 'byok-1' },
+      { providerId: 'openai-remote-b', agentDeviceId: 'mini' },
+    ]);
+    const expanded = new Map(childrenOf(config, 'auto:openai').map((route) => [route.name, route.candidates.map((item) => item.agentDeviceId ?? 'local')]));
+    expect(expanded.get('GPT-6.2-SOL')).toEqual(['local']);
+    expect(expanded.get('GPT-6.2-ASTRA')).toEqual(['local']);
+    expect(expanded.get('GPT-5.3-CODEX-SPARK')).toEqual(['mini']);
+  });
+
+  // 2026-11-27 review(Greptile P1)：去重不能让已停用(off: true)或本机无法运行对应引擎的成员充当保留方，
+  // 否则会把远端唯一可用的来源删掉，导致已选路由无可用候选。
+  // 失效后果：远端 laptop 被错误滤除，展开后无可用候选。最小输入：本机 [A, B] + 远端 laptop [A]，分别测试本机被停用、本机缺 codex 引擎、
+  // 以及本机 codex 经 available 判定不可用三种情况——laptop 都必须保留并展开为可用候选。
+  it('keeps a covered remote computer when the local member is turned off or cannot run the engine', () => {
+    const accounts = (keys: string[]) => view('openai', 'OpenAI', 'codex', ['gpt-6-luna'], { subscriptionAccountKeys: keys });
+    const local = accounts(['acct-a', 'acct-b']);
+    const laptop = accounts(['acct-a']);
+
+    const withLocalOff = effectiveModelGroupsConfig({
+      routes: [],
+      autoSources: { 'auto:openai': [{ providerId: 'openai', off: true }] },
+    }, { views: [local], agents: AGENTS, available: () => true, remote: new Map([['laptop', [laptop]]]) });
+    expect(withLocalOff.sourceRoutes?.[0].sources).toEqual([
+      { providerId: 'openai', off: true },
+      { providerId: 'openai', agentDeviceId: 'laptop' },
+    ]);
+    expect(childrenOf(withLocalOff, 'auto:openai')[0].candidates).toContainEqual(
+      expect.objectContaining({ providerId: 'openai', agentDeviceId: 'laptop' }),
+    );
+
+    const withoutLocalCodex = effectiveModelGroupsConfig({ routes: [] }, {
+      views: [local], agents: ['claude-code'], available: () => true, remote: new Map([['laptop', [laptop]]]),
+    });
+    expect(withoutLocalCodex.sourceRoutes?.[0].sources).toEqual([
+      { providerId: 'openai' },
+      { providerId: 'openai', agentDeviceId: 'laptop' },
+    ]);
+    expect(childrenOf(withoutLocalCodex, 'auto:openai')[0].candidates.map((item) => item.agentDeviceId)).toEqual(['laptop']);
+
+    const withLocalUnavailable = effectiveModelGroupsConfig({ routes: [] }, {
+      views: [local], agents: AGENTS, available: (candidate) => Boolean(candidate.agentDeviceId), remote: new Map([['laptop', [laptop]]]),
+    });
+    expect(withLocalUnavailable.sourceRoutes?.[0].sources).toEqual([
+      { providerId: 'openai' },
+      { providerId: 'openai', agentDeviceId: 'laptop' },
+    ]);
+    expect(childrenOf(withLocalUnavailable, 'auto:openai')[0].candidates.map((item) => item.agentDeviceId)).toEqual(['laptop']);
+  });
+
   it('drops the automatic route once fewer than two providers of the brand are connected', () => {
     const config = effective({ routes: [] }, [SUBSCRIPTION, { ...ORGANIZATION, connected: false } as ProviderView, GATEWAY]);
     expect(config.sourceRoutes).toBeUndefined();
@@ -210,4 +325,254 @@ describe('provider routes', () => {
     await expect(offerFor({ routes: [] })).resolves.toMatchObject({ providerId: 'byok-1', model: 'byok-codex/gpt-6-luna' });
     await expect(offerFor({ routes: [], autoSwitchOff: ['auto:openai'] })).resolves.toBeNull();
   });
+
+  // 2026-11-27 用户反馈(ACP 插件执行引擎如 Antigravity 无法加入智能路由，含本机插件与分享给自己的)：
+  // 本机 Antigravity 与分享来的 Antigravity 归同一家自动合成供应商路由，按模型展开出 agentKind='acp' 候选；
+  // 停用的本机引擎、未开启远程调用的远端引擎、被关掉的模型均不进入候选。
+  it('merges local and shared ACP plugin engines into an automatic route and expands their models', () => {
+    const localAgy = {
+      key: 'antigravity:agy',
+      providerId: 'acp-plugin:antigravity:agy',
+      ghostId: 'antigravity',
+      harnessId: 'agy',
+      name: 'Antigravity',
+      availability: { state: 'available' as const },
+      models: [
+        { id: 'gemini-4-neon', displayName: 'Gemini 4 Neon', efforts: ['medium' as const, 'high' as const] },
+        { id: 'local-only', displayName: 'Local Only' },
+      ],
+      permissionModes: [],
+      defaultPermissionMode: 'ask' as const,
+      remoteUse: { supported: true, enabled: true, shareSupported: true },
+    };
+    const sharedAgy = {
+      ...localAgy,
+      key: '_ns__local__antigravity:agy',
+      providerId: 'acp-plugin:_ns__local__antigravity:agy',
+      ghostId: '_ns__local__antigravity',
+      models: [
+        { id: 'gemini-4-neon', displayName: 'Gemini 4 Neon', efforts: ['high' as const] },
+      ],
+    };
+    const unsharedAgy = {
+      ...sharedAgy,
+      remoteUse: { supported: true, enabled: false, shareSupported: true },
+    };
+    const out = effectiveModelGroupsConfig({ routes: [] }, {
+      views: [],
+      agents: AGENTS,
+      pluginEngines: [localAgy],
+      remotePluginEngines: new Map([
+        ['share:dash-agy', [sharedAgy]],
+        ['dev-other', [unsharedAgy]],
+      ]),
+      available: () => true,
+    });
+    expect(out.sourceRoutes).toEqual([expect.objectContaining({
+      id: 'auto:antigravity',
+      name: 'Antigravity',
+      auto: true,
+      sources: [
+        { providerId: 'acp-plugin:antigravity:agy' },
+        { providerId: 'acp-plugin:_ns__local__antigravity:agy', agentDeviceId: 'share:dash-agy' },
+      ],
+    })]);
+    const expanded = childrenOf(out, 'auto:antigravity');
+    expect(expanded.map((item) => item.name)).toEqual(['Gemini 4 Neon', 'Local Only']);
+    expect(expanded[0]?.candidates).toEqual([
+      { agentKind: 'acp', providerId: 'acp-plugin:antigravity:agy', model: 'gemini-4-neon' },
+      { agentKind: 'acp', providerId: 'acp-plugin:_ns__local__antigravity:agy', model: 'gemini-4-neon', agentDeviceId: 'share:dash-agy' },
+    ]);
+    // 手动创建的供应商路由可混放内置供应商与 ACP 插件引擎。
+    const manual = effectiveModelGroupsConfig({
+      routes: [],
+      sourceRoutes: [{
+        id: 'sr-mix', name: 'Mix', strategy: 'order',
+        sources: [{ providerId: 'openai' }, { providerId: 'acp-plugin:antigravity:agy' }],
+      }],
+    }, {
+      views: [SUBSCRIPTION],
+      agents: AGENTS,
+      pluginEngines: [{ ...localAgy, disabledModels: [{ id: 'local-only', displayName: 'Local Only' }] }],
+      available: () => true,
+    });
+    const mixChildren = childrenOf(manual, 'sr-mix');
+    expect(mixChildren.some((item) => item.candidates.some((c) => c.agentKind === 'acp' && c.model === 'gemini-4-neon'))).toBe(true);
+    expect(mixChildren.some((item) => item.candidates.some((c) => c.model === 'local-only'))).toBe(false);
+  });
+
+  // 2026-11-28 用户裁决：路由选项里不出现再次合并的嵌套自动来源（无两层自动）。
+  // 本机多账号订阅池直接拆平为单账号来源，可逐个开关/排序/权重，并按单账号与本机并集对同账号远端去重。
+  // 失效后果：多账号池被包成单个 opaque 成员或无法单独关掉其中一个账号。
+  // 最小输入：本机 OpenAI 2 个账号 + OpenAI-Codex + 同账号远端 另一台电脑 + 带旧型号的远端 Mac mini + 分享来源。
+  it('flattens local multi-account pools into individual toggleable route sources and deduplicates covered remotes', () => {
+    const localOpenAi = view('openai', 'OpenAI', 'codex', ['gpt-6.2-sol', 'gpt-6.2-astra'], {
+      subscriptionAccountKeys: ['acct-a', 'acct-b'],
+      subscriptionFastPolicy: { allowFast: true },
+    });
+    const laptop = view('openai-remote-a', 'OpenAI', 'codex', ['gpt-6.2-sol', 'gpt-6.2-astra'], {
+      logoKind: 'openai',
+      subscriptionAccountKeys: ['acct-a'],
+      subscriptionFastPolicy: { allowFast: false },
+    });
+    const mini = view('openai-remote-b', 'OpenAI', 'codex', ['gpt-6.2-sol', 'gpt-5.3-codex-spark'], {
+      logoKind: 'openai',
+      subscriptionAccountKeys: ['acct-b'],
+    });
+    const shareAlex = view('openai', 'OpenAI', 'codex', ['gpt-6.2-sol'], { logoKind: 'openai' });
+    const byok = view('byok-1', 'OpenAI-Codex', 'codex', ['byok-codex/gpt-6.2-sol'], {
+      source: 'organization',
+      logoKind: 'openai-spectrum',
+    });
+    const localAccounts = new Map([
+      ['openai', [
+        { id: 'default', label: 'first@example.com', accountKey: 'acct-a', usable: true },
+        { id: 'second', label: 'second@example.com', accountKey: 'acct-b', usable: true },
+      ]],
+    ]);
+
+    const config = effectiveModelGroupsConfig({ routes: [] }, {
+      views: [localOpenAi, byok],
+      localAccounts,
+      agents: AGENTS,
+      remote: new Map([
+        ['laptop', [laptop]],
+        ['mini', [mini]],
+        ['share:alex', [shareAlex]],
+      ]),
+      available: () => true,
+    });
+    // 本机 2 个账号拆平为 2 个独立来源；另一台电脑 被本机 default 覆盖而剔除；mini 因多了旧型号保留；分享与 BYOK 各自独立。
+    expect(config.sourceRoutes?.[0]?.sources).toEqual([
+      { providerId: 'openai', accountId: 'default' },
+      { providerId: 'openai', accountId: 'second' },
+      { providerId: 'byok-1' },
+      { providerId: 'openai-remote-b', agentDeviceId: 'mini' },
+      { providerId: 'openai', agentDeviceId: 'share:alex' },
+    ]);
+    // 共同模型 gpt-6.2-sol 上 mini 的重复配额被剔除，只剩 4 个不重不漏的扁平来源。
+    const expanded = new Map(childrenOf(config, 'auto:openai').map((route) => [route.name, route.candidates]));
+    expect(expanded.get('GPT-6.2-SOL')?.map((c) => [c.providerId, c.accountId ?? null, c.agentDeviceId ?? null])).toEqual([
+      ['openai', 'default', null],
+      ['openai', 'second', null],
+      ['byok-1', null, null],
+      ['openai', null, 'share:alex'],
+    ]);
+    expect(expanded.get('GPT-5.3-CODEX-SPARK')?.map((c) => c.agentDeviceId)).toEqual(['mini']);
+
+    // 单独关掉第 2 个本机账号：只停用该账号，第 1 个账号与其余来源照常启用。
+    const withSecondOff = effectiveModelGroupsConfig({
+      routes: [],
+      autoSources: {
+        'auto:openai': [
+          { providerId: 'openai', accountId: 'default' },
+          { providerId: 'openai', accountId: 'second', off: true },
+          { providerId: 'byok-1' },
+        ],
+      },
+    }, {
+      views: [localOpenAi, byok],
+      localAccounts,
+      agents: AGENTS,
+      available: () => true,
+    });
+    expect(withSecondOff.sourceRoutes?.[0]?.sources).toEqual([
+      { providerId: 'openai', accountId: 'default' },
+      { providerId: 'openai', accountId: 'second', off: true },
+      { providerId: 'byok-1' },
+    ]);
+    const solWithOff = childrenOf(withSecondOff, 'auto:openai').find((r) => r.name === 'GPT-6.2-SOL');
+    expect(solWithOff?.candidates.map((c) => [c.providerId, c.accountId ?? null, c.off === true])).toEqual([
+      ['openai', 'default', false],
+      ['openai', 'second', true],
+      ['byok-1', null, false],
+    ]);
+
+    // 仅本机一个供应商但有 2 个账号时，也直接拆平合成单层 auto:openai，不再留两层自动。
+    const twoAccountsOnly = effectiveModelGroupsConfig({ routes: [] }, {
+      views: [localOpenAi],
+      localAccounts,
+      agents: AGENTS,
+      available: () => true,
+    });
+    expect(twoAccountsOnly.sourceRoutes?.[0]?.sources).toEqual([
+      { providerId: 'openai', accountId: 'default' },
+      { providerId: 'openai', accountId: 'second' },
+    ]);
+
+    // 手动建的供应商路由若仍引用未拆平的本机多账号供应商，读取时同样拆平并继承开关与权重。
+    const manualFlattened = effectiveModelGroupsConfig({
+      routes: [],
+      sourceRoutes: [{
+        id: 'custom-gpt', name: 'My GPT', strategy: 'weighted',
+        sources: [{ providerId: 'openai', weight: 3 }, { providerId: 'byok-1' }],
+      }],
+    }, {
+      views: [localOpenAi, byok],
+      localAccounts,
+      agents: AGENTS,
+      available: () => true,
+    });
+    expect(manualFlattened.sourceRoutes?.find((r) => r.id === 'custom-gpt')?.sources).toEqual([
+      { providerId: 'openai', accountId: 'default', weight: 3 },
+      { providerId: 'openai', accountId: 'second', weight: 3 },
+      { providerId: 'byok-1' },
+    ]);
+  });
+
+  // PR #13634 review, unit: a provider was split into account sources only while two accounts were
+  // unpaused. Pausing one in the account pool turned the other back into a whole-provider source, so the
+  // off switch, weight and position the user saved on that account no longer matched and it ran again.
+  // Minimal input: two accounts, the route turns the first off, then the second is paused in the pool.
+  it('keeps an account source and its saved off switch when the other account of the pool is paused', () => {
+    const localOpenAi = view('openai', 'OpenAI', 'codex', ['gpt-6.2-sol'], { subscriptionAccountKeys: ['acct-a', 'acct-b'] });
+    const byok = view('byok-1', 'OpenAI-Codex', 'codex', ['byok-codex/gpt-6.2-sol'], { source: 'organization', logoKind: 'openai-spectrum' });
+    const config = effectiveModelGroupsConfig({
+      routes: [],
+      autoSources: {
+        'auto:openai': [
+          { providerId: 'byok-1', weight: 2 },
+          { providerId: 'openai', accountId: 'default', off: true },
+          { providerId: 'openai', accountId: 'second' },
+        ],
+      },
+    }, {
+      views: [localOpenAi, byok],
+      localAccounts: new Map([['openai', [
+        { id: 'default', label: 'first@example.com', accountKey: 'acct-a', usable: true },
+        { id: 'second', label: 'second@example.com', accountKey: 'acct-b', usable: false, paused: true },
+      ]]]),
+      agents: AGENTS,
+      available: () => true,
+    });
+    expect(config.sourceRoutes?.[0]?.sources).toEqual([
+      { providerId: 'byok-1', weight: 2 },
+      { providerId: 'openai', accountId: 'default', off: true },
+    ]);
+    const sol = childrenOf(config, 'auto:openai').find((route) => route.name === 'GPT-6.2-SOL');
+    expect(sol?.candidates.map((c) => [c.providerId, c.accountId ?? null, c.off === true])).toEqual([
+      ['byok-1', null, false],
+      ['openai', 'default', true],
+    ]);
+  });
+});
+
+// Unit: current placement must not add old connection names alongside the
+// real slots. Preserve the per-account controls introduced by #13658.
+it.each(['subscription', 'mixed'] as const)('lists each real %s account once and restores a detached connection', kind => {
+  const aliases = [view('old-openai', 'Old subscription', 'codex', ['gpt-6-luna'], { logoKind: 'openai', subscriptionPoolAlias: true, subscriptionPoolTarget: 'openai' }),
+    ...(kind === 'mixed' ? [view('old-key', 'Old Key', 'codex', ['gpt-6-luna'], { logoKind: 'openai', subscriptionPoolAlias: true, subscriptionPoolTarget: 'openai' })] : [])];
+  const accounts = [{ id: 'default', label: 'Native A', usable: true }, { id: 'second', label: 'Native B', usable: true },
+    ...(kind === 'mixed' ? [{ id: 'key-member', label: 'Key', usable: true }] : [])];
+  const selected = accounts.map((account, index) => ({ providerId: 'openai', accountId: account.id, ...(index ? { weight: 7 } : { off: true as const }) }));
+  const stored: ModelGroupsConfig = { routes: [], autoSources: { 'auto:openai': [...selected, ...aliases.map(alias => ({ providerId: alias.id }))] } };
+  const read = (old: ProviderView[], local = accounts) => effectiveModelGroupsConfig(stored, {
+    views: [SUBSCRIPTION, ...old], agents: AGENTS, available: () => true, localAccounts: new Map([['openai', local]]),
+  });
+  const merged = read(aliases);
+  expect(merged.sourceRoutes?.find(route => route.auto)?.sources).toEqual(selected);
+  const shared = childrenOf(merged, 'auto:openai').find(route => route.name === 'GPT-6-LUNA')!;
+  expect(shared.candidates.map(({ providerId, accountId, off, weight }) => ({ providerId, accountId, ...(off ? { off } : {}), ...(weight ? { weight } : {}) }))).toEqual(selected);
+  const split = read(aliases.map(alias => ({ ...alias, subscriptionPoolAlias: undefined, subscriptionPoolTarget: undefined })), accounts.slice(0, 1));
+  expect(split.sourceRoutes?.find(route => route.auto)?.sources.some(source => source.providerId === aliases[0].id)).toBe(true);
 });

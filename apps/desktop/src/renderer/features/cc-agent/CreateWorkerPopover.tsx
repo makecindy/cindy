@@ -20,7 +20,7 @@ import { Button } from '@/components/ui/button';
 import { ErrorNotice } from '@/components/ui/error-notice';
 import { Select } from '@/components/ui/select';
 import { useModelPickerAgents } from '@/hooks/useAvailableAgents';
-import { usePluginEngines } from '@/hooks/usePluginEngines';
+import { usePickerPluginEngines } from '@/hooks/usePickerPluginEngines';
 import { resolveActivePluginEngine, type PluginEngineSelection } from '@/lib/pluginEngineSelection';
 import type { PluginEngineEffort } from '../../../shared/pluginEngines';
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
@@ -298,40 +298,57 @@ export function CreateWorkerPopover({
   const localProjectEnabled =
     !!leadSessionId && !leadDeviceId && !sshRemote && !executionDeviceId && !isSidebarWindow();
   const project = useWorkerProjectSelection(open, leadSessionId, localProjectEnabled);
-  // 选中的插件引擎；null = 用内置模型。引擎只在本机启动，worktree 与内置 Worker 相同。被停用、卸载或报告
-  // 不可用时按没选处理，回到下面的内置模型。
+  // 选中的插件引擎；null = 用内置模型。支持本机、同账号其他电脑与分享的插件引擎，也支持被控/远端执行电脑。
+  // 被停用、卸载或报告不可用时按没选处理，回到下面的内置模型。
   const [pluginEngine, setPluginEngine] = useState<PluginEngineSelection | null>(null);
   useEffect(() => { if (!open) setPluginEngine(null); }, [open]);
-  const pluginEnginesAllowed = pluginEnginesEnabled && !leadDeviceId && !sshRemote && !executionDeviceId;
+  useEffect(() => { setPluginEngine(null); }, [executionDeviceId]);
+  const pluginEnginesAllowed = pluginEnginesEnabled && !sshRemote;
+  const rememberedPluginDeviceIds = useMemo(
+    () => (pluginEngine?.deviceId ? [pluginEngine.deviceId] : []),
+    [pluginEngine?.deviceId],
+  );
   // 面板常驻挂载：只在打开期间订阅引擎列表，关闭即停止。
-  const pluginEngineList = usePluginEngines(open && pluginEnginesAllowed);
+  const pickerPluginEngines = usePickerPluginEngines({
+    enabled: open && pluginEnginesAllowed,
+    hostDeviceId: workerHostDeviceId,
+    rememberedDeviceIds: rememberedPluginDeviceIds,
+  });
   const activePluginEngine = useMemo(
-    () => (pluginEnginesAllowed ? resolveActivePluginEngine(pluginEngineList, pluginEngine) : null),
-    [pluginEnginesAllowed, pluginEngineList, pluginEngine],
+    () => (pluginEnginesAllowed ? resolveActivePluginEngine(pickerPluginEngines.engines, pluginEngine) : null),
+    [pluginEnginesAllowed, pickerPluginEngines.engines, pluginEngine],
   );
   const pluginEnginePicker = useMemo(
-    () => pluginEnginesAllowed && pluginEngineList.length
+    () => pluginEnginesAllowed && (pickerPluginEngines.hasSources || !!pluginEngine)
       ? {
-          engines: pluginEngineList,
+          engines: pickerPluginEngines.engines,
           active: activePluginEngine
             ? {
                 providerId: activePluginEngine.engine.providerId,
                 modelId: activePluginEngine.modelId,
+                ...(activePluginEngine.engine.deviceId ? { deviceId: activePluginEngine.engine.deviceId } : {}),
                 ...(activePluginEngine.effort ? { effort: activePluginEngine.effort } : {}),
               }
             : null,
+          readCatalogue: pickerPluginEngines.readCatalogue,
           onSelect: (selection: PluginEngineSelection) => {
             setModelGroup(null);
-            // 插件引擎只在这台电脑运行：Worker 的 Agent 位置一并收回本机。
-            setAgentDeviceId(null);
+            setAgentDeviceId(selection.deviceId ?? null);
             setPluginEngine((previous) => {
-              const effort = selection.effort ?? previous?.effort;
-              return { providerId: selection.providerId, modelId: selection.modelId, ...(effort ? { effort } : {}) };
+              const sameChoice = previous?.providerId === selection.providerId
+                && (previous?.deviceId ?? null) === (selection.deviceId ?? null);
+              const effort = selection.effort ?? (sameChoice ? previous?.effort : undefined);
+              return {
+                providerId: selection.providerId,
+                modelId: selection.modelId,
+                ...(selection.deviceId ? { deviceId: selection.deviceId } : {}),
+                ...(effort ? { effort } : {}),
+              };
             });
           },
         }
       : undefined,
-    [pluginEnginesAllowed, pluginEngineList, activePluginEngine],
+    [pluginEnginesAllowed, pickerPluginEngines.hasSources, pickerPluginEngines.engines, pickerPluginEngines.readCatalogue, pluginEngine, activePluginEngine],
   );
   const trimmedRemoteDir = remoteDir.trim();
   const remoteDirInvalid =
@@ -377,7 +394,7 @@ export function CreateWorkerPopover({
     && sshRemote !== true
     && (!executionDeviceId || executionDevice?.supportsAgentDevice === true)
     && (!leadDeviceId || hostCaps.capabilities?.supportsOrcaWorkerAgentDevice === true);
-  const modelGroupsAllowed = open && !sshRemote
+  const modelGroupsAllowed = open
     && (!leadDeviceId || taskHostCaps?.supportsOrcaWorkerModelGroup === true)
     && (!executionDeviceId || executionDevice?.supportsModelGroup === true);
   const localModelGroups = useModelGroups(modelGroupsAllowed && !workerHostDeviceId);
@@ -391,8 +408,8 @@ export function CreateWorkerPopover({
           setPluginEngine(null);
           setModelGroup(selection.id);
         },
-        // 本机的 Worker：合并整个供应商的路由像一个供应商列出来，选其中的模型后补记路由(另一台电脑的配置里没有这类路由)。
-        ...(workerHostDeviceId ? {} : {
+        // 合并整个供应商的路由像一个供应商列出来，选其中的模型后补记路由(SSH 不合并跨机供应商路由)。
+        ...(sshRemote ? {} : {
           onAttach: (selection) => {
             setPluginEngine(null);
             setModelGroup(selection.id);
@@ -1155,7 +1172,7 @@ export function CreateWorkerPopover({
     }
     setIsSubmitting(true);
     if (activePluginEngine) {
-      // 插件引擎 Worker：在这台电脑运行，不用内置模型目录、来源与 Fast；内置模型的记忆不改。
+      // 插件引擎 Worker：支持本机、其他电脑与分享；不用内置模型目录、来源与 Fast；内置模型的记忆不改。
       try {
         await onCreate({
           ...(localProjectEnabled ? project.fields : {}),
@@ -1168,7 +1185,14 @@ export function CreateWorkerPopover({
           ...(supportsWorkerPermissionModeSelection
             ? { workerPermissionMode: selectedWorkerPermissionMode }
             : {}),
-          ...(agentLocationSelectable ? { agentDeviceId: null } : {}),
+          ...(executionDevice
+            ? {
+                executionDeviceId: executionDevice.deviceId,
+                executionDeviceName: executionDevice.name,
+                ...(remoteDirMode === 'path' ? { workingDir: trimmedRemoteDir } : {}),
+              }
+            : {}),
+          ...(agentLocationSelectable ? { agentDeviceId: activePluginEngine.engine.deviceId ?? null } : {}),
         });
       } finally {
         submittingRef.current = false;
@@ -1419,15 +1443,20 @@ export function CreateWorkerPopover({
               </Dialog.Description>
             ) : null}
           </div>
-          <button
-            type="button"
-            aria-label={t('orca.createWorker.closeAria')}
-            className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-lg text-[var(--text-tertiary)] hover:text-[var(--text-primary)]"
-            disabled={isSubmitting}
-            onClick={handleClose}
-          >
-            <X size={15} />
-          </button>
+          {/* 28px 方形图标按钮;-m-0.5 让它在排版里仍只占原来的 24px,图标中心和标题行高度不变。 */}
+          <Tip text={t('orca.createWorker.closeAria')}>
+            <Button
+              size="sm"
+              variant="secondary"
+              tone="quiet"
+              aria-label={t('orca.createWorker.closeAria')}
+              className="-m-0.5 w-7 px-0"
+              disabled={isSubmitting}
+              onClick={handleClose}
+            >
+              <X size={15} aria-hidden />
+            </Button>
+          </Tip>
         </div>
 
         {/* 角色:先选让 Worker 做哪类事,选中即带回这个角色上次用的任务文字、模型和权限;内置的检查类
@@ -1553,6 +1582,7 @@ export function CreateWorkerPopover({
                       ? ORCA_WORKER_PERMISSION_MODES
                       : AUTO_ONLY_WORKER_PERMISSION_MODES
                   }
+                  pluginEngineModes={activePluginEngine?.engine.permissionModes}
                 />
               </div>
             )}
@@ -1570,6 +1600,7 @@ export function CreateWorkerPopover({
                 fastModeConfigurable={['codex', 'pi']}
                 unifiedAgents={pickerAgents}
                 modelGroups={workerModelGroups}
+                readModelGroupDevices={modelGroupsAllowed && workerHostDeviceId ? remoteModelGroups.read : undefined}
                 onUnifiedSelect={deviceId && remoteProviders.unsupported ? undefined : (selection) => {
                   if (selection.agentDevice !== undefined && executionDeviceId && !agentLocationSelectable) return;
                   setPluginEngine(null);
@@ -1651,8 +1682,7 @@ export function CreateWorkerPopover({
           </div>
         </div>
         <FieldVoiceInputNotice
-          error={taskVoice.lastError}
-          speakerFiltered={taskVoice.speakerFiltered}
+          {...taskVoice.noticeProps}
           className="-mt-2 mb-4"
         />
         {activePluginEngine || modelGroup ? null : noAvailableLocalModels ? (
@@ -1766,6 +1796,8 @@ export function CreateWorkerPopover({
 
 const FIELD_LABEL_CLASS =
   'mb-2 text-12 font-medium uppercase tracking-[0.5px] text-[var(--text-tertiary)]';
+/** 标签里带用户起的名字(如设备名)时不转大写,和「让 Worker 做什么」同理:专有名词保持原样。 */
+const NAMED_FIELD_LABEL_CLASS = 'mb-2 text-12 font-medium text-[var(--text-tertiary)]';
 
 /** 弹窗内的单选胶囊(预设、其他电脑上的目录方式)。 */
 function choiceChipClass(checked: boolean): string {
@@ -1833,7 +1865,7 @@ function ExecutionDeviceField({
       </div>
       {selected ? (
         <div>
-          <div className={FIELD_LABEL_CLASS}>
+          <div className={NAMED_FIELD_LABEL_CLASS}>
             {t('orca.createWorker.remoteDirLabel', { device: selected.name })}
           </div>
           <div

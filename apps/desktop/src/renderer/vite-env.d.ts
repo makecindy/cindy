@@ -282,6 +282,8 @@ type VoiceInputDictionaryLearningAction =
 type VoiceInputSettingsData = import('../shared/voiceInputData').VoiceInputSettings;
 type VoiceSpeakerFilterStatusData = import('../shared/voiceSpeakerFilter').VoiceSpeakerFilterStatus;
 type VoiceSpeakerEnrollResultData = import('../shared/voiceSpeakerFilter').VoiceSpeakerEnrollResult;
+type VoiceLocalAsrStatusData = import('../shared/voiceLocalAsr').VoiceLocalAsrStatus;
+type VoiceLocalAsrChooseDirResultData = import('../shared/voiceLocalAsr').VoiceLocalAsrChooseDirResult;
 type VoiceInputSettingsPatchData = import('../shared/voiceInputData').VoiceInputSettingsPatch;
 type VoiceInputHistoryEntryData = import('../shared/voiceInputData').VoiceInputHistoryEntry;
 type VoiceInputDataSnapshot = import('../shared/voiceInputData').VoiceInputDataSnapshot;
@@ -315,7 +317,7 @@ type VoiceInputModelSelectionResultData = {
     id: VoiceInputProviderKindData;
     model: string;
     mode: VoiceInputAsrModeData;
-    auth: 'api-key' | 'codex';
+    auth: 'api-key' | 'codex' | 'local';
   }>;
   refinerProfiles: Array<{
     id: VoiceInputRefinerProviderKindData;
@@ -327,11 +329,15 @@ type VoiceInputModelSelectionResultData = {
     ok: boolean;
     provider: VoiceInputProviderKindData;
     providerModel: string;
-    auth: 'api-key' | 'codex';
+    auth: 'api-key' | 'codex' | 'local';
     settingsTab: 'api-keys' | 'connections' | 'providers';
     error?: string;
     failureReason?:
-      'custom-asr-config-missing' | 'custom-asr-key-missing' | 'codex-realtime-unsupported';
+      | 'custom-asr-config-missing'
+      | 'custom-asr-key-missing'
+      | 'codex-realtime-unsupported'
+      | 'local-asr-model-missing'
+      | 'local-asr-unsupported';
   };
   customAsrApiKeyConfigured: boolean;
 };
@@ -1239,6 +1245,8 @@ interface ElectronAPI {
   /** 当前 Desktop 构建是否具备 Beta 更新渠道。 */
   supportsBetaUpdateChannel?: boolean;
   windowBackdropMaterial: import('../shared/windowBackdrop').WindowsBackdropMaterial;
+  /** 硬件加速回退(软件渲染)模式标记：渲染进程据此关闭昂贵的 CSS backdrop-filter。 */
+  gpuFallback?: boolean;
   onWindowBackdropMaterialChanged?: (
     cb: (material: import('../shared/windowBackdrop').WindowsBackdropMaterial) => void,
   ) => () => void;
@@ -1396,15 +1404,17 @@ interface ElectronAPI {
   /** 模型组：路线与模式的配置，以及把选中的一项解析成现在能用的具体模型。 */
   modelGroups: {
     commit: (decisionId: string) => Promise<boolean>;
-    get: () => Promise<import('../shared/modelGroups').ModelGroupsConfig>;
+    get: (options?: import('../shared/modelGroups').ModelGroupGetOptions) => Promise<import('../shared/modelGroups').ModelGroupsConfig>;
     set: (config: import('../shared/modelGroups').ModelGroupsConfig) => Promise<import('../shared/modelGroups').ModelGroupsConfig>;
     resolve: (request: import('../shared/modelGroups').ModelGroupResolveRequest) => Promise<import('../shared/modelGroups').ModelGroupResolveResult>;
     decisions: () => Promise<import('../shared/modelGroupDecisions').ModelGroupDecision[]>;
     bindSession: (request: {
       sessionId: string;
       selection: import('../shared/modelGroups').ModelGroupSelection;
-      route: Pick<import('../shared/modelGroups').ModelGroupResolvedRoute, 'agentKind' | 'providerId' | 'model'>;
+      route: Pick<import('../shared/modelGroups').ModelGroupResolvedRoute, 'agentKind' | 'providerId' | 'model' | 'agentDeviceId'>;
     }) => Promise<void>;
+    unbindSession: (request: { sessionId: string }) => Promise<{ ok: boolean; unbound: boolean }>;
+    getSessionBinding: (request: { sessionId: string }) => Promise<import('../shared/modelGroups').ModelGroupSessionBindingView | null>;
     switchOffer: (request: { sessionId: string }) => Promise<import('../shared/modelGroups').ModelGroupSwitchOffer | null>;
   },
 
@@ -1906,6 +1916,11 @@ interface ElectronAPI {
       sourceLanguage?: string;
       refinementEnabled?: boolean;
     }) => Promise<{ ok: true }>;
+    prewarmOnPress?: (payload?: {
+      sourceLanguage?: string;
+      refinementEnabled?: boolean;
+    }) => Promise<{ ok: true }>;
+    discardPressPrewarm?: () => Promise<{ ok: true }>;
     getBenchmarkFixtureAudio: () => Promise<
       { ok: true; path: string; wav: ArrayBuffer } | { ok: false }
     >;
@@ -1936,40 +1951,34 @@ interface ElectronAPI {
     getReadiness: () => Promise<{
       ok: boolean;
       serviceMode: VoiceInputServiceModeData;
-      provider:
-        | 'custom-realtime-asr'
-        | 'elevenlabs-scribe-realtime'
-        | 'openai-realtime-whisper'
-        | 'litellm-gpt-realtime-whisper'
-        | 'litellm-qwen3-asr-flash-realtime'
-        | 'litellm-volcengine-sauc-asr'
-        | 'litellm-batch';
+      provider: VoiceInputProviderKindData;
       providerModel: string;
-      auth: 'api-key' | 'codex';
+      auth: 'api-key' | 'codex' | 'local';
       settingsTab: 'api-keys' | 'connections' | 'providers';
       error?: string;
       authErrorReason?: string;
       failureReason?:
-        'custom-asr-config-missing' | 'custom-asr-key-missing' | 'codex-realtime-unsupported';
+        | 'custom-asr-config-missing'
+        | 'custom-asr-key-missing'
+        | 'codex-realtime-unsupported'
+        | 'local-asr-model-missing'
+        | 'local-asr-unsupported';
     }>;
     getReadinessCached: () => {
       ok: boolean;
       serviceMode: VoiceInputServiceModeData;
-      provider:
-        | 'custom-realtime-asr'
-        | 'elevenlabs-scribe-realtime'
-        | 'openai-realtime-whisper'
-        | 'litellm-gpt-realtime-whisper'
-        | 'litellm-qwen3-asr-flash-realtime'
-        | 'litellm-volcengine-sauc-asr'
-        | 'litellm-batch';
+      provider: VoiceInputProviderKindData;
       providerModel: string;
-      auth: 'api-key' | 'codex';
+      auth: 'api-key' | 'codex' | 'local';
       settingsTab: 'api-keys' | 'connections' | 'providers';
       error?: string;
       authErrorReason?: string;
       failureReason?:
-        'custom-asr-config-missing' | 'custom-asr-key-missing' | 'codex-realtime-unsupported';
+        | 'custom-asr-config-missing'
+        | 'custom-asr-key-missing'
+        | 'codex-realtime-unsupported'
+        | 'local-asr-model-missing'
+        | 'local-asr-unsupported';
     } | null;
     getModelSelection: () => Promise<VoiceInputModelSelectionResultData>;
     setModelSelection: (patch: {
@@ -1990,6 +1999,7 @@ interface ElectronAPI {
     openSettings: (tab: 'voice-input' | 'providers') => Promise<{ ok: true }>;
     start: (params?: {
       recordingId?: string;
+      mode?: 'dictation' | 'rewrite';
       sourceLanguage?: string;
       refinementEnabled?: boolean;
       refinementCacheScope?: string;
@@ -2017,7 +2027,15 @@ interface ElectronAPI {
     >;
     deleteDictionaryEntries: (entryIds: string[]) => Promise<VoiceInputSettingsData>;
     addDictionaryEntry: (text: string) => Promise<VoiceInputSettingsData>;
-    importDictionaryEntries: (texts: string[]) => Promise<VoiceInputSettingsData>;
+    importDictionaryEntries: (
+      entries: Array<string | { text: string; aliases?: string[] }>,
+    ) => Promise<VoiceInputSettingsData>;
+    promoteDictionaryCandidate: (text: string) => Promise<VoiceInputSettingsData>;
+    deleteDictionaryCandidate: (text: string) => Promise<VoiceInputSettingsData>;
+    restoreSuppressedDictionaryTerm: (
+      text: string,
+      options?: { addToDictionary?: boolean },
+    ) => Promise<VoiceInputSettingsData>;
     renameDictionaryEntry: (entryId: string, text: string) => Promise<VoiceInputSettingsData>;
     editDictionaryEntry: (
       entryId: string,
@@ -2031,7 +2049,7 @@ interface ElectronAPI {
     getHistory: (limit?: number) => VoiceInputHistoryEntryData[];
     getHistoryForRefinement: () => VoiceInputHistoryEntryData[];
     recordHistory: (text: string) => string | null;
-    updateHistoryEntry: (id: string, text: string) => void;
+    updateHistoryEntry: (id: string, text: string, rawText?: string) => void;
     deleteHistoryEntry: (id: string) => void;
     onDataChanged: (callback: (payload: VoiceInputDataSnapshot) => void) => () => void;
     /** 「识别我的声音」:模型与声纹都留在本机,Renderer 只拿到状态。 */
@@ -2043,6 +2061,13 @@ interface ElectronAPI {
       enroll: (clips: ArrayBuffer[]) => Promise<VoiceSpeakerEnrollResultData>;
       deleteProfile: () => Promise<VoiceSpeakerFilterStatusData>;
       onStatusChanged: (callback: (status: VoiceSpeakerFilterStatusData) => void) => () => void;
+    };
+    /** 本地离线语音识别（sherpa-onnx）：纯端侧推理，无需云账号与 API Key。 */
+    localAsr: {
+      getStatus: () => Promise<VoiceLocalAsrStatusData>;
+      chooseModelDir: () => Promise<VoiceLocalAsrChooseDirResultData>;
+      clearModelDir: () => Promise<VoiceLocalAsrStatusData>;
+      onStatusChanged: (callback: (status: VoiceLocalAsrStatusData) => void) => () => void;
     };
     /** options.suspend = 录制期挂起（故意与存盘不同）；不带它的请求会被 main 按存盘校验。 */
     setGlobalShortcut: (
@@ -2405,6 +2430,13 @@ interface ElectronAPI {
   }>;
   authGetLoginState: () => Promise<DesktopLoginActionResult>;
   authDispatchLoginAction: (action: DesktopLoginAction) => Promise<DesktopLoginActionResult>;
+  /** 扫码登录：本机已登录，为另一台设备出码；凭据只在 main。 */
+  authQrHandoffCreate: () => Promise<import('../shared/authIpc').DesktopQrHandoffResult>;
+  authQrHandoffState: (handoffId: string) => Promise<import('../shared/authIpc').DesktopQrHandoffStateResult>;
+  authQrHandoffDecide: (
+    handoffId: string,
+    approve: boolean,
+  ) => Promise<import('../shared/authIpc').DesktopQrHandoffDecisionResult>;
   /** 登录 captcha 托管挑战页地址(不含 query);LoginCaptchaOverlay 装载 webview 用。 */
   authGetCaptchaChallengeUrl: () => Promise<string>;
   authLogout: () => Promise<void>;
@@ -2599,6 +2631,30 @@ interface ElectronAPI {
 
   // ── 伙伴自有 IM 机器人连接(Telegram / 飞书, 伙伴设置「消息平台」页)──
   botImConnection: {
+    /** 个人 bot 的「谁来回复」(可选：旧 preload 没有)。 */
+    getPersonalReplyTarget?: (payload: {
+      channel: import('../shared/botImConnection').PersonalReplyTargetChannel;
+    }) => Promise<import('../shared/botImConnection').PersonalReplyTargetState>;
+    /** 切换前有排队消息或运行中的任务 → PRECONDITION_FAILED；伙伴不可用 → NOT_FOUND。 */
+    setPersonalReplyTarget?: (payload: {
+      channel: import('../shared/botImConnection').PersonalReplyTargetChannel;
+      companionBotId: string | null;
+    }) => Promise<import('../shared/botImConnection').PersonalReplyTargetState>;
+    onPersonalReplyTargetChanged?: (
+      listener: (state: import('../shared/botImConnection').PersonalReplyTargetState) => void,
+    ) => () => void;
+    /** 个人机器人的项目选择(可选：旧 preload 没有)。 */
+    getPersonalChannel?: (payload: {
+      channel: import('../shared/botImConnection').PersonalChannelState['channel'];
+    }) => Promise<import('../shared/botImConnection').PersonalChannelState>;
+    /** 只能选侧栏里的本机项目；不认识的目录 → NOT_FOUND。 */
+    setPersonalChannelProject?: (payload: {
+      channel: import('../shared/botImConnection').PersonalChannelState['channel'];
+      projectDir: string | null;
+    }) => Promise<import('../shared/botImConnection').PersonalChannelState>;
+    onPersonalChannelChanged?: (
+      listener: (state: import('../shared/botImConnection').PersonalChannelState) => void,
+    ) => () => void;
     getIMessageConfig?: (payload: { id: string }) => Promise<import('../shared/botImConnection').BotIMessageConfig>;
     updateIMessageConfig?: (payload: { id: string; config: import('../shared/botImConnection').BotIMessageUpdateInput }) => Promise<import('../shared/botImConnection').BotImConnectionListPayload>;
 
@@ -2727,7 +2783,7 @@ interface ElectronAPI {
     cancelAuthorization: () => Promise<{ ok: true }>;
     unbind: () => Promise<{ ok: true }>;
     getChannelSettings: () => Promise<WechatChannelSettingsState>;
-    setCompanion: (botId: string | null) => Promise<WechatChannelSettingsState>;
+    setCompanion: (botId: string | null, options?: { allowReassign?: boolean }) => Promise<WechatChannelSettingsState>;
     onChannelSettingsChange: (callback: (state: WechatChannelSettingsState) => void) => () => void;
     chooseWorkingDirectory: () => Promise<{
       canceled: boolean;
@@ -3346,6 +3402,7 @@ interface ElectronAPI {
         | { type: 'installed-plugin'; ghostId?: string }
         | { type: 'gift-card'; code: string }
         | { type: 'settings-navigation'; target: import('@cindy/maker-shared/settings-navigation').SettingsNavigationTarget }
+        | { type: 'plugin-engine-settings'; engineKey: string }
         | { type: 'settings'; tab: 'voice-input' | 'providers' | 'billing' | 'remote-control' | 'builtin-tools' | 'im-bot'; focusDeviceId?: string; connect?: string; intent?: 'topup'; imGroup?: 'cindy' | 'personal' },
     ) => void,
   ) => () => void;
@@ -3372,6 +3429,7 @@ interface ElectronAPI {
     | { type: 'installed-plugin'; ghostId?: string }
     | { type: 'gift-card'; code: string }
     | { type: 'settings-navigation'; target: import('@cindy/maker-shared/settings-navigation').SettingsNavigationTarget }
+    | { type: 'plugin-engine-settings'; engineKey: string }
     | { type: 'settings'; tab: 'voice-input' | 'providers' | 'billing' | 'remote-control' | 'builtin-tools' | 'im-bot'; focusDeviceId?: string; connect?: string; intent?: 'topup'; imGroup?: 'cindy' | 'personal' }
     | null
   >;
@@ -4494,7 +4552,7 @@ interface ElectronAPI {
     openLink: (deviceId: string) => Promise<{ appVersion: string; allowlistHash: string }>;
     closeLink: (deviceId: string) => Promise<{ ok: true }>;
     /** 远程调用被控端 allowlist 内 channel;成功拿返回值,失败 reject 带 code 的 Error */
-    invoke: (deviceId: string, channel: string, args: unknown[], scheduling?: { background?: boolean }) => Promise<unknown>;
+    invoke: (deviceId: string, channel: string, args: unknown[], scheduling?: { background?: boolean; requireStructuredHistoryMiss?: boolean }) => Promise<unknown>;
     /** 控制端:订阅被控端某 topic 的变更推送(push 驱动侧边栏 / 会话视图) */
     subscribe: (deviceId: string, topics: string[]) => Promise<{ ok: true }>;
     /** 控制端:取消订阅某 topic */
@@ -4800,6 +4858,7 @@ interface ElectronAPI {
   worktreeCheckout: (req: import('../shared/worktreeCheckout').CheckoutRequest) => Promise<import('../shared/worktreeCheckout').CheckoutReply>;
   worktreeBranchSyncStatus: (req: import('../shared/worktreeBranchSync').BranchSyncRequest) => Promise<import('../shared/worktreeBranchSync').BranchSyncStatus>;
   worktreeSyncBranch: (req: import('../shared/worktreeBranchSync').BranchSyncRequest) => Promise<import('../shared/worktreeBranchSync').BranchSyncReply>;
+  worktreeWorkspaceClutterSummary?: (req: import('../shared/worktreeWorkspaceClutter').WorkspaceClutterRequest) => Promise<import('../shared/worktreeWorkspaceClutter').WorkspaceClutterSummary>;
   worktreeListBranches: (req: {
     baseRepo: string;
   }) => Promise<import('@/lib/worktree.types').ListBranchesResp>;
@@ -4843,6 +4902,12 @@ interface ElectronAPI {
     /** Official X assignment, compared with the caller's last observed value. */
     setXCompanion: (botId: string | null, expectedBotId: string | null) =>
       Promise<{ hook: import('../shared/hookControlIpc').SlackHookView }>;
+    /** 官方渠道交给哪位伙伴(可选：旧 preload 没有), 与调用方上次看到的值比较后写入。 */
+    setProviderCompanion?: (
+      provider: 'slack' | 'telegram' | 'feishu' | 'discord' | 'x',
+      botId: string | null,
+      expectedBotId: string | null,
+    ) => Promise<{ hook: import('../shared/hookControlIpc').SlackHookView }>;
     setProviderDefaultWorkspace: (
       provider: 'telegram' | 'x' | 'feishu' | 'discord',
       alias: string | null,
@@ -4920,6 +4985,7 @@ interface ElectronAPI {
       teamId: string | null;
       workspace: string;
       providerId: string | null;
+      modelGroup?: string | null;
     }) => Promise<{
       entries: import('../shared/hookControlIpc').HookWorkspaceProviderSourceEntry[];
     }>;
@@ -4980,11 +5046,18 @@ interface ElectronAPI {
         repo: string;
         prNumber: number;
       }>,
+      options?: { refresh?: boolean },
     ) => Promise<import('@/lib/gitContext.types').PrStatusResult[]>;
     onChanged: (
       cb: (data: import('@/lib/gitContext.types').GitContextSnapshot) => void,
     ) => () => void;
     onPrRefsChanged: (cb: (data: { sessionId: string }) => void) => () => void;
+    onPrStatusChanged: (
+      cb: (
+        data: import('@/lib/gitContext.types').PrStatusResult,
+        ownerStamp?: import('../shared/dataOwnerPush').DataOwnerPushStamp,
+      ) => void,
+    ) => () => void;
   };
 
   gitReview: {
@@ -5064,6 +5137,7 @@ interface ElectronAPI {
     push: (params: {
       sessionId: string;
       confirmForce?: import('@/lib/gitReview.types').ReviewPushConfirmForce;
+      syncBeforePush?: boolean;
     }) => Promise<import('@/lib/gitReview.types').ReviewPushResult>;
   };
 
@@ -6808,7 +6882,7 @@ interface ElectronAPI {
     listActive: () => Promise<
       Array<{
         sessionId: string;
-        agentKind: 'claude-code' | 'codex' | 'pi';
+        agentKind: 'claude-code' | 'codex' | 'pi' | 'acp';
         workDir: string;
         capabilities: unknown;
         isTurnRunning: boolean;
@@ -7132,6 +7206,33 @@ interface ElectronAPI {
       /** true = Codex 正忙, 存活会话的软重启在任务结束后自动补做 (设置已生效) */
       codexRestartDeferred: boolean;
     }>;
+    memoryTidyStatus: () => Promise<{
+      cadence: 'weekly' | 'biweekly' | 'monthly' | 'off';
+      isCustomCadence: boolean;
+      running: boolean;
+      lastRunAt: number | null;
+      lastOutcome: 'idle' | 'updated' | 'skipped' | 'error' | null;
+      lastSummary: string;
+      lastTouchedBots: string[];
+      nextEligibleAt: number | null;
+    }>;
+    memoryTidySetCadence: (
+      cadence: 'weekly' | 'biweekly' | 'monthly' | 'off' | null,
+    ) => Promise<{
+      cadence: 'weekly' | 'biweekly' | 'monthly' | 'off';
+      isCustomCadence: boolean;
+      running: boolean;
+      lastRunAt: number | null;
+      lastOutcome: 'idle' | 'updated' | 'skipped' | 'error' | null;
+      lastSummary: string;
+      lastTouchedBots: string[];
+      nextEligibleAt: number | null;
+    }>;
+    memoryTidyRun: () => Promise<{
+      outcome: 'idle' | 'updated' | 'skipped' | 'error';
+      summary: string;
+      touchedBots: string[];
+    }>;
 
     /** IM 新会话默认 agent/model/effort/provider。传 channel 时按渠道独立读写。 */
     imDefaultSettingsGet: (channel?: ImDefaultSettingsChannel) => Promise<ImDefaultSettingsState>;
@@ -7140,18 +7241,27 @@ interface ElectronAPI {
       channel?: ImDefaultSettingsChannel,
     ) => Promise<ImDefaultSettingsState>;
     imDefaultSettingsReset: (channel?: ImDefaultSettingsChannel) => Promise<ImDefaultSettingsState>;
-    /** 个人飞书 / Lark 机器人所在的群与各群单独的项目、模型、权限。 */
-    feishuGroupSettingsList: (options?: {
-      /** 用户点了「刷新」：不复用 30 秒内的群名单。 */
-      refresh?: boolean;
-      /** 只给收起时的群数与头像用：不解析项目模型（`project.config` 都是 null）。 */
-      summary?: boolean;
-    }) => Promise<import('../shared/feishuGroupSettings').FeishuGroupSettingsList>;
-    feishuGroupSettingsSet: (
+    /** 个人 IM 机器人的「群聊」总表: 所在的群与各群单独的项目、模型、权限、群成员也能提问。 */
+    imChatSettingsList: (
+      channel: import('../shared/imChatSettings').ImChatSettingsChannel,
+      options?: {
+        /** 用户点了「刷新」：不复用 30 秒内的群名单。 */
+        refresh?: boolean;
+        /** 只给收起时的群数与头像用：不解析项目模型（`project.config` 都是 null）。 */
+        summary?: boolean;
+      },
+    ) => Promise<import('../shared/imChatSettings').ImChatSettingsList>;
+    imChatSettingsSet: (
+      channel: import('../shared/imChatSettings').ImChatSettingsChannel,
       chatId: string,
-      patch: import('../shared/feishuGroupSettings').FeishuGroupSettingsPatch,
+      patch: import('../shared/imChatSettings').ImChatSettingsPatch,
       name: string | null,
-    ) => Promise<import('../shared/feishuGroupSettings').FeishuGroupSettingsView>;
+    ) => Promise<import('../shared/imChatSettings').ImChatSettingsView>;
+    imChatSettingsResumeMembers: (
+      channel: import('../shared/imChatSettings').ImChatSettingsChannel,
+      chatId: string,
+      name: string | null,
+    ) => Promise<import('../shared/imChatSettings').ImChatSettingsView>;
 
     /** 子代理模型覆盖。null 表示不注入覆盖，仅对新建 agent 会话生效。 */
     subagentModelSettingsGet: () => Promise<SubagentModelSettingsState>;

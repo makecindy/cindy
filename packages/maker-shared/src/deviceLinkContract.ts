@@ -30,6 +30,8 @@ export const DEVICE_LINK_VOICE_TRANSCRIBE_CHANNEL = 'device-link:voice:transcrib
 export const DEVICE_LINK_VOICE_CREDENTIAL_SYNC_CHANNEL = 'device-link:voice:credential-sync';
 export const DEVICE_LINK_VOICE_DICTIONARY_LEARNING_CHANNEL = 'device-link:voice:dictionary-learning';
 export const DEVICE_LINK_VOICE_DICTIONARY_GET_CHANNEL = 'device-link:voice:dictionary:get';
+/** 手机端通过同账号在线桌面编辑语音词典（增/改/删，含别名），由桌面 CRDT 落盘并同步全端。 */
+export const DEVICE_LINK_VOICE_DICTIONARY_MUTATE_CHANNEL = 'device-link:voice:dictionary:mutate';
 /** 桌面主动推给手机的只读词典快照；push 不受 remoteControlEnabled 控制门禁。 */
 export const DEVICE_LINK_VOICE_DICTIONARY_SNAPSHOT_CHANNEL =
   'device-link:voice:dictionary:snapshot';
@@ -205,6 +207,33 @@ export type MobileVoiceDictionarySnapshotResult =
       error: string;
     };
 
+export type MobileVoiceDictionaryMutateRequest =
+  | {
+      action: 'add';
+      text: string;
+      aliases?: string[];
+    }
+  | {
+      action: 'edit';
+      originalText: string;
+      text: string;
+      aliases: string[];
+    }
+  | {
+      action: 'delete';
+      text: string;
+    };
+
+export type MobileVoiceDictionaryMutateResult =
+  | {
+      ok: true;
+      snapshot: MobileVoiceDictionarySnapshotResult;
+    }
+  | {
+      ok: false;
+      error: string;
+    };
+
 export type MobileVoiceDictionaryLearningRequest = {
   source: 'mobile';
   rawTranscriptText?: string;
@@ -371,6 +400,8 @@ export interface MobileCodexRateLimitResetResult {
 
 /** 下一条消息发送时才会应用的跨 Agent 切换意图。 */
 export interface MobileSessionAgentSwitchIntent {
+  preparation?: 'preparing' | 'failed';
+  preparationError?: string;
   targetAgentKind: 'claude-code' | 'codex' | 'pi';
   model: string;
   providerId: string | null;
@@ -463,6 +494,7 @@ export const MOBILE_REMOTE_INVOKE_CHANNELS = [
   DEVICE_LINK_VOICE_TRANSCRIBE_CHANNEL,
   DEVICE_LINK_VOICE_DICTIONARY_LEARNING_CHANNEL,
   DEVICE_LINK_VOICE_DICTIONARY_GET_CHANNEL,
+  DEVICE_LINK_VOICE_DICTIONARY_MUTATE_CHANNEL,
   'maker:get-pending-interactions',
   'maker:resolve-interaction',
   'maker:get-context-usage',

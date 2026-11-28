@@ -18,7 +18,7 @@ import {
   readAliasStateVisibleCount,
 } from './alias-removal';
 import {
-  hasDictionaryKey,
+  isTermSuppressed,
   listLiveIncarnations,
   readCounterTotal,
   type DictionaryIncarnation,
@@ -109,7 +109,7 @@ export function materializeDictionary(
       : 'automatic';
     // 抑制只压制自动学习的产物。用户手动添加过的同名词条不受影响 —— 与 desktop
     // 单机语义一致(手动词条的删除本来就不写抑制集合)。
-    if (source === 'automatic' && hasDictionaryKey(state.suppressed, key)) continue;
+    if (source === 'automatic' && isTermSuppressed(state, key)) continue;
 
     const stage = live.some((item) => item.stage === 'entry') ? 'entry' : 'candidate';
     const total = Math.max(1, live.reduce((sum, item) => sum + readCounterTotal(item.counters), 0));
@@ -143,6 +143,7 @@ export function materializeDictionary(
     ).map(stripKey),
     candidates: sortAndCap(candidates, (item) => item.evidenceCount, limits.maxCandidates).map(stripKey),
     suppressedTexts: Object.keys(state.suppressed)
+      .filter((key) => isTermSuppressed(state, key))
       .sort()
       .map((key) => state.suppressed[key].text),
   };

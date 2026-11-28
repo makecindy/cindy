@@ -51,6 +51,15 @@ export interface HandoffWorktreeDeps {
     baseRepo: string,
     fallback: string,
   ) => Promise<{ sourceBranch: string; fetched?: boolean; reason?: string }>;
+  /**
+   * 显式基线解析(worktree/freshBase.ts 的 resolveExplicitSourceRef):点名远端分支时先 fetch
+   * 这一条分支,并返回无歧义的 `refs/remotes/...` 全名。fetched=false 表示没能刷新,基线取自
+   * 本地已有的副本;不注入时显式基线原样使用、不联网。
+   */
+  resolveExplicitSource?: (
+    baseRepo: string,
+    ref: string,
+  ) => Promise<{ sourceBranch: string; fetched?: boolean; reason?: string }>;
 }
 
 export type PrepareHandoffWorktreeResult =
@@ -58,10 +67,17 @@ export type PrepareHandoffWorktreeResult =
       ok: true;
       sessionId: string;
       meta: WorktreeMeta;
-      /** 走了新鲜基底解析但没能 fetch 时的原因:基底来自本地已有引用,可能落后远端。 */
+      /** 走了新鲜基底或显式远端基线解析但没能 fetch 时的原因:基底来自本地已有引用,可能落后远端。 */
       staleBaseReason?: string;
     }
   | { ok: false; message: string };
+
+/** 显式远端基线没能刷新、随后又建不出 worktree 时,补在报错后面的原因。 */
+function explicitSourceFailureHint(reason: string | undefined): string {
+  if (reason === 'not-on-remote') return ' The remote has no such branch.';
+  if (reason) return ' It could not be fetched from the remote, and no usable local copy exists.';
+  return '';
+}
 
 /** a 是否等于 b 或位于 b 目录之下(大小写按 Windows 习惯不敏感比较,POSIX 敏感)。 */
 function isSamePathOrUnder(a: string, b: string): boolean {
@@ -134,6 +150,8 @@ export function shouldRecycleHandoffWorktreeOnFailure(sessionCreated: boolean): 
  *    工作区可落后上游上千 commit(实踩),这是本分支语义的直接动因。
  *  - 显式给出 sourceRef(调用方点名的基线)→ 直接用该引用为源,不再取默认分支。
  *    引用解析不了由 createWorktree 的 rev-parse 校验报错,不静默回退默认分支(#9513)。
+ *    点名的是远端分支时先经 resolveExplicitSource fetch 这一条分支:另一台电脑刚 push 的
+ *    分支在本机可能还不存在或停在旧提交。没能刷新时沿用本地副本并回报 staleBaseReason。
  */
 export async function prepareHandoffWorktree(
   deps: HandoffWorktreeDeps,
@@ -154,6 +172,11 @@ export async function prepareHandoffWorktree(
   if (options?.sourceRef) {
     // 显式基线优先:调用方点名了分支/远端引用,就不再按默认分支或 dispatcher 在途分支推导。
     sourceBranch = options.sourceRef;
+    if (deps.resolveExplicitSource) {
+      const explicit = await deps.resolveExplicitSource(baseRepo, options.sourceRef);
+      sourceBranch = explicit.sourceBranch;
+      if (explicit.fetched === false) staleBaseReason = explicit.reason ?? 'fetch-failed';
+    }
   } else if (continuingDispatcherWork) {
     // 派生子任务:源分支取 dispatcher worktree 里当前检出的分支——baseRepo 主 checkout
     // 的 current 可能是另一条分支,用它会丢 dispatcher 分支上的在途提交。
@@ -185,7 +208,15 @@ export async function prepareHandoffWorktree(
   const sessionId = deps.createId();
   const resp = await deps.createWorktree({ sessionId, baseRepo, name, sourceBranch });
   if (!resp.ok) {
-    return { ok: false, message: resp.error.message || resp.error.kind };
+    let hint = '';
+    // 只有基线本身解析不了才补下一步:worktree 也会因为锁、路径、取消等原因建不出来,
+    // 那时说「基线拉不到」是错的,会把调用方引去改一个没问题的 base_ref。
+    if (options?.sourceRef && (await deps.resolveCommit?.(baseRepo, sourceBranch)) === null) {
+      hint = explicitSourceFailureHint(staleBaseReason)
+        // 只在远端有、本机没检出过的分支,裸分支名解析不了:告诉调用方怎么点名远端。
+        || ' If the branch only exists on the remote, pass it as "origin/<branch>".';
+    }
+    return { ok: false, message: (resp.error.message || resp.error.kind) + hint };
   }
   return { ok: true, sessionId, meta: resp.meta, ...(staleBaseReason ? { staleBaseReason } : {}) };
 }
@@ -202,7 +233,7 @@ export type PrepareTaskWorktreeResult =
  * 没有 dispatcher 语义:调用方此刻没有 worktree,按「新任务」从刚 fetch 的远端默认分支切出。
  *
  * baseRef:显式基线(本地分支或远端引用)。给出时按该引用切出,不再取远端默认分支;
- * 引用解析不了直接报错,不静默回退默认分支(#9513)。
+ * 引用解析不了直接报错,不静默回退默认分支(#9513)。远端分支先 fetch,见 prepareHandoffWorktree。
  */
 export async function prepareTaskWorktree(
   deps: Omit<HandoffWorktreeDeps, 'createId'>,

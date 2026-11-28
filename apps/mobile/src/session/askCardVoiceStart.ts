@@ -4,6 +4,8 @@
  */
 import { AppState } from 'react-native';
 
+import type { RetainedFailedVoiceAudio } from '@cindy/voice-input-core';
+
 import { i18n } from '@/i18n';
 import type { AskCardAuth } from '@/session/askCardAuth';
 import {
@@ -11,7 +13,10 @@ import {
   createMobileCindyVoiceCredential,
   MobileCindyVoiceRunContext,
 } from '@/session/mobileCindyVoiceSession';
-import { createMobileVoiceControllerSession } from '@/session/mobileVoiceController';
+import {
+  createMobileVoiceControllerSession,
+  replayMobileVoiceAudio,
+} from '@/session/mobileVoiceController';
 import { playMobileVoiceInputEndCue } from '@/session/mobileVoiceCue';
 import {
   mobileVoiceMicPermissionError,
@@ -52,6 +57,7 @@ export async function startAskCardDictation(input: {
   onError: (message: string) => void;
   /** The voiceprint filter muted someone else's speech. */
   onSpeakerFiltered?: () => void;
+  onRetainedFailedAudio?: (audio: RetainedFailedVoiceAudio) => void;
 }): Promise<{ stop: () => Promise<void>; cancel: () => Promise<void> }> {
   const requestedAt = Date.now();
   if (!isMobileRealtimeAudioAvailable()) {
@@ -110,6 +116,7 @@ export async function startAskCardDictation(input: {
       if (state === 'listening') input.onListening();
     },
     onError: input.onError,
+    onRetainedFailedAudio: input.onRetainedFailedAudio,
     onReadyForEndCue: credential.settings?.playInteractionSound ? playMobileVoiceInputEndCue : undefined,
   });
   const run = {
@@ -133,6 +140,43 @@ export async function startAskCardDictation(input: {
     throw new AskCardVoiceCancelledError();
   }
   return run;
+}
+
+export async function replayAskCardDictation(input: {
+  deviceId: string;
+  audio: RetainedFailedVoiceAudio;
+  signal?: AbortSignal;
+  getAccessToken: () => Promise<string | null>;
+  refreshAccessToken: () => Promise<string | null>;
+  apiFetch: AskCardAuth['apiFetch'];
+  getText: () => string;
+  setText: (value: string, selection?: MobileVoiceSelection) => void;
+  getSelection: () => MobileVoiceSelection;
+  onError: (message: string) => void;
+}): Promise<void> {
+  const credential = createMobileCindyVoiceCredential(input.deviceId);
+  const voiceContext = new MobileCindyVoiceRunContext(
+    input.getAccessToken,
+    input.refreshAccessToken,
+    input.apiFetch as ConstructorParameters<typeof MobileCindyVoiceRunContext>[2],
+    credential.settings?.language,
+    CINDY_MANAGED_REFINER_PROVIDER,
+  );
+  await replayMobileVoiceAudio({
+    audio: input.audio,
+    signal: input.signal,
+    credential,
+    requestedAt: Date.now(),
+    connectionProvider: (providerId) => voiceContext.createAsrConnection(providerId),
+    refinerTargetProvider: (providerId, options) => voiceContext.createRefinerTarget(providerId, options),
+    warmRefiner: (request) => voiceContext.warmRefiner(request),
+    refineRequestBudget: () => voiceContext.refineRequestBudget(),
+    initialDraft: input.getText(),
+    initialSelection: input.getSelection(),
+    readCurrentDraft: input.getText,
+    onDraftChanged: (text, selection) => input.setText(text, selection),
+    onError: input.onError,
+  });
 }
 
 function waitUntilActive(
