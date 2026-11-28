@@ -12845,7 +12845,19 @@
         "failed": "操作未完成，請重試。",
         "lastOwner": "請先轉讓群主或解散群聊，再退出。"
       },
-      "externalBadge": "外部"
+      "externalBadge": "外部",
+      "links": {
+        "kind": {
+          "pull": "PR",
+          "issue": "Issue",
+          "discussion": "討論",
+          "commit": "提交",
+          "file": "檔案",
+          "folder": "資料夾",
+          "release": "發行版",
+          "repo": "儲存庫"
+        }
+      }
     },
     "joined": {
       "today": "今天加入",

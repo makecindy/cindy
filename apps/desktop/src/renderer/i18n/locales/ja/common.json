@@ -12845,7 +12845,19 @@
         "failed": "操作を完了できませんでした。もう一度お試しください。",
         "lastOwner": "退出する前にオーナーを譲渡するか、グループを解散してください。"
       },
-      "externalBadge": "外部"
+      "externalBadge": "外部",
+      "links": {
+        "kind": {
+          "pull": "プルリクエスト",
+          "issue": "Issue",
+          "discussion": "ディスカッション",
+          "commit": "コミット",
+          "file": "ファイル",
+          "folder": "フォルダ",
+          "release": "リリース",
+          "repo": "リポジトリ"
+        }
+      }
     },
     "joined": {
       "today": "今日加入",
