@@ -233,6 +233,10 @@ export function adaptPluginNodeProcess(
       events.once(event, listener);
       return adapter;
     },
+    off(event: 'exit', listener: (code: number | null, signal: string | null) => void) {
+      events.off(event, listener);
+      return adapter;
+    },
     kill(signal?: NodeJS.Signals): boolean {
       if (exited) return false;
       destroyed = true;

@@ -457,6 +457,23 @@ describe('nodeRuntimeBroker · Electron utilityProcess 适配', () => {
     } finally { worker.kill(); }
   });
 
+  // #13744, unit: fake broker processes already expose off(), so exercise
+  // cancellation through the shared production adapter with a late native exit.
+  it('removes a cancelled exit listener while still reporting the process exit', () => {
+    const native = new FakeUtilityProcess();
+    const proc = adaptPluginNodeProcess(native, true);
+    const cancelled = vi.fn();
+    const remaining = vi.fn();
+    proc.once('exit', cancelled);
+    proc.once('exit', remaining);
+
+    proc.off?.('exit', cancelled);
+    native.emit('exit', 0);
+
+    expect(cancelled).not.toHaveBeenCalled();
+    expect(remaining).toHaveBeenCalledExactlyOnceWith(0, null);
+  });
+
   // #10189, unit: exercise the real adapter with OS outcomes injected. Native-event
   // tests did not cover lost exits, unknown identity or kill requests without exit.
   it.each(['EPERM', 'EACCES', 'unknown', 'alive'])('retains quota on %s until a real exit', code => {
