@@ -851,6 +851,22 @@ execution, made of the member avatar and the shared `WorkGroupBlock` journal (20
 capsule or other outer frame; its content and states follow the product rule. Keep semantic
 surface/border/text colors in both Light and Dark. It does not authorize pill-shaped toolbars or other status panels.
 
+### Group Cindy waiting-for-a-computer card (owner-chosen option C, 2026-11-28)
+
+`BotGroupAssistantDeviceCard` (Desktop, passed to `BotGroupComposer` as `aboveCard`; Mobile, above the
+group composer) is the requester's own prompt for group-Cindy requests held until they choose a computer
+([group chat §9](../product-rules/bot-group-chat.md#9-群里的-cindy2026-11-12)). Only that member sees it. It docks above the
+composer in the permission request's place and uses the same chrome: `rounded-xl`, 1px
+`--chat-input-border`, `--chat-input-bg`, and 16px horizontal / 12px vertical padding. Top row: a 15/500
+title, with a 12px `--text-tertiary` 「只有你能看到」 label and an eye-off icon on the right. Below it,
+two 13px `--text-secondary` lines: the request (or how many are waiting) and the reminder that later
+requests use the same computer. Separate lines are needed because sentence joining differs by language.
+Bottom row: a compact `Select` of computers, plus a right-aligned secondary 「取消请求」 and primary
+「继续」 that wrap together as one group. Mobile uses the same order with `BotGroupMenu` and two
+equal-width compact `MainWindowActionButton`s. When there are no computers, both clients show the
+request and the cancel action. Real-component regression:
+`scripts/fixtures/group-control` cases `assistant-device-wait` and `assistant-device-wait-narrow`.
+
 ### Desktop hidden channel records
 
 `BotChannelsPage` lists each connection's hidden channel tasks. The record name and
