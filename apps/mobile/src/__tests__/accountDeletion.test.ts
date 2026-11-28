@@ -231,11 +231,13 @@ describe("mobile account deletion", () => {
     expect(layout).toContain("loginText('accountDeletionRestoredCopy')");
     expect(
       loginMessages.match(/(?:["']accountDeletionAcknowledgeCopy["']|accountDeletionAcknowledgeCopy):/g),
-    ).toHaveLength(12);
+    ).toHaveLength(13);
     expect(loginMessages).toContain("其他客户端会在登录状态失效后退出");
     expect(loginMessages).toContain(
       "other clients will sign out when their sign-in session becomes invalid",
     );
+    // ru 也必须有完整的一套(新增语言漏掉时这里会报错)。
+    expect(loginMessages).toContain("этот телефон немедленно выйдет из системы");
     expect(loginMessages).not.toContain("通常不超过 1 分钟");
     expect(loginMessages).not.toContain("normally within one minute");
   });
@@ -268,7 +270,7 @@ describe("mobile account deletion", () => {
     expect(panel).toContain("getAuthLocale()");
     expect(panel).not.toMatch(/[\u4e00-\u9fff]/);
     expect(loginMessages.match(/accountDeletionPendingTitle:/g)).toHaveLength(
-      7,
+      8,
     );
     expect(loginMessages).toContain("现在重新登录即可取消注销");
     expect(loginMessages).toContain("Sign in now to cancel deletion.");

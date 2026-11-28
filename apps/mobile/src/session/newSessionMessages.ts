@@ -6,6 +6,10 @@ import { resolveSystemLocale, type SupportedLocale } from "@/i18n/locale";
 export type NewSessionLocale = SupportedLocale;
 
 const messages = {
+  ru: {
+    showHiddenDirectories: "Показать скрытые папки",
+    emptyDirectory: "Нет папок для отображения.",
+  },
   "zh-CN": {
     showHiddenDirectories: "显示隐藏文件夹",
     emptyDirectory: "没有可显示的子目录。",

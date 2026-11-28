@@ -123,7 +123,7 @@ describe('mobile tool/work-group wording', () => {
       expect(row.label).toBe('读取 app.ts');
 
       expect(summarizeWorkGroupPresentation(workGroup, mobilePresentationLocalizer).title)
-        .toBe('已工作 1m 5s');
+        .toBe('已工作 1 分 5 秒');
       expect(summarizeWorkGroupPresentation(
         { ...workGroup, isStreaming: true },
         mobilePresentationLocalizer,
