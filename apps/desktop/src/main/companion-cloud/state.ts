@@ -42,6 +42,7 @@ const bot = z.object({
   storeSeeded: z.boolean().optional(),
   /** Local restore failed for these cloud keys. No local value or deletion may replace them. */
   restoreBlockedKeys: z.array(z.string()).optional(),
+  oversizedMemory: z.object({ key: z.string(), version: z.string() }).optional(),
   /** This computer gave the companion away; never re-register it as home here. */
   demoted: z.boolean().optional(),
   /** Cloud history was added while the canonical Session was busy; rebuild at the next idle point. */

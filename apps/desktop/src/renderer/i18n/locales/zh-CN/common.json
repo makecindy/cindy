@@ -13127,6 +13127,8 @@
       "targetOutdatedItem": "换到「{{device}}」· 旧版 Cindy",
       "targetOutdatedMeta": "旧版 Cindy",
       "olderTargetNote": "「{{device}}」上是旧版 Cindy，{{name}} 在那里按旧方式运行：对话记录照常同步，项目规则和自动化在那里不生效。",
+      "localRestorePending": "本机接管尚未完成",
+      "oversizedMemoryHint": "有记忆过大，无法恢复。可缩短原文后重试，或在这台电脑继续，云端原件会保留。",
       "shadowTitle": "这个伙伴已在「{{device}}」上运行",
       "shadowHint": "这里的对话只能查看。",
       "openOnHome": "打开「{{device}}」上的伙伴",

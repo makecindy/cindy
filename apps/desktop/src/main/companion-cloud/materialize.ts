@@ -287,10 +287,18 @@ export async function materializeCompanion(input: {
   const profileRow = prefs.get(COMPANION_PROFILE_KEY);
   if (profileRow && profile) applied.set(COMPANION_PROFILE_KEY, { hash: valueHash(profileRow.value), revision: profileRow.revision });
   const failedKeys = new Set<string>();
+  let oversized: { key: string; version: string } | undefined;
   const apply = async (kind: string, keys: readonly string[], run: () => Promise<void>) => {
     try { await run(); } catch (error) {
       if (errorCode(error) === 'OWNER_CHANGED') throw error;
+      fence.assertCurrent();
       for (const key of keys) failedKeys.add(key);
+      if (kind === 'memory' && error instanceof Error && 'reason' in error && error.reason === 'MEMORY_SHARD_TOO_LARGE') {
+        const key = keys[0]!;
+        oversized ??= { key, version: valueHash(prefs.get(key)) };
+        log?.warn('Companion memory could not be restored', { actorId: actor.id, code: 'MEMORY_SHARD_TOO_LARGE' });
+        return;
+      }
       log?.warn('Companion content could not be restored', { actorId: actor.id, kind, code: errorCode(error) });
     }
   };
@@ -430,6 +438,12 @@ export async function materializeCompanion(input: {
   }
 
   if (failedKeys.size > 0) {
+    if (oversized) {
+      state.update(botId, actor.id, entry => {
+        entry.restoreBlockedKeys = [...new Set([...(entry.restoreBlockedKeys ?? []), ...failedKeys])];
+        entry.oversizedMemory = oversized;
+      });
+    }
     if (!input.resilient) {
       // Keep what was restored (so the retry does not back the copy up again) and stay demoted.
       state.update(botId, actor.id, entry => {
@@ -437,7 +451,7 @@ export async function materializeCompanion(input: {
         // The copy now exists: the retry no longer sees it as new, so remember what it could not keep.
         if (notices.length) entry.arrivalNotices = notices;
       });
-      throw new Error('RESTORE_INCOMPLETE');
+      throw new Error(oversized ? 'MEMORY_SHARD_TOO_LARGE' : 'RESTORE_INCOMPLETE');
     }
     if (!notices.includes('partial_content')) notices.push('partial_content');
   }
@@ -470,6 +484,7 @@ export async function materializeCompanion(input: {
     for (const key of applied.keys()) blocked.delete(key);
     for (const key of failedKeys) blocked.add(key);
     if (blocked.size) entry.restoreBlockedKeys = [...blocked]; else delete entry.restoreBlockedKeys;
+    delete entry.oversizedMemory;
     if (!keepCursor) entry.mirror = { sessionId, ...cursor };
     if (needsRebuild) entry.pendingRebuild = true;
     if (notices.length) entry.arrivalNotices = notices; else delete entry.arrivalNotices;

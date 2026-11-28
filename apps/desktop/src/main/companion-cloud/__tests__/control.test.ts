@@ -427,6 +427,44 @@ describe('take over', () => {
     } finally { runtime?.dispose(); vi.useRealTimers(); }
   });
 
+  // #13755, unit: unchanged rejected content must not replay a takeover. A corrected
+  // revision should restore normally without a manual action.
+  it('waits for a changed memory after the local writer rejects its size', async () => {
+    vi.useFakeTimers();
+    try {
+      const key = 'companion.memory.v1:project_large.md';
+      const row = { key, revision: 1, value: { content: 'oversized' } };
+      const t = setup({ home: 'desk', handler: (route, method) => {
+        if (route === '/preferences' && method === 'GET') return [{ key: 'companion.profile.v1', value: MIA, revision: 1 }, row];
+        if (route === '/preferences?key=' + encodeURIComponent(key)) return [row];
+        if (route === '/conversations') return { id: ROOM };
+        if (route.includes('/messages?')) return [];
+        return {};
+      } });
+      vi.mocked(t.local.host.restoreMemory).mockRejectedValueOnce(Object.assign(createIpcError('INVALID_PARAMS', 'size limit'), { reason: 'MEMORY_SHARD_TOO_LARGE' }));
+      const reconcile = async () => {
+        await t.runtime.reconcile([]);
+        await vi.advanceTimersByTimeAsync(0);
+      };
+      await reconcile();
+      expect(t.runtime.hasOversizedMemory('bot_mia')).toBe(true);
+      expect(t.state.bot('bot_mia')?.restoreBlockedKeys).toEqual([key]);
+      const claims = () => t.calls.filter(call => call.method === 'PATCH');
+      const initialClaims = claims().length;
+      await vi.advanceTimersByTimeAsync(65_000);
+      await reconcile();
+      expect(claims()).toHaveLength(initialClaims);
+      expect(t.local.host.restoreMemory).toHaveBeenCalledTimes(1);
+      row.revision++;
+      row.value = { content: 'shortened' };
+      await vi.advanceTimersByTimeAsync(65_000);
+      await reconcile();
+      expect(t.state.isDemoted('bot_mia')).toBe(false);
+      expect(t.local.memories.get('project_large.md')).toBe('shortened');
+      expect(t.state.bot('bot_mia')?.restoreBlockedKeys).toBeUndefined();
+    } finally { runtime?.dispose(); vi.useRealTimers(); }
+  });
+
   // #13642, unit: only the model-specific refusal during automatic recovery should explain
   // the shadow; retry with a working route must restore the original conversation.
   it('identifies a missing model on automatic take-over and clears it after recovery', async () => {

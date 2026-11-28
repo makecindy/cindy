@@ -28,11 +28,15 @@ function enabled() {
 }
 
 /** Only the Chat Server transport is synthetic; profile validation, backup and restoration are real. */
-function createFixture(file: string, soul: string, failHistoryOnce: boolean, currentHome: boolean) {
+function createFixture(file: string, soul: string, failHistoryOnce: boolean, currentHome: boolean, memory?: string) {
   const log = createLogger('companion-ui-mock');
   const actors: CompanionRuntimeActor[] = [{ id: ACTOR, kind: 'bot', externalId: BOT_ID, name: '资料恢复验收', homeDeviceId: SELF }];
   const rows = new Map<string, CompanionRow>([[PROFILE, { key: PROFILE, revision: 1,
     value: { name: '资料恢复验收', description: '', soul, user: '', systemPrompt: '' } }]]);
+  if (memory) {
+    const key = 'companion.memory.v1:project_mock.md';
+    rows.set(key, { key, value: { content: memory }, revision: 1 });
+  }
   const api: CompanionApi = async <T>(route: string, method = 'GET', data?: unknown) => {
     if (!enabled()) throw new Error('OWNER_CHANGED');
     const body = data as Record<string, unknown>;
@@ -92,6 +96,7 @@ function createFixture(file: string, soul: string, failHistoryOnce: boolean, cur
     selfDeviceId: SELF, current: enabled, actors: () => actors, initialKick: false, log,
     bots: () => runtime.state.isDemoted(BOT_ID) ? [] : [{ botId: BOT_ID, actorId: ACTOR, name: '资料恢复验收' }] });
   runtime.state.update(BOT_ID, ACTOR, entry => { entry.demoted = !currentHome; });
+  if (memory && !currentHome) void runtime.reconcile([]);
   let prepared: Promise<void> | undefined;
   const prepareCurrentHome = () => prepared ??= (async () => {
     if (!currentHome) return;
@@ -111,7 +116,8 @@ function createFixture(file: string, soul: string, failHistoryOnce: boolean, cur
     snapshot: (): CompanionCloudSnapshot => ({ enabled: true, selfDeviceId: SELF, humanActorId: 'ui-mock-human',
       demotedBotIds: runtime.state.isDemoted(BOT_ID) ? [BOT_ID] : [], actors: [{ id: ACTOR, externalId: BOT_ID, name: '资料恢复验收',
         avatar: null, homeDeviceId: SELF, homeDevice: { deviceId: SELF, name: 'Mock desktop', isSelf: true, online: true },
-        ...(runtime.state.isDemoted(BOT_ID) || (currentHome && String((rows.get(PROFILE)?.value as { soul?: unknown })?.soul ?? '').trim().length > 12000)
+        ...(runtime.hasOversizedMemory(BOT_ID) ? { hasOversizedMemory: true } : {}),
+        ...((runtime.state.isDemoted(BOT_ID) || currentHome) && String((rows.get(PROFILE)?.value as { soul?: unknown })?.soul ?? '').trim().length > 12000
           ? { profileFailure: runtime.profileFailure(BOT_ID) ?? { field: 'identitySource' as const, maxLength: 12000 } } : {}) }] }),
     async takeOver() {
       await prepareCurrentHome();
@@ -138,13 +144,15 @@ export function companionProfileUiMock() {
   let source: unknown;
   let failHistoryOnce = false;
   let currentHome = false;
+  let memory: string | undefined;
   try {
     const config = JSON.parse(fs.readFileSync(file, 'utf8'));
     source = config.soul;
+    memory = typeof config.memory === 'string' ? config.memory : undefined;
     failHistoryOnce = config.failHistoryOnce === true;
     currentHome = config.currentHome === true;
   } catch { return undefined; }
   if (typeof source !== 'string') return undefined;
-  fixture = createFixture(file, source, failHistoryOnce, currentHome);
+  fixture = createFixture(file, source, failHistoryOnce, currentHome, memory);
   return fixture;
 }

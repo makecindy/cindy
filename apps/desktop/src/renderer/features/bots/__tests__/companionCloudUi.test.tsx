@@ -598,6 +598,10 @@ describe('CompanionShadowBanner', () => {
     maker.getCompanionCloudState.mockResolvedValue(cloud);
     maker.takeOverCompanion.mockResolvedValue({ ok: false, code: 'OFFLINE' });
     render(<CompanionShadowBanner botId="mia" name="Mia" />);
+    expect(screen.getByText('bots.cloud.localRestorePending')).toBeTruthy();
+    expect(screen.queryByText(/^bots.cloud.openOnHome/)).toBeNull();
+    act(() => resetCompanionCloudStoreForTests({ ...cloud, actors: cloud.actors.map(actor => ({ ...actor, hasOversizedMemory: true })) }));
+    expect(screen.getByText('bots.cloud.oversizedMemoryHint')).toBeTruthy();
     fireEvent.click(screen.getByText('bots.cloud.continueHere'));
     expect(await screen.findByText('bots.cloud.takeOverOffline:{"name":"Mia"}')).toBeTruthy();
     act(() => resetCompanionCloudStoreForTests({ ...cloud, actors: cloud.actors.map(actor => ({ ...actor, needsModelSetup: true })) }));

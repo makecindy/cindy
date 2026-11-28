@@ -4,6 +4,7 @@
  * transient failures are retried; rejected profile sources are surfaced without replaying writes.
  */
 import type { DeliverToCanonical } from './directRoom.js';
+import { SessionModelUnavailableError } from '../maker-ipc/sessionExecutionSelection.js';
 import { isMissingBotModelError } from '../../shared/ipc-errors.js';
 import { randomUUID } from 'node:crypto';
 import { COMPANION_CLOUD_LEGACY_SKILL_MAX_BODY_BYTES, COMPANION_CLOUD_SKILL_SOURCE_VERSION, type CompanionOversizedSkill } from '@cindy/device-link';
@@ -37,7 +38,7 @@ import { importCloudHistory } from './materialize.js';
 import type { CompanionCloudState } from './state.js';
 import { chatRejection, errorCode, isUnreachable, type CompanionApi, type CompanionLog } from './types.js';
 import { createCompanionStore, readCompanionRestoreValue, readPreference, type CompanionStoreTransfer } from './store.js';
-import { COMPANION_PROFILE_KEY, COMPANION_READ_INCOMPLETE, COMPANION_SKILL_FILES_PREFIX, COMPANION_SKILL_PREFIX, COMPANION_VALUE_TOO_LARGE, canonicalJson, createCompanionUploader, isCompanionProfileSnapshot, type CompanionPreferenceValue } from './uploader.js';
+import { COMPANION_PROFILE_KEY, COMPANION_READ_INCOMPLETE, COMPANION_SKILL_FILES_PREFIX, COMPANION_SKILL_PREFIX, COMPANION_VALUE_TOO_LARGE, canonicalJson, valueHash, createCompanionUploader, isCompanionProfileSnapshot, type CompanionPreferenceValue } from './uploader.js';
 
 /** Electron/database side of the feature, wired in register.ts. */
 export interface CompanionCloudHost {
@@ -140,6 +141,7 @@ export interface CompanionCloudRuntime {
   /** What the last move to this computer could not keep of the companion's setup, until dismissed. */
   arrivalNotices: (botId: string) => CompanionArrivalNotice[];
   profileFailure: (botId: string) => BotProfileSourceFailure | undefined;
+  hasOversizedMemory: (botId: string) => boolean;
   needsModelSetup: (botId: string) => boolean;
   dismissArrivalNotices: (botId: string) => void;
   /** One of the files in the companion's room, brought to this computer. */
@@ -192,6 +194,7 @@ function checkLegacySkillSizes(values: CompanionPreferenceValue[]): void {
 }
 
 function actionFailure(error: unknown, fallback: 'FAILED' | 'OFFLINE' = 'FAILED'): CompanionCloudActionResult {
+  if (error instanceof SessionModelUnavailableError) return { ok: false, code: 'SESSION_MODEL_UNAVAILABLE' };
   if (error instanceof CompanionProfileRepairError) return { ok: false, code: 'FAILED', profileRepairError: error.reason };
   if (error instanceof BotProfileSourceTooLong) return { ok: false, code: 'FAILED', profileFailure: error.failure };
   if (error instanceof CompanionIdentityConflict) return { ok: false, code: 'LOCAL_CINDY_CONFLICT' };
@@ -741,6 +744,15 @@ export function startCompanionCloud(input: {
       // The existing retry cadence reads only the profile until it is valid. Do not
       // reclaim the home/installation or replay all files for unchanged bad text.
       const entry = state.bot(botId);
+      const blocked = entry?.actorId === actorId && entry.oversizedMemory;
+      if (blocked) {
+        const row = await readCompanionRestoreValue(backgroundIdentityApi, store, actorId, blocked.key);
+        fence.assertCurrent();
+        const current = actorOf(botId);
+        if (current?.id !== actorId || current.homeDeviceId !== input.selfDeviceId || !state.isDemoted(botId)) throw new Error('COMPANION_CHANGED');
+        if (row && valueHash(row) === blocked.version) throw new Error('MEMORY_REVISION_UNCHANGED');
+        state.update(botId, actorId, next => { delete next.oversizedMemory; });
+      }
       let correction = entry?.actorId === actorId && entry.profileCorrection && entry.profileCorrection.homeDeviceId === input.selfDeviceId
         && !entry.profileCorrection.restored ? entry.profileCorrection : undefined;
       if (correction) {
@@ -767,7 +779,7 @@ export function startCompanionCloud(input: {
       autoRetryAt.set(botId, Date.now() + AUTO_RETRY_MS);
       const current = actorOf(botId);
       if (live() && current?.id === actorId && current.homeDeviceId === input.selfDeviceId) {
-        if (isMissingBotModelError(error) && state.isDemoted(botId) && installOwner(botId) === 'mine') {
+        if ((isMissingBotModelError(error) || error instanceof SessionModelUnavailableError) && state.isDemoted(botId) && installOwner(botId) === 'mine') {
           if (missingModelActors.get(botId) !== actorId) {
             profileFailures.delete(botId);
             missingModelActors.set(botId, actorId);
@@ -778,6 +790,8 @@ export function startCompanionCloud(input: {
         }
         if (missingModelActors.delete(botId)) publish();
       }
+      if (errorCode(error) === 'MEMORY_REVISION_UNCHANGED') return;
+      if (errorCode(error) === 'MEMORY_SHARD_TOO_LARGE') { publish(); return; }
       if (recordProfileFailure(actor, actorId, error)) return;
       if (error instanceof CompanionIdentityConflict) {
         const previous = identityConflicts.get(botId);
@@ -1355,6 +1369,12 @@ export function startCompanionCloud(input: {
     },
 
     arrivalNotices: botId => state.bot(botId)?.arrivalNotices ?? [],
+    hasOversizedMemory: botId => {
+      const actor = actorOf(botId);
+      const entry = state.bot(botId);
+      return !!actor && live() && !actor.disabled && actor.homeDeviceId === input.selfDeviceId
+        && entry?.actorId === actor.id && !!entry.demoted && !!entry.oversizedMemory && installOwner(botId) === 'mine';
+    },
     needsModelSetup: botId => {
       const actor = actorOf(botId);
       return !!actor && live() && !actor.disabled && actor.homeDeviceId === input.selfDeviceId

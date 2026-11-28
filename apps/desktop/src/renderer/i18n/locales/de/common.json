@@ -13177,6 +13177,8 @@
       "targetOutdatedItem": "Auf „{{device}}“ verschieben · ältere Cindy",
       "targetOutdatedMeta": "Ältere Cindy",
       "olderTargetNote": "Auf „{{device}}“ läuft eine ältere Cindy-Version, daher arbeitet {{name}} dort wie bisher: Der Chatverlauf wird weiter synchronisiert, Projektregeln und Automatisierungen gelten dort aber nicht.",
+      "localRestorePending": "Die Übernahme auf diesem Computer steht noch aus",
+      "oversizedMemoryHint": "Ein Speichereintrag ist zu groß. Kürze das Original und versuche es erneut oder fahre hier fort. Die Cloud-Kopie bleibt erhalten.",
       "shadowTitle": "Dieser Freund läuft jetzt auf „{{device}}“",
       "shadowHint": "Das Gespräch hier ist schreibgeschützt.",
       "openOnHome": "Auf „{{device}}“ öffnen",
