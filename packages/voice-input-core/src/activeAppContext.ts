@@ -1,4 +1,7 @@
 const MAX_ACTIVE_APP_CHARS = 80;
+const ACTIVE_APP_CATEGORIES = new Set<ActiveAppCategory>([
+  'code_editor', 'terminal', 'chat', 'email', 'document', 'browser',
+]);
 
 export type ActiveAppDescriptor =
   | string
@@ -167,11 +170,14 @@ export function sanitizeActiveAppContext(descriptor: ActiveAppDescriptor): strin
     if (!trimmed) return undefined;
     // Preserve an already-classified label such as "Cursor (code_editor)" while
     // still sanitizing unexpected path/URL characters and enforcing the cap.
-    const existingMatch = trimmed.match(/^(.+?)\s*\((code_editor|terminal|chat|email|document|browser)\)$/);
-    if (existingMatch) {
-      const cleanName = normalizeRawAppName(existingMatch[1]);
+    const openingParen = trimmed.lastIndexOf('(');
+    const existingCategory = openingParen > 0 && trimmed.endsWith(')')
+      ? trimmed.slice(openingParen + 1, -1)
+      : '';
+    if (ACTIVE_APP_CATEGORIES.has(existingCategory as ActiveAppCategory)) {
+      const cleanName = normalizeRawAppName(trimmed.slice(0, openingParen).trimEnd());
       if (!cleanName) return undefined;
-      return formatActiveAppLabel(cleanName, existingMatch[2] as ActiveAppCategory);
+      return formatActiveAppLabel(cleanName, existingCategory as ActiveAppCategory);
     }
     const cleanName = normalizeRawAppName(trimmed);
     if (!cleanName) return undefined;
