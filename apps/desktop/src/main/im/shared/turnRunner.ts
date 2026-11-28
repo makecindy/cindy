@@ -264,7 +264,7 @@ interface TurnState {
   /** Direct Stop cancels this exact turn, independently of session disposal. */
   stopRequested?: boolean;
   userId: string;
-  /** thread = session 模型的会话维度键(slack thread root ts);feishu undefined。 */
+  /** This turn's output thread: a session scope or an explicit private-topic message root. */
   scopeKey?: string;
   initialMessageText: string;
   sourceDescription?: string;
@@ -590,6 +590,8 @@ export interface ImRunAgentTurnArgs {
    * 引用证据(见 imAutoReviewReferences), 不改模型正文与落库。
    */
   replyContext?: IMMessageEvent['replyContext'];
+  /** Trusted inbound private-topic root, used only for this turn's replies, never task lookup. */
+  replyThreadRootMessageId?: string;
   /** thread = session 模型的会话维度键(slack);feishu 不传。 */
   scopeKey?: string;
   /**
@@ -1224,6 +1226,7 @@ export function createTurnRunner(
     },
   ): Promise<ImTurnDispatch> {
     const { botContextId, userId, userMessageId, text, attachments, scopeKey } = args;
+    const replyScopeKey = args.replyThreadRootMessageId ?? scopeKey;
     // 个人机器人的群成员轮次(交给伙伴回复时按伙伴规则, 不算)。
     const guestCapped = isPersonalGuest(args);
     // 群成员的轮次必须带渠道的群轮次策略(最高自动审批); 渠道漏挂时不按会话档位放行。
@@ -1244,7 +1247,7 @@ export function createTurnRunner(
       if (args.queueMode === 'internal') {
         try {
           const consumed = (await args.onEarlyReject?.('companion_unavailable', notice)) ?? false;
-          if (!consumed) await sendTextClaimingOpener(userId, notice, scopeKey);
+          if (!consumed) await sendTextClaimingOpener(userId, notice, replyScopeKey);
         } catch (err) {
           log.warn(`companion unavailable notice failed: ${err instanceof Error ? err.message : String(err)}`);
         }
@@ -1262,7 +1265,7 @@ export function createTurnRunner(
             ui.agent.authMissing?.({ ...created.missingAuth, attached: false }) ??
             ui.agent.apiKeyMissing;
           const consumed = (await args.onEarlyReject?.('missing_auth', text)) ?? false;
-          if (!consumed) await replyMissingAuth(userId, created.missingAuth, scopeKey);
+          if (!consumed) await replyMissingAuth(userId, created.missingAuth, replyScopeKey);
         }
         await discardHandedOverAck(userMessageId, args.ackReactionIdPromise);
         return { kind: 'rejected', reason: 'missing_auth' };
@@ -1311,7 +1314,7 @@ export function createTurnRunner(
           try {
             const text = ui.agent.sendInternalError(normalized.reason);
             const consumed = (await args.onEarlyReject?.(normalized.reason, text)) ?? false;
-            if (!consumed) await sendTextClaimingOpener(userId, text, target.scopeKey);
+            if (!consumed) await sendTextClaimingOpener(userId, text, replyScopeKey);
           } catch {
             /* A failed notice must still return a definite pre-dispatch rejection. */
           }
@@ -1324,7 +1327,7 @@ export function createTurnRunner(
         const text = ui.agent.companionUnavailable?.(blocked) ?? ui.agent.runtimeError(blocked);
         if (args.queueMode === 'internal') {
           const consumed = (await args.onEarlyReject?.('companion_unavailable', text)) ?? false;
-          if (!consumed) await sendTextClaimingOpener(userId, text, target.scopeKey);
+          if (!consumed) await sendTextClaimingOpener(userId, text, replyScopeKey);
         }
         await discardHandedOverAck(userMessageId, args.ackReactionIdPromise);
         return { kind: 'rejected', reason: 'companion_unavailable' };
@@ -1358,7 +1361,7 @@ export function createTurnRunner(
             try {
               const text = ui.agent.sendInternalError(normalized.reason);
               const consumed = (await args.onEarlyReject?.(normalized.reason, text)) ?? false;
-              if (!consumed) await sendTextClaimingOpener(userId, text, target.scopeKey);
+              if (!consumed) await sendTextClaimingOpener(userId, text, replyScopeKey);
             } catch { /* Keep the definite pre-dispatch rejection if its notice fails. */ }
           }
           return { kind: 'rejected', reason: normalized.reason };
@@ -1379,7 +1382,8 @@ export function createTurnRunner(
     target: RouteTarget,
     cold?: { row: ImSessionRow; release(): void },
   ): Promise<ImTurnDispatch> {
-    const { botContextId, userId, userMessageId, text, attachments, scopeKey } = args;
+    const { botContextId, userId, userMessageId, text, attachments } = args;
+    const replyScopeKey = args.replyThreadRootMessageId ?? target.scopeKey;
     // 个人机器人的群成员轮次(落在伙伴任务上的按伙伴规则): 排队时记下, 渠道策略不可跳过。
     const guestCapped = deps.personalGuests !== undefined && args.requesterIsOwner !== true
       && !args.notificationSessionId && !target.botOwned;
@@ -1423,7 +1427,7 @@ export function createTurnRunner(
             ui.agent.apiKeyMissing;
           const consumed = (await args.onEarlyReject?.('missing_auth', text)) ?? false;
           if (!consumed) {
-            await replyMissingAuth(userId, authStatus, scopeKey, authNoticeAttached);
+            await replyMissingAuth(userId, authStatus, replyScopeKey, authNoticeAttached);
           }
         }
         await discardHandedOverAck(userMessageId, args.ackReactionIdPromise);
@@ -1479,7 +1483,7 @@ export function createTurnRunner(
       turnId: randomUUID(),
       questionRespondentId: args.questionRespondentId,
       userId,
-      scopeKey: target.scopeKey,
+      scopeKey: replyScopeKey,
       initialMessageText: text,
       sourceDescription: args.sourceDescription ?? describeInteractionSource({
         channelName: channel, chatId: userId, text, protectedContent: args.protectedContent,
@@ -1557,7 +1561,7 @@ export function createTurnRunner(
                 ui.agent.authMissing?.({ ...authStatus, attached: target.attached }) ??
                 ui.agent.apiKeyMissing;
               const consumed = (await args.onEarlyReject?.('missing_auth', text)) ?? false;
-              if (!consumed) await replyMissingAuth(userId, authStatus, scopeKey, target.attached);
+              if (!consumed) await replyMissingAuth(userId, authStatus, replyScopeKey, target.attached);
             }
             await discardHandedOverAck(userMessageId, args.ackReactionIdPromise);
             return { kind: 'rejected', reason: 'missing_auth' };
