@@ -99,6 +99,11 @@ A 不直接读取目标安装目录。原目录选择请求通过 Main 的固定
 响应仅携带名称、描述、范围、引擎、版本、状态、正文及市场身份，不暴露目录、凭证或内部 registry。
 Claude 原生 `user` 范围投影为 `global`；控制端读取早期 Host 的 `user` 返回值时也按全局展示，避免丢弃整份快照。
 
+Desktop 独立技能页与设置页共用「刷新本地技能」（#13632）。本机沿用隔离扫描器和已识别的
+全局／项目目录，不触发市场批量同步；已确认支持技能管理的远程电脑只发一次
+`management:snapshot { installedOnly: true }`，不重拉能力清单或市场。进行中保留列表且不能重复点击，
+读取失败保留上次的列表并显示错误；远程离线不回退本机。刷新只更新列表，不重载运行中的任务。
+
 控制端新增受信任原生 IPC `device-link:confirm-skill-mutation`，从目标查询具体操作回执，
 原生确认后仅回答这一个 Host requestId。普通 Renderer 的 Remote Resource invoke 禁止直接
 发送技能 `management:answer`。确认不占用目标安装锁；批准后重读实体版本，安装器在原锁和

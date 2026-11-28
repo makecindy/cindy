@@ -1,4 +1,5 @@
 import { Button } from '@/components/ui/button';
+import { ErrorNotice } from '@/components/ui/error-notice';
 import { CatalogDeviceScope, type CatalogDeviceControl } from '@/features/plugin/useCatalogDevice';
 import { useSkillhubTarget } from './SkillhubTargetContext';
 /**
@@ -20,6 +21,7 @@ import {
   Bot,
   ChevronRight,
   Package,
+  RotateCw,
   SquareTerminal,
   Upload,
   type LucideIcon,
@@ -130,7 +132,13 @@ export function SkillhubHomeContent({
   const target = useSkillhubTarget();
   const navigate = useNavigate();
   const [initialSearch] = useSearchParams();
-  const { skills, projects, bootstrapped, syncResults } = useSkillhub();
+  const { skills, projects, bootstrapped, loading, error, syncResults, marketSyncSkills, rescan } = useSkillhub();
+  const refreshUnavailable = !active || (target !== null && !target.writable);
+  // Newly discovered copies should not start per-card market comparisons on a disk-only refresh.
+  const marketSyncPaths = useMemo(
+    () => marketSyncSkills !== skills ? new Set(marketSyncSkills.map((skill) => skill.absolutePath)) : undefined,
+    [marketSyncSkills, skills],
+  );
   const { catalogTab, query, setCatalogTab, setQuery } = useSkillhubHomeNavigation(navigationLocation);
   const normalizedQuery = query.trim().toLocaleLowerCase();
 
@@ -373,19 +381,37 @@ export function SkillhubHomeContent({
                         : t(`skillhub.home.catalogFilter.${tab}`),
                   }))}
                 />
-                <button
-                  type="button"
-                  onClick={openMarket}
-                  className={cn(
-                    'inline-flex shrink-0 items-center gap-1 rounded-full px-3.5 py-2 text-12 text-[var(--text-secondary)]',
-                    'transition-colors duration-150 hover:bg-[var(--surface-hover-soft)] hover:text-[var(--text-primary)]',
-                    'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
+                <div className="ml-auto flex shrink-0 items-center gap-1">
+                  {catalogTab === 'local' && (
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      compact
+                      loading={loading}
+                      disabled={refreshUnavailable}
+                      onClick={() => void rescan()}
+                    >
+                      <RotateCw size={14} strokeWidth={1.8} aria-hidden="true" />
+                      {t('skillhub.home.refreshLocal')}
+                    </Button>
                   )}
-                >
-                  {t('skillhub.home.catalogMore')}
-                  <ChevronRight size={13} strokeWidth={1.8} aria-hidden="true" />
-                </button>
+                  <button
+                    type="button"
+                    onClick={openMarket}
+                    className={cn(
+                      'inline-flex shrink-0 items-center gap-1 rounded-full px-3.5 py-2 text-12 text-[var(--text-secondary)]',
+                      'transition-colors duration-150 hover:bg-[var(--surface-hover-soft)] hover:text-[var(--text-primary)]',
+                      'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
+                    )}
+                  >
+                    {t('skillhub.home.catalogMore')}
+                    <ChevronRight size={13} strokeWidth={1.8} aria-hidden="true" />
+                  </button>
+                </div>
               </div>
+              {catalogTab === 'local' && !target && error !== null && (
+                <ErrorNotice role="alert" message={t('skillhub.home.refreshLocalFailed')} />
+              )}
               {showMarketCatalog && categories.length > 0 ? (
                 <SkillCategoryFilterBar
                   categories={categories}
@@ -457,9 +483,11 @@ export function SkillhubHomeContent({
             {catalogTab === 'local' && (!normalizedQuery || visibleLocalCount > 0) ? (
               <section className="plugin-motion-page-section min-w-0">
                 {visibleLocalCount === 0 ? (
-                  <div className="rounded-xl border-[0.5px] border-[var(--border-default)] px-4 py-5 text-13 leading-5 text-[var(--text-secondary)]">
-                    {bootstrapped ? t('skillhub.home.localEmpty') : t('skillhub.welcome.scanning')}
-                  </div>
+                  (!error && (!target || bootstrapped || loading)) ? (
+                    <div className="rounded-xl border-[0.5px] border-[var(--border-default)] px-4 py-5 text-13 leading-5 text-[var(--text-secondary)]">
+                      {bootstrapped ? t('skillhub.home.localEmpty') : t('skillhub.welcome.scanning')}
+                    </div>
+                  ) : null
                 ) : (
                   <div className="flex flex-col gap-6">
                     {globalSkills.length > 0 && (
@@ -467,6 +495,7 @@ export function SkillhubHomeContent({
                         skills={globalSkills}
                         syncResults={syncResults}
                         active={active && !target}
+                        marketSyncPaths={marketSyncPaths}
                         onOpen={openLocal}
                       />
                     )}
@@ -477,6 +506,7 @@ export function SkillhubHomeContent({
                         skills={g.skills}
                         syncResults={syncResults}
                         active={active && !target}
+                        marketSyncPaths={marketSyncPaths}
                         onOpen={openLocal}
                       />
                     ))}
@@ -556,11 +586,13 @@ function LocalGroup({
   skills,
   syncResults,
   active,
+  marketSyncPaths,
   onOpen,
 }: {
   label?: string;
   skills: SkillhubSkill[];
   active: boolean;
+  marketSyncPaths?: ReadonlySet<string>;
   /** server 归属结果(含 isMine),用于历史遗留 registry(origin 缺失)的来源推断 */
   syncResults: Map<string, SkillhubSyncResult>;
   onOpen: (s: SkillhubSkill) => void;
@@ -625,7 +657,10 @@ function LocalGroup({
                     {displayDescription}
                   </span>
                 )}
-                <SkillPublishUpdateHint skill={s} knownCreator={active && sync?.exists === true && sync.isCreator === true} />
+                <SkillPublishUpdateHint
+                  skill={s}
+                  knownCreator={active && (marketSyncPaths?.has(s.absolutePath) ?? true) && sync?.exists === true && sync.isCreator === true}
+                />
               </span>
               <span className="mt-1 flex size-7 shrink-0 items-center justify-center rounded-lg border border-transparent text-[var(--text-secondary)] transition-[background-color,color,transform] group-hover:translate-x-0.5 group-hover:bg-[var(--surface-chip)] group-hover:text-[var(--text-primary)] group-active:translate-x-0 group-active:scale-95">
                 <ChevronRight size={15} strokeWidth={1.8} />

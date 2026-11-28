@@ -3,6 +3,9 @@ import { LocalSkillhubStoreSync } from '../../../src/renderer/features/skillhub/
 import { SkillhubHomeContent } from '../../../src/renderer/features/skillhub/SkillhubHomeView';
 import { InstallTargetPicker } from '../../../src/renderer/features/skillhub/components/InstallTargetPicker';
 
+type Scan = Window['electronAPI']['skillhub']['scan'];
+const fixtureWindow = window as Window & { scanSyntheticSkillFiles?: Scan };
+
 void mountPage({
   route: '/skillhub/local?tab=local',
   host: {
@@ -15,19 +18,22 @@ void mountPage({
       }) },
       // Each requested project supplies the same scenario Skill. The real
       // collector/store must collapse casing aliases before they reach this API.
-      scan: async ({ projects }: { projects: Array<{ projectRoot: string; hash: string }> }) => ({
-        success: true, sources: [], learnSkillEnabled: true,
-        skills: projects.map(({ projectRoot, hash }) => ({
-          id: `claude-code:skill:project:${hash}:add-feature`,
-          urlKey: `skill:project:${hash}:add-feature`,
-          engine: 'claude-code', linkedEngines: [{ engine: 'claude-code', label: 'Claude' }],
-          kind: 'skill', scope: 'project', name: 'add-feature', description: '新增项目功能的协议与业务实现。',
-          absolutePath: `${projectRoot}/.agents/skills/add-feature`,
-          discoveredPath: `${projectRoot}/.agents/skills/add-feature`,
-          mdPath: `${projectRoot}/.agents/skills/add-feature/SKILL.md`,
-          files: [], registryEntry: null, projectRoot, projectHash: hash, cindyEnabled: true,
-        })),
-      }),
+      scan: async (params: Parameters<Scan>[0]) => {
+        if (fixtureWindow.scanSyntheticSkillFiles) return fixtureWindow.scanSyntheticSkillFiles(params);
+        return {
+          success: true, sources: [], learnSkillEnabled: true,
+          skills: (params.projects ?? []).map(({ projectRoot, hash }) => ({
+            id: `claude-code:skill:project:${hash}:add-feature`,
+            urlKey: `skill:project:${hash}:add-feature`,
+            engine: 'claude-code', linkedEngines: [{ engine: 'claude-code', label: 'Claude' }],
+            kind: 'skill', scope: 'project', name: 'add-feature', description: '新增项目功能的协议与业务实现。',
+            absolutePath: `${projectRoot}/.agents/skills/add-feature`,
+            discoveredPath: `${projectRoot}/.agents/skills/add-feature`,
+            mdPath: `${projectRoot}/.agents/skills/add-feature/SKILL.md`,
+            files: [], registryEntry: null, projectRoot, projectHash: hash, cindyEnabled: true,
+          })),
+        };
+      },
       pickLocal: forbid('skillhub.pickLocal'),
       install: forbid('skillhub.install'),
       reconcileMineRegistry: forbid('skillhub.reconcileMineRegistry'),

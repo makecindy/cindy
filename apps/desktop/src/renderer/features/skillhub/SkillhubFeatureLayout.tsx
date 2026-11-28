@@ -49,8 +49,7 @@ export function useSkillhubStoreSync(): void {
   const { dataOwnerId, mode } = useAuth();
   const cloudSyncEnabled = mode === 'cloud';
 
-  // v0.2.1: trigger batch sync whenever the skill list changes
-  const { skills, syncResults, bootstrapped } = useSkillhub();
+  const { marketSyncSkills: skills, syncResults, bootstrapped } = useSkillhub();
   useSkillSync(skills, cloudSyncEnabled);
 
   // 一次性回填:server 端 authorId 是权威结论,把本地 registry 跟它对齐。两类:

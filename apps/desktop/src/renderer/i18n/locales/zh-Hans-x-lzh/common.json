@@ -19737,6 +19737,8 @@
       "sourceLocal": "此机",
       "import": "纳技艺",
       "importAria": "自本地压缩包或 SKILL.md 纳技艺",
+      "refreshLocal": "重览此机技艺",
+      "refreshLocalFailed": "此机技艺未能重览",
       "importPickerTitle": "择纳入之所",
       "importPickerSubtitle": "{{name}} · {{description}}",
       "importSuccess": "{{name}} 已纳{{suffix}}",

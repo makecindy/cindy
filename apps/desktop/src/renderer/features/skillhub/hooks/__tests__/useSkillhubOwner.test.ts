@@ -19,6 +19,7 @@ import {
   refresh,
   reset,
   setSkillhubDataOwner,
+  syncProjects,
   useSkillhub,
 } from '../useSkillhub';
 
@@ -112,5 +113,41 @@ describe('SkillHub data-owner bootstrap', () => {
     });
 
     expect(result.current.learnSkillEnabled).toBe(false);
+  });
+
+  // #13632 (unit): a successful transport can carry an incomplete scan. An empty
+  // filesystem projection plus one source failure must not replace the last good rows.
+  it('keeps the last list on a manual scan error and recovers without replaying market sync', async () => {
+    reset();
+    const { result, unmount } = renderHook(useSkillhub);
+    const projects = [{ projectRoot: '/project', hash: 'project-hash' }];
+    const previous = { id: 'project-skill', description: 'Before' } as SkillhubSkill;
+    scan.mockResolvedValueOnce({ success: true, skills: [previous], sources: [] });
+    await act(async () => syncProjects([{ ...projects[0], displayName: 'Project' }]));
+    expect(result.current.skills).toEqual([previous]);
+    const marketInput = result.current.marketSyncSkills;
+    const failed = Promise.withResolvers<unknown>();
+    scan.mockImplementationOnce(() => failed.promise);
+
+    act(() => {
+      void result.current.rescan();
+      void result.current.rescan();
+    });
+    expect(result.current.loading).toBe(true);
+    expect(result.current.skills).toEqual([previous]);
+    expect(scan.mock.calls).toEqual([[{ projects }], [{ projects }]]);
+    await act(async () => failed.resolve({
+      success: true, skills: [],
+      sources: [{ kind: 'skill', scope: 'global', path: '', status: { state: 'error', message: 'Scan timed out' } }],
+    }));
+    expect(result.current).toMatchObject({ skills: [previous], loading: false, error: 'Scan timed out' });
+
+    const updated = { ...previous, description: 'After' };
+    scan.mockResolvedValueOnce({ success: true, skills: [updated], sources: [] });
+    await act(async () => { await result.current.rescan(); });
+    expect(result.current).toMatchObject({ skills: [updated], loading: false, error: null });
+    expect(result.current.marketSyncSkills).toBe(marketInput);
+    unmount();
+    reset();
   });
 });

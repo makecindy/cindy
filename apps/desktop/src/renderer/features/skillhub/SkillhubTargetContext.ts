@@ -28,6 +28,7 @@ export interface SkillhubTarget {
   state: SkillhubState;
   api: SkillhubBrowseApi;
   projects: Array<SkillhubProject & { target: RemoteSkillProject }>;
+  rescan(): Promise<SkillhubSkill[]>;
   refresh(): Promise<SkillhubSkill[]>;
   current(): boolean;
   mutate(

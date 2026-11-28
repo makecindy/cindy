@@ -19737,6 +19737,8 @@
       "sourceLocal": "ローカル",
       "import": "スキルをインポート",
       "importAria": "ローカルの zip または SKILL.md からスキルをインポート",
+      "refreshLocal": "ローカルのスキルを更新",
+      "refreshLocalFailed": "ローカルのスキルを更新できませんでした",
       "importPickerTitle": "インポート先を選択",
       "importPickerSubtitle": "{{name}} · {{description}}",
       "importSuccess": "{{name}} をインポートしました{{suffix}}",
