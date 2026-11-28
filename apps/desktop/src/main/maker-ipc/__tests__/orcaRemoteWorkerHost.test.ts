@@ -3,6 +3,7 @@ import {
   ORCA_REMOTE_WORKER_CAPS_CHANNEL,
   ORCA_REMOTE_WORKER_MODELS_CHANNEL,
   ORCA_REMOTE_WORKER_OPEN_CHANNEL,
+  ORCA_REMOTE_WORKER_ARCHIVE_CHANNEL,
   ORCA_REMOTE_WORKER_RELEASE_CHANNEL,
   ORCA_REMOTE_WORKER_VERSION,
 } from '@cindy/device-link';
@@ -253,6 +254,24 @@ describe('orca remote worker host', () => {
     await expect(host.open(request)).rejects.toThrow(/ALREADY_EXISTS/);
   });
 
+  it('retries a failed close, then replays its durable receipt without closing a later session', async () => {
+    const { deps, host, sessions } = setup();
+    await host.open(request);
+    deps.closeRuntime = vi.fn().mockRejectedValueOnce(new Error('process still running')).mockResolvedValue(undefined);
+    const raw = { sessionId: request.sessionId };
+    const foreign = createOrcaRemoteWorkerHost({ ...deps, getCaller: () => ({ controllerDeviceId: 'foreign' }) });
+    await expect(foreign.archive(raw)).rejects.toThrow(/NOT_FOUND/);
+    await expect(host.archive(raw)).rejects.toThrow('process still running');
+    expect(sessions.get(request.sessionId)?.orcaRemoteLead?.releasedAt).toBeUndefined();
+    await expect(host.archive(raw)).resolves.toEqual({ runtimeClosed: true });
+    // Lose this acknowledgement and recreate the host after a user resumes the ordinary task.
+    const closeLaterSession = vi.fn();
+    const restarted = createOrcaRemoteWorkerHost({ ...deps, closeRuntime: closeLaterSession });
+    await expect(restarted.archive(raw)).resolves.toEqual({ runtimeClosed: true });
+    expect(closeLaterSession).not.toHaveBeenCalled();
+    expect(deps.closeRuntime).toHaveBeenCalledTimes(2);
+  });
+
   it('marks release once and keeps the task', async () => {
     const { host, deps, sessions } = setup();
     await host.open(request);
@@ -290,6 +309,7 @@ describe('orca remote worker host', () => {
         ORCA_REMOTE_WORKER_CAPS_CHANNEL,
         ORCA_REMOTE_WORKER_MODELS_CHANNEL,
         ORCA_REMOTE_WORKER_OPEN_CHANNEL,
+        ORCA_REMOTE_WORKER_ARCHIVE_CHANNEL,
         ORCA_REMOTE_WORKER_RELEASE_CHANNEL,
       ].sort(),
     );

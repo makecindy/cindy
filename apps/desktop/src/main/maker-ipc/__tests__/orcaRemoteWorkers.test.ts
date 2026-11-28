@@ -88,6 +88,8 @@ function setup(opts: {
         const agentKind = acceptedInputs.get(clientId);
         return ok(agentKind ? [{ clientId, role: 'user', agentKind }] : []);
       }
+      case 'maker:orca:remote-worker:archive':
+        return ok({ runtimeClosed: true });
       case 'maker:abort-session':
         return ok(undefined);
       case 'maker:orca:remote-worker:release':
@@ -684,10 +686,10 @@ describe('wrapTeamDeps', () => {
         : h.service.archiveWorker({ callerLeadSessionId: 'lead-1', workerId: 'w-1', onlyIfIdle: true }))
         .resolves.toMatchObject({ ok: true });
       expect(h.getWorker().status).toBe(action === 'idle' ? 'idle' : 'done');
-      expect(h.remoteInvoke.mock.calls.some(([, channel]) => channel === 'maker:abort-session')).toBe(true);
+      expect(h.remoteInvoke.mock.calls.some(([, channel]) => channel === 'maker:abort-session')).toBe(action === 'idle');
       if (action === 'release') {
         expect(store.archiveSingleWorkerSession).toHaveBeenCalledWith('proxy-1', expect.any(Function));
-        expect(h.remoteInvoke.mock.calls.some(([, channel]) => channel === 'maker:orca:remote-worker:release')).toBe(true);
+        expect(h.remoteInvoke.mock.calls.some(([, channel]) => channel === 'maker:orca:remote-worker:archive')).toBe(true);
         expect(store.markWorkerRemoteReleased).toHaveBeenCalledWith('w-1');
         expect(h.workers.runtime.isRemote('proxy-1')).toBe(false);
       }
@@ -1245,13 +1247,41 @@ describe('wrapTeamDeps', () => {
     await workers.wrapTeamDeps(base).archiveWorkerSession('proxy-1');
     expect(base.archiveWorkerSession).not.toHaveBeenCalled();
     expect(store.archiveSingleWorkerSession).toHaveBeenCalledWith('proxy-1', expect.any(Function));
-    expect(remoteInvoke.mock.calls.some(([, channel]) => channel === 'maker:orca:remote-worker:release')).toBe(true);
+    expect(remoteInvoke).toHaveBeenCalledWith('mac-mini', 'maker:orca:remote-worker:archive', [{ sessionId: 'remote-1' }]);
     expect(store.markWorkerRemoteReleased).toHaveBeenCalledWith('w-1');
     expect(workers.runtime.isRemote('proxy-1')).toBe(false);
   });
 
+  it.each([
+    fail('CHANNEL_NOT_ALLOWED', 'old host'),
+    fail('DEVICE_OFFLINE', 'offline'),
+    ok({ released: true }),
+  ])('keeps the proxy available to retry until the host confirms close', async response => {
+    let next = response;
+    const { workers, remoteInvoke } = await trackedWorker({ handle: (_device, channel) =>
+      channel === 'maker:orca:remote-worker:archive' ? next : undefined });
+    store.getRemoteWorkerByProxySession.mockResolvedValue(restoredRow as never);
+    try {
+      const wrapped = workers.wrapTeamDeps(baseDeps());
+      await expect(wrapped.archiveWorkerSession('proxy-1')).rejects.toThrow();
+      expect(store.archiveSingleWorkerSession).not.toHaveBeenCalled();
+      expect(store.markWorkerRemoteReleased).not.toHaveBeenCalled();
+      expect(workers.runtime.isRemote('proxy-1')).toBe(true);
+      next = ok({ runtimeClosed: true });
+      await wrapped.archiveWorkerSession('proxy-1');
+      expect(store.archiveSingleWorkerSession).toHaveBeenCalledOnce();
+      expect(remoteInvoke.mock.calls.map(([, channel]) => channel)).toEqual([
+        'maker:orca:remote-worker:archive', 'maker:orca:remote-worker:archive',
+      ]);
+    } finally {
+      store.getRemoteWorkerByProxySession.mockResolvedValue(null);
+      workers.stop();
+    }
+  });
+
   it('keeps remote routing when archive persistence or authorization fails', async () => {
     const { workers } = await trackedWorker();
+    store.getRemoteWorkerByProxySession.mockResolvedValueOnce(restoredRow as never);
     store.archiveSingleWorkerSession.mockRejectedValueOnce(new Error('permission revoked'));
     const base = baseDeps();
     const wrapped = workers.wrapTeamDeps(base);
