@@ -52,6 +52,7 @@ export function ErrorMessageCard({
   reason,
   providerId,
   providerName,
+  providers,
   reconnectHandoff,
   toolLoop,
   outputLimit,
@@ -67,6 +68,7 @@ export function ErrorMessageCard({
   reason?: string;
   providerId?: string;
   providerName?: string;
+  providers?: readonly { id: string; name?: string | null; auth?: { native?: string } }[];
   reconnectHandoff?: ReconnectHandoff;
   /** Structured details for a tool-loop terminal error (optional for legacy rows). */
   toolLoop?: ToolLoopErrorDetails;
@@ -77,7 +79,7 @@ export function ErrorMessageCard({
 }) {
   const { t, i18n } = useTranslation();
   const decoded = decodeRemoteErrorMessage(message);
-  const externalProviderName = resolveExternalErrorProviderName({ providerId, providerName });
+  const externalProviderName = resolveExternalErrorProviderName({ providerId, providerName, providers });
   const parsedRemoteKey = remoteErrorI18nKey(message);
   const remoteKey = isRemoteAgentResumeRejectedError(message) ? 'chat.remoteError.REMOTE_AGENT_RESUME_UNAVAILABLE'
     : isMemberBudgetPaused(message) ? 'providerShare.memberBudget.paused' : parsedRemoteKey === 'chat.remoteError.AUTO_REVIEW_UNAVAILABLE'

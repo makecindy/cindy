@@ -3,6 +3,7 @@ import { i18n } from '@/i18n';
 import { localizeAgentError } from '@/session/agentErrorI18n';
 import {
   buildMobileChatErrorExplain,
+  isMobileQuotaExhaustedError,
   resolveMobileErrorExplain,
   resolveMobileExternalProviderName,
 } from '@/session/chatErrorExplain';
@@ -19,6 +20,15 @@ describe('mobile chatErrorExplain & provider attribution', () => {
     expect(resolveMobileExternalProviderName({ providerId: 'custom', providerName: ' OpenRouter ' })).toBe('OpenRouter');
     expect(resolveMobileExternalProviderName({ providerId: 'custom', providerName: 'Cindy AI · 个人版' })).toBeUndefined();
     expect(resolveMobileExternalProviderName({ providerId: 'custom' })).toBeUndefined();
+  });
+
+  it('recognizes balance exhaustion shared with desktop without treating unrelated numbers as HTTP 402', () => {
+    for (const message of ['insufficient funds', 'quota exhausted for this key', '账户余额不足，请充值', 'HTTP 402 Payment Required']) {
+      expect(isMobileQuotaExhaustedError(message)).toBe(true);
+      expect(resolveMobileErrorExplain({ message, providerId: 'custom', providerName: 'OpenRouter' }, i18n.t.bind(i18n)))
+        .toMatchObject({ title: '为什么提示配额或余额不足' });
+    }
+    expect(isMobileQuotaExhaustedError('processed 402 rows')).toBe(false);
   });
 
   it('builds localized summaries and explanations across all 7 external/model error categories and failedSamplingAttempt', () => {

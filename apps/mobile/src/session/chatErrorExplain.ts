@@ -1,6 +1,7 @@
 import type { TFunction } from 'i18next';
 import {
   isAccountUsageLimitReachedText,
+  matchesDeterministicUsageExhaustionText,
   isProviderSafetyRefusalError,
   isRemoteCompactEncryptedContentError,
 } from '@cindy/maker-shared/error-redaction';
@@ -22,8 +23,8 @@ const UPSTREAM_STATUS_5XX_RE = /\b(5\d{2})\s+status code\b/i;
 const OVERLOAD_TEXT_RE = /\bat capacity\b|\bcurrently overloaded\b|\boverloaded_error\b|\b529\b/i;
 const STREAM_INTERRUPTED_RE = /Response API in-stream error/i;
 const INVALID_ENCRYPTED_CONTENT_RE = /invalid_encrypted_content/i;
-const QUOTA_EXHAUSTED_RE =
-  /insufficient_quota|insufficient_balance|insufficient_credit|insufficient balance|credit balance is too low|exceeded your current quota|billing hard limit|out of credits|not enough credits|(?:\bhttp\b|\bstatus\b|\berror\b|[:(\s])\s*402\b/i;
+const PAYMENT_REQUIRED_RE =
+  /\bpayment\s+required\b|(?:\b(?:http|status|code|error)\b[^0-9a-z]{0,10}402\b|\(\s*402\s*\)|\b402\s+payment\s+required\b|(?:^|[\r\n])\s*402\s*:)/i;
 
 /**
  * 解析可用于移动端错误提示点名的外部模型供应商名：
@@ -90,7 +91,7 @@ export function parseMobileUpstreamStatus(message: string): string | null {
 }
 
 export function isMobileQuotaExhaustedError(message: string): boolean {
-  return QUOTA_EXHAUSTED_RE.test(message);
+  return matchesDeterministicUsageExhaustionText(message) || PAYMENT_REQUIRED_RE.test(message);
 }
 
 /**

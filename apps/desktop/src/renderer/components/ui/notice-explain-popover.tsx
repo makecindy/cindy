@@ -50,7 +50,7 @@ export function NoticeExplainPopover({
       </PopoverTrigger>
       <PopoverContent
         align="start"
-        className="w-80 max-w-[calc(100vw-24px)] space-y-3 text-12 leading-relaxed"
+        className="w-80 max-w-[calc(100vw-24px)] max-h-[var(--radix-popover-content-available-height)] overflow-y-auto space-y-3 text-12 leading-relaxed"
         data-testid="notice-explain-popover"
       >
         <div className="space-y-1">

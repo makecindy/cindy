@@ -213,6 +213,7 @@ describe('ErrorBanner & ErrorMessageCard provider attribution + explain popover'
 
   it('attaches explain popover to persisted ErrorMessageCard and FailedSamplingNotice', async () => {
     const i18n = await createZhI18n();
+    providersMock.mockReturnValue([{ id: 'openrouter', name: 'OpenRouter', auth: {} }]);
     render(
       <I18nextProvider i18n={i18n}>
         <ErrorMessageCard
@@ -224,6 +225,14 @@ describe('ErrorBanner & ErrorMessageCard provider attribution + explain popover'
     expect(screen.getByText('Anthropic 服务返回异常（HTTP 550），本次回复未完成。')).toBeTruthy();
     fireEvent.click(screen.getByTestId('notice-explain-trigger'));
     expect(screen.getByTestId('notice-explain-popover').textContent).toContain('HTTP 550');
+
+    cleanup();
+    render(
+      <I18nextProvider i18n={i18n}>
+        <ErrorMessageCard message="550 status code (no body)" providerId="openrouter" providers={providersMock()} />
+      </I18nextProvider>,
+    );
+    expect(screen.getByText('OpenRouter 服务返回异常（HTTP 550），本次回复未完成。')).toBeTruthy();
 
     cleanup();
     render(

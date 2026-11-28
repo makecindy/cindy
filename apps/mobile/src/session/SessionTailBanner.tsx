@@ -13,6 +13,7 @@ import { ErrorNotice, ErrorNoticeAction } from '@/components/ErrorNotice';
 import { AgentErrorDetails } from './AgentErrorDetails';
 import { resolveMobileErrorExplain } from './chatErrorExplain';
 import { NoticeExplainButton } from './NoticeExplainSheet';
+import { localizeAgentError } from './agentErrorI18n';
 import { ReadableHistoryRecovery } from './ReadableHistoryRecovery';
 import { StyleSheet, View } from 'react-native';
 import { useTranslation } from 'react-i18next';
@@ -49,11 +50,17 @@ export function SessionTailBanner({
   const { t } = useTranslation();
   const isInterrupted =
     state.kind === 'interrupted' || state.continueKind === 'interrupted';
+  const namedError = state.kind === 'error-tail' && state.rawError && providerName
+    ? localizeAgentError(state.reason, null, state.rawError, undefined, undefined, {
+        providerId: state.providerId ?? providerId,
+        providerName,
+      })
+    : null;
   const text =
     state.kind === 'error-tail' && state.continueKind === 'error'
       ? state.summaryKey
         ? t(state.summaryKey)
-        : state.text
+        : namedError?.includes(providerName ?? '\0') ? namedError : state.text
       : t('session.tail.interrupted');
   const errorExplain =
     state.kind === 'error-tail' && state.rawError && !isInterrupted
