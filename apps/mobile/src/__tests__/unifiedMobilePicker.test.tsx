@@ -561,6 +561,27 @@ it('restores session mirrors through the existing value-only remote accessors',a
   } finally { clearSessionMirror('restore-test'); }
 });
 
+// 回归:会话里调未选中的被控电脑模型,档位 / Fast 经会话镜像双写到被控电脑。此前两条请求的拒绝
+// 被吞掉,断连时照样提示 parametersSaved,行上留着被控电脑没有的值。入口是详情页 onChange 加真实的
+// makeSessionMirrorAccessors;相邻用例的 modelMemory 都是同步假件,看不到写穿结果。
+// 最小失败输入:两条请求都被拒。只收下一条(只支持其中一条的旧被控电脑)仍算保存。tier: unit。
+it.each([
+  {name:'reports the failure and restores the row when the host accepts neither write',accepted:[false,false],error:'models.unified.saveFailed',notice:null,config:{effort:'medium',fast:false},mirror:[undefined,undefined]},
+  {name:'reports saved once the host accepts either write',accepted:[false,true],error:null,notice:'models.unified.parametersSaved',config:{effort:'high',fast:true},mirror:['high',true]},
+])('$name',async({accepted,error,notice,config,mirror})=>{
+  const {makeSessionMirrorAccessors,clearSessionMirror}=await vi.importActual<typeof import('@/session/sessionModelMirror')>('@/session/sessionModelMirror');
+  const memory=makeSessionMirrorAccessors('save-result-test',()=>accepted.map(ok=>ok?Promise.resolve():Promise.reject(new Error('offline'))));
+  try {
+    await mount(undefined,{activeModelId:'other',modelMemory:memory});
+    await act(async()=>test.view.onOptions(test.view.groups[0].rows[0]));
+    await act(async()=>test.view.options.onChange({...test.view.options.row.config,effort:'high',fast:true}));
+    expect(test.view.error).toBe(error);
+    expect(test.view.options.notice).toBe(notice);
+    expect(test.view.options.row.config).toMatchObject(config);
+    expect([memory.getEffort('codex','account','codex/model'),memory.getFast('codex','account','codex/model')]).toEqual(mirror);
+  } finally { clearSessionMirror('save-result-test'); }
+});
+
 it('rolls back the active configuration if saving a recommendation reset fails',async()=>{
   const memory={getEffort:()=>undefined,getFast:()=>undefined,setEffort:vi.fn(),setFast:vi.fn(),clearEffort:vi.fn(),clearFast:vi.fn()};
   const {onSelect}=await mount(undefined,{selectedEffort:'high',selectedFastMode:true,modelMemory:memory});
