@@ -1,7 +1,12 @@
 import path from 'node:path';
+import { isIpcError } from '../../shared/ipc-errors';
+import { createLogger } from '../logger';
 import { requireObject, requireString, throwIpcError } from '../utils/ipcValidate';
 import { createCheckoutService, type CheckoutActivity } from './checkout';
+import { GitExecError } from './gitExec';
 import type { CheckoutReply, CheckoutRequest, CheckoutResult } from '../../shared/worktreeCheckout';
+
+const log = createLogger('WorktreeCheckout');
 
 /** Bounded replies retain the outcome of each explicit mutation; result requests never replay Git. */
 export function createCheckoutHandler<Event>(deps: {
@@ -94,7 +99,21 @@ export function createCheckoutHandler<Event>(deps: {
           return await service.undo(req.baseRepo, req.receiptId, assertScope);
         }
         throwIpcError('INVALID_PARAMS', 'checkout:changed');
-      } catch {
+      } catch (error) {
+        if (isIpcError(error)) throw error;
+        if (error instanceof GitExecError && error.timedOut) {
+          log.warn('[checkout] git command timed out', {
+            action: req.action,
+            command: error.args[0],
+          });
+          throwIpcError('INTERNAL', 'checkout:timeout');
+        }
+        log.warn('[checkout] operation failed', {
+          action: req.action,
+          ...(error instanceof GitExecError
+            ? { command: error.args[0], exitCode: error.exitCode }
+            : {}),
+        });
         throwIpcError('INTERNAL', 'checkout:git');
       }
     };

@@ -1,15 +1,18 @@
 import {
   useCallback,
   useEffect,
+  useRef,
   type Dispatch,
   type RefObject,
   type SetStateAction,
 } from "react";
 import {
   pickInitialNewSessionWorkspace,
+  resolveInitialNewSessionWorkspaceKind,
   type NewSessionDeviceOption,
   type NewSessionDraft,
   type NewSessionStoredPreferences,
+  type NewSessionWorkspaceKind,
   type buildRecentWorkspaceOptions,
 } from "./newSession";
 import {
@@ -77,6 +80,9 @@ interface WorkspaceIdentity {
   userTouchedDeviceRef: RefObject<boolean>;
   initialWorkspaceKeyRef: RefObject<string | null>;
   workingDirPreferenceOverridesRef: RefObject<Record<string, string>>;
+  workspaceKindPreferenceOverridesRef?: RefObject<
+    Record<string, NewSessionWorkspaceKind>
+  >;
   newSessionPreferences: NewSessionStoredPreferences | null;
   newSessionPreferencesLoaded: boolean;
   preferredDefaultDevice: NewSessionDeviceOption | null;
@@ -87,10 +93,12 @@ interface WorkspaceIdentity {
 
 export interface NewSessionWorkspacePreferencesInput extends Pick<
   WorkspaceIdentity,
+  | "selectedDeviceId"
   | "initialWorkingDir"
   | "newSessionPreferences"
   | "newSessionPreferencesLoaded"
   | "workingDirPreferenceOverridesRef"
+  | "workspaceKindPreferenceOverridesRef"
   | "userTouchedWorkspaceRef"
   | "userTouchedDeviceRef"
   | "preferredDefaultDevice"
@@ -113,11 +121,13 @@ export function useNewSessionWorkspacePreferences(
   input: NewSessionWorkspacePreferencesInput,
 ): void {
   const {
+    selectedDeviceId,
     newSessionPreferences,
     setNewSessionPreferences,
     newSessionPreferencesLoaded,
     setNewSessionPreferencesLoaded,
     workingDirPreferenceOverridesRef,
+    workspaceKindPreferenceOverridesRef,
     initialWorkingDir,
     userTouchedWorkspaceRef,
     setDraft,
@@ -132,6 +142,7 @@ export function useNewSessionWorkspacePreferences(
     setSelectedDeviceName,
     setDevicePickerOpen,
   } = input;
+  const appliedInitialWorkspaceKindRef = useRef(false);
   useEffect(() => {
     let cancelled = false;
     setNewSessionPreferencesLoaded(false);
@@ -145,15 +156,11 @@ export function useNewSessionWorkspacePreferences(
             ...preferences.workingDirByDevice,
             ...workingDirPreferenceOverridesRef.current,
           },
+          workspaceKindByDevice: {
+            ...preferences.workspaceKindByDevice,
+            ...(workspaceKindPreferenceOverridesRef?.current ?? {}),
+          },
         });
-        const workspaceKind = preferences.workspaceKind;
-        if (!initialWorkingDir && workspaceKind) {
-          setDraft((current) =>
-            userTouchedWorkspaceRef.current
-              ? current
-              : { ...current, workspaceKind },
-          );
-        }
       })
       .finally(() => {
         if (!cancelled) setNewSessionPreferencesLoaded(true);
@@ -191,6 +198,38 @@ export function useNewSessionWorkspacePreferences(
     routeDeviceId,
     routeDeviceName,
   ]);
+  // Apply the settled device's own remembered workspace mode once preferences load,
+  // preserving explicit entry (initialWorkingDir) and restored/manual workspace choices.
+  useEffect(() => {
+    if (!newSessionPreferencesLoaded || appliedInitialWorkspaceKindRef.current) {
+      return;
+    }
+    const targetDeviceId = userTouchedDeviceRef.current
+      ? selectedDeviceId
+      : (preferredDefaultDevice?.deviceId ?? "");
+    if (!userTouchedDeviceRef.current && selectedDeviceId !== targetDeviceId) {
+      return;
+    }
+    appliedInitialWorkspaceKindRef.current = true;
+    if (initialWorkingDir || userTouchedWorkspaceRef.current) return;
+    const workspaceKind = resolveInitialNewSessionWorkspaceKind({
+      deviceId: targetDeviceId,
+      preferences: newSessionPreferences,
+      workspaceKindOverrides: workspaceKindPreferenceOverridesRef?.current,
+    });
+    if (!workspaceKind) return;
+    setDraft((current) =>
+      userTouchedWorkspaceRef.current
+        ? current
+        : { ...current, workspaceKind },
+    );
+  }, [
+    initialWorkingDir,
+    newSessionPreferences,
+    newSessionPreferencesLoaded,
+    preferredDefaultDevice?.deviceId,
+    selectedDeviceId,
+  ]);
 }
 
 export interface NewSessionWorkspaceActionsInput extends Pick<
@@ -200,6 +239,7 @@ export interface NewSessionWorkspaceActionsInput extends Pick<
   | "initialWorkingDir"
   | "setBrowseOpen"
   | "workingDirPreferenceOverridesRef"
+  | "workspaceKindPreferenceOverridesRef"
   | "setNewSessionPreferences"
   | "userTouchedWorkspaceRef"
   | "initialWorkspaceKeyRef"
@@ -224,6 +264,7 @@ export function useNewSessionWorkspaceActions(
     setBrowseError,
     setShowHiddenDirectories,
     workingDirPreferenceOverridesRef,
+    workspaceKindPreferenceOverridesRef,
     setNewSessionPreferences,
     userTouchedWorkspaceRef,
     setWorkspacePickerOpen,
@@ -243,6 +284,10 @@ export function useNewSessionWorkspaceActions(
     (workingDir: string) => {
       if (!selectedDeviceId || !workingDir.trim()) return undefined;
       workingDirPreferenceOverridesRef.current[selectedDeviceId] = workingDir;
+      if (workspaceKindPreferenceOverridesRef) {
+        workspaceKindPreferenceOverridesRef.current[selectedDeviceId] =
+          "project";
+      }
       setNewSessionPreferences((prev) =>
         prev
           ? {
@@ -250,6 +295,10 @@ export function useNewSessionWorkspaceActions(
               workingDirByDevice: {
                 ...prev.workingDirByDevice,
                 [selectedDeviceId]: workingDir,
+              },
+              workspaceKindByDevice: {
+                ...prev.workspaceKindByDevice,
+                [selectedDeviceId]: "project",
               },
             }
           : prev,
@@ -269,12 +318,39 @@ export function useNewSessionWorkspaceActions(
   );
   const selectDialogueWorkspace = useCallback(() => {
     userTouchedWorkspaceRef.current = true;
-    void saveNewSessionPreferences({ workspaceKind: "dialogue" });
+    if (selectedDeviceId) {
+      if (workspaceKindPreferenceOverridesRef) {
+        workspaceKindPreferenceOverridesRef.current[selectedDeviceId] =
+          "dialogue";
+      }
+      setNewSessionPreferences((prev) =>
+        prev
+          ? {
+              ...prev,
+              workspaceKindByDevice: {
+                ...prev.workspaceKindByDevice,
+                [selectedDeviceId]: "dialogue",
+              },
+            }
+          : prev,
+      );
+    }
+    void saveNewSessionPreferences({
+      workspaceKind: "dialogue",
+      ...(selectedDeviceId
+        ? {
+            workspaceKindForDevice: {
+              deviceId: selectedDeviceId,
+              workspaceKind: "dialogue",
+            },
+          }
+        : {}),
+    });
     patchDraft({ workspaceKind: "dialogue", workingDir: "" });
     setWorkspacePickerOpen(false);
     setBrowseOpen(false);
     setShowHiddenDirectories(false);
-  }, [patchDraft]);
+  }, [patchDraft, selectedDeviceId]);
   const selectRecentProject = useCallback(
     (workingDir: string) => {
       userTouchedWorkspaceRef.current = true;

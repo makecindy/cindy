@@ -8,6 +8,19 @@
       "selected": "已選"
     }
   },
+  "voiceCall": {
+    "title": "聲通",
+    "saved": "錄已存",
+    "you": "君",
+    "companion": "同伴",
+    "sendFailed": "遣送未成，原話已留。",
+    "handoff": {
+      "sending": "方交接…",
+      "accepted": "已交同伴處理",
+      "failed": "交接未成，原話已留",
+      "completed": "結果已歸"
+    }
+  },
   "renderer": {
     "sourceLocalApp": "此機應用程式「{{name}}」所遣",
     "sourceLocalAppId": "應用程式 ID：{{id}}",
@@ -67,7 +80,6 @@
       "dingtalk": "釘釘",
       "imessage": "iMessage"
     },
-    "modelMismatch": "本輪由 {{actual}} 作答，非所選之 {{selected}}（服務端暫降其級）",
     "copyStateCopying": "方錄",
     "copyStateCopied": "已錄",
     "copyStateFailed": "錄之未成",
@@ -133,6 +145,7 @@
     "retryRemoteMediaFetch": "再取遠端媒體",
     "retryFetch": "再取",
     "openMedia": "啟媒體",
+    "playAudio": "播音",
     "readCurrentRemoteFile": "讀今之遠端卷",
     "retryFilePreview": "再覽其卷",
     "readCurrentFile": "讀今之卷",
@@ -184,7 +197,8 @@
     "groupSent": "遣自群議",
     "sourceGroupId": "群議 ID：{{id}}",
     "selectText": "選文字",
-    "you": "君"
+    "you": "君",
+    "recentActivity": "近事"
   },
   "actions": {
     "attachmentsPrefix": "附卷：{{names}}",
@@ -195,6 +209,9 @@
     "turnTokens": "{{tokens}} tokens"
   },
   "lightbox": {
+    "saveImage": "存原圖",
+    "imageSaved": "圖已存",
+    "saveFailed": "圖未存，請再試。",
     "originalUnavailable": "原圖暫不可載",
     "retryOriginal": "再載原圖",
     "loadingOriginal": "方載原圖…",
@@ -246,6 +263,7 @@
     "edit": "修",
     "steer": "插言",
     "steerQueued": "尚未送達，訊仍在佇列中。",
+    "steerUnsupportedNotice": "此引擎不受插話，待遣之訊俟此輪畢乃遣。",
     "moveUp": "前移一位",
     "moveDown": "後移一位",
     "cancelSend": "罷遣",
@@ -259,10 +277,14 @@
     "delete": "刪",
     "retry": "再試",
     "notSent": "未遣",
+    "deliveryUnconfirmed": "傳送未驗",
+    "recheckDelivery": "再驗",
     "imagesNotUploaded_one": "{{count}} 圖未能上呈",
     "imagesNotUploaded_other": "{{count}} 圖未能上呈",
     "waitingForNamedComputer": "俟{{name}}連通即發",
     "reconnectComputer": "重連",
+    "pendingDelivery": "待達",
+    "pendingDeliveryHint": "此訊已存於機，正候電腦確認。",
     "waitingForComputer": "候機歸來，即遣之",
     "waitingForNetwork": "待網路重通，即遣之",
     "queued": "方候",
@@ -287,12 +309,13 @@
     "goalResumed": "耗用已復，續逐其鵠",
     "goalCapacityRetry": "模型繁忙，方再逐其鵠",
     "autoResume": {
-      "separator": "連線中斷，已自續",
+      "separator": "未得答，已自續",
       "succeeded": "已復連",
       "failed": "復連未成",
       "neutral": "復連",
       "usageReset": "耗用已復，已自續",
       "pending": "方復連…",
+      "continuingWithProgress": "自動續行中（{{attempt}}/{{total}}）…",
       "pendingWithProgress": "方復連 {{attempt}}/{{total}}…",
       "groupSwitchPending": "方易一機而續…",
       "details": "此番再試 {{attempt}}/{{total}} · 本差事累計復連 {{count}} 次",
@@ -435,6 +458,9 @@
     "send": "遣訊",
     "sending": "方遣…",
     "sent": "已呈",
+    "sendTooManyArguments": "此訊一次所理逾 {{limit}} 項，請助理分組重擬。",
+    "sendValueUnavailable": "此訊所需之值不可得，請助理核查表單欄位。",
+    "sendTextUnavailable": "未能擬就待傳之訊。",
     "sendFailed": "訊未呈，所填猶存",
     "playVideo": "播影",
     "downloadVideo": "取下此影",
@@ -460,6 +486,15 @@
     }
   },
   "attachmentPreview": {
+    "audioBackTen": "退十秒",
+    "audioForwardTen": "進十秒",
+    "audioMute": "靜音",
+    "audioUnmute": "復聲",
+    "audioSpeed": "奏速",
+    "audioOutput": "音出何處",
+    "fetchAudio": "取自電腦",
+    "pauseAudio": "暫止音聲",
+    "audioProgress": "奏至何處",
     "more": "更多操作",
     "retry": "再試",
     "image": "圖",
@@ -482,5 +517,103 @@
     "wrap": "折行",
     "lineNumbers": "行號",
     "rendered": "觀文"
+  },
+  "modelMismatch": {
+    "notice": "模型供方改以 {{actual}} 應此輪（原擇 {{selected}}）",
+    "noticeWithProvider": "{{provider}} 改以 {{actual}} 應此輪（原擇 {{selected}}）",
+    "infoLink": "明其由",
+    "infoTitle": "何以應答模型有異",
+    "infoSummary": "Cindy 已依君所擇 {{selected}} 遣此輪之請，然模型供方實以 {{actual}} 覆之。",
+    "infoSummaryWithProvider": "Cindy 已依君所擇 {{selected}} 遣此輪之請，然 {{provider}} 實以 {{actual}} 覆之。",
+    "infoCausesTitle": "常見之由",
+    "infoCausePolicy": "模型觸及安全或內容規約而自動回退（若干新模型遇拒答時，會改由舊版模型續答）。",
+    "infoCauseLoad": "模型供方逢高負載，暫將請求分流至備用模型。",
+    "infoCauseGateway": "第三方或自建模型閘道將模型名轉映至他模型。",
+    "infoActionsTitle": "處置之法",
+    "infoActionContinue": "毋須重設規制：此事僅涉此輪，後續之訊仍照請 {{selected}}。",
+    "infoActionRetry": "若此輪所覆未合意，可改易措辭再遣，或暫換他可用模型。",
+    "infoActionCheckProvider": "若累輪皆然，宜查模型供方之限額狀態或閘道轉映規制。"
+  },
+  "errorExplain": {
+    "providerSafetyRefusal": {
+      "title": "此覆何以見阻",
+      "summary": "Cindy 已如實發君之請，然模型供方內置之安策阻此答。非 Cindy 所審，亦非本機插件所截。",
+      "summaryWithProvider": "Cindy 已如實發君之請，然 {{provider}} 內置之安策阻此答。非 Cindy 所審，亦非本機插件所截。",
+      "cause1": "所問之辭、附件或前文觸及供方安全審查之規。",
+      "cause2": "模型方撰答之際，觸輸出安濾而中輟。",
+      "action1": "原辭再試多復見阻，宜先易辭或去觸規之段再發。",
+      "action2": "若前文已觸禁，可另起新事以續，或更用他型。"
+    },
+    "overload": {
+      "title": "何以示供方繁忙",
+      "summary": "模型供方今算力告急（如盛時擁塞或返 HTTP 529），暫難承此輪之請。與 Cindy 本體及君之網路無涉。",
+      "summaryWithProvider": "{{provider}} 今算力告急（如盛時擁塞或返 HTTP 529），暫難承此輪之請。與 Cindy 本體及君之網路無涉。",
+      "cause1": "盛時求者驟增，供方算力暫滿。",
+      "cause2": "供方暫修或節流調度，目前無餘力。",
+      "action1": "無須重啟 Cindy 或更動網路，少頃點「重試」即可。",
+      "action2": "若欲立續，可暫更他型，或改取同組他源。"
+    },
+    "streamInterrupted": {
+      "title": "傳覆何以中斷",
+      "summary": "模型供方續傳答文之際，連線忽絕。Cindy 未嘗崩潰，已畢之步與前文皆存。",
+      "summaryWithProvider": "{{provider}} 續傳答文之際，連線忽絕。Cindy 未嘗崩潰，已畢之步與前文皆存。",
+      "cause1": "模型供方伺服器撰答途中偶生異狀或自絕其流。",
+      "cause2": "他家或自建轉關傳長文逾時而斷。",
+      "action1": "逕點「重試」，或發「續」字令模型接成其文。",
+      "action2": "若連輪皆斷，可暫更他型，或察自建轉關逾時之設。"
+    },
+    "upstreamStatus": {
+      "title": "何以返服務異常",
+      "summary": "Cindy 已達其請，然模型供方返 HTTP {{status}} 內誤（無詳文），乃外服之異，非 Cindy 之失。",
+      "summaryWithProvider": "Cindy 已達其請，然 {{provider}} 返 HTTP {{status}} 內誤（無詳文），乃外服之異，非 Cindy 之失。",
+      "cause1": "模型供方接口暫生內部故障。",
+      "cause2": "他家或自建轉關轉發失利，或截後自返 5xx 狀碼。",
+      "action1": "少頃點「重試」；若係暫震，常速復常。",
+      "action2": "若經他家或自建轉關，宜察其狀與日誌，或先易他供方。"
+    },
+    "modelAccessDenied": {
+      "title": "何以無權用此型",
+      "summary": "模型供方拒今帳號取用此型，Cindy 不能越供方之權限。",
+      "summaryWithProvider": "{{provider}} 拒今帳號取用此型，Cindy 不能越 {{provider}} 之權限。",
+      "cause1": "今所訂之等或 API 金鑰尚未開通此型。",
+      "cause2": "組織主事限列可用之型，或所在地域暫不支援。",
+      "action1": "改擇今帳號已通之他型以續此事。",
+      "action2": "赴供方後臺核對權限；若甫升方案，重連帳號再試。"
+    },
+    "providerQuotaExceeded": {
+      "title": "何以示限額或餘資不足",
+      "summary": "今所連外置模型供方帳戶餘資或限額已罄，供方遂拒此請。與 Cindy 本身帳戶無涉。",
+      "summaryWithProvider": "君所連 {{provider}} 帳戶餘資或限額已罄，{{provider}} 遂拒此請。與 Cindy 本身帳戶無涉。",
+      "cause1": "該供方帳戶預存餘資用盡，或未繫有效付費之法。",
+      "cause2": "此 API 金鑰設消費上限，或組織限額已滿。",
+      "action1": "赴對應供方計費處增資或提限後，再點「重試」。",
+      "action2": "亦可於選型處改擇尚有餘額之他供方以續。"
+    },
+    "usageLimit": {
+      "title": "何以屆用量上限",
+      "summary": "今所連模型帳號已觸供方所定週期用量上限，暫難受新請。非 Cindy 所設之限。",
+      "summaryWithProvider": "今所連 {{provider}} 帳號已觸 {{provider}} 所定週期用量上限，暫難受新請。非 Cindy 所設之限。",
+      "cause1": "訂閱帳號於本期（如五時或一週）內用量已盡。",
+      "cause2": "同帳號並行於多事或多器，共用同一週期限額。",
+      "action1": "俟週期復原後再試；若已啟自動續行，限復即自續。",
+      "action2": "欲立續者，可暫易他型、他訂帳號或 API 供方。"
+    },
+    "encryptedContent": {
+      "title": "部分舊誌何以難讀",
+      "summary": "部分模型會密藏推演之態於舊誌，唯原供方與原帳號能解。易供方、換號或遠端整文時，今供方或無由讀舊密段。",
+      "summaryWithProvider": "部分模型會密藏推演之態於舊誌，唯原供方與原帳號能解。易供方、換號或遠端整文時，{{provider}} 或無由讀舊密段。",
+      "cause1": "中途改用他家供方或他號，新供方不能解前所加密之思。",
+      "cause2": "遠端整文或跨端點轉送時，密態與今目標不合。",
+      "action1": "歸回原用之模型供方或帳號，即可續此事。",
+      "action2": "或點「於新事中續」，Cindy 留可讀之言而去難解密段，原事無損。"
+    },
+    "failedSamplingAttempt": {
+      "title": "何以猶見未竟之答",
+      "summary": "模型撰此答途中失利或見斷，僅吐前半。Cindy 留已成之段以供參酌，免前思盡失。",
+      "cause1": "流傳之際遇供方報誤、網斷或安策所截。",
+      "cause2": "此輪尚未收尾即觸誤或止。",
+      "action1": "視下方誤報以明斷因，定奪是否重試。",
+      "action2": "可逕點重試或發新訊以續，已留之文仍可參照。"
+    }
   }
 }

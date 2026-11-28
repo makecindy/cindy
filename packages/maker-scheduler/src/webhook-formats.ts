@@ -3,6 +3,7 @@
  * 所以新增发送方只需在这里加预设。校验与 cindy-server 仓 webhook-server/src/core/format.ts 一致，两边一起改。
  * 不依赖 Node，Renderer 也会引用。
  */
+import { normalizePluginEventSources, samePluginEventScope, type SchedulePluginEventSource } from './plugin-events.js';
 
 export const WEBHOOK_FIELD_NAMES = [
   'event',
@@ -423,9 +424,35 @@ export function scheduleWebhookPreset(id: string): ScheduleWebhookPreset | undef
 
 /** 任务保存的发送方。缺省等于 GitHub 预设并签名。 */
 export type ScheduleWebhookSource =
-  | { preset: 'github-app'; repositories: string[] }
-  | { preset: ScheduleWebhookPresetId; signed?: boolean }
+  /** number：只看这个编号的 Issue（或 PR）事件，此时 repositories 恰好一个。 */
+  | { preset: 'github-app'; repositories: string[]; number?: number }
+  /** 插件事件：本机插件经 routine-request 发布，不需要接收地址、密钥或账号。 */
+  | { preset: 'plugin'; sources: SchedulePluginEventSource[] }
+  /**
+   * 普通地址型发送方。repository + number：只看这个项目里这个编号的事件（如指定 GitLab Issue），
+   * 只在本机按事件里的 repository / number 复核，不改变服务器上的地址与格式。
+   */
+  | { preset: ScheduleWebhookPresetId; signed?: boolean; repository?: string; number?: number }
   | { preset: 'custom'; format: WebhookFormat };
+
+/** 由宿主管理、没有公网接收地址和密钥的来源：GitHub App 与插件事件。 */
+export function isManagedWebhookSource(source: ScheduleWebhookSource | undefined): boolean {
+  return source?.preset === 'github-app' || source?.preset === 'plugin';
+}
+
+/**
+ * 托管来源的范围是否相同。范围变了要更换本地队列身份，旧范围的待执行事件不得进入新范围；
+ * 任一方是托管来源而另一方不同类时也视为变化。
+ */
+export function sameManagedWebhookScope(
+  a: { source?: ScheduleWebhookSource; events?: readonly string[] },
+  b: { source?: ScheduleWebhookSource; events?: readonly string[] },
+): boolean {
+  if (a.source?.preset === 'plugin' && b.source?.preset === 'plugin') {
+    return samePluginEventScope(a.source.sources, b.source.sources);
+  }
+  return sameGithubAppScope(a, b);
+}
 
 /** Presentation order is not part of a managed subscription's queue identity. */
 export function sameGithubAppScope(
@@ -433,11 +460,12 @@ export function sameGithubAppScope(
   b: { source?: ScheduleWebhookSource; events?: readonly string[] },
 ): boolean {
   if (a.source?.preset !== 'github-app' || b.source?.preset !== 'github-app') return false;
-  const canonical = (repositories: readonly string[], events: readonly string[] = []) => JSON.stringify([
+  const canonical = (repositories: readonly string[], events: readonly string[] = [], number?: number) => JSON.stringify([
     [...new Set(repositories.map(repo => repo.trim().toLowerCase()))].sort(),
     [...new Set(events.map(event => event.trim()).filter(Boolean))].sort(),
+    number ?? null,
   ]);
-  return canonical(a.source.repositories, a.events) === canonical(b.source.repositories, b.events);
+  return canonical(a.source.repositories, a.events, a.source.number) === canonical(b.source.repositories, b.events, b.source.number);
 }
 
 /**
@@ -447,12 +475,22 @@ export function sameGithubAppScope(
 export function normalizeScheduleWebhookSource(value: unknown): ScheduleWebhookSource {
   if (!isObject(value) || typeof value.preset !== 'string') throw new Error('invalid webhook source');
   if (value.preset === 'github-app') {
-    if (!hasOnlyKeys(value, ['preset', 'repositories']) || !Array.isArray(value.repositories)
+    if (!hasOnlyKeys(value, ['preset', 'repositories'], ['number']) || !Array.isArray(value.repositories)
       || !value.repositories.length || value.repositories.length > 50 || value.repositories.some(repo =>
         typeof repo !== 'string' || !/^[a-z\d][a-z\d-]{0,38}\/[a-z\d_.-]{1,100}$/i.test(repo))) {
       throw new Error('GitHub App requires 1–50 repository names (owner/repository)');
     }
-    return { preset: 'github-app', repositories: [...new Set((value.repositories as string[]).map(repo => repo.toLowerCase()))] };
+    const repositories = [...new Set((value.repositories as string[]).map(repo => repo.toLowerCase()))];
+    if (value.number === undefined) return { preset: 'github-app', repositories };
+    // A single Issue (or PR) number narrows one repository's events to that item.
+    if (typeof value.number !== 'number' || !Number.isSafeInteger(value.number) || value.number < 1 || repositories.length !== 1) {
+      throw new Error('A GitHub item number requires exactly one repository and a positive number');
+    }
+    return { preset: 'github-app', repositories, number: value.number };
+  }
+  if (value.preset === 'plugin') {
+    if (!hasOnlyKeys(value, ['preset', 'sources'])) throw new Error('invalid webhook source');
+    return { preset: 'plugin', sources: normalizePluginEventSources(value.sources) };
   }
   if (value.preset === 'custom') {
     if (!hasOnlyKeys(value, ['preset', 'format'])) throw new Error('invalid webhook source');
@@ -461,15 +499,23 @@ export function normalizeScheduleWebhookSource(value: unknown): ScheduleWebhookS
     return { preset: 'custom', format };
   }
   const preset = scheduleWebhookPreset(value.preset);
-  if (!preset || !hasOnlyKeys(value, ['preset'], ['signed'])) throw new Error('invalid webhook source');
+  if (!preset || !hasOnlyKeys(value, ['preset'], ['signed', 'repository', 'number'])) throw new Error('invalid webhook source');
   if (value.signed !== undefined && typeof value.signed !== 'boolean') throw new Error('invalid webhook source');
-  return value.signed === false ? { preset: preset.id, signed: false } : { preset: preset.id };
+  const base = value.signed === false ? { preset: preset.id, signed: false } : { preset: preset.id };
+  if (value.repository === undefined && value.number === undefined) return base;
+  // A specific item narrows one project's events: both the project path and a positive number are required.
+  const repository = typeof value.repository === 'string' ? value.repository.trim().toLowerCase() : '';
+  if (!/^[a-z\d_.-]+(?:\/[a-z\d_.-]+)+$/.test(repository) || repository.split('/').some(part => part === '.' || part === '..')
+    || typeof value.number !== 'number' || !Number.isSafeInteger(value.number) || value.number < 1) {
+    throw new Error('A specific item requires a project path and a positive number');
+  }
+  return { ...base, repository, number: value.number };
 }
 
 /** 发给服务器的格式。来自更新版本、本机认不出的预设返回 null，这时不改服务器上的格式。 */
 export function resolveScheduleWebhookFormat(source: ScheduleWebhookSource | undefined): WebhookFormat | null {
   if (!source) return scheduleWebhookPreset(DEFAULT_SCHEDULE_WEBHOOK_PRESET)!.format;
-  if (source.preset === 'github-app') return null;
+  if (source.preset === 'github-app' || source.preset === 'plugin') return null;
   if (source.preset === 'custom') return parseWebhookFormat(source.format);
   const preset = scheduleWebhookPreset(source.preset);
   if (!preset) return null;

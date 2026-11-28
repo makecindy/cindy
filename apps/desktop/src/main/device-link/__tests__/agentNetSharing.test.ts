@@ -54,6 +54,13 @@ import { selectedAgentNetSharingRoute, rememberAgentNetSharingService, requestAg
   joinAgentNetSharedTask, agentNetSharingRoute, stopAgentNetSharing, captureAgentNetSharingBoundaryClose, bindAgentNetSharing,
   listAgentNetSharedTasks, rememberAgentNetSharingHost, retireAgentNetSharingGuest } from '../agentNetSharing.js';
 import { checkProviderShareDelegation, resolveAgentNetProviderShareLink, providerShareApi, providerShareLinkFor, providerShareHiddenByEncryptedOnly } from '../providerShareApi.js';
+/** Account-service identity card shape: a JWT whose iat/exp the client reads for its lifetime. */
+const UNIT_CARD_SIGNATURE = 'unit-limited-identity-card';
+function unitIdentityCard() {
+  const iat = Math.floor(Date.now() / 1000), exp = iat + 300;
+  return { card: ['e30', Buffer.from(JSON.stringify({ iat, exp })).toString('base64url'), UNIT_CARD_SIGNATURE].join('.'),
+    expiresAt: new Date(exp * 1000).toISOString() };
+}
 beforeEach(() => {
   state.key = 'owner-a'; state.pending = false; state.files.clear(); state.writes = [];
   state.relay = null; state.config = null; state.agentNetEnabled = true; state.onlyEncrypted = false; state.allowLegacy = false;
@@ -62,7 +69,7 @@ beforeEach(() => {
   state.scopedTarget.mockReset();
   const identity = generateIdentity('self-device'), { bootstrap } = createPrivateNetwork('Unit fixture', identity);
   state.api = new AgentNetClient('https://private.example.test', identity, bootstrap.ownerCertificate, bootstrap.rootPublicKey);
-  state.card.mockResolvedValue({ card: 'unit-limited-identity-card', expiresAt: new Date(Date.now() + 300_000).toISOString() });
+  state.card.mockImplementation(async () => unitIdentityCard());
 });
 afterEach(() => stopAgentNetSharing());
 
@@ -226,6 +233,58 @@ it('keeps a provider application, approval, transport identity and leave on its 
   }
   expect(state.card.mock.calls.every(([, opts]) => opts.body.audience === 'cindy-agent-net-sharing')).toBe(true);
 });
+
+// Unit: both complete and partial Agent-Net received lists must carry 429 backoff
+// across reads. The real SDK sees the HTTP header and the unaffected origin still loads.
+it.each([false, true])('waits for Retry-After in received lists (healthy second origin: %s)', async (partial) => {
+  const current = state.api;
+  state.api = new AgentNetClient(current.base, current.identity, current.certificate, current.rootPublicKey, undefined, { fetch: state.http });
+  if (partial) {
+    rememberAgentNetSharingService({ ...selectedAgentNetSharingRoute('provider-share')!,
+      server: 'https://friend.example.test', networkId: 'private:friend' });
+  }
+  const startedAt = Date.now();
+  const clock = vi.spyOn(Date, 'now').mockReturnValue(startedAt);
+  const healthyShare = {
+    shareId: 'healthy-share', memberId: 'healthy-member', providerId: 'claude', providerLabel: 'Remote',
+    hostDeviceId: 'remote-host', deviceName: 'Owner', owner: { displayName: 'Owner', avatarUrl: null, region: 'global' },
+    status: 'active', hostOnline: true, hostCapable: true,
+  };
+  let restrictedReads = 0, healthyReads = 0;
+  state.http.mockImplementation(async (url: string) => {
+    const { hostname, pathname } = new URL(String(url));
+    if (pathname.endsWith('/sharing-origins')) return Response.json({ origins: [] });
+    if (hostname === 'friend.example.test') {
+      healthyReads++;
+      return Response.json({ shares: [healthyShare] });
+    }
+    restrictedReads++;
+    return restrictedReads === 1
+      ? new Response('Too many requests', { status: 429, headers: { 'Retry-After': '90' } })
+      : Response.json({ shares: [] });
+  });
+  const readWhileThrottled = async () => {
+    if (partial) {
+      const result = await providerShareApi.listReceived();
+      expect(result.authorityIncomplete).toBe(true);
+      expect(result.map(share => share.shareId)).toEqual(['healthy-share']);
+    } else {
+      await expect(providerShareApi.listReceived()).rejects.toThrow('AGENT_NET_SHARING_SERVICES_UNAVAILABLE');
+    }
+  };
+  try {
+    await readWhileThrottled();
+    clock.mockReturnValue(startedAt + 61_000);
+    await readWhileThrottled();
+    expect(restrictedReads).toBe(1);
+    expect(healthyReads).toBe(partial ? 2 : 0);
+    clock.mockReturnValue(startedAt + 91_000);
+    expect((await providerShareApi.listReceived()).authorityIncomplete).toBeUndefined();
+    expect(restrictedReads).toBe(2);
+  } finally {
+    clock.mockRestore();
+  }
+});
 // Review #10578: a partial outage returns cached rows rather than throwing. Unit,
 // real Main API + aggregation + SDK; previous leave tests never populated that
 // cache. An older read must not refill it, and a later admission must still work.
@@ -261,7 +320,7 @@ it.each([
   state.card.mockImplementation(async (path: string) => {
     if (path.endsWith('/received')) return readSource();
     if (path.endsWith('/leave')) return {};
-    return { card: 'unit-limited-identity-card', expiresAt: new Date(Date.now() + 300_000).toISOString() };
+    return unitIdentityCard();
   });
   await providerShareApi.listReceived();
   const neighbourSeed = agentNetSharingRoute('provider-share', 'neighbour-share')?.seed;
@@ -382,7 +441,7 @@ it('sends a key-bound short-lived card to the private service and persists only 
     const headers = new Headers(options.headers), auth = headers.get('authorization')!;
     expect(auth.startsWith('AgentNetIdentity ')).toBe(true); expect(auth.includes('Bearer')).toBe(false);
     const envelope = JSON.parse(Buffer.from(auth.slice('AgentNetIdentity '.length), 'base64url').toString());
-    expect(envelope.card).toBe('unit-limited-identity-card');
+    expect(envelope.card.endsWith('.' + UNIT_CARD_SIGNATURE)).toBe(true);
     expect(verifyRequestProof(envelope.signingKey, envelope.proof, 'POST', '/api/agent-net/sharing/shared-tasks',
       Buffer.from(String(options.body)), Date.now())).toBe(true);
     expect(headers.get('x-agent-net-authorization')?.startsWith('AgentNet ')).toBe(true);
@@ -394,7 +453,7 @@ it('sends a key-bound short-lived card to the private service and persists only 
     body: { audience: 'cindy-agent-net-sharing', purpose: 'network-session', nonce: expect.stringMatching(/^[a-f0-9]{64}$/) },
   }));
   expect(state.files.size).toBe(1);
-  expect([...state.files.values()][0]).not.toContain('unit-limited-identity-card');
+  expect([...state.files.values()][0]).not.toContain(UNIT_CARD_SIGNATURE);
   expect(state.writes.every(file => file.startsWith('/unit-only-vault/owner-a/'))).toBe(true);
 });
 it('pins an explicit guest invitation and rejects a conflicting root before any second join', async () => {

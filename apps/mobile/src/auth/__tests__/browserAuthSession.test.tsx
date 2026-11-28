@@ -5,6 +5,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const native = vi.hoisted(() => ({
   platform: 'android',
+  refresh: vi.fn(),
+  resourceRequest: vi.fn(),
+  network: new Set<(state: { isConnected: boolean }) => void>(),
   replaceRoute: vi.fn(),
   closeAccount: undefined as (() => void) | undefined,
   storage: new Map<string, string>(),
@@ -28,6 +31,11 @@ const native = vi.hoisted(() => ({
   initialUrl: vi.fn(),
   requestCode: vi.fn(),
   discoverOrganization: vi.fn(),
+  verifyCode: vi.fn(),
+  signup: vi.fn(),
+  claimQrHandoff: vi.fn(),
+  pollQrHandoff: vi.fn(),
+  clientOptions: [] as Array<{ region?: string; capabilities?: readonly string[] }>,
   crossRealm: false,
   state: 0,
 }));
@@ -53,6 +61,12 @@ vi.mock('react-native', () => ({
   },
   Keyboard: { dismiss() {} },
 }));
+vi.mock('expo-network', () => ({
+  addNetworkStateListener: (listener: (state: { isConnected: boolean }) => void) => {
+    native.network.add(listener);
+    return { remove: () => native.network.delete(listener) };
+  },
+}));
 vi.mock('expo-web-browser', () => ({
   maybeCompleteAuthSession() {}, openAuthSessionAsync: native.open,
 }));
@@ -72,6 +86,14 @@ vi.mock('@cindy/auth-client', async (importOriginal) => {
   return {
     ...actual,
     CindyAuthClient: class {
+      constructor(options: { region?: string; capabilities?: readonly string[] }) {
+        native.clientOptions.push(options);
+      }
+      verifyCode = native.verifyCode;
+      signup = native.signup;
+      claimQrHandoff = native.claimQrHandoff;
+      pollQrHandoff = native.pollQrHandoff;
+      refresh = native.refresh;
       getProviders = native.providers;
       requestCode = native.requestCode;
       discoverSsoOrg = native.discoverOrganization;
@@ -96,12 +118,14 @@ vi.mock('@/auth/pkce', () => ({
 vi.mock('@/auth/deviceId', () => ({ ensureDeviceId: async () => 'fixture-device', hasStoredDeviceId: async () => true }));
 vi.mock('@/auth/mobileAccountVault', async (original) => ({
   ...(await original<typeof import('../mobileAccountVault')>()),
-  readMobileAccountVault: async () => null,
   clearMobileLoginCredentialsForLogout: native.logoutCleanup,
   listMobileSavedAccounts: () => [],
-  reconcileMobileActiveAuthSession: async () => null,
 }));
-vi.mock('@/api/client', () => ({ registerAccountUnavailableHandler: () => () => {} }));
+vi.mock('@/api/client', async (original) => ({
+  ...(await original<typeof import('@/api/client')>()),
+  apiFetchRaw: native.resourceRequest,
+  registerAccountUnavailableHandler: () => () => {},
+}));
 vi.mock('@/auth/nativeSocial', () => ({}));
 vi.mock('@/auth/ssoOrgHistory', () => ({ rememberSsoOrgIdentifier: async () => {} }));
 vi.mock('@/auth/canaryChannelSync', () => ({}));
@@ -136,6 +160,9 @@ vi.mock('@/update/canaryChannelStore', () => ({ clearCanaryChannel: async () => 
 vi.mock('@/update/betaChannelStore', () => ({ prepareBetaChannelForDevice: async () => {} }));
 vi.mock('@/update/fetchLatestRelease', () => ({}));
 
+import { AuthApiError, accountVaultKey } from '@cindy/auth-client';
+import { ApiError } from '@/api/client';
+import { MOBILE_ACCOUNT_VAULT_KEY } from '../mobileAccountVault';
 import { AuthProvider, useAuth } from '../AuthContext';
 import AddAccountScreen from '../../../app/add-account';
 import { redirectSystemPath } from '../../../app/+native-intent';
@@ -201,6 +228,8 @@ describe('browser auth session lifecycle (real AuthProvider, mocked native/netwo
     native.replaceRoute.mockReset();
     native.closeAccount = undefined;
     native.crossRealm = false;
+    native.refresh.mockReset();
+    native.resourceRequest.mockReset();
     native.discoverOrganization.mockReset().mockResolvedValue({
       region: 'cn', orgName: 'Fixture Organization',
       connections: [{ connectionId: 'fixture-connection', connectionName: 'Fixture SSO', protocol: 'wecom' }],
@@ -223,6 +252,11 @@ describe('browser auth session lifecycle (real AuthProvider, mocked native/netwo
     native.selectAccount.mockReset().mockResolvedValue(verifiedOutcome);
     native.requestBinding.mockReset().mockResolvedValue(undefined);
     native.requestVerification.mockReset().mockResolvedValue(undefined);
+    native.verifyCode.mockReset().mockResolvedValue(verifiedOutcome);
+    native.signup.mockReset().mockResolvedValue(verifiedOutcome);
+    native.claimQrHandoff.mockReset().mockResolvedValue({ expiresAt: new Date(Date.now() + 120_000).toISOString() });
+    native.pollQrHandoff.mockReset().mockResolvedValue({ status: 'pending' });
+    native.clientOptions.length = 0;
     root = createRoot(document.createElement('div'));
     await act(async () => { root.render(<AuthProvider><Probe /></AuthProvider>); });
     expect(auth.initialized).toBe(true);
@@ -234,6 +268,119 @@ describe('browser auth session lifecycle (real AuthProvider, mocked native/netwo
     expect(native.links.size).toBe(0);
     expect(native.appStates.size).toBe(0);
     vi.restoreAllMocks();
+  });
+
+  // Regression: a locked Keychain, an offline refresh and a resource 401 must
+  // leave the account recoverable. Exercise the provider with actual vault records.
+  const profileKey = 'cindy.mobile.auth.userProfile';
+  const sessionKey = 'cindy.mobile.auth.session.v1';
+  const membership = {
+    id: 'saved', passportId: 'passport', displayName: 'Saved', kind: 'personal',
+    role: 'owner', email: null, orgName: null, orgId: null, orgLogoUrl: null, avatarUrl: null,
+  };
+  function seedSession(profileId: string) {
+    const key = accountVaultKey('cn', membership.id);
+    const metadata = { ...membership, membershipId: membership.id };
+    native.storage.set(MOBILE_ACCOUNT_VAULT_KEY, JSON.stringify({
+      version: 1, activeAccountKey: key, passports: {}, resources: {
+        [key]: { realm: 'cn', metadata, lastUsedAt: 1, refreshToken: 'fixture-refresh' },
+      },
+    }));
+    native.storage.set(profileKey, JSON.stringify({
+      version: 1, accountKey: accountVaultKey('cn', profileId),
+      user: { id: profileId, name: profileId, membershipKind: 'personal' },
+    }));
+  }
+
+  it('restores the cached owner on unlock even while refresh is offline', async () => {
+    seedSession(membership.id);
+    let locked = true;
+    native.readSecure.mockImplementation(async (key: string) => {
+      if (locked && key === MOBILE_ACCOUNT_VAULT_KEY) throw new Error('locked');
+      return native.storage.get(key) ?? null;
+    });
+    native.refresh.mockRejectedValue(new AuthApiError('NETWORK_ERROR', 0, 'offline'));
+    await restartProvider();
+    expect(auth.recoveringSession).toBe(true);
+    expect(auth.initialized).toBe(false);
+    expect(native.storage.has(profileKey)).toBe(true);
+
+    locked = false;
+    await act(async () => { for (const listener of native.appStates) listener('active'); });
+    expect(auth.initialized && auth.isAuthenticated).toBe(true);
+    expect(auth.user?.id).toBe(membership.id);
+    expect(native.unregisterPush).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    new AuthApiError('SERVICE_UNAVAILABLE', 503, 'offline'),
+    new AuthApiError('INVALID_RESPONSE', 401, 'gateway response'),
+  ])('withholds another owner’s cache and recovers from $code on reconnect', async failure => {
+    seedSession('different-owner');
+    native.refresh.mockRejectedValue(failure);
+    await restartProvider();
+    expect(auth.recoveringSession).toBe(true);
+    expect(auth.user).toBeNull();
+    native.refresh.mockResolvedValue({ membership, accessToken: 'fixture-access', refreshToken: 'rotated' });
+    await act(async () => { for (const listener of native.network) listener({ isConnected: true }); });
+    expect(auth.initialized && auth.isAuthenticated).toBe(true);
+    expect(auth.user?.id).toBe(membership.id);
+
+    const denied = new ApiError('HTTP_401', 401, 'unauthorized');
+    native.resourceRequest.mockRejectedValue(denied);
+    await act(async () => {
+      await expect(auth.apiFetch('/resource', { baseUrl: 'https://resource.example.invalid' })).rejects.toBe(denied);
+    });
+    expect(auth.user?.id).toBe(membership.id);
+    expect(native.unregisterPush).not.toHaveBeenCalled();
+  });
+
+  it.each([false, true])('offers explicit login for a damaged vault without clearing it (initially locked: %s)', async initiallyLocked => {
+    seedSession(membership.id);
+    const vault = JSON.parse(native.storage.get(MOBILE_ACCOUNT_VAULT_KEY)!);
+    vault.resources.damaged = { realm: 'cn' };
+    const damagedVault = initiallyLocked ? JSON.stringify(vault) : '{bad-json';
+    native.storage.set(MOBILE_ACCOUNT_VAULT_KEY, damagedVault);
+    const savedSession = JSON.stringify({ version: 1, realm: 'cn', refreshToken: 'fixture-refresh' });
+    native.storage.set(sessionKey, savedSession);
+    let locked = initiallyLocked;
+    native.readSecure.mockImplementation(async (key: string) => {
+      if (locked && key === MOBILE_ACCOUNT_VAULT_KEY) throw new Error('locked');
+      return native.storage.get(key) ?? null;
+    });
+    await restartProvider();
+    if (initiallyLocked) {
+      expect(auth.recoveringSession).toBe(true);
+      locked = false;
+      await act(async () => { for (const listener of native.appStates) listener('active'); });
+    }
+    expect(auth.initialized && !auth.isAuthenticated && !auth.recoveringSession).toBe(true);
+    await act(async () => { await auth.dispatchLoginAction({ type: 'initialize' }); });
+    expect(auth.authError).toBe('AUTH_VAULT_INVALID');
+    expect(native.storage.get(MOBILE_ACCOUNT_VAULT_KEY)).toBe(damagedVault);
+    expect(native.storage.get(sessionKey)).toBe(savedSession);
+    expect(native.refresh).not.toHaveBeenCalled();
+    expect(native.unregisterPush).not.toHaveBeenCalled();
+
+    native.exchange.mockResolvedValue({
+      status: 'ok', accessToken: 'fixture-access', refreshToken: 'repaired', expiresIn: 3600,
+      membership,
+    });
+    await start();
+    await emitLink(callbackUrl());
+    expect(auth.user?.id).toBe(membership.id);
+    expect(native.storage.get(sessionKey)).toContain('repaired');
+    expect(native.storage.get(MOBILE_ACCOUNT_VAULT_KEY)).not.toContain('damaged');
+  });
+
+  it('returns to login after the auth service rejects the saved session', async () => {
+    seedSession(membership.id);
+    native.refresh.mockRejectedValue(new AuthApiError('INVALID_REFRESH_TOKEN', 401, 'revoked'));
+    await restartProvider();
+    expect(auth.initialized && !auth.isAuthenticated && !auth.recoveringSession).toBe(true);
+    expect(auth.authError).toBe('SESSION_EXPIRED');
+    expect(native.storage.has(sessionKey)).toBe(false);
+    expect(native.unregisterPush).toHaveBeenCalled();
   });
 
   it('retries voiceprint cleanup on startup and foreground while signed out', async () => {
@@ -1336,6 +1483,112 @@ describe('browser auth session lifecycle (real AuthProvider, mocked native/netwo
     expect(auth.loginState).toBe(before);
     await act(async () => { await auth.dispatchLoginAction({ type: 'reset' }); });
     expect(auth.loginState?.step).toBe('identifier');
+  });
+
+  // 依据:注册前确认(2026-11-26)。服务端只对声明了 signup_confirmation_v1 的请求返回
+  // signup_required,漏声明就会回到「验证即注册」;确认前不得调用 /signup。
+  it('asks before creating an account and signs up only after confirmation', async () => {
+    native.verifyCode.mockResolvedValueOnce({
+      status: 'signup_required', signupTicket: 'fixture-signup-ticket',
+      channel: 'email', targetMasked: 'u***@example.invalid',
+    });
+    await act(async () => { await auth.dispatchLoginAction({
+      type: 'request-code', kind: 'email', identifier: 'user@example.invalid',
+    }); });
+    await act(async () => { await auth.dispatchLoginAction({
+      type: 'verify-code', kind: 'email', identifier: 'user@example.invalid', code: '123456',
+    }); });
+    expect(auth.loginState).toEqual({
+      step: 'signup-confirmation', channel: 'email', targetMasked: 'u***@example.invalid',
+    });
+    expect(native.signup).not.toHaveBeenCalled();
+    expect(native.clientOptions.at(-1)?.capabilities).toContain('signup_confirmation_v1');
+
+    await act(async () => { await auth.dispatchLoginAction({ type: 'confirm-signup' }); });
+    expect(native.signup).toHaveBeenCalledExactlyOnceWith('fixture-signup-ticket');
+    expect(auth.loginState?.step).toBe('sso-verification');
+  });
+
+  // 依据:电脑装的是另一个版本时先问再切(2026-11-26 决定)。同意前不得向对方区域发请求。
+  it('asks before switching editions for a scanned computer code and claims only after consent', async () => {
+    const payload = {
+      kind: 'handoff', region: 'global', id: 'fixture-handoff-0001', scanToken: 'fixture-scan-token-0000000000000001',
+    } as const;
+    await act(async () => { await auth.dispatchLoginAction({ type: 'qr-claim', payload }); });
+    expect(auth.loginState).toEqual({ step: 'qr-region-switch', targetRegion: 'global' });
+    expect(native.claimQrHandoff).not.toHaveBeenCalled();
+
+    await act(async () => { await auth.dispatchLoginAction({ type: 'confirm-qr-region-switch' }); });
+    expect(native.claimQrHandoff).toHaveBeenCalledOnce();
+    expect(native.claimQrHandoff.mock.calls[0]![0]).toMatchObject({
+      handoffId: payload.id, scanToken: payload.scanToken,
+    });
+    expect(native.clientOptions.at(-1)?.region).toBe('global');
+    expect(auth.loginState?.step).toBe('qr-waiting');
+    await act(async () => { await auth.dispatchLoginAction({ type: 'reset' }); });
+  });
+
+  // 依据:server-channel-review —— 服务端给了 Retry-After 就等到那时再问;要等到码过期之后才行就结束等待。
+  it('waits for the server retry time while waiting for the computer and stops when that is past expiry', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    try {
+      const payload = {
+        kind: 'handoff', region: 'global', id: 'fixture-handoff-0002', scanToken: 'fixture-scan-token-0000000000000002',
+      } as const;
+      native.pollQrHandoff.mockImplementationOnce(async () => {
+        throw new AuthApiError('RATE_LIMITED', 429, 'slow down', Date.now() + 30_000);
+      });
+      await act(async () => { await auth.dispatchLoginAction({ type: 'qr-claim', payload }); });
+      await act(async () => { await auth.dispatchLoginAction({ type: 'confirm-qr-region-switch' }); });
+      expect(auth.loginState?.step).toBe('qr-waiting');
+
+      await act(async () => { await vi.advanceTimersByTimeAsync(2_000); });
+      expect(native.pollQrHandoff).toHaveBeenCalledTimes(1);
+      await act(async () => { await vi.advanceTimersByTimeAsync(29_000); });
+      expect(native.pollQrHandoff).toHaveBeenCalledTimes(1);
+      await act(async () => { await vi.advanceTimersByTimeAsync(1_000); });
+      expect(native.pollQrHandoff).toHaveBeenCalledTimes(2);
+
+      native.pollQrHandoff.mockImplementationOnce(async () => {
+        throw new AuthApiError('RATE_LIMITED', 429, 'slow down', Date.now() + 600_000);
+      });
+      await act(async () => { await vi.advanceTimersByTimeAsync(2_000); });
+      expect(native.pollQrHandoff).toHaveBeenCalledTimes(3);
+      expect(auth.loginState?.step).not.toBe('qr-waiting');
+      expect(auth.authError).toBe('RATE_LIMITED');
+      await act(async () => { await vi.advanceTimersByTimeAsync(120_000); });
+      expect(native.pollQrHandoff).toHaveBeenCalledTimes(3);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // 依据:扫码已选定电脑上的账号,领取结果后不能再按邮箱查企业登录、把用户带去另选身份。
+  it('signs in with the computer account after approval without asking to switch to an organization', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    try {
+      const payload = {
+        kind: 'handoff', region: 'global', id: 'fixture-handoff-0003', scanToken: 'fixture-scan-token-0000000000000003',
+      } as const;
+      native.pollQrHandoff.mockResolvedValueOnce({
+        status: 'approved',
+        outcome: {
+          status: 'ok', accessToken: 'fixture-access', refreshToken: 'fixture-refresh', expiresIn: 3600,
+          membership: { id: 'fixture-personal', kind: 'personal', role: 'owner', displayName: 'Fixture',
+            email: 'user@example.invalid', orgId: null, orgName: null },
+        },
+      });
+      await act(async () => { await auth.dispatchLoginAction({ type: 'qr-claim', payload }); });
+      await act(async () => { await auth.dispatchLoginAction({ type: 'confirm-qr-region-switch' }); });
+      expect(auth.loginState?.step).toBe('qr-waiting');
+
+      await act(async () => { await vi.advanceTimersByTimeAsync(2_000); });
+      expect(native.pollQrHandoff).toHaveBeenCalledOnce();
+      expect(native.discoverOrganization).not.toHaveBeenCalled();
+      expect(auth.loginState?.step).not.toBe('realm-confirmation');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('keeps add-account initialization and cancellation as explicit lifecycle boundaries', async () => {

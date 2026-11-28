@@ -36,7 +36,7 @@
 | 退出尸检结论只进日志 | `RunMarkerStore.analyzePreviousRuns()` → `logPreviousRunReports()`，`reports` 未对外暴露 |
 | 致命判定收口在生命周期模块 | `lifecycle.ts` 的 `beginShutdown(timeoutMs, reason)`；`unhandledRejection` / broken stdio / 瞬时网络错误都**不**进入该路径 |
 | 端点清单有受信任域约束 | `endpointManifestCache.ts` 的 `REGION_ENDPOINT_DOMAIN` + `findUntrustedCachedEndpoint()`——第三方日志服务域名加进清单会让整份离线缓存判不可信 |
-| 隐私政策同意是独立事实 | `analytics-settings-store.ts` 的 `privacyConsentAccepted`（与 `analyticsEnabled` 分开） |
+| 隐私政策同意是独立事实 | `analytics-settings-store.ts` 的 `privacyConsentAccepted`（与 `analyticsEnabled` 分开）；手动上传也接受桌面设置页单独保存的当前版本授权，见 [§4.4](#44-隐私授权读取与持久化) |
 | 跨实例现读盘的现成原语 | `maker-host/override-settings-file.ts` 的 `invalidateIfChanged()`（mtime 守卫，文件没变零开销） |
 | 吃系统代理的出网通道 | `maker-host/outbound-fetch.ts` 的 `outboundFetch` |
 | 区域常量 | `shared/brandRegion.ts` 的 `CURRENT_CINDY_REGION`（main / renderer 共用） |
@@ -368,11 +368,17 @@ export function onFatalShutdown(cb: (reason: string) => void): void;
   `crash-exit` / `shutdown-incomplete` 不额外补——那两类在崩溃当时已经过 lifecycle，
   标记已写；重复补会造成重复上报。
 
-### 4.4 `analytics-settings-store.ts`：加一个现读盘入口
+### 4.4 隐私授权读取与持久化
 
-新增 `refreshAnalyticsSettingsFromDisk()`，内部就是 `store.invalidateIfChanged()`。
-现有语义一字不动（既有读取路径仍走缓存）。授权闸在每次判定前调用它——开发版与正式版共享
-userData，用户可能刚在另一个实例里关掉授权（需求 §4.3）。
+崩溃路径通过 `refreshAnalyticsSettingsFromDisk()` 刷新全局隐私同意。桌面「关于」的手动上传
+异步读取当前全局记录；可读但未同意时再读取手动授权。任一必要记录不可读时禁止上传，
+保留原文件。每次手动请求重新读取，避免共享用户数据目录的实例使用旧授权。
+
+`log-upload:accept-manual-consent` 只接受可信桌面渲染器与当前政策版本。它将版本异步原子保存
+到 `<userData>/manual-log-upload-consent.json`，不采集日志。该文件只用于手动上传，
+与使用统计、崩溃开关及其「恢复默认」互不影响。文件缺失或版本过期时重新请求同意。
+实现见 [日志上传入口](../apps/desktop/src/main/log-upload/index.ts)，回归见
+[手动上传 IPC](../apps/desktop/src/main/log-upload/__tests__/manualUploadIpc.test.ts)。
 
 ### 4.5 `bootstrap-electron.ts`：接线
 
@@ -482,7 +488,8 @@ i18n 门禁：`pnpm check:i18n` + `pnpm check:i18n-glossary`。
    override 跟随版本默认值（配置规则 §4），不动隐私政策同意这个事实记录。
 2. **`UploadLogsRow`**：按钮 + 进行态；成功 toast 带上传编号并支持复制。四种失败按错误码
    给可区分文案：未配置目标 / 未同意隐私政策 / 采到 0 条 / 上传失败。未配置或未同意时
-   按钮 disabled 并在副文案里说明原因。
+   按钮 disabled 并在副文案里说明原因。仅在桌面「关于」可读取授权且缺少同意时，
+   副文案提供隐私政策链接和独立的「同意」按钮。同意后启用原「上传」按钮，用户再次点击才发送。
 
 文案（`settings.about.logUpload.*`，四语齐全）：
 

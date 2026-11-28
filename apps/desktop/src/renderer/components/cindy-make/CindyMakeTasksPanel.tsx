@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
+import { SearchInput } from '@/components/ui/search-input';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { cindyMakeState } from '@/lib/cindyMakeState';
 import { formatCindyMakeTitle } from '@/lib/cindyMakeTitle';
@@ -181,8 +181,7 @@ export function CindyMakeTasksPanel({
         <h3 className="font-medium">
           {t('settings.cindyMake.tasks.title')} · {tasks.length}
         </h3>
-        <Input
-          size="sm"
+        <SearchInput
           value={query}
           onChange={setQuery}
           aria-label={t('settings.cindyMake.tasks.search')}

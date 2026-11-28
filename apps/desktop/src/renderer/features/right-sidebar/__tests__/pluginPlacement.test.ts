@@ -21,10 +21,12 @@ vi.mock('@/lib/sidebarTabWindow', () => ({ isSidebarTabWindow: () => tabWindow.s
 import {
   __resetGlobalTabsForTest,
   getActiveGlobalTabId,
+  addGlobalPluginTab,
   isPluginWindowPlacement,
 } from '../globalTabs';
 import { __resetTabGroupsForTest } from '../tabGroups';
-import { openPluginInWindow } from '../pluginPlacement';
+import { __setSidebarTabWindowsStateForTest, __resetSidebarTabWindowsStateForTest } from '@/lib/sidebarTabWindowState';
+import { focusExistingPluginTab, openPluginInWindow } from '../pluginPlacement';
 
 const ghost = {
   manifest: { id: 'alpha', name: 'Alpha', mainView: { html: 'main.html' } },
@@ -42,6 +44,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  __resetSidebarTabWindowsStateForTest();
   delete (window as unknown as Win).electronAPI;
   __resetGlobalTabsForTest();
   __resetTabGroupsForTest();
@@ -74,4 +77,20 @@ describe('openPluginInWindow', () => {
     openPluginInWindow(ghost);
     await vi.waitFor(() => expect(isPluginWindowPlacement('alpha')).toBe(false));
   });
+});
+
+it('focuses a popped-out docked panel only when it contains the requested page', () => {
+  const plugin: InstalledGhost = {
+    ...ghost,
+    manifest: { ...ghost.manifest, panel: { position: 'right', html: 'panel.html' } },
+  };
+  const tab = addGlobalPluginTab('alpha', { ghost: plugin, view: 'panel' })!;
+  __setSidebarTabWindowsStateForTest({ [tab.id]: { windowId: 'panel-window', sessionId: null, open: true } });
+  const focus = vi.fn().mockResolvedValue(undefined);
+  const returnTab = vi.fn();
+  (window as unknown as Win).electronAPI = { sidebarTabWindow: { focus, returnTab } };
+  expect(focusExistingPluginTab(plugin)).toBe(false);
+  expect(focusExistingPluginTab(plugin, 'panel')).toBe(true);
+  expect(focus).toHaveBeenCalledWith(tab.id);
+  expect(returnTab).not.toHaveBeenCalled();
 });

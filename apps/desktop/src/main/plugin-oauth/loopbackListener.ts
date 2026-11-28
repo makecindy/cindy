@@ -20,7 +20,7 @@ export async function listenForOauthCallback(
   deliver: (value: PluginOauthCallback) => Promise<void>,
   assertCurrent: () => void,
   expectedState: string = offer.state,
-): Promise<{ close(): Promise<void> }> {
+): Promise<{ close(): Promise<void>; drain(): Promise<void> }> {
   const endpoint = new URL(offer.callbackUrl);
   let consumed = false;
   let closed = false;
@@ -132,17 +132,28 @@ export async function listenForOauthCallback(
     }
   };
   let closing: Promise<void> | undefined;
-  const close = (): Promise<void> => {
+  const stop = (drain: boolean): Promise<void> => {
     if (closing) return closing;
     closed = true;
     // Stop accepting callbacks immediately, but let callers wait until both
     // families have released their sockets before reusing the callback port.
     closing = Promise.all(servers.map((server) => new Promise<void>((resolve) => {
-      server.close(() => resolve());
-      server.closeAllConnections();
+      // A completed cloud exchange may retire the listener before its HTTP
+      // result page has flushed. Drain that one response; cancellation stays
+      // immediate. The grace period is bounded even for a stalled peer.
+      const timer = drain ? setTimeout(() => server.closeAllConnections(), 2000) : undefined;
+      timer?.unref();
+      server.close(() => {
+        clearTimeout(timer);
+        resolve();
+      });
+      if (drain) server.closeIdleConnections();
+      else server.closeAllConnections();
     }))).then(() => {});
     return closing;
   };
+  const close = () => stop(false);
+  const drain = () => stop(true);
   try {
     for (const host of hosts) {
       if (closed) throw fail();
@@ -175,7 +186,7 @@ export async function listenForOauthCallback(
     if (closed || !servers.some((server) => server.listening)) throw fail();
     assertCurrent();
     ready = true;
-    return { close };
+    return { close, drain };
   } catch {
     await close();
     throw fail();

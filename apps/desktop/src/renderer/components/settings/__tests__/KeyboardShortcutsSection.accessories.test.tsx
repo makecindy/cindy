@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 
+import { createRef } from 'react';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -112,6 +113,7 @@ vi.mock('@/hooks/useXboxGamepad', () => ({
 }));
 
 import { KeyboardShortcutsSection } from '../KeyboardShortcutsSection';
+import { SettingsEscapeHarness } from './SettingsEscapeHarness';
 
 const GAMEPAD_OPEN = {
   xbox: 'settings.shortcuts.xboxGamepad.openAria',
@@ -148,6 +150,7 @@ describe('KeyboardShortcutsSection accessories', () => {
   });
 
   afterEach(() => {
+    vi.unstubAllGlobals();
     Reflect.deleteProperty(window, 'electronAPI');
   });
 
@@ -166,6 +169,33 @@ describe('KeyboardShortcutsSection accessories', () => {
     expect(screen.getByRole('button', { name: GAMEPAD_OPEN.playstation })).toBeTruthy();
     expect(screen.getByRole('button', { name: GAMEPAD_OPEN.nintendo })).toBeTruthy();
     expect(screen.getByRole('button', { name: GAMEPAD_OPEN.generic })).toBeTruthy();
+  });
+
+  // Unit regression: opening a device from Accessories replaces two parent pages in one viewport.
+  // Visibility-only tests miss the return offsets after scrolling each page independently.
+  it.each(['button', 'Escape'])('returns to the scrolled positions of Accessories and the shortcuts list using %s', (action) => {
+    vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
+    const scrollRef = createRef<HTMLDivElement>();
+    render(<SettingsEscapeHarness><div ref={scrollRef}><KeyboardShortcutsSection scrollRef={scrollRef} /></div></SettingsEscapeHarness>);
+    const viewport = scrollRef.current!;
+    viewport.scrollTop = 300;
+    fireEvent.click(screen.getByRole('button', { name: 'settings.shortcuts.accessories.openAria' }));
+    expect(viewport.scrollTop).toBe(0);
+    viewport.scrollTop = 120;
+    fireEvent.click(screen.getByRole('button', { name: GAMEPAD_OPEN.xbox }));
+    expect(viewport.scrollTop).toBe(0);
+    const goBack = (buttonName: string) => {
+      if (action === 'Escape') fireEvent.keyDown(document.body, { key: 'Escape' });
+      else fireEvent.click(screen.getByRole('button', { name: buttonName }));
+    };
+    goBack('settings.shortcuts.xboxGamepad.back');
+    expect(screen.getByRole('button', { name: GAMEPAD_OPEN.xbox })).toBeTruthy();
+    expect(viewport.scrollTop).toBe(120);
+    goBack('settings.shortcuts.accessories.back');
+    expect(screen.getByRole('button', { name: 'settings.shortcuts.accessories.openAria' })).toBeTruthy();
+    expect(viewport.scrollTop).toBe(300);
+    fireEvent.keyDown(document.body, { key: 'Escape' });
+    expect(screen.getByText('Left settings')).toBeTruthy();
   });
 
   it('shows a detected device here and still lists it inside Accessories', () => {

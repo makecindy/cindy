@@ -25,6 +25,7 @@ vi.mock('../../subagentObservationRewindFence.js', () => ({
 }));
 vi.mock('../../messagePersistBroadcaster.desktop.js', () => ({
   enqueueDurableWrite: mocks.enqueueDurableWrite,
+  getSessionTextSnapshot: vi.fn(() => null),
   flushAssistantBlock: vi.fn(),
   onAssistantTextEvent: mocks.onAssistantTextEvent,
   onAssistantAttemptFailure: vi.fn(),
@@ -67,6 +68,31 @@ describe('session event persistence dependencies', () => {
 
     expect(log.warn).toHaveBeenCalledWith('Subagent workspace persistence failed',
       { sessionId: 'session-1', error: 'DB_TRANSPORT_OUTCOME_UNKNOWN' });
+  });
+
+  // Unit: plugin forwarding must distinguish finished foreground progress from a draft,
+  // a subagent's text and a final answer even when all have identical content.
+  it('marks only finished progress belonging to the current plugin input', () => {
+    const deps = { log: { warn: vi.fn() }, orcaTeamServiceForEvents: null };
+    const event = { type: 'text', source: 'codex',
+      data: { text: 'same text', phase: 'commentary', isFinal: true, isFullText: true } };
+    const input = 'plugin-task:run';
+    for (const [sourceEvent, meta, identity, eligible] of [
+      [event, {}, input, true],
+      [{ ...event, source: 'claude-code' }, { stopReason: 'tool_use' }, input, true],
+      [{ ...event, source: 'pi' }, { stopReason: 'toolUse' }, input, true],
+      [{ ...event, data: { ...event.data, phase: 'final_answer' } }, {}, input, false],
+      [{ ...event, data: { ...event.data, isFinal: false } }, {}, input, false],
+      [{ ...event, runtimeRecovery: true }, {}, input, false],
+      [{ ...event, turnScope: 'background' }, {}, input, false],
+      [event, { parentUuid: 'subagent-parent' }, input, false],
+      [event, {}, 'human-steer', false],
+    ] as const) {
+      persistSessionStreamEvent(deps, session, { event: sourceEvent, eventAgentMeta: meta,
+        groupLaneInputClientId: identity } as unknown as PreparedSessionEvent);
+      const persisted = mocks.onAssistantTextEvent.mock.lastCall?.[2];
+      expect(persisted?.pluginProgressInputId).toBe(eligible ? input : undefined);
+    }
   });
 
   it('captures worker text through the dependency inherited from the session entry', () => {

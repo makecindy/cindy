@@ -8,6 +8,19 @@
       "selected": "Selecionada"
     }
   },
+  "voiceCall": {
+    "title": "Chamada de voz",
+    "saved": "Registo guardado",
+    "you": "Eu",
+    "companion": "Amigo",
+    "sendFailed": "Não foi possível enviar. As suas palavras foram mantidas.",
+    "handoff": {
+      "sending": "A transferir…",
+      "accepted": "Transferido para o seu amigo",
+      "failed": "Não foi possível transferir. As suas palavras foram mantidas.",
+      "completed": "Resultado recebido"
+    }
+  },
   "renderer": {
     "sourceLocalApp": "Enviado pela aplicação local «{{name}}»",
     "sourceLocalAppId": "ID da aplicação: {{id}}",
@@ -67,7 +80,6 @@
       "dingtalk": "DingTalk",
       "imessage": "iMessage"
     },
-    "modelMismatch": "Este turno foi respondido por {{actual}} em vez do modelo selecionado {{selected}} (redução temporária de capacidade do lado do servidor)",
     "copyStateCopying": "A copiar",
     "copyStateCopied": "Copiado",
     "copyStateFailed": "Falha ao copiar",
@@ -133,6 +145,7 @@
     "retryRemoteMediaFetch": "Voltar a obter conteúdo multimédia remoto",
     "retryFetch": "Voltar a obter",
     "openMedia": "Abrir conteúdo multimédia",
+    "playAudio": "Reproduzir áudio",
     "readCurrentRemoteFile": "Ler ficheiro remoto atual",
     "retryFilePreview": "Recarregar pré-visualização do ficheiro",
     "readCurrentFile": "Ler ficheiro atual",
@@ -184,7 +197,8 @@
     "groupSent": "Enviado de um grupo",
     "sourceGroupId": "ID do grupo: {{id}}",
     "selectText": "Selecionar texto",
-    "you": "Eu"
+    "you": "Eu",
+    "recentActivity": "Atividade recente"
   },
   "actions": {
     "attachmentsPrefix": "Anexos: {{names}}",
@@ -195,6 +209,9 @@
     "turnTokens": "{{tokens}} tokens"
   },
   "lightbox": {
+    "saveImage": "Guardar imagem",
+    "imageSaved": "Imagem guardada",
+    "saveFailed": "Não foi possível guardar a imagem. Tente novamente.",
     "originalUnavailable": "Imagem original indisponível",
     "retryOriginal": "Recarregar imagem original",
     "loadingOriginal": "A carregar a imagem original…",
@@ -246,6 +263,7 @@
     "edit": "Editar",
     "steer": "Intervir",
     "steerQueued": "Ainda não foi entregue. A mensagem continua em fila.",
+    "steerUnsupportedNotice": "Este motor não permite orientar. As mensagens em fila serão enviadas quando o turno atual terminar.",
     "moveUp": "Mover para antes",
     "moveDown": "Mover para depois",
     "cancelSend": "Cancelar envio",
@@ -259,10 +277,14 @@
     "delete": "Eliminar",
     "retry": "Tentar novamente",
     "notSent": "Não enviado",
+    "deliveryUnconfirmed": "Envio não confirmado",
+    "recheckDelivery": "Verificar novamente",
     "imagesNotUploaded_one": "Não foi possível carregar {{count}} imagem",
     "imagesNotUploaded_other": "Não foi possível carregar {{count}} imagens",
     "waitingForNamedComputer": "Envio automático quando {{name}} se ligar",
     "reconnectComputer": "Voltar a ligar",
+    "pendingDelivery": "A aguardar entrega",
+    "pendingDeliveryHint": "Mensagem guardada neste telemóvel. A aguardar a confirmação do computador.",
     "waitingForComputer": "Será enviado quando o computador voltar a estar disponível",
     "waitingForNetwork": "Será enviado quando voltar a estar online",
     "queued": "Em fila",
@@ -296,12 +318,13 @@
     "goalResumed": "Utilização reposta, a continuar o objetivo",
     "goalCapacityRetry": "O serviço do modelo estava ocupado — a tentar o objetivo novamente",
     "autoResume": {
-      "separator": "Ligação interrompida — retomada automaticamente",
+      "separator": "Resposta vazia — retoma automática",
       "succeeded": "Ligação restabelecida",
       "failed": "Falha ao restabelecer a ligação",
       "neutral": "Restabelecer ligação",
       "usageReset": "Utilização reposta, continuação automática",
       "pending": "A restabelecer a ligação…",
+      "continuingWithProgress": "A continuar automaticamente ({{attempt}}/{{total}})…",
       "pendingWithProgress": "A restabelecer a ligação {{attempt}}/{{total}}…",
       "groupSwitchPending": "A mudar para outro computador…",
       "details": "Tentativa {{attempt}}/{{total}} · {{count}} restabelecimentos de ligação nesta sessão",
@@ -436,6 +459,9 @@
     "send": "Enviar mensagem",
     "sending": "A enviar…",
     "sent": "Enviado",
+    "sendTooManyArguments": "Esta mensagem usa mais de {{limit}} itens num só passo. Pede ao assistente para os dividir em grupos mais pequenos.",
+    "sendValueUnavailable": "Um valor usado nesta mensagem não está disponível. Pede ao assistente para verificar os campos do formulário.",
+    "sendTextUnavailable": "Não foi possível preparar a mensagem para envio.",
     "sendFailed": "A mensagem não foi enviada. O que introduziu continua aqui.",
     "playVideo": "Reproduzir vídeo",
     "downloadVideo": "Transferir vídeo",
@@ -461,6 +487,15 @@
     }
   },
   "attachmentPreview": {
+    "audioBackTen": "Recuar 10 segundos",
+    "audioForwardTen": "Avançar 10 segundos",
+    "audioMute": "Silenciar",
+    "audioUnmute": "Ativar som",
+    "audioSpeed": "Velocidade de reprodução",
+    "audioOutput": "Saída de áudio",
+    "fetchAudio": "Obter do computador",
+    "pauseAudio": "Pausar áudio",
+    "audioProgress": "Posição de reprodução",
     "more": "Mais ações",
     "retry": "Tentar novamente",
     "image": "Imagem",
@@ -483,5 +518,103 @@
     "wrap": "Moldar linhas",
     "lineNumbers": "Números de linha",
     "rendered": "Ver documento"
+  },
+  "modelMismatch": {
+    "notice": "O fornecedor de modelos respondeu a este turno com {{actual}} em vez de {{selected}}",
+    "noticeWithProvider": "{{provider}} respondeu a este turno com {{actual}} em vez de {{selected}}",
+    "infoLink": "Porque aconteceu?",
+    "infoTitle": "Porque respondeu outro modelo",
+    "infoSummary": "A Cindy enviou este turno para {{selected}} conforme selecionado, mas o fornecedor de modelos devolveu a resposta com {{actual}}.",
+    "infoSummaryWithProvider": "A Cindy enviou este turno para {{selected}} conforme selecionado, mas {{provider}} devolveu a resposta com {{actual}}.",
+    "infoCausesTitle": "Causas comuns",
+    "infoCausePolicy": "Recurso por política de segurança ou conteúdo (alguns modelos recuam automaticamente para um modelo anterior em vez de recusar).",
+    "infoCauseLoad": "Redirecionamento temporário pelo fornecedor de modelos durante picos de carga.",
+    "infoCauseGateway": "Regras de mapeamento ou encaminhamento num gateway de terceiros ou personalizado.",
+    "infoActionsTitle": "O que pode fazer",
+    "infoActionContinue": "Não precisa de alterar as definições: isto afetou apenas este turno e as mensagens seguintes continuam a pedir {{selected}}.",
+    "infoActionRetry": "Se esta resposta não servir o que precisa, reformule a mensagem e envie novamente, ou mude para outro modelo disponível.",
+    "infoActionCheckProvider": "Se persistir em vários turnos, verifique o estado da quota do fornecedor de modelos ou o encaminhamento do gateway."
+  },
+  "errorExplain": {
+    "providerSafetyRefusal": {
+      "title": "Porque esta resposta foi bloqueada",
+      "summary": "O Cindy enviou o teu pedido tal como foi escrito, mas a política de segurança e conteúdo do fornecedor de modelos bloqueou a resposta. Não se trata de moderação do Cindy nem de um bloqueio de plugins locais.",
+      "summaryWithProvider": "O Cindy enviou o teu pedido tal como foi escrito, mas a política de segurança e conteúdo de {{provider}} bloqueou a resposta. Não se trata de moderação do Cindy nem de um bloqueio de plugins locais.",
+      "cause1": "O pedido, um anexo ou o contexto anterior acionou as regras de segurança do fornecedor.",
+      "cause2": "Um filtro de segurança interrompeu a geração da resposta a meio.",
+      "action1": "Voltar a tentar exatamente igual costuma ser bloqueado de novo; reformula ou remove o trecho sensível antes de reenviar.",
+      "action2": "Se o contexto anterior estiver a causar o bloqueio, inicia uma nova tarefa ou muda para outro modelo."
+    },
+    "overload": {
+      "title": "Porque o serviço está sobrecarregado",
+      "summary": "O fornecedor de modelos está temporariamente com pouca capacidade de cálculo (por exemplo, pico de tráfego ou HTTP 529). Isto não está relacionado com o Cindy nem com a tua rede local.",
+      "summaryWithProvider": "{{provider}} está temporariamente com pouca capacidade de cálculo (por exemplo, pico de tráfego ou HTTP 529). Isto não está relacionado com o Cindy nem com a tua rede local.",
+      "cause1": "A procura elevada em horas de ponta saturou temporariamente a capacidade deste modelo.",
+      "cause2": "Está ativa uma manutenção temporária ou limitação de capacidade no fornecedor.",
+      "action1": "Não precisas de reiniciar o Cindy nem alterar a tua rede; aguarda um momento e clica em «Tentar novamente».",
+      "action2": "Para continuar já, muda temporariamente para outro modelo ou outra origem do teu grupo de modelos."
+    },
+    "streamInterrupted": {
+      "title": "Porque a saída foi interrompida",
+      "summary": "O fornecedor de modelos encerrou inesperadamente a ligação de transmissão antes de concluir a resposta. O Cindy não falhou e os passos concluídos e o histórico mantêm-se intactos.",
+      "summaryWithProvider": "{{provider}} encerrou inesperadamente a ligação de transmissão antes de concluir a resposta. O Cindy não falhou e os passos concluídos e o histórico mantêm-se intactos.",
+      "cause1": "Um erro temporário no servidor do fornecedor interrompeu a geração a meio.",
+      "cause2": "Um gateway intermédio de terceiros ou personalizado atingiu o tempo limite numa resposta longa.",
+      "action1": "Clica em «Tentar novamente» ou envia «continua» para retomar.",
+      "action2": "Se acontecer repetidamente, experimenta outro modelo ou verifica o tempo limite do teu gateway personalizado."
+    },
+    "upstreamStatus": {
+      "title": "Porque foi devolvido um erro de serviço",
+      "summary": "O Cindy enviou o pedido com sucesso, mas o fornecedor de modelos devolveu um erro interno HTTP {{status}} sem detalhes. A falha vem do serviço externo, não do Cindy.",
+      "summaryWithProvider": "O Cindy enviou o pedido com sucesso, mas {{provider}} devolveu um erro interno HTTP {{status}} sem detalhes. A falha vem do serviço externo, não do Cindy.",
+      "cause1": "O servidor do fornecedor de modelos teve uma falha interna temporária.",
+      "cause2": "Um gateway de terceiros ou próprio falhou ao reencaminhar o pedido ou devolveu um código 5xx personalizado.",
+      "action1": "Clica em «Tentar novamente» dentro de momentos; falhas passageiras costumam resolver-se depressa.",
+      "action2": "Se usares um gateway próprio ou de terceiros, consulta o estado e os registos dele ou muda de fornecedor."
+    },
+    "modelAccessDenied": {
+      "title": "Porque não tens acesso a este modelo",
+      "summary": "O fornecedor de modelos recusou o acesso desta conta ao modelo selecionado. O Cindy não pode contornar as permissões do fornecedor.",
+      "summaryWithProvider": "{{provider}} recusou o acesso desta conta ao modelo selecionado. O Cindy não pode contornar as permissões de {{provider}}.",
+      "cause1": "O teu plano atual ou a chave API ainda não inclui acesso a este modelo.",
+      "cause2": "Um administrador da organização restringiu a lista de modelos ou a tua região ainda não é suportada.",
+      "action1": "Muda para outro modelo disponível na tua conta atual para continuares a tarefa.",
+      "action2": "Verifica as permissões na consola do fornecedor; se acabaste de atualizar o plano, volta a ligar a conta e tenta de novo."
+    },
+    "providerQuotaExceeded": {
+      "title": "Porque a quota ou o saldo está esgotado",
+      "summary": "A conta externa do fornecedor de modelos ligada ficou sem saldo ou quota e recusou o pedido. Isto é independente da tua conta Cindy.",
+      "summaryWithProvider": "A tua conta {{provider}} ligada ficou sem saldo ou quota e {{provider}} recusou o pedido. Isto é independente da tua conta Cindy.",
+      "cause1": "O saldo pré-pago da conta do fornecedor esgotou-se ou não existe um método de pagamento válido.",
+      "cause2": "O limite de gastos desta chave API ou a quota da organização foi atingido.",
+      "action1": "Carrega saldo ou aumenta o limite na página de faturação do fornecedor e clica em «Tentar novamente».",
+      "action2": "Também podes mudar para outro fornecedor com quota disponível no seletor de modelos."
+    },
+    "usageLimit": {
+      "title": "Porque foi atingido o limite de utilização",
+      "summary": "A conta ligada atingiu a janela periódica de utilização definida pelo fornecedor de modelos e não aceita novos pedidos por agora. Este limite não é imposto pelo Cindy.",
+      "summaryWithProvider": "A tua conta {{provider}} ligada atingiu a janela periódica de utilização definida por {{provider}} e não aceita novos pedidos por agora. Este limite não é imposto pelo Cindy.",
+      "cause1": "A subscrição esgotou o limite na janela atual (por exemplo, de 5 horas ou semanal).",
+      "cause2": "Várias tarefas ou dispositivos com a mesma conta partilham a mesma janela de quota.",
+      "action1": "Aguarda a reposição da janela e tenta de novo; se a continuação automática estiver ativa, a tarefa retomará sozinha.",
+      "action2": "Para continuar de imediato, muda para outro modelo, outra conta de subscrição ou um fornecedor API."
+    },
+    "encryptedContent": {
+      "title": "Porque parte do histórico não pode ser lida",
+      "summary": "Alguns modelos guardam o raciocínio interno encriptado no histórico e apenas o fornecedor e a conta originais conseguem desencriptá-lo. Após trocar de fornecedor/conta ou compactar remotamente, o fornecedor atual pode não conseguir ler blocos antigos.",
+      "summaryWithProvider": "Alguns modelos guardam o raciocínio interno encriptado no histórico e apenas o fornecedor e a conta originais conseguem desencriptá-lo. Após trocar de fornecedor/conta ou compactar remotamente, {{provider}} pode não conseguir ler blocos antigos.",
+      "cause1": "Mudaste para outro fornecedor ou conta que não consegue desencriptar o raciocínio anterior.",
+      "cause2": "A compactação remota ou um endpoint diferente não corresponde à chave usada antes.",
+      "action1": "Volta ao fornecedor ou conta original para continuar diretamente nesta tarefa.",
+      "action2": "Ou escolhe «Continuar numa nova tarefa»: o Cindy mantém o histórico legível e remove apenas os blocos encriptados ilegíveis sem alterar a tarefa original."
+    },
+    "failedSamplingAttempt": {
+      "title": "Porque aparece uma resposta incompleta",
+      "summary": "O modelo falhou ou foi interrompido antes de concluir esta resposta, gerando apenas parte do texto. O Cindy mantém o fragmento visível como referência para não perderes o que já foi produzido.",
+      "cause1": "Um erro do fornecedor, uma quebra de ligação ou um bloqueio de segurança interrompeu a transmissão.",
+      "cause2": "O turno terminou com erro ou foi parado antes de finalizar a resposta.",
+      "action1": "Consulta o cartão de erro abaixo para veres a causa exata e se deves tentar novamente.",
+      "action2": "Podes clicar em «Tentar novamente» ou enviar uma nova mensagem para continuar a partir daqui."
+    }
   }
 }

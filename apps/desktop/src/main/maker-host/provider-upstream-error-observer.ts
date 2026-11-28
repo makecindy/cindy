@@ -18,14 +18,17 @@
 
 import { brotliDecompressSync, gunzipSync, inflateSync } from 'node:zlib';
 
-import type { ResponseObserver, ResponseObserverCtx } from '@cindy/anthropic-compat-proxy';
+import type { ResponseObserver, ResponseObserverCtx, ResponseObserverSink } from '@cindy/anthropic-compat-proxy';
 import type { AgentKind } from '@cindy/model-providers';
 import { redactSensitiveText } from '@cindy/maker-shared/error-redaction';
 
 import {
   classifyProviderError,
+  providerRetryAfterAt,
   type ProviderErrorCode,
 } from '../../shared/providerErrors.js';
+import type { OpenAiGroupProbeResult } from '../../shared/openAiAccountGroup.js';
+import { PROVIDER_GROUP_FAILURE_COOLDOWN_MS } from '../provider-group/cooling.js';
 
 /** 广播给 renderer 的结构化上游错误事件（payload 走 MAKER_PUSH.PROVIDER_UPSTREAM_ERROR）。 */
 export interface ProviderUpstreamErrorEvent {
@@ -58,6 +61,16 @@ const THROTTLE_MS = 30_000;
 // broadcaster 由 host（register.ts）注入 —— 本模块不 import Electron，可脱 Electron 单测。
 type Broadcaster = (event: ProviderUpstreamErrorEvent) => void;
 let _broadcast: Broadcaster = () => {};
+type HealthCapture = (id: string, agent: AgentKind, upstream: string, authorization: string | undefined, sessionId?: string | null) =>
+  ((result: OpenAiGroupProbeResult, retryAt?: number) => Promise<unknown>) | undefined;
+let captureHealth: HealthCapture = () => undefined;
+let observeVerifiedResponse: (sessionId: string, id: string, agent: AgentKind, ctx: ResponseObserverCtx) => (() => void) | undefined = () => undefined;
+export function setProviderUpstreamSuccessObserver(observer: typeof observeVerifiedResponse): void {
+  observeVerifiedResponse = observer;
+}
+export function setProviderUpstreamHealthCapture(capture: HealthCapture): void {
+  captureHealth = capture;
+}
 export function setProviderUpstreamErrorBroadcaster(fn: Broadcaster): void {
   _broadcast = fn;
 }
@@ -65,6 +78,36 @@ export function setProviderUpstreamErrorBroadcaster(fn: Broadcaster): void {
 /** 请求路径（去 query）是否为 count_tokens 辅助计量端点。 */
 function isCountTokensUrl(url: string): boolean {
   return url.split('?', 1)[0].endsWith('/count_tokens');
+}
+
+/** Watch only a direct recovery candidate. Success needs model text and the
+ * completed frame from the same Responses stream. Consume no partial body
+ * when the connection fails or the producer emits an empty terminal. */
+function observeCompletedResponses(ctx: ResponseObserverCtx, complete: () => void): ResponseObserverSink | null {
+  if (!String(ctx.responseHeaders['content-type'] ?? '').includes('text/event-stream')
+    || !['', 'identity'].includes(String(ctx.responseHeaders['content-encoding'] ?? ''))) return null;
+  let tail = '';
+  let text = false;
+  let settled = false;
+  return {
+    onData(chunk) {
+      if (settled) return;
+      const lines = (tail + chunk.toString('utf8')).split('\n');
+      tail = (lines.pop() ?? '').slice(0, MAX_ERROR_BODY_BYTES);
+      for (const line of lines) {
+        if (!line.startsWith('data:') || line.length > MAX_ERROR_BODY_BYTES) continue;
+        try {
+          const frame = JSON.parse(line.slice(5)) as { type?: string; delta?: unknown; response?: { status?: string } };
+          if (frame.type === 'response.output_text.delta' && typeof frame.delta === 'string' && frame.delta.trim()) text = true;
+          if (frame.type === 'response.completed' && frame.response?.status === 'completed') {
+            settled = true;
+            if (text) complete();
+            return;
+          }
+        } catch { /* SSE can include non-JSON keepalives. */ }
+      }
+    },
+  };
 }
 
 // 桥接 localHandler 路径的节流表：Responses→Chat bridge 不经 proxy responseObserver,
@@ -186,6 +229,9 @@ function extractErrorTypeFromBody(bodyText: string): string | undefined {
 
 export interface ProviderUpstreamErrorObserverOptions {
   agent: AgentKind;
+  resolveUserSessionId?: (requestHeaders: Readonly<Record<string, string>>) => string | null;
+  /** Record verified account health without emitting an additional UI notice. */
+  healthOnly?: boolean;
   /**
    * 从请求 headers 反解「该请求归属的自定义(user)供应商 id」。
    * 返回 null = 非自定义供应商流量（内置来源 / 反解不到），观察器直接跳过。
@@ -210,12 +256,26 @@ export function createProviderUpstreamErrorObserver(
   const lastEmit = new Map<string, number>();
 
   return (ctx: ResponseObserverCtx) => {
-    if (ctx.status < 400) return null; // 成功路径零开销（规则 10）
+    if (ctx.status < 400) {
+      // Only a pinned direct recovery candidate gets a read-only stream observer.
+      if (ctx.status >= 200 && ctx.status < 300 && opts.resolveUserSessionId
+        && ctx.method === 'POST' && ctx.url.split('?', 1)[0].endsWith('/responses')) {
+        const sessionId = opts.resolveUserSessionId(ctx.requestHeaders);
+        const providerId = sessionId ? opts.resolveUserProviderId(ctx.requestHeaders) : null;
+        const complete = sessionId && providerId ? observeVerifiedResponse(sessionId, providerId, opts.agent, ctx) : undefined;
+        if (complete) return observeCompletedResponses(ctx, complete);
+      }
+      return null;
+    }
     // count_tokens 404 = 上游没实现该辅助端点（良性缺失），不是配置错——见文件头注释。
     // 其余 status（401/429 等）照常广播：它们与主链路同因，是真信号。
     if (ctx.status === 404 && isCountTokensUrl(ctx.url)) return null;
     const providerId = opts.resolveUserProviderId(ctx.requestHeaders);
     if (!providerId) return null;
+    const observeHealth = ctx.status === 401 || ctx.status === 402 || ctx.status === 429 || ctx.status === 529
+      ? captureHealth(providerId, opts.agent, ctx.upstreamBase, ctx.outboundHeaders?.authorization,
+        opts.resolveUserSessionId?.(ctx.requestHeaders)) : undefined;
+    if (opts.healthOnly && !observeHealth) return null;
 
     const chunks: Buffer[] = [];
     let size = 0;
@@ -232,6 +292,15 @@ export function createProviderUpstreamErrorObserver(
           typeof encoding === 'string' ? encoding : undefined,
         );
         const cls = classifyProviderError({ status: ctx.status, bodyText });
+        if (observeHealth) {
+          const value = ctx.responseHeaders['retry-after'];
+          const observedAt = now();
+          const retryAt = providerRetryAfterAt(value, observedAt)
+            ?? (ctx.status === 529 ? observedAt + PROVIDER_GROUP_FAILURE_COOLDOWN_MS : undefined);
+          void observeHealth({ ok: false, code: cls.code, ...(cls.billingCode ? { billingCode: cls.billingCode } : {}) },
+            retryAt).catch(() => {});
+        }
+        if (opts.healthOnly) return;
         const key = `${providerId}:${cls.code}`;
         const t = now();
         const prev = lastEmit.get(key);
@@ -244,7 +313,7 @@ export function createProviderUpstreamErrorObserver(
           code: cls.code,
           retryable: cls.retryable,
           status: ctx.status,
-          detail: cls.detail ? redactSensitiveText(cls.detail) : undefined,
+          detail: !observeHealth && cls.detail ? redactSensitiveText(cls.detail) : undefined,
           errorType: extractErrorTypeFromBody(bodyText),
           reqId: ctx.reqId,
         });

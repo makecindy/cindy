@@ -15,6 +15,7 @@ import { isExternalOrganizationByokUser } from './organizationManaged.js';
 import { serverApiFetch, ServerApiError } from '../serverApiClient.desktop.js';
 import { getClientEndpoint } from '../clientEndpointsService.js';
 import { getProviderSecretStore } from '../secrets/providerSecretStore.js';
+import { getReadyBinaryPath } from '../agent-binaries/index.js';
 import {
   scheduleCodexGatewayKeyRefresh,
   prepareCodexForCustomProviderHostChange,
@@ -171,6 +172,7 @@ let lastModelsSyncStartedAt = 0;
 export const XD_MODELS_FOREGROUND_REFRESH_INTERVAL_MS = 5 * 60_000;
 /** 在途目录请求所属的认证世代。 */
 let modelsSyncGen = -1;
+let modelsSyncSilentSwitch = false;
 /** 旧世代请求在途时新账号的补发标记。 */
 let modelsSyncRerunQueued = false;
 /**
@@ -238,17 +240,22 @@ function applyGatewayModels(
   });
 }
 
+function canSwitchGatewayAutoEngines(): boolean {
+  return Boolean(getReadyBinaryPath('pi') && getReadyBinaryPath('codex'));
+}
+
 async function runModelsSync(
   myGen: number,
   authenticatedUserId: string,
   myAttempt: number,
+  canSwitchAutoEngines: boolean,
 ): Promise<void> {
   // 新请求开始后，旧 LKG 仍可展示但不再能证明“当前账号明确没有某模型”。
   // 只有本次同认证世代的成功响应会重新把三态提升为 authoritative。
   markXdGatewayModelAccessUnknown();
   let models: ModelAccessGatewayModel[];
   try {
-    const request = buildModelsSyncRequest(() => getClientEndpoint('modelAccessApiBaseUrl'));
+    const request = buildModelsSyncRequest(() => getClientEndpoint('modelAccessApiBaseUrl'), canSwitchAutoEngines);
     const payload = await withModelsSyncOverallDeadline(
       serverApiFetch<unknown>(request.path, request.options),
     );
@@ -322,7 +329,7 @@ async function runModelsSync(
   lastModelsSyncSucceededAttempt = myAttempt;
 }
 
-/** 触发一次模型目录同步(同世代 single-flight;旧世代在途时为新账号排队补发)。 */
+/** Refreshes once per account and runtime capability, with one follow-up for a change in flight. */
 function scheduleModelsSync(): void {
   if (isProviderDisabled(readModelDisableOverrides(), 'xd')) return;
   const gen = authGeneration;
@@ -334,10 +341,10 @@ function scheduleModelsSync(): void {
     log.warn('xd gateway models sync skipped: authenticated user id unavailable');
     return;
   }
+  const canSwitchAutoEngines = canSwitchGatewayAutoEngines();
   if (modelsSyncInflight) {
-    if (modelsSyncGen === gen) return; // 同账号在途,复用
+    if (modelsSyncGen === gen && modelsSyncSilentSwitch === canSwitchAutoEngines) return;
     if (!modelsSyncRerunQueued) {
-      // 旧账号请求在途:等它结束(其结果会被世代闸丢弃)后为当前账号补发。
       modelsSyncRerunQueued = true;
       void modelsSyncInflight.finally(() => {
         modelsSyncRerunQueued = false;
@@ -347,9 +354,10 @@ function scheduleModelsSync(): void {
     return;
   }
   modelsSyncGen = gen;
+  modelsSyncSilentSwitch = canSwitchAutoEngines;
   const attempt = ++modelsSyncAttempt;
   lastModelsSyncStartedAt = Date.now();
-  modelsSyncInflight = runModelsSync(gen, authenticatedUserId, attempt)
+  modelsSyncInflight = runModelsSync(gen, authenticatedUserId, attempt, canSwitchAutoEngines)
     .catch((err) => {
       log.warn('xd gateway models sync threw', {
         error: err instanceof Error ? err.message : String(err),
@@ -455,6 +463,13 @@ function getSync(): CredentialsSync {
 /** 当前同步状态(renderer 首帧经 IPC 拉;main 内部也可直接读)。 */
 export function getModelAccessStatus(): ModelAccessStatus {
   return statusWithAccountTier(getSync().getStatus());
+}
+
+/** A cold login can fetch the compatible catalog before local binaries finish preparing. */
+export function noteModelAccessAgentBinariesReady(): void {
+  if (lastAuthUserId && modelsSyncSilentSwitch !== canSwitchGatewayAutoEngines() && getSync().getStatus().state === 'ok') {
+    scheduleModelsSync();
+  }
 }
 
 /**
@@ -608,23 +623,23 @@ export function initModelAccess(): void {
   };
   app.on('browser-window-focus', foregroundRefreshListener);
   ipcMain.handle('model-access:get-status', () => getModelAccessStatus());
-  registerByokIpc(ipcMain, {
+  const byokControl = {
     getStatus: () => byok.getStatus(),
     // 设置页的显式刷新不受节流限制,但要记时间戳,避免紧接着的聚焦再拉一轮。
     sync: () => {
       lastByokSyncStartedAt = Date.now();
       return byok.sync();
     },
-  }, assertTrustedAppRendererEvent);
+  };
+  registerByokIpc(ipcMain, byokControl, assertTrustedAppRendererEvent);
 
-  ipcMain.handle('model-access:retry', async (): Promise<ModelAccessStatus> => {
+  const retry = async (): Promise<ModelAccessStatus> => {
     if (!getAppCapabilities().canUseCindyGateway) {
       throwIpcError('PERMISSION_DENIED', 'Cindy AI requires a Cindy account.');
     }
     return statusWithAccountTier(await sync.retry());
-  });
-
-  ipcMain.handle('model-access:rotate', async (): Promise<ModelAccessStatus> => {
+  };
+  const rotate = async (): Promise<ModelAccessStatus> => {
     if (!getAppCapabilities().canUseCindyGateway) {
       throwIpcError('PERMISSION_DENIED', 'Cindy AI requires a Cindy account.');
     }
@@ -633,7 +648,31 @@ export function initModelAccess(): void {
     } catch (err) {
       mapServerError(err);
     }
-  });
+  };
+  ipcMain.handle('model-access:retry', retry);
+  ipcMain.handle('model-access:rotate', rotate);
+  cloudControl = {
+    status: getModelAccessStatus,
+    retry,
+    rotate,
+    byokStatus: byokControl.getStatus,
+    byokRetry: async () => {
+      await byokControl.sync();
+      return byokControl.getStatus();
+    },
+  };
+}
+
+let cloudControl: {
+  status(): ModelAccessStatus;
+  retry(): Promise<ModelAccessStatus>;
+  rotate(): Promise<ModelAccessStatus>;
+  byokStatus(): ReturnType<ReturnType<typeof createByokRuntime>['getStatus']>;
+  byokRetry(): Promise<ReturnType<ReturnType<typeof createByokRuntime>['getStatus']>>;
+} | null = null;
+/** The cloud providers page: the same handlers as this Host's own Settings page. */
+export function cloudModelAccessControl(): NonNullable<typeof cloudControl> | null {
+  return cloudControl;
 }
 
 /** 仅测试:重置单例。 */
@@ -651,6 +690,7 @@ export function resetModelAccessForTest(): void {
   syncInstance = null;
   modelsSyncInflight = null;
   modelsSyncGen = -1;
+  modelsSyncSilentSwitch = false;
   modelsSyncRerunQueued = false;
   modelsSyncAttempt = 0;
   lastModelsSyncSucceededAttempt = 0;

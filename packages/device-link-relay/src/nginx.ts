@@ -47,6 +47,16 @@ export interface NginxPlan {
 /** 解析语法与位置，不用正则改写任意 Nginx 配置；引号、注释、变量与嵌套块分别处理。 */
 function parse(file: string, source: string): Directive[] {
   const tokens: Array<{ kind: 'word' | '{' | '}' | ';'; value: string; start: number; end: number }> = [];
+  // Diagnostics contain coordinates and a plain directive name, never arguments
+  // (which may contain authorization headers or other private configuration).
+  const fail = (reason: string, offset: number, directive?: string): never => {
+    const prefix = source.slice(0, offset);
+    const line = prefix.split('\n').length;
+    const column = offset - prefix.lastIndexOf('\n');
+    const name = directive && /^[a-z_][a-z0-9_]{0,63}$/i.test(directive)
+      ? ` (directive: ${directive})` : '';
+    throw new Error(`${reason} at ${JSON.stringify(file)}:${line}:${column}${name}`);
+  };
   let i = 0;
   while (i < source.length) {
     if (/\s/.test(source[i])) {
@@ -60,8 +70,7 @@ function parse(file: string, source: string): Directive[] {
     const start = i;
     const char = source[i];
     if (char === '{' || char === '}' || char === ';') {
-      i++;
-      tokens.push({ kind: char, value: char, start, end: i });
+      tokens.push({ kind: char, value: char, start, end: ++i });
       continue;
     }
     let value = '';
@@ -86,7 +95,7 @@ function parse(file: string, source: string): Directive[] {
       }
       if (c === '$' && source[i + 1] === '{') {
         const end = source.indexOf('}', i + 2);
-        if (end < 0) throw new Error('Unclosed Nginx variable');
+        if (end < 0) fail('Unclosed Nginx variable', i);
         value += source.slice(i, end + 1);
         i = end + 1;
         continue;
@@ -95,19 +104,19 @@ function parse(file: string, source: string): Directive[] {
       value += c;
       i++;
     }
-    if (quote || i === start) throw new Error('Invalid Nginx token');
+    if (quote || i === start) fail('Invalid Nginx token', start);
     tokens.push({ kind: 'word', value, start, end: i });
   }
   let cursor = 0;
-  function block(nested: boolean): Directive[] {
+  function block(nested: boolean, opening?: { start: number; value: string }): Directive[] {
     const nodes: Directive[] = [];
     while (cursor < tokens.length && tokens[cursor].kind !== '}') {
       const first = tokens[cursor++];
-      if (first.kind !== 'word') throw new Error('Invalid Nginx directive');
+      if (first.kind !== 'word') fail('Invalid Nginx directive', first.start);
       const args: string[] = [];
-      while (tokens[cursor]?.kind === 'word') args.push(tokens[cursor++].value);
+      while (cursor < tokens.length && tokens[cursor].kind === 'word') args.push(tokens[cursor++].value);
       const delimiter = tokens[cursor++];
-      if (!delimiter || delimiter.kind === '}') throw new Error('Invalid Nginx directive');
+      if (!delimiter || delimiter.kind === '}') fail('Invalid Nginx directive', first.start, first.value);
       const node: Directive = {
         file,
         name: first.value,
@@ -117,13 +126,13 @@ function parse(file: string, source: string): Directive[] {
       };
       if (delimiter.kind === '{') {
         node.open = delimiter.end;
-        node.children = block(true);
+        node.children = block(true, first);
         node.end = tokens[cursor - 1].end;
       }
       nodes.push(node);
     }
-    if (nested && tokens[cursor++]?.kind !== '}') throw new Error('Unclosed Nginx block');
-    if (!nested && cursor < tokens.length) throw new Error('Invalid Nginx directive');
+    if (nested && tokens[cursor++]?.kind !== '}') fail('Unclosed Nginx block', opening?.start ?? source.length, opening?.value);
+    if (!nested && cursor < tokens.length) fail('Invalid Nginx directive', tokens[cursor].start);
     return nodes;
   }
   return block(false);

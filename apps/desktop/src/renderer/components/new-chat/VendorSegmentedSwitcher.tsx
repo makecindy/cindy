@@ -33,8 +33,7 @@ export function VendorSegmentedSwitcher({
       className={className}
       fullWidth
       style={{ width }}
-      height={dense ? 30 : 36}
-      optionHeight={dense ? 24 : 30}
+      density={dense ? 'sm' : 'md'}
       optionClassName={dense ? 'text-12 px-0' : 'text-14 px-0'}
       preserveMouseFocus
       options={AGENT_OPTIONS.map((option) => ({

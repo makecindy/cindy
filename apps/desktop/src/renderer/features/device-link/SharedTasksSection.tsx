@@ -3,7 +3,13 @@ import { ChevronDown, ChevronRight, Crown, FileText, Plus } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { isSharedTaskPeer, type SharedTaskOwnedItem } from '@cindy/device-link';
 import { SessionCard } from '@/features/cc-agent/sidebar/SessionCard';
-import { SessionItem } from '@/features/cc-agent/sidebar/SessionItem';
+import { SessionItem, type SessionClickHandler } from '@/features/cc-agent/sidebar/SessionItem';
+import { isRemoteSessionWriteBlocked } from '@/features/cc-agent/lib/remoteSessionWriteGuard';
+import {
+  isSidebarNewWindowActivation,
+  openTargetInNewWindow,
+  preventMiddleClickAutoscroll,
+} from '@/lib/sidebarNewWindowActivation';
 import { sessionActivityMs } from '@/features/cc-agent/lib/dateSessionGrouping';
 import type { SessionMoveTarget } from '@/features/cc-agent/sidebar/sessionMoveTarget';
 import type { FolderPickerOption } from '@/components/new-chat/FolderPickerPopover';
@@ -112,8 +118,8 @@ export function SharedTasksSection({ activeSessionId, localSessions = [], runnin
       return rightActivity - leftActivity || left.order - right.order;
     });
   }, [joined, localSessions, owned, sessions]);
-  const openOwned = async (item: SharedTaskOwnedItem) => {
-    if (item.sessionId === activeSessionId || pending.current) return;
+  const openOwned = async (item: SharedTaskOwnedItem, separate = false) => {
+    if ((!separate && item.sessionId === activeSessionId) || pending.current) return;
     const owner = getDataOwnerGeneration();
     const captured = epoch.current;
     const current = () => captured === epoch.current && isDataOwnerGenerationCurrent(owner);
@@ -124,11 +130,17 @@ export function SharedTasksSection({ activeSessionId, localSessions = [], runnin
         if (!current()) return;
         remoteProjectsStore.pinSessionOrigin(item.hostDeviceId, item.sessionId);
       }
-      if (current()) onSelect(item.sessionId);
+      if (current()) {
+        if (separate) {
+          void openTargetInNewWindow(item.sessionId, item.local ? undefined : item.hostDeviceId);
+        } else {
+          onSelect(item.sessionId);
+        }
+      }
     } catch (error) { if (current()) toast.error(t(sharedTaskErrorKey(error))); }
     finally { if (current()) { pending.current = false; setOpening(null); } }
   };
-  const renderTask = (session: Session, onClick: () => void, key: string, navigationOnly: boolean, role: 'owned' | 'joined', sharedTaskId?: string) => {
+  const renderTask = (session: Session, onClick: SessionClickHandler, key: string, navigationOnly: boolean, role: 'owned' | 'joined', sharedTaskId?: string) => {
     const props = {
       session,
       navigationOnly,
@@ -151,7 +163,7 @@ export function SharedTasksSection({ activeSessionId, localSessions = [], runnin
       : <SessionItem key={key} {...props} />;
   };
   if (!isAuthenticated) return null;
-  return <>{(owned.length > 0 || joined.length > 0) && <section className="mx-3 mb-2 border-b border-[var(--border-default)] pb-3" aria-label={t('sharedTask.title')}
+  return <>{(owned.length > 0 || joined.length > 0) && <section className="ml-3 mr-0 mb-2 border-b border-[var(--border-default)] pb-3" aria-label={t('sharedTask.title')}
     onContextMenu={event => {
       // Task rows handle their own menus; group whitespace must not open the sidebar menu.
       event.preventDefault();
@@ -170,18 +182,49 @@ export function SharedTasksSection({ activeSessionId, localSessions = [], runnin
         const session = row.session;
         if (!session) return null;
         return renderTask(session,
-          () => { if (session.id !== activeSessionId) onSelect(session.id); }, row.key, true, 'joined');
+          (_id, modifiers) => {
+            if (modifiers && isSidebarNewWindowActivation(modifiers)) {
+              if (isRemoteSessionWriteBlocked(session)) {
+                toast.warning(t('ccAgent.remoteSession.actionsUnavailable'));
+                return;
+              }
+              void openTargetInNewWindow(session.id, session.deviceLinkDeviceId);
+              return;
+            }
+            if (session.id !== activeSessionId) onSelect(session.id);
+          }, row.key, true, 'joined');
       }
       const item = row.owned;
       if (!item) return null;
-      if (row.session) return <div key={row.key} aria-busy={opening === item.sharedTaskId || undefined}>
-        {renderTask(row.session, () => void openOwned(item), row.key, false, 'owned', item.sharedTaskId)}
-      </div>;
+      if (row.session) {
+        const mirroredSession = row.session;
+        return <div key={row.key} aria-busy={opening === item.sharedTaskId || undefined}>
+          {renderTask(mirroredSession, (_id, modifiers) => {
+            if (modifiers && isSidebarNewWindowActivation(modifiers)) {
+              if (isRemoteSessionWriteBlocked(mirroredSession)) {
+                toast.warning(t('ccAgent.remoteSession.actionsUnavailable'));
+                return;
+              }
+              void openOwned(item, true);
+              return;
+            }
+            void openOwned(item);
+          }, row.key, false, 'owned', item.sharedTaskId)}
+        </div>;
+      }
       // Account discovery can precede the host's session mirror. Keep navigation available
       // without inventing a preview, activity timestamp or Agent identity.
       return <button key={row.key} type="button"
         aria-current={item.sessionId === activeSessionId ? 'page' : undefined} disabled={!!opening} aria-busy={opening === item.sharedTaskId || undefined}
-        onClick={() => void openOwned(item)} aria-label={item.title + ', ' + t('sharedTask.roleHost')} title={item.title}
+        onMouseDown={preventMiddleClickAutoscroll}
+        onClick={(event) => void openOwned(item, isSidebarNewWindowActivation(event))}
+        onAuxClick={(event) => {
+          if (event.button !== 1) return;
+          event.preventDefault();
+          event.stopPropagation();
+          void openOwned(item, true);
+        }}
+        aria-label={item.title + ', ' + t('sharedTask.roleHost')} title={item.title}
         className={cn('flex w-full items-center gap-2.5 text-left text-sm font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]',
           mode === 'list' ? 'min-h-14 rounded-lg px-2.5 py-2' : 'h-8 rounded-full pl-3 pr-2',
           item.sessionId === activeSessionId ? 'bg-sidebar-item-active text-sidebar-item-active-foreground' : 'text-foreground hover:bg-sidebar-item-hover')}>

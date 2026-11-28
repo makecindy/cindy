@@ -65,6 +65,12 @@ export function createCodexResetAutoUseStore(filePath: () => string, scopeKey = 
         return entry?.accountKey === accountKey ? { [provider]: { ...entry, lastUsedAt: at } } : {};
       });
     },
+    /** Drop one provider's rule entirely (deleted pool accounts; their probes can never succeed again). */
+    async remove(provider: string) {
+      await file.updateAtomic(current => (provider in current.value
+        ? { [provider]: undefined as unknown as AccountEntry }
+        : {}));
+    },
   };
 }
 

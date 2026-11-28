@@ -1,3 +1,4 @@
+import type { ReconnectHandoff } from '../../../shared/agentInputQueue';
 import { localizeOutputLimit } from './outputLimitI18n';
 import { type OutputLimitDetails } from '@cindy/maker-shared';
 import { isMemberBudgetPaused } from '../../../shared/providerShareBudget';
@@ -7,6 +8,8 @@ import { useCodexRateLimits } from '@/hooks/useCodexRateLimits';
 import { useCodexRateLimitReset } from '@/hooks/useCodexRateLimitReset';
 import { Button } from '@/components/ui/button';
 import { ErrorNotice } from '@/components/ui/error-notice';
+import type { NoticeExplainContent } from '@/components/ui/notice-explain-popover';
+import { buildChatErrorExplain, resolveExternalErrorProviderName } from '@/lib/chatErrorExplain';
 import { renderProviderErrorExplanation } from './ProviderErrorExplanation';
 import { AutoReviewRecoveryActions } from './AutoReviewRecoveryActions';
 import { isSharedTaskPeer } from '@cindy/device-link';
@@ -34,10 +37,12 @@ import {
   canOfferCodexHistoryRecovery,
   isAccountUsageLimitReachedText,
   isCindyGatewayProxyTokenInvalidError,
+  isProviderSafetyRefusalError,
   isResponsesLiteParallelToolCallsError,
   isRemoteCompactEncryptedContentError,
   parseAgentErrorCode,
   parseGeminiInputRateLimit,
+  PROVIDER_SAFETY_REFUSAL_REASON,
   localizeSubscriptionAccountError,
   requiresAgentErrorConfigurationChange,
   isRemoteAgentResumeRejectedError,
@@ -66,9 +71,10 @@ import {
   isStreamInterruptedErrorMessage,
 } from '@/utils/streamInterruptError';
 import { isQuotaExhaustedErrorMessage } from '@/utils/quotaError';
+import { parseUpstreamStatusError } from '@/utils/upstreamStatusError';
 import { parseTerminalRateLimitRetryProgress } from '@/utils/rateLimitRetry';
 import type { UsageLimitRecoveryHint } from '@/lib/usageLimitRecovery';
-import { errorReasonI18nKey as resolveErrorReasonI18nKey } from './errorReasonI18n';
+import { errorReasonI18nKey as resolveErrorReasonI18nKey, localizeReconnectStall } from './errorReasonI18n';
 import { isCodexSharedAuthLinkUnavailableError } from '../../../shared/codexAuthReason';
 import { getToolLoopI18nKey } from './toolLoopI18n';
 import {
@@ -85,6 +91,7 @@ interface ErrorBannerProps {
   /** terminal error 的稳定 reason key。'silent-stop-exhausted'(silent-stop 自动
    *  续跑额度耗尽)时隐藏 Retry、改显「继续」按钮(onSilentStopContinue)。 */
   errorReason?: string | null;
+  reconnectHandoff?: ReconnectHandoff;
   /** Structured details for a tool-loop terminal error (optional for legacy rows). */
   toolLoop?: ToolLoopErrorDetails | null;
   outputLimit?: OutputLimitDetails | null;
@@ -111,7 +118,7 @@ interface ErrorBannerProps {
   usageLimitRecovery?: UsageLimitRecoveryHint | null;
   /** 当前 session 的 agent kind。codex 的 401 / Missing bearer 必须 hide Retry,
    *  否则 retry 撞同一个 in-memory auth retry-loop 产生重复失败 turn。 */
-  agentKind?: 'cc' | 'codex' | 'pi';
+  agentKind?: 'cc' | 'codex' | 'pi' | 'acp';
   agentDeviceId?: string | null;
   /** 当前 session 的远端 host id;非空 + agentKind='codex' 时显「同步登录态」按钮。
    *  本机认证失败通过对应连接的设置恢复，不提供远端同步入口。 */
@@ -171,6 +178,7 @@ export function ErrorBanner({
   onChooseComputer,
   error,
   errorReason,
+  reconnectHandoff,
   toolLoop,
   outputLimit,
   retryText,
@@ -265,6 +273,9 @@ export function ErrorBanner({
     setSyncedSinceError(false);
   }, [error, isAnyRemoteSession, remoteHostId]);
 
+  const isProviderSafetyRefusal =
+    errorReason === PROVIDER_SAFETY_REFUSAL_REASON ||
+    isProviderSafetyRefusalError(error, errorReason);
   // 凭证切换忙:本会话要求的模型来源与共享 codex 进程当前钥匙形态不同,重启进程前
   // 必须等其它本地 Codex 任务全部结束。main 侧用 CREDENTIAL_SWITCH_BUSY: 前缀编码
   // (makerSendTransaction),这里换成可操作文案;Retry 保留 —— 其它任务结束后重试即成功。
@@ -291,7 +302,9 @@ export function ErrorBanner({
   // 主侧把这个结论留成稳定 reason(auth-adapters / host runtime),这里负责把它翻成用户
   // 能执行的动作;落到兜底文案时用户只看到「回复未完成」,而重登解决不了链接权限。
   const isCodexSharedAuthLinkUnavailable =
-    agentKind === 'codex' && isCodexSharedAuthLinkUnavailableError(error);
+    !isProviderSafetyRefusal &&
+    agentKind === 'codex' &&
+    isCodexSharedAuthLinkUnavailableError(error);
   // 仅本地 Codex 会话:远端会话 rollout 在远端机器, 本地 fork 剥离做不到, 不给入口。
   const showInvalidEncryptedContentRecovery =
     agentKind === 'codex' &&
@@ -325,8 +338,9 @@ export function ErrorBanner({
   // 时刻的快照),不用会话当前的 providerId —— 报错后切换 provider / 恢复历史错误
   // 时两者会分叉,用当前值会误判来源。来源不明确(null)或非 xd 时不提供 Cindy
   // 充值入口；余额摘要仍可使用供应商通用提示。
-  const geminiLimit = parseGeminiInputRateLimit(error);
-  const isQuotaExhausted = geminiLimit === null && isQuotaExhaustedErrorMessage(error);
+  const geminiLimit = isProviderSafetyRefusal ? null : parseGeminiInputRateLimit(error);
+  const isQuotaExhausted =
+    !isProviderSafetyRefusal && geminiLimit === null && isQuotaExhaustedErrorMessage(error);
   const isGatewayQuotaExhausted =
     (errorSourceProviderId?.trim() || null) === 'xd' &&
     Boolean(onViewBalance) &&
@@ -346,7 +360,10 @@ export function ErrorBanner({
   // Pattern: 跟 translator.ts:180 一致, 收紧到 \b401\b | Missing bearer 避开
   // "Unauthorized file system access" 等非 HTTP-auth 误伤。
   const isCodexAuthMissing =
-    agentKind === 'codex' && isCodexOpenAiSource && /\b401\b|Missing bearer/i.test(error);
+    !isProviderSafetyRefusal &&
+    agentKind === 'codex' &&
+    isCodexOpenAiSource &&
+    /\b401\b|Missing bearer/i.test(error);
   const isCodexRemoteAuthMissing = isCodexAuthMissing && !!remoteHostId;
   const isCodexLocalOAuthAuthMissing =
     isCodexAuthMissing && isLocalAuthSession &&
@@ -361,6 +378,7 @@ export function ErrorBanner({
     !!modelId &&
     modelId.startsWith('chatgpt/');
   const isOpenAiConnectionExpired =
+    !isProviderSafetyRefusal &&
     isLocalAuthSession &&
     ((isCodexOpenAiSource && isCodexSessionExpiredError(error)) ||
       (isClaudeChatgptBridgeModel && isCodexSessionExpiredError(error)));
@@ -402,8 +420,9 @@ export function ErrorBanner({
       : (reconnectCredentialScope ?? 'unknown');
   // 网络类错误(502/连接失败/fetch failed 等):友好文案 + 原始错误折叠可查。
   // Codex `Reconnecting... N/M` 额外解析次数，让 recoverable 状态持续更新而非裸英文。
-  const reconnectAttempt = parseReconnectAttemptMessage(error);
-  const isNetworkishError = reconnectAttempt !== null || isNetworkishErrorMessage(error);
+  const reconnectAttempt = isProviderSafetyRefusal ? null : parseReconnectAttemptMessage(error);
+  const isNetworkishError =
+    !isProviderSafetyRefusal && (reconnectAttempt !== null || isNetworkishErrorMessage(error));
   // 服务过载(模型容量不足 / 上游 529):与网络类分开判定——把容量问题说成"网络
   // 异常"会让用户白折腾自己的网络。带 `(auto-retry N/M)` 后缀 = 仍在自动重试。
   //
@@ -411,10 +430,24 @@ export function ErrorBanner({
   // Codex 的容量文案是它二进制里硬编码的提示语, 改一次措辞就会让这里退回英文原文,
   // 而这条判定驱动的正是本地化文案、重试进度与 hideRetry。文案匹配保留作兜底
   // (老 daemon / Anthropic 侧 / 历史持久化错误行 —— 后者只有文案可用)。
-  const isOverloadError = isOverloadErrorMessage(error, undefined, errorReason);
-  const isStreamInterrupted = isStreamInterruptedErrorMessage(error, errorReason);
+  const isOverloadError =
+    !isProviderSafetyRefusal && isOverloadErrorMessage(error, undefined, errorReason);
+  const isStreamInterrupted =
+    !isProviderSafetyRefusal && isStreamInterruptedErrorMessage(error, errorReason);
+  // 上游 5xx 但没带错误正文:兜底文案只会说「回复未完成」,看不出是上游拒了。
+  const upstreamStatusError = !isProviderSafetyRefusal ? parseUpstreamStatusError(error) : null;
   const overloadRetryProgress = parseOverloadRetryProgress(error);
   const errorReasonI18nKey = resolveErrorReasonI18nKey(errorReason, error);
+  // #12970 review: a history read the provider refused means the message was
+  // never accepted. That fact outranks every status word in the message —
+  // `(status 502)` and friends would otherwise land in the network/overload
+  // branches and tell the user the service was unreachable, hiding that nothing
+  // was ever sent. Both bounded diagnostics share the same priority.
+  const piRetryHistoryKey =
+    errorReasonI18nKey === 'chat.errorBanner.piRetryHistoryUnavailable'
+    || errorReasonI18nKey === 'chat.errorBanner.piRetryHistoryTooLarge'
+      ? errorReasonI18nKey
+      : undefined;
   const toolLoopI18nKey =
     errorReason === 'tool_use_loop_detected' ? getToolLoopI18nKey(toolLoop) : undefined;
   const localizedReasonError =
@@ -467,8 +500,11 @@ export function ErrorBanner({
       sameDay ? { timeStyle: 'short' } : { dateStyle: 'medium', timeStyle: 'short' },
     ).format(resumeDate);
   })();
-  const isAccountUsageLimitText = isAccountUsageLimitReachedText(error);
+  const isAccountUsageLimit =
+    !isProviderSafetyRefusal &&
+    (errorReason === 'acp-usage-limit' || isAccountUsageLimitReachedText(error));
   // 原始恢复记录优先；自动任务收口后可手动续跑。按钮与指引共用同一判定。
+  const isReconnectStalled = errorReason === 'codex_reconnect_stalled';
   const isSilentStopExhausted = errorReason === 'silent-stop-exhausted';
   const isClaudeGatewayOpusPlanMismatch = errorReason === CLAUDE_GATEWAY_OPUS_PLAN_MISMATCH_REASON;
   const isClaudeSubscriptionOpusPlanMismatch =
@@ -481,6 +517,7 @@ export function ErrorBanner({
   // 订阅套餐错误保留 Retry：用户重新连接 Anthropic 后可从当前错误卡片重试；
   // Gateway 错误则隐藏 Retry，改走切换到 Claude.ai 的明确恢复动作。
   const hideRetry = remoteErrorCode === 'REMOTE_AGENT_RESUME_UNAVAILABLE' || isMemberBudgetPaused(error) ||
+    isProviderSafetyRefusal ||
     isRemoteResumeRejected ||
     isSilentStopExhausted ||
     isClaudeGatewayOpusPlanMismatch ||
@@ -541,9 +578,22 @@ export function ErrorBanner({
 
   // hasSpecialGuidance: 是否命中下面任一「有专属可操作指引」的特殊分支。用一个在
   // else 兜底里翻转的标志, 而不是另写一遍条件取反，保证原始错误只在通用回退时展开。
-  const sharedRecoveryReason = isCodexUsageLimitError ? undefined : sharedTaskRecoveryFor(error, agentDeviceId);
+  const sharedRecoveryReason =
+    isCodexUsageLimitError || isProviderSafetyRefusal
+      ? undefined
+      : sharedTaskRecoveryFor(error, agentDeviceId);
   const subscriptionGuidance = localizeSubscriptionAccountError(error, t, i18n.resolvedLanguage ?? i18n.language);
+  const externalProviderName = resolveExternalErrorProviderName({
+    providerId: authProviderId,
+    providers: errorProviders,
+  });
+  const quotaSourceProviderId = errorSourceProviderId?.trim() || null;
+  const quotaProviderName = resolveExternalErrorProviderName({
+    providerId: quotaSourceProviderId,
+    providers: errorProviders,
+  });
   let displayError: string;
+  let explain: NoticeExplainContent | undefined;
   let hasSpecialGuidance = true;
   // #9855: an unknown legacy error code intentionally survives the generic
   // decoder. Surface the host's localized metadata-based recovery hint while
@@ -554,6 +604,17 @@ export function ErrorBanner({
     : undefined;
   if (piCloudContextRecovery) {
     displayError = piCloudContextRecovery;
+  } else if (isProviderSafetyRefusal) {
+    displayError = externalProviderName
+      ? t('chat.errorBanner.providerSafetyRefusalWithProvider', { provider: externalProviderName })
+      : t('chat.errorBanner.providerSafetyRefusal');
+    explain = buildChatErrorExplain('providerSafetyRefusal', t, { providerName: externalProviderName });
+    hasSpecialGuidance = false;
+  } else if (piRetryHistoryKey) {
+    // 「本次消息未发送」优先于网络/过载/上游状态等宽泛分支:历史读取被拒时上游
+    // 返回什么状态都与「这条消息根本没发出去」无关,用户先要知道的是这件事。
+    displayError = t(piRetryHistoryKey);
+    hasSpecialGuidance = false;
   } else if (geminiLimit !== null) {
     displayError = t(errorReason === 'gemini-input-retry-exhausted' ? 'chat.geminiRateLimit.exhausted' : 'chat.geminiRateLimit.title');
   } else if (subscriptionGuidance) {
@@ -585,7 +646,10 @@ export function ErrorBanner({
     // —— 断的只是入口,失败表面上没有任何东西把用户带到那里,用户只能自己在设置里翻。
     displayError = t('chat.errorBanner.codexSharedAuthLinkUnavailable');
   } else if (showInvalidEncryptedContentRecovery) {
-    displayError = t('chat.errorBanner.invalidEncryptedContent');
+    displayError = externalProviderName
+      ? t('chat.errorBanner.invalidEncryptedContentWithProvider', { provider: externalProviderName })
+      : t('chat.errorBanner.invalidEncryptedContent');
+    explain = buildChatErrorExplain('encryptedContent', t, { providerName: externalProviderName });
   } else if (isOversizedHistoryError) {
     displayError = t(
       isSshRemoteSession
@@ -633,17 +697,42 @@ export function ErrorBanner({
           : 'chat.errorBanner.codexUsageLimit',
       );
     }
+    explain = buildChatErrorExplain('usageLimit', t, {
+      providerName: externalProviderName ?? 'OpenAI',
+    });
   } else if (usageLimitResumeAt) {
     // 被控端已确认是账号用量上限并排好了自动继续：直接说发生了什么，
     // 「将于 X 自动继续」在操作区，原始报错留在可展开的详情里。
-    displayError = t('chat.errorBanner.usageLimitReached');
-  } else if (isQuotaExhausted) {
-    displayError = t('providerError.QUOTA_EXCEEDED');
-  } else if (isAccountUsageLimitText) {
-    // 没有排自动继续（已取消、共享中、拿不到可靠时刻等）但原文明说到了用量上限。
+    displayError = externalProviderName
+      ? t('chat.errorBanner.usageLimitReachedWithProvider', { provider: externalProviderName })
+      : t('chat.errorBanner.usageLimitReached');
+    explain = buildChatErrorExplain('usageLimit', t, { providerName: externalProviderName });
+  } else if (isAccountUsageLimit) {
+    // 没有排自动继续（已取消、共享中、拿不到可靠时刻等）但插件或原文明说到了周期用量上限。
+    // 放在通用余额不足（isQuotaExhausted）之前，避免把带“usage limit / quota reached”的
+    // 周期限额错归成需要充值的通用配额不足（网关余额耗尽已在更前面的 isGatewayQuotaExhausted 处理）。
     displayError = usageLimitResetAt
-      ? t('chat.errorBanner.usageLimitReachedWithReset', { resetAt: usageLimitResetAt })
-      : t('chat.errorBanner.usageLimitReachedNoReset');
+      ? externalProviderName
+        ? t('chat.errorBanner.usageLimitReachedWithResetWithProvider', {
+            provider: externalProviderName,
+            resetAt: usageLimitResetAt,
+          })
+        : t('chat.errorBanner.usageLimitReachedWithReset', { resetAt: usageLimitResetAt })
+      : externalProviderName
+        ? t('chat.errorBanner.usageLimitReachedNoResetWithProvider', {
+            provider: externalProviderName,
+          })
+        : t('chat.errorBanner.usageLimitReachedNoReset');
+    explain = buildChatErrorExplain('usageLimit', t, { providerName: externalProviderName });
+  } else if (isQuotaExhausted) {
+    displayError = quotaProviderName
+      ? t('chat.errorBanner.providerQuotaExhaustedWithProvider', { provider: quotaProviderName })
+      : t('providerError.QUOTA_EXCEEDED');
+    if (quotaSourceProviderId !== 'xd') {
+      explain = buildChatErrorExplain('providerQuotaExceeded', t, {
+        providerName: quotaProviderName,
+      });
+    }
   } else if (terminalRateLimitRetryProgress) {
     // daemon 已耗尽内部 retry budget 的终态 429，由 maker-core 做受限外层重投。
     // 它不是模型容量过载，也不是用户网络异常；独立文案避免误导用户切模型或查网络。
@@ -660,6 +749,8 @@ export function ErrorBanner({
   } else if (agentKind === 'pi' && /bundled node not installed/.test(error)) {
     // 引导:需先装 claude-code 或 codex 连带 node。
     displayError = t('chat.errorBanner.piBundledNodeMissing');
+  } else if (isReconnectStalled) {
+    displayError = localizeReconnectStall(t, reconnectHandoff);
   } else if (isOverloadError) {
     // 服务过载:上游模型没有可用容量。原始英文("Selected model is at capacity")
     // 对用户没有行动价值,换成友好文案 + 明确的下一步;原始错误折叠可查。
@@ -670,19 +761,41 @@ export function ErrorBanner({
     // 是假信息(review #844 codex P1)。真的重试过时用户也已经在退避窗口里逐帧看过
     // 「正在自动重试（N/M）」, 信息不丢。两个分支只按"有没有重试按钮"给不同下一步。
     displayError = overloadRetryProgress
-      ? t('chat.errorBanner.overloadRetrying', {
-          attempt: overloadRetryProgress.attempt,
-          maxAttempts: overloadRetryProgress.maxAttempts,
-        })
-      : t(retryAction ? 'chat.errorBanner.overloadBusy' : 'chat.errorBanner.overloadBusyNoRetry');
+      ? externalProviderName
+        ? t('chat.errorBanner.overloadRetryingWithProvider', {
+            provider: externalProviderName,
+            attempt: overloadRetryProgress.attempt,
+            maxAttempts: overloadRetryProgress.maxAttempts,
+          })
+        : t('chat.errorBanner.overloadRetrying', {
+            attempt: overloadRetryProgress.attempt,
+            maxAttempts: overloadRetryProgress.maxAttempts,
+          })
+      : externalProviderName
+        ? t(
+            retryAction
+              ? 'chat.errorBanner.overloadBusyWithProvider'
+              : 'chat.errorBanner.overloadBusyNoRetryWithProvider',
+            { provider: externalProviderName },
+          )
+        : t(retryAction ? 'chat.errorBanner.overloadBusy' : 'chat.errorBanner.overloadBusyNoRetry');
+    explain = buildChatErrorExplain('overload', t, { providerName: externalProviderName });
   } else if (isStreamInterrupted) {
     // LiteLLM / Responses 流中途空壳 500。协议客户端会写成 OpenAI API error,
     // 对非 OpenAI 模型是误导。只改展示,不自动续跑。
-    displayError = t(
-      retryAction
-        ? 'chat.errorBanner.streamInterrupted'
-        : 'chat.errorBanner.streamInterruptedNoRetry',
-    );
+    displayError = externalProviderName
+      ? t(
+          retryAction
+            ? 'chat.errorBanner.streamInterruptedWithProvider'
+            : 'chat.errorBanner.streamInterruptedNoRetryWithProvider',
+          { provider: externalProviderName },
+        )
+      : t(
+          retryAction
+            ? 'chat.errorBanner.streamInterrupted'
+            : 'chat.errorBanner.streamInterruptedNoRetry',
+        );
+    explain = buildChatErrorExplain('streamInterrupted', t, { providerName: externalProviderName });
   } else if (isNetworkishError) {
     // 网络类错误:原始英文报错(502/ECONNREFUSED/fetch failed 等)对用户没有
     // 行动价值,换成友好文案;原始错误折叠可查(下方「查看原始错误」)。
@@ -700,13 +813,41 @@ export function ErrorBanner({
             ? 'chat.errorBanner.networkUnreachable'
             : 'chat.errorBanner.networkUnreachableNoRetry',
         );
+  } else if (upstreamStatusError) {
+    // 上游 5xx(无正文):标题直接点名状态,原始报错折叠可查。
+    // 放在网络分支之后 —— 502/503/504 仍走「服务暂时不可达」那套更贴近恢复动作的文案。
+    displayError = externalProviderName
+      ? t('chat.errorBanner.upstreamStatusErrorWithProvider', {
+          provider: externalProviderName,
+          status: upstreamStatusError.status,
+        })
+      : t('chat.errorBanner.upstreamStatusError', { status: upstreamStatusError.status });
+    explain = buildChatErrorExplain('upstreamStatus', t, {
+      providerName: externalProviderName,
+      status: upstreamStatusError.status,
+    });
+    hasSpecialGuidance = false;
   } else {
     // Keep the raw message available to every specialized gate above. Only
     // the final fallback uses the stable reason map, so auth/network/overload
     // recovery behavior keeps its existing priority while generic maker-core
     // English fallbacks are localized in both the live and tail banner.
-    displayError = localizedReasonError ?? t(preconditionMessage === undefined
-      ? 'chat.errorBanner.replyFailed' : 'ipcError.PRECONDITION_FAILED');
+    if (errorReasonI18nKey === 'chat.errorBanner.modelAccessDenied') {
+      displayError = externalProviderName
+        ? t('chat.errorBanner.modelAccessDeniedWithProvider', { provider: externalProviderName })
+        : t('chat.errorBanner.modelAccessDenied');
+      explain = buildChatErrorExplain('modelAccessDenied', t, {
+        providerName: externalProviderName,
+      });
+    } else if (errorReasonI18nKey === 'chat.errorBanner.remoteCompactEncryptedContent') {
+      displayError = t('chat.errorBanner.remoteCompactEncryptedContent');
+      explain = buildChatErrorExplain('encryptedContent', t, {
+        providerName: externalProviderName,
+      });
+    } else {
+      displayError = localizedReasonError ?? t(preconditionMessage === undefined
+        ? 'chat.errorBanner.replyFailed' : 'ipcError.PRECONDITION_FAILED');
+    }
     hasSpecialGuidance = false;
   }
   const showUnwrappedRaw = !hasSpecialGuidance || isResponsesLiteParallelToolCallsError(error);
@@ -718,8 +859,10 @@ export function ErrorBanner({
   ].includes(remoteErrorCode ?? '');
   if (sharedRecoveryReason && !keepRemoteGuidance) {
     displayError = t(`sharedTaskRecovery.reason.${sharedRecoveryReason}`);
+    explain = undefined;
   }
   const canShowErrorDetails =
+    isReconnectStalled ||
     piCloudContextRecovery ||
     isNetworkishError ||
     isOverloadError ||
@@ -727,7 +870,7 @@ export function ErrorBanner({
     showUnwrappedRaw ||
     isCodexUsageLimitError ||
     Boolean(usageLimitResumeAt) ||
-    isAccountUsageLimitText ||
+    isAccountUsageLimit ||
     terminalRateLimitRetryProgress ||
     isClaudeGatewayOpusPlanMismatch ||
     isClaudeSubscriptionOpusPlanMismatch ||
@@ -880,6 +1023,7 @@ export function ErrorBanner({
               ? t('chat.errorBanner.readableHistoryRecoveryDescription')
               : renderProviderErrorExplanation(error, displayError, t)
       }
+      explain={!isAttachmentAccessDenied ? explain : undefined}
       details={canShowErrorDetails && preconditionMessage !== displayError ? preconditionMessage ?? error : undefined}
       onDiagnose={
         onDiagnose
@@ -1065,10 +1209,10 @@ export function ErrorBanner({
               disabled={forkStripEncryptedRunning}
               loading={retrying}
               onClick={() => void handleRetry()}
-              title={t('chat.errorBanner.retryTitle')}
+              title={t(isReconnectStalled ? 'chat.errorBanner.silentStopContinueTitle' : 'chat.errorBanner.retryTitle')}
             >
-              <RotateCcw size={12} />
-              {t('chat.errorBanner.retry')}
+              {isReconnectStalled ? <Play size={12} /> : <RotateCcw size={12} />}
+              {t(isReconnectStalled ? 'chat.errorBanner.silentStopContinueTitle' : 'chat.errorBanner.retry')}
             </Button>
           )}
           {(showHistoryRecovery || showInvalidEncryptedContentRecovery) && onForkStripEncrypted && (

@@ -234,6 +234,35 @@ it('drops a timed-out request when its cancel gets to the peer first', async () 
 });
 
 
+/** 测试价值：WorkerSessions.open 的发送失败必须立即通知 Main。会话测试已覆盖对端拒绝和超时，
+ * 这里用真实会话与 worker 桥模拟第一帧写入失败，断言 Main 在握手时限前收到错误且计时器已清除。
+ * 依据：远程适配「Agent-Net 会话层上的控制链路」的建链失败处理。tier：unit，假时钟。 */
+it('settles a worker-side link open immediately when writing its first frame fails', async () => {
+  vi.useFakeTimers();
+  const session = new SessionPeer({
+    wire: {
+      write() { throw new Error('stream finished'); },
+      bufferedAmount: 0,
+      onData() {},
+    },
+    laneFor: () => 'normal',
+  });
+  const main = new WorkerSessions((message) => worker(message), () => {});
+  const worker = serveWorkerSessions({
+    useSessions() {},
+    session: () => session,
+    onSession() {},
+  }, (message) => main.receive(message));
+  main.use({ laneFor: () => 'normal', handlers: () => ({}) });
+  main.receive({ type: 'session-up', peer: 'peer', device: 'peer' });
+
+  const rejected = vi.fn();
+  void main.session('peer')!.open({ controllerName: 'test' }, 10_000).catch(rejected);
+  await Promise.resolve();
+  expect(rejected).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ code: 'DEVICE_OFFLINE', message: 'stream finished' }));
+  expect(vi.getTimerCount()).toBe(0);
+});
+
 /** 测试价值
  * - 生产入口与可观察结果：Main 读到的会话积压（WorkerSessions 给出的 bufferedAmount，Desktop 当作链路的队列深度，
  *   高了就先不推任务文字）。worker 的通道还压着数据时，积压清掉以后 Main 自己就能读到，不用等下一次调用。
@@ -260,6 +289,28 @@ it('lets Main see a session backlog drain without sending anything more', async 
   backlog = 0;
   await vi.advanceTimersByTimeAsync(SESSION_BACKLOG_REPORT_MS * 2);
   expect(announced!.bufferedAmount).toBe(0);
+});
+
+// Unit: Main can cancel by request id while the worker owns the wire timeout.
+it('forwards cancellation from Main to the worker session immediately', async () => {
+  const { caller, ran, arrive } = peers();
+  const main = new WorkerSessions((message) => worker(message), () => {});
+  let onSession: Parameters<Parameters<typeof serveWorkerSessions>[0]['onSession']>[0] | undefined;
+  const worker = serveWorkerSessions({
+    useSessions() {},
+    session: () => caller,
+    onSession(listener) { onSession = listener; },
+  }, (message) => main.receive(message));
+  main.use({ laneFor: () => 'normal', handlers: () => ({}) });
+  onSession!('peer', caller, 'peer');
+  const proxy = main.session('peer')!;
+  const result = proxy.request('test:read', [], { id: 'listing', timeoutMs: 10_000 });
+  proxy.cancelRequest('listing');
+  await expect(result).resolves.toMatchObject({ ok: false, error: { code: 'INVOKE_TIMEOUT' } });
+  arrive('control');
+  arrive('normal');
+  await settle();
+  expect(ran).toEqual([]);
 });
 
 /** 测试价值（会话 v2：大消息走自己的流）

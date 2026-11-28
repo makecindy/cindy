@@ -57,8 +57,24 @@ export function isForeignKeyboardControl(target: Element): boolean {
 }
 
 /** 原生复选框 / 单选：不收文字，只有空格切换，按键归属与按钮相同。 */
-function isToggleInput(target: EventTarget | null): boolean {
+function isToggleInput(target: EventTarget | null): target is HTMLInputElement {
   return target instanceof HTMLInputElement && (target.type === 'checkbox' || target.type === 'radio');
+}
+
+const RADIO_KEYS = new Set([' ', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight']);
+
+/**
+ * 焦点所在的控件是否自己要这个键。收文字的控件（输入框、文本域、下拉、可编辑区）要所有键；
+ * 原生复选框只要空格，单选要空格和方向键，其余键与焦点在按钮上时一样交给页面。
+ *
+ * isEditableKeyboardTarget 仍把所有 input 当可编辑：设置页「第一下 Esc 只失焦」、导航键的空格
+ * 判断与图片标注的空格平移各有自己的约定，不随这里改变。只有原本面对 button role=checkbox、
+ * 换成原生勾选框后被挡住的快捷键（分享栏 Esc / ⌘A、消息列表翻页键、设置页 Esc）改用本函数。
+ */
+export function editableTargetConsumesKey(target: EventTarget | null, key: string): boolean {
+  if (!isEditableKeyboardTarget(target)) return false;
+  if (!isToggleInput(target)) return true;
+  return target.type === 'radio' ? RADIO_KEYS.has(key) : key === ' ';
 }
 
 /**

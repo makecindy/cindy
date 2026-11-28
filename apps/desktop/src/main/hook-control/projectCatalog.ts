@@ -11,7 +11,6 @@ import path from 'node:path';
 
 import { desc } from 'drizzle-orm';
 import { BrowserWindow } from 'electron';
-import { isTeammateProjectPath } from '@cindy/maker-shared/teammate-project';
 
 import { getActiveDataOwnerPushStamp, isAppSessionBoundaryPending } from '../appSessionState.js';
 import { tryGetDbClient } from '../localDb/client/current.js';
@@ -64,7 +63,7 @@ export async function loadImProjectCatalog(): Promise<ProjectCatalogSnapshot | n
     if (!names.has(key)) names.set(key, row.alias);
   }
   const projects = rows
-    .filter((row) => !hidden.has(identity(row.path)) && !isTeammateProjectPath(row.path))
+    .filter((row) => !hidden.has(identity(row.path)))
     .map((row) => ({
       path: row.path,
       name: names.get(identity(row.path)) ?? (path.basename(row.path) || row.path),
@@ -79,7 +78,7 @@ export type RegisterImProjectResult =
 
 /**
  * 把一个本机目录登记成项目(侧栏与 IM 机器人共用的那一份); 之前移除过的恢复显示。
- * 不能是对话的托管目录、任务 worktree 或伙伴的项目。默认要求目录存在; 升级迁移传
+ * 不能是对话的托管目录、任务 worktree。默认要求目录存在; 升级迁移传
  * `requireExisting: false`, 暂时不在的目录(外接盘没插)也登记。
  */
 export async function registerImProjectDirectory(
@@ -88,9 +87,6 @@ export async function registerImProjectDirectory(
 ): Promise<RegisterImProjectResult> {
   const lexical = validateLocalProjectDirectory(directory);
   if (!lexical.ok) return lexical;
-  if (isTeammateProjectPath(lexical.workingDir)) {
-    return { ok: false, errorCode: 'INVALID_ARGS', message: 'Teammate projects are opened from the teammate.' };
-  }
   const client = tryGetDbClient();
   if (!client || isAppSessionBoundaryPending()) {
     return { ok: false, errorCode: 'HOST_NOT_READY', message: 'Cindy project storage is not ready.' };

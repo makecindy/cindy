@@ -1,4 +1,5 @@
 import { Button } from '@/components/ui/button';
+import { getDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { Bot, Link2, Plus, Users } from 'lucide-react';
 import { useRef, useState } from 'react';
@@ -76,7 +77,12 @@ export function BotCreateMenu({ variant, label }: {
       {dialog === 'group' ? (
         <BotGroupCreateDialog
           onOpenChange={open => { if (!open) { setDialog(null); trigger.current?.focus(); } }}
-          onCreated={id => { setDialog(null); navigate(`/bots/groups/${encodeURIComponent(id)}`); }}
+          onCreated={(id, serverBacked) => {
+            setDialog(null);
+            navigate(`/bots/groups/${encodeURIComponent(id)}`, {
+              state: serverBacked ? { openGroupInviteMenu: { groupId: id, owner: getDataOwnerGeneration() } } : null,
+            });
+          }}
         />
       ) : null}
       {dialog === 'join' ? (

@@ -207,7 +207,7 @@ const DESCRIPTION = [
   '',
   '参数:',
   '- role: worker 角色 (developer / reviewer / tester / merger 或自定义 string)',
-  '- agent: 可选 (codex / claude-code / pi / acp)。acp = 本机插件提供的执行引擎：取 list_available_models 的 plugin_engines，provider_id 传该项 provider_id，model 传其 models[].id(default = 由引擎自己选)；只在本机运行，不能配 execution_device_id、远程 agent_device_id 或 new_worktree，不使用创建偏好。不传按用户在创建 Worker 面板手工提交过的组合；没有适用记忆时需指定 agent。记忆整条不可用且未能确定 agent 时返回 INVALID_PARAMS，指定 agent 后重试即可。显式来源或位置完全禁用记忆，agent/model/effort/fast 都走原策略。',
+  '- agent: 可选 (codex / claude-code / pi / acp)。acp = 本机插件提供的执行引擎：取 list_available_models 的 plugin_engines，provider_id 传该项 provider_id，model 传其 models[].id(default = 由引擎自己选)；只在本机运行，不能配 execution_device_id 或远程 agent_device_id，不使用创建偏好；new_worktree 与内置 Worker 相同。不传按用户在创建 Worker 面板手工提交过的组合；没有适用记忆时需指定 agent。记忆整条不可用且未能确定 agent 时返回 INVALID_PARAMS，指定 agent 后重试即可。显式来源或位置完全禁用记忆，agent/model/effort/fast 都走原策略。',
   '- model: 可选，Worker 模型 id；不传优先使用适用的手工组合，否则走原默认策略。有适用的手工组合时，只传 model 可按目录推断 agent，歧义时须指定 agent；没有适用组合时需同时指定 agent。',
   '- provider_id: 可选, 模型来源 provider id。优先使用 list_available_models 对应模型返回的 provider_id；显式传入后 host 会严格校验该来源已连接且提供所选模型。',
   '- effort: 可选, reasoning/thinking 强度 (low / medium / high / xhigh / max / ultra)。Codex: 映射 OpenAI reasoning effort(max/ultra 仅部分模型如 GPT-5.6 Sol 支持); Claude Code: 映射 extended thinking token 预算(无 ultra,自动降级为 max)。显式传入时必须匹配所选 model 能力；当前 worker 模型都不把 minimal 作为可选思考档。',
@@ -218,8 +218,8 @@ const DESCRIPTION = [
   '- execution_device_id: 可选，运行设备(同账号另一台电脑)的 device_id，只能取 get_workspace_info 的 execution_devices 里 supported=true 的值；指定后 Worker 的任务、目录、命令与文件都在那台电脑，结果仍自动回报给你。用户没有要求放到别的电脑时不要传。',
   '- agent_device_id: 可选，Agent 使用哪台电脑的远程供应商；"local" 为 Worker 工作电脑。指定 execution_device_id 时先用同参数的 list_available_models 查 model / provider_id / locations；省略位置优先使用适用的手工组合，否则按原策略跟 Lead（运行设备使用工作电脑默认）。',
   '- initial_task 的正文要自包含：目标、背景、边界与交付要求写进正文，文件只作补充并给绝对路径。返回的 file_access 说明这个 worker 能看到什么：lead_working_directory = 与你同一目录；own_worktree / explicit_directory = 同一台电脑的另一个目录（没有你未提交的文件，代码用提交或分支交接）；other_computer = 另一台电脑，读不到这台电脑的任何文件。',
-  '- 返回的 initial_task_state 说明首条任务的真实状态：delivered = 已送达并开始处理；queued = 已排队、尚未开始；not_delivered = worker 已创建但任务没送到；none = 没有附任务。创建成功不等于任务已完成，向用户汇报时按这个状态如实说。',
-  "- initial_task: 可选, 创建后立即派给 worker 的第一条消息；dispatch_outcome.wakeKind=queued 表示首条任务已成功入队(此时回传 queued_message_id, 被消费前可用 get_worker_queue_status / update_queued_message / cancel_queued_message / merge_queued_messages 管理)；dispatch_outcome.kind='session-dispatch' 且 dispatched=false，或 kind='host-send' 且 accepted=false，表示 worker 已创建但首条任务未送达 / 派发失败",
+  '- 返回的 initial_task_state 说明首条任务的真实状态：delivered = 已送达并开始处理；queued = 已排队、尚未开始；unknown = 送达未确认、正在核对，请勿重复派发；not_delivered = worker 已创建但任务没送到；none = 没有附任务。创建成功不等于任务已完成，向用户汇报时按这个状态如实说。',
+  "- initial_task: 可选, 创建后立即派给 worker 的第一条消息；dispatch_outcome.wakeKind=queued 表示首条任务已成功入队(此时回传 queued_message_id, 被消费前可用 get_worker_queue_status / update_queued_message / cancel_queued_message / merge_queued_messages 管理)；dispatch_outcome.kind='session-dispatch' 且 dispatched=false，或 kind='host-send' 且 accepted=false（DELIVERY_UNKNOWN 除外），表示 worker 已创建但首条任务未送达 / 派发失败",
   "- images: 可选, 随 initial_task 发的图片(最多 8 张, 仅本机 worker)。用户在对话里贴的图, 把上下文 <cindy-host-image-references> 里的 uri 原样传入; Lead 自己落盘的文件传本机绝对路径。",
   '',
   '【硬边界】',
@@ -299,7 +299,7 @@ export function registerCreateWorkerTool(
 }
 
 /** 首条任务的真实状态；创建成功不等于任务已经在跑，更不等于完成。 */
-export type InitialTaskState = 'none' | 'delivered' | 'queued' | 'not_delivered';
+export type InitialTaskState = 'none' | 'delivered' | 'queued' | 'unknown' | 'not_delivered';
 
 export function initialTaskState(
   hasInitialTask: boolean,
@@ -307,6 +307,7 @@ export function initialTaskState(
 ): InitialTaskState {
   if (!hasInitialTask) return 'none';
   const outcome = result.dispatchOutcome;
+  if (outcome?.kind === 'host-send' && outcome.code === 'DELIVERY_UNKNOWN') return 'unknown';
   const sessionDispatched = outcome?.kind === 'session-dispatch' && outcome.dispatched;
   if (result.queuedMessageId || (sessionDispatched && outcome.wakeKind === 'queued')) return 'queued';
   if (result.dispatched === true || sessionDispatched) return 'delivered';

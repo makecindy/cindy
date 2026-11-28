@@ -1,11 +1,9 @@
-import { useState } from 'react';
 import { ListChecks } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { AttentionDot } from './AttentionDot';
 import { ChromeIconButton } from '@/components/title-bar/ChromeIconButton';
-import { claimTaskInboxIntro, TaskInboxIntro } from '@/features/cc-agent/sidebar/TaskInboxIntro';
-import { useTaskListMode } from '@/hooks/useTaskListMode';
+import { useTaskListModeSwitch } from '@/features/cc-agent/sidebar/TaskInboxIntro';
 import { cn } from '@/lib/utils';
 
 /**
@@ -15,8 +13,7 @@ import { cn } from '@/lib/utils';
  */
 export function TaskListModeToggle({ hasUnread }: { hasUnread: boolean }) {
   const { t } = useTranslation();
-  const { mode, setMode } = useTaskListMode();
-  const [intro, setIntro] = useState(false);
+  const { mode, switchMode, intro } = useTaskListModeSwitch();
   const inbox = mode === 'inbox';
   const showUnread = !inbox && hasUnread;
   const label = t(inbox ? 'ccAgent.sidebar.taskListMode.leaveInbox' : 'ccAgent.sidebar.taskListMode.enterInbox');
@@ -29,16 +26,13 @@ export function TaskListModeToggle({ hasUnread }: { hasUnread: boolean }) {
         tooltip={label}
         tooltipSide="bottom"
         data-task-list-mode-toggle=""
-        onClick={() => {
-          setMode(inbox ? 'tasks' : 'inbox');
-          if (!inbox && claimTaskInboxIntro()) setIntro(true);
-        }}
+        onClick={() => switchMode(inbox ? 'tasks' : 'inbox')}
         className={cn('relative shrink-0', inbox && '[--button-face-bg:var(--surface-hover)] text-[var(--text-primary)]')}
       >
         <ListChecks size={15} />
         {showUnread && <AttentionDot className="pointer-events-none absolute right-1 top-1" />}
       </ChromeIconButton>
-      {intro ? <TaskInboxIntro open onClose={() => setIntro(false)} /> : null}
+      {intro}
     </>
   );
 }
