@@ -52,8 +52,34 @@ export interface PluginMarketItem {
   /** 来源市场名（自定义市场项必填；服务端项为 null）。 */
   sourceMarketName: string | null;
   /**
-   * 新版本比已装版本权限变多，后台更新已暂停、等待用户确认。只在 Main 按真实包
-   * 判定过后出现；缺省表示未知或无需确认，不能据此推断可以静默更新。
+   * 自定义市场项的去敏来源身份（Main 按该条目的来源配置与当前缓存版本的取包记录生成，见
+   * pluginMarketSourceIdentity）。服务端项、以及无法安全生成或无法核实时缺省。
+   */
+  sourceIdentity?: PluginMarketSourceIdentity;
+  /**
+   * 这台电脑上当前已装实例的来源标识（同 `sourceIdentity.sourceId` 的算法，由安装账本记录的来源指纹
+   * 生成）。只在已装实例存在、账本记录为已安装且属于本条目的 `pluginId` 时给出。它只说明「来自哪里」，
+   * 用于确认前的来源比对与换源判断；回执过期后核实「是不是这次操作」用 `installedOperationId`（契约 V2.9）。
+   */
+  installedSourceId?: string;
+  /**
+   * 当前已装实例是哪一次远程管理操作装入的（契约 V2.9）：远程 `management:begin` 安装／更新提交成功时，Host 把
+   * 操作号连同发起方设备身份的本机不可逆标识和装入的包摘要写进安装记录。只在远程管理响应里、只对发起那次
+   * 操作的控制端给出，且要求磁盘上的包仍是那份；电脑本机界面与其它控制端永远看不到。形状见
+   * PLUGIN_MARKET_OPERATION_ID_PATTERN。
+   */
+  installedOperationId?: string;
+  /**
+   * 当前安装能否归到请求方发起的那次远程操作（契约 V2.10）。只在远程管理响应里、且 `installState` 为
+   * `installed`／`update-available` 时出现：`'self'` 必带 `installedOperationId`；`'unattributed'` 表示 Host 核实过，
+   * 但当前安装不能归到请求方的操作（本机或其它控制端装的、证据缺失或无法核实），不带操作号，也不说明是谁。
+   * 两个字段都缺省即旧 Host。由 projectInstalledOperationAttribution 统一给出。
+   */
+  installedOperationAttribution?: PluginMarketInstalledOperationAttribution;
+  /**
+   * 新版本比已装版本权限变多，或（自定义市场）实际来源与已装版本不同，后台更新已暂停、
+   * 等待用户确认。只在 Main 按真实包与来源记录判定过后出现；缺省表示未知或无需确认，
+   * 不能据此推断可以静默更新。
    */
   updateRequiresConsent?: true;
 }
@@ -288,6 +314,266 @@ export interface MarketSourceSummary extends MarketSourceConfig {
   status: 'ok' | 'error';
   /** status === 'error' 时的 IPC 错误码（Renderer 按码本地化）。 */
   errorCode: string | null;
+}
+
+/**
+ * 可以展示给用户和远程控制端的来源身份（契约第 2 版）。
+ * - `sourceId`：Host 用本机密钥对来源指纹（`marketSourceKey`）做的 HMAC 截断，不透明、不可反推，
+ *   区分不同本地目录、端口、协议写法与稀疏路径；控制端用它核对「装的是哪个来源」。
+ * - Git 来源另给 `repository`（实际取包地址的 `host/owner/repo`）与可选 `ref`，只用于展示。
+ * 不含任何凭证、查询串、片段、端口或本地路径。
+ * 远程协议见 docs/dev-rules/protocol-compatibility/same-account-remote-plugin-management.md。
+ */
+export type PluginMarketSourceIdentity =
+  | { kind: 'git'; repository: string; ref?: string; sourceId: string }
+  | { kind: 'local'; sourceId: string };
+
+/** 展示用仓库标识的整体形状；远程控制端按同一形状校验。 */
+export const PLUGIN_MARKET_SOURCE_REPOSITORY_PATTERN =
+  /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)*(?:\/[A-Za-z0-9_][A-Za-z0-9._-]{0,99}){2,4}$/;
+/** 远程管理操作号（契约 V2.9）：Host 只为这个形状的操作号留安装证据；控制端应使用随机 UUID。 */
+export const PLUGIN_MARKET_OPERATION_ID_PATTERN = /^[A-Za-z0-9_-]{8,128}$/;
+export function isPluginMarketOperationId(value: unknown): value is string {
+  return typeof value === 'string' && PLUGIN_MARKET_OPERATION_ID_PATTERN.test(value);
+}
+export type PluginMarketInstalledOperationAttribution = 'self' | 'unattributed';
+
+/** 契约 V2.10：归属复核需要的一个已装实例的当前事实（实例键、批准令牌、版本）。Main 内部使用，不上线。 */
+export interface InstalledInstanceFacts {
+  storagePart: string;
+  approval: string;
+  version: string;
+}
+
+/**
+ * 远程管理响应里「当前安装归属」的唯一出口（契约 V2.10）。先去掉条目上已有的两个字段，再按结论重新给出，保证
+ * `'self'` ⇔ 带 `installedOperationId`：
+ * - 条目不是 installed／update-available：两个字段都不给；
+ * - `operationId` 合法：`'self'` + 该操作号；
+ * - 其余：`'unattributed'`，不带操作号。
+ */
+export function projectInstalledOperationAttribution<T extends PluginMarketItem>(
+  item: T,
+  operationId: string | null | undefined,
+): T {
+  const copy = { ...item };
+  delete copy.installedOperationId;
+  delete copy.installedOperationAttribution;
+  if (copy.installState !== 'installed' && copy.installState !== 'update-available') return copy;
+  return isPluginMarketOperationId(operationId)
+    ? { ...copy, installedOperationId: operationId, installedOperationAttribution: 'self' }
+    : { ...copy, installedOperationAttribution: 'unattributed' };
+}
+/** 来源标识：16 字节 HMAC 截断的 base64url（无填充）。 */
+export const PLUGIN_MARKET_SOURCE_ID_PATTERN = /^[A-Za-z0-9_-]{22}$/;
+/** 与 sources/parse.ts 的 REF_PATTERN 同一口径。 */
+const SOURCE_IDENTITY_REF = /^(?!-)[A-Za-z0-9][A-Za-z0-9._/-]{0,127}$/;
+const SOURCE_IDENTITY_HOST = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)*$/;
+const SOURCE_IDENTITY_SEGMENT = /^[A-Za-z0-9_][A-Za-z0-9._-]{0,99}$/;
+/**
+ * 地址里出现即不生成：空白、C0/C1 控制符、零宽与双向控制符（视觉欺骗）、反斜杠
+ * （WHATWG URL 把它当 `/`，git 不会，两边认定的 host 会不一致）、百分号编码（`%2e%2e`
+ * 会被 URL 解析成 `..` 后归一掉，展示的路径就不再是 git 实际请求的路径）。
+ */
+// eslint-disable-next-line no-control-regex
+const SOURCE_IDENTITY_UNSAFE_CHARS = /[\s\u0000-\u001f\u007f-\u009f\u200b-\u200f\u2028-\u202e\u2060-\u2069\ufeff\\%]/;
+/**
+ * 只接受「最无争议的形状」，任何一处可能让 git（libcurl / ssh）与这里认定的主机、端口、路径不同就整体不生成：
+ * - 整串先拒绝 `?` `#` `[` `]`（再加上 SOURCE_IDENTITY_UNSAFE_CHARS 的空白、控制符、`\`、`%`），在拆分之前；
+ * - userinfo 非空、只含 RFC 3986 的 unreserved / sub-delims 与 `:`，不含 `@` `/`；
+ * - host 是严格的 ASCII DNS 名（不收 IPv6 方括号）；端口是不带前导零的十进制；
+ * - 路径各段只含 `A-Za-z0-9._~+-`，没有空段与 `.` / `..` 段，可带一个结尾斜杠。
+ */
+const SOURCE_IDENTITY_URL_AMBIGUOUS = /[?#[\]]/;
+const SOURCE_IDENTITY_URL =
+  /^(https?|ssh|git):\/\/(?:([A-Za-z0-9._~!$&'()*+,;=:-]+)@)?([A-Za-z0-9.-]+)(?::([1-9][0-9]{0,4}))?((?:\/[A-Za-z0-9._~+-]+)+\/?)$/i;
+const SOURCE_IDENTITY_PATH_DOT_SEGMENT = /(?:^|\/)\.{1,2}(?=\/|$)/;
+const SOURCE_IDENTITY_DEFAULT_PORT: Record<string, string> = { http: '80', https: '443' };
+/** scp 形式 `user@host:owner/repo`：用户、主机、路径都按严格字符集；路径不能以 `/` 开头，没有空段。 */
+const SOURCE_IDENTITY_SCP = /^([A-Za-z0-9._-]+)@([A-Za-z0-9.-]+):([A-Za-z0-9._~+-]+(?:\/[A-Za-z0-9._~+-]+)*\/?)$/;
+/** SSH 登录用户：只进本机 HMAC 输入，字符集限制在常见账户名内，其它一律按无法核实处理。 */
+const SOURCE_IDENTITY_SSH_USER = /^[A-Za-z0-9_][A-Za-z0-9._-]{0,127}$/;
+
+/** 实际取包地址按白名单取出的部件（不含用户名、密码、令牌、查询串、片段），只用于生成 sourceId。 */
+export interface PluginMarketFetchAddress {
+  /**
+   * 来源标识（sourceId）的唯一输入：校验通过的原始地址字节串，**只**去掉 http / https / git 形式的 userinfo（凭证），
+   * 其余一字不改——ssh 与 scp 形式整串原样（含登录用户、主机原始大小写、端口、路径）。不经任何规整或按 URL 语义的
+   * 重组：OpenSSH 的 Host 别名区分大小写、登录名可含 `:` 等，git / ssh 实际怎么解释由它们决定，这里只会偏保守
+   * （同一仓库的不同写法得到不同标识），不会把两个不同端点并成一个。下面的拆分部件只用于拒绝与生成展示用仓库。
+   */
+  identity: string;
+  /** 小写协议；scp 形式记作 `scp`。 */
+  scheme: 'https' | 'http' | 'ssh' | 'git' | 'scp';
+  /**
+   * SSH 登录用户（仅 `ssh` / `scp`；其它协议为空串）。在普通 SSH 服务上，同一主机、同一路径（尤其 scp 的
+   * 相对路径、`~user/…`）可随登录用户解析到不同家目录和仓库，所以它是来源身份的一部分；ssh:// 带绝对路径时
+   * 也一律纳入，结果只会更保守。只进本机 HMAC 输入，不进展示、记录、回执或日志。https / http / git 的
+   * userinfo（含 `https://TOKEN@host` 单段令牌）是凭证，一律不读取，凭证轮换不改变来源标识。
+   */
+  user: string;
+  /** 小写 host（DNS 不区分大小写；只接受 ASCII 主机名，不做 IDNA 转换）。 */
+  host: string;
+  /** 端口，按地址里写的原样（`:443` 与缺省不归并，`0443` 与 `443` 也不归并），缺省为空串。 */
+  port: string;
+  /**
+   * 路径，按地址里写的原样（以 `/` 开头；scp 形式为冒号后的部分）。不去掉结尾 `.git` 或 `/`、不改大小写：
+   * 有的服务把 `plugins` 与 `plugins.git`、带不带结尾斜杠、大小写不同的路径当成不同仓库，核实用的标识宁可
+   * 按原值区分（展示用的 repository 另行规整，见 pluginMarketRepositoryFromUrl）。
+   */
+  path: string;
+}
+
+/**
+ * 把一个 Git 地址（配置地址，或 git 解析出的实际取包地址）白名单拆成部件，解析不了返回 null：
+ * - 先对 git 实际使用的原始字节校验，再拆分；不做任何会把两个不同实际地址变成同一组部件的规整：不 trim
+ *   （首尾空白也是地址的一部分，出现即拒绝）、不经 URL 解析器归一、端口与路径保持原样。只有协议与 host 转成
+ *   小写：DNS 主机名不区分大小写；git 对大写协议要么按同一协议处理、要么取包失败（不会有身份），都不会把两个
+ *   能取到包的不同地址并成一个；
+ * - 只接受 `https` / `http` / `ssh` / `git` 与 `user@host:path` 的 scp 形式；
+ * - 只读取协议、SSH 登录用户（仅 ssh / scp）、host、端口、路径；https / http / git 的用户名与密码（含
+ *   `https://TOKEN@host` 这类单段令牌，例如 `insteadOf` 改写注入的）与任何密码一律不读取；
+ * - 整串含 `?` `#` `[` `]` 时在拆分之前就不生成：URL 解析器会把 `?`/`#` 当成查询串、片段截掉（出现在
+ *   userinfo 一段时还会改变 libcurl 认定的主机），git 却把它们当成仓库路径的一部分（ssh / git）或拼进请求；
+ * - 只接受最无争议的形状（见 SOURCE_IDENTITY_URL / SOURCE_IDENTITY_SCP），并与 WHATWG URL 的解析结果交叉核对，
+ *   任何分歧都不生成；宁可多拒绝（身份缺省，控制端按无法核实处理），不给出可能与实际取包主机不同的身份。
+ * 输入按不可信处理（手工改过的配置、git 解析出的改写地址）。结果不写日志。
+ */
+export function pluginMarketFetchAddress(value: unknown): PluginMarketFetchAddress | null {
+  if (typeof value !== 'string') return null;
+  const url = value;
+  if (
+    !url ||
+    url.length > 2048 ||
+    SOURCE_IDENTITY_UNSAFE_CHARS.test(url) ||
+    SOURCE_IDENTITY_URL_AMBIGUOUS.test(url)
+  ) {
+    return null;
+  }
+  const parsed = SOURCE_IDENTITY_URL.exec(url);
+  if (parsed) {
+    const [, rawScheme, userinfo, rawHost, port = '', path] =
+      parsed as unknown as [string, string, string | undefined, string, string | undefined, string];
+    if (SOURCE_IDENTITY_PATH_DOT_SEGMENT.test(path) || Number(port || '0') > 65535) return null;
+    const host = rawHost.toLowerCase();
+    if (host.length > 253 || !SOURCE_IDENTITY_HOST.test(host)) return null;
+    const protocol = rawScheme.toLowerCase() as PluginMarketFetchAddress['scheme'];
+    // 只有 ssh 的用户名是身份；其它协议的 userinfo 是凭证，不读取。ssh 的 `user:password` 只取用户名。
+    // ssh 的 userinfo 是登录名：git 把 `git:tenant-a` 整串当登录名，不是「用户名:密码」，这里不猜，含 `:` 即拒绝。
+    if (protocol === 'ssh' && userinfo !== undefined && !SOURCE_IDENTITY_SSH_USER.test(userinfo)) return null;
+    const user = protocol === 'ssh' ? userinfo ?? '' : '';
+    // 交叉核对：与 WHATWG URL 解析的主机、端口、路径、ssh 用户名逐项一致才接受，任何分歧都按无法核实处理。
+    let whatwg: URL;
+    try {
+      whatwg = new URL(url);
+    } catch {
+      return null;
+    }
+    const expectedPort = SOURCE_IDENTITY_DEFAULT_PORT[protocol] === port ? '' : port;
+    if (
+      whatwg.hostname.toLowerCase() !== host ||
+      whatwg.port !== expectedPort ||
+      whatwg.pathname !== path ||
+      (protocol === 'ssh' && whatwg.username !== user)
+    ) {
+      return null;
+    }
+    // http / https / git 的 userinfo 是凭证：只去掉这一段，轮换凭证不改变标识；ssh 整串原样。
+    const identity = protocol === 'ssh' || userinfo === undefined ? url : url.replace(`${userinfo}@`, '');
+    return { identity, scheme: protocol, user, host, port, path };
+  }
+  // 带 `://` 却不合上面的严格形状：不能再当 scp 形式解读。
+  if (url.includes('://')) return null;
+  const scp = SOURCE_IDENTITY_SCP.exec(url);
+  if (!scp) return null;
+  const user = scp[1]!;
+  const host = scp[2]!.toLowerCase();
+  const path = scp[3]!;
+  if (
+    !SOURCE_IDENTITY_SSH_USER.test(user) ||
+    host.length > 253 ||
+    !SOURCE_IDENTITY_HOST.test(host) ||
+    SOURCE_IDENTITY_PATH_DOT_SEGMENT.test(path)
+  ) {
+    return null;
+  }
+  return { identity: url, scheme: 'scp', user, host, port: '', path };
+}
+
+/**
+ * 把一个 Git 地址白名单归约成展示用的 `host/owner/repo`，生成不出就返回 null：在
+ * pluginMarketFetchAddress 的基础上，路径限 2–4 段（允许 GitLab 子组），每段只允许字母数字与 `._-`
+ * 且不以 `.` 开头，去掉结尾 `.git`。端口不进入展示（核实靠 sourceId 区分端口）。
+ */
+export function pluginMarketRepositoryFromUrl(value: unknown): string | null {
+  const address = pluginMarketFetchAddress(value);
+  if (!address) return null;
+  const segments = address.path.replace(/^\//, '').replace(/\/$/, '').replace(/\.git$/, '').split('/');
+  if (segments.length < 2 || segments.length > 4) return null;
+  if (!segments.every((segment) => segment !== '.' && segment !== '..' && SOURCE_IDENTITY_SEGMENT.test(segment))) {
+    return null;
+  }
+  const repository = `${address.host}/${segments.join('/')}`;
+  return repository.length <= 256 && PLUGIN_MARKET_SOURCE_REPOSITORY_PATTERN.test(repository) ? repository : null;
+}
+
+/**
+ * 组装来源身份，任何一项生成不出就整体返回 null：
+ * - `sourceId` 由 Main 用本机密钥算出（见 main/plugin-market/sources/sourceId.ts），必须合形；
+ * - 本地文件夹来源只给 `{kind:'local', sourceId}`，不含路径；
+ * - Git 来源的 `repository` 取**实际取包地址**的去敏结果（该缓存版本的取包记录），不取配置字符串；
+ * - 没配置 ref 时不给 ref；配置了 ref 但不是合法引用（只可能来自手工改坏的配置）时整个身份不生成：
+ *   git 实际仍会用它取包，不能给出缺了 ref 的身份。
+ */
+export function pluginMarketSourceIdentity(
+  source: MarketSource,
+  facts: { sourceId: string | null; fetchedRepository: string | null },
+): PluginMarketSourceIdentity | null {
+  if (!source || typeof source !== 'object') return null;
+  const { sourceId, fetchedRepository } = facts;
+  if (typeof sourceId !== 'string' || !PLUGIN_MARKET_SOURCE_ID_PATTERN.test(sourceId)) return null;
+  if (source.type === 'local') return { kind: 'local', sourceId };
+  if (source.type !== 'git') return null;
+  // 添加来源时没填 ref 存成缺省键，git 侧按真假判断，所以 null / 空串同样视为未配置。
+  const rawRef: unknown = source.ref;
+  let ref: string | undefined;
+  if (rawRef !== undefined && rawRef !== null && rawRef !== '') {
+    if (typeof rawRef !== 'string' || !SOURCE_IDENTITY_REF.test(rawRef)) return null;
+    ref = rawRef;
+  }
+  if (
+    typeof fetchedRepository !== 'string' ||
+    fetchedRepository.length > 256 ||
+    !PLUGIN_MARKET_SOURCE_REPOSITORY_PATTERN.test(fetchedRepository)
+  ) {
+    return null;
+  }
+  return { kind: 'git', repository: fetchedRepository, ...(ref !== undefined ? { ref } : {}), sourceId };
+}
+
+/** 来源标识的形状（`installedSourceId` 等单独出现的标识也经这里）。 */
+export function isPluginMarketSourceId(value: unknown): value is string {
+  return typeof value === 'string' && PLUGIN_MARKET_SOURCE_ID_PATTERN.test(value);
+}
+
+/**
+ * 校验一份来源身份的形状（远程 Host 发来的确认请求也经这里）。只接受契约里的键：
+ * Git 形式 `kind`／`repository`／可选 `ref`／`sourceId`，本地形式只有 `kind`／`sourceId`。
+ */
+export function isPluginMarketSourceIdentity(value: unknown): value is PluginMarketSourceIdentity {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+  const keys = Object.keys(record);
+  if (!isPluginMarketSourceId(record.sourceId)) return false;
+  if (record.kind === 'local') return keys.length === 2;
+  return (
+    record.kind === 'git' &&
+    keys.every((key) => key === 'kind' || key === 'repository' || key === 'ref' || key === 'sourceId') &&
+    typeof record.repository === 'string' &&
+    record.repository.length <= 256 &&
+    PLUGIN_MARKET_SOURCE_REPOSITORY_PATTERN.test(record.repository) &&
+    (record.ref === undefined || (typeof record.ref === 'string' && SOURCE_IDENTITY_REF.test(record.ref)))
+  );
 }
 
 /**

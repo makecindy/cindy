@@ -26,6 +26,7 @@ vi.mock('../../utils/atomicWriteFile.js', async (importOriginal) => {
 import {
   NS_LEDGER_FILE,
   PluginMarketLedger,
+  pluginMarketLedgerRevision,
   type PluginMarketInstallationRecord,
 } from '../ledger';
 
@@ -113,5 +114,31 @@ describe('PluginMarketLedger namespace write order', () => {
       fs.readFileSync(path.join(path.dirname(filePath), NS_LEDGER_FILE), 'utf8'),
     ) as { installations: Record<string, { namespace?: string | null }> };
     expect(sidecar.installations['_ns__acme__helper']).toMatchObject({ namespace: 'acme' });
+  });
+});
+
+/* 测试价值（PR #12731 独立审查 C2：安装代次）
+ * - 生产入口与可观察结果：真实 PluginMarketLedger 写入与读取时的日志重放，pluginMarketLedgerRevision()。
+ * - 覆盖缺口：写完日志后目标文件写失败时，变更由下一次读取重放才落地；计数不前进，市场在途读取的代次判断就看不到
+ *   这次变更（例如远程操作证据补写，之后的读取仍并入补写前的在途读取）。
+ * - 最小失败输入：主账本写失败一次，再读一次；改前计数在整个过程中都不变。
+ * - tier：unit。
+ */
+describe('PluginMarketLedger write revision', () => {
+  it('advances for a change that lands through the journal replay as well as for a direct write', () => {
+    const { ledger } = harness();
+    const start = pluginMarketLedgerRevision();
+    ledger.upsertInstallation(record());
+    const written = pluginMarketLedgerRevision();
+    expect(written).toBeGreaterThan(start);
+    expect(ledger.read()).toBeTruthy();
+    expect(pluginMarketLedgerRevision()).toBe(written);
+    crash.failMain = true;
+    expect(() => ledger.upsertInstallation(record({ version: '2.0.0' }))).toThrow(/simulated crash/);
+    crash.failMain = false;
+    const failed = pluginMarketLedgerRevision();
+    expect(failed).toBeGreaterThan(written);
+    expect(ledger.installationForPlugin({ ghostId: 'cindy-test', namespace: null })).toMatchObject({ version: '2.0.0' });
+    expect(pluginMarketLedgerRevision()).toBeGreaterThan(failed);
   });
 });

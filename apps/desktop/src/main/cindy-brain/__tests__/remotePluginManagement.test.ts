@@ -119,11 +119,13 @@ it('keeps the published package size in peer snapshots, pages, recommendations, 
   f.deps.market.recommendations = async () => [item];
   f.deps.market.detail = async () => ({ ...item, manifest: f.ghosts[0].manifest });
 
+  // The service layer has no attribution projection here: an installed item reaches a peer as 'unattributed' (V2.10).
+  const peerItem = { ...item, installedOperationAttribution: 'unattributed' };
   const full = await f.invoke('snapshot', {});
-  expect(full).toHaveProperty('market.items', [item]);
-  expect(await f.invoke('snapshot', { read: 'catalog' })).toEqual({ ...page, items: [item] });
-  expect(await f.invoke('snapshot', { read: 'recommendations' })).toEqual([item]);
-  expect(await f.invoke('market-detail', { pluginId: item.pluginId })).toEqual({ ...item, manifest: f.ghosts[0].manifest });
+  expect(full).toHaveProperty('market.items', [peerItem]);
+  expect(await f.invoke('snapshot', { read: 'catalog' })).toEqual({ ...page, items: [peerItem] });
+  expect(await f.invoke('snapshot', { read: 'recommendations' })).toEqual([peerItem]);
+  expect(await f.invoke('market-detail', { pluginId: item.pluginId })).toEqual({ ...peerItem, manifest: f.ghosts[0].manifest });
 });
 
 const flush = async () => {
@@ -421,6 +423,77 @@ describe('remote plugin management receipt boundaries', () => {
     expect((await f.read()).disabled).toEqual([installedGhostStoragePart(f.ghosts[0])]);
     expect(f.deps.projects!.setDisabled).toHaveBeenCalledTimes(1);
   });
+  /* 测试价值（契约 V2.9，PR #12731）
+   * - 生产入口与可观察结果：RemotePluginManagement.invoke 的 begin（install 更新）、market-detail 与 catalog；
+   *   交给安装出口的远程操作参数、响应里的 installedOperationId。
+   * - 缺口：回执过期后控制端需要 Host 返回的操作级证据；它只能对发起那次操作的控制端可见，否则同账号的另一台
+   *   控制端可在原操作被清掉后复用同一操作号冒认。
+   * - 最小失败输入：phone-a 发起一次更新；phone-a 与 desktop-b 各读一次详情；服务层条目自带该字段时。
+   * - tier：unit（fake 依赖，假定时器）。
+   */
+  it('passes the operation and its controller to the installer and projects the evidence only to that controller', async () => {
+    const f = fixture();
+    await f.invoke('begin', {
+      operationId: 'op-0000000000000001', kind: 'install', pluginId: 'plugin-weather', expectedReleaseId: 'release-2',
+      expectedInstalledApproval: ghostInstallApprovalToken(f.ghosts[0].approval),
+    }, 'phone-a', installedGhostStoragePart(f.ghosts[0]));
+    await flush();
+    expect(vi.mocked(f.deps.market.install).mock.calls[0]?.[5]).toEqual({ operationId: 'op-0000000000000001', controller: 'phone-a' });
+
+    const item = { pluginId: 'plugin-weather', installState: 'installed', installedOperationId: 'from-service' };
+    f.deps.market.detail = vi.fn(async () => item as never);
+    // Without the Host projection the field never leaves, even if a lower layer set it.
+    expect(await f.invoke('market-detail', { pluginId: 'plugin-weather' }, 'phone-a')).not.toHaveProperty('installedOperationId');
+    const installedOperations = vi.fn(async (items: readonly PluginMarketItem[], controller: string) => items.map((entry) => (
+      { ...entry, ...(controller === 'phone-a'
+        ? { installedOperationId: 'op-0000000000000001', installedOperationAttribution: 'self' as const } : {}) })));
+    f.deps.market.installedOperations =
+      installedOperations as unknown as NonNullable<RemotePluginManagementDeps['market']['installedOperations']>;
+    expect(await f.invoke('market-detail', { pluginId: 'plugin-weather' }, 'phone-a'))
+      .toMatchObject({ installedOperationId: 'op-0000000000000001' });
+    expect(installedOperations.mock.calls.at(-1)?.[1]).toBe('phone-a');
+    await f.invoke('market-detail', { pluginId: 'plugin-weather' }, 'desktop-b');
+    expect(installedOperations.mock.calls.at(-1)?.[1]).toBe('desktop-b');
+  });
+
+  /* 测试价值（契约 V2.10，PR #12731）
+   * - 生产入口与可观察结果：RemotePluginManagement.invoke 的 market-detail 响应里 installState、
+   *   installedOperationAttribution、installedOperationId 三者的组合。
+   * - 缺口：「'self' ⇔ 带 installedOperationId」只在服务层成立时，下层的任何偏差（漏给号、给了号却没有标记、未装条目
+   *   带着结论、号的形状不对）都会原样到达控制端，手机可能据此给出「打开」。
+   * - 最小失败输入：下层给出的六种组合，以及下层不提供归属时。
+   * - 改前失败：V2.10 之前没有这个出口。
+   * - tier：unit（fake 依赖，假定时器）。
+   */
+  it.each([
+    ['a valid self attribution', { installState: 'installed', installedOperationAttribution: 'self', installedOperationId: 'op-0000000000000001' },
+      { installState: 'installed', installedOperationAttribution: 'self', installedOperationId: 'op-0000000000000001' }],
+    ['self without an operation id', { installState: 'installed', installedOperationAttribution: 'self' },
+      { installState: 'installed', installedOperationAttribution: 'unattributed' }],
+    ['an operation id without the marker', { installState: 'update-available', installedOperationId: 'op-0000000000000001' },
+      { installState: 'update-available', installedOperationAttribution: 'unattributed' }],
+    ['a malformed operation id', { installState: 'installed', installedOperationAttribution: 'self', installedOperationId: 'bad id' },
+      { installState: 'installed', installedOperationAttribution: 'unattributed' }],
+    ['an unknown marker', { installState: 'installed', installedOperationAttribution: 'someone-else' },
+      { installState: 'installed', installedOperationAttribution: 'unattributed' }],
+    ['an item that is not installed', { installState: 'not-installed', installedOperationAttribution: 'self', installedOperationId: 'op-0000000000000001' },
+      { installState: 'not-installed' }],
+  ])('normalizes %s at the remote exit', async (_label, fromService, expected) => {
+    const f = fixture();
+    f.deps.market.detail = vi.fn(async () => ({ pluginId: 'plugin-weather', ...fromService }) as never);
+    f.deps.market.installedOperations = (async (items: readonly PluginMarketItem[]) => [...items]) as unknown as
+      NonNullable<RemotePluginManagementDeps['market']['installedOperations']>;
+    expect(await f.invoke('market-detail', { pluginId: 'plugin-weather' }, 'phone-a'))
+      .toEqual({ pluginId: 'plugin-weather', ...expected });
+    // Without the service projection an installed item is still explicitly unattributed, never silent.
+    delete f.deps.market.installedOperations;
+    const without = await f.invoke('market-detail', { pluginId: 'plugin-weather' }, 'phone-a');
+    expect(without).not.toHaveProperty('installedOperationId');
+    if (fromService.installState !== 'not-installed') {
+      expect(without).toMatchObject({ installedOperationAttribution: 'unattributed' });
+    }
+  });
+
   it('rejects removed projects, arbitrary paths, malformed scope and scoped installation', async () => {
     const f = projectsFixture();
     const state = await f.read();

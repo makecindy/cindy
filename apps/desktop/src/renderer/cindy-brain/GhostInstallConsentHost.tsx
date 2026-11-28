@@ -15,6 +15,8 @@ import { isDataOwnerPushStampCurrent } from '@/contexts/dataOwnerGeneration';
 import { PluginPermissionList, usePluginPermissionFacts } from '@/features/plugin/PluginPermissionList';
 import type { GhostPermissionItem } from '../../shared/ghost';
 import {
+  ghostInstallConsentOriginSourceText,
+  ghostInstallSourceChangedNoticeKey,
   ghostInstallSourceNoticeKey,
   type GhostInstallConsentFacts,
   type GhostInstallConsentRequest,
@@ -22,12 +24,15 @@ import {
 
 type Translate = ReturnType<typeof useTranslation>['t'];
 
+/** 安装确认的标题与来源行：插件名、仓库标识可能是无空格长串，任意处可断行。 */
+export const GHOST_INSTALL_CONSENT_TEXT_CLASS = '[overflow-wrap:anywhere]';
+
 /** 来源说明与 Main 侧任务确认卡同口径（ghostInstallConsentInteraction.ts）。 */
 export function ghostInstallConsentSourceLabel(
   t: Translate,
-  request: Pick<GhostInstallConsentRequest, 'initiator' | 'origin' | 'originLabel'>,
+  request: Pick<GhostInstallConsentRequest, 'initiator' | 'origin' | 'originLabel' | 'originSource'>,
 ): string {
-  const origin =
+  const market =
     request.origin === 'market'
       ? t('settings.ghosts.installConsent.originMarket')
       : request.origin === 'custom-market'
@@ -37,6 +42,9 @@ export function ghostInstallConsentSourceLabel(
         : request.origin === 'local-file'
           ? t('settings.ghosts.installConsent.originLocalFile')
           : t('settings.ghosts.installConsent.originForge');
+  // 自定义市场再写明包来自哪个仓库；电脑作远程端时这份请求来自另一台 Host，形状不对就不展示。
+  const repository = ghostInstallConsentOriginSourceText(request, (key, args) => t(`settings.ghosts.installConsent.${key}`, args));
+  const origin = repository ? `${market} · ${repository}` : market;
   return request.initiator === 'agent'
     ? t('settings.ghosts.installConsent.initiatedByAgent', { origin })
     : origin;
@@ -60,16 +68,29 @@ function ConsentSection({ title, items, countLabel, change }: {
   );
 }
 
-export function GhostInstallConsentContent({ facts, origin, communityMarket, capabilityOnly = false, replacement = false, sourceChanged = false }: {
+export function GhostInstallConsentContent({ facts, origin, communityMarket, capabilityOnly = false, replacement = false, sourceChanged = false, originSourceChanged = false, originSource }: {
   facts: GhostInstallConsentFacts; origin?: GhostInstallConsentRequest['origin'];
   communityMarket?: GhostInstallConsentRequest['communityMarket'];
   capabilityOnly?: boolean; replacement?: boolean; sourceChanged?: boolean;
+  /**
+   * 自定义市场更新的实际来源与已装的不同（确认后旧账号与数据隔离保存）。本机确认、电脑作远程端的确认与
+   * 分享替换共用这段内容，调用方必须原样传入请求里的 `originSourceChanged`，否则远程用户看不到在换源。
+   */
+  originSourceChanged?: boolean;
+  /** 确认里的来源身份：只有展示了仓库时，换源提示才提「上面显示的仓库」。 */
+  originSource?: GhostInstallConsentRequest['originSource'];
 }) {
   const { t } = useTranslation();
+  const sourceChangedNotice = ghostInstallSourceChangedNoticeKey({
+    origin, originSource, ...(originSourceChanged ? { originSourceChanged: true } : {}),
+  });
   if (facts.kind === 'install') {
     const sourceNotice = ghostInstallSourceNoticeKey(origin, communityMarket);
     return (
       <div>
+        {sourceChangedNotice ? (
+          <p className="mb-3 text-13 font-medium text-[var(--warning-fg)]">{t(sourceChangedNotice)}</p>
+        ) : null}
         <p className="text-13 leading-5 text-[var(--confirm-desc)]">
           {t('settings.ghosts.installConsent.installDescription')}
         </p>
@@ -98,6 +119,9 @@ export function GhostInstallConsentContent({ facts, origin, communityMarket, cap
   }
   return (
     <div>
+      {sourceChangedNotice ? (
+        <p className="mb-3 text-13 font-medium text-[var(--warning-fg)]">{t(sourceChangedNotice)}</p>
+      ) : null}
       <p className="text-13 leading-5 text-[var(--confirm-desc)]">
         {capabilityOnly ? null : t(replacement ? 'sharing.localReplaceNotice' : 'settings.ghosts.installConsent.updateDescription')}
       </p>
@@ -212,9 +236,12 @@ export function GhostInstallConsentHost() {
                     {request.target.otherCopies > 0 && <p>{t('settings.ghosts.installConsent.otherCopies', { count: request.target.otherCopies })}</p>}
                   </div>}
                   <GhostInstallConsentContent facts={facts} origin={request.origin} communityMarket={request.communityMarket} capabilityOnly={capabilityOnly}
-                    replacement={replacement} sourceChanged={request.target?.sourceChanged} />
+                    replacement={replacement} sourceChanged={request.target?.sourceChanged}
+                    originSourceChanged={request.originSourceChanged === true} originSource={request.originSource} />
                 </>,
                 maxWidth: 440,
+                // 来源行可能带最长 256 字符、无空格的仓库标识，必须可断行，不能撑宽弹窗。
+                textClassName: GHOST_INSTALL_CONSENT_TEXT_CLASS,
                 contentSelectable: true,
                 describeContent: true,
                 confirmText:

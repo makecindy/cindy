@@ -17,6 +17,7 @@ import type {
   PluginMarketPage,
   PluginMarketItem,
 } from '../../shared/pluginMarket.js';
+import { projectInstalledOperationAttribution, type InstalledInstanceFacts } from '../../shared/pluginMarket.js';
 import type {
   PluginManagementProject,
   PluginManagementProjectState,
@@ -59,6 +60,11 @@ function publicationStatus(transfer: ContributionTransferView): RemotePluginPubl
 }
 export interface RemotePluginManagementDeps {
   list(): InstalledGhost[];
+  /**
+   * 契约 V2.10：按实例键读当前实例（不重扫全部安装）。只用于目录、推荐、详情对本控制端 `'self'` 候选的复核；
+   * 读不到（含实例注册表答不了）返回 undefined，调用方按未证实处理，不回退到整份列表。
+   */
+  instance?(instanceKey: string): InstalledInstanceFacts | undefined;
   preferences?: RemotePluginPreferences;
   settingsPage?: true;
   ui?: {
@@ -96,7 +102,23 @@ export interface RemotePluginManagementDeps {
       prompt: GhostInstallConsentPrompt,
       assertCurrent: () => void,
       assertScope: () => void,
+      /** 契约 V2.9：发起这次安装的远程操作与控制端（设备身份），提交成功时记作操作级证据。 */
+      remoteOperation?: { operationId: string; controller: string },
     ): Promise<void>;
+    /**
+     * 契约 V2.9／V2.10：按 `controller` 给已装条目定归属：它自己那次操作装的给 `'self'` + `installedOperationId`，
+     * 其余 `'unattributed'`。缺省时远程响应里的已装条目一律 `'unattributed'`。
+     */
+    installedOperations?<T extends PluginMarketItem>(
+      items: readonly T[],
+      controller: string,
+      /** 契约 V2.10：复核用的实例列表（最后一个 await 之后同步读取，出口原样放进同一响应）与换装回调。 */
+      live?: {
+        ghosts?(): readonly InstalledGhost[];
+        instance?(instanceKey: string): InstalledInstanceFacts | undefined;
+        onChanged?(): void;
+      },
+    ): Promise<T[]>;
   };
   setEnabled(
     id: string,
@@ -298,6 +320,59 @@ export class RemotePluginManagement {
   invalidate(): void {
     this.prune();
   }
+  /**
+   * 契约 V2.9／V2.10：远程响应里「当前安装归属」的出口。
+   * - 服务层按请求方给出结论，并在最后一个 await 之后同步复核：`'self'` 只给仍是当前安装的那次安装。
+   *   - `withGhosts`（返回 `ghosts[]` 的快照）：整份列表在复核那一刻读一次，出口随后原样放进同一响应，中间没有 await。
+   *   - 其它出口（目录、推荐、详情）不读整份列表：只对本控制端的 `'self'` 候选按实例读（deps.instance），
+   *     没有候选时零额外读取；读不到即降为 `'unattributed'`。
+   * - 这里再经同一个 projectInstalledOperationAttribution 收口：只有 `'self'` 且带合法操作号的才保留，已装条目
+   *   其余一律 `'unattributed'`。服务层不支持归属时同样得到 `'unattributed'`。
+   * - `changed` 表示复核时发现换装、已降级，由调用方决定是否整次重读一次。
+   */
+  private async withOperations<T extends PluginMarketItem>(
+    peer: string,
+    items: readonly T[],
+    withGhosts: boolean,
+  ): Promise<{ items: T[]; ghosts: InstalledGhost[] | undefined; changed: boolean }> {
+    let ghosts: InstalledGhost[] | undefined;
+    let changed = false;
+    const onChanged = () => { changed = true; };
+    const projected = this.deps.market.installedOperations
+      ? await this.deps.market.installedOperations(items, peer, withGhosts
+        ? { ghosts: () => (ghosts = this.deps.list()), onChanged }
+        : { instance: (instanceKey) => this.deps.instance?.(instanceKey), onChanged })
+      : items.map((item) => projectInstalledOperationAttribution(item, null));
+    return {
+      items: projected.map((item) => projectInstalledOperationAttribution(
+        item,
+        item.installedOperationAttribution === 'self' ? item.installedOperationId : null,
+      )),
+      // 快照出口要返回整份列表：服务层已在复核时读过就用那一份，否则（没有条目）在这里读一次。
+      ghosts: withGhosts ? ghosts ?? this.deps.list() : undefined,
+      changed,
+    };
+  }
+
+  /**
+   * 读市场数据并投影归属。复核发现换装时整次重读一次；第二次仍发现换装就用已降级的结果（宁可不给「打开」）。
+   * 重读最多一次，频繁换装时也不会循环。`current()` 失效返回 null。
+   */
+  private async readAttributed<V>(
+    peer: string,
+    current: () => boolean,
+    read: () => Promise<V>,
+    itemsOf: (value: V) => readonly PluginMarketItem[],
+    withGhosts = false,
+  ): Promise<{ value: V; items: PluginMarketItem[]; ghosts: InstalledGhost[] | undefined } | null> {
+    for (let attempt = 0; ; attempt++) {
+      const value = await read();
+      if (!current()) return null;
+      const projected = await this.withOperations(peer, itemsOf(value), withGhosts);
+      if (!current()) return null;
+      if (!projected.changed || attempt >= 1) return { value, items: projected.items, ghosts: projected.ghosts };
+    }
+  }
   async invoke(
     peer: string,
     request: RemoteActionInvokeRequest,
@@ -324,25 +399,32 @@ export class RemotePluginManagement {
       if (!current()) return unavailable();
       if (read === 'capabilities') return result({ catalogPaging: !!this.deps.market.query && !!this.deps.market.recommendations });
       if (read === 'catalog' || read === 'recommendations') {
-        const value = read === 'catalog' && this.deps.market.query
-          ? await this.deps.market.query(input.query as PluginMarketQuery ?? {})
-          : read === 'recommendations' && this.deps.market.recommendations
-            ? await this.deps.market.recommendations() : null;
-        if (!current()) return unavailable();
-        return result(value);
+        const read$ = async (): Promise<PluginMarketPage | PluginMarketItem[] | null> =>
+          read === 'catalog' && this.deps.market.query
+            ? await this.deps.market.query(input.query as PluginMarketQuery ?? {})
+            : read === 'recommendations' && this.deps.market.recommendations
+              ? await this.deps.market.recommendations() : null;
+        const attributed = await this.readAttributed(peer, current, read$,
+          (value) => !value ? [] : Array.isArray(value) ? value : value.items);
+        if (!attributed) return unavailable();
+        const { value, items } = attributed;
+        return result(!value ? value : Array.isArray(value) ? items : { ...value, items });
       }
-      const [market, projects] = await Promise.all([
-        this.deps.market.snapshot(read === undefined),
-        this.deps.projects?.list(),
-      ]);
-      if (!current()) return unavailable();
+      const attributed = await this.readAttributed(peer, current,
+        () => Promise.all([this.deps.market.snapshot(read === undefined), this.deps.projects?.list()]),
+        ([snapshot]) => snapshot.items, true);
+      if (!attributed) return unavailable();
+      const { value: [snapshot, projects] } = attributed;
+      const ghosts = attributed.ghosts ?? this.deps.list();
+      const market = { ...snapshot, items: attributed.items };
       const browsed = this.browsedProjects.get(peer)?.project;
       const scopeProjects = browsed && projects
         ? [browsed, ...projects.filter((project) => project.id !== browsed.id)]
         : projects;
       return result({
         version: 1,
-        ghosts: this.deps.list().map(ghost => ({ ...projectManagedGhost(ghost),
+        // 与上面归属复核时是同一份实例列表（契约 V2.10：带 'self' 的条目与这里的对应实例出自同一次安装）。
+        ghosts: ghosts.map(ghost => ({ ...projectManagedGhost(ghost),
           ...(this.deps.publication && ghost.publishingSource?.kind === 'local' ? { publishingSource: ghost.publishingSource } : {}),
           ...(this.deps.ui?.suppressed(ghost) ? { uiPromptSuppressed: true } : {}),
         })),
@@ -415,9 +497,10 @@ export class RemotePluginManagement {
       if (Object.keys(input).some((k) => k !== 'pluginId')) return invalid();
       const current = this.deps.capture(peer);
       if (!current()) return unavailable();
-      const detail = await this.deps.market.detail(str(input.pluginId, 1024));
-      if (!current()) return unavailable();
-      return result(detail);
+      const pluginId = str(input.pluginId, 1024);
+      const attributed = await this.readAttributed(peer, current, () => this.deps.market.detail(pluginId), (detail) => [detail]);
+      if (!attributed) return unavailable();
+      return result(attributed.items[0]);
     }
     if (request.actionId === 'management:operation') {
       if (Object.keys(input).some((k) => k !== 'operationId')) return invalid();
@@ -592,6 +675,8 @@ export class RemotePluginManagement {
               assertCurrent,
               // The installer owns approval checks; this guard survives its directory swap.
               () => this.assertScope(op),
+              // 契约 V2.9：提交成功时把这次操作号记作安装证据，只对本控制端（peer）投影。
+              { operationId: id, controller: peer },
             );
             break;
           case 'install-file':

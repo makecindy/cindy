@@ -219,6 +219,23 @@ describe('official simulator identity migration', () => {
     },
   );
 
+  // 契约 V2.10（PR #12731 推送前自审）：迁移后实例键沿用旧名、内容目录是新名；按实例键读批准事实必须与 list()
+  // 一致，否则远程归属复核会把迁移后的模拟器永远读成未证实。改前失败（返回 undefined）。
+  it('reads the approval of a migrated simulator instance by its kept instance key', async () => {
+    await manager.install(await makeCindy('old.cindy', goodManifest('baguette-simulator')), { namespace: null });
+    const old = manager.list()[0]!;
+    await manager.update(await makeCindy('new.cindy', goodManifest('cindy-simulator')), { namespace: null,
+      simulatorPreviousRelId: installedGhostPhysicalRelId(old), expectedInstalledApproval: ghostInstallApprovalToken(old.approval),
+    });
+    const [migrated] = manager.list();
+    expect(migrated!.manifest.id).toBe('cindy-simulator');
+    const key = installedGhostStoragePart(migrated!);
+    expect(manager.readInstalledInstanceApproval(key)).toEqual({
+      revision: migrated!.approval.state === 'approved' ? migrated!.approval.revision : 'missing',
+      manifest: expect.objectContaining({ id: 'cindy-simulator', version: migrated!.manifest.version }),
+    });
+  });
+
   it('does not take over an organization installation', async () => {
     await manager.install(await makeCindy('old.cindy', goodManifest('baguette-simulator')), { namespace: 'acme' });
     const old = manager.list()[0]!;
@@ -3748,6 +3765,31 @@ describe('GhostManager · install', () => {
     await expect(manager.uninstall(installedGhostPhysicalRelId(local))).resolves.toEqual({ ok: true });
     expect(manager.list().map(item => item.namespace)).toEqual(expect.arrayContaining([null, 'acme']));
     expect(manager.list()).toHaveLength(2);
+  });
+
+  /* 测试价值（PR #12731 维护者评审 6069999202：安装代次）
+   * - 生产入口与可观察结果：真实 GhostManager 的 install / update / uninstall 与 installationRevision()。
+   * - 覆盖缺口：市场在途读取按这个计数判断「是否早于某次变更」；它不前进，变更后的读取就会并入变更前的读取；
+   *   读取本身让它前进，没有变更时的复用就会被拆开。
+   * - 最小失败输入：装一个、更新、卸载，各自之后计数前进；只读 list() 不前进。
+   * - tier：unit。
+   */
+  it('advances the installation revision after every committed change and never on reads', async () => {
+    const start = manager.installationRevision();
+    const installed = await manager.install(await makeCindy('revision.cindy', goodManifest()));
+    if (!('ghost' in installed)) throw new Error('expected committed install');
+    const afterInstall = manager.installationRevision();
+    expect(afterInstall).toBeGreaterThan(start);
+    manager.list();
+    await manager.listAsync();
+    expect(manager.installationRevision()).toBe(afterInstall);
+    await manager.update(await makeCindy('revision-next.cindy', { ...goodManifest(), version: '2.0.0' }), {
+      expectedInstalledApproval: ghostInstallApprovalToken(installed.ghost.approval),
+    });
+    const afterUpdate = manager.installationRevision();
+    expect(afterUpdate).toBeGreaterThan(afterInstall);
+    await manager.uninstall(installedGhostPhysicalRelId(manager.list()[0]!));
+    expect(manager.installationRevision()).toBeGreaterThan(afterUpdate);
   });
 
   it('reads namespaced receipts from storage part and install rel id', async () => {
@@ -7523,4 +7565,74 @@ it('keeps an old receipt usable when its original archive already carried an unk
   expect(old.approval.state).toBe('approved');
   expect(old.approvedAutoTools).toBeUndefined();
   expect(old.manifest.tools?.[0].approval).toBeUndefined();
+});
+
+/* 测试价值（契约 V2.10，PR #12731 维护者复审 5c7575414a：按候选复核不得重复读市场账本）
+ * - 生产入口与可观察结果：真实 GhostManager（12 个真实安装的实例）＋与生产接线相同、读真实 PluginMarketLedger 的
+ *   sourcesForInstance；readInstalledInstanceApproval 与 findInstalledInstance 每次调用实际发生的文件读取与 stat，
+ *   以及安装来源投影（即市场账本读取）的次数。
+ * - 缺口：远程归属复核原来用 findInstalledInstance 读每个候选，它会走完整实例投影，每个候选都同步读取、解析并合并
+ *   三份市场账本；替身计数只数到 deps.instance()，看不到这层读取。
+ * - 最小失败输入：0／1／12 个候选，逐个按实例键读取。
+ * - 改前失败：新路径改前不存在；对照组 findInstalledInstance 的账本读取随候选数增长（12 个候选 12 次），即改前的生产路径。
+ * - tier：unit（临时目录，真实包、真实账本文件）。
+ */
+describe('instance reads for remote attribution (V2.10)', () => {
+  it('reads one instance\'s approval without touching the market ledger, a constant cost per candidate', async () => {
+    const ledgerDir = path.join(workDir, 'plugin-market');
+    const ledger = new PluginMarketLedger(path.join(ledgerDir, 'ledger.v1.json'));
+    let sourceProjections = 0;
+    manager.disposeNotificationIndex();
+    manager = new GhostManager({
+      getRootDir: () => rootDir,
+      // Same wiring as production (cindy-brain/index.ts): every projected instance looks its source up in the ledger.
+      sourcesForInstance: (record) => {
+        sourceProjections++;
+        ledger.lookupInstallationForAuthorization({ ghostId: record.ghostId, namespace: record.namespace });
+        return {};
+      },
+    });
+    for (let index = 0; index < 12; index++) {
+      await manager.install(await makeCindy(`candidate-${index}.cindy`, goodManifest(`candidate-${index}`)));
+    }
+    const keys = manager.list().map(installedGhostStoragePart);
+    expect(keys).toHaveLength(12);
+
+    const touched: string[] = [];
+    const names = ['readFileSync', 'statSync', 'lstatSync', 'readdirSync', 'existsSync', 'openSync'] as const;
+    const originals = names.map((name) => (fs[name] as (...args: unknown[]) => unknown).bind(fs));
+    const spies = names.map((name, index) => vi.spyOn(fs, name).mockImplementation(((...args: unknown[]) => {
+      touched.push(`${name}:${String(args[0])}`);
+      return originals[index]!(...args);
+    }) as never));
+    const measure = (read: (key: string) => unknown, count: number) => {
+      touched.length = 0;
+      sourceProjections = 0;
+      for (const key of keys.slice(0, count)) expect(read(key)).toBeTruthy();
+      return {
+        ledger: touched.filter((entry) => entry.includes(ledgerDir)).length,
+        sources: sourceProjections,
+        total: touched.length,
+      };
+    };
+    try {
+      const light = [0, 1, 12].map((count) => measure((key) => manager.readInstalledInstanceApproval(key), count));
+      // No market-ledger read and no source projection, whatever the number of candidates.
+      expect(light.map((row) => [row.ledger, row.sources])).toEqual([[0, 0], [0, 0], [0, 0]]);
+      // The filesystem cost is the same for every candidate (its own registry entry, directory and approval record).
+      expect(light[2]!.total).toBe(light[1]!.total * 12);
+      // The full projection used before reads the ledger once per candidate.
+      const full = [1, 12].map((count) => measure((key) => manager.findInstalledInstance(key), count));
+      expect(full.map((row) => row.sources)).toEqual([1, 12]);
+      expect(full[1]!.ledger).toBeGreaterThan(full[0]!.ledger);
+    } finally {
+      for (const spy of spies) spy.mockRestore();
+    }
+    // Same facts as the listed instance.
+    const [first] = manager.list();
+    expect(manager.readInstalledInstanceApproval(keys[0]!)).toEqual({
+      revision: first!.approval.state === 'approved' ? first!.approval.revision : '', manifest: expect.objectContaining({ version: '1.0.0' }),
+    });
+    expect(manager.readInstalledInstanceApproval('_root__missing')).toBeUndefined();
+  });
 });

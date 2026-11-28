@@ -8800,7 +8800,13 @@
         "localOidcUnavailable": "Cette copie de développement ne peut pas utiliser l’identité de l’organisation. Pour la tester, installez-la explicitement dans votre organisation actuelle via Forge.",
         "personalTarget": "Personnel",
         "sourceChanged": "Cette mise à jour passe à une source locale. Les comptes et données existants sont archivés séparément. Reconnectez vos comptes après la mise à jour.",
-        "otherCopies": "Il existe {{count}} autres copies de ce plugin. Elles resteront installées et conserveront leur état d'activation actuel. Une copie distincte nécessite ses propres connexions de compte."
+        "otherCopies": "Il existe {{count}} autres copies de ce plugin. Elles resteront installées et conserveront leur état d'activation actuel. Une copie distincte nécessite ses propres connexions de compte.",
+        "originRepository": "Dépôt {{repository}}",
+        "originRepositoryRef": "Dépôt {{repository}} ({{ref}})",
+        "originLocalFolder": "Dossier local",
+        "originSourceChanged": "Cette mise à jour provient d’une autre source que la version installée. Les comptes et données existants sont archivés séparément ; reconnectez vos comptes après la mise à jour. Continuez uniquement si vous faites confiance au dépôt indiqué ci-dessus.",
+        "sourceChangedIsolated": "Cette mise à jour provient d’une autre source que la version installée. Les comptes et données existants sont archivés séparément ; reconnectez vos comptes après la mise à jour.",
+        "marketSourceChanged": "Cette mise à jour passe à la version du marketplace de plugins. Les comptes et données existants sont archivés séparément. Reconnectez vos comptes après la mise à jour."
       },
       "trust": {
         "official": "Plugin Cindy officiel",
