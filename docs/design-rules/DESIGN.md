@@ -1321,8 +1321,8 @@ Always write the token, never the value. The values per theme family are in the 
 ### Iteration Guide
 
 1. Focus on ONE component at a time
-2. Name the token, never a value — colors per §10 Token Selection Rules for New UI
-3. Radii and visible layers: §5 Border Radius Scale (Step 1, then Step 2)
+2. Keep values grayscale and name the token (`--text-secondary`), never a literal gray — §7 Do, §10 Token Selection Rules for New UI
+3. Radii and visible layers: §5 Border Radius Scale — Step 1 registered shapes first, then the Step 2 tiers; keep content, hit areas and focus / selection indicators separate, and submit unresolved shapes for adjudication
 4. Shadows: §6 Shadow Philosophy
 5. Weights: §3 「字重阶梯」
 6. If something feels too decorated, remove it — less is always more
