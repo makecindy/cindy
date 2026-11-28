@@ -67,6 +67,29 @@ it('accepts imEntrance only with tasks and targets, in both readers, without a n
   expect(diffGhostPermissionItems(before.manifest, after.manifest).added).toEqual([]);
 });
 
+// 测试价值：协议正本与 Desktop 镜像对网络凭证预算必须同步（plugin-security §6）；
+// 网页搜索插件接入第 5 个自备 provider 时靠这次上限调整放行。
+// 最小输入：同一清单分别声明 4/6/7 条 secrets；tier=unit，纯内存解析。
+it('keeps the Desktop and protocol network secret budgets in sync', () => {
+  const secrets = (count: number) => Array.from({ length: count }, (_, index) => ({
+    key: `provider_key_${index}`,
+    label: `Provider ${index}`,
+    inject: { header: 'X-Api-Key', format: '{value}', hosts: ['api.example.com'] },
+  }));
+  const base = {
+    schemaVersion: 3, minCindyVersion: '0.1.64', id: 'secret-budget', name: 'Secret budget',
+    version: '1.0.0', kind: 'chip', entry: 'main.js', settingsHtml: 'settings.html',
+  };
+  for (const count of [4, 6]) {
+    const manifest = { ...base, network: { hosts: ['api.example.com'], secrets: secrets(count) } };
+    expect(validateGhostManifest(manifest), String(count)).toMatchObject({ ok: true });
+    expect(validateProtocolManifest(manifest), String(count)).toMatchObject({ ok: true });
+  }
+  const over = { ...base, network: { hosts: ['api.example.com'], secrets: secrets(7) } };
+  expect(validateGhostManifest(over)).toMatchObject({ ok: false, reason: expect.stringContaining('1–6 条') });
+  expect(validateProtocolManifest(over)).toMatchObject({ ok: false, reason: expect.stringContaining('1–6 条') });
+});
+
 // 第23项：HTTPS 域名旧批准不能变成 HTTP 或自定义端口批准；双 validator 与权限 diff 共用真实入口。
 it('keeps exact-origin network permissions separate from existing HTTPS domain approvals', () => {
   const base = { schemaVersion: 3, minCindyVersion: '0.1.0', id: 'local-service', name: 'Local service', version: '1.0.0', kind: 'chip', entry: 'main.js' };
