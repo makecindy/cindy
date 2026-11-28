@@ -31,15 +31,14 @@ export function getVisibleSidebarSessionIds(root?: Document | Element | null): s
   return [...ids];
 }
 
-type InboxTarget = { sessionId: string } | { route: string };
+type InboxTarget = { sessionId: string };
 
-/** The pending section renders both row kinds in display order, including during a hover freeze. */
+/** Collect pending task rows in display order, including during a hover freeze. */
 export function getVisibleInboxTargets(section: Element): Map<string, InboxTarget> {
   const targets = new Map<string, InboxTarget>();
-  for (const row of visibleSidebarRows(section, `${SESSION_ROW}, [data-teammate-inbox-route]`)) {
-    const { sessionId, teammateInboxRoute } = row.dataset;
-    if (teammateInboxRoute) targets.set(`teammate:${teammateInboxRoute}`, { route: teammateInboxRoute });
-    else if (sessionId) targets.set(`session:${sessionId}`, { sessionId });
+  for (const row of visibleSidebarRows(section, SESSION_ROW)) {
+    const { sessionId } = row.dataset;
+    if (sessionId) targets.set(`session:${sessionId}`, { sessionId });
   }
   return targets;
 }

@@ -170,7 +170,7 @@ export function createSchedulerRemoteDeps(deps: {
         response = await deps.invoke(deviceId, CHANNELS[op], args, { preSend: assertCurrent });
         if (op === 'get') {
           assertCurrent();
-          const schedule = response.ok ? response.result : null;
+          let schedule = response.ok ? response.result : null;
           if (schedule && typeof schedule === 'object' && !Array.isArray(schedule)
             && 'webhookTrigger' in schedule && schedule.webhookTrigger) {
             // Remote reads skip the local schedule_get callback, so enrich through
@@ -180,6 +180,27 @@ export function createSchedulerRemoteDeps(deps: {
             response = status.ok
               ? { ok: true, result: status.result ? { ...schedule, webhookStatus: status.result } : schedule }
               : status;
+            schedule = response.ok ? response.result : null;
+          }
+          if (schedule && typeof schedule === 'object' && !Array.isArray(schedule)
+            && 'targetSessionId' in schedule && schedule.targetSessionId) {
+            // The target's existing runtime-state channel contains transient
+            // deferrals; the persisted schedule returned above cannot contain them.
+            const runtime = await deps.invoke(deviceId, 'maker:schedule:get-runtime-state', [], { preSend: assertCurrent });
+            assertCurrent();
+            const snapshot = runtime.ok ? runtime.result as { deferredSchedules?: Array<{
+              scheduleId: string; count: number; firstAt: number; lastReason?: string;
+            }> } | null : null;
+            const deferred = Array.isArray(snapshot?.deferredSchedules)
+              ? snapshot.deferredSchedules.find(item => item?.scheduleId === args[0]
+                && Number.isFinite(item.count) && item.count > 0 && Number.isFinite(item.firstAt))
+              : undefined;
+            if (deferred && response.ok) {
+              response = { ok: true, result: { ...schedule, deferral: {
+                count: deferred.count, firstAt: deferred.firstAt,
+                ...(deferred.lastReason ? { lastReason: deferred.lastReason } : {}),
+              } } };
+            }
           }
         }
       } catch (error) {

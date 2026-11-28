@@ -24,6 +24,7 @@ import { deleteTerms, promoteTermToEntry, seedTerm, type MutationResult } from '
 import { dictionaryTermKey, normalizeDictionaryTermText } from './text';
 import {
   hasDictionaryKey,
+  isTermSuppressed,
   withDictionaryKey,
   type DictionaryTermSource,
   type VoiceDictionarySyncState,
@@ -72,12 +73,13 @@ export function reconcileFromLocalSnapshot(
   let nextClock = clock;
   let changed = false;
 
-  // 1. 抑制集合直接并集。旧版本删自动词条时会往文件里写抑制文本,这是比「猜哪条被
-  //    删了」更可靠的信号,而且抑制是只增集合,并集不会丢信息。
+  // 1. 抑制集合并集。旧版本删自动词条时会往文件里写抑制文本,这是比「猜哪条被
+  //    删了」更可靠的信号。若某词曾在新端解除抑制、降级后又被旧端重新抑制，这里
+  //    用 isTermSuppressed 判定并补写 suppressedAt。
   for (const rawText of input.snapshot.suppressedTexts ?? []) {
     const text = normalizeDictionaryTermText(rawText);
     const key = dictionaryTermKey(text);
-    if (!key || hasDictionaryKey(nextState.suppressed, key)) continue;
+    if (!key || isTermSuppressed(nextState, key)) continue;
     const result = deleteTerms(nextState, nextClock, {
       termKeys: [key],
       nowMs: input.nowMs,
@@ -87,7 +89,7 @@ export function reconcileFromLocalSnapshot(
     nextClock = result.clock;
     // 该词可能压根不在状态里(旧版本删掉后状态里也没有),deleteTerms 不会写抑制,
     // 这里补上,保证抑制意图不丢。
-    if (!hasDictionaryKey(nextState.suppressed, key)) {
+    if (!isTermSuppressed(nextState, key)) {
       const stamped = addSuppression(nextState, nextClock, key, text, input.nowMs);
       nextState = stamped.state;
       nextClock = stamped.clock;
@@ -208,11 +210,26 @@ function addSuppression(
   nowMs: number,
 ): { state: VoiceDictionarySyncState; clock: HlcClock } {
   const ticked = tickHlc(clock, nowMs);
+  const existing = state.suppressed[key];
+  const existingEvent = state.suppressionEvents && hasDictionaryKey(state.suppressionEvents, key)
+    ? state.suppressionEvents[key]
+    : undefined;
+  const nextState: VoiceDictionarySyncState = {
+    ...state,
+    suppressed: existing
+      ? state.suppressed
+      : withDictionaryKey(state.suppressed, key, { text, stamp: ticked.stamp }),
+    ...(existing
+      ? {
+          suppressionEvents: withDictionaryKey(state.suppressionEvents, key, {
+            ...existingEvent,
+            suppressedAt: ticked.stamp,
+          }),
+        }
+      : {}),
+  };
   return {
-    state: {
-      ...state,
-      suppressed: withDictionaryKey(state.suppressed, key, { text, stamp: ticked.stamp }),
-    },
+    state: nextState,
     clock: ticked.clock,
   };
 }

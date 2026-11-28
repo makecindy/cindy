@@ -120,7 +120,9 @@ function compile(expression: string, bindings: Record<string, unknown>) {
   const context = {
     readDeviceLinkModelSelectionOrigin: () => undefined,
     isProviderShareAgentDeviceId: () => false,
-    getSessionRowSnapshotStrict: async () => null, ...bindings,
+    getSessionRowSnapshotStrict: async () => null,
+    runDesktopModelGroupBeforeSend: async () => ({ switched: false }),
+    ...bindings,
   };
   return new Function(...Object.keys(context), js)(...Object.values(context));
 }
@@ -307,7 +309,7 @@ describe('complete selection commit boundaries', () => {
     acceptSessionRuntimeMutation({ sessionId: id, source: 'agent', profile, deferred: false });
     const persist = vi.fn(async (_id: string, patch: object) => Object.assign(saved, patch));
     const setProvider = vi.fn();
-    const bindings = { getSessionRowSnapshotStrict: async () => ({ ...saved }), dbToMakerAgentKind: (kind: string) => kind,
+    const bindings = { getSessionRowSnapshotStrict: async () => ({ ...saved }), dbToMakerEngineKind: (kind: string) => kind,
       captureSessionRuntimeControlOwnerEpoch, sessionRuntimeControlOwnerEpochMatches, getSessionRuntimeControlSnapshot,
       remapSessionRuntimeProvider, persistSessionFields: persist, setSessionProvider: setProvider };
     try {

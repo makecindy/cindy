@@ -60,7 +60,6 @@ import {
 import {
   PROVIDER_GROUP_SUPERSEDED_ERROR,
   decideProviderGroupFailure,
-  providerGroupSwitchCause,
   describeProviderGroupFailure,
   providerGroupUnavailableError,
   providerGroupFailureSignals,
@@ -169,6 +168,7 @@ export interface ProviderGroupServiceDeps {
   directory: ProviderGroupDirectory;
   readGroup(providerId: string): ProviderGroupConfig | null;
   prepareLocalAccountPool?(providerId: string): Promise<void>;
+  isMigratedLocalAccountGroup?(providerId: string): boolean;
   /** 另一台电脑上的组；不提供 = 只处理本机的组。 */
   remote?: ProviderGroupRemoteGroups;
   /** 本机设备 id(另一台电脑的组里，本机自己可能也是一台组内电脑)。 */
@@ -250,6 +250,7 @@ export interface ProviderGroupServiceDeps {
     sessionId: string,
     token: number,
     info: AutoResumeInfo,
+    localMixedAccountSwitch?: boolean,
   ): Promise<'resumed' | 'superseded' | 'no-progress'>;
   /**
    * 任务所在那台电脑上撞了限额或登录失效的只是账号池里的一个账号，另一个账号此刻能接这个任务的模型时，返回被换下的
@@ -257,7 +258,7 @@ export interface ProviderGroupServiceDeps {
    * 不提供 = 不在同一台电脑上换账号(subscription-account-pools.md「账号间自动换号」)。
    */
   readAccountSwitch?(sessionId: string): Promise<string | null>;
-  isLocalApiPoolTurn?(sessionId: string): boolean;
+  isLocalAccountPoolTurn?(sessionId: string): boolean;
   /** 不换电脑时交回原有处理(额度重置后自动继续等)。 */
   fallback(sessionId: string, signals: InterruptedTurnErrorSignals, token: number, options?: UsageLimitRecoveryOptions): void;
   /** 报错里的重置时刻(unix ms)。 */
@@ -1426,14 +1427,29 @@ export function createProviderGroupService(deps: ProviderGroupServiceDeps): Prov
     directRecovery: DirectGuestRecovery | null | undefined,
   ): Promise<boolean> {
     const { cause } = decision;
-    if (!deps.readBinding(sessionId) && !(await adoptOnFailure(sessionId, token, lease, signals.reason))) {
+    const existingBinding = deps.readBinding(sessionId);
+    // A migrated mixed account group can have no computer-group binding (or a
+    // leftover local account-only binding). Its actual member is the native
+    // lease on this computer, not a separately selectable computer.
+    const localPoolTurn = deps.isLocalAccountPoolTurn?.(sessionId) === true;
+    const localConfig = localPoolTurn && existingBinding && !existingBinding.groupDeviceId
+      ? deps.readGroup(existingBinding.providerId) : null;
+    const migratedAccountBinding = localPoolTurn && existingBinding && !existingBinding.groupDeviceId
+      && !localConfig && deps.isMigratedLocalAccountGroup?.(existingBinding.providerId) === true;
+    const localAccountOnlyBinding = localPoolTurn && (migratedAccountBinding || !!localConfig?.localAccountIds?.length);
+    if (localAccountOnlyBinding || (!existingBinding && !(await adoptOnFailure(sessionId, token, lease, signals.reason)))) {
       const accountFailure = cause === 'usage-limit' || cause === 'auth';
-      const paired = accountFailure && deps.readAccountSwitch && await deps.readSessionRow(sessionId);
-      if (accountFailure && (deps.isLocalApiPoolTurn?.(sessionId)
+      const paired = accountFailure && !localPoolTurn && deps.readAccountSwitch && await deps.readSessionRow(sessionId);
+      if (accountFailure && (localPoolTurn
         || (paired && !paired.remoteHostId && paired.agentDeviceId && !isProviderShareAgentDeviceId(paired.agentDeviceId)))) {
+        if (localConfig && !localConfig.autoSwitch) return false;
         if (!lease || !(await deps.isFailoverEligible(sessionId, { kind: 'failure', token, lease, reason: signals.reason })))
           return false;
         await withSwitchRun(sessionId, signals, token, lease, run, hooks, async (isCurrent, handBack, checked) => {
+          if (migratedAccountBinding && existingBinding) {
+            await releaseDeletedGroup(sessionId, groupOf(localSource, existingBinding.providerId));
+            if (!isCurrent()) return;
+          }
           const accountSwitch = await readAccountSwitch(sessionId);
           if (!isCurrent()) return;
           if (!accountSwitch) {
@@ -1442,7 +1458,7 @@ export function createProviderGroupService(deps: ProviderGroupServiceDeps): Prov
             return;
           }
           noteAccountSwitch(sessionId, accountSwitch);
-          await continueWithAnotherAccount(sessionId, lease, isCurrent, hooks);
+          await continueWithAnotherAccount(sessionId, lease, isCurrent, hooks, localPoolTurn);
         });
         return true;
       }
@@ -1529,17 +1545,21 @@ export function createProviderGroupService(deps: ProviderGroupServiceDeps): Prov
     lease: object,
     isCurrent: () => boolean,
     hooks: ProviderGroupTurnErrorHooks | undefined,
+    localMixedAccountSwitch: boolean,
   ): Promise<void> {
     if (!isCurrent()) return;
     const continueToken = deps.rearmContinue(sessionId, lease, deps.now());
     if (continueToken === null) return;
     hooks?.continuing?.();
-    const outcome = await deps.continueSession(sessionId, continueToken, {
+    const info: AutoResumeInfo = {
       reason: USAGE_LIMIT_RESET_AUTO_RESUME_REASON,
       attempt: 1,
       maxAttempts: 1,
       sessionTotal: 0,
-    });
+    };
+    const outcome = await (localMixedAccountSwitch
+      ? deps.continueSession(sessionId, continueToken, info, true)
+      : deps.continueSession(sessionId, continueToken, info));
     if (outcome === 'resumed') hooks?.resumed?.();
     else deps.cancelContinue(sessionId, continueToken);
   }
@@ -1793,7 +1813,7 @@ export function createProviderGroupService(deps: ProviderGroupServiceDeps): Prov
           sessionId, cause, member: current.key,
         });
         input.setAccountSwitchChecked(false);
-        await continueWithAnotherAccount(sessionId, lease, isCurrent, hooks);
+        await continueWithAnotherAccount(sessionId, lease, isCurrent, hooks, deps.isLocalAccountPoolTurn?.(sessionId) === true);
         return;
       }
       fromLabel = pick.labelOf(current.key) ?? fromLabel;
@@ -2051,8 +2071,8 @@ export function createProviderGroupService(deps: ProviderGroupServiceDeps): Prov
       const groupProviderId = row.providerId ?? (await deps.resolveImplicitProvider(agentKind, model));
       const config = groupProviderId ? await localSource.readGroup(groupProviderId) : null;
       if (!groupProviderId || !config) return null;
-      if (row.providerId && deps.isLocalApiAccount?.(row.providerId)
-        && deps.isReleased(sessionId, { providerId: groupProviderId })) return null;
+      // 已经明确解除过这个组的任务（含经智能路由显式选定本机来源、避免两层自动叠加）不再交由电脑组二次选路。
+      if (deps.isReleased(sessionId, { providerId: groupProviderId })) return null;
       // 已经运行过的任务(建组前就在用、回退或清空等清掉了原生会话)不按策略挪走：留在本机并纳入组。
       // live session 仍在时之后的运行中错误走 failover；要重新打开时这次启动失败换下一台(要续接的先带交接)。
       const hasRun = Boolean(row.sdkSessionId || (await deps.hasAssistantHistory(sessionId)));
@@ -2198,18 +2218,22 @@ export function createProviderGroupService(deps: ProviderGroupServiceDeps): Prov
 
     mayHandleTurnError(sessionId, signals) {
       if (signals.reason === 'remote_agent_restarted') return true;
-      if (decideProviderGroupFailure(signals, 'run').action !== 'switch') return false;
+      const decision = decideProviderGroupFailure(signals, 'run');
+      if (decision.action !== 'switch') return false;
       const binding = deps.readBinding(sessionId);
-      if (!binding) return deps.guestSwitch?.hasOffer(sessionId) === true
-        || !!deps.directGuestSession?.(sessionId)
-        || (deps.isLocalApiPoolTurn?.(sessionId) === true
-          && ['usage-limit', 'auth'].includes(providerGroupSwitchCause(signals, 'run') ?? ''));
+      const localAccountFailure = (decision.cause === 'usage-limit' || decision.cause === 'auth')
+        && deps.isLocalAccountPoolTurn?.(sessionId) === true;
+      if (!binding) return localAccountFailure || deps.guestSwitch?.hasOffer(sessionId) === true
+        || !!deps.directGuestSession?.(sessionId);
       if (binding.groupDeviceId) return deps.remote !== undefined;
       const config = deps.readGroup(binding.providerId);
+      if (localAccountFailure && (config?.localAccountIds?.length
+        || (!config && deps.isMigratedLocalAccountGroup?.(binding.providerId)))) return true;
       const current = config?.members.find((m) => m.key === binding.memberKey);
       // 同机其他连接也能接替；只有当前成员时仍交回原有错误处理。
       return Boolean(
-        config?.autoSwitch && !config.localAccountIds?.length && current && config.members.some((m) => m.key !== current.key),
+        config?.autoSwitch && !config.localAccountIds?.length && current
+          && (config.members.some((m) => m.key !== current.key) || localAccountFailure),
       );
     },
 

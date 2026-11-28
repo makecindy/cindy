@@ -9,12 +9,25 @@
     "stopAllHint": "Inclut les demandes des autres participants",
     "step": "Étape {{step}}/{{total}}"
   },
+  "newMessagesBoundary": "NOUVEAU",
   "title": "Conversations de groupe",
   "memberSeparator": ", ",
   "memberCount_one": "{{count}} membre",
   "memberCount_other": "{{count}} membres",
   "organizer": "Organisateur",
   "waitingConfirm": "{{name}} attend votre feu vert",
+  "assistantDevice": {
+    "title": "La Cindy du groupe attend que vous choisissiez un ordinateur",
+    "onlyYou": "Visible uniquement par vous",
+    "request": "« {{request}} » démarre dès que vous choisissez un ordinateur.",
+    "requestUnknown": "Votre demande démarre dès que vous choisissez un ordinateur.",
+    "requests_one": "{{count}} demande attend et démarre dès que vous choisissez un ordinateur.",
+    "requests_many": "{{count}} demandes attendent et démarrent dès que vous choisissez un ordinateur.",
+    "requests_other": "{{count}} demandes attendent et démarrent dès que vous choisissez un ordinateur.",
+    "remember": "Vos prochaines demandes dans ce groupe utiliseront le même ordinateur. Vous pouvez le changer dans les paramètres du groupe.",
+    "cancel": "Annuler la demande",
+    "continue": "Continuer"
+  },
   "loadFailedTitle": "Impossible de charger ce groupe",
   "loadFailedDescription": "Impossible de lire cette conversation de groupe depuis votre ordinateur pour le moment. Réessayez, ou revenez à Amis.",
   "unavailableTitle": "Ce groupe n'est plus disponible",
@@ -46,6 +59,7 @@
     "all": "Tout le monde",
     "allHint": "Personnes uniquement",
     "label": "Mentionner un ami",
+    "avatarHint": "Mentionne cet ami à la fin du brouillon.",
     "allBots": "Tous les amis",
     "allBotsHint": "Amis uniquement"
   },
@@ -180,6 +194,9 @@
       "GROUP_AUTHORIZATION_REQUIRED": "{{name}} n’a pas pu exécuter cet outil : l’autorisation du groupe a expiré ou ne permet pas cette action. Le propriétaire de l’ami peut renouveler la demande dans ce groupe.",
       "GROUP_AUTHORIZATION_UNAVAILABLE": "L’autorisation de groupe de {{name}} n’a pas pu être vérifiée ; cet outil n’a donc pas été exécuté. Réessayez une fois la connexion rétablie.",
       "ATTACHMENTS_UNAVAILABLE": "Certaines pièces jointes n’ont pas été transmises à {{name}} en raison d’un échec de téléchargement ou de la limite de pièces jointes. Renvoyez celles nécessaires à cette demande.",
+      "ATTACHMENTS_DOWNLOAD_FAILED": "Certaines pièces jointes n’ont pas été transmises à {{name}} en raison d’un échec de téléchargement. Renvoyez celles nécessaires à cette demande.",
+      "ATTACHMENTS_LIMIT_REACHED": "Certaines pièces jointes n’ont pas été transmises à {{name}} en raison de la limite de pièces jointes. Renvoyez celles nécessaires à cette demande.",
+      "ATTACHMENTS_DOWNLOAD_FAILED_AND_LIMIT_REACHED": "Certaines pièces jointes n’ont pas été transmises à {{name}} en raison d’un échec de téléchargement et de la limite de pièces jointes. Renvoyez celles nécessaires à cette demande.",
       "GROUP_ASSISTANT_UNAVAILABLE": "{{name}}, connectez votre Cindy pour que Cindy puisse travailler pour vous (aucun de vos Cindy n'est en ligne pour le moment).",
       "GROUP_ASSISTANT_DEVICE_REQUIRED": "{{name}}, choisissez un ordinateur pour ce groupe afin de poursuivre cette demande.",
       "GROUP_ASSISTANT_DEVICE_OFFLINE": "L’ordinateur choisi par {{name}} pour ce groupe est hors ligne."
@@ -698,5 +715,10 @@
   },
   "memberCount_many": "{{count}} membres",
   "waitingForOwner": "En attente de confirmation",
-  "externalBadge": "Externe"
+  "externalBadge": "Externe",
+  "reaction": {
+    "add": "Ajouter une réaction",
+    "count": "{{emoji}} · {{count}} réactions",
+    "failed": "Impossible de mettre à jour la réaction. Réessayez."
+  }
 }

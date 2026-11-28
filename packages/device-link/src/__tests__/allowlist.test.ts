@@ -17,6 +17,8 @@ import {
   DL_VOICE_TRANSCRIBE_CHANNEL,
   DL_VOICE_CREDENTIAL_SYNC_CHANNEL,
   DL_VOICE_DICTIONARY_LEARNING_CHANNEL,
+  DL_VOICE_DICTIONARY_GET_CHANNEL,
+  DL_VOICE_DICTIONARY_MUTATE_CHANNEL,
   DL_HISTORY_MESSAGES_CHANNEL,
   DL_TELEGRAM_STATUS_CHANNEL,
   DL_TELEGRAM_SET_ONLINE_CHANNEL,
@@ -33,6 +35,13 @@ describe('REMOTE_INVOKE_ALLOWLIST', () => {
     for (const raw of ['update-check-now', 'update-get-status', 'update-auto-settings-set', 'relaunch-to-update']) {
       expect(REMOTE_INVOKE_ALLOWLIST.has(raw)).toBe(false);
     }
+  });
+
+  it('allows scoped voice dictionary snapshot and mutation channels while keeping raw voice settings local', () => {
+    expect(REMOTE_INVOKE_ALLOWLIST.has(DL_VOICE_DICTIONARY_GET_CHANNEL)).toBe(true);
+    expect(REMOTE_INVOKE_ALLOWLIST.has(DL_VOICE_DICTIONARY_MUTATE_CHANNEL)).toBe(true);
+    expect(REMOTE_INVOKE_ALLOWLIST.has('voice-input:update-settings')).toBe(false);
+    expect(REMOTE_INVOKE_ALLOWLIST.has('voice-input:dictionary:import')).toBe(false);
   });
 
   it('allows the public composer projection without exposing the full installed plugin records', () => {

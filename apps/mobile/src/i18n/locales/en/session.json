@@ -303,6 +303,7 @@
   },
   "screen": {
     "thinking": "Thinking…",
+    "replyStreaming": "Generating…",
     "tokenCount": "{{tokens}} tok",
     "tokenCountFull": "{{tokens}} tokens",
     "tokenRate": "{{rate}} tok/s",
@@ -398,7 +399,13 @@
     "forkConfirmTitle": "Start a new session from here?",
     "forkConfirmDescription": "A separate session will be created using the context at this point. The original session stays unchanged, and future messages in either session won't affect the other.",
     "forkConfirm": "Start new session",
-    "forkCancel": "Cancel"
+    "forkCancel": "Cancel",
+    "modelSwitchPreparation": {
+      "pending": "Next message",
+      "preparing": "Preparing…",
+      "failed": "Switch failed",
+      "usingPrevious": "This message uses {{actual}}; {{target}} is not ready."
+    }
   },
   "shareImage": {
     "title": "Share Conversation",
@@ -664,7 +671,20 @@
     "toolUseLoopDetectedRotationWithCount": "The model kept rotating through tool calls, so Cindy stopped this turn after detecting {{count}} calls in the loop. Send a new message to continue.",
     "codexThreadLost": "The Codex auth mode changed, so this session can't continue. Start a new session.",
     "remoteCompactEncryptedContent": "Context compaction failed because the model could not read encrypted history. Automatic continuation did not complete. Retry to attempt recovery.",
-    "encryptedContentInvalid": "Switching providers made the encryption unavailable, so this session works only under the original provider. Handle it on the computer (use “Start new session from here” to drop the encrypted protocol content and continue in a new session)."
+    "encryptedContentInvalid": "Switching providers made the encryption unavailable, so this session works only under the original provider. Handle it on the computer (use “Start new session from here” to drop the encrypted protocol content and continue in a new session).",
+    "providerSafetyRefusal": "The model provider's safety policy blocked this reply. Adjust your request and try sending again.",
+    "providerSafetyRefusalWithProvider": "{{provider}}'s safety policy blocked this reply. Adjust your request and try sending again.",
+    "overloadBusy": "The model provider is temporarily busy and has no available capacity. Try again later or switch to another model.",
+    "overloadBusyWithProvider": "{{provider}} is temporarily busy and has no available capacity. Try again later or switch to another model.",
+    "streamInterrupted": "The reply stream from the model provider was interrupted mid-response. Try again later.",
+    "streamInterruptedWithProvider": "The reply stream from {{provider}} was interrupted mid-response. Try again later.",
+    "upstreamStatusError": "The model provider service returned an error (HTTP {{status}}). This reply did not complete.",
+    "upstreamStatusErrorWithProvider": "{{provider}} returned an error (HTTP {{status}}). This reply did not complete.",
+    "modelAccessDenied": "Your current model provider account does not have access to this model. Switch models or verify access with the provider.",
+    "modelAccessDeniedWithProvider": "Your {{provider}} account does not have access to this model. Switch models or verify model access.",
+    "providerQuotaExhausted": "Insufficient quota or balance on your model provider account. Check your provider account.",
+    "providerQuotaExhaustedWithProvider": "Your {{provider}} account has insufficient quota or balance. Check your account.",
+    "usageLimitReachedWithProvider": "Your {{provider}} account has reached its usage limit"
   },
   "row": {
     "markRead": "Mark as read",
@@ -680,9 +700,15 @@
   "outbox": {
     "deleteConfirmTitle": "Delete this message?",
     "deleteConfirmBody": "This message wasn't sent. Deleting it can't be undone.",
+    "deleteUnconfirmedBody": "The computer may have received this message. Deleting it only removes the pending message from this device. If the computer received it, it will still appear in the conversation history.",
     "legacyPlanRecovery": "This computer cannot restore saved messages in Plan mode. Turn off Plan mode or update Cindy on the computer, then retry.",
     "creationRecoveryRequired": "Retry creating this task before deleting its first message. That message keeps the recovery details for your later messages.",
     "confirmationRequired": "This computer cannot confirm whether the message was received. Check its history or update Cindy before retrying.",
+    "profileInUseByDesktop": "This data is in use by the Cindy desktop app running on its own. Quit it, then send again.",
+    "taskInactive": "This task cannot receive messages right now.",
+    "inputNotSupported": "This computer does not support sending this type of message to the task.",
+    "invalidInput": "The computer rejected the message because its contents are invalid.",
+    "taskClearedBeforeSend": "The task was cleared or is being cleared. The message is still saved on this device.",
     "taskCleared": "This task was cleared after you sent the message. The saved message has been kept for you to review.",
     "restoreFailed": "Saved messages could not be restored. They have not been deleted. Restart the app and try again.",
     "recoveryTarget": "Keep the original computer while recovering this task. Its later messages are still saved.",

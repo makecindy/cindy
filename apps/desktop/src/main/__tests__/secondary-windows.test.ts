@@ -100,6 +100,9 @@ vi.mock('../appearance-settings-ipc.js', () => ({
 vi.mock('../mainWindowFullscreenStartup.js', () => ({
   installWindowFullscreenStateBroadcast: vi.fn(),
 }));
+vi.mock('../macFullscreenRecovery.js', () => ({
+  installMacFullscreenDesyncRecovery: vi.fn(),
+}));
 vi.mock('../window-theme-mode-store.js', () => ({
   readWindowThemeSnapshot: () => mocks.readWindowThemeSnapshot(),
 }));
@@ -172,6 +175,16 @@ describe('session window link targets', () => {
     vi.stubGlobal('MAIN_WINDOW_VITE_DEV_SERVER_URL', undefined);
     openSessionInNewWindow('task', null);
     expect(mocks.installWindowZoomRestoration).toHaveBeenCalledOnce();
+  });
+
+  // 拖出/新开的会话副窗定位为窄陪伴窗（DESIGN.md §8），不能沿用主窗 800×600 下限。
+  it('allows dragged-out secondary windows to shrink to a compact 360x420 floor', () => {
+    vi.stubGlobal('MAIN_WINDOW_VITE_DEV_SERVER_URL', undefined);
+    openSessionInNewWindow('task', null);
+    expect(mocks.browserWindowOptions[0]).toMatchObject({
+      minWidth: 360,
+      minHeight: 420,
+    });
   });
 
   // Regression (#11670): macOS secondary windows previously passed `transparent: true` unconditionally

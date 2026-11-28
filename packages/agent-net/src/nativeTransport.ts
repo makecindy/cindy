@@ -996,6 +996,7 @@ class NativeChannel implements PeerChannel {
       measure: (address) => fire({ op: 'measure', address }),
       setPreferRelay: (prefer) => fire({ op: 'preferRelay', prefer }),
       writeControl: (line) => { this.control.push(utf8(line)); owner.wake(); },
+      localRelayVia: () => owner.relayRoute()?.via ?? null,
     }, NATIVE_REPROBE_MS) : null;
     this.router?.start();
   }
@@ -1005,6 +1006,8 @@ class NativeChannel implements PeerChannel {
     this.control.stream = await this.owner.call<number>({ op: 'openStream', id: this.id, priority: 'interactive' });
     const bytes = concatBytes([Uint8Array.of(CONTROL), utf8(JSON.stringify({ candidates: this.owner.candidates() }) + '\n')]);
     await this.owner.call({ op: 'write', id: this.id, stream: this.control.stream, data: toBase64Url(bytes) });
+    // Only after the stream's first byte went out: queued control lines are written behind it.
+    this.router?.announceRelayVia();
   }
   /** This side's candidates changed (STUN answered, another network): tell the peer, as the Desktop re-announces. */
   announceCandidates(): void {
@@ -1305,7 +1308,7 @@ class NativeChannel implements PeerChannel {
     }
   }
   private onControl(line: string): void {
-    let value: { candidates?: unknown; session?: unknown; pathPreference?: unknown; autoRelay?: unknown };
+    let value: { candidates?: unknown; session?: unknown; pathPreference?: unknown; autoRelay?: unknown; relayVia?: unknown };
     // Ignore malformed control lines, never business frames.
     try { value = JSON.parse(line); } catch { return; }
     if (this.owner.enhanced && Array.isArray(value?.session) && value.session.includes(AGENT_NET_SESSION_V1) && !this.sessionCapable) {
@@ -1323,6 +1326,7 @@ class NativeChannel implements PeerChannel {
       this.router?.setCandidates(this.candidates);
     }
     if (value) this.router?.onPeerPreference(value);
+    if (value && typeof value === 'object') this.router?.onPeerRelayVia(value);
   }
   /** Both paths' round trips as last measured and this side's preference (types.ts `PeerPathMetrics`). */
   pathMetrics(): PeerPathMetrics {

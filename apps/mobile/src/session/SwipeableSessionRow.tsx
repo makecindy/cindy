@@ -120,12 +120,6 @@ export interface SwipeableSessionRowProps {
   onSnooze?(session: RemoteSession): void;
   /** Inbox: one-tap Done (archives without the automation reminder). */
   onComplete?(session: RemoteSession): void;
-  /**
-   * Inbox row of a teammate's main conversation: only these actions on a left swipe, and no
-   * pin / read / options. With Done unavailable (it runs, or waits for an answer), Snooze takes
-   * the single button and the full swipe. The caller mounts the row only when one is offered.
-   */
-  only?: { snooze: boolean; complete: boolean };
   testID?: string;
   children: ReactNode;
 }
@@ -141,14 +135,12 @@ function SwipeableSessionRowInner({
   onComplete,
   inboxMode = false,
   pinnedSection = false,
-  only,
   testID,
   children,
 }: SwipeableSessionRowProps) {
   const { t } = useTranslation();
   // Inbox: archive becomes a one-tap Done (button and full swipe alike).
-  const completeAction = inboxMode && session.status !== 'archived' && onComplete !== undefined && only?.complete !== false;
-  const snoozeOnly = !!only && !only.complete;
+  const completeAction = inboxMode && session.status !== 'archived' && onComplete !== undefined;
   const onArchive = completeAction && onComplete !== undefined ? onComplete : onArchiveProp;
   // The same task may appear in its project and in the fixed inbox at once.
   const instanceId = useId();
@@ -256,14 +248,9 @@ function SwipeableSessionRowInner({
       return;
     }
     if (-releaseTranslation < fullSwipeThreshold) return;
-    if (snoozeOnly) {
-      close();
-      onSnooze?.(session);
-      return;
-    }
     // 归档刻意不先关:乐观更新立即把行移出列表(卸载即收行);失败由页面层回滚 + Alert 收口。
     onArchive(session);
-  }, [fullSwipeThreshold, close, onMarkRead, onArchive, onSnooze, snoozeOnly, readReleaseTranslation, session]);
+  }, [fullSwipeThreshold, close, onMarkRead, onArchive, readReleaseTranslation, session]);
 
   const handleReadPress = useCallback(() => {
     close();
@@ -275,7 +262,7 @@ function SwipeableSessionRowInner({
     onTogglePin(session);
   }, [close, onTogglePin, session]);
 
-  const snoozeAction = inboxMode && session.status !== 'archived' && !!onSnooze && only?.snooze !== false;
+  const snoozeAction = inboxMode && session.status !== 'archived' && !!onSnooze;
   const secondaryLabel = snoozeAction
     ? t(taskSnoozeUntil(session) > Date.now() ? 'devices.list.menu.inbox.wake' : 'devices.list.menu.inbox.snooze')
     : t('session.row.moreOptions');
@@ -287,9 +274,8 @@ function SwipeableSessionRowInner({
   }, [close, onShowOptions, onSnooze, pinnedSection, snoozeAction, session]);
 
   const handleArchivePress = useCallback(() => {
-    if (snoozeOnly) handleOptionsPress();
-    else onArchive(session);
-  }, [handleOptionsPress, onArchive, session, snoozeOnly]);
+    onArchive(session);
+  }, [onArchive, session]);
 
   const pinned = !!pinnedAt;
   const pinLabel = pinToggleAction(pinnedAt).label;
@@ -342,15 +328,14 @@ function SwipeableSessionRowInner({
           {actionsMounted ? (
             <RightActionsContent
               armedProgress={armedProgress}
-              archiveLabel={snoozeOnly ? secondaryLabel : completeAction ? t('devices.list.menu.inbox.complete') : statusToggle.label}
+              archiveLabel={completeAction ? t('devices.list.menu.inbox.complete') : statusToggle.label}
               complete={completeAction}
-              snoozePrimary={snoozeOnly}
               archived={statusToggle.action === 'restore'}
               onArchive={handleArchivePress}
               onOptions={handleOptionsPress}
-          secondaryLabel={secondaryLabel}
-          snoozeAction={snoozeAction}
-          showSecondary={only ? only.snooze && only.complete : !inboxMode || session.status !== 'archived'}
+              secondaryLabel={secondaryLabel}
+              snoozeAction={snoozeAction}
+              showSecondary={!inboxMode || session.status !== 'archived'}
               onTranslationValue={handleTranslationValue}
               styles={styles}
               testID={testID}
@@ -365,7 +350,7 @@ function SwipeableSessionRowInner({
       armedProgress,
       handleArchivePress,
       handleOptionsPress,
-      secondaryLabel, snoozeAction, inboxMode, session.status, completeAction, t, only, snoozeOnly,
+      secondaryLabel, snoozeAction, inboxMode, session.status, completeAction, t,
       handleTranslationValue,
       actionsMounted,
       statusToggle,
@@ -384,7 +369,7 @@ function SwipeableSessionRowInner({
       onSwipeableClose={handleClose}
       onSwipeableOpenStartDrag={handleOpenStartDrag}
       onSwipeableWillOpen={handleWillOpen}
-      renderLeftActions={only ? undefined : renderLeftActions}
+      renderLeftActions={renderLeftActions}
       renderRightActions={renderRightActions}
       testID={testID}
     >
@@ -533,7 +518,6 @@ function RightActionsContent({
   archiveLabel,
   archived,
   complete = false,
-  snoozePrimary = false,
   onArchive,
   onOptions,
   secondaryLabel, snoozeAction, showSecondary,
@@ -547,8 +531,6 @@ function RightActionsContent({
   archiveLabel: string;
   archived: boolean;
   complete?: boolean;
-  /** The single button is Snooze (a teammate row that cannot be marked done). */
-  snoozePrimary?: boolean;
   onArchive(): void;
   onOptions(): void;
   secondaryLabel: string;
@@ -565,7 +547,7 @@ function RightActionsContent({
   // 置顶 / 归档会让行移位:按下即提前挂上列表过渡,松手时直接执行。
   const prepareDisclosure = useDisclosurePrepare();
   const { t } = useTranslation();
-  const StatusIcon = snoozePrimary ? Clock : complete ? Check : archived ? ArchiveRestore : Archive;
+  const StatusIcon = complete ? Check : archived ? ArchiveRestore : Archive;
   const revealed = Animated.multiply(translation, -1);
   const optionsOpacity = Animated.multiply(
     revealed.interpolate({
@@ -654,8 +636,7 @@ function RightActionsContent({
             accessibilityLabel={archiveLabel}
             accessibilityRole="button"
             onPress={onArchive}
-            // Snooze opens a sheet first; nothing moves until the user picks a time.
-            onPressIn={snoozePrimary ? undefined : () => prepareDisclosure(true)}
+            onPressIn={() => prepareDisclosure(true)}
             style={styles.actionPressable}
             testID={testID ? `${testID}.archiveAction` : undefined}
           >

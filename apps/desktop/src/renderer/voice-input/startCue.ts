@@ -102,6 +102,60 @@ export function playVoiceInputStartCue(): Promise<void> {
  * rather than an open-ended wait.
  */
 export const START_CUE_CAPTURE_WAIT_MS = 300;
+/** Extra acoustic tail after start-cue playback finishes during which speaker bleed can reach the mic. */
+export const START_CUE_ECHO_TAIL_MS = 280;
+/** Hard safety cap so an audio context stall can never keep the echo gate latched. */
+export const START_CUE_ECHO_MAX_WINDOW_MS = 900;
+
+export type StartCueEchoTracker = {
+  /** Call right before playVoiceInputStartCue() begins playing. */
+  markCueStarted: () => void;
+  /** Call once playVoiceInputStartCue() resolves or settles. */
+  markCueEnded: () => void;
+  /** Call when the recording attempt ends or resets. */
+  reset: () => void;
+  /** True while captured PCM may contain speaker-to-mic bleed from the start cue. */
+  isInEchoWindow: () => boolean;
+};
+
+/**
+ * Tracks the short acoustic echo window around the start cue so sound-activity
+ * detectors ignore brief speaker-to-mic bleed without ever dropping PCM frames
+ * forwarded to ASR.
+ */
+export function createStartCueEchoTracker(options?: {
+  tailMs?: number;
+  maxWindowMs?: number;
+  now?: () => number;
+}): StartCueEchoTracker {
+  const tailMs = options?.tailMs ?? START_CUE_ECHO_TAIL_MS;
+  const maxWindowMs = options?.maxWindowMs ?? START_CUE_ECHO_MAX_WINDOW_MS;
+  const now = options?.now ?? (() => performance.now());
+  let cueStartedAt: number | null = null;
+  let cueEndedAt: number | null = null;
+
+  return {
+    markCueStarted() {
+      cueStartedAt = now();
+      cueEndedAt = null;
+    },
+    markCueEnded() {
+      if (cueStartedAt === null) return;
+      cueEndedAt = now();
+    },
+    reset() {
+      cueStartedAt = null;
+      cueEndedAt = null;
+    },
+    isInEchoWindow() {
+      if (cueStartedAt === null) return false;
+      const current = now();
+      if (current - cueStartedAt > maxWindowMs) return false;
+      if (cueEndedAt === null) return true;
+      return current - cueEndedAt <= tailMs;
+    },
+  };
+}
 
 export type StartCueGate = {
   /**

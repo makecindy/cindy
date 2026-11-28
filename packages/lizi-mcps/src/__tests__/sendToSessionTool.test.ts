@@ -318,6 +318,78 @@ describe('send_to_session tool', () => {
     });
   });
 
+  // base_ref 与创建回执里的实际基线、供应电脑。依据:2026-11-28 多机协作复盘——工作分支
+  // 不是默认分支的项目,每个新任务都从默认分支起步再整树切一次分支;回执不写供应电脑,
+  // 另一台电脑上建出的任务用了别的电脑的账号很久才被发现。既有用例只有 use_worktree 透传。
+  // 最小输入:一次 create 调用 + host 的回执。
+  it('create + base_ref → host 收到去空白的基线，回执给出实际基线与没能刷新的提示', async () => {
+    const { registry, sendToSession } = setup({
+      result: {
+        ok: true, targetSessionId: 'tgt-2', agentKind: 'claude-code', wakeKind: 'created',
+        targetTitle: 'PR #638', targetLastUserSendAt: null,
+        worktreePath: '/repo/.cindy-worktrees/auto-abc123',
+        worktreeBaseRef: 'refs/remotes/origin/release/2.x', worktreeBaseStaleReason: 'fetch-failed',
+        providerDeviceId: null,
+      },
+    });
+    const payload = parse(await registry.call('send_to_session', {
+      message: '跟进修复 PR #638', use_worktree: true, base_ref: ' origin/release/2.x ',
+    }));
+    expect(sendToSession).toHaveBeenCalledWith(
+      expect.objectContaining({ useWorktree: true, baseRef: 'origin/release/2.x' }),
+    );
+    expect(payload).toMatchObject({
+      ok: true, worktree_base_ref: 'refs/remotes/origin/release/2.x', worktree_base_fetched: false,
+      provider_device_id: 'local',
+    });
+    expect(payload.worktree_warning).toContain('base_ref');
+    expect(payload.worktree_warning).toContain('fetch-failed');
+    expect(payload).not.toHaveProperty('provider_note');
+  });
+
+  it.each([
+    ['省略 use_worktree', {}],
+    ['use_worktree=false', { use_worktree: false }],
+  ] as const)('create: base_ref 但 %s → INVALID_ARGS，host 不被调(不悄悄忽略基线)', async (_label, extra) => {
+    const { registry, sendToSession } = setup();
+    const res = await registry.call('send_to_session', { message: 'x', base_ref: 'release/2.x', ...extra });
+    expect(res.isError).toBe(true);
+    expect(parse(res)).toMatchObject({ ok: false, errorCode: 'INVALID_ARGS' });
+    expect(sendToSession).not.toHaveBeenCalled();
+  });
+
+  it('jump: base_ref 不传给 host(不为既有任务建 worktree)，投递照常', async () => {
+    const { registry, sendToSession } = setup({
+      result: { ok: true, targetSessionId: UUID, agentKind: 'claude-code', wakeKind: 'queued',
+        targetTitle: 't', targetLastUserSendAt: null },
+    });
+    const payload = parse(await registry.call('send_to_session', {
+      target_session_id: UUID, message: 'x', base_ref: 'release/2.x',
+    }));
+    expect(payload).toMatchObject({ ok: true, wake_kind: 'queued' });
+    expect(sendToSession.mock.calls[0]?.[0]).not.toHaveProperty('baseRef');
+    expect(payload).not.toHaveProperty('provider_device_id');
+  });
+
+  it.each([
+    ['本机供应商', { providerDeviceId: null }, 'local', null],
+    ['继承来源任务的另一台电脑', { providerDeviceId: 'mac-mini', providerDeviceInherited: true as const }, 'mac-mini', 'provider_device_id was omitted'],
+    ['点名的另一台电脑', { providerDeviceId: 'mac-mini' }, 'mac-mini', 'as requested by provider_device_id'],
+    ['旧版本目标电脑没回报', { targetDeviceId: 'mac-studio' }, undefined, 'older version'],
+    ['本机 SSH 任务不适用', {}, undefined, null],
+  ] as const)('create 回执写明模型由哪台电脑提供: %s', async (_label, hostFields, expectedId, note) => {
+    const { registry } = setup({
+      result: { ok: true, targetSessionId: 'tgt-3', agentKind: 'claude-code', wakeKind: 'created',
+        targetTitle: 't', targetLastUserSendAt: null, ...hostFields },
+    });
+    const payload = parse(await registry.call('send_to_session', { message: 'x' }));
+    expect(payload.provider_device_id).toBe(expectedId);
+    if (note === null) expect(payload).not.toHaveProperty('provider_note');
+    else expect(payload.provider_note).toContain(note);
+    // 另一台电脑的供应商:说明里要有那台电脑的 id，调用方才能对上 list_machines。
+    if (expectedId && expectedId !== 'local') expect(payload.provider_note).toContain(expectedId);
+  });
+
   it('create: 显式执行配置完整透传并回显 host 的实际解析结果', async () => {
     const { registry, sendToSession } = setup({
       result: {

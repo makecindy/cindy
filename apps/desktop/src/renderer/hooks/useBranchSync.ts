@@ -30,15 +30,23 @@ export function useBranchSync(
   }>({ key });
   const request = useRef(0);
   const busy = useRef(false);
-  const continuation = useRef<{ key: string; operationId: string } | undefined>(undefined);
+  const continuation = useRef<
+    { key: string; operationId: string; strategy?: 'ff-only' | 'rebase' } | undefined
+  >(undefined);
   const hoverTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const doneTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const invoke = useCallback(
-    (sync: boolean, operationId?: string) => {
+    (sync: boolean, operationId?: string, strategy?: 'ff-only' | 'rebase') => {
       const req = {
         baseRepo: baseRepo!,
         branch,
-        ...(sync ? { waitForResult: true, ...(operationId ? { operationId } : {}) } : {}),
+        ...(sync
+          ? {
+              waitForResult: true,
+              ...(operationId ? { operationId } : {}),
+              ...(strategy ? { strategy } : {}),
+            }
+          : {}),
       };
       if (deviceId)
         return window.electronAPI.deviceLink.invoke(
@@ -100,25 +108,37 @@ export function useBranchSync(
       clearTimeout(doneTimer.current);
     };
   }, [key, refresh]);
-  const blockedHint = (status: BranchSyncStatus) =>
-    t(`newChat.branchSync.${status.blocked}`, {
+  const state = snapshot.key === key ? snapshot : { key };
+  const status = state.status;
+  const canRebaseDiverged =
+    status?.blocked === 'diverged' &&
+    status.divergedConflict === false &&
+    !status.inProgressOp &&
+    !!status.checkoutPath &&
+    status.dirtyFiles === 0;
+  const divergedConflictFiles = status?.divergedConflictFiles ?? [];
+  const blockedHint = (nextStatus: BranchSyncStatus) =>
+    t(`newChat.branchSync.${nextStatus.blocked}`, {
       branch,
-      remote: status.remote ?? 'origin',
-      remoteBranch: status.remoteBranch ?? branch,
+      remote: nextStatus.remote ?? 'origin',
+      remoteBranch: nextStatus.remoteBranch ?? branch,
     });
-  const sync = async () => {
+  const sync = async (explicitStrategy?: 'ff-only' | 'rebase') => {
     if (!baseRepo || busy.current) return;
+    const strategy = explicitStrategy ?? (canRebaseDiverged ? 'rebase' : undefined);
     busy.current = true;
     const id = ++request.current;
     setSnapshot((old) => ({ ...old, key, busy: true, error: undefined, result: undefined }));
     try {
-      let reply = (await invoke(true,
-        continuation.current?.key === key ? continuation.current.operationId : undefined,
-      )) as BranchSyncReply;
+      const resume =
+        continuation.current?.key === key && continuation.current.strategy === strategy
+          ? continuation.current.operationId
+          : undefined;
+      let reply = (await invoke(true, resume, strategy)) as BranchSyncReply;
       while ('pending' in reply) {
         if (currentKey.current !== key || id !== request.current) return;
-        continuation.current = { key, operationId: reply.operationId };
-        reply = (await invoke(true, reply.operationId)) as BranchSyncReply;
+        continuation.current = { key, operationId: reply.operationId, strategy };
+        reply = (await invoke(true, reply.operationId, strategy)) as BranchSyncReply;
       }
       const result = reply;
       if (currentKey.current !== key || id !== request.current) return;
@@ -154,31 +174,45 @@ export function useBranchSync(
       if (currentKey.current === key && id === request.current) busy.current = false;
     }
   };
-  const state = snapshot.key === key ? snapshot : { key };
-  const status = state.status;
   const vars = {
     branch,
     remote: status?.remote ?? 'origin',
     remoteBranch: status?.remoteBranch ?? branch,
   };
+  const ahead = status?.ahead ?? 0;
+  const behind = status?.behind ?? 0;
+  const diverging = ahead > 0 && behind > 0;
   const errorText = state.error?.startsWith(BRANCH_SYNC_ERROR_PREFIX)
     ? t(`newChat.branchSync.errors.${state.error.slice(BRANCH_SYNC_ERROR_PREFIX.length)}`)
     : state.error;
   let hint = t('newChat.branchSync.action', vars);
   if (status?.remoteOnly) hint = t('newChat.branchSync.remoteAction', vars);
   if (status?.checkoutPath) hint += `\n${t('newChat.branchSync.checkedOut')}`;
-  if (status?.blocked) hint = blockedHint(status);
+  if (status?.blocked) {
+    if (canRebaseDiverged) {
+      hint = t('newChat.branchSync.divergedCanRebase', { ...vars, ahead, behind });
+    } else if (status.blocked === 'diverged' && divergedConflictFiles.length > 0) {
+      hint = t('newChat.branchSync.divergedConflictHint', {
+        ...vars,
+        files:
+          divergedConflictFiles.length > 2
+            ? `${divergedConflictFiles.slice(0, 2).join(', ')} +${divergedConflictFiles.length - 2}`
+            : divergedConflictFiles.join(', '),
+      });
+    } else {
+      hint = blockedHint(status);
+    }
+  }
   if (state.result && !status?.blocked)
     hint = state.result.updated
-      ? t('newChat.branchSync.updated', { count: state.result.updated })
+      ? state.result.syncedMode === 'rebase'
+        ? t('newChat.branchSync.rebased', { count: state.result.updated })
+        : t('newChat.branchSync.updated', { count: state.result.updated })
       : status?.ahead
         ? t('newChat.branchSync.keptAhead', { count: status.ahead })
         : t('newChat.branchSync.current');
   if (state.error) hint = t('newChat.branchSync.failed', { reason: errorText });
   if (state.busy) hint = t('newChat.branchSync.fetching', vars);
-  const ahead = status?.ahead ?? 0;
-  const behind = status?.behind ?? 0;
-  const diverging = ahead > 0 && behind > 0;
   const details = [
     diverging
       ? t('newChat.branchSync.diverging', {
@@ -208,8 +242,12 @@ export function useBranchSync(
     .filter(Boolean)
     .join(' · ');
   return {
+    status,
+    canRebaseDiverged,
+    divergedConflictFiles,
+    errorText,
     visible: !!baseRepo && !state.unsupported && status?.blocked !== 'not-local',
-    disabled: !!state.busy || !!status?.blocked || (!status && !state.error),
+    disabled: !!state.busy || (!!status?.blocked && !canRebaseDiverged) || (!status && !state.error),
     busy: !!state.busy,
     done: !!state.result && !status?.blocked,
     hint,

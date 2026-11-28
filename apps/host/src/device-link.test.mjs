@@ -1,17 +1,21 @@
 import { holdError, releaseFailure } from './agent/profile-hold.ts';
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { EventEmitter, once } from 'node:events';
 import { randomUUID } from 'node:crypto';
+import { fileURLToPath } from 'node:url';
+import { register as registerTsRequire } from 'tsx/cjs/api';
 import WebSocket, { WebSocketServer } from 'ws';
 import Database from 'better-sqlite3';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
 import { eq, getTableColumns, getTableName } from 'drizzle-orm';
-import { DeviceLinkClient, PROTOCOL_VERSION, FILE_PEER_CHANNEL, REMOTE_AGENT_CHANNEL, REMOTE_DESKTOP_CHANNEL,
+import { DeviceLinkClient, DeviceLinkError, PROTOCOL_VERSION, FILE_PEER_CHANNEL, REMOTE_AGENT_CHANNEL, REMOTE_DESKTOP_CHANNEL,
   DEVICE_LINK_CAPABILITY_BACKGROUND_LINK_V1, DEVICE_LINK_CAPABILITY_HISTORY_VIEW_V1, DL_HISTORY_MESSAGES_CHANNEL, DL_SESSION_HANDOFF_CHANNEL, ORCA_REMOTE_WORKER_MODELS_CHANNEL,
+  CONTROLLER_CAPABILITY_EXACT_MESSAGE_NOT_FOUND_V1,
   ORCA_REMOTE_WORKER_CAPS_CHANNEL, MACHINE_STATUS_CHANNEL, parseMachineStatus,
   PROVIDER_SHARE_RELAY_CAPABILITY, isProviderSharePeer, providerShareGuestPeer, providerShareHostPeer, PLUGIN_OAUTH_CHANNEL, SESSION_ACTIVITY_CHANNEL, TASK_ACTIVITY_SNAPSHOT } from '@cindy/device-link';
 import { AgentNetWorkerSocket } from '@cindy/agent-net';
@@ -44,7 +48,7 @@ import { sessions, messages, taskTags, sessionTaskTags, orcaWorkers, orcaTeams, 
 import { readHostSessionList, readHostSession } from './session-reads.ts';
 import { publishAgentEvent } from './agent/turn-executor.mjs';
 import { createHostContextRecoveryRollover } from './agent/context-recovery-assembly.ts';
-import { createHostHistoryReader, dismissHostErrorMessage, readHostHistoryView, readHostWorkDetails, readMessagesList } from './agent/history.ts';
+import { createHostHistoryReader, dismissHostErrorMessage, readHostHistoryView, readHostWorkDetails, readMessagesAroundClientId, readMessagesList } from './agent/history.ts';
 import { setHistoryWorkPageReader } from '../../desktop/src/main/device-link/historyViewPush.ts';
 import { ackSessionTurnEndedDurable, markSessionTurnEnded, drainSessionActiveTurnWrites, setOnSessionTurnEndedPersisted } from '../../desktop/src/main/localDb/sessionActiveTurn.ts';
 import * as broadcastTap from '../../desktop/src/main/device-link/broadcast-tap.ts';
@@ -59,6 +63,27 @@ const waitFor = async condition => {
     await new Promise(resolve => setTimeout(resolve, 10));
   }
 };
+
+function loadMobileOutbox() {
+  // Only the test imports Mobile's state machine. Resolve its Metro aliases
+  // without changing the resolver for the Host and its other tests.
+  const previous = process.env.TSX_TSCONFIG_PATH;
+  process.env.TSX_TSCONFIG_PATH = fileURLToPath(new URL('../../mobile/tsconfig.json', import.meta.url));
+  try {
+    const loader = registerTsRequire({ namespace: 'host-mob-outbox-test' });
+    try {
+      return {
+        ...loader.require('../../mobile/src/session/durableOutbox.ts', import.meta.url),
+        ...loader.require('../../mobile/src/session/durableOutboxDelivery.ts', import.meta.url),
+        ...loader.require('../../mobile/src/session/outboxHistoryConfirmation.ts', import.meta.url),
+        ...loader.require('../../mobile/src/device-link/historyViewCapability.ts', import.meta.url),
+      };
+    } finally { loader.unregister(); }
+  } finally {
+    if (previous === undefined) delete process.env.TSX_TSCONFIG_PATH;
+    else process.env.TSX_TSCONFIG_PATH = previous;
+  }
+}
 
 // Real Node WebSockets + shared production client/dispatcher + SQLite. The local
 // relay authenticates synthetic tokens and stamps src; it is NOT official-relay
@@ -120,7 +145,7 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
     fs.rmSync(profile, { recursive: true, force: true });
   });
   wss.on('connection', (socket, request) => {
-    const match = /^Bearer synthetic-(host|ios|android|desktop)$/.exec(request.headers.authorization ?? '');
+    const match = /^Bearer synthetic-(host|legacy-host|ios|android|desktop)$/.exec(request.headers.authorization ?? '');
     if (!match) { socket.close(1008); return; }
     const id = match[1]; sockets.set(id, socket);
     socket.on('message', raw => {
@@ -150,8 +175,14 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
   const closedSessions = [];
   const metaPatches = [];
   const titleCalls = [];
+  const insertMessage = sqlite.prepare(
+    'INSERT INTO messages (id, session_id, client_id, role, content, created_at) VALUES (?, ?, ?, ?, ?, ?)',
+  );
+  const outboxHistory = createHostHistoryReader({ running: () => false, live: () => [] });
+  const outboxPending = [];
   const service = createHostService({
     profileHold: () => held,
+    historyView: (id, before, opts) => readHostHistoryView(outboxHistory, id, before, opts),
     // One USD and one CNY quote: the device-link v1 projection keeps only USD (usageHandlers.ts).
     modelPricing: async () => ({ xd: {
       'usd-model': { providerId: 'xd', modelId: 'usd-model', currency: 'USD', source: 'gateway', approximate: false, inputPerMtok: 3, outputPerMtok: 15 },
@@ -171,6 +202,7 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
     getSession: id => readHostSession(db.drizzle, id),
     updateSession: async (id, patch, options) => { metaPatches.push({ id, patch, options }); return { id, ...patch }; },
     messagesList: (id, limit) => readMessagesList(id, { limit }),
+    messagesAroundClientId: readMessagesAroundClientId,
     setSessionModel: async (id, model) => {
       if (model === 'release-refusal') throw holdError(releaseFailure());
 
@@ -178,10 +210,16 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
       return { deferred: true };
     },
     input: {
-      projection: async sessionId => ({ sessionId, pendingQueue: [], turnInProgress: false, clearBoundaryMs: null }),
+      projection: async sessionId => ({
+        sessionId, pendingQueue: sessionId === 'outbox-task' ? outboxPending : [],
+        turnInProgress: false, clearBoundaryMs: null,
+      }),
       enqueue: async (sessionId, item) => {
       writes++; source = readDeviceLinkInvokeSourceDevice();
       await hold;
+        if (sessionId === 'outbox-task') {
+          insertMessage.run(randomUUID(), sessionId, item.clientId, 'user', item.text, 200);
+        }
       const projection = { sessionId, pendingQueue: [item], turnInProgress: false };
       hub.publish({ type: 'input_projection', sessionId, projection });
       return projection;
@@ -191,12 +229,16 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
   const worktreeCreates = [];
   const worktreeLifecycle = { ...createHostWorktreeLifecycle(profile), createWorktree: async (request, options) => {
     worktreeCreates.push({ request, options });
-    return { ok: true, meta: { sessionId: request.sessionId, path: path.join(profile, 'created-worktree') } };
+    return { ok: true, meta: { sessionId: request.sessionId, path: path.join(profile, 'created-worktree'),
+      sourceBranch: request.sourceBranch } };
   } };
   const handoffQueue = [];
   let enqueueHandoff = async (id, item, handoff) => {
+    const target = await handoff.validateTarget();
+    if (!target.ok) return target;
     await handoff.taskActionDeliveryGuard();
     handoffQueue.push({ id, item, handoff });
+    return target;
   };
   let holdAfterHandoffCreation;
   const handoffProviders = [{
@@ -271,7 +313,8 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
     });
     client.start();
     await waitFor(() => client.getStatus() === 'online');
-    await client.openLink('host', { controllerName: id, protocolVersion: PROTOCOL_VERSION, appVersion: 'test' });
+    await client.openLink('host', { controllerName: id, protocolVersion: PROTOCOL_VERSION, appVersion: 'test',
+      ...(id === 'ios' ? { capabilities: [CONTROLLER_CAPABILITY_EXACT_MESSAGE_NOT_FOUND_V1] } : {}) });
     // The first invocation uses one of the last registered ordinary handlers (no startup delay).
     // Assigning old-peer "unsupported" here would survive the end of startup in a controller cache.
     const first = await client.invoke('host', { channel: 'maker:session:prewarm', args: ['task', {}] });
@@ -858,6 +901,59 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
         assert.equal((await handoff([lastWrite])).result?.errorCode, 'UNSUPPORTED_CAPABILITY');
       });
 
+      // Integration (2026-11-28): `create.baseRef` over the real relay. The opener is shared with
+      // Desktop, so this loopback is where the key crosses the wire into the Host's own worktree
+      // preparation; the cases above never ask for a worktree. A project whose work branch is not
+      // the default one otherwise starts every new task from the default branch. Minimal input: a
+      // real repository and one create per outcome; createWorktree only records its request.
+      await t.test('creates the task worktree from the requested base and reports what took effect', async () => {
+        assert.equal(support.result.ordinaryCreateBaseRef, 1);
+        const repo = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-host-base-')));
+        const git = (...args) => execFileSync('git', ['-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', ...args], {
+          cwd: repo, stdio: 'ignore', env: { ...process.env,
+            GIT_CONFIG_GLOBAL: process.platform === 'win32' ? 'NUL' : os.devNull,
+            GIT_CONFIG_NOSYSTEM: '1' },
+        });
+        fs.mkdirSync(path.join(profile, 'created-worktree'), { recursive: true });
+        try {
+          git('init', '--initial-branch=main');
+          git('commit', '--allow-empty', '-m', 'base');
+          git('branch', 'release/2.x');
+          const sessionId = randomUUID();
+          const created = await send({ deviceId: 'host', sessionId }, {
+            sender, message: 'Work on the release branch',
+            create: async () => ({ permissionMode: 'ask', projectDir: null, workingDir: repo, useWorktree: true, baseRef: 'release/2.x' }),
+          });
+          assert.equal(created.ok, true, JSON.stringify(created));
+          assert.equal(created.wakeKind, 'created');
+          assert.equal(worktreeCreates.at(-1).request.sourceBranch, 'release/2.x');
+          assert.equal(worktreeCreates.at(-1).request.sessionId, sessionId);
+          assert.equal(created.worktreeBaseRef, 'release/2.x');
+          assert.equal(created.worktreePath, path.join(profile, 'created-worktree'));
+          // null = the Host's own provider; a caller must be able to tell it from "not reported".
+          assert.equal(created.agentDeviceId, null);
+          const [stored] = await db.drizzle.select().from(sessions).where(eq(sessions.id, sessionId));
+          assert.equal(stored.worktreePath, path.join(profile, 'created-worktree'));
+
+          const attempts = worktreeCreates.length;
+          for (const create of [
+            { useWorktree: true, baseRef: '--upload-pack=evil' },
+            { baseRef: 'release/2.x' },
+          ]) {
+            const refusedId = randomUUID();
+            const refused = await send({ deviceId: 'host', sessionId: refusedId }, {
+              sender, message: 'Refused base',
+              create: async () => ({ permissionMode: 'ask', projectDir: null, workingDir: repo, ...create }),
+            });
+            assert.equal(refused.errorCode, 'INVALID_ARGS', JSON.stringify(refused));
+            assert.equal((await db.drizzle.select().from(sessions).where(eq(sessions.id, refusedId))).length, 0);
+          }
+          assert.equal(worktreeCreates.length, attempts);
+        } finally {
+          fs.rmSync(repo, { recursive: true, force: true });
+        }
+      });
+
       // This also uses the actual Node queue. The hold case does not reach it;
       // inject one failing boundary at a time after the task row exists.
       await t.test('settles pre-acceptance rejections but retains receipts after uncertain queue writes', async () => {
@@ -905,6 +1001,240 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
       });
     } finally { off(); }
   });
+  /*
+   * Test value (engineering-conventions §3.2): the real Mobile outbox uses the
+   * same loopback Device Link and Host service as other sends. Start with one
+   * committed user message whose outbox confirmation is pending. The existing
+   * enqueue test can't observe the second record waiting behind it. The Host
+   * must confirm the first without re-enqueueing it and persist the second once.
+   * The legacy peer sends the original CHANNEL_NOT_ALLOWED over the same wire and offers the
+   * historical page route without the newer capability. Exercise the same bounded read that
+   * Mobile uses and count its requests along with actual committed SQLite rows.
+   * Tier: integration with synthetic engine IO and an in-memory SQLite DB.
+   */
+  await t.test('confirms an already committed mobile input and sends the next exactly once', async t => {
+    const { createDurableOutbox, createDurableOutboxDelivery, readLegacyOutboxHistory,
+      invokeWithHistoryViewCapability } = loadMobileOutbox();
+    const sessionId = 'outbox-task';
+    const channel = 'local-db:messages:around-client-id';
+    const view = 'local-db:messages:view';
+    sqlite.prepare('INSERT INTO sessions(id, source, status, created_at, updated_at) VALUES (?,?,?,?,?)')
+      .run(sessionId, 'desktop', 'active', 1, 1);
+    const mobile = clients[0];
+    const count = clientId => sqlite.prepare('SELECT count(*) AS n FROM messages WHERE session_id=? AND client_id=?')
+      .get(sessionId, clientId).n;
+    const rpc = (target, channel, args) => mobile.invoke(target, { channel, args });
+
+    async function followup(target, firstState, { saved = true, suffix = '', cacheCaughtUp = () => true } = {}) {
+      const first = [target, suffix, 'first'].filter(Boolean).join('-');
+      const next = [target, suffix, 'next'].filter(Boolean).join('-');
+      const commitFirst = () => insertMessage.run(randomUUID(), sessionId, first, 'user', 'first input', 100);
+      if (saved) commitFirst();
+      const data = new Map();
+      const store = createDurableOutbox({
+        getAllKeys: async () => [...data.keys()],
+        getItem: async key => data.get(key) ?? null,
+        setItem: async (key, value) => { data.set(key, value); },
+        removeItem: async key => { data.delete(key); },
+      });
+      const message = (clientId, createdAt) => ({
+        version: 1, accountId: 'test-account', deviceId: target, createdAt, state: 'queued', uploads: [],
+        item: { sessionId, clientId, text: 'follow-up input', attachmentSlots: [] },
+      });
+      await store.activate('test-account');
+      await store.add({
+        ...message(first, 1), state: firstState,
+        prepared: { clientId: first, text: 'first input' }, enqueueStarted: true, sendAtMs: 1,
+      });
+      await store.add(message(next, 2));
+      const calls = [];
+      const invoke = async (destination, name, args) => {
+        calls.push([destination, name, ...args]);
+        const reply = await rpc(destination, name, args);
+        if (!reply.ok) throw new DeviceLinkError(reply.error.code, reply.error.message);
+        return reply.result;
+      };
+      const enqueued = [];
+      const delivery = createDurableOutboxDelivery({
+        store, isCurrent: () => true, canRun: () => true,
+        projection: r => invoke(target, 'maker:input:get-projection', [sessionId, { deliveryClientIds: [r.item.clientId] }]),
+        prepare: async r => ({ clientId: r.item.clientId, text: r.item.text }),
+        enqueue: r => {
+          enqueued.push(r.item.clientId);
+          return invoke(target, 'maker:input:enqueue', [sessionId, r.prepared, { sendAtMs: r.sendAtMs }]);
+        },
+        history: async r => (await invoke(target, channel, [sessionId, r.item.clientId, { radius: 1 }]))
+          .some(row => row.clientId === r.item.clientId && row.role === 'user'),
+        legacyHistory: async r => Boolean(await readLegacyOutboxHistory(r, (device, name, args) =>
+          invokeWithHistoryViewCapability(name, async () => ({ capabilities: [] }),
+            () => invoke(device, name, args), true))),
+        cacheHistory: async r => cacheCaughtUp(r.item.clientId, first),
+        bindProjection: () => () => {}, cleanup: async () => {},
+        retryable: () => false, describe: error => error.message,
+      });
+      const run = async () => {
+        delivery.wake();
+        await delivery.run();
+      };
+      return { first, next, enqueued, store, run, commitFirst, calls, stop: delivery.stop };
+    }
+
+    const legacy = new DeviceLinkClient({
+      getWsUrl: () => url, getToken: async () => 'synthetic-legacy-host',
+      getHello: () => ({ deviceName: 'legacy-host', platform: 'linux', appVersion: 'test', remoteControlEnabled: true }),
+      createWebSocket: (address, headers) => new WebSocket(address, { headers }),
+    });
+    t.after(() => legacy.stop());
+    const legacyRoutes = new Map([
+      [view, ([sid, opts]) => service('/api/messages/history-view', { sessionId: sid, opts })],
+      ['maker:input:get-projection', ([sid]) => service('/api/input/projection', { sessionId: sid })],
+      ['maker:input:enqueue', ([sid, item]) => service('/api/input/enqueue', { sessionId: sid, item })],
+    ]);
+    legacy.onFrame(async frame => {
+      if (frame.kind === 'link-open') {
+        legacy.sendLinkAccept(frame.src, frame.id, { appVersion: 'test', allowlistHash: '' });
+      } else if (frame.kind === 'invoke') {
+        const handle = legacyRoutes.get(frame.payload.channel);
+        if (!handle) {
+          legacy.sendInvokeResult(frame.src, frame.id,
+            { ok: false, error: { code: 'CHANNEL_NOT_ALLOWED', message: "legacy peer does not support this channel" } });
+          return;
+        }
+        try {
+          const { body } = await handle(frame.payload.args);
+          legacy.sendInvokeResult(frame.src, frame.id, { ok: true, result: body });
+        } catch (error) {
+          legacy.sendInvokeResult(frame.src, frame.id, { ok: false, error: { code: 'IPC_ERROR', message: error.message } });
+        }
+      }
+    });
+    legacy.start();
+    await waitFor(() => legacy.getStatus() === 'online');
+    const accepted = await mobile.openLink('legacy-host', { controllerName: 'ios', protocolVersion: PROTOCOL_VERSION, appVersion: 'test' });
+    assert.equal(accepted.capabilities?.includes(DEVICE_LINK_CAPABILITY_HISTORY_VIEW_V1) ?? false, false);
+
+    await t.test('old Host confirms with one page even while local history is catching up', async t => {
+      let cacheReady = false;
+      const f = await followup('legacy-host', 'confirming', { cacheCaughtUp: (id, head) => id !== head || cacheReady });
+      t.after(f.stop);
+      await f.run();
+      assert.deepEqual(f.store.getSnapshot().map(r => r.state), ['host-owned', 'queued']);
+      assert.equal(f.store.getSnapshot()[0].historyConfirmed, true);
+      assert.deepEqual(f.calls.filter(([, name]) => name === view), [
+        ['legacy-host', view, sessionId, { lazyDetails: true }],
+      ]);
+      await f.run();
+      assert.deepEqual(f.enqueued, [f.next]);
+      assert.equal(count(f.first), 1);
+      assert.equal(count(f.next), 1);
+      assert.equal(f.calls.filter(([, name, , clientId]) => name === channel && clientId === f.first).length, 1);
+      cacheReady = true;
+      await f.run();
+      assert.deepEqual(f.store.getSnapshot(), []);
+    });
+
+    await t.test('a legacy miss waits for a read-only recheck before releasing the next input', async t => {
+      const f = await followup('legacy-host', 'confirming', { saved: false, suffix: 'recheck' });
+      t.after(f.stop);
+      await f.run();
+      await f.run();
+      assert.deepEqual(f.enqueued, []);
+      assert.deepEqual(f.store.getSnapshot().map(r => [r.item.clientId, r.state, r.historyConfirmation]), [
+        [f.first, 'failed', 'unconfirmed'], [f.next, 'queued', undefined],
+      ]);
+      const reads = f.calls.filter(([, name]) => name === view);
+      assert.equal(reads.length, 1);
+      assert.equal(count(f.first), 0);
+      assert.equal(count(f.next), 0);
+
+      await f.store.update(f.store.getSnapshot()[0], { historyConfirmation: 'requested' });
+      await f.run();
+      assert.equal(f.store.getSnapshot()[0].historyConfirmation, 'unconfirmed');
+      assert.deepEqual(f.enqueued, []);
+      assert.equal(count(f.first), 0);
+      assert.equal(count(f.next), 0);
+
+      f.commitFirst();
+      await f.store.update(f.store.getSnapshot()[0], { historyConfirmation: 'requested' });
+      await f.run();
+      assert.deepEqual(f.enqueued, []);
+      assert.equal(f.calls.filter(([, name]) => name === view).length, 3);
+      assert.deepEqual(f.calls.filter(([, name]) => name === channel)
+        .map(([target, , task, clientId]) => [target, task, clientId]),
+      Array.from({ length: 3 }, () => ['legacy-host', sessionId, f.first]));
+      await f.run();
+      assert.deepEqual(f.enqueued, [f.next]);
+      assert.equal(count(f.first), 1);
+      assert.equal(count(f.next), 1);
+    });
+
+    // Integrate the new Host's structured miss with the Mobile ledger. Both
+    // branches cross the same real dispatcher and SQLite history read.
+    for (const inQueue of [false, true]) {
+      await t.test(`rechecks a missing history row ${inQueue ? 'still in' : 'absent from'} the Host queue`, async t => {
+        const f = await followup('host', 'failed', { saved: false, suffix: inQueue ? 'pending' : 'missing' });
+        t.after(f.stop);
+        if (inQueue) outboxPending.push({ clientId: f.first });
+        try {
+          const miss = await rpc('host', channel, [sessionId, f.first, { radius: 1 }]);
+          assert.equal(miss.ok, false);
+          assert.equal(miss.error.code, 'NOT_FOUND');
+          await f.store.update(f.store.getSnapshot()[0], { historyConfirmation: 'requested' });
+          await f.run();
+          const firstRecord = f.store.getSnapshot()[0];
+          assert.equal(firstRecord.state, 'failed');
+          assert.equal(firstRecord.historyConfirmation, inQueue ? 'unconfirmed' : undefined);
+          await f.run();
+          assert.deepEqual(f.enqueued, []);
+          assert.equal(count(f.first), 0);
+          assert.equal(count(f.next), 0);
+          if (inQueue) return;
+
+          await f.store.update(firstRecord, { state: 'queued' });
+          for (let pass = 0; pass < 4; ++pass) await f.run();
+          assert.deepEqual(f.enqueued, [f.first, f.next]);
+          assert.equal(count(f.first), 1);
+          assert.equal(count(f.next), 1);
+          assert.deepEqual(f.store.getSnapshot(), []);
+        } finally {
+          if (inQueue) outboxPending.pop();
+        }
+      });
+    }
+
+    // An upgraded Host can repair a phone ledger whose first confirmation already failed.
+    const f = await followup('host', 'failed');
+    t.after(f.stop);
+    for (let pass = 0; pass < 4; ++pass) await f.run();
+    const { first, next } = f;
+    assert.deepEqual(f.enqueued, [next], 'the confirmed first message must release the next FIFO entry');
+    assert.equal(count(first), 1);
+    assert.equal(count(next), 1);
+    assert.deepEqual(f.store.getSnapshot(), []);
+    assert.equal(f.calls.some(([, name]) => name === view), false);
+
+    // The same read works during a profile hold and respects the desktop's
+    // exact session/client identity, persisted visibility and content limit.
+    held = projectHold;
+    try {
+      const around = await rpc('host', channel, [sessionId, first, { radius: 0, contentCharLimit: 5 }]);
+      assert.equal(around.ok, true, JSON.stringify(around));
+      assert.deepEqual(around.result.map(row => [row.clientId, row.content]), [[first, '…nput']]);
+      const notFound = async (...args) => {
+        const reply = await rpc('host', channel, args);
+        assert.equal(reply.ok, false);
+        assert.match(reply.error.message, /^\[NOT_FOUND\]/);
+      };
+      await notFound('task', first);
+      await notFound(sessionId, sqlite.prepare('SELECT id FROM messages WHERE client_id=?').get(next).id);
+      sqlite.prepare('UPDATE messages SET rewind_at=? WHERE session_id=? AND client_id=?').run(201, sessionId, next);
+      await notFound(sessionId, next);
+      sqlite.prepare('UPDATE sessions SET cleared_at=? WHERE id=?').run(100, sessionId);
+      await notFound(sessionId, first);
+    } finally { held = null; }
+    assert.equal(count(first), 1, 'confirmation reads do not mutate the stored messages');
+    assert.equal(count(next), 1);
+  });
   await host.revoke('ios');
   const denied = await clients[0].invoke('host', { channel: 'local-db:sessions:get', args: ['task'] }).catch(error => ({ denied: error }));
   assert.ok(denied.denied || denied.ok === false);
@@ -921,8 +1251,9 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
   await waitFor(() => host.state().status === 'online');
   await clients[1].openLink('host', { controllerName: 'android', protocolVersion: PROTOCOL_VERSION, appVersion: 'test' });
   hold = new Promise(resolve => { release = resolve; });
+  const pendingWrites = writes + 1;
   const inFlight = clients[1].invoke('host', { channel: 'maker:input:enqueue', args: ['task', { clientId: 'pending', text: 'wait' }] }).catch(() => null);
-  await waitFor(() => writes === 3);
+  await waitFor(() => writes === pendingWrites);
   commitVolatileAppSession('cloud', 'another-test-owner', true);
   await assert.rejects(host.setEnabled(true), /account changed/);
   let stopped = false;
@@ -1045,7 +1376,7 @@ test('Host device-link refuses provider-share guests and the platform features i
   // Clients cache only CHANNEL_NOT_ALLOWED as unsupported. Extend the existing loopback fixture
   // with one request per affected capability, including the goal write that must not reach a handler.
   for (const channel of [
-    'model-groups:get', 'maker:subscription-accounts', 'maker:goal:get-status', 'maker:goal:set',
+    'maker:subscription-accounts', 'maker:goal:get-status', 'maker:goal:set',
     'maker:model-context-limit:get', 'maker:api-key:present',
   ]) {
     const reply = await desktop.invoke('host', { channel, args: [] });
@@ -1063,7 +1394,8 @@ test('Host device-link refuses provider-share guests and the platform features i
   assert.match(remoteDesktop.error.message, /^\[NOT_SUPPORTED\] requestRemoteDesktop /);
 
   for (const channel of [REMOTE_AGENT_CHANNEL, MACHINE_STATUS_CHANNEL, DL_HISTORY_MESSAGES_CHANNEL,
-    'local-db:sessions:list', 'host:execute-arbitrary']) {
+    'local-db:messages:around-client-id', 'local-db:sessions:list',
+    'model-groups:get', 'model-groups:resolve', 'host:execute-arbitrary']) {
     const reply = await guest.invoke(hostKey, { channel, args: [] });
     assert.equal(reply.ok, false, `${channel}: ${JSON.stringify(reply)}`);
     assert.equal(reply.error.code, 'ACCESS_REVOKED', `${channel}: ${JSON.stringify(reply)}`);
@@ -1104,7 +1436,7 @@ const PINNED_DISPATCH_PORTS = {
     'delegatedProviderShareLeases', 'invalidateProviderShareDelegation',
     'remoteDesktop', 'requestRemoteDesktop', 'remoteCredentialHost', 'fetchLocalMediaToOss', 'transcribeRemoteVoiceInput',
     'readTelegramRemoteStatus', 'setTelegramRemoteOnline', 'adviseAndRecordVoiceInputDictionaryLearning',
-    'buildMobileDictionarySnapshot'],
+    'buildMobileDictionarySnapshot', 'mutateMobileDictionary'],
 };
 
 test('every port the Host passes the inbound dispatch has the class pinned here', () => {

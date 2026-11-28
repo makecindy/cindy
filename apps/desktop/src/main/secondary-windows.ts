@@ -52,6 +52,8 @@ import type { WindowsBackdropMaterial } from './vibrancyConfig.js';
 import { installSelectionContextMenu } from './selection-context-menu.js';
 import { applyAppearanceToWindow, installWindowZoomRestoration } from './appearance-settings-ipc.js';
 import { installWindowFullscreenStateBroadcast } from './mainWindowFullscreenStartup.js';
+import { installMacFullscreenDesyncRecovery } from './macFullscreenRecovery.js';
+import { readPluginUiRegions } from './mcp-apps/visibility.js';
 import { installWindowsTransparentTitleBar } from './windowsTransparentTitleBar.js';
 import { resolveAppThemeIsDark } from './resolved-app-theme.js';
 import { readWindowThemeSnapshot } from './window-theme-mode-store.js';
@@ -77,6 +79,11 @@ export {
 
 // 副窗相对主窗右下错开的像素,让用户一眼看出弹出了新窗(而非严丝合缝盖住主窗)。
 const OFFSET_PX = 30;
+
+// 副窗默认折叠侧栏，定位是并排盯任务/群聊的窄窗；最小尺寸低于主窗(800×600)一半宽度，
+// 对齐 sidebar-tab-window 的 360×420 下限（DESIGN.md §8）。
+export const SECONDARY_WINDOW_MIN_WIDTH = 360;
+export const SECONDARY_WINDOW_MIN_HEIGHT = 420;
 
 // http(s) 外链一律丢给系统浏览器,与主窗 createWindow 的 will-navigate /
 // setWindowOpenHandler 守卫保持一致(dev server origin 视为内部允许导航)。
@@ -193,8 +200,8 @@ export function openSessionInNewWindow(
 
   const win = new BrowserWindow({
     ...bounds,
-    minWidth: 800,
-    minHeight: 600,
+    minWidth: SECONDARY_WINDOW_MIN_WIDTH,
+    minHeight: SECONDARY_WINDOW_MIN_HEIGHT,
     title: BRAND_NAME,
     icon: app.isPackaged
       ? path.join(process.resourcesPath, 'icon.png')
@@ -241,6 +248,15 @@ export function openSessionInNewWindow(
   installSelectionContextMenu(win);
   installWindowFullscreenStateBroadcast(win, {
     getDisplayBounds: (bounds) => screen.getDisplayMatching(bounds).bounds,
+  });
+  installMacFullscreenDesyncRecovery(win, {
+    windowLabel: 'secondary',
+    trafficLightPosition: { x: 12, y: 16 },
+    minSize: { width: SECONDARY_WINDOW_MIN_WIDTH, height: SECONDARY_WINDOW_MIN_HEIGHT },
+    shouldShowWindowButtons: () => {
+      const regions = readPluginUiRegions(win);
+      return regions.workspace && regions.windowControls;
+    },
   });
   // E4D:副窗加入注册表,供 vibrancy 动态开关与灵动岛优先唤起已有副窗使用;关闭时移除。
   registerSecondaryAppWindow(win, {

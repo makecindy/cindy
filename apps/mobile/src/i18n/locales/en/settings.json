@@ -317,7 +317,29 @@
     "refreshAccessibility": "Refresh dictionary",
     "readOnlyHint": "View on your phone; add or remove entries on a computer.",
     "offlineHint": "Your computers are offline. Showing the last synced dictionary.",
-    "noDesktops": "Sign in to the same account on a computer to sync your dictionary."
+    "noDesktops": "Sign in to the same account on a computer to sync your dictionary.",
+    "addEntry": "Add term",
+    "addModalTitle": "New dictionary term",
+    "editModalTitle": "Edit term",
+    "edit": "Edit",
+    "tapToEditHint": "Tap to edit term and aliases",
+    "termLabel": "Term",
+    "termPlaceholder": "Enter preferred spelling",
+    "termRequired": "Enter a term before saving.",
+    "aliasesLabel": "Often misheard as",
+    "aliasesPlaceholder": "One misrecognition per line",
+    "aliasesHint": "Enter one alias per line.",
+    "searchPlaceholder": "Search terms or aliases",
+    "noSearchResults": "No matching terms.",
+    "save": "Save",
+    "saving": "Saving…",
+    "saveFailed": "Could not save dictionary change.",
+    "cancel": "Cancel",
+    "delete": "Delete",
+    "deleteConfirmTitle": "Delete term?",
+    "deleteConfirmMessage": "Remove “{{term}}” from your synced dictionary across devices.",
+    "editableHint": "Changes sync through your online computer to all devices. Cached terms stay readable offline.",
+    "upgradeDesktopHint": "Update Cindy on your computer to edit terms from this phone. Cached entries remain viewable."
   },
   "voiceSpeakerFilter": {
     "actionFailed": "The change could not be saved. Try again.",
@@ -549,5 +571,14 @@
   },
   "navigation": {
     "unavailable": "Could not open settings on the target computer. Check that it is online and allows remote control; update Cindy if it is an older version."
+  },
+  "qrLogin": {
+    "scanTitle": "Scan to sign in",
+    "hintLogin": "Scan the code shown by Cindy on your computer",
+    "hintLoginDetail": "On your computer: phone icon next to your avatar → Control Cindy Remotely",
+    "cameraNeeded": "Cindy needs the camera to scan",
+    "grantCamera": "Allow camera",
+    "openSettings": "Open Settings",
+    "wrongCode": "This isn't a Cindy sign-in code"
   }
 }

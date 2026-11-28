@@ -793,7 +793,7 @@ function PiDurableDetailView({
                 </Tip>
               </div>
             </div>
-            <FieldVoiceInputNotice error={controlVoice.lastError} speakerFiltered={controlVoice.speakerFiltered} />
+            <FieldVoiceInputNotice {...controlVoice.noticeProps} />
             {controlError ? (
               <ErrorNotice role="alert" message={t('rightSidebar.subagents.controlFailed')} />
             ) : null}

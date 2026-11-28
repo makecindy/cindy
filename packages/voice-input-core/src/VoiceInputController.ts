@@ -15,19 +15,52 @@ import type {
 } from './types';
 import { VoiceTimelineLogger } from './VoiceTimelineLogger';
 import type { AudioGate } from './SpeakerGate';
-import { hasAdditionalSentence } from './pauseRefinement';
+import { AdaptiveVoicedDetector } from './pcmActivity';
+import {
+  DEFAULT_MAX_REFINE_CHUNK_CHARS,
+  extractRecentRefinedContext,
+  hasAdditionalSentence,
+  joinRefinedSegments,
+  sliceUnrefinedDelta,
+  splitLongDeltaForRefinement,
+  stripLeadingJoinPunctuation,
+} from './pauseRefinement';
 
 type DictationRefiner = {
   refine(input: {
     text: string;
     runId: string;
     segmentIds: string[];
+    precedingRefinedText?: string;
     onPartial?: (text: string) => void;
   }): Promise<RefinementResult>;
 };
 
+export type SessionRotationOptions = {
+  /** Prefer rotating during a natural speech pause once session age passes this threshold (ms). */
+  softRotateAfterMs?: number;
+  /** Force rotate before upstream maxSessionMs once session age passes this threshold (ms). */
+  hardRotateAfterMs?: number;
+  /** Quiet pause duration required before taking a soft rotation (default: 800 ms). */
+  pauseQuietMs?: number;
+  /** Optional dynamic provider of upstream session duration limit (e.g. 180_000 ms). */
+  getMaxSessionMs?: () => number | undefined;
+};
+
+type FrozenRefinedSegment = {
+  rawEndPrefix: string;
+  rawDelta: string;
+  refinedDelta: string;
+  cumulativeRefined: string;
+};
+
 type PendingRefinement = {
+  /** Full cumulative raw transcript covered by this refinement. */
   text: string;
+  /** Incremental raw delta sent to the refiner (equals `text` when no prefix was frozen). */
+  deltaText: string;
+  /** Already-refined prefix before `deltaText` (empty when refining from scratch). */
+  frozenPrefixRefined: string;
   segmentIds: string[];
   startedAt: number;
   latestPreview?: string;
@@ -52,6 +85,16 @@ type VoiceInputControllerOptions = {
    * one request stays free for the final text. Undefined means no limit.
    */
   refineRequestBudget?: () => RefineRequestBudget | undefined;
+  /**
+   * Maximum raw characters per single refiner request before splitting long
+   * unrefined tails along sentence boundaries (default: 600).
+   */
+  maxRefineChunkChars?: number;
+  /**
+   * Optional proactive session rotation before an upstream duration ceiling
+   * (e.g. voice-server 180s session limit).
+   */
+  sessionRotation?: SessionRotationOptions;
   /** Replay retained audio once after an audible recording ends without text. */
   retryEmptyTranscript?: boolean;
   /** Host opt-in for known recovery failures; undefined keeps the generic error. */
@@ -74,8 +117,8 @@ type CryptoWithUuid = {
 // recover trigger caused us to close a healthy session mid-dictation and lose
 // words around the reconnect boundary.
 //
-// The audio-side gate counts ONLY voiced chunks (RMS above threshold), not
-// raw audio duration. Counting raw duration meant a silent thinking pause
+// The audio-side gate counts ONLY voiced chunks (above adaptive ambient floor),
+// not raw audio duration. Counting raw duration meant a silent thinking pause
 // looked identical to a real stall: any 6+ seconds of mic-open silence
 // triggered false alarms. Voiced gating makes the warning meaningful while
 // keeping it non-destructive; network recovery is only driven by explicit
@@ -87,12 +130,10 @@ const ASR_STALL_CHECK_INTERVAL_MS = 1_000;
 // gateway/WebSocket interruptions do not abort an otherwise healthy dictation.
 // Providers still own replay/merge safety; after the cap, surface the failure.
 const ASR_NETWORK_RECOVERY_MAX_ATTEMPTS = 3;
-// PCM16 RMS above this counts as "the user is talking right now". 300 is
-// well above quiet-room background (~30) and typing/AC noise (~50-150)
-// while being below normal speech (~800+) by enough margin to catch soft
-// speakers. Hardcoded for now; a per-mic adaptive baseline would be the
-// next refinement if false positives ever bite.
-const ASR_VOICED_RMS_THRESHOLD = 300;
+const DEFAULT_SOFT_ROTATE_AFTER_MS = 150_000;
+const DEFAULT_HARD_ROTATE_AFTER_MS = 165_000;
+const DEFAULT_ROTATE_PAUSE_QUIET_MS = 800;
+const ROTATION_RETRY_BACKOFF_MS = 5_000;
 const EMPTY_TRANSCRIPT_ERROR = 'Voice input detected speech but returned no transcript. Please try again.';
 // Refinement is optional. A transport or fallback chain may stay alive without
 // producing words; stop must still release the user's already-submitted text.
@@ -114,6 +155,8 @@ export class VoiceInputController {
   private readonly stableWaitMs: number;
   private readonly pauseRefinementEnabled: boolean;
   private readonly refineRequestBudget?: () => RefineRequestBudget | undefined;
+  private readonly maxRefineChunkChars: number;
+  private readonly sessionRotation?: SessionRotationOptions;
   // Requests sent to the session identified by refineBudgetSessionKey.
   private refineBudgetSessionKey: string | undefined;
   private refineRequestsStarted = 0;
@@ -121,13 +164,21 @@ export class VoiceInputController {
   private readonly retryEmptyTranscript: boolean;
   private readonly recoveryErrorMessage?: (error: unknown) => string | undefined;
   private readonly audioGate?: AudioGate;
+  private readonly voicedDetector = new AdaptiveVoicedDetector();
   private lastSoundAt = 0;
   private lastTranscriptChangeAt = 0;
   private pauseRefinement?: PendingRefinement;
+  private lastPauseAttemptRaw = '';
+  private frozenSegments: FrozenRefinedSegment[] = [];
   private liveRefinementPreview?: { basedOnText: string; text: string };
   private state: VoiceInputState = 'idle';
   private runId = '';
   private startedAt = 0;
+  private sessionStartedAt = 0;
+  private sessionRotationInFlight = false;
+  private rotationTransportLost = false;
+  private sessionRotationCount = 0;
+  private nextRotationRetryAt = 0;
   private latestPartial = '';
   private latestStable = '';
   // The most recent transcript regardless of lane, plus which lane produced it.
@@ -188,6 +239,8 @@ export class VoiceInputController {
     this.stableWaitMs = options.stableWaitMs ?? 500;
     this.pauseRefinementEnabled = options.pauseRefinementEnabled ?? false;
     this.refineRequestBudget = options.refineRequestBudget;
+    this.maxRefineChunkChars = options.maxRefineChunkChars ?? DEFAULT_MAX_REFINE_CHUNK_CHARS;
+    this.sessionRotation = options.sessionRotation;
     this.retryEmptyTranscript = options.retryEmptyTranscript ?? false;
     this.recoveryErrorMessage = options.recoveryErrorMessage;
     this.audioGate = options.audioGate;
@@ -208,6 +261,12 @@ export class VoiceInputController {
 
     this.runId = createVoiceInputId();
     this.startedAt = performance.now();
+    this.sessionStartedAt = this.startedAt;
+    this.sessionRotationInFlight = false;
+    this.rotationTransportLost = false;
+    this.sessionRotationCount = 0;
+    this.nextRotationRetryAt = 0;
+    this.voicedDetector.reset();
     this.latestPartial = '';
     this.latestStable = '';
     this.latestTranscript = '';
@@ -228,6 +287,8 @@ export class VoiceInputController {
     this.lastSoundAt = performance.now();
     this.lastTranscriptChangeAt = performance.now();
     this.pauseRefinement = undefined;
+    this.lastPauseAttemptRaw = '';
+    this.frozenSegments = [];
     this.liveRefinementPreview = undefined;
     this.refineBudgetSessionKey = undefined;
     this.refineRequestsStarted = 0;
@@ -272,7 +333,11 @@ export class VoiceInputController {
         elapsedMs: performance.now() - this.startedAt,
       });
     }
-    const voiced = isChunkVoiced(chunk);
+    const { voiced } = this.voicedDetector.observe(chunk, {
+      durationMs: trace?.durationMs,
+      sampleRate: trace?.sampleRate,
+      startCueEchoWindow: trace?.startCueEchoWindow,
+    });
     if (voiced) {
       this.lastSoundAt = performance.now();
       this.speechActivitySeen = true;
@@ -358,22 +423,30 @@ export class VoiceInputController {
       return;
     }
 
+    const frozen = this.unwindFrozenSegments(text);
     const readyResult = this.pauseRefinementEnabled && optimisticRefinement?.text === text
       ? optimisticRefinement.result : undefined;
     const readyText = readyResult?.accepted && readyResult.refinedText
       && normalizeSubmittedText(readyResult.basedOnText) === text
-      ? readyResult.refinedText : undefined;
+      ? readyResult.refinedText
+      : this.pauseRefinementEnabled && frozen?.rawEndPrefix === text
+        ? frozen.cumulativeRefined
+        : undefined;
+    const frozenWithRawTail = !readyText && this.pauseRefinementEnabled && frozen
+      ? this.composeFrozenWithRawTail(frozen, text)
+      : undefined;
+    const initialDisplayText = readyText ?? frozenWithRawTail ?? text;
     const segment: SpeechSegment = {
       id: optimisticRefinement?.text === text ? optimisticRefinement.segmentIds[0] : createVoiceInputId(),
       source: 'mic',
       status: 'submitted',
-      text: readyText ?? text,
-      ...(readyText ? { basedOnText: text } : {}),
+      text: initialDisplayText,
+      ...(initialDisplayText !== text ? { basedOnText: text } : {}),
       updatedAt: Date.now(),
     };
     let range: EditableRange | undefined;
     try {
-      range = this.callbacks.onSubmitted(readyText ?? text, segment);
+      range = this.callbacks.onSubmitted(initialDisplayText, segment);
     } catch (error) {
       // salvageTranscript() already treats a throwing host as a real scenario
       // (destroyed window, torn-down editor); this path has to survive it too.
@@ -397,9 +470,37 @@ export class VoiceInputController {
       let refinement: PendingRefinement;
       if (optimisticRefinement?.text === text) {
         refinement = optimisticRefinement;
+      } else if (this.pauseRefinementEnabled && frozen?.rawEndPrefix === text) {
+        this.discardRefinement(runId, optimisticRefinement, 'final_text_changed');
+        const resolvedResult: RefinementResult = {
+          accepted: true,
+          sourceSegmentIds: [segment.id],
+          basedOnText: text,
+          refinedText: frozen.cumulativeRefined,
+          elapsedMs: 0,
+        };
+        refinement = {
+          text,
+          deltaText: '',
+          frozenPrefixRefined: frozen.cumulativeRefined,
+          segmentIds: [segment.id],
+          startedAt: performance.now(),
+          settled: true,
+          result: resolvedResult,
+          promise: Promise.resolve({ result: resolvedResult }),
+        };
       } else {
         this.discardRefinement(runId, optimisticRefinement, 'final_text_changed');
-        refinement = this.startRefinementRequest(runId, text, [segment.id]);
+        const rawDelta = frozen ? sliceUnrefinedDelta(frozen.rawEndPrefix, text) : text;
+        const cleanDelta = frozen && rawDelta
+          ? stripLeadingJoinPunctuation(rawDelta, frozen.cumulativeRefined)
+          : (rawDelta ?? text);
+        refinement = this.startFinalRefinementRequest(runId, {
+          fullRawText: text,
+          deltaText: cleanDelta,
+          frozenPrefixRefined: frozen?.cumulativeRefined ?? '',
+          segmentIds: [segment.id],
+        });
       }
       this.setState('refining');
       void this.finishRefinement(runId, segment, range, refinement);
@@ -475,6 +576,14 @@ export class VoiceInputController {
 
     switch (event.type) {
       case 'connected':
+        if (
+          !this.sessionRotationInFlight
+          && !this.networkRecoveryInFlight
+          && this.sessionRotationCount === 0
+          && !this.everSawAsrSignal
+        ) {
+          this.sessionStartedAt = performance.now();
+        }
         this.logger.record({
           type: 'asr_connected',
           runId: this.runId,
@@ -564,6 +673,10 @@ export class VoiceInputController {
   // either succeed and continue, or fail in its own catch handler.
   private tryRecover(trigger: 'error' | 'disconnected'): boolean {
     if (typeof this.asr.recover !== 'function') return false;
+    if (this.sessionRotationInFlight) {
+      this.rotationTransportLost = true;
+      return true;
+    }
     if (this.networkRecoveryInFlight) return true;
     if (this.networkRecoveryAttempts >= ASR_NETWORK_RECOVERY_MAX_ATTEMPTS) return false;
     this.attemptNetworkRecovery(
@@ -575,13 +688,51 @@ export class VoiceInputController {
     return true;
   }
 
+  private unwindFrozenSegments(rawText: string): FrozenRefinedSegment | undefined {
+    let popped = false;
+    while (this.frozenSegments.length > 0) {
+      const top = this.frozenSegments[this.frozenSegments.length - 1];
+      if (sliceUnrefinedDelta(top.rawEndPrefix, rawText) !== null) {
+        break;
+      }
+      this.frozenSegments.pop();
+      popped = true;
+    }
+    const top = this.frozenSegments.at(-1);
+    if (popped) {
+      this.liveRefinementPreview = top
+        ? { basedOnText: top.rawEndPrefix, text: top.cumulativeRefined }
+        : undefined;
+    }
+    return top;
+  }
+
+  private composeFrozenWithRawTail(
+    frozen: FrozenRefinedSegment,
+    fullRaw: string,
+  ): string | undefined {
+    const rawTail = sliceUnrefinedDelta(frozen.rawEndPrefix, fullRaw);
+    if (rawTail === null) return undefined;
+    if (!rawTail) return frozen.cumulativeRefined;
+    const cleanTail = stripLeadingJoinPunctuation(rawTail, frozen.cumulativeRefined);
+    return joinRefinedSegments(frozen.cumulativeRefined, cleanTail, rawTail);
+  }
+
   private publishDraft(text: string, source: VoiceInputDraftSource): void {
     let normalized = text.trim();
     if (!normalized) return;
-    const preview = this.liveRefinementPreview;
     const rawText = normalizeSubmittedText(text);
+    this.unwindFrozenSegments(rawText);
+    const preview = this.liveRefinementPreview;
     if (preview && rawText.startsWith(preview.basedOnText)) {
-      normalized = preview.text + rawText.slice(preview.basedOnText.length);
+      const rawTail = rawText.slice(preview.basedOnText.length).trim();
+      normalized = rawTail
+        ? joinRefinedSegments(
+          preview.text,
+          stripLeadingJoinPunctuation(rawTail, preview.text),
+          rawTail,
+        )
+        : preview.text;
       source = 'refinement';
     }
     const reason: VoiceInputDraftReason = source === 'refinement'
@@ -637,7 +788,15 @@ export class VoiceInputController {
     // ASR text matches. If the provider corrects or extends the text, we
     // discard this request and refine the final transcript instead.
     if (!this.speculativeRefineLeavesFinalRequest('stop')) return undefined;
-    return this.startRefinementRequest(runId, text, [createVoiceInputId()]);
+    // Ultra-long unrefined text must be chunked by startFinalRefinementRequest
+    // rather than sent as one oversized speculative request.
+    if (text.length > this.maxRefineChunkChars) return undefined;
+    return this.startDeltaRefinementRequest(runId, {
+      fullRawText: text,
+      deltaText: text,
+      frozenPrefixRefined: '',
+      segmentIds: [createVoiceInputId()],
+    });
   }
 
   private maybeRefineDuringPause(): void {
@@ -645,21 +804,91 @@ export class VoiceInputController {
     const now = performance.now();
     if (now - this.lastSoundAt < 2_000 || now - this.lastTranscriptChangeAt < 2_000) return;
     if (this.pauseRefinement && !this.pauseRefinement.settled) return;
-    const text = normalizeSubmittedText(this.latestTranscript);
-    if (!hasAdditionalSentence(this.pauseRefinement?.text ?? '', text)) return;
+    const fullRaw = normalizeSubmittedText(this.latestTranscript);
+    if (!fullRaw || fullRaw === this.lastPauseAttemptRaw) return;
+    const frozen = this.unwindFrozenSegments(fullRaw);
+    const comparisonBase = fullRaw.startsWith(this.lastPauseAttemptRaw)
+      ? this.lastPauseAttemptRaw
+      : (frozen?.rawEndPrefix ?? '');
+    if (!hasAdditionalSentence(comparisonBase, fullRaw)) return;
+
+    const rawDelta = sliceUnrefinedDelta(frozen?.rawEndPrefix ?? '', fullRaw);
+    if (!rawDelta) return;
+    const cleanDelta = frozen
+      ? stripLeadingJoinPunctuation(rawDelta, frozen.cumulativeRefined)
+      : rawDelta;
+    if (!cleanDelta) return;
+
+    // Keep pause refinement requests bounded under maxRefineChunkChars so a
+    // long pause-less stretch never hits maxRefineOutputTokens.
+    let targetRawEnd = fullRaw;
+    let targetDelta = cleanDelta;
+    if (cleanDelta.length > this.maxRefineChunkChars) {
+      const firstChunk = splitLongDeltaForRefinement(cleanDelta, this.maxRefineChunkChars)[0];
+      if (!firstChunk) return;
+      const frozenLen = frozen?.rawEndPrefix.length ?? 0;
+      const chunkIdx = fullRaw.indexOf(firstChunk, frozenLen);
+      if (chunkIdx < 0) return;
+      targetDelta = firstChunk;
+      targetRawEnd = fullRaw.slice(0, chunkIdx + firstChunk.length).trim();
+      if (!targetRawEnd || targetRawEnd === this.lastPauseAttemptRaw) return;
+    }
+
     if (!this.speculativeRefineLeavesFinalRequest('pause')) return;
     const runId = this.runId;
-    const request = this.startRefinementRequest(runId, text, [createVoiceInputId()]);
+    const frozenPrefixRaw = frozen?.rawEndPrefix ?? '';
+    const frozenPrefixRefined = frozen?.cumulativeRefined ?? '';
+    const precedingRefinedText = frozenPrefixRefined
+      ? extractRecentRefinedContext(frozenPrefixRefined)
+      : undefined;
+    this.lastPauseAttemptRaw = targetRawEnd;
+    const request = this.startDeltaRefinementRequest(runId, {
+      fullRawText: targetRawEnd,
+      deltaText: targetDelta,
+      frozenPrefixRefined,
+      precedingRefinedText,
+      segmentIds: [createVoiceInputId()],
+    });
     this.pauseRefinement = request;
     void request.promise.then(({ result }) => {
-      if (runId !== this.runId || this.state !== 'listening' || this.currentRunCancelled) return;
-      if (this.pauseRefinement !== request || !result?.accepted || !result.refinedText) return;
-      if (normalizeSubmittedText(result.basedOnText) !== request.text) return;
-      // A newer ASR revision may correct the beginning. Never overlay a result
-      // on a different source; if only a suffix grew, keep that new suffix.
-      if (!normalizeSubmittedText(this.latestTranscript).startsWith(request.text)) return;
-      this.liveRefinementPreview = { basedOnText: request.text, text: result.refinedText };
-      this.publishDraft(this.latestTranscript, this.latestTranscriptSource);
+      if (runId !== this.runId || this.currentRunCancelled) return;
+      if (this.pauseRefinement !== request) return;
+      if (!result) return;
+      if (normalizeSubmittedText(result.basedOnText) !== targetRawEnd) return;
+      // Freeze the completed prefix whenever ASR has not backtracked past it.
+      const currentRaw = normalizeSubmittedText(this.latestTranscript);
+      if (!currentRaw.startsWith(targetRawEnd)) return;
+      if ((this.frozenSegments.at(-1)?.rawEndPrefix ?? '') !== frozenPrefixRaw) return;
+
+      if (result.accepted && result.refinedText) {
+        const refinedDelta = frozenPrefixRefined && result.refinedText.startsWith(frozenPrefixRefined)
+          ? result.refinedText.slice(frozenPrefixRefined.length).trim()
+          : result.refinedText;
+        this.frozenSegments.push({
+          rawEndPrefix: targetRawEnd,
+          rawDelta: targetDelta,
+          refinedDelta,
+          cumulativeRefined: result.refinedText,
+        });
+        if (this.state === 'listening') {
+          this.liveRefinementPreview = { basedOnText: targetRawEnd, text: result.refinedText };
+          this.publishDraft(this.latestTranscript, this.latestTranscriptSource);
+        }
+      } else if (result.rejectionReason === 'no_change' && frozenPrefixRefined) {
+        // The newly added sentence needed no edits; freeze it alongside the
+        // existing refined prefix so subsequent pauses only send newer text.
+        const cumulative = joinRefinedSegments(frozenPrefixRefined, targetDelta, targetDelta);
+        this.frozenSegments.push({
+          rawEndPrefix: targetRawEnd,
+          rawDelta: targetDelta,
+          refinedDelta: targetDelta,
+          cumulativeRefined: cumulative,
+        });
+        if (this.state === 'listening') {
+          this.liveRefinementPreview = { basedOnText: targetRawEnd, text: cumulative };
+          this.publishDraft(this.latestTranscript, this.latestTranscriptSource);
+        }
+      }
     });
   }
 
@@ -702,32 +931,177 @@ export class VoiceInputController {
     return false;
   }
 
-  private startRefinementRequest(runId: string, text: string, segmentIds: string[]): PendingRefinement {
+  private startDeltaRefinementRequest(
+    runId: string,
+    input: {
+      fullRawText: string;
+      deltaText: string;
+      frozenPrefixRefined: string;
+      precedingRefinedText?: string;
+      segmentIds: string[];
+    },
+  ): PendingRefinement {
     if (!this.refiner) throw new Error('Dictation refiner is not configured.');
     this.currentRefineBudget();
     this.refineRequestsStarted += 1;
     const refineStartedAt = performance.now();
-    this.logger.record({ type: 'refine_requested', runId, at: Date.now(), text });
+    this.logger.record({ type: 'refine_requested', runId, at: Date.now(), text: input.deltaText });
 
     const request: PendingRefinement = {
-      text,
-      segmentIds,
+      text: input.fullRawText,
+      deltaText: input.deltaText,
+      frozenPrefixRefined: input.frozenPrefixRefined,
+      segmentIds: input.segmentIds,
       startedAt: refineStartedAt,
       promise: Promise.resolve({}),
     };
-    request.promise = this.refiner.refine({
-      text,
+    const refineInput: Parameters<DictationRefiner['refine']>[0] = {
+      text: input.deltaText,
       runId,
-      segmentIds,
+      segmentIds: input.segmentIds,
+      ...(input.precedingRefinedText ? { precedingRefinedText: input.precedingRefinedText } : {}),
       onPartial: (partial) => {
-        if (partial.trim() && partial !== request.latestPreview) request.onProgress?.();
-        request.latestPreview = partial;
-        request.onPreview?.(partial);
+        const composedPreview = input.frozenPrefixRefined
+          ? joinRefinedSegments(input.frozenPrefixRefined, partial, input.deltaText)
+          : partial;
+        if (composedPreview.trim() && composedPreview !== request.latestPreview) request.onProgress?.();
+        request.latestPreview = composedPreview;
+        request.onPreview?.(composedPreview);
       },
-    }).then(
-      (result) => { request.settled = true; request.result = result; return { result }; },
+    };
+    request.promise = this.refiner.refine(refineInput).then(
+      (deltaResult) => {
+        const composed = composeDeltaRefinementResult(
+          deltaResult,
+          input.fullRawText,
+          input.deltaText,
+          input.frozenPrefixRefined,
+          input.segmentIds,
+        );
+        request.settled = true;
+        request.result = composed;
+        return { result: composed };
+      },
       (error: unknown) => { request.settled = true; return { error }; },
     );
+    return request;
+  }
+
+  private startFinalRefinementRequest(
+    runId: string,
+    input: {
+      fullRawText: string;
+      deltaText: string;
+      frozenPrefixRefined: string;
+      segmentIds: string[];
+    },
+  ): PendingRefinement {
+    if (!this.refiner) throw new Error('Dictation refiner is not configured.');
+    const rawChunks = splitLongDeltaForRefinement(input.deltaText, this.maxRefineChunkChars);
+    const budget = this.currentRefineBudget();
+    const maxAllowedChunks = budget
+      ? Math.max(1, budget.limit - budget.started)
+      : rawChunks.length;
+    const chunks = rawChunks.slice(0, maxAllowedChunks);
+    const unrefinedChunks = rawChunks.slice(maxAllowedChunks);
+    if (rawChunks.length <= 1) {
+      const singleDelta = chunks[0] ?? input.deltaText;
+      const precedingRefinedText = input.frozenPrefixRefined
+        ? extractRecentRefinedContext(input.frozenPrefixRefined)
+        : undefined;
+      return this.startDeltaRefinementRequest(runId, {
+        fullRawText: input.fullRawText,
+        deltaText: singleDelta,
+        frozenPrefixRefined: input.frozenPrefixRefined,
+        precedingRefinedText,
+        segmentIds: input.segmentIds,
+      });
+    }
+
+    const refineStartedAt = performance.now();
+    const request: PendingRefinement = {
+      text: input.fullRawText,
+      deltaText: input.deltaText,
+      frozenPrefixRefined: input.frozenPrefixRefined,
+      segmentIds: input.segmentIds,
+      startedAt: refineStartedAt,
+      promise: Promise.resolve({}),
+    };
+    const refiner = this.refiner;
+    request.promise = (async () => {
+      let accumulated = input.frozenPrefixRefined;
+      let anyAccepted = Boolean(input.frozenPrefixRefined);
+      let firstError: unknown;
+      for (const chunk of chunks) {
+        if (runId !== this.runId || this.currentRunCancelled || this.state === 'error') {
+          return { error: new Error('Refinement cancelled') };
+        }
+        this.currentRefineBudget();
+        this.refineRequestsStarted += 1;
+        this.logger.record({ type: 'refine_requested', runId, at: Date.now(), text: chunk });
+        const preceding = accumulated ? extractRecentRefinedContext(accumulated) : undefined;
+        try {
+          const chunkResult = await refiner.refine({
+            text: chunk,
+            runId,
+            segmentIds: input.segmentIds,
+            ...(preceding ? { precedingRefinedText: preceding } : {}),
+            onPartial: (partial) => {
+              const composedPreview = accumulated
+                ? joinRefinedSegments(accumulated, partial, chunk)
+                : partial;
+              if (composedPreview.trim() && composedPreview !== request.latestPreview) {
+                request.onProgress?.();
+              }
+              request.latestPreview = composedPreview;
+              request.onPreview?.(composedPreview);
+            },
+          });
+          if (chunkResult.accepted && chunkResult.refinedText) {
+            accumulated = accumulated
+              ? joinRefinedSegments(accumulated, chunkResult.refinedText, chunk)
+              : chunkResult.refinedText;
+            anyAccepted = true;
+          } else {
+            accumulated = accumulated
+              ? joinRefinedSegments(accumulated, chunk, chunk)
+              : chunk;
+          }
+          request.onProgress?.();
+        } catch (error) {
+          firstError ??= error;
+          // Preserve unrefined tail words rather than discarding earlier refined chunks.
+          accumulated = accumulated ? joinRefinedSegments(accumulated, chunk, chunk) : chunk;
+        }
+      }
+      for (const chunk of unrefinedChunks) {
+        accumulated = accumulated ? joinRefinedSegments(accumulated, chunk, chunk) : chunk;
+      }
+      if (!anyAccepted && firstError) {
+        request.settled = true;
+        return { error: firstError };
+      }
+      const changed = normalizeSubmittedText(accumulated) !== input.fullRawText;
+      const finalResult: RefinementResult = changed
+        ? {
+          accepted: true,
+          sourceSegmentIds: input.segmentIds,
+          basedOnText: input.fullRawText,
+          refinedText: accumulated,
+          elapsedMs: performance.now() - refineStartedAt,
+        }
+        : {
+          accepted: false,
+          sourceSegmentIds: input.segmentIds,
+          basedOnText: input.fullRawText,
+          refinedText: accumulated,
+          rejectionReason: 'no_change',
+          elapsedMs: performance.now() - refineStartedAt,
+        };
+      request.settled = true;
+      request.result = finalResult;
+      return { result: finalResult };
+    })();
     return request;
   }
 
@@ -978,7 +1352,9 @@ export class VoiceInputController {
       this.stopStallWatchdog();
       return;
     }
-    if (this.networkRecoveryInFlight) return;
+    if (this.networkRecoveryInFlight || this.sessionRotationInFlight) return;
+    this.maybeRotateSession();
+    if (this.sessionRotationInFlight) return;
     this.maybeRefineDuringPause();
 
     const wallMs = performance.now() - this.lastAsrSignalAt;
@@ -1001,6 +1377,97 @@ export class VoiceInputController {
         everSawSignal: this.everSawAsrSignal,
       });
     }
+  }
+
+  private maybeRotateSession(): void {
+    if (!this.sessionRotation || typeof this.asr.rotateSession !== 'function') return;
+    if (this.state !== 'listening' || this.sessionRotationInFlight || this.networkRecoveryInFlight) return;
+    const now = performance.now();
+    if (now < this.nextRotationRetryAt) return;
+
+    const dynamicMax = this.sessionRotation.getMaxSessionMs?.();
+    const validMax = typeof dynamicMax === 'number' && Number.isFinite(dynamicMax) && dynamicMax > 30_000
+      ? dynamicMax
+      : undefined;
+    const softAfterMs = this.sessionRotation.softRotateAfterMs
+      ?? (validMax ? Math.max(10_000, validMax - 30_000) : DEFAULT_SOFT_ROTATE_AFTER_MS);
+    const hardAfterMs = this.sessionRotation.hardRotateAfterMs
+      ?? (validMax ? Math.max(15_000, validMax - 15_000) : DEFAULT_HARD_ROTATE_AFTER_MS);
+    const pauseQuietMs = this.sessionRotation.pauseQuietMs ?? DEFAULT_ROTATE_PAUSE_QUIET_MS;
+
+    const sessionElapsedMs = now - this.sessionStartedAt;
+    if (sessionElapsedMs < softAfterMs) return;
+
+    if (sessionElapsedMs >= hardAfterMs) {
+      this.attemptSessionRotation('deadline', sessionElapsedMs);
+      return;
+    }
+
+    const isQuietPause = now - this.lastSoundAt >= pauseQuietMs
+      && now - this.lastTranscriptChangeAt >= pauseQuietMs;
+    if (isQuietPause) {
+      this.attemptSessionRotation('pause', sessionElapsedMs);
+    }
+  }
+
+  private attemptSessionRotation(reason: 'pause' | 'deadline', sessionElapsedMs: number): void {
+    const rotateSession = this.asr.rotateSession;
+    if (typeof rotateSession !== 'function') return;
+    const runId = this.runId;
+    this.sessionRotationInFlight = true;
+    this.rotationTransportLost = false;
+    const rotationCount = this.sessionRotationCount + 1;
+    const startedAt = performance.now();
+    this.logger.record({
+      type: 'asr_session_rotation_attempted',
+      runId,
+      at: Date.now(),
+      reason,
+      sessionElapsedMs: Math.round(sessionElapsedMs),
+      rotationCount,
+    });
+    void rotateSession.call(this.asr)
+      .then(() => {
+        if (runId !== this.runId) return;
+        this.rotationTransportLost = false;
+        this.sessionRotationCount = rotationCount;
+        this.sessionStartedAt = performance.now();
+        this.nextRotationRetryAt = 0;
+        this.lastAsrSignalAt = this.sessionStartedAt;
+        this.audioMsSinceLastSignal = 0;
+        this.voicedAudioMsSinceLastSignal = 0;
+        this.stallWarned = false;
+        this.logger.record({
+          type: 'asr_session_rotation_succeeded',
+          runId,
+          at: Date.now(),
+          elapsedMs: performance.now() - startedAt,
+          rotationCount,
+        });
+      })
+      .catch((error: unknown) => {
+        if (runId !== this.runId) return;
+        const message = error instanceof Error ? error.message : String(error);
+        this.nextRotationRetryAt = performance.now() + ROTATION_RETRY_BACKOFF_MS;
+        this.logger.record({
+          type: 'asr_session_rotation_failed',
+          runId,
+          at: Date.now(),
+          elapsedMs: performance.now() - startedAt,
+          reason: message,
+          rotationCount,
+        });
+      })
+      .finally(() => {
+        if (runId !== this.runId) return;
+        this.sessionRotationInFlight = false;
+        if (this.rotationTransportLost && this.state === 'listening') {
+          this.rotationTransportLost = false;
+          if (!this.tryRecover('disconnected')) {
+            this.fail('Voice input connection was interrupted. Please try again.', 'connection_interrupted');
+          }
+        }
+      });
   }
 
   private attemptNetworkRecovery(
@@ -1029,8 +1496,9 @@ export class VoiceInputController {
       .recover()
       .then(() => {
         if (runId !== this.runId) return;
-        // Reset stall counters so the next watchdog window starts fresh.
-        this.lastAsrSignalAt = performance.now();
+        // Reset session age & stall counters so the next watchdog window starts fresh.
+        this.sessionStartedAt = performance.now();
+        this.lastAsrSignalAt = this.sessionStartedAt;
         this.audioMsSinceLastSignal = 0;
         this.voicedAudioMsSinceLastSignal = 0;
         this.stallWarned = false;
@@ -1065,33 +1533,46 @@ export class VoiceInputController {
   }
 }
 
-function normalizeSubmittedText(text: string): string {
-  return text.replace(/\s+/g, ' ').trim();
+function composeDeltaRefinementResult(
+  deltaResult: RefinementResult,
+  fullRawText: string,
+  deltaText: string,
+  frozenPrefixRefined: string,
+  segmentIds: string[],
+): RefinementResult {
+  if (!frozenPrefixRefined) {
+    return deltaResult;
+  }
+  if (deltaResult.accepted && deltaResult.refinedText) {
+    return {
+      accepted: true,
+      sourceSegmentIds: segmentIds,
+      basedOnText: fullRawText,
+      refinedText: joinRefinedSegments(frozenPrefixRefined, deltaResult.refinedText, deltaText),
+      elapsedMs: deltaResult.elapsedMs,
+    };
+  }
+  if (deltaResult.rejectionReason === 'no_change') {
+    const combined = joinRefinedSegments(frozenPrefixRefined, deltaText, deltaText);
+    if (normalizeSubmittedText(combined) !== fullRawText) {
+      return {
+        accepted: true,
+        sourceSegmentIds: segmentIds,
+        basedOnText: fullRawText,
+        refinedText: combined,
+        elapsedMs: deltaResult.elapsedMs,
+      };
+    }
+  }
+  return {
+    ...deltaResult,
+    sourceSegmentIds: segmentIds,
+    basedOnText: fullRawText,
+  };
 }
 
-/**
- * True when the chunk's PCM16 RMS is loud enough to plausibly contain speech.
- * Used by the stall watchdog to distinguish "user is silent" from "user is
- * speaking but server is quiet": only voiced chunks count toward the warning
- * threshold, so a 30-second thinking pause never creates noisy diagnostics.
- *
- * Pure silence in a quiet room is RMS ~10-30; typing/AC/fan noise ~50-150;
- * normal speech ~800+. The threshold (300) sits in the gap between background
- * noise and soft speech — well below typical voice levels but high enough to
- * reject room hum.
- */
-function isChunkVoiced(chunk: ArrayBuffer): boolean {
-  if (chunk.byteLength < 2) return false;
-  const sampleCount = Math.floor(chunk.byteLength / 2);
-  if (sampleCount === 0) return false;
-  const samples = new Int16Array(chunk, 0, sampleCount);
-  let sumSquares = 0;
-  for (let i = 0; i < sampleCount; i += 1) {
-    const s = samples[i];
-    sumSquares += s * s;
-  }
-  const rms = Math.sqrt(sumSquares / sampleCount);
-  return rms >= ASR_VOICED_RMS_THRESHOLD;
+function normalizeSubmittedText(text: string): string {
+  return text.replace(/\s+/g, ' ').trim();
 }
 
 function createVoiceInputId(): string {

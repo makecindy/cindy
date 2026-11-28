@@ -61,6 +61,9 @@ const h = vi.hoisted(() => ({
   strategies: {} as Record<string, string>,
   apiMembers: [] as import('../apiKeyMembers.js').ApiKeyPoolMember[],
   apiAllowed: true,
+  apiAutoSwitch: true,
+  realApiHealth: false,
+  apiHealth: {} as Record<string, unknown>,
   copyOverrides: vi.fn(),
   storedUsage: new Map<string, object | null>(),
   mkdir: vi.fn(),
@@ -142,20 +145,50 @@ vi.mock('../apiKeyMembers.js', () => ({
   apiKeyPoolMembers: (provider: string) => h.apiMembers.filter(member => member.providerId === provider),
   hasApiKeyPoolWithMultipleMembers: () => h.apiMembers.some((member, index) =>
     h.apiMembers.slice(index + 1).some(other => other.providerId === member.providerId)),
-  apiKeyPoolAllowsAutoSwitch: () => true,
+  apiKeyPoolAllowsAutoSwitch: () => h.apiAutoSwitch,
   legacyApiKeyPoolBinding: () => undefined,
   poolDispatchOrder: (_provider: string, accounts: { id: string }[]) => h.apiMembers.length
     ? [...accounts].sort((a, b) => Number(h.apiMembers.some(member => member.id === b.id))
       - Number(h.apiMembers.some(member => member.id === a.id))) : accounts,
 }));
-vi.mock('../../provider-group/localOpenAiAccounts.js', () => ({
-  hasOpenAiGroupApiModel: (_id: string, model: string) => model === 'gpt-6',
-  isLocalOpenAiGroupAccountUsable: () => h.apiAllowed,
-  isOpenAiGroupAccountUnavailable: () => !h.apiAllowed,
-  openAiGroupAccountResult: () => ({ checks: [] }),
-  captureOpenAiGroupApiResponse: () => undefined,
-  settleOpenAiGroupAccountHealth: async () => {},
-}));
+// Keep existing allocator fixtures; the conversation regression below uses the
+// actual health observer and admission reader over an isolated in-memory store.
+vi.mock('../../maker-host/override-settings-file.js', async importOriginal => {
+  const actual = await importOriginal<typeof import('../../maker-host/override-settings-file.js')>();
+  return {
+    ...actual,
+    createOverrideSettingsFile: <T>(options: Parameters<typeof actual.createOverrideSettingsFile<T>>[0]) => {
+      if (options.label !== 'openai-account-health') return actual.createOverrideSettingsFile(options);
+      const read = () => options.normalize(h.apiHealth);
+      return {
+        read, invalidateIfChanged() {},
+        async updateAtomic(update: (state: { value: T }) => Partial<T> | null) {
+          const patch = update({ value: read() });
+          if (patch) h.apiHealth = { ...h.apiHealth, ...patch };
+          return read();
+        },
+      };
+    },
+  };
+});
+vi.mock('../../provider-group/localOpenAiAccounts.js', async importOriginal => {
+  const actual = await importOriginal<typeof import('../../provider-group/localOpenAiAccounts.js')>();
+  return {
+    ...actual,
+    hasOpenAiGroupApiModel: (...args: Parameters<typeof actual.hasOpenAiGroupApiModel>) =>
+      h.realApiHealth ? actual.hasOpenAiGroupApiModel(...args) : args[1] === 'gpt-6',
+    isLocalOpenAiGroupAccountUsable: (...args: Parameters<typeof actual.isLocalOpenAiGroupAccountUsable>) =>
+      h.realApiHealth ? actual.isLocalOpenAiGroupAccountUsable(...args) : h.apiAllowed,
+    isOpenAiGroupAccountUnavailable: (...args: Parameters<typeof actual.isOpenAiGroupAccountUnavailable>) =>
+      h.realApiHealth ? actual.isOpenAiGroupAccountUnavailable(...args) : !h.apiAllowed,
+    openAiGroupAccountResult: (...args: Parameters<typeof actual.openAiGroupAccountResult>) =>
+      h.realApiHealth ? actual.openAiGroupAccountResult(...args) : { checks: [] },
+    captureOpenAiGroupApiResponse: (...args: Parameters<typeof actual.captureOpenAiGroupApiResponse>) =>
+      h.realApiHealth ? actual.captureOpenAiGroupApiResponse(...args) : undefined,
+    settleOpenAiGroupAccountHealth: (...args: Parameters<typeof actual.settleOpenAiGroupAccountHealth>) =>
+      h.realApiHealth ? actual.settleOpenAiGroupAccountHealth(...args) : Promise.resolve(),
+  };
+});
 vi.mock('../../provider-group/coolingStore.js', () => ({
   readProviderGroupCooling: () => ({}),
   writeProviderGroupCooling: async () => undefined,
@@ -310,6 +343,7 @@ import {
   hasConnectedSubscriptionPool,
   hasCreatedOpenAiImageAuth,
   lastConfirmedSubscriptionModelsAt,
+  listSubscriptionPoolSources,
   subscriptionProviderAccountKeys,
   observeSubscriptionAccountUsage,
   pooledCodexResetTarget,
@@ -322,16 +356,23 @@ import { CodexResetAutoUse, DEFAULT_CODEX_RESET_AUTO_USE } from '../../usage/cod
 import { providerGroupMemberUsageState, providerGroupCodexUsageFromReads, providerGroupUsageSnapshot } from '../../provider-group/usage.js';
 import { readLegacySubscriptionQuota } from '../legacyQuota.js';
 import { withSubscriptionAccounts } from '../agent.js';
-import { getSessionSubscriptionAccount, registerSessionSubscriptionAccount } from '../session.js';
+import { getSessionSubscriptionAccount, registerSessionSubscriptionAccount, poolFailuresAfterOutput, isLocalAccountPoolTurn } from '../session.js';
+import { createModelGroupResolver } from '../../model-groups/resolver.js';
+import { applyRuntimeSetModelChange } from '../../maker-ipc/runtimeSetModel.js';
+import { clearSessionProvider, getSessionProvider, setSessionProvider } from '../../maker-host/session-provider-store.js';
 import { setCustomProviderKeyReader } from '../../maker-host/provider-route.js';
 import { prepareSubscriptionAccountForSend } from '../prepareSend.js';
-import { getActiveCatalogWithCodexModels } from '../../maker-host/active-catalog.js';
+import { getActiveCatalog, getActiveCatalogWithCodexModels, setActiveCatalog, setCustomProviders } from '../../maker-host/active-catalog.js';
 import { refreshCatalogDerivedModels } from '../../maker-host/catalog-to-descriptors.js';
 import type { SessionRowSnapshot } from '../../localDb/sessionDispatchSnapshot.js';
-import { canSwitchSubscriptionAccount, prepareSubscriptionAccountFailover, readSubscriptionAccountSwitch } from '../failover.js';
+import { canSwitchSubscriptionAccount, captureLocalAccountSwitchGuard, prepareSubscriptionAccountFailover, readSubscriptionAccountSwitch } from '../failover.js';
 import { UsageLimitAutoResume, USAGE_LIMIT_RESUME_BUFFER_MS } from '../../maker-ipc/usageLimitAutoResume.js';
 import { createProviderGroupDirectory } from '../../provider-group/directory.js';
 import { createProviderGroupRouter, type ProviderGroupPersistedCooling } from '../../provider-group/router.js';
+import { createAutomaticContinueEligibility } from '../../maker-ipc/automaticContinueEligibility.js';
+import { createOrcaTeamService, rebaseRestoredWorkerTerminal, type OrcaTeamServiceDeps, type OrcaWorkerRecordSnapshot, type WorkerTerminalTurnParams } from '../../maker-ipc/orcaTeamService.js';
+import { createProviderGroupHeldWorkerTerminals } from '../../provider-group/heldWorkerTerminals.js';
+import { createProviderGroupHeldRecovery } from '../../provider-group/heldTurnErrors.js';
 import { createProviderGroupService, type ProviderGroupSessionRow } from '../../provider-group/service.js';
 import type { ProviderGroupBinding } from '../../provider-group/bindings.js';
 import { isProviderShareAgentDeviceId } from '../../../shared/providerShare.js';
@@ -356,7 +397,7 @@ import { registerSharedAccountStopAll, sharedAccountHandoffProbe, sharedAccountR
 import { createContextOverflowRollover } from '../../maker-ipc/contextOverflowRollover.js';
 import { acceptSessionRuntimeMutation, applySessionRuntimeOverrideForStart, clearAllSessionRuntimeControlStates } from '../../maker-ipc/sessionRuntimeControl.js';
 import { AgentInputCoordinator, type AgentInputCoordinatorDeps } from '../../maker-ipc/agent-input-coordinator.js';
-import { providerGroupSwitchCause } from '../../provider-group/failurePolicy.js';
+import { mixedPoolRecoveryDisposition, providerGroupSwitchCause } from '../../provider-group/failurePolicy.js';
 import { DEVICE_LINK_CAPABILITY_RELIABLE_TRANSPORT, DeviceLinkClient, PROTOCOL_VERSION, REMOTE_AGENT_INVOKE_TIMEOUT_MS, providerShareGuestPeer, providerShareHostPeer, type InvokePayload, type Envelope } from '@cindy/device-link';
 import { createServer } from 'node:http';
 import { once } from 'node:events';
@@ -376,7 +417,7 @@ import {
 import { composeForkOriginHandoff, createAgentHandoffPendingRegistry, extractPlainText, prependHandoffToUserMessage, type HandoffSourceMessage } from '../../maker-ipc/agentHandoff.js';
 import { hostSessionIdFor } from '../../remote-agent/host/sessionIdentity.js';
 import { readAccountBinding } from '../store.js';
-import { BUNDLED_CATALOG, type ProviderView } from '@cindy/model-providers';
+import { BUNDLED_CATALOG, buildUserProvider, type ProviderView } from '@cindy/model-providers';
 import { resolveSubscriptionPoolProvider } from '../placement.js';
 import { createAccountCodexImageChannel, createCodexImageAuthAcquirer, setCodexImageAuthBinding } from '../../cindy-brain/codexImageAuthBinding.js';
 import { subscriptionPoolSources } from '../../menubar/collect.js';
@@ -386,6 +427,9 @@ let generation = 0;
 beforeEach(() => {
   h.apiMembers = [];
   h.apiAllowed = true;
+  h.apiAutoSwitch = true;
+  h.realApiHealth = false;
+  h.apiHealth = {};
   h.afterPoolWrite = undefined;
   h.owner = 'owner-a:' + ++generation;
   h.bound = true;
@@ -474,6 +518,369 @@ it('reserves one API key slot across local, paired and shared starts with live a
   } finally {
     setCustomProviderKeyReader(() => null);
   }
+});
+
+// Unit through the ordinary Session, account-health observer, pool read and
+// pre-send failover. Codex drops the upstream billing code from this terminal
+// error. Neither the panel nor the next dispatch should need a manual probe.
+it.each(['billing', 'partial-output', 'rate-limit', 'subscription'] as const)(
+  'records only the actual API member refusal before retry (%s)', async scenario => {
+    const model = 'gpt-6';
+    const connection = 'dialogue-health-key';
+    const task = 'dialogue-health-task';
+    const keyAccount = 'dialogue-key';
+    const billing = scenario === 'billing' || scenario === 'partial-output';
+    h.realApiHealth = true;
+    h.pools.openai = { strategy: 'order', accounts: [account('default')] };
+    h.apiMembers = [{ ...account(keyAccount), connectionId: connection, providerId: 'openai' }];
+    setCustomProviders([buildUserProvider({
+      id: connection, name: 'Fixture API', auth: { method: 'apiKey' },
+      runtimes: { codex: { baseUrl: 'https://api.openai.com/v1', wireProtocol: 'openai-responses',
+        models: [{ id: model, name: model }] } },
+    })]);
+    setCustomProviderKeyReader(id => id === connection ? 'synthetic-key' : null);
+    if (scenario === 'subscription') h.bindings.set('task:' + task, { providerId: 'openai', accountId: 'default' });
+    const history: HandoffSourceMessage[] = [
+      { role: 'user', content: 'Remember PINEAPPLE-42', createdAt: 1 },
+      { role: 'assistant', content: 'Prior step completed', createdAt: 2 },
+    ];
+    const row: AgentSwitchSessionRow = { id: task, agentKind: 'codex', model, providerId: 'openai',
+      status: 'active', remoteHostId: null, orcaRole: null, sdkSessionId: null, workingDir: '/work' };
+    const starts: StartSessionOptions[] = [];
+    const sent: Array<{ account: string; text: string }> = [];
+    const events: AgentEvent[] = [];
+    const terminal: AgentEvent = { type: 'error', source: 'codex', data: { isTerminal: true,
+      ...(scenario === 'rate-limit'
+        ? { errorStatus: 429, message: 'Too Many Requests', codexErrorInfo: 'rateLimitExceeded' }
+        : { codexErrorInfo: 'usageLimitExceeded', message: 'Quota exceeded. Check your plan and billing details.' }),
+    } };
+    const logger: Logger = { trace() {}, debug() {}, info() {}, warn() {}, error() {}, fatal() {}, child() { return logger; } };
+    const agent = withSubscriptionAccounts({ kind: 'codex', startSession: async (options: StartSessionOptions) => {
+      starts.push(options);
+      const first = starts.length === 1;
+      const queue: AgentEvent[] = [];
+      let wake: (() => void) | undefined;
+      let closed = false;
+      return { id: 'dialogue-native-' + starts.length, agentKind: 'codex', model,
+        setInteractionResolver() {}, abort: async () => {},
+        close: async () => { closed = true; wake?.(); },
+        send: async (input: { content: string }) => {
+          sent.push({ account: options[NATIVE_SUBSCRIPTION_ACCOUNT] ? 'subscription' : options.providerId!, text: input.content });
+          if (first) {
+            if (scenario === 'partial-output') queue.push({ type: 'text', source: 'codex', data: { text: 'Partial result' } });
+            queue.push(terminal);
+          } else queue.push({ type: 'done', source: 'codex', data: {} });
+          wake?.();
+        },
+        events: async function* () {
+          while (!closed) {
+            if (queue.length) yield queue.shift()!;
+            else await new Promise<void>(resolve => { wake = resolve; });
+          }
+        },
+      } as unknown as AgentSessionHandle;
+    } } as unknown as BaseAgent);
+    let live: Session | undefined;
+    let handoff = '';
+    const open = async () => {
+      const handle = await agent.startSession({ providerId: 'openai', model, sessionId: task, workingDir: '/work',
+        resumeSessionId: row.sdkSessionId ?? undefined } as StartSessionOptions);
+      row.sdkSessionId = handle.id;
+      live = new Session({ id: task, agentKind: 'codex', permissionMode: 'default', workDir: '/work',
+        handle, capabilities: {} as never, logger });
+      live.onEvent(event => {
+        events.push(event);
+        if (event.type === 'text') history.push({ role: 'assistant',
+          content: (event.data as { text: string }).text, createdAt: Date.now() });
+      });
+      return live;
+    };
+    try {
+      const panel = async () => (await readSubscriptionPool('openai')).accounts.find(member => member.id === keyAccount)!;
+      expect((await panel()).apiKey?.checks).toEqual([{ agent: 'codex' }]);
+      await (await open()).send('Continue remaining work');
+      await vi.waitFor(() => expect(events.some(event => event.type === 'error')).toBe(true));
+      expect(sent[0]?.account).toBe(scenario === 'subscription' ? 'subscription' : connection);
+      const checks = (await panel()).apiKey?.checks;
+      if (billing) {
+        expect(checks).toEqual([{ agent: 'codex', blocked: true,
+          result: { ok: false, code: 'QUOTA_EXCEEDED', billingCode: 'credit_balance_exhausted' } } ]);
+        expect(poolFailuresAfterOutput.has(terminal)).toBe(scenario === 'partial-output');
+        expect(events.find(event => event.type === 'error')?.data).toMatchObject(scenario === 'partial-output'
+          ? { message: 'Quota exceeded. Check your plan and billing details.' }
+          : { errorStatus: 429, sdkError: 'billing_error' });
+        expect(await prepareSubscriptionAccountFailover(task, {
+          readSession: async () => row, isRunning: () => live?.isTurnRunning() ?? false,
+          rebuild: async (_id, assertCurrent) => {
+            await relocateForFreshStart({
+              getSessionRow: async () => row, listMessagesForHandoff: async () => history,
+              applyAgentSwitchToDb: async (_id, patch) => { row.sdkSessionId = patch.sdkSessionId ?? null; },
+              setSessionProvider() {}, insertBoundaryMessage: async () => 'boundary',
+              setPendingHandoff: (_id, value) => { handoff = value; },
+              applyResumeFallbackAtomically: async () => {}, log: logger,
+            }, { sessionId: task, providerId: 'openai', agentDeviceId: null, assertCurrent });
+            await live?.close();
+          },
+        })).toBe(true);
+        expect(h.bindings.get('native:dialogue-native-1')?.accountId).toBe(keyAccount);
+        expect(h.bindings.get('task:' + task)?.accountId).toBe('default');
+        const retryText = prependHandoffToUserMessage('Continue remaining work', handoff);
+        if (typeof retryText !== 'string') throw new Error('Expected a plain-text retry');
+        await (await open()).send(retryText);
+        await vi.waitFor(() => expect(events.some(event => event.type === 'done')).toBe(true));
+        expect(starts[1]?.resumeSessionId).toBeUndefined();
+        expect(sent[1]?.account).toBe('subscription');
+        expect(sent[1]?.text).toContain('PINEAPPLE-42');
+        expect(sent[1]?.text).toContain('Continue remaining work');
+        if (scenario === 'partial-output') expect(sent[1]?.text).toContain('Partial result');
+        expect(sent).toHaveLength(2);
+      } else if (scenario === 'rate-limit') {
+        expect(checks).toEqual([{ agent: 'codex', result: { ok: false, code: 'RATE_LIMITED' } } ]);
+      } else {
+        expect(checks).toEqual([{ agent: 'codex' }]);
+      }
+    } finally {
+      await live?.close();
+      setCustomProviderKeyReader(() => null);
+      setCustomProviders([]);
+      h.realApiHealth = false;
+    }
+  },
+);
+
+// Unit through real Orca dispatch acceptance, Session, input coordinator,
+// allocator, group recovery and product terminal ownership. The vendor and DB
+// are fixtures; neither the subscription failure nor Key health is pre-set.
+it.each(['subscription-to-key', 'subscription-to-subscription', 'key-to-subscription',
+  'disabled', 'no-candidate', 'candidate-disappears', 'candidate-model-mismatch', 'tool-progress', 'migrated-binding'] as const)('continues one dispatched Orca Worker within its mixed pool (%s)', async scenario => {
+  const task = 'worker-pool-task';
+  const model = 'gpt-6';
+  const connection = 'worker-pool-key';
+  const keyAccount = 'worker-key';
+  const keyFirst = scenario === 'key-to-subscription';
+  const secondSubscription = scenario === 'subscription-to-subscription';
+  const shouldSwitch = !['disabled', 'no-candidate', 'candidate-disappears', 'candidate-model-mismatch'].includes(scenario);
+  h.realApiHealth = true;
+  h.apiAutoSwitch = scenario !== 'disabled';
+  h.pools.openai = { strategy: 'order', accounts: [account('default'), ...(secondSubscription ? [account('second')] : [])] };
+  h.apiMembers = [{ ...account(keyAccount), paused: secondSubscription || scenario === 'no-candidate', connectionId: connection, providerId: 'openai' }];
+  setCustomProviders([buildUserProvider({
+    id: connection, name: 'Fixture API', auth: { method: 'apiKey' },
+    runtimes: { codex: { baseUrl: 'https://api.openai.com/v1', wireProtocol: 'openai-responses', models: [{ id: scenario === 'candidate-model-mismatch' ? 'other-model' : model, name: model }] } },
+  })]);
+  setCustomProviderKeyReader(id => id === connection ? 'synthetic-key' : null);
+  if (!keyFirst) h.bindings.set('task:' + task, { providerId: 'openai', accountId: 'default' });
+  const row: AgentSwitchSessionRow & ProviderGroupSessionRow = { id: task, agentKind: 'codex', model, providerId: 'openai',
+    status: 'active', remoteHostId: null, agentDeviceId: null, orcaRole: 'worker', sdkSessionId: null, workingDir: '/work' };
+  const log: Logger = { trace() {}, debug() {}, info() {}, warn() {}, error() {}, fatal() {}, child() { return log; } };
+  const calls: { account: string; text: string }[] = [];
+  const history: HandoffSourceMessage[] = [];
+  const starts: StartSessionOptions[] = [];
+  let toolRuns = 0;
+  let delivered = false;
+  let live: Session | undefined;
+  let handoff: string | null = null;
+  let releaseFirst!: () => void;
+  const firstFailure = new Promise<void>(resolve => { releaseFirst = resolve; });
+  const agent = withSubscriptionAccounts({ kind: 'codex', startSession: async (options: StartSessionOptions) => {
+    starts.push(options);
+    const first = starts.length === 1;
+    let closed = false;
+    let wake: (() => void) | undefined;
+    const queue: AgentEvent[] = [];
+    return { id: 'worker-native-' + starts.length, agentKind: 'codex', model, setInteractionResolver() {}, abort: async () => {},
+      close: async () => { closed = true; wake?.(); },
+      send: async (input: { content: string }) => {
+        calls.push({ account: options[NATIVE_SUBSCRIPTION_ACCOUNT]?.configDir ?? options.providerId!, text: input.content });
+        if (first) {
+          void firstFailure.then(() => {
+            if (scenario === 'tool-progress') {
+              toolRuns++;
+              queue.push({ type: 'tool_use', source: 'codex', data: { toolUseId: 'fixture-tool', toolName: 'write', input: { path: 'artifact.txt' } } });
+              queue.push({ type: 'tool_result', source: 'codex', data: { toolUseIds: ['fixture-tool'], summary: 'artifact PINEAPPLE-42' } });
+              queue.push({ type: 'text', source: 'codex', data: { text: 'Tool already ran: artifact PINEAPPLE-42' } });
+            }
+            queue.push({ type: 'error', source: 'codex', data: { isTerminal: true, codexErrorInfo: 'usageLimitExceeded',
+              message: keyFirst ? 'Quota exceeded. Check your plan and billing details.' : "You've hit your usage limit",
+            } });
+            wake?.();
+          });
+        } else {
+          if (scenario === 'tool-progress' && !input.content.includes('[UI_ACTION_TRIGGER]')) toolRuns++;
+          queue.push({ type: 'done', source: 'codex', data: { result: 'Worker result' } });
+          wake?.();
+        }
+      },
+      events: async function* () { while (!closed) { if (queue.length) yield queue.shift()!; else await new Promise<void>(resolve => { wake = resolve; }); } },
+    } as unknown as AgentSessionHandle;
+  } } as unknown as BaseAgent);
+  const worker: OrcaWorkerRecordSnapshot = { id: 'worker', teamId: 'team', leadSessionId: 'lead', sessionId: task,
+    status: 'idle', label: 'fixture', role: 'Worker', focused: false, idleSince: null,
+    session: { title: 'Worker', agentKind: 'codex', model, effort: 'medium', permissionMode: 'default', fastMode: false } };
+  const reported = vi.fn(async () => ({ accepted: true }));
+  const terminalStatuses: string[] = [];
+  const team = createOrcaTeamService({
+    getWorkerLinkBySessionId: async () => ({ workerId: worker.id, teamId: worker.teamId, workerSessionId: task, leadSessionId: 'lead' }),
+    listWorkersByLead: async () => [worker], getLiveSession: () => live ?? null, resumeWorkerSession: async () => { await open(); },
+    getManualInterrupt: () => null, clearManualInterrupt() {}, updateWorkerStatus: async (_id, status) => { worker.status = status; terminalStatuses.push(status); },
+    broadcastOrcaWorkerChanged() {}, sendAutoBridgeToLead: reported,
+    dispatchWorkerMessage: async params => {
+      const item: import('../../../shared/agentInputQueue.js').AgentInputQueuedMessage = {
+        clientId: 'lead-dispatch', text: params.message, persistedContent: params.message, model, effort: 'medium', workingDir: '/work', permissionMode: 'default',
+        origin: { kind: 'orca', senderSessionId: 'lead', senderLabel: 'Lead' },
+        createOpts: { agentKind: 'codex', model, providerId: 'openai', workingDir: '/work', permissionMode: 'default', orcaRole: 'worker' },
+        chatMessage: { clientId: 'lead-dispatch', role: 'user', content: params.message, isStreaming: false, createdAt: new Date().toISOString() },
+      };
+      if (scenario === 'subscription-to-subscription') {
+        await params.onAccepted?.();
+        coordinator.enqueue(task, item);
+      } else {
+        const runtime = live ?? await open();
+        const sent = await runtime.send(params.message, { onAccepted: async () => {
+          history.push({ role: 'user', content: params.message, clientId: item.clientId, createdAt: Date.now() });
+          await params.onAccepted?.();
+          coordinator.rememberDirectWorkerInput(runtime, runtime.getTurnGeneration(), item, coordinator.getInputAbortSignal(task));
+        } });
+        expect(sent.accepted).toBe(true);
+      }
+      await vi.waitFor(() => expect(calls).toHaveLength(1));
+      await params.onAcceptedCommit?.();
+      return { ok: true, mode: 'dispatched', clientId: 'lead-dispatch', dispatchOutcome: { kind: 'session-dispatch', source: 'test', dispatched: true },
+        targetTitle: 'Worker', targetLastUserSendAt: null };
+    }, log,
+  } as Partial<OrcaTeamServiceDeps> as OrcaTeamServiceDeps);
+  const terminal = createProviderGroupHeldWorkerTerminals<WorkerTerminalTurnParams>({
+    ownerKey: () => h.owner, deliver: (_id, result, restored) => {
+      team.noteWorkerProductTerminal(result.capture);
+      void team.handleWorkerTerminalTurn(restored ? { ...result, capture: rebaseRestoredWorkerTerminal(result.capture, live) } : result);
+    },
+  });
+  const held = createProviderGroupHeldRecovery({ ownerKey: () => h.owner, terminals: terminal,
+    errors: { discard: (id, hold) => { coordinator.releaseProviderGroupSwitchHold(id, hold); }, release: (id, hold) => { coordinator.releaseProviderGroupSwitchHold(id, hold); } },
+    settleFailure() {},
+  });
+  const open = async () => {
+    const handle = await agent.startSession({ providerId: 'openai', model, sessionId: task, workingDir: '/work', orcaRole: 'worker',
+      resumeSessionId: row.sdkSessionId ?? undefined } as StartSessionOptions);
+    row.sdkSessionId = handle.id;
+    live = new Session({ id: task, agentKind: 'codex', permissionMode: 'default', workDir: '/work', handle, capabilities: {} as never, logger: log });
+    const incarnation = live;
+    incarnation.onStatusChange(status => {
+      if (status !== 'closed' || live !== incarnation) return;
+      live = undefined;
+      coordinator.onSessionClosed(task, { preserveInputBoundary: true,
+        preserveAutoResumeIntent: held.hasPendingContinuation(task), wakeQueuedInput: true });
+    });
+    live.onEvent(event => {
+      if (event.type === 'text' || event.type === 'tool_use' || event.type === 'tool_result') delivered = true;
+      if (event.type === 'text') history.push({ role: 'assistant', content: (event.data as { text: string }).text, createdAt: Date.now() });
+      if (event.type !== 'error' && event.type !== 'done') return;
+      const capture = team.captureWorkerTerminalTurn(task);
+      const { message, ...signals } = event.data as { message?: string; errorStatus?: number };
+      coordinator.onTurnEvent(task, event.type, message, signals, event);
+      const result: WorkerTerminalTurnParams = { sessionId: task, status: event.type, finalText: event.type === 'done' ? 'Worker result' : message ?? '', capture };
+      const hold = coordinator.getProviderGroupSwitchHoldId(task);
+      if (hold !== null) terminal.stash(task, hold, result);
+      else void team.handleWorkerTerminalTurn(result);
+    });
+    return live;
+  };
+  const tx = sharedAccountSendTransaction({
+    getSession: () => live, bootstrapSession: async () => ({ session: await open(), didInjectOrcaInstructions: false, didInjectProjectContext: false }),
+    prepareUnhealthySession: async () => {
+      if (calls.length === 0) return;
+      if (scenario === 'candidate-disappears') h.apiMembers[0].paused = true;
+      await prepareSubscriptionAccountFailover(task, {
+        readSession: async () => row, isRunning: () => live?.isTurnRunning() ?? false,
+        rebuild: async (_id, assertCurrent) => {
+          await relocateForFreshStart({ getSessionRow: async () => row, listMessagesForHandoff: async () => history,
+            applyAgentSwitchToDb: async (_id, patch) => { row.sdkSessionId = patch.sdkSessionId ?? null; },
+            setSessionProvider() {}, insertBoundaryMessage: async () => 'boundary', setPendingHandoff: (_id, text) => { handoff = text; },
+            applyResumeFallbackAtomically: async () => {}, log,
+          }, { sessionId: task, providerId: 'openai', agentDeviceId: null, assertCurrent });
+          await live?.close(); live = undefined;
+        },
+      });
+    },
+    peekPendingHandoff: async () => handoff, consumePendingHandoff: () => { handoff = null; },
+    createDbMessage: async (_id, message) => { if (message.role === 'user') history.push({ role: 'user', content: message.content, clientId: message.clientId, createdAt: Date.now() }); },
+  });
+  const eligibility = createAutomaticContinueEligibility({ ownerEpoch: () => h.owner, isPaused: () => false, readSession: async () => row,
+    isShared: () => false, goalOwnsRecovery: async () => false, readCompanion: async () => null, ownsCompanionInput: () => false });
+  const delayedResetTimer = vi.fn();
+  const reset = new UsageLimitAutoResume({ now: Date.now, random: () => 0, setTimer: delayedResetTimer, clearTimer() {},
+    isEligible: eligibility.usageLimit, resolveResetAt: async () => Date.now() + 3_600_000,
+    canSwitchAccount: id => canSwitchSubscriptionAccount(id, async () => row),
+    arm: (...args) => coordinator.armUsageLimitWait(...args), isCurrent: (...args) => coordinator.isUsageLimitWaitCurrent(...args),
+    cancel: (...args) => coordinator.cancelUsageLimitWait(...args), continueSession: (...args) => coordinator.continueAfterUsageLimitReset(...args), log: () => {},
+  });
+  const directory = createProviderGroupDirectory({ listLocalProviders: async () => [], localDeviceName: () => 'local',
+    listDevices: async () => [], readDeviceProviders: async () => [], listReceivedShares: () => [], isMobilePlatform: () => false, now: Date.now });
+  let staleGroupBinding: ProviderGroupBinding | null = scenario === 'migrated-binding'
+    ? { providerId: 'openai', memberKey: 'local', at: Date.now() } : null;
+  const service = createProviderGroupService({
+    router: createProviderGroupRouter({ directory, readGroup: () => null, listBindings: () => ({}), isTurnRunning: () => false, now: Date.now }),
+    directory, readGroup: () => null, readBinding: () => staleGroupBinding,
+    writeBinding: async (_id, binding) => { staleGroupBinding = binding ? { ...binding, groupDeviceId: binding.groupDeviceId ?? undefined, at: Date.now() } : null; }, isReleased: () => false, markReleased: async () => {},
+    isMigratedLocalAccountGroup: () => scenario === 'migrated-binding',
+    readSessionRow: async () => row, resolveImplicitProvider: async () => 'openai', persistRoute: async () => {}, hasAssistantHistory: async () => true,
+    isFailoverEligible: eligibility.providerGroup, leaseRecovery: (...args) => coordinator.leaseUsageLimitRecovery(...args),
+    isLeaseCurrent: (...args) => coordinator.isUsageLimitRecoveryLeaseCurrent(...args), rearmContinue: (...args) => coordinator.rearmUsageLimitWait(...args),
+    cancelContinue: (...args) => coordinator.cancelUsageLimitWait(...args), isTurnRunning: () => live?.isTurnRunning() ?? false,
+    continueSession: async (id, token, info, localMixedAccountSwitch) => {
+      expect(localMixedAccountSwitch).toBe(true);
+      const beforeDispatch = await captureLocalAccountSwitchGuard(id, async () => row);
+      return beforeDispatch ? coordinator.continueAfterProviderGroupRecovery(id, token, info, {
+        forceContinuationOnly: delivered, beforeDispatch,
+      }) : 'no-progress';
+    },
+    readAccountSwitch: id => readSubscriptionAccountSwitch(id, async () => row), isLocalAccountPoolTurn,
+    fallback: (...args) => { void reset.onTurnError(...args); }, readResetAt: () => null, now: Date.now, log,
+    switchAgentLocation: async () => { throw new Error('Pool recovery must not change computers'); },
+  });
+  const coordinator = new AgentInputCoordinator({
+    sendToAgent: async (...args) => (await tx.sendToAgentAccepted(...args)).outcome, steerToAgent: async () => {}, abortSession: async () => {},
+    touchUserSend: async () => {}, createUserMessage: vi.fn(), isTurnRunning: () => live?.isTurnRunning() ?? false, hasPendingInteraction: () => false,
+    getAgentKind: () => 'codex', getSdkSessionId: async () => row.sdkSessionId ?? undefined, getTurnGeneration: () => live?.getTurnGeneration() ?? null,
+    getTurnSessionIdentity: () => live ?? null, hasAssistantProgressAfter: async () => false, emitProjection() {}, persistTerminalSendError: vi.fn(),
+    providerGroupSwitchCandidate: (id, signals) => mixedPoolRecoveryDisposition(signals, delivered, isLocalAccountPoolTurn(id)) && service.mayHandleTurnError(id, signals) ? providerGroupSwitchCause(signals, 'run') : null,
+    isLocalMixedPoolWorkerInput: (id, item) => item.createOpts.orcaRole === 'worker' && isLocalAccountPoolTurn(id),
+    onUsageLimitedTurnError: (id, signals, _item, token) => {
+      const hold = coordinator.getProviderGroupSwitchHoldId(id);
+      void service.onTurnError(id, signals, token, {
+        beforeFallback: () => { if (hold !== null) held.release(id, hold); },
+        resumed: () => { if (hold !== null) held.discard(id, hold); },
+      }).finally(() => { if (hold !== null) held.release(id, hold); });
+    },
+    onDispatchedUserTurn: (id, item) => { if (item.autoResume) held.settleContinuation(id, true); },
+    onDiscardedQueuedMessage: (id, item) => { if (item.autoResume) held.settleContinuation(id, false, coordinator.restoreAutoResumeRecovery(id, item.clientId, null)); },
+    onUndispatchedUserTurn: (id, item) => { if (item.autoResume) held.settleContinuation(id, false, coordinator.restoreAutoResumeRecovery(id, item.clientId, null)); },
+  });
+  try {
+    expect(await eligibility.usageLimit(task)).toBe(false);
+    const dispatched = await team.dispatchWorkerTask({ targetSessionId: task, message: 'Run the tool now', dispatchMeta: { source: 'test', context: 'initial' } });
+    expect(dispatched.dispatched).toBe(true);
+    expect(worker.status).toBe('running');
+    releaseFirst();
+    await vi.waitFor(() => {
+      expect(reported).toHaveBeenCalledTimes(1);
+      expect(worker.status).toBe(shouldSwitch ? 'done' : 'error');
+    });
+    expect(terminalStatuses).toEqual(['running', shouldSwitch ? 'done' : 'error']);
+    expect(delayedResetTimer).not.toHaveBeenCalled();
+    expect(staleGroupBinding).toBeNull();
+    expect(history.filter(message => message.clientId === 'lead-dispatch')).toHaveLength(1);
+    expect(calls.map(call => call.account)).toEqual(shouldSwitch
+      ? [keyFirst ? connection : 'openai/default', keyFirst ? 'openai/default' : secondSubscription ? 'openai/second' : connection]
+      : ['openai/default']);
+    expect(h.bindings.get('native:worker-native-1')?.accountId).toBe(keyFirst ? keyAccount : 'default');
+    if (scenario === 'tool-progress') {
+      expect(toolRuns).toBe(1);
+      expect(calls[1]?.text).toContain('PINEAPPLE-42');
+      expect(calls[1]?.text).toContain('[UI_ACTION_TRIGGER]');
+    }
+  } finally { releaseFirst(); await live?.close(); reset.dispose(); coordinator.onSessionClosed(task);
+    setCustomProviders([]); setCustomProviderKeyReader(() => null); h.realApiHealth = false; }
 });
 
 // Unit: moving a member must not strand its local native history or transfer
@@ -882,7 +1289,7 @@ it.skipIf(process.env.CINDY_VERIFY_POOL_LOOPBACK !== '1').each([
     rearmContinue: (...args) => coordinator.rearmUsageLimitWait(...args),
     cancelContinue: (...args) => coordinator.cancelUsageLimitWait(...args),
     isTurnRunning: () => live?.isTurnRunning() ?? false, hasLiveSession: () => !!live,
-    continueSession: (...args) => coordinator.continueAfterProviderGroupRecovery(...args),
+    continueSession: (id, token, info) => coordinator.continueAfterProviderGroupRecovery(id, token, info),
     readAccountSwitch: async () => readSubscriptionAccountSwitch(task, async () => row(), invokeAccount),
     fallback: () => {}, readResetAt: () => null, now: Date.now, guestSwitch: offers, log,
     switchAgentLocation: async (_id, _route, options) => {
@@ -1950,6 +2357,28 @@ describe('owner-only subscription identity', () => {
     h.pools.openai.accounts[1].paused = true;
     expect(subscriptionProviderAccountKeys('openai')).toBeUndefined();
   });
+
+  // Unit regression: on cold start before readSubscriptionPool caches auth, a bound default slot
+  // without persisted lastConfirmedIdentity was filtered out as "unused", leaving length 1 so
+  // Smart Routing skipped warming and failed to flatten the two accounts.
+  it('keeps bound default slot on cold start and drops it only after cache confirms signed-out', async () => {
+    h.pools.openai = { strategy: 'expiring', accounts: [account('default'), account('second')] };
+    h.owner += ':cold-sources';
+    const cold = listSubscriptionPoolSources('openai');
+    expect(cold?.map(a => a.id)).toEqual(['default', 'second']);
+
+    h.read.mockImplementation(async (_provider: string, directory: string) => (
+      directory.endsWith('/second')
+        ? { authenticated: true, identity: 'second@example.test' }
+        : { authenticated: false }
+    ));
+    h.tokens.mockResolvedValue({ chatgptAccountId: 'ws-second', canDispatch: () => true });
+    await readSubscriptionPool('openai');
+    const warmed = listSubscriptionPoolSources('openai');
+    expect(warmed?.map(a => ({ id: a.id, label: a.label }))).toEqual([
+      { id: 'second', label: 'second@example.test' },
+    ]);
+  });
 });
 
 // Unit regression: merging two profiles of the same verified ChatGPT account counted it twice.
@@ -2191,7 +2620,7 @@ describe('duplicate subscription account profiles', () => {
     next?.release();
     h.bindings.set('task:b', { providerId: 'openai', accountId: 'other' });
     expect(await readSubscriptionSessionAccount('openai', { sessionId: 'b' }))
-      .toMatchObject({ state: 'bound', account: { number: 3 } });
+      .toMatchObject({ state: 'bound', account: { kind: 'subscription', number: 3 } });
     h.pools.openai!.accounts = h.pools.openai!.accounts.filter(a => a.id !== 'other');
     expect(readSubscriptionAccountBlocked('openai', 'duplicate', 'gpt-6')).toBe(false);
     h.tokens.mockResolvedValue({ canDispatch: () => false });
@@ -3405,7 +3834,7 @@ describe('paused account next-turn handoff', () => {
     const row = { providerId: alias, model, agentKind: 'codex', sdkSessionId: nativeSessionId, agentDeviceId: 'my-other-computer' };
     expect(await needsSubscriptionAccountHandoff('task', row)).toBe(true);
     expect(await readSubscriptionSessionAccount('openai', query, owner)).toMatchObject({
-      state: 'bound', routeProviderId: alias, replacementProviderId: 'openai', account: { blocked: true, switchAvailable: true },
+      state: 'bound', routeProviderId: alias, replacementProviderId: 'openai', account: { kind: 'apiKey', blocked: true, switchAvailable: true },
     });
     h.routeAllowed.mockImplementation((_model, _options, provider) => provider !== 'openai');
     expect(await needsSubscriptionAccountHandoff('task', row)).toBe(false);
@@ -3503,6 +3932,116 @@ describe('tasks using imported Codex connections', () => {
     expect(start).toHaveBeenCalledOnce();
   });
 
+  // Unit: a live mixed-pool session's writer check must use the reserved engine
+  // provider and account, not the logical task provider. Existing checks registered
+  // short synthetic account IDs and never started a mixed-pool engine.
+  // A self-created or legacy source can also own the pool; the actual writer
+  // may be a later native account rather than the source's original account.
+  it.each([
+    { providerId: 'openai', nativeId: null },
+    { providerId: 'openai-api', nativeId: 'default' },
+    { providerId: 'openai-sub-12345678', nativeId: 'second' },
+    { providerId: 'openai-old', nativeId: 'second' },
+    { providerId: 'openai-old', nativeId: 'first' },
+  ] as const)('keeps the live writer for a mixed pool owned by $providerId, native member $nativeId', async ({ providerId, nativeId }) => {
+    const connection = 'openai-api';
+    const native = nativeId !== null;
+    const expectedEngineProvider = providerId === 'openai-old' && nativeId === 'first' ? providerId : native ? 'openai' : connection;
+    const member = { ...account('writer-key'), connectionId: connection, providerId };
+    h.pools.openai = { strategy: 'order', accounts: [account('default')] };
+    if (providerId === 'openai-sub-12345678' || providerId === 'openai-old') {
+      h.pools.openai.accounts.push(account('first'), account('second'));
+      h.placement['openai:first'] = providerId;
+      h.placement['openai:second'] = providerId;
+      if (providerId === 'openai-sub-12345678') h.created[providerId] = { kind: 'openai', name: 'Mixed', account: 'first' };
+      else h.pools.openai.legacyCodexAccounts = { [providerId]: 'first' };
+    }
+    h.apiMembers = [member];
+    if (native) {
+      h.placement[`openai:${nativeId}`] = providerId;
+      h.bindings.set('task:mixed-writer', { providerId: 'openai', accountId: nativeId });
+    }
+    setCustomProviderKeyReader(id => id === connection ? 'synthetic-key' : null);
+    const setModel = vi.fn(async () => {});
+    const start = vi.fn<BaseAgent['startSession']>(async () => ({
+      id: 'writer-thread', close: async () => {}, send: async () => {}, setModel,
+    } as unknown as AgentSessionHandle));
+    const check = vi.fn<BaseAgent['requiresCodexThreadHostTransfer']>(async options => {
+      const running = start.mock.calls[0]![0];
+      return options.providerId !== running.providerId
+        || options[NATIVE_SUBSCRIPTION_ACCOUNT] !== running[NATIVE_SUBSCRIPTION_ACCOUNT];
+    });
+    const agent = withSubscriptionAccounts({ kind: 'codex', startSession: start,
+      requiresCodexThreadHostTransfer: check } as unknown as BaseAgent);
+    const previousCatalog = getActiveCatalog();
+    try {
+      if (providerId === 'openai-old') {
+        const legacy = buildUserProvider({ id: providerId, name: 'Legacy account',
+          auth: { method: 'oauth', native: 'codex' },
+          runtimes: { codex: { baseUrl: 'https://chatgpt.com/backend-api/codex', models: [] } },
+        }, { modelRegistry: BUNDLED_CATALOG.modelRegistry });
+        setActiveCatalog({ ...previousCatalog, providers: [...previousCatalog.providers, legacy] });
+      }
+      const view = (id: string) => ({ id, name: id, source: 'user', connected: true, agents: ['codex'],
+        routing: { codex: { enabled: true } }, models: { codex: [{ id: 'gpt-6', name: 'GPT', mode: 'chat' }] },
+      }) as unknown as ProviderView;
+      const resolver = createModelGroupResolver({
+        config: () => ({ routes: [{ id: 'mixed-route', name: 'Mixed route', strategy: 'order',
+          candidates: [providerId, 'other-provider'].map(id => ({ agentKind: 'codex', providerId: id, model: 'gpt-6' })) }] }),
+        views: async () => [view(providerId), view('other-provider')], agents: () => ['codex'],
+        harnessInstalled: async () => true, quotaWindows: async () => new Map(), scope: () => h.owner,
+        now: Date.now,
+        innerQuota: async source => {
+          if (source.providerId !== providerId) return null;
+          const summary = await readSubscriptionPoolScheduling(source.providerId, source.model, { agent: 'codex' });
+          return summary && { limited: summary.accounts === 0 && !summary.full,
+            urgency: summary.urgency, fiveHourTight: summary.fiveHourTight, headroom: summary.headroom ?? null };
+        },
+      });
+      const picked = await resolver.resolve({ selection: { type: 'route', id: 'mixed-route' } });
+      expect(picked).toMatchObject({ outcome: 'routed', route: { providerId, model: 'gpt-6' } });
+      if (picked.outcome !== 'routed') throw new Error('fixture must select the pool');
+      const selection = picked.route;
+      setSessionProvider('mixed-writer', selection.providerId);
+      const handle = await agent.startSession({ sessionId: 'mixed-writer', providerId: selection.providerId,
+        model: selection.model } as StartSessionOptions);
+      try {
+        const running = start.mock.calls[0]![0];
+        expect(running.providerId).toBe(expectedEngineProvider);
+        if (native) expect(running[NATIVE_SUBSCRIPTION_ACCOUNT]?.id).toMatch(new RegExp(`:openai:${nativeId}$`));
+        else expect(running[NATIVE_SUBSCRIPTION_ACCOUNT]).toBeUndefined();
+        const query = { sessionId: 'mixed-writer', providerId, model: 'gpt-6', threadId: handle.id };
+        await expect(agent.requiresCodexThreadHostTransfer(query)).resolves.toBe(false);
+        expect(check.mock.lastCall?.[0].providerId).toBe(running.providerId);
+        expect(check.mock.lastCall?.[0][NATIVE_SUBSCRIPTION_ACCOUNT]).toBe(running[NATIVE_SUBSCRIPTION_ACCOUNT]);
+        const closeSession = vi.fn(async () => {});
+        const modelSwitch = await applyRuntimeSetModelChange({
+          sessionId: 'mixed-writer', model: selection.model, providerId: selection.providerId,
+          maker: { getSession: () => ({ agentKind: 'codex', model: selection.model, codexProxyActive: true,
+            codexThreadModelProviderId: native ? 'cindy_openai' : 'cindy_gateway',
+            setModel: handle.setModel!, requiresModelSwitchRebuild: handle.requiresModelSwitchRebuild }),
+            listActiveSessions: () => [], closeSession },
+          requiresCodexThreadRelink: () => agent.requiresCodexThreadHostTransfer(query),
+        });
+        expect(modelSwitch.status).toBe('applied');
+        expect(closeSession).not.toHaveBeenCalled();
+        expect(setModel).toHaveBeenCalledExactlyOnceWith(selection.model, { providerId: running.providerId });
+        expect(getSessionProvider('mixed-writer')).toBe(selection.providerId);
+        await expect(agent.requiresCodexThreadHostTransfer({ ...query, providerId: 'independent-provider' })).resolves.toBe(true);
+        expect(check.mock.lastCall?.[0].providerId).toBe('independent-provider');
+        if (nativeId === 'second') {
+          // A former alias of this native member is not the route selected by this task.
+          h.pools.openai.legacyCodexAccounts = { ...h.pools.openai.legacyCodexAccounts, 'old-member-alias': nativeId };
+          await expect(agent.requiresCodexThreadHostTransfer({ ...query, providerId: 'old-member-alias' })).resolves.toBe(true);
+          expect(check.mock.lastCall?.[0].providerId).toBe('old-member-alias');
+        }
+      } finally { await handle.close(); }
+    } finally {
+      clearSessionProvider('mixed-writer'); setCustomProviderKeyReader(() => null);
+      if (providerId === 'openai-old') setActiveCatalog(previousCatalog);
+    }
+  });
+
   // Regression (2026-11-22): the writer check must compare against the host the session actually runs on,
   // which carries its subscription account; a route onto another account still compares without it.
   it('checks the thread writer host with the account the session runs on, only for that account', async () => {
@@ -3570,14 +4109,120 @@ describe('tasks using imported Codex connections', () => {
     } finally { release(); }
   });
 
-  it('forks old history through the same imported account and reconnects through its old login', async () => {
+  // Issue #13416: runtime lease accounts carry an owner-and-provider-prefixed id
+  // (`<owner>:openai:<accountId>`). Switching an existing Codex session from the `openai` pool
+  // to a named alias pointing to the same pool account must still recognize it as the same
+  // account instead of misclassifying it for `provider-thread-relink`.
+  it('matches the running account when registered with the runtime prefixed native account id', async () => {
+    h.pools.openai = {
+      strategy: 'rotate',
+      accounts: [account('default'), account('imported')],
+      legacyCodexAccounts: { 'openai-old': 'imported' },
+    };
+    h.created.cprov = { kind: 'openai', name: 'Named Pool', account: 'imported' };
+    h.placement['openai:imported'] = 'openai';
+    const check = vi.fn<BaseAgent['requiresCodexThreadHostTransfer']>(async () => false);
+    const agent = withSubscriptionAccounts({ kind: 'codex', requiresCodexThreadHostTransfer: check } as unknown as BaseAgent);
+    const running = {
+      id: 'local:openai:imported',
+      configDir: 'openai/imported',
+      assertCurrent() {},
+      readState: async () => ({ authenticated: true }),
+    };
+    const release = registerSessionSubscriptionAccount('lane', running, 'imported');
+    try {
+      await agent.requiresCodexThreadHostTransfer({ sessionId: 'lane', providerId: 'openai-old', model: 'gpt-5.4', threadId: 't' });
+      expect(check.mock.calls[0][0][NATIVE_SUBSCRIPTION_ACCOUNT]).toBe(running);
+      await agent.requiresCodexThreadHostTransfer({ sessionId: 'lane', providerId: 'cprov', model: 'gpt-5.4', threadId: 't' });
+      expect(check.mock.calls[1][0][NATIVE_SUBSCRIPTION_ACCOUNT]).toBe(running);
+      await agent.requiresCodexThreadHostTransfer({ sessionId: 'lane', providerId: 'openai', model: 'gpt-5.4', threadId: 't' });
+      expect(check.mock.calls[2][0][NATIVE_SUBSCRIPTION_ACCOUNT]).toBe(running);
+      h.pools.openai.legacyCodexAccounts = { 'openai-old': 'default' };
+      await agent.requiresCodexThreadHostTransfer({ sessionId: 'lane', providerId: 'openai-old', model: 'gpt-5.4', threadId: 't' });
+      expect(check.mock.calls[3][0][NATIVE_SUBSCRIPTION_ACCOUNT]).toBeUndefined();
+    } finally { release(); }
+  });
+
+  // #13416: a legacy alias after merge and the OpenAI pool must pass the same
+  // native route and account to the writer check and resume. Standard unit tier.
+  it.each([false, true])('keeps the validated account when resuming a merged legacy Codex alias (hosted=%s)', async deviceHosted => {
+    const model = 'gpt-5.4';
+    h.pools.openai = {
+      strategy: 'rotate',
+      accounts: [account('imported'), account('second')],
+      legacyCodexAccounts: { 'openai-old': 'imported', 'openai-other': 'second' },
+    };
+    h.bindings.set('task:lane', { providerId: 'openai', accountId: 'imported', via: 'openai' });
+    h.bindings.set('native:thread', { providerId: 'openai', accountId: 'imported', via: 'openai' });
+    const start = vi.fn<BaseAgent['startSession']>(async () =>
+      ({ id: 'thread', close: async () => {} } as AgentSessionHandle));
+    const check = vi.fn<BaseAgent['requiresCodexThreadHostTransfer']>(async () => false);
+    const agent = withSubscriptionAccounts({
+      kind: 'codex', startSession: start, requiresCodexThreadHostTransfer: check,
+    } as unknown as BaseAgent);
+    const options = { sessionId: 'lane', model, resumeSessionId: 'thread', workingDir: '.' };
+    const execution = deviceHosted ? { deviceHosted: { guest: false } as NonNullable<StartSessionOptions['deviceHosted']> } : {};
+    const expectedEngineRoute = deviceHosted ? 'openai-old' : 'openai';
+    const current = await agent.startSession({ ...options, ...execution, providerId: 'openai' });
+    try {
+      const running = start.mock.calls[0][0][NATIVE_SUBSCRIPTION_ACCOUNT];
+      expect(running?.configDir).toBe('openai/imported');
+      await agent.requiresCodexThreadHostTransfer({ ...options, threadId: 'thread', providerId: 'openai-old' });
+      expect(check).toHaveBeenLastCalledWith(expect.objectContaining({
+        providerId: expectedEngineRoute, [NATIVE_SUBSCRIPTION_ACCOUNT]: running,
+      }));
+      await agent.requiresCodexThreadHostTransfer({ ...options, threadId: 'thread', providerId: 'openai-other' });
+      expect(check.mock.lastCall?.[0].providerId).toBe('openai-other');
+      expect(check.mock.lastCall?.[0][NATIVE_SUBSCRIPTION_ACCOUNT]).toBeUndefined();
+    } finally {
+      await current.close();
+    }
+    const resumed = await agent.startSession({ ...options, ...execution, providerId: 'openai-old' });
+    try {
+      expect(resumed.id).toBe('thread');
+      expect(start.mock.calls[1][0]).toMatchObject({ providerId: expectedEngineRoute, resumeSessionId: 'thread' });
+      expect(start.mock.calls[1][0][NATIVE_SUBSCRIPTION_ACCOUNT]?.configDir).toBe('openai/imported');
+      expect(h.bindings.get('task:lane')?.accountId).toBe('imported');
+      expect(h.bindings.get('native:thread')?.accountId).toBe('imported');
+      if (!deviceHosted) {
+        setSessionProvider('lane', 'openai-old');
+        const query = { ...options, threadId: 'thread', providerId: 'openai' };
+        const boundAccount = start.mock.calls[1][0][NATIVE_SUBSCRIPTION_ACCOUNT];
+        await agent.requiresCodexThreadHostTransfer(query);
+        expect(check).toHaveBeenLastCalledWith(expect.objectContaining({
+          providerId: 'openai', [NATIVE_SUBSCRIPTION_ACCOUNT]: boundAccount,
+        }));
+        await agent.requiresCodexThreadHostTransfer({ ...query, providerId: 'openai-other' });
+        expect(check.mock.lastCall?.[0][NATIVE_SUBSCRIPTION_ACCOUNT]).toBeUndefined();
+        check.mockImplementationOnce(async () => {
+          setSessionProvider('lane', 'independent-provider');
+          return false;
+        });
+        check.mockImplementationOnce(async () => true);
+        await expect(agent.requiresCodexThreadHostTransfer(query)).resolves.toBe(true);
+        expect(check.mock.lastCall?.[0][NATIVE_SUBSCRIPTION_ACCOUNT]).toBeUndefined();
+      }
+    } finally {
+      clearSessionProvider('lane');
+      await resumed.close();
+    }
+    await expect(agent.startSession({ ...options, ...execution, providerId: 'openai-other' }))
+      .rejects.toThrow('The task subscription account changed');
+    expect(start).toHaveBeenCalledTimes(2);
+  });
+
+  // Hosted forks have a validated hostedForkAccess instead of deviceHosted.
+  // The fork route must keep that original legacy alias, unlike a local resume.
+  it.each([false, true])('forks old history through its saved legacy route (hosted=%s)', async hosted => {
     h.pools.openai = {
       strategy: 'rotate', accounts: [account('default'), account('imported')],
       legacyCodexAccounts: { 'openai-old': 'imported' },
     };
     const fork = vi.fn<(options: ForkSdkSessionOptions) => Promise<{ newSdkSessionId: string }>>(async () => ({ newSdkSessionId: 'forked' }));
     const agent = withSubscriptionAccounts({ kind: 'codex', forkSdkSession: fork } as unknown as BaseAgent);
-    await agent.forkSdkSession({ providerId: 'openai-old', sourceSdkSessionId: 'old-native' } as ForkSdkSessionOptions);
+    const hostedForkAccess = hosted ? { ownComputer: true, assertCurrent() {} } : undefined;
+    await agent.forkSdkSession({ providerId: 'openai-old', sourceSdkSessionId: 'old-native', upToMessageId: 'fixture-anchor', hostedForkAccess });
+    expect(fork.mock.calls[0][0]).toMatchObject({ providerId: 'openai-old', hostedForkAccess });
     expect(fork.mock.calls[0][0][NATIVE_SUBSCRIPTION_ACCOUNT]?.configDir).toBe('openai/imported');
     expect(h.bindings.get('native:forked')?.accountId).toBe('imported');
     await runSubscriptionAccountCommand({ action: 'login', providerId: 'openai', accountId: 'imported', loginKey: 'reconnect' });
@@ -5103,6 +5748,28 @@ describe('native account assignment on the executing computer', () => {
     h.bindings.set('task:stay', { providerId: 'anthropic', accountId: 'default' });
     await agent.startSession({ providerId: 'anthropic', sessionId: 'stay', model } as StartSessionOptions);
     expect((start.mock.calls[1] as unknown as [StartSessionOptions])[0][NATIVE_SUBSCRIPTION_ACCOUNT]?.configDir).toBe('anthropic/default');
+  });
+  // PR #13634 review (unit): a task Smart Routing put on one account source must start on that account.
+  // The pool used to replace a blocked binding with another account, which the route may have turned off,
+  // so the task ran on a source the preview and the route switch said it would not use. Minimal input: the
+  // routed account is blocked and another account could take the task.
+  it('never moves a Smart Routing account source to another pool account at start', async () => {
+    h.pools.anthropic!.accounts = [{ ...account('default'), limit: 4 }, { ...account('second'), limit: 4 }];
+    const model = 'claude-sonnet';
+    const failed = await acquireSubscriptionAccount('anthropic', model, []);
+    await failed!.bind(['task:routed']);
+    failed!.observeFailure({ sdkError: 'rate_limit' }, model, 'run');
+    failed!.release();
+    const start = vi.fn(async () => ({ id: 'native-new', events: async function* () {}, send: vi.fn(), close: vi.fn() }) as unknown as AgentSessionHandle);
+    const routedAccount = vi.fn(async (sessionId: string, providerId: string) =>
+      sessionId === 'routed' && providerId === 'anthropic' ? 'default' : undefined);
+    const agent = withSubscriptionAccounts({ kind: 'claude-code', startSession: start } as unknown as BaseAgent,
+      { getState: vi.fn(), routedAccount } as never);
+    await agent.startSession({ providerId: 'anthropic', sessionId: 'routed', model } as StartSessionOptions).catch(() => undefined);
+    expect(routedAccount).toHaveBeenCalledWith('routed', 'anthropic');
+    expect(start.mock.calls.map(call => (call as unknown as [StartSessionOptions])[0][NATIVE_SUBSCRIPTION_ACCOUNT]?.configDir))
+      .not.toContain('anthropic/second');
+    expect(h.bindings.get('task:routed')).toMatchObject({ accountId: 'default' });
   });
   // 2026-11-12 incident (unit): a same-account remote task stayed on its exhausted account although
   // its computer had another one; pre-send and immediate continuation only handled local tasks.
@@ -9637,5 +10304,105 @@ describe('local credential directory hardening scope', () => {
     await runSubscriptionAccountCommand({ action: 'login', providerId: 'anthropic', accountId: 'second', loginKey: 'login-cindy' });
     expect(h.hardenCredentialDir).toHaveBeenCalledExactlyOnceWith('anthropic/second', { writeMarkers: false });
     expect(h.mkdir).not.toHaveBeenCalled();
+  });
+});
+
+describe('pooled Claude shared quota throttling and live-window retention', () => {
+  // #13535 review, unit: the shared quota reader must recover after the failure delay
+  // when get_usage returns null on the first read or after the only window expires.
+  // The live-window retention test below already took the failure path on both versions.
+  it.each([false, true])('retries an empty Claude quota after backoff (expired prior window: %s)', async hasExpiredWindow => {
+    let now = 1_900_000_000_000;
+    const clock = vi.spyOn(Date, 'now').mockImplementation(() => now);
+    try {
+      h.pools.anthropic = { strategy: 'expiring', accounts: [account('default')] };
+      h.read.mockResolvedValue({ authenticated: true, identity: 'shared@example.test', plan: 'max' });
+      const quota = (used: number, resetsInSeconds: number) => ({
+        claudeUsage: {
+          source: 'oauth-endpoint',
+          updatedAt: now,
+          fiveHour: { utilization: used, resetsAt: now / 1000 + resetsInSeconds },
+          scoped: [],
+        },
+      });
+      if (hasExpiredWindow) {
+        h.usage.mockResolvedValueOnce(quota(25, 180));
+        await readSubscriptionPoolAccountUsages('anthropic');
+        now += 181_000;
+      }
+
+      h.usage.mockResolvedValueOnce({ claudeUsage: null });
+      const readQuota = async () => (await readSubscriptionPoolAccountUsages('anthropic'))?.[0]?.usage?.claudeUsage;
+      expect(await readQuota()).toBeNull();
+
+      h.usage.mockResolvedValue(quota(35, 3_600));
+      now += 60_000;
+      expect(await readQuota()).toBeNull();
+      now += 4 * 60_000;
+      expect(await readQuota()).toMatchObject({ fiveHour: { utilization: 35 } });
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  // Unit regression (server-channel-review.md & provider-sharing.md): shared-provider quota
+  // polling previously hit `claude -p get_usage` every 3m while idle and every 30s after a
+  // transient error (429 / stored-login error), and a null get_usage reply wiped live windows.
+  it('throttles idle passive reads, backs off failures, and preserves live windows when get_usage returns null', async () => {
+    let now = 1_900_000_000_000;
+    const clock = vi.spyOn(Date, 'now').mockImplementation(() => now);
+    try {
+      const reset = now / 1000 + 86_400;
+      h.pools.anthropic = { strategy: 'expiring', accounts: [account('default')] };
+      h.read.mockResolvedValue({ authenticated: true, identity: 'shared@example.test', plan: 'max' });
+      h.usage.mockResolvedValueOnce({
+        claudeUsage: {
+          source: 'oauth-endpoint',
+          updatedAt: now,
+          fiveHour: { utilization: 25, resetsAt: reset },
+          sevenDay: { utilization: 40, resetsAt: reset },
+          scoped: [],
+        },
+      });
+      const first = await readSubscriptionPoolAccountUsages('anthropic');
+      expect(first?.[0]?.usage?.claudeUsage?.fiveHour?.utilization).toBe(25);
+      expect(h.usage).toHaveBeenCalledTimes(1);
+
+      // Idle passive poll after 10m (< 30m idle TTL) reuses cached quota without spawning CLI.
+      now += 10 * 60_000;
+      const idle = await readSubscriptionPoolAccountUsages('anthropic');
+      expect(idle?.[0]?.usage?.claudeUsage?.fiveHour?.utilization).toBe(25);
+      expect(h.usage).toHaveBeenCalledTimes(1);
+
+      // After idle TTL (31m), an unrecognized/null get_usage reply preserves live windows and backs off 5m.
+      now += 21 * 60_000;
+      h.usage.mockResolvedValueOnce({ claudeUsage: null });
+      const preserved = await readSubscriptionPoolAccountUsages('anthropic');
+      expect(preserved?.[0]?.usage?.claudeUsage?.fiveHour?.utilization).toBe(25);
+      expect(h.usage).toHaveBeenCalledTimes(2);
+
+      // Polling 1m later (> 30s snapshot TTL, < 5m backoff) must not re-hit get_usage.
+      now += 60_000;
+      const backedOff = await readSubscriptionPoolAccountUsages('anthropic');
+      expect(backedOff?.[0]?.usage?.claudeUsage?.fiveHour?.utilization).toBe(25);
+      expect(h.usage).toHaveBeenCalledTimes(2);
+
+      // Once the 5m failure backoff expires, a fresh read retries and picks up updated quota.
+      now += 4 * 60_000 + 1_000;
+      h.usage.mockResolvedValueOnce({
+        claudeUsage: {
+          source: 'oauth-endpoint',
+          updatedAt: now,
+          fiveHour: { utilization: 35, resetsAt: reset },
+          sevenDay: { utilization: 45, resetsAt: reset },
+          scoped: [],
+        },
+      });
+      const recovered = await readSubscriptionPoolAccountUsages('anthropic');
+      expect(recovered?.[0]?.usage?.claudeUsage?.fiveHour?.utilization).toBe(35);
+      expect(h.usage).toHaveBeenCalledTimes(3);
+    } finally {
+      clock.mockRestore();
+    }
   });
 });

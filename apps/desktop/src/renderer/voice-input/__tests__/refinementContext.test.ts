@@ -62,6 +62,20 @@ describe('editor cursor context delivered to refinement', () => {
     const long = schema.node('doc', null, [schema.node('paragraph', null, [schema.text('前'.repeat(1500) + '后'.repeat(1500))])]);
     expect(buildEditorSelectionContext(long, { from: 1501, to: 1501 })).toEqual({ selectionBefore: '前'.repeat(1200), selectedText: '', selectionAfter: '后'.repeat(1200) });
   });
+
+  it('passes the full supported editor selection to explicit rewrite mode', () => {
+    const selected = '完整选区'.repeat(500);
+    const long = schema.node('doc', null, [schema.node('paragraph', null, [schema.text(selected)])]);
+    const range = { from: 1, to: 1 + selected.length };
+    expect(buildEditorSelectionContext(long, range).selectedText).toHaveLength(1_200);
+    expect(buildEditorSelectionContext(long, range, 'rewrite').selectedText).toBe(selected);
+    const paragraphs = schema.node('doc', null, [
+      schema.node('paragraph', null, [schema.text('first')]),
+      schema.node('paragraph', null, [schema.text('second')]),
+    ]);
+    expect(buildEditorSelectionContext(paragraphs, { from: 1, to: paragraphs.content.size - 1 }, 'rewrite').selectedText)
+      .toBe('first\nsecond');
+  });
 });
 
 describe('buildVoiceInputHistoryContext', () => {

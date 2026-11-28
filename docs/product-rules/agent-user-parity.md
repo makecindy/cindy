@@ -137,7 +137,9 @@ Cindy 应用更新（2026-11-11）：`list_tools({query:"更新 Cindy"})`（含�
 | 跟进收到的共享任务 | 在自己的任务里用复制的链接读取运行状态，查看最近或更早的记录（`get_shared_task_progress`） | 有（使用当前账号的单任务访客权限） | 从手机或另一台电脑发起时，由运行该任务的 Desktop 使用其已有共享连接读取。退出或撤权后，后续查询显示访问失败。 |
 | 给收到的共享任务发消息 | `send_to_session` 的 `target_session_id` 传完整复制任务链接或共享引用；仅发送显式 `message`，保留原任务执行配置 | 有（当前账号已加入的访客权限；需原 Host 支持可靠输入回执） | 复用官方共享任务连接，不转成房主设备的同账号远控。返回 `delivery_id`；带原 ID 再调用只对账，结果不明不重发。 |
 | 任务     | 改名、移动、标签                                            | 有   | 无               |
-| 任务     | 给当前任务新建 Cindy 托管 worktree（默认最新远端默认分支，拉取失败时返回 `base_fetched: false` 与提示；可指定基线分支 `base_ref`；绑定当前任务，随归档回收；不搬任务、不重启） | 有（`create_task_worktree`，2026-10-31；基线分支 2026-11-10；拉取失败提示 2026-11-21） | 无 |
+| 任务     | 给当前任务新建 Cindy 托管 worktree（默认最新远端默认分支，拉取失败时返回 `base_fetched: false` 与提示；可指定基线分支 `base_ref`，点名远端分支时先拉取这一条分支；绑定当前任务，随归档回收；不搬任务、不重启） | 有（`create_task_worktree`，2026-10-31；基线分支 2026-11-10；拉取失败提示 2026-11-21；远端基线先拉取 2026-11-28） | 无 |
+| 任务     | 新建任务时为它建独立 worktree 并指定基线（`send_to_session` create 的 `use_worktree` + `base_ref`，写法与 `create_task_worktree` 相同；省略时跟随来源任务所在 worktree 的分支，否则为远端默认分支）。回执返回实际基线 `worktree_base_ref`，远端基线没能拉取时带 `worktree_base_fetched: false` 与提示 | 有（2026-11-28；基线解析不了返回 `WORKTREE_UNAVAILABLE`，没开 `use_worktree` 返回 `INVALID_ARGS`，都不创建任务、不回退默认分支） | 有（2026-11-28，基线在任务所在电脑解析与拉取；经 `ordinaryCreateBaseRef: 1` 协商，目标电脑版本不支持时返回 `REMOTE_UNSUPPORTED`、不创建任务） |
+| 任务     | 新建任务后核对模型由哪台电脑提供（`send_to_session` create 回执的 `provider_device_id`，`local` 为任务所在电脑自己；是另一台电脑时 `provider_note` 说明是继承来源任务还是调用方点名） | 有（2026-11-28；SSH 任务不适用，不返回） | 有（2026-11-28；目标电脑版本较旧不回报时不返回该字段，`provider_note` 说明位置未知，不当作目标电脑自己的供应商） |
 | 任务     | 看输入队列；编辑 / 撤回 / 调序 / 插话待发消息；任务调用方沿原消息归属，声明 control 的插件可查看、撤回、调序、插话所有来源，编辑范围与任务界面一致，消费中与已消费项不可撤回 | 有（共用唯一队列；插件编辑标明实际插件来源，不沿用原文授权） | 无 |
 | 任务运行 | `control_session` 暂停 / 恢复 / 重试 / 压缩，Agent 与插件共用执行暂停锁、错误恢复与原生压缩事务；送达未知不自动重放 | 有（执行电脑本机；Claude 原 `/compact` 队列、Codex/Pi 原生手动压缩；不打断在途模型和工具） | 无 |
 | 任务     | 模型、推理强度、Fast                                       | 有   | 无               |
@@ -221,7 +223,12 @@ Worker 工具省略 working_dir 时保持继承 Lead 任务记录目录，不跟
   `apps/desktop/src/main/maker-ipc/sessionHandoffIpc.ts`。
 - 新建任务的 Agent 所在电脑：`packages/lizi-mcps/src/xdt-helper/send_to_session.ts` 的 `provider_device_id`（兼容 `agent_device_id`），
   host 侧解析见 `apps/desktop/src/main/maker-ipc/sendToSessionExecutionConfig.ts`
-  （`resolveSendToSessionCreateRoute`）。
+  （`resolveSendToSessionCreateRoute`）。创建回执里的实际位置由同一文件的 `providerLocationReceipt` 整形。
+- 新建任务的 worktree 基线：`send_to_session.ts` 的 `base_ref` 与 `create_task_worktree.ts` 的 `base_ref` 同名同义，
+  都落到 `apps/desktop/src/main/maker-ipc/handoffWorktree.ts` 的 `prepareHandoffWorktree`。入参判定见
+  `apps/desktop/src/main/worktree/sourceRef.ts`（`checkWorktreeBaseRefArg`），远端分支的拉取见
+  `apps/desktop/src/main/worktree/freshBase.ts`（`resolveExplicitSourceRef`）。本机、Desktop 接收端与 Node Host
+  共用这一条路径；项目级的默认基线分支尚未提供，工作分支不是默认分支的项目需要每次显式传 `base_ref`。
 - 新建任务的供应商连接与插件引擎由 `packages/lizi-mcps/src/xdt-helper/list_available_models.ts` 列出（内置 `providers` 与插件引擎 `plugin_engines`），
   `send_to_session.ts` 接收 `agent_kind`（含 `"acp"`）与 `provider_id`。`apps/desktop/src/main/mcp-integrations/mcp-providers.ts`
   在转发到其他电脑前检查该参数（内置 `provider_id` 仅限本机，插件引擎须为 `acp-plugin:…` 且不支持 `fast`），本机创建由 `resolveSendToSessionCreateRoute`、跨电脑创建由 `remoteSessionCreation.ts` 校验引擎、连接、模型与推理强度。

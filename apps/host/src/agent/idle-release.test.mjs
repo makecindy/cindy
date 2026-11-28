@@ -210,3 +210,25 @@ test('idle release: hidden, remote, other-computer, Orca and goal tasks keep the
   assert.deepEqual(f.released(), ['ordinary'], 'only the ordinary task releases its runtime');
   for (const id of kept) assert.ok(f.live.has(id), `${id} keeps its runtime`);
 });
+
+test('idle release: ACP tasks wait 90 idle minutes and stay warm while bound to an active PR-follow schedule', async t => {
+  const f = await fixture(t);
+  await f.task('acp-idle', 'acp');
+  await f.task('acp-pr-follow', 'acp');
+  f.db.prepare(`
+    INSERT INTO schedules (id, name, prompt, kind, cron_expr, timezone, recurring, manual, interval_ms, agent_kind, target_session_id, pr_trigger, status, created_at, updated_at)
+    VALUES ('sched-pr', 'PR #1', 'check PR', 'cron', '*/5 * * * *', 'UTC', 1, 0, 300000, 'acp', 'acp-pr-follow', '{"repo":"o/r","pr":1}', 'active', 0, 0)
+  `).run();
+  await f.release.scanNow();
+  f.pass(89 * MINUTE);
+  await f.release.scanNow();
+  assert.deepEqual(f.released(), [], 'ACP task is kept below 90 idle minutes');
+  f.pass(2 * MINUTE);
+  await f.release.scanNow();
+  assert.deepEqual(f.released(), ['acp-idle'], 'only the unscheduled ACP task releases after 90 idle minutes');
+  assert.ok(f.live.has('acp-pr-follow'), 'ACP task with an active PR-follow schedule stays warm');
+  f.db.prepare(`UPDATE schedules SET status = 'paused' WHERE id = 'sched-pr'`).run();
+  f.pass(91 * MINUTE);
+  await f.release.scanNow();
+  assert.deepEqual(f.released(), ['acp-idle', 'acp-pr-follow'], 'ACP task releases once its schedule pauses');
+});

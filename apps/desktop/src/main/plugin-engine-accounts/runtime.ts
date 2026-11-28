@@ -23,6 +23,8 @@ import {
 import { readTurnUsageResetAt } from '../goal-host/usageLimit.js';
 import { desktopMakerLogger } from '../maker-host/logger-adapter.js';
 import { AccountServiceUnreachableError } from '../subscription-accounts/accountServiceError.js';
+import { readAccountBeforeSend } from '../subscription-accounts/remotePreflight.js';
+import type { RemoteSubscriptionInvoke } from '../subscription-accounts/runtime.js';
 import {
   coolingScope,
   currentCooling,
@@ -51,11 +53,16 @@ import {
 import { DEFAULT_ROUTE_STRATEGY, type RouteStrategy } from '../../shared/routeStrategy.js';
 import {
   MAX_SUBSCRIPTION_ACCOUNTS,
+  SUBSCRIPTION_ACCOUNTS_CHANNEL,
+  isPluginEngineProviderIdShape,
+  parsePluginEngineSessionAccountView,
+  type PluginEngineSessionAccountView,
   type SubscriptionAccountCommand,
   type SubscriptionAccountView,
   type SubscriptionPoolView,
 } from '../../shared/subscriptionAccounts.js';
 import { PLUGIN_ENGINE_DEFAULT_MODEL } from '../../shared/pluginEngines.js';
+import { isProviderShareAgentDeviceId } from '../../shared/providerShare.js';
 import {
   newPluginEngineProviderSuffix,
   parsePluginEngineProviderId,
@@ -726,21 +733,221 @@ export function pluginEngineFailureCause(error: unknown): unknown {
  * Whether a task whose bound account cannot take its model right now can move to another account
  * of its provider (before-send switch and immediate continuation after a usage limit).
  */
-export async function canSwitchPluginEngineAccount(providerId: string, sessionId: string, model: string | undefined): Promise<boolean> {
+export async function canSwitchPluginEngineAccount(
+  providerId: string,
+  sessionId: string,
+  model: string | undefined,
+  options: { nativeSessionId?: string; accountId?: string } = {},
+): Promise<boolean> {
   const ref = parsePluginEngineProviderId(providerId);
   if (!ref || !pluginEngineHasAccountPool(ref.engineKey)) return false;
-  const binding = readPluginEngineBinding(ref.engineKey, `task:${sessionId}`);
+  const binding = options.accountId
+    ? { accountId: options.accountId }
+    : readPluginEngineTaskAccount(ref.engineKey, sessionId, options.nativeSessionId)
+      ?? (options.nativeSessionId ? { accountId: 'default' } : undefined);
   if (!binding) return false;
   const pool = effectivePluginEnginePool(ref.engineKey);
-  if (providerAccounts(pool, accountSuffix(pool, binding.accountId)).length < 2) return false;
+  const inPool = pool.accounts.some(account => account.id === binding.accountId);
+  const targetSuffix = inPool ? accountSuffix(pool, binding.accountId) : ref.suffix;
+  const minimum = inPool ? 2 : 1;
+  if (providerAccounts(pool, targetSuffix).length < minimum) return false;
   // A dry run selects exactly like a new assignment (limits, pauses, cooldowns) and reserves nothing.
   try {
-    await acquirePluginEngineAccount(pluginEngineProviderId(ref.engineKey, accountSuffix(pool, binding.accountId)),
+    await acquirePluginEngineAccount(pluginEngineProviderId(ref.engineKey, targetSuffix),
       model, [], { resuming: false, dryRun: true, exclude: new Set([binding.accountId]) });
     return true;
   } catch {
     return false;
   }
+}
+
+/**
+ * Read-only session account status for a plugin engine task (own-computer remote failover).
+ * Shares a short budget across stale status/usage refreshes and dry-run replacement admission,
+ * never exposes identities or paths, and fails closed when remote access is not explicitly granted.
+ */
+export async function readPluginEngineSessionAccount(
+  providerId: string,
+  keys: { sessionId?: string; nativeSessionId?: string; model?: string },
+  options: {
+    remote?: boolean;
+    ownComputer?: boolean;
+    isRemoteOffered?: (providerId: string, model: string | undefined) => boolean;
+  } = {},
+): Promise<PluginEngineSessionAccountView> {
+  const switchDeadline = performance.now() + SELECTION_READ_BUDGET_MS;
+  const state = currentRuntime();
+  assertOwner(state);
+  if (options.remote && !options.ownComputer) return { providerId, state: 'unavailable' };
+  const ref = resolvePluginEngineProvider(providerId);
+  if (!ref || !pluginEngineHasAccountPool(ref.engineKey)) return { providerId, state: 'legacy' };
+  const remoteRouteAdmits = () => {
+    if (!options.remote) return true;
+    if (!options.ownComputer || ref.suffix !== null || !options.isRemoteOffered) return false;
+    return options.isRemoteOffered(ref.providerId, keys.model);
+  };
+  if (!remoteRouteAdmits()) return { providerId, state: 'unavailable' };
+  const resolveBinding = () =>
+    readPluginEngineTaskAccount(ref.engineKey, keys.sessionId, keys.nativeSessionId)
+      ?? (keys.nativeSessionId ? { accountId: 'default' } : undefined);
+  const binding = resolveBinding();
+  if (!binding) return { providerId, state: 'unassigned' };
+
+  // A bound task starts in its account's current provider, even when its route still names the
+  // original provider. Probe that same group or the controller could retire a usable session for
+  // an account the next start cannot select.
+  const targetSuffixFor = (pool: PluginEnginePoolConfig, accountId: string) =>
+    pool.accounts.some(account => account.id === accountId) ? accountSuffix(pool, accountId) : ref.suffix;
+
+  const canReplace = async (accountId: string): Promise<boolean> => {
+    const latestPool = effectivePluginEnginePool(ref.engineKey);
+    const targetSuffix = targetSuffixFor(latestPool, accountId);
+    // A taken-out provider is not offered to other computers. Even if it has another account,
+    // the original remote route cannot authorize a handoff into that provider.
+    if (options.remote && targetSuffix !== ref.suffix) return false;
+    const targetAccounts = providerAccounts(latestPool, targetSuffix);
+    const minimum = targetAccounts.some(account => account.id === accountId) ? 2 : 1;
+    if (targetAccounts.length < minimum || !remoteRouteAdmits()) return false;
+    const budget = switchDeadline - performance.now();
+    if (budget <= 0) return false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const available = await Promise.race([
+        acquirePluginEngineAccount(pluginEngineProviderId(ref.engineKey, targetSuffix), keys.model, [], {
+          resuming: false, dryRun: true, exclude: new Set([accountId]),
+        }).then(() => true),
+        new Promise<false>(resolve => { timer = setTimeout(() => resolve(false), budget); }),
+      ]);
+      return available && remoteRouteAdmits();
+    } catch {
+      return false;
+    } finally {
+      if (timer !== undefined) clearTimeout(timer);
+      assertOwner(state);
+    }
+  };
+
+  const initialPool = effectivePluginEnginePool(ref.engineKey);
+  const initialAccount = initialPool.accounts.find(entry => entry.id === binding.accountId);
+  if (!initialAccount) {
+    const switchAvailable = await canReplace(binding.accountId);
+    if (!remoteRouteAdmits() || resolveBinding()?.accountId !== binding.accountId) {
+      return { providerId, state: 'unavailable' };
+    }
+    return { providerId, state: 'unavailable', switchAvailable };
+  }
+
+  // Match local pre-send refresh: when another candidate exists, refresh a stale bound account
+  // within the shared probe budget so an idle sign-out or updated quota is seen before sending.
+  const targetSuffix = targetSuffixFor(initialPool, initialAccount.id);
+  const hasOtherCandidate = providerAccounts(initialPool, targetSuffix).some(entry => entry.id !== initialAccount.id);
+  if (!initialAccount.paused && hasOtherCandidate) {
+    const budget = switchDeadline - performance.now();
+    if (budget > 0) {
+      const read = Promise.all([
+        readStatus(state, ref, initialAccount.id),
+        readUsage(state, ref, initialAccount.id),
+      ]).catch(() => {});
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        await Promise.race([read, new Promise<void>(resolve => { timer = setTimeout(resolve, budget); })]);
+      } finally {
+        if (timer !== undefined) clearTimeout(timer);
+      }
+      assertOwner(state);
+    }
+  }
+  if (!remoteRouteAdmits() || resolveBinding()?.accountId !== initialAccount.id) {
+    return { providerId, state: 'unavailable' };
+  }
+
+  const latestPool = effectivePluginEnginePool(ref.engineKey);
+  const latestAccount = latestPool.accounts.find(entry => entry.id === initialAccount.id);
+  if (!latestAccount) {
+    const switchAvailable = await canReplace(initialAccount.id);
+    if (!remoteRouteAdmits() || resolveBinding()?.accountId !== initialAccount.id) {
+      return { providerId, state: 'unavailable' };
+    }
+    return { providerId, state: 'unavailable', switchAvailable };
+  }
+
+  const blocked = !latestAccount.paused && readPluginEngineAccountBlocked(ref.engineKey, latestAccount.id, keys.model);
+  const switchAvailable = (blocked || latestAccount.paused) ? await canReplace(latestAccount.id) : undefined;
+  const finalPool = effectivePluginEnginePool(ref.engineKey);
+  const finalAccount = finalPool.accounts.find(entry => entry.id === latestAccount.id);
+  if (!remoteRouteAdmits() || !finalAccount || resolveBinding()?.accountId !== latestAccount.id) {
+    return { providerId, state: 'unavailable' };
+  }
+  const siblings = providerAccounts(finalPool, accountSuffix(finalPool, finalAccount.id));
+  const index = siblings.findIndex(entry => entry.id === finalAccount.id);
+  return {
+    providerId,
+    state: 'bound',
+    account: {
+      isDefault: finalAccount.id === 'default',
+      number: index >= 0 ? index + 1 : 1,
+      paused: finalAccount.paused,
+      status: accountStatus(state, ref.engineKey, finalAccount),
+      ...(blocked ? { blocked: true as const, switchAvailable } : finalAccount.paused ? { switchAvailable } : {}),
+    },
+  };
+}
+
+export interface RemotePluginEngineAccountState {
+  number: number;
+  /** Bound account was paused or removed on the executing computer (explicit routing decision). */
+  disabled: boolean;
+  /** Bound account cannot take this model now (cooling, quota exhausted, signed out). */
+  blocked: boolean;
+  /** Executing computer confirmed another account can take this route and model right now. */
+  available: boolean;
+}
+
+/**
+ * Controller-side query for a same-account remote Agent plugin engine task. Returns null on SSH,
+ * provider shares, older executing hosts (INVALID_PARAMS), or when no handoff state is reported.
+ */
+export async function readRemotePluginEngineAccount(
+  row: {
+    status?: string;
+    providerId?: string | null;
+    agentKind?: string | null;
+    sdkSessionId?: string | null;
+    agentDeviceId?: string | null;
+    remoteHostId?: string | null;
+    model?: string | null;
+  },
+  invokeRemote: RemoteSubscriptionInvoke,
+): Promise<RemotePluginEngineAccountState | null> {
+  if (row.status === 'deleted' || row.remoteHostId || !row.agentDeviceId
+    || isProviderShareAgentDeviceId(row.agentDeviceId) || row.agentKind !== 'acp'
+    || !row.sdkSessionId || !isPluginEngineProviderIdShape(row.providerId)) {
+    return null;
+  }
+  const state = currentRuntime();
+  const preSend = () => assertOwner(state);
+  const read = readAccountBeforeSend(invokeRemote, state);
+  const reply = await read(row.agentDeviceId, SUBSCRIPTION_ACCOUNTS_CHANNEL, [{
+    action: 'session',
+    providerId: row.providerId,
+    nativeSessionId: row.sdkSessionId,
+    ...(row.model ? { model: row.model } : {}),
+  }], { preSend });
+  assertOwner(state);
+  const view = reply.ok ? parsePluginEngineSessionAccountView(reply.result, row.providerId) : null;
+  if (!view) return null;
+  if (view.state === 'unavailable' && typeof view.switchAvailable === 'boolean') {
+    return { number: 0, disabled: true, blocked: false, available: view.switchAvailable };
+  }
+  if (view.state !== 'bound') return null;
+  const paused = view.account.paused;
+  const blocked = view.account.blocked === true;
+  return {
+    number: view.account.number,
+    disabled: paused,
+    blocked,
+    available: (paused || blocked) && view.account.switchAvailable === true,
+  };
 }
 
 /** The task's bound account, for the task's own displays (composer, model picker). */
@@ -771,6 +978,64 @@ export async function readPluginEngineTaskUsage(
   const usage = await readUsage(state, ref, binding.accountId);
   assertOwner(state);
   return usage;
+}
+
+/**
+ * Assignable signed-in account usage snapshots for a plugin engine provider (the engine itself or a
+ * taken-out account provider), for owner-enabled quota sharing. Returns `undefined` when
+ * `providerId` is not a plugin engine, `'unsupported'` when the live engine does not declare
+ * `reportsUsage`, and an empty list when unavailable or no serving account is admissible.
+ * Never returns account identities or credential paths.
+ */
+export async function readPluginEnginePoolAccountUsages(
+  providerId: string,
+): Promise<'unsupported' | Array<{ usage: GhostHarnessUsage | null }> | undefined> {
+  if (!parsePluginEngineProviderId(providerId)) return undefined;
+  const ref = resolvePluginEngineProvider(providerId);
+  if (!ref) return [];
+  const engine = liveEngine(ref.engineKey);
+  if (!engine || engine.availability.state === 'unavailable') return [];
+  if (!engine.reportsUsage) return 'unsupported';
+  if (!engine.accounts?.methods.length) {
+    const owner = activeOwnerScopeKey();
+    const usage = await readPluginHarnessUsage(ref.engineKey).catch(() => null);
+    if (activeOwnerScopeKey() !== owner || isAppSessionBoundaryPending()) {
+      throw new Error('Subscription account owner changed');
+    }
+    const latest = liveEngine(ref.engineKey);
+    if (!latest || latest.availability.state === 'unavailable') return [];
+    if (!latest.reportsUsage) return 'unsupported';
+    return [{ usage }];
+  }
+  const state = currentRuntime();
+  const pool = effectivePluginEnginePool(ref.engineKey);
+  const accounts = providerAccounts(pool, ref.suffix).filter((account) => !account.paused);
+  if (accounts.length === 0) return [];
+  const reads = await Promise.all(
+    accounts.map(async (account) => {
+      const [status, usage] = await Promise.all([
+        readStatus(state, ref, account.id).catch(() => undefined),
+        readUsage(state, ref, account.id).catch(() => null),
+      ]);
+      return { account, status, usage };
+    }),
+  );
+  assertOwner(state);
+  const latestRef = resolvePluginEngineProvider(providerId);
+  const latestEngine = latestRef && liveEngine(latestRef.engineKey);
+  if (!latestRef || !latestEngine || latestEngine.availability.state === 'unavailable') return [];
+  if (!latestEngine.reportsUsage) return 'unsupported';
+  const latestServing = new Map(
+    providerAccounts(effectivePluginEnginePool(latestRef.engineKey), latestRef.suffix)
+      .filter((account) => !account.paused)
+      .map((account) => [account.id, account]),
+  );
+  return reads
+    .filter((entry) => {
+      const latestAccount = latestServing.get(entry.account.id);
+      return latestAccount !== undefined && admissibleFor(entry.status, latestAccount);
+    })
+    .map((entry) => ({ usage: entry.usage }));
 }
 
 /* ── Views ─────────────────────────────────────────────────────────────── */

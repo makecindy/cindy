@@ -144,14 +144,28 @@
       "exceptionImage": "メッセージに画像があるため、画像を扱えるソースの中から選択",
       "exceptionImageFallback": "メッセージに画像がありますが、画像を扱えるソースがないため通常どおり選択",
       "exceptionHours": "この時間帯は「{{name}}」を使用",
-      "separator": "、"
+      "separator": "、",
+      "usageHabit": "普段の利用傾向から優先して選択",
+      "usageHabitQuota": "普段の利用傾向から優先して選択（残り {{left}}%）",
+      "autoBalance": "他のソースの余裕が少ないため負荷分散で選択",
+      "autoBalanceQuota": "クォータの余裕と負荷を考慮して優先（残り {{left}}%）",
+      "lessBusy": "他のソースが実行中のため空いているこちらを先に使用",
+      "paygFallback": "サブスクリプションや共有ソースが使えないため従量課金へフォールバック"
     },
     "picker": {
       "switched": "「{{name}}」でこのタスクを {{model}} に切り替えました",
       "switchUnavailable": "「{{name}}」には、今このタスクで使えるソースがありません。モデルは変更していません。",
-      "chooseUnavailable": "「{{name}}」には今使えるソースがないため、選択しませんでした。"
+      "chooseUnavailable": "「{{name}}」には今使えるソースがないため、選択しませんでした。",
+      "managedBy": "「{{name}}」で継続管理中",
+      "detach": "管理を解除",
+      "detached": "スマートルーティングの管理を解除しました。現在のモデルを維持します。"
     },
-    "anotherDevice": "別のコンピュータ"
+    "anotherDevice": "別のコンピュータ",
+    "sourceRouteTitle_one": "{{name}} · スマートルート（{{count}} 件のソース）",
+    "sourceRouteTitle_other": "{{name}} · スマートルート（{{count}} 件のソース）",
+    "switchOffer": {
+      "button": "{{model}} に切り替えて続行"
+    }
   },
   "pluginEngines": {
     "genericName": "プラグインエンジン",

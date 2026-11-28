@@ -28,6 +28,7 @@ import { GIT_REVIEW_REMOTE_OP_CHANNEL } from '@cindy/device-link';
 
 import { createLogger } from '../logger.js';
 import {
+  panelReadDeps,
   parseBranchDiffPayload,
   parseCommitDiffPayload,
   parseCommitsPayload,
@@ -113,7 +114,7 @@ async function dispatchRemoteOp(op: string, payload: unknown): Promise<unknown> 
     }
     case 'get': {
       const { sessionId, options } = parseReviewDataPayload(payload);
-      return withSessionReviewExecution(sessionId, () => readReviewData(sessionId, options));
+      return withSessionReviewExecution(sessionId, () => readReviewData(sessionId, options, panelReadDeps));
     }
     case 'summary': {
       const sessionId = parseSessionId(payload);
