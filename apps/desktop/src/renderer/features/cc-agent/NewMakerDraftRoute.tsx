@@ -26,7 +26,7 @@ import {
 } from '@/lib/pluginEngineSelection';
 import { bindModelGroupSession, buildModelGroupRouteNote, commitModelGroupDecision, modelGroupLocationNameFrom, useModelGroups, writeModelGroupRouteNote } from '../model-groups/modelGroupsClient';
 import { modelGroupOwnerDevice, resolveDraftModelGroup } from '../model-groups/draftModelGroupRouting';
-import { implicitSourceRouteSelection } from '../model-groups/sourceRouteProviders';
+import { implicitSourceRouteSelection, userDefinedModelGroupRoutes } from '../model-groups/sourceRouteProviders';
 import { bindDeviceModelGroupSession, commitDeviceModelGroupDecision, useDeviceModelGroups, useDevicesModelGroups, writeDeviceModelGroupRouteNote } from '../model-groups/remoteModelGroups';
 import { findModelGroupRoute, MODEL_GROUPS_DEFAULTS, type ModelGroupResolvedRoute, type ModelGroupSelection } from '../../../shared/modelGroups';
 import { isPluginEngineEffort, isPluginEnginePermissionModeId } from '../../../shared/pluginEngines';
@@ -161,6 +161,7 @@ import {
   patchVendorPrefs,
   patchVendorPrefsPreservingModelChoice,
   applySuggestedDefaultTuple,
+  applySilentSwitchDraftTuple,
   fallbackUnavailableVendor,
   markDefaultTupleCustomized,
   clearDefaultTupleTuningCustomization,
@@ -230,7 +231,7 @@ import {
   resolveDraftSessionProviderId,
   type DraftModelCalibrationResult,
 } from '@/lib/draftModelCalibration';
-import { resolveNewMakerDefaultTuple } from '@/lib/newMakerDefaultTuple';
+import { resolveNewMakerDefaultTuple, resolveSilentSwitchDraftTuple } from '@/lib/newMakerDefaultTuple';
 import { RUN_LOCATION_LOCAL } from '@/lib/providerRunLocation';
 import { useProviderBorrow } from '@/hooks/useProviderBorrow';
 import { showWorktreeError } from '@/lib/worktreeToast';
@@ -1593,9 +1594,9 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
   }, [rememberedModelGroupDeviceId, readDevicesModelGroups]);
   const modelGroupDevices = useMemo(
     () => modelGroupDeviceIds.flatMap((deviceId) => {
-      const config = devicesModelGroups.get(deviceId)?.config;
-      return config && config.routes.length > 0
-        ? [{ deviceId, name: deviceDisplayName(deviceId, undefined, selectableDevices), config }]
+      const routes = userDefinedModelGroupRoutes(devicesModelGroups.get(deviceId)?.config);
+      return routes.length > 0
+        ? [{ deviceId, name: deviceDisplayName(deviceId, undefined, selectableDevices), config: { routes } }]
         : [];
     }),
     [modelGroupDeviceIds, devicesModelGroups, selectableDevices],
@@ -1612,33 +1613,8 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
     }
     return findModelGroupRoute(modelGroupsConfig, selection) ? selection : null;
   }, [modelGroupsAllowed, activePluginModel, dlPluginEngine, modelGroupsConfig, draft.modelGroup, isDeviceLinkDraft, devicesModelGroups]);
-  /** 草稿选着的是合并了整个供应商的路由下的模型时，那条路由的名字；否则 null。 */
-  const activeSourceRouteName = activeModelGroup && !activeModelGroup.deviceId
-    ? modelGroupsConfig.routes.find((route) => route.id === activeModelGroup.id)?.parent?.name ?? null
-    : null;
   // 非 SSH 草稿、没在用插件模型或插件引擎时，供应商路由成员的模型一律经路由开任务(本机与被控端一致)。
   const sourceRoutesImplicit = modelGroupsAllowed && !effectiveRemoteHostId && !activePluginModel && !dlPluginEngine;
-  const modelGroupsProps = useMemo(
-    () => modelGroupsAllowed
-      ? {
-          config: modelGroupsConfig,
-          active: activeModelGroup,
-          onSelect: (selection: ModelGroupSelection) => {
-            setAlternateModel(null);
-            forgetRemoteAlternateDraftModel();
-            setRemoteDraftPluginEngine(null);
-            patchDraft({ modelGroup: selection, pluginModel: null, pluginEngine: null });
-          },
-          // 供应商路由下的模型在面板里是普通模型行：选中后只补记这条路由，不动刚选的模型、思考深度与 Fast(SSH 不合并跨机供应商路由)。
-          ...(effectiveRemoteHostId ? {} : { onAttach: (selection: ModelGroupSelection) => patchDraft({ modelGroup: selection }) }),
-          // 「管理模型组」只在本机：另一台电脑的模式在那台上改。
-          ...(isDeviceLinkDraft ? {} : { onManage: () => navigate('/settings?tab=model-groups') }),
-          ...(modelGroupDevices.length > 0 ? { devices: modelGroupDevices } : {}),
-          ...(modelGroupDeviceIds.length > 0 ? { readDevices: readDevicesModelGroups } : {}),
-        }
-      : undefined,
-    [modelGroupsAllowed, modelGroupsConfig, activeModelGroup, navigate, isDeviceLinkDraft, effectiveRemoteHostId, modelGroupDevices, modelGroupDeviceIds, readDevicesModelGroups, setAlternateModel, forgetRemoteAlternateDraftModel],
-  );
   /** 组里没有能用的模型时，说明里写用户原来选的那个模型的显示名。 */
   const localProvidersForGroupNoteRef = useRef<ReturnType<typeof useProviders>['providers']>([]);
   const keptModelNameForGroupNote = (agentKind: Parameters<typeof dbToMakerAgentKind>[0], providerId: string | null | undefined, model: string) =>
@@ -1920,6 +1896,30 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
     draft.remoteHostId,
     hasLegacyDefaultChoice,
   ]);
+  // A remembered Cindy AI model that the catalog moved to another engine (silentSwitch) follows
+  // it, including customized drafts; otherwise the saved route blocks task creation. Local only:
+  // remote targets resolve engines in their own catalog.
+  const savedDraftPrefs = savedDraft.lastByVendor[savedDraft.vendor];
+  const silentSwitchDraftTuple = useMemo(
+    () =>
+      catalogDeviceId || savedDraft.remoteHostId || savedDraft.pluginEngine || localAlternate
+        ? null
+        : resolveSilentSwitchDraftTuple({
+            providers: localProviders,
+            providersLoading: localProvidersLoading,
+            availableAgents: availableVendors,
+            availableAgentsLoaded,
+            vendor: savedDraft.vendor,
+            model: savedDraftPrefs.model,
+            providerId: savedDraftPrefs.providerId ?? null,
+          }),
+    [catalogDeviceId, savedDraft.remoteHostId, savedDraft.pluginEngine, localAlternate, localProviders,
+      localProvidersLoading, availableVendors, availableAgentsLoaded, savedDraft.vendor, savedDraftPrefs.model,
+      savedDraftPrefs.providerId],
+  );
+  useEffect(() => {
+    if (silentSwitchDraftTuple) applySilentSwitchDraftTuple(savedDraft.vendor, silentSwitchDraftTuple);
+  }, [silentSwitchDraftTuple, savedDraft.vendor]);
   const {
     providers: deviceProviders,
     loading: deviceProvidersLoading,
@@ -2974,6 +2974,56 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
     draftInitialModel,
     capabilityAgentKind,
   ]);
+  // 展示层与发送层(implicitSourceRouteSelection)使用同一条隐式供应商路由判据：
+  // 草稿里只记着某个成员(含分享/远端成员)但发送时会走未隐藏的合并路由时，横幅、按钮与选择器初始落点必须如实
+  // 显示「由路由决定」，不能先写「Agent 在某分享上运行」发出去又切走。
+  const implicitDraftSourceRoute = useMemo(
+    () =>
+      !activeModelGroup && sourceRoutesImplicit
+        ? implicitSourceRouteSelection(modelGroupsConfig, {
+            providerId: chatInitialProviderId,
+            model: draftInitialModel,
+            agentDeviceId: effectiveAgentDeviceId,
+          })
+        : null,
+    [
+      activeModelGroup,
+      sourceRoutesImplicit,
+      modelGroupsConfig,
+      chatInitialProviderId,
+      draftInitialModel,
+      effectiveAgentDeviceId,
+    ],
+  );
+  const effectiveDisplayModelGroup = activeModelGroup ?? implicitDraftSourceRoute;
+  /** 草稿选着的是合并了整个供应商的路由下的模型时，那条路由的名字；否则 null。 */
+  const activeSourceRouteName = effectiveDisplayModelGroup && !effectiveDisplayModelGroup.deviceId
+    ? modelGroupsConfig.routes.find((route) => route.id === effectiveDisplayModelGroup.id)?.parent?.name ?? null
+    : null;
+  const modelGroupsProps = useMemo(
+    () => modelGroupsAllowed
+      ? {
+          config: modelGroupsConfig,
+          active: effectiveDisplayModelGroup,
+          onSelect: (selection: ModelGroupSelection) => {
+            setAlternateModel(null);
+            forgetRemoteAlternateDraftModel();
+            setRemoteDraftPluginEngine(null);
+            patchDraft({ modelGroup: selection, pluginModel: null, pluginEngine: null });
+          },
+          // 供应商路由下的模型在面板里是普通模型行：选中后只补记这条路由，不动刚选的模型、思考深度与 Fast(SSH 不合并跨机供应商路由)。
+          ...(effectiveRemoteHostId ? {} : { onAttach: (selection: ModelGroupSelection) => patchDraft({ modelGroup: selection }) }),
+          // 「管理模型组」只在本机：另一台电脑的模式在那台上改。
+          ...(isDeviceLinkDraft ? {} : { onManage: () => navigate('/settings?tab=model-groups') }),
+          ...(modelGroupDevices.length > 0 ? { devices: modelGroupDevices } : {}),
+        }
+      : undefined,
+    [modelGroupsAllowed, modelGroupsConfig, effectiveDisplayModelGroup, navigate, isDeviceLinkDraft, effectiveRemoteHostId, modelGroupDevices, setAlternateModel, forgetRemoteAlternateDraftModel],
+  );
+
+  const readModelGroupDevices = deviceLinkModelGroupsId
+    ? deviceModelGroups.read
+    : modelGroupDeviceIds.length > 0 ? readDevicesModelGroups : undefined;
 
   // 选中来源与型号之后的**档位**:按目标目录里该型号的档位表解析 —— 用户上次在这台设备
   // 为**这个型号**选的档 > 该型号自己记住的档 > 本机偏好(该模型支持才保留)> 模型默认档。
@@ -3201,7 +3251,7 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
       : false;
 
   const localModelIssue = !usesDeviceCatalog && !effectiveRemoteHostId &&
-    !activePluginEngine && !activePluginModel && !activeModelGroup &&
+    !activePluginEngine && !activePluginModel && !effectiveDisplayModelGroup &&
     (savedDraft.defaultTupleSelectionCustomized || localAlternate)
     ? savedDraftModelIssue({
         agent: capabilityAgentKind,
@@ -4425,7 +4475,7 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
   // 模型面板里点那台电脑上的同一个模型一样，把 Agent 落到那台。每个供应商 + 位置只落一次，用户之后再改选
   // 以面板为准；那台下线时草稿由上面的落点校验退回本机。
   const runLocationProvider = !isDeviceLinkDraft && !effectiveRemoteHostId && !sshCodexDraftHostId
-    && !effectiveAgentDeviceId && !activePluginModel && !activeModelGroup && unifiedModelPanelActive && draft.vendor !== 'orca'
+    && !effectiveAgentDeviceId && !activePluginModel && !effectiveDisplayModelGroup && unifiedModelPanelActive && draft.vendor !== 'orca'
     ? localProviders.find((provider) => provider.id === effectiveSourceId) ?? null
     : null;
   const { location: runLocation, routeProviderId: runLocationProviderId, borrowedCatalog: runLocationCatalog } = useProviderBorrow(runLocationProvider);
@@ -8545,6 +8595,7 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
                     onUnifiedDraftSelect={handleUnifiedDraftSelect}
                     {...(pluginModelsProps ? { pluginModels: pluginModelsProps } : {})}
                     {...(modelGroupsProps ? { modelGroups: modelGroupsProps } : {})}
+                    readModelGroupDevices={readModelGroupDevices}
                     {...(pluginEnginesProps ? { pluginEngines: pluginEnginesProps } : {})}
                     selectedFavoriteUid={selectedFavoriteUid}
                     // 「+」菜单协同模式项:普通 Lead 的项目/对话 draft 都可用 —— eligible 由

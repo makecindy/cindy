@@ -549,5 +549,14 @@
   },
   "navigation": {
     "unavailable": "无法打开目标电脑的设置。请确认电脑在线并已允许远程控制；旧版本请先更新 Cindy。"
+  },
+  "qrLogin": {
+    "scanTitle": "扫码登录",
+    "hintLogin": "扫描电脑上 Cindy 显示的二维码",
+    "hintLoginDetail": "电脑上：侧栏头像旁的手机图标 →「远程控制 Cindy」",
+    "cameraNeeded": "需要使用相机来扫码",
+    "grantCamera": "允许使用相机",
+    "openSettings": "打开系统设置",
+    "wrongCode": "这不是 Cindy 的登录二维码"
   }
 }

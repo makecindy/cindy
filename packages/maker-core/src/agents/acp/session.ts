@@ -17,6 +17,7 @@ import {
   TurnPermissionPolicyUnsupportedError,
   type AgentSessionHandle,
   type SendOptions,
+  type StartSessionOptions,
   type TakeMcpToolResult,
   type TurnChangeCaptureHooks,
   type TurnPermissionPolicy,
@@ -160,8 +161,11 @@ export interface OpenAcpSessionOptions {
    * cannot connect to one of them is refused before any session is created.
    */
   requiredMcpServers?: readonly string[];
+  getOrcaRole?: () => unknown;
   /** ACP session id persisted for this task; resumes instead of creating a session. */
   resumeSessionId?: string;
+  /** Personal instructions to append to a supporting agent’s system prompt. */
+  personalSystemPrompt?: string;
   model?: string;
   /** An explicit companion model must be accepted by this engine before it can receive a message. */
   requireSelectedModel?: boolean;
@@ -185,13 +189,16 @@ export interface OpenAcpSessionOptions {
   readFile?: (path: string) => Promise<Uint8Array>;
   /**
    * Host text sent ahead of the first message of a newly created agent session (for example
-   * collaboration role instructions; plugin engines get no Cindy system prompt). A resumed or
+   * collaboration role instructions). A resumed or
    * loaded session already has it in its own history, so it is not repeated. A function receives
    * the names of the MCP servers the agent accepted, so the text only names tools it really has.
    */
   briefing?: string | ((acceptedMcpServers: readonly string[]) => string);
+  bindOrcaDiscoveryBriefing?: StartSessionOptions['bindPluginEngineOrcaDiscoveryBriefing'];
   /** Current companion settings for the first prompt after restoring the native conversation. */
   resumedCompanionBriefing?: string;
+  /** Host-owned one-shot role briefing, including when resuming after promotion. */
+  readRoleBriefing?: () => { text: string; onSent: () => void } | undefined;
   /** Lowercase Skill names discovered for this session, so host briefings defuse `/skill` mentions. */
   skillCommandNames?: readonly string[];
   /**
@@ -199,6 +206,8 @@ export interface OpenAcpSessionOptions {
    * text. Called only for such messages, so ordinary messages are sent without waiting on it.
    */
   expandSlashInvocation?: (text: string) => Promise<string | null>;
+  /** Host-local observation of usage for the confirmed model, separate from display notifications. */
+  observeContextWindow?: (modelId: string, size: number) => void;
   /** Optional callback to update the host MCP bridge's mutable vendorOptions in-place. */
   onVendorOptionsChange?: (patch: Record<string, unknown>) => void;
   /** Called once when the session's event stream ends (closed, or the endpoint exited). */
@@ -252,9 +261,16 @@ export class AcpAccountError extends Error {
 /** The agent cannot connect to an MCP server this task depends on. */
 export class AcpRequiredMcpUnavailableError extends Error {
   constructor(readonly servers: readonly string[]) {
-    super('[PLUGIN_ENGINE_REMOTE_TOOLS_UNSUPPORTED] This plugin engine cannot use the tools of the computer the task is on, so it cannot run this task from another computer.');
+    super(servers.includes('cindy_exec')
+      ? '[PLUGIN_ENGINE_REMOTE_TOOLS_UNSUPPORTED] This plugin engine cannot use the tools of the computer the task is on, so it cannot run this task from another computer.'
+      : 'This collaboration task cannot run without its Cindy tools: ' + servers.join(', ') + '. Retry after the tool bridge is available.');
     this.name = 'AcpRequiredMcpUnavailableError';
   }
+}
+
+/** Worker must be able to report to the Lead and use Orca queue tools. */
+export function requiredOrcaMcpServers(role: unknown): readonly string[] {
+  return role === 'worker' ? ['cindy_orca', 'orca_worker_bridge'] : role === 'lead' ? ['cindy_orca'] : [];
 }
 
 /** Retains the task's native identity when its conversation cannot be restored. */
@@ -374,6 +390,11 @@ export async function openAcpSession(opts: OpenAcpSessionOptions): Promise<AcpSe
       ? [...new Set((opts.extraDirs ?? []).map((dir) => dir.trim()).filter(Boolean))]
       : [];
     const additionalDirsField = additionalDirs.length > 0 ? { additionalDirectories: additionalDirs } : {};
+    const sessionParams: AcpRecord = { cwd: opts.cwd, mcpServers: accepted, ...additionalDirsField };
+    if (init.agentCapabilities.sessionCapabilities.systemPrompt && opts.personalSystemPrompt) {
+      sessionParams.systemPrompt = { mode: 'append', content: [{ type: 'text', text: opts.personalSystemPrompt }] };
+    }
+
     let sessionId: string;
     let outcome: AcpResumeOutcome;
     let result: AcpRecord;
@@ -386,7 +407,7 @@ export async function openAcpSession(opts: OpenAcpSessionOptions): Promise<AcpSe
       try {
         result = await connection.request(
           method,
-          { sessionId: opts.resumeSessionId, cwd: opts.cwd, mcpServers: accepted, ...additionalDirsField },
+          { ...sessionParams, sessionId: opts.resumeSessionId },
           { onResult: onSessionOpened },
         );
       } catch (error) {
@@ -401,7 +422,7 @@ export async function openAcpSession(opts: OpenAcpSessionOptions): Promise<AcpSe
       try {
         result = await connection.request(
           'session/new',
-          { cwd: opts.cwd, mcpServers: accepted, ...additionalDirsField },
+          sessionParams,
           { onResult: onSessionOpened },
         );
       } catch (error) {
@@ -635,6 +656,8 @@ export class AcpSession {
   private readonly onEnded: (() => void) | undefined;
   private readonly queue = createAsyncQueue<AgentEvent>();
   private readonly translator: AcpUpdateTranslator;
+  private readonly acceptedMcpServers: readonly string[];
+  private readonly getOrcaRole: OpenAcpSessionOptions['getOrcaRole'];
   private readonly pendingPrompts: QueuedPrompt[] = [];
   private readonly inFlightCaptures = new Map<string, Promise<void>>();
   private readonly reliablePathsByTool = new Map<string, Set<string>>();
@@ -643,6 +666,9 @@ export class AcpSession {
   private readonly rejectedTools = new Set<string>();
   /** Sent once, ahead of the first prompt of a new session. */
   private pendingBriefing: string | null;
+  private readOrcaDiscoveryBriefing: OpenAcpSessionOptions['readRoleBriefing'];
+  private pendingLegacyRoleBriefing: string | undefined;
+  private readRoleBriefing: OpenAcpSessionOptions['readRoleBriefing'];
   /** Slash-command names advertised by Skills or `available_commands_update`. */
   private readonly commandNames = new Set<string>();
   private sendChain: Promise<void> = Promise.resolve();
@@ -654,6 +680,7 @@ export class AcpSession {
   private reportedSelection = '';
   private contextSelectionPending = 0;
   private modelDetailsListener?: (details: AcpReportedModelDetails | undefined) => void;
+  private readonly observeContextWindow?: OpenAcpSessionOptions['observeContextWindow'];
   private readonly requireSelectedModel: boolean;
   private readonly initialModel: string;
   private capabilitiesSnapshot: Capabilities;
@@ -698,6 +725,8 @@ export class AcpSession {
     this.id = init.sessionId;
     this.resumeOutcome = init.resumeOutcome;
     this.droppedMcpServers = init.droppedMcpServers;
+    this.acceptedMcpServers = init.acceptedMcpServers;
+    this.getOrcaRole = init.options.getOrcaRole;
     this.configOptions = init.configOptions;
     this.rememberNonPlanMode();
     this.requireSelectedModel = init.options.requireSelectedModel === true;
@@ -710,6 +739,7 @@ export class AcpSession {
     this.expandSlashInvocation = this.reviewMode ? undefined : init.options.expandSlashInvocation;
     this.cancelGraceMs = init.options.cancelGraceMs ?? DEFAULT_CANCEL_GRACE_MS;
     this.onVendorOptionsChange = init.options.onVendorOptionsChange;
+    this.observeContextWindow = init.options.observeContextWindow;
     this.recoverVerification = init.options.recoverVerification;
     this.onEnded = init.options.onEnded;
     this.now = init.options.now ?? Date.now;
@@ -718,6 +748,12 @@ export class AcpSession {
       ? ''
       : init.resumeOutcome === 'new' ? init.briefing : init.options.resumedCompanionBriefing;
     this.pendingBriefing = briefing?.trim() ? briefing : null;
+    if (!this.getOrcaRole?.()) this.readOrcaDiscoveryBriefing = init.options.bindOrcaDiscoveryBriefing?.({
+      nativeId: init.sessionId,
+      fresh: init.resumeOutcome === 'new',
+      hasOrca: init.acceptedMcpServers.includes('cindy_orca'),
+    });
+    this.readRoleBriefing = init.options.readRoleBriefing;
     for (const name of init.options.skillCommandNames ?? []) {
       const trimmed = name.trim().replace(/^\/+/, '').toLowerCase();
       if (trimmed) this.commandNames.add(trimmed);
@@ -845,7 +881,13 @@ export class AcpSession {
    * run as before.
    */
   validateSendOptions(opts: SendOptions): void {
+    this.assertOrcaTools();
     this.turnGate(opts);
+  }
+
+  private assertOrcaTools(): void {
+    const missing = requiredOrcaMcpServers(this.getOrcaRole?.()).filter((name) => !this.acceptedMcpServers.includes(name));
+    if (missing.length > 0) throw new AcpRequiredMcpUnavailableError(missing);
   }
 
   private turnGate(opts: SendOptions | undefined): TurnGate | null {
@@ -866,6 +908,7 @@ export class AcpSession {
   /** Starts a turn, or queues it behind the running one (ACP allows one prompt per session). */
   async send(message: UserMessage, opts?: SendOptions): Promise<void> {
     if (this.ended || this.closing) throw new Error('ACP session is closed');
+    this.assertOrcaTools();
     const gate = this.turnGate(opts);
     // Attachments are read asynchronously; chain conversions so turns keep the order they were sent in.
     const generation = this.stopGeneration;
@@ -878,39 +921,7 @@ export class AcpSession {
       if (this.ended || this.closing) throw new Error('ACP session is closed');
       // Stop also discards messages that were still being prepared, like queued ones.
       if (generation !== this.stopGeneration) return;
-      const firstText = prompt.find((block): block is Extract<AcpContentBlock, { type: 'text' }> => block.type === 'text')?.text ?? '';
-      if (!isLeadingSlashCommand(firstText)) {
-        const hostParts: string[] = [];
-        if (this.pendingBriefing) {
-          hostParts.push(this.pendingBriefing);
-          this.pendingBriefing = null;
-        }
-        if (!this.reviewMode) {
-          if (this.initialDirectoryBriefingPending) {
-            const dirNote = formatPluginEngineDirectoryGrants(this.extraDirs, this.writableDirs, this.libraryRoot);
-            if (dirNote) hostParts.push(dirNote);
-            this.initialDirectoryBriefingPending = false;
-            this.directoryGrantsDirty = false;
-          } else if (this.directoryGrantsDirty) {
-            hostParts.push(formatPluginEngineDirectoryGrantsUpdate(this.extraDirs, this.writableDirs, this.libraryRoot));
-            this.directoryGrantsDirty = false;
-          }
-        }
-        const hostPrefix = hostParts.filter((part) => part.trim()).join('\n\n');
-        if (hostPrefix) {
-          prompt.unshift({ type: 'text', text: defusePluginEngineSlashMentions(hostPrefix, this.commandNames) });
-        }
-      }
-      if (!this.reviewMode && this.libraryRoot !== undefined) {
-        const promptText = prompt
-          .filter((block): block is Extract<AcpContentBlock, { type: 'text' }> => block.type === 'text')
-          .map((block) => block.text)
-          .join('\n');
-        const libCtx = libraryNativeReadContext(this.libraryRoot, this.extraDirs, promptText);
-        if (libCtx) {
-          prompt.push({ type: 'text', text: defusePluginEngineSlashMentions(libCtx, this.commandNames) });
-        }
-      }
+      this.assertOrcaTools();
       this.pendingPrompts.push({ blocks: prompt, gate });
       this.pump();
     });
@@ -945,6 +956,11 @@ export class AcpSession {
     if (this.ended || this.closing || this.connection.closed) throw new Error('ACP session is closed');
     // Attachments are read asynchronously: the turn may have ended or been stopped meanwhile.
     if (this.turn !== turn || turn.cancelTimer || turn.verification) throw new Error(NO_ACTIVE_TURN_TO_STEER);
+    // A host role change can also race attachment conversion or input screening.
+    // Nothing crossed the transport, so the host can still send this in the next turn.
+    if (this.readRoleBriefing?.() || requiredOrcaMcpServers(this.getOrcaRole?.()).some(name => !this.acceptedMcpServers.includes(name))) {
+      throw new Error(NO_ACTIVE_TURN_TO_STEER);
+    }
     // Before the agent can act on the message; a steer that is not taken leaves the turn stricter, never looser.
     if (gate && turn.gate) turn.gate = mergeGates(turn.gate, gate);
     let result: AcpRecord;
@@ -1133,13 +1149,22 @@ export class AcpSession {
 
   async setVendorOptions(patch: Record<string, unknown>): Promise<void> {
     this.onVendorOptionsChange?.(patch);
-    const roleBriefing = typeof patch.pluginEngineRoleBriefing === 'string'
-      ? patch.pluginEngineRoleBriefing.trim()
-      : '';
-    if (roleBriefing) {
-      this.pendingBriefing = this.pendingBriefing
-        ? `${this.pendingBriefing}\n\n${roleBriefing}`
-        : roleBriefing;
+    if (patch.orcaRole === 'lead' || patch.orcaRole === 'worker') {
+      this.readOrcaDiscoveryBriefing?.()?.onSent();
+      this.readOrcaDiscoveryBriefing = undefined;
+    }
+    if (patch.orcaRole === null) {
+      this.readRoleBriefing = undefined;
+      this.pendingLegacyRoleBriefing = undefined;
+      return;
+    }
+    const roleBriefing = patch.pluginEngineRoleBriefing;
+    if (typeof roleBriefing === 'function') {
+      this.readRoleBriefing = roleBriefing as OpenAcpSessionOptions['readRoleBriefing'];
+    } else if (typeof roleBriefing === 'string' && roleBriefing.trim()) {
+      // A serializable RPC applies only to this handle, never the local handoff.
+      // A replay carrying a revoked role takes the branch above.
+      this.pendingLegacyRoleBriefing = [this.pendingLegacyRoleBriefing, roleBriefing.trim()].filter(Boolean).join('\n\n');
     }
   }
 
@@ -1313,7 +1338,19 @@ export class AcpSession {
 
   private pump(): void {
     if (this.turn || this.ended || this.closing) return;
-    const next = this.pendingPrompts.shift();
+    let next: QueuedPrompt | undefined;
+    while ((next = this.pendingPrompts.shift())) {
+      try {
+        this.assertOrcaTools();
+        break;
+      } catch (err) {
+        this.queue.push({ type: 'error', data: {
+          message: (err instanceof Error ? err.message : String(err)) + (err instanceof AcpRequiredMcpUnavailableError ? ' The message was not sent.' : ''),
+          isTerminal: true,
+          reason: 'acp-prompt-not-sent',
+        } });
+      }
+    }
     if (!next) return;
     // Output produced between turns (autonomous agent work) is closed off as background.
     this.emit(this.translator.flushPending());
@@ -1333,6 +1370,33 @@ export class AcpSession {
     this.backgroundPermission = null;
     this.usage = { ...this.usage, tokenUsage: 0 };
     this.emit([{ type: 'status', data: { status: 'running', ...this.usage, isRunning: true } }]);
+    const firstText = next.blocks.find((block): block is Extract<AcpContentBlock, { type: 'text' }> => block.type === 'text')?.text ?? '';
+    const ordinary = !isLeadingSlashCommand(firstText);
+    const roleBriefing = ordinary ? this.readRoleBriefing?.() : undefined;
+    const discovery = ordinary ? this.readOrcaDiscoveryBriefing?.() : undefined;
+    if (ordinary) {
+      const discoveryText = roleBriefing || this.pendingLegacyRoleBriefing || this.getOrcaRole?.() ? undefined : discovery?.text;
+      const hostParts = [this.pendingBriefing, discoveryText, this.pendingLegacyRoleBriefing, roleBriefing?.text];
+      if (!this.reviewMode) {
+        if (this.initialDirectoryBriefingPending) {
+          hostParts.push(formatPluginEngineDirectoryGrants(this.extraDirs, this.writableDirs, this.libraryRoot));
+        } else if (this.directoryGrantsDirty) {
+          hostParts.push(formatPluginEngineDirectoryGrantsUpdate(this.extraDirs, this.writableDirs, this.libraryRoot));
+        }
+      }
+      const briefing = hostParts.filter((part) => part?.trim()).join('\n\n');
+      if (briefing) next.blocks.unshift({ type: 'text', text: defusePluginEngineSlashMentions(briefing, this.commandNames) });
+    }
+    if (!this.reviewMode && this.libraryRoot !== undefined) {
+      const promptText = next.blocks
+        .filter((block): block is Extract<AcpContentBlock, { type: 'text' }> => block.type === 'text')
+        .map((block) => block.text)
+        .join('\n');
+      const libCtx = libraryNativeReadContext(this.libraryRoot, this.extraDirs, promptText);
+      if (libCtx) {
+        next.blocks.push({ type: 'text', text: defusePluginEngineSlashMentions(libCtx, this.commandNames) });
+      }
+    }
     const params: AcpRecord = { sessionId: this.id, prompt: next.blocks };
     if (turn.permissionTurnId) {
       params._meta = { permissionGate: {
@@ -1340,11 +1404,19 @@ export class AcpSession {
         ...(next.gate || this.reviewMode ? { scope: ACP_PERMISSION_GATE_SCOPE } : {}),
       } };
     }
-    this.runPrompt(turn, params, true);
+    this.runPrompt(turn, params, true, ordinary ? () => {
+      this.pendingBriefing = null;
+      this.readOrcaDiscoveryBriefing = undefined;
+      this.pendingLegacyRoleBriefing = undefined;
+      this.initialDirectoryBriefingPending = false;
+      this.directoryGrantsDirty = false;
+      discovery?.onSent();
+      roleBriefing?.onSent();
+    } : undefined);
   }
 
-  private runPrompt(turn: ActiveTurn, params: AcpRecord, allowRecovery: boolean): void {
-    this.connection.request('session/prompt', params, { timeoutMs: null }).then(
+  private runPrompt(turn: ActiveTurn, params: AcpRecord, allowRecovery: boolean, onSent?: () => void): void {
+    this.connection.request('session/prompt', params, { timeoutMs: null, onSent }).then(
       (result) => {
         if (this.turn !== turn) return;
         // Each native prompt reports its own tokens, including one interrupted by verification.
@@ -1387,6 +1459,14 @@ export class AcpSession {
       return;
     }
     if (outcome === 'ready') {
+      // The role may have changed while verification was pending. Do not
+      // continue in a runtime that was started without the newly required tools.
+      try {
+        this.assertOrcaTools();
+      } catch (error) {
+        this.finishTurn(turn.token, this.errorOutcome(error));
+        return;
+      }
       // Preserve the native conversation, tool results and the original permission gate.
       this.emit(this.translator.finishVerificationWarning());
       this.runPrompt(turn, { ...params, prompt: [{ type: 'text', text:
@@ -1482,10 +1562,21 @@ export class AcpSession {
     if (used === null || size === null) return;
     const window = Number.isSafeInteger(size) && size > 0 ? size : undefined;
     if (this.contextSelectionPending === 0
-      && (!this.turn || this.turn.contextSelection === this.reportedSelection)
-      && this.reportedContextWindow !== window) {
-      this.reportedContextWindow = window;
-      this.publishReportedModelDetails();
+      && (!this.turn || this.turn.contextSelection === this.reportedSelection)) {
+      if (window !== undefined && this.observeContextWindow && !this.ended) {
+        const modelId = this.model;
+        if (modelId) {
+          try {
+            this.observeContextWindow(modelId, window);
+          } catch (error) {
+            this.logger?.error('acp: context window observer failed', { error: String(error) });
+          }
+        }
+      }
+      if (this.reportedContextWindow !== window) {
+        this.reportedContextWindow = window;
+        this.publishReportedModelDetails();
+      }
     }
     const cost = asRecord(update.cost);
     this.usage = {

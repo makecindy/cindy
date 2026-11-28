@@ -13,6 +13,7 @@
 
 import crypto, { webcrypto } from 'node:crypto';
 import http from 'node:http';
+import { WebSocket } from 'ws';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -788,5 +789,164 @@ describe('bridge · 转交请求(翻译/字幕)', () => {
       (await c.signed('/learning/start', { id: crypto.randomUUID(), request: { op: 'nope' } }))
         .status,
     ).toBe(400);
+  });
+});
+
+// Regression: HTTP long-polling + extension setTimeout heartbeats allowed Chrome MV3 service workers
+// to be throttled past the 35s lease window and left 0-window Profile drops undetected for 35s.
+// Production entry: BrowserExtensionBridge (/health ws-v1, POST /ws/ticket, WS /ws, GET /poll?nowait=1).
+describe('WebSocket keepalive and instant job wakeup', () => {
+  function openWs(url: string, headers: Record<string, string>) {
+    return new Promise<{ ws?: WebSocket; rejectedStatus?: number }>((resolve, reject) => {
+      const ws = new WebSocket(url, { headers });
+      let settled = false;
+      ws.once('open', () => {
+        if (settled) return;
+        settled = true;
+        resolve({ ws });
+      });
+      ws.once('unexpected-response', (_req, res) => {
+        if (settled) return;
+        settled = true;
+        res.resume();
+        resolve({ rejectedStatus: res.statusCode });
+      });
+      ws.once('error', (err) => {
+        if (settled) return;
+        settled = true;
+        reject(err);
+      });
+    });
+  }
+
+  function nextWsMessage(ws: WebSocket) {
+    return new Promise<Record<string, unknown>>((resolve, reject) => {
+      ws.once('message', (raw) => {
+        resolve(JSON.parse(raw.toString('utf8')) as Record<string, unknown>);
+      });
+      ws.once('close', (code) => reject(new Error(`WS_CLOSED:${code}`)));
+      ws.once('error', reject);
+    });
+  }
+
+  it('rejects non-extension origins, missing tickets, bad tickets and ticket replay', async () => {
+    const f = await fixture({ wsPingIntervalMs: 0 });
+    const c = await f.client({ paired: true });
+    const health = await c.health();
+    expect(health.capabilities).toContain('ws-v1');
+    const wsUrl = f.url.replace(/^http:/, 'ws:') + '/ws';
+
+    // Without an issued ticket, even a real extension origin is rejected on upgrade.
+    expect((await openWs(wsUrl, { Origin: c.origin })).rejectedStatus).toBe(403);
+    // Web origins are rejected even after a ticket exists for the extension.
+    const issued = await c.request('/ws/ticket', {});
+    expect(issued.status).toBe(200);
+    expect(typeof issued.ticket).toBe('string');
+    expect((await openWs(wsUrl, { Origin: 'https://evil.test' })).rejectedStatus).toBe(403);
+    expect((await openWs(f.url.replace(/^http:/, 'ws:') + '/other', { Origin: c.origin })).rejectedStatus).toBe(403);
+
+    // Wrong ticket is closed with 4403 after upgrade; valid ticket authenticates once and cannot replay.
+    const badConn = await openWs(wsUrl, { Origin: c.origin });
+    expect(badConn.ws).toBeDefined();
+    const badClosed = new Promise<number>((r) => badConn.ws!.once('close', (code) => r(code)));
+    badConn.ws!.send(JSON.stringify({ type: 'auth', clientId: c.id, session: health.session, ticket: 'wrong' }));
+    expect(await badClosed).toBe(4403);
+
+    const goodConn = await openWs(wsUrl, { Origin: c.origin });
+    expect(goodConn.ws).toBeDefined();
+    const authOk = nextWsMessage(goodConn.ws!);
+    goodConn.ws!.send(JSON.stringify({ type: 'auth', clientId: c.id, session: health.session, ticket: issued.ticket }));
+    expect(await authOk).toEqual({ type: 'auth_ok' });
+
+    // Reusing the same ticket fails at upgrade (ticket already consumed).
+    expect((await openWs(wsUrl, { Origin: c.origin })).rejectedStatus).toBe(403);
+    goodConn.ws!.close();
+  });
+
+  it('keeps client alive via host-driven ping/pong, pushes job_available immediately, and detects sudden disconnect', async () => {
+    let now = Date.now();
+    const f = await fixture({
+      now: () => now,
+      pollTimeout: 5000,
+      wsPingIntervalMs: 30,
+      wsPongTimeoutMs: 35_000,
+    });
+    const c = await f.client({ paired: true });
+    const health = await c.health();
+    const { ticket } = await c.request('/ws/ticket', {});
+    const wsUrl = f.url.replace(/^http:/, 'ws:') + '/ws';
+    const { ws } = await openWs(wsUrl, { Origin: c.origin });
+    expect(ws).toBeDefined();
+
+    const authOk = nextWsMessage(ws!);
+    ws!.send(JSON.stringify({ type: 'auth', clientId: c.id, session: health.session, ticket }));
+    expect(await authOk).toEqual({ type: 'auth_ok' });
+
+    // /poll?nowait=1 returns immediately without waiting for pollTimeout when idle.
+    const idlePollStart = Date.now();
+    expect(await c.request('/poll?nowait=1')).toMatchObject({ status: 200, job: null });
+    expect(Date.now() - idlePollStart).toBeLessThan(1000);
+
+    // Advance clock past the 35s lease in two 20s steps without any HTTP /health or /poll:
+    // host-driven WS pings + client pongs keep the client continuously connected.
+    for (let step = 0; step < 2; step++) {
+      now += 20_000;
+      const ping = await nextWsMessage(ws!);
+      expect(ping.type).toBe('ping');
+      ws!.send(JSON.stringify({ type: 'pong', ts: ping.ts }));
+      await vi.waitFor(async () => {
+        expect(await f.bridge.status()).toMatchObject({ extension_connected: true });
+      });
+    }
+
+    // Queuing a job pushes job_available immediately on the WS; /poll?nowait=1 delivers the job once.
+    const wakePromise = new Promise<Record<string, unknown>>((resolve) => {
+      const onMsg = (raw: Buffer) => {
+        const msg = JSON.parse(raw.toString('utf8')) as Record<string, unknown>;
+        if (msg.type === 'ping') {
+          ws!.send(JSON.stringify({ type: 'pong', ts: msg.ts }));
+          return;
+        }
+        if (msg.type === 'job_available') {
+          ws!.off('message', onMsg);
+          resolve(msg);
+        }
+      };
+      ws!.on('message', onMsg);
+    });
+    const pendingAct = f.bridge.act('tabs', { browser: c.id });
+    expect(await wakePromise).toEqual({ type: 'job_available' });
+    const polled = await c.request('/poll?nowait=1');
+    expect(polled.job?.action).toBe('tabs');
+    expect((await c.request('/ack', { id: polled.job.id })).ok).toBe(true);
+    expect((await c.request('/result', { id: polled.job.id, result: { ok: true, tabs: [] } })).ok).toBe(true);
+    expect(await pendingAct).toMatchObject({ ok: true, tabs: [] });
+
+    // Closing the WS unexpectedly with no in-flight job expires heartbeat immediately (no 35s stall).
+    ws!.terminate();
+    await vi.waitFor(async () => {
+      expect(await f.bridge.status()).toMatchObject({ extension_connected: false, clients: [] });
+    });
+  });
+
+  it('does not break an in-flight job /result when the WS drops mid-operation', async () => {
+    const f = await fixture({ wsPingIntervalMs: 0 });
+    const c = await f.client({ paired: true });
+    const health = await c.health();
+    const { ticket } = await c.request('/ws/ticket', {});
+    const { ws } = await openWs(f.url.replace(/^http:/, 'ws:') + '/ws', { Origin: c.origin });
+    const authOk = nextWsMessage(ws!);
+    ws!.send(JSON.stringify({ type: 'auth', clientId: c.id, session: health.session, ticket }));
+    expect(await authOk).toEqual({ type: 'auth_ok' });
+
+    const pendingAct = f.bridge.act('tabs', { browser: c.id });
+    const polled = await c.request('/poll?nowait=1');
+    expect((await c.request('/ack', { id: polled.job.id })).ok).toBe(true);
+    // Drop WS while job is in-flight; /result must still succeed on the live session.
+    const closed = new Promise<void>((r) => ws!.once('close', () => r()));
+    ws!.terminate();
+    await closed;
+    expect((await c.request('/result', { id: polled.job.id, result: { ok: true, tabs: [] } })).status).toBe(200);
+    expect(await pendingAct).toMatchObject({ ok: true, tabs: [] });
   });
 });

@@ -435,6 +435,7 @@ export function parseBotGroupChatData(value: unknown): BotGroupRemoteChatData | 
     supportsScopedStop: record.supportsScopedStop === true,
     supportsMentionAudiences: record.supportsMentionAudiences === true,
     allowMentionAllBots: record.allowMentionAllBots === true,
+    supportsPersonalMentionHistory: record.supportsPersonalMentionHistory === true,
     supportsMemberMentionAll: record.supportsMemberMentionAll === true,
     allowMemberMentionAll: record.allowMemberMentionAll === true,
     supportsMemberInvites: record.supportsMemberInvites === true,
@@ -452,6 +453,12 @@ export function parseBotGroupChatData(value: unknown): BotGroupRemoteChatData | 
         const id = text(device?.id, 200), name = text(device?.name, 200);
         return id && name ? [{ id, name }] : [];
       }),
+      // A newer computer names this account's own requests waiting for a computer; older ones omit it.
+      ...(Array.isArray(record.assistantDeviceWaits) ? { assistantDeviceWaits: record.assistantDeviceWaits.slice(0, 20).flatMap(raw => {
+        const wait = recordOf(raw);
+        const executionId = text(wait?.executionId, 200), sourceMessageId = text(wait?.sourceMessageId, 200);
+        return executionId && sourceMessageId ? [{ executionId, sourceMessageId, requestText: text(wait?.requestText, 500) ?? '' }] : [];
+      }) } : {}),
     } : {}),
     supportsNotificationSettings: record.supportsNotificationSettings === true,
     ...(record.notificationMode === 'all' || record.notificationMode === 'mentions' || record.notificationMode === 'none'

@@ -16,6 +16,18 @@
   "memberCount_other": "{{count}} miembros",
   "organizer": "Organizador",
   "waitingConfirm": "{{name}} está esperando tu visto bueno",
+  "assistantDevice": {
+    "title": "La Cindy del grupo espera a que elijas un equipo",
+    "onlyYou": "Solo tú puedes verlo",
+    "request": "«{{request}}» empieza en cuanto elijas un equipo.",
+    "requestUnknown": "Tu solicitud empieza en cuanto elijas un equipo.",
+    "requests_one": "{{count}} solicitud espera y empieza en cuanto elijas un equipo.",
+    "requests_many": "{{count}} solicitudes esperan y empiezan en cuanto elijas un equipo.",
+    "requests_other": "{{count}} solicitudes esperan y empiezan en cuanto elijas un equipo.",
+    "remember": "Tus próximas solicitudes en este grupo usarán el mismo equipo. Puedes cambiarlo en la configuración del grupo.",
+    "cancel": "Cancelar solicitud",
+    "continue": "Continuar"
+  },
   "loadFailedTitle": "No se pudo cargar este chat grupal",
   "loadFailedDescription": "No puedo leer este chat grupal desde tu computadora en este momento. Inténtalo de nuevo o vuelve a Amigos.",
   "unavailableTitle": "Este chat grupal ya no está disponible",
@@ -47,6 +59,7 @@
     "all": "Todos",
     "allHint": "Solo personas",
     "label": "Menciona a un amigo",
+    "avatarHint": "Menciona a este amigo al final del borrador.",
     "allBots": "Todos los amigos",
     "allBotsHint": "Solo amigos"
   },
@@ -181,6 +194,9 @@
       "GROUP_AUTHORIZATION_REQUIRED": "{{name}} no pudo ejecutar la herramienta: la autorización del grupo ha caducado o no permite esta acción. La persona propietaria del amigo puede volver a solicitarla en este grupo.",
       "GROUP_AUTHORIZATION_UNAVAILABLE": "No se pudo verificar la autorización de grupo de {{name}}, por lo que la herramienta no se ejecutó. Vuelve a intentarlo cuando se restablezca la conexión.",
       "ATTACHMENTS_UNAVAILABLE": "Algunos adjuntos no llegaron a {{name}} por un fallo de descarga o por el límite de adjuntos. Vuelve a enviar los archivos necesarios para esta solicitud.",
+      "ATTACHMENTS_DOWNLOAD_FAILED": "Algunos adjuntos no llegaron a {{name}} por un fallo de descarga. Vuelve a enviar los archivos necesarios para esta solicitud.",
+      "ATTACHMENTS_LIMIT_REACHED": "Algunos adjuntos no llegaron a {{name}} por el límite de adjuntos. Vuelve a enviar los archivos necesarios para esta solicitud.",
+      "ATTACHMENTS_DOWNLOAD_FAILED_AND_LIMIT_REACHED": "Algunos adjuntos no llegaron a {{name}} por un fallo de descarga y por el límite de adjuntos. Vuelve a enviar los archivos necesarios para esta solicitud.",
       "GROUP_ASSISTANT_UNAVAILABLE": "{{name}}, conecta tu Cindy para que Cindy pueda trabajar por ti (ahora no tienes ningún Cindy conectado).",
       "GROUP_ASSISTANT_DEVICE_REQUIRED": "{{name}}, elige un equipo para este grupo para continuar con la solicitud.",
       "GROUP_ASSISTANT_DEVICE_OFFLINE": "El equipo que {{name}} eligió para este grupo está desconectado."

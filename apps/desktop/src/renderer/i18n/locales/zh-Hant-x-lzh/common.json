@@ -15,8 +15,8 @@
   },
   "sharedTaskRecovery": {
     "title": "不能於原機續此差事",
-    "description": "可擇他機或他供方，藉上下文交接續行。原訊皆留，然切換不移原機上完整之執行狀態。",
-    "choose": "擇他機",
+    "description": "可啟模型選單，改用他機、他供方或他模型，藉上下文交接續行。原訊皆留，然切換不移原機上完整之執行狀態。",
+    "choose": "換模型或供方",
     "cancel": "留此",
     "stage": {
       "owner": "失敗環節：聯絡分享所在電腦。",
@@ -4260,6 +4260,7 @@
           "supported": "可",
           "unsupported": "不可",
           "undeclared": "未宣",
+          "ultrafastDeclaredUnavailable": "供應商已宣，此 Codex 連線不可用",
           "pricing": "價目",
           "pricingLabel": "價目",
           "noPricing": "此路由無報價資料",
@@ -4864,68 +4865,7 @@
         "hint": "經已繫之飛書或 Lark 機器人，私遣君一訊；唯於視窗失焦時遣之。",
         "disabledHint": "須先設 Bot，並遣之一訊以成其繫。"
       },
-      "bind": "繫之",
-      "groups": {
-        "title": "群議",
-        "description": "為機器人所在之某群另定專案、模型與權柄。",
-        "rules": "未另定者：已繫專案之群從「案與模型」中該專案之設，未繫專案之群從上方「新言談配置」與「群議新差事之權柄檔」。群之主線與其話題共一群之設。",
-        "expand": "展",
-        "collapse": "收",
-        "groupCount_one": "{{count}} 群",
-        "groupCount_other": "{{count}} 群",
-        "customCount_one": "{{count}} 群另設",
-        "customCount_other": "{{count}} 群另設",
-        "refresh": "重讀",
-        "loading": "正讀群錄…",
-        "loadFailed": "群錄未能讀得，請稍後點「重讀」再試。",
-        "saveFailed": "群設未能存",
-        "notConnected": "機器人連上後方能列其所在之群。下方唯列已另設之群。",
-        "empty": "機器人尚未入群。引之入群後，再來此設之。",
-        "listPermission": "未能讀機器人所在之群：請於飛書開放平台為此應用開「獲取群組資訊」之權。下方先列機器人曾用之群。",
-        "listUnavailable": "暫未能讀機器人所在之群，下方先列機器人曾用之群。",
-        "unnamed": "無名之群（{{id}}）",
-        "summaryModel": "另定模型",
-        "summaryPermission": "另定權柄",
-        "expandAria": "設「{{name}}」",
-        "searchLabel": "尋群",
-        "searchPlaceholder": "以群名尋之",
-        "customHeading": "另設者",
-        "followHeading": "從渠道之設者",
-        "showMore": "再顯 {{count}} 個",
-        "showLess": "收",
-        "noMatch": "未見名含「{{query}}」之群",
-        "project": {
-          "label": "專案",
-          "follow": "言談",
-          "missing": "{{name}}（已離側欄）",
-          "hint": "於群中初 @ 機器人、開新話題或發 /new 時乃行，進行之差事不移。擇專案，則模型與權柄常從此專案於「案與模型」之設；擇「言談」，則差事置於機器人之言談目錄，從上方「新言談配置」。唯可擇側欄中本機之專案。"
-        },
-        "model": {
-          "label": "模型與思之深淺",
-          "hintFollow": "從「新言談配置」。於此換模型或思之深淺，則唯及此群。",
-          "hintFollowProject": "從專案「{{project}}」於「案與模型」之設。於此換模型或思之深淺，則唯及此群。",
-          "hintProjectUnavailable": "專案「{{project}}」於「案與模型」所定之模型今不可用。可往彼處重擇，或於此為此群另擇之。",
-          "hintFixed": "此群另定模型。群中未另改模型之差事，得下一言時即換之；新差事徑用之。"
-        },
-        "permission": {
-          "label": "權柄",
-          "hintFollow": "今從「群議新差事之權柄檔」。唯及此後於此群新開之差事，既有差事請於群中以 /permission 切換。",
-          "hintFollowProject": "今從專案「{{project}}」於「案與模型」之權柄。唯及此後於此群新開之差事，既有差事請於群中以 /permission 切換。",
-          "hintFixed": "此群另定權柄。唯及此後於此群新開之差事，既有差事請於群中以 /permission 切換。"
-        },
-        "fullAccessConfirm": {
-          "title": "令「{{name}}」以完全存取行之乎？",
-          "description": "此後於此群新開之差事皆徑行，不復逐項確認，群中無論何人 @ 機器人皆然。群議之言由成員掌之，請確保群中之人皆可信。",
-          "confirm": "改為完全存取",
-          "cancel": "罷"
-        },
-        "widerConfirm": {
-          "title": "寬「{{name}}」之權柄乎？",
-          "description": "此後於此群新開之差事，將由「{{current}}」易為「{{next}}」，群中無論何人 @ 機器人皆然。群議之言由成員掌之，請確保群中之人皆可信。",
-          "confirm": "仍改之",
-          "cancel": "罷"
-        }
-      }
+      "bind": "繫之"
     },
     "wechatBot": {
       "title": "個人微信",
@@ -7394,7 +7334,7 @@
     "tina": {
       "chat": {
         "title": "言談",
-        "description": "不落任何倉庫之純言談；於 Slack、Telegram、X 或飛書 / Lark 中選 chat 即可用之，每條言談 lane 各對應一差事。"
+        "description": "不繫於具體專案夾之純對談；諸訊息應用未指專案時，預設依此模型與權限。"
       },
       "prefs": {
         "agentLabel": "Agent",
@@ -7525,7 +7465,8 @@
       "groups": {
         "cindy": "官設",
         "personal": "私",
-        "plugins": "法器"
+        "plugins": "法器",
+        "shared": "共用設定"
       },
       "tips": {
         "cindy": "由 Cindy 所供並維護。無須自建機器人或備憑證，依引導連線即可用。",
@@ -7566,6 +7507,190 @@
       "plugins": {
         "rowHint": "登入、綁定與各群各私語之設，皆在法器頁中。",
         "open": "啟法器"
+      },
+      "replyTarget": {
+        "label": "孰為應答",
+        "cindy": "常務",
+        "cindyHint": "於側欄任務錄中處置，依下文專案與模型而行；亦可委諸夥伴，循其記憶與設定答覆。",
+        "companionHint": "私語入 {{name}} 之對談，群議由 {{name}} 各自料理；模型、權限與記憶皆從 {{name}}。",
+        "openCompanion": "{{name}} 之設定",
+        "summary": "{{name}} 應答",
+        "missingCompanion": "已不可用之同伴",
+        "busy": "此機器人尚有待發之言或行中之差事，待其畢再易。",
+        "updateFailed": "未能更易。請察同伴尚可用，再試之。",
+        "companionSettingsHint": "模型、權限與記憶"
+      },
+      "nav": {
+        "back": "返",
+        "backTo": "返至 {{page}}"
+      },
+      "pageDescription": "於微信、飛書、Telegram 諸傳訊之器，傳言於 Cindy 或汝之同伴。",
+      "list": {
+        "connected": "已連",
+        "available": "尚可連者",
+        "choose": "擇一傳訊之器",
+        "cindyReplies": "常務",
+        "official": "官方機器人：{{status}}",
+        "projects": "項目與模型",
+        "projectsHint": "傳訊之器或法器於項目中啟新差事時，各項目所用之模型與權柄",
+        "hint": {
+          "both": "官方機器人，或汝自建之機器人",
+          "slack": "用 Cindy 官方機器人，登 Slack 即可",
+          "x": "用 Cindy 官方之號，許之則於 X 上應汝",
+          "wechat": "掃碼以連汝之微信",
+          "personal": "用汝自建之機器人"
+        },
+        "companionDedicated": "夥伴專屬：{{names}}"
+      },
+      "apps": {
+        "telegram": "Telegram",
+        "slack": "Slack",
+        "discord": "Discord",
+        "x": "X",
+        "wechat": "微信",
+        "feishu": "飛書 / Lark",
+        "wecom": "企業微信",
+        "dingtalk": "釘釘"
+      },
+      "ways": {
+        "official": "Cindy 官方機器人",
+        "personal": "汝自有之機器人",
+        "personalHint": "汝於平臺自建之機器人，名與像由汝定。",
+        "personalSetupTitle": "用汝自有之機器人",
+        "setUp": "設之",
+        "personalSetupHint": {
+          "telegram": "於 BotFather 建機器人，填其令牌與汝之用戶 ID。",
+          "discord": "於 Discord 開發者後臺建機器人，填其令牌。",
+          "feishu": "於飛書或 Lark 開放平臺建應用，填其 App ID 與 App Secret。"
+        },
+        "officialHint": "毋庸自建應用，徑與閣下 Cindy 帳號相繫。"
+      },
+      "rows": {
+        "model": "模型",
+        "groupReply": "群中何時應答",
+        "persona": "名與性情",
+        "behavior": "表情與引語",
+        "receiveHere": "於此機收言",
+        "receiveHereHint": "關之則機器人於此機下線，憑證仍存，可隨時復開。",
+        "unbind": "解此機器人之係",
+        "ownerId": "吾之用戶 ID {{id}}",
+        "discordChannels": "伺服器頻道",
+        "discordChannelsHint": "機器人可於何頻道行事",
+        "notifications": "告示",
+        "on": "已開",
+        "off": "未開",
+        "project": "項目",
+        "projectDialogue": "對話（不擇項目）",
+        "projectMissing": "已不在側欄之項目",
+        "projectHint": "新差事入此項目，模型與權限依其於「項目與模型」之設。",
+        "projectDialogueHint": "新差事置於機器人自有之對話目錄，用下之模型。",
+        "officialProjectHint": "新差事置於此項目，模型與權柄從其於「項目與模型」之設。凡 Cindy 官方機器人共此一項。",
+        "officialProjectDialogueHint": "新差事置於言談目錄，模型與權柄從「項目與模型」中「言談」一行。凡 Cindy 官方機器人共此一項。",
+        "projectFullAccessTitle": "改用「{{name}}」之權限乎？",
+        "projectFullAccessDescription": "「{{name}}」於「項目與模型」為完全訪問：此後於{{app}}所啟之差事將逕行，不復逐條確認。可先於「項目與模型」改為 Auto 或 Ask。",
+        "projectFullAccessConfirm": "仍用之",
+        "projectFullAccessCancel": "取消",
+        "projectUpdateFailed": "未能換項目，請察其尚在側欄，再試之。",
+        "chats": "群議",
+        "channels": "頻道",
+        "projectModel": "模型與權限",
+        "projectModelHint": "於「專案與模型」統一更改",
+        "projectModelFollow": "從「{{name}}」",
+        "groupReplyHint": "定機器人在群中惟點名方答，抑或悉數回應"
+      },
+      "chats": {
+        "title": "群議",
+        "description": "為機器人所在之某群另定項目、模型、權柄，及群中他人可否發問。",
+        "rules": "未另定者：已繫專案之群從「案與模型」中該專案之設，未繫專案之群從機器人之「專案」，機器人亦未擇專案者，從其「模型」之設。群之主線與其話題共一群之設。",
+        "expand": "展",
+        "collapse": "收",
+        "groupCount_one": "{{count}} 群",
+        "groupCount_other": "{{count}} 群",
+        "customCount_one": "{{count}} 群另設",
+        "customCount_other": "{{count}} 群另設",
+        "refresh": "重讀",
+        "loading": "正讀群錄…",
+        "loadFailed": "群錄未能讀得，請稍後點「重讀」再試。",
+        "saveFailed": "群設未能存",
+        "notConnected": "機器人連上後方能列其所在之群。下方唯列已另設之群。",
+        "empty": "機器人尚未入群。引之入群後，再來此設之。",
+        "listPermission": "未能讀機器人所在之群：請於飛書開放平台為此應用開「獲取群組資訊」之權。下方先列機器人曾用之群。",
+        "listUnavailable": "暫未能讀機器人所在之群，下方先列機器人曾用之群。",
+        "unnamed": "無名之群（{{id}}）",
+        "summaryModel": "另定模型",
+        "summaryPermission": "另定權柄",
+        "expandAria": "設「{{name}}」",
+        "searchLabel": "尋群",
+        "searchPlaceholder": "以群名尋之",
+        "customHeading": "另設者",
+        "followHeading": "從渠道之設者",
+        "showMore": "再顯 {{count}} 個",
+        "showLess": "收",
+        "noMatch": "未見名含「{{query}}」之群",
+        "project": {
+          "label": "專案",
+          "follow": "從機器人",
+          "missing": "{{name}}（已離側欄）",
+          "hint": "於群中初 @ 機器人、開新話題或發 /new 時乃行，進行之差事不移。擇專案，則模型與權柄常從此專案於「案與模型」之設；擇「從機器人」，則從機器人之「專案」，機器人未擇專案者，差事置於其言談目錄，從其「模型」之設。唯可擇側欄中本機之專案。",
+          "followWith": "從機器人（{{project}}）"
+        },
+        "model": {
+          "label": "模型與思之深淺",
+          "hintFollow": "從「新言談配置」。於此換模型或思之深淺，則唯及此群。",
+          "hintFollowProject": "從專案「{{project}}」於「案與模型」之設。於此換模型或思之深淺，則唯及此群。",
+          "hintProjectUnavailable": "專案「{{project}}」於「案與模型」所定之模型今不可用。可往彼處重擇，或於此為此群另擇之。",
+          "hintFixed": "此群另定模型。群中未另改模型之差事，得下一言時即換之；新差事徑用之。",
+          "reset": "模型復從"
+        },
+        "permission": {
+          "label": "權柄",
+          "hintFollow": "今從「群議新差事之權柄檔」。唯及此後於此群新開之差事，既有差事請於群中以 /permission 切換。",
+          "hintFollowProject": "今從專案「{{project}}」於「案與模型」之權柄。唯及此後於此群新開之差事，既有差事請於群中以 /permission 切換。",
+          "hintFixed": "此群另定權柄。唯及此後於此群新開之差事，既有差事請於群中以 /permission 切換。",
+          "hintFollowBot": "今從機器人自身之權柄。唯及此後於此群新啟之差事，舊差事於群中以 /permission 易之。",
+          "followWith": "從 · {{mode}}"
+        },
+        "fullAccessConfirm": {
+          "title": "令「{{name}}」以完全存取行之乎？",
+          "description": "此後於此群新開之差事皆徑行，不復逐項確認，群中無論何人 @ 機器人皆然。群議之言由成員掌之，請確保群中之人皆可信。",
+          "confirm": "改為完全存取",
+          "cancel": "罷"
+        },
+        "widerConfirm": {
+          "title": "寬「{{name}}」之權柄乎？",
+          "description": "此後於此群新開之差事，將由「{{current}}」易為「{{next}}」，群中無論何人 @ 機器人皆然。群議之言由成員掌之，請確保群中之人皆可信。",
+          "confirm": "仍改之",
+          "cancel": "罷"
+        },
+        "descriptionChannels": "為機器人所事之某頻道另定項目、模型、權柄，及頻道中他人可否發問。",
+        "kindGroup": "群議",
+        "kindChannel": "頻道",
+        "channelCount_one": "{{count}} 頻道",
+        "channelCount_other": "{{count}} 頻道",
+        "membersCount_one": "{{count}} 群許眾發問",
+        "membersCount_other": "{{count}} 群許眾發問",
+        "unnamedChannel": "無名之頻道（{{id}}）",
+        "searchPlaceholderChannels": "以頻道名索之",
+        "emptyLocal": "尚未記機器人所在之群。於群中 @ 機器人一言，此處乃列其群。",
+        "emptyChannels": "尚無所開之頻道。先於「伺服器頻道」中開機器人所事之頻道。",
+        "members": {
+          "label": "群眾亦可發問",
+          "hint": "開之，則群中他人 @ 機器人亦得其答，用此群之項目與模型。其問至多以「自審」行之，有所作為者仍待汝許；汝自問者從此群之權柄。",
+          "guard": "汝不言於群時，群眾連問滿 {{limit}} 次則暫止，待汝於群中 @ 機器人一言或點「復」。號令唯聽於汝。",
+          "paused": "已暫止答群眾：彼連問 {{limit}} 次，汝皆未言於群。",
+          "resume": "復",
+          "chip": "群眾可問",
+          "pausedChip": "群眾暫止",
+          "resumeFailed": "復之未成，請稍後再試"
+        },
+        "statusCustom": "已另定",
+        "shownHint": "已示前 {{shown}} / {{total}}，書其名可篩之。",
+        "fieldsNote": "易項目、模型、權柄者，群中下次新啟差事乃行，進行之差事不移。"
+      },
+      "companionBots": {
+        "title": "夥伴專屬機器人",
+        "description": "此類機器人另設於夥伴設定中，升級前已備者照常運行。",
+        "manage": "往理"
       }
     },
     "shortcuts": {
@@ -10218,7 +10343,8 @@
       "INVALID_AUTH_CODE": "授權已逾期，請重新登入",
       "INVALID_LOGIN_TICKET": "登入會話已逾期，請重新登入",
       "INVALID_BIND_TICKET": "繫結會話已逾期，請重新登入",
-      "REGION_MISMATCH": "登入服務之區與當前客戶端不符"
+      "REGION_MISMATCH": "登入服務之區與當前客戶端不符",
+      "INVALID_SIGNUP_TICKET": "註籍之確認已逾時，請再登門"
     },
     "rateLimit": {
       "retryAt": "請於 {{time}}（本機時間）之後再試。",
@@ -10226,6 +10352,15 @@
       "intro": "登入服務暫限請求次數。此與本機憑證儲存之異，乃兩事也。",
       "guidance": "請稍待再取驗證碼。重新啟動、重新安裝或切換網路，皆不保解除限制。",
       "support": "稍待之後仍無法登入，請將記錄私下寄予 feedback@cindy.app，並附作業系統、Cindy 版本、出錯時間及下方錯誤碼。請勿公開發布記錄。"
+    },
+    "signup": {
+      "title": "尚無 Cindy 名籍",
+      "subtitle": "{{target}} 尚未註籍於 Cindy。昔以他法登門乎？請歸而擇之。",
+      "subtitleSocial": "此 {{provider}} 名籍尚未註籍於 Cindy。昔以他法登門乎？請歸而擇之。",
+      "create": "立新名籍",
+      "createDescEmail": "以此郵箱註籍 Cindy",
+      "createDescPhone": "以此手機號註籍 Cindy",
+      "createDescSocial": "以此 {{provider}} 名籍註籍"
     }
   },
   "legalTermsUpdate": {
@@ -11543,7 +11678,17 @@
         "enable": "往啟",
         "enabled": "已啟"
       },
-      "close": "闔"
+      "close": "闔",
+      "scanToLogin": "以 Cindy App 掃碼，徑登此名籍",
+      "approveTitle": "許手機登汝名籍乎？",
+      "approveBody": "「{{device}}」方掃碼登門。若非汝所為，請點「拒」。",
+      "approveBodyUnknown": "一手機方掃碼登門。若非汝所為，請點「拒」。",
+      "approve": "許",
+      "deny": "拒",
+      "loginApproved": "手機已登門",
+      "loginDenied": "已拒此登門",
+      "qrExpired": "此碼已逾時",
+      "qrRefresh": "更新"
     },
     "localNetwork": {
       "title": "啟區域網路之權",
@@ -12066,6 +12211,17 @@
       "memberCount_other": "{{count}} 人",
       "nameLabel": "群議之名",
       "waitingConfirm": "{{name}}候君確認",
+      "assistantDevice": {
+        "title": "群中 Cindy 待君擇機",
+        "onlyYou": "唯君可見",
+        "request": "「{{request}}」既擇機即行。",
+        "requestUnknown": "既擇機即行此事。",
+        "requests_one": "君有 {{count}} 事待行，既擇機即行。",
+        "requests_other": "君有 {{count}} 事待行，既擇機即行。",
+        "remember": "此後君於本群之事皆用此機，可於群議之設更之。",
+        "cancel": "罷此事",
+        "continue": "續"
+      },
       "loadFailedTitle": "不能載此群議",
       "loadFailedDescription": "Cindy 暫不能讀此群議之訊。君可再試，或歸同伴頁。",
       "unavailableTitle": "此群議已不可用",
@@ -12208,6 +12364,9 @@
           "GROUP_AUTHORIZATION_REQUIRED": "{{name}} 的工具呼叫未執行：群內授權已失效或不允許此操作。請由夥伴主人在目前群組重新發起。",
           "GROUP_AUTHORIZATION_UNAVAILABLE": "暫時無法核驗 {{name}} 的群聊授權，這次工具呼叫未執行。請在連線恢復後重試。",
           "ATTACHMENTS_UNAVAILABLE": "部分附件未交給 {{name}}（下載失敗或數量限制）。請重新傳送這次需要的附件。",
+          "ATTACHMENTS_DOWNLOAD_FAILED": "部分附件下載失敗，未能交給 {{name}}。請重新傳送需要的附件。",
+          "ATTACHMENTS_LIMIT_REACHED": "本輪附件數量超過上限，部分附件未能交給 {{name}}。請分批傳送需要的附件。",
+          "ATTACHMENTS_DOWNLOAD_FAILED_AND_LIMIT_REACHED": "部分附件下載失敗，另一些超出本輪數量上限，未能交給 {{name}}。請分批重新傳送需要的附件。",
           "GROUP_ASSISTANT_UNAVAILABLE": "{{name}}，連君之 Cindy，而後 Cindy 可代君行事（君之電腦今無在線之 Cindy）。",
           "GROUP_ASSISTANT_DEVICE_REQUIRED": "{{name}}，請擇本群執行之機，既擇即續此事。",
           "GROUP_ASSISTANT_DEVICE_OFFLINE": "{{name}} 於本群所擇之機已離線。"
@@ -12250,6 +12409,7 @@
         "projectDirClear": "清",
         "projectDirNote": "可擇本機既有之專案。未擇，則先取倉庫所繫，次取行事同伴之專案。Git 分工另闢 worktree。",
         "autoContinueSaveFailed": "分工交接未能存，請再試",
+        "projectDirNotRegistered": "請先於 Cindy 立此目錄為專案，再擇之。",
         "projectDirSaveFailed": "案之卷匣未能存，確其尚存後再試",
         "allowMemberInvites": "許諸成員邀友",
         "allowMemberInvitesHint": "啟之，已入群者皆可邀友。唯群主與管理員可改。",
@@ -12685,7 +12845,19 @@
         "failed": "操作未竟，請再試。",
         "lastOwner": "請先轉讓群主或解散群議，再退出。"
       },
-      "externalBadge": "外部"
+      "externalBadge": "外部",
+      "links": {
+        "kind": {
+          "pull": "PR",
+          "issue": "Issue",
+          "discussion": "討論",
+          "commit": "提交",
+          "file": "檔案",
+          "folder": "資料夾",
+          "release": "發行版",
+          "repo": "儲存庫"
+        }
+      }
     },
     "joined": {
       "today": "今日入列",
@@ -13232,7 +13404,11 @@
         "unbound": "可將官方 @askmycindy 所收君之提問交予 {{name}}。",
         "managed": "X 之問由同伴處理。可於該同伴之傳訊之所規制中更改所繫。",
         "riskBody": "X 之問將用同伴之共享記憶、才能與工作目錄，回答公開。勿經 X 處理私密資訊。專線不直接用同伴之私聊記錄。"
-      }
+      },
+      "handedOver": "{{apps}} 已於設定中付 {{name}} 應答。",
+      "handedOverSeparator": "、",
+      "manageInSettings": "往設定理之",
+      "handedOverHint": "下文所添乃 {{name}} 獨用之機器人，與設定中者各行不悖。"
     },
     "voiceMode": {
       "realtime": {
@@ -13926,7 +14102,8 @@
         },
         "companion": {
           "retryLater": "請少頃再試"
-        }
+        },
+        "membersPaused": "群眾之問暫止矣，待主人歸而續之 🙈"
       },
       "hook": {
         "interaction": {
@@ -14924,6 +15101,12 @@
       "discoveredCopy": {
         "unavailableHere": "此機之 {{provider}} 今不可用。",
         "unavailableOn": "「{{device}}」之 {{provider}} 今不可用。"
+      },
+      "preparation": {
+        "pending": "下則訊息",
+        "preparing": "正備…",
+        "failed": "切換未成",
+        "usingPrevious": "此則用 {{actual}}，{{target}} 尚未備"
       }
     },
     "permissionSelector": {
@@ -15213,6 +15396,7 @@
       },
       "credentialSwitchDeferred": "模型來源已切換，將於今之差事畢後生效。",
       "effortRuntimeDirty": "思之深淺尚在更新，稍候再遣",
+      "tooManyTaskReferences": "一訊至多引 {{max}} 事，逾者請刪",
       "steerNotSent": "未遣，暫不能插話，草稿已留",
       "credentialSwitchApplied": "模型所出已易，即行生效。",
       "credentialSwitchFailed": "模型來源切換未成，請重擇。",
@@ -17278,6 +17462,8 @@
       "organizeSidebar": "側欄顯示規制",
       "filterAllText": "全",
       "filterSelectedProjects": "已擇 {{count}} 案",
+      "filterSelectedHarnesses": "已擇 {{count}} 項",
+      "filterVendorPluginHeading": "出自法器",
       "filterStatus": {
         "active": "活躍",
         "archived": "已封存",
@@ -17296,6 +17482,11 @@
         "device": "機",
         "dialogue": "言談",
         "automation": "自運"
+      },
+      "filterGroupByHint": {
+        "device": "最外之層",
+        "dialogue": "無案之差事",
+        "automation": "自運所行之差事"
       },
       "filterGroupByDeviceManualTip": "手動排序時，暫不能依裝置分組",
       "deviceGroup": {
@@ -17327,6 +17518,11 @@
       "filterSortByTip": {
         "priority": "待君處置者居首，次未讀、方行者，餘依時序"
       },
+      "filterSortByHint": {
+        "priority": "待君者先",
+        "activity": "新動者先",
+        "created": "新立者先"
+      },
       "filterStatusHeading": "狀",
       "filterAgentHeading": "Harness",
       "filterLastActivityHeading": "近活躍",
@@ -17341,9 +17537,17 @@
       "filterProjectOrderTip": {
         "custom": "以滑鼠拖案列以調其序，組內差事仍依上之排序"
       },
+      "filterProjectOrderHint": {
+        "custom": "拖案列"
+      },
       "filterCreatorsHeading": "同伴",
       "filterCreatorsAny": "全",
-      "filterHideAutomations": "隱自動之務",
+      "hideHeading": "隱",
+      "hideOptions": {
+        "automations": "自動之務",
+        "taskCreated": "他差事所立之務",
+        "teammates": "同伴之務"
+      },
       "filterCreatorsNone": "皆不示",
       "filterSelectedCreators": "已擇 {{count}} 位",
       "filterProjectsHeading": "案",
@@ -17366,6 +17570,10 @@
         "openWorktree": "啟 worktree 卷匣",
         "tokens": "Token",
         "cost": "所費"
+      },
+      "taskInfoSection": {
+        "identity": "差事之識",
+        "meta": "右側之訊 · 依勾選之序"
       },
       "taskInfoTip": {
         "tokens": "累計 Token",
@@ -17447,7 +17655,15 @@
         "scheduleName": "「{{name}}」",
         "scheduleNameSeparator": "、",
         "confirm": "善",
-        "cancel": "罷"
+        "cancel": "罷",
+        "deleteSchedules_one": "刪所關聯之自運",
+        "deleteSchedules_other": "刪所關聯之自運",
+        "deleteScheduleWarning_one": "所關聯之自運{{names}}將被刪除，不可復原。",
+        "deleteScheduleWarning_other": "所關聯之自運{{names}}將被刪除，不可復原。",
+        "deleteSchedulesAndArchive": "刪而歸檔",
+        "discardDeleteAndArchive": "棄、刪並歸檔",
+        "deleteScheduleFailed_one": "差事已封存，惟未能刪除所關聯之自運，請往自運頁手動刪除。",
+        "deleteScheduleFailed_other": "差事已封存，惟未能刪除 {{count}} 項所關聯之自運，請往自運頁手動刪除。"
       },
       "dialogueAction": {
         "search": "於言談中尋",
@@ -17713,9 +17929,9 @@
         "tasks": "任務列表",
         "inbox": "收件匣",
         "enterInbox": "轉至收件匣之式",
-        "leaveInbox": "轉至任務列之式"
+        "leaveInbox": "轉至任務列之式",
+        "inboxTips": "收件匣用法"
       },
-      "filterHideTaskCreated": "隱他差事所立之務",
       "origin": {
         "createdByTask": "他差事所立",
         "createdByTaskNamed": "差事「{{title}}」所立",
@@ -18195,6 +18411,7 @@
     "ultra": "窮極"
   },
   "scheduler": {
+    "billingWait": "待籌或訂閱恢復。恢復後，以此連線發訊成功，定時任務即復行。",
     "prTrigger": {
       "fallback": "GitHub App 消息未通，仍依時查驗。",
       "label": "PR / MR",
@@ -18398,7 +18615,11 @@
       "openWorkdirFailed": "啟卷匣未成"
     },
     "runs": {
-      "boundPluginEngineRecovery": "自動之務未行。繫於法器引擎之務者，循其務之模型，行於此機。若自動之務另擇模型，宜去之，復行之。",
+      "boundPluginEngineRecovery": "自運未能用法器引擎而行。展開錯誤詳情，可察其故。",
+      "boundPluginEngineSshRecovery": "SSH 差事須循其原用引擎。欲用法器引擎，宜繫自運於相容之非 SSH 差事。",
+      "boundPluginEngineSelectionLocationRecovery": "所選法器引擎之所在不可行此自運。宜於自運模型設定中擇可用電腦之引擎。",
+      "boundPluginEngineTaskLocationRecovery": "所繫差事之法器引擎所在不可行此自運。宜移其引擎至可用之電腦，或另繫相容差事。",
+      "boundPluginEngineModelRecovery": "自運所設模型與所繫差事之法器引擎不合。宜設自運循差事之模型。",
       "queueWaitTimeoutRecovery": "排候逾時，提示詞未發。待所繫任務閒，按「{{action}}」補行。",
       "status": {
         "running": "方行",
@@ -22498,6 +22719,9 @@
     "send": "遣訊",
     "sending": "方遣…",
     "sent": "已呈",
+    "sendTooManyArguments": "此訊一次所理逾 {{limit}} 項，請助理分組重擬。",
+    "sendValueUnavailable": "此訊所需之值不可得，請助理核查表單欄位。",
+    "sendTextUnavailable": "未能擬就待傳之訊。",
     "sendFailed": "訊未呈，所填之內容仍存",
     "playVideo": "播影",
     "openVideoSource": "啟原影",

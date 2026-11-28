@@ -20,6 +20,9 @@ import {
   recognizeLoginMethods,
   meResponseSchema,
   providerConfigSchema,
+  qrHandoffStateSchema,
+  qrLoginHandoffCreatedSchema,
+  qrLoginPollSchema,
   ssoOrgDiscoverySchema,
   tokenPairSchema,
   type AuthClientType,
@@ -35,6 +38,9 @@ import {
   type LoginMethod,
   type LoginOutcome,
   type ProviderConfig,
+  type QrHandoffState,
+  type QrLoginHandoffCreated,
+  type QrLoginPoll,
   type SocialProvider,
   type SsoOrgDiscovery,
   type VerificationKind,
@@ -67,6 +73,11 @@ export interface AuthClientOptions {
   locale?: string;
   fetch: AuthFetch;
   timeoutMs?: number;
+  /**
+   * 登录能力声明（如 `SIGNUP_CONFIRMATION_CAPABILITY`），随验证码校验、原生社交交换与
+   * Web 授权发起一起发送。只有能处理对应新登录状态的宿主才传；不传时服务端保持旧语义。
+   */
+  capabilities?: readonly string[];
   /** Original failure before UI mapping; JSON syntax errors omit body excerpts. Adapters redact logs. */
   onRequestError?: (path: string, status: number, error: unknown) => void;
 }
@@ -174,6 +185,8 @@ export function retryAfterDeadline(response: Pick<AuthFetchResponse, "headers">)
  * (hold 住请求直到授权完成或 ~20s);短轮询实现下正常毫秒级返回,不受影响。
  */
 const DESKTOP_AUTHORIZATION_POLL_TIMEOUT_MS = 30_000;
+/** 扫码登录轮询单次请求上限；调用方另有 2 分钟总预算。 */
+const QR_LOGIN_POLL_TIMEOUT_MS = 15_000;
 
 const errorResponseSchema = z.object({
   error: z
@@ -310,6 +323,7 @@ export class CindyAuthClient {
       deviceId: this.options.deviceId,
       clientType: this.options.clientType,
       locale: this.options.locale,
+      ...this.capabilityField(),
     };
     return this.request(
       `/api/auth/${kind}/verify-code`,
@@ -379,7 +393,87 @@ export class CindyAuthClient {
       deviceId: this.options.deviceId,
       clientType: this.options.clientType,
       locale: this.options.locale,
+      ...this.capabilityField(),
     });
+  }
+
+  /** 用户确认「创建新账号」：消费 `signup_required` 返回的注册票据。 */
+  signup(signupTicket: string): Promise<LoginOutcome> {
+    return this.request("/api/auth/signup", loginOutcomeSchema, {
+      signupTicket,
+      deviceId: this.options.deviceId,
+    });
+  }
+
+  // -------------------------------------------------------------------------
+  // 扫码登录：已登录的电脑出码，未登录的手机扫码认领，电脑允许后手机登录。
+  // pollSecret 原像只在认领方（手机）进程内；服务端与二维码只见摘要。
+
+  createQrHandoff(accessToken: string): Promise<QrLoginHandoffCreated> {
+    return this.request("/api/auth/qr-login/handoffs", qrLoginHandoffCreatedSchema, {}, { token: accessToken });
+  }
+
+  claimQrHandoff(input: {
+    handoffId: string;
+    scanToken: string;
+    pollSecretHash: string;
+    deviceName?: string;
+    platform?: string;
+  }): Promise<{ status: "claimed"; expiresAt: string }> {
+    return this.request(
+      `/api/auth/qr-login/handoffs/${encodeURIComponent(input.handoffId)}/claim`,
+      z.object({ status: z.literal("claimed"), expiresAt: z.string() }),
+      {
+        scanToken: input.scanToken,
+        pollSecretHash: input.pollSecretHash,
+        deviceId: this.options.deviceId,
+        clientType: this.options.clientType,
+        ...(input.deviceName ? { deviceName: input.deviceName.slice(0, 64) } : {}),
+        ...(input.platform ? { platform: input.platform.slice(0, 16) } : {}),
+      },
+    );
+  }
+
+  qrHandoffState(
+    accessToken: string,
+    handoffId: string,
+    options: { signal?: AbortSignal } = {},
+  ): Promise<QrHandoffState> {
+    return this.request(
+      `/api/auth/qr-login/handoffs/${encodeURIComponent(handoffId)}/state`,
+      qrHandoffStateSchema,
+      {},
+      { token: accessToken, timeoutMs: QR_LOGIN_POLL_TIMEOUT_MS, signal: options.signal },
+    );
+  }
+
+  async decideQrHandoff(accessToken: string, handoffId: string, approve: boolean): Promise<void> {
+    await this.request(
+      `/api/auth/qr-login/handoffs/${encodeURIComponent(handoffId)}/decision`,
+      z.object({ status: z.enum(["approved", "denied"]) }),
+      { approve },
+      { token: accessToken },
+    );
+  }
+
+  pollQrHandoff(
+    handoffId: string,
+    pollSecret: string,
+    options: { signal?: AbortSignal } = {},
+  ): Promise<QrLoginPoll> {
+    return this.request(
+      `/api/auth/qr-login/handoffs/${encodeURIComponent(handoffId)}/poll`,
+      qrLoginPollSchema,
+      { pollSecret, deviceId: this.options.deviceId },
+      { timeoutMs: QR_LOGIN_POLL_TIMEOUT_MS, signal: options.signal },
+    );
+  }
+
+  private capabilityField(): { capabilities?: string[] } {
+    const capabilities = this.options.capabilities;
+    return capabilities && capabilities.length > 0
+      ? { capabilities: [...capabilities] }
+      : {};
   }
 
   selectAccount(loginTicket: string, accountId: string): Promise<LoginOutcome> {
@@ -645,6 +739,10 @@ export class CindyAuthClient {
       code_challenge_method: "S256",
       client_state: input.state,
       ...(this.options.locale ? { ui_locale: this.options.locale } : {}),
+      // 社交授权在起点冻结能力声明；企业 SSO 不涉及个人注册，不携带。
+      ...(input.kind === "social" && this.options.capabilities?.length
+        ? { capabilities: this.options.capabilities.join(",") }
+        : {}),
     }).toString();
     return url.toString();
   }

@@ -131,6 +131,7 @@ import {
 } from '../shared/windowBackdrop.js';
 import { isHardwareAccelerationDisabled } from './gpuRenderingPolicy.js';
 import { isAllowedBillingMailtoRequest } from '../shared/billing.js';
+import { parseDesktopQrHandoffId } from '../shared/authIpc';
 import path from 'node:path';
 import fs from 'node:fs';
 import { textFilePreviewResult, TEXT_PREVIEW_LIMIT_MB } from './text-file-preview';
@@ -155,6 +156,8 @@ import {
   readWindowFullscreenState,
   showMainWindowAndRestoreFullscreen,
 } from './mainWindowFullscreenStartup';
+import { installMacFullscreenDesyncRecovery } from './macFullscreenRecovery';
+import { readPluginUiRegions } from './mcp-apps/visibility';
 import {
   installMainWindowMaximizeRecovery,
   installMainWindowNativeRestoreIntent,
@@ -1287,6 +1290,7 @@ import { applyDockIcon } from './app-icon.js';
 import { registerBillingIpc } from './billing/index.js';
 import {
   initModelAccess,
+  noteModelAccessAgentBinariesReady,
   noteManualXdKeySaved,
   noteManualXdKeyRemoved,
   refreshXdGatewayModels,
@@ -1370,7 +1374,7 @@ import { isClassicalReplyStyle } from '@cindy/maker-shared/classical-reply';
 import { registerModelGroupDecisionIpc } from './model-groups/decisionIpc.js';
 import { registerDesktopSshCodexProvidersReader } from './model-groups/desktopResolver.js';
 import { registerModelGroupsIpc } from './model-groups/ipc.js';
-import { registerFeishuGroupSettingsIpc } from './im/feishu/groupSettingsIpc.js';
+import { registerImChatSettingsIpc } from './im/shared/chatSettingsIpc.js';
 import { wireFeishuGroupProjectPorts } from './im/feishu/groupProjectPortsWiring.js';
 import { requireObject, requireString, throwIpcError } from './utils/ipcValidate.js';
 import { pickNativeAtResource } from './nativeAtResourcePicker.js';
@@ -4965,6 +4969,15 @@ const createWindow = () => {
     // animation start so traffic-light padding returns before the end event.
     getDisplayBounds: (bounds) => screen.getDisplayMatching(bounds).bounds,
   });
+  installMacFullscreenDesyncRecovery(mainWindow, {
+    windowLabel: 'main',
+    trafficLightPosition: { x: 12, y: 16 },
+    minSize: { width: 800, height: 600 },
+    shouldShowWindowButtons: () => {
+      const regions = readPluginUiRegions(mainWindow);
+      return regions.workspace && regions.windowControls;
+    },
+  });
 
   // Wire resize / move / maximize / fullscreen listeners that persist the
   // state to disk on `close`. Must run before any user resize event fires.
@@ -5903,7 +5916,7 @@ const registerIpcHandlers = () => {
     return imDefaultSettingsWire(channel);
   });
   wireFeishuGroupProjectPorts();
-  registerFeishuGroupSettingsIpc();
+  registerImChatSettingsIpc();
   if (!hostClientMode) {
     registerDesktopSshCodexProvidersReader(listSshCodexProviders);
     registerModelGroupsIpc();
@@ -7191,6 +7204,25 @@ const registerIpcHandlers = () => {
     return authManager.getLoginCaptchaChallengeUrl();
   });
 
+  // 扫码登录：本机已登录，在「远程控制 Cindy」弹窗为另一台设备出码并允许/拒绝。
+  // 仅本机界面使用（手机端直连 auth-server），不进入设备互联白名单。
+  ipcMain.handle('auth:qr-handoff:create', async (event) => {
+    assertTrustedAppRendererEvent(event);
+    return authManager.createQrLoginHandoff();
+  });
+  ipcMain.handle('auth:qr-handoff:state', async (event, handoffId: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    const id = parseDesktopQrHandoffId(handoffId);
+    if (!id) return { success: false, code: 'INVALID_PARAMS' };
+    return authManager.getQrLoginHandoffState(id);
+  });
+  ipcMain.handle('auth:qr-handoff:decide', async (event, handoffId: unknown, approve: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    const id = parseDesktopQrHandoffId(handoffId);
+    if (!id || typeof approve !== 'boolean') return { success: false, code: 'INVALID_PARAMS' };
+    return authManager.decideQrLoginHandoff(id, approve);
+  });
+
   ipcMain.handle('auth:logout', async () => {
     await authManager.logout();
   });
@@ -7769,6 +7801,7 @@ const registerIpcHandlers = () => {
     startBinaryBackgroundUpdates();
 
     instanceBinariesReady = true;
+    noteModelAccessAgentBinariesReady();
 
     return {
       claudeCode: { status: claudeRes.ready ? 'passed' as const : 'failed' as const, path: claudeRes.path },
@@ -10706,7 +10739,8 @@ app.on('ready', async () => {
           throwIpcError('PRECONDITION_FAILED', 'The task already has a worktree');
         }
         return WorktreeManager.createWorktree(request, {
-          awaitFullCheckout: true,
+          trackBackgroundCheckout: true,
+          strictSelectiveCheckout: true,
           refreshDefaultSource: true,
           assertCurrent,
         });

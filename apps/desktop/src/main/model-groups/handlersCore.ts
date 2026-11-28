@@ -27,22 +27,18 @@ import {
   projectModelGroupSessionBinding,
   readModelGroupSessionBinding,
   unbindModelGroupSession,
+  type ModelGroupSessionTarget,
+  type PendingModelGroupTarget,
 } from './sessionBindings.js';
 import { readModelGroupsConfig, readModelGroupsConfigForSelected, writeModelGroupsConfig } from './store.js';
-
-export interface ModelGroupHandlersSessionTarget {
-  agentKind?: string | null;
-  providerId?: string | null;
-  model?: string | null;
-  agentDeviceId?: string | null;
-}
 
 export interface ModelGroupHandlersPorts {
   runtime(): ModelGroupRuntime;
   isDeviceLink(): boolean;
   deviceLinkOrigin(): 'owner' | 'scoped' | undefined;
-  readSessionTarget(sessionId: string): Promise<ModelGroupHandlersSessionTarget | null>;
-  readPendingSessionTarget?(sessionId: string): ModelGroupHandlersSessionTarget | null;
+  readSessionTarget(sessionId: string): Promise<ModelGroupSessionTarget | null>;
+  readPendingSessionTarget?(sessionId: string): PendingModelGroupTarget | null;
+  markPendingModelGroupPick?(sessionId: string, pickedKey: string): void;
   routeNotePorts: ModelGroupRouteNotePorts;
 }
 
@@ -160,7 +156,10 @@ export function createModelGroupHandlers(ports: ModelGroupHandlersPorts) {
         || agentDeviceId === null) {
         throwIpcError('INVALID_PARAMS', 'model group selection and route are required');
       }
-      bindModelGroupSession(sessionId, selection, modelGroupCandidateKey({ agentKind, providerId, model, agentDeviceId }));
+      const pickedKey = modelGroupCandidateKey({ agentKind, providerId, model, agentDeviceId });
+      if (bindModelGroupSession(sessionId, selection, pickedKey)) {
+        ports.markPendingModelGroupPick?.(sessionId, pickedKey);
+      }
     },
 
     unbindSession(raw: unknown, assertLocal?: () => void) {

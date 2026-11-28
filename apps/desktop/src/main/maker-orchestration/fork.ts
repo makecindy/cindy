@@ -19,10 +19,13 @@ import { assertCindyMakeSessionAvailable } from '../cindy-make/featureGate.js';
 import { remoteBackgroundInvoke } from '../device-link/index.js';
 import { forkRemoteAgentSession } from '../remote-agent/controller/fork.js';
 import { remoteAgentInvoker } from '../remote-agent/controller/runClient.js';
-import { isSharedTaskPeer, parseProviderSharePeer } from '@cindy/device-link';
+import { isSharedTaskPeer, parseProviderSharePeer, remoteAgentErrorCode } from '@cindy/device-link';
 import {
   authorizeSharedTaskHistory, authorizeSharedTaskExecutor, releaseSharedTaskAuthorization,
 } from '../remote-agent/controller/providerShareTaskLocation.js';
+import type { DbClient } from '../localDb/client/DbClient.js';
+import { isDbTransportOutcomeUnknown } from '../localDb/client/DbTransport.js';
+import type { ForkSessionArgs } from '../localDb/client/tx/types.js';
 import { getDbClient } from '../localDb/client/current';
 import { sessions, messages } from '../localDb/schema';
 import { sessionToCamel } from '../localDb/mapper';
@@ -45,6 +48,9 @@ import {
   parseClaudeAgentMeta,
   resolveClaudeForkAssistantAnchor,
 } from './claudeTranscriptAnchors';
+import { createLogger } from '../logger';
+
+const log = createLogger('maker-orchestration/fork');
 
 /** fork 内部错误码——由 IPC 层 catch 后映射到对应 IPC 错误码。 */
 export type ForkErrorCode =
@@ -113,6 +119,13 @@ async function forkSideChat(sourceSessionId: string, childId?: string): Promise<
   )).orderBy(desc(messages.createdAt), desc(messageRowid)).limit(1);
   if (!anchor?.clientId) throw forkError('NO_PRIOR_ASSISTANT', 'Wait for the first completed reply');
   return forkSessionAtMessage(sourceSessionId, anchor.clientId, { sideChat: true, childId });
+}
+
+/** 被控端的错误码可能在正文前缀里(桌面 IPC 包装)，也可能直接是 code(中转原样转发)。 */
+function isRemoteNativeForkFailure(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  return remoteAgentErrorCode(error.message) === 'REMOTE_AGENT_FORK_FAILED'
+    || (error as { code?: unknown }).code === 'REMOTE_AGENT_FORK_FAILED';
 }
 
 function forkError(code: ForkErrorCode, message: string): Error {
@@ -974,6 +987,39 @@ function collectClaudeToolParentUuids(
   return [...uuids];
 }
 
+async function commitForkSession<T extends ForkSessionArgs>(client: DbClient, inheritedBudget: number | null, args: T) {
+  const child = args.newSession;
+  const readChild = async () => {
+    const [row] = await client.drizzle.select().from(sessions).where(eq(sessions.id, child.id));
+    return row;
+  };
+  try {
+    await client.tx('fork.session', args);
+  } catch (error) {
+    if (isDbTransportOutcomeUnknown(error)) {
+      // A lost receipt can arrive before the write finishes. A missing or unreadable
+      // child is inconclusive, so keep its preference and never replay the transaction.
+      const row = await readChild().catch(() => undefined);
+      if (row?.id === child.id && row.parentSessionId === child.parentSessionId
+        && row.sdkSessionId === child.sdkSessionId && row.forkedAtMessageId === child.forkedAtMessageId) {
+        return row;
+      }
+      log.warn('fork: transaction outcome could not be confirmed', {
+        sourceSessionId: args.sourceSessionId, childSessionId: child.id, sdkSessionId: child.sdkSessionId,
+      });
+      throw error;
+    }
+    if (inheritedBudget !== null) pruneSessionContextWindowBudget(child.id);
+    if (child.sdkSessionId) {
+      log.error('fork: native session created but DB transaction failed', {
+        sourceSessionId: args.sourceSessionId, childSessionId: child.id, sdkSessionId: child.sdkSessionId,
+      });
+    }
+    throw error;
+  }
+  return readChild();
+}
+
 /**
  * 把 source 会话在 messageClientId 处 fork 成新会话。fork 点支持两种 role：
  *
@@ -1137,6 +1183,8 @@ export async function forkSessionAtMessage(
   let forkAtTimestampMs: number | undefined;
   let tailTurnsToDrop: number | undefined;
   let claudeAnchorIndex: ClaudeTranscriptAnchorIndex | null = null;
+  /** Claude 原生分叉不可用时，子任务从复制的聊天记录交接开始。 */
+  let claudeHistoryHandoff = false;
   const resetHandoffBoundaryClientId = findFirstUserAfterSwitchBoundary(
     sourceMessages,
     target.role,
@@ -1156,7 +1204,12 @@ export async function forkSessionAtMessage(
     // 切换后的首条 user 自身不进子分支。fresh Claude session 在它之前没有可 fork
     // 的 assistant 锚点，此时创建未绑定的新会话，并把复制边界恢复为 pending handoff。
     if (!assistantUuid && !resetHandoffBoundaryClientId) {
-      throw forkError('NO_PRIOR_ASSISTANT', '请在 AI 回复之后的提问上 fork');
+      // 有 AI 回复、只是原生记录里找不到(典型：压缩后底层对话换了编号，旧回复不在当前记录里)：
+      // 用复制的聊天记录交接给新的原生对话，而不是让用户无法分叉。
+      if (!sourceMessages.some((row) => row.role === 'assistant')) {
+        throw forkError('NO_PRIOR_ASSISTANT', '请在 AI 回复之后的提问上 fork');
+      }
+      claudeHistoryHandoff = true;
     }
   } else if (forkSource.reuseVendorSession && forkSource.sdkSessionId) {
     if (isCodex) {
@@ -1237,6 +1290,17 @@ export async function forkSessionAtMessage(
       ? forkRemote()
       : getMaker().forkSdkSession(agentKind, forkOptions))
       .catch((err: unknown) => {
+        // 运行 Agent 的电脑明确回「原生分叉失败」(多为锚点已不在当前原生记录里)：电脑在线、
+        // 也有权限，只是原生历史接不上，用聊天记录交接。连不上、无权限等其它错误照常上抛。
+        if (forkSource.agentDeviceId && forkSource.agentKind === 'cc' && isRemoteNativeForkFailure(err)) {
+          claudeHistoryHandoff = true;
+          return {
+            newSdkSessionId: null,
+            uuidMap: new Map<string, string>(),
+            initialContextTokens: undefined,
+            usedNativeForkAnchor: false,
+          };
+        }
         // 这里刻意用 isCodex(非 usesTailTurnFork):CODEX_FORK_STATE_UNAVAILABLE 是 codex 专属
         // 错误码 + 文案,只有真 codex 失败才包装。pi 与 cc 一样裸抛原始错误(不会拿到指名道姓
         // 错对象的 "Codex 状态不可用" 提示)。改成 usesTailTurnFork 会让 pi 误报成 codex 错误。
@@ -1301,8 +1365,10 @@ export async function forkSessionAtMessage(
   // 事务失败则把刚写的条目撤掉，不留指向不存在任务的孤儿条目。
   await assertTaskActionCurrent();
   const inheritedBudget = copySessionContextWindowBudget(sourceSessionId, newSessionId);
-  try {
-    await dbClient.tx('fork.session', {
+  const row = await commitForkSession(
+    dbClient,
+    inheritedBudget,
+    {
       sourceSessionId,
       sourceClearedAt: source.clearedAt,
       targetCreatedAt: snapshotBoundary.createdAt,
@@ -1353,30 +1419,24 @@ export async function forkSessionAtMessage(
       resetHandoffBoundaryClientId,
       newMessageIds,
       recoveryMarker,
-    });
-  } catch (err) {
-    // 轮 40-w4-t13 HIGH:SDK 侧已创建新 session file(forkSdkSession), DB 事务
-    // 失败时该文件成孤儿 —— 调用方收到失败, 但孤儿累积不可达。至少记录
-    // 可恢复线索(sdkSessionId), 供诊断/清理; 错误照常上抛。
-    if (inheritedBudget !== null) pruneSessionContextWindowBudget(newSessionId);
-    if (newSdkSessionId) {
-      console.error(
-        `[fork] SDK session ${newSdkSessionId} created but DB transaction failed — orphan session file left behind`,
-        { sourceSessionId, error: err instanceof Error ? err.message : String(err) },
-      );
-    }
-    throw err;
-  }
-
-  // 7. 返回 mapper 转过的新 session（含 messageCount）
-  const [row] = await db.select().from(sessions).where(eq(sessions.id, newSessionId));
+    },
+  );
   if (!row) {
     throw new Error('Fork session 创建后查询失败');
   }
   const pluginEngineFork = forkSource.agentKind === 'acp';
+  const handoffReason = claudeHistoryHandoff
+    ? 'native-session-recovery' as const
+    : !needsHistoryRecovery && !forkSource.reuseVendorSession ? forkSource.rebuildReason : undefined;
+  if (claudeHistoryHandoff) {
+    log.warn('fork: Claude native anchor unavailable, handing off from chat history', {
+      sourceSessionId,
+      remote: Boolean(forkSource.agentDeviceId),
+      copiedMessages: sourceMessages.length,
+    });
+  }
   // A plugin engine fork before the first copied message has no history to hand over.
-  if (!needsHistoryRecovery && !forkSource.reuseVendorSession && forkSource.rebuildReason
-    && (!pluginEngineFork || sourceMessages.length > 0)) {
+  if (handoffReason && (!pluginEngineFork || sourceMessages.length > 0)) {
     await assertTaskActionCurrent();
     await seedForkHandoffAfterSameEngineRebuild({
       sessionId: newSessionId,
@@ -1389,14 +1449,15 @@ export async function forkSessionAtMessage(
         : await resolveDesktopHandoffWindow(newSessionId, {
             ...forkSource, agentKind: dbToMakerAgentKind(forkSource.agentKind), remoteHostId: source.remoteHostId,
           }),
-      reason: forkSource.rebuildReason,
+      reason: handoffReason,
     });
   }
   return sessionToCamel({ ...row, messageCount: sourceMessages.length + (recoveryMarker ? 1 : 0) });
 }
 
 export async function forkSessionStripEncrypted(sourceSessionId: string): Promise<Session> {
-  const db = getDbClient().drizzle;
+  const dbClient = getDbClient();
+  const db = dbClient.drizzle;
 
   const [source] = await db
     .select()
@@ -1517,8 +1578,10 @@ export async function forkSessionStripEncrypted(sourceSessionId: string): Promis
   // 任务级窗口档位与普通 fork 同口径继承（同一条任务意图）；这是偏好文件里的条目，
   // 与普通 fork 一样先写后提交：写失败时任务还没建出来，事务失败则撤掉条目。
   const inheritedBudget = copySessionContextWindowBudget(sourceSessionId, newSessionId);
-  try {
-    await getDbClient().tx('fork.session', {
+  const row = await commitForkSession(
+    dbClient,
+    inheritedBudget,
+    {
       sourceSessionId,
       sourceClearedAt: source.clearedAt,
       targetCreatedAt: copyBeforeCreatedAt,
@@ -1553,13 +1616,8 @@ export async function forkSessionStripEncrypted(sourceSessionId: string): Promis
       uuidMap: Array.from(uuidMap.entries()),
       newMessageIds,
       recoveryMarker,
-    });
-  } catch (err) {
-    if (inheritedBudget !== null) pruneSessionContextWindowBudget(newSessionId);
-    throw err;
-  }
-
-  const [row] = await db.select().from(sessions).where(eq(sessions.id, newSessionId));
+    },
+  );
   if (!row) {
     throw new Error('Fork session 创建后查询失败');
   }
