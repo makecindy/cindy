@@ -359,6 +359,10 @@ async function pruneVolatileConfig(absPath: string): Promise<void> {
   if (!isConfigRecord(parsed)) return;
   const pruned = withoutVolatileConfig(parsed);
   if (pruned === parsed) return;
+  // 读一遍再写是两步：中间用户可能在编辑器里保存了别的字段。写前再确认一次内容没变，
+  // 变了就是用户的新内容，放弃清理而不是盖回去。
+  const current = await fs.readFile(absPath, 'utf8').catch(() => null);
+  if (current !== raw) return;
   await writeTextAtomic(absPath, `${JSON.stringify(pruned, null, 2)}\n`);
 }
 

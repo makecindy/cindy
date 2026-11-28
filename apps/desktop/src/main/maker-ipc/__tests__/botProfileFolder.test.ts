@@ -284,6 +284,32 @@ describe('搬家', () => {
     expect(await fs.readFile(file, 'utf8')).toBe('{ model: gpt-6.1-sol, ');
   });
 
+  // 清理是「读一整份、再写回」两步：中间用户保存了别的字段时，旧副本不能盖掉新内容。
+  it('清理期间用户刚好保存了 config.json：跳过清理，不覆盖新内容', async () => {
+    await fs.mkdir(botProfileDir(root, 'bot-a'), { recursive: true });
+    const file = path.join(botProfileDir(root, 'bot-a'), 'config.json');
+    await fs.writeFile(file, JSON.stringify({ memory: true, model: 'gpt-6.1-sol' }));
+    await fs.writeFile(path.join(botProfileDir(root, 'bot-a'), 'SOUL.md'), '已经建好的家');
+    const real = fs.readFile.bind(fs);
+    const realWrite = fs.writeFile.bind(fs);
+    let reads = 0;
+    const simulatedSave = JSON.stringify({ memory: false, model: 'gpt-6.1-sol' });
+    const spy = vi.spyOn(fs, 'readFile').mockImplementation(((target: Parameters<typeof fs.readFile>[0], options?: Parameters<typeof fs.readFile>[1]) => {
+      if (String(target) === file) {
+        reads += 1;
+        // The user's save lands between the read and the rewrite.
+        if (reads > 1) return realWrite(file, simulatedSave).then(() => simulatedSave);
+      }
+      return real(target as never, options as never);
+    }) as typeof fs.readFile);
+    try {
+      await migrateBotProfileFolder(root, 'bot-a', SEED);
+    } finally {
+      spy.mockRestore();
+    }
+    expect(JSON.parse(await fs.readFile(file, 'utf8'))).toEqual({ memory: false, model: 'gpt-6.1-sol' });
+  });
+
   it('已经有家了就整个跳过,绝不覆盖用户改过的灵魂', async () => {
     await writeBotProfileFolder(root, 'bot-a', { identitySource: '用户自己改过的' });
     const result = await migrateBotProfileFolder(root, 'bot-a', SEED);
