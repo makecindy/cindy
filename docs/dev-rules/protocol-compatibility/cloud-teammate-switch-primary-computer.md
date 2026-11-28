@@ -13,6 +13,25 @@
 不新增 channel、参数、帧、服务端接口或持久化字段；官方与自建中转继续透传既有能力回包，
 Mobile 仍通过既有换主力流程发起请求，不改原生指纹。
 
+2026-11-21：发起方读主力电脑版本时，`maker:companion-cloud:caps` 的请求与回包不变，只改本机对「没有回包」的解读：
+设备列表显示主力电脑在线时按白名单判定：只有主力电脑回包里的版本（≥ 1），或主力电脑分发层答复的 `CHANNEL_NOT_ALLOWED`
+且正文正是分发层对未知通道的原话 `channel 'maker:companion-cloud:caps' not allowed remotely`（旧版没有该通道；路由层同码的
+`Encrypted transport required` 等不算）、`REMOTE_DISABLED`、`ACCESS_REVOKED` 算明确答复，
+后者仍记为版本 0、照旧直接接管；其余一律「不可确认」——超时、链路未就绪、`DEVICE_OFFLINE`、本机抛出的
+`CHANNEL_NOT_ALLOWED`、没有错误码的异常、不认识或新增的错误码、没带版本的回包——放宽等待重试一次，仍不可确认
+则给本机界面 `HOME_UNRESPONSIVE`，不自动接管。为区分「对端答复的错误」与「本机 / 中转抛出的错误」，这条探测直接读
+`remoteInvoke` 的回包（保留错误正文），不经把两者合并成 `[CODE]` 文本的 `invokeDeviceValue`。只有完整且新鲜的设备目录
+（非 partial、非 stale）里主力电脑那一行说离线时不探测、照旧直接接管；目录读取失败、过期、不完整或缺行都按主力电脑 ID 探测。
+2026-11-25 起明确答复还要求来源：只有 `remoteInvoke` 正常返回的回包（按请求 id 配对的对端 invoke-result）算对端答复；
+调用抛出的 `DeviceLinkError` 一律不可确认，包括本机缓存的 `REMOTE_DISABLED`（`DeviceLinkClient.request` / Agent-Net
+会话发送前抛出）、中转 relay-error、链路关闭带回的 `ACCESS_REVOKED` 与 Agent-Net `UNAUTHORIZED`。现有 API 已能区分
+（失败一律抛出、对端回包一律正常返回），不需要在 device-link 里加来源标记，也不改共享包。
+2026-11-25 起主人确认过的强制只探测一次（5 秒），同一台主力电脑、同一种探测的在途请求在本机主进程里合并（不缓存结果）；
+请求与回包不变，探测次数只减不增。
+不新增错误码，不改变发给对端的内容。`HOME_UNRESPONSIVE` 与 `CompanionSwitchOptions.force` / `forceHomeDeviceId`
+只在同一 Desktop 的 `:home-choices` / `:switch-home` 本机 IPC 中使用；`maker:companion-cloud:hand-over` 仍只转发
+`whenBusy`，`force` 不进 device-link，也不进远程交出的选项解析。不新增 channel、帧或服务端接口，手机与旧版对端不受影响。
+
 2026-11-08：`maker:companion-cloud:caps` 的 `companionCloud` 升至 4，表示接收端能运行伙伴 V2（伙伴 = 项目）。
 V2 主力电脑只交给声明 ≥ 4 的目标，低于 4 返回 `TARGET_OUTDATED`（旧发起方不认识该码，按 `FAILED` 显示）；
 `maker:companion-cloud:targets` 的条目新增可选 `outdated: true`（版本 1–3 的电脑仍列出、不可选），旧发起方忽略。

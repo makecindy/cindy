@@ -8,7 +8,9 @@ import { useTranslation } from 'react-i18next';
 
 import { WINDOW_NO_DRAG_STYLE } from '@/components/layout/windowDrag';
 import { FileTypeIcon } from '@/components/ui/file-type-icon';
+import { MENU_DANGER_TEXT } from '@/components/ui/menu-row';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import { Spinner } from '@/components/ui/spinner';
 import { AttentionDot } from '@/components/sidebar/AttentionDot';
 import { useSessionAttentionKind } from '@/lib/sessionAttentionStore';
 import { useCCSessions } from '@/hooks/useCCSessions';
@@ -64,6 +66,7 @@ function Row({
   inlineMeta = false,
   trailing,
   muted = false,
+  danger = false,
   onClick,
   onContextMenu,
   onKeyDown,
@@ -75,6 +78,8 @@ function Row({
   inlineMeta?: boolean;
   trailing?: ReactNode;
   muted?: boolean;
+  /** A destructive action (same text colour as a menu's danger row). */
+  danger?: boolean;
   onClick?: () => void;
   onContextMenu?: (event: MouseEvent<HTMLButtonElement>) => void;
   onKeyDown?: (event: KeyboardEvent<HTMLButtonElement>) => void;
@@ -91,7 +96,7 @@ function Row({
           className={cn(
             'block min-w-0 truncate text-13 leading-5',
             inlineMeta && 'flex-1',
-            muted ? 'text-[var(--text-secondary)]' : 'text-[var(--text-primary)]',
+            danger ? MENU_DANGER_TEXT : muted ? 'text-[var(--text-secondary)]' : 'text-[var(--text-primary)]',
           )}
         >
           {title}
@@ -151,6 +156,16 @@ interface ComputerRowModel {
   unread?: boolean;
   /** An older Cindy: still selectable, labelled so the owner knows the teammate runs there the older way. */
   outdated?: boolean;
+  /**
+   * Taking the companion over here although its home's state could not be confirmed: named as
+   * the forced action, in the destructive style, like the settings menu (cloud-companions.md §3.1).
+   */
+  force?: boolean;
+  /**
+   * A cloud companion's home not confirmed to run it (`HomeSwitch.homeRunning` is false): no «running
+   * there» claim on the row. Only the cloud companion's home row sets it; other rows are unchanged.
+   */
+  unconfirmed?: boolean;
   onSelect?: () => void;
 }
 
@@ -165,9 +180,10 @@ function ComputerRows({ rows }: { rows: ComputerRowModel[] }) {
       key={row.key}
       testId="bot-glance-computer"
       icon={<Monitor size={16} />}
-      title={row.name}
+      title={row.force ? t('bots.cloud.forceHere') : row.name}
       muted={!row.current && !row.online}
-      meta={row.current ? t('bots.glance.runningHere') : row.outdated ? t('bots.cloud.targetOutdatedMeta')
+      danger={row.force}
+      meta={row.force || row.unconfirmed ? undefined : row.current ? t('bots.glance.runningHere') : row.outdated ? t('bots.cloud.targetOutdatedMeta')
         : row.online ? t('bots.glance.online') : t('bots.glance.offline')}
       inlineMeta
       trailing={
@@ -210,18 +226,23 @@ function CloudComputers({
   onClose: () => void;
 }) {
   const { t } = useTranslation();
-  const loaded = useRef(false);
+  const loaded = useRef<string | null>(null);
   useEffect(() => {
-    if (open && !loaded.current) {
-      loaded.current = true;
+    if (open && loaded.current !== bot.id) {
+      loaded.current = bot.id;
       state.load();
     }
-    if (!open) loaded.current = false;
-    // 每次打开只读一次可以换去的电脑。
-  }, [open]);
+    if (!open) loaded.current = null;
+    // 每次打开只读一次可以换去的电脑；打开期间换了伙伴就为新伙伴重读（旧伙伴迟到的结果不会显示）。
+  }, [open, bot.id]);
   const targets = state.choices && state.choices.mode !== 'unavailable' ? state.choices.targets : [];
+  // Listed online but not answering: only an explicit, forced take-over here (with its own warning).
+  const unresponsive = state.choices?.reason === 'HOME_UNRESPONSIVE';
   const rows: ComputerRowModel[] = [
-    { key: `home:${state.home ?? ''}`, name: state.homeName, current: true, online: true },
+    // «Running there» only from a confirmed fact (`homeRunning`: a local companion that is active), never from
+    // the absence of a known problem nor from another computer's device-level answer.
+    { key: `home:${state.home ?? ''}`, name: state.homeName, current: true, online: true,
+      ...(state.homeRunning ? {} : { unconfirmed: true }) },
     ...targets
       .filter((target) => target.deviceId !== state.home)
       .map((target) => ({
@@ -230,10 +251,12 @@ function CloudComputers({
         current: false,
         online: target.online,
         ...(target.outdated ? { outdated: true } : {}),
+        ...(unresponsive ? { force: true } : {}),
         onSelect: () => {
           onClose();
           state.setError(null);
-          state.setPending(target);
+          if (unresponsive) state.askForce(target, state.decidedHome(state.choices?.homeDeviceId, state.choices?.homeName));
+          else state.setPending(target);
         },
       })),
   ];
@@ -244,6 +267,13 @@ function CloudComputers({
         <p className="px-2 pb-1 text-12 text-[var(--text-tertiary)]">{t('bots.cloud.devicesFailed')}</p>
       ) : !state.movable ? (
         <p className="px-2 pb-1 text-12 text-[var(--text-tertiary)]">{t('bots.cloud.resumeToMove', { name: bot.name })}</p>
+      ) : state.checkingHome ? (
+        <p role="status" className="flex items-center gap-1.5 px-2 pb-1 text-12 text-[var(--text-tertiary)]">
+          <Spinner size={12} aria-hidden className="shrink-0" />
+          <span className="min-w-0">{t('bots.cloud.checkingHome', state.homeText(state.checkingName))}</span>
+        </p>
+      ) : unresponsive ? (
+        <p className="px-2 pb-1 text-12 text-[var(--text-tertiary)]">{t('bots.cloud.homeUnresponsive', { name: bot.name, ...state.homeText(state.decidedHome(state.choices?.homeDeviceId, state.choices?.homeName)?.name) })}</p>
       ) : null}
     </>
   );

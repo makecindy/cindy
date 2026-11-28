@@ -63,11 +63,19 @@ export type CompanionCloudFailureCode =
   /** The chosen computer still rejects imported skills above its 64 KiB body limit. */
   | 'SKILL_TARGET_OUTDATED'
   /** Cloud has no uploaded profile snapshot yet; another computer requires confirmation before starting fresh. */
-  | 'PROFILE_SNAPSHOT_MISSING';
+  | 'PROFILE_SNAPSHOT_MISSING'
+  /**
+   * Local only (never sent to another computer): the home's state could not be confirmed (no explicit
+   * answer; cloud-companions.md §3.1), so it was not asked to hand over. Taking over anyway needs
+   * `CompanionSwitchOptions.force`.
+   */
+  | 'HOME_UNRESPONSIVE';
 
 export type CompanionCloudActionResult =
   | { ok: true }
   | { ok: false; code: CompanionCloudFailureCode; homeDeviceId?: string | null;
+      /** Device-link name of `homeDeviceId` from the same decision (local `switchHome` results only; may be empty). */
+      homeName?: string;
       oversizedSkill?: CompanionOversizedSkill;
       /** Local identity conflict provenance; older/remote replies may omit it. Never a cleanup authorization. */
       conflictingBotId?: string; conflictingDeviceId?: string | null;
@@ -96,6 +104,18 @@ export interface CompanionSwitchOptions {
   whenBusy?: 'wait' | 'stop';
   /** User confirmed continuing with a default profile when switching in take-over mode without a snapshot. */
   allowMissingProfile?: boolean;
+  /**
+   * Take the companion over here although its home's state could not be confirmed
+   * (`HOME_UNRESPONSIVE`); what it has not synced yet may stay on that computer. Local UI only.
+   * Only counts together with `forceHomeDeviceId`.
+   */
+  force?: boolean;
+  /**
+   * The home the owner confirmed forcing past. A force applies to that home only: if the home has
+   * changed meanwhile the move fails with `HOME_CONFLICT` (nothing written), and the final write
+   * compares-and-sets against this home.
+   */
+  forceHomeDeviceId?: string;
 }
 
 export interface CompanionTranscriptMessage {
@@ -142,7 +162,8 @@ export interface CompanionTransferTarget {
  * Where a companion can move, as seen from this computer (cloud-companions.md §3.1):
  * - `local`: this computer is the home and hands it over itself;
  * - `remote`: the home is another reachable computer, asked to hand it over;
- * - `takeOver`: the home cannot be reached; only this computer can continue it;
+ * - `takeOver`: the home cannot be reached; only this computer can continue it. With `reason:
+ *   'HOME_UNRESPONSIVE'` the home's state could not be confirmed: taking over needs `force`;
  * - `unavailable`: the home cannot be changed from here (`reason`).
  */
 export interface CompanionHomeChoices {
@@ -150,7 +171,7 @@ export interface CompanionHomeChoices {
   /** Device-link name of the home; empty when unknown here. */
   homeName?: string;
   mode: 'local' | 'remote' | 'takeOver' | 'unavailable';
-  reason?: 'HOME_OUTDATED' | 'NOT_ENABLED' | 'NOT_FOUND';
+  reason?: 'HOME_OUTDATED' | 'NOT_ENABLED' | 'NOT_FOUND' | 'HOME_UNRESPONSIVE';
   /** Computers it can move to (never the current home). */
   targets: CompanionTransferTarget[];
   /** Why this computer is not among the targets of a remote home: it has not allowed same-account control. */
