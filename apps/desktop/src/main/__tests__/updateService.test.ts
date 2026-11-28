@@ -1226,6 +1226,51 @@ describe('checkForUpdate Linux installer flow', () => {
     }
   });
 
+  // Test value
+  // - Production entry and observable result: a managed user install that both
+  //   lacks update tools and belongs to another region reports the generic
+  //   "cannot self-update", not the missing-tool dialog.
+  // - Bug/rule basis: naming tools the user cannot fix the refusal with sends
+  //   them in a circle — the region check still refuses after they install.
+  // - Existing coverage gap: the region-mismatch path never ran with tools
+  //   missing at the same time.
+  // - Smallest failure: installation.region differs from CURRENT_CINDY_REGION
+  //   together with one missing tool; tier: unit.
+  it('reports a region mismatch instead of tools it cannot fix', async () => {
+    const installation: TestLinuxInstallation = {
+      prefix: '/opt/cindy', current: 'releases/0.0.64',
+      region: CURRENT_CINDY_REGION === 'cn' ? 'global' : 'cn',
+    };
+    recognizeLinuxUserInstallation.mockReturnValue(installation);
+    findLinuxUserInstallation.mockReturnValue(installation);
+    missingLinuxUserInstallTools.mockReturnValue(['bsdtar']);
+    download.mockImplementation(async ({ targetPath }: { targetPath: string }) => {
+      fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+      fs.writeFileSync(targetPath, 'deb');
+      return { path: targetPath, size: 123 };
+    });
+    const service = await freshUpdateService('linux', 'x64');
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
+    service.initUpdateService();
+    try {
+      await expect(service.checkForUpdate(linuxInstallerManifest())).resolves.toBe('ready');
+      ipcListeners.get('update-relaunch')?.({}, 'dark');
+      await vi.waitFor(() => expect(ipcHandlers.get('update-get-status')?.()).toMatchObject({
+        status: 'ready',
+        errorCode: 'linux_installation_unsupported',
+      }));
+      expect(ipcHandlers.get('update-get-status')?.()).not.toHaveProperty('missingTools', expect.anything());
+      const info = JSON.parse(fs.readFileSync(path.join(TEST_USER_DATA, 'updates', 'patch-info.json'), 'utf8'));
+      expect(fs.existsSync(path.join(TEST_USER_DATA, 'updates', info.fileName))).toBe(true);
+      expect(spawnProcess).not.toHaveBeenCalled();
+      expect(exitSpy).not.toHaveBeenCalled();
+      expect(service.isUpdateRelaunchImminent()).toBe(false);
+    } finally {
+      service.stopUpdateService();
+      exitSpy.mockRestore();
+    }
+  });
+
   it('downloads the Linux installer .deb instead of a hotfix zip', async () => {
     readAutoUpdateSettings.mockReturnValue({ autoRelaunchOnIdle: false });
     download.mockImplementation(async ({ targetPath }: { targetPath: string }) => {

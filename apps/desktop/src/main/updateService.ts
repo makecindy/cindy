@@ -2207,7 +2207,12 @@ async function executeRelaunchUnguarded(
       // user in one command. Name them; the generic pointer to the guide
       // leaves a distro like NixOS (no bsdtar in PATH) with nothing to act on.
       // The patch stays staged either way.
-      const toolsMissing = installation !== null && missingTools.length > 0;
+      // Name the tools only when they are the only blocker. An install whose
+      // region does not match this build is refused after the tools are in
+      // place too, so naming them would send the user in a circle.
+      const toolsMissing = installation !== null
+        && installation.region === CURRENT_CINDY_REGION
+        && missingTools.length > 0;
       if (debianCheck?.status === 'managed') {
         log.error('Linux system .deb update needs pkexec, which is not installed');
       } else if (toolsMissing) {
