@@ -889,6 +889,9 @@ export function updateQueuedMessageContent(
   return merged;
 }
 
+/** Maximum structured task references accepted for a single input. */
+export const MAX_SESSION_REFERENCES = 8;
+
 const SESSION_REF_LINK_RE =
   /(?:cindy|xdt-maker):\/\/session\/([A-Za-z0-9%~_-]+)(?:\?([A-Za-z0-9%&=~._-]*))?/g;
 

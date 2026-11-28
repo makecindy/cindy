@@ -1,5 +1,15 @@
-import type { RequestTransformCtx, RequestTransform, RecoveryRule } from '@cindy/model-compat';
-export type { RequestTransformCtx, RequestTransform, RecoveryRule } from '@cindy/model-compat';
+import type { RequestTransformCtx, RequestTransform, RecoveryRule as ModelRecoveryRule } from '@cindy/model-compat';
+export type { RequestTransformCtx, RequestTransform } from '@cindy/model-compat';
+
+export interface RecoveryRule extends ModelRecoveryRule {
+  /** Defaults to the legacy 400/422 recovery path. */
+  statusCodes?: readonly number[];
+  /** Use bounded error inspection even for legacy recovery statuses. */
+  boundedErrorBody?: true;
+  /** An explicitly narrower rule offered only to the next upstream response. */
+  followUpRule?: Omit<RecoveryRule, 'followUpRule'>;
+  strip: (body: Buffer, decodedErrorText?: string) => Buffer | null;
+}
 /**
  * 公开类型 —— 给 host 注入 transform 链 / logger 用。
  *

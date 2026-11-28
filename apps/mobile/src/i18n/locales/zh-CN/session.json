@@ -709,7 +709,20 @@
     "toolUseLoopDetectedRotationWithCount": "模型持续轮转调用多个工具，Cindy 检测到本轮已有 {{count}} 次调用后停止了本轮。可以发送新消息继续。",
     "codexThreadLost": "Codex 鉴权模式已切换，当前任务无法继续，请新建任务。",
     "remoteCompactEncryptedContent": "整理上下文失败：模型无法读取历史中的加密内容。自动接续未完成，可重试恢复。",
-    "encryptedContentInvalid": "由于更换供应商导致加密不可用，本任务只能在原供应商下使用；请回到电脑端处理（可以用「从这里开启新任务」丢弃协议加密内容，在新任务里继续）。"
+    "encryptedContentInvalid": "由于更换供应商导致加密不可用，本任务只能在原供应商下使用；请回到电脑端处理（可以用「从这里开启新任务」丢弃协议加密内容，在新任务里继续）。",
+    "providerSafetyRefusal": "模型供应商的安全策略拦截了本次回复。如需继续，请调整请求内容后再发送",
+    "providerSafetyRefusalWithProvider": "{{provider}} 的安全策略拦截了本次回复。如需继续，请调整请求内容后再发送",
+    "overloadBusy": "模型供应商暂时繁忙，当前没有可用容量。可稍后重试，或换一个模型。",
+    "overloadBusyWithProvider": "{{provider}} 暂时繁忙，当前没有可用容量。可稍后重试，或换一个模型。",
+    "streamInterrupted": "模型供应商返回回复时中途中断，请稍后重试。",
+    "streamInterruptedWithProvider": "{{provider}} 返回回复时中途中断，请稍后重试。",
+    "upstreamStatusError": "模型供应商服务返回异常（HTTP {{status}}），本次回复未完成。",
+    "upstreamStatusErrorWithProvider": "{{provider}} 服务返回异常（HTTP {{status}}），本次回复未完成。",
+    "modelAccessDenied": "当前模型供应商账号无权访问此模型。请切换模型，或向供应商确认模型访问权限",
+    "modelAccessDeniedWithProvider": "当前 {{provider}} 账号无权访问此模型。请切换模型，或确认模型访问权限",
+    "providerQuotaExhausted": "模型供应商账户配额或余额不足，请检查供应商账户",
+    "providerQuotaExhaustedWithProvider": "{{provider}} 账户配额或余额不足，请检查账户状态",
+    "usageLimitReachedWithProvider": "{{provider}} 账号已达到用量上限"
   },
   "row": {
     "markRead": "标为已读",

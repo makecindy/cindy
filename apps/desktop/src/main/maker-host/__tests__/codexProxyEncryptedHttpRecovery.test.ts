@@ -18,6 +18,12 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { WebSocket, WebSocketServer } from 'ws';
 
 const proxyUpstream = vi.hoisted(() => ({ url: '' }));
+const silentEncryptedRetry = vi.hoisted(() => ({ enabled: true }));
+
+vi.mock('../silent-encrypted-retry-store.js', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../silent-encrypted-retry-store.js')>(),
+  readSilentEncryptedRetrySettings: () => ({ enabled: silentEncryptedRetry.enabled }),
+}));
 
 // Proxy routing does not perform standby-share cloud mutations. Keep this
 // external writer outside the test process rather than booting the whole app.
@@ -381,4 +387,90 @@ describe('Codex Responses search dialect (Issue 8170)', () => {
       await new Promise<void>(resolve => upstream.close(() => resolve()));
     }
   });
+});
+
+// #9928: real host and loopback proxy. A WS rejection followed by a missing-ID
+// HTTP 404 must preserve the user's choice when the next error names ciphertext.
+it.each([true, false])('handles DeepSeek reasoning replay with silent encrypted retry enabled=%s', async (enabled) => {
+  const error = {
+    type: 'error', status: 400,
+    error: {
+      code: 'unsupported_parameter', param: 'input',
+      message: 'This request does not support user-supplied input item IDs.',
+    },
+  };
+  const stale = { type: 'reasoning', id: 'rs_deepseek', encrypted_content: null, summary: [] };
+  const sealed = { type: 'reasoning', id: 'rs_deepseek_sealed', encrypted_content: 'opaque-foreign', summary: [] };
+  const message = { type: 'message', role: 'user', content: [{ type: 'input_text', text: '继续' }] };
+  const invalidEncrypted = {
+    error: {
+      code: 'invalid_encrypted_content',
+      message: 'The encrypted content for item rs_deepseek_sealed could not be verified. Reason: Encrypted content could not be decrypted or parsed.',
+    },
+  };
+  const replay = { model: 'gpt-6.2-sol', store: false, input: [stale, sealed, message] };
+  const forwarded: unknown[] = [];
+  const upstream = createServer(async (req, res) => {
+    const { input } = JSON.parse(await readBody(req)) as { input: Array<{ id?: string }> };
+    forwarded.push(input);
+    const hasStale = input.some((item) => item.id === stale.id);
+    const hasSealed = input.some((item) => item.id === sealed.id);
+    res.writeHead(hasStale ? 404 : hasSealed ? 400 : 200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify(hasStale ? {
+      error: { message: "Item with id 'rs_deepseek' not found. Items are not persisted when `store` is set to false." },
+    } : hasSealed ? invalidEncrypted : { output: [] }));
+  });
+  const wsUpstream = new WebSocketServer({ noServer: true });
+  upstream.on('upgrade', (req, socket, head) => wsUpstream.handleUpgrade(req, socket, head, (ws) => {
+    ws.once('message', () => ws.send(JSON.stringify(error)));
+  }));
+  await new Promise<void>((resolve) => upstream.listen(0, '127.0.0.1', resolve));
+  proxyUpstream.url = `http://127.0.0.1:${(upstream.address() as AddressInfo).port}`;
+  const clients: WebSocket[] = [];
+  try {
+    silentEncryptedRetry.enabled = enabled;
+    setCodexProxyAuthInjection('oauth-bearer');
+    await ensureCodexProxyReady();
+    registerComposed('session-resume', 'thread-resume', 'PRODUCT_PROMPT');
+    const connect = () => {
+      const url = getCodexProxyEndpoint()!.replace(/^http/, 'ws') + '/v1/responses';
+      const client = new WebSocket(url, { headers: { 'thread-id': 'thread-resume' } });
+      clients.push(client);
+      return client;
+    };
+    const socket = connect();
+    await once(socket, 'open');
+    const rejection = once(socket, 'message');
+    socket.send(JSON.stringify(replay));
+    const [frame] = await rejection;
+    expect(JSON.parse(frame.toString())).toEqual(error);
+    const closed = once(socket, 'close');
+    expect(armCodexHttpRecovery({
+      sessionId: 'session-resume', threadId: 'thread-resume', message: 'Bad request',
+      additionalDetails: frame.toString(),
+    })).toBe('responses_input_item_ids_unsupported');
+    await closed;
+    const status = await new Promise<number | undefined>((resolve, reject) => {
+      const retry = connect();
+      retry.once('open', () => reject(new Error('expected HTTP fallback')));
+      retry.once('unexpected-response', (_req, res) => { res.resume(); resolve(res.statusCode); });
+      retry.once('error', reject);
+    });
+    expect(status).toBe(426);
+    const result = await postReplay(replay, 'thread-resume');
+    expect(result).toEqual(enabled
+      ? { status: 200, body: JSON.stringify({ output: [] }) }
+      : { status: 400, body: JSON.stringify(invalidEncrypted) });
+    expect(forwarded).toEqual(enabled
+      ? [[stale, sealed, message], [sealed, message], [message]]
+      : [[stale, sealed, message], [sealed, message]]);
+  } finally {
+    silentEncryptedRetry.enabled = true;
+    for (const client of clients) client.terminate();
+    unregister('session-resume');
+    await disposeCodexProxy();
+    wsUpstream.close();
+    upstream.closeAllConnections();
+    await new Promise<void>((resolve) => upstream.close(() => resolve()));
+  }
 });

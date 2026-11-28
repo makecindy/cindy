@@ -5016,16 +5016,17 @@ export const remoteSessionStore = {
       return;
     }
     if (channel === 'usage:message-model-mismatch' && isRecord(payload)) {
-      // 本轮模型降级标记(桌面被控端 turn 结束检测命中时推送):patch 进
-      // agent_meta,messageNormalize 的 readModelMismatch 据此渲染降级提示行。
+      // 本轮模型改派标记(桌面被控端 turn 结束检测命中时推送):patch 进
+      // agent_meta,messageNormalize 的 readModelMismatch 据此渲染提示行。
       const sessionId = readString(payload, 'sessionId');
       const clientId = readString(payload, 'clientId');
       const mm = isRecord(payload.modelMismatch) ? payload.modelMismatch : null;
       const selected = mm ? readString(mm, 'selected') : null;
       const actual = mm ? readString(mm, 'actual') : null;
+      const providerName = mm ? readString(mm, 'providerName')?.trim() || undefined : undefined;
       if (sessionId && clientId && selected && actual) {
         this.patchMessageAgentMeta(sessionId, clientId, {
-          modelMismatch: { selected, actual },
+          modelMismatch: { selected, actual, ...(providerName ? { providerName } : {}) },
         });
       }
       return;

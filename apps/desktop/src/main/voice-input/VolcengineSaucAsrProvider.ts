@@ -1,7 +1,15 @@
 import WebSocket from 'ws';
 import { gzipSync, gunzipSync } from 'node:zlib';
 import type { ClientRequest, IncomingMessage } from 'node:http';
-import { StopSoundActivity, type AsrEvent, type AsrProvider, type AsrSegment, type AudioTrace } from '@cindy/voice-input-core';
+import {
+  StopSoundActivity,
+  buildVolcengineSaucCorpusContext,
+  type AsrEvent,
+  type AsrProvider,
+  type AsrRecognitionHints,
+  type AsrSegment,
+  type AudioTrace,
+} from '@cindy/voice-input-core';
 import { createLogger } from '../logger.js';
 import { createOutboundHttpAgent } from '../maker-host/outbound-fetch.desktop.js';
 import { resamplePcm16 } from './RealtimeAsrWebSocketProvider.js';
@@ -17,6 +25,7 @@ type VolcengineSaucAsrProviderOptions = {
   connectionProvider?: () => Promise<{ websocketUrl: string; authorizationToken: string }>;
   resourceId: string;
   sourceLanguage?: string;
+  recognitionHints?: AsrRecognitionHints;
   pcmSampleRate?: number;
   connectTimeoutMs?: number;
   missingCredentialMessage?: string;
@@ -87,6 +96,7 @@ export class VolcengineSaucAsrProvider implements AsrProvider {
   private readonly connectionProvider?: () => Promise<{ websocketUrl: string; authorizationToken: string }>;
   private readonly resourceId: string;
   private readonly sourceLanguage: string;
+  private readonly recognitionHints?: AsrRecognitionHints;
   private readonly pcmSampleRate: number;
   private readonly connectTimeoutMs: number;
   private readonly missingCredentialMessage: string;
@@ -123,6 +133,7 @@ export class VolcengineSaucAsrProvider implements AsrProvider {
     this.connectionProvider = options.connectionProvider;
     this.resourceId = options.resourceId;
     this.sourceLanguage = options.sourceLanguage ?? 'auto';
+    this.recognitionHints = options.recognitionHints;
     this.pcmSampleRate = options.pcmSampleRate ?? DEFAULT_PCM_SAMPLE_RATE;
     this.soundActivity = new StopSoundActivity(this.pcmSampleRate);
     this.connectTimeoutMs = options.connectTimeoutMs ?? CONNECT_TIMEOUT_MS;
@@ -526,6 +537,7 @@ export class VolcengineSaucAsrProvider implements AsrProvider {
     const socket = this.socket;
     if (!socket || socket.readyState !== WebSocket.OPEN) return;
     const language = volcengineSaucLanguageCode(this.sourceLanguage);
+    const corpusContext = buildVolcengineSaucCorpusContext(this.recognitionHints);
     socket.send(encodeFullClientRequest({
       user: {
         uid: 'xdt-maker',
@@ -546,6 +558,7 @@ export class VolcengineSaucAsrProvider implements AsrProvider {
         enable_punc: true,
         enable_itn: true,
         ...(language ? { language } : {}),
+        ...(corpusContext ? { corpus: { context: corpusContext } } : {}),
       },
     }));
   }
