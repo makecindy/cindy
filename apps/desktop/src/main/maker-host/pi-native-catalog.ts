@@ -1,6 +1,7 @@
 /** Pure Pi catalog projection shared by the desktop and headless launchers.
  * Keep protocol, endpoint, model limits and per-provider credential isolation together. */
 import { providerPresetModelRecord, providerModelAdapterId, providerBaseUrlForApi } from '@cindy/model-providers';
+import { isKnownNoVisionModel } from '@cindy/model-providers/vision-capability';
 import type { PiNativeApi, PiNativeModelSpec, PiNativeProviderSpec, PiNativeProvidersResult } from '@cindy/maker-core';
 import { PI_REASONING_EFFORTS, resolvePiModelRoute, runtimeCustomProviderId } from '@cindy/model-providers';
 import { providerCatalogForPi, providerModelRecord, providerModelGenerationRecord } from '@cindy/model-providers';
@@ -336,7 +337,11 @@ export function buildPiNativeProvidersFromConfigs(
         id: row.id, name: row.name, baseUrl: row.upstream,
         ...row.execution.pi, api: row.execution.pi.api as PiModelApi,
         contextWindow: row.contextWindow, maxTokens: row.maxOutput,
-        input: (row.modalities?.input ?? ['text']).filter((value): value is 'text' | 'image' => value === 'text' || value === 'image'),
+        // 目录缺模态时按型号兜底：已知纯文本型号（如 glm-5.3）不能声明 image，否则
+        // 图片会被送到明确拒图的上游，进历史后每轮重放、会话死锁（#11296）。
+        // 用请求实际发出的 wire 型号判定，别名路由才不会漏。
+        input: (row.modalities?.input ?? (isKnownNoVisionModel(row.id) ? ['text'] : ['text', 'image']))
+          .filter((value): value is 'text' | 'image' => value === 'text' || value === 'image'),
         reasoning: row.reasoning,
         cost: row.cost?.input !== undefined && row.cost.output !== undefined
           ? { input: row.cost.input, output: row.cost.output,
