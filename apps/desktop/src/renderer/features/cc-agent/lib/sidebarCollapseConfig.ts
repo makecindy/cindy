@@ -15,6 +15,10 @@
  * 删除对应 key 即恢复默认。非法值(非数字/负数)自动回落默认。
  */
 
+/** 桌面侧栏普通任务的闲置折叠阈值（可选偏好，默认关闭）；不改变手机端与自动化运行列表。 */
+export const SIDEBAR_INACTIVE_COLLAPSE_MS = 30 * 60 * 1000;
+export const SIDEBAR_IDLE_COLLAPSE_KEY = 'sidebar.collapse.idle30m';
+
 const PROJECT_SESSION_LIMIT_KEY = 'sidebar.collapse.projectSessionLimit';
 const DIALOGUE_LIMIT_KEY = 'sidebar.collapse.dialogueLimit';
 const PROJECT_LIMIT_KEY = 'sidebar.collapse.projectLimit';

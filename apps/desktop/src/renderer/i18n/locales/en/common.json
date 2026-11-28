@@ -17355,7 +17355,9 @@
         "awaitingPluginSetup": "Awaiting plugin setup",
         "awaitingInputHandoff": "Awaiting input handoff"
       },
+      "collapseInactiveSessions": "Collapse Inactive Tasks",
       "showAllSessions": "Show all {{count}}",
+      "autoCollapseIdleTasks": "Auto-collapse tasks after {{minutes}} min of inactivity",
       "allSessions": "All sessions",
       "scopeLocalSessions": "Local",
       "dialogues": "Chat",

@@ -13,7 +13,8 @@ import {
   getEntryActivityMs,
   groupAutomationSidebarEntries,
 } from '../lib/automationSidebarGrouping';
-import { getSessionListCollapseView } from '../lib/sessionListCollapse';
+import { getSidebarSessionCollapseView } from '../lib/sessionListCollapse';
+import { useSidebarActivityNow, useSidebarIdleCollapse } from './SidebarActivityClock';
 import { AutomationSessionGroupItem } from './AutomationSessionGroupItem';
 import { SessionItem } from './SessionItem';
 import type { SessionClickHandler } from './SessionItem';
@@ -213,6 +214,8 @@ export function SessionEntryList({
 }: SessionEntryListProps) {
   const { t } = useTranslation();
   const [showAll, setShowAll] = useCollapsibleShowAll(sectionCollapsed);
+  const nowMs = useSidebarActivityNow();
+  const { idleCollapseEnabled } = useSidebarIdleCollapse();
   const entries = useMemo(
     () => groupAutomationSidebarEntries(sessions, { notifications, scheduleSessionIndex }),
     [notifications, scheduleSessionIndex, sessions],
@@ -234,30 +237,35 @@ export function SessionEntryList({
   // running 豁免与上层聚合灯同口径(Greptile P1):项目行/设备段头的呼吸灯为
   // running 会话点亮,该会话就不能折进「显示全部」——灯亮进去必须找得到行。
   // foldExemptSessionIds 供父层追加口径(如展开态并入 device-link 远程镜像)。
-  const { visibleEntries, isOverflowing, totalCount } = getSessionListCollapseView({
+  // 开启闲置折叠后普通任务按活动时间收起(置顶也保留),展开后底部可收回。
+  const { visibleEntries, isOverflowing, totalCount } = getSidebarSessionCollapseView({
     entries,
     minVisibleCount: collapseLimit,
-    showAll,
+    showAll: false,
     disableCollapse,
     isFiltering: false,
-    nowMs: Date.now(),
+    nowMs,
+    idleCollapseEnabled,
     getActivityMs: getEntryActivityMs,
     isActiveEntry: (entry) => entryIsActive(entry, props.activeSessionId),
     hasAttentionEntry: (entry) =>
       entryHasAttention(entry, notifications) ||
       entryHasAttention(entry, props.runningSessionIds) ||
+      (idleCollapseEnabled &&
+        (entry.kind === 'session' ? !!entry.session.pinnedAt : entry.group.sessions.some((s) => !!s.pinnedAt))) ||
       (foldExemptSessionIds != null && entryHasAttention(entry, foldExemptSessionIds)),
   });
+  const canCollapseAgain = showAll && idleCollapseEnabled && isOverflowing;
 
   return (
     <>
       <SessionEntryRows
-        entries={visibleEntries}
+        entries={showAll ? entries : visibleEntries}
         notifications={notifications}
         foldExemptSessionIds={foldExemptSessionIds}
         {...props}
       />
-      {isOverflowing && (
+      {((!showAll && isOverflowing) || canCollapseAgain) && (
         <button
           type="button"
           className={cn(
@@ -265,9 +273,11 @@ export function SessionEntryList({
             'text-[var(--cmd-palette-item-meta)] transition-colors hover:bg-sidebar-item-hover hover:text-foreground',
             'focus:outline-none focus-visible:ring-1 focus-visible:ring-[var(--focus-ring)]',
           )}
-          onClick={() => setShowAll(true)}
+          onClick={() => setShowAll(!showAll)}
         >
-          {t('ccAgent.sidebar.showAllSessions', { count: totalCount })}
+          {showAll
+            ? t('ccAgent.sidebar.collapseInactiveSessions')
+            : t('ccAgent.sidebar.showAllSessions', { count: totalCount })}
         </button>
       )}
     </>

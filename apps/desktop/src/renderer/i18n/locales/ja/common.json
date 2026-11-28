@@ -17280,7 +17280,9 @@
         "awaitingPluginSetup": "プラグイン設定待ち",
         "awaitingInputHandoff": "代理入力待ち"
       },
+      "collapseInactiveSessions": "非アクティブなタスクを折りたたむ",
       "showAllSessions": "{{count}} 件をすべて表示",
+      "autoCollapseIdleTasks": "{{minutes}} 分間操作のないタスクを自動で折りたたむ",
       "allSessions": "すべてのセッション",
       "scopeLocalSessions": "このデバイスのセッション",
       "dialogues": "会話",

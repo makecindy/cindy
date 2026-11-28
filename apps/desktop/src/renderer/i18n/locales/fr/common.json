@@ -17520,7 +17520,9 @@
         "awaitingPluginSetup": "Plugin à configurer",
         "awaitingInputHandoff": "Saisie manuelle requise"
       },
+      "collapseInactiveSessions": "Réduire les tâches inactives",
       "showAllSessions": "Afficher les {{count}}",
+      "autoCollapseIdleTasks": "Replier les tâches après {{minutes}} min d’inactivité",
       "allSessions": "Toutes les sessions",
       "scopeLocalSessions": "Local",
       "dialogues": "Conversations",

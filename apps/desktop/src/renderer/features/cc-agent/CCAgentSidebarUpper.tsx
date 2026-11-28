@@ -286,6 +286,7 @@ import {
   getProjectSessionCollapseLimit,
 } from './lib/sidebarCollapseConfig';
 import { getSessionListCollapseView } from './lib/sessionListCollapse';
+import { SidebarActivityClock, useSidebarIdleCollapse } from './sidebar/SidebarActivityClock';
 import { type SessionClickModifiers } from './sidebar/SessionItem';
 import { isEditableKeyboardTarget } from '@/lib/editableKeyboardTarget';
 import {
@@ -868,6 +869,7 @@ export function CCAgentSidebarUpper() {
     // 保持"热态"即时切换——PR tips 行间穿插着无 tip 的普通行,默认窗口太短,
     // 路过几行热态就丢了,体感退回"每行都要重新等 500ms"(session-git-pr-context)。
     <Tooltip.Provider skipDelayDuration={1500}>
+      <SidebarActivityClock enabled={!isCollapsed && !filesSessionId} interactionRoot={sidebarRootRef}>
       <SessionAttentionUrgencyProvider urgentSessionIds={unreadFailedScheduleSessionIds}>
         <div ref={sidebarRootRef} className="relative flex flex-1 flex-col overflow-hidden">
           {/* Expanded — fade out when collapsed.
@@ -957,6 +959,7 @@ export function CCAgentSidebarUpper() {
           </div>
         </div>
       </SessionAttentionUrgencyProvider>
+      </SidebarActivityClock>
     </Tooltip.Provider>
   );
 }
@@ -1039,6 +1042,7 @@ function ExpandedView({
   searchTaskMenuHandlersRef,
 }: ExpandedProps) {
   const { t, i18n } = useTranslation();
+  const { idleCollapseEnabled } = useSidebarIdleCollapse();
   const location = useLocation();
   const localPlatform = window.electronAPI.platform;
   const sessions = useMemo(
@@ -4098,7 +4102,8 @@ function ExpandedView({
                       notifications={sidebarNotifications}
                       scheduleSessionIndex={automationGroupingIndex}
                       selectedSessionIds={selectedSessionIds}
-                      disableSessionCollapse={false}
+                      // 闲置折叠开启时，置顶项目在任务列表只跟随状态筛选；收件箱的置顶快捷入口独立于筛选。
+                      disableSessionCollapse={idleCollapseEnabled && taskListMode === 'tasks' && filter.status !== 'active'}
                       onToggle={collapse.toggle}
                       onSettings={setSettingsProject}
                       onRenameProject={handleProjectAliasChange}

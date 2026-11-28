@@ -17520,7 +17520,9 @@
         "awaitingPluginSetup": "Esperando la configuración del complemento",
         "awaitingInputHandoff": "Esperando entrada manual"
       },
+      "collapseInactiveSessions": "Contraer tareas inactivas",
       "showAllSessions": "Mostrar todas ({{count}})",
+      "autoCollapseIdleTasks": "Contraer tareas automáticamente tras {{minutes}} min de inactividad",
       "allSessions": "Todas las sesiones",
       "scopeLocalSessions": "Local",
       "dialogues": "Conversación",

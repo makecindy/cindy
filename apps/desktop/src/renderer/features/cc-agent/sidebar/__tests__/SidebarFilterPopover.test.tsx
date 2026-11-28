@@ -3,6 +3,8 @@ import React, { useState } from 'react';
 import { act, cleanup, fireEvent, render, renderHook, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { SidebarFilterPopover } from '../SidebarFilterPopover';
+import { SidebarActivityClock } from '../SidebarActivityClock';
+import { SIDEBAR_IDLE_COLLAPSE_KEY } from '../../lib/sidebarCollapseConfig';
 import type { UseSidebarFilterReturn } from '../../hooks/useSidebarFilter';
 import { useTaskListMode } from '@/hooks/useTaskListMode';
 import translations from '@/i18n/locales/zh-CN/common.json';
@@ -128,6 +130,26 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe('sidebar display settings menu', () => {
+  // #11282: the opt-in defaults to off and persists across remounts.
+  it('persists the opt-in for 30-minute folding', async () => {
+    localStorage.removeItem(SIDEBAR_IDLE_COLLAPSE_KEY);
+    const mount = () => render(
+      <SidebarActivityClock enabled={false}><Preview filter={makeFilter()} /></SidebarActivityClock>,
+    );
+    const first = mount();
+    const getChoice = (menu: HTMLElement) => within(menu).getByRole('menuitemcheckbox', {
+      name: '闲置 30 分钟后自动收起',
+    });
+    const choice = getChoice(await openSubmenu(/^隐藏/));
+    expect(choice.getAttribute('aria-checked')).toBe('false');
+    fireEvent.click(choice);
+    expect(choice.getAttribute('aria-checked')).toBe('true');
+    first.unmount();
+    const reopened = mount();
+    expect(getChoice(await openSubmenu(/^隐藏/)).getAttribute('aria-checked')).toBe('true');
+    reopened.unmount();
+    localStorage.removeItem(SIDEBAR_IDLE_COLLAPSE_KEY);
+  });
   it('does not enumerate project menu rows while closed, and uses fresh props on open', async () => {
     const projects = [] as NonNullable<
       React.ComponentProps<typeof SidebarFilterPopover>['allKnownProjects']
@@ -208,7 +230,12 @@ describe('sidebar display settings menu', () => {
     const hidden = await openSubmenu(/^隐藏/);
     expect(
       within(hidden).getAllByRole('menuitemcheckbox').map((row) => [row.textContent, row.getAttribute('aria-checked')]),
-    ).toEqual([['自动化任务', 'true'], ['由其他任务创建的任务', 'false'], ['伙伴的任务', 'false']]);
+    ).toEqual([
+      ['自动化任务', 'true'],
+      ['由其他任务创建的任务', 'false'],
+      ['伙伴的任务', 'false'],
+      ['闲置 30 分钟后自动收起', 'false'],
+    ]);
     fireEvent.click(within(hidden).getByRole('menuitemcheckbox', { name: '由其他任务创建的任务' }));
     expect(filter.setHideTaskCreated).toHaveBeenCalledWith(true);
     // Hiding every teammate's tasks moved here from 筛选 › 伙伴 (2026-11-28 user decision).

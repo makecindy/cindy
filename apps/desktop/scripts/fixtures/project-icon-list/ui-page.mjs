@@ -1,3 +1,4 @@
+import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 const avatarData = 'data:image/png;base64,' + readFileSync(new URL('../../../../mobile/assets/bot-presets/cindy.png', import.meta.url)).toString('base64');
 export default {
@@ -7,9 +8,38 @@ export default {
   stubs:{
     'src/renderer/features/bots/botFollowScopes': {partial: `export const useSessionFollowers = session => session.id === 'demo-0-0' ? [{id:'test', name:'Cindy', avatar:'cindy://avatar/preset/cindy', avatarColor:'blue'}] : [];`},
     'src/renderer/contexts/AuthContext':{partial:'export const useAuth = () => ({dataOwnerId: "fixture", isAuthenticated: false});'}},
-  cases:{flat:{data:{avatarData,flat:'list'},about:'Project icons beside source labels on task cards'},compact:{data:{avatarData,flat:'text'},about:'Project icons beside source labels on compact task rows'},default:{data:{avatarData},about:'Sidebar folders preserve expand/collapse semantics regardless of saved project icon'}},
+  cases:{
+    flat:{data:{avatarData,flat:'list'},about:'Project icons beside source labels on task cards'},
+    compact:{data:{avatarData,flat:'text'},about:'Project icons beside source labels on compact task rows'},
+    default:{data:{avatarData},about:'Sidebar folders preserve expand/collapse semantics regardless of saved project icon'},
+    'idle-projects':{data:{avatarData,inactive:true},about:'Idle tasks fold independently under each project and can be shown and folded again (#11233)'},
+    'idle-disabled':{data:{avatarData,inactive:true,idleDisabled:true},about:'Thirty-minute-old tasks stay visible by default (#11282)'},
+  },
   async ready(page){await page.locator('[data-project-source] img, [data-project-working-dir="local:/Projects/Cindy"] .lucide-folder-open').first().waitFor();},
   async check(page,ui){
+    const fold = await ui.t('ccAgent.sidebar.collapseInactiveSessions');
+    if (ui.case === 'idle-disabled') {
+      // #11282: with the preference off the legacy 24h window keeps both rows.
+      await page.locator('[data-session-id="demo-0-1"]').waitFor();
+      await page.locator('[data-session-id="demo-1-0"]').waitFor();
+      assert.equal(await page.getByRole('button', { name: fold, exact: true }).count(), 0);
+      return;
+    }
+    if (ui.case === 'idle-projects') {
+      const project = page.locator('[data-project-working-dir="local:/Projects/Cindy"]');
+      const hidden = page.locator('[data-session-id="demo-0-1"]');
+      const otherRow = page.locator('[data-session-id="demo-1-0"]');
+      assert.equal(await hidden.count(), 0, 'Idle task must start folded');
+      assert.equal(await otherRow.count(), 0, 'An all-idle project must start folded');
+      await ui.capture('inactive-folded');
+      await project.getByRole('button', { name: await ui.t('ccAgent.sidebar.showAllSessions', { count: 2 }), exact: true }).click();
+      await hidden.waitFor();
+      assert.equal(await otherRow.count(), 0, 'Projects must expand independently');
+      await ui.capture('project-expanded');
+      await project.getByRole('button', { name: fold, exact: true }).click();
+      assert.equal(await hidden.count(), 0, 'Idle task must fold again');
+      return;
+    }
     if(ui.case !== 'default') {
       await page.locator('[data-project-source] img').first().waitFor();
       await page.locator('[data-project-source] [data-project-monogram]').first().waitFor();

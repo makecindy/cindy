@@ -2,10 +2,18 @@ import { SessionEntryList } from '../../../src/renderer/features/cc-agent/sideba
 import { useState } from 'react';
 import { mountPage, subscription, ctx } from '../../ui-page/harness';
 import { ProjectNode } from '../../../src/renderer/features/cc-agent/sidebar/sections/ProjectNode';
+import { SidebarActivityClock } from '../../../src/renderer/features/cc-agent/sidebar/SidebarActivityClock';
+import { SIDEBAR_IDLE_COLLAPSE_KEY } from '../../../src/renderer/features/cc-agent/lib/sidebarCollapseConfig';
 import { WorktreeProvider } from '../../../src/renderer/contexts/WorktreeContext';
 import { setDataOwnerGeneration } from '../../../src/renderer/contexts/dataOwnerGeneration';
 import type { Session } from '../../../src/renderer/lib/ccAgent.types';
 setDataOwnerGeneration('fixture', 1);
+if (ctx.data.idleDisabled) {
+  // Verify the legacy activity window independently of the count floor.
+  localStorage.setItem('sidebar.collapse.projectSessionLimit', '0');
+} else if (ctx.data.inactive) {
+  localStorage.setItem(SIDEBAR_IDLE_COLLAPSE_KEY, 'true');
+}
 const noop = () => {};
 const examples = [
   ['Cindy', null, ['完善项目设置界面，让桌面和手机保持一致', '检查手机端交互']],
@@ -19,7 +27,8 @@ const projects = examples.map(([name, icon, tasks], i) => ({
   scope: 'local' as const, remoteHostId: null, deviceLinkDeviceId: null, deviceLinkDeviceName: null,
   deviceLinkConnectionStatus: null, segments: 1, latestActivityAt: '',
   sessions: tasks.map((title, j) => ({id:`demo-${i}-${j}`, title, status:'active', source:'manual',
-    createdAt:new Date().toISOString(), updatedAt:new Date().toISOString(), agentKind:'codex',
+    createdAt:new Date().toISOString(),
+    updatedAt:new Date(Date.now() - (ctx.data.inactive && (i > 0 || j > 0) ? 31 * 60_000 : 0)).toISOString(), agentKind:'codex',
     pinnedAt:null, sdkSessionId:null, remoteHostId:null, deviceLinkDeviceId:null, workspaceKind:'project',
     workingDir:`/Projects/${name}`, _count:{messages:5}} as Session)),
 }));
@@ -50,4 +59,4 @@ void mountPage({route:'/cc-agent', host:{localDb:{
   projectAliases:{snapshot:async()=>({aliases:[],icons:Object.fromEntries(examples.filter(e=>e[1]).map(([name,icon])=>[`local:/Projects/${name}`,icon])),platform:'darwin',settingsSupported:true,settingsVersion:5,ownerStamp:{dataOwnerId:'fixture',ownerGeneration:1}}),onChanged:subscription('projectInfoChanged'),
     iconImage:async()=>ctx.data.avatarData as string,
     autoIcon:async(input:{projectKey:string})=>({image:input.projectKey==='local:/Projects/Cindy'?ctx.data.avatarData:null,source:'assets/icon.png',kind:'local',candidate:false})}
-}},render:()=> <WorktreeProvider><Preview /></WorktreeProvider>});
+}},render:()=> <WorktreeProvider><SidebarActivityClock enabled={false}><Preview /></SidebarActivityClock></WorktreeProvider>});

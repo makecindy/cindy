@@ -17280,7 +17280,9 @@
         "awaitingPluginSetup": "候设法器",
         "awaitingInputHandoff": "候代书"
       },
+      "collapseInactiveSessions": "收久闲之务",
       "showAllSessions": "示全部 {{count}} 项",
+      "autoCollapseIdleTasks": "闲置 {{minutes}} 分钟后自收",
       "allSessions": "诸差事",
       "scopeLocalSessions": "此机差事",
       "dialogues": "言谈",
