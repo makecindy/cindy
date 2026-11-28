@@ -59,6 +59,15 @@ export function backlogLabel(env: Envelope, replyChannel?: string): string {
   return env.kind;
 }
 
+/** Count the allowlisted labels already assigned by backlogLabel, even for retired frames. */
+export function summarizeQueuedChannels(entries: Iterable<BacklogEntry>): string {
+  const counts = new Map<string, number>();
+  for (const { diagChannel = 'unknown' } of entries) {
+    counts.set(diagChannel, (counts.get(diagChannel) ?? 0) + 1);
+  }
+  return [...counts].map(([label, count]) => `${label}=${count}`).join(',');
+}
+
 const kib = (bytes: number) => Math.round(bytes / 1024);
 
 /**
