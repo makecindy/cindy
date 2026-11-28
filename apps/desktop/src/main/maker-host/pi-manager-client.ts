@@ -328,6 +328,10 @@ export async function withPiManagerRpc<R>(
     }
     if (tailLine) {
       const enriched = new Error(`${base.message}\ndaemon log tail: ${tailLine}`);
+      // Cleanup treats the daemon's explicit SESSION_NOT_FOUND as success.
+      if ('code' in base && typeof base.code === 'string') {
+        Object.assign(enriched, { code: base.code });
+      }
       enriched.stack = base.stack;
       throw enriched;
     }
