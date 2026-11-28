@@ -108,7 +108,7 @@ describe('remoteStatus', () => {
     try {
       for (const language of ['zh-CN', 'en']) {
         await i18n.changeLanguage(language);
-        const description = i18n.t('deviceLink.agentAuth.proxyNotReady', { agent: 'Agent' });
+        const description = i18n.t('deviceLink.agentAuth.engineMissing');
         expect(describeNewSessionError(raw)).toBe(description);
         expect(describeNewSessionError(recovered)).toBe(i18n.t('session.screen.createFailedNotice', { message: description }));
         expect(humanizeRemoteError(error)).toBe(description);

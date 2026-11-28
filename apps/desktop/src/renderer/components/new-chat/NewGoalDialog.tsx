@@ -14,6 +14,8 @@ import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { goalApiFor } from '@/lib/makerTransport';
+import { getStickySessionDeviceId } from '@/features/device-link/stickySessionOrigin';
+import { isRemoteGoalUnsupported } from '@/lib/remoteCapabilityNotices';
 import { extractIpcError } from '@/utils/ipcError';
 import { isWritableDirectoryGrantErrorCode } from '../../../shared/writableDirectoryGrantError';
 import { GoalAdvancedLimits, DEFAULT_GOAL_LIMITS, type GoalLimitValues } from './GoalAdvancedLimits';
@@ -119,6 +121,7 @@ export function NewGoalDialog({ sessionId, open, onOpenChange, onCreate, initial
     }
     setSaving(true);
     setError(null);
+    const remote = !!sessionId && !!getStickySessionDeviceId(sessionId);
     try {
       if (sessionId) {
         await goalApiFor(sessionId).setGoal({ sessionId, objective: finalTrimmed, limits });
@@ -131,7 +134,9 @@ export function NewGoalDialog({ sessionId, open, onOpenChange, onCreate, initial
       // The recovery notice explains the handled picker error. A later retry
       // can fail for another reason while that notice is still visible.
       setError({
-        message: err instanceof Error ? err.message : t('goal.newGoalDialog.failed'),
+        message: remote
+          ? t(isRemoteGoalUnsupported(err) ? 'logic.errors.remoteCapabilityUnavailable' : 'goal.newGoalDialog.failed')
+          : err instanceof Error ? err.message : t('goal.newGoalDialog.failed'),
         pickerAuthorization: isWritableDirectoryGrantErrorCode(extractIpcError(err)?.code),
       });
     } finally {

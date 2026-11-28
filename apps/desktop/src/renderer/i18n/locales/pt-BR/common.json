@@ -21173,6 +21173,8 @@
     },
     "errors": {
       "piStartupCloudFile": "Um arquivo de instruções disponível apenas na nuvem pode estar atrasando a inicialização do Pi: {{path}}. Baixe este arquivo no Finder, espere até que esteja disponível localmente e tente novamente. O tempo limite excedido pode ter outra causa.",
+      "remoteEngineMissing": "O computador remoto não tem um mecanismo disponível. Instale um mecanismo nesse computador, reinicie a Cindy e tente novamente.",
+      "remoteCapabilityUnavailable": "O servidor ou computador atual ainda não oferece suporte a esta ação.",
       "hostProfileInUseByDesktop": "Estes dados estão sendo usados pelo aplicativo para desktop da Cindy, que está rodando sozinho. Feche-o e envie novamente.",
       "hostProfileInUseByDesktopAtStart": "Estes dados estão sendo usados pelo aplicativo para desktop da Cindy, que está rodando sozinho, então o serviço em segundo plano da Cindy não foi iniciado. Feche-o, reinicie o serviço em segundo plano da Cindy e abra esta janela da Cindy novamente.",
       "hostProfileInUseByDesktopRetry": "Estes dados estão sendo usados pelo aplicativo para desktop da Cindy, que está rodando sozinho, então não dá para alterar agora. Feche-o e tente novamente.",

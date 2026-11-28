@@ -21173,6 +21173,8 @@
     },
     "errors": {
       "piStartupCloudFile": "Un fichier d’instructions uniquement dans le cloud peut retarder le démarrage de Pi : {{path}}. Téléchargez ce fichier dans le Finder, attendez qu’il soit disponible en local, puis réessayez. Le délai dépassé peut avoir une autre cause.",
+      "remoteEngineMissing": "Aucun moteur n’est disponible sur l’ordinateur distant. Installez un moteur sur cet ordinateur, redémarrez Cindy, puis réessayez.",
+      "remoteCapabilityUnavailable": "Le serveur ou l'ordinateur actuel ne prend pas encore en charge cette action.",
       "hostProfileInUseByDesktop": "Ces données sont utilisées par l’application de bureau Cindy qui s’exécute seule. Quittez-la, puis renvoyez le message.",
       "hostProfileInUseByDesktopAtStart": "Ces données sont utilisées par l’application de bureau Cindy qui s’exécute seule ; le service d’arrière-plan Cindy n’a donc pas démarré. Quittez-la, redémarrez le service d’arrière-plan Cindy, puis rouvrez cette fenêtre Cindy.",
       "hostProfileInUseByDesktopRetry": "Ces données sont utilisées par l’application de bureau Cindy qui s’exécute seule ; cette modification n’est donc pas possible pour le moment. Quittez-la, puis réessayez.",

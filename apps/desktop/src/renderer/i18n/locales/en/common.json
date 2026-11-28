@@ -20963,6 +20963,8 @@
     },
     "errors": {
       "piStartupCloudFile": "A cloud-only instruction file may be delaying Pi startup: {{path}}. Download this file in Finder, wait until it is available locally, then retry. The timeout may have another cause.",
+      "remoteEngineMissing": "The remote computer has no available engine. Install an engine on that computer, restart Cindy, and try again.",
+      "remoteCapabilityUnavailable": "The current server or computer does not support this action yet.",
       "hostProfileInUseByDesktop": "This data is in use by the Cindy desktop app running on its own. Quit it, then send again.",
       "hostProfileInUseByDesktopAtStart": "This data is in use by the Cindy desktop app running on its own, so the Cindy background service did not start. Quit that app, restart the Cindy background service, then reopen this Cindy window.",
       "hostProfileInUseByDesktopRetry": "This data is in use by the Cindy desktop app running on its own, so this can’t be changed right now. Quit that app, then try again.",

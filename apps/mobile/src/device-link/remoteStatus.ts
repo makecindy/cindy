@@ -274,8 +274,8 @@ function localizedStableRemoteError(error: string): string | null {
 }
 
 function describeAgentBinaryNotReadyError(error: string): string | null {
-  return error.includes('[PRECONDITION_FAILED] binary_not_ready:')
-    ? i18n.t('deviceLink.agentAuth.proxyNotReady', { agent: 'Agent' })
+  return /^(?:\[IPC_ERROR\]\s*)?\[PRECONDITION_FAILED\]\s*binary_not_ready:/.test(error)
+    ? i18n.t('deviceLink.agentAuth.engineMissing')
     : null;
 }
 
