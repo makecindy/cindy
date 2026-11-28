@@ -191,21 +191,29 @@ export function MobileOutboxBridge() {
           id: record.item.sessionId,
         }));
         if (result?.sessionId !== record.item.sessionId) throw new Error(i18n.t('session.new.sessionIdNotAdopted'));
+        const row = remoteSessionStore.getSessions()
+          .find((session) => session.id === record.item.sessionId && session.deviceLinkDeviceId === record.deviceId);
         remoteSessionStore.applySessionPatch(record.deviceId, record.item.sessionId, {
           pendingLocalCreation: false,
+          ...(row && row.source === undefined ? { source: null } : {}),
           ...(result.workDir ? { workingDir: result.workDir } : {}),
         });
         return true;
       },
       onHostSessionReady: (record, session) => {
         if ('workingDir' in session) {
+          const full = session as RemoteSession;
           remoteSessionStore.upsertDeviceSession(record.deviceId, record.creation?.deviceName ?? '', {
-            ...(session as RemoteSession),
+            ...full,
+            ...(full.source === undefined ? { source: null } : {}),
             pendingLocalCreation: false,
           });
         } else {
+          const row = remoteSessionStore.getSessions()
+            .find((item) => item.id === record.item.sessionId && item.deviceLinkDeviceId === record.deviceId);
           remoteSessionStore.applySessionPatch(record.deviceId, record.item.sessionId, {
             pendingLocalCreation: false,
+            ...(row && row.source === undefined ? { source: null } : {}),
           });
         }
       },

@@ -54,6 +54,7 @@ import {
   dismissRecoveredPrecreatedSession,
   drainStashedNewSessionDraft,
   getNewSessionCreationTask,
+  hasPendingHostDialogueCreation,
   prepareNewSessionCreationForEdit,
   retryNewSessionCreation,
   restoreNewSessionDurableEdit,
@@ -221,16 +222,21 @@ describe('newSessionCreation pipeline', () => {
       expect(getNewSessionCreationTask(record.item.sessionId)).toBeNull();
       expect(endBackgroundDelivery).not.toHaveBeenCalled();
       expect(shouldBlockSessionSync(record.item.sessionId, record.deviceId)).toBe(true);
+      expect(hasPendingHostDialogueCreation(record.item.sessionId, record.deviceId)).toBe(true);
+      expect(hasPendingHostDialogueCreation(record.item.sessionId, 'other-device')).toBe(false);
+      expect(hasPendingHostDialogueCreation(record.item.sessionId, '')).toBe(false);
       expect(editOutbox.update).not.toHaveBeenCalledWith(record, expect.objectContaining({ state: 'failed' }));
       // A subsequent permanent create failure must keep blocking sync instead of triggering NOT_FOUND.
       editOutbox.records.mockReturnValue([{ ...record, state: 'failed', error: 'unauthenticated' }]);
       expect(shouldBlockSessionSync(record.item.sessionId, record.deviceId)).toBe(true);
+      expect(hasPendingHostDialogueCreation(record.item.sessionId, record.deviceId)).toBe(true);
       // Once host creation is confirmed, sync is allowed again even before prepared is written.
       editOutbox.records.mockReturnValue([{
         ...record, state: 'failed',
         creation: { ...record.creation!, needsHostCreation: undefined, hostCreated: true },
       }]);
       expect(shouldBlockSessionSync(record.item.sessionId, record.deviceId)).toBe(false);
+      expect(hasPendingHostDialogueCreation(record.item.sessionId, record.deviceId)).toBe(false);
     } finally {
       editOutbox.records.mockReturnValue([]);
     }

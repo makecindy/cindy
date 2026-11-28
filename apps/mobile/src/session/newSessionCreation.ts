@@ -721,6 +721,15 @@ export function dismissRecoveredPrecreatedSession(record: { sessionId: string; d
   remoteSessionStore.clearPendingTitlePreview(record.sessionId);
 }
 
+export function hasPendingHostDialogueCreation(sessionId: string, deviceId?: string): boolean {
+  if (!sessionId || !deviceId) return false;
+  return getCurrentMobileOutboxRecords().some(
+    (record) => record.item.sessionId === sessionId
+      && record.deviceId === deviceId
+      && isPendingHostDialogueCreation(record),
+  );
+}
+
 /**
  * 会话页 syncSession 守卫:running(被控端可能还没有这个会话,getSession 会
  * NOT_FOUND 报错横幅)与 create-failed(确定不存在)都要跳过同步;
@@ -760,6 +769,14 @@ function getTaskSnapshot(sessionId: string): NewSessionCreationTask | null {
 /** 会话页订阅本会话的创建 task(null = 无 task / 已完成)。 */
 export function useNewSessionCreationTask(sessionId: string): NewSessionCreationTask | null {
   return useSyncExternalStore(subscribeNewSessionCreationTasks, () => getTaskSnapshot(sessionId));
+}
+
+/** Subscribe to whether this device/session still awaits durable host dialogue creation. */
+export function usePendingHostDialogueCreation(sessionId: string, deviceId?: string): boolean {
+  return useSyncExternalStore(
+    subscribeNewSessionCreationTasks,
+    () => hasPendingHostDialogueCreation(sessionId, deviceId),
+  );
 }
 
 // ---------------------------------------------------------------------------
