@@ -359,18 +359,63 @@ export function getWorkerOwnedWorktree(sessionId: string): WorkerOwnedWorktree |
   return meta ? { path: meta.path, branch: meta.branch } : undefined;
 }
 
+/**
+ * Resolve a source to a commit inside a linked worktree. When a local branch and a tag have the
+ * same exact name the branch wins: rev-parse prefers the tag, which would start the Worker from
+ * the wrong commit without any error. Qualified refs (refs/...) are exact already, and any other
+ * spelling (HEAD, @~1, a commit ID, a tag) resolves as given. A failing lookup throws: falling back
+ * would let the tag decide.
+ */
+async function resolveSourceInWorktree(directory: string, source: string): Promise<string> {
+  let revision = source;
+  if (!source.startsWith('refs/')) {
+    // for-each-ref reports a missing ref as empty output, so only real failures throw. Its patterns
+    // also match children of a name (refs/heads/<name>/...), hence the exact comparison below.
+    const { stdout } = await gitExec(
+      ['for-each-ref', '--format=%(refname)', `refs/heads/${source}`, `refs/tags/${source}`],
+      directory,
+      { timeoutMs: 5000 },
+    );
+    const refs = new Set(stdout.split(/\r?\n/));
+    if (refs.has(`refs/heads/${source}`) && refs.has(`refs/tags/${source}`)) {
+      revision = `refs/heads/${source}`;
+    }
+  }
+  const rev = await gitExec(
+    ['rev-parse', '--verify', '--quiet', '--end-of-options', `${revision}^{commit}`],
+    directory,
+    { timeoutMs: 5000 },
+  );
+  return rev.stdout.trim();
+}
+
 export async function createWorkerWorktree(
   sessionId: string,
   directory: string,
   sourceBranch: string,
+  options?: { awaitFullCheckout?: boolean },
 ): Promise<string> {
   const info = await probeWorkerProject(directory);
   if (!info.baseRepo) throw new Error('Worker worktree requires a Git repository');
   // A Worker based on the origin default starts from a freshly fetched ref, like the
   // Desktop new-task entry; other sources (the lead's branch, a commit) are unchanged.
+  const source = qualifyWorkerRemoteSource(sourceBranch);
+  let resolvedSourceBranch = source;
+  // When targeting a linked worktree, resolve the revision inside that worktree first so
+  // worktree-local refs (HEAD, @, @~1, HEAD@{1}, etc.) do not silently resolve against baseRepo.
+  // Remote-tracking refs are shared by every worktree and stay symbolic: the origin default
+  // refresh in WorktreeManager works on the ref name, so a commit ID would silently skip it.
+  if (info.isWorktree && !source.startsWith('refs/remotes/')) {
+    const sha = await resolveSourceInWorktree(directory, source);
+    if (sha) resolvedSourceBranch = sha;
+  }
   const created = await WorktreeManager.createWorktree(
-    { sessionId, baseRepo: info.baseRepo, name: '', sourceBranch: qualifyWorkerRemoteSource(sourceBranch) },
-    { trackBackgroundCheckout: true, refreshDefaultSource: true },
+    { sessionId, baseRepo: info.baseRepo, name: '', sourceBranch: resolvedSourceBranch },
+    {
+      trackBackgroundCheckout: true,
+      refreshDefaultSource: true,
+      ...(options?.awaitFullCheckout ? { awaitFullCheckout: true } : {}),
+    },
   );
   if (!created.ok) throw new Error(`Worker worktree creation failed: ${created.error.message}`);
   // Probe paths are realpaths, so a symlink spelling cannot change the subproject offset.
@@ -381,8 +426,11 @@ export async function createWorkerWorktree(
   if (!relative) return created.meta.path;
 
   // Stage checkout only includes root startup files. A subproject and its rules need
-  // the full checkout; root-directory Workers keep the normal asynchronous startup.
-  await WorktreeManager.awaitBackgroundCheckout(sessionId);
+  // the full checkout; root-directory built-in Workers keep asynchronous startup while
+  // ACP plugin-engine Workers pass awaitFullCheckout above.
+  if (!options?.awaitFullCheckout) {
+    await WorktreeManager.awaitBackgroundCheckout(sessionId);
+  }
   const subproject = path.join(created.meta.path, relative);
   try {
     const [realRoot, realSubproject] = await Promise.all([

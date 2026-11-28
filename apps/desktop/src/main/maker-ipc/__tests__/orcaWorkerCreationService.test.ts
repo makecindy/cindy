@@ -717,10 +717,58 @@ describe('plugin engine Worker', () => {
       ok: true, workingDir: '/repo/.cindy-worktrees/worker',
       worktree: { path: '/repo/.cindy-worktrees/worker', branch: 'cindy/worker' },
     });
-    expect(deps.createWorkerWorktree).toHaveBeenCalledWith(WORKER_SESSION_ID, 'C:\\repo', 'feature');
+    expect(deps.createWorkerWorktree).toHaveBeenCalledWith(WORKER_SESSION_ID, 'C:\\repo', 'feature', { awaitFullCheckout: true });
     expect(deps.bootstrapSession).toHaveBeenCalledWith(expect.objectContaining({
       agentKind: 'acp', providerId: PROVIDER, workingDir: '/repo/.cindy-worktrees/worker',
     }));
+  });
+
+  /*
+   * Test value (docs/dev-rules/engineering-conventions.md §3.2):
+   * - Entry and observable result: createWorker with agent=acp + worktree; the plugin engine is bootstrapped only
+   *   after the worktree call has settled, and a failed checkout starts no engine and discards the worktree.
+   * - Basis: a plugin engine reads project files and agent rules as soon as it starts, so it must not see a
+   *   half-written tree (the staged checkout returns before the full checkout ends). #11823.
+   * - Gap: the test above only checks the directory handed to the engine, not the checkout wait or the failure path.
+   * - Minimal failing input: agent=acp + worktree, with createWorkerWorktree pending / rejecting.
+   * - Tier: unit (in-process fakes).
+   */
+  it('starts the plugin engine only after the full worktree checkout has finished', async () => {
+    let finishCheckout!: (path: string) => void;
+    const checkout = new Promise<string>((resolve) => { finishCheckout = resolve; });
+    const { deps, service } = createDeps({
+      admitPluginEngineWorker: admitted(),
+      createWorkerWorktree: vi.fn(() => checkout),
+      discardWorkerWorktree: vi.fn(async () => undefined),
+    });
+    const pending = service.createWorker({
+      leadSessionId: 'lead-1', role: 'developer', label: 'developer', agent: 'acp', providerId: PROVIDER,
+      worktree: { sourceBranch: 'feature' },
+    });
+    await vi.waitFor(() => expect(deps.createWorkerWorktree).toHaveBeenCalledOnce());
+    expect(deps.createWorkerWorktree).toHaveBeenCalledWith(WORKER_SESSION_ID, 'C:\\repo', 'feature', { awaitFullCheckout: true });
+    expect(deps.bootstrapSession).not.toHaveBeenCalled();
+
+    finishCheckout('/repo/.cindy-worktrees/worker');
+    await expect(pending).resolves.toMatchObject({ ok: true, workingDir: '/repo/.cindy-worktrees/worker' });
+    expect(deps.bootstrapSession).toHaveBeenCalledOnce();
+    expect(deps.discardWorkerWorktree).not.toHaveBeenCalled();
+  });
+
+  it('starts no plugin engine and discards the worktree when the full checkout fails', async () => {
+    const { deps, service } = createDeps({
+      admitPluginEngineWorker: admitted(),
+      createWorkerWorktree: vi.fn(async () => { throw new Error('full checkout failed'); }),
+      discardWorkerWorktree: vi.fn(async () => undefined),
+    });
+    const result = await service.createWorker({
+      leadSessionId: 'lead-1', role: 'developer', label: 'developer', agent: 'acp', providerId: PROVIDER,
+      worktree: { sourceBranch: 'feature' },
+    });
+    expect(result).toMatchObject({ ok: false, errorCode: 'INTERNAL' });
+    expect(deps.bootstrapSession).not.toHaveBeenCalled();
+    expect(deps.addOrUpdateWorker).not.toHaveBeenCalled();
+    expect(deps.discardWorkerWorktree).toHaveBeenCalledWith(WORKER_SESSION_ID);
   });
 
   // 2026-11-27: plugin engine Workers support remote/shared agentDeviceId and remote execution
@@ -3635,7 +3683,9 @@ describe('local Worker worktree ownership', () => {
     expect(deps.bootstrapSession).toHaveBeenCalledWith(expect.objectContaining({id: WORKER_SESSION_ID, workingDir: '/repo/.cindy-worktrees/worker'}));
     expect(deps.discardWorkerWorktree).not.toHaveBeenCalled();
   });
-  it.each(['create', 'ownership', 'bootstrap', 'renewal', 'persist', 'postcheck'])('compensates a %s failure before releasing the reservation', async phase => {
+  // 'lease' = the reservation expired while the checkout ran, so nothing may start; 'renewal' = it expires only
+  // after bootstrap (the first renewal, before bootstrap, succeeds), so the started session must be closed.
+  it.each(['create', 'ownership', 'lease', 'bootstrap', 'renewal', 'persist', 'postcheck'])('compensates a %s failure before releasing the reservation', async phase => {
     let finishCheckout!: () => void;
     const checkout = new Promise<void>(resolve => {finishCheckout = resolve;});
     let compensationStarted!: () => void;
@@ -3646,7 +3696,8 @@ describe('local Worker worktree ownership', () => {
       discardWorkerWorktree: vi.fn(async id => {compensationStarted(); await checkout; removed.push(id);}),
       ...(phase === 'ownership' ? {getWorkerWorktree: vi.fn(() => undefined)} : {}),
       ...(phase === 'bootstrap' ? {bootstrapSession: vi.fn(async () => {throw new Error('start failed');})} : {}),
-      ...(phase === 'renewal' ? {renewWorkerCreationReservation: vi.fn(async () => false)} : {}),
+      ...(phase === 'lease' ? {renewWorkerCreationReservation: vi.fn(async () => false)} : {}),
+      ...(phase === 'renewal' ? {renewWorkerCreationReservation: vi.fn(async () => false).mockResolvedValueOnce(true)} : {}),
       ...(phase === 'persist' ? {addOrUpdateWorker: vi.fn(async () => {throw new Error('write failed');})} : {}),
       ...(phase === 'postcheck' ? {markOrcaRoleIfNeeded: vi.fn(async () => {throw new Error('mark failed');})} : {}),
     });
@@ -3658,7 +3709,32 @@ describe('local Worker worktree ownership', () => {
     await expect(result).resolves.toMatchObject({ok: false});
     expect(removed).toEqual([WORKER_SESSION_ID]);
     expect(deps.releaseWorkerCreationReservation).toHaveBeenCalledWith('worker-1');
-    if (phase === 'create' || phase === 'ownership') expect(deps.bootstrapSession).not.toHaveBeenCalled();
+    if (phase === 'create' || phase === 'ownership' || phase === 'lease') {
+      expect(deps.bootstrapSession).not.toHaveBeenCalled();
+      expect(deps.closeWorkerSession).not.toHaveBeenCalled();
+    }
+    if (phase === 'renewal') {
+      expect(deps.bootstrapSession).toHaveBeenCalledOnce();
+      expect(deps.closeWorkerSession).toHaveBeenCalledExactlyOnceWith(WORKER_SESSION_ID);
+    }
+  });
+  // The session started before the lease expired must be closed before its worktree goes away: a slow
+  // close holds the discard back, so the agent never loses its directory while it is still shutting down.
+  it('waits for the started session to close before discarding the worktree when the lease expires after bootstrap', async () => {
+    let finishClose!: () => void;
+    const closing = new Promise<void>(resolve => {finishClose = resolve;});
+    const {deps, service} = createDeps({
+      createWorkerWorktree: vi.fn(async () => '/repo/.cindy-worktrees/worker'),
+      discardWorkerWorktree: vi.fn(async () => {}),
+      renewWorkerCreationReservation: vi.fn(async () => false).mockResolvedValueOnce(true),
+      closeWorkerSession: vi.fn(async () => {await closing;}),
+    });
+    const result = service.createWorker(request);
+    await vi.waitFor(() => expect(deps.closeWorkerSession).toHaveBeenCalledExactlyOnceWith(WORKER_SESSION_ID));
+    expect(deps.discardWorkerWorktree).not.toHaveBeenCalled();
+    finishClose();
+    await expect(result).resolves.toMatchObject({ok: false});
+    expect(deps.discardWorkerWorktree).toHaveBeenCalledExactlyOnceWith(WORKER_SESSION_ID);
   });
   it('never claims or discards an inherited checkout, even when bootstrap fails', async () => {
     const {deps, service} = createDeps({

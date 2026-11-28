@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { realpath, stat } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -529,6 +529,53 @@ describe('Worker worktree subproject directory', () => {
       }
     },
   );
+
+  it('passes awaitFullCheckout to WorktreeManager when requested', async () => {
+    const target = path.join(fixture, 'acp-wt');
+    mkdirSync(target, { recursive: true });
+    vi.mocked(createWorktree).mockResolvedValueOnce({
+      ok: true,
+      meta: { path: target, branch: 'cindy/acp', baseRepo: repo },
+    } as never);
+    vi.mocked(awaitBackgroundCheckout).mockReset();
+
+    expect(await createWorkerWorktree('acp-root', alias, 'main', { awaitFullCheckout: true })).toBe(target);
+    const calls = vi.mocked(createWorktree).mock.calls;
+    const [req, opts] = calls[calls.length - 1]!;
+    // git prints the canonical base path (/private/var on macOS, forward slashes on Windows).
+    expect(realpathSync.native(req.baseRepo)).toBe(realpathSync.native(repo));
+    expect(req).toMatchObject({
+      sessionId: 'acp-root',
+      name: '',
+      sourceBranch: 'main',
+    });
+    expect(opts).toEqual({ trackBackgroundCheckout: true, refreshDefaultSource: true, awaitFullCheckout: true });
+    expect(awaitBackgroundCheckout).not.toHaveBeenCalled();
+  });
+
+  // #11823 review: inside a linked worktree, a ref lookup that fails (timeout, spawn error) must fail the
+  // creation. Falling back to the plain spelling would let a tag with the same name decide the commit.
+  // Unit tier: a failing Git command cannot be produced with real Git; the real-Git outcomes live in
+  // orcaWorkerLinkedWorktree.git-integration.test.ts. Minimal input: a linked worktree and a failing for-each-ref.
+  it('fails the creation when the ref lookup inside a linked worktree fails', async () => {
+    const linkedGitDir = path.join(repo, '.git', 'worktrees', 'lookup');
+    mkdirSync(linkedGitDir, { recursive: true });
+    const previous = vi.mocked(gitExec).getMockImplementation()!;
+    vi.mocked(gitExec).mockImplementation(async (args, ...rest) => {
+      if (args[0] === 'rev-parse' && args.includes('--git-dir')) {
+        return { stdout: [repo, path.join(repo, '.git'), linkedGitDir].join('\n') + '\n', stderr: '' };
+      }
+      if (args[0] === 'for-each-ref') throw new Error('git timed out');
+      return previous(args, ...rest);
+    });
+    vi.mocked(createWorktree).mockClear();
+    try {
+      await expect(createWorkerWorktree('lookup-fails', alias, 'feature')).rejects.toThrow('git timed out');
+      expect(createWorktree).not.toHaveBeenCalled();
+    } finally {
+      vi.mocked(gitExec).mockImplementation(previous);
+    }
+  });
 });
 
 // PR2 unit: validate the tool's optional source before any worktree side effect.

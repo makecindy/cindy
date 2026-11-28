@@ -214,6 +214,30 @@ describe('createWorktree naming authority', () => {
     expect(gitExecMock.mock.calls.some(([args]) => args[0] === 'worktree' && args[1] === 'remove')).toBe(true);
   });
 
+  // A project initialised with an empty commit has an empty root tree. `git checkout HEAD -- .` exits
+  // non-zero on it because the pathspec matches nothing, although there is nothing to check out. The
+  // probe is the size of the root tree object: a bounded output that is 0 only for the empty tree,
+  // whatever the entry names are. Unit tier: the real Git behavior is covered in
+  // worktreeDetectCwd.git-integration.test.ts; here the size decides whether the checkout runs.
+  it.each([
+    { tree: 'a root tree with entries', size: '57\n', checksOut: true },
+    { tree: 'an empty root tree', size: '0\n', checksOut: false },
+  ])('awaitFullCheckout creates the worktree and runs the checkout only for $tree', async ({ size, checksOut }) => {
+    const previousGit = gitExecMock.getMockImplementation()!;
+    gitExecMock.mockImplementation((args: string[], ...rest: unknown[]) => {
+      if (args[0] === 'cat-file') return { stdout: size, stderr: '' };
+      if (args[0] === 'checkout' && args.includes('.') && !checksOut) {
+        throw new Error("error: pathspec '.' did not match any file(s) known to git");
+      }
+      return previousGit(args, ...rest);
+    });
+    await expect(manager.createWorktree(
+      { sessionId: `tree-${checksOut}`, baseRepo, name: `tree-${checksOut}`, sourceBranch: 'main' },
+      { awaitFullCheckout: true },
+    )).resolves.toMatchObject({ ok: true });
+    expect(gitExecMock.mock.calls.some(([args]) => args[0] === 'checkout' && args.includes('.'))).toBe(checksOut);
+  });
+
   // A slow awaitFullCheckout (e.g. large repo / slow Git LFS) must release the
   // repo-level create queue once `git worktree add` + checkout lease succeed,
   // so other creates on the same baseRepo proceed without colliding on branch/path,

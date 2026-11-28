@@ -518,6 +518,31 @@ it('creates an Orca Worker from the freshly fetched origin default', async () =>
   expect(metadata.has('orca-missing-remote')).toBe(false);
 }, 30_000);
 
+// #11823 review: a project Cindy initialises from an empty folder has one commit with an empty
+// tree. `git checkout HEAD -- .` exits non-zero on it (the pathspec matches nothing), so a plugin
+// engine Worker, which waits for the full checkout, could not be created there while the staged
+// checkout of built-in Workers could. Minimal failure: `commit --allow-empty` and one Worker.
+// The pathspec failure is Git's own output, so it needs real Git (git-integration tier).
+it('creates a Worker worktree that waits for the full checkout from a project whose only commit is empty', async () => {
+  fixture = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-worker-empty-tree-'));
+  vi.spyOn(app, 'getPath').mockReturnValue(fixture);
+  const repo = path.join(fixture, 'repo');
+  await fs.mkdir(repo);
+  const git = async (cwd: string, ...args: string[]) =>
+    (await exec('git', args, { cwd, windowsHide: true, timeout: 10_000 })).stdout.trim();
+  await git(repo, 'init', '--initial-branch=main');
+  await git(repo, 'config', 'user.name', 'Test');
+  await git(repo, 'config', 'user.email', 'test@example.invalid');
+  await git(repo, 'config', 'commit.gpgsign', 'false');
+  await git(repo, 'commit', '--allow-empty', '-m', 'empty project');
+  const head = await git(repo, 'rev-parse', 'HEAD');
+
+  const workerDir = await createWorkerWorktree('orca-empty-tree', repo, 'main', { awaitFullCheckout: true });
+  expect(await git(workerDir, 'rev-parse', 'HEAD')).toBe(head);
+  expect(await git(workerDir, 'status', '--porcelain')).toBe('');
+  expect(metadata.get('orca-empty-tree')?.path).toBe(workerDir);
+}, 30_000);
+
 // #6792: createWorktree must populate the linked worktree's full index after
 // background checkout. Existing checks use ordinary repositories. Reproduce
 // with a local submodule and inherited recursion before its linked gitdir exists.
