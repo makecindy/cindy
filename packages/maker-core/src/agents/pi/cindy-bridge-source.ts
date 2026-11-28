@@ -2731,6 +2731,22 @@ interface ResolvedMcpGatewayCall {
   qualifiedName: string;
   args: Record<string, unknown>;
   tool: ConnectedMcpTool;
+  /** 归一化时从顶层折进 args 的键(模型把参数平铺在顶层)。 */
+  folded?: string[];
+  /** 顶层有、args 容器里已有同名参数、因而没有采用的键(同名以 args 为准)。 */
+  shadowed?: string[];
+  /** 顶层有、但工具 schema 不认、因而没有转发的键。 */
+  unmapped?: string[];
+  /** args 以 JSON 字符串形态给出, 已被解析成对象。 */
+  parsedFromString?: boolean;
+  /** 信封被平铺(顶层 name + 顶层 args), 已重建回 {name, args}。 */
+  rebuiltEnvelope?: boolean;
+  /** 顶层兄弟键收进了**嵌套信封的内层** args 层(容器本身就是 {name, args} 两层)。 */
+  foldedIntoInnerArgs?: boolean;
+  /** 撞名的内层工具代拉之后仍判不了: 执行与审批两条路径都拒收, 不猜层数(值是内层工具名)。 */
+  unresolvedCollision?: string;
+  /** 撞名的形态: sameSelector = 同一个选择器写了两遍; entrySelf = 顶层选择器就是入口工具自己。 */
+  unresolvedCollisionKind?: 'sameSelector' | 'entrySelf';
 }
 
 class McpBridgeError extends Error {
@@ -3324,17 +3340,1303 @@ function schemaHint(schema: Record<string, unknown>): string {
 }
 
 /**
+ * 网关自身的键。模型给网关的调用里, 这些键属于网关, 不属于所选工具的参数:
+ * server/tool 是选哪个工具, args/arguments 是工具参数放在哪。折进 args 时不能碰它们 ——
+ * 工具真有一个叫 tool 的参数时(如插件的 ghost_call), 平铺形态本身就说不清, 只能报错。
+ */
+const GATEWAY_OWN_KEYS = new Set(['server', 'tool', 'args', 'arguments']);
+
+/** 网关入参归一化的结果: 真正发给服务端的参数 + 归一化过程中的动作与残留。 */
+interface GatewayArgsResolution {
+  /** 归位后的工具参数(真正会随 tools/call 发出)。 */
+  args: Record<string, unknown>;
+  /** 模型是否给了 args 或 arguments。 */
+  provided: boolean;
+  /** 给了但形态不可用: 数组、null、或解析不了的 JSON 字符串。 */
+  malformed: boolean;
+  /** 从顶层折进 args 的键(模型把参数平铺在顶层)。 */
+  folded: string[];
+  /** 顶层有、args 容器里也有同名参数、因而没有采用的键(同名以 args 为准)。 */
+  shadowed: string[];
+  /** 顶层有、但这个工具的 schema 不认、因而没有转发的键。 */
+  unmapped: string[];
+  /** args 以 JSON 字符串形态给出, 已被解析成对象。 */
+  parsedFromString: boolean;
+  /** 信封被平铺(顶层 name + 顶层 args), 已重建回 {name, args}。 */
+  rebuiltEnvelope?: boolean;
+  /** 顶层兄弟键收进了嵌套信封的内层 args 层(容器本身就是 {name, args} 两层)。 */
+  foldedIntoInnerArgs?: boolean;
+  /**
+   * 撞名的内层工具本地查不到: 要问服务端那份 schema 才能定「剥不剥那一层」。调用方代拉一次
+   * 内层列表后重新归一化(见 CindyMcpGateway.resolveCallAsync)。
+   */
+  innerSchemaPending?: string;
+  /**
+   * 信封判不了: 工具 schema 没能看完(预算截断 / 解析不了的引用), 但已看到的部分就是 {name, args} 信封的
+   * 样子, 而顶层又给了 name。它是信封层的内层工具名, 还是这个工具自己的 name 参数, 网关分不清 ——
+   * 调用方必须拒收, 不能按普通工具转发(见 callInputError)。
+   */
+  indeterminateEnvelope?: boolean;
+  /**
+   * 撞名的内层工具代拉之后仍判不了(服务端内层列表没有 schema, 或代拉失败): 两种读法发出去的
+   * 层数不同, 不猜 —— 调用方拒收并指路(见 callInputError 的撞名分支)。值是内层工具名, 供回执点名。
+   */
+  unresolvedCollision?: string;
+  /**
+   * 撞名是哪种形态: sameSelector = 同一个选择器写了两遍; entrySelf = 顶层选择器就是入口工具
+   * 自己(入口内层有个同名工具)。两种的读法不同, 回执与错误文案也不同。
+   */
+  unresolvedCollisionKind?: 'sameSelector' | 'entrySelf';
+  /**
+   * 顶层选择器就是 entry tool 自己的名字(selector === tool.name), 但容器里的 name 与选择器
+   * 不同(是内层工具自己的参数, 不是重复信封): 内层工具本地查不到、判不了时按「剥一层」
+   * 会把内层工具的参数剥掉 —— 调用方代拉一次内层列表再判一次(值是内层工具名)。
+   */
+  entrySelfPending?: string;
+  /**
+   * args 与 arguments 两个容器同时给出且不一致(或有一份形态不可用): 发哪份结果不同, 不猜 ——
+   * 调用方拒收(见 callInputError 的双容器分支)。
+   */
+  dualContainers?: boolean;
+}
+
+function parseJsonObject(value: string): Record<string, unknown> | null {
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown>
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 双容器裁决用的规范化序列化: 键序不参与相等判定({a,b} 与 {b,a} 是同一份参数), 深度封顶
+ * 防深嵌套递归。返回 null 表示超深(按「两份不一致」处理, 交回拒收)。
+ */
+function canonicalArgsJson(value: unknown, depth = 0): string | null {
+  if (depth > 32) return null;
+  if (value === null || typeof value !== 'object') return JSON.stringify(value) ?? 'null';
+  if (Array.isArray(value)) {
+    const parts: string[] = [];
+    for (const item of value) {
+      const rendered = canonicalArgsJson(item, depth + 1);
+      if (rendered === null) return null;
+      parts.push(rendered);
+    }
+    return '[' + parts.join(',') + ']';
+  }
+  const parts: string[] = [];
+  const entries = Object.keys(value as Record<string, unknown>).sort();
+  for (const key of entries) {
+    const rendered = canonicalArgsJson((value as Record<string, unknown>)[key], depth + 1);
+    if (rendered === null) return null;
+    parts.push(JSON.stringify(key) + ':' + rendered);
+  }
+  return '{' + parts.join(',') + '}';
+}
+
+/** 组合 schema 遍历的预算: 节点数与深度封顶 —— 循环引用、超大 schema 都不能拖住同步路径。 */
+const SCHEMA_WALK_MAX_NODES = 512;
+const SCHEMA_WALK_MAX_DEPTH = 32;
+/**
+ * 声明名收集的封顶。节点预算管不住键的枚举: 一个 properties 塞十万键时, Object.keys 全量
+ * 物化键数组、名字逐个进 Set, 而表面在权限与执行两条路径上要重建多次 —— 收集必须是常数
+ * 工作量。收满即标 truncated(见 walk), 没看到的声明按没看到处理。
+ */
+const SCHEMA_NAMES_MAX = 512;
+const SCHEMA_COMBINATORS = ['allOf', 'anyOf', 'oneOf'];
+/** 条件分支: 这些节点里声明的属性也是服务端认的参数(条件成立时的 then / 不成立时的 else)。 */
+const SCHEMA_CONDITIONAL_KEYWORDS = ['if', 'then', 'else'];
+/** 依赖分支: dependentSchemas(2020-12)与 schema 形态的 dependencies(draft-07)里声明的字段同样算数。 */
+const SCHEMA_DEPENDENCY_KEYWORDS = ['dependentSchemas', 'dependencies'];
+/**
+ * 「有它就必须带上这些字段」的三种写法: dependentRequired(2019-09)与数组形态的 dependencies(draft-07)
+ * 的值是被点名的字段, dependentSchemas(2020-12)与 schema 形态的 dependencies 的值是子 schema(另走)。
+ * 三者的键都是触发字段 —— 服务端按它的有无提要求, 它就是认的参数。
+ */
+const SCHEMA_DEPENDENT_KEYWORDS = ['dependentRequired', 'dependentSchemas', 'dependencies'];
+/** 放开额外字段的两种写法: additionalProperties(draft-07)与 unevaluatedProperties(2019-09 起)。 */
+const SCHEMA_DYNAMIC_KEYWORDS = ['additionalProperties', 'unevaluatedProperties'];
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/** 把 required / dependentRequired 这类「字段名数组」里的字符串并进声明名; 不是数组就什么都不做。
+ * 收集器装不下(封顶)时返回 false, 调用方据此标 truncated —— 剩下的名字没看到。 */
+function collectDeclaredNames(names: unknown, collect: (name: string) => boolean): boolean {
+  if (!Array.isArray(names)) return true;
+  for (const name of names) {
+    if (typeof name !== 'string') continue;
+    if (!collect(name)) return false;
+  }
+  return true;
+}
+
+/**
+ * 解析 schema 文档内的本地 $ref(纯 JSON 指针: #、#/definitions/X、#/$defs/X)。远程引用
+ * (http(s)://…)与其他 URI 一律不解析 —— 不为归一化发请求, 也不猜。
+ */
+function resolveLocalSchemaRef(root: Record<string, unknown>, ref: string): Record<string, unknown> | null {
+  if (ref === '#') return root;
+  if (!ref.startsWith('#/')) return null;
+  let node: unknown = root;
+  for (const rawToken of ref.slice(2).split('/')) {
+    if (!isPlainRecord(node)) return null;
+    const token = rawToken.replace(/~1/g, '/').replace(/~0/g, '~');
+    if (!Object.prototype.hasOwnProperty.call(node, token)) return null;
+    node = node[token];
+  }
+  return isPlainRecord(node) ? node : null;
+}
+
+/**
+ * 工具 schema 收集到的「表态」: 声明过的参数名、是不是信封形状、是否放开额外字段、
+ * patternProperties 模式、以及这份表态本身是否完整。
+ *
+ * 组合声明: allOf / anyOf / oneOf 分支、条件分支(if / then / else)、依赖分支
+ * (dependentSchemas)与文档内的本地 $ref(第三方 schema 常把公共字段抽成 $defs 再 allOf
+ * 进来)。只读根层 properties 会把这些字段全判成「没声明」, 平铺到顶层的它们于是被记成
+ * unmapped 不转发。
+ *
+ * 分支里声明的字段也收: 某个 anyOf / oneOf 分支声明了这个键, 它就是服务端认的参数。
+ * 同理, 分支里放开 additionalProperties、或给出 patternProperties, 也算这个 schema 表态过 ——
+ * 否则「根层只有 $ref、声明在被引用文档里」的 schema 会因为名字被收下、额外字段却被丢掉而
+ * 半懂不懂。
+ *
+ * 遍历有预算: 同一个节点只走一次(循环引用靠它终止), 节点数与深度封顶。**被截断时这份表态
+ * 是不完整的**(truncated)—— 剩下的声明我们没看到, 于是不能证明某个键「没声明」, 调用方
+ * 按「不丢参数」处理(见 normalizeGatewayArgs)。解析不了的 $ref(远程引用、指向不存在节点的
+ * 指针)同样算不完整。
+ */
+interface SchemaParameterSurface {
+  /** 走到的节点声明过的参数名(properties 的键、required 点名的字段、依赖写法里的触发字段与被点名的字段)。 */
+  names: Set<string>;
+  /** 有没有节点声明过属性名(properties 里至少有一个键)。 */
+  declaresProperties: boolean;
+  /** 是 {name, args} 信封形状: name 在每条路径上都必填, 且有一条路径凑齐三个信号(见 settleEnvelope)。 */
+  envelope: boolean;
+  /** 有节点明确放开了额外字段(additionalProperties / unevaluatedProperties 为 true 或一个 schema)。 */
+  additionalAllowed: boolean;
+  /** 走到的节点给出的 patternProperties 模式(去重, 数量封顶)。 */
+  patterns: string[];
+  /** 这份表态是否不完整(预算截断 / 有解析不了的引用)。 */
+  truncated: boolean;
+}
+
+/**
+ * 恒假 schema 的对象形态: not 一个空约束(空对象或 true)对任何实例都不成立 —— 空 schema
+ * 匹配一切, not 它就什么都不匹配。与字面量 false 同一处理: 永不可行的分支不能参与
+ * 「每条路径都必填」的判定, 它的零信号不是「这条路径没要求 name」的证据
+ * (Codex P1 on #10908 第 17 轮)。not 旁边还有别的关键词也一样: not 空约束已经让实例
+ * 全部落空, 其余关键词改变不了这一点。
+ */
+function isAlwaysFalseSchema(schema: unknown): boolean {
+  if (schema === false) return true;
+  if (!isPlainRecord(schema)) return false;
+  const not = schema.not;
+  return not === true || (isPlainRecord(not) && Object.keys(not).length === 0);
+}
+
+/**
+ * 条件分支(if/then/else)的静态裁决: 这份 if 是否对任何实例恒成立或恒不成立。恒成立的写法是
+ * 字面量 true 与没有任何关键词的空对象(无约束, 匹配一切); 恒不成立的是字面量 false 与
+ * not 空约束。判不了(有真实约束、或结论取决于实例)返回 null, then/else 照旧各算一条路径。
+ * 判据只认写法本身, 不猜实例: {type:'object'} 这类「恰好总是成立」的约束不做推断,
+ * 否则判错一次就把另一条真实路径丢了(Codex P1 on #10908 第 17 轮)。
+ */
+function staticSchemaVerdict(schema: unknown): boolean | null {
+  if (schema === true) return true;
+  if (schema === false) return false;
+  if (!isPlainRecord(schema)) return null;
+  const keys = Object.keys(schema);
+  if (keys.length === 0) return true;
+  if (keys.length === 1 && schema.not !== undefined) {
+    const not = schema.not;
+    if (not === true || (isPlainRecord(not) && Object.keys(not).length === 0)) return false;
+  }
+  return null;
+}
+
+function schemaParameterSurface(schema: Record<string, unknown> | undefined): SchemaParameterSurface | null {
+  if (!schema) return null;
+  const surface: SchemaParameterSurface = {
+    names: new Set<string>(),
+    declaresProperties: false,
+    envelope: false,
+    additionalAllowed: false,
+    patterns: [],
+    truncated: false,
+  };
+  const seenPatterns = new Set<string>();
+  const visited = new Set<Record<string, unknown>>();
+  // 走过的节点的「合取信号」: 它自己的声明 + 沿合取边连起来的节点的声明。环、被多处引用的定义第二次
+  // 走到时不再往下走, 把这一份交给现在这个组。
+  const closure = new Map<Record<string, unknown>, number>();
+  // 正在重放分支结构的节点: 重放栈里已有的节点不再重放(环, 否则递归不止)。
+  const replaying = new Set<Record<string, unknown>>();
+  let remainingNodes = SCHEMA_WALK_MAX_NODES;
+  // 声明名收集与节点遍历共用一份封顶(Codex P2 on #10908): properties / required / 依赖写法
+  // 收进的名字加起来不超过 SCHEMA_NAMES_MAX, 装不下就标 truncated。已收过的名字不占额度。
+  let remainingNames = SCHEMA_NAMES_MAX;
+  const collectName = (name: string): boolean => {
+    if (surface.names.has(name)) return true;
+    if (remainingNames <= 0) return false;
+    remainingNames--;
+    surface.names.add(name);
+    return true;
+  };
+  const rootGroup: EnvelopeGroup = { own: 0, base: null, alternatives: [] };
+  // groups[0] 是根组; 之后按创建顺序追加分支组。
+  const groups: EnvelopeGroup[] = [rootGroup];
+  const branchGroup = (base: EnvelopeGroup): EnvelopeGroup => {
+    const group: EnvelopeGroup = { own: 0, base, alternatives: [] };
+    groups.push(group);
+    return group;
+  };
+  // 返回这个节点沿合取边连起来的信号; 分支(anyOf / oneOf / 条件 / 依赖)的信号记在各自的分支组里。
+  const walk = (
+    node: unknown,
+    depth: number,
+    group: EnvelopeGroup,
+  ): number => {
+    if (isPlainRecord(node) && visited.has(node)) {
+      const known = closure.get(node);
+      // 环(正在走的节点还没进 closure): 没有结论, 只带零信号回去。
+      if (known === undefined) return 0;
+      group.own |= known;
+      // 分支证据重放: 同一个目标被两条分支路径(anyOf/oneOf/条件/依赖)引用时, 它内部的分支结构
+      // 对两条路径是同一套 —— 但「沿这条路径必填」的结论不该复用「沿那条路径」的: 第二条路径也要
+      // 看得见目标内部的分支, 否则外层并集看到一条分支「没要求 name」, 信封被降级成普通工具,
+      // 外层那层 args 被剥掉(Codex P1 on #10908 第 16 轮, 3539 行)。所以沿这条路径把目标的
+      // 分支结构重建一遍, 而不是只把它的合取信号并进来。
+      // 重放栈里已有的节点不再重放: 环, 否则递归不止。
+      if (!replaying.has(node)) replayBranches(node, depth, group);
+      return known;
+    }
+    // 第一次看到的节点一律占预算, 不是对象的分支(true / false)与超深的节点也不例外: 它们不占的话
+    // 预算永远用不完, 多大的分支数组都要逐个进一次 walk、各起一个分支组。
+    if (remainingNodes <= 0) {
+      // 预算用尽: 剩下的声明我们看不到, 这份表态不完整。
+      surface.truncated = true;
+      return 0;
+    }
+    remainingNodes--;
+    if (!isPlainRecord(node)) return 0;
+    if (depth > SCHEMA_WALK_MAX_DEPTH) {
+      // 超深: 下面的声明同样看不到。
+      surface.truncated = true;
+      return 0;
+    }
+    visited.add(node);
+    // for-in 惰性枚举: 十万键的 properties 只看到封顶为止, 不全量物化键数组(Codex P2 on #10908)。
+    // schema 文档是 JSON.parse 的产物, for-in 枚举的就是自己的键; 原型上的同名属性用 hasOwnProperty 挡掉。
+    if (isPlainRecord(node.properties)) {
+      for (const name in node.properties) {
+        if (!Object.prototype.hasOwnProperty.call(node.properties, name)) continue;
+        surface.declaresProperties = true;
+        if (!collectName(name)) {
+          // 封顶: 剩下的声明名没看到, 这份表态不完整。
+          surface.truncated = true;
+          break;
+        }
+      }
+    }
+    // required 可以列出 properties 里没有的字段(合法写法): 服务端既然校验它必填, 它就是认的参数。
+    if (!collectDeclaredNames(node.required, collectName)) surface.truncated = true;
+    // 「有 tag 就必须带 file_id」: 触发的 tag 与被点名的 file_id 同理, 都不在 properties 里时也算声明过。
+    for (const keyword of SCHEMA_DEPENDENT_KEYWORDS) {
+      const dependents = node[keyword];
+      if (!isPlainRecord(dependents)) continue;
+      let dependentFull = false;
+      // 同 properties: 惰性枚举 + 封顶, 十万条依赖不物化(Codex P2 on #10908)。
+      for (const trigger in dependents) {
+        if (!Object.prototype.hasOwnProperty.call(dependents, trigger)) continue;
+        if (!collectName(trigger) || !collectDeclaredNames(dependents[trigger], collectName)) {
+          dependentFull = true;
+          break;
+        }
+      }
+      if (dependentFull) {
+        surface.truncated = true;
+        break;
+      }
+    }
+    let signals = declaredEnvelopeSignals(schema, node, surface);
+    for (const keyword of SCHEMA_DYNAMIC_KEYWORDS) {
+      const dynamic = node[keyword];
+      if (dynamic === true || (typeof dynamic === 'object' && dynamic !== null)) {
+        surface.additionalAllowed = true;
+      }
+    }
+    if (isPlainRecord(node.patternProperties)) {
+      // 同 properties: 惰性枚举, 十万条模式不物化键数组; 封顶照旧(Codex P2 on #10908)。
+      for (const pattern in node.patternProperties) {
+        if (!Object.prototype.hasOwnProperty.call(node.patternProperties, pattern)) continue;
+        // 数量封顶在循环内生效: 一个 patternProperties 里塞上百条模式时, 只看前 N 条,
+        // 否则单次调用要把上百条模式全部编译并跑一遍(Codex P1 on #10908)。
+        // 碰到封顶提前停下来时必须标 truncated: 剩下的模式没看到, 不能把后面声明的键静默丢掉。
+        if (seenPatterns.has(pattern)) continue;
+        if (surface.patterns.length >= SCHEMA_PATTERN_MAX_COUNT) {
+          surface.truncated = true;
+          break;
+        }
+        seenPatterns.add(pattern);
+        surface.patterns.push(pattern);
+      }
+    }
+    if (typeof node.$ref === 'string') {
+      const resolved = resolveLocalSchemaRef(schema, node.$ref);
+      // 解析不了的引用(远程引用、指向不存在节点的指针)那边的声明我们看不到。
+      if (resolved) {
+        signals |= walk(resolved, depth + 1, group);
+      } else {
+        surface.truncated = true;
+      }
+    }
+    // 2020-12 的动态引用: 本地能解析(指向本 schema 里的 $dynamicAnchor), 但解析规则是
+    // 运行时顺着调用栈找锚点 —— 与 $ref 的静态解析不是一回事, 解析不了时那边的声明同样
+    // 看不到(Codex P1 on #10908 第 15 轮)。本地能解析就照常走, 解析不了记截断。
+    if (typeof node.$dynamicRef === 'string') {
+      const resolved = resolveLocalSchemaRef(schema, node.$dynamicRef);
+      if (resolved) {
+        signals |= walk(resolved, depth + 1, group);
+      } else {
+        surface.truncated = true;
+      }
+    }
+    for (const keyword of SCHEMA_COMBINATORS) {
+      const branches = node[keyword];
+      if (!Array.isArray(branches) || branches.length === 0) continue;
+      // allOf 的分支对每次调用同时生效, 留在出发点的组里; 只有一个分支的 anyOf / oneOf 就是那个
+      // 分支本身, 同样按合取边走。多分支的 anyOf / oneOf 走 walkBranches(分支路径各自成组)。
+      if (keyword !== 'allOf' && branches.length !== 1) continue;
+      for (const branch of branches) {
+        // 预算用尽后不再逐个走剩下的分支: 否则多大的分支数组都要每个进一次 walk, 组合声明面的
+        // 工作量随分支总数增长(Codex P2 on #10908)。没走的分支里的声明一律按没看到处理。
+        if (remainingNodes <= 0) {
+          surface.truncated = true;
+          break;
+        }
+        signals |= walk(branch, depth + 1, group);
+      }
+    }
+    // 分支结构(多分支 anyOf/oneOf、条件分支、依赖分支): 沿这条路径各起一组。
+    walkBranches(node, depth, group);
+    closure.set(node, signals);
+    group.own |= signals;
+    return signals;
+  };
+  // 分支结构(anyOf / oneOf 的多分支、条件分支、依赖分支): 沿一条路径走到的节点, 它内部的分支
+  // 要在这条路径上各起一组。合取边(allOf / 只有一个分支的 anyOf/oneOf / $ref)不走这里 —— 那些声明
+  // 对每次调用同时成立, 直接并进出发点的组。
+  const walkBranches = (node: Record<string, unknown>, depth: number, group: EnvelopeGroup): void => {
+    for (const keyword of SCHEMA_COMBINATORS) {
+      const branches = node[keyword];
+      if (!Array.isArray(branches) || branches.length === 0) continue;
+      if (keyword === 'allOf' || branches.length === 1) continue;
+      // 多分支的 anyOf / oneOf: 每个分支只在一个条件下生效, 各自另起一组、接在出发点那一组后面。
+      // 恒假分支(false)永远选不中, 不能参与「每条路径都必填」的判定 —— 它零信号, every 会把它
+      // 当成「这条路径没要求 name」的证据(Codex P1 on #10908 第 15 轮)。true 分支照常, 它不约束
+      // 任何字段, 但仍是可选路径, 信号并入父组即可, 不必单独成组。
+      const alternatives: EnvelopeGroup[] = [];
+      group.alternatives.push(alternatives);
+      for (const branch of branches) {
+        if (remainingNodes <= 0) {
+          surface.truncated = true;
+          break;
+        }
+        if (branch === false || isAlwaysFalseSchema(branch)) {
+          // 永不可行的分支(字面量 false, 以及对象形态的恒假写法: 空约束的 not): 零信号但不占位;
+          // 仍占节点预算, 否则全是恒假分支的巨型数组能把 512 节点上限变成 O(数组长度) 扫描
+          // (Codex P2 on #10908 第 16 轮; 对象形态见第 17 轮)。
+          remainingNodes--;
+          continue;
+        }
+        const nested = branchGroup(group);
+        alternatives.push(nested);
+        walk(branch, depth + 1, nested);
+      }
+    }
+    // 条件分支(if/then/else): 同一次调用只落进一条, 但分支内部的所有 required 都是「沿这条
+    // 路径必填」的证据。与 anyOf/oneOf 同一处理: 每条分支另起一组、接在出发点后面。
+    // 'if' 只是条件(它本身不约束实例), 不是一条路径 —— 它声明的属性照样算声明过的参数, 但它的
+    // required 不参与「每条路径都必填」的判定。
+    // 'then' 与 'else' 是一对互斥路径(条件成立走 then, 不成立走 else): 两条都声明 name 必填,
+    // 沿这条路径 name 就必填(Codex P1 on #10908 第 16 轮, 3663 行)。只有一条时不传播 ——
+    // 另一条路径不要求 name。
+    // 但 if 静态可判时例外: 恒成立(true / 无约束的空对象)的 if 让 else 永远走不到, then
+    // 无条件生效; 恒不成立(false / not 空约束)的 if 让 then 走不到。走不到的分支不参与
+    // 「每条路径都必填」的判定, 也不收它的声明名 —— 实际调用里不可能带上那些字段; 选中的
+    // 那条按合取边并进当前组, 它的必填就是这条路径自己的必填(Codex P1 on #10908 第 17 轮, 3735 行)。
+    const ifVerdict = node.if !== undefined ? staticSchemaVerdict(node.if) : null;
+    const selectedConditional = ifVerdict === true ? 'then' : ifVerdict === false ? 'else' : null;
+    const conditionalAlternatives: EnvelopeGroup[] = [];
+    for (const keyword of SCHEMA_CONDITIONAL_KEYWORDS) {
+      if (node[keyword] === undefined) continue;
+      if (keyword === 'if') {
+        const nested = branchGroup(group);
+        walk(node[keyword], depth + 1, nested);
+        continue;
+      }
+      if (selectedConditional !== null) {
+        if (keyword !== selectedConditional) continue;
+        walk(node[keyword], depth + 1, group);
+        continue;
+      }
+      const nested = branchGroup(group);
+      conditionalAlternatives.push(nested);
+      walk(node[keyword], depth + 1, nested);
+    }
+    if (conditionalAlternatives.length >= 2) group.alternatives.push(conditionalAlternatives);
+    for (const keyword of SCHEMA_DEPENDENCY_KEYWORDS) {
+      const dependencies = node[keyword];
+      if (!isPlainRecord(dependencies)) continue;
+      // 同 properties: 惰性枚举, 十万条依赖不物化值数组(Codex P2 on #10908)。
+      for (const trigger in dependencies) {
+        if (!Object.prototype.hasOwnProperty.call(dependencies, trigger)) continue;
+        if (remainingNodes <= 0) {
+          surface.truncated = true;
+          break;
+        }
+        const dependency = dependencies[trigger];
+        // 数组形态的属性依赖不是子 schema: 它点名的字段已经在上面收进声明名了。
+        if (!isPlainRecord(dependency)) continue;
+        walk(dependency, depth + 1, branchGroup(group));
+      }
+    }
+  };
+  // 重放一个已走过节点的分支结构。与首次走到不同, 重放入口只把节点自己的组合登记到这条路径上
+  // —— 引用包装层({$ref: ...} / {$dynamicRef: ...})自己没有组合, 分支在被引用的文档里:
+  // 重放要顺着引用走过去, 否则两条并集分支引用同一份共享定义、定义里又套着引用时, 第二条
+  // 路径看不见引用后面的分支, 它们缓存的合取位是零, 「沿这条路径必填」的证据就丢了
+  // (Codex P1 on #10908 第 17 轮, 3572 行)。首次走到时不走这里: 那时引用已经按合取边
+  // walk 进来, 被引用节点自己的 walkBranches 已登记过一次, 再走会重复起组。
+  // 重放栈里已有的节点不再重放: 环, 否则递归不止。
+  const replayBranches = (node: Record<string, unknown>, depth: number, group: EnvelopeGroup): void => {
+    if (replaying.has(node)) return;
+    replaying.add(node);
+    walkBranches(node, depth, group);
+    if (typeof node.$ref === 'string') {
+      const resolved = resolveLocalSchemaRef(schema, node.$ref);
+      if (isPlainRecord(resolved)) replayBranches(resolved, depth + 1, group);
+    }
+    if (typeof node.$dynamicRef === 'string') {
+      const resolved = resolveLocalSchemaRef(schema, node.$dynamicRef);
+      if (isPlainRecord(resolved)) replayBranches(resolved, depth + 1, group);
+    }
+    replaying.delete(node);
+  };
+  walk(schema, 0, rootGroup);
+  surface.envelope = settleEnvelope(groups);
+  return surface;
+}
+
+/** 信封三个信号的位标记; 也当集合用(并、比)。 */
+const ENVELOPE_NAME_IS_STRING = 1;
+const ENVELOPE_ARGS_IS_OBJECT = 2;
+const ENVELOPE_NAME_REQUIRED = 4;
+const ENVELOPE_TYPES = ENVELOPE_NAME_IS_STRING | ENVELOPE_ARGS_IS_OBJECT;
+
+/**
+ * 信封证据的一组。沿合取边($ref、allOf、只有一个分支的 anyOf / oneOf)连起来的节点同属一组:
+ * 这些声明对落在这组里的每次调用同时成立, 信号直接并在一起。只在一个条件下生效的分支
+ * (多分支 anyOf / oneOf、if / then / else、依赖分支)各自另起一组, 接在出发点那一组后面。
+ */
+interface EnvelopeGroup {
+  /** 本组节点自己声明的信号(沿合取边并起来)。 */
+  own: number;
+  /** 这一组是从哪一组分出去的; 根组没有。 */
+  base: EnvelopeGroup | null;
+  /** 本组节点上遇到的每个多分支 anyOf / oneOf 的各分支组。 */
+  alternatives: EnvelopeGroup[][];
+}
+
+/** 判属性类型时最多看多少个节点: 组合声明可能有环, 也可能很宽。 */
+const SCHEMA_PROPERTY_TYPE_MAX_NODES = 32;
+/**
+ * enum / const 值检查的个数上限。枚举值不占类型判据的节点预算, 也不占声明面的 512 名额 ——
+ * 不单独封顶的话, 服务端给一个上百 KB 的选择器枚举, 权限/执行两条路径上每次类型探测都要
+ * 同步扫完整个数组(Codex P2 on #10908 第 14 轮)。上限与声明面的名字名额(SCHEMA_NAMES_MAX)
+ * 同一量级: 前段看不完的按「看不完」处理, 不假装看完了。
+ */
+const SCHEMA_ENUM_VALUES_MAX = 512;
+
+/**
+ * 属性类型判据的三态结论: 容得下(admits)、确认容不下(not)、看不完(exhausted)。
+ * 看完 ≠ 容不下: 预算用尽时类型证据没读全, 调用方按「表态不完整」处理(Codex P1 on d805bd345b)。
+ */
+type PropertyTypeVerdict = 'admits' | 'not' | 'exhausted';
+
+/**
+ * 属性 schema 容不容得下某个基本类型: type 是它, 或 type 是含它的数组(可空的 args 常写成
+ * ['object', 'null']), 或 enum / const 的值把它定死了(见 schemaAdmitsTypeByValues)。类型抽到
+ * 组合声明里($ref 指向的定义、allOf / anyOf / oneOf 分支)时, 任一分支容得下就算 —— 指纹要认的
+ * 是「这个字段像不像 string / object」, 不是替服务端做校验。看不到底(环、超出节点数、解析不了
+ * 的引用)按「看不完」回传, 不与「确认容不下」混同。
+ */
+function propertyAdmitsType(root: Record<string, unknown>, property: unknown, expected: 'string' | 'object'): PropertyTypeVerdict {
+  let remaining = SCHEMA_PROPERTY_TYPE_MAX_NODES;
+  const visit = (node: unknown): PropertyTypeVerdict => {
+    if (!isPlainRecord(node)) return 'not';
+    if (remaining <= 0) return 'exhausted';
+    remaining--;
+    const type = node.type;
+    if (type === expected || (Array.isArray(type) && type.includes(expected))) return 'admits';
+    let exhausted = false;
+    // 枚举值检查超预算: 类型证据没看全, 与预算用尽同类 —— 不与「确认容不下」混同。
+    const valuesVerdict = schemaAdmitsTypeByValues(node, expected);
+    if (valuesVerdict === 'admits') return 'admits';
+    exhausted = exhausted || valuesVerdict === 'exhausted';
+    // 任一分支容得下就是容得下; 只有「确认容不下」的分支才允许被别的分支翻案,
+    // 「看不完」记下来但不能掩盖后面可能存在的容得下。
+    if (typeof node.$ref === 'string') {
+      const resolved = resolveLocalSchemaRef(root, node.$ref);
+      if (resolved) {
+        const verdict = visit(resolved);
+        if (verdict === 'admits') return 'admits';
+        exhausted = exhausted || verdict === 'exhausted';
+      } else {
+        // 解析不了的引用: 那边的类型证据看不到 —— 与预算用尽同类。
+        exhausted = true;
+      }
+    }
+    // 属性级 $dynamicRef: 本地能解析(指向本 schema 的 $defs/$dynamicAnchor)就照常 visit,
+    // 看不到的记 exhausted(Codex P1 on #10908 第 16 轮)。与根层同一处理。
+    if (typeof node.$dynamicRef === 'string') {
+      const resolved = resolveLocalSchemaRef(root, node.$dynamicRef);
+      if (resolved) {
+        const verdict = visit(resolved);
+        if (verdict === 'admits') return 'admits';
+        exhausted = exhausted || verdict === 'exhausted';
+      } else {
+        exhausted = true;
+      }
+    }
+    for (const keyword of SCHEMA_COMBINATORS) {
+      const branches = node[keyword];
+      if (!Array.isArray(branches)) continue;
+      for (const branch of branches) {
+        // 节点预算用尽就不再逐个走剩下的分支: 每个分支都要进一次 visit, 分支总数上万时
+        // 这一段就能吃掉整轮, 32 节点的上限形同虚设(Codex P2 on #10908)。与声明面遍历
+        // (schemaParameterSurface)同一套做法: 走不到的分支按「看不完」处理。
+        if (remaining <= 0) {
+          exhausted = true;
+          break;
+        }
+        const verdict = visit(branch);
+        if (verdict === 'admits') return 'admits';
+        exhausted = exhausted || verdict === 'exhausted';
+      }
+    }
+    return exhausted ? 'exhausted' : 'not';
+  };
+  return visit(property);
+}
+
+/**
+ * enum / const 不写 type 也把基本类型定死(JSON Schema 语义): 值全是字符串的 enum 就是 string,
+ * 对象值的 const / enum 就是 object(Codex P1 on #10908)。混型不推断 —— 字符串里混数字、对象里
+ * 混 null 都判不出「像不像」, 当不像处理。返回值沿用类型判据的三态: 值检查个数超过
+ * SCHEMA_ENUM_VALUES_MAX 时只看前段, 前段全容得下但还有剩余 → 'exhausted'(类型证据没看全),
+ * 调用方按「表态不完整」处理; 前段里已见不容 → 确认容不下('not')。
+ */
+function schemaAdmitsTypeByValues(node: Record<string, unknown>, expected: 'string' | 'object'): PropertyTypeVerdict {
+  const values = node.const !== undefined ? [node.const] : Array.isArray(node.enum) ? node.enum : null;
+  if (!values || values.length === 0) return 'not';
+  const limit = Math.min(values.length, SCHEMA_ENUM_VALUES_MAX);
+  for (let index = 0; index < limit; index++) {
+    const value = values[index];
+    if (!(expected === 'string' ? typeof value === 'string' : isPlainRecord(value))) return 'not';
+  }
+  return values.length > SCHEMA_ENUM_VALUES_MAX ? 'exhausted' : 'admits';
+}
+
+/**
+ * 这个节点自己声明的信封信号。
+ *
+ * 判据必须用**形状指纹**而不是名字或单个字段：Pi 也接入用户自接的第三方 MCP，它们可能
+ * 同样叫 call_tool（但信封是 {tool_name, arguments}），也可能有个叫 name 的必填字符串
+ * 参数却是文件名。所以三个信号缺一不可 —— properties.name 是 string、properties.args
+ * 是 object、required 含 name。
+ *
+ * 三个信号可以分散在几个节点里(allOf 的两个分支各声明一个字段、根层 $ref 指向的定义只写了
+ * required), 所以先按组并起来, 遍历结束后再结算(见 settleEnvelope), 而不是要求单个节点
+ * 自己凑齐(Codex P1 on #10908)。
+ */
+function declaredEnvelopeSignals(
+  root: Record<string, unknown>,
+  node: Record<string, unknown>,
+  surface: SchemaParameterSurface,
+): number {
+  const properties = isPlainRecord(node.properties) ? node.properties : null;
+  let signals = 0;
+  if (properties) {
+    const nameVerdict = propertyAdmitsType(root, properties.name, 'string');
+    const argsVerdict = propertyAdmitsType(root, properties.args, 'object');
+    // 类型判据的节点预算用尽: 类型证据没看全, 这份表态不完整 —— 与信封结算无关,
+    // 截断本身就要让调用方按「判不了」处理(Codex P1 on d805bd345b)。
+    if (nameVerdict === 'exhausted' || argsVerdict === 'exhausted') surface.truncated = true;
+    if (nameVerdict === 'admits') signals |= ENVELOPE_NAME_IS_STRING;
+    if (argsVerdict === 'admits') signals |= ENVELOPE_ARGS_IS_OBJECT;
+  }
+  const required = node.required;
+  if (Array.isArray(required)) {
+    // required 的扫描与声明面同一个上限: 数组长过上限且前段没有 name 时, 这份表态不完整
+    // —— 记截断, 不做整段扫描(Codex P2 on #10908 第 14 轮)。信封的 name 是选择器, 必填时
+    // 都写在 required 前段; 长尾 required 的工具按「判不了」处理, 不假装看完了。
+    const limit = Math.min(required.length, SCHEMA_NAMES_MAX);
+    for (let index = 0; index < limit; index++) {
+      if (required[index] === 'name') {
+        signals |= ENVELOPE_NAME_REQUIRED;
+        break;
+      }
+    }
+    if ((signals & ENVELOPE_NAME_REQUIRED) === 0 && required.length > SCHEMA_NAMES_MAX) {
+      surface.truncated = true;
+    }
+  }
+  return signals;
+}
+
+/**
+ * 遍历结束后结算信封证据: groups[0] 是根组。两个条件同时成立才算信封。
+ *
+ * 1. **name 在每条路径上都必填**: 根组自己的 required, 或每个分支都必填的 anyOf / oneOf。
+ *    分支里的 required 是有条件的 —— 「两个分支里只有一个要求 name」的普通工具, name 可省;
+ *    按信封检查去拦没给 name 的调用, 就是永久拒绝。
+ * 2. **有一条路径凑齐三个信号**: 一组的信号 = 本组的 + 出发点那一组的(沿 base 一路并上去)。
+ *    根层声明并要求必填的 name, 与某个 anyOf 分支里声明的 args, 对走了那个分支的调用同时
+ *    成立(Codex P1 on #10908)。分支之间各算各的: 一个分支声明 name、另一个声明 args, 拼不成信封。
+ *
+ * 结算放在遍历之后而不是边走边判: 合取边上的声明可能在分支之后才走到 —— name 写在 allOf 的
+ * 后一个分支里, args 写在前一个分支的 anyOf 里。
+ *
+ * 归一化(平铺信封重建)与执行前的信封检查必须用同一判据，否则两处对「这是不是信封」
+ * 的理解会分叉：重建出来的形状与检查时的形状对不上。
+ */
+function settleEnvelope(groups: EnvelopeGroup[]): boolean {
+  // 分支组排在出发点那一组之后: 倒着走, 内层并选先于外层并进各自的组。
+  for (let index = groups.length - 1; index >= 0; index--) {
+    const group = groups[index];
+    for (const alternatives of group.alternatives) {
+      if (alternatives.length > 0 && alternatives.every(branch => (branch.own & ENVELOPE_NAME_REQUIRED) !== 0)) {
+        group.own |= ENVELOPE_NAME_REQUIRED;
+      }
+    }
+  }
+  const root = groups[0];
+  if (!root || (root.own & ENVELOPE_NAME_REQUIRED) === 0) return false;
+  return groups.some(group => {
+    let types = 0;
+    for (let at: EnvelopeGroup | null = group; at !== null && types !== ENVELOPE_TYPES; at = at.base) {
+      types |= at.own & ENVELOPE_TYPES;
+    }
+    return types === ENVELOPE_TYPES;
+  });
+}
+
+/**
+ * 已看到的表态「就是信封的样子」: 恰好声明 name / args 两个字段、不放开动态字段。
+ *
+ * 多一个兄弟字段、或放开 additionalProperties / patternProperties 的工具(name/args 是它自己的参数,
+ * 不是信封)不能被当成信封 —— 否则平铺调用会把兄弟字段挪进 args 里, 在服务端校验之前就改错了层级
+ * (Codex P1 on #10908)。真实的注册表入口(call_tool)声明的就是 name + args 两个字段。兄弟字段与动态
+ * 字段可以藏在组合声明里, 所以按整份表态判, 不能只看根层。
+ *
+ * 三个信封信号凑没凑齐(envelope)不在这里判: 「看到的部分是不是信封的样子」与「信号齐不齐」是
+ * 两件事 —— 完整表态凑齐了才重建(isNameEnvelopeSchema); 截断的部分表态由 normalizeGatewayArgs
+ * 的 indeterminateEnvelope 另行拒收。
+ */
+function resemblesPartialNameEnvelope(surface: SchemaParameterSurface): boolean {
+  return surface.names.size === 2
+    && surface.names.has('name')
+    && surface.names.has('args')
+    && !surface.additionalAllowed
+    && surface.patterns.length === 0;
+}
+
+function resemblesNameEnvelope(surface: SchemaParameterSurface): boolean {
+  return Boolean(surface.envelope) && resemblesPartialNameEnvelope(surface);
+}
+
+/**
+ * 这个工具的 schema 是不是 Cindy 通用 call_tool 的 {name, args} 信封形状。
+ *
+ * 信封形状(见 settleEnvelope)之外, 还要求表态完整: 没看到的那部分可能还有兄弟字段, 看不全就不下
+ * 结论。判不了的那一类(看不全、但已看到的部分就是信封的样子)由 normalizeGatewayArgs 另行处理。
+ */
+function isNameEnvelopeSchema(schema: unknown, surface?: SchemaParameterSurface | null): boolean {
+  const root = isPlainRecord(schema) ? schema : null;
+  if (!root) return false;
+  const resolved = surface === undefined ? schemaParameterSurface(root) : surface;
+  if (!resolved) return false;
+  return !resolved.truncated && resemblesNameEnvelope(resolved);
+}
+
+/**
+ * patternProperties 的求值预算。
+ *
+ * 模式来自服务端、键来自模型, 两头都不受 Cindy 控制, 而归一化在权限与执行两条路径上同步跑它:
+ * 服务端给一个灾难性回溯的模式(如 ^(a+)+$), 模型给一个长 matching prefix 的键, 30 个字符就能
+ * 把 Node 事件循环卡住几秒, 更长的键直接冻结 Pi 进程。所以只跑「回溯组合数有上界」的模式。
+ */
+const SCHEMA_PATTERN_MAX_LENGTH = 512;
+const SCHEMA_PATTERN_MAX_COUNT = 16;
+const SCHEMA_PATTERN_KEY_MAX_LENGTH = 128;
+const SCHEMA_PATTERN_MAX_DEPTH = 32;
+/** 回溯引擎最多探索的「量词取值 × 分支选择 × 起始位置」组合数; 每个组合一步, 约二十万步以内。 */
+const SCHEMA_PATTERN_BACKTRACK_BUDGET = 200_000;
+
+/**
+ * 估算 pattern 在长度 keyLength 的键上, 回溯引擎最多探索多少种「量词取值 × 分支选择 × 起始位置」
+ * 的组合 —— 回溯引擎每一步对应一种组合, 所以这也是步数的上界。超过预算、或含估算不了的语法
+ * (回溯引用、环视、修饰符分组等)时返回预算加一, 调用方据此不跑这个模式。
+ *
+ * 组合数按结构递推: 顺序相乘、分支相加; 量词的轮数取 max 与「键长 + 下界 + 1」里较小的一个
+ * (吃掉字符的轮次不超过键长; 空匹配的轮次只在下界还没凑够时才被允许), 轮数的选择与每轮内部的
+ * 选择相乘。这是个偏松的上界(确定性的量词也按满算), 松掉的部分只会让少数安全模式被判成不收,
+ * 不会放进真正会爆炸的。
+ */
+function patternBacktrackBudget(pattern: string, keyLength: number): number {
+  const limit = SCHEMA_PATTERN_BACKTRACK_BUDGET;
+  const over = limit + 1;
+  const add = (a: number, b: number): number => (a + b > limit ? over : a + b);
+  const multiply = (a: number, b: number): number => (a * b > limit ? over : a * b);
+  const at = { index: 0 };
+  interface QuantifierRange { min: number; max: number; next: number }
+  // 估算不了: 余下的部分不再看, 整个模式按超预算处理。
+  const giveUp = (): number => {
+    at.index = pattern.length;
+    return over;
+  };
+  const parseAlternation = (depth: number): number => {
+    let total = 0;
+    for (;;) {
+      total = add(total, parseSequence(depth));
+      if (pattern[at.index] !== '|') return total;
+      at.index++;
+    }
+  };
+  const parseSequence = (depth: number): number => {
+    let product = 1;
+    // 上一个原子的组合数(含量词), 遇到下一个原子或分支结束时才乘进 product。
+    let pending: number | null = null;
+    for (;;) {
+      const char = pattern[at.index];
+      if (char === undefined || char === '|' || char === ')') break;
+      const range = parseQuantifier();
+      if (range) {
+        if (pending === null) return giveUp();
+        at.index = range.next;
+        if (pattern[at.index] === '?') at.index++; // 惰性量词: 组合数不变。
+        pending = quantified(pending, range);
+        continue;
+      }
+      product = multiply(product, pending ?? 1);
+      pending = parseAtom(depth);
+    }
+    return multiply(product, pending ?? 1);
+  };
+  const parseQuantifier = (): QuantifierRange | null => {
+    const char = pattern[at.index];
+    if (char === '*') return { min: 0, max: Number.POSITIVE_INFINITY, next: at.index + 1 };
+    if (char === '+') return { min: 1, max: Number.POSITIVE_INFINITY, next: at.index + 1 };
+    if (char === '?') return { min: 0, max: 1, next: at.index + 1 };
+    return char === '{' ? parseBraces() : null;
+  };
+  const parseBraces = (): QuantifierRange | null => {
+    const close = pattern.indexOf('}', at.index + 1);
+    const match = close < 0 ? null : /^(\d+)?(,)?(\d*)$/.exec(pattern.slice(at.index + 1, close));
+    // {a}、{}、{,} 在非 unicode 模式下是普通字符, 不是量词。
+    if (!match || (match[1] === undefined && match[3] === '')) return null;
+    const min = Number(match[1] ?? 0);
+    return {
+      min,
+      // 没有逗号时上界等于下界; 逗号后省略表示不封顶。
+      max: match[2] === undefined ? min : match[3] === '' ? Number.POSITIVE_INFINITY : Number(match[3]),
+      next: close + 1,
+    };
+  };
+  const quantified = (base: number, range: QuantifierRange): number => {
+    if (range.min > range.max) return over;
+    // 轮数: 吃掉字符的轮次不超过键长; 能空匹配的轮次只在下界还没凑够时才被允许, 最多再加 min + 1 轮。
+    const rounds = Math.min(range.max, keyLength + range.min + 1);
+    // 轮数本身也是一次选择。
+    if (rounds + 1 > limit) return over;
+    // 轮数可以很大(a{199999} 这类量词): 逐轮相乘等于把一次估算做成几十万次迭代, 十几条
+    // 模式就是上亿次, 同步卡住 Pi(Codex P1 on #10908)。平方代替逐轮相乘: 步数 O(log 轮数),
+    // 取值与逐轮相乘一致(封顶之后都记超预算)。
+    let choices = 1;
+    let factor = Math.max(base, 1);
+    for (let exponent = rounds; exponent > 0; exponent = Math.floor(exponent / 2)) {
+      if (exponent % 2 === 1) choices = multiply(choices, factor);
+      factor = multiply(factor, factor);
+    }
+    return multiply(rounds + 1, choices);
+  };
+  const parseAtom = (depth: number): number => {
+    const char = pattern[at.index];
+    if (char === '(') {
+      at.index++;
+      if (pattern[at.index] === '?') {
+        const kind = pattern[at.index + 1];
+        if (kind === ':') {
+          at.index += 2;
+        } else if (kind === '<' && pattern[at.index + 2] !== '=' && pattern[at.index + 2] !== '!') {
+          // 具名分组; 名字里带转义的不估。
+          const close = pattern.indexOf('>', at.index + 2);
+          if (close < 0 || pattern.slice(at.index + 2, close).includes('\\')) return giveUp();
+          at.index = close + 1;
+        } else {
+          return giveUp(); // 环视、修饰符分组。
+        }
+      }
+      if (depth + 1 > SCHEMA_PATTERN_MAX_DEPTH) return giveUp();
+      const inner = parseAlternation(depth + 1);
+      if (pattern[at.index] !== ')') return giveUp();
+      at.index++;
+      return inner;
+    }
+    if (char === '[') {
+      let index = at.index + 1;
+      if (pattern[index] === '^') index++;
+      if (pattern[index] === ']') index++;
+      while (index < pattern.length && pattern[index] !== ']') {
+        // 嵌套字符类是 v 标志的语法, 不按普通字符类估。
+        if (pattern[index] === '[') return giveUp();
+        index += pattern[index] === '\\' ? 2 : 1;
+      }
+      if (index >= pattern.length) return giveUp();
+      at.index = index + 1;
+      return 1;
+    }
+    if (char === '\\') {
+      const next = pattern[at.index + 1];
+      // 回溯引用; 以及带花括号的转义(\u{…}、\p{…})—— 非 unicode 模式下后者其实是字母加量词。
+      if (next === undefined || /[1-9kpP]/.test(next)) return giveUp();
+      if (next === 'u' && !/^[0-9a-fA-F]{4}/.test(pattern.slice(at.index + 2))) return giveUp();
+      at.index += 2;
+      return 1;
+    }
+    at.index++; // 普通字符、.、^、$ 都是单个原子。
+    return 1;
+  };
+  const choices = parseAlternation(0);
+  if (at.index !== pattern.length) return over;
+  // 没有 ^ 锚定时, 引擎从每个位置各起一次匹配。
+  return pattern.startsWith('^') ? choices : multiply(choices, keyLength + 1);
+}
+
+/**
+ * schema 对一个「声明名之外」的键的表态。
+ *
+ * rejected 只留给 schema 明确不收的情形(放开额外字段与模式都不命中); 有模式没跑成就不是「不收」,
+ * 而是判不了 —— 这个键可能正是某条模式声明的动态参数。
+ */
+type SchemaKeyStatus = 'accepted' | 'rejected' | 'unknown';
+
+/**
+ * schema 明确收下这个键吗（声明之外的动态参数）。
+ *
+ * - additionalProperties / unevaluatedProperties 明确放开（true 或一个 schema）→ 收：schema 说这个键
+ *   合法, 不转发等于又丢一次参数（表格类服务于是按缺省值写回 A1 并返回成功）。
+ *   组合 schema 里任何走到的分支放开它也算数。
+ * - patternProperties 命中某个模式 → 收。但只跑回溯组合数有上界的模式(见 patternBacktrackBudget):
+ *   模式是服务端给的、键是模型给的, 判不了的模式不跑。一轮里**所有模式**的估算总和也有上界:
+ *   单条都过关、合起来仍可能把同步路径拖住。
+ * - 有模式没跑成(键太长 / 预算用尽 / 模式估不了或是非法正则)且其余都不命中 → unknown(判不了):
+ *   这个键可能正是没跑成的那个模式声明的参数, 按「没声明」丢掉它就是丢参数(Codex P1 on #10908),
+ *   与声明面被截断是同一类事 —— 调用方按不丢处理。
+ * - 所有模式都跑过且都不命中（或 schema 根本没有模式）→ 不收：schema 没表态, 宁漏不误转。
+ *   JSON Schema 默认允许额外字段，但「默认允许」不等于「这个键是模型想给的参数」，
+ *   把模型的私货转过去只会让服务端多一条校验错误。
+ */
+function schemaKeyStatus(
+  surface: SchemaParameterSurface | null,
+  key: string,
+  patternBudget: { remaining: number } = { remaining: SCHEMA_PATTERN_BACKTRACK_BUDGET },
+): SchemaKeyStatus {
+  if (!surface) return 'rejected';
+  if (surface.additionalAllowed) return 'accepted';
+  if (surface.patterns.length === 0) return 'rejected';
+  if (key.length > SCHEMA_PATTERN_KEY_MAX_LENGTH || patternBudget.remaining <= 0) return 'unknown';
+  let skipped = false;
+  for (const pattern of surface.patterns) {
+    if (pattern.length > SCHEMA_PATTERN_MAX_LENGTH) {
+      skipped = true;
+      continue;
+    }
+    // 共享预算用尽后不再估算后面的模式: 估算本身要走一遍模式(每个量词原子都要算轮数),
+    // 每个顶层键都把这批模式重估一遍, 工作量按键数放大(Codex P1 on #10908)。
+    if (patternBudget.remaining <= 0) {
+      skipped = true;
+      break;
+    }
+    const estimate = patternBacktrackBudget(pattern, key.length);
+    if (estimate > SCHEMA_PATTERN_BACKTRACK_BUDGET) {
+      // 超预算的模式不跑, 但估算花掉的功夫要记账: 记进共享预算, 后面的顶层键不再重估这批
+      // 模式(判不了 → unknown, 键照常转发不丢)。
+      skipped = true;
+      patternBudget.remaining -= SCHEMA_PATTERN_BACKTRACK_BUDGET;
+      continue;
+    }
+    // 总量上限: 单次调用跨所有顶层键共享同一份回溯预算(Codex P1 on #10908)。后面的模式也跑不成。
+    if (estimate > patternBudget.remaining) {
+      skipped = true;
+      break;
+    }
+    patternBudget.remaining -= estimate;
+    try {
+      // JSON Schema 的 ECMA-262 语义是 Unicode 模式: ^.$ 对一个码点的星号位字符(😀)算
+      // 一个字符、匹配; 无 u 标志的 JS 正则把它当两个 UTF-16 单元、不匹配, 键被误判成
+      // 「schema 不收」而丢掉(Codex P2 on #10908 第 15 轮)。用 u 模式跑, 与服务端一致。
+      if (new RegExp(pattern, 'u').test(key)) return 'accepted';
+    } catch {
+      // 非法正则: 这一条判不了, 继续看后面的模式。
+      skipped = true;
+    }
+  }
+  return skipped ? 'unknown' : 'rejected';
+}
+
+/**
+ * 把一个折叠进来的键写成对象自己的数据属性。
+ *
+ * 用赋值表达式往 params 里写键时, key 是 __proto__ 会走 Object.prototype 上的 setter: 键没写进去
+ * (发给服务端的参数里少一个), 对象值还会把 params 的原型换掉, 后面按属性名读参数的地方就读到
+ * 被塞进来的值(Codex P2 on #10908)。defineProperty 建的是普通可枚举属性, 序列化时照常带出去。
+ */
+function setOwnArgument(target: Record<string, unknown>, key: string, value: unknown): void {
+  Object.defineProperty(target, key, { value, enumerable: true, writable: true, configurable: true });
+}
+
+/**
+ * 把模型给出的网关调用还原成「所选工具自己的参数」。
+ *
+ * 弱模型有两种常见偏差(实测 MiniMax-M3.1 / deepseek-v4.1-flash / step-5 都会犯):
+ * 把工具参数平铺在顶层({server, tool, row: 10}), 或把 args 写成一段 JSON 字符串。
+ * 只取 args 的实现会把其余参数静默丢掉 —— 服务端于是按缺省值执行(表格类服务写回 A1)
+ * 并返回成功, 链路看起来完全正常, 用户只会以为服务端忽略了参数。
+ *
+ * 这里按工具自己的 schema 把参数归位: schema 声明过的顶层键折进 args(同名以 args 为准),
+ * 声明之外的顶层键只在 schema 明确收下它时转发(additionalProperties / patternProperties),
+ * 其余不转发(那是模型的私货, 转过去只会让服务端多一条校验错误), 但记下来。schema 判不了的键
+ * (有模式没跑成)与声明面不完整的情形一样不丢: 丢的可能正是声明过的参数。
+ *
+ * 信封工具另有一种平铺: 弱模型把通用 call_tool 的信封两个字段(name/args)摊到顶层,
+ * 给出 {server, tool, name: <内层工具>, args: <内层参数>}。这时顶层 name 是**信封层**
+ * 的内层工具名, 不是内层参数 —— 把它折进参数容器, 信封的 args 层就没了, 服务端收到的
+ * 不是 {name, args}, 内层工具会被按空参数调用。这种形态重建回 {name, args}。
+ * 工具 schema 看不全、判不了是不是信封时(indeterminateEnvelope)不猜: 交给调用方拒收。
+ *
+ * 同一个参数在顶层与 args 里各给了一份时以 args 为准, 顶层那份记进 shadowed —— 它不出现在
+ * 转发的参数里, 不点名就没有人知道服务端为什么按 args 里那个值执行。
+ *
+ * args/arguments 只有两种形态可用: 对象, 或能解析成对象的 JSON 字符串。两个容器同时给出且
+ * 内容不一致(或有一份形态不可用)时整笔调用拒收 —— 容器键不进 shadowed/unmapped, 静默只认
+ * args 等于把 arguments 丢了(见 callInputError 的双容器分支)。
+ * 「没传这个键」与「显式传 null」必须分开: 后者是模型给了一个用不了的形态,
+ * 静默发 arguments: {} 只会让服务端按缺省值兜底并返回成功。
+ */
+/**
+ * 内层工具的本地查询, 由网关注入(归一化是自由函数, 不碰工具表)。查不到返回 null。
+ */
+type InnerToolLookup = (innerName: string) => { inputSchema: unknown } | null;
+
+function normalizeGatewayArgs(
+  record: Record<string, unknown>,
+  tool: ConnectedMcpTool,
+  lookupInnerTool?: InnerToolLookup,
+): GatewayArgsResolution {
+  const provided = record.args !== undefined || record.arguments !== undefined;
+  // 两个容器同时给出: args/arguments 都是网关自留键, 归一化只认 args, 另一份既不进 shadowed
+  // 也不进 unmapped(那两个数组记的是参数键, 不记容器键), 静默丢掉它模型无从知晓 —— 两份
+  // 内容不同时服务端按 args 执行, 模型以为发的是 arguments(实测弱模型会把同一组参数的两个
+  // 别名都填上, 各写一个值)。两份解析后一致时发哪份结果都相同, 不拦; 不一致或有一份形态
+  // 不可用, 这个调用本身有歧义 —— 不猜, 标出来交回给调用方拒收(Codex P1 on #10908 第 14 轮)。
+  let dualContainers = false;
+  if (record.args !== undefined && record.arguments !== undefined) {
+    const usableContainer = (value: unknown): Record<string, unknown> | null => {
+      if (value && typeof value === 'object' && !Array.isArray(value)) return value as Record<string, unknown>;
+      return typeof value === 'string' ? parseJsonObject(value) : null;
+    };
+    const left = usableContainer(record.args);
+    const right = usableContainer(record.arguments);
+    const leftJson = left ? canonicalArgsJson(left) : null;
+    const rightJson = right ? canonicalArgsJson(right) : null;
+    dualContainers = leftJson === null || rightJson === null || leftJson !== rightJson;
+  }
+  const raw = record.args !== undefined ? record.args : record.arguments;
+  let params: Record<string, unknown> = {};
+  let malformed = false;
+  let parsedFromString = false;
+  if (raw === null) {
+    malformed = true;
+  } else if (raw !== undefined) {
+    if (typeof raw === 'object' && !Array.isArray(raw)) {
+      // 复制一份: 归一化不能改写模型给的那个对象(它同时是审批提示与回执的凭据)。
+      params = { ...raw as Record<string, unknown> };
+    } else if (typeof raw === 'string') {
+      const parsed = parseJsonObject(raw);
+      if (parsed) {
+        params = parsed;
+        parsedFromString = true;
+      } else {
+        malformed = true;
+      }
+    } else {
+      malformed = true;
+    }
+  }
+  const schema = tool.inputSchema;
+  const surface = schemaParameterSurface(schema);
+  // 只在 required 里点名的字段也算声明过; 但「按名字筛」的前提是 schema 声明过属性名 ——
+  // 没声明 properties 的工具仍按下面那条整体折进去。
+  const declared = surface?.declaresProperties ? surface.names : null;
+  // schema 没声明属性名时, 只有明确禁止额外字段才不转发 —— JSON Schema 默认允许额外字段,
+  // 这类工具(如只声明类型不声明 properties 的)把顶层键折进去才是服务端能接住的那一份。
+  const foldAll = !declared && schema?.additionalProperties !== false;
+  // 声明面不完整(遍历被预算截断 / 有解析不了的引用): 剩下的声明我们没看到, 不能证明某个
+  // 顶层键「没声明」—— 就不丢它。丢一个声明过的参数, 服务端会按缺省值执行(本 PR 要修的
+  // 那类静默错误); 多转一个键最坏是服务端一条校验错误, 看得见。
+  const incomplete = Boolean(surface?.truncated);
+  const folded: string[] = [];
+  const shadowed: string[] = [];
+  const unmapped: string[] = [];
+  // 信封被平铺: 顶层 name 是信封层的内层工具名(选择器), args 容器是内层工具自己的参数。
+  // 内层工具自己常有 name 参数(memory_write 的记忆名、schedule_create 的展示名), 所以「args 里
+  // 有 name」不等于「模型给的是完整信封」—— 顶层选择器与 args 里的 name 各占一层, 两层都要留:
+  // 丢了顶层那层, 服务端拿 {name: <记忆名>, type} 当信封, 内层工具查无此名或调错工具。
+  // 只有 args 容器自身就是一个完整信封({name, args})、且它说的内层工具与顶层 name 一致
+  // (或顶层 name 只是入口工具自己的名字)时, 才是模型把同一个选择器写了两遍, 不再包一层。
+  const selector = typeof record.name === 'string' ? record.name : undefined;
+  // 「同一个选择器写了两遍」的撞名分支要先问内层工具自己的 schema(Codex P1 on 51c6ed253d):
+  // 内层工具自己就声明 name + args 参数时(run 这类), args 容器里的 {name, args} 可能正是它的
+  // 参数对象 —— 内层名恰好与选择器撞名而已。折叠后 registry 收到的 arguments 仍被剥一层信封,
+  // 内层工具拿到 {cwd}, 自己声明的 name/args 没了。内层 schema 声明了 args(与执行前双包裁决
+  // 同一判据、同一来源)就不折叠, 照实重建; 内层确实没有 args 才折叠 —— 平铺是 2026-10-31
+  // 实测撞出的形状, 折与不折都说得通时由执行前的双包裁决按真实 schema 定。
+  const containerLooksEnvelope = Object.prototype.hasOwnProperty.call(params, 'name')
+    && typeof params.name === 'string'
+    && Object.prototype.hasOwnProperty.call(params, 'args');
+  // 信封判据先算: 「要不要问服务端那份内层 schema」只在**确实认得出信封**时才问 ——
+  // 普通第三方工具的 args 容器碰巧长得像 {name, args} 时, 问它没有意义(归位结论与内层 schema
+  // 无关), 却会在弹框前打一次服务端自定的 list_tools: 那个工具名是服务端说了算的, 可能带副作用
+  // (Codex P1 on #10908 第 13 轮, 4179 行)。
+  const envelopeSchema = isNameEnvelopeSchema(schema, surface);
+  // 内层工具自己就声明 name + args 参数时(run 这类), args 容器里的 {name, args} 可能正是它的
+  // 参数对象 —— 内层名恰好与选择器撞名而已。三态判据(与执行前双包裁决同一判据、同一来源):
+  // - true  内层确实声明了 args → 容器是内层工具自己的参数对象, 两层都留;
+  // - false 内层确实没有 args   → 容器只能是重复信封, 剥一层;
+  // - null  查不到内层 / 判不了 → 先标「要不要问服务端那份 schema」: 调用方代拉一次内层列表
+  //        再判一次, 判据按真实 schema 定, 审批框与真正发出去的参数才一致(Codex P1 on #10908
+  //        第 12 轮, 4094 行)。代拉之后仍判不了(服务端内层列表没有 schema / 代拉失败)就不再
+  //        照旧剥一层 —— 两种读法发出去的层数不同, 猜层数等于替模型赌; 标 unresolvedCollision
+  //        拒收并指路(Codex P1 on #10908 第 14 轮, 见 resolveInnerSchema)。
+  const innerTool = containerLooksEnvelope && lookupInnerTool
+    ? lookupInnerTool(params.name as string)
+    : null;
+  const innerDeclaresArgs = innerTool ? schemaDeclaresArgs(innerTool.inputSchema) : null;
+  // 撞名裁决要问的是「被选中的那个内层工具」的 schema, 不是「容器里 name 指的那个」:
+  // - 同一个选择器写了两遍(容器里的 name 与选择器一致): 那个同名内层工具;
+  // - 选择器就是入口工具自己(第三方 registry 的入口内层有个同名工具): 入口名对应的内层工具。
+  // 两种形态的两种读法(剥一层 / 留两层)发出去的层数不同, 判不出来就不猜(见 pending)。
+  const selectorIsEntry = selector !== undefined && selector === tool.name;
+  const sameSelectorTwice = containerLooksEnvelope && selector !== undefined && params.name === selector;
+  const entrySelfShape = containerLooksEnvelope && selectorIsEntry && params.name !== selector;
+  const entrySelfInnerName = entrySelfShape ? selector : undefined;
+  const entrySelfInnerTool = entrySelfInnerName !== undefined && lookupInnerTool
+    ? lookupInnerTool(entrySelfInnerName)
+    : null;
+  const entrySelfDeclaresArgs = entrySelfInnerTool ? schemaDeclaresArgs(entrySelfInnerTool.inputSchema) : null;
+  // 内层工具自己就是 entry tool(selector === tool.name)时, 容器里的 name 是内层工具自己的参数
+  // (不是重复信封): 内层工具本地查不到、判不了时按「剥一层」走是把内层工具的 name/args 剥掉 ——
+  // 判不出来就不猜, 标出来代拉内层 schema 再判(Codex P1 on #10908 第 16 轮)。这种形态与「撞名」
+  // 的判据同源: 都是「容器里的 name 是内层工具自己的参数, 还是重复信封」。查到了但那份 schema
+  // 判不了(无 properties 也未放开额外字段, 三态里的 null)同样算「判不出来」—— null 不是
+  // 「没有」的证据, 拿它当「没有」剥一层, 内层工具的参数就被剥掉了(Codex P1 on #10908 第 17 轮)。
+  const innerUndecidable = innerTool === null || innerDeclaresArgs === null;
+  const innerSchemaPending = envelopeSchema
+    && containerLooksEnvelope
+    && selector !== undefined
+    && params.name === selector
+    && innerUndecidable
+    ? params.name as string
+    : undefined;
+  // 内层工具自己就是 entry tool(selector === tool.name)时, 容器里的 name 是内层工具自己的参数
+  // (不是重复信封): 内层工具本地查不到、判不了时按「剥一层」走是把内层工具的 name/args 剥掉 ——
+  // 判不出来就不猜, 标出来代拉内层 schema 再判(Codex P1 on #10908 第 16 轮)。这种形态与「撞名」
+  // 的判据同源: 都是「容器里的 name 是内层工具自己的参数, 还是重复信封」。查到了但那份 schema
+  // 判不了(三态里的 null)同样算判不出来 —— null 不是「没有」的证据, 同样先代拉(Codex P1 on
+  // #10908 第 17 轮)。
+  const entrySelfPending = envelopeSchema
+    && entrySelfShape
+    && entrySelfDeclaresArgs === null
+    ? entrySelfInnerName
+    : undefined;
+  // 内层工具自己就是 entry tool(selector === tool.name)时, args 容器里又是个 {name, args}
+  // 形状: 它可能是「同一个选择器写了两遍」(剥一层), 也可能是「entry tool 内层就是另一个
+  // 同名工具」(保留两层)。判据一样: 内层工具声明了 args 就是它的参数对象, 不剥; 没有 args
+  // 才剥。以前 selector===tool.name 无条件算「重复信封」剥一层, 第三方 registry 的 entry 内
+  // 层真的叫 call_tool 时, 它的参数会被剥掉、发错层(Codex P1 on #10908 第 16 轮, 4292 行)。
+  // 现在按同一判据: 同一个选择器写了两遍 → 容器里没有 args 才剥; 选择器是入口自己 → 看入口
+  // 名那个内层工具的 schema(查不到就先代拉一次内层列表), 判不出来就拒收, 不猜层数。
+  // 剥层只在「内层确实没有 args」时做(三态里的 false): 查不到或判不了都先按「两层都留」走,
+  // 交给代拉出来的真实 schema 定; 代拉后仍判不了就拒收(见 resolveInnerSchema)—— null 不是
+  // 「没有」的证据, 拿 null 当「没有」剥层就是猜层数(Codex P1 on #10908 第 17 轮, 4383 行)。
+  const repeatsEnvelope = containerLooksEnvelope && selector !== undefined && (
+    (params.name === selector && innerDeclaresArgs === false)
+    || (entrySelfShape && entrySelfDeclaresArgs === false)
+  );
+  // 信封判不了: schema 看不全, 但已看到的表态仍与信封兼容, 而顶层给了 name。它可能是信封层的
+  // 内层工具名 —— 按普通工具折进参数容器, 服务端拿到的是 {name, <内层参数>}: 没有 args 层, 内层
+  // 工具被按空参数调用还返回成功(Codex P1 on #10908)。也可能就是这个工具自己的 name 参数,
+  // 包一层同样是错的。两种都走得通的形状只有一个 —— 全部放进 args, 由 callInputError 拒收并指路。
+  //
+  // 「与信封兼容」比「恰好两个名字」宽(Codex P1 on 51c6ed253d / d805bd345b): 截断可能藏掉
+  // required 信号、藏掉 args 的声明本身, 甚至(类型判据预算用尽)藏掉类型证据 —— names 恰好
+  // {name, args} 只是兼容的一种。已看到的声明名不与信封矛盾(只有 name / args 或更少)、没放开
+  // 动态字段、没有模式, 这份表态就仍然可能是信封。但只给了选择器、没有载荷的调用不拦:
+  // 两种读法发出去的是同一份, 没有参数可以被发错层。
+  const envelopeCompatible = surface !== null
+    && !surface.additionalAllowed
+    && surface.patterns.length === 0
+    && [...surface.names].every((name) => name === 'name' || name === 'args');
+  // 载荷不只看 args 容器: 容器给了但是空的, 载荷可能平铺在顶层(模型给 args:{} 再给几个平铺键)。
+  // 这种形状有没有 registry 那层 args, 两种读法发出去的参数不一样 —— 判不出来就要拒收,
+  // 不能照发(少了 args 层, 内层工具被按缺省值调用还返回成功)。
+  const flatSiblings = Object.entries(record)
+    .some(([key]) => !GATEWAY_OWN_KEYS.has(key) && key !== 'name');
+  const carriesPayload = Object.keys(params).length > 0 || flatSiblings;
+  const indeterminateEnvelope = selector !== undefined && surface !== null
+    && surface.truncated && envelopeCompatible && carriesPayload;
+  if (indeterminateEnvelope) {
+    return {
+      args: params, provided, malformed, folded, shadowed, unmapped, parsedFromString, indeterminateEnvelope: true,
+      ...(dualContainers ? { dualContainers: true } : {}),
+    };
+  }
+  const flattenedEnvelope = envelopeSchema
+    && provided
+    && selector !== undefined
+    && !repeatsEnvelope;
+  // 信封**整个摊平**: 模型连 args 容器都没给, 只给了顶层选择器 + 内层参数
+  // ({server, tool, name:'schedule_list', status:'active'})。这时内层参数是**内层工具**的,
+  // 外层信封 schema 只声明 name/args, 判不了它们 —— 按外层 schema 丢, 内层工具就只拿到
+  // 空参数(列全部定时任务而不是按 status 过滤)。所以这一形态下顶层键整体收进内层 args。
+  const flattenedEnvelopeNoContainer = envelopeSchema
+    && !provided
+    && selector !== undefined;
+  // 已经是嵌套信封(args:{name:'schedule_list', args:{}})但顶层还散落着内层参数: 兄弟键也是
+  // 内层工具的, 按外层信封 schema 判就丢了 —— 收进嵌套的内层 args 层(Codex P1 on #10908 第 16 轮,
+  // 4346 行)。与「半平铺信封兄弟键收进内层 args」同一处理, 只是容器里已有 name + args 两层。
+  const nestedEnvelope = envelopeSchema && provided && !flattenedEnvelope && !flattenedEnvelopeNoContainer
+    && containerLooksEnvelope && flatSiblings;
+  // 嵌套信封的内层参数层(容器自己的 args): 顶层兄弟键收进这里。
+  const nestedInnerArgs = nestedEnvelope && isPlainRecord(params.args) ? { ...params.args } : null;
+  const patternBudget = { remaining: SCHEMA_PATTERN_BACKTRACK_BUDGET };
+  for (const [key, value] of Object.entries(record)) {
+    if (GATEWAY_OWN_KEYS.has(key)) continue;
+    if ((flattenedEnvelope || flattenedEnvelopeNoContainer) && key === 'name') continue; // 信封层, 不是内层参数。
+    if (flattenedEnvelopeNoContainer && (key === 'args' || key === 'arguments')) continue;
+    if (Object.prototype.hasOwnProperty.call(params, key)) {
+      // 同名以 args 为准。顶层的值没有采用, 也不在转发的参数里: 记下来, 回执里点名(Codex P1 on #10908)。
+      shadowed.push(key);
+      continue;
+    }
+    if (flattenedEnvelope || flattenedEnvelopeNoContainer) {
+      // 信封被平铺时顶层兄弟键是内层工具的参数, 外层信封 schema 判不了它们 —— 与整个摊平
+      // 同一处理: 整体收进内层 args, 交给内层工具自己校验。信封只有一半(name + args 都在顶层,
+      // args 容器里另有内层参数)同样适用: 兄弟键按外层 schema 判就丢了(Codex P1 on #10908 第 15 轮)。
+      setOwnArgument(params, key, value);
+      folded.push(key);
+      continue;
+    }
+    if (nestedInnerArgs) {
+      // 嵌套信封旁的兄弟键是**内层**工具的参数: 外层信封 schema 判不了它们, 收进内层 args 层,
+      // 交给内层工具自己校验(Codex P1 on #10908 第 16 轮, 4346 行)。
+      // 但内层 args 已有同名键时内层为准: 那一层就是内层工具自己的参数, 顶层散键是同一参数的
+      // 重复给法 —— 与顶层的「同名以 args 为准」同一口径。照旧盖掉等于替模型改写它已经写对的
+      // 层(Codex P1 on #10908 第 17 轮, 4473 行): 顶层那份记进 shadowed, 不出现在转发的参数里。
+      if (Object.prototype.hasOwnProperty.call(nestedInnerArgs, key)) {
+        shadowed.push(key);
+        continue;
+      }
+      setOwnArgument(nestedInnerArgs, key, value);
+      folded.push(key);
+      continue;
+    }
+    // 只有 schema 明确不收的键才不转发; 判不了的(有模式没跑成)与声明面不完整同样按不丢处理。
+    if (!foldAll && !incomplete && !(declared?.has(key) ?? false)
+      && schemaKeyStatus(surface, key, patternBudget) === 'rejected') {
+      unmapped.push(key);
+      continue;
+    }
+    setOwnArgument(params, key, value);
+    folded.push(key);
+  }
+  if (nestedInnerArgs) {
+    // 容器本身就是那个信封: 顶层兄弟键收进它的内层 args 层, 再整份转发。
+    params.args = nestedInnerArgs;
+  }
+  const args = flattenedEnvelope || flattenedEnvelopeNoContainer
+    ? { name: record.name as string, args: params }
+    : params;
+  return {
+    args,
+    provided,
+    malformed,
+    folded,
+    shadowed,
+    unmapped,
+    parsedFromString,
+    ...(dualContainers ? { dualContainers: true } : {}),
+    ...(flattenedEnvelope || flattenedEnvelopeNoContainer ? { rebuiltEnvelope: true } : {}),
+    ...(nestedInnerArgs ? { foldedIntoInnerArgs: true } : {}),
+    ...(innerSchemaPending ? { innerSchemaPending } : {}),
+    ...(entrySelfPending ? { entrySelfPending } : {}),
+  };
+}
+
+/**
  * 判断工具 schema 是否声明了名为 args 的参数。返回:
  * - true/false  properties 明确声明/未声明 args
  * - null        无法判定 — properties 缺失/为空(参数可能靠 $ref/allOf 组合声明),
  *               调用方按「无可靠判据」处理, 宁漏不误拦
  */
-function schemaDeclaresArgs(schema: { properties?: Record<string, unknown> } | null | undefined): boolean | null {
-  const props = schema?.properties;
-  if (props == null || typeof props !== 'object' || Object.keys(props).length === 0) {
-    return null;
+/**
+ * 判断工具 schema 是否声明了名为 args 的参数。判据用有预算的声明面遍历(与归一化的其他
+ * 判据同源): 组合声明($ref / allOf / anyOf / oneOf / 条件 / 依赖子 schema)里的 properties
+ * 与 required 都算 —— 根层只读会把 allOf 分支里声明的 args 判成没有, 撞名裁决就折错一层
+ * (Codex P1 on d805bd345b)。返回:
+ * - true/false  声明面里明确声明/未声明 args
+ * - null        无法判定 — 声明面没看到任何 properties 或没看全(truncated / 遍历截断),
+ *               调用方按「无可靠判据」处理, 宁漏不误拦
+ */
+function schemaDeclaresArgs(schema: unknown): boolean | null {
+  const root = isPlainRecord(schema) ? schema : null;
+  if (!root) return null;
+  const surface = schemaParameterSurface(root);
+  if (!surface) return null;
+  if (surface.names.has('args')) return true;
+  if (surface.truncated) return null;
+  // 零属性纯动态 schema({type:'object', additionalProperties:true}): 声明面没 properties, 但
+  // 额外字段不限 —— 收得下自己的 args 字段, 「没声明」不等于「没有」(Codex P1 on #10908 第 16 轮)。
+  if (!surface.declaresProperties && surface.additionalAllowed) return true;
+  if (!surface.declaresProperties) return null;
+  // 动态放开的字段(additionalProperties 放开或模式命中 args): 「声明名里没有 args」不等于「这份
+  // schema 不收 args」—— 按「没有」处理, 就是断言内层工具没有 args 参数, 于是把它的参数剥掉
+  // 一层, 服务端收到的是少一层的参数, 规范调用被判成「信封套了两遍」而拒收(Codex P1 on #10908)。
+  if (surface.additionalAllowed) return true;
+  if (surface.patterns.length > 0) {
+    // 模式命中 args → 收得下; 模式没跑成(判不了)也算收得下: 宁可多留一层交给服务端校验,
+    // 不凭「没声明」断言它不存在。
+    return schemaKeyStatus(surface, 'args') === 'rejected' ? false : true;
   }
-  return Object.prototype.hasOwnProperty.call(props, 'args');
+  return false;
 }
 
 class CindyMcpGateway {
@@ -3357,6 +4659,12 @@ class CindyMcpGateway {
   /** 本次调用跳过了权限询问（hook 未披露即放行）：按 toolCallId 记账，execute 见此标记一律回路标。 */
   private readonly permissionSkippedCalls = new Set<string>();
   private readonly approvedDefinitions = new Map<string, string>();
+  /**
+   * 归一化结论(按 toolCallId 记): 审批那条路径与执行那条路径必须用同一份结论 ——
+   * 剥不剥那一层可能要问服务端那份 schema, 代拉失败时两次答案可能不同; 记下来,
+   * 执行时就发审批框里显示的那一份(pi-harness §4.12)。
+   */
+  private readonly approvedCalls = new Map<string, ResolvedMcpGatewayCall>();
   private disclosureNotePending = false;
   private botMemoryFacadeEnabled = false;
   private botHelperFacadeEnabled = false;
@@ -3521,29 +4829,159 @@ class CindyMcpGateway {
     });
   }
 
-  // Share deterministic input errors with the approval hook. Never unwrap or
-  // guess parameters: ghost_call and third-party tools legitimately accept args.
+  // Share deterministic input errors with the approval hook. The gateway input is
+  // normalized first, so a model that flattens its parameters onto the top level is
+  // repaired instead of silently losing them.
   private callInputError(input: unknown): string | null {
     const record = recordInput(input);
     const server = typeof record.server === 'string' ? this.resolveServerName(record.server) : null;
     const tool = server && typeof record.tool === 'string'
       ? this.tools.get(mcpGatewayKey(server, record.tool)) : undefined;
+    if (!tool) return null;
+    const resolution = normalizeGatewayArgs(record, tool, this.innerToolLookup(tool));
+    if (resolution.dualContainers) {
+      // 双容器且两份不一致(或有一份用不了): 发哪份结果不同, 不猜。点名只发一份, 消歧义。
+      return 'Invalid ' + tool.serverName + '/' + tool.name + ' parameters: args and arguments were both'
+        + ' provided but do not carry the same contents, and Cindy forwards args — it will not guess which'
+        + ' one the model meant. Send exactly one of args/arguments with the selected tool parameters in it.'
+        + ' Expected args schema: ' + schemaHint(tool.inputSchema);
+    }
+    if (resolution.malformed) {
+      // 参数放在一个用不了的地方: 原样转发只会让服务端按缺省值静默兜底。
+      // 显式传 null 与「没传这个键」不是一回事, 所以单独点名, 让模型知道要省略这个键。
+      const sent = record.args === null || record.arguments === null
+        ? 'null (omit the key entirely — null is not an empty argument object)'
+        : 'something else';
+      return 'Invalid ' + tool.serverName + '/' + tool.name + ' parameters: args must be a JSON object'
+        + ' (the model sent ' + sent + '). Put the selected tool parameters directly in gateway args.'
+        + ' Expected args schema: ' + schemaHint(tool.inputSchema);
+    }
+    if (resolution.indeterminateEnvelope) {
+      // 信封判不了(见 normalizeGatewayArgs): 按普通工具转发, 内层工具会被按空参数调用还返回成功。
+      // 拒收并指出两种工具都走得通的形状 —— 全部放进 args(审批与执行两条路径同一条消息)。
+      return 'Invalid ' + tool.serverName + '/' + tool.name + ' parameters: Cindy could not read the schema'
+        + ' of this tool in full (too large, or a reference it cannot resolve), so it cannot tell whether the'
+        + ' top-level name is the inner tool of a {"name", "args"} envelope or a parameter of this tool, and will'
+        + ' not guess — guessing wrong calls the inner tool with empty arguments. Put everything in args; for an'
+        + ' envelope tool that is {"name": <inner tool>, "args": {<its parameters>}}.'
+        + ' Expected args schema: ' + schemaHint(tool.inputSchema);
+    }
     // Only the host plugin gateway is in scope. Other MCP tools retain their
-    // server-owned validation and the generic call_tool envelope diagnostics.
-    if (!tool || tool.serverName !== 'cindy' || !tool.name.startsWith('ghost_')) return null;
-    const schema = tool.inputSchema;
-    const required = Array.isArray(schema.required)
-      ? schema.required.filter((key): key is string => typeof key === 'string') : [];
-    const args = recordInput(record.args);
-    const missing = required.filter(key => !Object.prototype.hasOwnProperty.call(args, key));
+    // server-owned validation and the generic call_tool envelope diagnostics:
+    // 桥不替第三方工具判必填, 只保证它发出的参数不被改写、不被丢掉。
+    if (tool.serverName !== 'cindy' || !tool.name.startsWith('ghost_')) return null;
+    const missing = this.missingRequiredArgs(tool, resolution.args);
     if (missing.length === 0) return null;
     return 'Invalid ' + tool.serverName + '/' + tool.name + ' parameters: missing '
       + missing.map(key => 'args.' + key).join(', ')
       + '. Put the selected tool parameters directly in gateway args, without an extra wrapping args.'
-      + ' Expected args schema: ' + schemaHint(schema);
+      + ' Expected args schema: ' + schemaHint(tool.inputSchema);
+  }
+
+  /**
+   * 工具 schema 声明了必填参数时, 缺一个就不能发出去。
+   *
+   * 组合 schema(allOf/anyOf/oneOf/$ref)里藏着的必填项判定不了(要展开子 schema 才能判),
+   * 那种判定不了就不拦; 但**根层**的 required 是明确的, 缺了必须拦 ——
+   * 放过它等于让缺参的调用一路触达审批与服务端。
+   */
+  private missingRequiredArgs(tool: ConnectedMcpTool, args: Record<string, unknown>): string[] {
+    const schema = tool.inputSchema;
+    if (!schema || typeof schema !== 'object') return [];
+    const required = Array.isArray(schema.required)
+      ? schema.required.filter((key): key is string => typeof key === 'string')
+      : [];
+    if (required.length === 0) return [];
+    return required.filter(key => !Object.prototype.hasOwnProperty.call(args, key));
+  }
+
+  /** 归一化撞名裁决用的内层工具本地查询: 按 server + 内层名查工具表, 查不到返回 null。 */
+  private innerToolLookup(tool: ConnectedMcpTool): InnerToolLookup {
+    return (innerName) => {
+      const listing = this.innerListingCache.get(tool.serverName);
+      const listed = listing?.kind === 'listing'
+        ? listing.tools.find((entry) => entry?.name === innerName)
+        : undefined;
+      const listedSchema = listed
+        ? (listed.inputSchema ?? listed.parameters ?? listed.schema)
+        : undefined;
+      // 入口工具自己叫这个名字时, 本地工具表里那份是**外层入口**(信封 schema), 不是内层同名工具 ——
+      // 拿它当内层判据会把「入口内层到底有没有同名工具」判错: 信封 schema 也声明 name + args,
+      // 判出来永远是「内层有 args」, 于是把入口内层那个同名工具的参数层剥掉、发错层
+      // (Codex P1 on #10908 第 16 轮, 4292 行)。内层同名工具的 schema 只在服务端内层列表里。
+      if (innerName !== tool.name) {
+        const local = this.tools.get(mcpGatewayKey(tool.serverName, innerName));
+        if (local) return local;
+      }
+      // 代拉过的内层列表也是一份 schema: 判据要跟执行前那份同源(否则审批框与真正发出去的
+      // 参数会不一致 —— 剥不剥那一层取决于内层工具自己有没有 args 参数)。
+      if (listedSchema !== undefined) return { inputSchema: listedSchema };
+      return null;
+    };
   }
 
   resolveCall(input: unknown): ResolvedMcpGatewayCall | null {
+    const parts = this.resolveCallParts(input);
+    if (!parts) return null;
+    return this.resolvedGatewayCall(parts.serverName, parts.toolName, parts.tool, parts.resolution);
+  }
+
+  /**
+   * 权限询问前的解析: 撞名的内层工具本地查不到时, 先代拉一次服务端内层列表, 归一化再判一次。
+   *
+   * 剥不剥那一层必须按真实 schema 定 —— 剥错了, registry 收到的参数就少一层, 内层工具被按空
+   * 参数调用还返回成功(Codex P1 on #10908 第 12 轮)。判据要在审批之前定, 审批框显示的那份与
+   * 真正发出去的那份才一致。
+   */
+  async resolveCallAsync(input: unknown, signal?: AbortSignal): Promise<ResolvedMcpGatewayCall | null> {
+    const parts = this.resolveCallParts(input);
+    if (!parts) return null;
+    // 两种「判不了」: 同一个选择器写了两遍(内层同名工具的参数 vs 重复信封), 与选择器就是
+    // 入口工具自己(入口内层有个同名工具)。两种都要问服务端那份内层 schema 才能定层数。
+    const pending = parts.resolution.innerSchemaPending !== undefined
+      ? { name: parts.resolution.innerSchemaPending, kind: 'sameSelector' as const }
+      : parts.resolution.entrySelfPending !== undefined
+        ? { name: parts.resolution.entrySelfPending, kind: 'entrySelf' as const }
+        : null;
+    const resolution = pending
+      ? await this.resolveInnerSchema(parts.record, parts.tool, pending.name, pending.kind, signal)
+      : parts.resolution;
+    return this.resolvedGatewayCall(parts.serverName, parts.toolName, parts.tool, resolution);
+  }
+
+  /** 代拉内层列表后重新归一化: 撞名的判据按服务端那份真实 schema 定。 */
+  private async resolveInnerSchema(
+    record: Record<string, unknown>,
+    tool: ConnectedMcpTool,
+    innerName: string,
+    kind: 'sameSelector' | 'entrySelf',
+    signal?: AbortSignal,
+  ): Promise<GatewayArgsResolution> {
+    const probed = await this.probeInnerToolSchema(tool, innerName, signal);
+    const resolution = normalizeGatewayArgs(record, tool, this.innerToolLookup(tool));
+    const stillPending = kind === 'entrySelf'
+      ? resolution.entrySelfPending !== undefined
+      : resolution.innerSchemaPending !== undefined;
+    // 代拉了仍判不了(服务端内层列表只有类目没有 schema, 或代拉失败): 两种读法发出去的层数
+    // 不同, 照旧剥一层就是把层数猜出来 —— 内层工具自己声明 name + args 时(run 这类), 它的
+    // 参数会被剥掉, 服务端按缺省值执行还返回成功。不猜, 标出来交回给调用方拒收并指路
+    // (Codex P1 on #10908 第 14 轮)。代拉失败不缓存, 重试同一调用会再问一次。
+    // 入口同名那一种还多一层: 内层列表里根本没有这个同名工具 → 顶层那个 name 指的是不存在的
+    // 内层工具, 这次调用不可能成功, 同样拒收(而不是把猜出来的层数发给服务端)。
+    if (stillPending && (probed === 'schemaless' || probed === null
+      || (kind === 'entrySelf' && probed === 'missing'))) {
+      return { ...resolution, unresolvedCollision: innerName, unresolvedCollisionKind: kind };
+    }
+    return resolution;
+  }
+
+  private resolveCallParts(input: unknown): {
+    record: Record<string, unknown>;
+    serverName: string;
+    toolName: string;
+    tool: ConnectedMcpTool;
+    resolution: GatewayArgsResolution;
+  } | null {
     if (this.callInputError(input)) return null;
     const record = recordInput(input);
     const requestedServerName = typeof record.server === 'string' ? record.server : '';
@@ -3554,10 +4992,64 @@ class CindyMcpGateway {
     const tool = this.tools.get(mcpGatewayKey(serverName, toolName));
     if (!tool) return null;
     return {
-      qualifiedName: 'mcp__' + serverName + '__' + toolName,
-      args: recordInput(record.args),
+      record,
+      serverName,
+      toolName,
       tool,
+      resolution: normalizeGatewayArgs(record, tool, this.innerToolLookup(tool)),
     };
+  }
+
+  private resolvedGatewayCall(
+    serverName: string,
+    toolName: string,
+    tool: ConnectedMcpTool,
+    resolution: GatewayArgsResolution,
+  ): ResolvedMcpGatewayCall {
+    return {
+      qualifiedName: 'mcp__' + serverName + '__' + toolName,
+      args: resolution.args,
+      tool,
+      ...(resolution.folded.length > 0 ? { folded: resolution.folded } : {}),
+      ...(resolution.shadowed.length > 0 ? { shadowed: resolution.shadowed } : {}),
+      ...(resolution.unmapped.length > 0 ? { unmapped: resolution.unmapped } : {}),
+      ...(resolution.parsedFromString ? { parsedFromString: true } : {}),
+      ...(resolution.rebuiltEnvelope ? { rebuiltEnvelope: true } : {}),
+      ...(resolution.foldedIntoInnerArgs ? { foldedIntoInnerArgs: true } : {}),
+      ...(resolution.unresolvedCollision ? { unresolvedCollision: resolution.unresolvedCollision } : {}),
+      ...(resolution.unresolvedCollisionKind ? { unresolvedCollisionKind: resolution.unresolvedCollisionKind } : {}),
+    };
+  }
+
+  /**
+   * 撞名撞到代拉也判不了: 与信封判不了(indeterminateEnvelope)同款拒收 —— 点名两种读法,
+   * 给出两种读法都走得通的形状, 不替模型猜层数。
+   */
+  private unresolvedCollisionError(call: ResolvedMcpGatewayCall): string {
+    const innerName = call.unresolvedCollision ?? '';
+    const prefix = 'Invalid ' + call.tool.serverName + '/' + call.tool.name + ' parameters: ';
+    if (call.unresolvedCollisionKind === 'entrySelf') {
+      // 顶层选择器就是入口工具自己: 容器里的 {name, args} 可能是入口内层那个同名工具的参数对象,
+      // 也可能是重复信封 —— 两种读法发出去的层数不同, 判不出来就不猜(Codex P1 on #10908 第 16 轮)。
+      return prefix
+        + 'the top-level name ("' + innerName + '") is the entry tool\'s own name, and the {"name", "args"}'
+        + ' layer inside args may be the parameters of an inner tool with that same name or a duplicated'
+        + ' envelope; the schema of "' + innerName + '" is not available (the server\'s inner tool list carries'
+        + ' no schemas, or Cindy could not fetch it), so Cindy will not guess — guessing wrong drops the'
+        + ' inner tool\'s declared parameters or wraps them twice.'
+        + ' Keep exactly one level: {"name": <inner tool>, "args": {<its parameters>}}.'
+        + ' If the server was unreachable, retrying the same call may resolve the schema.'
+        + ' Expected args schema: ' + schemaHint(call.tool.inputSchema);
+    }
+    return prefix
+      + 'the top-level name ("' + innerName + '") repeats inside args as another {"name", "args"} envelope,'
+      + ' and the schema of "' + innerName + '" is not available (the server\'s inner tool list carries no'
+      + ' schemas, or Cindy could not fetch it), so Cindy cannot tell whether that inner layer is the tool\'s'
+      + ' own parameters or a duplicated envelope, and will not guess — guessing wrong drops its declared'
+      + ' parameters or wraps them twice.'
+      + ' Keep exactly one level: {"name": <inner tool>, "args": {<its parameters>}}.'
+      + ' If the server was unreachable, retrying the same call may resolve the schema.'
+      + ' Expected args schema: ' + schemaHint(call.tool.inputSchema);
   }
 
   private resolveServerName(requested: string): string | null {
@@ -3600,6 +5092,22 @@ class CindyMcpGateway {
     if (toolName === CINDY_MCP_CALL_TOOL) return this.resolveCall(input);
     if (CINDY_DIRECT_BOT_TOOLS.has(toolName) || toolName === CINDY_LIST_MACHINES_TOOL || toolName === CINDY_ASYNC_QUESTION_TOOL || toolName === CINDY_INPUT_HANDOFF_TOOL || toolName === CINDY_MANAGE_QUESTIONS_TOOL) return this.resolveDirectHelperTool(toolName, input);
     return toolName === CINDY_BOT_MEMORY_TOOL ? this.resolveBotMemory(input) : null;
+  }
+
+  /**
+   * 权限询问那一条路径上的解析: 撞名的内层工具本地查不到时, 先代拉一次服务端内层列表再判。
+   *
+   * 审批框显示的必须是归位后的那一份(pi-harness §4.12), 真正发出去的也必须是那一份 ——
+   * 所以代拉要发生在弹框之前, 不能拖到 execute 里再定。代拉的是同一台服务端的内层列表,
+   * 按 server 缓存, 合法调用最多代拉一次。
+   */
+  async resolveHookedCallAsync(
+    toolName: string,
+    input: unknown,
+    signal?: AbortSignal,
+  ): Promise<ResolvedMcpGatewayCall | null> {
+    if (toolName === CINDY_MCP_CALL_TOOL) return this.resolveCallAsync(input, signal);
+    return this.resolveHookedCall(toolName, input);
   }
 
   resolveCreateTeammate(input: unknown): ResolvedMcpGatewayCall | null {
@@ -3742,6 +5250,11 @@ class CindyMcpGateway {
     if (typeof toolCallId === 'string' && toolCallId) this.approvedDefinitions.set(toolCallId, definition);
   }
 
+  /** 记下审批框里显示的那份归一化结论, 执行时照它发(见 approvedCalls)。 */
+  rememberResolvedCall(toolCallId: unknown, call: ResolvedMcpGatewayCall): void {
+    if (typeof toolCallId === 'string' && toolCallId) this.approvedCalls.set(toolCallId, call);
+  }
+
   /**
    * Sorted, prompt-ready server/tool names worth re-surfacing after compaction:
    * only tools that still exist AND whose stored fingerprint still matches the
@@ -3780,21 +5293,16 @@ class CindyMcpGateway {
    *
    * 判据必须用**形状指纹**而不是名字或单个字段：Pi 也接入用户自接的第三方 MCP，它们可能
    * 同样叫 call_tool（但信封是 {tool_name, arguments}），也可能有个叫 name 的必填字符串
-   * 参数却是文件名（配 content 直传）。所以要求三个信号同时成立 —— properties.name 是
-   * string、properties.args 是 object、且 required 含 name —— 才认定是 Cindy 的信封。
-   * 少一个都不套用这条自纠错说明，让调用按检视到的 schema 原样走到服务端，由服务端报它
-   * 真实的参数要求：普通工具缺字段时不能被引向错误的嵌套形状。
+   * 参数却是文件名（配 content 直传）。所以要求三个信号同时成立 —— name 是 string、args 是
+   * object、且 name 在每条路径上都必填（信号可以分散在组合声明的几个节点里）—— 才认定是
+   * Cindy 的信封。少一个都不套用这条自纠错说明，让调用按检视到的 schema 原样走到服务端，
+   * 由服务端报它真实的参数要求：普通工具缺字段时不能被引向错误的嵌套形状。
+   *
+   * 判据本体在 isNameEnvelopeSchema: 归一化(平铺信封重建)与这里必须同源。schema 看不全、
+   * 判不了的那种不在这里拦 —— 它由 callInputError 在更早一步拒收。
    */
   private requiresNameEnvelope(tool: ConnectedMcpTool): boolean {
-    const schema = tool.inputSchema as {
-      required?: unknown;
-      properties?: Record<string, { type?: unknown } | undefined>;
-    } | null;
-    const properties = schema?.properties;
-    return Array.isArray(schema?.required)
-      && schema.required.includes('name')
-      && properties?.name?.type === 'string'
-      && properties?.args?.type === 'object';
+    return isNameEnvelopeSchema(tool.inputSchema);
   }
 
   /**
@@ -3844,10 +5352,27 @@ class CindyMcpGateway {
     if (listing.kind === 'schemaless') return 'schemaless';
     const match = listing.tools.find((tool) => tool?.name === innerName);
     if (!match) return 'missing';
-    const declared = schemaDeclaresArgs((match.inputSchema ?? match.parameters ?? match.schema) as
-      { properties?: Record<string, unknown> } | undefined);
+    const declared = schemaDeclaresArgs(match.inputSchema ?? match.parameters ?? match.schema);
     if (declared === null) return 'schemaless';
     return { declaresArgs: declared };
+  }
+
+  /**
+   * 入口内层那个同名工具的 schema 判据: 它声明了 args → args.args 那个 {name, args} 形状是它
+   * 自己的参数对象(两层合法); 没声明 → 那是重复信封。
+   *
+   * 只看服务端内层列表: 本地工具表里同名的那份是**外层入口**(信封 schema), 拿它判内层会把
+   * 「入口内层到底有没有同名工具」判错(Codex P1 on #10908 第 16 轮, 4292 行)。判不了(没代拉过 /
+   * 内层列表只有类目)返回 null。
+   */
+  private entrySelfDeclaresArgs(entry: ConnectedMcpTool): boolean | null {
+    const listing = this.innerListingCache.get(entry.serverName);
+    if (!listing || listing.kind !== 'listing') return null;
+    const match = listing.tools.find((tool) => tool?.name === entry.name);
+    if (!match) return null;
+    const schema = match.inputSchema ?? match.parameters ?? match.schema;
+    if (schema === undefined) return null;
+    return schemaDeclaresArgs(schema);
   }
 
   list(serverName?: string): Array<{ server: string; name: string; description: string }> {
@@ -3992,12 +5517,69 @@ class CindyMcpGateway {
       JSON.stringify(this.unavailable()).slice(0, 4_000);
   }
 
+  /**
+   * 归一化确实动过手时, 把真正发出去的参数回显出来。
+   *
+   * 「参数没生效还返回成功」这类问题只有看得见出站参数才查得动 —— 用户与模型据此
+   * 就能分清是链路丢参还是服务端行为(表格类服务收到坐标却仍写回 A1, 那是服务端的
+   * 字段契约问题, 不是链路问题)。
+   */
+  private normalizationNote(call: ResolvedMcpGatewayCall): string | null {
+    const folded = call.folded ?? [];
+    const shadowed = call.shadowed ?? [];
+    const unmapped = call.unmapped ?? [];
+    const parsedFromString = call.parsedFromString === true;
+    const rebuiltEnvelope = call.rebuiltEnvelope === true;
+    if (folded.length === 0 && shadowed.length === 0 && unmapped.length === 0
+      && !parsedFromString && !rebuiltEnvelope) return null;
+    const parts: string[] = [];
+    if (parsedFromString) {
+      // 字符串形态也是一种归一化动作: 参数被解析成了对象, 用户与模型看到的必须
+      // 是真正发出去的那一份, 否则「参数没生效」时就没有可对照的依据。
+      parts.push('Cindy parsed the JSON string in args before forwarding.');
+    }
+    if (rebuiltEnvelope) {
+      // 信封被平铺时 name 与 args 都在顶层, 归位后重建回 {name, args}。
+      parts.push('Cindy rebuilt the {"name", "args"} envelope from the flattened call before forwarding.');
+    }
+    if (call.foldedIntoInnerArgs === true) {
+      // 已经是嵌套信封, 但顶层散落着内层参数: 收进嵌套的内层 args 层(Codex P1 on #10908 第 16 轮)。
+      parts.push('Cindy moved these top-level parameters into the inner args before forwarding: '
+        + folded.join(', ') + '.');
+    } else if (folded.length > 0) {
+      parts.push('Cindy moved these top-level parameters into args before forwarding: '
+        + folded.join(', ') + '.');
+    }
+    if (shadowed.length > 0) {
+      // 顶层的值没有采用、也不在转发的参数里: 不点名, 模型就看不出服务端为什么按 args 里那个值执行。
+      parts.push('These top-level parameters were not forwarded because args already has a key of the same name'
+        + ' (args wins): ' + shadowed.join(', ') + '.');
+    }
+    if (unmapped.length > 0) {
+      parts.push('These top-level parameters were not forwarded because the tool schema does '
+        + 'not declare them: ' + unmapped.join(', ') + '.');
+    }
+    parts.push('Forwarded arguments: ' + this.renderForwardedArgs(call.args));
+    return parts.join(' ');
+  }
+
+  private renderForwardedArgs(args: Record<string, unknown>): string {
+    let rendered: string;
+    try {
+      rendered = JSON.stringify(args) ?? '{}';
+    } catch {
+      rendered = '{}';
+    }
+    return rendered.length <= 2_000 ? rendered : rendered.slice(0, 1_999) + '…';
+  }
+
   private async executeResolvedCall(resolved: ResolvedMcpGatewayCall, signal?: AbortSignal, approvedDefinition?: string): Promise<{
     content: Array<Record<string, unknown>>;
     details: unknown;
     isError?: boolean;
   }> {
     let result: any;
+    let requestAttempted = false;
     try {
       if (this.needsRecovery(resolved.tool.serverName)) await this.recover(resolved.tool.serverName, signal);
       const current = this.tools.get(mcpGatewayKey(resolved.tool.serverName, resolved.tool.name));
@@ -4009,21 +5591,30 @@ class CindyMcpGateway {
         throw new McpBridgeError('tool definition changed; inspect it with cindy_mcp_list_tools and call again');
       }
       resolved = { ...resolved, tool: current };
+      requestAttempted = true;
       result = await resolved.tool.client.request('tools/call', {
         name: resolved.tool.name,
         arguments: resolved.helperCommand
           ? { name: resolved.helperCommand, args: resolved.args } : resolved.args,
       }, signal);
     } catch (error) {
+      // 出站参数已经交给客户端了(哪怕服务端拒收): 最需要核对「真正发出去的那一份」的
+      // 场景恰恰是服务端说参数不对的时候, 回执里没有它就无从判断是链路丢参还是参数真错。
+      const note = requestAttempted ? this.normalizationNote(resolved) : null;
       throw new Error(
         'MCP tool ' + resolved.tool.serverName + '/' + resolved.tool.name + ' failed: ' +
         safeMcpFailure(error) + (resolved.tool.client.needsReconnect
           ? '. The request was not replayed; check whether the operation completed before retrying.' : '')
         + (error instanceof McpBridgeError && error.invalidParams
-          ? '. Expected args schema: ' + schemaHint(resolved.tool.inputSchema) : ''),
+          ? '. Expected args schema: ' + schemaHint(resolved.tool.inputSchema) : '')
+        + (note ? ' ' + note : ''),
       );
     }
     const content = mcpContentToPi(result?.content, result?.structuredContent);
+    // 归一化确实动过手时, 把真正发出去的参数回显出来: 「参数没生效还返回成功」
+    // 这类问题只有看得见出站参数才查得动(用户分得清是链路丢参还是服务端行为)。
+    const note = this.normalizationNote(resolved);
+    if (note) content.push({ type: 'text', text: note });
     const details = result?.structuredContent ?? {};
     if (result?.isError) {
       const failure = { content, details };
@@ -4041,8 +5632,24 @@ class CindyMcpGateway {
     const permissionSkipped = this.consumePermissionSkipped(toolCallId);
     const approvedDefinition = toolCallId ? this.approvedDefinitions.get(toolCallId) : undefined;
     if (toolCallId) this.approvedDefinitions.delete(toolCallId);
-    const resolved = this.resolveCall(params);
+    // 审批框里显示的那份归一化结论: 执行就照它发, 不再重新判一次(重新判可能要再问一次
+    // 服务端, 代拉失败时两次答案会不同 —— 那样弹框里是一份、发出去是另一份)。
+    const approvedCall = toolCallId ? this.approvedCalls.get(toolCallId) : undefined;
+    if (toolCallId) this.approvedCalls.delete(toolCallId);
+    // 归一化要等内层 schema 定下来: 剥不剥那一层按服务端那份真实 schema 判, 审批框显示的
+    // 那份与真正发出去的那份必须是同一份(pi-harness §4.12)。
+    let resolved = approvedCall ?? await this.resolveCallAsync(params, signal);
     if (!resolved) throw new Error(this.callInputError(params) ?? this.unknownCallMessage(params));
+    // 审批快照里的 tool 是审批时那份定义: 定义在这之后被替换(目录刷新、重连发现)时, 披露门
+    // 与变更防护都必须对着**当前注册的**那份判 —— 拿老指纹去对披露账, 会把「首次调用路标」
+    // 误抛出来, 盖住真正的 tool definition changed(pi-mcp-client r4411121969)。快照要保住的
+    // 是归位后的 args(审批框显示的那份), 不是审批时的 tool 对象。
+    const currentTool = this.tools.get(mcpGatewayKey(resolved.tool.serverName, resolved.tool.name));
+    if (currentTool && currentTool !== resolved.tool) resolved = { ...resolved, tool: currentTool };
+    // 撞名且代拉之后仍判不了: 不猜层数, 拒收并指路(审批 hook 已把这次标成没问过权限,
+    // 这里直接把回执递给模型)。在双包裁决之前拦 —— 那条路对这种形状只会给出另一条
+    // 「nested twice」, 点不到真正的歧义。
+    if (resolved.unresolvedCollision) throw new McpBridgeError(this.unresolvedCollisionError(resolved));
     if (approvedDefinition !== undefined && this.approvalDefinition(resolved) !== approvedDefinition) {
       throw new McpBridgeError('tool definition changed; inspect it with cindy_mcp_list_tools and call again');
     }
@@ -4061,13 +5668,19 @@ class CindyMcpGateway {
       const innerTool = entrySelf
         ? null
         : (this.tools.get(mcpGatewayKey(resolved.tool.serverName, innerName)) ?? null);
-      const innerSchema = innerTool?.inputSchema as { properties?: Record<string, unknown> } | null;
+      const innerSchema = innerTool?.inputSchema ?? null;
       const nestedArgsPlain = typeof nested.args === 'object' && nested.args !== null
         && !Array.isArray(nested.args);
       // 双包裁决: true=拦, false=放行, null=无可靠判据 → 两入口形状启发式兑底。
       let verdict: boolean | null;
-      if (entrySelf) {
-        verdict = true; // name 缺失/填了入口名: 不存在合法形状
+      if (innerName === '') {
+        verdict = true; // name 缺失: 不存在合法形状
+      } else if (innerName === resolved.tool.name) {
+        // 入口内层有个同名工具时(第三方 registry 的常见形态), args.args 那个 {name, args} 形状
+        // 是**那个内层工具自己的参数对象** —— 按它的 schema 判: 声明了 args 就是合法的两层
+        // (Codex P1 on #10908 第 16 轮, 4292 行)。本地工具表里那份是外层入口(信封 schema),
+        // 不能拿来判内层; 内层同名工具的 schema 只在服务端内层列表里。
+        verdict = this.entrySelfDeclaresArgs(resolved.tool) === true ? false : true;
       } else if (innerTool !== null) {
         const declared = schemaDeclaresArgs(innerSchema);
         verdict = declared === null ? null : !declared; // schema 宽松判定不了 → 启发式放行
@@ -4083,6 +5696,9 @@ class CindyMcpGateway {
         && ![...this.tools.values()].some((tool) => tool.serverName === resolved.tool.serverName
           && tool.name !== 'call_tool' && tool.name !== 'list_tools');
       const doubleWrap = nestedArgsPlain && (verdict ?? hidesInnerRegistry);
+      // 撞名的两层(顶层选择器与容器里的 name 一致)由归一化裁决: 归一化已经按内层工具的
+      // 真实 schema(本地表, 或代拉来的服务端内层列表)决定剥不剥那一层, 剥不剥的结果就是
+      // 真正发出去的那份。这里只判「信封套了两层」这种形状本身不合法的情况, 不改参数。
       if (doubleWrap) {
         throw new Error(
           resolved.tool.serverName + '/' + resolved.tool.name
@@ -4101,7 +5717,11 @@ class CindyMcpGateway {
             : 'args.name is required.'),
         );
       }
-      if (envelope.name === resolved.tool.name) {
+      if (envelope.name === resolved.tool.name
+        && this.entrySelfDeclaresArgs(resolved.tool) !== true) {
+        // 入口内层真的有个同名工具、且它声明了 args 时, 这个 name 是**内层同名工具**的名字 ——
+        // 合法(Codex P1 on #10908 第 16 轮, 4292 行)。判不了(没代拉过 / 内层列表没 schema)
+        // 就按「不是内层工具」拦, 不猜。
         throw new Error(
           resolved.tool.serverName + '/' + resolved.tool.name
           + ' envelope name must be the INNER tool (e.g. memory_write), not the entry tool name'
@@ -4166,7 +5786,7 @@ class CindyMcpGateway {
 
   register(pi: any, options: { botMemoryFacade?: boolean } = {}): void {
     // Aborted turns may approve a call that Pi never executes.
-    pi.on?.('agent_end', () => { this.approvedDefinitions.clear(); });
+    pi.on?.('agent_end', () => { this.approvedDefinitions.clear(); this.approvedCalls.clear(); });
     pi.on?.('tool_result', (event: any) => {
       const failure = this.failedResults.get(event.content) ?? this.failedResults.get(event.details);
       if (failure) {
@@ -4393,9 +6013,15 @@ class CindyMcpGateway {
           // MiniMax-M3.1 / deepseek-v4.1-flash / step-5 三会话均复现), 服务端只报 expected
           // string/name。故把信封形状作为**无类型约束**的提示属性挂出来: 声明结构给模型看,
           // 不约束任何值, 避免误伤参数名恰好叫 args 或 name 的直调工具。
+          //
+          // 类型放开成 object|string: 弱模型有时把 args 写成一段 JSON 字符串
+          // (实测 MiniMax-M3.1 / deepseek-v4.1-flash / step-5)。schema 只认 object 时,
+          // pi 的 schema 校验会先把这个调用判成非法并丢掉, 网关的「字符串→对象」解析分支
+          // 永远走不到 —— 字符串形态必须真的能到达网关, 才谈得上「解析后原样转发」。
           args: {
-            type: 'object',
-            description: 'Arguments for the selected tool as a JSON object; omit when the selected tool takes none.',
+            type: ['object', 'string'],
+            description: 'Arguments for the selected tool as a JSON object, or the same object encoded as a JSON '
+              + 'string; omit when the selected tool takes none.',
             properties: {
               name: { description: 'Generic call_tool envelope only: the target tool name.' },
               args: { description: 'Generic call_tool envelope only: the target tool parameters.' },
@@ -4404,7 +6030,12 @@ class CindyMcpGateway {
           },
         },
         required: ['server', 'tool'],
-        additionalProperties: false,
+        // 顶层放开额外字段: 弱模型会把工具参数平铺在顶层(实测 MiniMax-M3.1 会把
+        // file_id 放进 args、把 row/col 平铺在外层, 2026-10-15 三会话复现)。顶层一旦
+        // additionalProperties: false, pi 的 schema 校验会先把这些参数判成非法并丢掉,
+        // 网关根本看不到它们 —— 表格类服务于是按缺省值写回 A1 并返回成功。放开之后
+        // 这些键能到达网关, 由 normalizeGatewayArgs 按工具 schema 归位。
+        additionalProperties: true,
       },
       execute: async (_toolCallId: string, params: unknown, signal?: AbortSignal) => this.executeCall(params, signal, _toolCallId),
     });
@@ -5470,7 +7101,9 @@ export default async function cindyBridge(piApi: any) {
     // Pi sees one stable gateway schema, while Host policy and approval UI must
     // continue seeing the real MCP identity and real arguments. That preserves
     // every existing per-server policy without loading each schema at startup.
-    const resolvedGatewayCall = mcpGateway.resolveHookedCall(event.toolName, event.input);
+    // 撞名的内层工具本地查不到时, 这里要等一次服务端内层列表: 归位结论按真实 schema 定,
+    // 弹框里显示的那份与真正发出去的那份必须是同一份。
+    const resolvedGatewayCall = await mcpGateway.resolveHookedCallAsync(event.toolName, event.input);
     // 分类只认「解析成功」：披露状态不参与权限命名与采集分类，否则被门拦下的那次
     // 会被当成非 gateway 调用，权限命名与采集都会漏掉这一条。
     const gatewayCall = resolvedGatewayCall;
@@ -5488,6 +7121,12 @@ export default async function cindyBridge(piApi: any) {
       && !gatewayCall
     ) {
       if (event.toolName === CINDY_MCP_CALL_TOOL) mcpGateway.markPermissionSkipped(event.toolCallId);
+      return;
+    }
+    // 撞名代拉之后仍判不了: 不弹框(没有可审批的那一份), 交回给 execute 拒收并指路,
+    // 与非法入参同一处理。
+    if (event.toolName === CINDY_MCP_CALL_TOOL && gatewayCall?.unresolvedCollision) {
+      mcpGateway.markPermissionSkipped(event.toolCallId);
       return;
     }
     // 披露门必须判在**发起权限询问之前**：pi 的权限询问由本 hook 发起，若等到工具实现
@@ -5539,6 +7178,10 @@ export default async function cindyBridge(piApi: any) {
       };
     }
     if (approvedDefinition !== undefined) mcpGateway.rememberApproval(event.toolCallId, approvedDefinition);
+    // 执行那条路径照审批框里显示的那份发: 归位结论不再重判一次。
+    if (event.toolName === CINDY_MCP_CALL_TOOL && gatewayCall) {
+      mcpGateway.rememberResolvedCall(event.toolCallId, gatewayCall);
+    }
     if (
       FILE_WRITE_BUILTINS.has(event.toolName)
       && writeTargetResolved !== null
