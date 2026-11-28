@@ -158,9 +158,16 @@ describe('MakerMemoryManager · owner scope guard (#2341)', () => {
       resolveStorageDir: (scope) => scope === workdir ? directory : null,
     });
     try {
+      const userStore = await manager.getStore(USER_MEMORY_SCOPE_KEY);
+      await userStore.write({ type: 'user', name: 'preferences', title: 'About you', description: 'Prefer examples', body: 'Short examples.' });
+      const account = await manager.getPromptIndex(workdir);
+      expect(account).toContain('Prefer examples');
+      factory.mockClear();
       const ctx = await loadMemoryContext({ manager, scopeKey: workdir });
-      expect(ctx.index).toBe(coreText);
+      expect(ctx.index).toBe(account.trimEnd() + '\n\n' + coreText);
       expect(factory).not.toHaveBeenCalled();
+      const shared = await loadMemoryContext({ manager, scopeKey: workdir, snapshot: '' });
+      expect(shared.index).toBe(coreText);
 
       const store = await manager.getStore(workdir);
       // Opening store must NOT overwrite authored MEMORY.md
