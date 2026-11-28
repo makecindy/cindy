@@ -15,12 +15,15 @@ export function ModelHarnessPicker({
   value,
   disabled = false,
   locked = false,
+  selectOnClick = false,
   onChange,
 }: {
   entry: UnifiedModelEntry;
   value: UnifiedEngine;
   disabled?: boolean;
   locked?: boolean;
+  /** An explicit choice also submits a model with a single available Harness. */
+  selectOnClick?: boolean;
   onChange: (engine: UnifiedEngine) => void;
 }) {
   const { t } = useTranslation();
@@ -54,7 +57,7 @@ export function ModelHarnessPicker({
       .filter(Boolean)
       .join(' · ');
   };
-  const interactive = !disabled && !locked && engines.length > 1;
+  const interactive = !disabled && !locked && (selectOnClick || engines.length > 1);
 
   return (
     <div role="group" aria-label={t('settings.providers.models.advanced.engines')} className="pt-2">

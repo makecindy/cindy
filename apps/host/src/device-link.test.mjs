@@ -39,7 +39,8 @@ import { MCP_APPS_INVOKE } from '../../desktop/src/shared/mcpApps.ts';
 import { createEventHub } from './events.mjs';
 import { configureHostOwner } from './agent/claude-auth.mjs';
 import { configureAppDataDir } from '../../desktop/src/main/userDataPath.ts';
-import { commitVolatileAppSession } from '../../desktop/src/main/appSessionState.ts';
+import { beginAppSessionBoundary, commitVolatileAppSession } from '../../desktop/src/main/appSessionState.ts';
+import { getControllerPlatform } from '../../desktop/src/main/device-link/controllerPlatform.ts';
 import { getCurrentDbClientSnapshot, setCurrentDbClient, clearCurrentDbClient } from '../../desktop/src/main/localDb/client/current.ts';
 import { createDbClientForHandle } from '../../desktop/src/main/localDb/client/createDbClientForHandle.ts';
 import { messageToCamel } from '../../desktop/src/main/localDb/mapper.ts';
@@ -1436,7 +1437,7 @@ const PINNED_DISPATCH_PORTS = {
     'delegatedProviderShareLeases', 'invalidateProviderShareDelegation',
     'remoteDesktop', 'requestRemoteDesktop', 'remoteCredentialHost', 'fetchLocalMediaToOss', 'transcribeRemoteVoiceInput',
     'readTelegramRemoteStatus', 'setTelegramRemoteOnline', 'adviseAndRecordVoiceInputDictionaryLearning',
-    'buildMobileDictionarySnapshot'],
+    'buildMobileDictionarySnapshot', 'mutateMobileDictionary'],
 };
 
 test('every port the Host passes the inbound dispatch has the class pinned here', () => {
@@ -1530,6 +1531,124 @@ test('keeps compatibility app callers alive when only the Agent-Net connection d
   assert.deepEqual(releasedApps, ['device:desktop', 'device:phone']);
   assert.deepEqual(releasedAuth, ['device:desktop', 'device:phone']);
 });
+
+// §3.2 integration: drive the Host's real dispatch over one simulated relay.
+// A backpressured reply must stay in the outbox while its route is known offline.
+// Removing either offline notification wiring allows the next full sweep to
+// write to that peer. Another controller and the directed relink flush stay live.
+for (const offlineSignal of ['presence', 'relay error']) {
+  test(`Host outbox skips an offline controller after ${offlineSignal} and flushes it on relink`, async t => {
+    const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-host-offline-outbox-'));
+    configureAppDataDir(profile);
+    configureHostOwner({ userDataDir: profile, ownerId: 'test-offline-outbox' });
+    const sockets = [];
+    const attempts = [];
+    const released = [];
+    class Wire extends EventEmitter {
+      sent = [];
+      bufferedAmount = 0;
+      send(data) {
+        const frame = JSON.parse(data);
+        if (frame.kind === 'invoke-result') {
+          attempts.push(frame.id);
+          if ((frame.id === 'waiting-a' || frame.id === 'waiting-b')
+            && attempts.filter(id => id === frame.id).length === 1)
+            throw new DeviceLinkError('BACKPRESSURE', 'fixture write is full');
+        }
+        this.sent.push(frame);
+        if (frame.kind === 'hello') queueMicrotask(() => this.push({ kind: 'hello-ack',
+          payload: { serverProtocolVersion: PROTOCOL_VERSION, deviceId: 'host', userId: 'test-offline-outbox' } }));
+      }
+      push(frame) { this.emit('message', JSON.stringify({ v: PROTOCOL_VERSION, ...frame })); }
+      close(code = 1000) { this.emit('close', code); }
+    }
+    const host = createHostDeviceLink({
+      profileDir: profile, worktree: createHostWorktreeLifecycle(profile), version: 'test',
+      getWsUrl: () => 'ws://127.0.0.1:9', getToken: async () => 'synthetic-host', canRegister: () => true,
+      invoke: async () => ({ status: 200, body: {} }), subscribe: () => () => {},
+      createRuntimeSession: async () => ({}), closeRuntimeSession: async () => {}, disableShareAvailability: async () => {},
+      releaseAuthCaller: caller => released.push(caller),
+      createWebSocket: () => {
+        const socket = new Wire();
+        sockets.push(socket);
+        setImmediate(() => socket.emit('open'));
+        return socket;
+      },
+    });
+    t.after(async () => {
+      await host.stop();
+      commitVolatileAppSession('signed-out', null, true);
+      fs.rmSync(profile, { recursive: true, force: true });
+    });
+
+    await host.setEnabled(true);
+    await waitFor(() => host.state().status === 'online');
+    const [relay] = sockets;
+    const open = (src, id) => relay.push({ kind: 'link-open', src, id,
+      payload: { controllerName: src, protocolVersion: PROTOCOL_VERSION, appVersion: 'test' } });
+    const subscribe = (src, id, topics = ['sessions']) => relay.push({ kind: 'invoke', src, id,
+      payload: { channel: 'device-link:subscribe', args: [{ topics }] } });
+    const reply = id => relay.sent.find(frame => frame.kind === 'invoke-result' && frame.id === id);
+    const settle = () => new Promise(resolve => setImmediate(resolve));
+    open('peer-a', 'a-open');
+    open('peer-b', 'b-open');
+    await waitFor(() => relay.sent.filter(frame => frame.kind === 'link-accept').length === 2);
+    t.mock.timers.enable({ apis: ['setTimeout'] });
+    subscribe('peer-a', 'a-probe');
+    subscribe('peer-a', 'waiting-a');
+    await settle();
+    assert.equal(reply('a-probe')?.payload.ok, true);
+    assert.deepEqual(attempts, ['a-probe', 'waiting-a']);
+
+    if (offlineSignal === 'presence') {
+      relay.push({ kind: 'presence-changed', payload: { deviceId: 'peer-a', online: false } });
+    } else {
+      relay.push({ kind: 'relay-error', id: 'a-probe',
+        payload: { dst: 'peer-a', code: 'DEVICE_OFFLINE', message: 'device offline' } });
+    }
+    t.mock.timers.tick(500);
+    await settle();
+    assert.equal(attempts.filter(id => id === 'waiting-a').length, 1, 'no blind outbox write while offline');
+    assert.deepEqual(released, ['device:peer-a']);
+    subscribe('peer-b', 'b-live');
+    await settle();
+    assert.equal(reply('b-live')?.payload.ok, true);
+
+    open('peer-a', 'a-reopen');
+    await settle();
+    assert.equal(reply('waiting-a')?.payload.ok, true);
+    t.mock.timers.tick(500);
+    assert.deepEqual(attempts, ['a-probe', 'waiting-a', 'b-live', 'waiting-a']);
+    assert.deepEqual(sockets, [relay]);
+    assert.equal(relay.sent.filter(frame => frame.kind === 'link-accept' && frame.dst === 'peer-b').length, 1);
+
+    if (offlineSignal === 'presence') {
+      // §3.2: the production presence handler must still clear the controller's
+      // platform, App caller, and accepted subscription during an owner boundary.
+      // This is distinct from recording a new offline outbox gate for that owner.
+      relay.push({ kind: 'presence-changed', payload: { deviceId: 'peer-b', online: true, platform: 'ios' } });
+      assert.equal(getControllerPlatform('peer-b'), 'ios');
+      subscribe('peer-b', 'waiting-b', ['session:task']);
+      await settle();
+      assert.equal(attempts.filter(id => id === 'waiting-b').length, 1);
+      assert.equal(host.state().controllers.some(controller => controller.deviceId === 'peer-b'), true);
+      const endBoundary = beginAppSessionBoundary();
+      try {
+        relay.push({ kind: 'presence-changed', payload: { deviceId: 'peer-b', online: false } });
+        await settle();
+        assert.equal(getControllerPlatform('peer-b'), undefined);
+        assert.deepEqual(released, ['device:peer-a', 'device:peer-b']);
+        assert.equal(host.state().controllers.some(controller => controller.deviceId === 'peer-b'), false);
+      } finally {
+        endBoundary();
+      }
+      t.mock.timers.tick(500);
+      await settle();
+      assert.equal(attempts.filter(id => id === 'waiting-b').length, 2,
+        'a pending owner boundary must not record an offline outbox gate');
+    }
+  });
+}
 
 // Unit: the authenticated transport determines who can ask Desktop Main for project
 // evidence. Persisted profile fields never select the privileged write adapter.

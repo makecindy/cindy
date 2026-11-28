@@ -79,6 +79,10 @@ vi.mock('../VoiceInputModelSelection.js', () => ({
 vi.mock('../VoiceInputDataStore.js', () => ({ registerVoiceInputDataStoreIpc: vi.fn(),
   voiceInputDataStore: { getSettings: () => ({ speakerFilterEnabled: false }), updateSettings: vi.fn() } }));
 vi.mock('../speaker/index.js', () => ({ registerVoiceSpeakerFilterIpc: vi.fn(), getSpeakerFilterService: () => ({ createGate: () => undefined }) }));
+vi.mock('../local-asr/index.js', () => ({
+  registerVoiceLocalAsrIpc: vi.fn(),
+  getLocalAsrService: () => ({ supported: true, isReady: () => false, getStatus: () => ({ supported: true, ready: false, error: 'not_configured' }) }),
+}));
 vi.mock('loudness', () => ({ default: { getMuted: async () => m.muted,
   setMuted: async (value: boolean) => { await m.setMuted(value); m.muted = value; } } }));
 // Keep the production guard and OS mutation queue; only the OS API is fake.

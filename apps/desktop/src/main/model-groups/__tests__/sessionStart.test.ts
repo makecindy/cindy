@@ -148,6 +148,6 @@ describe('a mode picks the first source of a new task and is settled when its fi
     expect(base.calls.bind.mock.calls[0]?.[2]).toContain('acct:second');
     start.dispatched('s-flat', 'user-1');
     expect(innerChoice).not.toHaveBeenCalled();
-    expect(base.calls.writeNote.mock.calls[0]?.[1]?.modelName).toBe('GPT-6.2 · OpenAI · second@example.com');
+    expect(base.calls.writeNote.mock.calls[0]?.[1]?.modelName).toBe('GPT-6.2 · OpenAI · second@example.com · Codex');
   });
 });

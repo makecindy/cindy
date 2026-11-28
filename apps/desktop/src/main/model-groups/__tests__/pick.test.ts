@@ -862,3 +862,26 @@ it('resolves flattened per-account candidates with individual quotas without inv
     [null, 'OpenAI-Codex', 'standby', 'standby'],
   ]);
 });
+
+// Unit through actual resolver/preview: a held standalone Key or individual
+// pool member is not a selectable automatic assignment for the chosen engine.
+it('skips held standalone and account-qualified Keys before preview or dispatch', async () => {
+  const providers = ['openai', 'key'].map(id => ({ id, name: id, source: 'builtin', connected: true, agents: ['codex'], routing: { codex: { enabled: true } },
+    models: { codex: [{ id: 'gpt', name: 'GPT', mode: 'chat', efforts: [] }] },
+  })) as unknown as ProviderView[];
+  const group: ModelGroupRoute = { id: 'r-preserved', name: 'Saved', strategy: 'order', candidates: [
+    { agentKind: 'codex', providerId: 'key', model: 'gpt' },
+    { agentKind: 'codex', providerId: 'openai', accountId: 'held-key', model: 'gpt' }, { agentKind: 'codex', providerId: 'openai', accountId: 'native', model: 'gpt', weight: 5 },
+  ] };
+  let held = true;
+  const localAccount = vi.fn((_providerId: string, accountId: string, _model: string, agent: string) => ({ available: accountId !== 'held-key' || !held || agent !== 'codex', label: accountId }));
+  const resolver = createModelGroupResolver({ config: () => ({ routes: [group] }), views: async () => providers, agents: () => ['codex'], harnessInstalled: async () => true,
+    quotaWindows: async () => new Map(), scope: () => 'owner', now: () => NOW, localCandidateAvailable: provider => provider.id !== 'key' || !held, localAccount });
+  const selection = { type: 'route', id: group.id } as const;
+  for (const dryRun of [true, false]) expect(await resolver.resolve({ selection, dryRun })).toMatchObject({ outcome: 'routed', route: { providerId: 'openai', accountId: 'native' } });
+  expect(localAccount).toHaveBeenCalledWith('openai', 'held-key', 'gpt', 'codex');
+  group.candidates[2].off = true;
+  expect(await resolver.resolve({ selection, dryRun: true })).toMatchObject({ outcome: 'unavailable' });
+  held = false;
+  expect(await resolver.resolve({ selection, dryRun: true })).toMatchObject({ outcome: 'routed', route: { providerId: 'key' } });
+});

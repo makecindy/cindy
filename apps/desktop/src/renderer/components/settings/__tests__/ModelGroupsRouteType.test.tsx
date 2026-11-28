@@ -33,7 +33,12 @@ vi.mock('@/lib/toast', () => ({ toast: { error: (...args: unknown[]) => h.toastE
 vi.mock('@/components/ui/confirm-dialog-provider', () => ({
   useConfirmDialog: () => ({ confirm: (...args: unknown[]) => h.confirm(...(args as [])) }),
 }));
-vi.mock('@/components/new-chat/ModelSelector', () => ({ ProviderMark: () => null, ModelSelector: () => null }));
+vi.mock('@/components/new-chat/ModelSelector', () => ({
+  ProviderMark: () => null,
+  ModelSelector: () => null,
+  // Route-type tests exercise the surrounding form with the candidate picker closed.
+  ModelSelectorPopover: ({ trigger }: { trigger: React.ReactElement }) => trigger,
+}));
 vi.mock('@/hooks/useModelRouteDevices', () => ({ useModelRouteDevices: () => ({ devices: [] }) }));
 vi.mock('@/hooks/useDevicesProviders', () => ({ useDevicesProviders: () => new Map() }));
 vi.mock('@/hooks/useProviders', () => ({

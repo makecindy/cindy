@@ -280,11 +280,38 @@ describe('dynamic lizi MCP session context', () => {
       patch: { harness: 'claude-code', model: 'claude-opus-5-5', providerId: 'gateway' },
     });
 
-    for (const args of [{ worker_id: 'worker-1', agent: 'codex' }, { worker_id: 'worker-1' }]) {
+    for (const args of [
+      { worker_id: 'worker-1', agent: 'codex' },
+      { worker_id: 'worker-1' },
+      { worker_id: 'worker-1', provider_device_id: 'mac-a', agent_device_id: 'mac-b' },
+    ]) {
       expect(parse(await tools(server).set_worker_runtime.handler(args) as never))
         .toMatchObject({ ok: false, errorCode: 'INVALID_ARGS' });
     }
     expect(deps.setWorkerRuntime).toHaveBeenCalledTimes(1);
+
+    // Value: Lead can move a Worker to another provider computer (or back to local) without abandoning warm context.
+    // Gap: set_worker_runtime previously lacked provider_device_id / agent_device_id parameters.
+    // Minimal input: location-only patch with remote device ID and compat alias returning to local; tier: unit.
+    const moved = parse(await tools(server).set_worker_runtime.handler({
+      worker_id: 'worker-1', provider_device_id: 'mac-studio',
+    }) as never);
+    expect(moved).toMatchObject({
+      ok: true,
+      effective: { provider_device_id: 'local' },
+    });
+    expect(deps.setWorkerRuntime).toHaveBeenLastCalledWith({
+      callerLeadSessionId: 'lead-1', workerId: 'worker-1',
+      patch: { agentDeviceId: 'mac-studio' },
+    });
+
+    await tools(server).set_worker_runtime.handler({
+      worker_id: 'worker-1', agent_device_id: 'local',
+    });
+    expect(deps.setWorkerRuntime).toHaveBeenLastCalledWith({
+      callerLeadSessionId: 'lead-1', workerId: 'worker-1',
+      patch: { agentDeviceId: null },
+    });
   });
 
   it('forwards explicit send_to_worker delivery and reports steered or fallback receipts', async () => {

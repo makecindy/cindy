@@ -3,7 +3,7 @@ import { getDbClient } from './client/current.js';
 import { messages, sessions } from './schema.js';
 import { messageRowid } from './retriedUserTurnSupersede.js';
 import { messageToCamel, persistableSessionEffort, projectSessionRuntimeFields } from './mapper.js';
-import { isPluginEngineKind, normalizeDbAgentKind, type DbEngineKind } from '../../shared/agentKindConversion.js';
+import { dbToMakerEngineKind, isPluginEngineKind, normalizeDbAgentKind, type DbEngineKind } from '../../shared/agentKindConversion.js';
 import { isProviderShareAgentDeviceId } from '../../shared/providerShare.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
 
@@ -302,4 +302,136 @@ export async function rebroadcastAgentSwitchBoundaryWith(
   if (row && isOwnerBroadcastScopeCurrent(ownerScope)) {
     broadcastMessageRow(sessionId, messageToCamel(row), ownerScope);
   }
+}
+
+export type PersistedAgentSwitchActor =
+  | 'user'
+  | 'agent'
+  | 'fallback'
+  | 'model-group'
+  | 'provider-group'
+  | 'config-sync'
+  | 'scheduler'
+  | 'unknown';
+
+export interface PersistedAgentSwitchRouteChange {
+  at: string;
+  by: PersistedAgentSwitchActor;
+  reason: string | null;
+  from: {
+    agentKind: 'claude-code' | 'codex' | 'pi' | 'acp';
+    model: string | null;
+    providerId: string | null;
+    agentDeviceId: string | null;
+  };
+  to: {
+    agentKind: 'claude-code' | 'codex' | 'pi' | 'acp';
+    model: string | null;
+    providerId: string | null;
+    agentDeviceId: string | null;
+  };
+}
+
+const VALID_SWITCH_ACTORS = new Set<PersistedAgentSwitchActor>([
+  'user',
+  'agent',
+  'fallback',
+  'model-group',
+  'provider-group',
+  'config-sync',
+  'scheduler',
+  'unknown',
+]);
+const SAFE_SWITCH_REASON = /^[A-Za-z0-9_.:-]{1,64}$/;
+
+/**
+ * Derive the latest committed cross-engine / cross-device route change from persisted
+ * `agent_switch` boundary messages (respecting `/clear` and message rewind), requiring
+ * zero SQLite schema changes. Works for both newly written boundaries with `attribution`
+ * and legacy pre-upgrade boundaries (reported with `by: 'unknown'` unless `switchReason`
+ * identifies a provider-group rebalance).
+ */
+export async function readLatestAgentSwitchAttribution(
+  sessionId: string,
+): Promise<PersistedAgentSwitchRouteChange | null> {
+  const db = getDbClient().drizzle;
+  const [sessRow] = await db
+    .select({ clearedAt: sessions.clearedAt })
+    .from(sessions)
+    .where(eq(sessions.id, sessionId))
+    .limit(1);
+  const clearedAt = sessRow?.clearedAt ?? null;
+  const afterClear = clearedAt === null ? undefined : gt(messages.createdAt, clearedAt);
+  const [row] = await db
+    .select({
+      content: messages.content,
+      createdAt: messages.createdAt,
+    })
+    .from(messages)
+    .where(
+      and(
+        eq(messages.sessionId, sessionId),
+        eq(messages.role, 'agent_switch'),
+        isNull(messages.rewindAt),
+        afterClear,
+      ),
+    )
+    .orderBy(desc(messages.createdAt), desc(messageRowid))
+    .limit(1);
+  if (!row) return null;
+  let parsed: Record<string, unknown>;
+  try {
+    const raw = JSON.parse(row.content) as unknown;
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+    parsed = raw as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+  const parseDbKind = (value: unknown): DbEngineKind | null => {
+    if (value === 'cc' || value === 'codex' || value === 'pi' || value === 'acp') return value;
+    if (value === 'claude-code') return 'cc';
+    return null;
+  };
+  const fromKind = parseDbKind(parsed.fromAgentKind);
+  const toKind = parseDbKind(parsed.toAgentKind);
+  if (!fromKind || !toKind) return null;
+  const optStr = (value: unknown): string | null =>
+    typeof value === 'string' && value.trim() ? value.trim() : null;
+  const fromDeviceId = optStr(parsed.fromAgentDeviceId);
+  const toDeviceId =
+    parsed.toAgentDeviceId === undefined ? fromDeviceId : optStr(parsed.toAgentDeviceId);
+  const attr =
+    parsed.attribution && typeof parsed.attribution === 'object' && !Array.isArray(parsed.attribution)
+      ? (parsed.attribution as { at?: unknown; by?: unknown; reason?: unknown })
+      : null;
+  const rawBy = typeof attr?.by === 'string' ? (attr.by as PersistedAgentSwitchActor) : null;
+  const by: PersistedAgentSwitchActor =
+    rawBy && VALID_SWITCH_ACTORS.has(rawBy)
+      ? rawBy
+      : parsed.switchReason === 'quota-rebalance'
+        ? 'provider-group'
+        : 'unknown';
+  const rawReason = optStr(attr?.reason) ?? optStr(parsed.switchReason);
+  const reason = rawReason && SAFE_SWITCH_REASON.test(rawReason) ? rawReason : null;
+  const at =
+    typeof attr?.at === 'string' && Number.isFinite(Date.parse(attr.at))
+      ? attr.at
+      : new Date(row.createdAt).toISOString();
+  return {
+    at,
+    by,
+    reason,
+    from: {
+      agentKind: dbToMakerEngineKind(fromKind),
+      model: optStr(parsed.fromModel),
+      providerId: optStr(parsed.fromProviderId),
+      agentDeviceId: fromDeviceId,
+    },
+    to: {
+      agentKind: dbToMakerEngineKind(toKind),
+      model: optStr(parsed.toModel),
+      providerId: optStr(parsed.toProviderId),
+      agentDeviceId: toDeviceId,
+    },
+  };
 }

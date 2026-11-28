@@ -110,12 +110,21 @@ describe('buildMobileVoiceDictionaryEntryViews', () => {
             { text: 'rare', count: 1 },
             { text: 'common', count: 9 },
             { text: 'mid', count: 4 },
+            { text: 'hidden', count: 0 },
           ],
         },
       ])],
       { maxAliases: 2 },
     );
     expect(view.aliases).toEqual(['common', 'mid']);
+    const [editable] = buildMobileVoiceDictionaryEntryViews(
+      [snap([{ text: 'Vibe Coding', aliases: [
+        { text: 'rare', count: 1 }, { text: 'common', count: 9 },
+        { text: 'mid', count: 4 }, { text: 'hidden', count: 0 },
+      ] }])],
+      { maxAliases: Number.POSITIVE_INFINITY },
+    );
+    expect(editable.aliases).toHaveLength(4);
   });
 
   it('丢弃空文本并按归一化主键去重', () => {

@@ -156,6 +156,8 @@ export interface VoiceInputSettings {
 export interface VoiceInputHistoryEntry {
   id: string;
   text: string;
+  /** Local-only raw ASR transcript before refinement, when different from `text`. Never sent to refiner or cloud. */
+  rawText?: string;
   createdAt: number;
 }
 
@@ -678,6 +680,133 @@ export interface VoiceInputDictionaryCsvMergeResult {
   capacitySkippedCount: number;
 }
 
+export interface VoiceInputDictionaryExportEntry {
+  text: string;
+  source: VoiceInputDictionaryEntrySource;
+  aliases: string[];
+}
+
+export interface VoiceInputDictionaryJsonExport {
+  version: 1;
+  exportedAt: string;
+  entries: VoiceInputDictionaryExportEntry[];
+}
+
+export interface VoiceInputDictionaryImportItem {
+  text: string;
+  aliases: string[];
+}
+
+export type VoiceInputDictionaryImportParseResult =
+  | {
+      ok: true;
+      format: 'json' | 'csv';
+      items: VoiceInputDictionaryImportItem[];
+      duplicateRowCount: number;
+      skippedTooLongCount: number;
+    }
+  | {
+      ok: false;
+      reason: 'empty' | 'invalidFormat';
+    };
+
+export interface VoiceInputDictionaryImportMergeResult {
+  entries: VoiceInputDictionaryEntry[];
+  importedCount: number;
+  duplicateExistingCount: number;
+  capacitySkippedCount: number;
+}
+
+export function serializeVoiceInputDictionaryJson(
+  entries: ReadonlyArray<VoiceInputDictionaryEntry>,
+  exportedAt = new Date().toISOString(),
+): string {
+  const normalized = normalizeVoiceInputDictionaryEntries(entries);
+  const payload: VoiceInputDictionaryJsonExport = {
+    version: 1,
+    exportedAt,
+    entries: normalized.map((entry) => ({
+      text: entry.text,
+      source: entry.source,
+      aliases: entry.aliases.map((alias) => alias.text),
+    })),
+  };
+  return `${JSON.stringify(payload, null, 2)}\n`;
+}
+
+export function serializeVoiceInputDictionaryCsv(
+  entries: ReadonlyArray<VoiceInputDictionaryEntry>,
+): string {
+  const normalized = normalizeVoiceInputDictionaryEntries(entries);
+  const lines = ['term,aliases,source'];
+  for (const entry of normalized) {
+    // JSON array is reversible even when an alias contains CSV or legacy alias separators.
+    const aliases = JSON.stringify(entry.aliases.map((alias) => alias.text));
+    lines.push([
+      escapeCsvField(entry.text),
+      escapeCsvField(aliases),
+      escapeCsvField(entry.source),
+    ].join(','));
+  }
+  return `${lines.join('\r\n')}\r\n`;
+}
+
+export function parseVoiceInputDictionaryImport(
+  text: string,
+  fileName?: string,
+): VoiceInputDictionaryImportParseResult {
+  const stripped = text.replace(/^\uFEFF/, '');
+  const trimmed = stripped.trim();
+  if (!trimmed) return { ok: false, reason: 'empty' };
+  const looksJson = Boolean(fileName?.trim().toLowerCase().endsWith('.json'))
+    || trimmed.startsWith('{')
+    || trimmed.startsWith('[');
+  if (looksJson) {
+    return parseVoiceInputDictionaryJsonImport(trimmed);
+  }
+  return parseVoiceInputDictionaryCsvImport(stripped);
+}
+
+export function mergeVoiceInputDictionaryImportItems(
+  existingEntries: ReadonlyArray<VoiceInputDictionaryEntry>,
+  items: ReadonlyArray<VoiceInputDictionaryImportItem>,
+): VoiceInputDictionaryImportMergeResult {
+  const entries = normalizeVoiceInputDictionaryEntries(existingEntries);
+  const seen = new Set(entries.map((entry) => dictionaryTextKey(entry.text)));
+  let importedCount = 0;
+  let duplicateExistingCount = 0;
+  let capacitySkippedCount = 0;
+  const now = Date.now();
+
+  for (const item of items) {
+    const term = normalizeVoiceInputDictionaryCsvTerm(item.text);
+    if (!term) continue;
+    const key = dictionaryTextKey(term);
+    if (seen.has(key)) {
+      duplicateExistingCount += 1;
+      continue;
+    }
+    if (entries.length >= MAX_VOICE_INPUT_DICTIONARY_ENTRIES) {
+      capacitySkippedCount += 1;
+      continue;
+    }
+    seen.add(key);
+    importedCount += 1;
+    const aliases = normalizeImportAliases(item.aliases, key, now);
+    entries.push(createVoiceInputDictionaryEntry(term, 'manual', now, {
+      frequency: 1,
+      aliases,
+    }));
+  }
+
+  return {
+    entries,
+    importedCount,
+    duplicateExistingCount,
+    capacitySkippedCount,
+  };
+}
+
 export function parseVoiceInputDictionaryCsv(text: string): VoiceInputDictionaryCsvParseResult {
   const rows = parseSingleFileCsvRows(text.replace(/^\uFEFF/, ''));
   if (!rows) return { ok: false, reason: 'invalidCsv' };
@@ -972,12 +1101,18 @@ export function normalizeVoiceInputHistory(raw: unknown): VoiceInputHistoryEntry
     .sort((a, b) => b.createdAt - a.createdAt);
 }
 
-export function createVoiceInputHistoryEntry(text: string, timestamp = Date.now()): VoiceInputHistoryEntry | null {
+export function createVoiceInputHistoryEntry(
+  text: string,
+  timestamp = Date.now(),
+  rawText?: string,
+): VoiceInputHistoryEntry | null {
   const normalizedText = text.trim();
   if (!normalizedText) return null;
+  const normalizedRaw = typeof rawText === 'string' ? rawText.trim() : '';
   return {
     id: createId('voice', timestamp),
     text: normalizedText,
+    ...(normalizedRaw && normalizedRaw !== normalizedText ? { rawText: normalizedRaw } : {}),
     createdAt: timestamp,
   };
 }
@@ -1345,11 +1480,217 @@ function normalizeVoiceInputHistoryEntry(raw: unknown): VoiceInputHistoryEntry |
   const text = typeof candidate.text === 'string' ? candidate.text.trim() : '';
   const createdAt = Number(candidate.createdAt);
   if (!text || !Number.isFinite(createdAt) || createdAt <= 0) return null;
+  const rawText = typeof candidate.rawText === 'string' ? candidate.rawText.trim() : '';
   return {
     id: typeof candidate.id === 'string' && candidate.id.trim() ? candidate.id : createId('voice'),
     text,
+    ...(rawText && rawText !== text ? { rawText } : {}),
     createdAt,
   };
+}
+
+function escapeCsvField(value: string): string {
+  if (/[",\r\n]/.test(value)) {
+    return `"${value.replace(/"/g, '""')}"`;
+  }
+  return value;
+}
+
+const IMPORT_TERM_HEADERS = new Set(['term', 'text', 'word', 'entry', '词条', '术语']);
+const IMPORT_ALIAS_HEADERS = new Set(['aliases', 'alias', '别名', '误识别']);
+const IMPORT_OPTIONAL_HEADERS = new Set(['source', 'frequency', '来源', '频次', 'createdat', 'updatedat']);
+
+function parseVoiceInputDictionaryJsonImport(rawText: string): VoiceInputDictionaryImportParseResult {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(rawText);
+  } catch {
+    return { ok: false, reason: 'invalidFormat' };
+  }
+  let rawItems: unknown[];
+  if (Array.isArray(parsed)) {
+    rawItems = parsed;
+  } else if (
+    parsed
+    && typeof parsed === 'object'
+    && Array.isArray((parsed as { entries?: unknown }).entries)
+  ) {
+    rawItems = (parsed as { entries: unknown[] }).entries;
+  } else {
+    return { ok: false, reason: 'invalidFormat' };
+  }
+
+  const items: VoiceInputDictionaryImportItem[] = [];
+  const byKey = new Map<string, VoiceInputDictionaryImportItem>();
+  let duplicateRowCount = 0;
+  let skippedTooLongCount = 0;
+
+  for (const rawItem of rawItems) {
+    let rawTerm: unknown;
+    let rawAliases: unknown;
+    if (typeof rawItem === 'string') {
+      rawTerm = rawItem;
+      rawAliases = [];
+    } else if (rawItem && typeof rawItem === 'object' && !Array.isArray(rawItem)) {
+      const record = rawItem as { text?: unknown; term?: unknown; aliases?: unknown };
+      rawTerm = typeof record.text === 'string' ? record.text : record.term;
+      rawAliases = record.aliases;
+    } else {
+      return { ok: false, reason: 'invalidFormat' };
+    }
+    if (typeof rawTerm !== 'string' || rawTerm.includes('\0')) {
+      return { ok: false, reason: 'invalidFormat' };
+    }
+    if (!rawTerm.trim()) continue;
+    const term = normalizeVoiceInputDictionaryCsvTerm(rawTerm);
+    if (!term) {
+      skippedTooLongCount += 1;
+      continue;
+    }
+    const aliasTexts = extractImportAliasStrings(rawAliases);
+    if (aliasTexts === null) return { ok: false, reason: 'invalidFormat' };
+    const key = dictionaryTextKey(term);
+    const cleanedAliases = cleanImportAliasList(aliasTexts, key);
+    const existing = byKey.get(key);
+    if (existing) {
+      duplicateRowCount += 1;
+      existing.aliases = cleanImportAliasList([...existing.aliases, ...cleanedAliases], key);
+      continue;
+    }
+    const item: VoiceInputDictionaryImportItem = { text: term, aliases: cleanedAliases };
+    byKey.set(key, item);
+    items.push(item);
+  }
+
+  return items.length > 0
+    ? { ok: true, format: 'json', items, duplicateRowCount, skippedTooLongCount }
+    : { ok: false, reason: 'empty' };
+}
+
+function parseVoiceInputDictionaryCsvImport(rawText: string): VoiceInputDictionaryImportParseResult {
+  const rows = parseSingleFileCsvRows(rawText);
+  if (!rows) return { ok: false, reason: 'invalidFormat' };
+  const nonEmptyRows = rows.filter((row) => {
+    if (row.some((field) => field.includes('\0'))) return true;
+    return row.some((field) => field.trim().length > 0);
+  });
+  if (nonEmptyRows.some((row) => row.some((field) => field.includes('\0')))) {
+    return { ok: false, reason: 'invalidFormat' };
+  }
+  if (nonEmptyRows.length === 0) return { ok: false, reason: 'empty' };
+
+  const headerCells = nonEmptyRows[0].map((cell) => cell.trim().toLowerCase());
+  const termCol = headerCells.findIndex((cell) => IMPORT_TERM_HEADERS.has(cell));
+  const aliasCol = headerCells.findIndex((cell) => IMPORT_ALIAS_HEADERS.has(cell));
+  const hasRecognizedHeader = termCol >= 0 && headerCells.every(
+    (cell) => !cell || IMPORT_TERM_HEADERS.has(cell) || IMPORT_ALIAS_HEADERS.has(cell) || IMPORT_OPTIONAL_HEADERS.has(cell),
+  );
+
+  const dataRows = hasRecognizedHeader ? nonEmptyRows.slice(1) : nonEmptyRows;
+  const effectiveTermCol = hasRecognizedHeader ? termCol : 0;
+  const effectiveAliasCol = hasRecognizedHeader ? aliasCol : -1;
+
+  const items: VoiceInputDictionaryImportItem[] = [];
+  const byKey = new Map<string, VoiceInputDictionaryImportItem>();
+  let duplicateRowCount = 0;
+  let skippedTooLongCount = 0;
+
+  for (const row of dataRows) {
+    if (!hasRecognizedHeader) {
+      const filled = row.map((field) => field.trim()).filter((field) => field.length > 0);
+      if (filled.length === 0) continue;
+      if (filled.length > 1) return { ok: false, reason: 'invalidFormat' };
+    }
+    const rawTerm = (row[effectiveTermCol] ?? '').trim();
+    if (!rawTerm) continue;
+    const term = normalizeVoiceInputDictionaryCsvTerm(rawTerm);
+    if (!term) {
+      skippedTooLongCount += 1;
+      continue;
+    }
+    const rawAliasCell = effectiveAliasCol >= 0 ? (row[effectiveAliasCol] ?? '').trim() : '';
+    let rawAliases: string[] = [];
+    let parsedExportAliases = false;
+    if (rawAliasCell.startsWith('[')) {
+      try {
+        const parsed: unknown = JSON.parse(rawAliasCell);
+        if (Array.isArray(parsed) && parsed.every((alias) => typeof alias === 'string')) {
+          rawAliases = parsed;
+          parsedExportAliases = true;
+        }
+      } catch {
+        // An older human-authored alias may start with '['; use legacy parsing.
+      }
+    }
+    if (!parsedExportAliases && rawAliasCell) {
+      // Accept CSV files authored before the reversible export format.
+      rawAliases = rawAliasCell.split(/[|;；、\r\n,]+/).map((part) => part.trim()).filter(Boolean);
+    }
+    const key = dictionaryTextKey(term);
+    const cleanedAliases = cleanImportAliasList(rawAliases, key);
+    const existing = byKey.get(key);
+    if (existing) {
+      duplicateRowCount += 1;
+      existing.aliases = cleanImportAliasList([...existing.aliases, ...cleanedAliases], key);
+      continue;
+    }
+    const item: VoiceInputDictionaryImportItem = { text: term, aliases: cleanedAliases };
+    byKey.set(key, item);
+    items.push(item);
+  }
+
+  return items.length > 0
+    ? { ok: true, format: 'csv', items, duplicateRowCount, skippedTooLongCount }
+    : { ok: false, reason: 'empty' };
+}
+
+function extractImportAliasStrings(rawAliases: unknown): string[] | null {
+  if (rawAliases === undefined || rawAliases === null) return [];
+  if (typeof rawAliases === 'string') {
+    return rawAliases.split(/[|;；、\r\n,]+/).map((part) => part.trim()).filter(Boolean);
+  }
+  if (!Array.isArray(rawAliases)) return null;
+  const out: string[] = [];
+  for (const alias of rawAliases) {
+    if (typeof alias === 'string') {
+      if (alias.includes('\0')) return null;
+      out.push(alias);
+    } else if (alias && typeof alias === 'object' && typeof (alias as { text?: unknown }).text === 'string') {
+      const text = (alias as { text: string }).text;
+      if (text.includes('\0')) return null;
+      out.push(text);
+    } else {
+      return null;
+    }
+  }
+  return out;
+}
+
+function cleanImportAliasList(rawAliases: readonly string[], termKey: string): string[] {
+  const seen = new Set<string>();
+  const aliases: string[] = [];
+  for (const raw of rawAliases) {
+    const normalized = normalizeVoiceInputDictionaryCsvTerm(raw);
+    if (!normalized) continue;
+    const key = dictionaryTextKey(normalized);
+    if (!key || key === termKey || seen.has(key)) continue;
+    seen.add(key);
+    aliases.push(normalized);
+    if (aliases.length >= MAX_VOICE_INPUT_DICTIONARY_ALIASES) break;
+  }
+  return aliases;
+}
+
+function normalizeImportAliases(
+  rawAliases: readonly string[],
+  termKey: string,
+  timestamp: number,
+): VoiceInputDictionaryAlias[] {
+  return cleanImportAliasList(rawAliases, termKey).map((text) => ({
+    text,
+    count: 1,
+    lastSeenAt: timestamp,
+  }));
 }
 
 function createId(prefix: string, timestamp = Date.now(), seed = ''): string {

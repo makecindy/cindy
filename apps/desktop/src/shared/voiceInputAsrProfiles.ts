@@ -4,7 +4,7 @@ export type VoiceInputRealtimeProtocolProfile =
 
 export type VoiceInputNativeProtocolProfile = 'volcengine-sauc-duration';
 
-export type VoiceInputAsrAuthKind = 'api-key' | 'codex';
+export type VoiceInputAsrAuthKind = 'api-key' | 'codex' | 'local';
 
 export type VoiceInputAsrSettingsTab = 'api-keys' | 'connections' | 'providers';
 
@@ -12,7 +12,8 @@ export type VoiceInputAsrMode =
   | 'elevenlabs-realtime'
   | 'realtime-websocket'
   | 'provider-native-websocket'
-  | 'batch-http';
+  | 'batch-http'
+  | 'local-offline';
 
 export type VoiceInputAsrPricing =
   | { unit: 'audio-second'; usd: number }
@@ -65,6 +66,7 @@ export const LITELLM_VOLCENGINE_SAUC_ASR_RESOURCE_ID = 'volc.seedasr.sauc.durati
 export const LITELLM_VOLCENGINE_SAUC_ASR_PCM_SAMPLE_RATE = 16_000;
 export const LITELLM_TRANSCRIPTION_MODEL = 'elevenlabs/scribe_v2';
 export const CUSTOM_REALTIME_ASR_DISPLAY_MODEL = 'Custom realtime ASR';
+export const LOCAL_SHERPA_ONNX_ASR_MODEL = 'local-sherpa-onnx';
 
 export const DEFAULT_VOICE_INPUT_PROVIDER_KIND = 'litellm-volcengine-sauc-asr';
 
@@ -196,6 +198,15 @@ export const VOICE_INPUT_ASR_PROFILES = {
     missingCredentialMessage: 'API key is required for LiteLLM voice input.',
     errorFallbackMessage: 'XD LiteLLM batch transcription failed.',
   },
+  'local-sherpa-onnx': {
+    id: 'local-sherpa-onnx',
+    model: LOCAL_SHERPA_ONNX_ASR_MODEL,
+    auth: 'local',
+    settingsTab: 'providers',
+    mode: 'local-offline',
+    missingCredentialMessage: 'Select a local sherpa-onnx ASR model folder to enable offline voice input.',
+    errorFallbackMessage: 'Local offline speech recognition failed.',
+  },
 } as const satisfies Record<string, VoiceInputAsrProfile>;
 
 export type VoiceInputProviderKind = keyof typeof VOICE_INPUT_ASR_PROFILES;
@@ -253,6 +264,10 @@ const VOICE_INPUT_PROVIDER_ALIASES: Record<string, VoiceInputProviderKind> = {
   custom: 'custom-realtime-asr',
   'custom-realtime': 'custom-realtime-asr',
   'custom-realtime-asr': 'custom-realtime-asr',
+  local: 'local-sherpa-onnx',
+  offline: 'local-sherpa-onnx',
+  'sherpa-onnx': 'local-sherpa-onnx',
+  'local-sherpa-onnx': 'local-sherpa-onnx',
 };
 
 export function resolveVoiceInputProviderKindAlias(value: string): VoiceInputProviderKind | null {

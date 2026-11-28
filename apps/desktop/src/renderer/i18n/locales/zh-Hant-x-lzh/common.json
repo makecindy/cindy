@@ -3154,7 +3154,8 @@
           "gatewayKey": "須 AI 閘道器支援所擇即時 ASR 路由",
           "codexLogin": "用 Codex 登門",
           "elevenlabsKey": "用 ElevenLabs Key（環境變數）",
-          "codexRealtimeUnsupported": "不可用：Codex 登門非 OpenAI API Realtime 憑證"
+          "codexRealtimeUnsupported": "不可用：Codex 登門非 OpenAI API Realtime 憑證",
+          "localOffline": "本機離線而行，無需帳號與密鑰"
         },
         "credentialError": {
           "gatewayMissing": "未見可用之 AI 閘道器 Key，今模型不可用。",
@@ -3162,10 +3163,24 @@
           "elevenlabsMissing": "未設 ElevenLabs Key（環境變數），今模型不可用。",
           "customAsrConfigMissing": "請先完填並存即時 ASR 服務之設，再始語音輸入。",
           "customAsrKeyMissing": "請為自定即時 ASR 服務填並存 API Key。",
-          "codexRealtimeUnsupported": "Codex 登門不可用於即時語音識別，請擇受支援之 ASR 服務。"
+          "codexRealtimeUnsupported": "Codex 登門不可用於即時語音識別，請擇受支援之 ASR 服務。",
+          "localAsrModelMissing": "請先擇本機 sherpa-onnx 語音辨識模型目錄，乃可離線語音輸入。",
+          "localAsrUnsupported": "此機平台暫未支援本機離線語音辨識。"
         },
         "manageProviders": "往模型供方",
-        "reset": "復預設"
+        "reset": "復預設",
+        "localAsr": {
+          "optionLabel": "本機離線辨識（sherpa-onnx）",
+          "optionDescription": "端側 ONNX 離線轉寫，無需雲端帳號與密鑰",
+          "notice": "請擇本機 sherpa-onnx 離線模型目錄（支援 SenseVoice、Paraformer、Whisper 或 Transducer，須含 tokens.txt 及 .onnx 權重）。音訊盡留本機。",
+          "modelDirLabel": "本機模型目錄",
+          "readyStatus": "已備 · {{kind}}（{{folder}}）",
+          "unsupportedStatus": "此平台暫未支援",
+          "notConfiguredStatus": "尚未擇模型目錄",
+          "clearFolder": "清除",
+          "chooseFolder": "擇模型目錄",
+          "invalidFolder": "所擇目錄未見受支援之 sherpa-onnx 模型檔案（須含 tokens.txt 與 .onnx）。"
+        }
       },
       "historyToggle": {
         "show": "展近期歷史",
@@ -3313,7 +3328,9 @@
           "filters": {
             "all": "全",
             "automatic": "自增",
-            "manual": "手增"
+            "manual": "手增",
+            "candidates": "候選",
+            "suppressed": "已抑"
           },
           "sources": {
             "automatic": "自增",
@@ -3326,6 +3343,28 @@
             "automaticAddedMultiple": "已自入詞典：{{term}} 等 {{count}} 詞",
             "delete": "刪",
             "deleteAriaLabel": "刪自入之詞：{{term}}"
+          },
+          "export": {
+            "csv": "出 CSV",
+            "json": "出 JSON",
+            "successCsv": "已出 CSV 詞典",
+            "successJson": "已出 JSON 詞典"
+          },
+          "candidates": {
+            "hint": "自手改中察得之候選詞，尚未自動收錄；可一鍵收之或刪去。",
+            "evidenceCount": "察得 {{count}} 次",
+            "promote": "收錄",
+            "promoteTooltip": "一鍵將此候選詞收為正式詞條",
+            "promotedToast": "已收錄「{{term}}」入詞典",
+            "empty": "尚無候選詞。"
+          },
+          "suppressed": {
+            "hint": "前刪之自學習詞已抑止，免其復入；可復其自習之格，或徑收還詞典。",
+            "restore": "復允許自習",
+            "addToDictionary": "復入詞典",
+            "restoredToast": "已復「{{term}}」自習之格",
+            "addedToast": "已將「{{term}}」復入詞典",
+            "empty": "無已抑詞條。"
           }
         }
       },
@@ -3370,7 +3409,15 @@
         "toast": {
           "copied": "已錄",
           "copyFailed": "錄之未成"
-        }
+        },
+        "searchAriaLabel": "搜尋語音舊錄",
+        "searchPlaceholder": "搜尋轉寫或原始辨識之文…",
+        "showRawComparison": "照原識之文",
+        "hideRawComparison": "收對照",
+        "rawLabel": "原識",
+        "refinedLabel": "潤色後",
+        "loadMore": "續載其餘（餘 {{count}} 條）",
+        "noSearchResults": "未見相合之舊錄。"
       },
       "speakerFilter": {
         "label": "辨吾之聲",
@@ -15393,7 +15440,11 @@
           "description": "請開麥克風權柄，再點語音輸入",
           "confirm": "往授權",
           "cancel": "罷"
-        }
+        },
+        "rewriteSelected": "語音改寫",
+        "rewriteSelectedTooltip": "口授意旨以改寫所選之文；若不成則仍存原文",
+        "rewriteSelectedAria": "語音改寫所選之文",
+        "rewriteFailed": "語音改寫未竟，所選原文無損。"
       },
       "remoteSwitchFailed": "遠端之設切換未成，未生效",
       "switchFailed": "設定切換未成，未生效",
@@ -23585,10 +23636,10 @@
   },
   "openAiAccountGroup": {
     "removeDescription": "此連線將不再接收組內的新任務。正在執行的任務仍留在原連線。",
-    "mergeDescription": "從 {{target}} 新建的任務可以使用這兩個供應商。登入、金鑰和既有任務保留在原處。建立調度關係前，Cindy 會測試 {{apiKey}} 的 API Key。",
+    "mergeDescription": "自 {{target}} 新建之任務，分派於可用成員。登入、金鑰及既有任務仍留原處。Cindy 將測試 {{apiKey}} 之 API Key；若僅餘款不足或已達計費之限，仍可併入，恢復可用前不自動分派。",
     "modelUnavailable": "此連線無法呼叫本次自動選擇的模型。再次測試可嘗試其他候選。",
     "noTestModel": "目前的連線沒有可用於測試的模型。請確認 OpenAI 專案可呼叫哪些模型，再重新整理或更新此連線的模型清單。",
-    "billingPaused": "餘款不足或已達計費之限，暫停組內分派。",
+    "billingPaused": "餘款不足或已達計費之限，暫停自動分派。",
     "title": "帳號組",
     "testPassed": "測試成功",
     "refresh": "更新額度"
@@ -23872,6 +23923,8 @@
       "sourcesFull": "一路至多 {{count}} 源。",
       "addSource": "增模型路徑",
       "chooseModel": "擇一模型",
+      "editSource": "編輯所出",
+      "duplicateSource": "此路已有此源、模型與引擎。",
       "notConnected": "未連線",
       "moveUp": "上移",
       "moveDown": "下移",

@@ -11,7 +11,8 @@ import {
   userStagedSelectionProjection,
   type HarnessRuntimeSelectionDeps,
 } from '../sessionRuntimeHarnessSelection';
-import type { SessionRuntimeProfile } from '../sessionRuntimeControl';
+import { createSessionControlRuntimeWriter } from '../sessionControlRuntimeWriter';
+import { clearAllSessionRuntimeControlStates, type SessionRuntimeProfile } from '../sessionRuntimeControl';
 
 function setup(running = false) {
   let generation = 4;
@@ -367,5 +368,191 @@ describe('runtime harness selection', () => {
         4,
       ),
     ).toBeNull();
+  });
+
+  // Value: switching provider_device_id without harness/model must keep the current engine & model,
+  // drop the old computer's providerId (never inheriting it across devices), and map remote failures
+  // to ROUTE_UNAVAILABLE instead of INTERNAL.
+  // Gap: prior path pre-filled harness without model and rejected location-only switches with INVALID_ARGS,
+  // and left REMOTE_AGENT_* unmapped.
+  // Minimal input: location-only switch to another device, back to local, revision on staged choice, and remote error codes.
+  // Tier: unit.
+  it('supports location-only provider_device_id switches without harness or model and drops old device providerId', async () => {
+    const h = setup();
+    Object.assign(h.switchDeps, { assertAgentDeviceRouteUsable: vi.fn(async () => {}) });
+
+    const moved = await setSessionRuntimeHarness(h.deps, {
+      targetSessionId: 's1',
+      expectedGeneration: 4,
+      patch: { agentDeviceId: 'mac-studio' },
+    });
+    expect(moved).toMatchObject({
+      ok: true,
+      status: 'deferred',
+      effectiveBoundary: 'next_send',
+      pendingMutation: {
+        source: 'agent',
+        profile: {
+          agentDeviceId: 'mac-studio',
+          agentKind: 'claude-code',
+          model: 'claude-fable-5',
+          providerId: 'openai', // resolved by deps.resolve because old-provider was dropped to null
+        },
+      },
+    });
+    expect(h.deps.resolve).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentDeviceId: 'mac-studio',
+        agentKind: 'claude-code',
+        model: 'claude-fable-5',
+        providerId: null,
+      }),
+      { effort: false, fast: false },
+    );
+
+    // Moving a staged choice to another computer keeps the staged harness/model and clears the old computer's providerId.
+    const movedAgain = await setSessionRuntimeHarness(h.deps, {
+      targetSessionId: 's1',
+      expectedGeneration: 5,
+      patch: { agentDeviceId: 'share:team-1', providerId: 'gateway' },
+    });
+    expect(movedAgain).toMatchObject({
+      ok: true,
+      pendingMutation: {
+        profile: {
+          agentDeviceId: 'share:team-1',
+          agentKind: 'claude-code',
+          model: 'claude-fable-5',
+          providerId: 'gateway',
+        },
+      },
+    });
+  });
+
+  it.each([
+    'REMOTE_AGENT_DEVICE_UNREACHABLE',
+    'REMOTE_AGENT_MODEL_UNAVAILABLE',
+    'REMOTE_AGENT_SHARE_PAUSED',
+    'REMOTE_AGENT_SHARE_REMOVED',
+    'PRECONDITION_FAILED',
+    'MODEL_SELECTION_UNAVAILABLE',
+  ])('maps %s to ROUTE_UNAVAILABLE instead of throwing INTERNAL', async (code) => {
+    const h = setup();
+    h.deps.resolve = async () => {
+      throw Object.assign(new Error(`failed with ${code}`), { code });
+    };
+    expect(await setSessionRuntimeHarness(h.deps, {
+      targetSessionId: 's1',
+      expectedGeneration: 4,
+      patch: { agentDeviceId: 'mac-studio' },
+    })).toMatchObject({
+      ok: false,
+      errorCode: 'ROUTE_UNAVAILABLE',
+      message: `failed with ${code}`,
+    });
+  });
+
+  // Value: writer normalizes selfDeviceId -> null and triggers onExplicitRouteSelected only after
+  // an accepted route/device mutation (never on rejected attempts or effort-only patches).
+  // Gap: prior writer lacked selfDeviceId normalization and left stale usage-limit waits alive.
+  // Minimal input: writer called with self device ID, conflict attempt, and effort-only update; tier: unit.
+  it('normalizes selfDeviceId to local and notifies onExplicitRouteSelected only on accepted route changes', async () => {
+    clearAllSessionRuntimeControlStates();
+    const pending = createPendingAgentSwitchRegistry();
+    const onExplicitRouteSelected = vi.fn();
+    const updateScheduledPreference = vi.fn(async () => true);
+    const acceptTaskChoice = vi.fn(async () => {});
+    const effective: SessionRuntimeProfile = {
+      agentDeviceId: 'mac-studio',
+      agentKind: 'codex',
+      model: 'gpt-6-astra',
+      providerId: 'remote-prov',
+      effort: 'high',
+      fastMode: false,
+    };
+    const switchDeps = {
+      getSessionRow: vi.fn(async () => ({
+        id: 'writer-s1',
+        agentKind: 'codex',
+        agentDeviceId: 'mac-studio',
+        model: effective.model,
+        providerId: 'remote-prov',
+        status: 'active',
+        remoteHostId: null,
+        orcaRole: null,
+        sdkSessionId: 'native-1',
+      })),
+      getLiveSession: () => ({ isTurnRunning: () => false }),
+      pendingSwitches: pending,
+      onPendingSwitchChanged: vi.fn(),
+      closeSession: vi.fn(),
+      applyAgentSwitchToDb: vi.fn(),
+      supersedePendingCredentialSwitch: vi.fn(),
+      log: { info: vi.fn(), warn: vi.fn() },
+    } as unknown as MakerSessionAgentSwitchHandlerDeps;
+    const providerView = {
+      id: 'openai',
+      name: 'OpenAI',
+      source: 'builtin',
+      connected: true,
+      agents: ['codex'],
+      auth: { method: 'none' },
+      routing: { codex: { wireProtocol: 'openai-responses' } },
+      models: {
+        codex: [{ id: 'gpt-6-astra', name: 'GPT-6', contextWindow: 128_000, efforts: ['low', 'high'], defaultEffort: 'high', supportsFastMode: true }],
+      },
+    };
+    const writer = createSessionControlRuntimeWriter({
+      agentSwitchPending: pending,
+      agentSwitchDeps: switchDeps,
+      assertModelRouteUsable: vi.fn(async () => undefined),
+      getDesktopProviderService: () => ({ listProviders: vi.fn(async () => [providerView] as never) }),
+      reconcileBotModelRoute: { acceptTaskChoice },
+      updateScheduledPreference,
+      readSessionRuntimeProfiles: vi.fn(async () => ({
+        baseline: effective,
+        effective,
+        control: { generation: 0, effectiveOverride: null, pending: null, fallbackHop: 0, visitedRoutes: [], lastRouteChange: null },
+        pendingMutation: null,
+      })),
+      readUsableAgentDeviceProviders: vi.fn(async () => [providerView] as never),
+      shouldApplyExclusiveProviderRerouteLive: () => false,
+      applySessionRuntimeSelection: vi.fn(async () => ({ deferred: false, superseded: false, generation: 1 })),
+      runtimeSelectionRequiresModelWindowConfirmation: () => false,
+      isSelfDeviceId: (id) => id === 'self-mac',
+      onExplicitRouteSelected,
+    });
+
+    // Stale generation conflict must not cancel recovery waits.
+    expect(await writer({
+      targetSessionId: 'writer-s1',
+      expectedGeneration: 99,
+      patch: { agentDeviceId: 'self-mac' },
+    })).toMatchObject({ ok: false, errorCode: 'CONFLICT' });
+    expect(onExplicitRouteSelected).not.toHaveBeenCalled();
+
+    // Effort-only adjustment must not trigger onExplicitRouteSelected.
+    expect(await writer({
+      targetSessionId: 'writer-s1',
+      expectedGeneration: 0,
+      patch: { effort: 'low' },
+    })).toMatchObject({ ok: true, status: 'applied' });
+    expect(onExplicitRouteSelected).not.toHaveBeenCalled();
+
+    // Passing self-mac normalizes to agentDeviceId: null and triggers onExplicitRouteSelected.
+    const movedLocal = await writer({
+      targetSessionId: 'writer-s1',
+      expectedGeneration: 0,
+      patch: { agentDeviceId: 'self-mac' },
+    });
+    expect(movedLocal).toMatchObject({
+      ok: true,
+      status: 'deferred',
+      effectiveBoundary: 'next_send',
+      pendingMutation: { profile: { agentDeviceId: null, agentKind: 'codex', model: 'gpt-6-astra', providerId: 'openai' } },
+    });
+    expect(onExplicitRouteSelected).toHaveBeenCalledTimes(1);
+    expect(onExplicitRouteSelected).toHaveBeenCalledWith('writer-s1');
+    clearAllSessionRuntimeControlStates();
   });
 });

@@ -48,6 +48,8 @@ export interface ModelConfigFlyoutProps {
   overlayContentClassName?: string;
   /** Same-engine views show the current harness without offering a cross-engine switch. */
   engineLocked?: boolean;
+  /** Choosing a Harness submits the row without editing model preferences. */
+  harnessOnly?: boolean;
   onEngineChange: (engine: UnifiedEngine) => void;
   onEffortChange: (effort: Effort) => void;
   onFastChange: (enabled: boolean | 'ultrafast') => void;
@@ -83,6 +85,7 @@ export function ModelConfigFlyout({
   disabled = false,
   overlayContentClassName,
   engineLocked = false,
+  harnessOnly = false,
   onEngineChange,
   onEffortChange,
   onFastChange,
@@ -148,30 +151,32 @@ export function ModelConfigFlyout({
         >
           {displayName}
         </span>
-        <button
-          type="button"
-          disabled={disabled}
-          onClick={() => (state === 'favorite' ? onRemoveFavorite() : onAddFavorite())}
-          title={
-            state === 'favorite'
-              ? t('newChat.modelSelector.unified.removeFavorite')
-              : t('newChat.modelSelector.unified.addFavorite')
-          }
-          aria-label={
-            state === 'favorite'
-              ? t('newChat.modelSelector.unified.removeFavorite')
-              : t('newChat.modelSelector.unified.addFavorite')
-          }
-          className={cn(
-            'mt-[1px] flex h-5 w-5 shrink-0 items-center justify-center rounded-lg transition-colors',
-            starred
-              ? 'text-[var(--favorite-star)]'
-              : 'text-[var(--text-tertiary)] hover:text-[var(--favorite-star)]',
-            disabled && 'cursor-not-allowed opacity-50',
-          )}
-        >
-          <Star size={14} fill={starred ? 'currentColor' : 'none'} />
-        </button>
+        {!harnessOnly && (
+          <button
+            type="button"
+            disabled={disabled}
+            onClick={() => (state === 'favorite' ? onRemoveFavorite() : onAddFavorite())}
+            title={
+              state === 'favorite'
+                ? t('newChat.modelSelector.unified.removeFavorite')
+                : t('newChat.modelSelector.unified.addFavorite')
+            }
+            aria-label={
+              state === 'favorite'
+                ? t('newChat.modelSelector.unified.removeFavorite')
+                : t('newChat.modelSelector.unified.addFavorite')
+            }
+            className={cn(
+              'mt-[1px] flex h-5 w-5 shrink-0 items-center justify-center rounded-lg transition-colors',
+              starred
+                ? 'text-[var(--favorite-star)]'
+                : 'text-[var(--text-tertiary)] hover:text-[var(--favorite-star)]',
+              disabled && 'cursor-not-allowed opacity-50',
+            )}
+          >
+            <Star size={14} fill={starred ? 'currentColor' : 'none'} />
+          </button>
+        )}
       </div>
 
       <div className="truncate border-b border-[var(--model-dropdown-border)] pb-2.5 pt-0.5 text-12 text-[var(--text-tertiary)]">
@@ -194,7 +199,7 @@ export function ModelConfigFlyout({
         </p>
       )}
 
-      {showThinking && thinking && (
+      {!harnessOnly && showThinking && thinking && (
         <div className="flex items-center justify-between gap-2 pt-3.5 text-13 text-[var(--text-primary)]">
           <span>{t('newChat.modelSelector.thinking')}</span>
           <Switch
@@ -205,7 +210,7 @@ export function ModelConfigFlyout({
           />
         </div>
       )}
-      {(showSlider || config.fastCapable) && (
+      {!harnessOnly && (showSlider || config.fastCapable) && (
         // 设计稿 .fly-ctrl:first-of-type:第一个控件行上距 14px。
         <div className="flex items-center gap-2 pt-3.5">
           {showSlider && config.effort && (
@@ -287,6 +292,7 @@ export function ModelConfigFlyout({
         value={config.engine}
         disabled={disabled}
         locked={engineLocked}
+        selectOnClick={harnessOnly}
         onChange={onEngineChange}
       />
 
@@ -342,38 +348,40 @@ export function ModelConfigFlyout({
       )}
 
       {/* 状态底栏三态等高:推荐配置 / 已自定义 · 恢复推荐 / 收藏配置 · 取消收藏。 */}
-      <div className="mt-2 flex min-h-[22px] items-center justify-between border-t border-[var(--model-dropdown-border)] pt-2 text-11">
-        <span
-          className={
-            state === 'recommended' ? 'text-[var(--text-tertiary)]' : 'text-[var(--text-secondary)]'
-          }
-        >
-          {state === 'favorite'
-            ? t('newChat.modelSelector.unified.favoriteConfig')
-            : state === 'customized'
-              ? t('newChat.modelSelector.unified.customized')
-              : t('newChat.modelSelector.unified.recommendedConfig')}
-        </span>
-        {state === 'favorite' ? (
-          <button
-            type="button"
-            disabled={disabled}
-            onClick={onRemoveFavorite}
-            className="shrink-0 text-[var(--text-secondary)] underline underline-offset-2 transition-colors hover:text-[var(--text-primary)] disabled:cursor-not-allowed disabled:opacity-50"
+      {!harnessOnly && (
+        <div className="mt-2 flex min-h-[22px] items-center justify-between border-t border-[var(--model-dropdown-border)] pt-2 text-11">
+          <span
+            className={
+              state === 'recommended' ? 'text-[var(--text-tertiary)]' : 'text-[var(--text-secondary)]'
+            }
           >
-            {t('newChat.modelSelector.unified.removeFavorite')}
-          </button>
-        ) : state === 'customized' ? (
-          <button
-            type="button"
-            disabled={disabled}
-            onClick={onResetToRecommended}
-            className="shrink-0 text-[var(--text-secondary)] underline underline-offset-2 transition-colors hover:text-[var(--text-primary)] disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            {t('newChat.modelSelector.unified.reset')}
-          </button>
-        ) : null}
-      </div>
+            {state === 'favorite'
+              ? t('newChat.modelSelector.unified.favoriteConfig')
+              : state === 'customized'
+                ? t('newChat.modelSelector.unified.customized')
+                : t('newChat.modelSelector.unified.recommendedConfig')}
+          </span>
+          {state === 'favorite' ? (
+            <button
+              type="button"
+              disabled={disabled}
+              onClick={onRemoveFavorite}
+              className="shrink-0 text-[var(--text-secondary)] underline underline-offset-2 transition-colors hover:text-[var(--text-primary)] disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {t('newChat.modelSelector.unified.removeFavorite')}
+            </button>
+          ) : state === 'customized' ? (
+            <button
+              type="button"
+              disabled={disabled}
+              onClick={onResetToRecommended}
+              className="shrink-0 text-[var(--text-secondary)] underline underline-offset-2 transition-colors hover:text-[var(--text-primary)] disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {t('newChat.modelSelector.unified.reset')}
+            </button>
+          ) : null}
+        </div>
+      )}
     </div>
   );
 }

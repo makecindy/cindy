@@ -3,7 +3,7 @@
  * 所有依赖顶层静态导入，所有端口调用期转发；纯 Node 核心逻辑在 runtimeCore.ts。
  */
 import { isSessionActivityRunning } from '@cindy/maker-shared/session-activity';
-import type { ProviderView } from '@cindy/model-providers';
+import type { AgentKind, ProviderView } from '@cindy/model-providers';
 import type { ModelGroupAgentKind, ModelGroupTraceQuota } from '../../shared/modelGroups.js';
 import { isSubscriptionProvider } from '../../shared/subscriptionAccounts.js';
 import { getAgentIslandService } from '../agent-island/service.js';
@@ -18,6 +18,7 @@ import { getDesktopProviderService } from '../maker-host/createDesktopProviderSe
 import { isRemoteProviderInvocationAllowed } from '../maker-host/remote-provider-access-store.js';
 import * as pluginEnginesIpc from '../maker-ipc/pluginEnginesIpc.js';
 import { readWorkerAgentLocations } from '../maker-ipc/workerAgentLocations.js';
+import { isOpenAiGroupAccountUnavailable } from '../provider-group/localOpenAiAccounts.js';
 import { getProviderGroupRouter } from '../provider-group/runtime.js';
 import { fiveHourTightFor } from '../provider-group/scheduler.js';
 import { readProviderGroup } from '../provider-group/store.js';
@@ -117,7 +118,7 @@ function accountDisplayLabel(label: string, index: number): string {
 function readLocalAccounts(views: readonly ProviderView[]): ReadonlyMap<string, readonly SourceCatalogAccount[]> {
   const map = new Map<string, readonly SourceCatalogAccount[]>();
   for (const view of views) {
-    if (!view.connected || view.suspended || view.removed) continue;
+    if (!view.connected || view.suspended || view.removed || view.subscriptionPoolAlias) continue;
     if (!isSubscriptionProvider(view.id) && !view.subscriptionPool && !view.subscriptionAccountPool) continue;
     const raw = listSubscriptionPoolSources(view.id);
     if (!raw || raw.length === 0) continue;
@@ -131,7 +132,7 @@ function readLocalAccounts(views: readonly ProviderView[]): ReadonlyMap<string, 
 
 async function warmLocalAccounts(views: readonly ProviderView[]): Promise<void> {
   const coldIds = views
-    .filter((view) => view.connected && !view.suspended && !view.removed
+    .filter((view) => view.connected && !view.suspended && !view.removed && !view.subscriptionPoolAlias
       && (isSubscriptionProvider(view.id) || !!view.subscriptionPool || !!view.subscriptionAccountPool))
     .filter((view) => {
       const list = listSubscriptionPoolSources(view.id);
@@ -156,7 +157,7 @@ async function warmLocalAccounts(views: readonly ProviderView[]): Promise<void> 
   }));
 }
 
-function readLocalAccountFact(providerId: string, accountId: string, model: string): ModelGroupLocalAccountFact | null {
+function readLocalAccountFact(providerId: string, accountId: string, model: string, agent: AgentKind): ModelGroupLocalAccountFact | null {
   const list = listSubscriptionPoolSources(providerId);
   if (!list) return null;
   const index = list.findIndex((item) => item.id === accountId);
@@ -164,7 +165,8 @@ function readLocalAccountFact(providerId: string, accountId: string, model: stri
   const item = list[index];
   const modelOk = !item.supportedModelIds || item.supportedModelIds.has(model.replace(/^chatgpt\//, ''));
   return {
-    available: item.usable && modelOk,
+    available: item.usable && modelOk
+      && (!item.apiConnectionId || !isOpenAiGroupAccountUnavailable(item.apiConnectionId, agent)),
     label: accountDisplayLabel(item.label, index),
     running: item.running,
     payAsYouGo: Boolean(item.apiConnectionId),
@@ -238,7 +240,11 @@ export const desktopModelGroupRuntime = createModelGroupRuntime({
   },
   localAccounts: (views) => readLocalAccounts(views),
   warmLocalAccounts: (views) => warmLocalAccounts(views),
-  localAccount: (providerId, accountId, model) => readLocalAccountFact(providerId, accountId, model),
+  // For a flat member, the individual account health is checked by localAccount.
+  // A standalone key has no account slot, so check its own connection directly.
+  localCandidateAvailable: (view, agent) => !!view.subscriptionAccountPool
+    || !isOpenAiGroupAccountUnavailable(view.id, agent) || !!readProviderGroup(view.id),
+  localAccount: readLocalAccountFact,
   taskAccount: (sessionId, providerId) => readSessionBoundSubscriptionAccount(sessionId, providerId),
   pluginEngines: () => pluginEnginesIpc.listPluginEngineViews(),
   localAgents: () => getPluginModelPickerAgents(),

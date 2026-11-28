@@ -1040,8 +1040,8 @@ export interface ModelSelectorBaseProps {
    * 不传时沿用通用面板的 300px 上限，供 Settings 等紧凑场景按行数收窄。
    */
   maxVisibleModelRows?: number;
-  /** 关闭模型的 effort / Fast 编辑入口与行内状态摘要；只选择模型 id 的设置项使用。 */
-  configurationEnabled?: boolean;
+  /** false hides configuration; 'harness' lets the caller select a model with a Harness. */
+  configurationEnabled?: UnifiedModelPanelProps['configurationEnabled'];
   /** Restrict Fast to the Harnesses this entry can persist and dispatch; false disables it. */
   fastModeConfigurable?: boolean | readonly AgentKind[];
   /** 语义同 ModelSelectorContentProps.unifiedPanel（统一模型选择器面板，默认开启）。 */
@@ -1203,7 +1203,7 @@ export interface ModelSelectorContentBaseProps {
    */
   followSession?: { active: boolean; label: string; onFollow: () => void | boolean | Promise<void | boolean> };
   /** 是否显示模型的 effort / Fast 编辑入口。 */
-  configurationEnabled?: boolean;
+  configurationEnabled?: UnifiedModelPanelProps['configurationEnabled'];
   /** Restrict Fast to the Harnesses this entry can persist and dispatch; false disables it. */
   fastModeConfigurable?: boolean | readonly AgentKind[];
   /** A is the default for every entry. False is reserved for capabilities-only remote compatibility. */
@@ -1759,7 +1759,7 @@ function ModelSelectorContentView({
     [deviceId, mixedCatalog, subscriptionTaskId, remoteAgent, remoteBrowse],
   );
   // Old device-link hosts expose capabilities only. Never substitute local routes.
-  const unifiedPanel = useUnifiedPanel && !(deviceId && remoteProviders.unsupported);
+  const unifiedPanel = useUnifiedPanel && (configurationEnabled === 'harness' || !(deviceId && remoteProviders.unsupported));
   const providersLoading = deviceId ? remoteProviders.loading : !providersOverride && localProviders.loading;
   const remoteModelListStatus = resolveRemoteModelListStatus({
     deviceId,
@@ -2907,7 +2907,7 @@ function ModelSelectorContentView({
         !!selectedModel &&
         (selectedModel.efforts.length > 0 || fastEditable(providerId, selectedModel));
       const opensConfiguration =
-        !unifiedPanel && selectedRowClickOpensConfiguration && configurationEnabled && selectedModelHasConfiguration;
+        !unifiedPanel && selectedRowClickOpensConfiguration && configurationEnabled === true && selectedModelHasConfiguration;
       // A selected row can be the effective fallback for a stale explicit
       // provider.  Repair that route before opening its configuration, but do
       // not persist the row's derived/default effort just by opening the card.
@@ -3106,7 +3106,7 @@ function ModelSelectorContentView({
     !editingIsActive && !!modelMemory && !!currentAgentKind && !!editingProviderId;
   const canConfigure =
     !interactionDisabled &&
-    configurationEnabled &&
+    configurationEnabled === true &&
     !!editingModel &&
     (editingIsActive || inactiveProviderCanSelectEffort || inactiveProviderHasMemory);
   const editShowFast =
@@ -3464,8 +3464,8 @@ function ModelSelectorContentView({
     // 只选择模型 id 的入口没有 effort / Fast 语义；继续展示目录默认档会让用户
     // 误以为该值可在当前入口调整。选择事务仍由 handleRowSelect 独立解析 effort，
     // 此处只收窄可见摘要，不改变支持配置入口的行为。
-    const rowEffort = configurationEnabled ? rowEffortOf(providerId, model) : null;
-    const rowFastOn = configurationEnabled ? fastOnOf(providerId, model) : false;
+    const rowEffort = configurationEnabled === true ? rowEffortOf(providerId, model) : null;
+    const rowFastOn = configurationEnabled === true ? fastOnOf(providerId, model) : false;
     const rowPrice = pricePresentationOf(providerId, model.id);
     const rowPromotionLabel =
       rowPrice?.kind === 'free'
@@ -3891,7 +3891,10 @@ function ModelSelectorContentView({
     const withAgentDevice = remoteAgent ? { agentDevice: remoteBrowseDevice } : {};
     // 浏览的不是草稿当前落点的目录时,没有任何一行是「正在用的那一行」;归组的任务在组那一项里显示为正在用的。
     const panelSelection = browsingSelectionCatalog
-      ? { providerId: activeSourceId, modelId: shownModelId }
+      ? {
+          providerId: configurationEnabled === 'harness' ? (currentProviderId ?? null) : activeSourceId,
+          modelId: configurationEnabled === 'harness' ? modelId : shownModelId,
+        }
       : browsingBoundGroupEntry
         ? { providerId: boundEntry!.providerId, modelId }
         : { providerId: null, modelId: '' };
@@ -4195,7 +4198,8 @@ function ModelSelectorContentView({
             selectedFavoriteUid={browsingSelectionCatalog && !pluginModels?.active && !(effectiveModelGroupsActive && !activeSourceRoute && !modelGroups?.managedMeta) && !pluginEngines?.active
               ? selectedFavoriteUid : null}
             liveAgentKind={
-              unifiedSelectionPolicy === 'official' || !browsingLiveCatalog ? null : currentAgentKind
+              !browsingLiveCatalog || (unifiedSelectionPolicy === 'official' && configurationEnabled !== 'harness')
+                ? null : currentAgentKind
             }
             fastMode={unifiedSelectionPolicy === 'official' || !browsingLiveCatalog ? false : fastMode}
             selectedEffort={
@@ -6113,24 +6117,47 @@ export function ModelSelector({
   }
 
   return (
-    <Popover open={open || keepOpenForAgentSwitch} onOpenChange={handleOpenChange}>
+    <ModelSelectorPopover
+      open={open || keepOpenForAgentSwitch}
+      onOpenChange={handleOpenChange}
+      side={popoverSide}
+      width={isFieldTrigger ? fieldPanelWidth : undefined}
+      trigger={trigger}
+    >
+      {content}
+    </ModelSelectorPopover>
+  );
+}
+
+/** Shared popover for the picker, including settings rows that already have a display label. */
+export function ModelSelectorPopover({ open, onOpenChange, side, width, trigger, children }: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  side: ModelSelectorBaseProps['popoverSide'];
+  width?: ModelSelectorBaseProps['fieldPanelWidth'];
+  trigger: React.ReactElement;
+  children: React.ReactNode;
+}) {
+  const readable = width === 'readable';
+  return (
+    <Popover open={open} onOpenChange={onOpenChange}>
       <PopoverTrigger asChild>{trigger}</PopoverTrigger>
       <PopoverContent
-        side={popoverSide}
+        side={side}
         align="end"
         sideOffset={4}
-        collisionPadding={readableFieldPanel ? 12 : 8}
+        collisionPadding={readable ? 12 : 8}
         className={cn(
-          readableFieldPanel ? 'w-[max(var(--radix-popover-trigger-width),440px)] max-w-[calc(100vw-24px)]'
-            : fieldPanelFollowsTrigger ? 'w-[var(--radix-popover-trigger-width)]'
-            : isFieldTrigger ? 'w-auto min-w-[var(--radix-popover-trigger-width)]' : 'w-auto',
+          readable ? 'w-[max(var(--radix-popover-trigger-width),440px)] max-w-[calc(100vw-24px)]'
+            : width === 'trigger' ? 'w-[var(--radix-popover-trigger-width)]'
+            : width ? 'w-auto min-w-[var(--radix-popover-trigger-width)]' : 'w-auto',
           'flex min-h-0 max-h-[var(--radix-popover-content-available-height)] flex-col overflow-hidden rounded-xl p-0',
           'bg-[var(--model-dropdown-bg)]',
           'border border-[var(--model-dropdown-border)]',
         )}
       >
-        <ProviderShareQuotaViewingContext.Provider value={open || keepOpenForAgentSwitch}>
-          {content}
+        <ProviderShareQuotaViewingContext.Provider value={open}>
+          {children}
         </ProviderShareQuotaViewingContext.Provider>
       </PopoverContent>
     </Popover>

@@ -4,11 +4,13 @@
  * 产品规则见 docs/product-rules/model-groups.md。
  */
 import { Activity, lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react';
-import { ArrowDown, ArrowUp, Plus, Sparkles, X } from 'lucide-react';
+import { ArrowDown, ArrowUp, ChevronDown, Plus, Sparkles, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { PluginEngineIcon } from '@/components/icons/PluginEngineIcon';
-import { ModelSelector, ProviderMark } from '@/components/new-chat/ModelSelector';
+import {
+  ModelSelector, ModelSelectorContent, ModelSelectorPopover, ProviderMark, type ModelSelectorProps,
+} from '@/components/new-chat/ModelSelector';
 import { Button } from '@/components/ui/button';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { Select } from '@/components/ui/select';
@@ -47,6 +49,7 @@ import {
   type ModelGroupsConfig,
   type ModelGroupStrategy,
 } from '../../../shared/modelGroups';
+import { modelGroupHarnessLabel } from '../../../shared/modelGroupRouteNoteText';
 import { ModelGroupRouteExceptions } from './ModelGroupRouteExceptions';
 import { ModelGroupRoutePreview } from './ModelGroupRoutePreview';
 import {
@@ -77,6 +80,58 @@ const RemoteBuddyModelsPage = lazy(() => import('./RemoteBuddyModelsPage').then(
 
 /** 路由列表里两种路由各自的小标题：与模型供应商页左栏的分组标题同一档字。 */
 const ROUTE_KIND_LABEL = 'px-1 text-12 font-medium leading-[1.33] text-[var(--text-tertiary)]';
+
+function CandidateModelEditor({ candidate, names, devices, onSelect }: {
+  candidate: ModelGroupCandidate & { agentKind: NonNullable<ModelSelectorProps['vendorKey']> };
+  names: ReturnType<ReturnType<typeof useModelGroupCandidateNames>>;
+  devices: NonNullable<ModelSelectorProps['remoteAgent']>['devices'] | undefined;
+  onSelect: NonNullable<ModelSelectorProps['onUnifiedSelect']>;
+}) {
+  const { t } = useTranslation();
+  const [open, setOpen] = useState(false);
+  return (
+    <ModelSelectorPopover
+      open={open}
+      onOpenChange={setOpen}
+      side="bottom"
+      trigger={(
+        <Button
+          variant="secondary"
+          size="md"
+          tone="quiet"
+          className="max-w-full justify-start"
+          aria-label={`${t('modelGroups.settings.editSource')}: ${names.modelName}`}
+          title={names.modelName}
+          data-setting-id={modelGroupsSettings.routes.id}
+        >
+          <ProviderMark providerId={candidate.providerId} name={names.provider?.name}
+            routing={names.provider?.routing} logoKind={names.provider?.logoKind} customIcon={names.provider?.customIcon}
+            colorClass="text-[var(--text-primary)]" withMargin={false} />
+          <span className="min-w-0 truncate">{names.modelName}</span>
+          <ChevronDown size={12} aria-hidden className="shrink-0" />
+        </Button>
+      )}
+    >
+      {open && (
+        <ModelSelectorContent
+          remoteAgent={(devices || candidate.agentDeviceId)
+            ? { devices: devices ?? [], selectedDeviceId: candidate.agentDeviceId ?? null }
+            : undefined}
+          vendorKey={candidate.agentKind}
+          modelId={candidate.model}
+          currentProviderId={candidate.providerId}
+          effort=""
+          onModelChange={() => false}
+          onEffortChange={() => undefined}
+          configurationEnabled="harness"
+          unifiedSelectionPolicy="official"
+          onDismiss={() => setOpen(false)}
+          onUnifiedSelect={onSelect}
+        />
+      )}
+    </ModelSelectorPopover>
+  );
+}
 
 /** Time exceptions can only target a model route. Include the stored overrides of auto routes,
  * even if the supplier is currently disconnected and the route is not shown. */
@@ -348,6 +403,41 @@ export function ModelGroupsSection({ scrollRef, focusProvider }: {
         return next ? [next] : [];
       }),
     }));
+    const selectCandidate = (key?: string): NonNullable<ModelSelectorProps['onUnifiedSelect']> =>
+      async ({ engine, providerId, modelId, agentDevice }) => {
+        const selected: ModelGroupCandidate = {
+          agentKind: engine, providerId, model: modelId,
+          ...(agentDevice ? { agentDeviceId: agentDevice.deviceId } : {}),
+        };
+        const selectedKey = modelGroupCandidateKey(selected);
+        const outcome: { value: 'applied' | 'duplicate' | 'unavailable' } = { value: 'unavailable' };
+        const ok = await save((latest) => {
+          const index = latest.routes.findIndex((item) => item.id === route.id);
+          const current = latest.routes[index];
+          if (!current) return latest;
+          const previous = key === undefined ? undefined
+            : current.candidates.find((candidate) => modelGroupCandidateKey(candidate) === key);
+          if (key !== undefined && !previous) return latest;
+          if (key === selectedKey) {
+            outcome.value = 'applied';
+            return latest;
+          }
+          if (current.candidates.some((item) => modelGroupCandidateKey(item) === selectedKey)) {
+            outcome.value = 'duplicate';
+            return latest;
+          }
+          if (key === undefined && current.candidates.length >= MODEL_GROUP_LIMITS.candidates) return latest;
+          const candidates = previous
+            ? current.candidates.map((item) => item === previous
+              ? { ...selected, ...(item.off ? { off: item.off } : {}), ...(item.weight !== undefined ? { weight: item.weight } : {}) }
+              : item)
+            : [...current.candidates, selected];
+          outcome.value = 'applied';
+          return { ...latest, routes: latest.routes.map((item, i) => i === index ? { ...item, candidates } : item) };
+        });
+        if (ok && outcome.value === 'duplicate') toast.error(t('modelGroups.settings.duplicateSource'));
+        return ok && outcome.value === 'applied';
+      };
     const removeRoute = async () => {
       if (!await confirm({
         title: t('modelGroups.settings.deleteRouteConfirmTitle', { name: route.name }),
@@ -442,7 +532,8 @@ export function ModelGroupsSection({ scrollRef, focusProvider }: {
               <SettingsCard>
                 {route.candidates.map((candidate, index) => {
                   const names = namesOf(candidate);
-                  const label = `${names.modelName} · ${names.sourceLabel}`;
+                  const sourceLabel = [names.sourceLabel, modelGroupHarnessLabel(candidate.agentKind)].filter(Boolean).join(' · ');
+                  const label = `${names.modelName} · ${sourceLabel}`;
                   const key = modelGroupCandidateKey(candidate);
                   return (
                     <SettingsRow
@@ -452,19 +543,19 @@ export function ModelGroupsSection({ scrollRef, focusProvider }: {
                       lead={
                         <span className="flex items-center gap-3">
                           <span className="w-4 text-center text-12 tabular-nums leading-[1.33] text-[var(--text-tertiary)]">{index + 1}</span>
-                          <SettingsRowIcon>
-                            {candidate.agentKind === 'acp' ? (
-                              <PluginEngineIcon iconDataUrl={names.pluginEngine?.iconDataUrl} size={16} />
-                            ) : (
-                              <ProviderMark providerId={candidate.providerId} name={names.provider?.name} routing={names.provider?.routing} logoKind={names.provider?.logoKind} customIcon={names.provider?.customIcon}
-                                colorClass="text-[var(--text-primary)]" withMargin={false} />
-                            )}
-                          </SettingsRowIcon>
+                          {candidate.agentKind === 'acp' && (
+                            <SettingsRowIcon><PluginEngineIcon iconDataUrl={names.pluginEngine?.iconDataUrl} size={16} /></SettingsRowIcon>
+                          )}
                         </span>
                       }
-                      title={names.modelName}
+                      title={candidate.agentKind === 'acp' ? names.modelName : <CandidateModelEditor
+                        candidate={{ ...candidate, agentKind: candidate.agentKind }}
+                        names={names}
+                        devices={routeDevices.devices}
+                        onSelect={selectCandidate(key)}
+                      />}
                       tag={names.connected ? undefined : t('modelGroups.settings.notConnected')}
-                      hint={names.sourceLabel}
+                      hint={sourceLabel}
                       className={cn(candidate.off && '[&>span:nth-child(-n+2)]:opacity-60')}
                       trailing={
                         <span className="flex shrink-0 items-center gap-1">
@@ -540,20 +631,14 @@ export function ModelGroupsSection({ scrollRef, focusProvider }: {
                         effort=""
                         onModelChange={() => false}
                         onEffortChange={() => undefined}
-                        configurationEnabled={false}
+                        configurationEnabled="harness"
+                        unifiedSelectionPolicy="official"
                         triggerVariant="field"
                         fieldPanelWidth="content"
                         popoverSide="bottom"
                         ariaContext={t('modelGroups.settings.addSource')}
                         fallbackOption={{ active: true, label: t('modelGroups.settings.chooseModel'), onSelect: () => undefined }}
-                        onUnifiedSelect={({ engine, providerId, modelId, agentDevice }) => {
-                          const added: ModelGroupCandidate = {
-                            agentKind: engine, providerId, model: modelId,
-                            ...(agentDevice ? { agentDeviceId: agentDevice.deviceId } : {}),
-                          };
-                          if (route.candidates.some((item) => modelGroupCandidateKey(item) === modelGroupCandidateKey(added))) return true;
-                          return updateRoute(route.id, (current) => ({ ...current, candidates: [...current.candidates, added] }));
-                        }}
+                        onUnifiedSelect={selectCandidate()}
                       />
                     </div>
                   }

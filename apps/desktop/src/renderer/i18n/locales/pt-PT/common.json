@@ -3222,7 +3222,8 @@
           "gatewayKey": "Requer que o seu gateway de IA suporte esta rota ASR em tempo real",
           "codexLogin": "Usa a sua sessão do Codex",
           "elevenlabsKey": "Usa a sua chave ElevenLabs (variável de ambiente)",
-          "codexRealtimeUnsupported": "Indisponível: a sessão do Codex não é uma credencial OpenAI API Realtime"
+          "codexRealtimeUnsupported": "Indisponível: a sessão do Codex não é uma credencial OpenAI API Realtime",
+          "localOffline": "Executa offline neste dispositivo (sem conta nem chave de API)"
         },
         "credentialError": {
           "gatewayMissing": "Não foi encontrada nenhuma chave do gateway de IA; este modelo está indisponível.",
@@ -3230,10 +3231,24 @@
           "elevenlabsMissing": "Não foi configurada nenhuma chave ElevenLabs (variável de ambiente); este modelo está indisponível.",
           "customAsrConfigMissing": "Preencha e guarde as definições do serviço ASR em tempo real antes de iniciar a entrada de voz.",
           "customAsrKeyMissing": "Adicione e guarde uma chave de API para o serviço ASR em tempo real personalizado.",
-          "codexRealtimeUnsupported": "A sessão do Codex não pode ser usada para reconhecimento de voz em tempo real. Escolha um serviço ASR suportado."
+          "codexRealtimeUnsupported": "A sessão do Codex não pode ser usada para reconhecimento de voz em tempo real. Escolha um serviço ASR suportado.",
+          "localAsrModelMissing": "Selecione uma pasta de modelo ASR sherpa-onnx local antes de iniciar a entrada de voz offline.",
+          "localAsrUnsupported": "O reconhecimento de voz offline local não é compatível com esta arquitetura."
         },
         "manageProviders": "Abrir fornecedores de modelos",
-        "reset": "Repor predefinição"
+        "reset": "Repor predefinição",
+        "localAsr": {
+          "optionLabel": "Reconhecimento local offline (sherpa-onnx)",
+          "optionDescription": "Reconhecimento ONNX no dispositivo; funciona totalmente offline sem conta nem chave de API",
+          "notice": "Escolha uma pasta local de modelo sherpa-onnx (SenseVoice, Paraformer, Whisper ou Transducer com tokens.txt e ficheiros .onnx). O áudio permanece neste computador.",
+          "modelDirLabel": "Pasta do modelo local",
+          "readyStatus": "Pronto · {{kind}} ({{folder}})",
+          "unsupportedStatus": "Não compatível nesta plataforma",
+          "notConfiguredStatus": "Nenhuma pasta de modelo selecionada",
+          "clearFolder": "Limpar",
+          "chooseFolder": "Escolher pasta do modelo",
+          "invalidFolder": "Esta pasta não contém um modelo sherpa-onnx compatível (tokens.txt e ficheiros .onnx)."
+        }
       },
       "historyToggle": {
         "show": "Mostrar histórico recente",
@@ -3381,7 +3396,9 @@
           "filters": {
             "all": "Todas",
             "automatic": "Automática",
-            "manual": "Manual"
+            "manual": "Manual",
+            "candidates": "Candidatos",
+            "suppressed": "Suprimidos"
           },
           "sources": {
             "automatic": "Automática",
@@ -3394,6 +3411,28 @@
             "automaticAddedMultiple": "{{count}} termos adicionados automaticamente, incluindo {{term}}",
             "delete": "Eliminar",
             "deleteAriaLabel": "Eliminar termo adicionado automaticamente: {{term}}"
+          },
+          "export": {
+            "csv": "Exportar CSV",
+            "json": "Exportar JSON",
+            "successCsv": "Dicionário exportado em CSV",
+            "successJson": "Dicionário exportado em JSON"
+          },
+          "candidates": {
+            "hint": "Termos observados nas suas correções manuais ainda não promovidos automaticamente. Promova agora ou remova.",
+            "evidenceCount": "Observado {{count}}×",
+            "promote": "Promover",
+            "promoteTooltip": "Promover este candidato ao dicionário agora",
+            "promotedToast": "“{{term}}” promovido ao dicionário",
+            "empty": "Ainda não há termos candidatos."
+          },
+          "suppressed": {
+            "hint": "Termos automáticos eliminados ficam suprimidos para não voltarem sozinhos. Restaure a aprendizagem ou adicione novamente.",
+            "restore": "Permitir aprendizagem",
+            "addToDictionary": "Adicionar novamente",
+            "restoredToast": "Aprendizagem automática restaurada para “{{term}}”",
+            "addedToast": "“{{term}}” adicionado novamente ao dicionário",
+            "empty": "Nenhum termo suprimido."
           }
         }
       },
@@ -3438,7 +3477,15 @@
         "toast": {
           "copied": "Copiado",
           "copyFailed": "Falha ao copiar"
-        }
+        },
+        "searchAriaLabel": "Pesquisar histórico de voz",
+        "searchPlaceholder": "Pesquisar transcrições ou texto bruto…",
+        "showRawComparison": "Comparar bruto e refinado",
+        "hideRawComparison": "Ocultar comparação",
+        "rawLabel": "Reconhecimento bruto",
+        "refinedLabel": "Refinado",
+        "loadMore": "Carregar mais ({{count}} restantes)",
+        "noSearchResults": "Nenhuma transcrição correspondente."
       },
       "speakerFilter": {
         "label": "Reconhecer a minha voz",
@@ -15578,7 +15625,11 @@
           "description": "Permita o acesso ao microfone e clique novamente na introdução por voz.",
           "confirm": "Conceder permissão",
           "cancel": "Cancelar"
-        }
+        },
+        "rewriteSelected": "Reescrever por voz",
+        "rewriteSelectedTooltip": "Fale uma instrução para reescrever o texto selecionado (o original é preservado em caso de falha)",
+        "rewriteSelectedAria": "Reescrever texto selecionado por voz",
+        "rewriteFailed": "A reescrita por voz não foi concluída; o texto selecionado foi mantido intacto."
       },
       "remoteSwitchFailed": "Falha ao alterar a definição remota; alteração não aplicada",
       "switchFailed": "Falha ao alterar a definição; alteração não aplicada",
@@ -23925,10 +23976,10 @@
   },
   "openAiAccountGroup": {
     "removeDescription": "Esta ligação deixará de receber novas tarefas do grupo. As tarefas em execução permanecerão nesta ligação.",
-    "mergeDescription": "As novas tarefas iniciadas em {{target}} podem usar os dois fornecedores. As sessões iniciadas, chaves e tarefas existentes mantêm-se. A Cindy testará a chave de API de {{apiKey}} antes de ligar os fornecedores.",
+    "mergeDescription": "As novas tarefas iniciadas em {{target}} serão atribuídas aos membros disponíveis. As sessões iniciadas, chaves e tarefas existentes mantêm-se. A Cindy testará a chave de API de {{apiKey}}. Um saldo insuficiente ou um limite de faturação não impedem a sua inclusão, mas não receberá atribuições automáticas até voltar a estar disponível.",
     "modelUnavailable": "Esta ligação não pode usar o modelo escolhido para o teste. Um novo teste pode experimentar outro modelo.",
     "noTestModel": "Nenhum modelo configurado está disponível para teste. Verifique os modelos permitidos no seu projeto da OpenAI e atualize ou edite a lista de modelos desta ligação.",
-    "billingPaused": "Atribuição em pausa por saldo insuficiente ou limite de faturação.",
+    "billingPaused": "Atribuição automática em pausa por saldo insuficiente ou limite de faturação.",
     "title": "Grupo de contas",
     "testPassed": "Teste concluído com sucesso",
     "refresh": "Atualizar quota"
@@ -24215,6 +24266,8 @@
       "sourcesFull": "Uma rota aceita até {{count}} fontes.",
       "addSource": "Adicionar rota de modelos",
       "chooseModel": "Escolher um modelo",
+      "editSource": "Editar origem",
+      "duplicateSource": "Esta rota já contém esta combinação de origem, modelo e motor.",
       "notConnected": "Sem ligação",
       "moveUp": "Mover para cima",
       "moveDown": "Mover para baixo",

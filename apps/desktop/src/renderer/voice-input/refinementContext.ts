@@ -24,10 +24,14 @@ export type VoiceInputChatMessage = {
   isStreaming?: boolean;
 };
 
-export function buildEditorSelectionContext(doc: PMNode, range: { from: number; to: number }) {
+export function selectedTextForVoiceContext(text: string, mode: 'dictation' | 'rewrite'): string {
+  return mode === 'rewrite' ? text.replace(/\r\n?/g, '\n') : takeRefinementContextHead(text);
+}
+
+export function buildEditorSelectionContext(doc: PMNode, range: { from: number; to: number }, mode: 'dictation' | 'rewrite' = 'dictation') {
   return {
     selectionBefore: takeRefinementContextTail(doc.textBetween(0, range.from, '\n', '\n')),
-    selectedText: takeRefinementContextHead(doc.textBetween(range.from, range.to, '\n', '\n')),
+    selectedText: selectedTextForVoiceContext(doc.textBetween(range.from, range.to, '\n', '\n'), mode),
     selectionAfter: takeRefinementContextHead(doc.textBetween(range.to, doc.content.size, '\n', '\n')),
   };
 }
