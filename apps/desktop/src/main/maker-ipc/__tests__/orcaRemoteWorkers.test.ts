@@ -660,6 +660,34 @@ describe('wrapTeamDeps', () => {
     return { ...ctx, service, deps, getWorker: () => worker };
   }
 
+  // #13619 (unit): a durable user row may exist while the engine's pre-dispatch hooks still run.
+  it.each(['queued', 'persisted', 'different-turn', 'started'] as const)(
+    'reports a newly created remote Worker task at the %s boundary', async boundary => {
+      const h = await trackedTeam({ handle: (_device, channel, args) => {
+        if (channel !== 'maker:input:get-projection') return undefined;
+        const [clientId] = (args[1] as { deliveryClientIds: string[] }).deliveryClientIds;
+        return ok({
+          deliveryReceipts: [{ clientId, state: boundary === 'queued' ? 'pending' : 'accepted' }],
+          ...(boundary === 'started' || boundary === 'different-turn'
+            ? { dispatchedInput: { clientId: boundary === 'started' ? clientId : 'unrelated', agentKind: 'pi' } }
+            : {}),
+        });
+      } });
+      try {
+        const result = await h.service.dispatchWorkerTask({
+          targetSessionId: 'proxy-1', message: 'initial assignment',
+          dispatchMeta: { source: 'test', context: 'create_worker/proxy-1/initial_task' },
+        });
+        expect(result).toMatchObject(boundary === 'started'
+          ? { dispatched: true, agentKind: 'pi' }
+          : { dispatched: false, queued: true, queuedMessageId: expect.any(String) });
+        expect(h.remoteInvoke.mock.calls.filter(([, channel]) => channel === 'maker:input:enqueue')).toHaveLength(1);
+      } finally {
+        h.workers.stop();
+      }
+    },
+  );
+
   // #11042 / PR #11060: unit, real TeamService + remote adapter. Existing report
   // tests never acknowledged done. A foreground-idle remote has no background
   // signal, so automatic acknowledgement must preserve done. Explicit idle and

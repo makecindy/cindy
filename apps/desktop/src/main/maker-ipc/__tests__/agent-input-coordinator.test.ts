@@ -3896,12 +3896,15 @@ describe('AgentInputCoordinator send transaction', () => {
     expect(h.coordinator.getActiveInputClientId(sid)).toBeNull();
     h.sendToAgent.mockImplementationOnce(async () => {
       expect(h.coordinator.getActiveInputClientId(sid)).toBe('bot-dm:thread:delivery');
+      expect(h.coordinator.getDispatchedInput(sid, ['bot-dm:thread:delivery'])).toBeUndefined();
       h.setRunning(true);
       return sendSuccess();
     });
     h.coordinator.enqueue(sid, makeItem('bot-dm:thread:delivery', 'private message'));
     await flush();
     expect(h.coordinator.getActiveInputClientId(sid)).toBe('bot-dm:thread:delivery');
+    expect(h.coordinator.getDispatchedInput(sid, ['other'])).toBeUndefined();
+    expect(h.coordinator.getDispatchedInput(sid, ['bot-dm:thread:delivery'])).toEqual({ clientId: 'bot-dm:thread:delivery', agentKind: 'claude-code' });
     h.setRunning(false);
     h.coordinator.onTurnEvent(sid, 'done');
     await flush();

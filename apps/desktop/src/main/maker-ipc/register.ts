@@ -22510,7 +22510,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     return {
       ...inputCoordinator.getProjection(sid),
       inputDeliveryVersion: 1,
-      ...(deliveryReceipts ? { deliveryReceipts } : {}),
+      ...(deliveryClientIds ? { deliveryReceipts, dispatchedInput: inputCoordinator.getDispatchedInput(sid, deliveryClientIds) } : {}),
     };
   });
 
