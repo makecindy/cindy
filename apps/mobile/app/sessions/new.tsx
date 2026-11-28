@@ -66,6 +66,8 @@ import { needsHostCreation, type DurableOutboxRecord } from '@/session/durableOu
 import { stripTrailingPathSeparators } from '@cindy/maker-shared/path-text';
 import { workspacePathsEqual } from '@/session/workspaceSelection';
 import { isSharedTaskPeer } from '@cindy/device-link';
+import { useRevokedDevices } from '@/device-link/revokedDevicesStore';
+import { useUnresponsiveDevices } from '@/device-link/unresponsiveDevicesStore';
 import { takeRefinementContextTail } from '@cindy/voice-input-core';
 import { Stack, useIsFocused, useLocalSearchParams, useNavigation, useRouter } from 'expo-router';
 import { NewTaskSelectionSheet } from '@/session/NewTaskSelectionSheet';
@@ -261,6 +263,7 @@ import {
   resolvePermissionModeForNewSessionAgent,
   buildRemoteCreateSessionOptions,
   buildRecentWorkspaceOptions,
+  buildWorkspacePickerOptions,
   filterRemoteDirectoryEntries,
   isCurrentRemoteBrowseRequest,
   isNewSessionRuntimePending,
@@ -291,6 +294,7 @@ import { newSessionText } from '@/session/newSessionMessages';
 import { i18n } from '@/i18n';
 import {
   getMobileAuthOwner,
+  isMobileAuthOwnerCurrent,
   subscribeMobileAuthOwner,
 } from '@/auth/authOwnerGeneration';
 import { useTranslation } from 'react-i18next';
@@ -605,6 +609,7 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
     status: deviceLinkStatus,
     connectionEpoch,
     presenceVersion,
+    recoveringDeviceIds,
   } = useDeviceLink();
   const deviceLinkStatusRef = useRef(deviceLinkStatus);
   deviceLinkStatusRef.current = deviceLinkStatus;
@@ -1098,6 +1103,46 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
   const incomingShareReceivedRef = useRef(false);
   markNewSessionIncomingShare(incomingShareBatch, incomingShareReceivedRef);
   const isShareTargetFocused = useIsFocused();
+  const revokedDevices = useRevokedDevices();
+  const unresponsiveDevices = useUnresponsiveDevices();
+  const canLoadRegisteredProjects = nativeSelectionSheet && workspacePickerOpen && !browseOpen
+    && isShareTargetFocused && deviceLinkStatus === 'online'
+    && !!selectedDeviceId && !isSharedTaskPeer(selectedDeviceId)
+    && !revokedDevices.has(selectedDeviceId) && !unresponsiveDevices.has(selectedDeviceId)
+    && !recoveringDeviceIds.has(selectedDeviceId) && getPresenceAvailability(selectedDeviceId) !== false
+    && !!outboxOwner.accountId;
+  const projectRead = useMemo(
+    () => canLoadRegisteredProjects ? { deviceId: selectedDeviceId, owner: outboxOwner } : null,
+    [canLoadRegisteredProjects, selectedDeviceId, outboxOwner, connectionEpoch],
+  );
+  const projectReadRef = useRef(projectRead);
+  projectReadRef.current = projectRead;
+  const [registeredProjects, setRegisteredProjects] = useState<{ read: typeof projectRead; rows: unknown }>();
+  const workspaceRefreshing = !!projectRead && registeredProjects?.read !== projectRead;
+  useEffect(() => {
+    if (!projectRead) return;
+    let disposed = false;
+    const isCurrent = () => !disposed && projectReadRef.current === projectRead
+      && isMobileAuthOwnerCurrent(projectRead.owner);
+    const settle = (rows: unknown) => {
+      if (isCurrent()) setRegisteredProjects({ read: projectRead, rows });
+    };
+    void invoke(projectRead.deviceId, 'local-db:recent-workdirs:list', [], {
+      background: true,
+      noResultCache: true,
+      preSend: () => { if (!isCurrent()) throw new Error('PROJECT_PICKER_CLOSED'); },
+    }).then(settle, () => settle(undefined));
+    return () => { disposed = true; };
+  }, [invoke, projectRead]);
+  const workspacePickerOptions = useMemo(
+    () => buildWorkspacePickerOptions(
+      recentWorkspaces,
+      projectRead && registeredProjects?.read === projectRead ? registeredProjects.rows : undefined,
+      selectedDeviceId,
+      projectAliases,
+    ),
+    [recentWorkspaces, projectRead, registeredProjects, selectedDeviceId, projectAliases],
+  );
   useAutoResumeNewSessionDraft({
     enabled: !(params.recoverySessionId || params.editSessionId || params.draft || params.suggestion
       || visualInitialDraft || !newSessionPreferencesLoaded),
@@ -6608,7 +6653,8 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
         busy={creating || voiceIsProcessing}
         devices={deviceOptions}
         selectedDeviceId={selectedDeviceId}
-        workspaces={recentWorkspaces}
+        workspaces={workspacePickerOptions}
+        workspaceRefreshing={workspaceRefreshing}
         workspaceKind={draft.workspaceKind}
         workingDir={draft.workingDir}
         path={browsePath}

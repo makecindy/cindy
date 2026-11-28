@@ -52,7 +52,7 @@ export function NewTaskSelectionSheet(p: NewTaskSelectionSheetProps) {
           selected={device.deviceId === p.selectedDeviceId} disabled={p.busy}
           onPress={() => p.onDevice(device.deviceId)} testID="newSession.deviceOption" />)}
       </Section> : p.page === 'workspace' ? <>
-        {p.workspaceLoading ? <Section><ProgressView /></Section> : null}
+        {p.workspaceLoading || p.workspaceRefreshing ? <Section><ProgressView /></Section> : null}
         {displayError ? <Section><NativeErrorNotice message={displayError} /></Section> : null}
         <Section>
           <ComposerNativeRow title={t('session.new.workspaceDialogue')} leading={icon('bubble.left')}

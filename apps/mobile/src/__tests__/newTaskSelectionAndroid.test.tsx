@@ -254,6 +254,16 @@ it.each([false, true])("separates directory reads from workspace loading (%s)", 
   expect(props.onBrowse).toHaveBeenCalledTimes(workspaceLoading ? 0 : 1);
 });
 
+// #13362 / unit: the registry can be pending while task-derived choices are ready.
+it("shows a workspace refresh without blocking recent project selection", () => {
+  render({ page: "workspace", workspaceRefreshing: true });
+  expect(container.textContent).toContain("loading");
+  click("workspaceProjectOption");
+  expect(props.onProject).toHaveBeenCalledExactlyOnceWith("D:/project");
+  render({ workspaceRefreshing: false });
+  expect(container.textContent).not.toContain("loading");
+});
+
 // A blocked drag has already collapsed SheetSurface before it calls onClose.
 it("restores the surface after a busy drag-dismiss and retains the failure retry", () => {
   render({ page: "directory", busy: true });
