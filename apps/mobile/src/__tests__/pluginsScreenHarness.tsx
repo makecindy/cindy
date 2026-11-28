@@ -134,18 +134,7 @@ vi.mock("react-native", async () => {
   const React = await import("react");
   const view = ({ children, testID }: any) =>
     React.createElement("div", { "data-testid": testID }, children);
-  // The confirmation sheet's measured views report one layout when they mount, as on a device: a list tall enough for
-  // the whole identity block, its content height, the buttons, and (AppText below) the summary's heading and items. Its Allow answers only
-  // once every size has arrived (pluginNativeViews covers the cases before that).
-  const LAID_OUT: Record<string, number> = { "plugins.management.list": 2000, "plugins.management.identity": 100, "plugins.management.actions": 44 };
-  const laidOutView = (p: any) => {
-    React.useEffect(() => {
-      if (p.testID in LAID_OUT) p.onLayout?.({ nativeEvent: { layout: { height: LAID_OUT[p.testID] } } });
-      // The list's content height too (it is part of every size having arrived: maintainer review 03:06).
-      if (p.testID === "plugins.management.list") p.onContentSizeChange?.(390, 400);
-    }, []);
-    return view(p);
-  };
+
   return {
     AppState: { currentState: "active", addEventListener: (_event: string, listener: (state: string) => void) => {
       fixture.appStateListeners.add(listener); return { remove: () => fixture.appStateListeners.delete(listener) };
@@ -161,8 +150,8 @@ vi.mock("react-native", async () => {
       return React.createElement("button", { onClick: p.onPress, disabled: p.disabled, "data-testid": p.testID, "aria-pressed": selected }, p.children);
     },
     RefreshControl: view,
-    ScrollView: laidOutView,
-    View: laidOutView,
+    ScrollView: view,
+    View: view,
     Platform: {
       get OS() {
         return fixture.platform;
@@ -472,6 +461,16 @@ export async function approveOnPhone() {
 }
 export const marketPage = (items: any[]) => ({ items, unavailableReason: null, customSourceNames: [], unavailableCustomSourceNames: [],
   nextCursor: null, counts: null });
+/**
+ * Both confirmation sheets are review first (maintainer reviews 19:34, 08:37): press every sheet's "Review source and
+ * permissions" that can be pressed, as a person does before Allow (reviewing writes nothing).
+ */
+export async function reviewConsents() {
+  await act(async () => {
+    for (const button of element.querySelectorAll('[data-testid="plugins.management.review"]'))
+      if (!(button as HTMLButtonElement).disabled) (button as HTMLButtonElement).click();
+  });
+}
 export async function settle(rounds = 10) {
   for (let index = 0; index < rounds; index++) await act(async () => { await Promise.resolve(); });
 }

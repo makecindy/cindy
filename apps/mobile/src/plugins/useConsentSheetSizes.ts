@@ -1,13 +1,12 @@
 import { useReducer, useRef } from "react";
 import { emptyConsentSheetSizes, type ConsentSheetSizes } from "./pluginConsentPresentation";
 
-type SizeKey = "identity" | "heading" | "actions" | "visible" | "content";
+type SizeKey = "identity" | "heading" | "actions";
 /**
- * One consent's sheet sizes at one window size and text size (maintainer review 18:13). `layoutKey` names
- * them (`consentLayoutKey`): another consent, a rotation or another text size starts from nothing (the sheets also draw
+ * One consent's iOS sheet sizes at one window size and text size, for its layout only (maintainer review 18:13). `layoutKey` names
+ * them (`consentLayoutKey`): another consent, a rotation or another text size starts from nothing (the sheet also draws
  * their measured views anew for a new key, so every size is reported again), and a late report made under the previous
- * key is dropped. On Android `latest()` is read when Allow is pressed: a report lands in it at once, before the render it
- * schedules. On iOS these sizes only lay the sheet out (Allow follows the review step, maintainer review 19:34).
+ * key is dropped. No size lets Allow answer: both sheets are review first (maintainer reviews 19:34, 08:37).
  */
 export function useConsentSheetSizes(layoutKey: string | null) {
   const sizes = useRef<ConsentSheetSizes>(emptyConsentSheetSizes(layoutKey));
@@ -16,7 +15,6 @@ export function useConsentSheetSizes(layoutKey: string | null) {
   const owned = () => sizes.current.for === layoutKey;
   return {
     sizes: sizes.current,
-    latest: () => sizes.current,
     report: (key: SizeKey, height: number) => {
       const value = Math.ceil(height);
       if (!owned() || sizes.current[key] === value) return;

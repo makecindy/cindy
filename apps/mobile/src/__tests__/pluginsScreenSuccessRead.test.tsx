@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { fixture, root, element, row, openDetail, transportSend, marketWire, type MarketWireRequest, marketItem, demoConsent, demoGhost, approveOnPhone, marketPage, settle, openMarket, shownMarket, hostError, attributed, managementSnapshot, INSTALLED_REVISION } from "./pluginsScreenHarness";
+import { fixture, root, element, row, openDetail, transportSend, marketWire, type MarketWireRequest, marketItem, demoConsent, demoGhost, approveOnPhone, marketPage, settle, openMarket, shownMarket, hostError, attributed, managementSnapshot, INSTALLED_REVISION, reviewConsents } from "./pluginsScreenHarness";
 import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
 import { describe, expect, it, vi } from "vitest";
@@ -177,6 +177,7 @@ describe("market read fences and lost-receipt facts", () => {
         await act(async () => fixture.props.get("segment").onChange("market"));
         await settle(14);
         await click(`plugins.market.install.${pluginId}`);
+        await reviewConsents();
         await click("plugins.management.allow");
         await settle(14);
       }
@@ -394,6 +395,7 @@ describe("market read fences and lost-receipt facts", () => {
           expect({ proven: provenDemo(), writes: writes(requests) }).toEqual({ proven: true, writes: first });
           await click("plugins.checks.close");
           // The harness draws every consent sheet's content whether or not it is visible: the market's is the last one.
+          await reviewConsents();
           const allows = [...element.querySelectorAll('[data-testid="plugins.management.allow"]')] as HTMLButtonElement[];
           expect(allows.at(-1)!.disabled).toBe(false);
           await act(async () => allows.at(-1)!.click());
@@ -595,6 +597,7 @@ describe("market read fences and lost-receipt facts", () => {
           await settle(14);
           await click(`plugins.market.install.${notes.pluginId}`);
           world.hold = (label: string) => label.startsWith("installed-") ? hold.wait("second") : undefined;
+          await reviewConsents();
           const allows = [...element.querySelectorAll('[data-testid="plugins.management.allow"]')] as HTMLButtonElement[];
           await act(async () => allows.at(-1)!.click());
           await settle(14);
@@ -781,6 +784,7 @@ describe("market read fences and lost-receipt facts", () => {
           await installAndAllow(demo.pluginId);                              // Demo: done, could not be read
           world.hold = (label: string) => label.startsWith("installed-") && world.installed.has("notes") ? hold.wait("second") : undefined;
           await click(`plugins.market.install.${notes.pluginId}`);
+          await reviewConsents();
           const allows = [...element.querySelectorAll('[data-testid="plugins.management.allow"]')] as HTMLButtonElement[];
           await act(async () => allows.at(-1)!.click());
           await settle(14);                                                  // Notes: done, its read is out
@@ -860,6 +864,7 @@ describe("market read fences and lost-receipt facts", () => {
         await settle(14);
         await click(`plugins.market.row.${demo.pluginId}`);
         await click("plugins.market.detailInstall");
+        await reviewConsents();
         await click("plugins.management.allow");
         await settle(20);
         const detail = () => byId("plugins.market.detail")?.textContent ?? "";
@@ -899,6 +904,7 @@ describe("market read fences and lost-receipt facts", () => {
             args?.[0]?.actionId === "management:market-detail" && world.installed.has("demo")
               ? transportSend(options, async () => { if (slow) await new Promise(() => {}); throw timeout(); }) : original(device, channel, args, options));
           await click("plugins.market.detailInstall");
+          await reviewConsents();
           await click("plugins.management.allow");
           await settle(30);
           expect({ banner: banner(), told: told(), writes: writes(requests), install: !!byId("plugins.market.detailInstall"),
@@ -1039,6 +1045,7 @@ describe("market read fences and lost-receipt facts", () => {
           for (let index = 0; index < listed; index++) {
             if (index === listed - 1) armed = true;                                // the last success's read stays out
             await click(`plugins.market.install.${many[index].pluginId}`);
+            await reviewConsents();
             await click("plugins.management.allow");
           }
           const waiting = () => __retainedForTests.conclusions().filter((item: any) => item.result === "succeeded" && !item.told).length;
@@ -1269,6 +1276,7 @@ describe("market read fences and lost-receipt facts", () => {
           .toEqual({ written: [], consent: false, waits: [["confirmation", true]] });
         if (!byId("plugins.checks")) await click("plugins.slotHolder.show");
         await click("plugins.checks.decide");
+        await reviewConsents();
         await click("plugins.management.allow");                         // still the person's to answer: one answer
         expect(written()).toEqual(["answer:screen-operation"]);
       });
@@ -1361,6 +1369,7 @@ describe("market read fences and lost-receipt facts", () => {
         world.loseAnswer = true; world.answerInstallsNothing = true;
         world.operation = (operationId: string) => ({ ...consentFor(operationId, demo), consent: { ...consentFor(operationId, demo).consent, requestId: "consent-2" } });
         const before = writes(requests).length;
+        await reviewConsents();
         await click("plugins.management.allow");                             // the answer is written; its reply is lost
         expect(__retainedForTests.checks().map((check: any) => check.state.outcome)).toEqual(["unknown"]);
         fixture.online = false; await rerender(); fixture.online = true; await rerender();   // looked up again: a second consent

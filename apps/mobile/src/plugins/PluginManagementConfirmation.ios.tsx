@@ -39,7 +39,7 @@ export function PluginManagementConfirmation(
   const info = consent ? pluginConsentPresentation(consent, t, props.deviceName, props.controller.consentAllowance?.() ?? undefined) : undefined;
   const { height: windowHeight, width: windowWidth, fontScale } = useWindowDimensions();
   const insets = useSafeAreaInsets();
-  // Two layouts by one rule (`planConsentSheet`, the same as Android), from measured content heights only: regular,
+  // Two layouts by one rule (`planConsentSheet`; layout only, Android has the compact one only), from measured content heights: regular,
   // with the summary pinned in the footer above the buttons, when the identity block (title, computer, source,
   // repository, source notes) and the summary's heading with two items fit; compact otherwise, with the whole summary in
   // the scrolled list right after the identity block and only the buttons in the footer. The usable height is the
@@ -85,27 +85,27 @@ export function PluginManagementConfirmation(
     available: available(sizes.actions), identity: sizes.identity, heading: sizes.heading,
     lines: Array.from({ length: lineCount }, (_, index) => sizes.lines[index] ?? 0) /* 0 = not measured yet */, gap: spacing.xs,
   });
-  // iOS: review first, always (maintainer review 19:34). Allow answers only after an explicit "Review source and
-  // permissions" step for this consent, which puts the source and this consent's high-risk summary first, at the top of
-  // a new list. On Android the decision reads one layout pass (`onLayout`); here the native callbacks are separate events
-  // (each view's global frame, the list's scroll geometry on iOS 18 and later only), with nothing that ties a frame and an
-  // offset to the same layout pass, and a correction can come at any later time. Without a consistent sample the
+  // Review first, always (maintainer review 19:34; Android the same since 08:37). Allow answers only after an explicit
+  // "Review source and permissions" step for this consent, which puts the source and this consent's high-risk summary
+  // first, at the top of a new list. The native callbacks are separate events (each view's global frame, the list's
+  // scroll geometry on iOS 18 and later only), with nothing that ties a frame and an offset to the same layout pass, and
+  // a correction can come at any later time. Without a consistent sample the
   // measured layout cannot show the source was on screen, so it never lets Allow answer: from the first display, in
   // every orientation, text size and iOS version, the main button is "Review source and permissions".
   // Whether a press may answer is judged when it is pressed, from the sheet's current state (`useConsentAnswerGate`, the
   // same for both sheets: maintainer review 07:30), never from what the callback captured: Allow answers only for the
-  // consent reviewed, and a callback from before another consent or another layout answers nothing.
+  // consent reviewed, and a callback made for an earlier consent answers nothing.
   // Reviewed stays with the requestId: turning the phone or changing the text size afterwards keeps it reviewed (the
   // reviewed list is drawn anew for the new size, from its top: the source first); another consent starts again from the
   // review step.
   // Review and Allow are separate controls that never share a place (maintainer review 06:44, by layout alone): the
   // buttons are the same before and after the review step, in a footer at the bottom of a sheet whose height the step
-  // does not change. The bottom row is Reject and "Review source and permissions" (stacked: Review above Reject);
+  // does not change. The bottom row is Cancel and "Review source and permissions" (stacked: Review above Cancel);
   // "Allow and continue" is its own row above them (a centered button), unavailable until this consent is reviewed. Reviewed, the
   // review button stays where it was, unavailable, with the same label (so the same size), so a second tap there, however
-  // soon, does nothing; Reject never moves.
+  // soon, does nothing; Cancel never moves.
   const requestId = consent?.requestId ?? null;
-  const gate = useConsentAnswerGate({ requestId, mode: "review", layoutKey, allowBlocked: info?.allowBlocked === true });
+  const gate = useConsentAnswerGate({ requestId, allowBlocked: info?.allowBlocked === true });
   const [reviewedFor, setReviewedFor] = useState<string | null>(null);
   const reviewed = requestId !== null && reviewedFor === requestId;
   // Layout only: reviewed, the list is reordered (source and summary first, the whole summary in it); in landscape the
@@ -146,7 +146,7 @@ export function PluginManagementConfirmation(
             return;
           }
           // Allow: judged now, from the current state (this consent reviewed, never one that can only be rejected).
-          if (kind === "allow" && gate.allow() === "answer") answer(true);
+          if (kind === "allow" && gate.allow()) answer(true);
         }}
         modifiers={[
           buttonStyle(prominent ? "borderedProminent" : "bordered"),

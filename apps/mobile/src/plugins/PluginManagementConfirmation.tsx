@@ -16,13 +16,10 @@ import {
   usePluginConsent,
   type PluginManagementConfirmationProps,
 } from "./usePluginConsent";
-import { useEffect, useReducer, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ScrollFade, ScrollThumb, useScrollOverflow } from "@/components/ScrollOverflow";
-import { useConsentSheetSizes } from "./useConsentSheetSizes";
 import { useConsentAnswerGate } from "./consentAnswerGate";
-import { CONSENT_FADE_HEIGHT, CONSENT_SIDE_BY_SIDE_MIN_WIDTH, consentIdentityShown, consentLayoutKey, consentRegularConfirmed, consentSheetMeasured,
-  consentSummaryFadeAllowed, planConsentSheet,
-  pluginConsentPresentation } from "./pluginConsentPresentation";
+import { CONSENT_FADE_HEIGHT, CONSENT_SIDE_BY_SIDE_MIN_WIDTH, pluginConsentPresentation } from "./pluginConsentPresentation";
 export function PluginManagementConfirmation(
   props: PluginManagementConfirmationProps,
 ) {
@@ -30,142 +27,63 @@ export function PluginManagementConfirmation(
     styles = useThemedStyles(makeStyles), { colors } = useTheme();
   const { consent, visible, answer } = usePluginConsent(props);
   const info = consent ? pluginConsentPresentation(consent, t, props.deviceName, props.controller.consentAllowance?.() ?? undefined) : undefined;
-  const { height: windowHeight, width: windowWidth, fontScale } = useWindowDimensions();
-  // Two layouts by one rule (`planConsentSheet`, the same as iOS), from measured content heights only: regular, with the
-  // summary pinned above the buttons, when the identity block (titles, computer, source, repository, source notes) and
-  // the summary's heading with two items fit; compact otherwise, with everything in one scroll area above fixed buttons.
-  // A scroll area with more below shows a text-free fade over its lower edge, with the scrollbar always visible
-  // (dispatcher J-1, K-2): neither takes room, so neither can change the plan.
-  // Every size comes from this consent's own sheet at this window size and text size (maintainer review 18:13): another
-  // consent, a rotation or another text size starts from nothing (the sheet is drawn anew, see `key` below, so every size
-  // is reported again), and a late report made before is dropped.
-  const layoutKey = consentLayoutKey(consent?.requestId, { width: windowWidth, height: windowHeight, fontScale });
-  const layout = useConsentSheetSizes(layoutKey);
-  const sizes = layout.sizes;
-  // Laid out anew while this consent is open (dispatcher 2026-11-28, closing the rotation gap): once the window size or
-  // text size changes, or the list or the button area (their widths follow the window only: not the scroll thumb's room,
-  // which narrows the list's content) reports another width than it first did for this consent (the native relayout
-  // can arrive before the window size does), this consent is "review first" for as long as it is open
-  // (`moved`): the generation moves on at once and the regular Allow does not come back, so no reading from around the
-  // change can answer. A consent already reviewed stays reviewed.
-  const requestId = consent?.requestId ?? null;
-  const windowSize = `${windowWidth}x${windowHeight}@${fontScale}`;
-  const relaid = useRef<{ requestId: string | null; window: string; widths: Record<string, number>; moved: boolean }>({ requestId: null, window: windowSize, widths: {}, moved: false });
-  if (relaid.current.requestId !== requestId) relaid.current = { requestId, window: windowSize, widths: {}, moved: false };
-  else if (relaid.current.window !== windowSize) { relaid.current.window = windowSize; relaid.current.moved = true; }
-  const moved = relaid.current.moved;
-  const [, relayout] = useReducer((count: number) => count + 1, 0);
-  const noteWidth = (view: string, width: number | undefined) => {
-    const current = relaid.current;
-    if (width === undefined || width <= 0 || current.requestId !== requestId) return;
-    const first = current.widths[view];
-    if (first === undefined) { current.widths[view] = width; return; }
-    if (Math.abs(first - width) <= 0.5 || current.moved) return;
-    current.moved = true;
-    gate.leaveRegular();
-    relayout();
-  };
-  const measure = (key: "identity" | "heading" | "actions") => (event: { nativeEvent: { layout: { height: number; width?: number } } }) => {
-    if (key === "actions") noteWidth(key, event.nativeEvent.layout.width);
-    layout.report(key, event.nativeEvent.layout.height);
-  };
-  const measureLine = (index: number) => (event: { nativeEvent: { layout: { height: number } } }) =>
-    layout.reportLine(index, event.nativeEvent.layout.height);
-  const sheetPadding = spacing.lg + spacing.xs;
-  const lineCount = info?.highRisk?.lines.length ?? 0;
-  const available = (actions: number) => Math.floor(windowHeight * 0.85) - sheetPadding * 2 - spacing.md /* list bottom padding */
-    - (info?.highRisk ? spacing.md * 2 + spacing.xs : 0) /* summary padding, gap under its heading */ - actions;
-  const plan = planConsentSheet({
-    available: available(sizes.actions), identity: sizes.identity, heading: sizes.heading,
-    lines: Array.from({ length: lineCount }, (_, index) => sizes.lines[index] ?? 0) /* 0 = not measured yet */, gap: spacing.xs,
-  });
-  // Compact (maintainer review 16:35 #2, the same as iOS): Allow comes after an explicit "Review source and permissions"
-  // step, which shows the source and this consent's high-risk summary first (the list starts again at its top); the
-  // sheet stays compact once reviewed. Regular is unchanged.
-  const [reviewedFor, setReviewedFor] = useState<string | null>(null);
-  const reviewed = !!consent && reviewedFor === consent.requestId;
-  // Checked on the real layout (Android reshoot 2026-11-26, 1080×1600 at text size 2.0: the estimate above said the
-  // identity block fits, while the native bottom sheet caps its content at 85% of the window and this sheet takes 85% of
-  // that, so the list got far less than planned): when the regular list shows less than the whole identity block (where
-  // it installs, where it comes from) without scrolling, this consent goes compact. Kept for this consent at this window
-  // and text size, so the compact layout cannot flip it back.
-  const fitKey = layoutKey;
-  const [crampedFor, setCrampedFor] = useState<string | null>(null);
-  const cramped = fitKey !== null && crampedFor === fitKey;
-  const compact = plan.mode === "compact" || reviewed || cramped || moved;
-  // Compact: review and Allow are separate controls that never share a place (maintainer review 06:44, by layout alone,
-  // the same as iOS). The buttons are the same before and after the review step, at the bottom of a sheet of fixed
-  // height (its maximum, which a compact sheet fills anyway), so the step moves nothing: the bottom row is Reject and
-  // "Review source and permissions" (stacked: Review above Reject), "Allow and continue" its own row above them,
-  // unavailable until this consent is reviewed; reviewed, the review button stays where it was, unavailable, with the
-  // same label. Regular keeps Reject and Allow in one row; an Allow pressed before the layout confirms the regular
-  // layout turns the sheet compact, where that place becomes "Review" (a review, never an answer).
+  const { width: windowWidth, fontScale } = useWindowDimensions();
+  // Review first, always (maintainer review 08:37, the same as iOS): Allow answers only after an explicit "Review source
+  // and permissions" step for this consent, which puts the source and this consent's high-risk summary first, at the top
+  // of the list. No layout reading decides anything: the sizes React Native reports come in separate `onLayout` events,
+  // and nothing in JavaScript can show they belong to one native layout pass, so a sheet laid out "regular" (Allow at
+  // once when the source showed) could always be fooled by some order of those events. One layout: a single scroll area
+  // (the identity block, the whole high-risk summary, the full details) above fixed buttons.
+  // Buttons: review and Allow are separate controls that never share a place (maintainer review 06:44, by layout alone).
+  // The bottom row is Cancel and "Review source and permissions" (stacked: Review above Cancel); "Allow and continue" is
+  // its own row above them, unavailable until this consent is reviewed; reviewed, the review button stays where it was,
+  // unavailable, with the same label. They sit at the bottom edge of a sheet the review step does not resize.
   // Whether a press may answer is judged when it is pressed, from the sheet's current state (`useConsentAnswerGate`, the
-  // same for both sheets: maintainer review 07:30), never from what the callback captured: a regular Allow from before
-  // the sheet went compact (or before another consent or layout) answers nothing, even once the sizes would confirm it.
-  const gate = useConsentAnswerGate({ requestId, mode: compact ? "review" : "regular", layoutKey, allowBlocked: info?.allowBlocked === true });
-  const allowReadyCompact = reviewed && info?.allowBlocked !== true;
-  const list = useScrollOverflow(), summary = useScrollOverflow();
-  const measuredAll = consentSheetMeasured(sizes, lineCount);
-  useEffect(() => {
-    if (fitKey && !compact && measuredAll && !consentIdentityShown(sizes)) setCrampedFor(fitKey);
-    // Once compact for this consent at this window and text size, for whatever reason (the plan too), it stays compact:
-    // a later size report cannot turn the review button's place back into a regular Allow (maintainer review 06:44).
-    if (fitKey && plan.mode === "compact" && !cramped) setCrampedFor(fitKey);
-  }, [fitKey, compact, cramped, measuredAll, sizes, plan.mode]);
-  // Allow answers in the regular layout only once this consent's sizes have all arrived and confirm it (maintainer review
-  // 18:13: on first mount, or with only some sizes, the plan can say regular before it knows). Until then Allow looks the
-  // same but does not answer: pressed, the sheet goes compact (review first) instead. Read from the newest reports when
-  // pressed (a report lands there before the render it schedules); screen readers hear it unavailable until then.
-  const confirmedNow = () => consentRegularConfirmed(layout.latest(), { lineCount, available, gap: spacing.xs });
-  const allowReady = compact || consentRegularConfirmed(sizes, { lineCount, available, gap: spacing.xs });
+  // same for both sheets: maintainer review 07:30), never from what the callback captured.
+  const requestId = consent?.requestId ?? null;
+  const gate = useConsentAnswerGate({ requestId, allowBlocked: info?.allowBlocked === true });
+  const [reviewedFor, setReviewedFor] = useState<string | null>(null);
+  const reviewed = requestId !== null && reviewedFor === requestId;
+  const allowReady = reviewed && info?.allowBlocked !== true;
+  const list = useScrollOverflow();
   const listRef = useRef<ScrollViewInstance>(null);
   // Back to the list's top after "Review", and for each new consent (another requestId), so a second consent does not
   // open where the previous one was scrolled to (iOS: its new view id does the same).
-  useEffect(() => { listRef.current?.scrollTo({ y: 0, animated: false }); }, [reviewed, consent?.requestId]);
+  useEffect(() => { listRef.current?.scrollTo({ y: 0, animated: false }); }, [reviewed, requestId]);
   // Large text on a narrow screen: the buttons stack so each label shows in full (as the plugin notices do). Wide enough
   // (landscape, tablets) they stay side by side, labels wrapping inside them, so the text keeps more room (K-3).
   const stacked = fontScale > 1.2 && windowWidth < CONSENT_SIDE_BY_SIDE_MIN_WIDTH;
-  const heading = info?.highRisk ? (
-    // The heading wraps rather than truncates.
-    <Text testID="plugins.management.highRiskTitle" style={styles.highRiskTitle} onLayout={measure("heading")}>{info.highRisk.title}</Text>
+  const summary = info?.highRisk ? (
+    <View testID="plugins.management.highRisk" style={[styles.highRisk, styles.highRiskInline]}>
+      {/* The heading wraps rather than truncates. */}
+      <Text testID="plugins.management.highRiskTitle" style={styles.highRiskTitle}>{info.highRisk.title}</Text>
+      <View style={styles.highRiskLines}>
+        {info.highRisk.lines.map((line, index) => <Text key={index} style={styles.highRiskBody}>{line}</Text>)}
+      </View>
+    </View>
   ) : null;
-  const summaryLines = info?.highRisk?.lines.map((line, index) => (
-    <Text key={index} style={styles.highRiskBody} onLayout={measureLine(index)}>{line}</Text>
-  ));
   // Over the scroll area's lower edge while more is below: the sheet's own surface color (one token, so it follows light
   // and dark mode), with a scroll thumb in the `borderStrong` token that stays visible in both (dispatcher Q-1).
   const fade = (testID: string) => <ScrollFade testID={testID} color={colors.surfaceElevated} height={FADE_HEIGHT} />;
   const answerable = props.active && !props.state.busy && !props.state.answerHeld && props.state.online;
-  /** One answer control: `allow` (compact: its own row; regular: beside Reject), `review` / `reviewed` (one place), `reject`. */
+  /** One answer control: `allow` (its own row), `review` / `reviewed` (one place), `reject` (labelled Cancel). */
   const answerButton = (kind: "allow" | "review" | "reviewed" | "reject") => {
     const prominent = kind !== "reject";
-    const unavailable = !answerable || kind === "reviewed"
-      || (kind === "allow" && (info?.allowBlocked === true || (compact && !allowReadyCompact)));
+    const unavailable = !answerable || kind === "reviewed" || (kind === "allow" && !allowReady);
     return (
       <Pressable
         key={kind === "reviewed" ? "review" : kind}
         testID={"plugins.management." + kind}
         accessibilityRole="button"
         disabled={unavailable}
-        // Regular: screen readers hear Allow unavailable until the check shows the identity block (no visual change).
-        accessibilityState={{ disabled: unavailable || (kind === "allow" && !compact && !allowReady) }}
+        accessibilityState={{ disabled: unavailable }}
         onPress={() => {
           if (kind === "reject") { answer(false); return; }
-          if (kind === "review") {
-            if (gate.review()) setReviewedFor(requestId);
-            return;
-          }
-          if (kind !== "allow") return;
-          // Judged now, from the current state: compact answers only once reviewed; regular only with the current
-          // layout's measured sizes confirming it, otherwise the sheet leaves the regular layout at once (review first).
-          const verdict = gate.allow();
-          if (verdict === "answer") { answer(true); return; }
-          if (verdict !== "regular") return;
-          if (!confirmedNow()) { gate.leaveRegular(); if (fitKey) setCrampedFor(fitKey); return; }
-          answer(true);
+          if (kind === "review") { if (gate.review()) setReviewedFor(requestId); return; }
+          // Allow: judged now, from the current state (this consent reviewed, never one that can only be rejected).
+          if (kind === "allow" && gate.allow()) answer(true);
         }}
-        style={[styles.button, (stacked || (compact && kind === "allow")) && styles.stackedButton, prominent && styles.primary,
+        style={[styles.button, (stacked || kind === "allow") && styles.stackedButton, prominent && styles.primary,
           prominent && unavailable && styles.unavailable]}
       >
         <Text style={[styles.label, styles.buttonLabel, prominent && styles.primaryText]}>
@@ -181,20 +99,17 @@ export function PluginManagementConfirmation(
       onRequestClose={() => answer(false)}
       onBackdropPress={() => answer(false)}
     >
-      {/* Drawn anew for each consent, window size and text size (maintainer reviews 18:13, 18:20): both scroll areas
-          start at their top and every size is reported again; redrawing the same consent keeps where the person was
-          reading. */}
-      <View key={layoutKey ?? "none"} style={[styles.sheet, compact && styles.compactSheet]} testID="plugins.managementConfirmation">
-        <View testID="plugins.management.listArea" style={[styles.listArea, compact && styles.compactListArea]}>
+      {/* Drawn anew for each consent (maintainer review 18:20): the list starts at its top; redrawing the same consent
+          keeps where the person was reading. */}
+      <View key={requestId ?? "none"} style={styles.sheet} testID="plugins.managementConfirmation">
+        <View testID="plugins.management.listArea" style={styles.listArea}>
           <ScrollView ref={listRef} contentContainerStyle={[styles.content, list.thumbGutter]} testID="plugins.management.list" showsVerticalScrollIndicator={false}
             accessibilityHint={t("plugins.management.scrollHint")}
-            onLayout={(event) => { noteWidth("list", event.nativeEvent.layout.width); layout.report("visible", event.nativeEvent.layout.height); list.onLayout(event); }}
-            onContentSizeChange={(width, height) => { layout.report("content", height); list.onContentSizeChange(width, height); }}
+            onLayout={list.onLayout}
+            onContentSizeChange={list.onContentSizeChange}
             onScroll={list.onScroll}
             scrollEventThrottle={64}>
-            {/* The identity block: where it goes and where it comes from first, in primary text; the first thing shown
-                in either layout. The explanations follow in secondary text. */}
-            {/* Reviewed (compact): the source and this consent's high-risk summary come first, then the rest as before. */}
+            {/* Reviewed: the source and this consent's high-risk summary come first, then the rest as before. */}
             {reviewed ? (
               <View testID="plugins.management.reviewLead" style={styles.identity}>
                 {[info?.origin, info?.repository, info?.originSourceChanged, info?.sourceChanged, info?.trust].filter(Boolean).map((text, index) => (
@@ -202,13 +117,10 @@ export function PluginManagementConfirmation(
                 ))}
               </View>
             ) : null}
-            {reviewed && info?.highRisk ? (
-              <View testID="plugins.management.highRisk" style={[styles.highRisk, styles.highRiskInline]}>
-                {heading}
-                <View style={styles.highRiskLines}>{summaryLines}</View>
-              </View>
-            ) : null}
-            <View testID="plugins.management.identity" style={[styles.identity, reviewed && styles.reviewedIdentity]} onLayout={measure("identity")}>
+            {reviewed ? summary : null}
+            {/* The identity block: where it goes and where it comes from first, in primary text. The explanations follow
+                in secondary text. */}
+            <View testID="plugins.management.identity" style={[styles.identity, reviewed && styles.reviewedIdentity]}>
               <Text style={styles.title}>
                 {t("plugins.notice.title.confirmation")}
               </Text>
@@ -221,13 +133,8 @@ export function PluginManagementConfirmation(
                   </Text>
                 ))}
             </View>
-            {/* Compact: the whole summary right after the identity block, in the same scroll area. */}
-            {compact && !reviewed && info?.highRisk ? (
-              <View testID="plugins.management.highRisk" style={[styles.highRisk, styles.highRiskInline]}>
-                {heading}
-                <View style={styles.highRiskLines}>{summaryLines}</View>
-              </View>
-            ) : null}
+            {/* Not yet reviewed: the whole summary right after the identity block, in the same scroll area. */}
+            {reviewed ? null : summary}
             {[info?.sourceNotice, info?.version, info?.identity]
               .filter(Boolean)
               .map((text, index) => (
@@ -252,30 +159,11 @@ export function PluginManagementConfirmation(
           {list.more ? fade("plugins.management.listFade") : null}
           <ScrollThumb overflow={list} testID="plugins.management.listThumb" />
         </View>
-        {/* Regular: outside the scroll area, always visible above the buttons. */}
-        {!compact && info?.highRisk ? (
-          <View testID="plugins.management.highRisk" style={styles.highRisk}>
-            {heading}
-            <View>
-              {/* Scrolls inside its height; the bar stays visible and the fade shows while items are hidden below. */}
-              <ScrollView testID="plugins.management.highRiskScroll" nestedScrollEnabled showsVerticalScrollIndicator={false}
-                accessibilityHint={t("plugins.management.scrollHint")}
-                style={{ maxHeight: plan.mode === "regular" ? plan.summaryLines : undefined }}
-                onLayout={summary.onLayout} onContentSizeChange={summary.onContentSizeChange} onScroll={summary.onScroll}
-                scrollEventThrottle={64}
-                contentContainerStyle={[styles.highRiskLines, summary.thumbGutter]}>
-                {summaryLines}
-              </ScrollView>
-              {summary.more && consentSummaryFadeAllowed(plan) ? fade("plugins.management.highRiskFade") : null}
-              <ScrollThumb overflow={summary} testID="plugins.management.highRiskThumb" />
-            </View>
-          </View>
-        ) : null}
-        <View testID="plugins.management.actions" style={styles.footer} onLayout={measure("actions")}>
-          {compact ? answerButton("allow") : null}
+        <View testID="plugins.management.actions" style={styles.footer}>
+          {answerButton("allow")}
           <View testID="plugins.management.answerRow" style={[styles.actions, stacked && styles.stackedActions]}>
             {answerButton("reject")}
-            {compact ? answerButton(reviewed ? "reviewed" : "review") : answerButton("allow")}
+            {answerButton(reviewed ? "reviewed" : "review")}
           </View>
         </View>
       </View>
@@ -285,18 +173,17 @@ export function PluginManagementConfirmation(
 const FADE_HEIGHT = CONSENT_FADE_HEIGHT;
 const makeStyles = (c: ThemeColors) =>
   StyleSheet.create({
+    // The buttons stay at the sheet's bottom edge whatever the list holds, so the review step (which reorders the list)
+    // cannot move them. Where the sheet has a definite height (the centered sheet) it fills its maximum and the list takes
+    // all the room above the buttons; the native bottom sheet sizes itself to its content from its bottom edge.
     sheet: {
+      height: "85%",
       maxHeight: "85%",
       backgroundColor: c.surfaceElevated,
       borderTopLeftRadius: radius.container,
       borderTopRightRadius: radius.container,
       padding: spacing.lg + spacing.xs,
     },
-    // Compact: the buttons stay at the sheet's bottom edge whatever the list holds, so the review step (which reorders
-    // the list) cannot move them. Where the sheet has a definite height (the centered sheet) it fills its maximum and the
-    // list takes all the room above the buttons; the native bottom sheet sizes itself to its content from its bottom edge.
-    compactSheet: { height: "85%" },
-    compactListArea: { flexGrow: 1 },
     content: { gap: spacing.md, paddingBottom: spacing.md },
     identity: { gap: spacing.md },
     permission: { gap: spacing.xs },
@@ -322,8 +209,8 @@ const makeStyles = (c: ThemeColors) =>
       lineHeight: lineHeight.caption,
       color: c.textPrimary,
     },
-    // A hairline separates the scrolled list from the pinned summary, so a list title resting right above it
-    // does not read as a repeat.
+    // A hairline separates the summary from the block above it, so a title resting right above it does not read as a
+    // repeat.
     highRisk: {
       gap: spacing.xs,
       paddingTop: spacing.md,
@@ -346,13 +233,13 @@ const makeStyles = (c: ThemeColors) =>
     },
     footer: { gap: spacing.sm },
     actions: { flexDirection: "row", gap: spacing.sm },
-    // Large text: Allow first, each button the full width, labels wrapping instead of truncating.
+    // Large text: Review above Cancel, each button the full width, labels wrapping instead of truncating.
     stackedActions: { flexDirection: "column-reverse" },
     stackedButton: { flex: 0, paddingVertical: spacing.sm },
-    // The list takes what the pinned summary and the buttons leave (flex, from their real heights: K-1); the fade floats
-    // over its lower edge.
-    listArea: { flexShrink: 1 },
-    // Compact: the summary inside the scroll area, separated by the same hairline.
+    // The list takes all the room the buttons leave (flex, from their real heights: K-1); the fade floats over its lower
+    // edge.
+    listArea: { flexShrink: 1, flexGrow: 1 },
+    // The summary inside the scroll area, separated by the same hairline.
     highRiskInline: { paddingBottom: 0 },
     // Reviewed: the plugin and its computer follow the summary, under the same hairline.
     reviewedIdentity: { paddingTop: spacing.md, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: c.border },

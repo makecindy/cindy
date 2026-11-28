@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { fixture, row, root, element, openDetail, transportSend, type MarketWireRequest, marketWire, marketItem, demoConsent, approveOnPhone, marketPage, settle, openMarket, shownMarket, hostError, demoGhost, attributed, managementSnapshot, managedScreen, realManagementHost } from "./pluginsScreenHarness";
+import { fixture, row, root, element, openDetail, transportSend, type MarketWireRequest, marketWire, marketItem, demoConsent, approveOnPhone, marketPage, settle, openMarket, shownMarket, hostError, demoGhost, attributed, managementSnapshot, managedScreen, realManagementHost, reviewConsents } from "./pluginsScreenHarness";
 import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -2370,6 +2370,7 @@ describe("market install recovery", () => {
       await click("plugins.market.filter");
       await click("plugins.market.filter.custom");
       await click(`plugins.market.install.${custom.pluginId}`);
+      await reviewConsents();
       await click("plugins.management.allow");
     }
     const sentFor = (requests: MarketWireRequest[]) => requests
@@ -2551,6 +2552,7 @@ describe("market install recovery", () => {
       await click("plugins.checks.decide");
       // The same confirmation sheet; only the person's Allow writes the answer.
       expect(sent()).toEqual(["operation:screen-operation"]);
+      await reviewConsents();
       await click("plugins.management.allow");
       expect(sent()).toEqual(["operation:screen-operation", "answer:screen-operation"]);
       expect(writes(requests).filter((write) => write.startsWith("cancel") || write.startsWith("begin"))).toEqual(["begin:screen-operation"]);
@@ -2564,6 +2566,7 @@ describe("market install recovery", () => {
       origin: "custom-market", originLabel: "Team", originSource: { kind: "git", repository: "github.com/acme/market", sourceId: "SourceA_0123456789abcd" } } });
     const answers = (requests: MarketWireRequest[]) => writes(requests).filter((write) => write.startsWith("answer"));
     async function allowIsRefused(requests: MarketWireRequest[]) {
+      await reviewConsents();
       const allow = byId("plugins.management.allow");
       expect(allow, "the confirmation is on screen").not.toBeNull();
       expect(allow!.disabled).toBe(true);
@@ -2659,6 +2662,7 @@ describe("market install recovery", () => {
       world.operation = () => consentOf();
       const sent = await verifyFrom(requests);
       await click("plugins.checks.decide");
+      await reviewConsents();
       await click("plugins.management.allow");                            // written, reply lost
       await click("plugins.slotHolder.show");
       const after = requests.length;

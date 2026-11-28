@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { fixture, root, element, row, openDetail, transportSend, marketWire, type MarketWireRequest, marketItem, demoConsent, demoGhost, approveOnPhone, marketPage, settle, openMarket, shownMarket, hostError, attributed, managementSnapshot } from "./pluginsScreenHarness";
+import { fixture, root, element, row, openDetail, transportSend, marketWire, type MarketWireRequest, marketItem, demoConsent, demoGhost, approveOnPhone, marketPage, settle, openMarket, shownMarket, hostError, attributed, managementSnapshot, reviewConsents } from "./pluginsScreenHarness";
 import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
 import { describe, expect, it, vi } from "vitest";
@@ -1023,6 +1023,7 @@ describe("market read fences and lost-receipt facts", () => {
         const read = gate();
         world.hold = (label) => label === "light" && world.notesOn.size ? read.promise : undefined;
         await click(`plugins.market.install.${world.notes.pluginId}`);
+        await reviewConsents();
         await act(async () => allById("plugins.management.allow").at(-1)!.click());
         await settle(14);
         // Notes succeeded; its read of the computer is out. The person goes to Installed and starts Demo's update.
@@ -1054,6 +1055,7 @@ describe("market read fences and lost-receipt facts", () => {
         const answer = gate();
         world.hold = (label, request) => label === "answer-before" && request.device === "pc" ? answer.promise : undefined;
         await click(`plugins.market.install.${world.notes.pluginId}`);
+        await reviewConsents();
         await act(async () => allById("plugins.management.allow").filter((button) => !button.disabled).at(-1)!.click());
         await settle(14);                                                                       // PC is installing (Allow written)
         await act(async () => { void menu().props.onAction("update"); });
@@ -1080,6 +1082,7 @@ describe("market read fences and lost-receipt facts", () => {
         await act(async () => fixture.props.get("segment").onChange("market"));
         await settle(14);
         await click(`plugins.market.install.${world.notes.pluginId}`);
+        await reviewConsents();
         await act(async () => allById("plugins.management.allow").at(-1)!.click());
         await settle(30);
         expect(banner()).toContain("plugins.checks.settledOne");                             // Notes: proven, listed
@@ -1127,6 +1130,7 @@ describe("market read fences and lost-receipt facts", () => {
         world.hold = (label) => label === "answer-before" ? answer.promise : undefined;
         await act(async () => shownMarket().install(shownMarket().items[0]));
         await settle(20);
+        await reviewConsents();
         await act(async () => allById("plugins.management.allow").filter((button) => !button.disabled).at(-1)!.click());
         await settle(14);                                                                     // Allow is written; PC is installing
         expect(writes(world.requests)).toEqual(["begin:operation-0001", "answer:operation-0001"]);
@@ -1172,6 +1176,7 @@ describe("market read fences and lost-receipt facts", () => {
         const world = await twoComputersMarket();
         await act(async () => shownMarket().install(shownMarket().items[0]));
         await settle(20);
+        if (answer === "allow") await reviewConsents();
         await act(async () => allById("plugins.management." + answer).filter((button) => !button.disabled).at(-1)!.click());
         await settle(40);
         expect({ busy: shownMarket().installBusy, on: shownMarket().target.deviceId, writes: writes(world.requests) })
@@ -1204,6 +1209,7 @@ describe("market read fences and lost-receipt facts", () => {
         world.hold = (label) => label === "answer-before" ? answer.promise : undefined;
         await act(async () => shownMarket().install(shownMarket().items[0]));
         await settle(20);
+        await reviewConsents();
         await act(async () => allById("plugins.management.allow").filter((button) => !button.disabled).at(-1)!.click());
         await settle(14);                                                                     // Allow is written; Mac is installing
         expect(writes(world.requests)).toEqual(["begin:operation-0001", "answer:operation-0001"]);
@@ -1240,6 +1246,7 @@ describe("market read fences and lost-receipt facts", () => {
         const answer = gate();
         world.hold = (label, request) => label === "answer-before" && request.device === "pc" ? answer.promise : undefined;
         await click("plugins.market.detailInstall");
+        await reviewConsents();
         await act(async () => allById("plugins.management.allow").filter((button) => !button.disabled).at(-1)!.click());
         await settle(14);                                                                       // Allow is written; PC is installing
         expect(world.requests.filter((request) => request.actionId === "management:begin").map((request) => request.device)).toEqual(["pc"]);
@@ -1287,6 +1294,7 @@ describe("market read fences and lost-receipt facts", () => {
         await rerenderPage();
         await click(`plugins.market.row.${world.notes.pluginId}`);
         await click("plugins.market.detailInstall");
+        await reviewConsents();
         await act(async () => allById("plugins.management.allow").filter((button) => !button.disabled).at(-1)!.click());
         await settle(40);
         const detail = () => { const text = allById("plugins.market.detail")[0]?.textContent ?? null; return { detail: text !== null, installed: (text ?? "").includes("plugins.market.alreadyInstalled") }; };
@@ -1381,6 +1389,7 @@ describe("market read fences and lost-receipt facts", () => {
           }
           return original(device, channel, args, options);
         });
+        await reviewConsents();
         await act(async () => allById("plugins.management.allow").filter((button) => !button.disabled).at(-1)!.click());
         await settle(30);
         expect(fixture.props.get("observedManagement").state.receipt.consent.requestId).toBe("consent-2");
