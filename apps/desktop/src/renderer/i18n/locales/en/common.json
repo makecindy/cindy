@@ -1816,7 +1816,7 @@
       "range90": "90 days",
       "listModels_one": "Models · {{n}} day",
       "listModels_other": "Models · {{n}} days",
-      "listTasks": "Today's tasks",
+      "listTasks": "On this computer",
       "today": "Today",
       "manageTitle": "Manage",
       "done": "Done",

@@ -1786,7 +1786,7 @@
       "range30": "30일",
       "range90": "90일",
       "listModels_other": "최근 {{n}}일 모델",
-      "listTasks": "오늘의 작업",
+      "listTasks": "이 기기 오늘",
       "today": "오늘",
       "manageTitle": "관리",
       "done": "완료",

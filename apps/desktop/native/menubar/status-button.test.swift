@@ -102,6 +102,16 @@ enum StatusButtonTests {
       check(button.writes == ButtonWrites(), "repeated empty view is a no-op")
     }
     print("PASS: status button updates in Light and Dark")
+
+    // Usage page model list: a plugin engine (tokens, no value) used to be filtered out.
+    let listed = MBModelUsage.listed([
+      MBModelUsage(name: "Gemini", harness: "acp", money: 0, tokens: 29_000_000),
+      MBModelUsage(name: "Idle", harness: "codex", money: 0, tokens: 0),
+      MBModelUsage(name: "Claude", harness: "claude-code", money: 8, tokens: 1_000_000),
+      MBModelUsage(name: "GPT", harness: "codex", money: 0, tokens: 1_000_000),
+    ])
+    check(listed.map(\.name) == ["Claude", "Gemini", "GPT"], "token-only models listed after valued ones")
+    print("PASS: usage model list keeps token-only models")
   }
 
   static func check(_ condition: @autoclosure () -> Bool, _ message: String) {
