@@ -6526,7 +6526,8 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
               permissionMode,
               fastMode: effectiveFastMode,
               planModeEnabled: effectivePlanMode,
-              workingDir: baseRepo,
+              // Main resolves membership from the selected folder before checkout.
+              workingDir: workingDir ?? baseRepo,
               workspaceKind: 'project',
               extraDirs: effectiveExtraDirs,
               writableDirs: effectiveWritableDirs,
@@ -7790,7 +7791,6 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
         goalSessionId = localDraftSessionIdRef.current;
         optimisticGoalTitle = normalizeAutoTitle(objective);
         if (optimisticGoalTitle) emitAutoTitlePreview(goalSessionId, optimisticGoalTitle);
-        let goalWorkingDir = selectedWorkingDir;
         let goalWorktreeName = '';
         let goalWorktreeBranchName = '';
         if (useLocalGoalWorktree) {
@@ -7801,11 +7801,6 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
             goalWorktreeName = (suggestResp.name ?? '').trim();
           }
           if (!goalWorktreeName) goalWorktreeName = `auto-${Date.now().toString(36).slice(-6)}`;
-          // The local API needs a session id, so this is a compensated saga:
-          // create an empty base-repo session, then create the worktree and move
-          // workingDir. Any setup failure soft-deletes that empty session before
-          // retry; Goal never starts against the base repository.
-          goalWorkingDir = baseRepo;
           const startedAt = Date.now();
           setWtCreatingInfo({
             branch: getWorktreeModelNamingEnabled() ? '' : getBranchName(goalWorktreeName),
@@ -7823,9 +7818,10 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
           effort: draftInitialEffort ?? '',
           permissionMode: chatInitialPermissionMode,
           fastMode: effectiveFastMode,
-          workingDir: goalWorkingDir,
-          workspaceKind: goalWorkingDir ? 'project' : 'dialogue',
-          remoteHostId: goalWorkingDir ? (effectiveRemoteHostId ?? undefined) : undefined,
+          // Main resolves membership from the selected folder before checkout.
+          workingDir: selectedWorkingDir,
+          workspaceKind: selectedWorkingDir ? 'project' : 'dialogue',
+          remoteHostId: selectedWorkingDir ? (effectiveRemoteHostId ?? undefined) : undefined,
           ...(routeAgentDeviceId ? { agentDeviceId: routeAgentDeviceId } : {}),
           extraDirs: effectiveExtraDirs,
           writableDirs: effectiveWritableDirs,

@@ -2,10 +2,10 @@
  * Local Goal + Worktree preparation as a compensated transaction.
  *
  * The local worktree API needs a session id, so the renderer first creates an
- * empty session against the base repository. If worktree creation or the
- * managed-path update fails, that brand-new session must be soft-deleted before
- * the caller lets the user retry; otherwise each retry leaves another empty
- * base-repo task behind.
+ * empty session in the selected project folder to resolve its membership.
+ * This helper creates the checkout and updates the execution directory before
+ * Goal starts. If either step fails, the empty session must be soft-deleted
+ * before the caller lets the user retry.
  */
 
 export type LocalGoalWorktreeCreateResponse =

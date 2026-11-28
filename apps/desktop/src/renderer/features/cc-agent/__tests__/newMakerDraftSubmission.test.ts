@@ -277,10 +277,14 @@ async function submit(options: {
     }
     return { ...body, ...admit(body), id: 'created', workingDir: '/isolated/dialogue' };
   });
+  const updateSession = vi.fn(async (_id: string, _patch: { workingDir: string }) => {});
+  let goalStartWorkingDir: string | undefined;
   const setGoal = vi.fn(async () => {
     // Goal starts from the newly persisted selection rather than receiving an
     // independent effort argument. Exercise admission on that creation result.
-    admit(await ipcCreate.mock.results[0].value);
+    const created = await ipcCreate.mock.results[0].value;
+    goalStartWorkingDir = updateSession.mock.lastCall?.[1].workingDir ?? created.workingDir;
+    admit(created);
   });
   // Real renderer adapter forwards to the simulated IPC transport, whose receiving
   // side runs Main's production admission. No real database or user profile is opened.
@@ -486,7 +490,7 @@ async function submit(options: {
     commitRemoteSessionHandoff: () => {}, rememberRecoverableHandoff: vi.fn(),
     deliverRecoverableHandoff: (_id: string, deliver: () => Promise<boolean>) => deliver(),
     getBranchName: (name: string) => `cindy/${name}`,
-    sessionService: { touchUserSend: async () => {}, get: async () => ({ status: 'active' }), update: async () => {} },
+    sessionService: { touchUserSend: async () => {}, get: async () => ({ status: 'active' }), update: updateSession },
     crossAgentConvertService: { detect: async () => ({ items: [] }) },
     refreshWorktreeForSession: async () => {},
     worktreeCreationStore: { clear: finishWorktree, set: (_id: string, state: { status: string }) => {
@@ -561,11 +565,32 @@ async function submit(options: {
     }
     if (started) await finished;
     if (hasWorktree && !options.activePluginEngine && createSession.mock.calls.length) await worktreeFinished;
-    return { createSession, ipcCreate, createWorktree, sendMessage, setGoal, errors, environment, setPending, setPendingGoal, toastError, toastWarning, clearDraft, refreshDisplayedBranch, detectCwd, listAgentSkills, invokeRemote, enableOrca, createNote, checkAndConfirm, remoteProjectsStore };
+    return { createSession, ipcCreate, createWorktree, sendMessage, setGoal, goalStartWorkingDir, errors, environment, setPending, setPendingGoal, toastError, toastWarning, clearDraft, refreshDisplayedBranch, detectCwd, listAgentSkills, invokeRemote, enableOrca, createNote, checkAndConfirm, remoteProjectsStore };
   } finally { vi.unstubAllGlobals(); }
 }
 
 describe('homepage submission to Main admission and first-message handoff', () => {
+  // #13468, submission unit: a registered project can be below the Git root.
+  // Existing worktree cases use the same folder for both and miss the lost project
+  // in the create IPC. The checkout must be ready before the first Send or Goal turn.
+  it.each(['send', 'goal'] as const)('keeps the selected project when starting %s in a checkout', async (entry) => {
+    const project = '/fixture/repo/project-a';
+    const checkout = '/fixture/repo/.cindy-worktrees/creator';
+    const result = await submit({ entry, workingDir: project, worktree: { enabled: true, sourceBranch: 'main' } });
+    expect(result.ipcCreate).toHaveBeenCalledWith(expect.objectContaining({
+      workingDir: project, workspaceKind: 'project',
+    }));
+    expect(result.createWorktree).toHaveBeenCalledWith(expect.objectContaining({ baseRepo: '/fixture/repo' }));
+    if (entry === 'goal') {
+      expect(result.setGoal).toHaveBeenCalledWith({ sessionId: 'created', objective: 'hello goal', limits: goalLimits });
+      expect(result.goalStartWorkingDir).toBe(checkout);
+    } else {
+      expect(result.sendMessage).toHaveBeenCalledWith(
+        expect.any(String), 'hello', modelId, '', 'default', checkout, [], [], expect.any(Object),
+      );
+    }
+  });
+
   it.each(['send', 'goal'] as const)('keeps the draft when the saved route blocks %s', async (entry) => {
     const result = await submit({ entry, localModelIssueText: 'Saved engine unavailable' });
     expect(result.ipcCreate).not.toHaveBeenCalled();
