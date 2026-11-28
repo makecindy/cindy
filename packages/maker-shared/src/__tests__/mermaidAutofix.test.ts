@@ -76,6 +76,119 @@ describe('repairMermaidSource', () => {
     expect(repairMermaidSource(src)).toBe(src);
   });
 
+  it('保留 #7687 原报中两种形状标签的 Unicode 箭头', () => {
+    const src = 'flowchart TD\nA([stadium → text]) --> B[[subroutine ⟶ text]]';
+    expect(repairMermaidSource(src)).toBe(src);
+  });
+
+  it.each([
+    'A([before → "quoted ])" after → text])',
+    'A([输入 (含括号) → 输出])',
+    'A.([stadium → text])',
+    'A,([stadium → text])',
+    'A>draft → final]',
+    'A->draft → final]',
+    "A'([stadium → text])",
+    'A`([stadium → text])',
+    'A[[outer [inner] → text]]',
+    'A[(database → text)]',
+    'A{{hexagon ➔ text}}',
+    'A((circle ➜ text))',
+    'A[/parallelogram ⇒ text/]',
+    'A[\\trapezoid ⟹ text/]',
+  ])('保留 %s 的标签并修复同一行的边', (node) => {
+    expect(repairMermaidSource(`flowchart TD\n${node} → B`)).toBe(
+      `flowchart TD\n${node} --> B`,
+    );
+  });
+
+  it.each(['A .-> B', 'A -. label .-> B'])('保留点线边和非对称节点，修复中间的 Unicode 连线 (%s)', (edge) => {
+    const node = 'C>draft → final]';
+    expect(repairMermaidSource(`flowchart TD\n${edge} → ${node}`)).toBe(
+      `flowchart TD\n${edge} --> ${node}`,
+    );
+  });
+
+  // #7687 的 unit 回归。既有用例只覆盖符号形状；@{...} 的标签同样需要保留箭头，
+  // 连线仍须修复。最小失败输入是 A@{ shape: stadium, label: start → done } → B。
+  it.each([
+    'A@{ shape: stadium, label: start → done }',
+    'A@{ &props shape: stadium, label: start → done }',
+    'A@{ "shape": "stadium", label: start → done }',
+    "A@{ 'shape': 'stadium', label: start → done }",
+    'A@{\n  shape: stadium\n  label: start → done\n}',
+    'A@{\n  # node shape\n  shape: stadium\n  label: start → done\n}',
+    'A@{\n  shape: stadium\n  label: "start } → done"\n}',
+  ])('保留 @{...} 的属性内容并修复后续连线 (%s)', (node) => {
+    expect(repairMermaidSource('flowchart TD\n' + node + ' → B')).toBe(
+      'flowchart TD\n' + node + ' --> B',
+    );
+  });
+
+  it('YAML 标题和边标签中的 @{ 不会阻止后续连线修复', () => {
+    expect(repairMermaidSource('---\ntitle: Demo @{\n---\nflowchart TD\nA → B\nC{ok} --> D')).toBe(
+      '---\ntitle: Demo @{\n---\nflowchart TD\nA --> B\nC{ok} --> D',
+    );
+    expect(repairMermaidSource('flowchart TD\nA -->|literal @{ text| B\nC → D\nE{ok} --> F')).toBe(
+      'flowchart TD\nA -->|"literal @{ text"| B\nC --> D\nE{ok} --> F',
+    );
+  });
+
+  it.each(['\n', '; '])('回调名中的 -- 不影响后续形状属性和连线 (%j)', (separator) => {
+    const prefix = 'flowchart TD\nclick A call foo--bar()' + separator;
+    const node = 'C@{ shape: rect, label: start → done }';
+    expect(repairMermaidSource(prefix + node + ' → D')).toBe(prefix + node + ' --> D');
+  });
+
+  it.each(['C:::foo--bar\n', 'C:::foo--bar-->'])('类名中的 -- 不影响后续节点 (%j)', (line) => {
+    const prefix = 'flowchart TD\n' + line;
+    const node = 'D@{ shape: rect, label: start → done }';
+    expect(repairMermaidSource(prefix + node + '\nD → E')).toBe(prefix + node + '\nD --> E');
+  });
+
+  it.each([
+    'accTitle: Demo @{ shape: stadium',
+    'accDescr: Demo @{ shape: stadium',
+    'A --> B; accTitle: Demo @{ shape: stadium',
+    'A -- literal @{ shape: stadium --> B',
+    'A -- literal\n@{ shape: stadium --> B',
+    'A -. literal @{ shape: stadium .-> B',
+  ])('保留 %s 中的普通文本并修复下一行', (line) => {
+    const source = 'flowchart TD\n' + line + '\nC → D\nE{ok} --> F';
+    expect(repairMermaidSource(source)).toBe(
+      'flowchart TD\n' + line + '\nC --> D\nE{ok} --> F',
+    );
+  });
+
+  it.each(['A[foo -- bar]', 'A([foo == bar])', 'A(foo -. bar)', 'A>foo -- bar]', 'A["`foo\n-- bar`"]'])(
+    '保留 %s 后面的形状属性与连线',
+    (node) => {
+      expect(repairMermaidSource('flowchart TD\n' + node + '\nC@{ shape: rect, label: start → done }\nC → D')).toBe(
+        'flowchart TD\n' + node + '\nC@{ shape: rect, label: start → done }\nC --> D',
+      );
+    },
+  );
+
+  it.each(['A[[first\n→ second]]', 'A([first\n→ second])', 'A>first\n→ second]', 'A->first\n→ second]', 'A.>first\n→ second]', 'A["first\n→ second"]'])(
+    'preserves a multiline node label while repairing the next connection (%s)',
+    (node) => {
+      const chart = `flowchart TD\n${node} → B`;
+      expect(repairMermaidSource(chart)).toBe(`flowchart TD\n${node} --> B`);
+    },
+  );
+
+  it.each(['e==1@-->', 'e--1@ ==>', 'e-.1@-->'])('preserves metadata after an edge ID containing a link marker (%s)', (link) => {
+    const prefix = `flowchart TD\nA ${link} B\nC@{ shape: rect, label: start → done }\n`;
+    expect(repairMermaidSource(prefix + 'C → D')).toBe(prefix + 'C --> D');
+  });
+
+  it('未闭合的形状不会吞掉后面的完整标签和连线', () => {
+    const prefix = 'flowchart TD\n' + 'A(('.repeat(600);
+    expect(repairMermaidSource(prefix + ' C([go → stop]) → B')).toBe(
+      prefix + ' C([go → stop]) --> B',
+    );
+  });
+
   it('已引号的节点标签内容不被二次改写', () => {
     const src = 'flowchart TD\nA["call foo(x:y)"] --> B';
     expect(repairMermaidSource(src)).toBe(src);

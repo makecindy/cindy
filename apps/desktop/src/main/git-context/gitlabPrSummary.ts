@@ -78,34 +78,18 @@ export async function fetchGitlabMr(
   token: string,
   q: PrStatusQuery,
   fetchImpl: typeof fetch,
+  signal?: AbortSignal,
 ): Promise<PrRemoteState> {
   if (q.provider !== 'gitlab' || !isPrHost(q.host)) throw new Error('INVALID_GITLAB_IDENTITY');
   const origin = `https://${q.host.toLowerCase()}`;
-  assertSafeBaseUrl(origin);
-  const response = await fetchWithSafeRedirect(
-    `${origin}/api/graphql`,
-    {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        query: GITLAB_MR_QUERY,
-        variables: { path: `${q.owner}/${q.repo}`, iid: String(q.prNumber) },
-      }),
-      signal: AbortSignal.timeout(15_000),
-    },
-    undefined,
-    async (input, init) => {
-      // Enforce exact HTTPS origin on every hop, including same-host downgrades.
-      const target = new URL(
-        typeof input === 'string' ? input : input instanceof URL ? input.href : input.url,
-      );
-      if (target.origin !== origin) throw new Error('INVALID_GITLAB_ORIGIN');
-      return fetchImpl(input, init);
-    },
-  );
-  // Never propagate server bodies or headers into errors/logs.
-  if (!response.ok)
-    throw Object.assign(new Error('GITLAB_QUERY_FAILED'), { status: response.status });
+  const response = await gitlabRequest(origin, '/api/graphql', token, fetchImpl, {
+    method: 'POST',
+    signal,
+    body: JSON.stringify({
+      query: GITLAB_MR_QUERY,
+      variables: { path: `${q.owner}/${q.repo}`, iid: String(q.prNumber) },
+    }),
+  });
   const payload = (await response.json()) as {
     data?: { project?: { mergeRequest?: MergeRequest } };
     errors?: unknown[];
@@ -134,5 +118,87 @@ export async function fetchGitlabMr(
         ? total! - resolved!
         : null,
     checks: gitlabChecks(mr),
+  };
+}
+
+async function gitlabRequest(
+  origin: string,
+  path: string,
+  token: string,
+  fetchImpl: typeof fetch,
+  init: RequestInit = {},
+) {
+  assertSafeBaseUrl(origin);
+  const response = await fetchWithSafeRedirect(
+    origin + path,
+    {
+      ...init,
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      signal: init.signal ?? AbortSignal.timeout(15_000),
+    },
+    undefined,
+    async (input, init) => {
+      // Enforce exact HTTPS origin on every hop, including same-host downgrades.
+      const target = new URL(
+        typeof input === 'string' ? input : input instanceof URL ? input.href : input.url,
+      );
+      if (target.origin !== origin) throw new Error('INVALID_GITLAB_ORIGIN');
+      return fetchImpl(input, init);
+    },
+  );
+  // Never propagate server bodies or headers into errors/logs.
+  if (!response.ok)
+    throw Object.assign(new Error('GITLAB_QUERY_FAILED'), { status: response.status });
+  return response;
+}
+
+/** REST is supported by self-managed instances even when their GraphQL schema lacks a summary field. */
+export async function fetchGitlabMrStatus(
+  token: string,
+  q: PrStatusQuery,
+  fetchImpl: typeof fetch,
+): Promise<PrRemoteState> {
+  if (q.provider !== 'gitlab' || !isPrHost(q.host)) throw new Error('INVALID_GITLAB_IDENTITY');
+  const project = encodeURIComponent(`${q.owner}/${q.repo}`);
+  // Leave room in the mobile RPC's 15-second window for credential lookup and transport.
+  // The optional summary must finish within the same window, even on older or slow instances.
+  const rest = gitlabRequest(
+    `https://${q.host.toLowerCase()}`,
+    `/api/v4/projects/${project}/merge_requests/${q.prNumber}`,
+    token,
+    fetchImpl,
+    { signal: AbortSignal.timeout(10_000) },
+  ).then(response => response.json());
+  const summary = fetchGitlabMr(token, q, fetchImpl, AbortSignal.timeout(3_000)).catch(() => null);
+  const [mr, extra] = await Promise.all([rest, summary]);
+  if (
+    mr?.iid !== q.prNumber ||
+    !['opened', 'closed', 'merged', 'locked'].includes(mr.state) ||
+    typeof mr.title !== 'string' ||
+    typeof mr.source_branch !== 'string'
+  )
+    throw new Error('GITLAB_STATE_UNKNOWN');
+  const sameHead = !!mr.sha && extra?.head_sha === mr.sha;
+  return {
+    state: mr.state === 'opened' ? 'open' : 'closed',
+    merged: mr.state === 'merged',
+    draft: (mr.draft ?? mr.work_in_progress) === true,
+    title: mr.title,
+    html_url: sessionPrUrl(q),
+    branch: mr.source_branch,
+    head_sha: mr.sha,
+    base_branch: mr.target_branch,
+    conflicts: typeof mr.has_conflicts === 'boolean' ? mr.has_conflicts : null,
+    unresolved_count: sameHead ? extra?.unresolved_count : null,
+    checks: sameHead ? extra?.checks : null,
+    metadata: {
+      merged_at: mr.merged_at,
+      closed_at: mr.closed_at,
+      user_notes_count: mr.user_notes_count,
+      pipeline_status: mr.head_pipeline?.status,
+      pipeline_id: mr.head_pipeline?.id,
+      pipeline_finished_at: mr.head_pipeline?.finished_at,
+      blocking_discussions_resolved: mr.blocking_discussions_resolved,
+    },
   };
 }

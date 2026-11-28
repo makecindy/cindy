@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useAuth } from '@/contexts/AuthContext';
-import { Button } from '@/components/ui/button';
 import { Switch } from '@/components/ui/switch';
 import { Select } from '@/components/ui/select';
 import { Input } from '@/components/ui/input';
@@ -17,6 +16,7 @@ import { toast } from '@/lib/toast';
 import type { TaskArchiveSettings } from '../../../shared/taskManagement';
 import { taskManagementSettings } from './TaskManagement.settings-search';
 import { useSettingDefinition } from './useSettingDefinition';
+import { ResetGroupButton } from '@/components/ui/reset-buttons';
 
 export function TaskManagementSection() {
   const { t } = useTranslation();
@@ -96,16 +96,12 @@ export function TaskManagementSection() {
       title={t(taskManagementSettings.page.titleKey)}
       description={t(taskManagementSettings.page.descriptionKey)}
       action={
-        <Button
-          variant="secondary"
-          tone="quiet"
-          size="sm"
+        <ResetGroupButton
           disabled={saving || !settings}
           data-settings-search-action="Reset task archive preferences to defaults"
           onClick={() => void save(null)}
-        >
-          {t('taskManagement.reset')}
-        </Button>
+          label={t('taskManagement.reset')}
+        />
       }
     >
       {error && <ErrorNotice message={t('taskManagement.loadFailed')} />}

@@ -17,17 +17,18 @@ import { CCAgentSessionView } from '@/features/cc-agent/CCAgentSessionView';
 import { NewMakerDraftRoute } from '@/features/cc-agent/NewMakerDraftRoute';
 import { OrcaWorkflowRoute } from '@/features/cc-agent/OrcaWorkflowRoute';
 import { LegacySkillDetailRedirect } from '@/features/skillhub/LegacySkillDetailRedirect';
+import { loadPluginPage } from '@/features/plugin/GhostPluginRoute';
 
 function EmptyRouteFallback() {
   return null;
 }
 
 /*
- * 除默认落地的任务页（新建 / 任务 / Orca）外，各功能页都用 route lazy 首次进入时才加载，
+ * 除默认落地的任务页（新建 / 任务 / Orca）外，功能页分包按需加载，
  * 主窗口首屏不再连带伙伴、Skill、插件、定时任务、文件浏览（含 CodeMirror）等页面。
  * 导航在 startTransition 里等分包就绪，期间保留当前页面；窗口直接以这些地址加载时由空的
  * HydrateFallback 占住内容区，MainLayout 导航照常显示。
- * 设计台账按 lazy 返回的 `Component: X` 识别页面组件，保持这个写法。
+ * lazy 路由保留设计台账识别的 `Component: X` 写法。
  */
 
 /**
@@ -270,8 +271,17 @@ export const router = createHashRouter([
                   },
                   { path: 'settings', element: <SettingsView /> },
                   {
+                    path: 'cloud-settings',
+                    lazy: () =>
+                      import('@/features/cloud-settings/CloudSettingsRoute').then(({ CloudSettingsRoute }) => ({
+                        Component: CloudSettingsRoute,
+                      })),
+                  },
+                  {
                     path: 'plugins',
-                    lazy: () => import('@/features/plugin/GhostPluginPage').then(({ GhostPluginPage }) => ({ Component: GhostPluginPage })),
+                    lazy: () => loadPluginPage().then(({ GhostPluginPage }) => ({
+                      Component: GhostPluginPage,
+                    })),
                     HydrateFallback: EmptyRouteFallback,
                   },
                   {

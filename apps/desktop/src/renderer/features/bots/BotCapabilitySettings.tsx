@@ -1,11 +1,11 @@
 import { Button } from '@/components/ui/button';
+import { SearchInput } from '@/components/ui/search-input';
 import { Collapse } from '@/components/ui/collapse';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { Switch } from '@/components/ui/switch';
-import { Input } from '@/components/ui/input';
 import { toast } from '@/components/ui/toast';
 import { cn } from '@/lib/utils';
-import { ChevronDown, ChevronRight, Search } from 'lucide-react';
+import { ChevronDown, ChevronRight } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState, type MutableRefObject, type ReactNode } from 'react';
 import { useBotTranslation } from './botPronounContext';
 import type { BotCapabilities, BotProfile } from './botStore';
@@ -343,21 +343,12 @@ export function BotCapabilitySettings({
       <div className={cn('flex flex-col gap-5', expanded === undefined ? 'px-3 pt-4' : 'pt-1')}>
         <div className="flex flex-col gap-3">
           <p className="text-12 leading-5 text-[var(--text-secondary)]">{t('bots.capabilities.intro')}</p>
-          <div className="relative">
-            <Search
-              size={14}
-              aria-hidden="true"
-              className="pointer-events-none absolute left-3 top-1/2 z-raised -translate-y-1/2 text-[var(--text-tertiary)]"
-            />
-            <Input
-              size="md"
-              ariaLabel={t('bots.capabilities.search')}
-              placeholder={t('bots.capabilities.search')}
-              value={query}
-              onChange={setQuery}
-              inputClassName="pl-8"
-            />
-          </div>
+          <SearchInput
+            ariaLabel={t('bots.capabilities.search')}
+            placeholder={t('bots.capabilities.search')}
+            value={query}
+            onChange={setQuery}
+          />
           {busy ? <p className="text-12 text-[var(--text-secondary)]">{t('bots.capabilities.loading')}</p> : null}
           {error ? (
             <Button variant="secondary" size="md" tone="danger" compact type="button" onClick={refresh}>

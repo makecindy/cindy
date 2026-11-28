@@ -120,7 +120,9 @@ export function registerFeishuIpc(): void {
   handle('feishuBot:set-lifecycle-announcement', async (payload) => {
     const p = payload as { enabled?: unknown } | undefined;
     const enabled = typeof p?.enabled === 'boolean' ? p.enabled : true;
-    storage.writeLifecycleAnnouncement(enabled);
+    if (!storage.writeLifecycleAnnouncement(enabled)) {
+      throw new Error('Feishu lifecycle preference could not be saved');
+    }
     wsClient.setLifecycleAnnouncement(enabled);
     return { ok: true };
   });

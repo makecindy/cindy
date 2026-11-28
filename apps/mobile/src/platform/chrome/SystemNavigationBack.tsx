@@ -12,7 +12,8 @@ export function useSystemNavigationBack() {
 
 /** Keep real toolbar items: Toolbar.View custom content loses Duo's vertical
  * adaptation and returns to the horizontal header, overlapping the sidebar. */
-export function SystemNavigationBack({ onPress, label, disabled = false, close = false, available = true, newTask }: {
+export function SystemNavigationBack({ onPress, label, disabled = false, close = false, available = true, hideBackButton = false, newTask }: {
+  hideBackButton?: boolean;
   newTask?: { onPress(): void; label: string };
   onPress(): void; label: string; disabled?: boolean; close?: boolean; available?: boolean;
 }) {
@@ -41,7 +42,7 @@ export function SystemNavigationBack({ onPress, label, disabled = false, close =
     accessibilityLabel={newTaskLabel} onPress={pressNewTask} />, [newTaskLabel, pressNewTask]);
   return <>
     <Stack.Screen options={screenOptions} />
-    {enabled && available ? <Stack.Toolbar placement="left">{backButton}</Stack.Toolbar> : null}
+    {enabled && available && !hideBackButton ? <Stack.Toolbar placement="left">{backButton}</Stack.Toolbar> : null}
     {enabled && available && newTask ? <Stack.Toolbar placement="right">{newTaskButton}</Stack.Toolbar> : null}
   </>;
 }

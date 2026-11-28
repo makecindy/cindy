@@ -10,7 +10,7 @@ import { isPluginEngineKind } from '../../shared/pluginEngines.js';
 
 export type SessionOpenBody = NonNullable<Parameters<typeof sessionCreateToRow>[1]>;
 export type OpenedSessionRow = ReturnType<typeof sessionCreateToRow> & { model: string };
-type ModelAdmission = (body: SessionOpenBody) => Promise<SessionOpenBody>;
+type ModelAdmission = (body: SessionOpenBody, sourceSessionId?: string | null) => Promise<SessionOpenBody>;
 let admitModel: ModelAdmission | null = null;
 
 /** Host installs its ordinary model catalog once; UI, tools, companions and plugins share it. */
@@ -71,7 +71,8 @@ export async function openSession<T = void>(input: {
   // 所以仍交给宿主的准入(pluginEngineSessionAdmission)，那台是否开放这个引擎照旧由那台在启动时核对。
   const selected = (input.body.remoteHostId || agentRunsOnOtherDevice(input.body)) && !isPluginEngineKind(input.body.agentKind)
     ? input.body
-    : await admitModel({ ...input.body });
+    // Companions have their own saved route, even when its provider or effort is unset.
+    : await admitModel({ ...input.body }, input.source === 'bot' ? null : undefined);
   assertCurrent();
   const workspaceKind = selected.workspaceKind ?? 'project';
   const explicitDir = normalizeWorkingDirForStorage(selected.workingDir) ?? undefined;

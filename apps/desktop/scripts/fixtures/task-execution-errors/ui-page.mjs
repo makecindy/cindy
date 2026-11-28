@@ -9,6 +9,7 @@ export default {
   cases: {
     'catalog-unconfirmed': { about: 'Unconfirmed model catalog retains the saved selection at 320 px', viewport: { width: 320, height: 440 } },
     'pr-dns': { about: 'Remote PR check DNS failure and actual probe time', viewport: { width: 320, height: 300 } },
+    'pre-run-blocked': { about: '#10609: a confirmed startup check block explains that execution did not begin', viewport: { width: 320, height: 300 } },
     default: { about: 'Historical automatic execution failure' },
     narrow: { about: 'Automatic execution failure at 320 px', viewport: { width: 320, height: 540 } },
     history: { about: 'Historical task execution error' },
@@ -23,6 +24,15 @@ export default {
     'resume-history-narrow': { about: '#10187: persisted refusal at 320 px', viewport: { width: 320, height: 540 } },
   },
   async check(page, ui) {
+    if (ui.case === 'pre-run-blocked') {
+      const notice = page.getByTestId('unread-failed-schedule-banner');
+      assert.ok(await notice.getByText(await ui.t('chat.unreadFailedScheduleBanner.preRunBlocked'), { exact: true }).isVisible());
+      const show = notice.getByRole('button', { name: await ui.t('chat.errorBanner.networkShowRaw'), exact: true });
+      assert.equal(await show.getAttribute('aria-expanded'), 'false');
+      await show.click();
+      assert.ok(await notice.getByText(/pre-run hook failed with exit code 1/).isVisible());
+      return;
+    }
     if (ui.case === 'pr-dns') {
       const notice = page.getByTestId('unread-failed-schedule-banner');
       assert.ok(await notice.isVisible());

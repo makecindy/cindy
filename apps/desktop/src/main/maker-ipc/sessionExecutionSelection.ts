@@ -12,6 +12,9 @@ export interface SessionModelSelection {
 type Selection = SessionModelSelection;
 type Admission = Parameters<typeof resolveSendToSessionExecutionConfig>[0];
 
+/** Opening was refused before any task was written. A caller can opt in to its own fallback. */
+export class SessionModelUnavailableError extends Error {}
+
 /** Shared Session model selection. Callers supply authorized defaults; no caller-specific lifecycle or permissions. */
 export function resolveSessionExecutionSelection(params: {
   selection: Selection;
@@ -27,8 +30,8 @@ export function resolveSessionExecutionSelection(params: {
   const agentKind = selection.agentKind === 'cc' ? 'claude-code' : selection.agentKind ?? source?.agentKind;
   const model = selection.model ?? source?.model;
   const recover = '请在任务中重新选择模型，或在「设置 → 模型供应商」修复连接后重试。';
-  if (!agentKind || !model) throw new Error(`尚未选择任务模型。请先选择新任务模型，或${recover}`);
-  if (!params.availableAgents.includes(agentKind)) throw new Error(`Agent ${agentKind} 当前不可用。${recover}`);
+  if (!agentKind || !model) throw new SessionModelUnavailableError(`尚未选择任务模型。请先选择新任务模型，或${recover}`);
+  if (!params.availableAgents.includes(agentKind)) throw new SessionModelUnavailableError(`Agent ${agentKind} 当前不可用。${recover}`);
   // An old partial override may change engines/models. Never borrow the previous
   // model's provider or tuning; choose only a route for this exact requested model.
   const sameIdentity = source?.agentKind === agentKind && source.model === model;
@@ -48,7 +51,12 @@ export function resolveSessionExecutionSelection(params: {
     availableModels: params.availableModels, providerRouting, hasCindyAiApiKey: params.hasCindyAiApiKey,
     locationChanged: params.locationChanged,
   });
-  if (!result.ok) throw Object.assign(new Error(`${result.message} ${recover}不会自动更换模型或供应商。`), { code: result.errorCode });
+  if (!result.ok) {
+    const message = `${result.message} ${recover}不会自动更换模型或供应商。`;
+    const error = result.modelMissing || result.errorCode === 'PROVIDER_ROUTE_UNAVAILABLE'
+      ? new SessionModelUnavailableError(message) : new Error(message);
+    throw Object.assign(error, { code: result.errorCode });
+  }
   return result.config;
 }
 
@@ -62,9 +70,12 @@ export interface SessionExecutionResolverDeps {
   hasCindyAiApiKey(): boolean;
 }
 
-/** sourceSessionId is Host-resolved from an authenticated call, never plugin-supplied. */
+/**
+ * Only the Host supplies a caller's session ID. Without one, undefined permits the
+ * new-task draft and null resolves the selection from the model catalog alone.
+ */
 export function createSessionExecutionResolver(deps: SessionExecutionResolverDeps) {
-  return async (selection: Selection, sourceSessionId?: string,
+  return async (selection: Selection, sourceSessionId?: string | null,
     existing?: { agentKind: string; model: string; providerId?: string | null; effort?: string | null; fastMode?: boolean | 'ultrafast' },
   ): Promise<SessionExecutionSelection> => {
     const assertOwner = deps.captureOwner();
@@ -76,7 +87,7 @@ export function createSessionExecutionResolver(deps: SessionExecutionResolverDep
       source = { agentKind: (existing.agentKind === 'cc' ? 'claude-code' : existing.agentKind) as AgentKind,
         model: existing.model, providerId: existing.providerId,
         effort: (existing.effort || undefined) as Effort | undefined, fastMode: (existing.fastMode === 'ultrafast' ? 'ultrafast' : existing.fastMode === true) };
-    } else if (!(selection.agentKind && selection.model && selection.providerId)) {
+    } else if (sourceSessionId !== null && !(selection.agentKind && selection.model && selection.providerId)) {
       source = sourceSessionId ? await deps.readCaller(sourceSessionId) : deps.readDefault();
       assertOwner();
     }

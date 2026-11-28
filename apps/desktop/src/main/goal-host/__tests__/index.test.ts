@@ -34,12 +34,14 @@ vi.mock('../../device-link/broadcast-tap.js', () => ({ tapWindowBroadcast: vi.fn
 vi.mock('../../logger.js', () => ({ createLogger: () => ({ info() {}, warn() {}, error() {} }) }));
 vi.mock('../../maker-ipc/register.js', () => ({
   hasRestoredCodexQuota: vi.fn(),
+  readLocalSubscriptionTaskUsageLimit: async () => undefined,
   acquirePendingAgentSwitchForDirectSend: host.acquireGoalRoute,
   isSessionInTurn: () => false,
   ensureGoalInputReady: async (id: string) => !host.goalInputBlocked(id),
   isGoalInputBlocked: host.goalInputBlocked,
   stopActiveGoalTurnForClear: async () => {},
   resolveSessionRuntimeRoute: () => ({ providerId: host.row.providerId, modelId: host.row.model }),
+  tryGoalModelGroupRecovery: vi.fn(async () => false),
 }));
 vi.mock('../../device-link/sharedTaskDispatch.js', () => ({ isSessionSharedTaskActive: () => false }));
 vi.mock('../../localDb/ipc/messages.js', () => ({ createMessage: async () => {} }));

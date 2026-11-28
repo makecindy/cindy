@@ -18,6 +18,8 @@
  */
 
 import { describe, it, expect, beforeAll, beforeEach, vi } from 'vitest';
+import { pluginEngineSessionCreateFields, remotePluginEngineChoices, resolveActivePluginEngine } from '@/lib/pluginEngineSelection';
+import type { PluginEngineView } from '../../shared/pluginEngines';
 
 class MemLocalStorage {
   private store = new Map<string, string>();
@@ -229,6 +231,38 @@ describe('newMakerDraft store', () => {
     expect(getDraft().vendor).toBe('cc');
     expect(getDraft().defaultTupleCustomized).toBe(true);
     expect(getDraft().defaultTupleSelectionCustomized).toBe(true);
+  });
+
+  // docs/dev-rules/protocol-compatibility/model-access-silent-switch.md: a draft the user set to
+  // Pi + auto used to stay blocked ("model") once the catalog moved auto to Codex only, because the
+  // product default never overrides a customized draft. It now follows the flagged engine.
+  it('自选的 Pi + auto 草稿随目录静默指定换到 Codex，不再被拦下，Pi 槽位保留', async () => {
+    const { resolveSilentSwitchDraftTuple } = await import('@/lib/newMakerDefaultTuple');
+    const { savedDraftModelIssue } = await import('../features/cc-agent/newMakerDraftModelPrefs');
+    const { applySilentSwitchDraftTuple, getDraft, patchVendorPrefs, switchVendor } = await loadModule();
+    const gateway: import('@cindy/model-providers').ProviderView = {
+      id: 'xd', name: 'Cindy AI', source: 'builtin', connected: true, agents: ['pi', 'codex'],
+      auth: { method: 'managed' }, access: { kind: 'managed' },
+      routing: { pi: { upstream: 'https://provider.invalid', authStrategy: 'none' },
+        codex: { upstream: 'https://provider.invalid', authStrategy: 'none' } },
+      models: { pi: [], codex: [{ id: 'auto', name: 'Auto', contextWindow: 200000, efforts: ['medium', 'high'],
+        defaultEffort: 'medium', silentSwitch: true }] },
+    };
+    switchVendor('pi');
+    patchVendorPrefs('pi', { model: 'auto', providerId: 'xd' });
+    const issue = (agent: 'pi' | 'codex') => savedDraftModelIssue({ agent, engineAvailable: true, enginesLoaded: true,
+      enginesLoading: false, model: getDraft().lastByVendor[agent].model, providerId: 'xd', providers: [gateway],
+      providersLoading: false, providersLoadFailed: false });
+    expect(issue('pi')).toBe('model');
+    const tuple = resolveSilentSwitchDraftTuple({ providers: [gateway], providersLoading: false,
+      availableAgents: new Set(['cc', 'codex', 'pi']), availableAgentsLoaded: true, vendor: 'pi', model: 'auto', providerId: 'xd' });
+    expect(applySilentSwitchDraftTuple('pi', tuple!)).toBe(true);
+    const draft = (await reloadModule()).getDraft();
+    expect(draft).toMatchObject({ vendor: 'codex', defaultTupleSelectionCustomized: true,
+      lastByVendor: { codex: { model: 'auto', providerId: 'xd', effort: 'medium' }, pi: { model: 'auto', providerId: 'xd' } } });
+    expect(draft.modelChosenByVendor.codex).toBe(true);
+    expect(issue('codex')).toBeNull();
+    expect(applySilentSwitchDraftTuple('pi', tuple!)).toBe(false);
   });
 
   it('恢复推荐只撤销 effort/Fast 调档，不清除模型/来源/Harness 选择', async () => {
@@ -663,6 +697,7 @@ describe('newMakerDraft store', () => {
       { providerId: 'acp-plugin:agy-plugin:agy', modelId: 'gemini-4-neon', permissionMode: 'plan', effort: 'xhigh' }],
     ['不是插件引擎来源', { providerId: 'anthropic', modelId: 'claude-opus-5' }, null],
     ['缺模型', { providerId: 'acp-plugin:dsh-plugin:dsh', modelId: '' }, null],
+    ['缺分享 ID', { providerId: 'acp-plugin:dsh-plugin:dsh', modelId: 'default', deviceId: 'share:' }, null],
   ])('插件引擎选择跨重启保留,脏值丢弃:%s', async (_label, stored, expected) => {
     const m1 = await loadModule();
     const ccBefore = m1.getDraft().lastByVendor.cc;
@@ -670,6 +705,40 @@ describe('newMakerDraft store', () => {
     const m2 = await reloadModule();
     expect(m2.getDraft().pluginEngine).toEqual(expected);
     expect(m2.getDraft().lastByVendor.cc).toEqual(ccBefore);
+  });
+
+  // #13442（unit）：原有草稿用例只覆盖本机引擎。用一条授权目录中的分享 ACP 模型通过
+  // patchDraft 保存并重载，验证任务路由仍指向该分享；目录不再授权时，同名本机引擎也不能接替。
+  it('restores the shared ACP engine only through its own offered catalogue', async () => {
+    const deviceId = 'share:synthetic-share';
+    const engine: PluginEngineView = {
+      key: 'test-plugin:test-engine',
+      providerId: 'acp-plugin:test-plugin:test-engine',
+      ghostId: 'test-plugin',
+      harnessId: 'test-engine',
+      name: 'Synthetic ACP',
+      availability: { state: 'available' },
+      models: [{ id: 'selected-model', displayName: 'Selected model' }],
+      permissionModes: [{ id: 'default', displayName: 'Default' }],
+      defaultPermissionMode: 'default',
+      remoteUse: { supported: true, shareSupported: true, enabled: true },
+    };
+    const selection = { deviceId, providerId: engine.providerId, modelId: 'selected-model' };
+    const choices = (catalogue: readonly PluginEngineView[] | null) => [
+      engine,
+      ...remotePluginEngineChoices([{ deviceId }], new Map([[deviceId, catalogue]]), (id) => id),
+    ];
+
+    (await loadModule()).patchDraft({ pluginEngine: selection });
+    const restored = (await reloadModule()).getDraft().pluginEngine;
+    expect(restored).toEqual(selection);
+    const active = resolveActivePluginEngine(choices([engine]), restored);
+    expect(active && pluginEngineSessionCreateFields(active)).toMatchObject({
+      agentKind: 'acp', agentDeviceId: deviceId, providerId: engine.providerId, model: selection.modelId,
+    });
+
+    expect(resolveActivePluginEngine(choices(null), restored)).toBeNull();
+    expect(resolveActivePluginEngine(choices([{ ...engine, models: [], defaultModelAllowed: false }]), restored)).toBeNull();
   });
 
   it('extraDirs 不跨重启还原:运行内生效,重启后一律空(引用目录=单次草稿授权)', async () => {
@@ -694,6 +763,7 @@ describe('newMakerDraft store', () => {
         workerConfig: {
           role: 'developer',
           model: 'claude-opus-4-7',
+          modelGroup: 'coding',
           effort: 'high',
           fast: true,
           workerPermissionMode: 'bypassPermissions',
@@ -712,11 +782,43 @@ describe('newMakerDraft store', () => {
     expect(wc).toMatchObject({
       role: 'developer',
       model: 'claude-opus-4-7',
+      modelGroup: 'coding',
       effort: 'high',
       fast: true,
       workerPermissionMode: 'bypassPermissions',
     });
     expect(wc?.initialTask).toBeUndefined();
+  });
+
+  // Unit: reopening a saved draft must keep the plugin engine and model together.
+  it('restores the agy Worker selection locally and clears it when moving to SSH', async () => {
+    const store = await loadModule();
+    const collab = {
+      enabled: true, worker: 'acp' as const,
+      workerConfig: { role: 'developer', providerId: 'acp-plugin:agy-plugin:agy', model: 'gemini-3-pro' },
+    };
+    store.patchCollab(collab);
+    const restored = await reloadModule();
+    expect(restored.getDraft().collab).toMatchObject(collab);
+    restored.patchDraft({ remoteHostId: 'ssh-1', workingDir: '/project' });
+    expect(restored.getDraft().collab.enabled).toBe(false);
+    expect(restored.getDraft().collab.workerConfig).toBeUndefined();
+  });
+
+  it('preserves the Worker model group when the collaboration draft moves to SSH', async () => {
+    const { getDraft, patchDraft } = await loadModule();
+    patchDraft({
+      collab: {
+        enabled: true,
+        worker: 'cc',
+        workerConfig: { role: 'developer', model: 'claude-opus-4-7', modelGroup: 'coding' },
+      },
+    });
+    patchDraft({ workingDir: '/ssh/project', remoteHostId: 'ssh-1' });
+    expect(getDraft().collab).toMatchObject({
+      enabled: true,
+      workerConfig: { model: 'claude-opus-4-7', modelGroup: 'coding' },
+    });
   });
 
   it('另起干净任务时只关闭协同，不覆盖 Worker 创建偏好', async () => {
@@ -794,12 +896,12 @@ describe('newMakerDraft store', () => {
     switchVendor('codex');
     const d = getDraft();
     expect(d.vendor).toBe('codex');
-    // 旧 vendor(cc)的 prefs 被落地为传入的值
+    // 旧 vendor(cc)的 prefs 被落地为传入的值，且新建任务的权限选择跨 Harness 沿用
     expect(d.lastByVendor.cc.model).toBe('claude-opus-4-7');
     expect(d.lastByVendor.cc.effort).toBe('high');
     expect(d.lastByVendor.cc.permissionMode).toBe('bypassPermissions');
-    // 新 vendor(codex)的 prefs 不变(等待用户在 codex 下继续操作)
-    expect(d.lastByVendor.codex.permissionMode).toBe('auto');
+    expect(d.permissionMode).toBe('bypassPermissions');
+    expect(d.lastByVendor.codex.permissionMode).toBe('bypassPermissions');
   });
 
   it('switchVendor:选中的引擎跨重启保留(模拟 app 重启后仍是上次选的)', async () => {
@@ -2087,11 +2189,16 @@ describe('Bot default model write-through', () => {
   }
   it('persists the same default used by new tasks and survives reloading', async () => {
     const { store, selection } = await setup();
+    store.patchDraft({ agentDeviceId: 'share:old', remoteModelChoice: {
+      deviceId: 'share:old', vendor: 'codex', model: 'luna', providerId: 'openai', effort: 'medium', fastMode: false,
+    } });
     expect(store.applyAppDefaultModelSelection(selection)).toBe(true);
+    expect(store.getDraft().agentDeviceId).toBeNull();
     const reloaded = await reloadModule();
     reloaded.setNewMakerDraftOwner('bot-owner');
     expect(reloaded.getDraft().lastByVendor.codex).toMatchObject({ model: 'luna', effort: 'low', providerId: 'openai' });
     expect(reloaded.getDraft().vendor).toBe('codex');
+    expect(reloaded.getDraft().agentDeviceId).toBeNull();
     expect(reloaded.getDraft().defaultTupleSelectionCustomized).toBe(true);
   });
   it.each(['owner', 'expiry', 'selection', 'disk'] as const)('refuses %s changes without reporting success', async reason => {
@@ -2108,6 +2215,34 @@ describe('Bot default model write-through', () => {
 
 // Agent 在同账号另一台电脑运行:任务、项目与命令仍在本机,只记下运行 Agent 的电脑。
 describe('newMakerDraft agent computer', () => {
+  // Standard: editing a controlled computer's project must preserve the owner's local model default.
+  it('preserves a local share while another window edits a remote project', async () => {
+    const local = await loadModule();
+    const remote = await openSecondWindow();
+    remote.patchDraft({ deviceLinkDeviceId: 'office', workingDir: '/first' });
+    local.patchDraft({ agentDeviceId: 'share:selected', remoteModelChoice: {
+      deviceId: 'share:selected', vendor: 'cc', model: 'chosen', providerId: 'source', effort: 'high', fastMode: false,
+    } });
+    remote.patchDraft({ deviceLinkDeviceId: 'office', workingDir: '/second' });
+    expect(remote.getDraft()).toMatchObject({ deviceLinkDeviceId: 'office', agentDeviceId: null });
+    expect((await reloadModule()).getDraft()).toMatchObject({ deviceLinkDeviceId: null, agentDeviceId: 'share:selected' });
+  });
+  // Standard: an unrelated write in a stale window must not route the next task to a previous share.
+  it('keeps the latest shared provider when another window changes the project', async () => {
+    const store = await loadModule();
+    const selectShare = (deviceId: string) => store.patchDraft({
+      agentDeviceId: deviceId, remoteModelChoice: {
+        deviceId, vendor: 'cc', model: 'chosen', providerId: 'source', effort: 'high', fastMode: false,
+      },
+    });
+    selectShare('share:first');
+    const stale = await openSecondWindow();
+    selectShare('share:second');
+    stale.patchDraft({ workingDir: '/project' });
+    expect((await reloadModule()).getDraft()).toMatchObject({
+      workingDir: '/project', agentDeviceId: 'share:second', remoteModelChoice: { deviceId: 'share:second' },
+    });
+  });
   it('keeps the agent computer across local folder changes and clears it for remote tasks', async () => {
     const { getDraft, patchDraft } = await loadModule();
     patchDraft({ agentDeviceId: ' dev-b ', agentDeviceName: 'Office Mac' });
@@ -2157,25 +2292,103 @@ describe('newMakerDraft agent computer', () => {
   });
 });
 
-// Standard: the new-task preference must survive owner reload without becoming a picker override.
-it('persists the default, preserves explicit permissions, isolates owners and restores auto', async () => {
+// Standard: the new-task preference must survive owner reload without becoming a picker override,
+// while explicit picker choices carry across built-in harnesses and plugin engines.
+it('persists the default, carries explicit permissions across harnesses, isolates owners and restores auto', async () => {
   const m = await loadModule();
   m.setNewMakerDraftOwner('permission-owner');
-  m.patchVendorPrefs('cc', { permissionMode: 'acceptEdits' });
   m.setNewChatDefaultPermissionMode('bypassPermissions');
-  expect(m.getDraft().lastByVendor.cc.permissionMode).toBe('acceptEdits');
+  expect(m.getDraft().lastByVendor.cc.permissionMode).toBe('bypassPermissions');
   expect(m.getDraft().lastByVendor.pi.permissionMode).toBe('bypassPermissions');
+  expect(m.getDraftPermissionPreference(m.getDraft())).toBe('bypassPermissions');
   m.setNewMakerDraftOwner('another-owner');
   expect(m.getDraft().lastByVendor.pi.permissionMode).toBe('auto');
   m.setNewMakerDraftOwner('permission-owner');
   expect(m.getDraft().newChatDefaultPermissionMode).toBe('bypassPermissions');
   m.setNewChatDefaultPermissionMode(null);
   expect(m.getDraft().lastByVendor.pi.permissionMode).toBe('auto');
+  m.patchVendorPrefs('cc', { permissionMode: 'acceptEdits' });
+  m.setNewChatDefaultPermissionMode('bypassPermissions');
+  // Explicit picker choice is preserved across owners and resolves safely per harness.
+  expect(m.getDraft().permissionMode).toBe('acceptEdits');
   expect(m.getDraft().lastByVendor.cc.permissionMode).toBe('acceptEdits');
+  expect(m.getDraft().lastByVendor.pi.permissionMode).toBe('ask');
   m.setNewMakerDraftOwner('another-owner');
   m.setNewMakerDraftOwner('permission-owner');
+  expect(m.getDraft().newChatDefaultPermissionMode).toBe('bypassPermissions');
+  expect(m.getDraft().permissionMode).toBe('acceptEdits');
+  m.setNewChatDefaultPermissionMode(null);
   expect(m.getDraft().newChatDefaultPermissionMode).toBeNull();
-  expect(m.getDraft().lastByVendor.pi.permissionMode).toBe('auto');
+  expect(m.getDraft().lastByVendor.cc.permissionMode).toBe('acceptEdits');
+});
+
+// Unit: unified new-task permission memory across built-in harnesses and plugin engines.
+// Gap: switching from Claude/Codex/Pi (bypassPermissions) to a plugin engine (Antigravity) previously dropped
+// permissionMode to undefined and fell back to the engine's 'default' mode.
+// Minimum failing input: setDraftPermissionMode('bypassPermissions') -> applyPluginEngineDraftRoute -> reload.
+describe('unified new-task permission across harnesses and plugin engines', () => {
+  it('carries the last selected permission across built-in vendors, plugin engines and reload', async () => {
+    const m1 = await loadModule();
+    m1.setDraftPermissionMode('bypassPermissions');
+    expect(m1.getDraft().permissionMode).toBe('bypassPermissions');
+    expect(m1.getDraft().lastByVendor.cc.permissionMode).toBe('bypassPermissions');
+    expect(m1.getDraft().lastByVendor.codex.permissionMode).toBe('bypassPermissions');
+    expect(m1.getDraft().lastByVendor.pi.permissionMode).toBe('bypassPermissions');
+    expect(m1.applyPluginEngineDraftRoute({ providerId: 'acp-plugin:agy:agy', modelId: 'gemini-4-neon' })).toBe(true);
+    expect(m1.getDraft().pluginEngine?.permissionMode).toBe('bypassPermissions');
+
+    // Switching permission while on a plugin engine updates built-in harnesses too (default <-> ask).
+    m1.setDraftPermissionMode('default');
+    expect(m1.getDraft().permissionMode).toBe('default');
+    expect(m1.getDraft().pluginEngine?.permissionMode).toBe('default');
+    expect(m1.getDraft().lastByVendor.cc.permissionMode).toBe('ask');
+    expect(m1.getDraft().lastByVendor.codex.permissionMode).toBe('ask');
+
+    const m2 = await reloadModule();
+    expect(m2.getDraft().permissionMode).toBe('default');
+    expect(m2.getDraft().lastByVendor.cc.permissionMode).toBe('ask');
+  });
+
+  it('preserves un-clamped mode intent across harnesses that do not support it', async () => {
+    const m = await loadModule();
+    m.setDraftPermissionMode('acceptEdits');
+    expect(m.resolveBuiltinVendorPermissionMode('cc', m.getDraftPermissionPreference(m.getDraft()))).toBe('acceptEdits');
+    expect(m.resolveBuiltinVendorPermissionMode('codex', m.getDraftPermissionPreference(m.getDraft()))).toBe('ask');
+    expect(m.getDraft().permissionMode).toBe('acceptEdits');
+  });
+
+  // Security regression (PR #12880 review): tightening root permissionMode in window B must also
+  // tighten window A's in-memory pluginEngine.permissionMode so A never submits stale bypassPermissions.
+  it('syncs pluginEngine.permissionMode when another window tightens root permissionMode', async () => {
+    const winA = await loadModule();
+    winA.setDraftPermissionMode('bypassPermissions');
+    expect(winA.applyPluginEngineDraftRoute({ providerId: 'acp-plugin:agy:agy', modelId: 'gemini-4-neon' })).toBe(true);
+    expect(winA.getDraft().pluginEngine?.permissionMode).toBe('bypassPermissions');
+
+    secondWindow.__reloadForTest();
+    secondWindow.setDraftPermissionMode('ask');
+    const updatedPayload = memStorage.getItem(winA.__STORAGE_KEY);
+    onStorage?.({
+      key: winA.__STORAGE_KEY,
+      newValue: updatedPayload,
+      storageArea: memStorage,
+    } as unknown as StorageEvent);
+
+    expect(winA.getDraft().permissionMode).toBe('ask');
+    expect(winA.getDraft().pluginEngine?.permissionMode).toBe('ask');
+
+    // sanitize also reconciles a persisted snapshot where pluginEngine still holds stale bypassPermissions.
+    const stored = JSON.parse(updatedPayload!);
+    const inconsistentPayload = JSON.stringify({
+      ...stored,
+      permissionMode: 'ask',
+      pluginEngine: { providerId: 'acp-plugin:agy:agy', modelId: 'gemini-4-neon', permissionMode: 'bypassPermissions' },
+    });
+    memStorage.setItem(winA.__STORAGE_KEY, inconsistentPayload);
+    const reloaded = await reloadModule();
+    expect(reloaded.getDraft().permissionMode).toBe('ask');
+    expect(reloaded.getDraft().pluginEngine?.permissionMode).toBe('ask');
+  });
 });
 
 // #10731 review: unit，真实 store + 内存存储。旧覆盖缺少临时引擎、无关写入与重启的组合。
@@ -2208,16 +2421,20 @@ describe('remote engine is a window-local choice', () => {
       defaultsReady: false, selectedAgentKind: undefined,
     })).toBe('codex');
   });
-  it('preserves manual selection even after selecting the followed engine again', () => {
+  // 引擎按电脑记：远程电脑上手动换的引擎属于那台电脑，不写进本机落盘。
+  // 最小失败输入：本机 Pi → 远程跟随 Claude → 手动换 Codex → 改目录 → 重启，应仍是 Pi。
+  it('keeps a manual engine change on the remote computer out of the local draft', () => {
     followRemote();
     draftStore.switchVendor('codex', { userSelected: true });
-    draftStore.switchVendor('cc', { userSelected: true });
+    draftStore.patchDraft({ extraDirs: ['/extra'] });
+    expect(draftStore.getDraft().vendor).toBe('codex');
+    expect(draftStore.getDraftForPreferenceSync().vendor).toBe('pi');
     expect(engineFollow.nextRemoteDraftEngine({
-      ownerId: null, deviceId: null, currentVendor: 'cc',
+      ownerId: null, deviceId: null, currentVendor: 'codex',
       defaultsReady: false, selectedAgentKind: undefined,
-    })).toBeNull();
+    })).toBe('pi');
     draftStore.__reloadForTest();
-    expect(draftStore.getDraft().vendor).toBe('cc');
+    expect(draftStore.getDraft().vendor).toBe('pi');
   });
 });
 

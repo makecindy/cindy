@@ -48,6 +48,23 @@ it('keeps the clock-minute label for a daily schedule', () => {
   expect(screen.queryByLabelText('scheduler.chips.scheduleField.intervalMinutesAria')).toBeNull();
 });
 
+it.each([
+  { stored: '0 9 * * *', chooseCustom: true },
+  { stored: '0 9,18 * * *', chooseCustom: false },
+])('lets the user edit the full Cron expression $stored', ({ stored, chooseCustom }) => {
+  const onChange = renderChip(stored);
+  const customLabel = 'scheduler.chips.scheduleMenu.custom';
+  if (chooseCustom) fireEvent.click(screen.getByRole('button', { name: customLabel }));
+  const input = screen.getByRole<HTMLInputElement>('textbox', { name: customLabel });
+  expect(input.value).toBe(stored);
+  expect(onChange).not.toHaveBeenCalled();
+
+  fireEvent.change(input, { target: { value: '' } });
+  fireEvent.change(input, { target: { value: '0 9,17 * * *' } });
+  expect(input.value).toBe('0 9,17 * * *');
+  expect(onChange).toHaveBeenLastCalledWith({ cronExpr: '0 9,17 * * *', intervalMs: undefined });
+});
+
 it.each([7, 28, 59])('keeps legacy */%i when the selected minute menu is clicked again', (minutes) => {
   const onChange = renderChip(`*/${minutes} * * * *`);
   const menu = screen.getByRole('button', { name: 'scheduler.chips.scheduleMenu.intervalMinutes' });
@@ -86,7 +103,7 @@ it.each(staleCronValues)('starts the hour preset at its default, ignoring exact-
 
 it.each([7, 28, 59])('switches a stale Cron from the current %i-minute interval and keeps the legacy value on menu re-selection', (minutes) => {
   const onChange = renderChip('*/5 * * * *', minutes * 60_000);
-  fireEvent.click(screen.getByRole('button', { name: 'scheduler.chips.timingMode.cron' }));
+  fireEvent.click(screen.getByRole('radio', { name: 'scheduler.chips.timingMode.cron' }));
   expect(onChange).toHaveBeenCalledWith({ cronExpr: `*/${minutes} * * * *`, intervalMs: undefined });
   expect(screen.getByRole('combobox').textContent).toContain(`${minutes}*`);
   onChange.mockClear();

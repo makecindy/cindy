@@ -159,6 +159,23 @@
     "status": {
       "running": "运行中",
       "done": "已完成"
+    },
+    "collab": {
+      "wait": "等待 Subagent",
+      "waitCount_one": "等待 {{count}} 个 Subagent",
+      "waitCount_other": "等待 {{count}} 个 Subagent",
+      "sendInput": "向 Subagent 发送指令",
+      "sendInputCount_one": "向 {{count}} 个 Subagent 发送指令",
+      "sendInputCount_other": "向 {{count}} 个 Subagent 发送指令",
+      "resume": "恢复 Subagent",
+      "resumeCount_one": "恢复 {{count}} 个 Subagent",
+      "resumeCount_other": "恢复 {{count}} 个 Subagent",
+      "close": "关闭 Subagent",
+      "closeCount_one": "关闭 {{count}} 个 Subagent",
+      "closeCount_other": "关闭 {{count}} 个 Subagent",
+      "spawn": "启动 Subagent",
+      "spawnCount_one": "启动 {{count}} 个 Subagent",
+      "spawnCount_other": "启动 {{count}} 个 Subagent"
     }
   },
   "agentActions": {
@@ -197,6 +214,8 @@
     "retryIn": "{{seconds}} 秒后自动重试"
   },
   "subscriptionAccountError": {
+    "unreachable": "暂时连不上 Codex 账号服务。",
+    "rechecking": "暂时连不上 Codex 账号服务，将于 {{resetAt}} 自动重试。",
     "poolModelLimited": "当前模型的订阅额度已达上限。可以先切换模型。",
     "poolRetryUntil": "可在 {{resetAt}} 后重试。",
     "poolOtherSignedOut": "另有订阅账号已登出，可在执行任务的电脑上重新登录后重试。",

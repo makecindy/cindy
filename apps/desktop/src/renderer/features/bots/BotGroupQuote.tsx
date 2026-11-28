@@ -5,6 +5,7 @@
  * （原消息可定位时点击跳过去）。左侧竖线与 Markdown 引用块同一 token；摘要最多一行，
  * 长消息不会撑开时间线。原消息已删除时只显示作者与「原消息已删除」，不再露出快照。
  */
+import { useEffect, useRef, type ClipboardEvent } from 'react';
 import { Paperclip, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
@@ -13,6 +14,9 @@ import { Tip } from '@/components/ui/tooltip';
 import { ChatReplyIcon } from '@/components/chat/ChatReplyIcon';
 import { cn } from '@/lib/utils';
 import type { BotGroupQuoteDisplay } from '../../../shared/botGroupChat';
+
+// Wait for a second mouse press before treating the first click as a jump.
+const QUOTE_SINGLE_CLICK_DELAY_MS = 500;
 
 /** Words for the excerpt line; attachments summarize when the quoted message had no text. */
 export function botGroupQuoteSummary(display: BotGroupQuoteDisplay, t: TFunction): string {
@@ -48,6 +52,17 @@ function QuoteLines({ display, compact }: { display: BotGroupQuoteDisplay; compa
   );
 }
 
+// A quote contains only plain text. Preserve the native line break between its
+// author and excerpt when both are selected; wider selections belong to the timeline.
+function copyQuoteSelection(event: ClipboardEvent<HTMLElement>) {
+  const quote = event.currentTarget;
+  const selection = quote.ownerDocument.getSelection();
+  if (!selection || selection.isCollapsed ||
+      !quote.contains(selection.anchorNode) || !quote.contains(selection.focusNode)) return;
+  event.clipboardData.setData('text/plain', selection.toString());
+  event.preventDefault();
+}
+
 /**
  * A sent message's quote. With `onLocate` it is a button that goes to the original;
  * without one (deleted original, or a Thread root's quote) it is plain content.
@@ -62,6 +77,10 @@ export function BotGroupQuoteBlock({
   align?: 'left' | 'right';
 }) {
   const { t } = useTranslation();
+  const pendingJump = useRef<number | undefined>(undefined);
+  const cancelJump = () => window.clearTimeout(pendingJump.current);
+  useEffect(() => () => window.clearTimeout(pendingJump.current), []);
+
   const body = (
     <>
       <span aria-hidden className="w-0.5 shrink-0 self-stretch bg-[var(--msg-blockquote-border)]" />
@@ -69,11 +88,11 @@ export function BotGroupQuoteBlock({
     </>
   );
   const frame = cn(
-    'flex w-fit min-w-0 max-w-full select-none gap-2 rounded-lg py-0.5 text-left',
+    'flex w-fit min-w-0 max-w-full select-text gap-2 rounded-lg py-0.5 text-left',
     align === 'right' && 'self-end',
   );
   if (!onLocate || display.state === 'deleted') {
-    return <div data-testid="bot-group-quote" data-quote-state={display.state} className={frame}>{body}</div>;
+    return <div data-testid="bot-group-quote" data-quote-state={display.state} onCopy={copyQuoteSelection} className={frame}>{body}</div>;
   }
   return (
     <button
@@ -81,7 +100,22 @@ export function BotGroupQuoteBlock({
       data-testid="bot-group-quote"
       data-quote-state={display.state}
       aria-label={t('bots.groupChat.quote.jumpLabel', { name: display.authorName, summary: botGroupQuoteSummary(display, t) })}
-      onClick={onLocate}
+      onCopy={copyQuoteSelection}
+      onMouseDown={cancelJump}
+      onBlur={cancelJump}
+      onClick={event => {
+        cancelJump();
+        if (event.detail === 0) {
+          onLocate(); // Keyboard and assistive activation do not start a double-click.
+          return;
+        }
+        const button = event.currentTarget;
+        const selection = button.ownerDocument.getSelection();
+        if (event.detail > 1 || (selection && !selection.isCollapsed && selection.containsNode(button, true))) return;
+        pendingJump.current = window.setTimeout(() => {
+          if (button.isConnected) onLocate();
+        }, QUOTE_SINGLE_CLICK_DELAY_MS);
+      }}
       className={cn(
         frame,
         'outline-none transition-opacity hover:opacity-75 focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',

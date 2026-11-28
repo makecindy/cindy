@@ -55,7 +55,7 @@ const member = {
 };
 const view: ProviderGroupView = {
   providerId: 'anthropic',
-  config: { strategy: 'least', autoSwitch: true, members: [member] },
+  config: { strategy: 'expiring', autoSwitch: true, members: [member] },
   members: [{ ...member, state: 'available', running: 0, appVersion: '0.1.130' }],
 };
 
@@ -99,7 +99,7 @@ function pool(data: AccountScenario): SubscriptionPoolView {
   return {
     providerId: 'anthropic',
     configured: !data.single,
-    strategy: 'least',
+    strategy: 'expiring',
     accounts: data.singleAdded
       ? [account('default', { status: 'signed-out' }), second]
       : data.single

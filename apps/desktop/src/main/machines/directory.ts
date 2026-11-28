@@ -77,7 +77,7 @@ export interface MachineDirectoryDeps {
   /** The SSH config could not be read: listSsh then holds the last good hosts, or none. */
   sshConfigProblem?(): string | null;
   /** 在那台主机上跑只读状态命令，返回输出；连不上时抛错。 */
-  readSsh(id: string): Promise<string>;
+  readSsh(id: string, options: { allowFirstTrust: false }): Promise<string>;
   /** 这台的密钥是否已被信任过；不连接。 */
   isSshKeyKnown(hostname: string, port: number): Promise<boolean>;
   /** 传输层等多久算这次没问到：一台卡住不能拖住其他机器。 */
@@ -102,13 +102,13 @@ async function probeSsh(host: Awaited<ReturnType<MachineDirectoryDeps['listSsh']
   const empty = { os: null, arch: null, status: null };
   try {
     if (!await deps.isSshKeyKnown(host.hostname, host.port)) return { ...host, availability: 'unverified', ...empty };
-    const parsed = parseSshStatus(await withTimeout(deps.readSsh(host.id), deps.probeTimeoutMs ?? SSH_PROBE_TIMEOUT_MS));
+    const parsed = parseSshStatus(await withTimeout(deps.readSsh(host.id, { allowFirstTrust: false }), deps.probeTimeoutMs ?? SSH_PROBE_TIMEOUT_MS));
     return parsed
       ? { ...host, availability: 'reachable', os: parsed.os, arch: parsed.arch, status: parsed.status }
       : { ...host, availability: 'unreadable', ...empty };
   } catch (error) {
     const code = /^\[([A-Z_]+)\]/.exec(message(error))?.[1];
-    return { ...host, availability: code === 'SSH_HOST_KEY_MISMATCH' ? 'host_key_changed' : 'unreachable', ...empty, ...(code ? { errorCode: code } : {}) };
+    return { ...host, availability: code === 'SSH_HOST_KEY_MISMATCH' ? 'host_key_changed' : code === 'SSH_HOST_UNVERIFIED' ? 'unverified' : 'unreachable', ...empty, ...(code ? { errorCode: code } : {}) };
   }
 }
 

@@ -341,6 +341,11 @@ export interface HookControlManager {
     action: 'connect' | 'provider' | 'add-to-group',
     scopeId?: string,
   ): Promise<boolean>;
+  /** The same link without opening it, for a controller that opens it on its own computer. */
+  providerActionUrl(
+    provider: NeutralHookProvider,
+    action: 'connect' | 'provider' | 'add-to-group',
+  ): string | null;
   getProviderWorkspacePrefs(provider: NeutralHookProvider): Promise<ProviderPrefsView>;
   setProviderWorkspacePrefs(
     provider: NeutralHookProvider,
@@ -1586,7 +1591,9 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
           (action) => action !== 'select_device' || selectionReady) },
       // store 侧已保证读出来的别名仍然有效(目录删掉即归零), 这里直投。
       defaultWorkspace: defaultWorkspaceOf(store.get(), lane.config.provider),
-      ...(lane.config.provider === 'x' ? { companionBotId: store.get().xCompanionBotId ?? null } : {}),
+      companionBotId: lane.config.provider === 'x'
+        ? store.get().xCompanionBotId ?? null
+        : store.get().companionBotIds?.[lane.config.provider as 'telegram' | 'feishu' | 'discord'] ?? null,
     };
   }
 
@@ -1594,6 +1601,7 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
     const config = store.get();
     return {
       enabled: config.enabled,
+      companionBotId: config.companionBotIds?.slack ?? null,
       lifecycleAnnouncement:
         config.lifecycleAnnouncementOverride ?? DEFAULT_SLACK_LIFECYCLE_ANNOUNCEMENT,
       url: store.effectiveUrl(),
@@ -3827,6 +3835,11 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
       if (!url) return false;
       await lane.config.openUrl(url);
       return true;
+    },
+    providerActionUrl(provider, action) {
+      const lane = laneByProvider.get(provider);
+      if (lane === undefined || lane.binding === null) return null;
+      return lane.config.actionUrl(action, lane.binding) || null;
     },
     getProviderWorkspacePrefs(provider) {
       const lane = laneByProvider.get(provider);

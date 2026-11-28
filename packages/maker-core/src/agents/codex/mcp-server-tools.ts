@@ -16,7 +16,10 @@ type StatusRequest = <T>(
 /**
  * Read one MCP server's tools from this thread's own MCP status. The shared
  * app-server's process-level list is not evidence for a thread, so `threadId`
- * is always sent. Read-only: never starts a server or calls its tools.
+ * and `serverName` are always sent. Without the server selector, native Codex
+ * starts fresh catalog discovery for every configured server, even with a
+ * threadId; a stalled sibling can then hide a healthy helper behind a timeout.
+ * Read-only: reuse the selected thread connection, never start catalog clients.
  */
 export async function readCodexThreadMcpServerTools(
   request: StatusRequest,
@@ -24,7 +27,30 @@ export async function readCodexThreadMcpServerTools(
   serverName: string,
   timeoutMs = 5_000,
 ): Promise<AgentMcpServerToolsReport> {
+  return readCodexThreadMcpServerToolsBeforeDeadline(request, threadId, serverName, Date.now() + timeoutMs);
+}
+
+/** Query each selected thread server under one shared deadline. */
+export async function readCodexThreadMcpServersTools(
+  request: StatusRequest,
+  threadId: string,
+  serverNames: readonly string[],
+  timeoutMs = 5_000,
+): Promise<Map<string, AgentMcpServerToolsReport>> {
   const deadline = Date.now() + timeoutMs;
+  const reports = await Promise.all([...new Set(serverNames)].map(async serverName => [
+    serverName,
+    await readCodexThreadMcpServerToolsBeforeDeadline(request, threadId, serverName, deadline),
+  ] as const));
+  return new Map(reports);
+}
+
+async function readCodexThreadMcpServerToolsBeforeDeadline(
+  request: StatusRequest,
+  threadId: string,
+  serverName: string,
+  deadline: number,
+): Promise<AgentMcpServerToolsReport> {
   const seenCursors = new Set<string>();
   let cursor: string | null = null;
   for (let page = 0; page < MAX_STATUS_PAGES; page++) {
@@ -32,10 +58,10 @@ export async function readCodexThreadMcpServerTools(
     if (remainingMs <= 0) throw new Error('Codex MCP status timed out');
     const status: CodexMcpServerStatusListResponse = await request<CodexMcpServerStatusListResponse>(
       Method.McpServerStatusList,
-      { cursor, limit: 100, detail: 'toolsAndAuthOnly', threadId },
+      { cursor, limit: 100, detail: 'toolsAndAuthOnly', threadId, serverName },
       { timeoutMs: remainingMs },
     );
-    const server = status.data.find((entry) => entry.name === serverName);
+    const server = status.data.find(entry => entry.name === serverName);
     if (server) return reportFromCodexStatus(server);
     cursor = status.nextCursor;
     if (cursor === null) return { state: 'not-mounted', tools: [] };

@@ -104,6 +104,8 @@ export interface NodeWorkerProcess {
   stdin: NodeWorkerWritable;
   stdout: NodeWorkerReadable;
   stderr: NodeWorkerReadable;
+  /** 宿主日志消费者须隐藏原始 stderr；不改变字节流或业务中继。 */
+  redactStderr?: boolean;
   pid?: number;
   killed?: boolean;
   /** Confirm OS absence and emit the existing exit lifecycle once, when supported. */
@@ -180,13 +182,14 @@ export interface GhostNodeRuntimeBrokerDeps {
   resolveOauthSecret?: (ghostId: string, secretKey: string, accountId?: string) => Promise<
     { ok: true; accessToken: string } | { ok: false; error: string }
   >;
-  spawnProcess: (entryPath: string, cwd: string, ghostId: string) => NodeWorkerProcess;
+  spawnProcess: (entryPath: string, cwd: string, ghostId: string, inheritEnv?: boolean) => NodeWorkerProcess;
   /** 代启原样 stdio 子进程(childSpawn;缺省用 utilityProcess 适配器)。 */
   spawnChildProcess: (
     entryPath: string,
     cwd: string,
     ghostId: string,
     args: string[],
+    inheritEnv?: boolean,
   ) => NodeWorkerProcess;
   sendToGhost?: (ghostId: string, payload: GhostPipeEventPush) => void;
   now?: () => number;
@@ -336,8 +339,6 @@ interface HarnessProcEntry {
   stopping: boolean;
 }
 
-/** 一个任务一个引擎进程;同一插件同时在世的引擎进程上限。 */
-export const GHOST_HARNESS_MAX_PROCESSES_PER_GHOST = 8;
 /** 每个引擎进程写入插件日志的 stderr 字符总量上限。 */
 const HARNESS_STDERR_LOG_CAP = 64 * 1024;
 
@@ -1254,6 +1255,7 @@ export class GhostNodeRuntimeBroker {
         root,
         ghostId,
         message.args ?? [],
+        entry.ghost.manifest.node?.inheritEnv === true,
       );
     } catch (error) {
       fail(error instanceof Error ? error.message : '子进程启动失败');
@@ -1432,7 +1434,8 @@ export class GhostNodeRuntimeBroker {
    *
    * 守门(fork 前同步现查,fork 就绪后再核一次):未在停止/更新窗口、owner 代次可用、插件已
    * 启用且整包批准有效、声明了 node 与该引擎、协议为 `acp`、receipt `approvedHarnesses`
-   * 明确批准、入口逐字命中 node.entries、解析后的路径不越出安装目录、数量不超顶。
+   * 明确批准、入口逐字命中 node.entries、解析后的路径不越出安装目录。引擎由 Cindy 主进程按
+   * 用户任务发起(不同于插件自主 childSpawn),与内置引擎一致不设每插件固定进程数上限。
    *
    * 返回的进程:stdin.write 只收 base64 字节串;stdout 是未消费的原始字节流(调用方挂
    * 'data' 前自缓冲);stderr 已由 broker 有界写入插件日志,调用方后挂的监听只看到之后的
@@ -1461,9 +1464,6 @@ export class GhostNodeRuntimeBroker {
     if (!ghost || !resolved) {
       return reject('This task engine is not enabled, approved and declared by the plugin');
     }
-    if (this.harnessProcessCount(ghostId) >= GHOST_HARNESS_MAX_PROCESSES_PER_GHOST) {
-      reject(`At most ${GHOST_HARNESS_MAX_PROCESSES_PER_GHOST} task engine processes can run per plugin`);
-    }
     const identity = harnessIdentity(ghost);
     const generation = this.stopGeneration.get(ghostId) ?? 0;
 
@@ -1479,7 +1479,7 @@ export class GhostNodeRuntimeBroker {
             : []),
         ...(options?.accountDir ? [GHOST_HARNESS_ACCOUNT_DIR_ARG, options.accountDir] : []),
       ];
-      proc = this.deps.spawnChildProcess(resolved.entryPath, resolved.root, ghostId, entryArgs);
+      proc = this.deps.spawnChildProcess(resolved.entryPath, resolved.root, ghostId, entryArgs, ghost.manifest.node?.inheritEnv === true);
     } catch (error) {
       return reject(error instanceof Error ? error.message : 'Task engine failed to start');
     }
@@ -1500,6 +1500,7 @@ export class GhostNodeRuntimeBroker {
     // error 不是退出证明:开始有界停止,记账保留到真实 exit。
     proc.on('error', () => this.stopHarnessProcess(entry, true));
     try {
+      proc.redactStderr = ghost.manifest.node?.inheritEnv === true;
       this.logHarnessStderr(entry);
       await new Promise<void>((resolve, fail) => {
         let settled = false;
@@ -1570,7 +1571,7 @@ export class GhostNodeRuntimeBroker {
       const decoded = decoder.write(typeof chunk === 'string' ? Buffer.from(chunk) : chunk);
       const remaining = HARNESS_STDERR_LOG_CAP - seen;
       seen += decoded.length;
-      const text = decoded.trim().slice(0, Math.min(4_096, remaining));
+      const text = (entry.proc.redactStderr && decoded ? '[REDACTED]' : decoded.trim()).slice(0, Math.min(4_096, remaining));
       if (text) this.deps.log?.warn('ghost harness stderr', { ghostId: entry.ghostId, harnessId: entry.harnessId, text });
       if (seen >= HARNESS_STDERR_LOG_CAP) {
         truncated = true;
@@ -1975,7 +1976,7 @@ export class GhostNodeRuntimeBroker {
     const forkStartedAt = this.diagnosticNow();
     let child: NodeWorkerProcess;
     try {
-      child = this.deps.spawnProcess(entryPath, root, ghost.manifest.id);
+      child = this.deps.spawnProcess(entryPath, root, ghost.manifest.id, node.inheritEnv === true);
     } catch (error) {
       throw new WorkerStartError(
         error instanceof Error ? error.message : String(error),
@@ -2619,7 +2620,7 @@ export class GhostNodeRuntimeBroker {
     }
     const ghostId = GhostNodeRuntimeBroker.instanceId(entry.ghost);
     const exitHint = this.exitStderrHint(entry, exitedAt);
-    const detail = `${this.redactSecrets(entry, error?.message ?? `code=${code}, signal=${signal ?? 'none'}`)}${
+    const detail = `${error ? this.redactSecrets(entry, error.message) : `code=${code}, signal=${signal ?? 'none'}`}${
       exitHint ? `:${exitHint}` : ''
     }`;
     for (const pending of entry.pending.values()) {
@@ -2694,6 +2695,7 @@ export class GhostNodeRuntimeBroker {
   }
 
   private redactSecrets(entry: WorkerEntry, text: string): string {
+    if (entry.ghost.manifest.node?.inheritEnv === true) return text ? '[REDACTED]' : text;
     if (!entry.exposedSecretValues.size) return text;
     const sorted = [...entry.exposedSecretValues].sort((a, b) => b.length - a.length);
     for (const secret of sorted) {
@@ -2703,10 +2705,10 @@ export class GhostNodeRuntimeBroker {
   }
 
   private redactStderrChunk(entry: WorkerEntry, chunk: string): string {
-    // 接收过凭据的 Worker 可能打印截断、分块或编码后的令牌，字符串匹配
+    // 继承完整环境或接收过凭据的 Worker 可能打印截断、分块或编码后的令牌，字符串匹配
     // 无法保证安全。整个 stderr 不落日志/诊断缓存，仅保留输出发生的标记；
     // 未注入凭据的 Worker 保留原始诊断，RPC 返回结果不受影响。
-    return chunk && entry.exposedSecretValues.size > 0 ? '[REDACTED]' : chunk;
+    return chunk && (entry.ghost.manifest.node?.inheritEnv === true || entry.exposedSecretValues.size > 0) ? '[REDACTED]' : chunk;
   }
 
   private scheduleIdleStop(entry: WorkerEntry): void {

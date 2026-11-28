@@ -27,10 +27,18 @@ import { DeviceLinkError, type PushOwnerStamp } from '@cindy/device-link';
 export function latestStatePushKey(channel: string, payload: unknown): string | null {
   switch (channel) {
     case 'maker:schedule:event': {
-      // 只整流运行诊断快照:完整 snapshot、高频,远程控制端(手机 / 桌面远程项目)
-      // 的事件投影把它判为「不刷新、不改 run」。其余调度事件保持逐帧与顺序。
+      // 运行诊断快照(runtime-state)与静默提醒开关(silenced / notified)在远程控制端的
+      // 事件投影都判为「不刷新、不改 run」:按类型与 scheduleId 暂存整流,不逐帧冲窗口。
+      // 其余驱动刷新的调度事件由 ScheduleEventPushStage 在拥塞时因果合并,常态保持即时发送。
       const type = isRecord(payload) ? payload.type : undefined;
-      return type === 'runtime-state' ? `${channel}#runtime-state` : null;
+      if (type === 'runtime-state') return `${channel}#runtime-state`;
+      if (type === 'silenced' || type === 'notified') {
+        const scheduleId = isRecord(payload) && typeof payload.scheduleId === 'string'
+          ? payload.scheduleId.trim()
+          : '';
+        return scheduleId ? `${channel}#notice#${scheduleId}` : `${channel}#notice`;
+      }
+      return null;
     }
     case 'usage:claude-subscription-changed':
     case 'usage:codex-account-changed':
@@ -59,11 +67,19 @@ export interface LatestStatePush {
 export const LATEST_STATE_PUSH_DELAY_MS = 250;
 /** 单轮最多写入的帧数,避免刚恢复的窗口被一次填满。 */
 const LATEST_STATE_PUSH_DRAIN_BATCH = 8;
+const STALL_FAST_PROBES = 9;
+const STALL_MAX_PROBES = 14;
+const STALL_UNNOTIFIED_POLL_MS = 5_000;
 const RETRY_CODES = new Set(['BACKPRESSURE', 'NOT_CONNECTED', 'LINK_NOT_OPEN']);
 
 export class LatestStatePushStage {
   private readonly pending = new Map<string, LatestStatePush>();
+  private consecutiveStalls = 0;
+  private parkedOnStall = false;
   private timer: ReturnType<typeof setTimeout> | null = null;
+  private timerDelayMs: number | null = null;
+  private nudgeTimer: ReturnType<typeof setTimeout> | null = null;
+  private nudgedWhileDraining = false;
   private draining = false;
   private disposed = false;
 
@@ -74,6 +90,8 @@ export class LatestStatePushStage {
     /** 写入一帧;isCurrent() 为 false 表示授权等待期间已被同键新值替换或已释放。 */
     private readonly send: (item: LatestStatePush, isCurrent: () => boolean) => Promise<void>,
     private readonly failed: (item: LatestStatePush, error: unknown) => void,
+    /** 队列深度每次下降是否都会收到可写通知;无确定性通知的路径保留低频兜底,避免永久挂起最后一项。 */
+    private readonly canParkOnStall: () => boolean = () => true,
   ) {}
 
   enqueue(key: string, item: LatestStatePush): void {
@@ -81,31 +99,101 @@ export class LatestStatePushStage {
     // 重新插入到末尾:按最近更新排序,长期不变的键不会抢在新鲜键前面。
     this.pending.delete(key);
     this.pending.set(key, item);
-    this.schedule();
+    if (this.writable()) {
+      this.parkedOnStall = false;
+      this.consecutiveStalls = 0;
+      if (this.draining) {
+        this.nudgedWhileDraining = true;
+        return;
+      }
+      this.scheduleAtMost(LATEST_STATE_PUSH_DELAY_MS);
+      return;
+    }
+    if (this.parkedOnStall) {
+      if (this.canParkOnStall()) return;
+      this.parkedOnStall = false;
+    }
+    this.schedule(this.nextDelayMs());
+  }
+
+  /** 对端窗口排空或链路重连后由外层主动唤醒,只提前、绝不延后已排期的 drain。 */
+  nudge(): void {
+    if (this.disposed || this.pending.size === 0) return;
+    if (!this.writable()) return;
+    this.parkedOnStall = false;
+    this.consecutiveStalls = 0;
+    if (this.draining) {
+      this.nudgedWhileDraining = true;
+      return;
+    }
+    this.scheduleAtMost(LATEST_STATE_PUSH_DELAY_MS);
   }
 
   get size(): number {
     return this.pending.size;
   }
 
-  dispose(): void {
-    this.disposed = true;
-    if (this.timer) clearTimeout(this.timer);
-    this.timer = null;
-    this.pending.clear();
+  get hasActiveTimer(): boolean {
+    return this.timer !== null || this.nudgeTimer !== null;
   }
 
-  private schedule(): void {
-    if (this.disposed || this.timer || this.draining || this.pending.size === 0) return;
-    this.timer = setTimeout(() => {
+  dispose(): void {
+    this.disposed = true;
+    this.clearTimers();
+    this.nudgedWhileDraining = false;
+    this.pending.clear();
+    this.consecutiveStalls = 0;
+    this.parkedOnStall = false;
+  }
+
+  private nextDelayMs(): number {
+    if (this.consecutiveStalls <= STALL_FAST_PROBES) return LATEST_STATE_PUSH_DELAY_MS;
+    if (this.consecutiveStalls >= STALL_MAX_PROBES) return STALL_UNNOTIFIED_POLL_MS;
+    const exp = this.consecutiveStalls - STALL_FAST_PROBES;
+    return Math.min(4_000, LATEST_STATE_PUSH_DELAY_MS * 2 ** exp);
+  }
+
+  private clearTimers(): void {
+    if (this.timer) {
+      clearTimeout(this.timer);
       this.timer = null;
+    }
+    if (this.nudgeTimer) {
+      clearTimeout(this.nudgeTimer);
+      this.nudgeTimer = null;
+    }
+    this.timerDelayMs = null;
+  }
+
+  private schedule(delayMs: number): void {
+    if (this.disposed || this.timer || this.draining || this.pending.size === 0 || this.parkedOnStall) return;
+    this.timerDelayMs = delayMs;
+    this.timer = setTimeout(() => {
+      this.clearTimers();
       void this.drain();
-    }, LATEST_STATE_PUSH_DELAY_MS);
+    }, delayMs);
+    (this.timer as unknown as { unref?: () => void }).unref?.();
+  }
+
+  private scheduleAtMost(delayMs: number): void {
+    if (this.disposed || this.draining || this.pending.size === 0 || this.parkedOnStall) return;
+    if (!this.timer) {
+      this.schedule(delayMs);
+      return;
+    }
+    if (this.timerDelayMs !== null && this.timerDelayMs > delayMs && !this.nudgeTimer) {
+      this.nudgeTimer = setTimeout(() => {
+        this.clearTimers();
+        void this.drain();
+      }, delayMs);
+      (this.nudgeTimer as unknown as { unref?: () => void }).unref?.();
+    }
   }
 
   private async drain(): Promise<void> {
     if (this.disposed || this.draining) return;
     this.draining = true;
+    let sentCount = 0;
     try {
       for (let count = 0; count < LATEST_STATE_PUSH_DRAIN_BATCH && this.pending.size > 0; count++) {
         if (this.disposed || !this.writable()) break;
@@ -118,11 +206,30 @@ export class LatestStatePushStage {
           if (error instanceof DeviceLinkError && RETRY_CODES.has(error.code)) break;
           this.failed(item, error);
         }
-        if (isCurrent()) this.pending.delete(key);
+        if (isCurrent()) {
+          this.pending.delete(key);
+          sentCount += 1;
+        }
       }
     } finally {
+      const wasNudged = this.nudgedWhileDraining;
+      this.nudgedWhileDraining = false;
       this.draining = false;
-      this.schedule();
+      if (this.disposed || this.pending.size === 0) {
+        this.consecutiveStalls = 0;
+        this.parkedOnStall = false;
+      } else if (sentCount > 0 || (wasNudged && this.writable())) {
+        this.consecutiveStalls = 0;
+        this.parkedOnStall = false;
+        this.schedule(LATEST_STATE_PUSH_DELAY_MS);
+      } else {
+        this.consecutiveStalls += 1;
+        if (this.consecutiveStalls >= STALL_MAX_PROBES && this.canParkOnStall()) {
+          this.parkedOnStall = true;
+        } else {
+          this.schedule(this.nextDelayMs());
+        }
+      }
     }
   }
 }

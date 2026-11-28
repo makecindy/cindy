@@ -45,6 +45,17 @@ it('routes detached file previews and thumbnails through their dedicated IPCs', 
   ]);
 });
 
+// Unit: the actual detached model picker preload admits a catalog retry and still rejects share mutations.
+it('lets the sidebar retry a shared model catalog without exposing share mutations', async () => {
+  await import('../../../preload/sidebarWindowPreload');
+  const api = bridge.expose.mock.calls.find(([name]) => name === 'electronAPI')![1];
+  const retry = { action: 'retry-model-catalog', agentDeviceId: 'share:s1' };
+  bridge.invoke.mockClear().mockResolvedValueOnce({ ok: true });
+  await expect(api.providerShare.command(retry)).resolves.toEqual({ ok: true });
+  await expect(api.providerShare.command({ action: 'leave', memberId: 'm1' })).rejects.toThrow('Unsupported model catalog operation');
+  expect(bridge.invoke).toHaveBeenCalledExactlyOnceWith('provider-share:command', retry);
+});
+
 let source = '';
 try {
   source = readFileSync(PRELOAD_PATH, 'utf-8').replace(/\r\n/g, '\n');

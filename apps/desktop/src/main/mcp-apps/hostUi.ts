@@ -3,6 +3,7 @@ import { MCP_APP_COMPOSER_ATTACHMENT_EVENT } from '../../shared/mcpApps.js';
 import { randomUUID } from 'node:crypto';
 import type { Tool, CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import type { McpUiHostContext } from '@modelcontextprotocol/ext-apps/app-bridge';
+import { isInlineComposerAction } from '@cindy/plugin-protocol';
 import { readPluginHostUi } from '../mcp-integrations/plugin-app-registry.js';
 import type { McpAppResourceBinding } from './host.js';
 import { activeOwnerScopeKey } from '../appSessionState.js';
@@ -98,13 +99,20 @@ const tool = (name: string, description: string, properties: Record<string, obje
 /** Resolve declarations in Main. A page never chooses an instance, task or resource. */
 export function bindPluginUiResource(caller: string, sessionId: string | null, instance: string, viewId: string,
   revision: (config: NonNullable<ReturnType<typeof readPluginHostUi>>['config']) => string,
-  assertScope?: () => Promise<void>, task?: Record<string, unknown>): McpAppResourceBinding {
+  assertScope?: () => Promise<void>, task?: Record<string, unknown>,
+  inlineAction?: { id: string; contributionId: string; openId: string }): McpAppResourceBinding {
   const entry = readPluginHostUi(instance);
   const view = entry?.host.views?.find(view => view.id === viewId);
   if (!entry || !view || view.scope === 'task' && sessionId === null) throw new Error('MCP_APP_SOURCE_UNAVAILABLE');
   // Global resources have genuinely global scope, even when opened beside a task.
   if (view.scope !== 'task' && sessionId !== null) throw new Error('MCP_APP_INVALID_SCOPE');
-  callerWindow(caller);
+  const window = callerWindow(caller);
+  if (inlineAction && (sessionId === null || isRsbWindowWebContentsId(window.webContents.id) ||
+    !entry.host.contributions?.some(item => item.id === inlineAction.contributionId && item.view === viewId &&
+      isInlineComposerAction(item, entry.host.views)))) throw new Error('MCP_APP_SOURCE_UNAVAILABLE');
+  // Only the trusted open-resource request supplies this binding. Context and
+  // page tool arguments cannot provide or change the occurrence identifier.
+  const composerAction = inlineAction ? { ...inlineAction, instanceId: instance } : undefined;
   const owner = activeOwnerScopeKey();
   const capabilities = entry.host.capabilities ?? [];
   const watching = sessionId !== null && (capabilities.includes('draft') || capabilities.includes('context'))
@@ -119,12 +127,18 @@ export function bindPluginUiResource(caller: string, sessionId: string | null, i
   const assertOperation = async () => { assertCurrent(); await assertScope?.(); assertCurrent(); };
   let draft: Record<string, unknown> | null = null;
   const tools: Tool[] = [tool('open', 'Open another approved view of this plugin.', { viewId: { type: 'string' }, input: { type: 'object' } }, ['viewId'])];
+  if (composerAction) tools.push(tool('composerAction', 'Start once or finish this composer presentation.', {
+    phase: { enum: ['start', 'finish'] }, status: { enum: ['success', 'error'] },
+    message: { type: 'string', maxLength: 160 },
+  }, ['phase']));
   if (entry.host.settings?.length) tools.push(tool('settings', 'Read, update or reset this plugin’s registered settings.', {
     operation: { enum: ['get', 'update', 'reset'] }, patch: { type: 'object' },
   }, ['operation']));
   if (capabilities.includes('draft') && sessionId !== null) tools.push(tool('draft',
-    'Read or edit the bound task draft. Read returns a JSON document chunk and nextOffset; subsequent chunks require revision. Replacing requires revision; never sends a message.', {
+    'Read or edit the bound task draft. Read returns JSON document chunks. Write text or a structured document, never both. A structured write needs the mounted editor. Replacing requires revision; never sends a message.', {
       mode: { enum: ['read', 'append', 'replace', 'replace-selection'] }, text: { type: 'string', maxLength: 128000 }, revision: { type: 'string' },
+      document: { type: 'object', properties: { type: { const: 'doc' }, content: { type: 'array' } }, required: ['type', 'content'],
+        description: 'Tiptap document in the same format as read. Preserve non-text nodes and marks when editing text.' },
       offset: { type: 'integer', minimum: 0 },
     }, ['mode']));
   if (capabilities.includes('appearance')) tools.push(tool('appearance', 'Read or patch Cindy appearance through its settings owner.', {
@@ -163,6 +177,7 @@ export function bindPluginUiResource(caller: string, sessionId: string | null, i
         ? context.cindy as Record<string, unknown> : {};
       return { source: { instanceId: instance, viewId, sessionId }, capabilities,
         input: supplied.input && typeof supplied.input === 'object' && !Array.isArray(supplied.input) ? supplied.input : {},
+        ...(composerAction ? { composerAction: { version: 1, dynamicItems: true, draftDocument: true, queuedActions: true } } : {}),
         ...(sessionId !== null && capabilities.includes('context') ? {
           context: { ...(supplied.context && typeof supplied.context === 'object' && !Array.isArray(supplied.context) ? supplied.context : {}),
             ...(task ? { task } : {}), sessionId }, selection: supplied.selection ?? '',
@@ -174,6 +189,21 @@ export function bindPluginUiResource(caller: string, sessionId: string | null, i
       await assertOperation(); signal.throwIfAborted();
       if (!tools.some(tool => tool.name === name)) throw new Error('MCP_APP_TOOL_NOT_VISIBLE');
       switch (name) {
+        case 'cindy.ui.composerAction': {
+          const { phase, status, message } = args;
+          if (phase === 'start' && Object.keys(args).length === 1) {
+            const reply = await rendererAction(caller, { kind: 'composer-action-start', sessionId, composerAction }, signal, assertOperation);
+            if (!reply || typeof reply !== 'object' || !('started' in reply) || reply.started !== true)
+              throw new Error('MCP_APP_ACTION_UNAVAILABLE');
+            return result({ started: true });
+          }
+          if (phase !== 'finish' || (status !== 'success' && status !== 'error') ||
+              message !== undefined && (typeof message !== 'string' || message.length > 160) ||
+              Object.keys(args).some(key => !['phase', 'status', 'message'].includes(key)))
+            throw new Error('MCP_APP_INVALID_REQUEST');
+          return result(await rendererAction(caller, { kind: 'composer-action-finish', sessionId, composerAction,
+            status, message }, signal, assertOperation));
+        }
         case 'cindy.ui.settings':
           if (!['get', 'update', 'reset'].includes(String(args.operation))) throw new Error('MCP_APP_INVALID_REQUEST');
           return result(await manageAppSettings({ operation: args.operation as 'get' | 'update' | 'reset',
@@ -191,12 +221,19 @@ export function bindPluginUiResource(caller: string, sessionId: string | null, i
               args.revision !== undefined && typeof args.revision !== 'string' || (args.offset as number) > 0 && typeof args.revision !== 'string')
               throw new Error('MCP_APP_INVALID_REQUEST');
             return result(await rendererAction(caller, { kind: 'draft-read', sessionId, offset: args.offset ?? 0,
-              revision: args.revision }, signal, assertOperation));
+              revision: args.revision, ...(composerAction ? { composerAction } : {}) }, signal, assertOperation));
           }
-          if (!['append', 'replace', 'replace-selection'].includes(String(args.mode)) || typeof args.text !== 'string' || args.text.length > 128000 ||
+          const document = args.document;
+          if (!['append', 'replace', 'replace-selection'].includes(String(args.mode)) ||
+              (args.text !== undefined) === (document !== undefined) ||
+              args.text !== undefined && (typeof args.text !== 'string' || args.text.length > 128000) ||
+              document !== undefined && (!document || typeof document !== 'object' || Array.isArray(document) ||
+                (document as Record<string, unknown>).type !== 'doc' || !Array.isArray((document as Record<string, unknown>).content) ||
+                JSON.stringify(document).length > 128000) ||
               args.mode !== 'append' && typeof args.revision !== 'string') throw new Error('MCP_APP_INVALID_REQUEST');
           return result(await rendererAction(caller, { kind: 'draft', sessionId, mode: args.mode,
-            text: args.text, revision: args.revision }, signal, assertOperation));
+            ...(document === undefined ? { text: args.text } : { document }), revision: args.revision,
+            ...(composerAction ? { composerAction } : {}) }, signal, assertOperation));
         case 'cindy.ui.appearance': {
           const { readAppearanceSettings } = await import('../appearance-settings-store.js');
           const { updateAppearanceFromSettings } = await import('../appearance-settings-ipc.js');

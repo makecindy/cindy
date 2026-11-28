@@ -88,21 +88,38 @@ import type { SessionChatState } from '@/lib/makerChatStore';
 import type { Message } from '@/lib/ccAgent.types';
 import { setDataOwnerGeneration, __testing as dataOwnerGenerationTesting } from '@/contexts/dataOwnerGeneration';
 import { parseUserContent } from '@/lib/imageRef';
+import { resolveUserDisplayText } from '@/components/chat/userMessageDisplayText';
 import { buildPluginMessage } from '../../shared/pluginMessage';
 
 describe('makerChatStore IM source projection', () => {
-  it.each(['imSource', 'hookSource'] as const)('projects %s into the common Desktop card', (field) => {
+  // Unit, dispatch attribution/privacy contract: real history projection keeps
+  // the executor snapshot; authoritative redaction must remove cached identity.
+  // Existing sender tests never carried provider or execution-computer identity.
+  it('projects dispatch attribution and removes it when an authoritative row is redacted', () => {
+    const row: Message = { id: 'route-row', clientId: 'route-client', sessionId: 's1', role: 'user',
+      content: 'Continue', toolUseId: null, createdAt: '2026-11-27T00:00:00.000Z',
+      agentMeta: { dispatchRoute: { agentKind: 'pi', model: 'same-model', providerId: 'xd', agentDeviceId: null,
+        selected: { agentKind: 'codex', model: 'same-model', providerId: 'openai', agentDeviceId: null }, switchError: 'target timeout' } } };
+    const [mapped] = makerChatStore.__mapServerMessagesForTest([row]);
+    expect(mapped.dispatchRoute).toMatchObject({ agentKind: 'pi', providerId: 'xd',
+      selected: { agentKind: 'codex', providerId: 'openai' }, switchError: 'target timeout' });
+    const [redacted] = makerChatStore.__mapServerMessagesForTest([{ ...row, agentMeta: null }]);
+    expect(makerChatStore.__hydratePersistedMessageForTest(mapped, redacted)).not.toHaveProperty('dispatchRoute');
+  });
+
+  it.each(['imSource', 'hookSource'] as const)('projects %s from saved history and displays Feishu text', (field) => {
+    const content = '<p>第一段 &amp; 备注</p><p>第二段</p>';
     const source = {
-      im: 'telegram', userText: 'question', contentFormat: 'user-text' as const,
+      im: 'feishu', userText: content, contentFormat: 'user-text' as const,
       contextSnapshot: { groupContext: 'background', groupMessageCount: 1 },
     };
     const [mapped] = makerChatStore.__mapServerMessagesForTest([{
       id: 'im-row', clientId: 'im-client', sessionId: 's1', role: 'user',
-      content: 'question', agentMeta: { [field]: source },
-      toolUseId: null,
+      content, agentMeta: { [field]: source }, toolUseId: null,
       createdAt: '2026-09-12T00:00:00.000Z',
     } satisfies Message]);
-    expect(mapped).toMatchObject({ role: 'user', content: 'question', hookSource: source });
+    expect(mapped).toMatchObject({ role: 'user', content, hookSource: source });
+    expect(resolveUserDisplayText(mapped)).toBe('第一段 & 备注\n\n第二段');
   });
 
   // unit: message-source.md「插件转发的 IM 消息」(2026-11-16). Production projection entry: a Host-stamped

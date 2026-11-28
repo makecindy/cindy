@@ -93,8 +93,8 @@
     "remoteProvider": "{{provider}} · {{device}}",
     "remoteProviderGroup": "{{provider}} · {{device}} · {{group}}",
     "providerGroup": "{{provider}} · {{group}}",
-    "groupBadge_one": "Grupo de fornecedores · {{count}} computador",
-    "groupBadge_other": "Grupo de fornecedores · {{count}} computadores",
+    "groupBadge_one": "Grupo de computadores · {{count}} computador",
+    "groupBadge_other": "Grupo de computadores · {{count}} computadores",
     "harness": "Harness",
     "restoreRecommended": "Restaurar recomendações",
     "saveFailed": "Não foi possível guardar. Tente novamente.",
@@ -152,15 +152,23 @@
     "picker": {
       "switched": "«{{name}}» mudou esta tarefa para {{model}}",
       "switchUnavailable": "«{{name}}» não tem agora nenhuma fonte que esta tarefa possa usar. O modelo não foi alterado.",
-      "chooseUnavailable": "«{{name}}» não tem agora nenhuma fonte utilizável, por isso não foi selecionado."
+      "chooseUnavailable": "«{{name}}» não tem agora nenhuma fonte utilizável, por isso não foi selecionado.",
+      "managedBy": "Gerido por «{{name}}»",
+      "detach": "Desassociar",
+      "detached": "Desassociado do roteamento inteligente. O modelo atual mantém-se."
     },
-    "anotherDevice": "Outro computador"
+    "anotherDevice": "Outro computador",
+    "sourceRouteTitle_one": "{{name}} · Rota inteligente ({{count}} fonte)",
+    "sourceRouteTitle_many": "{{name}} · Rota inteligente ({{count}} fontes)",
+    "sourceRouteTitle_other": "{{name}} · Rota inteligente ({{count}} fontes)",
+    "switchOffer": {
+      "button": "Mudar para {{model}} e continuar"
+    }
   },
   "pluginEngines": {
     "genericName": "Motor de plugin",
     "defaultModel": "Modelo predefinido",
     "unavailable": "{{engine}} está indisponível",
-    "unavailableWithHint": "{{engine}} está indisponível: {{hint}}",
-    "worktreeUnsupported": "Os motores de plugins ainda não conseguem iniciar tarefas numa Worktree. Desative a Worktree para enviar."
+    "unavailableWithHint": "{{engine}} está indisponível: {{hint}}"
   }
 }

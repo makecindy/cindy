@@ -177,7 +177,7 @@ export async function setLinuxDisplayMode(
 export function supportsLinuxLock(): boolean {
   if (
     process.platform !== 'linux' ||
-    !/^[a-zA-Z0-9_-]{1,64}$/.test(process.env.XDG_SESSION_ID ?? '')
+    !/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/.test(process.env.XDG_SESSION_ID ?? '')
   )
     return false;
   try {

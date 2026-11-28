@@ -9,6 +9,7 @@ import { toast } from '@/lib/toast';
 import { useAuth } from '@/contexts/AuthContext';
 import { useOptionalConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { useLogout } from '@/hooks/useLogout';
+import { ContactChangeAction } from './ContactChangeAction';
 import { ProfileEditDialog } from './ProfileEditDialog';
 
 const ORGANIZATION_ROLE_I18N_KEYS = {
@@ -242,6 +243,8 @@ export function UserProfileCard() {
             </span>
             <Copy aria-hidden="true" size={10} className="shrink-0" />
           </button>
+          {/* 换绑登录手机号 / 邮箱:ID 行后的小号文字入口,不可换绑时自身不渲染。 */}
+          <ContactChangeAction />
         </div>
         {organizationName && organizationRole && (
           <div className="mt-1 flex min-w-0 items-center gap-1.5 text-sm leading-5 text-[var(--text-secondary)]">

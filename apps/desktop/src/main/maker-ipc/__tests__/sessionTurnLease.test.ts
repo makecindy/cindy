@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Session, type AgentEvent, type AgentSessionHandle } from '@cindy/maker-core';
 
 import type { DbClient } from '../../localDb/client/DbClient.js';
+import { DB_TRANSPORT_OUTCOME_UNKNOWN, createDbTransportError } from '../../localDb/client/DbTransport.js';
 import { tx as runDbTx } from '../../localDb/worker/opHandlers/tx.js';
 import {
   readPersistedSessionTurnLeases,
@@ -270,6 +271,153 @@ describe('shared-process session turn lease', () => {
     await expect(readPersistedSessionTurnLeases(first, 'source-1')).resolves.toMatchObject([
       { lease: { turnId: 'new-turn' } },
     ]);
+  });
+
+  it.each([true, false])('allows same-generation retry after an unknown insert outcome (committed: %s)', async (committed) => {
+    const { first, second } = setup();
+    const owner = { instanceId: 'local-owner', processId: 101 };
+    const peer = { instanceId: 'peer-owner', processId: 102 };
+    const turnId = 'session-instance:2';
+    await tryAcquireSessionTurnLease(second, { sessionId: 'source-1', owner: peer, turnId, createdAt: 30 });
+
+    const originalTx = first.tx;
+    const tx = vi.spyOn(first, 'tx').mockImplementationOnce(async (name, args) => {
+      if (committed) await originalTx(name, args);
+      throw createDbTransportError(DB_TRANSPORT_OUTCOME_UNKNOWN, 'lease insert reply lost');
+    });
+    const tracker = new SessionTurnLeaseTracker({
+      getDbClient: () => first, owner, createTurnId: () => turnId, now: () => 31,
+    });
+    await expect(tracker.markTurnStarted('source-1')).rejects.toMatchObject({ code: DB_TRANSPORT_OUTCOME_UNKNOWN });
+    const before = await readPersistedSessionTurnLeases(first, 'source-1');
+    const interrupted = before.find(row => row.lease?.owner.instanceId === owner.instanceId);
+    expect(Boolean(interrupted)).toBe(committed);
+
+    const retry = tracker.markTurnStarted('source-1');
+    await Promise.all([retry, tracker.markTurnStarted('source-1')]);
+    const active = await readPersistedSessionTurnLeases(first, 'source-1');
+    expect(active.map(row => row.lease?.owner.instanceId).sort()).toEqual(['local-owner', 'peer-owner']);
+    if (interrupted) expect(active).toContainEqual(interrupted);
+    expect(tx).toHaveBeenCalledTimes(2);
+    await tracker.markTurnEnded('source-1', 'session-instance:1');
+    expect(await readPersistedSessionTurnLeases(first, 'source-1')).toEqual(active);
+    await tracker.markTurnEnded('source-1', turnId);
+    expect((await readPersistedSessionTurnLeases(first, 'source-1')).map(row => row.lease?.owner)).toEqual([peer]);
+  });
+
+  it.each(['own-row-missing', 'active-turn-conflict', 'exact-release-missed'] as const)(
+    'reports %s without logging lease data or changing the retry outcome',
+    async (reason) => {
+      const { first, raw } = setup();
+      const owner = { instanceId: 'private-owner', processId: 101 };
+      const requested = 'private-requested-turn';
+      const persisted = reason === 'active-turn-conflict' ? requested : 'private-stale-turn';
+      if (reason === 'own-row-missing') {
+        raw.exec('CREATE TEMP TRIGGER miss BEFORE INSERT ON messages BEGIN SELECT RAISE(IGNORE); END');
+      } else {
+        await tryAcquireSessionTurnLease(first, {
+          sessionId: 'source-1', turnId: persisted, owner, createdAt: 1,
+        });
+        if (reason === 'exact-release-missed') {
+          raw.exec('CREATE TEMP TRIGGER miss BEFORE DELETE ON messages BEGIN SELECT RAISE(IGNORE); END');
+        }
+      }
+      const warn = vi.fn();
+      const tracker = new SessionTurnLeaseTracker({
+        getDbClient: () => first, owner, createTurnId: () => requested, now: () => 2, warn,
+      });
+
+      await expect(tracker.markTurnStarted('source-1')).rejects.toThrow(
+        'could not replace the previous turn lease',
+      );
+      expect(warn.mock.calls).toEqual([['session turn lease replacement failed', { reason }]]);
+      const rows = await readPersistedSessionTurnLeases(first, 'source-1');
+      expect(rows.map(row => row.lease?.turnId)).toEqual(reason === 'own-row-missing' ? [] : [persisted]);
+
+      raw.exec('DROP TRIGGER IF EXISTS miss');
+      await tracker.markTurnStarted('source-1', 'retry');
+      await expect(readPersistedSessionTurnLeases(first, 'source-1')).resolves.toMatchObject([
+        { lease: { turnId: 'retry' } },
+      ]);
+      expect(warn).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it('dispatches a same-generation retry once after a committed insert loses its reply', async () => {
+    const { first, second } = setup();
+    let loseReply = true;
+    const client: typeof first = {
+      ...first,
+      tx: async (name: string, args: unknown) => {
+        const result = await first.tx(name, args);
+        if (loseReply) {
+          loseReply = false;
+          throw createDbTransportError(DB_TRANSPORT_OUTCOME_UNKNOWN, 'lost insert reply');
+        }
+        return result;
+      },
+    };
+    const tracker = new SessionTurnLeaseTracker({
+      getDbClient: () => client, owner: { instanceId: 'local', processId: 101 },
+      createTurnId: () => 'fallback', now: () => 1,
+    });
+    let stop!: () => void;
+    const stopped = new Promise<void>(resolve => { stop = resolve; });
+    const send = vi.fn(async () => {});
+    const handle = {
+      id: 'runtime', agentKind: 'pi', send, isTurnRunning: () => false,
+      setInteractionResolver() {}, close: async () => stop(), async *events() { await stopped; },
+    } as unknown as AgentSessionHandle;
+    const logger = { trace() {}, debug() {}, info() {}, warn() {}, error() {}, fatal() {}, child() { return this; } };
+    const session = new Session({ id: 'source-1', agentKind: 'pi', workDir: '/repo', handle,
+      capabilities: {} as never, logger, turnStallMs: 0 });
+    const turnId = (generation: number) => `${session.instanceId}:${generation}`;
+    session.setTurnLifecycleObserver({
+      beforeProviderStart: generation => tracker.markTurnStarted(session.id, turnId(generation)),
+      onUndispatched: generation => tracker.markTurnEnded(session.id, turnId(generation)),
+      onTerminal() {},
+    });
+    try {
+      await expect(session.send('work')).rejects.toMatchObject({ code: DB_TRANSPORT_OUTCOME_UNKNOWN });
+      expect(send).toHaveBeenCalledTimes(0);
+      const committed = await readPersistedSessionTurnLeases(second, session.id);
+      expect(committed).toHaveLength(1);
+      const retry = await Promise.allSettled([session.send('work')]);
+      expect(send).toHaveBeenCalledTimes(1);
+      expect(retry[0].status).toBe('fulfilled');
+      const current = turnId(session.getTurnGeneration());
+      expect(committed[0].lease?.turnId).toBe(current);
+      expect(await readPersistedSessionTurnLeases(second, session.id)).toEqual(committed);
+      await tracker.markTurnStarted(session.id, 'successor');
+      expect(await tracker.markTurnEndedAndCheckIdle(session.id, current)).toBe(false);
+      expect(await readPersistedSessionTurnLeases(second, session.id)).toMatchObject([
+        { lease: { turnId: 'successor' } },
+      ]);
+    } finally {
+      await session.close();
+    }
+  });
+
+  it('recovers a committed generation replacement after the UPDATE reply is lost', async () => {
+    const { first, second } = setup();
+    const tracker = new SessionTurnLeaseTracker({
+      getDbClient: () => first, owner: { instanceId: 'local', processId: 101 },
+      createTurnId: () => 'fallback', now: () => 1,
+    });
+    await tracker.markTurnStarted('source-1', 'old');
+    const exec = first.exec.bind(first);
+    vi.spyOn(first, 'exec').mockImplementationOnce(async (sql, params) => {
+      await exec(sql, params);
+      throw createDbTransportError(DB_TRANSPORT_OUTCOME_UNKNOWN, 'lost replacement reply');
+    });
+    await expect(tracker.markTurnStarted('source-1', 'next')).rejects.toMatchObject({
+      code: DB_TRANSPORT_OUTCOME_UNKNOWN,
+    });
+    const committed = await readPersistedSessionTurnLeases(second, 'source-1');
+    expect(committed).toMatchObject([{ lease: { turnId: 'next' } }]);
+    await tracker.markTurnStarted('source-1', 'next');
+    await tracker.markTurnEnded('source-1', 'old');
+    expect(await readPersistedSessionTurnLeases(second, 'source-1')).toEqual(committed);
   });
 
   it('ignores a delayed tracker terminal after a newer generation replaces it', async () => {

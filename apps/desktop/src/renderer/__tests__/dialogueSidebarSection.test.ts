@@ -114,7 +114,7 @@ describe('Mixed main list (sidebar-redesign D 期)', () => {
     const failureIndex = sidebarSource.indexOf(
       'remoteSessionBootstrapFailures.length > 0 && !hasVisibleSidebarContent',
     );
-    const connectingIndex = sidebarSource.indexOf('selectedMachineConnecting ?');
+    const connectingIndex = sidebarSource.indexOf('selectedMachinePlaceholder ?');
     expect(failureIndex).toBeGreaterThanOrEqual(0);
     expect(connectingIndex).toBeGreaterThan(failureIndex);
     expect(sidebarSource).toContain("'ccAgent.sidebar.machineSwitcher.tasksLoadFailed'");

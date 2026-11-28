@@ -3,6 +3,7 @@ import type { ControlledModelFavoriteSource } from '../../shared/controlledModel
 import {
   parseProviderShareFavoriteSource,
   providerShareFavoriteSource,
+  providerShareFavoriteWireKey,
   providerSharePickerState,
   type ProviderShareReceived,
 } from '@cindy/device-link';
@@ -91,6 +92,45 @@ export function useProviderShareFavoriteSources(routed?: ReadonlyMap<string, Con
         && !current?.unavailableShareIds?.includes(share.shareId) && !current?.leftMemberIds?.includes(share.memberId))
       .map((share) => [providerShareFavoriteSource(share), `share:${share.shareId}`]),
   ), [current, routed]);
+}
+
+/**
+ * 按 `share:<shareId>` 反查写入收藏时应使用的来源键（与 useProviderShareFavorites 同一套有效成员判定）。
+ * `wireLimit = true` 时（远控写入被控电脑）遵守收藏通道的 512 字节上限，超长的不提供星标。
+ */
+export function useProviderShareFavoriteKeysByDevice(
+  routed?: ReadonlyMap<string, ControlledModelFavoriteSource>,
+  wireLimit = false,
+): ReadonlyMap<string, { providerId: string; sourceKey: string }> {
+  const state = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+  const current = state.membership && isDataOwnerPushStampCurrent(state.membership.ownerStamp)
+    ? state.membership : null;
+  return useMemo(() => {
+    const map = new Map<string, { providerId: string; sourceKey: string }>();
+    const encode = (share: { shareId: string; memberId: string; providerId: string; owner: { region: 'cn' | 'global' } }): string | null => {
+      if (wireLimit) return providerShareFavoriteWireKey(share);
+      try {
+        return providerShareFavoriteSource(share);
+      } catch {
+        return null;
+      }
+    };
+    if (routed) {
+      for (const [deviceId, share] of routed) {
+        const sourceKey = encode(share);
+        if (sourceKey) map.set(deviceId, { providerId: share.providerId, sourceKey });
+      }
+      return map;
+    }
+    for (const share of current?.received ?? []) {
+      if (share.status !== 'active'
+        || current?.unavailableShareIds?.includes(share.shareId)
+        || current?.leftMemberIds?.includes(share.memberId)) continue;
+      const sourceKey = encode(share);
+      if (sourceKey) map.set(`share:${share.shareId}`, { providerId: share.providerId, sourceKey });
+    }
+    return map;
+  }, [current, routed, wireLimit]);
 }
 
 export function useProviderShareFavorites(

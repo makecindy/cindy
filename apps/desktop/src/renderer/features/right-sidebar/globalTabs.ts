@@ -71,16 +71,16 @@ export function effectivePluginView(
 }
 
 /**
- * 该页签承载的页面是不是插件的主视图(整页入口那一份)。panel 与 mainView 指向不同
- * html 的插件,两个页面是不同的界面,可以并存;同一 html 或页签本身承载主视图才算同一视图。
+ * 页签承载目标页面时可以复用。panel 与 mainView 指向同一 HTML 时也视为同一页面。
  */
-export function tabShowsMainView(
+export function tabShowsPluginView(
   state: PluginViewTabState | null | undefined,
   ghost: InstalledGhost,
+  requestedView: PluginViewKind = 'main',
 ): boolean {
   if (state?.resourceViewId) return false;
   const view = effectivePluginView(state, ghost);
-  if (view === 'main') return true;
+  if (view === requestedView) return true;
   const panelHtml = ghost.manifest.panel?.html;
   return panelHtml !== undefined && panelHtml === ghost.manifest.mainView?.html;
 }

@@ -2,6 +2,7 @@
 import { act, cleanup, render } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { useChatLayoutPreference } from '../useChatLayoutPreference';
 import { useProportionalWidth } from '../useProportionalWidth';
 
 const BREAKPOINTS = [560, 600, 700] as const;
@@ -11,6 +12,8 @@ describe('useProportionalWidth resize hot path', () => {
   let notifyResize: ResizeObserverCallback | null = null;
 
   beforeEach(() => {
+    measuredWidth = 1_000;
+    localStorage.clear();
     vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(
       () =>
         ({
@@ -66,6 +69,21 @@ describe('useProportionalWidth resize hot path', () => {
     expect(latestBand).toBe(3);
     expect(latestCompact).toBe(false);
 
+    // Feedback #12, unit tier. A fresh profile retains the standard column at
+    // any pane size. Resizing stays in CSS without rerendering the session.
+    for (const pane of [1200, 1400, 1600, 2400]) {
+      measuredWidth = pane;
+      act(() => {
+        notifyResize?.(
+          [{ contentRect: { width: measuredWidth } } as ResizeObserverEntry],
+          {} as ResizeObserver,
+        );
+      });
+      expect(container.style.getPropertyValue('--cindy-message-width')).toBe('914px');
+      expect(container.style.getPropertyValue('--cindy-input-width')).toBe('934px');
+      expect(renders).toBe(initialRenderCount);
+    }
+
     measuredWidth = 900;
     act(() => {
       notifyResize?.(
@@ -101,5 +119,67 @@ describe('useProportionalWidth resize hot path', () => {
     });
     expect(container.style.getPropertyValue('--cindy-input-width')).toBe('620px');
     expect(renders).toBe(renderCountAfterBreakpoint);
+  });
+
+  it('applies the live wide preference, bounds narrow panes and falls back from invalid saved ratios', () => {
+    measuredWidth = 1600;
+    localStorage.setItem('chat.layoutMode', 'wide');
+    localStorage.setItem('chat.layoutWidthPercent', '99.5');
+    let controls: ReturnType<typeof useChatLayoutPreference>;
+    function Harness() {
+      controls = useChatLayoutPreference();
+      const width = useProportionalWidth(914);
+      return <div ref={width.containerRef} data-testid="container" />;
+    }
+    const container = render(<Harness />).getByTestId('container');
+    const message = () => container.style.getPropertyValue('--cindy-message-width');
+    expect(message()).toBe('1125px');
+
+    act(() => controls.preview(100));
+    expect(message()).toBe('1500px');
+    expect(localStorage.getItem('chat.layoutWidthPercent')).toBe('99.5');
+    for (const [ratio, width] of [[50, 750], [55, 825], [60, 900], [65, 975]]) {
+      act(() => controls.setWidth(ratio));
+      expect(message()).toBe(`${width}px`);
+    }
+    act(() => controls.setMode('standard'));
+    expect(message()).toBe('914px');
+    act(() => controls.setMode('wide'));
+    expect(controls!.width).toBe(65);
+
+    act(() => {
+      localStorage.setItem('chat.layoutWidthPercent', '25');
+      window.dispatchEvent(new StorageEvent('storage', { key: 'chat.layoutWidthPercent' }));
+    });
+    expect(controls!.width).toBe(50);
+    expect(message()).toBe('750px');
+    expect(localStorage.getItem('chat.layoutWidthPercent')).toBe('25');
+
+    // Other windows write the same native storage keys. An older queued event
+    // cannot override the current value. No app restart/migration is needed.
+    act(() => {
+      localStorage.setItem('chat.layoutWidthPercent', '100');
+      window.dispatchEvent(new StorageEvent('storage', { key: 'chat.layoutWidthPercent', newValue: '50' }));
+    });
+    expect(message()).toBe('1500px');
+    // Feedback #12, unit tier. The 700px compact breakpoint used to drop 60px
+    // of content between adjacent sizes. Verify both ends of the padding ramp.
+    for (const [pane, expected] of [[699, 659], [700, 660], [701, 660.5], [819, 719.5], [820, 720], [821, 721]]) {
+      measuredWidth = pane;
+      act(() => notifyResize?.(
+        [{ contentRect: { width: pane } } as ResizeObserverEntry],
+        {} as ResizeObserver,
+      ));
+      expect(parseFloat(message())).toBeCloseTo(expected);
+    }
+    measuredWidth = 280;
+    act(() => controls.setWidth(50));
+    act(() => notifyResize?.(
+      [{ contentRect: { width: 280 } } as ResizeObserverEntry],
+      {} as ResizeObserver,
+    ));
+    expect(message()).toBe('240px');
+    expect(container.style.getPropertyValue('--cindy-input-width')).toBe('260px');
+    expect(container.style.getPropertyValue('--cindy-markdown-table-width')).toBe('100%');
   });
 });
