@@ -4,8 +4,10 @@ import {
   holdStandaloneStopTokenDelta,
   isPossibleStandaloneStopPrefix,
   stableInternalWebCitationBoundary,
+  stableLeakedSystemNotificationBoundary,
   stableStandaloneModelStopTokenBoundary,
   stripInternalWebCitations,
+  stripLeakedSystemNotificationBlocks,
   stripStandaloneModelStopToken,
 } from './internalCitation.js';
 
@@ -156,5 +158,128 @@ describe('leaked model stop tokens', () => {
     const buffer = { pending: '', emitted: false };
     expect(holdStandaloneStopTokenDelta(buffer, 'The token is ')).toBe('The token is ');
     expect(holdStandaloneStopTokenDelta(buffer, '<|eos|>')).toBe('<|eos|>');
+  });
+});
+
+const LEAKED_NOTIFICATION_BODY = [
+  '<system-reminder>',
+  '[SYSTEM NOTIFICATION - NOT USER INPUT]',
+  'This is an automated background-task event, NOT a message from the user.',
+  '',
+  '<task-notification>',
+  '<task-id>task123</task-id>',
+  '<status>completed</status>',
+  '<summary>Background command completed (exit code 0)</summary>',
+  '</task-notification>',
+  '</system-reminder>',
+].join('\n');
+
+const LEAKED_NOTIFICATION_WITH_ROLE = `user\n${LEAKED_NOTIFICATION_BODY}`;
+
+describe('leaked synthetic system notifications (#11696)', () => {
+  it.each([
+    ['trailing role + notification after prose', `已启动后台任务。\n${LEAKED_NOTIFICATION_WITH_ROLE}`, '已启动后台任务。'],
+    ['CRLF line endings and trailing blank line', `Done.\r\n\r\nuser\r\n${LEAKED_NOTIFICATION_BODY.replace(/\n/g, '\r\n')}\r\n`, 'Done.'],
+    ['direct <system-reminder> without user line', `Done.\n${LEAKED_NOTIFICATION_BODY}`, 'Done.'],
+    ['standalone leaked notification', LEAKED_NOTIFICATION_WITH_ROLE, ''],
+    ['two consecutive leaked notifications', `Done.\n${LEAKED_NOTIFICATION_WITH_ROLE}\n${LEAKED_NOTIFICATION_WITH_ROLE}`, 'Done.'],
+    ['leading leaked notification before prose', `${LEAKED_NOTIFICATION_WITH_ROLE}\nActual answer.`, 'Actual answer.'],
+    ['truncated block after confirmed marker', 'Done.\nuser\n<system-reminder>\n[SYSTEM NOTIFICATION - NOT USER INPUT]\n<task-notification><task-id>t1', 'Done.'],
+  ])('strips %s and remains idempotent', (_label, input, expected) => {
+    expect(stripLeakedSystemNotificationBlocks(input)).toBe(expected);
+    expect(stripInternalWebCitations(input)).toBe(expected);
+    expect(stripInternalWebCitations(stripInternalWebCitations(input))).toBe(expected);
+  });
+
+  it.each([
+    [
+      'fenced backtick code block',
+      `Example:\n\`\`\`xml\n${LEAKED_NOTIFICATION_WITH_ROLE}\n\`\`\`\nDone.`,
+    ],
+    [
+      'fenced tilde code block',
+      `Example:\n~~~\n${LEAKED_NOTIFICATION_WITH_ROLE}\n~~~`,
+    ],
+    [
+      'ordinary <system-reminder> without synthetic-notification marker',
+      'Note:\n<system-reminder>\nNormal example content\n</system-reminder>',
+    ],
+    [
+      'inline mention in prose',
+      'Watch out for `user\\n<system-reminder>\\n[SYSTEM NOTIFICATION - NOT USER INPUT]` in logs.',
+    ],
+    [
+      'ordinary user line and incomplete prefix',
+      'Done.\nuser\nhello',
+    ],
+    [
+      'bare trailing user line',
+      'Done.\nuser',
+    ],
+  ])('preserves %s untouched', (_label, input) => {
+    expect(stripInternalWebCitations(input)).toBe(input);
+  });
+
+  it('keeps fenced example intact while stripping a leaked block after the closing fence', () => {
+    const fenced = `\`\`\`xml\n${LEAKED_NOTIFICATION_WITH_ROLE}\n\`\`\``;
+    expect(stripInternalWebCitations(`${fenced}\n${LEAKED_NOTIFICATION_WITH_ROLE}`)).toBe(fenced);
+  });
+
+  it('holds incomplete line-start prefixes during streaming without delaying ordinary newlines', () => {
+    expect(stableLeakedSystemNotificationBoundary('Done.\n')).toBe(6);
+    expect(stableLeakedSystemNotificationBoundary('Done.\nuser')).toBe(6);
+    expect(stableLeakedSystemNotificationBoundary('Done.\nuser\n<system-rem')).toBe(6);
+    expect(
+      stableLeakedSystemNotificationBoundary(
+        'Done.\nuser\n<system-reminder>\n[SYSTEM NOTIFICATION - NOT USER INPUT]\n<task-notification>',
+      ),
+    ).toBe(6);
+    expect(
+      stableLeakedSystemNotificationBoundary(`Done.\n${LEAKED_NOTIFICATION_WITH_ROLE}`),
+    ).toBe(`Done.\n${LEAKED_NOTIFICATION_WITH_ROLE}`.length);
+  });
+
+  it('suppresses split leaked notification deltas during streaming and releases false alarms', () => {
+    const leaked = { pending: '', emitted: false };
+    const emittedLeaked: string[] = [];
+    for (const chunk of [
+      '已启动后台任务。',
+      '\n',
+      'us',
+      'er\n<system-',
+      'reminder>\n[SYSTEM NOTIFICATION',
+      ' - NOT USER INPUT]\n<task-notification><task-id>t1</task-id></task-notification>\n</system-reminder>',
+    ]) {
+      const out = holdStandaloneStopTokenDelta(leaked, chunk);
+      if (out) emittedLeaked.push(out);
+    }
+    expect(emittedLeaked.join('')).toBe('已启动后台任务。\n');
+    expect(leaked.pending).toBe('');
+
+    const falseAlarm = { pending: '', emitted: false };
+    const emittedProse: string[] = [];
+    for (const chunk of ['Hello\n', 'user', 'name\n', 'user\n', 'world']) {
+      const out = holdStandaloneStopTokenDelta(falseAlarm, chunk);
+      if (out) emittedProse.push(out);
+    }
+    expect(emittedProse.join('')).toBe('Hello\nusername\nuser\nworld');
+    expect(falseAlarm.pending).toBe('');
+  });
+
+  it('preserves a split fenced code block during streaming and strips a leaked tail after it closes', () => {
+    const buffer = { pending: '', emitted: false };
+    const emitted: string[] = [];
+    for (const chunk of [
+      '`',
+      '``xml\n',
+      `${LEAKED_NOTIFICATION_WITH_ROLE}\n`,
+      '```',
+      `\n${LEAKED_NOTIFICATION_WITH_ROLE}`,
+    ]) {
+      const out = holdStandaloneStopTokenDelta(buffer, chunk);
+      if (out) emitted.push(out);
+    }
+    expect(emitted.join('')).toBe(`\`\`\`xml\n${LEAKED_NOTIFICATION_WITH_ROLE}\n\`\`\``);
+    expect(buffer.pending).toBe('');
   });
 });
