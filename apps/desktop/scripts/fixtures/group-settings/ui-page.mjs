@@ -49,8 +49,23 @@ export default {
     }
     if (ui.case === 'computer') {
       const picker = dialog.getByRole('combobox', { name: await t('assistantComputer') });
+      const triggerWidth = await picker.evaluate(element => element.offsetWidth);
       await picker.click();
-      await page.getByRole('option', { name: 'Windows', exact: true }).waitFor();
+      const mac = page.getByRole('option', { name: 'QA-Mac.local', exact: true });
+      await mac.waitFor();
+      // UI tier: the real group field with no selection must keep a trigger-width
+      // listbox (DESIGN.md §4). The existing row-height check missed wider panels.
+      const listboxWidth = await page.getByRole('listbox').evaluate(element => element.offsetWidth);
+      assert.equal(listboxWidth, triggerWidth, 'the group settings listbox matches its trigger');
+      assert.equal(await page.getByRole('option', { name: 'a'.repeat(64) }).count(), 0, 'routing IDs are never device labels');
+      assert.equal(await mac.getAttribute('title'), 'QA-Mac.local', 'the full name is available on hover');
+      assert.ok(await mac.evaluate(option => {
+        const label = option.querySelector('span');
+        return label && label.scrollWidth <= label.clientWidth;
+      }), 'a normal hostname is not truncated');
+      const macBounds = await mac.boundingBox();
+      const windowsBounds = await page.getByRole('option', { name: 'Windows', exact: true }).boundingBox();
+      assert.equal(macBounds.height, windowsBounds.height, 'a normal hostname fits on one line');
       await ui.capture('choose-computer');
       return;
     }
