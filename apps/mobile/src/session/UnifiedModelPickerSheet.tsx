@@ -33,6 +33,7 @@ import {
   pluginEngineChoiceKey,
   pluginEngineFilterId,
   pluginEngineModelRows,
+  pluginEngineSourceIconDataUrl,
   resolveMobilePluginEngineFavorite,
   resolvePluginEngineEffort,
   type MobilePluginEngine,
@@ -1907,9 +1908,10 @@ export function UnifiedModelPickerSheet(
           label: quota.sourceLabel ?? quota.summary,
         }
       : undefined;
+    const iconDataUrl = pluginEngineSourceIconDataUrl(engine.iconDataUrl);
     const pluginEngineMark = {
       name: engine.name,
-      ...(engine.iconDataUrl ? { iconDataUrl: engine.iconDataUrl } : {}),
+      ...(iconDataUrl ? { iconDataUrl } : {}),
     };
     const id = pluginEngineFilterId(engine.providerId, engine.deviceId);
     if (engine.deviceId) {

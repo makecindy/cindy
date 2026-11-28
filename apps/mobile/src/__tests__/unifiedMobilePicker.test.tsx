@@ -8,7 +8,9 @@ import {
   providerShareFavoriteWireKey,
   type ProviderShareFavoriteSource,
 } from '@cindy/device-link';
+import { ANTIGRAVITY_MARK_DATA_URL } from '@cindy/maker-shared/branding';
 import { resolveStoredModelEntry } from '@cindy/model-providers';
+import { pluginEngineFilterId } from '@/session/pluginEngines';
 import {
   __flushForTest as flushRemoteAgentModelMemory,
   __resetForTest as resetRemoteAgentModelMemory,
@@ -66,6 +68,70 @@ async function mount(onSelect=vi.fn(async()=>true),extra={}) {
   } as any)));
   return {onSelect,onClose};
 }
+// #12452: the iOS ordinary-session picker offered both Gemini rows in All but neither source.
+// Production sheet output and selection callbacks cover the gap. Minimal input: one selectable plugin group. Tier: unit.
+it('filters eligible plugin sources by provider ID and searches across them', async () => {
+  const selectPlugin = vi.fn(async () => true);
+  const engine = (key: string, name: string, state = 'available') => ({
+    key, name, providerId: `acp-plugin:${key}`, availability: { state },
+    defaultModelAllowed: false,
+    models: [{ id: 'gemini', displayName: 'Gemini', efforts: [] }],
+  });
+  const first = engine('one:acp', 'Antigravity');
+  const second = engine('two:acp', 'Other');
+  const disabled = engine('disabled:acp', 'Disabled', 'unavailable');
+  const { onClose } = await mount(undefined, { unified: {
+    scope: 'user-device', agents: ['codex'], loadCapabilities: async () => ({}), onSelect: vi.fn(),
+    pluginEngines: { engines: [first, second, disabled], active: null, onSelect: selectPlugin },
+  } });
+  const groups = () => test.view.pluginEngines.groups.map((group: { providerId: string }) => group.providerId);
+  expect(groups()).toEqual([first.providerId, second.providerId]);
+  expect(test.view.filters.filter((item: { pluginEngineMark?: unknown }) => item.pluginEngineMark)).toEqual([
+    expect.objectContaining({ id: pluginEngineFilterId(first.providerId), label: first.name }),
+    expect.objectContaining({ id: pluginEngineFilterId(second.providerId), label: second.name }),
+  ]);
+  await act(async () => test.view.onFilter(pluginEngineFilterId(first.providerId)));
+  expect(groups()).toEqual([first.providerId]);
+  expect(test.view.groups).toEqual([]);
+  expect(selectPlugin).not.toHaveBeenCalled();
+  await act(async () => test.view.onQuery('Gemini'));
+  expect(groups()).toEqual([first.providerId, second.providerId]);
+  await act(async () => test.view.onQuery(''));
+  expect(groups()).toEqual([first.providerId]);
+  await act(async () => test.view.pluginEngines.onSelect(test.view.pluginEngines.groups[0].rows[0]));
+  expect(selectPlugin).toHaveBeenCalledExactlyOnceWith({ providerId: first.providerId, modelId: 'gemini' });
+  expect(onClose).toHaveBeenCalledOnce();
+});
+
+// #12452: the iOS source row rendered the provider initial for a valid PNG.
+// Tier: unit. The production sheet must forward valid icons to the source row
+// and use the generic mark for an unsupported icon. Existing source-filter
+// coverage does not exercise this boundary. One engine with an SVG is enough.
+it.each([
+  ['PNG', 'data:image/png;base64,iVBORw0KGgo=', 'data:image/png;base64,iVBORw0KGgo='],
+  ['built-in SVG', ANTIGRAVITY_MARK_DATA_URL, ANTIGRAVITY_MARK_DATA_URL],
+  ['SVG', 'data:image/svg+xml;base64,PHN2Zy8+', undefined],
+  ['malformed bitmap', 'data:image/png;base64,AA=', undefined],
+  ['URL', 'https://example.invalid/icon.png', undefined],
+  ['missing', undefined, undefined],
+])('routes a plugin %s icon separately from provider SVG', async (_kind, iconDataUrl, expected) => {
+  const providerId = 'acp-plugin:plugin:engine';
+  await mount(undefined, { unified: {
+    scope: 'user-device', agents: ['codex'], loadCapabilities: async () => ({}), onSelect: vi.fn(),
+    pluginEngines: {
+      engines: [{
+        providerId, name: 'Plugin', iconDataUrl, availability: { state: 'available' },
+        models: [{ id: 'gemini', displayName: 'Gemini', efforts: [] }],
+      }],
+      active: null, onSelect: vi.fn(),
+    },
+  } });
+  const source = test.view.filters.find((item: { id: string }) => item.id === pluginEngineFilterId(providerId));
+  expect(source.pluginEngineMark.name).toBe('Plugin');
+  expect(source.pluginEngineMark.iconDataUrl).toBe(expected);
+  expect(source.providerMark).toBeUndefined();
+});
+
 it('keeps the sheet and preferences unchanged after cancelled selection',async()=>{
   const {onClose}=await mount(vi.fn(async()=>false));
   await act(async()=>test.view.onSelect(test.view.groups[0].rows[0]));
