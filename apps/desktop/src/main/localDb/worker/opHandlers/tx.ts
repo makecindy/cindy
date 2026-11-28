@@ -3007,6 +3007,14 @@ function forkSession(db: Database.Database, args: unknown): { messageCount: numb
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)`,
   );
   const transaction = db.transaction(() => {
+    if (payload.sourceAnchorClientId != null && !db.prepare(
+      `SELECT 1 FROM sessions s JOIN messages m ON m.session_id = s.id
+       WHERE s.id = ? AND s.status != 'deleted' AND s.cleared_at IS ?
+         AND m.client_id = ? AND m.rewind_at IS NULL AND m.role IN ('user', 'assistant')
+         AND (s.cleared_at IS NULL OR m.created_at > s.cleared_at)`,
+    ).get(sourceSessionId, sourceClearedAt, expectString(payload.sourceAnchorClientId, 'sourceAnchorClientId'))) {
+      throw invalidArgs('Source fork point changed while preparing fork');
+    }
     if (newSession.source === 'side-chat' && !db.prepare(
       "SELECT 1 FROM sessions WHERE id = ? AND status = 'active' AND cleared_at IS ?",
     ).get(sourceSessionId, sourceClearedAt)) {
@@ -3044,10 +3052,15 @@ function forkSession(db: Database.Database, args: unknown): { messageCount: numb
       throw invalidArgs('Source history changed while preparing fork');
     }
     const childCreatedAt = expectNumber(newSession.createdAt, 'newSession.createdAt');
-    // Keep inherited history strictly before the side-chat visibility boundary,
-    // without moving the child into the future or changing source timestamps.
-    const historyTimeOffset = newSession.source === 'side-chat'
-      ? sourceMessages.reduce((offset, message) => Math.max(offset, message.created_at - childCreatedAt + 1), 0)
+    // Keep inherited history before the fresh context boundary without changing
+    // the source. Imported synthetic future times must not survive a later clear.
+    // Ordinary native forks have no new boundary and retain their timestamps.
+    const historyBoundary = newSession.source === 'side-chat' ? childCreatedAt
+      : payload.recoveryMarker != null
+        ? expectNumber(asRecord(payload.recoveryMarker, 'recoveryMarker').createdAt, 'recoveryMarker.createdAt')
+        : null;
+    const historyTimeOffset = historyBoundary !== null
+      ? sourceMessages.reduce((offset, message) => Math.max(offset, message.created_at - historyBoundary + 1), 0)
       : 0;
     db.prepare(
       `INSERT INTO sessions (

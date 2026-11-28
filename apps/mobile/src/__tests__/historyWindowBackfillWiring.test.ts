@@ -213,10 +213,12 @@ it('clears loading when a queued sync is blocked for a newly-created session', (
     );
   });
 
-it('resets loading when the reused screen switches sessions', () => {
+it('resets loading and closes recovery when the reused screen switches sessions', () => {
     const source = readSessionScreenSource();
+    // Existing guard-tier cross-screen isolation contract: retain every reset,
+    // including the new recovery sheet, so it cannot remain on another task.
     expect(source).toContain(
-      'setRewindState({ kind: \'idle\' });\n    setMessageActionBusy(null);\n    setLoading(false);',
+      'setRewindState({ kind: \'idle\' });\n    setMessageActionBusy(null);\n    setForkModelPickerOpen(false);\n    setLoading(false);',
     );
   });
 

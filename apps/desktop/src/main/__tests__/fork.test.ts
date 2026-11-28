@@ -33,7 +33,14 @@ import { RemoteAgentPoller, RemoteAgentRunClient } from '../remote-agent/control
 import { CODEX_RESUME_NOT_READY_WIRE_MESSAGE } from '@cindy/maker-shared/agent-input-projection';
 import { projectSessionContextWindow } from '../../shared/sessionContextWindow';
 import { computeForkSourceMessagesDigest } from '../localDb/forkRecoverySnapshot.js';
+import { findPendingAgentHandoff } from '../localDb/agentHandoffPendingQueries.js';
+import { commitContextRebuildWithPorts } from '../localDb/contextRebuildPersistence.js';
+import { writeMessageRow } from '../localDb/messageWrite.js';
+import { messageToCamel } from '../localDb/mapper.js';
 import { admitTaskAction } from '../maker-ipc/taskActionAuthorization.js';
+import { configureOwnerContext } from '../ownerContext.js';
+import { runDeviceLinkInvokeContext } from '../device-link/invoke-context.js';
+import type { ForkRequest, ForkTarget } from '@cindy/maker-shared/fork-request';
 import {
   pruneSessionContextWindowBudget,
   readSessionContextWindowBudget,
@@ -45,6 +52,12 @@ function forkedSessionIdFromTx(): string {
   const call = txCalls.find((c) => c.name === 'fork.session');
   if (!call) throw new Error('no fork.session tx call recorded');
   return (call.args as { newSession: { id: string } }).newSession.id;
+}
+
+function forkRecoveryContentFromTx(): Record<string, unknown> {
+  const args = txCalls.find(call => call.name === 'fork.session')?.args as { recoveryMarker?: { content: string } };
+  if (!args?.recoveryMarker) throw new Error('no atomic fork recovery marker recorded');
+  return JSON.parse(args.recoveryMarker.content);
 }
 import { MAKER_INVOKE } from '../maker-ipc/channels.js';
 
@@ -155,8 +168,8 @@ const txMock = vi.fn((name: string, args: unknown) => {
 const queryOneMock = vi.fn(async () => null as Record<string, unknown> | null);
 const queryMock = vi.fn(async () => [] as Array<{ role: string; content: string }>);
 
-const commitContextRebuildMock = vi.fn(async () => ({ updatedAt: Date.now() }));
-const createMessageMock = vi.fn(async () => ({}));
+const commitContextRebuildMock = vi.fn<typeof import('../localDb/ipc/messages.js').commitContextRebuild>(async () => ({ updatedAt: Date.now() }));
+const createMessageMock = vi.fn<typeof import('../localDb/ipc/messages.js').createMessage>();
 vi.mock('../localDb/ipc/messages.js', () => ({
   commitContextRebuild: commitContextRebuildMock as never,
   createMessage: createMessageMock as never,
@@ -183,6 +196,7 @@ const userDataDirRef: { current: string } = { current: '' };
 // Keep per-case filesystem isolation and the existing hook timeout unchanged.
 const { forkSessionAtMessage, createSideChat, listSideChats, forkSessionStripEncrypted } =
   await import('../maker-orchestration/fork');
+const { runForkRequest, configureForkTargetAdmission } = await import('../maker-orchestration/fork-request');
 
 beforeEach(async () => {
   readBoundClaudeConfigDirMock.mockReset();
@@ -203,8 +217,8 @@ beforeEach(async () => {
   queryOneMock.mockResolvedValue(null);
   queryMock.mockReset();
   queryMock.mockResolvedValue([]);
-  commitContextRebuildMock.mockClear();
-  createMessageMock.mockClear();
+  commitContextRebuildMock.mockReset();
+  createMessageMock.mockReset();
   forkSdkSessionMock.mockReset();
   remoteInvokeMock.mockReset();
   inferProviderIdForModelMock.mockReset();
@@ -298,6 +312,155 @@ async function writeClaudeJsonlInConfigDir(
 
 // ── tests ──────────────────────────────────────────────────────────────────
 
+async function withForkReceiptDb(operation: (db: ReturnType<typeof drizzle>) => Promise<void>) {
+  const sqlite = new Database(':memory:');
+  configureOwnerContext({ read: () => ({ dataOwnerId: 'fixture-owner', generation: 1, boundaryPending: false }),
+    fallbackBaseDir: () => userDataDirRef.current });
+  try {
+    for (const table of [sessions, messages]) {
+      const config = getTableConfig(table);
+      sqlite.exec(`CREATE TABLE "${config.name}" (${config.columns.map(column =>
+        `"${column.name}" ${column.getSQLType()}${column.primary ? ' PRIMARY KEY' : ''}`).join(', ')})`);
+    }
+    const db = drizzle(sqlite, { schema });
+    db.insert(sessions).values({ id: 'src-session', title: 'Fork fixture', workingDir: '/fixture-work',
+      sdkSessionId: 'native-source', agentKind: 'pi', agentDeviceId: null,
+      model: 'source-model', providerId: 'source-provider', createdAt: 1, updatedAt: 1 }).run();
+    db.insert(messages).values([
+      { id: 'q', clientId: 'q', sessionId: 'src-session', role: 'user', content: '"question"', createdAt: 100 },
+      { id: 'a', clientId: 'a', sessionId: 'src-session', role: 'assistant', content: '"answer"', createdAt: 101 },
+      { id: 'next', clientId: 'next', sessionId: 'src-session', role: 'user', content: '"excluded turn"', createdAt: 200 },
+    ]).run();
+    snapshotClient = createDbClientForHandle({ db: sqlite, drizzle: db });
+    configureForkTargetAdmission(async target => target);
+    await operation(db);
+  } finally {
+    await snapshotClient?.dispose(); snapshotClient = null; sqlite.close();
+    configureOwnerContext({ read: () => ({ dataOwnerId: null, generation: 0, boundaryPending: false }),
+      fallbackBaseDir: () => userDataDirRef.current });
+  }
+}
+
+const receiptRequest = (target?: ForkTarget): ForkRequest => ({ version: 1, action: 'create', requestId: randomUUID(),
+  sourceSessionId: 'src-session', messageClientId: 'a', ...(target ? { target } : {}) });
+
+describe('recoverable fork requests', () => {
+  // Public creation/status entry + isolated real SQLite and per-test receipt files.
+  // Old fork had no request identity or alternate target: offline B / current C,
+  // a dropped response or a repeated click could not recover one complete child.
+  // Tier unit; native work is deferred or rejected in-process, with no live peer.
+  it.each([null, 'device-d', 'share:fixture'] as const)('hands an old offline segment to the explicit target %s', async device => {
+    await withForkReceiptDb(async db => {
+      db.update(sessions).set({ agentDeviceId: 'device-c' }).run();
+      db.insert(messages).values({ id: 'switch', clientId: 'switch', sessionId: 'src-session', role: 'agent_switch',
+        content: JSON.stringify({ fromAgentKind: 'cc', toAgentKind: 'pi', fromAgentDeviceId: 'device-b',
+          fromSdkSessionId: 'native-on-offline-b', fromModel: 'old-model', fromProviderId: 'old-provider' }), createdAt: 150 }).run();
+      const request = receiptRequest({ agentKind: 'codex', model: 'chosen-model', providerId: 'chosen-provider', agentDeviceId: device });
+      const result = await runForkRequest(request);
+      expect(result).toMatchObject({ state: 'complete', outcome: 'history-handoff', session: {
+        sdkSessionId: null, agentDeviceId: device, model: 'chosen-model', providerId: 'chosen-provider', workingDir: '/fixture-work',
+      } });
+      const handoff = await findPendingAgentHandoff(result.session!.id);
+      expect(handoff).toContain('question'); expect(handoff).toContain('answer');
+      expect(handoff).not.toContain('excluded turn'); expect(handoff).not.toContain('native-on-offline-b');
+      expect(db.select().from(sessions).all()).toHaveLength(2);
+      expect(remoteInvokeMock).not.toHaveBeenCalled(); expect(forkSdkSessionMock).not.toHaveBeenCalled();
+      const recovered = await runForkRequest({ ...request, action: 'status' });
+      expect(recovered.session?.id).toBe(result.session?.id);
+      expect((await runForkRequest(request)).session?.id).toBe(result.session?.id);
+      await expect(runForkRequest({ ...request, target: { ...request.target!, model: 'another-model' } })).rejects.toThrow('does not match');
+    });
+  });
+
+  it('resolves a lost acknowledgement and duplicate click to the single reserved child', async () => {
+    await withForkReceiptDb(async db => {
+      let finish!: (value: unknown) => void;
+      let started!: () => void;
+      const nativeStarted = new Promise<void>(resolve => { started = resolve; });
+      forkSdkSessionMock.mockImplementationOnce(() => { started(); return new Promise(resolve => { finish = resolve; }); });
+      const request = receiptRequest();
+      const first = runForkRequest(request);
+      await nativeStarted;
+      await expect(runForkRequest(request)).resolves.toMatchObject({ state: 'pending' });
+      await expect(runForkRequest({ ...request, action: 'status' })).resolves.toMatchObject({ state: 'pending' });
+      finish({ newSdkSessionId: 'native-child', uuidMap: new Map() });
+      const completed = await first;
+      expect(completed).toMatchObject({ state: 'complete', outcome: 'native' });
+      const found = await runForkRequest({ ...request, action: 'status' });
+      expect(found.session?.id).toBe(completed.session?.id);
+      expect(db.select().from(sessions).all()).toHaveLength(2);
+      expect(forkSdkSessionMock).toHaveBeenCalledTimes(1);
+      await expect(runDeviceLinkInvokeContext({ channel: 'maker:fork', controllerDeviceId: 'different-caller' },
+        () => runForkRequest({ ...request, action: 'status' }))).resolves.toEqual({ state: 'not-sent' });
+    });
+  });
+
+  it('keeps the handoff outcome when its completion receipt is lost and the child later runs', async () => {
+    // A committed child's SDK ID changes on its first turn. It cannot identify
+    // how the fork was created after losing the final receipt write (unit).
+    await withForkReceiptDb(async db => {
+      const rename = fs.rename.bind(fs);
+      const write = vi.spyOn(fs, 'rename').mockImplementation(async (from, to) => {
+        if (String(to).includes('fork-requests')) {
+          const record = JSON.parse(await fs.readFile(from, 'utf8'));
+          if (record.phase === 'complete') throw new Error('lost completion receipt');
+        }
+        await rename(from, to);
+      });
+      try {
+        const request = receiptRequest({ agentKind: 'pi', model: 'other-model', providerId: 'other-provider', agentDeviceId: null });
+        const completed = await runForkRequest(request);
+        expect(completed.state).toBe('complete');
+        db.update(sessions).set({ sdkSessionId: 'first-turn-native-id' }).run();
+        expect(await runForkRequest({ ...request, action: 'status' })).toMatchObject({
+          state: 'complete', outcome: 'history-handoff', session: { id: completed.session!.id },
+        });
+      } finally { write.mockRestore(); }
+    });
+  });
+
+  it('keeps an unknown native result across retries without resending the write', async () => {
+    await withForkReceiptDb(async db => {
+      forkSdkSessionMock.mockRejectedValueOnce(new Error('native reply lost'));
+      const request = receiptRequest();
+      await expect(runForkRequest(request)).resolves.toEqual({ state: 'unknown' });
+      await expect(runForkRequest(request)).resolves.toMatchObject({ state: 'unknown' });
+      expect(forkSdkSessionMock).toHaveBeenCalledTimes(1);
+      expect(db.select().from(sessions).all()).toHaveLength(1);
+    });
+  });
+
+  it('does not replay a history-handoff transaction whose acknowledgement is unknown', async () => {
+    // The DB write can still be in flight when its transport rejects. A missing
+    // child at this instant is not proof of failure, even without a native write.
+    await withForkReceiptDb(async () => {
+      const tx = vi.spyOn(snapshotClient!, 'tx').mockRejectedValueOnce(
+        createDbTransportError(DB_TRANSPORT_OUTCOME_UNKNOWN, 'transaction reply unavailable'));
+      const request = receiptRequest({ agentKind: 'pi', model: 'other-model', providerId: 'other-provider', agentDeviceId: null });
+      await expect(runForkRequest(request)).resolves.toEqual({ state: 'unknown' });
+      await expect(runForkRequest(request)).resolves.toEqual({ state: 'unknown' });
+      expect(tx).toHaveBeenCalledTimes(1);
+      expect(forkSdkSessionMock).not.toHaveBeenCalled();
+    });
+  });
+
+  it.each(['denied', 'clear', 'rewind', 'account'] as const)('does not create a child after %s invalidates preparation', async failure => {
+    await withForkReceiptDb(async db => {
+      configureForkTargetAdmission(async target => {
+        if (failure === 'denied') throw new Error('target permission denied');
+        if (failure === 'account') configureOwnerContext({ read: () => ({ dataOwnerId: 'different-owner', generation: 2, boundaryPending: false }),
+          fallbackBaseDir: () => userDataDirRef.current });
+        if (failure === 'clear') db.update(sessions).set({ clearedAt: 500 }).run();
+        if (failure === 'rewind') db.update(messages).set({ rewindAt: 500 }).run();
+        return target;
+      });
+      await expect(runForkRequest(receiptRequest({ agentKind: 'pi', model: 'new-model', providerId: 'new-provider', agentDeviceId: null }))).rejects.toThrow();
+      expect(db.select().from(sessions).all()).toHaveLength(1);
+      expect(forkSdkSessionMock).not.toHaveBeenCalled();
+    });
+  });
+});
+
 describe('disabled Cindy Make fork boundaries', () => {
   const cases = ['cindy-make', 'cindy-make-merge'].flatMap((source) =>
     [MAKER_INVOKE.FORK, MAKER_INVOKE.FORK_STRIP_ENCRYPTED].flatMap((channel) =>
@@ -342,6 +505,103 @@ describe('disabled Cindy Make fork boundaries', () => {
 });
 
 describe('forkSessionAtMessage', () => {
+  // Regression: fallback used to commit the child before saving its handoff/card.
+  // Existing mocked persistence assertions could not detect an incomplete child. Exercise
+  // the public fork entry and real SQLite transaction with a failing marker/card insert.
+  // Minimal input: one remote Claude reply, an explicit native fork failure, and a write error.
+  // Tier: unit (isolated in-memory SQLite; no live devices or model requests).
+  it.each([
+    ['cc', 'success'], ['cc', 'context_rebuild'], ['cc', 'card'],
+    ['pi', 'success'], ['acp', 'success'],
+  ] as const)(
+    'saves a recovery fork completely or not at all: %s / %s', async (agentKind, failure) => {
+      const sqlite = new Database(':memory:');
+      try {
+        for (const table of [sessions, messages]) {
+          const config = getTableConfig(table);
+          sqlite.exec(`CREATE TABLE "${config.name}" (${config.columns.map(column =>
+            `"${column.name}" ${column.getSQLType()}${column.primary ? ' PRIMARY KEY' : ''}`,
+          ).join(', ')})`);
+        }
+        const db = drizzle(sqlite, { schema });
+        db.insert(sessions).values({ id: 'src-session', title: 'Recovery', sdkSessionId: 'native-source',
+          agentDeviceId: 'device-b', agentKind, model: 'claude-sonnet-4-6',
+          providerId: agentKind === 'acp' ? 'acp-plugin:fixture:engine' : 'xd',
+          createdAt: 1, updatedAt: 1 }).run();
+        const futureTime = Date.now() + 60_000;
+        db.insert(messages).values([
+          { id: 'q', clientId: 'q', sessionId: 'src-session', role: 'user', content: '"question"', createdAt: futureTime },
+          { id: 'a', clientId: 'a', sessionId: 'src-session', role: 'assistant', content: '"answer"',
+            agentMeta: JSON.stringify({ uuid: 'missing-anchor' }), createdAt: futureTime + 1 },
+          { id: 'next', clientId: 'next', sessionId: 'src-session', role: 'user', content: '"excluded future turn"', createdAt: futureTime + 2 },
+        ]).run();
+        if (agentKind === 'pi') db.insert(messages).values({
+          id: 'rebuild', clientId: 'rebuild', sessionId: 'src-session', role: 'context_rebuild',
+          content: JSON.stringify({ reason: 'context-overflow', consumed: true, handoff: 'excluded future turn' }),
+          createdAt: futureTime + 3, rewindAt: futureTime + 3,
+        }).run();
+        snapshotClient = createDbClientForHandle({ db: sqlite, drizzle: db });
+        // Keep the old post-commit path real too: before the fix these writes fail
+        // after the child already exists. Other cases retain their narrow mocks.
+        commitContextRebuildMock.mockImplementationOnce((sessionId, handoff, meta) => commitContextRebuildWithPorts({
+          now: Date.now, createId: randomUUID, tx: (name, args) => snapshotClient!.tx(name, args),
+        }, sessionId, handoff, meta));
+        createMessageMock.mockImplementationOnce(async (sessionId, body) => {
+          const { row } = await writeMessageRow(snapshotClient!, sessionId, body);
+          return messageToCamel(row);
+        });
+        if (failure !== 'success') {
+          sqlite.exec(`CREATE TRIGGER fail_recovery BEFORE INSERT ON messages
+            WHEN NEW.session_id != 'src-session' AND ${failure === 'card'
+              ? "NEW.agent_meta LIKE '%contextRebuild%'" : "NEW.role = 'context_rebuild'"}
+            BEGIN SELECT RAISE(ABORT, 'fixture recovery write failed'); END`);
+        }
+        remoteInvokeMock.mockImplementation(async (_device, _channel, [request]) => request.op === 'caps'
+          ? { ok: true, result: { version: 1, agents: [], maxRuns: 16, uploadChunkBytes: 1024,
+              maxPayloadBytes: 2048, nativeFork: true } }
+          : { ok: false, error: { code: 'REMOTE_AGENT_FORK_FAILED', message: 'native history unavailable' } });
+
+        if (failure === 'success') {
+          const child = await forkSessionAtMessage('src-session', 'a');
+          expect(child).toMatchObject({ agentDeviceId: 'device-b', agentKind,
+            providerId: agentKind === 'acp' ? 'acp-plugin:fixture:engine' : 'xd', sdkSessionId: null,
+            contextTokens: 0, contextWindow: 0, _count: { messages: 3 } });
+          const rows = sqlite.prepare('SELECT client_id, role, content, agent_meta, created_at, rewind_at FROM messages WHERE session_id = ? ORDER BY created_at, rowid')
+            .all(child.id) as Array<{ client_id: string; role: string; content: string; agent_meta: string | null; created_at: number; rewind_at: number | null }>;
+          expect(rows.map(row => row.role)).toEqual(['user', 'assistant', 'context_rebuild', 'assistant']);
+          const marker = JSON.parse(rows[2]!.content);
+          expect(marker).toMatchObject({ consumed: false,
+            reason: agentKind === 'pi' ? 'context-overflow' : 'native-session-recovery', sourceAgentKind: agentKind,
+            sourceUserClientId: rows[0]!.client_id });
+          expect(marker.handoff).toContain('question');
+          expect(marker.handoff).not.toContain('excluded future turn');
+          await expect(findPendingAgentHandoff(child.id)).resolves.toBe(marker.handoff);
+          // Imported timestamps must not carry this fresh handoff past a
+          // controlled-host /clear. Query directly again (no registry cache),
+          // as after a restart, while preserving the source's original times.
+          const clearAt = Date.now();
+          expect(rows[1]!.created_at).toBeLessThan(rows[2]!.created_at);
+          expect(rows[2]!.created_at).toBeLessThanOrEqual(clearAt);
+          sqlite.prepare('UPDATE sessions SET cleared_at = ? WHERE id = ?').run(clearAt, child.id);
+          await expect(findPendingAgentHandoff(child.id)).resolves.toBeNull();
+          expect(sqlite.prepare('SELECT created_at FROM messages WHERE id = ?').get('q'))
+            .toEqual({ created_at: futureTime });
+          expect(rows[2]!.rewind_at).toBe(rows[2]!.created_at);
+          expect(JSON.parse(rows[3]!.agent_meta!)).toMatchObject({ contextRebuild: { reason: marker.reason } });
+        } else {
+          await expect(forkSessionAtMessage('src-session', 'a')).rejects.toThrow('fixture recovery write failed');
+          expect(sqlite.prepare("SELECT count(*) AS n FROM sessions WHERE id != 'src-session'").get()).toEqual({ n: 0 });
+          expect(sqlite.prepare("SELECT count(*) AS n FROM messages WHERE session_id != 'src-session'").get()).toEqual({ n: 0 });
+        }
+        expect(sqlite.prepare("SELECT sdk_session_id FROM sessions WHERE id = 'src-session'").get())
+          .toEqual({ sdk_session_id: 'native-source' });
+      } finally {
+        await snapshotClient?.dispose();
+        snapshotClient = null;
+        sqlite.close();
+      }
+    },
+  );
   // #11482, unit: real createSideChat and fork.session on isolated SQLite.
   // Existing queue fixtures cannot see source changes while the native fork awaits.
   // Minimal races: q@1000, a@1100, then a same-millisecond append or a new Pi turn.
@@ -1228,7 +1488,8 @@ describe('forkSessionAtMessage', () => {
       expect(marker).toMatchObject({ reason: 'native-session-recovery', consumed: false,
         sourceAgentKind: 'codex', sourceModel: 'gpt-5.5', sourceProviderId: 'xd',
         sourceUserClientId: args.newMessageIds[0]?.clientId ?? null });
-      expect(args.recoveryMarker.createdAt).toBeGreaterThanOrEqual(rows.at(-1)?.createdAt ?? 0);
+      expect(args.recoveryMarker.createdAt).toBe(args.newSession.createdAt);
+      expect(args.recoveryMarker.createdAt).toBeLessThanOrEqual(Date.now());
       expect(marker.handoff).not.toContain('future content');
       if (rows.length) expect(marker.handoff).toContain('keep prefix');
       if (target.role === 'user') expect(marker.handoff).not.toContain('target content');
@@ -1601,8 +1862,7 @@ describe('forkSessionAtMessage', () => {
         await forkSessionAtMessage('src-session', 'target-user');
         const args = txCalls[0].args as { newSession: Record<string, unknown> };
         expect(args.newSession).toMatchObject({ agentDeviceId: owner, sdkSessionId: null });
-        expect(commitContextRebuildMock).toHaveBeenCalledWith(args.newSession.id, expect.any(String),
-          expect.objectContaining({ reason: 'native-session-recovery', sourceAgentKind: 'cc' }));
+        expect(forkRecoveryContentFromTx()).toMatchObject({ reason: 'native-session-recovery', sourceAgentKind: 'cc' });
         expect([...authorizedTasks]).toEqual(['src-session']);
       } else {
         await expect(forkSessionAtMessage('src-session', 'target-user')).rejects.toThrow();
@@ -1660,8 +1920,7 @@ describe('forkSessionAtMessage', () => {
       const args = txCalls[0].args as { newSession: Record<string, unknown>; newMessageIds: unknown[] };
       expect(args.newSession).toMatchObject({ agentDeviceId: 'device-b', agentKind: 'cc', sdkSessionId: null });
       expect(args.newMessageIds).toHaveLength(2);
-      expect(commitContextRebuildMock).toHaveBeenCalledWith(args.newSession.id, expect.any(String),
-        expect.objectContaining({ reason: 'native-session-recovery', sourceAgentKind: 'cc' }));
+      expect(forkRecoveryContentFromTx()).toMatchObject({ reason: 'native-session-recovery', sourceAgentKind: 'cc' });
       expect(forkSdkSessionMock).not.toHaveBeenCalled();
     } finally {
       await host.dispose();
@@ -1905,17 +2164,13 @@ describe('forkSessionAtMessage', () => {
 
     expect(forkSdkSessionMock).not.toHaveBeenCalled();
     expect(txCalls.some((call) => call.name === 'fork.session')).toBe(true);
-    expect(commitContextRebuildMock).toHaveBeenCalledWith(
-      expect.any(String),
-      expect.stringContaining("exceeded the model's context window"),
-      expect.objectContaining({
-        reason: 'context-overflow',
-        sourceAgentKind: 'pi',
-        sourceModel: 'claude-sonnet-4-6',
-        sourceProviderId: 'xd',
-      }),
-    );
-    expect(createMessageMock).toHaveBeenCalled();
+    expect(forkRecoveryContentFromTx()).toMatchObject({
+      handoff: expect.stringContaining("exceeded the model's context window"),
+      reason: 'context-overflow',
+      sourceAgentKind: 'pi',
+      sourceModel: 'claude-sonnet-4-6',
+      sourceProviderId: 'xd',
+    });
   });
 
   // Unit, docs/plans/acp-plugin-bridge.md: plugin engine history belongs to the plugin's agent, so a
@@ -1956,23 +2211,18 @@ describe('forkSessionAtMessage', () => {
 
     expect(forkSdkSessionMock).not.toHaveBeenCalled();
     expect(remoteInvokeMock).not.toHaveBeenCalled();
-    const childId = forkedSessionIdFromTx();
     const txArgs = txCalls.find((call) => call.name === 'fork.session')!.args as { newSession: Record<string, unknown> };
     expect(txArgs.newSession).toMatchObject({
       agentKind: 'acp', providerId: PLUGIN_PROVIDER, model: 'deepseek-v4-pro', sdkSessionId: null,
       parentSessionId: 'src-session', fastMode: false,
     });
-    expect(commitContextRebuildMock).toHaveBeenCalledWith(
-      childId,
-      expect.stringContaining('could not be safely transferred'),
-      expect.objectContaining({
-        reason: 'native-session-recovery',
-        sourceAgentKind: 'acp',
-        sourceModel: 'deepseek-v4-pro',
-        sourceProviderId: PLUGIN_PROVIDER,
-      }),
-    );
-    expect(createMessageMock).toHaveBeenCalledWith(childId, expect.objectContaining({ agentKind: 'acp' }));
+    expect(forkRecoveryContentFromTx()).toMatchObject({
+      handoff: expect.stringContaining('could not be safely transferred'),
+      reason: 'native-session-recovery',
+      sourceAgentKind: 'acp',
+      sourceModel: 'deepseek-v4-pro',
+      sourceProviderId: PLUGIN_PROVIDER,
+    });
   });
 
   // Same plugin engine rule at the first message: nothing was said yet, so no empty handoff is queued.
@@ -1985,11 +2235,12 @@ describe('forkSessionAtMessage', () => {
       [makeSourceRow({ id: 'forked-id', agentKind: 'acp', sdkSessionId: null, parentSessionId: 'src-session' })],
     );
 
-    await forkSessionAtMessage('src-session', 'u1-client');
+    const child = await forkSessionAtMessage('src-session', 'u1-client');
 
     expect(txCalls.find((call) => call.name === 'fork.session')?.args).toMatchObject({
       newSession: { agentKind: 'acp', providerId: PLUGIN_PROVIDER, sdkSessionId: null },
     });
+    expect(child._count?.messages).toBe(0);
     expect(commitContextRebuildMock).not.toHaveBeenCalled();
     expect(createMessageMock).not.toHaveBeenCalled();
   });
@@ -2037,7 +2288,7 @@ describe('forkSessionAtMessage', () => {
     });
     expect(forkSdkSessionMock).not.toHaveBeenCalled();
     expect(remoteInvokeMock).not.toHaveBeenCalled();
-    expect(commitContextRebuildMock).toHaveBeenCalledOnce();
+    expect(forkRecoveryContentFromTx()).toMatchObject({ sourceAgentKind: 'acp', consumed: false });
   });
 
   // Security boundary (unit): plugin engine forks must still fail closed on missing engine identity
@@ -2076,7 +2327,7 @@ describe('forkSessionAtMessage', () => {
       newSession: { source: 'side-chat', agentKind: 'acp', providerId: PLUGIN_PROVIDER, sdkSessionId: null },
     });
     expect(forkSdkSessionMock).not.toHaveBeenCalled();
-    expect(commitContextRebuildMock).toHaveBeenCalledOnce();
+    expect(forkRecoveryContentFromTx()).toMatchObject({ sourceAgentKind: 'acp', consumed: false });
   });
 
   // Review #6563: native-session routing tests did not cover rebuild-before-switch.
@@ -2217,7 +2468,7 @@ describe('forkSessionAtMessage', () => {
     expect(txArgs.newSession.agentKind).toBe('cc');
     expect(txArgs.newSession.providerId).toBe('historical-cc-provider');
     expect(txArgs.newSession.sdkSessionId).toBeNull();
-    expect(commitContextRebuildMock).toHaveBeenCalled();
+    expect(forkRecoveryContentFromTx()).toMatchObject({ sourceAgentKind: 'cc', consumed: false });
   });
 
   it.each([
@@ -2905,8 +3156,7 @@ describe('forkSessionAtMessage', () => {
     expect(forkSdkSessionMock).not.toHaveBeenCalled();
     const args = txCalls[0].args as { newSession: Record<string, unknown> };
     expect(args.newSession).toMatchObject({ agentKind: 'cc', sdkSessionId: null });
-    expect(commitContextRebuildMock).toHaveBeenCalledWith(args.newSession.id, expect.any(String),
-      expect.objectContaining({ reason: 'native-session-recovery', sourceAgentKind: 'cc' }));
+    expect(forkRecoveryContentFromTx()).toMatchObject({ reason: 'native-session-recovery', sourceAgentKind: 'cc' });
   });
 
   it('assistant target (claude): repairs legacy imported parentUuid using the transcript index', async () => {

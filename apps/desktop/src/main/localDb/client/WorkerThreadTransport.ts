@@ -2127,6 +2127,11 @@ function forkSession(readyDb, args) {
     'INSERT INTO messages (id, client_id, session_id, role, content, tool_use_id, agent_meta, agent_kind, created_at, rewind_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)',
   );
   return readyDb.transaction(() => {
+    if (payload.sourceAnchorClientId != null && !readyDb.prepare(
+      "SELECT 1 FROM sessions s JOIN messages m ON m.session_id = s.id WHERE s.id = ? AND s.status != 'deleted' AND s.cleared_at IS ? AND m.client_id = ? AND m.rewind_at IS NULL AND m.role IN ('user', 'assistant') AND (s.cleared_at IS NULL OR m.created_at > s.cleared_at)",
+    ).get(sourceSessionId, sourceClearedAt, expectString(payload.sourceAnchorClientId, 'sourceAnchorClientId'))) {
+      throw invalidArgs('Source fork point changed while preparing fork');
+    }
     if (newSession.source === 'side-chat' && !readyDb.prepare(
       "SELECT 1 FROM sessions WHERE id = ? AND status = 'active' AND cleared_at IS ?",
     ).get(sourceSessionId, sourceClearedAt)) {
@@ -2153,9 +2158,13 @@ function forkSession(readyDb, args) {
       throw invalidArgs('Source history changed while preparing fork');
     }
     const childCreatedAt = expectNumber(newSession.createdAt, 'newSession.createdAt');
-    // Keep inherited history before the side-chat boundary, preserving relative order.
-    const historyTimeOffset = newSession.source === 'side-chat'
-      ? sourceMessages.reduce((offset, message) => Math.max(offset, message.created_at - childCreatedAt + 1), 0)
+    // Same fresh-context time boundary as the bundled worker; native forks retain their times.
+    const historyBoundary = newSession.source === 'side-chat' ? childCreatedAt
+      : payload.recoveryMarker != null
+        ? expectNumber(asRecord(payload.recoveryMarker, 'recoveryMarker').createdAt, 'recoveryMarker.createdAt')
+        : null;
+    const historyTimeOffset = historyBoundary !== null
+      ? sourceMessages.reduce((offset, message) => Math.max(offset, message.created_at - historyBoundary + 1), 0)
       : 0;
     readyDb.prepare(
       'INSERT INTO sessions (id, title, working_dir, model, provider_id, effort, permission_mode, status, sdk_session_id, total_token_usage, total_cost_usd, context_tokens, context_window, context_window_runtime, fast_mode, cleared_at, pinned_at, user_send_at, agent_kind, workspace_kind, codex_history_has_product_prompt, parent_session_id, forked_at_message_id, agent_device_id, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',

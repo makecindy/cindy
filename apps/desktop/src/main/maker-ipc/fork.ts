@@ -12,8 +12,12 @@
  * fork 点支持 user / assistant 消息 (语义区别见 forkSessionAtMessage doc)。
  */
 
-import { remoteAgentErrorCode } from '@cindy/device-link';
+import { isScopedPeer, remoteAgentErrorCode } from '@cindy/device-link';
 import { ipcMain } from 'electron';
+import { z } from 'zod';
+import type { ForkRequest, ForkReceipt } from '@cindy/maker-shared/fork-request';
+import type { Session } from '../../renderer/lib/ccAgent.types';
+import { forkRequestCapabilities, runForkRequest } from '../maker-orchestration/fork-request';
 
 import { createLogger } from '../logger.js';
 import { createSideChat, listSideChats, forkSessionAtMessage, forkSessionStripEncrypted } from '../maker-orchestration/fork.js';
@@ -22,6 +26,7 @@ import { emitSessionCreated } from '../localDb/ipc/sessionCreatedBroadcast.js';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
 import { getDeviceLinkInvokeContext } from '../device-link/invoke-context.js';
 import { assertTaskActionCurrent } from './taskActionAuthorization.js';
+import { isIpcError } from '../../shared/ipc-errors.js';
 
 import { MAKER_INVOKE } from './channels.js';
 
@@ -36,20 +41,45 @@ function broadcastSessionCreated(sessionId: string): void {
 }
 
 /** UI and Host tools share the completed fork, including task-list notification. */
-export async function forkTaskAtMessage(sessionId: string, messageClientId: string) {
+export function forkTaskAtMessage(sessionId: string, messageClientId: string): Promise<Session>;
+export function forkTaskAtMessage(sessionId: string, messageClientId: string, request: ForkRequest): Promise<ForkReceipt<Session>>;
+export async function forkTaskAtMessage(sessionId: string, messageClientId: string, request?: ForkRequest): Promise<Session | ForkReceipt<Session>> {
+  if (request) {
+    const receipt = await runForkRequest(parseForkRequest(request));
+    await assertTaskActionCurrent();
+    if (receipt.session && request.action === 'create') broadcastSessionCreated(receipt.session.id);
+    return receipt;
+  }
   const session = await forkSessionAtMessage(sessionId, messageClientId);
   await assertTaskActionCurrent();
   broadcastSessionCreated(session.id);
   return session;
 }
 
-function assertSideChatCaller(event: Electron.IpcMainInvokeEvent, channel: string): void {
+const forkRequestSchema = z.object({
+  version: z.literal(1), action: z.enum(['create', 'status']), requestId: z.string().uuid(),
+  sourceSessionId: z.string().min(1).max(512), messageClientId: z.string().min(1).max(512),
+  target: z.object({
+    agentKind: z.enum(['claude-code', 'codex', 'pi', 'acp']), model: z.string().min(1).max(512),
+    providerId: z.string().min(1).max(512).nullable(),
+    agentDeviceId: z.string().regex(/^[A-Za-z0-9_.:-]{1,128}$/).nullable(),
+    effort: z.string().max(64).optional(), fastMode: z.union([z.boolean(), z.literal('ultrafast')]).optional(),
+  }).strict().optional(),
+}).strict();
+
+export function parseForkRequest(input: unknown): ForkRequest {
+  const parsed = forkRequestSchema.safeParse(input);
+  if (!parsed.success) throwIpcError('INVALID_PARAMS', 'Invalid fork request');
+  return parsed.data;
+}
+
+function assertOwnedTaskCaller(event: Electron.IpcMainInvokeEvent, channel: string): void {
   const context = getDeviceLinkInvokeContext();
   if (context) {
     // Main creates this context only after device-link authorization. A remote
     // invoke has no Electron frame; never accept a caller-supplied substitute.
-    if (context.channel !== channel || !context.controllerDeviceId || context.sharedTask) {
-      throwIpcError('PERMISSION_DENIED', 'Side chats require the task owner');
+    if (context.channel !== channel || !context.controllerDeviceId || context.sharedTask || isScopedPeer(context.controllerDeviceId)) {
+      throwIpcError('PERMISSION_DENIED', 'This action requires the task owner');
     }
   } else {
     assertTrustedAppRendererEvent(event);
@@ -58,11 +88,11 @@ function assertSideChatCaller(event: Electron.IpcMainInvokeEvent, channel: strin
 
 export function registerMakerForkIpc(): void {
   ipcMain.handle(MAKER_INVOKE.SIDE_CHAT_LIST, (event, sourceSessionId: unknown) => {
-    assertSideChatCaller(event, MAKER_INVOKE.SIDE_CHAT_LIST);
+    assertOwnedTaskCaller(event, MAKER_INVOKE.SIDE_CHAT_LIST);
     return listSideChats(requireString(sourceSessionId, 'sourceSessionId'));
   });
   ipcMain.handle(MAKER_INVOKE.SIDE_CHAT, async (event, input: unknown) => {
-    assertSideChatCaller(event, MAKER_INVOKE.SIDE_CHAT);
+    assertOwnedTaskCaller(event, MAKER_INVOKE.SIDE_CHAT);
     // Older hosts require a string. An object fails closed if a cached capability
     // outlives a host downgrade, instead of creating a branch with a different ID.
     const request = typeof input === 'object' && input !== null ? input as Record<string, unknown> : null;
@@ -98,6 +128,27 @@ export function registerMakerForkIpc(): void {
       sourceSessionId: unknown,
       messageClientId: unknown,
     ) => {
+      if (typeof sourceSessionId === 'object' && sourceSessionId !== null) {
+        assertOwnedTaskCaller(_event, MAKER_INVOKE.FORK);
+        if ((sourceSessionId as { action?: unknown }).action === 'capabilities') return forkRequestCapabilities();
+        const request = parseForkRequest(sourceSessionId);
+        try {
+          return await forkTaskAtMessage(request.sourceSessionId, request.messageClientId, request);
+        } catch (error) {
+          if (isIpcError(error)) throw error;
+          const code = (error as { code?: string }).code;
+          const remote = remoteAgentErrorCode(error instanceof Error ? error.message : '');
+          if (remote) throwIpcError('PRECONDITION_FAILED', `[${remote}] The native history is unavailable`);
+          if (code === 'SOURCE_NOT_FOUND' || code === 'MESSAGE_NOT_FOUND') throwIpcError('NOT_FOUND', 'The fork source is unavailable');
+          if (code === 'NOT_USER_MESSAGE') throwIpcError('INVALID_PARAMS', 'Choose a user message or reply');
+          if (code === 'UNSUPPORTED_HISTORY') throwIpcError('FORK_UNSUPPORTED_HISTORY', 'This history cannot be forked');
+          if (code === 'NO_PRIOR_ASSISTANT' || code === 'SOURCE_NEVER_RAN' || code === 'CODEX_FORK_STATE_UNAVAILABLE') {
+            throwIpcError(code, 'The native history is unavailable');
+          }
+          log.warn('fork request failed before a confirmed result', { code });
+          throwIpcError('PRECONDITION_FAILED', 'Could not prepare this fork request');
+        }
+      }
       const sid = requireString(sourceSessionId, 'sourceSessionId');
       const mid = requireString(messageClientId, 'messageClientId');
       try {

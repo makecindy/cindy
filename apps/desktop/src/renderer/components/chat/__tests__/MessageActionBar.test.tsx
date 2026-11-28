@@ -480,7 +480,7 @@ describe('MessageActionBar', () => {
     });
   });
 
-  it('keeps the fork tooltip and bar visible after hover leaves once the fork is confirmed', async () => {
+  it('keeps the busy fork bar visible without a tooltip covering recovery dialogs', async () => {
     let confirmFork!: () => void;
     let resolveFork!: () => void;
     const onFork = vi.fn(async (options?: { onConfirmed?: () => void }) => {
@@ -505,16 +505,17 @@ describe('MessageActionBar', () => {
     await act(async () => {
       confirmFork();
     });
-    expect(screen.getByRole('tooltip').textContent).toBe('chat.messageActionBar.fork');
+    expect(screen.queryByRole('tooltip')).toBeNull();
 
-    // 鼠标移出整条消息并越过淡出防抖：转圈期间提示与操作栏都不应消失。
+    // Pending creation/recovery keeps the action reachable after hover ends,
+    // while its tooltip stays dismissed so it cannot cover the next dialog.
     vi.useFakeTimers();
     try {
       rerender(bar(false));
       act(() => {
         vi.advanceTimersByTime(1000);
       });
-      expect(screen.getByRole('tooltip')).toBeTruthy();
+      expect(screen.queryByRole('tooltip')).toBeNull();
       expect((container.firstElementChild as HTMLElement).classList.contains('opacity-100')).toBe(true);
     } finally {
       vi.useRealTimers();

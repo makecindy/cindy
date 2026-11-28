@@ -17395,6 +17395,21 @@
       "unavailable": "The subscription account assigned to this task is unavailable for this request. Check the account in model provider settings on the computer running the task, or choose another model source.",
       "legacy": "The subscription account assigned to this task is unavailable. Check its sign-in and usage status on the computer running the task, or choose another model source. This task does not switch accounts automatically."
     },
+    "forkRecovery": {
+      "choose": "Choose another provider to continue",
+      "continue": "Start from chat history",
+      "handoffDescription": "A new task will use chat history up to this point and the provider you select. The task and files stay on the task computer. The handoff has a size limit and may omit older content; native reasoning and tool state are not preserved.",
+      "selectModel": "Select a model and provider",
+      "pendingTitle": "Checking the new task",
+      "pendingDescription": "The creation result is not confirmed. Check the same request to find the task without creating another copy. If you choose another provider, the original request may still complete.",
+      "check": "Check result",
+      "retry": "Retry fork",
+      "update": "Update Cindy on the task computer",
+      "unavailableTitle": "This history is unavailable",
+      "unavailableDescription": "The computer holding this native history is unavailable or cannot fork it. Chat records remain on the task computer. Retry, or choose another provider to continue from those records.",
+      "nativeSuccess": "New task created from native history",
+      "handoffSuccess": "New task created with a chat-history handoff"
+    },
     "errorExplain": {
       "providerSafetyRefusal": {
         "title": "Why this reply was blocked",

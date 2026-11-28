@@ -106,6 +106,12 @@ interface ActionContext {
   rewindTarget?: TaskActionScope['rewindTarget'];
 }
 const actionContext = new AsyncLocalStorage<ActionContext>();
+/** Stable admitted caller for write receipts; never accepts a caller-supplied identity. */
+export function taskActionCallerKey(): string | undefined {
+  const current = actionContext.getStore();
+  return current?.caller ? `plugin:${current.caller.pluginId}`
+    : current?.sessionId ? `task:${current.sessionId}` : undefined;
+}
 export const TASK_ACTION_INPUT_GUARD = Symbol('task-action-input-guard');
 export type TaskActionDeliveryGuard = (() => Promise<void>) & {
   onSettled?: () => Promise<void>;

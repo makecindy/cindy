@@ -280,6 +280,7 @@ import { listPluginEngineViews, pluginEngineDescriptors, pluginEngineModelsOf, p
 import { pluginEngineRemoteUse, setPluginEngineRemoteUse } from '../maker-host/pluginEngineRemoteUse.js';
 import { onPluginEnginePrefsChanged, readPluginEnginePrefs, updatePluginEnginePrefs } from '../maker-host/plugin-engine-prefs-store.js';
 import { admitPluginEngineSession, admitPluginEngineSwitchTarget } from './pluginEngineSessionAdmission.js';
+import { configureForkTargetAdmission } from '../maker-orchestration/fork-request.js';
 import { getPluginHarnessRegistry } from '../cindy-brain/pluginHarnesses.js';
 import {
   isPluginEngineKind,
@@ -12448,6 +12449,26 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     }
     return admittedAlias ? { ...selection, providerId: current.providerId } : selection;
   };
+  configureForkTargetAdmission(async (target) => {
+    const resolver = createScheduledModelSelectionResolver({
+      readRemoteProviders: (deviceId, agent, model, providerId) =>
+        readUsableAgentDeviceProviders(deviceId, agent, model, providerId, 'MODEL_SELECTION_UNAVAILABLE'),
+      readSshCodexProviders: async () => { throwIpcError('UNSUPPORTED_CAPABILITY', 'SSH history handoff is unavailable'); },
+      resolveLocalSelection: async (route) => {
+        await assertModelRouteUsable(route.agentKind, route.model, route.providerId, undefined, 'MODEL_SELECTION_UNAVAILABLE');
+        return resolveScheduledModelSelectionLive(route);
+      },
+      resolvePluginEngineSelection: async (route) => {
+        const selected = { providerId: route.providerId ?? '', model: route.model, effort: route.effort };
+        const admitted = route.agentDeviceId
+          ? await agentSwitchDeps.admitRemotePluginEngineTarget!(route.agentDeviceId, selected)
+          : admitPluginEngineSwitchTarget(selected, listPluginEngineViews());
+        return { ...route, model: admitted.model, effort: admitted.effort as ScheduledModelSelection['effort'], fastMode: false };
+      },
+    });
+    const route = await resolver({ ...target, effort: (target.effort || null) as ScheduledModelSelection['effort'], fastMode: target.fastMode ?? false });
+    return { ...target, ...route, agentDeviceId: route.agentDeviceId ?? null, effort: route.effort ?? '' };
+  });
   const applyScheduledProfile = async (
     sessionId: string, selection: ScheduledModelSelection, signal?: AbortSignal,
   ) => applyScheduledModelSelection(await resolveScheduledExecutionSelection(sessionId, selection), {

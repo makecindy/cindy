@@ -17565,6 +17565,21 @@
       "unavailable": "La cuenta de suscripción asignada a esta tarea no se puede usar para esta solicitud. Revisa la cuenta en los ajustes del proveedor de modelos del ordenador que ejecuta la tarea o elige otra fuente de modelos.",
       "legacy": "La cuenta de suscripción asignada a esta tarea no está disponible. Revisa el inicio de sesión y el uso en el ordenador que ejecuta la tarea o elige otra fuente de modelos. La cuenta no cambia automáticamente."
     },
+    "forkRecovery": {
+      "choose": "Continuar con otro proveedor",
+      "continue": "Crear tarea desde el chat",
+      "handoffDescription": "La nueva tarea usa el chat hasta este punto y el proveedor elegido. La tarea y los archivos permanecen en el equipo de la tarea. La transferencia tiene un límite y puede omitir contenido antiguo; no conserva el razonamiento nativo ni el estado de las herramientas.",
+      "selectModel": "Selecciona modelo y proveedor",
+      "pendingTitle": "Comprobando la nueva tarea",
+      "pendingDescription": "El resultado aún no está confirmado. Consulta la misma solicitud para encontrar la tarea sin duplicarla. Si eliges otro proveedor, la solicitud original aún puede completarse.",
+      "check": "Consultar resultado",
+      "retry": "Reintentar bifurcación",
+      "update": "Actualizar Cindy en el equipo de la tarea",
+      "unavailableTitle": "Este historial no está disponible",
+      "unavailableDescription": "El equipo que guarda este historial nativo no está disponible o no puede bifurcarlo. El chat permanece en el equipo de la tarea. Reintenta o elige otro proveedor.",
+      "nativeSuccess": "Nueva tarea creada desde el historial nativo",
+      "handoffSuccess": "Nueva tarea creada con transferencia del chat"
+    },
     "errorExplain": {
       "providerSafetyRefusal": {
         "title": "Por qué se bloqueó esta respuesta",

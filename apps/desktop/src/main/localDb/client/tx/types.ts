@@ -149,6 +149,8 @@ export interface SessionTreeRehydrateArgs {
 }
 
 export interface ForkSessionArgs {
+  /** Optional v1 request fence: selected message must still be visible at commit. */
+  sourceAnchorClientId?: string;
   /** Reject edits to the ordered history selected before the native fork awaited. */
   sourceMessagesDigest?: string;
   sourceSessionId: string;

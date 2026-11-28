@@ -204,6 +204,7 @@ import { useSideChatCount } from '@/session/useSideChatCount';
 import { SessionTaskLayout, type SessionTaskChrome } from '@/session/SessionTaskLayout';
 import { buildMobileSessionRenderWindow, mobileSessionHistoryBoundary } from '@/session/mobileHistoryRender';
 import { createMobileMakerTransport } from '@/device-link/mobileMakerTransport';
+import { useForkRecovery } from '@/session/useForkRecovery';
 import { startFocusedTopicSubscription } from '@/device-link/focusedTopicSubscription';
 import { InteractionPanel, type MobilePlanViewerState } from '@/session/InteractionPanel';
 import {
@@ -1933,6 +1934,8 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     clientId: string;
     kind: MobileMessageActionBusyKind;
   } | null>(null);
+  const [forkModelPickerOpen, setForkModelPickerOpen] = useState(false);
+  const modelCatalogOpen = modelSheetOpen || forkModelPickerOpen;
   const [rewindState, setRewindState] = useState<RewindPreviewState>({ kind: 'idle' });
   // 切 session 时同步(render 阶段)重置回撤确认框 / busy / loading 态并递增「请求代际」。SessionScreen 切
   // session 复用实例、不 remount,这些本地 UI state 不会自动重置,残留会让确认框跨 session 出现且
@@ -1945,6 +1948,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     setPrevRewindSessionId(sessionId);
     setRewindState({ kind: 'idle' });
     setMessageActionBusy(null);
+    setForkModelPickerOpen(false);
     setLoading(false);
     rewindRequestSeqRef.current += 1;
   }
@@ -1993,8 +1997,8 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
   const remotePluginEngines = useControlledRemotePluginEngines({
     controlledDeviceId: deviceId,
     enabled: (pluginEngineTask && currentPluginEngineIsRemote)
-      || (pluginEngineSwitchEligible && (modelSheetOpen || pluginEngineTargetIsRemote)),
-    discoverAll: pluginEngineSwitchEligible && modelSheetOpen,
+      || (pluginEngineSwitchEligible && (modelCatalogOpen || pluginEngineTargetIsRemote)),
+    discoverAll: pluginEngineSwitchEligible && modelCatalogOpen,
     invoke,
     keepDeviceIds: pluginEngineKeepDeviceIds,
     connectionEpoch,
@@ -2288,7 +2292,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
   const { running: runningModel, pending: pendingModel } = taskModelCatalogRoutes(currentSession, deviceId);
   const composerDeviceProviders = useDeviceProviders(
     deviceId || undefined,
-    modelSheetOpen,
+    modelCatalogOpen,
     runningModel?.deviceId === deviceId ? runningModel.route : undefined,
     pendingModel?.deviceId === deviceId ? pendingModel.route : undefined,
   );
@@ -2846,13 +2850,13 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     // 选择器打开时才读其他电脑;Agent 已在另一台电脑时还要按那台的目录显示模型药丸。
     // 共享任务访客读到的是自己账号的设备,与任务无关,不读。
     enabled: !!deviceId && !isSharedTaskPeer(deviceId) && (
-      (agentLocationMovable && modelSheetOpen) || remoteAgentKeepDeviceIds.length > 0
+      (agentLocationMovable && modelCatalogOpen) || remoteAgentKeepDeviceIds.length > 0
     ),
     controlledDeviceId: deviceId,
     keepDeviceIds: remoteAgentKeepDeviceIds,
     retainedModel: runningModel?.deviceId !== deviceId ? runningModel : undefined,
     pendingModel: pendingModel?.deviceId !== deviceId ? pendingModel : undefined,
-    keepOnly: !(agentLocationMovable && modelSheetOpen),
+    keepOnly: !(agentLocationMovable && modelCatalogOpen),
   });
   const modelSheetRemoteCatalogs = useMemo(
     () => orcaRemoteAgentDeviceId
@@ -10623,12 +10627,17 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
   }, [maker, messageActionBusy, sessionId]);
 
 
-  const performForkAtMessage = useCallback(async (clientId: string, draft?: MobileMessageDraft) => {
-    if (!deviceId || messageActionBusy) return;
-    setMessageActionBusy({ clientId, kind: 'fork' });
-    setError(null);
-    try {
-      const forked = await maker.fork(sessionId, clientId);
+  const forkRecovery = useForkRecovery({
+    scope: JSON.stringify([accountControlScope, sessionId, currentSession?.clearedAt]), sessionId, maker,
+    storageScope: JSON.stringify([deviceId, sessionId]),
+    setPickerOpen: setForkModelPickerOpen,
+    onBusy: clientId => {
+      setMessageActionBusy(clientId ? { clientId, kind: 'fork' } : null);
+      if (clientId) setError(null);
+    },
+    onError: setError,
+    onComplete: (forked, draft, outcome) => {
+      if (!deviceId) return;
       remoteSessionStore.upsertDeviceSession(deviceId, deviceName, forked);
       const forkDocument = draft?.document ?? migrateLegacyComposerDraft(
         draft?.text,
@@ -10638,16 +10647,14 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       saveComposerDocumentDraft(forked.id, forkDocument);
       saveComposerDraft(forked.id, composerDocumentProjectedText(forkDocument));
       clearQuotes(forked.id);
+      if (outcome) Alert.alert(t(outcome === 'native' ? 'session.forkRecovery.nativeSuccess' : 'session.forkRecovery.handoffSuccess'));
       pushSessionDrillDown(router, { sessionId: forked.id, deviceId, deviceName });
-    } catch (err) {
-      const detail = formatRemoteError(err);
-      // 远程 Agent 的分叉失败(如 REMOTE_AGENT_FORK_FAILED)用 session.remoteError 的本地化文案，不显示原始错误码。
-      const key = inputProjectionErrorI18nKey(detail) ?? remoteActionErrorI18nKey(detail);
-      setError(key ? t(key) : detail);
-    } finally {
-      setMessageActionBusy(null);
-    }
-  }, [deviceId, deviceName, maker, messageActionBusy, router, sessionId, t]);
+    },
+  });
+  const performForkAtMessage = useCallback(async (clientId: string, draft?: MobileMessageDraft) => {
+    if (!deviceId || messageActionBusy) return;
+    await forkRecovery.run(clientId, draft);
+  }, [deviceId, messageActionBusy, forkRecovery]);
 
   const forkAtMessage = useCallback((clientId: string, draft?: MobileMessageDraft) => {
     if (!deviceId || messageActionBusy) return;
@@ -11465,6 +11472,41 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
             />
           )}
         </ContextSheet>
+        )}</MountOnFirstOpen>
+        <MountOnFirstOpen open={forkModelPickerOpen}>{() => (
+          <ModelPickerSheet
+            unified={{
+              scope: JSON.stringify([auth.user?.id, deviceId, 'fork-history-handoff']),
+              agents: ['claude-code', 'codex', 'pi'],
+              loadCapabilities: async agent => {
+                const result = normalizeMobileAgentCapabilities(await maker.getCapabilities(agent));
+                if (!result) throw new Error('Capabilities unavailable');
+                return result;
+              },
+              onSelect: async (config, source) => forkRecovery.pick({
+                agentKind: config.agent, model: config.modelId, providerId: config.providerId,
+                agentDeviceId: source?.deviceId ?? null, effort: config.effort ?? '', fastMode: config.fast,
+              }),
+              ...(composerPluginEngineOptions ? { pluginEngines: {
+                ...composerPluginEngineOptions, active: null,
+                onSelect: selection => forkRecovery.pick({ agentKind: 'acp', providerId: selection.providerId,
+                  model: selection.modelId || PLUGIN_ENGINE_DEFAULT_MODEL, effort: selection.effort ?? '',
+                  fastMode: false, agentDeviceId: selection.deviceId ?? null }),
+              } } : {}),
+              remote: { catalogs: remoteAgentCatalogs, selectedDeviceId: null,
+                hostDeviceId: deviceId, hostDeviceName: controlledComputerName, providerGroup: remoteProviderGroup },
+            }}
+            activeModelId="" activePermissionMode="" agentKind="codex" apiKeyStatus={deviceApiKeyStatus}
+            capabilities={null} flatOptions={[]} hidePermissionTrigger
+            keyboardAvoidingBehavior={nativeShellLayout.keyboardAvoidingBehavior}
+            loading={composerDeviceProviders.loading} providers={composerDeviceProviders.providers}
+            providersReady={composerDeviceProviders.ready} providersUnsupported={composerDeviceProviders.unsupported}
+            modelVisibilityOverrides={composerDeviceProviders.modelVisibilityOverrides}
+            onClose={() => setForkModelPickerOpen(false)} onClosed={forkRecovery.pickerClosed} onSelectFlatModel={() => undefined}
+            onSelectPermissionMode={() => undefined} onSelectProviderRow={() => undefined}
+            permissionOptions={[]} pricing={deviceModelPricing} selectedEffort="" selectedFastMode={false}
+            selectedProviderId={null} testID="session.forkModelSheet" visible={forkModelPickerOpen}
+          />
         )}</MountOnFirstOpen>
         <MountOnFirstOpen open={modelSheetOpen && canConfigureSessionModel}>{() =>
               currentSession && canConfigureSessionModel && runtimeOptions && modelSheetSelection && modelSheetRuntimeOptions ? (
