@@ -142,12 +142,8 @@ describe('renderOrcaLeadSystemPrompt', () => {
     expect(prompt).toContain(
       'If create_worker, send_to_worker, or interrupt_worker fails or lacks those dispatch signals, report the result immediately instead of ending silently.',
     );
-    expect(prompt).toContain(
-      'Silence is tied to the concrete dispatch signals above, not merely to calling a tool.',
-    );
-    expect(prompt).toContain(
-      'For a fully resolved multi-role request, issue all required Orca dispatches together in the one parallel tool-call batch described above',
-    );
+    expect(prompt).toContain(sendDispatchSignals);
+    expect(prompt).toContain(multiRoleBatchBoundary);
     expect(prompt).not.toContain('when the tool result says a task was accepted or queued');
   });
 
@@ -158,6 +154,22 @@ describe('renderOrcaLeadSystemPrompt', () => {
     expect(prompt).toContain(missingWorkerBoundary);
     expect(prompt).toContain(missingGenericWorkerBoundary);
     expect(prompt).toContain(multiRoleReadinessBoundary);
+    expect(prompt).toContain('Use get_workspace_info when the target is unknown, ambiguous, or a previous mapping is stale.');
+    expect(prompt).toContain('For a role or label, use get_workspace_info unless you have already verified the match for this assignment.');
+    expect(prompt).not.toContain('Before any dispatch, call get_workspace_info');
+  });
+
+  // Lead dispatch contract: a new Worker needs decisions and constraints it cannot infer,
+  // but a follow-up in an existing Worker conversation need not restate known context.
+  it('allows short follow-ups and supplies missing context for complex assignments in one message', () => {
+    const prompt = renderOrcaLeadSystemPrompt(null);
+    expect(prompt).toContain('State the task and expected outcome in one message.');
+    expect(prompt).toContain('If the Worker may not know');
+    expect(prompt).toContain('affect how it should act or judge completion');
+    expect(prompt).toContain('a specific source it can access directly');
+    expect(prompt).toContain('A simple follow-up can be one sentence');
+    expect(prompt).toContain('use paragraphs when needed');
+    expect(prompt).toContain('Do not repeat context the Worker already knows.');
   });
 
   it('states the queue inspection, atomic interrupt, atomic merge, steer, and supersession rules verbatim', () => {
@@ -170,10 +182,10 @@ describe('renderOrcaLeadSystemPrompt', () => {
       'If get_workspace_info shows queued_count > 0 or queue_paused=true, call get_worker_queue_status first, then revise or withdraw one pending message, merge related messages, or send a separate task.',
     );
     expect(prompt).toContain(
-      'Orders are self-contained: state, premises, acceptance, and a "supersedes earlier orders" header when replacing one — never assume the worker just read your previous message. A message that queues is consumed only after every earlier one, so never describe the queue or pending work inside it ("one order left") — that snapshot is stale on arrival; give status to the user, not to the worker.',
+      'When replacing earlier orders, include a "supersedes earlier orders" header and make the replacement complete — never assume the Worker has read the order it replaces. A message that queues is consumed only after every earlier one, so never describe the queue or pending work inside it ("one order left") — that snapshot is stale on arrival; give status to the user, not to the worker.',
     );
     expect(prompt).toContain(
-      'When you invalidate your own premise (history rewrite, retracted decision, overturned finding), sweep the team before your own work: in one parallel tool-call batch, steer-correct or interrupt every running order built on that premise and revise or withdraw queued ones (update_queued_message / cancel_queued_message), then continue your own work; rule 5\'s parallel-batch semantics apply.',
+      'in one parallel tool-call batch, steer-correct or interrupt every running order built on that premise and revise or withdraw queued ones (update_queued_message / cancel_queued_message)',
     );
     expect(prompt).toContain(
       'Never simulate an interrupt or merge with multiple stop, update, cancel, or send calls because the queue may advance between calls.',
@@ -187,20 +199,20 @@ describe('renderOrcaLeadSystemPrompt', () => {
     expect(prompt).toContain(
       'Messages from workers arrive prefixed with [From Orca Worker <role> (worker_id: <id>)] (role omitted when unknown). Treat them as worker reports or questions, not user messages.',
     );
-    expect(prompt).toContain(
-      '[New message arrives: "[From Orca Worker Backend (worker_id: w-1)] Feature X is done. Changes: ..."]',
-    );
     expect(prompt).toContain('6. When a worker report arrives (prefixed with [From Orca Worker ...]), review it');
     expect(prompt).toContain('If you see "[Auto-bridged: ...]" in a worker message');
     expect(prompt).not.toContain('prefixed with [From Orca Worker].');
   });
 
-  it('keeps Worker routing and disclosure rules when an initial worker exists', () => {
+  it('addresses a known initial Worker with its session ID while preserving channel boundaries', () => {
     const prompt = renderOrcaLeadSystemPrompt({ workerId: 'worker-1', sessionId: 'session-1' });
 
     expect(prompt).toContain(workerRoutingRule);
     expect(prompt).toContain(toolSurfaceRule);
     expect(prompt).toContain(channelDisclosureRule);
+    expect(prompt).toContain('send it directly with send_to_worker on server cindy_orca');
+    expect(prompt).toContain('use send_to_worker with target_session_id=session-1');
+    expect(prompt).not.toContain('target_session_id=worker-1');
   });
 });
 
@@ -244,19 +256,19 @@ describe('renderOrcaWorkerSystemPrompt', () => {
     expect(prompt).toContain(subagentHint);
   });
 
-  it('teaches token hygiene to both lead and workers', () => {
-    // Orca worker 会话反复冷启、门禁类命令输出巨大：不复读已知 schema、
-    // 不重复发起仍然新鲜的调用、验证类命令只回摘要行，是协同模式 token 浪费的主要止血点。
-    // 措辞必须保留“结果已过期/改码后重验/失败重试”的豁免，否则会挡住合法的状态刷新。
+  it('lets both roles reuse evidence and match verification to the assignment', () => {
     const leadPrompt = renderOrcaLeadSystemPrompt(null);
-    expect(leadPrompt).toContain('10. Token hygiene: do not re-issue a tool call just to re-fetch a result you already have and that is still current');
-    expect(leadPrompt).toContain('Re-running a state read after something changed, re-running verification after new edits, and retrying a failed call are not repetition.');
-    expect(leadPrompt).toContain('require gate/verification commands (build/test/smoke/LSP/md5/git) to be answered with a one-line pass/fail summary naming the command, the outcome and the log file path');
+    expect(leadPrompt).toContain('Reuse current results.');
+    expect(leadPrompt).toContain('a check fails, or independent verification is requested');
+    expect(leadPrompt).not.toContain('the command, the outcome and the log file path');
 
     const workerPrompt = renderOrcaWorkerSystemPrompt(workerMeta);
-    expect(workerPrompt).toContain('12. Token hygiene: do not re-issue a tool call just to re-fetch a result you already have and that is still current');
-    expect(workerPrompt).toContain('Re-running a state read after something changed, re-running verification (build/test/smoke/LSP) after new edits, and retrying a failed call are not repetition.');
-    expect(workerPrompt).toContain('report only a one-line pass/fail summary to the lead — command, outcome and the log file path');
+    expect(workerPrompt).toContain('These tools are on server orca_worker_bridge.');
+    expect(workerPrompt).toContain('For a read-only review, report findings with evidence.');
+    expect(workerPrompt).toContain('For implementation, run the relevant checks.');
+    expect(workerPrompt).toContain('Repeat a check when inputs change or a failure needs investigation.');
+    expect(workerPrompt).toContain('Save a log when requested or useful for diagnosing a failure.');
+    expect(workerPrompt).not.toContain('/review');
   });
 
   it('keeps the Worker rule concise without the unreachable fallback', () => {

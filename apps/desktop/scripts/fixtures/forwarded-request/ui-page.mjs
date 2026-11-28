@@ -6,7 +6,7 @@ export default {
   stubs: {
     'src/renderer/lib/makerChatStore': { partial: "import { makerChatStore as real } from './src/renderer/lib/makerChatStore'; export const makerChatStore = { ...real, reloadMessages: () => {} };" },
     'src/renderer/voice-input/workletUrl': 'export const getVoiceInputWorkletUrl = () => "";',
-    'src/renderer/features/bots/botStore': 'const profiles = []; export const useBotProfiles = () => profiles;',
+    'src/renderer/features/bots/botStore': 'const profiles = []; export const useBotProfiles = () => profiles; export const canonicalBotSessionId = () => undefined;',
     'src/renderer/components/chat/GhostToolCard': 'export const CARD_EXPAND_TOGGLE_EVENT = "xdt-card-expand-toggle"; export const GhostToolCard = () => null; export const MailCardEditor = () => null;',
   },
   cases: {

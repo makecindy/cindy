@@ -8,9 +8,3 @@ export function shouldNotifyAgentIslandForSession(
 ): boolean {
   return config.notifyOrcaWorkerSessions || !isOrcaWorkerSession;
 }
-
-export function shouldClearAgentIslandSessionForOrcaWorker(
-  config: AgentIslandNotificationPolicyConfig,
-): boolean {
-  return !config.notifyOrcaWorkerSessions;
-}

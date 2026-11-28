@@ -36,11 +36,16 @@ export function warmRuntimePluginSettings(): void {
   if (activeDataOwnerId()) store.read();
 }
 
-export async function writeRuntimePluginSettings(sessionId: string, value: RuntimePluginSettings): Promise<void> {
+export async function writeRuntimePluginSettings(
+  sessionId: string,
+  value: RuntimePluginSettings,
+  assertCanWrite?: () => void,
+): Promise<void> {
   if (!sessionId) throw new Error('Session id required');
   const settings = parseRuntimePluginSettings(value);
   if (!settings) throw new Error('Invalid runtime plugin settings');
   await store.updateAtomic(current => {
+    assertCanWrite?.();
     const tasks = { ...current.value.tasks };
     if (Object.keys(settings).length) tasks[sessionId] = settings;
     else delete tasks[sessionId];

@@ -1,3 +1,4 @@
+import { DownloadImageMenuItem } from '@/components/chat/DownloadImageMenuItem';
 import { Button } from '@/components/ui/button';
 import { ErrorNotice } from '@/components/ui/error-notice';
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
@@ -156,10 +157,10 @@ export function GhostPanelMediaMenu({
           }}
         />
       </DropdownMenuTrigger>
-      {/* z-index 必须压过 webview:与 lightbox / 对话框等「webview 上方浮层」
-          同档(z-[10000]);默认 z-50 会被面板 webview 的合成层盖住——菜单
-          开了但看不见(指针事件已被 Radix 关掉,表现为光标变默认箭头)。 */}
-      <DropdownMenuContent align="start" sideOffset={2} style={{ zIndex: 10000 }}>
+      {/* 共享菜单默认在 dropdown 层(10010),压得过 webview 的合成层;
+          不要再局部降回 z-50,否则菜单开了但看不见。 */}
+      <DropdownMenuContent align="start" sideOffset={2}>
+        {menu.kind === 'image' && <DownloadImageMenuItem src={menu.url} />}
         <DropdownMenuItem onClick={handleCopy}>
           <Copy className="mr-2 h-4 w-4" />
           {t(menu.kind === 'video' ? 'chat.media.copyVideo' : 'chat.media.copyImage')}

@@ -207,11 +207,15 @@ flowchart TB
 
 1. 停 `cindy-desktop.service`，并确认没有其他进程占用数据库。
 2. 重新备份真实 profile 的数据库与 `safe-storage`（沿用既有备份命名，不覆盖旧备份）。
-3. 用 feat 分支构建的桌面产物替换 `cindy-desktop.service` 里的二进制，并让它以客户端模式启动
+3. 在 Host 和桌面都已退出时运行 `cindy-host migration-preflight "$PROFILE"`，传入本步骤使用的
+   真实 profile 绝对路径。仅在退出码为 0 且 `count` 为 0 时继续。非零时先用 Cindy Desktop
+   v0.1.48 或更新的版本以内嵌模式打开这个 profile，完成已有的一次性插件批准迁移，退出后复查。
+   仍有缺口或清点失败时停止切换。[插件预检边界](../host/client-handoff-foundation.md#迁移前的插件批准预检)
+4. 用 feat 分支构建的桌面产物替换 `cindy-desktop.service` 里的二进制，并让它以客户端模式启动
    （自动发现 `host-endpoint.json`，或设 `CINDY_HOST_API=http://127.0.0.1:3456`）。
-4. `systemctl --user enable --now cindy-host.service`，让 Host 持有 profile 并迁移到 seq 129。
-5. 先启动 Host，再启动桌面。
-6. 桌面版本号显示改为真实版本，不再是 `0.0.0-host`（读取桌面包版本）。
+5. `systemctl --user enable --now cindy-host.service`，让 Host 持有 profile 并迁移到 seq 129。
+6. 先启动 Host，再启动桌面。
+7. 桌面版本号显示改为真实版本，不再是 `0.0.0-host`（读取桌面包版本）。
 - 完成判据：第 7 节全部通过。
 
 ### S9 · 收尾

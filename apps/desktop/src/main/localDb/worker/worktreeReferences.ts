@@ -3,6 +3,7 @@ import path from 'node:path';
 import type Database from 'better-sqlite3';
 
 import type { DatabaseConstructor } from './runtime.js';
+import { isSqliteCorruption } from '../client/sqliteCorruption.js';
 
 /** Machine-local deletion evidence only; never exposes messages or credentials. */
 export interface LocalWorktreeReference {
@@ -59,15 +60,24 @@ export function readLocalWorktreeReferences(
     const file = path.join(root, name);
     if (!fs.lstatSync(file).isFile()) throw new Error('task database is not a regular file');
     const isCurrent = file === currentPath;
-    const db = isCurrent ? current : new DatabaseCtor(file, {
-      readonly: true, fileMustExist: true, ...(nativeBinding ? { nativeBinding } : {}),
-    });
+    let db: Database.Database | undefined;
     try {
+      db = isCurrent ? current : new DatabaseCtor(file, {
+        readonly: true, fileMustExist: true, ...(nativeBinding ? { nativeBinding } : {}),
+      });
       // Inspect columns and rows in one read snapshot if another instance upgrades the DB.
-      const references = db.transaction(() => db.prepare(referenceQuery(db)).all())() as Omit<LocalWorktreeReference, 'currentDatabase'>[];
+      const source = db;
+      const references = source.transaction(() => source.prepare(referenceQuery(source)).all())() as Omit<LocalWorktreeReference, 'currentDatabase'>[];
       rows.push(...references.map((row) => ({ ...row, currentDatabase: isCurrent })));
+    } catch (error) {
+      // A failed catalog scan remains fail-closed, but a different owner's
+      // damaged read-only source does not quarantine this client's connection.
+      if (!isCurrent && isSqliteCorruption(error)) {
+        throw Object.assign(new Error('Task reference source is corrupt'), { code: 'DB_REFERENCE_SOURCE_CORRUPT', cause: error });
+      }
+      throw error;
     } finally {
-      if (!isCurrent) db.close();
+      if (!isCurrent) db?.close();
     }
   }
   // A source created during the scan has not been checked yet.

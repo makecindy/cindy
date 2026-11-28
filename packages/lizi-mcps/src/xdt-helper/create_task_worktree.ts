@@ -20,6 +20,8 @@ export type CreateTaskWorktreeCallback = (params: {
       sourceBranch: string;
       /** False when the task already had a managed worktree; it is returned unchanged. */
       created: boolean;
+      /** Set when the remote default branch could not be refreshed, so the base may be out of date. */
+      staleBaseReason?: string;
     },
     string
   >
@@ -28,8 +30,9 @@ export type CreateTaskWorktreeCallback = (params: {
 const DESCRIPTION =
   `Create a ${BRAND_NAME}-managed git worktree for the current task and bind it to this task, ` +
   'without restarting or moving the task. It is created at <repo>/.cindy-worktrees/<name> on a new ' +
-  'cindy/<name> branch from the freshly fetched remote default branch (the current branch when ' +
-  `offline), shows as the task's worktree in ${BRAND_NAME}, and is removed when the task is archived ` +
+  'cindy/<name> branch from the freshly fetched remote default branch (when that fetch fails it uses ' +
+  "the newest local copy and returns base_fetched=false with a warning), shows as the task's worktree " +
+  `in ${BRAND_NAME}, and is removed when the task is archived ` +
   "or deleted. The task's working directory does not change: run commands and edit files inside the " +
   'returned worktree_path. If the task already has a worktree, that one is returned with created=false. ' +
   'Pass repo_dir when the task working directory is not itself the repository. Pass base_ref to branch ' +
@@ -89,6 +92,15 @@ export function registerCreateTaskWorktreeTool(
         base_repo: result.baseRepo,
         source_branch: result.sourceBranch,
         created: result.created,
+        ...(result.staleBaseReason
+          ? {
+              base_fetched: false,
+              warning:
+                `Could not refresh the remote default branch (${result.staleBaseReason}). This worktree ` +
+                `starts from ${result.sourceBranch} as it exists locally and may be behind the remote. ` +
+                'Tell the user, and fetch and merge the remote default branch once the network is available.',
+            }
+          : {}),
       });
     },
   });

@@ -1,0 +1,4 @@
+限速：在最终源码上跑（PYTHONIOENCODING=utf-8 python -X utf8 sim/mutants.py 限速：，退出码 0）
+caught    限速：一阵数据的尾巴也算应用空闲  small_transfers_do_not_keep_overrunning_a_policer, result:
+caught    限速：随机丢包率不封顶  small_transfers_do_not_keep_overrunning_a_policer, result:
+exit 0

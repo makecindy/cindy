@@ -29,6 +29,17 @@ final class EphemeralProvider: NSItemProvider {
     try? FileManager.default.removeItem(at: url)
   }
 }
+// A modern provider can vend bytes without implementing legacy loadItem
+// or supplying a temporary file for loadFileRepresentation.
+final class BytesProvider: NSItemProvider {
+  override func loadItem(forTypeIdentifier identifier: String, options: [AnyHashable: Any]? = nil, completionHandler: NSItemProvider.CompletionHandler? = nil) {
+    completionHandler?(nil, CocoaError(.fileReadUnsupportedScheme))
+  }
+  override func loadFileRepresentation(forTypeIdentifier identifier: String, completionHandler: @escaping (URL?, Error?) -> Void) -> Progress {
+    completionHandler(nil, CocoaError(.fileReadUnsupportedScheme))
+    return Progress(totalUnitCount: 0)
+  }
+}
 enum ShareType { case text, url, image, video, audio, file }
 struct SharePayload { let type: ShareType; let value: String; let mimeType: String?; let metadata: String? }
 final class Adapter {
@@ -58,6 +69,46 @@ final class Adapter {
     // The file URL owns the bytes; a separate image representation may be only
     // its thumbnail. Extensionless originals must not inherit that preview type.
     let png = Data(base64Encoded: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=")!
+    for (type, bytes, expected) in [(UTType.utf8PlainText, Data("备忘录文字".utf8), ShareType.text),
+                                    (.png, png, .image), (.pdf, Data("%PDF-test".utf8), .file)] {
+      let provider = BytesProvider()
+      provider.registerDataRepresentation(forTypeIdentifier: type.identifier, visibility: .all) { done in
+        done(bytes, nil); return nil
+      }
+      guard let payload = await adapter.parse(provider), payload.type == expected else {
+        fatalError("Missing data representation for " + type.identifier)
+      }
+      if expected == .text {
+        precondition(payload.value == "备忘录文字")
+      } else {
+        let file = URL(string: payload.value)!
+        precondition(try! Data(contentsOf: file) == bytes)
+      }
+    }
+    print("PASS: text, photos and documents available only as data representations")
+    // Byte-only providers bypass loadItem. Native UTF-16 accepts a BOM, while
+    // the external representation defaults to big-endian without one.
+    for (type, bytes) in [(UTType.utf16PlainText, Data([0x41, 0, 0x42, 0])),
+                         (.utf16PlainText, Data([0xff, 0xfe, 0x41, 0, 0x42, 0])),
+                         (.utf16ExternalPlainText, Data([0, 0x41, 0, 0x42]))] {
+      let provider = BytesProvider()
+      provider.registerDataRepresentation(forTypeIdentifier: type.identifier, visibility: .all) { done in
+        done(bytes, nil); return nil
+      }
+      guard let payload = await adapter.parse(provider), payload.type == .text, payload.value == "AB" else {
+        fatalError("Incorrect byte order or BOM handling for " + type.identifier)
+      }
+    }
+    // The generic file pass also sees audio and movie types. It must not ask
+    // for their bytes after the file representation fails.
+    for type in [UTType.mpeg4Movie, .mp3] {
+      let provider = BytesProvider()
+      provider.registerDataRepresentation(forTypeIdentifier: type.identifier, visibility: .all) { _ in
+        fatalError("Requested in-memory media bytes for " + type.identifier)
+      }
+      let payload = await adapter.parse(provider)
+      precondition(payload == nil, "Missing file should leave the media share unhandled")
+    }
     if selected != "raw-image" {
       let url = root.appendingPathComponent("data encoded document.pdf")
       let bytes = Data("original file URL document".utf8)
@@ -81,8 +132,7 @@ final class Adapter {
     }
     if selected != "data-file-url" {
       let gif = Data(base64Encoded: "R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7")!
-      for (bytes, type) in [(png, UTType.png), (gif, UTType.gif)] {
-        let provider = NSItemProvider()
+      for (bytes, type, provider) in [(png, UTType.png, NSItemProvider()), (gif, UTType.gif, BytesProvider())] {
         provider.registerDataRepresentation(forTypeIdentifier: UTType.image.identifier, visibility: .all) { done in
           done(bytes, nil); return nil
         }
@@ -94,6 +144,15 @@ final class Adapter {
         precondition(try! Data(contentsOf: result) == bytes)
       }
       print("PASS: unnamed abstract image bytes preserve concrete extensions and MIME")
+      // An abstract image provider can return an object archive when asked for
+      // bytes. A keyed archive must not be delivered as an image attachment.
+      let archive = try! NSKeyedArchiver.archivedData(withRootObject: png as NSData, requiringSecureCoding: true)
+      let archiveProvider = BytesProvider()
+      archiveProvider.registerDataRepresentation(forTypeIdentifier: UTType.image.identifier, visibility: .all) { done in
+        done(archive, nil); return nil
+      }
+      let payload = await adapter.parse(archiveProvider)
+      precondition(payload == nil, "Object archive was accepted as an image")
     }
     for (name, bytes, kind) in [("extensionless-document", Data("original document bytes".utf8), ShareType.file),
                                 ("extensionless-image", png, ShareType.image)] {

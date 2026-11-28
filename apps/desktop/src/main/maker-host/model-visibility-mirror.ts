@@ -16,6 +16,7 @@
  * key 形如 `${agent}:${providerId}:${modelId}`,与 renderer modelVisibilityPrefs.keyOf 一致。
  */
 
+import type { ProviderPickerModel } from '@cindy/device-link';
 import type { AgentKind, ProviderView } from '@cindy/model-providers';
 
 import { createIpcError } from '../../shared/ipc-errors.js';
@@ -23,6 +24,11 @@ import { isDataOwnerPushStamp, type DataOwnerPushStamp } from '../../shared/data
 
 /** 有效开关表:key=`${agent}:${providerId}:${modelId}` → 用户显式设定的可见性。 */
 type VisibilityMap = Record<string, boolean>;
+
+export interface ProviderPickerVisibilityScope {
+  deferredProviderIds: readonly string[];
+  retainedModel?: ProviderPickerModel;
+}
 
 let mirror: VisibilityMap = {};
 let strict = true;
@@ -152,10 +158,34 @@ export function getModelVisibilityOverride(
  * 整表快照(浅拷贝)。PROVIDER_LIST 用它把被控端的可见性 override 一并回给 device-link
  * 控制端(手机),让手机模型列表按**被控端**用户的显示开关过滤(与本机 / IM /model 同口径)。
  */
-export function getModelVisibilityMirrorSnapshot(providers: readonly ProviderView[] = [], allowPending = false): Record<string, boolean> {
+export function getModelVisibilityMirrorSnapshot(providers: readonly ProviderView[] = [], allowPending = false, pickerScope?: ProviderPickerVisibilityScope): Record<string, boolean> {
   if (!ready && allowPending) return {};
   if (!ready) throw notReady();
-  const snapshot = { ...mirror };
+  if (pickerScope?.retainedModel) {
+    const { agent, providerId, modelId } = pickerScope.retainedModel;
+    const offered = new Set(providers.filter(p => p.models[agent]?.some(m => m.id === modelId)).map(p => p.id));
+    const snapshot: VisibilityMap = {};
+    for (const id of new Set([...pickerScope.deferredProviderIds, ...offered])) {
+      if (providerId !== null && providerId !== id) continue;
+      const key = keyOf(agent, id, modelId);
+      // Discovery may have dropped the model. Preserve an explicit preference without
+      // treating every missing model as hidden under the unknown-route catalog policy.
+      const value = offered.has(id) ? getModelVisibilityOverride(agent, id, modelId) : mirror[key];
+      if (value !== undefined) snapshot[key] = value;
+    }
+    return snapshot;
+  }
+  // The bulk picker still needs stored preferences for missing models of enabled sources.
+  const snapshot: VisibilityMap = { ...mirror };
+  if (pickerScope?.deferredProviderIds.length) {
+    const deferred = new Set(pickerScope.deferredProviderIds);
+    for (const key of Object.keys(snapshot)) {
+      const start = key.indexOf(':') + 1;
+      for (let end = key.indexOf(':', start); end !== -1; end = key.indexOf(':', end + 1)) {
+        if (deferred.has(key.slice(start, end))) { delete snapshot[key]; break; }
+      }
+    }
+  }
   // Expand the fallback into ordinary per-model booleans for legacy remote clients. The
   // provider list and visibility map come from the same catalog; no wire-schema change.
   for (const provider of providers) {
@@ -166,7 +196,8 @@ export function getModelVisibilityMirrorSnapshot(providers: readonly ProviderVie
       }
     }
     const mediaAgent = provider.agents[0] ?? 'claude-code';
-    for (const model of [...(provider.imageModels ?? []), ...(provider.videoModels ?? [])]) {
+    for (const model of [...(provider.imageModels ?? []), ...(provider.videoModels ?? []),
+      ...(pickerScope ? [...(provider.audioModels ?? []), ...(provider.embeddingModels ?? [])] : [])]) {
       const value = getModelVisibilityOverride(mediaAgent, provider.id, model.id);
       if (value !== undefined) snapshot[keyOf(mediaAgent, provider.id, model.id)] = value;
     }

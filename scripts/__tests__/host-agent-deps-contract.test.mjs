@@ -39,12 +39,24 @@ function interfaceMembers(rel, name) {
   return members;
 }
 
+/**
+ * The bag of `new <ctor>(…)`: an object literal, or one written out through `explicitPorts<T>({...})`
+ * (apps/host/src/agent/explicit-ports.ts, which returns its argument as T).
+ */
+function constructorBag(node) {
+  const argument = node.arguments?.[0];
+  if (argument && ts.isCallExpression(argument) && ts.isIdentifier(argument.expression)
+    && argument.expression.text === 'explicitPorts' && argument.arguments.length === 1) return argument.arguments[0];
+  return argument;
+}
+
 /** Literal keys of `new <ctor>({...})`, following `...(cond ? {...} : {})`; other spreads are reported. */
 function constructorKeys(sf, ctor) {
   const found = [];
   const visit = node => {
+    const bag = ts.isNewExpression(node) ? constructorBag(node) : undefined;
     if (ts.isNewExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === ctor
-      && node.arguments?.[0] && ts.isObjectLiteralExpression(node.arguments[0])) {
+      && bag && ts.isObjectLiteralExpression(bag)) {
       const keys = [];
       const spreads = [];
       const collect = (object) => {
@@ -62,7 +74,7 @@ function constructorKeys(sf, ctor) {
           }
         }
       };
-      collect(node.arguments[0]);
+      collect(bag);
       found.push({ keys, spreads });
     }
     ts.forEachChild(node, visit);
@@ -74,8 +86,12 @@ function constructorKeys(sf, ctor) {
 
 // The spread bundles are built in TypeScript as Pick/Partial<AgentDeps>, so their keys are type checked there.
 // The per-model resolver bundles come from engineModelResolvers.ts, typed as Required<Pick<AgentDeps, ...>>.
+// The ports another engine reads (agent-deps-engines.ts) are `satisfies { [K in keyof AgentDeps]?: undefined }`;
+// codexRuntimePorts is the Codex runtime's typed deps or its unbound fallback, typed the same way in runtime.ts.
 const TYPED_SPREADS = new Set(['options.mcpRuntime.codexDeps', 'options.codexRuntime?.deps', 'options.mcpRuntime.piDeps',
-  'claudeModelResolvers', 'codexModelResolvers', 'piModelResolvers']);
+  'claudeModelResolvers', 'codexModelResolvers', 'piModelResolvers',
+  'PORTS_ONLY_CODEX_READS', 'PORTS_ONLY_PI_READS', 'PORTS_ONLY_CLAUDE_READS',
+  'PORTS_ONLY_CLAUDE_AND_PI_READ', 'PORTS_ONLY_CLAUDE_AND_CODEX_READ', 'codexRuntimePorts']);
 
 test('every key the Host hands an engine or Maker exists in the maker-core dependency types', () => {
   const runtime = parse('apps/host/src/agent/runtime.ts');

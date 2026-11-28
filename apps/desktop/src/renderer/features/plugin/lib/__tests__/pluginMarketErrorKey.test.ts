@@ -27,6 +27,7 @@ describe('pluginMarketErrorKey', () => {
     ['GHOST_FILE_INVALID', 'invalidPackage'],
     ['GHOST_DOWNLOAD_TIMEOUT', 'downloadTimeout'],
     ['GHOST_DOWNLOAD_FAILED', 'downloadFailed'],
+    ['GHOST_DOWNLOAD_AUTHORIZATION_EXPIRED', 'downloadAuthorizationExpired'],
     ['GHOST_BROKER_REDIRECT_PORT_REQUIRED', 'brokerRedirectPortRequired'],
     ['PLUGIN_NAMESPACE_CLIENT_REQUIRED', 'namespaceClientRequired'],
     ['PLUGIN_ORGANIZATION_CONTEXT_UNAVAILABLE', 'organizationContextUnavailable'],
@@ -73,6 +74,16 @@ describe('pluginMarketErrorKey', () => {
       expect(i18n.getResource(locale, 'common', key)).toEqual(expect.any(String));
       expect(i18n.getFixedT(locale)(key)).not.toBe(key);
     }
+  });
+
+  // #6357: no English fallback or generic account/version-change copy in any locale.
+  it.each([...SUPPORTED_LOCALES])('renders authorization expiry distinctly in %s', (locale) => {
+    const key = pluginMarketErrorKey(serializedIpcError('GHOST_DOWNLOAD_AUTHORIZATION_EXPIRED'));
+    const message = i18n.getResource(locale, 'common', key);
+    expect(message).toEqual(expect.any(String));
+    expect(message.length).toBeGreaterThan(0);
+    expect(i18n.getFixedT(locale)(key)).toBe(message);
+    expect(message).not.toBe(i18n.getFixedT(locale)('settings.ghosts.market.errors.stateChanged'));
   });
 
   it('never exposes a plain main-process error message', () => {

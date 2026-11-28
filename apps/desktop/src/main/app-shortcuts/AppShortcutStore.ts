@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import { createLogger } from '../logger.js';
+import { inspectSettingsJson, isSettingsRecord } from '../maker-host/inspect-settings-json.js';
 import {
   comboToElectronAccelerator,
   findAppShortcutConflict,
@@ -18,6 +19,7 @@ import {
   type AppShortcutOverrides,
 } from '../../shared/appShortcuts.js';
 import { isSystemReservedShortcut } from '../../shared/keyboardReserved.js';
+import { createOverrideSettingsFile, type OverrideSettingsCommitOptions } from '../maker-host/override-settings-file.js';
 
 const log = createLogger('app-shortcuts:store');
 
@@ -61,10 +63,56 @@ export class AppShortcutStore {
 
   constructor(private readonly options: AppShortcutStoreOptions) {}
 
+  private hostFile() {
+    return createOverrideSettingsFile<Record<string, unknown>>({
+      filePath: this.options.getFilePath, defaults: {}, normalize: raw => ({ ...raw as Record<string, unknown> }),
+      validateOverrides: raw => {
+        if (raw.version !== undefined && raw.version !== 1) throw new Error('Invalid shortcut version');
+        if (raw.overrides !== undefined && !isSettingsRecord(raw.overrides)) throw new Error('Invalid shortcuts');
+        const overrides = (raw.overrides ?? {}) as Record<string, unknown>;
+        for (const [id, combo] of Object.entries(overrides)) {
+          if (!isAppShortcutId(id) || combo !== null && !normalizeAppShortcutCombo(combo)) throw new Error('Invalid shortcut');
+        }
+      }, preserveUnreadableFile: true, maxBytes: 64 * 1024, log, label: 'app-shortcuts',
+    });
+  }
+
+  inspectHost() { return this.hostFile().inspect(); }
+
+  async commitHost(overrides: AppShortcutOverrides, editableIds: readonly AppShortcutId[], options: OverrideSettingsCommitOptions) {
+    const result = await this.hostFile().commitAtomic(state => {
+      const current = { ...((state.value.overrides ?? {}) as AppShortcutOverrides) };
+      for (const id of editableIds) delete current[id];
+      Object.assign(current, overrides);
+      for (const [id, combo] of Object.entries(overrides)) {
+        if (!isAppShortcutId(id) || !editableIds.includes(id)) throw new Error('Shortcut unavailable');
+        const reason = this.validateOverride(id, combo, current);
+        if (reason) throw new Error(`Shortcut ${reason}`);
+      }
+      return Object.keys(current).length ? { set: { version: 1, overrides: current } } : { clear: ['version', 'overrides'] };
+    }, options);
+    // Publishing and native menu/renderer refresh cannot turn a saved write into failure.
+    this.overrides = normalizeAppShortcutOverrides(result.value.overrides, this.options.platform);
+    const snapshot = { ...this.overrides };
+    let applicationFailed = false;
+    try { this.options.onChanged?.(snapshot); } catch { applicationFailed = true; }
+    for (const listener of this.changeListeners) { try { listener(snapshot); } catch { applicationFailed = true; } }
+    return { ...result, applicationFailed };
+  }
+
   /** main 内部订阅 (如菜单重建); 返回取消订阅函数。 */
   subscribe(listener: (overrides: AppShortcutOverrides) => void): () => void {
     this.changeListeners.add(listener);
     return () => this.changeListeners.delete(listener);
+  }
+
+  /** Fresh disk evidence without updating runtime cache or registering shortcuts. */
+  inspect() {
+    return inspectSettingsJson(this.options.getFilePath(), (raw) => {
+      if (raw.version !== undefined && raw.version !== 1) throw new Error('unknown version');
+      if (raw.overrides !== undefined && !isSettingsRecord(raw.overrides)) throw new Error('invalid overrides');
+      return normalizeAppShortcutOverrides(raw.overrides, this.options.platform);
+    }, 64 * 1024);
   }
 
   getOverrides(): AppShortcutOverrides {
@@ -89,13 +137,18 @@ export class AppShortcutStore {
    * combo 传 null = 删除绑定 (该快捷键禁用), 跳过组合键校验。
    */
   setOverride(id: unknown, combo: unknown): AppShortcutOverrideRejection | null {
+    const reason = this.validateOverride(id, combo, this.load());
+    if (reason) return reason;
+    this.replaceOverrides({ ...this.load(), [id as AppShortcutId]: combo === null ? null : normalizeAppShortcutCombo(combo)! });
+    return null;
+  }
+
+  private validateOverride(id: unknown, combo: unknown, current: AppShortcutOverrides): AppShortcutOverrideRejection | null {
     if (!isAppShortcutId(id)) return 'unknown-id';
     const def = getAppShortcutDefinition(id);
     if (!def.rebindable) return 'not-rebindable';
     if (!isAppShortcutAvailableOnPlatform(id, this.options.platform)) return 'platform-unavailable';
     if (combo === null) {
-      const current = this.load();
-      this.replaceOverrides({ ...current, [id]: null });
       return null;
     }
     const normalized = normalizeAppShortcutCombo(combo);
@@ -116,13 +169,11 @@ export class AppShortcutStore {
     if (def.scope === 'global' && !isGlobalAppShortcutComboUsable(normalized, this.options.platform)) {
       return 'global-unusable';
     }
-    const current = this.load();
     // 跨 id 冲突兜底 (renderer 已前置校验, 这里防多窗口并发 / 直调 IPC):
     // 与重叠 scope 域内其它 id 的生效组合撞键则拒绝。
     if (findAppShortcutConflict(id, normalized, current, this.options.platform)) {
       return 'conflict';
     }
-    this.replaceOverrides({ ...current, [id]: normalized });
     return null;
   }
 

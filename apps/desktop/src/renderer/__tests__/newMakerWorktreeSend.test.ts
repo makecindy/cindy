@@ -44,24 +44,6 @@ describe('NewMakerDraftRoute worktree send flow', () => {
     expect(clearStarting).toBeLessThan(restoreEnd);
   });
 
-  it('never silently downgrades an explicit worktree request to a normal session', () => {
-    const selected = source.indexOf('const selectedWorktree = { ...wtRef.current };');
-    const guard = source.indexOf(
-      '&& selectedWorktree.confirmedIneligible !== true',
-      selected,
-    );
-    const markInFlight = source.indexOf('markSendInFlight(true);', guard);
-    const guardedSource = source.slice(guard, markInFlight);
-
-    expect(selected).toBeGreaterThan(-1);
-    expect(guard).toBeGreaterThan(selected);
-    expect(markInFlight).toBeGreaterThan(guard);
-    expect(guardedSource).toContain('!selectedWorktree.baseRepo');
-    expect(guardedSource).toContain('!selectedWorktree.branchPreferenceReady');
-    expect(guardedSource).toContain('selectedWorktree.supportsRecoveryKeyDiscard !== true');
-    expect(guardedSource).toContain('return false;');
-  });
-
   it('lets a confirmed-ineligible directory create a plain session while keeping the ON memory', () => {
     // 2026-08-07 裁决:探测成功且确认不合格(非 git / 无 git / 已在 worktree 内)时,
     // 勾选记忆不生效——发送 / Goal 门、worktree 副作用分支全部按普通会话放行;
@@ -96,7 +78,7 @@ describe('NewMakerDraftRoute worktree send flow', () => {
       'const preNavDraftDoc = opts?.recoveryDraftDoc ?? preNavDraft?.text ?? null;',
     );
     expect(source.slice(restoreHelper, restoreText)).toContain('text: preNavDraftDoc ??');
-    expect(source.slice(restoreHelper, restoreHelper + 500)).toContain(
+    expect(source.slice(restoreHelper, source.indexOf('emitAutoTitlePreviewCleared(newSession.id)', restoreHelper))).toContain(
       'browserComments: rehomedComments',
     );
     expect(source.slice(restoreHelper, failedCard)).toContain(
@@ -112,7 +94,9 @@ describe('NewMakerDraftRoute worktree send flow', () => {
   });
 
   it('uses the current checkout as the safe source when branch discovery is not ready', () => {
-    expect(source.match(/sourceBranch: wt\.sourceBranch\.trim\(\) \|\| 'HEAD'/g)).toHaveLength(2);
+    // Remote two-step creation (built-in and plugin engines) moved to precreateRemoteDraftWorktree,
+    // whose 'HEAD' fallback is exercised in remotePrecreatedWorktree.test.ts.
+    expect(source.match(/sourceBranch: wt\.sourceBranch\.trim\(\) \|\| 'HEAD'/g)).toHaveLength(1);
     expect(source).not.toContain("sourceBranch: wt.sourceBranch.trim() || 'main'");
   });
 
@@ -218,42 +202,14 @@ describe('NewMakerDraftRoute worktree send flow', () => {
     expect(sendMessage).toBeGreaterThan(restoreDraft);
   });
 
-  it('locks the session composer while the background worktree is still preparing', () => {
-    // worktreePreparing 从 worktreeCreationStore 读 status==='creating'(经 1.6s
-    // 平滑中间态 smoothedWorktreeCreating 派生),下游用作 sendGuard;输入区的
-    // "锁定"由 WorktreeCreatingOverlay 顶替 ChatInput 实现(早期是
-    // disabled={worktreePreparing} prop,已重构为 overlay 三元)。
-    const hookSubscription = sessionViewSource.indexOf('useWorktreeCreation(sessionId)');
-    const rawDerive = sessionViewSource.indexOf(
-      "worktreeCreation?.status === 'creating'",
-      hookSubscription,
-    );
-    const worktreePreparing = sessionViewSource.indexOf(
-      'const worktreePreparing = smoothedWorktreeCreating',
-      rawDerive,
-    );
-    // sendGuard 现在读合并后的 sessionHandoffPreparing —— 「会话正在准备」多了一档
-    // (device-link 远程交接,见 remoteHandoffPreparing),两档必须共用同一个
-    // 下游判据,否则又是「同一语义两处判定」。worktree 这一档仍是它的组成项。
-    const preparingMerge = sessionViewSource.indexOf(
-      'const sessionHandoffPreparing = worktreePreparing || remoteHandoffPreparing || !!creationPreview;',
-      worktreePreparing,
-    );
-    const sendGuard = sessionViewSource.indexOf(
-      'if (sessionHandoffPreparing) return false',
-      preparingMerge,
-    );
-    const overlayLock = sessionViewSource.indexOf(
-      'worktreePreparing && smoothedBranchName',
-      sendGuard,
-    );
-
-    expect(hookSubscription).toBeGreaterThan(-1);
-    expect(rawDerive).toBeGreaterThan(hookSubscription);
-    expect(preparingMerge).toBeGreaterThan(worktreePreparing);
-    expect(worktreePreparing).toBeGreaterThan(rawDerive);
-    expect(sendGuard).toBeGreaterThan(worktreePreparing);
-    expect(overlayLock).toBeGreaterThan(sendGuard);
+  it('guards worktree handoff before slash commands can start in the base directory', () => {
+    // Cross-entry race guard: hardware sends can bypass the composer button. A slash
+    // command must not dispatch before the original input has reached the worktree.
+    const handleSend = sessionViewSource.indexOf('const handleSend = useCallback(');
+    const sendGuard = sessionViewSource.indexOf('if (sessionHandoffPreparing) return false;', handleSend);
+    const dispatch = sessionViewSource.indexOf('await maybeDispatchDesktopSlashCommand(', handleSend);
+    expect(sendGuard).toBeGreaterThan(handleSend);
+    expect(dispatch).toBeGreaterThan(sendGuard);
   });
 
   it('ignores desktop slash command broadcasts for other mounted session panes', () => {

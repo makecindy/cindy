@@ -16,7 +16,7 @@ import {
 } from './sessionRuntimeControl.js';
 
 export interface PendingRuntimeAxisPatchPorts {
-  getDesktopProviderService: typeof import('../maker-host/createDesktopProviderService.js').getDesktopProviderService;
+  getDesktopProviderService: () => Pick<ReturnType<typeof import('../maker-host/createDesktopProviderService.js').getDesktopProviderService>, 'listProviders'>;
   log: Logger;
 }
 

@@ -1,4 +1,5 @@
 import { UI_MOCK_SHOWCASE_PROJECTS, UI_MOCK_SHOWCASE_TASKS } from './uiMockShowcase';
+import { richAnswerText } from './richAnswer';
 import { UI_MOCK_BIDI_TASK } from './uiMockBidi';
 export { UI_MOCK_SHOWCASE_PROJECTS };
 
@@ -124,6 +125,20 @@ const RICH_ANSWER = [
   '> 只改样式，不影响登录流程。',
 ].join('\n');
 
+// Android real-message regression: a user bubble must retain its intrinsic
+// width, and native/HTML selection must agree on spaces and line breaks.
+const TABLE_SELECTION_ANSWER = [
+  '表前开始：中文  spaces **粗体**  `inline  code`  [链接](https://example.test)。',
+  '同段第二行 two  spaces。',
+  '',
+  '| 名称 | 内容 | 结果 |',
+  '| --- | --- | --- |',
+  '| 项目甲 | 中文  双空格 | 正常 |',
+  '| 项目乙 | | 第二行 |',
+  '',
+  '表后结束：复制完整。',
+].join('\n');
+
 /**
  * Task ids starting with `visual-` keep Mobile's runtime state overlays
  * (running, waiting for permission, queued) working; Desktop shows them as
@@ -203,6 +218,17 @@ export const UI_MOCK_TASKS: readonly UiMockTask[] = [
     messages: [
       { role: 'user', text: '手机上反馈问题时，确认卡提示只能回电脑处理。' },
       { role: 'assistant', text: '已整理好反馈，请检查标题、正文和公开署名，确认后提交。' },
+    ],
+  },
+  {
+    id: 'visual-input-handoff',
+    title: 'Set up the Mac mail app',
+    project: 'cindy-demo',
+    agentKind: 'cc', model: 'claude-sonnet-5', effort: 'medium',
+    status: 'active', source: 'desktop', minutesAgo: 1,
+    messages: [
+      { role: 'user', text: 'Finish setting up the mail app on my Mac.' },
+      { role: 'assistant', text: 'The app is asking for your account. Please type it on your phone.' },
     ],
   },
   {
@@ -290,6 +316,23 @@ $$e\in\mathcal{E},\quad x^{12}+y_i$$` },
     messages: [
       { role: 'user', text: '把这周合并的改动整理成发布说明。' },
       { role: 'assistant', text: '已按「新功能／修复／体验改进」分组，共 12 条。需要我再写一段英文版吗？' },
+    ],
+  },
+  {
+    id: `${UI_MOCK_ID_PREFIX}table-selection`,
+    title: '表格连续选择验收',
+    project: 'cindy-demo',
+    agentKind: 'cc',
+    model: 'claude-opus-5',
+    effort: 'high',
+    status: 'active',
+    source: 'desktop',
+    minutesAgo: 26,
+    messages: [
+      { role: 'user', text: '短消息' },
+      { role: 'assistant', text: '请提供表格。' },
+      { role: 'user', text: TABLE_SELECTION_ANSWER },
+      { role: 'assistant', text: TABLE_SELECTION_ANSWER },
     ],
   },
   {
@@ -615,5 +658,6 @@ function taskMessageRows(task: UiMockTask, endsAt: number): UiMockMessageRow[] {
 function previewOf(task: UiMockTask): string {
   const last = [...task.messages].reverse().find((message) => message.role === 'assistant' || message.role === 'user');
   const text = last && 'text' in last ? last.text : task.title;
-  return text.replace(/[#>*`|\-]/g, '').replace(/\s+/g, ' ').trim().slice(0, 140);
+  const readable = last?.role === 'assistant' ? richAnswerText(text) : text;
+  return readable.replace(/[#>*`|\-]/g, '').replace(/\s+/g, ' ').trim().slice(0, 140);
 }

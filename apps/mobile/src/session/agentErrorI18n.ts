@@ -1,5 +1,5 @@
 import { parseOutputLimitDetails, isReasoningDominatedOutputLimit } from '@cindy/maker-shared';
-import { isRemoteAgentResumeRejectedError, isResponsesLiteParallelToolCallsError, localizeSubscriptionAccountError, parseAgentErrorCode, isRemoteCompactEncryptedContentError } from '@cindy/maker-shared/error-redaction';
+import { isAccountUsageLimitReachedText, parseGeminiInputRateLimit, isRemoteAgentResumeRejectedError, isResponsesLiteParallelToolCallsError, localizeSubscriptionAccountError, parseAgentErrorCode, isRemoteCompactEncryptedContentError } from '@cindy/maker-shared/error-redaction';
 import { requiresAgentErrorConfigurationChange as requiresConfigurationChange } from '@cindy/maker-shared/error-redaction';
 import { i18n } from '@/i18n';
 import { describeAgentAuthError, isCodexSharedAuthLinkUnavailableError } from '@/device-link/remoteStatus';
@@ -77,17 +77,29 @@ export function localizeAgentError(
   toolLoop: MobileToolLoopErrorDetails | null,
   message = '',
   outputLimit?: unknown,
+  reconnectHandoff?: unknown,
 ): string | null {
   // 「共享凭证连不上」的引导文案走这里：它可恢复，不能占用「不可重试」那条路
   // （见 describeNonRetryableAgentError），但提示条仍要显示这段可执行的说明。
   if (isCodexSharedAuthLinkUnavailableError(message)) {
     return describeAgentAuthError(message);
   }
+  if (parseGeminiInputRateLimit(message) !== null) return i18n.t(reason === 'gemini-input-retry-exhausted'
+    ? 'chat.geminiRateLimit.exhausted' : 'chat.geminiRateLimit.title');
   const subscriptionGuidance = localizeSubscriptionAccountError(message, i18n.t, i18n.resolvedLanguage ?? i18n.language);
   if (subscriptionGuidance) return subscriptionGuidance;
   if (isRemoteCompactEncryptedContentError(message, reason)) return i18n.t('session.tail.remoteCompactEncryptedContent');
+  if (reason === 'acp-usage-limit') return i18n.t('session.tail.usageLimitReached');
+  if (reason === 'acp-auth-required') return i18n.t('chat.subscriptionAccountError.loginRequired');
+  if (reason === 'UPSTREAM_OVERLOADED' || reason === 'acp-overloaded') return i18n.t('interaction.contextSheet.goalStatus.capacityLimited');
   if (reason === 'unexecuted-tool-markup') return i18n.t('session.tail.unexecutedToolMarkup');
   if (reason === 'yield-continuation-incomplete') return i18n.t('session.tail.executionResultUnavailable');
+  if (reason === 'codex_reconnect_stalled') {
+    const summary = i18n.t('session.tail.codexReconnectStalled');
+    if (reconnectHandoff === 'disabled') return `${summary} ${i18n.t('session.tail.reconnectAutoResumeDisabled')}`;
+    if (reconnectHandoff === 'exhausted') return `${summary} ${i18n.t('session.tail.reconnectAutoResumeExhausted')}`;
+    return summary;
+  }
   if (reason === 'silent-stop-exhausted') return i18n.t('session.tail.silentStopExhausted');
   if (reason === 'output-limit') {
     const details = parseOutputLimitDetails(outputLimit);
@@ -125,8 +137,10 @@ export function unclassifiedAgentErrorI18nKey(message: string, sessionSource?: u
     : parsed?.code;
   const key = code ? `session.remoteError.${code}` : null;
   if (key && i18n.exists(key)) return key;
-  return isResponsesLiteParallelToolCallsError(message)
-    ? 'session.tail.requestFormatError'
+  if (isResponsesLiteParallelToolCallsError(message)) return 'session.tail.requestFormatError';
+  // The account ran out of its periodic allowance: say so instead of "reply failed".
+  return isAccountUsageLimitReachedText(message)
+    ? 'session.tail.usageLimitReached'
     : 'session.tail.replyFailed';
 }
 

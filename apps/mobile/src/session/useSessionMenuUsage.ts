@@ -1,3 +1,5 @@
+import { isPluginEngineSessionKind } from './pluginEngines';
+import { PLUGIN_USAGE_READ_INTERVAL_MS } from '@cindy/plugin-protocol';
 import type { OpenAiAccountProvider } from './sessionControls';
 import { normalizeUsageCostRows, type UsageCostRow } from '@cindy/maker-shared/usage-cost-details';
 import { useCallback, useEffect, useState } from "react";
@@ -18,7 +20,7 @@ import {
  * Reads of the account this task's Agent consumes. With a remote Agent it is another computer
  * than the task host (see sessionUsageAccount.ts); task data is still read from the host.
  */
-export type SessionMenuAccountReader = Pick<
+export type SessionMenuAccountReader = Partial<Pick<MobileMakerTransport, "getPluginEngineUsage">> & Pick<
   MobileMakerTransport,
   | "getCodexRateLimits"
   | "getAccountUsage"
@@ -32,6 +34,7 @@ interface UsageState {
   costBreakdown?: UsageCostRow[] | null;
   account: SessionMenuAccountUsage | null;
   estimate: RemoteMoney | null;
+  estimateAmounts?: RemoteMoney[];
   accountFailed: boolean;
   estimateFailed: boolean;
   loading: boolean;
@@ -69,6 +72,7 @@ export function useSessionMenuUsage(
   provider?: OpenAiAccountProvider,
   /** Defaults to the task host; null = this account cannot be read from here (shown unavailable). */
   accountReader: SessionMenuAccountReader | null = reader,
+  modelLabel?: string | null,
 ) {
   const taskScope = [
     session.deviceLinkDeviceId,
@@ -99,6 +103,7 @@ export function useSessionMenuUsage(
             ? previous.value
             : {
                 ...EMPTY,
+                estimateAmounts: previous?.taskScope === taskScope ? previous.value.estimateAmounts : undefined,
                 estimate:
                   previous?.taskScope === taskScope
                     ? previous.value.estimate
@@ -114,7 +119,7 @@ export function useSessionMenuUsage(
       update({ loading: true });
       await Promise.allSettled([
         (accountReader
-          ? readSessionMenuAccountUsage(session, accountReader, provider)
+          ? readSessionMenuAccountUsage(session, accountReader, provider, modelLabel)
           : Promise.resolve(unavailableSessionMenuAccountUsage())
         ).then(
           (account) => update({ account, accountFailed: false }),
@@ -130,6 +135,7 @@ export function useSessionMenuUsage(
           (snapshot) =>
             update({
               costBreakdown: Array.isArray(snapshot.costBreakdown) ? normalizeUsageCostRows(snapshot.costBreakdown) : null,
+              estimateAmounts: snapshot.totalValueAmounts?.map(normalizeRemoteMoney).filter((value): value is RemoteMoney => !!value),
               estimate:
                 normalizeRemoteMoney(snapshot.totalValueMoney) ??
                 (typeof snapshot.totalValueUsd === "number" &&
@@ -153,7 +159,7 @@ export function useSessionMenuUsage(
     void read();
     // Existing host readers refresh cached snapshots in the background. Re-read while visible
     // so their first cold response does not leave the sheet empty until it is reopened.
-    const timer = setInterval(() => void read(), 30_000);
+    const timer = setInterval(() => void read(), isPluginEngineSessionKind(session.agentKind) ? PLUGIN_USAGE_READ_INTERVAL_MS : 30_000);
     return () => {
       cancelled = true;
       clearInterval(timer);
@@ -168,12 +174,14 @@ export function useSessionMenuUsage(
     session.id,
     codexRateLimits,
     provider,
+    modelLabel,
   ]);
   return {
     ...(stored?.scope === scope
       ? stored.value
       : {
           ...EMPTY,
+          estimateAmounts: stored?.taskScope === taskScope ? stored.value.estimateAmounts : undefined,
           estimate:
             stored?.taskScope === taskScope ? stored.value.estimate : null,
         }),

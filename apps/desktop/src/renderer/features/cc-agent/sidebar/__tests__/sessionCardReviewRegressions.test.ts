@@ -155,7 +155,7 @@ describe('SessionCard review regressions', () => {
 
   // 置顶卡片等高(2026-11-08 用户定稿):正文区不论有无内容都占 2 行;失效后两列卡片底边错开。
   it('keeps card preview at a fixed two-line height across content sources', () => {
-    expect(sessionCardSource).toContain("'mt-[4px] h-[2.8em] text-11 leading-[1.4]'");
+    expect(sessionCardSource).toContain("'mt-1 h-[2.8em] text-11 leading-[1.4]'");
     expect(sessionCardSource).toContain(
       "'[display:-webkit-box] [-webkit-box-orient:vertical] [-webkit-line-clamp:2] overflow-hidden'",
     );
@@ -350,10 +350,10 @@ describe('SessionCard review regressions', () => {
   it('keeps selected sidebar hover actions inside the active color system', () => {
     expect(sessionItemSource).toContain('isActive={isActive}');
     expect(sessionItemSource).toContain(
-      "'text-sidebar-item-active-foreground hover:text-sidebar-item-active-foreground hover:bg-[color-mix(in_srgb,var(--sidebar-item-active-foreground)_14%,transparent)]'",
+      "'text-sidebar-item-active-foreground hover:text-sidebar-item-active-foreground enabled:[&:not([aria-disabled=true])]:hover:[--button-face-bg:color-mix(in_srgb,var(--sidebar-item-active-foreground)_14%,transparent)]'",
     );
     expect(sessionItemSource).toContain(
-      "'text-sidebar-action-icon hover:bg-sidebar-item-hover hover:text-foreground'",
+      "'text-sidebar-action-icon enabled:[&:not([aria-disabled=true])]:hover:[--button-face-bg:hsl(var(--sidebar-item-hover))] hover:text-foreground'",
     );
   });
 
@@ -476,19 +476,18 @@ describe('SessionCard review regressions', () => {
 
   it('shows the project source label inline in both list and text modes', () => {
     // The inbox leaves the project name to the row's project icon (2026-11-18 user decision).
-    expect(sessionCardSource).toContain('{sourceLabel && !inboxMode ? (');
-    expect(sessionItemSource).toContain('{sourceLabel && !inboxMode ? (');
+    expect(sessionCardSource).toContain('{showProject && sourceLabel && !inboxMode ? (');
+    expect(sessionItemSource).toContain('{showProject && sourceLabel && !inboxMode ? (');
     expect(sessionItemSource).toContain('title={sourceLabel}');
     expect(sessionCardSource).toContain('title={sourceLabel}');
     expect(sessionItemSource).toContain("'inline-flex min-w-0 items-center gap-1 text-xs font-normal'");
     expect(sessionItemSource).not.toContain('sourceLabel={sourceLabel}');
   });
 
-  it('aligns list automation headers with regular tasks and indents only expanded children', () => {
+  it('aligns list automation headers with regular tasks', () => {
     expect(automationGroupSource).toMatch(
-      /sessionVariant === 'list'\s*\? 'px-2\.5'\s*: indented\s*\? 'pl-5 pr-2'\s*: 'pl-3 pr-2'/,
+      /sessionVariant === 'list'\s*\? 'px-2\.5'\s*: 'pl-3 pr-2'/,
     );
-    expect(automationGroupSource).toContain('<div className="flex flex-col gap-0.5 pl-2">');
     expect(automationGroupSource).toContain("sessionVariant === 'list' ? 'w-3' : 'w-[15px]'");
     expect(automationGroupSource).toContain("sessionVariant === 'list' && 'order-2'");
   });

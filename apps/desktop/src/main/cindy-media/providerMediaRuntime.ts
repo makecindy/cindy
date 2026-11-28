@@ -1,6 +1,7 @@
 import type { AgentKind, MediaCapability, ProviderVideoApi } from '@cindy/model-providers';
 import type { ImageParameters, ImageProtocol } from './imageParameters.js';
 import { supportsMediaCapability } from './mediaCapabilities.js';
+import type { SharedImageStart } from './sharedImageClient.js';
 
 export interface ProviderMediaRuntimeModel {
   id: string;
@@ -42,6 +43,7 @@ export type ProviderMediaRuntimeResult = {
 } | { url: string };
 
 interface ProviderMediaRuntime {
+  generateSharedSubscriptionImage?(request: SharedImageStart, assertAllowed: () => void, signal: AbortSignal): Promise<{ buffer: Buffer; mimeType: string }>;
   guideTarget?(target: { providerId: string; agent: AgentKind; modelId: string }): { providerId: string; agent: AgentKind; modelId: string };
   guideScope?(target: { providerId: string; agent: AgentKind; modelId: string }): string | null;
   guideProtocol?(target: { providerId: string; agent: AgentKind; modelId: string }): string | undefined;
@@ -89,6 +91,11 @@ export function resolveProviderHttpConnection(providerId: string, modelId: strin
 
 export function configureProviderMediaRuntime(next: ProviderMediaRuntime): void {
   runtime = next;
+}
+
+export async function generateSharedSubscriptionImage(request: SharedImageStart, assertAllowed: () => void, signal: AbortSignal) {
+  if (!runtime?.generateSharedSubscriptionImage) throw new Error('SHARED_IMAGE_UNAVAILABLE');
+  return runtime.generateSharedSubscriptionImage(request, assertAllowed, signal);
 }
 
 export function listProviderMediaModels(capabilities: readonly MediaCapability[] = []): ProviderMediaRuntimeModel[] {

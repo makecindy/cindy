@@ -62,6 +62,30 @@ function fixture() {
   };
 }
 describe('encrypted BYOK snapshot contract', () => {
+  // Unit: save/load through the live sync path. A v2 image removal must also
+  // clear the cached provider's image when restored in a later process.
+  it('round-trips a v2 icon and drops it after an authoritative update', async () => {
+    const h = fixture();
+    const v2 = { ...directory, schemaVersion: 2 };
+    const icon = '<svg/>';
+    const replace = vi.fn();
+    const fetch = vi.fn()
+      .mockResolvedValueOnce({ ...v2, providers: [{ ...provider, icon }] })
+      .mockResolvedValueOnce(credentials)
+      .mockResolvedValueOnce({ ...v2, revision: '2' })
+      .mockResolvedValueOnce(credentials);
+    const runtime = createByokSync({ cache: h.cache, replace, fetch });
+    runtime.setOwner(owner);
+    await runtime.sync();
+    expect(h.cache.load(owner)).toMatchObject({
+      catalog: { schemaVersion: 2, providers: [{ icon }] },
+      connections: [{ provider: { icon } }],
+    });
+    await runtime.sync();
+    expect(replace.mock.lastCall?.[1][0]?.provider).not.toHaveProperty('icon');
+    expect(h.cache.load(owner)?.connections[0]?.provider).not.toHaveProperty('icon');
+  });
+
   it('restores matching keys across process generations, but never across identities or regions', async () => {
     const h = fixture();
     await h.sync.sync();

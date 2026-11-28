@@ -9,22 +9,39 @@ const gitExecMock = vi.fn();
 const storeMap = new Map<string, WorktreeMeta>();
 const storeSetMock = vi.fn();
 const profile = vi.hoisted(() => ({ root: '' }));
-const checkoutLease = vi.hoisted(() => ({ record: vi.fn(), release: vi.fn() }));
+const checkoutLease = vi.hoisted(() => ({
+  record: vi.fn(),
+  release: vi.fn(),
+  runtimePaths: new Set<string>(),
+  trackActivePaths: false,
+}));
 vi.mock('electron', () => ({ app: { getPath: () => profile.root } }));
 vi.mock('../localDb/client/current', () => ({ getDbClient: () => ({ readLocalWorktreeReferences: async () => [] }) }));
 vi.mock('../worktree/piSubagentReferences', () => ({ readPiSubagentWorktreeReferences: async () => new Map() }));
 vi.mock('../worktree/runtimeLeases', () => ({
-  readWorktreeRuntimePaths: async () => new Set(),
-  acquireWorktreeRuntimeLease: async () => ({}),
+  readWorktreeRuntimePaths: async () => new Set(checkoutLease.runtimePaths),
+  acquireWorktreeRuntimeLease: async (_id: string, cwd: string) => {
+    if (checkoutLease.trackActivePaths) checkoutLease.runtimePaths.add(cwd);
+    return {};
+  },
   recordWorktreeRuntimeLeaseChild: checkoutLease.record,
-  releaseWorktreeRuntimeLease: checkoutLease.release,
+  releaseWorktreeRuntimeLease: (...args: unknown[]) => {
+    if (checkoutLease.trackActivePaths) checkoutLease.runtimePaths.clear();
+    return checkoutLease.release(...args);
+  },
   reclaimOrphanedWorktreeRuntimeLeases: async () => 0,
 }));
 const includeMock = vi.hoisted(() => vi.fn(async () => []));
 
 vi.mock('../worktree/gitExec', () => ({
   gitExec: (...args: unknown[]) => gitExecMock(...args),
-  GitExecError: class GitExecError extends Error {},
+  GitExecError: class GitExecError extends Error {
+    readonly cleanupUnconfirmed: boolean;
+    constructor(opts?: { cleanupUnconfirmed?: boolean; stderr?: string } | string) {
+      super(typeof opts === 'string' ? opts : (opts?.stderr ?? 'git failed'));
+      this.cleanupUnconfirmed = typeof opts === 'object' && opts !== null ? Boolean(opts.cleanupUnconfirmed) : false;
+    }
+  },
   globalSafeDirectoryLockPath: () => path.join(profile.root, 'git-config.lock'),
   safeDirectorySpellings: (value: string) => [value],
 }));
@@ -57,6 +74,8 @@ describe('createWorktree naming authority', () => {
     baseRepo = path.join(tmpRoot, 'repo');
     fs.mkdirSync(baseRepo, { recursive: true });
     storeMap.clear();
+    checkoutLease.runtimePaths.clear();
+    checkoutLease.trackActivePaths = false;
     includeMock.mockReset().mockResolvedValue([]);
     storeSetMock.mockReset().mockImplementation(async (sessionId: string, meta: WorktreeMeta) => {
       storeMap.set(sessionId, meta);
@@ -79,8 +98,8 @@ describe('createWorktree naming authority', () => {
       if (args[0] === 'rev-parse' && args[1] === '--git-path') {
         return { stdout: '.git/info/exclude\n', stderr: '' };
       }
-      if (args[0] === 'rev-parse' && (args[1] === '--git-dir' || args[1] === '--git-common-dir')) {
-        return { stdout: '.git\n', stderr: '' };
+      if (args[0] === 'rev-parse' && (args.includes('--git-dir') || args.includes('--git-common-dir'))) {
+        return { stdout: `${path.join(cwd ?? baseRepo, '.git')}\n`, stderr: '' };
       }
       if (args[0] === 'branch' && args[1] === '--format=%(refname:short)') {
         return { stdout: 'main\n', stderr: '' };
@@ -90,6 +109,7 @@ describe('createWorktree naming authority', () => {
       }
       return { stdout: '', stderr: '' };
     });
+    await import('../worktree/WorktreeManagerPorts.desktop');
     manager = await import('../worktree/WorktreeManager');
   });
 
@@ -170,7 +190,7 @@ describe('createWorktree naming authority', () => {
       finishCheckout = (fail) => (fail ? reject(new Error('checkout failed')) : resolve({ stdout: '', stderr: '' }));
     });
     gitExecMock.mockImplementation((args: string[], ...rest: unknown[]) => {
-      if (args[0] === 'checkout' && args.includes(':(exclude).sivi')) {
+      if (args[0] === 'checkout' && args.includes('.')) {
         enteredCheckout();
         return checkout;
       }
@@ -192,6 +212,89 @@ describe('createWorktree naming authority', () => {
     }
     await expect(creating).resolves.toMatchObject({ ok: false });
     expect(gitExecMock.mock.calls.some(([args]) => args[0] === 'worktree' && args[1] === 'remove')).toBe(true);
+  });
+
+  // A slow awaitFullCheckout (e.g. large repo / slow Git LFS) must release the
+  // repo-level create queue once `git worktree add` + checkout lease succeed,
+  // so other creates on the same baseRepo proceed without colliding on branch/path,
+  // and non-interactive checkouts must never block on terminal credential prompts.
+  it('releases the repo create queue before awaitFullCheckout runs and disables terminal prompts', async () => {
+    const previousGit = gitExecMock.getMockImplementation()!;
+    const createdRefs: string[] = [];
+    let enteredFirstCheckout!: () => void;
+    const firstCheckoutStarted = new Promise<void>((resolve) => { enteredFirstCheckout = resolve; });
+    let finishFirstCheckout!: () => void;
+    const firstCheckout = new Promise<{ stdout: string; stderr: string }>((resolve) => {
+      finishFirstCheckout = () => resolve({ stdout: '', stderr: '' });
+    });
+    const firstPath = path.join(baseRepo, '.cindy-worktrees', 'shared');
+    let fullCheckoutEnv: Record<string, string> | undefined;
+    let selectiveCheckoutEnv: Record<string, string> | undefined;
+    let backgroundCheckoutEnv: Record<string, string> | undefined;
+
+    gitExecMock.mockImplementation((args: string[], cwd?: string, opts?: { extraEnv?: Record<string, string> }) => {
+      const wtIdx = args.indexOf('worktree');
+      if (wtIdx >= 0 && args[wtIdx + 1] === 'add') {
+        const bIdx = args.indexOf('-b');
+        if (bIdx >= 0 && args[bIdx + 1]) createdRefs.push(`refs/heads/${args[bIdx + 1]}`);
+        const targetDir = args[bIdx >= 0 ? bIdx + 2 : wtIdx + 2];
+        if (targetDir) fs.mkdirSync(targetDir, { recursive: true });
+        return { stdout: '', stderr: '' };
+      }
+      if (args[0] === 'branch' && args[1] === '--all') {
+        return { stdout: createdRefs.join('\n'), stderr: '' };
+      }
+      if (args[0] === 'ls-tree') {
+        return { stdout: 'AGENTS.md\n', stderr: '' };
+      }
+      if (args[0] === 'checkout' && cwd === firstPath && args.includes('.')) {
+        fullCheckoutEnv = opts?.extraEnv;
+        enteredFirstCheckout();
+        return firstCheckout;
+      }
+      if (args[0] === 'checkout' && args.includes('AGENTS.md')) {
+        selectiveCheckoutEnv = opts?.extraEnv;
+        return { stdout: '', stderr: '' };
+      }
+      if (args[0] === 'checkout' && args.includes(':(exclude).sivi')) {
+        backgroundCheckoutEnv = opts?.extraEnv;
+        return { stdout: '', stderr: '' };
+      }
+      return previousGit(args, cwd, opts);
+    });
+
+    const first = manager.createWorktree(
+      { sessionId: 'slow-full-checkout', baseRepo, name: 'shared', sourceBranch: 'main' },
+      { awaitFullCheckout: true },
+    );
+    try {
+      await firstCheckoutStarted;
+      const second = await manager.createWorktree({
+        sessionId: 'concurrent-staged',
+        baseRepo,
+        name: 'shared',
+        sourceBranch: 'main',
+      });
+      expect(second).toMatchObject({
+        ok: true,
+        meta: {
+          name: 'shared-2',
+          branch: 'cindy/shared-2',
+          path: path.join(baseRepo, '.cindy-worktrees', 'shared-2'),
+        },
+      });
+      expect(fullCheckoutEnv).toMatchObject({ LC_ALL: 'C', GIT_TERMINAL_PROMPT: '0' });
+      expect(selectiveCheckoutEnv).toMatchObject({ LC_ALL: 'C', GIT_TERMINAL_PROMPT: '0' });
+      expect(backgroundCheckoutEnv).toMatchObject({ LC_ALL: 'C', GIT_TERMINAL_PROMPT: '0' });
+    } finally {
+      finishFirstCheckout();
+      await first;
+    }
+
+    await expect(first).resolves.toMatchObject({
+      ok: true,
+      meta: { name: 'shared', branch: 'cindy/shared', path: firstPath },
+    });
   });
 
   // Worker failure compensation must wait for checkout; successful creation must not.
@@ -234,6 +337,204 @@ describe('createWorktree naming authority', () => {
     expect(checkoutLease.release).toHaveBeenCalledOnce();
     expect(gitExecMock.mock.calls.some(([args]) => args[0] === 'worktree' && args[1] === 'remove')).toBe(failSetup);
     await manager.awaitBackgroundCheckout(sessionId);
+  });
+
+  // 测试价值
+  // - 生产入口与可观察结果：WorktreeManager.createWorktree({ trackBackgroundCheckout: true, strictSelectiveCheckout }) +
+  //   ensureBackgroundCheckoutReady(sessionId, signal) + removeWorktreeForSession；验证 ACP 延迟
+  //   检出后，正常等待、提前失败保留错误、AbortSignal 取消不破坏底层检出、保留目录时不误清失败记录、
+  //   确认删除后才清理，以及 strictSelectiveCheckout 传播选择性检出错误并回滚。
+  // - 规则依据：ACP 延迟全量检出绝不能在缺失规则或检出失败的半检出树上静默放行。
+  // - 现有覆盖缺口：awaitBackgroundCheckout 是 fail-soft，不覆盖失败保留、未删保错、strictSelectiveCheckout 与 AbortSignal。
+  // - 最小失败输入：后台 full checkout 在调用前 reject、存在 .worktree-keep 阻止删除、或选择性检出 .claude reject。
+  // - tier：unit（进程内 mock gitExec）。
+  it('ensureBackgroundCheckoutReady waits, supports abort, and retains failures until removal succeeds', async () => {
+    const previousGit = gitExecMock.getMockImplementation()!;
+    let finishOk!: () => void;
+    const okCheckout = new Promise<{ stdout: string; stderr: string }>((resolve) => {
+      finishOk = () => resolve({ stdout: '', stderr: '' });
+    });
+    gitExecMock.mockImplementation((args: string[], ...rest: unknown[]) => {
+      if (args[0] === 'checkout' && args.includes(':(exclude).sivi')) return okCheckout;
+      return previousGit(args, ...rest);
+    });
+    const okSession = 'deferred-ready-ok';
+    await expect(
+      manager.createWorktree({ sessionId: okSession, baseRepo, name: 'deferred-ok', sourceBranch: 'main' }, { trackBackgroundCheckout: true }),
+    ).resolves.toMatchObject({ ok: true });
+
+    const abortController = new AbortController();
+    const abortedWait = manager.ensureBackgroundCheckoutReady(okSession, abortController.signal);
+    abortController.abort(new Error('turn stopped'));
+    await expect(abortedWait).rejects.toThrow('turn stopped');
+
+    let ready = false;
+    const waiting = manager.ensureBackgroundCheckoutReady(okSession).then(() => { ready = true; });
+    await Promise.resolve();
+    expect(ready).toBe(false);
+    finishOk();
+    await waiting;
+    expect(ready).toBe(true);
+    await expect(manager.ensureBackgroundCheckoutReady(okSession)).resolves.toBeUndefined();
+
+    // Even if background checkout rejects before the caller awaits readiness, the failure is retained.
+    const failSession = 'deferred-ready-fail';
+    const failBranch = 'cindy/deferred-fail';
+    gitExecMock.mockImplementation(async (args: string[], cwd?: string, ...rest: unknown[]) => {
+      if (args[0] === 'checkout' && args.includes(':(exclude).sivi')) {
+        throw new Error('smudge filter failed');
+      }
+      if (args[0] === 'symbolic-ref' && args.includes('--short') && args.includes('HEAD')) {
+        return { stdout: `${failBranch}\n`, stderr: '' };
+      }
+      if (args[0] === 'worktree' && args[1] === 'move') {
+        fs.renameSync(args[2]!, args[3]!);
+        return { stdout: '', stderr: '' };
+      }
+      if (args[0] === 'worktree' && args[1] === 'remove') {
+        const target = args[args.length - 1]!;
+        fs.rmSync(target, { recursive: true, force: true });
+        return { stdout: '', stderr: '' };
+      }
+      return previousGit(args, cwd, ...rest);
+    });
+    const createdFail = await manager.createWorktree(
+      { sessionId: failSession, baseRepo, name: 'deferred-fail', sourceBranch: 'main' },
+      { trackBackgroundCheckout: true },
+    );
+    expect(createdFail).toMatchObject({ ok: true });
+    if (!createdFail.ok) return;
+    fs.mkdirSync(createdFail.meta.path, { recursive: true });
+    await manager.awaitBackgroundCheckout(failSession);
+    await expect(manager.ensureBackgroundCheckoutReady(failSession)).rejects.toThrow('smudge filter failed');
+
+    // A preserved removal (.worktree-keep) must keep the retained failure so reopening does not run on a broken tree.
+    const keepSentinel = path.join(createdFail.meta.path, '.worktree-keep');
+    fs.writeFileSync(keepSentinel, '');
+    await manager.removeWorktreeForSession(failSession, { preserveDirty: true, canRemove: async () => true });
+    expect(storeMap.has(failSession)).toBe(true);
+    await expect(manager.ensureBackgroundCheckoutReady(failSession)).rejects.toThrow('smudge filter failed');
+
+    // Once removal actually deletes the worktree, the failure record is cleared.
+    fs.rmSync(keepSentinel, { force: true });
+    await manager.removeWorktreeForSession(failSession, { preserveDirty: true, canRemove: async () => true });
+    expect(storeMap.has(failSession)).toBe(false);
+    await expect(manager.ensureBackgroundCheckoutReady(failSession)).resolves.toBeUndefined();
+  });
+
+  it('propagates selective checkout failures and rolls back when strictSelectiveCheckout is set', async () => {
+    const previousGit = gitExecMock.getMockImplementation()!;
+    let bgStarted = false;
+    gitExecMock.mockImplementation(async (args: string[], ...rest: unknown[]) => {
+      if (args[0] === 'ls-tree') {
+        return { stdout: '.claude\nAGENTS.md\n', stderr: '' };
+      }
+      if (args[0] === 'checkout' && args.includes('.claude') && !args.includes(':(exclude).sivi')) {
+        throw new Error('required smudge filter failed on .claude');
+      }
+      if (args[0] === 'checkout' && args.includes(':(exclude).sivi')) {
+        bgStarted = true;
+      }
+      return previousGit(args, ...rest);
+    });
+    const result = await manager.createWorktree(
+      { sessionId: 'strict-selective-fail', baseRepo, name: 'strict-sel', sourceBranch: 'main' },
+      { trackBackgroundCheckout: true, strictSelectiveCheckout: true },
+    );
+    expect(result.ok).toBe(false);
+    expect(bgStarted).toBe(false);
+    expect(storeMap.has('strict-selective-fail')).toBe(false);
+  });
+
+  // 测试价值
+  // - 生产入口与可观察结果：WorktreeManager.createWorktree + ensureBackgroundCheckoutReady；模拟
+  //   进程重启清空内存态（保留持久化 store.backgroundCheckoutPending）以及未传 trackBackgroundCheckout
+  //   的检出失败，验证重启或内存逐出后仍 fail-closed 抛错，不在半检出/失败工作树上放行。
+  // - 规则依据：PR #13429 独立审查 P1（discussion_r4722629833）——跨进程重启不破坏「不在半检出树运行」不变量。
+  // - 现有覆盖缺口：上方用例仅在单进程内存 Map 有效期内校验。
+  // - 最小失败输入：后台检出未完成或失败后清空进程内 Map，仅留持久化 backgroundCheckoutPending: true。
+  // - tier：unit（进程内 mock gitExec + 持久化 storeMap）。
+  it('fails closed after simulated process restart when backgroundCheckoutPending remains persisted', async () => {
+    const previousGit = gitExecMock.getMockImplementation()!;
+    let finishPending!: () => void;
+    const pendingCheckout = new Promise<{ stdout: string; stderr: string }>((resolve) => {
+      finishPending = () => resolve({ stdout: '', stderr: '' });
+    });
+    gitExecMock.mockImplementation((args: string[], ...rest: unknown[]) => {
+      if (args[0] === 'checkout' && args.includes(':(exclude).sivi')) return pendingCheckout;
+      return previousGit(args, ...rest);
+    });
+
+    const pendingSession = 'restart-while-pending';
+    await expect(
+      manager.createWorktree(
+        { sessionId: pendingSession, baseRepo, name: 'restart-pending', sourceBranch: 'main' },
+        { trackBackgroundCheckout: true },
+      ),
+    ).resolves.toMatchObject({ ok: true, meta: { backgroundCheckoutPending: true } });
+
+    // Simulate process exit/crash before background checkout completes: in-memory maps are gone,
+    // while persisted worktreeStore still has backgroundCheckoutPending: true.
+    manager._resetInMemoryBackgroundCheckoutStateForTests();
+    await expect(manager.ensureBackgroundCheckoutReady(pendingSession)).rejects.toThrow(/did not complete/i);
+    finishPending();
+
+    // Also cover failed checkout -> restart, and non-tracked (e.g. worktree:create IPC) failures.
+    gitExecMock.mockImplementation((args: string[], ...rest: unknown[]) => {
+      if (args[0] === 'checkout' && args.includes(':(exclude).sivi')) {
+        return Promise.reject(new Error('checkout filter failed'));
+      }
+      return previousGit(args, ...rest);
+    });
+
+    const untrackedFailSession = 'restart-after-untracked-fail';
+    await expect(
+      manager.createWorktree({ sessionId: untrackedFailSession, baseRepo, name: 'untracked-fail', sourceBranch: 'main' }),
+    ).resolves.toMatchObject({ ok: true, meta: { backgroundCheckoutPending: true } });
+    await manager.awaitBackgroundCheckout(untrackedFailSession);
+    await expect(manager.ensureBackgroundCheckoutReady(untrackedFailSession)).rejects.toThrow('checkout filter failed');
+
+    manager._resetInMemoryBackgroundCheckoutStateForTests();
+    await expect(manager.ensureBackgroundCheckoutReady(untrackedFailSession)).rejects.toThrow(/did not complete/i);
+  });
+
+  it('waits for checkout before rolling back an unpublished registry rejection', async () => {
+    const previousGit = gitExecMock.getMockImplementation()!;
+    let finishCheckout!: () => void;
+    const checkout = new Promise<{ stdout: string; stderr: string }>((resolve) => {
+      finishCheckout = () => resolve({ stdout: '', stderr: '' });
+    });
+    gitExecMock.mockImplementation((args: string[], ...rest: unknown[]) => {
+      if (args[0] === 'checkout' && args.includes(':(exclude).sivi')) return checkout;
+      return previousGit(args, ...rest);
+    });
+    let reachedPersist!: () => void;
+    const persist = new Promise<void>((resolve) => { reachedPersist = resolve; });
+    storeSetMock.mockImplementation(async (...args: unknown[]) => {
+      reachedPersist();
+      // The real store invokes this under its registry lock.
+      await (args[2] as (() => Promise<void>) | undefined)?.();
+    });
+    let guardCalls = 0;
+    let settled = false;
+    const creating = manager.createWorktree({
+      sessionId: 'locked-rejection', baseRepo, name: 'guarded', sourceBranch: 'main',
+    }, {
+      assertWriteAllowed: () => {
+        guardCalls++;
+        if (guardCalls === 3) throw new Error('profile held');
+      },
+    }).finally(() => { settled = true; });
+    await persist;
+    try {
+      expect(settled).toBe(false);
+      expect(storeMap.has('locked-rejection')).toBe(false);
+    } finally {
+      finishCheckout();
+    }
+    await expect(creating).resolves.toMatchObject({ ok: false });
+    expect(storeMap.has('locked-rejection')).toBe(false);
+    expect(gitExecMock.mock.calls.some(([args]) => args[0] === 'worktree' && args[1] === 'remove')).toBe(true);
   });
 
   it.each(['', '   \t'])('generates a meaningful final name for blank input %j', async (name) => {
@@ -310,6 +611,7 @@ describe('createWorktree naming authority', () => {
     // profile lock and cancellation marker are real shared filesystem state.
     const creator = manager;
     vi.resetModules();
+    await import('../worktree/WorktreeManagerPorts.desktop');
     const canceller = await import('../worktree/WorktreeManager');
     let release!: () => void;
     let entered!: () => void;
@@ -468,5 +770,152 @@ describe('createWorktree naming authority', () => {
         baseRepo,
       );
     });
+  });
+
+  // Regression: an abandoned remote precreated worktree whose staged background checkout is
+  // still running previously self-blocked its own discard because its own `checkout:` lease
+  // triggered live-session preservation and its partial checkout looked dirty to plain `git status`.
+  // Unit tier, fake Git I/O.
+  it('discardPrecreatedWorktreeByRecoveryKey aborts an in-flight staged checkout only when unclaimed and removes the incomplete worktree', async () => {
+    checkoutLease.trackActivePaths = true;
+    const { GitExecError } = await import('../worktree/gitExec');
+    const previousGit = gitExecMock.getMockImplementation()!;
+    let capturedSignal: AbortSignal | undefined;
+    gitExecMock.mockImplementation((args: string[], cwd?: string, opts?: { signal?: AbortSignal }) => {
+      if (args[0] === 'checkout' && args.includes(':(exclude).sivi')) {
+        capturedSignal = opts?.signal;
+        return new Promise((_resolve, reject) => {
+          opts?.signal?.addEventListener('abort', () => {
+            reject(new GitExecError({ stderr: 'cancelled; process tree terminated', cleanupUnconfirmed: false } as unknown as ConstructorParameters<typeof GitExecError>[0]));
+          }, { once: true });
+        });
+      }
+      if (args[0] === 'status' && args[1] === '--porcelain') {
+        // Real partial --no-checkout state appears dirty to plain `git status --porcelain`.
+        return Promise.resolve({ stdout: 'D  README.md\n', stderr: '' });
+      }
+      if (args[0] === 'status' && args[1] === '--porcelain=v1') {
+        // Temp HEAD index shows only working-tree-missing tracked files.
+        return Promise.resolve({ stdout: ' D README.md\0', stderr: '' });
+      }
+      if (args[0] === 'rev-parse' && args[1] === '--verify') {
+        return Promise.resolve({ stdout: 'abc123\n', stderr: '' });
+      }
+      if (args[0] === 'rev-list') {
+        return Promise.resolve({ stdout: '0\n', stderr: '' });
+      }
+      return previousGit(args, cwd, opts);
+    });
+
+    const recoveryKey = 'bg-discard-recovery-key';
+    const created = await manager.createWorktree({
+      sessionId: 'bg-session',
+      baseRepo,
+      name: 'bg-stuck',
+      sourceBranch: 'main',
+      recoveryKey,
+    });
+    expect(created).toMatchObject({ ok: true, meta: { backgroundCheckoutPending: true } });
+    expect(capturedSignal?.aborted).toBe(false);
+    expect(checkoutLease.runtimePaths.size).toBe(1);
+
+    // If a session already claimed the worktree, discard must NOT abort its background checkout.
+    await expect(
+      manager.discardPrecreatedWorktreeByRecoveryKey('bg-session', recoveryKey, {
+        canRemove: async () => false,
+      }),
+    ).resolves.toEqual({ status: 'preserved', reason: 'claimed' });
+    expect(capturedSignal?.aborted).toBe(false);
+    expect(checkoutLease.release).not.toHaveBeenCalled();
+
+    // Unclaimed discard aborts the background checkout, releases its lease, and removes the directory.
+    await expect(
+      manager.discardPrecreatedWorktreeByRecoveryKey('bg-session', recoveryKey, {
+        canRemove: async () => true,
+      }),
+    ).resolves.toEqual({ status: 'discarded', branchDeleted: true });
+    expect(capturedSignal?.aborted).toBe(true);
+    expect(checkoutLease.release).toHaveBeenCalledTimes(1);
+    expect(storeMap.has('bg-session')).toBe(false);
+    expect(gitExecMock).toHaveBeenCalledWith(
+      ['worktree', 'remove', '--force', path.join(baseRepo, '.cindy-worktrees', 'bg-stuck')],
+      baseRepo,
+    );
+  });
+
+  it('keeps the checkout lease protective and preserves the worktree when abort cleanup is unconfirmed', async () => {
+    checkoutLease.trackActivePaths = true;
+    const { GitExecError } = await import('../worktree/gitExec');
+    const previousGit = gitExecMock.getMockImplementation()!;
+    gitExecMock.mockImplementation((args: string[], cwd?: string, opts?: { signal?: AbortSignal }) => {
+      if (args[0] === 'checkout' && args.includes(':(exclude).sivi')) {
+        return new Promise((_resolve, reject) => {
+          opts?.signal?.addEventListener('abort', () => {
+            reject(new GitExecError({ stderr: 'cancelled; process tree cleanup unconfirmed', cleanupUnconfirmed: true } as unknown as ConstructorParameters<typeof GitExecError>[0]));
+          }, { once: true });
+        });
+      }
+      return previousGit(args, cwd, opts);
+    });
+
+    const recoveryKey = 'bg-unconfirmed-recovery';
+    await expect(manager.createWorktree({
+      sessionId: 'bg-unconfirmed',
+      baseRepo,
+      name: 'bg-unconfirmed',
+      sourceBranch: 'main',
+      recoveryKey,
+    })).resolves.toMatchObject({ ok: true });
+
+    await expect(
+      manager.discardPrecreatedWorktreeByRecoveryKey('bg-unconfirmed', recoveryKey, {
+        canRemove: async () => true,
+      }),
+    ).resolves.toEqual({ status: 'preserved', reason: 'live-reference' });
+    expect(checkoutLease.release).not.toHaveBeenCalled();
+    expect(storeMap.has('bg-unconfirmed')).toBe(true);
+    expect(gitExecMock).not.toHaveBeenCalledWith(
+      expect.arrayContaining(['worktree', 'remove']),
+      baseRepo,
+    );
+  });
+
+  it('quarantines an incomplete-checkout rollback before force removal and restores if files appear', async () => {
+    const { GitExecError } = await import('../worktree/gitExec');
+    const wp = path.join(baseRepo, '.cindy-worktrees', 'rb-race');
+    const previousGit = gitExecMock.getMockImplementation()!;
+    let statusCalls = 0;
+
+    gitExecMock.mockImplementation((args: string[], cwd?: string, opts?: { signal?: AbortSignal }) => {
+      if (args[0] === 'checkout' && args.includes(':(exclude).sivi')) {
+        return new Promise((_resolve, reject) => {
+          opts?.signal?.addEventListener('abort', () => {
+            reject(new GitExecError({ stderr: 'cancelled', cleanupUnconfirmed: false } as unknown as ConstructorParameters<typeof GitExecError>[0]));
+          }, { once: true });
+        });
+      }
+      if (args[0] === 'status' && args[1] === '--porcelain=v1') {
+        statusCalls += 1;
+        // First check (at live path) looks clean; after quarantine move, a concurrent write is present.
+        return Promise.resolve({
+          stdout: statusCalls === 1 ? ' D README.md\0' : ' D README.md\0?? concurrent.txt\0',
+          stderr: '',
+        });
+      }
+      return previousGit(args, cwd, opts);
+    });
+    storeSetMock.mockRejectedValueOnce(new Error('persist failed'));
+
+    await expect(create('rb-race', 'rb-race-session')).resolves.toMatchObject({ ok: false });
+
+    const moveCalls = gitExecMock.mock.calls.filter(([args]) => args[0] === 'worktree' && args[1] === 'move');
+    expect(moveCalls).toHaveLength(2);
+    const quarantinePath = moveCalls[0]?.[0]?.[3];
+    expect(moveCalls[0]?.[0]).toEqual(['worktree', 'move', wp, quarantinePath]);
+    expect(moveCalls[1]?.[0]).toEqual(['worktree', 'move', quarantinePath, wp]);
+    expect(gitExecMock).not.toHaveBeenCalledWith(
+      expect.arrayContaining(['worktree', 'remove', '--force']),
+      baseRepo,
+    );
   });
 });

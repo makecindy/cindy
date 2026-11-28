@@ -1,13 +1,83 @@
 // @vitest-environment jsdom
-import { act, cleanup, renderHook, waitFor } from '@testing-library/react';
+import { act, cleanup, render, renderHook, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { createInstance } from 'i18next';
+import { I18nextProvider } from 'react-i18next';
 import { setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 import { useClaudeSubscriptionUsage } from '@/hooks/useClaudeSubscriptionUsage';
 import { useXaiSubscriptionUsage } from '@/hooks/useXaiSubscriptionUsage';
 import { useXaiRateLimit } from '@/hooks/useXaiRateLimit';
 import { useAccountUsage } from '@/hooks/useAccountUsage';
+import { PluginEngineUsageChip } from '@/components/status/PluginEngineUsageChip';
+import { resetPluginEnginesStoreForTests, usePluginEngines } from '@/hooks/usePluginEngines';
 
 afterEach(() => { cleanup(); setDataOwnerGeneration(null); vi.unstubAllGlobals(); });
+
+// Unit, PR #11563: switching between two tasks unmounts the first chip while a remote
+// quota request is in flight. A new mount must reuse that request and the settled snapshot.
+it('shares plugin account usage across task switches without leaking it to a new account', async () => {
+  setDataOwnerGeneration('quota-first');
+  const snapshot = { updatedAt: 1234, windows: [{ label: 'Shared quota', remainingPercent: 42 }] };
+  let finish!: (value: unknown) => void;
+  const invoke = vi.fn().mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }))
+    .mockResolvedValue(null);
+  vi.stubGlobal('electronAPI', { deviceLink: { invoke } });
+  const i18n = createInstance();
+  await i18n.init({ lng: 'en', resources: { en: { translation: {} } } });
+  const mount = () => render(
+    <I18nextProvider i18n={i18n}>
+      <PluginEngineUsageChip engineKey="demo:acp" deviceId="remote-desk" running={false} />
+    </I18nextProvider>,
+  );
+  const first = mount();
+  await act(async () => {});
+  first.unmount();
+  const second = mount();
+  await act(async () => finish(snapshot));
+  expect(second.getByRole('button').textContent).toContain('Shared quota');
+  second.unmount();
+  const third = mount();
+  await act(async () => {});
+  expect(third.getByRole('button').textContent).toContain('Shared quota');
+  expect(invoke).toHaveBeenCalledExactlyOnceWith('remote-desk', 'maker:get-plugin-engine-usage', ['demo:acp']);
+  third.unmount();
+  setDataOwnerGeneration('quota-second');
+  const otherAccount = mount();
+  await act(async () => {});
+  expect(otherAccount.queryByRole('button')).toBeNull();
+  expect(invoke).toHaveBeenCalledTimes(2);
+});
+
+// Unit, #11563: a catalogue push can arrive while the visible chip awaits its first
+// balance. Switching tasks alone does not exercise this race with model discovery.
+it('shows the pending balance after models change in the local catalogue', async () => {
+  const engine = { key: 'demo:local', providerId: 'acp-plugin:demo:local', name: 'Demo', reportsUsage: true, models: [] as { id: string }[] };
+  let push!: (list: typeof engine[]) => void;
+  let finish!: (value: unknown) => void;
+  const getPluginEngineUsage = vi.fn(() => new Promise(resolve => { finish = resolve; }));
+  vi.stubGlobal('electronAPI', { maker: {
+    getPluginEngineUsage,
+    listPluginEngines: async () => [engine],
+    onPluginEnginesChanged: (cb: typeof push) => { push = cb; return () => {}; },
+  } });
+  const i18n = createInstance();
+  await i18n.init({ lng: 'en', resources: { en: { translation: { providerAccountUsage: { deepSeek: { chipBalance: '{{balance}}' } } } } } });
+  try {
+    const catalogue = renderHook(() => usePluginEngines());
+    await waitFor(() => expect(catalogue.result.current[0]?.key).toBe(engine.key));
+    const chip = render(<I18nextProvider i18n={i18n}>
+      <PluginEngineUsageChip engineKey={engine.key} deviceId={null} running={false} />
+    </I18nextProvider>);
+    await waitFor(() => expect(getPluginEngineUsage).toHaveBeenCalledTimes(1));
+    await act(async () => { push([{ ...engine, models: [{ id: 'new-model' }] }]); });
+    await act(async () => finish({ updatedAt: 1234, balances: [{ currency: 'USD', amount: '0' }] }));
+    expect(chip.getByRole('button').textContent).toContain('USD');
+    expect(getPluginEngineUsage).toHaveBeenCalledTimes(1);
+  } finally {
+    cleanup();
+    resetPluginEnginesStoreForTests();
+  }
+});
 
 const sources = [
   { name: 'Anthropic', hook: useClaudeSubscriptionUsage,

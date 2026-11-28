@@ -8,6 +8,10 @@ import { pendingGhostCardFormDelivery } from "@cindy/maker-shared/ghost-card-for
 import { MobileMailHtmlPreview } from '../plugins/MobileMailHtmlPreview';
 import { pluginPreviewFixture, PREVIEW_FIXTURE_PLUGIN } from '../debug/pluginPreviewFixture';
 
+vi.mock('../plugins/PluginModelPicker', () => ({ PluginModelPicker: ({ request, onAnswer }: any) =>
+  createElement('button', { onClick: () => onAnswer({ ...request.initial, model: 'new-model' }) }, 'Select new model'),
+}));
+
 vi.mock('../plugins/PluginNativeIntent', () => ({ PluginNativeIntent: (props: any) => {
   h.preview = props;
   return createElement('button', { 'data-testid': 'plugin-preview', onClick: props.onClose }, props.intent.url);
@@ -177,6 +181,35 @@ describe("rich plugin card hints", () => {
     expect(control.getAttribute('aria-busy')).toBe('false');
     expect(control.disabled).toBe(false);
     expect(container.querySelector('[role=progressbar]')).toBeNull();
+  });
+
+  // Unit regression: sending the PR button alone passed existing tests while the phone
+  // ignored the picker returned by the plugin. A stale poll after acceptance must not reopen it.
+  it('answers a PR follow model request on the card that opened it', async () => {
+    vi.useFakeTimers();
+    const initial = { agentKind: 'codex', model: 'old-model', providerId: 'account', effort: 'high', fastMode: true };
+    const request = { requestId: 'pick', ghostId: 'cindy-github', ghostName: 'GitHub', initial, expiresAt: Date.now() + 90_000 };
+    h.invoke.mockImplementation(async (_device, _channel, [action]) => {
+      if (action.actionId === 'open-interaction') return { result: { pageId: 'pr-page' } };
+      if (action.actionId === 'poll') return { result: { confirms: [], modelPickers: [request] } };
+      if (action.actionId === 'answer-model-picker') return { result: { accepted: true, handled: true } };
+      return { effects: [] };
+    });
+    const container = document.createElement('div'), root = createRoot(container);
+    unmount = () => act(() => root.unmount());
+    await act(async () => root.render(createElement(PluginCardActions, {
+      deviceId: 'device', sessionId: 's', callId: 'c', data: { pluginId: 'cindy-github', revision: '1',
+        items: [{ id: 'prset:modelPick', label: 'Change model', disabled: false }] },
+    })));
+    await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="Change model"]')!.click());
+    const picker = Array.from(container.querySelectorAll('button')).find(button => button.textContent === 'Select new model');
+    expect(picker).toBeDefined();
+    await act(async () => picker!.click());
+    expect(h.invoke).toHaveBeenCalledWith('device', expect.any(String), [expect.objectContaining({
+      actionId: 'answer-model-picker', input: { pageId: 'pr-page', requestId: 'pick', route: { ...initial, model: 'new-model' } },
+    })]);
+    await act(async () => vi.advanceTimersByTimeAsync(1000));
+    expect(container.textContent).not.toContain('Select new model');
   });
 
   // Unit regression: PR publish disabled clicks but gave no visible feedback during remote delivery.
@@ -608,6 +641,30 @@ describe("native plugin card deliberate actions", () => {
     } })));
     expect([...container.querySelectorAll('textarea')].every(el => el.disabled)).toBe(true);
     await act(async () => [...container.querySelectorAll('button')].find(b => b.textContent === operation)!.click());
+    expect(dispatch).toHaveBeenCalledWith(expect.objectContaining({ actionId: id }));
+    expect(dispatch.mock.calls[0][0]).not.toHaveProperty('input.formValues');
+  });
+  // User regression (unit): Mobile must allow cancelling a queued send while
+  // the host is still syncing the draft (state === 'sending' with cancelLabel).
+  it('allows cancel while syncing before sending without unlocking inputs or resubmitting fields', async () => {
+    const dispatch = vi.fn(async (_input: unknown) => ({ effects: [] }));
+    h.invoke.mockImplementation(async (_device: string, _channel: string, args: any[]) => {
+      if (args[0].collectionId === 'plugin-results') return dispatch(args[0]);
+      if (args[0].actionId === 'open-interaction') return { result: { pageId: 'page' } };
+      return { result: { confirms: [] } };
+    });
+    const container = document.createElement('div'), root = createRoot(container);
+    unmount = () => act(() => root.unmount());
+    const key = '12345678-1234-1234-1234-123456789abc';
+    const fields = ['to', 'cc', 'bcc', 'subject', 'body'].map(name => ({ name, label: name, value: name }));
+    const id = `mail:cancel:${key}`;
+    await act(async () => root.render(createElement(PluginCardActions, { deviceId: 'device', sessionId: 's', callId: 'preparing', data: {
+      pluginId: 'mail', revision: '1', form: fields, items: [{ id, label: 'Undo', disabled: false }],
+      mail: { accountId: 'a', draftId: 'd', key, from: 'a@example.test', fields, state: 'sending', status: 'Syncing draft before sending…',
+        sendLabel: 'Send', fromLabel: 'From', cancelLabel: 'Undo', attachments: [] },
+    } })));
+    expect([...container.querySelectorAll('textarea')].every(el => el.disabled)).toBe(true);
+    await act(async () => [...container.querySelectorAll('button')].find(b => b.textContent === 'Undo')!.click());
     expect(dispatch).toHaveBeenCalledWith(expect.objectContaining({ actionId: id }));
     expect(dispatch.mock.calls[0][0]).not.toHaveProperty('input.formValues');
   });

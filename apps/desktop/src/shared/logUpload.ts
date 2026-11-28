@@ -27,10 +27,12 @@ export interface LogUploadSettingsPayload {
   /** 用户是否显式设置过该开关（盘上有 override）。false = 跟随当前版本默认值。 */
   crashAutoUploadCustomized: boolean;
   /**
-   * 手动上传当前是否可用 = `targetConfigured && privacyConsentAccepted`。
+   * 已配置目标且有既有隐私同意或有效的手动日志授权时，手动上传可用。
    * 刻意**不看**「使用统计」开关——那是行为埋点的偏好，与排障上传不是一件事。
    */
   manualUploadAvailable: boolean;
+  /** 当前同意记录可读但缺少手动上传授权。 */
+  manualUploadConsentRequired: boolean;
 }
 
 /** 手动上传成功的结果。编号短、可读，用户报障时口述给我们。 */

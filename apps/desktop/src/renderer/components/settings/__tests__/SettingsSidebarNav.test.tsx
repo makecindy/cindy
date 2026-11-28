@@ -60,7 +60,9 @@ describe('SettingsSidebarNav', () => {
     render(<SettingsSidebarNav tabIds={TAB_IDS} activeTab="general" onSelectTab={vi.fn()} />);
 
     const tabs = screen.getAllByRole('tab');
-    expect(tabs).toHaveLength(TAB_IDS.length);
+    // 智能路由(model-groups)并进了「模型供应商」页：地址仍可直达，侧栏不单独列它。
+    expect(tabs).toHaveLength(TAB_IDS.length - 1);
+    expect(tabs.some((tab) => tab.id.includes('model-groups'))).toBe(false);
     for (const tab of tabs) {
       expect(tab.querySelector('svg')).not.toBeNull();
     }

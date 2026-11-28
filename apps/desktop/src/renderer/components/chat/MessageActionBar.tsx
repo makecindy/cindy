@@ -53,7 +53,7 @@ import { PluginUiSlot, PluginUiMessageMenuItem, runPluginUiEntry, type PluginUiE
 import { ChatReplyIcon } from './ChatReplyIcon';
 import { Spinner } from '@/components/ui/spinner';
 import type { ForkAtMessageRunOptions } from './useForkAtMessage';
-import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import { Popover, PopoverAnchor, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Tip, Tooltip } from '@/components/ui/tooltip';
 import {
   DropdownMenu,
@@ -68,8 +68,10 @@ import { formatAbsolute, useRelativeTime } from '@/hooks/useRelativeTime';
 import { SHARE_EXCLUDE_ATTR } from '@/lib/shareConversationImage';
 import { formatCompactTokens, formatTurnCostMoney } from '@/lib/usageFormat';
 import { buildTurnUsageTooltipLines } from '@/lib/turnUsageTooltip';
-import { splitUsageCost } from '@cindy/maker-shared/usage-cost-details';
+import { messageCostParts } from '@cindy/maker-shared/usage-cost-details';
 import { UsageCostPopover } from '@/components/status/UsageCostPopover';
+import { TurnGenerationTrace } from '@/components/status/TurnGenerationTrace';
+import { traceHasChart } from '@cindy/maker-shared/usage-format';
 import type { TurnUsageDetails } from '../../../shared/turnUsageDetails';
 import {
   legacyUsdMoney,
@@ -121,7 +123,7 @@ interface MessageActionBarProps {
   /** Extra More-menu items owned by the caller, listed before link copy. */
   menuActions?: Array<{ key: string; label: string; icon: ReactNode; onSelect: () => void; disabled?: boolean }>;
   /** The caller owns reaction persistence; the toolbar owns its trigger and placement. */
-  reactionAction?: { label: string; open: boolean; onOpenChange: (open: boolean) => void; disabled?: boolean; content: ReactNode };
+  reactionAction?: { label: string; open: boolean; onOpenChange: (open: boolean) => void; onCloseAutoFocus?: (event: Event) => void; disabled?: boolean; content: ReactNode };
   /** When provided, the More menu exposes single-message deletion. The
    *  parent owns confirmation + persistence; the promise keeps the action
    *  bar disabled until the flow resolves. */
@@ -201,6 +203,9 @@ export function MessageActionBar({
   clientId,
 }: MessageActionBarProps) {
   const { t } = useTranslation();
+  const reactionTrigger = useRef<HTMLButtonElement>(null);
+  const pointerOpenedReaction = useRef(false);
+  const [reactionAnchor, setReactionAnchor] = useState<Element | null>(null);
   const readAloud = useContext(MessageReadAloudContext);
   const pluginMenuEntries = align === 'right' ? pluginUi.userMenu : pluginUi.assistantMenu;
   const [copied, setCopied] = useState(false);
@@ -488,18 +493,34 @@ export function MessageActionBar({
   );
 
   const reactionBtn = reactionAction && (
-    <Popover key="reaction" open={reactionAction.open} onOpenChange={reactionAction.onOpenChange}>
+    <Popover key="reaction" open={reactionAction.open} onOpenChange={open => {
+      setReactionAnchor(open ? reactionTrigger.current?.closest('[data-reaction-anchor]') ?? null : null);
+      reactionAction.onOpenChange(open);
+    }}>
+      {reactionAction.open && reactionAnchor && <PopoverAnchor virtualRef={{ current: reactionAnchor }} />}
       <Tip text={reactionAction.label}>
         <PopoverTrigger asChild>
-          <button type="button" className={actionButtonClass} disabled={inFlight || reactionAction.disabled}
-            aria-label={reactionAction.label} onClick={event => event.stopPropagation()}>
+          <button ref={reactionTrigger} type="button" className={actionButtonClass} disabled={inFlight || reactionAction.disabled}
+            aria-label={reactionAction.label} onClick={event => {
+              pointerOpenedReaction.current = event.detail > 0;
+              event.stopPropagation();
+            }}>
             <SmilePlus size={14} strokeWidth={2} className={actionIconClass} />
           </button>
         </PopoverTrigger>
       </Tip>
-      <PopoverContent align={align === 'right' ? 'end' : 'start'} className="z-[80] w-fit p-2" aria-label={reactionAction.label}>
+      {reactionAction.open && <PopoverContent side="top" align={align === 'right' ? 'start' : 'end'}
+        collisionBoundary={reactionAnchor?.closest('[data-testid="bot-group-timeline"], .thread-panel') ?? undefined} collisionPadding={8}
+        className="w-fit p-1" aria-label={reactionAction.label} tabIndex={-1}
+        onCloseAutoFocus={reactionAction.onCloseAutoFocus}
+        onOpenAutoFocus={event => {
+          if (pointerOpenedReaction.current && event.currentTarget instanceof HTMLElement) {
+            event.preventDefault();
+            event.currentTarget.focus({ preventScroll: true });
+          }
+        }}>
         {reactionAction.content}
-      </PopoverContent>
+      </PopoverContent>}
     </Popover>
   );
 
@@ -552,12 +573,16 @@ export function MessageActionBar({
       ? userTurnCostIsEstimate
       : turnCostIsEstimate;
     const isUserTurnTotal = effectiveUserTurnMoney != null;
-    const splitCost = displayedMoney ? splitUsageCost(displayedMoney, turnUsageDetails?.additionalCosts) : null;
-    const conversationText = splitCost && splitCost.conversation.amount > 1e-9
-      ? displayedCostIsEstimate
-        ? t('chat.messageActionBar.turnCostEstimatedValue', { cost: formatTurnCostMoney(splitCost.conversation) })
-        : formatTurnCostMoney(splitCost.conversation) : '';
-    const costLabel = [conversationText, ...(splitCost?.additional.map(formatTurnCostMoney) ?? [])].filter(Boolean).join(' + ');
+    const parts = displayedMoney ? messageCostParts(
+      displayedCostIsEstimate ? { ...displayedMoney, kind: 'value-estimate' } : displayedMoney,
+      turnUsageDetails,
+    ) : null;
+    const costLabel = parts ? [
+      ...parts.conversation.map(money => money.kind === 'value-estimate'
+        ? t('chat.messageActionBar.turnCostEstimatedValue', { cost: formatTurnCostMoney(money) })
+        : formatTurnCostMoney(money)),
+      ...parts.additional.map(formatTurnCostMoney),
+    ].join(' + ') : '';
 
     // 费用 — 样式与 timeText 完全一致(12px + 同色 + 0.5px 光学修正)。
     // 仅 assistant(align='left')会拿到值;估算值(Codex 折算)表达为 token 价值。
@@ -591,32 +616,43 @@ export function MessageActionBar({
       'text-[var(--settings-section-desc)] cursor-default',
     );
 
+    // 本轮的速度与推理图：有金额时在费用明细顶部，没有金额时由 token 回退入口打开同一张图。
+    const turnTrace = turnUsageDetails?.trace && traceHasChart(turnUsageDetails.trace)
+      ? <TurnGenerationTrace trace={turnUsageDetails.trace} /> : undefined;
+
     const costText = displayedMoney && displayedMoney.amount > 0 && (
       <UsageCostPopover key="cost" sessionId={sessionId} clientId={clientId}
-        className={metaTextClassName} label={costLabel} fallback={turnCostTooltipNode} />
+        className={metaTextClassName} label={costLabel} fallback={turnCostTooltipNode}
+        header={turnTrace} />
     );
 
     // 金额缺席时的回退:显示本轮 token 总量。成因可能是网关目录整体不下发价格、
     // 模型不在价表、或订阅估值也 miss —— 对用户都一样,这一格不该因此空着。
     // 钱算不出来不代表用量算不出来:明细由 main 在 turn 结束时落库,与金额同源。
+    // 看本轮推理量不该取决于价格是否可用（免费模型、价表缺失、估值未命中都会走到这里）：有图时
+    // 这一格与金额一样悬停预览、点击固定，浮窗里是同一张图加 token 明细；不带 sessionId，
+    // 不读取也不显示费用明细。没有图时保持原来的文字提示。
     const tokensText = !(displayedMoney && displayedMoney.amount > 0) &&
       turnUsageDetails &&
-      turnUsageDetails.totalTokens > 0 && (
-        <Tooltip.Root key="tokens">
-          <Tooltip.Trigger asChild>
-            <span className={metaTextClassName}>
-              {t('chat.messageActionBar.turnTokens', {
-                tokens: formatCompactTokens(turnUsageDetails.totalTokens),
-              })}
-            </span>
-          </Tooltip.Trigger>
-          <Tooltip.Content>
-            <span className="whitespace-pre-line">
-              {buildTurnUsageTooltipLines({ details: turnUsageDetails, t }).join('\n')}
-            </span>
-          </Tooltip.Content>
-        </Tooltip.Root>
-      );
+      turnUsageDetails.totalTokens > 0 && (() => {
+        const label = t('chat.messageActionBar.turnTokens', {
+          tokens: formatCompactTokens(turnUsageDetails.totalTokens),
+        });
+        const lines = buildTurnUsageTooltipLines({ details: turnUsageDetails, t }).join('\n');
+        return turnTrace ? (
+          <UsageCostPopover key="tokens" className={metaTextClassName} label={label} header={turnTrace}
+            fallback={<div className="whitespace-pre-line text-12 text-[var(--text-secondary)]">{lines}</div>} />
+        ) : (
+          <Tooltip.Root key="tokens">
+            <Tooltip.Trigger asChild>
+              <span className={metaTextClassName}>{label}</span>
+            </Tooltip.Trigger>
+            <Tooltip.Content>
+              <span className="whitespace-pre-line">{lines}</span>
+            </Tooltip.Content>
+          </Tooltip.Root>
+        );
+      })();
 
     return [costText, tokensText];
   })();
@@ -934,13 +970,11 @@ export function MessageActionBar({
  * The frame that hangs a compact toolbar beside its message bubble (群聊): on the bubble's
  * outer `side`, level with its top, inside the message row so moving the pointer across the gap keeps
  * the row hovered. It shows while the message (`group/message`) is hovered, while keyboard focus is
- * inside, while `open` (a picker) is set, and always on touch screens. The bubble must be `relative`.
+ * inside, and on touch screens. The reaction picker takes its place while open. The bubble must be `relative`.
  * Private ThreadPanel keeps this toolbar in flow below content; group topics retain the outer rail.
  */
-export function BubbleHoverToolbar({ side, open = false, besideReactions = false, marker, children }: {
+export function BubbleHoverToolbar({ side, open = false, marker, children }: {
   side: 'left' | 'right'; open?: boolean;
-  /** Steps past reactions hung on the bubble's outer top corner. */
-  besideReactions?: boolean;
   /** A data attribute that names this toolbar for its caller's tests and checks. */
   marker?: `data-${string}`;
   children: ReactNode;
@@ -948,8 +982,8 @@ export function BubbleHoverToolbar({ side, open = false, besideReactions = false
   const left = side === 'left';
   return (
     <div data-chat-copy-exclude {...{ [SHARE_EXCLUDE_ATTR]: '' }} {...(marker ? { [marker]: '' } : {})} data-open={open ? '' : undefined}
-      className={cn('chat-bubble-toolbar pointer-events-none absolute top-0 z-10 w-max rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-0.5 opacity-0 transition-opacity duration-[var(--motion-fast)] ease-[var(--motion-ease-out)] focus-within:pointer-events-auto focus-within:opacity-100 group-hover/message:pointer-events-auto group-hover/message:opacity-100 data-[open]:pointer-events-auto data-[open]:opacity-100 motion-reduce:transition-none [@media(hover:none)]:pointer-events-auto [@media(hover:none)]:opacity-100',
-        left ? 'right-full' : 'left-full', besideReactions ? (left ? 'mr-6' : 'ml-6') : (left ? 'mr-1.5' : 'ml-1.5'))}>
+      className={cn('chat-bubble-toolbar pointer-events-none absolute top-0 z-raised w-max rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-0.5 opacity-0 transition-opacity duration-[var(--motion-fast)] ease-[var(--motion-ease-out)] has-[:focus-visible]:pointer-events-auto has-[:focus-visible]:opacity-100 group-hover/message:pointer-events-auto group-hover/message:opacity-100 motion-reduce:transition-none [@media(hover:none)]:pointer-events-auto [@media(hover:none)]:opacity-100',
+        left ? 'right-full mr-1.5' : 'left-full ml-1.5')}>
       {children}
     </div>
   );

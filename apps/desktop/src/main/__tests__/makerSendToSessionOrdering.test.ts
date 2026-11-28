@@ -629,7 +629,7 @@ describe('sendToSession ordering', () => {
     expectOrder(
       setModelBlock,
       'applyRuntimeSelectionAxesWithRecovery({',
-      'await persistSessionFields',
+      'await persistSessionFields(sessionId, patch);',
     );
     expectOrder(
       setModelBlock,

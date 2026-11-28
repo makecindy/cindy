@@ -68,7 +68,7 @@ describe('decodeRemoteErrorMessage', () => {
       'Control for this device is off; the message was not sent.',
     );
     expect(decodeRemoteErrorMessage('[DEVICE_LINK_MEDIA_TRANSFER_FAILED] upload failed')).toBe(
-      'Attachment transfer failed; the message was not sent. Please try again.',
+      'Attachment transfer failed; the message was not sent. Try again.',
     );
   });
 
@@ -163,4 +163,41 @@ it('preserves rejected shared history and exposes context handoff recovery', asy
     expect(decodeRemoteErrorMessage(raw)).not.toBe(i18n.t('chat.remoteError.REMOTE_AGENT_INVALID'));
     expect(enqueue).toHaveBeenCalledOnce();
   } finally { vi.unstubAllGlobals(); }
+});
+
+// 并存方案 A 的 D（审核方 2026-11-17 定）：Host 因单独运行的桌面版占用数据而拒绝发送时，发送失败横幅说清
+// 原因与做法（窗口语言），不再显示 `Error invoking remote method…: [PRECONDITION_FAILED] …` 原文。走真实的
+// sendMessage 失败投影；不带这个标记的错误，横幅文本与之前逐字相同。
+describe('a send refused while a desktop app uses the Host data', () => {
+  it.each([
+    ['running', 'HOST_PROFILE_IN_USE_BY_DESKTOP: In use by the desktop app.', 'logic.errors.hostProfileInUseByDesktop'],
+    ['at start', 'HOST_PROFILE_IN_USE_BY_DESKTOP_AT_START: Quit that app, then restart the Host.', 'logic.errors.hostProfileInUseByDesktopAtStart'],
+  ])('says why and what to do (%s)', async (_label, detail, key) => {
+    const raw = `Error invoking remote method 'maker:input:enqueue': Error: [PRECONDITION_FAILED] ${detail}`;
+    const enqueue = vi.fn().mockRejectedValue(new Error(raw));
+    vi.stubGlobal('window', { dispatchEvent: vi.fn(), electronAPI: { maker: { input: { enqueue },
+      autoTitle: vi.fn().mockResolvedValue({ applied: true, done: true }) } } });
+    try {
+      const id = `host-profile-held-${key}`;
+      expect(await makerChatStore.sendMessage(id, 'continue', 'test-model', 'medium', 'auto', '/test')).toBe(false);
+      expect(makerChatStore.getSnapshot(id).error).toBe(i18n.t(key));
+      expect(i18n.t(key)).not.toBe(key);
+      expect(decodeRemoteErrorMessage(raw)).toBe(i18n.t(key));
+      expect(enqueue).toHaveBeenCalledOnce();
+      enqueue.mockResolvedValue({ sessionId: id, pendingQueue: [], queuePaused: false, error: null });
+      expect(await makerChatStore.sendMessage(id, 'retry', 'test-model', 'medium', 'auto', '/test')).toBe(true);
+      expect(makerChatStore.getSnapshot(id).error).toBeFalsy();
+    } finally { vi.unstubAllGlobals(); }
+  });
+
+  it.each([
+    "Error invoking remote method 'maker:input:enqueue': Error: [PRECONDITION_FAILED] The Host account is not ready",
+    "Error invoking remote method 'maker:input:enqueue': Error: network down",
+    "Error invoking remote method 'maker:input:enqueue': Error: [PRECONDITION_FAILED] blocked: HOST_PROFILE_IN_USE_BY_DESKTOP: later",
+    '[INTERNAL] HOST_PROFILE_IN_USE_BY_DESKTOP: under another code',
+    'LAZY_CREATE_FAILED: [REMOTE_COMPAT_MODE_UNSUPPORTED] local provider',
+    'plain failure text',
+  ])('passes other errors through as before: %s', raw => {
+    expect(remoteErrorMessageForBanner(raw)).toBe(raw);
+  });
 });

@@ -36,6 +36,13 @@ const MAX_BYTES = 16 * 1024 * 1024; // 16 MiB
 const cache = new Map<string, CachedText>();
 let totalBytes = 0;
 
+/** Each endpoint can contain a different file under the same absolute path. */
+export function fileContentScope(workdir: string, remoteHostId: string | null, deviceId: string | null): string {
+  if (deviceId) return `dev:${deviceId}|${workdir}`;
+  if (remoteHostId) return `ssh:${remoteHostId}|${workdir}`;
+  return workdir;
+}
+
 function makeKey(workdir: string, relPath: string): string {
   return `${workdir}|${relPath}`;
 }

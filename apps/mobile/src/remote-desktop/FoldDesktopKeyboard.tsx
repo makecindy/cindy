@@ -18,7 +18,7 @@ import { RemoteKeySurface } from "./RemoteKeySurface";
 
 type KeySurfaceProps = Omit<
   Parameters<typeof RemoteKeySurface>[0],
-  "compact" | "mode" | "strip"
+  "compact" | "mode" | "strip" | "keycap" | "keyGap"
 >;
 
 const MIN_TARGET = 44;
@@ -94,10 +94,15 @@ export function FoldDesktopKeyboard({
         <View style={styles.keys}>
           <RemoteKeySurface
             {...keys}
+            keycap="themed"
+            keyGap={3}
             // The strip takes the shared function-row share, so it stays
             // shorter than a key row however tall the deck is.
             strip={{}}
-            stripEnd={[clipboard, <FoldDeckOperations onPress={onOperations} />]}
+            stripEnd={[
+              clipboard,
+              <FoldDeckOperations onPress={onOperations} />,
+            ]}
           />
         </View>
         <View style={styles.lower}>

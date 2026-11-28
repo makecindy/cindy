@@ -297,5 +297,54 @@
     "selector": ".dark .composer-send-beam"
    }
   ]
+ },
+ {
+  "glob": "apps/desktop/src/renderer/features/right-sidebar/plugins/terminal/lib/terminalCanvasColors.ts",
+  "reason": "右侧栏终端画布的固定深色（面板底色 + xterm 主题）：Light / Dark 同值、不跟随主题；未定义 ANSI 16 色，xterm 默认色板按深底调校，换浅底会让输出看不清。只给终端画布使用。DESIGN.md §2「Terminal canvas」登记",
+  "owner": "right-sidebar-terminal",
+  "matches": [
+   {
+    "value": "#1c1c1c",
+    "before": "background:\\s*['\\\"]",
+    "object": "TERMINAL_CANVAS"
+   },
+   {
+    "value": "#e6e6e6",
+    "before": "foreground:\\s*['\\\"]",
+    "object": "TERMINAL_CANVAS"
+   },
+   {
+    "value": "#e6e6e6",
+    "before": "cursor:\\s*['\\\"]",
+    "object": "TERMINAL_CANVAS"
+   },
+   {
+    "value": "#1c1c1c",
+    "before": "cursorAccent:\\s*['\\\"]",
+    "object": "TERMINAL_CANVAS"
+   },
+   {
+    "value": "#3a4a5a",
+    "before": "selectionBackground:\\s*['\\\"]",
+    "object": "TERMINAL_CANVAS"
+   }
+  ],
+  "reviewDate": "2027-05-20",
+  "maintenanceOwner": "kirozeng",
+  "basis": "2026-11-20 维护者裁决（来源：#10019 报告「发现的其他问题」）：保持现值，登记为固定色例外，不新增调色板。"
+ },
+ {
+  "glob": "apps/desktop/src/renderer/components/title-bar/WindowControls.tsx",
+  "reason": "Windows 窗口关闭按钮悬停的系统标准红 #E81123（配白色图标）：平台约定色，Light / Dark 同值，不是主题语义色；只用于 WINDOWS_CLOSE_HOVER_CLASS。DESIGN.md §2「Windows window close button」登记",
+  "owner": "title-bar",
+  "matches": [
+   {
+    "value": "#E81123",
+    "before": "WINDOWS_CLOSE_HOVER_CLASS\\s*=\\s*['\\\"]hover:bg-\\["
+   }
+  ],
+  "reviewDate": "2027-05-20",
+  "maintenanceOwner": "kirozeng",
+  "basis": "2026-11-20 维护者裁决（来源：#10019 报告「发现的其他问题」）：保持现值，登记为固定色例外，不新增调色板。"
  }
 ]

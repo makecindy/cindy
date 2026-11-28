@@ -119,6 +119,7 @@ type DraftRecord = {
     reload: () => Promise<LocalSourceEntry | undefined>;
     issue?: LocalProviderIssue;
     completed?: string;
+    needsDestinationConsent?: boolean;
   };
 };
 
@@ -1038,7 +1039,7 @@ export function beginProviderImportConfirm(
   scope: ProviderImportScope,
   providers: readonly ProviderView[],
   target?: unknown,
-): { draft: ProviderImportDraft; resolution: ProviderImportResolution } {
+): { draft: ProviderImportDraft; resolution: ProviderImportResolution; destinationToConfirm?: string } {
   const record = requireRecord(importId);
   if (record.scope && !sameScope(record.scope, scope)) fail('the active account changed');
   if (!record.scope || !record.resolution) fail('preview this import again before confirming');
@@ -1047,7 +1048,10 @@ export function beginProviderImportConfirm(
   if (JSON.stringify(latest) !== JSON.stringify(record.resolution))
     fail('provider list changed; preview the import again');
   record.confirming = true;
-  return { draft: record.draft, resolution: latest };
+  const destinationToConfirm = record.local?.needsDestinationConsent
+    ? new URL(record.local.entry.endpoints[0].baseUrl).href
+    : undefined;
+  return { draft: record.draft, resolution: latest, destinationToConfirm };
 }
 
 export function finishProviderImportConfirm(importId: string, succeeded: boolean): void {
@@ -1163,6 +1167,10 @@ export function createLocalProviderImport(
 export function isLocalProviderImport(id: unknown): boolean {
   return typeof id === 'string' && !!drafts.get(id)?.local;
 }
+export function needsLocalProviderDestinationConsent(id: unknown): boolean {
+  const local = typeof id === 'string' ? drafts.get(id)?.local : undefined;
+  return local?.needsDestinationConsent === true && !local.completed;
+}
 /** Main-only access for comparing with owner-scoped persisted credentials. */
 export function localProviderImportDraft(
   id: string,
@@ -1233,6 +1241,7 @@ export function editLocalProviderImport(
   const name = boundedString(edit.name, 'name', 60);
   if (!Array.isArray(edit.endpoints) || edit.endpoints.length !== local.entry.endpoints.length)
     fail('invalid local endpoints');
+  let needsDestinationConsent = false;
   const endpoints = edit.endpoints.map((raw, i) => {
     const e = object(raw, 'endpoint');
     exactFields(e, ['baseUrl', 'protocol', 'apiKey'], 'endpoint');
@@ -1263,6 +1272,19 @@ export function editLocalProviderImport(
     const authHeaders = Object.entries(headers ?? {}).filter(([k]) =>
       /^(authorization|x-api-key|api-key|x-goog-api-key)$/i.test(k),
     );
+    // The edit supplies the first destination for Claude's saved static authentication headers.
+    const completingClaudeHeaderAuth =
+      local.source === 'claude-code' &&
+      prior.baseUrl === '' &&
+      !oldKey &&
+      e.protocol === prior.protocol &&
+      authHeaders.some(([, value]) => !!value);
+    const retainsUnboundHeaders = completingClaudeHeaderAuth && replacement === undefined;
+    needsDestinationConsent ||=
+      retainsUnboundHeaders ||
+      (same &&
+        local.needsDestinationConsent === true &&
+        (replacement === undefined || Object.keys(ordinaryHeaders).length > 0));
     const headerAuth =
       !oldKey &&
       e.protocol === prior.protocol &&
@@ -1286,6 +1308,7 @@ export function editLocalProviderImport(
       baseUrl,
       protocol: e.protocol as ProviderWireProtocol,
       ...(same ? { apiKey: oldKey, headers, modelsUrl, requestPath } : {}),
+      ...(retainsUnboundHeaders ? { headers } : {}),
       ...(replacement !== undefined
         ? {
             apiKey: headerAuth ? undefined : replacement || undefined,
@@ -1294,6 +1317,7 @@ export function editLocalProviderImport(
         : {}),
     };
   });
+  local.needsDestinationConsent = needsDestinationConsent;
   local.entry = { ...local.entry, name, endpoints };
   rebuildLocalDraft(record);
   return localProviderImportItem(id as string, scope);
@@ -1301,14 +1325,16 @@ export function editLocalProviderImport(
 export async function checkLocalProviderImportSource(
   id: unknown,
   scope: ProviderImportScope,
+  confirming = false,
 ): Promise<string | undefined> {
   if (!isLocalProviderImport(id)) return;
   const record = localRecord(id, scope),
     local = record.local!;
-  if (record.confirming) fail('local confirmation is running');
+  if (record.confirming !== confirming) fail('local confirmation state changed');
   if (local.completed) return local.completed;
   const current = await local.reload();
   localRecord(id, scope);
+  if (record.expiresAt <= Date.now()) fail('local import expired');
   if (!current || localEntryVersion(current) !== local.original) {
     local.issue = 'changed';
     record.resolution = undefined;

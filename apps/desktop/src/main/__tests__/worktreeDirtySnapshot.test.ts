@@ -19,6 +19,7 @@ import {
   getAutoStashSha,
   getRestorableAutoStashSha,
   getSnapshotSha,
+  isIncompleteCheckoutWorktreeDirty,
   listNonReproducibleIgnoredFiles,
   restoreAutoStashToPreservedWorktree,
   snapshotRefForSession,
@@ -330,5 +331,94 @@ describe('getSnapshotSha / snapshotRefForSession', () => {
       .mockResolvedValueOnce({ stdout: `${SHA}\n`, stderr: '' });
 
     await expect(getRestorableAutoStashSha('/repo', 's1', 'wt1')).resolves.toBeNull();
+  });
+
+  // Incomplete staged checkout (--no-checkout + aborted/failed background checkout)
+  // leaves missing tracked files as ` D <path>` against a temp HEAD index. Any real
+  // user modification, untracked file, staged addition, initialized submodule, or
+  // git error must fail closed.
+  it('treats only missing-from-checkout entries (and uninitialized submodules) as clean in isIncompleteCheckoutWorktreeDirty', async () => {
+    const tmpWt = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-wt-dirty-'));
+    const gitDir = path.join(tmpWt, '.git-meta');
+    fs.mkdirSync(gitDir, { recursive: true });
+    try {
+      gitExecMock
+        .mockResolvedValueOnce({ stdout: '', stderr: '' }) // diff --cached
+        .mockResolvedValueOnce({ stdout: '', stderr: '' }) // read-tree HEAD
+        .mockResolvedValueOnce({ stdout: `${gitDir}\n`, stderr: '' }) // rev-parse --git-dir
+        .mockResolvedValueOnce({ stdout: '160000 1111111111111111111111111111111111111111 0\tlibs/sub\0', stderr: '' }) // ls-files --stage
+        .mockResolvedValueOnce({ stdout: ' D README.md\0 D libs/sub\0', stderr: '' }); // status
+
+      await expect(isIncompleteCheckoutWorktreeDirty(tmpWt)).resolves.toBe(false);
+      const readTreeCall = gitExecMock.mock.calls[1];
+      const statusCall = gitExecMock.mock.calls[4];
+      expect(readTreeCall?.[0]).toEqual(['read-tree', 'HEAD']);
+      expect(statusCall?.[0]).toEqual([
+        'status',
+        '--porcelain=v1',
+        '-z',
+        '--untracked-files=all',
+        '--ignore-submodules=none',
+      ]);
+      const indexPath = (readTreeCall?.[2] as { extraEnv?: Record<string, string> })?.extraEnv?.GIT_INDEX_FILE;
+      expect(indexPath).toBeTruthy();
+      expect((statusCall?.[2] as { extraEnv?: Record<string, string> })?.extraEnv?.GIT_INDEX_FILE).toBe(indexPath);
+      expect(fs.existsSync(path.dirname(indexPath!))).toBe(false);
+    } finally {
+      fs.rmSync(tmpWt, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    ['untracked file', '', ' D README.md\0?? user-notes.txt\0'],
+    ['modified file', '', ' M README.md\0 D src/app.ts\0'],
+    ['staged addition', 'added.ts\n', ''],
+  ])('fails closed when incomplete checkout contains %s', async (_label, cachedStdout, statusStdout) => {
+    const tmpWt = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-wt-dirty-'));
+    const gitDir = path.join(tmpWt, '.git-meta');
+    fs.mkdirSync(gitDir, { recursive: true });
+    try {
+      gitExecMock.mockReset();
+      gitExecMock
+        .mockResolvedValueOnce({ stdout: cachedStdout, stderr: '' })
+        .mockResolvedValueOnce({ stdout: '', stderr: '' })
+        .mockResolvedValueOnce({ stdout: `${gitDir}\n`, stderr: '' })
+        .mockResolvedValueOnce({ stdout: '', stderr: '' })
+        .mockResolvedValueOnce({ stdout: statusStdout, stderr: '' });
+
+      await expect(isIncompleteCheckoutWorktreeDirty(tmpWt)).resolves.toBe(true);
+    } finally {
+      fs.rmSync(tmpWt, { recursive: true, force: true });
+    }
+  });
+
+  it('fails closed when incomplete checkout has an initialized submodule even if status ignores it', async () => {
+    const tmpWt = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-wt-submod-'));
+    const gitDir = path.join(tmpWt, '.git-meta');
+    fs.mkdirSync(path.join(gitDir, 'modules', 'libs', 'sub'), { recursive: true });
+    try {
+      gitExecMock.mockReset();
+      gitExecMock
+        .mockResolvedValueOnce({ stdout: '', stderr: '' }) // diff --cached
+        .mockResolvedValueOnce({ stdout: '', stderr: '' }) // read-tree HEAD
+        .mockResolvedValueOnce({ stdout: `${gitDir}\n`, stderr: '' }); // rev-parse --git-dir (modules/ exists)
+
+      await expect(isIncompleteCheckoutWorktreeDirty(tmpWt)).resolves.toBe(true);
+
+      // Even without `<gitdir>/modules`, a populated gitlink directory must fail closed.
+      fs.rmSync(path.join(gitDir, 'modules'), { recursive: true, force: true });
+      fs.mkdirSync(path.join(tmpWt, 'libs', 'sub'), { recursive: true });
+      fs.writeFileSync(path.join(tmpWt, 'libs', 'sub', 'user.txt'), 'precious');
+      gitExecMock.mockReset();
+      gitExecMock
+        .mockResolvedValueOnce({ stdout: '', stderr: '' })
+        .mockResolvedValueOnce({ stdout: '', stderr: '' })
+        .mockResolvedValueOnce({ stdout: `${gitDir}\n`, stderr: '' })
+        .mockResolvedValueOnce({ stdout: '160000 1111111111111111111111111111111111111111 0\tlibs/sub\0', stderr: '' });
+
+      await expect(isIncompleteCheckoutWorktreeDirty(tmpWt)).resolves.toBe(true);
+    } finally {
+      fs.rmSync(tmpWt, { recursive: true, force: true });
+    }
   });
 });

@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { createInteractionBroker } from './interactions.mjs';
 import { redactToolInputForUntrustedBoundary } from '../../../desktop/src/main/toolInputRedaction.ts';
 import { beginUnattendedTurn } from '../../../desktop/src/main/mcp-integrations/unattendedTurn.ts';
+import { defaultDecisionForPending } from '../../../desktop/src/main/maker-ipc/sessionEventPreparationSteps.ts';
 
 function createSession(id = 'task') {
   const session = {
@@ -199,4 +200,23 @@ test('permission requests leave the Host with the desktop tool-input redaction',
   await Promise.resolve();
   assert.deepEqual(events.at(-1).request, question);
   broker.dispose();
+});
+
+// Unit, the broker's real attach and detach: a task stopped with its cards pending (main.ts passes the
+// abort's reason to detach). Rule: each card gets the desktop's default decision for a card closed
+// without an answer (register.ts defaultDecisionForPending), the same one the clients are told.
+// Gap: the broker had its own fallback, whose permission decision also carried dismissed: true.
+// Minimal input: one pending card of each kind, then the task's abort.
+test('a stopped task closes its pending cards with the desktop\'s default decisions', async () => {
+  const events = [];
+  const broker = createInteractionBroker({ hub: { publish: event => events.push(event) } });
+  const session = createSession('stopped');
+  broker.attach(session, 'stopped');
+  const kinds = ['permission', 'ask_user_question', 'plan_review'];
+  const decisions = kinds.map(kind => session.listener({ requestId: `${kind}-card`, kind }));
+  broker.detach('stopped', 'session_aborted');
+  const expected = kinds.map(kind => defaultDecisionForPending(kind, 'session_aborted'));
+  assert.deepEqual(await Promise.all(decisions), expected);
+  assert.deepEqual(expected[0], { kind: 'permission', behavior: 'deny', reason: 'session_aborted' });
+  assert.deepEqual(events.filter(event => event.type === 'interaction_dismissed').map(event => event.decision), expected);
 });

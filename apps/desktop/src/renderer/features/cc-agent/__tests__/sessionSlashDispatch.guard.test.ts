@@ -44,6 +44,9 @@ function harness(agentKind = 'pi', remoteDeviceId?: string, runtimeOnly = false)
     extraDirs: ['/reference', 'cindy-library:/library'], writableDirs: ['/output'] };
   const environment: Record<string, any> = {
     ...slash, toast: { error: vi.fn() }, extractIpcError: () => null, session, sessionId: session.id, remoteDeviceId, catalogDeviceId: remoteDeviceId,
+    // Built-in tasks only here; plugin-engine tasks skip the vendor sign-in gate.
+    pluginEngineTask: false,
+    pluginEngineSwitchIntent: null,
     dbToMakerAgentKind: (kind: string) => kind,
     buildCreateOptsForCurrentSession: (_id: string, model: string, effort: string, permissionMode: string, workingDir: string) =>
       ({ model, effort, permissionMode, workingDir }),
@@ -52,7 +55,8 @@ function harness(agentKind = 'pi', remoteDeviceId?: string, runtimeOnly = false)
     getHelpCommandsSnapshot: async () => [discovered],
     loadAllCommands: async () => ready ? [loaded] : runtimeOnly ? [] : [discovered],
     setAllCommands: vi.fn(), isRemoteSession: false,
-    readOnly: false, cindyMakeInputLocked: false, invalidateHistoryRecoveryNavigation: vi.fn(),
+    readOnly: false, cindyMakeInputLocked: false, awaitingSessionCreation: false, creationFailed: false,
+    invalidateHistoryRecoveryNavigation: vi.fn(),
     matchNavigationCommandName: () => null, tryHandleNavigationCommand: async () => false,
     navigate: vi.fn(), t: (key: string) => key, canNavigateSession: true, navigationMode: 'default',
     maybeShowContextUsage: async () => false, sessionRef: { current: session },

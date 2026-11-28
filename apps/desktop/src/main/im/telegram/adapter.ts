@@ -81,7 +81,8 @@ export const TELEGRAM_TOOLS_HINT =
 
 export interface TelegramAdapterOptions {
   /** 伙伴自有连接: 不注入设置页人格, 私聊按主人 / 外部用户分落点。 */
-  companionBotId?: string;
+  /** 交给哪位伙伴: 固定 id(伙伴自有连接), 或每次现读(设置页那份个人机器人的「谁来回复」)。 */
+  companionBotId?: string | (() => string | null);
   /**
    * 全响应(ambient)群消息的前置判定器(辅助模型链)。不给 = 每条都起轮次, 由主模型
    * NO_REPLY(老行为)。
@@ -94,12 +95,18 @@ export interface TelegramAdapterOptions {
   describeSelfForAmbientJudge?: () => Promise<{ name: string; description: string }>;
 }
 
+const AMBIENT_HISTORY_IMAGE_MAX_AGE_MS = 2 * 60 * 1_000;
+const AMBIENT_HISTORY_MAX_IMAGES = 2;
+
 export function buildTelegramAdapter(
   telegramIm: TelegramIM,
   config: ImOrchestratorConfig,
   options: TelegramAdapterOptions = {},
 ): ImChannelAdapter {
-  const companion = Boolean(options.companionBotId);
+  // 交给伙伴与否按每条消息现读: 设置页那份个人机器人可以随时在「谁来回复」里切换。
+  const isCompanion = (): boolean => Boolean(
+    typeof options.companionBotId === 'function' ? options.companionBotId() : options.companionBotId,
+  );
   // 同一条群任务会混入 owner 与非 owner 的消息。Full access 只能取缔 owner
   // 触发轮次的逐轮策略；用对象身份记录这批 policy，避免把会话级权限误当成
   // 整个群所有成员的授权。WeakSet 不延长排队 policy 的生命周期。
@@ -121,7 +128,7 @@ export function buildTelegramAdapter(
         decodeTelegramLaneUserId(userId)
           ? `[TG·群] ${userId.slice(-6)}`
           : `[TG·DM] ${userId.slice(-6)}`,
-      generatedTitlePrefix: 'TG · ',
+      generatedTitlePrefix: 'Telegram · ',
       // 私聊与群 lane 的工作目录都是 app 托管目录, 不该聚成假项目组。
       workspaceKind: 'dialogue',
       ensureWorkingDir,
@@ -167,7 +174,7 @@ export function buildTelegramAdapter(
           cursorScope: lane.threadId,
           triggerMessageId,
         }).catch(() => ({ prefix: '' })),
-        (options.describeSelfForAmbientJudge ?? describePersonaForAmbientJudge)().catch(() => ({
+        (isCompanion() && options.describeSelfForAmbientJudge ? options.describeSelfForAmbientJudge : describePersonaForAmbientJudge)().catch(() => ({
           name: '',
           description: '',
         })),
@@ -198,7 +205,7 @@ export function buildTelegramAdapter(
       if (!event.speaker) return undefined;
       // 伙伴自有 bot(2026-10-16 Chris 裁决): 伙伴设置里的权限档是唯一开关。主人触发
       // 的轮次不另挂策略; 成员 / 外部用户触发的轮次只在破坏性动作上要主人确认。
-      if (companion) {
+      if (isCompanion()) {
         return event.speaker.isOwner
           ? undefined
           : createTelegramGuestTurnPermissionPolicy(event.messageId, false);
@@ -218,7 +225,7 @@ export function buildTelegramAdapter(
     // 无法兑现逐轮策略, 成员触发的轮次同样取缔策略而不是拒跑 —— 要成员动手前
     // 必须确认, 把伙伴设成 Auto 或 Ask。
     turnPolicyOptionalForMode: (mode, policy) =>
-      mode === 'bypassPermissions' && (companion || ownerGroupTurnPolicies.has(policy)),
+      mode === 'bypassPermissions' && (isCompanion() || ownerGroupTurnPolicies.has(policy)),
     groupHistoryAccessFor: (event): GroupHistoryAccessScope | undefined => {
       const lane = decodeTelegramLaneUserId(event.senderId);
       // Keep the verified identity check even though transport rejects guest DMs;
@@ -275,15 +282,15 @@ export function buildTelegramAdapter(
         chatKind: lane ? 'group' : 'direct',
         requesterIsOwner,
         triggerMessageId,
-        companion,
+        companion: isCompanion(),
       };
     },
     prepareAgentTurnText: async (event) => {
       const lane = decodeTelegramLaneUserId(event.senderId);
       const replyBlock = event.replyContext
-        ? buildTelegramReplyContextBlock(event.replyContext)
+        ? buildTelegramReplyContextBlock(event.replyContext, event.text)
         : '';
-      const persona = companion ? '' : personaBlock();
+      const persona = isCompanion() ? '' : personaBlock();
       if (!lane) {
         // DM: 无群窗口, 但人格块与引用注入(回复某条消息触发)同样生效。
         if (!replyBlock && !persona) return null;
@@ -308,15 +315,30 @@ export function buildTelegramAdapter(
       });
       // 「先发视频/图片、再单独 @bot」: 群上下文里纳入的那些消息带的附件一并补齐,
       // 只进模型消息不落库(contextAttachments 语义, 与飞书群上下文同口径)。
-      // 下载失败不阻断本轮 — 说明块会把原因交给模型。ambient(全响应)轮次不补:
-      // 每条普通群消息都会起一轮, 逐轮下载群里的音视频代价过高, 仍只给文件名。
+      // 下载失败不阻断本轮 — 说明块会把原因交给模型。ambient(全响应)轮次仍不下载音视频/文件,
+      // 但允许补齐同发言人 2 分钟内最多 2 张图片(覆盖「转发图 + 单独附言」), 失败静默降级。
       const historyMedia = event.ambient
-        ? { attachments: [], unavailable: [] }
+        ? event.speaker?.id && (assembly.messageIds?.length ?? 0) > 0
+          ? await telegramIm
+              .collectGroupHistoryMedia(
+                lane.chatId,
+                assembly.messageIds ?? [],
+                event.raw as Parameters<TelegramIM['collectGroupHistoryMedia']>[2],
+                {
+                  provided: event.attachments,
+                  imagesOnly: true,
+                  sameSenderId: event.speaker.id,
+                  maxAgeMs: AMBIENT_HISTORY_IMAGE_MAX_AGE_MS,
+                  maxImages: AMBIENT_HISTORY_MAX_IMAGES,
+                },
+              )
+              .catch(() => ({ attachments: [], unavailable: [] }))
+          : { attachments: [], unavailable: [] }
         : await telegramIm
             .collectGroupHistoryMedia(
               lane.chatId,
               assembly.messageIds ?? [],
-              // 触发消息的相册成员与被引消息已随本轮附件送达, 由 transport 排除。
+              // 触发消息的相册成员、并入的转发同批成员与被引消息已随本轮附件送达, 由 transport 排除。
               event.raw as Parameters<TelegramIM['collectGroupHistoryMedia']>[2],
               { attachmentMessageIds: assembly.attachmentMessageIds, provided: event.attachments },
             )

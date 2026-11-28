@@ -8,6 +8,7 @@ import { RemoteAgentRunClient, remoteAgentInvoker } from './runClient.js';
 import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../../appSessionState.js';
 import { getClientEndpoint } from '../../clientEndpointsService.js';
 import { findReceivedShare, findReceivedShareForExecution, providerShareAccessEpoch } from '../../device-link/providerShareGuest.js';
+import { hasLinkedProviderShareGuest, noteLinkedProviderShareExecutor } from '../../device-link/agentNetLinkedShares.js';
 import { probeSharedTask, sharedTaskFailureReason, sharedTaskRecoveryError, sharedTaskRecoveryReason } from '../../../shared/sharedTaskRecovery.js';
 import { readAgentNetStandbyPlacement, type AgentNetStandbyPlacement } from './agentNetStandbyPlacement.js';
 
@@ -30,7 +31,7 @@ export function rememberSharedTaskAuthorization(ownerRoute: string, sessionId: s
   const ownerEpoch = getRemoteLinkCloseEpoch(ownerRoute);
   const shareId = parseProviderShareAgentDeviceId(ownerRoute);
   const findShare = grant.standby ? findReceivedShareForExecution : findReceivedShare;
-  const share = shareId ? findShare(shareId) : null;
+  const share = shareId ? findShare(shareId, { existingLease: true }) : null;
   if (!share || share.status !== 'active') return;
   const accessEpoch = providerShareAccessEpoch(shareId!);
   const ownerTarget = share.hostDeviceId ? providerShareHostPeer(shareId!, share.hostDeviceId) : ownerRoute;
@@ -42,7 +43,7 @@ export function rememberSharedTaskAuthorization(ownerRoute: string, sessionId: s
       if (retainedTasks.get(key) === entry) retainedTasks.delete(key);
       return false;
     }
-    const now = shareId ? findShare(shareId) : null;
+    const now = shareId ? findShare(shareId, { existingLease: true }) : null;
     return retainedTasks.get(key) === entry && !isAppSessionBoundaryPending() && activeOwnerScopeKey() === owner
       && getClientEndpoint('deviceLinkApiBaseUrl') === endpoint
       && getRemoteLinkCloseEpoch(grant.target) === closeEpoch && getRemoteLinkCloseEpoch(ownerRoute) === ownerEpoch
@@ -123,13 +124,15 @@ export async function authorizeSharedTaskExecutor(
   const value = await (saved ? allocateShareAvailability(shareId, sessionId, agentKind, model)
     : remoteAgentInvoker(ownerRoute, remoteBackgroundInvoke)([{
       op: 'allocate', sessionId, agentKind, model, preferredExecutorDeviceId: deviceId,
+      ...(hasLinkedProviderShareGuest(shareId) ? { linkedShareExecutor: true as const } : {}),
     }])).catch(error => {
     signal?.throwIfAborted();
     if (isShareStateError(error)) throw error;
     if (error instanceof Error && sharedTaskRecoveryReason(error.message)) throw error;
     throw sharedTaskRecoveryError('allocation', sharedTaskFailureReason(error), error);
   });
-  const row = value && typeof value === 'object' ? value as { deviceId?: unknown; generation?: unknown } : null;
+  const row = value && typeof value === 'object'
+    ? value as { deviceId?: unknown; generation?: unknown; linkedShareExecutor?: unknown } : null;
   const generation = typeof row?.generation === 'string' && GRANT_ID.test(row.generation) ? row.generation : undefined;
   try {
     signal?.throwIfAborted();
@@ -137,8 +140,16 @@ export async function authorizeSharedTaskExecutor(
       // A legacy O returns null without a reason. Never invent an offline verdict.
       throw sharedTaskRecoveryError('allocation', row?.deviceId ? 'history' : 'unknown');
     }
+    const leaseDeadline = sharedTaskLeaseDeadline(value, requestedAt);
+    if (row.linkedShareExecutor === true) {
+      noteLinkedProviderShareExecutor(shareId, deviceId,
+        requestedWall + Math.max(0, (leaseDeadline ?? requestedAt + 30 * 60_000) - requestedAt));
+    }
     const requireCurrentLink = (): void => {
       signal?.throwIfAborted();
+      if (leaseDeadline !== undefined && performance.now() >= leaseDeadline) {
+        throw sharedTaskRecoveryError('authorization', 'history');
+      }
       if (retainedWindow && !retainedWindow.current()) {
         throw sharedTaskRecoveryError('authorization', 'history');
       }
@@ -159,14 +170,13 @@ export async function authorizeSharedTaskExecutor(
     await probeSharedTask('executor', async () => {
       if (isCrossRegionProviderShareTarget(target)) await renewCrossRegionProviderShareLink(target);
       else await openRemoteLink(target);
-    }, requireCurrentLink);
+    }, requireCurrentLink, signal);
     requireCurrentLink();
-    const caps = await probeSharedTask('capability', () => RemoteAgentRunClient.caps(remoteAgentInvoker(target, remoteBackgroundInvoke)), requireCurrentLink);
+    const caps = await probeSharedTask('capability', () => RemoteAgentRunClient.caps(remoteAgentInvoker(target, remoteBackgroundInvoke)), requireCurrentLink, signal);
     requireCurrentLink();
     if (!caps.directGuestExecution || !caps.agents.some(agent => agent.kind === agentKind && agent.available)) {
       throw sharedTaskRecoveryError('capability', 'unsupported');
     }
-    const leaseDeadline = sharedTaskLeaseDeadline(value, requestedAt);
     const grant: SharedTaskAuthorization = { target, direct: true, ...(saved ? { availability: true } : {}), ...(generation ? { generation } : {}),
       ...((value as { directStatusBatch?: unknown } | null)?.directStatusBatch === true ? { directStatusBatch: true } : {}),
       ...(leaseDeadline !== undefined ? { leaseDeadline, wallDeadline: requestedWall + leaseDeadline - requestedAt,

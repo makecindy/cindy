@@ -1,4 +1,35 @@
-import type { RemoteForward, RemoteForwardSpec } from '@cindy/maker-remote-ssh';
+import type { RemoteForward, RemoteForwardSpec, RemoteHost } from '@cindy/maker-remote-ssh';
+
+/**
+ * Check HTTP reachability on the Pi execution host, never the controlling Desktop.
+ * This is not provider authentication: a 401/404/405 still proves an HTTP listener.
+ * Only the origin is probed, with no auth, curl config, proxy, redirects or response body.
+ * The selected provider URL and its credentials continue through the ordinary Pi path.
+ */
+export async function probePiRemoteProviderEndpoint(
+  host: Pick<RemoteHost, 'exec'>,
+  baseUrl: string,
+): Promise<boolean> {
+  try {
+    const url = new URL(baseUrl);
+    const hostname = url.hostname.replace(/^\[|\]$/g, '');
+    if (!['http:', 'https:'].includes(url.protocol) || !(
+      hostname === 'localhost' || hostname === '::1' ||
+      /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(hostname)
+    )) return false;
+    // URL.origin omits userinfo, path, query and fragment. The validated loopback
+    // origin contains no shell metacharacters; quoting is still explicit.
+    const origin = url.origin.replace(/'/g, "'\\''");
+    const result = await host.exec(
+      `curl --disable --silent --head --output /dev/null --connect-timeout 2 --max-time 3 ` +
+        `--noproxy '*' --proto '=http,https' --max-redirs 0 --write-out '%{http_code}' '${origin}/'`,
+      { timeoutMs: 5_000, maxOutputBytes: 1024, label: 'pi-provider-reachability' },
+    );
+    return result.exitCode === 0 && !result.truncated && /^[1-5]\d{2}$/.test(result.stdout.trim());
+  } catch {
+    return false;
+  }
+}
 
 interface ProviderForwardEntry {
   pending: Promise<RemoteForward>;

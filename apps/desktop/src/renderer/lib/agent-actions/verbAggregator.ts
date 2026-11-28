@@ -27,9 +27,17 @@
  */
 
 import type { TFunction } from 'i18next';
-import type { CommandIntentAction } from '@cindy/maker-shared';
+import {
+  formatCollabTargetsSummary,
+  type CommandIntentAction,
+  type ToolUseDescriptor,
+} from '@cindy/maker-shared';
 
-import { INTENT_ROW_VERB_KEY } from '../../../shared/agentActionVerbKeys';
+import {
+  COLLAB_ROW_COUNT_VERB_KEY,
+  COLLAB_ROW_VERB_KEY,
+  INTENT_ROW_VERB_KEY,
+} from '../../../shared/agentActionVerbKeys';
 
 import type { ChatMessage } from '@/lib/makerChatStore';
 
@@ -123,6 +131,35 @@ const ROW_VERB_KEY: Record<Verb, string> = {
  */
 export function verbLabelKeyForIntent(action: CommandIntentAction): string {
   return INTENT_ROW_VERB_KEY[action];
+}
+
+/** Resolve i18n key (+ optional count) for a Codex `collab:*` descriptor row verb. */
+export function verbLabelKeyForCollab(
+  descriptor: Extract<ToolUseDescriptor, { kind: 'collab' }>,
+): { key: string; count?: number } | null {
+  if (descriptor.action === 'other') return null;
+  if (!descriptor.targets?.length && descriptor.targetCount && descriptor.targetCount > 0) {
+    return { key: COLLAB_ROW_COUNT_VERB_KEY[descriptor.action], count: descriptor.targetCount };
+  }
+  return { key: COLLAB_ROW_VERB_KEY[descriptor.action] };
+}
+
+/** Single-line localized label for a Codex `collab:*` tool call (shared with teammate summaries). */
+export function formatCollabRowLabel(
+  descriptor: Extract<ToolUseDescriptor, { kind: 'collab' }>,
+  t: TFunction,
+): string {
+  if (descriptor.action === 'other') {
+    return `${t('chat.agentActionRow.verb.used')} ${descriptor.toolLabel}`.trim();
+  }
+  const targets = formatCollabTargetsSummary(descriptor.targets, descriptor.targetCount);
+  if (targets) {
+    return `${t(COLLAB_ROW_VERB_KEY[descriptor.action])} ${targets}`.trim();
+  }
+  if (descriptor.targetCount && descriptor.targetCount > 0) {
+    return t(COLLAB_ROW_COUNT_VERB_KEY[descriptor.action], { count: descriptor.targetCount });
+  }
+  return t(COLLAB_ROW_VERB_KEY[descriptor.action]);
 }
 
 /** Pure helper — exposed for unit testing the per-row label too. */

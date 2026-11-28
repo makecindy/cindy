@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, render } from '@testing-library/react';
+import { act, fireEvent, render } from '@testing-library/react';
 import { createElement, type PropsWithChildren } from 'react';
 import { MemoryRouter } from 'react-router-dom';
 import { EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES } from '@/cindy-brain/PluginUiContributions';
@@ -114,6 +114,36 @@ describe('PendingQueueBubble after a plugin edit', () => {
     expect(rendered.getByText('Queue Editor', { exact: true })).toBeTruthy();
     expect(rendered.container.querySelector('[data-pending-queue-message="client-1"]')).toBe(bubble);
     if (withAttachment) expect(rendered.getByText(file.name, { exact: true })).toBeTruthy();
+  });
+});
+
+// 插件引擎不支持同轮插话时，任务视图不传 onSteer：排队消息的菜单不出现插话，其他操作照旧。
+// 缺口：此前插话项始终显示，点了之后变成报错。最小失败输入：不传 onSteer 的普通排队消息。
+describe('PendingQueueBubble steer action', () => {
+  it.each([true, false])('offers steer only when the task can take it (steerable=%s)', async (steerable) => {
+    const rendered = render(createElement(PendingQueueBubble, {
+      pluginUi: EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES,
+      entry: queuedMessage(),
+      index: 0,
+      count: 1,
+      editingClientId: null,
+      steeringClientIds: [],
+      editLocks: [],
+      interactionLocks: [],
+      onEdit: () => {},
+      onRemove: () => {},
+      onMove: () => {},
+      ...(steerable ? { onSteer: async () => true } : {}),
+    }), {
+      wrapper: ({ children }: PropsWithChildren) =>
+        createElement(MemoryRouter, null, createElement(ConfirmDialogProvider, { children })),
+    });
+    await act(async () => {});
+    const trigger = rendered.getByRole('button', { name: i18n.t('newChat.pendingQueue.queued') });
+    await act(async () => { fireEvent.keyDown(trigger, { key: 'Enter' }); });
+
+    expect(rendered.getByRole('menuitem', { name: i18n.t('newChat.pendingQueue.editAction') })).toBeTruthy();
+    expect(Boolean(rendered.queryByRole('menuitem', { name: i18n.t('newChat.pendingQueue.steerAction') }))).toBe(steerable);
   });
 });
 

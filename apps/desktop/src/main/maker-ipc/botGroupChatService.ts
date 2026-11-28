@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { groupTaskName, type GroupTaskTopic } from './groupTaskNaming.js';
 import { messageSourceSenderFromMeta, parseSourceSessionTarget } from '@cindy/maker-shared/message-source';
 import path from 'node:path';
 
@@ -93,7 +94,8 @@ type DispatchResult =
   | { ok: true; targetSessionId: string; wakeKind: string }
   | { ok: false; errorCode: string; message: string };
 
-type LaneResult = { ok: true; sessionId: string; replacedSessionId?: string } | { ok: false; errorCode: string; message: string };
+/** `permissionSynced`: the lane was reused and its permission reconciled just now (`syncLanePermission`). */
+type LaneResult = { ok: true; sessionId: string; created?: boolean; replacedSessionId?: string; permissionSynced?: boolean } | { ok: false; errorCode: string; message: string };
 
 interface TurnExecution {
   instanceId: string;
@@ -136,6 +138,7 @@ export interface BotGroupChatServiceDeps {
     botId: string;
     groupId: string;
     title: string;
+    topic?: GroupTaskTopic;
     chatAccess?: import('../../shared/botGroupChat.js').ChatLaneAccess;
     plan?: { planId: string; workDir: string; sessionId?: string };
     threadRootId?: string;
@@ -145,10 +148,13 @@ export interface BotGroupChatServiceDeps {
     projectDir?: string;
     continueConversation?: boolean;
   }) => Promise<LaneResult>;
+  refineTopicTitle?: (sessionId: string, initialTitle: string | undefined, topic: GroupTaskTopic) => void;
   /** Live native context identity; absent/unknown means background must be restored. */
   readLaneContext?: (sessionId: string) => { key: string; contextTokens: number } | null;
   /** Same hidden, durable input path as Bot DMs; attachments go with the turn like a task message's. */
   dispatch: (params: {
+    /** Set by the host only after resolving the visible Cindy task for this room or thread. */
+    groupAssistantTask?: true;
     targetSessionId: string;
     message: string;
     persistedContent: string;
@@ -175,7 +181,7 @@ export interface BotGroupChatServiceDeps {
    * folder (`projectDir`) or under 「对话」 (null), with this user's new-task model and permission.
    */
   ensureGroupAssistantSession?: (input: { sessionId?: string; title: string; projectDir: string | null }) =>
-    Promise<{ ok: true; sessionId: string; created: boolean } | { ok: false; errorCode: string; message: string }>;
+    Promise<{ ok: true; sessionId: string; created: boolean; modelFallback?: { name?: string } } | { ok: false; errorCode: string; message: string }>;
   /**
    * Turns a composer's attachments into stored ones (bot-group-chat.md §3.1): images end up
    * in the media store under this group, files stay where they are on this computer or, from
@@ -202,12 +208,14 @@ export interface BotGroupChatServiceDeps {
   decidePlan?: (input: PlanDecisionInput, signal: AbortSignal) => Promise<PlanDecision | null>;
   workDir?: Pick<BotGroupWorkDir, 'prepare' | 'snapshot' | 'changedFiles' | 'trashGroupFolder'>;
   /** Existing local directory usable as a 项目文件夹 (same rules as new-task projects). */
-  validateProjectDir?: (dir: string) => Promise<{ ok: true; dir: string } | { ok: false; message: string }>;
+  validateProjectDir?: (dir: string) => Promise<{ ok: true; dir: string } | { ok: false; message: string; errorCode?: 'PROJECT_NOT_REGISTERED' | 'INVALID_PARAMS' }>;
   /**
    * A task this computer runs, for its group card: title, state and recorded pull request; null
    * when the task is gone (bot-group-chat.md §10).
    */
-  readGroupTaskStatus?: (taskId: string) => Promise<{ title: string; state?: 'running' | 'waiting' | 'idle' | 'failed'; prUrl?: string; model?: string } | null>;
+  readGroupTaskStatus?: (taskId: string, options?: { model?: boolean }) => Promise<{ title: string; state?: 'running' | 'waiting' | 'idle' | 'failed'; prUrl?: string; model?: string } | null>;
+  /** Main-owned exact input liveness, including queue/steering and automatic recovery. No I/O. */
+  isGroupInputLive?: (sessionId: string, clientId: string) => boolean;
   /** The task whose `send_to_session` a turn answered (bot-group-chat.md §10); defaults to the stored message. */
   readInputSenderTask?: (sessionId: string, inputClientId: string) => Promise<string | null>;
   /** Registered project folders on this computer that are checkouts of this repository (any remote). */
@@ -1033,7 +1041,7 @@ export function createBotGroupChatService(deps: BotGroupChatServiceDeps) {
     mentioned: 'you' | 'everyone' | null,
     scope: DataOwnerBroadcastScope | undefined,
   ): Promise<TurnOutcome> => {
-    const lane = await deps.ensureLane({ botId: member.botId, groupId: group.id, title: group.name });
+    const lane = await deps.ensureLane({ botId: member.botId, groupId: group.id, ...groupTaskName(group.name, member.name) });
     if (round.cancelled || !scopeIsCurrent(scope)) return { kind: 'cancelled' };
     if (!lane.ok) return unavailableLaneOutcome(lane.errorCode, lane.message);
     // A lane must never act on a stale, looser permission profile than its Bot now has.
@@ -1611,7 +1619,7 @@ export function createBotGroupChatService(deps: BotGroupChatServiceDeps) {
       const lane = await deps.ensureLane({
         botId: step.botId,
         groupId,
-        title: group.name,
+        ...groupTaskName(group.name, member.name, step.task),
         plan: { planId, workDir, sessionId: ownerSessionId },
       });
       if (!live()) return;
@@ -1984,10 +1992,8 @@ export function createBotGroupChatService(deps: BotGroupChatServiceDeps) {
         if (typeof raw.projectDir !== 'string' || !raw.projectDir || raw.projectDir.length > MAX_PROJECT_DIR_CHARS) {
           return failure('INVALID_PARAMS', '项目文件夹无效');
         }
-        const checked = deps.validateProjectDir
-          ? await deps.validateProjectDir(raw.projectDir).catch(() => ({ ok: false as const, message: '' }))
-          : ({ ok: false as const, message: '' });
-        if (!checked.ok) return failure('INVALID_PARAMS', checked.message || '项目文件夹不可用');
+        const checked = await deps.validateProjectDir?.(raw.projectDir).catch(() => undefined);
+        if (!checked?.ok) return failure(checked?.errorCode ?? 'INVALID_PARAMS', checked?.message || '项目文件夹不可用');
         patch.projectDir = checked.dir;
       }
     }

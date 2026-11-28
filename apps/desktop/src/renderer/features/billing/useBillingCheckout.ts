@@ -3,9 +3,11 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type {
   BillingPaymentOrder,
   BillingSubscription,
+  CreateBillingGiftCardOrderRequest,
   CreateBillingSubscriptionRequest,
   CreateBillingTopupRequest,
 } from '../../../shared/billing';
+import { extractIpcError } from '@/utils/ipcError';
 import { billingApi } from './api';
 import { clearLegacyBillingIntentStorage, newBillingIdempotencyKey } from './checkoutIntent';
 
@@ -19,17 +21,29 @@ export type BillingCheckoutPhase =
  */
 export type BillingCheckoutIntent =
   | { kind: 'TOPUP'; idempotencyKey: string; request: CreateBillingTopupRequest }
+  | {
+      kind: 'GIFT_CARD';
+      idempotencyKey: string;
+      request: CreateBillingGiftCardOrderRequest;
+      /** 单张面额，供支付弹窗写「礼品卡 ¥100 × 2」。 */
+      unitAmount: string;
+    }
   | { kind: 'SUBSCRIPTION'; idempotencyKey: string; request: CreateBillingSubscriptionRequest }
   | { kind: 'TOPUP_RETRY'; idempotencyKey: string; orderId: string };
 
+/** 创建订单时服务端明确拒绝的原因；其它失败（网络、5xx）统一按请求失败说明。 */
+export type BillingCheckoutFailure = 'GIFT_CARD_LIMIT_REACHED' | 'GIFT_CARD_AMOUNT_TOO_LARGE';
+
 export type BillingCheckoutState = {
   open: boolean;
+  /** TOPUP 是一次性订单（充值或礼品卡，见 isGiftCardCheckout）；SUBSCRIPTION 是订阅首购。 */
   kind: 'TOPUP' | 'SUBSCRIPTION' | null;
   phase: BillingCheckoutPhase;
   intent: BillingCheckoutIntent | null;
   order: BillingPaymentOrder | null;
   subscription: BillingSubscription | null;
   error: boolean;
+  failure: BillingCheckoutFailure | null;
 };
 
 const INITIAL_STATE: BillingCheckoutState = {
@@ -40,7 +54,20 @@ const INITIAL_STATE: BillingCheckoutState = {
   order: null,
   subscription: null,
   error: false,
+  failure: null,
 };
+
+/** 这次结算买的是礼品卡：重试后的新订单仍带着同一个礼品卡意图。 */
+export function isGiftCardCheckout(state: BillingCheckoutState): boolean {
+  return state.order?.productKind === 'GIFT_CARD' || state.intent?.kind === 'GIFT_CARD';
+}
+
+function failureOf(error: unknown): BillingCheckoutFailure | null {
+  const code = extractIpcError(error)?.code;
+  if (code === 'GIFT_CARD_PURCHASE_LIMIT_REACHED') return 'GIFT_CARD_LIMIT_REACHED';
+  if (code === 'GIFT_CARD_ORDER_AMOUNT_TOO_LARGE') return 'GIFT_CARD_AMOUNT_TOO_LARGE';
+  return null;
+}
 
 function phaseForOrder(order: BillingPaymentOrder): BillingCheckoutPhase {
   if (order.status === 'FAILED') return 'FAILED';
@@ -80,6 +107,7 @@ export function useBillingCheckout(accountId: string | null) {
         order,
         subscription: null,
         error: false,
+        failure: null,
       });
     },
     [],
@@ -96,14 +124,16 @@ export function useBillingCheckout(accountId: string | null) {
         order: null,
         subscription,
         error: false,
+        failure: null,
       });
     },
     [],
   );
 
-  const failCurrentOperation = useCallback((session: number) => {
+  const failCurrentOperation = useCallback((session: number, error?: unknown) => {
     if (!mountedRef.current || session !== sessionRef.current) return;
-    setState((current) => ({ ...current, phase: 'FAILED', error: true }));
+    const failure = failureOf(error);
+    setState((current) => ({ ...current, phase: 'FAILED', error: true, failure }));
   }, []);
 
   const flagError = useCallback((session: number) => {
@@ -138,12 +168,48 @@ export function useBillingCheckout(accountId: string | null) {
         order: null,
         subscription: null,
         error: false,
+        failure: null,
       });
       await withRequestLock(session, async () => {
         try {
           applyOrder(await billingApi.createTopup(request, intent.idempotencyKey), intent, session);
         } catch {
           failCurrentOperation(session);
+        }
+      });
+    },
+    [accountId, applyOrder, failCurrentOperation, withRequestLock],
+  );
+
+  const startGiftCard = useCallback(
+    async (request: CreateBillingGiftCardOrderRequest, unitAmount: string) => {
+      if (!accountId || inFlightRef.current === sessionRef.current) return;
+      const session = ++sessionRef.current;
+      const intent: BillingCheckoutIntent = {
+        kind: 'GIFT_CARD',
+        idempotencyKey: newBillingIdempotencyKey('gift-card'),
+        request,
+        unitAmount,
+      };
+      setState({
+        open: true,
+        kind: 'TOPUP',
+        phase: 'CREATING',
+        intent,
+        order: null,
+        subscription: null,
+        error: false,
+        failure: null,
+      });
+      await withRequestLock(session, async () => {
+        try {
+          applyOrder(
+            await billingApi.createGiftCardOrder(request, intent.idempotencyKey),
+            intent,
+            session,
+          );
+        } catch (error) {
+          failCurrentOperation(session, error);
         }
       });
     },
@@ -167,6 +233,7 @@ export function useBillingCheckout(accountId: string | null) {
         order: null,
         subscription: null,
         error: false,
+        failure: null,
       });
       await withRequestLock(session, async () => {
         try {
@@ -231,7 +298,7 @@ export function useBillingCheckout(accountId: string | null) {
     if (current.intent?.kind === 'TOPUP' && !current.order) {
       const intent = current.intent;
       const session = sessionRef.current;
-      setState((value) => ({ ...value, phase: 'CREATING', error: false }));
+      setState((value) => ({ ...value, phase: 'CREATING', error: false, failure: null }));
       await withRequestLock(session, async () => {
         try {
           applyOrder(
@@ -245,10 +312,27 @@ export function useBillingCheckout(accountId: string | null) {
       });
       return;
     }
+    if (current.intent?.kind === 'GIFT_CARD' && !current.order) {
+      const intent = current.intent;
+      const session = sessionRef.current;
+      setState((value) => ({ ...value, phase: 'CREATING', error: false, failure: null }));
+      await withRequestLock(session, async () => {
+        try {
+          applyOrder(
+            await billingApi.createGiftCardOrder(intent.request, intent.idempotencyKey),
+            intent,
+            session,
+          );
+        } catch (error) {
+          failCurrentOperation(session, error);
+        }
+      });
+      return;
+    }
     if (current.intent?.kind === 'SUBSCRIPTION' && !current.subscription) {
       const intent = current.intent;
       const session = sessionRef.current;
-      setState((value) => ({ ...value, phase: 'CREATING', error: false }));
+      setState((value) => ({ ...value, phase: 'CREATING', error: false, failure: null }));
       await withRequestLock(session, async () => {
         try {
           applySubscription(
@@ -277,6 +361,7 @@ export function useBillingCheckout(accountId: string | null) {
       order: previousOrder,
       subscription: null,
       error: false,
+      failure: null,
     });
     await withRequestLock(session, async () => {
       try {
@@ -348,6 +433,7 @@ export function useBillingCheckout(accountId: string | null) {
   return {
     state,
     startTopup,
+    startGiftCard,
     startSubscription,
     refreshActive,
     retry,

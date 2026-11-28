@@ -87,8 +87,10 @@ describe('production credential recovery wiring', () => {
       const request = vi.fn();
       const recordStartupResult = vi.fn();
       const getAuthState = vi.fn(() => outcome);
+      const refresh = vi.fn();
       const deps = {
         hostClientMode,
+        companyReporting: hostClientMode ? null : { refresh },
         ipcMain: {
           handle: (_channel: string, callback: typeof handler) => {
             handler = callback;
@@ -109,6 +111,7 @@ describe('production credential recovery wiring', () => {
       if (rejects) await expect(handler()).rejects.toBe(outcome);
       else await expect(handler()).resolves.toBe(outcome);
       expect(request).toHaveBeenCalledTimes(hostClientMode ? 0 : 1);
+      expect(refresh).toHaveBeenCalledTimes(!rejects && !hostClientMode ? 1 : 0);
       if (!rejects && versionLaunchPending) {
         expect(recordStartupResult).toHaveBeenCalledExactlyOnceWith(
           outcome,

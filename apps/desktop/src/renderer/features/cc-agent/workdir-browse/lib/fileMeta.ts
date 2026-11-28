@@ -1,6 +1,7 @@
 /**
  * Shared file metadata helpers for workdir-browse preview surfaces.
  */
+import { isWindowsPathLike } from '@/../shared/workingDir';
 
 export function formatBytes(n: number): string {
   if (n < 1024) return `${n} B`;
@@ -32,15 +33,14 @@ export function joinPath(a: string, b: string): string {
 }
 
 /**
- * 把 (workdir, relPath) 拼成当前 OS 的绝对路径,Windows 把所有 `/` 归一化为 `\`,
+ * 把 (workdir, relPath) 拼成文件所在系统的绝对路径,Windows 把所有 `/` 归一化为 `\`,
  * POSIX 保持 `/`。用于复制路径到剪贴板等需要 OS-native 形态的场景。
  *
  * 与 `joinPath` 的区别:`joinPath` 始终用 `/`(项目内部统一形态);本函数则按
  * 平台输出,只在"对外"场景(剪贴板 / "在系统中打开")用。
  */
 export function toOsAbsolutePath(workdir: string, relPath: string): string {
-  const isWin = window.electronAPI?.platform === 'win32';
-  if (isWin) {
+  if (isWindowsPathLike(workdir)) {
     const normalizedWd = workdir.replace(/\//g, '\\');
     const normalizedRel = relPath.replace(/\//g, '\\');
     const sep = normalizedWd.endsWith('\\') ? '' : '\\';

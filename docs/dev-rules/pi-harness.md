@@ -81,9 +81,10 @@ Cindy 以 `pi --mode rpc` spawn pi 二进制(JSONL/stdio),`translator.ts` 把 pi
   再按具体 server + tool 取完整说明及单个 schema，
   未检查 schema 的调用在 bridge 内 fail closed，不会触达 MCP 或弹权限框。门按会话与
   当前工具 schema 指纹记账：Pi 升级不再作废未变 schema 的披露，schema 真变动时门重新武装。
-  首次未披露的调用在**发起权限询问之前**被拦下——不弹权限框、不触达 MCP，回执指名该查的
-  server／tool 并说明重发即可放行（模型补完 `cindy_mcp_list_tools` 后重发即通过，重发那次
-  正常过一次权限）。上下文压缩成功后，bridge 会在下一次运行开始前注入一条一次性的已披露
+  首次未披露的调用在**发起权限询问之前**被拦下。工具说明和输入 schema 序列化后合计不超过
+  2048 个 UTF-16 代码单元时，回执给出完整定义，模型可以直接修正参数后重发；较大的定义仍按
+  server／tool 定向查询。发出该回执时没有执行工具，重发时正常审批。上下文压缩成功后，
+  bridge 会在下一次运行开始前注入一条一次性的已披露
   工具清单提醒（display:false 常驻上下文，只列仍存在且指纹仍匹配的工具），避免模型因压缩
   失忆而重跑 `cindy_mcp_list_tools`；这是提示卫生，不改变门的任何判定。Host 审批、策略与变更捕获仍使用真实
   `mcp__<server>__<tool>` identity 和真实参数，不能退化成对网关包装器授权。Claude Code 与
@@ -255,6 +256,11 @@ Claude Code、Codex 共用同一模型比例，各自适配原生参数。env:`C
 外部 MCP 专用动态 env、`PI_OFFLINE=1`(关启动期联网)、`NO_PROXY` 兜底 loopback(防全局代理
 打穿本地 proxy 与 MCP bridge)。
 
+桌面本机启动的 Pi（含在该电脑上托管的分享任务）保留显式代理环境。未设置代理变量时，
+其 HTTPS 连接使用桌面回环 CONNECT 桥，按每个目标主机和端口查询执行电脑的系统代理或 PAC。
+切换模型或系统代理后，新连接沿用桌面解析器的短时缓存；已建立的连接继续使用原路径。
+本机地址沿用 Pi 的 `NO_PROXY`，SSH 会话独立使用已配置的远端转发。
+
 用户重试已被 Pi 接受但零产出的失败输入时，用持久化的原生 user entry id 精确定位当前
 分支；确认后续只有空的错误响应及模型／推理档位变更记录，再通过原生树导航回到输入之前重发。
 导航只回退消息，保留当前模型和推理档位；重新打开任务时仍由 Cindy 已保存的选择恢复设置。
@@ -406,7 +412,7 @@ Pi CLI 管理入口、内核自更新与旧工具兼容的执行边界见
    本地非 Review、非隔离 Bot（V2 伙伴项目里的主人私聊按普通任务）、非 SSH 的 root 任务用重复 `--skill` / `--prompt-template` /
    `--extension` 把仓库原路径交给 Pi：`.pi/skills` 与 cwd→git root 内 `.agents/skills`
    的目录型 Skill、`.pi/prompts/*.md`、`.pi/extensions/*.ts` 与 `*/index.ts`。越界 symlink
-   不传入。root 仍回装 Cindy 自有 bridge/subagent 与 pinned plan-mode。Review、Bot、子代理、
+   不传入。root 仍回装 Cindy 自有 bridge/subagent 与 pinned plan-mode；按普通任务装配的伙伴会话另挂伙伴自有技能（`ownSkills`）。Review、Bot、子代理、
    离线 `forkSdkSession` 克隆进程与远端会话不带这些项目资源。随后以 `resumeSessionId`
    恢复的本地根任务（含 fork 之后的恢复）与普通本地任务相同，加载项目资源。
    不得读取/复制项目 `.pi/settings.json`，不得传 `--approve`，

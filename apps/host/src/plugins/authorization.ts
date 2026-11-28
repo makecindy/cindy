@@ -26,6 +26,7 @@ import { ConnectionTokenProvider, type IssuedConnectionToken } from '../../../de
 import { createMainI18n } from '../../../desktop/src/main/i18n.js';
 import { createLogger } from '../../../desktop/src/main/logger.js';
 import { hostOutbound } from '../outbound.mjs';
+import { heldCredentialError, holdCredentialFetch } from '../agent/held-credentials.js';
 
 export interface PluginAccountPorts {
   hasLogin(): boolean;
@@ -49,8 +50,16 @@ export function createHostPluginAuthorization(options: {
   account: PluginAccountPorts;
   publish(channel: string, payload: unknown): void;
   signal: AbortSignal;
+  /** Coexistence plan A: whether a Cindy desktop app running on its own uses this profile. */
+  isProfileHeld?(): boolean;
 }) {
   const { owner, root, current, assertCurrent, getGhost, secret, identity, account } = options;
+  // Plugin OAuth while a desktop uses the profile (held-credentials.ts): its token requests (renewal,
+  // forced renewal after a 401, identity backfill) and broker calls are answered without the network,
+  // and its account vault writes nothing (no rotated token, no expired mark, no removed token, no
+  // insufficient scopes). A tool then fails with "…刷新令牌失败:<reason>,请稍后重试", not "reconnect".
+  const held = () => options.isProfileHeld?.() === true;
+  const heldWhat = 'this plugin sign-in is not renewed';
   const log = createLogger('host-plugin-auth');
   const i18n = createMainI18n(() => [Intl.DateTimeFormat().resolvedOptions().locale]);
   const changes = new GhostSetupChangeBus(log);
@@ -81,15 +90,20 @@ export function createHostPluginAuthorization(options: {
   const oauth = new GhostOauthAccountManager({
     connectionSources, connectionSource,
     vault: { read: secret.readGhostSecret, readStrict: secret.readGhostSecretStrict,
-      store: secret.storeGhostSecret, remove: secret.removeGhostSecret },
-    fetchImpl: (url, init) => hostOutbound.outboundFetch(url, { ...init,
-      signal: AbortSignal.any([...(init?.signal ? [init.signal] : []), options.signal]) }),
+      store: (...args) => (held() ? false : secret.storeGhostSecret(...args)),
+      remove: (...args) => { if (!held()) secret.removeGhostSecret(...args); } },
+    fetchImpl: holdCredentialFetch((url: Parameters<typeof fetch>[0], init?: RequestInit) => hostOutbound.outboundFetch(url, { ...init,
+      signal: AbortSignal.any([...(init?.signal ? [init.signal] : []), options.signal]) }), held, heldWhat),
     fetchAvatarHop: (url, init) => hostOutbound.guardedOutboundFetch(url, { ...init, credentials: 'omit',
       signal: AbortSignal.any([...(init?.signal ? [init.signal] : []), options.signal]) }, assertCurrent),
     openExternal: url => { assertCurrent(); return account.openExternal(url); },
     broker: createGhostOauthBrokerClient({
       hasLoginToken: account.hasLogin,
-      apiPost: (path, body) => { assertCurrent(); return account.post('oauthBrokerApiBaseUrl', path, body); }, logger: log,
+      apiPost: (path, body) => {
+        assertCurrent();
+        if (held()) throw heldCredentialError(heldWhat);
+        return account.post('oauthBrokerApiBaseUrl', path, body);
+      }, logger: log,
     }),
     resolveBrokerPublicUrl: path => `${account.endpoint('oauthBrokerApiBaseUrl').replace(/\/+$/, '')}${path}`,
     captureConnectTarget: target,
@@ -184,12 +198,14 @@ export function createHostPluginAuthorization(options: {
     resolveSavedCredential(id: string, key: string) {
       return savedCredentialManager().resolve(id, key);
     },
-    async cleanupSourceReferences(from: string) {
+    async cleanupSourceReferences(from: string, check?: () => void) {
       // Wait for existing source mutations, releasing that lock before taking
       // consumer locks. The manager's uninstall journal already blocks new work.
-      await withMutationLock(from, () => {});
+      await withMutationLock(from, () => check?.());
+      check?.();
       const targets = secret.listGhostAccountReferenceKeys(options.list().map(installedGhostStoragePart));
       await savedCredentialManager().relocateSourceReferences(from, null, targets);
+      check?.();
       await oauth.relocateSourceReferences(from, null, targets);
     },
     bindConnection(args: { ghostId: string; actionId: string; onCommitted(): void }) {

@@ -557,6 +557,7 @@ function RemoteBotSettingsContent({ bot, beforeCloseRef, onDeleted, initialPage 
         <><BotModelChainEditor
           label={t('bots.model.primary')}
           deviceId={bot.deviceId}
+          {...(item.modelGroups ? { hostModelGroups: item.modelGroups } : {})}
           value={readRemoteBotModelChain(draft.modelChain)}
           disabled={disabled || draft.followsDefault === true}
           onChange={(chain) => {

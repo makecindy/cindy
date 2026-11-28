@@ -7,6 +7,7 @@
 
 import { useSyncExternalStore } from 'react';
 
+import { isCompanionChatTarget } from '../bots/companionChatTarget';
 import { isSecondaryWindow } from '@/lib/secondaryWindow';
 
 export type SplitDirection = 'row' | 'column';
@@ -81,7 +82,7 @@ export function getSplitPanes(root: SplitNode | null): SplitPaneNode[] {
 }
 
 export function getSplitSessionIds(root: SplitNode | null): string[] {
-  return getSplitPanes(root).map((pane) => pane.sessionId);
+  return getSplitPanes(root).map((pane) => pane.sessionId).filter(id => !isCompanionChatTarget(id));
 }
 
 function collectNodeKeys(root: SplitNode, keys: Set<string>): void {

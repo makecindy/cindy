@@ -80,7 +80,17 @@ describe('turn cost routing regression', () => {
     expect(result.turnMoney?.amount).toBeCloseTo(7.216596, 5);
   });
 
-  it('provider API USD cost converts at 6.7 only when entering the CN ledger', () => {
+  // Unit: a mixed native catalog used to throw after both models had already been priced.
+  it('keeps one spend subtotal per currency within a multi-model turn', () => {
+    const result = resolveClaudeTurnCostSinks(
+      ['model-a', 'model-b'].map(model => delta({ model, inputTokensDelta: 1_000_000 })),
+      pricing(quote('model-a', 2, 5), {...quote('model-b', 7, 9), currency: 'CNY'}),
+      {providerId: 'xd', billingRoute: 'xd-gateway', region: 'cn'},
+    );
+    expect(result.actualByCurrency).toMatchObject([{currency: 'USD',amount: 2},{currency: 'CNY',amount: 7}]);
+  });
+
+  it('preserves the provider API USD amount on a CNY ledger', () => {
     try {
       setActiveLedgerCurrency('CNY');
       const result = resolveClaudeTurnCostSinks(
@@ -97,10 +107,10 @@ describe('turn cost routing regression', () => {
       );
 
       expect(result.turnMoney).toMatchObject({
-        currency: 'CNY',
+        currency: 'USD',
         approximate: false,
       });
-      expect(result.turnMoney?.amount).toBeCloseTo(23.45);
+      expect(result.turnMoney?.amount).toBe(3.5);
       expect(result.perModel.map((item) => item.source)).toEqual(['sdk', 'sdk']);
     } finally {
       __resetActiveLedgerCurrencyForTesting();

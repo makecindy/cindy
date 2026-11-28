@@ -1,5 +1,6 @@
 import {
   interactionKind as sharedInteractionKind,
+  interactionPriority,
   normalizeAskQuestions as sharedNormalizeAskQuestions,
   permissionToolName as sharedPermissionToolName,
   planReviewFilePath as sharedPlanReviewFilePath,
@@ -89,7 +90,9 @@ export function selectPendingInteractionByRequestId<T extends PendingInteraction
 ): T | null {
   const fallback = sharedSelectActivePendingInteraction(interactions) as T | null;
   if (!requestId) return fallback;
-  return interactions.find((item) => sharedReadRequestId(item) === requestId) ?? fallback;
+  const selected = interactions.find((item) => sharedReadRequestId(item) === requestId);
+  if (!selected || (fallback && interactionPriority(fallback) < interactionPriority(selected))) return fallback;
+  return selected;
 }
 
 export function shouldUseFullHeightPendingInteractionSurface(input: {

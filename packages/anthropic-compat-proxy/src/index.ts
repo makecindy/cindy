@@ -64,6 +64,7 @@ export {
 export {
   createActiveStripTransform,
   createToolReferenceRecoveryRule,
+  createNativeMcpHistoryRecoveryRule,
   lowerToolReferencesFromBody,
   createDuplicateToolUseIdRecoveryRule,
   createEmptyAssistantMessageRecoveryRule,

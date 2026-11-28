@@ -60,6 +60,27 @@ export function getDesktopNotificationsEnabled(): boolean {
   return desktopNotificationsEnabled;
 }
 
+/** A local protection failure can happen while the owner is away. */
+export function showPrivacyScreenNotification(title: string, body: string, openSettings: () => void): void {
+  if (!desktopNotificationsEnabled || !Notification.isSupported()) return;
+  let notification: Notification | undefined;
+  const release = () => { if (notification) liveNotifications.delete(notification); };
+  try {
+    notification = new Notification({ title, body });
+    liveNotifications.add(notification);
+    notification.on('click', () => {
+      release();
+      openSettings();
+    });
+    notification.on('close', release);
+    notification.on('failed', release);
+    notification.show();
+  } catch (error) {
+    release();
+    log.warn('Could not show privacy screen notification', error);
+  }
+}
+
 /** Chat uses the same system permission and global desktop preference as task notifications. */
 export async function showDesktopChatMessage(payload: ChatMessageNotification, current: () => boolean): Promise<void> {
   const visible = () => {

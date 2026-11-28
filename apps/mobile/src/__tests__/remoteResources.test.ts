@@ -407,6 +407,23 @@ it('preserves additive public generation state without interpreting unknown futu
   expect(normalizeRemoteCollectionItems(input({ phase: {}, startedAt: Infinity }), 'teammates')[0].display.generation).toBeUndefined();
 });
 
+// Unit, through the controller's real normalizer (the remote resource cache reads rows back through
+// it too). The inbox offers Snooze for a teammate only when the host sends `inboxSnooze`, and
+// places the row by it: a dropped valid value hides the action, a kept malformed one misplaces the row.
+it('keeps a teammate conversation snooze only when every time is null or a valid date', () => {
+  const input = (inboxSnooze?: unknown) => ({ items: [{ ref: { collectionId: 'teammates', kind: 'bot', id: 'bot' },
+    display: { title: 'Cindy', inboxSnooze }, links: [], revision: '1' }] });
+  const read = (value?: unknown) => normalizeRemoteCollectionItems(input(value), 'teammates')[0].display.inboxSnooze;
+  const none = { snoozedUntil: null, snoozedAt: null, userSendAt: null };
+  const set = { snoozedUntil: '9999-12-31T23:59:59.999Z', snoozedAt: '2026-11-20T08:00:00.000Z', userSendAt: null };
+  expect(read(none)).toEqual(none);
+  expect(read({ ...set, extra: 1 })).toEqual(set);
+  expect(read()).toBeUndefined();
+  expect(read({ ...set, snoozedAt: 'soon' })).toBeUndefined();
+  expect(read({ snoozedUntil: set.snoozedUntil })).toBeUndefined();
+  expect(read({ ...set, userSendAt: 1 })).toBeUndefined();
+});
+
 describe('bot group chat block', () => {
   const ref = { collectionId: 'bot-groups', kind: 'bot-group', id: 'g1' };
   const response = {

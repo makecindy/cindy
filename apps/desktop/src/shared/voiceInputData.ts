@@ -1,3 +1,4 @@
+import { normalizeRealtimeVoicePreferences, type RealtimeVoiceSelection } from './realtimeVoice.js';
 import { normalizeVoiceConversationPreferences, normalizeVoiceConversationSelection, normalizeSentencePlaybackOverrides, type VoiceConversationSelection } from './voiceConversation';
 import type {
   DictationDictionaryAdviceInput,
@@ -96,6 +97,8 @@ export interface VoiceInputSettings {
   conversationSelection?: VoiceConversationSelection | null;
   /** Per-companion overrides; absence inherits the default without copying it. */
   conversationSelections?: Record<string, VoiceConversationSelection | null>;
+  realtimeSelections?: Record<string, RealtimeVoiceSelection>;
+  previousRealtimeSelections?: Record<string, RealtimeVoiceSelection>;
   /** Missing entries follow the enabled default; false waits for the complete reply. */
   conversationSentencePlayback?: Record<string, boolean>;
   language: VoiceInputLanguage;
@@ -554,6 +557,8 @@ export function normalizeVoiceInputSettings(
   if (!raw || typeof raw !== 'object') return defaults;
   const candidate = raw as Partial<VoiceInputSettings>;
   const conversationSelections = normalizeVoiceConversationPreferences(candidate.conversationSelections);
+  const realtimeSelections = normalizeRealtimeVoicePreferences(candidate.realtimeSelections);
+  const previousRealtimeSelections = normalizeRealtimeVoicePreferences(candidate.previousRealtimeSelections);
   const conversationSentencePlayback = normalizeSentencePlaybackOverrides(candidate.conversationSentencePlayback);
   const legacyPlayStartSound = (candidate as { playStartSound?: unknown }).playStartSound;
   const shortcut =
@@ -564,6 +569,8 @@ export function normalizeVoiceInputSettings(
     ...(normalizeVoiceConversationSelection(candidate.conversationSelection)
       ? { conversationSelection: normalizeVoiceConversationSelection(candidate.conversationSelection) } : {}),
     ...(Object.keys(conversationSelections).length ? { conversationSelections } : {}),
+    ...(Object.keys(realtimeSelections).length ? { realtimeSelections } : {}),
+    ...(Object.keys(previousRealtimeSelections).length ? { previousRealtimeSelections } : {}),
     ...(Object.keys(conversationSentencePlayback).length ? { conversationSentencePlayback } : {}),
     language: isVoiceInputLanguage(candidate.language) ? candidate.language : defaults.language,
     microphoneDeviceId:

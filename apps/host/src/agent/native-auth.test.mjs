@@ -14,6 +14,7 @@ import { buildClaudeEnv } from '../../../../packages/maker-core/src/agents/claud
 import { CLAUDE_PROVIDER_AUTH_PLACEHOLDER_KEY } from '../../../desktop/src/main/maker-host/claude-gateway-config.ts';
 import { CODEX_PROVIDER_OAUTH_PLACEHOLDER_KEY } from '../../../desktop/src/main/maker-host/codex-gateway-config.ts';
 import { writeInvalidatedSystemCodexAuthMarker } from '../../../desktop/src/main/maker-host/codex-auth-invalidation.ts';
+import { publishClaudeCliLoginStatus, resetClaudeCliLoginStatusForTest } from '../../../desktop/src/main/maker-host/claude-native-cli-status.ts';
 
 test('Codex uses only its isolated home and requires the current account binding', async () => {
   const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'host-native-auth-'));
@@ -183,4 +184,50 @@ test('through the loopback proxy, Claude carries only the proxy secrets, each pa
   assert.deepEqual(await spawn(() => false), [PROXY, 'fixture-gateway'], 'stopped: the key itself, never the secret');
   ready = false;
   assert.deepEqual(await spawn(() => false), [UPSTREAM, 'fixture-gateway'], 'never ready: the key on the upstream, as on the desktop');
+});
+
+/*
+ * 测试价值
+ * - 生产入口：createClaudeGatewayAuth 的 getState（/api/agents/auth-state 与 /api/agents/status 不带参数调用它），
+ *   直连网关和经本机代理两条线各走一遍。
+ * - 规则：并存方案 A（审核方 2026-11-17 定）。`claude auth status` 会不会在 CLI 内部刷新令牌、写回它的配置目录，
+ *   仓库代码查不到，按会写处理：闸门关着时不起这个子进程，只用已经读到的状态作答；一次也没读到过（Host 刚启动）
+ *   时报“暂不可用”（errorReason 为原因码），不能报成“未登录”。
+ * - 现有覆盖缺口：之前读状态时缓存过期就起 CLI。
+ * - 最小失败输入：闸门关着、Claude 订阅已授权，缓存为空或有值时各读一次状态。
+ * - tier：unit（CLI 是记录调用的桩；登录态缓存是真实的进程内缓存；授权写在临时 profile 里）。
+ */
+test('while a desktop uses the profile, the Claude state starts no CLI: the status read before, or unknown', async t => {
+  const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'host-native-auth-held-'));
+  t.after(() => { resetClaudeCliLoginStatusForTest(); configureHostOwner({ userDataDir: profile, ownerId: null }); fs.rmSync(profile, { recursive: true, force: true }); });
+  configureHostOwner({ userDataDir: profile, ownerId: 'native-auth-owner-held' });
+  bindNativeProviderAuth('anthropic', { sharedSystem: true });
+  let spawns = 0;
+  const cli = { readClaudeCliLoginStatus: async () => { spawns++; return { loggedIn: true }; }, claudeCliNetworkEnv: async () => ({}) };
+  const proxy = { isReady: () => true, endpoint: () => 'http://127.0.0.1:4545', inboundSecret: () => 'runtime-secret-fixture',
+    gatewayInboundSecret: () => 'gateway-secret-fixture' };
+  let held = true;
+  const lanes = { direct: createClaudeGatewayAuth(null, undefined, cli, null, undefined, () => held),
+    proxy: createClaudeGatewayAuth(null, undefined, cli, proxy, undefined, () => held) };
+  // Host just started: nothing read yet. Unknown, never "not signed in".
+  resetClaudeCliLoginStatusForTest();
+  for (const [lane, auth] of Object.entries(lanes)) {
+    assert.deepEqual(await auth.getState(), { authenticated: false, errorReason: 'HOST_PROFILE_IN_USE_BY_DESKTOP' }, lane);
+  }
+  assert.equal(spawns, 0, 'no claude auth status while held');
+  // A status read before the hold answers, signed in or not, still without the CLI.
+  for (const loggedIn of [true, false]) {
+    publishClaudeCliLoginStatus({ loggedIn });
+    for (const [lane, auth] of Object.entries(lanes)) {
+      const state = await auth.getState();
+      assert.equal(state.authenticated, loggedIn, `${lane}, signed in: ${loggedIn}`);
+      assert.notEqual(state.errorReason, 'HOST_PROFILE_IN_USE_BY_DESKTOP', lane);
+    }
+  }
+  assert.equal(spawns, 0, 'no claude auth status while held');
+  // Released, the same read runs the CLI again (the direct lane's 30 s and the proxy's 60 s have passed for a reset cache).
+  held = false;
+  resetClaudeCliLoginStatusForTest();
+  for (const auth of Object.values(lanes)) await auth.getState();
+  assert.equal(spawns, 2);
 });

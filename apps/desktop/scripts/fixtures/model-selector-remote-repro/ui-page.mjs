@@ -17,6 +17,7 @@ export default {
     'src/renderer/features/provider-group/useLocalProviderGroups': { partial: 'export const useLocalProviderGroups = () => ({});' },
   },
   cases: {
+    'saved-draft-source-unavailable': { about: 'An unavailable saved local model stays visible and opens the picker for a replacement' },
     local: { about: 'Task opened on its own computer: equivalent sources fold' },
     default: { about: 'Same task opened remotely: equivalent sources also fold' },
     'remote-device-only': { about: 'Remote ChatInput without location choices passes only deviceId; target rails and rows still fold' },
@@ -28,6 +29,14 @@ export default {
     'remote-other-distinct': { about: 'Task on another computer: a third computer with a different account stays listed' },
   },
   async check(page, ui) {
+    if (ui.case === 'saved-draft-source-unavailable') {
+      const trigger = page.locator('[data-repro-trigger] button').first();
+      await trigger.getByText(/gpt-6-astra/i).waitFor();
+      await trigger.click();
+      await page.getByRole('option').filter({ hasText: 'Alternative model' }).waitFor();
+      await ui.capture('available-alternative');
+      return;
+    }
     await page.locator('[data-repro-trigger] button').first().click();
     await page.getByRole('listbox').waitFor();
     const otherRails = await page.locator('[data-rail-item^="remote:"]').count();

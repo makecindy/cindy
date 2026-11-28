@@ -90,6 +90,11 @@ async function copyFromMenu(image: HTMLElement) {
   fireEvent.click(await screen.findByRole('menuitem', { name: label('chat.media.copyImage') }));
 }
 
+async function downloadFromMenu(image: HTMLElement) {
+  fireEvent.contextMenu(image);
+  fireEvent.click(await screen.findByRole('menuitem', { name: label('chat.shareImage.download') }));
+}
+
 async function previewAction(key: string) {
   fireEvent.pointerDown(screen.getByRole('button', { name: label('attachmentPreview.more') }), { button: 0, ctrlKey: false });
   fireEvent.click(await screen.findByRole('menuitem', { name: label(key) }));
@@ -119,6 +124,8 @@ describe('shared production image interactions', () => {
         expect(fileCopy).toHaveBeenCalledWith({ filePath: '/fixture/preview.png' }),
       );
       expect(toast.success).toHaveBeenCalledWith(label('chat.media.imageCopied'));
+      await downloadFromMenu(img);
+      expect(save).toHaveBeenCalledWith({ url: img.getAttribute('src') });
       // Both task and companion message toolbars expose Copy directly. It copies
       // Markdown text, never the image or its path; the image menu stays separate.
       fireEvent.click(screen.getByRole('button', { name: label('chat.messageActionBar.copy') }));
@@ -182,6 +189,9 @@ describe('shared production image interactions', () => {
     await copyFromMenu(img);
     await waitFor(() => expect(nativeCopy).toHaveBeenCalledTimes(1));
     expect(readBytes).toHaveBeenCalledWith({ url: remoteSrc });
+    await downloadFromMenu(img);
+    expect(save).toHaveBeenCalledWith({ url: remoteSrc });
+    save.mockClear();
     fireEvent.click(img);
     await previewAction('chat.media.copyImage');
     await waitFor(() => expect(nativeCopy).toHaveBeenCalledTimes(2));
@@ -253,6 +263,32 @@ describe('shared production image interactions', () => {
       expect(toast.success).not.toHaveBeenCalled();
     },
   );
+  it.each([true, false])(
+    'offers system open after a Markdown image error only for confirmed local sessions (%s)',
+    (localConfirmed) => {
+      render(
+        <Tooltip.Provider>
+          <ChatSessionFileProvider
+            value={{ sessionId: 's1', workingDir: '/fixture', origin: { kind: 'local' }, localConfirmed }}
+          >
+            <MarkdownRenderer workingDir="/fixture" currentSessionId="s1" content={`![preview](${localFile})`} />
+          </ChatSessionFileProvider>
+        </Tooltip.Provider>,
+      );
+      fireEvent.error(screen.getByAltText('preview'));
+      expect(screen.getByText(label('chat.imageMissing.unavailable'))).toBeTruthy();
+      const action = screen.queryByRole('button', { name: `${label('chat.media.openWithApp')}: preview` });
+      if (localConfirmed) {
+        expect(action).not.toBeNull();
+        fireEvent.click(action!);
+        expect(open).toHaveBeenCalledExactlyOnceWith({ url: localFile });
+      } else {
+        expect(action).toBeNull();
+        expect(open).not.toHaveBeenCalled();
+      }
+    },
+  );
+
   it('keeps remote Markdown ownership in the inline menu', async () => {
     render(
       <ChatSessionFileProvider

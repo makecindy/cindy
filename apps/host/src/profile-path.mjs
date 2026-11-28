@@ -1,13 +1,27 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import { hostReleaseRegion } from './runtime-layout.mjs';
 
 const DB_FILE_PREFIX = 'cindy';
 
-export function resolveHostRegion(raw = process.env.CINDY_HOST_REGION) {
-  if (raw === undefined || raw === null || raw === '') return 'global';
-  if (raw === 'cn' || raw === 'global') return raw;
-  throw new Error(`CINDY_HOST_REGION must be "cn" or "global"; received ${JSON.stringify(raw)}`);
+/**
+ * The Host's edition. A release is built for one (scripts/build.mjs --region) and answers that; a
+ * CINDY_HOST_REGION naming the other edition refuses to start rather than being ignored. From source
+ * CINDY_HOST_REGION chooses, global when unset, for development only. The account's realm is separate:
+ * it only picks the sign-in and service endpoints.
+ */
+export function resolveHostRegion(raw = process.env.CINDY_HOST_REGION, release = hostReleaseRegion()) {
+  const requested = raw === undefined || raw === null || raw === '' ? null : raw;
+  if (requested !== null && requested !== 'cn' && requested !== 'global') {
+    throw new Error(`CINDY_HOST_REGION must be "cn" or "global"; received ${JSON.stringify(raw)}`);
+  }
+  if (release === null) return requested ?? 'global';
+  if (requested !== null && requested !== release) {
+    throw new Error(`HOST_REGION_MISMATCH: this Cindy Host release is the ${release} edition, but CINDY_HOST_REGION is ${requested}. `
+      + `Install the ${requested} release, or remove CINDY_HOST_REGION (a release does not need it).`);
+  }
+  return release;
 }
 
 /** Source and installed Hosts default to an independent profile. Existing
@@ -56,8 +70,21 @@ export function ownerDatabasePath(userDataDir, ownerId) {
   return path.join(userDataDir, `${DB_FILE_PREFIX}-${ownerId}.db`);
 }
 
+/**
+ * The OS app-data root the Host shares with the desktop: the Skill mutation locks and the built-in
+ * Skill bundle live under `<appData>/Cindy`, so both sides must resolve the same directory or their
+ * cross-process exclusion silently splits. Electron's app.getPath('appData') does not follow $HOME on
+ * macOS (measured 2026-11-17, release table row 25) while os.homedir() does, so a desktop that launches
+ * the Host passes its own value in CINDY_HOST_APP_DATA_DIR and the Host uses it as given; only a Host
+ * installed on its own computes it. A value that is not absolute is refused rather than guessed.
+ */
 export function resolveHostAppDataDir(options = {}) {
   const env = options.env ?? process.env;
+  const passed = env.CINDY_HOST_APP_DATA_DIR;
+  if (passed !== undefined && passed !== '') {
+    if (!path.isAbsolute(passed)) throw new Error('CINDY_HOST_APP_DATA_DIR must be an absolute directory');
+    if (!options.appDataDir) return passed;
+  }
   return options.appDataDir
     ?? env.APPDATA
     ?? (process.platform === 'darwin'

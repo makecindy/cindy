@@ -10,6 +10,8 @@ export type SsoOrgRealmClients = Record<AuthRegion, SsoOrgDiscoveryClient>;
 export interface SsoOrgRealmDiscovery {
   region: AuthRegion;
   discovery: SsoOrgDiscovery;
+  /** Set only if explicit-organization discovery continued despite a failed peer lookup. */
+  unconfirmedRegion?: AuthRegion;
 }
 
 function isNotFound(reason: unknown): boolean {
@@ -17,15 +19,16 @@ function isNotFound(reason: unknown): boolean {
 }
 
 /**
- * 同时探测国内与国际 auth-server，并以 fail-closed 规则选择企业所在区域。
+ * 同时探测国内与国际 auth-server，等待两侧结束后选择企业所在区域。
  *
- * 只有「一侧成功、另一侧明确 ORG_SSO_NOT_FOUND」可以继续。任一侧网络失败、
- * 超时、响应非法或 region 不匹配都不能拿另一侧的成功结果猜测，避免故障期间
- * 把同名企业路由到错误数据面。
+ * 默认要求另一侧明确 ORG_SSO_NOT_FOUND，保持邮箱发现与登录后提示的严格策略。
+ * 显式企业标识入口可启用 allowPartialSuccess：只有一侧通过客户端的响应、区域及
+ * 非空连接校验时即可继续；双命中仍报冲突，两侧均无有效结果保留原错误。
  */
 export async function discoverSsoOrgRealm(
   org: string,
   clients: SsoOrgRealmClients,
+  options: { allowPartialSuccess?: boolean } = {},
 ): Promise<SsoOrgRealmDiscovery> {
   const [cn, global] = await Promise.allSettled([
     clients.cn.discoverSsoOrg(org),
@@ -39,26 +42,31 @@ export async function discoverSsoOrgRealm(
       "Enterprise identifier exists in both auth regions",
     );
   }
+  const cnNotFound = cn.status === "rejected" && isNotFound(cn.reason);
+  const globalNotFound = global.status === "rejected" && isNotFound(global.reason);
   if (
     cn.status === "fulfilled" &&
     global.status === "rejected" &&
-    isNotFound(global.reason)
+    (options.allowPartialSuccess || globalNotFound)
   ) {
-    return { region: "cn", discovery: cn.value };
+    return {
+      region: "cn",
+      discovery: cn.value,
+      ...(globalNotFound ? {} : { unconfirmedRegion: "global" }),
+    };
   }
   if (
     global.status === "fulfilled" &&
     cn.status === "rejected" &&
-    isNotFound(cn.reason)
+    (options.allowPartialSuccess || cnNotFound)
   ) {
-    return { region: "global", discovery: global.value };
+    return {
+      region: "global",
+      discovery: global.value,
+      ...(cnNotFound ? {} : { unconfirmedRegion: "cn" }),
+    };
   }
-  if (
-    cn.status === "rejected" &&
-    global.status === "rejected" &&
-    isNotFound(cn.reason) &&
-    isNotFound(global.reason)
-  ) {
+  if (cnNotFound && globalNotFound) {
     throw new AuthApiError(
       "ORG_SSO_NOT_FOUND",
       404,

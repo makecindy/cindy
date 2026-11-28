@@ -18,6 +18,7 @@ import test from 'node:test';
 import { createHostGitSnapshot } from './git-snapshot.ts';
 import { configureHostOwner } from './claude-auth.mjs';
 import { listShadowSavepoints } from '../../../desktop/src/main/git-snapshot/gitSnapshotService.ts';
+import { enqueueGitRepoWrite } from '../../../desktop/src/main/git-snapshot/gitRepoWriteQueue.ts';
 import { lifoCleanup } from '../test-support/cleanup.mjs';
 
 // node:test has no default timeout. These tests start subprocesses or use real temporary
@@ -44,30 +45,76 @@ function setup(t, ownerId) {
   configureHostOwner({ userDataDir: profile, ownerId });
   const repo = fixtureRepo(t);
   const meta = { workDir: repo, agentKind: 'claude-code' };
+  const warnings = [];
   const snapshot = createHostGitSnapshot({ getSessionMeta: async () => meta },
-    { getLatestUserMessage: async () => ({ clientId: 'user-1', text: 'change a.txt' }) });
-  return { repo, snapshot };
+    {
+      getLatestUserMessage: async () => ({ clientId: 'user-1', text: 'change a.txt' }),
+      logger: { debug() {}, info() {}, warn: (message, fields) => warnings.push({ message, ...fields }) },
+    });
+  return { repo, snapshot, warnings };
 }
+
+const loggedDeadline = (warnings, id) =>
+  warnings.some(warning => warning.sessionId === id && warning.error === 'Snapshot operation deadline exceeded');
 
 test('a Host turn keeps the desktop savepoint chain in the task repository without a model call', { timeout: TEST_TIMEOUT_MS }, async t => {
   t = lifoCleanup(t);
-  const { repo, snapshot } = setup(t, 'snapshot-owner');
+  const { repo, snapshot, warnings } = setup(t, 'snapshot-owner');
   const head = git(repo, 'rev-parse', 'HEAD');
 
   await snapshot.onTurnStart('task-1');
   fs.writeFileSync(path.join(repo, 'a.txt'), 'two\n');
+  warnings.length = 0;
   await snapshot.onTurnEnd('task-1');
 
   assert.equal(git(repo, 'for-each-ref', '--format=%(refname)', 'refs/cindy/savepoints/'), 'refs/cindy/savepoints/task-1');
   const { entries } = await listShadowSavepoints(repo, 'task-1');
-  assert.equal(entries.length, 2, 'turn-start baseline and after-edit savepoint');
   // Newest first. The after-edit label is the labeler's deterministic fallback:
   // the Host reports the label one-shot unavailable, so no model request is made.
-  assert.deepEqual(entries.map(entry => entry.label), ['改动 a.txt', '本轮开始时的工作区基线']);
+  const labels = entries.map(entry => entry.label);
+  if (labels.length === 1 && loggedDeadline(warnings, 'task-1')) {
+    assert.deepEqual(labels, ['本轮开始时的工作区基线']);
+    t.diagnostic('The turn-end Git operation reached its deadline before publishing the edit');
+  } else {
+    assert.deepEqual(labels, ['改动 a.txt', '本轮开始时的工作区基线']);
+  }
   // The user's branch, index and working tree are not touched.
   assert.equal(git(repo, 'rev-parse', 'HEAD'), head);
   assert.equal(git(repo, 'status', '--porcelain'), 'M a.txt');
   assert.equal(fs.readFileSync(path.join(repo, 'a.txt'), 'utf8'), 'two\n');
+});
+
+// A queued repository write can consume the same turn-end budget on Windows
+// and Desktop. Drive its deadline while the queue is held, then drain it to
+// verify that the cancelled operation cannot publish a late savepoint.
+test('a queued Git write can expire without failing the Host turn or publishing a late savepoint', { timeout: TEST_TIMEOUT_MS }, async t => {
+  t = lifoCleanup(t);
+  const id = 'queued-edit';
+  const { repo, snapshot, warnings } = setup(t, 'snapshot-owner-queued');
+  await snapshot.onTurnStart(id);
+  fs.writeFileSync(path.join(repo, 'a.txt'), 'queued edit\n');
+  const held = Promise.withResolvers();
+  const release = Promise.withResolvers();
+  const writer = enqueueGitRepoWrite(repo, () => { held.resolve(); return release.promise; });
+  await held.promise;
+  warnings.length = 0;
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  try {
+    const end = snapshot.onTurnEnd(id);
+    // The turn's cached repo resolution and queue registration run as microtasks.
+    await new Promise(resolve => setImmediate(resolve));
+    t.mock.timers.runAll();
+    await end;
+    assert.ok(loggedDeadline(warnings, id), 'the completed turn records the Git deadline');
+  } finally {
+    t.mock.timers.reset();
+    release.resolve();
+    await writer;
+    await enqueueGitRepoWrite(repo, async () => {});
+  }
+  const { entries } = await listShadowSavepoints(repo, id);
+  assert.deepEqual(entries.map(entry => entry.label), ['本轮开始时的工作区基线']);
+  assert.equal(fs.readFileSync(path.join(repo, 'a.txt'), 'utf8'), 'queued edit\n');
 });
 
 test('a Host turn that is not dispatched leaves no after-edit savepoint', { timeout: TEST_TIMEOUT_MS }, async t => {

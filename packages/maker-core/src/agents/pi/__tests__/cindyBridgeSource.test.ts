@@ -28,6 +28,7 @@ import {
   CINDY_PI_BASH_DEFAULT_TIMEOUT_SECONDS,
   CINDY_PI_BASH_MAX_TIMEOUT_SECONDS,
 } from '../cindy-bridge-source.js';
+import { formatPermissionDenial } from '../../shared/auto-review-decision.js';
 
 it('strips Fast control paths from shell environments without mutating the runner environment', () => {
   const source = CINDY_BRIDGE_EXTENSION_SOURCE;
@@ -149,7 +150,7 @@ it('lets a shared user\'s Pi call only tools that Cindy extensions registered', 
   const handlerStart = source.indexOf("  pi.on('tool_call', async");
   const handlerEnd = source.indexOf('\n  });', handlerStart) + '\n  });'.length;
   // 子代理扩展的工具名在生成时写进源码。
-  expect(source).toContain('createCindyGuestToolGate(piApi, ["subagent"])');
+  expect(source).toContain('createCindyGuestToolGate(piApi, ["cindy_subagent"])');
   const handlers = new Map<string, (event: any, ctx: any) => any>();
   const registered: string[] = [];
   const api = {
@@ -159,7 +160,7 @@ it('lets a shared user\'s Pi call only tools that Cindy extensions registered', 
   };
   const compiled = ts.transpileModule(
     source.slice(gateStart, gateEnd)
-      + '\nconst guestToolGate = createCindyGuestToolGate(api, ["subagent"]);\nconst pi = guestToolGate.pi;'
+      + '\nconst guestToolGate = createCindyGuestToolGate(api, ["cindy_subagent"]);\nconst pi = guestToolGate.pi;'
       + '\npi.registerTool({ name: "read" });\npi.registerTool({ name: "cindy_mcp_call_tool" });\nresult = pi.getActiveTools();\ngate = guestToolGate;\n'
       + source.slice(handlerStart, handlerEnd),
     { compilerOptions: { target: ts.ScriptTarget.ES2022 } },
@@ -180,7 +181,8 @@ it('lets a shared user\'s Pi call only tools that Cindy extensions registered', 
   }
   // Cindy 扩展注册的(含经 Pi 原名顶替的 read)与子代理工具放行，交给后面的权限门。
   const gate = sandbox.gate as { blocks: (toolName: unknown) => boolean };
-  for (const toolName of ['read', 'cindy_mcp_call_tool', 'subagent']) expect(gate.blocks(toolName)).toBe(false);
+  for (const toolName of ['read', 'cindy_mcp_call_tool', 'cindy_subagent']) expect(gate.blocks(toolName)).toBe(false);
+  expect(gate.blocks('subagent')).toBe(true);
 });
 
 const canLinkFile = (() => {
@@ -1608,6 +1610,8 @@ describe('cindy-bridge extension source', () => {
     expect(decode('user-deny')).toBe('User denied this tool call via Cindy.');
     expect(decode('user-deny:Do not publish.')).toBe('User denied this tool call via Cindy: Do not publish.');
     expect(decode('system-deny:session_closed')).toBe('Cindy could not approve this tool call: session_closed');
+    expect(decode('system-deny:interaction_timeout')).toBe(formatPermissionDenial('system', 'interaction_timeout'));
+    expect(decode('system-deny:timeout')).toContain('the user did not reject it');
     expect(decode(undefined)).toBe('Cindy could not approve this tool call.');
     expect(decode('auto-review-deny:' + 'x'.repeat(500))).toBe('Cindy Auto-review denied this tool call: ' + 'x'.repeat(240));
   });
@@ -1666,6 +1670,38 @@ describe('cindy-bridge extension source', () => {
     expect(powerShellOverlayEnabled('win32', undefined)).toBe(false);
     // 受邀者会话不注册：它在本机执行，设备托管没有对应的执行器。
     expect(powerShellOverlayEnabled('win32', () => undefined, true)).toBe(false);
+  });
+
+  // #13082: the registration guard alone cannot detect missing Python stream
+  // settings on CP936. Exercise the spawn hook supplied to Pi in-process (unit).
+  it('defaults missing Python encodings in the Windows PowerShell child environment', () => {
+    const source = CINDY_BRIDGE_EXTENSION_SOURCE;
+    const start = source.indexOf('const createPowerShellTool =');
+    const end = source.indexOf('// Cindy owns a separate Pi extension store.', start);
+    const compiled = ts.transpileModule(source.slice(start, end), {
+      compilerOptions: { target: ts.ScriptTarget.ES2022 },
+    }).outputText;
+    type Env = Record<string, string | undefined>;
+    type SpawnHook = (input: { command: string; cwd: string; env: Env }) => { env: Env };
+    const factory = vi.fn((_cwd: string, _options: { spawnHook: SpawnHook }) => ({}));
+    const cwd = 'C:\\work';
+    const bashPackageHome = 'C:\\isolated';
+    runInNewContext(compiled, {
+      piCodingAgent: { createPowerShellTool: factory },
+      pi: { registerTool: vi.fn() },
+      process: { platform: 'win32', cwd: () => cwd },
+      guestToolGate: null,
+      isolatedBashEnvironment: loadBashIsolationHelper(path.win32),
+      bashPackageHome,
+    });
+    const { spawnHook } = factory.mock.calls[0][1];
+    const run = (env: Env) => spawnHook({ command: 'python', cwd, env }).env;
+    expect(run({ CINDY_PI_API_KEY: 'fixture' })).toEqual({
+      PI_CODING_AGENT_DIR: bashPackageHome, PYTHONUTF8: '1', PYTHONIOENCODING: 'utf-8',
+    });
+    expect(run({ PythonUtf8: '0', PYTHONIOENCODING: '' })).toEqual({
+      PI_CODING_AGENT_DIR: bashPackageHome, PythonUtf8: '0', PYTHONIOENCODING: '',
+    });
   });
 
   it.each(['darwin', 'linux'] as const)(
@@ -2514,6 +2550,63 @@ it.each(['list_machines', 'ask_user_question_async', 'manage_user_questions'])('
   // Ask and Auto judge the real MCP identity, so this auto-approves like the same tool over MCP.
   expect(direct.resolveHookedCall(name, {}).qualifiedName).toBe('mcp__cindy_helper__' + name);
   expect(direct.resolveHookedCall('read', {})).toBeNull();
+});
+
+it('classifies MCP discovery errors by the registered server before matching the tool (#6926)', async () => {
+  const source = CINDY_BRIDGE_EXTENSION_SOURCE;
+  const compiled = ts.transpileModule(
+    source.slice(source.indexOf('const CINDY_MCP_LIST_TOOLS'), source.indexOf('async function connectServer'))
+      + '\n(globalThis as any).Gateway = CindyMcpGateway;',
+    { compilerOptions: { module: ts.ModuleKind.None, target: ts.ScriptTarget.ES2022 } },
+  ).outputText;
+  const context: Record<string, any> = {
+    createHash,
+    recordInput: (value: unknown) => value && typeof value === 'object' ? value : {},
+  };
+  runInNewContext(compiled, context);
+
+  const gateway = new context.Gateway();
+  const client = {};
+  gateway.add('demo', client, [{ name: 'inspect' }], 'Demo');
+  gateway.add('one', client, [{ name: 'inspect' }], 'Shared');
+  gateway.add('two', client, [{ name: 'inspect' }], 'Shared');
+  gateway.add('cindy_memory', client, [{ name: 'call_tool' }]);
+  gateway.setServerDisplayName('offline', 'Offline');
+  gateway.markUnavailable('offline', 'Connection closed');
+  let listTools!: (id: string, input: { server?: string; tool?: string }) => Promise<{ details: unknown }>;
+  gateway.register({
+    registerTool: (tool: { name: string; execute: typeof listTools }) => {
+      if (tool.name === 'cindy_mcp_list_tools') listTools = tool.execute;
+    },
+  }, { botMemoryFacade: true });
+
+  const discover = async (server: string, tool?: string) =>
+    (await listTools('lookup', tool ? { server, tool } : { server })).details;
+  const unknown = {
+    ok: false,
+    errorCode: 'UNKNOWN_SERVER',
+    requested: 'missing',
+    availableServers: ['Demo', 'Shared'],
+    unavailableServers: [{ server: 'offline', reason: 'Connection closed' }],
+  };
+  expect(await discover('missing', 'inspect')).toEqual(unknown);
+  expect(await discover('missing')).toEqual(unknown);
+  expect(await discover('Offline', 'inspect')).toMatchObject({
+    errorCode: 'SERVER_UNAVAILABLE', reason: 'Connection closed',
+  });
+  expect(await discover('Demo', 'missing')).toMatchObject({
+    errorCode: 'UNKNOWN_TOOL', availableTools: ['inspect'],
+  });
+  expect(await discover('Shared', 'inspect')).toMatchObject({
+    errorCode: 'AMBIGUOUS_SERVER', matchingServerIds: ['one', 'two'],
+  });
+  expect(await discover('demo', 'inspect')).toMatchObject({
+    ok: true, tools: [{ server: 'Demo', serverId: 'demo', name: 'inspect', inputSchema: { type: 'object' } }],
+  });
+  expect(await discover('cindy_memory', 'call_tool')).toMatchObject({
+    errorCode: 'UNKNOWN_TOOL', availableTools: [],
+  });
+  expect(await discover('cindy_memory')).toMatchObject({ errorCode: 'UNKNOWN_SERVER' });
 });
 
 it('routes Bot shortcuts through the scoped helper entry without exposing them to ordinary Pi tasks', async () => {

@@ -3,6 +3,7 @@ import { useEffect, useRef } from 'react';
 import type { Options } from 'canvas-confetti';
 import { createPortal } from 'react-dom';
 import { parseCssColor, toHex } from '../../../shared/theme-import/color';
+import { Z_INDEX_LAYERS } from '@/styles/generated/token-mappings';
 
 /** Separate visual presets share loading, accessibility, coordinates and cleanup. */
 const BURST_PRESETS = {
@@ -45,7 +46,7 @@ interface ConfettiBurstProps {
 export function ConfettiBurst({
   origin,
   onDone,
-  zIndex = 10101,
+  zIndex = Z_INDEX_LAYERS['toast-top'],
   preset = 'star',
 }: ConfettiBurstProps) {
   const originRef = useRef(origin);

@@ -122,6 +122,28 @@
     "status": {
       "running": "En cours",
       "done": "Terminé"
+    },
+    "collab": {
+      "wait": "Attendre le sous-Agent",
+      "waitCount_one": "Attendre {{count}} sous-Agent",
+      "waitCount_other": "Attendre {{count}} sous-Agents",
+      "waitCount_many": "Attendre {{count}} sous-Agents",
+      "sendInput": "Envoyer des instructions au sous-Agent",
+      "sendInputCount_one": "Envoyer des instructions à {{count}} sous-Agent",
+      "sendInputCount_other": "Envoyer des instructions à {{count}} sous-Agents",
+      "sendInputCount_many": "Envoyer des instructions à {{count}} sous-Agents",
+      "resume": "Reprendre le sous-Agent",
+      "resumeCount_one": "Reprendre {{count}} sous-Agent",
+      "resumeCount_other": "Reprendre {{count}} sous-Agents",
+      "resumeCount_many": "Reprendre {{count}} sous-Agents",
+      "close": "Fermer le sous-Agent",
+      "closeCount_one": "Fermer {{count}} sous-Agent",
+      "closeCount_other": "Fermer {{count}} sous-Agents",
+      "closeCount_many": "Fermer {{count}} sous-Agents",
+      "spawn": "Démarrer le sous-Agent",
+      "spawnCount_one": "Démarrer {{count}} sous-Agent",
+      "spawnCount_other": "Démarrer {{count}} sous-Agents",
+      "spawnCount_many": "Démarrer {{count}} sous-Agents"
     }
   },
   "agentActions": {
@@ -201,9 +223,21 @@
     },
     "failed_many": "{{count}} appels ont échoué"
   },
+  "geminiRateLimit": {
+    "retried": "Nouvelle tentative automatique après le délai indiqué par Gemini",
+    "title": "La limite de saisie par minute de Gemini est atteinte.",
+    "exhausted": "Gemini reste limité après une nouvelle tentative. Vous pouvez réessayer manuellement.",
+    "retryIn": "Nouvelle tentative automatique dans {{seconds}} s"
+  },
   "subscriptionAccountError": {
-    "limited": "Le compte avec abonnement utilisé par cette tâche a atteint sa limite d’utilisation. Attendez sa réinitialisation ou choisissez une autre source de modèles. Le compte n’est pas changé automatiquement.",
-    "limitedUntil": "Le compte avec abonnement utilisé par cette tâche a atteint sa limite d’utilisation. Réinitialisation prévue : {{resetAt}}. Attendez cette date ou choisissez une autre source de modèles. Le compte n’est pas changé automatiquement.",
+    "unreachable": "Le service de comptes Codex est temporairement inaccessible.",
+    "rechecking": "Le service de comptes Codex est temporairement inaccessible. Nouvel essai à {{resetAt}}.",
+    "poolModelLimited": "La limite d’utilisation de l’abonnement pour ce modèle est atteinte. Vous pouvez changer de modèle.",
+    "poolRetryUntil": "Réessayez après {{resetAt}}.",
+    "poolOtherSignedOut": "Un autre compte d’abonnement est déconnecté. Reconnectez-le sur l’ordinateur qui exécute la tâche, puis réessayez.",
+    "poolUnavailable": "Aucun compte d’abonnement disponible pour ce modèle. Changez de modèle ou vérifiez les comptes sur l’ordinateur qui exécute la tâche.",
+    "limited": "Le compte avec abonnement utilisé par cette tâche a atteint sa limite d’utilisation. Attendez sa réinitialisation ou choisissez une autre source de modèles.",
+    "limitedUntil": "Le compte avec abonnement utilisé par cette tâche a atteint sa limite d’utilisation. Réinitialisation prévue : {{resetAt}}. Attendez cette date ou choisissez une autre source de modèles.",
     "loginRequired": "Le compte avec abonnement utilisé par cette tâche nécessite une nouvelle connexion. Reconnectez-vous sur l’ordinateur qui exécute la tâche, puis réessayez.",
     "signingIn": "La connexion au compte avec abonnement utilisé par cette tâche est en cours. Réessayez une fois la connexion terminée.",
     "unavailable": "Le compte avec abonnement affecté à cette tâche ne peut pas être utilisé pour cette demande. Vérifiez le compte dans les paramètres du fournisseur de modèles sur l’ordinateur d’exécution, ou choisissez une autre source de modèles.",

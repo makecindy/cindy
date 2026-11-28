@@ -61,6 +61,7 @@ export function reconcileNewSessionSubmitDraft(
   hasFast: () => boolean,
   t: HiddenModelText,
 ): NewSessionDraft {
+  if (effectiveDraft.pluginEngine) return effectiveDraft;
   if (
     g.catalogKnown &&
     modelNeedsReselection(

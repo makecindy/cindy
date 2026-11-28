@@ -20,7 +20,14 @@ import {
   shouldFallbackToLegacyCodexUsage,
 } from "./sessionControls";
 
-type Reader = Pick<
+import {
+  effectivePluginWindowMinutes,
+  parsePluginQuotaWindowLabel,
+  selectPluginWindowsForModel,
+} from '@cindy/maker-shared/plugin-engine-quota';
+import { isPluginEngineProviderId, isPluginEngineSessionKind, PLUGIN_ENGINE_PROVIDER_PREFIX } from './pluginEngines';
+
+type Reader = Partial<Pick<MobileMakerTransport, "getPluginEngineUsage">> & Pick<
   MobileMakerTransport,
   | "getCodexRateLimits"
   | "getAccountUsage"
@@ -29,7 +36,7 @@ type Reader = Pick<
 >;
 /** Mobile presentation only; this shape is never sent through device-link. */
 export interface SessionMenuAccountUsage {
-  source: "chatgpt" | "claude" | "xai" | "gateway" | "api" | "unavailable";
+  source: "plugin" | "chatgpt" | "claude" | "xai" | "gateway" | "api" | "unavailable";
   plan: string | null;
   updatedAt: number | null;
   windows: Array<{
@@ -42,7 +49,7 @@ export interface SessionMenuAccountUsage {
   amounts: Array<{
     id: "balance" | "cycle" | "today";
     amount: number;
-    currency: "CNY" | "USD";
+    currency: string;
     limit?: number;
   }>;
   /** The account read cannot prove this task's frozen auth route. */
@@ -185,11 +192,55 @@ export async function readSessionMenuAccountUsage(
   session: RemoteSession,
   reader: Reader,
   accountProvider?: OpenAiAccountProvider,
+  modelLabel?: string | null,
 ): Promise<SessionMenuAccountUsage> {
   if (session.remoteHostId?.trim()) return empty("unavailable");
   // The host projects runtime-effective selection onto providerId. Missing
   // selection alone proves neither a Gateway nor a subscription route.
   const provider = session.providerId?.trim() || null;
+  if (isPluginEngineSessionKind(session.agentKind)) {
+    const result = empty("plugin");
+    if (!isPluginEngineProviderId(provider)) return result;
+    // The task on the controlled computer names itself, so an engine with several accounts reports
+    // the task's own account; a task whose Agent runs elsewhere keeps the engine-level read.
+    const key = provider.slice(PLUGIN_ENGINE_PROVIDER_PREFIX.length);
+    const usage = session.agentDeviceId?.trim()
+      ? await reader.getPluginEngineUsage?.(key)
+      : await reader.getPluginEngineUsage?.(key, session.id);
+    if (!usage) return result;
+    result.updatedAt = usage.updatedAt;
+    const selected = selectPluginWindowsForModel(
+      usage.windows,
+      { id: session.model, displayName: modelLabel },
+      Date.now(),
+      { strictModelMatch: false, includeExpired: true },
+    );
+    result.windows = selected.windows.map((row, index) => {
+      const minutes = effectivePluginWindowMinutes(row);
+      const resetsAt =
+        typeof row.resetsAt === "number" && Number.isFinite(row.resetsAt) && row.resetsAt > 0
+          ? row.resetsAt / 1000
+          : null;
+      const parsed = parsePluginQuotaWindowLabel(row.label);
+      const hasPeriod = resetsAt !== null || minutes !== null;
+      const windowModelLabel = !hasPeriod
+        ? (parsed.groupName ?? row.label)
+        : !selected.matchedModel && !selected.singleGroup && parsed.groupName
+          ? parsed.groupName
+          : undefined;
+      return {
+        id: String(index),
+        minutes,
+        ...(windowModelLabel ? { modelLabel: windowModelLabel } : {}),
+        remainingPercent: row.remainingPercent,
+        resetsAt,
+      };
+    });
+    result.amounts = (usage.balances ?? []).map(row => ({
+      id: "balance", currency: row.currency, amount: Number(row.amount),
+    }));
+    return result;
+  }
   const model = session.model.trim();
   const claudeRoute = await readDefaultClaudeRoute(session, reader);
   const family = sessionSubscriptionFamily(session, accountProvider, claudeRoute);

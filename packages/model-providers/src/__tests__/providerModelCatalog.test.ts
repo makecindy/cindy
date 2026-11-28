@@ -1,3 +1,5 @@
+import { mergeDiscoveredRuntimeModels } from '../modelMetadataLayers.js';
+import { parseModelsListResponse } from '../modelDiscovery.js';
 import { describe, expect, it } from "vitest";
 import {
   providerCatalogForPi,
@@ -8,6 +10,34 @@ import { BUNDLED_CATALOG } from '../builtin.js';
 import { modelProtocolComparison } from '../modelProtocol.js';
 
 describe("standard provider catalog", () => {
+  it.each(['claude-code', 'codex', 'pi'] as const)('routes newly discovered Copilot Responses models in %s', agent => {
+    const baseUrl = 'https://api.individual.githubcopilot.com';
+    const ids = ['gpt-6.2-sol', 'future-with-override', 'undeclared', 'claude-fable-5'];
+    const data = ids.map((id, index) => ({ id, supported_endpoints: index === 2 ? [] : ['/responses'] }));
+    const models = parseModelsListResponse({ data }, baseUrl + '/models')!;
+    const configured = models.map(model => model.id === 'future-with-override'
+      ? { ...model, api: 'openai-completions' as const } : model);
+    const provider = buildUserProvider({ id: 'copilot-test', name: 'Copilot', runtimes: {
+      [agent]: { baseUrl, wireProtocol: 'anthropic-messages', catalogPresetId: 'github-copilot', models: configured },
+    } }, { presets: BUNDLED_CATALOG.presets, modelRegistry: BUNDLED_CATALOG.modelRegistry });
+    expect(provider.models[agent]?.map(model => model.route?.wireProtocol ?? 'anthropic-messages'))
+      .toEqual(['openai-responses', 'openai-chat', 'anthropic-messages', 'anthropic-messages']);
+    expect(provider.models[agent]?.[0].api).toBe('openai-responses');
+    expect(provider.models[agent]?.[0].userModelConfig).toEqual(configured[0]);
+    expect(parseModelsListResponse({ data }, 'https://relay.example/models')?.[0].discoveredMetadata?.nativeApi)
+      .toBeUndefined();
+  });
+
+  it('clears a withdrawn Copilot Responses declaration on refresh', () => {
+    const url = 'https://api.business.githubcopilot.com/models';
+    const discover = (fields: object) => parseModelsListResponse({ data: [{ id: 'new-model', ...fields }] }, url)!;
+    const first = mergeDiscoveredRuntimeModels([], discover({ supported_endpoints: ['/responses'] }));
+    const sparse = mergeDiscoveredRuntimeModels(first, discover({}));
+    expect(sparse[0].discoveredMetadata?.nativeApi).toBe('openai-responses');
+    const updated = mergeDiscoveredRuntimeModels(sparse, discover({ supported_endpoints: ['/chat/completions'] }));
+    expect(updated[0].discoveredMetadata?.nativeApi).toBeNull();
+  });
+
   // #10269, unit: discovery supplies only Carbon's ID on a Messages connection.
   // The Astra regression covers a different API; this must select Chat without
   // turning defaults into user overrides or changing the other models' routes.

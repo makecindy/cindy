@@ -36,7 +36,7 @@ vi.mock('@cindy/anthropic-compat-proxy', async (original) => ({
   ...(await original<typeof import('@cindy/anthropic-compat-proxy')>()),
   hasProxyEnvConfig: () => h.envProxy,
 }));
-vi.mock('../claude-cli-proxy-bridge.js', () => ({ ensureClaudeCliProxyBridge: h.bridge }));
+vi.mock('../cli-proxy-bridge.js', () => ({ ensureCliProxyBridge: h.bridge }));
 vi.mock('node:child_process', () => ({ spawn: h.spawn, execFile: vi.fn() }));
 vi.mock('node:worker_threads', () => ({
   Worker: class extends EventEmitter {
@@ -399,12 +399,17 @@ describe('runClaudeCliLogin', () => {
   });
 });
 
-type FakeSdkChild = FakeChild & { stdin: EventEmitter & { write: ReturnType<typeof vi.fn> } };
+type FakeSdkChild = FakeChild & {
+  stdin: EventEmitter & { write: ReturnType<typeof vi.fn>; end: ReturnType<typeof vi.fn> };
+};
 
 /** SDK 模式的假 CLI:收到 get_usage 请求后按 reply 回一行(reply 为 null 时不回)。 */
-function fakeSdkChild(reply: (requestId: string) => unknown): FakeSdkChild {
+function fakeSdkChild(reply: (requestId: string) => unknown, exitOnEof = true): FakeSdkChild {
   const child = fakeChild('hang') as FakeSdkChild;
   const stdin = new EventEmitter() as FakeSdkChild['stdin'];
+  stdin.end = vi.fn(() => {
+    if (exitOnEof) setImmediate(() => child.emit('close', 0));
+  });
   stdin.write = vi.fn((line: string) => {
     const message = JSON.parse(line) as { request_id: string; request: { subtype: string } };
     if (message.request.subtype !== 'get_usage') return true;
@@ -423,7 +428,7 @@ function fakeSdkChild(reply: (requestId: string) => unknown): FakeSdkChild {
 const RATE_LIMITS = { limits: [{ kind: 'session', percent: 5, resets_at: '2026-09-26T04:00:00Z' }] };
 
 describe('readClaudeCliPlanUsage', () => {
-  it('发 get_usage 控制请求,取 rate_limits 后结束 CLI;拉起时隔离项目设置 / MCP / 会话记录', async () => {
+  it('读取 get_usage 后立即返回额度并发送 EOF 让 CLI 收尾;隔离项目设置 / MCP / 会话记录', async () => {
     const child = fakeSdkChild((id) => ({
       type: 'control_response',
       response: {
@@ -431,16 +436,36 @@ describe('readClaudeCliPlanUsage', () => {
         request_id: id,
         response: { subscription_type: 'max', rate_limits_available: true, rate_limits: RATE_LIMITS },
       },
-    }));
+    }), false);
     h.spawn.mockReturnValue(child);
     await expect(readClaudeCliPlanUsage()).resolves.toEqual({ rateLimits: RATE_LIMITS, subscriptionType: 'max' });
+    expect(child.stdin.end).toHaveBeenCalledOnce();
+    child.emit('close', 0);
     const args = argsOf(h.spawn.mock.calls[0]!);
     expect(args).toEqual(expect.arrayContaining([
       '--input-format', 'stream-json', '--no-session-persistence', '--strict-mcp-config', '--setting-sources', 'user',
     ]));
     const request = JSON.parse(child.stdin.write.mock.calls[1]![0] as string);
     expect(request.request).toEqual({ subtype: 'get_usage', skip_behaviors: true });
-    expect(child.kill).toHaveBeenCalled();
+    expect(child.kill).not.toHaveBeenCalled();
+  });
+
+  it('已返回额度后仍未退出的 CLI 在宽限期结束时被回收', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      const child = fakeSdkChild((id) => ({
+        type: 'control_response',
+        response: { subtype: 'success', request_id: id, response: { rate_limits: RATE_LIMITS } },
+      }), false);
+      h.spawn.mockReturnValue(child);
+      await expect(readClaudeCliPlanUsage()).resolves.toEqual({ rateLimits: RATE_LIMITS });
+      await vi.advanceTimersByTimeAsync(2_999);
+      expect(child.kill).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(child.kill).toHaveBeenCalledWith('SIGKILL');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('账号没有套餐余量 → null;控制请求报错 / CLI 提前退出 → 抛错', async () => {

@@ -9,6 +9,9 @@ import {
   type ReactNode,
 } from "react";
 import { StyleSheet, View, type GestureResponderEvent } from "react-native";
+import Animated from "react-native-reanimated";
+import { RetroKeycap, type RetroKeycapProfile } from "./RetroKeycap";
+import { useReduceMotionEnabled } from "@/hooks/useReduceMotion";
 import {
   ArrowBigUp,
   ArrowBigUpDash,
@@ -99,6 +102,8 @@ const PC_LEGENDS: Record<string, string> = {
   AltLeft: "Alt",
 };
 
+type KeycapAppearance = RetroKeycapProfile | "themed";
+
 const Keycap = memo(function Keycap({
   rect,
   styles,
@@ -110,7 +115,8 @@ const Keycap = memo(function Keycap({
   subdued,
   pressed,
   latch,
-  artwork,
+  appearance,
+  animate,
   onActivate,
   disabled,
 }: {
@@ -124,17 +130,27 @@ const Keycap = memo(function Keycap({
   subdued: boolean;
   pressed: boolean;
   latch: KeyLatch | null;
-  artwork: ReactNode;
+  appearance?: KeycapAppearance;
+  animate: boolean;
   onActivate(id: string): void;
   disabled: boolean;
 }) {
   const selected = latch !== null;
-  const foreground = selected
-    ? palette.ctaText
-    : rect.bare || (subdued && !artwork)
-      ? palette.textSecondary
-      : palette.textPrimary;
+  const themed = appearance === "themed";
+  const hardware =
+    appearance && appearance !== "themed" ? appearance : undefined;
+  const foreground =
+    selected && !hardware
+      ? palette.ctaText
+      : themed || rect.bare || (subdued && !hardware)
+        ? palette.textSecondary
+        : palette.textPrimary;
   const small = (legend?.length ?? 0) > 1;
+  const travel = Math.min(hardware?.travel ?? 1.25, rect.height * 0.12);
+  const splitPrint =
+    themed && Boolean(shifted) && rect.width >= 26 && rect.height >= 26;
+  const depressed = pressed || selected;
+  const travelDuration = animate ? (depressed ? 45 : 110) : 0;
   return (
     <View
       testID={`remoteDesktop.key.${rect.id}`}
@@ -148,9 +164,10 @@ const Keycap = memo(function Keycap({
         styles.key,
         subdued && styles.keySubdued,
         rect.bare && styles.keyBare,
-        artwork ? styles.keyArtwork : null,
-        pressed && (artwork ? styles.keyArtworkPressed : styles.keyPressed),
-        selected && styles.keySelected,
+        hardware && styles.hardwareWindow,
+        themed && styles.themedBed,
+        pressed && !appearance && styles.keyPressed,
+        selected && !appearance && styles.keySelected,
         {
           left: rect.x,
           top: rect.y,
@@ -159,37 +176,102 @@ const Keycap = memo(function Keycap({
         },
       ]}
     >
-      {selected ? null : artwork}
-      {shifted ? (
-        <Text
-          numberOfLines={1}
-          style={[styles.shiftedLegend, selected && { color: foreground }]}
-        >
-          {shifted}
-        </Text>
-      ) : null}
-      {Icon ? (
-        <Icon
-          size={rect.half ? iconSize.sm : iconSize.action}
-          strokeWidth={iconStroke.regular}
-          color={foreground}
-        />
-      ) : legend ? (
-        <Text
-          numberOfLines={1}
-          adjustsFontSizeToFit
-          minimumFontScale={0.7}
+      {hardware && (
+        <Animated.View
+          pointerEvents="none"
           style={[
-            small || shifted ? styles.smallLegend : styles.legend,
-            { color: foreground },
+            styles.keySocket,
+            { backgroundColor: hardware.material.contact },
+            {
+              opacity: depressed ? 0.2 : 0.8,
+              transitionProperty: "opacity",
+              transitionDuration: animate ? 110 : 0,
+            },
           ]}
-        >
-          {legend}
-        </Text>
-      ) : null}
-      {latch === "locked" ? (
-        <View style={[styles.lockMark, { backgroundColor: foreground }]} />
-      ) : null}
+        />
+      )}
+      <Animated.View
+        pointerEvents="none"
+        testID={`remoteDesktop.keyFace.${rect.id}`}
+        style={[
+          styles.keyFace,
+          themed && styles.themedFace,
+          themed && subdued && styles.themedControl,
+          themed && pressed && styles.keyPressed,
+          themed && selected && styles.keySelected,
+          splitPrint && styles.themedPrint,
+          appearance
+            ? {
+                bottom: travel,
+                transform: [{ translateY: depressed ? travel : 0 }],
+                transitionProperty: "transform",
+                transitionDuration: travelDuration,
+                transitionTimingFunction: "ease-out",
+              }
+            : null,
+        ]}
+      >
+        {hardware ? (
+          <RetroKeycap
+            profile={hardware}
+            rect={rect}
+            legend={legend}
+            shifted={shifted}
+            depressed={depressed}
+            travelDuration={travelDuration}
+          />
+        ) : (
+          <>
+            {shifted && (!themed || splitPrint) ? (
+              <Text
+                numberOfLines={1}
+                style={[
+                  styles.shiftedLegend,
+                  splitPrint && styles.themedAlternate,
+                  selected && { color: foreground },
+                ]}
+              >
+                {shifted}
+              </Text>
+            ) : null}
+            {Icon ? (
+              <Icon
+                size={rect.half ? iconSize.sm : iconSize.action}
+                strokeWidth={iconStroke.regular}
+                color={foreground}
+              />
+            ) : legend ? (
+              <Text
+                numberOfLines={1}
+                adjustsFontSizeToFit
+                minimumFontScale={0.7}
+                style={[
+                  small || (shifted && !themed)
+                    ? styles.smallLegend
+                    : styles.legend,
+                  { color: foreground },
+                ]}
+              >
+                {legend}
+              </Text>
+            ) : null}
+            {themed &&
+              rect.height >= 26 &&
+              (rect.code === "KeyF" || rect.code === "KeyJ") && (
+                <View style={styles.homingBar} />
+              )}
+          </>
+        )}
+        {latch === "locked" && (
+          <View
+            testID={`remoteDesktop.keyLock.${rect.id}`}
+            style={[
+              hardware ? styles.hardwareLatch : styles.lockMark,
+              { backgroundColor: hardware?.material.ink ?? foreground },
+            ]}
+          />
+        )}
+      </Animated.View>
     </View>
   );
 });
@@ -213,7 +295,8 @@ export function RemoteKeySurface({
   strip,
   stripEnd,
   palette,
-  renderKeycap,
+  keycap,
+  keyGap,
   renderOverlay,
   testID = "remoteDesktop.keys",
   resyncRef,
@@ -241,7 +324,9 @@ export function RemoteKeySurface({
   stripEnd?: ReactNode[];
   /** Hardware skins keep their own colors in either app theme. */
   palette?: ThemeColors;
-  renderKeycap?: (rect: KeyRect) => ReactNode;
+  /** Fixed hardware materials or the shallow, theme-aware default folding keyboard. */
+  keycap?: KeycapAppearance;
+  keyGap?: number;
   renderOverlay?: (rects: KeyRect[]) => ReactNode;
   testID?: string;
   /**
@@ -257,6 +342,7 @@ export function RemoteKeySurface({
   const input = useRef(new RemoteKeyInput()).current;
   const touches = useRef(new Map<string | number, KeyRect>());
   const [size, setSize] = useState({ width: 0, height: 0 });
+  const reduceMotion = useReduceMotionEnabled();
   const [pressed, setPressed] = useState<ReadonlySet<string>>(new Set());
   const [symbols, setSymbols] = useState(false);
   const [, refresh] = useState(0);
@@ -285,6 +371,7 @@ export function RemoteKeySurface({
         size.width,
         size.height,
         false,
+        keyGap,
       );
     const gap = compact ? 0.3 : 0.6;
     const bareKey = (code: string): KeyCell => ({
@@ -335,7 +422,7 @@ export function RemoteKeySurface({
       mode === "bar"
         ? [typingStrip]
         : keyboardRows(platform, typingStrip, compact, symbols);
-    return keyRects(rows, size.width, size.height, strip ?? {});
+    return keyRects(rows, size.width, size.height, strip ?? {}, keyGap);
     // stripKey stands for the strip's values, which callers rebuild each render.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
@@ -347,6 +434,7 @@ export function RemoteKeySurface({
     symbols,
     size,
     mode,
+    keyGap,
     stripKey,
   ]);
   const rects = useMemo(
@@ -506,7 +594,8 @@ export function RemoteKeySurface({
           }
           pressed={pressed.has(rect.id)}
           latch={rect.code ? input.latch(rect.code) : null}
-          artwork={rect.bare ? null : renderKeycap?.(rect)}
+          appearance={rect.bare ? undefined : keycap}
+          animate={reduceMotion === false}
           onActivate={activate}
           disabled={!enabled}
         />
@@ -588,13 +677,58 @@ const makeStyles = (colors: ThemeColors) =>
       borderColor: colors.borderTranslucent,
     },
     keyBare: { backgroundColor: "transparent", borderRadius: radius.pill },
-    keyArtwork: {
+    hardwareWindow: {
       backgroundColor: "transparent",
       borderWidth: 0,
-      paddingBottom: spacing.xs,
+      borderRadius: radius.micro,
+    },
+    themedBed: { backgroundColor: colors.border, borderWidth: 0 },
+    themedFace: {
+      borderRadius: radius.control,
+      backgroundColor: colors.surfaceChip,
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: colors.borderTranslucent,
+    },
+    themedControl: { backgroundColor: colors.surfaceElevated },
+    themedPrint: {
+      alignItems: "flex-start",
+      justifyContent: "flex-end",
+      paddingLeft: spacing.sm,
+    },
+    themedAlternate: {
+      position: "absolute",
+      right: spacing.xs,
+      top: 0,
+      color: colors.textTertiary,
+    },
+    keyFace: {
+      ...StyleSheet.absoluteFill,
+      alignItems: "center",
+      justifyContent: "center",
+    },
+    keySocket: {
+      ...StyleSheet.absoluteFill,
+      top: 5,
+      bottom: StyleSheet.hairlineWidth,
+      marginHorizontal: 1,
+      borderRadius: radius.micro,
+    },
+    homingBar: {
+      position: "absolute",
+      bottom: 3,
+      width: 7,
+      height: 1,
+      backgroundColor: colors.borderTranslucent,
+    },
+    hardwareLatch: {
+      position: "absolute",
+      right: 6,
+      top: 5,
+      width: 3,
+      height: 3,
+      borderRadius: radius.pill,
     },
     keyPressed: { backgroundColor: colors.border },
-    keyArtworkPressed: { opacity: 0.55 },
     keySelected: { backgroundColor: colors.cta },
     legend: {
       fontSize: typeScale.body,

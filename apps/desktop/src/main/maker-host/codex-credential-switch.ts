@@ -1,6 +1,6 @@
 import { CredentialModeSwitchBusyError, CodexCredentialModeSwitchBusyError, isCredentialModeSwitchBusyError } from './credentialSwitchError.js';
 export { CredentialModeSwitchBusyError, CodexCredentialModeSwitchBusyError, isCredentialModeSwitchBusyError } from './credentialSwitchError.js';
-import { providerCatalogId, sourceProviderForPreset } from '@cindy/model-providers';
+import { isOpenAiSubscriptionProvider, providerCatalogId, sourceProviderForPreset } from '@cindy/model-providers';
 import {
   canReuseCodexHostForCredentialMode,
   canReuseHostForCredentialMode,
@@ -8,6 +8,7 @@ import {
   resolveAgentCredentialMode as resolveBaseCredentialMode,
   type AgentCredentialMode,
   type AgentKind,
+  type EngineKind,
 } from '@cindy/maker-core';
 
 import { claudeToolSearchMode } from './claude-behavior-flags.js';
@@ -28,15 +29,20 @@ import {
 import type { CodexProxyAuthInjection } from './codex-proxy-host.desktop.js';
 import { withRehydrateCloseSuppressed } from './rehydrateCloseSuppression.js';
 import { getActiveCatalog } from './active-catalog.js';
+import { isPoolSessionExecutionCurrent, readPoolSessionExecution } from '../subscription-accounts/session.js';
 
 function resolveAgentCredentialMode(input: Parameters<typeof resolveBaseCredentialMode>[0]): AgentCredentialMode | undefined {
-  if (input.agentKind === 'codex' && getActiveCatalog().providers.some(
-    (provider) => provider.id === input.providerId && provider.auth.native === 'codex',
-  )) return 'oauth-bearer';
+  if (input.agentKind === 'codex' && getActiveCatalog().providers.some((provider) => {
+    if (provider.id !== input.providerId) return false;
+    // 拆出来的 OpenAI 订阅来源只有 subscriptionPool，没有 auth.native。
+    // 它和内置 openai 共用 cindy_openai 线程家族，不能按普通供应商期待 cindy_gateway。
+    return provider.auth.native === 'codex' || isOpenAiSubscriptionProvider(provider);
+  })) return 'oauth-bearer';
   return resolveBaseCredentialMode(input);
 }
 
 export interface ShouldCloseSessionForCredentialSwitchInput {
+  sessionId?: string;
   agentKind: AgentKind;
   remoteHostId?: string | null;
   currentProviderId: string | null;
@@ -77,7 +83,8 @@ function credentialFamilyFromAuthInjection(
 interface LocalAgentSession {
   codexHostKey?: string;
   id: string;
-  agentKind: AgentKind;
+  // Only compared with 'codex'; plugin-engine tasks are never Codex hosts.
+  agentKind: EngineKind;
   remoteHostId?: string | null;
   isTurnRunning?: () => boolean;
 }
@@ -121,6 +128,34 @@ export interface PrepareLocalSessionCredentialModeSwitchResult {
 function normalizeProviderId(providerId: string | null | undefined): string | null {
   const trimmed = providerId?.trim();
   return trimmed || null;
+}
+
+export function readCodexPoolExecution(input: Pick<ShouldCloseSessionForCredentialSwitchInput,
+  'sessionId' | 'agentKind' | 'remoteHostId'>) {
+  return input.agentKind === 'codex' && !input.remoteHostId
+    ? readPoolSessionExecution(input.sessionId) : undefined;
+}
+
+function poolExecutionMatchesSwitch(
+  execution: NonNullable<ReturnType<typeof readCodexPoolExecution>>,
+  input: ShouldCloseSessionForCredentialSwitchInput,
+): boolean {
+  return normalizeProviderId(input.currentProviderId) === execution.providerId &&
+    isPoolSessionExecutionCurrent(input.sessionId, execution, normalizeProviderId(input.nextProviderId), input.nextModel);
+}
+
+/** Translate only the engine-facing comparison, never the task's selected source or grant. */
+export function crossesCodexSessionCustomProviderIdentity(input: ShouldCloseSessionForCredentialSwitchInput): boolean {
+  const execution = readCodexPoolExecution(input);
+  return crossesCodexAppliedCustomProviderIdentity({
+    agentKind: input.agentKind,
+    remoteHostId: input.remoteHostId,
+    currentCodexProxyActive: input.currentCodexProxyActive,
+    currentThreadModelProviderId: input.currentCodexThreadModelProviderId,
+    targetProviderId: execution && poolExecutionMatchesSwitch(execution, input)
+      ? execution.connectionId : input.nextProviderId,
+    targetModel: input.nextModel,
+  });
 }
 
 /**
@@ -173,6 +208,12 @@ export function codexImportedThreadModelProviderId(input: {
 export function isCodexThreadModelProviderIdentityMismatch(
   input: ShouldCloseSessionForCredentialSwitchInput,
 ): boolean {
+  const execution = readCodexPoolExecution(input);
+  if (execution && !poolExecutionMatchesSwitch(execution, input)) return true;
+  return codexThreadIdentityMismatch(execution ? { ...input, nextProviderId: execution.connectionId } : input);
+}
+
+function codexThreadIdentityMismatch(input: ShouldCloseSessionForCredentialSwitchInput): boolean {
   if (input.remoteHostId || input.agentKind !== 'codex' || input.currentCodexProxyActive !== true) {
     return false;
   }
@@ -292,8 +333,12 @@ export function shouldCloseSessionForCredentialSwitch(
 
   if (input.agentKind === 'pi') return false;
 
-  const currentProviderId = normalizeProviderId(input.currentProviderId);
-  const nextProviderId = normalizeProviderId(input.nextProviderId);
+  const execution = readCodexPoolExecution(input);
+  // A reservation for a different logical source or an unusable account must not be reused,
+  // even if the target happens to have the same thread identity or credential family.
+  if (execution && !poolExecutionMatchesSwitch(execution, input)) return true;
+  const currentProviderId = execution?.connectionId ?? normalizeProviderId(input.currentProviderId);
+  const nextProviderId = execution?.connectionId ?? normalizeProviderId(input.nextProviderId);
   const currentMode = resolveAgentCredentialMode({
     agentKind: input.agentKind,
     providerId: currentProviderId,
@@ -345,7 +390,7 @@ export function shouldCloseSessionForCredentialSwitch(
     // provider store 可能先于运行时切换被 UI/持久层覆盖。此时仅比较 currentMode/nextMode
     // 会把两边误判为同一家族，并在仍绑定 cindy_openai 的 thread 上热切 DeepSeek/xAI/XD。
     // start/resume 响应才是 thread 身份的事实源；与目标身份不一致就必须 close + resume。
-    if (isCodexThreadModelProviderIdentityMismatch(input)) {
+    if (codexThreadIdentityMismatch({ ...input, nextProviderId })) {
       return true;
     }
     const mayTouchRemoteCompaction =

@@ -3,6 +3,7 @@ import { cleanup, fireEvent, render, screen, act } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createInstance } from 'i18next';
 import { I18nextProvider } from 'react-i18next';
+import { MemoryRouter } from 'react-router-dom';
 import { SUPPORTED_LOCALES } from '../../../../shared/locale';
 import es from '@/i18n/locales/es/common.json';
 import fr from '@/i18n/locales/fr/common.json';
@@ -24,7 +25,10 @@ vi.mock('@/hooks/useProviders', () => ({ useProviders: () => ({ providers: [], r
 vi.mock('@/hooks/useCodexAuth', () => ({ useCodexAuth: () => ({ state: { kind: 'disconnected' } }), isChatGptConnectionConnected: () => false }));
 import { ErrorBanner } from '../ErrorBanner';
 import { ErrorMessageCard } from '../ErrorMessageCard';
+import { UserMessage } from '../UserMessage';
 import { ErrorTailErrorBanner } from '../InterruptedTurnBanner';
+import { EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES } from '@/cindy-brain/PluginUiContributions';
+import { Tooltip } from '@/components/ui/tooltip';
 import { remoteErrorMessageForBanner, handleStreamEvent, EMPTY_SESSION_STATE } from '@/lib/makerChatStore';
 import { buildErrorDiagnosisPrompt, prefillErrorDiagnosisDraft } from '@/lib/errorDiagnosisPrompt';
 import { clearDraft, getDraft, plainTextToTiptapDoc, saveDraft } from '@/lib/composerDraftStore';
@@ -37,6 +41,152 @@ const raw = JSON.stringify({ error: {
   type: 'invalid_request_error', code: 'unsupported_value', param: 'parallel_tool_calls',
 } });
 afterEach(cleanup);
+
+// #12924, unit: the live and historical notices name an upstream 5xx status —
+// the exact empty HTTP 550 and any other message naming "550 status code" get
+// the same upstream-status notice (#12970) — while the dispatch refusal keeps
+// its own "not sent" text.
+const upstream550 = zhCN.chat.errorBanner.upstreamStatusError.replace('{{status}}', '550');
+it.each([
+  ['550 status code (no body)', upstream550],
+  ['ordinary failure mentioning 550 status code (no body)', upstream550],
+  ['provider-rejected-before-dispatch: Provider rejected the Session send before dispatch: SEND/task/send',
+    zhCN.chat.errorBanner.messageNotSent],
+])('names the upstream 5xx status and keeps the dispatch refusal (%s)', async (message, expected) => {
+  const i18n = createInstance();
+  await i18n.init({ lng: 'zh-CN', resources: { 'zh-CN': { translation: zhCN } } });
+  const { rerender } = render(<I18nextProvider i18n={i18n}>
+    <ErrorBanner error={message} agentKind="pi" onRetry={vi.fn()} />
+  </I18nextProvider>);
+  expect(screen.getByText(expected)).toBeTruthy();
+  rerender(<I18nextProvider i18n={i18n}>
+    <ErrorMessageCard message={message} />
+  </I18nextProvider>);
+  expect(screen.getByText(expected)).toBeTruthy();
+});
+
+// #12240, unit: the live banner must explain both options for a retained
+// queue head. The same network error without that recovery cannot promise
+// that the original input is still waiting to be sent.
+it.each([true, false])('describes the original input only for a queue-head retry (%s)', async queuedSendRecovery => {
+  const i18n = createInstance();
+  await i18n.init({ lng: 'en', resources: { en: { translation: en } } });
+  const retry = vi.fn();
+  render(<I18nextProvider i18n={i18n}>
+    <ErrorBanner error="LAZY_CREATE_FAILED: [REMOTE_AGENT_UNAVAILABLE] not online within 1500ms"
+      agentKind="codex" agentDeviceId="other-computer" queuedSendRecovery={queuedSendRecovery}
+      retryText="original input" onRetry={retry} />
+  </I18nextProvider>);
+  const hint = screen.queryByText('Your message wasn’t sent. Select Retry to send it as is. Sending a new message will replace it.');
+  expect(Boolean(hint)).toBe(queuedSendRecovery);
+  fireEvent.click(screen.getByRole('button', { name: en.chat.errorBanner.retry }));
+  expect(retry).toHaveBeenCalledExactlyOnceWith('original input');
+});
+
+// L343 / unit: a short input skipped after a context overflow uses the same
+// notice as any skipped input. Exercise the real bubble with its locale bundle.
+it('shows the context-full notice on a skipped short input', async () => {
+  const i18n = createInstance();
+  await i18n.init({ lng: 'zh-CN', resources: { 'zh-CN': { translation: zhCN } } });
+  const { container } = render(<I18nextProvider i18n={i18n}><MemoryRouter><Tooltip.Provider>
+    <UserMessage pluginUi={EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES} workingDir="" content="继续"
+      inputNotice="oversized-input-skipped" />
+  </Tooltip.Provider></MemoryRouter></I18nextProvider>);
+  expect(screen.getByText('继续')).toBeTruthy();
+  const notice = container.querySelectorAll('[data-input-notice]');
+  expect(notice).toHaveLength(1);
+  expect(notice[0].textContent).toBe('上下文已满，这条消息未能处理。后面的消息会继续按顺序处理。');
+});
+
+it.each(['live', 'history'] as const)('reports a clean Codex transport exit as an interruption in %s', async surface => {
+  const i18n = createInstance();
+  await i18n.init({ lng: 'en', resources: { en: { translation: en } } });
+  const message = 'app-server force-retired: transport error: codex app-server transport closed: child exited (exit code=0)';
+  const reason = 'app-server-force-retired';
+  const retry = vi.fn();
+  render(<I18nextProvider i18n={i18n}>{surface === 'live'
+    ? <ErrorBanner error={message} errorReason={reason} agentKind="codex" retryText="continue" onRetry={retry} />
+    : <ErrorMessageCard message={message} reason={reason} />}</I18nextProvider>);
+  expect(screen.getByText('The connection to Codex was lost. The current request was interrupted. You can continue in this session.')).toBeTruthy();
+  if (surface === 'live') {
+    fireEvent.click(screen.getByRole('button', { name: en.chat.errorBanner.retry }));
+    expect(retry).toHaveBeenCalledOnce();
+  }
+});
+
+// #10161 / unit: a stalled local dispatch record used to look like a model
+// reply failure. Both error surfaces use real localized copy after the host
+// identifies that boundary. An unclassified timeout still has generic copy.
+it.each(['live', 'history', 'unclassified'] as const)('attributes a send preparation deadline in %s', async surface => {
+  const i18n = createInstance();
+  await i18n.init({ lng: 'zh-CN', resources: { 'zh-CN': { translation: zhCN } } });
+  const raw = 'Snapshot operation deadline exceeded';
+  const message = surface === 'unclassified'
+    ? raw
+    : `[SNAPSHOT_DISPATCH_INTENT_TIMEOUT] ${raw} before confirming the send record. The message was not sent.`;
+  const retry = vi.fn();
+  render(<I18nextProvider i18n={i18n}>{surface === 'history'
+    ? <ErrorMessageCard message={message} />
+    : <ErrorBanner error={message} agentKind="codex" retryText="原消息" onRetry={retry} />}</I18nextProvider>);
+  expect(screen.getByText(surface === 'unclassified'
+    ? zhCN.chat.errorBanner.replyFailed
+    : '未发送消息，Cindy 未能及时确认安全记录')).toBeTruthy();
+  if (surface === 'live') {
+    fireEvent.click(screen.getByRole('button', { name: zhCN.chat.errorBanner.retry }));
+    expect(retry).toHaveBeenCalledWith('原消息');
+  }
+});
+
+// #12924, unit: an upstream 5xx without a body must name the status in both
+// error surfaces. The generic "reply failed" copy hides that the upstream
+// refused the request.
+it.each(['live', 'history'] as const)('names the upstream status in %s', async surface => {
+  const i18n = createInstance();
+  await i18n.init({ lng: 'zh-CN', resources: { 'zh-CN': { translation: zhCN } } });
+  const message = '550 status code (no body)';
+  const retry = vi.fn();
+  render(<I18nextProvider i18n={i18n}>{surface === 'history'
+    ? <ErrorMessageCard message={message} />
+    : <ErrorBanner error={message} agentKind="pi" retryText="原消息" onRetry={retry} />}</I18nextProvider>);
+  expect(screen.getByText('上游返回 550，本次回复未完成。')).toBeTruthy();
+});
+
+// #12924, unit: a Pi history read the upstream refused never reached the
+// provider. Both surfaces must say "not sent" and name that reason instead of
+// the generic "reply failed".
+it.each(['live', 'history'] as const)('explains a refused Pi history read in %s', async surface => {
+  const i18n = createInstance();
+  await i18n.init({ lng: 'zh-CN', resources: { 'zh-CN': { translation: zhCN } } });
+  const message = 'provider-rejected-before-dispatch: [PI_RETRY_HISTORY_UNAVAILABLE] Your message was not sent. Pi could not read the history needed to send it (status 550). You can retry, or continue in a new task.';
+  const retry = vi.fn();
+  render(<I18nextProvider i18n={i18n}>{surface === 'history'
+    ? <ErrorMessageCard message={message} />
+    : <ErrorBanner error={message} agentKind="pi" retryText="原消息" onRetry={retry} />}</I18nextProvider>);
+  expect(screen.getByText(zhCN.chat.errorBanner.piRetryHistoryUnavailable)).toBeTruthy();
+});
+
+// #12970, unit: the refused-history-read cause must outrank every broad status
+// matcher. 502/503/504 read as network-unreachable and 529 as overloaded, so a
+// banner that let them win would hide that the message was never sent at all.
+// Minimal failure input: the same synthesized message with a non-550 status.
+it.each(['live', 'history'] as const)('keeps a refused Pi history read ahead of broad matchers in %s', async surface => {
+  // 500/413 never reached the competing copy, but pin them so a future branch
+  // added ahead of this one cannot quietly swallow the "not sent" fact either.
+  for (const status of ['502', '503', '504', '529', '500', '413']) {
+    const i18n = createInstance();
+    await i18n.init({ lng: 'zh-CN', resources: { 'zh-CN': { translation: zhCN } } });
+    const message = `provider-rejected-before-dispatch: [PI_RETRY_HISTORY_UNAVAILABLE] Your message was not sent. Pi could not read the history needed to send it (status ${status}). You can retry, or continue in a new task.`;
+    const retry = vi.fn();
+    const { unmount } = render(<I18nextProvider i18n={i18n}>{surface === 'history'
+      ? <ErrorMessageCard message={message} />
+      : <ErrorBanner error={message} agentKind="pi" retryText="原消息" onRetry={retry} />}</I18nextProvider>);
+    expect(screen.getByText(zhCN.chat.errorBanner.piRetryHistoryUnavailable, { ignore: 'style,script' })).toBeTruthy();
+    expect(screen.queryByText(zhCN.chat.errorBanner.networkUnreachable)).toBeNull();
+    expect(screen.queryByText(zhCN.chat.errorBanner.overloadBusy)).toBeNull();
+    expect(screen.queryByText(/上游返回/)).toBeNull();
+    unmount();
+  }
+});
 
 // #10854, unit: production live reducer + banner/tail/history must retain the
 // actual cause for diagnosis while legacy reason-only errors use neutral copy.
@@ -197,7 +347,7 @@ describe.each(SUPPORTED_LOCALES)('error presentation in %s', locale => {
     expect(screen.queryByText(locales[locale].chat.errorBanner.networkShowRaw)).toBeNull();
   });
 
-  it.each(['REMOTE_AGENT_TIMEOUT', 'REMOTE_AGENT_LINK_BUSY', 'REMOTE_AGENT_UNRESPONSIVE', 'REMOTE_AGENT_OFFLINE', 'REMOTE_AGENT_ACCESS_DENIED', 'REMOTE_LOCAL_ONLY_PROVIDER', 'DEVICE_LINK_MEDIA_TRANSFER_FAILED', 'DEVICE_LINK_MEDIA_ACCESS_DENIED', 'DEVICE_LINK_BUSY', 'MCP_APPROVAL_CONFIRMATION_TIMEOUT', 'SSH_HARNESS_SWITCH_UNSUPPORTED', 'MODEL_SELECTION_UNAVAILABLE', 'HARNESS_SWITCH_NOT_READY'])('preserves curated %s guidance and follows language changes', async code => {
+  it.each(['REMOTE_AGENT_TIMEOUT', 'REMOTE_AGENT_LINK_BUSY', 'REMOTE_AGENT_UNRESPONSIVE', 'REMOTE_AGENT_OFFLINE', 'REMOTE_AGENT_ACCESS_DENIED', 'REMOTE_LOCAL_ONLY_PROVIDER', 'DEVICE_LINK_MEDIA_TRANSFER_FAILED', 'DEVICE_LINK_MEDIA_ACCESS_DENIED', 'DEVICE_LINK_BUSY', 'MCP_APPROVAL_CONFIRMATION_TIMEOUT', 'SSH_HARNESS_SWITCH_UNSUPPORTED', 'MODEL_SELECTION_UNAVAILABLE', 'MODEL_CATALOG_UNCONFIRMED', 'HARNESS_SWITCH_NOT_READY'])('preserves curated %s guidance and follows language changes', async code => {
     const i18n = createInstance();
     await i18n.init({ lng: locale, fallbackLng: 'en', resources: Object.fromEntries(Object.entries(locales).map(([lng, common]) => [lng, { translation: common }])) });
     const message = `Error invoking remote method device-link:invoke: Error: [${code}] upstream fallback api_key=private-test-value`;
@@ -346,3 +496,145 @@ describe.each(SUPPORTED_LOCALES)('error presentation in %s', locale => {
     expect(screen.queryByText(/Switch this task/)).toBeNull();
   });
 });
+
+// #8706 unit: render each real error surface with the new code; the old UI offered Full access.
+it.each(['live', 'tail', 'history'] as const)('localizes quota exhaustion on %s without permission escalation', async surface => {
+  const i18n = createInstance();
+  await i18n.init({ lng: 'zh-CN', resources: { 'zh-CN': { translation: zhCN } } });
+  const message = '[AUTO_REVIEW_UNAVAILABLE_QUOTA] PRIVATE_UPSTREAM_BODY';
+  render(<I18nextProvider i18n={i18n}>{surface === 'live'
+    ? <ErrorBanner error={message} onRetry={vi.fn()} />
+    : surface === 'tail'
+      ? <ErrorTailErrorBanner errorText={message} onContinue={vi.fn()} onDismiss={vi.fn()} />
+      : <ErrorMessageCard message={message} />}</I18nextProvider>);
+  expect(screen.getByText(zhCN.chat.remoteError.AUTO_REVIEW_UNAVAILABLE_QUOTA)).toBeTruthy();
+  expect(screen.queryByText(/PRIVATE_UPSTREAM_BODY|完全访问/)).toBeNull();
+});
+
+// 测试价值：依据供应商安全拦截应准确解释、保留其决定且不提供重试/换号绕过的要求；此前 live/tail/history 三处错误面会把安全拦截落回
+// 通用「回复未完成」或被载荷里的状态码误导成鉴权/网络恢复，并暴露原样重发按钮；生产入口 ErrorBanner / ErrorTailErrorBanner / ErrorMessageCard；
+// 最小失败输入为带 sequence_number:401 与 safety_violation 的上游拦截负载；tier: unit。
+it.each(['live', 'tail', 'history'] as const)(
+  'explains provider safety refusal on %s without offering Retry or auth/computer bypass',
+  async (surface) => {
+    const i18n = createInstance();
+    await i18n.init({ lng: 'zh-CN', resources: { 'zh-CN': { translation: zhCN } } });
+    const rawSafetyError = JSON.stringify({
+      type: 'error',
+      sequence_number: 401,
+      error: {
+        type: 'invalid_request_error',
+        code: 'safety_violation',
+        message: 'Output blocked by upstream safety policy; api_key=sk-secret-value-12345',
+      },
+    });
+    const retry = vi.fn();
+    const chooseComputer = vi.fn();
+    render(
+      <I18nextProvider i18n={i18n}>
+        {surface === 'live' ? (
+          <ErrorBanner
+            error={rawSafetyError}
+            errorReason="provider-safety-refusal"
+            agentKind="codex"
+            agentDeviceId="share:peer"
+            retryText="blocked-prompt"
+            onRetry={retry}
+            onChooseComputer={chooseComputer}
+            modelGroupSwitch={{ label: '换到其他模型继续', onSwitch: async () => true }}
+          />
+        ) : surface === 'tail' ? (
+          <ErrorTailErrorBanner
+            errorText={rawSafetyError}
+            errorReason="provider-safety-refusal"
+            agentKind="codex"
+            agentDeviceId="share:peer"
+            onContinue={retry}
+            onDismiss={vi.fn()}
+            onChooseComputer={chooseComputer}
+          />
+        ) : (
+          <ErrorMessageCard message={rawSafetyError} reason="provider-safety-refusal" />
+        )}
+      </I18nextProvider>,
+    );
+    expect(screen.getByText(zhCN.chat.errorBanner.providerSafetyRefusal)).toBeTruthy();
+    expect(screen.getByText(/Output blocked by upstream safety policy/)).toBeTruthy();
+    expect(screen.queryByText(/sk-secret-value-12345/)).toBeNull();
+    expect(screen.queryByTitle(zhCN.chat.errorBanner.retryTitle)).toBeNull();
+    expect(screen.queryByText('换到其他模型继续')).toBeNull();
+    expect(screen.queryByText(zhCN.sharedTaskRecovery.choose)).toBeNull();
+    fireEvent.click(screen.getByText(zhCN.chat.errorBanner.networkShowRaw));
+    expect(screen.getByText(/safety_violation/)).toBeTruthy();
+  },
+);
+
+it.each(['live', 'tail', 'history'] as const)(
+  'explains the Claude cybersecurity refusal log example on %s (including legacy rows without safety reason) and keeps #12371 plugin wording collapsed',
+  async (surface) => {
+    const i18n = createInstance();
+    await i18n.init({ lng: 'zh-CN', resources: { 'zh-CN': { translation: zhCN } } });
+    const cyberRefusal = 'This request was flagged for possible cybersecurity risk.';
+    const retry = vi.fn();
+    render(
+      <I18nextProvider i18n={i18n}>
+        {surface === 'live' ? (
+          <ErrorBanner
+            error={cyberRefusal}
+            errorReason="provider-safety-refusal"
+            agentKind="cc"
+            retryText="blocked-prompt"
+            onRetry={retry}
+            modelGroupSwitch={{ label: '换到其他模型继续', onSwitch: async () => true }}
+          />
+        ) : surface === 'tail' ? (
+          <ErrorTailErrorBanner
+            errorText={cyberRefusal}
+            errorReason="turn-failed"
+            agentKind="cc"
+            onContinue={retry}
+            onDismiss={vi.fn()}
+          />
+        ) : (
+          <ErrorMessageCard message={cyberRefusal} reason="turn-failed" />
+        )}
+      </I18nextProvider>,
+    );
+    expect(screen.getByText(zhCN.chat.errorBanner.providerSafetyRefusal)).toBeTruthy();
+    expect(screen.queryByTitle(zhCN.chat.errorBanner.retryTitle)).toBeNull();
+    expect(screen.queryByText('换到其他模型继续')).toBeNull();
+    expect(screen.queryByText(cyberRefusal)).toBeNull();
+    fireEvent.click(screen.getByText(zhCN.chat.errorBanner.networkShowRaw));
+    expect(screen.getByText(cyberRefusal)).toBeTruthy();
+
+    cleanup();
+    const codexOutputBlock = JSON.stringify({
+      error: {
+        type: 'invalid_request_error',
+        code: 'safety_violation',
+        message: 'Synthetic plugin blocked the output stream. api_key=sk-secret-value-99999',
+      },
+      sequence_number: 502,
+    });
+    render(
+      <I18nextProvider i18n={i18n}>
+        <ErrorBanner error={codexOutputBlock} errorReason="turn-failed" agentKind="codex" onRetry={retry} />
+      </I18nextProvider>,
+    );
+    expect(screen.getByText(zhCN.chat.errorBanner.providerSafetyRefusal)).toBeTruthy();
+    expect(screen.queryByText(/plugin blocked the output stream/)).toBeNull();
+    fireEvent.click(screen.getByText(zhCN.chat.errorBanner.networkShowRaw));
+    expect(screen.getByText(/plugin blocked the output stream/)).toBeTruthy();
+    expect(screen.queryByText(/sk-secret-value-99999/)).toBeNull();
+
+    cleanup();
+    const localPluginError = `Local plugin hook failed: "${cyberRefusal}"`;
+    render(
+      <I18nextProvider i18n={i18n}>
+        <ErrorBanner error={localPluginError} retryText="retry-ok" onRetry={retry} />
+      </I18nextProvider>,
+    );
+    expect(screen.getByText(zhCN.chat.errorBanner.replyFailed)).toBeTruthy();
+    expect(screen.getByTitle(zhCN.chat.errorBanner.retryTitle)).toBeTruthy();
+  },
+);

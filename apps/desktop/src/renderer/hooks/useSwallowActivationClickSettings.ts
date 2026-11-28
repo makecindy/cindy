@@ -16,7 +16,11 @@
  * 次启动创建 BrowserWindow 时也会以 `acceptFirstMouse: true` 建窗。
  */
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { flushSync } from 'react-dom';
+import { i18n } from '@/i18n';
+import { toast } from '@/lib/toast';
+import { mapIpcErrorToI18nKey } from '@/utils/ipcError';
 
 const STORAGE_KEY = 'input.swallowActivationClick';
 const DEFAULT_ENABLED = false;
@@ -35,22 +39,27 @@ export function getSwallowActivationClickEnabled(): boolean {
 
 export function useSwallowActivationClickSettings(): {
   enabled: boolean;
-  setEnabled: (next: boolean) => void;
+  setEnabled: (next: boolean) => Promise<boolean>;
 } {
   const [enabled, setEnabledState] = useState<boolean>(getSwallowActivationClickEnabled);
 
+  const request = useRef(0);
   const setEnabled = useCallback((next: boolean) => {
-    setEnabledState(next);
-    try {
-      localStorage.setItem(STORAGE_KEY, String(next));
-    } catch {
-      // localStorage 不可用——忽略,UI 仍以内存值为准。
-    }
-    // 通知 main 落盘到 userData,供下次启动创建 BrowserWindow 时读取
-    // acceptFirstMouse。IPC 失败(preload 缺失 / bridge 关闭)只影响下一次 macOS
-    // 启动值,不影响当前会话的 UI 或 Windows JS swallow——静默失败即可。
-    void window.electronAPI?.windowBehavior?.setSwallowActivationClick?.(next).catch(() => {
-      // no-op:main 侧只是缓存值,失败最多让下次 macOS 启动读到旧值。
+    const sequence = ++request.current;
+    const apply = () => {
+      if (sequence !== request.current) return false;
+      setEnabledState(next);
+      try { localStorage.setItem(STORAGE_KEY, String(next)); } catch { /* State still reflects Main's confirmed value. */ }
+      return true;
+    };
+    const saved = window.electronAPI?.windowBehavior?.setSwallowActivationClick?.(next);
+    if (!saved) return Promise.resolve(apply());
+    // The cloud caller reads the hook snapshot as soon as this promise settles.
+    return saved.then(() => flushSync(apply), error => {
+      if (sequence === request.current) {
+        toast.error(i18n.t(mapIpcErrorToI18nKey(error, { fallback: 'ipcError.INTERNAL' })));
+      }
+      return false;
     });
   }, []);
 

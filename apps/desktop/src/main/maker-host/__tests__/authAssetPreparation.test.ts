@@ -8,6 +8,7 @@ const state = vi.hoisted(() => ({
   owner: { dataOwnerId: 'a', generation: 1, mode: 'cloud' },
   boundary: false,
   bridge: vi.fn(),
+  builtIns: vi.fn(),
   links: vi.fn(),
   fingerprint: 'fp-1',
   logs: [] as Array<{ level: string; scope: string; warning?: unknown }>,
@@ -29,7 +30,7 @@ vi.mock('../shared-global-skills.js', async (original) => ({
 vi.mock('../built-in-skills.js', async (original) => ({
   ...await original<typeof import('../built-in-skills.js')>(),
   resolveBundledSystemSkillsRoot: () => 'unused-bundle',
-  prepareBuiltInSkills: async () => ({ descriptors: [], projectionSafe: false, warnings: [] }),
+  prepareBuiltInSkills: state.builtIns,
 }));
 vi.mock('../../authBoundaryQuarantine.js', async (original) => ({
   ...await original<typeof import('../../authBoundaryQuarantine.js')>(),
@@ -54,6 +55,7 @@ beforeEach(() => {
   state.owner = { dataOwnerId: 'a', generation: 1, mode: 'cloud' };
   state.boundary = false;
   state.bridge.mockReset().mockResolvedValue({ warnings: [], routingFailures: [] });
+  state.builtIns.mockReset().mockResolvedValue({ descriptors: [], projectionSafe: false, warnings: [], persistentWarnings: [] });
   state.links.mockReset();
   state.fingerprint = 'fp-1';
   state.logs = [];
@@ -101,10 +103,10 @@ describe('asset preparation boundaries', () => {
   });
 
   it('does not reuse a completion across owner generations or an in-progress boundary', async () => {
-    const prepare = vi.fn(async () => true);
-    const adapter = Object.assign(Object.create(DesktopClaudeAuthAdapter.prototype), {
-      sharedSkillsPreparation: new PreparationCache(30_000), runEnsureSharedGlobalSkills: prepare,
-    }) as DesktopClaudeAuthAdapter;
+    // The preparation moved into sharedGlobalSkillsPreparationCore.ts (shared with the Host); count
+    // its runs through the shared-link step it always reaches, on the real adapter entry.
+    const prepare = state.links.mockResolvedValue({ warnings: [], persistentWarnings: [] });
+    const adapter = new DesktopClaudeAuthAdapter();
     await adapter.ensureSharedGlobalSkills();
     await adapter.ensureSharedGlobalSkills();
     expect(prepare).toHaveBeenCalledTimes(1);
@@ -151,5 +153,31 @@ describe('asset preparation boundaries', () => {
       'cannot link skill y: EACCES',
       'cannot link skill y: EACCES',
     ]);
+  });
+
+  // Regression (idle CPU / log spam): keeping a newer installed built-in Skill bundle on an older
+  // build is stable state; returning it only as a transient warning defeated the 30s completion cache.
+  it('caches past persistent built-in Skill bundle warnings and logs them once', async () => {
+    const kept = 'kept built-in Skill bundle 237; this build only carries older bundle 228';
+    state.builtIns.mockResolvedValue({
+      descriptors: [],
+      projectionSafe: true,
+      warnings: [kept],
+      persistentWarnings: [kept],
+    });
+    state.links.mockResolvedValue({ warnings: [], persistentWarnings: [] });
+    const adapter = new DesktopClaudeAuthAdapter();
+    await adapter.ensureSharedGlobalSkills();
+    await adapter.ensureSharedGlobalSkills();
+    expect(state.builtIns).toHaveBeenCalledTimes(1);
+    expect(state.links).toHaveBeenCalledTimes(1);
+    const reported = () => state.logs.filter((entry) => entry.scope === 'auth-adapters:asset-prep');
+    expect(reported()).toEqual([{ level: 'warn', scope: 'auth-adapters:asset-prep', warning: kept }]);
+
+    // Even when a fingerprint change triggers a rerun, the unchanged persistent warning is not logged again.
+    state.fingerprint = 'fp-2';
+    await adapter.ensureSharedGlobalSkills();
+    expect(state.builtIns).toHaveBeenCalledTimes(2);
+    expect(reported()).toHaveLength(1);
   });
 });

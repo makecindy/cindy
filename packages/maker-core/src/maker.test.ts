@@ -151,6 +151,15 @@ describe('Maker agent status', () => {
     expect(maker.registerAgent('pi', pi)).toBe(false);
     expect(maker.listAvailableAgents()).toEqual(['pi']);
   });
+
+  // The engine roster crosses devices and feeds Agent tools; a plugin engine must never appear in it
+  // (docs/plans/acp-plugin-bridge.md). Built-in kinds keep their exact listing.
+  it('keeps a registered plugin engine out of the built-in engine roster', () => {
+    const maker = new Maker({ agents: {}, storage: createStorage(), logger: createLogger() });
+    maker.registerAgent('pi', createAgent(async () => undefined, 'pi'));
+    expect(maker.registerAgent('acp', { ...createAgent(async () => undefined), kind: 'acp' } as BaseAgent)).toBe(true);
+    expect(maker.listAvailableAgents()).toEqual(['pi']);
+  });
 });
 
 function createAgent(
@@ -3515,8 +3524,25 @@ describe('Session turn send guard', () => {
       releaseAccepted = resolve;
     });
     const events = createAsyncQueue<AgentEvent>();
+    let terminalEventConsumed!: () => void;
+    const terminalEventObserved = new Promise<void>((resolve) => {
+      terminalEventConsumed = resolve;
+    });
     const handle = createHandle({ id: 'thread-1' });
-    handle.events = () => events;
+    handle.events = () => ({
+      [Symbol.asyncIterator]() {
+        const inner = events[Symbol.asyncIterator]();
+        let yieldedCount = 0;
+        return {
+          async next() {
+            if (yieldedCount === 1) terminalEventConsumed();
+            const result = await inner.next();
+            if (!result.done) yieldedCount += 1;
+            return result;
+          },
+        };
+      },
+    });
     handle.send = vi.fn(async () => undefined);
     const session = new Session({
       id: 'session-1',
@@ -3526,11 +3552,9 @@ describe('Session turn send guard', () => {
       capabilities: createAgent(async () => handle).capabilities,
       logger: createLogger(),
     });
-    const terminalEventObserved = new Promise<void>((resolve) => {
-      const unsubscribe = session.onEvent(() => {
-        unsubscribe();
-        resolve();
-      });
+    const seen: AgentEvent[] = [];
+    session.onEvent((event) => {
+      seen.push(event);
     });
 
     const firstSend = session.send('first', { onAccepted: () => acceptedReady });
@@ -3538,6 +3562,7 @@ describe('Session turn send guard', () => {
     events.push({ type: 'status', data: { isRunning: false }, source: 'codex' });
     await terminalEventObserved;
 
+    expect(seen).toEqual([]);
     await expect(session.send('second')).rejects.toMatchObject({ code: 'SESSION_RUNNING' });
     expect(handle.send).not.toHaveBeenCalled();
 
@@ -3579,7 +3604,9 @@ describe('Session turn send guard', () => {
   });
 
   it('emits a terminal error and closes the session after the event iterator crashes', async () => {
-    const crash = new Error('events crashed');
+    const crash = new Error('events crashed token=private-fixture');
+    const logger = createLogger();
+    const logCrash = vi.spyOn(logger, 'error');
     let crashIterator!: () => void;
     const crashReady = new Promise<void>((resolve) => {
       crashIterator = resolve;
@@ -3608,7 +3635,7 @@ describe('Session turn send guard', () => {
       workDir: '/repo',
       handle,
       capabilities: createAgent(async () => handle).capabilities,
-      logger: createLogger(),
+      logger,
     });
     const order: string[] = [];
     const terminalEvents: AgentEvent[] = [];
@@ -3638,9 +3665,17 @@ describe('Session turn send guard', () => {
       type: 'error',
       data: expect.objectContaining({
         reason: 'session_event_loop_crashed',
+        message: 'Session event loop stopped unexpectedly: Error: events crashed token=[REDACTED]',
         isTerminal: true,
       }),
     }));
+    expect(session.getObservedCurrentTurnTerminal()).toMatchObject({
+      kind: 'error', message: 'Session event loop stopped unexpectedly: Error: events crashed token=[REDACTED]',
+    });
+    expect(logCrash).toHaveBeenCalledWith('event loop crashed', expect.objectContaining({
+      stack: expect.stringContaining('maker.test.ts'),
+    }));
+    expect(JSON.stringify(logCrash.mock.calls)).not.toContain('private-fixture');
     expect(order).toEqual(['error']);
     expect(closedObserved).toBe(false);
     expect(handle.close).toHaveBeenCalledTimes(1);
@@ -4587,6 +4622,67 @@ describe('Maker invalid-resume persistence bridge', () => {
       resumeSessionId: 'sdk-old',
     });
     expect((await storage.get('session-1'))?.sdkSessionId).toBeUndefined();
+  });
+
+  // Unit regression for PR #11549. The actual Maker error path keeps the native
+  // identity on resume failure so a later send cannot silently start a fresh conversation.
+  it('keeps the native identity and returns the failure when a plugin resume is unavailable', async () => {
+    const storage = createStorage();
+    await storage.create({
+      id: 'session-1',
+      agentKind: 'acp',
+      workDir: '/repo',
+      title: 'Resume me',
+      model: 'default',
+      providerId: 'acp-plugin:dsh-acp:dsh',
+      sdkSessionId: 'sdk-old',
+    });
+    const failure = new Error('[PLUGIN_ENGINE_RESUME_UNAVAILABLE] The plugin engine could not restore the previous conversation.');
+    const startSession = vi.fn(async (opts: CreateSessionOptions) => {
+      expect(opts.onInvalidResumeSession).toBeUndefined();
+      throw new AgentStartupStoppedError(failure);
+    });
+    const maker = new Maker({
+      agents: { acp: { ...createAgent(startSession), kind: 'acp' } as BaseAgent },
+      storage,
+      logger: createLogger(),
+    });
+    await expect(maker.createSession({
+      id: 'session-1',
+      agentKind: 'acp',
+      workingDir: '/repo',
+      model: 'default',
+      providerId: 'acp-plugin:dsh-acp:dsh',
+      resumeSessionId: 'sdk-old',
+    })).rejects.toBe(failure);
+    expect(startSession).toHaveBeenCalledOnce();
+    expect((await storage.get('session-1'))?.sdkSessionId).toBe('sdk-old');
+  });
+
+  // 测试价值：Maker.createSession 交给插件引擎的 userPrompt，插件引擎会把它作为 ACP systemPrompt 发出。
+  // 依据：#13098 审查 P1，桌面 prepareStartOptions 会把协同角色说明拼进 userPrompt，目标模式恢复等入口
+  // 不带冻结的个性化。缺口：此前只有 AcpAgent 层用例且手写 userPrompt。最小失败输入：不带
+  // hostStartupPreferences 的 acp 启动加一个追加文本的 prepareStartOptions。unit tier。
+  it.each([
+    { name: 'none when the start froze none', extra: {}, expected: undefined },
+    { name: 'the frozen text otherwise', extra: { hostStartupPreferences: { userPrompt: 'MY PERSONAL' } }, expected: 'MY PERSONAL' },
+  ])('gives a plugin engine only personal instructions frozen at start: $name', async ({ extra, expected }) => {
+    const startSession = vi.fn<(opts: CreateSessionOptions) => Promise<AgentSessionHandle>>(async () => createHandle({ id: 'sdk-1' }));
+    const maker = new Maker({
+      agents: { acp: { ...createAgent(startSession), kind: 'acp' } as BaseAgent },
+      storage: createStorage(),
+      logger: createLogger(),
+      lifecycleHooks: {
+        prepareStartOptions: async (_sessionId, opts) => {
+          opts.userPrompt = `${opts.userPrompt ?? ''}\n\nORCA LEAD ROLE`;
+        },
+      },
+    });
+    await maker.createSession({
+      id: 'session-1', agentKind: 'acp', workingDir: '/repo', model: 'default',
+      providerId: 'acp-plugin:dsh-acp:dsh', userPrompt: 'MY PERSONAL', ...extra,
+    });
+    expect(startSession.mock.lastCall?.[0].userPrompt).toBe(expected);
   });
 
   it('injects a compare-and-clear callback for fresh (non-resume) Claude sessions too', async () => {

@@ -248,6 +248,58 @@ function header(srcLabel) {
  * that can live at the adapter boundary.
  */
 const LOCAL_PATCHES = {
+  "packages/net-policy/ip.ts": [
+    {
+      desc: "support explicit RFC 5180 benchmark fake-IP policy without allowing private networks",
+      transform: (source) =>
+        applyExactReplacements(source, [
+          [
+            'type BlockedIpv6Range = Ipv6Range | "discard";',
+            'type BlockedIpv6Range = Ipv6Range | "discard" | "benchmarking" | "orchid2";',
+          ],
+          [
+            "  allowUniqueLocalRange?: boolean;\n};",
+            "  allowUniqueLocalRange?: boolean;\n  /** Permit only RFC 5180 benchmark addresses (2001:2::/48) used by fake-IP DNS. */\n  allowBenchmarkingRange?: boolean;\n};",
+          ],
+          [
+            "const RFC2544_BENCHMARK_PREFIX:",
+            'const IPV6_BENCHMARK_PREFIX: [ipaddr.IPv6, number] = [ipaddr.IPv6.parse("2001:2::"), 48];\nconst RFC2544_BENCHMARK_PREFIX:',
+          ],
+          [
+            " * `allowUniqueLocalRange` is exposed (#74351); other reserved IPv6 ranges stay\n * unconditionally blocked because they have no documented fake-ip / proxy\n * use case.",
+            " * ULA and RFC 5180 benchmarking exemptions are exposed; other reserved IPv6\n * ranges stay blocked. Callers must explicitly opt in to each range.",
+          ],
+          [
+            "  if (BLOCKED_IPV6_SPECIAL_USE_RANGES.has(range)) {",
+            "  const inBenchmarkingRange = address.match(IPV6_BENCHMARK_PREFIX);\n  if (inBenchmarkingRange && options.allowBenchmarkingRange === true) {\n    return false;\n  }\n  if (inBenchmarkingRange || BLOCKED_IPV6_SPECIAL_USE_RANGES.has(range)) {",
+          ],
+        ]),
+    },
+  ],
+  "leaf/src/infra/net/ssrf.ts": [
+    {
+      desc: "support explicit RFC 5180 benchmark fake-IP policy without allowing private networks",
+      transform: (source) =>
+        applyExactReplacements(source, [
+          [
+            "  allowIpv6UniqueLocalRange?: boolean;\n",
+            "  allowIpv6UniqueLocalRange?: boolean;\n  /** Opt in to RFC 5180 benchmark fake-IP DNS answers; does not allow ULA. */\n  allowIpv6BenchmarkingRange?: boolean;\n",
+          ],
+          [
+            "    allowIpv6UniqueLocalRange: policy.allowIpv6UniqueLocalRange === true,",
+            "    allowIpv6UniqueLocalRange: policy.allowIpv6UniqueLocalRange === true,\n    allowIpv6BenchmarkingRange: policy.allowIpv6BenchmarkingRange === true,",
+          ],
+          [
+            "    if (policy.allowedHostnames?.length) {",
+            "    if (policy.allowIpv6BenchmarkingRange) {\n      merged.allowIpv6BenchmarkingRange = true;\n    }\n    if (policy.allowedHostnames?.length) {",
+          ],
+          [
+            "    allowUniqueLocalRange: policy?.allowIpv6UniqueLocalRange === true,",
+            "    allowUniqueLocalRange: policy?.allowIpv6UniqueLocalRange === true,\n    allowBenchmarkingRange: policy?.allowIpv6BenchmarkingRange === true,",
+          ],
+        ]),
+    },
+  ],
   'extension/src/browser/navigation-guard.ts': [
     {
       desc: 'allow explicit browser proxies only for public hostnames named in the strict hostname allowlist',

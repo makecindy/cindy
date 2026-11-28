@@ -1,0 +1,3 @@
+real window-bg run1 upload=2392ms failed=0 tapRTT p50/p90/max=13/26/56 taps=11
+slow window-bg run1 upload=10033ms failed=0 tapRTT p50/p90/max=229/235/283 taps=23
+very-slow window-bg run1 upload=40402ms failed=0 tapRTT p50/p90/max=461/474/826 taps=60

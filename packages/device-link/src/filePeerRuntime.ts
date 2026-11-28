@@ -3,6 +3,8 @@
 export type FilePeerCloseReason = "failed" | "closed" | "disconnect-timeout";
 
 export interface FilePeerRuntimeBridge {
+  /** A local observer returns a disposer that takes the final reading and closes the peer connection. */
+  observePeerConnection?(pc: RTCPeerConnection): () => void;
   /** Local lifecycle event, never a wire message. */
   closed?(connection: string, reason?: FilePeerCloseReason): void;
   read(connection: string, ticket: string, offset: number): Promise<string>;
@@ -53,6 +55,7 @@ interface SendProgress {
 }
 interface PeerState {
   pc: RTCPeerConnection;
+  closePeer: () => void;
   dc: RTCDataChannel | null;
   busy: boolean;
   recv?: ReceiveProgress;
@@ -273,15 +276,16 @@ export function createFilePeerRuntime(bridge: FilePeerRuntimeBridge) {
     });
   }
   function close(id: string, reason?: FilePeerCloseReason) {
+    const p = peers.get(id);
     const rpc = rpcPeers.get(id);
     rpcPeers.delete(id);
     rpc?.close();
-    const p = peers.get(id);
     peers.delete(id);
     clearTimeout(p?.disconnectTimer);
     p?.dc?.close();
-    p?.pc.close();
     if (p) {
+      p.pc.ondatachannel = null;
+      p.closePeer();
       if (reason) bridge.closed?.(id, reason);
       else bridge.closed?.(id);
     }
@@ -289,7 +293,7 @@ export function createFilePeerRuntime(bridge: FilePeerRuntimeBridge) {
   function create(id: string, servers: RTCIceServer[]) {
     if (peers.has(id) || peers.size >= 4) throw new Error("FILE_PEER_BUSY");
     const pc = new RTCPeerConnection({ iceServers: servers });
-    const p: PeerState = { pc, dc: null, busy: false };
+    const p: PeerState = { pc, dc: null, busy: false, closePeer: bridge.observePeerConnection?.(pc) ?? (() => pc.close()) };
     peers.set(id, p);
     pc.onconnectionstatechange = () => {
       if (peers.get(id) !== p) return;
@@ -333,13 +337,28 @@ export function createFilePeerRuntime(bridge: FilePeerRuntimeBridge) {
       throw new Error("FILE_PEER_CLOSED");
     return pc.localDescription.sdp;
   }
-  function decode(text: string, limit = chunkBytes) {
-    if (
-      text.length > Math.ceil(limit / 3) * 4 ||
-      !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(
-        text,
+  function isCanonicalBase64(text: string) {
+    const len = text.length;
+    if (len === 0) return true;
+    if (len % 4 !== 0) return false;
+    const pad = text.endsWith("==") ? 2 : text.endsWith("=") ? 1 : 0;
+    const end = len - pad;
+    for (let index = 0; index < end; index += 1) {
+      const code = text.charCodeAt(index);
+      if (
+        (code >= 0x41 && code <= 0x5a) ||
+        (code >= 0x61 && code <= 0x7a) ||
+        (code >= 0x30 && code <= 0x39) ||
+        code === 0x2b ||
+        code === 0x2f
       )
-    )
+        continue;
+      return false;
+    }
+    return true;
+  }
+  function decode(text: string, limit = chunkBytes) {
+    if (text.length > Math.ceil(limit / 3) * 4 || !isCanonicalBase64(text))
       throw new Error("FILE_PEER_BLOCK");
     const s = atob(text);
     if (s.length > limit) throw new Error("FILE_PEER_BLOCK");
@@ -739,9 +758,7 @@ export function createFilePeerRuntime(bridge: FilePeerRuntimeBridge) {
       if (
         typeof body !== "string" ||
         body.length > Math.ceil(RPC_BODY_MAX_BYTES / 3) * 4 ||
-        !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(
-          body,
-        )
+        !isCanonicalBase64(body)
       )
         throw new Error("FILE_PEER_RPC_SIZE");
       return rpc.request(

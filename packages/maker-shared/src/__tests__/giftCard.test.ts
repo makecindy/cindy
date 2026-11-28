@@ -4,6 +4,7 @@ import {
   formatGiftCardCode,
   giftCardCodeFromInput,
   giftCardCodeRegion,
+  giftCardFaceName,
   giftCardFailureForError,
   normalizeGiftCardCode,
   projectGiftCardPreview,
@@ -52,7 +53,9 @@ const card = {
 
 describe('gift card server responses', () => {
   it('keeps only the fields the redeem surfaces render', () => {
-    expect(projectGiftCardPreview({ card: { ...card, claimedByMembershipId: 'member-1' } })).toEqual({ card });
+    // 旧服务端不下发 destination：它发出的卡都是后台发放，进赠送余额。
+    expect(projectGiftCardPreview({ card: { ...card, claimedByMembershipId: 'member-1' } }))
+      .toEqual({ card: { ...card, face: null, destination: 'PROMOTIONAL' } });
     const redeemed = projectGiftCardRedemption({
       card: { ...card, status: 'CLAIMED_BY_YOU', claimedAt: '2026-11-16T12:00:00.000Z' },
       credit: { state: 'PENDING', amount: '20.000000000', expiresAt: null, grantId: 'grant-1' },
@@ -72,10 +75,162 @@ describe('gift card server responses', () => {
       { card: { ...card, senderName: '' } },
       { card: { ...card, validityDays: 0 } },
       { card: { ...card, claimDeadline: 'tomorrow' } },
+      // 后台发放的卡必须带齐领取截止与有效天数，否则说不清条款。
+      { card: { ...card, destination: 'PROMOTIONAL', claimDeadline: null } },
+      { card: { ...card, destination: 'PROMOTIONAL', validityDays: null } },
+      // 声称是用户买的卡却没有说明到账去向：不能按赠送余额的条款展示。
+      { card: { ...card, source: 'PURCHASE' } },
+      { card: { ...card, destination: 'GIFT' } },
     ]) {
       expect(() => projectGiftCardPreview(broken)).toThrow();
     }
     expect(() => projectGiftCardRedemption({ card, credit: { state: 'DONE', amount: '20', expiresAt: null } })).toThrow();
+  });
+
+  // 用户买的卡进充值余额、永久有效：两端都直接这样告诉用户，所以带了领取截止、有效天数或到账
+  // 过期时间的「买来的卡」是自相矛盾的响应，拒绝，不悄悄隐去条款。
+  it.each([
+    ['a claim deadline', { claimDeadline: '2026-12-31T16:00:00.000Z' }, null],
+    ['validity days', { validityDays: 90 }, null],
+    ['a missing claim deadline', { claimDeadline: undefined }, null],
+    ['an expiring credit', {}, '2027-01-01T00:00:00.000Z'],
+  ])('rejects a purchased card that comes with %s', (_label, terms, creditExpiresAt) => {
+    const purchased = {
+      ...card, source: 'PURCHASE', destination: 'PURCHASED', claimDeadline: null, validityDays: null, ...terms,
+    };
+    const claimed = { ...purchased, status: 'CLAIMED_BY_YOU', claimedAt: '2026-11-19T08:00:00.000Z' };
+    const credit = { state: 'APPLIED', amount: '20', expiresAt: creditExpiresAt };
+    expect(() => projectGiftCardRedemption({ card: claimed, credit })).toThrow();
+    if (creditExpiresAt === null) expect(() => projectGiftCardPreview({ card: purchased })).toThrow();
+  });
+
+  // 来源与去向对不上（买来的卡却进赠送余额，或后台发的卡却进充值余额）时，两端会承诺错误的到账条款：拒绝。
+  it.each([
+    ['PURCHASE', 'PROMOTIONAL', false],
+    ['PLATFORM', 'PURCHASED', false],
+    ['GIFT', 'PROMOTIONAL', false],
+    ['PLATFORM', 'PROMOTIONAL', true],
+    ['PURCHASE', 'PURCHASED', true],
+  ])('checks that source %s goes with destination %s', (source, destination, accepted) => {
+    const terms = destination === 'PURCHASED' ? { claimDeadline: null, validityDays: null } : {};
+    const project = () => projectGiftCardPreview({ card: { ...card, source, destination, ...terms } });
+    if (accepted) expect(project().card.destination).toBe(destination);
+    else expect(project).toThrow();
+  });
+
+  // 买来的卡到账额度就是卡面金额：金额对不上的兑换结果拒绝，写法不同但数值相等的照常接受。
+  it.each([
+    ['20', true],
+    ['20.000000000', true],
+    ['1', false],
+  ])('accepts a purchased redemption crediting %s only when it equals the face value', (creditAmount, accepted) => {
+    const redeemed = {
+      ...card, source: 'PURCHASE', destination: 'PURCHASED', claimDeadline: null, validityDays: null,
+      status: 'CLAIMED_BY_YOU', claimedAt: '2026-11-19T08:00:00.000Z',
+    };
+    const project = () => projectGiftCardRedemption({ card: redeemed, credit: { state: 'APPLIED', amount: creditAmount, expiresAt: null } });
+    if (accepted) expect(project().credit.amount).toBe(creditAmount);
+    else expect(project).toThrow();
+  });
+
+  // 卡面按分印：比分更细的卡面或到账金额（即使两者相等）按坏响应处理，免得卡面印 1.005、文字显示 1.01。
+  it('rejects gift card amounts finer than a cent, however they are written', () => {
+    const redeemed = {
+      ...card, source: 'PURCHASE', destination: 'PURCHASED', claimDeadline: null, validityDays: null,
+      status: 'CLAIMED_BY_YOU', claimedAt: '2026-11-19T08:00:00.000Z',
+    };
+    const redeem = (amount: string) => projectGiftCardRedemption({
+      card: { ...redeemed, amount }, credit: { state: 'APPLIED', amount, expiresAt: null },
+    });
+    expect(() => redeem('1.005')).toThrow();
+    // 0 元的卡或「成功兑换 0 元」同样自相矛盾。
+    expect(() => redeem('0')).toThrow();
+    expect(() => projectGiftCardPreview({ card: { ...card, amount: '0.00' } })).toThrow();
+    expect(() => projectGiftCardPreview({ card: { ...card, amount: '1.005' } })).toThrow();
+    expect(redeem('1.500000000').card.amount).toBe('1.500000000');
+  });
+
+  // 买来的卡永久有效：预览或兑换结果里出现「已过期」同样自相矛盾，拒绝而不是告诉用户卡过期了。
+  it('rejects a purchased card reported as expired', () => {
+    const expired = {
+      ...card, source: 'PURCHASE', destination: 'PURCHASED', claimDeadline: null, validityDays: null, status: 'EXPIRED',
+    };
+    expect(() => projectGiftCardPreview({ card: expired })).toThrow();
+    expect(() => projectGiftCardRedemption({ card: expired, credit: { state: 'APPLIED', amount: '20', expiresAt: null } })).toThrow();
+    // 后台发的卡过了领取截止照常是「已过期」。
+    expect(projectGiftCardPreview({ card: { ...card, status: 'EXPIRED' } }).card.status).toBe('EXPIRED');
+  });
+
+  // 用户买的卡进充值余额、永久有效：没有领取截止，也没有有效天数。
+  it('accepts a purchased card without a claim deadline or validity days', () => {
+    const purchased = {
+      ...card, source: 'PURCHASE', destination: 'PURCHASED', claimDeadline: null, validityDays: null,
+    };
+    expect(projectGiftCardPreview({ card: purchased }).card).toMatchObject({
+      destination: 'PURCHASED', claimDeadline: null, validityDays: null,
+    });
+    expect(projectGiftCardRedemption({
+      card: { ...purchased, status: 'CLAIMED_BY_YOU', claimedAt: '2026-11-19T08:00:00.000Z' },
+      credit: { state: 'APPLIED', amount: '20', expiresAt: null },
+    }).credit).toEqual({ state: 'APPLIED', amount: '20', expiresAt: null });
+  });
+
+  // 卡面改由服务端下发（底图 + 金额印法 + 名称），新卡面不用发版就能显示。卡面信息不合法时只丢弃它、
+  // 按 faceCode 用内置卡面：旧版本把不认识的内容当坏响应会让整张卡打不开，这里绝不能这样。
+  it('takes the server card face and drops only face details it cannot draw', () => {
+    const snow = {
+      code: 'snow',
+      names: { en: 'Snow · Night', 'zh-CN': '雪 · 夜色' },
+      imageUrl: 'https://model-access.example.com/api/public/gift-cards/faces/snow.webp?v=0123456789ab',
+      amount: { x: 80, baseline: 676, size: 228, maxWidth: 480, color: '#F3EDE2' },
+    };
+    const read = (face: unknown) => projectGiftCardPreview({ card: { ...card, faceCode: 'snow', face } }).card;
+    expect(read(snow)).toMatchObject({ faceCode: 'snow', face: snow });
+    // 本机开发的服务端可以是 http://localhost。
+    const local = { ...snow, imageUrl: 'http://localhost:3339/api/public/gift-cards/faces/snow.webp' };
+    expect(read(local).face).toEqual(local);
+    for (const broken of [
+      undefined,
+      null,
+      'snow',
+      { ...snow, code: 'cat' },
+      { ...snow, imageUrl: 'http://cdn.example.com/snow.webp' },
+      { ...snow, imageUrl: 'javascript:alert(1)' },
+      { ...snow, imageUrl: 'https://user:secret@cdn.example.com/snow.webp' },
+      { ...snow, names: {} },
+      { ...snow, names: { en: '' } },
+      { ...snow, names: { en: 'x'.repeat(41) } },
+      { ...snow, names: { 'not a tag': 'Snow' } },
+      { ...snow, amount: { ...snow.amount, color: 'red' } },
+      { ...snow, amount: { ...snow.amount, x: 1200 } },
+      { ...snow, amount: { ...snow.amount, baseline: 0 } },
+      { ...snow, amount: { ...snow.amount, size: Number.NaN } },
+      { ...snow, amount: { ...snow.amount, x: 800, maxWidth: 401 } },
+      // 基线与字号各自都在卡面内，但字形上沿超出卡面顶部 / 下沿（$ 的竖线）超出底部：金额会被裁掉。
+      { ...snow, amount: { ...snow.amount, baseline: 100 } },
+      { ...snow, amount: { ...snow.amount, baseline: 757 } },
+      { ...snow, amount: null },
+    ]) {
+      const parsed = read(broken);
+      expect(parsed.face).toBeNull();
+      expect(parsed.amount).toBe('20.000000000');
+    }
+  });
+
+  // 卡面名称跟着界面语言：服务端没给这种语言时依次退到繁简中文、同一语言、英文、第一项。
+  it('picks the card face name for the interface language', () => {
+    const names = { 'zh-CN': '雪 · 夜色', 'zh-TW': '雪 · 夜色（繁）', en: 'Snow · Night', 'pt-BR': 'Neve · Noite' };
+    for (const [locale, expected] of [
+      ['zh-CN', '雪 · 夜色'],
+      ['zh-Hant-x-lzh', '雪 · 夜色（繁）'],
+      ['zh-Hans-x-lzh', '雪 · 夜色'],
+      ['pt-PT', 'Neve · Noite'],
+      ['de', 'Snow · Night'],
+    ] as const) {
+      expect(giftCardFaceName(names, locale)).toBe(expected);
+    }
+    expect(giftCardFaceName({ 'zh-CN': '雪' }, 'ja')).toBe('雪');
+    expect(giftCardFaceName({}, 'en')).toBeNull();
   });
 
   it('tells a card state the server reported apart from an outage', () => {

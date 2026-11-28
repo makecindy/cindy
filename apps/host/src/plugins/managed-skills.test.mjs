@@ -21,14 +21,18 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
+import { chromium } from 'playwright-core';
 
 import { configureHostOwner } from '../agent/claude-auth.mjs';
 import { createSnapshotProcess } from '../snapshot-process.mjs';
 import { createHostGhostManager } from '../plugins-installed.ts';
 import { createHostPluginRuntime } from './runtime.ts';
+import { runLegacyPluginMigrationPreflight } from './legacy-approvals.ts';
 import { createHostPluginIdentity } from './identity.ts';
 import { configureGhostSnapshotProcess } from '../../../desktop/src/main/cindy-brain/ghostSnapshotCapability.ts';
 import { prepareBuiltInSkills } from '../../../desktop/src/main/maker-host/built-in-skills.ts';
+import { getDesktopMcpToolApprovalPolicy, setGhostToolApprovalResolver } from '../../../desktop/src/main/maker-host/mcp-tool-approval-policy.ts';
+import { writeRuntimePluginSettings } from '../../../desktop/src/main/maker-host/runtime-plugin-settings.ts';
 import { configureAppDataDir } from '../../../desktop/src/main/userDataPath.ts';
 import { commitVolatileAppSession, LOCAL_DATA_OWNER_ID } from '../../../desktop/src/main/appSessionState.ts';
 import { getAppCapabilities } from '../../../desktop/src/main/appCapabilities.ts';
@@ -70,13 +74,13 @@ async function profileFor(t, mode, ownerId) {
   return { profile, owner, manager };
 }
 
-async function install(manager, profile, { id, namespace, account }) {
+async function install(manager, profile, { id, namespace, account, manifest = {} }) {
   const zip = new JSZip();
   zip.file('ghost.json', JSON.stringify({ schemaVersion: 3, minCindyVersion: '0.1.61', id,
     name: `Fixture ${id}`, kind: 'chip', version: '1.0.0', entry: 'main.js',
     tools: [{ name: 'noop', description: 'fixture tool', parameters: { type: 'object' } }],
     ...(account ? { network: { hosts: ['api.example.com'], secrets: [{ key: 'email', label: 'Email', source: 'login-email', inject: { header: 'X-User', format: '{value}' } }] } } : {}),
-    skill: { items: [{ dir: 'skills/demo', name: 'demo', description: `Skill of ${id}` }] } }));
+    skill: { items: [{ dir: 'skills/demo', name: 'demo', description: `Skill of ${id}` }] }, ...manifest }));
   zip.file('main.js', '// fixture');
   zip.file('skills/demo/SKILL.md', `---\nname: demo\ndescription: Skill of ${id}\n---\n\nApproved body\n`);
   const archive = path.join(profile, `${id}-${namespace ?? 'root'}.cindy`);
@@ -104,11 +108,13 @@ async function installAll(manager, profile, owner, plugins = PLUGINS) {
   return parts;
 }
 
-async function hostRuntime(t, { profile, owner, manager }, user = null) {
+async function hostRuntime(t, { profile, owner, manager }, user = null, log) {
   const secrets = new Map();
   const runtime = await createHostPluginRuntime({ profileDir: profile, ownerId: owner, manager,
     credentials: { read: key => secrets.get(key) ?? null, write: (key, value) => { secrets.set(key, value); }, remove: key => { secrets.delete(key); } },
     getLoginEmail: () => user?.email ?? null, getUser: () => user,
+    modelRouteSources: () => ({ localViews: async () => [], localAgents: () => [] }),
+    log,
     appContext: () => ({ ok: false, error: 'unavailable' }), getSession: () => undefined,
     requestFileConfirmation: async () => false, publish() {},
     // No plugin process is started here; the worker assets are never read.
@@ -117,6 +123,79 @@ async function hostRuntime(t, { profile, owner, manager }, user = null) {
   t.after(() => runtime.close());
   return runtime;
 }
+
+async function writeLegacyPlugin(dir, id) {
+  const manifest = JSON.stringify({ id, schemaVersion: 3, minCindyVersion: '0.1.61', kind: 'chip',
+    name: 'Legacy fixture', version: '1.0.0', entry: 'main.js' });
+  await fs.mkdir(dir, { recursive: true });
+  await fs.writeFile(path.join(dir, 'ghost.json'), manifest);
+  await fs.writeFile(path.join(dir, 'main.js'), '// fixture');
+  return manifest;
+}
+
+async function preflight(profile) {
+  const stdout = [];
+  const stderr = [];
+  const exitCode = await runLegacyPluginMigrationPreflight([profile], { log: value => stdout.push(value), error: value => stderr.push(value) });
+  return { exitCode, report: JSON.parse(stdout[0]), stderr };
+}
+
+// §3.2 integration, migration release table §5: use the real startup plugin
+// reconciliation and offline preflight on one unapproved bare install. A migrated
+// copy alone cannot prove either the block or the safe discovery of an old profile.
+test('legacy plugin startup reports missing approvals and preflight only passes after desktop backfill', async t => {
+  t = lifoCleanup(t);
+  const env = await profileFor(t, 'local', null);
+  const { profile, owner, manager } = env;
+  const id = 'legacy-fixture';
+  const dir = ownerScopedPath(profile, owner, 'cindy-brain', id);
+  const receipt = ownerScopedPath(profile, owner, 'ghost-install-state', `${id}.json`);
+  const manifest = await writeLegacyPlugin(dir, id);
+  const report = { count: 1, installIds: [id] };
+  const preflightReport = { ...report, allowed: false, installIds: [path.relative(profile, dir).split(path.sep).join('/')] };
+  const refused = await preflight(profile);
+  assert.equal(refused.exitCode, 1);
+  assert.deepEqual(refused.report, preflightReport);
+  assert.match(refused.stderr.join('\n'), /Cindy Desktop v0\.1\.48 or later/);
+
+  const logs = [];
+  const runtime = await hostRuntime(t, env, null, { info: (...args) => logs.push(args), trace() {}, debug() {}, warn() {}, error() {}, fatal() {} });
+  const censusLogs = () => logs.filter(([message]) => message === 'legacy plugin approval census: %j');
+  assert.equal(runtime.legacyPluginApprovals(), null);
+  await runtime.reconcile();
+  assert.deepEqual(runtime.legacyPluginApprovals(), report);
+  assert.deepEqual(censusLogs(), [['legacy plugin approval census: %j', report]]);
+  assert.equal((await runtime.list()).find(ghost => ghost.manifest.id === id)?.approval.state, 'legacy-unapproved');
+  await assert.rejects(fs.stat(receipt), { code: 'ENOENT' });
+  assert.equal(await fs.readFile(path.join(dir, 'ghost.json'), 'utf8'), manifest);
+  assert.equal(await fs.readFile(path.join(dir, 'main.js'), 'utf8'), '// fixture');
+
+  assert.deepEqual((await manager.migrateLegacyApprovalsOnce()).migrated, [id]);
+  const approved = await fs.readFile(receipt);
+  assert.deepEqual(await preflight(profile), { exitCode: 0, report: { allowed: true, count: 0, installIds: [] }, stderr: [] });
+  await runtime.reconcile();
+  assert.deepEqual(runtime.legacyPluginApprovals(), { count: 0, installIds: [] });
+  assert.equal(censusLogs().length, 1);
+  assert.deepEqual(await fs.readFile(receipt), approved);
+  assert.equal((await runtime.list()).find(ghost => ghost.manifest.id === id)?.enabled, true);
+});
+
+// §3.2 integration: an active-owner-only or cindy-brain-only scan can incorrectly
+// clear the profile gate. Include the older flat and inactive owner layouts.
+test('legacy plugin preflight includes unclaimed and dormant owner roots and rejects an incomplete census', async t => {
+  const profile = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-host-legacy-preflight-'));
+  t.after(() => fs.rm(profile, { recursive: true, force: true }));
+  const dormant = ownerScopedPath(profile, 'dormant-owner', 'brain', 'dormant-fixture');
+  await writeLegacyPlugin(dormant, 'dormant-fixture');
+  await writeLegacyPlugin(path.join(profile, 'brain', 'shared-fixture'), 'shared-fixture');
+  const refused = await preflight(profile);
+  assert.equal(refused.exitCode, 1);
+  assert.deepEqual(refused.report, { allowed: false, count: 2,
+    installIds: ['brain/shared-fixture', path.relative(profile, dormant).split(path.sep).join('/')] });
+  const unknownRoot = ownerScopedPath(profile, 'unreadable-owner');
+  await fs.writeFile(unknownRoot, 'not a directory');
+  await assert.rejects(preflight(profile), /owner projection namespace is not a regular directory/);
+});
 
 /** The identity as it was before 3c: the runtime's own lookup (manager.findInstalledInstance, then the list). */
 function previousIdentity({ profile, owner, manager }, user = null) {
@@ -196,3 +275,87 @@ test('with account services unavailable, a plugin that needs an account is left 
   }
   assert.equal(runtime.identity.isVerifiedPublicMarket(parts.accountOfficial), true);
 });
+
+// §3.2, integration: a pre-existing desktop installation must answer a runtime
+// point without a second approval. Exercise real install facts, gateway wake,
+// sandbox admission, host-request binding and verdict delivery. Only Chromium's
+// process boundary is a fixture. The legacy variant starts with no receipt and
+// takes the existing desktop backfill before handing its profile to the Host.
+for (const layout of ['receipt', 'desktop backfill']) {
+  test(`Host hook delivery uses the existing ${layout} approval and the plugin’s each-call policy`, async t => {
+    t = lifoCleanup(t);
+    const env = await profileFor(t, 'local', null);
+    const id = 'approved-hook';
+    const installed = () => env.manager.list().find(ghost => ghost.manifest.id === id);
+    const manifest = { id, schemaVersion: 3, minCindyVersion: '0.1.61', kind: 'chip',
+      name: 'Approved hook', version: '1.0.0', entry: 'main.js',
+      subscribe: { hooks: ['will-compose-context', 'will-tool-call', 'did-tool-result'] },
+      tools: [{ name: 'noop', description: 'fixture tool', parameters: { type: 'object' }, approval: 'each-call' }] };
+    if (layout === 'desktop backfill') {
+      const dir = ownerScopedPath(env.profile, env.owner, 'cindy-brain', id);
+      await fs.mkdir(dir, { recursive: true });
+      await fs.writeFile(path.join(dir, 'ghost.json'), JSON.stringify(manifest));
+      await fs.writeFile(path.join(dir, 'main.js'), '// fixture');
+      assert.equal(installed()?.approval.state, 'legacy-unapproved');
+      assert.deepEqual((await env.manager.migrateLegacyApprovalsOnce()).migrated, [id]);
+    } else {
+      await install(env.manager, env.profile, { id, namespace: null, manifest });
+    }
+    const ghost = installed();
+    assert.ok(ghost);
+    assert.equal(ghost.approval.state, 'approved');
+    let onRequest, href;
+    const delivered = [];
+    const replies = [];
+    const verdicts = {
+      'will-compose-context': { action: 'context', blocks: [{ id: 'reference', text: 'approved reference' }] },
+      'will-tool-call': { action: 'tool', tool: { decision: 'deny', reason: 'fixture denied call' } },
+      'did-tool-result': { action: 'tool', tool: { result: { details: { edited: true } } } },
+    };
+    const frame = { url: () => href };
+    const page = {
+      on() {}, close: async () => {}, isClosed: () => false, mainFrame: () => frame,
+      exposeBinding(_name, handler) { onRequest = handler; },
+      route: async () => {}, goto: async url => { href = url; }, addScriptTag: async () => {},
+      evaluateHandle: async () => ({
+        async evaluate(_deliver, message) {
+          delivered.push(message.name);
+          const result = await onRequest({ page, frame }, 'send', { type: 'event-verdict',
+            hookId: message.hookId, ...verdicts[message.name] });
+          replies.push(result);
+        },
+      }),
+    };
+    const browser = { once() {}, close: async () => {}, isConnected: () => true, newContext: async () => ({
+      once() {}, on() {}, route: async () => {}, routeWebSocket: async () => {}, close: async () => {},
+      browser: () => browser, newPage: async () => page,
+    }) };
+    t.mock.method(chromium, 'launch', async () => browser);
+    const runtime = await hostRuntime(t, env);
+    const installation = installedGhostStoragePart(ghost);
+    const screen = await runtime.taskPlugins.screenGhostControlPoint('will-compose-context', { sessionId: 'task', text: 'work' },
+      { pluginId: installation, onFailure: 'block' });
+    assert.equal(screen.action, 'context');
+    const selection = [{ pluginId: installation, onFailure: 'block' }];
+    await writeRuntimePluginSettings('task', { 'will-tool-call': selection, 'did-tool-result': selection });
+    const lifecycle = runtime.taskPlugins.ghostToolLifecycleControl;
+    const call = { engine: 'pi', phase: 'call', toolName: 'noop', toolCallId: 'call', input: {} };
+    assert.deepEqual(await lifecycle.run('task', call), { decision: 'deny', reason: 'fixture denied call' });
+    assert.deepEqual(await lifecycle.run('task', { ...call, phase: 'result',
+      result: { content: [{ type: 'text', text: 'original' }], details: {} } }), {
+      result: { content: [{ type: 'text', text: 'original' }], details: { edited: true } },
+    });
+    assert.deepEqual(delivered, ['will-compose-context', 'will-tool-call', 'did-tool-result']);
+    await new Promise(resolve => setImmediate(resolve));
+    assert.deepEqual(replies, [{ ok: true }, { ok: true }, { ok: true }]);
+    assert.deepEqual(installed()?.approval, ghost.approval);
+    setGhostToolApprovalResolver(runtime.taskPlugins.resolveToolApproval);
+    try {
+      const invocation = { serverName: 'cindy', toolName: 'ghost_call', toolParams: { ghost_id: id, tool: 'noop' } };
+      assert.deepEqual([getDesktopMcpToolApprovalPolicy(invocation), getDesktopMcpToolApprovalPolicy(invocation)],
+        ['prompt-each-time', 'prompt-each-time']);
+    } finally {
+      setGhostToolApprovalResolver(null);
+    }
+  });
+}

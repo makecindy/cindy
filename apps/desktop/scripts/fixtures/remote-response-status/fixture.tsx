@@ -11,10 +11,19 @@ function Subject({ context }: { context: UiPageContext }) {
     ? [{ clientId: 'thinking', role: 'thinking', content: 'Considering the request' } as ChatMessage] : [];
   return <div className="flex h-screen items-center bg-[var(--surface)] px-6" data-ui-page-subject data-background-stopped={stopped}>
     <RunningStatusBar status={remoteResponsePendingStatus('Thinking...', context.data.remote ? 'remote-device' : null, true, messages)}
-      visible preparing={context.data.preparing === true} tokenUsage={context.data.preparing ? 1234 : 0}
+      visible preparing={context.data.preparing === true} tokenUsage={context.data.clock ? 85900 : context.data.preparing ? 1234 : 0}
       backgroundTasksRunning={context.data.background === true} onStopBackgroundTasks={() => setStopped(true)}
-      startedAt={null} generationReliable={false} inputWidth="100%" />
+      sessionKey={context.data.clock ? 'task' : null} clockDeviceId="remote-device"
+      startedAt={context.data.clock ? 1 : null} generationReliable={false} inputWidth="100%" />
   </div>;
 }
 
-void mountPage({ render: context => <Subject context={context} /> });
+void mountPage({
+  host: context => ({ deviceLink: {
+    invoke: async () => ({
+      id: 'task', activeTurnStartedAt: 1000,
+      ...(context.data.clock === 'sampled' ? { turnElapsedMs: 252000 } : {}),
+    }),
+  } }),
+  render: context => <Subject context={context} />,
+});

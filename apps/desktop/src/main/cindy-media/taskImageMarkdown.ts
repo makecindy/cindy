@@ -4,7 +4,7 @@ import remarkParse from 'remark-parse';
 import remarkGfm from 'remark-gfm';
 import { visit } from 'unist-util-visit';
 import type { Definition } from 'mdast';
-import { findBareSpaceLocalImages } from '../../shared/bareSpaceLocalImages.js';
+import { recoverBareSpaceLocalImages } from '../../shared/bareSpaceLocalImages.js';
 
 const parser = unified().use(remarkParse).use(remarkGfm);
 
@@ -21,7 +21,7 @@ export interface TaskImageReference {
 /**
  * Parse Markdown, rather than treating examples in code or HTML as deliveries.
  * Local destinations with bare spaces are not CommonMark images; they are
- * recovered from plain text nodes only, with offsets in the original text.
+ * recovered from the inline source, with offsets in the original text.
  */
 export function taskImageReferences(text: string): TaskImageReference[] {
   if (!text.includes('![')) return [];
@@ -47,25 +47,9 @@ export function taskImageReferences(text: string): TaskImageReference[] {
         end,
       });
   });
-  visit(tree, 'text', (node, _index, parent) => {
-    if (parent?.type === 'link' || parent?.type === 'linkReference') return;
-    const start = node.position?.start.offset;
-    const end = node.position?.end.offset;
-    if (start === undefined || end === undefined) return;
-    // Scan the source span, not the decoded value: entities (`&amp;`) elsewhere in
-    // the node must not hide an image, and an escaped `\![` must stay literal.
-    const source = text.slice(start, end);
-    for (const image of findBareSpaceLocalImages(source)) {
-      images.push({
-        raw: source.slice(image.start, image.end),
-        url: image.url,
-        alt: image.alt,
-        title: image.title,
-        start: start + image.start,
-        end: start + image.end,
-      });
-    }
-  });
+  for (const image of recoverBareSpaceLocalImages(tree, text)) {
+    images.push({ ...image, raw: text.slice(image.start, image.end) });
+  }
   return images.sort((a, b) => a.start - b.start);
 }
 
@@ -79,14 +63,21 @@ export function localTaskImagePath(url: string): string | null {
   // A model sometimes copies the xdt-file example and substitutes xdt-image.
   // Only this unambiguous, hostless shape is recoverable; the old protocol stays strict.
   if (value.startsWith('xdt-image:///') || value.startsWith('xdt-file:///')) {
+    value = value.slice(value.indexOf('://') + 3);
     try {
-      value = decodeURIComponent(value.slice(value.indexOf('://') + 3));
+      value = decodeURIComponent(value);
     } catch {
-      return null;
+      // Model-written paths can contain a literal '%' (e.g. shot (100%).png).
+      // Keep the original payload on malformed escapes, like the renderer bridge.
     }
     if (/^\/[A-Za-z]:[\\/]/.test(value)) value = value.slice(1);
   }
   return !value.includes('\0') && path.isAbsolute(value) ? value : null;
+}
+
+/** Network and device namespaces must never be touched by failure diagnostics. */
+export function isUnsafeLocalTaskImagePath(value: string): boolean {
+  return /^[\\/]{2}|^[\\/]\?\?[\\/]/.test(value);
 }
 
 export function hasLocalTaskImages(text: unknown): text is string {

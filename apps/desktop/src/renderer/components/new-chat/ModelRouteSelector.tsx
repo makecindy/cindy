@@ -15,14 +15,15 @@ interface ModelRouteContext {
   /** The selected Agent location; null/omitted means the task host. */
   agentDeviceId?: string | null;
   sshRemote?: boolean;
+  hostOnly?: boolean;
 }
 
 function useModelRouteOptions(
-  { deviceId, agentDeviceId, sshRemote }: ModelRouteContext,
+  { deviceId, agentDeviceId, sshRemote, hostOnly }: ModelRouteContext,
   modelMemory?: ModelMemoryAccessors,
 ) {
   const locations = useModelRouteDevices({
-    controlledDeviceId: deviceId ?? null,
+    controlledDeviceId: hostOnly ? undefined : deviceId ?? null,
     leadAgentDeviceId: agentDeviceId,
     sshRemote,
   });
@@ -45,15 +46,15 @@ function useModelRouteOptions(
 }
 
 /** Full control using the common task/worker location catalog. */
-export function ModelRouteSelector({ agentDeviceId, sshRemote, deviceId, ...props }:
+export function ModelRouteSelector({ agentDeviceId, sshRemote, deviceId, hostOnly, ...props }:
   Omit<ModelSelectorBaseProps, 'deviceId'> & ModelRouteContext) {
-  const options = useModelRouteOptions({ deviceId, agentDeviceId, sshRemote }, props.modelMemory);
+  const options = useModelRouteOptions({ deviceId, agentDeviceId, sshRemote, hostOnly }, props.modelMemory);
   return <ModelSelector {...props} {...options} />;
 }
 
 /** The same selector inside an existing popover; callbacks retain the full selection. */
-export function ModelRouteSelectorContent({ agentDeviceId, sshRemote, deviceId, ...props }:
+export function ModelRouteSelectorContent({ agentDeviceId, sshRemote, deviceId, hostOnly, ...props }:
   Omit<ModelSelectorContentBaseProps, 'deviceId'> & ModelRouteContext) {
-  const options = useModelRouteOptions({ deviceId, agentDeviceId, sshRemote }, props.modelMemory);
+  const options = useModelRouteOptions({ deviceId, agentDeviceId, sshRemote, hostOnly }, props.modelMemory);
   return <ModelSelectorContent {...props} {...options} />;
 }

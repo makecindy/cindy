@@ -1430,12 +1430,19 @@ function readProcessStartTimeSecAsync(pid: number): Promise<number | null> {
   return probe;
 }
 
-async function isOwnerInstanceAliveAsync(identity: PiSubagentOwnerIdentity): Promise<boolean> {
+async function isOwnerInstanceAliveAsync(
+  identity: PiSubagentOwnerIdentity,
+  startTimes?: ProcessStartTimeMemo,
+): Promise<boolean> {
   if (isProcessAlive(identity.pid) === false) return false;
   if (identity.startTimeSec === undefined) return true;
-  const startTimeSec = identity.pid === process.pid
-    ? ownProcessStartTimeSec()
-    : await readProcessStartTimeSecAsync(identity.pid);
+  let startTimeSec = startTimes?.get(identity.pid);
+  if (startTimeSec === undefined) {
+    startTimeSec = identity.pid === process.pid
+      ? ownProcessStartTimeSec()
+      : await readProcessStartTimeSecAsync(identity.pid);
+    startTimes?.set(identity.pid, startTimeSec);
+  }
   if (isProcessAlive(identity.pid) === false) return false;
   return startTimeSec === null
     || Math.abs(startTimeSec - identity.startTimeSec) <= OWNER_START_TIME_TOLERANCE_SEC;
@@ -3015,8 +3022,44 @@ export async function resumePiSubagentRun(
   ));
 }
 
+/** Periodic update checks must yield while reading history and querying foreign processes. */
+export async function hasActivePiSubagentRuns(
+  agentHome: string,
+  scope: Pick<PiSubagentSweepScope, 'hostPid'> = {},
+): Promise<boolean> {
+  let sessions: Awaited<ReturnType<typeof fs.opendir>>;
+  try {
+    sessions = await fs.opendir(piSubagentRunsRoot(agentHome));
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code !== 'ENOENT';
+  }
+
+  const startTimes: ProcessStartTimeMemo = new Map();
+  try {
+    for await (const session of sessions) {
+      if (!session.isDirectory()) continue;
+      const root = path.join(sessions.path, session.name);
+      for await (const run of await fs.opendir(root)) {
+        if (!run.isDirectory() || !RUN_DIR_RE.test(run.name)) continue;
+        const status = parseStatus(await readSmallJson(path.join(root, run.name, 'status.json')), run.name);
+        if (!status) return true;
+        if (isPiSubagentTerminal(status.state)) continue;
+        if (scope.hostPid !== undefined) {
+          const owner = piSubagentOwnerIdentity(status.runtimeOwnerId);
+          if (owner && owner.pid !== scope.hostPid && await isOwnerInstanceAliveAsync(owner, startTimes)) continue;
+        }
+        if (!await isPiSubagentRunStaleAsync(status, Date.now())) return true;
+      }
+    }
+  } catch {
+    // An unreadable or partly published run cannot be declared idle.
+    return true;
+  }
+  return false;
+}
+
 /**
- * Is anything still running that *this* host would have to stop on exit?
+ * Immediate activity check for restart decisions, including the fenced exit boundary.
  *
  * `hostPid` scopes the answer to this process (plus unattributable and orphaned
  * runs). Without it a concurrent instance sharing `pi-agent-home` would make
@@ -3037,6 +3080,7 @@ export function hasActivePiSubagentRunsSync(
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false;
     return true;
   }
+  const startTimes: ProcessStartTimeMemo = new Map();
   for (const sessionEntry of sessionEntries) {
     if (!sessionEntry.isDirectory()) continue;
     let runEntries: import('node:fs').Dirent[];
@@ -3049,10 +3093,12 @@ export function hasActivePiSubagentRunsSync(
           JSON.parse(readFileSync(path.join(root, runEntry.name, 'status.json'), 'utf8')),
           runEntry.name,
         );
-        if (status && scope.hostPid !== undefined && !isSweepableByHost(status, scope.hostPid)) {
+        if (!status) return true;
+        if (isPiSubagentTerminal(status.state)) continue;
+        if (scope.hostPid !== undefined && !isSweepableByHost(status, scope.hostPid, startTimes)) {
           continue;
         }
-        if (!status || (!isPiSubagentTerminal(status.state) && !isPiSubagentRunStale(status))) return true;
+        if (!isPiSubagentRunStale(status)) return true;
       } catch {
         return true;
       }

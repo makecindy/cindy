@@ -1,0 +1,4 @@
+  diag {}
+real run1 ok=true ms=11932 mib=8 wireUpMiB=11.20 goodputMBps=0.70
+  sender {"packetsSent":8699,"packetsReceived":3091,"wireBytesSent":11385601,"retransmittedSegments":2139,"bundledSegments":0,"parityPackets":0,"recoveredSegments":0,"timeoutLosses":0,"fastLosses":0,"spuriousLosses":0,"duplicatePackets":0,"srttUs":13139,"minRttUs":10972,"bandwidth":793195,"rateLimitsFound":0}
+  receiver {"packetsReceived":6561,"packetsSent":3196,"wireBytesReceived":8585674,"unauthenticatedPackets":0,"replayedPackets":0,"retransmittedSegments":0}

@@ -59,6 +59,8 @@ export interface GithubEnhancementViewer {
   source: GithubEnhancementSource;
   login: string;
   token?: string;
+  /** Physical plugin identity retained from viewer lookup through the search. */
+  instanceId?: string;
 }
 
 /** 远端 issue 的必要字段子集(平台响应与 GitHub 响应的公共部分)。 */

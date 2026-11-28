@@ -10,12 +10,15 @@ export function UsageCostPopover({
   label,
   className,
   fallback,
+  header,
 }: {
   sessionId?: string;
   clientId?: string;
   label: ReactNode;
   className?: string;
   fallback?: ReactNode;
+  /** Shown above the details, e.g. the chart of the turn this label belongs to. */
+  header?: ReactNode;
 }) {
   const [open, setOpen] = useState(false);
   const pinned = useRef(false);
@@ -81,6 +84,7 @@ export function UsageCostPopover({
           });
         }}
       >
+        {header ? <div className="mb-3 border-b pb-3">{header}</div> : null}
         {sessionId ? (
           <>
             <UsageCostDetails rows={rows} />

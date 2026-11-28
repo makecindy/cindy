@@ -33,6 +33,7 @@ import {
   shortDeviceRef,
 } from '@cindy/device-link';
 import { FILE_PEER_LOCAL, type FilePeerCommand } from '../../shared/filePeer';
+import { registerRtcTraffic } from './linkTraffic.desktop';
 import { DesktopCaptureWindow } from '../remote-desktop/captureWindow';
 import { loadDesktopIceServers } from '../remote-desktop/iceConfig';
 import { resolveAuthorizedMedia } from './mediaFetch';
@@ -144,6 +145,7 @@ const replies = new Map<
     probe?: boolean;
   }
 >();
+let finishDataTraffic: ReturnType<typeof registerRtcTraffic> | undefined;
 const host = new DesktopCaptureWindow(() => stopFilePeers(), 'files');
 let starting: Promise<void> | null = null;
 /** Transfers slower than one sample interval log runtime stats once per interval. */
@@ -355,7 +357,8 @@ function stopConnection(id: string, reason: string) {
       sinks.delete(ticket);
       void sink.file.close().catch(() => {});
     }
-  if (host.contents && !host.contents.isDestroyed())
+  // The last connection closes with the entire runtime in its final traffic request.
+  if (connections.size && host.contents && !host.contents.isDestroyed())
     host.contents.send(FILE_PEER_LOCAL.COMMAND, randomUUID(), { action: 'close', connection: id });
   for (const [key, p] of replies)
     if (p.connection === id) {
@@ -364,7 +367,7 @@ function stopConnection(id: string, reason: string) {
       p.reject(new Error('FILE_PEER_CLOSED'));
     }
   if (!connections.size) {
-    host.dispose();
+    host.dispose(finishDataTraffic);
     for (const p of replies.values()) {
       clearTimeout(p.timer);
       p.reject(new Error('FILE_PEER_CLOSED'));
@@ -811,7 +814,7 @@ export function registerFilePeerIpc() {
     host.assertSender(e);
     return serveRpc(id, text, body);
   });
-  ipcMain.handle(FILE_PEER_LOCAL.REGISTER, (e) => host.registered(e));
+  finishDataTraffic = registerRtcTraffic(host, FILE_PEER_LOCAL);
   ipcMain.handle(FILE_PEER_LOCAL.CLOSED, (e, id: unknown, reason: unknown) => {
     host.assertSender(e);
     if (typeof id !== 'string' || !/^[a-f0-9-]{36}$/.test(id)) throw new Error('FILE_PEER_CLOSED');

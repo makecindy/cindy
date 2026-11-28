@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import {
   buildNoProviderMessage,
+  buildOrcaLeadSessionSnapshot,
   createOrcaWorkerCreationService,
   orcaWorkerTitle,
   providerRouteRequiresExplicitSelection,
@@ -20,6 +21,8 @@ import { isActiveWorkerStatus } from '../../../shared/orca-worker-status';
 import { deviceAvailableModels, deviceWorkerRoutingContext, sshCodexWorkerRoutingContext } from '../orcaProviderRoutingContext';
 import type { ProviderView } from '@cindy/model-providers';
 import { resolveSessionGitDir, resolveWorkerInheritedDirectory } from '../../git-context/sessionDirResolver';
+import { admitPluginEngineSwitchTarget } from '../pluginEngineSessionAdmission';
+import type { PluginEngineView } from '../../../shared/pluginEngines';
 
 vi.mock('electron-store', () => ({ default: class {} }));
 
@@ -530,6 +533,25 @@ function providerRoutingContext(
   };
 }
 
+it('boots a Worker with the selected group route and leaves the first dispatch receipt on that Worker', async () => {
+  const { deps } = createDeps({
+    modelGroupStart: {
+      prepare: vi.fn(async () => ({
+        token: 'group-receipt',
+        route: { agentKind: 'cc' as const, model: 'claude-sonnet-4-6', providerId: 'xd', agentDeviceId: null },
+      })),
+    },
+  });
+  const result = await createOrcaWorkerCreationService(deps).createWorker({
+    leadSessionId: 'lead-1', role: 'developer', label: 'developer-1',
+    agent: 'codex', model: 'gpt-5.5', effort: 'low', modelGroup: 'coding',
+  });
+  expect(result).toMatchObject({ ok: true, resolved: { agent: 'claude-code', model: 'claude-sonnet-4-6', effort: 'high' } });
+  expect(deps.bootstrapSession).toHaveBeenCalledWith(expect.objectContaining({
+    id: WORKER_SESSION_ID, agentKind: 'claude-code', model: 'claude-sonnet-4-6', modelGroupStart: 'group-receipt',
+  }));
+});
+
 function createDeps(overrides: Partial<OrcaWorkerCreationDeps> = {}) {
   const calls: string[] = [];
   const ids = ['worker-1'];
@@ -597,7 +619,8 @@ function createDeps(overrides: Partial<OrcaWorkerCreationDeps> = {}) {
       return {
         session: {
           id: opts.id ?? WORKER_SESSION_ID,
-          agentKind: opts.agentKind,
+          // Orca workers are created on built-in engines only.
+          agentKind: opts.agentKind as AgentKind,
         },
         didInjectOrcaInstructions: true,
         didInjectProjectContext: false,
@@ -650,6 +673,281 @@ function createDeps(overrides: Partial<OrcaWorkerCreationDeps> = {}) {
     service: createOrcaWorkerCreationService(deps),
   };
 }
+
+/**
+ * 插件引擎 Worker（docs/plans/acp-plugin-bridge.md 第二期「协作」）：经真实 createWorker 入口建出 agentKind=acp 的
+ * Worker 任务，按插件自己的准入定模型与权限，不读内置模型目录；只在本机运行，worktree 与内置 Worker 相同。
+ * 缺口：此前没有任何用例覆盖 acp 分支，接线错了会静默建成 Claude Code Worker，或 worktree 没检出就在基础仓库里跑。
+ * 最小失败输入：agent=acp + provider_id；再分别带 worktree / execution_device_id / SSH Lead / 已停用的引擎。tier：unit。
+ */
+describe('plugin engine Worker', () => {
+  const PROVIDER = 'acp-plugin:dsh-acp:dsh';
+  const admitted = () => vi.fn(() => ({ model: 'dsh-pro', effort: '', permissionMode: 'bypassPermissions' }));
+
+  it('starts the Worker on the plugin engine the host admitted, without the built-in catalog', async () => {
+    const admit = admitted();
+    const { deps, service } = createDeps({ admitPluginEngineWorker: admit });
+    const result = await service.createWorker({
+      leadSessionId: 'lead-1', role: 'developer', label: 'developer', agent: 'acp',
+      providerId: PROVIDER, model: 'dsh-pro', workerPermissionMode: 'bypassPermissions',
+    });
+    expect(result).toMatchObject({ ok: true, workerSessionId: WORKER_SESSION_ID });
+    expect(admit).toHaveBeenCalledWith(expect.objectContaining({ providerId: PROVIDER, model: 'dsh-pro' }));
+    expect(deps.getProviderRoutingContext).not.toHaveBeenCalled();
+    expect(deps.bootstrapSession).toHaveBeenCalledWith(expect.objectContaining({
+      agentKind: 'acp', providerId: PROVIDER, model: 'dsh-pro', permissionMode: 'bypassPermissions', fastMode: false,
+      // The bootstrap gives a plugin-engine Worker its role instructions from these.
+      vendorOptions: expect.objectContaining({ orcaRole: 'worker', orcaWorkerId: 'worker-1', orcaLeadSessionId: 'lead-1' }),
+    }));
+    expect(deps.addOrUpdateWorker).toHaveBeenCalled();
+  });
+
+  // 2026-11-25 用户要求插件引擎与内置引擎一样能用 worktree：Worker 在检出好的目录里启动，并登记归属。
+  it('checks out the requested worktree and starts the plugin engine Worker inside it', async () => {
+    const { deps, service } = createDeps({
+      admitPluginEngineWorker: admitted(),
+      createWorkerWorktree: vi.fn(async () => '/repo/.cindy-worktrees/worker'),
+      discardWorkerWorktree: vi.fn(async () => undefined),
+    });
+    const result = await service.createWorker({
+      leadSessionId: 'lead-1', role: 'developer', label: 'developer', agent: 'acp', providerId: PROVIDER,
+      worktree: { sourceBranch: 'feature' },
+    });
+    expect(result).toMatchObject({
+      ok: true, workingDir: '/repo/.cindy-worktrees/worker',
+      worktree: { path: '/repo/.cindy-worktrees/worker', branch: 'cindy/worker' },
+    });
+    expect(deps.createWorkerWorktree).toHaveBeenCalledWith(WORKER_SESSION_ID, 'C:\\repo', 'feature');
+    expect(deps.bootstrapSession).toHaveBeenCalledWith(expect.objectContaining({
+      agentKind: 'acp', providerId: PROVIDER, workingDir: '/repo/.cindy-worktrees/worker',
+    }));
+  });
+
+  // 2026-11-27: plugin engine Workers support remote/shared agentDeviceId and remote execution
+  // computers just like built-in Workers, while SSH Leads remain refused.
+  it('supports remote/shared agentDeviceId and remote executionDeviceId on plugin engine Workers', async () => {
+    const admit = vi.fn(async () => ({ model: 'dsh-pro', effort: 'high', permissionMode: 'bypassPermissions' }));
+    const { deps, service } = createDeps({ admitPluginEngineWorker: admit });
+    const remoteAgent = await service.createWorker({
+      leadSessionId: 'lead-1', role: 'developer', label: 'developer', agent: 'acp',
+      providerId: PROVIDER, model: 'dsh-pro', agentDeviceId: 'share:friend',
+    });
+    expect(remoteAgent).toMatchObject({ ok: true, resolved: { agent: 'acp', providerId: PROVIDER, agentDeviceId: 'share:friend' } });
+    expect(admit).toHaveBeenCalledWith(expect.objectContaining({ providerId: PROVIDER, agentDeviceId: 'share:friend' }));
+    expect(deps.bootstrapSession).toHaveBeenCalledWith(expect.objectContaining({
+      agentKind: 'acp', providerId: PROVIDER, agentDeviceId: 'share:friend',
+    }));
+
+    const openRemoteWorker = vi.fn(async () => ({
+      ok: true as const,
+      proxySessionId: 'proxy-acp-1',
+      proxySession: {
+        title: 'Developer', agentKind: 'acp', model: 'dsh-pro', effort: null,
+        permissionMode: 'auto', fastMode: false, providerId: PROVIDER,
+      },
+      remoteSessionId: 'remote-acp-1',
+      agent: 'acp' as const,
+      model: 'dsh-pro',
+      providerId: PROVIDER,
+      workingDir: '/remote/repo',
+    }));
+    const recordRemoteWorker = vi.fn(async () => undefined);
+    const discardRemoteWorker = vi.fn(async () => undefined);
+    const remoteExec = createDeps({ openRemoteWorker, recordRemoteWorker, discardRemoteWorker });
+    const execResult = await remoteExec.service.createWorker({
+      leadSessionId: 'lead-1', role: 'developer', label: 'developer-remote', agent: 'acp',
+      providerId: PROVIDER, model: 'dsh-pro', executionDeviceId: 'desk-b',
+    });
+    expect(execResult).toMatchObject({
+      ok: true, executionDeviceId: 'desk-b', workerSessionId: 'proxy-acp-1',
+      resolved: { agent: 'acp', providerId: PROVIDER, model: 'dsh-pro' },
+    });
+    expect(openRemoteWorker).toHaveBeenCalledWith(expect.objectContaining({
+      deviceId: 'desk-b', agent: 'acp', providerId: PROVIDER, model: 'dsh-pro',
+    }));
+  });
+
+  it('still refuses an SSH Lead before starting anything', async () => {
+    const admit = admitted();
+    const base = await createDeps().deps.getLeadSessionRow('lead-1');
+    const { deps, service } = createDeps({
+      admitPluginEngineWorker: admit,
+      getLeadSessionRow: vi.fn(async () => ({ ...base!, remoteHostId: 'box' })),
+    });
+    const result = await service.createWorker({
+      leadSessionId: 'lead-1', role: 'developer', label: 'developer', agent: 'acp', providerId: PROVIDER,
+    } as OrcaWorkerCreateParams);
+    expect(result).toMatchObject({ ok: false, errorCode: 'INVALID_PARAMS', message: expect.stringContaining('plugin engine') });
+    expect(deps.bootstrapSession).not.toHaveBeenCalled();
+    expect(deps.addOrUpdateWorker).not.toHaveBeenCalled();
+  });
+
+  it('reports the plugin refusal (turned off or removed) and creates nothing', async () => {
+    const { deps, service } = createDeps({
+      admitPluginEngineWorker: vi.fn(() => { throw new Error('插件已停用或卸载'); }),
+    });
+    const result = await service.createWorker({
+      leadSessionId: 'lead-1', role: 'developer', label: 'developer', agent: 'acp', providerId: PROVIDER,
+    });
+    expect(result).toEqual({ ok: false, errorCode: 'PROVIDER_ROUTE_UNAVAILABLE', message: '插件已停用或卸载' });
+    expect(deps.bootstrapSession).not.toHaveBeenCalled();
+  });
+
+  it('does not leak a plugin-engine Lead model or provider onto a built-in Worker', async () => {
+    const base = await createDeps().deps.getLeadSessionRow('lead-1');
+    const { deps, service } = createDeps({
+      getLeadSessionRow: vi.fn(async () => ({
+        ...base!,
+        agentKind: 'acp' as const,
+        model: 'dsh-pro',
+        providerId: PROVIDER,
+      })),
+    });
+    const result = await service.createWorker({
+      leadSessionId: 'lead-1', role: 'developer', label: 'developer', agent: 'claude-code',
+    });
+    expect(result).toMatchObject({ ok: true, workerSessionId: WORKER_SESSION_ID });
+    expect(deps.bootstrapSession).toHaveBeenCalledWith(expect.objectContaining({
+      agentKind: 'claude-code',
+      model: expect.not.stringContaining('dsh-pro'),
+    }));
+    const opts = vi.mocked(deps.bootstrapSession).mock.calls[0]?.[0];
+    expect(opts?.providerId).not.toBe(PROVIDER);
+  });
+
+  it('inherits the Lead plugin engine provider and model when an acp Lead creates an acp Worker without specifying them', async () => {
+    const admit = admitted();
+    const base = await createDeps().deps.getLeadSessionRow('lead-1');
+    const { deps, service } = createDeps({
+      admitPluginEngineWorker: admit,
+      getLeadSessionRow: vi.fn(async () => ({
+        ...base!,
+        agentKind: 'acp' as const,
+        model: 'dsh-pro',
+        providerId: PROVIDER,
+      })),
+    });
+    const result = await service.createWorker({
+      leadSessionId: 'lead-1', role: 'developer', label: 'developer', agent: 'acp',
+    });
+    expect(result).toMatchObject({ ok: true, workerSessionId: WORKER_SESSION_ID });
+    expect(admit).toHaveBeenCalledWith(expect.objectContaining({ providerId: PROVIDER, model: 'dsh-pro' }));
+    expect(deps.bootstrapSession).toHaveBeenCalledWith(expect.objectContaining({
+      agentKind: 'acp',
+      providerId: PROVIDER,
+      model: 'dsh-pro',
+    }));
+  });
+
+  // 2026-11-28: register.ts 曾把 acp Lead 的 model/providerId 清空，导致真实生产路径里
+  // acp Lead 省略 provider_id 创建同引擎其他模型（如 Neon Lead 派发 Hydrogen xhigh）必败。
+  it.each([
+    {
+      name: 'explicit model + effort without providerId',
+      input: { model: 'gemini-4-hydrogen', effort: 'xhigh' as const },
+      expectedModel: 'gemini-4-hydrogen',
+      expectedEffort: 'xhigh',
+    },
+    {
+      name: 'omitted model and providerId',
+      input: {},
+      expectedModel: 'gemini-4-neon',
+      expectedEffort: null,
+    },
+  ])('preserves acp Lead providerId/model through buildOrcaLeadSessionSnapshot and real plugin admission ($name)', async ({ input, expectedModel, expectedEffort }) => {
+    const agyProvider = 'acp-plugin:cindy-antigravity-acp:agy';
+    const agyView: PluginEngineView = {
+      key: 'cindy-antigravity-acp:agy',
+      providerId: agyProvider,
+      ghostId: 'cindy-antigravity-acp',
+      harnessId: 'agy',
+      name: 'Antigravity',
+      availability: { state: 'available', version: '1.5.18' },
+      models: [
+        { id: 'gemini-4-neon', displayName: 'Gemini 4 Neon', efforts: ['low', 'medium', 'high', 'xhigh'], defaultEffort: 'high' },
+        { id: 'gemini-4-hydrogen', displayName: 'Gemini 4 Hydrogen', efforts: ['low', 'medium', 'high', 'xhigh'], defaultEffort: 'high' },
+      ],
+      permissionModes: [
+        { id: 'default', displayName: 'Default' },
+        { id: 'bypassPermissions', displayName: 'Allow all' },
+      ],
+      defaultPermissionMode: 'default',
+    };
+    const snapshot = buildOrcaLeadSessionSnapshot({
+      id: 'lead-1',
+      agentKind: 'acp',
+      workspaceKind: 'project',
+      workingDir: '/repo',
+      model: 'gemini-4-neon',
+      effort: 'xhigh',
+      permissionMode: 'default',
+      fastMode: true,
+      providerId: agyProvider,
+      remoteHostId: null,
+    }, { providerGroupEntry: { agentDeviceId: null, providerId: 'group-1' } });
+    expect(snapshot).toMatchObject({
+      agentKind: 'acp',
+      model: 'gemini-4-neon',
+      providerId: agyProvider,
+      effort: '',
+      fastMode: false,
+    });
+    expect(snapshot.providerGroupEntry).toBeUndefined();
+
+    const { deps, service } = createDeps({
+      admitPluginEngineWorker: async (target) => admitPluginEngineSwitchTarget(target, [agyView]),
+      getLeadSessionRow: vi.fn(async () => snapshot),
+    });
+    const result = await service.createWorker({
+      leadSessionId: 'lead-1',
+      role: 'developer',
+      label: 'developer',
+      agent: 'acp',
+      ...input,
+    });
+    expect(result).toMatchObject({
+      ok: true,
+      workerSessionId: WORKER_SESSION_ID,
+      resolved: { agent: 'acp', providerId: agyProvider, model: expectedModel, effort: expectedEffort },
+    });
+    expect(deps.bootstrapSession).toHaveBeenCalledWith(expect.objectContaining({
+      agentKind: 'acp',
+      providerId: agyProvider,
+      model: expectedModel,
+      effort: expectedEffort,
+    }));
+  });
+
+  // 即使上游快照保留了 acp Lead 的 effort/fastMode/model/providerId，内置 Worker 也绝不能误继承。
+  it.each(['claude-code', 'codex'] as const)('never leaks acp Lead model/provider/effort/fastMode onto built-in %s Worker', async (targetAgent) => {
+    const agyProvider = 'acp-plugin:cindy-antigravity-acp:agy';
+    const base = await createDeps().deps.getLeadSessionRow('lead-1');
+    const { deps, service } = createDeps({
+      getLeadSessionRow: vi.fn(async () => ({
+        ...base!,
+        agentKind: 'acp' as const,
+        model: 'gemini-4-neon',
+        effort: 'xhigh',
+        fastMode: true,
+        providerId: agyProvider,
+      })),
+      getWorkerDefaults: vi.fn(() => ({})),
+    });
+    const result = await service.createWorker({
+      leadSessionId: 'lead-1',
+      role: 'developer',
+      label: 'developer',
+      agent: targetAgent,
+    });
+    expect(result).toMatchObject({ ok: true, workerSessionId: WORKER_SESSION_ID });
+    const opts = vi.mocked(deps.bootstrapSession).mock.calls[0]?.[0];
+    expect(opts?.agentKind).toBe(targetAgent);
+    expect(opts?.model).not.toBe('gemini-4-neon');
+    expect(opts?.providerId).not.toBe(agyProvider);
+    expect(opts?.effort).not.toBe('xhigh');
+    expect(opts?.fastMode).toBe(false);
+  });
+});
 
 describe('Orca worker working directory', () => {
   const params: OrcaWorkerCreateParams = {
@@ -866,7 +1164,7 @@ describe('OrcaWorkerCreationService', () => {
       bootstrapSession: vi.fn(async (opts: MakerSessionCreateOpts) => {
         order.push('bootstrap');
         return {
-          session: { id: opts.id ?? WORKER_SESSION_ID, agentKind: opts.agentKind },
+          session: { id: opts.id ?? WORKER_SESSION_ID, agentKind: opts.agentKind as AgentKind },
           didInjectOrcaInstructions: true,
           didInjectProjectContext: false,
         };

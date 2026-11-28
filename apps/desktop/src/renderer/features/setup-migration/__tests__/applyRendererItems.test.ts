@@ -154,7 +154,7 @@ describe('portable renderer preferences', () => {
   // PR #8848: the new reminder override was dropped during setup migration.
   // Unit: export/import a saved boolean, read the production preference, and keep a target override.
   // Existing cases cover generic preferences but did not include this newly added setting.
-  it.each([true, false])('moves the subtle-reminder override %s without replacing the target choice', (enabled) => {
+  it.each([true, false])('moves the subtle-reminder override %s without replacing the target choice', async (enabled) => {
     const key = 'notifications.agentIslandSubtleReminders';
     const source = new MemoryStorage();
     source.setItem(key, String(enabled));
@@ -164,12 +164,12 @@ describe('portable renderer preferences', () => {
     const target = new MemoryStorage();
     vi.stubGlobal('localStorage', target);
     try {
-      expect(applyPortableRendererPrefs(values, target, null)).toBe(1);
+      expect(await applyPortableRendererPrefs(values, target, null)).toBe(1);
       expect(target.getItem(key)).toBe(String(enabled));
       expect(getAgentIslandSubtleReminders()).toBe(enabled);
 
       target.setItem(key, String(!enabled));
-      expect(applyPortableRendererPrefs(values, target, null)).toBe(0);
+      expect(await applyPortableRendererPrefs(values, target, null)).toBe(0);
       expect(getAgentIslandSubtleReminders()).toBe(!enabled);
     } finally {
       vi.unstubAllGlobals();
@@ -195,11 +195,11 @@ describe('portable renderer preferences', () => {
     expect(readPortableRendererPrefs(storage, null)).not.toHaveProperty('userPrompt.value.owner-a');
   });
 
-  it('writes only whitelisted values this computer has not set itself', () => {
+  it('writes only whitelisted values this computer has not set itself', async () => {
     const target = new MemoryStorage();
     target.setItem('theme', 'light');
     expect(
-      applyPortableRendererPrefs(
+      await applyPortableRendererPrefs(
         {
           theme: 'dark',
           language: 'ko',
@@ -218,13 +218,13 @@ describe('portable renderer preferences', () => {
     expect(target.getItem('cc-agent.sidebar.selectedMachines')).toBeNull();
   });
 
-  it('moves the misclick protection switch that the click handler actually reads', () => {
+  it('moves the misclick protection switch that the click handler actually reads', async () => {
     // Two-computer acceptance: only the main-side cache file moved, so the switch and
     // Windows click handling stayed off on the new computer.
     const source = new MemoryStorage();
     source.setItem('input.swallowActivationClick', 'true');
     const target = new MemoryStorage();
-    expect(applyPortableRendererPrefs(readPortableRendererPrefs(source, null), target, null)).toBe(1);
+    expect(await applyPortableRendererPrefs(readPortableRendererPrefs(source, null), target, null)).toBe(1);
     vi.stubGlobal('localStorage', target);
     try {
       expect(getSwallowActivationClickEnabled()).toBe(true);

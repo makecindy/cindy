@@ -1,3 +1,4 @@
+import { isCompanionChatTarget } from '../bots/companionChatTarget';
 import type { DropSide } from './splitGroupStore';
 import type { SessionDragPreviewPalette } from '../../../shared/sessionDragPreview';
 import { buildSessionDeepLink } from '@/lib/deepLink';
@@ -153,7 +154,6 @@ export function writeSplitGroupSessionDragData(
 ): boolean {
   const sessionId = sessionIdInput.trim();
   if (!sessionId) return false;
-  const link = buildSessionDeepLink(sessionId, { deviceId: options?.deviceId });
   // The same gesture can reorder a row (move) or insert its link into the
   // composer (copy), so the source must advertise both legal drop effects.
   dataTransfer.effectAllowed = 'copyMove';
@@ -162,7 +162,9 @@ export function writeSplitGroupSessionDragData(
   // consumes one of the two private MIME types below.
   dataTransfer.clearData?.();
   dataTransfer.setData(SPLIT_GROUP_SESSION_MIME, sessionId);
-  dataTransfer.setData(SESSION_LINK_DROP_MIME, link);
+  if (!isCompanionChatTarget(sessionId)) {
+    dataTransfer.setData(SESSION_LINK_DROP_MIME, buildSessionDeepLink(sessionId, { deviceId: options?.deviceId }));
+  }
   return true;
 }
 
@@ -213,11 +215,12 @@ export function startSessionDrag(
     options.dragStartTarget ??
     (typeof Element !== 'undefined' && event.target instanceof Element ? event.target : null);
   const startedOnDedicatedHandle = Boolean(target?.closest(SPLIT_GROUP_DRAG_HANDLE_SELECTOR));
+  const interactiveTarget = target?.closest(SPLIT_GROUP_DRAG_INTERACTIVE_SELECTOR);
   const startedOnInteractiveElement = Boolean(
     target &&
     currentTarget &&
     target !== currentTarget &&
-    target.closest(SPLIT_GROUP_DRAG_INTERACTIVE_SELECTOR),
+    interactiveTarget && interactiveTarget !== currentTarget,
   );
 
   if (

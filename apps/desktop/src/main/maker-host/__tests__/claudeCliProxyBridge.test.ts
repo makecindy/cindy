@@ -1,5 +1,5 @@
 /**
- * claude-cli-proxy-bridge —— 本机 CONNECT 端口,每条隧道按目标重新解析出口(直连 / HTTP 代理 /
+ * cli-proxy-bridge —— 本机 CONNECT 端口,每条隧道按目标重新解析出口(直连 / HTTP 代理 /
  * SOCKS5);只做 TCP 转发、只接受 CONNECT。
  */
 import http from 'node:http';
@@ -12,12 +12,12 @@ vi.mock('../../logger.js', () => ({
 }));
 
 import { startSocks5Stub, type Socks5Stub } from '../../../../../../packages/anthropic-compat-proxy/src/test-socks5-stub.js';
-import { closeClaudeCliProxyBridge, ensureClaudeCliProxyBridge } from '../claude-cli-proxy-bridge.js';
+import { closeCliProxyBridge, ensureCliProxyBridge } from '../cli-proxy-bridge.js';
 
 const cleanups: Array<() => Promise<void> | void> = [];
 
 afterEach(async () => {
-  await closeClaudeCliProxyBridge();
+  await closeCliProxyBridge();
   while (cleanups.length > 0) await cleanups.pop()!();
 });
 
@@ -85,12 +85,12 @@ function exchange(port: number, request: string, until: string, followUp?: strin
 
 const connectTo = (authority: string) => `CONNECT ${authority} HTTP/1.1\r\nHost: ${authority}\r\n\r\n`;
 
-describe('claude-cli-proxy-bridge', () => {
+describe('cli-proxy-bridge', () => {
   it('SOCKS5 出口:经代理打隧道,域名交给代理解析,数据原样双向转发', async () => {
     const echoPort = await startEchoServer();
     const stub = await startStub({ tunnelToPort: echoPort });
     const resolver = vi.fn(async () => `socks5://127.0.0.1:${stub.port}`);
-    const url = await ensureClaudeCliProxyBridge(resolver);
+    const url = await ensureCliProxyBridge(resolver);
     expect(url).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
 
     const received = await exchange(bridgePort(url), connectTo('api.anthropic.com:443'), 'ping', 'ping');
@@ -103,7 +103,7 @@ describe('claude-cli-proxy-bridge', () => {
   it('HTTP 代理出口:经上游 CONNECT', async () => {
     const echoPort = await startEchoServer();
     const proxy = await startHttpConnectProxy(echoPort);
-    const url = await ensureClaudeCliProxyBridge(async () => `http://127.0.0.1:${proxy.port}`);
+    const url = await ensureCliProxyBridge(async () => `http://127.0.0.1:${proxy.port}`);
     const received = await exchange(bridgePort(url), connectTo('claude.ai:443'), 'hello', 'hello');
     expect(received).toContain('HTTP/1.1 200 Connection Established');
     expect(received).toContain('hello');
@@ -115,7 +115,7 @@ describe('claude-cli-proxy-bridge', () => {
     const stub = await startStub({ tunnelToPort: echoPort });
     const resolver = vi.fn(async (target: string) =>
       target.startsWith('https://127.0.0.1') ? null : `socks5://127.0.0.1:${stub.port}`);
-    const url = await ensureClaudeCliProxyBridge(resolver);
+    const url = await ensureCliProxyBridge(resolver);
 
     const direct = await exchange(bridgePort(url), connectTo(`127.0.0.1:${echoPort}`), 'intranet', 'intranet');
     expect(direct).toContain('intranet');
@@ -129,7 +129,7 @@ describe('claude-cli-proxy-bridge', () => {
   it('CONNECT 到 80 端口也能解析目标', async () => {
     const stub = await startStub({ tunnelToPort: await startEchoServer() });
     const resolver = vi.fn(async () => `socks5://127.0.0.1:${stub.port}`);
-    const url = await ensureClaudeCliProxyBridge(resolver);
+    const url = await ensureCliProxyBridge(resolver);
     await exchange(bridgePort(url), connectTo('example.test:80'), 'x', 'x');
     expect(resolver).toHaveBeenCalledWith('https://example.test:80/');
     expect(stub.requests).toEqual([expect.objectContaining({ host: 'example.test', port: 80 })]);
@@ -137,7 +137,7 @@ describe('claude-cli-proxy-bridge', () => {
 
   it('只接受 CONNECT:明文 HTTP 请求 405,不做正向代理', async () => {
     const resolver = vi.fn(async () => null);
-    const url = await ensureClaudeCliProxyBridge(resolver);
+    const url = await ensureCliProxyBridge(resolver);
     const received = await exchange(
       bridgePort(url),
       'GET http://example.test/ HTTP/1.1\r\nHost: example.test\r\n\r\n',
@@ -149,7 +149,7 @@ describe('claude-cli-proxy-bridge', () => {
 
   it('上游建隧道失败 → 502', async () => {
     const stub = await startStub({ replyCode: 0x05 });
-    const url = await ensureClaudeCliProxyBridge(async () => `socks5://127.0.0.1:${stub.port}`);
+    const url = await ensureCliProxyBridge(async () => `socks5://127.0.0.1:${stub.port}`);
     const received = await exchange(bridgePort(url), connectTo('api.anthropic.com:443'), '502');
     expect(received).toContain('HTTP/1.1 502 Bad Gateway');
   });
@@ -158,8 +158,8 @@ describe('claude-cli-proxy-bridge', () => {
     const echoPort = await startEchoServer();
     const first = await startStub({ tunnelToPort: echoPort });
     const second = await startStub({ tunnelToPort: echoPort });
-    const urlA = await ensureClaudeCliProxyBridge(async () => `socks5://127.0.0.1:${first.port}`);
-    const urlB = await ensureClaudeCliProxyBridge(async () => `socks5://127.0.0.1:${second.port}`);
+    const urlA = await ensureCliProxyBridge(async () => `socks5://127.0.0.1:${first.port}`);
+    const urlB = await ensureCliProxyBridge(async () => `socks5://127.0.0.1:${second.port}`);
     expect(urlB).toBe(urlA);
     await exchange(bridgePort(urlB), connectTo('claude.ai:443'), 'x', 'x');
     expect(first.requests).toEqual([]);

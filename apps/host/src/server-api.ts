@@ -7,7 +7,7 @@ import { hostOutbound } from './outbound.mjs';
  * captured account boundary covering requests, refresh and returned payloads. */
 export function createHostServerApi(options: {
   token(): string | null;
-  refresh(): Promise<boolean>;
+  refresh(options?: { serverRejectedToken?: boolean }): Promise<boolean>;
   invalidate(reason: string): Promise<void>;
   locale(): string;
 }) {
@@ -26,7 +26,8 @@ export function createHostServerApi(options: {
       },
       auth: {
         getAccessToken: () => { check(); return options.token(); },
-        refresh: async () => { check(); const refreshed = await options.refresh(); check(); return refreshed; },
+        // The desktop's request contract says whether the server rejected the token (a 401).
+        refresh: async (refreshOptions) => { check(); const refreshed = await options.refresh(refreshOptions); check(); return refreshed; },
         invalidateSession: async reason => { check(); await options.invalidate(reason); },
       },
     });

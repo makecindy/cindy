@@ -5,11 +5,14 @@
  *
  * 只并进远程 Agent 的候选(remoteAgentDevices)，**不**进设备切换器：分享者的电脑不是可远程
  * 控制的设备。已暂停或已不在的分享只有在它正是任务当前 / 即将使用的位置时才保留，让用户
- * 看得到、换得走。
+ * 看得到、换得走。分享者电脑暂时离线时照常列出，名字后标「暂时离线」(providerSharePickerState，
+ * 与手机同一条规则)，不随在线状态来回出现、消失。
  */
 import { useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
+import { providerSharePickerState } from '@cindy/device-link';
 
+import { pluginEngineKeyFromProviderId } from '../../../shared/pluginEngines';
 import { isProviderShareAgentDeviceId } from '../../../shared/providerShare';
 import { providerShareAgentDeviceId } from './providerShareFormat';
 import { providerShareDisplayNames } from './providerShareNames';
@@ -23,6 +26,8 @@ export interface ProviderShareAgentDevice {
 
 export interface ProviderShareAgentDevices {
   devices: readonly ProviderShareAgentDevice[];
+  /** 已收到的插件引擎分享(`acp-plugin:…`)，供插件引擎选择器读取，不混入内置供应商目录轮询。 */
+  pluginEngineDevices: readonly ProviderShareAgentDevice[];
   /** 已拿到过一次已收到分享的权威列表。 */
   loaded: boolean;
   /** `share:<id>` → 展示名；不是分享 id 时返回 null。 */
@@ -49,19 +54,25 @@ export function useProviderShareAgentDevices(
     const byShare = providerShareDisplayNames(received, t);
     const map = new Map<string, string>();
     for (const share of received) {
-      map.set(providerShareAgentDeviceId(share.shareId), byShare.get(share.shareId) ?? '');
+      const name = byShare.get(share.shareId) ?? '';
+      map.set(providerShareAgentDeviceId(share.shareId), providerSharePickerState(share) === 'offline'
+        ? t('providerShare.picker.offline', { name }) : name);
     }
     return map;
   }, [received, t]);
 
-  const devices = useMemo(() => {
+  const { devices, pluginEngineDevices } = useMemo(() => {
     const keep = new Set(keepKey ? keepKey.split('\n') : []);
     const list: ProviderShareAgentDevice[] = [];
+    const pluginList: ProviderShareAgentDevice[] = [];
     for (const share of received) {
       const deviceId = providerShareAgentDeviceId(share.shareId);
+      const isPlugin = pluginEngineKeyFromProviderId(share.providerId) !== null;
       if (share.status !== 'active' && !keep.has(deviceId)) continue;
       if (controlledDeviceId && !controlledShareIds.has(deviceId) && !keep.has(deviceId)) continue;
-      list.push({ deviceId, name: names.get(deviceId) ?? '' });
+      const entry = { deviceId, name: names.get(deviceId) ?? '' };
+      if (isPlugin) pluginList.push(entry);
+      else list.push(entry);
       keep.delete(deviceId);
     }
     // 任务仍指着、但已不在列表里的分享(被删除或已退出)：保留一行，名字说明已不可用。
@@ -70,7 +81,7 @@ export function useProviderShareAgentDevices(
         list.push({ deviceId, name: t('providerShare.picker.unavailable') });
       }
     }
-    return list;
+    return { devices: list, pluginEngineDevices: pluginList };
   }, [controlledDeviceId, controlledShareIds, keepKey, loaded, names, received, t]);
 
   const nameFor = useCallback(
@@ -96,5 +107,5 @@ export function useProviderShareAgentDevices(
     [names],
   );
 
-  return { devices, loaded, nameFor, isKnown, isReceived };
+  return { devices, pluginEngineDevices, loaded, nameFor, isKnown, isReceived };
 }

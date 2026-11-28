@@ -16,16 +16,25 @@
  * 提示文案跟随主人的 Cindy 界面语言(`imBot.text.shared.desktopConfirm.*`),发送时现取。
  */
 
+import type { GhostGrantLane } from '../cindy-brain/ghostGrantConfirmBridge';
 import { imText } from './shared/imText';
 
 const K = 'imBot.text.shared.desktopConfirm';
 
 /** 桌面专属确认卡的种类;`desktopConfirmSubject` 给出当前语言下的卡片称呼。 */
-export type DesktopConfirmSubject = 'githubIssue' | 'renameSessions' | 'pluginFileGrant';
+export type DesktopConfirmSubject = 'githubIssue' | 'renameSessions' | 'pluginFileGrant' | 'mediaPathReveal';
 
 /** 「「提交 GitHub issue」的确认卡」这类称呼,作 `buildDesktopConfirmNoticeText` 的 `what`。 */
 export function desktopConfirmSubject(subject: DesktopConfirmSubject): string {
   return imText(`${K}.subject.${subject}`);
+}
+
+/**
+ * 文件授权确认桥的卡片称呼按 lane 区分:reveal_path 是 Agent 想知道媒体文件在电脑上的
+ * 位置,不涉及插件拿文件,叫「插件文件授权」主人看不懂。
+ */
+export function ghostGrantConfirmSubject(lane: GhostGrantLane): DesktopConfirmSubject {
+  return lane === 'reveal_path' ? 'mediaPathReveal' : 'pluginFileGrant';
 }
 
 export interface DesktopConfirmNoticeDeps {

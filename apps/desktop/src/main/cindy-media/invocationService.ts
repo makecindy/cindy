@@ -23,6 +23,7 @@ import { ServerApiError } from '../serverApiClient.desktop.js';
 import { getCurrentDbClientUserId, getDbClient } from '../localDb/client/current.js';
 import type { DbClient } from '../localDb/client/DbClient.js';
 import { outboundFetch } from '../maker-host/outbound-fetch.desktop.js';
+import { getActiveCatalog } from '../maker-host/active-catalog.js';
 import {
   fetchMediaInvocationGuide,
   getMediaGuide,
@@ -35,7 +36,13 @@ import * as blobStore from './blobStore.desktop.js';
 import { ingestMedia } from './ingest.js';
 import { downloadMediaResult, MediaDownloadError, type MediaDownloadContext } from './mediaDownload.js';
 import { mediaErrorForLog, mediaErrorStackForLog, mediaRequestParamsForLog, mediaRequestUrlForLog } from './mediaRequestLog.js';
-import { normalizeBase64Payload, parseDataUrl } from './dataUrl.js';
+import {
+  isCanonicalBase64,
+  normalizeBase64Payload,
+  parseBase64DataUrl,
+  parseDataUrl,
+  replaceInlineBase64DataUrls,
+} from './dataUrl.js';
 import {
   invokeProviderMedia,
   resolveProviderMediaModel,
@@ -48,6 +55,8 @@ import {
 import { validateCustomVideoBody, videoRelayResultHosts } from './customVideoProtocol.js';
 import { fetchVideoTaskContent, isVideoTaskContentRef, videoTaskContentUrl } from './videoTaskContent.js';
 import { sniffMediaMime, additionalMp3BytesNeeded } from './sniffMediaMime.js';
+import { generateSharedImage } from './sharedImageClient.js';
+import { invokeSharedImageSource, resolveSharedImageSource } from './sharedImageCatalog.js';
 import {
   countMediaInvocations,
   createMediaInvocation,
@@ -319,8 +328,16 @@ function providerErrorMessage(buffer: Buffer, managedHeaders: Record<string, str
       .flatMap((value) => [value, value.replace(/^Bearer\s+/i, '')])
       .filter(Boolean).sort((a, b) => b.length - a.length);
     for (const credential of credentials) redacted = redacted.replaceAll(credential, '[已脱敏凭证]');
-    return redacted
-      .replace(/data:[^,\s]{1,128};base64,[A-Za-z0-9+/=\s]+/gi, '[已脱敏 data URL]')
+    return replaceInlineBase64DataUrls(
+      redacted,
+      {
+        caseInsensitive: true,
+        headerPattern: /^[^\s,]{1,128}$/,
+        maxHeaderLength: 128,
+        payloadMode: 'loose-whitespace',
+      },
+      () => '[已脱敏 data URL]',
+    )
       .replace(/\bhttps?:\/\/[^\s"'<>]+/gi, '[已脱敏 URL]')
       .replace(/\bBearer\s+[A-Za-z0-9._~+/-]{16,}\b/gi, 'Bearer [已脱敏]')
       .replace(/\b[A-Za-z0-9+/_-]{80,}={0,2}\b/g, '[已脱敏长值]')
@@ -750,7 +767,7 @@ async function localImagePath(
 async function providerImageRequest(
   invocation: StoredMediaInvocation,
   body: Record<string, unknown>,
-  model: ProviderMediaRuntimeModel,
+  model: Pick<ProviderMediaRuntimeModel, 'id' | 'imageProtocol'>,
 ): Promise<ImageParameters & {
   prompt: string;
   imagePaths: string[];
@@ -863,15 +880,15 @@ async function mediaBytes(
       throw error;
     }
   } else {
-    const dataUrl = /^data:([^;,]+);base64,(.+)$/s.exec(raw);
-    const encoded = (dataUrl ? dataUrl[2] : raw).replace(/\s/g, '');
-    headerMime = dataUrl?.[1]?.toLowerCase() ?? null;
+    const dataUrl = parseBase64DataUrl(raw, /^data:([^;,]+);base64$/, {
+      allowLineTerminators: true,
+    });
+    const encoded = (dataUrl ? dataUrl.payload : raw).replace(/\s/g, '');
+    headerMime = dataUrl?.header[1]?.toLowerCase() ?? null;
     if (encoded.length > Math.ceil((maxResultBytes(extractor.kind) * 4) / 3) + 16) {
       throw new MediaInvocationError('MEDIA_RESULT_TOO_LARGE', '上游 base64 媒体超过大小限制');
     }
-    // Repeating four-character groups exhausts V8's regexp stack on large images.
-    // Check quartet length separately so the alphabet scan uses constant stack space.
-    if (encoded.length % 4 !== 0 || !/^[A-Za-z0-9+/]*={0,2}$/.test(encoded)) {
+    if (!isCanonicalBase64(encoded)) {
       throw new MediaInvocationError('MEDIA_RESULT_INVALID', '上游 base64 媒体编码不合法');
     }
     buffer = Buffer.from(encoded, 'base64');
@@ -1045,11 +1062,10 @@ async function submitProviderInvocation(
   db: DbClient,
 ): Promise<Record<string, unknown>> {
   const providerId = invocation.guide.binding.providerId;
-  const providerModel = resolveProviderMediaModel(
-    providerId,
-    invocation.modelId,
-    invocation.capability,
-  );
+  const shared = resolveSharedImageSource(providerId);
+  const providerModel = shared && invocation.capability === 'image.generate'
+    ? ({ id: invocation.modelId, imageProtocol: 'openai' } as const)
+    : resolveProviderMediaModel(providerId, invocation.modelId, invocation.capability);
   if (!providerModel) {
     return failure('MODEL_NOT_AVAILABLE', '该第三方媒体模型或执行来源已不可用，本次生成未发出');
   }
@@ -1074,12 +1090,27 @@ async function submitProviderInvocation(
   }
   assertAuthScope(scope, invocation.owner);
   try {
-    const result = await invokeProviderMedia({
+    const signal = AbortSignal.timeout(invocation.guide.request.timeoutMs);
+    const result = shared ? await generateSharedImage(async command => {
+      const assertCurrent = () => {
+        assertAuthScope(scope, invocation.owner);
+        const current = resolveSharedImageSource(providerId);
+        if (!current || current.memberId !== shared.memberId || current.hostDeviceId !== shared.hostDeviceId) {
+          throw new Error('SHARED_IMAGE_UNAVAILABLE');
+        }
+      };
+      return invokeSharedImageSource(providerId, command, assertCurrent);
+    }, {
+      op: 'shared-image', action: 'start', requestId: invocation.id, providerId: shared.providerId,
+      model: providerModel.id, prompt: input.prompt, size: input.size,
+      aspectRatio: input.aspectRatio, quality: input.quality,
+      resolution: input.resolution, nativeParameters: input.nativeParameters,
+    }, signal) : await invokeProviderMedia({
       providerId,
       modelId: providerModel.id,
       capability: invocation.capability,
       ...input,
-      signal: AbortSignal.timeout(invocation.guide.request.timeoutMs),
+      signal,
     });
     assertAuthScope(scope, invocation.owner);
     if ('url' in result) {
@@ -1227,6 +1258,7 @@ async function prepareInvocation(
   assertAuthScope(scope);
   const models = await listAvailableMediaModels(capability, {
     skipGateway: !getAppCapabilities().canUseCindyGateway,
+    providerId,
   });
   assertAuthScope(scope);
   let matchingModels = models.filter(
@@ -1253,6 +1285,15 @@ async function prepareInvocation(
     });
   }
   if (!model) {
+    if (capability === 'image.generate' && providerId &&
+        getActiveCatalog().providers.some(provider => provider.id === providerId && provider.source === 'user')) {
+      return failure('MODEL_NOT_AVAILABLE', '指定供应商的可用生图型号中没有找到目标型号', false, {
+        outcomeKnown: true,
+        target: { providerId, modelId, ...(sourceAgent && { agent: sourceAgent }) },
+        allowedActions: ['inspect_model_connection_and_media_declaration', 'use_another_tool'],
+        guidance: '先用 cindy_helper.list_model_providers 核对供应商和型号是否启用，以及型号是否属于所选 runtime 的连接。确认目标连接支持文生图且声明缺失时，用 configure_model_connection 为该型号补齐 mode=image_generation、modalities.input 包含 text、modalities.output 包含 image，再查模型和 Guide。',
+      });
+    }
     return failure('MODEL_NOT_AVAILABLE', '该模型或指定 Provider 当前不可见，或不是请求的媒体类型');
   }
   const resolvedModelId = model.id;
@@ -1260,7 +1301,11 @@ async function prepareInvocation(
   let binding: MediaInvocationBinding = { providerId: model.providerId, executor: 'gateway' };
   let selectedGuide: ResolvedMediaInvocationGuide | undefined;
   let nativeGuideTarget: { providerId: string; agent: AgentKind; modelId: string } | undefined;
-  if (model.providerId !== 'xd') {
+  const shared = resolveSharedImageSource(model.providerId);
+  if (shared && capability === 'image.generate') {
+    protocol = 'openai';
+    binding = { providerId: model.providerId, executor: 'provider-image' };
+  } else if (model.providerId !== 'xd') {
     const providerModel = resolveProviderMediaModel(
       model.providerId,
       resolvedModelId,
@@ -1334,7 +1379,10 @@ async function prepareInvocation(
       if (binding.executor === 'provider-image' || binding.executor === 'provider-video')
         binding = { ...binding, guideSource: resolved.source };
     }
-    resolvedGuide = selectedGuide ?? await fetchMediaInvocationGuide(resolvedModelId, protocol);
+    const shareModelPrefix = shared ? `${shared.providerId}/` : '';
+    const guideModelId = shareModelPrefix && resolvedModelId.startsWith(shareModelPrefix)
+      ? `openai/${resolvedModelId.slice(shareModelPrefix.length)}` : resolvedModelId;
+    resolvedGuide = selectedGuide ?? await fetchMediaInvocationGuide(guideModelId, protocol);
     assertAuthScope(scope);
   } catch (error) {
     if (error instanceof ServerApiError && error.code === 'MEDIA_INVOCATION_GUIDE_NOT_FOUND') {
@@ -1542,6 +1590,7 @@ async function submitInvocation(
   // Gateway 清单和客户端停用状态，避免模型/供应商刚被停用后仍发出新请求。
   const models = await listAvailableMediaModels(invocation.capability, {
     skipGateway: !getAppCapabilities().canUseCindyGateway,
+    providerId: invocation.guide.binding.providerId,
   });
   assertAuthScope(scope, invocation.owner);
   if (!models.some((model) => model.providerId === invocation.guide.binding.providerId && model.id === invocation.modelId)) {

@@ -263,7 +263,7 @@ export class DesktopCaptureWindow {
     });
   }
 
-  dispose(): void {
+  dispose(finishDataTraffic?: (contents: Electron.WebContents, destroy: () => void) => void): void {
     const win = this.window;
     this.window = null; // Detach before destruction callbacks; never stop a replacement owner.
     const pending = this.ready;
@@ -272,6 +272,10 @@ export class DesktopCaptureWindow {
       clearTimeout(pending.timer);
       pending.reject(new Error('DESKTOP_VIDEO_STOPPED'));
     }
-    if (win && !win.isDestroyed()) win.destroy();
+    if (!win || win.isDestroyed()) return;
+    const destroy = () => { if (!win.isDestroyed()) win.destroy(); };
+    if (finishDataTraffic && !pending && (this.mode === 'files' || this.mode === 'direct')) {
+      finishDataTraffic(win.webContents, destroy);
+    } else destroy();
   }
 }

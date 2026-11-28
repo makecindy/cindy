@@ -111,7 +111,7 @@ vi.mock('@/components/ui/confirm-dialog-provider', () => ({
 vi.mock('@/hooks/useAppShortcut', () => ({ useAppShortcut: vi.fn() }));
 vi.mock('@/hooks/useCloseWindowShortcut', () => ({ useCloseShortcutShellOwner: vi.fn() }));
 vi.mock('@/hooks/useLocale', () => ({
-  useLocale: () => ({ effectiveLocale: 'en', setLocale: vi.fn() }),
+  useLocale: () => ({ setDisplayLocale: vi.fn() }),
 }));
 vi.mock('@/lib/makerChatStore', () => ({
   makerChatStore: { initGlobalListeners: mocks.initGlobalListeners },

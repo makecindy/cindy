@@ -49,7 +49,10 @@ export function SelectionMenuText({ onLayout, ...props }: TextProps) {
   }, [tag, props.selectable, quoteCallback, quoteLabel, sideChatLabel]);
 
   return <Text {...props} ref={textRef} onLayout={(event) => {
-    if (native && ctx && props.selectable) setTag(findNodeHandle(textRef.current) ?? null);
+    // Cache the laid-out view even while streaming or read-only. Enabling
+    // selection/actions need not change geometry or emit another onLayout;
+    // the effect above still gates native menu registration on availability.
+    if (native) setTag(findNodeHandle(textRef.current) ?? null);
     onLayout?.(event);
   }} />;
 }

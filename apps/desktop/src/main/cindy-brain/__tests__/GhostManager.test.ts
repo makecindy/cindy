@@ -36,6 +36,7 @@ import { runGhostSnapshotWorkerRequest } from '../ghostSnapshotWorkerProcess';
 import { writeTestCindyPackage } from './cindyPackageFixture';
 import { PluginMarketLedger } from '../../plugin-market/ledger';
 import { projectPluginPublishingSource, projectPluginInstallationSource } from '../pluginPublishingSource';
+import * as pluginInstanceRegistry from '../pluginInstanceRegistry';
 import { createGhostProductionCallbacks } from './ghostProductionCallbacksFixture';
 import { hasPluginHostToolGroupApproval } from '../taskCapability';
 
@@ -1303,6 +1304,131 @@ describe('GhostManager · owner 受管根路径', () => {
           getStateDir: () => path.join(workDir, 'state-root'),
         }),
     ).toThrow(/ghost content root is not a real directory/);
+  });
+
+  // Unit: 受管根的物理身份每次取用都要 lstat + realpath,而实例核对、路径拼接、批准
+  // receipt 读取都会经过它;同一轮用户操作里重复解析同一对根就是实测里 25% 的主线程开销。
+  // 固定时钟把「同一重检窗口」变成确定性事实,断言不随机器快慢漂移。
+  const managerWithClock = (clock: () => number): GhostManager =>
+    new GhostManager({
+      getRootDir: () => rootDir,
+      getLocale: () => hostLocale,
+      onChanged,
+      isTrustedBundledId: (id) => trustedBundledIds.has(id),
+      isTrustedBundledSource: (id, sourceDir) =>
+        trustedBundledIds.has(id) &&
+        path.resolve(sourceDir) === path.resolve(workDir, 'bundled-seeds', id),
+      recordBuiltinTombstone,
+      now: clock,
+      mutateSnapshot: async (request) => {
+        const { parentDir, ...workerRequest } = request;
+        await runGhostSnapshotWorkerRequest(workerRequest, parentDir);
+      },
+    });
+
+  it('同一轮操作只解析一次受管根,窗口结束与逻辑根变化都会重新解析', async () => {
+    let clock = 1_000;
+    const memo = managerWithClock(() => clock);
+    try {
+      await memo.install(await makeCindy('root-memo.cindy', goodManifest('root-memo')));
+
+      const nativeRealpath = fs.realpathSync.native as unknown as (target: string) => string;
+      const spy = vi.spyOn(fs.realpathSync as unknown as { native: typeof nativeRealpath }, 'native');
+    try {
+      const before = spy.mock.calls.length;
+      for (let index = 0; index < 5; index += 1) {
+        expect(memo.list().map((ghost) => ghost.manifest.id)).toEqual(['root-memo']);
+      }
+      // 5 轮 list 落在同一窗口里:只解析一次内容根(+ 一次派生状态根)。
+      expect(spy.mock.calls.length - before).toBeLessThanOrEqual(2);
+
+      // 窗口结束后重新核验物理根,不会永远沿用第一次的结果。
+      clock += 2_000;
+      const afterWindow = spy.mock.calls.length;
+      expect(memo.list().map((ghost) => ghost.manifest.id)).toEqual(['root-memo']);
+      expect(spy.mock.calls.length - afterWindow).toBe(2);
+
+      // 逻辑根换位置:即使还在窗口内,也必须立刻按新根解析,否则会把还在的插件读没。
+      const movedRoot = path.join(workDir, 'ghosts-moved');
+      fs.renameSync(rootDir, movedRoot);
+      if (fs.existsSync(`${rootDir}-install-state`)) {
+        fs.renameSync(`${rootDir}-install-state`, `${movedRoot}-install-state`);
+      }
+      rootDir = movedRoot;
+      expect(memo.list().map((ghost) => ghost.manifest.id)).toEqual(['root-memo']);
+    } finally {
+      spy.mockRestore();
+    }
+    } finally {
+      memo.disposeNotificationIndex();
+    }
+  });
+
+  // 复审回归(P2):缓存命中也必须确认物理根仍是普通目录,否则根在窗口内被换成
+  // 指向根外的链接后,子目录判定会静默穿透。
+  it('根在窗口内被换成链接时不再沿用缓存', async () => {
+    let clock = 1_000;
+    const memo = managerWithClock(() => clock);
+    try {
+      await memo.install(await makeCindy('root-circuit.cindy', goodManifest('root-circuit')));
+      expect(memo.list().map((ghost) => ghost.manifest.id)).toEqual(['root-circuit']);
+
+      const outside = path.join(workDir, 'outside-ghosts');
+      fs.mkdirSync(path.join(outside, 'root-circuit'), { recursive: true });
+      const parked = path.join(workDir, 'ghosts-parked');
+      fs.renameSync(rootDir, parked);
+      try {
+        fs.symlinkSync(outside, rootDir, process.platform === 'win32' ? 'junction' : 'dir');
+      } catch {
+        return;
+      }
+      expect(() => memo.list()).toThrow(/ghost content root is not a real directory/);
+    } finally {
+      memo.disposeNotificationIndex();
+    }
+  });
+
+  // 复审回归(P1/security):写事务不能吃读路径的窗口缓存。根在窗口内被换成指向根外的
+  // junction 时必须先重新核验,否则 uninstall 会顺着链接递归删到根外。
+  it('写入事务不吃重检窗口,根被换成链接时拒绝卸载且不动链接目标', async () => {
+    let clock = 1_000;
+    const memo = managerWithClock(() => clock);
+    try {
+      await memo.install(await makeCindy('root-write.cindy', goodManifest('root-write')));
+      expect(memo.list().map((ghost) => ghost.manifest.id)).toEqual(['root-write']);
+
+      const nativeRealpath = fs.realpathSync.native as unknown as (target: string) => string;
+      const spy = vi.spyOn(fs.realpathSync as unknown as { native: typeof nativeRealpath }, 'native');
+      try {
+        await memo.uninstall('root-write');
+        // 写入事务重解析内容根(不再复用读路径缓存)。
+        expect(spy.mock.calls.some(([target]) => path.resolve(String(target)) === rootDir)).toBe(
+          true,
+        );
+      } finally {
+        spy.mockRestore();
+      }
+      expect(memo.list()).toEqual([]);
+
+      // 再装一份并把根换指向根外的 junction：写入事务会当场拒绝，链接目标原封不动。
+      await memo.install(await makeCindy('root-write2.cindy', goodManifest('root-write2')));
+      const outside = path.join(workDir, 'outside-write');
+      fs.mkdirSync(path.join(outside, 'root-write2'), { recursive: true });
+      const sentinel = path.join(outside, 'root-write2', 'ghost.json');
+      fs.writeFileSync(sentinel, '{}');
+      const parked = path.join(workDir, 'ghosts-write-parked');
+      fs.renameSync(rootDir, parked);
+      try {
+        fs.symlinkSync(outside, rootDir, process.platform === 'win32' ? 'junction' : 'dir');
+      } catch {
+        return;
+      }
+
+      await expect(memo.uninstall('root-write2')).rejects.toThrow(/not a real directory/);
+      expect(fs.existsSync(sentinel)).toBe(true);
+    } finally {
+      memo.disposeNotificationIndex();
+    }
   });
 });
 
@@ -4506,19 +4632,8 @@ describe('GhostManager · list', () => {
     expect(prepare).toHaveBeenCalledTimes(1);
   });
 
-  // PR #9754 review, unit: one approved plugin and a failed ledger snapshot.
-  // The custom projector test above misses the production catch branch. Run
-  // that callback through listAsync: transient IO must recover, persistent IO
-  // must reject within the retry limit instead of publishing unavailable sources.
-  // Empty scans and skipped invalid directories need no source evidence at all.
-  it.each(['empty', 'unprojected', 'transient', 'persistent'] as const)('handles %s listing snapshot failures through production wiring', async (failure) => {
-    if (failure === 'unprojected') {
-      await fs.promises.mkdir(path.join(rootDir, 'broken'), { recursive: true });
-    } else if (failure !== 'empty') {
-      await manager.install(await makeCindy('ledger-retry.cindy', goodManifest()), { namespace: null });
-    }
-    const ledger = new PluginMarketLedger(path.join(workDir, 'market', 'ledger.v1.json'));
-    manager = productionManager({
+  function listingManager(ledger: PluginMarketLedger): GhostManager {
+    return productionManager({
       // Keep production source callbacks; unrelated app services stay isolated.
       GhostManager: class extends GhostManager {
         constructor(options: GhostManagerOptions) {
@@ -4537,6 +4652,58 @@ describe('GhostManager · list', () => {
       projectPluginPublishingSource,
       projectPluginInstallationSource,
     }).getGhostManager();
+  }
+
+  // #11035, unit: the source helper alone misses the official-trust override in
+  // installed listings. Hold reconciliation at the old revision across the first
+  // frame and a background refresh; the package and market ledger still match.
+  it('shows unknown in installed plugin lists while the approval revision stays out of sync', async () => {
+    const pluginId = `c${'a'.repeat(24)}`;
+    const file = await makeCindy('market.cindy', goodManifest());
+    const ledger = new PluginMarketLedger(path.join(workDir, 'market', 'ledger.v1.json'));
+    ledger.upsertInstallation({
+      ghostId: 'hello', pluginId, namespace: null, scope: 'public', organizationId: null,
+      releaseId: 'release', version: '1.0.0', source: 'market', installed: true,
+      sha256: crypto.createHash('sha256').update(await fs.promises.readFile(file)).digest('hex'),
+      updatedAt: '2026-01-01T00:00:00.000Z',
+    });
+    manager = listingManager(ledger);
+    const installed = await manager.install(file, {
+      namespace: null, registrySource: 'market', pluginId, trustOverride: 'cindy-official',
+    });
+    if (!('ghost' in installed)) throw new Error('market fixture did not install');
+    expect(manager.list()).toMatchObject([{ installationSource: { kind: 'official' } }]);
+
+    const receipt = manager.readApprovedInstallReceipt(installedGhostStoragePart(installed.ghost));
+    if (!receipt) throw new Error('missing approved receipt');
+    const revision = crypto.randomUUID();
+    const receipts = new GhostInstallReceiptStore(() => manager.approvalStateRoot());
+    await receipts.write({ ...receipt, revision }, { relId: installedGhostPhysicalRelId(installed.ghost) });
+    const reconcile = vi.spyOn(pluginInstanceRegistry, 'reconcileInstanceReceipt').mockImplementation(record => record);
+    try {
+      const expected = [{
+        enabled: true, approval: { state: 'approved', revision }, installationSource: { kind: 'unknown' },
+      }];
+      expect(manager.list()).toMatchObject(expected);
+      await expect(manager.listAsync()).resolves.toMatchObject(expected);
+    } finally {
+      reconcile.mockRestore();
+    }
+  });
+
+  // PR #9754 review, unit: one approved plugin and a failed ledger snapshot.
+  // The custom projector test above misses the production catch branch. Run
+  // that callback through listAsync: transient IO must recover, persistent IO
+  // must reject within the retry limit instead of publishing unavailable sources.
+  // Empty scans and skipped invalid directories need no source evidence at all.
+  it.each(['empty', 'unprojected', 'transient', 'persistent'] as const)('handles %s listing snapshot failures through production wiring', async (failure) => {
+    if (failure === 'unprojected') {
+      await fs.promises.mkdir(path.join(rootDir, 'broken'), { recursive: true });
+    } else if (failure !== 'empty') {
+      await manager.install(await makeCindy('ledger-retry.cindy', goodManifest()), { namespace: null });
+    }
+    const ledger = new PluginMarketLedger(path.join(workDir, 'market', 'ledger.v1.json'));
+    manager = listingManager(ledger);
     const unavailable = () => { throw Object.assign(new Error('ledger locked'), { code: 'EBUSY' }); };
     const snapshot = vi.spyOn(ledger, 'createListingLookup');
     try {

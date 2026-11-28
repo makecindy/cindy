@@ -20,6 +20,7 @@ interface MockTransitionInput {
 }
 
 const mocks = vi.hoisted(() => ({
+  activeCatalog: vi.fn(),
   localMode: false,
   currentUserId: 'media-user-0',
   ownerGeneration: 1,
@@ -27,6 +28,8 @@ const mocks = vi.hoisted(() => ({
   executableModels: vi.fn(),
   providerModel: vi.fn(),
   providerInvoke: vi.fn(),
+  sharedImageSource: vi.fn(),
+  remoteInvoke: vi.fn(),
   videoConnection: vi.fn(),
   httpConnection: vi.fn(),
   resolvedGuide: vi.fn(),
@@ -104,6 +107,7 @@ vi.mock('../../maker-host/outbound-fetch.desktop.js', () => ({
 vi.mock('../../usage/gatewayMediaBilling.js', () => ({
   prepareGatewayMediaBilling: mocks.prepareBilling,
 }));
+vi.mock('../../maker-host/active-catalog.js', () => ({ getActiveCatalog: mocks.activeCatalog }));
 vi.mock('../../model-access/mediaModels.js', () => ({
   listAvailableMediaModels: mocks.models,
   listExecutableMediaModels: mocks.executableModels,
@@ -135,6 +139,10 @@ vi.mock('../providerMediaRuntime.js', async (importOriginal) => ({
   resolveProviderHttpConnection: mocks.httpConnection,
 }));
 vi.mock('../ingest.js', () => ({ ingestMedia: mocks.ingestMedia }));
+vi.mock('../sharedImageCatalog.js', () => ({
+  resolveSharedImageSource: mocks.sharedImageSource,
+  invokeSharedImageSource: mocks.remoteInvoke,
+}));
 vi.mock('../blobStore.desktop.js', () => ({
   readFile: mocks.readBlob,
   parseBlobUrl: (url: string) => {
@@ -341,6 +349,7 @@ async function prepare(capability: MediaCapability = 'image.generate'): Promise<
 
 describe('Cindy Core media invocation state and security boundary', () => {
   beforeEach(() => {
+    mocks.activeCatalog.mockReset().mockReturnValue({ providers: [] });
     mocks.recordBilling.mockReset().mockResolvedValue(undefined);
     mocks.finishBilling.mockReset();
     mocks.prepareBilling.mockReset().mockResolvedValue(
@@ -371,6 +380,8 @@ describe('Cindy Core media invocation state and security boundary', () => {
     });
     mocks.providerModel.mockReset();
     mocks.providerInvoke.mockReset();
+    mocks.sharedImageSource.mockReset();
+    mocks.remoteInvoke.mockReset();
     mocks.videoConnection.mockReset();
     mocks.httpConnection.mockReset();
     mocks.resolvedGuide.mockReset();
@@ -1744,6 +1755,29 @@ describe('Cindy Core media invocation state and security boundary', () => {
     expect(JSON.parse(init.body)).toMatchObject({ model: fullModelId });
   });
 
+  it('uses the selected incoming OpenAI share and ingests the returned image without local credentials', async () => {
+    const providerId = 'share:image-account';
+    const modelId = 'openai/gpt-image-2';
+    mocks.models.mockResolvedValue([{ id: modelId, providerId, name: 'GPT Image 2', mode: 'image_generation' }]);
+    mocks.sharedImageSource.mockReturnValue({ memberId: 'member', providerId: 'openai', hostDeviceId: 'host' });
+    mocks.remoteInvoke.mockImplementation(async (_providerId, command) =>
+      command.action === 'start' ? { accepted: true } : {
+        state: 'complete', mimeType: 'image/png', size: PNG.length, data: PNG.toString('base64'),
+      });
+    const prepared = await callCindyMedia({ action: 'prepare', providerId, modelId, capability: 'image.generate' });
+    expect(prepared).toMatchObject({ ok: true, provider_id: providerId, model_id: modelId });
+    expect(mocks.models).toHaveBeenCalledWith('image.generate', expect.objectContaining({ providerId }));
+    const invocationId = prepared.invocation_id as string;
+    const nativeParameters = { rendering: { seed: 7 } };
+    const result = await callCindyMedia({ action: 'request', invocationId, body: { prompt: 'a cat', ...nativeParameters } });
+    expect(result).toMatchObject({ ok: true });
+    expect(mocks.remoteInvoke).toHaveBeenCalledWith(providerId,
+      expect.objectContaining({ action: 'start', providerId: 'openai', model: modelId, requestId: invocationId, nativeParameters }),
+      expect.any(Function));
+    expect(mocks.ingestMedia).toHaveBeenCalledWith(expect.objectContaining({ buffer: PNG }), mocks.db.drizzle);
+    expect(mocks.providerInvoke).not.toHaveBeenCalled();
+  });
+
   it.each([
     [false, 'openai'], [true, 'openai'], [true, 'openai-independent'],
   ] as const)('同名媒体模型按 providerId 精确准备并调用第三方来源 (local=%s, provider=%s)', async (localMode, providerId) => {
@@ -1962,6 +1996,25 @@ describe('Cindy Core media invocation state and security boundary', () => {
     })).resolves.toMatchObject({ ok: true, status: 'complete' });
     const init = mocks.outboundFetch.mock.calls[0]![1] as RequestInit;
     expect(JSON.parse(init.body as string)).toMatchObject({ size: '1320x2868', quality: 'max' });
+  });
+
+  // #13118 / unit: a visible custom connection can exist outside the image catalog.
+  it('guides a targeted prepare miss without inferring a missing declaration or submitting', async () => {
+    mocks.activeCatalog.mockReturnValue({ providers: [{ id: 'relay', source: 'user',
+      models: { pi: [{ id: 'image-model' }] } }] });
+    const request = { action: 'prepare', providerId: 'relay', modelId: 'image-model',
+      sourceAgent: 'pi', capability: 'image.generate' } as const;
+    const result = await callCindyMedia(request);
+    expect(result).toMatchObject({ ok: false, errorCode: 'MODEL_NOT_AVAILABLE', retryable: false,
+      target: { providerId: 'relay', agent: 'pi', modelId: 'image-model' },
+      allowedActions: expect.arrayContaining(['inspect_model_connection_and_media_declaration']),
+      guidance: expect.stringMatching(/是否启用.*声明缺失时.*configure_model_connection.*image_generation.*text.*image/) });
+    const unknown = await callCindyMedia({ ...request, providerId: 'wrong-source' });
+    expect(unknown.errorCode).toBe('MODEL_NOT_AVAILABLE');
+    expect(unknown).not.toHaveProperty('guidance');
+    expect(mocks.rows.size).toBe(0);
+    expect(mocks.providerInvoke).not.toHaveBeenCalled();
+    expect(mocks.outboundFetch).not.toHaveBeenCalled();
   });
 
   it('本机准备期间同 owner 代次变化时不保存调用', async () => {

@@ -106,19 +106,19 @@ function ownerSuppression(owner: string): Map<string, Set<string>> | undefined {
   const groupAllowsFast = readProviderGroup(provider.id)?.allowFast !== false;
   const view = { ...provider, subscriptionFastPolicy: { allowFast, groupAllowsFast } };
   if (allowFast && groupAllowsFast) return view;
+  const withoutFast = (models: ProviderView['models']): ProviderView['models'] => Object.fromEntries(
+    Object.entries(models).map(([agent, entries]) => [
+      agent,
+      entries?.map((model) => ({ ...model, supportsFastMode: false, supportsUltrafastMode: false })),
+    ]),
+  );
   return {
     ...view,
-    models: Object.fromEntries(
-      Object.entries(provider.models).map(([agent, models]) => [
-        agent,
-        models?.map((model) => ({
-          ...model,
-          supportsFastMode: false,
-          supportsUltrafastMode: false,
-        })),
-      ]),
-    ),
-  } as ProviderView;
+    models: withoutFast(provider.models),
+    ...(provider.subscriptionDisplayModels
+      ? { subscriptionDisplayModels: withoutFast(provider.subscriptionDisplayModels) }
+      : {}),
+  };
 }
 return { notifySubscriptionFastPolicyChanged, createSubscriptionFastPolicy, projectSubscriptionFastPolicy };
 }

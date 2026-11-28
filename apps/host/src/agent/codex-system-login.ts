@@ -2,7 +2,12 @@ import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { codexAuthPathsShareEntry, inspectCodexAuthLink, relinkSharedCodexAuth } from '../../../desktop/src/main/maker-host/codex-auth-link.js';
+import {
+  codexAuthPathsShareEntry,
+  inspectCodexAuthLink,
+  relinkSharedCodexAuth,
+  removeLegacyCodexAuthAlias,
+} from '../../../desktop/src/main/maker-host/codex-auth-link.js';
 import {
   getActiveInvalidatedSystemCodexAuthMarker,
   readInvalidatedSystemCodexAuthMarker,
@@ -109,6 +114,8 @@ export function createHostCodexSystemLogin(options: {
   systemAuthPath: string | null;
   /** A native login of this connection is in progress or being cancelled. */
   loginActive(): boolean;
+  /** A non-client desktop owns the shared files until the Host releases its hold. */
+  isProfileHeld?(): boolean;
   /** The desktop's onOAuthBindingClaimed. */
   onBindingClaimed?: () => unknown;
 }) {
@@ -122,18 +129,29 @@ export function createHostCodexSystemLogin(options: {
   let sharedAuthLinkUnavailable = false;
 
   /** runReconcileWithSystemCodex, steps 2 to 9 (auth-adapters.ts 1172–1353). */
-  async function run(systemAuth: string): Promise<void> {
+  async function run(systemAuth: string, profileAllowsWrite: () => boolean): Promise<void> {
     // Every pass judges again: only this pass failing to link counts as unreachable.
     sharedAuthLinkUnavailable = false;
     // Step 2: an explicit disconnect or an invalidation still covering the system login.
-    if (restoreInvalidationStateOnStartup(options.codexHome, systemAuth, myAuth).suppressReconcile) return;
+    if (restoreInvalidationStateOnStartup(options.codexHome, systemAuth, myAuth).suppressReconcile) {
+      if (!options.loginActive() && profileAllowsWrite()) {
+        const marker = getActiveInvalidatedSystemCodexAuthMarker(options.codexHome, systemAuth, myAuth);
+        if (marker && !marker.unprovenCredentialAttribution && fs.existsSync(systemAuth)) {
+          removeLegacyCodexAuthAlias(systemAuth, myAuth);
+        }
+      }
+      return;
+    }
     // Step 3.
     if (!fs.existsSync(systemAuth)) return;
     // Step 4: already the same entry.
     if (codexAuthPathsShareEntry(systemAuth, myAuth)) return;
     // Step 5: a healthy hardlink is marked shared and replaced by a file symlink below.
     const topology = await inspectCodexAuthLink(systemAuth, myAuth);
-    if (topology.healthy && topology.linkType === 'hardlink') markNativeProviderAuthSharedSystemCredential('openai');
+    if (topology.healthy && topology.linkType === 'hardlink') {
+      if (!profileAllowsWrite()) return;
+      markNativeProviderAuthSharedSystemCredential('openai');
+    }
     if (topology.healthy && topology.linkType === 'symlink') return;
     // Step 6: a login made explicitly in Cindy stays the instance's own.
     const hasLocalEntry = topology.linkType !== 'missing';
@@ -152,6 +170,7 @@ export function createHostCodexSystemLogin(options: {
     if (!sysAccount && topology.linkType !== 'hardlink') return;
     const myAccount = hasLocalEntry ? await readCodexAccountId(myAuth) : null;
     if (legacyExplicitOwner && myAccount && myAccount !== sysAccount) {
+      if (!profileAllowsWrite()) return;
       const migrated = migrateLegacyExplicitNativeProviderAuthToInstanceIsolated('openai', legacyExplicitOwner);
       log.info('keeping account-distinct legacy explicit Codex auth',
         { provenanceMigrated: migrated, ownerMatchesActive: legacyExplicitOwner === getActiveAppSession().dataOwnerId });
@@ -159,7 +178,8 @@ export function createHostCodexSystemLogin(options: {
     }
     // Step 8: Windows keeps a standalone file (no Release snapshot on the Host).
     if (process.platform === 'win32' && topology.linkType === 'file') {
-      if (legacyExplicitOwner) migrateLegacyExplicitNativeProviderAuthToInstanceIsolated('openai', legacyExplicitOwner);
+      if (legacyExplicitOwner && profileAllowsWrite())
+        migrateLegacyExplicitNativeProviderAuthToInstanceIsolated('openai', legacyExplicitOwner);
       return;
     }
     if (hasLocalEntry) {
@@ -167,8 +187,9 @@ export function createHostCodexSystemLogin(options: {
         { linkType: topology.linkType, accountMatch: myAccount ? myAccount === sysAccount : 'unknown', dryRunCandidate: true });
     }
     // Step 9: the reads above crossed awaits; a login may have started since.
-    if (options.loginActive()) return;
+    if (options.loginActive() || !profileAllowsWrite()) return;
     await fsp.mkdir(options.codexHome, { recursive: true }).catch(() => undefined);
+    if (!profileAllowsWrite()) return;
     const { kind, error, linkType } = await relinkSharedCodexAuth(systemAuth, myAuth);
     if (kind === 'linked') log.info('codex auth.json linked with shared OpenAI login', { linkType });
     else if (kind === 'link-unsupported') {
@@ -181,7 +202,7 @@ export function createHostCodexSystemLogin(options: {
 
   /** claimDetectedCodexOAuthBinding (auth-adapters.ts 1061–1135), step 10. */
   function claim(systemAuth: string, sessionAtStart: { generation: number; dataOwnerId: string | null }): void {
-    if (options.loginActive()) return;
+    if (options.loginActive() || options.isProfileHeld?.()) return;
     const session = getActiveAppSession();
     if (isAppSessionBoundaryPending()) return;
     if (session.generation !== sessionAtStart.generation || session.dataOwnerId !== sessionAtStart.dataOwnerId) return;
@@ -221,11 +242,19 @@ export function createHostCodexSystemLogin(options: {
     reconcile(opts?: { allowCurrentLogin?: boolean }): Promise<void> {
       const systemAuth = options.systemAuthPath;
       if (!systemAuth) return Promise.resolve();
+      if (options.isProfileHeld?.()) return Promise.resolve();
       if (!opts?.allowCurrentLogin && options.loginActive()) return Promise.resolve();
       if (pending) return pending;
       const sessionAtStart = getActiveAppSession();
-      const current = run(systemAuth)
-        .then(() => claim(systemAuth, sessionAtStart))
+      // As on desktop, the filesystem link is independent of which account gets the binding.
+      // An observed profile hold ends this pass; only a later pass can resume writing.
+      let sawProfileHold = false;
+      const profileAllowsWrite = () => {
+        sawProfileHold ||= options.isProfileHeld?.() === true;
+        return !sawProfileHold;
+      };
+      const current = run(systemAuth, profileAllowsWrite)
+        .then(() => { if (profileAllowsWrite()) claim(systemAuth, sessionAtStart); })
         .finally(() => { if (pending === current) pending = null; });
       pending = current;
       return current;

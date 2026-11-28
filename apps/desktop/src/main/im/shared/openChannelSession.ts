@@ -15,20 +15,21 @@
  */
 
 import { imText } from './imText';
-import type { AgentKind, Effort, PermissionMode } from '@cindy/maker-core';
+import type { Effort, EngineKind, PermissionMode } from '@cindy/maker-core';
 
-import { normalizeDbAgentKind } from '../../../shared/agentKindConversion';
+import { makerToDbEngineKind } from '../../../shared/agentKindConversion';
 import { getCurrentDbClientSnapshot } from '../../localDb/client/current';
 import { openSession, type SessionOpenBody } from '../../localDb/sessionOpening';
 
 /** 渠道为新任务选定的路由(准入前)。 */
 export interface ChannelSessionRoute {
   agentDeviceId?: string | null;
-  agentKind: AgentKind;
+  /** 'acp' = 插件引擎(按在它上面新建任务的准入，providerId 指出是哪一个)。 */
+  agentKind: EngineKind;
   model: string;
   providerId: string | null;
   /** 缺席 = 渠道没有显式指定(准入后的默认值不回写给调用方, 保持渠道原有省略语义)。 */
-  effort?: Effort;
+  effort?: Effort | '';
   /** 缺席同上。 */
   fastMode?: boolean | 'ultrafast';
   permissionMode: PermissionMode;
@@ -41,7 +42,7 @@ export interface ChannelSessionRoute {
 export interface AdmittedChannelRoute {
   model: string;
   providerId: string | null;
-  effort?: Effort;
+  effort?: Effort | '';
   fastMode?: boolean | 'ultrafast';
 }
 
@@ -67,7 +68,7 @@ export async function openChannelSession<T>(
 ): Promise<T> {
   const body: SessionOpenBody = {
     ...(route.title ? { title: route.title } : {}),
-    agentKind: normalizeDbAgentKind(route.agentKind) as SessionOpenBody['agentKind'],
+    agentKind: makerToDbEngineKind(route.agentKind) as SessionOpenBody['agentKind'],
     model: route.model,
     providerId: route.providerId,
     ...(route.agentDeviceId ? { agentDeviceId: route.agentDeviceId } : {}),
@@ -84,7 +85,7 @@ export async function openChannelSession<T>(
         {
           model: row.model,
           providerId: row.providerId ?? null,
-          ...(route.effort !== undefined ? { effort: row.effort as Effort } : {}),
+          ...(route.effort !== undefined ? { effort: row.effort as Effort | '' } : {}),
           ...(route.fastMode !== undefined ? { fastMode: row.fastMode } : {}),
         },
         assertCurrent,

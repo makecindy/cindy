@@ -202,18 +202,18 @@ describe('user rename notification ordering', () => {
     for (const [note, write] of [
       // local-db:sessions:update(本机重命名框)
       [
-        "if (typeof p.title === 'string') noteUserTitleWritten(sid);",
+        "if (typeof p.title === 'string') noteUserTitleWritten(sid, titleOwner);",
         'await withStatusWriteLock(',
       ],
       // patchSessionMetaInDb(device-link 远程改名)
       [
-        'if (patch.title !== undefined) noteUserTitleWritten(sessionId);',
+        'if (patch.title !== undefined) noteUserTitleWritten(sessionId, readCurrentDbClientSnapshot());',
         'withStatusWriteLock(db, sessionId, patch.status, async () => {',
       ],
       // renameSessionTitlesInDb(MCP 批量改名)
       [
-        'for (const change of changes) noteUserTitleWritten(change.sessionId);',
-        "getDbClient()\n    .tx('sessions.renameTitles'",
+        'for (const change of changes) noteUserTitleWritten(change.sessionId, titleOwner);',
+        "dbClient\n    .tx('sessions.renameTitles'",
       ],
     ] as const) {
       const noteAt = sessionsSource.indexOf(note);

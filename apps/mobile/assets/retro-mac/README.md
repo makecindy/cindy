@@ -53,3 +53,63 @@ Additional finishing prompts (built-in image_gen):
 Generated with GPT Image 2.5 Flare, 1536×1024, to replace the rail / keys / palm slices. Prompt direction: photoreal exact orthographic top view of the keyboard base filling the frame, top band with period detail at the ends only, one recessed EMPTY keyboard well with straight edges and a flat uniform floor, plain palm rest with the machine's pointing control centred; no keys, labels, logos or UI. Materials: Macintosh II platinum with Snow White grooves and trackpad; PowerBook 170 graphite with hinges and trackball; ThinkPad 701C matte black with two red-lined buttons; classic ivory with brown well and trackpad, shared by the classic, compact and edge skins.
 
 `*-control.webp` is the pointing control cropped from each source with a feathered edge. `*-deck.webp` has it covered with neighbouring palm material, so the control can stay undistorted and clear of the toolbar. Well floors measured for `DECK_WELLS`: classic `(58,179)–(1487,594)`, Macintosh II `(48,169)–(1490,640)`, PowerBook `(71,148)–(1475,560)`, ThinkPad `(62,153)–(1482,593)`.
+
+## Ice Blue and refined keycaps (2026-11-07)
+
+Original skin named **Ice Blue / 冰蓝**, inspired by translucent early laptop
+materials. Generated with built-in OpenAI image_gen; no competitor names,
+fruit marks or screenshots are shipped as assets. The initial unshipped draft
+was replaced after visual review for coarse bevels and excessive glossy ribs.
+
+- `iceblue-display.webp`: thick translucent teal shell, cloudy milk-white face,
+  fine speaker perforations and ICE BLUE inscription. Source screen opening
+  `(198,150)–(1339,769)` in 1536×1024; destination opening is independently
+  enlarged to keep the bezel from consuming remote-desktop space.
+- `iceblue-deck.webp`: matching matte palmrest and empty keyboard well
+  `(171,171)–(1363,622)` in 1536×1024. No baked-in keys or trackpad.
+- `iceblue-control.webp`: teal satin pad, translucent molded frame with screw
+  wells/clips and a milk-white lower click strip, 600px wide. Regenerated from
+  the user's earlier touchpad reference with a taller 1288:955 silhouette;
+  transparent margins trimmed before encoding. It preserves its aspect ratio,
+  scales up to 120pt tall and fits the available palmrest with an 8pt vertical
+  margin on each side. The full palmrest remains the live pointer input surface.
+  A subsequent color-only edit softens the teal to pale icy aqua while retaining
+  the molded rim, satin grain, highlight depth and milk-white click strip.
+- `keycap-ice.webp`: cool-white satin key. The Ice Blue keyboard samples its
+  unprinted center for the surface grain and draws the curved shoulders and
+  front lip at the actual key dimensions, including on the spacebar.
+- `keycap-ivory-refined.webp` / `keycap-graphite-refined.webp`: matching fine-grain
+  ivory / graphite materials, subtle concave faces; replace coarse faceted
+  textures in existing physical skins. Each key texture is 256px wide.
+
+Material light comes from upper left. The physical keyboards sample only the
+unprinted texture center. Continuous native faces and height-based sidewalls
+keep their shape across every key width. MacBook uses a low-profile satin face.
+Legends are live text. A separate contact-shadow layer fades as keys depress;
+the full-size touch region stays fixed. App theme does not recolor physical
+materials. No native dependencies are added.
+
+### Material revision: translucent plastic, not glass
+
+The 2026-11-07 revision references the iMac G3's physical plastic: rich teal at
+thick curved edges, lighter color across thin sections, softly obscured internal
+ribs/clips and a cloudy milk-white inner tray. Highlights vary with curvature
+instead of forming luminous rings. Case textures are opaque images (material
+translucency is baked in), avoiding accidental holes in the keyboard recess.
+The live display opening uses 83% of panel width, preserving readable shell depth.
+Material reference: https://www.mac-museum.com/apple-geraete/imac-g3.html
+The reference photo is not bundled. Original ICE BLUE branding is retained.
+
+### Full-bleed exterior
+
+The display and deck were edited again to extend teal molded plastic through
+all four image edges and corners. No gray studio background remains outside
+the rounded shell. Inner opening coordinates are unchanged, so the live screen
+and keyboard keep their existing alignment. These are production textures,
+not device screenshots; physical-device verification is separate.
+
+The native Duo review further removed the separate rounded silhouette from
+each panel. Material now continues to the rectangular texture bounds; the
+device's own display mask supplies the outer corners, and the fold joins two
+straight edges. Nine-slice boundaries align to physical pixels and overdraw one
+pixel to avoid hairline backing leaks.

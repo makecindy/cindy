@@ -1,11 +1,11 @@
-import type { AgentKind } from '@cindy/maker-core';
+import type { EngineKind } from '@cindy/maker-core';
 
 import { beginTurnChangeSet, finalizeTurnChangeSet, waitForTurnChangeSetSeal } from './store.js';
 
 /** The session fields the dispatch boundary reads. */
 export interface TurnChangeSetDispatchSession {
   id: string;
-  agentKind: AgentKind;
+  agentKind: EngineKind;
   workDir: string;
   remoteHostId: string | null;
 }

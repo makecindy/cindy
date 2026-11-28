@@ -89,7 +89,7 @@ export function CardMasonry<T>({
             onReorder={onReorder}
             reducedMotion={reducedMotion}
             forceFallback={forceFallback}
-            className="flex flex-col gap-[7px]"
+            className="flex flex-col gap-1.5"
             renderItem={renderItem}
           />
         ) : (

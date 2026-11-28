@@ -168,6 +168,19 @@ describe('通知入口在伙伴投影未加载时的路由', () => {
     }
   });
 
+  it('keeps an explicitly local session out of the cached remote companion route', () => {
+    const openOrdinary = vi.fn();
+    const readKnownBotRoute = vi.fn(() => ({ route: '/bots/remote/other/bot', consumesAlert: false }));
+    const openBotRoute = vi.fn();
+    const open = createSessionEntryNavigator({
+      readKnownBotRoute, resolveBotRoute: vi.fn(), openBotRoute, consumeAlert: vi.fn(), openOrdinary,
+    });
+    open('same-id', undefined, undefined, 'local');
+    expect(openOrdinary).toHaveBeenCalledWith('same-id', undefined, expect.any(Function), 'local');
+    expect(readKnownBotRoute).not.toHaveBeenCalled();
+    expect(openBotRoute).not.toHaveBeenCalled();
+  });
+
   it('drops a delayed device lookup after a newer entry has opened', async () => {
     let resolveDevice!: (remote: boolean) => void;
     const openOrdinary = vi.fn();

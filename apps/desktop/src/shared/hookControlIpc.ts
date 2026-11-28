@@ -42,6 +42,8 @@ export const HOOK_CONTROL_INVOKE = {
    */
   SET_PROVIDER_DEFAULT_WORKSPACE: 'maker:hook-control:set-provider-default-workspace',
   SET_X_COMPANION: 'maker:hook-control:set-x-companion',
+  /** 官方渠道交给哪位伙伴(slack / telegram / feishu / discord / x), 比较后写入。 */
+  SET_PROVIDER_COMPANION: 'maker:hook-control:set-provider-companion',
   /** 发起 Slack 账号绑定(bind.start; SIWS OIDC, 无参数)。 */
   BIND_START: 'maker:hook-control:bind-start',
   /** 解除 Slack 账号绑定(bind.revoke)。 */
@@ -103,7 +105,7 @@ export const HOOK_WORKSPACE_PROVIDER_SOURCE_MAX_ENTRIES = 256;
  * Cindy relay 当前支持的客户端 provider。协议包 HOOK_PROVIDERS 的手抄副本
  * (shared 层刻意不引协议包)——协议 bump 新增 provider 时必须手动同步。
  */
-export type HookProvider = 'slack' | 'telegram' | 'x' | 'feishu';
+export type HookProvider = 'slack' | 'telegram' | 'x' | 'feishu' | 'discord';
 
 /** provider-neutral 状态机(非 slack legacy 线)覆盖的 provider。 */
 export type NeutralHookProvider = Exclude<HookProvider, 'slack'>;
@@ -135,8 +137,9 @@ export interface ProviderBindingView {
   scopeName: string | null;
   connectUrl: string | null;
   /**
-   * 一次性短关联码(飞书 / Lark: 网页授权不可用时发给机器人的兜底)。只在
-   * pending 时非空; 其它 provider 与旧 server 恒为 null。
+   * 一次性短关联码(飞书 / Lark: 网页授权不可用时发给机器人的兜底; 官方 Discord:
+   * 唯一的关联方式, 私信给机器人或在 Discord 里执行 /bind)。只在 pending 时非空;
+   * 其它 provider 与旧 server 恒为 null。
    */
   bindCode: string | null;
   expiresAt: number | null;
@@ -159,7 +162,7 @@ export interface FeishuAppView {
 
 export interface ProviderHookView {
   applications?: FeishuAppView[];
-  /** Local companion assignment, currently only used by the official X provider. */
+  /** 本机的伙伴归属(设置 → IM 机器人 → 某平台 →「谁来回复」); null = 普通任务。 */
   companionBotId?: string | null;
   enabled: boolean;
   /** 该 provider 平级 hook 服务的运行期端点；空值表示当前环境尚未部署。 */
@@ -189,7 +192,7 @@ export interface ProviderHookView {
 /** @deprecated 兼容别名;新代码用 ProviderHookView。 */
 export type TelegramHookView = ProviderHookView;
 
-/** 绑定卡可打开的链接类别;'add-to-group' 仅 Telegram 使用。 */
+/** 绑定卡可打开的链接类别;'add-to-group' 仅 Telegram 与 Discord(添加到服务器)使用。 */
 export type ProviderOpenAction = 'connect' | 'provider' | 'add-to-group';
 
 /** @deprecated 兼容别名;新代码用 ProviderOpenAction。 */
@@ -316,6 +319,8 @@ export type HookConnectionStatus = 'disabled' | 'connecting' | 'connected' | 'st
 /** 渲染层可见的 Cindy IM 快照；顶层字段保持 Slack 兼容。 */
 export interface SlackHookView {
   enabled: boolean;
+  /** 官方 Slack 交给的伙伴; 缺省 / null = 普通任务。 */
+  companionBotId?: string | null;
   /** Slack Bot 是否发送本设备上下线私聊通知。 */
   lifecycleAnnouncement: boolean;
   /** 实际生效的服务器地址(默认内置值; 被 urlOverride 覆写时为覆写值)。 */
@@ -350,6 +355,8 @@ export interface SlackHookView {
   x: ProviderHookView;
   /** 平级官方飞书 / Lark hook 服务状态。 */
   feishu: ProviderHookView;
+  /** 官方 Discord 服务状态(寄宿在 telegram-hook-server 的独立 /discord 路径)。 */
+  discord: ProviderHookView;
 }
 
 /**
@@ -390,6 +397,8 @@ export interface HookWorkspaceProviderSourceEntry {
   teamId: string | null;
   workspace: string;
   providerId: string;
+  /** 可选智能路由 id(仅存本机，绝不镜像到 hook server)；命中有值时新任务按路由选源并持续托管。 */
+  modelGroup?: string;
 }
 
 export interface HookWorkspacePrefs {

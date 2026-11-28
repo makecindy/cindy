@@ -160,7 +160,7 @@ describe('scheduler model popover overlay behavior', () => {
 
     expect(onOuterWheel).not.toHaveBeenCalled();
     expect(screen.getByTestId('model-selector-content').getAttribute('data-overlay-class')).toBe(
-      'z-[10020]',
+      'z-modal-popover-nested',
     );
     expect(
       screen

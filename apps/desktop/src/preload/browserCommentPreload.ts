@@ -24,6 +24,7 @@
  */
 
 import { ipcRenderer } from 'electron';
+import { installHtmlPreviewFit } from './fitHtmlPreview';
 
 import {
   BROWSER_COMMENT_CANCEL_PENDING_CHANNEL,
@@ -1169,3 +1170,5 @@ ipcRenderer.on(BROWSER_COMMENT_DESIGN_RESET_CHANNEL, () => {
     // see above
   }
 });
+
+installHtmlPreviewFit();

@@ -36,6 +36,7 @@ import {
   normalizeSafeDirectorySpelling,
   safeDirectorySpellings,
 } from '../gitExec';
+import { GIT_LISTING_MAX_BUFFER } from '../gitOutputLimits';
 
 const realPlatform = process.platform;
 
@@ -228,6 +229,18 @@ describe('gitExec timeoutMs', () => {
     });
   });
 
+  // A ~1M-file repository prints 100+ MB from `ls-files --stage`; recycling such worktrees always
+  // failed at the default ceiling. Minimal input: one byte over 16 MiB with the listing ceiling.
+  it('accepts index-sized listing output up to the caller-provided ceiling', async () => {
+    setPlatform('linux');
+    const state = installExecFileMock();
+    const pending = gitExec(['ls-files', '--stage', '-z'], '/repo', { maxBuffer: GIT_LISTING_MAX_BUFFER });
+    state.child.stdout.emit('data', Buffer.alloc(16 * 1024 * 1024 + 1, 0x61));
+    state.child.emit('close', 0, null);
+    const { stdout } = await pending;
+    expect(stdout.length).toBe(16 * 1024 * 1024 + 1);
+  });
+
   // #7259: unit tier. Explicit abort must kill the tree, not only drop its
   // promise; a blocked child is the minimal reproduction. No wall-clock waits.
   it.each(['win32', 'linux'] as const)('abort terminates the %s tree before settling', async (platform) => {
@@ -379,6 +392,9 @@ describe('gitExec timeoutMs', () => {
     );
     const pending = gitExec(['status'], '/repo');
     const status = probe(pending);
+    expect(mocks.execFile).toHaveBeenCalledWith(
+      'git', ['status'], expect.objectContaining({ windowsHide: true }), expect.any(Function),
+    );
     state.child.stdout.emit(
       'error',
       Object.assign(new Error('read ENOTCONN'), { code: 'ENOTCONN', syscall: 'read' }),

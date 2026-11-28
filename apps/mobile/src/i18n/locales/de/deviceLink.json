@@ -35,7 +35,17 @@
   "retryAccess": "Zugriff erneut versuchen",
   "recheck": "Erneut prüfen",
   "deviceRemovedTitle": "Gerät entfernt",
-  "deviceRemovedHint": "Melde dich ab und wieder an, um das Gerät wieder zur Geräteliste hinzuzufügen.",
+  "deviceRemovedHint": "Dieses Handy wurde aus deinem Konto entfernt. Tippe auf „Wieder beitreten“, um es zurückzuholen.",
+  "rejoin": {
+    "action": "Wieder beitreten",
+    "busy": "Tritt wieder bei",
+    "doneTitle": "Wieder beigetreten",
+    "agentNetUnavailable": "Der Agent-Net-Dienst unterstützt das Wiederbeitreten noch nicht. Dieses Handy verbindet sich vorerst ohne Agent-Net.",
+    "failedTitle": "Wiederbeitreten fehlgeschlagen",
+    "failed": "Prüfe dein Netzwerk und versuche es erneut.",
+    "unsupported": "Der Dienst unterstützt das Wiederbeitreten noch nicht. Melde dich ab und wieder an.",
+    "agentNetUnsupported": "Der Agent-Net-Dienst unterstützt das Wiederbeitreten noch nicht. Schalte „Nur verschlüsselte Verbindungen“ aus, um dieses Handy ohne Agent-Net zurückzuholen."
+  },
   "authFailedTitle": "Anmeldung abgelaufen",
   "authFailedHint": "Deine Anmeldung ist abgelaufen. Melde dich ab und wieder an.",
   "replacedTitle": "Verbindung ersetzt",

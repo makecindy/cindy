@@ -7,7 +7,7 @@ import {
   formatCompactTimeUntilReset,
   WEEKLY_WINDOW_MINUTES,
 } from '@/lib/compactQuotaCountdown';
-import { isCodexGatewayWireModel, isOpenAiSubscriptionProvider, type AgentKind } from '@cindy/model-providers';
+import { isClaudeSubscriptionProvider, isCodexGatewayWireModel, isOpenAiSubscriptionProvider, type AgentKind } from '@cindy/model-providers';
 import { providerDisplayNameById } from '@/lib/providerDisplayName';
 import { useDeviceProviders } from '@/hooks/useDeviceProviders';
 import { useProviders } from '@/hooks/useProviders';
@@ -92,6 +92,7 @@ import {
 } from '../../../shared/claudeSubscriptionUsage';
 import { useCodexRuntimeRoute } from '@/hooks/useCodexRuntimeRoute';
 import { isProviderShareAgentDeviceId } from '../../../shared/providerShare';
+import { isOpenAiApiEndpoint } from '../../../shared/openAiAccountGroup';
 import { useCodexRateLimits } from '@/hooks/useCodexRateLimits';
 import { useXaiRateLimit } from '@/hooks/useXaiRateLimit';
 import {
@@ -665,7 +666,9 @@ function toQuotaHoverCardTurnUsage(
 ): QuotaHoverCardTurnUsage | null {
   if (!summary) return null;
   const { details } = summary;
-  const costText = summary.money
+  const costText = details.userTurnAmounts?.length
+    ? details.userTurnAmounts.map(formatTurnCostMoney).join(' + ')
+    : summary.money
     ? formatTurnCostMoney(summary.money)
     : summary.costUsd != null
       ? formatTurnCostUsd(summary.costUsd)
@@ -697,6 +700,12 @@ function toQuotaHoverCardTurnUsage(
   };
 }
 
+function formatSessionAmounts(amounts: RegionalMoney[] | undefined, fallback: RegionalMoney): string {
+  return (amounts?.length ? amounts : [fallback]).map(money =>
+    money.kind === 'actual-cost' && money.approximate ? `≈${formatTurnCostMoney(money)}` : formatTurnCostMoney(money),
+  ).join(' + ');
+}
+
 /** 把会话金额投影成卡片数据；混合合计保留实际费用与价值估算两条构成。 */
 function toQuotaHoverCardSessionUsage(
   sessionUsage: SessionUsageMoney,
@@ -720,9 +729,9 @@ function toQuotaHoverCardSessionUsage(
     costIsEstimate:
       totalMoney?.kind === 'value-estimate' ||
       Boolean(!actualMoney?.amount && estimatedValueMoney?.amount),
-    ...(actualMoney?.amount ? { actualCostText: formatTurnCostMoney(actualMoney) } : {}),
+    ...(actualMoney?.amount ? { actualCostText: formatSessionAmounts(sessionUsage.actualAmounts, actualMoney) } : {}),
     ...(estimatedValueMoney?.amount
-      ? { estimatedValueText: formatTurnCostMoney(estimatedValueMoney) }
+      ? { estimatedValueText: formatSessionAmounts(sessionUsage.estimatedAmounts, estimatedValueMoney) }
       : {}),
   };
 }
@@ -886,6 +895,7 @@ interface TodaySpendChipProps {
   /** 来自 session.totalCostUsd（sessionService.get 拿到）— mount 后由 IPC push 更新。 */
   sessionInitialMoney?: RegionalMoney | null;
   sessionInitialCostUsd?: number | null;
+  sessionInitialUsdApproximate?: boolean;
   /** 来自 session.totalTokenUsage（sessionService.get 拿到）— mount 后由 IPC push 更新。 */
   sessionInitialTokens?: number | null;
   /** 远端 Codex 由远端 daemon 路由,本机不能拿本地 app-server route / 账号快照来归类。 */
@@ -910,6 +920,7 @@ export function TodaySpendChip({
   sessionId,
   sessionInitialMoney,
   sessionInitialCostUsd,
+  sessionInitialUsdApproximate,
   sessionInitialTokens,
   remoteHostId,
   deviceLinkDeviceId,
@@ -967,7 +978,8 @@ export function TodaySpendChip({
   const quotaProviders = isDeviceLinkRemote ? deviceQuotaProviders : localQuotaProviders;
   const selectedQuotaProvider = quotaProviders.find((provider) => provider.id === providerId);
   const isClaudeAccount =
-    providerId === 'anthropic' || selectedQuotaProvider?.auth?.native === 'claude';
+    providerId === 'anthropic' || selectedQuotaProvider?.auth?.native === 'claude' ||
+    isClaudeSubscriptionProvider(selectedQuotaProvider);
   const isXaiAccount = providerId === 'xai' || selectedQuotaProvider?.auth?.native === 'xai';
   // Remote provider ids belong to the device running the Agent. Reuse its existing provider
   // catalog (also used by the model selector), never the controller's same-named account.
@@ -1039,8 +1051,23 @@ export function TodaySpendChip({
         ? !deviceQuotaLoading && !deviceQuotaError
         : !localQuotaLoading && !localQuotaError,
     }) === 'openai');
+  const explicitTaskAccount = useSessionSubscriptionAccount(accountUnreadable ? null : providerId, accountDeviceId);
+  const sessionAccount = implicitCodexAccount ?? explicitTaskAccount;
+  const codexMemberKind = vendorKey === 'codex' && sessionAccount?.providerId === 'openai' && sessionAccount.state === 'bound'
+    ? sessionAccount.account.kind : undefined;
+  const explicitCodexRoute = selectedQuotaProvider?.routing?.codex;
+  const explicitCodexModel = selectedQuotaProvider?.models?.codex?.find(model => model.id === modelId);
+  // A pool owner's own authentication method does not describe the member it assigned.
+  const hasCodexApiKey = codexMemberKind === 'apiKey' ||
+    (vendorKey === 'codex' && !remoteHostId && !accountUnreadable && Boolean(providerId) && providerId !== 'xd' &&
+      (isDeviceLinkRemote ? !deviceQuotaLoading && !deviceQuotaError : !localQuotaLoading && !localQuotaError) &&
+      selectedQuotaProvider?.connected === true && selectedQuotaProvider.auth?.method === 'apiKey' &&
+      explicitCodexRoute?.authStrategy === 'api-key-header' && !explicitCodexRoute.disabled &&
+      (!modelId || (explicitCodexModel && !explicitCodexModel.interfaceUnavailable)) &&
+      !selectedQuotaProvider.subscriptionAccountPool && !selectedQuotaProvider.subscriptionPool &&
+      !selectedQuotaProvider.subscriptionPoolAlias && !sessionAccount);
   const hasImplicitCodexBinding = implicitCodexAccount?.state === 'bound';
-  // 显式 OpenAI 订阅连接在执行端固定走该账号的 OAuth（独立账号有自己的 host）。
+  // 混合账号组以执行端确认的绑定决定计费方式。旧执行端缺少成员类型时沿用原来的路由判断。
   // 全局 authInjection 仅作为未确认任务绑定的旧来源回退，不能因本机 Codex 断开或其它
   // API host 的状态隐藏所选账号的额度。xAI 由 proxy 注入 SuperGrok OAuth。
   // 远端 Codex 的事实在远端 daemon 上,本机只记录 token 价值估算,不写本地 gateway cost。
@@ -1056,7 +1083,8 @@ export function TodaySpendChip({
   const isCodexOauth =
     vendorKey === 'codex' &&
     !isCodexXaiProvider &&
-    (isRemoteCodexSession ||
+    codexMemberKind !== 'apiKey' &&
+    (codexMemberKind === 'subscription' || isRemoteCodexSession ||
       isDeviceLinkRemoteCodexOauth ||
       (!isCodexGatewayBudgetModel &&
         (isOpenAiAccount || (providerId == null && (hasImplicitCodexBinding || codexAuthInjection === 'oauth-bearer')))));
@@ -1073,6 +1101,10 @@ export function TodaySpendChip({
   // codex-oauth 与 cc+chatgpt/ bridge 共用同一 ChatGPT 账户 → 同一套限额窗口 chip 渲染。
   const usesCodexQuotaForm = isCodexOauth || isChatgptBridge;
   const usesXaiQuotaForm = isCodexXaiProvider || isXaiBridge;
+  // 订阅空态回退（#12149）覆盖 codex 订阅与 xai-backed codex（xai 账号 / xai/ 模型）：
+  // 这两类远程会话都不读本机额度、反向隧道计费为 0，chipSegments 同样会空。只按
+  // usesCodexQuotaForm 会漏掉 xai-backed codex（它归 usesXaiQuotaForm，同样空态）。
+  const codexFamilyQuotaForm = usesCodexQuotaForm || isCodexXaiProvider;
   // 远程会话不读本机账户快照 —— 额度事实在远端:SSH 用 remoteHostId 判,device-link 与
   // 远程 Agent 用 isDeviceLinkRemote 判(任一成立即远程,turn 消耗的是远端账号的额度)。
   const isAnyRemoteSession = Boolean(remoteHostId) || isDeviceLinkRemote;
@@ -1117,7 +1149,7 @@ export function TodaySpendChip({
   const isCodexGateway =
     vendorKey === 'codex' &&
     !isAnyRemoteSession &&
-    !isCodexSubscription &&
+    !isCodexSubscription && codexMemberKind !== 'apiKey' &&
     (providerId === 'xd' ||
       (providerId == null &&
         (codexAuthInjection === 'env-key' ||
@@ -1145,19 +1177,15 @@ export function TodaySpendChip({
         (providerId == null || providerId === 'xd')));
   // 账号池：任务固定在一个账号上，用量与账号名只读那个账号，不读默认账号或下一个待分配的账号。
   // 默认账号、没有账号池或旧任务时 taskAccount 不替换用量，原来的读取就是这个账号。
-  const explicitTaskAccount = useSessionSubscriptionAccount(
-    !accountUnreadable && (usesCodexQuotaForm || (isClaudeSubscription && !isSubscriptionBridge))
-      ? providerId
-      : null,
-    accountDeviceId,
+  const taskAccount = sessionAccountDisplay(
+    usesCodexQuotaForm || (isClaudeSubscription && !isSubscriptionBridge) ? sessionAccount : null, t,
   );
-  const taskAccount = sessionAccountDisplay(implicitCodexAccount ?? explicitTaskAccount, t);
   const readsTaskAccountUsage = taskAccount?.replacesUsage === true;
   const shouldReadLocalCodexAccountUsage =
     usesCodexQuotaForm && !isAnyRemoteSession && !readsTaskAccountUsage;
   // 会话金额只由已发生的 turn 决定，不由当前选中的 provider/模型决定。实际费用从
   // session ledger 读取，订阅价值从消息明细重建，再统一汇总成“本对话”投影。
-  const sessionUsage = useSessionUsageMoney(sessionId, sessionInitialMoney, sessionInitialCostUsd);
+  const sessionUsage = useSessionUsageMoney(sessionId, sessionInitialMoney, sessionInitialCostUsd, sessionInitialUsdApproximate);
   const sessionTokens = useSessionTokens(
     vendorKey === 'pi' ||
       isCodexApi ||
@@ -1487,12 +1515,12 @@ export function TodaySpendChip({
     : [
         sessionUsage.actualMoney?.amount
           ? t('todaySpend.tooltip.sessionUsed', {
-              cost: formatTurnCostMoney(sessionUsage.actualMoney),
+              cost: formatSessionAmounts(sessionUsage.actualAmounts, sessionUsage.actualMoney),
             })
           : null,
         sessionUsage.estimatedValueMoney?.amount
           ? t('todaySpend.codex.sessionValueLabel', {
-              cost: formatTurnCostMoney(sessionUsage.estimatedValueMoney),
+              cost: formatSessionAmounts(sessionUsage.estimatedAmounts, sessionUsage.estimatedValueMoney),
             })
           : null,
       ]
@@ -1764,9 +1792,20 @@ export function TodaySpendChip({
     (isDeviceLinkRemoteClaudeSubscription ||
       usesOpenCodeGoForm ||
       (isDeviceLinkRemote &&
-        (usesCodexQuotaForm || usesXaiQuotaForm || isDeviceLinkRemoteGateway)));
+        (hasCodexApiKey || usesCodexQuotaForm || usesXaiQuotaForm || isDeviceLinkRemoteGateway)));
+  let apiKeyLabel: React.ReactNode = null;
+  if (isCodexApi && hasCodexApiKey) {
+    const upstream = explicitCodexModel?.route?.baseUrl ?? explicitCodexRoute?.upstream;
+    apiKeyLabel = codexMemberKind === 'apiKey' || (upstream && isOpenAiApiEndpoint(upstream))
+      ? t('todaySpend.codex.openAiApiLabel')
+      : <span className="uppercase">{t('menubar.detail.apiKey')}</span>;
+  }
   let labelNode: React.ReactNode;
   let account: UsageCardAccount = { title: t('quotaCard.usageTitle'), windows: [] };
+  // 订阅(codex/xai/claude)与 codex-api 两个形态共用的「有没有用量数据」判定（#12149）：
+  // 只在这里调一次 getCodexApiEmptyState，两个空态分支各按自身条件取用，避免同一判定
+  // 出现两份口径（下面的源码契约测试也钉住只有一个调用点）。
+  const codexEmptyState = getCodexApiEmptyState(latestTurnUsage);
   if (isDeviceLinkRemote && !deviceLinkRemoteFormResolved) {
     // device-link 远程会话不读取本机账号形态；金额仍使用同一个会话合计投影。
     // (形态已解析的远程会话不走这里——落到下方对应形态分支,用被控端镜像渲染。)
@@ -1783,6 +1822,7 @@ export function TodaySpendChip({
       ? formatDeepSeekBalanceSegment(providerAccountSnapshot, t, formatterLocale)
       : null;
     const chipSegments = [
+      ...(apiKeyLabel ? [apiKeyLabel] : []),
       ...(usesDeepSeekAccountForm && deepSeekBalanceSegment ? [deepSeekBalanceSegment] : []),
       ...windowSegments,
     ];
@@ -1794,9 +1834,37 @@ export function TodaySpendChip({
       );
     }
     if (sessionSegment) chipSegments.push(sessionSegment);
+    // 订阅形态没有可展示的额度窗口、也没有金额时（典型：SSH 远程 Codex —— 账号快照
+    // 读不到、反向隧道计费为 0），回退展示会话已记录的 token；与下方 codex-api 分支
+    // 同一把尺子（#12149）：有额度或金额保持原展示，都没有而有 token 显示会话 token，
+    // 连 token 都没有时区分「尚无用量」与「数据暂不可用」，不再渲染孤立的货币符号。
+    // codex 家族（含 xai-backed codex）远程会话同样两手空空，一并覆盖。
+    const codexQuotaTokenFallback =
+      codexFamilyQuotaForm && chipSegments.length === 0 && hasPositiveSessionTokens(sessionTokens);
+    if (codexQuotaTokenFallback) {
+      chipSegments.push(
+        t('todaySpend.codex.sessionTokensLine', {
+          tokens: formatCompactTokens(Math.floor(sessionTokens ?? 0)),
+        }),
+      );
+    }
+    const codexQuotaEmptyState =
+      codexFamilyQuotaForm &&
+      chipSegments.length === 0 &&
+      !hasPositiveSessionTokens(sessionTokens)
+        ? codexEmptyState
+        : null;
     labelNode =
       chipSegments.length > 0 ? (
         renderSegmentedLabel(chipSegments, isClaudeSubscription)
+      ) : codexQuotaEmptyState ? (
+        <span className="tabular-nums opacity-60">
+          {t(
+            codexQuotaEmptyState === 'no-usage'
+              ? 'todaySpend.codex.noUsageLabel'
+              : 'todaySpend.codex.unavailableLabel',
+          )}
+        </span>
       ) : (
         <span className="tabular-nums opacity-60">{DEFAULT_MONEY_SYMBOL}</span>
       );
@@ -1855,12 +1923,12 @@ export function TodaySpendChip({
     }
   } else {
     const slots = computeMetricSlots(claudeQuota, creditTotals, sessionSegment, t);
-    const chipSegments = getGatewayChipSegments(slots);
+    const chipSegments: React.ReactNode[] = getGatewayChipSegments(slots);
     const codexApiHasTokenFallback =
       isCodexApi && !slots.session.available && hasPositiveSessionTokens(sessionTokens);
     const codexApiEmptyState =
       isCodexApi && !slots.session.available && !hasPositiveSessionTokens(sessionTokens)
-        ? getCodexApiEmptyState(latestTurnUsage)
+        ? codexEmptyState
         : null;
     if (codexApiHasTokenFallback) {
       chipSegments.push(
@@ -1924,27 +1992,16 @@ export function TodaySpendChip({
       );
     }
 
-    if (chipSegments.length === 0) {
-      if (codexApiEmptyState) {
-        labelNode = (
-          <span className="tabular-nums opacity-60">
-            {t(
-              codexApiEmptyState === 'no-usage'
-                ? 'todaySpend.codex.noUsageLabel'
-                : 'todaySpend.codex.unavailableLabel',
-            )}
-          </span>
-        );
-      } else {
-        labelNode = <span className="tabular-nums opacity-60">{DEFAULT_MONEY_SYMBOL}</span>;
-      }
-    } else {
-      // 之前用纯字符串 ".join(' · ')" — middle dot · 落在 x-height, 周围混着 cap-height
-      // 大写字母 + 数字 + $/k, 视觉上文字"高低不齐"。改成结构化渲染:
-      //   - 段间用 CSS 横线 (border-l h-3) 当分隔符 — 高度与字号绑定, 视觉上像条直线
-      //   - 文字段内统一加 tabular-nums + slashed-zero, 数字等宽对齐
-      labelNode = renderSegmentedLabel(chipSegments);
+    if (!chipSegments.length && codexApiEmptyState && !(apiKeyLabel && codexApiEmptyState === 'no-usage')) {
+      chipSegments.push(
+        <span className="opacity-60">{t(codexApiEmptyState === 'unavailable'
+          ? 'todaySpend.codex.unavailableLabel' : 'todaySpend.codex.noUsageLabel')}</span>,
+      );
     }
+    if (apiKeyLabel) chipSegments.unshift(apiKeyLabel);
+    labelNode = chipSegments.length
+      ? renderSegmentedLabel(chipSegments)
+      : <span className="tabular-nums opacity-60">{DEFAULT_MONEY_SYMBOL}</span>;
   }
 
   if (
@@ -2116,11 +2173,11 @@ export function TodaySpendChip({
       </Popover>
       <Dialog.Root open={resetListOpen && usesCodexQuotaForm && !isAnyRemoteSession && !readsTaskAccountUsage} onOpenChange={setResetListOpen}>
         <Dialog.Portal>
-          <Dialog.Overlay className="modal-scrim fixed inset-0 z-[10000]" />
+          <Dialog.Overlay className="modal-scrim fixed inset-0 z-modal" />
           <Dialog.Content
             aria-describedby={undefined}
             onPointerDownOutside={(event) => event.preventDefault()}
-            className="modal-panel fixed left-1/2 top-1/2 z-[10000] w-[400px] max-w-[calc(100vw-32px)] -translate-x-1/2 -translate-y-1/2 p-4"
+            className="modal-panel fixed left-1/2 top-1/2 z-modal w-[400px] max-w-[calc(100vw-32px)] -translate-x-1/2 -translate-y-1/2 p-4"
             onCloseAutoFocus={(event) => {
               event.preventDefault();
               // The confirmation owns focus when it opens after this dialog closes.
@@ -2144,7 +2201,7 @@ export function TodaySpendChip({
                 }} />
             </div>
             <Dialog.Close asChild>
-              <Tip text={t('common.dismiss')} contentClassName="z-[10001]">
+              <Tip text={t('common.dismiss')}>
                 <button type="button" aria-label={t('common.dismiss')}
                   className="absolute right-3 top-3 flex h-8 w-8 items-center justify-center rounded-full text-[var(--confirm-desc)] transition-colors hover:bg-[var(--surface-hover)] hover:text-[var(--confirm-title)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]">
                   <X className="h-4 w-4" aria-hidden="true" />

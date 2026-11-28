@@ -22,8 +22,31 @@ import {
 } from './override-settings-file.js';
 
 import { getModelVisibilityOverride, waitForModelVisibilityMirror } from './model-visibility-mirror.js';
+import { readModelGroupsConfig, readModelGroupsConfigForSelected } from '../model-groups/store.js';
+import { modelGroupsConfigForRemote, type ModelGroupsConfig } from '../../shared/modelGroups.js';
+
+import { inspectSettingsFile, isSettingsObject, validateOptionalSettingsFields } from './settings-inspection.js';
 
 const log = desktopMakerLogger.child('bot-model-chain-settings-store');
+
+/** 只取保存的链；缺少 override 时保留存储默认 []，不求解依赖凭据的运行时链。 */
+export function inspectBotModelChainSettings(ownerRoot: string) {
+  return inspectSettingsFile({ filePath: () => settingsFilePath(ownerRoot), defaults: DEFAULTS, normalize,
+    validate: (raw) => validateOptionalSettingsFields(raw, {
+      modelChain: (value) => Array.isArray(value) && value.every((route) => {
+        if (!isSettingsObject(route) || typeof route.model !== 'string' || !route.model.trim()) return false;
+        try {
+          validateOptionalSettingsFields(route, {
+            harness: (v) => v === 'claude' || v === 'codex' || v === 'pi',
+            providerId: (v) => v === null || typeof v === 'string',
+            effort: (v) => typeof v === 'string', fastMode: (v) => typeof v === 'boolean',
+          });
+          return true;
+        } catch { return false; }
+      }),
+    }),
+  });
+}
 
 export interface BotModelChainSettings {
   modelChain: BotModelRoute[];
@@ -160,7 +183,7 @@ async function followMovedCindyAuto(
   providers: readonly ProviderView[] | undefined,
 ): Promise<BotModelRoute[]> {
   // 预设 auto 只在 Cindy AI 上、不会被挪动；只有模型组 Auto 才值得为此读一次目录。
-  if (!chain.some((route) => !route.agentDeviceId && route.model !== 'auto' && isCindyAutoModelId(route.model)))
+  if (!chain.some((route) => route.harness !== 'acp' && !route.agentDeviceId && route.model !== 'auto' && isCindyAutoModelId(route.model)))
     return chain;
   let views = providers;
   if (!views) {
@@ -178,7 +201,7 @@ async function followMovedCindyAuto(
   }
   const catalog = views;
   return chain.map((route) => {
-    if (route.agentDeviceId) return route;
+    if (route.agentDeviceId || route.harness === 'acp') return route;
     const providerId = movedCindyAutoSourceId(catalog, {
       agent: route.harness === 'claude' ? 'claude-code' : route.harness,
       model: route.model,
@@ -213,4 +236,59 @@ export async function readEffectiveBotModelChain(
   options?: Parameters<typeof readBotModelChainSettingsState>[0],
 ): Promise<BotModelRoute[]> {
   return (await readEffectiveBotModelSelection(config, options)).chain;
+}
+
+/**
+ * 模型组此刻会选的来源(只看不记，不推进「轮流」)；组用不了为 null。由 maker-ipc 注入，
+ * 这里不直接依赖选路模块。未注入时按存下的模型。
+ */
+type BotModelGroupPreview = (groupId: string) => Promise<BotModelRoute | null>;
+let previewModelGroup: BotModelGroupPreview | null = null;
+
+export function setBotModelGroupPreview(next: BotModelGroupPreview | null): void {
+  previewModelGroup = next;
+}
+
+/**
+ * 新建伙伴对话用的首选模型(model-groups.md §6.2)：首选是模型组时取组此刻会选的来源，用不了才是存下的具体模型，
+ * 这样存下的模型后来断开、组里还有能用的来源时，新对话不会被模型准入挡住。之后由套用流程按组的规则正式选一次。
+ */
+export async function readEffectiveBotPrimaryRoute(
+  config: Record<string, unknown>,
+  options?: Parameters<typeof readBotModelChainSettingsState>[0],
+): Promise<BotModelRoute | null> {
+  const [primary] = await readEffectiveBotModelChain(config, options);
+  if (!primary?.modelGroup || !previewModelGroup) return primary ?? null;
+  const picked = await previewModelGroup(primary.modelGroup).catch((error: unknown) => {
+    log.warn('Bot model group preview failed; using the saved model', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return null;
+  });
+  return picked ? { ...picked, modelGroup: primary.modelGroup } : primary;
+}
+
+/**
+ * 这台电脑的模型组，给远程控制它的手机与电脑在伙伴模型设置里选(model-groups.md §6.2)。
+ * 只有来源的供应商连接 id 与模型 id，与同账号可读的模型目录同一层级，不含凭证。
+ */
+export function listBotModelGroupsForRemote(): ModelGroupsConfig {
+  return modelGroupsConfigForRemote(readModelGroupsConfig());
+}
+
+/**
+ * 远程保存或新建伙伴时补全模型组项(model-groups.md §6.2)：控制端只记下了组，这里把存下的具体模型换成组此刻会选的来源；
+ * 这台电脑上没有这个组时去掉组、按控制端带来的具体模型；组暂时用不了时保留原来的具体模型。
+ */
+export async function fillBotModelGroupRoutes(chain: readonly BotModelRoute[]): Promise<BotModelRoute[]> {
+  const config = readModelGroupsConfigForSelected();
+  return Promise.all(chain.map(async (route) => {
+    if (!route.modelGroup) return route;
+    if (!config.routes.some((group) => group.id === route.modelGroup)) {
+      const { modelGroup: _missing, ...plain } = route;
+      return plain;
+    }
+    const picked = previewModelGroup ? await previewModelGroup(route.modelGroup).catch(() => null) : null;
+    return picked ? { ...picked, modelGroup: route.modelGroup } : route;
+  }));
 }

@@ -83,10 +83,10 @@ const VALID_ROW = {
   lastTurnEndedAt: 200,
 };
 
-function predict(): Promise<string | null> {
+function predict(agentKind: 'claude-code' | 'acp' = 'claude-code'): Promise<string | null> {
   return generatePromptPrediction({
     sessionId: 'session-1',
-    agentKind: 'claude-code',
+    agentKind,
     messages: [
       { role: 'user', content: '实现这个功能' },
       { role: 'assistant', content: '已经完成实现' },
@@ -222,6 +222,17 @@ describe('prompt prediction completion revision guard', () => {
       if (change === 'disabled') expect(h.requestUtilityText).toHaveBeenCalledTimes(1);
     },
   );
+
+  // 插件引擎任务(docs/plans/acp-plugin-bridge.md；2026-11-25 用户要求与内置引擎一样有推荐)：推荐与标题一样只走
+  // 辅助模型链，按 'acp' 请求；请求的引擎与任务行不一致(例如任务刚换了引擎)时仍不派发。
+  it('插件引擎任务按 acp 请求时经辅助模型推荐，引擎不一致时不派发', async () => {
+    h.rows = [{ ...VALID_ROW, agentKind: 'acp', providerId: 'acp-plugin:dsh-acp:dsh' }];
+    await expect(predict('acp')).resolves.toBe('继续补测试');
+    const paidDispatch = vi.fn();
+    h.afterDispatch = paidDispatch;
+    await expect(predict()).resolves.toBeNull();
+    expect(paidDispatch).not.toHaveBeenCalled();
+  });
 
   it('provider 派发紧前两次复核都匹配时允许预测', async () => {
     await expect(predict()).resolves.toBe('继续补测试');

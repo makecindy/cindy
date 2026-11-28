@@ -21,8 +21,12 @@ import { MyDevicesPanel } from '@/components/settings/MyDevicesPanel';
 describe('MyDevicesPanel rename guards', () => {
   afterEach(cleanup);
 
-  it('does not write a manual name when rename is confirmed without changes', () => {
+  it.each([
+    device('self', 'Studio Mac', true),
+    { ...device('self', 'self', true), selfName: 'Studio Mac' },
+  ])('does not write a manual name when confirming the displayed name for $name', (self) => {
     const s = settings();
+    s.devices = [self];
     render(createElement(MyDevicesPanel, { s, variant: 'self' }));
     fireEvent.click(screen.getByRole('button', { name: 'settings.devices.rename' }));
     fireEvent.click(screen.getByRole('button', { name: 'settings.devices.renameConfirm' }));
@@ -32,6 +36,25 @@ describe('MyDevicesPanel rename guards', () => {
     fireEvent.change(screen.getByRole('textbox'), { target: { value: 'Renamed Mac' } });
     fireEvent.click(screen.getByRole('button', { name: 'settings.devices.renameConfirm' }));
     expect(s.rename).toHaveBeenCalledExactlyOnceWith('self', 'Renamed Mac');
+  });
+});
+
+// 「重新加入」(2026-11-23): a removal on the official network offers Rejoin on this device; a removal without `rejoinable`
+// (a self-hosted relay, which rejoins through its own pairing) keeps the old text and no button. Unit, real panel.
+describe('MyDevicesPanel removed device', () => {
+  afterEach(cleanup);
+
+  it('offers Rejoin only for a rejoinable removal and disables it while rejoining', () => {
+    const s = { ...settings(), linkStatus: 'stopped', connectionIssue: { kind: 'device-removed', at: 1, rejoinable: true } } as DeviceLinkSettings;
+    const { rerender } = render(createElement(MyDevicesPanel, { s, variant: 'self' }));
+    expect(screen.getByText('settings.devices.rejoin.hint')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'settings.devices.rejoin.action' }));
+    expect(s.rejoin).toHaveBeenCalledOnce();
+    rerender(createElement(MyDevicesPanel, { s: { ...s, rejoining: true }, variant: 'self' }));
+    expect((screen.getByRole('button', { name: 'settings.devices.rejoin.action' }) as HTMLButtonElement).disabled).toBe(true);
+    rerender(createElement(MyDevicesPanel, { s: { ...s, connectionIssue: { kind: 'device-removed', at: 1 } }, variant: 'self' }));
+    expect(screen.getByText('settings.devices.connectionIssue.device-removed')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'settings.devices.rejoin.action' })).toBeNull();
   });
 });
 
@@ -154,6 +177,8 @@ function settings(): DeviceLinkSettings {
     revoke: noop,
     restore: noop,
     setDeviceControlEnabled: noop,
+    rejoining: false,
+    rejoin: vi.fn(async () => undefined),
   } as unknown as DeviceLinkSettings;
 }
 

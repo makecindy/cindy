@@ -519,32 +519,33 @@ it.each(["onPress", "onLongPress"])(
   },
 );
 
-// Unit regression, PR #11283: the real status row supplies managed history to the
-// popover. A paused Host snapshot must hide recent throughput in both surfaces;
-// the counter-only tests did not cover this input, and average/total/peak stay visible.
-it("hides paused Host speed in the status row and pinned popover and restores it on output", async () => {
+// Exercise the real status row, which supplies managed history to the pinned card.
+it("shows recent throughput only in the pinned card while live speed is unavailable", async () => {
   const speed = { rate: 50, average: 40, tokens: 80, elapsedMs: 2000, streaming: true, peak: 75 };
-  const renderStatus = (streaming: boolean) => act(async () => root.render(
+  const renderStatus = (streaming: boolean, rate = speed.rate) => act(async () => root.render(
     createElement(ActivityStatus, {
       ...base, visible: true, sideTaskRunning: false, reconnectAttempt: null,
-      tokenUsage: 100, tokenSpeed: { ...speed, streaming, totalOutputTokens: 5300 },
+      tokenUsage: 100, tokenSpeed: { ...speed, streaming, rate, totalOutputTokens: 5300 },
     }),
   ));
   await renderStatus(true);
   await gesture("onPress");
   expect(card()!.textContent).toContain("50");
-  await renderStatus(false);
-  expect(card()!.textContent).toContain("—");
-  expect(card()!.textContent).not.toContain("50");
+  await renderStatus(false, speed.average);
+  expect(card()!.textContent).toContain("50");
   expect(card()!.textContent).toContain("40 tok/s");
   expect(card()!.textContent).toContain("5.3k tok");
   expect(card()!.textContent).toContain("75 tok/s");
-  expect(host.textContent).not.toContain("50 tok/s");
+  const trigger = () => host.querySelector('[data-testid="session.tokenRate.trigger"]')!;
+  expect(trigger().textContent).not.toContain("50 tok/s");
+  await renderStatus(true, 0);
+  expect(trigger().textContent).not.toContain("50 tok/s");
+  expect(card()!.textContent).toContain("50");
   await renderStatus(true);
   expect(card()!.textContent).toContain("50");
 });
 
-it("uses paired generation samples, expires recent speed, and isolates a different task", async () => {
+it("uses paired generation samples, keeps the last reading past a minute, and isolates a different task", async () => {
   vi.useFakeTimers();
   vi.setSystemTime(1000);
   await render();
@@ -555,8 +556,10 @@ it("uses paired generation samples, expires recent speed, and isolates a differe
   expect(card()!.textContent).toContain("75 tok/s");
   expect(card()!.textContent).toContain("5.3k tok");
   expect(card()!.textContent).toContain("100 tok/s");
+  // The card describes the turn: its last reading stays after a minute (it used to turn into a dash).
   await act(async () => vi.advanceTimersByTime(60_000));
-  expect(card()!.textContent).toContain("—");
+  expect(card()!.textContent).toContain("50");
+  expect(card()!.textContent).not.toContain("—");
   await render({ key: "other", sessionKey: "account/device/other" });
   expect(card()).toBeNull();
   await gesture("onPressIn");

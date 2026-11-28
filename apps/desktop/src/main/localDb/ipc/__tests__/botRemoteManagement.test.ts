@@ -5,7 +5,7 @@ vi.mock('../../../appSessionState.js', () => ({ activeOwnerScopeKey: () => 'owne
 vi.mock('../../../device-link/settings-store.desktop.js', () => ({ readDeviceLinkSettings: () => ({ remoteControlEnabled: true, revokedControllers: [] }) }));
 vi.mock('../botRemoteSessionAccess.js', () => ({ readRemoteBotSessionAccess: async () => 'visible' }));
 // These services belong to other settings pages and must not initialize here.
-vi.mock('../../../maker-host/bot-model-chain-settings-store.js', () => ({ readEffectiveBotModelChain: vi.fn() }));
+vi.mock('../../../maker-host/bot-model-chain-settings-store.js', () => ({ readEffectiveBotModelChain: vi.fn(), listBotModelGroupsForRemote: vi.fn(() => ({ routes: [] })), fillBotModelGroupRoutes: vi.fn(async (chain: unknown[]) => chain) }));
 vi.mock('../../../maker-ipc/appDefaultModelControl.js', () => ({ resolveAvailableTaskModels: vi.fn() }));
 vi.mock('../bots.js', () => ({ botProjectRepository: vi.fn(), createBotProfile: vi.fn(), createBotCanonicalSession: vi.fn(), getBotMemoryService: vi.fn(), getBotRemoteResourceSource: vi.fn(), getBotRemoteSettingsSource: vi.fn(), readBotSettingsProfile: vi.fn(), searchBotHistory: vi.fn(), setBotProfileAvatar: vi.fn(), updateBotProfile: vi.fn() }));
 vi.mock('../../../maker-ipc/botSkillService.js', () => ({ listBotSkillsForBot: vi.fn(), readBotSkillForBot: vi.fn(), saveBotSkillForSession: vi.fn(), deleteBotSkillForBot: vi.fn(),

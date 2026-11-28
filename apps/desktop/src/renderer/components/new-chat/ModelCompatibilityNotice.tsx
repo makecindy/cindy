@@ -20,12 +20,12 @@ export function ModelCompatibilityNotice() {
               aria-label={label}
               onClick={() => setOpen(true)}
               data-compatibility-notice
-              className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-sm text-[var(--warning-accent)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--model-dropdown-border)]"
+              className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-lg text-[var(--warning-accent)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--model-dropdown-border)]"
             >
               <CircleAlert size={12} aria-hidden />
             </button>
           </Tooltip.Trigger>
-          <Tooltip.Content className="z-[10002] max-w-[240px] break-normal">
+          <Tooltip.Content className="max-w-[240px] break-normal">
             {t('settings.providers.models.advanced.protocol.compatibilityHint')}
           </Tooltip.Content>
         </Tooltip.Root>

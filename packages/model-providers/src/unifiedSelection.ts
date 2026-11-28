@@ -606,6 +606,8 @@ export interface UnifiedModelEntriesOptions {
    * 注意:传进来的 `model` 是**该引擎下的目录条目**(wire id 形态),不是行的归一化 id。
    */
   isVisible?: (providerId: string, model: CatalogModel, agent: AgentKind) => boolean;
+  /** 保留用户整家隐藏的供应商(见 deriveModelList.includeHiddenProviders);缺省 false。 */
+  includeHiddenProviders?: boolean;
   /** 整供应商排除(SSH 远程排除 chat-bridged Codex 源等)。 */
   excludeProvider?: (provider: ProviderView, agent: AgentKind) => boolean;
   /** 单模型排除(SSH 远程排除订阅直连前缀等)。 */
@@ -796,6 +798,7 @@ export function unifiedModelEntries(opts: UnifiedModelEntriesOptions): UnifiedMo
         ? { keepSelected: { providerId: keepModel.providerId, modelId: keepModel.modelId } }
         : {}),
       includePaymentRequired,
+      ...(opts.includeHiddenProviders ? { includeHiddenProviders: true } : {}),
     });
     for (const row of rows) {
       // Gateway prefixes identify distinct routes, not Cindy bridge wrappers.

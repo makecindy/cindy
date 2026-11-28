@@ -1,27 +1,9 @@
 import { syncBotLinkedLanePermissions } from './botPermissionSync.js';
 import { withBotPermissionChange } from './botPermissionDispatch.js';
 import { getCurrentDbClientSnapshot } from '../localDb/client/current.js';
+import { isSessionPermissionMode } from './sessionPermissionModes.js';
 
-const SESSION_PERMISSION_MODES = new Set([
-  'ask',
-  'default',
-  'acceptEdits',
-  'plan',
-  'auto',
-  'bypassPermissions',
-]);
-
-export function isSessionPermissionMode(mode: string): boolean {
-  return SESSION_PERMISSION_MODES.has(mode);
-}
-
-/** Profile stores only the three teammate permission values. Other session modes stay on the session row. */
-export function profilePermissionForSessionMode(mode: string): 'ask' | 'auto' | 'trusted' | null {
-  if (mode === 'bypassPermissions') return 'trusted';
-  if (mode === 'auto') return 'auto';
-  if (mode === 'ask') return 'ask';
-  return null;
-}
+export { isSessionPermissionMode, profilePermissionForSessionMode } from './sessionPermissionModes.js';
 
 /**
  * Persist a permission change when the Maker runtime is not loaded.

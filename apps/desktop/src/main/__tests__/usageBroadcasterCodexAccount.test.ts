@@ -32,6 +32,7 @@ vi.mock('../logger', () => ({
   createLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
 }));
 vi.mock('../appSessionState.js', () => ({
+  getDataOwnerLifetime: () => 0,
   activeOwnerScopeKey: () => mocks.getCurrentDbClientUserId() ?? '',
   isAppSessionBoundaryPending: () => false,
 }));

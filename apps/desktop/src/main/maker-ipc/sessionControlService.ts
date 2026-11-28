@@ -2,6 +2,7 @@ import { formatForwardedRequest, type CapturedAgentRequest } from './forwardedRe
 import type { AgentRequestReceipt } from '../../shared/forwardedRequest.js';
 import type {
   AgentKind,
+  EngineKind,
   Effort,
   PermissionMode,
   SessionGracefulStopResult,
@@ -87,7 +88,7 @@ export type SessionRuntimeSetResult =
   | Failure<'NOT_FOUND' | 'CONFLICT' | 'INVALID_ARGS' | 'ROUTE_UNAVAILABLE' | 'UNSUPPORTED_CAPABILITY' | 'INTERNAL'>;
 
 export interface SessionControlLiveSession {
-  agentKind: AgentKind;
+  agentKind: EngineKind;
   capabilities: {
     sameTurnSteer: { supported: boolean };
     permissionModes?: readonly { id: PermissionMode }[];
@@ -577,6 +578,8 @@ export function sessionQueueOriginForDispatcher(params: {
   dispatcherBot?: { id: string; name: string } | null;
   message: string;
   explicitOrigin?: AgentInputQueuedMessage['origin'];
+  /** Host-stamped: a plugin follows this word back (plugin task follow-up); only with a dispatcher task. */
+  pluginReply?: Extract<NonNullable<AgentInputQueuedMessage['origin']>, { kind: 'session' }>['pluginReply'];
 }): AgentInputQueuedMessage['origin'] | undefined {
   if (params.explicitOrigin) return params.explicitOrigin;
   if (!params.dispatcherSessionId) return undefined;
@@ -589,5 +592,6 @@ export function sessionQueueOriginForDispatcher(params: {
     ...(params.dispatcherBot
       ? { senderBotId: params.dispatcherBot.id, senderBotName: params.dispatcherBot.name }
       : {}),
+    ...(params.pluginReply ? { pluginReply: params.pluginReply } : {}),
   };
 }

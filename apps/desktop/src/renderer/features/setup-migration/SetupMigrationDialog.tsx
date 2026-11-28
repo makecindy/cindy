@@ -45,6 +45,7 @@ import {
   notifySetupMigrationStateChanged,
   useSetupMigrationDialog,
 } from './setupMigrationStore';
+import { Checkbox } from '@/components/ui/checkbox';
 
 type Phase = 'source' | 'reading' | 'review' | 'permissions' | 'running' | 'done';
 type ItemPhase = 'pending' | 'running' | SetupMigrationResult['outcome'];
@@ -83,19 +84,13 @@ function SelectionCheckbox({
   onChange: (checked: boolean) => void;
   ariaLabel?: string;
 }) {
-  const ref = useRef<HTMLInputElement>(null);
-  useEffect(() => {
-    if (ref.current) ref.current.indeterminate = indeterminate;
-  }, [indeterminate]);
   return (
-    <input
-      ref={ref}
-      type="checkbox"
+    <Checkbox
       checked={checked}
+      indeterminate={indeterminate}
       disabled={disabled}
       aria-label={ariaLabel}
       onChange={(event) => onChange(event.target.checked)}
-      className="size-3.5 shrink-0 cursor-pointer accent-[var(--confirm-btn-primary-bg)] disabled:cursor-default"
     />
   );
 }
@@ -640,7 +635,7 @@ function SetupMigrationDialogBody() {
   return (
     <Dialog.Root open={dialog.open} onOpenChange={(next) => { if (!next) close(); }}>
       <Dialog.Portal>
-        <Dialog.Overlay className="modal-scrim fixed inset-0 z-[10000]" style={WINDOW_DRAG_STYLE} />
+        <Dialog.Overlay className="modal-scrim fixed inset-0 z-modal" style={WINDOW_DRAG_STYLE} />
         <Dialog.Content
           aria-describedby={undefined}
           onPointerDownOutside={(event) => event.preventDefault()}
@@ -650,7 +645,7 @@ function SetupMigrationDialogBody() {
             if (busyRef.current || event.isComposing) event.preventDefault();
           }}
           style={WINDOW_NO_DRAG_STYLE}
-          className="modal-panel fixed inset-0 z-[10000] m-auto flex h-fit max-h-[min(640px,85vh)] w-[min(600px,calc(100vw-32px))] flex-col overflow-hidden outline-none"
+          className="modal-panel fixed inset-0 z-modal m-auto flex h-fit max-h-[min(640px,85vh)] w-[min(600px,calc(100vw-32px))] flex-col overflow-hidden outline-none"
         >
           <div className="flex flex-col items-start gap-3 px-4 pb-3 pt-4">
             <Dialog.Title asChild>

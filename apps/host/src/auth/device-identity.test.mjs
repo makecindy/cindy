@@ -30,8 +30,10 @@ test('legacy records remain refreshable but cannot displace a desktop connection
 });
 test('refresh rotation preserves the identity bound at login', async () => {
   let raw = serializeHostSession('global', 'synthetic-old-refresh', 'host-test');
-  const store = { read: key => { assert.equal(key, AUTH_SESSION_KEY); return raw; }, write: (key, value) => { assert.equal(key, AUTH_SESSION_KEY); raw = value; } };
-  await refreshHostSession({ store, refresh: async () => ({ accessToken: 'synthetic-access', refreshToken: 'synthetic-new-refresh' }) });
+  // Only the session record exists; the renewal also reads the vault and legacy records (absent).
+  const store = { read: key => (key === AUTH_SESSION_KEY ? raw : null), write: (key, value) => { assert.equal(key, AUTH_SESSION_KEY); raw = value; } };
+  await refreshHostSession({ store, refresh: async () => ({ accessToken: 'synthetic-access', refreshToken: 'synthetic-new-refresh' }),
+    withVaultLock: task => task(), buildRegion: 'global' });
   assert.equal(readSessionDeviceId(raw), 'host-test');
   assert.equal(JSON.parse(raw).refreshToken, 'synthetic-new-refresh');
 });

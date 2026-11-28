@@ -19,6 +19,40 @@ function setup(
 }
 
 describe("independent voice call", () => {
+  it("dispatches only the accepted native transcript once and never runs text generation", async () => {
+    const { call, handoff, generate } = setup();
+    expect(await call.handoffNativeTurn("unknown", "forged")).toBe(false);
+    expect(call.recordNativeTurn("native", "user", "请查一下这个问题")).toBe(true);
+    expect(call.recordNativeTurn("native", "user", "replacement")).toBe(false);
+    await Promise.all([call.handoffNativeTurn("native", "context"), call.handoffNativeTurn("native", "duplicate")]);
+    expect(handoff).toHaveBeenCalledExactlyOnceWith({ id: "voice-task:call-1:native", inputId: "native", original: "请查一下这个问题", supplement: "context" });
+    expect(generate).not.toHaveBeenCalled();
+    call.recordNativeTurn("answer", "assistant", "Partial", false);
+    call.interruptNativeTurn("answer");
+    expect(call.recordNativeTurn("answer", "assistant", "Late final")).toBe(false);
+    expect(call.record.turns.at(-1)).toMatchObject({ text: "Partial", complete: true });
+    expect(call.record.turns.at(-1)?.failed).toBeFalsy();
+    call.end();
+    expect(call.recordNativeTurn("late", "user", "Late")).toBe(false);
+  });
+
+  it("delivers native task results once and retains accepted work after ending", async () => {
+    const result = vi.fn(), generate = vi.fn();
+    const call = new VoiceCallContext({ callId: "native", identity: "Cindy", reference: "", generate, handoff: async () => true, changed: vi.fn(), result });
+    call.recordNativeTurn("first", "user", "Do work");
+    await call.handoffNativeTurn("first", "");
+    call.deliverResult("voice-task:native:first", "Done");
+    call.deliverResult("voice-task:native:first", "Duplicate");
+    expect(result).toHaveBeenCalledExactlyOnceWith("voice-task:native:first", "Done");
+    call.recordNativeTurn("second", "user", "Background work");
+    await call.handoffNativeTurn("second", "");
+    call.end();
+    call.deliverResult("voice-task:native:second", "Late result");
+    expect(result).toHaveBeenCalledTimes(1);
+    expect(call.record.handoffs[1]).toMatchObject({ state: "completed", result: "Late result" });
+    expect(generate).not.toHaveBeenCalled();
+  });
+
   it("keeps casual exchanges in the call and includes them in the next call turn", async () => {
     const { call, generate, handoff } = setup();
     await call.submit("u1", "My name is Pat.");
@@ -145,6 +179,61 @@ describe("independent voice call", () => {
     expect(handoff).not.toHaveBeenCalled();
   });
 
+  it("keeps the call alive when a reply cannot be used", async () => {
+    const generate = vi
+      .fn<Deps["generate"]>()
+      .mockResolvedValueOnce("Sure! Here is my answer.")
+      .mockResolvedValueOnce('{"say":"Hello."}');
+    const { call } = setup(generate);
+    expect(await call.submit("u1", "Hello")).toBe(false);
+    // Clients hang up the whole call when a user turn is flagged failed, so an
+    // unusable reply must not flag the turn the user actually spoke.
+    expect(
+      call.record.turns.find((turn) => turn.role === "user")?.failed,
+    ).toBeUndefined();
+    // Clients leave the thinking phase when the reply turn is flagged failed,
+    // so an unusable reply still has to be published.
+    expect(
+      call.record.turns.find((turn) => turn.role === "assistant")?.failed,
+    ).toBe(true);
+    expect(await call.submit("u2", "Still there?")).toBe(true);
+    expect(call.record.turns.at(-1)).toMatchObject({
+      text: "Hello.",
+      complete: true,
+    });
+  });
+
+  it("does not duplicate a rejected handoff as a failed reply", async () => {
+    const { call, handoff } = setup(
+      vi.fn<Deps["generate"]>(async () => '{"handoff":"Do work"}'),
+    );
+    handoff.mockResolvedValue(false);
+    expect(await call.submit("u1", "Do work")).toBe(false);
+    // The handoff receipt already marks the user turn; adding an empty failed
+    // reply would show the user two failure messages for one rejected handoff.
+    expect(
+      call.record.turns.filter((turn) => turn.failed),
+    ).toHaveLength(1);
+    expect(
+      call.record.turns.find((turn) => turn.role === "user")?.failed,
+    ).toBe(true);
+    expect(
+      call.record.turns.some((turn) => turn.role === "assistant"),
+    ).toBe(false);
+    expect(call.record.handoffs[0].state).toBe("failed");
+  });
+
+  it("accepts a single pretty printed action object", async () => {
+    const { call } = setup(
+      vi.fn<Deps["generate"]>(async () => '{\n  "say": "Hello there."\n}'),
+    );
+    expect(await call.submit("u1", "Hello")).toBe(true);
+    expect(call.record.turns.at(-1)).toMatchObject({
+      text: "Hello there.",
+      complete: true,
+    });
+  });
+
   it("has independent history for every call", async () => {
     const a = setup();
     const b = setup();
@@ -152,4 +241,64 @@ describe("independent voice call", () => {
     await b.call.submit("u2", "Hello");
     expect(b.generate.mock.calls[0][0]).not.toContain("Private call detail");
   });
+
+  it.each([
+    '[]', '{"say":""}', '{"say":"Hi","handoff":"Do work"}',
+    '{\n"end_call":true\n}', JSON.stringify({ say: "x".repeat(8_001) }),
+  ])("keeps invalid actions bounded without executing a handoff: %s", async (raw) => {
+    const { call, handoff } = setup(vi.fn<Deps["generate"]>(async () => raw));
+    expect(await call.submit("u1", "Hello")).toBe(false);
+    expect(handoff).not.toHaveBeenCalled();
+    expect(call.record.turns).toMatchObject([
+      { role: "user", text: "Hello" },
+      { role: "assistant", text: "", complete: true, failed: true },
+    ]);
+    expect(call.record.turns[0].failed).toBeUndefined();
+  });
+
+  it("settles a partially streamed failed reply and excludes it from the next prompt", async () => {
+    const generate = vi.fn<Deps["generate"]>()
+      .mockImplementationOnce(async (_prompt, _system, _signal, update) => {
+        update('{"say":"First sentence."}\n');
+        throw new Error("provider failed");
+      })
+      .mockResolvedValueOnce('{"say":"Recovered."}');
+    const { call } = setup(generate);
+    expect(await call.submit("u1", "Hello")).toBe(false);
+    expect(call.record.turns.at(-1)).toMatchObject({
+      text: "First sentence.", complete: true, failed: true,
+    });
+    expect(call.record.turns[0].failed).toBeUndefined();
+    expect(await call.submit("u2", "Continue")).toBe(true);
+    expect(JSON.parse(generate.mock.calls[1][0]).conversation).toEqual([
+      { role: "user", text: "Hello" }, { role: "user", text: "Continue" },
+    ]);
+  });
+
+  it.each(["superseded", "ended"] as const)(
+    "does not publish a phantom reply when an unspoken turn is %s",
+    async (reason) => {
+      let reject!: (error: Error) => void;
+      let started!: () => void;
+      const ready = new Promise<void>((resolve) => { started = resolve; });
+      const generate = vi.fn<Deps["generate"]>()
+        .mockImplementationOnce(async () => {
+          started();
+          return new Promise<string>((_resolve, fail) => { reject = fail; });
+        })
+        .mockResolvedValueOnce('{"say":"New answer."}');
+      const { call } = setup(generate);
+      const first = call.submit("u1", "Old input");
+      await ready;
+      let next: Promise<boolean> | undefined;
+      if (reason === "ended") call.end();
+      else next = call.submit("u2", "New input");
+      reject(new Error("cancelled"));
+      await first;
+      await next;
+      expect(call.record.turns.some((turn) => turn.id === "u1:reply")).toBe(false);
+      expect(call.record.turns[0].failed).toBeUndefined();
+      if (next) expect(call.record.turns.at(-1)?.text).toBe("New answer.");
+    },
+  );
 });

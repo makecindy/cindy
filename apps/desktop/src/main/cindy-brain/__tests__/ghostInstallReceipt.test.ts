@@ -102,6 +102,21 @@ describe('GhostInstallReceiptStore cleanup', () => {
     expect(await fs.promises.readFile(file, 'utf8')).toBe(bytes);
   });
 
+  it.each([true, 'invalid', false, undefined])('never infers change-check consent from an old receipt: %j', async fact => {
+    await store.write(createSetupReceipt());
+    const file = path.join(stateRoot, 'hello.json');
+    const raw = JSON.parse(await fs.promises.readFile(file, 'utf8'));
+    raw.checksCapabilityApproved = fact;
+    await fs.promises.writeFile(file, JSON.stringify(raw));
+    const loaded = store.readForRecovery('hello');
+    expect(loaded.state).toBe('approved');
+    if (loaded.state === 'approved') {
+      expect(loaded.receipt.checksCapabilityApproved).toBe(fact === true ? true : undefined);
+      await store.write(loaded.receipt);
+      expect(await store.readAsync('hello')).toMatchObject({ state: 'approved', receipt: loaded.receipt });
+    }
+  });
+
   // Unit: main removed Harness grants. Existing optional-UI tests never load a
   // receipt written by that older Host. A legacy unknown Harness fact must not
   // revoke the plugin or grant UI; read/write must retain identity and setup.
@@ -506,6 +521,22 @@ describe('GhostInstallReceiptStore cleanup', () => {
       state: 'approved',
       receipt: { approvedControlPoints: ['will-later-point', 'will-routine-run'], revision: receipt.revision },
     });
+  });
+
+  // 测试价值：真实 receipt 写读只保留本次 manifest 仍声明、协议可运行的引擎 id；没有该字段的旧 receipt
+  // 照常是已批准安装，只是不授予引擎（plugin-security-and-authoring.md §5，最小输入为缺字段的旧 receipt；unit）。
+  it('round trips approved task engines and keeps older receipts approved without them', async () => {
+    const base = createSetupReceipt();
+    const parsed = validateGhostManifest({ schemaVersion: 3, minCindyVersion: '0.1.61', id: 'hello', name: 'Hello', version: '1.0.0',
+      entry: 'main.js', node: { entry: 'worker.js', protocol: 'json-rpc-stdio', entries: ['engine.js'] },
+      harnesses: [{ id: 'dsh', name: 'DSH', protocol: 'acp', entry: 'engine.js' }, { id: 'later', name: 'Later', protocol: 'acp/2', entry: 'engine.js' }] });
+    if (!parsed.ok) throw new Error(parsed.reason);
+    await store.write(createGhostInstallReceipt({ ...base, manifest: parsed.manifest, localeResources: {}, skillContentSha256: {} }));
+    const old = store.read('hello');
+    if (old.state !== 'approved') throw new Error('fixture not approved');
+    expect(old.receipt.approvedHarnesses).toBeUndefined();
+    await store.write({ ...old.receipt, approvedHarnesses: ['dsh', 'later', 'undeclared'] });
+    expect(store.read('hello')).toMatchObject({ state: 'approved', receipt: { approvedHarnesses: ['dsh'], revision: old.receipt.revision } });
   });
 
   it('round trips independent observe approval without inferring it from tasks or targets grants', async () => {

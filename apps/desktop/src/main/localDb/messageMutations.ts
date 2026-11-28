@@ -1,7 +1,7 @@
-import { and, desc, eq, gt, inArray, isNull, or, sql } from 'drizzle-orm';
+import { and, desc, eq, exists, gt, inArray, isNull, or, sql } from 'drizzle-orm';
 import type { DbClient } from './client/DbClient.js';
 import { messages, sessions } from './schema.js';
-import { safeStringify } from './mapper.js';
+import { safeStringify, serializePersistedAgentMeta } from './mapper.js';
 
 /** Owner is captured by the caller. Do not reacquire a database after an await. */
 export async function writeMessageContentRow(
@@ -46,6 +46,35 @@ export async function writeMessageContentRow(
     .where(and(eq(messages.sessionId, sessionId), eq(messages.clientId, clientId)))
     .limit(1);
   return row ? { ...row, content: serialized } : undefined;
+}
+
+/** Mark only the original visible input and preserve concurrent unrelated metadata. */
+export async function markOversizedInputSkippedRow(
+  client: DbClient,
+  sessionId: string,
+  clientId: string,
+): Promise<typeof messages.$inferSelect | undefined> {
+  const db = client.drizzle;
+  const meta = sql`CASE WHEN json_valid(${messages.agentMeta}) THEN
+    CASE WHEN json_type(${messages.agentMeta}) = 'object' THEN ${messages.agentMeta} ELSE '{}' END
+    ELSE '{}' END`;
+  const task = db.select({ id: sessions.id }).from(sessions).where(and(
+    eq(sessions.id, sessionId),
+    sql`${sessions.status} != 'deleted'`,
+    or(isNull(sessions.clearedAt), gt(messages.createdAt, sessions.clearedAt)),
+  ));
+  const [row] = await db.update(messages)
+    .set({ agentMeta: sql`json_set(${meta}, '$.inputNotice', 'oversized-input-skipped')` })
+    .where(and(
+      eq(messages.sessionId, sessionId),
+      eq(messages.clientId, clientId),
+      eq(messages.role, 'user'),
+      isNull(messages.rewindAt),
+      sql`json_extract(${meta}, '$.autoResume') IS NOT 1`,
+      sql`json_extract(${meta}, '$.inputNotice') IS NULL`,
+      exists(task),
+    )).returning();
+  return row;
 }
 
 /** Exact publication rollback: a late correction cannot remove a replacement row. */
@@ -126,7 +155,7 @@ export async function patchMessageAgentMetaWithResultRow(
   // Keep the read and write on the same owner even if login changes across await.
   await db
     .update(messages)
-    .set({ agentMeta: JSON.stringify(next) })
+    .set({ agentMeta: serializePersistedAgentMeta(next) })
     .where(and(eq(messages.sessionId, sessionId), eq(messages.clientId, clientId)));
   return { previous, next };
 }

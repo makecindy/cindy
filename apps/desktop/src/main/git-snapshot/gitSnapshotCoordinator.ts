@@ -6,7 +6,13 @@
  */
 
 import type { AgentKind } from '@cindy/maker-core';
-import { OperationBudget, operationCheckpoint, operationWait } from '../utils/operationBudget';
+import {
+  OperationBudget,
+  operationCheckpoint,
+  operationWait,
+  SnapshotDispatchIntentDeadlineError,
+  SnapshotOperationDeadlineError,
+} from '../utils/operationBudget';
 
 import { createAfterEditLabel } from './gitSnapshotLabeler';
 import { enqueueGitRepoWrite } from './gitRepoWriteQueue';
@@ -166,6 +172,11 @@ export class GitSnapshotCoordinator {
       const index = queue?.indexOf(record) ?? -1;
       if (index >= 0) queue!.splice(index, 1);
       if (queue?.length === 0) this.turnStartQueues.delete(sessionId);
+      if (error instanceof SnapshotOperationDeadlineError) {
+        // This rejection is before intent confirmation. Keep the local deadline
+        // type for the scheduler's existing guarded retry, and identify it in history.
+        throw new SnapshotDispatchIntentDeadlineError(error);
+      }
       throw error;
     }
   }

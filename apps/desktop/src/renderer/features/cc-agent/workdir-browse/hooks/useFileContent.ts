@@ -17,10 +17,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { createLogger } from '@/lib/logger';
-import { observeFileTransferProgress } from '@/lib/fileTransferProgress';
+import { observeFileTransferProgress, type FileTransferProgress } from '@/lib/fileTransferProgress';
 import { fileBrowserApiFor, onFileTreeEventFor } from '@/lib/fileBrowserTransport';
-import { fileTreeEventPaths, onDirectoryAliasChange } from './useFileTree';
+import { fileTreeEventPaths, hasFileTreeWatcher, onDirectoryAliasChange } from './useFileTree';
+import { isVideoPath } from '../lib/videoExt';
 import {
+  fileContentScope,
   getCachedFileContent,
   invalidateCachedFile,
   invalidateWorkdirCache,
@@ -36,6 +38,20 @@ interface FileStat {
   mtimeMs: number;
 }
 
+interface FileReadQueue {
+  readonly relPath: string;
+  running: boolean;
+  pending: boolean;
+}
+
+type PreviewTransfer = {
+  kind: 'fetching';
+  requestId: string;
+  received: number;
+  total: number;
+  phase?: 'upload' | 'download';
+};
+
 export type FileContent =
   | {
       kind: 'text';
@@ -50,18 +66,20 @@ export type FileContent =
   /** 远程文本文件超出传输上限(device-link 帧限预判):渲染"文件过大"占位卡。 */
   | { kind: 'oversize'; stat: FileStat }
   /** 大文件取回进行中(SSH 分片 / device OSS):渲染进度。 */
-  | { kind: 'fetching'; received: number; total: number; phase?: 'upload' | 'download' }
+  | PreviewTransfer
   /** 大文件已取回到本地缓存:占位卡 + 「在系统中打开」(cachePath 是本地文件)。
    *  stale = 实时取回失败后回落的历史副本(可能不是远端最新版),UI 需标注。 */
-  | { kind: 'cached'; stat: FileStat; cachePath: string; stale?: boolean }
+  | { kind: 'cached'; stat: FileStat; cachePath: string; stale?: boolean; progress?: PreviewTransfer }
   | { kind: 'error'; message: string }
   | { kind: 'loading' }
   | { kind: 'empty' };
 
 export interface UseFileContentReturn {
   content: FileContent;
+  /** A retained editor may autosave again after its visible copy is verified. */
+  autosaveReady: boolean;
   /** Force a refetch of the current (workdir, relPath). Used after save. */
-  refresh: () => void;
+  refresh: (options?: { preserveEditor?: boolean }) => void;
   /**
    * 用调用方已经握有的 fresh content 同步把 cache + state 推到 text 分支,
    * 不发 IPC、不进 loading 中间态。专为 save-after 场景:editor 里的 next
@@ -126,6 +144,7 @@ export function useFileContent(
   relPath: string | null,
   remoteHostId: string | null = null,
   deviceId: string | null = null,
+  visible = true,
 ): UseFileContentReturn {
   const [state, setState] = useState<FileContentState>({
     workdir: '',
@@ -137,18 +156,84 @@ export function useFileContent(
   // refresh 计数器:bump 一次触发下面 effect 重跑(包含 IPC 重读)。
   const [refreshTick, setRefreshTick] = useState(0);
   const readEpoch = useRef(0);
+  const [awaitingVerification, setAwaitingVerification] = useState(false);
 
   // 内容缓存的作用域键:远程会话必须把传输端点编进 key——不同 SSH 主机 /
   // 被控设备可能暴露相同绝对路径 workdir,仅按 workdir|relPath 会串缓存
   // (A 机的内容渲染成 B 机的文件,保存时反向覆写)。本地会话保持裸 workdir。
-  const contentCacheScope = deviceId
-    ? `dev:${deviceId}|${workdir}`
-    : remoteHostId
-      ? `ssh:${remoteHostId}|${workdir}`
-      : workdir;
+  const contentCacheScope = fileContentScope(workdir, remoteHostId, deviceId);
+  const visibleRef = useRef(visible);
+  visibleRef.current = visible;
+  const lastReadScope = useRef<string | null>(null);
+  const silentRead = useRef<(() => void) | null>(null);
+  const readQueue = useRef<FileReadQueue | null>(null);
+  const preserveViewOnRead = useRef(false);
+  const transferObserver = useRef<ReturnType<typeof observeFileTransferProgress> | null>(null);
+  const [transfer, setTransfer] = useState<{
+    scope: string; relPath: string; progress: PreviewTransfer;
+  } | null>(null);
+
+  useEffect(() => {
+    // A return visit to the same path can overlap a download from the previous visit.
+    readQueue.current = visible && relPath ? { relPath, running: false, pending: false } : null;
+    return () => {
+      readQueue.current = null;
+      transferObserver.current?.dispose();
+      transferObserver.current = null;
+    };
+  }, [contentCacheScope, relPath, visible, refreshTick]);
+
+  const fetchRemotePreview = useCallback(async (
+    file: Pick<FileStat, 'relPath' | 'size' | 'mtimeMs'>,
+    fallback: FileContent,
+    showPreparing = true,
+  ): Promise<FileContent> => {
+    transferObserver.current?.dispose();
+    const report = ({ received, total, phase }: FileTransferProgress) => {
+      if (!visibleRef.current || phase === 'pack' || phase === 'extract') return;
+      setTransfer({
+        scope: contentCacheScope, relPath: file.relPath,
+        progress: { kind: 'fetching', requestId: observer.requestId, received, total, phase },
+      });
+    };
+    const observer = observeFileTransferProgress(report);
+    transferObserver.current = observer;
+    try {
+      if (showPreparing) report({ received: 0, total: file.size });
+      const copy = await window.electronAPI.fileBrowser.fetchRemote({
+        ...file, workdir, remoteHostId, deviceId, requestId: observer.requestId,
+      });
+      if (!copy.ok) {
+        log.warn('fetchRemote failed, falling back', { relPath: file.relPath, message: copy.message });
+        return fallback;
+      }
+      if (copy.stale && fallback.kind === 'cached' && copy.cachePath === fallback.cachePath) return fallback;
+      return { kind: 'cached', stat: { ...file, type: 'file' }, cachePath: copy.cachePath, stale: copy.stale === true };
+    } catch (error) {
+      if (fallback.kind !== 'cached') throw error;
+      log.warn('fetchRemote failed, retaining cached preview', error);
+      return fallback;
+    } finally {
+      observer.dispose();
+      if (transferObserver.current === observer) {
+        transferObserver.current = null;
+        setTransfer(null);
+      }
+    }
+  }, [contentCacheScope, workdir, remoteHostId, deviceId]);
 
   useEffect(() => {
     const epoch = ++readEpoch.current;
+    if (!visible) {
+      setAwaitingVerification(true);
+      preserveViewOnRead.current = true;
+      // A read-only external file may not have a tree watcher of its own.
+      if (relPath && !hasFileTreeWatcher(workdir, remoteHostId, deviceId)) invalidateCachedFile(contentCacheScope, relPath);
+      return;
+    }
+    const resumeInPlace = preserveViewOnRead.current && lastReadScope.current === contentCacheScope;
+    preserveViewOnRead.current = false;
+    lastReadScope.current = contentCacheScope;
     if (!workdir || !relPath) {
       setState({ workdir, relPath: null, content: { kind: 'empty' } });
       return;
@@ -159,13 +244,25 @@ export function useFileContent(
     const cached = getCachedFileContent(contentCacheScope, relPath);
     if (cached) {
       setState({ workdir, relPath, content: cached });
+      setAwaitingVerification(cached.kind !== 'text' || cached.truncated);
+      return;
+    }
+
+    // Keep the editor mounted when refreshing an already displayed document.
+    // The same silent path as watcher edits preserves its draft and selection.
+    const previous = stateRef.current;
+    const resumingFile = resumeInPlace && previous.workdir === workdir && previous.relPath === relPath;
+    if (resumingFile && previous.content.kind === 'text' && silentRead.current) {
+      silentRead.current();
       return;
     }
 
     let cancelled = false;
     const stale = () => cancelled || epoch !== readEpoch.current;
-    let transferProgress: ReturnType<typeof observeFileTransferProgress> | undefined;
-    setState({ workdir, relPath, content: { kind: 'loading' } });
+    // Recheck the file without replacing a paused player and losing its playhead.
+    const retainedVideo = resumingFile && isVideoPath(relPath)
+      && (previous.content.kind === 'binary' || previous.content.kind === 'cached') ? previous.content : null;
+    if (!retainedVideo) setState({ workdir, relPath, content: { kind: 'loading' } });
 
     void (async () => {
       try {
@@ -176,47 +273,12 @@ export function useFileContent(
           mtimeMs: number,
           fallback: FileContent,
         ): Promise<void> => {
-          setState({ workdir, relPath, content: { kind: 'fetching', received: 0, total: size } });
-          const progress = observeFileTransferProgress((e) => {
-            if (stale()) return;
-            // 打包 / 解包阶段只出现在文件夹下载(relPath 键为远端绝对路径),这里收不到。
-            if (e.phase === 'pack' || e.phase === 'extract') return;
-            setState({
-              workdir,
-              relPath,
-              content: { kind: 'fetching', received: e.received, total: e.total, phase: e.phase },
-            });
-          });
-          transferProgress = progress;
-          try {
-            const res = await window.electronAPI.fileBrowser.fetchRemote({
-              workdir,
-              relPath,
-              size,
-              mtimeMs,
-              remoteHostId,
-              deviceId,
-              requestId: progress.requestId,
-            });
-            if (stale()) return;
-            if (res.ok) {
-              setState({
-                workdir,
-                relPath,
-                content: {
-                  kind: 'cached',
-                  stat: { relPath, type: 'file', size, mtimeMs },
-                  cachePath: res.cachePath,
-                  stale: res.stale === true,
-                },
-              });
-            } else {
-              log.warn('fetchRemote failed, falling back', { relPath, message: res.message });
-              setState({ workdir, relPath, content: fallback });
-            }
-          } finally {
-            progress.dispose();
-          }
+          const retained = retainedVideo?.kind === 'cached' ? retainedVideo : null;
+          const sameCopy = retained && !retained.stale && retained.stat.size === size && retained.stat.mtimeMs === mtimeMs;
+          const content = await fetchRemotePreview(
+            { relPath, size, mtimeMs }, retained ? { ...retained, stale: true } : fallback, !sameCopy,
+          );
+          if (!stale()) setState({ workdir, relPath, content });
         };
 
         const result = await fileBrowserApiFor(deviceId).readFile({ workdir, relPath, remoteHostId });
@@ -269,6 +331,7 @@ export function useFileContent(
               resolvedPath: result.data.resolvedPath,
             },
           });
+          setAwaitingVerification(result.data.truncated);
           return;
         }
         if (result.code === 'OVERSIZE' && result.stat) {
@@ -344,24 +407,8 @@ export function useFileContent(
 
     return () => {
       cancelled = true;
-      transferProgress?.dispose();
     };
-  }, [workdir, relPath, remoteHostId, deviceId, refreshTick]);
-
-  // listener 拿当前 relPath 的最新值, 但不进 effect deps —— 不能因为切文件就
-  // 重新订阅 chokidar(那会丢掉订阅期间的事件)。
-  const relPathRef = useRef(relPath);
-  useEffect(() => {
-    relPathRef.current = relPath;
-  }, [relPath]);
-
-  // 静默重读的端点保鲜:同 workdir+relPath 跨端点切换时,in-flight 重读的
-  // 续体仅靠 relPathRef 判不出"端点已变",旧端点的字节会被写进新端点的
-  // 视图与缓存桶(后续保存 = 覆写错机器)。
-  const contentCacheScopeRef = useRef(contentCacheScope);
-  useEffect(() => {
-    contentCacheScopeRef.current = contentCacheScope;
-  }, [contentCacheScope]);
+  }, [workdir, relPath, remoteHostId, deviceId, contentCacheScope, refreshTick, visible, fetchRemotePreview]);
 
   // chokidar push events → cache evict + 当前文件静默重读。
   //   - 任何文件被改 / 被删 都要 invalidate 该 entry, 否则下次切回时仍然看到
@@ -378,49 +425,73 @@ export function useFileContent(
     // device-link 走 onRemotePush 过滤 —— transport 统一,按 workdir 过滤后
     // 逻辑与本地完全一致。
     let disposed = false;
-    let running = false;
-    let pending = false;
-    const reread = async () => {
-      if (running || disposed) return;
-      running = true;
+    const reread = async (queue: FileReadQueue) => {
+      if (queue.running) return;
+      const isCurrent = () => !disposed && visibleRef.current && readQueue.current === queue;
+      const targetRelPath = queue.relPath;
+      queue.running = true;
       try {
-        while (pending && !disposed) {
-          pending = false;
-          const targetRelPath = relPathRef.current;
-          if (!targetRelPath) break;
+        while (queue.pending && isCurrent()) {
+          queue.pending = false;
           const epoch = readEpoch.current;
+          const stale = () => epoch !== readEpoch.current || !isCurrent();
           try {
-            const result = await fileBrowserApiFor(deviceId).readFile({ workdir, relPath: targetRelPath, remoteHostId });
-            if (disposed || epoch !== readEpoch.current || relPathRef.current !== targetRelPath
-                || contentCacheScopeRef.current !== contentCacheScope) continue;
-            if (!result.ok || (result.data.truncated && (remoteHostId || deviceId))) {
-              // The event may have superseded the initial read/large-file fetch.
-              // Restart an unfinished/placeholder preview, but never replace
-              // an existing text editor with loading/fetching: that unmounts it
-              // and discards its draft. Fetch large content on explicit reopen;
-              // saves still validate the original resolved target.
-              const kind = stateRef.current.content.kind;
-              if (kind === 'loading' || kind === 'fetching'
-                  || (kind !== 'text' && result.ok && result.data.truncated)) {
-                setRefreshTick(t => t + 1);
-              }
+            const api = fileBrowserApiFor(deviceId);
+            const request = { workdir, relPath: targetRelPath, remoteHostId };
+            const result = await api.readFile(request);
+            if (stale()) continue;
+            const remote = Boolean(remoteHostId || deviceId);
+            if (result.ok && (!result.data.truncated || !remote)) {
+              const content = { ...result.data, kind: 'text' as const };
+              setCachedFileContent(contentCacheScope, content);
+              setState({ workdir, relPath: targetRelPath, content });
+              setAwaitingVerification(content.truncated);
               continue;
             }
-            const data = { ...result.data, kind: 'text' as const };
-            setCachedFileContent(contentCacheScope, data);
-            setState({ workdir, relPath: targetRelPath, content: data });
+
+            const displayed = getVisibleFileContentState(stateRef.current, workdir, targetRelPath);
+            if ('stat' in displayed && !result.ok && (result.code === 'BINARY_FILE' || result.code === 'OVERSIZE')) {
+              const stat = result.code === 'OVERSIZE' ? result.stat : await api.stat(request);
+              if (stale()) continue;
+              const hasCopy = !remote || (displayed.kind === 'cached' && !displayed.stale);
+              if (hasCopy && displayed.stat.mtimeMs === stat.mtimeMs && displayed.stat.size === stat.size) continue;
+              const placeholder: FileContent = { kind: result.code === 'BINARY_FILE' ? 'binary' : 'oversize', stat };
+              const content = remote
+                ? await fetchRemotePreview(
+                    { relPath: targetRelPath, size: stat.size, mtimeMs: stat.mtimeMs },
+                    displayed.kind === 'cached' ? { ...displayed, stale: true } : placeholder,
+                  )
+                : placeholder;
+              if (!stale()) setState({ workdir, relPath: targetRelPath, content });
+              continue;
+            }
+
+            // An event can supersede an unfinished load. Keep an open text
+            // editor and its draft intact if the replacement cannot be read as text.
+            if (displayed.kind === 'loading' || (displayed.kind !== 'text' && result.ok && result.data.truncated)) {
+              setRefreshTick(t => t + 1);
+            }
           } catch (err) {
             log.warn('silent re-read on change failed', err);
-            if (!disposed && epoch === readEpoch.current
-                && (stateRef.current.content.kind === 'loading' || stateRef.current.content.kind === 'fetching')) {
+            if (!stale() && stateRef.current.content.kind === 'loading') {
               setRefreshTick(t => t + 1);
             }
           }
         }
       } finally {
-        running = false;
+        queue.running = false;
       }
     };
+    const scheduleRead = () => {
+      const queue = readQueue.current;
+      if (!queue || !visibleRef.current || disposed) return;
+      setAwaitingVerification(true);
+      readEpoch.current++;
+      if (queue.pending) return;
+      queue.pending = true;
+      queueMicrotask(() => { void reread(queue); });
+    };
+    silentRead.current = scheduleRead;
     const changed = (event: { workdir: string; relPath: string }) => {
       if (event.workdir !== workdir) return;
       const changedPaths = fileTreeEventPaths(workdir, event.relPath, remoteHostId, deviceId);
@@ -428,37 +499,49 @@ export function useFileContent(
         if (changedPath === '') invalidateWorkdirCache(contentCacheScope);
         else invalidateCachedFile(contentCacheScope, changedPath);
       }
-      const current = relPathRef.current;
+      const current = readQueue.current?.relPath;
       if (current && [...changedPaths].some(p => p === '' || current === p || current.startsWith(`${p}/`))) {
         // Invalidate in-flight reads synchronously; an A response must not
         // repopulate the cache after the directory has changed to B.
-        readEpoch.current++;
-        pending = true;
-        queueMicrotask(() => { void reread(); });
+        scheduleRead();
       }
     };
     const off = onFileTreeEventFor(deviceId, changed);
     const offAlias = onDirectoryAliasChange(event => {
       if (event.remoteHostId === remoteHostId && event.deviceId === deviceId) changed(event);
     });
-    return () => { disposed = true; off(); offAlias(); };
-  }, [workdir, remoteHostId, deviceId, contentCacheScope]);
+    return () => { disposed = true; silentRead.current = null; off(); offAlias(); };
+  }, [workdir, remoteHostId, deviceId, contentCacheScope, fetchRemotePreview]);
 
   // workdir 切换 → 旧 workdir 的 entry 一次性扔掉, 防长期累积。
   // 注意 cleanup 才扔: 当前 workdir 可能和上一渲染相等(Strict Mode 双调用),
   // 仅在 effect 真正卸载 (workdir 变了 / 组件 unmount) 时清, 不会误伤。
   useEffect(() => {
     if (!workdir) return;
-    return () => invalidateWorkdirCache(contentCacheScope);
-  }, [workdir, contentCacheScope]);
+    return () => {
+      if (!hasFileTreeWatcher(workdir, remoteHostId, deviceId)) invalidateWorkdirCache(contentCacheScope);
+    };
+  }, [workdir, contentCacheScope, remoteHostId, deviceId]);
 
-  const refresh = useCallback(() => {
-    // 显式 invalidate 当前文件 + bump tick 触发 effect 重跑 → 走 miss 路径。
-    if (relPath) invalidateCachedFile(contentCacheScope, relPath);
+  const refresh = useCallback((options?: { preserveEditor?: boolean }) => {
+    if (!relPath) return;
+    invalidateCachedFile(contentCacheScope, relPath);
+    if (options?.preserveEditor) {
+      // A window can miss writes while unfocused. Recheck the open editor
+      // through the same queue as watch events, even if it stayed visible.
+      const displayed = getVisibleFileContentState(stateRef.current, workdir, relPath);
+      if (displayed.kind === 'text' && visibleRef.current && lastReadScope.current === contentCacheScope && silentRead.current) {
+        silentRead.current();
+        return;
+      }
+      preserveViewOnRead.current = true;
+    }
+    setAwaitingVerification(true);
+    readEpoch.current++;
     setRefreshTick((t) => t + 1);
     // contentCacheScope 必须进 deps:同 workdir 跨端点切换时闭包若滞留旧
     // scope,invalidate/写入会落进别的端点的缓存桶(串内容 + 反向覆写)。
-  }, [contentCacheScope, relPath]);
+  }, [contentCacheScope, workdir, relPath]);
 
   const setLocal = useCallback(
     (data: { content: string; size: number; mtimeMs: number; truncated: boolean; resolvedPath?: string }) => {
@@ -488,8 +571,15 @@ export function useFileContent(
     [contentCacheScope, workdir, relPath],
   );
 
+  let content = getVisibleFileContentState(state, workdir, relPath);
+  if (visible && transfer?.scope === contentCacheScope && transfer.relPath === relPath
+      && transfer.progress.requestId === transferObserver.current?.requestId) {
+    // Keep the last complete copy playable while its replacement is in flight.
+    content = content.kind === 'cached' ? { ...content, progress: transfer.progress } : transfer.progress;
+  }
   return {
-    content: getVisibleFileContentState(state, workdir, relPath),
+    content,
+    autosaveReady: visible && !awaitingVerification,
     refresh,
     setLocal,
   };

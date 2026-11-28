@@ -1,4 +1,4 @@
-import type { AgentKind, Effort } from '@cindy/maker-core';
+import type { AgentKind, Effort, EngineKind } from '@cindy/maker-core';
 import { EFFORT_VALUES } from '@cindy/model-providers';
 
 /** Runtime validation for effort values crossing IPC and Device Link boundaries. */
@@ -29,7 +29,7 @@ export function resolveRetainedRuntimeEffort(input: {
 }
 
 interface RuntimeSelectionAxesSession {
-  agentKind: AgentKind;
+  agentKind: EngineKind;
   setEffort: (effort: Effort) => Promise<void>;
   setFastMode: (enabled: boolean | 'ultrafast') => Promise<void>;
 }

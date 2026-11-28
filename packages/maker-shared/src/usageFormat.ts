@@ -31,3 +31,4 @@ export function formatCompactTokens(n: number): string {
 }
 
 export * from './runningTokenRateHistory.js';
+export * from './generationTrace.js';

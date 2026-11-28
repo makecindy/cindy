@@ -137,6 +137,19 @@ describe('messageActions', () => {
     }))).toBe('Tool input\n\nTool output');
   });
 
+  // Batfree feedback: range selection stops at native table boundaries. The
+  // whole-message production copy path must still write both paragraphs and
+  // every Markdown table cell. Existing cases contain no table (unit tier).
+  it('copies the complete body before, inside and after a table', async () => {
+    const body = ['Before', '', '| A | B |', '| --- | --- |', '| 1 | 2 |', '| 3 | 4 |', '', 'After'].join('\n');
+    let clipboard = '';
+    const status = await copyMessageText(buildMobileMessageCopyText(normalizedMessage({ body })), async value => {
+      clipboard = value;
+    });
+    expect(status).toBe('copied');
+    expect(clipboard).toBe(body);
+  });
+
   it('keeps copied quote Markdown readable without exposing private marker lines', () => {
     expect(buildMobileMessageCopyText(normalizedMessage({
       body: [

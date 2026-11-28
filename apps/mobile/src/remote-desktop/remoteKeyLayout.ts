@@ -29,7 +29,7 @@ export type KeyRect = KeyCell & {
 export type KeyStrip = { height?: number; left?: number; right?: number };
 export type HostPlatform = string | undefined;
 
-const GAP = 5;
+const DEFAULT_KEY_GAP = 5;
 const FUNCTION_ROW_HEIGHT = 0.74;
 
 const letters = (keys: string) =>
@@ -82,15 +82,11 @@ export function classicKeyboardRows(platform: HostPlatform): KeyCell[][] {
   });
   const meta = mac ? "⌘" : platform === "win32" ? "Win" : "Super";
   return [
-    [
-      key("Escape", "Esc", 1.25),
-      ...[..."1234567890"].map((digit) => key(`Digit${digit}`, digit)),
-      key("Backspace", "⌫", 1.75),
-    ],
+    [key("Escape", "Esc", 1.25), ...digitRow(), key("Backspace", "⌫", 1.75)],
     [
       key("Tab", "Tab", 1.5),
       ...letters("QWERTYUIOP"),
-      key("Backslash", "\\", 1.5),
+      { ...symbol("Backslash", "\\", "|"), weight: 1.5 },
     ],
     [
       key(KEY_CAPS, "Caps", 1.75),
@@ -100,10 +96,10 @@ export function classicKeyboardRows(platform: HostPlatform): KeyCell[][] {
     [
       key("ShiftLeft", "Shift", 2),
       ...letters("ZXCVBNM"),
-      key("Comma", ","),
-      key("Period", "."),
+      symbol("Comma", ",", "<"),
+      symbol("Period", ".", ">"),
       key("ArrowUp", "↑"),
-      key("Slash", "/"),
+      symbol("Slash", "/", "?"),
     ],
     [
       key("ControlLeft", "Ctrl", 1.25),
@@ -262,13 +258,14 @@ export function keyRects(
   width: number,
   height: number,
   strip: KeyStrip | false = {},
+  gap = DEFAULT_KEY_GAP,
 ): KeyRect[] {
   const fixedStrip = strip && strip.height !== undefined ? strip.height : null;
   const typingRows = strip ? rows.length - 1 : rows.length;
   const units =
     typingRows + (strip && fixedStrip === null ? FUNCTION_ROW_HEIGHT : 0);
   const rowHeight =
-    Math.max(0, height - GAP * (rows.length - 1) - (fixedStrip ?? 0)) /
+    Math.max(0, height - gap * (rows.length - 1) - (fixedStrip ?? 0)) /
     Math.max(1, units);
   const rects: KeyRect[] = [];
   let y = 0;
@@ -286,30 +283,30 @@ export function keyRects(
       0,
     );
     // A wide key spans the gaps it covers, keeping columns aligned across rows.
-    const unit = Math.max(0, width - left - right - GAP * (total - 1)) / total;
-    const span = (weight: number) => weight * unit + (weight - 1) * GAP;
-    const skip = (weight: number) => weight * (unit + GAP);
+    const unit = Math.max(0, width - left - right - gap * (total - 1)) / total;
+    const span = (weight: number) => weight * unit + (weight - 1) * gap;
+    const skip = (weight: number) => weight * (unit + gap);
     let x = left;
     for (const cell of slots) {
       x += skip(cell.groupGap ?? 0);
       const cellWidth = span(cell.weight);
       if (cell.half === "top") {
         const lower = row.find((other) => other.half === "bottom")!;
-        const half = (currentHeight - GAP / 2) / 2;
+        const half = (currentHeight - gap / 2) / 2;
         rects.push({ ...cell, x, y, width: cellWidth, height: half });
         rects.push({
           ...lower,
           x,
-          y: y + half + GAP / 2,
+          y: y + half + gap / 2,
           width: cellWidth,
           height: half,
         });
       } else {
         rects.push({ ...cell, x, y, width: cellWidth, height: currentHeight });
       }
-      x += cellWidth + skip(cell.trailingGap ?? 0) + GAP;
+      x += cellWidth + skip(cell.trailingGap ?? 0) + gap;
     }
-    y += currentHeight + GAP;
+    y += currentHeight + gap;
   });
   return rects;
 }

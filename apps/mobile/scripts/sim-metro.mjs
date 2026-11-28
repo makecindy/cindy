@@ -3,7 +3,7 @@
 
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { mkdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import net from 'node:net';
 import path, { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -118,6 +118,69 @@ export function readMetroOwner(port) {
     return { ...JSON.parse(readFileSync(file, 'utf8')), recordedAtMs: statSync(file).mtimeMs };
   } catch {
     return null;
+  }
+}
+
+function checkoutWasRemoved(root, stat) {
+  try {
+    stat(root);
+    return false;
+  } catch (error) {
+    return error.code === 'ENOENT';
+  }
+}
+
+// Recover launches from before Expo monitored its checkout. Use recorded
+// ports (including custom ports) and revalidate the live listener identity.
+export async function reapOrphanMetros({
+  platform = process.platform,
+  readDirectory = (directory) => readdirSync(directory),
+  stat = (root) => { statSync(root); },
+  readOwner = readMetroOwner,
+  probe = probeMetroOwnership,
+  findListener = listenerPid,
+  readParentPid = (pid) => Number(execFileSync('ps', ['-p', String(pid), '-o', 'ppid='], { timeout: 5000 })),
+  terminate = terminateMetro,
+} = {}) {
+  let files;
+  try {
+    files = readDirectory(metroOwnerDir);
+  } catch (error) {
+    if (error.code === 'ENOENT') return;
+    throw error;
+  }
+  for (const file of files) {
+    const match = /^port-(\d{1,5})\.json$/.exec(file);
+    if (!match) continue;
+    const port = Number(match[1]);
+    if (port < 1 || port > 65535) continue;
+    const record = readOwner(port);
+    if (!record?.source || typeof record.worktreeRoot !== 'string' || !path.isAbsolute(record.worktreeRoot)) continue;
+    // Probe only definitively removed checkouts. EACCES and other I/O errors
+    // can also make existsSync return false for a live project.
+    if (!checkoutWasRemoved(record.worktreeRoot, stat)) continue;
+    const owner = probe(port);
+    if (!owner?.cwd || owner.source !== record.source
+      || path.resolve(owner.cwd) !== path.join(record.worktreeRoot, 'apps/mobile')) continue;
+    if (platform !== 'win32' && Number(owner.pid) !== record.pid) {
+      // POSIX records store the pnpm parent, not necessarily the Expo PID.
+      let parent;
+      try {
+        parent = readParentPid(owner.pid);
+      } catch {
+        continue;
+      }
+      if (parent !== record.pid) continue;
+    }
+    if (!checkoutWasRemoved(record.worktreeRoot, stat)
+      || readOwner(port)?.recordedAtMs !== record.recordedAtMs
+      || String(findListener(port)) !== String(owner.pid)) continue;
+    // On Unix the launcher may only be a pnpm shell. Stop the actual listener
+    // and let its waiting parents unwind. Windows needs taskkill /T.
+    const stopped = await terminate(owner.launcherPid ?? owner.pid, { worktreeRoot: record.worktreeRoot });
+    if (!stopped && String(findListener(port)) === String(owner.pid)) {
+      console.warn(`Could not stop orphan Metro on port ${port}`);
+    }
   }
 }
 

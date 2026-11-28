@@ -14,6 +14,7 @@ import {
   type OverflowClaimResult,
 } from '../../../desktop/src/main/maker-ipc/contextOverflowRollover.ts';
 import { isTerminalTurnErrorEvent } from '../../../desktop/src/main/maker-ipc/sessionTurnActivityTracker.ts';
+import { explicitPorts } from './explicit-ports.ts';
 
 /**
  * How long a Host shutdown waits, in total, for the context recoveries still in flight to end
@@ -59,6 +60,10 @@ export interface RecoveryTerminal {
   /** The Host is stopping: as the desktop's planned upgrade close, recovery does not claim. */
   isStopping: boolean;
   isGatewayProxyTokenRecovery: boolean;
+  /** Holds the turn's product failure for this recovery (product-turn.ts defer of its owner). */
+  deferProductTurn?: () => void;
+  /** The recovery's final failure: the turn's product failure goes through the finalizer. */
+  notifyProductTurn?: () => void;
 }
 
 export type HostContextRecovery = ReturnType<typeof createHostContextRecovery>;
@@ -98,6 +103,11 @@ export function createHostContextRecovery(deps: {
    */
   isRecoverable?(data: unknown): boolean;
   publish(sessionId: string, event: AgentEvent, fields: Record<string, unknown>): void;
+  /**
+   * Whether the input coordinator has taken this terminal error over for an automatic resume, read
+   * as the desktop's delivery reads it (sessionErrorSuppression.ts, sessionEventDelivery.ts).
+   */
+  isErrorSuppressed?(sessionId: string, event: AgentEvent): boolean;
   log: { warn(message: string, fields?: Record<string, unknown>): void };
 }) {
   const held = new Map<string, HeldBroadcast>();
@@ -108,7 +118,7 @@ export function createHostContextRecovery(deps: {
   };
 
   function ports(history: RecoveryHistory, rollover: () => Rollover | null): ContextRecoveryTerminalPorts {
-    return {
+    return explicitPorts<ContextRecoveryTerminalPorts>({
       getRollover: rollover,
       getSuppressedBroadcasts: () => held as unknown as ReturnType<ContextRecoveryTerminalPorts['getSuppressedBroadcasts']>,
       isTerminalTurnErrorEvent: event => isTerminalTurnErrorEvent(event),
@@ -128,7 +138,7 @@ export function createHostContextRecovery(deps: {
       handleAgentIslandEventAfterBroadcast: () => {},
       eventChannel: () => 'agent-event',
       log: deps.log,
-    };
+    });
   }
 
   function input(terminal: RecoveryTerminal) {
@@ -142,7 +152,8 @@ export function createHostContextRecovery(deps: {
       isPlannedUpgradeClose: terminal.isStopping,
       isRemoteAuthRetry: false,
       isGatewayProxyTokenRecovery: terminal.isGatewayProxyTokenRecovery,
-      autoResumeSuppressesPersist: false,
+      autoResumeSuppressesPersist: deps.isErrorSuppressed?.(terminal.session.id, terminal.event) === true,
+      inputClientId: typeof terminal.fields.inputClientId === 'string' ? terminal.fields.inputClientId : undefined,
       // A held terminal reserves no row id, as on the desktop (sessionEventDelivery.ts).
       persistId: undefined,
     };
@@ -161,8 +172,14 @@ export function createHostContextRecovery(deps: {
       if (holds && deps.isRecoverable && !deps.isRecoverable(event.data)) return 'idle';
       if (holds) held.set(session.id, { sessionId: session.id, event, fields: terminal.fields });
       const result = claimContextRecoveryTerminal(ports(terminal.history, deps.getRollover), input(terminal));
-      // The Host has no product-turn follow-up to defer (release table).
-      deferContextRecoveryTerminal(ports(terminal.history, deps.getRollover), input(terminal), result, () => {});
+      // As the desktop: the terminal a recovery claims holds its product failure until the recovery ends.
+      // The shared rule also holds a gateway key recovery and a planned close, whose rows the desktop
+      // writes later; the Host writes them at once and has no later exit for them, so only a claim
+      // ('claimed', 'in-flight') holds here. A terminal an automatic resume holds is deferred by the
+      // executor (turn-executor.mjs settleProductTurn), with the same owner.
+      deferContextRecoveryTerminal(ports(terminal.history, deps.getRollover), input(terminal), result, () => {
+        if (result === 'claimed' || result === 'in-flight') terminal.deferProductTurn?.();
+      });
       if (holds && result === 'idle' && held.get(session.id)?.event === event) held.delete(session.id);
       return result;
     },
@@ -189,7 +206,8 @@ export function createHostContextRecovery(deps: {
           return recovery;
         },
       };
-      settleContextRecoveryTerminal(ports(terminal.history, () => waiting), input(terminal), result, () => {});
+      // The recovery's final failure settles the held product failure, as the desktop's notify does.
+      settleContextRecoveryTerminal(ports(terminal.history, () => waiting), input(terminal), result, () => terminal.notifyProductTurn?.());
     },
 
     /**
@@ -206,6 +224,11 @@ export function createHostContextRecovery(deps: {
      * terminal of its own client id). Only while that recovery runs: it ends, fails, throws, is
      * rebuilt or is drained at shutdown, and the entry goes. A replay outside a recovery gets none.
      */
+    /** Whether a recovery of this task is running (its replay belongs to the turn that overflowed). */
+    isRecovering(sessionId: string): boolean {
+      return recovering.has(sessionId);
+    },
+
     replayClientId(sessionId: string): string | undefined {
       const clientId = recovering.get(sessionId)?.terminal.fields.inputClientId;
       return typeof clientId === 'string' ? clientId : undefined;

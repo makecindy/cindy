@@ -4,6 +4,7 @@ import { runInNewContext } from 'node:vm';
 import ts from 'typescript';
 import { describe, expect, it, vi } from 'vitest';
 import { WORKLOUDER_CREATOR_LIT_TASK_KEY_COUNT } from '../../shared/workLouderCodex';
+import { createSidebarTaskPublisher } from '../features/cc-agent/lib/sidebarTaskPublication';
 
 const chatInputSource = readFileSync(
   resolve(__dirname, '..', 'components', 'new-chat', 'ChatInput.tsx'),
@@ -80,9 +81,33 @@ describe('ChatInput session switch focus contract', () => {
     expect(firstMountHydrationBlock).toContain("editor.commands.focus('end');");
   });
 
+  // Guard tier, #11517 security regression: background companion approvals and composer
+  // commands must not be consumed. Evaluate the production ownership predicate,
+  // shared by approval/text/voice/scroll subscribers, rather than a copied formula.
+  // Existing focus guards covered only header ownership. Smallest failure input
+  // is an unfocused visible companion with navigationMode='route-owner'.
+  it.each([
+    [false, false, 'route-owner', true, false],
+    [false, true, 'route-owner', true, false],
+    [true, false, 'route-owner', true, true],
+    [true, true, 'route-owner', true, true],
+    [true, false, 'sidebar-embedded', true, false],
+    [true, false, 'split-pane', true, false],
+    [true, false, 'route-owner', false, false],
+  ])('hardware ownership with focus=%s route=%s mode=%s visible=%s is %s',
+    (paneFocused, ownsRoute, navigationMode, viewVisible, expected) => {
+      const predicate = extractBetween(sessionViewSource,
+        'const ownsHardwareTaskActions =', 'const showComposerControlledBanner');
+      expect(runInNewContext(
+        '(function () { ' + predicate + '; return ownsHardwareTaskActions; })()',
+        { paneFocused, ownsRoute, navigationMode, viewVisible, sessionId: 'companion-chat' },
+      )).toBe(expected);
+    },
+  );
+
   it('enables storageKey refocus for routed session and new-draft views', () => {
     expect(sessionViewSource).toContain(
-      'const ownsRoute = routeOwner ?? (!sessionIdProp && !isCompactRail && !isOrcaMode);',
+      'const ownsRoute = paneFocused && (routeOwner ?? (!sessionIdProp && !isCompactRail && !isOrcaMode));',
     );
     expect(sessionViewSource).toContain('focusOnStorageKeyChange={ownsRoute || focusComposerOnOpen}');
     expect(sessionViewSource).toContain(
@@ -204,7 +229,7 @@ describe('ChatInput session switch focus contract', () => {
       'finishAgentSendDispatch();',
     );
     const worktreeSendBlock = extractBetween(
-      newMakerDraftRouteSource,
+      newMakerDraftRouteSource.slice(newMakerDraftRouteSource.indexOf('if (!isRemoteProjectDraft && wt.enabled && wt.baseRepo)')),
       'const accepted = await makerChatStore.sendMessage(',
       'worktreeCreationStore.clear(newSession.id);',
     );
@@ -212,8 +237,13 @@ describe('ChatInput session switch focus contract', () => {
     expect(chatInputSource).toContain('findGhostByCommand(eligibleGhosts, ghostCommandToken.word, ghostCommandToken.namespace)');
     expect(chatInputSource).toContain('onAccepted: markRecentPluginUsage');
     expect(successfulSendBlock).toContain('markRecentPluginUsage();');
-    // 本机首条 / worktree 首条 / 远程普通首条直接发送 / 远程视图交接 四处受理点。
-    expect(newMakerDraftRouteSource.match(/opts\?\.onAccepted\?\.\(\);/g)).toHaveLength(4);
+    // 本机首条 / worktree 首条 / 远程普通首条直接发送 / 远程普通视图交接 /
+    // 本机插件引擎（普通 / 独立工作区）/ 远程插件引擎直接发送 / 远程视图交接 八处受理点。
+    expect(newMakerDraftRouteSource.match(/opts\?\.onAccepted\?\.\(\);/g)).toHaveLength(8);
+    expect(newMakerDraftRouteSource).toContain('if (accepted) opts?.onAccepted?.();\n              else restoreEngineFirstMessageDraft();');
+    expect(newMakerDraftRouteSource).toContain(
+      'if (accepted) {\n                remoteProjectsStore.clearCreationPreview(remoteSessionId);\n                opts?.onAccepted?.();\n                return;\n              }',
+    );
     expect(worktreeSendBlock).toContain('if (accepted) {');
     expect(worktreeSendBlock).toContain('opts?.onAccepted?.();');
     expect(worktreeSendBlock).toContain(
@@ -461,7 +491,9 @@ it.each([
               : visible.map((row) => row.id),
         isSecondaryWindow: () => false,
         useCallback: (publish: () => void) => publish,
-        publishedTaskKeyRef: { current: '' },
+        // 发布器用真实的实现，这样载荷的截断与去重都在沙箱里同样生效。
+        taskPublisherRef: { current: null },
+        createSidebarTaskPublisher,
         WORKLOUDER_CREATOR_LIT_TASK_KEY_COUNT,
         window: { electronAPI: { workLouderCodex: { publishTasks } } },
       },

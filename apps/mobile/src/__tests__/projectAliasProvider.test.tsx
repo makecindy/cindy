@@ -65,6 +65,7 @@ const transport = vi.hoisted(() => {
     connectionFor() { return this; }
     hasServerCapability = () => false;
     isOutboundExplicitlyClosed = () => false;
+    needsLinkRecovery = () => false;
     hasPendingRequestsTo = () => false;
     onStatusChange = () => () => {};
     onPresenceChanged = () => () => {};

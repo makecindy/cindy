@@ -70,8 +70,10 @@ vi.mock('../lib/rsbBrowserBridge', async () => {
 });
 
 import { RightSidebarShell } from '../RightSidebarShell';
+import { sharedTaskHostPeer } from '@cindy/device-link';
 import '../plugins/plugin-task';
 import { BrowserTabBody } from '../plugins/web-browser/BrowserTabBody';
+import { InlineHtmlPreview } from '../plugins/file-browser/InlineHtmlPreview';
 import type { WebBrowserState } from '../plugins/web-browser';
 import type { TabKindBodyProps } from '../types';
 import { browserWebviewPool } from '../lib/browserWebviewPool';
@@ -326,6 +328,41 @@ describe('RightSidebarShell empty state', () => {
     delete (window as unknown as { electronAPI?: unknown }).electronAPI;
   });
 
+  // #11546, unit: an empty task sidebar and its + menu share the session's Review eligibility.
+  it.each([
+    ['guest', sharedTaskHostPeer('task', 'host'), true],
+    ['owner', null, true],
+    ['paired device', 'paired-device', true],
+  ] as const)('filters both Review creation surfaces for %s', async (_role, deviceLinkDeviceId, available) => {
+    const name = 'rightSidebar.tabs.kinds.review';
+    registerTabKind({
+      kind: 'review',
+      menu: { kind: 'review', labelKey: name, icon: (() => null) as unknown as LucideIcon, order: 1, enabled: true },
+      TabPillTitle: () => null, TabBody: () => null, defaultState: () => null,
+    });
+    try {
+      render(createElement(RightSidebarShell, {
+        sessionId: 's1', workdir: 'repo', remoteHostId: null, deviceLinkDeviceId, shellVisible: true, isMac: true,
+      }));
+      await screen.findByText('rightSidebar.tabs.empty.title');
+      expect(Boolean(screen.queryByRole('button', { name }))).toBe(available);
+      const add = screen.getByRole('button', { name: 'rightSidebar.tabs.addAria' });
+      vi.spyOn(add.parentElement!, 'getBoundingClientRect').mockReturnValue(new DOMRect(20, 20, 24, 24));
+      fireEvent.pointerDown(add, { button: 0, ctrlKey: false });
+      await screen.findByRole('menu');
+      const entry = screen.queryByRole('menuitem', { name });
+      expect(Boolean(entry)).toBe(available);
+      if (entry) {
+        fireEvent.click(entry);
+        await waitFor(() => expect(tabsIpc.upsert).toHaveBeenCalled());
+      } else {
+        expect(tabsIpc.upsert).not.toHaveBeenCalled();
+      }
+    } finally {
+      unregisterTabKind('review');
+    }
+  });
+
   // 测试价值
   // - 生产入口与可观察结果:RightSidebarShell 同时投影全局页签(globalTabs,不跟对话)与任务
   //   页签;可观察的是全局页签钉在条首并带图钉、切任务后仍在、点它只改本窗口的全局激活位
@@ -469,6 +506,56 @@ describe('RightSidebarShell empty state', () => {
     expect(closeOthers.getAttribute('data-disabled')).not.toBeNull();
     left.unmount();
     right.unmount();
+  });
+
+  // #11392, unit: keep the actual preview's DOM in place across tasks and
+  // release it under the same memory pressure as an ordinary browser page.
+  it('preserves an interactive file preview across tasks until its guest is evicted', async () => {
+    const report = vi.fn(async () => true);
+    Object.assign(window.electronAPI.rsbBrowserBridge, { reportPreviewOpener: report });
+    registerTabKind({
+      kind: 'file-browser', menu: { kind: 'file-browser', labelKey: 'files', icon: Globe, order: 1, enabled: true },
+      TabPillTitle: () => createElement('span', null, 'files'),
+      TabBody: ({ ctx, active, shellVisible }: TabKindBodyProps) => createElement(InlineHtmlPreview, {
+        sessionId: ctx.sessionId, tabId: ctx.tabId, workdir: ctx.workdir, relPath: 'form.html',
+        active: active === true && shellVisible !== false, deviceId: null,
+      }), defaultState: () => ({}),
+    });
+    tabsIpc.list.mockImplementation(async ({ sessionId }: { sessionId: string }) => sessionId === 'task-a'
+      ? { tabs: [{ id: 'form', kind: 'file-browser', state: {} }], activeTabId: 'form' }
+      : { tabs: [], activeTabId: null });
+    const shell = (sessionId: string) => createElement(RightSidebarShell, { sessionId, workdir: '/docs', remoteHostId: null, isMac: true });
+    const view = render(shell('task-a'));
+    try {
+      await waitFor(() => expect(view.container.querySelector('webview')?.getAttribute('src')).toContain('form.html'));
+      const entry = browserWebviewPool.peek('form')!;
+      Object.assign(entry.webview, { getWebContentsId: () => 78 });
+      fireEvent(entry.webview, new Event('did-attach'));
+      expect(report).toHaveBeenCalledWith({ sessionId: 'task-a', tabId: 'form', webContentsId: 78, visible: true });
+      const slot = entry.wrapper.parentElement;
+      const observer = new MutationObserver(() => {});
+      observer.observe(view.container, { childList: true, subtree: true });
+      view.rerender(shell('task-b'));
+      expect([...observer.takeRecords()].flatMap(record => [...record.removedNodes]).some(node => node.contains(entry.webview))).toBe(false);
+      expect(entry.wrapper.isConnected).toBe(true);
+      expect(report).toHaveBeenLastCalledWith({ sessionId: 'task-a', tabId: 'form', webContentsId: 78, visible: false });
+      view.rerender(shell('task-a'));
+      expect(report).toHaveBeenLastCalledWith({ sessionId: 'task-a', tabId: 'form', webContentsId: 78, visible: true });
+      expect(view.container.querySelector('webview')).toBe(entry.webview);
+      expect(entry.wrapper.parentElement).toBe(slot);
+      observer.disconnect();
+      view.rerender(shell('task-b'));
+      act(() => { for (let i = 0; i < 5; i++) browserWebviewPool.acquire('pressure-' + i); });
+      expect(entry.wrapper.isConnected).toBe(false);
+      expect(browserWebviewPool.peek('form')).toBeNull();
+      view.rerender(shell('task-a'));
+      await waitFor(() => expect(view.container.querySelector('webview')?.getAttribute('src')).toContain('form.html'));
+      expect(browserWebviewPool.peek('form')?.webview).not.toBe(entry.webview);
+    } finally {
+      view.unmount();
+      browserWebviewPool.releaseAll();
+      unregisterTabKind('file-browser');
+    }
   });
 
   it.each([

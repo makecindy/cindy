@@ -24,5 +24,5 @@
 
 /* Reserve marker space on each item's own starting side, including mixed lists. */
 .msg-markdown li {
-  margin-inline-start: 1.5rem;
+  margin-inline-start: var(--space-6);
 }

@@ -25,6 +25,7 @@ export type ComposerSuggestionActionId =
   | 'plan-mode'
   | 'collaboration'
   | 'add-extra-dir'
+  | 'project-settings'
   | `plugin-completion:${string}`;
 
 export interface ComposerSuggestionAction {
@@ -90,6 +91,12 @@ export function resolveComposerAtActivation({
  *  render in full like the legacy `+` menu did; the panel scrolls). */
 export const EMPTY_QUERY_CONTEXT_SECTION_LIMIT = 3;
 
+/** Leave IME confirmation and editor newlines to the normal keymap before panel navigation. */
+export function resolveComposerSuggestionKey(event: KeyboardEvent): string | null {
+  if (event.isComposing || (event.key === 'Enter' && event.shiftKey)) return null;
+  return event.key;
+}
+
 export function composerSuggestionEntryKey(entry: ComposerSuggestionEntry): string {
   return entry.kind === 'action'
     ? `action:${entry.action.id}`
@@ -98,6 +105,10 @@ export function composerSuggestionEntryKey(entry: ComposerSuggestionEntry): stri
 
 export function isComposerSuggestionEntryDisabled(entry: ComposerSuggestionEntry): boolean {
   return entry.kind === 'action' ? entry.action.disabled === true : entry.disabled === true;
+}
+
+export function isComposerDirectoryAction(id: ComposerSuggestionActionId): boolean {
+  return id === 'add-extra-dir' || id === 'project-settings';
 }
 
 /**
@@ -144,7 +155,7 @@ function scoreAction(action: ComposerSuggestionAction, q: string): number {
 interface BuildComposerSuggestionEntriesInput {
   /** Trimmed-or-not raw query; empty string = curated sections view. */
   query: string;
-  /** Ordered action list assembled by ChatInput (attach → goal → plan → collab → add-dir). */
+  /** Ordered action list assembled by ChatInput. */
   actions: readonly ComposerSuggestionAction[];
   /** Scanned mention resources (workspace/context/task/plugin resources). */
   resources: readonly AtResourceItem[];
@@ -155,10 +166,10 @@ interface BuildComposerSuggestionEntriesInput {
 /**
  * Empty query — curated sections, in visual order:
  *   1. attach-files action
- *   2. remaining actions except add-extra-dir (goal / plan mode / collaboration)
+ *   2. remaining non-directory actions (goal / plan mode / collaboration)
  *   3. browser tabs (≤3), agents (≤3)
  *   4. all plugins (unavailable ones disabled)
- *   5. add-extra-dir action (rendered under the reference-dirs section)
+ *   5. directory actions (add directory, then project settings)
  *
  * Non-empty query — one flat pool ranked by the shared scorer, capped to
  * `AT_MENTION_SEARCH_RESULT_LIMIT`. Disabled plugins are excluded from search
@@ -175,7 +186,7 @@ export function buildComposerSuggestionEntries(
     for (const action of input.actions) {
       if (
         action.id === 'attach-files'
-        || action.id === 'add-extra-dir'
+        || isComposerDirectoryAction(action.id)
       ) continue;
       entries.push({ kind: 'action', action });
     }
@@ -196,8 +207,9 @@ export function buildComposerSuggestionEntries(
         ...(plugin.disabledReason ? { disabledReason: plugin.disabledReason } : {}),
       });
     }
-    const addDir = input.actions.find((a) => a.id === 'add-extra-dir');
-    if (addDir) entries.push({ kind: 'action', action: addDir });
+    for (const action of input.actions) {
+      if (isComposerDirectoryAction(action.id)) entries.push({ kind: 'action', action });
+    }
     return entries;
   }
 

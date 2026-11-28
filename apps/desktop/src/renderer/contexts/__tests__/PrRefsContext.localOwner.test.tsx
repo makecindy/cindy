@@ -2,7 +2,7 @@
 
 import { useEffect } from 'react';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
   dataOwnerId: 'local-v1' as string | null,
@@ -18,8 +18,10 @@ vi.mock('@/lib/logger', () => ({
   createLogger: () => ({ warn: vi.fn(), debug: vi.fn() }),
 }));
 
-import { PrRefsProvider, usePrRefsForSession, usePrActions, usePrStatuses, useTaskPrArchiveEligibility } from '../PrRefsContext';
+import { PrRefsProvider, usePrRefsForSession, usePrActions, usePrStatus, usePrStatuses, useTaskPrArchiveEligibility } from '../PrRefsContext';
+import { __testing as dataOwnerGenerationTesting, setDataOwnerGeneration } from '../dataOwnerGeneration';
 import { unresponsiveDevicesStore } from '@/features/device-link/unresponsiveDevicesStore';
+import { PR_STATUS_REFRESH_INTERVAL_MS } from '@/lib/prStatus';
 
 function RefCount() {
   return <div>{usePrRefsForSession('session-local').length}</div>;
@@ -225,20 +227,103 @@ describe('remote task association invalidation', () => {
   );
 });
 
-function StatusProbe() {
+/** A remote task's PR set is asked once per refresh interval. The manual refresh buttons in
+ * these tests stand for a later trigger, so each click first steps the clock past that interval. */
+function statusClock() {
+  let now = 1_000_000;
+  const spy = vi.spyOn(Date, 'now').mockImplementation(() => now);
+  return {
+    advance: (ms: number) => {
+      now += ms;
+    },
+    later: () => {
+      now += PR_STATUS_REFRESH_INTERVAL_MS;
+    },
+    restore: () => spy.mockRestore(),
+  };
+}
+
+function StatusProbe({ later }: { later?: () => void }) {
   const { statuses, successfulStatuses, fetchStatusesForSession } = usePrStatuses('remote-child');
   const { registerPrConsumer } = usePrActions();
   useEffect(() => registerPrConsumer('remote-child', 'home'), [registerPrConsumer]);
   const latest = statuses.get('github:github.com/a/b#1');
   const confirmed = successfulStatuses.get('github:github.com/a/b#1');
   return (
-    <button onClick={() => fetchStatusesForSession('remote-child')}>
+    <button
+      onClick={() => {
+        later?.();
+        fetchStatusesForSession('remote-child');
+      }}
+    >
       {confirmed?.ok ? confirmed.status : 'unknown'}:{latest?.ok === false ? 'stale' : 'fresh'}
     </button>
   );
 }
 
+// 测试价值
+// - 生产入口与可观察结果:PrRefsProvider 的远程会话状态读取;对方电脑收到的 git-context:pr-status 次数。
+// - Bug／规则依据:2026-11-21 MacBook ↔ Mac Studio 联调日志,行挂载、悬停、聚焦每次都经中转重查,
+//   三小时约 800 次,688/795 个间隔不到 30 秒。
+// - 现有覆盖缺口:相邻用例未覆盖重复触发、或慢查询完成后恰逢定时刷新。
+// - 最小失败输入:读完立即再触发一次；第一次定时刷新前 80 秒收到上一轮结果（#11857）。
+// - tier:unit(进程内 fake invoke + 假时钟)。
+it('coalesces repeat PR reads and refreshes on the next tick after a slow read', async () => {
+  vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+  const clock = statusClock();
+  const ref = (prNumber: number) => ({ id: `pr-${prNumber}`, sessionId: 'remote-child', owner: 'a',
+    repo: 'b', prNumber, url: `https://github.com/a/b/pull/${prNumber}`, firstSeenAt: 1, lastSeenAt: prNumber });
+  let refs = [ref(1)];
+  const statusQueries: number[][] = [];
+  let finishSecondRead!: () => void;
+  const secondRead = new Promise<void>((resolve) => { finishSecondRead = resolve; });
+  mocks.listAllPrRefs.mockResolvedValue([]);
+  type StatusArgs = [{ queries: Array<{ prNumber: number }> }];
+  window.electronAPI = {
+    gitContext: { listAllPrRefs: mocks.listAllPrRefs, onPrRefsChanged: mocks.onPrRefsChanged },
+    deviceLink: { invoke: vi.fn(async (_device: string, channel: string, args: StatusArgs) => {
+      if (channel === 'git-context:pr-refs:list') return refs;
+      statusQueries.push(args[0].queries.map((q) => q.prNumber));
+      if (statusQueries.length === 2) await secondRead;
+      return args[0].queries.map((q) => ({ ...ref(q.prNumber), ok: true, status: 'open' }));
+    }) },
+  } as unknown as typeof window.electronAPI;
+  function Probe() {
+    const { registerPrConsumer, fetchStatusesForSession, invalidateRemotePrRefs } = usePrActions();
+    useEffect(() => registerPrConsumer('remote-child', 'home'), [registerPrConsumer]);
+    return <div>
+      <button onClick={() => fetchStatusesForSession('remote-child')}>again</button>
+      <button onClick={() => invalidateRemotePrRefs('remote-child')}>refs</button>
+    </div>;
+  }
+  const focus = vi.spyOn(document, 'hasFocus').mockReturnValue(true);
+  const { unmount } = render(<PrRefsProvider><Probe /></PrRefsProvider>);
+  try {
+    await act(async () => {});
+    expect(statusQueries).toEqual([[1]]);
+    await act(async () => fireEvent.click(screen.getByText('again')));
+    await act(async () => window.dispatchEvent(new Event('focus')));
+    expect(statusQueries).toEqual([[1]]);
+    refs = [ref(2), ref(1)];
+    await act(async () => fireEvent.click(screen.getByText('refs')));
+    expect(statusQueries).toEqual([[1], [2, 1]]);
+    clock.advance(10_000);
+    await act(async () => finishSecondRead());
+    clock.advance(PR_STATUS_REFRESH_INTERVAL_MS - 10_000);
+    await act(async () => { await vi.advanceTimersByTimeAsync(PR_STATUS_REFRESH_INTERVAL_MS); });
+    expect(statusQueries).toEqual([[1], [2, 1], [2, 1]]);
+    await act(async () => window.dispatchEvent(new Event('focus')));
+    expect(statusQueries).toHaveLength(3);
+  } finally {
+    unmount();
+    focus.mockRestore();
+    clock.restore();
+    vi.useRealTimers();
+  }
+});
+
 it('retains successful session status when a failure arrives while its consumer is unmounted', async () => {
+  const clock = statusClock();
   let fail!: (value: unknown) => void;
   let statusReads = 0;
   const ref = {
@@ -267,9 +352,10 @@ it('retains successful session status when a failure arrives while its consumer 
     deviceLink: { invoke },
   } as any;
   const view = (visible: boolean) => (
-    <PrRefsProvider>{visible ? <StatusProbe /> : null}</PrRefsProvider>
+    <PrRefsProvider>{visible ? <StatusProbe later={clock.later} /> : null}</PrRefsProvider>
   );
   const { rerender, unmount } = render(view(true));
+  onTestFinished(clock.restore);
   fireEvent.click(await screen.findByRole('button', { name: 'merged:fresh' }));
   await waitFor(() => expect(statusReads).toBe(2));
   rerender(view(false));
@@ -366,9 +452,11 @@ it('keeps cached PR data stale until both rejected query channels recover, then 
       <span>{refs.length}:{successfulStatuses.size}:{refreshError ? 'stale' : 'fresh'}</span>
       <span>other:{String(other.refreshError)}</span>
       <button onClick={() => invalidateRemotePrRefs('remote-child')}>refs</button>
-      <button onClick={() => fetchStatusesForSession('remote-child')}>statuses</button>
+      <button onClick={() => { clock.later(); fetchStatusesForSession('remote-child'); }}>statuses</button>
     </div>;
   }
+  const clock = statusClock();
+  onTestFinished(clock.restore);
   const view = () => <PrRefsProvider><Probe /></PrRefsProvider>;
   const { rerender, unmount } = render(view());
   await screen.findByText('1:1:fresh');
@@ -446,7 +534,11 @@ it('invalidates confirmed PR status on not-found across remounts and later trans
     deviceLink: { invoke: vi.fn(async (_device: string, channel: string) =>
       channel === 'git-context:pr-refs:list' ? [ref] : [status]) },
   } as any;
-  const view = (visible: boolean) => <PrRefsProvider>{visible ? <StatusProbe /> : null}</PrRefsProvider>;
+  const clock = statusClock();
+  onTestFinished(clock.restore);
+  const view = (visible: boolean) => (
+    <PrRefsProvider>{visible ? <StatusProbe later={clock.later} /> : null}</PrRefsProvider>
+  );
   const { rerender, unmount } = render(view(true));
   await screen.findByRole('button', { name: 'merged:fresh' });
   for (const reason of ['not-found', 'fetch-failed', 'no-token']) {
@@ -629,5 +721,262 @@ it.each(['leave', 'owner'])('discards queued remote reads after %s', async (chan
   expect(sentOwners.filter((owner) => owner === 'queue-old-owner')).toHaveLength(1);
   expect(invoke).toHaveBeenCalledTimes(change === 'leave' ? 1 : 2);
   if (change === 'owner') expect(invoke.mock.calls[1][1]).toBe('git-context:pr-status');
+  view.unmount();
+});
+
+// Unit regression: main pushes live PR status updates via git-context:pr-status-changed so
+// topbar/sidebar/PR-card badges update without waiting for the 90s polling timer or triggering
+// extra IPC invokes. Must isolate remote device-link sessions, keep unrelated local rows stable,
+// and unsubscribe cleanly on owner switch/unmount.
+it('applies pushed PR status immediately to matching local sessions without affecting remote or unrelated rows', async () => {
+  mocks.dataOwnerId = 'live-push-owner';
+  const statusPushRef: { current: ((status: Record<string, unknown>) => void) | null } = { current: null };
+  const unsubStatus = vi.fn();
+  const localRef = {
+    id: 'ref-local',
+    sessionId: 'local-session',
+    owner: 'makecindy',
+    repo: 'cindy',
+    prNumber: 419,
+    url: 'https://github.com/makecindy/cindy/pull/419',
+    firstSeenAt: 1,
+    lastSeenAt: 1,
+  };
+  const unrelatedRef = {
+    id: 'ref-other',
+    sessionId: 'other-local-session',
+    owner: 'makecindy',
+    repo: 'cindy',
+    prNumber: 999,
+    url: 'https://github.com/makecindy/cindy/pull/999',
+    firstSeenAt: 1,
+    lastSeenAt: 1,
+  };
+  const remoteRef = { ...localRef, id: 'ref-remote', sessionId: 'remote-session' };
+  const getPrStatuses = vi.fn(async (queries: Array<{ owner: string; repo: string; prNumber: number }>) =>
+    queries.map((q) => ({ ...q, ok: true, status: 'open', title: 't', htmlUrl: '', branch: 'b' })),
+  );
+  const invoke = vi.fn(async (_device: string, channel: string) => {
+    if (channel === 'git-context:pr-refs:list') return [remoteRef];
+    if (channel === 'git-context:pr-status') {
+      return [{ owner: 'makecindy', repo: 'cindy', prNumber: 419, ok: true, status: 'draft', title: 'r', htmlUrl: '', branch: 'b' }];
+    }
+    return [];
+  });
+  window.electronAPI = {
+    gitContext: {
+      listAllPrRefs: async () => [localRef, unrelatedRef],
+      listPrRefs: async () => [localRef],
+      onPrRefsChanged: () => () => {},
+      onPrStatusChanged: (cb: (status: Record<string, unknown>) => void) => {
+        statusPushRef.current = cb;
+        return unsubStatus;
+      },
+      getPrStatuses,
+    },
+    deviceLink: { invoke },
+  } as unknown as typeof window.electronAPI;
+
+  let unrelatedRenders = 0;
+  function LocalProbe() {
+    const { registerPrConsumer } = usePrActions();
+    const status = usePrStatus('local-session', 'makecindy/cindy#419');
+    const { eligible } = useTaskPrArchiveEligibility('local-session');
+    useEffect(() => registerPrConsumer('local-session'), [registerPrConsumer]);
+    return (
+      <div data-testid="local">
+        {status?.ok ? status.status : 'none'}:{eligible ? 'archive' : 'keep'}
+      </div>
+    );
+  }
+  function UnrelatedProbe() {
+    unrelatedRenders += 1;
+    const status = usePrStatus('other-local-session', 'makecindy/cindy#999');
+    return <div data-testid="unrelated">{status?.ok ? status.status : 'none'}</div>;
+  }
+  function RemoteProbe() {
+    const { registerPrConsumer } = usePrActions();
+    const status = usePrStatus('remote-session', 'makecindy/cindy#419');
+    useEffect(() => registerPrConsumer('remote-session', 'home-mac'), [registerPrConsumer]);
+    return <div data-testid="remote">{status?.ok ? status.status : 'none'}</div>;
+  }
+
+  const view = render(
+    <PrRefsProvider>
+      <LocalProbe />
+      <UnrelatedProbe />
+      <RemoteProbe />
+    </PrRefsProvider>,
+  );
+  await waitFor(() => {
+    expect(screen.getByTestId('local').textContent).toBe('open:keep');
+    expect(screen.getByTestId('remote').textContent).toBe('draft');
+  });
+  const readsBeforePush = getPrStatuses.mock.calls.length;
+  const rendersBeforePush = unrelatedRenders;
+
+  await act(async () => {
+    statusPushRef.current?.({
+      owner: 'makecindy',
+      repo: 'cindy',
+      prNumber: 419,
+      ok: true,
+      status: 'merged',
+      title: 't',
+      htmlUrl: 'https://github.com/makecindy/cindy/pull/419',
+      branch: 'b',
+      observedAt: 2_000,
+      revision: 'rev-2',
+    });
+  });
+
+  expect(screen.getByTestId('local').textContent).toBe('merged:archive');
+  expect(screen.getByTestId('remote').textContent).toBe('draft');
+  expect(getPrStatuses).toHaveBeenCalledTimes(readsBeforePush);
+  expect(unrelatedRenders).toBe(rendersBeforePush);
+
+  // Switching to signed-out owner unsubscribes and ignores stale pushes.
+  mocks.dataOwnerId = null;
+  view.rerender(
+    <PrRefsProvider>
+      <LocalProbe />
+    </PrRefsProvider>,
+  );
+  expect(unsubStatus).toHaveBeenCalledOnce();
+  const stalePush = statusPushRef.current;
+  await act(async () => {
+    stalePush?.({
+      owner: 'makecindy',
+      repo: 'cindy',
+      prNumber: 419,
+      ok: true,
+      status: 'closed',
+      title: 't',
+      htmlUrl: '',
+      branch: 'b',
+    });
+  });
+  expect(screen.getByTestId('local').textContent).toBe('none:keep');
+  view.unmount();
+});
+
+// Unit regression (security + freshness):
+// 1) A late main→renderer push carrying an older account/generation ownerStamp must be dropped
+//    synchronously by isDataOwnerPushCurrent rather than contaminating the active owner.
+// 2) When a task has >10 PRs (multi-batch fetchStatusesForRefs), a live push arriving for a PR in
+//    batch 1 while batch 2 is still in flight must NOT be overwritten when all batches finish.
+it('rejects stale ownerStamp pushes and prevents an in-flight multi-batch query from overwriting a newer push', async () => {
+  onTestFinished(() => dataOwnerGenerationTesting.reset());
+  mocks.dataOwnerId = 'owner-b';
+  setDataOwnerGeneration('owner-b', 2);
+
+  const refs = Array.from({ length: 12 }, (_, i) => ({
+    id: `ref-${i + 1}`,
+    sessionId: 'multi-batch',
+    owner: 'makecindy',
+    repo: 'cindy',
+    prNumber: i + 1,
+    url: `https://github.com/makecindy/cindy/pull/${i + 1}`,
+    firstSeenAt: 1,
+    lastSeenAt: 1,
+  }));
+
+  const statusPushRef: {
+    current: ((status: Record<string, unknown>, ownerStamp?: { dataOwnerId: string | null; ownerGeneration: number }) => void) | null;
+  } = { current: null };
+  let resolveSecondBatch!: (value: Array<Record<string, unknown>>) => void;
+  let fetchCount = 0;
+  const getPrStatuses = vi.fn((queries: Array<{ owner: string; repo: string; prNumber: number }>) => {
+    fetchCount += 1;
+    // Batch 1 (PR #1..#10): resolves immediately with stale 'open'.
+    if (fetchCount === 1) {
+      return Promise.resolve(
+        queries.map((q) => ({ ...q, ok: true, status: 'open', title: 't', htmlUrl: '', branch: 'b', observedAt: 1_000 })),
+      );
+    }
+    // Batch 2 (PR #11..#12): stays pending while a newer push lands for PR #1.
+    if (fetchCount === 2) {
+      return new Promise<Array<Record<string, unknown>>>((resolve) => {
+        resolveSecondBatch = resolve;
+      });
+    }
+    // Later fresh refresh after the push can still update PR #1.
+    return Promise.resolve(
+      queries.map((q) => ({ ...q, ok: true, status: 'closed', title: 't', htmlUrl: '', branch: 'b', observedAt: 3_000 })),
+    );
+  });
+
+  window.electronAPI = {
+    gitContext: {
+      listAllPrRefs: async () => refs,
+      listPrRefs: async () => refs,
+      onPrRefsChanged: () => () => {},
+      onPrStatusChanged: (
+        cb: (status: Record<string, unknown>, ownerStamp?: { dataOwnerId: string | null; ownerGeneration: number }) => void,
+      ) => {
+        statusPushRef.current = cb;
+        return () => {};
+      },
+      getPrStatuses,
+    },
+  } as unknown as typeof window.electronAPI;
+
+  function Probe() {
+    const { registerPrConsumer, fetchStatusesForSession } = usePrActions();
+    const pr1 = usePrStatus('multi-batch', 'makecindy/cindy#1');
+    const pr12 = usePrStatus('multi-batch', 'makecindy/cindy#12');
+    useEffect(() => registerPrConsumer('multi-batch'), [registerPrConsumer]);
+    return (
+      <div>
+        <span data-testid="pr1">{pr1?.ok ? pr1.status : 'none'}</span>
+        <span data-testid="pr12">{pr12?.ok ? pr12.status : 'none'}</span>
+        <button onClick={() => fetchStatusesForSession('multi-batch')}>refresh</button>
+      </div>
+    );
+  }
+
+  const view = render(
+    <PrRefsProvider>
+      <Probe />
+    </PrRefsProvider>,
+  );
+
+  // Wait until batch 1 finished and batch 2 is in flight.
+  await waitFor(() => expect(getPrStatuses).toHaveBeenCalledTimes(2));
+
+  // Stale ownerStamp (wrong owner or older generation) must be rejected.
+  await act(async () => {
+    statusPushRef.current?.(
+      { owner: 'makecindy', repo: 'cindy', prNumber: 1, ok: true, status: 'closed', title: 'wrong-owner', htmlUrl: '', branch: 'b', observedAt: 9_999 },
+      { dataOwnerId: 'owner-a', ownerGeneration: 1 },
+    );
+    statusPushRef.current?.(
+      { owner: 'makecindy', repo: 'cindy', prNumber: 1, ok: true, status: 'closed', title: 'old-gen', htmlUrl: '', branch: 'b', observedAt: 9_999 },
+      { dataOwnerId: 'owner-b', ownerGeneration: 1 },
+    );
+  });
+  expect(screen.getByTestId('pr1').textContent).toBe('none');
+
+  // Current ownerStamp push updates PR #1 immediately while batch 2 is still awaiting.
+  await act(async () => {
+    statusPushRef.current?.(
+      { owner: 'makecindy', repo: 'cindy', prNumber: 1, ok: true, status: 'merged', title: 'fresh', htmlUrl: '', branch: 'b', observedAt: 2_000 },
+      { dataOwnerId: 'owner-b', ownerGeneration: 2 },
+    );
+  });
+  expect(screen.getByTestId('pr1').textContent).toBe('merged');
+
+  // Batch 2 completes: PR #12 applies, and batch 1's stale 'open' must NOT overwrite PR #1's 'merged'.
+  await act(async () => {
+    resolveSecondBatch(
+      refs.slice(10).map((q) => ({ owner: q.owner, repo: q.repo, prNumber: q.prNumber, ok: true, status: 'open', title: 't', htmlUrl: '', branch: 'b', observedAt: 1_500 })),
+    );
+  });
+  await waitFor(() => expect(screen.getByTestId('pr12').textContent).toBe('open'));
+  expect(screen.getByTestId('pr1').textContent).toBe('merged');
+
+  // A brand-new refresh started AFTER the push can still update PR #1.
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'refresh' })));
+  await waitFor(() => expect(screen.getByTestId('pr1').textContent).toBe('closed'));
   view.unmount();
 });

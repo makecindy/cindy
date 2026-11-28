@@ -33,6 +33,13 @@ export interface GhostPagePorts {
   ghostModelPreferencesProvider: GhostModelPreferencesProvider | null;
   ghostMediaModelsProvider: ((id: string, type: GhostMediaModelType) => Promise<GhostMediaModelsResult>) | null;
   ghostModelsHandler: GhostPageEndpoint | null;
+  /** /harnesses: task engine availability. Optional; Hosts without task engines answer 404. */
+  ghostHarnessesHandler?: GhostPageEndpoint | null;
+  /**
+   * /harnesses/open-settings: shows one of the plugin's engines in Settings → Model Providers.
+   * Optional; only a Host with a local settings window offers it, the others answer 404.
+   */
+  ghostEngineSettingsHandler?: GhostPageEndpoint | null;
   ghostSecretsHandler: GhostPageEndpoint | null;
   ghostOauthHandler: GhostPageEndpoint | null;
   ghostConnectionsHandler: GhostPageEndpoint | null;
@@ -252,9 +259,12 @@ export function createGhostPageHandler(ports: GhostPagePorts) {
           },
         });
       }
-      if (url.pathname === '/models') {
-        if (!ports.ghostModelsHandler) return new Response(null, { status: 503 });
-        const out = await ports.ghostModelsHandler({
+      // /models 与 /harnesses:插件发布模型列表 / 执行引擎可用状态(只存元数据，整体覆盖)。
+      // /harnesses 只在提供该端点的宿主(Desktop)开放，其余宿主照旧 404。
+      if (url.pathname === '/models' || (url.pathname === '/harnesses' && ports.ghostHarnessesHandler)) {
+        const handler = url.pathname === '/models' ? ports.ghostModelsHandler : ports.ghostHarnessesHandler;
+        if (!handler) return new Response(null, { status: 503 });
+        const out = await handler({
           ghostId: storagePart,
           method: request.method,
           pathname: url.pathname,
@@ -268,6 +278,20 @@ export function createGhostPageHandler(ports: GhostPagePorts) {
             'Cache-Control': 'no-cache',
           },
         });
+      }
+      // /harnesses/open-settings：页面请宿主打开本插件某个引擎在「设置 → 模型供应商」里的页面(只导航，
+      // 不改不读)。只在有本机设置窗口的宿主(Desktop)开放；其余宿主与旧宿主照旧 404，页面据此保留文字引导。
+      if (url.pathname === '/harnesses/open-settings' && ports.ghostEngineSettingsHandler) {
+        const headers = { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' };
+        if (url.search) return new Response(null, { status: 400, headers });
+        const out = await ports.ghostEngineSettingsHandler({
+          ghostId: storagePart,
+          method: request.method,
+          pathname: url.pathname,
+          readBodyText: () => readBoundedBodyText(request),
+          isCurrent: isRegistrationCurrent,
+        });
+        return new Response(out.body ?? null, { status: out.status, headers });
       }
       // /secrets:input:'ghost' 凭证的只写入库通道(FORGE_GUIDE §4.7)。
       // 明文单向进保险库,无任何读回动作;分区专属通道天然只碰自己的账。

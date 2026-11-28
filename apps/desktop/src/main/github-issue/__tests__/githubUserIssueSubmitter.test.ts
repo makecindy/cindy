@@ -9,9 +9,7 @@ import {
 
 function makeDeps(over: Partial<GithubUserIssueSubmitterDeps> = {}): GithubUserIssueSubmitterDeps {
   return {
-    isGithubGhostEnabled: () => true,
-    isGithubCredentialSaved: () => true,
-    isGithubGhostDisabledForWorkdir: () => false,
+    resolveInstanceId: () => 'cindy-github',
     callGhostTool: vi.fn(async (request) => {
       const operation = request.args.name;
       if (operation === 'get_current_user') {
@@ -43,20 +41,15 @@ describe('resolveGithubIssueSubmissionChoices', () => {
   });
 
   it('未绑定或插件未启用时走平台身份且不调用插件', async () => {
-    for (const over of [
-      { isGithubGhostEnabled: () => false },
-      { isGithubCredentialSaved: () => false },
-    ]) {
-      const deps = makeDeps(over);
-      await expect(resolveGithubIssueSubmissionChoices(deps)).resolves.toEqual({
-        platform: PLATFORM_ISSUE_SUBMISSION_IDENTITY,
-      });
-      expect(deps.callGhostTool).not.toHaveBeenCalled();
-    }
+    const deps = makeDeps({ resolveInstanceId: () => null });
+    await expect(resolveGithubIssueSubmissionChoices(deps)).resolves.toEqual({
+      platform: PLATFORM_ISSUE_SUBMISSION_IDENTITY,
+    });
+    expect(deps.callGhostTool).not.toHaveBeenCalled();
   });
 
   it('当前 workdir 禁用 cindy-github 时走平台身份且不调用插件', async () => {
-    const deps = makeDeps({ isGithubGhostDisabledForWorkdir: (workdir) => workdir === '/repo' });
+    const deps = makeDeps({ resolveInstanceId: (workdir) => workdir === '/repo' ? null : 'cindy-github' });
     await expect(resolveGithubIssueSubmissionChoices(deps, '/repo')).resolves.toEqual({
       platform: PLATFORM_ISSUE_SUBMISSION_IDENTITY,
     });
@@ -67,7 +60,7 @@ describe('resolveGithubIssueSubmissionChoices', () => {
     const warn = vi.fn();
     const deps = makeDeps({
       logger: { warn },
-      isGithubGhostEnabled: () => {
+      resolveInstanceId: () => {
         throw new Error('plugin registry unavailable');
       },
     });
@@ -85,7 +78,7 @@ describe('resolveGithubIssueSubmissionChoices', () => {
           throw new Error('logger unavailable');
         },
       },
-      isGithubGhostEnabled: () => {
+      resolveInstanceId: () => {
         throw new Error('plugin registry unavailable');
       },
     });

@@ -7,7 +7,7 @@
  * automations, then removes it here together with its backing schedule.
  */
 import { randomUUID } from 'node:crypto';
-import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
 import type { Routine, RoutineState } from '@cindy/maker-scheduler';
@@ -72,6 +72,54 @@ export async function readV1RoutineSlice(ownerRoot: string, botId: string): Prom
 
 export async function readV1Routines(ownerRoot: string, botId: string): Promise<Routine[]> {
   return (await readV1RoutineSlice(ownerRoot, botId)).routines;
+}
+
+/**
+ * The run tasks that V1 run records prove never reached the model: every record pointing at the task
+ * says `skipped`, which the engine wrote only when the pre-run check stopped the run before the agent
+ * started (the same signal the engine used to discard such a task, 2026-10-30). Any other record
+ * pointing at a task keeps it out. Records live in the account's routines file until the V2 upgrade and
+ * in each teammate's `v1-archive/routine-runs.json` after it. null when a file there cannot be read or
+ * parsed, or an unparseable routines file was archived: nothing can be decided from records then.
+ */
+export async function readV1NeverDispatchedSessionIds(ownerRoot: string): Promise<Set<string> | null> {
+  const files = [v1RoutinesFile(ownerRoot)];
+  const botsDir = path.join(ownerRoot, 'bots');
+  try {
+    for (const entry of await readdir(botsDir, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+      const archive = path.join(botsDir, entry.name, 'v1-archive');
+      if (await stat(path.join(archive, 'routines-unreadable.json')).then(() => true, () => false)) return null;
+      files.push(path.join(archive, 'routine-runs.json'));
+    }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return null;
+  }
+  const skipped = new Set<string>();
+  const dispatched = new Set<string>();
+  for (const file of files) {
+    let raw: string;
+    try {
+      raw = await readFile(file, 'utf8');
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue;
+      return null;
+    }
+    let runs: unknown;
+    try {
+      runs = (JSON.parse(raw) as { runs?: unknown } | null)?.runs;
+    } catch {
+      return null;
+    }
+    if (runs === undefined) continue;
+    if (!Array.isArray(runs)) return null;
+    for (const run of runs as Array<{ sessionId?: unknown; status?: unknown } | null>) {
+      if (typeof run?.sessionId !== 'string') continue;
+      (run.status === 'skipped' ? skipped : dispatched).add(run.sessionId);
+    }
+  }
+  for (const id of dispatched) skipped.delete(id);
+  return skipped;
 }
 
 /** Rewrites of one file run one at a time in this process (several teammates may upgrade at once). */

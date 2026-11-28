@@ -45,13 +45,14 @@ export async function requestRendererMicrophonePermission(): Promise<VoiceInputP
     return window.electronAPI.voiceInput.requestMicrophonePermission();
   }
 
+  let stream: MediaStream;
   try {
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    stream.getTracks().forEach((track) => track.stop());
-    await window.electronAPI.voiceInput.setRendererMicrophonePermissionVerified(true);
-    const refreshed = await refreshMicrophonePermissionSnapshot();
-    return refreshed.ok ? refreshed : { ok: true, status: 'granted' };
+    stream = await navigator.mediaDevices.getUserMedia({ audio: true });
   } catch (error) {
+    const name = error && typeof error === 'object' && 'name' in error ? error.name : undefined;
+    if (name === 'NotFoundError' || name === 'NotReadableError' || name === 'OverconstrainedError' || name === 'AbortError') {
+      return { ok: false, status: 'device-unavailable', error: 'Microphone input device unavailable.' };
+    }
     await window.electronAPI.voiceInput.setRendererMicrophonePermissionVerified(false);
     const mainResult = await window.electronAPI.voiceInput.requestMicrophonePermission();
     if (mainResult.ok) return mainResult;
@@ -69,6 +70,13 @@ export async function requestRendererMicrophonePermission(): Promise<VoiceInputP
           : mainResult.error || 'Microphone permission is required for voice input.'),
     };
   }
+  stream.getTracks().forEach((track) => track.stop());
+  // A successful capture is direct evidence even if the status bridge is
+  // temporarily unavailable. A later explicit OS denial still takes precedence.
+  await window.electronAPI.voiceInput.setRendererMicrophonePermissionVerified(true).catch(() => {});
+  const refreshed = await refreshMicrophonePermissionSnapshot().catch(() => null);
+  if (refreshed?.status === 'denied' || refreshed?.status === 'restricted') return refreshed;
+  return refreshed?.ok ? refreshed : { ok: true, status: 'granted' };
 }
 
 /**

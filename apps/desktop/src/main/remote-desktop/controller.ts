@@ -185,7 +185,7 @@ export interface DesktopControllerDeps {
     open(plugin: string, id: string, ended: () => void, identity?: string): Promise<DesktopLiveScreen>;
     close(): void;
   };
-  input(events: DesktopInput[]): void;
+  input(events: DesktopInput[]): void | Promise<boolean>;
   stopInput(): void;
   releaseInput?(): Promise<void>;
   stopVideo(): void;
@@ -233,6 +233,7 @@ export interface DesktopControllerDeps {
     attemptId?: string,
   ): Promise<string>;
   ice?(request: RemoteDesktopIceRequest): Promise<RemoteDesktopIceReply>;
+  editableAt?(displayId: string, x: number, y: number): Promise<boolean>;
   displayModes?(displayId: string): Promise<RemoteDesktopDisplayMode[]>;
   /** Local hardware presence; must not hide displays when remote access is revoked. */
   displayPresent?(displayId: string): boolean | Promise<boolean>;
@@ -299,6 +300,12 @@ export class RemoteDesktopController {
           stopReason?: DesktopStopReason;
         };
         sequence: number;
+        lastClick?: {
+          x: number;
+          y: number;
+          generation: number;
+          delivered: Promise<boolean>;
+        };
         authenticationSession: string | undefined;
         backgroundViewing?: boolean;
         mediaHeartbeatAt?: number;
@@ -976,7 +983,17 @@ export class RemoteDesktopController {
     if (sequence <= active.sequence) return; // never replay a click after retries/reconnect
     active.sequence = sequence;
     const generation = this.controlGeneration;
-    this.deps.input(request.events);
+    const delivered = this.deps.input(request.events);
+    const last = request.events.at(-1);
+    active.lastClick =
+      this.deps.editableAt && last?.kind === 'button' && last.button === 0 && !last.down
+        ? {
+            x: last.x,
+            y: last.y,
+            generation,
+            delivered: Promise.resolve(delivered).then((value) => value !== false),
+          }
+        : undefined;
     // Release-only cleanup is generated automatically and is not human activity.
     if (request.events.some((event) => event.kind !== 'release'))
       active.lastInputAt = this.idleNow();
@@ -1016,6 +1033,7 @@ export class RemoteDesktopController {
           : {}),
         connectionTakeover: true,
         autoControl: caps.canControl === true,
+        ...(this.deps.editableAt ? { editableClick: true } : {}),
         resolutionRestore: Boolean(
           caps.displayModes && this.deps.resolution && this.deps.displayModes,
         ),
@@ -1604,6 +1622,29 @@ export class RemoteDesktopController {
         } finally {
           this.clipboardPending = false;
         }
+      }
+      case 'editableClick': {
+        if (!active.controlling) throw new Error('DESKTOP_VIEW_ONLY');
+        const click = active.lastClick;
+        if (
+          !click ||
+          click.generation !== this.controlGeneration ||
+          request.sequence !== active.sequence ||
+          !this.deps.editableAt
+        ) return { editable: false };
+        active.lastClick = undefined; // Each delivered click can start at most one hit test.
+        const display = active.display;
+        const isCurrent = () =>
+          this.active === active &&
+          active.controlling &&
+          active.sequence === request.sequence &&
+          click.generation === this.controlGeneration &&
+          active.display === display &&
+          !this.displayChanging;
+        if (!(await click.delivered) || !isCurrent()) return { editable: false };
+        const editable = await this.deps.editableAt(display.id, click.x, click.y);
+        this.require(peer, request.lease);
+        return { editable: editable && isCurrent() };
       }
       case 'input':
         this.input(request.lease, request.sequence, request.events);

@@ -89,7 +89,7 @@ function HunkActionPill({
   return (
     <span
       data-review-hunk-action-anchor="true"
-      className="pointer-events-none absolute bottom-[3px] left-0 right-0 z-20 flex justify-end"
+      className="pointer-events-none absolute bottom-[3px] left-0 right-0 z-page-float flex justify-end"
     >
       <span
         data-review-action-reveal="hunk"
@@ -409,7 +409,7 @@ export function PlainUnifiedDiff({
       ? diff.error ?? t('rightSidebar.review.kindNotice.unrenderable')
       : t(`rightSidebar.review.kindNotice.${diff.kind}`, { defaultValue: status });
     return (
-      <div className="flex min-w-0 items-center gap-2 rounded-[8px] border border-[var(--border-default)] bg-[var(--surface)] px-3 py-2 text-12 text-[var(--text-secondary)]">
+      <div className="flex min-w-0 items-center gap-2 rounded-lg border border-[var(--border-default)] bg-[var(--surface)] px-3 py-2 text-12 text-[var(--text-secondary)]">
         <span className="min-w-0 flex-1">
           <span className="font-medium text-[var(--text-primary)]">{status}</span>
           <span className="ml-2">{notice}</span>
@@ -425,7 +425,7 @@ export function PlainUnifiedDiff({
   }
   if (diff.hunks.length === 0) {
     return (
-      <div className="rounded-[8px] border border-[var(--border-default)] bg-[var(--surface)] px-3 py-2 text-12 text-[var(--text-tertiary)]">
+      <div className="rounded-lg border border-[var(--border-default)] bg-[var(--surface)] px-3 py-2 text-12 text-[var(--text-tertiary)]">
         {t('rightSidebar.review.noRenderableDiff')}
       </div>
     );
@@ -437,7 +437,7 @@ export function PlainUnifiedDiff({
         ref={parentRef}
         data-virtualized-diff="true"
         className={cn(
-          'max-h-[70vh] max-w-full min-w-0 select-text rounded-[8px] border border-[var(--border-default)] bg-[var(--surface-elevated)]',
+          'max-h-[70vh] max-w-full min-w-0 select-text rounded-lg border border-[var(--border-default)] bg-[var(--surface-elevated)]',
           wordWrap || viewMode === 'split' ? 'overflow-y-auto overflow-x-hidden' : 'overflow-auto',
         )}
       >
@@ -468,7 +468,7 @@ export function PlainUnifiedDiff({
     <div
       ref={parentRef}
       className={cn(
-        'max-w-full min-w-0 select-text rounded-[8px] border border-[var(--border-default)] bg-[var(--surface-elevated)]',
+        'max-w-full min-w-0 select-text rounded-lg border border-[var(--border-default)] bg-[var(--surface-elevated)]',
         wordWrap || viewMode === 'split' ? 'overflow-x-hidden' : 'overflow-x-auto',
       )}
     >

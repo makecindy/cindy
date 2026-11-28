@@ -37,7 +37,8 @@ export function isSupportedPurchaseOption(
 ): option is SupportedPurchaseOption {
   if (!isSupportedBillingProvider(option.provider)) return false;
   if (!SUPPORTED_PAYMENT_ACTIONS.has(option.paymentAction)) return false;
-  return productKind === 'CREDIT_TOPUP'
-    ? option.capability === 'ONE_TIME_PAYMENT'
-    : SUPPORTED_SUBSCRIPTION_CAPABILITIES.has(option.capability);
+  // 充值与礼品卡都是一次性付款；只有订阅走签约或渠道托管的续费能力。
+  return productKind === 'SUBSCRIPTION'
+    ? SUPPORTED_SUBSCRIPTION_CAPABILITIES.has(option.capability)
+    : option.capability === 'ONE_TIME_PAYMENT';
 }

@@ -9,7 +9,9 @@ import cindyIconUrl from '@/../../resources/icon.png?url';
 import { Spinner } from '@/components/ui/spinner';
 import { cn } from '@/lib/utils';
 import { billingApi } from './api';
-import type { BillingCheckoutState } from './useBillingCheckout';
+import { formatGiftCardAmount, giftCardCheckoutLine } from './giftCardPurchase';
+import { BILLING_CURRENCY } from './money';
+import { isGiftCardCheckout, type BillingCheckoutState } from './useBillingCheckout';
 
 interface BillingCheckoutDialogProps {
   state: BillingCheckoutState;
@@ -22,13 +24,24 @@ function actionOf(state: BillingCheckoutState) {
   return state.order?.paymentAction ?? state.subscription?.paymentAction ?? null;
 }
 
+/** 礼品卡订单的「面额 × 张数」：订单创建后以订单为准（见 giftCardCheckoutLine）。 */
+function giftCardLine(state: BillingCheckoutState): { unitAmount: string; quantity: number } | null {
+  if (!isGiftCardCheckout(state)) return null;
+  const intent = state.intent?.kind === 'GIFT_CARD'
+    ? { unitAmount: state.intent.unitAmount, quantity: state.intent.request.quantity }
+    : null;
+  return giftCardCheckoutLine(intent, state.order ?? null);
+}
+
 export function BillingCheckoutDialog({
   state,
   onClose,
   onRefresh,
   onRetry,
 }: BillingCheckoutDialogProps) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
+  const locale = i18n.resolvedLanguage ?? i18n.language;
+  const giftCard = giftCardLine(state);
   const action = actionOf(state);
   const [qrDataUrl, setQrDataUrl] = useState<string | null>(null);
   const [remainingSeconds, setRemainingSeconds] = useState<number | null>(null);
@@ -116,8 +129,10 @@ export function BillingCheckoutDialog({
   const actionExpired =
     state.phase === 'AWAITING_PAYMENT' && action === null && hadActionRef.current;
 
+  // 购买上限、单笔总额这类明确拒绝，原样重试只会再被拒一次。
   const canRetry =
-    (state.error && state.intent !== null && state.order === null && state.subscription === null) ||
+    (state.error && state.failure === null && state.intent !== null && state.order === null &&
+      state.subscription === null) ||
     (state.kind === 'TOPUP' &&
       (state.order?.status === 'FAILED' || state.order?.status === 'EXPIRED'));
 
@@ -127,11 +142,11 @@ export function BillingCheckoutDialog({
       onOpenChange={(open) => !open && state.phase !== 'CREATING' && onClose()}
     >
       <Dialog.Portal>
-        <Dialog.Overlay className="modal-scrim fixed inset-0 z-[10000]" />
+        <Dialog.Overlay className="modal-scrim fixed inset-0 z-modal" />
         <Dialog.Content
           onPointerDownOutside={(event) => event.preventDefault()}
           className={cn(
-            'modal-panel fixed left-1/2 top-1/2 z-[10001] flex max-h-[calc(100dvh-40px)] w-[calc(100vw-40px)] max-w-[620px] flex-col',
+            'modal-panel fixed left-1/2 top-1/2 z-modal-raised flex max-h-[calc(100dvh-40px)] w-[calc(100vw-40px)] max-w-[620px] flex-col',
             '-translate-x-1/2 -translate-y-1/2 overflow-hidden',
             'text-[var(--text-primary)] focus:outline-none',
           )}
@@ -141,9 +156,14 @@ export function BillingCheckoutDialog({
             <div>
               <Dialog.Title className="text-lg font-medium">{title}</Dialog.Title>
               <p className="mt-1 text-12 leading-5 text-[var(--text-secondary)]">
-                {state.kind === 'TOPUP'
-                  ? t('billing.checkout.topupSubtitle')
-                  : t('billing.checkout.subscriptionSubtitle')}
+                {giftCard
+                  ? t('billing.giftCardPurchase.checkoutSubtitle', {
+                      amount: formatGiftCardAmount(giftCard.unitAmount, BILLING_CURRENCY, locale),
+                      count: giftCard.quantity,
+                    })
+                  : state.kind === 'TOPUP'
+                    ? t('billing.checkout.topupSubtitle')
+                    : t('billing.checkout.subscriptionSubtitle')}
               </p>
             </div>
             {state.phase !== 'CREATING' && (
@@ -203,7 +223,7 @@ export function BillingCheckoutDialog({
                             aria-hidden="true"
                             className="pointer-events-none absolute grid size-10 place-items-center rounded-lg bg-white p-1"
                           >
-                            <img src={cindyIconUrl} className="size-8 rounded-md" alt="" />
+                            <img src={cindyIconUrl} className="size-8" alt="" />
                           </span>
                         </>
                       ) : (
@@ -269,7 +289,11 @@ export function BillingCheckoutDialog({
                     <CircleAlert size={23} />
                   </div>
                   <p className="mt-4 max-w-[320px] text-sm text-[var(--text-secondary)]">
-                    {state.error
+                    {state.failure === 'GIFT_CARD_LIMIT_REACHED'
+                      ? t('billing.giftCardPurchase.errors.limitReached')
+                      : state.failure === 'GIFT_CARD_AMOUNT_TOO_LARGE'
+                        ? t('billing.giftCardPurchase.errors.amountTooLarge')
+                        : state.error
                       ? t('billing.checkout.requestFailed')
                       : state.phase === 'EXPIRED'
                         ? t('billing.checkout.expiredBody')

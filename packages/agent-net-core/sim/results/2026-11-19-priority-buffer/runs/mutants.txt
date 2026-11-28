@@ -1,0 +1,47 @@
+PYTHONIOENCODING=utf-8 python -X utf8 sim/mutants.py 流：（2026-11-19，按 AGENT_NET_MUTANT_SHARD=0/4…3/4 分四个进程跑；31 条，29 条抓到，2 条匹配文本在主干上就已失效，见文末）
+caught    流：不带流头的分片猜成默认流  headerless_segments_wait_for_their_header, every_seed_delivers_every_stream_intact, upgrad
+caught    流：不给交互流留窗口  a_full_window_keeps_room_for_interactive_messages, result:
+caught    流：丢的交互消息不优先重传  interactive_messages_go_ahead_of_retransmissions, a_flood_of_tiny_messages_cannot_overrun_
+caught    流：交互消息也要排节奏  small_interactive_messages_skip_the_pacing_queue, interactive_messages_stay_fast_beside_a_
+caught    流：低优先级可以饿死  every_priority_makes_progress_when_all_are_busy, priorities_share_the_link, result:
+caught    流：低优先级重传不算前进  interactive_messages_stay_fast_beside_a_full_file, result:
+caught    流：低档的流占满共用发送缓冲后高档的流写不进  full_bulk_streams_leave_room_for_more_urgent_ones, interactive_messages_stay_fast_beside_t
+caught    流：共用发送缓冲满了以后没缓冲的流一个分片也写不进  full_bulk_streams_leave_room_for_more_urgent_ones, every_priority_makes_progress_when_all_
+caught    流：单独的交互流也压低队列  a_lone_interactive_stream_runs_at_full_speed, result:
+caught    流：压低队列时拿历史最低当基准  files_keep_their_speed_beside_messages_on_ordered_jitter, interactive_messages_stay_fast_b
+caught    流：发送不看额度  an_unread_stream_only_stalls_itself, upgraded_senders_stay_inside_a_legacy_window, result:
+caught    流：发送端不释放用完的流  finished_streams_release_their_slots, result:
+caught    流：同档的流也算作低档、多占共用发送缓冲  full_bulk_streams_leave_room_for_more_urgent_ones, result:
+caught    流：同级的流不轮转  priorities_share_the_link, result:
+caught    流：开流数量不设限  forged_stream_headers_stay_within_bounds, result:
+caught    流：探测时不补发额度  every_seed_delivers_every_stream_intact, result:
+caught    流：新消息排在重传后面  interactive_messages_go_ahead_of_retransmissions, interactive_messages_stay_fast_beside_a_
+caught    流：每个分片都带流头  headerless_segments_wait_for_their_header, a_lone_stream_does_not_repeat_its_header, resul
+caught    流：混发时启动不放轻  interactive_messages_stay_fast_beside_a_full_file, files_keep_their_speed_beside_messages_
+caught    流：混发时在途不收紧  interactive_messages_stay_fast_beside_a_full_file, files_keep_their_speed_beside_messages_
+caught    流：混发时巡航不让路  interactive_messages_stay_fast_beside_a_full_file, files_keep_their_speed_beside_messages_
+caught    流：混发时探测不放轻  interactive_messages_stay_fast_beside_a_full_file, files_keep_their_speed_beside_messages_
+caught    流：等确认耽误的节奏不补  interactive_messages_stay_fast_beside_a_full_file, result:
+caught    流：结束标记不生效  finished_streams_release_their_slots, every_seed_delivers_every_stream_intact, result:
+caught    流：让过的那一档不清零  small_interactive_messages_skip_the_pacing_queue, every_priority_makes_progress_when_all_a
+caught    流：读了数据不更新额度  hang detected
+caught    流：调整优先级不生效  priorities_share_the_link, result:
+caught    流：额度更新太慢  interactive_messages_stay_fast_beside_a_full_file, credit_keeps_up_with_fast_paths, result
+caught    流：高档的流写入时完全不算低档的流  full_bulk_streams_leave_room_for_more_urgent_ones, result:
+invalid   流：交互消息放行不限量  pattern matched 0 times
+invalid   流：路径变慢也一直降速  pattern matched 0 times
+
+最终源码（指纹 1490d026a2cb）上重跑新增、改过匹配文本的几条，以及过滤词顺带选中的「一阵一阵：」「抖动窗口：」各条：
+caught    一阵一阵：发送缓冲一直按上限占  send_buffer_follows_the_path, result:
+caught    一阵一阵：发送缓冲不跟着窗口放大  send_buffer_follows_the_path, result:
+caught    抖动窗口：自己排的队也当路径变慢  files_keep_their_speed_beside_messages_on_ordered_jitter, result:
+caught    流：交互消息放行不限量  a_flood_of_tiny_messages_cannot_overrun_the_path, bulk_data_marked_interactive_is_still_pa
+caught    流：低优先级可以饿死  every_priority_makes_progress_when_all_are_busy, priorities_share_the_link, result:
+caught    流：低档的流占满共用发送缓冲后高档的流写不进  full_bulk_streams_leave_room_for_more_urgent_ones, interactive_messages_stay_fast_beside_t
+caught    流：共用发送缓冲满了以后没缓冲的流一个分片也写不进  full_bulk_streams_leave_room_for_more_urgent_ones, every_priority_makes_progress_when_all_
+caught    流：同档的流也算作低档、多占共用发送缓冲  full_bulk_streams_leave_room_for_more_urgent_ones, result:
+caught    流：让过的那一档不清零  small_interactive_messages_skip_the_pacing_queue, every_priority_makes_progress_when_all_a
+caught    流：路径变慢也一直降速  interactive_messages_stay_fast_beside_a_full_file, result:
+caught    流：高档的流写入时完全不算低档的流  full_bulk_streams_leave_room_for_more_urgent_ones, result:
+
+上面两条 invalid 的匹配文本在主干 1a5ed26727 上就找不到（2026-11-16 发包上限改成 send_limit()、拥塞控制那一段改成 else if 以后没同步），这一轮按现有代码改了匹配文本，重跑都抓到。

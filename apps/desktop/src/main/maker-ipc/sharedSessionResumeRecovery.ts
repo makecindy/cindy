@@ -39,8 +39,9 @@ export async function withSharedSessionResumeRecovery<T>(
   try {
     return await start();
   } catch (error) {
+    // Shared-provider devices run built-in engines only; a plugin-engine task never takes this path.
     if (!sessionId || !resumeId || !isProviderShareAgentDeviceId(options.agentDeviceId) || options.remoteHostId ||
-      !(error instanceof Error) ||
+      options.agentKind === 'acp' || !(error instanceof Error) ||
       error.message !== '[REMOTE_AGENT_INVALID] this conversation cannot be resumed on this computer') throw error;
     const assertCurrent = () => {
       deps.assertCurrent();

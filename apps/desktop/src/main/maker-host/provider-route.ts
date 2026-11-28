@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { resolveCopilotAccountUrl } from './copilot-account-url.js';
 import { withProviderAppAttribution } from './provider-app-attribution.js';
 /**
@@ -66,6 +67,11 @@ const providerRouteMutationCounts = new Map<string, number>();
 const providerRouteCredentialRevisions = new Map<string, number>();
 let nextProviderRouteCredentialRevision = 1;
 const providerRouteMutationWaiters = new Map<string, Set<() => void>>();
+
+/** Non-sensitive generation for read/validate/commit operations that span awaits. */
+export function getProviderRouteMutationStamp(): string {
+  return `${nextProviderRouteCredentialRevision}:${providerRouteMutationCounts.size}`;
+}
 
 export type ProviderRouteMutationRelease = (() => void) & {
   /** Publish the new non-sensitive route/capability/credential dispatch generation. */
@@ -149,6 +155,18 @@ export function setOAuthTokenReader(reader: OAuthTokenReader): void {
 export function hasCustomProviderKey(providerId: string, agent: AgentKind): boolean {
   if (isProviderRouteMutationInProgress(providerId)) return false;
   return Boolean(customProviderKeyReader(storedCustomProviderId(providerId), agent));
+}
+
+export function matchesCustomProviderBearer(providerId: string, agent: AgentKind, authorization: string | undefined): boolean {
+  if (!authorization || isProviderRouteMutationInProgress(providerId)) return false;
+  const key = customProviderKeyReader(storedCustomProviderId(providerId), agent);
+  return !!key && authorization === `Bearer ${key}`;
+}
+
+/** Main-only comparison of the credential actually read by the route. */
+export function customProviderCredentialFingerprint(providerId: string, agent: AgentKind): string | undefined {
+  const key = customProviderKeyReader(storedCustomProviderId(providerId), agent);
+  return key ? createHash('sha256').update(key).digest('hex') : undefined;
 }
 
 export interface ProviderOAuthTokenReadOptions {
@@ -546,7 +564,7 @@ export function gatewayDefaultRouteDecision(
  * 未声明 = universal(网关 / Anthropic 直连 / 自定义供应商,上游本身能服务任意模型);
  * wireModel 为空 = 控制面请求(如 codex `GET /models`,无 body.model),不受范围限制。
  */
-function routingServesWireModel(
+export function routingServesWireModel(
   routing: RoutingDescriptor,
   wireModel: string | undefined,
 ): boolean {
@@ -1283,16 +1301,15 @@ export function rewriteImplicitModelIdForRoute(
  * codex 路由用：env-key 注入态默认全量走网关、per-session 无意义（内置三家保持该旧行为），
  * 但这两类供应商必须按各自 baseUrl + key 路由，故放行 per-session 解析。
  */
-export function isUserProviderSession(sessionId: string): boolean {
-  return getUserProviderIdForSession(sessionId) !== null;
+export function isUserProviderSession(sessionId: string, providerId = getSessionProvider(sessionId)): boolean {
+  return getUserProviderIdForSession(sessionId, providerId) !== null;
 }
 
 /**
  * 该会话显式选定的自定义路由供应商 id；其他供应商 / 未选 → null。
  * 上游错误观察器（provider-upstream-error-observer）用它把 4xx/5xx 归属到具体自定义供应商。
  */
-export function getUserProviderIdForSession(sessionId: string): string | null {
-  const providerId = getSessionProvider(sessionId);
+export function getUserProviderIdForSession(sessionId: string, providerId = getSessionProvider(sessionId)): string | null {
   if (!providerId) return null;
   const provider = getActiveCatalog().providers.find((p) => p.id === providerId);
   return isCustomRoutedProvider(provider) ? providerId : null;

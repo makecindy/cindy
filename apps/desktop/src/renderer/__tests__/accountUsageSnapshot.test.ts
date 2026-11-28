@@ -230,7 +230,7 @@ describe('mergeCodexAccountUsageSnapshot', () => {
 
   it('wires refreshed Codex web snapshots through a renderer IPC channel', () => {
     const mainSource = readFileSync(
-      new URL('../../main/usageBroadcaster.ts', import.meta.url),
+      new URL('../../main/usageBroadcasterCore.ts', import.meta.url),
       'utf8',
     );
     const preloadSource = readFileSync(

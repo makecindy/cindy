@@ -75,6 +75,8 @@ describe('resumeOrcaWorkerSessionIfMissing runtime cleanup', () => {
       readSessionWritableDirsFromDb: async () => [],
       buildCreateOptsWithStderr: (opts: Record<string, unknown>) => opts,
       dbToMakerAgentKind: (value: unknown) => value,
+      dbToMakerEngineKind: (value: unknown) => value,
+      isPluginEngineKind: (value: unknown) => value === 'acp',
       permissionModeOrAsk: (value: unknown) => value,
       directoryGrantsForRuntime: () => ({}),
       ensureRemoteReadyForSessionStart: async () => undefined,

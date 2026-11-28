@@ -73,7 +73,7 @@ vi.mock('../dialogue.js', () => ({ CompanionCallDialogue: class {
 
 import { createGenericOAuthService } from '../../maker-host/generic-oauth.js';
 import { normalizeVoiceInputSettings } from '../../../shared/voiceInputData.js';
-import { registerVoiceConversationIpc } from '../index.js';
+import { getVoiceSettingsHostApi, registerVoiceConversationIpc } from '../index.js';
 import { outboundFetch } from '../../maker-host/outbound-fetch.desktop.js';
 import { clearModelVisibilityMirror, setModelVisibilityMirror } from '../../maker-host/model-visibility-mirror.js';
 const sender = (id = 1) => ({ sender: { id, once: vi.fn(), on: vi.fn() } });
@@ -124,6 +124,38 @@ const startInput = () => ({
   voice: 'alloy',
 });
 const start = () => call('start', startInput());
+
+it('cancels only the matching window and realtime catalog request before fetching private voice details', async () => {
+  const modelId = 'qwen-audio-3.1-realtime-flash';
+  const provider = buildUserProvider({
+    id: 'byok', name: 'Bailian',
+    runtimes: { codex: { baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+      wireProtocol: 'openai-chat', models: [{ id: modelId, name: modelId, mode: 'realtime' }] } },
+  }, { modelRegistry: BUNDLED_CATALOG.modelRegistry });
+  h.catalog = { ...BUNDLED_CATALOG, providers: [provider] };
+  h.readKey.mockReturnValue('test-key');
+  const route = { providerId: provider.id, modelId, agent: 'codex' };
+  const requests: { signal: AbortSignal; complete(): void }[] = [];
+  vi.mocked(outboundFetch).mockImplementation((_url, init) => new Promise(resolve => {
+    requests.push({ signal: init!.signal!, complete: () => resolve(Response.json({
+      output: { voice_list: [{ voice_id: 'needs-details' }] },
+    })) });
+  }));
+  const first = call('realtime-custom-voices', route, 'first');
+  expect(requests).toHaveLength(1);
+  const second = call('realtime-custom-voices', route, 'second');
+  expect(requests[0].signal.aborted).toBe(true);
+  requests[0].complete();
+  await first;
+  await call('cancel-realtime-custom-voices', 'first');
+  await h.handlers.get('voice-conversation:cancel-realtime-custom-voices')!(sender(2), 'second');
+  expect(requests[1].signal.aborted).toBe(false);
+  await call('cancel-realtime-custom-voices', 'second');
+  expect(requests[1].signal.aborted).toBe(true);
+  requests[1].complete();
+  await second;
+  expect(outboundFetch).toHaveBeenCalledTimes(2);
+});
 
 // PR #6900 unit: injected model tests missed production credential-store wiring.
 // Exercise real IPC -> catalog -> voice query/synthesis with a legacy display ID,
@@ -242,8 +274,13 @@ it('keeps untrusted upstream errors generic rather than forwarding their text or
 
 it('patches playback without replacing the saved route and validates boolean overrides', async () => {
   const choice = { modelId: 'voice-test', voice: 'alloy', speed: 1.15 };
-  await call('set-preference', 'bot-a', choice);
+  const host = getVoiceSettingsHostApi()!;
+  const initial = await host.selfPreference('bot-a');
+  expect(initial.sources).toEqual({ selection: 'device', sentencePlayback: 'device' });
+  await host.setPreference('bot-a', choice, undefined, initial.revision);
   await call('set-preference', 'bot-a', undefined, false);
+  await expect(host.setPreference('bot-a', null, null, initial.revision)).rejects.toThrow('VOICE_PREFERENCE_CHANGED');
+  expect((await host.selfPreference('bot-a')).sources).toEqual({ selection: 'teammate', sentencePlayback: 'teammate' });
   expect(await call('preference', 'bot-a')).toEqual({
     selection: choice,
     customized: true,
@@ -263,6 +300,27 @@ it('patches playback without replacing the saved route and validates boolean ove
   ).rejects.toThrow();
 });
 
+it('keeps realtime preferences behind the trusted owner and separate from TTS settings', async () => {
+  const provider = buildUserProvider({ id: 'native-api', name: 'OpenAI API', runtimes: { codex: {
+    baseUrl: 'https://api.openai.com/v1', models: [{ id: 'gpt-realtime-2', name: 'Realtime', mode: 'realtime' }],
+  } } }, { modelRegistry: BUNDLED_CATALOG.modelRegistry });
+  h.catalog = { ...BUNDLED_CATALOG, providers: [provider] };
+  h.readKey.mockReturnValue('fixture-native-key');
+  const selection = { mode: 'realtime', providerId: 'native-api', agent: 'codex', modelId: 'gpt-realtime-2', protocol: 'openai-realtime', voice: 'marin' };
+  expect(JSON.stringify(await call('realtime-models'))).not.toContain('fixture-native-key');
+  await call('set-realtime-preference', 'buddy', selection);
+  expect(await call('preference', 'buddy')).toMatchObject({ selection: null, realtimeSelection: selection });
+  await expect(call('set-realtime-preference', 'buddy', { ...selection, modelId: 'unknown' })).rejects.toThrow();
+  expect(await call('preference', 'buddy')).toMatchObject({ realtimeSelection: selection });
+  h.boundary = true;
+  await expect(call('set-realtime-preference', 'buddy', null)).rejects.toThrow();
+  h.boundary = false;
+  h.trusted.mockImplementationOnce(() => { throw new Error('untrusted'); });
+  await expect(call('realtime-models')).rejects.toThrow('untrusted');
+  await call('set-realtime-preference', 'buddy', null);
+  expect(await call('preference', 'buddy')).not.toHaveProperty('realtimeSelection');
+});
+
 it.each([NaN, Infinity, '1.2', 0.1, 4.1])('rejects invalid speed %s without replacing the saved preference', async (speed) => {
   const choice = { modelId: 'voice-test', voice: 'alloy', speed: 1.15 };
   await call('set-preference', 'bot', choice);
@@ -276,7 +334,7 @@ it('rejects an untrusted sender before returning models or opening a connection'
   });
   await expect(call('models')).rejects.toThrow('untrusted frame');
   await expect(start()).rejects.toThrow('untrusted frame');
-  for (const name of ['voices', 'preview', 'read-preview', 'stop-preview', 'start-playback']) {
+  for (const name of ['voices', 'realtime-custom-voices', 'cancel-realtime-custom-voices', 'preview', 'read-preview', 'stop-preview', 'start-playback']) {
     await expect(call(name, {})).rejects.toThrow('untrusted frame');
   }
 });

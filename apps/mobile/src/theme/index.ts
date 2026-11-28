@@ -7,6 +7,7 @@ export {
   fontWeight,
   iconSize,
   iconStroke,
+  retroKeyboardMaterials,
   lightColors,
   lineHeight,
   navigationChrome,

@@ -35,8 +35,8 @@
 
 import { PI_GLOBAL_CONTEXT_FILE_NAMES } from './global-context.js';
 
-/** 工具名 —— 与 `@cindy/maker-shared` 的 `PI_SUBAGENT_TOOL_NAME` 必须一致(卡片判据靠它)。 */
-export const CINDY_SUBAGENT_TOOL_NAME = 'subagent';
+/** Native dispatch name; messageNormalize projects it to the stable card identity. */
+export { PI_SUBAGENT_RUNTIME_TOOL_NAME as CINDY_SUBAGENT_TOOL_NAME } from '@cindy/maker-shared/agent-task';
 
 export const CINDY_SUBAGENT_EXTENSION_FILENAME = 'cindy-subagent.ts';
 export const CINDY_SUBAGENT_RUNNER_CONTROL_TITLE = 'cindy:pi-subagent-runner';
@@ -125,7 +125,7 @@ import { createHmac } from 'node:crypto';
 import { randomUUID } from 'node:crypto';
 import { chmodSync, copyFileSync, lstatSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
-const TOOL_NAME = 'subagent';
+const TOOL_NAME = 'cindy_subagent';
 const MARKER = '__cindySubagent';
 const BINARY_ENV = 'CINDY_PI_SUBAGENT_BINARY';
 const DEPTH_ENV = 'CINDY_PI_SUBAGENT_DEPTH';

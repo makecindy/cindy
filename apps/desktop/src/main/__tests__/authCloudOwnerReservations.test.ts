@@ -6,7 +6,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const context = vi.hoisted(() => ({ root: '', owner: null as string | null }));
 vi.mock('electron', () => ({ app: { getPath: () => context.root } }));
-vi.mock('../userDataPath.js', () => ({ userDataPath: (...parts: string[]) => path.join(context.root, ...parts) }));
+vi.mock('../userDataPath.js', () => ({
+  userDataPath: (...parts: string[]) => path.join(context.root, ...parts),
+  getUserDataDir: () => context.root,
+}));
 vi.mock('../ownerContext.js', () => ({
   activeDataOwnerId: () => context.owner,
   isOwnerBoundaryPending: () => false,
@@ -42,6 +45,7 @@ const compiled = transpileModule(`${functions.join('\n')}\nreturn { withCloudOwn
 function setup(overrides: Record<string, unknown> = {}) {
   const deps = {
     ...profile, ...native,
+    LOCAL_DATA_OWNER_ID: 'local-v1',
     app: { getPath: () => context.root },
     BRAND_IDENTITY: { dbFilePrefix: 'cindy' },
     log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
@@ -53,7 +57,7 @@ function setup(overrides: Record<string, unknown> = {}) {
     ...overrides,
   };
   return new Function(...Object.keys(deps), compiled)(...Object.values(deps)) as {
-    withCloudOwnerCommit(options: { previousOwnerId: string | null; nextOwnerId: string; prepareTransition(): Promise<void>; commit(): void }): Promise<void>;
+    withCloudOwnerCommit(options: { explicitLogin?: boolean; previousOwnerId: string | null; nextOwnerId: string; prepareTransition(): Promise<void>; commit(): void }): Promise<void>;
     repairStableCloudOwnerDataReservationsWhileLocked(owner: string): boolean;
   };
 }
@@ -72,6 +76,25 @@ beforeEach(() => {
 afterEach(() => fs.rmSync(context.root, { recursive: true, force: true }));
 
 describe('cloud login with independent legacy asset owners', () => {
+  // #12399: the settings login route first exits local mode. The authenticated
+  // commit must distinguish that signed-out edge from token refresh and account switching.
+  it.each([
+    { previous: 'local-v1', login: true, existing: 'none', expected: true },
+    { previous: null, login: true, existing: 'none', expected: true },
+    { previous: null, login: false, existing: 'none', expected: false },
+    { previous: 'owner-b', login: true, existing: 'none', expected: false },
+    { previous: null, login: true, existing: 'profile', expected: false },
+    { previous: null, login: true, existing: 'native', expected: false },
+  ])('limits the provider key grant ($previous, login=$login, claim=$existing)', async ({ previous, login, existing, expected }) => {
+    if (existing === 'native') fs.writeFileSync(nativeFile(), JSON.stringify({ legacyClaimOwner: 'owner-a' }));
+    if (existing === 'profile') fs.writeFileSync(profileFile(), JSON.stringify({ ownerId: 'owner-a' }));
+    await setup().withCloudOwnerCommit({
+      explicitLogin: login, previousOwnerId: previous, nextOwnerId: 'owner-a',
+      prepareTransition: async () => {}, commit: () => { context.owner = 'owner-a'; },
+    });
+    expect(typeof JSON.parse(fs.readFileSync(profileFile(), 'utf8')).adoptProviderKeys === 'string').toBe(expected);
+  });
+
   it.each(['owner-a', 'owner-b', 'owner-c'])('commits %s without moving either legacy namespace', async (owner) => {
     seed('owner-a', 'owner-b');
     const before = [fs.readFileSync(profileFile(), 'utf8'), fs.readFileSync(nativeFile(), 'utf8')];

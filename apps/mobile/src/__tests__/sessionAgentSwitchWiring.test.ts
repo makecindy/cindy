@@ -25,7 +25,9 @@ describe('new task remote Agent wiring', () => {
     expect(select).toContain('setRemoteAgentChoice(null);');
     // 普通创建与目标模式都把远程选择落进草稿,且不按被控电脑的目录 / 登录拦。
     expect(source.split('applyRemoteAgentPick(draft, remoteAgentPick)')).toHaveLength(3);
-    expect(source.split('const runGuard = () => effectiveDraft.agentDeviceId ? Promise.resolve({')).toHaveLength(3);
+    expect(source.split(
+      'const runGuard = () => (effectiveDraft.agentDeviceId || effectiveDraft.pluginEngine) ? Promise.resolve({',
+    )).toHaveLength(3);
     expect(source).toContain('confirmUnauthenticated: effectiveDraft.agentDeviceId');
     expect(source).toContain("agentAuthVerdict === 'unauthenticated' || remoteAgentPick");
     // 恢复的远程位置拆分行为由 newSessionDraftRecovery.test.ts 直接调用生产
@@ -35,11 +37,29 @@ describe('new task remote Agent wiring', () => {
 });
 
 describe('session Agent switch UI wiring', () => {
+  // L342 protocol/ordering guard. Dropping a screen call site's protection
+  // lets an older host patch replace a newer in-flight pick. The real frame
+  // and pending-write behavior are covered in historyViewProvider.test.tsx.
+  it('protects both model pickers until their optimistic settings writes settle', () => {
+    const source = readSource('app/sessions/[sessionId].tsx');
+    const routeControls = source.slice(source.indexOf('const runControlAction = useCallback'),
+      source.indexOf('const writeSessionAgentSwitchIntent = useCallback'));
+    expect(routeControls).toMatch(/if \(opts\?\.protectModelSelection\) \{\s*releaseModelWrite = sessionPendingWrites\.track\(sessionId, Object\.keys\(optimisticPatch\)\);/);
+    expect(routeControls).toMatch(/finally \{\s*releaseModelWrite\?\.\(\);/);
+    for (const [picker, next] of [
+      ['selectComposerModelRow', 'selectUnifiedComposerModel'],
+      ['selectUnifiedComposerModel', 'selectComposerPluginEngine'],
+    ]) {
+      const start = source.indexOf(`const ${picker} = useCallback`);
+      const end = source.indexOf(`const ${next} = useCallback`, start);
+      expect(source.slice(start, end)).toContain("}, { recover: 'refetch', protectModelSelection: true });");
+    }
+  });
+
   it('locks guest model controls while preserving message and stop controls', () => {
     const source = readSource('app/sessions/[sessionId].tsx');
     const modelAccess = source.slice(source.indexOf('const canConfigureSessionModel'), source.indexOf('// 共享模型自造'));
     expect(modelAccess).toContain('canUseRemoteSessionControls');
-    expect(modelAccess).toContain('!sessionManagedByHost');
     expect(modelAccess).toContain('!isSharedTaskPeer(deviceId)');
     expect(source).toContain('disabled={controlBusy || !canConfigureSessionModel}');
     expect(source).toContain('visible={modelSheetOpen && canConfigureSessionModel}');
@@ -63,7 +83,8 @@ describe('session Agent switch UI wiring', () => {
     const source = readSource('app/sessions/[sessionId].tsx');
     expect(source).toContain('maker.getSessionAgentSwitchIntent(sessionId)');
     expect(source).toContain('maker.switchSessionAgent(');
-    expect(source).toContain('agentSwitchIntent: normalizeSessionAgentSwitchIntent(result)');
+    // 回读的权威意图拆成内置 / 插件引擎两个字段(sessionAgentSwitchIntentPatch)。
+    expect(source).toContain('remoteSessionStore.applySessionPatch(deviceId, sessionId, sessionAgentSwitchIntentPatch(result))');
     expect(source).toContain('agentSwitch={sessionAgentSwitchSupported ? {');
     expect(source).toContain('targetAgentKind: modelSheetAgentKind');
     expect(source).toContain('...(agentSwitchIntent ? { agentSwitchIntent: null } : {})');
@@ -288,10 +309,9 @@ it('hides host-owned settings while preserving permission controls and the compo
     expect(source).toContain('{renderSessionPermissionButton()}');
     expect(source).toContain('currentSession && runtimeOptions ? (');
     expect(source).not.toContain('!sessionManagedByHost ? renderSessionPermissionButton() : null');
-    expect(source).toContain('{!sessionManagedByHost && composerRuntimeSummary ? (');
+    expect(source).toContain('{composerRuntimeSummary ? (');
     const modelAccess = source.slice(source.indexOf('const canConfigureSessionModel'), source.indexOf('// 共享模型自造'));
     expect(modelAccess).toContain('canUseRemoteSessionControls');
-    expect(modelAccess).toContain('!sessionManagedByHost');
     expect(modelAccess).toContain('!isSharedTaskPeer(deviceId)');
     const modelPicker = source.slice(source.indexOf('const toggleComposerModelPicker'), source.indexOf('// 账号限额按需拉取'));
     expect(modelPicker).toContain('if (!canConfigureSessionModel)');

@@ -747,6 +747,30 @@ describe('[10] 收敛检查点:主动发送闸门的全部入口与边界(review
 });
 
 describe('[11] 重连恢复的顺序(review 第三轮)', () => {
+  // Unit: buffered maker status must include time spent offline before batch or single delivery.
+  it.each([true, false])('includes offline time in the sample age (batch=%s)', (batch) => {
+    const h = mkClient();
+    __testing.setActiveClient(h.client as never);
+    const capabilities = batch ? [CONTROLLER_CAPABILITY_MAKER_EVENT_BATCH_V1] : [];
+    subscriptions.subscribe('phone', ['session:s1'], 'phone', capabilities);
+    h.client.getStatus.mockReturnValue('connecting');
+    const sample = { kind: 'request', rate: 42, atMs: 4000, measuredAt: Date.now() - 600_000 };
+    const payload = { sessionId: 's1', event: { type: 'status', data: { tokenSpeed: {
+      measurement: { latest: sample, average: 42, sampleAgeMs: 1000 },
+    } } } };
+    __testing.forwardPush('maker:event', payload);
+    expect(h.sent).toEqual([]);
+    vi.advanceTimersByTime(70_000);
+    h.client.getStatus.mockReturnValue('online');
+    __testing.handleSubscriptionFrame('phone', {
+      channel: DL_SUBSCRIBE_CHANNEL, args: [{ topics: ['session:s1'], capabilities }],
+    });
+    const events = batch ? batchesIn(h.sent).flatMap(frame => frame.events)
+      : h.sent.filter(frame => frame.channel === 'maker:event').map(frame => frame.payload);
+    expect(events).toMatchObject([{ event: { data: { tokenSpeed: { measurement: { sampleAgeMs: 71_000 } } } } }]);
+    expect(payload.event.data.tokenSpeed.measurement.sampleAgeMs).toBe(1000);
+  });
+
   it.each(['completed offline', '中'.repeat(200_000), '\u0000'.repeat(200_000)])('replays an allowed offline body intact (%#)', (content) => {
     const h = mkClient();
     __testing.setActiveClient(h.client as never);

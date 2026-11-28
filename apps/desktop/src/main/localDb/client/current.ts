@@ -8,10 +8,18 @@ export type CurrentDbClientSnapshot = {
 
 let clientEpoch = 0;
 let current: CurrentDbClientSnapshot | null = null;
+const installListeners = new Set<() => void>();
+
+/** Receive a readiness edge after installing a new connection. */
+export function onCurrentDbClientInstalled(listener: () => void): () => void {
+  installListeners.add(listener);
+  return () => { installListeners.delete(listener); };
+}
 
 export function setCurrentDbClient(client: DbClient, userId: string): void {
   clientEpoch += 1;
   current = { client, userId, clientEpoch };
+  for (const listener of installListeners) listener();
 }
 
 export function clearCurrentDbClient(client?: DbClient): void {

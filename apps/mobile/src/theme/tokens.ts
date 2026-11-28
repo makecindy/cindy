@@ -168,11 +168,9 @@ export interface ThemeColors {
   permAutoAccent: string;
   /**
    * 伙伴列表未读点(信息蓝 #417CDD,L=D 同值)。对齐桌面 `--bot-unread-bg`(DESIGN.md「Bot Unread Badge」):
-   * 表示 IM 未读语义,用于伙伴列表行(伙伴与群聊)及群内话题入口的未读提示,不是 CTA、不是状态色,不得挪作他用。
+   * 表示 IM 未读语义,用于伙伴列表行(伙伴与群聊)、群内话题入口的未读提示和时间线未读分割线,不是 CTA、不是状态色,不得挪作他用。
    */
   botUnread: string;
-  /** 话题内新回复分界线及标签；列表与摘要继续使用 botUnread。 */
-  threadUnreadDivider: string;
   /**
    * PR 已合并图标色(焦点蓝 #417CDD,L=D 同值)。对齐桌面 PR_STATUS_COLOR.merged = `--focus-ring`;
    * 只用于 PR 状态图标,不得挪作他用。其余 PR 状态复用 statusDone / statusError / textTertiary。
@@ -495,7 +493,6 @@ export const lightColors: ThemeColors = {
   statusDone: '#2AAE5B',
   permAutoAccent: '#417CDD',
   botUnread: '#417CDD',
-  threadUnreadDivider: '#D91F37',
   prMerged: '#417CDD',
   errorText: '#0F0F0F',
   destructive: '#f43d3f',
@@ -597,7 +594,6 @@ export const darkColors: ThemeColors = {
   statusDone: '#2AAE5B',
   permAutoAccent: '#417CDD',
   botUnread: '#417CDD',
-  threadUnreadDivider: '#FF667A',
   prMerged: '#417CDD',
   errorText: '#EDEDED',
   destructive: '#f43d3f',
@@ -624,6 +620,94 @@ export const palettes: Record<ThemeMode, ThemeColors> = {
 };
 
 // —— 以下为主题无关(light / dark 一致)的不变量阶梯 ——
+
+/** Fixed pigments sampled for each physical keyboard. App appearance only affects the software keyboard. */
+export const retroKeyboardMaterials = {
+  iceblue: {
+    ink: '#354c55',
+    secondaryInk: '#495e68',
+    wellTint: 'rgba(179, 197, 201, 0.88)',
+    contact: 'rgba(65, 86, 96, 0.40)',
+    skirtLight: '#edf3f3',
+    skirtMid: '#c0ced2',
+    skirtShade: '#9aaeb5',
+    skirtFoot: '#81969e',
+    faceShade: '#cad7da',
+    face: '#e9eff0',
+    faceLight: '#f4f7f6',
+    modifierTint: 'transparent',
+  },
+  ivory: {
+    ink: '#483d30',
+    secondaryInk: '#615546',
+    wellTint: 'rgba(128, 111, 83, 0.52)',
+    contact: 'rgba(62, 50, 33, 0.50)',
+    skirtLight: '#eee4cf',
+    skirtMid: '#c2b398',
+    skirtShade: '#a49479',
+    skirtFoot: '#8a7b62',
+    faceShade: '#d2c5ad',
+    face: '#e7dcc6',
+    faceLight: '#f3ead6',
+    modifierTint: 'rgba(116, 90, 51, 0.14)',
+  },
+  platinum: {
+    ink: '#3d3e3b',
+    secondaryInk: '#555852',
+    wellTint: 'rgba(122, 122, 114, 0.63)',
+    contact: 'rgba(54, 55, 49, 0.48)',
+    skirtLight: '#e1e1d8',
+    skirtMid: '#b9b9ae',
+    skirtShade: '#97998d',
+    skirtFoot: '#7c7e75',
+    faceShade: '#c0c2b7',
+    face: '#d9dad1',
+    faceLight: '#e9eae1',
+    modifierTint: 'rgba(70, 75, 60, 0.13)',
+  },
+  powerbook: {
+    ink: '#ece5d9',
+    secondaryInk: '#d0cabd',
+    wellTint: 'rgba(57, 54, 57, 0.48)',
+    contact: 'rgba(15, 14, 18, 0.75)',
+    skirtLight: '#5c5b60',
+    skirtMid: '#39383d',
+    skirtShade: '#2e2c31',
+    skirtFoot: '#232226',
+    faceShade: '#414045',
+    face: '#504e53',
+    faceLight: '#626065',
+    modifierTint: 'transparent',
+  },
+  thinkpad: {
+    ink: '#e4e6df',
+    secondaryInk: '#adc3cd',
+    wellTint: 'rgba(33, 35, 37, 0.47)',
+    contact: 'rgba(5, 8, 10, 0.85)',
+    skirtLight: '#45484b',
+    skirtMid: '#292b2e',
+    skirtShade: '#1b1e20',
+    skirtFoot: '#161819',
+    faceShade: '#292b2c',
+    face: '#333638',
+    faceLight: '#45484a',
+    modifierTint: 'transparent',
+  },
+  macbook: {
+    ink: '#edf0ef',
+    secondaryInk: '#c6cdce',
+    wellTint: '#a1a3a3',
+    contact: 'rgba(36, 39, 40, 0.68)',
+    skirtLight: '#4a4c4d',
+    skirtMid: '#313335',
+    skirtShade: '#242628',
+    skirtFoot: '#1c1e20',
+    faceShade: '#303234',
+    face: '#343638',
+    faceLight: '#414345',
+    modifierTint: 'transparent',
+  },
+} as const;
 
 /** 间距阶梯,基数 4。 */
 export const spacing = {
@@ -725,6 +809,7 @@ export const fontWeight = {
  * 非标准配对(如 subtitle 字号 + listTitle 行高)手动组合两个 token,但禁止字面量。
  */
 export const textStyles = {
+  unreadDivider: { fontSize: typeScale.micro, lineHeight: lineHeight.micro, fontWeight: fontWeight.medium, letterSpacing: typeScale.micro * 0.08 },
   micro: { fontSize: typeScale.micro, lineHeight: lineHeight.micro },
   caption: { fontSize: typeScale.caption, lineHeight: lineHeight.caption },
   footnote: { fontSize: typeScale.footnote, lineHeight: lineHeight.caption },
@@ -852,6 +937,8 @@ export const motionDuration = {
   exit: 150,
   /** 功能性 loading spinner 完整一圈(§14.4 窄例外) */
   spinnerCycle: 1000,
+  /** Desktop 流式正文逐词淡入时长(§14.4 窄例外;双端 token 同构,移动端不消费) */
+  streamWord: 500,
   /** Desktop 侧栏溢出标题每个可视宽度的阅读时长(双端 token 同构,移动端不消费) */
   sidebarTitleMarqueePerViewport: 2400,
 } as const;

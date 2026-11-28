@@ -1,3 +1,4 @@
+import { PI_SUBAGENT_TOOL_NAME } from '@cindy/maker-shared/agent-task';
 import { parseMessageToolUse } from '@cindy/maker-shared/message-normalize';
 import type {
   SessionTreeEntryKind,
@@ -16,6 +17,9 @@ interface RawTreeNode {
 }
 
 const PREVIEW_LIMIT = 180;
+
+export const PI_NATIVE_SUBAGENT_CALL_ENTRY = 'cindy-native-subagent-call';
+export const PI_NATIVE_SUBAGENT_DISPLAY_NAME = 'dynamic:subagent';
 
 function recordOf(value: unknown): UnknownRecord | null {
   return typeof value === 'object' && value !== null ? (value as UnknownRecord) : null;
@@ -94,33 +98,72 @@ function describeEntry(entry: UnknownRecord): {
   return { role: 'system', preview: customType };
 }
 
-function normalizeNode(raw: unknown): SessionTreeNode | null {
-  const node = recordOf(raw) as RawTreeNode | null;
-  const entry = recordOf(node?.entry);
-  if (!entry || typeof entry.id !== 'string' || entry.id.length === 0) return null;
-  const described = describeEntry(entry);
-  const children = Array.isArray(node?.children)
-    ? node.children.map(normalizeNode).filter((child): child is SessionTreeNode => child !== null)
-    : [];
-  return {
-    id: entry.id,
-    parentId: typeof entry.parentId === 'string' ? entry.parentId : null,
-    kind: entryKind(entry.type),
-    ...(described.role ? { role: described.role } : {}),
-    preview: described.preview,
-    ...(typeof entry.timestamp === 'string' ? { timestamp: entry.timestamp } : {}),
-    ...(typeof node?.label === 'string' ? { label: node.label } : {}),
-    ...(typeof node?.labelTimestamp === 'string' ? { labelTimestamp: node.labelTimestamp } : {}),
-    children,
-  };
+function isNativeSubagentCallEntry(entry: UnknownRecord | undefined): boolean {
+  return entry?.type === 'custom' && entry.customType === PI_NATIVE_SUBAGENT_CALL_ENTRY;
+}
+
+function normalizeNodes(raw: unknown, hiddenParents: Map<string, string | null>): SessionTreeNode[] {
+  if (!Array.isArray(raw)) return [];
+  const nodes: SessionTreeNode[] = [];
+  for (const value of raw) {
+    const node = recordOf(value) as RawTreeNode | null;
+    const entry = recordOf(node?.entry);
+    if (!entry || typeof entry.id !== 'string' || !entry.id) continue;
+    const rawParentId = typeof entry.parentId === 'string' ? entry.parentId : null;
+    const parentId = rawParentId && hiddenParents.has(rawParentId)
+      ? hiddenParents.get(rawParentId) ?? null
+      : rawParentId;
+    if (isNativeSubagentCallEntry(entry)) {
+      hiddenParents.set(entry.id, parentId);
+      for (const child of normalizeNodes(node?.children, hiddenParents)) nodes.push(child);
+      continue;
+    }
+    const described = describeEntry(entry);
+    nodes.push({
+      id: entry.id,
+      parentId,
+      kind: entryKind(entry.type),
+      ...(described.role ? { role: described.role } : {}),
+      preview: described.preview,
+      ...(typeof entry.timestamp === 'string' ? { timestamp: entry.timestamp } : {}),
+      ...(typeof node?.label === 'string' ? { label: node.label } : {}),
+      ...(typeof node?.labelTimestamp === 'string' ? { labelTimestamp: node.labelTimestamp } : {}),
+      children: normalizeNodes(node?.children, hiddenParents),
+    });
+  }
+  return nodes;
+}
+
+function activePathIds(
+  leafId: string | null,
+  parentFor: (id: string) => string | null | undefined,
+): string[] {
+  const reversed: string[] = [];
+  const seen = new Set<string>();
+  let cursor = leafId;
+  while (cursor && !seen.has(cursor)) {
+    const parent = parentFor(cursor);
+    if (parent === undefined) break;
+    seen.add(cursor);
+    reversed.push(cursor);
+    cursor = parent;
+  }
+  return reversed.reverse();
+}
+
+export function rawPiSessionTreeLeafId(data: unknown): string | null {
+  const leafId = recordOf(data)?.leafId;
+  return typeof leafId === 'string' ? leafId : null;
 }
 
 export function normalizePiSessionTree(data: unknown): SessionTreeSnapshot {
   const payload = recordOf(data);
-  const roots = Array.isArray(payload?.tree)
-    ? payload.tree.map(normalizeNode).filter((node): node is SessionTreeNode => node !== null)
-    : [];
-  const leafId = typeof payload?.leafId === 'string' ? payload.leafId : null;
+  const hiddenParents = new Map<string, string | null>();
+  const roots = normalizeNodes(payload?.tree, hiddenParents);
+  const rawLeafId = rawPiSessionTreeLeafId(data);
+  const leafId = rawLeafId && hiddenParents.has(rawLeafId)
+    ? hiddenParents.get(rawLeafId) ?? null
+    : rawLeafId;
   const parents = new Map<string, string | null>();
   const walk = (nodes: readonly SessionTreeNode[]): void => {
     for (const node of nodes) {
@@ -129,15 +172,7 @@ export function normalizePiSessionTree(data: unknown): SessionTreeSnapshot {
     }
   };
   walk(roots);
-  const reversed: string[] = [];
-  const seen = new Set<string>();
-  let cursor = leafId;
-  while (cursor && parents.has(cursor) && !seen.has(cursor)) {
-    seen.add(cursor);
-    reversed.push(cursor);
-    cursor = parents.get(cursor) ?? null;
-  }
-  return { roots, leafId, activePathIds: reversed.reverse() };
+  return { roots, leafId, activePathIds: activePathIds(leafId, id => parents.get(id)) };
 }
 
 /** Retry empty failures, allowing model/effort changes and omission-only context edits that do not produce output. */
@@ -178,16 +213,32 @@ export function piRetryBranch(data: unknown, entryId: string): {
   return { parentId: typeof entry.parentId === 'string' ? entry.parentId : null, requestTooLarge };
 }
 
-function rawNodeMap(data: unknown): Map<string, UnknownRecord> {
+function rawNodeMap(data: unknown, nativeCalls?: Map<string, Set<string>>): Map<string, UnknownRecord> {
   const payload = recordOf(data);
   const map = new Map<string, UnknownRecord>();
-  const walk = (nodes: unknown): void => {
+  const walk = (nodes: unknown, assistantEntryId?: string): void => {
     if (!Array.isArray(nodes)) return;
     for (const raw of nodes) {
       const node = recordOf(raw);
       const entry = recordOf(node?.entry);
-      if (entry && typeof entry.id === 'string') map.set(entry.id, entry);
-      walk(node?.children);
+      let owningAssistant = assistantEntryId;
+      if (entry && typeof entry.id === 'string') {
+        map.set(entry.id, entry);
+        if (nativeCalls) {
+          const role = entry.type === 'message' ? recordOf(entry.message)?.role : undefined;
+          if (role === 'assistant') owningAssistant = entry.id;
+          if (role === 'user') owningAssistant = undefined;
+          if (owningAssistant && isNativeSubagentCallEntry(entry)) {
+            const callId = recordOf(entry.data)?.toolCallId;
+            if (typeof callId === 'string' && callId) {
+              let calls = nativeCalls.get(owningAssistant);
+              if (!calls) nativeCalls.set(owningAssistant, calls = new Set());
+              calls.add(callId);
+            }
+          }
+        }
+      }
+      walk(node?.children, owningAssistant);
     }
   };
   walk(payload?.tree);
@@ -238,7 +289,11 @@ export function activePiHistoryFromTree(
   data: unknown,
   snapshot: SessionTreeSnapshot = normalizePiSessionTree(data),
 ): SessionTreeHistoryMessage[] {
-  const entries = rawNodeMap(data);
+  // A tool result's provenance can be below the selected branch tip. Associate
+  // it with the originating assistant entry so rewinding past the result keeps
+  // the tool's identity, even when a different turn reuses its call ID.
+  const nativeCalls = new Map<string, Set<string>>();
+  const entries = rawNodeMap(data, nativeCalls);
   const out: SessionTreeHistoryMessage[] = [];
   let lastCreatedAt = 0;
   const push = (message: Omit<SessionTreeHistoryMessage, 'createdAt'>, timestamp: number): void => {
@@ -297,7 +352,9 @@ export function activePiHistoryFromTree(
             agentMeta: meta,
           }, baseTs + index);
         } else if (block.type === 'toolCall' && typeof block.id === 'string') {
-          const toolName = typeof block.name === 'string' ? block.name : 'tool';
+          const toolName = block.name === PI_SUBAGENT_TOOL_NAME && nativeCalls.get(entryId)?.has(block.id)
+            ? PI_NATIVE_SUBAGENT_DISPLAY_NAME
+            : typeof block.name === 'string' ? block.name : 'tool';
           push({
             clientId: `pi-tree-${entryId}-tool-${index}`,
             role: 'tool_use',

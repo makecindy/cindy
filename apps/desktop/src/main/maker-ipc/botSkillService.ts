@@ -11,6 +11,7 @@ import path from 'node:path';
 import { app } from 'electron';
 import { collectTeammateGuideMount } from './teammateGuideStore.js';
 import { botSkillRuntimeSummary, projectBotSkillMounts } from './botSkillRuntimeProjection.js';
+import { isStandardProjectSkill } from './botProjectSettingsGuide.js';
 import { queryBotSkillIndex } from './botSkillQueryIndex.js';
 import { cachedBotSkillRuntime } from './botSkillRuntimeCache.js';
 import { iterateBotSkillRuntimeSummaries } from './botSkillRuntimeSource.js';
@@ -274,7 +275,10 @@ export async function listBotSkillsForSession(
     assertOwnerBoundary(deps, boundary);
     await owner.refresh?.();
     assertOwnerBoundary(deps, boundary);
-    return { ok: true, ...result };
+    const project = botSkillsDir(home, owner.botId) !== path.join(botSkillRootDir(home, owner.botId), 'skills');
+    const skills = project ? result.skills.map(skill => ({ ...skill,
+      ownership: isStandardProjectSkill(skill.slug) ? 'project-standard' : 'personal' })) : result.skills;
+    return { ok: true, ...result, skills };
   } catch (cause) {
     return storeError(cause);
   }

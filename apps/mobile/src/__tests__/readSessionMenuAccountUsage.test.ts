@@ -42,6 +42,55 @@ const reader = () => ({
 });
 
 describe("existing remote quota compatibility", () => {
+  // A plugin task with a Codex-looking model must use the plugin account on its executing device.
+  it('keeps plugin balances and reset windows on the plugin route, including on older hosts', async () => {
+    const task = { ...session, agentKind: 'acp', providerId: 'acp-plugin:demo:engine' } as unknown as RemoteSession;
+    const r = { ...reader(), getPluginEngineUsage: vi.fn(async () => ({
+      updatedAt: 2000, balances: [{ currency: 'EUR', amount: '0.00' }],
+      windows: [{ label: 'Week', remainingPercent: 0, resetsAt: 1893456000000 }],
+    })) };
+    expect(await readSessionMenuAccountUsage(task, r)).toEqual({
+      source: 'plugin', plan: null, updatedAt: 2000,
+      amounts: [{ id: 'balance', currency: 'EUR', amount: 0 }],
+      windows: [{ id: '0', minutes: 10080, remainingPercent: 0, resetsAt: 1893456000 }],
+    });
+    // Multi-group plugin snapshot without `models[]` (e.g. Antigravity v0.5.0): filters to the
+    // active model's group, orders shortest-to-longest (5h before weekly), and omits redundant
+    // group/period text so sessionUsagePresentation renders clean countdown rows like Claude/ChatGPT.
+    const agyTask = {
+      ...session,
+      agentKind: 'acp',
+      providerId: 'acp-plugin:antigravity:agy',
+      model: 'gemini-4-neon',
+    } as unknown as RemoteSession;
+    const nowMs = Date.now();
+    const agyReader = {
+      ...reader(),
+      getPluginEngineUsage: vi.fn(async () => ({
+        updatedAt: nowMs,
+        windows: [
+          { label: 'Claude and GPT models · weekly', windowMinutes: 10080, remainingPercent: 55, resetsAt: nowMs + 6 * 24 * 3_600_000 },
+          { label: 'Claude and GPT models · 5h', windowMinutes: 300, remainingPercent: 12, resetsAt: nowMs + 2 * 3_600_000 },
+          { label: 'Gemini Models · weekly', windowMinutes: 10080, remainingPercent: 95, resetsAt: nowMs + 7 * 24 * 3_600_000 },
+          { label: 'Gemini Models · 5h', windowMinutes: 300, remainingPercent: 80, resetsAt: nowMs + 4 * 3_600_000 },
+        ],
+      })),
+    };
+    const agyUsage = await readSessionMenuAccountUsage(agyTask, agyReader, undefined, 'Gemini 4 Neon');
+    expect(agyUsage.windows).toEqual([
+      { id: '0', minutes: 300, remainingPercent: 80, resetsAt: (nowMs + 4 * 3_600_000) / 1000 },
+      { id: '1', minutes: 10080, remainingPercent: 95, resetsAt: (nowMs + 7 * 24 * 3_600_000) / 1000 },
+    ]);
+    // The controlled computer's own task names itself, so an engine with several accounts reports the
+    // task's account (plugin engine accounts, 2026-11-23); a task whose Agent runs elsewhere does not.
+    expect(r.getPluginEngineUsage).toHaveBeenCalledWith('demo:engine', 's1');
+    await readSessionMenuAccountUsage({ ...task, agentDeviceId: 'box' } as RemoteSession, r);
+    expect(r.getPluginEngineUsage).toHaveBeenLastCalledWith('demo:engine');
+    expect(await readSessionMenuAccountUsage(task, { ...r, getPluginEngineUsage: undefined })).toMatchObject({ windows: [], amounts: [] });
+    expect(r.getCodexRateLimits).not.toHaveBeenCalled();
+    expect(r.getAccountUsage).not.toHaveBeenCalled();
+  });
+
   it('reads the selected independent account and never falls back after its read fails', async () => {
     const r = reader();
     const provider = { id: 'openai-second', auth: { method: 'oauth' as const, native: 'codex' as const } };

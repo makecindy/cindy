@@ -141,14 +141,16 @@ describe('ClaudeCodeAgent.refreshLocalModels(主动读取订阅模型清单)', (
   it('读取失败返回 false 并仍关闭 Query', async () => {
     const listener = vi.fn();
     setClaudeSupportedModelsListener(listener);
-    const q = fakeQuery(async () => {
-      throw new Error('cli exited');
-    });
+    const failure = new Error('Connection error');
+    const q = fakeQuery(async () => { throw failure; });
     sdkMock.query.mockReturnValue(q);
     const { agent } = createAgent(true);
 
     await expect(agent.refreshLocalModels()).resolves.toBe(false);
     expect(listener).not.toHaveBeenCalled();
     expect(q.close).toHaveBeenCalledTimes(1);
+    // Unit #11880: hosts need the original failure to classify it; legacy callers keep false.
+    await expect(agent.refreshLocalModels({ throwOnError: true })).rejects.toBe(failure);
+    expect(q.close).toHaveBeenCalledTimes(2);
   });
 });

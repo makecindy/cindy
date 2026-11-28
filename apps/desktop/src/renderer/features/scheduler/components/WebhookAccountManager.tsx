@@ -107,9 +107,9 @@ function AccountManager({ onChanged, allowOpenSchedule = true }: Props) {
         <Dialog.Trigger asChild><Button variant="secondary" tone="quiet" size="sm" compact>{t(`${K}.manage`)}</Button></Dialog.Trigger>
       </div>
       <Dialog.Portal>
-        <Dialog.Overlay className="modal-scrim fixed inset-0 z-[10000]" />
+        <Dialog.Overlay className="modal-scrim fixed inset-0 z-modal" />
         <Dialog.Content
-          className="modal-panel fixed left-1/2 top-1/2 z-[10000] flex max-h-[85vh] w-[min(600px,calc(100vw-32px))] -translate-x-1/2 -translate-y-1/2 flex-col gap-4 p-4 outline-none"
+          className="modal-panel fixed left-1/2 top-1/2 z-modal flex max-h-[85vh] w-[min(600px,calc(100vw-32px))] -translate-x-1/2 -translate-y-1/2 flex-col gap-4 p-4 outline-none"
           onPointerDownOutside={(event) => event.preventDefault()}
           onEscapeKeyDown={(event) => { if (busy) event.preventDefault(); }}
         >

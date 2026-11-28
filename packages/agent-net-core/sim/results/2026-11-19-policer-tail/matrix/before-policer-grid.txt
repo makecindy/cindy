@@ -1,0 +1,24 @@
+
+running 1 test
+rtt= 10ms depth=  64KB size=1MiB wire x2.62 (max 2.74) finish 1.43s (ideal 1.41s) found [0, 0, 0, 0]
+rtt= 10ms depth=  64KB size=8MiB wire x1.26 (max 1.28) finish 12.00s (ideal 11.89s) found [0, 0, 0, 0]
+rtt= 10ms depth= 256KB size=1MiB wire x5.05 (max 5.83) finish 1.16s (ideal 1.13s) found [0, 0, 0, 0]
+rtt= 10ms depth= 256KB size=8MiB wire x1.57 (max 1.66) finish 11.77s (ideal 11.62s) found [0, 0, 0, 0]
+rtt= 10ms depth= 600KB size=1MiB wire x9.08 (max 9.15) finish 0.83s (ideal 0.65s) found [0, 0, 0, 0]
+rtt= 10ms depth= 600KB size=8MiB wire x1.90 (max 1.95) finish 11.25s (ideal 11.13s) found [0, 0, 0, 0]
+rtt= 40ms depth=  64KB size=1MiB wire x2.71 (max 2.72) finish 1.45s (ideal 1.41s) found [1, 1, 1, 1]
+rtt= 40ms depth=  64KB size=8MiB wire x1.26 (max 1.26) finish 12.05s (ideal 11.89s) found [2, 2, 2, 2]
+rtt= 40ms depth= 256KB size=1MiB wire x3.65 (max 3.70) finish 1.19s (ideal 1.13s) found [1, 1, 1, 1]
+rtt= 40ms depth= 256KB size=8MiB wire x1.37 (max 1.37) finish 11.77s (ideal 11.62s) found [2, 3, 1, 1]
+rtt= 40ms depth= 600KB size=1MiB wire x6.12 (max 6.30) finish 0.93s (ideal 0.65s) found [0, 0, 0, 0]
+rtt= 40ms depth= 600KB size=8MiB wire x1.71 (max 1.72) finish 11.27s (ideal 11.13s) found [3, 2, 1, 2]
+rtt= 90ms depth=  64KB size=1MiB wire x11.28 (max 12.37) finish 1.76s (ideal 1.41s) found [0, 0, 0, 0]
+rtt= 90ms depth=  64KB size=8MiB wire x1.42 (max 1.43) finish 12.16s (ideal 11.89s) found [3, 2, 4, 4]
+rtt= 90ms depth= 256KB size=1MiB wire x9.02 (max 9.72) finish 1.63s (ideal 1.13s) found [0, 0, 0, 0]
+rtt= 90ms depth= 256KB size=8MiB wire x1.40 (max 1.40) finish 11.86s (ideal 11.62s) found [4, 3, 2, 3]
+rtt= 90ms depth= 600KB size=1MiB wire x3.29 (max 3.34) finish 1.06s (ideal 0.65s) found [0, 0, 0, 0]
+rtt= 90ms depth= 600KB size=8MiB wire x1.64 (max 1.66) finish 11.38s (ideal 11.13s) found [1, 1, 2, 3]
+test probe ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 1.68s
+

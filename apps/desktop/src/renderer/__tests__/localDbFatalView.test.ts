@@ -31,6 +31,7 @@ describe('resolveLocalDbFatalView', () => {
     for (const status of statuses) {
       expect(resolveLocalDbFatalView(status, 'DB_INIT_FAILED')).toBe('init-failed');
       expect(resolveLocalDbFatalView(status, 'DB_CORRUPT_NO_BACKUP')).toBe('corrupt');
+      expect(resolveLocalDbFatalView(status, 'DB_RUNTIME_CORRUPT')).toBe('runtime-corrupt');
     }
   });
 

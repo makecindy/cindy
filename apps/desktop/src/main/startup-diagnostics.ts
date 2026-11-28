@@ -80,7 +80,7 @@ export interface RunMarker {
   heartbeatAt: string; // ISO
   heartbeatIntervalMs: number;
   state: RunMarkerState;
-  /** beginShutdown 的触发入口,e.g. 'before-quit' / 'uncaughtException' / 'update-relaunch' */
+  /** 退出原因,e.g. 'before-quit' / 'uncaughtException' / 'update-relaunch' */
   shutdownReason?: string;
   shutdownAt?: string;
   /** runQuitDisposers 全链跑完的时刻;缺失 = disposer chain 没跑完 */
@@ -93,7 +93,7 @@ export interface RunMarker {
 
 export type PreviousRunReportKind =
   | 'clean' // exited + exitCode 0 — 正常退出
-  | 'crash-exit' // exited + exitCode !== 0 — 经过 lifecycle 的崩溃退出
+  | 'crash-exit' // exited + 非零退出码或未捕获异常 — 经过 lifecycle 的崩溃退出
   | 'shutdown-incomplete' // shutdown-begin — 开始 shutdown 但没跑完
   | 'abnormal' // running — 无任何退出记录(crash / kill / hang)
   | 'ended-asleep' // running 且停在睡眠中,之后系统重启过 — 系统结束了进程,不是崩溃
@@ -125,7 +125,10 @@ function endedWhileAsleep(marker: RunMarker, bootTimeMs: number | null): boolean
 /** pid 已不属于写标记的实例时,按标记最后状态给出它的退出结论。 */
 function classifyEndedRun(marker: RunMarker, bootTimeMs: number | null): PreviousRunReportKind {
   if (marker.state === 'exited') {
-    return marker.exitCode != null && marker.exitCode !== 0 ? 'crash-exit' : 'clean';
+    // Electron 进入 app.exit 后可能已锁定退出码，销毁窗口期间仍可能出现异常。
+    const failed = marker.shutdownReason === 'uncaughtException' ||
+      (marker.exitCode != null && marker.exitCode !== 0);
+    return failed ? 'crash-exit' : 'clean';
   }
   if (marker.state === 'shutdown-begin') return 'shutdown-incomplete';
   return endedWhileAsleep(marker, bootTimeMs) ? 'ended-asleep' : 'abnormal';
@@ -254,6 +257,13 @@ export class RunMarkerStore {
     }
   }
 
+  /** 正常退出期间出现未捕获异常时更新归因，保留清理开始时间。 */
+  markUncaughtExceptionDuringQuit(): void {
+    if (this.current?.shutdownReason !== 'before-quit') return;
+    this.current.shutdownReason = 'uncaughtException';
+    this.persist();
+  }
+
   /** runQuitDisposers 全链完成。 */
   markDisposed(): void {
     if (!this.current) return;
@@ -380,18 +390,31 @@ interface CrashDumpEntry {
   sizeBytes: number;
 }
 
+interface CrashDumpScanResult {
+  dumps: CrashDumpEntry[];
+  /** 首个扫描错误的系统错误码。null 表示扫描完成。 */
+  errorCode: string | null;
+}
+
 /**
  * 递归扫描 crashDumps 目录下 sinceMs 之后的 .dmp(Crashpad 在 mac/win 的完成、
  * pending 子目录布局不同,直接递归覆盖)。深度限 4,防御性避免异常目录结构。
  */
-export function scanCrashDumps(rootDir: string, sinceMs: number): CrashDumpEntry[] {
-  const out: CrashDumpEntry[] = [];
+export function scanCrashDumps(rootDir: string, sinceMs: number): CrashDumpScanResult {
+  const dumps: CrashDumpEntry[] = [];
+  let errorCode: string | null = null;
+  const recordError = (err: unknown): void => {
+    const code = (err as NodeJS.ErrnoException | null)?.code;
+    // 文件系统错误消息、堆栈和 path 可能包含本机路径。这里只保留系统错误码。
+    errorCode ??= typeof code === 'string' && /^E[A-Z0-9]{1,31}$/.test(code) ? code : 'UNKNOWN';
+  };
   const walk = (dir: string, depth: number): void => {
     if (depth > 4) return;
     let entries: fs.Dirent[];
     try {
       entries = fs.readdirSync(dir, { withFileTypes: true });
-    } catch {
+    } catch (err) {
+      recordError(err);
       return;
     }
     for (const e of entries) {
@@ -402,17 +425,17 @@ export function scanCrashDumps(rootDir: string, sinceMs: number): CrashDumpEntry
         try {
           const st = fs.statSync(p);
           if (st.mtimeMs >= sinceMs) {
-            out.push({ path: p, mtimeMs: st.mtimeMs, sizeBytes: st.size });
+            dumps.push({ path: p, mtimeMs: st.mtimeMs, sizeBytes: st.size });
           }
-        } catch {
-          /* 文件竞态消失 — 忽略 */
+        } catch (err) {
+          recordError(err);
         }
       }
     }
   };
   walk(rootDir, 0);
-  out.sort((a, b) => b.mtimeMs - a.mtimeMs);
-  return out;
+  dumps.sort((a, b) => b.mtimeMs - a.mtimeMs);
+  return { dumps, errorCode };
 }
 
 // ── module-level 单例接线(electron 侧) ──────────────────────────────────────
@@ -446,8 +469,8 @@ function logPreviousRunReports(reports: PreviousRunReport[]): boolean {
       case 'crash-exit':
         hadAbnormal = true;
         log.error(
-          `[exit-diagnosis] previous run exited with non-zero code: pid=${m!.pid} v=${m!.version} ` +
-            `exitCode=${m!.exitCode} reason=${m!.shutdownReason ?? '?'} ` +
+          `[exit-diagnosis] previous run exited abnormally: pid=${m!.pid} v=${m!.version} ` +
+            `exitCode=${m!.exitCode ?? '?'} reason=${m!.shutdownReason ?? '?'} ` +
             `disposersCompleted=${m!.disposedAt ? 'yes' : 'no'} exitedAt=${m!.exitedAt ?? '?'} — ` +
             `process went through lifecycle shutdown but exited abnormally (renderer crash / uncaughtException / fatal signal)`,
         );
@@ -525,7 +548,10 @@ function logCrashDumpScan(hadAbnormal: boolean): void {
     log.warn('cannot resolve crashDumps path', err);
     return;
   }
-  const dumps = scanCrashDumps(dumpDir, Date.now() - DUMP_SCAN_WINDOW_MS);
+  const { dumps, errorCode } = scanCrashDumps(dumpDir, Date.now() - DUMP_SCAN_WINDOW_MS);
+  if (errorCode !== null) {
+    log.warn(`[exit-diagnosis] crash dump scan incomplete (code=${errorCode})`);
+  }
   if (dumps.length > 0) {
     const listed = dumps
       .slice(0, DUMP_LIST_CAP)
@@ -535,11 +561,8 @@ function logCrashDumpScan(hadAbnormal: boolean): void {
       `[exit-diagnosis] ${dumps.length} crash dump(s) in the last 14 days under ${dumpDir}: ${listed}` +
       (dumps.length > DUMP_LIST_CAP ? ` … +${dumps.length - DUMP_LIST_CAP} more` : '');
     log.warn(line);
-  } else {
-    log.warn(
-      `[exit-diagnosis] no crash dumps found under ${dumpDir} in the last 14 days — the abnormal ` +
-        `exit above was likely an external kill or a hard hang (see Windows WER AppHang) rather than a native crash`,
-    );
+  } else if (errorCode === null) {
+    log.warn(`[exit-diagnosis] no crash dumps found under ${dumpDir} in the last 14 days`);
   }
 }
 
@@ -627,6 +650,10 @@ export function getPreviousRunReports(): readonly PreviousRunReport[] {
 /** lifecycle.beginShutdown → 记录 shutdown 入口。init 前调用是 no-op。 */
 export function noteShutdownBegin(reason: string): void {
   _store?.markShutdownBegin(reason);
+}
+
+export function noteUncaughtExceptionDuringQuit(): void {
+  _store?.markUncaughtExceptionDuringQuit();
 }
 
 /** powerMonitor 'suspend' → 记录挂起时刻。init 前调用是 no-op。 */

@@ -14,7 +14,7 @@ const mocks = vi.hoisted(() => {
     // createSession upsert 后回读持久化行;返回空数组时回落 prepared row
     selectLimit: vi.fn<() => Promise<Array<{ title?: string | null }>>>(async () => []),
     updateSet: vi.fn(),
-    updateWhere: vi.fn(async () => undefined),
+    updateWhere: vi.fn(() => ({ returning: async () => [{ id: 'slack-bot-user' }] })),
     webContentsSend: vi.fn(),
     tapWindowBroadcast: vi.fn(),
   };

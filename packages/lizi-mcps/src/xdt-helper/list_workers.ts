@@ -6,14 +6,15 @@ import { BRAND_NAME } from '@cindy/maker-shared/branding';
 import { z } from 'zod';
 
 import type { XdtHelperToolRegistry } from '../lizi_xdtHelperToolRegistry.js';
-import type { ControlResult, ControlWorkerAgent } from '../lizi_xdtHelperMcpServer.js';
+import type { ControlResult, ControlWorkerEngine } from '../lizi_xdtHelperMcpServer.js';
 import { okPayload, errorPayload } from './_payload.js';
 
 export interface WorkerSummary {
   workerId: string;
   sessionId: string;
   role: string;
-  agent: ControlWorkerAgent;
+  /** 'acp' = 插件引擎 Worker。 */
+  agent: ControlWorkerEngine;
   model: string;
   effort: string | null;
   label: string | null;

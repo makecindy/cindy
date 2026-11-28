@@ -20,7 +20,7 @@ function normalizeLowercaseStringOrEmpty(value: unknown): string {
 export type ParsedIpAddress = ipaddr.IPv4 | ipaddr.IPv6;
 type Ipv4Range = ReturnType<ipaddr.IPv4["range"]>;
 type Ipv6Range = ReturnType<ipaddr.IPv6["range"]>;
-type BlockedIpv6Range = Ipv6Range | "discard";
+type BlockedIpv6Range = Ipv6Range | "discard" | "benchmarking" | "orchid2";
 
 const BLOCKED_IPV4_SPECIAL_USE_RANGES = new Set<Ipv4Range>([
   "unspecified",
@@ -51,6 +51,7 @@ const BLOCKED_IPV6_SPECIAL_USE_RANGES = new Set<BlockedIpv6Range>([
   "discard",
   "orchid2",
 ]);
+const IPV6_BENCHMARK_PREFIX: [ipaddr.IPv6, number] = [ipaddr.IPv6.parse("2001:2::"), 48];
 const RFC2544_BENCHMARK_PREFIX: [ipaddr.IPv4, number] = [ipaddr.IPv4.parse("198.18.0.0"), 15];
 const CLOUD_METADATA_IP_ADDRESSES = new Set(["100.100.100.200", "fd00:ec2::254"]);
 /** Per-call exemptions for `isBlockedSpecialUseIpv4Address`. */
@@ -61,9 +62,8 @@ export type Ipv4SpecialUseBlockOptions = {
 /**
  * Per-call exemptions for `isBlockedSpecialUseIpv6Address`. Mirror of
  * {@link Ipv4SpecialUseBlockOptions} for the IPv6 side. Currently only
- * `allowUniqueLocalRange` is exposed (#74351); other reserved IPv6 ranges stay
- * unconditionally blocked because they have no documented fake-ip / proxy
- * use case.
+ * ULA and RFC 5180 benchmarking exemptions are exposed; other reserved IPv6
+ * ranges stay blocked. Callers must explicitly opt in to each range.
  */
 export type Ipv6SpecialUseBlockOptions = {
   /**
@@ -74,6 +74,8 @@ export type Ipv6SpecialUseBlockOptions = {
    * proxy stacks need both ranges exempted to keep `web_fetch` working.
    */
   allowUniqueLocalRange?: boolean;
+  /** Permit only RFC 5180 benchmark addresses (2001:2::/48) used by fake-IP DNS. */
+  allowBenchmarkingRange?: boolean;
 };
 
 const EMBEDDED_IPV4_SENTINEL_RULES: Array<{
@@ -329,7 +331,11 @@ export function isBlockedSpecialUseIpv6Address(
     // `allowRfc2544BenchmarkRange` for the IPv4 side (#74351).
     return false;
   }
-  if (BLOCKED_IPV6_SPECIAL_USE_RANGES.has(range)) {
+  const inBenchmarkingRange = address.match(IPV6_BENCHMARK_PREFIX);
+  if (inBenchmarkingRange && options.allowBenchmarkingRange === true) {
+    return false;
+  }
+  if (inBenchmarkingRange || BLOCKED_IPV6_SPECIAL_USE_RANGES.has(range)) {
     return true;
   }
   // ipaddr.js does not classify deprecated site-local fec0::/10 as private.

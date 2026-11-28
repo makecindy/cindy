@@ -4,6 +4,7 @@ import { createDirectRuntimeBridge, type DirectRuntime, type DirectRuntimeSessio
 import { DIRECT_LINK_LOCAL } from '../../shared/directLink';
 import { DesktopCaptureWindow } from '../remote-desktop/captureWindow';
 import { createLogger } from '../logger';
+import { registerRtcTraffic } from './linkTraffic.desktop';
 
 const log = createLogger('device-link:direct');
 const bridge = createDirectRuntimeBridge({ maxPeers: DIRECT_LINK_DESKTOP_MAX_PEERS,
@@ -17,6 +18,7 @@ let retryAt = 0;
 const RESTART_COOLDOWN_BASE_MS = 60_000;
 const RESTART_COOLDOWN_MAX_MS = 5 * 60_000;
 let stableTimer: ReturnType<typeof setTimeout> | undefined;
+let finishDataTraffic: ReturnType<typeof registerRtcTraffic> | undefined;
 const host = new DesktopCaptureWindow(() => {
   failed();
   log.warn('data transport process stopped; active peers fall back to relay');
@@ -37,7 +39,7 @@ function suspend() {
   detach?.();
   detach = undefined;
   starting = undefined;
-  host.dispose();
+  host.dispose(finishDataTraffic);
 }
 function ensureStarted(): Promise<void> {
   if (detach) return Promise.resolve();
@@ -45,7 +47,7 @@ function ensureStarted(): Promise<void> {
   if (crashes >= 2 && performance.now() < retryAt) return Promise.reject(new Error('DIRECT_RUNTIME_UNAVAILABLE'));
   if (!registered) {
     registered = true;
-    ipcMain.handle(DIRECT_LINK_LOCAL.REGISTER, (event) => host.registered(event));
+    finishDataTraffic = registerRtcTraffic(host, DIRECT_LINK_LOCAL);
     ipcMain.handle(DIRECT_LINK_LOCAL.EVENT, (event, payload: unknown) => {
       host.assertSender(event);
       // Bridge validates shape, frame sizes, connection ownership and pending operation IDs.

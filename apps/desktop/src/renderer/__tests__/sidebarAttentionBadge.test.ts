@@ -46,6 +46,8 @@ vi.mock('@/components/sidebar/VendorIcon', () => ({
   VendorIcon: () => createElement('span', { 'data-testid': 'vendor-icon' }),
   agentKindToVendor: (kind: string | null | undefined) =>
     kind === 'codex' ? 'codex' : kind === 'pi' ? 'pi' : 'cc',
+  engineIconKindOf: (kind: string | null | undefined) =>
+    kind === 'acp' ? 'acp' : kind === 'codex' ? 'codex' : kind === 'pi' ? 'pi' : 'cc',
 }));
 
 afterEach(() => {

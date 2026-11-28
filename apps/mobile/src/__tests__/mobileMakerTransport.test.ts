@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2,
+  CONTROLLER_CAPABILITY_PROVIDER_PICKER_V1,
   FILE_INLINE_MAX_BYTES,
   REMOTE_INVOKE_ALLOWLIST,
   sharedTaskHostPeer,
@@ -105,6 +106,10 @@ describe("mobile maker transport", () => {
     expect(await maker.listSideChats('main')).toEqual([{ id: 'child' }]);
     await expect(maker.createSideChat('main')).rejects.toThrow('CHANNEL_NOT_ALLOWED');
     expect(calls).toEqual(['maker:side-chat:list:v1', 'maker:side-chat:v1']);
+    const invoke = vi.fn();
+    const modern = createMobileMakerTransport({ deviceId: 'side-host', invoke });
+    await modern.createSideChat('main', 'child');
+    expect(invoke.mock.calls[0].slice(0, 3)).toEqual(['side-host', 'maker:side-chat:v1', [{ parentSessionId: 'main', childId: 'child' }]]);
   });
   it('writes reset preferences to the execution device and rejects a different account response', async () => {
     const invoke = vi.fn(async () => ({ providerId: 'openai-b', autoUse: { accountKey: 'bound-account' } }));
@@ -782,11 +787,18 @@ describe("mobile maker transport", () => {
         channel: "maker:provider:list",
         args: [
           {
-            capabilities: [CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2],
+            capabilities: [CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2, CONTROLLER_CAPABILITY_PROVIDER_PICKER_V1],
           },
         ],
       },
     ]);
+  });
+
+  it("sends the current model only for a task that needs its suspended source", async () => {
+    const { calls, maker } = harness();
+    const retainedModel = { agent: 'codex' as const, providerId: 'old', modelId: 'model-1' };
+    await maker.listProviders(retainedModel);
+    expect(calls[0]).toMatchObject({ channel: 'maker:provider:list', args: [{ retainedModel }] });
   });
 
   it("carries providerId into create-session only when a source is explicitly chosen", async () => {

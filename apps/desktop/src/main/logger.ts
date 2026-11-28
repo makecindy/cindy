@@ -348,8 +348,14 @@ export function isTransientNetworkError(err: unknown): boolean {
     case 'UND_ERR_CONNECT_TIMEOUT':
       return true;
     default:
-      return false;
+      break;
   }
+  // `ws` 把 HTTP upgrade 握手超时抛成没有 code 的普通 Error
+  // (ws/lib/websocket.js → abortHandshake)；代理/VPN 抖动时 Discord 网关已经
+  // 在自己的重连循环里，这条错误没有可恢复的调用点，不该带走整个进程 (#11354)。
+  // 只认这一条完整消息: ws 的其它握手失败（例如无效的 Sec-WebSocket-Accept）
+  // 仍应视为致命错误，不能因为都是「握手」就被降级。
+  return (err as Error).message === 'Opening handshake has timed out';
 }
 
 // dev 终端镜像的单行上限。终端只是人眼实时观察通道,超长行(典型:透传大 payload

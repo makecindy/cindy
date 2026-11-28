@@ -10,7 +10,7 @@ type AgentGraph = Pick<ReturnType<typeof createHostAgentGraph>, 'maker' | 'conte
  * The input queue's context recovery (createInputQueue's isContextRecoveryOpen and
  * createContextRecoveryRollover), as main.ts wires it: a kind opens only when it is in `openKinds`,
  * after its real-engine test (release table); a closed kind takes the normal error path, unclaimed.
- * The Codex history and Pi ports reach the rollover only once their kind is open.
+ * A saved Codex history error is classified before a send even when terminal claims are closed.
  */
 export function createHostContextRecoveryWiring(deps: {
   openKinds: ReadonlySet<ContextRecoveryKind>;
@@ -20,6 +20,8 @@ export function createHostContextRecoveryWiring(deps: {
   publish: HostRecoveryPorts['publish'];
   pendingHandoff: HostRecoveryPorts['pendingHandoff'];
   log: HostRecoveryPorts['log'] & { warn(message: string): void };
+  /** The runtime selection's cold Pi window check, read at call time (it is created after the queue). */
+  rehydrateColdPiRuntimeForWindowVerification?: HostRecoveryPorts['rehydrateColdPiRuntimeForWindowVerification'];
 }) {
   const { openKinds } = deps;
   const graph = () => {
@@ -48,11 +50,11 @@ export function createHostContextRecoveryWiring(deps: {
         deps.getGraph()?.contextRecovery.resolveVerifiedWindow(agentKind, modelId, providerId) ?? null,
       resolveHandoffWindow: (sessionId, route) =>
         deps.getGraph()?.contextRecovery.resolveHandoffWindow(sessionId, route) ?? null,
-      ...(openKinds.has('oversized-history') ? { codexHistory: {
-        readCodexThreadStorageReadOnly: (threadId: string) => codexHistory().readCodexThreadStorageReadOnly(threadId),
+      codexHistory: {
+        readCodexThreadStorageReadOnly: async (threadId: string) => codexHistory().readCodexThreadStorageReadOnly(threadId),
         classifyCodexHistoryOversized: (threadId: string, located?: { rolloutPath?: string }) =>
           codexHistory().classifyCodexHistoryOversized(threadId, located),
-      } } : {}),
+      },
       ...(openKinds.has('unsupported-request-option') ? { piCompat: {
         read: (providerId: string, modelId: string, routeKey?: string) =>
           deps.getGraph()?.contextRecovery.piCompat.read(providerId, modelId, routeKey),
@@ -61,6 +63,7 @@ export function createHostContextRecoveryWiring(deps: {
       } } : {}),
       pendingHandoff: deps.pendingHandoff,
       log: deps.log,
+      rehydrateColdPiRuntimeForWindowVerification: deps.rehydrateColdPiRuntimeForWindowVerification,
     }, runtime),
   };
 }

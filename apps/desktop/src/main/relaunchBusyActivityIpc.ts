@@ -71,7 +71,10 @@ async function readTurnFacts(reasons: readonly string[]): Promise<RelaunchTurnFa
  */
 export function registerRelaunchBusyActivityIpc(
   resolveSources: () => RelaunchBusyActivitySources,
-  options?: { describeTurns?: () => Promise<RelaunchTurnFacts | null> },
+  options?: {
+    describeTurns?: () => Promise<RelaunchTurnFacts | null>;
+    readPiActivityForBanner?: () => Promise<boolean>;
+  },
 ): void {
   currentSources = resolveSources;
   currentDescribeTurns = options?.describeTurns;
@@ -86,6 +89,19 @@ export function registerRelaunchBusyActivityIpc(
   ipcMain.handle(RELAUNCH_BLOCKING_ACTIVITY_CHANNEL, async (event, payload) => {
     assertTrustedAppRendererEvent(event);
     const silent = isSilentBusyProbe(payload);
+    if (silent && options?.readPiActivityForBanner) {
+      // Periodic banner checks only choose when to show the prompt. The restart
+      // button still checks Pi synchronously immediately after the scheduler read.
+      try {
+        if (await options.readPiActivityForBanner()) return true;
+      } catch {
+        return true;
+      }
+      return (await evaluateRelaunchBusyActivity({
+        ...resolveSources(),
+        anyPiSubagentRunning: () => false,
+      })).busy;
+    }
     const result = await evaluateRelaunchBusyActivity(resolveSources());
     if (result.busy && !silent) {
       log.info('manual relaunch has live activity', { reasons: result.reasons });

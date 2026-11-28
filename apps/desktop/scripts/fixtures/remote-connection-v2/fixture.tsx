@@ -27,6 +27,19 @@ function link(deviceId: string, path: Link['path'], rttMs: number | null, sent: 
 }
 
 function scenario(name: string): { devices: Device[]; links: Link[]; relayRttMs: number | null } {
+  if (name === 'rename-self') {
+    return { devices: [
+      device({ deviceId: 'self', isSelf: true, name: 'self', selfName: 'Office desktop', platform: 'win32' }),
+      device({ deviceId: 'peer', name: 'MacBook Air' }),
+    ], links: [link('peer', 'direct', 6)], relayRttMs: 18 };
+  }
+  if (name === 'traffic') {
+    return {
+      devices: [SELF, device({ deviceId: 'win', name: 'Work PC', platform: 'win32' }), device({ deviceId: 'mini', name: 'Mac mini' })],
+      links: [link('win', 'direct', 9), { ...link('mini', 'relay', 15), encrypted: false }],
+      relayRttMs: 25,
+    };
+  }
   if (name === 'app-nodes' || name === 'app-nodes-list') {
     return { devices: [SELF,
       device({ deviceId: 'friend', name: 'Friend Mac', app: 'cindy-friend', remoteControlEnabled: false }),
@@ -36,6 +49,13 @@ function scenario(name: string): { devices: Device[]; links: Link[]; relayRttMs:
     ], links: [link('friend', 'direct', 4), link('future', 'relay', 35)], relayRttMs: 18 };
   }
   if (name === 'empty') return { devices: [SELF], links: [], relayRttMs: 18 };
+  if (name === 'narrow-relay') {
+    return {
+      devices: [SELF, device({ deviceId: 'relay-peer', name: 'Relay PC', platform: 'win32' })],
+      links: [link('relay-peer', 'relay', 24)],
+      relayRttMs: 25,
+    };
+  }
   if (name === 'fleet') {
     // 与真实账号同一形状(3 直连、7 经中转、15 离线),名字是虚构的;两台正在收发。
     const devices: Device[] = [SELF];
@@ -97,6 +117,28 @@ function scenario(name: string): { devices: Device[]; links: Link[]; relayRttMs:
       relayRttMs: 21,
     };
   }
+  if (name === 'relay-below' || name === 'relay-below-long-name') {
+    // 七台直连拆成两组，左边直连在上、两台经中转在下，中转点远在这台电脑下方，
+    // 这台电脑到中转站那段线很陡;中转往返只有个位数。
+    const devices: Device[] = [name === 'relay-below-long-name'
+      ? { ...SELF, name: 'Conference Room Editing Workstation', selfName: 'Conference Room Editing Workstation' }
+      : SELF];
+    const links: Link[] = [];
+    const direct = [
+      ['design', 'Design Mac', 'darwin', 1], ['office', 'Office Mac', 'darwin', 5], ['workshop', 'Workshop Mac', 'darwin', 1],
+      ['laptop', 'Spare MacBook', 'darwin', 260], ['work-pc', 'Work PC', 'win32', 9], ['vm', 'Linux VM', 'linux', 354],
+    ] as const;
+    for (const [id, name, platform, rtt] of direct) {
+      devices.push(device({ deviceId: id, name, platform }));
+      links.push(link(id, 'direct', rtt));
+    }
+    devices.push(device({ deviceId: 'cloud', name: '云端 Cindy', platform: 'linux' }));
+    links.push({ ...link('cloud', 'direct', 12), encrypted: false });
+    devices.push(device({ deviceId: 'small-pc', name: 'Small PC' }), device({ deviceId: 'friend-phone', name: 'iPhone', platform: 'ios', app: 'cindy-friend' }));
+    links.push(link('small-pc', 'relay', 25), link('friend-phone', 'relay', 58));
+    for (let i = 0; i < 2; i++) devices.push(device({ deviceId: `off${i}`, name: `Old device ${i + 1}`, online: false, lastSeenAt: '2026-11-20T08:00:00Z' }));
+    return { devices, links, relayRttMs: 9 };
+  }
   if (name === 'split-direct') {
     // 直连多到拆成两组:第二组直连在左边上方,中转组排在它下面,中转站整个落在这台电脑的名字下面。
     const devices: Device[] = [SELF];
@@ -154,12 +196,36 @@ function scenario(name: string): { devices: Device[]; links: Link[]; relayRttMs:
   };
 }
 
-const data = scenario(ctx.case);
-const agentNetRoutes: DeviceLinkPeerLinksSnapshot['agentNetRoutes'] = ctx.case === 'default' ? [
+const scene = ctx.case === 'narrow-fleet' ? 'fleet' : ctx.case;
+const data = scenario(scene);
+if (ctx.case === 'narrow-fleet') {
+  data.links = data.links.map((link) => {
+    if (link.deviceId === 'dir0') return { ...link, encrypted: false };
+    if (link.deviceId === 'rel6') return { ...link, encrypted: undefined };
+    return link;
+  });
+}
+const defaultRoutes: NonNullable<DeviceLinkPeerLinksSnapshot['agentNetRoutes']> = ctx.case === 'default' ? [
   { deviceId: 'mini', path: 'direct', rttMs: 1 },
   { deviceId: 'pixel', path: 'connecting', rttMs: null },
-] : undefined;
-if (agentNetRoutes) data.links = data.links.filter((link) => link.deviceId !== 'mini');
+] : [];
+if (ctx.case === 'default') data.links = data.links.filter((link) => link.deviceId !== 'mini');
+/**
+ * 经中转的 Agent-Net 设备自己到中转走 UDP 还是 WS(对方经控制流告诉本机，2026-11-27):拓扑在通往它的线上写这一段，
+ * 这台电脑那一段写在它到中转站的线上。不在表里的走 UDP;值为 null 的当旧版，不说。
+ */
+const PEER_RELAY_VIA: Record<string, 'udp' | 'websocket' | null> = {
+  nas: 'websocket', 'relay-peer': 'websocket', rel2: 'websocket', rel5: null, future: null, 'friend-phone': null,
+};
+function agentNetRoutes(): DeviceLinkPeerLinksSnapshot['agentNetRoutes'] {
+  const legs = data.links.flatMap((link) => {
+    if (link.path !== 'relay' || link.encrypted !== true) return [];
+    const via = link.deviceId in PEER_RELAY_VIA ? PEER_RELAY_VIA[link.deviceId] : 'udp';
+    return via ? [{ deviceId: link.deviceId, path: 'relay' as const, rttMs: link.rttMs, peerRelayVia: via }] : [];
+  });
+  const routes = [...defaultRoutes, ...legs];
+  return routes.length ? routes : undefined;
+}
 if (ctx.case === 'remote-switch-controller-strict') data.links = data.links.filter((l) => l.encrypted);
 /**
  * 这台电脑实际用的连接方式(拓扑中间名字下面):打开 Agent-Net 后通常就是 Agent-Net;self-device-link 是开着开关、
@@ -167,6 +233,8 @@ if (ctx.case === 'remote-switch-controller-strict') data.links = data.links.filt
  */
 const selfEncrypted = ctx.case !== 'self-device-link';
 if (!selfEncrypted) for (const l of data.links) l.encrypted = false;
+/** 这台电脑在官方网络上被移除了：本机卡片说明原因并给「重新加入」(deviceRejoin.ts)。 */
+const removed = ctx.case === 'removed-rejoin';
 /**
  * 远程切换连接方式的模拟对端(remote-switch):代替那台电脑回答 `peer-agent-net`,并像真实切换一样
  * 让与它的连接先断开、再以新方式连回来。MacBook Air 是旧版 Cindy(不认识这个请求)，Spare PC 在当前中转上
@@ -221,17 +289,25 @@ async function simulatePeer(command: Extract<SelfHostedRelayCommand, { type: 'pe
   return { ok: true, result: { version: 1, switchId: request.switchId, enabled: request.enabled, confirmWithinMs } };
 }
 if (ctx.case === 'default' && data.links[0]) data.links[0].encrypted = false;
+// An organization member with a running cloud computer and room for another (the 云主机 row).
+const cloudComputer = ctx.case === 'cloud-computer';
+if (cloudComputer) (globalThis as { __uiPageAuthUser?: unknown }).__uiPageAuthUser = { id: 'member-1', orgId: 'org-1', membershipKind: 'org' };
 
 void mountPage({
   route: '/settings?tab=remote-control',
   host: {
     deviceLink: {
-      listDevices: async () => ({ devices: data.devices }),
+      cloudComputerEntry: async () => (cloudComputer ? {
+        enabled: true, membershipId: 'member-1', organizationId: 'org-1',
+        url: 'https://console.example.test/console/orgs/org-1/personal/cloud', computer: { status: 'linked' }, canAdd: true,
+      } : null),
+      // A removed computer is no longer on the account's device list; its own card stays, stopped on the removal.
+      listDevices: async () => ({ devices: removed ? data.devices.filter((d) => !d.isSelf) : data.devices }),
       getState: async () => ({
         remoteControlEnabled: ctx.case !== 'empty',
         keepAwake: false,
-        linkStatus: 'online',
-        connectionIssue: null,
+        linkStatus: removed ? 'stopped' : 'online',
+        connectionIssue: removed ? { kind: 'device-removed', closeCode: 4410, at: Date.now(), rejoinable: true } : null,
         standby: false,
         controlledBy: ctx.case === 'default' ? [{ deviceId: 'win', name: 'Work PC' }] : [],
         revokedControllers: [],
@@ -240,10 +316,15 @@ void mountPage({
       }),
       getPeerLinks: async () => ({
         links: data.links,
-        agentNetRoutes,
+        traffic: {
+          last5m: { 'device-link': { sent: 0, received: 0 }, 'agent-net': { sent: 131072, received: 524288 } },
+          lastHour: { 'device-link': { sent: 524288, received: 1048576 }, 'agent-net': { sent: 2097152, received: 8388608 } },
+          lastDay: { 'device-link': { sent: 8388608, received: 25165824 }, 'agent-net': { sent: 33554432, received: 100663296 } },
+        },
+        agentNetRoutes: agentNetRoutes(),
         relayProtocol: selfEncrypted ? 'agent-net' : 'device-link',
         // Agent-Net 经中转的数据走 UDP;fleet 演示 UDP 不通退回 WebSocket。Device Link 只有 WebSocket。
-        relayTransport: selfEncrypted && ctx.case !== 'fleet' ? 'udp' : 'websocket',
+        relayTransport: selfEncrypted && scene !== 'fleet' ? 'udp' : 'websocket',
         relayRttMs: data.relayRttMs,
       }),
       onPeerLinksChanged: subscription('peerLinks'),
@@ -254,8 +335,19 @@ void mountPage({
       onControlledState: subscription('controlled'),
       onControlTargetChanged: subscription('controlTarget'),
       setEnabled: forbid('deviceLink.setEnabled'),
-      renameDevice: forbid('deviceLink.renameDevice'),
-      deleteDevice: forbid('deviceLink.deleteDevice'),
+      renameDevice: ctx.case === 'rename-self' ? async (deviceId: string, name: string) => {
+        data.devices = data.devices.map((d) => d.deviceId === deviceId ? { ...d, name } : d);
+        return { deviceId, name };
+      } : forbid('deviceLink.renameDevice'),
+      deleteDevice: async (deviceId: string) => {
+        const index = data.devices.findIndex((d) => d.deviceId === deviceId && !d.online && !d.isSelf);
+        if (index >= 0) data.devices.splice(index, 1);
+        return { deviceId, deleted: index >= 0 };
+      },
+      rejoin: removed ? async () => {
+        (window as unknown as { __rejoinCalls?: number }).__rejoinCalls = ((window as unknown as { __rejoinCalls?: number }).__rejoinCalls ?? 0) + 1;
+        return { agentNet: 'rejoined' as const };
+      } : forbid('deviceLink.rejoin'),
     },
     selfHostedRelay: {
       command: async (command: SelfHostedRelayCommand) => ({
@@ -293,7 +385,7 @@ void mountPage({
   },
   render: () => (
     <AppFrame>
-      <div className="mx-auto w-full max-w-[920px] px-6 py-6">
+      <div className={`mx-auto w-full px-6 py-6 ${ctx.case === 'default' ? 'max-w-[1000px]' : 'max-w-[920px]'}`}>
         <RemoteControlSection />
       </div>
     </AppFrame>

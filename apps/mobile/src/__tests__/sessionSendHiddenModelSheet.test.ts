@@ -12,7 +12,7 @@ const readTextLf = (path: string): string =>
 const screen = readTextLf("app/sessions/[sessionId].tsx");
 
 function hiddenModelSendBlock(): string {
-  const start = screen.indexOf("modelNeedsReselection(\n      getCachedDeviceProviders(deviceId)?.modelVisibilityOverrides,");
+  const start = screen.indexOf("if (blockedModel) {");
   expect(start).toBeGreaterThan(0);
   const end = screen.indexOf("return;\n    }", start);
   expect(end).toBeGreaterThan(start);
@@ -22,16 +22,15 @@ function hiddenModelSendBlock(): string {
 describe("session send blocked by a hidden model", () => {
   it("points the model sheet at the selection being validated before opening it", () => {
     const block = hiddenModelSendBlock();
-    const init = block.indexOf("setModelSheetAgentKind(selectionAtSend.agentKind);");
+    const init = block.indexOf("setModelSheetAgentKind(blockedModel.agent);");
     const open = block.indexOf("setModelSheetOpen(true);");
     expect(init).toBeGreaterThan(0);
     expect(open).toBeGreaterThan(init);
   });
 
-  it("validates the pending cross-agent target, matching the manual picker entry", () => {
-    expect(screen).toContain(
-      "? { agentKind: intentAtSend.targetAgentKind, model: intentAtSend.model, providerId: intentAtSend.providerId }",
-    );
+  it("uses the latest session row for ordinary messages and preserves the manual picker entry", () => {
+    expect(screen).toContain("const sessionAtSend = readSessionRowNow() ?? currentSession;");
+    expect(screen).toMatch(/!earlyLocalCommand && !earlyDesktopCommand\s+&& blockedSessionModelAtSend\(sessionAtSend,/);
     expect(screen).toContain("setModelSheetAgentKind(agentSwitchIntent?.targetAgentKind ?? sessionAgentKind);");
   });
 });

@@ -1,4 +1,4 @@
-import type { Session } from '@cindy/maker-core';
+import type { AgentEvent, Session } from '@cindy/maker-core';
 import { createChannelTurnObserver } from './channelTurnSignal';
 import { isManagedSidecarProviderId } from '../../shared/localModelRuntime.js';
 import { ensureManagedOllamaReadyForSession } from '../local-model-runtime/preflight.js';
@@ -12,6 +12,7 @@ import { SilentStopTurnLeaseGate, SessionTurnLeaseTracker } from './sessionTurnL
 import { prepareBotPermissionDispatch } from './botPermissionDispatch.js';
 
 export interface InstallSessionTurnObserverDeps {
+  readonly onLocalTurnTerminal?: (session: Session, generation: number, event: AgentEvent) => void;
   readonly onProviderInitiatedTurn?: (session: Session, generation: number) => void;
   readonly beforeLocalProviderStart?: (session: Session) => Promise<void>;
   readonly silentStopTurnLeaseGate: Pick<
@@ -26,13 +27,16 @@ export interface InstallSessionTurnObserverDeps {
   readonly log: Pick<ReturnType<typeof createLogger>, 'debug'>;
 }
 
-export function installSessionTurnObserver(deps: InstallSessionTurnObserverDeps, session: Session) {
+export function installSessionTurnObserver(deps: InstallSessionTurnObserverDeps, session: Session,
+  usage?: { reserve(generation: number): (dispatched: boolean) => void; dispatch(generation: number): void }) {
   let assertPermissionDispatch: (() => void) | undefined;
   const channelTurn = createChannelTurnObserver(session);
   session.setTurnLifecycleObserver({
+    onTurnReserved: usage?.reserve,
     onDispatching: () => {
       assertPermissionDispatch?.();
       channelTurn.onDispatching();
+      usage?.dispatch(session.getTurnGeneration());
     },
     beforeProviderStart: async (turnGeneration, signal) => {
       assertPermissionDispatch = undefined;
@@ -54,9 +58,12 @@ export function installSessionTurnObserver(deps: InstallSessionTurnObserverDeps,
       // 同一账号付费，门禁照常执行。
       const chargedToShareHost = isProviderShareAgentDeviceId(session.agentDeviceId);
       const model = session.model;
-      if (model) {
+      // 插件引擎(ACP)用它自己的模型与凭证,不是 Cindy 目录里的路由:没有付费 / 来源裁决可做
+      // (docs/plans/acp-plugin-bridge.md,与建任务时 admitLocalRoute 跳过同口径)。
+      const routeAgentKind = session.agentKind;
+      if (model && routeAgentKind !== 'acp') {
         const verdict = await verdictForModelRoute(
-          session.agentKind,
+          routeAgentKind,
           model,
           getSessionProvider(session.id),
         );
@@ -127,6 +134,7 @@ export function installSessionTurnObserver(deps: InstallSessionTurnObserverDeps,
     },
     onTerminal: ({ turnGeneration, event, isCurrentGeneration }) => {
       if (session.remoteHostId) return;
+      if (isCurrentGeneration && !session.agentDeviceId) deps.onLocalTurnTerminal?.(session, turnGeneration, event);
       const turnLeaseId = deps.providerTurnLeaseId(session.instanceId, turnGeneration);
       const isSilentStop =
         event.type === 'done' &&

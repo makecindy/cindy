@@ -42,7 +42,7 @@
 | 能力 | 状态 | 证据 / 缺口 |
 |---|---|---|
 | 本地模式（无账号） | 部分 | 登录页可进入本地模式（`authGetLoginState`/`authEnterLocal` 已实现），但随后停在 “Waking Cindy…” 启动门；Host 侧尚无本地 owner 命名空间 |
-| 复用现有登录 | 已验证（单写者） | 登录态稳定：Host 后台每 30 分钟定时刷新，暴露 `/api/auth/refresh`；Desktop 客户端模式重定向所有刷新至 Host，杜绝并发 refresh token 轮转失效 |
+| 复用现有登录 | 已验证（单写者） | 登录态稳定：Host 按 access token 的 exp 减 300 秒续期（与桌面同一个函数），暴露 `/api/auth/refresh`；Desktop 客户端模式重定向所有刷新至 Host，杜绝并发 refresh token 轮转失效 |
 | 复用现有存储 | 已验证 | 打开同一 owner 生产库（192 条存量任务与全部历史），无平行数据库，`fuser -v` 确认单写者 |
 | 单 Runtime 锁 | 已验证 | 第二个 Host 报 `runtime.state=blocked`、`storage=unopened` |
 | 设置与偏好同步 | 已验证 | 外观设置、窗口布局、全局快捷键、项目别名由 Host 统一读写，并通过带序号 SSE 事件实时广播，两端 1 秒内同步 |

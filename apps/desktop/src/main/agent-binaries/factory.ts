@@ -26,10 +26,7 @@ import {
   type BinaryProvisionerConfig,
   type VendorRuntimeState,
 } from './types.js';
-import {
-  isBinaryVersionNotOlder,
-  normalizeBinaryVersion,
-} from './binary-version-probe.js';
+import { findPreferredLocalBinary as findPreferredLocalBinaryIn } from './local-version-selection.js';
 import { getVendorAsset, resolveVendorAssetUrl, type VendorAsset } from './manifest.js';
 import {
   clearPreparedBinaryDownloads,
@@ -67,39 +64,6 @@ function getVerifiedMarker(installSubdir: string, version: string): string {
   return path.join(getVersionDir(installSubdir, version), '.verified');
 }
 
-interface VerifiedBinaryCandidate {
-  directoryVersion: string;
-  binaryPath: string;
-}
-
-/** List executable installs carrying the provisioner's completed-download marker. */
-function listVerifiedBinaries(
-  installSubdir: string,
-  binaryName: string,
-): VerifiedBinaryCandidate[] {
-  try {
-    const root = getInstallRoot(installSubdir);
-    return fs
-      .readdirSync(root, { withFileTypes: true })
-      .filter((entry) => entry.isDirectory())
-      .map((entry) => ({
-        directoryVersion: entry.name,
-        binaryPath: getFinalBinPath(installSubdir, entry.name, binaryName),
-      }))
-      .filter((candidate) => {
-        try {
-          fs.accessSync(getVerifiedMarker(installSubdir, candidate.directoryVersion));
-          fs.accessSync(candidate.binaryPath, fs.constants.X_OK);
-          return true;
-        } catch {
-          return false;
-        }
-      });
-  } catch {
-    return [];
-  }
-}
-
 /**
  * Find the latest locally installed and verified version.
  * Scans the install root for directories containing a .verified marker file,
@@ -135,11 +99,7 @@ function findLatestVerifiedBinary(
   return null;
 }
 
-/**
- * Choose the highest real local semver that is not older than the manifest.
- * A resolver failure is deliberately ignored so this additive check can never
- * turn the existing exact-manifest path into a startup failure.
- */
+// Moved to local-version-selection.ts (no Electron), with the install root passed in.
 async function findPreferredLocalBinary(
   installSubdir: string,
   binaryName: string,
@@ -148,29 +108,7 @@ async function findPreferredLocalBinary(
     ((binaryPath: string, signal?: AbortSignal) => Promise<string | null>) | undefined,
   signal?: AbortSignal,
 ): Promise<{ version: string; binaryPath: string } | null> {
-  const requiredVersion = manifestVersion === undefined ? null : normalizeBinaryVersion(manifestVersion);
-  if (!resolveVersion || (manifestVersion !== undefined && !requiredVersion)) return null;
-
-  // Probe all completed installs concurrently so one broken candidate cannot hide
-  // a self-updated runtime or multiply the bounded probe delay.
-  const resolved = await Promise.all(
-    listVerifiedBinaries(installSubdir, binaryName).map(async (candidate) => {
-      try {
-        const reported = await resolveVersion(candidate.binaryPath, signal);
-        const version = reported ? normalizeBinaryVersion(reported) : null;
-        return version ? { version, binaryPath: candidate.binaryPath } : null;
-      } catch {
-        return null;
-      }
-    }),
-  );
-  return resolved.reduce<{ version: string; binaryPath: string } | null>((preferred, candidate) => {
-    if (!candidate || (requiredVersion !== null && !isBinaryVersionNotOlder(candidate.version, requiredVersion)))
-      return preferred;
-    return !preferred || isBinaryVersionNotOlder(candidate.version, preferred.version)
-      ? candidate
-      : preferred;
-  }, null);
+  return findPreferredLocalBinaryIn(() => getInstallRoot(installSubdir), binaryName, manifestVersion, resolveVersion, signal);
 }
 
 function isInstalled(installSubdir: string, version: string, binaryName: string): boolean {

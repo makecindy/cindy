@@ -109,7 +109,7 @@ export function WindowBehaviorSection() {
                 <p role="alert">{t(`settings.windowBehavior.loginItem.${loginItem.error}`)}</p>
               ) : loginItem.state?.requiresApproval ? (
                 <p>{t('settings.windowBehavior.loginItem.requiresApproval')}</p>
-              ) : loginItem.busy ? (
+              ) : loginItem.busy && !loginItem.state ? (
                 <p>{t('settings.windowBehavior.loginItem.loading')}</p>
               ) : null}
             </div>
@@ -120,18 +120,19 @@ export function WindowBehaviorSection() {
   }
 
   if (menubar.available) {
+    const setting = windowBehaviorSettings[isWindows ? 'trayCardLabel' : 'menubarLabel'];
     rows.push({
       key: 'menubar',
       node: (
         <BehaviorRow
-          id={windowBehaviorSettings.menubarLabel.targetId}
-          data-setting-id={windowBehaviorSettings.menubarLabel.id}
-          label={t(windowBehaviorSettings.menubarLabel.titleKey)}
-          hint={t(windowBehaviorSettings.menubarLabel.descriptionKey)}
+          id={setting.targetId}
+          data-setting-id={setting.id}
+          label={t(setting.titleKey)}
+          hint={t(setting.descriptionKey)}
           checked={menubar.state?.enabled === true}
           disabled={menubar.busy}
           onCheckedChange={(enabled) => void menubar.setEnabled(enabled)}
-          ariaLabel={t(windowBehaviorSettings.menubarLabel.titleKey)}
+          ariaLabel={t(setting.titleKey)}
         />
       ),
     });

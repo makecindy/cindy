@@ -71,6 +71,8 @@ function recordingMaker(f) {
 
 async function harness(t) {
   const f = await learnFixture(t);
+  // The runtime start writes the task's provider (as the desktop's bootstrapSession): the column it writes.
+  f.sqlite.exec('CREATE TABLE sessions(id TEXT PRIMARY KEY, provider_id TEXT)');
   const maker = recordingMaker(f);
   const persisted = [];
   const queue = createInputQueue({
@@ -82,6 +84,8 @@ async function harness(t) {
     persistMessage: async (sessionId, input) => { persisted.push({ sessionId, ...input }); },
     readAuthorizationHistory: async id => persisted.filter(row => row.sessionId === id),
     sent: () => {},
+    // Fixture does not test admission (夹具不测准入): the runtime start admission lets every start through.
+    admitLocalRoute: async () => {},
   });
   t.after(() => queue.dispose());
   // One turn: returns what the engine was given and the persisted user row.

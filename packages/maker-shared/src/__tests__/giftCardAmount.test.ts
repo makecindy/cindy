@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
-import { giftCardAmountArt, giftCardAmountLabel } from '../giftCardAmount';
+import {
+  bundledGiftCardAmountLayout,
+  giftCardAmountArt,
+  giftCardAmountArtForLayout,
+  giftCardAmountLabel,
+  giftCardAmountLayoutFitsCard,
+} from '../giftCardAmount';
 
 describe('gift card amount on the face', () => {
   it('writes the amount with the currency symbol and without trailing zeros', () => {
@@ -37,6 +43,36 @@ describe('gift card amount on the face', () => {
       expect(scaleOf(face, '$100')).toBe(scaleOf(face, '$20'));
     }
     expect(scaleOf('bell', '$1000')).toBeLessThan(scaleOf('bell', '$100'));
+  });
+
+  // 服务端下发的卡面带自己的金额印法：起点、基线与颜色都按它来，可占宽度同样限制缩放。
+  it('prints the amount where a server card face asks for it', () => {
+    const art = giftCardAmountArtForLayout({ x: 600, baseline: 300, size: 228, maxWidth: 200, color: '#112233' }, '$1000');
+    expect(art?.fill).toBe('#112233');
+    expect(art?.transform.startsWith('translate(600 300) ')).toBe(true);
+    expect(art!.width).toBeLessThanOrEqual(200);
+  });
+
+  // 评审发现（PR #11688）：只分别检查基线与字号时，基线 100、字号 228 也算合法，金额上半截会被裁掉。
+  // 纵向按字形实际上下沿判断；内置四张卡面都在卡面内。
+  it('tells whether a layout keeps every glyph on the card', () => {
+    const layout = { x: 80, baseline: 676, size: 228, maxWidth: 480, color: '#F3EDE2' };
+    expect(giftCardAmountLayoutFitsCard(layout)).toBe(true);
+    expect(giftCardAmountLayoutFitsCard({ ...layout, baseline: 100 })).toBe(false);
+    expect(giftCardAmountLayoutFitsCard({ ...layout, baseline: 757 })).toBe(false);
+    expect(giftCardAmountLayoutFitsCard({ ...layout, x: 800, maxWidth: 401 })).toBe(false);
+    for (const face of ['cindy', 'cat', 'bell', 'leap']) {
+      expect(giftCardAmountLayoutFitsCard(bundledGiftCardAmountLayout(face)!)).toBe(true);
+    }
+  });
+
+  // 评审发现（PR #11688）：服务端误配极小的字号或可占宽度时，缩放取整成 0，金额画成看不见的路径，
+  // 界面却以为已印在卡上、不再用文字写出金额。缩到看不清就不印，交给文字。
+  it('declines to print an amount it would have to shrink out of sight', () => {
+    const layout = { x: 80, baseline: 676, size: 228, maxWidth: 480, color: '#F3EDE2' };
+    expect(giftCardAmountArtForLayout({ ...layout, size: 0.001 }, '$20')).toBeNull();
+    expect(giftCardAmountArtForLayout({ ...layout, maxWidth: 1 }, '$20')).toBeNull();
+    expect(giftCardAmountArtForLayout(layout, '$20')).not.toBeNull();
   });
 
   it('declines faces and characters it cannot draw', () => {

@@ -23,6 +23,7 @@ vi.mock('../model-route-guard-live.js', () => ({
 }));
 
 vi.mock('../../appSessionState.js', () => ({
+  getDataOwnerLifetime: () => 0,
   activeOwnerScopeKey: () => h.ownerScope,
   isAppSessionBoundaryPending: () => h.sessionBoundaryPending,
 }));
@@ -88,10 +89,12 @@ describe('auxiliary task-title routing', () => {
   ])('保留正常标题并按 40 个 Unicode 字符截断: %s', async (text, expected) => {
     h.requestText.mockResolvedValue({ ok: true, text });
     await expect(generateTitleWithAuxiliaryModel(REQUEST, {}, runtimeDeps())).resolves.toBe(expected);
+    expect(h.requestText).toHaveBeenLastCalledWith(REQUEST.prompt, expect.objectContaining({ source: 'title', automaticTitle: true }));
     // AI regenerate consumes the result API; both routes retain historical truncation.
     await expect(generateTitleWithAuxiliaryModelResult(REQUEST, {}, runtimeDeps())).resolves.toEqual({
       status: 'ok', title: expected,
     });
+    expect(h.requestText).toHaveBeenLastCalledWith(REQUEST.prompt, expect.objectContaining({ source: 'title', automaticTitle: false }));
   });
 
   it('uses the shared utility chain in automatic mode', async () => {
@@ -128,6 +131,16 @@ describe('auxiliary task-title routing', () => {
         responseInstructions: expect.stringContaining('Output only the short conversation title'),
       }),
     );
+  });
+
+  // Plugin-engine tasks (agentKind null, 2026-11-25) are named by the auxiliary chain only: when it is
+  // exhausted, their conversation never goes to a built-in engine's one-shot. Minimal input: agentKind null.
+  it('never falls back to another engine for a plugin-engine task', async () => {
+    h.requestText.mockResolvedValue({ ok: false, reason: 'all_candidates_failed', attempts: [] });
+    await expect(generateTitleWithAuxiliaryModel({ ...REQUEST, agentKind: null }, {}, runtimeDeps())).resolves.toBeNull();
+    expect(h.oneShot).not.toHaveBeenCalled();
+    h.requestText.mockResolvedValue({ ok: true, text: '插件引擎任务命名' });
+    await expect(generateTitleWithAuxiliaryModel({ ...REQUEST, agentKind: null }, {}, runtimeDeps())).resolves.toBe('插件引擎任务命名');
   });
 
   it('lets a latency-bound caller skip the session-agent fallback, while the default keeps it', async () => {

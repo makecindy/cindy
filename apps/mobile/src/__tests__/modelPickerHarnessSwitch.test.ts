@@ -35,6 +35,8 @@ function harness(
   const executionMakerForDevice = vi.fn((_deviceId: string) => ({ getCapabilities: getRemoteCapabilities }));
   const env = {
     // These fixtures exercise ordinary tasks; Orca admission has its own suite.
+    // Built-in tasks only; plugin-engine picks are covered by pluginEngines.test.ts.
+    pluginEngineTask:false,
     hostSupportsRemoteModelWindowRebuild:false, modelSelectionUsesWindowIntent:false, orcaModelSelectionUsesIntent:false,orcaRemoteAgentDeviceId:null,executionMakerForDevice,
     isProviderShareAgentDeviceId:(id:unknown)=>typeof id === 'string' && id.startsWith('share:'),
     agentLocationMovable:true,

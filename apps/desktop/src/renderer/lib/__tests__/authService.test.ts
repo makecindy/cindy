@@ -141,6 +141,23 @@ describe('renderer auth service', () => {
     expect(createAuthService().getSnapshot()).toBeNull();
   });
 
+  // 甲 (2026-11-17), unit on the real service: the Host's start-failure reason survives normalization; a code
+  // this build does not know reads as HOST_START_FAILED (a newer Host); every other state keeps its exact shape.
+  it('keeps the Host start-failure reason, and only that, across normalization', async () => {
+    const service = createAuthService();
+    const listener = vi.fn();
+    service.onAuthStateChange(listener);
+    push({ ...signedOut, hostUnavailable: { reason: 'HOST_DATABASE_LOCKED' } });
+    push({ ...signedOut, hostUnavailable: { reason: 'HOST_SOME_FUTURE_CODE' } } as unknown as AuthState);
+    push(signedOut);
+    expect(listener.mock.calls.map(([state]) => state.hostUnavailable)).toEqual([
+      { reason: 'HOST_DATABASE_LOCKED' },
+      { reason: 'HOST_START_FAILED' },
+      undefined,
+    ]);
+    expect(listener.mock.calls[2][0]).toStrictEqual(signedOut);
+  });
+
   it('propagates a real initialization failure without inventing an auth snapshot', async () => {
     const service = createAuthService();
     const pending = service.initialize();

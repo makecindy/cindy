@@ -50,6 +50,7 @@ export function createClaudeProviderBridge(options: {
   providerId?: string;
   /** Preset the connection derives from; lets the native route keep its provider-specific headers after edits. */
   catalogPresetId?: string;
+  copilotOAuth?: boolean;
   nativeUpstream?: string;
   fetchImpl: typeof fetch;
 }): ResponsesBridgeHandler {
@@ -58,6 +59,7 @@ export function createClaudeProviderBridge(options: {
   },
     providerId: options.providerId ?? 'custom',
     catalogPresetId: options.catalogPresetId,
+    copilotOAuth: options.copilotOAuth,
     upstream: options.nativeUpstream,
     apiKey: nativeBridgeApiKey(options.headers),
     headers: Object.fromEntries(Object.entries(options.headers).filter(([name]) =>

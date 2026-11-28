@@ -1,3 +1,6 @@
+import { isSqliteCorruption } from '../client/sqliteCorruption.js';
+import type { DataOwnerPushStamp } from '../../../shared/dataOwnerPush.js';
+
 export type OwnerEnsureResult =
   | { ready: true }
   | {
@@ -6,11 +9,12 @@ export type OwnerEnsureResult =
     };
 
 interface OwnerEnsureCoordinatorDeps {
-  isOwnerCurrent(ownerId: string): boolean;
-  beforeEnsureReady?(ownerId: string): void | Promise<void>;
+  isOwnerCurrent(ownerId: string, recovery?: DataOwnerPushStamp): boolean;
+  beforeEnsureReady?(ownerId: string, recovery?: DataOwnerPushStamp): void | Promise<void>;
   ensureReady(ownerId: string): Promise<OwnerEnsureResult>;
   onReady?(ownerId: string): void | Promise<void>;
   onReadyError?(ownerId: string, error: unknown): void;
+  getCorruptionError?(ownerId: string): Error | null;
   discardReadyOwner(ownerId: string): void | Promise<void>;
 }
 
@@ -40,15 +44,16 @@ const readyHookFailureResult = (error: unknown): OwnerEnsureResult => ({
 export function createOwnerEnsureCoordinator(deps: OwnerEnsureCoordinatorDeps) {
   let tail: Promise<void> = Promise.resolve();
 
-  return (ownerId: string): Promise<OwnerEnsureResult> => {
+  return (ownerId: string, recovery?: DataOwnerPushStamp): Promise<OwnerEnsureResult> => {
+    const isCurrent = () => deps.isOwnerCurrent(ownerId, recovery);
     const operation = tail.then(async () => {
-      if (!deps.isOwnerCurrent(ownerId)) return staleResult();
+      if (!isCurrent()) return staleResult();
 
-      await deps.beforeEnsureReady?.(ownerId);
-      if (!deps.isOwnerCurrent(ownerId)) return staleResult();
+      await deps.beforeEnsureReady?.(ownerId, recovery);
+      if (!isCurrent()) return staleResult();
 
       const result = await deps.ensureReady(ownerId);
-      if (!deps.isOwnerCurrent(ownerId)) {
+      if (!isCurrent()) {
         await deps.discardReadyOwner(ownerId);
         return staleResult();
       }
@@ -58,6 +63,13 @@ export function createOwnerEnsureCoordinator(deps: OwnerEnsureCoordinatorDeps) {
           await deps.onReady(ownerId);
         } catch (error) {
           deps.onReadyError?.(ownerId, error);
+          // Preserve a quarantined client until explicit recovery. Discarding
+          // it here would let the next window create a fresh error boundary.
+          const corruption = deps.getCorruptionError?.(ownerId)
+            ?? (isSqliteCorruption(error) ? error : null);
+          if (corruption) {
+            return { ready: false, error: { code: 'DB_RUNTIME_CORRUPT', message: corruption instanceof Error ? corruption.message : String(corruption) } };
+          }
           // ensureReady has already committed this owner's DB. A failed
           // lifecycle hook must roll it back so a renderer retry can perform a
           // complete initialization instead of observing a half-ready owner.
@@ -65,7 +77,7 @@ export function createOwnerEnsureCoordinator(deps: OwnerEnsureCoordinatorDeps) {
           return readyHookFailureResult(error);
         }
       }
-      if (!deps.isOwnerCurrent(ownerId)) {
+      if (!isCurrent()) {
         await deps.discardReadyOwner(ownerId);
         return staleResult();
       }

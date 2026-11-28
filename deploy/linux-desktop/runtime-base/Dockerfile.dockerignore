@@ -1,0 +1,6 @@
+# Context is deploy/linux-desktop; the base reads only these tracked inputs.
+*
+!runtime-base/base_lock.py
+!runtime-base/packages.lock
+!runtime-fonts/stage-emoji-font.py
+!normalize-timestamps.py

@@ -99,12 +99,14 @@ describe('shared Home group', () => {
     expect(split([], [{ ...own, source: null }]).rows).toHaveLength(1);
   });
 
-  it('moves pinned and project shared tasks into the same group', () => {
-    const result = split([
+  it.each([false, true])('lists each shared task once, including pinned tasks (inboxMode=%s)', inboxMode => {
+    const sessions = [
       { ...session('joined', peer, 'Joined'), pinnedAt: '2026-09-21T00:00:00.000Z' },
       { ...session('owner-task', 'desktop', 'My share'), workspaceKind: 'project', workingDir: '/repo' },
       { ...session('normal', 'desktop', 'Normal'), workspaceKind: 'project', workingDir: '/repo' },
-    ]);
+    ];
+    const home = buildMobileHomePresentation({ sessions, inboxMode });
+    const result = splitSharedHomeGroup(home, [own], { sessions, searchQuery: '', statusFilter: 'active' });
     expect(result.rows).toHaveLength(2);
     expect(result.home.pinned).toEqual([]);
     expect(result.home.projects[0].sessions.map(item => item.session.id)).toEqual(['normal']);

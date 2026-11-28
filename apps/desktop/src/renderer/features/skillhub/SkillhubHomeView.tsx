@@ -356,6 +356,8 @@ export function SkillhubHomeContent({
                   className="skill-catalog-source-tabs min-w-0"
                   role="radiogroup"
                   aria-label={t('skillhub.home.catalogFiltersAria')}
+                  // Underline-styled tabs keep an explicit size; density presets would detach the
+                  // underline from the divider (DESIGN.md §4 Tabs).
                   height={40}
                   optionHeight={40}
                   optionClassName="px-1 text-13"
@@ -405,20 +407,20 @@ export function SkillhubHomeContent({
                     {Array.from({ length: MARKET_PAGE_SIZE }).map((_, i) => (
                       <div
                         key={i}
-                        className="flex min-h-[100px] flex-col gap-2 rounded-[12px] border-[0.5px] border-[var(--border-default)] bg-[var(--surface-elevated)] p-3"
+                        className="flex min-h-[100px] flex-col gap-2 rounded-xl border-[0.5px] border-[var(--border-default)] bg-[var(--surface-elevated)] p-3"
                       >
                         <div className="flex items-center gap-2">
                           <div className="size-9 shrink-0 animate-pulse rounded-xl bg-[var(--cmd-palette-item-hover)] opacity-60" />
-                          <div className="h-3.5 w-2/3 animate-pulse rounded bg-[var(--cmd-palette-item-hover)] opacity-60" />
+                          <div className="h-3.5 w-2/3 animate-pulse rounded-full bg-[var(--cmd-palette-item-hover)] opacity-60" />
                         </div>
-                        <div className="h-3 w-full animate-pulse rounded bg-[var(--cmd-palette-item-hover)] opacity-40" />
-                        <div className="h-3 w-4/5 animate-pulse rounded bg-[var(--cmd-palette-item-hover)] opacity-40" />
-                        <div className="mt-auto h-3 w-1/3 animate-pulse rounded bg-[var(--cmd-palette-item-hover)] opacity-40" />
+                        <div className="h-3 w-full animate-pulse rounded-full bg-[var(--cmd-palette-item-hover)] opacity-40" />
+                        <div className="h-3 w-4/5 animate-pulse rounded-full bg-[var(--cmd-palette-item-hover)] opacity-40" />
+                        <div className="mt-auto h-3 w-1/3 animate-pulse rounded-full bg-[var(--cmd-palette-item-hover)] opacity-40" />
                       </div>
                     ))}
                   </div>
                 ) : marketError && catalogItems.length === 0 ? null : catalogItems.length === 0 ? (
-                  <div className="rounded-[12px] border-[0.5px] border-[var(--border-default)] px-4 py-5 text-13 leading-5 text-[var(--text-secondary)]">
+                  <div className="rounded-xl border-[0.5px] border-[var(--border-default)] px-4 py-5 text-13 leading-5 text-[var(--text-secondary)]">
                     {t('skillhub.home.catalogEmpty')}
                   </div>
                 ) : (
@@ -455,7 +457,7 @@ export function SkillhubHomeContent({
             {catalogTab === 'local' && (!normalizedQuery || visibleLocalCount > 0) ? (
               <section className="plugin-motion-page-section min-w-0">
                 {visibleLocalCount === 0 ? (
-                  <div className="rounded-[12px] border-[0.5px] border-[var(--border-default)] px-4 py-5 text-13 leading-5 text-[var(--text-secondary)]">
+                  <div className="rounded-xl border-[0.5px] border-[var(--border-default)] px-4 py-5 text-13 leading-5 text-[var(--text-secondary)]">
                     {bootstrapped ? t('skillhub.home.localEmpty') : t('skillhub.welcome.scanning')}
                   </div>
                 ) : (
@@ -484,7 +486,7 @@ export function SkillhubHomeContent({
             ) : null}
 
             {normalizedQuery && (catalogTab === 'local' || !marketLoading) && !hasSearchResults ? (
-              <div className="plugin-motion-page-section rounded-[12px] border-[0.5px] border-[var(--border-default)] px-4 py-8 text-center text-13 leading-5 text-[var(--text-secondary)]">
+              <div className="plugin-motion-page-section rounded-xl border-[0.5px] border-[var(--border-default)] px-4 py-8 text-center text-13 leading-5 text-[var(--text-secondary)]">
                 {t('skillhub.home.noSearchResults')}
               </div>
             ) : null}
@@ -588,7 +590,7 @@ function LocalGroup({
               type="button"
               onClick={() => onOpen(s)}
               className={cn(
-                'group flex w-full items-start gap-3 rounded-[12px] border-[0.5px] border-[var(--border-default)] px-3 py-2.5 text-left',
+                'group flex w-full items-start gap-3 rounded-xl border-[0.5px] border-[var(--border-default)] px-3 py-2.5 text-left',
                 'bg-[var(--surface-elevated)]',
                 'transition-[background-color,border-color,transform] duration-150 ease-out',
                 'hover:-translate-y-0.5 hover:border-[var(--text-tertiary)]',

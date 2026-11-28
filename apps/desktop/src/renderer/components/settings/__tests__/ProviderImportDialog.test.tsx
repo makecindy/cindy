@@ -211,6 +211,18 @@ describe('ProviderImportBatchDialog', () => {
     expect(maker.confirmProviderImport.mock.calls).toEqual([['draft-a'], ['draft-b'], ['draft-a']]);
   });
 
+  it('allows reselecting a cancelled local import without showing an import failure', async () => {
+    maker.confirmProviderImport.mockRejectedValueOnce(new Error('[MUTATION_CANCELLED] Cancelled'));
+    render(<ProviderImportBatchDialog importIds={['draft-a']} onClose={vi.fn()} onDone={vi.fn()} />);
+    const entry = await screen.findByRole('checkbox', { name: 'draft-a' });
+    start();
+    await waitFor(() => expect((entry as HTMLInputElement).checked).toBe(false));
+    expect(screen.queryByText('settings.providers.import.batchStatus.failed')).toBeNull();
+    fireEvent.click(entry);
+    start();
+    await screen.findByText('settings.providers.import.batchStatus.saved');
+  });
+
   it('defers OAuth and interruption consent to individual review without automatically authorizing', async () => {
     maker.previewProviderImport.mockImplementation(async id => ({ ...preview, importId: id, name: id,
       authMethod: id === 'draft-b' ? 'oauth' : 'apiKey' }));

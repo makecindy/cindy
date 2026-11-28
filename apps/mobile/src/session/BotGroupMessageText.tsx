@@ -10,19 +10,19 @@ import { Linking, Pressable, Platform, ScrollView, StyleSheet, View, type Gestur
 import { useTranslation } from 'react-i18next';
 import { tokenizeInlineMath } from '@cindy/maker-shared/math-markdown';
 import { HighlightedCodeText } from './HighlightedCodeText';
-import { MarkdownCodeCopyButton } from './MarkdownCodeCopyButton';
+import { MarkdownBlockCopyButton } from './MarkdownBlockCopyButton';
 import { MermaidDiagramWebView } from './mermaidWebView';
 import { MathFormulaWebView } from './mathWebView';
 import { hasRichAnswer } from '@cindy/maker-shared/rich-answer';
-import { splitBotGroupMentionSegments, type BotGroupTextSegment } from '@cindy/maker-shared/botGroupMentions';
+import type { BotGroupTextSegment } from '@cindy/maker-shared/botGroupMentions';
 import { Text } from '@/components/AppText';
 import { MarkdownSelectableText, MarkdownSelectableSpan } from './MarkdownSelectableText';
 import { fontWeight, monoFont, useThemedStyles, type ThemeColors } from '@/theme';
 import { lineHeight, radius, spacing, typeScale } from '@/theme/tokens';
-import { mobileMarkdownListMarkerText, parseMobileMarkdown, type MobileMarkdownBlock, type MobileMarkdownInline } from './messageMarkdown';
+import { mobileMarkdownListMarkerText, mobileMarkdownTableToTsv, parseMobileMarkdown, type MobileMarkdownBlock, type MobileMarkdownInline } from './messageMarkdown';
 import { buildMessageContentLayout } from './messageContentLayout';
 import { buildMobileMarkdownTableColumnWidths } from './messageTableLayout';
-import { botGroupMentionMember, type BotGroupMentionContext, type BotGroupMentionPoint } from './botGroupMentions';
+import { botGroupMentionMember, splitMobileBotGroupMentionSegments, type BotGroupMentionContext, type BotGroupMentionPoint } from './botGroupMentions';
 import { MarkdownBody, MessagePayloadModal, MessageHeavyContentVisibilityContext } from './MessageRenderer';
 import { ImageLightbox } from './ImageLightbox';
 import type { MessagePayload } from './messagePayload';
@@ -105,7 +105,7 @@ function renderInlines(inlines: readonly MobileMarkdownInline[], styles: Styles,
   const visibleText = runs.map(run => run.text).join('');
   // Most group text has no mention. Keep its native styled run directly:
   // scanning labels and nesting another selectable span adds work per cell/run.
-  const segments = context && visibleText.includes('@') ? splitBotGroupMentionSegments(visibleText, context.labels).map(segment => {
+  const segments = context && visibleText.includes('@') ? splitMobileBotGroupMentionSegments(visibleText, context.labels, context).map(segment => {
     const start = offset;
     offset += segment.text.length;
     return { ...segment, start, end: offset, label: segment.text,
@@ -189,12 +189,17 @@ function BotGroupMarkdownTable({ block, styles, options, context }: {
       ))}
     </View>
   );
-  return <ScrollView horizontal style={styles.tableScroll} onLayout={onLayout}>
-    <View style={styles.table}>
-      {renderRow(block.header, `${block.key}:header`, true)}
-      {block.rows.map(row => renderRow(row.cells, row.key))}
-    </View>
-  </ScrollView>;
+  return <View style={styles.tableScroll}>
+    <ScrollView horizontal style={styles.tableScroll} onLayout={onLayout}>
+      <View style={styles.table}>
+        {renderRow(block.header, `${block.key}:header`, true)}
+        {block.rows.map(row => renderRow(row.cells, row.key))}
+      </View>
+    </ScrollView>
+    {options.richContent && options.interactive !== false ? (
+      <MarkdownBlockCopyButton kind="table" text={mobileMarkdownTableToTsv(block)} />
+    ) : null}
+  </View>;
 }
 
 function renderBlock(block: MobileMarkdownBlock, styles: Styles, options: BodyOptions, diagramLabel: string, context?: BotGroupMentionContext): ReactNode {
@@ -216,7 +221,7 @@ function renderBlock(block: MobileMarkdownBlock, styles: Styles, options: BodyOp
         return <View key={block.key} style={[styles.codeBlock, copyable && styles.codeWithCopy]}>
           <HighlightedCodeText text={block.text} language={block.language} styles={styles} selectable allowIosUITextView
             SpanComponent={Platform.OS === 'ios' ? MarkdownSelectableSpan : Text} />
-          {copyable ? <MarkdownCodeCopyButton text={block.text} /> : null}
+          {copyable ? <MarkdownBlockCopyButton text={block.text} /> : null}
         </View>;
       }
       return renderSourceBlock(block, styles);
@@ -233,6 +238,14 @@ function renderBlock(block: MobileMarkdownBlock, styles: Styles, options: BodyOp
       return renderSourceBlock(block, styles);
     case 'table':
       return <BotGroupMarkdownTable key={block.key} block={block} styles={styles} options={options} context={context} />;
+    case 'carousel':
+      return (
+        <View key={block.key} style={styles.codeBlock}>
+          {block.slides.flatMap((slide, slideIndex) =>
+            slide.map((child) => renderBlock({ ...child, key: `${block.key}:${slideIndex}:${child.key}` }, styles, options, diagramLabel, context)),
+          )}
+        </View>
+      );
     default:
       return <MarkdownSelectableText key={block.key} selectable style={styles.text}>{renderInlines(block.inlines, styles, options, context)}</MarkdownSelectableText>;
   }
@@ -275,6 +288,7 @@ export function BotGroupMarkdownText({ content, authorKind, mentionContext, rich
       <MessageHeavyContentVisibilityContext.Provider value={active && (!visibility || visible)}>
         <ChatFilePathContext.Provider value={null}>
           <MarkdownBody renderRichAnswers publicMediaOnly richStateKey={messageKey ?? instanceKey}
+            codeCopyEnabled={interactive}
             markdownImageCacheKey={messageKey ?? instanceKey} layout={layout} text={content} selectable
             onOpenPayload={next => {
               // Shared answers may open public media and diagrams, never task-local files.
@@ -300,7 +314,7 @@ export function BotGroupMarkdownText({ content, authorKind, mentionContext, rich
 export function BotGroupUserText({ content, mentionLabels, mentionContext }: { content: string; mentionLabels: readonly string[]; mentionContext?: BotGroupMentionContext }) {
   const styles = useThemedStyles(makeStyles);
   const touch = useMentionTouchContext(content.includes('@') ? mentionContext : undefined);
-  const text = useMemo(() => renderMentionSegments(splitBotGroupMentionSegments(content, mentionLabels), styles, touch.context),
+  const text = useMemo(() => renderMentionSegments(splitMobileBotGroupMentionSegments(content, mentionLabels, touch.context), styles, touch.context),
     [content, mentionLabels, styles, touch.context]);
   return <View ref={touch.ref} collapsable={false} onTouchStart={touch.onTouchStart}><MarkdownSelectableText selectable style={styles.text}>
     {text}

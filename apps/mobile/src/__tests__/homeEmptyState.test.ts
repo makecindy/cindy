@@ -16,7 +16,11 @@ const source = ts.createSourceFile('HomeSurface.tsx', readFileSync(
   resolve(process.cwd(), 'src/session/HomeSurface.tsx'), 'utf8',
 ), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
 let expression = '';
+let displaySource = '';
 function visit(node: ts.Node) {
+  if (ts.isVariableDeclaration(node) && node.name.getText(source) === 'displayedHome' && node.initializer) {
+    displaySource = node.initializer.getText(source);
+  }
   if (ts.isJsxAttribute(node) && node.name.getText(source) === 'ListEmptyComponent'
     && node.initializer && ts.isJsxExpression(node.initializer) && node.initializer.expression) {
     expression = node.initializer.expression.getText(source);
@@ -36,12 +40,18 @@ it.each([
   ['needle', 'ready', true, '<p>no matching tasks</p>'],
   ['needle', 'searching', true, '<p>loading</p>'],
   ['', 'idle', false, '<p>no matching tasks</p>'],
-].flatMap(row => ['list', 'inbox'].map(mode => [mode, ...row] as const)))('renders mode=%s query=%s status=%s with pinned=%s', (taskListMode, searchQuery, status, pinned, expected) => {
+  ['', 'idle', false, '', true],
+].flatMap(row => ['tasks', 'inbox'].map(mode => [mode, ...row] as const)))('renders mode=%s query=%s status=%s with pinned=%s', (taskListMode, searchQuery, status, pinned, expected, deviceSections) => {
+  // The presentation is now selected before content filtering. Give the other mode the
+  // opposite pin state to keep catching leaks from the ordinary list into the inbox.
+  const filteredHome = new Function('taskListMode', 'home', 'inboxHome', 'return ' + displaySource)(
+    taskListMode, { pinned: (taskListMode === 'tasks' ? pinned : !pinned) ? [{}] : [] },
+    { pinned: (taskListMode === 'inbox' ? pinned : !pinned) ? [{}] : [] },
+  );
   const bindings = {
     createElement, shouldReplaceListWithSearchResults, searchQuery, indexedSearch: { status },
     sharedRows: [], initialHomeLoading: status === 'searching', taskSuggestionsPending: false,
-    taskListMode, filteredInboxHome: { pinned: (taskListMode === 'inbox' ? pinned : !pinned) ? [{}] : [] },
-    filteredHome: { pinned: (taskListMode === 'list' ? pinned : !pinned) ? [{}] : [] }, showRemoteGuide: false,
+    filteredHome, hasDeviceSections: deviceSections === true, showRemoteGuide: false,
     contentFilterCount: 0, taskSuggestionsMode: null, initialHomeError: false,
     emptyStateTitle: 'no matching tasks', emptyStateCopy: 'adjust search',
     spacing: { xxl: 32 }, windowLayout: { emptyMinHeight: 100, emptyPadding: 16 },

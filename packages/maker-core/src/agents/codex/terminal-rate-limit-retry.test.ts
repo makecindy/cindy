@@ -31,6 +31,23 @@ describe('terminal rate-limit retry', () => {
         { responseTooManyFailedAttempts: { httpStatusCode: 429 } },
       ),
     ).toBe(true);
+    // 测试价值：依据 Codex 0.156.0 新增 CodexErrorInfo='rateLimitExceeded' 枚举；此前只认 httpStatusCode=429，
+    // 当上游省去文本状态码只带 rateLimitExceeded 时漏掉受限重投，但裸 429 仍不得重投；生产入口 isTerminalRateLimitRetryExhaustion；
+    // 最小失败输入为 ('exceeded retry limit', undefined, 'rateLimitExceeded')；tier: unit。
+    expect(
+      isTerminalRateLimitRetryExhaustion(
+        'exceeded retry limit',
+        undefined,
+        'rateLimitExceeded',
+      ),
+    ).toBe(true);
+    expect(
+      isTerminalRateLimitRetryExhaustion(
+        'Too Many Requests',
+        undefined,
+        'rateLimitExceeded',
+      ),
+    ).toBe(false);
   });
 
   it('recognizes the legacy text fallback only when it also carries status 429', () => {

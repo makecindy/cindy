@@ -64,7 +64,11 @@ export function resolveDesktopDrizzleDir(isPackaged: boolean): string {
   return path.resolve(__dirname, '../../drizzle');
 }
 
-export async function runMigrations(db: Database.Database, dbFilePath: string): Promise<void> {
+export async function runMigrations(
+  db: Database.Database,
+  dbFilePath: string,
+  assertConnectionAvailable?: () => void,
+): Promise<void> {
   const { drizzleDir, isPackaged } = getMigrationRuntimeConfig();
   log.info(
     JSON.stringify({
@@ -116,6 +120,10 @@ export async function runMigrations(db: Database.Database, dbFilePath: string): 
 
   // 备份失败 → throw 阻断启动（开战前的备份步骤失败，不进入后续任何 apply）
   const backupResult = await backupDb(db, dbFilePath);
+  // A live worker can quarantine this file while the online backup yields.
+  // Reject before apply's catch/restore path: no SQL or backup restoration is
+  // appropriate for work that was never admitted after corruption.
+  assertConnectionAvailable?.();
   if (backupResult === null) {
     throw new Error(`schema migration 前的备份失败，阻断启动${diskHint}`);
   }

@@ -96,6 +96,9 @@ function sourceRevision(source: BotRemoteResourceSource): string {
     source.activityAt,
     source.canonicalSessionId ?? '',
     source.needsAttention ? 1 : 0,
+    source.inboxSnooze?.snoozedUntil ?? '',
+    source.inboxSnooze?.snoozedAt ?? '',
+    source.inboxSnooze?.userSendAt ?? '',
     followingDigest(source.followingSessionIds ?? []),
   ].join(':');
 }
@@ -122,6 +125,8 @@ export function botRemoteCollectionItemFromSource(
       lastReplyAt: source.lastReplyAt ?? 0,
       // Read position kept on this computer; also tells controllers the `read` action exists.
       lastReadAt: source.lastReadAt ?? 0,
+      // Sent whenever the conversation exists: it also tells controllers this row can be snoozed.
+      ...(source.inboxSnooze ? { inboxSnooze: source.inboxSnooze } : {}),
       ...(source.description ? { subtitle: source.description } : {}),
       ...(source.lastMessagePreview ? { preview: source.lastMessagePreview } : {}),
       ...(source.activityAt ? { timestamp: source.activityAt } : {}),

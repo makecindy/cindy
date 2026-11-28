@@ -7,6 +7,8 @@ import {
 import { assertBrowserNavigationAllowed } from '../_generated/extension/src/browser/navigation-guard.js';
 import { withAllowedHostname } from '../_generated/extension/src/browser/ssrf-policy-helpers.js';
 import {
+  isSameSsrFPolicy,
+  mergeSsrFPolicies,
   isBlockedHostnameOrIp,
   isPrivateIpAddress,
   resolvePinnedHostnameWithPolicy,
@@ -75,6 +77,62 @@ describe('vendored SSRF decision primitives', () => {
       ).rejects.toThrow(/blocked/i);
     },
   );
+});
+
+// #9208, unit: the existing policy fixture also allows ULA, which wallpaper must not.
+// Resolve real DNS policy with the narrow benchmark-only opt-in; default and adjacent
+// ranges must stay blocked. These tests also prevent policy reuse ignoring the new bit.
+describe("benchmark-only wallpaper policy", () => {
+  const policy = {
+    allowRfc2544BenchmarkRange: true,
+    allowIpv6BenchmarkingRange: true,
+    hostnameAllowlist: ["cdn.example"],
+  };
+  it.each(["2001:2::", "2001:2:0:ffff:ffff:ffff:ffff:ffff"])(
+    "allows only explicit benchmark opt-in for %s",
+    async (address) => {
+      const lookupFn = lookupAddresses([{ address, family: 6 }]);
+      await expect(
+        resolvePinnedHostnameWithPolicy("cdn.example", { lookupFn }),
+      ).rejects.toThrow(/blocked/i);
+      await expect(
+        resolvePinnedHostnameWithPolicy("cdn.example", { lookupFn, policy }),
+      ).resolves.toMatchObject({ addresses: [address] });
+    },
+  );
+  it.each(["fd00::1", "fe80::1", "::1", "2001:db8::1", "169.254.169.254"])(
+    "keeps %s blocked",
+    async (address) => {
+      await expect(
+        resolvePinnedHostnameWithPolicy("cdn.example", {
+          policy,
+          lookupFn: lookupAddresses([
+            { address, family: address.includes(":") ? 6 : 4 },
+          ]),
+        }),
+      ).rejects.toThrow(/blocked/i);
+    },
+  );
+  it("does not grant another hostname and distinguishes/merges the opt-in", async () => {
+    await expect(
+      resolvePinnedHostnameWithPolicy("other.example", {
+        policy,
+        lookupFn: lookupAddresses([{ address: "2001:2::1", family: 6 }]),
+      }),
+    ).rejects.toThrow(/allowlist/i);
+    expect(isSameSsrFPolicy({}, { allowIpv6BenchmarkingRange: true })).toBe(
+      false,
+    );
+    expect(
+      mergeSsrFPolicies(
+        { allowIpv6BenchmarkingRange: true },
+        { hostnameAllowlist: ["cdn.example"] },
+      ),
+    ).toEqual({
+      allowIpv6BenchmarkingRange: true,
+      hostnameAllowlist: ["cdn.example"],
+    });
+  });
 });
 
 describe('proxied browser navigation policy', () => {

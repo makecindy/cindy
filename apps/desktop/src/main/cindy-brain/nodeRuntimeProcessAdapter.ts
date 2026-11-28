@@ -8,7 +8,8 @@ export interface PluginNodeProcess extends Pick<NodeJS.EventEmitter, 'on' | 'rem
   postMessage(message: unknown): void;
   kill(): boolean;
 }
-export function pluginNodeEnvironment(ghostId: string, inherited: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+export function pluginNodeEnvironment(ghostId: string, inherited: NodeJS.ProcessEnv = process.env, inheritEnv = false): NodeJS.ProcessEnv {
+  if (inheritEnv) return { ...inherited, CINDY_GHOST_ID: ghostId };
   // 不继承 API key / token 等宿主环境变量。Node 本身仍有用户级本机权限，
   // 这里只是在“无意泄露宿主秘密”和“系统运行必需变量”之间取最小集合。
   const inheritedKeys = [
@@ -34,6 +35,18 @@ export function pluginNodeEnvironment(ghostId: string, inherited: NodeJS.Process
     'GH_CONFIG_DIR',
     // XDG_CONFIG_HOME 也可指定 gh 配置目录，且在 Windows 上同样可能优先于 APPDATA。
     'XDG_CONFIG_HOME',
+    // Linux 图形会话定位变量（显示器名、socket 与 cookie 路径，不含秘密）：缺少它们时
+    // 插件或其代启的 CLI 打不开浏览器（如 agy 的 Google 登录报“没有图形界面”）。
+    // 与 cindy-make/testRunner 的桌面会话清单同一口径；macOS/Windows 上不存在，透传为空。
+    'DISPLAY',
+    'WAYLAND_DISPLAY',
+    'XAUTHORITY',
+    'XDG_RUNTIME_DIR',
+    'XDG_SESSION_TYPE',
+    'XDG_CURRENT_DESKTOP',
+    'XDG_SESSION_DESKTOP',
+    'DESKTOP_SESSION',
+    'DBUS_SESSION_BUS_ADDRESS',
   ] as const;
   const env: NodeJS.ProcessEnv = {
     CINDY_GHOST_ID: ghostId,
@@ -48,7 +61,11 @@ export function pluginNodeEnvironment(ghostId: string, inherited: NodeJS.Process
 return env;
 }
 
-export function adaptPluginNodeProcess(child: PluginNodeProcess, isChild: boolean): NodeWorkerProcess {
+export function adaptPluginNodeProcess(
+  child: PluginNodeProcess,
+  isChild: boolean,
+  probeProcess: (pid: number, signal: 0) => unknown = process.kill,
+): NodeWorkerProcess {
   const stdout = child.stdout;
   const stderr = child.stderr;
   if (!stdout || !stderr) {
@@ -63,6 +80,7 @@ export function adaptPluginNodeProcess(child: PluginNodeProcess, isChild: boolea
   >();
   let nativeSpawnObservation: NodeWorkerStartupObservation | null = null;
   let destroyed = false;
+  let exited = false;
   let killed = false;
   let ready = false;
   let messageCount = 0;
@@ -77,6 +95,9 @@ export function adaptPluginNodeProcess(child: PluginNodeProcess, isChild: boolea
       return undefined;
     }
   };
+  // Keep lifecycle identity separate from diagnostic observer state. An observed
+  // PID may disappear from utilityProcess before its exit notification arrives.
+  let processPid = readNativePid();
   const publishNativeSpawnObservation = (pid = readNativePid()): void => {
     try {
       if (nativeSpawnObservation) return;
@@ -97,6 +118,7 @@ export function adaptPluginNodeProcess(child: PluginNodeProcess, isChild: boolea
     }
   };
   const onMessage = (message: unknown) => {
+    if (exited) return;
     messageCount += 1;
     if (
       !ready &&
@@ -119,7 +141,10 @@ export function adaptPluginNodeProcess(child: PluginNodeProcess, isChild: boolea
     }
   };
   try {
-    child.on('spawn', () => publishNativeSpawnObservation());
+    child.on('spawn', () => {
+      processPid ??= readNativePid();
+      publishNativeSpawnObservation();
+    });
   } catch {
     // native spawn observer 安装失败不得影响 adapter 构造。
   }
@@ -130,12 +155,16 @@ export function adaptPluginNodeProcess(child: PluginNodeProcess, isChild: boolea
     // PID 只用于诊断；getter 异常不得影响 adapter 构造。
   }
   child.on('message', onMessage);
-  child.on('exit', (code) => {
+  const settleExit = (code: number | null): void => {
+    if (exited) return;
+    exited = true;
     destroyed = true;
     killed = true;
     events.emit('exit', code, null);
-  });
+  };
+  child.on('exit', settleExit);
   child.on('error', (type, location) => {
+    if (exited) return;
     events.emit('error', new Error(`Node utilityProcess ${type} at ${location}`));
   });
 
@@ -181,6 +210,21 @@ export function adaptPluginNodeProcess(child: PluginNodeProcess, isChild: boolea
     get killed() {
       return killed;
     },
+    reconcileExit(): boolean {
+      // A kill request, unknown PID or permission error does not prove absence.
+      // A reused PID also remains charged: existence cannot establish its identity.
+      processPid ??= readNativePid();
+      if (!exited && processPid !== undefined) {
+        try {
+          probeProcess(processPid, 0);
+        } catch (error) {
+          if (error && typeof error === 'object' && 'code' in error && error.code === 'ESRCH') {
+            settleExit(null);
+          }
+        }
+      }
+      return exited;
+    },
     on(event: 'exit' | 'error', listener: (...args: unknown[]) => void) {
       events.on(event, listener);
       return adapter;
@@ -190,6 +234,7 @@ export function adaptPluginNodeProcess(child: PluginNodeProcess, isChild: boolea
       return adapter;
     },
     kill(signal?: NodeJS.Signals): boolean {
+      if (exited) return false;
       destroyed = true;
       killed = true;
       if (signal === 'SIGKILL' && child.pid !== undefined) {

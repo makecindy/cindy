@@ -26,6 +26,7 @@ vi.mock('@/features/device-link/remoteProjectsStore', () => ({
 afterEach(() => { vi.unstubAllGlobals(); vi.clearAllMocks(); });
 import { projectSessionRuntimeControl } from '../../../../main/maker-ipc/sessionRuntimeControl';
 import { dbToMakerAgentKind } from '../../../../shared/agentKindConversion';
+import { isPluginEngineKind } from '../../../../shared/pluginEngines';
 import {
   PI_RUNTIME_SKILL_RETRY_DELAYS_MS,
   leadingSlashInvocation,
@@ -58,26 +59,30 @@ const code = callbackCode('handleSend');
 const slashCode = callbackCode('maybeDispatchDesktopSlashCommand');
 const catalogCode = callbackCode('getHelpCommandsSnapshot');
 
-it.each(['recovery', 'ordinary', 'missing-offer', 'pending', 'new-provider', 'new-model', 'new-intent', 'no-composer-offer'])(
+it.each(['recovery', 'gateway-recovery', 'gateway-running', 'ordinary', 'missing-offer', 'pending', 'new-provider', 'new-model', 'new-intent', 'no-composer-offer'])(
   'defers old-Harness authentication only for the unchanged recovery route (%s)', async (scenario) => {
     const auth = vi.fn(async () => ({ proceed: false }));
     const beforeEnqueue = vi.fn(async () => false); // Stop before unrelated persistence/workdir work.
-    const route = { agentKind: 'codex', model: 'retired', providerId: 'removed' };
-    const session = { source: scenario === 'ordinary' ? 'user' : 'bot',
+    const gateway = scenario.startsWith('gateway-');
+    const route = { agentKind: 'codex', model: 'retired', providerId: gateway ? 'xd' : 'removed' };
+    const session = { source: gateway || scenario === 'ordinary' ? 'desktop' : 'bot',
       runtimeBaselineRecoveryPending: scenario !== 'missing-offer',
       runtimePending: scenario === 'pending' ? route : null, runtimeEffective: route };
-    const send = runInNewContext(code, { readOnly: false, cindyMakeInputLocked: false,
-      invalidateHistoryRecoveryNavigation: vi.fn(), getDataOwnerGeneration: () => 1,
+    const send = runInNewContext(code, { readOnly: false, cindyMakeInputLocked: false, awaitingSessionCreation: false, creationFailed: false,
+      sessionHandoffPreparing: false, invalidateHistoryRecoveryNavigation: vi.fn(), getDataOwnerGeneration: () => 1,
       remoteDeviceId: null, catalogDeviceId: undefined, displayAgentKind: 'codex', isCodex: true, session,
+      pluginEngineTask: false, pluginEngineSwitchIntent: null,
+      allowGatewaySilentSwitch: gateway, isRunningRef: { current: scenario === 'gateway-running' },
       agentSwitchIntent: scenario === 'new-intent' ? { target: 'pi' } : null,
       vendorAuthGate: { checkAndConfirm: auth },
     });
     await send('hello', scenario === 'new-model' ? 'new' : 'retired', '', 'ask', undefined, undefined, {
       literalText: true, baselineRecovery: scenario !== 'no-composer-offer',
-      providerId: scenario === 'new-provider' ? 'new' : 'removed', beforeEnqueue,
+      providerId: scenario === 'new-provider' ? 'new' : route.providerId, beforeEnqueue,
     });
-    expect(auth).toHaveBeenCalledTimes(scenario === 'recovery' ? 0 : 1);
-    expect(beforeEnqueue).toHaveBeenCalledTimes(scenario === 'recovery' ? 1 : 0);
+    const recovering = scenario === 'recovery' || scenario === 'gateway-recovery';
+    expect(auth).toHaveBeenCalledTimes(recovering ? 0 : 1);
+    expect(beforeEnqueue).toHaveBeenCalledTimes(recovering ? 1 : 0);
   });
 
 it('authenticates the recovered Harness on subsequent sends after a legacy projection patch', async () => {
@@ -87,10 +92,10 @@ it('authenticates the recovered Harness on subsequent sends after a legacy proje
   const auth = vi.fn(async (vendor: string) => ({ proceed: vendor === 'pi' }));
   const beforeEnqueue = vi.fn(async () => false);
   const displayAgentKind = dbToMakerAgentKind(session.agentKind);
-  const send = runInNewContext(code, { readOnly: false, cindyMakeInputLocked: false,
-    invalidateHistoryRecoveryNavigation: vi.fn(), getDataOwnerGeneration: () => 1,
+  const send = runInNewContext(code, { readOnly: false, cindyMakeInputLocked: false, awaitingSessionCreation: false, creationFailed: false,
+    sessionHandoffPreparing: false, invalidateHistoryRecoveryNavigation: vi.fn(), getDataOwnerGeneration: () => 1,
     remoteDeviceId: null, catalogDeviceId: undefined, displayAgentKind, isCodex: displayAgentKind === 'codex', session,
-    agentSwitchIntent: null, vendorAuthGate: { checkAndConfirm: auth },
+    pluginEngineTask: false, pluginEngineSwitchIntent: null, agentSwitchIntent: null, vendorAuthGate: { checkAndConfirm: auth },
   });
   await send('hello again', recovered.model, '', 'ask', undefined, undefined, {
     literalText: true, providerId: recovered.providerId, beforeEnqueue,
@@ -126,10 +131,12 @@ function setup(options: {
   const dispatchCommand = vi.fn(async () => undefined);
   const agentKind = options.agentKind ?? options.vendor ?? 'claude-code';
   const environment = {
-    readOnly: false, cindyMakeInputLocked: false, invalidateHistoryRecoveryNavigation: vi.fn(),
+    readOnly: false, cindyMakeInputLocked: false, awaitingSessionCreation: false, creationFailed: false,
+    invalidateHistoryRecoveryNavigation: vi.fn(),
     remoteDeviceId: options.remoteDeviceId ?? null, catalogDeviceId: options.catalogDeviceId,
     displayAgentKind: options.pendingVendor ?? agentKind,
     isCodex: !options.pendingVendor && agentKind === 'codex',
+    pluginEngineTask: false, pluginEngineSwitchIntent: null,
     agentSwitchIntent: options.switchAgentDeviceId !== undefined
       ? { target: options.pendingVendor ?? agentKind, agentDeviceId: options.switchAgentDeviceId } : null,
     modelCatalogKey, controlledModelRoute: { catalogHostDeviceId: options.catalogHostDeviceId },
@@ -143,7 +150,7 @@ function setup(options: {
     botChatIdentity: null, readSendFollowCancelGeneration: () => 0, requestFollowLatest: vi.fn(),
     sendMessage: storeSend, steerMessage: storeSend,
     dispatchDeferredUiAssignment: async () => undefined,
-    dbToMakerAgentKind, CINDY_MAKE_ENABLED: true, isRemoteSession: false,
+    dbToMakerAgentKind, isPluginEngineKind, CINDY_MAKE_ENABLED: true, isRemoteSession: false,
     allCommandsRef: { current: [] as UnifiedCommand[] }, setAllCommands: vi.fn(),
     loadAllCommands: vi.fn(async () => await (options.slashCatalog ?? Promise.resolve([]))),
     PI_RUNTIME_SKILL_RETRY_DELAYS_MS, leadingSlashInvocation,

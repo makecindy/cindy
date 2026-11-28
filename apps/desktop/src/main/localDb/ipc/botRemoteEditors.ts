@@ -1,5 +1,5 @@
 import { serializeModelRoutes } from '@cindy/maker-shared/model-route';
-import { normalizeBotModelChain, type BotModelRoute } from '../../../shared/botModelChain.js';
+import { parseRemoteBotModelChain, type BotModelRoute } from '../../../shared/botModelChain.js';
 import { createHash } from 'node:crypto';
 import { resolveRemoteText, type RemoteActionDescriptor, type RemoteActionInvokeResponse, type RemoteLocalizedText, type RemoteResource } from '@cindy/device-link';
 import type { BotRemoteSettingsDeps, createBotRemoteSettingsResource } from './botRemoteSettingsResource.js';
@@ -12,7 +12,7 @@ import type { BotProjectOption } from '../../../shared/botWorkbench.js';
 
 type Kind = 'skill' | 'mcp' | 'toolset';
 type Capability = { id: string; name: string; description: string; available: boolean; joined: boolean; cindyOfficial?: boolean };
-export interface BotRemoteEditorDeps extends Pick<BotRemoteSettingsDeps, 'owner' | 'assertOwner' | 'read' | 'update' | 'skills'> {
+export interface BotRemoteEditorDeps extends Pick<BotRemoteSettingsDeps, 'owner' | 'assertOwner' | 'read' | 'update' | 'skills' | 'modelGroups' | 'fillModelGroups'> {
   projects?: { list(botId: string): Promise<BotProjectOption[]>; set(botId: string, id: string, linked: boolean): Promise<unknown> };
   /** Learned skills, including turned-off ones (`enabled: false`). */
   skills(botId: string): Promise<Array<{ slug: string; name: string; description: string; updatedAt: string | number; enabled?: boolean }>>;
@@ -45,6 +45,7 @@ export const editorCopy = {
   projectEmpty: text('Add projects to the project list on the buddy’s computer first.', '请先在伙伴所在电脑的项目列表中添加项目。', '請先在夥伴所在電腦的專案列表中新增專案。', '先に仲間のコンピューターのプロジェクト一覧に追加してください。', '먼저 동반자가 실행되는 컴퓨터의 프로젝트 목록에 프로젝트를 추가하세요.', {"es":"Añade primero los proyectos a la lista de proyectos en el equipo del amigo.","fr":"Ajoutez d’abord les projets à la liste des projets sur l’ordinateur de l’ami.","de":"Füge zuerst Projekte zur Projektliste auf dem Computer des Freundes hinzu.","pt-PT":"Adicione primeiro os projetos à lista de projetos no computador do amigo.","pt-BR":"Primeiro, adicione projetos à lista de projetos no computador do amigo.","zh-Hant-x-lzh":"請先於同伴所在之機，在案錄中增案。","zh-Hans-x-lzh":"请先于同伴所在之机，在案录中增案。"}),
 
   create: text('New Buddy', '创建伙伴', '建立夥伴', '仲間を作成', '동반자 만들기', {"es":"Nuevo amigo","fr":"Nouvel ami","de":"Neuer Freund","pt-PT":"Novo amigo","pt-BR":"Novo amigo","zh-Hant-x-lzh":"立同伴","zh-Hans-x-lzh":"立同伴"}),
+  settingsAction: text('Buddy settings', '伙伴设置', '夥伴設定', '仲間の設定', '동반자 설정', {"es":"Ajustes del amigo","fr":"Paramètres de l’ami","de":"Einstellungen des Freundes","pt-PT":"Definições do amigo","pt-BR":"Configurações do amigo","zh-Hant-x-lzh":"同伴規制","zh-Hans-x-lzh":"同伴规制"}),
   name: text('Name', '名字', '名字', '名前', '이름', {"es":"Nombre","fr":"Nom","de":"Name","pt-PT":"Nome","pt-BR":"Nome","zh-Hant-x-lzh":"名","zh-Hans-x-lzh":"名"}),
   avatar: text('Avatar', '头像', '頭像', 'アバター', '아바타', {"es":"Avatar","fr":"Avatar","de":"Avatar","pt-PT":"Avatar","pt-BR":"Avatar","zh-Hant-x-lzh":"頭像","zh-Hans-x-lzh":"头像"}),
   skills: text('Personal Skills', '学会的技能', '學會的技能', '学習したスキル', '학습한 스킬', {"es":"Habilidades personales","fr":"Compétences personnelles","de":"Persönliche Skills","pt-PT":"Competências pessoais","pt-BR":"Habilidades pessoais","zh-Hant-x-lzh":"所習技藝","zh-Hans-x-lzh":"所习技艺"}),
@@ -131,7 +132,10 @@ export function createBotRemoteEditors(deps: BotRemoteEditorDeps, bind: ReturnTy
         { id: 'avatarImageBase64', label: editorCopy.avatar, kind: 'text', required: true },
       ], { name: '', avatarImageBase64: '' });
       // Metadata keeps older generic form renderers from displaying raw model JSON.
-      const block = { ...panel.block, data: { ...panel.block.data, creationModelChain: serializeModelRoutes(modelChain.slice(0, 1)) } };
+      const groups = deps.modelGroups?.();
+      const block = { ...panel.block, data: { ...panel.block.data, creationModelChain: serializeModelRoutes(modelChain.slice(0, 1)),
+        // This computer's model groups for the creation picker (model-groups.md §6.2); older controllers ignore it.
+        ...(groups?.routes.length ? { modelGroups: groups } : {}) } };
       return bind(context, { ref: ref(id), revision: '1', display: { title: editorCopy.create }, links: [], blocks: [block], actions: [panel.action] }, async () => '1', async request => {
         const input = request.input ?? {}; keys(input, ['name', 'avatarImageBase64', 'requestId', 'modelChain']);
         const requestId = string(input.requestId, 80);
@@ -145,9 +149,10 @@ export function createBotRemoteEditors(deps: BotRemoteEditorDeps, bind: ReturnTy
         if (input.modelChain !== undefined) {
           let value: unknown;
           try { value = JSON.parse(string(input.modelChain, 4000)); } catch { fail(); }
-          const chain = normalizeBotModelChain(value);
-          if (!Array.isArray(value) || value.length !== 1 || chain.length !== 1 || !['claude', 'codex', 'pi'].includes(value[0]?.harness)) fail();
-          capabilities = { modelChainOverride: chain };
+          const chain = parseRemoteBotModelChain(value);
+          if (chain?.length !== 1) return fail();
+          capabilities = { modelChainOverride: deps.fillModelGroups ? await deps.fillModelGroups(chain) : chain };
+          deps.assertOwner(owner);
         }
         await deps.create({ id: botId, name, avatarImageBase64, locale, ...(capabilities ? { capabilities } : {}) });
         deps.assertOwner(owner);

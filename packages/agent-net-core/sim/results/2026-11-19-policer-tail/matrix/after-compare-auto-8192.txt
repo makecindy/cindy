@@ -1,0 +1,72 @@
+
+running 1 test
+agent-net 策略 Auto；每场景 16 个种子
+=== 窗口 8192 ===
+无丢包 40ms
+  agent-net      用时     759ms 开销   5.0% p50   20.5 p95   21.0 p99   21.0ms 交互字节     477K
+丢包 1%
+  agent-net      用时     795ms 开销   5.8% p50   20.3 p95   20.8 p99   20.9ms 交互字节     860K
+丢包 5%
+  agent-net      用时     819ms 开销  12.9% p50   20.3 p95   20.7 p99   20.9ms 交互字节    1314K
+丢包 15%
+  agent-net      用时     873ms 开销  22.9% p50   20.2 p95   20.7 p99   20.9ms 交互字节    1850K
+丢包 30%
+  agent-net      用时     974ms 开销  47.5% p50   20.2 p95   20.7 p99   35.7ms 交互字节    2315K
+突发丢包
+  agent-net      用时     821ms 开销   5.9% p50   20.3 p95  183.0 p99  381.9ms 交互字节    2438K
+乱序 10%
+  agent-net      用时     806ms 开销   9.0% p50   20.3 p95   20.9 p99   22.7ms 交互字节     873K
+高延迟 300ms 丢包 5%
+  agent-net      用时    1830ms 开销  16.3% p50  150.3 p95  150.7 p99  151.0ms 交互字节    1301K
+弱网 2Mbit 80ms 丢包 5%
+  agent-net      用时   37718ms 开销   8.3% p50   43.8 p95   48.4 p99   50.1ms 交互字节    1315K
+千兆 2ms 丢包 0.1%
+  agent-net      用时      72ms 开销   2.8% p50    1.1 p95    1.2 p99    1.2ms 交互字节     482K
+50Mbit 20ms 丢包 2%
+  agent-net      用时    1435ms 开销   5.4% p50   11.0 p95   12.4 p99   12.8ms 交互字节     894K
+手机 10Mbit 100ms 抖动 30ms 丢包 3%
+  agent-net      用时    7386ms 开销  11.9% p50   59.0 p95   74.3 p99   79.2ms 交互字节     993K
+小队列 5Mbit 60ms 丢包 1%
+  agent-net      用时   15615ms 开销   4.9% p50   31.1 p95   32.1 p99   32.3ms 交互字节     864K
+重复 5% 乱序 5% 丢包 3%
+  agent-net      用时    3606ms 开销   9.8% p50   26.7 p95   29.3 p99   30.0ms 交互字节     986K
+低速 1Mbit 200ms 丢包 2%
+  agent-net      用时   75053ms 开销   6.3% p50  103.9 p95  106.2 p99  106.6ms 交互字节     895K
+卫星 20Mbit 600ms 丢包 1%
+  agent-net      用时    5695ms 开销  60.3% p50  303.1 p95  308.2 p99  309.7ms 交互字节     932K
+Wi-Fi 200Mbit 8ms 抖动 4ms 短突发
+  agent-net      用时     380ms 开销   6.8% p50    5.1 p95    7.3 p99   34.9ms 交互字节    1000K
+地铁 30Mbit 60ms 每 5 秒断 1 秒
+  agent-net      用时    3075ms 开销  16.2% p50   32.7 p95 1109.5 p99 1829.1ms 交互字节    3166K
+跨境 50Mbit 180ms 丢包 8% 乱序 3%
+  agent-net      用时    2178ms 开销  36.3% p50   93.5 p95  100.9 p99  104.0ms 交互字节    1410K
+实测路径 下载 令牌桶 5.7Mbit
+  agent-net      用时   11239ms 开销  56.8% p50   46.5 p95   48.9 p99   49.5ms 交互字节     879K
+实测路径 上传 随机丢包 17%
+  agent-net      用时    1135ms 开销  41.7% p50   46.6 p95   50.3 p99   52.6ms 交互字节    1875K
+配额 20Mbit 40ms 短窗口
+  agent-net      用时    3555ms 开销 101.9% p50   20.5 p95   20.9 p99   21.0ms 交互字节     477K
+家宽 300Mbit 25ms 丢包 0.3%
+  agent-net      用时     326ms 开销   7.6% p50   13.2 p95   14.2 p99   14.4ms 交互字节     767K
+4G 20Mbit 70ms 抖动 20ms 丢包 1.5%
+  agent-net      用时    3715ms 开销   8.6% p50   41.2 p95   51.2 p99   53.9ms 交互字节     891K
+跨洋 100Mbit 250ms 丢包 0.5%
+  agent-net      用时    1678ms 开销   8.0% p50  126.5 p95  128.9 p99  129.6ms 交互字节     877K
+拥挤 Wi-Fi 30Mbit 15ms 抖动 10ms 丢包 6%
+  agent-net      用时    2395ms 开销  11.0% p50    9.9 p95   14.6 p99   16.2ms 交互字节    1354K
+山区 3Mbit 150ms 丢包 10% 突发
+  agent-net      用时   34644ms 开销  19.3% p50   79.5 p95  228.3 p99  415.9ms 交互字节    1911K
+留出 校园网 40Mbit 30ms 丢包 0.8%
+  agent-net      用时    1778ms 开销   4.0% p50   16.0 p95   17.4 p99   17.8ms 交互字节     868K
+留出 5G 100Mbit 35ms 抖动 15ms 丢包 0.5%
+  agent-net      用时     825ms 开销   6.1% p50   22.1 p95   29.5 p99   31.5ms 交互字节     880K
+留出 欧美 30Mbit 200ms 丢包 2%
+  agent-net      用时    2946ms 开销  30.3% p50  101.9 p95  104.9 p99  105.7ms 交互字节     895K
+留出 令牌桶 10Mbit 60ms 突发 300KB
+  agent-net      用时    6598ms 开销  28.4% p50   31.0 p95   32.6 p99   32.9ms 交互字节     751K
+留出 高铁 15Mbit 80ms 丢包 4% 短断网
+  agent-net      用时    5498ms 开销  19.3% p50   43.0 p95  339.0 p99  640.9ms 交互字节    2216K
+test compare_core_only ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.75s
+

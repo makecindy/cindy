@@ -2,7 +2,7 @@ import { mkdtemp, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import { hasCurrentTeammateInstructions, teammateRuntimeInstructionItem } from './teammate-runtime-instructions';
+import { DELIVERED_TEAMMATE_INSTRUCTIONS_LIMIT, hasCurrentTeammateInstructions, rememberDeliveredTeammateInstructions, teammateRuntimeInstructionItem } from './teammate-runtime-instructions';
 let root: string;
 let file: string;
 beforeEach(async () => { root = await mkdtemp(join(tmpdir(), 'teammate-runtime-context-')); file = join(root, 'rollout.jsonl'); });
@@ -57,4 +57,32 @@ it('never uses local history for a missing, incompatible or failed remote reader
   const marker = teammateRuntimeInstructionItem('BASELINE').marker;
   expect(await hasCurrentTeammateInstructions(file, marker, {})).toBe(false);
   expect(await hasCurrentTeammateInstructions(file, marker, { readFileTail: async () => { throw new Error('SSH disconnected'); } })).toBe(false);
+});
+
+// Regression (2026-11-22): one image result is megabytes, so a long teammate thread pushed its marker out of
+// the bounded tail and every resume appended the ~17k-character block again. What this process delivered
+// answers only when the tail shows nothing; a compaction or another generation in the tail still re-delivers.
+it('trusts this process\'s own delivery only when the bounded tail is inconclusive', async () => {
+  const marker = teammateRuntimeInstructionItem('BASELINE').marker;
+  const filler = JSON.stringify({ type: 'response_item', payload: { role: 'user', content: [{ text: 'x'.repeat(300000) }] } }) + '\n';
+  await writeFile(file, entry('BASELINE') + filler);
+  expect(await hasCurrentTeammateInstructions(file, marker)).toBe(false);
+  expect(await hasCurrentTeammateInstructions(file, marker, undefined, marker)).toBe(true);
+  expect(await hasCurrentTeammateInstructions(file, teammateRuntimeInstructionItem('CHANGED').marker, undefined, marker)).toBe(false);
+  await writeFile(file, entry('BASELINE') + filler + JSON.stringify({ type: 'compacted', payload: { message: 'summary' } }) + '\n');
+  expect(await hasCurrentTeammateInstructions(file, marker, undefined, marker)).toBe(false);
+  await writeFile(file, entry('OTHER'));
+  expect(await hasCurrentTeammateInstructions(file, marker, undefined, marker)).toBe(false);
+});
+// Review (#12144): a long-running process keeps delivery records for recent threads only; a
+// re-delivered thread counts as recent again.
+it('keeps delivery records for the most recent threads only', () => {
+  const delivered = new Map<string, string>();
+  for (let i = 0; i < DELIVERED_TEAMMATE_INSTRUCTIONS_LIMIT; i += 1) rememberDeliveredTeammateInstructions(delivered, `t${i}`, 'm');
+  rememberDeliveredTeammateInstructions(delivered, 't0', 'm2');
+  rememberDeliveredTeammateInstructions(delivered, 'new', 'm');
+  expect(delivered.size).toBe(DELIVERED_TEAMMATE_INSTRUCTIONS_LIMIT);
+  expect(delivered.get('t0')).toBe('m2');
+  expect(delivered.has('t1')).toBe(false);
+  expect(delivered.get('new')).toBe('m');
 });

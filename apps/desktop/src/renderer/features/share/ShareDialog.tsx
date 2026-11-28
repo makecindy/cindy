@@ -164,12 +164,12 @@ export function ShareDialog({
       }}
     >
       <Dialog.Portal>
-        <Dialog.Overlay className="modal-scrim fixed inset-0 z-[10000]" style={WINDOW_DRAG_STYLE}>
+        <Dialog.Overlay className="modal-scrim fixed inset-0 z-modal" style={WINDOW_DRAG_STYLE}>
           <Dialog.Content
             ref={contentRef}
             tabIndex={-1}
             aria-describedby={undefined}
-            className="modal-panel fixed inset-0 z-[10000] m-auto flex h-fit max-h-[85vh] w-[min(460px,calc(100vw-32px))] flex-col overflow-y-auto overscroll-contain p-4 text-[var(--text-primary)]"
+            className="modal-panel fixed inset-0 z-modal m-auto flex h-fit max-h-[85vh] w-[min(460px,calc(100vw-32px))] flex-col overflow-y-auto overscroll-contain p-4 text-[var(--text-primary)]"
             style={WINDOW_NO_DRAG_STYLE}
             onPointerDownOutside={(event) => event.preventDefault()}
             onInteractOutside={(event) => event.preventDefault()}
@@ -187,7 +187,7 @@ export function ShareDialog({
             <Dialog.Title className="pr-10 text-18 font-medium text-[var(--confirm-title)]">
               {t('sharing.title')}
             </Dialog.Title>
-            <Tip text={t('sharing.close')} contentClassName="z-[10001]">
+            <Tip text={t('sharing.close')}>
               <Button
                 variant="secondary"
                 tone="quiet"

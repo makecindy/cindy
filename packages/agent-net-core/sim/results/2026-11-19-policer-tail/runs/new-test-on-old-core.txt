@@ -1,0 +1,5 @@
+新测试放到改动前的核心（指纹 1490d026a2cb）上：cargo test --profile sim -p agent-net-sim --test reliability small_transfers_do_not_keep
+test small_transfers_do_not_keep_overrunning_a_policer ... FAILED
+thread 'small_transfers_do_not_keep_overrunning_a_policer' panicked at sim\tests\reliability.rs:607:5:
+sent 11.28x the payload on the wire
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 47 filtered out; finished in 0.14s

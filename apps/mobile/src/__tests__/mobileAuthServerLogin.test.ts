@@ -217,6 +217,22 @@ describe('mobile auth-server login', () => {
     expect(authSource).toContain("kind: 'sso'");
     expect(authSource).toContain('startBrowserAuthorization({');
     expect(authSource).toContain("sole?.type === 'email_code'");
+
+    const orgStart = authSource.indexOf("if (action.type === 'discover-sso-org') {");
+    const org = authSource.slice(orgStart, authSource.indexOf("if (action.type === 'request-code')", orgStart));
+    const crossRegion = org.indexOf('if (discovery.region !== BUILD_AUTH_REGION)');
+    const sameRegion = org.indexOf('} else {', crossRegion);
+    expect(org.slice(crossRegion, sameRegion)).toContain("type: 'realm-switch-required'");
+    expect(org.slice(crossRegion, sameRegion)).not.toContain('startBrowserAuthorization');
+    expect(org.slice(sameRegion)).toContain('startBrowserAuthorization');
+    expect(org).not.toContain('activateMobileSessionRealm');
+    const cancelStart = authSource.indexOf("if (action.type === 'cancel-sso-realm') {");
+    const cancel = authSource.slice(cancelStart, authSource.indexOf("if (action.type === 'discover')", cancelStart));
+    expect(cancel).toContain('pendingAuthRealmRef.current = null;');
+    expect(cancel).toContain('resetMobileSessionRealm();');
+    expect(cancel).toContain("type: 'providers-loaded'");
+    expect(cancel).toContain('providers: confirmation.providers');
+    expect(cancel).not.toContain('startBrowserAuthorization');
   });
 
   it('shares email-domain discovery and keeps the enterprise realm until personal code sending succeeds', () => {
@@ -259,6 +275,34 @@ describe('mobile auth-server login', () => {
     expect(methodsAt).toBeGreaterThanOrEqual(0);
     expect(rememberAt).toBeGreaterThan(methodsAt);
     expect(autoStartAt).toBeGreaterThan(rememberAt);
+  });
+
+  // 测试价值
+  // - 生产入口与可观察结果：手动企业入口单区命中可继续，邮箱与登录后企业提示仍保持严格。
+  // - Bug／规则依据：国内成功+国际418 的修复不能扩大到其它登录入口与凭证区域选择。
+  // - 现有覆盖缺口：SDK 测合并结果，既有手机 guard 未验证调用方选择的策略。
+  // - 最小失败输入：默认放宽会改变邮箱登录；显式入口缺少选项则418仍阻断。
+  // - tier：guard；AuthProvider 依赖原生认证与持久化，静态契约核对入口选项，SDK 单测验证行为。
+  // - 实测耗时：单文件 0.38 秒。
+  it('opts only the explicit organization entry into partial realm discovery', () => {
+    const source = readFileSync(resolve(process.cwd(), 'src/auth/AuthContext.tsx'), 'utf8');
+    const orgStart = source.indexOf("if (action.type === 'discover-sso-org') {");
+    const org = source.slice(orgStart, source.indexOf("if (action.type === 'request-code')", orgStart));
+    expect(org).toContain('discoverOrganization(org, { allowPartialSuccess: true })');
+    expect(source.match(/allowPartialSuccess: true/g)).toHaveLength(1);
+    const lookupStart = source.indexOf('const lookupOrganizationRealm = useCallback');
+    const lookup = source.slice(lookupStart, source.indexOf('const acceptOutcome = useCallback', lookupStart));
+    expect(lookup).toContain('options: { allowPartialSuccess?: boolean } = {}');
+    expect(lookup).toContain('}, options);');
+    const wrapperStart = source.indexOf('const discoverOrganization = async');
+    const wrapper = source.slice(wrapperStart, source.indexOf("if (action.type === 'reset')", wrapperStart));
+    expect(wrapper).toContain('options: { allowPartialSuccess?: boolean } = {}');
+    expect(wrapper).toContain('lookupOrganizationRealm(org, did, expectedLoginFlowEpoch, options)');
+    expect(source).toContain('lookupOrganizationRealm(domain, did, expectedLoginFlowEpoch)');
+    const emailStart = source.indexOf("if (action.type === 'discover') {");
+    const email = source.slice(emailStart, orgStart);
+    expect(email).toContain('discoverOrganization,');
+    expect(email).not.toContain('allowPartialSuccess');
   });
 
   it('keeps short-lived account tokens and private tickets out of the screen and business API', () => {

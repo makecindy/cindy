@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import type { CindyRegion } from '@cindy/maker-shared/brand-identity';
 import type { DevProfileKind } from './devCliFlags.js';
+import type { DesktopRuntimeKind } from './hostDelegationEnv.js';
 import { withLocalProfileMigrationStartupBarrier } from './localProfileDataMigration.js';
 import { atomicWriteFileSync } from './utils/atomicWriteFile.js';
 import {
@@ -48,6 +49,11 @@ export interface DesktopDevInstanceRecord {
   isolationIntent?: boolean;
   /** 解析后的实际 profile 归属。 */
   profileKind?: DevProfileKind;
+  /**
+   * `client`: a client of the Node Host (CINDY_HOST_API), which never opens this profile's database;
+   * `embedded`: runs its own runtime. Absent on older instances, which readers treat as `embedded`.
+   */
+  runtime?: DesktopRuntimeKind;
   userDataDir: string;
   state: DesktopDevInstanceState;
   failure?: {
@@ -68,6 +74,7 @@ export interface BeginDesktopDevInstanceOptions {
   isolated: boolean;
   isolationIntent?: boolean;
   profileKind?: DevProfileKind;
+  runtime?: DesktopRuntimeKind;
   pid?: number;
   startedAtMs?: number;
   instanceId?: string;
@@ -177,6 +184,7 @@ export async function beginDesktopDevInstance(
     isolated: options.isolated,
     ...(options.isolationIntent !== undefined ? { isolationIntent: options.isolationIntent } : {}),
     ...(options.profileKind !== undefined ? { profileKind: options.profileKind } : {}),
+    ...(options.runtime !== undefined ? { runtime: options.runtime } : {}),
     userDataDir: path.resolve(options.userDataDir),
     state: 'starting',
   };

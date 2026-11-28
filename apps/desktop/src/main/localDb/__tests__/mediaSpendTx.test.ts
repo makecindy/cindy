@@ -17,7 +17,7 @@ describe('media spend transaction', () => {
         cache_create_tokens INTEGER DEFAULT 0, cost_is_approximate INTEGER DEFAULT 0,
         PRIMARY KEY(day, agent_kind, model, cost_currency));
       CREATE TABLE sessions (
-        id TEXT PRIMARY KEY, total_cost_usd REAL DEFAULT 0, total_cost_amount REAL DEFAULT 0,
+        id TEXT PRIMARY KEY, total_cost_usd REAL DEFAULT 0, total_cost_usd_is_approximate INTEGER DEFAULT 0, total_cost_amount REAL DEFAULT 0,
         total_cost_currency TEXT, total_cost_is_approximate INTEGER DEFAULT 0);
       CREATE TABLE messages (session_id TEXT, client_id TEXT, role TEXT, agent_meta TEXT);
       CREATE TABLE schedule_runs (id TEXT PRIMARY KEY, cost_amount REAL DEFAULT 0,
@@ -37,6 +37,7 @@ describe('media spend transaction', () => {
   it('adds costs to day, model and task without changing chat tokens or historical USD', () => {
     expect(spend('USD', 'session-1')).toEqual({
       legacyUsd: 2,
+      usdApproximate: 0,
       amount: 3.75,
       currency: 'USD',
       approximate: 0,
@@ -58,8 +59,10 @@ describe('media spend transaction', () => {
 
   it('keeps separate currency rows and follows the existing task currency rollover', () => {
     spend('USD', 'session-1');
+    db.prepare('UPDATE sessions SET total_cost_is_approximate = 1').run();
     expect(spend('CNY', 'session-1')).toEqual({
-      legacyUsd: 2,
+      legacyUsd: 5.75,
+      usdApproximate: 1,
       amount: 0.75,
       currency: 'CNY',
       approximate: 0,

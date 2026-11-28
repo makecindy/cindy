@@ -22,3 +22,14 @@ export function decodeAccessTokenOrgSlug(token: string | null): string | null {
     return null;
   }
 }
+
+/**
+ * How long until the runtime refresh of this access token is due, in ms from `nowMs`: its `exp`
+ * minus 300 seconds. ≤ 0 means due now. Throws on a token whose payload is not JSON, and gives
+ * NaN for one without a numeric `exp`, exactly as the desktop's scheduleRefresh computed it
+ * (authManager.ts), which now calls this; the Node Host schedules with the same function.
+ */
+export function accessTokenRefreshDelayMs(token: string, nowMs: number): number {
+  const payload = JSON.parse(Buffer.from(token.split('.')[1], 'base64').toString('utf-8'));
+  return (payload.exp - 300) * 1000 - nowMs;
+}

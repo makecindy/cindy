@@ -39,7 +39,11 @@ interface TeammateRowOptions {
   onSelect(item: HostedRemoteCollectionItem): void;
   /** Group chats, mixed with the teammates by latest activity. */
   groups?: TeammateListGroups;
+  /** Live activity already read by the caller for these rows; the renderer then subscribes to none. */
+  activities?: ReadonlyMap<string, string>;
 }
+
+const NO_ROWS: readonly HostedRemoteCollectionItem[] = [];
 
 export function conversationSessionId(row: HostedRemoteCollectionItem): string | null {
   const target = row.item.links.find(({ rel, target: link }) => rel === 'conversation' && link.kind === 'session')?.target;
@@ -47,6 +51,24 @@ export function conversationSessionId(row: HostedRemoteCollectionItem): string |
 }
 
 export type TeammateListEntry = { kind: 'bot' | 'group'; row: HostedRemoteCollectionItem };
+
+/**
+ * What a teammate's row shows, from its roster row and the live activity of its conversation.
+ * The inbox passes `quiet: true`: an unreachable computer is not a request for the user.
+ */
+export function teammateRowState(row: HostedRemoteCollectionItem, input: {
+  online: boolean; connected: boolean | null; quiet: boolean;
+  activities: ReadonlyMap<string, string>; userId: string; language: string;
+}) {
+  const display = row.item.display;
+  const generating = input.online && !!display.generation
+    && display.teammateActivity?.phase !== 'needs-interaction' && input.activities.get(row.key) !== 'needs-interaction';
+  const { attention, waiting } = teammateAttention(row, input.online, input.activities, input.language);
+  const unread = isRemoteResourceUnread(input.userId, row.host.deviceId, row.item.ref.id, display.lastReplyAt);
+  const status = resolveTeammateStatus({ online: input.connected, quietOffline: input.quiet, unread, waiting,
+    failed: !!attention, working: generating, activities: [display.teammateActivity, { phase: input.activities.get(row.key) ?? '' }] });
+  return { generating, attention, waiting, unread, status };
+}
 
 /** Teammates and group chats, mixed by latest activity and filtered by the same search. */
 export function useTeammateEntries(items: readonly HostedRemoteCollectionItem[], groups: readonly HostedRemoteCollectionItem[] | undefined, query = '') {
@@ -61,11 +83,12 @@ export function useTeammateEntries(items: readonly HostedRemoteCollectionItem[],
 }
 
 /** The teammate / group row of the task home's teammate section. */
-export function useTeammateRowRenderer({ items, isOnline, connectionState, quietPresence, onSelect, groups }: TeammateRowOptions) {
+export function useTeammateRowRenderer({ items, isOnline, connectionState, quietPresence, onSelect, groups, activities: provided }: TeammateRowOptions) {
   const { i18n } = useTranslation();
   const { user } = useAuth();
   const now = useMinuteNow();
-  const activities = useRosterActivities(items);
+  const subscribed = useRosterActivities(provided ? NO_ROWS : items);
+  const activities = provided ?? subscribed;
   // Resource refreshes replace objects and navigation closures even when the row
   // looks identical. Keep presses current without invalidating every visible row.
   const selection = useRef({ items, onSelect });
@@ -94,11 +117,9 @@ export function useTeammateRowRenderer({ items, isOnline, connectionState, quiet
     const title = resolveRemoteText(display.title, i18n.language);
     const online = isOnline(row.host);
     const connected = connectionState ? connectionState(row.host) : online;
-    const generating = online && !!display.generation
-      && display.teammateActivity?.phase !== 'needs-interaction' && activities.get(row.key) !== 'needs-interaction';
-    const { attention, waiting } = teammateAttention(row, online, activities, i18n.language);
+    const { generating, attention, waiting, unread, status } = teammateRowState(row, {
+      online, connected, quiet: !!quietPresence?.(row), activities, userId: user?.id ?? '', language: i18n.language });
     const ambiguous = (duplicateNames.get(title.normalize('NFKC').toLocaleLowerCase(i18n.language)) ?? 0) > 1;
-    const unread = isRemoteResourceUnread(user?.id ?? '', row.host.deviceId, row.item.ref.id, display.lastReplyAt);
     const timestamp = display.timestamp;
     const time = timestamp !== undefined && Number.isFinite(new Date(timestamp).getTime())
       ? formatRemoteSessionSidebarTime(new Date(timestamp).toISOString(), now) : '';
@@ -110,8 +131,7 @@ export function useTeammateRowRenderer({ items, isOnline, connectionState, quiet
       avatarFallback={display.avatar?.fallbackText} avatarColor={display.avatar?.color}
       generating={generating} phase={generating ? display.generation!.phase : ''}
       startedAt={generating ? display.generation!.startedAt : null}
-      status={resolveTeammateStatus({ online: connected, quietOffline: !!quietPresence?.(row), unread, waiting,
-        failed: !!attention, working: generating, activities: [display.teammateActivity, { phase: activities.get(row.key) ?? '' }] })}
+      status={status}
       connected={connected} quiet={!!quietPresence?.(row)} attention={attention} waiting={waiting}
       unread={unread} time={time} last={last} onSelect={select} />;
   };

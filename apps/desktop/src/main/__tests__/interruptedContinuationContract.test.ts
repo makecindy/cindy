@@ -1,12 +1,15 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+import { createRuntimePluginInputHooks } from '../maker-ipc/runtimePluginTaskBindings.js';
 
-const registerSource = readFileSync(
-  resolve(__dirname, '..', 'maker-ipc', 'register.ts'),
-  'utf8',
-).replace(/\r\n?/g, '\n');
+// The auto-resume runtime (guards, bookkeeping, undispatched settlement) is assembled in
+// autoResumeRuntime.ts; register.ts binds its ports. Appended after register.ts so register's own order holds.
+const registerSource = ['register', 'autoResumeRuntime']
+  .map((name) => readFileSync(resolve(__dirname, '..', 'maker-ipc', name + '.ts'), 'utf8'))
+  .join('\n')
+  .replace(/\r\n?/g, '\n');
 // Retain local characterization guards at the production stages they describe.
 // Cross-stage delivery and recovery timing run in sessionEventPipeline.test.ts.
 const eventSource = [
@@ -117,7 +120,7 @@ describe('interrupted continuation enqueue contract', () => {
     expect(discardedFinalizeIndex).toBeGreaterThan(discardedSettleIndex);
 
     const settleStart = registerSource.indexOf('function settleUndispatchedAutoResumeOutcome(');
-    const settleEnd = registerSource.indexOf('\n}\n', settleStart);
+    const settleEnd = registerSource.indexOf('\n  }\n', settleStart);
     expect(settleStart).toBeGreaterThan(-1);
     expect(settleEnd).toBeGreaterThan(settleStart);
     const settleHelper = registerSource.slice(settleStart, settleEnd);
@@ -127,7 +130,7 @@ describe('interrupted continuation enqueue contract', () => {
     const interruptedSettleStart = registerSource.indexOf(
       'function settleUndispatchedInterruptedAutoResume(',
     );
-    const interruptedSettleEnd = registerSource.indexOf('\n}\n', interruptedSettleStart);
+    const interruptedSettleEnd = registerSource.indexOf('\n  }\n', interruptedSettleStart);
     expect(interruptedSettleStart).toBeGreaterThan(-1);
     expect(interruptedSettleEnd).toBeGreaterThan(interruptedSettleStart);
     const interruptedSettleHelper = registerSource.slice(
@@ -227,9 +230,23 @@ describe('interrupted continuation enqueue contract', () => {
     expect(registerSource).toContain(
       "rollbackAgentIslandUserPrompt(sessionId, item.clientId, 'rejected')",
     );
-    expect(registerSource).toContain(
-      "rollbackAgentIslandUserPrompt(sessionId, item.clientId, 'blocked')",
-    );
+    expect(registerSource).toMatch(/createRuntimePluginInputHooks\(\{[^}]*rollbackAgentIslandUserPrompt,/);
+    const rollback = vi.fn();
+    const broadcast = vi.fn();
+    const hooks = createRuntimePluginInputHooks({
+      getStableSessionForTurnBoundary: () => null,
+      screenGhostUserMessage: vi.fn(),
+      rollbackAgentIslandUserPrompt: rollback,
+      revokeTrustedDesktopQueueOrigin: vi.fn(),
+      broadcastGhostMessageBlocked: broadcast,
+      broadcastGhostMessageRewritten: vi.fn(),
+    });
+    const item = { clientId: 'input', text: 'prompt' } as Parameters<typeof hooks.onUserMessageBlocked>[1];
+    const verdict = { ghostId: 'plugin', ghostName: 'Fixture', reason: 'blocked' };
+    hooks.onUserMessageBlocked('task', item, verdict);
+    expect(rollback).toHaveBeenCalledExactlyOnceWith('task', 'input', 'blocked');
+    expect(broadcast).toHaveBeenCalledExactlyOnceWith({ sessionId: 'task', clientId: 'input', text: 'prompt', ...verdict });
+    expect(rollback.mock.invocationCallOrder[0]).toBeLessThan(broadcast.mock.invocationCallOrder[0]);
   });
 
   it('fails a pending scheduler auto-resume before dispatching unrelated user input', () => {

@@ -1,6 +1,7 @@
 export {
   buildGhostRosterPrompt,
   createCindyGhostsMcpServer,
+  prepareStartupGhostToolInputSchema,
   handleForgeGuide,
   handleForgeInstall,
   handleForgePack,

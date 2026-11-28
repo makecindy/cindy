@@ -43,7 +43,7 @@ vi.mock('@/theme', async () => {
 });
 vi.mock('@/session/messageActions', () => ({ writeClipboardText: h.write }));
 
-import { MarkdownCodeCopyButton } from '@/session/MarkdownCodeCopyButton';
+import { MarkdownBlockCopyButton } from '@/session/MarkdownBlockCopyButton';
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 
@@ -51,7 +51,7 @@ let root: Root;
 let container: HTMLDivElement;
 
 async function render(text: string) {
-  await act(async () => root.render(createElement(MarkdownCodeCopyButton, { text })));
+  await act(async () => root.render(createElement(MarkdownBlockCopyButton, { text })));
 }
 
 function button(): HTMLButtonElement {

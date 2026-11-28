@@ -1,0 +1,10 @@
+主干 1a5ed26727 的核心 + 这一轮的 sim/tests/streams.rs：cargo test --profile sim -p agent-net-sim --test streams（2026-11-19）
+21 个通过，新加的 3 个失败：
+test full_bulk_streams_leave_room_for_more_urgent_ones ... FAILED
+  assertion `left == right` failed: 交互流被大流挡在缓冲外  left: 0  right: 200
+test interactive_messages_stay_fast_beside_two_full_streams ... FAILED
+  assertion `left == right` failed: 消息写不进发送缓冲，at 120813us  left: 0  right: 200
+test every_priority_makes_progress_when_all_are_busy ... FAILED
+  交互 / 普通 / 后台：[6789996, 448825, 0]
+只修发送缓冲、调度还是一个数时（中间状态），`interactive_messages_stay_fast_beside_two_full_streams` 的慢线一行：
+  一条文件 p50/p95/p99 74.7 / 185.1 / 316.0 毫秒；普通加后台两条大流 161.0 / 2551.5 / 3065.7 毫秒

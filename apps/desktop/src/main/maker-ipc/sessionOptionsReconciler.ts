@@ -1,6 +1,6 @@
 import { eq } from 'drizzle-orm';
 import { permissionModeOrAsk } from '@cindy/maker-shared/permission-mode';
-import { dbToMakerAgentKind } from '../../shared/agentKindConversion.js';
+import { dbToMakerEngineKind } from '../../shared/agentKindConversion.js';
 import { getDbClient } from '../localDb/client/current.js';
 import { sessions } from '../localDb/schema.js';
 import type { MakerSessionCreateOpts as CreateOpts } from './sessionRequest.js';
@@ -48,7 +48,8 @@ export function createSessionOptionsReconciler(deps: {
       if (!co.remoteHostId && !row.remoteHostId) {
         co.agentDeviceId = row.agentDeviceId ?? undefined;
       }
-      const dbMakerKind = dbToMakerAgentKind(row.agentKind);
+      // Engine-aware: a plugin-engine row stays 'acp' instead of reading as Claude.
+      const dbMakerKind = dbToMakerEngineKind(row.agentKind);
       if (co.agentKind !== dbMakerKind) {
         log.warn('lazy-create: createOpts agentKind drifted from DB (agent switch); reconciling', {
           sessionId,

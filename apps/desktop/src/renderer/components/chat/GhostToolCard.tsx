@@ -1,3 +1,5 @@
+import { qualifiedCardPrKey } from '@cindy/maker-shared';
+import { DownloadImageMenuItem } from '@/components/chat/DownloadImageMenuItem';
 import { GhostCardSessionLink } from './GhostCardSessionLink';
 import { ghostCardSessionLinkId } from '@cindy/maker-shared/ghost-card-form';
 import { createRoot } from 'react-dom/client';
@@ -225,14 +227,14 @@ function useRemoteCardSource(callId: string): GhostRemoteCardSource | undefined 
 }
 
 /** A second view of the same card; actions keep the original call identity. */
-export function GhostCardPreview({ callId, ghostId, html, sessionId, onEscape, settingsButtonRef, inDialog }: {
-  callId: string; ghostId: string; html: string; sessionId: string; inDialog?: boolean; onEscape?: () => void; settingsButtonRef?: RefObject<HTMLButtonElement | null>;
+export function GhostCardPreview({ callId, ghostId, html, sessionId, onEscape, settingsButtonRef }: {
+  callId: string; ghostId: string; html: string; sessionId: string; onEscape?: () => void; settingsButtonRef?: RefObject<HTMLButtonElement | null>;
 }) {
   const themeVars = useGhostCardThemeVars();
   const { t, i18n } = useTranslation();
   const { name, externalLinks } = useGhostCardOwner(callId, ghostId, i18n.language);
   return <GhostCardCanvas callId={callId} html={html} height={GHOST_CARD_HEIGHT_MIN}
-    sessionId={sessionId} themeVars={themeVars} running={false} persistHeight={false} inDialog={inDialog} onEscape={onEscape} settingsButtonRef={settingsButtonRef}
+    sessionId={sessionId} themeVars={themeVars} running={false} persistHeight={false} onEscape={onEscape} settingsButtonRef={settingsButtonRef}
     ariaTitle={t('chat.ghostCall.cardAria', { name, tool: '' })}
     allowExternalLinks={externalLinks} />;
 }
@@ -254,7 +256,6 @@ function GhostCardCanvas({
   allowExternalLinks,
   mailPanel = false,
   persistHeight = true,
-  inDialog = false,
   onEscape,
   settingsButtonRef,
 }: {
@@ -271,7 +272,6 @@ function GhostCardCanvas({
   allowExternalLinks?: boolean;
   mailPanel?: boolean;
   persistHeight?: boolean;
-  inDialog?: boolean;
   onEscape?: () => void;
   settingsButtonRef?: RefObject<HTMLButtonElement | null>;
 }): ReactNode {
@@ -436,7 +436,7 @@ function GhostCardCanvas({
       el.style.setProperty('display', 'inline-flex', 'important');
     });
     if (!prSlotKey) return;
-    setTaskAutoArchive(fillGhostCardPrStatus(doc, (key) => prStatusesRef.current.get(`github:github.com/${key}`) ?? prStatusesRef.current.get(key), t, taskArchiveEligible));
+    setTaskAutoArchive(fillGhostCardPrStatus(doc, (key) => prStatusesRef.current.get(qualifiedCardPrKey(key)!) ?? prStatusesRef.current.get(key), t, taskArchiveEligible));
     fillGhostCardTaskAutoArchiveHint(doc, taskArchiveEligible ? autoArchiveStateRef.current : 'inactive', {
       pending: t('chat.ghostCall.taskAutoArchivePending'),
       cancel: t('chat.ghostCall.taskAutoArchiveCancel'),
@@ -750,16 +750,30 @@ function GhostCardCanvas({
             el.style.opacity = '';
             el.style.pointerEvents = '';
           };
-          void formDelivery.current.then(async ok => {
-            if (!ok || (sessionId && await pendingGhostCardFormDelivery(sessionId) === false)) return { ok: false };
+          const deliveryKey = `${callId}:${editorId}`;
+          const delivery = formDelivery.current;
+          void delivery.then(async ok => {
+            if (!mailSubmit && !ok) return { ok: false };
+            if (sessionId && await pendingGhostCardFormDelivery(sessionId, mailSubmit ? deliveryKey : undefined) === false) return { ok: false };
             // A second view may have delivered edits since this iframe bound its listener.
             const entry = getGhostCardSnapshot().byCallId.get(callId);
             const latest = entry?.status === 'ready' ? readGhostCardForm(entry.html) : null;
             const values = latest && entry?.status === 'ready' && readGhostCardFormChange(entry.html) === formState.current.key
               ? mergeGhostCardFormValues(formState.current.values, formState.current.base, Object.fromEntries(latest.map(f => [f.name, f.value])))
               : formState.current.values;
-            return dispatchGhostCardAction(callId, actionId, { formValues: values });
-          }).then(result => { if (mailSubmit || !result.ok) unlock(); }).catch(unlock);
+            const result = await dispatchGhostCardAction(callId, actionId, { formValues: values });
+            if (mailSubmit && result.ok && !ok && formDelivery.current === delivery) {
+              formDelivery.current = Promise.resolve(true);
+              if (sessionId) releaseGhostCardFormDelivery(sessionId, deliveryKey);
+            }
+            return result;
+          }).then(result => {
+            if (mailSubmit && !result.ok) toast.error(t('chat.ghostCall.formSyncFailed'));
+            if (mailSubmit || !result.ok) unlock();
+          }).catch(() => {
+            if (mailSubmit) toast.error(t('chat.ghostCall.formSyncFailed'));
+            unlock();
+          });
           return;
         }
         // data-ghost-model-select 类动作:在按钮下方弹模型下拉框,选中后才派发。
@@ -966,8 +980,8 @@ function GhostCardCanvas({
   };
 
   /** 输入面板发送:非空文字 → 锁源按钮 + 派发带 prompt 的 card-action。 */
-  const submitPrompt = (): void => {
-    const text = promptText.trim();
+  const submitPrompt = (overrideText?: string): void => {
+    const text = (overrideText ?? promptText).trim();
     if (!text || !promptAsk) return;
     const el = promptSourceElRef.current;
     if (el) lockActionEl(el);
@@ -1018,7 +1032,7 @@ function GhostCardCanvas({
         }} /> : null}
       {/* Editable forms share a frame with their plugin-provided footer.
           Ordinary plugin posters keep their original transparent canvas. */}
-      <div className={formFields ? 'relative overflow-hidden rounded-b-xl border-t border-border' : 'relative overflow-hidden rounded-[10px]'}>
+      <div className={formFields ? 'relative overflow-hidden rounded-b-xl border-t border-border' : 'relative overflow-hidden rounded-xl'}>
         <iframe
           ref={iframeRef}
           sandbox="allow-same-origin"
@@ -1097,10 +1111,10 @@ function GhostCardCanvas({
         />
       ) : null}
       {remotePrompt?.kind === 'model' ? (
-        <RemoteCardModelRequest key={remotePrompt.request.requestId} prompt={remotePrompt} inDialog={inDialog} />
+        <RemoteCardModelRequest key={remotePrompt.request.requestId} prompt={remotePrompt} />
       ) : null}
       {modelAsk ? (
-        <GhostCardModelSelect inDialog={inDialog}
+        <GhostCardModelSelect
           rect={modelAsk.rect}
           initial={modelAsk.initial}
           onSelect={(route) => {
@@ -1137,6 +1151,7 @@ function GhostCardCanvas({
             />
           </DropdownMenuTrigger>
           <DropdownMenuContent align="start" sideOffset={2}>
+            <DownloadImageMenuItem src={imgMenu.src} />
             <DropdownMenuItem onClick={() => void copyMenuImage()}>
               <Copy className="mr-2 h-4 w-4" />
               {t('chat.media.copyImage')}
@@ -1336,7 +1351,8 @@ export function GhostToolCard({
         >
           {toolName ? (
             <div
-              className="mb-1 inline-block rounded px-1.5 py-px font-mono text-10"
+              // design: intrinsic-geometry — 行内代码，与 Markdown 行内代码同为 6px（DESIGN.md §5 内容排版）
+              className="mb-1 inline-block rounded-[6px] px-1.5 py-px font-mono text-10"
               style={{ backgroundColor: 'var(--surface-chip)', color: 'var(--text-secondary)' }}
             >
               {toolName}

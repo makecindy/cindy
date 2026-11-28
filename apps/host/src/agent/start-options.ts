@@ -16,6 +16,7 @@
  */
 
 import type { CreateSessionOptions } from '@cindy/maker-core';
+import { builtinAgentKindOrNull } from '../../../desktop/src/main/maker-host/engineKind.js';
 
 import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../../../desktop/src/main/appSessionState.js';
 import { getActiveCatalog } from '../../../desktop/src/main/maker-host/active-catalog.js';
@@ -102,17 +103,21 @@ export function createHostStartOptions(ports: HostStartOptionsPorts) {
     // The desktop refreshes these lists on every catalog change; the Host at least
     // before each start, against the catalog it just applied.
     ports.refreshModels?.();
+    // Plugin engines (`acp`, docs/plans/acp-plugin-bridge.md) are not catalog routes:
+    // skip built-in catalog lookup, Fast policy and built-in pricing hooks while keeping
+    // owner checks, provider freeze, worktree lease, shared Skill links and disabled plugins.
+    const agentKind = builtinAgentKindOrNull(opts.agentKind);
     // The dispatch boundary every creation path shares; providerId is final here.
     freezeSessionProviderAtStart(sessionId, opts.providerId);
-    const interfaceProvider = getActiveCatalog().providers.find(p => p.id === opts.providerId);
-    const interfaceModel = interfaceProvider?.models[opts.agentKind]?.find(m => m.id === opts.model);
-    if (interfaceProvider && interfaceModel) sessionModelInterface(sessionId, interfaceProvider.id, opts.agentKind,
+    const interfaceProvider = agentKind ? getActiveCatalog().providers.find(p => p.id === opts.providerId) : undefined;
+    const interfaceModel = agentKind ? interfaceProvider?.models[agentKind]?.find(m => m.id === opts.model) : undefined;
+    if (agentKind && interfaceProvider && interfaceModel) sessionModelInterface(sessionId, interfaceProvider.id, agentKind,
       interfaceModel, getActiveCatalog().modelRegistry,
-      opts.resumeSessionId ? interfaceProvider.routing[opts.agentKind]?.wireProtocol : undefined);
+      opts.resumeSessionId ? interfaceProvider.routing[agentKind]?.wireProtocol : undefined);
 
-    if (!opts.remoteHostId && !opts.agentDeviceId && ports.fastPolicies) {
+    if (agentKind && !opts.remoteHostId && !opts.agentDeviceId && ports.fastPolicies) {
       opts.fastModePolicy = ports.fastPolicies.createSubscriptionFastPolicy(sessionId, () => getSessionProvider(sessionId)
-        ?? ports.modelContext.resolveContextProviderId(ports.modelContext.getSelectableCatalog(), opts.agentKind, null, opts.model));
+        ?? ports.modelContext.resolveContextProviderId(ports.modelContext.getSelectableCatalog(), agentKind, null, opts.model));
     }
     // The task's working context budget, settled against the catalog and model limits.
     await budget.applySessionContextWindowBudgetToCreateOpts(sessionId, opts, getActiveCatalog());
@@ -120,14 +125,16 @@ export function createHostStartOptions(ports: HostStartOptionsPorts) {
       const thinkingEnabled = getThinkingEnabledFromMemory(opts.agentKind, opts.providerId, opts.model);
       if (thinkingEnabled !== undefined) opts.thinkingEnabled = thinkingEnabled;
     }
-    // The desktop reads the session's Fast axis from this store; the Host starts it
-    // from the options it is about to run and keeps it in step with later changes.
-    setSessionFastMode(sessionId, opts.fastMode ?? false);
-    // The proxy's provider bridges read the task's effort from this store; the desktop
-    // hydrates it at start against the current model's capabilities (register.ts).
-    setSessionEffort(sessionId, interfaceModel
-      ? resolveCompatibleSessionRuntimeEffort(interfaceModel, (opts.effort ?? null) as Parameters<typeof resolveCompatibleSessionRuntimeEffort>[1])
-      : opts.effort ?? null);
+    if (agentKind) {
+      // The desktop reads the session's Fast axis from this store; the Host starts it
+      // from the options it is about to run and keeps it in step with later changes.
+      setSessionFastMode(sessionId, opts.fastMode ?? false);
+      // The proxy's provider bridges read the task's effort from this store; the desktop
+      // hydrates it at start against the current model's capabilities (register.ts).
+      setSessionEffort(sessionId, interfaceModel
+        ? resolveCompatibleSessionRuntimeEffort(interfaceModel, (opts.effort ?? null) as Parameters<typeof resolveCompatibleSessionRuntimeEffort>[1])
+        : opts.effort ?? null);
+    }
     if (opts.agentKind === 'codex' || opts.agentKind === 'pi') {
       opts.resolveUsagePriceVariant = registerUsagePricing(sessionId);
     }
@@ -178,6 +185,8 @@ export function createHostStartOptions(ports: HostStartOptionsPorts) {
     resolveConfiguredContextWindow: budget.resolveConfiguredContextWindow,
     /** The task's window budget the user set (null: the route's default). */
     readStoredSessionContextWindowBudget: budget.readStoredSessionContextWindowBudget,
+    /** Whether a budget change changes a route's effective window (the budget core, as the desktop's). */
+    contextWindowBudgetChangesEffectiveWindow: budget.contextWindowBudgetChangesEffectiveWindow,
     prepareStartOptions,
     onBeforeStart,
     async onStartFailed({ sessionId, options, runtimeMayBeAlive }: SessionStartFailureContext): Promise<void> {

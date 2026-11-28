@@ -45,6 +45,7 @@ import type {
   BotImFeishuService,
   BotImGroupActivationMode,
 } from '../../../shared/botImConnection';
+import { BOT_IM_CONNECT_TIMEOUT_REASON } from '../../../shared/botImConnection';
 import { useBotTranslation } from './botPronounContext';
 import { useBotSettingsTarget } from './useBotSettingsTarget';
 import { RemoteOfficialXCard } from './RemoteOfficialXCard';
@@ -186,6 +187,7 @@ export function BotChannelsPage({ bot }: { bot: BotProfile }) {
 
   return (
     <section className="flex flex-col gap-4 pt-3" aria-label={t('bots.channels.title')}>
+      {target.kind === 'local' ? <HandedOverFromSettings bot={bot} /> : null}
       {remoteX ? <RemoteOfficialXCard bot={bot} api={remoteX} deviceName={target.deviceName ?? ''} /> : null}
       {!remoteX && target.kind === 'local' && typeof window.electronAPI.hookControl?.setXCompanion === 'function' ? <HookConnectionsSection companion={{ id: bot.id, name: bot.name }} /> : null}
       {loading && !payload ? (
@@ -251,6 +253,9 @@ export function BotChannelsPage({ bot }: { bot: BotProfile }) {
                   {t('bots.channels.remove')}
                 </Button>
                 </div>
+                {view.health?.automationDenied && (
+                  <p className="text-12 leading-[1.5] text-[var(--text-secondary)]">{t('bots.channels.add.imessage.automationDenied')}</p>
+                )}
                 {view.health && view.health.uncertainInputs + view.health.uncertainSends > 0 ? (
                   <p className="text-12 leading-[1.5] text-[var(--text-secondary)]">{t('bots.channels.add.imessage.uncertain', {
                     count: view.health.uncertainInputs + view.health.uncertainSends,
@@ -306,6 +311,59 @@ export function BotChannelsPage({ bot }: { bot: BotProfile }) {
         <BotChannelAddDialog bot={bot} api={im} remoteName={target.channels.canEnterCredentials ? undefined : target.deviceName} onApplied={apply} onOpenChange={setAdding} />
       ) : null}
     </section>
+  );
+}
+
+/**
+ * 「设置 → IM 机器人」里交给这位伙伴的机器人(个人机器人的「谁来回复」, 官方机器人的「谁来回复」)。
+ * 只读汇总: 改归属、换项目都在设置里, 这里一键过去。只看本机。
+ */
+function HandedOverFromSettings({ bot }: { bot: BotProfile }) {
+  const { t } = useBotTranslation();
+  const navigate = useNavigate();
+  const [apps, setApps] = useState<string[]>([]);
+  useEffect(() => {
+    let cancelled = false;
+    const api = window.electronAPI.botImConnection;
+    const refresh = async () => {
+      const found = new Set<string>();
+      if (typeof api?.getPersonalChannel === 'function') {
+        const states = await Promise.all((['telegram', 'feishu', 'wecom', 'dingtalk', 'discord'] as const)
+          .map((channel) => api.getPersonalChannel!({ channel }).catch(() => null)));
+        for (const state of states) if (state?.companionBotId === bot.id) found.add(state.channel);
+      }
+      try {
+        const { hook } = await window.electronAPI.hookControl!.get();
+        if (hook.companionBotId === bot.id) found.add('slack');
+        for (const provider of ['telegram', 'feishu', 'discord'] as const) {
+          if (hook[provider]?.companionBotId === bot.id) found.add(provider);
+        }
+      } catch { /* 官方机器人不可用时只列个人机器人 */ }
+      if (!cancelled) setApps([...found]);
+    };
+    void refresh();
+    const offPersonal = api?.onPersonalChannelChanged?.(() => void refresh());
+    const offOfficial = window.electronAPI.hookControl?.onStatusChanged?.(() => void refresh());
+    return () => { cancelled = true; offPersonal?.(); offOfficial?.(); };
+  }, [bot.id]);
+  if (apps.length === 0) return null;
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] px-4 py-3">
+      <div className="min-w-0 flex-[1_1_240px]">
+        <p className="text-13 leading-[1.5] text-[var(--text-primary)]">
+          {t('bots.channels.handedOver', {
+            name: bot.name,
+            apps: apps.map((app) => t(`settings.imBot.apps.${app}`)).join(t('bots.channels.handedOverSeparator')),
+          })}
+        </p>
+        <p className="mt-0.5 text-12 leading-[1.5] text-[var(--text-secondary)]">
+          {t('bots.channels.handedOverHint', { name: bot.name })}
+        </p>
+      </div>
+      <Button type="button" variant="secondary" size="sm" onClick={() => navigate('/settings?tab=im-bot')}>
+        {t('bots.channels.manageInSettings')}
+      </Button>
+    </div>
   );
 }
 
@@ -391,8 +449,6 @@ function ConnectionGroups({ api, connectionId, botName, refreshVersion }: { api:
             aria-label={`${group.chatName || group.chatId} · ${t('bots.channels.groups.title')}`}
             value={group.activation}
             onValueChange={(mode) => setMode(group.chatId, mode)}
-            height={30}
-            optionHeight={24}
             optionClassName="text-11"
             options={(['mention', 'always'] as const).map((mode) => ({
               value: mode,
@@ -561,6 +617,7 @@ function ConnectionLanes({ api, connectionId, botName, platform, deviceId }: {
       <div className="flex items-center justify-between text-12 font-medium text-[var(--text-primary)]">
         <span>{t('bots.channels.lanes.title', { platform })}</span>
         <ChromeIconButton
+          // -my-[5px]：28px 按钮抵消到 18px 文字行高，标题行不被撑高（DESIGN.md §5 破出抵消）。
           className="-my-[5px] shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
           aria-label={t(expanded ? 'bots.channels.lanes.collapse' : 'bots.channels.lanes.expand', { platform })}
           aria-expanded={expanded}
@@ -891,7 +948,10 @@ function BotChannelAddDialog({
       } else if (message.includes('CONNECT_FAILED')) {
         const marker = 'CONNECT_FAILED: ';
         const reason = message.slice(message.indexOf(marker) + marker.length).trim();
-        setError(t('bots.channels.add.errors.connectFailed', { reason: reason || '…' }));
+        // 只是超时: 表单内容原样保留, 再点一次即用原输入重试。
+        setError(reason === BOT_IM_CONNECT_TIMEOUT_REASON
+          ? t('bots.channels.add.errors.connectTimedOut')
+          : t('bots.channels.add.errors.connectFailed', { reason: reason || '…' }));
       } else {
         setError(t('bots.channels.add.errors.failed'));
       }
@@ -904,7 +964,7 @@ function BotChannelAddDialog({
   return (
     <Dialog.Root open onOpenChange={(open) => !busyRef.current && onOpenChange(open)}>
       <Dialog.Portal>
-        <Dialog.Overlay className="modal-scrim fixed inset-0 z-[70]" />
+        <Dialog.Overlay className="modal-scrim fixed inset-0 z-modal" />
         <Dialog.Content
           onPointerDownOutside={(event) => event.preventDefault()}
           onEscapeKeyDown={(event) => {
@@ -915,7 +975,7 @@ function BotChannelAddDialog({
             event.preventDefault();
             firstOptionRef.current.focus();
           }}
-          className="modal-panel fixed inset-0 z-[71] m-auto flex h-fit max-h-[85vh] w-[min(480px,calc(100vw-32px))] flex-col p-4 outline-none"
+          className="modal-panel fixed inset-0 z-modal-raised m-auto flex h-fit max-h-[85vh] w-[min(480px,calc(100vw-32px))] flex-col p-4 outline-none"
         >
           <form className="flex min-h-0 flex-col" onSubmit={(event) => void submit(event)}>
             <Dialog.Title className="text-18 font-medium text-[var(--confirm-title)]">
@@ -1001,7 +1061,7 @@ function BotChannelAddDialog({
                       {control => <Input {...control} mono secret={key === 'password'} value={imessage[key]}
                         onChange={value => setIMessage(previous => ({ ...previous, [key]: value }))}
                         placeholder={editing && key === 'password' ? t('bots.channels.edit.keepPassword') : t(`bots.channels.add.imessage.${key}Placeholder`)} autoComplete="off"
-                        spellCheck={false} disabled={busy} secretTipContentClassName="z-[10001]" />}
+                        spellCheck={false} disabled={busy} />}
                     </FormField>
                   ))}
                 </>
@@ -1019,7 +1079,6 @@ function BotChannelAddDialog({
                         autoComplete="off"
                         spellCheck={false}
                         disabled={busy}
-                        secretTipContentClassName="z-[10001]"
                       />
                     )}
                   </FormField>
@@ -1120,7 +1179,6 @@ function BotChannelAddDialog({
                         autoComplete="off"
                         spellCheck={false}
                         disabled={busy}
-                        secretTipContentClassName="z-[10001]"
                       />
                     )}
                   </FormField>
@@ -1156,7 +1214,6 @@ function BotChannelAddDialog({
                         autoComplete="off"
                         spellCheck={false}
                         disabled={busy}
-                        secretTipContentClassName="z-[10001]"
                       />
                     )}
                   </FormField>
@@ -1192,7 +1249,6 @@ function BotChannelAddDialog({
                         autoComplete="off"
                         spellCheck={false}
                         disabled={busy}
-                        secretTipContentClassName="z-[10001]"
                       />
                     )}
                   </FormField>
@@ -1211,7 +1267,6 @@ function BotChannelAddDialog({
                         autoComplete="off"
                         spellCheck={false}
                         disabled={busy}
-                        secretTipContentClassName="z-[10001]"
                       />
                     )}
                   </FormField>

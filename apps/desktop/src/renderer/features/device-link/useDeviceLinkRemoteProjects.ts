@@ -35,7 +35,10 @@ import { evictTaskTagCatalog } from '../task-tags/taskTagEvents';
 
 import { useEffect, useRef } from 'react';
 import { isSharedTaskPeer, readProviderMetadataContinuity } from '@cindy/device-link';
-import { projectScheduleEvent } from '@cindy/maker-shared/schedule-events';
+import {
+  isPatchableSkippedScheduleEvent,
+  projectScheduleEvent,
+} from '@cindy/maker-shared/schedule-events';
 import { isCindyApp } from '@cindy/maker-shared/device-list';
 import { historyTurnEnded } from '@cindy/maker-shared/message-window';
 import { PROJECT_ALIASES_CHANGED_CHANNEL } from '@cindy/maker-shared/project-alias-sync';
@@ -74,14 +77,38 @@ import {
 import { prefetchDeviceCapabilities, evictDeviceCapabilities } from '@/hooks/useAgentCapabilities';
 import { prefetchDeviceProviders, evictDeviceProviders } from '@/hooks/useDeviceProviders';
 import { refreshRemoteCatalogSnapshot } from '@/lib/remoteCatalogSnapshot';
-import { isModelCatalogSourceChange } from '../../../shared/controlledModelCatalog';
+import {
+  invalidateDetachedControlledModelLocations,
+  registerControlledCatalogPushWatcher,
+} from '@/hooks/useControlledModelLocations';
+import {
+  CONTROLLED_MODEL_CATALOG_CHANGED,
+  isModelCatalogSourceChange,
+  parseModelCatalogKey,
+  readReceivedCatalogChangeSequence,
+} from '../../../shared/controlledModelCatalog';
 import { PROVIDER_GROUP_IPC } from '../../../shared/providerGroup';
 import {
   evictDeviceGitSafetySettings,
   prefetchDeviceGitSafetySettings,
 } from '@/hooks/useGitSafetySettings';
+import {
+  evictRemotePluginEngines,
+  hasRemotePluginEngineSubscribers,
+  markRemotePluginEnginesStale,
+  prefetchRemotePluginEngines,
+} from '@/hooks/usePluginEngines';
+import { isPluginEngineKind } from '../../../shared/pluginEngines';
 import { extractIpcError } from '@/utils/ipcError';
 import { remoteProjectAliases } from './remoteProjectAliases';
+import {
+  clearOfflineInboxIntentsForDevice,
+  listAllOfflineInboxIntents,
+  resetOfflineInboxIntents,
+  startOfflineInboxIntentsSync,
+  subscribeOfflineInboxIntents,
+} from './offlineInboxIntentsStore';
+import { replayOfflineInboxIntentsForDevice } from './offlineInboxReplay';
 
 const log = createLogger('device-link-remote-projects');
 
@@ -461,7 +488,11 @@ export function useDeviceLinkRemoteProjects(
     }
 
     let disposed = false;
-    const scheduleEventRefreshes = new Map<string, { timer: ReturnType<typeof setTimeout>; firstAt: number }>();
+    const scheduleEventRefreshes = new Map<
+      string,
+      { timer: ReturnType<typeof setTimeout>; firstAt: number; onlyFiredRuns: Set<string> | null }
+    >();
+    const patchedSkippedRuns = new Map<string, Map<string, string>>();
     /** Count of schedule events skipped while the window was hidden or idle. */
     const scheduleEventsMissed = new Map<string, number>();
     const markScheduleEventMissed = (deviceId: string) =>
@@ -651,9 +682,11 @@ export function useDeviceLinkRemoteProjects(
       // 被控端明确拒绝我们:盘上那份镜像缓存也不该留(尊重对方的拒绝,不在本机留副本)。
       cacheHydrationBlocked.add(deviceId);
       clearCachedDevice(deviceId);
+      void clearOfflineInboxIntentsForDevice(deviceId);
       evictDeviceCapabilities(deviceId);
       evictDeviceProviders(deviceId);
       evictDeviceGitSafetySettings(deviceId);
+      evictRemotePluginEngines(deviceId);
     };
 
     /**
@@ -746,9 +779,19 @@ export function useDeviceLinkRemoteProjects(
         if (!canBootstrap(deviceId, lifecycleEpoch)) return;
         await prefetchDeviceGitSafetySettings(deviceId);
         if (!canBootstrap(deviceId, lifecycleEpoch)) return;
+        const hasPluginEngineTasks = remoteProjectsStore
+          .getDeviceSessions(deviceId)
+          .some((session) => isPluginEngineKind(session.agentKind));
+        if (hasPluginEngineTasks || hasRemotePluginEngineSubscribers(deviceId)) {
+          await prefetchRemotePluginEngines(deviceId);
+          if (!canBootstrap(deviceId, lifecycleEpoch)) return;
+        }
         // Bootstrap follows a gap in live pushes (start, reconnect). Read changed tasks ahead
         // so opening them shows what the list already shows; one window does it for all.
-        if (windowRole === 'main') void makerChatStore.prefetchRemoteHistories(deviceId);
+        if (windowRole === 'main') {
+          void makerChatStore.prefetchRemoteHistories(deviceId);
+          void replayOfflineInboxIntentsForDevice(deviceId);
+        }
       }
       // 未被撤销(ok 或普通失败):清掉可能残留的「已撤销」标记(被控端恢复 → 自动接回的收尾)。
       revokedDevicesStore.clearRevoked(deviceId);
@@ -852,6 +895,8 @@ export function useDeviceLinkRemoteProjects(
         if (action === 'disconnect') {
           remoteProjectsStore.markDeviceDisconnected(d.deviceId);
           remoteProjectAliases.suspend(d.deviceId);
+          // 离线期间保留已读到的插件引擎图标，重连后再刷新一次。
+          markRemotePluginEnginesStale(d.deviceId);
         } else {
           remoteProjectsStore.removeDevice(d.deviceId);
           remoteProjectAliases.remove(d.deviceId);
@@ -860,6 +905,8 @@ export function useDeviceLinkRemoteProjects(
           // 否则下次冷启动会把一台已经不该出现的设备画回侧边栏。
           cacheHydrationBlocked.add(d.deviceId);
           clearCachedDevice(d.deviceId);
+          void clearOfflineInboxIntentsForDevice(d.deviceId);
+          evictRemotePluginEngines(d.deviceId);
         }
         evictDeviceCapabilities(d.deviceId);
         evictDeviceProviders(d.deviceId);
@@ -1008,6 +1055,7 @@ export function useDeviceLinkRemoteProjects(
               // listDevices 离线时纠正不了(review: codex P1)。
               cacheHydrationBlocked.add(deviceId);
               clearCachedDevice(deviceId);
+              void clearOfflineInboxIntentsForDevice(deviceId);
             }
             // 拿到新目录:目录重读退避到此为止,下一次目录不可用时再从头开始。
             stopDirectoryRetry();
@@ -1080,6 +1128,9 @@ export function useDeviceLinkRemoteProjects(
       // 在 listDevices 离线时也纠正不了,于是那台设备会一直留在侧边栏(review: codex P1)。
       const usable = devices.filter((device) => !cacheHydrationBlocked.has(device.deviceId));
       if (usable.length === 0) return;
+      for (const device of usable) {
+        if (device.projectAliases) remoteProjectAliases.hydrate(device.deviceId, device.projectAliases);
+      }
       remoteProjectsStore.hydrateFromCache(usable);
       // 种入的分片是 connecting。link 已上线时由 bootstrap / reseed 接手;否则按已知的连接
       // 预期收口:不会去连(待命 / 关闭远程控制)直接标离线,会去连或未知则进宽限计时。
@@ -1300,10 +1351,22 @@ export function useDeviceLinkRemoteProjects(
       });
     });
 
+    const offControlledCatalogWatcher = registerControlledCatalogPushWatcher();
     // 被控端 active-catalog 变化：供应商目录与 capabilities.availableModels 必须同代刷新。
     // 两套缓存订阅会把完整结果原子推给已挂载选择器，刷新期间保留旧列表避免空白跳变。
     const offRemotePush = window.electronAPI.deviceLink.onRemotePush((push, localOwnerStamp) => {
-      if (disposed || !eligible.has(push.deviceId)) return;
+      if (disposed) return;
+      const routed = parseModelCatalogKey(push.deviceId);
+      if (routed) {
+        if (!eligible.has(routed.taskDeviceId) || !isDeviceLinkRemotePushCurrent(push, localOwnerStamp)) return;
+        if (readProviderMetadataContinuity(push.payload)?.remainingMs === 0) {
+          evictDeviceProviders(push.deviceId);
+          evictDeviceCapabilities(push.deviceId);
+          evictRemotePluginEngines(push.deviceId);
+        }
+        return;
+      }
+      if (!eligible.has(push.deviceId)) return;
       if (push.channel === PROJECT_ALIASES_CHANGED_CHANNEL) {
         const lifecycleEpoch = remoteProjectsStore.getDeviceLifecycleEpoch(push.deviceId);
         if (remoteProjectAliases.acceptChanged(push.deviceId, push.ownerStamp, localOwnerStamp,
@@ -1332,14 +1395,59 @@ export function useDeviceLinkRemoteProjects(
           markScheduleEventMissed(push.deviceId);
           return;
         }
+        const deviceId = push.deviceId;
         // 与手机同一份事件投影：运行诊断、静默提醒这类不改索引的事件不重拉，
         // 否则 run 进行期间高频推送会反复取消在途的列表 / 索引读取。
-        const { refresh } = projectScheduleEvent(push.payload);
-        if (!refresh.sessionIndex && !refresh.scheduleList && !refresh.unreadSummary) return;
-        const deviceId = push.deviceId;
+        const { event, refresh } = projectScheduleEvent(push.payload);
+        if (
+          event.type === 'changed' &&
+          event.skippedRunId &&
+          patchedSkippedRuns.get(deviceId)?.get(event.scheduleId) === event.skippedRunId
+        ) {
+          return;
+        }
+        if (isPatchableSkippedScheduleEvent(event)) {
+          if (remoteProjectsStore.patchDeviceScheduleTiming(deviceId, event)) {
+            let perSchedule = patchedSkippedRuns.get(deviceId);
+            if (!perSchedule) {
+              perSchedule = new Map();
+              patchedSkippedRuns.set(deviceId, perSchedule);
+            }
+            perSchedule.set(event.scheduleId, event.runId);
+            const pending = scheduleEventRefreshes.get(deviceId);
+            const runKey = `${event.scheduleId}:${event.runId}`;
+            if (pending?.onlyFiredRuns?.delete(runKey) && pending.onlyFiredRuns.size === 0) {
+              clearTimeout(pending.timer);
+              scheduleEventRefreshes.delete(deviceId);
+            }
+            return;
+          }
+          patchedSkippedRuns.get(deviceId)?.delete(event.scheduleId);
+          remoteProjectsStore.clearPendingDeviceScheduleTiming(deviceId, event.scheduleId);
+        } else if (event.type === 'ready' || event.type === 'unknown') {
+          patchedSkippedRuns.delete(deviceId);
+          remoteProjectsStore.clearPendingDeviceScheduleTiming(deviceId);
+        } else if ('scheduleId' in event) {
+          patchedSkippedRuns.get(deviceId)?.delete(event.scheduleId);
+          if (
+            event.type === 'changed' || event.type === 'fired' || event.type === 'completed'
+            || event.type === 'failed' || event.type === 'deferred' || event.type === 'skipped'
+          ) {
+            remoteProjectsStore.clearPendingDeviceScheduleTiming(deviceId, event.scheduleId);
+          }
+        }
+        const forceUnseededOrFailureSkipRefresh = isPatchableSkippedScheduleEvent(event);
+        if (!forceUnseededOrFailureSkipRefresh && !refresh.sessionIndex && !refresh.scheduleList && !refresh.unreadSummary) {
+          return;
+        }
         const pending = scheduleEventRefreshes.get(deviceId);
         if (pending) clearTimeout(pending.timer);
         const firstAt = pending?.firstAt ?? Date.now();
+        let onlyFiredRuns: Set<string> | null = null;
+        if (event.type === 'fired' && (pending === undefined || pending.onlyFiredRuns !== null)) {
+          onlyFiredRuns = pending?.onlyFiredRuns ? new Set(pending.onlyFiredRuns) : new Set();
+          onlyFiredRuns.add(`${event.scheduleId}:${event.runId}`);
+        }
         const delay = Math.min(SCHEDULE_EVENT_QUIET_MS, Math.max(0, firstAt + SCHEDULE_EVENT_MAX_WAIT_MS - Date.now()));
         const timer = setTimeout(() => {
           scheduleEventRefreshes.delete(deviceId);
@@ -1353,7 +1461,13 @@ export function useDeviceLinkRemoteProjects(
             if (result === 'revoked' && !disposed) handleRevoked(deviceId);
           });
         }, delay);
-        scheduleEventRefreshes.set(deviceId, { timer, firstAt });
+        scheduleEventRefreshes.set(deviceId, { timer, firstAt, onlyFiredRuns });
+        return;
+      }
+      if (push.channel === CONTROLLED_MODEL_CATALOG_CHANGED) {
+        // Retire detached routed caches immediately so returning to this host never
+        // serves stale models from a share that changed while no picker was mounted.
+        invalidateDetachedControlledModelLocations(push.deviceId, readReceivedCatalogChangeSequence(push.payload));
         return;
       }
       // Main fences in-flight catalog reads for each of these source changes.
@@ -1500,6 +1614,7 @@ export function useDeviceLinkRemoteProjects(
           evictDeviceCapabilities(p.deviceId);
           evictDeviceProviders(p.deviceId);
           evictDeviceGitSafetySettings(p.deviceId);
+          evictRemotePluginEngines(p.deviceId);
         }
         // 本机关掉「控制这台设备」→ 盘上那份镜像缓存也要清。只清内存分片的话,下次冷启动
         // hydrateFromCache 会把这台已经明确禁用控制的设备连着它的会话画回侧边栏
@@ -1507,6 +1622,7 @@ export function useDeviceLinkRemoteProjects(
         // 盘上仍可能留着上一次运行写下的缓存。
         cacheHydrationBlocked.add(p.deviceId);
         clearCachedDevice(p.deviceId);
+        void clearOfflineInboxIntentsForDevice(p.deviceId);
         return;
       }
       reseed();
@@ -1518,10 +1634,12 @@ export function useDeviceLinkRemoteProjects(
     });
 
     const offRemoval = subscribeDeviceLinkDeviceRemoval((deviceId) => {
+      revokedDevicesStore.clearRevoked(deviceId);
       // Deletion is authoritative even if the directory is unavailable or a cold read is in flight.
       directoryGeneration += 1;
       cacheHydrationBlocked.add(deviceId);
       clearCachedDevice(deviceId);
+      void clearOfflineInboxIntentsForDevice(deviceId);
       cancelDeviceReseeds(deviceId);
       clearArchivedSessionRetry(deviceId);
       sessionsSubscribeRetry.delete(deviceId);
@@ -1534,6 +1652,7 @@ export function useDeviceLinkRemoteProjects(
       evictDeviceCapabilities(deviceId);
       evictDeviceProviders(deviceId);
       evictDeviceGitSafetySettings(deviceId);
+      evictRemotePluginEngines(deviceId);
     });
 
     // 冷缓存回写由「分片变更」驱动,而不是只在一次成功 refresh 之后:
@@ -1541,17 +1660,35 @@ export function useDeviceLinkRemoteProjects(
     // 之前退出,下次离线冷启动就会把那条已归档 / 已删除的会话又 hydrate 回侧边栏
     // (review: codex P1)。订阅覆盖所有 mutation(snapshot / patch / 改名 / 断连 / 移除),
     // 去抖 1200ms 合并高频变更,main 侧还有内容指纹去重 —— 内容没变根本不落盘。
-    const offShardChange = remoteProjectsStore.subscribe(() => {
+    const schedulePersist = () => {
       if (disposed) return;
       scheduleSessionListPersist(collectSessionListSnapshot);
-    });
+    };
+    const offShardChange = remoteProjectsStore.subscribe(schedulePersist);
+    const offAliasesChange = remoteProjectAliases.subscribe(schedulePersist);
+
+    const stopOfflineInboxSync = startOfflineInboxIntentsSync();
+    const offOfflineInboxReplay =
+      windowRole === 'main'
+        ? subscribeOfflineInboxIntents(() => {
+            if (disposed) return;
+            const queuedDevices = new Set(listAllOfflineInboxIntents().map((intent) => intent.deviceId));
+            for (const deviceId of queuedDevices) {
+              if (isDeviceConnected(deviceId)) void replayOfflineInboxIntentsForDevice(deviceId);
+            }
+          })
+        : null;
 
     return () => {
       disposed = true;
+      stopOfflineInboxSync();
+      offOfflineInboxReplay?.();
+      resetOfflineInboxIntents();
       clearTimeout(initialDiscoveryTimer);
       stopDirectoryRetry();
       for (const { timer } of scheduleEventRefreshes.values()) clearTimeout(timer);
       scheduleEventRefreshes.clear();
+      patchedSkippedRuns.clear();
       clearConnectingGrace();
       stopRecoveryTimer();
       recoveryInFlight.clear();
@@ -1565,6 +1702,7 @@ export function useDeviceLinkRemoteProjects(
       bootstrapTasks.clear();
       offPresence();
       offRemotePush();
+      offControlledCatalogWatcher();
       offStatus();
       offDirectoryInvalidated?.();
       offAccessRevoked();
@@ -1574,6 +1712,7 @@ export function useDeviceLinkRemoteProjects(
       offRename();
       offRemoval();
       offShardChange();
+      offAliasesChange();
       offResponsiveness();
       unresponsiveDevicesStore.clearAll();
       // best-effort 取消所有订阅(被控端 presence-offline 也会兜底清僵尸订阅)+ 驱逐远端快照缓存。
@@ -1582,6 +1721,7 @@ export function useDeviceLinkRemoteProjects(
         evictDeviceCapabilities(deviceId);
         evictDeviceProviders(deviceId);
         evictDeviceGitSafetySettings(deviceId);
+        evictRemotePluginEngines(deviceId);
       }
       // 卸载可能只是关了个窗口(镜像是每渲染进程一份),盘上缓存**不动** ——
       // 只作废尚未落盘的回写,免得它把正在清空的分片写回去。

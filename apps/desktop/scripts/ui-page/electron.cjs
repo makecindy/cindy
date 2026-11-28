@@ -37,6 +37,26 @@ const types = {
 };
 // Background checks must not take focus or add a Dock icon to the user's desktop.
 if (!preview) app.dock?.hide();
+// The runner closes this process and removes its scratch folder. When the runner is killed
+// outright (SIGKILL, a stopped task, a tool timeout) none of that runs and a hidden window
+// would stay forever, so quit as soon as the runner is gone. POSIX reparents an orphan, which
+// also covers a reused owner PID; Windows keeps the old parent PID, so probe the owner there.
+const ownerPid = Number(process.env.CINDY_UI_OWNER_PID);
+if (Number.isSafeInteger(ownerPid) && ownerPid > 0) {
+  const parentPid = process.ppid;
+  const ownerGone = () => {
+    if (process.platform !== 'win32' && process.ppid !== parentPid) return true;
+    try {
+      process.kill(ownerPid, 0);
+      return false;
+    } catch (error) {
+      return error.code === 'ESRCH';
+    }
+  };
+  setInterval(() => {
+    if (ownerGone()) app.exit(0);
+  }, 1000);
+}
 app.whenReady().then(() => {
   const ownSession = session.fromPartition('ui-check');
   const allowsFullscreen = (wc, permission, requestingUrl) => {

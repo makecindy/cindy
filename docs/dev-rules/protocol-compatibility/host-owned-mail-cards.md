@@ -249,3 +249,19 @@ view. A remote task's tab reads that card through its computer's existing card r
 this is not a new plugin or device-link capability.
 Older URL-based reader tabs remain valid. Draft edits, deletion and delayed send
 still use the same host-owned mail workflow as the chat card.
+
+Adapters can supply `readReplyQuote({record, readBack})` to recover the exact parent
+in the selected account, returning `{quote, quoteHtml}` or `null` for an empty
+source. A provider may set `replyQuoteExpected: true` on the creation receipt for a
+requested quote, never simply on reopening a reply. The optional `addQuoteLabel`
+publishes a submit action on editable cards; it uses the same form, account, draft
+and save checks as other edits. A plain read or a click on that action cannot send
+mail. Older adapters and stored cards keep the existing form and send path.
+
+Optional `cancelLabel` on `MailCardData` is valid only when `state` is `sending`
+without `pendingSend`, exposing `mail:cancel:<key>` while a queued send waits
+for an in-flight or pending draft sync to finish before the ten-second countdown
+begins. Actual provider sends omit both `pendingSend` and `cancelLabel`, keeping
+`mail:cancel:<key>` rejected once sending starts. Older clients ignore
+`cancelLabel` and display the locked `sending` status until the countdown card
+arrives; no wire channel or adapter contract changes.

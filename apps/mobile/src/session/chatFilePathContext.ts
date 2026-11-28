@@ -7,7 +7,7 @@
  * 纯文本渲染,消费方无需特判。
  */
 
-import { createContext } from 'react';
+import { createContext, useContext, useLayoutEffect, useMemo } from 'react';
 
 import type { RemotePathStatFn } from '@/session/remotePathVerdict';
 
@@ -48,3 +48,23 @@ export interface ChatFilePathContextValue {
 }
 
 export const ChatFilePathContext = createContext<ChatFilePathContextValue | null>(null);
+
+interface MarkdownLinkActivation {
+  active: boolean;
+  pendingMail: Set<string>;
+}
+
+export const MarkdownLinkActivationContext = createContext<MarkdownLinkActivation | null>(null);
+
+/** Link actions belong to the message revision across a native/WebView handoff. */
+export function useMarkdownLinkActivation(enabled: boolean, revision: string): MarkdownLinkActivation | null {
+  const task = useContext(ChatFilePathContext);
+  const scope = useMemo(() => enabled ? { active: false, pendingMail: new Set<string>() } : null,
+    [enabled, revision, task]);
+  useLayoutEffect(() => {
+    if (!scope) return;
+    scope.active = true;
+    return () => { scope.active = false; };
+  }, [scope]);
+  return scope;
+}

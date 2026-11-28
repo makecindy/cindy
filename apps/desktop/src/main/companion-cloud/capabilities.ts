@@ -60,6 +60,8 @@ function referencedNames(raw: unknown, ids: string[] | undefined): Record<string
 }
 /** A route that names another computer to run on has no meaning on the new home. */
 const portableRoute = (route: BotModelRoute) => !route.agentDeviceId;
+/** Model groups exist only on the computer that made them; the new home runs the saved model. */
+const withoutModelGroup = ({ modelGroup: _group, ...route }: BotModelRoute): BotModelRoute => route;
 /** The carried task model, read leniently: anything unreadable is simply not carried. */
 function carriedTaskModel(value: unknown): BotModelRoute | undefined {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
@@ -92,7 +94,7 @@ export function portableCompanionCapabilities(config: Record<string, unknown>, e
   }
   if (Array.isArray(config.systemSkillsOff)) value.systemSkillsOff = skillIds(config.systemSkillsOff);
   if (typeof config.gender === 'string' && config.gender.length <= 16) value.gender = config.gender;
-  const chain = (explicitChain ?? []).filter(portableRoute);
+  const chain = (explicitChain ?? []).filter(portableRoute).map(withoutModelGroup);
   if (chain.length) value.modelChain = chain;
   const task = carriedTaskModel(config.taskModelOverride);
   if (task) value.taskModel = task;
@@ -119,7 +121,7 @@ export function parseCompanionCapabilities(raw: unknown): CompanionCapabilitiesV
   }
   if (Array.isArray(input.systemSkillsOff)) value.systemSkillsOff = skillIds(input.systemSkillsOff);
   if (typeof input.gender === 'string' && input.gender.length <= 16) value.gender = input.gender;
-  const chain = normalizeBotModelChain(input.modelChain).filter(portableRoute).slice(0, BOT_MODEL_CHAIN_MAX);
+  const chain = normalizeBotModelChain(input.modelChain).filter(portableRoute).map(withoutModelGroup).slice(0, BOT_MODEL_CHAIN_MAX);
   if (chain.length) value.modelChain = chain;
   const task = carriedTaskModel(input.taskModel);
   if (task) value.taskModel = task;
@@ -127,25 +129,22 @@ export function parseCompanionCapabilities(raw: unknown): CompanionCapabilitiesV
 }
 
 /** What the new home could not keep of the old setup; shown once as a line after the move. */
-export type CompanionArrivalNotice = 'permissions' | 'model';
+export type CompanionArrivalNotice = 'permissions' | 'model' | 'model_setup' | 'partial_content';
 
 /**
  * The settings patch for `updateBotProfile` from a cloud value and the routes usable here. Only called
  * for a present `companion.capabilities.v1` value; without the key (an older main computer) nothing is touched.
  */
-export function companionCapabilitiesPatch(value: CompanionCapabilitiesValue, models: {
-  chain: BotModelRoute[];
-}): Record<string, unknown> {
+export function companionCapabilitiesPatch(value: CompanionCapabilitiesValue): Record<string, unknown> {
   const patch: Record<string, unknown> = {};
   for (const field of ['skills', 'skillMode', 'skillsExcluded', 'toolsets', 'toolsetMode', 'mcpServers', 'mcpMode', 'mcpServerNames', 'memory', 'inputHandoff', 'allowSchedulerFollow', 'systemSkillsOff'] as const) {
     if (value[field] !== undefined) patch[field] = value[field];
   }
-  // The value exists, so the main computer's setup is known: a model it does not name is one it
-  // follows its default for, and a copy kept here from an earlier stay must not keep its old choice.
-  const [primary] = models.chain;
-  if (value.modelChain && primary) Object.assign(patch, primary, { modelChain: models.chain, modelChainOverride: models.chain });
-  // No chain saved, or none of the saved routes exists here: follow this computer's default.
-  else Object.assign(patch, { modelOverride: null, modelChainOverride: null });
+  // A companion that lands on this computer always follows this computer's default model (2026-11-26 user
+  // decision): it can run at once, with no model to re-arrange, and a copy kept here from an earlier stay does
+  // not keep its old choice. The model the main computer named still travels in the cloud value for older
+  // computers, but is not applied here.
+  Object.assign(patch, { modelOverride: null, modelChainOverride: null });
   // Stored as carried, never checked or used here (see `taskModel`).
   patch.taskModelOverride = value.taskModel ?? null;
   return patch;

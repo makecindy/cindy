@@ -23,6 +23,12 @@ import { i18n } from '@/i18n';
 export interface SelectableMarkdownHtmlOptions {
   /** When supplied, export only these embedded images; never expose source URLs. */
   imageSources?: ReadonlyMap<string, { uri: string }>;
+  /**
+   * When true (and `imageSources` allowlist is not restricting images), emit
+   * progressive hydration slots for local/remote Markdown images and enable
+   * tap-to-open `markdown-image:open:<index>` messages for ImageLightbox.
+   */
+  interactiveImages?: boolean;
   bodyGap?: number;
   borderColor?: string;
   chipColor?: string;
@@ -59,10 +65,19 @@ export interface SelectableMarkdownHtmlOptions {
   targetLine?: number;
 }
 
-/** renderBlocks/renderInline 的渲染上下文(目前只有会话 chip 标题 map)。 */
+/** renderBlocks/renderInline 的渲染上下文。 */
 interface RenderContext {
   imageSources?: SelectableMarkdownHtmlOptions['imageSources'];
+  interactiveImages?: boolean;
+  nextImageIndex?: () => number;
   sessionLinkTitles?: Readonly<Record<string, string>>;
+  /** Trusted chat renderer hook; never receives or executes author HTML. */
+  renderInline?: (inline: MobileMarkdownInline) => string | undefined;
+}
+
+/** A parsed block, sharing the file reader's escaping and code tokenizer. */
+export function buildSelectableMarkdownBlockHtml(block: MobileMarkdownBlock, context: RenderContext = {}): string {
+  return renderBlock(block, context);
 }
 
 export function buildSelectableMarkdownHtml(
@@ -73,8 +88,15 @@ export function buildSelectableMarkdownHtml(
   // 不为用不上的 data-src-line 容器多付 DOM 节点(bot review 建议)。
   const wantsTargetLine =
     options.targetLine !== undefined && Number.isInteger(options.targetLine) && options.targetLine > 0;
-  const blocks = parseMobileMarkdown(markdown, { srcLines: wantsTargetLine });
+  const interactiveImages = options.interactiveImages === true && !options.imageSources;
+  const blocks = parseMobileMarkdown(markdown, {
+    srcLines: wantsTargetLine,
+    allowLocalHtmlImages: interactiveImages,
+  });
   const hasMath = blocksContainMath(blocks);
+  const hasCarousel = blocksContainCarousel(blocks);
+  const hasImages = interactiveImages && blocksContainImages(blocks);
+  let imageCounter = 0;
   const css = buildSelectableMarkdownCss(options, hasMath);
   return [
     '<!doctype html>',
@@ -86,9 +108,16 @@ export function buildSelectableMarkdownHtml(
     '</head>',
     '<body>',
     `<main id="xdt-content" role="article" aria-label="${escapeAttribute(i18n.t('message.renderer.markdownDocAriaLabel'))}">`,
-    renderBlocks(blocks, { sessionLinkTitles: options.sessionLinkTitles, imageSources: options.imageSources }),
+    renderBlocks(blocks, {
+      sessionLinkTitles: options.sessionLinkTitles,
+      imageSources: options.imageSources,
+      interactiveImages,
+      nextImageIndex: () => imageCounter++,
+    }),
     '</main>',
     hasMath ? buildMathRuntimeScript() : '',
+    hasCarousel ? buildCarouselRuntimeScript() : '',
+    hasImages ? buildInteractiveImageScript() : '',
     buildTargetLineScript(options.targetLine),
     '</body>',
     '</html>',
@@ -114,8 +143,30 @@ function blocksContainMath(blocks: readonly MobileMarkdownBlock[]): boolean {
     if (block.type === 'table') {
       return block.header.some(inlinesHaveMath) || block.rows.some((row) => row.cells.some(inlinesHaveMath));
     }
+    if (block.type === 'carousel') {
+      return block.slides.some((slide) => blocksContainMath(slide));
+    }
     if (block.type === 'code' || block.type === 'mermaid') return false;
     return inlinesHaveMath(block.inlines);
+  });
+}
+
+function blocksContainCarousel(blocks: readonly MobileMarkdownBlock[]): boolean {
+  return blocks.some((block) => block.type === 'carousel');
+}
+
+function blocksContainImages(blocks: readonly MobileMarkdownBlock[]): boolean {
+  const inlinesHaveImage = (inlines: readonly MobileMarkdownInline[]) =>
+    inlines.some((inline) => inline.type === 'image');
+  return blocks.some((block) => {
+    if (block.type === 'table') {
+      return block.header.some(inlinesHaveImage) || block.rows.some((row) => row.cells.some(inlinesHaveImage));
+    }
+    if (block.type === 'carousel') {
+      return block.slides.some((slide) => blocksContainImages(slide));
+    }
+    if (block.type === 'code' || block.type === 'mermaid' || block.type === 'math') return false;
+    return inlinesHaveImage(block.inlines);
   });
 }
 
@@ -142,9 +193,6 @@ export function syncInlineMathOverflowElement(el: InlineMathElementLike): boolea
 
 /**
  * KaTeX 原位渲染脚本:KaTeX 就绪后把所有 data-latex 元素替换成 KaTeX 输出。
- * CSS/JS 经 buildKatexLoaderJs 动态注入(固定本地资源 + 超时,不阻塞首屏),
- * 全部失败时占位源码(块级 <pre> / 行内斜体)保持可读;渲染失败(非法 LaTeX)
- * 由 throwOnError:false 消化,不抛错不留半截 DOM。
  */
 function buildMathRuntimeScript(): string {
   const renderAllJs = [
@@ -177,10 +225,109 @@ function buildMathRuntimeScript(): string {
 }
 
 /**
+ * Interactive slide switching for ````carousel blocks (prev/next buttons and
+ * horizontal swipe inside each carousel card).
+ */
+function buildCarouselRuntimeScript(): string {
+  return `<script>(function(){
+document.querySelectorAll('[data-xdt-carousel]').forEach(function(card){
+  var slides=card.querySelectorAll('[data-xdt-slide]');
+  if(slides.length<=1)return;
+  var counter=card.querySelector('[data-xdt-carousel-counter]');
+  var active=0;
+  function show(next){
+    active=(next+slides.length)%slides.length;
+    for(var i=0;i<slides.length;i++){
+      if(i===active)slides[i].classList.add('is-active');
+      else slides[i].classList.remove('is-active');
+    }
+    if(counter)counter.textContent=(active+1)+' / '+slides.length;
+  }
+  var prev=card.querySelector('[data-xdt-carousel-prev]');
+  var next=card.querySelector('[data-xdt-carousel-next]');
+  if(prev)prev.addEventListener('click',function(e){e.stopPropagation();show(active-1);});
+  if(next)next.addEventListener('click',function(e){e.stopPropagation();show(active+1);});
+  var touchStart=null;
+  card.addEventListener('touchstart',function(e){
+    if(e.touches.length!==1)return;
+    touchStart={x:e.touches[0].clientX,y:e.touches[0].clientY};
+  },{passive:true});
+  card.addEventListener('touchend',function(e){
+    if(!touchStart||e.changedTouches.length!==1){touchStart=null;return;}
+    var dx=e.changedTouches[0].clientX-touchStart.x;
+    var dy=e.changedTouches[0].clientY-touchStart.y;
+    touchStart=null;
+    if(Math.abs(dx)>=40&&Math.abs(dx)>Math.abs(dy)*1.5){
+      show(dx<0?active+1:active-1);
+    }
+  },{passive:true});
+});
+})();</script>`;
+}
+
+/**
+ * Progressive in-place image hydration and tap-to-open bridge for Markdown
+ * document previews. Updates DOM slots via exact attribute comparison (zero
+ * selector interpolation, zero WebView reload).
+ */
+function buildInteractiveImageScript(): string {
+  return `<script>(function(){
+window.__cindyUpdateMarkdownImage=function(rawSrc,uri,status){
+  var slots=document.querySelectorAll('.xdt-md-img-slot');
+  for(var i=0;i<slots.length;i++){
+    var slot=slots[i];
+    if(slot.getAttribute('data-xdt-img-src')!==rawSrc)continue;
+    slot.classList.remove('xdt-md-img-loading');
+    if(status==='ready'&&typeof uri==='string'&&uri.indexOf('data:image/')===0){
+      slot.classList.remove('xdt-md-img-error','xdt-md-img-deferred');
+      slot.classList.add('xdt-md-img-loaded');
+      var img=slot.querySelector('img.xdt-md-img');
+      if(!img){
+        img=document.createElement('img');
+        img.className='xdt-md-img';
+        var idx=slot.getAttribute('data-xdt-img-index');
+        if(idx!==null)img.setAttribute('data-xdt-img-index',idx);
+        var w=slot.getAttribute('data-xdt-width');
+        var h=slot.getAttribute('data-xdt-height');
+        if(w)img.setAttribute('width',w);
+        if(h)img.setAttribute('height',h);
+        slot.textContent='';
+        slot.appendChild(img);
+      }
+      img.alt=slot.getAttribute('data-xdt-alt')||'';
+      img.src=uri;
+    }else if(status==='deferred'){
+      slot.classList.remove('xdt-md-img-error','xdt-md-img-loaded');
+      slot.classList.add('xdt-md-img-deferred');
+    }else{
+      slot.classList.remove('xdt-md-img-deferred','xdt-md-img-loaded');
+      slot.classList.add('xdt-md-img-error');
+    }
+  }
+};
+var root=document.getElementById('xdt-content');
+if(!root)return;
+root.addEventListener('click',function(event){
+  var sel=window.getSelection&&window.getSelection();
+  if(sel&&!sel.isCollapsed)return;
+  var el=event.target&&event.target.nodeType===1?event.target:event.target&&event.target.parentElement;
+  if(!el)return;
+  if(el.closest&&el.closest('a,button,[data-xdt-carousel-prev],[data-xdt-carousel-next]'))return;
+  var host=el.closest?el.closest('[data-xdt-img-index]'):null;
+  if(!host)return;
+  if(host.classList&&host.classList.contains('xdt-md-img-error'))return;
+  var index=host.getAttribute('data-xdt-img-index');
+  if(index===null||!/^\\d+$/.test(index))return;
+  if(window.ReactNativeWebView){
+    window.ReactNativeWebView.postMessage('markdown-image:open:'+index);
+  }
+});
+})();</script>`;
+}
+
+/**
  * 渲染态「定位到源码行」脚本:选出 data-src-line ≤ 目标行的最后一个块
- * (= 覆盖目标行的块),滚到视口中部并闪两下高亮。window load 后补滚一次
- * (图片加载会推移布局)。高亮走 CSS animation 两次迭代,animationend 移除
- * class——闪完即恢复原样,不驻留。
+ * (= 覆盖目标行的块),滚到视口中部并闪两下高亮。
  */
 function buildTargetLineScript(targetLine: number | undefined): string {
   if (targetLine === undefined || !Number.isInteger(targetLine) || targetLine <= 0) return '';
@@ -211,7 +358,6 @@ export function buildSelectableMarkdownCss(options: SelectableMarkdownHtmlOption
   const fontSize = cssNumber(options.fontSize ?? 16);
   const lineHeight = cssNumber(options.lineHeight ?? 23);
   const codeFontSize = cssNumber(typeScale.bodySmall);
-  // 标题两档大号 + 共用行高(20/28、18/28 都是 lineHeight 阶梯里的既有配对)。
   const headingLargeFontSize = cssNumber(typeScale.title);
   const headingMediumFontSize = cssNumber(typeScale.subtitle);
   const headingLineHeight = cssNumber(lineHeightScale.listTitle);
@@ -227,7 +373,6 @@ export function buildSelectableMarkdownCss(options: SelectableMarkdownHtmlOption
   const horizontalPadding = cssNumber(options.horizontalPadding ?? 16);
   const markerWidth = cssNumber(options.markerWidth ?? 24);
   const tableCellMinWidth = cssNumber(options.tableCellMinWidth ?? 0);
-  // 分享沿用原有的最小列宽；文件阅读器未指定列宽，才启用窄屏等分布局。
   const tableLayout = options.tableCellMinWidth === undefined
     ? 'table-layout: fixed; width: 100%;'
     : 'display: block; max-width: 100%; overflow-x: auto;';
@@ -297,12 +442,6 @@ export function buildSelectableMarkdownCss(options: SelectableMarkdownHtmlOption
     p, h1, h2, h3, h4, h5, h6, blockquote, pre, table, .list-row {
       margin: 0;
     }
-    /* 正文横滑切文件；宽公式保留内部横移，文档手势识别器按触点让路。 */
-    /* 标题分三档。改前 h1–h6 全部等于正文字号(只有 font-weight:500 撑),文档里
-       完全读不出层级 —— 与聊天消息流同一个缺陷、同一套修法:
-         h1  20/28 = 1.400(= desktop h1 比例)
-         h2  18/28 = 1.556(= desktop h2 比例)
-         h3+ 正文字号,靠 500 字重区分(= desktop 让 h3 贴近正文的处理) */
     h1, h2, h3, h4, h5, h6 {
       font-size: ${fontSize}px;
       font-weight: 500;
@@ -316,11 +455,6 @@ export function buildSelectableMarkdownCss(options: SelectableMarkdownHtmlOption
       font-size: ${headingMediumFontSize}px;
       line-height: ${headingLineHeight}px;
     }
-    /* 引用正文与列表 marker 走正文色(不用 mutedColor):mutedColor =
-       textSecondary 对底色仅 3.1:1(light)/ 3.4:1(dark),低于 WCAG AA 4.5:1。
-       引用语义由左侧竖线表达,编号与列表项正文同色。与聊天消息流
-       (MessageRenderer 的 markdownQuoteText / markdownListMarker)保持一致。
-       th 仍用 mutedColor —— 表头是元信息且有 font-weight 500 区分。 */
     blockquote {
       border-left: 2px solid ${borderColor};
       color: ${textColor};
@@ -351,71 +485,133 @@ export function buildSelectableMarkdownCss(options: SelectableMarkdownHtmlOption
       padding: 10px 12px;
       white-space: pre-wrap;
     }
-    /* 语法着色只作用于代码块内(pre code):行内 code 不着色 —— 一句话里的短标识
-       被染成关键字色反而更吵。与聊天消息流共用 session/codeHighlight 的分词
-       结果,配色同为 GitHub 主题。
-       注意:本文件是模板字符串,注释里不能出现反引号。 */
     pre code .syn-keyword { color: ${syntax.keyword}; }
     pre code .syn-string { color: ${syntax.string}; }
     pre code .syn-comment { color: ${syntax.comment}; }
     pre code .syn-number { color: ${syntax.number}; }
     pre code .syn-function { color: ${syntax.function}; }
     pre code .syn-property { color: ${syntax.property}; }
-    /* 行内 code:零底色 + 等宽字体 + 文字压暗(取值见 tokens 里 chatInlineCodeText)。
-       本文件虽然是 CSS,做得出圆角淡底,但仍跟随聊天消息流的 markdownInlineCode ——
-       同一个 App 里同一种元素不该两副样子;桌面端另走 GitHub 淡底,两端形态刻意不同。 */
     code {
       color: ${inlineCodeColor};
       font-family: Menlo, Monaco, Consolas, monospace;
       font-size: ${codeFontSize}px;
     }
-    /* 代码块内不压暗:pre 已有底色与描边把它划成独立区块,里面还要承载语法着色,
-       正文片段必须留在正文色上。不写这条 color 就会继承上面 code 的压暗。
-       background 同理复位(与 GitHub 的 pre code 规则同形):判据是**祖先结构**,
-       不是语言标注 —— 无语言围栏一样在 pre 里,一样要复位。桌面端因为按
-       className(只有带语言标注才有)近似判断,曾把无语言围栏整块套上行内底色,
-       修法是给 pre 的 code 打结构标记(见 desktop 的 rehypeFencedCodeMarker)。
-       别当这条规则冗余删掉,回归测试见 selectableMarkdownHtml.test.ts。 */
     pre code {
       background: transparent;
       color: ${textColor};
       font-size: inherit;
     }
-    /* 可点的 http(s) 链接:**只有下划线**,颜色继承上下文(DESIGN.md §14.5 —— 可点态
-       相对不可点态只多一条横线)。不写死 textColor:表头等非正文色上下文里会让链接除
-       下划线之外还变色。
-       但这里必须**显式**写 color: inherit 而不是留空 —— 本文件是手写 CSS 模板,没有
-       Tailwind preflight 那种 a { color: inherit } 复位,留空会命中 UA 样式表的
-       a:link { color: -webkit-link },外链掉回浏览器默认蓝(既违反本规则,又不随
-       light/dark 适配、深色底对比度差)。桌面靠 preflight、RN Text 靠天然继承,唯独
-       WebView 需要这一行(PR #1144 review 实捉)。
-       ⚠️ 本段在 JS 模板字符串内,注释里不能用反引号。 */
     a {
       color: inherit;
       text-decoration: underline;
     }
-    /* 直连图片:MarkdownFileReader 的 bridge 只接翻页，图片没有点击处理，
-       生成的 <img> 也不在链接内 —— 点它毫无响应,所以**不带 pointer**(与下面的
-       .xdt-image-chip 同一条判据:这个面上「像能点」的反馈一律不给)。
-       上一轮只清了 chip、漏了直连图片这对称的另一半,PR #1144 review 实捉。 */
     img {
       border-radius: 8px;
       display: inline-block;
       height: auto;
       max-width: 100%;
-      /* 渲染高度上限 320px:无尺寸 ![](url) 的长图加载后不再无界长高(intrinsic 比例在
-         max-width/max-height 双约束下保持,宽随高等比收缩),加载后的跳变被封在这个
-         上限以内。 */
       max-height: 320px;
       vertical-align: middle;
     }
-    /* 图片 chip:阅读器没有 postMessage bridge,这里点不动,所以**不带下划线也不带
-       pointer** —— 下划线在本仓专表「可点」(DESIGN.md §14.5),给点不动的东西加就是
-       制造反例。底色只表达「这是张图的占位」这层排版含义。 */
     .xdt-image-chip {
       background: ${chipColor};
       border-radius: 6px;
       padding: 1px 8px;
+    }
+    .xdt-md-img-slot {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      max-width: 100%;
+      vertical-align: middle;
+    }
+    .xdt-md-img-slot.xdt-md-img-loading {
+      background: ${chipColor};
+      border: 1px solid ${borderColor};
+      border-radius: 10px;
+      color: ${mutedColor};
+      font-size: ${codeFontSize}px;
+      min-height: 72px;
+      min-width: 160px;
+      padding: 10px 14px;
+      box-sizing: border-box;
+    }
+    .xdt-md-img-slot.xdt-md-img-deferred {
+      background: ${chipColor};
+      border: 1px solid ${borderColor};
+      border-radius: 10px;
+      color: ${textColor};
+      cursor: pointer;
+      font-size: ${codeFontSize}px;
+      padding: 8px 12px;
+    }
+    .xdt-md-img-slot.xdt-md-img-error {
+      background: ${chipColor};
+      border: 1px dashed ${borderColor};
+      border-radius: 8px;
+      color: ${mutedColor};
+      font-size: ${codeFontSize}px;
+      padding: 6px 10px;
+    }
+    .xdt-md-img-slot.xdt-md-img-loaded {
+      display: inline-block;
+      background: transparent;
+      border: 0;
+      padding: 0;
+    }
+    .xdt-carousel {
+      border: 1px solid ${borderColor};
+      border-radius: 12px;
+      background: ${chipColor};
+      overflow: hidden;
+      max-width: 100%;
+    }
+    .xdt-carousel-stage {
+      padding: 12px;
+    }
+    .xdt-carousel-slide {
+      display: none;
+      text-align: center;
+    }
+    .xdt-carousel-slide.is-active {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 8px;
+    }
+    .xdt-carousel-slide img {
+      display: block;
+      margin: 0 auto;
+      max-height: 420px;
+    }
+    .xdt-carousel-nav {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 8px 12px;
+      border-top: 1px solid ${borderColor};
+    }
+    .xdt-carousel-btn {
+      appearance: none;
+      -webkit-appearance: none;
+      border: 1px solid ${borderColor};
+      border-radius: 8px;
+      background: transparent;
+      color: ${textColor};
+      font-size: 18px;
+      line-height: 1;
+      width: 34px;
+      height: 30px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      padding: 0;
+    }
+    .xdt-carousel-counter {
+      color: ${mutedColor};
+      font-size: ${codeFontSize}px;
+      font-variant-numeric: tabular-nums;
     }
     .xdt-session-chip {
       background: ${chipColor};
@@ -426,8 +622,6 @@ export function buildSelectableMarkdownCss(options: SelectableMarkdownHtmlOption
       display: inline-block;
       max-width: 100%;
       padding: 0 6px;
-      /* 同 .xdt-image-chip:阅读器里会话 chip 点不动(无 bridge、interceptNavigation
-         只放行 http(s)),所以不带下划线。渲染侧也用 <span> 而非 <a>。 */
       vertical-align: bottom;
     }
     table {
@@ -480,8 +674,6 @@ export function buildSelectableMarkdownCss(options: SelectableMarkdownHtmlOption
 }
 
 function renderBlocks(blocks: readonly MobileMarkdownBlock[], ctx: RenderContext = {}): string {
-  // 统一 div 包裹并打 data-src-line:#xdt-content 是 flex+gap 布局,包一层对
-  // 布局中性(wrapper 成为 flex child,块自身 margin 恒 0),定位脚本按属性查块。
   return blocks
     .map((block) => {
       const html = renderBlock(block, ctx);
@@ -510,8 +702,6 @@ function renderBlock(block: MobileMarkdownBlock, ctx: RenderContext): string {
       ].join('');
     }
     case 'code':
-      // 与聊天消息流同一个 tokenizer(session/codeHighlight),着色口径一致;
-      // 每个非 plain 片段包一层 <span class="syn-*">,颜色见 css 里的 .syn-* 规则。
       return `<pre><code>${highlightCodeHtml(block.text, block.language)}</code></pre>`;
     case 'mermaid': {
       const repaired = repairMermaidSource(block.text);
@@ -521,9 +711,22 @@ function renderBlock(block: MobileMarkdownBlock, ctx: RenderContext): string {
       return `<pre><code data-mermaid-source="${escapeAttribute(block.text)}"${repairedAttribute}>${escapeHtml(`// mermaid\n${block.text}`)}</code></pre>`;
     }
     case 'math':
-      // display 公式:data-latex 存源码,文档级 KaTeX runtime(见
-      // buildMathRuntimeScript)加载后原位渲染;CDN 失败时保持源码 <pre> 展示。
       return `<div class="xdt-math-block" data-katex-display="1" data-latex="${escapeAttribute(block.text)}"><pre>${escapeHtml(block.text)}</pre></div>`;
+    case 'carousel': {
+      const slidesHtml = block.slides
+        .map((slide, index) => `<div class="xdt-carousel-slide${index === 0 ? ' is-active' : ''}" data-xdt-slide="${index}">${renderBlocks(slide, ctx)}</div>`)
+        .join('');
+      const navHtml = block.slides.length > 1
+        ? [
+            '<div class="xdt-carousel-nav">',
+            `<button type="button" class="xdt-carousel-btn" data-xdt-carousel-prev aria-label="${escapeAttribute(i18n.t('message.attachmentPreview.previousPage'))}">&#8249;</button>`,
+            `<span class="xdt-carousel-counter" data-xdt-carousel-counter>1 / ${block.slides.length}</span>`,
+            `<button type="button" class="xdt-carousel-btn" data-xdt-carousel-next aria-label="${escapeAttribute(i18n.t('message.attachmentPreview.nextPage'))}">&#8250;</button>`,
+            '</div>',
+          ].join('')
+        : '';
+      return `<div class="xdt-carousel" data-xdt-carousel="1"><div class="xdt-carousel-stage">${slidesHtml}</div>${navHtml}</div>`;
+    }
     case 'table':
       return [
         '<table>',
@@ -549,30 +752,21 @@ const MARK_TAGS: Record<MobileMarkdownInlineMark, string> = {
 };
 
 function renderInline(inline: MobileMarkdownInline, ctx: RenderContext = {}): string {
-  // 强调里的链接 / 代码等:先按原类型渲染,再由内到外套上外层强调标签。
   if (inline.marks?.length) {
     return inline.marks.reduceRight(
       (html, mark) => `<${MARK_TAGS[mark]}>${html}</${MARK_TAGS[mark]}>`,
       renderInline({ ...inline, marks: undefined }, ctx),
     );
   }
+  const rendered = ctx.renderInline?.(inline);
+  if (rendered !== undefined) return rendered;
   switch (inline.type) {
     case 'text':
       return escapeHtml(inline.text);
     case 'link': {
-      // 本模块唯一消费方是文件阅读器 WebView(MarkdownFileReader)。那个面**只有
-      // http(s) 真的可点**:interceptNavigation 只把 http(s) 交给 Linking.openURL,
-      // 其余导航一律 return false;而且它没有任何 postMessage bridge,所以 chip 类
-      // 元素的点击也无处可去。
-      //
-      // 于是按 DESIGN.md §14.5 规则①的反面要求:**这个面上只有 http(s) 能带下划线**。
-      // 会话深链 / 本地路径 / mailto 等一律渲染成不可点形态、不出下划线 —— 否则就是
-      // 「有下划线却点不动」的反例,把刚建立的信号本身弄脏(PR #1144 review 实捉)。
       if (!/^https?:\/\//i.test(inline.url)) {
         const session = parseSessionDeepLinkUrl(inline.url);
         if (session) {
-          // 会话引用仍保留 chip 观感(底色 + 边框只表达「这是个会话引用」这层排版
-          // 含义),但用 <span> 而不是 <a> —— 点不动的东西不该是锚点。
           const explicit =
             inline.text.trim() && inline.text.trim() !== inline.url ? inline.text.trim() : null;
           const title =
@@ -581,9 +775,6 @@ function renderInline(inline: MobileMarkdownInline, ctx: RenderContext = {}): st
             i18n.t('message.renderer.sessionChipFallback');
           return `<span class="xdt-session-chip">›&nbsp;${escapeHtml(title)}</span>`;
         }
-        // 本地路径(`[README.md](/abs/README.md:17)` 与正文裸写的路径)、mailto 等:
-        // 纯文本。与原生侧「未点亮 → 纯文本」同语义(阅读器里没有 chip / 远端 stat
-        // 基础设施,让文档里的路径也可点属于另一个功能)。
         return escapeHtml(inline.text);
       }
       return `<a href="${escapeAttribute(inline.url)}">${escapeHtml(inline.text)}</a>`;
@@ -597,46 +788,41 @@ function renderInline(inline: MobileMarkdownInline, ctx: RenderContext = {}): st
     case 'strikethrough':
       return `<del>${escapeHtml(inline.text)}</del>`;
     case 'math':
-      // inline 公式:同 display 块走文档级 KaTeX runtime 原位渲染(displayMode
-      // 关闭),加载失败保持斜体源码。
       return `<span class="xdt-math-inline" data-latex="${escapeAttribute(inline.text)}"><em>${escapeHtml(inline.text)}</em></span>`;
     case 'image': {
+      const alt = inline.alt || i18n.t('message.renderer.imageFallbackTitle');
       if (ctx.imageSources) {
         const image = ctx.imageSources.get(inline.url);
-        const alt = inline.alt || i18n.t('message.renderer.imageFallbackTitle');
         return image?.uri.startsWith('data:image/')
           ? `<img src="${escapeAttribute(image.uri)}" alt="${escapeAttribute(alt)}">`
           : `<span class="xdt-image-chip">${escapeHtml(alt)}</span>`;
       }
-      // xdt 系非直连图:WebView 无法解析 xdt-image:// 等内部 scheme,渲染占位 chip,
-      // 点击经 data-xdt-src 上报后由 ImageLightbox 走 remote-media resolver 取图。
-      if (!isMobileMarkdownImageDirectUrl(inline.url)) {
-        return `<span class="xdt-image-chip" data-xdt-src="${escapeAttribute(inline.url)}" data-xdt-alt="${escapeAttribute(inline.alt)}">${escapeHtml(inline.alt || i18n.t('message.renderer.imageFallbackTitle'))}</span>`;
-      }
-      // width/height 是解析层过滤过的纯数字提示;CSS 的 max-width:100% + height:auto 保证不撑破气泡。
-      // 双属性齐全时浏览器会按声明 aspect-ratio 在加载前预留高度,height=9999 这类极端比例
-      // (白名单只拦"1-4 位纯数字")会预留出 ~10k px 空框、加载后再回缩;声明比例超出 [1:4, 4:1]
-      // 时丢弃 height 属性,落回 bridge 的有界预留(width×0.75 且被展示宽/封顶截断)。
+      const imageIndex = ctx.interactiveImages && ctx.nextImageIndex ? ctx.nextImageIndex() : null;
       const declaredRatioSane = inline.width !== undefined && inline.height !== undefined
         ? inline.height / inline.width <= 4 && inline.height / inline.width >= 0.25
         : true;
+      if (!isMobileMarkdownImageDirectUrl(inline.url)) {
+        if (imageIndex !== null) {
+          const dimAttrs = [
+            inline.width !== undefined ? ` data-xdt-width="${inline.width}"` : '',
+            inline.height !== undefined && declaredRatioSane ? ` data-xdt-height="${inline.height}"` : '',
+          ].join('');
+          return `<span class="xdt-md-img-slot xdt-md-img-loading" data-xdt-img-index="${imageIndex}" data-xdt-img-src="${escapeAttribute(inline.url)}" data-xdt-alt="${escapeAttribute(alt)}"${dimAttrs}><span>${escapeHtml(alt)}</span></span>`;
+        }
+        return `<span class="xdt-image-chip" data-xdt-src="${escapeAttribute(inline.url)}" data-xdt-alt="${escapeAttribute(inline.alt)}">${escapeHtml(alt)}</span>`;
+      }
       const size = [
         inline.width !== undefined ? ` width="${inline.width}"` : '',
         inline.height !== undefined && declaredRatioSane ? ` height="${inline.height}"` : '',
       ].join('');
-      // data-xdt-src 保留解析层原始 URL:target.src 会被 WebView percent-encode(中文文件名等),
-      // 与图集里存的原始 URL 精确匹配不上会丢横滑翻页,点击上报以 data-xdt-src 为准。
-      const alt = inline.alt || i18n.t('message.renderer.imageFallbackTitle');
-      return `<img src="${escapeAttribute(inline.url)}" data-xdt-src="${escapeAttribute(inline.url)}" alt="${escapeAttribute(alt)}"${size}>`;
+      const interactiveAttrs = imageIndex !== null
+        ? ` class="xdt-md-img" data-xdt-img-index="${imageIndex}"`
+        : '';
+      return `<img src="${escapeAttribute(inline.url)}" data-xdt-src="${escapeAttribute(inline.url)}" alt="${escapeAttribute(alt)}"${interactiveAttrs}${size}>`;
     }
   }
 }
 
-/**
- * 代码块语法着色 → HTML。走与聊天消息流相同的 tokenizer,颜色由 css 的 .syn-*
- * 规则给(见 buildSelectableMarkdownCss)。每个片段都经 escapeHtml,不会因为着色
- * 引入未转义内容。
- */
 function highlightCodeHtml(source: string, language: string | undefined): string {
   return tokenizeCode(source, language)
     .map((token) => (

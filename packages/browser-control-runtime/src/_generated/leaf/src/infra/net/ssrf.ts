@@ -58,6 +58,8 @@ export type SsrFPolicy = {
    * 198.18.0.0/15 range. See #74351.
    */
   allowIpv6UniqueLocalRange?: boolean;
+  /** Opt in to RFC 5180 benchmark fake-IP DNS answers; does not allow ULA. */
+  allowIpv6BenchmarkingRange?: boolean;
   allowedHostnames?: string[];
   /**
    * Exact HTTP origins that may promote only the current request hostname into
@@ -86,6 +88,7 @@ function normalizeSsrFPolicyForComparison(policy?: SsrFPolicy) {
     dangerouslyAllowPrivateNetwork: policy.dangerouslyAllowPrivateNetwork === true,
     allowRfc2544BenchmarkRange: policy.allowRfc2544BenchmarkRange === true,
     allowIpv6UniqueLocalRange: policy.allowIpv6UniqueLocalRange === true,
+    allowIpv6BenchmarkingRange: policy.allowIpv6BenchmarkingRange === true,
     allowedHostnames: normalizeSsrFPolicyHostnames(policy.allowedHostnames),
     allowedOrigins: normalizeSsrFPolicyOrigins(policy.allowedOrigins),
     hostnameAllowlist: [...normalizeHostnameAllowlist(policy.hostnameAllowlist)].toSorted(),
@@ -118,6 +121,9 @@ export function mergeSsrFPolicies(
     }
     if (policy.allowIpv6UniqueLocalRange) {
       merged.allowIpv6UniqueLocalRange = true;
+    }
+    if (policy.allowIpv6BenchmarkingRange) {
+      merged.allowIpv6BenchmarkingRange = true;
     }
     if (policy.allowedHostnames?.length) {
       merged.allowedHostnames = Array.from(
@@ -266,6 +272,7 @@ function resolveIpv4SpecialUseBlockOptions(policy?: SsrFPolicy): Ipv4SpecialUseB
 function resolveIpv6SpecialUseBlockOptions(policy?: SsrFPolicy): Ipv6SpecialUseBlockOptions {
   return {
     allowUniqueLocalRange: policy?.allowIpv6UniqueLocalRange === true,
+    allowBenchmarkingRange: policy?.allowIpv6BenchmarkingRange === true,
   };
 }
 

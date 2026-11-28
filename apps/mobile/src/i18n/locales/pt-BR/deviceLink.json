@@ -35,7 +35,17 @@
   "retryAccess": "Tentar acessar novamente",
   "recheck": "Verificar novamente",
   "deviceRemovedTitle": "Dispositivo removido",
-  "deviceRemovedHint": "Saia e entre novamente para voltar à lista de dispositivos.",
+  "deviceRemovedHint": "Este celular foi removido da sua conta. Toque em “Reintegrar” para recuperá-lo.",
+  "rejoin": {
+    "action": "Reintegrar",
+    "busy": "Reintegrando",
+    "doneTitle": "Reintegrado",
+    "agentNetUnavailable": "O serviço Agent-Net ainda não oferece suporte à reintegração; por enquanto, este celular se conecta sem Agent-Net.",
+    "failedTitle": "Não foi possível reintegrar",
+    "failed": "Verifique a rede e tente novamente.",
+    "unsupported": "O serviço ainda não oferece suporte à reintegração. Saia e entre novamente.",
+    "agentNetUnsupported": "O serviço Agent-Net ainda não oferece suporte à reintegração. Desative “Usar apenas conexões criptografadas” para recuperar este celular sem Agent-Net."
+  },
   "authFailedTitle": "Login expirado",
   "authFailedHint": "Seu login expirou. Saia e entre novamente.",
   "replacedTitle": "Conexão substituída",

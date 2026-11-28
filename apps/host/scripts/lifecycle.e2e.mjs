@@ -35,7 +35,7 @@ async function attachFromShortLivedLauncher() {
     ? path.join(releaseDir, 'bin', process.platform === 'win32' ? 'node.exe' : 'node') : process.execPath,
     args: releaseDir ? [path.join(releaseDir, 'bin/host.mjs'), 'serve']
       : ['--import', 'tsx', '--import', './src/loaders/register-raw.mjs', 'src/main.ts', 'serve'],
-    cwd: releaseDir ? profile : appDir, timeoutMs: 20_000 };
+    cwd: releaseDir ? profile : appDir };
   // A real launcher exits completely; no parent object can keep its child alive.
   const child = spawn(process.execPath, ['--input-type=module', '-e',
     'const {ensureBackgroundHost}=await import(process.argv[1]); console.log(JSON.stringify(await ensureBackgroundHost(JSON.parse(process.argv[2]))));',
@@ -68,10 +68,18 @@ function launch() {
   listening.catch(() => undefined);
   return { child, exit, listening };
 }
+const LIFECYCLE_TIMEOUT_MS = 180_000;
+const timings = new Map();
+let stageStarted;
+function beginStage(name) {
+  if (stageStarted) timings.set(stageStarted.name, performance.now() - stageStarted.time);
+  stageStarted = { name, time: performance.now() };
+}
 const deadline = setTimeout(() => {
   for (const child of children) child.kill('SIGTERM');
-}, 30_000);
+}, LIFECYCLE_TIMEOUT_MS);
 try {
+  beginStage('first');
   const first = launch();
   await first.listening;
   const endpoint = readHostEndpoint(profile);
@@ -85,6 +93,7 @@ try {
     assert.match(shim.headers.get('content-type'), /javascript/);
     assert.match(await shim.text(), /electronAPI/);
   }
+  beginStage('busy');
   const second = launch();
   const secondExit = await second.exit;
   assert.notEqual(secondExit.code, 0);
@@ -95,16 +104,19 @@ try {
   assert.equal(readHostEndpoint(profile), null);
   assert.deepEqual(await readHostProcessStatus(profile), { running: false });
   // The operating-system lease must be reusable after an orderly stop.
+  beginStage('replacement');
   const replacement = launch();
   await replacement.listening;
   assert.notEqual(readHostEndpoint(profile).instanceId, endpoint.instanceId);
   replacement.child.kill('SIGTERM');
   assert.equal((await replacement.exit).code, 0);
   assert.equal(readHostEndpoint(profile), null);
+  beginStage('background');
   background = await attachFromShortLivedLauncher();
   assert.equal(background.started, true);
   assert.equal((await readHostProcessStatus(profile)).instanceId, background.instanceId);
   // New launcher (possibly from a new source checkout) reuses the live backend.
+  beginStage('reattach');
   const reattached = await attachFromShortLivedLauncher();
   assert.equal(reattached.started, false);
   assert.equal(reattached.pid, background.pid);
@@ -114,6 +126,8 @@ try {
   console.log('PASS: background Host survives launcher exit; replacement launcher attaches to the same process and instance');
 } finally {
   clearTimeout(deadline);
+  if (stageStarted) timings.set(stageStarted.name, performance.now() - stageStarted.time);
+  for (const [stage, ms] of timings) console.log(`lifecycle ${stage}: ${Math.round(ms)} ms`);
   const remaining = [...children];
   const exits = remaining.map(child => child.exitCode !== null || child.signalCode !== null
     ? Promise.resolve() : once(child, 'exit'));

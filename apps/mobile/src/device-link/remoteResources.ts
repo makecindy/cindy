@@ -179,6 +179,19 @@ function normalizeRemoteTimestamp(value: unknown): number | undefined {
   return Number.isFinite(new Date(value).getTime()) ? value : undefined;
 }
 
+/** The conversation's inbox snooze (Session ISO fields). Malformed values drop the whole object. */
+function normalizeRemoteInboxSnooze(value: unknown): RemoteResourceDisplay['inboxSnooze'] | undefined {
+  const record = recordOf(value);
+  if (!record) return undefined;
+  const time = (raw: unknown): string | null | undefined => raw === null ? null
+    : typeof raw === 'string' && raw.length <= 64 && Number.isFinite(Date.parse(raw)) ? raw : undefined;
+  const snoozedUntil = time(record.snoozedUntil);
+  const snoozedAt = time(record.snoozedAt);
+  const userSendAt = time(record.userSendAt);
+  return snoozedUntil === undefined || snoozedAt === undefined || userSendAt === undefined
+    ? undefined : { snoozedUntil, snoozedAt, userSendAt };
+}
+
 function normalizeRemoteDisplay(value: unknown): RemoteResourceDisplay | null {
   const record = recordOf(value);
   const title = normalizeRemoteText(record?.title, 512);
@@ -191,6 +204,7 @@ function normalizeRemoteDisplay(value: unknown): RemoteResourceDisplay | null {
   const generation = recordOf(record.generation);
   const generationPhase = boundedString(generation?.phase, 80);
   const generationStartedAt = normalizeRemoteTimestamp(generation?.startedAt);
+  const inboxSnooze = normalizeRemoteInboxSnooze(record.inboxSnooze);
   return {
     title,
     ...(subtitle ? { subtitle } : {}),
@@ -201,6 +215,8 @@ function normalizeRemoteDisplay(value: unknown): RemoteResourceDisplay | null {
     ...(timestamp !== undefined ? { timestamp } : {}),
     ...(normalizeRemoteTimestamp(record.lastReplyAt) !== undefined ? { lastReplyAt: record.lastReplyAt as number } : {}),
     ...(normalizeRemoteTimestamp(record.lastReadAt) !== undefined ? { lastReadAt: record.lastReadAt as number } : {}),
+    // Its presence also says the host accepts a snooze written to the conversation Session.
+    ...(inboxSnooze ? { inboxSnooze } : {}),
     ...(avatar ? { avatar } : {}),
     ...(status ? { status } : {}),
     ...(Array.isArray(record.badges) ? { badges: record.badges.slice(0, 8).flatMap(value => {

@@ -1,4 +1,8 @@
 import type { AuthFlowState } from '@cindy/auth-client';
+import {
+  readHostUnavailableReason,
+  type HostUnavailable,
+} from '../../shared/hostStartFailure';
 import type {
   DesktopAccountDeletionAvailabilityResult,
   DesktopAccountDeletionChallenge,
@@ -32,6 +36,8 @@ export interface User {
   orgSlug: string | null;
   /** 企业 logo(auth console 组织设置上传);个人身份或未设置为 null。 */
   orgLogoUrl: string | null;
+  tapdbChargeAlias?: string;
+  tapdbUsageAlias?: string;
   passportId: string;
 }
 
@@ -50,6 +56,8 @@ export interface AuthState {
   accountDeletionRestored: boolean;
   /** 持久凭证库(safeStorage)连续多个刷新周期不可用(#1687);恢复后自动回 false。 */
   credentialStoreUnavailable: boolean;
+  /** Client mode only: why the Host serving this window did not start. Absent otherwise. */
+  hostUnavailable?: HostUnavailable;
 }
 
 export type AuthStateSource = 'initialize' | 'push' | 'snapshot';
@@ -97,7 +105,14 @@ function normalizeAuthState(raw: Awaited<ReturnType<typeof window.electronAPI.au
     hasAccountDeletionReceipt: raw.hasAccountDeletionReceipt === true,
     accountDeletionRestored: raw.accountDeletionRestored === true,
     credentialStoreUnavailable: raw.credentialStoreUnavailable === true,
+    ...hostUnavailableField(raw),
   };
+}
+
+/** Present only when the Host reports a start failure, so every other state keeps its exact shape. */
+function hostUnavailableField(raw: { hostUnavailable?: unknown }): { hostUnavailable?: HostUnavailable } {
+  const reason = readHostUnavailableReason(raw);
+  return reason ? { hostUnavailable: { reason } } : {};
 }
 
 /** One Main projection per renderer. Components only own their subscriptions. */

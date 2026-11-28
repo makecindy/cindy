@@ -27,8 +27,9 @@ export interface HostDelegationConfig {
   readonly instanceId?: string;
 }
 
-/** Env var that enables client mode; the value is the loopback base URL. */
-export const HOST_DELEGATION_ENV = 'CINDY_HOST_API';
+import { HOST_DELEGATION_ENV } from './hostDelegationEnv.js';
+
+export { HOST_DELEGATION_ENV };
 
 /**
  * Resolve the delegation target. Returns null when disabled, and throws when
@@ -215,7 +216,7 @@ export function registerHostDelegatedIpc(deps: HostDelegatedIpcDeps): string[] {
   for (const entry of PROXIED_CHANNELS) {
     deps.ipcMain.removeHandler(entry.channel);
     rawHandle(entry.channel, async (event, ...args: unknown[]) => {
-      if (entry.trustedRenderer) {
+      if (entry.trustedRenderer || entry.channel === 'local-db:messages:work-details') {
         if (!deps.assertTrusted) throw new Error('Trusted renderer admission is required');
         deps.assertTrusted(event);
       }

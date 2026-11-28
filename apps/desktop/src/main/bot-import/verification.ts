@@ -189,7 +189,8 @@ export async function verifyImportedAutomation(root: string, botId: string, item
     const maker = getMakerIfReady();
     const meta = bot.canonicalSessionId ? await maker?.getSessionMeta(bot.canonicalSessionId) : undefined;
     assertOwner();
-    if (!maker || !meta) return { verified: false, reason: 'VERIFICATION_MODEL_UNAVAILABLE' };
+    // Plugin engines have no one-shot planning call (docs/plans/acp-plugin-bridge.md).
+    if (!maker || !meta || meta.agentKind === 'acp') return { verified: false, reason: 'VERIFICATION_MODEL_UNAVAILABLE' };
     // Native argv/cwd/stdin are opaque: literals can contain credentials absent
     // from all configured secret maps. Only the dependency catalog goes to AI.
     // No credential values, raw environment, endpoint queries or source configuration are sent to AI.

@@ -110,6 +110,8 @@ export interface GhostCardPush {
   logicalGhostId?: string;
   /** agent 侧 tool_use id(claude 路径有,codex 为 null → renderer 走启发式锚定)。 */
   toolUseId: string | null;
+  /** Host-selected MCP alias for a named plugin tool, used before a result exists. */
+  startupToolName?: string;
   /** 静态版(settle 后 / 历史回放用;与落库内容一致)。 */
   html: string;
   /**
@@ -165,6 +167,7 @@ interface CallEntry {
   /** 被调用的插件工具名(ghost_call 登记时提供；其它通道省略)。 */
   tool?: string;
   toolUseId: string | null;
+  startupToolName?: string;
   sessionId: string | null;
   sessionInstanceId?: string;
   /**
@@ -257,6 +260,7 @@ export class GhostCardService {
       /** 被调用的插件工具名；networkSlot 据此判断是否带 MCP Apps 手册头。 */
       tool?: string;
       toolUseId: string | null;
+      startupToolName?: string;
       sessionId: string | null;
       sessionInstanceId?: string;
       /** SSH remote host；本地会话显式传 null，未知时省略并 fail closed。 */
@@ -275,6 +279,7 @@ export class GhostCardService {
       ...(info.logicalGhostId !== undefined ? { logicalGhostId: info.logicalGhostId } : {}),
       ...(info.tool !== undefined ? { tool: info.tool } : {}),
       toolUseId: info.toolUseId,
+      ...(info.startupToolName ? { startupToolName: info.startupToolName } : {}),
       sessionId: info.sessionId,
       sessionInstanceId: info.sessionInstanceId,
       remoteHostId: info.remoteHostId,
@@ -518,6 +523,7 @@ export class GhostCardService {
       ghostId: senderGhostId,
       ...(entry.logicalGhostId !== undefined ? { logicalGhostId: entry.logicalGhostId } : {}),
       toolUseId: entry.toolUseId,
+      ...(entry.startupToolName ? { startupToolName: entry.startupToolName } : {}),
       html,
       animatedHtml: supersededBy ? null : sanitized.animatedHtml ?? null,
       height,

@@ -128,4 +128,25 @@ describe('bounded metadata continuity', () => {
     f.state.online = false;
     expect((await f.reader.read(scope, 'directory', async () => ['unused'])).value).toEqual(['new']);
   });
+
+  // Gap: every consumer with its own TTL started another physical read of the same catalog.
+  // Minimal input: three reads inside the fresh window, one after it, one under a new scope key.
+  it('answers repeated reads inside the fresh window from one physical read, then refreshes', async () => {
+    const f = fixture(), scope = { ...f.scope, freshForMs: 15_000 };
+    const request = vi.fn(async () => ({ models: ['a'] }));
+    await f.reader.read(scope, 'catalog', request);
+    f.state.wall = f.state.mono = 14_999;
+    for (let i = 0; i < 3; i++) {
+      expect(await f.reader.read(scope, 'catalog', request)).toEqual({ value: { models: ['a'] }, stale: false,
+        remainingMs: 1_800_000 - 14_999 });
+    }
+    expect(request).toHaveBeenCalledTimes(1);
+    // A wall clock moved backwards does not extend the window: the monotonic age still counts.
+    f.state.wall = 0; f.state.mono = 15_000;
+    await f.reader.read(scope, 'catalog', request);
+    expect(request).toHaveBeenCalledTimes(2);
+    // A source change (new scope key) never reuses the previous snapshot.
+    await f.reader.read({ ...scope, key: 'owner-a/realm/permission-1/source-2' }, 'catalog', request);
+    expect(request).toHaveBeenCalledTimes(3);
+  });
 });

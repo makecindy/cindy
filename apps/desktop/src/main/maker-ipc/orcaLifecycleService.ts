@@ -1,5 +1,5 @@
 import type { OrcaWorkerCreateRequest } from './orcaWorkerDefaults';
-import type { AgentKind } from '@cindy/maker-core';
+import type { AgentKind, EngineKind } from '@cindy/maker-core';
 
 import { normalizeOrcaWorkerLabel } from '@cindy/maker-shared/orca-team';
 import { createHostSendFailure } from '../maker-host/send-outcome.js';
@@ -22,10 +22,13 @@ export const ORCA_WORKER_READY_MESSAGE =
 /** 开启协同时的一次性入参；负责把 UI/MCP 的 worker 偏好归一到 worker 创建内核。 */
 export interface OrcaEnableTeamParams {
   leadSessionId: string;
-  workerAgent: AgentKind;
+  admittedLeadAgentKind?: EngineKind;
+  /** 'acp' = 插件引擎 Worker(providerId 指出是哪一个)。 */
+  workerAgent: EngineKind;
   role?: string;
   label?: string;
   model?: string;
+  modelGroup?: string;
   effort?: OrcaWorkerEffort;
   fast?: boolean | 'ultrafast';
   /** 显式选定的模型来源;语义见 OrcaWorkerCreateParams.providerId。 */
@@ -47,6 +50,7 @@ export interface OrcaEnableTeamParams {
 /** MCP start_team 只建立 lead team，不创建 worker；worker 后续由 create_worker 添加。 */
 export interface OrcaStartTeamParams {
   leadSessionId: string;
+  admittedLeadAgentKind?: EngineKind;
   /** Worker 创建默认权限；缺省沿用当前偏好，显式值会更新偏好。 */
   workerPermissionMode?: OrcaWorkerPermissionMode;
 }
@@ -118,17 +122,20 @@ export interface OrcaLifecycleDeps {
   setLeadVendorOptions(params: {
     leadSessionId: string;
     teamId: string;
+    newTeam?: true;
+    admittedLeadAgentKind?: EngineKind;
     workerId?: string;
     workerSessionId?: string;
   }): Promise<void>;
   clearLeadVendorOptions(leadSessionId: string): Promise<void>;
   sendWorkerReadyPlaceholder(params: {
     workerSessionId: string;
-    agentKind: AgentKind;
+    agentKind: EngineKind;
     entrypoint: 'create_worker' | 'enable_collab_mode';
     context: string;
   }, assertCurrent?: () => Promise<void>): Promise<void>;
   rollbackCreatedWorker(params: { workerId: string; workerSessionId: string }): Promise<void>;
+  promoteSideChatLead?(leadSessionId: string, teamId: string, workerId: string, assertCurrent?: () => Promise<void>): Promise<void>;
   broadcastSessionCreated(sessionId: string): void;
   broadcastOrcaWorkerChanged(leadSessionId: string): void;
 }
@@ -159,6 +166,7 @@ function normalizeEnableParams(params: OrcaEnableTeamParams): OrcaWorkerCreatePa
     label: explicitLabel ?? createDefaultWorkerLabel(role),
     agent: params.workerAgent,
     model: params.model?.trim() || undefined,
+    modelGroup: params.modelGroup,
     effort: params.effort,
     fast: params.fast,
     providerId: params.providerId,
@@ -309,6 +317,7 @@ export function createOrcaLifecycleService(deps: OrcaLifecycleDeps): OrcaLifecyc
       await deps.rollbackCreatedWorker(created).catch(() => undefined);
       return internalFailure(err);
     }
+    await deps.promoteSideChatLead?.(params.leadSessionId, team.id, created.workerId, assertCreatedCurrent);
     deps.broadcastSessionCreated(created.workerSessionId);
     deps.broadcastOrcaWorkerChanged(params.leadSessionId);
     return {
@@ -356,14 +365,13 @@ export function createOrcaLifecycleService(deps: OrcaLifecycleDeps): OrcaLifecyc
   async function activateLeadTeam(params: {
     leadSessionId: string;
     teamId: string;
+    newTeam?: true;
+    admittedLeadAgentKind?: EngineKind;
   }, assertCurrent: () => Promise<void>): Promise<void> {
     await deps.setSessionOrcaRole(params.leadSessionId, 'lead');
     await assertCurrent();
     deps.clearKnownNonOrcaSession(params.leadSessionId);
-    await deps.setLeadVendorOptions({
-      leadSessionId: params.leadSessionId,
-      teamId: params.teamId,
-    });
+    await deps.setLeadVendorOptions(params);
   }
 
   async function startTeam(params: OrcaStartTeamParams, assertCurrent?: () => Promise<void>): Promise<OrcaStartTeamResult> {
@@ -389,7 +397,7 @@ export function createOrcaLifecycleService(deps: OrcaLifecycleDeps): OrcaLifecyc
     initializingTeamIds.add(team.id);
     try {
       await assertAdmission();
-      await activateLeadTeam({ leadSessionId: params.leadSessionId, teamId: team.id }, assertAdmission);
+      await activateLeadTeam({ leadSessionId: params.leadSessionId, teamId: team.id, newTeam: true, admittedLeadAgentKind: params.admittedLeadAgentKind }, assertAdmission);
       await assertAdmission();
     } catch (err) {
       return failCreatedTeamOnly({ teamId: team.id, leadSessionId: params.leadSessionId, err });
@@ -461,6 +469,8 @@ export function createOrcaLifecycleService(deps: OrcaLifecycleDeps): OrcaLifecyc
       await deps.setLeadVendorOptions({
         leadSessionId: params.leadSessionId,
         teamId: team.id,
+        newTeam: true,
+        admittedLeadAgentKind: params.admittedLeadAgentKind,
         workerId: created.workerId,
         workerSessionId: created.workerSessionId,
       });
@@ -510,6 +520,7 @@ export function createOrcaLifecycleService(deps: OrcaLifecycleDeps): OrcaLifecyc
       });
     }
 
+    await deps.promoteSideChatLead?.(params.leadSessionId, team.id, created.workerId, assertCreatedCurrent);
     deps.broadcastSessionCreated(created.workerSessionId);
     deps.broadcastOrcaWorkerChanged(params.leadSessionId);
     return {

@@ -41,6 +41,7 @@ function entryHasAttention(
 export interface SessionEntryListProps {
   sessions: readonly Session[];
   inboxMode?: boolean;
+  hideInboxActions?: boolean;
   activeSessionId?: string;
   runningSessionIds: ReadonlySet<string>;
   attachedSessionIds: ReadonlySet<string>;
@@ -54,7 +55,6 @@ export interface SessionEntryListProps {
   onMoveSession?: (id: string, target: SessionMoveTarget) => void;
   projectOptions?: readonly FolderPickerOption[];
   onScheduleAction: (group: AutomationSessionGroup, action: AutomationScheduleAction) => void;
-  indented?: boolean;
   matchMap?: ReadonlyMap<string, readonly number[]>;
   /**
    * 会话行 hover 时右侧展示的"项目来源"标签映射(sessionId → displayName/"对话")。
@@ -99,6 +99,7 @@ export interface SessionEntryRowsProps extends Omit<
 export function SessionEntryRows({
   entries,
   inboxMode = false,
+  hideInboxActions = false,
   activeSessionId,
   runningSessionIds,
   attachedSessionIds,
@@ -111,7 +112,6 @@ export function SessionEntryRows({
   onMoveSession,
   projectOptions,
   onScheduleAction,
-  indented = false,
   matchMap,
   sourceLabelMap,
   sessionVariant = 'text',
@@ -132,6 +132,7 @@ export function SessionEntryRows({
           const commonProps = {
             session: entry.session,
             inboxMode,
+            hideInboxActions,
             isActive: entry.session.id === activeSessionId,
             isRunning: runningSessionIds.has(entry.session.id),
             isAttached: attachedSessionIds.has(entry.session.id),
@@ -143,7 +144,6 @@ export function SessionEntryRows({
             onTogglePin,
             onMoveSession,
             projectOptions,
-            indented,
             matchIndices: matchMap?.get(entry.session.id),
           };
 
@@ -169,6 +169,8 @@ export function SessionEntryRows({
           <AutomationSessionGroupItem
             key={entry.group.id}
             group={entry.group}
+            inboxMode={inboxMode}
+            hideInboxActions={hideInboxActions}
             activeSessionId={activeSessionId}
             runningSessionIds={runningSessionIds}
             attachedSessionIds={attachedSessionIds}
@@ -188,7 +190,6 @@ export function SessionEntryRows({
                 ? (collapsed) => onAutomationGroupCollapsedChange(entry.group.id, collapsed)
                 : undefined
             }
-            indented={indented}
             matchMap={matchMap}
             sourceLabelMap={sourceLabelMap}
             sessionVariant={sessionVariant}

@@ -1,3 +1,4 @@
+import { companionChatTarget } from '@/features/bots/companionChatTarget';
 import { matchPath } from 'react-router-dom';
 
 const NON_SESSION_CC_AGENT_SEGMENTS = new Set([
@@ -34,7 +35,12 @@ export function resolveAgentIslandVisibleSessionsFromPath(
   splitSessionIds: readonly string[],
 ): string | string[] | null {
   const sessionId = resolveAgentIslandVisibleSessionIdFromPath(pathname);
-  // SplitGroup stays in the store after leaving cc-agent, but is no longer mounted.
+  // Companion routes now keep the same split tree mounted. This list already
+  // excludes companion paths, so report even a single ordinary task beside one.
+  if (companionChatTarget(pathname) && splitSessionIds.length > 0) {
+    return [...new Set(splitSessionIds)];
+  }
+  // Other feature pages retain the saved tree without showing it.
   if (sessionId && splitSessionIds.length >= 2) {
     return [...new Set([sessionId, ...splitSessionIds])];
   }

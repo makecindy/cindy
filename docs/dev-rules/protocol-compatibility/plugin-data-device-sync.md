@@ -20,3 +20,9 @@ namespace + id 下同一插件的有界 JSON 请求；`deviceSync: true` 是独�
 不重连共享 relay。恢复由插件持久状态对账，不恢复失效请求。
 实现与 unit 回归：`cindy-brain/deviceSyncSlot.ts` / `__tests__/deviceSyncSlot.test.ts`。
 完整体验需要两台电脑都更新 Host 和插件；本地回归不能代替双机稳定版/Beta 实测。
+
+声明 `deviceSync` 和 `agent.schedule` 的插件可以读取 `cindy.deviceSync({ op: 'automationHost' })`。已登录且在线的宿主从账号服务读取 `revision / selected / isPrimary / deviceName`，并从本地调度器返回 `localSchedule`（active / paused / expired / none）。选择或清空本机时提交 `{ op: 'selectAutomationHost', revision, useThisDevice }`，由宿主弹窗确认。主机身份由已安装插件的 namespace、id 和登录设备决定。旧服务、离线或撤权时不根据本地缓存推断主机。
+
+`cindy.agent.requestSchedule({ primaryDeviceOnly: true, ... })` 在执行电脑的桌面端打开需要用户保存的任务草稿。旧手机编辑器只回传名称与提示词，远端查看插件时也请在指定电脑完成首次保存。绑定存于自动化记录中，编辑任务和暂停/启用保留绑定。所有参与自动整理的电脑应先更新 Host。旧版通讯录生成的公共包整理任务在升级时保留启停状态，识别依据为生成的提示或本地化任务名及整理协议。每次模型派发前由已登录账号服务授予执行租约。没有主机、非主机、断连或失去租约时不派发，主机暂停或离线期间保留归属。账号服务需先支持 `/api/device-link/plugin-automation-host`。其他插件的默认草稿继续使用原有调度方式。
+
+免登录资料中的旧整理任务会保留原来的启停选择。免登录期间无法取得账号租约，宿主跳过自动整理。首次登录时若账号接收了这份本机资料，已启用的任务可在本机被选为主机后运行，暂停的任务继续暂停。

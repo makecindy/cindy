@@ -46,22 +46,15 @@ import { prepareCodexGlobalSkillsLinks } from './codex-global-skills.js';
 import { prepareCodexGlobalRulesCopy } from './codex-global-rules.js';
 import { prepareCodexGlobalPluginsBridge } from './codex-global-plugins.js';
 import { DESKTOP_CAPABILITY_ROUTING_POLICY } from './capability-routing.js';
-import {
-  prepareSharedGlobalSkillLinks,
-  markClaudeSessionObserved,
-  SHARED_GLOBAL_SKILL_SYNC_DISABLED_NOTICE,
-  sharedGlobalSkillLinksFingerprint,
-} from './shared-global-skills.js';
+import { markClaudeSessionObserved } from './shared-global-skills.js';
 import { PreparationCache } from './preparation-cache.js';
-import {
-  prepareBuiltInSkills,
-  migrateBuiltInGlobalSkillLinks,
-  resolveBundledSystemSkillsRoot,
-} from './built-in-skills.js';
+import { resolveBundledSystemSkillsRoot } from './built-in-skills.js';
+import { createSharedGlobalSkillsPreparation, preparationScope } from './sharedGlobalSkillsPreparationCore.js';
 import {
   copyCodexAuthSnapshotWithRetry,
   inspectCodexAuthLink,
   relinkSharedCodexAuth,
+  removeLegacyCodexAuthAlias,
   resolveWindowsAclPrincipal,
   codexAuthLinkAcceptanceFor,
   codexAuthPathsShareIdentity,
@@ -115,10 +108,7 @@ import {
   isAppSessionBoundaryPending,
   type ActiveAppSession,
 } from '../appSessionState.js';
-import {
-  assertGhostSkillProjectionBoundaryStableForOwner,
-  withSharedGlobalSkillProjectionMutation,
-} from '../authBoundaryQuarantine.js';
+import { withSharedGlobalSkillProjectionMutation } from '../authBoundaryQuarantine.js';
 import {
   bindNativeProviderAuth,
   claimDetectedNativeProviderAuth,
@@ -147,18 +137,6 @@ const log = createLogger('auth-adapters');
  */
 const assetPrepLog = createLogger('auth-adapters:asset-prep');
 
-function preparationScope(): { key: string; ownerId: string | null; current: () => boolean } {
-  const owner = getActiveAppSession();
-  return {
-    key: JSON.stringify([owner.dataOwnerId, owner.generation, isAppSessionBoundaryPending()]),
-    ownerId: owner.dataOwnerId,
-    current: () => {
-      const latest = getActiveAppSession();
-      return !isAppSessionBoundaryPending() && latest.generation === owner.generation
-        && latest.dataOwnerId === owner.dataOwnerId;
-    },
-  };
-}
 /**
  * 凭证文件的落盘 / 权限 / 硬链操作失败诊断。这些消息(icacls/chmod 的 `{ file }`、`fsp.rm` 与
  * `relinkSharedCodexAuth` 的 `error.message`)会带 `auth.json` / `models_cache.json` 等**凭证文件
@@ -484,9 +462,17 @@ function claudeSubscriptionServesModel(model: string | undefined): boolean {
 
 /** Claude AuthAdapter —— 只回鉴权 env, endpoint / behavior flag 走 runtime-configs.ts。 */
 export class DesktopClaudeAuthAdapter implements AuthAdapter {
-  private readonly sharedSkillsPreparation = new PreparationCache(30_000);
-  /** Last reported set of persistent projection warnings; each set is logged once. */
-  private reportedPersistentSkillWarnings = '[]';
+  /** Built-in publication and shared home-level links (sharedGlobalSkillsPreparationCore.ts, shared with the Host). */
+  private readonly sharedGlobalSkills = createSharedGlobalSkillsPreparation({
+    preparationScope,
+    bundledSystemSkillsRoot: () => resolveBundledSystemSkillsRoot({
+      isPackaged: app.isPackaged,
+      appPath: app.getAppPath(),
+      resourcesPath: process.resourcesPath,
+    }),
+    userDataDir: () => app.getPath('userData'),
+    appDataDir: () => app.getPath('appData'),
+  });
 
   /** invalidate() 触发时把 auth state 推给 renderer(maker-host 装配注入,对齐 codex)。 */
   private onInvalidatedBroadcast?: (reason: string) => void;
@@ -514,70 +500,7 @@ export class DesktopClaudeAuthAdapter implements AuthAdapter {
   }
 
   async ensureSharedGlobalSkills(): Promise<void> {
-    const scope = preparationScope();
-    // The opt-in setting and root listings are part of the key so a cached completion
-    // never hides a crossAgentSyncEnabled toggle or an added/removed global skill.
-    const key = JSON.stringify([scope.key, await sharedGlobalSkillLinksFingerprint()]);
-    await this.sharedSkillsPreparation.ensure(key, async () => {
-      const success = await this.runEnsureSharedGlobalSkills(scope.ownerId);
-      return success && scope.current();
-    });
-  }
-
-  private async runEnsureSharedGlobalSkills(ownerId: string | null): Promise<boolean> {
-    try {
-      const result = await withSharedGlobalSkillProjectionMutation(ownerId, async () => {
-        // Bundle publication keeps every managed Agent link on one stable
-        // active pointer. The stable-owner boundary prevents a passive profile
-        // from participating in that transaction.
-        const preparedBuiltIns = await prepareBuiltInSkills({
-          bundledRoot: resolveBundledSystemSkillsRoot({
-            isPackaged: app.isPackaged,
-            appPath: app.getAppPath(),
-            resourcesPath: process.resourcesPath,
-          }),
-          userDataDir: app.getPath('userData'),
-          appDataDir: app.getPath('appData'),
-        });
-        const migrationWarnings = preparedBuiltIns.projectionSafe
-          ? await migrateBuiltInGlobalSkillLinks({ userDataDir: app.getPath('userData'), appDataDir: app.getPath('appData') })
-          : [];
-        const sharedProjection = await prepareSharedGlobalSkillLinks({
-          assertOwnerStable: () => assertGhostSkillProjectionBoundaryStableForOwner(ownerId),
-        });
-        const persistent = new Set(sharedProjection.persistentWarnings);
-        return {
-          warnings: [
-            ...preparedBuiltIns.warnings,
-            ...migrationWarnings,
-            ...sharedProjection.warnings.filter((warning) => !persistent.has(warning)),
-          ],
-          persistentWarnings: sharedProjection.persistentWarnings,
-        };
-      });
-      for (const warning of result.warnings) {
-        assetPrepLog.warn('shared global skill warning', { warning });
-      }
-      // The sync opt-out and user-owned conflicting paths are stable state, not failures:
-      // report each distinct set once and let the completion cache hold past them.
-      const persistentSignature = JSON.stringify([...result.persistentWarnings].sort());
-      if (persistentSignature !== this.reportedPersistentSkillWarnings) {
-        this.reportedPersistentSkillWarnings = persistentSignature;
-        for (const warning of result.persistentWarnings) {
-          if (warning === SHARED_GLOBAL_SKILL_SYNC_DISABLED_NOTICE) {
-            assetPrepLog.info('shared global skill notice', { warning });
-          } else {
-            assetPrepLog.warn('shared global skill warning', { warning });
-          }
-        }
-      }
-      return result.warnings.length === 0;
-    } catch (error) {
-      assetPrepLog.warn('prepare shared global skills failed', {
-        error: error instanceof Error ? error.message : String(error),
-      });
-      return false;
-    }
+    await this.sharedGlobalSkills.ensureSharedGlobalSkills();
   }
 
   async getState(options?: AuthAdapterOptions): Promise<AuthState> {
@@ -1161,7 +1084,15 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
     // writer from another live profile or a native logout. Leave any old backup intact.
     if (!existsSync(systemAuth)) return;
 
-    if (markerActive) return;
+    if (markerActive) {
+      // 对账被抑制期间（durable disconnect 或服务端作废锁残留），仍拆掉本实例遗留的存量硬链：
+      // 断开用户后续直接在原生 Codex CLI/App 登录，不会再走 Cindy 内登录；留着 nlink>1
+      // 会让 Codex 0.165+/0.171+ 拒绝原子保存新凭证。unproven 与只读 Dev 一律不碰。
+      if (!this.devOAuthWritesBlocked() && marker && !marker.unprovenCredentialAttribution) {
+        removeLegacyCodexAuthAlias(systemAuth, myAuth);
+      }
+      return;
+    }
     if (this.suppressSystemCodexReconcile) {
       // marker 丢失时保持本进程 fail-closed; 磁盘写失败不能变成下一次调用立刻回灌坏 token。
       // 走到这里说明 marker 已经失效(本机 Codex 换了凭证): 解除抑制, 继续正常对账。
@@ -1596,14 +1527,18 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
     const marker = persistedMarker ?? this.memoryOnlyInvalidatedSystemCredential;
     if (!marker) return;
     const systemAuthPath = getSystemCodexAuthPath();
+    const localAuthPath = path.join(this.codexHome, 'auth.json');
     if (persistedMarker) {
       if (
         getActiveInvalidatedSystemCodexAuthMarker(
           this.codexHome,
           systemAuthPath,
-          path.join(this.codexHome, 'auth.json'),
+          localAuthPath,
         )
       ) {
+        if (!this.devOAuthWritesBlocked() && !persistedMarker.unprovenCredentialAttribution) {
+          removeLegacyCodexAuthAlias(systemAuthPath, localAuthPath);
+        }
         return;
       }
     } else {
@@ -2442,9 +2377,15 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
     if (!this.isCodexDisconnectCurrent(activeIntent)) return;
     this.commitExplicitCodexDisconnectBoundary(activeIntent);
     const authPath = path.join(this.codexHome, 'auth.json');
+    const cliAuthPath = getCodexCliAuthPath();
     try {
-      if (!activeIntent.explicitRequested && !codexAuthPathsShareEntry(authPath, getCodexCliAuthPath())) {
+      if (!activeIntent.explicitRequested && !codexAuthPathsShareEntry(authPath, cliAuthPath)) {
         await fsp.rm(authPath, { force: true });
+      } else if (activeIntent.explicitRequested && !this.devOAuthWritesBlocked()) {
+        // 显式断开保留独立文件与软链，但若本实例仍是升级前尚未迁移的存量硬链，顺手摘掉别名，
+        // 防止写入 durable disconnect 后永久阻塞原生 Codex 保存新登录。
+        removeLegacyCodexAuthAlias(getSystemCodexAuthPath(), authPath);
+        removeLegacyCodexAuthAlias(cliAuthPath, authPath);
       }
     } catch (err) {
       // 显式 logout 已在 durable marker 处完成线性化：即使 Windows 文件锁让旧文件

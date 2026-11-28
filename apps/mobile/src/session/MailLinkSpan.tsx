@@ -5,21 +5,29 @@ import { useRouter } from 'expo-router';
 import { useDeviceLink } from '@/device-link/DeviceLinkContext';
 import { getRemoteResource } from '@/device-link/remoteResources';
 import { getMobileAuthOwner, isMobileAuthOwnerCurrent } from '@/auth/authOwnerGeneration';
-import { ChatFilePathContext } from './chatFilePathContext';
+import { ChatFilePathContext, MarkdownLinkActivationContext } from './chatFilePathContext';
 
 /** All mail providers use Host-declared link recognition; unknown/old hosts keep OS links. */
 export function MailLinkSpan({ url, children, style, SpanText }: {
   url: string; children: string; style: StyleProp<TextStyle>; SpanText: typeof Text;
 }) {
+  const open = useOpenMailLink(url);
+  return <SpanText onPress={open} style={style}>{children}</SpanText>;
+}
+
+/** Preserve Host recognition and auth/scope checks for every chat link carrier. */
+export function useOpenMailLink(url: string): () => void {
   const context = useContext(ChatFilePathContext);
+  const activation = useContext(MarkdownLinkActivationContext);
   const { invoke } = useDeviceLink();
   const router = useRouter();
   const busy = useRef(false);
   const current = useRef(context); current.current = context;
   useEffect(() => () => { current.current = null; }, []);
   const open = async () => {
-    if (busy.current) return;
-    busy.current = true;
+    if (activation ? !activation.active || activation.pendingMail.has(url) : busy.current) return;
+    if (activation) activation.pendingMail.add(url);
+    else busy.current = true;
     const owner = getMobileAuthOwner(), source = context;
     try {
       if (source && url.startsWith('https://')) {
@@ -29,14 +37,17 @@ export function MailLinkSpan({ url, children, style, SpanText }: {
             { collectionId: 'mail-messages', kind: 'message', id: JSON.stringify([source.sessionId, url, false]) }, undefined, ['mail-message']);
           supported = (resource.blocks?.[0]?.data as { supported?: unknown })?.supported === true;
         } catch { /* Legacy hosts open the original link. */ }
-        if (current.current !== source || !isMobileAuthOwnerCurrent(owner)) return;
+        if (!(activation ? activation.active : current.current === source) || !isMobileAuthOwnerCurrent(owner)) return;
         if (supported) {
           router.push({ pathname: '/mail-preview', params: { deviceId: source.deviceId, sessionId: source.sessionId, url } });
           return;
         }
       }
       await Linking.openURL(url);
-    } finally { busy.current = false; }
+    } finally {
+      if (activation) activation.pendingMail.delete(url);
+      else busy.current = false;
+    }
   };
-  return <SpanText onPress={() => { void open().catch(() => undefined); }} style={style}>{children}</SpanText>;
+  return () => { void open().catch(() => undefined); };
 }

@@ -1,0 +1,48 @@
+  diag {}
+real run1 ok=true ms=586 mib=1 wireUpMiB=5.60 goodputMBps=1.79
+  sender {"packetsSent":4366,"packetsReceived":150,"wireBytesSent":5711948,"retransmittedSegments":1940,"bundledSegments":0,"parityPackets":0,"recoveredSegments":0,"timeoutLosses":0,"fastLosses":0,"spuriousLosses":0,"duplicatePackets":0,"srttUs":10520,"minRttUs":9474,"bandwidth":5508290,"rateLimitsFound":0}
+  receiver {"packetsReceived":947,"packetsSent":195,"wireBytesReceived":1235812,"unauthenticatedPackets":0,"replayedPackets":0,"retransmittedSegments":0}
+  diag {}
+real run2 ok=true ms=693 mib=1 wireUpMiB=5.63 goodputMBps=1.51
+  sender {"packetsSent":4370,"packetsReceived":183,"wireBytesSent":5719066,"retransmittedSegments":2465,"bundledSegments":0,"parityPackets":0,"recoveredSegments":0,"timeoutLosses":0,"fastLosses":0,"spuriousLosses":0,"duplicatePackets":0,"srttUs":9341,"minRttUs":8833,"bandwidth":1226931,"rateLimitsFound":0}
+  receiver {"packetsReceived":870,"packetsSent":269,"wireBytesReceived":1136304,"unauthenticatedPackets":0,"replayedPackets":0,"retransmittedSegments":0}
+  diag {}
+real run1 ok=true ms=552 mib=1 wireUpMiB=3.59 goodputMBps=1.90
+  sender {"packetsSent":2806,"packetsReceived":112,"wireBytesSent":3671774,"retransmittedSegments":1091,"bundledSegments":0,"parityPackets":0,"recoveredSegments":0,"timeoutLosses":0,"fastLosses":0,"spuriousLosses":0,"duplicatePackets":0,"srttUs":11131,"minRttUs":10107,"bandwidth":1085614,"rateLimitsFound":0}
+  receiver {"packetsReceived":879,"packetsSent":159,"wireBytesReceived":1148077,"unauthenticatedPackets":0,"replayedPackets":0,"retransmittedSegments":0}
+  diag {}
+real run2 ok=true ms=604 mib=1 wireUpMiB=4.18 goodputMBps=1.74
+  sender {"packetsSent":3249,"packetsReceived":109,"wireBytesSent":4250190,"retransmittedSegments":1274,"bundledSegments":0,"parityPackets":0,"recoveredSegments":0,"timeoutLosses":0,"fastLosses":0,"spuriousLosses":0,"duplicatePackets":0,"srttUs":10943,"minRttUs":10235,"bandwidth":1746238,"rateLimitsFound":0}
+  receiver {"packetsReceived":887,"packetsSent":172,"wireBytesReceived":1157264,"unauthenticatedPackets":0,"replayedPackets":0,"retransmittedSegments":0}
+  diag {}
+real run1 ok=true ms=772 mib=1 wireUpMiB=7.15 goodputMBps=1.36
+  sender {"packetsSent":5551,"packetsReceived":151,"wireBytesSent":7264510,"retransmittedSegments":2589,"bundledSegments":0,"parityPackets":0,"recoveredSegments":0,"timeoutLosses":0,"fastLosses":0,"spuriousLosses":0,"duplicatePackets":0,"srttUs":10577,"minRttUs":9710,"bandwidth":1152063,"rateLimitsFound":0}
+  receiver {"packetsReceived":990,"packetsSent":224,"wireBytesReceived":1293341,"unauthenticatedPackets":0,"replayedPackets":0,"retransmittedSegments":0}
+  diag {}
+real run2 ok=true ms=622 mib=1 wireUpMiB=3.22 goodputMBps=1.69
+  sender {"packetsSent":2505,"packetsReceived":136,"wireBytesSent":3277730,"retransmittedSegments":907,"bundledSegments":0,"parityPackets":0,"recoveredSegments":0,"timeoutLosses":0,"fastLosses":0,"spuriousLosses":0,"duplicatePackets":0,"srttUs":10682,"minRttUs":9456,"bandwidth":905059,"rateLimitsFound":0}
+  receiver {"packetsReceived":879,"packetsSent":192,"wireBytesReceived":1148042,"unauthenticatedPackets":0,"replayedPackets":0,"retransmittedSegments":0}
+  diag {}
+real run1 ok=true ms=761 mib=1 wireUpMiB=6.18 goodputMBps=1.38
+  sender {"packetsSent":4838,"packetsReceived":130,"wireBytesSent":6329908,"retransmittedSegments":2122,"bundledSegments":0,"parityPackets":0,"recoveredSegments":0,"timeoutLosses":0,"fastLosses":0,"spuriousLosses":0,"duplicatePackets":0,"srttUs":10449,"minRttUs":9462,"bandwidth":1300596,"rateLimitsFound":0}
+  receiver {"packetsReceived":906,"packetsSent":201,"wireBytesReceived":1183385,"unauthenticatedPackets":0,"replayedPackets":0,"retransmittedSegments":0}
+  diag {}
+real run2 ok=true ms=575 mib=1 wireUpMiB=3.22 goodputMBps=1.82
+  sender {"packetsSent":2502,"packetsReceived":134,"wireBytesSent":3273873,"retransmittedSegments":1681,"bundledSegments":0,"parityPackets":0,"recoveredSegments":0,"timeoutLosses":0,"fastLosses":0,"spuriousLosses":0,"duplicatePackets":0,"srttUs":9496,"minRttUs":8915,"bandwidth":806886,"rateLimitsFound":0}
+  receiver {"packetsReceived":822,"packetsSent":202,"wireBytesReceived":1073468,"unauthenticatedPackets":0,"replayedPackets":0,"retransmittedSegments":0}
+  diag {}
+real run1 ok=true ms=700 mib=1 wireUpMiB=6.16 goodputMBps=1.50
+  sender {"packetsSent":4784,"packetsReceived":124,"wireBytesSent":6259222,"retransmittedSegments":2033,"bundledSegments":0,"parityPackets":0,"recoveredSegments":0,"timeoutLosses":0,"fastLosses":0,"spuriousLosses":0,"duplicatePackets":0,"srttUs":9555,"minRttUs":8937,"bandwidth":1743318,"rateLimitsFound":0}
+  receiver {"packetsReceived":896,"packetsSent":207,"wireBytesReceived":1170326,"unauthenticatedPackets":0,"replayedPackets":0,"retransmittedSegments":0}
+  diag {}
+real run2 ok=true ms=365 mib=1 wireUpMiB=2.45 goodputMBps=2.87
+  sender {"packetsSent":1902,"packetsReceived":116,"wireBytesSent":2488403,"retransmittedSegments":597,"bundledSegments":0,"parityPackets":0,"recoveredSegments":0,"timeoutLosses":0,"fastLosses":0,"spuriousLosses":0,"duplicatePackets":0,"srttUs":9579,"minRttUs":9166,"bandwidth":12137947,"rateLimitsFound":0}
+  receiver {"packetsReceived":882,"packetsSent":143,"wireBytesReceived":1152000,"unauthenticatedPackets":0,"replayedPackets":0,"retransmittedSegments":0}
+  diag {}
+real run1 ok=true ms=873 mib=1 wireUpMiB=5.23 goodputMBps=1.20
+  sender {"packetsSent":4068,"packetsReceived":151,"wireBytesSent":5323643,"retransmittedSegments":1679,"bundledSegments":0,"parityPackets":0,"recoveredSegments":0,"timeoutLosses":0,"fastLosses":0,"spuriousLosses":0,"duplicatePackets":0,"srttUs":11511,"minRttUs":10774,"bandwidth":800923,"rateLimitsFound":0}
+  receiver {"packetsReceived":939,"packetsSent":232,"wireBytesReceived":1226590,"unauthenticatedPackets":0,"replayedPackets":0,"retransmittedSegments":0}
+  diag {}
+real run2 ok=true ms=423 mib=1 wireUpMiB=2.66 goodputMBps=2.48
+  sender {"packetsSent":2066,"packetsReceived":101,"wireBytesSent":2701732,"retransmittedSegments":741,"bundledSegments":0,"parityPackets":0,"recoveredSegments":0,"timeoutLosses":0,"fastLosses":0,"spuriousLosses":0,"duplicatePackets":0,"srttUs":8198,"minRttUs":7544,"bandwidth":962500,"rateLimitsFound":0}
+  receiver {"packetsReceived":843,"packetsSent":146,"wireBytesReceived":1099695,"unauthenticatedPackets":0,"replayedPackets":0,"retransmittedSegments":0}

@@ -120,6 +120,18 @@ describe('updateRoundKey', () => {
     expect(updateRoundKey(sameGhost)).toContain('public-helper');
     expect(updateRoundKey(sameGhost)).toContain('org-helper');
   });
+
+  // Persisted contract: users' saved "ignore this round" values are market-only keys
+  // (`p1@1.1.0|p2@2.0.0`). Without GitHub updates the key must stay byte-identical or an
+  // upgrade would resurface every dismissed banner; a new GitHub version must resurface it.
+  it('keeps the saved market-only key and adds GitHub Release updates to the round', () => {
+    const market = [marketItem({ pluginId: 'p1', ghostId: 'g1', version: '1.1.0' })];
+    expect(updateRoundKey(market, [])).toBe('p1@1.1.0');
+    const zcode = { instanceId: 'local~zcode', version: '0.1.1' };
+    const withGithub = updateRoundKey(market, [zcode]);
+    expect(withGithub).not.toBe('p1@1.1.0');
+    expect(updateRoundKey(market, [{ ...zcode, version: '0.1.2' }])).not.toBe(withGithub);
+  });
 });
 
 describe('ignoredRoundStorageKey', () => {

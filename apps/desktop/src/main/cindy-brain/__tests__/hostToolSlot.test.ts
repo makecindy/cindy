@@ -290,6 +290,7 @@ describe('plugin Host tool entry', () => {
       releasePluginUiRegions: noop, releasePluginAppearance: noop,
       pluginDeviceSync: { invalidate: noop }, pluginLiveScreenViews: { invalidate: noop }, getGhostPipeDispatcher: () => ({ onRuntimeState: noop }),
       networkSlotSingleton: null, fsSlotSingleton: null, getDesktopHostTerminalService: () => ({ disposePlugin: noop }),
+      getGhostFormDialogBridge: () => null,
       disposePluginHostTools, modelPickerSingleton: null, pluginInvocations: { invalidate: noop },
       invocationRuntimeGenerations: new Map(), broadcastGhostRuntimeStates: noop,
     };
@@ -297,6 +298,7 @@ describe('plugin Host tool entry', () => {
       GhostRuntime, sandbox: { adapter: deps.electronSandboxAdapter }, log: deps.log,
       network: { disposeGhost: noop }, fsSlot: { disposePlugin: noop },
       options: { publish: noop, onPluginStopped: disposePluginHostTools }, dispatcher: { onRuntimeState: noop },
+      profileHoldMessage: () => null, desktopPause: null, closed: false, publish: noop,
     }).runtime;
     const ghost = fixture().ghost;
     try {

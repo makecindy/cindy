@@ -116,6 +116,22 @@ describe('initial auth decision', () => {
     isCanary: false, deviceId: 'device', hasAccountDeletionReceipt: false,
     accountDeletionRestored: false, credentialStoreUnavailable: false,
   };
+  // unit, real Provider (甲 2026-11-17): the Host's start-failure reason reaches the login page through this
+  // context; a later Host state without one clears it.
+  it('passes the Host start-failure reason through and clears it with the next state', async () => {
+    let push!: (state: AuthState) => void;
+    mocks.service.onAuthStateChange.mockImplementation((listener) => {
+      push = listener;
+      return () => {};
+    });
+    mocks.service.initialize.mockResolvedValue({ ...signedOut, hostUnavailable: { reason: 'HOST_ACCOUNT_MISMATCH' } });
+    const hook = renderHook(() => useAuth(), { wrapper: AuthProvider });
+    await waitFor(() => expect(hook.result.current.hostUnavailableReason).toBe('HOST_ACCOUNT_MISMATCH'));
+
+    act(() => push({ ...signedOut, ownerGeneration: 2 }));
+    expect(hook.result.current.hostUnavailableReason).toBeNull();
+  });
+
   // unit：真实 Provider；旧 finally 把 boundary pending 判成完成，已有 reject 用例覆盖不到。
   it.each(['cloud', 'local', 'signed-out'] as const)('waits for stable %s after a pending initialize response', async (mode) => {
     let push!: (state: AuthState) => void;

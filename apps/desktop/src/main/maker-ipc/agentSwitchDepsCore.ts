@@ -3,8 +3,10 @@ import { createId } from '@paralleldrive/cuid2';
 import type { MakerSessionCreateOpts as CreateOpts } from './sessionRequest.js';
 import { getDbClient } from '../localDb/client/current.js';
 import { sessions } from '../localDb/schema.js';
-import { dbToMakerAgentKind } from '../../shared/agentKindConversion.js';
+import { dbToMakerAgentKind, dbToMakerEngineKind, isPluginEngineKind } from '../../shared/agentKindConversion.js';
 import { getActiveCatalog } from '../maker-host/active-catalog.js';
+import { setThinkingEnabledInMemory } from '../maker-host/newMakerDefaultsCache.js';
+import { MAKER_PUSH } from './channels.js';
 import { lookupVerifiedContextWindow } from './contextOverflowRollover.js';
 import type { MakerSessionAgentSwitchHandlerDeps } from './sessionAgentSwitchHandler.js';
 
@@ -29,6 +31,7 @@ export const readAgentSwitchSessionRow: SwitchDeps['getSessionRow'] = async (ses
         workingDir: sessions.workingDir,
         source: sessions.source,
         agentDeviceId: sessions.agentDeviceId,
+        permissionMode: sessions.permissionMode,
       })
       .from(sessions)
       .where(eq(sessions.id, sessionId))
@@ -44,7 +47,8 @@ export function createAgentSwitchDbApply(
   return async (sessionId, patch) => {
       // 把 Agent 挪到另一台电脑时那台的目录才算数，不拿本机目录的窗口写进去。
       const movingToOtherDevice = typeof patch.agentDeviceId === 'string';
-      const verifiedWindow = movingToOtherDevice ? undefined : lookupVerifiedContextWindow(
+      // 插件引擎不在内置模型目录里，没有可核实的上下文窗口。
+      const verifiedWindow = movingToOtherDevice || isPluginEngineKind(patch.agentKind) ? undefined : lookupVerifiedContextWindow(
         (agentKind, modelId, pid) =>
           resolveConfiguredContextWindow(
             getActiveCatalog(),
@@ -114,7 +118,8 @@ export function createSwitchedSessionBootstrap({
       }
       const co = buildCreateOptsWithStderr({
         id: sessionId,
-        agentKind: dbToMakerAgentKind(row.agentKind),
+        // 插件引擎任务按自己的引擎重建(dbToMakerAgentKind 会把 'acp' 当成 Claude Code)。
+        agentKind: dbToMakerEngineKind(row.agentKind),
         workingDir: row.workingDir,
         model: row.model ?? undefined,
         providerId: row.providerId,
@@ -157,5 +162,25 @@ export function createSwitchedSessionBootstrap({
       await ensureRemoteReadyForSessionStart({ createOpts: co });
       await bootstrapSession(co, assertOwner, opts?.nativeHistoryResume);
       broadcastSessionCreated(sessionId);
+  };
+}
+
+/** register.ts's rememberThinkingIntent of the agent switch deps (a committed switch's thinking choice). */
+export function createRememberThinkingIntent(ports: {
+  broadcastToAllWindows: (channel: string, payload: unknown) => void;
+}): NonNullable<SwitchDeps['rememberThinkingIntent']> {
+  const { broadcastToAllWindows } = ports;
+  return ({ agentKind, providerId, model, thinking }) => {
+    setThinkingEnabledInMemory(agentKind, providerId, model, thinking);
+    // 同步本机 renderer 的记忆：主进程写的只是镜像，renderer 才是 providerModelMemory
+    // 的真相源。不写回这一笔，renderer 的全量快照会一直「尚未包含该选择」，提交时写入
+    // 的钉子也就撤不掉，反而会长期压住用户在被控端后来的显式改动（Greptile P1）。
+    broadcastToAllWindows(MAKER_PUSH.DRAFT_PREF_APPLY, {
+      agent: agentKind,
+      providerId: providerId ?? '',
+      modelId: model,
+      active: false,
+      thinking,
+    });
   };
 }

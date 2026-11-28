@@ -22,7 +22,7 @@ export default {
     'src/renderer/features/bots/useRemoteBots': { partial: `export const useRemoteBots=()=>${data}.remoteBots;` },
     'src/renderer/features/bots/companionCloudStore': { partial: 'const snapshot={enabled:false,actors:[],demotedBotIds:[]}; export const useCompanionCloud=()=>snapshot;' },
     'src/renderer/features/bots/botGroupStore': { partial: `export const useBotGroupList=()=>({groups:${data}.groups||[],loaded:true});` },
-    'src/renderer/features/device-link/useDeviceLinkDeviceList': 'export const useDeviceLinkDeviceList=()=>[];',
+    'src/renderer/features/device-link/useDeviceLinkDeviceList': { partial: 'export const useDeviceLinkDeviceList=()=>[]; export const useDeviceLinkDeviceListRequestState=()=>({status:"ready",error:null});' },
     'src/renderer/state/agentIslandActivity': { partial: `export const useAgentIslandActivityMap=()=>new Map(${data}.activities||[]);` },
     'src/renderer/features/bots/BotCreateMenu': 'export const BotCreateMenu=()=>null;',
     'src/renderer/features/bots/BotDeleteDialog': 'export const BotDeleteDialog=()=>null;',
@@ -103,6 +103,17 @@ export default {
         lastMessage: { authorKind: index === 0 ? 'bot' : 'user', isSelf: false, authorName: index === 0 ? 'Dash' : 'Alex', preview: index === 0 ? '报告已整理好，等你查看' : '今天的讨论有新消息', createdAt: Date.now() - (index + 1) * 60000 },
         serverUnread: { count: index === 0 ? 3 : 12, mentioned: false }, createdAt: 1, updatedAt: Date.now() - (index + 1) * 60000,
       })) },
+    },
+    // 副标题横贯整行（时间在名称行），未读角标必须自己占列，不能压住预览文字。
+    'topic-reply-unread': {
+      about: 'Topic-reply preview truncates before the unread count instead of running under it',
+      data: { profiles: [], remoteBots: [], route: '/bots', groups: [{
+        id: 'topic-unread', name: 'Cindy Plugin For VSCode', replyMode: 'all', speakingMode: 'auto',
+        members: ['dash', 'lizi'].map(preset => ({ botId: preset, name: preset, avatar: `cindy://avatar/preset/${preset}`, avatarColor: 'violet', status: 'active' })),
+        organizerBotId: 'dash', projectDir: null, speakingBotIds: [], planningBotId: null, openPlan: null,
+        lastMessage: { authorKind: 'user', isSelf: false, authorName: 'liugaowei', preview: '评价一下这个插件的安装步骤和权限说明，顺便看看更新记录', createdAt: Date.now() - 3600000, messageId: '40000000-0000-4000-8000-000000000002', threadRootId: '40000000-0000-4000-8000-000000000001' },
+        serverUnread: { count: 1, mentioned: false }, createdAt: 1, updatedAt: Date.now() - 3600000,
+      }] },
     },
     'message-kinds': {
       about: 'Bot result green, ordinary group unread count, group mention blue count; execution states retain priority',
@@ -236,6 +247,20 @@ export default {
         { id: 'designer', name: 'Designer', deviceId: 'cccccccccccccccccccccccccccccccc', deviceName: '', online: false, preview: 'Ready', activityAt: 0 },
       ] },
     },
+    'remote-hide-recover': {
+      about: '#13461: Hide a remote companion via context menu, inspect it with its device label in the shared hidden section, and restore it',
+      data: {
+        profiles: [
+          { ...profiles[0], name: '写作伙伴', avatar: 'cindy://avatar/preset/dash', lastMessagePreview: '今天的草稿已整理好' },
+          { ...profiles[1], name: '本地隐藏伙伴', avatar: 'cindy://avatar/preset/lizi', hiddenAt: 10 },
+        ],
+        remoteBots: [
+          { id: 'studio-ops', name: '发布助手', deviceId: 'mac-studio', deviceName: 'Mac Studio', avatar: 'cindy://avatar/preset/cindy', avatarColor: 'blue', online: true, connectionKnown: true, preview: 'CI 流水线已就绪', activityAt: 500 },
+          { id: 'office-review', name: '代码评审', deviceId: 'office-mac', deviceName: 'Office Mac', avatar: 'cindy://avatar/preset/dash', avatarColor: 'amber', online: false, connectionKnown: true, preview: '昨天完成 3 条建议', activityAt: 400 },
+        ],
+        route: '/bots/mate-1',
+      },
+    },
   },
   async check(page, ui) {
     if (ui.case === 'startup-read-pending') {
@@ -312,6 +337,20 @@ export default {
       assert.deepEqual(await titles(), ['pinned-0', 'pinned-1', 'pinned-2']);
       await ui.capture('manual-restored');
       await openMenu();
+      return;
+    }
+    if (ui.case === 'topic-reply-unread') {
+      const row = page.locator('[data-bot-group-id="topic-unread"]');
+      await row.getByText('Cindy Plugin For VSCode', { exact: true }).waitFor();
+      assert.equal((await row.locator('[data-teammate-unread-count]').innerText()).trim(), '1');
+      // 预览与角标各占一列：预览（包括可点的话题回复行）右缘必须停在角标左边。
+      const [previewRight, badgeLeft] = await row.evaluate(el => {
+        const badge = el.querySelector('[data-teammate-unread-count]').getBoundingClientRect();
+        const preview = el.querySelector('button[title]').getBoundingClientRect();
+        return [preview.right, badge.left];
+      });
+      assert.ok(previewRight <= badgeLeft, `preview ends at ${previewRight}, badge starts at ${badgeLeft}`);
+      await ui.capture('topic-reply-unread');
       return;
     }
     const showIcons = async () => {
@@ -480,6 +519,12 @@ export default {
     if (ui.case === 'running-preview-parity') {
       const expand = page.getByRole('button', { name: /Show all|显示全部|查看全部/ });
       if (await expand.count()) await expand.click();
+      // A draggable attribute alone cannot override the global native drag reset.
+      const chatSources = page.locator('[data-sidebar-section="teammates"] button[draggable=true]');
+      assert.equal(await chatSources.count(), 4);
+      for (const source of await chatSources.all()) {
+        assert.equal(await source.evaluate(node => getComputedStyle(node).webkitUserDrag), 'element');
+      }
       const previews = page.locator('[data-teammate-running-preview]');
       assert.equal(await previews.count(), 3);
       // The screenshot runner defaults to reduced motion. Verify both modes explicitly.
@@ -487,13 +532,14 @@ export default {
         assert.equal(await preview.locator('.session-status-breathing').evaluate(node => getComputedStyle(node).animationName), 'none');
       }
       await page.emulateMedia({ colorScheme: ui.theme, reducedMotion: 'no-preference' });
-      const groupAnimation = await page.locator('[data-testid="bot-group-running"] .session-status-breathing').evaluate(node => getComputedStyle(node).animationName);
-      assert.notEqual(groupAnimation, 'none');
-      const groupColor = await page.locator('[data-testid="bot-group-running"]').evaluate(node => getComputedStyle(node).color);
+      assert.equal(await page.locator('[data-testid="bot-group-running"]').count(), 0, 'executing group keeps showing latest message');
+      const firstAnimation = await previews.first().locator('.session-status-breathing').evaluate(node => getComputedStyle(node).animationName);
+      assert.notEqual(firstAnimation, 'none');
+      const firstColor = await previews.first().evaluate(node => getComputedStyle(node).color);
       for (const preview of await previews.all()) {
-        assert.equal(await preview.evaluate(node => getComputedStyle(node).color), groupColor);
+        assert.equal(await preview.evaluate(node => getComputedStyle(node).color), firstColor);
         const icon = preview.locator('.session-status-breathing');
-        assert.equal(await icon.evaluate(node => getComputedStyle(node).animationName), groupAnimation);
+        assert.equal(await icon.evaluate(node => getComputedStyle(node).animationName), firstAnimation);
         assert.equal(await icon.locator('svg').getAttribute('width'), '11');
       }
       assert.equal(await page.locator('[data-teammate-row-status] [data-teammate-status="running"]').count(), 0);
@@ -668,24 +714,14 @@ export default {
       const box = await badge.first().boundingBox();
       assert.ok(box && box.width === 14 && box.height === 14, 'mentions use the same compact status point');
       const colors = await badge.evaluateAll(nodes => nodes.map(node => node.firstElementChild.style.backgroundColor));
-      assert.deepEqual(colors, ['var(--warning-accent)', 'var(--bot-unread-bg)'], 'running stays orange, group attention is blue');
+      assert.deepEqual(colors, ['var(--bot-unread-bg)', 'var(--bot-unread-bg)'], 'executing group keeps blue mention point');
       assert.equal(await page.locator('button:visible:has([data-teammate-mention]) [data-teammate-status]:visible').count(), 2, 'one indicator per marked avatar');
       await ui.capture('collapsed-mention');
       return;
     }
     if (ui.case.startsWith('long-speakers-')) {
-      const running = page.getByTestId('bot-group-running');
-      const label = running.locator('[title]');
-      const badge = page.locator('[data-teammate-status="running"]');
-      const metrics = await label.evaluate(node => ({
-        width: node.clientWidth, fullWidth: node.scrollWidth,
-        right: node.getBoundingClientRect().right, overflow: getComputedStyle(node).overflow,
-        textOverflow: getComputedStyle(node).textOverflow,
-      }));
-      assert.ok(metrics.width > 0 && metrics.fullWidth > metrics.width, 'long names reach the text boundary');
-      assert.equal(metrics.overflow, 'hidden');
-      assert.equal(metrics.textOverflow, 'ellipsis');
-      assert.equal(await badge.count(), 0, 'expanded running has no duplicate orange point');
+      assert.equal(await page.getByTestId('bot-group-running').count(), 0, 'executing group keeps showing latest message');
+      assert.equal(await page.locator('[data-teammate-status="running"]').count(), 0, 'executing group has no running point');
       return;
     }
     if (ui.case === 'device-names') {
@@ -694,6 +730,26 @@ export default {
       assert.match(text, /Mac Studio \(2\)/);
       assert.ok(text.includes(await ui.t('bots.cloud.unknownDevice')));
       assert.doesNotMatch(text, /[abc]{32}/);
+      return;
+    }
+    if (ui.case === 'remote-hide-recover') {
+      const remoteRow = page.getByRole('button', { name: /发布助手/ });
+      await remoteRow.click({ button: 'right' });
+      const hideItem = page.getByRole('menuitem', { name: await ui.t('bots.list.hide'), exact: true });
+      await hideItem.waitFor();
+      assert.equal(await page.getByRole('menuitem', { name: await ui.t('bots.lifecycle.delete'), exact: true }).count(), 0);
+      await ui.capture('remote-context-menu');
+      await hideItem.click();
+      await page.getByText('CI 流水线已就绪').waitFor({ state: 'detached' });
+      const hiddenToggle = page.getByRole('button', { name: await ui.t('bots.list.hidden', { count: 2 }), exact: true });
+      await hiddenToggle.click();
+      const unhideButton = page.getByRole('button', { name: await ui.t('bots.list.unhideNamed', { name: '发布助手' }), exact: true });
+      await unhideButton.waitFor();
+      assert.equal(await page.getByRole('button', { name: await ui.t('bots.lifecycle.deleteTitle'), exact: true }).count(), 1);
+      await ui.capture('hidden-section-expanded');
+      await unhideButton.click();
+      await page.getByText('CI 流水线已就绪').waitFor();
+      assert.equal(await page.getByRole('button', { name: await ui.t('bots.list.hidden', { count: 1 }), exact: true }).count(), 1);
       return;
     }
     const rows = page.getByText('Ready', { exact: true });

@@ -12,6 +12,7 @@ import {
   AUTO_REVIEW_RETRY_ATTEMPTS,
   AUTO_REVIEW_RETRY_BACKOFF_MS,
   annotatePermissionRequestForUnavailableReview,
+  annotatePermissionRequestForAutoReview,
   autoReviewRetryBudgetMs,
   getAutoReviewDelegateHardCeilingMs,
   DEFAULT_AUTO_REVIEW_TIMEOUT_POLICY,
@@ -31,6 +32,7 @@ import {
   isAutoReviewNewUserInput,
   resolveAutoReviewDecision,
   formatPermissionDenial,
+  PERMISSION_CONFIRMATION_TIMEOUT_GUIDANCE,
   toolAutoReviewAction,
   type AutoReviewRequest,
 } from './auto-review-decision.js';
@@ -88,6 +90,36 @@ describe('toolAutoReviewAction', () => {
 });
 
 describe('resolveAutoReviewDecision', () => {
+  // #8706 unit: the real normalization/annotation/notice chain must keep quota,
+  // discard arbitrary delegate text, and never grant permission on model failure.
+  it('preserves only the safe quota cause through confirmation metadata and notices', async () => {
+    const decision = await resolveAutoReviewDecision(request({ kind: 'exec', command: 'npm run build' }), async () => ({
+      verdict: 'ask', unavailable: true, unavailableReason: 'quota_exhausted', reason: 'PRIVATE_UPSTREAM_BODY',
+    }));
+    expect(decision).toMatchObject({ verdict: 'ask', unavailable: true, unavailableReason: 'quota_exhausted' });
+    const permission: { kind: 'permission'; metadata?: Record<string, unknown> } = { kind: 'permission' };
+    const annotated = annotatePermissionRequestForAutoReview(permission, decision);
+    expect(annotated.metadata).toMatchObject({ autoReviewUnavailable: true, autoReviewUnavailableReason: 'quota_exhausted' });
+    const emit = vi.fn();
+    const notice = createAutoReviewUnavailableNotice(emit);
+    notice.notify(decision);
+    notice.notify(decision);
+    expect(emit).toHaveBeenCalledOnce();
+    expect(emit.mock.calls[0][0]).toContain('[AUTO_REVIEW_UNAVAILABLE_QUOTA]');
+    expect(isAutoReviewUnavailableNotice(emit.mock.calls[0][0])).toBe(true);
+    expect(JSON.stringify([decision, annotated, emit.mock.calls])).not.toMatch(/PRIVATE_UPSTREAM_BODY|Full access/);
+    notice.reset();
+    notice.notify(decision);
+    expect(emit).toHaveBeenCalledTimes(2);
+  });
+
+  it.each(['allow', 'block'] as const)('does not attach an outage to a valid %s', async (verdict) => {
+    const decision = await resolveAutoReviewDecision(request({ kind: 'exec', command: 'npm run build' }), async () => ({
+      verdict, unavailable: true, unavailableReason: 'quota_exhausted',
+    }));
+    expect(decision).toEqual({ verdict });
+  });
+
   it('names the legacy prompt result as an internal needs-review tier, not a UI prompt', () => {
     expect(classifyLocalAutoReviewTier(request({ kind: 'other' }))).toBe('needs-review');
     expect(classifyLocalAutoReviewTier(request({
@@ -791,6 +823,23 @@ it.each([
   expect(formatPermissionDenial(source, '  Only inspect.  ')).toBe(label + ': Only inspect.');
   expect(formatPermissionDenial(source, ' ')).toBe(label + '.');
   expect(formatPermissionDenial(source, 'x'.repeat(500))).toBe(label + ': ' + 'x'.repeat(240));
+});
+
+// 2026-11-21: Claude got "could not approve this tool call: timeout" and Codex "user rejected",
+// so teammates read an unanswered confirmation as the owner saying no.
+it.each(['timeout', 'interaction_timeout', 'hook_interaction_timeout', 'wechat_interaction_timeout'])(
+  'says an unanswered confirmation (%s) is not a user rejection',
+  (reason) => {
+    const text = formatPermissionDenial('system', reason);
+    expect(text).toBe(`Cindy could not approve this tool call (${reason}). ${PERMISSION_CONFIRMATION_TIMEOUT_GUIDANCE}`);
+    expect(text).toContain('the user did not reject it');
+    expect(text).toContain('Do not retry the same call automatically');
+  },
+);
+
+it('keeps other system and user denials free of the timeout guidance', () => {
+  expect(formatPermissionDenial('system', 'session_closed')).toBe('Cindy could not approve this tool call: session_closed');
+  expect(formatPermissionDenial('user', 'timeout')).toBe('User denied this tool call via Cindy: timeout');
 });
 
 

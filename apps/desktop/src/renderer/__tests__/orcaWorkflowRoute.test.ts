@@ -239,7 +239,7 @@ describe('OrcaWorkflowRoute source invariants', () => {
 
   it('renders lead labels with dynamic agent text and a VendorIcon in both Orca layouts', () => {
     expect(splitViewSource).toContain("const leadPaneLabel = t('orca.split.leadLabel', {");
-    expect(splitViewSource).toContain('agent: orcaAgentLabel(leadAgentKind)');
+    expect(splitViewSource).toContain('agent: orcaAgentLabel(leadAgentKind, leadPluginIdentity.name)');
     expect(splitViewSource).toContain('const leadPaneIcon = (');
     expect(splitViewSource).toContain('<VendorIcon');
     expect(splitViewSource).toContain('{leadPaneIcon}');
@@ -450,7 +450,7 @@ describe('OrcaWorkflowRoute source invariants', () => {
     expect(workerPanelSource).toContain('navigationMode="sidebar-embedded"');
     expect(workerPanelSource).toContain('sidebarTargetSessionId={leadSessionId}');
     expect(sessionViewSource).toContain('sidebarTargetSessionId={sidebarTargetSessionId}');
-    expect(sessionViewSource).toContain("const ownsWindowRoute = navigationMode === 'route-owner';");
+    expect(sessionViewSource).toContain("const ownsWindowRoute = paneFocused && navigationMode === 'route-owner';");
     expect(sessionViewSource).toContain('ownsWindowRoute && handoffFrom');
     expect(sessionViewSource).toContain('canNavigateSession && session?.parentSessionId');
     expect(sessionViewSource).toContain(
@@ -487,12 +487,12 @@ describe('OrcaWorkflowRoute source invariants', () => {
 
   it('shows the Lead identity bar only in the plain Orca Lead route', () => {
     expect(sessionViewSource).toContain(
-      'const ownsRoute = routeOwner ?? (!sessionIdProp && !isCompactRail && !isOrcaMode);',
+      'const ownsRoute = paneFocused && (routeOwner ?? (!sessionIdProp && !isCompactRail && !isOrcaMode));',
     );
     expect(sessionViewSource).toContain('const collabEnabled = isOrcaLeadSessionView;');
     expect(sessionViewSource).toContain('const showOrcaLeadIdentityBar = ownsRoute && collabEnabled;');
     expect(sessionViewSource).toContain("t('orca.split.leadLabel', {");
-    expect(sessionViewSource).toContain('orcaAgentLabel(leadAgentKind)');
+    expect(sessionViewSource).toContain('orcaAgentLabel(leadAgentKind, leadPluginIdentity.name)');
     expect(sessionViewSource).toContain('<VendorIcon');
     expect(sessionViewSource).toContain('{showOrcaLeadIdentityBar && (');
     expect(sessionViewSource).not.toContain('maximizePaneAria');

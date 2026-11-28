@@ -1,8 +1,7 @@
 import type { DbClient } from '../localDb/client/DbClient.js';
-import { supplementalConversationEstimates } from '@cindy/maker-shared/usage-cost-details';
 import { readPriorUserRoundCost } from '../localDb/ipc/messages.js';
 import {
-  addCompatibleRegionalMoney,
+  userRoundCostProjection,
   asValueEstimateMoney,
   legacyUsdMoney,
   normalizeRegionalMoney,
@@ -72,18 +71,12 @@ export async function refreshMediaUserTurnCost(
       ? legacyUsdMoney(meta.turnCostUsd)
       : null);
   const current = raw && meta.turnCostIsEstimate === true ? asValueEstimateMoney(raw) : raw;
-  const money = addCompatibleRegionalMoney(
-    [...(prior.money ? [prior.money] : []), ...(current ? [current] : []), ...supplementalConversationEstimates(meta)],
-    current?.currency,
-  );
-  if (!money) return null;
-  const isEstimate = money.kind === 'value-estimate' ||
-    supplementalConversationEstimates(meta).some(value => value.currency === money.currency) ||
-    (prior.money?.currency === money.currency && prior.hasEstimatedValue) ||
-    (current?.currency === money.currency && current.kind === 'value-estimate');
+  const round = userRoundCostProjection(prior, current, meta.turnUsageDetails);
+  if (!round) return null;
+  const { money, isEstimate, userTurnAmounts } = round;
   const patch = {
     turnUsageDetails: buildTurnUsageDetails({ ...normalizeTurnUsageDetails(meta.turnUsageDetails),
-      additionalCosts: prior.additionalCosts }),
+      additionalCosts: prior.additionalCosts, userTurnAmounts }),
     userTurnCost: money,
     userTurnCostIsEstimate: isEstimate,
     // JSON merge patch removes a stale USD compatibility projection for CNY.

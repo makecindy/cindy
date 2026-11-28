@@ -33,8 +33,35 @@ import {
   tiptapDocHasContent,
   type ComposerDraft,
 } from '@/lib/composerDraftStore';
+import { appendMcpAppComposerAttachment } from '@/lib/mcpAppComposerAttachment';
 
 const emptyDoc: JSONContent = { type: 'doc', content: [{ type: 'paragraph' }] };
+
+// Tier: unit at the renderer's production draft boundary. The minimum input
+// is one Main-delivered attachment, and the observable result is that the
+// existing unsent draft survives while a repeated receipt stays idempotent.
+it('appends a local MCP attachment without replacing the existing draft', () => {
+  const key = 'mcp-composer-attachment';
+  const existing = {
+    text: plainTextToTiptapDoc('/cindy:cindy-plugin-creator make a page'),
+    attachments: [attachment('existing')],
+    quotes: [],
+    browserComments: [],
+    builtInSkillIntent: { name: 'cindy-plugin-creator', commandName: 'cindy:cindy-plugin-creator' },
+    pendingGhostId: 'plugin-1',
+    focusAtEnd: true,
+  } satisfies ComposerDraft;
+  const added = {
+    id: 'mcp-1', name: 'notes.txt', path: '/cache/notes.txt', ext: '.txt', size: 5,
+    category: 'text' as const, mimeType: 'text/plain',
+  };
+  saveDraft(key, existing);
+  appendMcpAppComposerAttachment(key, added);
+  expect(getDraft(key)).toEqual({ ...existing, attachments: [...existing.attachments, added] });
+  appendMcpAppComposerAttachment(key, added);
+  expect(getDraft(key)?.attachments).toHaveLength(2);
+  clearDraft(key);
+});
 
 // Unit: a routed built-in must survive the editor/attachment snapshot saves, but
 // cease owning the draft when the user replaces its command (PR #6433).

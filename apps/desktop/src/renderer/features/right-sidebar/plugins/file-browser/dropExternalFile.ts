@@ -1,3 +1,4 @@
+import { isVideoPath } from '@/features/cc-agent/workdir-browse/lib/videoExt';
 import { isTextPreviewSupported } from '@/lib/textPreview';
 import { isDrawioPath } from '@/features/cc-agent/workdir-browse/lib/drawioExt';
 import { isImagePath } from '@/features/cc-agent/workdir-browse/lib/imageExt';
@@ -61,6 +62,7 @@ export function isDroppedFilePreviewSupported(filePath: string): boolean {
     isTextPreviewSupported(filePath) ||
     isImagePath(filePath) ||
     isPdfPath(filePath) ||
+    isVideoPath(filePath) ||
     isDrawioPath(filePath)
   );
 }

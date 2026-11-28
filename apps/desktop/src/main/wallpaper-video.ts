@@ -1,3 +1,4 @@
+import { SsrFBlockedError } from '@cindy/browser-control-runtime/ssrf-runtime';
 import { app } from 'electron';
 import { createHash } from 'node:crypto';
 import fs from 'node:fs/promises';
@@ -99,8 +100,41 @@ async function ensureWallpaperAsset(
           maxBytes: asset.bytes,
           redirect: 'error',
           isUrlAllowed: (candidate) => candidate === source.href,
-          request: (url, init) =>
-            guardedOutboundFetch(url, { ...init, credentials: 'omit' }, () => {}),
+          request: async (url, init) => {
+            try {
+              return await guardedOutboundFetch(url, { ...init, credentials: 'omit' }, () => {}, {
+                targetUrl: source.href,
+                // Manifest assets only; the transport binds this to the exact URL/host.
+                allowBenchmarkFakeIp: true,
+              });
+            } catch (error) {
+              // Capture before the downloader's privacy-preserving NETWORK wrapper.
+              // Never log raw errors: even nested messages may contain signed URLs.
+              let cause: unknown = error;
+              let reason = 'Network request failed';
+              let code: string | undefined;
+              for (let depth = 0; depth < 5 && cause instanceof Error; depth++) {
+                if (cause instanceof SsrFBlockedError) {
+                  reason = 'SSRF policy blocked the wallpaper request';
+                  code = 'SSRF_BLOCKED';
+                  break;
+                }
+                const candidate = (cause as NodeJS.ErrnoException).code;
+                if (
+                  candidate &&
+                  /^(?:ENOTFOUND|EAI_AGAIN|ECONNREFUSED|ECONNRESET|ETIMEDOUT|ENETUNREACH|EHOSTUNREACH|CERT_HAS_EXPIRED|DEPTH_ZERO_SELF_SIGNED_CERT|ERR_TLS_CERT_ALTNAME_INVALID|UND_ERR_CONNECT_TIMEOUT)$/.test(
+                    candidate,
+                  )
+                ) {
+                  code = candidate;
+                  reason = 'Wallpaper network request failed';
+                }
+                cause = cause.cause;
+              }
+              log.warn('Wallpaper request failed', { wallpaperId: id, kind, reason, code });
+              throw error;
+            }
+          },
           resume: false,
           retry: { maxAttempts: 3 },
           timeout: { totalMs: 120_000 },

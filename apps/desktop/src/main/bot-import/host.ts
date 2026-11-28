@@ -20,6 +20,7 @@ import { createBotCanonicalSession, createBotProfile, getBotMemoryService, getBo
 import { ensureBotWorkspaceDir, readBotProfileFolder, writeBotProfileFolder, BOT_PROFILE_TEXT_MAX_BYTES } from '../maker-ipc/botProfileFolder.js';
 import { splitImportedMemoryText } from '../maker-ipc/botMemoryService.js';
 import { memoryFileContent } from './memoryFiles.js';
+import { importedStandardSkill } from '../maker-ipc/botProjectTemplate.js';
 import { importBotSkillDirectory, importBotSkillFiles, normalizeBotSkillSlug, validateBotSkillFiles } from '../maker-ipc/botSkillStore.js';
 import { withBotProfileLocks } from '../maker-ipc/botProfileLock.js';
 import { findRoutineAutomations, prepareTeammateRoutineProject, setRoutineAutomationsRunning, writeRoutineAutomations } from '../maker-ipc/botRoutineAutomations.js';
@@ -730,12 +731,13 @@ export async function startCompanionImport(selection: CompanionImportSelection, 
       let needsPrivate = false;
       if (item.view.category === 'skills') {
         const slug = skillSlug(item);
+        const standard = importedStandardSkill(slug);
         if (item.skillArchive) {
           await importBotSkillDirectory(scope.root, botId, slug,
-            directory => materializeSkillArchive(item.skillArchive!, directory, companionEnvironmentStore, contentSecrets, scope.assert, true, slug, value => { needsPrivate = value; }), scope.assert, item.view.enabled !== false);
+            directory => materializeSkillArchive(item.skillArchive!, directory, companionEnvironmentStore, contentSecrets, scope.assert, true, slug, value => { needsPrivate = value; }), scope.assert, item.view.enabled !== false, standard);
         } else {
-        const projected = projectImportedSkill(item.files ?? [], slug, contentSecrets);
-        await importBotSkillFiles(scope.root, botId, slug, projected.files, scope.assert, item.view.enabled !== false);
+          const projected = projectImportedSkill(item.files ?? [], slug, contentSecrets);
+          await importBotSkillFiles(scope.root, botId, slug, projected.files, scope.assert, item.view.enabled !== false, standard);
         }
       } else if (snapshot.nativePackage && item.role === 'identity') {
         // Native identity belongs to SOUL, never reference/user memory.

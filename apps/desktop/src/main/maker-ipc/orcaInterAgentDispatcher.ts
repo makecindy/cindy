@@ -4,8 +4,8 @@ import {
   formatOrcaCommunicationMessage,
 } from '@cindy/orca-workflow';
 import { AUTO_REVIEW_DELEGATED_CONTINUATION, AUTO_REVIEW_SOURCE_CONTENT, AUTO_REVIEW_USER_INTENT } from '@cindy/maker-core';
-import { restoreAutoReviewUserIntent, type AutoReviewHistoryMessage } from './autoReviewUserIntent.js';
-import type { AgentKind, SessionSendOptions, SessionSendResult, UserMessage } from '@cindy/maker-core';
+import { restoreAutoReviewUserIntent, type AutoReviewHistory } from './autoReviewUserIntent.js';
+import type { AgentKind, EngineKind, SessionSendOptions, SessionSendResult, UserMessage } from '@cindy/maker-core';
 
 import type {
   AgentInputCreateOpts,
@@ -41,8 +41,8 @@ export type DispatchOrcaInterAgentMessageResult =
   | {
       ok: true;
       mode: OrcaInterAgentDispatchMode;
-      /** Runtime that accepted the message; queued messages have not switched yet. */
-      agentKind?: AgentKind;
+      /** Runtime that accepted the message; queued messages have not switched yet. 'acp' = plugin-engine Worker. */
+      agentKind?: EngineKind;
       clientId: string;
       dispatchOutcome: CollabDispatchSuccessOutcome | CollabDispatchQueuedOutcome;
       targetTitle?: string | null;
@@ -89,7 +89,7 @@ export interface DispatchOrcaInterAgentMessageParams {
 /** Orca dispatcher 只依赖 maker-core session 的最小发送接口，避免绑定完整 Maker 实例。 */
 interface PersistedUserMessageSession {
   id: string;
-  agentKind?: AgentKind;
+  agentKind?: EngineKind;
   isTurnRunning?: () => boolean;
   getTurnGeneration?: () => number;
   capabilities?: { sameTurnSteer: { supported: boolean } };
@@ -114,7 +114,7 @@ export type OrcaInterAgentSendToSessionInternalResult =
   | {
       ok: true;
       targetSessionId: string;
-      agentKind: AgentKind;
+      agentKind: EngineKind;
       wakeKind: 'resumed' | 'already-active' | 'created' | 'queued';
       targetTitle: string | null;
       targetLastUserSendAt: string | null;
@@ -130,6 +130,7 @@ export type OrcaInterAgentSendToSessionInternalResult =
         | 'DELETED'
         | 'BUSY'
         | 'AGENT_NOT_READY'
+        | 'HOST_NOT_READY'
         | 'UNSUPPORTED_CAPABILITY'
         // create 显式执行配置专用;dispatcher 恒走 jump,仅镜像共用函数的联合形状。
         | 'BUDGET_MODEL_REQUIRES_API_MODE'
@@ -176,7 +177,7 @@ export interface OrcaInterAgentDispatcherDeps<TSessionMeta> {
     rollback: () => void | Promise<void>;
   } | undefined;
   onDirectInputDispatched?: (sessionId: string) => void | Promise<void>;
-  readAutoReviewHistory?: (sessionId: string) => Promise<AutoReviewHistoryMessage[]>;
+  readAutoReviewHistory?: (sessionId: string) => Promise<AutoReviewHistory>;
   createId: () => string;
   getSessionMeta: (sessionId: string) => Promise<TSessionMeta | null>;
   directWorkerRecovery?: {
@@ -185,6 +186,8 @@ export interface OrcaInterAgentDispatcherDeps<TSessionMeta> {
   };
   getSessionRowSnapshot: (sessionId: string) => Promise<OrcaInterAgentSessionRowSnapshot | null>;
   getLiveSession: (sessionId: string) => PersistedUserMessageSession | null | undefined;
+  /** A newly promoted runtime must finish the current turn and hydrate before accepting a report. */
+  needsOrcaRuntimeRefresh?(sessionId: string): boolean;
   /** Apply a deferred route while the per-session send lock is held. */
   applyPendingAgentSwitch?: (sessionId: string) => Promise<void>;
   hasPendingAgentSwitch?: (sessionId: string) => boolean;
@@ -541,6 +544,9 @@ export function createOrcaInterAgentDispatcher<TSessionMeta>(
     // 插话只由发送方显式选择（delivery=steer），且只对正在运行的目标尝试；空闲目标照常直发。
     const liveTurn = deps.getLiveSession(params.targetSessionId);
     if (params.delivery === 'steer' && liveTurn?.isTurnRunning?.() === true) {
+      if (params.source === 'worker' && deps.needsOrcaRuntimeRefresh?.(params.targetSessionId)) {
+        return enqueueQueuedMessage('orca report queued until role runtime is ready');
+      }
       if (
         !deps.steerControlInput || !liveTurn.capabilities?.sameTurnSteer.supported ||
         !liveTurn.getTurnGeneration || liveTurn.remoteHostId
@@ -566,7 +572,8 @@ export function createOrcaInterAgentDispatcher<TSessionMeta>(
           if (
             deps.getLiveSession(params.targetSessionId) !== liveTurn ||
             !liveTurn.isTurnRunning?.() ||
-            liveTurn.getTurnGeneration?.() !== expectedTurn.turnGeneration
+            liveTurn.getTurnGeneration?.() !== expectedTurn.turnGeneration ||
+            (params.source === 'worker' && deps.needsOrcaRuntimeRefresh?.(params.targetSessionId))
           ) return null;
           deliveryAttempt.started = true;
           const outcome = await deps.steerControlInput!(params.targetSessionId, item, expectedTurn);
@@ -697,9 +704,11 @@ export function createOrcaInterAgentDispatcher<TSessionMeta>(
           throw new Error('Agent switch is still pending; retry the send after recovery');
         }
         await deps.prepareUnhealthySession?.(params.targetSessionId);
+        const targetAgentKind = deps.getLiveSession(params.targetSessionId)?.agentKind;
         try {
           await deps.hydrateOrcaSessionIfNeeded?.(params.targetSessionId, meta);
         } catch (err) {
+          if (targetAgentKind === 'acp') throw err;
           // Best effort: a failed rebuild either left the old runtime (deliver as before)
           // or closed it (no live below, so the lazy-resume path starts a hydrated one).
           log.warn('orca inter-agent hydrate before direct send failed', {

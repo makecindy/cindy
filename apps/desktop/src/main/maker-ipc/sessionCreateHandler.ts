@@ -1,5 +1,5 @@
 import { assertSessionCreationCurrent, currentSessionCreationSignal, runSessionCreationAttempt } from '../localDb/sessionRuntimeCleanup.js';
-import type { AgentKind } from '@cindy/maker-core';
+import type { EngineKind } from '@cindy/maker-core';
 
 import { MAKER_INVOKE } from './channels.js';
 import type { IpcHandlerRegistry } from './ipcHandlerRegistry.js';
@@ -41,7 +41,7 @@ function remoteRouteErrorCode(err: unknown): IpcErrorCode | null {
 
 export interface MakerSessionCreateResultSession {
   id: string;
-  agentKind: AgentKind;
+  agentKind: EngineKind;
   workDir: string;
   capabilities: unknown;
 }
@@ -77,7 +77,7 @@ export interface MakerSessionCreateHandlerDeps<
   sendWorkerReadyMessage(session: TSession): void;
   broadcastSessionCreated(sessionId: string): void;
   logCreateSession(fields: Record<string, unknown>): void;
-  warnStderr(agentKind: AgentKind, line: string): void;
+  warnStderr(agentKind: EngineKind, line: string): void;
 }
 
 export function registerMakerSessionCreateHandler<TSession extends MakerSessionCreateResultSession>(

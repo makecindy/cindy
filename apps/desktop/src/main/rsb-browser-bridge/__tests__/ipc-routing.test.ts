@@ -15,13 +15,17 @@ vi.mock('electron', () => {
   };
 });
 
-import { ipcMain } from 'electron';
+import { app, ipcMain, webContents, type WebContents } from 'electron';
 import {
   RSB_BROWSER_BRIDGE_PIN_CHANNEL,
+  RSB_BROWSER_BRIDGE_UNPIN_CHANNEL,
   RSB_BROWSER_BRIDGE_RELEASE_CHANNEL,
+  RSB_FILE_PREVIEW_OPENER_CHANNEL,
+  RSB_BROWSER_BRIDGE_RESOURCE_EVENT_CHANNEL,
 } from '../../../shared/rsbBrowserBridge.js';
 import { _resetRsbBrowserBridgeIpcForTests, registerRsbBrowserBridgeIpc } from '../ipc.js';
-import type { TabRegistry } from '../registry.js';
+import { BG_MEMORY_EVICT_KB, FG_MEMORY_KILL_KB, RESOURCE_WATCHDOG_INTERVAL_MS } from '../resource-watchdog.js';
+import { TabRegistry } from '../registry.js';
 
 function handler(channel: string) {
   const handlers = (ipcMain as unknown as {
@@ -76,6 +80,72 @@ afterEach(() => {
 });
 
 describe('RSB browser bridge ownership routing', () => {
+  // #11392, unit: preview links need task attribution without exposing local
+  // documents as browser automation targets. Exercise the real IPC and registry.
+  it('attributes preview links to their host for the lifetime of the guest', () => {
+    const owner = { id: 7, send: vi.fn(), isDestroyed: () => false };
+    const mockGuest = { ...fakeGuest(7), hostWebContents: owner, once: vi.fn() };
+    const guest = mockGuest as unknown as WebContents;
+    vi.mocked(webContents.fromId).mockReturnValue(guest);
+    const registry = new TabRegistry({ lookupWebContents: webContents.fromId, logger: { info: vi.fn(), warn: vi.fn() } });
+    register(registry);
+    const report = handler(RSB_FILE_PREVIEW_OPENER_CHANNEL);
+    const record = { sessionId: 'source-task', tabId: 'file-preview', webContentsId: 101 };
+    const notify = vi.fn();
+    registry.onReport(notify);
+    expect(() => report({ sender: { id: 9 } }, record)).toThrow(/INVALID_PARAMS/);
+    expect(registry.findByWebContentsId(101)).toBeNull();
+    report({ sender: { id: 7 } }, record);
+    expect(notify).toHaveBeenCalledWith(record);
+    expect(registry.findByWebContentsId(101)).toEqual(record);
+    expect(registry.listBySession('source-task')).toEqual([]);
+    expect(registry.getWebContentsByTabId('file-preview')).toBeNull();
+    // Native child windows keep their opener alive via an ordinary pin lease.
+    const closeChild = registry.acquirePinLease(record.tabId);
+    expect(owner.send).toHaveBeenCalledWith(RSB_BROWSER_BRIDGE_PIN_CHANNEL, { tabId: record.tabId });
+    closeChild();
+    expect(owner.send).toHaveBeenCalledWith(RSB_BROWSER_BRIDGE_UNPIN_CHANNEL, { tabId: record.tabId });
+    mockGuest.isDestroyed = () => true;
+    mockGuest.once.mock.calls.find(([event]) => event === 'destroyed')![1]();
+    expect(registry.findByWebContentsId(101)).toBeNull();
+    vi.mocked(webContents.fromId).mockReset();
+  });
+
+  // #11392, unit: use the registered preview IPC and the real watchdog timer.
+  // A synthetic memory sample exercises the limits without allocating that memory.
+  it('routes preview resource limits to its owner and preserves the automation boundary', () => {
+    vi.useFakeTimers();
+    try {
+      const owner = { id: 7, send: vi.fn(), once: vi.fn(), isDestroyed: () => false };
+      const guest = { ...fakeGuest(owner.id), hostWebContents: owner, once: vi.fn(),
+        getOSProcessId: () => 88, isCurrentlyAudible: () => false, forcefullyCrashRenderer: vi.fn() };
+      vi.mocked(webContents.fromId).mockReturnValue(guest as unknown as WebContents);
+      const metrics = (memory: number) => [{ pid: 88, memory: { workingSetSize: memory }, cpu: { percentCPUUsage: 0 } }] as ReturnType<typeof app.getAppMetrics>;
+      vi.mocked(app.getAppMetrics).mockReturnValue(metrics(BG_MEMORY_EVICT_KB));
+      const registry = new TabRegistry({ lookupWebContents: webContents.fromId, logger: { info: vi.fn(), warn: vi.fn() } });
+      register(registry);
+      const report = handler(RSB_FILE_PREVIEW_OPENER_CHANNEL);
+      const record = { sessionId: 'source', tabId: 'file', webContentsId: 101 };
+      report({ sender: owner }, { ...record, visible: true });
+      vi.advanceTimersByTime(RESOURCE_WATCHDOG_INTERVAL_MS);
+      expect(owner.send).not.toHaveBeenCalled();
+      report({ sender: owner }, { ...record, visible: false });
+      vi.advanceTimersByTime(RESOURCE_WATCHDOG_INTERVAL_MS);
+      expect(owner.send).toHaveBeenCalledWith(RSB_BROWSER_BRIDGE_RESOURCE_EVENT_CHANNEL, { tabId: 'file', kind: 'evict-request' });
+      report({ sender: owner }, { ...record, visible: true });
+      vi.mocked(app.getAppMetrics).mockReturnValue(metrics(FG_MEMORY_KILL_KB));
+      vi.advanceTimersByTime(RESOURCE_WATCHDOG_INTERVAL_MS);
+      expect(owner.send).toHaveBeenCalledWith(RSB_BROWSER_BRIDGE_RESOURCE_EVENT_CHANNEL, { tabId: 'file', kind: 'kill-notice', cause: 'memory' });
+      expect(guest.forcefullyCrashRenderer).toHaveBeenCalledOnce();
+      expect(registry.listAll()).toEqual([]);
+      expect(registry.getWebContentsByTabId('file')).toBeNull();
+    } finally {
+      vi.mocked(app.getAppMetrics).mockReturnValue([]);
+      vi.mocked(webContents.fromId).mockReset();
+      vi.useRealTimers();
+    }
+  });
+
   it('routes pin changes to the renderer that owns the tab', () => {
     const guest = fakeGuest(7);
     const owner = { id: 7, send: vi.fn(), isDestroyed: () => false };

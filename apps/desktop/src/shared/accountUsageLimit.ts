@@ -12,17 +12,23 @@ export interface UsageWindow {
   resetsAtSec: number | null | undefined;
 }
 
-function hasReset(w: UsageWindow): w is UsageWindow & { resetsAtSec: number } {
-  return typeof w.resetsAtSec === 'number' && Number.isFinite(w.resetsAtSec) && w.resetsAtSec > 0;
+/** Expired windows cannot keep an account blocked; unknown resets cannot borrow another window's reset. */
+export function accountUsageLimitFromExhaustedResets(
+  resetsMs: readonly (number | null)[],
+  nowMs: number,
+): AccountUsageLimit {
+  let latest: number | null = null;
+  for (const reset of resetsMs) {
+    if (reset === null || !Number.isFinite(reset) || reset <= 0) return { limited: true, resetAtMs: null };
+    if (reset > nowMs && (latest === null || reset > latest)) latest = reset;
+  }
+  return { limited: latest !== null, resetAtMs: latest };
 }
 
-/** Expired windows cannot keep an account blocked; unknown resets cannot borrow another window's reset. */
 export function accountUsageLimitFromWindows(windows: readonly UsageWindow[], nowMs: number): AccountUsageLimit {
-  const live = windows.filter((w) => !hasReset(w) || w.resetsAtSec * 1000 > nowMs);
-  const exhausted = live.filter((w) => w.usedPercent >= 100);
-  if (exhausted.length === 0) return { limited: false, resetAtMs: null };
-  if (exhausted.some((w) => !hasReset(w))) return { limited: true, resetAtMs: null };
-  return { limited: true, resetAtMs: Math.max(...exhausted.map((w) => w.resetsAtSec as number)) * 1000 };
+  const exhausted = windows.filter(w => w.usedPercent >= 100);
+  const resetsMs = exhausted.map(w => typeof w.resetsAtSec === 'number' ? w.resetsAtSec * 1000 : null);
+  return accountUsageLimitFromExhaustedResets(resetsMs, nowMs);
 }
 
 /** Only this model's scoped weekly window can restrict the selected model. */

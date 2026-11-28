@@ -42,7 +42,7 @@ it('clips the input and held card at the selected region while measuring only th
     const bindings = { StyleSheet: { absoluteFill: { position: 'absolute', left: 0, right: 0, top: 0, bottom: 0 } },
       adaptiveWindow: geometry, composerRegion: region, paneLayout: { detail: { x: 0, width: 800 } },
       windowDimensions: geometry, insets: geometry.insets, styles: {}, nativeComposerFrameAvailable: true, androidFrostedComposer: false,
-      sessionOperationLayout: { composerSlot: 'editable' }, shareSelectionActive: false,
+      sessionOperationLayout: { composerSlot: 'editable' }, shareSelectionActive: false, pendingInteractionDock: false,
       nativeShellLayout: { keyboardBottomInset: Math.max(0, keyboardHeight - 16) } };
     const clip = style(viewport, bindings);
     const input = style(layer, bindings);
@@ -53,6 +53,9 @@ it('clips the input and held card at the selected region while measuring only th
     expect(input.overflow).toBe('visible');
     expect(input.maxHeight).toBe(region.height);
     expect(input.bottom).toBe(-geometry.insets.bottom);
+    const pinned = style(layer, { ...bindings, pendingInteractionDock: true, pinPermissionActions: true,
+      sessionOperationLayout: { composerSlot: 'pending-interaction' }, topChromeHeight: 92, spacing: { sm: 8 } });
+    expect(pinned.maxHeight).toBe(Math.max(0, region.height - Math.max(0, 100 - region.y)));
   }
 });
 

@@ -36,6 +36,7 @@ import type { ImSlashHandlers } from './slashCommands';
 import { looksLikeSlashCommand } from './slashCommands';
 import type { ImRunAgentTurnArgs, ImTurnRunner } from './turnRunner';
 import type { ImChannelAdapter } from './types';
+import type { PersonalGuestGate } from './guestGate';
 import { describeInteractionSource } from './interactionSource';
 import { buildImReplyContextBlock } from './replyContext';
 import { captureImContext } from '../../../shared/imMessageSource';
@@ -49,10 +50,24 @@ import { isLaneTurnScopeChannel, type ChannelToolScope } from './channelToolScop
  */
 export { isStopCommand } from './controlCommands';
 
+/**
+ * Whether the message was sent inside a thread/topic. A message that opens a new topic from
+ * the main stream reads its context from the main stream, so it is not "in" that topic yet.
+ */
+function messageIsInThread(adapter: ImChannelAdapter, event: IMMessageEvent): boolean {
+  if (event.groupContextLane) return event.groupContextLane.threadId !== '';
+  const lane = adapter.companionLane?.(event.senderId);
+  return lane?.kind === 'group' && lane.threadId !== '';
+}
+
 export function createMessageHandler(
   adapter: ImChannelAdapter,
   slash: ImSlashHandlers,
   turnRunner: ImTurnRunner,
+  options: {
+    /** 设置页那份个人机器人的「群成员也能提问」(见 guestGate.ts); 伙伴连接不传。 */
+    guestGate?: PersonalGuestGate;
+  } = {},
 ): (im: TextChannelIM) => () => void {
   const { ui, channel, threadScoped } = adapter;
   // 富卡渠道(仅 feishu 实现这两个能力): 群主流 @ 开话题的「思考中」开场白卡
@@ -135,6 +150,22 @@ export function createMessageHandler(
           `speaker=...${(event.speaker?.id ?? '').slice(-8)}`,
       );
       return;
+    }
+
+    // ── 个人机器人的「群成员也能提问」: 群里非主人的消息先过这道门 ────────────
+    // 交给伙伴回复时按伙伴的规则, 不经过这里。主人在群里说话清零群成员的连续提问计数。
+    if (options.guestGate && event.speaker && !turnRunner.companionBotIdFor?.(event.contextId)) {
+      if (event.speaker.isOwner === true) {
+        options.guestGate.ownerSpoke(event);
+      } else if (!(await options.guestGate.admit(event, async (text) => {
+        await im.sendMarkdownText(event.senderId, text, { threadTs: event.scopeKey });
+      }))) {
+        log.info(
+          `dropped group member message sender=...${event.senderId.slice(-8)} ` +
+            `speaker=...${event.speaker.id.slice(-8)}`,
+        );
+        return;
+      }
     }
 
     let notificationSessionId: string | undefined;
@@ -337,7 +368,10 @@ export function createMessageHandler(
     // iMessage participation mode applies before any attachment notice.
     if (channel === 'imessage' && event.ambient === true && adapter.ambientTurnGate && await skipAmbient()) return;
 
-    const hasContent = event.text.length > 0 || event.attachments.length > 0;
+    // An entry the model can fetch by itself (an original over the direct-delivery cap) is content.
+    const hasContent = event.text.length > 0 || event.attachments.length > 0
+      || event.unsupported.some(entry => entry.retrievable);
+    const reportedUnsupported = event.unsupported.filter(entry => !entry.retrievable);
 
     // ── pure-unsupported: reply directly, do NOT invoke agent ───────────────
     if (!hasContent && !event.invoked && !event.replyContext && event.unsupported.length > 0) {
@@ -369,9 +403,9 @@ export function createMessageHandler(
     // Durable callers may retry a busy dispatch. Emit mixed-attachment notices
     // only after acceptance so those queue retries cannot repeat the notice.
     const notifyUnsupported = async () => {
-      if (!event.unsupported.length) return;
+      if (!reportedUnsupported.length) return;
       try {
-        await im.sendText(event.senderId, ui.agent.unsupportedNotice(event.unsupported), {
+        await im.sendText(event.senderId, ui.agent.unsupportedNotice(reportedUnsupported), {
           threadTs: event.scopeKey,
         });
       } catch (err) {
@@ -437,10 +471,16 @@ export function createMessageHandler(
         chatName: event.interactionSource?.chatName,
       }).catch(() => log.warn('received image history indexing failed'));
     }
+    // Resolve the sender once so early persistence and dispatch use the same authority.
+    const turnPermissionPolicy = adapter.turnPermissionPolicyFor?.(event);
+    const requesterIsOwner = turnPermissionPolicy?.autoReviewContext
+      ? turnPermissionPolicy.autoReviewContext.requesterAuthority === 'owner'
+      : isCommandAuthorized(event);
     if (adapter.prepareAgentTurnText) {
       handedOverAck = event.messageId ? ackProcessingEarly(im, event.messageId) : null;
       try {
         if (!notificationSessionId && !event.delivery) {
+          event.assertCurrent?.();
           prePersisted =
             (await turnRunner.persistInboundUserMessageEarly?.({
               botContextId: event.contextId,
@@ -448,6 +488,7 @@ export function createMessageHandler(
               scopeKey: threadScoped ? event.scopeKey : undefined,
               text: event.text,
               attachments: event.attachments,
+              requesterIsOwner,
               ...(event.protectedContent === true ? { protectedContent: true } : {}),
               // 群 / 私聊此刻还没算出来(渠道说明在拼), 先把发言人存上; 派发时补齐。
               ...(() => {
@@ -469,13 +510,6 @@ export function createMessageHandler(
     }
     const channelNoteSource = await channelNoteSourcePromise;
     const messageOrigin = imMessageOriginFor(event, channelNoteSource);
-    // 按事件挂 per-turn 权限策略(telegram 群成员触发 → 破坏性调用强确认)。
-    const turnPermissionPolicy = adapter.turnPermissionPolicyFor?.(event);
-    // A channel policy's own identity verdict wins (personal WeChat is always
-    // `unknown`); otherwise the control-command owner check applies.
-    const requesterIsOwner = turnPermissionPolicy?.autoReviewContext
-      ? turnPermissionPolicy.autoReviewContext.requesterAuthority === 'owner'
-      : isCommandAuthorized(event);
     // Telegram / 飞书由渠道自己登记带 transport 的作用域; 企业微信 / 钉钉 / Discord 的伙伴专线
     // 轮次登记一份不带 transport 的, 让伙伴技能等能按本轮触发者授权(否则主人也只读)。
     let replyScopeKey = event.scopeKey;
@@ -496,7 +530,7 @@ export function createMessageHandler(
             }
           : undefined);
       const fallbackReplyPrefix = !adapter.prepareAgentTurnText && event.replyContext
-        ? buildImReplyContextBlock(event.replyContext)
+        ? buildImReplyContextBlock(event.replyContext, event.text)
         : '';
       const deliveredReply = prepared?.replyContext ??
         (!adapter.prepareAgentTurnText ? event.replyContext : undefined);
@@ -546,6 +580,7 @@ export function createMessageHandler(
           text: event.text,
           invoked: event.invoked,
           hasReply: !!deliveredReply,
+          inThread: messageIsInThread(adapter, event),
           attachmentCount: event.attachments.length + (prepared?.contextAttachments?.length ?? 0),
           unavailable: [
             ...event.unsupported.map((entry) => `${entry.type}：${entry.label}`),
@@ -592,14 +627,18 @@ export function createMessageHandler(
         event.delivery.awaitPersistence();
         const dispatch = await turnRunner.dispatchAgentTurn({
           ...turnArgs, queueMode: 'external',
-          beforeProviderStart: async () => { event.assertCurrent?.(); event.delivery!.awaitPersistence(); },
+          beforeProviderStart: async () => {
+            event.assertCurrent?.();
+            event.delivery!.awaitPersistence();
+            if (event.delivery!.isCancelled?.()) throw new Error('IM_INPUT_CANCELLED');
+          },
         });
         if (dispatch.kind === 'busy') event.delivery.defer();
         else if (dispatch.kind === 'rejected') {
-          const text = dispatch.reason === 'missing_auth' ? ui.agent.apiKeyMissing
+          const text = dispatch.notice ?? (dispatch.reason === 'missing_auth' ? ui.agent.apiKeyMissing
             : dispatch.reason === 'companion_unavailable'
               ? ui.agent.companionUnavailable?.(dispatch.reason) ?? ui.agent.runtimeError(dispatch.reason)
-              : ui.agent.sendInternalError(dispatch.reason);
+              : ui.agent.sendInternalError(dispatch.reason));
           try {
             await im.sendText(event.senderId, text, { threadTs: replyScopeKey });
             event.delivery.accept();
@@ -613,6 +652,7 @@ export function createMessageHandler(
         await turnRunner.runAgentTurn(turnArgs);
       }
     } catch (err) {
+      if (event.delivery?.isCancelled?.()) return;
       try { event.assertCurrent?.(); }
       catch {
         const reactionId = await handedOverAck;

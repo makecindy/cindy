@@ -21,6 +21,7 @@ import {
   GHOST_SKILL_MD_MAX_BYTES,
   declaredAutoApproveTools,
   declaredGhostCindyModelActions,
+  declaredGhostHarnesses,
   type GhostCindyModelsAction,
   isGhostRuntimeControlPoint,
   ghostManifestToAuthorFormat,
@@ -149,6 +150,14 @@ export interface GhostInstallReceipt {
   observeCapabilityApproved?: true;
   companionsCapabilityApproved?: true;
   approvedCindyModelActions?: GhostCindyModelsAction[];
+  /**
+   * 用户在安装/更新确认里看到并接受过的任务执行引擎(`harnesses[].id`)。缺项 = 一个都没
+   * 批准:Host 认识该字段之前就声明了引擎的旧安装,升级后不会静默生效。可选字段,旧客户端
+   * 读到时按未知字段忽略,不判损坏。
+   */
+  approvedHarnesses?: string[];
+  approvedFileOpenerExtensions?: string[];
+  checksCapabilityApproved?: true;
   schemaVersion: typeof RECEIPT_SCHEMA_VERSION;
   id: string;
   /** Missing is a pre-namespace receipt. null is root; a string is an organization. */
@@ -1311,7 +1320,27 @@ export function approvedCindyModelActionsField(raw: unknown, manifest: GhostMani
   return approved.length ? { approvedCindyModelActions: approved } : {};
 }
 
+/**
+ * 只保留本次批准 manifest 仍声明、且本 Host 能运行(协议已知)的引擎 id;空列表省略字段。
+ * 批准只来自安装/更新确认里显示过的 `harnesses` 权限行,清单本身不能补写批准。
+ */
+export function approvedHarnessesField(raw: unknown, manifest: GhostManifest): { approvedHarnesses?: string[] } {
+  if (!Array.isArray(raw)) return {};
+  const approved = declaredGhostHarnesses(manifest).map((harness) => harness.id).filter((id) => raw.includes(id));
+  return approved.length > 0 ? { approvedHarnesses: approved } : {};
+}
+
+export function approvedFileOpenerExtensionsField(raw: unknown, manifest: GhostManifest): {
+  approvedFileOpenerExtensions?: string[];
+} {
+  if (!Array.isArray(raw)) return {};
+  const approved = manifest.fileOpener?.extensions.filter(extension => raw.includes(extension));
+  return approved?.length ? { approvedFileOpenerExtensions: approved } : {};
+}
+
 export function createGhostInstallReceipt(input: {
+  approvedHarnesses?: readonly string[];
+  approvedFileOpenerExtensions?: readonly string[];
   approvedCindyModelActions?: readonly string[];
   simulatorPreviousRelId?: string;
   simulatorMarketRelease?: GhostInstallReceipt['simulatorMarketRelease'];
@@ -1325,6 +1354,7 @@ export function createGhostInstallReceipt(input: {
   approvedAutoTools?: readonly string[];
   observeCapabilityApproved?: true;
   companionsCapabilityApproved?: true;
+  checksCapabilityApproved?: true;
   manifest: GhostManifest;
   localeResources: Record<string, GhostManifestLocaleResource>;
   enabled: boolean;
@@ -1365,6 +1395,9 @@ export function createGhostInstallReceipt(input: {
     ...(input.observeCapabilityApproved === true ? { observeCapabilityApproved: true as const } : {}),
     ...(input.companionsCapabilityApproved === true ? { companionsCapabilityApproved: true as const } : {}),
     ...approvedCindyModelActionsField(input.approvedCindyModelActions, input.manifest),
+    ...approvedHarnessesField(input.approvedHarnesses, input.manifest),
+    ...approvedFileOpenerExtensionsField(input.approvedFileOpenerExtensions, input.manifest),
+    ...(input.checksCapabilityApproved === true ? { checksCapabilityApproved: true as const } : {}),
     ...(input.packageSha256 ? { packageSha256: input.packageSha256 } : {}),
     ...(input.iconDataUrl ? { iconDataUrl: input.iconDataUrl } : {}),
     ...(input.installOrigin !== undefined ? { installOrigin: input.installOrigin } : {}),
@@ -1586,6 +1619,9 @@ function validateReceipt(
       ...(value.observeCapabilityApproved === true ? { observeCapabilityApproved: true as const } : {}),
       ...(value.companionsCapabilityApproved === true ? { companionsCapabilityApproved: true as const } : {}),
       ...approvedCindyModelActionsField(value.approvedCindyModelActions, manifestResult.manifest),
+      ...approvedHarnessesField(value.approvedHarnesses, manifestResult.manifest),
+      ...approvedFileOpenerExtensionsField(value.approvedFileOpenerExtensions, manifestResult.manifest),
+      ...(value.checksCapabilityApproved === true ? { checksCapabilityApproved: true as const } : {}),
       ...(typeof value.packageSha256 === 'string' ? { packageSha256: value.packageSha256 } : {}),
       ...(typeof value.iconDataUrl === 'string' ? { iconDataUrl: value.iconDataUrl } : {}),
       ...(installOrigin !== undefined ? { installOrigin } : {}),

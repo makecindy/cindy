@@ -90,6 +90,8 @@ export function extractText(raw: string | null | undefined, role: string): strin
       return typeof text === 'string' ? guard(text) : '';
     }
     if (typeof parsed === 'string') return guard(parsed);
+    // A bare numeric assistant reply is stored verbatim. Keep its original precision and spelling.
+    if (role === 'assistant' && typeof parsed === 'number') return raw;
     return '';
   } catch {
     return typeof raw === 'string' ? guard(raw) : '';

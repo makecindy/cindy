@@ -112,6 +112,13 @@ async function writeProjectInfo(
       : null;
   if (!projectKey || (!projectKey.startsWith('local:') && !projectKey.startsWith('remote:')))
     throwIpcError('INVALID_PARAMS', 'Invalid host project identity');
+  // The recursive creation hand-off carries the allocator's native path (Windows
+  // uses `\`), while `projectKey` above is normalized. Compare the identity this
+  // request already authorized in the same spelling, otherwise Main's own new
+  // directory re-enters picker authorization and is rejected (#11632).
+  const authorizedProjectKey = authorizedCreation
+    ? normalizeProjectKey(authorizedCreation)
+    : null;
   const changes =
     body.field === 'profile'
       ? requireObject(body.value, 'value')
@@ -252,7 +259,7 @@ async function writeProjectInfo(
       assertCurrent();
       const previousDirectories = currentDirectories();
       const previouslyRegistered = body.create ? await hasRecentWorkdir(projectKey.slice(6)) : true;
-      if (authorizedCreation !== projectKey) {
+      if (authorizedProjectKey !== projectKey) {
         await authorizeProjectDirectoryChanges({
           projectKey,
           authorization,
