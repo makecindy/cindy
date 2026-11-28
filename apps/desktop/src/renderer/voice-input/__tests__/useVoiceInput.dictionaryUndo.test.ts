@@ -193,6 +193,58 @@ afterEach(() => {
 });
 
 describe('in-app dictionary learning after undo', () => {
+  // 测试价值：经 useVoiceInput 的受控文本目标验证还原 ASR 原文不会被当成手工词典纠错，随后真实编辑仍能学习。
+  // 依据：PR #13667 与 #13665 合并后，润色撤销和文本目标词典监听共享同一替换路径。
+  // 现有覆盖缺口：编辑器撤销测试不经过 textTarget 的监听器；受控字段测试没有先还原原文。
+  // 最小输入：一次预润色听写、一次 Cmd+Z、一次用户手工改字；tier: unit，内存目标且无真实 I/O。单文件实测墙钟 5.43s（测试本身 90ms）。
+  it('keeps text-target dictionary learning clean after restoring raw ASR, then learns a real edit', () => {
+    let onEvent!: (event: VoiceInputRendererEvent) => void;
+    vi.stubGlobal('electronAPI', { voiceInput: {
+      onEvent: (listener: typeof onEvent) => { onEvent = listener; return vi.fn(); },
+      cancel: vi.fn().mockResolvedValue({ ok: true }),
+    } });
+    let text = '前文：';
+    const textTarget = {
+      getText: () => text,
+      getSelection: () => ({ from: text.length, to: text.length }),
+      replace: (range: { from: number; to: number }, replacement: string) => {
+        text = text.slice(0, range.from) + replacement + text.slice(range.to);
+        return { start: range.from, end: range.from + replacement.length };
+      },
+      focus: vi.fn(),
+    };
+    const hook = renderHook(() => useVoiceInput(null, true, undefined, { textTarget }));
+    const raw = '使用 cloud code';
+    const refined = '使用 Cloud Code。';
+    act(() => onEvent({
+      type: 'submitted', runId: 'run-field-undo', text: refined,
+      segment: {
+        id: 'segment-field-undo', source: 'mic', status: 'submitted', text: refined,
+        basedOnText: raw, updatedAt: Date.now(),
+      },
+    }));
+    expect(text).toBe('前文：' + refined);
+
+    act(() => expect(hook.result.current.handleUndoKeyDown(new KeyboardEvent('keydown', {
+      key: 'z', metaKey: true, cancelable: true,
+    }))).toBe(true));
+    expect(text).toBe('前文：' + raw);
+    act(() => hook.result.current.inspectTextTargetValue(text));
+    act(() => vi.advanceTimersByTime(15_000));
+    expect(mocks.advise).not.toHaveBeenCalled();
+
+    text = '前文：使用 Codex Code。';
+    act(() => hook.result.current.inspectTextTargetValue(text));
+    act(() => vi.advanceTimersByTime(15_000));
+    expect(mocks.advise).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+      source: 'in_app',
+      rawTranscriptText: raw,
+      beforeText: raw,
+      afterText: '使用 Codex Code。',
+    }));
+    hook.unmount();
+  });
+
   it('keeps pre-refined text visible on confirmation and retains the raw source for learning', () => {
     const raw = '呃使用 cloud code。';
     const dictation = mountDictation(raw);
