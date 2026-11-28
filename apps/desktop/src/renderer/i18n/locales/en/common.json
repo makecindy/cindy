@@ -17886,7 +17886,8 @@
         "compactResumeFirst": "Send a message to resume this session before compacting its context.",
         "compactNothing": "Nothing to compact yet",
         "sessionBranches": "Session branches",
-        "copySessionLink": "Copy session link"
+        "copySessionLink": "Copy session link",
+        "deliveryReceipt": "This result"
       },
       "sessionBranches": {
         "title": "Session branches",
@@ -23920,5 +23921,54 @@
     "review": "$t(macControlPermission.selectApp)\nIf offered, Choose Apps limits which apps it can control. Full control gives the app access to all apps and data. If you agree, acknowledge each item, then choose Allow at the bottom.",
     "reviewWholeMac": "$t(macControlPermission.selectApp)\nRemote keyboard and mouse act anywhere on this Mac, so they need control of the whole Mac: when adding with +, choose Override System Protections; for an app already listed, turn on Control Your Entire Mac and All Apps under ⓘ. With chosen apps only, macOS blocks all remote keyboard and mouse input. Review the access macOS lists before you allow it.",
     "chosenAppsOnly": "{{app}} can control only the apps you chose, so macOS blocks all remote keyboard and mouse input. To control this Mac remotely, click ⓘ next to {{app}} in System & App Protection Override and turn on Control Your Entire Mac and All Apps."
+  },
+  "deliveryReceipt": {
+    "title": "This result",
+    "loading": "Reading this result…",
+    "loadFailed": "Couldn't read this result",
+    "copied": "Link copied",
+    "copyFailed": "Couldn't copy the link",
+    "copyLink": "Copy link",
+    "close": "Close",
+    "status": "Status",
+    "workingDir": "Working directory",
+    "branch": "Branch",
+    "changes": "What changed",
+    "verification": "Commands that ran",
+    "outputs": "What was produced",
+    "pullRequest": "Pull request",
+    "ci": "CI",
+    "ciNone": "No pull request",
+    "unknown": "Unknown",
+    "more": "{{count}} more",
+    "conversationOnly": "This task only has the conversation. Nothing was changed or produced.",
+    "outcome": {
+      "failed": "Failed",
+      "testsFailed": "Tests failed",
+      "ok": "Succeeded"
+    },
+    "phaseValue": {
+      "running": "Running",
+      "waiting-permission": "Waiting for your approval",
+      "waiting-answer": "Waiting for your answer",
+      "errored": "Hit an error",
+      "usage-limit": "Usage limit reached",
+      "finished": "This turn ended",
+      "idle": "Idle"
+    },
+    "ciValue": {
+      "unknown": "Unknown",
+      "none": "Not run",
+      "passed": "Passed",
+      "failed": "Failed",
+      "pending": "Still running"
+    },
+    "next": "Next",
+    "nextValue": {
+      "waiting-answer": "Waiting for your answer",
+      "waiting-approval": "Waiting for your approval",
+      "waiting-merge": "Waiting to merge",
+      "none": "Nothing else is waiting"
+    }
   }
 }

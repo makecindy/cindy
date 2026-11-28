@@ -17811,7 +17811,8 @@
         "compactResumeFirst": "先にメッセージを送信してタスクを再開してから、コンテキストを圧縮してください。",
         "compactNothing": "圧縮できる内容がまだありません",
         "sessionBranches": "セッション分岐",
-        "copySessionLink": "セッションリンクをコピー"
+        "copySessionLink": "セッションリンクをコピー",
+        "deliveryReceipt": "今回の結果"
       },
       "sessionBranches": {
         "title": "セッション分岐",
@@ -23828,5 +23829,54 @@
     "review": "$t(macControlPermission.selectApp)\n「アプリを選択」が表示された場合は、制御できるアプリを限定できます。Mac 全体の制御を許可すると、すべてのアプリとデータにアクセスできます。同意する場合は各項目を読んで確認し、最後に画面下部で許可します。",
     "reviewWholeMac": "$t(macControlPermission.selectApp)\nリモートのキーボードとマウスは Mac 全体を操作するため、Mac 全体の制御が必要です。「＋」で追加するときは「Override System Protections」を選び、一覧にある場合は ⓘ で「Control Your Entire Mac and All Apps」をオンにします。一部のアプリだけを許可していると、macOS はリモートのキーボードとマウス操作をすべてブロックします。許可する前に、macOS が示すアクセス範囲を確認してください。",
     "chosenAppsOnly": "{{app}} は選択したアプリしか制御できないため、macOS がリモートのキーボードとマウス操作をすべてブロックしています。リモート操作するには、「System & App Protection Override」で {{app}} の右の ⓘ をクリックし、「Control Your Entire Mac and All Apps」をオンにします。"
+  },
+  "deliveryReceipt": {
+    "title": "今回の結果",
+    "loading": "今回の結果を読み込んでいます…",
+    "loadFailed": "今回の結果を読めませんでした",
+    "copied": "リンクをコピーしました",
+    "copyFailed": "リンクをコピーできませんでした",
+    "copyLink": "リンクをコピー",
+    "close": "閉じる",
+    "status": "状態",
+    "workingDir": "作業ディレクトリ",
+    "branch": "ブランチ",
+    "changes": "変更したファイル",
+    "verification": "実行したコマンド",
+    "outputs": "作られたファイル",
+    "pullRequest": "プルリクエスト",
+    "ci": "CI",
+    "ciNone": "プルリクエストなし",
+    "unknown": "不明",
+    "more": "ほか {{count}} 件",
+    "conversationOnly": "このセッションには会話しかありません。変更も成果物もありません。",
+    "outcome": {
+      "failed": "失敗",
+      "testsFailed": "テスト失敗",
+      "ok": "成功"
+    },
+    "phaseValue": {
+      "running": "実行中",
+      "waiting-permission": "承認待ち",
+      "waiting-answer": "回答待ち",
+      "errored": "エラー",
+      "usage-limit": "利用上限",
+      "finished": "このターンは終了",
+      "idle": "待機"
+    },
+    "ciValue": {
+      "unknown": "不明",
+      "none": "未実行",
+      "passed": "成功",
+      "failed": "失敗",
+      "pending": "実行中"
+    },
+    "next": "次",
+    "nextValue": {
+      "waiting-answer": "回答待ち",
+      "waiting-approval": "承認待ち",
+      "waiting-merge": "マージ待ち",
+      "none": "ほかに待つことはありません"
+    }
   }
 }

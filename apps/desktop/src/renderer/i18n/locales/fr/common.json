@@ -18063,7 +18063,8 @@
         "compactResumeFirst": "Envoyez un message pour reprendre cette session avant de compacter son contexte.",
         "compactNothing": "Rien à compacter pour l'instant",
         "sessionBranches": "Branches de la session",
-        "copySessionLink": "Copier le lien de la session"
+        "copySessionLink": "Copier le lien de la session",
+        "deliveryReceipt": "Ce résultat"
       },
       "sessionBranches": {
         "title": "Branches de la session",
@@ -24155,5 +24156,54 @@
     "review": "$t(macControlPermission.selectApp)\nSi l’option est proposée, vous pouvez limiter le contrôle aux apps de votre choix. Le contrôle intégral donne accès à toutes les apps et données. Si vous acceptez, lisez et confirmez chaque élément, puis autorisez l’accès en bas de la fenêtre.",
     "reviewWholeMac": "$t(macControlPermission.selectApp)\nLe clavier et la souris à distance agissent sur tout le Mac et nécessitent donc le contrôle du Mac entier : lors de l’ajout avec +, choisissez « Override System Protections » ; si l’app figure déjà dans la liste, activez « Control Your Entire Mac and All Apps » sous ⓘ. Si seules certaines apps sont autorisées, macOS bloque toute saisie clavier et souris à distance. Vérifiez l’accès indiqué par macOS avant d’autoriser.",
     "chosenAppsOnly": "{{app}} ne peut contrôler que les apps choisies : macOS bloque donc toute saisie clavier et souris à distance. Pour le contrôle à distance, cliquez sur ⓘ à côté de {{app}} dans « System & App Protection Override » et activez « Control Your Entire Mac and All Apps »."
+  },
+  "deliveryReceipt": {
+    "title": "Ce résultat",
+    "loading": "Lecture de ce résultat…",
+    "loadFailed": "Impossible de lire ce résultat",
+    "copied": "Lien copié",
+    "copyFailed": "Impossible de copier le lien",
+    "copyLink": "Copier le lien",
+    "close": "Fermer",
+    "status": "État",
+    "workingDir": "Répertoire de travail",
+    "branch": "Branche",
+    "changes": "Ce qui a changé",
+    "verification": "Commandes exécutées",
+    "outputs": "Ce qui a été produit",
+    "pullRequest": "Pull request",
+    "ci": "CI",
+    "ciNone": "Aucune pull request",
+    "unknown": "Inconnu",
+    "more": "{{count}} de plus",
+    "conversationOnly": "Cette session ne contient que la conversation. Rien n’a été modifié ni produit.",
+    "outcome": {
+      "failed": "Échec",
+      "testsFailed": "Tests échoués",
+      "ok": "OK"
+    },
+    "phaseValue": {
+      "running": "En cours",
+      "waiting-permission": "En attente de votre accord",
+      "waiting-answer": "En attente de votre réponse",
+      "errored": "Une erreur est survenue",
+      "usage-limit": "Limite d’usage atteinte",
+      "finished": "Ce tour est terminé",
+      "idle": "Inactif"
+    },
+    "ciValue": {
+      "unknown": "Inconnu",
+      "none": "Non exécuté",
+      "passed": "Réussi",
+      "failed": "Échoué",
+      "pending": "Encore en cours"
+    },
+    "next": "Suite",
+    "nextValue": {
+      "waiting-answer": "En attente de votre réponse",
+      "waiting-approval": "En attente de votre accord",
+      "waiting-merge": "En attente de fusion",
+      "none": "Rien d’autre n’est en attente"
+    }
   }
 }

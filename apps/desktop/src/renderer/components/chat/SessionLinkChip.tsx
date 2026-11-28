@@ -28,6 +28,7 @@ import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts
 import { cn } from '@/lib/utils';
 import { useOptionalAuthDeviceId } from '@/contexts/AuthContext';
 import { parseSessionDeepLinkHref } from '@/lib/deepLink';
+import { requestOpenDeliveryReceipt } from '@/features/cc-agent/sidebar/deliveryReceiptRequest';
 import { getSessionRouteOwnerId, resolveSessionRoute } from '@/lib/orcaSessionIdentity';
 import { resolveSessionMessageText } from '@/lib/sessionMessageText';
 import * as sessionService from '@/lib/sessionService';
@@ -113,6 +114,7 @@ export function useSessionLinkTarget(href: string) {
     await resolveTargetRoute().then((route) => {
       if (!route || !active()) return;
       reportSessionNavigation?.(sessionId, getSessionRouteOwnerId(route) ?? sessionId);
+      if (target.receipt) requestOpenDeliveryReceipt(sessionId);
       navigate(
         route,
         target.messageClientId

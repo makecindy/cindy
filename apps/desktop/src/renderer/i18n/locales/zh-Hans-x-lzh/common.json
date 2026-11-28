@@ -17811,7 +17811,8 @@
         "compactResumeFirst": "请先遣一讯以续此差事，再压缩上下文。",
         "compactNothing": "无可压缩者",
         "sessionBranches": "差事分支",
-        "copySessionLink": "录差事链接"
+        "copySessionLink": "录差事链接",
+        "deliveryReceipt": "本次结果"
       },
       "sessionBranches": {
         "title": "差事分支",
@@ -23828,5 +23829,54 @@
     "review": "$t(macControlPermission.selectApp)\n系统若提供「选择 App」，可限定控制范围。整机控制允许访问所有应用和数据。如果同意，请逐项阅读并点「OK」确认，再点窗口底部的允许按钮。",
     "reviewWholeMac": "$t(macControlPermission.selectApp)\n远程键盘和鼠标会操作整台 Mac：用「＋」添加时选「Override System Protections」；已在列表中的，在 ⓘ 里打开「Control Your Entire Mac and All Apps」。只允许部分 App 时，macOS 会拦下全部远程键鼠操作。允许前请逐项阅读系统列出的访问范围。",
     "chosenAppsOnly": "{{app}} 目前只能控制你选定的 App，macOS 会拦下全部远程键盘和鼠标操作。如需远程控制，在「System & App Protection Override」里点 {{app}} 右侧的 ⓘ，打开「Control Your Entire Mac and All Apps」。"
+  },
+  "deliveryReceipt": {
+    "title": "本次结果",
+    "loading": "正读本次结果…",
+    "loadFailed": "读本次结果不得",
+    "copied": "链接已录",
+    "copyFailed": "录链接不成",
+    "copyLink": "录链接",
+    "close": "阖",
+    "status": "状",
+    "workingDir": "工作目录",
+    "branch": "枝",
+    "changes": "此番所改",
+    "verification": "所行命令",
+    "outputs": "此番所出",
+    "pullRequest": "PR",
+    "ci": "CI",
+    "ciNone": "无相联之 PR",
+    "unknown": "未明",
+    "more": "尚有 {{count}} 项",
+    "conversationOnly": "此番唯有言谈，未改文件，亦无产出。",
+    "outcome": {
+      "failed": "未成",
+      "testsFailed": "试未成",
+      "ok": "成"
+    },
+    "phaseValue": {
+      "running": "方行",
+      "waiting-permission": "待汝许",
+      "waiting-answer": "待汝答",
+      "errored": "有误",
+      "usage-limit": "用量已尽",
+      "finished": "此轮已竟",
+      "idle": "闲"
+    },
+    "ciValue": {
+      "unknown": "未明",
+      "none": "未行",
+      "passed": "过",
+      "failed": "败",
+      "pending": "尚行"
+    },
+    "next": "下一步",
+    "nextValue": {
+      "waiting-answer": "待汝答",
+      "waiting-approval": "待汝许",
+      "waiting-merge": "待并",
+      "none": "无待办之下一步"
+    }
   }
 }

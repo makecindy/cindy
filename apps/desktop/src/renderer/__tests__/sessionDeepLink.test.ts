@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { deviceLinkProjectKey, projectKeyForDeepLink, projectIdentityKey } from '../../shared/projectKeys';
 
 import {
+  buildDeliveryReceiptDeepLink,
   buildProjectDeepLink,
   buildSessionDeepLink,
   buildSessionMessageDeepLink,
@@ -164,5 +165,16 @@ describe('dual scheme (cindy primary + legacy xdt-maker)', () => {
       workingDir: '/tmp/x',
     });
     expect(parseSessionDeepLinkHref('cindy://session/')).toBeNull();
+  });
+
+  it('keeps a receipt locator on the existing session link', () => {
+    const href = buildDeliveryReceiptDeepLink('task 1', { deviceId: 'mac' });
+    expect(href.startsWith('cindy://session/')).toBe(true);
+    expect(parseSessionDeepLinkHref(href)).toEqual({
+      sessionId: 'task 1',
+      messageClientId: null,
+      deviceId: 'mac',
+      receipt: true,
+    });
   });
 });

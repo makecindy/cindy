@@ -123,7 +123,7 @@ it('hides runtime plugins when no installed plugin declares a runtime control', 
   render(<Harness />);
   openMenu();
   expect(screen.queryByRole('menuitem', { name: 'taskPlugins' })).toBeNull();
-  expect(labels()).toEqual(['pin', 'rename', 'muteNotifications', 'tags', 'copy', 'title',
+  expect(labels()).toEqual(['pin', 'rename', 'muteNotifications', 'tags', 'copy', 'deliveryReceipt', 'title',
     'moveToProject', 'export', 'openInNewWindow', 'archived', 'delete']);
 });
 
@@ -186,6 +186,7 @@ it('loads only on open and groups task organization, sharing, viewing and remova
     'tags',
     'taskPlugins',
     'copy',
+    'deliveryReceipt',
     'title',
     'moveToProject',
     'export',
@@ -234,6 +235,13 @@ it('hides the mute entry for a task whose notifications another device sends', (
   render(<Harness target={{ ...session, deviceLinkDeviceId: 'device-b' } as Session} />);
   openMenu();
   expect(screen.queryByRole('menuitem', { name: 'muteNotifications' })).toBeNull();
+  expect(screen.queryByRole('menuitem', { name: 'deliveryReceipt' })).toBeNull();
+});
+
+it('hides this result when the task files are on an SSH workspace', () => {
+  render(<Harness target={{ ...session, remoteHostId: 'ssh-1' } as Session} />);
+  openMenu();
+  expect(screen.queryByRole('menuitem', { name: 'deliveryReceipt' })).toBeNull();
 });
 
 it('shows unpin without a branch entry even for a forked Pi task', () => {
@@ -250,6 +258,7 @@ it('shows unpin without a branch entry even for a forked Pi task', () => {
     'tags',
     'taskPlugins',
     'copy',
+    'deliveryReceipt',
     'title',
     'moveToProject',
     'export',
@@ -262,7 +271,7 @@ it('shows unpin without a branch entry even for a forked Pi task', () => {
 it('keeps restore and delete last for archived tasks and does not expose sharing', () => {
   render(<Harness target={{ ...session, status: 'archived' }} />);
   openMenu();
-  expect(labels()).toEqual(['rename', 'tags', 'taskPlugins', 'copy', 'export', 'unarchive', 'delete']);
+  expect(labels()).toEqual(['rename', 'tags', 'taskPlugins', 'copy', 'deliveryReceipt', 'export', 'unarchive', 'delete']);
 });
 
 it('offers guests the task link and leave action without owner controls or separators', () => {
@@ -323,7 +332,7 @@ it('shows stop sharing for an active host and closes only after confirmation', a
   state.host.mockResolvedValue({ available: true, detail: { sharedTaskId: 'share', status: 'active' } });
   render(<Harness />); openMenu();
   await screen.findByRole('menuitem', { name: 'manageSharing' });
-  expect(labels()).toEqual(['pin', 'rename', 'muteNotifications', 'tags', 'taskPlugins', 'copy', 'manageSharing', 'moveToProject', 'export', 'openInNewWindow', 'archived', 'delete']);
+  expect(labels()).toEqual(['pin', 'rename', 'muteNotifications', 'tags', 'taskPlugins', 'copy', 'deliveryReceipt', 'manageSharing', 'moveToProject', 'export', 'openInNewWindow', 'archived', 'delete']);
   expect(screen.queryByRole('menuitem', { name: 'cancelSharing' })).toBeNull();
   await openSharingSubmenu();
   fireEvent.click(screen.getByRole('menuitem', { name: 'cancelSharing' }));

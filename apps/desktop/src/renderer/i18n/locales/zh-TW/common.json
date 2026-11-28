@@ -17811,7 +17811,8 @@
         "compactResumeFirst": "請先傳送一則訊息恢復任務，再壓縮上下文。",
         "compactNothing": "暫無可壓縮內容",
         "sessionBranches": "任務分支",
-        "copySessionLink": "複製任務連結"
+        "copySessionLink": "複製任務連結",
+        "deliveryReceipt": "本次結果"
       },
       "sessionBranches": {
         "title": "任務分支",
@@ -23823,5 +23824,54 @@
     "review": "$t(macControlPermission.selectApp)\n系統若提供「選擇 App」，可限定控制範圍。完整控制可存取所有 App 和資料。若同意，請逐項閱讀並按「OK」確認，再按視窗底部的允許按鈕。",
     "reviewWholeMac": "$t(macControlPermission.selectApp)\n遠端鍵盤和滑鼠會操作整台 Mac：用「＋」加入時選「Override System Protections」；已在清單中的，在 ⓘ 裡打開「Control Your Entire Mac and All Apps」。只允許部分 App 時，macOS 會攔下所有遠端鍵盤和滑鼠操作。允許前請逐項閱讀系統列出的存取範圍。",
     "chosenAppsOnly": "{{app}} 目前只能控制你選定的 App，macOS 會攔下所有遠端鍵盤和滑鼠操作。如需遠端控制，在「System & App Protection Override」按 {{app}} 右側的 ⓘ，打開「Control Your Entire Mac and All Apps」。"
+  },
+  "deliveryReceipt": {
+    "title": "本次結果",
+    "loading": "正在讀取本次結果…",
+    "loadFailed": "讀不到本次結果",
+    "copied": "已複製連結",
+    "copyFailed": "複製連結失敗",
+    "copyLink": "複製連結",
+    "close": "關閉",
+    "status": "狀態",
+    "workingDir": "工作目錄",
+    "branch": "分支",
+    "changes": "這次改了",
+    "verification": "跑過的命令",
+    "outputs": "這次產出",
+    "pullRequest": "PR",
+    "ci": "CI",
+    "ciNone": "沒有關聯的 PR",
+    "unknown": "未知",
+    "more": "還有 {{count}} 項",
+    "conversationOnly": "這次只有對話，沒有改動檔案，也沒有產出檔案。",
+    "outcome": {
+      "failed": "失敗",
+      "testsFailed": "測試失敗",
+      "ok": "通過"
+    },
+    "phaseValue": {
+      "running": "執行中",
+      "waiting-permission": "等你批准",
+      "waiting-answer": "等你回答",
+      "errored": "出錯了",
+      "usage-limit": "用量到頂",
+      "finished": "這一輪已結束",
+      "idle": "空閒"
+    },
+    "ciValue": {
+      "unknown": "未知",
+      "none": "未跑",
+      "passed": "通過",
+      "failed": "失敗",
+      "pending": "還在跑"
+    },
+    "next": "下一步",
+    "nextValue": {
+      "waiting-answer": "等你回答",
+      "waiting-approval": "等你批准",
+      "waiting-merge": "待合併",
+      "none": "沒有待處理的下一步"
+    }
   }
 }

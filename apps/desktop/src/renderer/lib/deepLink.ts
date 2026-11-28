@@ -46,6 +46,12 @@ export function buildSessionDeepLink(sessionId: string, opts?: SessionDeepLinkOp
   return buildTaskDeepLink(sessionId, opts?.deviceId);
 }
 
+/** Same session link, plus `receipt=1` so opening it can show this task's receipt. */
+export function buildDeliveryReceiptDeepLink(sessionId: string, opts?: SessionDeepLinkOptions): string {
+  const base = buildSessionDeepLink(sessionId, opts);
+  return `${base}${base.includes('?') ? '&' : '?'}receipt=1`;
+}
+
 /** 带消息锚点的会话深链:点击后跳到会话内指定消息(clientId 语义,跨设备稳定)。 */
 export function buildSessionMessageDeepLink(
   sessionId: string,
@@ -151,6 +157,8 @@ export interface SessionDeepLinkTarget {
   messageClientId: string | null;
   /** `?device=<deviceId>` 冻结的会话归属设备;旧格式深链 / 参数值非法时为 null。 */
   deviceId: string | null;
+  /** Present only when the link asks to open this task's delivery receipt. */
+  receipt?: true;
 }
 
 /**
@@ -178,27 +186,29 @@ export function parseSessionDeepLinkHref(href: string): SessionDeepLinkTarget | 
   if (!sessionId) return null;
   let messageClientId: string | null = null;
   let deviceId: string | null = null;
+  let receipt = false;
   if (queryIdx >= 0) {
     const query = noHash.slice(queryIdx + 1);
     for (const pair of query.split('&')) {
       const eqIdx = pair.indexOf('=');
       if (eqIdx <= 0) continue;
       const key = pair.slice(0, eqIdx);
-      if (key !== 'message' && key !== 'device') continue;
-      if (key === 'message' ? messageClientId !== null : deviceId !== null) continue;
+      if (key !== 'message' && key !== 'device' && key !== 'receipt') continue;
+      if (key === 'message' ? messageClientId !== null : key === 'device' ? deviceId !== null : receipt) continue;
       const rawValue = pair.slice(eqIdx + 1);
       if (!rawValue) continue;
       try {
         const decoded = decodeURIComponent(rawValue);
         if (!decoded) continue;
         if (key === 'message') messageClientId = decoded;
-        else deviceId = decoded;
+        else if (key === 'device') deviceId = decoded;
+        else if (decoded === '1') receipt = true;
       } catch {
         // 参数编码非法 → 按无该参数处理,不拖累整条链接
       }
     }
   }
-  return { sessionId, messageClientId, deviceId };
+  return { sessionId, messageClientId, deviceId, ...(receipt ? { receipt: true as const } : {}) };
 }
 
 /**
