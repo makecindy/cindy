@@ -2,7 +2,7 @@ export default {
   name: 'sidebar-status-dot-alignment',
   entry: './fixture.tsx',
   viewport: { width: 320, height: 520 },
-  real: 'SidebarTopNav, ProjectsSection, SessionGroupNode, ProjectNode, DeviceSectionHeader, AutomationSessionGroupItem, SessionItem, SessionCard, TaskInbox and TeammateInboxRow',
+  real: 'SidebarTopNav, ProjectsSection, SessionGroupNode, ProjectNode, DeviceSectionHeader, AutomationSessionGroupItem, SessionItem and SessionCard',
   notCovered: 'Full desktop shell, live IPC remote-desktop capability checks and persisted sidebar preferences.',
   stubs: {
     'src/renderer/contexts/AuthContext': {
@@ -41,7 +41,6 @@ export default {
     list: { about: 'List mode: collapsed groups, project, automation group and list task card dots share one vertical column' },
     devices: { about: 'Device grouping (text mode): local and remote collapsed device dots align with nested group/project/task dots and swap on hover' },
     'devices-list': { about: 'Device grouping (list mode): collapsed device dots align with list cards and folder rows' },
-    'inbox-list': { about: 'Inbox list mode: TeammateInboxRow and SessionCard list dots align vertically' },
   },
   async ready(page) {
     await page.locator('[data-sidebar-right-status="done"]').first().waitFor();
@@ -80,7 +79,7 @@ export default {
       });
 
     const dots = await measureDoneDots();
-    const minCount = ui.case === 'inbox-list' ? 2 : 4;
+    const minCount = 4;
     if (dots.length < minCount) {
       throw new Error(`Expected at least ${minCount} visible done dots, got ${dots.length}: ${JSON.stringify(dots)}`);
     }

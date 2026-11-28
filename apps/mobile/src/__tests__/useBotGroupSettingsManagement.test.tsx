@@ -160,6 +160,84 @@ it('withdraws an owned companion as that actor without granting removal of other
   expect(writes()).toHaveLength(1);
 });
 
+// Unit regression (#13127, direct path): the phone talking to the chat service had no 「群里的 Cindy」 switch.
+// As on Desktop it needs groupAssistant and a groupAssistantActorId Zod's uuid() accepts (the last
+// one has a valid shape but an invalid variant), and writes the same PATCH only as a manager.
+// Review on #13593: the value read back after your own write is the newest one, also offline.
+it('switches the group Cindy as a manager only on servers with groupAssistant', async () => {
+  snapshot.room.assistant = false;
+  let me: Record<string, unknown> = {};
+  let offline = false, snapshotDown = false;
+  let meGate: Promise<void> | undefined;
+  const original = request.getMockImplementation()!;
+  request.mockImplementation(async (path, method, body, actor) => {
+    if (offline || (snapshotDown && path.endsWith('/snapshot'))) throw new Error('NETWORK_ERROR');
+    if (path === '/me') { const answer = { actor: { id: id(2), kind: 'human' }, ...me }; await meGate; return answer; }
+    const saved = await original(path, method, body, actor);
+    if (method === 'PATCH' && body.assistant !== undefined) snapshot.room.assistant = body.assistant;
+    return saved;
+  });
+  for (const older of [{}, { capabilities: { groupAssistant: 1 } }, { capabilities: { groupAssistant: 1 }, groupAssistantActorId: 'cindy' },
+    { capabilities: { groupAssistant: 1 }, groupAssistantActorId: '00000000-0000-4000-0000-000000000001' }]) {
+    me = older;
+    await render(); await act(async () => { await result.refresh(); });
+    expect(result.group).not.toHaveProperty('assistantEnabled');
+    await act(async () => { await expect(result.act('set-assistant', { assistant: true })).rejects.toThrow('CHAT_UNAVAILABLE'); });
+  }
+  expect(writes()).toHaveLength(0);
+  me = { capabilities: { groupAssistant: 1 }, groupAssistantActorId: id(20) };
+  await act(async () => { await result.refresh(); });
+  expect(result.group).toMatchObject({ supportsGroupAssistant: true, assistantEnabled: false });
+  await act(async () => { await result.act('set-assistant', { assistant: true }); });
+  expect(writes()).toEqual([[`/conversations/${id(1)}`, 'PATCH', { operationId: 'operation-1', expectedRevision: 4, assistant: true }, id(2)]]);
+  expect(result.group).toMatchObject({ assistantEnabled: true, revision: 5 });
+  // A member is refused before any request, not only by a disabled switch.
+  snapshot.members[0].role = 'member';
+  await act(async () => { await result.refresh(); });
+  await act(async () => { await expect(result.act('set-assistant', { assistant: false })).rejects.toThrow('PERMISSION_DENIED'); });
+  expect(writes()).toHaveLength(1);
+  // Reopened offline over a chat page still at revision 4 (off): the read-back at revision 5 (on) is shown, read-only.
+  source = { ...source, supportsGroupAssistant: true, assistantEnabled: false };
+  h.enabled = false; await render();
+  offline = true; h.enabled = true; await render();
+  await act(async () => { await Promise.resolve(); });
+  expect(result).toMatchObject({ group: undefined, editable: false, reason: 'unavailable', shown: { revision: 4, assistantEnabled: true } });
+  // Review on #13593: reopened online, the read's snapshot fails first and the sheet shows the known value; its /me then
+  // arrives late and no longer offers the switch. The open sheet drops the row by itself (nothing renders it again),
+  // although the chat page's older copy still carries the flag.
+  let answer!: () => void;
+  h.enabled = false; await render();
+  offline = false; snapshotDown = true; me = {}; meGate = new Promise<void>(resolve => { answer = resolve; });
+  h.enabled = true; await render();
+  await act(async () => { await Promise.resolve(); });
+  expect(result).toMatchObject({ group: undefined, reason: 'unavailable', shown: { supportsGroupAssistant: true, assistantEnabled: true } });
+  await act(async () => { answer(); await meGate; });
+  expect(result.shown).toMatchObject({ supportsGroupAssistant: false });
+});
+
+// Review on #13593: the open sheet follows a newer 「群里的 Cindy」 value read elsewhere (another screen of the group)
+// without rendering again. Its own read is then behind what it shows, so it is not writable until it has read again.
+it('shows a newer group Cindy value read elsewhere on the open settings and reads again before writing', async () => {
+  snapshot.room.assistant = false;
+  let hold: Promise<void> | undefined;
+  const original = request.getMockImplementation()!;
+  request.mockImplementation(async (path, method, body, actor) => {
+    if (path === '/me') return { actor: { id: id(2), kind: 'human' }, capabilities: { groupAssistant: 1 }, groupAssistantActorId: id(20) };
+    if (path.endsWith('/snapshot')) await hold;
+    return original(path, method, body, actor);
+  });
+  await render(); await act(async () => { await result.refresh(); });
+  expect(result).toMatchObject({ editable: true, group: { revision: 4, assistantEnabled: false } });
+  // Someone turns it on; another screen reads revision 5 first, and this sheet's re-read waits.
+  snapshot.room = { ...snapshot.room, revision: 5, assistant: true };
+  let release!: () => void;
+  hold = new Promise<void>(resolve => { release = resolve; });
+  await act(async () => { h.api.client.groupAssistant(snapshot.room, id(2)); await Promise.resolve(); });
+  expect(result).toMatchObject({ editable: false, group: { assistantEnabled: true } });
+  await act(async () => { release(); await hold; });
+  await vi.waitFor(() => expect(result).toMatchObject({ editable: true, group: { revision: 5, assistantEnabled: true } }));
+});
+
 it('selects only an owned manager, never a foreign owner', async () => {
   snapshot.members[0].role = 'member'; snapshot.members[1].role = 'admin';
   snapshot.members.push({ ...snapshot.members[0], id: id(9), ownerActorId: id(9), role: 'owner' });

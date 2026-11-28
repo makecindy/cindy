@@ -22,7 +22,7 @@ import {
   type Logger,
   type StartSessionOptions,
 } from '@cindy/maker-core';
-import { observePluginEngineModelDetails, rememberPluginHarnessModels } from './pluginEngineModelCache.js';
+import { observePluginEngineContextWindow, observePluginEngineModelDetails, rememberPluginHarnessModels } from './pluginEngineModelCache.js';
 import {
   getPluginHarnessRegistry,
   recordPluginHarnessActivity,
@@ -151,6 +151,7 @@ export function buildAcpAgentCore(opts: BuildAcpAgentCoreOpts): AcpAgent {
     ...(opts.inlineImageBudgetBytesForHarness ? { inlineImageBudgetBytesForHarness: opts.inlineImageBudgetBytesForHarness } : {}),
     onSessionCapabilities: rememberCapabilities,
     observeModelDetails: observePluginEngineModelDetails,
+    observeContextWindow: observePluginEngineContextWindow,
   });
   return opts.onActivity ? withPluginHarnessActivityTracking(agent, opts.onActivity) : agent;
 }

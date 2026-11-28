@@ -117,6 +117,7 @@ import { SessionHeaderNativeBlur } from './SessionHeaderNativeControls';
 import { CompanionEntering } from './CompanionEntering';
 import { BotGroupRuntimeFailureNotice } from './BotGroupRuntimeFailureNotice';
 import { BotGroupComposer, type BotGroupComposerHandle, type BotGroupSendInput } from './BotGroupComposer';
+import { BotGroupAssistantDeviceCard } from './BotGroupAssistantDeviceCard';
 import { BotGroupAuthorAvatar } from './BotGroupAuthorAvatar';
 import { BotGroupMessageAttachments } from './BotGroupMessageAttachments';
 import { MessageListVisibilityContext, useMessageListItemVisible, useScrollViewMessageVisibility } from './messageListVisibility';
@@ -1042,6 +1043,7 @@ function BotGroupChatContent({ deviceId, deviceName, groupId, messageId, notific
       </View> : null}
       <BotGroupTopicImageShare key={shareScope} selectionScope={shareScope} messages={selectedMessages} allIds={shareableIds}
         resolveMedia={chat.media} onBusyChange={setImageShareBusy} />
+      {!imageSelectionActive && !threadRootId && group.assistantDeviceWaits?.length ? <BotGroupAssistantDeviceCard group={group} online={composerEditable} act={chat.act} /> : null}
       <View style={selectedImages ? styles.hiddenComposer : undefined} testID="botGroup.composerContainer">
         <BotGroupComposer ref={composerRef} conversationKind={direct ? 'direct' : undefined} pullThrough={composerPullThrough} allowMentionAll={canMentionAllInBotGroup(group)} allowMentionAllBots={group.supportsMentionAudiences === true && group.allowMentionAllBots === true} key={`${viewportOwner}:composer`} topic={!!threadRootId} onParticipate={replyControls?.participate} maskIndicator={replyControls?.state?.settings.companionId ? <GroupMaskStatus mask={mask} deviceId={deviceId} onPress={() => setMaskSettings(true)} /> : undefined} members={group.members} identityFor={identityFor} deviceId={deviceId} online={composerEditable}
         quoteMessageId={replyTo?.messageId} focusRequest={replyFocusRequest}

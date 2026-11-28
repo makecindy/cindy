@@ -170,6 +170,49 @@ it('saves realtime choices on selection, retries failed choices and rejects stal
   expect(api.setRealtimePreference).toHaveBeenCalledTimes(count + 1);
 });
 
+it('displays, saves and previews Cindy AI Gateway realtime models without an agent or protocol picker', async () => {
+  const api = window.electronAPI.voiceConversation;
+  const gatewayModel = {
+    id: 'gpt-realtime-mini',
+    name: 'GPT Realtime Mini',
+    providerId: 'xd',
+    providerName: 'XD',
+    protocol: 'openai-realtime' as const,
+    protocolLocked: true,
+  };
+  api.realtimeModels = vi.fn(async () => [gatewayModel]);
+  api.setRealtimePreference = vi.fn(async (_bot, selection) => ({
+    selection: null,
+    customized: false,
+    realtimeSelection: selection ?? undefined,
+  }));
+  renderSettings();
+  const select = await screen.findByRole('combobox', { name: 'bots.voiceMode.realtime.callMode' });
+  await waitFor(() => expect((select as HTMLSelectElement).disabled).toBe(false));
+  expect(screen.getByRole('option', { name: 'GPT Realtime Mini · Cindy AI' })).toBeTruthy();
+  fireEvent.change(select, { target: { value: voiceModelKey(gatewayModel) } });
+  await waitFor(() => expect(api.setRealtimePreference).toHaveBeenCalledOnce());
+  expect(api.setRealtimePreference).toHaveBeenCalledWith('bot', {
+    mode: 'realtime',
+    providerId: 'xd',
+    modelId: 'gpt-realtime-mini',
+    protocol: 'openai-realtime',
+    voice: 'marin',
+  });
+  expect(screen.queryByRole('combobox', { name: 'bots.voiceMode.protocol' })).toBeNull();
+  const menu = await openVoices(callVoiceLabel);
+  fireEvent.click(menu.getByRole('button', { name: 'bots.voiceMode.previewVoice: cedar' }));
+  await waitFor(() => expect(audio.play).toHaveBeenCalledOnce());
+  expect(api.preview).toHaveBeenCalledWith(expect.objectContaining({
+    mode: 'realtime',
+    providerId: 'xd',
+    modelId: 'gpt-realtime-mini',
+    protocol: 'openai-realtime',
+    voice: 'cedar',
+  }));
+  expect(vi.mocked(api.preview).mock.calls[0]![0]).not.toHaveProperty('agent');
+});
+
 const callVoiceLabel = 'bots.voiceMode.realtime.callVoice';
 const voicePicker = (label = 'bots.voiceMode.voice') =>
   screen.getByRole('button', { name: label }) as HTMLButtonElement;

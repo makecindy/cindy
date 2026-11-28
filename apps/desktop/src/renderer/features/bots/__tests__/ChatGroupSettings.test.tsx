@@ -6,8 +6,8 @@ import { transferableAbortController } from 'node:util';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { ChatGroupSettings } from '../ChatGroupSettings';
 import { BotSettingsDrawer } from '../BotSettingsDrawer';
-import type { BotGroupSummary } from '../../../../shared/botGroupChat';
-const mocks = vi.hoisted(() => ({ manage: vi.fn(), updateBotGroup: vi.fn(async () => ({ ok: true })), ownedBots: vi.fn(), refresh: vi.fn(), confirm: vi.fn(), toastSuccess: vi.fn(), toastError: vi.fn() }));
+import type { BotGroupMutationResult, BotGroupSummary } from '../../../../shared/botGroupChat';
+const mocks = vi.hoisted(() => ({ manage: vi.fn(), updateBotGroup: vi.fn(async (): Promise<BotGroupMutationResult> => ({ ok: true })), ownedBots: vi.fn(), refresh: vi.fn(), confirm: vi.fn(), toastSuccess: vi.fn(), toastError: vi.fn() }));
 const profiles = vi.hoisted(() => ({
   list: [{ id: 'bot', name: 'Partner', status: 'active', sessions: [] as Array<{ id: string }>, capabilities: {}, skills: [] as string[] }],
 }));
@@ -51,6 +51,15 @@ function renderAt(value: BotGroupSummary, page?: string) {
   const view = render(tree(value));
   return { ...view, update: (next: BotGroupSummary) => view.rerender(tree(next)) };
 }
+
+// #13603: selecting a folder in server group management keeps the actionable registration error.
+it('explains how to select a folder that has not been added as a project', async () => {
+  window.electronAPI.dialog = { ...window.electronAPI.dialog, showOpenDirectory: vi.fn().mockResolvedValue({ success: true, path: '/work/site' }) };
+  mocks.updateBotGroup.mockResolvedValueOnce({ ok: false, errorCode: 'PROJECT_NOT_REGISTERED', message: '' });
+  renderAt(group(true), 'manage');
+  fireEvent.click(screen.getByRole('button', { name: key('ownFolder') }));
+  expect(await screen.findByText('bots.groupChat.settings.projectDirNotRegistered')).toBeTruthy();
+});
 
 it('keeps saved fields until a newer snapshot arrives and retries the read without repeating the write', async () => {
   const initial = { ...group(true), topic: 'Old topic', description: 'Old description' };

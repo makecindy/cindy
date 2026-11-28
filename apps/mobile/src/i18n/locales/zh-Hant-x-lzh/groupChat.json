@@ -16,6 +16,17 @@
   "memberCount_other": "成員 {{count}} 位",
   "organizer": "主事",
   "waitingConfirm": "{{name}}候君首肯",
+  "assistantDevice": {
+    "title": "群中 Cindy 待君擇機",
+    "onlyYou": "唯君可見",
+    "request": "「{{request}}」既擇機即行。",
+    "requestUnknown": "既擇機即行此事。",
+    "requests_one": "君有 {{count}} 事待行，既擇機即行。",
+    "requests_other": "君有 {{count}} 事待行，既擇機即行。",
+    "remember": "此後君於本群之事皆用此機，可於群議之設更之。",
+    "cancel": "罷此事",
+    "continue": "續"
+  },
   "loadFailedTitle": "此群議不能載入",
   "loadFailedDescription": "暫讀不得機上之此群議，可再試，或歸同伴頁。",
   "unavailableTitle": "此群議已不可用",
