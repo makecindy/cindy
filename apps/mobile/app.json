@@ -89,6 +89,7 @@
         }
       ],
       "./plugins/with-android-release-optimization",
+      "./plugins/with-android-activity-display-metrics",
       [
         "expo-splash-screen",
         {
