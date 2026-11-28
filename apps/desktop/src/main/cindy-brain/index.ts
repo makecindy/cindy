@@ -112,7 +112,18 @@ import {
 import { createGhostModelPreferencesProvider } from './ghostModelPreferences.js';
 import { applyHostModelFavorite, readHostModelPreferences } from '../maker-ipc/modelFavoritesSync.js';
 import { modelDescriptionKey } from '../../shared/modelDescriptionKey.js';
-import { GhostModelPicker, chooseModelPickerWindow, readPluginModelRouteCatalog, getPluginModelPickerAgents, isPluginModelPickerRouteAvailable, isPluginRouteHarnessInstalled, type RemotePluginRouteAgentStatus } from './ghostModelPicker.js';
+import {
+  GhostModelPicker,
+  chooseModelPickerWindow,
+  readPluginModelRouteCatalog,
+  getPluginModelPickerAgents,
+  getPluginModelPickerPluginEngines,
+  isPluginEngineModelRouteAvailable,
+  isPluginModelPickerRouteAvailable,
+  isPluginRouteHarnessInstalled,
+  type RemotePluginRouteAgentStatus,
+} from './ghostModelPicker.js';
+import type { PluginEngineView } from '../../shared/pluginEngines.js';
 import { installGhostPageModelPicker } from './ghostPageModelPicker.js';
 import { getDesktopProviderService } from '../maker-host/createDesktopProviderService.js';
 import { readModelGroupsConfig } from '../model-groups/store.js';
@@ -2703,16 +2714,19 @@ export function setGhostAgentTurnRunner(runner: GhostAgentTurnRunner | null): vo
 const ghostAgentModelsCache = createGhostAgentModelsCache();
 let listGhostAgentLocations: (() => Promise<GhostAgentLocationsReadResult>) | null = null;
 let readGhostAgentRemoteViews: ((agentDeviceId: string) => Promise<ProviderView[]>) | null = null;
+let readGhostAgentRemotePluginEngines: ((agentDeviceId: string) => Promise<readonly PluginEngineView[]>) | null = null;
 let readGhostAgentRemoteStatus: RemotePluginRouteAgentStatus | null = null;
 
 /** maker-ipc 注入设备列表与跨设备目录读取；静态 import device-link 会成环。 */
 export function setGhostAgentModelLocationSources(sources: {
   listLocations: () => Promise<GhostAgentLocationsReadResult>;
   readRemoteViews: (agentDeviceId: string) => Promise<ProviderView[]>;
+  readRemotePluginEngines?: (agentDeviceId: string) => Promise<readonly PluginEngineView[]>;
   readRemoteStatus?: RemotePluginRouteAgentStatus;
 } | null): void {
   listGhostAgentLocations = sources?.listLocations ?? null;
   readGhostAgentRemoteViews = sources?.readRemoteViews ?? null;
+  readGhostAgentRemotePluginEngines = sources?.readRemotePluginEngines ?? null;
   readGhostAgentRemoteStatus = sources?.readRemoteStatus ?? null;
 }
 
@@ -3153,7 +3167,11 @@ const runtimePluginHost = createDesktopRuntimePluginHost({
     && (getAppCapabilities().canUseCindyAccountServices || !ghostRequiresCindyAccount(ghost.manifest)),
   sendToGhostLogic, broadcastGhostWindowPush, ghostOwnerScope, log, getGhostOwnerPushStamp,
   isGhostOwnerStampCurrent, findGhostForInstanceId,
-  remoteSources: () => ({ locations: listGhostAgentLocations, remoteViews: readGhostAgentRemoteViews }),
+  remoteSources: () => ({
+    locations: listGhostAgentLocations,
+    remoteViews: readGhostAgentRemoteViews,
+    remotePluginEngines: readGhostAgentRemotePluginEngines,
+  }),
 });
 const { isGhostEligibleSession } = runtimePluginHost;
 export const { getGhostSubscriptionGateway, hasEnabledUserMessageHookGhost, screenGhostUserMessage,
@@ -4645,6 +4663,12 @@ export function getGhostModelPicker(): GhostModelPicker {
     },
     available: async route => {
       const owner = activeOwnerScopeKey();
+      if (route.agentKind === 'acp') {
+        const engines = route.agentDeviceId
+          ? await readGhostAgentRemotePluginEngines?.(route.agentDeviceId).catch(() => []) ?? []
+          : getPluginModelPickerPluginEngines();
+        return owner === activeOwnerScopeKey() && isPluginEngineModelRouteAvailable(route, engines);
+      }
       const { views, agents } = await readPluginModelRouteCatalog(route, {
         local: () => getDesktopProviderService({ allowSideEffects: false }).listProviders({ allowSideEffects: false, snapshotOnly: true }),
         remote: readGhostAgentRemoteViews, localAgents: getPluginModelPickerAgents,
@@ -6224,6 +6248,8 @@ function getPluginOneshotModelSelection(
   ghostId: string,
 ): { providerId?: string; agentKind: AgentKind; model: string } | null {
   const config = getPluginTaskDefaults(ghostId) ?? {};
+  // 插件引擎任务与远程任务一样不用于本机一次性快问快答：快问快答回落系统辅助模型链。
+  if (config.agentKind === 'acp') return null;
   if (config.modelGroup) {
     for (const candidate of localRouteCandidatesInPickOrder(config.modelGroup)) {
       if (candidate.agentKind === 'pi') {
@@ -9691,6 +9717,7 @@ export function registerGhostIpc(): void {
       read: readPluginTaskConfig, write: writePluginTaskConfig, validate: validatePluginTaskConfig,
       providers: () => getDesktopProviderService({ allowSideEffects: false }).listProviders({ allowSideEffects: false, snapshotOnly: true }),
       agents: async () => { const { getMakerIfReady } = await import('../maker-host/index.js'); return getMakerIfReady()?.listAvailableAgents() ?? []; },
+      pluginEngines: getPluginModelPickerPluginEngines,
     });
   remotePluginManagement = new RemotePluginManagement({
     list: availableGhosts,

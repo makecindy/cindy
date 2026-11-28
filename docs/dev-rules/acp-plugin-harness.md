@@ -96,8 +96,13 @@ maker-core（packages/maker-core/src/agents/acp/：protocol / connection / capab
 ## 5. Briefing、斜杠指令与协议扩展不变量
 
 1. **首轮 Briefing 与防斜杠误触发（#12683）**：
-   - 插件引擎不接入 Cindy 的 system prompt（保持内置引擎前缀与缓存稳定），仅在新会话首条用户消息前按固定顺序附：`远程工作区说明 → 伙伴说明 → 已装插件花名册（仅 cindy MCP 实际挂载时）→ Skill 清单（内置 Pi 范围，隔离进程扫描）→ 协同角色说明`。
-   - 宿主拼入的非用户文本必须清洗独立 `/命令` 的前导 `/`（不动路径、URL 与用户原话），防止 `agy acp` 等对端自动激活非预期工作流；用户原话本身以 `/` 开头时，首轮说明顺延至下一条普通消息。
+   - 用户自定义提示词只经 ACP 标准 `systemPrompt` 协商交出（本机与托管任务的取值见
+     [协议记录](protocol-compatibility/plugin-harnesses.md) 的「用户自定义提示词」一节）。
+   - 插件引擎不接入 Cindy 的 system prompt（保持内置引擎前缀与缓存稳定）。新会话首条用户消息前按固定顺序附适用段落：`远程工作区说明 → 伙伴说明 → 记忆说明 → 已装插件花名册（仅 cindy MCP 实际挂载时）→ Skill 清单（内置 Pi 范围，隔离进程扫描）→ 协同说明`。
+   - 2026-11-27 用户决定：在 2026-11-24 已批准的花名册和 Skill 清单之外，本机普通插件引擎新会话（含 Antigravity、DeepSeek Harness）也复用内置引擎的协同发现原文。仅当全局协同启用、项目未禁用，且对端 `initialize` 声明支持对应传输、`session/new` 请求带了 `cindy_orca`、会话建立成功时才准备说明。这不证明逐个 MCP 服务已连通或工具已可调用，不新增探活。
+   - 说明写入首条普通提示前，宿主可在同一任务恢复原生会话时交接待发说明，并重新检查全局／项目开关、MCP 传输和请求及建立结果、协同角色。首条普通提示写出，或任务成为 Lead／Worker，均清除待发状态；已有角色只附角色说明。伙伴、Review、没有待发状态的普通恢复均不附发现说明。和 Lead 说明一样，交接只存在宿主内存，宿主进程重启后不补发。
+   - 同账号另一台电脑上运行的插件引擎普通任务暂不附协同发现说明；内置引擎在同场景仍会附（`apps/desktop/src/main/maker-host/index.ts` 的启动钩子，原 2693–2702 行）。待远程路径单独评审后再对齐。
+   - 宿主拼入的非用户文本必须清洗独立 `/命令` 的前导 `/`（不动路径、URL 与用户原话），防止 `agy acp` 等对端自动激活非预期工作流。只有原样交给 CLI 的斜杠命令才把首轮说明顺延到下一条普通消息；由 Cindy 展开为文本的 `/Skill` 按普通消息处理，首轮说明随该条发出。
    - 桌面 `/` 菜单读取插件引擎 Skill 清单必须按 `agentKind: 'acp'` 走 `AcpAgent.listAgentSkills`，不得借用内置 Pi 的清单。
 2. **协议扩展与运行期能力同步**：
    - **插话（`_session/steering`）**：支持 `injected`、`queued`（不提前截断当前回复段）、`promptRequired`（改下一轮发送）、`startedNewTurn`（按回合外工作显示）四类结局；超时／断连按 `delivery uncertain` 暂停队首不重发；若声明后实际返回 `method not found`，立即撤回 `sameTurnSteer` 能力并通过 `AgentSessionHandle.onCapabilitiesChange` 同步到 remote-agent、输入协调器与手机端（#13231）。
@@ -105,6 +110,11 @@ maker-core（packages/maker-core/src/agents/acp/：protocol / connection / capab
    - **问题卡（`elicitation/create`）**：经 `packages/maker-core/src/agents/acp/elicitation.ts` 转换为原生 `ask_user_question`，强制校验 schema 约束，并把成对的 `k` + 可选纯文本 `${k}_other` 折叠为单题选项 + 自填框（#13001）。
 3. **用量与计费归因**：
    - 回合 token 从 `session/prompt` 结果的 `usage` 结算，保留 `promptModel` 与零值；设备托管的 ACP token 在控制端结算；企业用量授权跳过插件引擎；限额自动继续只认 `error.data._meta.cindy.resetsAt`，不解析外部错误原文。
+
+4. **任务中途切到插件引擎的交接**：
+   - 本机从已有 ACP `usage_update.size` 记下目标供应商和实际模型最近一次有效的窗口。只留在宿主内存，不随会话退出清除；宿主重启或切换登录状态后不复用旧值。只接受正整数，最多 4,000,000 token（内置模型目录最大为 3,500,000，向上取整留余量）。无效更新不覆盖已有的有效值。
+   - 用同一套交接长度算法：窗口的 30%，最多 100,000 估算 token 和 250,000 字符；已知下一条输入长度时额外留出空间。没有可匹配的窗口（包括未报告实际模型或选择默认模型但尚不知实际路由）则保持 16,000 字符。
+   - 另一台电脑执行和分享执行的目录不提供这个运行期窗口，继续使用 16,000 字符。不新增远程请求，也不把本机同名模型的窗口当作远端窗口。
 
 ## 6. Review 清单与最小回归入口
 

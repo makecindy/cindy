@@ -63,7 +63,10 @@ vi.mock('../../../device-link/broadcast-tap.js', () => ({
   getSafeDataOwnerPushStamp: vi.fn(() => undefined),
   tapWindowBroadcast: h.tapWindowBroadcast,
 }));
-vi.mock('../../agentIslandSessionPatch', () => ({ notifyAgentIslandSessionPatch: vi.fn() }));
+vi.mock('../../agentIslandSessionPatch', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../../agentIslandSessionPatch')>(),
+  notifyAgentIslandSessionPatch: vi.fn(),
+}));
 vi.mock('../../../messagePersistBroadcaster.desktop', () => ({ noteSessionClearBoundary: vi.fn() }));
 vi.mock('../../../sessionIds', () => ({ resolveBusinessSessionId: (id: string) => id }));
 vi.mock('../../../worktree/resourceLock', () => ({
@@ -124,7 +127,7 @@ function createDb(): void {
       context_window_runtime INTEGER,
       fast_mode INTEGER NOT NULL DEFAULT 0,
       cleared_at INTEGER,
-      pinned_at INTEGER, snoozed_until INTEGER, snoozed_at INTEGER,
+      pinned_at INTEGER, snoozed_until INTEGER, snoozed_at INTEGER, archived_at INTEGER,
       hidden_at INTEGER,
       notifications_muted INTEGER NOT NULL DEFAULT 0,
       created_at INTEGER NOT NULL,
@@ -329,7 +332,7 @@ describe('local-db:sessions:restore-if-archived', () => {
     expect(readStatus()).toBe('active');
     expect(h.tapWindowBroadcast).toHaveBeenCalledWith('local-db:sessions:patched', {
       sessionId: 'target',
-      patch: { status: 'active', snoozedUntil: null, snoozedAt: null },
+      patch: { status: 'active', archivedAt: null, snoozedUntil: null, snoozedAt: null },
     });
   });
 

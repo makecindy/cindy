@@ -83,7 +83,7 @@ import { WORKLOUDER_CREATOR_LIT_TASK_KEY_COUNT } from '../../../shared/workLoude
 import { setSessionOrdinalBadges } from './sidebar/sessionOrdinalBadges';
 import { useOwnTopNavScrollableRows, useSidebarCollapsedState } from '../feature-context';
 import { SidebarRailNavigation, SidebarTopNav } from '@/components/sidebar/SidebarTopNav';
-import { SidebarFilterPopover } from './sidebar/SidebarFilterPopover';
+import { SidebarFilterPopover, type SidebarPluginHarness } from './sidebar/SidebarFilterPopover';
 import { MainListScopeHeader } from './sidebar/MainListScopeHeader';
 import { SharedTasksSection } from '@/features/device-link/SharedTasksSection';
 import { TeammatesSection } from '@/features/bots/TeammatesSection';
@@ -278,7 +278,6 @@ import {
 } from './sidebar/railPanelStore';
 import { SessionEntryList } from './sidebar/SessionEntryList';
 import { useInboxUnread } from './sidebar/useInboxUnread';
-import { useTeammateInboxEntries } from '@/features/bots/useTeammateInboxEntries';
 import { AttentionDot } from '@/components/sidebar/AttentionDot';
 import {
   getDialogueCollapseLimit,
@@ -302,6 +301,9 @@ import {
   DIALOGUE_FILTER_KEY,
   projectFilterIncludes,
   buildManualPinnedReorder,
+  harnessFilterPredicate,
+  isPluginHarnessKey,
+  sessionHarnessKey,
 } from './hooks/helpers/sidebarFilterCore';
 import {
   activePinnedSidebarEntryIds,
@@ -362,7 +364,10 @@ import {
   useDeleteScheduleWithSessions,
   type DeletedScheduleGeneratedSessionResult,
 } from '@/features/scheduler/hooks/useDeleteScheduleWithSessions';
-import { loadActiveBoundScheduleNames } from '@/features/scheduler/lib/archiveScheduleWarning';
+import {
+  loadActiveBoundScheduleNames,
+  loadActiveBoundSchedules,
+} from '@/features/scheduler/lib/archiveScheduleWarning';
 import { resolveDialogueDeviceTarget, type DialogueDeviceTarget } from './lib/dialogueCreateTarget';
 import { makeDialogueNewMakerRouteState } from './lib/newMakerRouteState';
 import { makeGenericNewMakerRouteState } from './lib/genericNewMakerRouteState';
@@ -462,8 +467,6 @@ function sameStringSet(a: ReadonlySet<string>, b: ReadonlySet<string>): boolean 
 }
 
 /* ============================== Root ============================== */
-
-const EMPTY_INBOX_TEAMMATES: readonly never[] = [];
 
 export function CCAgentSidebarUpper() {
   const { t } = useTranslation();
@@ -1962,11 +1965,7 @@ function ExpandedView({
   }, [groupsWithPinnedProjects.projects, hiddenProjectKeys, filter.projectsAsSet, localPlatform, teammatesElsewhere]);
 
   /* ---- M41: Vendor 过滤 — 应用到 pinned / unclassified / project sessions ---- */
-  const vendorPredicate = useMemo(() => {
-    if (filter.vendor === 'all') return null;
-    const v = filter.vendor;
-    return (s: { agentKind?: string | null }) => (s.agentKind ?? 'cc') === v;
-  }, [filter.vendor]);
+  const vendorPredicate = useMemo(() => harnessFilterPredicate(filter.vendor), [filter.vendor]);
 
   const pinnedProjectKeys = useMemo(() => {
     const keys = new Set<string>();
@@ -2122,6 +2121,31 @@ function ExpandedView({
   // allProjectGroups still respects device scope and task status.
   const dialogueActionSessions = allProjectGroups.dialogues;
   const dialogueFilterCount = taskListMode === 'inbox' ? dialogueActionSessions.length : allGroups.dialogues.length;
+  // Harness 筛选里的插件 Harness：当前范围内任务实际用到的；已勾选但暂时没有任务的也保留，
+  // 否则用户没有地方取消勾选。
+  const harnessOptionSessions = taskListMode === 'inbox' ? statusIndependentSidebarSessions : sidebarSessions;
+  const pluginHarnessOptions = useMemo(() => {
+    const options = new Map<string, SidebarPluginHarness>();
+    for (const session of harnessOptionSessions) {
+      const key = sessionHarnessKey(session);
+      if (!isPluginHarnessKey(key) || options.has(key)) continue;
+      options.set(key, {
+        key,
+        providerId: session.providerId ?? null,
+        deviceId: session.deviceLinkDeviceId,
+        agentDeviceId: session.agentDeviceId ?? undefined,
+        remoteHostId: session.remoteHostId,
+        deviceConnected: session.deviceLinkConnectionStatus !== 'disconnected'
+          && session.deviceLinkConnectionStatus !== 'connecting',
+      });
+    }
+    if (filter.vendor !== 'all') {
+      for (const key of filter.vendor) {
+        if (isPluginHarnessKey(key) && !options.has(key)) options.set(key, { key, providerId: key });
+      }
+    }
+    return [...options.values()];
+  }, [harnessOptionSessions, filter.vendor]);
 
   // 对话段排序状态提升到此处:DialogueSection(展开态)受控消费,rail 对话
   // 面板按同一排序渲染——否则折叠后面板的前 N 条/折叠溢出与展开态刚排好的
@@ -2242,7 +2266,7 @@ function ExpandedView({
       if (
         matchingSessions.length === 0 &&
         (!project.isPersistentLocal ||
-          (vendorPredicate && !persistentProjectMatchesVendor(project, filter.vendor)))
+          (vendorPredicate && !persistentProjectMatchesVendor(project, vendorPredicate)))
       )
         return [];
       return [
@@ -2262,7 +2286,6 @@ function ExpandedView({
     pinnedProjectComparisonKeys,
     localPlatform,
     vendorPredicate,
-    filter.vendor,
     hostProjectSort,
     projectPriorityContext,
   ]);
@@ -2279,14 +2302,13 @@ function ExpandedView({
       ...(inboxFilter.projectsAsSet === null || inboxFilter.projectsAsSet.has(DIALOGUE_FILTER_KEY) ? inboxGroups.dialogues : []),
       ...(inboxFilter.projects === 'all' ? inboxGroups.unclassified : []),
     ];
-    return inboxFilter.vendor === 'all' ? scoped : scoped.filter(session => (session.agentKind ?? 'cc') === inboxFilter.vendor);
+    const inboxVendorPredicate = harnessFilterPredicate(inboxFilter.vendor);
+    return inboxVendorPredicate ? scoped.filter(inboxVendorPredicate) : scoped;
   }, [inboxGroups, teammatesElsewhere, hiddenProjectKeys, localPlatform,
     inboxFilter]);
 
-  const teammateEntries = useTeammateInboxEntries();
-  const inboxTeammates = sidebarContentFilterCount(inboxFilter) ? EMPTY_INBOX_TEAMMATES : teammateEntries;
   const { now: inboxNow, hasUnread } = useInboxUnread(
-    inboxSessions, inboxTeammates, projectPriorityProjection.base, isInboxTeammateTask,
+    inboxSessions, projectPriorityProjection.base, isInboxTeammateTask,
   );
   const reportUnread = useContext(InboxUnreadReporter);
   useLayoutEffect(() => {
@@ -2304,7 +2326,7 @@ function ExpandedView({
       if (
         matchingSessions.length === 0 &&
         (!project.isPersistentLocal ||
-          (vendorPredicate && !persistentProjectMatchesVendor(project, filter.vendor)))
+          (vendorPredicate && !persistentProjectMatchesVendor(project, vendorPredicate)))
       )
         return [];
       return [
@@ -2322,7 +2344,7 @@ function ExpandedView({
       localPlatform,
       projectPriorityContext,
     );
-  }, [visibleProjects, vendorPredicate, filter.vendor, hostProjectSort, localPlatform, projectPriorityContext]);
+  }, [visibleProjects, vendorPredicate, hostProjectSort, localPlatform, projectPriorityContext]);
 
   /**
    * Pinned 拖拽落定回调。SortableList 给的是当前 visible（含 vendor / projectsFilter
@@ -3349,8 +3371,7 @@ function ExpandedView({
         const queue = [...order, ...remaining.filter(id => !original.has(id))];
         const key = pickSessionIdAfterRemoval(queue, removed, anchor) ?? remaining[0];
         const next = key ? available.get(key) : undefined;
-        if (next && 'route' in next) navigate(next.route);
-        else if (next) void handleSessionClick(next.sessionId);
+        if (next) void handleSessionClick(next.sessionId);
         else navigate('/cc-agent/new', { state: { workspacePrompt: 'generic' } });
       };
       if (action === 'complete' && canHandleOfflineInbox && offlineDeviceId && session) {
@@ -3420,9 +3441,9 @@ function ExpandedView({
             // 自动化绑定读本地缓存,放在 worktree 预检之前,不占用预检之后的窗口。
             // 收件箱「完成」单击生效:不再提醒自动化会恢复任务(安静的一轮会放回已处理,
             // archive-pauses-automations.md);未提交改动的确认照常保留。
-            const scheduleNames = action === 'complete'
+            const boundSchedules = action === 'complete'
               ? []
-              : (await loadActiveBoundScheduleNames([
+              : (await loadActiveBoundSchedules([
                   { id: sessionId, deviceLinkDeviceId: session?.deviceLinkDeviceId, orcaRole: session?.orcaRole },
                 ])).get(sessionId) ?? [];
             // **worktree 预检必须是最后一个前置条件**(codex review):它之后再 await
@@ -3447,9 +3468,9 @@ function ExpandedView({
             // 同样要弹确认框,否则归档会静默回收可能带着未提交改动的 worktree
             // (greptile review)。'unknown' 时不摆 dirty 警告文案 —— 那会谎称有改动,
             // 走的是普通归档确认。
-            const confirmed = preflight === 'clean' && scheduleNames.length === 0
+            const confirmed = preflight === 'clean' && boundSchedules.length === 0
               ? true
-              : await confirmTaskArchive(preflight, scheduleNames);
+              : await confirmTaskArchive(preflight, boundSchedules);
             if (!confirmed || !isCurrent()) return false;
             // 重定向判定用 viewedSessionId:files 路由下归档「正在浏览的会话」也要
             // 跳离失效的文件视图(codex review;正常路由下两者恒等)。经 ref 读:它随
@@ -3962,6 +3983,7 @@ function ExpandedView({
                   filter={filter}
                   allKnownProjects={visibleProjectUniverse}
                   dialogueCount={dialogueFilterCount}
+                  pluginHarnesses={pluginHarnessOptions}
                   hasRemoteDevices={deviceGroupingAvailable}
                 />
                 <RemoteSidebarLoadNotice
@@ -3977,6 +3999,7 @@ function ExpandedView({
                   filter={filter}
                   allKnownProjects={visibleProjectUniverse}
                   dialogueCount={dialogueFilterCount}
+                  pluginHarnesses={pluginHarnessOptions}
                   hasRemoteDevices={deviceGroupingAvailable}
                 />
                 <RemoteSidebarLoadNotice kind="devices" status="loading" partial={false} />
@@ -3987,6 +4010,7 @@ function ExpandedView({
                   filter={filter}
                   allKnownProjects={visibleProjectUniverse}
                   dialogueCount={dialogueFilterCount}
+                  pluginHarnesses={pluginHarnessOptions}
                   hasRemoteDevices={deviceGroupingAvailable}
                 />
                 <RemoteSidebarLoadNotice
@@ -4003,6 +4027,7 @@ function ExpandedView({
                   filter={filter}
                   allKnownProjects={visibleProjectUniverse}
                   dialogueCount={dialogueFilterCount}
+                  pluginHarnesses={pluginHarnessOptions}
                   hasRemoteDevices={deviceGroupingAvailable}
                 />
                 <div className="flex flex-col items-center justify-center px-3 py-12 text-center">
@@ -4103,7 +4128,6 @@ function ExpandedView({
                 <ProjectsSection
                   inboxSessions={inboxSessions}
                   inboxNow={inboxNow}
-                  inboxTeammates={inboxTeammates}
                   isInboxTeammateTask={isInboxTeammateTask}
                   unclassified={visibleUnclassified}
                   projects={visibleProjectsWithVendor}
@@ -4111,6 +4135,7 @@ function ExpandedView({
                   dialogueActionSessions={dialogueActionSessions}
                   allKnownProjects={visibleProjectUniverse}
                   dialogueCount={dialogueFilterCount}
+                  pluginHarnesses={pluginHarnessOptions}
                   allProjectKeysForOrder={gcProjectKeys}
                   filter={filter}
                   collapsed={collapse.collapsed}
@@ -4160,6 +4185,7 @@ function ExpandedView({
         filter={filter}
         allKnownProjects={visibleProjectUniverse}
         dialogueCount={dialogueFilterCount}
+        pluginHarnesses={pluginHarnessOptions}
         // 与段头实例同一门控(详见 ProjectsSection.deviceGroupingAvailable)。
         hasRemoteDevices={deviceGroupingAvailable}
         contextMenuPos={organizeMenuPos}

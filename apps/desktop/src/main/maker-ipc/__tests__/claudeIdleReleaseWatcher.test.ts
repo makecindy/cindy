@@ -246,6 +246,36 @@ describe('ordinary Claude task eligibility in SQLite', () => {
       expect(eligible.get('task', 'native-history')).toBeUndefined();
     } finally { db.close(); }
   });
+  it.each([
+    "UPDATE sessions SET status = 'archived'",
+    "UPDATE sessions SET source = 'plugin', hidden_at = 1",
+  ])('admits the Codex host-owned lane after %s, still refused for Claude', (change) => {
+    const db = database();
+    try {
+      const eligible = db.prepare(ORDINARY_CODEX_TASK_SQL);
+      db.exec(`UPDATE sessions SET agent_kind = '${makerToDbEngineKind('codex')}'`);
+      expect(eligible.get('task', 'native-history')).toEqual({ id: 'task' });
+      db.exec(change);
+      expect(eligible.get('task', 'native-history')).toEqual({ id: 'task' });
+      expect(db.prepare(ORDINARY_CLAUDE_TASK_SQL).get('task', 'native-history')).toBeUndefined();
+    } finally { db.close(); }
+  });
+  it.each([
+    "UPDATE sessions SET status = 'deleted'",
+    "UPDATE sessions SET status = 'archived'; INSERT INTO bot_session_links VALUES ('task')",
+    "UPDATE sessions SET source = 'plugin', hidden_at = 1; INSERT INTO orca_workers VALUES ('task')",
+    "UPDATE sessions SET source = 'plugin', hidden_at = 1; INSERT INTO orca_teams VALUES ('task', 'active')",
+    "UPDATE sessions SET source = 'plugin', hidden_at = 1; INSERT INTO session_goals VALUES ('task', 'active')",
+    "UPDATE sessions SET source = 'plugin', hidden_at = 1; UPDATE sessions SET remote_host_id = 'ssh-host'",
+    "UPDATE sessions SET source = 'plugin', hidden_at = 1; UPDATE sessions SET agent_device_id = 'another-computer'",
+  ])('keeps ownership exclusions on the Codex host-owned lanes: %s', (changes) => {
+    const db = database();
+    try {
+      db.exec(`UPDATE sessions SET agent_kind = '${makerToDbEngineKind('codex')}'`);
+      db.exec(changes);
+      expect(db.prepare(ORDINARY_CODEX_TASK_SQL).get('task', 'native-history')).toBeUndefined();
+    } finally { db.close(); }
+  });
   it('retains completed goals and other tasks while releasing only a resumable ordinary task', () => {
     const db = database();
     try {

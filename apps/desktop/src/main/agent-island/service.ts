@@ -6,7 +6,9 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { release as getOsRelease } from 'node:os';
 import { TASK_ACTIVITY_SNAPSHOT } from '@cindy/device-link';
-import { projectHostTaskActivity } from '../device-link/taskActivity.js';
+import { taskSnoozeUntil } from '@cindy/maker-shared/live-task-priority';
+import { keepInboxCountedTasks, projectHostTaskActivity } from '../device-link/taskActivity.js';
+import { readSessionInboxFacts, type SessionInboxFacts } from '../localDb/sessionInboxFacts.js';
 import { SESSION_ACTIVITY_CHANNEL, type SessionActivityPayload } from '@cindy/device-link';
 import {
   isTerminalAgentErrorEvent,
@@ -329,6 +331,7 @@ export function initAgentIslandService(deps: AgentIslandServiceDeps): AgentIslan
   setAgentIslandCompanionChangeSink({
     companionChanged: (botId) => service.handleCompanionProfileChanged(botId),
     groupChanged: (groupId) => service.handleBotGroupChanged(groupId),
+    inboxFactsChanged: (sessionId) => service.handleSessionInboxFactsChanged(sessionId),
   });
   // 远程任务同步与原生岛面无关:无原生岛的平台也要靠它发桌面通知。
   service.registerDeviceSessionIpc();
@@ -397,6 +400,9 @@ export class AgentIslandService {
   private publishTimer: ReturnType<typeof setTimeout> | null = null;
   private readonly metadataCache = new Map<string, AgentIslandCachedMetadata>();
   private readonly metadataLoading = new Set<string>();
+  private readonly inboxFacts = new Map<string, { stamp: string; facts: SessionInboxFacts | null }>();
+  private readonly inboxFactsLoading = new Map<string, string>();
+  private inboxWakeTimer: ReturnType<typeof setTimeout> | undefined;
   private readonly remoteCompanions = new Map<string, { snapshot: AgentIslandCompanionSnapshot; retryAt: number | null }>();
   private readonly remoteCompanionKeysInUse = new Set<string>();
   /** Latest identity read per Session: an older read that finishes late never overwrites a newer one. */
@@ -1091,6 +1097,10 @@ export class AgentIslandService {
     this.emitSessionActivityTransitions([], Date.now());
     this.metadataCache.clear();
     this.metadataLoading.clear();
+    this.inboxFacts.clear();
+    this.inboxFactsLoading.clear();
+    clearTimeout(this.inboxWakeTimer);
+    this.inboxWakeTimer = undefined;
     this.remoteCompanions.clear();
     this.remoteCompanionKeysInUse.clear();
     this.companionReadSeq.clear();
@@ -2134,9 +2144,71 @@ export class AgentIslandService {
     return buildAllSessionActivitySnapshots(this.state);
   }
 
-  /** This computer's share of the island counts; the phone island adds these per computer. */
+  /**
+   * This computer's share of the phone counts; the phone island adds these per computer.
+   * Only tasks the inbox lists count (see `keepInboxCountedTasks`): the user must be able
+   * to find and clear every counted task there.
+   */
   getLocalTaskOverview(): AgentIslandSessionSnapshot[] {
-    return buildLocalAgentIslandTaskOverview(this.state, Date.now(), this.companionChatProjections());
+    const now = Date.now();
+    const rows = buildLocalAgentIslandTaskOverview(this.state, now, this.companionChatProjections());
+    this.refreshInboxFacts(rows, now);
+    return keepInboxCountedTasks(rows, (sessionId) => this.inboxFacts.get(sessionId)?.facts, now);
+  }
+
+  /**
+   * Row facts follow the row: a new phase or result reloads them, after the turn has written
+   * its send time. Snooze and wake edits arrive through `handleSessionInboxFactsChanged`.
+   * Entries for tasks that left the overview are dropped, so the cache stays bounded by it.
+   */
+  private refreshInboxFacts(rows: readonly AgentIslandSessionSnapshot[], now: number): void {
+    const ids = new Set(rows.map((row) => row.sessionId));
+    for (const id of this.inboxFacts.keys()) if (!ids.has(id)) this.inboxFacts.delete(id);
+    for (const id of this.inboxFactsLoading.keys()) if (!ids.has(id)) this.inboxFactsLoading.delete(id);
+    let wakeAt = Infinity;
+    for (const row of rows) {
+      const stamp = row.phase === 'running' ? 'running' : `${row.phase}:${row.lastActivityAt}`;
+      const cached = this.inboxFacts.get(row.sessionId);
+      const until = cached?.facts ? taskSnoozeUntil(cached.facts) : 0;
+      if (until > now) wakeAt = Math.min(wakeAt, until);
+      if (cached?.stamp === stamp || this.inboxFactsLoading.get(row.sessionId) === stamp) continue;
+      this.inboxFactsLoading.set(row.sessionId, stamp);
+      void readSessionInboxFacts(row.sessionId)
+        .then((facts) => {
+          if (this.inboxFactsLoading.get(row.sessionId) !== stamp) return;
+          this.inboxFactsLoading.delete(row.sessionId);
+          const previous = this.inboxFacts.get(row.sessionId);
+          this.inboxFacts.set(row.sessionId, { stamp, facts });
+          if (JSON.stringify(previous?.facts ?? null) !== JSON.stringify(facts)) this.notifyTaskOverview();
+        })
+        .catch((err) => {
+          if (this.inboxFactsLoading.get(row.sessionId) === stamp) this.inboxFactsLoading.delete(row.sessionId);
+          log.warn('session inbox facts load failed', {
+            sessionId: row.sessionId,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        });
+    }
+    // A snooze ending returns its task to the inbox without any other change to announce it.
+    clearTimeout(this.inboxWakeTimer);
+    this.inboxWakeTimer = undefined;
+    if (Number.isFinite(wakeAt)) {
+      this.inboxWakeTimer = setTimeout(() => {
+        this.inboxWakeTimer = undefined;
+        this.notifyTaskOverview();
+      }, Math.min(2_147_483_647, Math.max(1, wakeAt - now)));
+      this.inboxWakeTimer.unref?.();
+    }
+  }
+
+  /** Snooze, wake or a new send changed which inbox section a task belongs to. */
+  handleSessionInboxFactsChanged(sessionId: string): void {
+    const cached = this.inboxFacts.get(sessionId);
+    if (!cached && !this.inboxFactsLoading.has(sessionId)) return;
+    // Keep counting by the old facts until the reload lands, so a snooze never flashes back in.
+    if (cached) this.inboxFacts.set(sessionId, { stamp: '', facts: cached.facts });
+    this.inboxFactsLoading.delete(sessionId);
+    this.notifyTaskOverview();
   }
 
   /** Read the same canonical snapshot used by sidebar and device-list relays. */
@@ -2193,13 +2265,17 @@ export class AgentIslandService {
     return () => this.attentionCountListeners.delete(listener);
   }
 
-  private publishAttentionCount(count: number): void {
-    // Content can change without changing the count (including restored companion chats).
+  private notifyTaskOverview(): void {
     for (const listener of this.taskOverviewListeners) {
       try { listener(); } catch (error) {
         log.warn('task overview listener failed', { error: error instanceof Error ? error.message : String(error) });
       }
     }
+  }
+
+  private publishAttentionCount(count: number): void {
+    // Content can change without changing the count (including restored companion chats).
+    this.notifyTaskOverview();
     if (count === this.attentionCount) return;
     this.attentionCount = count;
     for (const listener of this.attentionCountListeners) {

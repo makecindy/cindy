@@ -12,12 +12,13 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 const h = vi.hoisted(() => ({
   applyRuntimeSetModelChange: vi.fn(),
+  sessionRow: { agentKind: 'cc' as string, model: 'grok-4.6', providerId: 'xd' },
 }));
 vi.mock('../../localDb/client/current.js', () => ({
   getDbClient: () => ({
     drizzle: {
       select: () => ({
-        from: () => ({ where: () => ({ limit: async () => [{ agentKind: 'cc', model: 'grok-4.6', providerId: 'xd' }] }) }),
+        from: () => ({ where: () => ({ limit: async () => [h.sessionRow] }) }),
       }),
     },
   }),
@@ -33,6 +34,7 @@ afterEach(() => {
   applied.clear();
   pending.clear();
   h.applyRuntimeSetModelChange.mockReset();
+  h.sessionRow = { agentKind: 'cc', model: 'grok-4.6', providerId: 'xd' };
 });
 
 const reconcileWith = (overrides: Partial<SessionContextWindowBudgetReconcilePorts>) => createSessionContextWindowBudgetReconcile({
@@ -117,5 +119,17 @@ describe('session context window budget reconciler', () => {
     await replay('task-1', before);
     expect(h.applyRuntimeSetModelChange).toHaveBeenCalledTimes(expectedReconciles);
     expect(before).toHaveBeenCalledTimes(expectedReconciles);
+  });
+
+  it('skips plugin-engine tasks without coercing them into claude-code', async () => {
+    h.sessionRow = { agentKind: 'acp', model: 'gemini-4-neon', providerId: 'acp-plugin:antigravity:agy' };
+    const checkEffectiveWindow = vi.fn(() => true);
+    const { sessionContextWindowBudgetApplier } = reconcileWith({
+      contextWindowBudgetChangesEffectiveWindow: checkEffectiveWindow,
+    });
+
+    await sessionContextWindowBudgetApplier('task-acp', { previous: null, next: 300_000 });
+    expect(checkEffectiveWindow).not.toHaveBeenCalled();
+    expect(h.applyRuntimeSetModelChange).not.toHaveBeenCalled();
   });
 });
