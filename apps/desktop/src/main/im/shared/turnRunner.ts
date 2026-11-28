@@ -890,10 +890,16 @@ export function createTurnRunner(
   /** 接线前跟随切换期间, 切换重建会话要用的渠道 vendorOptions(见 vendorOptionsForSession)。 */
   const coldWiringVendorOptions = new Map<string, Record<string, unknown>>();
   /** Agent-switch close suppression is scoped to its guarded preparation. */
-  const expectedSessionCloses = new Map<string, { expectedSession: MakerSession }>();
+  const expectedSessionCloses = new Map<string, MakerSession>();
   type MakerInstance = ReturnType<typeof getMaker>;
   let subscribedMaker: MakerInstance | null = null;
   let unsubscribeMakerEvents: (() => void) | null = null;
+
+  function expectAgentSwitchClose(sessionId: string, cachedSession: MakerSession): void {
+    // An out-of-band runtime refresh can leave the queue wired to the retired
+    // instance. The switch closes Maker's live instance, not the cached one.
+    expectedSessionCloses.set(sessionId, getMaker().getSession(sessionId) ?? cachedSession);
+  }
 
   function ensureMakerCloseSubscription(maker: MakerInstance): void {
     if (subscribedMaker === maker && unsubscribeMakerEvents) return;
@@ -914,9 +920,8 @@ export function createTurnRunner(
         state && event.reason === 'runtime-refresh' &&
         deps.acquirePendingAgentSwitch
       ) return;
-      const suppression = expectedSessionCloses.get(event.sessionId);
       if (
-        suppression?.expectedSession === event.session &&
+        expectedSessionCloses.get(event.sessionId) === event.session &&
         event.reason === 'agent-switch'
       ) return;
       forgetClosedSession(event.sessionId, 'maker session closed');
@@ -1902,7 +1907,7 @@ export function createTurnRunner(
         // 后面的 refreshSessionAfterPendingAgentSwitch 原地换绑。
         let blocked: string | null;
         if (deps.acquirePendingAgentSwitch) {
-          expectedSessionCloses.set(rowId, { expectedSession: state.makerSession });
+          expectAgentSwitchClose(rowId, state.makerSession);
           try {
             blocked = await deps.companion.prepareSend(rowId);
           } finally {
@@ -1954,10 +1959,7 @@ export function createTurnRunner(
       // deferred 切换会关闭旧 session。apply 成功后重新读取 maker 里的 live
       // session 并原地换绑 IM listener,确保当前这条消息发给目标引擎且队列不丢。
       if (deps.acquirePendingAgentSwitch) {
-        const suppression = {
-          expectedSession: state.makerSession,
-        };
-        expectedSessionCloses.set(rowId, suppression);
+        expectAgentSwitchClose(rowId, state.makerSession);
         try {
           releaseAgentSwitchLock = await deps.acquirePendingAgentSwitch(rowId, {
             // 伙伴任务跟随伙伴模型链, 不对齐渠道默认。
@@ -4521,8 +4523,7 @@ export function createTurnRunner(
         if (!isStillCurrent()) return;
       }
       if (deps.acquirePendingAgentSwitch) {
-        const suppression = { expectedSession: state.makerSession };
-        expectedSessionCloses.set(rowId, suppression);
+        expectAgentSwitchClose(rowId, state.makerSession);
         try {
           releaseAgentSwitchLock = await deps.acquirePendingAgentSwitch(rowId, {
             channelOwned: false,

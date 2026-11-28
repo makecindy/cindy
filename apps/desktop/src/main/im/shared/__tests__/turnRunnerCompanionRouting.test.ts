@@ -25,7 +25,7 @@ import { isIMessageSteeringEnabled } from '../../imessage/steering';
 import { findImQuestionReply } from '../questionPresentation';
 import { getActiveInteractionRoute } from '../../../maker-ipc/interactionRouter';
 import { readChannelToolScope, type IMessageToolScope } from '../channelToolScope';
-import type { ChannelIM } from '@cindy/im';
+import type { ChannelIM, FeishuIM } from '@cindy/im';
 
 const mocks = vi.hoisted(() => ({
   logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
@@ -104,6 +104,7 @@ import type { ImCardBuilders } from '../cardBuilders';
 import type { ImSessionRepo, ImSessionRow } from '../sessionRepo';
 import type { ImChannelAdapter } from '../types';
 import type { ImCompanionRouteDeps } from '../imBotBindingRoute';
+import { buildFeishuAdapter } from '../../feishu/adapter';
 import { ui as telegramUi } from '../../telegram/uiText';
 
 interface SessionHarness {
@@ -112,7 +113,10 @@ interface SessionHarness {
   emit(event: AgentEvent): void;
 }
 
-function makeSessionHarness(sessionId: string): SessionHarness {
+function makeSessionHarness(
+  sessionId: string,
+  runtime?: Pick<Session, 'agentKind' | 'instanceId'>,
+): SessionHarness {
   const listeners: Array<(event: AgentEvent) => void> = [];
   const send = vi.fn(
     async (
@@ -128,6 +132,7 @@ function makeSessionHarness(sessionId: string): SessionHarness {
     workDir: '/tmp/wd',
     agentKind: 'claude-code',
     instanceId: `${sessionId}-instance`,
+    ...runtime,
     abort: vi.fn(async () => undefined),
     send,
     isTurnRunning: vi.fn(() => false),
@@ -832,6 +837,92 @@ describe('turnRunner: connection handed to a companion bot', () => {
     expect(commitFinal).toHaveBeenCalledWith(expect.objectContaining({ userId: OWNER, text: 'sample reply', terminal: 'done' }));
     expect(runner.getMakerSessionById('mimi-main')).toBe(switched.session);
   });
+
+  // #13655 (unit): the existing guard test closes the cached instance. After an
+  // external route refresh, runAgentTurn must deliver the triggering input only
+  // to the new engine and finalize its reply in the same Feishu group.
+  it.each(['companion guard', 'send lock'] as const)(
+    'dispatches once when the %s switches a Feishu lane refreshed outside the runner',
+    async (switchAt) => {
+      const userId = 'g/oc_test_group';
+      const sessionId = `lane:im:feishu:${BOT_CONTEXT}:g:oc_test_group`;
+      const cached = makeSessionHarness(sessionId, { agentKind: 'codex', instanceId: 'cached' });
+      const refreshed = makeSessionHarness(sessionId, { agentKind: 'codex', instanceId: 'refreshed' });
+      const switched = makeSessionHarness(sessionId, { agentKind: 'claude-code', instanceId: 'switched' });
+      harnesses.set(sessionId, cached);
+      const initialRow = rowFor(sessionId, { agentKind: 'codex', model: 'gpt-5.5' });
+      botRows.set(sessionId, initialRow);
+      companion.resolveSession.mockResolvedValue({ ok: true, sessionId, created: false });
+
+      type CloseEvent = Extract<MakerEvent, { type: 'session:closed' }>;
+      const listeners = new Set<(event: MakerEvent) => void>();
+      mocks.getMaker().on.mockImplementation((listener: (event: MakerEvent) => void) => {
+        listeners.add(listener);
+        return () => listeners.delete(listener);
+      });
+      const replaceLive = (next: SessionHarness, reason: CloseEvent['reason']) => {
+        const { session } = harnesses.get(sessionId)!;
+        harnesses.delete(sessionId);
+        vi.mocked(session.getStatus).mockReturnValue('closed');
+        for (const listener of listeners) listener({ type: 'session:closed', sessionId, session, reason });
+        harnesses.set(sessionId, next);
+      };
+      const applySwitch = () => {
+        replaceLive(switched, 'agent-switch');
+        botRows.set(sessionId, rowFor(sessionId, { model: 'bot-model' }));
+      };
+      companion.prepareSend.mockImplementation(async () => {
+        if (switchAt === 'companion guard') applySwitch();
+        return null;
+      });
+      acquirePendingAgentSwitch.mockImplementation(async () => {
+        if (switchAt === 'send lock') applySwitch();
+        return () => undefined;
+      });
+      mocks.dbSelect.mockImplementation(() => ({
+        from: () => ({ where: () => ({ limit: async () => [{ ...botRows.get(sessionId), status: 'active' }] }) }),
+      }));
+
+      const handle = streamingHandleStub();
+      mocks.im.startStreamingText.mockResolvedValue(handle);
+      const adapter = buildFeishuAdapter(
+        { ...mocks.im, getService: () => 'feishu' } as unknown as FeishuIM,
+        fakeAdapter.config,
+        { companionBotId: 'bot-mimi' },
+      );
+      const localRunner = createTurnRunner(adapter, fakeRepo, fakeCards, {
+        companion: companion as unknown as ImCompanionRouteDeps,
+        acquirePendingAgentSwitch,
+      });
+      try {
+        localRunner.attachSessionOutput(cached.session, userId, { attached: false, companionChannel: true });
+        replaceLive(refreshed, 'runtime-refresh');
+        expect(localRunner.getMakerSessionById(sessionId)).toBe(refreshed.session);
+
+        const onTurnComplete = vi.fn();
+        await localRunner.runAgentTurn({
+          botContextId: BOT_CONTEXT, userId, userMessageId: 'om_switch_trigger',
+          text: 'send this through the new engine', attachments: [], onTurnComplete,
+        });
+
+        expect(cached.send).not.toHaveBeenCalled();
+        expect(refreshed.send).not.toHaveBeenCalled();
+        expect(switched.send).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({ content: 'send this through the new engine' }),
+          expect.anything(),
+        );
+        switched.emit({ type: 'text', data: { text: 'sample reply', isFinal: true } });
+        switched.emit({ type: 'done', data: {} });
+
+        await vi.waitFor(() => expect(onTurnComplete).toHaveBeenCalledOnce());
+        expect(mocks.im.startStreamingText).toHaveBeenCalledExactlyOnceWith(userId, undefined, { threadTs: undefined });
+        expect(handle.finalize).toHaveBeenCalledExactlyOnceWith('sample reply');
+        expect(mocks.im.sendText).not.toHaveBeenCalled();
+      } finally {
+        await localRunner.disposeAllSessions();
+      }
+    },
+  );
 
   it('runs the shared pre-send context check between the bot guard and the send lock, and rebinds the refreshed session', async () => {
     // prepareUnhealthySessionForSend closes the live handle with reason 'runtime-refresh'
