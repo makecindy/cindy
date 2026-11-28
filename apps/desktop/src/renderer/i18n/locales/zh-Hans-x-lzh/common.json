@@ -15111,6 +15111,7 @@
       "taskClearedBeforeSend": "差事已清或方清，讯犹存于此机。",
       "invalidInput": "此讯有误，此机未收。",
       "profileInUseByDesktop": "此资料为独行之 Cindy 电脑端所用。先退其程，再传讯。",
+      "other": "此操作未毕。请稍后再试。",
       "deleteConfirmTitle": "删此讯？",
       "deleteConfirmBody": "此讯未能遣出，删之则不可复原。",
       "deleteUnconfirmedBody": "彼机或已收此讯。删之，唯去此机待遣之讯。彼机若已收，讯仍见于对谈之录。",

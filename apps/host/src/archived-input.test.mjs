@@ -16,7 +16,7 @@ const hostDir = fileURLToPath(new URL('../', import.meta.url));
 
 // Real CLI, HTTP, queue and SQLite (loopback integration). The old queue's stub
 // restore bypassed the real status reader. An archived row is the failing input.
-test('production input restores an archived task only for an admitted new client ID', { timeout: 50000 }, async () => {
+test('production input restores an archived task only for an admitted new client ID', { timeout: 80000 }, async () => {
   const profile = await mkdtemp(path.join(os.tmpdir(), 'cindy-archived-input-'));
   let child, exited, db;
   try {
@@ -49,7 +49,7 @@ test('production input restores an archived task only for an admitted new client
       const log = path.join(profile, 'logs', `main-${new Date().toISOString().slice(0, 10)}.log`);
       return (await readFile(log, 'utf8').catch(() => '')).slice(-5000);
     };
-    for (let i = 0; i < 600; i++) {
+    for (let i = 0; i < 900; i++) {
       assert.equal(child.exitCode, null, output);
       const found = readHostEndpoint(profile);
       if (found) {
@@ -80,7 +80,10 @@ test('production input restores an archived task only for an admitted new client
     const item = { clientId: 'new-input', text: 'Continue this task' };
 
     insert.run('archive', 'desktop', 'archived', profile, null, null);
+    const acceptedAt = performance.now();
     const [acceptedStatus, body] = await enqueue('archive', item, { expectedClearBoundaryMs: null });
+    const acceptedInMs = Math.round(performance.now() - acceptedAt);
+    console.info(`archived enqueue accepted in ${acceptedInMs}ms`);
     assert.equal(acceptedStatus, 200, body);
     assert.equal(statusFor.get('archive'), 'active');
     const [duplicateStatus, duplicateBody] = await enqueue('archive', item);

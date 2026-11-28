@@ -15285,6 +15285,7 @@
       "taskClearedBeforeSend": "A tarefa foi limpa ou está sendo limpa. A mensagem continua salva neste dispositivo.",
       "invalidInput": "O computador recusou a mensagem porque o conteúdo é inválido.",
       "profileInUseByDesktop": "Estes dados estão sendo usados pelo aplicativo para desktop da Cindy, que está rodando sozinho. Feche-o e envie novamente.",
+      "other": "Esta ação não foi concluída. Tente novamente em instantes.",
       "deleteConfirmTitle": "Excluir esta mensagem?",
       "deleteConfirmBody": "Esta mensagem não foi enviada. Sua exclusão não pode ser desfeita.",
       "deleteUnconfirmedBody": "O computador pode já ter recebido esta mensagem. Excluí-la remove apenas a mensagem pendente deste dispositivo. Se o computador a recebeu, ela continuará aparecendo no histórico da conversa.",

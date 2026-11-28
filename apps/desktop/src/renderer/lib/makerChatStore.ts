@@ -1176,7 +1176,7 @@ export interface QueuedMessage extends Omit<
 
 export type RemoteQueueDelivery = {
   state: 'failed' | 'unconfirmed';
-  refusal?: Exclude<ReturnType<typeof remoteInputRefusal>, 'other' | undefined>;
+  refusal?: Exclude<ReturnType<typeof remoteInputRefusal>, undefined>;
   checking?: boolean;
 };
 
@@ -12678,14 +12678,14 @@ async function retryRemotePendingMessage(sessionId: string, clientId: string): P
   }
   const confirmation = beginRemoteQueueConfirmation(sessionId, record);
   showRemoteQueueDelivery(sessionId, record, { ...delivery, checking: true });
-  const evidence = await confirmRemoteQueueDelivery(sessionId, record, confirmation, delivery.state === 'failed')
+  const evidence = await confirmRemoteQueueDelivery(sessionId, record, confirmation, record.retrySafe)
     .catch(() => 'unknown' as const);
   if (!isRemoteOptimisticSendRegistered(sessionId, record) || record.accepted) return;
   if (!confirmation.isCurrent() || (evidence !== 'missing' && evidence !== 'retry-safe')) {
     showRemoteQueueDelivery(sessionId, record, { state: 'unconfirmed' });
     return;
   }
-  if (delivery.state === 'unconfirmed') {
+  if (delivery.state === 'unconfirmed' && evidence === 'missing') {
     showRemoteQueueDelivery(sessionId, record, { state: 'failed' });
     return;
   }
@@ -12801,8 +12801,7 @@ async function dispatchRemoteOptimisticSend(
       // A stable preflight refusal applies to this write. Retain uncertainty if
       // an earlier attempt using this ID may still have been accepted.
       if (refusal && !record.needsDeliveryProof) {
-        showRemoteQueueDelivery(sessionId, record, { state: 'failed',
-          ...(refusal === 'other' ? {} : { refusal }) });
+        showRemoteQueueDelivery(sessionId, record, { state: 'failed', refusal });
         if (!getOrCreateState(sessionId).agentStatus.isRunning) clearSessionStarting(sessionId);
         return { kind: 'deferred' };
       }
@@ -12812,9 +12811,15 @@ async function dispatchRemoteOptimisticSend(
       }
       record.needsDeliveryProof = true;
       const confirmation = beginRemoteQueueConfirmation(sessionId, record);
-      const evidence = await confirmRemoteQueueDelivery(sessionId, record, confirmation).catch(() => 'unknown' as const);
+      const evidence = await confirmRemoteQueueDelivery(sessionId, record, confirmation,
+        record.retrySafe && record.attempt === 1).catch(() => 'unknown' as const);
       if (!isRemoteOptimisticSendRegistered(sessionId, record)) return { kind: 'cancelled' };
       if (record.accepted) return { kind: 'accepted' };
+      if (evidence === 'retry-safe' && confirmation.isCurrent()) {
+        record.retryProofCurrent = confirmation.isCurrent;
+        showRemoteQueueDelivery(sessionId, record);
+        return { kind: 'retry' };
+      }
       const missing = evidence === 'missing' && confirmation.isCurrent();
       showRemoteQueueDelivery(sessionId, record, { state: missing ? 'failed' : 'unconfirmed' });
       if (!getOrCreateState(sessionId).agentStatus.isRunning) clearSessionStarting(sessionId);

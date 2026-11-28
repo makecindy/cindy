@@ -15111,6 +15111,7 @@
       "taskClearedBeforeSend": "差事已清或方清，訊猶存於此機。",
       "invalidInput": "此訊有誤，此機未收。",
       "profileInUseByDesktop": "此資料為獨行之 Cindy 電腦端所用。先退其程，再傳訊。",
+      "other": "此操作未畢。請稍後再試。",
       "deleteConfirmTitle": "刪此訊？",
       "deleteConfirmBody": "此訊未能遣出，刪之則不可復原。",
       "deleteUnconfirmedBody": "彼機或已收此訊。刪之，唯去此機待遣之訊。彼機若已收，訊仍見於對談之錄。",

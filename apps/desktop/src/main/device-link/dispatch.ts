@@ -116,6 +116,7 @@ import {
   CONTROLLER_CAPABILITY_MAKER_EVENT_BATCH_V1,
   CONTROLLER_CAPABILITY_PLUGIN_ENGINE_SWITCH_INTENT_V1,
   CONTROLLER_CAPABILITY_SESSION_TEXT_SNAPSHOT_V1,
+  CONTROLLER_CAPABILITY_EXACT_MESSAGE_NOT_FOUND_V1,
   DEVICE_LINK_CAPABILITY_COMPACT_MESSAGE_HISTORY_V1,
   DEVICE_LINK_CAPABILITY_HISTORY_VIEW_V1,
   DEVICE_LINK_CAPABILITY_GITHUB_READ_V1,
@@ -5792,6 +5793,7 @@ async function executeRemoteInvoke(src: string, payload: InvokePayload | undefin
       return { ok: false, error: { code: 'BACKPRESSURE', message } };
     }
     if (!handlerCompleted && payload.channel === 'local-db:messages:around-client-id'
+        && subscriptions.controllerSupports(src, CONTROLLER_CAPABILITY_EXACT_MESSAGE_NOT_FOUND_V1)
         && (err instanceof DeviceLinkError || isIpcError(err)) && err.code === 'NOT_FOUND') {
       return { ok: false, error: { code: err.code, message } };
     }

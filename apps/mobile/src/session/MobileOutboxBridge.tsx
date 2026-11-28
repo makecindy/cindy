@@ -49,7 +49,7 @@ import {
 } from "./sessionReferences";
 import { remoteSessionStore } from "./remoteSessionStore";
 import { unarchiveSessionAfterSend, type SessionPatchInvoke } from "./unarchiveAfterSend";
-import { cacheOutboxHistory } from "./outboxHistoryCache";
+import { cacheOutboxHistory, hasObservedOutboxHistory } from "./outboxHistoryCache";
 import { readLegacyOutboxHistory } from "./outboxHistoryConfirmation";
 import { validateOutboxResourceBinding } from './outboxResourceBinding';
 import { findRemoteHistoryView } from "./remoteHistoryViews";
@@ -341,6 +341,7 @@ export function MobileOutboxBridge() {
           });
         return found;
       },
+      observedHistory: (r) => hasObservedOutboxHistory(r.deviceId, r.item.sessionId, r.item.clientId),
       legacyHistory: async (r) => {
         const sessionId = r.item.sessionId;
         const authority = remoteSessionStore.captureSessionMessageAuthority(sessionId);

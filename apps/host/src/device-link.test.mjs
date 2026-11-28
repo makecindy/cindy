@@ -14,6 +14,7 @@ import { drizzle } from 'drizzle-orm/better-sqlite3';
 import { eq, getTableColumns, getTableName } from 'drizzle-orm';
 import { DeviceLinkClient, DeviceLinkError, PROTOCOL_VERSION, FILE_PEER_CHANNEL, REMOTE_AGENT_CHANNEL, REMOTE_DESKTOP_CHANNEL,
   DEVICE_LINK_CAPABILITY_BACKGROUND_LINK_V1, DEVICE_LINK_CAPABILITY_HISTORY_VIEW_V1, DL_HISTORY_MESSAGES_CHANNEL, DL_SESSION_HANDOFF_CHANNEL, ORCA_REMOTE_WORKER_MODELS_CHANNEL,
+  CONTROLLER_CAPABILITY_EXACT_MESSAGE_NOT_FOUND_V1,
   ORCA_REMOTE_WORKER_CAPS_CHANNEL, MACHINE_STATUS_CHANNEL, parseMachineStatus,
   PROVIDER_SHARE_RELAY_CAPABILITY, isProviderSharePeer, providerShareGuestPeer, providerShareHostPeer, PLUGIN_OAUTH_CHANNEL, SESSION_ACTIVITY_CHANNEL, TASK_ACTIVITY_SNAPSHOT } from '@cindy/device-link';
 import { AgentNetWorkerSocket } from '@cindy/agent-net';
@@ -307,7 +308,8 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
     });
     client.start();
     await waitFor(() => client.getStatus() === 'online');
-    await client.openLink('host', { controllerName: id, protocolVersion: PROTOCOL_VERSION, appVersion: 'test' });
+    await client.openLink('host', { controllerName: id, protocolVersion: PROTOCOL_VERSION, appVersion: 'test',
+      ...(id === 'ios' ? { capabilities: [CONTROLLER_CAPABILITY_EXACT_MESSAGE_NOT_FOUND_V1] } : {}) });
     // The first invocation uses one of the last registered ordinary handlers (no startup delay).
     // Assigning old-peer "unsupported" here would survive the end of startup in a controller cache.
     const first = await client.invoke('host', { channel: 'maker:session:prewarm', args: ['task', {}] });

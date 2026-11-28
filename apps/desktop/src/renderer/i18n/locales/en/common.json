@@ -15166,6 +15166,7 @@
       "taskClearedBeforeSend": "The task was cleared or is being cleared. The message is still saved on this device.",
       "invalidInput": "The computer rejected the message because its contents are invalid.",
       "profileInUseByDesktop": "This data is in use by the Cindy desktop app running on its own. Quit it, then send again.",
+      "other": "This action did not finish. Try again in a moment.",
       "deleteConfirmTitle": "Delete this message?",
       "deleteConfirmBody": "This message wasn't sent. Deleting it can't be undone.",
       "deleteUnconfirmedBody": "The computer may have received this message. Deleting it only removes the pending message from this device. If the computer received it, it will still appear in the conversation history.",

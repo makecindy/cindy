@@ -15111,6 +15111,7 @@
       "taskClearedBeforeSend": "任务已清空或正在清空，消息仍保存在本机。",
       "invalidInput": "这条消息有无效内容，电脑未接收。",
       "profileInUseByDesktop": "这份数据正被单独运行的 Cindy 电脑端使用。请先退出它，再发送。",
+      "other": "这个操作没有完成。请稍后重试。",
       "deleteConfirmTitle": "删除这条消息？",
       "deleteConfirmBody": "这条消息没有发送成功，删除后无法恢复。",
       "deleteUnconfirmedBody": "电脑可能已经收到这条消息。删除只会移除本机的待发消息。如果电脑已收到，这条消息仍会出现在对话记录里。",

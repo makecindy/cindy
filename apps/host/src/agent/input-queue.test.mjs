@@ -140,7 +140,8 @@ const unitDatabase = await (async () => {
     const layout = hostRuntimeLayout();
     configureAppDataDir(path.join(unitProfile, 'app-data'));
     const opened = await openOwnerDatabase({ userDataDir: unitProfile, ownerId: 'input-queue-unit',
-      isPackaged: false, drizzleDir: layout.drizzleDir, sqliteVecExtPath: layout.sqliteVecPath });
+      isPackaged: false, drizzleDir: layout.drizzleDir,
+      sqliteVecExtPath: process.env.CINDY_HOST_SQLITE_VEC_PATH?.trim() || layout.sqliteVecPath });
     return createDbClientForHandle({ db: opened.db, drizzle: opened.drizzle, dispose: async () => opened.db.close() });
   } finally {
     if (sharedProfile !== undefined) process.env.XDT_OFFICIAL_SHARED_PROFILE = sharedProfile;
@@ -3016,6 +3017,31 @@ test('ordinary archived enqueue gives up the route lock before dispatch', async 
   await waitFor(() => h.maker.getSession(id)?.sent.length === 1);
   assert.ok(observed.length > 0 && observed.every(held => !held));
   assert.equal(status, 'active');
+});
+
+// An archived enqueue and a direct send share command -> route-lock order. In
+// the old order the lock holder queued the archived command behind a direct
+// send, while that send waited for the lock: neither could finish.
+test('archived enqueue and direct send cannot wait on each other', { timeout: 10_000 }, async t => {
+  const id = 'archive-direct-interleave';
+  let status = 'archived';
+  let direct;
+  const h = createHarness({
+    readSession: async sessionId => ({ id: sessionId, status, agentKind: 'claude-code',
+      model: 'm', workingDir: os.tmpdir(), providerId: 'xd' }),
+    restoreArchivedSessionForSend: async () => { status = 'active'; },
+  });
+  setSessionRouteLockImplementation((sessionId, run) => withSendToSessionLock(sessionId, async () => {
+    direct = h.queue.send(sessionId, 'direct follow-up', {});
+    direct.catch(() => {});
+    await new Promise(resolve => setImmediate(resolve));
+    return run();
+  }));
+  t.after(() => { setSessionRouteLockImplementation(null); return h.queue.dispose(); });
+  await h.queue.enqueue(id, { clientId: 'archived-1', text: 'continue' }, undefined, {});
+  await direct;
+  assert.equal(status, 'active');
+  assert.ok(h.maker.getSession(id)?.sent.includes('direct follow-up'));
 });
 
 // Unit: Stop after restoration commits but before admission recheck cannot

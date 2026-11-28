@@ -15285,6 +15285,7 @@
       "taskClearedBeforeSend": "La tarea se ha vaciado o se está vaciando. El mensaje sigue guardado en este dispositivo.",
       "invalidInput": "El ordenador ha rechazado el mensaje porque contiene datos no válidos.",
       "profileInUseByDesktop": "La aplicación de escritorio de Cindy, que se está ejecutando por su cuenta, está usando estos datos. Ciérrala y vuelve a enviar.",
+      "other": "Esta acción no terminó. Inténtalo de nuevo en un momento.",
       "deleteConfirmTitle": "¿Eliminar este mensaje?",
       "deleteConfirmBody": "Este mensaje no se envió. Si lo eliminas, no podrás deshacerlo.",
       "deleteUnconfirmedBody": "Es posible que la computadora ya haya recibido este mensaje. Al eliminarlo, solo se quitará el mensaje pendiente de este dispositivo. Si la computadora lo recibió, seguirá apareciendo en el historial de la conversación.",

@@ -383,6 +383,60 @@ describe('resending a missing remote input after explicit confirmation', () => {
   });
 });
 
+// A restored archived task can accept A1, remove it from the live projection
+// while executing, then publish its user row. The phone must not interpret the
+// absent projection item as a miss or keep A2/A3 behind an unconfirmed A1.
+it('settles a late positive history row for an unconfirmed archived send without replaying it', async () => {
+  const { store, deps } = await setup();
+  await store.add({ ...message('a1'), state: 'failed', historyConfirmation: 'unconfirmed',
+    enqueueStarted: true, retrySafe: false, prepared: { clientId: 'a1' } as QueuedRemoteMessage });
+  await store.add({ ...message('a2'), createdAt: 2 });
+  await store.add({ ...message('a3'), createdAt: 3 });
+  let historicalA1 = false;
+  const cacheHistory = vi.fn(async () => historicalA1);
+  const runner = createDurableOutboxDelivery({ ...deps,
+    observedHistory: r => historicalA1 && r.item.clientId === 'a1', cacheHistory,
+    projection: vi.fn(async r => ({ ...projection(r.item.clientId), sessionId: r.item.sessionId })),
+  });
+  await runner.run();
+  expect(deps.enqueue).not.toHaveBeenCalled();
+  expect(deps.history).not.toHaveBeenCalled();
+  expect(cacheHistory).not.toHaveBeenCalled();
+  historicalA1 = true; // exact user row from the restored task's history push
+  runner.wake();
+  await runner.run();
+  expect(store.getSnapshot().some(r => r.item.clientId === 'a1')).toBe(false);
+  expect(deps.enqueue).not.toHaveBeenCalled();
+  runner.wake();
+  await runner.run();
+  runner.wake();
+  await runner.run();
+  expect(deps.enqueue.mock.calls.map(([r]) => r.item.clientId)).toEqual(['a2', 'a3']);
+  expect(deps.history).not.toHaveBeenCalled();
+});
+
+it('releases the unconfirmed FIFO head on positive history even while the disk view lags', async () => {
+  const { store, deps } = await setup();
+  await store.add({ ...message('a1'), state: 'failed', historyConfirmation: 'unconfirmed',
+    enqueueStarted: true, retrySafe: false, prepared: { clientId: 'a1' } as QueuedRemoteMessage });
+  await store.add({ ...message('a2'), createdAt: 2 });
+  let rowVisible = false;
+  const runner = createDurableOutboxDelivery({ ...deps,
+    observedHistory: r => rowVisible && r.item.clientId === 'a1',
+    cacheHistory: vi.fn(async () => false),
+  });
+  await runner.run();
+  rowVisible = true;
+  runner.wake();
+  await runner.run();
+  expect(store.getSnapshot().find(r => r.item.clientId === 'a1'))
+    .toMatchObject({ state: 'host-owned', historyConfirmed: true });
+  runner.wake();
+  await runner.run();
+  expect(deps.enqueue.mock.calls.map(([r]) => r.item.clientId)).toEqual(['a2']);
+  expect(deps.history).not.toHaveBeenCalled();
+});
+
 describe('disabled Cindy Make outbox recovery', () => {
   it.each(['cindy-make', 'cindy-make-merge'])('cleans upgraded %s records before contacting a legacy host', async (source) => {
     const { store, storage, deps } = await setup();

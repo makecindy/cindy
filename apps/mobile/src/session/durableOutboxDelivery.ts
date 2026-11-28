@@ -51,6 +51,8 @@ export interface DurableOutboxDeliveryDeps {
   beforeEnqueue?(record: DurableOutboxRecord): Promise<void>;
   cancel(record: DurableOutboxRecord): Promise<boolean>;
   history(record: DurableOutboxRecord, fresh?: boolean): Promise<boolean>;
+  /** Positive, in-memory user row for this task and original client ID. Never treats absence as a miss. */
+  observedHistory?(record: DurableOutboxRecord): boolean;
   /** One compatible page read after an explicit denial of the exact-ID read. */
   legacyHistory?(record: DurableOutboxRecord): Promise<boolean>;
   /** A remote row alone cannot release the local bubble before offline history owns it. */
@@ -240,6 +242,14 @@ export function createDurableOutboxDelivery(deps: DurableOutboxDeliveryDeps) {
         const reconciled = deps.store.getSnapshot().find((r) => id(r) === id(record));
         if (!reconciled || !current(reconciled)) return;
         record = reconciled;
+      }
+      if (record.historyConfirmation === 'unconfirmed') {
+        // An uncertain write must never be replayed by the background runner.
+        // A later history push may nevertheless prove that the original ID was
+        // accepted. Persist the history view when possible; otherwise mark
+        // host ownership so a lagging local disk view cannot block FIFO.
+        if (deps.observedHistory?.(record)) await finishHistory();
+        return;
       }
       // Persisted completion never re-enters delivery, even after missing files or lost host history.
       if (isDurableOutboxSettled(record)) return await finish();
@@ -624,7 +634,7 @@ export function createDurableOutboxDelivery(deps: DurableOutboxDeliveryDeps) {
             ...group.filter(isDurableOutboxHandedOff),
           ];
         })
-        .filter((r) => r.historyConfirmation !== 'unconfirmed' && !inFlight.has(id(r)) && deps.canRun(r)
+        .filter((r) => !inFlight.has(id(r)) && deps.canRun(r)
           && !(r.state === 'failed' && !r.cancelRequested && (r.retryAfterConfirmedMiss || isDurableOutboxUnsent(r)))
           && (r.historyConfirmation === 'requested' || (r.retryAfterConfirmedMiss && r.state === 'queued')
             || (due.get(id(r)) ?? 0) <= Date.now()));

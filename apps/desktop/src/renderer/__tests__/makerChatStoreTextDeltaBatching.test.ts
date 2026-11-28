@@ -5399,6 +5399,15 @@ describe('makerChatStore text delta batching', () => {
       await flushPromises();
       const id = enqueued[0]!.clientId;
       const draft = () => makerChatStore.getSnapshot(SESSION_ID).pendingQueue;
+      if (scenario === 'v1 retry') {
+        // Fresh v1 projection permits one automatic retry of the original ID.
+        // A lost first reply must not leave the successor waiting forever.
+        expect(enqueued.map(item => item.text)).toEqual(['first', 'first', 'second']);
+        expect(enqueued[1]?.clientId).toBe(id);
+        expect(enqueued[1]?.durableDelivery).toBe(true);
+        expect(draft().some(row => row.clientId === id && row.remoteDelivery?.state === 'unconfirmed')).toBe(false);
+        return;
+      }
       expect(enqueued.map(item => item.text)).toEqual(['first']);
       expect(draft().map(row => row.remoteDelivery?.state)).toEqual(['unconfirmed', 'waiting']);
 
@@ -5435,7 +5444,6 @@ describe('makerChatStore text delta batching', () => {
       }
       expect(draft()[0]?.remoteDelivery?.state).toBe('failed');
       expect(enqueued.map(item => item.text)).toEqual(['first']);
-      if (scenario === 'v1 retry') legacyEnvelope = true;
       await makerChatStore.retryRemotePendingMessage(SESSION_ID, id);
       await flushPromises();
       expect(enqueued.map(item => item.text)).toEqual(['first', 'first', 'second']);
@@ -5465,6 +5473,19 @@ describe('makerChatStore text delta batching', () => {
     expect(head?.remoteDelivery).toEqual({ state: 'failed', refusal: 'taskInactive' });
     expect(tail?.remoteDelivery).toEqual({ state: 'waiting' });
     expect(sent).toEqual(['first']);
+  });
+
+  it('shows the existing localized explanation for another pre-accept refusal', async () => {
+    remoteProjectsStore.pinSessionOrigin('device-1', SESSION_ID);
+    deviceLinkInvoke.mockImplementation(async (_device, channel) => {
+      if (channel === 'maker:input:get-projection') return projection(SESSION_ID);
+      if (channel === 'maker:input:enqueue') throw new Error('[REMOTE_DISABLED] control is closed');
+      throw new Error(`unexpected remote channel: ${channel}`);
+    });
+    await makerChatStore.sendMessage(SESSION_ID, 'first', MODEL, EFFORT, PERMISSION_MODE, WORKING_DIR);
+    await flushPromises();
+    expect(makerChatStore.getSnapshot(SESSION_ID).pendingQueue[0]?.remoteDelivery)
+      .toEqual({ state: 'failed', refusal: 'other' });
   });
 
   // Unit regression: restart notifications can arrive during the initial read.

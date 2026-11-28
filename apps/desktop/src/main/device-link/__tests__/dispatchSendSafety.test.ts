@@ -21,6 +21,7 @@ import {
   type InvokeResultPayload,
   SessionMessageReuse,
   CONTROLLER_CAPABILITY_HISTORY_RELINK_FOLDED_V1,
+  CONTROLLER_CAPABILITY_EXACT_MESSAGE_NOT_FOUND_V1,
   CONTROLLER_CAPABILITY_TOOL_RESULT_EVENT_TEXT_OPTIONAL_V1,
   CONTROLLER_CAPABILITY_TOOL_RESULT_LIVE_LIMIT_V1,
   CONTROLLER_CAPABILITY_TOOL_USE_EVENT_INPUT_OPTIONAL_V1,
@@ -1127,12 +1128,15 @@ it('preserves structured NOT_FOUND only for the exact client ID read', async () 
   registry.register(channel, missing);
   registry.register('local-db:messages:around', missing);
   setRemoteBotSessionLookup(async () => 'ordinary');
+  subscriptions.subscribe('ctrl-new', ['session:s1'], 'ctrl-new', [CONTROLLER_CAPABILITY_EXACT_MESSAGE_NOT_FOUND_V1]);
   try {
-    expect(await runInvoke('ctrl-1', { channel, args: ['s1', 'm1'] }))
+    expect(await runInvoke('ctrl-new', { channel, args: ['s1', 'm1'] }))
       .toEqual({ ok: false, error: { code: 'NOT_FOUND', message: error.message } });
+    expect(await runInvoke('ctrl-old', { channel, args: ['s1', 'm1'] }))
+      .toEqual({ ok: false, error: { code: 'IPC_ERROR', message: error.message } });
     expect(await runInvoke('ctrl-1', { channel: 'local-db:messages:around', args: ['s1', 'm1'] }))
       .toEqual({ ok: false, error: { code: 'IPC_ERROR', message: error.message } });
-    expect(missing).toHaveBeenCalledTimes(2);
+    expect(missing).toHaveBeenCalledTimes(3);
   } finally {
     setRemoteBotSessionLookup(null);
   }

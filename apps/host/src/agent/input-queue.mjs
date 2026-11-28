@@ -606,7 +606,7 @@ export function createInputQueue(deps) {
         const generation = ordinaryInput ? coordinator.getGeneration(id) : undefined;
         const expectedClearBoundary = readExpectedClearBoundary(userInputOptions);
         let wakeAfterRouteLock = false;
-        const enqueue = routeLockHeld => command(id, async state => {
+        const enqueue = async (state, routeLockHeld) => {
           if (coordinator.hasKnownClientId(id, item?.clientId)) {
             handoff?.onQueueAcceptanceStarted?.();
             await flushed(id);
@@ -675,12 +675,14 @@ export function createInputQueue(deps) {
           } finally {
             if (!accepted && prepared.ownerId) await attachmentOwnership.discardSpecific(id, item.clientId, prepared.ownerId);
           }
-        });
-        const result = await enqueue(false);
+        };
+        const result = await command(id, state => enqueue(state, false));
         if (result !== NEEDS_ARCHIVE_RESTORE_LOCK) return result;
-        // Delete takes the same route lock, then drains this command chain. A
-        // command must finish before we wait for the lock, never the reverse.
-        const projection = await withSessionRouteLock(id, () => enqueue(true));
+        // The command chain and direct send both acquire the route lock. Keep
+        // their order command -> route lock; otherwise one can hold the lock
+        // while waiting for a command that is itself waiting for the lock.
+        const projection = await command(id, state =>
+          withSessionRouteLock(id, () => enqueue(state, true)));
         const state = states.get(id);
         // A drain scheduled inside the route lock inherits its async context.
         // Start it after release so its send takes the lock as an independent operation.
