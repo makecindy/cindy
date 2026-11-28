@@ -7765,7 +7765,7 @@ describe('unbound Codex history account recovery', () => {
   // 测试价值: 生产入口 prepareSubscriptionAccountForSend + withSubscriptionAccounts.startSession。
   // 用户可观察结果: 主动换源后任务带着上下文在新来源上继续, 不再用旧来源的原生线程或账号绑定。
   // 依据: 2026-11-25 实报的换源重试/不可用绑定; 既有覆盖只测了目录属于某个账号的交接。
-  // 最小失败输入: 用户换源记录 + 原生线程归属旧来源 + 旧账号绑定; tier: unit。
+  // 最小失败输入: 用户换源记录 + 原生线程归属旧来源 + 旧账号已离开目标池; tier: unit。
   it('hands a task the user moved to another source over before the next start', async () => {
     const { row, deps } = fixture();
     h.pools.openai = { strategy: 'order', accounts: [account('second'), account('third')],
@@ -7782,6 +7782,8 @@ describe('unbound Codex history account recovery', () => {
     expect(start.mock.calls[0][0].resumeSessionId).toBe('legacy');
     await before.close();
     const nativeBefore = { ...h.bindings.get('native:legacy')! };
+    // 旧账号已离开目标池: 线程只能换一家。这是下面「同账号保留」用例的对照面。
+    h.pools.openai.accounts = [account('second')];
 
     expect(await prepareSubscriptionAccountForSend('old-task', deps)).toBe(true);
     expect(deps.rebuild).toHaveBeenCalledOnce();
@@ -7800,11 +7802,42 @@ describe('unbound Codex history account recovery', () => {
   // 交接已经提交后，清记录失败不能反过来把这次发送判成失败：记录留着，下一次幂等重消费。
   it('keeps the committed handoff when the record cannot be cleared', async () => {
     const { row, deps } = fixture();
+    // 旧账号不在目标池里, 所以这次发送确实需要交接。
+    h.bindings.set('task:old-task', { providerId: 'openai', accountId: 'third' });
     deps.matchesSourceSwitch.mockReturnValue(true);
     deps.consumeSourceSwitch.mockRejectedValueOnce(new Error('record file is locked'));
     expect(await prepareSubscriptionAccountForSend('old-task', deps)).toBe(true);
     expect(deps.rebuild).toHaveBeenCalledOnce();
     expect(row.sdkSessionId).toBeNull();
+  });
+
+  // 对照上面「旧账号不可用」的交接: 目标池里原账号仍可用时, 换源只是换了来源标签,
+  // 原生线程与绑定都是这个任务自己的家, 不该为了换源丢掉一个还能续上的线程。
+  it('keeps the thread and the binding when the same account still serves the destination', async () => {
+    const { row, deps } = fixture();
+    h.pools.openai = { strategy: 'order', accounts: [account('second'), account('third')],
+      legacyCodexAccounts: { 'openai-old': 'imported' } };
+    h.bindings.set('task:old-task', { providerId: 'openai', accountId: 'third', via: 'openai-old' });
+    h.bindings.set('native:legacy', { providerId: 'openai', accountId: 'third', via: 'openai-old' });
+    deps.matchesSourceSwitch.mockReturnValue(true);
+    const start = vi.fn<(options: StartSessionOptions) => Promise<{ id: string; close: () => Promise<void> }>>(
+      async () => ({ id: 'legacy', close: async () => {} }));
+    const agent = withSubscriptionAccounts({ kind: 'codex', startSession: start } as unknown as BaseAgent,
+      { getState: h.legacyRead, resolveCodexHistoryHome: deps.resolveCodexHistoryHome });
+
+    expect(await prepareSubscriptionAccountForSend('old-task', deps)).toBe(false);
+    expect(deps.rebuild).not.toHaveBeenCalled();
+    expect(row.sdkSessionId).toBe('legacy');
+    expect(h.bindings.get('task:old-task')?.accountId).toBe('third');
+    expect(h.bindings.get('native:legacy')?.accountId).toBe('third');
+    // 记录仍要消费: 换源意图已经落定, 下次发送不该再按换源处理。
+    expect(deps.consumeSourceSwitch).toHaveBeenCalledOnce();
+
+    const handle = await agent.startSession({ providerId: 'openai', sessionId: 'old-task',
+      resumeSessionId: 'legacy', model: row.model! } as StartSessionOptions);
+    expect(start.mock.calls[0][0].resumeSessionId).toBe('legacy');
+    expect(start.mock.calls[0][0][NATIVE_SUBSCRIPTION_ACCOUNT]?.configDir).toBe('openai/third');
+    await handle.close();
   });
 
   // 目标来源当下没有能服务该模型的账号：保持旧上下文与记录，等真有账号的那次发送再接手。
@@ -7819,10 +7852,12 @@ describe('unbound Codex history account recovery', () => {
     expect(h.bindings.get('task:old-task')?.accountId).toBe('second');
     expect(deps.consumeSourceSwitch).not.toHaveBeenCalled();
 
-    // 目标来源有了能服务该模型的账号：这一次才交接并消费记录。
+    // 目标来源有了能服务该模型的账号：这一次消费记录；原账号仍在该池里，所以线程与绑定留在原地。
     row.model = 'gpt-6.1-sol';
-    expect(await prepareSubscriptionAccountForSend('old-task', deps)).toBe(true);
-    expect(deps.rebuild).toHaveBeenCalledOnce();
+    expect(await prepareSubscriptionAccountForSend('old-task', deps)).toBe(false);
+    expect(deps.rebuild).not.toHaveBeenCalled();
+    expect(row.sdkSessionId).toBe('legacy');
+    expect(h.bindings.get('task:old-task')?.accountId).toBe('second');
     expect(deps.consumeSourceSwitch).toHaveBeenCalledOnce();
   });
 

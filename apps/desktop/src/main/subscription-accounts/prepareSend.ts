@@ -55,6 +55,24 @@ export async function prepareSubscriptionAccountForSend(
       throw new Error('Subscription account owner changed');
   };
   assertOwner();
+  /** A record left behind is idempotent: the next send consumes it again. Never fail the send. */
+  const consumeRecord = async () => {
+    try {
+      await deps.consumeSourceSwitch?.();
+    } catch (error) {
+      deps.log?.('subscription account handoff: source switch record was not cleared', {
+        sessionId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  };
+  /** The destination pool still holds the account that already owns this task's thread. */
+  const taskAccountIsUsable = () => {
+    const bound = readAccountBinding(`task:${sessionId}`, 'openai');
+    const destination = readPool('openai');
+    return !!bound && !!destination && !destination.disconnected
+      && destination.accounts.some(account => account.id === bound.accountId && !account.paused);
+  };
   const read = await deps.readSession(sessionId);
   assertOwner();
   // Keep comparing against what this send saw, even if the caller reuses its row object.
@@ -72,6 +90,14 @@ export async function prepareSubscriptionAccountForSend(
       return false;
     }
     assertOwner();
+    // Retiring the old context is only the answer when the account that owns this task is gone
+    // from the source the user picked. If that account still serves the destination, the thread
+    // and binding remain this task's own home: consume the record and continue in place, so a
+    // switch that lands on the same account never throws a resumable thread away.
+    if (taskAccountIsUsable()) {
+      await consumeRecord();
+      return false;
+    }
     deps.log?.('subscription account handoff: user moved the task to another source', {
       sessionId, providerId: row.providerId, model: row.model ?? null,
     });
@@ -84,14 +110,7 @@ export async function prepareSubscriptionAccountForSend(
     await clearAccountBindings([`task:${sessionId}`], 'openai');
     // The handoff is already committed. A record that cannot be cleared only means the next send
     // consumes it again (idempotent); it must not turn the committed switch into a send failure.
-    try {
-      await deps.consumeSourceSwitch?.();
-    } catch (error) {
-      deps.log?.('subscription account handoff: source switch record was not cleared', {
-        sessionId,
-        error: error instanceof Error ? error.message : String(error),
-      });
-    }
+    await consumeRecord();
     return true;
   }
   let historyAccountId: string | undefined;
