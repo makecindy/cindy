@@ -7,6 +7,8 @@
  * computer's engines; the change push stays local (controllers read the list on demand).
  */
 
+import { getDeviceLinkInvokeContext, readDeviceLinkModelSelectionOrigin } from '../device-link/invoke-context.js';
+import { hostSessionIdFor } from '../remote-agent/host/sessionIdentity.js';
 import type { IpcMainInvokeEvent } from 'electron';
 import { ACP_PERMISSION_MODES } from '@cindy/maker-core';
 import {
@@ -403,10 +405,18 @@ export function registerPluginEnginesIpc(opts: RegisterPluginEnginesIpcOpts): ()
     // A task of this computer names itself (2026-11-23): its account's usage, not the original
     // login's. A phone or another computer may name a task this computer does not know (its Agent
     // runs elsewhere); that keeps the engine-level read. Older hosts ignore the argument.
-    const sessionId = task && typeof task === 'object' ? (task as { sessionId?: unknown }).sessionId : undefined;
+    const request = task && typeof task === 'object' ? task as { sessionId?: unknown; hosted?: unknown } : undefined;
+    const sessionId = request?.sessionId;
     if (typeof sessionId === 'string' && sessionId && sessionId.length <= 256 && opts.readTaskUsage) {
       const engine = getPluginHarnessRegistry().list().find((item) => item.key === key.replace(/~[a-z0-9]{8}$/, ''));
-      if (engine?.accounts?.methods.length) return opts.readTaskUsage(key, sessionId, { fallbackToOriginal: isRemote });
+      if (engine?.accounts?.methods.length) {
+        if (request?.hosted === true) {
+          const caller = getDeviceLinkInvokeContext();
+          if (!isRemote || !caller || readDeviceLinkModelSelectionOrigin() !== 'owner') return null;
+          return opts.readTaskUsage(key, hostSessionIdFor(caller.controllerDeviceId, sessionId), { fallbackToOriginal: true });
+        }
+        return opts.readTaskUsage(key, sessionId, { fallbackToOriginal: isRemote });
+      }
     }
     return readPluginHarnessUsage(key, undefined, { reportWorkerFailure: isRemote });
   });

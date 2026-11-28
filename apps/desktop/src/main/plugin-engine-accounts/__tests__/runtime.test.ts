@@ -1,3 +1,4 @@
+import { hostSessionIdFor } from '../../remote-agent/host/sessionIdentity.js';
 import { createHash } from 'node:crypto';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -85,6 +86,7 @@ vi.mock('../../cindy-brain/pluginHarnesses.js', () => ({
 const {
   acquirePluginEngineAccount,
   readPluginEnginePoolAccountUsages,
+  readPluginEngineTaskUsage,
   readPluginEngineSessionAccount,
   runPluginEngineAccountCommand,
   resetPluginEngineAccountsRuntimeForTests,
@@ -123,6 +125,26 @@ beforeEach(async () => {
 });
 
 describe('plugin engine account pool', () => {
+  // Unit #13748: the same original id can name a host task and a borrowed-engine task.
+  // The paused original login, both bindings and the unassigned fallback have observable quotas.
+  it('reads the bound plugin account quota for host and borrowed tasks', async () => {
+    h.harnesses[0]!.reportsUsage = true;
+    const hosted = hostSessionIdFor('desk', 'same-id');
+    await updatePluginEnginePool(ENGINE, pool => ({
+      ...pool, accounts: pool.accounts.map(account => account.id === 'default' ? { ...account, paused: true } : account),
+    }));
+    for (const [id, remainingPercent] of [['default', 66], [A, 73], [B, 98]] as const) {
+      h.usage.set(id, { updatedAt: 1234, windows: [{ label: 'Quota', remainingPercent }] });
+    }
+    await writePluginEngineBindings(ENGINE, ['task:same-id'], A, PROVIDER);
+    await writePluginEngineBindings(ENGINE, [`task:${hosted}`], B, PROVIDER);
+    const read = (id: string) => readPluginEngineTaskUsage(ENGINE, id, { fallbackToOriginal: true });
+    expect(await read('same-id')).toEqual(h.usage.get(A));
+    expect(await read(hosted)).toEqual(h.usage.get(B));
+    expect(await read(hostSessionIdFor('other', 'same-id'))).toEqual(h.usage.get('default'));
+    expect(await readPluginEngineTaskUsage(ENGINE, 'unassigned')).toBeNull();
+  });
+
   it('spreads new tasks over signed-in accounts, keeps a bound task on its account and stops at the limit', async () => {
     const first = await acquirePluginEngineAccount(PROVIDER, undefined, ['task:t1']);
     const second = await acquirePluginEngineAccount(PROVIDER, undefined, ['task:t2']);

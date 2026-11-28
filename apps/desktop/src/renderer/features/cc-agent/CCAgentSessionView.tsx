@@ -2722,8 +2722,9 @@ function CCAgentSessionContent({
       : usageAccount.kind === 'task'
         ? (remoteDeviceId ?? null)
         : null;
-  // Session IDs identify bindings on the task host. A separate execution device can have an unrelated task with the same ID.
-  const usageSessionId = usageAccount.kind === 'task' ? sessionId : undefined;
+  // A third computer viewing a task with a borrowed engine cannot identify itself as its owner.
+  const borrowedPluginEngine = usageAccount.kind === 'device' && !remoteDeviceId;
+  const pluginUsageSessionId = usageAccount.kind === 'task' || borrowedPluginEngine ? sessionId : undefined;
   const usageCatalogue = taskAccountDeviceId
     ? (taskAccountDeviceId === pluginEngineAgentDeviceId && agentDevicePluginEngines !== undefined
       ? agentDevicePluginEngines
@@ -7550,11 +7551,11 @@ function CCAgentSessionContent({
                     )}
                     {pluginUsageKey && viewVisible && !session?.remoteHostId && !isSharedTaskPeer(remoteDeviceId ?? '')
                       && usageAccount.kind !== 'unreadable' && (usageEngine?.reportsUsage || !usageCatalogue) && (
-                      <PluginEngineUsageChip key={JSON.stringify([dataOwnerGeneration, taskAccountDeviceId, pluginUsageKey, usageSessionId])}
+                      <PluginEngineUsageChip key={JSON.stringify([dataOwnerGeneration, taskAccountDeviceId, pluginUsageKey, pluginUsageSessionId, borrowedPluginEngine])}
                         engineKey={pluginUsageKey} name={usageEngine?.name} deviceId={taskAccountDeviceId}
                         modelId={pluginEngineSwitchIntent?.model ?? session?.model ?? null}
                         modelName={pluginEngineModelName(usageEngine, pluginEngineSwitchIntent?.model ?? session?.model ?? '') ?? null}
-                        running={agentStatus.isRunning} {...(usageSessionId ? { sessionId: usageSessionId } : {})} />
+                        running={agentStatus.isRunning} hosted={borrowedPluginEngine} sessionId={pluginUsageSessionId ?? undefined} />
                     )}
                     {!pluginUsageKey && (!pluginEngineTask || agentSwitchIntent) && (
                       <TodaySpendChip
