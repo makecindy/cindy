@@ -3052,10 +3052,15 @@ function forkSession(db: Database.Database, args: unknown): { messageCount: numb
       throw invalidArgs('Source history changed while preparing fork');
     }
     const childCreatedAt = expectNumber(newSession.createdAt, 'newSession.createdAt');
-    // Keep inherited history strictly before the side-chat visibility boundary,
-    // without moving the child into the future or changing source timestamps.
-    const historyTimeOffset = newSession.source === 'side-chat'
-      ? sourceMessages.reduce((offset, message) => Math.max(offset, message.created_at - childCreatedAt + 1), 0)
+    // Keep inherited history before the fresh context boundary without changing
+    // the source. Imported synthetic future times must not survive a later clear.
+    // Ordinary native forks have no new boundary and retain their timestamps.
+    const historyBoundary = newSession.source === 'side-chat' ? childCreatedAt
+      : payload.recoveryMarker != null
+        ? expectNumber(asRecord(payload.recoveryMarker, 'recoveryMarker').createdAt, 'recoveryMarker.createdAt')
+        : null;
+    const historyTimeOffset = historyBoundary !== null
+      ? sourceMessages.reduce((offset, message) => Math.max(offset, message.created_at - historyBoundary + 1), 0)
       : 0;
     db.prepare(
       `INSERT INTO sessions (

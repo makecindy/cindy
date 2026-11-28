@@ -1917,6 +1917,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     kind: MobileMessageActionBusyKind;
   } | null>(null);
   const [forkModelPickerOpen, setForkModelPickerOpen] = useState(false);
+  const modelCatalogOpen = modelSheetOpen || forkModelPickerOpen;
   const [rewindState, setRewindState] = useState<RewindPreviewState>({ kind: 'idle' });
   // 切 session 时同步(render 阶段)重置回撤确认框 / busy / loading 态并递增「请求代际」。SessionScreen 切
   // session 复用实例、不 remount,这些本地 UI state 不会自动重置,残留会让确认框跨 session 出现且
@@ -1978,8 +1979,8 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
   const remotePluginEngines = useControlledRemotePluginEngines({
     controlledDeviceId: deviceId,
     enabled: (pluginEngineTask && currentPluginEngineIsRemote)
-      || (pluginEngineSwitchEligible && (modelSheetOpen || pluginEngineTargetIsRemote)),
-    discoverAll: pluginEngineSwitchEligible && modelSheetOpen,
+      || (pluginEngineSwitchEligible && (modelCatalogOpen || pluginEngineTargetIsRemote)),
+    discoverAll: pluginEngineSwitchEligible && modelCatalogOpen,
     invoke,
     keepDeviceIds: pluginEngineKeepDeviceIds,
     connectionEpoch,
@@ -2392,7 +2393,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
   const { running: runningModel, pending: pendingModel } = taskModelCatalogRoutes(currentSession, deviceId);
   const composerDeviceProviders = useDeviceProviders(
     deviceId || undefined,
-    modelSheetOpen || forkModelPickerOpen,
+    modelCatalogOpen,
     runningModel?.deviceId === deviceId ? runningModel.route : undefined,
     pendingModel?.deviceId === deviceId ? pendingModel.route : undefined,
   );
@@ -2940,13 +2941,13 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     // 选择器打开时才读其他电脑;Agent 已在另一台电脑时还要按那台的目录显示模型药丸。
     // 共享任务访客读到的是自己账号的设备,与任务无关,不读。
     enabled: !!deviceId && !isSharedTaskPeer(deviceId) && (
-      (agentLocationMovable && (modelSheetOpen || forkModelPickerOpen)) || remoteAgentKeepDeviceIds.length > 0
+      (agentLocationMovable && modelCatalogOpen) || remoteAgentKeepDeviceIds.length > 0
     ),
     controlledDeviceId: deviceId,
     keepDeviceIds: remoteAgentKeepDeviceIds,
     retainedModel: runningModel?.deviceId !== deviceId ? runningModel : undefined,
     pendingModel: pendingModel?.deviceId !== deviceId ? pendingModel : undefined,
-    keepOnly: !(agentLocationMovable && (modelSheetOpen || forkModelPickerOpen)),
+    keepOnly: !(agentLocationMovable && modelCatalogOpen),
   });
   const modelSheetRemoteCatalogs = useMemo(
     () => orcaRemoteAgentDeviceId

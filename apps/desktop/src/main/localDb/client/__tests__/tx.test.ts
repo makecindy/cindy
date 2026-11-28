@@ -2341,10 +2341,10 @@ describe('db worker tx handlers', () => {
       await client.exec('INSERT INTO messages (id, client_id, session_id, role, content, created_at) VALUES (?, ?, ?, ?, ?, ?)', ['m1', 'c1', 'src', 'user', 'keep my history', 100]);
       const args = {
         sourceSessionId: 'src', targetCreatedAt: 200,
-        newSession: sessionRow('forked', { sdkSessionId: null, parentSessionId: 'src',
-          ...(sideChat ? { source: 'side-chat', createdAt: 50 } : {}) }),
+        newSession: sessionRow('forked', { sdkSessionId: null, parentSessionId: 'src', createdAt: 50,
+          ...(sideChat ? { source: 'side-chat' } : {}) }),
         uuidMap: [], newMessageIds: [{ id: 'copy1', clientId: 'copy-client1' }],
-        recoveryMarker: { id: 'm1', clientId: 'handoff', createdAt: 300,
+        recoveryMarker: { id: 'm1', clientId: 'handoff', createdAt: 50,
           sourceMessagesDigest: computeForkSourceMessagesDigest([{ client_id: 'c1', role: 'user', content: 'keep my history', tool_use_id: null, agent_meta: null, agent_kind: null, created_at: 100 }]),
           content: JSON.stringify({ reason: 'native-session-recovery', consumed: false, handoff: 'keep my history' }) },
       };
@@ -2355,14 +2355,46 @@ describe('db worker tx handlers', () => {
       await client.tx('fork.session', args);
       expect(await client.queryOne('SELECT sdk_session_id FROM sessions WHERE id = ?', ['forked'])).toEqual({ sdk_session_id: null });
       expect(await client.queryOne('SELECT role, created_at, rewind_at FROM messages WHERE id = ?', ['recovery']))
-        .toEqual({ role: 'context_rebuild', created_at: sideChat ? 50 : 300, rewind_at: sideChat ? 50 : 300 });
+        .toEqual({ role: 'context_rebuild', created_at: 50, rewind_at: 50 });
       expect(await client.queryOne('SELECT content, created_at FROM messages WHERE id = ?', ['copy1']))
-        .toEqual({ content: 'keep my history', created_at: sideChat ? 49 : 100 });
+        .toEqual({ content: 'keep my history', created_at: 49 });
       const card = await client.queryOne<{ agent_meta: string }>('SELECT agent_meta FROM messages WHERE id = ?', ['recovery:card']);
       expect(JSON.parse(card!.agent_meta)).toEqual({ contextRebuild: { reason: 'native-session-recovery', handoff: 'keep my history' } });
       expect(await client.queryOne('SELECT created_at FROM messages WHERE id = ?', ['recovery:card']))
-        .toEqual({ created_at: sideChat ? 50 : 300 });
-      expect(await client.queryOne('SELECT content FROM messages WHERE id = ?', ['m1'])).toEqual({ content: 'keep my history' });
+        .toEqual({ created_at: 50 });
+      expect(await client.queryOne('SELECT content, created_at FROM messages WHERE id = ?', ['m1']))
+        .toEqual({ content: 'keep my history', created_at: 100 });
+      // A host-time clear hides both the copied future row and its fresh
+      // recovery marker/card, without changing the parent's imported time.
+      await client.exec('UPDATE sessions SET cleared_at = ? WHERE id = ?', [50, 'forked']);
+      expect(await client.query('SELECT id FROM messages WHERE session_id = ? AND created_at > ?', ['forked', 50]))
+        .toEqual([]);
+    }, { useInlineWorker });
+  });
+
+  // Request-owned forks must reject a rewound anchor even when it sits outside
+  // the copied prefix. The old inline worker lacked the bundled worker's fence.
+  // DB tier: real named transaction through both production transports.
+  it.each([false, true])('fork rechecks its selected anchor atomically (inline=%s)', async useInlineWorker => {
+    await withClient(async client => {
+      await seedSession(client, 'src');
+      await client.exec('INSERT INTO messages (id, client_id, session_id, role, content, created_at) VALUES (?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?)',
+        ['prefix', 'prefix', 'src', 'assistant', 'keep', 100, 'anchor', 'anchor', 'src', 'user', 'draft', 200]);
+      const args = { sourceSessionId: 'src', sourceAnchorClientId: 'anchor', targetCreatedAt: 200,
+        newSession: sessionRow('forked', { parentSessionId: 'src', forkedAtMessageId: 'anchor' }),
+        uuidMap: [], newMessageIds: [{ id: 'copy', clientId: 'copy' }] };
+      for (const change of ["UPDATE messages SET rewind_at = 500 WHERE id = 'anchor'",
+        "UPDATE sessions SET status = 'deleted' WHERE id = 'src'",
+        "UPDATE sessions SET cleared_at = 150 WHERE id = 'src'"]) {
+        await client.exec(change);
+        await expect(client.tx('fork.session', args)).rejects.toThrow('Source fork point changed');
+        expect(await client.queryOne('SELECT id FROM sessions WHERE id = ?', ['forked'])).toBeUndefined();
+        expect(await client.query('SELECT id FROM messages WHERE session_id = ?', ['forked'])).toEqual([]);
+        await client.exec("UPDATE messages SET rewind_at = NULL WHERE id = 'anchor'");
+        await client.exec("UPDATE sessions SET status = 'active', cleared_at = NULL WHERE id = 'src'");
+      }
+      await expect(client.tx('fork.session', args)).resolves.toEqual({ messageCount: 1 });
+      expect(await client.query('SELECT content FROM messages WHERE session_id = ?', ['forked'])).toEqual([{ content: 'keep' }]);
     }, { useInlineWorker });
   });
 

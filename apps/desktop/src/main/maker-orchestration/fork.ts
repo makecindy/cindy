@@ -242,8 +242,9 @@ function buildForkRecoveryMarker(opts: {
     id: createId(),
     clientId: createId(),
     sourceMessagesDigest: computeForkSourceMessagesDigest(opts.rows),
-    // 导入历史可能有晚于墙钟的合成时间；恢复边界必须排在复制内容之后。
-    createdAt: opts.rows.reduce((latest, row) => Math.max(latest, row.createdAt), opts.now),
+    // fork.session shifts inherited future timestamps before this boundary.
+    // Keep the fresh handoff at wall time so an immediate remote /clear hides it.
+    createdAt: opts.now,
     content: JSON.stringify({
       reason: opts.reason,
       consumed: false,

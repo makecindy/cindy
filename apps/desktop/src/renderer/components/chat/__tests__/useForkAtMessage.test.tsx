@@ -26,7 +26,12 @@ vi.mock('@/components/ui/confirm-dialog-provider', () => ({
 
 vi.mock('@/lib/sessionService', () => ({
   forkAtMessage: mocks.forkAtMessage,
+  getForkCapabilities: vi.fn(async () => ({})),
+  requestFork: vi.fn(),
 }));
+// The introduction owns confirmation/navigation, not the model catalog. The
+// production picker is exercised by chat-fork's real-component UI fixture.
+vi.mock('../ForkTargetPicker', () => ({ ForkTargetPicker: () => null }));
 
 vi.mock('@/lib/composerDraftStore', () => ({
   saveDraft: vi.fn(),
@@ -95,9 +100,9 @@ describe('useForkAtMessage introduction dialog', () => {
     mocks.forkAtMessage.mockRejectedValue(new Error('[REMOTE_AGENT_PEER_TOO_OLD] update the host'));
     const { result } = renderHook(() => useForkAtMessage({ sessionId: 'shared-task', messageClientId: 'reply' }));
     await act(async () => {
-      await expect(result.current()).rejects.toThrow('REMOTE_AGENT_PEER_TOO_OLD');
+      await result.current();
     });
-    expect(mocks.toastError).toHaveBeenCalledWith('chat.remoteError.REMOTE_AGENT_PEER_TOO_OLD');
+    expect(mocks.toastError).toHaveBeenCalledWith('chat.forkRecovery.update');
     expect(mocks.navigate).not.toHaveBeenCalled();
   });
 });

@@ -576,7 +576,16 @@ describe('forkSessionAtMessage', () => {
           expect(marker.handoff).toContain('question');
           expect(marker.handoff).not.toContain('excluded future turn');
           await expect(findPendingAgentHandoff(child.id)).resolves.toBe(marker.handoff);
-          expect(rows[2]!.created_at).toBeGreaterThanOrEqual(futureTime + 1);
+          // Imported timestamps must not carry this fresh handoff past a
+          // controlled-host /clear. Query directly again (no registry cache),
+          // as after a restart, while preserving the source's original times.
+          const clearAt = Date.now();
+          expect(rows[1]!.created_at).toBeLessThan(rows[2]!.created_at);
+          expect(rows[2]!.created_at).toBeLessThanOrEqual(clearAt);
+          sqlite.prepare('UPDATE sessions SET cleared_at = ? WHERE id = ?').run(clearAt, child.id);
+          await expect(findPendingAgentHandoff(child.id)).resolves.toBeNull();
+          expect(sqlite.prepare('SELECT created_at FROM messages WHERE id = ?').get('q'))
+            .toEqual({ created_at: futureTime });
           expect(rows[2]!.rewind_at).toBe(rows[2]!.created_at);
           expect(JSON.parse(rows[3]!.agent_meta!)).toMatchObject({ contextRebuild: { reason: marker.reason } });
         } else {
@@ -1479,7 +1488,8 @@ describe('forkSessionAtMessage', () => {
       expect(marker).toMatchObject({ reason: 'native-session-recovery', consumed: false,
         sourceAgentKind: 'codex', sourceModel: 'gpt-5.5', sourceProviderId: 'xd',
         sourceUserClientId: args.newMessageIds[0]?.clientId ?? null });
-      expect(args.recoveryMarker.createdAt).toBeGreaterThanOrEqual(rows.at(-1)?.createdAt ?? 0);
+      expect(args.recoveryMarker.createdAt).toBe(args.newSession.createdAt);
+      expect(args.recoveryMarker.createdAt).toBeLessThanOrEqual(Date.now());
       expect(marker.handoff).not.toContain('future content');
       if (rows.length) expect(marker.handoff).toContain('keep prefix');
       if (target.role === 'user') expect(marker.handoff).not.toContain('target content');
