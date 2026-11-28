@@ -252,23 +252,26 @@ async function readStatus(
   state: RuntimeState,
   ref: { engineKey: string; ghostId: string; harnessId: string },
   accountId: string,
-  force = false,
+  mode: 'cached' | 'retry' | 'confirm-login' = 'cached',
 ): Promise<StatusSnapshot> {
   const key = accountKey(ref.engineKey, accountId);
   const cached = state.status.get(key);
   const fresh = cached && Date.now() - cached.at < (cached.failed ? STATUS_FAILURE_FRESH_MS : STATUS_FRESH_MS);
-  if (!force && fresh) return cached;
+  if (mode === 'cached' && fresh) return cached;
   const flight = state.statusFlights.get(key);
-  if (flight && !force) return flight;
-  const read = (async () => {
-    let snapshot: StatusSnapshot;
+  if (flight && mode !== 'confirm-login') return flight;
+  const read: Promise<StatusSnapshot> = (async (): Promise<StatusSnapshot> => {
     try {
       const status = await readPluginHarnessAccountStatus(ref.engineKey, dirOf(ref, accountId));
-      snapshot = { status, failed: status === null, at: Date.now() };
+      return { status, failed: status === null, at: Date.now() };
     } catch {
-      snapshot = { status: null, failed: true, at: Date.now() };
+      return { status: null, failed: true, at: Date.now() };
     }
+  })().then(snapshot => {
     if (runtime !== state) return snapshot;
+    // Confirmation after login supersedes any probe started with the previous credentials.
+    const current = state.statusFlights.get(key);
+    if (current !== read) return current ?? state.status.get(key) ?? snapshot;
     const previous = state.status.get(key);
     state.status.set(key, snapshot);
     if (previous && (previous.status?.state !== snapshot.status?.state || previous.failed !== snapshot.failed))
@@ -276,7 +279,7 @@ async function readStatus(
     const identity = displayIdentity(snapshot.status);
     if (snapshot.status?.state === 'signed-in' && identity) void rememberIdentity(ref.engineKey, accountId, identity);
     return snapshot;
-  })();
+  });
   state.statusFlights.set(key, read);
   void read.finally(() => { if (state.statusFlights.get(key) === read) state.statusFlights.delete(key); }).catch(() => {});
   return read;
@@ -1087,7 +1090,7 @@ export async function readPluginEnginePoolView(providerId: string, taskId?: stri
   // Identity-only engines (no methods) report just the original login.
   const accounts = engine.accounts.methods.length ? providerAccounts(pool, ref.suffix) : [DEFAULT_PLUGIN_ENGINE_ACCOUNT];
   await Promise.all(accounts.map(account => Promise.all([
-    readStatus(state, ref, account.id, account.id === retryStatusAccountId),
+    readStatus(state, ref, account.id, account.id === retryStatusAccountId ? 'retry' : 'cached'),
     readUsage(state, ref, account.id),
   ]).catch(() => {})));
   assertOwner(state);
@@ -1142,7 +1145,7 @@ async function runLogin(
     const result = await loginPluginHarnessAccount(ref.engineKey, dir, methodId, secret);
     assertOwner(state);
     if (!result.ok) throw new Error(result.error === 'cancelled' ? 'login_cancelled' : 'login_failed');
-    const confirmed = await readStatus(state, ref, accountId, true);
+    const confirmed = await readStatus(state, ref, accountId, 'confirm-login');
     assertOwner(state);
     // The plugin could not say whether the sign-in worked: not a failed login, not a success.
     if (confirmed.failed) throw new AccountServiceUnreachableError('plugin-unavailable');

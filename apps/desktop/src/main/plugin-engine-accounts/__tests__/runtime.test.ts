@@ -76,7 +76,7 @@ vi.mock('../../provider-group/coolingStore.js', () => ({
 }));
 vi.mock('../../cindy-brain/pluginHarnesses.js', () => ({
   getPluginHarnessRegistry: () => ({ list: () => h.harnesses }),
-  readPluginHarnessAccountStatus: async (_key: string, dir?: string) => h.status.get(dir ? path.basename(dir) : 'default') ?? null,
+  readPluginHarnessAccountStatus: vi.fn(async (_key: string, dir?: string) => h.status.get(dir ? path.basename(dir) : 'default') ?? null),
   readPluginHarnessUsage: async (_key: string, dir?: string) => h.usage.get(dir ? path.basename(dir) : 'default') ?? null,
   loginPluginHarnessAccount: h.login,
   cancelPluginHarnessAccountLogin: async () => undefined,
@@ -139,6 +139,33 @@ describe('plugin engine account pool', () => {
     expect(await statuses()).toEqual(['unavailable', 'unavailable']);
     expect(await statuses(B)).toEqual(['unavailable', 'ready']);
     expect(h.login).not.toHaveBeenCalled();
+  });
+
+  // #13766: hold the first probe open so overlapping reads complete in a controlled order.
+  it('shares a pending account probe between concurrent retries', async () => {
+    await runPluginEngineAccountCommand({ action: 'read', providerId: PROVIDER });
+    const probe = vi.mocked((await import('../../cindy-brain/pluginHarnesses.js')).readPluginHarnessAccountStatus);
+    probe.mockClear();
+    const pending = Promise.withResolvers<null>();
+    probe.mockReturnValueOnce(pending.promise);
+    const retry = () => runPluginEngineAccountCommand({ action: 'read', providerId: PROVIDER, retryStatusAccountId: A });
+    const views = Promise.all([retry(), retry()]);
+    pending.resolve(null);
+    for (const view of await views) expect(view.accounts.find(row => row.id === A)?.status).toBe('unavailable');
+    expect(probe).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps a confirmed login when a pre-login probe finishes later', async () => {
+    await runPluginEngineAccountCommand({ action: 'read', providerId: PROVIDER });
+    const probe = vi.mocked((await import('../../cindy-brain/pluginHarnesses.js')).readPluginHarnessAccountStatus);
+    const pending = Promise.withResolvers<null>();
+    probe.mockReturnValueOnce(pending.promise);
+    const beforeLogin = runPluginEngineAccountCommand({ action: 'read', providerId: PROVIDER, retryStatusAccountId: A });
+    h.login.mockResolvedValueOnce({ ok: true });
+    const login = await runPluginEngineAccountCommand({ action: 'login', providerId: PROVIDER, accountId: A, loginKey: 'confirm' });
+    expect(login.accounts.find(row => row.id === A)?.status).toBe('ready');
+    pending.resolve(null);
+    expect((await beforeLogin).accounts.find(row => row.id === A)?.status).toBe('ready');
   });
 
   it('spreads new tasks over signed-in accounts, keeps a bound task on its account and stops at the limit', async () => {
