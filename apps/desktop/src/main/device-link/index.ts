@@ -56,6 +56,7 @@ import {
   CONTROLLER_CAPABILITY_MAKER_EVENT_BATCH_V1,
   CONTROLLER_CAPABILITY_PLUGIN_ENGINE_SWITCH_INTENT_V1,
   CONTROLLER_CAPABILITY_SESSION_TEXT_SNAPSHOT_V1,
+  CONTROLLER_CAPABILITY_EXACT_MESSAGE_NOT_FOUND_V1,
   CONTROLLER_CAPABILITY_SESSION_LIST_MESSAGES_V1,
   CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2,
   CONTROLLER_CAPABILITY_SET_MODEL_EXPLICIT_PROVIDER_NULL_V1,
@@ -716,6 +717,7 @@ const CONTROLLER_CAPABILITIES = [
   CONTROLLER_CAPABILITY_SESSION_LIST_MESSAGES_V1,
   SHARED_TASK_CAPABILITY,
   CONTROLLER_CAPABILITY_SESSION_TEXT_SNAPSHOT_V1,
+  CONTROLLER_CAPABILITY_EXACT_MESSAGE_NOT_FOUND_V1,
   CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2,
   CONTROLLER_CAPABILITY_SET_MODEL_EXPLICIT_PROVIDER_NULL_V1,
   // 桌面控制桌面时同样收微批:批的收益是**relay 帧数**,只要有一个控制端不支持,
@@ -942,6 +944,8 @@ export interface DeviceLinkServiceOptions {
 }
 
 let stopNetworkWatch: (() => void) | null = null;
+/** Re-uploads this computer's phone share when the remote-control switch decides whether it counts. */
+let taskActivityShareChanged: (() => void) | null = null;
 
 export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): void {
   installAgentNetMediaRouting();
@@ -994,7 +998,9 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
     // Capture both the endpoint and credential: a later account/realm switch
     // must never re-label an old host snapshot with the new account's token.
     const baseUrl = officialDeviceLinkApiBase();
-    const body = projectHostTaskActivity(island.getLocalTaskOverview());
+    // The phone counts only tasks it can open: with remote control off this computer's tasks are
+    // unreachable from the phone, so it reports an empty share instead of a stale or partial one.
+    const body = projectHostTaskActivity(readDeviceLinkSettings().remoteControlEnabled ? island.getLocalTaskOverview() : []);
     const key = JSON.stringify([baseUrl, authManager.getCurrentUserId(), body]);
     if (lastActivityUpload?.key === key && Date.now() - lastActivityUpload.at < 55_000) return;
     try {
@@ -1007,7 +1013,12 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
     }
   });
   const unsubscribeTaskActivity = options.taskActivity?.subscribeTaskOverview(taskActivityPublisher.changed);
-  onQuit('task-activity-push', () => { unsubscribeTaskActivity?.(); taskActivityPublisher.dispose(); });
+  taskActivityShareChanged = taskActivityPublisher.changed;
+  onQuit('task-activity-push', () => {
+    taskActivityShareChanged = null;
+    unsubscribeTaskActivity?.();
+    taskActivityPublisher.dispose();
+  });
   remoteCredentialHost.currentToken = () => {
     const membership = authManager.getCurrentUserId(), token = authManager.getAccessToken();
     return membership && token ? { realm: authManager.getActiveAuthRealm(), membership, authDevice: authManager.getDeviceId(), token } : null;
@@ -2319,6 +2330,7 @@ export async function setRemoteControlEnabled(enabled: boolean, assertCurrent?: 
   // 本地刚做过的动作重复 enforce 无害,同时能捕获这条竞态窗口里的外部变更。
   pollExternalSettingsChange();
   broadcast(DEVICE_LINK_PUSH.CONTROL_ENABLED_CHANGED, { remoteControlEnabled: readDeviceLinkSettings().remoteControlEnabled });
+  taskActivityShareChanged?.();
   log.info(`remote control ${enabled ? 'enabled' : 'disabled'}`);
   if (enabled) noteLocalNetworkControlEnabled();
 }
@@ -2462,6 +2474,7 @@ function pollExternalSettingsChange(): void {
     broadcast(DEVICE_LINK_PUSH.CONTROL_ENABLED_CHANGED, { remoteControlEnabled });
     client.sendPresence({ remoteControlEnabled });
     if (!remoteControlEnabled) dropAllControllers(client, 'toggle-off');
+    taskActivityShareChanged?.();
     log.info(
       `remote control ${remoteControlEnabled ? 'enabled' : 'disabled'} (external settings change)`,
     );

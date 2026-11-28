@@ -145,7 +145,7 @@ export function ModelGroupsSection({ scrollRef, focusProvider }: {
     const owner = (config.sourceRoutes ?? []).find((item) =>
       !item.hidden && item.sources.some((source) => !source.off && !source.agentDeviceId && source.providerId === focusProvider.providerId));
     setView(owner ? { kind: 'source', id: owner.id } : { kind: 'list' });
-    const selector = `[data-auto-route="accounts:${CSS.escape(focusProvider.providerId)}"],[data-auto-route="computers:${CSS.escape(focusProvider.providerId)}"]`;
+    const selector = `[data-auto-route="accounts:${CSS.escape(focusProvider.providerId)}"],[data-auto-route="computers:${CSS.escape(focusProvider.providerId)}"],[data-source-route-provider="${CSS.escape(focusProvider.providerId)}"]`;
     let tries = 0;
     let frame = 0;
     const find = () => {

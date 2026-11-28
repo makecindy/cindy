@@ -74,6 +74,12 @@ import type {
 import { formatSidebarTime } from '@/features/cc-agent/lib/formatSidebarTime';
 
 import { gitReviewApiFor, isReviewRemoteOversizeError } from '@/lib/gitReviewTransport';
+import { getDraft, plainTextToTiptapDoc, saveDraft } from '@/lib/composerDraftStore';
+import {
+  buildBranchConflictResolvePrompt,
+  formatConflictFilesSummary,
+} from '@/lib/branchConflictPrompt';
+import { composerDraftKeyForRightSidebarSession } from '@/features/cc-agent/newMakerDraftRightSidebar';
 import { makerChatStore } from '@/lib/makerChatStore';
 import { extractIpcError } from '@/utils/ipcError';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
@@ -455,7 +461,7 @@ export function descriptorForReviewSource(
 
 export function ReviewTabBody({ state, ctx }: ReviewTabBodyProps) {
   const { t } = useTranslation();
-  const { confirm } = useConfirmDialog();
+  const { confirm, confirmThree } = useConfirmDialog();
   // device-link 远程会话:session 行在被控设备的 DB 里,只读查询经 gitReviewTransport
   // 隧道到被控端执行(被控端以它自己的 session 记录解析 workdir);写操作与本机
   // 文件打开在控制端禁用(readOnly 经 writeDisabledReasons 的 remote-device 档)。
@@ -985,31 +991,125 @@ export function ReviewTabBody({ state, ctx }: ReviewTabBodyProps) {
       return;
     }
 
-    const ok = await confirm({
-      title: t('rightSidebar.review.push.forceTitle'),
-      description: t('rightSidebar.review.push.forceDesc', {
-        count: result.behind,
-        remoteRef: result.remoteRef,
-      }),
-      confirmText: t('rightSidebar.review.push.forceConfirm'),
-      cancelText: t('rightSidebar.review.push.forceCancel'),
-    });
-    if (!ok) return;
+    const runForcePush = async (
+      needsForce: Extract<ReviewPushResult, { kind: 'needs-force' }>,
+    ) => {
+      const forceResult = applyPushResult(
+        await window.electronAPI.gitReview.push({
+          sessionId,
+          confirmForce: {
+            remoteRef: needsForce.remoteRef,
+            expectedOid: needsForce.remoteOid,
+          },
+        }),
+      );
+      if (forceResult.kind === 'needs-force') {
+        throw new Error(t('rightSidebar.review.push.forceStillRejected'));
+      }
+      toast.success(t('rightSidebar.review.push.successToast'));
+    };
 
-    const forceResult = applyPushResult(
-      await window.electronAPI.gitReview.push({
-        sessionId,
-        confirmForce: {
-          remoteRef: result.remoteRef,
-          expectedOid: result.remoteOid,
-        },
-      }),
-    );
-    if (forceResult.kind === 'needs-force') {
-      throw new Error(t('rightSidebar.review.push.forceStillRejected'));
+    const askAgentToResolve = (
+      needsForce: Extract<ReviewPushResult, { kind: 'needs-force' }>,
+    ) => {
+      const draftKey = composerDraftKeyForRightSidebarSession(sessionId);
+      const branchName =
+        needsForce.branch ??
+        needsForce.data.scope.branch ??
+        needsForce.remoteRef.replace(/^refs\/heads\//, '');
+      const remoteDisplay =
+        needsForce.upstream ??
+        `${needsForce.remote}/${needsForce.remoteRef.replace(/^refs\/heads\//, '')}`;
+      const prompt = buildBranchConflictResolvePrompt(t, {
+        branch: branchName,
+        remoteRef: remoteDisplay,
+        ahead: needsForce.ahead,
+        behind: needsForce.behind,
+        dirtyFiles: needsForce.dirty ? needsForce.data.summary.totalFiles : 0,
+        conflictFiles: needsForce.conflictFiles,
+        pushAfterSync: true,
+      });
+      const existing = getDraft(draftKey);
+      saveDraft(draftKey, {
+        ...existing,
+        text: plainTextToTiptapDoc(prompt),
+        attachments: existing?.attachments ?? [],
+      });
+      toast.info(t('rightSidebar.review.push.agentPromptFilled'));
+    };
+
+    const promptConflictOptions = async (
+      needsForce: Extract<ReviewPushResult, { kind: 'needs-force' }>,
+    ) => {
+      const remoteDisplay =
+        needsForce.upstream ??
+        `${needsForce.remote}/${needsForce.remoteRef.replace(/^refs\/heads\//, '')}`;
+      const description =
+        needsForce.conflictFiles && needsForce.conflictFiles.length > 0
+          ? t('rightSidebar.review.push.divergedConflictDesc', {
+              count: needsForce.behind,
+              remoteRef: remoteDisplay,
+              files: formatConflictFilesSummary(needsForce.conflictFiles),
+            })
+          : needsForce.dirty
+            ? t('rightSidebar.review.push.divergedDirtyDesc', {
+                count: needsForce.behind,
+                remoteRef: remoteDisplay,
+              })
+            : t('rightSidebar.review.push.divergedGeneralDesc', {
+                count: needsForce.behind,
+                remoteRef: remoteDisplay,
+              });
+      const choice = await confirmThree({
+        title: t('rightSidebar.review.push.divergedTitle'),
+        description,
+        confirmText: t('rightSidebar.review.push.askAgentSyncConfirm'),
+        tertiaryText: t('rightSidebar.review.push.forceConfirm'),
+        cancelText: t('rightSidebar.review.push.forceCancel'),
+        maxWidth: 440,
+        autoFocusConfirm: true,
+      });
+      if (choice === 'confirm') {
+        askAgentToResolve(needsForce);
+      } else if (choice === 'tertiary') {
+        await runForcePush(needsForce);
+      }
+    };
+
+    if (result.canSyncCleanly) {
+      const remoteDisplay =
+        result.upstream ?? `${result.remote}/${result.remoteRef.replace(/^refs\/heads\//, '')}`;
+      const choice = await confirmThree({
+        title: t('rightSidebar.review.push.divergedTitle'),
+        description: t('rightSidebar.review.push.syncCleanDesc', {
+          count: result.behind,
+          remoteRef: remoteDisplay,
+        }),
+        confirmText: t('rightSidebar.review.push.syncAndPushConfirm'),
+        tertiaryText: t('rightSidebar.review.push.forceConfirm'),
+        cancelText: t('rightSidebar.review.push.forceCancel'),
+        autoFocusConfirm: true,
+      });
+      if (choice === 'confirm') {
+        const syncedResult = applyPushResult(
+          await window.electronAPI.gitReview.push({
+            sessionId,
+            syncBeforePush: true,
+          }),
+        );
+        if (syncedResult.kind === 'needs-force') {
+          await promptConflictOptions(syncedResult);
+          return;
+        }
+        toast.success(t('rightSidebar.review.push.syncedAndPushedToast'));
+      } else if (choice === 'tertiary') {
+        await runForcePush(result);
+      }
+      return;
     }
-    toast.success(t('rightSidebar.review.push.successToast'));
-  }, [applyPushResult, confirm, sessionId, t]);
+
+    await promptConflictOptions(result);
+  }, [applyPushResult, confirmThree, sessionId, t]);
 
   const decoratePushError = useCallback(
     (message: string, err: unknown) => {

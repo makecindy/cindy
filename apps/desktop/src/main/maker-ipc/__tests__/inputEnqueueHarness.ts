@@ -157,6 +157,7 @@ export function createInputEnqueueHarness(coordinator: AgentInputCoordinator, op
     availableInterfaces?: { profileId: string; defaults: { supportsImageInput?: boolean } }[];
   };
   pinnedCodexImageInput?: boolean;
+  modelGroupBound?: boolean;
 } = {}) {
   const { remote = true, mobile = false, resumeInterruptedScheduleRun = async () => null } = options;
   const noop = () => undefined;
@@ -218,7 +219,9 @@ export function createInputEnqueueHarness(coordinator: AgentInputCoordinator, op
     agentSwitchPending: new Map(),
     maker: { getSession: () => null },
     hasSessionProvider: () => false,
-    activeModelGroupBinding: async () => null,
+    activeModelGroupBinding: async () => options.modelGroupBound
+      ? { selection: { type: 'route', id: 'fixture-route' }, pickedKey: 'fixture-codex', at: 1 }
+      : null,
     isSessionSharedTaskActive: () => false,
     getActiveCatalog: () => ({ providers: [{ id: 'fixture-codex', models: { codex: [options.codexModel] } }] }),
     findCatalogModel,

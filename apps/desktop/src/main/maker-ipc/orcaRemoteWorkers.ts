@@ -12,6 +12,7 @@ import { createId } from '@paralleldrive/cuid2';
 import { readInputDeliveryReceipts } from '../localDb/agentInputQueueSnapshots.js';
 import {
   DeviceLinkError,
+  ORCA_REMOTE_WORKER_ARCHIVE_CHANNEL,
   ORCA_REMOTE_WORKER_CAPS_CHANNEL,
   ORCA_REMOTE_WORKER_MODELS_CHANNEL,
   ORCA_REMOTE_WORKER_OPEN_CHANNEL,
@@ -686,13 +687,31 @@ export function createOrcaRemoteWorkers(deps: OrcaRemoteWorkersDeps) {
     assertOwner(owner);
     const row = await getRemoteWorkerByProxySession(proxySessionId);
     assertOwner(owner);
+    if (!row) throw new Error('Remote Worker route unavailable');
+    await beforeMutation?.();
+    assertOwner(owner);
+    const receipt = await invoke(row.deviceId, ORCA_REMOTE_WORKER_ARCHIVE_CHANNEL, [{ sessionId: row.remoteSessionId }])
+      .catch(err => {
+        if (codeOf(err) === 'CHANNEL_NOT_ALLOWED') {
+          throw new Error('请更新 Worker 所在电脑上的 Cindy 后重试归档。');
+        }
+        throw err;
+      });
+    if (!receipt || typeof receipt !== 'object' || !('runtimeClosed' in receipt) || receipt.runtimeClosed !== true) {
+      throw new Error('运行设备尚未确认 Worker 已关闭，请重试归档。');
+    }
+    await beforeMutation?.();
+    assertOwner(owner);
+    await markWorkerRemoteStopConfirmed(row.workerId);
+    assertOwner(owner);
+    await markWorkerRemoteReleased(row.workerId);
+    assertOwner(owner);
     await archiveSingleWorkerSession(proxySessionId, async () => {
       await beforeMutation?.();
       assertOwner(owner);
     });
     assertOwner(owner);
     runtime.untrack(proxySessionId);
-    if (row) await releaseAndMark(row);
   }
 
   /**
@@ -724,10 +743,11 @@ export function createOrcaRemoteWorkers(deps: OrcaRemoteWorkersDeps) {
         if (await isRemoteWorker(worker.sessionId)) return;
         await base.resumeWorkerSession(worker, link);
       },
-      closeWorkerSession: async (sessionId, beforeClose) => {
+      closeWorkerSession: async (sessionId, beforeClose, intent) => {
         if (!(await isRemoteWorker(sessionId))) return base.closeWorkerSession(sessionId, beforeClose);
         await beforeClose?.();
-        await runtime.abort(sessionId);
+        // Archive closes under the execution host’s ownership check and send lock.
+        if (intent !== 'archive') await runtime.abort(sessionId);
       },
       closeWorkerSessionIfIdle: async (sessionId, sendLockHeld, options) =>
         (await isRemoteWorker(sessionId))
@@ -743,7 +763,7 @@ export function createOrcaRemoteWorkers(deps: OrcaRemoteWorkersDeps) {
           : base.hasPendingWorkerInput(sessionId),
       archiveWorkerSession: async (sessionId, beforeMutation) => {
         if (!(await isRemoteWorker(sessionId))) return base.archiveWorkerSession(sessionId, beforeMutation);
-        await archive(sessionId, beforeMutation);
+        await base.withSessionSendLock(sessionId, () => archive(sessionId, beforeMutation));
       },
       dispatchWorkerMessage: async (params) => {
         if (!(await isRemoteWorker(params.targetSessionId))) return base.dispatchWorkerMessage(params);
@@ -818,6 +838,18 @@ export function createOrcaRemoteWorkers(deps: OrcaRemoteWorkersDeps) {
             }
             await params.onAcceptedCommit?.();
             runtime.confirmDispatchAccepted(params.targetSessionId, clientId);
+            if (result.mode === 'unknown') {
+              return {
+                ok: false,
+                dispatchOutcome: {
+                  ...meta,
+                  kind: 'host-send',
+                  accepted: false,
+                  code: 'DELIVERY_UNKNOWN',
+                  message: '远端未确认消息是否送达，正在按原消息核对，请勿重复派发。',
+                },
+              };
+            }
             return {
               ok: true,
               mode: result.mode,

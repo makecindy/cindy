@@ -68,7 +68,7 @@ import { mobileDebugLog } from '@/debug/mobileDebugLog';
 import { getMobileAuthOwner, isMobileAuthOwnerCurrent, subscribeMobileAuthOwner } from '@/auth/authOwnerGeneration';
 import { mobileDurableOutbox, durableOutboxDisplayItem, getCurrentMobileOutboxRecords, reconcileMobileOutboxDrafts } from '@/session/mobileDurableOutbox';
 import { retainOutboxFile, durableOutboxUploadUri, removeOutboxFiles, outboxAttachmentNeedsLocalBytes } from '@/session/durableOutboxFiles';
-import { isDurableOutboxSettled, observeDurableOutboxSending, type DurableOutboxRecord } from '@/session/durableOutbox';
+import { hasUncreatedHostSession, isDurableOutboxHandedOff, isDurableOutboxSettled, isPendingHostDialogueCreation, observeDurableOutboxSending, type DurableOutboxRecord } from '@/session/durableOutbox';
 import { isInFlightDeviceLinkError, isSharedTaskPeer, isScopedPeer, resolveRemoteText } from '@cindy/device-link';
 import { takeRefinementContextTail, truncateRefinementReply } from '@cindy/voice-input-core';
 import {
@@ -656,9 +656,11 @@ import {
 } from '@/session/mobileVoiceCue';
 import {
   createMobileVoiceControllerSession,
+  replayMobileVoiceAudio,
   type MobileVoiceControllerSession,
 } from '@/session/mobileVoiceController';
 import { createMobileSpeakerGate, warmMobileSpeakerFilter } from '@/session/mobileSpeakerFilter';
+import { useMobileFailedVoiceRetry } from '@/session/useMobileFailedVoiceRetry';
 import { useSpeakerFilterNotice } from '@/session/useSpeakerFilterNotice';
 import {
   createMobileVoiceDictionaryLearningTracker,
@@ -1291,6 +1293,9 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
   // existing link/subscription path to establish reachability instead of
   // blocking both history and sync until a presence change happens to arrive.
   const currentSession = useRemoteSessionDetail(deviceId, sessionId);
+  const creationTask = useNewSessionCreationTask(sessionId);
+  const creationBlocksReads = currentSession?.pendingLocalCreation === true
+    || creationTask?.status === 'running' || creationTask?.status === 'create-failed';
   const sideChatPending = currentSession?.source === 'side-chat' && currentSession.pendingLocalCreation === true;
   const remoteHistoryAvailable = !sideChatPending && status === 'online' && getPresenceAvailability(deviceId) !== false;
   // Unknown presence while connecting is loading, not evidence of a lost computer.
@@ -1299,7 +1304,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       : '');
   const sideChatBoundary = mobileSessionHistoryBoundary(currentSession);
   const unfilteredHistoryView = useRemoteHistoryView(deviceId, sessionId, maker,
-    () => messageScreenFocusedRef.current && messageAppActiveRef.current, remoteHistoryAvailable);
+    () => messageScreenFocusedRef.current && messageAppActiveRef.current, remoteHistoryAvailable && !creationBlocksReads);
   const historyView = useMemo(() => ({ ...unfilteredHistoryView,
     snapshot: historyAfter(unfilteredHistoryView.snapshot, sideChatBoundary)!,
   }), [unfilteredHistoryView.view, unfilteredHistoryView.snapshot, unfilteredHistoryView.cacheRestoring, sideChatBoundary]);
@@ -1578,6 +1583,9 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       || voiceState === 'submitting' || voiceState === 'refining',
   });
   const [voiceError, setVoiceError] = useState<string | null>(null);
+  const failedVoiceRetry = useMobileFailedVoiceRetry(`${deviceId ?? ''}:${sessionId}`);
+  const voiceRetryRunSeqRef = useRef(0);
+  const voiceRetryAbortRef = useRef<AbortController | null>(null);
   const {
     visible: voiceSpeakerFiltered,
     show: showVoiceSpeakerFiltered,
@@ -1857,9 +1865,10 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
   const sendInFlightRef = useRef(false);
   const rawOutboxRecords = useSyncExternalStore(mobileDurableOutbox.subscribe, mobileDurableOutbox.getSnapshot);
   const durableOutboxRecords = useMemo(() => rawOutboxRecords.filter((record) => record.accountId === outboxOwner.accountKey && !isDurableOutboxSettled(record)), [rawOutboxRecords, outboxOwner]);
-  const outboxItems = useMemo(() => durableOutboxRecords
-    .filter((r) => r.deviceId === deviceId && r.item.sessionId === sessionId && r.accountId === getMobileAuthOwner().accountKey)
-    .map(durableOutboxDisplayItem), [durableOutboxRecords, deviceId, sessionId]);
+  const taskOutboxRecords = useMemo(() => durableOutboxRecords
+    .filter((r) => r.deviceId === deviceId && r.item.sessionId === sessionId && r.accountId === getMobileAuthOwner().accountKey),
+    [durableOutboxRecords, deviceId, sessionId]);
+  const outboxItems = useMemo(() => taskOutboxRecords.map(durableOutboxDisplayItem), [taskOutboxRecords]);
   const outboxRef = useRef<readonly MobileOutboxItem[]>(outboxItems);
   outboxRef.current = outboxItems;
   useEffect(() => observeDurableOutboxSending(mobileDurableOutbox, deviceId, sessionId, (record) => {
@@ -2393,6 +2402,17 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     runningModel?.deviceId === deviceId ? runningModel.route : undefined,
     pendingModel?.deviceId === deviceId ? pendingModel.route : undefined,
   );
+  const errorProviderName = (providerId?: string | null): string | undefined => {
+    if (!providerId || providerId === 'xd') return undefined;
+    const catalogDeviceId = runningModel?.deviceId ?? currentSession?.agentDeviceId ?? deviceId;
+    const catalog = catalogDeviceId === deviceId
+      ? composerDeviceProviders.ready ? composerDeviceProviders.providers : []
+      : remoteAgentCatalogs.find((item) => item.deviceId === catalogDeviceId)?.providers ?? [];
+    const provider = catalog.find((item) => item.id === providerId);
+    if (provider?.auth?.native === 'claude') return 'Anthropic';
+    if (provider?.auth?.native === 'codex') return 'OpenAI';
+    return provider?.name?.trim() || undefined;
+  };
   const collabWorkerDeviceId = collab.workerForm.form.executionDeviceId ?? deviceId;
   const collabDeviceProviders = useDeviceProviders(collabWorkerDeviceId || undefined, collab.workerForm.modelPicker.open);
   const collabModelPricing = useDeviceModelPricing(collabWorkerDeviceId || undefined);
@@ -2804,7 +2824,6 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       setPendingPlanViewerState('half');
     }
   }, [activePendingKind, activePendingRequestId, sessionOperationLayout.composerSlot]);
-  const creationTask = useNewSessionCreationTask(sessionId);
   // A failed chat is handing its composer to the editor. Running creation still
   // keeps the normal composer; stop further edits only during this handoff.
   const canUseComposer = sessionOperationLayout.canUseComposer && !sessionResourceCards.blocked && companionEntry.canCompose
@@ -4064,7 +4083,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
   ]);
 
   useEffect(() => {
-    if (!deviceId || !sessionAgentSwitchSupported) {
+    if (creationBlocksReads || !deviceId || !sessionAgentSwitchSupported) {
       agentSwitchIntentLoadSeqRef.current += 1;
       return;
     }
@@ -4090,7 +4109,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     return () => {
       cancelled = true;
     };
-  }, [connectionEpoch, deviceId, lastSyncedAt, maker, openLink, sessionAgentSwitchSupported, sessionId]);
+  }, [connectionEpoch, creationBlocksReads, deviceId, lastSyncedAt, maker, openLink, sessionAgentSwitchSupported, sessionId]);
 
   const syncSession = useCallback(async (syncRun: RemoteSyncRun) => {
     const snapshotStartedAt = Date.now();
@@ -4104,7 +4123,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     // 新建会话乐观管线在途(running / create-failed):被控端可能还没有这个会话,
     // getSession 会 NOT_FOUND 报错横幅。统一在这里挡掉全部 load 触发点;管线完成
     // (task 移除)后由下方 effect 触发一轮真正的同步。
-    if (shouldBlockSessionSync(sessionId)) {
+    if (shouldBlockSessionSync(sessionId, deviceId)) {
       if (!syncRun.isStale()) setLoading(false);
       return;
     }
@@ -4571,10 +4590,15 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       }
     },
   });
+  const pendingHostCreationStatus = useMemo(() => {
+    const record = durableOutboxRecords.find((r) => r.deviceId === deviceId && r.item.sessionId === sessionId && isPendingHostDialogueCreation(r));
+    if (!record) return null;
+    return record.state === 'failed' ? 'create-failed' : 'running';
+  }, [durableOutboxRecords, deviceId, sessionId]);
   const prevCreationStatusRef = useRef<string | null>(null);
-  useEffect(() => {
+  useEffect(function syncAfterCreationTransition() {
     const prev = prevCreationStatusRef.current;
-    const status = creationTask?.status ?? null;
+    const status = creationTask?.status ?? pendingHostCreationStatus;
     prevCreationStatusRef.current = status;
     if (status === prev) return;
     if (status === null) {
@@ -4593,6 +4617,8 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
         }).catch((err) => {
           if (isMobileAuthOwnerCurrent(owner) && outboxSessionAliveRef.current === sessionId) setError(formatRemoteError(err));
         });
+        // Creation succeeded: refresh the open page while the outbox recovers the first input.
+        void load();
         return;
       }
       // 首条消息没发出,而创建期间用户可能已经发了后续消息(composer 全程可用)。
@@ -4633,7 +4659,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       dismissNewSessionCreation(sessionId);
       void load();
     }
-  }, [creationTask, deviceId, deviceName, load, navigation, router, sessionId, setComposerDraft]);
+  }, [creationTask, deviceId, deviceName, load, navigation, pendingHostCreationStatus, router, sessionId, setComposerDraft]);
 
   // 排队行里该显示「在途转圈」的 clientId:本页 enqueue 在途的条目,加上新建会话
   // 乐观管线仍在跑(create + 首条 enqueue 都还没确认)时的首条消息——它同样是
@@ -4913,10 +4939,18 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
   // 已进被控端队列的消息归队列管,不再算交接。已回流进历史、且后面已有回复(turn 已跑过)
   // 的消息也不算,否则快速 turn 结束后活动条要等后台对账才熄灭。只「已确认」不排除:
   // 被控端先落库用户消息、再跑派发前钩子,这段还没有运行信号。
-  const handoffSettledClientIds = useMemo(() => new Set([
-    ...inputProjection.pendingQueue.map((item) => item.clientId),
-    ...repliedHistoryUserClientIds(historyView.snapshot, rawMessages),
-  ]), [inputProjection.pendingQueue, historyView.snapshot, rawMessages]);
+  const rawHistoryDeviceId = remoteSessionStore.getSessionDeviceId(sessionId);
+  const handoffSettledClientIds = useMemo(() => {
+    // 活动条可以用同设备已确认的发送和实时终态收尾，待发记录仍等离线历史缓存完成。
+    const confirmedOutbox = rawHistoryDeviceId === deviceId ? {
+      sessionId,
+      clientIds: new Set(taskOutboxRecords.filter((record) => record.historyConfirmed).map((record) => record.item.clientId)),
+    } : undefined;
+    return new Set([
+      ...inputProjection.pendingQueue.map((item) => item.clientId),
+      ...repliedHistoryUserClientIds(historyView.snapshot, rawMessages, confirmedOutbox),
+    ]);
+  }, [inputProjection.pendingQueue, historyView.snapshot, rawMessages, rawHistoryDeviceId, deviceId, sessionId, taskOutboxRecords]);
   const messageHandoffActive = hasActiveOutboxHandoff(
     durableOutboxRecords,
     { deviceId, sessionId },
@@ -5758,7 +5792,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     && !isSharedTaskPeer(deviceId) && !['bot', 'review'].includes(currentSession.source ?? '')
     && !currentSession.pendingLocalCreation;
   const sideChatCount = useSideChatCount({ deviceId, sessionId, maker, owner: outboxOwner,
-    enabled: canUseSideChats && currentSession?.source !== 'side-chat' && remoteHistoryAvailable,
+    enabled: !creationBlocksReads && canUseSideChats && currentSession?.source !== 'side-chat' && remoteHistoryAvailable,
     refreshKey: `${connectionEpoch}:${sideChatsOpen}`,
   });
   const openSideChat = useCallback((row: RemoteSession) => {
@@ -5869,6 +5903,8 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     ) return;
     // 开始语音输入和打字一样，是要发消息的信号。
     prewarmAgentOnTyping();
+    const retryRunSeq = ++voiceRetryRunSeqRef.current;
+    failedVoiceRetry.clear();
     voiceStopAfterStartRef.current = false;
     setVoiceError(null);
     clearVoiceSpeakerFiltered();
@@ -6025,6 +6061,11 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
             setVoiceState('error');
             setVoiceError(message);
           },
+          onRetainedFailedAudio: (audio) => {
+            if (voiceRetryRunSeqRef.current === retryRunSeq) {
+              failedVoiceRetry.retain(audio);
+            }
+          },
           // No start cue on mobile: playing a cue via expo-audio during capture
           // re-activates the AVAudioSession and stalls the record tap (see
           // mobileVoiceCue.ts). Only the end cue, which plays after capture
@@ -6105,9 +6146,12 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       setVoiceState('error');
       setVoiceError(formatRemoteError(err));
     }
-  }, [clearVoiceSpeakerFiltered, deviceId, openLink, prewarmAgentOnTyping, renderItems, showVoiceSpeakerFiltered, t, voiceIsProcessing, voiceState, writeVoiceDraft]);
+  }, [clearVoiceSpeakerFiltered, deviceId, failedVoiceRetry, openLink, prewarmAgentOnTyping, renderItems, showVoiceSpeakerFiltered, t, voiceIsProcessing, voiceState, writeVoiceDraft]);
 
   const cancelVoiceForAppBackground = useCallback(() => {
+    voiceRetryRunSeqRef.current += 1;
+    voiceRetryAbortRef.current?.abort();
+    voiceRetryAbortRef.current = null;
     const controller = voiceControllerSessionRef.current;
     const ownsActiveRun = shouldCancelMobileVoiceForBackground({
       startupInFlight: voiceStartupInFlightRef.current,
@@ -6121,6 +6165,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       return;
     }
 
+    failedVoiceRetry.clear();
     voiceStartupSeqRef.current += 1;
     voiceControllerSessionRef.current = null;
     voiceStartupInFlightRef.current = false;
@@ -6135,7 +6180,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     setVoiceError(null);
     discardPendingPrewarm();
     if (controller) void controller.cancel().catch(() => undefined);
-  }, [setVoiceState]);
+  }, [failedVoiceRetry, setVoiceState]);
 
   useEffect(() => {
     const subscription = AppState.addEventListener('change', (nextState) => {
@@ -6172,6 +6217,9 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       voicePermissionRequestAbortRef.current = null;
       voicePermissionRequestInFlightRef.current = false;
       voiceStartupSeqRef.current += 1;
+      voiceRetryRunSeqRef.current += 1;
+      voiceRetryAbortRef.current?.abort();
+      voiceRetryAbortRef.current = null;
       voiceStartupInFlightRef.current = false;
       voiceStopInFlightRef.current = false;
       voiceRecordingActiveRef.current = false;
@@ -6245,6 +6293,113 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       voiceStopInFlightRef.current = false;
     }
   }, [attachments.length, t, voiceState]);
+
+  const retryFailedVoiceRecording = useCallback(async () => {
+    if (
+      voicePermissionRequestInFlightRef.current
+      || voiceStartupInFlightRef.current
+      || voiceStopInFlightRef.current
+      || voiceRecordingActiveRef.current
+      || voiceState === 'listening'
+      || voiceIsProcessing
+    ) return;
+    if (!deviceId) return;
+    const retained = failedVoiceRetry.peek();
+    if (!retained) return;
+    const retryRunSeq = ++voiceRetryRunSeqRef.current;
+    const retryAbort = new AbortController();
+    voiceRetryAbortRef.current = retryAbort;
+    voiceStopInFlightRef.current = true;
+    const caretPlacementSeq = ++voiceCaretPlacementSeqRef.current;
+    setVoiceCaretPlacementPending(true);
+    setVoiceError(null);
+    clearVoiceSpeakerFiltered();
+    setVoiceState('submitting');
+    try {
+      const credential = createMobileCindyVoiceCredential(deviceId);
+      const voiceContext = new MobileCindyVoiceRunContext(
+        () => auth.getAccessToken(),
+        () => auth.refreshAccessToken(),
+        auth.apiFetch,
+        credential.settings?.language,
+        CINDY_MANAGED_REFINER_PROVIDER,
+      );
+      const [localVoiceInputHistory] = await Promise.all([
+        getMobileVoiceInputHistoryForHost(deviceId, credential.settings?.voiceInputHistory).catch(() => undefined),
+        hydrateMobileVoiceDictionary(deviceId).catch(() => undefined),
+      ]);
+      if (voiceRetryRunSeqRef.current !== retryRunSeq) return;
+      const initialDraft = draftRef.current;
+      const initialDocument = composerDocumentRef.current;
+      const input = composerInputRef.current;
+      const initialSelection = input?.getSelection(initialDraft)
+        ?? { start: initialDraft.length, end: initialDraft.length };
+      const latestDraft = await replayMobileVoiceAudio({
+        audio: retained,
+        signal: retryAbort.signal,
+        credential,
+        requestedAt: Date.now(),
+        connectionProvider: (providerId: string) => voiceContext.createAsrConnection(providerId),
+        refinerTargetProvider: (providerId: string, options?: { refreshAccessToken?: boolean }) =>
+          voiceContext.createRefinerTarget(providerId, options),
+        refineRequestBudget: () => voiceContext.refineRequestBudget(),
+        warmRefiner: (warmInput: { system: string; user: unknown; promptCacheKey: string }) =>
+          voiceContext.warmRefiner(warmInput),
+        initialDraft,
+        initialSelection,
+        refinementContext: buildMobileVoiceSessionRefinementContext(initialDraft, renderItems, initialSelection),
+        localVoiceInputHistory,
+        readCurrentDraft: () => draftRef.current,
+        onDraftChanged: (text, selection, replacement) => {
+          if (voiceRetryRunSeqRef.current !== retryRunSeq) return;
+          if (selection) input?.rememberSelection(text, selection);
+          writeVoiceDraft({ draft: text, initialDocument, initialSelection, insertionEnd: selection?.end, replacement });
+        },
+        onStateChanged: (next) => {
+          if (voiceRetryRunSeqRef.current !== retryRunSeq) return;
+          setVoiceState(next);
+        },
+        onError: (message) => {
+          if (voiceRetryRunSeqRef.current !== retryRunSeq) return;
+          setVoiceState('error');
+          setVoiceError(message);
+        },
+        recordHistory: (text) => recordMobileVoiceInputHistoryForHost(deviceId, text),
+        updateHistoryEntry: (entryId, text) => updateMobileVoiceInputHistoryEntryForHost(deviceId, entryId, text),
+        onRefinementApplied: (refinementInput) => {
+          const uiLanguage = currentMobileVoiceUiLanguage();
+          voiceDictionaryLearningTrackerRef.current?.captureRefinedInsertion({
+            ...refinementInput,
+            uiLanguage,
+            sourceLanguage: resolveMobileVoiceRefinementSourceLanguage(
+              credential.settings?.language,
+              uiLanguage,
+            ),
+          });
+        },
+      });
+      if (voiceRetryRunSeqRef.current !== retryRunSeq) return;
+      failedVoiceRetry.clear();
+      setVoiceState('done');
+      setVoiceError(null);
+      const insertionEnd = composerInputRef.current?.getSelection(latestDraft).end ?? latestDraft.length;
+      requestAnimationFrame(() => {
+        if (input && composerInputRef.current === input && draftRef.current === latestDraft) {
+          input.applyDocumentAndSetSelection(composerDocumentRef.current, insertionEnd);
+        }
+        if (voiceCaretPlacementSeqRef.current === caretPlacementSeq) setVoiceCaretPlacementPending(false);
+      });
+    } catch (err) {
+      if (voiceCaretPlacementSeqRef.current === caretPlacementSeq) setVoiceCaretPlacementPending(false);
+      if (voiceRetryRunSeqRef.current === retryRunSeq) {
+        setVoiceState('error');
+        setVoiceError(formatRemoteError(err));
+      }
+    } finally {
+      if (voiceRetryAbortRef.current === retryAbort) voiceRetryAbortRef.current = null;
+      voiceStopInFlightRef.current = false;
+    }
+  }, [auth, clearVoiceSpeakerFiltered, deviceId, failedVoiceRetry, renderItems, setVoiceState, voiceIsProcessing, voiceState, writeVoiceDraft]);
 
   const openVoiceSettings = useCallback(() => {
     void Linking.openSettings().catch((err) => {
@@ -6433,20 +6588,22 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       || getNewSessionCreationTask(sessionId) !== null
     );
   };
-  const { findDurableOutboxRecord, retryOutboxItem, removeOutboxItem } = usePendingOutboxActions({
+  const { retryOutboxItem, removeOutboxItem } = usePendingOutboxActions({
     deviceId, deviceName, sessionId, router, outboxSessionAliveRef,
     setError, setQueueSelectedClientId, t,
   });
   const outboxLeftVersion = useSyncExternalStore(subscribeOutboxLeftInBackground, getOutboxLeftInBackgroundVersion);
-  const outboxDisplayItems = useMemo(() => outboxItems.map((item) => {
-    const record = findDurableOutboxRecord(item.clientId);
-    return {
-      ...outboxDisplayItem(item),
-      ...(record ? { sentAt: record.createdAt, pendingDelivery: isPendingDeliveryAfterLeaving(record) } : {}),
-      historyConfirmation: record?.historyConfirmation,
-      canCancel: !record?.historyConfirmation && !(record?.creation && !record.prepared && !record.template),
-    };
-  }), [outboxItems, deviceId, sessionId, outboxLeftVersion]);
+  const outboxDisplayItems = useMemo(() => {
+    const head = taskOutboxRecords.findIndex((record) => !isDurableOutboxHandedOff(record));
+    return taskOutboxRecords.map((record, index) => ({
+      ...outboxDisplayItem(outboxItems[index]!),
+      sentAt: record.createdAt,
+      pendingDelivery: isPendingDeliveryAfterLeaving(record),
+      historyConfirmation: record.historyConfirmation,
+      waitingForPrevious: head !== -1 && index > head && !isDurableOutboxHandedOff(record),
+      canCancel: !record.historyConfirmation && !hasUncreatedHostSession(record),
+    }));
+  }, [taskOutboxRecords, outboxItems, outboxLeftVersion]);
 
   // Legacy creation tasks have no app-owned first record. Never downgrade durable follow-ups
   // into the old ephemeral draft recovery; new creation tasks use the branch above.
@@ -9262,7 +9419,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
   // push 继续负责增量；打开菜单与动作结束时再读取权威状态。
   const goalStatus = useSessionGoalStatus(sessionId);
   useFocusEffect(useCallback(() => {
-    if (!appStateActive || !remoteHistoryAvailable || !deviceId || !sessionId || isSharedTaskPeer(deviceId)) return;
+    if (creationBlocksReads || !appStateActive || !remoteHistoryAvailable || !deviceId || !sessionId || isSharedTaskPeer(deviceId)) return;
     let cancelled = false;
     void (async () => {
       try {
@@ -9278,7 +9435,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     return () => {
       cancelled = true;
     };
-  }, [appStateActive, connectionEpoch, contextSheetOpen, contextSheetView, deviceId, maker, remoteHistoryAvailable, sessionId]));
+  }, [appStateActive, connectionEpoch, contextSheetOpen, contextSheetView, creationBlocksReads, deviceId, maker, remoteHistoryAvailable, sessionId]));
   // 暂停 / 继续 / 结束目标:先乐观切本地状态镜像(面板当帧反馈,不等往返),
   // RPC 后台;成功回读权威收敛(既有语义)。失败时报错并还原:优先回读权威状态,
   // 回读也失败(离线 / 超时,与 action 同因高概率连败)则还原到乐观前的快照——
@@ -11687,6 +11844,8 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
                         {tailBannerState ? (
                           <SessionTailBanner
                             busy={tailBannerBusy || historyRecoveryBusy}
+                            providerId={currentSession?.providerId}
+                            providerName={errorProviderName(tailBannerState.kind === 'error-tail' ? tailBannerState.providerId ?? currentSession?.providerId : currentSession?.providerId)}
                             modelGroupSwitchOffer={
                               tailBannerState.kind === 'error-tail' && sessionModelGroupSwitchOffer
                                 ? {
@@ -11731,6 +11890,8 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
                           }
                           onRecoverHistory={canRecoverHistory ? () => void recoverReadableHistory() : undefined}
                           sessionSource={currentSession?.source}
+                          providerId={currentSession?.providerId}
+                          providerName={errorProviderName(currentSession?.providerId)}
                           onClearError={clearQueueError}
                           onCancelUsageLimitWait={cancelUsageLimitWait}
                           onResume={resumeQueue}
@@ -12267,6 +12428,8 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
                 voiceCaretPlacementPending={voiceCaretPlacementPending}
                 voiceError={voiceError}
                 voiceSpeakerFiltered={voiceSpeakerFiltered}
+                canRetryVoice={failedVoiceRetry.canRetry}
+                retryVoiceRecording={retryFailedVoiceRecording}
                 composerVoiceHoldArmed={composerVoiceHoldArmed}
                 setComposerVoiceHoldArmed={setComposerVoiceHoldArmed}
                 modelSheetOpen={modelSheetOpen}
@@ -13194,6 +13357,8 @@ interface SessionComposerInputProps {
   voiceError: string | null;
   /** The voiceprint filter just muted someone else's speech. */
   voiceSpeakerFiltered: boolean;
+  canRetryVoice: boolean;
+  retryVoiceRecording: () => void;
   composerVoiceHoldArmed: boolean;
   setComposerVoiceHoldArmed: (value: boolean) => void;
   modelSheetOpen: boolean;
@@ -13227,7 +13392,7 @@ interface SessionComposerInputProps {
 function SessionComposerInput({
   promptRecommendation,
   onDismissPromptRecommendation,
-  source, sessionId, composerInputRef, canUseComposer, canStopComposer, canUseRemoteSessionControls, remoteUnavailableReason, voiceState, voiceStartPending, voiceCaretPlacementPending, voiceError, voiceSpeakerFiltered, composerVoiceHoldArmed, setComposerVoiceHoldArmed, modelSheetOpen, permissionSheetOpen, sending, queueBusy, nativeShellLayout, composerTouchLayout, keyboardState, attachmentError, visualFocusComposer, applyRichComposerChange, setComposerDraft, handleComposerInputPressIn, beginPastePlaceholders, failPastePlaceholders, resolvePastedSessionLinkLabel, openVoiceSettings,
+  source, sessionId, composerInputRef, canUseComposer, canStopComposer, canUseRemoteSessionControls, remoteUnavailableReason, voiceState, voiceStartPending, voiceCaretPlacementPending, voiceError, voiceSpeakerFiltered, canRetryVoice, retryVoiceRecording, composerVoiceHoldArmed, setComposerVoiceHoldArmed, modelSheetOpen, permissionSheetOpen, sending, queueBusy, nativeShellLayout, composerTouchLayout, keyboardState, attachmentError, visualFocusComposer, applyRichComposerChange, setComposerDraft, handleComposerInputPressIn, beginPastePlaceholders, failPastePlaceholders, resolvePastedSessionLinkLabel, openVoiceSettings,
   composerSendUnavailableReason, attachmentCount, pendingUploadCount,
   onPasteImages, onDragActiveChange, onInputTopLayout, composerPullThrough, renderControls,
 }: SessionComposerInputProps) {
@@ -13600,6 +13765,19 @@ function SessionComposerInput({
                       >
                         <Settings color={colors.textSecondary} size={iconSize.md} strokeWidth={iconStroke.regular} />
                       </RouteActionButton>
+                    ) : canRetryVoice && voiceError && !voiceIsBusy && !voiceStartPending ? (
+                      <Pressable
+                        accessibilityLabel={t('composer.voice.retryRecognition')}
+                        accessibilityRole="button"
+                        hitSlop={COMPOSER_CONTROL_HIT_SLOP}
+                        onPress={retryVoiceRecording}
+                        style={({ pressed }) => [styles.voiceRetryButton, pressed && styles.voiceRetryButtonPressed]}
+                        testID="session.voiceRetryButton"
+                      >
+                        <Text numberOfLines={1} style={styles.voiceRetryButtonText}>
+                          {t('composer.voice.retryRecognition')}
+                        </Text>
+                      </Pressable>
                     ) : null}
                   </View>
                 ) : null}
@@ -14870,6 +15048,26 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     height: 28,
     justifyContent: 'center',
     width: 28,
+  },
+  voiceRetryButton: {
+    alignItems: 'center',
+    backgroundColor: colors.surfaceChip,
+    borderColor: colors.border,
+    borderRadius: radius.pill,
+    borderWidth: StyleSheet.hairlineWidth,
+    flexShrink: 0,
+    justifyContent: 'center',
+    minHeight: 28,
+    paddingHorizontal: spacing.sm,
+  },
+  voiceRetryButtonPressed: {
+    opacity: 0.7,
+  },
+  voiceRetryButtonText: {
+    color: colors.textPrimary,
+    fontSize: typeScale.caption,
+    fontWeight: fontWeight.medium,
+    lineHeight: lineHeight.caption,
   },
   // 语音按钮撑满 VoicePillWidthFrame,宽度由外框的过渡驱动;裁剪保证展开初段
   // 红点 + 计时尚未装下时不会溢出盖住左邻控件。

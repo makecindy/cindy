@@ -57,7 +57,7 @@ export interface OrcaWorkerLinkSnapshot {
 
 /** send_to_worker 对外允许暴露的错误码，内部 host-send code 必须在 service 边界归一。 */
 export type SendToWorkerFailureCode =
-  'NOT_FOUND' | 'ARCHIVED' | 'DELETED' | 'BUSY' | 'AGENT_NOT_READY' | 'INVALID_ARGS' | 'INTERNAL';
+  'NOT_FOUND' | 'ARCHIVED' | 'DELETED' | 'BUSY' | 'AGENT_NOT_READY' | 'INVALID_ARGS' | 'INTERNAL' | 'DELIVERY_UNKNOWN';
 
 /** provider / IPC 共享的 send_to_worker 结果；worker 派活不允许创建新 session。 */
 export type SendToWorkerResult =
@@ -464,7 +464,7 @@ export interface OrcaTeamServiceDeps {
   markWorkerIdle(workerId: string): Promise<void>;
   markWorkerIdleIfStatus(workerId: string, expectedStatus: 'done'): Promise<boolean>;
   restoreWorkerDoneIfIdle(workerId: string): Promise<boolean>;
-  closeWorkerSession(sessionId: string, beforeClose?: () => Promise<void>): Promise<void>;
+  closeWorkerSession(sessionId: string, beforeClose?: () => Promise<void>, intent?: 'archive'): Promise<void>;
   /** 与 Session.send reservation 原子互斥；false 表示 direct send/turn 已先取得会话。 */
   closeWorkerSessionIfIdle(sessionId: string, sendLockHeld?: boolean, options?: { intent: 'explicit-release' }): Promise<boolean>;
   /** pending / dispatch-boundary / recovery 输入任一存在时返回 true。 */
@@ -1148,6 +1148,8 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
     if (outcome.kind === 'host-send') {
       const errorCode: SendToWorkerFailureCode = (() => {
         switch (outcome.code) {
+          case 'DELIVERY_UNKNOWN':
+            return 'DELIVERY_UNKNOWN';
           case 'SESSION_NOT_FOUND':
             return 'NOT_FOUND';
           case 'SESSION_RUNNING':
@@ -1473,7 +1475,9 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
       }
 
       if (!result.ok) {
-        await rollbackAccepted();
+        if (!(result.dispatchOutcome.kind === 'host-send' && result.dispatchOutcome.code === 'DELIVERY_UNKNOWN')) {
+          await rollbackAccepted();
+        }
         return { result, wasLiveBeforeDispatch };
       }
       if (result.mode === 'dispatched') {
@@ -2241,7 +2245,8 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
       catch (err) { authorityRejected = true; throw err; }
     } : undefined;
     try {
-      if (beforeClose) await deps.closeWorkerSession(sessionId, beforeClose);
+      if (owner === 'archiveWorker') await deps.closeWorkerSession(sessionId, beforeClose, 'archive');
+      else if (beforeClose) await deps.closeWorkerSession(sessionId, beforeClose);
       else await deps.closeWorkerSession(sessionId);
     } catch (err) {
       if (authorityRejected) throw err;
