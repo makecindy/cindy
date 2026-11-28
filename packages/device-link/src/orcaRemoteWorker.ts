@@ -53,6 +53,7 @@ export interface OrcaRemoteWorkerCaps {
   workerBridge?: true;
   agentDevice?: boolean;
   modelGroup?: true;
+  pluginEngines?: true;
 }
 
 export const ORCA_REMOTE_WORKER_BRIDGE_TOOLS = ['send_to_lead', 'read_lead_history', 'read_lead', 'lead_status'] as const;
@@ -96,6 +97,8 @@ export interface OrcaRemoteWorkerModelsResult {
   codex?: OrcaRemoteWorkerModel[];
   claude_code?: OrcaRemoteWorkerModel[];
   pi?: OrcaRemoteWorkerModel[];
+  /** A failed plugin catalog read is not a successful empty catalog. */
+  pluginEngineCatalogUnavailable?: true;
   /** Plugin engines offered on the execution computer (or selected provider location). */
   pluginEngines?: Array<{
     providerId: string;

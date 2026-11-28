@@ -53,6 +53,7 @@ Renderer 读到的字段相同；图标数据 URL 单个最多 64 KiB、一次�
 插件重新上报模型，插件各自冷却），两者都进后台 invoke 档。变更推送 `maker:plugin-engines-changed` 仍只发本机窗口，控制端打开选择器时
 按需读取。旧被控端没有这两条准入 → `CHANNEL_NOT_ALLOWED`，控制端按「没有插件引擎」隐藏入口；旧控制端不调用。走既有 invoke 帧，
 自建中转无需改动。桌面控制端按账号和引擎所在电脑共享目录：任务列表存在该电脑的插件引擎任务或打开插件任务／模型选择器时共用一次 `maker:list-plugin-engines` 读取，断线保留已缓存图标、重连刷新、撤权或移除时驱逐（见 `usePluginEngines.ts`、`useDeviceLinkRemoteProjects.ts` 与 `pluginEngineVendorIcon.test.tsx`）。
+伙伴和协同 Worker 的目录与派发准入仅需要模型信息，调用同一接口时可传一个可选对象 `{ includeIcons: false }`。新版被控端在发送前省略所有 `iconDataUrl`，其余字段不变。旧被控端忽略参数并照常返回，旧控制端及界面选择器不传参数，仍获得原图标。自建中转透明传递现有 invoke 参数，无需改动或升级。
 同引擎模型变更沿用 `maker:set-model`，按稳定设备归属发往被控端并使用该端的任务变更推送回显。引擎提供的模型标识在 256 字符
 以内原样缓存，超限项目不进入目录，展示名称另行限长。
 
@@ -69,11 +70,11 @@ Agent 工具：`list_available_models` / `schedule_list_models` 的 host 结果�
 renderer `scheduleFormLogic.test.ts`「plugin engine selection」。
 
 协同 Lead & Worker（2026-11-19 起演进，2026-11-27 扩展）：`maker:session:enable-orca` 的 `workerAgent`、`maker:worker:create` 的 `agent`、`create_worker` /
-`create_workers` 的 `agent` 枚举新增取值 `acp`（`providerId` / `provider_id` 必为 `acp-plugin:…`）。桌面端与手机端创建面板都支持选择 Lead 所在电脑本机的插件引擎作为 Worker（远程运行设备与 SSH Lead 不列插件引擎）；旧版被控端不认识 `acp` 时以 `INVALID_PARAMS` 拒绝。插件引擎 Worker 只在 Lead 所在电脑本机运行，带运行设备、Agent 位置
-或 SSH Lead 时拒绝（INVALID_PARAMS）；2026-11-25 起接受 `worktree`（旧版拒绝）。`maker:worker:list` 与团队快照里这种 Worker 的 `session.agentKind = acp`，并追加可选
+`create_workers` 的 `agent` 枚举新增取值 `acp`（`providerId` / `provider_id` 必为 `acp-plugin:…`）。桌面端与手机端创建面板都支持选择 Lead 所在电脑本机的插件引擎作为 Worker（远程运行设备与 SSH Lead 不列插件引擎）；旧版被控端不认识 `acp` 时以 `INVALID_PARAMS` 拒绝。
+Lead 的工具可显式选择同账号工作电脑和模型来源电脑，按[跨电脑 Worker](orca-remote-worker.md)能力协商；SSH Lead 仍不支持插件引擎 Worker（`INVALID_PARAMS`）；2026-11-25 起接受 `worktree`（旧版拒绝）。`maker:worker:list` 与团队快照里这种 Worker 的 `session.agentKind = acp`，并追加可选
 `session.providerId`；`list_workers` / `get_workspace_info` 的 agent 字段同样可为 `acp`。共享解析器 `parseOrcaTeamWorkers` 给手机追加可选
 `pluginEngineProviderId`，`agentKind` 仍是旧端可用的占位值；已发布的手机把它显示为 Claude Code，查看与派活不受影响，新版手机按 `pluginEngineProviderId` 解析真实插件引擎名与模型名。2026-11-27 起（#13001 / #13331）插件引擎任务当 Lead 在新版电脑端与手机端均已放开（同时补齐 ACP `elicitation/create` 问题卡、plan 更新、分叉／回退与手动压缩），旧版被控端仍以 `[PLUGIN_ENGINE_CANNOT_LEAD]` 拒绝并由手机端给出场景化提示；`set_worker_runtime` 对插件引擎 Worker 仍返回 UNSUPPORTED_CAPABILITY，远端 Worker
-回报通道（`orcaRemoteWorkerBridge`）仍拒绝插件引擎 Worker。maker-core 内部新增 `StartSessionOptions.pluginEngineBriefing` /
+主动回报通道（`orcaRemoteWorkerBridge`）仍拒绝插件引擎 Worker，跨电脑 Worker 继续使用现有的完成后自动回报。maker-core 内部新增 `StartSessionOptions.pluginEngineBriefing` /
 `pluginEngineTrustedCaller`（只 acp 引擎读取，不跨端）。回归见 `orcaWorkerCreationService.test.ts`「plugin engine Worker」、maker-core
 `acp-session.test.ts`（briefing / trusted caller / elicitation）、renderer `CreateWorkerPopover.test.tsx` 与 maker-shared `orcaTeam.test.ts`。
 
@@ -97,7 +98,7 @@ renderer `scheduleFormLogic.test.ts`「plugin engine selection」。
   控制端记为不支持、只列 B 自己的引擎(与此前相同)；B 没有来源名单(更早的版本)时同样只列 B 自己的引擎。手机端同样复用同一条
   `maker:model-catalog:read` 路径读取同账号其他电脑与已收到插件引擎分享，支持在模型选择器来源页筛选、收藏（沿用 `PLUGIN_ENGINE_FAVORITE_WIRE_AGENT = 'cc'` 既有槽位）、新建任务、会话内切换、伙伴模型链与插件自动化草稿中选择，并在不支持的旧被控端上静默降级为只列 B 本机引擎。
   来源名单或链接状态变化时丢弃该任务电脑的引擎目录与在途读取。重新发现来源后，只为已打开任务回读仍可用的来源。
-- **暂未开放**：插件引擎加入供应商组（电脑组）或备用机委托、转分享(`relayKey`)、协同 Worker 跨机运行插件引擎。这些入口保持明确拒绝。（注：本机插件引擎任务的分叉与回退已于 2026-11-27 #13001 支持；Agent 在另一台电脑上运行时的冷恢复回退仍受 `session-regressions.md` 同口径约束。） 跨电脑或直连分享插件引擎的分叉与侧边追问于 2026-11-27 开放：沿用从 Cindy 记录交接的新会话路径(`sdk_session_id = null`)，子任务首轮启动时仍由执行端完整复核准入。
+- **暂未开放**：插件引擎加入供应商组（电脑组）或备用机委托、转分享(`relayKey`)。这些入口保持明确拒绝。（注：本机插件引擎任务的分叉与回退已于 2026-11-27 #13001 支持；Agent 在另一台电脑上运行时的冷恢复回退仍受 `session-regressions.md` 同口径约束。） 跨电脑或直连分享插件引擎的分叉与侧边追问于 2026-11-27 开放：沿用从 Cindy 记录交接的新会话路径(`sdk_session_id = null`)，子任务首轮启动时仍由执行端完整复核准入。
 
 
 实现见 `maker-host/pluginEngineRemoteUse.ts`、`device-link/providerShareHost.ts`、`device-link/providerShareRuntime.ts`、`device-link/dispatch.ts`、`remote-agent/host/service.ts`、`remote-agent/host/runHost.ts`、`remote-agent/controller/service.ts`、maker-core `agents/acp/acp-agent.ts`；远程控制下的来源与代读见 `maker-ipc/controlledModelCatalog.ts`、renderer `lib/pluginEngineSelection.ts`(`controlledPluginEngineSources`)与 `hooks/usePluginEngines.ts`；回归见 `roundtrip.test.ts`、`providerShareDispatch.test.ts`、`pluginHarnesses.test.ts`、`nodeRuntimeBroker.test.ts`、`pluginEngineSessionAdmission.test.ts`、`PluginEnginesSection.test.tsx`、`PluginEngineRemoteUse.test.tsx`、`controlledModelCatalog.test.ts` 与 `newMakerDraftSubmission.test.ts`。

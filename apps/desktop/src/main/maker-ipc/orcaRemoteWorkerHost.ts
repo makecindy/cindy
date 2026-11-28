@@ -22,6 +22,7 @@ import {
   type OrcaRemoteWorkerModelsRequest,
   type OrcaRemoteWorkerModelsResult,
 } from '@cindy/device-link';
+import { dbToMakerEngineKind } from '../../shared/agentKindConversion.js';
 
 import type { ModelGroupSessionStart } from '../model-groups/sessionStart.js';
 import type { OrcaRemoteLead } from '../../shared/orcaRemoteWorker.js';
@@ -42,6 +43,7 @@ export function createOrcaRemoteWorkerSessionOpener(deps: {
   return async (request, lead) => {
     const assertOwner = deps.captureOwner?.() ?? (() => {});
     assertOwner();
+    if (request.modelGroup && request.agentKind === 'acp') fail('INVALID_PARAMS', 'Plugin engines do not support model groups');
     if (request.modelGroup && !deps.modelGroupStart) fail('UNSUPPORTED_CAPABILITY', 'Worker model groups are unavailable');
     const group = request.modelGroup ? await deps.modelGroupStart!.prepare(request.modelGroup, {
       keptModelName: request.model ?? '',
@@ -62,7 +64,7 @@ export function createOrcaRemoteWorkerSessionOpener(deps: {
     if (request.agentDeviceId && deps.isSelfDeviceId?.(request.agentDeviceId)) {
       request = { ...request, agentDeviceId: null };
     }
-    if (request.agentDeviceId) {
+    if (request.agentDeviceId || request.agentKind === 'acp') {
       if (!deps.resolveAgentSelection) fail('UNSUPPORTED_CAPABILITY', 'remote Worker Agent selection is unavailable');
       request = await deps.resolveAgentSelection(request);
       assertOwner();
@@ -91,7 +93,7 @@ export function createOrcaRemoteWorkerSessionOpener(deps: {
       else await deps.bootstrapSession(opened, assertCurrent);
     });
     deps.broadcastSessionCreated(row.id);
-    const agentKind = row.agentKind === 'cc' ? 'claude-code' : (row.agentKind as 'codex' | 'pi' | 'acp');
+    const agentKind = dbToMakerEngineKind(row.agentKind);
     return { workingDir: row.workingDir ?? '', model: row.model, agentKind, effort: row.effort, fastMode: row.fastMode,
       ...(request.modelGroup || request.agentDeviceId !== undefined || agentKind === 'acp'
         ? { agentDeviceId: row.agentDeviceId ?? null, providerId: row.providerId ?? null } : {}) };
@@ -120,6 +122,7 @@ export interface OrcaRemoteWorkerExistingSession {
 export interface OrcaRemoteWorkerHostDeps {
   getCaller(): OrcaRemoteWorkerCaller | null;
   supportsModelGroup?: boolean;
+  supportsPluginEngines?: boolean;
   readSession(sessionId: string): Promise<OrcaRemoteWorkerExistingSession | null>;
   readModels?(request: OrcaRemoteWorkerModelsRequest): Promise<OrcaRemoteWorkerModelsResult>;
   /**
@@ -179,6 +182,7 @@ export function createOrcaRemoteWorkerHost(deps: OrcaRemoteWorkerHostDeps) {
         workerBridge: true,
         ...(deps.readModels ? { agentDevice: true } : {}),
         ...(deps.supportsModelGroup ? { modelGroup: true } : {}),
+        ...(deps.supportsPluginEngines ? { pluginEngines: true } : {}),
       };
     },
 

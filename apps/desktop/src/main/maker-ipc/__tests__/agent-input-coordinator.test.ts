@@ -13,7 +13,7 @@ import Database from 'better-sqlite3';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
 import type { DbClient } from '../../localDb/client/DbClient.js';
 import { setCurrentDbClient, clearCurrentDbClient } from '../../localDb/client/current.js';
-import { saveAgentInputQueueSnapshot, awaitAgentInputQueueSnapshotPersistence, readInputDeliveryReceipts, loadAgentInputQueueSnapshot, saveCancelledInputDelivery } from '../../localDb/agentInputQueueSnapshots.js';
+import { saveAgentInputQueueSnapshot, awaitAgentInputQueueSnapshotPersistence, readInputDeliveryReceipts, loadAgentInputQueueSnapshot, loadAgentInputQueueSnapshotCounts, saveCancelledInputDelivery } from '../../localDb/agentInputQueueSnapshots.js';
 import { createInputEnqueueHarness, createInputRetryHarness, createInputStopHarness, createSavedQuotaRestoreHarness } from './inputEnqueueHarness.js';
 import { runSessionExecutionAction } from '../sessionExecutionActions.js';
 import { createSharedPermission } from '../sharedPermission.js';
@@ -663,6 +663,159 @@ describe('MCP App queued message grants', () => {
 });
 
 describe('INPUT_ENQUEUE crash-restored remote Worker pause', () => {
+  // #13225, unit: exercise the production handler against a wrong peer and a temporary state read failure.
+  it.each(['lead-computer', 'other-computer', 'database-unavailable', 'released-before-enqueue'])('authorizes ACP input from the linked Lead (%s)', async controllerDeviceId => {
+    const h = createHarness();
+    let reads = 0;
+    const enqueue = createInputEnqueueHarness(h.coordinator, {
+      controllerDeviceId: controllerDeviceId === 'released-before-enqueue' ? 'lead-computer' : controllerDeviceId,
+      getInputSessionRow: async () => {
+        if (controllerDeviceId === 'database-unavailable') throw Object.assign(new Error('Temporary state read failure'), { code: 'INTERNAL' });
+        return { clearedAt: null, agentKind: 'acp', orcaRemoteLead: JSON.stringify({
+          leadDeviceId: 'lead-computer', leadSessionId: 'lead-task', workerLabel: 'reviewer',
+          // The third read runs under the release lock, after both preparation reads.
+          ...(controllerDeviceId === 'released-before-enqueue' && ++reads >= 3 ? { releasedAt: 1 } : {}),
+        }) };
+      },
+    }).enqueue;
+    const item = makeItem('acp-input', 'Do the task');
+    item.createOpts.agentKind = 'acp';
+    if (controllerDeviceId === 'lead-computer') {
+      await enqueue({}, 'remote-worker', item);
+      await flush();
+      expect(h.sendToAgent).toHaveBeenCalledOnce();
+    } else {
+      await expect(enqueue({}, 'remote-worker', item)).rejects.toMatchObject({
+        code: controllerDeviceId === 'database-unavailable' ? 'INTERNAL' : 'PERMISSION_DENIED',
+      });
+      expect(h.sendToAgent).not.toHaveBeenCalled();
+    }
+  });
+
+  // #13293 / #13225, unit: the host stamp unit alone would miss the IPC
+  // gate rejecting a guest ACP payload before it gets the trusted task route.
+  it('enqueues shared ACP input on the host-owned route without a Worker Lead binding', async () => {
+    const sid = 'shared-plugin-task';
+    const h = createHarness();
+    h.setRunning(true);
+    const author = { sharedTaskId: 'share', sessionId: sid, memberId: 'member', accountId: 'guest', displayName: 'Guest' };
+    const item = makeItem('guest-input', 'Do the task');
+    item.createOpts = {
+      ...item.createOpts, agentKind: 'acp', model: 'guest-model',
+      providerId: 'acp-plugin:guest:engine', permissionMode: 'bypassPermissions',
+    };
+    const task: AgentInputCreateOpts = {
+      ...item.createOpts, model: 'host-model', providerId: 'acp-plugin:host:engine',
+      workingDir: '/host', permissionMode: 'ask',
+    };
+    const { enqueue } = createInputEnqueueHarness(h.coordinator, {
+      controllerDeviceId: 'guest-computer',
+      sharedTask: { capture: { author, isCurrent: () => true, authorize: () => true }, task },
+      getInputSessionRow: async () => ({ clearedAt: null, agentKind: 'acp' }),
+    });
+
+    await enqueue({}, sid, item);
+    expect(h.coordinator.getQueueControlSnapshot(sid).pendingQueue).toEqual([
+      expect.objectContaining({ clientId: item.clientId, createOpts: task, sharedTaskAuthor: author }),
+    ]);
+  });
+
+  // #13225 review P1, unit with in-memory SQLite: admission alone never reads the
+  // durable snapshot. A busy linked ACP Worker must report pending and recover
+  // the acknowledged input after a fresh coordinator starts.
+  it('keeps acknowledged ACP input pending and restores it for dispatch after restart', async () => {
+    const sid = 'durable-acp-worker';
+    const sqlite = new Database(':memory:');
+    sqlite.exec([
+      'CREATE TABLE agent_input_queue_snapshots (session_id TEXT PRIMARY KEY, payload TEXT NOT NULL, updated_at INTEGER);',
+      'CREATE TABLE messages (id TEXT, session_id TEXT, client_id TEXT, role TEXT, rewind_at INTEGER, created_at INTEGER);',
+      'CREATE TABLE sessions (id TEXT PRIMARY KEY, cleared_at INTEGER);',
+    ].join('\n'));
+    sqlite.prepare('INSERT INTO sessions (id) VALUES (?)').run(sid);
+    setCurrentDbClient({
+      drizzle: drizzle(sqlite),
+      query: async (sql: string, args: unknown[] = []) => sqlite.prepare(sql).all(...args),
+    } as unknown as DbClient, 'acp-worker-queue-test');
+    try {
+      const live = createHarness();
+      live.persistQueueSnapshot.mockImplementation(saveAgentInputQueueSnapshot);
+      live.setRunning(true);
+      const { enqueue } = createInputEnqueueHarness(live.coordinator, {
+        awaitQueuePersistence: awaitAgentInputQueueSnapshotPersistence,
+        getInputSessionRow: async () => ({
+          clearedAt: null, agentKind: 'acp', orcaRemoteLead: JSON.stringify({
+            leadDeviceId: 'lead-computer', leadSessionId: 'lead-task', workerLabel: 'reviewer',
+          }),
+        }),
+      });
+      const clientId = 'durable-acp-input';
+      const createOpts: AgentInputCreateOpts = {
+        ...makeItem('settings', '').createOpts,
+        agentKind: 'acp',
+        providerId: 'acp-plugin:fixture',
+        model: 'fixture-model',
+      };
+      const item = buildRemoteWorkerQueuedMessage({
+        clientId, rawContent: 'Do the task', createOpts, createdAt: '2026-11-01T00:00:00.000Z',
+      });
+      await enqueue({}, sid, item);
+      expect(live.sendToAgent).not.toHaveBeenCalled();
+      await expect(readInputDeliveryReceipts(sid, [clientId])).resolves.toEqual([{ clientId, state: 'pending' }]);
+      await expect(loadAgentInputQueueSnapshotCounts([sid])).resolves.toEqual({ [sid]: 1 });
+
+      const restarted = createHarness();
+      restarted.setLoadQueueSnapshot(loadAgentInputQueueSnapshot);
+      await restarted.coordinator.ensureQueueRestored(sid);
+      expect(restarted.coordinator.getProjection(sid).pendingQueue.map(input => input.clientId)).toEqual([clientId]);
+      expect(restarted.sendToAgent).not.toHaveBeenCalled();
+      restarted.coordinator.resume(sid);
+      await flush();
+      expect(restarted.sendToAgent).toHaveBeenCalledOnce();
+      expect(restarted.sendToAgent.mock.calls[0]?.[1]).toEqual({ type: 'user', content: item.text });
+      expect(restarted.sendToAgent.mock.calls[0]?.[2]).toMatchObject({
+        providerId: 'acp-plugin:fixture', model: 'fixture-model',
+      });
+    } finally {
+      clearCurrentDbClient();
+      sqlite.close();
+    }
+  });
+
+  // #13225, unit: unlike the admission tests above, clear the Worker while
+  // INPUT_ENQUEUE reads its first session row. The stale input must not dispatch.
+  it('does not dispatch ACP input superseded during the first session read', async () => {
+    const h = createHarness();
+    const sid = 'remote-worker';
+    const row = {
+      clearedAt: null,
+      agentKind: 'acp',
+      orcaRemoteLead: JSON.stringify({
+        leadDeviceId: 'lead-computer', leadSessionId: 'lead-task', workerLabel: 'reviewer',
+      }),
+    };
+    const reading = deferred<void>();
+    const firstRow = deferred<typeof row>();
+    const enqueue = createInputEnqueueHarness(h.coordinator, {
+      getInputSessionRow: vi.fn(async () => row).mockImplementationOnce(() => {
+        reading.resolve();
+        return firstRow.promise;
+      }),
+    }).enqueue;
+    const item = makeItem('acp-input', 'Do the task');
+    item.createOpts.agentKind = 'acp';
+    const pending = enqueue({}, sid, item);
+    await reading.promise;
+    h.coordinator.clearSession(sid);
+    firstRow.resolve(row);
+
+    await expect(pending).rejects.toMatchObject({
+      code: 'PRECONDITION_FAILED',
+      message: expect.stringContaining('REMOTE_OPTIMISTIC_INPUT_SUPERSEDED'),
+    });
+    expect(h.coordinator.getProjection(sid).pendingQueue).toEqual([]);
+    expect(h.sendToAgent).not.toHaveBeenCalled();
+  });
+
   function hostInput(
     h: ReturnType<typeof createHarness>, remote = true, mobile = false,
     resumeInterruptedScheduleRun: typeof import('../../scheduler-host/index.desktop.js').resumeInterruptedScheduleRun = async () => null,

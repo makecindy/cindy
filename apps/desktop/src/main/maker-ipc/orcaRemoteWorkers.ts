@@ -435,6 +435,9 @@ export function createOrcaRemoteWorkers(deps: OrcaRemoteWorkersDeps) {
         return { ok: false, errorCode: 'UNSUPPORTED_CAPABILITY',
           message: `${name} 需要更新后才能为跨设备 Worker 选择 Agent 所在电脑。` };
       }
+      if (input.agent === 'acp' && supported.pluginEngines !== true) {
+        return { ok: false, errorCode: 'UNSUPPORTED_CAPABILITY', message: 'Update the Worker execution computer to use plugin engines. No Worker was created.' };
+      }
       if (input.modelGroup && supported.modelGroup !== true) {
         return { ok: false, errorCode: 'UNSUPPORTED_CAPABILITY',
           message: 'The execution computer does not support Worker model groups' };

@@ -3029,7 +3029,7 @@ interface OrcaCollabService {
     /** create 分支可选:新 session 的工作目录覆盖(绝对路径,须已存在;jump 忽略)。#811 */
     workingDir?: string;
     /** create 分支可选:显式执行配置；未提供的字段继续继承 dispatcher。jump 忽略。 */
-    execution?: SendToSessionExecutionOverrides;
+    execution?: Omit<SendToSessionExecutionOverrides, 'agentKind'> & { agentKind?: EngineKind };
     /** create 分支可选:新任务的 Agent 所在电脑；null = 本机，省略 = 继承 dispatcher。jump 忽略。 */
     agentDeviceId?: string | null;
     /** Host-owned create defaults for non-session callers such as scheduler script tasks. */
@@ -3326,6 +3326,7 @@ interface OrcaCollabService {
           providers?: Array<{ id: string; name: string }>;
           defaultProviderId?: string | null;
         }>;
+        pluginEngineCatalogUnavailable?: true;
         pluginEngines?: ReturnType<typeof pluginEngineDescriptors>;
       }
     | { ok: false; errorCode: string; message: string }
@@ -9130,6 +9131,32 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     return resolveDeviceHandoffWindow(catalog, deviceId, agent, model, providerId);
   }
 
+  async function readDispatchedPluginEngines(deviceId: string | null) {
+    if (!deviceId) return listPluginEngineViews();
+    if (isProviderShareAgentDeviceId(deviceId) || deviceId.length > 128) throw new Error('Select a same-account computer for the plugin engine');
+    return readOfferedRemotePluginEngines(deviceId);
+  }
+
+  async function resolveDispatchedPluginEngine(target: {
+    providerId?: string | null; model?: string; effort?: unknown; permissionMode?: string | null;
+    agentDeviceId?: string | null; fastMode?: boolean | 'ultrafast';
+  }) {
+    try {
+      if (target.fastMode) throw new Error('Plugin engines do not support Fast');
+      const agentDeviceId = target.agentDeviceId && target.agentDeviceId !== getSelfDeviceId() ? target.agentDeviceId : null;
+      const engines = agentDeviceId ? await readOfferedRemotePluginEngines(agentDeviceId) : listPluginEngineViews();
+      const model = target.model?.trim() || 'default';
+      const engine = engines.find(item => item.key === pluginEngineKeyFromProviderId(target.providerId));
+      if (model !== 'default' && !engine?.models.some(item => item.id === model)) {
+        throw new Error('The selected plugin engine does not offer this model');
+      }
+      const admitted = admitPluginEngineSwitchTarget({ ...target, model, providerId: target.providerId }, engines);
+      return { ...admitted, agentKind: 'acp' as const, agentDeviceId, providerId: target.providerId!, fastMode: false as const };
+    } catch (error) {
+      throw Object.assign(error instanceof Error ? error : new Error('Plugin engine unavailable'), { code: 'PROVIDER_ROUTE_UNAVAILABLE' });
+    }
+  }
+
   async function readUsableAgentDeviceProviders(
     deviceId: string,
     agent: AgentKind,
@@ -11072,7 +11099,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         status: row.status,
         workingDir: row.workingDir,
         model: row.model,
-        agentKind: row.agentKind === 'cc' ? 'claude-code' : (row.agentKind as 'codex' | 'pi' | 'acp'),
+        agentKind: dbToMakerEngineKind(row.agentKind),
         effort: row.effort,
         fastMode: row.fastMode,
         agentDeviceId: row.agentDeviceId,
@@ -11080,6 +11107,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       };
     },
     supportsModelGroup: true,
+    supportsPluginEngines: true,
     openSession: createOrcaRemoteWorkerSessionOpener({
       openSession,
       modelGroupStart: modelGroupSessionStart,
@@ -11090,16 +11118,15 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       },
       resolveAgentSelection: async request => {
         if (request.agentKind === 'acp') {
+          if (request.modelGroup) throwIpcError('INVALID_PARAMS', 'Plugin engines do not support model groups');
           try {
-            const admitted = admitPluginEngineSwitchTarget({
-              providerId: request.providerId ?? null,
-              model: request.model?.trim() || 'default',
-              effort: request.effort,
-              permissionMode: request.permissionMode,
-            }, await readOfferedRemotePluginEngines(request.agentDeviceId!));
-            return { ...request, model: admitted.model, effort: admitted.effort || undefined, fastMode: false };
+            const selected = await resolveDispatchedPluginEngine(request);
+            if (selected.permissionMode !== request.permissionMode) {
+              throw new Error('The selected plugin engine does not support the Worker permission mode');
+            }
+            return { ...request, ...selected, permissionMode: request.permissionMode };
           } catch (error) {
-            throwIpcError('INVALID_PARAMS', error instanceof Error ? error.message : 'Worker plugin engine is unavailable');
+            throwIpcError('PRECONDITION_FAILED', error instanceof Error ? error.message : 'Plugin engine unavailable');
           }
         }
         const views = await readDeviceProviderViews(remoteBackgroundInvoke, request.agentDeviceId!);
@@ -11128,9 +11155,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         await getDbClient().drizzle.insert(sessions).values(row).run();
       },
       bootstrapSession: async (opened, assertCurrent, modelGroupStart) => {
-        const agentKind = opened.agentKind === 'codex' || opened.agentKind === 'pi' || opened.agentKind === 'acp'
-          ? opened.agentKind
-          : 'claude-code';
+        const agentKind = dbToMakerEngineKind(opened.agentKind);
         await bootstrapSession(buildCreateOptsWithStderr({
           id: opened.id,
           ...(modelGroupStart ? { modelGroupStart } : {}),
@@ -12997,9 +13022,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       const share = findReceivedShare(shareId);
       if (share && !pluginEngineKeyFromProviderId(share.providerId)) return [];
     }
-    const reply = await remoteBackgroundInvoke(deviceId, PLUGIN_ENGINES_INVOKE.LIST, []);
+    const assertCurrent = captureSessionOwner();
+    const reply = await remoteBackgroundInvoke(deviceId, PLUGIN_ENGINES_INVOKE.LIST, [{ includeIcons: false }]);
+    assertCurrent();
     if (!reply.ok) {
-      if (reply.error?.code === 'CHANNEL_NOT_ALLOWED') return [];
+      // Catalog tools distinguish an unsupported or failed read from a successful empty catalog.
       throw new Error(reply.error?.message || '[REMOTE_AGENT_UNAVAILABLE] Selected remote plugin engine is unavailable.');
     }
     return parseOfferedPluginEngines(reply.result);
@@ -13027,7 +13054,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     /** create 分支可选:新 session 的工作目录覆盖(绝对路径,须已存在;jump 忽略)。#811 */
     workingDir?: string;
     /** create 分支可选:显式执行配置；未提供的字段继续继承 dispatcher。jump 忽略。 */
-    execution?: SendToSessionExecutionOverrides;
+    execution?: Omit<SendToSessionExecutionOverrides, 'agentKind'> & { agentKind?: EngineKind };
     /** create 分支可选:新任务的 Agent 所在电脑；null = 本机，省略 = 继承 dispatcher。jump 忽略。 */
     agentDeviceId?: string | null;
     onAccepted?: () => void | Promise<void>;
@@ -17894,10 +17921,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       await ensureRemoteReadyForSessionStart({ createOpts: params.createOpts });
     },
     bootstrapSession: (...args: Parameters<typeof bootstrapSession>) => bootstrapSession(...args),
-    admitPluginEngineWorker: async (target) => admitPluginEngineSwitchTarget(
-      target,
-      target.agentDeviceId ? await readOfferedRemotePluginEngines(target.agentDeviceId) : listPluginEngineViews(),
-    ),
+    admitPluginEngineWorker: resolveDispatchedPluginEngine,
     addOrUpdateWorker: async (worker) => {
       await addOrUpdateWorker(worker);
     },
@@ -19480,6 +19504,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
               ok: true,
               ...(result.agentDeviceId !== undefined ? { agentDeviceId: result.agentDeviceId } : {}),
               ...(result.locations ? { locations: result.locations } : {}),
+              ...(result.pluginEngineCatalogUnavailable ? { pluginEngineCatalogUnavailable: true as const } : {}),
               pluginEngines: result.pluginEngines ?? [],
             };
           }
@@ -19512,23 +19537,25 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
               return agentDeviceCatalogFailure(err);
             }
           }
-          let pluginEngines: ReturnType<typeof pluginEngineDescriptors> = [];
+          let pluginEngines: ReturnType<typeof pluginEngineDescriptors> | null = [];
           if (wantPluginEngines && !sshLead) {
             try {
               pluginEngines = pluginEngineDescriptors(await readOfferedRemotePluginEngines(agentDeviceId));
             } catch (err) {
               if (agent === 'acp') return agentDeviceCatalogFailure(err);
+              pluginEngines = null;
             }
           }
           return {
             ok: true,
             agentDeviceId,
             ...(locations ? { locations } : {}),
+            ...(pluginEngines === null ? { pluginEngineCatalogUnavailable: true as const } :
+              agent === 'acp' || pluginEngines.length ? { pluginEngines } : {}),
             ...Object.fromEntries(agents.map((a) => [
               a === 'codex' ? 'codex' : a === 'pi' ? 'pi' : 'claude_code',
               deviceAvailableModels(views, a),
             ])),
-            ...(agent === 'acp' || pluginEngines.length ? { pluginEngines } : {}),
           };
         }
         if (agent === 'acp') {
@@ -22606,6 +22633,21 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       const inputOwner = getCurrentDbClientSnapshot();
       await withSessionPermissionChange(sid, async () => undefined);
       if (!inputOwner || inputOwner !== getCurrentDbClientSnapshot()) throwIpcError('PRECONDITION_FAILED', 'Account changed before input');
+      const pluginLink = deviceLinkInvoke ? getDeviceLinkInvokeContext() : null;
+      // Shared-task inputs are authorized separately and use the host task's
+      // route. The raw ACP tag selects Lead admission only on the owner link.
+      const isPluginInput = deviceLinkInvoke && !pluginLink?.sharedTask
+        && (item as Partial<AgentInputQueuedMessage> | null)?.createOpts?.agentKind === 'acp';
+      if (isPluginInput && !pluginLink) {
+        throwIpcError('PERMISSION_DENIED', 'Plugin engine input requires the Worker Lead computer');
+      }
+      const assertPluginEngineInput = (row: Awaited<ReturnType<typeof getInputSessionRow>> | undefined) => {
+        if (inputOwner !== getCurrentDbClientSnapshot()) throwIpcError('PRECONDITION_FAILED', 'Account changed before input');
+        const origin = parseOrcaRemoteLead(row?.orcaRemoteLead);
+        if (row?.agentKind !== 'acp' || !origin || origin.releasedAt !== undefined || origin.leadDeviceId !== pluginLink?.controllerDeviceId) {
+          throwIpcError('PERMISSION_DENIED', 'Plugin engine input requires the Worker Lead computer');
+        }
+      };
       const parsed = await prepareSharedTaskInput(sid, requireQueuedMessage(item));
       // debug 日志：远程发送在被控端各阶段的耗时，不影响任何判定。
       const sendTrace = deviceLinkInvoke ? beginRemoteSendTrace(sid, parsed.clientId) : undefined;
@@ -22626,6 +22668,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       // 已删除的远控任务必须在恢复队列、附件下载、引用水合和自动起名预检之前终止。
       // 入队前仍会再读一次，覆盖准备期间发生的删除竞态。
       let inputSessionRow = deviceLinkInvoke ? await getInputSessionRow(sid) : undefined;
+      // 复用记录清空代次后的首个会话快照，避免 ACP 准入时清空任务却接受旧输入。
+      if (isPluginInput) assertPluginEngineInput(inputSessionRow);
       if (deviceLinkInvoke) {
         inputCoordinator.observeClearBoundary(sid, inputSessionRow?.clearedAt);
         assertRemoteInputClearNotInFlight(sid, true);
@@ -22753,7 +22797,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           });
         };
         let projection: ReturnType<typeof enqueueInput> | undefined;
-        if (queued.text === CONTINUE_AFTER_APP_EXIT_PROMPT
+        if (!isPluginInput && queued.text === CONTINUE_AFTER_APP_EXIT_PROMPT
           && !(deviceLinkInvoke && isAutomaticInputOriginKind(parsed.origin?.kind))) {
           assertCurrentInputGeneration();
           if (inputOwner !== getCurrentDbClientSnapshot()) throwIpcError('PRECONDITION_FAILED', 'Account changed before input');
@@ -22809,7 +22853,21 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             await Promise.race([enqueued, completion]);
           }
         }
-        projection ??= enqueueInput(queued);
+        if (isPluginInput) {
+          // Share the release path’s lock, and recheck after all async preparation.
+          projection = await withSendToSessionLock(sid, async () => {
+            assertPluginEngineInput(await getInputSessionRow(sid));
+            // ACP identifies the remote request for admission. Persist the same
+            // built-in placeholder as local plugin input; dispatch reads the
+            // actual engine and its route from the Worker session.
+            return enqueueInput({
+              ...queued,
+              createOpts: { ...queued.createOpts, agentKind: 'claude-code' },
+            });
+          });
+        } else {
+          projection ??= enqueueInput(queued);
+        }
         if (duplicate) {
           if (attachmentOwnerId) {
             await materialized.cleanupBeforeAcceptance?.();
