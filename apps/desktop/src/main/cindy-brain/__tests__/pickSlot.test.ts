@@ -351,7 +351,10 @@ describe('call-bound pick lifetime', () => {
       await vi.advanceTimersByTimeAsync(0);
       const picked = h.slot.handleRequest('pick-ghost', { mode, into: 'media', callId: 'active', deposit: true });
       await vi.advanceTimersByTimeAsync(331_000);
-      expect(h.dispatcher.getPendingCallSignal('pick-ghost', 'active')?.aborted).toBe(false);
+      const signal = h.dispatcher.getPendingCallSignal('pick-ghost', 'active');
+      expect(signal?.aborted).toBe(false);
+      const showDialog = mode === 'directory' ? h.deps.showDirectoryDialog : h.deps.showFileDialog!;
+      expect(vi.mocked(showDialog).mock.lastCall?.[0].signal).toBe(signal);
       h.select(['/selected/file.png']);
       expect(await picked).toMatchObject({ ok: true });
       h.dispatcher.handleToolResult('pick-ghost', { callId: 'active', ok: true, result: 'done' });
@@ -374,6 +377,7 @@ describe('call-bound pick lifetime', () => {
         expect(await picked).toMatchObject({ ok: false, errorCode: 'CANCELLED' });
         expect(await call).toMatchObject({ ok: false, errorCode: reason === 'cancel' ? 'CANCELLED' : 'TIMEOUT' });
       }
+      // A logical cancellation cannot free the slot while the native promise is pending.
       expect(await h.slot.handleRequest('pick-ghost', { mode: 'directory' })).toMatchObject({ errorCode: 'BUSY' });
       h.select(['/selected/file.png']);
       expect(await picked).toMatchObject({ ok: false });

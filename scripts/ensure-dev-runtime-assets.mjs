@@ -26,11 +26,13 @@ import {
 import { fixNodePtyExecutables } from './fix-node-pty-perms.mjs';
 import { buildDesktopBlur } from '../apps/desktop/native/desktop-blur/build.mjs';
 import { buildTrackpad } from '../apps/desktop/native/trackpad/build.mjs';
+import { buildPluginOpenPanel } from '../apps/desktop/native/plugin-open-panel/build.mjs';
 
 const ROOT = path.resolve(fileURLToPath(new URL('..', import.meta.url)));
 if (process.platform === 'darwin') {
   buildDesktopBlur(path.join(ROOT, 'apps/desktop/resources/tools/desktop-blur/cindy-desktop-blur.node'));
   buildTrackpad(path.join(ROOT, 'apps/desktop/resources/tools/trackpad/cindy-trackpad.node'));
+  buildPluginOpenPanel(path.join(ROOT, 'apps/desktop/resources/tools/plugin-open-panel/cindy-plugin-open-panel.node'));
 }
 const LFS_POINTER_HEADER = 'version https://git-lfs.github.com/spec/v1';
 const MIN_EXPECTED_BYTES = 1024;
