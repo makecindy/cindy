@@ -23,6 +23,7 @@ import {
   type DictionaryRecord,
   type DictionaryStage,
   type DictionarySuppression,
+  type DictionarySuppressionEvent,
   type DictionaryTermSource,
   type GCounter,
   type SyncAliasState,
@@ -148,6 +149,24 @@ function mergeSuppression(a: DictionarySuppression, b: DictionarySuppression): D
   return { text, stamp };
 }
 
+function mergeSuppressionEvent(
+  a: DictionarySuppressionEvent,
+  b: DictionarySuppressionEvent,
+): DictionarySuppressionEvent {
+  const merged: DictionarySuppressionEvent = {};
+  if (a.suppressedAt !== undefined || b.suppressedAt !== undefined) {
+    merged.suppressedAt = a.suppressedAt && b.suppressedAt
+      ? maxHlc(a.suppressedAt, b.suppressedAt)
+      : (a.suppressedAt ?? b.suppressedAt);
+  }
+  if (a.unsuppressedAt !== undefined || b.unsuppressedAt !== undefined) {
+    merged.unsuppressedAt = a.unsuppressedAt && b.unsuppressedAt
+      ? maxHlc(a.unsuppressedAt, b.unsuppressedAt)
+      : (a.unsuppressedAt ?? b.unsuppressedAt);
+  }
+  return merged;
+}
+
 /**
  * 合并两份完整状态。纯函数:两个入参都不被修改。
  *
@@ -181,6 +200,21 @@ export function mergeSyncStates(
   }
 
   const state: VoiceDictionarySyncState = { version: VOICE_DICTIONARY_SYNC_VERSION, records, suppressed };
+  if (a.suppressionEvents !== undefined || b.suppressionEvents !== undefined) {
+    const suppressionEvents = createDictionaryMap<DictionarySuppressionEvent>();
+    for (const key of new Set([
+      ...Object.keys(a.suppressionEvents ?? {}),
+      ...Object.keys(b.suppressionEvents ?? {}),
+    ])) {
+      const left = a.suppressionEvents?.[key];
+      const right = b.suppressionEvents?.[key];
+      if (left && right) suppressionEvents[key] = mergeSuppressionEvent(left, right);
+      else if (left ?? right) suppressionEvents[key] = { ...(left ?? right) };
+    }
+    if (Object.keys(suppressionEvents).length > 0) {
+      state.suppressionEvents = suppressionEvents;
+    }
+  }
   if (a.mutationVector !== undefined || b.mutationVector !== undefined) {
     const vector = createDictionaryMap<HlcTimestamp>();
     for (const input of [a.mutationVector, b.mutationVector]) {
@@ -231,6 +265,10 @@ export function buildStateVersionVector(state: VoiceDictionarySyncState): Record
     for (const stamp of Object.values(record.tombstones)) observe(stamp);
   }
   for (const suppression of Object.values(state.suppressed)) observe(suppression.stamp);
+  for (const event of Object.values(state.suppressionEvents ?? {})) {
+    observe(event.suppressedAt);
+    observe(event.unsuppressedAt);
+  }
   for (const stamp of Object.values(state.mutationVector ?? {})) observe(stamp);
   // 原样返回无原型字典 —— 展开成 `{...vector}` 会把 Object.prototype 装回去,而
   // nodeId 是可以长成 `__proto__` / `constructor` 的(`isCanonicalHlc` 只要求它非空
@@ -271,6 +309,10 @@ export function findMaxHlc(state: VoiceDictionarySyncState): HlcTimestamp | null
     for (const stamp of Object.values(record.tombstones)) observe(stamp);
   }
   for (const suppression of Object.values(state.suppressed)) observe(suppression.stamp);
+  for (const event of Object.values(state.suppressionEvents ?? {})) {
+    observe(event.suppressedAt);
+    observe(event.unsuppressedAt);
+  }
   for (const stamp of Object.values(state.mutationVector ?? {})) observe(stamp);
   return max;
 }

@@ -1,6 +1,7 @@
 import { holdError, releaseFailure } from './agent/profile-hold.ts';
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -15,6 +16,7 @@ import { eq, getTableColumns, getTableName } from 'drizzle-orm';
 import { SSH_ACCESS_CHANNEL } from '@cindy/device-link';
 import { DeviceLinkClient, DeviceLinkError, PROTOCOL_VERSION, FILE_PEER_CHANNEL, REMOTE_AGENT_CHANNEL, REMOTE_DESKTOP_CHANNEL,
   DEVICE_LINK_CAPABILITY_BACKGROUND_LINK_V1, DEVICE_LINK_CAPABILITY_HISTORY_VIEW_V1, DL_HISTORY_MESSAGES_CHANNEL, DL_SESSION_HANDOFF_CHANNEL, ORCA_REMOTE_WORKER_MODELS_CHANNEL,
+  CONTROLLER_CAPABILITY_EXACT_MESSAGE_NOT_FOUND_V1,
   ORCA_REMOTE_WORKER_CAPS_CHANNEL, MACHINE_STATUS_CHANNEL, parseMachineStatus,
   PROVIDER_SHARE_RELAY_CAPABILITY, isProviderSharePeer, providerShareGuestPeer, providerShareHostPeer, PLUGIN_OAUTH_CHANNEL, SESSION_ACTIVITY_CHANNEL, TASK_ACTIVITY_SNAPSHOT } from '@cindy/device-link';
 import { AgentNetWorkerSocket } from '@cindy/agent-net';
@@ -38,7 +40,8 @@ import { MCP_APPS_INVOKE } from '../../desktop/src/shared/mcpApps.ts';
 import { createEventHub } from './events.mjs';
 import { configureHostOwner } from './agent/claude-auth.mjs';
 import { configureAppDataDir } from '../../desktop/src/main/userDataPath.ts';
-import { commitVolatileAppSession } from '../../desktop/src/main/appSessionState.ts';
+import { beginAppSessionBoundary, commitVolatileAppSession } from '../../desktop/src/main/appSessionState.ts';
+import { getControllerPlatform } from '../../desktop/src/main/device-link/controllerPlatform.ts';
 import { getCurrentDbClientSnapshot, setCurrentDbClient, clearCurrentDbClient } from '../../desktop/src/main/localDb/client/current.ts';
 import { createDbClientForHandle } from '../../desktop/src/main/localDb/client/createDbClientForHandle.ts';
 import { messageToCamel } from '../../desktop/src/main/localDb/mapper.ts';
@@ -228,12 +231,16 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
   const worktreeCreates = [];
   const worktreeLifecycle = { ...createHostWorktreeLifecycle(profile), createWorktree: async (request, options) => {
     worktreeCreates.push({ request, options });
-    return { ok: true, meta: { sessionId: request.sessionId, path: path.join(profile, 'created-worktree') } };
+    return { ok: true, meta: { sessionId: request.sessionId, path: path.join(profile, 'created-worktree'),
+      sourceBranch: request.sourceBranch } };
   } };
   const handoffQueue = [];
   let enqueueHandoff = async (id, item, handoff) => {
+    const target = await handoff.validateTarget();
+    if (!target.ok) return target;
     await handoff.taskActionDeliveryGuard();
     handoffQueue.push({ id, item, handoff });
+    return target;
   };
   let holdAfterHandoffCreation;
   const handoffProviders = [{
@@ -308,7 +315,8 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
     });
     client.start();
     await waitFor(() => client.getStatus() === 'online');
-    await client.openLink('host', { controllerName: id, protocolVersion: PROTOCOL_VERSION, appVersion: 'test' });
+    await client.openLink('host', { controllerName: id, protocolVersion: PROTOCOL_VERSION, appVersion: 'test',
+      ...(id === 'ios' ? { capabilities: [CONTROLLER_CAPABILITY_EXACT_MESSAGE_NOT_FOUND_V1] } : {}) });
     // The first invocation uses one of the last registered ordinary handlers (no startup delay).
     // Assigning old-peer "unsupported" here would survive the end of startup in a controller cache.
     const first = await client.invoke('host', { channel: 'maker:session:prewarm', args: ['task', {}] });
@@ -893,6 +901,59 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
         // A retained receiver claim would return DELIVERY_UNKNOWN before it
         // revalidates this already-released receipt with the sender.
         assert.equal((await handoff([lastWrite])).result?.errorCode, 'UNSUPPORTED_CAPABILITY');
+      });
+
+      // Integration (2026-11-28): `create.baseRef` over the real relay. The opener is shared with
+      // Desktop, so this loopback is where the key crosses the wire into the Host's own worktree
+      // preparation; the cases above never ask for a worktree. A project whose work branch is not
+      // the default one otherwise starts every new task from the default branch. Minimal input: a
+      // real repository and one create per outcome; createWorktree only records its request.
+      await t.test('creates the task worktree from the requested base and reports what took effect', async () => {
+        assert.equal(support.result.ordinaryCreateBaseRef, 1);
+        const repo = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-host-base-')));
+        const git = (...args) => execFileSync('git', ['-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', ...args], {
+          cwd: repo, stdio: 'ignore', env: { ...process.env,
+            GIT_CONFIG_GLOBAL: process.platform === 'win32' ? 'NUL' : os.devNull,
+            GIT_CONFIG_NOSYSTEM: '1' },
+        });
+        fs.mkdirSync(path.join(profile, 'created-worktree'), { recursive: true });
+        try {
+          git('init', '--initial-branch=main');
+          git('commit', '--allow-empty', '-m', 'base');
+          git('branch', 'release/2.x');
+          const sessionId = randomUUID();
+          const created = await send({ deviceId: 'host', sessionId }, {
+            sender, message: 'Work on the release branch',
+            create: async () => ({ permissionMode: 'ask', projectDir: null, workingDir: repo, useWorktree: true, baseRef: 'release/2.x' }),
+          });
+          assert.equal(created.ok, true, JSON.stringify(created));
+          assert.equal(created.wakeKind, 'created');
+          assert.equal(worktreeCreates.at(-1).request.sourceBranch, 'release/2.x');
+          assert.equal(worktreeCreates.at(-1).request.sessionId, sessionId);
+          assert.equal(created.worktreeBaseRef, 'release/2.x');
+          assert.equal(created.worktreePath, path.join(profile, 'created-worktree'));
+          // null = the Host's own provider; a caller must be able to tell it from "not reported".
+          assert.equal(created.agentDeviceId, null);
+          const [stored] = await db.drizzle.select().from(sessions).where(eq(sessions.id, sessionId));
+          assert.equal(stored.worktreePath, path.join(profile, 'created-worktree'));
+
+          const attempts = worktreeCreates.length;
+          for (const create of [
+            { useWorktree: true, baseRef: '--upload-pack=evil' },
+            { baseRef: 'release/2.x' },
+          ]) {
+            const refusedId = randomUUID();
+            const refused = await send({ deviceId: 'host', sessionId: refusedId }, {
+              sender, message: 'Refused base',
+              create: async () => ({ permissionMode: 'ask', projectDir: null, workingDir: repo, ...create }),
+            });
+            assert.equal(refused.errorCode, 'INVALID_ARGS', JSON.stringify(refused));
+            assert.equal((await db.drizzle.select().from(sessions).where(eq(sessions.id, refusedId))).length, 0);
+          }
+          assert.equal(worktreeCreates.length, attempts);
+        } finally {
+          fs.rmSync(repo, { recursive: true, force: true });
+        }
       });
 
       // This also uses the actual Node queue. The hold case does not reach it;
@@ -1483,7 +1544,7 @@ const PINNED_DISPATCH_PORTS = {
     'delegatedProviderShareLeases', 'invalidateProviderShareDelegation',
     'remoteDesktop', 'requestRemoteDesktop', 'remoteCredentialHost', 'fetchLocalMediaToOss', 'transcribeRemoteVoiceInput',
     'readTelegramRemoteStatus', 'setTelegramRemoteOnline', 'adviseAndRecordVoiceInputDictionaryLearning',
-    'buildMobileDictionarySnapshot'],
+    'buildMobileDictionarySnapshot', 'mutateMobileDictionary'],
 };
 
 test('every port the Host passes the inbound dispatch has the class pinned here', () => {
@@ -1577,6 +1638,124 @@ test('keeps compatibility app callers alive when only the Agent-Net connection d
   assert.deepEqual(releasedApps, ['device:desktop', 'device:phone']);
   assert.deepEqual(releasedAuth, ['device:desktop', 'device:phone']);
 });
+
+// §3.2 integration: drive the Host's real dispatch over one simulated relay.
+// A backpressured reply must stay in the outbox while its route is known offline.
+// Removing either offline notification wiring allows the next full sweep to
+// write to that peer. Another controller and the directed relink flush stay live.
+for (const offlineSignal of ['presence', 'relay error']) {
+  test(`Host outbox skips an offline controller after ${offlineSignal} and flushes it on relink`, async t => {
+    const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-host-offline-outbox-'));
+    configureAppDataDir(profile);
+    configureHostOwner({ userDataDir: profile, ownerId: 'test-offline-outbox' });
+    const sockets = [];
+    const attempts = [];
+    const released = [];
+    class Wire extends EventEmitter {
+      sent = [];
+      bufferedAmount = 0;
+      send(data) {
+        const frame = JSON.parse(data);
+        if (frame.kind === 'invoke-result') {
+          attempts.push(frame.id);
+          if ((frame.id === 'waiting-a' || frame.id === 'waiting-b')
+            && attempts.filter(id => id === frame.id).length === 1)
+            throw new DeviceLinkError('BACKPRESSURE', 'fixture write is full');
+        }
+        this.sent.push(frame);
+        if (frame.kind === 'hello') queueMicrotask(() => this.push({ kind: 'hello-ack',
+          payload: { serverProtocolVersion: PROTOCOL_VERSION, deviceId: 'host', userId: 'test-offline-outbox' } }));
+      }
+      push(frame) { this.emit('message', JSON.stringify({ v: PROTOCOL_VERSION, ...frame })); }
+      close(code = 1000) { this.emit('close', code); }
+    }
+    const host = createHostDeviceLink({
+      profileDir: profile, worktree: createHostWorktreeLifecycle(profile), version: 'test',
+      getWsUrl: () => 'ws://127.0.0.1:9', getToken: async () => 'synthetic-host', canRegister: () => true,
+      invoke: async () => ({ status: 200, body: {} }), subscribe: () => () => {},
+      createRuntimeSession: async () => ({}), closeRuntimeSession: async () => {}, disableShareAvailability: async () => {},
+      releaseAuthCaller: caller => released.push(caller),
+      createWebSocket: () => {
+        const socket = new Wire();
+        sockets.push(socket);
+        setImmediate(() => socket.emit('open'));
+        return socket;
+      },
+    });
+    t.after(async () => {
+      await host.stop();
+      commitVolatileAppSession('signed-out', null, true);
+      fs.rmSync(profile, { recursive: true, force: true });
+    });
+
+    await host.setEnabled(true);
+    await waitFor(() => host.state().status === 'online');
+    const [relay] = sockets;
+    const open = (src, id) => relay.push({ kind: 'link-open', src, id,
+      payload: { controllerName: src, protocolVersion: PROTOCOL_VERSION, appVersion: 'test' } });
+    const subscribe = (src, id, topics = ['sessions']) => relay.push({ kind: 'invoke', src, id,
+      payload: { channel: 'device-link:subscribe', args: [{ topics }] } });
+    const reply = id => relay.sent.find(frame => frame.kind === 'invoke-result' && frame.id === id);
+    const settle = () => new Promise(resolve => setImmediate(resolve));
+    open('peer-a', 'a-open');
+    open('peer-b', 'b-open');
+    await waitFor(() => relay.sent.filter(frame => frame.kind === 'link-accept').length === 2);
+    t.mock.timers.enable({ apis: ['setTimeout'] });
+    subscribe('peer-a', 'a-probe');
+    subscribe('peer-a', 'waiting-a');
+    await settle();
+    assert.equal(reply('a-probe')?.payload.ok, true);
+    assert.deepEqual(attempts, ['a-probe', 'waiting-a']);
+
+    if (offlineSignal === 'presence') {
+      relay.push({ kind: 'presence-changed', payload: { deviceId: 'peer-a', online: false } });
+    } else {
+      relay.push({ kind: 'relay-error', id: 'a-probe',
+        payload: { dst: 'peer-a', code: 'DEVICE_OFFLINE', message: 'device offline' } });
+    }
+    t.mock.timers.tick(500);
+    await settle();
+    assert.equal(attempts.filter(id => id === 'waiting-a').length, 1, 'no blind outbox write while offline');
+    assert.deepEqual(released, ['device:peer-a']);
+    subscribe('peer-b', 'b-live');
+    await settle();
+    assert.equal(reply('b-live')?.payload.ok, true);
+
+    open('peer-a', 'a-reopen');
+    await settle();
+    assert.equal(reply('waiting-a')?.payload.ok, true);
+    t.mock.timers.tick(500);
+    assert.deepEqual(attempts, ['a-probe', 'waiting-a', 'b-live', 'waiting-a']);
+    assert.deepEqual(sockets, [relay]);
+    assert.equal(relay.sent.filter(frame => frame.kind === 'link-accept' && frame.dst === 'peer-b').length, 1);
+
+    if (offlineSignal === 'presence') {
+      // §3.2: the production presence handler must still clear the controller's
+      // platform, App caller, and accepted subscription during an owner boundary.
+      // This is distinct from recording a new offline outbox gate for that owner.
+      relay.push({ kind: 'presence-changed', payload: { deviceId: 'peer-b', online: true, platform: 'ios' } });
+      assert.equal(getControllerPlatform('peer-b'), 'ios');
+      subscribe('peer-b', 'waiting-b', ['session:task']);
+      await settle();
+      assert.equal(attempts.filter(id => id === 'waiting-b').length, 1);
+      assert.equal(host.state().controllers.some(controller => controller.deviceId === 'peer-b'), true);
+      const endBoundary = beginAppSessionBoundary();
+      try {
+        relay.push({ kind: 'presence-changed', payload: { deviceId: 'peer-b', online: false } });
+        await settle();
+        assert.equal(getControllerPlatform('peer-b'), undefined);
+        assert.deepEqual(released, ['device:peer-a', 'device:peer-b']);
+        assert.equal(host.state().controllers.some(controller => controller.deviceId === 'peer-b'), false);
+      } finally {
+        endBoundary();
+      }
+      t.mock.timers.tick(500);
+      await settle();
+      assert.equal(attempts.filter(id => id === 'waiting-b').length, 2,
+        'a pending owner boundary must not record an offline outbox gate');
+    }
+  });
+}
 
 // Unit: the authenticated transport determines who can ask Desktop Main for project
 // evidence. Persisted profile fields never select the privileged write adapter.

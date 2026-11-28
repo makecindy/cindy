@@ -288,6 +288,8 @@ type VoiceInputDictionaryLearningAction =
 type VoiceInputSettingsData = import('../shared/voiceInputData').VoiceInputSettings;
 type VoiceSpeakerFilterStatusData = import('../shared/voiceSpeakerFilter').VoiceSpeakerFilterStatus;
 type VoiceSpeakerEnrollResultData = import('../shared/voiceSpeakerFilter').VoiceSpeakerEnrollResult;
+type VoiceLocalAsrStatusData = import('../shared/voiceLocalAsr').VoiceLocalAsrStatus;
+type VoiceLocalAsrChooseDirResultData = import('../shared/voiceLocalAsr').VoiceLocalAsrChooseDirResult;
 type VoiceInputSettingsPatchData = import('../shared/voiceInputData').VoiceInputSettingsPatch;
 type VoiceInputHistoryEntryData = import('../shared/voiceInputData').VoiceInputHistoryEntry;
 type VoiceInputDataSnapshot = import('../shared/voiceInputData').VoiceInputDataSnapshot;
@@ -321,7 +323,7 @@ type VoiceInputModelSelectionResultData = {
     id: VoiceInputProviderKindData;
     model: string;
     mode: VoiceInputAsrModeData;
-    auth: 'api-key' | 'codex';
+    auth: 'api-key' | 'codex' | 'local';
   }>;
   refinerProfiles: Array<{
     id: VoiceInputRefinerProviderKindData;
@@ -333,11 +335,15 @@ type VoiceInputModelSelectionResultData = {
     ok: boolean;
     provider: VoiceInputProviderKindData;
     providerModel: string;
-    auth: 'api-key' | 'codex';
+    auth: 'api-key' | 'codex' | 'local';
     settingsTab: 'api-keys' | 'connections' | 'providers';
     error?: string;
     failureReason?:
-      'custom-asr-config-missing' | 'custom-asr-key-missing' | 'codex-realtime-unsupported';
+      | 'custom-asr-config-missing'
+      | 'custom-asr-key-missing'
+      | 'codex-realtime-unsupported'
+      | 'local-asr-model-missing'
+      | 'local-asr-unsupported';
   };
   customAsrApiKeyConfigured: boolean;
 };
@@ -1914,6 +1920,11 @@ interface ElectronAPI {
       sourceLanguage?: string;
       refinementEnabled?: boolean;
     }) => Promise<{ ok: true }>;
+    prewarmOnPress?: (payload?: {
+      sourceLanguage?: string;
+      refinementEnabled?: boolean;
+    }) => Promise<{ ok: true }>;
+    discardPressPrewarm?: () => Promise<{ ok: true }>;
     getBenchmarkFixtureAudio: () => Promise<
       { ok: true; path: string; wav: ArrayBuffer } | { ok: false }
     >;
@@ -1944,40 +1955,34 @@ interface ElectronAPI {
     getReadiness: () => Promise<{
       ok: boolean;
       serviceMode: VoiceInputServiceModeData;
-      provider:
-        | 'custom-realtime-asr'
-        | 'elevenlabs-scribe-realtime'
-        | 'openai-realtime-whisper'
-        | 'litellm-gpt-realtime-whisper'
-        | 'litellm-qwen3-asr-flash-realtime'
-        | 'litellm-volcengine-sauc-asr'
-        | 'litellm-batch';
+      provider: VoiceInputProviderKindData;
       providerModel: string;
-      auth: 'api-key' | 'codex';
+      auth: 'api-key' | 'codex' | 'local';
       settingsTab: 'api-keys' | 'connections' | 'providers';
       error?: string;
       authErrorReason?: string;
       failureReason?:
-        'custom-asr-config-missing' | 'custom-asr-key-missing' | 'codex-realtime-unsupported';
+        | 'custom-asr-config-missing'
+        | 'custom-asr-key-missing'
+        | 'codex-realtime-unsupported'
+        | 'local-asr-model-missing'
+        | 'local-asr-unsupported';
     }>;
     getReadinessCached: () => {
       ok: boolean;
       serviceMode: VoiceInputServiceModeData;
-      provider:
-        | 'custom-realtime-asr'
-        | 'elevenlabs-scribe-realtime'
-        | 'openai-realtime-whisper'
-        | 'litellm-gpt-realtime-whisper'
-        | 'litellm-qwen3-asr-flash-realtime'
-        | 'litellm-volcengine-sauc-asr'
-        | 'litellm-batch';
+      provider: VoiceInputProviderKindData;
       providerModel: string;
-      auth: 'api-key' | 'codex';
+      auth: 'api-key' | 'codex' | 'local';
       settingsTab: 'api-keys' | 'connections' | 'providers';
       error?: string;
       authErrorReason?: string;
       failureReason?:
-        'custom-asr-config-missing' | 'custom-asr-key-missing' | 'codex-realtime-unsupported';
+        | 'custom-asr-config-missing'
+        | 'custom-asr-key-missing'
+        | 'codex-realtime-unsupported'
+        | 'local-asr-model-missing'
+        | 'local-asr-unsupported';
     } | null;
     getModelSelection: () => Promise<VoiceInputModelSelectionResultData>;
     setModelSelection: (patch: {
@@ -1998,6 +2003,7 @@ interface ElectronAPI {
     openSettings: (tab: 'voice-input' | 'providers') => Promise<{ ok: true }>;
     start: (params?: {
       recordingId?: string;
+      mode?: 'dictation' | 'rewrite';
       sourceLanguage?: string;
       refinementEnabled?: boolean;
       refinementCacheScope?: string;
@@ -2025,7 +2031,15 @@ interface ElectronAPI {
     >;
     deleteDictionaryEntries: (entryIds: string[]) => Promise<VoiceInputSettingsData>;
     addDictionaryEntry: (text: string) => Promise<VoiceInputSettingsData>;
-    importDictionaryEntries: (texts: string[]) => Promise<VoiceInputSettingsData>;
+    importDictionaryEntries: (
+      entries: Array<string | { text: string; aliases?: string[] }>,
+    ) => Promise<VoiceInputSettingsData>;
+    promoteDictionaryCandidate: (text: string) => Promise<VoiceInputSettingsData>;
+    deleteDictionaryCandidate: (text: string) => Promise<VoiceInputSettingsData>;
+    restoreSuppressedDictionaryTerm: (
+      text: string,
+      options?: { addToDictionary?: boolean },
+    ) => Promise<VoiceInputSettingsData>;
     renameDictionaryEntry: (entryId: string, text: string) => Promise<VoiceInputSettingsData>;
     editDictionaryEntry: (
       entryId: string,
@@ -2039,7 +2053,7 @@ interface ElectronAPI {
     getHistory: (limit?: number) => VoiceInputHistoryEntryData[];
     getHistoryForRefinement: () => VoiceInputHistoryEntryData[];
     recordHistory: (text: string) => string | null;
-    updateHistoryEntry: (id: string, text: string) => void;
+    updateHistoryEntry: (id: string, text: string, rawText?: string) => void;
     deleteHistoryEntry: (id: string) => void;
     onDataChanged: (callback: (payload: VoiceInputDataSnapshot) => void) => () => void;
     /** 「识别我的声音」:模型与声纹都留在本机,Renderer 只拿到状态。 */
@@ -2051,6 +2065,13 @@ interface ElectronAPI {
       enroll: (clips: ArrayBuffer[]) => Promise<VoiceSpeakerEnrollResultData>;
       deleteProfile: () => Promise<VoiceSpeakerFilterStatusData>;
       onStatusChanged: (callback: (status: VoiceSpeakerFilterStatusData) => void) => () => void;
+    };
+    /** 本地离线语音识别（sherpa-onnx）：纯端侧推理，无需云账号与 API Key。 */
+    localAsr: {
+      getStatus: () => Promise<VoiceLocalAsrStatusData>;
+      chooseModelDir: () => Promise<VoiceLocalAsrChooseDirResultData>;
+      clearModelDir: () => Promise<VoiceLocalAsrStatusData>;
+      onStatusChanged: (callback: (status: VoiceLocalAsrStatusData) => void) => () => void;
     };
     /** options.suspend = 录制期挂起（故意与存盘不同）；不带它的请求会被 main 按存盘校验。 */
     setGlobalShortcut: (
@@ -4535,7 +4556,7 @@ interface ElectronAPI {
     openLink: (deviceId: string) => Promise<{ appVersion: string; allowlistHash: string }>;
     closeLink: (deviceId: string) => Promise<{ ok: true }>;
     /** 远程调用被控端 allowlist 内 channel;成功拿返回值,失败 reject 带 code 的 Error */
-    invoke: (deviceId: string, channel: string, args: unknown[], scheduling?: { background?: boolean }) => Promise<unknown>;
+    invoke: (deviceId: string, channel: string, args: unknown[], scheduling?: { background?: boolean; requireStructuredHistoryMiss?: boolean }) => Promise<unknown>;
     /** 控制端:订阅被控端某 topic 的变更推送(push 驱动侧边栏 / 会话视图) */
     subscribe: (deviceId: string, topics: string[]) => Promise<{ ok: true }>;
     /** 控制端:取消订阅某 topic */
@@ -4841,6 +4862,7 @@ interface ElectronAPI {
   worktreeCheckout: (req: import('../shared/worktreeCheckout').CheckoutRequest) => Promise<import('../shared/worktreeCheckout').CheckoutReply>;
   worktreeBranchSyncStatus: (req: import('../shared/worktreeBranchSync').BranchSyncRequest) => Promise<import('../shared/worktreeBranchSync').BranchSyncStatus>;
   worktreeSyncBranch: (req: import('../shared/worktreeBranchSync').BranchSyncRequest) => Promise<import('../shared/worktreeBranchSync').BranchSyncReply>;
+  worktreeWorkspaceClutterSummary?: (req: import('../shared/worktreeWorkspaceClutter').WorkspaceClutterRequest) => Promise<import('../shared/worktreeWorkspaceClutter').WorkspaceClutterSummary>;
   worktreeListBranches: (req: {
     baseRepo: string;
   }) => Promise<import('@/lib/worktree.types').ListBranchesResp>;
@@ -5119,6 +5141,7 @@ interface ElectronAPI {
     push: (params: {
       sessionId: string;
       confirmForce?: import('@/lib/gitReview.types').ReviewPushConfirmForce;
+      syncBeforePush?: boolean;
     }) => Promise<import('@/lib/gitReview.types').ReviewPushResult>;
   };
 

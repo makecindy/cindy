@@ -231,6 +231,7 @@ export interface UnifiedMobileModelGroupManagedMeta {
 }
 
 export interface UnifiedMobileModelGroupOptions {
+  unsupported?: boolean;
   rows: readonly UnifiedMobileModelGroupRow[];
   /** 返回 false = 没有应用(选择器留在原地)。 */
   onSelect(id: string): Promise<boolean> | boolean;
@@ -325,6 +326,7 @@ export interface UnifiedMobilePickerViewProps {
   /** 模型组(列在插件引擎与 groups 之前)；搜索时只列命中的。 */
   modelGroups?: {
     title: string;
+    unsupportedNotice?: string;
     rows: readonly UnifiedMobileModelGroupRow[];
     onSelect(id: string): void;
     managedMeta?: UnifiedMobileModelGroupManagedMeta;
@@ -2063,11 +2065,14 @@ export function UnifiedModelPickerSheet(
         ...remotePluginFilters,
       ]}
       groups={groups}
-      {...(modelGroupRows.length || modelGroupOptions?.managedMeta
+      {...(modelGroupRows.length || modelGroupOptions?.managedMeta || modelGroupOptions?.unsupported
         ? {
             modelGroups: {
               title: t("models.modelGroups.title"),
               rows: modelGroupRows,
+              ...(modelGroupOptions?.unsupported ? {
+                unsupportedNotice: t("deviceLink.remoteError.capabilityUnavailable"),
+              } : {}),
               onSelect: selectModelGroup,
               ...(modelGroupOptions?.managedMeta ? { managedMeta: modelGroupOptions.managedMeta } : {}),
               ...(detachModelGroup ? { onDetach: detachModelGroup } : {}),

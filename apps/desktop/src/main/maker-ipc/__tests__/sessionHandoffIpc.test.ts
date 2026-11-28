@@ -162,6 +162,46 @@ describe('maker:session:handoff (receiving computer)', () => {
     expect(rows.size).toBe(0);
   });
 
+  // Unit/protocol: `create.baseRef` through the production receiver and opener. Basis: the
+  // multi-computer retrospective of 2026-11-28 — a project whose work branch is not the default
+  // one had every new task start from the default branch, and the receipt named neither the base
+  // nor the provider computer. No earlier case sends a base or reads those receipt fields.
+  // Minimal inputs: one create request per outcome. A refused base must create nothing.
+  it.each(['explicit', 'default', 'without-worktree', 'malformed', 'unresolvable'] as const)(
+    'cuts the worktree from the requested base and reports what took effect: %s', async scenario => {
+      const { id, deps, insert } = creationFixture();
+      deps.prepareWorktree = vi.fn(async (_id, _directory, baseRef) => scenario === 'unresolvable'
+        ? { ok: false as const, errorCode: 'WORKTREE_UNAVAILABLE', message: 'no such ref' }
+        : { ok: true as const, path: '/destination/worktree',
+          baseRef: baseRef ? `refs/remotes/${baseRef}` : 'refs/remotes/origin/main',
+          ...(baseRef ? { staleBaseReason: 'fetch-failed' } : {}) });
+      const send = vi.fn(async () => ({ ok: true as const, agentKind: 'codex', wakeKind: 'queued' as const,
+        targetTitle: null, targetLastUserSendAt: null }));
+      const handle = createSessionHandoffHandler({ create: createRemoteSessionOpener(deps), send, validate: async () => true });
+      const result = await handle('source-device', { ...request, sessionId: id, action: 'create', create: {
+        permissionMode: 'ask',
+        ...(scenario === 'without-worktree' ? {} : { useWorktree: true }),
+        ...(scenario === 'default' ? {} : { baseRef: scenario === 'malformed' ? '--upload-pack=evil' : ' origin/release/2.x ' }),
+      } });
+      if (scenario === 'explicit' || scenario === 'default') {
+        expect(deps.prepareWorktree).toHaveBeenCalledWith(id, '/destination/project',
+          scenario === 'explicit' ? 'origin/release/2.x' : undefined);
+        expect(result).toMatchObject({ ok: true, wakeKind: 'created', worktreePath: '/destination/worktree',
+          worktreeBaseRef: scenario === 'explicit' ? 'refs/remotes/origin/release/2.x' : 'refs/remotes/origin/main',
+          // null = this computer's own provider; the sender must be able to tell it from "unknown".
+          agentDeviceId: null });
+        expect((result as { worktreeBaseStaleReason?: string }).worktreeBaseStaleReason)
+          .toBe(scenario === 'explicit' ? 'fetch-failed' : undefined);
+        expect(send).toHaveBeenCalledOnce();
+        return;
+      }
+      expect(result).toMatchObject({ ok: false, errorCode: scenario === 'unresolvable' ? 'WORKTREE_UNAVAILABLE' : 'INVALID_ARGS' });
+      if (scenario === 'unresolvable') expect((result as { message: string }).message).toContain('base_ref "origin/release/2.x"');
+      else expect(deps.prepareWorktree).not.toHaveBeenCalled();
+      expect(insert).not.toHaveBeenCalled(); expect(send).not.toHaveBeenCalled();
+    },
+  );
+
   // Unit regression: run the destination model resolver through the production
   // create receiver/opener, so both persisted tuning and public error categories are checked.
   it.each(['defaults', 'changed-model', 'override', 'offline', 'missing-model', 'invalid-tuning'] as const)(
@@ -194,7 +234,8 @@ describe('maker:session:handoff (receiving computer)', () => {
         expect(result).toMatchObject({ ok: false, errorCode: scenario === 'invalid-tuning' ? 'INVALID_ARGS' : 'PROVIDER_ROUTE_UNAVAILABLE' });
         expect(insert).not.toHaveBeenCalled(); expect(send).not.toHaveBeenCalled();
       } else {
-        expect(result).toMatchObject({ ok: true, wakeKind: 'created' });
+        // The receipt names the provider computer that took effect, not only the stored row.
+        expect(result).toMatchObject({ ok: true, wakeKind: 'created', agentDeviceId: 'provider-computer' });
         expect(rows.get(id)).toMatchObject({ providerId: 'remote-provider', agentDeviceId: 'provider-computer',
           model: scenario === 'changed-model' ? 'other-model' : 'saved-model',
           effort: scenario === 'defaults' ? 'high' : 'medium', fastMode: scenario === 'defaults' });
@@ -352,7 +393,8 @@ describe('maker:session:handoff (receiving computer)', () => {
       ).rejects.toThrow('authorized device link');
       expect(send).not.toHaveBeenCalled();
       expect(await within({ controllerDeviceId: 'device-A', channel: DL_SESSION_HANDOFF_CHANNEL },
-        { action: 'task-action-capability' })).toMatchObject({ ordinaryCreateVersion: 1, ordinaryCreatePluginEngine: 1, ordinaryCreateAutoTitle: 1 });
+        { action: 'task-action-capability' })).toMatchObject({ ordinaryCreateVersion: 1, ordinaryCreatePluginEngine: 1, ordinaryCreateAutoTitle: 1,
+        ordinaryCreateBaseRef: 1 });
       expect(
         await within({ controllerDeviceId: 'device-A', channel: DL_SESSION_HANDOFF_CHANNEL }),
       ).toMatchObject({ ok: true, wakeKind: 'queued' });

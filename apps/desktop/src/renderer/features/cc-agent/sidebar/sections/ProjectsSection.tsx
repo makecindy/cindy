@@ -126,6 +126,10 @@ import { DeviceSectionHeader } from '../DeviceSectionHeader';
 import { SectionCollapse } from '../SectionCollapse';
 import { SessionEntryList, SessionEntryRows } from '../SessionEntryList';
 import { TaskInbox } from '../TaskInbox';
+import type {
+  EnvironmentHealthAction,
+  EnvironmentHealthAlert,
+} from '../environmentHealth';
 import { sessionRowKey } from '../sessionRowKey';
 import { useCollapsibleShowAll } from '../hooks/useCollapsibleShowAll';
 import { useAutomationGroupsCollapsed } from '../../hooks/useAutomationGroupCollapsed';
@@ -199,6 +203,11 @@ export interface ProjectsSectionProps {
   inboxNow?: number;
   /** Inbox: whether a task belongs to a teammate (the task list's teammate-filter test). */
   isInboxTeammateTask?: (session: Session) => boolean;
+  /** Inbox: aggregated environment health alerts rendered at the top of TaskInbox. */
+  inboxHealthAlerts?: readonly EnvironmentHealthAlert[];
+  onInboxHealthAlertAction?: (action: EnvironmentHealthAction, alert: EnvironmentHealthAlert) => void;
+  onDismissInboxHealthAlert?: (fingerprint: string) => void;
+  inboxHealthAlertsDefaultExpanded?: boolean;
   /** 已经按 filter.projects 过滤后、仅会被渲染的 Project 子集。 */
   projects: ProjectNodeData[];
   /**
@@ -295,6 +304,10 @@ export function ProjectsSection({
   inboxSessions,
   inboxNow,
   isInboxTeammateTask,
+  inboxHealthAlerts,
+  onInboxHealthAlertAction,
+  onDismissInboxHealthAlert,
+  inboxHealthAlertsDefaultExpanded,
   projects,
   dialogues,
   dialogueActionSessions = dialogues,
@@ -1427,6 +1440,10 @@ export function ProjectsSection({
           sessions={inboxSessions}
           contentFiltered={sidebarContentFilterCount(filter) > 0}
           isTeammateTask={isInboxTeammateTask}
+          healthAlerts={inboxHealthAlerts}
+          onHealthAlertAction={onInboxHealthAlertAction}
+          onDismissHealthAlert={onDismissInboxHealthAlert}
+          healthAlertsDefaultExpanded={inboxHealthAlertsDefaultExpanded}
           priorityContext={priorityContext}
           activeSessionId={activeSessionId}
           runningSessionIds={runningSessionIds}

@@ -208,7 +208,9 @@ export function registerSessionHandoffHandlers(
     const request = requireObject(value, 'request');
     if (request.action === 'task-action-capability') return {
       ...SESSION_HANDOFF_CAPABILITY,
-      ...(deps.create ? { ordinaryCreateVersion: 1 } : {}),
+      // ordinaryCreateBaseRef: `create.baseRef` is understood (2026-11-28). The opener is shared, so
+      // every host that can create accepts it; senders must not send the key without this bit.
+      ...(deps.create ? { ordinaryCreateVersion: 1, ordinaryCreateBaseRef: 1 } : {}),
       ...(deps.create && deps.supportsPluginEngineCreate ? { ordinaryCreatePluginEngine: 1 } : {}),
       ...(deps.create && deps.refineTitle ? { ordinaryCreateAutoTitle: 1 } : {}),
       ...(deps.listProjects ? { projectCatalogVersion: 1 } : {}),

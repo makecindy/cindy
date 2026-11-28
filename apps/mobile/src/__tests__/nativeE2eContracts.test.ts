@@ -4,8 +4,9 @@ import { describe, expect, it } from 'vitest';
 
 // guard: credentials-and-local-storage.md requires legacy keys to be removed at startup/logout.
 // The storage unit suite tests actual deletion; this cross-module check prevents dropping AuthContext callers.
-// mobile-development.md native boundary: Android must reuse shipped ExpoAudio, not add an unsupported recorder.
-// Actual recording is covered in mobileRealtimeAudio; native registration cannot execute in a JS unit runner.
+// mobile-development.md native boundary: register Android capture while retaining ExpoAudio
+// for older native packages. JS guards check the registration and fallback order;
+// actual recording is covered in mobileRealtimeAudio and native device verification.
 describe('native e2e security and native boundary contracts', () => {
 it('clears local mobile voice credentials on logout and at auth startup', () => {
     const authContext = readFileSync(resolve(process.cwd(), 'src/auth/AuthContext.tsx'), 'utf8');
@@ -46,19 +47,22 @@ it('clears local mobile voice credentials on logout and at auth startup', () => 
     // secure storage(与 LEGACY_* token 清理同一批)。
     expect(authContext).toContain('clearAllMobileVoiceCredentials().catch(() => undefined),');
   });
-it('backs Android realtime voice with the Expo AudioStream already shipped in the app', () => {
-    const expoModuleConfig = readFileSync(
+  it('prefers Android native realtime voice and keeps Expo AudioStream for older builds', () => {
+    const expoModuleConfig = JSON.parse(readFileSync(
       resolve(process.cwd(), 'modules/xdt-mobile-realtime-audio/expo-module.config.json'),
       'utf8',
-    );
+    )) as { platforms: string[]; android?: { modules: string[] } };
     const realtimeAudio = readFileSync(resolve(process.cwd(), 'src/session/mobileRealtimeAudio.ts'), 'utf8');
     const appJson = readFileSync(resolve(process.cwd(), 'app.json'), 'utf8');
 
-    // The latency-tuned custom recorder stays Apple-only. Android reuses the
-    // PCM SharedObject from expo-audio, which is already a native dependency.
-    expect(expoModuleConfig).toContain('"platforms": ["apple"]');
-    expect(expoModuleConfig).not.toContain('"android"');
+    // New Android binaries use AudioRecord; older binaries retain the existing
+    // Expo AudioStream path so an OTA update does not break microphone access.
+    expect(expoModuleConfig.platforms).toEqual(['apple', 'android']);
+    expect(expoModuleConfig.android?.modules).toContain('com.xdtmaker.realtimeaudio.XdtMobileRealtimeAudioModule');
     expect(appJson).toContain('"recordAudioAndroid": true');
+    expect(realtimeAudio).toContain('const binding = getNativeBinding();');
+    expect(realtimeAudio).toContain('const expoAudioModule = getExpoAudioNativeModule();');
+    expect(realtimeAudio.indexOf('const binding = getNativeBinding();')).toBeLessThan(realtimeAudio.indexOf('const expoAudioModule = getExpoAudioNativeModule();'));
     expect(realtimeAudio).toContain("requireNativeModule<ExpoAudioNativeModule>('ExpoAudio')");
     expect(realtimeAudio).toContain('new module.AudioStream({');
     expect(realtimeAudio).toContain("encoding: 'int16'");

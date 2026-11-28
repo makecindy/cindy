@@ -9,7 +9,7 @@ import {
   type PcmChunk,
 } from './WebMicAudioEngine';
 import { createVoiceInputAudioProfile } from './audioProfile';
-import { hasPcmSound } from '@cindy/voice-input-core';
+import { RecordingSoundDetector } from '@cindy/voice-input-core';
 import type { VoiceInputStartupTimeline } from './startupTimeline';
 
 const log = createLogger('voice-input-capture');
@@ -54,10 +54,13 @@ type VoiceInputCaptureSessionOptions = {
   isCurrentEngine?: (engine: WebMicAudioEngine) => boolean;
   /** Fires once after the first PCM frame has been retained locally. */
   onCaptureReady?: () => void;
+  onSoundEvidenceAvailable?: (hasSound: () => boolean) => void;
   /** Fires once when captured PCM contains sound, even before cloud startup. */
   onSoundDetected?: () => void;
   /** Fires for every captured 16 kHz PCM frame, including frames buffered before start IPC settles. */
   onPcmCaptured?: (pcm16k: ArrayBuffer) => void;
+  /** True while speaker-to-mic bleed from the start cue may reach the mic. */
+  isInStartCueEchoWindow?: () => boolean;
   onSamples?: (pcm: ArrayBuffer) => void;
   timeline?: VoiceInputStartupTimeline;
   appendAudioChunk: (chunk: PcmChunk) => void;
@@ -87,6 +90,8 @@ export async function startVoiceInputCaptureSession(
   let nonSilentChunkLogged = false;
   let captureReady = false;
   let soundDetected = false;
+  const soundDetector = new RecordingSoundDetector();
+  options.onSoundEvidenceAvailable?.(() => soundDetector.hasSound);
   let engine: WebMicAudioEngine;
 
   const createEngine = (deviceId?: string): WebMicAudioEngine => {
@@ -103,7 +108,15 @@ export async function startVoiceInputCaptureSession(
       if (chunk.pcm16k.byteLength === 0) return;
       options.onPcmCaptured?.(chunk.pcm16k);
       options.onSamples?.(chunk.pcm16k);
-      if (!soundDetected && hasPcmSound(chunk.pcm16k)) {
+      const inCueEchoWindow = options.isInStartCueEchoWindow?.() === true;
+      const outgoingChunk: PcmChunk = inCueEchoWindow
+        ? { ...chunk, trace: { ...chunk.trace, startCueEchoWindow: true } }
+        : chunk;
+      if (!soundDetected && soundDetector.append(chunk.pcm16k, {
+        durationMs: chunk.trace.durationMs,
+        sampleRate: chunk.trace.sampleRate,
+        startCueEchoWindow: inCueEchoWindow,
+      })) {
         soundDetected = true;
         options.onSoundDetected?.();
       }
@@ -134,10 +147,10 @@ export async function startVoiceInputCaptureSession(
           }
           pendingChunks.shift();
         }
-        pendingChunks.push(chunk);
+        pendingChunks.push(outgoingChunk);
         options.timeline?.mark('first_buffered_audio');
       } else {
-        options.appendAudioChunk(chunk);
+        options.appendAudioChunk(outgoingChunk);
       }
       // System mute and cloud setup must never discard the user's opening
       // words. Readiness means PCM is retained, not merely engine.start() done.

@@ -3188,7 +3188,8 @@
           "gatewayKey": "Requires your AI gateway to support this realtime ASR route",
           "codexLogin": "Uses your Codex sign-in",
           "elevenlabsKey": "Uses your ElevenLabs key (environment variable)",
-          "codexRealtimeUnsupported": "Unavailable: Codex sign-in is not an OpenAI API Realtime credential"
+          "codexRealtimeUnsupported": "Unavailable: Codex sign-in is not an OpenAI API Realtime credential",
+          "localOffline": "Runs offline on this device (no account or API key required)"
         },
         "credentialError": {
           "gatewayMissing": "No AI gateway key found; this model is unavailable.",
@@ -3196,10 +3197,24 @@
           "elevenlabsMissing": "No ElevenLabs key configured (environment variable); this model is unavailable.",
           "customAsrConfigMissing": "Complete and save the realtime ASR service settings before starting voice input.",
           "customAsrKeyMissing": "Add and save an API key for the custom realtime ASR service.",
-          "codexRealtimeUnsupported": "Codex sign-in cannot be used for realtime speech recognition. Choose a supported ASR service."
+          "codexRealtimeUnsupported": "Codex sign-in cannot be used for realtime speech recognition. Choose a supported ASR service.",
+          "localAsrModelMissing": "Select a local sherpa-onnx ASR model folder before starting offline voice input.",
+          "localAsrUnsupported": "Local offline speech recognition is not supported on this computer architecture."
         },
         "manageProviders": "Open model providers",
-        "reset": "Reset to default"
+        "reset": "Reset to default",
+        "localAsr": {
+          "optionLabel": "Local offline ASR (sherpa-onnx)",
+          "optionDescription": "On-device ONNX recognition; works completely offline without an account or API key",
+          "notice": "Choose a local sherpa-onnx offline model folder (SenseVoice, Paraformer, Whisper, or Transducer containing tokens.txt and .onnx weights). Audio stays on this computer.",
+          "modelDirLabel": "Local model folder",
+          "readyStatus": "Ready · {{kind}} ({{folder}})",
+          "unsupportedStatus": "Not supported on this platform",
+          "notConfiguredStatus": "No model folder selected yet",
+          "clearFolder": "Clear",
+          "chooseFolder": "Choose model folder",
+          "invalidFolder": "That folder does not contain a supported sherpa-onnx model (tokens.txt and .onnx files)."
+        }
       },
       "historyToggle": {
         "show": "Show recent history",
@@ -3347,7 +3362,9 @@
           "filters": {
             "all": "All",
             "automatic": "Auto-added",
-            "manual": "Manual"
+            "manual": "Manual",
+            "candidates": "Candidates",
+            "suppressed": "Suppressed"
           },
           "sources": {
             "automatic": "Auto",
@@ -3360,6 +3377,28 @@
             "automaticAddedMultiple": "Auto-added {{count}} terms, including {{term}}",
             "delete": "Delete",
             "deleteAriaLabel": "Delete auto-added term: {{term}}"
+          },
+          "export": {
+            "csv": "Export CSV",
+            "json": "Export JSON",
+            "successCsv": "Exported dictionary as CSV",
+            "successJson": "Exported dictionary as JSON"
+          },
+          "candidates": {
+            "hint": "Terms observed from your manual edits but not yet auto-promoted. Promote a term immediately or remove it.",
+            "evidenceCount": "Observed {{count}}×",
+            "promote": "Promote",
+            "promoteTooltip": "Promote candidate to active dictionary immediately",
+            "promotedToast": "Promoted “{{term}}” to dictionary",
+            "empty": "No candidate terms yet."
+          },
+          "suppressed": {
+            "hint": "Deleted auto-learned terms are suppressed so they will not be re-added automatically. Restore a term to allow learning again or add it back.",
+            "restore": "Allow learning",
+            "addToDictionary": "Add back",
+            "restoredToast": "Restored “{{term}}” for automatic learning",
+            "addedToast": "Added “{{term}}” back to dictionary",
+            "empty": "No suppressed terms."
           }
         }
       },
@@ -3404,7 +3443,15 @@
         "toast": {
           "copied": "Copied",
           "copyFailed": "Copy failed"
-        }
+        },
+        "searchAriaLabel": "Search voice history",
+        "searchPlaceholder": "Search transcripts or raw recognition…",
+        "showRawComparison": "Compare raw vs refined",
+        "hideRawComparison": "Hide comparison",
+        "rawLabel": "Raw ASR",
+        "refinedLabel": "Refined",
+        "loadMore": "Load more ({{count}} remaining)",
+        "noSearchResults": "No matching transcripts."
       },
       "speakerFilter": {
         "label": "Recognize my voice",
@@ -11139,12 +11186,14 @@
       "fileCount_other": "{{count}} files",
       "emptyTitle": "No changes yet",
       "emptyDesc": "This session hasn't edited any files yet. Changes by the agent will appear here.",
+      "emptyDescSvn": "Versioned files match their SVN BASE revisions.",
+      "svnSelectFile": "Select a file to read its changes.",
       "emptyDescGit": "The current git worktree has no staged or unstaged changes.",
       "filterEmptyTitle": "No changes in this filter",
-      "filterEmptyDesc": "No git changes are visible with the current filter or settings.",
+      "filterEmptyDesc": "No changes are visible with the current filter or settings.",
       "noSessionTitle": "No session",
       "noSessionDesc": "Select a local session to review its git worktree changes.",
-      "loadingTitle": "Reading git changes",
+      "loadingTitle": "Reading changes",
       "loadingDesc": "The panel keeps the previous content until the refresh completes.",
       "errorTitle": "Failed to read changes",
       "refresh": "Refresh",
@@ -11344,7 +11393,20 @@
         "leaseExpired": "The remote changed after confirmation. Push was stopped; refresh and confirm again.",
         "noRemote": "This repository has no git remote configured, so it cannot be pushed.",
         "failedTitle": "Push failed",
-        "successToast": "Commits pushed"
+        "successToast": "Commits pushed",
+        "divergedTitle": "Remote branch has new commits",
+        "syncCleanDesc_one": "Remote {{remoteRef}} has {{count}} commit you do not have, and preflight found no conflicts. Sync via rebase before pushing to avoid overwriting remote history.",
+        "syncCleanDesc_other": "Remote {{remoteRef}} has {{count}} commits you do not have, and preflight found no conflicts. Sync via rebase before pushing to avoid overwriting remote history.",
+        "divergedConflictDesc_one": "Remote {{remoteRef}} has {{count}} commit you do not have, with conflicts in {{files}}. Hand off to Agent to sync and resolve conflicts, or force push instead.",
+        "divergedConflictDesc_other": "Remote {{remoteRef}} has {{count}} commits you do not have, with conflicts in {{files}}. Hand off to Agent to sync and resolve conflicts, or force push instead.",
+        "divergedDirtyDesc_one": "Remote {{remoteRef}} has {{count}} commit you do not have, and the working tree has uncommitted changes. Hand off to Agent to sync and push, or force push instead.",
+        "divergedDirtyDesc_other": "Remote {{remoteRef}} has {{count}} commits you do not have, and the working tree has uncommitted changes. Hand off to Agent to sync and push, or force push instead.",
+        "divergedGeneralDesc_one": "Remote {{remoteRef}} has {{count}} commit you do not have. Hand off to Agent to integrate remote updates safely, or force push instead.",
+        "divergedGeneralDesc_other": "Remote {{remoteRef}} has {{count}} commits you do not have. Hand off to Agent to integrate remote updates safely, or force push instead.",
+        "syncAndPushConfirm": "Sync and push",
+        "askAgentSyncConfirm": "Resolve with Agent",
+        "syncedAndPushedToast": "Synced with remote and pushed",
+        "agentPromptFilled": "Added sync instructions to the composer. Press Enter to run with Agent."
       },
       "changeStatus": {
         "renamed": "Renamed",
@@ -11409,6 +11471,10 @@
         "non-git": {
           "title": "Not a git repository",
           "desc": "The current working directory does not contain a usable git repository."
+        },
+        "svn-unavailable": {
+          "title": "SVN unavailable",
+          "desc": "Install the Subversion command-line client to review this working copy."
         },
         "git-unavailable": {
           "title": "Git unavailable",
@@ -15392,6 +15458,24 @@
       "removeFromList": "Remove from list",
       "missingDir": "Folder not found"
     },
+    "remoteOutbox": {
+      "notSent": "Not sent",
+      "retry": "Retry",
+      "delete": "Delete",
+      "deliveryUnconfirmed": "Delivery unconfirmed",
+      "recheckDelivery": "Check again",
+      "waitingForPrevious": "Waiting for the previous message",
+      "taskInactive": "This task cannot receive messages right now.",
+      "inputNotSupported": "This computer does not support sending this type of message to the task.",
+      "taskClearedBeforeSend": "The task was cleared or is being cleared. The message is still saved on this device.",
+      "invalidInput": "The computer rejected the message because its contents are invalid.",
+      "profileInUseByDesktop": "This data is in use by the Cindy desktop app running on its own. Quit it, then send again.",
+      "other": "This action did not finish. Try again in a moment.",
+      "deleteConfirmTitle": "Delete this message?",
+      "deleteConfirmBody": "This message wasn't sent. Deleting it can't be undone.",
+      "deleteUnconfirmedBody": "The computer may have received this message. Deleting it only removes the pending message from this device. If the computer received it, it will still appear in the conversation history.",
+      "cancel": "Cancel"
+    },
     "pendingQueue": {
       "waitingForDevice": "Not sent · Will send when the other computer reconnects",
       "stopping": "Stopping…",
@@ -15511,7 +15595,11 @@
           "description": "Allow microphone access, then click voice input again.",
           "confirm": "Grant permission",
           "cancel": "Cancel"
-        }
+        },
+        "rewriteSelected": "Voice rewrite",
+        "rewriteSelectedTooltip": "Speak an instruction to rewrite the selected text (original text is kept on failure)",
+        "rewriteSelectedAria": "Voice rewrite selected text",
+        "rewriteFailed": "Voice rewrite did not complete; your selected text was kept unchanged."
       },
       "remoteSwitchFailed": "Remote setting change failed; not applied",
       "switchFailed": "Setting change failed; not applied",
@@ -15716,7 +15804,26 @@
         "missing": "The remote branch no longer exists.",
         "busy": "The repository is busy. Try again later.",
         "changed": "The checked-out branch changed. Retry."
-      }
+      },
+      "rebased_one": "Rebased onto {{count}} remote commit",
+      "rebased_other": "Rebased onto {{count}} remote commits",
+      "divergedCanRebase": "{{ahead}} ahead and {{behind}} behind {{remote}}/{{remoteBranch}}, with no conflicts detected. Click to rebase local commits onto {{remote}}/{{remoteBranch}}.",
+      "divergedConflictHint": "Diverged from {{remote}}/{{remoteBranch}} with conflicts ({{files}}). Click to inspect or hand off to Agent.",
+      "divergedOpenDetails": "Inspect branch divergence and resolve with Agent",
+      "divergedRebaseNotice": "Diverged from {{remote}} ({{ahead}} ahead, {{behind}} behind). Preflight found no conflicts.",
+      "divergedConflictNoticeFiles": "Diverged from {{remote}} with conflicts ({{files}}).",
+      "divergedDirtyNotice_one": "Diverged from {{remote}} with {{count}} uncommitted change.",
+      "divergedDirtyNotice_other": "Diverged from {{remote}} with {{count}} uncommitted changes.",
+      "divergedConflictNotice": "Diverged from {{remote}} with potential conflicts.",
+      "rebaseNow": "Rebase now",
+      "askAgentResolve": "Resolve with Agent",
+      "agentPromptFilled": "Added branch sync instructions to the input. Send when ready.",
+      "agentPromptDivergedCounts": "Currently {{ahead}} ahead and {{behind}} behind",
+      "agentPromptConflictFiles": "Preflight conflict files: {{files}}",
+      "agentPromptDirty_one": "Working tree also has {{count}} uncommitted file",
+      "agentPromptDirty_other": "Working tree also has {{count}} uncommitted files",
+      "agentPromptSyncOnly": "Safely sync local branch {{branch}} with {{remoteRef}}.{{details}}\nCheck git status and recent commits first, integrate remote updates via rebase or merge, and resolve conflicts while preserving local intent. Do not run git reset --hard or discard uncommitted changes. Summarize the result and run relevant checks when done.",
+      "agentPromptSyncAndPush": "Safely sync local branch {{branch}} with {{remoteRef}} and push.{{details}}\nCheck git status and recent commits first, integrate remote updates via rebase or merge, and resolve conflicts while preserving local intent. Do not run git reset --hard or discard uncommitted changes. Verify checks before pushing."
     },
     "pluginUi": {
       "title": "Plugin “{{name}}” added interactive pages. Review them to enable them.",
@@ -15819,6 +15926,106 @@
       "engineMissing": "The plugin that provides this engine is turned off or uninstalled.",
       "worktreeUnsupported": "Plugin engines can’t start tasks in a worktree yet. Turn off worktree to send.",
       "modelChangeFailed": "Could not switch the model"
+    },
+    "workspaceCapsule": {
+      "popoverTitle": "Task workspace",
+      "checkUpdates": "Check updates",
+      "checkingUpdates": "Checking…",
+      "checkUpdatesAria": "Check latest remote branch status",
+      "openGuideAria": "New to branches & worktree? Quick visual guide",
+      "back": "Back",
+      "worktreeTitle": "Run in isolated copy",
+      "worktreeOnDesc": "Creates a separate working copy so your current folder stays untouched",
+      "worktreeOffDesc": "Edits your current folder directly; switching branches affects local files",
+      "worktreeCompareToggle": "What is the difference?",
+      "compareDirectTitle": "Off · Direct edit",
+      "compareIsolatedTitle": "On · Isolated copy",
+      "badgeCurrent": "Active",
+      "badgeOff": "Off",
+      "badgeRecommended": "Recommended",
+      "compareMainDir": "Main folder",
+      "compareDirectWrite": "Direct edits",
+      "compareDirectNote": "Fast for one task, but parallel tasks can overwrite each other",
+      "compareUntouched": "Untouched",
+      "compareTaskCopy": "Task copy",
+      "compareIsolatedRun": "Isolated",
+      "remoteLatestReady": "Using latest cloud version; no sync needed",
+      "syncedStatus": "Up to date with remote",
+      "aheadOnlyStatus": "{{count}} local commit(s) ahead (no pull needed)",
+      "behindTitle": "{{count}} new update(s) on remote",
+      "behindDesc": "Pull cleanly into local with zero AI tokens and no overwrites",
+      "syncNow": "Sync locally",
+      "divergedCleanTitle": "Both local and remote have new changes",
+      "divergedCleanDesc": "Preflight found no conflicts — safe one-click sync with zero AI tokens",
+      "divergedConflictTitle": "Local and remote edited the same lines",
+      "divergedConflictDesc": "{{count}} overlapping file(s) — hand off to Agent to merge safely without losing changes",
+      "divergedDirtyTitle": "{{count}} uncommitted local change(s)",
+      "divergedDirtyDesc": "To protect your edits, auto-sync paused — hand off to Agent to sync safely",
+      "divergedGenericDesc": "Local and remote history diverged — hand off to Agent to sync safely without losing edits",
+      "techDetails": "Technical details",
+      "filesAndDetails": "Files & details",
+      "techRefsLabel": "Local / Remote",
+      "techCommitsLabel": "Commits",
+      "techWorkingTreeLabel": "Working tree",
+      "techFfSafety": "Uses strict fast-forward (git merge --ff-only): aborts automatically on unexpected changes.",
+      "techRebaseSafety": "Read-only merge-tree passed with 0 conflicts; runs git rebase with auto-abort on error.",
+      "techAgentSafety": "Includes strict safety constraints for Agent: never runs git reset --hard and preserves all local edits.",
+      "tooltipBehind": "{{count}} new update(s) on remote — click to sync",
+      "tooltipConflict": "Local and remote changes overlap — click to review options",
+      "branchSwitchReadOnly": "Currently on {{branch}}; turn on isolated copy above to choose a different source branch",
+      "remoteGroupHint": "Latest merged team code",
+      "localGroupHint": "Branches on this computer",
+      "remoteOptionSub": "Start fresh from the latest merged remote code",
+      "footerGuideCta": "New to branches & worktree? 30s guide",
+      "kbdSwitchHint": "↑↓ navigate",
+      "guideTitle": "Branches & worktree guide",
+      "guideBranchTitle": "1. What is a branch?",
+      "guideBranchDesc": "Think of it as a parallel draft of your project. You can build features or experiment safely without affecting the main version.",
+      "guideGraphMain": "main",
+      "guideGraphTask": "task draft",
+      "guideWorktreeTitle": "2. What is an isolated copy?",
+      "guideWorktreeDesc": "When enabled, Cindy prepares a dedicated folder for this task so you and multiple Agents can work in parallel without overwriting files.",
+      "guideChoiceTitle": "3. Cloud latest vs local branch?",
+      "guideRemoteLabel": "Cloud latest:",
+      "guideRemoteDesc": "Best when starting a brand-new task from the latest merged team code.",
+      "guideLocalLabel": "Local branch:",
+      "guideLocalDesc": "Best when continuing work that is still only on your computer.",
+      "guideProHint": "Familiar with Git? Expand “Technical details” in the status strip anytime to inspect refs and commands."
+    },
+    "workspaceCleanup": {
+      "entrySuggestTitle": "Ask AI to tidy local branches & worktrees",
+      "entryUrgentTitle": "Cleanup recommended for branches & worktrees",
+      "entrySub": "{{cindyBranches}} historical branches & {{idleWorktrees}} idle copies accumulated",
+      "entrySubWithFailed": "{{cindyBranches}} historical branches, {{idleWorktrees}} idle copies & {{failed}} leftover(s)",
+      "entryCountBadge": "{{branches}} branches · {{worktrees}} idle",
+      "capsuleRedDotTooltip": "{{branches}} local branches & {{worktrees}} idle copies accumulated — click to tidy safely with AI",
+      "paneTitle": "Tidy branches & worktrees with AI",
+      "safeBannerTitle": "Read-only audit first — nothing deleted until you confirm",
+      "safeBannerDesc": "AI groups items into Safe to clean, Needs review, and Protected so no unmerged work or active task is touched.",
+      "statBranchesLabel": "Local branches",
+      "statWorktreesLabel": "Isolated copies (worktree)",
+      "statCount": "{{count}}",
+      "statCindyBranches": "{{count}} cindy/* task branch(es)",
+      "statActiveProtected": "{{count}} active task(s) protected",
+      "statIdleOnly": "{{count}} idle to review",
+      "statIdleAndFailed": "{{idle}} idle · {{failed}} pending cleanup",
+      "scopesTitle": "Focus areas (multi-select)",
+      "scopeMerged": "Merged old branches",
+      "scopeWorktrees": "Idle worktree copies",
+      "scopeUnpushed": "Flag unpushed edits",
+      "mainRepoNote": "Runs in the main project folder (automatically skips creating another worktree) and checks PR merge state via the GitHub plugin first.",
+      "startAuditAction": "Fill composer to start read-only audit",
+      "snooze7Days": "Not now · hide red dot for 7 days",
+      "snoozedToast": "Red dot muted for 7 days — you can still tidy anytime from the branch menu",
+      "agentPromptFilled": "Read-only audit prompt filled in main repo mode (nothing will be deleted automatically). Press Enter to start.",
+      "promptIntro": "Run a STRICTLY READ-ONLY audit of this repository’s local branches and git worktrees first (Phase 1 must NOT delete, reset, checkout, fetch/prune, or run full-branch diff/cherry across large repos):",
+      "promptFocusMerged": "merged local and cindy/* branches (including squash-merged PRs: prefer the GitHub plugin GraphQL batch query and MUST verify local HEAD SHA equals or is an ancestor of the merged PR headRefOid — never match by branch name alone)",
+      "promptFocusWorktrees": "idle worktrees (estimate disk space quickly for cleanable candidates only — never recursive du on the main repo; on macOS APFS distinguish shared node_modules CoW blocks from real build-artifact space)",
+      "promptFocusUnpushed": "branches or worktrees with unpushed commits, uncommitted edits, or git stash entries that need my confirmation",
+      "promptStepFocus": "1. Audit scope: {{focus}}.",
+      "promptStepProtect": "2. Protect and exclude via triple verification: (a) unarchived Cindy tasks (including freshly created clean ahead=0 tasks, distinguishing ended legacy Workers); (b) directories held by live OS processes (lsof/handle check) or .worktree-keep; (c) branches/worktrees linked to OPEN/DRAFT PRs or containing uncommitted/unmerged changes.",
+      "promptStepOutput": "3. Report clearly in three buckets (“Safe to clean”, “Needs my confirmation”, “Protected / active”); aggregate by prefix/directory and highlight top space consumers when counts are large, then end with numbered cleanup options and wait for my confirmation.",
+      "promptProtectedList": "4. Cindy detected {{count}} unarchived active task worktree(s) that MUST stay in “Protected / active”: {{paths}}."
     }
   },
   "onboarding": {
@@ -18204,7 +18411,46 @@
         "offlineCompleteRejectedNewActivity": "“{{title}}” returned to Pending: new activity arrived on its computer while offline.",
         "offlineCompleteRejectedRunning": "“{{title}}” returned to Pending: the task is currently running.",
         "offlineCompleteRejectedAttached": "“{{title}}” returned to Pending: the task is currently attached or shared and could not be archived automatically.",
-        "offlineCompleteRejectedPreflight": "“{{title}}” returned to Pending: could not verify its worktree before archiving."
+        "offlineCompleteRejectedPreflight": "“{{title}}” returned to Pending: could not verify its worktree before archiving.",
+        "health": {
+          "regionLabel": "Environment health alerts",
+          "dismiss": "Dismiss alert",
+          "summaryTitle_one": "{{count}} environment issue needs attention",
+          "summaryTitle_other": "{{count}} environment issues need attention",
+          "providerAuthSingleTitle": "{{name}} sign-in expired",
+          "providerAuthSingleDesc": "Reconnect this provider to resume using its models.",
+          "providerAuthMultiTitle_one": "{{count}} model provider needs reconnection",
+          "providerAuthMultiTitle_other": "{{count}} model providers need reconnection",
+          "providerAuthMultiDesc": "Affected: {{names}}. Reconnect to resume.",
+          "githubMissingTitle": "GitHub not connected",
+          "githubNotLoggedInTitle": "GitHub connection expired",
+          "gitlabMissingTitle": "GitLab not connected",
+          "gitlabNotLoggedInTitle": "GitLab connection expired",
+          "prAffectedDesc_one": "Affects status updates for {{count}} PR.",
+          "prAffectedDesc_other": "Affects status updates for {{count}} PRs.",
+          "auxiliaryTitle": "Auxiliary model chain degraded",
+          "auxiliarySingleDesc": "{{model}} is unavailable; titles and summaries may degrade.",
+          "auxiliaryMultiDesc_one": "{{count}} auxiliary model route is degraded.",
+          "auxiliaryMultiDesc_other": "{{count}} auxiliary model routes are degraded.",
+          "auxiliaryUnavailableDesc": "No usable auxiliary model is available; titles and summaries are paused.",
+          "automationSingleTitle": "Automation “{{name}}” is blocked",
+          "automationMissingPluginDesc": "Required plugin “{{plugin}}” is missing or disabled.",
+          "automationPrecheckDesc": "Pre-run check blocked the latest run.",
+          "automationFailedDesc": "The latest run failed. Review its settings and logs.",
+          "automationMultiTitle_one": "{{count}} automation needs attention",
+          "automationMultiTitle_other": "{{count}} automations need attention",
+          "automationMultiDesc": "Affected: {{names}}.",
+          "actions": {
+            "reconnect": "Reconnect",
+            "openProviders": "Open providers",
+            "configureGitlab": "Configure GitLab",
+            "openSettings": "Open Settings",
+            "inspectAutomation": "Inspect and fix",
+            "viewAutomations": "View automations",
+            "connectGithub": "Connect GitHub",
+            "openGithubPlugin": "Open GitHub plugin"
+          }
+        }
       },
       "taskListMode": {
         "heading": "Task mode",
@@ -18867,6 +19113,7 @@
       "subtitlePaused": "Paused",
       "subtitleWaitingForResources": "Waiting for a slot ({{inFlight}}/{{max}})",
       "subtitleQueuedForSession": "Queued until the session is idle",
+      "subtitleDeferredForSession": "{{reason}} · deferred {{count}} time(s)",
       "subtitleManual": "Manual",
       "subtitleOnce": "Once",
       "tagOnce": "Once",
@@ -18885,6 +19132,7 @@
     },
     "detail": {
       "manualTrigger": "Manual trigger",
+      "deferredBanner": "{{reason}} · deferred {{count}} time(s) since {{since}}",
       "recentRuns": "RECENT RUNS · {{count}}",
       "noRunsHeading": "No runs yet",
       "noRunsHint": "Click “Run now” or wait for the next scheduled run.",
@@ -19653,6 +19901,12 @@
       "cleanMergedConfirmAction": "Delete",
       "cleanMergedDone": "Deleted {{count}} completed PR automations",
       "checkFailed": "Unable to check PR status right now"
+    },
+    "deferral": {
+      "busy": "Waiting for target task to be idle",
+      "usage": "Waiting for usage limit to reset",
+      "permission": "Waiting for permission status",
+      "other": "Execution deferred"
     }
   },
   "issueTracker": {
@@ -20862,6 +21116,8 @@
     },
     "errors": {
       "piStartupCloudFile": "A cloud-only instruction file may be delaying Pi startup: {{path}}. Download this file in Finder, wait until it is available locally, then retry. The timeout may have another cause.",
+      "remoteEngineMissing": "The remote computer has no available engine. Install an engine on that computer, restart Cindy, and try again.",
+      "remoteCapabilityUnavailable": "The current server or computer does not support this action yet.",
       "hostProfileInUseByDesktop": "This data is in use by the Cindy desktop app running on its own. Quit it, then send again.",
       "hostProfileInUseByDesktopAtStart": "This data is in use by the Cindy desktop app running on its own, so the Cindy background service did not start. Quit that app, restart the Cindy background service, then reopen this Cindy window.",
       "hostProfileInUseByDesktopRetry": "This data is in use by the Cindy desktop app running on its own, so this can’t be changed right now. Quit that app, then try again.",
@@ -23577,10 +23833,10 @@
   },
   "openAiAccountGroup": {
     "removeDescription": "This connection will stop receiving new tasks from the group. Tasks already running will stay on this connection.",
-    "mergeDescription": "New tasks started through {{target}} can use both providers. Sign-ins, keys and existing tasks stay where they are. Cindy will test the API key for {{apiKey}} before adding the scheduling connection.",
+    "mergeDescription": "New tasks started through {{target}} will be assigned to available members. Sign-ins, keys and existing tasks stay where they are. Cindy will test the API key for {{apiKey}}. Insufficient balance or a billing limit will not prevent adding it, but it will not receive automatic assignments until available again.",
     "modelUnavailable": "This connection cannot use the model chosen for the test. Test again to try another candidate.",
     "noTestModel": "No configured model is available for testing. Check which models your OpenAI project can use, then refresh or update this connection’s model list.",
-    "billingPaused": "Group assignment paused due to insufficient balance or a billing limit.",
+    "billingPaused": "Automatic assignment paused due to insufficient balance or a billing limit.",
     "title": "Account group",
     "testPassed": "Test passed",
     "refresh": "Refresh quota"
@@ -23822,7 +24078,15 @@
       "exceptionImage": "The message has images, so only sources that can see images were considered",
       "exceptionImageFallback": "The message has images, but no source can see images, so it picked as usual",
       "exceptionHours": "During this time, it uses “{{name}}” instead",
-      "separator": "; "
+      "separator": "; ",
+      "usageHabit": "Picked first based on your usual usage",
+      "usageHabitQuota": "Picked first based on your usual usage ({{left}}% quota left)",
+      "autoBalance": "Taking load while other sources are tight or busy",
+      "autoBalanceQuota": "Balanced by quota headroom and load ({{left}}% quota left)",
+      "lessBusy": "Other sources are running tasks, so this idle one goes first",
+      "paygFallback": "Subscriptions and shared sources are unavailable, falling back to pay-as-you-go",
+      "paygReserve": "Pay-as-you-go reserve; used only when other sources are unavailable",
+      "standbyQuotaNeutral": "{{left}}% of its quota is left and resets {{reset}}; not picked this time"
     },
     "settings": {
       "autoSwitch": {

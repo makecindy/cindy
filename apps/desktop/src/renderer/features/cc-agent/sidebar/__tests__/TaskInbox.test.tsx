@@ -268,3 +268,69 @@ it('lights for a due remote result and clears as soon as the host acknowledges i
     vi.useRealTimers();
   }
 });
+
+// Feature: Desktop Inbox aggregated environment health strip.
+// Unit tier: verifies zero footprint when healthy, collapsible multi-alert aggregation,
+// direct repair action callback, and per-alert dismissal without disturbing Inbox section DOM.
+it('renders EnvironmentHealthStrip only when alerts exist, supports expand, action, and dismiss', () => {
+  const onAction = vi.fn();
+  const onDismiss = vi.fn();
+  const baseProps: Parameters<typeof TaskInbox>[0] = {
+    sessions: [{ id: 't1', title: 'Task 1', status: 'active' } as Session],
+    priorityContext: { runningSessionIds: new Set(), attentionSessionIds: new Set(['t1']) },
+    runningSessionIds: new Set(),
+    attachedSessionIds: new Set(),
+    notifications: new Set(),
+    onSessionClick: () => {},
+    onAction: () => {},
+    onRename: () => {},
+    onTogglePin: () => {},
+    onScheduleAction: () => {},
+    onHealthAlertAction: onAction,
+    onDismissHealthAlert: onDismiss,
+  };
+
+  const view = render(<TaskInbox {...baseProps} healthAlerts={[]} />);
+  expect(screen.queryByTestId('inbox-environment-health')).toBeNull();
+
+  const alerts = [
+    {
+      id: 'provider-auth',
+      kind: 'provider-auth' as const,
+      severity: 'error' as const,
+      fingerprint: 'provider-auth:openai',
+      titleKey: 'ccAgent.sidebar.inbox.health.providerAuthSingleTitle',
+      titleParams: { name: 'Codex' },
+      descriptionKey: 'ccAgent.sidebar.inbox.health.providerAuthSingleDesc',
+      actionLabelKey: 'ccAgent.sidebar.inbox.health.actions.reconnect',
+      action: { type: 'navigate' as const, path: '/settings?tab=providers&connect=openai' },
+    },
+    {
+      id: 'github-auth',
+      kind: 'github-auth' as const,
+      severity: 'warning' as const,
+      fingerprint: 'github-auth:gh-not-logged-in:3',
+      titleKey: 'ccAgent.sidebar.inbox.health.githubNotLoggedInTitle',
+      descriptionKey: 'ccAgent.sidebar.inbox.health.prAffectedDesc',
+      descriptionParams: { count: 3 },
+      actionLabelKey: 'ccAgent.sidebar.inbox.health.actions.connectGithub',
+      action: { type: 'open-github-connect' as const },
+    },
+  ];
+
+  view.rerender(<TaskInbox {...baseProps} healthAlerts={alerts} />);
+  // Does not pollute Inbox <section> list.
+  expect(view.container.querySelectorAll('section')).toHaveLength(4);
+  const strip = screen.getByTestId('inbox-environment-health');
+  const toggle = strip.querySelector('button[aria-expanded]')!;
+  expect(toggle.getAttribute('aria-expanded')).toBe('false');
+  fireEvent.click(toggle);
+  expect(toggle.getAttribute('aria-expanded')).toBe('true');
+
+  fireEvent.click(screen.getByRole('button', { name: 'ccAgent.sidebar.inbox.health.actions.connectGithub' }));
+  expect(onAction).toHaveBeenCalledWith(alerts[1].action, alerts[1]);
+
+  const dismissButtons = screen.getAllByRole('button', { name: 'ccAgent.sidebar.inbox.health.dismiss' });
+  fireEvent.click(dismissButtons[0]);
+  expect(onDismiss).toHaveBeenCalledWith('provider-auth:openai');
+});

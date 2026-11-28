@@ -163,6 +163,31 @@ it.each(['subscription', 'apiKey'] as const)('merges from %s through the existin
   expect(window.electronAPI.subscriptionAccounts.command).not.toHaveBeenCalledWith(expect.objectContaining({ action: 'merge' }));
 });
 
+// Unit: the pool settings and the mixed-account directory can both report the
+// same target after a key owns native accounts. One menu row must issue the mixed command.
+it('offers a target only once and prefers the mixed merge command', async () => {
+  const source = 'openai-sub-12345678';
+  const target = 'fixture-key';
+  vi.mocked(window.electronAPI.maker.listProviders).mockResolvedValue({ providers: [
+    { id: target, name: 'OpenAI', connected: true, subscriptionAccountPool: 'openai' },
+  ] } as Awaited<ReturnType<typeof window.electronAPI.maker.listProviders>>);
+  // A billing refusal is a successful membership save, not a successful Key test.
+  const command = vi.fn(async () => ({ ok: true, probe: { ok: false, code: 'QUOTA_EXCEEDED', billingCode: 'credit_balance_exhausted' } }));
+  const onDone = vi.fn();
+  Object.assign(window.electronAPI, { providerGroup: { command } });
+  render(<MergeProviderButton kind="openai" providerId={source} providerName="Subscription" onDone={onDone} openAiAccounts={[
+    { id: source, name: 'Subscription', kind: 'subscription', included: true, connected: true },
+    { id: target, name: 'OpenAI', kind: 'apiKey', included: false, connected: true, mergeTarget: true },
+  ]} />);
+  await waitFor(() => expect(window.electronAPI.maker.listProviders).toHaveBeenCalled());
+  await act(async () => { fireEvent.pointerDown(screen.getByRole('button', { name: 'subscriptionAccounts.placement.mergeInto' }), { button: 0, pointerType: 'mouse' }); });
+  expect(screen.getAllByRole('menuitem', { name: 'OpenAI' })).toHaveLength(1);
+  fireEvent.click(screen.getByRole('menuitem', { name: 'OpenAI' }));
+  await waitFor(() => expect(command).toHaveBeenCalledWith({ action: 'account-merge', providerId: source, targetProviderId: target }));
+  await waitFor(() => expect(onDone).toHaveBeenCalledTimes(1));
+  expect(window.electronAPI.subscriptionAccounts.command).not.toHaveBeenCalled();
+});
+
 it('continues to use the subscription placement command for same-kind providers', async () => {
   vi.mocked(window.electronAPI.maker.listProviders).mockResolvedValue({ providers: [
     { id: 'openai', name: 'Existing subscription', connected: true },
@@ -195,7 +220,9 @@ describe('SubscriptionAccountsSection usage', () => {
     const providerId = 'target-key-fixture';
     const apiAccount = (id: string, connectionId: string) => ({
       ...view.accounts[0]!, id, identity: connectionId, usage: undefined,
-      apiKey: { connectionId, checks: [{ agent: 'pi' as const }] },
+      apiKey: { connectionId, checks: [{ agent: 'pi' as const, ...(connectionId === providerId ? {} : {
+        result: { ok: false, code: 'QUOTA_EXCEEDED' as const, billingCode: 'credit_balance_exhausted' as const }, blocked: true as const,
+      }) }] },
     });
     vi.mocked(window.electronAPI.subscriptionAccounts.command).mockResolvedValue({
       providerId, configured: true, strategy: 'expiring',
@@ -205,6 +232,7 @@ describe('SubscriptionAccountsSection usage', () => {
     const [own, merged] = await screen.findAllByTestId('subscription-account');
     expect(within(own).getByRole('button', { name: /settings.providers.custom.test.button/ })).toBeTruthy();
     expect(within(own).queryByRole('button', { name: 'providerGroup.member.moreAria' })).toBeNull();
+    expect(within(merged).getByText('openAiAccountGroup.billingPaused')).toBeTruthy();
     fireEvent.pointerDown(within(merged).getByRole('button', { name: 'providerGroup.member.moreAria' }),
       { button: 0, ctrlKey: false, pointerType: 'mouse' });
     expect(await screen.findByRole('menuitem', { name: 'subscriptionAccounts.remove' })).toBeTruthy();

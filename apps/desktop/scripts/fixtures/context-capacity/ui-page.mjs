@@ -10,6 +10,7 @@ export default {
     'src/renderer/lib/modelDefinitions': 'export const getModelsForVendor = () => [];',
   },
   cases: {
+    'remote-task-quota': { about: 'Remote task bound to the second account, original account paused', data: { usage: 'remote' } },
     'plugin-quotas': { about: 'ACP account quotas beside its reported context window', data: { usage: 'quotas' }, viewport: { width: 320, height: 420 } },
     'plugin-balance': { about: 'Zero available balance', data: { usage: 'balance' } },
     'plugin-missing': { about: 'Engine provides neither account nor context data', data: { usage: 'missing' } },
@@ -44,6 +45,16 @@ export default {
       const trigger = footer.getByRole('button');
       await trigger.waitFor();
       assert.match(await footer.innerText(), /12%/);
+      if (ui.data.usage === 'remote') {
+        assert.match(await trigger.innerText(), /98%/);
+        await ui.capture('entry', { locator: footer });
+        await trigger.click();
+        const card = page.getByTestId('quota-hover-card');
+        await card.waitFor();
+        assert.match(await card.innerText(), /98%/);
+        await ui.capture('details', { locator: card });
+        return;
+      }
       assert.match(await trigger.innerText(), ui.data.usage === 'balance' ? /CNY\s*0[.,]00/ : /(?:6天|6d)[\s\S]*0%/);
       await ui.capture('entry', { locator: footer });
       if (ui.data.usage === 'balance') {

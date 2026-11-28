@@ -1127,6 +1127,12 @@ export async function handleInvoke(
   // 被控端透传回来的错误:IPC_ERROR 的 message 已是 `[CODE] message` 形态,
   // 直接抛原样 Error 让 renderer extractIpcError 解码;其余隧道码走映射
   if (result.error.code === 'IPC_ERROR') {
+    if (channel === 'local-db:messages:around-client-id' && scheduling && typeof scheduling === 'object'
+        && 'requireStructuredHistoryMiss' in scheduling && scheduling.requireStructuredHistoryMiss === true) {
+      // The renderer must distinguish an exact wire miss from a legacy error
+      // containing the same prefix before using it as resend evidence.
+      throwIpcError('INTERNAL', result.error.message);
+    }
     throw new Error(result.error.message);
   }
   if (channel === 'local-db:messages:around-client-id' && result.error.code === 'NOT_FOUND') {
