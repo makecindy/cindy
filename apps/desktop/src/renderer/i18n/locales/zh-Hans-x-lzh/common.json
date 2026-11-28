@@ -4865,68 +4865,7 @@
         "hint": "经已系之飞书或 Lark 机器人，私遣君一讯；唯于窗口失焦时遣之。",
         "disabledHint": "须先设 Bot，并遣之一讯以成其系。"
       },
-      "bind": "系之",
-      "groups": {
-        "title": "群议",
-        "description": "为机器人所在之某群另定项目、模型与权柄。",
-        "rules": "未另定者：已系项目之群从「案与模型」中该项目之设，未系项目之群从上方「新言谈配置」与「群议新差事之权柄档」。群之主线与其话题共一群之设。",
-        "expand": "展",
-        "collapse": "收",
-        "groupCount_one": "{{count}} 群",
-        "groupCount_other": "{{count}} 群",
-        "customCount_one": "{{count}} 群另设",
-        "customCount_other": "{{count}} 群另设",
-        "refresh": "重读",
-        "loading": "正读群录…",
-        "loadFailed": "群录未能读得，请稍后点「重读」再试。",
-        "saveFailed": "群设未能存",
-        "notConnected": "机器人连上后方能列其所在之群。下方唯列已另设之群。",
-        "empty": "机器人尚未入群。引之入群后，再来此设之。",
-        "listPermission": "未能读机器人所在之群：请于飞书开放平台为此应用开「获取群组信息」之权。下方先列机器人曾用之群。",
-        "listUnavailable": "暂未能读机器人所在之群，下方先列机器人曾用之群。",
-        "unnamed": "无名之群（{{id}}）",
-        "summaryModel": "另定模型",
-        "summaryPermission": "另定权柄",
-        "expandAria": "设「{{name}}」",
-        "searchLabel": "寻群",
-        "searchPlaceholder": "以群名寻之",
-        "customHeading": "另设者",
-        "followHeading": "从渠道之设者",
-        "showMore": "再显 {{count}} 个",
-        "showLess": "收",
-        "noMatch": "未见名含「{{query}}」之群",
-        "project": {
-          "label": "项目",
-          "follow": "言谈",
-          "missing": "{{name}}（已离侧栏）",
-          "hint": "于群中初 @ 机器人、开新话题或发 /new 时乃行，进行之差事不移。择项目，则模型与权柄常从此项目于「案与模型」之设；择「言谈」，则差事置于机器人之言谈目录，从上方「新言谈配置」。唯可择侧栏中本机之项目。"
-        },
-        "model": {
-          "label": "模型与思之深浅",
-          "hintFollow": "从「新言谈配置」。于此换模型或思之深浅，则唯及此群。",
-          "hintFollowProject": "从项目「{{project}}」于「案与模型」之设。于此换模型或思之深浅，则唯及此群。",
-          "hintProjectUnavailable": "项目「{{project}}」于「案与模型」所定之模型今不可用。可往彼处重择，或于此为此群另择之。",
-          "hintFixed": "此群另定模型。群中未另改模型之差事，得下一言时即换之；新差事径用之。"
-        },
-        "permission": {
-          "label": "权柄",
-          "hintFollow": "今从「群议新差事之权柄档」。唯及此后于此群新开之差事，既有差事请于群中以 /permission 切换。",
-          "hintFollowProject": "今从项目「{{project}}」于「案与模型」之权柄。唯及此后于此群新开之差事，既有差事请于群中以 /permission 切换。",
-          "hintFixed": "此群另定权柄。唯及此后于此群新开之差事，既有差事请于群中以 /permission 切换。"
-        },
-        "fullAccessConfirm": {
-          "title": "令「{{name}}」以完全访问行之乎？",
-          "description": "此后于此群新开之差事皆径行，不复逐项确认，群中无论何人 @ 机器人皆然。群议之言由成员掌之，请确保群中之人皆可信。",
-          "confirm": "改为完全访问",
-          "cancel": "罢"
-        },
-        "widerConfirm": {
-          "title": "宽「{{name}}」之权柄乎？",
-          "description": "此后于此群新开之差事，将由「{{current}}」易为「{{next}}」，群中无论何人 @ 机器人皆然。群议之言由成员掌之，请确保群中之人皆可信。",
-          "confirm": "仍改之",
-          "cancel": "罢"
-        }
-      }
+      "bind": "系之"
     },
     "wechatBot": {
       "title": "个人微信",
@@ -7395,7 +7334,7 @@
     "tina": {
       "chat": {
         "title": "言谈",
-        "description": "不落任何仓库之纯言谈；于 Slack、Telegram、X 或飞书 / Lark 中选 chat 即可用之，每条言谈 lane 各对应一差事。"
+        "description": "不系于具体项目夹之纯对谈；诸消息应用未指项目时，默认依此模型与权限。"
       },
       "prefs": {
         "agentLabel": "Agent",
@@ -7526,7 +7465,8 @@
       "groups": {
         "cindy": "官设",
         "personal": "私",
-        "plugins": "法器"
+        "plugins": "法器",
+        "shared": "共用设置"
       },
       "tips": {
         "cindy": "由 Cindy 所供并维护。无须自建机器人或备凭证，依引导连接即可用。",
@@ -7567,6 +7507,190 @@
       "plugins": {
         "rowHint": "登入、绑定与各群各私语之设，皆在法器页中。",
         "open": "启法器"
+      },
+      "replyTarget": {
+        "label": "孰为应答",
+        "cindy": "常务",
+        "cindyHint": "于侧栏任务录中处置，依下文项目与模型而行；亦可委诸伙伴，循其记忆与设定答复。",
+        "companionHint": "私语入 {{name}} 之对谈，群议由 {{name}} 各自料理；模型、权限与记忆皆从 {{name}}。",
+        "openCompanion": "{{name}} 之设置",
+        "summary": "{{name}} 应答",
+        "missingCompanion": "已不可用之同伴",
+        "busy": "此机器人尚有待发之言或行中之差事，待其毕再易。",
+        "updateFailed": "未能更易。请察同伴尚可用，再试之。",
+        "companionSettingsHint": "模型、权限与记忆"
+      },
+      "nav": {
+        "back": "返",
+        "backTo": "返至 {{page}}"
+      },
+      "pageDescription": "于微信、飞书、Telegram 诸传讯之器，传言于 Cindy 或汝之同伴。",
+      "list": {
+        "connected": "已连",
+        "available": "尚可连者",
+        "choose": "择一传讯之器",
+        "cindyReplies": "常务",
+        "official": "官方机器人：{{status}}",
+        "projects": "项目与模型",
+        "projectsHint": "传讯之器或法器于项目中启新差事时，各项目所用之模型与权柄",
+        "hint": {
+          "both": "官方机器人，或汝自建之机器人",
+          "slack": "用 Cindy 官方机器人，登 Slack 即可",
+          "x": "用 Cindy 官方之号，许之则于 X 上应汝",
+          "wechat": "扫码以连汝之微信",
+          "personal": "用汝自建之机器人"
+        },
+        "companionDedicated": "伙伴专属：{{names}}"
+      },
+      "apps": {
+        "telegram": "Telegram",
+        "slack": "Slack",
+        "discord": "Discord",
+        "x": "X",
+        "wechat": "微信",
+        "feishu": "飞书 / Lark",
+        "wecom": "企业微信",
+        "dingtalk": "钉钉"
+      },
+      "ways": {
+        "official": "Cindy 官方机器人",
+        "personal": "汝自有之机器人",
+        "personalHint": "汝于平台自建之机器人，名与像由汝定。",
+        "personalSetupTitle": "用汝自有之机器人",
+        "setUp": "设之",
+        "personalSetupHint": {
+          "telegram": "于 BotFather 建机器人，填其令牌与汝之用户 ID。",
+          "discord": "于 Discord 开发者后台建机器人，填其令牌。",
+          "feishu": "于飞书或 Lark 开放平台建应用，填其 App ID 与 App Secret。"
+        },
+        "officialHint": "毋庸自建应用，径与阁下 Cindy 账号相系。"
+      },
+      "rows": {
+        "model": "模型",
+        "groupReply": "群中何时应答",
+        "persona": "名与性情",
+        "behavior": "表情与引语",
+        "receiveHere": "于此机收言",
+        "receiveHereHint": "关之则机器人于此机下线，凭证仍存，可随时复开。",
+        "unbind": "解此机器人之系",
+        "ownerId": "吾之用户 ID {{id}}",
+        "discordChannels": "服务器频道",
+        "discordChannelsHint": "机器人可于何频道行事",
+        "notifications": "告示",
+        "on": "已开",
+        "off": "未开",
+        "project": "项目",
+        "projectDialogue": "对话（不择项目）",
+        "projectMissing": "已不在侧栏之项目",
+        "projectHint": "新差事入此项目，模型与权限依其于「项目与模型」之设。",
+        "projectDialogueHint": "新差事置于机器人自有之对话目录，用下之模型。",
+        "officialProjectHint": "新差事置于此项目，模型与权柄从其于「项目与模型」之设。凡 Cindy 官方机器人共此一项。",
+        "officialProjectDialogueHint": "新差事置于言谈目录，模型与权柄从「项目与模型」中「言谈」一行。凡 Cindy 官方机器人共此一项。",
+        "projectFullAccessTitle": "改用「{{name}}」之权限乎？",
+        "projectFullAccessDescription": "「{{name}}」于「项目与模型」为完全访问：此后于{{app}}所启之差事将径行，不复逐条确认。可先于「项目与模型」改为 Auto 或 Ask。",
+        "projectFullAccessConfirm": "仍用之",
+        "projectFullAccessCancel": "取消",
+        "projectUpdateFailed": "未能换项目，请察其尚在侧栏，再试之。",
+        "chats": "群议",
+        "channels": "频道",
+        "projectModel": "模型与权限",
+        "projectModelHint": "于「项目与模型」统一更改",
+        "projectModelFollow": "从「{{name}}」",
+        "groupReplyHint": "定机器人在群中惟点名方答，抑或悉数回应"
+      },
+      "chats": {
+        "title": "群议",
+        "description": "为机器人所在之某群另定项目、模型、权柄，及群中他人可否发问。",
+        "rules": "未另定者：已系项目之群从「案与模型」中该项目之设，未系项目之群从机器人之「项目」，机器人亦未择项目者，从其「模型」之设。群之主线与其话题共一群之设。",
+        "expand": "展",
+        "collapse": "收",
+        "groupCount_one": "{{count}} 群",
+        "groupCount_other": "{{count}} 群",
+        "customCount_one": "{{count}} 群另设",
+        "customCount_other": "{{count}} 群另设",
+        "refresh": "重读",
+        "loading": "正读群录…",
+        "loadFailed": "群录未能读得，请稍后点「重读」再试。",
+        "saveFailed": "群设未能存",
+        "notConnected": "机器人连上后方能列其所在之群。下方唯列已另设之群。",
+        "empty": "机器人尚未入群。引之入群后，再来此设之。",
+        "listPermission": "未能读机器人所在之群：请于飞书开放平台为此应用开「获取群组信息」之权。下方先列机器人曾用之群。",
+        "listUnavailable": "暂未能读机器人所在之群，下方先列机器人曾用之群。",
+        "unnamed": "无名之群（{{id}}）",
+        "summaryModel": "另定模型",
+        "summaryPermission": "另定权柄",
+        "expandAria": "设「{{name}}」",
+        "searchLabel": "寻群",
+        "searchPlaceholder": "以群名寻之",
+        "customHeading": "另设者",
+        "followHeading": "从渠道之设者",
+        "showMore": "再显 {{count}} 个",
+        "showLess": "收",
+        "noMatch": "未见名含「{{query}}」之群",
+        "project": {
+          "label": "项目",
+          "follow": "从机器人",
+          "missing": "{{name}}（已离侧栏）",
+          "hint": "于群中初 @ 机器人、开新话题或发 /new 时乃行，进行之差事不移。择项目，则模型与权柄常从此项目于「案与模型」之设；择「从机器人」，则从机器人之「项目」，机器人未择项目者，差事置于其言谈目录，从其「模型」之设。唯可择侧栏中本机之项目。",
+          "followWith": "从机器人（{{project}}）"
+        },
+        "model": {
+          "label": "模型与思之深浅",
+          "hintFollow": "从「新言谈配置」。于此换模型或思之深浅，则唯及此群。",
+          "hintFollowProject": "从项目「{{project}}」于「案与模型」之设。于此换模型或思之深浅，则唯及此群。",
+          "hintProjectUnavailable": "项目「{{project}}」于「案与模型」所定之模型今不可用。可往彼处重择，或于此为此群另择之。",
+          "hintFixed": "此群另定模型。群中未另改模型之差事，得下一言时即换之；新差事径用之。",
+          "reset": "模型复从"
+        },
+        "permission": {
+          "label": "权柄",
+          "hintFollow": "今从「群议新差事之权柄档」。唯及此后于此群新开之差事，既有差事请于群中以 /permission 切换。",
+          "hintFollowProject": "今从项目「{{project}}」于「案与模型」之权柄。唯及此后于此群新开之差事，既有差事请于群中以 /permission 切换。",
+          "hintFixed": "此群另定权柄。唯及此后于此群新开之差事，既有差事请于群中以 /permission 切换。",
+          "hintFollowBot": "今从机器人自身之权柄。唯及此后于此群新启之差事，旧差事于群中以 /permission 易之。",
+          "followWith": "从 · {{mode}}"
+        },
+        "fullAccessConfirm": {
+          "title": "令「{{name}}」以完全访问行之乎？",
+          "description": "此后于此群新开之差事皆径行，不复逐项确认，群中无论何人 @ 机器人皆然。群议之言由成员掌之，请确保群中之人皆可信。",
+          "confirm": "改为完全访问",
+          "cancel": "罢"
+        },
+        "widerConfirm": {
+          "title": "宽「{{name}}」之权柄乎？",
+          "description": "此后于此群新开之差事，将由「{{current}}」易为「{{next}}」，群中无论何人 @ 机器人皆然。群议之言由成员掌之，请确保群中之人皆可信。",
+          "confirm": "仍改之",
+          "cancel": "罢"
+        },
+        "descriptionChannels": "为机器人所事之某频道另定项目、模型、权柄，及频道中他人可否发问。",
+        "kindGroup": "群议",
+        "kindChannel": "频道",
+        "channelCount_one": "{{count}} 频道",
+        "channelCount_other": "{{count}} 频道",
+        "membersCount_one": "{{count}} 群许众发问",
+        "membersCount_other": "{{count}} 群许众发问",
+        "unnamedChannel": "无名之频道（{{id}}）",
+        "searchPlaceholderChannels": "以频道名索之",
+        "emptyLocal": "尚未记机器人所在之群。于群中 @ 机器人一言，此处乃列其群。",
+        "emptyChannels": "尚无所开之频道。先于「服务器频道」中开机器人所事之频道。",
+        "members": {
+          "label": "群众亦可发问",
+          "hint": "开之，则群中他人 @ 机器人亦得其答，用此群之项目与模型。其问至多以「自审」行之，有所作为者仍待汝许；汝自问者从此群之权柄。",
+          "guard": "汝不言于群时，群众连问满 {{limit}} 次则暂止，待汝于群中 @ 机器人一言或点「复」。号令唯听于汝。",
+          "paused": "已暂止答群众：彼连问 {{limit}} 次，汝皆未言于群。",
+          "resume": "复",
+          "chip": "群众可问",
+          "pausedChip": "群众暂止",
+          "resumeFailed": "复之未成，请稍后再试"
+        },
+        "statusCustom": "已另定",
+        "shownHint": "已示前 {{shown}} / {{total}}，书其名可筛之。",
+        "fieldsNote": "易项目、模型、权柄者，群中下次新启差事乃行，进行之差事不移。"
+      },
+      "companionBots": {
+        "title": "伙伴专属机器人",
+        "description": "此类机器人另设于伙伴设置中，升级前已备者照常运行。",
+        "manage": "往理"
       }
     },
     "shortcuts": {
@@ -13268,7 +13392,11 @@
         "unbound": "可将官方 @askmycindy 所收君之提问交予 {{name}}。",
         "managed": "X 之问由同伴处理。可于该同伴之传讯之所规制中更改所系。",
         "riskBody": "X 之问将用同伴之共享记忆、才能与工作目录，回答公开。勿经 X 处理私密信息。专线不直接用同伴之私聊记录。"
-      }
+      },
+      "handedOver": "{{apps}} 已于设置中付 {{name}} 应答。",
+      "handedOverSeparator": "、",
+      "manageInSettings": "往设置理之",
+      "handedOverHint": "下文所添乃 {{name}} 独用之机器人，与设置中者各行不悖。"
     },
     "voiceMode": {
       "realtime": {
@@ -13962,7 +14090,8 @@
         },
         "companion": {
           "retryLater": "请少顷再试"
-        }
+        },
+        "membersPaused": "群众之问暂止矣，待主人归而续之 🙈"
       },
       "hook": {
         "interaction": {
