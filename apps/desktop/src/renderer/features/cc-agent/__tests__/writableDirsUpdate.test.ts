@@ -36,6 +36,24 @@ describe('applyDirectoryGrantUpdate', () => {
 });
 
 describe('createWritableDirRemovalQueue', () => {
+  it('saves each removal after the same task directory is added back', async () => {
+    const queue = createWritableDirRemovalQueue();
+    const path = '/fixture/output';
+    let saved = [path];
+    const apply = vi.fn(async (next: string[]) => (saved = [...next]));
+    const remove = () => queue.remove({ sessionId: 'task', path, observed: saved, apply });
+
+    await expect(remove()).resolves.toEqual([]);
+    await expect(queue.update('task', saved, async () => {
+      saved = [path];
+      return saved;
+    })).resolves.toEqual([path]);
+    await expect(remove()).resolves.toEqual([]);
+
+    expect(apply.mock.calls).toEqual([[[], [path]], [[], [path]]]);
+    expect(saved).toEqual([]);
+  });
+
   it('serializes rapid removals against the latest accepted grant set', async () => {
     const queue = createWritableDirRemovalQueue();
     const order: string[] = [];
