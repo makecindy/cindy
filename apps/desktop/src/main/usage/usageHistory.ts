@@ -54,6 +54,7 @@ import {
   displayModelName,
   getSubscriptionValuePriceFor,
   isSubscriptionUsageModel,
+  isValueEstimateUsageRow,
 } from './usageModelKeys.js';
 export {
   claudeSubscriptionUsageModelKey,
@@ -667,7 +668,7 @@ export async function readUsageHistoryWith(
   }
   const pricedModels = rawModels.map(row => {
     let money = row.money;
-    if (row.agentKind !== 'acp' && (!modelCutoff || row.day >= modelCutoff) && isSubscriptionUsageModel(row.model) && money.kind !== 'value-estimate' && money.amount === 0) {
+    if ((!modelCutoff || row.day >= modelCutoff) && isValueEstimateUsageRow(row) && money.kind !== 'value-estimate' && money.amount === 0) {
       const quote = getSubscriptionValuePriceFor(usageAgentKind(row.agentKind), displayModelName(row.model), pricing, row.day, priceOverrides);
       money = computePriceQuoteTurnMoney(row, quote) ?? money;
     }
@@ -802,7 +803,7 @@ export async function readUsageHistoryWith(
     agg.outputTokens += row.outputTokens;
     agg.cacheReadTokens += row.cacheReadTokens;
     agg.cacheCreateTokens += row.cacheCreateTokens;
-    if (isSubscriptionUsageModel(row.model)) {
+    if (isValueEstimateUsageRow(row)) {
       const estimate = row.money.kind === 'value-estimate' ? row.money : null;
       if (estimate?.amount) {
         const estimates = subscriptionEstimatesByKey.get(key) ?? [];
@@ -827,7 +828,7 @@ export async function readUsageHistoryWith(
     const agentKind = usageAgentKind(row.agentKind);
     const model = agentKind === 'acp' ? row.model : displayModelName(row.model);
     const apiMoney = row.money.kind === 'actual-cost' ? row.money : zeroActual();
-    const subscriptionEstimateMoney = isSubscriptionUsageModel(row.model) && row.money.kind === 'value-estimate'
+    const subscriptionEstimateMoney = isValueEstimateUsageRow(row) && row.money.kind === 'value-estimate'
       ? row.money : zeroEstimate();
     const money = apiMoney.amount > 0 ? apiMoney : subscriptionEstimateMoney;
     return {

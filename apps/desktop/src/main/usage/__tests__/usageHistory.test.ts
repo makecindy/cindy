@@ -86,6 +86,18 @@ vi.mock('../referenceModelPricing', () => ({
           outputPerMtok: 10,
         }
       : undefined,
+  getPluginEngineValuePrice: (model: string) =>
+    model === 'gemini-4-carbon'
+      ? {
+          providerId: 'google-gemini-api',
+          modelId: model,
+          currency: 'USD',
+          source: 'subscription-reference',
+          approximate: true,
+          inputPerMtok: 2,
+          outputPerMtok: 10,
+        }
+      : undefined,
   getSubscriptionDirectValuePrice: (model: string, agent?: string) =>
     model === 'xai/grok-4.3' || (model === 'grok-4.6' && agent === 'pi')
       ? {
@@ -420,6 +432,29 @@ describe('readUsageHistoryWith', () => {
     const widget = buildUsageWidgetSnapshot(view, Date.now(), () => null, scope.modelSeries)?.usage;
     expect(widget?.daily).toEqual([{ ...expectedDay, models: [0, 0], modelTokens: [11635, 0] }]);
     expect(widget?.models).toEqual([{ name: usage.model, harness: 'acp' }]);
+  });
+
+  // Unit: plugin engines (agentKind acp) report tokens only. A model the registry prices once is
+  // valued at that tariff as an estimate, never as spend; an unknown model keeps tokens only.
+  it('values plugin engine tokens at the model reference price as an estimate', async () => {
+    const result = await readUsageHistoryWith(makeDeps({
+      getModelUsageSince: async () => [
+        modelRow(TODAY, 'acp', 'gemini-4-carbon', actual(0), { inputTokens: 1_000_000, outputTokens: 100_000 }),
+        modelRow(TODAY, 'acp', 'gemini-4-hydrogen', actual(0), { inputTokens: 5_000 }),
+      ],
+    }), { currency: 'USD' });
+    const carbon = result.models.find(model => model.model === 'gemini-4-carbon');
+    expect(carbon?.money.amount).toBe(0);
+    expect(carbon?.estimatedMoney).toMatchObject({ amount: 3, currency: 'USD', kind: 'value-estimate' });
+    expect(result.models.find(model => model.model === 'gemini-4-hydrogen')?.estimatedMoney).toBeNull();
+    expect(result.totals.last30Days.amount).toBe(0);
+    const day = result.modelDaily.find(row => row.model === 'gemini-4-carbon');
+    expect(day?.apiMoney.amount).toBe(0);
+    expect(day?.subscriptionEstimateMoney.amount).toBe(3);
+    const scope = usageScope(result, [TODAY], []);
+    expect(scope.models['7']).toEqual(expect.arrayContaining([
+      expect.objectContaining({ harness: 'acp', money: 3 }),
+    ]));
   });
 
   it('keeps media fees in actual totals and model detail without inventing chat tokens', async () => {

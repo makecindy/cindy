@@ -4,6 +4,7 @@ import { BUNDLED_CATALOG, type ModelRegistry } from '@cindy/model-providers';
 import type { ModelAccessGatewayModel } from '../modelAccess.js';
 import {
   gatewayPricingCatalog,
+  pluginEngineReferencePriceQuote,
   providerReferencePriceQuote,
   registryPricingCatalog,
 } from '../modelPriceQuote.js';
@@ -323,3 +324,29 @@ it('quotes explicit Anthropic Batch caches and preserves the standard tariff', (
   expect(providerReferencePriceQuote('anthropic', 'claude-opus-5-5', registry, { at: '2026-10-22', variant: 'batch' }))
     .toMatchObject({ currency: 'USD', inputPerMtok: 2, outputPerMtok: 10 });
 });
+
+// Unit: plugin engines report only a model id. The bundled registry lists gemini-4-carbon under one
+// official provider; an id listed by two providers, or none, must not borrow a price.
+describe('pluginEngineReferencePriceQuote', () => {
+  const registry = BUNDLED_CATALOG.modelRegistry as ModelRegistry;
+
+  it('uses the single official tariff of a registry model id', () => {
+    expect(pluginEngineReferencePriceQuote('gemini-4-carbon', registry, '2026-11-28')).toMatchObject({
+      providerId: 'google-gemini-api', modelId: 'gemini-4-carbon', currency: 'USD',
+      source: 'subscription-reference', inputPerMtok: 2, outputPerMtok: 10,
+    });
+  });
+
+  it('gives no price to unknown or ambiguous model ids', () => {
+    expect(pluginEngineReferencePriceQuote('not-a-model', registry)).toBeUndefined();
+    const carbon = registry.models.find(entry => entry.id === 'google-gemini-api/gemini-4-carbon')!;
+    const duplicated = {
+      ...registry,
+      models: [...registry.models, { ...carbon, id: 'other/gemini-4-carbon', routes: carbon.routes.map(route => ({ ...route, providerId: 'other' })) }],
+    } as ModelRegistry;
+    const otherPrice = providerReferencePriceQuote('other', 'gemini-4-carbon', duplicated, { officialOnly: true });
+    expect(otherPrice).toBeDefined();
+    expect(pluginEngineReferencePriceQuote('gemini-4-carbon', duplicated)).toBeUndefined();
+  });
+});
+

@@ -15,6 +15,7 @@ import {
   modelCostQuote,
   modelPricingKey,
   registryPricingCatalog,
+  pluginEngineReferencePriceQuote,
   providerReferencePriceQuote as registryQuoteForModel,
   subscriptionDirectPriceQuote,
 } from '../../shared/modelPriceQuote.js';
@@ -207,6 +208,11 @@ export function getClaudeSubscriptionValuePrice(
   return getCodexProviderSubscriptionValuePrice(
     'anthropic', modelId, pricing, at, overrides, 'claude-code',
   );
+}
+
+/** Value estimate for a plugin engine turn: the model's single official registry tariff. */
+export function getPluginEngineValuePrice(modelId: string, at?: string | Date): ModelPriceQuote | undefined {
+  return pluginEngineReferencePriceQuote(modelId, getActiveCatalog().modelRegistry, at);
 }
 
 export function getSubscriptionDirectValuePrice(

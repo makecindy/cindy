@@ -8,6 +8,7 @@ import {
   getClaudeSubscriptionValuePrice,
   getCodexProviderSubscriptionValuePrice,
   getCodexSubscriptionValuePrice,
+  getPluginEngineValuePrice,
   getSubscriptionDirectValuePrice,
   type ModelPriceOverridesSnapshot,
 } from './referenceModelPricingCore.js';
@@ -17,6 +18,14 @@ const CODEX_BILLING_MODEL_SUFFIX_RE = /#billing=(api|subscription)$/;
 
 export function displayModelName(model: string): string {
   return model.replace(CODEX_BILLING_MODEL_SUFFIX_RE, '');
+}
+
+/**
+ * Rows whose money is a value estimate rather than a charge: subscription turns and plugin-engine
+ * turns (agentKind `acp`, no billing suffix — the plugin owns the account).
+ */
+export function isValueEstimateUsageRow(row: { agentKind: string; model: string }): boolean {
+  return row.agentKind === 'acp' || isSubscriptionUsageModel(row.model);
 }
 
 /** `#billing=subscription` 标记行 —— Claude / Codex 订阅共用同一后缀语义。 */
@@ -51,6 +60,8 @@ export function piSubscriptionUsageModelKey(model: string): string {
  *     再依次回退 Codex(OpenAI)与 Anthropic registry 参考价
  *     (Pi 可跨三类 provider,按模型 id 路由,依次尝试不会串价)
  *   - claude-code → Anthropic registry 参考价
+ *   - acp(插件引擎)→ 模型 id 在 registry 中唯一的官方价(Cindy 不知道插件账号怎么计费,
+ *     只作价值估算)
  * 各级都 miss → undefined(该行只显示 token,不臆造金额)。
  */
 export function getSubscriptionValuePriceFor(
@@ -60,7 +71,9 @@ export function getSubscriptionValuePriceFor(
   at?: string | Date,
   overrides?: ModelPriceOverridesSnapshot,
 ): ModelPriceQuote | undefined {
-  if (agentKind === 'acp' || agentKind === 'media' || agentKind === 'auxiliary') return undefined;
+  // Plugin engines report only a model id; value it at that model's official API tariff.
+  if (agentKind === 'acp') return getPluginEngineValuePrice(model, at);
+  if (agentKind === 'media' || agentKind === 'auxiliary') return undefined;
   if (agentKind === 'codex') {
     return (
       getSubscriptionDirectValuePrice(model, 'codex', pricing, at, overrides) ??

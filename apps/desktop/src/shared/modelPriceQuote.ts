@@ -545,3 +545,31 @@ export function subscriptionDirectPriceQuote(
       }
     : undefined;
 }
+
+/**
+ * Reference value for a plugin engine's turn (agentKind `acp`). The plugin owns the account and
+ * its billing, so Cindy only knows the model id it reported. When exactly one provider in the
+ * Model Registry lists that id with an official tariff, that tariff values the tokens as a
+ * value estimate (like subscription turns); an unknown or ambiguous id gets no value.
+ */
+export function pluginEngineReferencePriceQuote(
+  modelId: string,
+  registry: ModelRegistry | null | undefined,
+  at?: string | Date,
+): ModelPriceQuote | undefined {
+  const id = modelId.trim().toLowerCase();
+  if (!id || !registry) return undefined;
+  const providers = new Set<string>();
+  for (const model of registry.models ?? []) {
+    for (const route of model.routes ?? []) {
+      if (route.providerId !== 'xd' && route.modelId?.toLowerCase() === id) providers.add(route.providerId);
+    }
+  }
+  const quotes = [...providers].flatMap((providerId) => {
+    const quote = providerReferencePriceQuote(providerId, modelId, registry, { at, officialOnly: true });
+    return quote ? [quote] : [];
+  });
+  if (quotes.length !== 1) return undefined;
+  return { ...quotes[0], modelId, source: 'subscription-reference' };
+}
+
