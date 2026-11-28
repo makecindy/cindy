@@ -53,7 +53,8 @@ function uriPath(uri: string): string | null {
 
 function toUri(pathname: string): string {
   const url = new URL('file:///');
-  url.pathname = pathname;
+  // pathname 的设置不转义 `%`：`50%41.md` 会被对方解成 `50A.md`。
+  url.pathname = pathname.replace(/%/g, '%25');
   return url.href;
 }
 

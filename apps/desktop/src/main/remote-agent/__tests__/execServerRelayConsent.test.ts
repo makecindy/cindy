@@ -384,6 +384,8 @@ describe('managed Skills in the agent project Skill directory (#13718)', () => {
     fs.mkdirSync(path.join(skill, 'scripts'), { recursive: true });
     fs.writeFileSync(path.join(skill, 'SKILL.md'), '---\nname: learn\n---\n');
     fs.writeFileSync(path.join(skill, 'scripts', 'run.sh'), 'echo hi\n');
+    // 文件名里的 `%41` 不能被对方解成 `A`。
+    fs.writeFileSync(path.join(skill, 'scripts', '50%41.md'), '');
     const agentDir = `${shadow}/.agents/skills/cindy-learn`;
     const project = root;
     const context = setup(undefined, {
@@ -414,6 +416,7 @@ describe('managed Skills in the agent project Skill directory (#13718)', () => {
           { path: uri(`${shadow}/.agents/skills/cindy-learn`), kind: 'directory' },
           { path: uri(`${shadow}/.agents/skills/cindy-learn/SKILL.md`), kind: 'file' },
           { path: uri(`${shadow}/.agents/skills/cindy-learn/scripts`), kind: 'directory' },
+          { path: uri(`${shadow}/.agents/skills/cindy-learn/scripts/50%2541.md`), kind: 'file' },
           { path: uri(`${shadow}/.agents/skills/cindy-learn/scripts/run.sh`), kind: 'file' },
         ],
         errors: [],
