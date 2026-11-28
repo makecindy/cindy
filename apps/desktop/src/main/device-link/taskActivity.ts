@@ -3,7 +3,8 @@ import {
   type HostTaskActivity,
   type HostTaskActivityCompanion,
 } from '@cindy/device-link';
-import { taskInboxSection } from '@cindy/maker-shared/live-task-priority';
+import { taskInboxSection, teammateInboxSection } from '@cindy/maker-shared/live-task-priority';
+import { resolveTeammateStatus } from '@cindy/maker-shared/teammate-status';
 import type { AgentIslandSessionSnapshot } from '../../shared/agentIsland.js';
 import type { SessionInboxFacts } from '../localDb/sessionInboxFacts.js';
 
@@ -21,18 +22,14 @@ export function keepInboxCountedTasks(
   return rows.filter((row) => {
     const facts = factsFor(row.sessionId);
     if (!facts) return true;
+    if (facts.status === 'archived') return false;
     const waiting = row.phase === 'needs-interaction';
     const failed = row.phase === 'error' && row.attention;
     const running = row.phase === 'running';
     const unread = row.phase === 'completed' && row.attention;
-    const teammateMain = facts.kind === 'canonical';
-    const section = taskInboxSection(facts, {
-      // The teammate strip can surface and clear unread main conversations.
-      waiting: waiting || failed || (teammateMain && unread),
-      running,
-      unread,
-      teammate: teammateMain || facts.kind === 'teammate-task',
-    }, now);
+    const section = facts.kind === 'canonical'
+      ? teammateInboxSection(resolveTeammateStatus({ waiting, failed, working: running, unread }), facts, now)
+      : taskInboxSection(facts, { waiting: waiting || failed, running, unread, teammate: facts.kind === 'teammate-task' }, now);
     return section === 'inbox' || section === 'working';
   });
 }
