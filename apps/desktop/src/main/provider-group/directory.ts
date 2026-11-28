@@ -23,7 +23,7 @@ import {
 } from '../../shared/providerGroup.js';
 import type { DeviceLinkDeviceView } from '../../shared/deviceLinkIpc.js';
 import type { ClaudeSubscriptionUsageSnapshot } from '../../shared/claudeSubscriptionUsage.js';
-import { providerWeeklyQuotaSource } from '../../shared/providerQuotaSource.js';
+import { providerUsageReaderSource } from '../../shared/providerQuotaSource.js';
 import { isSameProvider } from './matching.js';
 import type { ProviderGroupCodexUsageSnapshot, ProviderGroupShareQuotaSnapshot, ProviderGroupUsageInvalidation } from './usage.js';
 
@@ -397,7 +397,7 @@ export function createProviderGroupDirectory(deps: ProviderGroupDirectoryDeps): 
       if (settled[index]) return settled[index];
       const value = partial[index];
       if (value?.state === 'ok' && member.kind !== 'share' && value.view
-        && providerWeeklyQuotaSource(value.view) === 'codex' && deps.peekCodexUsage) {
+        && providerUsageReaderSource(value.view) === 'codex' && deps.peekCodexUsage) {
         return { ...value, codexUsage: deps.peekCodexUsage(member) };
       }
       return value ?? pendingMember(member);
@@ -436,7 +436,7 @@ export function createProviderGroupDirectory(deps: ProviderGroupDirectoryDeps): 
             ? { ...resolved, shareQuota: await deps.readShareQuota(member).catch(() => null) } : resolved;
         }
         if (resolved.state !== 'ok' || !resolved.view?.auth) return resolved;
-        const source = providerWeeklyQuotaSource(resolved.view);
+        const source = providerUsageReaderSource(resolved.view);
         if (source === 'codex' && deps.readCodexUsage) {
           return { ...resolved, codexUsage: await deps.readCodexUsage(member).catch(() => null) };
         }

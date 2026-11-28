@@ -38,7 +38,7 @@ import { desktopTransferCodec } from './transferCodec';
 import { desktopInvokeTransferMetrics } from './invokeTransferMetrics';
 import { watchNetworkChanges } from './networkChanges';
 import path from 'node:path';
-import { app, BrowserWindow } from 'electron';
+import { app, BrowserWindow, session } from 'electron';
 import type WebSocket from 'ws';
 import {
   DeviceLinkClient,
@@ -195,6 +195,7 @@ import { startProviderShareRuntime, stopProviderShareRuntime } from './providerS
 import { refreshProviderShareHost, ownedProviderShareGuestAccess } from './providerShareHost.js';
 import { providerShareGuestPeer, providerShareHostPeer, shortDeviceRef } from '@cindy/device-link';
 import { tapRemoteModelCatalogChange } from './broadcast-tap.js';
+import { parseModelCatalogKey } from '../../shared/controlledModelCatalog.js';
 import { handleProviderMetadataSourcePush, invokeProviderMetadataContinuity, invalidateProviderMetadataContinuity, onProviderDirectoryDenied, onProviderMetadataDenied, isTemporaryProviderMetadataFailure } from './providerMetadataContinuity.js';
 import { retireControlOffRetention } from './controlOffRetention.js';
 import { bumpDeviceAccessGeneration, noteControllerAccessAllowed, syncRemoteControlAccessGeneration } from './remoteControlAccess.js';
@@ -227,9 +228,10 @@ import { rejoinRemovedDevice, type AgentNetRejoinOutcome } from './deviceRejoin.
 import { activeSelfHostedRelay } from './selfHostedRelayRouting.js';
 import { currentRelayFrameAuth } from './selfHostedRelayFrameAuth.js';
 import { installAgentNetMediaRouting } from './agentNetMedia.js';
-import { bindAgentNetSharing, stopAgentNetSharing, agentNetSharingRoute } from './agentNetSharing.js';
+import { bindAgentNetSharing, stopAgentNetSharing, agentNetSharingRoute, agentNetProviderShareRoutes } from './agentNetSharing.js';
 import { installAgentNetSharingPolicy } from './agentNetSharingPolicy.js';
-import { isAgentNetActive, agentNetAllowsLegacy, agentNetRequiresEncryption, createAgentNetOrLegacySocket, noteAgentNetIdentityRefused, rejoinOfficialAgentNet, agentNetSelectionKey, agentNetShouldUseLegacyPeer, agentNetShouldProbeLegacyPeer, agentNetPeerSnapshot, agentNetPeerRoutes,
+import { linkedProviderShareAdmission, linkedProviderShareSessionSocket, setLinkedShareControlTransport } from './agentNetLinkedShares.js';
+import { isAgentNetActive, agentNetAllowsLegacy, agentNetRequiresEncryption, createAgentNetOrLegacySocket, noteAgentNetIdentityRefused, noteOfficialAgentNetRemoved, rejoinOfficialAgentNet, agentNetSelectionKey, agentNetShouldUseLegacyPeer, agentNetShouldProbeLegacyPeer, agentNetPeerSnapshot, agentNetPeerRoutes,
   agentNetTransportAttestation, verifyAgentNetTransportAttestation, agentNetPrefersPrimary, useAgentNetSessions, agentNetSession,
   agentNetPeerRoute, agentNetRelayStalled, agentNetPeerConnectedAt, connectAgentNetSessionPeer, agentNetPeerState, agentNetNotifyCoverage, agentNetListedPhones, agentNetNetworkChanged, agentNetRelayConnected, onAgentNetRelayChange, onAgentNetPathChange, agentNetRelayRoute, setAgentNetDuplicateIdentityCooldown } from './agentNetRuntime.js';
 import { AgentNetSessionLinks, agentNetSessionLane, outboundOnSession, routeSessionPeers, type PeerLinks } from '@cindy/agent-net';
@@ -247,6 +249,7 @@ import {
 export { setBusyProbe };
 
 const log = createLogger('device-link');
+let canUpgradeLinkedShareBackgroundLink: (peer: string) => boolean = () => false;
 // relay 建连专用的 DNS 回退(成功缓存 / 失败与慢解析回退最近成功地址)。
 const relayDnsLookup = createDnsFallbackLookup({ log });
 
@@ -539,7 +542,7 @@ onProviderMetadataDenied(target => {
   // Existing result metadata and local push, not a new wire permission or a link close.
   broadcast(DEVICE_LINK_PUSH.REMOTE_PUSH, { deviceId, channel: 'maker:provider:changed',
     payload: { providerContinuity: { stale: true, remainingMs: 0 } } });
-  tapRemoteModelCatalogChange(target, 'maker:provider:changed', false);
+  if (!parseModelCatalogKey(target)) tapRemoteModelCatalogChange(target, 'maker:provider:changed', false);
 });
 // Local IPC metadata, never accepted from a push payload or sent over the wire.
 const sharedHostStreams = new Map<string, { streamId: string; epoch: number }>();
@@ -939,6 +942,8 @@ export interface DeviceLinkServiceOptions {
 }
 
 let stopNetworkWatch: (() => void) | null = null;
+/** Re-uploads this computer's phone share when the remote-control switch decides whether it counts. */
+let taskActivityShareChanged: (() => void) | null = null;
 
 export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): void {
   installAgentNetMediaRouting();
@@ -991,7 +996,9 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
     // Capture both the endpoint and credential: a later account/realm switch
     // must never re-label an old host snapshot with the new account's token.
     const baseUrl = officialDeviceLinkApiBase();
-    const body = projectHostTaskActivity(island.getLocalTaskOverview());
+    // The phone counts only tasks it can open: with remote control off this computer's tasks are
+    // unreachable from the phone, so it reports an empty share instead of a stale or partial one.
+    const body = projectHostTaskActivity(readDeviceLinkSettings().remoteControlEnabled ? island.getLocalTaskOverview() : []);
     const key = JSON.stringify([baseUrl, authManager.getCurrentUserId(), body]);
     if (lastActivityUpload?.key === key && Date.now() - lastActivityUpload.at < 55_000) return;
     try {
@@ -1004,7 +1011,12 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
     }
   });
   const unsubscribeTaskActivity = options.taskActivity?.subscribeTaskOverview(taskActivityPublisher.changed);
-  onQuit('task-activity-push', () => { unsubscribeTaskActivity?.(); taskActivityPublisher.dispose(); });
+  taskActivityShareChanged = taskActivityPublisher.changed;
+  onQuit('task-activity-push', () => {
+    taskActivityShareChanged = null;
+    unsubscribeTaskActivity?.();
+    taskActivityPublisher.dispose();
+  });
   remoteCredentialHost.currentToken = () => {
     const membership = authManager.getCurrentUserId(), token = authManager.getAccessToken();
     return membership && token ? { realm: authManager.getActiveAuthRealm(), membership, authDevice: authManager.getDeviceId(), token } : null;
@@ -1170,6 +1182,20 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
   // 文件直传：两台都开着 Agent-Net 的同账号电脑之间，文件字节走会话，不再起 WebRTC（filePeer.ts streamTransport）。
   // 按这次调用实际走的路判断：Device Link 上还留着这个对端的链路时调用照旧走 Device Link，字节也照旧走 WebRTC。
   setFilePeerStreamTransport((peer) => !isScopedPeer(peer) && outboundOnSession(routedClient, sessionLinks, peer));
+  // 换到 Agent-Net 的 Device Link 分享：附件跟着这次控制链路实际走的路（受邀者看本机发起的链路，分享者看对方建来的链路）。
+  setLinkedShareControlTransport((peer) => parseProviderSharePeer(peer)?.role === 'host'
+    ? outboundOnSession(routedClient, sessionLinks, peer) : sessionLinks.ownsInbound(peer));
+  const linkedUpgradeAttemptAt = new Map<string, number>();
+  canUpgradeLinkedShareBackgroundLink = (peer: string): boolean => {
+    if (linkTornDown || parseProviderSharePeer(peer)?.role !== 'host' || sessionLinks.ownsOutbound(peer)
+      || linkedProviderShareSessionSocket(peer) == null || snapshotSubscriptions(peer).length > 0
+      || routedClient.getReliableSendQueueDepth(peer) > 0 || routedClient.hasPendingRequestsTo(peer)) return false;
+    const now = performance.now();
+    if (now - (linkedUpgradeAttemptAt.get(peer) ?? -Infinity) < 60_000) return false;
+    linkedUpgradeAttemptAt.set(peer, now);
+    if (linkedUpgradeAttemptAt.size > 512) linkedUpgradeAttemptAt.delete(linkedUpgradeAttemptAt.keys().next().value!);
+    return true;
+  };
   // 另一台电脑在用本机设备身份(同一系统镜像装机、MachineGuid 相同)：确认后提示用户给这台电脑
   // 换身份，并放慢被顶替后的重连。没被反复顶替时什么都不做。
   identityConflictMonitor = createDeviceIdentityConflictMonitor({
@@ -1441,6 +1467,7 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
     // Agent-Net 关着重建，由 Device Link 自己决定（还被删着的 Device Link 自己会再报「已移除」，重新登录过的照常连上）。
     // 「仅使用 Agent-Net」时没有 Device Link 可退，照旧停着。
     if (issue?.kind === 'device-removed' && primaryUsesEncryptedTransport && noteAgentNetIdentityRefused('relay closed 4410')) {
+      if (!activeSelfHostedRelay()) noteOfficialAgentNetRemoved();
       setTimeout(() => restartDeviceLinkForRelayChange(), 0);
     }
   });
@@ -1754,7 +1781,12 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
       linkTornDown = false;
       stopSharingPolicy?.();
       stopSharingPolicy = installAgentNetSharingPolicy(async request => {
-        if (!arbiter?.isOwner() || linkTornDown || !agentNetSharingRoute(request.kind, request.resourceId)) return false;
+        if (!arbiter?.isOwner() || linkTornDown) return false;
+        // A Device Link share moved to Agent-Net: only the key its guest registered over the share's
+        // authenticated Device Link connection, and only while this computer's V1 member book still admits it.
+        const linked = linkedProviderShareAdmission(request);
+        if (linked === false) return false;
+        if (linked === null && !agentNetSharingRoute(request.kind, request.resourceId)) return false;
         if (request.kind === 'provider-share') {
           await refreshProviderShareHost('agent-net-transport');
           return !!ownedProviderShareGuestAccess(providerShareGuestPeer(request.resourceId, request.scope.memberId, request.guestDeviceId));
@@ -1783,12 +1815,31 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
       startProviderShareRuntime(broadcast, { invoke: remoteBackgroundInvoke });
       client?.start();
       stopNetworkWatch?.();
+      const readSystemProxy = async (): Promise<string | null> => {
+        const ses = session?.defaultSession;
+        if (!ses || typeof ses.resolveProxy !== 'function') return null;
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        try {
+          const result = await Promise.race([
+            ses.resolveProxy('https://cindy.invalid'),
+            new Promise<null>((resolve) => {
+              timer = setTimeout(() => resolve(null), 500);
+              timer.unref?.();
+            }),
+          ]);
+          return typeof result === 'string' ? result.trim() : null;
+        } catch {
+          return null;
+        } finally {
+          if (timer) clearTimeout(timer);
+        }
+      };
       stopNetworkWatch = watchNetworkChanges(() => {
         if (linkTornDown || !arbiter?.isOwner() || !authManager.getAuthState().isAuthenticated) return;
         client?.notifyNetworkChanged();
-        // Agent-Net 主连接自己探测（Device Link 的探测在那条连接里由本机回答，到不了中转）。关着时不做任何事。
+        // Agent-Net 主连接与分享连接自己探测（Device Link 的探测在那条连接里由本机回答，到不了中转）。关着时不做任何事。
         agentNetNetworkChanged();
-      });
+      }, { readProxy: readSystemProxy });
       // 可靠帧可能在 ownership 接管前到达(那时非持有者,重建被 shouldAbort 挡掉):
       // 接管后对本机仍在控制、且 link 未就绪的设备补发一次重建,避免启动竞态留下
       // 半开链路,不必等对端下一帧。
@@ -1991,6 +2042,7 @@ function teardownActiveLink(): void {
   identityConflictMonitor?.reset();
   if (!client || linkTornDown) return;
   linkTornDown = true;
+  canUpgradeLinkedShareBackgroundLink = () => false;
   // 拓扑页立刻清空;下一段链路从头比较结构。
   peerLinksPush.dispose();
   broadcast(DEVICE_LINK_PUSH.PEER_LINKS_CHANGED, { links: [], relayRttMs: null });
@@ -2072,15 +2124,20 @@ export function getDeviceLinkPeerLinks(includeTraffic = false): DeviceLinkPeerLi
   // Device Link 的中转只有 WebSocket。Agent-Net 主连接还没报上来时不写，不猜。
   const agentNetRoute = primaryUsesEncryptedTransport ? agentNetRelayRoute() : null;
   const relayTransport = !relayProtocol ? undefined : primaryUsesEncryptedTransport ? agentNetRoute?.via : 'websocket';
+  const allPeerLinks = client.getPeerLinkSnapshots();
+  const providerShareRoutes = primaryUsesEncryptedTransport
+    ? agentNetProviderShareRoutes(allPeerLinks, (peer) => client!.connectionFor(peer) === client)
+    : [];
   return {
     ...traffic,
     // 拓扑只画同账号设备;跨账号 peer(共享任务 / 供应商分享)不在这页。
-    links: client.getPeerLinkSnapshots().filter((link) => !isScopedPeer(link.deviceId)).map((link) => {
+    links: allPeerLinks.filter((link) => !isScopedPeer(link.deviceId)).map((link) => {
       const core = client!.connectionFor(link.deviceId) === client ? agentNetPeerSnapshot(link.deviceId) : null;
       const encrypted = primaryUsesEncryptedTransport && client!.connectionFor(link.deviceId) === client;
       return core ? { ...link, ...core, encrypted } : { ...link, encrypted };
     }),
     ...(primaryUsesEncryptedTransport ? { agentNetRoutes: agentNetPeerRoutes() } : {}),
+    ...(providerShareRoutes.length > 0 ? { providerShareRoutes } : {}),
     relayProtocol,
     ...(relayTransport ? { relayTransport } : {}),
     relayRttMs: primaryUsesEncryptedTransport ? agentNetRoute?.rttMs ?? null : client.getRelayRttMs(),
@@ -2185,7 +2242,7 @@ function connectionIssueForRenderer(issue: ConnectionIssuePayload | null): Rende
  * 账号与中转按点击时的为准：每一跳请求发出前、每个等待点之后都核对，中途切号就整个停下（2026-11-23 review）。
  * 重连只恢复主连接，独立的共享任务与供应商连接继续运行。
  */
-export function rejoinThisDevice(): Promise<{ agentNet: AgentNetRejoinOutcome }> {
+export function rejoinThisDevice(options?: { agentNet?: boolean }): Promise<{ agentNet: AgentNetRejoinOutcome }> {
   const scope = activeOwnerScopeKey(), selection = agentNetSelectionKey(), agentNetWasActive = isAgentNetActive();
   const assertCurrent = () => {
     if (activeOwnerScopeKey() !== scope || isAppSessionBoundaryPending() || agentNetSelectionKey() !== selection
@@ -2194,7 +2251,7 @@ export function rejoinThisDevice(): Promise<{ agentNet: AgentNetRejoinOutcome }>
   return rejoinRemovedDevice({
     selfHostedRelaySelected: () => activeSelfHostedRelay() !== null,
     officialFetch: (path, opts) => serverApiFetch(path, { ...opts, baseUrl: () => { assertCurrent(); return officialDeviceLinkApiBase(); } }),
-    rejoinAgentNet: () => rejoinOfficialAgentNet(),
+    rejoinAgentNet: () => rejoinOfficialAgentNet({ force: options?.agentNet === true }),
     agentNetRequired: () => agentNetRequiresEncryption(),
     restartConnection: () => {
       if (!client || !arbiter?.isOwner() || !authManager.getAuthState().isAuthenticated) return;
@@ -2271,6 +2328,7 @@ export async function setRemoteControlEnabled(enabled: boolean, assertCurrent?: 
   // 本地刚做过的动作重复 enforce 无害,同时能捕获这条竞态窗口里的外部变更。
   pollExternalSettingsChange();
   broadcast(DEVICE_LINK_PUSH.CONTROL_ENABLED_CHANGED, { remoteControlEnabled: readDeviceLinkSettings().remoteControlEnabled });
+  taskActivityShareChanged?.();
   log.info(`remote control ${enabled ? 'enabled' : 'disabled'}`);
   if (enabled) noteLocalNetworkControlEnabled();
 }
@@ -2414,6 +2472,7 @@ function pollExternalSettingsChange(): void {
     broadcast(DEVICE_LINK_PUSH.CONTROL_ENABLED_CHANGED, { remoteControlEnabled });
     client.sendPresence({ remoteControlEnabled });
     if (!remoteControlEnabled) dropAllControllers(client, 'toggle-off');
+    taskActivityShareChanged?.();
     log.info(
       `remote control ${remoteControlEnabled ? 'enabled' : 'disabled'} (external settings change)`,
     );
@@ -2921,7 +2980,7 @@ async function backgroundInvokeDevice(deviceId: string, channel: string, args: u
 
 async function backgroundInvokeDeviceLive(deviceId: string, channel: string, args: unknown[], options?: { preSend?: () => void; beforeDispatch?: () => void }): Promise<InvokeResultPayload> {
   options?.preSend?.();
-  if (!client?.isLinkReady(deviceId)) {
+  if (!client?.isLinkReady(deviceId) || canUpgradeLinkedShareBackgroundLink(deviceId)) {
     assertBackgroundLinkAccepted(await openRemoteLink(deviceId), {
       hasOutboundSubscriptions: () => snapshotSubscriptions(deviceId).length > 0,
       closeLink: () => closeRemoteLink(deviceId),

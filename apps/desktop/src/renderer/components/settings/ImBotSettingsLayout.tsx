@@ -2,6 +2,7 @@ import { Lightbulb } from 'lucide-react';
 import type { ReactNode, Ref } from 'react';
 import { useTranslation } from 'react-i18next';
 
+import { Badge } from '@/components/ui/badge';
 import { SettingsPageHeader } from '@/components/ui/settings-rows';
 
 import type { ImBotSettingsGroup } from './ImBotSection';
@@ -22,9 +23,9 @@ export function ImBotSettingsFrame({
     <div className="flex flex-col gap-2">
       <SettingsPageHeader
         title={t(imBotSettings.imBot.sectionKey)}
-        adornment={<span className="rounded-full border border-[var(--settings-badge-border)] bg-[var(--settings-badge-bg)] px-2 py-px text-10 font-medium uppercase leading-[1.5] tracking-wide text-[var(--text-secondary)]">
+        adornment={<Badge tone="outline" size="xs" className="bg-[var(--settings-badge-bg)]">
           {t('settings.imBot.beta')}
-        </span>}
+        </Badge>}
       />
       {context}
       <div key={contentKey} className="mt-4 flex flex-col gap-8">

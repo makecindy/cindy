@@ -8,12 +8,9 @@ import {
   isMobileAuthOwnerCurrent,
   subscribeMobileAuthOwner,
 } from "@/auth/authOwnerGeneration";
-import { useDeviceLink } from "@/device-link/DeviceLinkContext";
+import { useDeviceLink, type DeviceLinkInvokeOptions } from "@/device-link/DeviceLinkContext";
 import { parseSharedTaskPeer } from "@cindy/device-link";
-import {
-  createMobileMakerTransport,
-  type RemoteInvoke,
-} from "@/device-link/mobileMakerTransport";
+import { createMobileMakerTransport } from "@/device-link/mobileMakerTransport";
 import {
   formatRemoteError,
   isAutoRecoveringRemoteError,
@@ -26,6 +23,7 @@ import {
 } from "./durableOutboxDelivery";
 import {
   mobileDurableOutbox,
+  getCurrentMobileOutboxRecords,
   isDurableOutboxCreationHeld,
   discardOutboxUploads,
   cleanupOutboxResources,
@@ -51,8 +49,10 @@ import {
 import { remoteSessionStore } from "./remoteSessionStore";
 import { unarchiveSessionAfterSend, type SessionPatchInvoke } from "./unarchiveAfterSend";
 import { cacheOutboxHistory } from "./outboxHistoryCache";
+import { readLegacyOutboxHistory } from "./outboxHistoryConfirmation";
 import { validateOutboxResourceBinding } from './outboxResourceBinding';
 import { findRemoteHistoryView } from "./remoteHistoryViews";
+import { endOutboxBackgroundSend, hasOutboxBackgroundSend, syncOutboxLeftInBackground } from './outboxBackgroundSend';
 import type { DurableOutboxRecord } from "./durableOutbox";
 import {
   canConnectOutboxPeer,
@@ -107,19 +107,12 @@ export function MobileOutboxBridge() {
       invoke: (deviceId, channel, args, options) => latest.current.link.invoke(deviceId, channel, args, options),
       readSession: (record) => maker(record).getSession(record.item.sessionId),
       isForeground: () => AppState.currentState !== "background" && AppState.currentState !== "inactive",
+      canContinueInBackground: hasOutboxBackgroundSend,
       canConnect: (deviceId) => canConnectOutboxPeer(latest.current.link, deviceId),
       isCreationHeld: isDurableOutboxCreationHeld,
       hasCreationTask: (sessionId) => getNewSessionCreationTask(sessionId) !== null,
       needsReconciliation,
     });
-    const invoke: RemoteInvoke = async (deviceId, channel, args) => {
-      guard();
-      const result = await latest.current.link.invoke(deviceId, channel, args, {
-        preSend: guard,
-      });
-      guard();
-      return result as never;
-    };
     const ownerInvoke: SessionPatchInvoke = async (deviceId, channel, args, options) => {
       guard();
       const result = await latest.current.link.invoke(deviceId, channel, args, {
@@ -131,10 +124,10 @@ export function MobileOutboxBridge() {
       guard();
       return result as never;
     };
-    const maker = (r: DurableOutboxRecord) =>
+    const maker = (r: DurableOutboxRecord, options?: DeviceLinkInvokeOptions) =>
       createMobileMakerTransport({
         deviceId: r.deviceId,
-        invoke: invokeOwned(r),
+        invoke: invokeOwned(r, options),
       });
     // Learned from this host's own projection / enqueue replies. A first send in
     // a task whose boundary is known needs no projection round trip.
@@ -167,8 +160,9 @@ export function MobileOutboxBridge() {
       isCurrent,
       canRun,
       sessionPolicy,
-      projection: async (r) => {
-        return invoke<DeliveryProjection>(
+      connectionEpoch: connectionEpochFor,
+      projection: async (r, fresh) => {
+        return invokeOwned(r, fresh ? { noResultCache: true } : undefined)<DeliveryProjection>(
           r.deviceId,
           "maker:input:get-projection",
           [
@@ -293,8 +287,10 @@ export function MobileOutboxBridge() {
           guard();
         }
       },
-      enqueue: async (r) => {
-        const projection = await maker(r).input.enqueue(
+      // A later projection can confirm delivery even if the enqueue reply was lost.
+      accepted: async (record) => { endOutboxBackgroundSend(record); },
+      enqueue: async (r, preSend) => {
+        const projection = await maker(r, preSend ? { preSend } : undefined).input.enqueue(
           r.item.sessionId,
           r.prepared!,
           {
@@ -304,6 +300,7 @@ export function MobileOutboxBridge() {
               : {}),
           },
         );
+        endOutboxBackgroundSend(r);
         // 电脑已接收这条消息(离线时是重连后才送达):在已归档任务里发消息即取消归档。
         // 绑账号归属而不绑这条待发记录:消息对账后记录会被清走,取消归档不能随之失效。
         void unarchiveSessionAfterSend(
@@ -324,24 +321,39 @@ export function MobileOutboxBridge() {
         ]);
         return result.inputDeliveryCancelled === true;
       },
-      history: async (r) => {
+      history: async (r, fresh) => {
         const authority = remoteSessionStore.captureSessionMessageAuthority(
           r.item.sessionId,
         );
-        const messages = await maker(r).aroundMessagesByClientId(
+        const messages = await maker(r, fresh ? { noResultCache: true } : undefined).aroundMessagesByClientId(
           r.item.sessionId,
           r.item.clientId,
           { radius: 1 },
         );
         guard();
         const found = messages.some(
-          (m) => m.clientId === r.item.clientId && m.role === "user",
+          (m) => m.sessionId === r.item.sessionId && m.clientId === r.item.clientId && m.role === "user",
         );
         if (found)
           remoteSessionStore.mergeMessages(r.item.sessionId, messages, {
             authority,
           });
         return found;
+      },
+      legacyHistory: async (r) => {
+        const sessionId = r.item.sessionId;
+        const authority = remoteSessionStore.captureSessionMessageAuthority(sessionId);
+        const epoch = connectionEpochFor(r.deviceId);
+        const row = await readLegacyOutboxHistory(r, invokeOwned(r, {
+          legacyHistoryConfirmation: true,
+          noResultCache: true,
+          preSend: () => {
+            if (connectionEpochFor(r.deviceId) !== epoch) throw new Error("OUTBOX_STALE_HISTORY");
+          },
+        }));
+        if (!row) return false;
+        remoteSessionStore.mergeMessages(sessionId, [row], { authority });
+        return true;
       },
       cacheHistory: (r) => cacheOutboxHistory(r.deviceId, r.item.sessionId, r.item.clientId,
         () => isCurrent() && mobileDurableOutbox.getSnapshot().includes(r)),
@@ -402,6 +414,18 @@ export function MobileOutboxBridge() {
       clearInterval(timer);
       appState.remove();
       messageLeases.dispose();
+    };
+  }, [accountId, owner]);
+  // Remember texts still on the way when the user leaves, including one saved
+  // just after Home from the editor's hidden snapshot.
+  useEffect(() => {
+    const sync = () => syncOutboxLeftInBackground(getCurrentMobileOutboxRecords(), AppState.currentState === "background");
+    sync();
+    const off = mobileDurableOutbox.subscribe(sync);
+    const appState = AppState.addEventListener("change", sync);
+    return () => {
+      off();
+      appState.remove();
     };
   }, [accountId, owner]);
   useEffect(() => {

@@ -465,6 +465,10 @@ describe('provider weekly quota identity and windows', () => {
       ),
     ).toBe('codex');
     expect(providerWeeklyQuotaSource(provider('anthropic'))).toBe('claude');
+    // Providers Cindy creates for one subscription account copy the built-in entry (same source
+    // and auth) under a new id; only subscriptionPool marks them.
+    expect(providerWeeklyQuotaSource(provider('anthropic-sub-0000abcd', { subscriptionPool: 'anthropic' }))).toBe('claude');
+    expect(providerWeeklyQuotaSource(provider('openai-sub-0000abcd', { subscriptionPool: 'openai' }))).toBe('codex');
     expect(providerWeeklyQuotaSource(provider('xai'))).toBe('xai');
     expect(providerWeeklyQuotaSource(provider('opencode-go', {
       source: 'user',

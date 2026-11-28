@@ -210,6 +210,54 @@ rollback candidate; its compatibility with data created by a newer build must st
 There is no automatic rollback of data and no automatic cleanup of worktrees. When finished, use
 normal Git worktree management after checking no process or uncommitted work depends on the directory.
 
+### Forward a reviewed resolution to its source PR
+
+A combination may conflict even while every source PR merges cleanly with its own base.
+Keep those resolutions in the personal build. For a PR that also conflicts with its actual
+target (including a stacked target or a fork), use the separate maintainer CLI below.
+
+1. Run `node scripts/personal-build.mjs conflicts list /build/report.json` after a
+   completed composition. Save its JSON output outside Git. The inventory identifies the
+   repository, PR, frozen head, first-parent merge and conflicting paths. An existing build
+   report works as long as the checkout still has its Git objects. Keep any explicitly
+   excluded PRs out of the follow-up inventory.
+2. One existing follow-up can consume several inventories. Run
+   `node scripts/personal-build.mjs conflicts check /build/inventory.json --cache /state/checked.json`.
+   Append other inventory filenames to the command when they are in scope. The check groups
+   by repository and PR, queries its live state once, and reuses Git's conflict paths while
+   both remote tips and branch identities match. Treat an error as an incomplete run. Empty
+   `pending` with open PRs means wait; stop the follow-up when a successful run returns
+   `open: 0`. This command never updates a remote branch.
+3. For a pending record, prepare a detached worktree with the commands below. Review both
+   the original resolution and the candidate against the current PR. Git supplies the clean
+   merge of the real target; only the text inside matching conflict blocks is taken from
+   the recorded resolution. Context outside those blocks comes from the live merge. Check
+   that the chosen lines themselves do not depend on an unmerged feature. If the file type,
+   conflict or a boundary is ambiguous, the tool stops. Inspect that case separately; do
+   not copy the private merge commit or an entire file onto the PR.
+4. With explicit authority to update the source PR, run `push` against the same worktree.
+   Supply the affected project's actual test and typecheck commands as JSON argument arrays.
+   On Windows, bare `pnpm` starts the installed executable or the JS entry alongside a standard
+   npm/Corepack shim. For a custom or ambiguous installation, supply the absolute path to
+   `pnpm.exe` or pass the installed JS entry to Node as the first argument.
+   The command checks the reviewed tree, parents, PR identity and both remote tips, pushes
+   the candidate with ordinary Git fast-forward semantics, then reads the remote head back.
+   A moved branch requires a fresh comparison. If a push receipt is interrupted, recheck
+   the remote head against the candidate before trying again.
+
+```sh
+tool=scripts/personal-build.mjs
+node "$tool" conflicts prepare /build/report.json --repo app --pr 123 --worktree /work/review-123
+git -C /work/review-123 show --remerge-diff HEAD
+# Example for a Desktop change; select commands for the actual conflict.
+node "$tool" conflicts push /build/report.json --repo app --pr 123 --worktree /work/review-123 \
+  --test '["pnpm","--dir","apps/desktop","exec","vitest","run","path/to/affected.test.ts"]' \
+  --typecheck '["pnpm","--dir","apps/desktop","typecheck"]'
+```
+
+Use `--repo plugins` for the composed plugin repository. Preparing or checking a build
+does not schedule a follow-up, change a PR target, publish branches or merge PRs.
+
 ## Personal iPhone companion delivery
 
 The optional mobile step consumes the **same `report.json` and frozen source commit** as Desktop.
@@ -948,13 +996,13 @@ and the target phone before calling delivery successful.
   CHECKED_BUILD_REPORT`，要求监督锁可取得、应用与 runner 均已停止、报告和事务的 runtime
   key/digest 一致；只完成文件事务，不启动应用、不更改业务 journal。候选开始尝试执行后，
   数据兼容性未知仍禁止自动退回旧版。
-- 换壳后注销退役包的 LaunchServices 登记并重新登记固定安装路径；隔离 smoke 正常停止
-  后注销预览包，仍被别的实例使用则保留并警告。改名为 `.bundle` 本身不保证系统注销。
+- 换壳后同时注销退役包的 LaunchServices 与 PlugInKit（`Contents/PlugIns/*.appex`）登记并重新登记固定安装路径，同时向已注销退役扩展及停机换壳前残留的扩展进程发送 `SIGTERM` 以便系统加载新二进制；隔离 smoke 正常停止后同样注销预览包及其扩展，仍被别的实例使用则保留并警告。改名为 `.bundle` 本身不保证系统注销；新旧个人版复用同一 Electron `CFBundleVersion` 时，若旧备份的 `.appex` 仍留在 PlugInKit 中，系统会继续拉起旧版灵动岛扩展。
   系统登记失败不得阻断文件安装或旧版恢复：完成文件事务，在安装元数据记录
   `registrationPending`，由 doctor 提示、registry-clean 成功后清除；smoke 的登记错误
   写入 `registrationWarnings`，不改变候选启动结果。停止进程失败仍使 smoke 失败。
-  `doctor` 列出同 Bundle ID 的登记路径；显式 `registry-clean --config FILE` 只注销
-  同 ID 且未运行的副本：状态目录内或固定包同级受管备份前缀内的退役包允许旧/临时签名，
+  固定安装启动前还会非阻断地核对 PlugInKit 的 `<bundleId>.agent-activity` 登记，清理陈旧的受管/缺失副本。
+  `doctor` 列出同 Bundle ID 的 LaunchServices 登记路径、PlugInKit 扩展登记路径及遗留的同级 `.previous-*` 备份；显式 `registry-clean --config FILE` 只注销
+  同 ID 且未运行的副本（含其 `.appex` 扩展登记并结束退役扩展残留进程）：状态目录内或固定包同级受管备份前缀内的退役包允许旧/临时签名，
   其它位置仍要求同证书有效签名；同 ID 查询中已不存在的路径只注销陈旧登记。真实路径
   是固定包的别名、异 ID、运行中或身份不明的条目保留。固定包始终验证原签名和摘要。
   此命令不删除文件、不重置 TCC；登记查询限时 60 秒，注销/登记各限时 15 秒。
@@ -997,6 +1045,10 @@ PR 并冻结新 SHA，不能修改已验收候选来冒充新构建。
 停止旧应用前调用候选的真实 `assertSharedDevMigrationPolicy(..., ['--shared'])`；实际启动时
 再次检查。策略拒绝就保持旧应用运行，不靠 sandbox 验收绕过共享迁移规则。
 
+固定安装路径要更换运行包时，预检先用正式安装的复制方式在目标目录旁试装，并核对副本的内容、权限、符号链接和签名。
+macOS 使用系统 `ditto` 保留包内权限，监督进程可以继续用 `umask 077` 保护日志和备份。预检结束即清理临时副本；
+校验失败会在退出旧版及应用数据库迁移前中止。正式替换时仍重新验证实际安装的副本。
+
 使用固定安装路径时，两个手动命令还会用正式切换的参数和重定向输出读取候选启动器的策略。
 候选缺少冷启动保护会在旧版退出前被拒绝。macOS 受监督的源码启动给编译到首个窗口最多
 10 分钟，首次出现窗口后给登录和数据库就绪另计 3 分钟。明确的启动错误立即上报；
@@ -1022,8 +1074,21 @@ node scripts/personal-build.mjs manual-check --config FILE --report BUILD_REPORT
 默认只接受冻结 main 的迁移树。开发者本地显式例外可用
 `--approve-unmerged-migration-pr NUMBER` 绑定冻结 PR 的完整迁移树；还必须提供已提交的
 `scripts/personal-migration-allowlist.json`，计划固定其 SHA-256，并通过候选真实启动策略。
-仓库自带的启动策略仍拒绝未合入 SQL；此参数不会改写策略，也不提供个人批准清单。
+默认启动策略仍拒绝未合入 SQL；此参数不会改写策略，也不提供个人批准清单。
 本地例外的策略及清单不得混入通用分发，下一轮不得沿用不同迁移树的批准。
+
+已部署的个人版若使用经审核的独立迁移历史，可在启动用的 Git 仓库本地记录一次审核结果。
+先独立核对已部署的个人版和当时主线的迁移树、SQL、伴随脚本与日志，确认两者截至同一序号，
+再用两个提交的完整对象 ID（依次为个人版、主线）登记：
+
+```sh
+git config --local --replace-all cindy.reviewedMigrationPrefix "$reviewed_personal_commit $reviewed_upstream_commit"
+```
+
+登记适用于共享这份本地配置的工作树。显式 `--shared` 启动时，个人版须继承已审提交且迁移树完全相同；
+主线须继承已审基线，保留原迁移历史，只可连续追加日志条目和相应的 SQL、快照、伴随脚本。
+个人版迁移有工作区改动仍会被拒绝。此检查用于重新启动已部署版本；新迁移仍走上面的独立升级流程。
+两次提交的审核记录只存本地。要恢复默认策略，执行 `git config --local --unset-all cindy.reviewedMigrationPrefix`。
 
 `automatic/activation-events.jsonl` 保留迁移和启动阶段及原始失败。启动前失败只有在
 未尝试数据库升级时才能沿用安全恢复；迁移完成后，若首次启动未就绪且失败进程及其启动器已经退出，可重试同一候选一次。

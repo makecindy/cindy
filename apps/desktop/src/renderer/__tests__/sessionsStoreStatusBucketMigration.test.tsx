@@ -1574,4 +1574,39 @@ describe('sessionsStore status bucket migration', () => {
     expect(sessionsStore.getByFilter('archived')).toEqual([]);
     expect(mocks.list).toHaveBeenCalledTimes(2);
   });
+
+  // 2026-11-27 回归：后台归档或旧版对端推送携带数字型 updatedAt 时，useCCSessionsAllStatuses
+  // 此前因 b.updatedAt.localeCompare is not a function 导致整窗崩溃。
+  it('normalizes numeric or malformed updatedAt patches without crashing useCCSessionsAllStatuses', async () => {
+    const activeRow = session('acp-new', 'active', '2026-11-27T11:00:00.000Z');
+    const tidyRow = session('tidy-old', 'active', '2026-11-27T10:00:00.000Z');
+    mocks.list.mockImplementation(async (_limit, filter) =>
+      filter === 'active' ? [activeRow, tidyRow] : [],
+    );
+
+    const { result } = renderHook(() => useCCSessionsAllStatuses());
+    await waitFor(() => expect(result.current).toHaveLength(2));
+
+    const numericUpdatedAt = Date.parse('2026-11-27T12:00:00.000Z');
+    act(() => {
+      emitPatch('tidy-old', {
+        status: 'archived',
+        updatedAt: numericUpdatedAt as unknown as string,
+      });
+    });
+
+    await waitFor(() =>
+      expect(result.current.find((row) => row.id === 'tidy-old')?.status).toBe('archived'),
+    );
+    expect(result.current.map((row) => row.id)).toEqual(['tidy-old', 'acp-new']);
+    expect(result.current[0]?.updatedAt).toBe('2026-11-27T12:00:00.000Z');
+
+    // 非法非字符串 updatedAt 不应覆盖已有字符串，也不应导致排序报错。
+    act(() => {
+      emitPatch('acp-new', { updatedAt: Number.NaN as unknown as string });
+    });
+    expect(result.current.find((row) => row.id === 'acp-new')?.updatedAt).toBe(
+      '2026-11-27T11:00:00.000Z',
+    );
+  });
 });

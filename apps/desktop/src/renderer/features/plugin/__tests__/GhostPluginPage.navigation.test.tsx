@@ -484,8 +484,6 @@ describe('market action feedback', () => {
   });
 });
 
-// Unit: route unmount used to discard all catalog view state. Only IPC is
-// stubbed; the same page mounts again with its real catalog and search controls.
 // Unit / Codex 4584198380: Settings can remount the local Plugins pane
 // underneath Skills. Cached installed-tab prewarming and hidden revisions must
 // not query the catalog; activation resumes the existing page/count readers.
@@ -531,7 +529,9 @@ it('defers local catalog prewarming and hidden revisions until activation', asyn
   expect(query).toHaveBeenCalledTimes(reads);
 });
 
-it('restores tab, search, source and scroll together after leaving the plugin route', async () => {
+// Unit / reported route-return bug: visit the market, search, filter and scroll,
+// then reopen the real page. Detail-return coverage does not remount the route.
+it('reopens the installed list with a clean view while retaining catalog data after leaving the plugin route', async () => {
   const mounted = render(page('/plugins'));
   fireEvent.click(screen.getByRole('tab', { name: /settings.ghosts.page.marketSection/ }));
   await screen.findByRole('button', { name: detail.name });
@@ -541,13 +541,14 @@ it('restores tab, search, source and scroll together after leaving the plugin ro
   fireEvent.click(screen.getByRole('option', { name: 'settings.ghosts.market.publisherKind.official' }));
   await screen.findByRole('button', { name: detail.name });
   fireEvent.scroll(screen.getByRole('main'), { target: { scrollTop: 640 } });
+  const memory = pluginCatalogMemory(pluginCatalogOwnerKey('local', auth.dataOwnerId, auth.dataOwnerGeneration, 'en'), 'local');
+  const snapshot = memory.snapshot;
   mounted.unmount();
   render(page('/plugins'));
-  expect((screen.getByRole('textbox') as HTMLInputElement).value).toBe('Navigation');
-  expect(screen.getByRole('combobox', { name: /^settings\.ghosts\.page\.filtersAria/ }).textContent)
-    .toMatch(/^settings\.ghosts\.market\.publisherKind\.official\d*$/);
-  expect(screen.getByRole('main').scrollTop).toBe(640);
-  expect(screen.getByRole('button', { name: detail.name })).toBeTruthy();
+  expect(screen.getByRole('tab', { name: /settings.ghosts.page.installedSection/ }).getAttribute('aria-selected')).toBe('true');
+  expect(screen.queryByRole('textbox')).toBeNull();
+  expect(screen.getByRole('main').scrollTop).toBe(0);
+  expect(memory.snapshot).toBe(snapshot);
 });
 
 // Unit: the new recommendation pool must survive tab/search/detail navigation;
@@ -627,6 +628,50 @@ it('fills installed recommendation slots from the original pool and hides the in
   }
   await waitFor(() => expect(screen.queryByText('settings.ghosts.page.todayRecommendations')).toBeNull());
   expect(recommendations).toHaveBeenCalledTimes(1);
+});
+
+// Unit / reported search-source bug: the real page inherited the browsing source
+// and hid matching community plugins. Existing search cases only had official items.
+// Two public items and a selected browsing source are the smallest failing input.
+it.each(['official', 'community'])('starts search across all plugins after browsing %s and keeps explicit search filters', async source => {
+  auth.mode = 'cloud';
+  Object.assign(window.electronAPI, { pluginContributions: {
+    list: vi.fn().mockResolvedValue({ plugins: [], nextCursor: null, queriedAt: detail.publishedAt }),
+  } });
+  const community = { ...detail, pluginId: 'community-navigation', ghostId: 'community-navigation',
+    name: 'Navigation Community', publisherKind: 'personal' as const };
+  window.electronAPI.pluginMarket.snapshot = async () => ({ items: [detail, community],
+    unavailableReason: null, customSourceNames: [], unavailableCustomSourceNames: [] });
+  render(page('/plugins'));
+  fireEvent.click(screen.getByRole('tab', { name: /settings.ghosts.page.marketSection/ }));
+  await screen.findByRole('button', { name: detail.name });
+  openSourceMenu();
+  fireEvent.click(screen.getByRole('option', { name: new RegExp(`publisherKind\\.${source}`) }));
+  let input = openPluginSearch();
+  fireEvent.change(input, { target: { value: 'Navigation' } });
+  expect(screen.getByRole('combobox', { name: /^settings\.ghosts\.page\.filtersAria/ }).textContent)
+    .toContain('settings.ghosts.page.filterAll');
+  await screen.findByRole('button', { name: detail.name });
+  await screen.findByRole('button', { name: community.name });
+  openSourceMenu();
+  fireEvent.click(screen.getByRole('option', { name: /publisherKind\.official/ }));
+  fireEvent.change(input, { target: { value: 'Navigation ' } });
+  expect(screen.getByRole('combobox', { name: /^settings\.ghosts\.page\.filtersAria/ }).textContent)
+    .toContain('settings.ghosts.market.publisherKind.official');
+  expect(screen.queryByRole('button', { name: community.name })).toBeNull();
+  // Review regression: author management unmounts the catalog while its query
+  // remains; returning must retain the chosen source as well as the query.
+  fireEvent.click(screen.getByRole('button', { name: 'settings.ghosts.contribution.myPlugins' }));
+  await screen.findByRole('heading', { name: 'settings.ghosts.contribution.myPlugins' });
+  fireEvent.click(screen.getByRole('button', { name: 'settings.ghosts.title' }));
+  input = screen.getByRole('textbox', { name: 'settings.ghosts.page.search' });
+  expect((input as HTMLInputElement).value).toBe('Navigation ');
+  expect(screen.getByRole('combobox', { name: /^settings\.ghosts\.page\.filtersAria/ }).textContent)
+    .toContain('settings.ghosts.market.publisherKind.official');
+  expect(screen.queryByRole('button', { name: community.name })).toBeNull();
+  fireEvent.change(input, { target: { value: '' } });
+  fireEvent.change(input, { target: { value: 'Navigation' } });
+  await screen.findByRole('button', { name: community.name });
 });
 
 // Unit / §8.6: Escape through the real page must reuse the fresh list. The
@@ -1080,6 +1125,7 @@ describe('plugin page return navigation', () => {
     snapshots.mockReturnValueOnce(pending);
     const reads = snapshots.mock.calls.length;
     render(page('/plugins'));
+    fireEvent.click(screen.getByRole('tab', { name: /settings.ghosts.page.marketSection/ }));
     expect(screen.getByText(stable.name)).toBeTruthy();
     expect(memory.browser.current.pages).toBe(pages);
     expect(snapshots).toHaveBeenCalledTimes(reads + 1);

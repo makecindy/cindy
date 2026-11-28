@@ -54,6 +54,7 @@ interface SlashCommandPaletteProps {
   /** Merged list of available commands (desktop + agent-builtin + agent-skill). */
   commands: UnifiedCommand[];
   additionalCommands?: UnifiedCommand[];
+  showBuddyNewHint?: boolean;
   /** Currently focused row index within the filtered list. */
   focusedIndex: number;
   onFocusedIndexChange: (i: number) => void;
@@ -92,6 +93,7 @@ export function SlashCommandPalette({
   query,
   commands,
   additionalCommands,
+  showBuddyNewHint,
   focusedIndex,
   onFocusedIndexChange,
   onSelect,
@@ -270,7 +272,14 @@ export function SlashCommandPalette({
         style={{ boxShadow: 'var(--shadow-menu)', maxHeight }}
       >
         <MenuHighlightLayer />
-        {filtered.length === 0 ? (
+        {filtered.length === 0 ? showBuddyNewHint ? (
+          <p role="status" className="px-2.5 py-2 text-13 leading-normal text-[var(--cmd-palette-tooltip-body)]">
+            {t('commandPalette.buddyNewHint', {
+              restart: t('bots.lifecycle.restart'),
+              startTopic: t('bots.groupChat.server.startTopic'),
+            })}
+          </p>
+        ) : (
           <div
             className={cn(
               'flex items-center justify-center',

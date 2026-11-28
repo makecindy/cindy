@@ -49,7 +49,7 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 
-function historyAvailable(status: string, presence: boolean | null): boolean {
+function historyAvailable(status: string, presence: boolean | null, sideChatPending = false): boolean {
   let expression: ts.Expression | undefined;
   const visit = (node: ts.Node) => {
     if (ts.isVariableDeclaration(node) && node.name.getText(source) === 'remoteHistoryAvailable') {
@@ -59,8 +59,8 @@ function historyAvailable(status: string, presence: boolean | null): boolean {
   };
   visit(source);
   if (!expression) throw new Error('Missing production history availability gate');
-  return new Function('status', 'getPresenceAvailability', 'deviceId',
-    `return ${expression.getText(source)};`)(status, () => presence, 'd1');
+  return new Function('status', 'getPresenceAvailability', 'deviceId', 'sideChatPending',
+    `return ${expression.getText(source)};`)(status, () => presence, 'd1', sideChatPending);
 }
 const tick = () => new Promise((done) => setTimeout(done, 0));
 afterEach(() => vi.useRealTimers());
@@ -200,6 +200,21 @@ describe('production session recovery callbacks', () => {
     expect(f.maker.listMessages).toHaveBeenCalledTimes(1);
     expect(f.state.rows).toEqual(page.messages);
     expect(f.state.readAck).not.toBeNull();
+  });
+
+  // Unit regression #12990: an online computer may not have committed the
+  // child yet. Run the page gate and callbacks to catch premature reads.
+  it('keeps remote history reads paused until side chat creation is confirmed', async () => {
+    const pending = fixture(false, historyAvailable('online', true, true));
+    await pending.sync();
+    await pending.earlier();
+    expect(pending.maker.getSession).not.toHaveBeenCalled();
+    expect(pending.maker.listMessages).not.toHaveBeenCalled();
+    expect(pending.maker.input.getProjection).not.toHaveBeenCalled();
+
+    const ready = fixture(false, historyAvailable('online', true, false));
+    await ready.sync();
+    expect(ready.maker.listMessages).toHaveBeenCalledOnce();
   });
 
   it.each([

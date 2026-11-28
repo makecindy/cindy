@@ -90,6 +90,7 @@ describe('message activity wording refreshes with app language', () => {
       MarkdownSelectableSpan: Text, UITextView: Text,
       styles: {}, layout: { markdownBodyGap: 0 }, selectable: false, hasNestedLists: false, spanFor: () => undefined,
       onOpenSessionLink: undefined, openMarkdownImage: undefined, openMarkdownMedia: undefined,
+      groupExternalLinks: undefined,
       renderManagedImage: undefined, sessionLinkTitles: {}, streaming: false,
       isMobileMarkdownImageDirectUrl: () => false, clickableInlineStyle: () => undefined,
     });

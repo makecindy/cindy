@@ -17,6 +17,7 @@ type UnreadPorts = { [K in keyof AgentDeps]?: undefined };
 
 /** Ports only the Codex agent reads. */
 export const PORTS_ONLY_CODEX_READS = {
+  closeCodexMcpSessionInstance: undefined,
   armCodexHttpRecovery: undefined,
   getObservedCodexUpstreamCapacity: undefined,
   getRejectedCodexDownshiftModel: undefined,
