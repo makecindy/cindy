@@ -26,6 +26,11 @@ describe('readStoredWorkerListLayout default-layout fallback', () => {
     expect(readStoredWorkerListLayout()).toBe('dropdown');
   });
 
+  it('keeps rows when a stored rows preference exists', () => {
+    window.localStorage.setItem(KEY, 'rows');
+    expect(readStoredWorkerListLayout()).toBe('rows');
+  });
+
   it('falls back to tabs when reading localStorage throws', () => {
     vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
       throw new Error('storage read failed');

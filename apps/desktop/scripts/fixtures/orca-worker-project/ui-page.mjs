@@ -7,6 +7,9 @@ export default {
   notCovered:
     'Full Worker creation popover, model/device selection, native folder dialog, filesystem discovery, IPC and actual worktree creation',
   cases: {
+    'rows-long-names': {
+      about: '32-character CJK and unbroken Latin names in a 280px sidebar; controls and full-name tooltips remain reachable',
+    },
     'attention-error': {
       about: 'Idle Worker with unhandled task error in tabs, both menus and collapsed trigger',
     },
@@ -38,6 +41,71 @@ export default {
     await page.getByRole('button').first().waitFor();
   },
   async check(page, ui) {
+    // #13575 review: UI regression through the real toolbar. jsdom cannot measure
+    // overflow; the existing short-name scenes do not exercise a single overwide pill.
+    if (ui.case === 'rows-long-names') {
+      const rows = page.getByTestId('worker-rows-list');
+      const pills = rows.locator('[data-worker-id]');
+      assert.equal(await pills.count(), 4);
+      const bounds = await rows.boundingBox();
+      for (const pill of await pills.all()) {
+        const box = await pill.boundingBox();
+        assert.ok(box.x >= bounds.x - 1 && box.x + box.width <= bounds.x + bounds.width + 1,
+          'every pill must fit inside the wrapping list');
+        const buttons = await pill.getByRole('button').all();
+        for (const button of buttons) {
+          const control = await button.boundingBox();
+          assert.ok(control.x + control.width <= bounds.x + bounds.width + 1,
+            'selection and archive controls must stay inside the sidebar');
+        }
+      }
+      const error = rows.getByLabel(await ui.t('orca.rolePill.errorBadgeAria'));
+      assert.ok((await error.boundingBox()).width > 16, 'error badge must remain readable');
+      await ui.capture('wrapped-long-names');
+
+      for (const [id, name] of [['long-cjk', '超長中文角色名稱'.repeat(4)], ['long-latin', 'W'.repeat(32)]]) {
+        const button = rows.locator(`[data-worker-id="${id}"]`).getByRole('button').first();
+        await button.click();
+        assert.equal(await button.getAttribute('aria-pressed'), 'true');
+        await page.mouse.move(0, 0);
+        await button.hover();
+        const tooltip = page.getByRole('tooltip').filter({ hasText: name });
+        await tooltip.waitFor();
+        assert.ok((await tooltip.textContent()).includes(name), 'tooltip preserves the full name');
+        // Radix gives the accessible tooltip a visually-hidden span; measure its
+        // rendered content parent rather than the 1px accessibility copy.
+        assert.ok(await tooltip.evaluate((el) => el.parentElement.scrollWidth <= el.parentElement.clientWidth + 1),
+          'full name wraps within the tooltip');
+        await ui.capture(`full-name-${id}`);
+        await page.keyboard.press('Escape');
+        await page.mouse.move(0, 0);
+      }
+      // Keyboard focus must expose the same full-name hint as pointer hover.
+      await page.getByTestId('long-names-sidebar').getByRole('button').first().focus();
+      await page.keyboard.press('Tab');
+      const keyboardTooltip = page.getByRole('tooltip').filter({ hasText: '超長中文角色名稱'.repeat(4) });
+      await keyboardTooltip.waitFor();
+      assert.ok((await keyboardTooltip.textContent()).includes('超長中文角色名稱'.repeat(4)));
+      await ui.capture('keyboard-full-name');
+      await page.keyboard.press('Escape');
+
+      const archive = rows.locator('[data-worker-id="long-cjk"]').getByRole('button').nth(1);
+      await archive.click();
+      const dialog = page.getByRole('alertdialog');
+      await dialog.waitFor();
+      await dialog.getByRole('button', { name: await ui.t('newChat.collaboration.archiveWorkerConfirmCancel'), exact: true }).click();
+      await page.getByRole('button', { name: await ui.t('orca.rolePill.layoutMenuLabel') }).click();
+      await ui.capture('long-names-menu');
+      const edit = page.getByRole('button', {
+        name: await ui.t('orca.rolePill.editWorkerAria', { name: '超長中文角色名稱'.repeat(4) }), exact: true,
+      });
+      const menuName = await edit.locator('..').getByText('超長中文角色名稱'.repeat(4), { exact: true }).boundingBox();
+      const editBox = await edit.boundingBox();
+      assert.ok(menuName.x + menuName.width <= editBox.x, 'long menu names leave the edit control clear');
+      await edit.click();
+      assert.equal(await page.getByTestId('long-names-action').textContent(), 'edit:long-cjk');
+      return;
+    }
     if (ui.case.startsWith('attention-')) {
       const key =
         ui.case === 'attention-error'

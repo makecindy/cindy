@@ -260,7 +260,8 @@ export function OrcaWorkerPanel({
 
   return (
     <div className="flex h-full min-h-0 w-full flex-col bg-content-area">
-      <div className="flex h-8 shrink-0 items-center border-b border-border/40 px-3 text-11 font-medium leading-none text-muted-foreground">
+      {/* min-h + py：平铺 / 下拉仍是 32px 一行；多行布局换行时随内容长高。 */}
+      <div className="flex min-h-8 shrink-0 items-center border-b border-border/40 px-3 py-1 text-11 font-medium leading-none text-muted-foreground">
         <WorkerListToolbar
           leadSessionId={leadSessionId}
           worker={selectedWorkerRecord ?? focusedWorker}

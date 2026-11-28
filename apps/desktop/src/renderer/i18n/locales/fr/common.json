@@ -20902,6 +20902,7 @@
       "layoutMenuLabel": "Disposition de la liste des Workers",
       "layoutTabs": "Onglets",
       "layoutDropdown": "Menu déroulant",
+      "layoutRows": "Plusieurs lignes",
       "scrollWorkersLeft": "Faire défiler vers les Workers précédents",
       "scrollWorkersRight": "Faire défiler vers d'autres Workers",
       "scrollWorkersLeftEdge": "Vous êtes déjà au premier Worker",

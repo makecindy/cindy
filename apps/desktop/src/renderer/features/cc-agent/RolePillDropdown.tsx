@@ -35,6 +35,7 @@ import type { WorkerInfo } from './hooks/useWorkers';
 import type { WorkerExecutionDevice } from './hooks/workerProjectionStore';
 import { shouldShowWorkerLabel } from './workerLabel';
 import { clearWorkerAttention, useWorkerAttentionSnapshot } from './lib/workerAttentionStore';
+import { sortWorkersForRows } from './workerRowsOrder';
 
 /**
  * 插件引擎 Worker 跑在 Lead 所在电脑：Device Link 控制端从那台电脑的引擎目录取图标，
@@ -279,7 +280,7 @@ export function workerTabsScrollStep(clientWidth: number): number {
   return Math.max(80, Math.floor(clientWidth * 0.7));
 }
 
-type WorkerListLayout = 'tabs' | 'dropdown';
+type WorkerListLayout = 'tabs' | 'dropdown' | 'rows';
 type DropdownOpenMode = 'transient' | 'pinned' | null;
 
 // Exported for direct unit testing of the default-layout fallback matrix.
@@ -287,7 +288,7 @@ export function readStoredWorkerListLayout(): WorkerListLayout {
   if (typeof window === 'undefined') return 'tabs';
   try {
     const stored = window.localStorage.getItem(WORKER_LIST_LAYOUT_KEY);
-    if (stored === 'dropdown') return 'dropdown';
+    if (stored === 'dropdown' || stored === 'rows') return stored;
     return 'tabs';
   } catch {
     return 'tabs';
@@ -363,7 +364,7 @@ function WorkerSummary({
 }) {
   return (
     <>
-      <div className={cn('flex items-center gap-2 leading-snug', compact ? 'text-11' : 'text-13')}>
+      <div className={cn('flex items-center gap-2 leading-snug', compact ? 'min-w-0 text-11' : 'text-13')}>
         <WorkerAvatar
           agent={worker.agent}
           providerId={worker.providerId}
@@ -375,6 +376,7 @@ function WorkerSummary({
         <span
           className={cn(
             'font-medium',
+            compact && 'min-w-0 truncate',
             selected ? 'text-[var(--surface-on-card)]' : 'text-[var(--text-primary)]',
           )}
         >
@@ -548,6 +550,7 @@ function useAnchorMenuMaxWidth(
 }
 
 function WorkerLayoutMenu({
+  className,
   leadSessionId,
   layout,
   onLayoutChange,
@@ -558,6 +561,7 @@ function WorkerLayoutMenu({
   onEditWorker,
   clearAttentionWhenVisible = true,
 }: {
+  className?: string;
   leadSessionId?: string;
   layout: WorkerListLayout;
   onLayoutChange: (layout: WorkerListLayout) => void;
@@ -649,12 +653,13 @@ function WorkerLayoutMenu({
   const layoutRows: Array<{ value: WorkerListLayout; label: string }> = [
     { value: 'tabs', label: t('orca.rolePill.layoutTabs') },
     { value: 'dropdown', label: t('orca.rolePill.layoutDropdown') },
+    { value: 'rows', label: t('orca.rolePill.layoutRows') },
   ];
 
   return (
     <div
       ref={wrapperRef}
-      className="relative shrink-0"
+      className={cn('relative shrink-0', className)}
       onMouseEnter={handleMouseEnter}
       onMouseLeave={handleMouseLeave}
     >
@@ -688,7 +693,7 @@ function WorkerLayoutMenu({
           }}
         >
           {/* Header: WORKERS + count */}
-          {layout === 'tabs' && (
+          {layout !== 'dropdown' && (
             <>
               <div className="flex shrink-0 select-none items-center justify-between px-4 pt-3 pb-2">
                 <span className="text-10 font-medium uppercase tracking-[0.5px] text-[var(--text-tertiary)]">
@@ -732,7 +737,10 @@ function WorkerLayoutMenu({
                           closeMenu();
                         }}
                       >
-                        <div className="flex items-center gap-2 text-13 leading-snug">
+                        <div className={cn(
+                          'flex min-w-0 items-center gap-2 text-13 leading-snug',
+                          onEditWorker ? 'mr-14' : 'mr-7',
+                        )}>
                           <WorkerAvatar
                             agent={w.agent}
                             providerId={w.providerId}
@@ -740,11 +748,15 @@ function WorkerLayoutMenu({
                             attentionKind={attentionKind}
                             remote={Boolean(w.agentDeviceId)}
                           />
-                          <span className="font-medium text-[var(--text-primary)]">{w.role}</span>
+                          <span className="min-w-0 truncate font-medium text-[var(--text-primary)]" title={w.role}>
+                            {w.role}
+                          </span>
                           {shouldShowWorkerLabel(w.role, w.label) && (
                             <>
-                              <span className="text-[var(--text-tertiary)]">#</span>
-                              <span className="text-[var(--text-secondary)]">{w.label}</span>
+                              <span className="shrink-0 text-[var(--text-tertiary)]">#</span>
+                              <span className="min-w-0 truncate text-[var(--text-secondary)]" title={w.label ?? undefined}>
+                                {w.label}
+                              </span>
                             </>
                           )}
                         </div>
@@ -1018,76 +1030,22 @@ function WorkerTabsList({
       >
         {workers.map((worker) => {
           const selected = worker.workerId === focusedWorkerId;
-          const attentionKind = resolveWorkerListAttention(
-            worker,
-            taskAttention.get(worker.sessionId),
-            selected,
-            attention.has(worker.workerId),
-            leadSessionId,
-          );
-          // error 终态整体描红: 选中态保留 accent 底 (标明当前 tab) 但换红边, 非选中态
-          // 走软红底 + 红边 + 红字, 让出错 worker 的 tab 一眼可定位。
-          const isError = attentionKind === 'error';
           return (
-            <Tip
+            <WorkerTabPill
               key={worker.workerId}
-              side="bottom"
-              delay={250}
-              contentClassName="min-w-[220px] max-w-[260px] border-[var(--border-default)] bg-[var(--surface-elevated)] text-[var(--text-primary)] shadow-[shadow:var(--shadow-menu)]"
-              text={
-                <div className="py-0.5">
-                  <WorkerSummary worker={worker} attentionKind={attentionKind} />
-                </div>
-              }
-            >
-              <div className="group relative inline-flex shrink-0">
-                <button
-                  type="button"
-                  ref={selected ? focusedTabRef : undefined}
-                  className={cn(
-                    'inline-flex h-6 shrink-0 items-center gap-1.5 rounded-full border py-0 pl-2 pr-6 text-11 leading-none transition-colors',
-                    selected
-                      ? isError
-                        ? 'border-[var(--error-fg)] bg-[var(--accent-cta-bg)] text-[var(--accent-pure-cta-fg)]'
-                        : 'border-[var(--accent-cta-bg)] bg-[var(--accent-cta-bg)] text-[var(--accent-pure-cta-fg)]'
-                      : isError
-                        ? 'border-[var(--error-border)] bg-[var(--error-bg)] text-[var(--error-fg-strong)] hover:bg-[var(--error-bg)]'
-                        : 'border-[var(--border-default)] bg-[var(--surface-chip)] text-[var(--text-primary)] hover:bg-[var(--surface-hover)]',
-                  )}
-                  onClick={() => {
-                    onSwitchFocus(worker.workerId);
-                  }}
-                >
-                  <WorkerSummary
-                    worker={worker}
-                    attentionKind={attentionKind}
-                    selected={selected}
-                    compact
-                  />
-                  {/* ERR 徽章行内放在 pill 内部, 而非溢出角标 —— 平铺容器是 overflow-x-auto
-                      (会连带裁剪垂直溢出), 角标朝上溢出会被切掉; 行内则始终在 pill 边界内。 */}
-                  {isError && <WorkerErrorBadge className="ml-0.5" />}
-                </button>
-                <button
-                  type="button"
-                  className={cn(
-                    'absolute right-[3px] top-1/2 inline-flex h-[18px] w-[18px] -translate-y-1/2 items-center justify-center rounded-full opacity-0 transition-opacity group-hover:opacity-100',
-                    selected
-                      ? 'text-[var(--surface-on-card)] hover:text-[var(--surface-on-card)]'
-                      : 'text-[var(--text-tertiary)] hover:text-[var(--text-primary)]',
-                  )}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    void requestArchiveWorker(worker);
-                  }}
-                  aria-label={t('orca.rolePill.archiveWorkerAria', {
-                    name: getWorkerArchiveDisplayName(worker),
-                  })}
-                >
-                  <X size={12} />
-                </button>
-              </div>
-            </Tip>
+              worker={worker}
+              selected={selected}
+              attentionKind={resolveWorkerListAttention(
+                worker,
+                taskAttention.get(worker.sessionId),
+                selected,
+                attention.has(worker.workerId),
+                leadSessionId,
+              )}
+              buttonRef={selected ? focusedTabRef : undefined}
+              onSwitchFocus={onSwitchFocus}
+              onRequestArchive={requestArchiveWorker}
+            />
           );
         })}
       </div>
@@ -1141,6 +1099,166 @@ function WorkerTabsList({
           </button>
         </Tip>
       </div>
+    </div>
+  );
+}
+
+/** 平铺与多行布局共用的 Worker 药丸：选中、出错描红、ERR 徽章与悬停归档一致。 */
+function WorkerTabPill({
+  worker,
+  selected,
+  attentionKind,
+  buttonRef,
+  onSwitchFocus,
+  onRequestArchive,
+  constrainWidth = false,
+}: {
+  worker: WorkerInfo;
+  selected: boolean;
+  attentionKind: AttentionKind | undefined;
+  buttonRef?: { current: HTMLButtonElement | null };
+  onSwitchFocus: (workerId: string) => void;
+  onRequestArchive: (worker: WorkerInfo) => Promise<void>;
+  /** 多行模式在可用栏宽内截断；平铺模式保留原本的自然宽度与水平滚动。 */
+  constrainWidth?: boolean;
+}) {
+  const { t } = useTranslation();
+  // error 终态整体描红: 选中态保留 accent 底 (标明当前 tab) 但换红边, 非选中态
+  // 走软红底 + 红边 + 红字, 让出错 worker 的 tab 一眼可定位。
+  const isError = attentionKind === 'error';
+  return (
+    <Tip
+      side="bottom"
+      delay={250}
+      contentClassName="min-w-[220px] max-w-[260px] border-[var(--border-default)] bg-[var(--surface-elevated)] text-[var(--text-primary)] shadow-[shadow:var(--shadow-menu)]"
+      text={
+        <div className="py-0.5">
+          <WorkerSummary worker={worker} attentionKind={attentionKind} />
+        </div>
+      }
+    >
+      <div
+        className={cn('group relative inline-flex shrink-0', constrainWidth && 'min-w-0 max-w-full')}
+        data-worker-id={worker.workerId}
+      >
+        <button
+          type="button"
+          ref={buttonRef}
+          aria-pressed={selected}
+          className={cn(
+            'inline-flex h-6 shrink-0 items-center gap-1.5 rounded-full border py-0 pl-2 pr-6 text-11 leading-none transition-colors',
+            constrainWidth && 'min-w-0 max-w-full',
+            selected
+              ? isError
+                ? 'border-[var(--error-fg)] bg-[var(--accent-cta-bg)] text-[var(--accent-pure-cta-fg)]'
+                : 'border-[var(--accent-cta-bg)] bg-[var(--accent-cta-bg)] text-[var(--accent-pure-cta-fg)]'
+              : isError
+                ? 'border-[var(--error-border)] bg-[var(--error-bg)] text-[var(--error-fg-strong)] hover:bg-[var(--error-bg)]'
+                : 'border-[var(--border-default)] bg-[var(--surface-chip)] text-[var(--text-primary)] hover:bg-[var(--surface-hover)]',
+          )}
+          onClick={() => {
+            onSwitchFocus(worker.workerId);
+          }}
+        >
+          <WorkerSummary
+            worker={worker}
+            attentionKind={attentionKind}
+            selected={selected}
+            compact
+          />
+          {/* ERR 徽章行内放在 pill 内部, 而非溢出角标 —— 平铺容器是 overflow-x-auto
+              (会连带裁剪垂直溢出), 角标朝上溢出会被切掉; 行内则始终在 pill 边界内。 */}
+          {isError && <WorkerErrorBadge className="ml-0.5 shrink-0" />}
+        </button>
+        <button
+          type="button"
+          className={cn(
+            'absolute right-[3px] top-1/2 inline-flex h-[18px] w-[18px] -translate-y-1/2 items-center justify-center rounded-full opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100',
+            selected
+              ? 'text-[var(--surface-on-card)] hover:text-[var(--surface-on-card)]'
+              : 'text-[var(--text-tertiary)] hover:text-[var(--text-primary)]',
+          )}
+          onClick={(e) => {
+            e.stopPropagation();
+            void onRequestArchive(worker);
+          }}
+          aria-label={t('orca.rolePill.archiveWorkerAria', {
+            name: getWorkerArchiveDisplayName(worker),
+          })}
+        >
+          <X size={12} />
+        </button>
+      </div>
+    </Tip>
+  );
+}
+
+/**
+ * 多行布局：全部 Worker 自动换行铺开，不滚动、不收起。
+ * 顺序：有问题 / 等用户回答 > 进行中 > 停止中；同层最后触发时间越晚越靠前。
+ * 每次渲染按当前状态与提醒重新排序，状态一变位置随之更新。
+ */
+function WorkerRowsList({
+  leadSessionId,
+  workers,
+  selectedWorkerId,
+  onSwitchFocus,
+  onArchiveWorker,
+  clearAttentionWhenVisible = true,
+}: {
+  leadSessionId?: string;
+  workers: WorkerInfo[];
+  selectedWorkerId: string | null;
+  onSwitchFocus: (workerId: string) => void;
+  onArchiveWorker: (workerId: string) => void;
+  clearAttentionWhenVisible?: boolean;
+}) {
+  const attention = useWorkerAttentionSnapshot();
+  const taskAttention = useWorkerTaskAttention(workers, leadSessionId);
+  const requestArchiveWorker = useRequestArchiveWorker(onArchiveWorker);
+  const focusedWorkerId =
+    selectedWorkerId ?? workers.find((worker) => worker.focused)?.workerId ?? null;
+
+  useLayoutEffect(() => {
+    if (!clearAttentionWhenVisible) return;
+    if (
+      selectedWorkerId &&
+      workers.find((item) => item.workerId === selectedWorkerId)?.status !== 'done'
+    ) {
+      clearWorkerAttention(selectedWorkerId);
+    }
+  }, [attention, clearAttentionWhenVisible, selectedWorkerId, workers]);
+
+  const attentionKinds = new Map(
+    workers.map((worker) => [
+      worker.workerId,
+      resolveWorkerListAttention(
+        worker,
+        taskAttention.get(worker.sessionId),
+        worker.workerId === focusedWorkerId,
+        attention.has(worker.workerId),
+        leadSessionId,
+      ),
+    ]),
+  );
+  const ordered = sortWorkersForRows(workers, (worker) => attentionKinds.get(worker.workerId));
+
+  return (
+    <div
+      data-testid="worker-rows-list"
+      className="flex min-w-0 flex-1 flex-wrap items-center gap-1"
+    >
+      {ordered.map((worker) => (
+        <WorkerTabPill
+          key={worker.workerId}
+          worker={worker}
+          selected={worker.workerId === focusedWorkerId}
+          attentionKind={attentionKinds.get(worker.workerId)}
+          onSwitchFocus={onSwitchFocus}
+          onRequestArchive={requestArchiveWorker}
+          constrainWidth
+        />
+      ))}
     </div>
   );
 }
@@ -1217,8 +1335,33 @@ function WorkerListToolbarContent({
   }
 
   return (
-    <div className={cn('flex min-w-0 flex-1 items-center gap-1.5', className)}>
-      {layout === 'tabs' ? (
+    <div
+      className={cn(
+        'flex min-w-0 flex-1 gap-1.5',
+        // 多行换行后工具栏变高，+ 与 ⋮ 对齐第一排。
+        layout === 'rows' ? 'items-start' : 'items-center',
+        className,
+      )}
+    >
+      {layout === 'rows' ? (
+        <>
+          <CreateWorkerTabButton
+            activeCount={activeCount}
+            softLimit={softLimit}
+            hardLimit={hardLimit}
+            onOpenCreate={onOpenCreate}
+            onOpenSettings={onOpenSettings}
+          />
+          <WorkerRowsList
+            leadSessionId={leadSessionId}
+            workers={workers}
+            selectedWorkerId={selectedWorkerId}
+            onSwitchFocus={onSwitchFocus}
+            onArchiveWorker={onArchiveWorker}
+            clearAttentionWhenVisible={clearAttentionWhenVisible}
+          />
+        </>
+      ) : layout === 'tabs' ? (
         <>
           <CreateWorkerTabButton
             activeCount={activeCount}
@@ -1261,6 +1404,7 @@ function WorkerListToolbarContent({
         </>
       )}
       <WorkerLayoutMenu
+        className={layout === 'rows' ? 'mt-0.5' : undefined}
         leadSessionId={leadSessionId}
         layout={layout}
         onLayoutChange={handleLayoutChange}

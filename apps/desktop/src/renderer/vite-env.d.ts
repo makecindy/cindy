@@ -709,6 +709,8 @@ interface OrcaWorkerRecord {
     sdkSessionId?: string;
     /** Worker 的 Agent 在另一台电脑或分享上运行(远程供应商)；null = 任务所在电脑。旧端缺省。 */
     agentDeviceId?: string | null;
+    /** 最近一次实际 turn 启动时刻(ISO)；从未触发为 null，旧端缺省。 */
+    lastTriggeredAt?: string | null;
   };
 }
 

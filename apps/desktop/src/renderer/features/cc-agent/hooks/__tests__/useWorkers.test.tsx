@@ -162,6 +162,29 @@ describe('useWorkers / worker projection store', () => {
     expect(hook.result.current.workers[1]).not.toHaveProperty('executionDevice');
   });
 
+  // 多行布局同层按实际 turn 启动时间排序；旧端缺值或从未触发时回落到创建时刻。
+  it('projects the last-triggered time from dispatched turn start, falling back to creation time', async () => {
+    const base = workerRecord('worker-a', 'session-a', true);
+    mocks.listWorkersByLeads.mockResolvedValue({
+      'lead-1': [
+        {
+          ...base,
+          createdAt: '2026-11-01T00:00:00.000Z',
+          session: { ...base.session, lastTriggeredAt: '2026-11-02T00:00:00.000Z' },
+        },
+        { ...workerRecord('worker-b', 'session-b'), createdAt: '2026-11-03T00:00:00.000Z' },
+        { ...workerRecord('worker-c', 'session-c'), session: { ...base.session, lastTriggeredAt: 'bogus' } },
+      ],
+    });
+    const hook = renderHook(() => useWorkers('lead-1'));
+    await waitFor(() => expect(hook.result.current.workers).toHaveLength(3));
+    expect(hook.result.current.workers.map((item) => item.lastTriggeredAt)).toEqual([
+      Date.parse('2026-11-02T00:00:00.000Z'),
+      Date.parse('2026-11-03T00:00:00.000Z'),
+      undefined,
+    ]);
+  });
+
   it('hydrates local N lead projections through one batch IPC', async () => {
     const sessions = [leadSession('lead-1'), leadSession('lead-2')];
     const hook = renderHook(() => useOrcaLeadWorkerMap(sessions));

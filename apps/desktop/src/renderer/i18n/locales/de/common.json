@@ -20706,6 +20706,7 @@
       "layoutMenuLabel": "Layout der Worker-Liste",
       "layoutTabs": "Tabs",
       "layoutDropdown": "Dropdown",
+      "layoutRows": "Mehrzeilig",
       "scrollWorkersLeft": "Zu früheren Workern scrollen",
       "scrollWorkersRight": "Zu weiteren Workern scrollen",
       "scrollWorkersLeftEdge": "Bereits beim ersten Worker",

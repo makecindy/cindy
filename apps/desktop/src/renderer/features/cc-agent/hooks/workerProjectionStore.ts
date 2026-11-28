@@ -25,6 +25,11 @@ export interface WorkerInfo {
   status: OrcaWorkerStatus;
   focused: boolean;
   idleSince: string | null;
+  /**
+   * 最近一次实际 turn 启动时刻(unix ms)，从未触发时回落到 Worker 创建时刻；
+   * 都读不到时缺省。仅供「多行」布局同层排序，不用于展示。
+   */
+  lastTriggeredAt?: number;
   /** Worker 的 Agent 在另一台电脑或分享上运行(远程供应商)；Agent 在任务所在电脑时无此字段。 */
   agentDeviceId?: string;
   /** 在同账号另一台电脑运行的 Worker；本机 Worker 无此字段。 */
@@ -183,8 +188,15 @@ function getEntry(leadSessionId: string): LeadEntry {
   return entry;
 }
 
+function parseIsoMs(value: unknown): number | undefined {
+  if (typeof value !== 'string' || !value) return undefined;
+  const ms = Date.parse(value);
+  return Number.isFinite(ms) ? ms : undefined;
+}
+
 function mapWorkerRecord(raw: Record<string, unknown>): WorkerInfo {
   const session = raw.session as Record<string, unknown> | undefined;
+  const lastTriggeredAt = parseIsoMs(session?.lastTriggeredAt) ?? parseIsoMs(raw.createdAt);
   return {
     workerId: raw.id as string,
     sessionId: raw.sessionId as string,
@@ -202,6 +214,7 @@ function mapWorkerRecord(raw: Record<string, unknown>): WorkerInfo {
     status: (raw.status as WorkerInfo['status']) ?? 'idle',
     focused: (raw.focused as boolean) ?? false,
     idleSince: (raw.idleSince as string | null) ?? null,
+    ...(lastTriggeredAt !== undefined ? { lastTriggeredAt } : {}),
     ...(typeof session?.agentDeviceId === 'string' && session.agentDeviceId
       ? { agentDeviceId: session.agentDeviceId }
       : {}),

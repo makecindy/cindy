@@ -149,7 +149,7 @@ describe('WorkerLayoutMenu hover interaction', () => {
       expect(onOpenSettings).toHaveBeenCalledOnce();
       expect(onOpenCreate).not.toHaveBeenCalled();
       fireEvent.click(
-        layout === 'tabs' ? menuButton() : screen.getByRole('button', { name: /^developer/ }),
+        layout !== 'dropdown' ? menuButton() : screen.getByRole('button', { name: /^developer/ }),
       );
       expect(screen.getByText('5 workers · 2 running')).toBeTruthy();
     },
@@ -236,6 +236,109 @@ describe('WorkerLayoutMenu hover interaction', () => {
   });
 });
 
+// 多行布局：用户要求全部 Worker 换行可见，按「有问题/等回答 > 进行中 > 停止中」、同层最后触发
+// 越晚越前排序，状态变化后立即重排。走真实布局菜单与提醒 store，不直接调排序 helper。
+describe('Worker list multi-row layout', () => {
+  beforeEach(() => localStorage.clear());
+  afterEach(() => {
+    cleanup();
+    for (const id of getSessionAttentionKinds().keys())
+      clearSessionAttention(id, { intent: 'explicit' });
+    __resetWorkerAttentionStoreForTest();
+  });
+
+  const rowsOrder = () =>
+    Array.from(
+      screen.getByTestId('worker-rows-list').querySelectorAll<HTMLElement>('[data-worker-id]'),
+    ).map((element) => element.dataset.workerId);
+
+  it('切到多行后全部 Worker 换行可见、选择被记住，并能切回平铺与下拉', () => {
+    const workers = Array.from({ length: 6 }, (_, index) =>
+      worker({ workerId: `w${index}`, sessionId: `s${index}`, focused: index === 0 }),
+    );
+    renderToolbar({ worker: workers[0], workers, selectedWorkerId: 'w0' });
+    expect(screen.getByTestId('worker-tabs-scroller')).toBeTruthy();
+
+    fireEvent.click(menuButton());
+    fireEvent.click(screen.getByRole('button', { name: 'orca.rolePill.layoutRows' }));
+    expect(rowsOrder()).toHaveLength(6);
+    expect(screen.queryByTestId('worker-tabs-scroller')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'orca.rolePill.scrollWorkersRight' })).toBeNull();
+    expect(localStorage.getItem('orca-worker-list-layout-v1')).toBe('rows');
+    // 多行保留菜单名单，编辑入口与平铺相同。
+    fireEvent.click(menuButton());
+    expect(screen.getByText('orca.rolePill.workersHeader')).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: 'orca.rolePill.layoutDropdown' }));
+    expect(screen.queryByTestId('worker-rows-list')).toBeNull();
+    expect(screen.getByRole('button', { name: /^developer/ })).toBeTruthy();
+    fireEvent.click(menuButton());
+    fireEvent.click(screen.getByRole('button', { name: 'orca.rolePill.layoutTabs' }));
+    expect(screen.getByTestId('worker-tabs-scroller')).toBeTruthy();
+    expect(localStorage.getItem('orca-worker-list-layout-v1')).toBe('tabs');
+  });
+
+  // #13566: unit, real toolbar; completion/focus cannot reorder dispatch ties.
+  it('keeps B before A after both finish, stable ties and focus switches', () => {
+    localStorage.setItem('orca-worker-list-layout-v1', 'rows');
+    const workers = ['A', 'B', 'C'].map((id, index) => worker({
+      workerId: id, sessionId: `s-${id}`, focused: false, status: 'done',
+      lastTriggeredAt: index === 0 ? 1000 : 2000,
+    }));
+    markWorkerAttention('A');
+    const view = renderToolbar({ workers, worker: workers[0], selectedWorkerId: 'A' });
+    expect(rowsOrder()).toEqual(['B', 'C', 'A']);
+    view.rerender(<WorkerListToolbar
+      workers={workers} worker={workers[1]} selectedWorkerId="B"
+      activeWorkerCount={3} softLimit={5} hardLimit={8}
+      onSwitchFocus={vi.fn()} onOpenCreate={vi.fn()}
+      onArchiveWorker={vi.fn()}
+    />);
+    expect(rowsOrder()).toEqual(['B', 'C', 'A']);
+  });
+
+  it('按 有问题/等回答 > 进行中 > 停止中 排序，同层最后触发越晚越前，状态变化即时重排', () => {
+    localStorage.setItem('orca-worker-list-layout-v1', 'rows');
+    const make = (id: string, status: WorkerInfo['status'], lastTriggeredAt: number) =>
+      worker({ workerId: id, sessionId: `s-${id}`, status, lastTriggeredAt, focused: false });
+    const workers = [
+      make('idle-old', 'idle', 500),
+      make('run-old', 'running', 100),
+      make('run-new', 'running', 300),
+      make('done-new', 'done', 900),
+      make('waiting', 'idle', 50),
+      make('failed', 'idle', 10),
+    ];
+    addSessionAttention('s-waiting', 'awaiting');
+    addSessionAttention('s-failed', 'error');
+    const props = { worker: workers[0], selectedWorkerId: null };
+    const view = renderToolbar({ ...props, workers });
+    expect(rowsOrder()).toEqual(['waiting', 'failed', 'run-new', 'run-old', 'done-new', 'idle-old']);
+
+    // 停止中的 Worker 被重新触发 → 进入「进行中」且最近触发，排到该层最前。
+    const retriggered = workers.map((item) =>
+      item.workerId === 'idle-old' ? { ...item, status: 'running' as const, lastTriggeredAt: 1000 } : item,
+    );
+    view.rerender(
+      <WorkerListToolbar
+        {...props}
+        workers={retriggered}
+        activeWorkerCount={6}
+        softLimit={5}
+        hardLimit={8}
+        onSwitchFocus={vi.fn()}
+        onOpenCreate={vi.fn()}
+        onArchiveWorker={vi.fn()}
+      />,
+    );
+    expect(rowsOrder()).toEqual(['waiting', 'failed', 'idle-old', 'run-new', 'run-old', 'done-new']);
+
+    // 用户回答后提醒消失 → 回到停止中，按触发时间排在该层末尾。
+    act(() => clearSessionAttention('s-waiting', { intent: 'explicit' }));
+    expect(rowsOrder()).toEqual(['failed', 'idle-old', 'run-new', 'run-old', 'done-new', 'waiting']);
+  });
+});
+
 // 使用真实提醒 store 驱动四个展示入口；防止只修 helper 却漏接其中一份列表。
 describe('Worker list task attention', () => {
   beforeEach(() => localStorage.clear());
@@ -249,7 +352,7 @@ describe('Worker list task attention', () => {
     __resetStickySessionOriginForTest();
   });
 
-  it.each(['tabs', 'dropdown'] as const)(
+  it.each(['tabs', 'dropdown', 'rows'] as const)(
     '%s：本机 Worker 关闭任务错误后，运行态仍 error 也清除列表错误并恢复蓝/绿点',
     (layout) => {
       localStorage.setItem('orca-worker-list-layout-v1', layout);
@@ -265,7 +368,7 @@ describe('Worker list task attention', () => {
       const view = renderToolbar({ worker: current, workers: [current, hidden] });
       const openList = () =>
         fireEvent.click(
-          layout === 'tabs' ? menuButton() : screen.getByRole('button', { name: /^developer/ }),
+          layout !== 'dropdown' ? menuButton() : screen.getByRole('button', { name: /^developer/ }),
         );
 
       // 未展开时：平铺 tab 或折叠入口都必须能看出隐藏 Worker 出错。
@@ -291,7 +394,7 @@ describe('Worker list task attention', () => {
       // 当前 Worker 等确认仍显示；错误优先于当前/隐藏 Worker 的蓝点。
       act(() => addSessionAttention(current.sessionId, 'awaiting'));
       expect(screen.getAllByLabelText('orca.rolePill.awaitingBadgeAria').length).toBe(
-        layout === 'tabs' ? 2 : 1,
+        layout !== 'dropdown' ? 2 : 1,
       );
       act(() => addSessionAttention(current.sessionId, 'error'));
       expect(screen.getByRole('button', { name: /^developer/ }).className).toContain(
@@ -361,7 +464,7 @@ describe('Worker list task attention', () => {
     expect(screen.queryByLabelText('orca.rolePill.unread')).toBeNull();
   });
 
-  it.each(['tabs', 'dropdown'] as const)(
+  it.each(['tabs', 'dropdown', 'rows'] as const)(
     '%s：切回后任务 awaiting 已清，未处理确认仍亮，处理后消失',
     (layout) => {
       localStorage.setItem('orca-worker-list-layout-v1', layout);
@@ -375,13 +478,25 @@ describe('Worker list task attention', () => {
       expect(getSessionAttentionKinds().has(current.sessionId)).toBe(false);
       expect(screen.getByLabelText('orca.rolePill.awaitingBadgeAria')).toBeTruthy();
       fireEvent.click(
-        layout === 'tabs' ? menuButton() : screen.getByRole('button', { name: /developer/ }),
+        layout !== 'dropdown' ? menuButton() : screen.getByRole('button', { name: /developer/ }),
       );
       expect(screen.getAllByLabelText('orca.rolePill.awaitingBadgeAria').length).toBe(2);
       act(() => setPendingAsk(current.sessionId, false));
       expect(screen.queryByLabelText('orca.rolePill.awaitingBadgeAria')).toBeNull();
     },
   );
+
+  // #13566: unit, real toolbar; rows previously hid the only edit entry.
+  it('keeps every Worker editable from the multi-row menu', () => {
+    localStorage.setItem('orca-worker-list-layout-v1', 'rows');
+    const onEditWorker = vi.fn();
+    renderToolbar({ onEditWorker });
+    fireEvent.click(menuButton());
+    fireEvent.click(screen.getByRole('button', { name: 'orca.rolePill.editWorkerAria' }));
+    expect(onEditWorker).toHaveBeenCalledWith('worker-a');
+    expect(screen.queryByText('orca.rolePill.workersHeader')).toBeNull();
+    expect(screen.getByTestId('worker-rows-list')).toBeTruthy();
+  });
 
   it('其他任务的提醒变化不重新渲染 Worker 列表', () => {
     const onRender = vi.fn();

@@ -20902,6 +20902,7 @@
       "layoutMenuLabel": "Disposição da lista de Workers",
       "layoutTabs": "Separadores",
       "layoutDropdown": "Lista pendente",
+      "layoutRows": "Várias linhas",
       "scrollWorkersLeft": "Deslocar para Workers anteriores",
       "scrollWorkersRight": "Deslocar para mais Workers",
       "scrollWorkersLeftEdge": "Já está no primeiro Worker",

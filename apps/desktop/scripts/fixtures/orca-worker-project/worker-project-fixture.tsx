@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import {
   addSessionAttention,
   clearSessionAttention,
@@ -120,6 +120,42 @@ function AttentionFixture({ kind }: { kind: 'error' | 'awaiting' | 'done' }) {
     </main>
   );
 }
+const longNameWorkers: WorkerInfo[] = [
+  { ...workers[0], workerId: 'long-cjk', sessionId: 'long-cjk', role: '超長中文角色名稱'.repeat(4), focused: false },
+  { ...workers[0], workerId: 'long-latin', sessionId: 'long-latin', role: 'W'.repeat(32), focused: false },
+  ...workers.map((worker) => ({ ...worker, focused: false })),
+];
+function LongNamesFixture() {
+  const [selected, setSelected] = useState('long-latin');
+  const [action, setAction] = useState('');
+  useEffect(() => {
+    addSessionAttention('long-cjk', 'error');
+    addSessionAttention('long-latin', 'awaiting');
+    return () => {
+      clearSessionAttention('long-cjk', { intent: 'explicit' });
+      clearSessionAttention('long-latin', { intent: 'explicit' });
+    };
+  }, []);
+  return (
+    <main className="p-4">
+      <section className="flex w-[280px] max-w-full items-start gap-1 border border-[var(--border-default)] p-1" data-testid="long-names-sidebar">
+        <WorkerListToolbar
+          worker={longNameWorkers.find((worker) => worker.workerId === selected)!}
+          workers={longNameWorkers}
+          selectedWorkerId={selected}
+          activeWorkerCount={longNameWorkers.length}
+          softLimit={5}
+          hardLimit={8}
+          onSwitchFocus={setSelected}
+          onArchiveWorker={(id) => setAction(`archive:${id}`)}
+          onEditWorker={(id) => setAction(`edit:${id}`)}
+          onOpenCreate={() => {}}
+        />
+      </section>
+      <output data-testid="long-names-action">{action}</output>
+    </main>
+  );
+}
 void mountPage({
   host: (ctx) => ({
     notificationMarkSessionAttention: async () => {},
@@ -223,6 +259,10 @@ void mountPage({
     }),
   }),
   render: (ctx) => {
+    if (ctx.case === 'rows-long-names') {
+      localStorage.setItem('orca-worker-list-layout-v1', 'rows');
+      return <LongNamesFixture />;
+    }
     if (ctx.case.startsWith('attention-')) {
       localStorage.setItem('orca-worker-list-layout-v1', 'tabs');
       return (
