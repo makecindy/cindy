@@ -72,6 +72,7 @@ import { EXEC_SERVER_WS_PATH } from '../controller/execServerRelay';
 import { RemoteAgentRemoteError, RemoteAgentRunClient, type RemoteAgentInvoke, type RemoteAgentPoller } from '../controller/runClient';
 import { EventLog, waitForAny } from '../eventLog';
 import { createExecServerShortcut, type ExecServerShortcutLayout } from './execServerShortcut';
+import { createExecServerSkillDiscovery } from './execServerSkillDiscovery';
 import { createExecServerStartupBatch } from './execServerStartupBatch';
 import { createGuestUsageMeter, type GuestUsageSample } from './guestUsage';
 import {
@@ -525,6 +526,7 @@ interface Run {
   handle?: AgentSessionHandle;
   tunnel?: RunTunnel;
   releaseAttachmentPreservation?: () => void;
+  execSkillDiscovery?: Map<string, ReturnType<typeof createExecServerSkillDiscovery>>;
   execStartupBatches?: Map<string, ReturnType<typeof createExecServerStartupBatch>>;
   attachmentsDir: string;
   /** 影子工作区根(按 hostSessionId 复用，任务收尾后清理)。 */
@@ -1498,7 +1500,7 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
     hostSessionId: string,
     trust: RemoteAgentControllerTrust,
     kind: RemoteAgentEngineKind,
-  ): Promise<{ shadowDir: string; mirrorRoot: string; shortcutLayout: ExecServerShortcutLayout; sessionRoot: string; extraDirs: string[]; writableDirs: string[]; projectText(text: string): string; controllerManagedSkills?: { claudePluginRoots: string[] } }> {
+  ): Promise<{ shadowDir: string; mirrorRoot: string; shortcutLayout: ExecServerShortcutLayout; sessionRoot: string; extraDirs: string[]; writableDirs: string[]; projectText(text: string): string; skillDirs: string[]; controllerManagedSkills?: { claudePluginRoots: string[] } }> {
     const sessionRoot = shadowSessionRoot(controller, hostSessionId);
     /** 受邀者的说明文件：指向会话目录之外的 `@` 引用不再被当作导入(否则会在本机读文件)。 */
     const instructionBytes = (data: Buffer, fileDir: string): Buffer => (
@@ -1613,6 +1615,7 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
       await writeNew(path.join(dir, file.name), instructionBytes(projectBytes(Buffer.from(file.data, 'base64')), dir));
     }
     const { personal } = payload;
+    const materialized = new Set<string>();
     if (personal.memory) {
       await writeNew(path.join(sessionRoot, 'CLAUDE.md'), instructionBytes(Buffer.from(projectText(personal.memory), 'utf8'), sessionRoot));
     }
@@ -1621,6 +1624,7 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
       const target = path.join(shadowDir, ...file.path.split('/'));
       if (!inside(target, shadowDir)) continue;
       await writeNew(target, markdownBytes(projectBytes(Buffer.from(file.data, 'base64')), target));
+      if (file.path.endsWith('/SKILL.md')) materialized.add(file.path);
     }
     // 任务所在电脑报「与你那份一样」的托管 Skill：复制这台自己的，指纹不再一致(刚更新过)就不带这个 Skill。
     const reused = personal.managedSkills?.filter((skill) => skill.reuse) ?? [];
@@ -1641,6 +1645,7 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
           const own = { path: relative, data: (await fsp.readFile(file.local)).toString('base64') };
           for (const asset of trust === 'guest' ? guestInstructionAsset(own) : [own]) {
             await writeNew(target, markdownBytes(projectBytes(Buffer.from(asset.data, 'base64')), target));
+            if (relative.endsWith('/SKILL.md')) materialized.add(relative);
           }
         }
       }
@@ -1687,6 +1692,8 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
     // virtualParent 停在控制端有对应目录的最上一级(与控制端 shadowAliases 逐级映射的范围一致)。
     const shortcutLayout: ExecServerShortcutLayout = { mirrorRoot, mappedRoot: virtualParent, ancestorAbsence, taskAncestorAbsence };
     return {
+      skillDirs: kind === 'codex' && trust === 'owner' ? (personal.managedSkills ?? [])
+        .map(skill => skill.dir).filter(dir => dir.startsWith('.agents/skills/') && materialized.has(`${dir}/SKILL.md`)) : [],
       shadowDir, mirrorRoot, shortcutLayout, sessionRoot, extraDirs: virtualAll.slice(0, extraCount), writableDirs: virtualAll.slice(extraCount), projectText,
       ...(controllerManagedSkills ? { controllerManagedSkills } : {}),
     };
@@ -1742,7 +1749,7 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
         guestHome = guestHomeFor(guestScopeOf(run.controller, run.relayKey));
         await fsp.mkdir(guestHome, { recursive: true, mode: 0o700 });
       }
-      const { shadowDir, mirrorRoot, shortcutLayout, sessionRoot, extraDirs, writableDirs, projectText, controllerManagedSkills } = await timing.measure('shadow-workspace', () =>
+      const { shadowDir, mirrorRoot, shortcutLayout, sessionRoot, extraDirs, writableDirs, projectText, controllerManagedSkills, skillDirs } = await timing.measure('shadow-workspace', () =>
         withShadowLock(hostSessionId, async () => {
           // 断线后旧实例还没清理就重新打开同一任务时，新旧实例共用同一个影子目录：
           // 先结束旧实例再重建，避免删掉旧 Agent 还在使用的目录，或两个实例争用重建后的目录。
@@ -1795,6 +1802,7 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
             (run.localWs ??= new Set()).add(connId);
             if (wsPath.split('?')[0] === EXEC_SERVER_WS_PATH) {
               execConns.add(connId);
+              if (skillDirs.length) (run.execSkillDiscovery ??= new Map()).set(connId, createExecServerSkillDiscovery(shadowDir, skillDirs));
               if (!startupComplete) execServerStats.connections += 1;
               if (!startupComplete && shortcut) {
                 (run.execStartupBatches ??= new Map()).set(connId, createExecServerStartupBatch({
@@ -1820,12 +1828,14 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
               return;
             }
             if (run.execStartupBatches?.get(connId)?.request(data)) return;
+            run.execSkillDiscovery?.get(connId)?.request(data);
             if (!startupComplete && execConns.has(connId)) execServerStats.forwarded += 1;
             append(run, { t: 'ws', connId, kind: 'message', data });
           },
           wsClose: (connId) => {
             run.localWs?.delete(connId);
             execConns.delete(connId);
+            run.execSkillDiscovery?.delete(connId);
             run.execStartupBatches?.delete(connId);
             append(run, { t: 'ws', connId, kind: 'close' });
           },
@@ -2037,6 +2047,7 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
     run.releaseAttachmentPreservation?.();
     run.releaseAttachmentPreservation = undefined;
     await run.tunnel?.close().catch(() => undefined);
+    run.execSkillDiscovery?.clear();
     run.execStartupBatches?.clear();
     await imagePreparation.get(run);
     run.tunnel = undefined;
@@ -3003,6 +3014,7 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
     run.releaseAttachmentPreservation?.();
     run.releaseAttachmentPreservation = undefined;
     await run.tunnel?.close().catch(() => undefined);
+    run.execSkillDiscovery?.clear();
     run.execStartupBatches?.clear();
     // Native image materialization must finish before the log becomes unreadable.
     await imagePreparation.get(run);
@@ -4441,16 +4453,20 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
               // 单条消息拼接上限与反向请求载荷一致，防止无限累积。
               if (joined.length > REMOTE_AGENT_MAX_PAYLOAD_BYTES) {
                 run.pushParts.delete(frame.connId);
+                run.execSkillDiscovery?.delete(frame.connId);
                 run.execStartupBatches?.delete(frame.connId);
                 run.tunnel?.closeWs(frame.connId);
               } else run.pushParts.set(frame.connId, joined);
               continue;
             }
             run.pushParts.delete(frame.connId);
-            if (!run.execStartupBatches?.get(frame.connId)?.response(joined)) run.tunnel?.sendWs(frame.connId, joined);
+            if (!run.execStartupBatches?.get(frame.connId)?.response(joined)) {
+              run.tunnel?.sendWs(frame.connId, run.execSkillDiscovery?.get(frame.connId)?.response(joined) ?? joined);
+            }
           } else {
             run.pushParts.delete(frame.connId);
             // closeWs removes its connection before the close event; wsClose will not run.
+            run.execSkillDiscovery?.delete(frame.connId);
             run.execStartupBatches?.delete(frame.connId);
             run.tunnel?.closeWs(frame.connId);
           }
