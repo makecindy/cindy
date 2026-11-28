@@ -459,6 +459,19 @@ describe('bot group remote resources', () => {
       actionId: 'assistantDevice', resourceRef: ref('g1'), input: { deviceId: 'second' } });
     expect(service.chatServer.manage).toHaveBeenCalledWith({ groupId: 'g1', action: { type: 'assistantDevice', deviceId: 'second' } });
 
+    // The phone's card may only end a request this computer listed as the account's own wait for a computer.
+    const waiting = detail({ serverBacked: true, assistantComputers: [{ id: 'second', name: 'Windows' }],
+      assistantDeviceWaits: [{ executionId: 'e1', sourceMessageId: 'm1', requestText: 'Weekly report' }] });
+    service.getGroup.mockResolvedValueOnce({ ok: true, group: waiting });
+    await remoteResourceRegistry.invoke(context, { client: client(), collectionId: BOT_GROUP_REMOTE_COLLECTION_ID,
+      actionId: 'cancelAssistantDeviceWait', resourceRef: ref('g1'), input: { executionId: 'e1' } });
+    expect(service.chatServer.manage).toHaveBeenCalledWith({ groupId: 'g1', action: { type: 'cancelAssistantDeviceWait', executionId: 'e1' } });
+    service.getGroup.mockResolvedValueOnce({ ok: true, group: waiting });
+    service.chatServer.manage.mockClear();
+    await expect(remoteResourceRegistry.invoke(context, { client: client(), collectionId: BOT_GROUP_REMOTE_COLLECTION_ID,
+      actionId: 'cancelAssistantDeviceWait', resourceRef: ref('g1'), input: { executionId: 'someone-else' } })).rejects.toThrow();
+    expect(service.chatServer.manage).not.toHaveBeenCalled();
+
     service.getGroup.mockResolvedValueOnce({ ok: true, group: detail({ serverBacked: true, supportsNotificationSettings: true, notificationMode: 'all' }) });
     await remoteResourceRegistry.invoke(context, { client: client(), collectionId: BOT_GROUP_REMOTE_COLLECTION_ID,
       actionId: 'notifications', resourceRef: ref('g1'), input: { mode: 'mentions' } });
