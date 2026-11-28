@@ -8,6 +8,7 @@ import type { MobileLocalAttachmentUploadCandidate } from "./mobileLocalAttachme
 import {
   getCurrentMobileOutboxRecords,
   mobileDurableOutbox,
+  retractSubmittedDialogueCreation,
 } from "./mobileDurableOutbox";
 import { outboxCreationRetryIdentity } from "./cancelledCreationDraft";
 import { buildOutboxItem, createOutboxClientId } from "./sessionOutbox";
@@ -38,6 +39,7 @@ import type { RemoteSerializedAttachment, RemoteSession } from "./types";
 export const newSessionCreationPreparationServices = {
   getCurrentMobileOutboxRecords,
   mobileDurableOutbox,
+  retractSubmittedDialogueCreation,
   outboxCreationRetryIdentity,
   buildOutboxItem,
   createNewSessionId,
@@ -134,6 +136,7 @@ export async function prepareNewSessionCreation(
   const {
     getCurrentMobileOutboxRecords,
     mobileDurableOutbox,
+    retractSubmittedDialogueCreation,
     outboxCreationRetryIdentity,
     buildOutboxItem,
     createNewSessionId,
@@ -277,8 +280,16 @@ export async function prepareNewSessionCreation(
       if (!saved) return false;
       if (!isCurrentOwner() || !ensureDeviceAlive()) {
         // An aborted submission must not leave an unhanded-off host-creation intent behind.
-        if (isCurrentOwner() && needsHostCreation(saved)) {
-          await mobileDurableOutbox.remove(saved).catch(() => undefined);
+        if (needsHostCreation(saved)) {
+          await retractSubmittedDialogueCreation(
+            {
+              accountId: saved.accountId,
+              deviceId: saved.deviceId,
+              sessionId: saved.item.sessionId,
+              clientId: saved.item.clientId,
+            },
+            { store: mobileDurableOutbox, holdCreation: holdNewSessionCreationDraft },
+          );
         }
         return false;
       }

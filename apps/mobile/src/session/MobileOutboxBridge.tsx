@@ -167,6 +167,7 @@ export function MobileOutboxBridge() {
       isCurrent,
       getRecords: () => mobileDurableOutbox.getSnapshot(),
       hidden,
+      isCreationHeld: isDurableOutboxCreationHeld,
       needsReconciliation,
       restoreEditable: restoreNewSessionDurableEdit,
       dismissCancelled: dismissRecoveredPrecreatedSession,

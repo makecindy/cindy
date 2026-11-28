@@ -55,7 +55,12 @@ import { modelNeedsReselection } from '@/session/modelReselection';
 
 import { completePrecreatedWorktreeRecovery } from '@/session/completePrecreatedWorktreeRecovery';
 
-import { mobileDurableOutbox, getCurrentMobileOutboxRecords } from '@/session/mobileDurableOutbox';
+import {
+  mobileDurableOutbox,
+  getCurrentMobileOutboxRecords,
+  retractSubmittedDialogueCreation,
+  type SubmittedDialogueTarget,
+} from '@/session/mobileDurableOutbox';
 
 import { needsHostCreation, type DurableOutboxRecord } from '@/session/durableOutbox';
 import { stripTrailingPathSeparators } from '@cindy/maker-shared/path-text';
@@ -4348,7 +4353,7 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
     // 回来的是新 mount,creatingRef 天然复位。
     let handedOff = false;
     let endBackgroundDelivery: (() => void) | undefined;
-    let submittedDialogue: { deviceId: string; sessionId: string; clientId: string } | null = null;
+    let submittedDialogue: SubmittedDialogueTarget | null = null;
     const creationLeases: { precreated: (() => void) | null; durable: (() => void) | null;
     } = { precreated: null, durable: null };
     const accountIdAtCreate = auth.user?.id?.trim() ?? '';
@@ -4598,7 +4603,12 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
         if (!ensureDeviceAlive()) return;
         if (prepared.persistSubmittedDialogue) {
           if (!await prepared.persistSubmittedDialogue(checkedDraft(guardResult))) return;
-          submittedDialogue = { deviceId: deviceIdSnapshot, sessionId, clientId: firstMessageClientId };
+          submittedDialogue = {
+            accountId: authOwnerAtCreate.accountKey,
+            deviceId: deviceIdSnapshot,
+            sessionId,
+            clientId: firstMessageClientId,
+          };
           if (!isCurrentOwner() || !ensureDeviceAlive()) return;
           if (getDeviceProvidersGen(guardDeviceId) !== guardResult.genAt) {
             guardResult = await runGuard();
@@ -4723,18 +4733,17 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
       const raw = formatRemoteError(err);
       setError(raw);
     } finally {
-      if (!handedOff && submittedDialogue && isCurrentOwner()) {
+      if (!handedOff && submittedDialogue) {
         // Retract an unhanded-off host-creation record before releasing the lease,
-        // so an aborted device switch or rejected guard cannot launch it in background.
-        const stale = getCurrentMobileOutboxRecords().find(
-          (record) => record.deviceId === submittedDialogue!.deviceId
-            && record.item.sessionId === submittedDialogue!.sessionId
-            && record.item.clientId === submittedDialogue!.clientId
-            && needsHostCreation(record),
-        );
-        if (stale) {
-          await mobileDurableOutbox.remove(stale).catch(() => undefined);
-          if (outboxRecoveryRef.current === stale) outboxRecoveryRef.current = null;
+        // so an aborted device switch, logout, or rejected guard cannot launch it in background.
+        const target = submittedDialogue;
+        await retractSubmittedDialogueCreation(target);
+        if (
+          outboxRecoveryRef.current?.deviceId === target.deviceId
+          && outboxRecoveryRef.current.item.sessionId === target.sessionId
+          && outboxRecoveryRef.current.item.clientId === target.clientId
+        ) {
+          outboxRecoveryRef.current = null;
         }
       }
       creationLeases.precreated?.();
