@@ -15309,6 +15309,24 @@
       "removeFromList": "Aus Liste entfernen",
       "missingDir": "Ordner nicht gefunden"
     },
+    "remoteOutbox": {
+      "notSent": "Nicht gesendet",
+      "retry": "Erneut versuchen",
+      "delete": "Löschen",
+      "deliveryUnconfirmed": "Sendeergebnis unbestätigt",
+      "recheckDelivery": "Erneut prüfen",
+      "waitingForPrevious": "Wartet auf die vorherige Nachricht",
+      "taskInactive": "Diese Aufgabe kann gerade keine Nachrichten empfangen.",
+      "inputNotSupported": "Dieser Computer unterstützt diesen Nachrichtentyp für die Aufgabe nicht.",
+      "taskClearedBeforeSend": "Die Aufgabe wurde oder wird gerade geleert. Die Nachricht bleibt auf diesem Gerät gespeichert.",
+      "invalidInput": "Der Computer hat die Nachricht wegen ungültiger Inhalte abgelehnt.",
+      "profileInUseByDesktop": "Diese Daten werden von der eigenständig laufenden Cindy-Desktop-App verwendet. Beende sie und sende dann erneut.",
+      "other": "Diese Aktion wurde nicht abgeschlossen. Versuche es gleich erneut.",
+      "deleteConfirmTitle": "Diese Nachricht löschen?",
+      "deleteConfirmBody": "Diese Nachricht wurde nicht gesendet. Das Löschen kann nicht rückgängig gemacht werden.",
+      "deleteUnconfirmedBody": "Der Computer hat diese Nachricht möglicherweise schon empfangen. Beim Löschen wird nur die ausstehende Nachricht auf diesem Gerät entfernt. Hat der Computer sie empfangen, ist sie weiterhin im Gesprächsverlauf zu sehen.",
+      "cancel": "Abbrechen"
+    },
     "pendingQueue": {
       "waitingForDevice": "Nicht gesendet · Wird gesendet, sobald der andere Computer wieder verbunden ist",
       "stopping": "Wird gestoppt",

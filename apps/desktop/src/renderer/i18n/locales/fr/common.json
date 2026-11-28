@@ -15434,6 +15434,24 @@
       "removeFromList": "Retirer de la liste",
       "missingDir": "Dossier introuvable"
     },
+    "remoteOutbox": {
+      "notSent": "Non envoyé",
+      "retry": "Réessayer",
+      "delete": "Supprimer",
+      "deliveryUnconfirmed": "Envoi non confirmé",
+      "recheckDelivery": "Vérifier à nouveau",
+      "waitingForPrevious": "En attente du message précédent",
+      "taskInactive": "Cette tâche ne peut pas recevoir de messages pour le moment.",
+      "inputNotSupported": "Cet ordinateur ne prend pas en charge l’envoi de ce type de message à cette tâche.",
+      "taskClearedBeforeSend": "La tâche a été vidée ou est en cours de nettoyage. Le message reste enregistré sur cet appareil.",
+      "invalidInput": "L’ordinateur a refusé le message, car son contenu est invalide.",
+      "profileInUseByDesktop": "Ces données sont utilisées par l’application de bureau Cindy qui s’exécute seule. Quittez-la, puis renvoyez le message.",
+      "other": "Cette action n'a pas abouti. Réessayez dans un instant.",
+      "deleteConfirmTitle": "Supprimer ce message ?",
+      "deleteConfirmBody": "Ce message n'a pas été envoyé. Sa suppression est irréversible.",
+      "deleteUnconfirmedBody": "L’ordinateur a peut-être déjà reçu ce message. La suppression retire uniquement le message en attente sur cet appareil. Si l’ordinateur l’a reçu, il apparaîtra toujours dans l’historique de la conversation.",
+      "cancel": "Annuler"
+    },
     "pendingQueue": {
       "waitingForDevice": "Non envoyé · Envoi à la reconnexion de l’autre ordinateur",
       "stopping": "Arrêt en cours",

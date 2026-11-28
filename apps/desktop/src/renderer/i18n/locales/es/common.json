@@ -15434,6 +15434,24 @@
       "removeFromList": "Quitar de la lista",
       "missingDir": "Carpeta no encontrada"
     },
+    "remoteOutbox": {
+      "notSent": "No enviado",
+      "retry": "Reintentar",
+      "delete": "Eliminar",
+      "deliveryUnconfirmed": "Envío sin confirmar",
+      "recheckDelivery": "Volver a comprobar",
+      "waitingForPrevious": "En espera del mensaje anterior",
+      "taskInactive": "Esta tarea no puede recibir mensajes en este momento.",
+      "inputNotSupported": "Este ordenador no permite enviar este tipo de mensaje a la tarea.",
+      "taskClearedBeforeSend": "La tarea se ha vaciado o se está vaciando. El mensaje sigue guardado en este dispositivo.",
+      "invalidInput": "El ordenador ha rechazado el mensaje porque contiene datos no válidos.",
+      "profileInUseByDesktop": "La aplicación de escritorio de Cindy, que se está ejecutando por su cuenta, está usando estos datos. Ciérrala y vuelve a enviar.",
+      "other": "Esta acción no terminó. Inténtalo de nuevo en un momento.",
+      "deleteConfirmTitle": "¿Eliminar este mensaje?",
+      "deleteConfirmBody": "Este mensaje no se envió. Si lo eliminas, no podrás deshacerlo.",
+      "deleteUnconfirmedBody": "Es posible que la computadora ya haya recibido este mensaje. Al eliminarlo, solo se quitará el mensaje pendiente de este dispositivo. Si la computadora lo recibió, seguirá apareciendo en el historial de la conversación.",
+      "cancel": "Cancelar"
+    },
     "pendingQueue": {
       "waitingForDevice": "Sin enviar · Se enviará cuando el otro equipo se reconecte",
       "stopping": "Parando",

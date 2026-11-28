@@ -15250,6 +15250,24 @@
       "removeFromList": "從列表中移除",
       "missingDir": "目錄不存在"
     },
+    "remoteOutbox": {
+      "notSent": "未傳送",
+      "retry": "重試",
+      "delete": "刪除",
+      "deliveryUnconfirmed": "傳送結果未確認",
+      "recheckDelivery": "重新確認",
+      "waitingForPrevious": "等待前一則訊息",
+      "taskInactive": "這個任務目前無法接收訊息。",
+      "inputNotSupported": "這部電腦暫不支援向這個任務傳送這類訊息。",
+      "taskClearedBeforeSend": "任務已清空或正在清空，訊息仍儲存在這部裝置上。",
+      "invalidInput": "這則訊息包含無效內容，電腦未接收。",
+      "profileInUseByDesktop": "這份資料正被單獨執行的 Cindy 電腦端使用。請先結束它，再傳送。",
+      "other": "這個操作沒有完成。請稍後重試。",
+      "deleteConfirmTitle": "刪除這則訊息？",
+      "deleteConfirmBody": "這則訊息未能成功傳送，刪除後無法復原。",
+      "deleteUnconfirmedBody": "電腦可能已經收到這則訊息。刪除只會移除這部裝置上的待傳訊息。若電腦已收到，這則訊息仍會出現在對話記錄中。",
+      "cancel": "取消"
+    },
     "pendingQueue": {
       "waitingForDevice": "尚未傳送，待另一台電腦重新連線後傳送",
       "stopping": "停止處理中",
