@@ -247,8 +247,8 @@ function computeMetricSlots(
   // Cindy 自己的计费账本, 与账单页 BILLING_CURRENCY 同一笔钱、必须同口径 —— 不能
   // 改用 Gateway 目录下发的币种, 否则同一笔余额在两个界面显示成不同货币。
   if (creditTotals) {
-    const used = formatBillingAmount(String(creditTotals.used), BILLING_CURRENCY, locale);
-    const total = formatBillingAmount(String(creditTotals.total), BILLING_CURRENCY, locale);
+    const used = formatBillingAmount(creditTotals.used.toFixed(9), BILLING_CURRENCY, locale);
+    const total = formatBillingAmount(creditTotals.total.toFixed(9), BILLING_CURRENCY, locale);
     slots.credit = {
       label: t('todaySpend.creditLabel', { used, total }),
       tooltipLabel: t('todaySpend.tooltip.creditUsed', { used, total }),

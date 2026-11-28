@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ReactElement } from 'react';
 import type { MobileCodexRateLimitsResult } from '@cindy/maker-shared/device-link-contract';
 import { ConfirmDialogProvider } from '@/components/ui/confirm-dialog-provider';
+import { BILLING_CURRENCY, formatBillingAmount } from '@/features/billing/money';
 
 function render(ui: ReactElement) {
   return renderUI(ui, { wrapper: ConfirmDialogProvider });
@@ -394,6 +395,22 @@ describe('TodaySpendChip credit snapshot time', () => {
     const card = openUsageCard();
     expect(card.textContent).toContain('账号已用 $0.52 · 总额 $3.00');
     expect(within(card).getByRole('progressbar').getAttribute('aria-valuenow')).toBe('83');
+  });
+
+  // #13698: tiny nine-place ledger values must format like billing's decimal-string input.
+  it('formats tiny credit usage like billing without changing the balance percentage', () => {
+    mocks.creditSnapshot = {
+      ...creditSnapshot(new Date().toISOString()),
+      available: '2.9999999',
+      plan: { remaining: '2.9999999', used: '0.0000001', total: '3.00' },
+    };
+    render(gatewayChip());
+    const used = formatBillingAmount('0.0000001', BILLING_CURRENCY, 'zh-CN');
+    const total = formatBillingAmount('3.00', BILLING_CURRENCY, 'zh-CN');
+    expect(screen.getByRole('button', { name: '用量明细' }).textContent).toContain(`${used} / ${total}`);
+    const card = openUsageCard();
+    expect(card.textContent).toContain(`账号已用 ${used} · 总额 ${total}`);
+    expect(within(card).getByRole('progressbar').getAttribute('aria-valuenow')).toBe('100');
   });
 
   // Unit regression: the rendered chip and card must distinguish a disabled
