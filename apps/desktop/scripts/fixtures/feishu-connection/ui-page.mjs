@@ -14,6 +14,11 @@ export default {
       'export const FeishuBotNotificationSection = () => null;',
   },
   cases: {
+    unbound: {
+      about: 'Unbound form: app setup hint, create link and collapsed steps',
+      viewport: { width: 660, height: 760 },
+      data: { status: 'idle', hasSecret: false, appId: '', ownerOpenId: null },
+    },
     default: {
       about: 'Timeout explains recovery and exposes reconnect',
       data: { error: 'Timed out waiting for connection (no onReady).' },
@@ -46,11 +51,47 @@ export default {
     },
   },
   async ready(page) {
-    await page.locator('[data-feishu-connection-card]').waitFor();
+    await page.locator('#personal-im-feishu').waitFor();
   },
   async check(page, ui) {
-    const card = page.locator('[data-feishu-connection-card]');
-    const reconnect = card.getByRole('button', {
+    const card = page.locator('#personal-im-feishu');
+    if (ui.case === 'unbound') {
+      await card
+        .getByText(await ui.t('bots.channels.add.feishu.stepCreate'), { exact: true })
+        .waitFor();
+      assert.ok(
+        await card
+          .getByRole('button', {
+            name: await ui.t('settings.feishuBot.createLink', {
+              service: await ui.t('settings.feishuBot.services.feishu'),
+            }),
+          })
+          .isVisible(),
+      );
+      assert.ok(
+        await card
+          .getByRole('button', { name: await ui.t('settings.feishuBot.bind'), exact: true })
+          .isVisible(),
+      );
+      const steps = card.getByRole('button', {
+        name: await ui.t('bots.channels.add.feishu.stepsLabel'),
+        exact: true,
+      });
+      assert.equal(await steps.getAttribute('aria-expanded'), 'false');
+      assert.equal(
+        await card.getByText(await ui.t('settings.feishuBot.setup.afterBind'), { exact: true }).count(),
+        0,
+      );
+      await steps.click();
+      assert.equal(await steps.getAttribute('aria-expanded'), 'true');
+      await card
+        .getByText(await ui.t('settings.feishuBot.setup.afterBind'), { exact: true })
+        .waitFor();
+      await ui.capture('expanded');
+      return;
+    }
+    const connectionCard = page.locator('[data-feishu-connection-card]');
+    const reconnect = connectionCard.getByRole('button', {
       name: await ui.t('settings.feishuBot.connected.reconnect', {
         service: await ui.t('settings.feishuBot.services.feishu'),
       }),
@@ -69,18 +110,18 @@ export default {
     };
     if (notes[ui.case])
       assert.ok(
-        await card
+        await connectionCard
           .getByText(await ui.t(`settings.feishuBot.saved.${notes[ui.case]}`), { exact: true })
           .isVisible(),
       );
     if (ui.data.error) {
-      const details = card.getByRole('button', {
+      const details = connectionCard.getByRole('button', {
         name: await ui.t('chat.errorBanner.networkShowRaw'),
         exact: true,
       });
       assert.equal(await details.getAttribute('aria-expanded'), 'false');
       await details.click();
-      assert.equal(await card.locator('pre').innerText(), ui.data.error);
+      assert.equal(await connectionCard.locator('pre').innerText(), ui.data.error);
     }
     if (ui.case === 'default') {
       await ui.emit('feishu-status', {
@@ -88,7 +129,7 @@ export default {
         botAppId: 'cli_example1234567890',
         ownerOpenId: 'ou_example1234567890',
       });
-      await card
+      await connectionCard
         .getByText(
           await ui.t('settings.feishuBot.connected.heading', {
             service: await ui.t('settings.feishuBot.services.feishu'),
@@ -96,7 +137,7 @@ export default {
           { exact: true },
         )
         .waitFor();
-      assert.equal(await card.locator('pre').count(), 0);
+      assert.equal(await connectionCard.locator('pre').count(), 0);
       await ui.capture('recovered');
     }
     await reconnect.click();
@@ -112,7 +153,7 @@ export default {
         .isVisible(),
     );
     assert.ok(
-      await card
+      await connectionCard
         .getByText(await ui.t('settings.feishuBot.status.connecting'), { exact: true })
         .isVisible(),
     );

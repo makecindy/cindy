@@ -14,10 +14,10 @@ void mountPage({
       getState: async () => ({
         status: ctx.data.status ?? 'error',
         error: ctx.data.error,
-        appId: 'cli_example1234567890',
+        appId: ctx.data.appId ?? 'cli_example1234567890',
         appSecret: null,
-        hasSecret: true,
-        ownerOpenId: 'ou_example1234567890',
+        hasSecret: ctx.data.hasSecret ?? true,
+        ownerOpenId: ctx.data.ownerOpenId ?? 'ou_example1234567890',
         lifecycleAnnouncement: false,
         service: 'feishu',
       }),
