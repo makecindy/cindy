@@ -131,6 +131,14 @@ esac`);
     assert.equal(downloads.filter((url) => url.includes('/manifest-linux-x64.json?t=')).length, 4);
     assert.ok(downloads.every((url) => url.startsWith('https://hotfix.cindy.app/cindy/')));
     assert.equal(fs.readdirSync(path.join(home, '.local/share/applications')).filter((f) => f.endsWith('.desktop')).length, 1);
+    const entryDir = path.join(home, '.local/share/applications');
+    const [entryName] = fs.readdirSync(entryDir).filter((f) => f.endsWith('.desktop'));
+    const execLine = fs.readFileSync(path.join(entryDir, entryName), 'utf8')
+      .split('\n').find((line) => line.startsWith('Exec='));
+    assert.ok(execLine, 'desktop entry has an Exec line');
+    const execWord = execLine.slice('Exec='.length).split(' ')[0];
+    assert.ok(!execWord.startsWith('"'), 'Exec must not quote the launcher: xdg-open does not strip the quotes');
+    assert.ok(fs.existsSync(execWord), `Exec points at the installed launcher (${execWord})`);
     assert.ok(fs.readFileSync(path.join(home, 'mime.log'), 'utf8').includes('x-scheme-handler/cindy'));
     const active = pointer(prefix);
     fails(run(home, v1), /refusing to downgrade/);
