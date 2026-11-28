@@ -103,11 +103,13 @@
     "missingRefinerTargetProvider": "Die Überarbeitung der Spracheingabe ist nicht verfügbar. Melde dich erneut bei {{appName}} an und versuch es noch einmal.",
     "emptyTranscript": "Die Spracherkennung hat keinen Text zurückgegeben. Nimm erneut auf.",
     "speakerFiltered": "Stimme einer anderen Person ignoriert",
+    "undoRefinement": "Original wiederherstellen",
     "connectionInterrupted": "Die Sprachverbindung wurde unterbrochen. Prüfe dein Netzwerk und versuche es erneut.",
     "recognitionStalled": "Die Spracherkennung liefert keine Ergebnisse mehr. Versuche es erneut.",
     "transcriptKept": "{{message}} Der bisher erkannte Text wurde beibehalten — du kannst ihn direkt bearbeiten.",
     "micPermission": "Der Mikrofonzugriff ist deaktiviert. Erlaube {{appName}} in den Systemeinstellungen den Zugriff auf das Mikrofon.",
-    "realtimeAudioUnavailable": "Dieser Build unterstützt keine Echtzeit-Spracheingabe. Installiere einen Test-Build mit dem nativen Aufnahmemodul."
+    "realtimeAudioUnavailable": "Dieser Build unterstützt keine Echtzeit-Spracheingabe. Installiere einen Test-Build mit dem nativen Aufnahmemodul.",
+    "retryRecognition": "Erneut erkennen"
   },
   "incomingShare": {
     "title": "An Cindy senden",

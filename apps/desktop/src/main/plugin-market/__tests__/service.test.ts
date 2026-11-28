@@ -17,6 +17,7 @@ import { writeTestCindyPackage } from '../../cindy-brain/__tests__/cindyPackageF
 import { assertGhostInstallConsent, confirmedUiCapability, type GhostInstallConsentDecision } from '../../cindy-brain/ghostInstallConsent.js';
 import { installedGhostStoragePart } from '../../../shared/pluginIdentity.js';
 import { emptyPluginInstanceRegistry } from '../../cindy-brain/pluginInstanceRegistry.js';
+import { trackPluginEngineSession } from '../../cindy-brain/pluginHarnesses.js';
 
 import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 
@@ -4522,12 +4523,19 @@ describe('PluginMarketService migration and defaultInstall', () => {
     },
   );
 
-  // Unit, #13404: buildAcpAgentCore → startSession and market snapshot → package replacement.
-  // Direct transport setup would hide a missing instance ID in the Host factory.
-  // A single pending ACP prompt or background tool must keep the installed version on disk.
-  it.each(['before-check', 'during-download', 'during-stop-preparation'] as const)(
-    'keeps existing ACP work running when it starts %s, then upgrades at idle',
-    async (when) => {
+  // Unit, #13404: market snapshot must preserve the installed version and a live
+  // buildAcpAgentCore session at each check. Existing turn-only coverage misses
+  // a single in-progress tool after session/prompt has already returned.
+  it.each([
+    ['turn', 'before-check'],
+    ['turn', 'during-download'],
+    ['turn', 'during-stop-preparation'],
+    ['background tool', 'before-check'],
+    ['background tool', 'during-download'],
+    ['background tool', 'during-stop-preparation'],
+  ] as const)(
+    'keeps an ACP %s running %s, then upgrades at idle',
+    async (work, when) => {
       const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-market-acp-'));
       roots.push(root);
       const manager = new GhostManager({
@@ -4626,7 +4634,15 @@ describe('PluginMarketService migration and defaultInstall', () => {
       vi.useFakeTimers({ toFake: ['Date'] });
       onTestFinished(() => { vi.useRealTimers(); });
       const engine = await spawn();
-      const send = () => engine.session.send({ type: 'user', content: 'Run fixture' });
+      const startWork = async () => {
+        await engine.session.send({ type: 'user', content: 'Run fixture' });
+        if (work === 'background tool') {
+          engine.process.tool({ sessionUpdate: 'tool_call', toolCallId: 'job', title: 'Work', status: 'in_progress' });
+          engine.process.finish();
+          await vi.waitFor(() => expect(engine.session.isTurnRunning?.()).toBe(false));
+          expect(await engine.session.hasLiveBackgroundWork?.()).toBe(true);
+        }
+      };
       const downloadStarted = deferred();
       const downloadGate = deferred();
       const prepareStarted = deferred();
@@ -4647,10 +4663,10 @@ describe('PluginMarketService migration and defaultInstall', () => {
           prepareStarted.resolve();
           await prepareGate.promise;
         }
-        options.assertIdleBeforeStop?.(instanceId);
-        broker.stopHarnesses(instanceId);
+        options.beforeRuntimeStopInLock?.();
+        const stopped = broker.stopAndWait(instanceId);
         await expect(spawn()).rejects.toThrow('stopping or updating');
-        await broker.stopAndWait(instanceId);
+        await stopped;
         const result = await manager.update(file, {
           namespace: null, manifestSource: 'stored-release', approvedHarnesses: ['test'],
           expectedPackageSha256: inspected.packageSha256, expectedInstalledApproval: options.expectedInstalledApproval,
@@ -4660,30 +4676,29 @@ describe('PluginMarketService migration and defaultInstall', () => {
         return result.ghost;
       });
       try {
-        if (when === 'before-check') await send();
+        if (when === 'before-check') await startWork();
         const check = h.service.snapshot();
         if (when !== 'before-check') {
           const preparingStop = when === 'during-stop-preparation';
           const started = preparingStop ? prepareStarted : downloadStarted;
           const gate = preparingStop ? prepareGate : downloadGate;
           await Promise.race([started.promise, check.then(() => { throw new Error('Update did not reach the fixture gate'); })]);
-          await send();
+          await startWork();
           gate.resolve();
         }
         await check;
         expect(engine.process.kill).not.toHaveBeenCalled();
-        expect(engine.session.isTurnRunning?.()).toBe(true);
+        expect(engine.session.isTurnRunning?.()).toBe(work === 'turn');
         expect(manager.list()[0]?.manifest.version).toBe('1.0.0');
 
-        engine.process.tool({ sessionUpdate: 'tool_call', toolCallId: 'job', title: 'Work', status: 'in_progress' });
-        engine.process.finish();
-        await vi.waitFor(() => expect(engine.session.isTurnRunning?.()).toBe(false));
-        expect(await engine.session.hasLiveBackgroundWork?.()).toBe(true);
-        await h.service.snapshot();
-        expect(engine.process.kill).not.toHaveBeenCalled();
-
-        engine.process.tool({ sessionUpdate: 'tool_call_update', toolCallId: 'job', status: 'completed' });
-        vi.setSystemTime(Date.now() + 30_001);
+        if (work === 'turn') {
+          engine.process.finish();
+          await vi.waitFor(() => expect(engine.session.isTurnRunning?.()).toBe(false));
+        } else {
+          expect(await engine.session.hasLiveBackgroundWork?.()).toBe(true);
+          engine.process.tool({ sessionUpdate: 'tool_call_update', toolCallId: 'job', status: 'completed' });
+          vi.setSystemTime(Date.now() + 30_001);
+        }
         expect(await engine.session.hasLiveBackgroundWork?.()).toBe(false);
         await h.service.snapshot();
         expect(engine.process.kill).toHaveBeenCalledTimes(1);
@@ -6775,6 +6790,60 @@ describe('organization default Plugin takeover', () => {
     });
     await h.service.snapshot();
     expect(runtime.install).toHaveBeenCalledTimes(1);
+  });
+
+  // Regression (2026-11-28): a silent update stopped a plugin task engine while four tasks were
+  // mid-turn, killing them. A running engine turn now defers the update like other plugin work;
+  // an engine session that is only idle does not, so updates are not postponed indefinitely.
+  it('defers a silent update while a plugin engine turn is running', async () => {
+    setCurrentOrganization();
+    const item = organizationDefaultSummary();
+    const dir = installRuntimeGhost({ ...manifest(item.ghostId), description: 'Local package' });
+    const h = harness([item]);
+    let turnRunning = true;
+    // A root install's busy key is its ghost id (see 'uses the namespaced storage part as the busy key').
+    const untrack = trackPluginEngineSession(item.ghostId, {
+      isTurnRunning: () => turnRunning,
+    });
+    try {
+      await h.service.snapshot();
+      expect(h.api.detail).not.toHaveBeenCalled();
+
+      turnRunning = false;
+      runtime.install.mockImplementationOnce(async (_file, options) => {
+        options.beforeCommitInLock?.();
+        const installed = { manifest: manifest(item.ghostId), dir, enabled: true };
+        fs.writeFileSync(path.join(dir, 'ghost.json'), JSON.stringify(installed.manifest));
+        runtime.ghosts = [installed];
+        return installed;
+      });
+      await h.service.snapshot();
+      expect(runtime.install).toHaveBeenCalledTimes(1);
+    } finally { untrack(); }
+  });
+
+  // Review regression: a turn can start while the update waits for browser work to end.
+  // The final check must still defer the update without recording a failed release.
+  it('defers an automatic update when a turn starts after the earlier busy check', async () => {
+    setCurrentOrganization();
+    const item = organizationDefaultSummary();
+    installRuntimeGhost({ ...manifest(item.ghostId), description: 'Local package' });
+    const h = harness([item]);
+    let turnRunning = false;
+    const untrack = trackPluginEngineSession(item.ghostId, { isTurnRunning: () => turnRunning });
+    try {
+      runtime.install.mockImplementationOnce(async (_file, options) => {
+        options.beforeCommitInLock?.();
+        turnRunning = true;
+        options.beforeRuntimeStopInLock?.();
+        throw new Error('The final activity check did not defer the update');
+      });
+      await h.service.snapshot();
+      expect(runtime.ghosts[0]?.manifest.version).toBe('1.0.0');
+      turnRunning = false;
+      await h.service.snapshot();
+      expect(runtime.install).toHaveBeenCalledTimes(2);
+    } finally { untrack(); }
   });
 
   it.each(['detail', 'download', 'inspect'] as const)(

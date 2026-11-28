@@ -13,6 +13,7 @@ export type ReviewDisableReason =
   | 'no-workdir'
   | 'non-git'
   | 'git-unavailable'
+  | 'svn-unavailable'
   | 'invalid-worktree'
   | 'unknown';
 
@@ -24,6 +25,7 @@ export interface AheadBehind {
 }
 
 export interface ReviewScope {
+  vcs?: 'svn' | 'git';
   sessionId: string;
   workdir: string | null;
   worktreePath: string | null;
@@ -419,6 +421,8 @@ export interface ReviewPushPushedResult {
   stdout: string;
   stderr: string;
   aheadBehind: AheadBehind;
+  /** True when the push succeeded after a zero-token clean rebase onto the remote branch. */
+  syncedBeforePush?: boolean;
 }
 
 export interface ReviewPushNeedsForceResult {
@@ -431,6 +435,14 @@ export interface ReviewPushNeedsForceResult {
   behind: number;
   upstream: string | null;
   stderr: string;
+  /** Local branch name (present on newer hosts for conflict handoff prompts). */
+  branch?: string;
+  /** True when working tree is clean, no git op is in progress, and merge-tree proved zero conflicts. */
+  canSyncCleanly?: boolean;
+  /** Up to 6 repo-relative conflicting paths reported by merge-tree when conflicts exist. */
+  conflictFiles?: string[];
+  /** True when the checkout has uncommitted changes preventing automatic rebase. */
+  dirty?: boolean;
 }
 
 export type ReviewPushResult = ReviewPushPushedResult | ReviewPushNeedsForceResult;

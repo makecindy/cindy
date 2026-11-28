@@ -80,7 +80,6 @@
       "dingtalk": "DingTalk",
       "imessage": "iMessage"
     },
-    "modelMismatch": "Ce tour a été traité par {{actual}} au lieu du modèle sélectionné {{selected}} (rétrogradation temporaire côté serveur)",
     "copyStateCopying": "Copie en cours",
     "copyStateCopied": "Copié",
     "copyStateFailed": "Échec de la copie",
@@ -287,6 +286,7 @@
     "pendingDelivery": "En attente de livraison",
     "pendingDeliveryHint": "Message enregistré sur ce téléphone. En attente de confirmation de l’ordinateur.",
     "waitingForComputer": "Envoi au retour de l'ordinateur",
+    "waitingForPrevious": "En attente du message précédent",
     "waitingForNetwork": "Envoi au retour du réseau",
     "queued": "En file d'attente",
     "retryImage": "Renvoyer cette image",
@@ -519,5 +519,103 @@
     "wrap": "Retour à la ligne",
     "lineNumbers": "Numéros de ligne",
     "rendered": "Afficher le document"
+  },
+  "modelMismatch": {
+    "notice": "Le fournisseur de modèles a répondu à ce tour avec {{actual}} au lieu de {{selected}}",
+    "noticeWithProvider": "{{provider}} a répondu à ce tour avec {{actual}} au lieu de {{selected}}",
+    "infoLink": "Pourquoi ?",
+    "infoTitle": "Pourquoi un autre modèle a répondu",
+    "infoSummary": "Cindy a envoyé ce tour à {{selected}} comme vous l’avez choisi, mais le fournisseur de modèles a renvoyé la réponse avec {{actual}}.",
+    "infoSummaryWithProvider": "Cindy a envoyé ce tour à {{selected}} comme vous l’avez choisi, mais {{provider}} a renvoyé la réponse avec {{actual}}.",
+    "infoCausesTitle": "Causes fréquentes",
+    "infoCausePolicy": "Repli lié à une politique de sécurité ou de contenu (certains modèles basculent automatiquement vers un modèle antérieur au lieu de refuser).",
+    "infoCauseLoad": "Redirection temporaire par le fournisseur de modèles en période de forte charge.",
+    "infoCauseGateway": "Règles de correspondance ou de routage sur une passerelle tierce ou personnalisée.",
+    "infoActionsTitle": "Que faire",
+    "infoActionContinue": "Aucun changement de paramètres nécessaire : cela n’affecte que ce tour, les messages suivants continueront de demander {{selected}}.",
+    "infoActionRetry": "Si cette réponse ne convient pas, reformulez votre message et renvoyez-le, ou passez à un autre modèle disponible.",
+    "infoActionCheckProvider": "Si cela se répète sur plusieurs tours, vérifiez le quota de votre fournisseur de modèles ou les règles de routage de votre passerelle."
+  },
+  "errorExplain": {
+    "providerSafetyRefusal": {
+      "title": "Pourquoi cette réponse a été bloquée",
+      "summary": "Cindy a transmis votre demande telle quelle, mais la politique de sécurité et de contenu du fournisseur de modèles a bloqué la sortie. Il ne s’agit ni d’une modération de Cindy ni d’un blocage par une extension locale.",
+      "summaryWithProvider": "Cindy a transmis votre demande telle quelle, mais la politique de sécurité et de contenu de {{provider}} a bloqué la sortie. Il ne s’agit ni d’une modération de Cindy ni d’un blocage par une extension locale.",
+      "cause1": "Votre message, une pièce jointe ou le contexte précédent a déclenché les règles de sécurité du fournisseur.",
+      "cause2": "Un filtre de sécurité a interrompu la réponse du modèle en cours de génération.",
+      "action1": "Réessayer à l’identique entraîne généralement le même blocage ; reformulez ou retirez le passage concerné avant de renvoyer.",
+      "action2": "Si le contexte antérieur est en cause, démarrez une nouvelle tâche ou changez de modèle."
+    },
+    "overload": {
+      "title": "Pourquoi le service est saturé",
+      "summary": "Le fournisseur de modèles manque temporairement de capacité de calcul (pic de charge ou erreur HTTP 529). Cela n’est lié ni à Cindy ni à votre réseau local.",
+      "summaryWithProvider": "{{provider}} manque temporairement de capacité de calcul (pic de charge ou erreur HTTP 529). Cela n’est lié ni à Cindy ni à votre réseau local.",
+      "cause1": "Une forte demande aux heures de pointe a saturé la capacité disponible pour ce modèle.",
+      "cause2": "Une maintenance temporaire ou une limitation de capacité est active côté fournisseur.",
+      "action1": "Inutile de redémarrer Cindy ou de modifier votre réseau : patientez un instant puis cliquez sur « Réessayer ».",
+      "action2": "Pour continuer sans attendre, passez temporairement à un autre modèle ou une autre source du groupe."
+    },
+    "streamInterrupted": {
+      "title": "Pourquoi la sortie a été interrompue",
+      "summary": "Le fournisseur de modèles a interrompu la connexion de streaming avant la fin de la réponse. Cindy n’a pas planté et les étapes terminées comme l’historique sont intacts.",
+      "summaryWithProvider": "{{provider}} a interrompu la connexion de streaming avant la fin de la réponse. Cindy n’a pas planté et les étapes terminées comme l’historique sont intacts.",
+      "cause1": "Une erreur serveur temporaire du fournisseur a coupé la génération en cours de route.",
+      "cause2": "Une passerelle relais tierce ou personnalisée a expiré pendant une réponse longue.",
+      "action1": "Cliquez sur « Réessayer » ou envoyez « continue » pour reprendre la suite.",
+      "action2": "Si cela se répète sur plusieurs tours, essayez un autre modèle ou vérifiez le délai d’expiration de votre passerelle."
+    },
+    "upstreamStatus": {
+      "title": "Pourquoi une erreur de service est renvoyée",
+      "summary": "Cindy a bien envoyé votre demande, mais le fournisseur de modèles a renvoyé une erreur interne HTTP {{status}} sans détail. L’anomalie vient du service externe, pas de Cindy.",
+      "summaryWithProvider": "Cindy a bien envoyé votre demande, mais {{provider}} a renvoyé une erreur interne HTTP {{status}} sans détail. L’anomalie vient du service externe, pas de Cindy.",
+      "cause1": "Le serveur du fournisseur de modèles rencontre une défaillance interne temporaire.",
+      "cause2": "Une passerelle tierce ou auto-hébergée a échoué à relayer la requête ou renvoyé un code 5xx personnalisé.",
+      "action1": "Cliquez sur « Réessayer » un peu plus tard ; les incidents passagers se résorbent vite.",
+      "action2": "Si vous utilisez une passerelle tierce ou personnalisée, consultez son état et ses journaux, ou changez de fournisseur."
+    },
+    "modelAccessDenied": {
+      "title": "Pourquoi l’accès à ce modèle est refusé",
+      "summary": "Le fournisseur de modèles a refusé l’accès de ce compte au modèle choisi. Cindy ne peut pas contourner les autorisations côté fournisseur.",
+      "summaryWithProvider": "{{provider}} a refusé l’accès de ce compte au modèle choisi. Cindy ne peut pas contourner les autorisations de {{provider}}.",
+      "cause1": "Votre offre d’abonnement actuelle ou votre clé API n’inclut pas l’accès à ce modèle.",
+      "cause2": "Un administrateur d’organisation limite la liste des modèles autorisés, ou votre région n’est pas encore prise en charge.",
+      "action1": "Sélectionnez un autre modèle autorisé sur votre compte pour poursuivre la tâche.",
+      "action2": "Vérifiez vos droits dans la console du fournisseur ; après une mise à niveau récente, reconnectez le compte puis réessayez."
+    },
+    "providerQuotaExceeded": {
+      "title": "Pourquoi le quota ou le solde est épuisé",
+      "summary": "Le compte externe du fournisseur de modèles connecté n’a plus de solde ou de quota disponible et a refusé la requête. Cela est indépendant de votre compte Cindy.",
+      "summaryWithProvider": "Votre compte {{provider}} connecté n’a plus de solde ou de quota disponible et {{provider}} a refusé la requête. Cela est indépendant de votre compte Cindy.",
+      "cause1": "Le crédit prépayé du compte fournisseur est épuisé ou aucun moyen de paiement valide n’est associé.",
+      "cause2": "Le plafond de dépenses de cette clé API ou le quota de l’organisation est atteint.",
+      "action1": "Rechargez le solde ou augmentez le plafond sur la page de facturation du fournisseur, puis cliquez sur « Réessayer ».",
+      "action2": "Vous pouvez aussi choisir un autre fournisseur disposant de quota dans le sélecteur de modèles."
+    },
+    "usageLimit": {
+      "title": "Pourquoi la limite d’utilisation est atteinte",
+      "summary": "Le compte connecté a atteint la fenêtre d’utilisation périodique fixée par le fournisseur de modèles et ne peut pas traiter de nouvelle requête pour l’instant. Cette limite n’est pas imposée par Cindy.",
+      "summaryWithProvider": "Votre compte {{provider}} connecté a atteint la fenêtre d’utilisation périodique fixée par {{provider}} et ne peut pas traiter de nouvelle requête pour l’instant. Cette limite n’est pas imposée par Cindy.",
+      "cause1": "L’abonnement a consommé tout son quota sur la fenêtre en cours (par exemple 5 heures ou hebdomadaire).",
+      "cause2": "Plusieurs tâches ou appareils utilisant le même compte partagent la même fenêtre de quota.",
+      "action1": "Attendez la réinitialisation de la fenêtre puis réessayez ; si la reprise automatique est active, la tâche reprendra seule.",
+      "action2": "Pour continuer tout de suite, passez à un autre modèle, un autre compte abonné ou un fournisseur API."
+    },
+    "encryptedContent": {
+      "title": "Pourquoi une partie de l’historique est illisible",
+      "summary": "Certains modèles stockent un état de raisonnement chiffré dans l’historique, déchiffrable uniquement par le fournisseur et le compte d’origine. Après un changement de fournisseur/compte ou un compactage distant, le fournisseur actuel peut ne pas lire ces anciens blocs.",
+      "summaryWithProvider": "Certains modèles stockent un état de raisonnement chiffré dans l’historique, déchiffrable uniquement par le fournisseur et le compte d’origine. Après un changement de fournisseur/compte ou un compactage distant, {{provider}} peut ne pas lire ces anciens blocs.",
+      "cause1": "Vous avez changé de fournisseur ou de compte en cours de tâche et le nouveau ne peut pas déchiffrer les blocs précédents.",
+      "cause2": "Le compactage distant ou un autre point de terminaison ne correspond pas à la clé d’origine.",
+      "action1": "Revenez au fournisseur ou au compte d’origine pour poursuivre directement cette tâche.",
+      "action2": "Ou choisissez « Continuer dans une nouvelle tâche » : Cindy conserve l’historique lisible et retire les blocs chiffrés illisibles sans toucher à la tâche d’origine."
+    },
+    "failedSamplingAttempt": {
+      "title": "Pourquoi une réponse incomplète s’affiche",
+      "summary": "Le modèle a échoué ou été interrompu avant la fin de cette réponse et n’en a généré que le début. Cindy conserve ce fragment visible à titre de référence afin que ces éléments ne disparaissent pas.",
+      "cause1": "Une erreur fournisseur, une coupure réseau ou un blocage de sécurité a interrompu le flux.",
+      "cause2": "Le tour a rencontré une erreur ou a été arrêté avant de pouvoir se terminer.",
+      "action1": "Consultez la carte d’erreur ci-dessous pour connaître la cause exacte et voir s’il faut réessayer.",
+      "action2": "Cliquez sur « Réessayer » ou envoyez un nouveau message pour poursuivre en vous appuyant sur ce qui est déjà affiché."
+    }
   }
 }

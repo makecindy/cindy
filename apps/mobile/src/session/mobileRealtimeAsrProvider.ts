@@ -1,4 +1,16 @@
-import { StopSoundActivity, type AsrEvent, type AsrProvider, type AudioTrace } from '@cindy/voice-input-core';
+import {
+  StopSoundActivity,
+  buildOpenAiTranscriptionPrompt,
+  buildQwenAsrCorpusText,
+  buildVolcengineSaucCorpusContext,
+  isUnsupportedOpenAiRealtimePromptError,
+  supportsOpenAiRealtimeTranscriptionPrompt,
+  type AsrEvent,
+  type AsrProvider,
+  type AsrRecognitionHints,
+  type AudioTrace,
+} from '@cindy/voice-input-core';
+import type { MobileCindyVoiceAsrConnection } from '@/session/mobileCindyVoiceSession';
 import type { StoredMobileVoiceCredential } from '@/session/mobileVoiceCredentialStore';
 import { redactMobileVoiceCredentialText } from '@/session/mobileVoiceCredentialRedaction';
 import { isMobileVoiceRateLimited } from '@/session/mobileVoiceInput';
@@ -13,13 +25,11 @@ type MobileRealtimeProtocolProfile =
 type MobileRealtimeAsrProviderOptions = {
   credential: StoredMobileVoiceCredential;
   sourceLanguage?: string;
+  recognitionHints?: AsrRecognitionHints;
   websocketFactory?: WebSocketFactory;
   connectTimeoutMs?: number;
   flushTimeoutMs?: number;
-  connectionProvider?: (provider: string) => Promise<{
-    websocketUrl: string;
-    authorizationToken: string;
-  }>;
+  connectionProvider?: (provider: string) => Promise<MobileCindyVoiceAsrConnection>;
 };
 
 type WebSocketFactory = new (
@@ -141,6 +151,7 @@ class MobileFallbackAsrProvider implements AsrProvider {
   private stopped = false;
 
   recover?: () => Promise<void>;
+  rotateSession?: () => Promise<void>;
 
   constructor(candidates: MobileAsrCandidate[]) {
     if (candidates.length === 0) throw new Error('Mobile ASR fallback requires at least one candidate.');
@@ -189,6 +200,7 @@ class MobileFallbackAsrProvider implements AsrProvider {
         attempt: this.candidates.indexOf(candidate) + 1,
       });
       this.recover = provider.recover ? () => provider.recover!() : undefined;
+      this.rotateSession = provider.rotateSession ? () => provider.rotateSession!() : undefined;
       return;
     }
     throw lastError instanceof Error ? lastError : new Error('All mobile ASR providers failed to start.');
@@ -204,6 +216,8 @@ class MobileFallbackAsrProvider implements AsrProvider {
 
   async stop(): Promise<void> {
     this.stopped = true;
+    this.recover = undefined;
+    this.rotateSession = undefined;
     const providers = new Set([this.pending, this.active]);
     await Promise.all([...providers].map((provider) => provider?.stop()));
   }
@@ -240,6 +254,7 @@ function mobileAsrCredentialChain(
 export class MobileRealtimeAsrProvider implements AsrProvider {
   private readonly credential: StoredMobileVoiceCredential;
   private readonly sourceLanguage: string;
+  private readonly recognitionHints?: AsrRecognitionHints;
   private readonly websocketFactory: WebSocketFactory;
   private readonly connectTimeoutMs: number;
   private readonly flushTimeoutMs: number;
@@ -249,6 +264,9 @@ export class MobileRealtimeAsrProvider implements AsrProvider {
   private callback: (event: AsrEvent) => void = () => {};
   private socket: WebSocketLike | null = null;
   private sessionReady = false;
+  private promptFallbackActive = false;
+  private lastSessionUpdateIncludedPrompt = false;
+  private promptFallbackAttemptedForConnection = false;
   private bufferedMs = 0;
   private pendingCommitCount = 0;
   private nextAudioCommitId = 1;
@@ -267,11 +285,14 @@ export class MobileRealtimeAsrProvider implements AsrProvider {
   private stopped = false;
   private inRecovery = false;
   private recoveryPromise?: Promise<void>;
+  private rotationPromise?: Promise<void>;
+  private standbySocket: WebSocketLike | null = null;
   private pendingConnect?: PendingConnect;
 
   constructor(options: MobileRealtimeAsrProviderOptions) {
     this.credential = options.credential;
     this.sourceLanguage = options.sourceLanguage ?? this.credential.settings?.language ?? 'auto';
+    this.recognitionHints = options.recognitionHints;
     this.websocketFactory = options.websocketFactory ?? (globalThis.WebSocket as unknown as WebSocketFactory);
     this.connectTimeoutMs = options.connectTimeoutMs ?? DEFAULT_CONNECT_TIMEOUT_MS;
     this.flushTimeoutMs = options.flushTimeoutMs ?? DEFAULT_FLUSH_TIMEOUT_MS;
@@ -304,22 +325,28 @@ export class MobileRealtimeAsrProvider implements AsrProvider {
     }
     const dynamicConnection = await this.connectionProvider(this.credential.asr.provider);
     if (this.stopped) throw new Error('Realtime ASR connection stopped.');
-    const { websocketUrl, authorizationToken } = dynamicConnection;
+    const { websocketUrl, authorizationToken, headers } = dynamicConnection;
 
     await new Promise<void>((resolve, reject) => {
       const socket = new this.websocketFactory(
         websocketUrl,
         null,
-        { headers: { Authorization: `Bearer ${authorizationToken}` } },
+        {
+          headers: {
+            ...(headers ?? {}),
+            Authorization: `Bearer ${authorizationToken}`,
+          },
+        },
       );
       this.socket = socket;
+      this.lastSessionUpdateIncludedPrompt = false;
+      this.promptFallbackAttemptedForConnection = false;
       let settled = false;
       let pendingConnect: PendingConnect | undefined;
       let pendingConnectError: Error | null = null;
       let pendingConnectErrorTimer: ReturnType<typeof setTimeout> | null = null;
       const timer = setTimeout(() => {
         fail(new Error(`Realtime ASR connection timed out after ${this.connectTimeoutMs}ms`));
-        socket.close();
       }, this.connectTimeoutMs);
       const cleanup = (): void => {
         clearTimeout(timer);
@@ -332,6 +359,7 @@ export class MobileRealtimeAsrProvider implements AsrProvider {
         cleanup();
         this.socket = null;
         this.sessionReady = false;
+        if (socket.readyState !== CLOSED) socket.close();
         reject(error);
       };
       const ready = (): void => {
@@ -348,7 +376,7 @@ export class MobileRealtimeAsrProvider implements AsrProvider {
       };
       socket.onmessage = (event) => {
         if (this.socket !== socket) return;
-        this.handleMessage(String(event.data), ready);
+        this.handleMessage(String(event.data), ready, fail);
       };
       socket.onerror = (event) => {
         if (this.socket !== socket) return;
@@ -395,9 +423,10 @@ export class MobileRealtimeAsrProvider implements AsrProvider {
   }
 
   async flushAudio(): Promise<void> {
-    if (this.recoveryPromise) {
+    const inFlight = this.recoveryPromise ?? this.rotationPromise;
+    if (inFlight) {
       await Promise.race([
-        this.recoveryPromise.catch(() => undefined),
+        inFlight.catch(() => undefined),
         new Promise<void>((resolve) => setTimeout(resolve, RECOVER_TIMEOUT_MS)),
       ]);
     }
@@ -428,12 +457,16 @@ export class MobileRealtimeAsrProvider implements AsrProvider {
     this.resolveFlushWaiters();
     this.clearUnconfirmedAudio();
     const socket = this.socket;
+    const standby = this.standbySocket;
     this.pendingConnect?.reject(new Error('Realtime ASR connection stopped.'));
     this.socket = null;
+    this.standbySocket = null;
     if (socket && socket.readyState !== CLOSED) socket.close();
-    if (this.recoveryPromise) {
+    if (standby && standby.readyState !== CLOSED) standby.close();
+    const inFlight = this.recoveryPromise ?? this.rotationPromise;
+    if (inFlight) {
       await Promise.race([
-        this.recoveryPromise.catch(() => undefined),
+        inFlight.catch(() => undefined),
         new Promise<void>((resolve) => setTimeout(resolve, RECOVER_TIMEOUT_MS)),
       ]);
     }
@@ -449,12 +482,60 @@ export class MobileRealtimeAsrProvider implements AsrProvider {
     return this.recoveryPromise;
   }
 
+  /**
+   * Proactively rotates the ASR session before the upstream ceiling (~180s)
+   * using make-before-break so live audio never pauses during cutover. Falls
+   * back to break-before-make (`performRecover`) if the server enforces a
+   * strict single-session concurrency limit (HTTP 429 / concurrency error).
+   */
+  async rotateSession(): Promise<void> {
+    if (this.stopped) return;
+    if (this.recoveryPromise) return this.recoveryPromise;
+    if (this.rotationPromise) return this.rotationPromise;
+    this.rotationPromise = this.performRotateSession().finally(() => {
+      this.rotationPromise = undefined;
+    });
+    return this.rotationPromise;
+  }
+
   private sendSessionUpdate(): void {
-    this.sendWs(buildSessionUpdateMessage(
+    const hints = this.protocolProfile === 'openai-transcription-manual' && this.promptFallbackActive
+      ? undefined
+      : this.recognitionHints;
+    const message = buildSessionUpdateMessage(
       this.credential.asr.model,
       this.sourceLanguage,
       this.pcmSampleRate,
       this.protocolProfile,
+      hints,
+    );
+    this.lastSessionUpdateIncludedPrompt =
+      this.protocolProfile === 'openai-transcription-manual'
+      && sessionUpdateIncludesOpenAiPrompt(message);
+    this.sendWs(message);
+  }
+
+  private tryFallbackWithoutPrompt(event: Record<string, unknown>): boolean {
+    if (this.sessionReady) return false;
+    if (this.protocolProfile !== 'openai-transcription-manual') return false;
+    if (!this.lastSessionUpdateIncludedPrompt || this.promptFallbackAttemptedForConnection) return false;
+    const errorPayload = isRecord(event.error)
+      ? event.error
+      : (typeof event.message === 'string' ? event.message : undefined);
+    if (!isUnsupportedOpenAiRealtimePromptError(errorPayload)) return false;
+    this.promptFallbackActive = true;
+    this.promptFallbackAttemptedForConnection = true;
+    this.lastSessionUpdateIncludedPrompt = false;
+    logMobileVoice('warn', 'realtime asr rejected transcription prompt; retrying without prompt', {
+      provider: this.credential.asr.provider,
+      model: this.credential.asr.model,
+    });
+    return this.sendWs(buildSessionUpdateMessage(
+      this.credential.asr.model,
+      this.sourceLanguage,
+      this.pcmSampleRate,
+      this.protocolProfile,
+      undefined,
     ));
   }
 
@@ -480,7 +561,7 @@ export class MobileRealtimeAsrProvider implements AsrProvider {
     }
   }
 
-  private handleMessage(raw: string, markReady?: () => void): void {
+  private handleMessage(raw: string, markReady?: () => void, markFailed?: (error: Error) => void): void {
     const event = parseJsonObject(raw);
     if (!isRecord(event) || typeof event.type !== 'string') return;
 
@@ -517,7 +598,14 @@ export class MobileRealtimeAsrProvider implements AsrProvider {
           this.resolveFlushWaiters();
           break;
         }
-        this.callback({ type: 'error', message, at: Date.now() });
+        if (this.tryFallbackWithoutPrompt(event)) {
+          break;
+        }
+        if (!this.sessionReady && markFailed) {
+          markFailed(new Error(message));
+        } else {
+          this.callback({ type: 'error', message, at: Date.now() });
+        }
         this.resolveFlushWaiters();
         break;
       }
@@ -558,6 +646,160 @@ export class MobileRealtimeAsrProvider implements AsrProvider {
     if (aggregate) this.callback({ type: 'stable', text: aggregate, at: Date.now() });
     this.finishRealtimeAudio(event.item_id, itemTranscript.trim().length > 0);
     if (this.pendingCommitCount === 0) this.resolveFlushWaiters();
+  }
+
+  private async performRotateSession(): Promise<void> {
+    if (this.inRecovery || this.stopped) return;
+    let standby: WebSocketLike;
+    try {
+      standby = await this.openStandbySocket();
+    } catch (error) {
+      if (this.stopped) return;
+      if (isSessionConcurrencyLimitError(error)) {
+        logMobileVoice('info', 'realtime asr rotation hit concurrency limit; falling back to break-before-make');
+        await this.performRecover().catch((recoverError: unknown) => {
+          this.callback({ type: 'disconnected', at: Date.now() });
+          throw recoverError;
+        });
+        return;
+      }
+      throw error;
+    }
+    if (this.stopped) {
+      if (standby.readyState !== CLOSED) standby.close();
+      return;
+    }
+    // Atomic make-before-break cutover: preserve finalized transcript items,
+    // reset per-socket bookkeeping, swap the socket, and quietly close the old
+    // connection (this.socket !== oldSocket suppresses its onclose event).
+    const partialOnlyItemIds = new Set(this.partialsByItem.keys());
+    this.itemOrder = this.itemOrder.filter((itemId) => !partialOnlyItemIds.has(itemId) || this.finalsByItem.has(itemId));
+    this.partialsByItem.clear();
+    this.bufferedMs = 0;
+    this.pendingCommitCount = 0;
+    this.pendingAudioCommitIds = [];
+    this.audioCommitIdsByItem.clear();
+    this.unboundAudioItemTurnIds.clear();
+    this.serverVadFinishRequested = false;
+    this.resolveFlushWaiters();
+    this.resetUnconfirmedAudioForReplay();
+
+    const oldSocket = this.socket;
+    this.socket = standby;
+    this.standbySocket = null;
+    this.sessionReady = true;
+    standby.onmessage = (event) => {
+      if (this.socket !== standby) return;
+      this.handleMessage(String(event.data));
+    };
+    standby.onerror = (event) => {
+      if (this.socket !== standby) return;
+      const { message } = webSocketErrorMessage(event, 'Realtime ASR connection failed.');
+      this.sessionReady = false;
+      this.resolveFlushWaiters();
+      this.callback({ type: 'error', message: this.redactError(message), at: Date.now() });
+    };
+    standby.onclose = () => {
+      if (this.socket !== standby) return;
+      this.sessionReady = false;
+      this.resolveFlushWaiters();
+      if (!this.stopped) this.callback({ type: 'disconnected', at: Date.now() });
+    };
+    if (oldSocket && oldSocket.readyState !== CLOSED) oldSocket.close();
+
+    const replay = [...this.unconfirmedAudio];
+    for (const entry of replay) {
+      if (!this.sendRealtimeAudioEntry(entry)) {
+        throw new Error('Realtime ASR rotation replay failed.');
+      }
+    }
+    this.callback({ type: 'connected', at: Date.now() });
+    logMobileVoice('info', 'realtime asr session rotated', {
+      chunks: replay.length,
+      replayMs: Math.round(replay.reduce((total, entry) => total + entry.durationMs, 0)),
+    });
+  }
+
+  private async openStandbySocket(): Promise<WebSocketLike> {
+    if (!this.connectionProvider) {
+      throw new Error(i18n.t('composer.voice.missingConnectionProvider'));
+    }
+    const dynamicConnection = await this.connectionProvider(this.credential.asr.provider);
+    if (this.stopped) throw new Error('Realtime ASR connection stopped.');
+    const { websocketUrl, authorizationToken, headers } = dynamicConnection;
+    return new Promise<WebSocketLike>((resolve, reject) => {
+      const socket = new this.websocketFactory(
+        websocketUrl,
+        null,
+        {
+          headers: {
+            ...(headers ?? {}),
+            Authorization: `Bearer ${authorizationToken}`,
+          },
+        },
+      );
+      this.standbySocket = socket;
+      let settled = false;
+      let pendingConnectError: Error | null = null;
+      let pendingConnectErrorTimer: ReturnType<typeof setTimeout> | null = null;
+      const timer = setTimeout(() => {
+        fail(new Error(`Realtime ASR rotation timed out after ${this.connectTimeoutMs}ms`));
+        socket.close();
+      }, this.connectTimeoutMs);
+      const cleanup = (): void => {
+        clearTimeout(timer);
+        if (pendingConnectErrorTimer) clearTimeout(pendingConnectErrorTimer);
+      };
+      const fail = (error: Error): void => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        if (socket.readyState !== CLOSED) socket.close();
+        if (this.standbySocket === socket) this.standbySocket = null;
+        reject(error);
+      };
+      socket.onopen = () => {
+        if (this.standbySocket !== socket || settled) return;
+        socket.send(JSON.stringify(buildSessionUpdateMessage(
+          this.credential.asr.model,
+          this.sourceLanguage,
+          this.pcmSampleRate,
+          this.protocolProfile,
+        )));
+      };
+      socket.onmessage = (event) => {
+        if (this.standbySocket !== socket || settled) return;
+        const parsed = parseJsonObject(String(event.data));
+        if (!isRecord(parsed) || typeof parsed.type !== 'string') return;
+        if (parsed.type === 'session.updated') {
+          settled = true;
+          cleanup();
+          resolve(socket);
+        } else if (parsed.type === 'error') {
+          fail(new Error(this.redactError(realtimeErrorMessage(parsed, i18n.t('composer.voice.realtimeAsrFailed')))));
+        }
+      };
+      socket.onerror = (event) => {
+        if (this.standbySocket !== socket || settled) return;
+        const { message, specific } = webSocketErrorMessage(event, 'Realtime ASR rotation failed.');
+        pendingConnectError = new Error(this.redactError(message));
+        if (specific) {
+          fail(pendingConnectError);
+        } else {
+          pendingConnectErrorTimer = setTimeout(() => {
+            if (pendingConnectError) fail(pendingConnectError);
+          }, 250);
+        }
+      };
+      socket.onclose = (event) => {
+        if (this.standbySocket !== socket || settled) return;
+        fail(new Error(this.redactError(webSocketCloseBeforeReadyMessage(
+          event,
+          'Realtime ASR rotation closed before ready.',
+          pendingConnectError?.message,
+        ))));
+      };
+    });
   }
 
   private async performRecover(): Promise<void> {
@@ -775,6 +1017,9 @@ export class MobileRealtimeAsrProvider implements AsrProvider {
 
   private resetTranscriptState(): void {
     this.sessionReady = false;
+    this.promptFallbackActive = false;
+    this.lastSessionUpdateIncludedPrompt = false;
+    this.promptFallbackAttemptedForConnection = false;
     this.bufferedMs = 0;
     this.pendingCommitCount = 0;
     this.nextAudioCommitId = 1;
@@ -802,6 +1047,7 @@ type VolcengineFlushReason = 'final_response' | 'transport_closed' | 'transport_
 export class MobileVolcengineSaucAsrProvider implements AsrProvider {
   private readonly credential: StoredMobileVoiceCredential;
   private readonly sourceLanguage: string;
+  private readonly recognitionHints?: AsrRecognitionHints;
   private readonly websocketFactory: WebSocketFactory;
   private readonly connectTimeoutMs: number;
   private readonly flushTimeoutMs: number;
@@ -829,11 +1075,14 @@ export class MobileVolcengineSaucAsrProvider implements AsrProvider {
   private flushResolvers: Array<(reason: VolcengineFlushReason) => void> = [];
   private stopped = false;
   private recoveryPromise?: Promise<void>;
+  private rotationPromise?: Promise<void>;
+  private standbySocket: WebSocketLike | null = null;
   private pendingConnect?: PendingConnect;
 
   constructor(options: MobileRealtimeAsrProviderOptions) {
     this.credential = options.credential;
     this.sourceLanguage = options.sourceLanguage ?? this.credential.settings?.language ?? 'auto';
+    this.recognitionHints = options.recognitionHints;
     this.websocketFactory = options.websocketFactory ?? (globalThis.WebSocket as unknown as WebSocketFactory);
     this.connectTimeoutMs = options.connectTimeoutMs ?? DEFAULT_CONNECT_TIMEOUT_MS;
     this.flushTimeoutMs = options.flushTimeoutMs ?? DEFAULT_FLUSH_TIMEOUT_MS;
@@ -866,13 +1115,14 @@ export class MobileVolcengineSaucAsrProvider implements AsrProvider {
     const dynamicConnection = await this.connectionProvider(this.credential.asr.provider);
     const sessionMs = Date.now() - connectStartedAt;
     if (this.stopped) throw new Error('Volcengine SAUC ASR connection stopped.');
-    const { websocketUrl, authorizationToken } = dynamicConnection;
+    const { websocketUrl, authorizationToken, headers } = dynamicConnection;
     await new Promise<void>((resolve, reject) => {
       const socket = new this.websocketFactory(
         websocketUrl,
         null,
         {
           headers: {
+            ...(headers ?? {}),
             Authorization: `Bearer ${authorizationToken}`,
             'X-Api-Resource-Id': resourceId,
             'X-Api-Connect-Id': buildConnectId(),
@@ -979,9 +1229,10 @@ export class MobileVolcengineSaucAsrProvider implements AsrProvider {
   }
 
   async flushAudio(): Promise<void> {
-    if (this.recoveryPromise) {
+    const inFlight = this.recoveryPromise ?? this.rotationPromise;
+    if (inFlight) {
       await Promise.race([
-        this.recoveryPromise.catch(() => undefined),
+        inFlight.catch(() => undefined),
         new Promise<void>((resolve) => setTimeout(resolve, RECOVER_TIMEOUT_MS)),
       ]);
     }
@@ -1017,12 +1268,16 @@ export class MobileVolcengineSaucAsrProvider implements AsrProvider {
     this.clearUnconfirmedAudio();
     this.sessionTranscriptPrefix = '';
     const socket = this.socket;
+    const standby = this.standbySocket;
     this.pendingConnect?.reject(new Error('Volcengine SAUC ASR connection stopped.'));
     this.socket = null;
+    this.standbySocket = null;
     if (socket && socket.readyState !== CLOSED) socket.close();
-    if (this.recoveryPromise) {
+    if (standby && standby.readyState !== CLOSED) standby.close();
+    const inFlight = this.recoveryPromise ?? this.rotationPromise;
+    if (inFlight) {
       await Promise.race([
-        this.recoveryPromise.catch(() => undefined),
+        inFlight.catch(() => undefined),
         new Promise<void>((resolve) => setTimeout(resolve, RECOVER_TIMEOUT_MS)),
       ]);
     }
@@ -1038,9 +1293,26 @@ export class MobileVolcengineSaucAsrProvider implements AsrProvider {
     return this.recoveryPromise;
   }
 
+  /**
+   * Proactively rotates the Volcengine SAUC ASR session before the upstream
+   * ceiling (~180s) using make-before-break so continuous speech never drops.
+   * Falls back to break-before-make (`performRecover`) if the server enforces
+   * a single concurrent session (HTTP 429 / concurrency limit).
+   */
+  async rotateSession(): Promise<void> {
+    if (this.stopped) return;
+    if (this.recoveryPromise) return this.recoveryPromise;
+    if (this.rotationPromise) return this.rotationPromise;
+    this.rotationPromise = this.performRotateSession().finally(() => {
+      this.rotationPromise = undefined;
+    });
+    return this.rotationPromise;
+  }
+
   private sendInitialRequest(): void {
     const socket = this.socket;
     if (!socket) return;
+    const corpusContext = buildVolcengineSaucCorpusContext(this.recognitionHints);
     sendBinary(socket, encodeVolcengineFullClientRequest({
       user: { uid: 'xdt-maker' },
       audio: {
@@ -1061,6 +1333,7 @@ export class MobileVolcengineSaucAsrProvider implements AsrProvider {
         ...(this.sourceLanguage && this.sourceLanguage.toLowerCase() !== 'auto'
           ? { language: this.sourceLanguage }
           : {}),
+        ...(corpusContext ? { corpus: { context: corpusContext } } : {}),
       },
     }));
   }
@@ -1219,6 +1492,148 @@ export class MobileVolcengineSaucAsrProvider implements AsrProvider {
     }
   }
 
+  private async performRotateSession(): Promise<void> {
+    const resourceId = this.credential.asr.resourceId;
+    if (!resourceId) throw new Error(i18n.t('composer.voice.volcengineMissingResourceId'));
+    let standby: WebSocketLike;
+    try {
+      standby = await this.openStandbySocket(resourceId);
+    } catch (error) {
+      if (this.stopped) return;
+      if (isSessionConcurrencyLimitError(error)) {
+        logMobileVoice('info', 'volcengine sauc rotation hit concurrency limit; falling back to break-before-make');
+        await this.performRecover().catch((recoverError: unknown) => {
+          this.callback({ type: 'disconnected', at: Date.now() });
+          throw recoverError;
+        });
+        return;
+      }
+      throw error;
+    }
+    if (this.stopped) {
+      if (standby.readyState !== CLOSED) standby.close();
+      return;
+    }
+    this.recovered = true;
+    this.confirmedEndMs = 0;
+    this.sessionTranscriptPrefix = this.finalizedTranscript;
+    this.sequence = 1;
+    this.finalRequested = false;
+    this.stableEmitted = false;
+    this.resolveFlushWaiters('reset');
+
+    const oldSocket = this.socket;
+    this.socket = standby;
+    this.standbySocket = null;
+    this.connected = true;
+    standby.onmessage = (event) => {
+      if (this.socket !== standby) return;
+      this.handleMessage(event.data);
+    };
+    standby.onerror = (event) => {
+      if (this.socket !== standby) return;
+      const { message } = webSocketErrorMessage(event, 'Volcengine SAUC ASR connection failed.');
+      this.connected = false;
+      this.resolveFlushWaiters('transport_error');
+      this.callback({ type: 'error', message: this.redactError(message), at: Date.now() });
+    };
+    standby.onclose = (event) => {
+      if (this.socket !== standby) return;
+      this.connected = false;
+      this.resolveFlushWaiters('transport_closed');
+      logMobileVoice('debug', 'volcengine sauc transport closed', {
+        code: typeof event.code === 'number' ? event.code : undefined,
+        finalRequested: this.finalRequested,
+      });
+      if (!this.stopped) this.callback({ type: 'disconnected', at: Date.now() });
+    };
+    this.sendInitialRequest();
+    if (oldSocket && oldSocket.readyState !== CLOSED) oldSocket.close();
+
+    const replay = [...this.unconfirmedAudio];
+    for (const entry of replay) {
+      if (!this.sendVolcengineAudioEntry(entry, standby)) {
+        throw new Error('Volcengine SAUC ASR rotation replay failed.');
+      }
+    }
+    this.callback({ type: 'connected', at: Date.now() });
+    logMobileVoice('info', 'volcengine sauc session rotated', {
+      chunks: replay.length,
+      replayMs: Math.round(replay.reduce((total, entry) => total + entry.durationMs, 0)),
+      prefixChars: this.sessionTranscriptPrefix.length,
+    });
+  }
+
+  private async openStandbySocket(resourceId: string): Promise<WebSocketLike> {
+    if (!this.connectionProvider) {
+      throw new Error(i18n.t('composer.voice.missingConnectionProvider'));
+    }
+    const dynamicConnection = await this.connectionProvider(this.credential.asr.provider);
+    if (this.stopped) throw new Error('Volcengine SAUC ASR connection stopped.');
+    const { websocketUrl, authorizationToken, headers } = dynamicConnection;
+    return new Promise<WebSocketLike>((resolve, reject) => {
+      const socket = new this.websocketFactory(
+        websocketUrl,
+        null,
+        {
+          headers: {
+            ...(headers ?? {}),
+            Authorization: `Bearer ${authorizationToken}`,
+            'X-Api-Resource-Id': resourceId,
+            'X-Api-Connect-Id': buildConnectId(),
+          },
+        },
+      );
+      socket.binaryType = 'arraybuffer';
+      this.standbySocket = socket;
+      let settled = false;
+      let pendingConnectError: Error | null = null;
+      let pendingConnectErrorTimer: ReturnType<typeof setTimeout> | null = null;
+      const timer = setTimeout(() => {
+        fail(new Error(`Volcengine SAUC ASR rotation timed out after ${this.connectTimeoutMs}ms`));
+        socket.close();
+      }, this.connectTimeoutMs);
+      const cleanup = (): void => {
+        clearTimeout(timer);
+        if (pendingConnectErrorTimer) clearTimeout(pendingConnectErrorTimer);
+      };
+      const fail = (error: Error): void => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        if (socket.readyState !== CLOSED) socket.close();
+        if (this.standbySocket === socket) this.standbySocket = null;
+        reject(error);
+      };
+      socket.onopen = () => {
+        if (this.standbySocket !== socket || settled) return;
+        settled = true;
+        cleanup();
+        resolve(socket);
+      };
+      socket.onerror = (event) => {
+        if (this.standbySocket !== socket || settled) return;
+        const { message, specific } = webSocketErrorMessage(event, 'Volcengine SAUC ASR rotation failed.');
+        pendingConnectError = new Error(this.redactError(message));
+        if (specific) {
+          fail(pendingConnectError);
+        } else {
+          pendingConnectErrorTimer = setTimeout(() => {
+            if (pendingConnectError) fail(pendingConnectError);
+          }, 250);
+        }
+      };
+      socket.onclose = (event) => {
+        if (this.standbySocket !== socket || settled) return;
+        fail(new Error(this.redactError(webSocketCloseBeforeReadyMessage(
+          event,
+          'Volcengine SAUC ASR rotation closed before ready.',
+          pendingConnectError?.message,
+        ))));
+      };
+    });
+  }
+
   private async performRecover(): Promise<void> {
     const resourceId = this.credential.asr.resourceId;
     if (!resourceId) throw new Error(i18n.t('composer.voice.volcengineMissingResourceId'));
@@ -1306,9 +1721,11 @@ export function buildSessionUpdateMessage(
   sourceLanguage: string,
   pcmSampleRate: number,
   protocolProfile: MobileRealtimeProtocolProfile,
+  recognitionHints?: AsrRecognitionHints,
 ): Record<string, unknown> {
   const language = openAiLanguageCode(sourceLanguage);
   if (protocolProfile === 'qwen-asr-server-vad') {
+    const corpusText = buildQwenAsrCorpusText(recognitionHints);
     return {
       event_id: buildRealtimeEventId('session_update'),
       type: 'session.update',
@@ -1318,6 +1735,7 @@ export function buildSessionUpdateMessage(
         sample_rate: pcmSampleRate,
         input_audio_transcription: {
           ...(language ? { language } : {}),
+          ...(corpusText ? { corpus: { text: corpusText } } : {}),
         },
         turn_detection: {
           type: 'server_vad',
@@ -1327,6 +1745,9 @@ export function buildSessionUpdateMessage(
       },
     };
   }
+  const prompt = supportsOpenAiRealtimeTranscriptionPrompt(model)
+    ? buildOpenAiTranscriptionPrompt(recognitionHints)
+    : undefined;
   return {
     type: 'session.update',
     session: {
@@ -1337,6 +1758,7 @@ export function buildSessionUpdateMessage(
           transcription: {
             model,
             ...(language ? { language } : {}),
+            ...(prompt ? { prompt } : {}),
           },
           turn_detection: null,
         },
@@ -1755,6 +2177,14 @@ function toExactArrayBuffer(bytes: Uint8Array): ArrayBuffer {
   return view as ArrayBuffer;
 }
 
+function sessionUpdateIncludesOpenAiPrompt(message: Record<string, unknown>): boolean {
+  const session = isRecord(message.session) ? message.session : undefined;
+  const audio = isRecord(session?.audio) ? session.audio : undefined;
+  const input = isRecord(audio?.input) ? audio.input : undefined;
+  const transcription = isRecord(input?.transcription) ? input.transcription : undefined;
+  return typeof transcription?.prompt === 'string' && transcription.prompt.length > 0;
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
 }
@@ -1789,4 +2219,10 @@ function webSocketAuthStatus(event: { code?: number; reason?: string }): string 
   const text = `${event.code ?? ''} ${event.reason ?? ''}`;
   const match = text.match(/\b(401|403)\b/);
   return match?.[1] ?? null;
+}
+
+function isSessionConcurrencyLimitError(error: unknown): boolean {
+  if (isMobileVoiceRateLimited(error)) return true;
+  const message = error instanceof Error ? error.message : String(error ?? '');
+  return /\b429\b|too many|rate.?limit|concurrency|concurrent/i.test(message);
 }

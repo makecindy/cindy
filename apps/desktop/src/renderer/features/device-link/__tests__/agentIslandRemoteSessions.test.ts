@@ -316,11 +316,9 @@ describe('buildAgentIslandRemoteSessionInputs', () => {
     ).toEqual([]);
   });
 
-  // #13473: a task archived on the controlled device (here: the turn was closed before
-  // its terminal event, so the truncation error lands *after* the archive) must leave the
-  // island. The stale error activity stays in the mirror on purpose: the archive state
-  // alone has to retire the card. An unarchived error task keeps showing.
-  it('retires an archived remote task from the island while unarchived errors stay', () => {
+  // #13473: activity can remain in the mirror or arrive after an archive. Only restoring
+  // the task should make that activity eligible for the island again.
+  it('keeps archived remote errors off the island until the task is restored', () => {
     clearRemoteSessionActivity();
     const state = createAgentIslandState();
     const deviceId = 'device-a';
@@ -357,6 +355,19 @@ describe('buildAgentIslandRemoteSessionInputs', () => {
       expect(getRemoteSessionActivity('a-1', deviceId)?.phase).toBe('error');
       sync();
       expect(cardIds()).toEqual(['a-2']);
+
+      applyRemoteSessionActivity(deviceId, {
+        sessionId: 'a-1',
+        phase: 'error',
+        attention: true,
+        compactDetail: 'Late terminal event',
+      });
+      sync();
+      expect(cardIds()).toEqual(['a-2']);
+
+      remoteProjectsStore.applyPatch(deviceId, 'a-1', { status: 'active' });
+      sync();
+      expect(cardIds()).toEqual(['a-1', 'a-2']);
     } finally {
       remoteProjectsStore.removeDevice(deviceId);
       clearRemoteSessionActivity();

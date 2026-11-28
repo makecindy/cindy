@@ -31,7 +31,7 @@ const callbackChannels = {
 };
 const createCallbacks = createGhostProductionCallbacks<Record<keyof typeof callbackChannels, Handler>>({
   functions: [
-    'readLocalGhostUpdateSource', 'updateLocalGhostPackageLocked', 'rejectUnauthorizedTokenBroker',
+    'readLocalGhostUpdateSource', 'stopGhostNodeRuntimeForUpdate', 'updateLocalGhostPackageLocked', 'rejectUnauthorizedTokenBroker',
     'assertGhostRelocationIdle', 'findGhostForInstanceId',
   ],
   variables: ['updateLocalFile'],

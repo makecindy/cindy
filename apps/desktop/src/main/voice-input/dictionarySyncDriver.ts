@@ -16,10 +16,22 @@
  */
 
 import { MAX_FRAME_BYTES } from '@cindy/device-link';
-import type { MobileVoiceDictionarySnapshotResult } from '@cindy/maker-shared/device-link-contract';
+import type {
+  MobileVoiceDictionaryMutateRequest,
+  MobileVoiceDictionaryMutateResult,
+  MobileVoiceDictionarySnapshotResult,
+} from '@cindy/maker-shared/device-link-contract';
 import { isCindyApp } from '@cindy/maker-shared/device-list';
-import { buildStateVersionVector, type VoiceDictionarySyncState } from '@cindy/voice-input-core';
+import {
+  buildStateVersionVector,
+  dictionaryTermKey,
+  type VoiceDictionarySyncState,
+} from '@cindy/voice-input-core';
 
+import {
+  MAX_VOICE_INPUT_DICTIONARY_ALIASES,
+  MAX_VOICE_INPUT_DICTIONARY_ENTRY_CHARS,
+} from '../../shared/voiceInputData.js';
 import { isDesktopPlatform } from '../device-link/controllerPlatform.js';
 import { createLogger } from '../logger.js';
 import { voiceDictionarySyncStore } from './VoiceDictionarySyncStore.js';
@@ -258,6 +270,85 @@ export function buildMobileDictionarySnapshot(): MobileVoiceDictionarySnapshotRe
     emittedAt: lastEmittedAt,
     ...readDictionaryProjectionForMobile(),
   };
+}
+
+function normalizeMobileMutateTerm(value: unknown): string {
+  if (typeof value !== 'string') return '';
+  return value.trim().slice(0, MAX_VOICE_INPUT_DICTIONARY_ENTRY_CHARS).trim();
+}
+
+function normalizeMobileMutateAliases(raw: unknown, primaryKey: string): string[] {
+  if (!Array.isArray(raw)) return [];
+  const seen = new Set<string>([primaryKey]);
+  const aliases: string[] = [];
+  for (const item of raw) {
+    const cleaned = normalizeMobileMutateTerm(item);
+    const key = dictionaryTermKey(cleaned);
+    if (!cleaned || !key || seen.has(key)) continue;
+    seen.add(key);
+    aliases.push(cleaned);
+    if (aliases.length >= MAX_VOICE_INPUT_DICTIONARY_ALIASES) break;
+  }
+  return aliases;
+}
+
+/**
+ * 执行来自同账号手机端的个人词典修改（增/改/删，含别名），直接写入本机 CRDT 并返回最新快照。
+ *
+ * 词典真相仍在桌面端：任何修改都走 `voiceInputDataStore` 的 CRDT 写路径，自动触发桌面间同步
+ * 与其它手机的只读快照推送，避免移动端维护独立可写副本导致冲突或分叉。
+ */
+export function mutateMobileDictionary(raw: unknown): MobileVoiceDictionaryMutateResult {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    return { ok: false, error: 'Invalid dictionary mutation payload.' };
+  }
+  const req = raw as Partial<MobileVoiceDictionaryMutateRequest>;
+  if (req.action === 'add') {
+    const text = normalizeMobileMutateTerm(req.text);
+    const key = dictionaryTermKey(text);
+    if (!text || !key) {
+      return { ok: false, error: 'Dictionary term cannot be empty.' };
+    }
+    const aliases = normalizeMobileMutateAliases(req.aliases, key);
+    voiceInputDataStore.importManualDictionaryEntries([{ text, aliases }]);
+    return { ok: true, snapshot: buildMobileDictionarySnapshot() };
+  }
+
+  if (req.action === 'edit') {
+    const originalText = normalizeMobileMutateTerm(req.originalText);
+    const originalKey = dictionaryTermKey(originalText);
+    const nextText = normalizeMobileMutateTerm(req.text);
+    const nextKey = dictionaryTermKey(nextText);
+    if (!originalKey || !nextText || !nextKey) {
+      return { ok: false, error: 'Dictionary term cannot be empty.' };
+    }
+    const existing = voiceInputDataStore
+      .getSettings()
+      .dictionaryEntries.find((entry) => dictionaryTermKey(entry.text) === originalKey);
+    if (!existing) {
+      return { ok: false, error: 'Dictionary entry not found.' };
+    }
+    const aliases = normalizeMobileMutateAliases(req.aliases, nextKey);
+    voiceInputDataStore.editDictionaryEntry(existing.id, nextText, aliases);
+    return { ok: true, snapshot: buildMobileDictionarySnapshot() };
+  }
+
+  if (req.action === 'delete') {
+    const text = normalizeMobileMutateTerm(req.text);
+    const key = dictionaryTermKey(text);
+    if (!key) {
+      return { ok: false, error: 'Dictionary term cannot be empty.' };
+    }
+    const existing = voiceInputDataStore
+      .getSettings()
+      .dictionaryEntries.find((entry) => dictionaryTermKey(entry.text) === key);
+    if (existing) {
+      voiceInputDataStore.deleteDictionaryEntries([existing.id]);
+    }
+    return { ok: true, snapshot: buildMobileDictionarySnapshot() };
+  }
+
+  return { ok: false, error: 'Unsupported dictionary mutation action.' };
 }
 
 function buildMobileSnapshot(): MobileVoiceDictionarySnapshotResult | null {

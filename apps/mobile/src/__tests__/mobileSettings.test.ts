@@ -258,7 +258,8 @@ describe('mobile settings overview', () => {
     expect(dictionaryEffectIndex).toBeGreaterThan(-1);
     expect(hydrateIndex).toBeGreaterThan(dictionaryEffectIndex);
     expect(source).toContain('[desktopDevices, refreshVoiceDictionary]');
-    expect(source).toContain('[desktopDevices, invoke]');
+    expect(source).toContain('[invoke, onlineDesktops]');
+    expect(source).toContain('hydrateAllCachedMobileVoiceDictionaries()');
     expect(source).not.toContain('[desktopDevices, deviceLink]');
     expect(source).toContain('subscribeMobileVoiceDictionaryCache(() => {');
   });

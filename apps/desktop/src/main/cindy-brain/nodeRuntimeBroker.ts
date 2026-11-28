@@ -1610,21 +1610,15 @@ export class GhostNodeRuntimeBroker {
     }
   }
 
-  /** Block new harnesses and signal existing ones before yielding to other update cleanup. */
-  stopHarnesses(ghostId: string): void {
-    this.harnessSpawnBlocked.add(ghostId);
-    for (const harness of [...(this.harnessProcesses.get(ghostId) ?? [])]) {
-      this.stopHarnessProcess(harness);
-    }
-  }
-
   /** 停用、更新或卸载一个插件时立即停止其名下**全部** Node 进程。 */
   stop(ghostId: string): void {
     this.stopGeneration.set(ghostId, (this.stopGeneration.get(ghostId) ?? 0) + 1);
     this.stoppedGhosts.add(ghostId);
     this.harnessSpawnBlocked.add(ghostId);
     this.deps.onStopped?.(ghostId);
-    this.stopHarnesses(ghostId);
+    for (const harness of [...(this.harnessProcesses.get(ghostId) ?? [])]) {
+      this.stopHarnessProcess(harness);
+    }
     for (const starting of [...(this.startingChildren.get(ghostId) ?? [])]) {
       this.stopStartingChild(starting);
     }
@@ -1652,6 +1646,23 @@ export class GhostNodeRuntimeBroker {
     const exited = [...processes].map((process) => this.waitForProcessExit(process, ghostId));
     this.stop(ghostId);
     await Promise.all(exited);
+  }
+
+  /**
+   * stopAndWait 等不到退出而放弃更新后调用：此刻仍在世的进程全部真实退出时回调一次(已无
+   * 在世进程则在下一个微任务回调)，由上层恢复旧版本并解除引擎启动闸。期间若又开始新的停止
+   * (再次更新、停用、卸载)，由那次操作负责收尾，本次回调作废；broker 销毁后也不回调。
+   */
+  whenProcessesExited(ghostId: string, onExited: () => void): void {
+    const generation = this.stopGeneration.get(ghostId) ?? 0;
+    this.reconcileProcessExits(ghostId);
+    const exits = [...(this.liveProcesses.get(ghostId) ?? [])].map(
+      (process) => new Promise<void>((resolve) => process.once('exit', () => resolve())),
+    );
+    void Promise.all(exits).then(() => {
+      if (this.destroyed || (this.stopGeneration.get(ghostId) ?? 0) !== generation) return;
+      onExited();
+    });
   }
 
   /** 原位更新时，进程异常或强杀后仍不退出都必须阻止目录替换。 */

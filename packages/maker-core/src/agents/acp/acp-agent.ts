@@ -21,7 +21,6 @@ import {
   isolatedBotProfile,
   LOCAL_AGENT_CLIENT,
   type AgentDeps,
-  type AgentSessionHandle,
   type PiExtraSpawnConfig,
   type StartSessionOptions,
 } from '../base-agent.js';
@@ -167,7 +166,6 @@ function trackClose(transport: AcpLineTransport): {
     whenStopped,
     transport: {
       write: (line) => transport.write(line),
-      setActivityProbe: transport.setActivityProbe?.bind(transport),
       onLine: (listener) => transport.onLine(listener),
       onClose: (listener) => transport.onClose(listener),
       close: async () => {
@@ -239,7 +237,7 @@ export class AcpAgent extends BaseAgent {
     };
   }
 
-  async startSession(opts: StartSessionOptions): Promise<AgentSessionHandle> {
+  async startSession(opts: StartSessionOptions): Promise<AcpSession> {
     // SSH workspaces are not offered. Shared-user tasks require guest-workspace support, enforced
     // by the endpoint launcher against the plugin's live published capabilities.
     if (opts.remoteHostId) {

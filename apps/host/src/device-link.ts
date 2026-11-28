@@ -142,6 +142,7 @@ export const HOST_DISPATCH_PORTS_WHILE_HELD = Object.freeze({
   setTelegramRemoteOnline: 'unbound',
   adviseAndRecordVoiceInputDictionaryLearning: 'unbound',
   buildMobileDictionarySnapshot: 'unbound',
+  mutateMobileDictionary: 'unbound',
   setBroadcastTapListener: 'read',
   broadcastTap: 'read',
   RECOVERY_CHECKPOINT_MARKER: 'read',

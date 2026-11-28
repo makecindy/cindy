@@ -874,12 +874,13 @@ export function aroundMessagesByClientIdForDevice(
   sessionId: string,
   clientId: string,
   opts?: { radius?: number },
+  requireStructuredHistoryMiss = false,
 ): Promise<Message[]> {
-  return invokeRemote(deviceId, 'local-db:messages:around-client-id', [
-    sessionId,
-    clientId,
-    opts,
-  ]) as Promise<Message[]>;
+  const args = [sessionId, clientId, opts];
+  const channel = 'local-db:messages:around-client-id';
+  return (requireStructuredHistoryMiss
+    ? window.electronAPI.deviceLink.invoke(deviceId, channel, args, { requireStructuredHistoryMiss: true })
+    : invokeRemote(deviceId, channel, args)) as Promise<Message[]>;
 }
 
 // ─── /goal:device-link 远程路由 ────────────────────────────────────────────────

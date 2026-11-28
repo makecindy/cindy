@@ -5,6 +5,7 @@ import {
   type ModelAccessParseResult,
   type ProviderVideoApi,
 } from '@cindy/model-providers';
+import { providerShareIdOfAgentDeviceId } from './providerShare.js';
 
 export const MODEL_ACCESS_INVOCATION_GUIDE_SCHEMA_VERSION = 1 as const;
 export const MODEL_ACCESS_INVOCATION_GUIDE_PATH = '/api/model-access/invocation-guide' as const;
@@ -599,7 +600,12 @@ export function parsePreparedMediaInvocationGuide(
     : binding.executor === 'provider-image' ? ['providerId', 'executor', 'guideSource'] : ['providerId', 'executor'];
   const bindingError = unknownField(binding, bindingFields, 'guide.binding');
   if (bindingError) return fail(bindingError);
-  if (!boundedString(binding.providerId, 128) || !/^[a-zA-Z0-9_-]+$/.test(binding.providerId)) {
+  const providerId = binding.providerId;
+  const sharedId =
+    binding.executor === 'provider-image' && value.capability === 'image.generate' && typeof providerId === 'string'
+      ? providerShareIdOfAgentDeviceId(providerId)
+      : null;
+  if (!boundedString(providerId, 128) || !/^[a-zA-Z0-9_-]+$/.test(sharedId ?? providerId)) {
     return fail('guide.binding.providerId must be a bounded identifier');
   }
   if (!['gateway', 'provider-image', 'provider-video', 'provider-http'].includes(binding.executor as string)) {

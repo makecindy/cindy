@@ -56,9 +56,17 @@ const routed = {
 describe('the host computer\'s model groups over device-link', () => {
   it('treats an older computer without the channel as having no model groups', async () => {
     const invoke = vi.fn(async () => {
-      throw Object.assign(new Error('[CHANNEL_NOT_ALLOWED] model-groups:get'), { code: 'CHANNEL_NOT_ALLOWED' });
+      throw Object.assign(new Error("channel 'model-groups:get' not allowed remotely"), { code: 'CHANNEL_NOT_ALLOWED' });
     }) as unknown as RemoteInvoke;
     await expect(createMobileMakerTransport({ deviceId: 'old-desk', invoke }).listModelGroups()).resolves.toBeNull();
+  });
+
+  // Cloud status gap 7 / unit: a local policy refusal must not become an
+  // unsupported section. Exercise the same read as the model picker.
+  it('does not treat a transport refusal as a missing model groups capability', async () => {
+    const error = Object.assign(new Error('Encrypted transport is required'), { code: 'CHANNEL_NOT_ALLOWED' });
+    const invoke = vi.fn().mockRejectedValue(error) as unknown as RemoteInvoke;
+    await expect(createMobileMakerTransport({ deviceId: 'desk', invoke }).listModelGroups()).rejects.toBe(error);
   });
 
   it('asks an older computer again after a while, so an upgrade shows its modes without reopening the app', async () => {
@@ -184,6 +192,15 @@ describe('host model group strategies', () => {
       modelName: 'GPT', sourceName: 'A', why: 'order', pickWhy: 'drainNext', quota: null, trace: [],
     });
     expect(buildHostModelGroupRouteNote(fromNewHost, 'Kept', t, 'en', () => '')?.reason).toBe('models.modelGroups.why.drainNext');
+    const usageHabitFromHost = parseHostModelGroupResult({
+      outcome: 'routed', groupName: 'G', route: { agentKind: 'codex', providerId: 'a', model: 'gpt' },
+      modelName: 'GPT', sourceName: 'A', why: 'expiring', pickWhy: 'usageHabit', quota: { usedPercent: 30, resetAtMs: null }, trace: [],
+    });
+    expect(buildHostModelGroupRouteNote(usageHabitFromHost, 'Kept', t, 'en', () => '')?.reason).toBe('models.modelGroups.why.usageHabitQuota:70');
+    expect(reason('usageHabit')).toBe('models.modelGroups.why.usageHabit');
+    expect(reason('autoBalance')).toBe('models.modelGroups.why.autoBalance');
+    expect(reason('lessBusy')).toBe('models.modelGroups.why.lessBusy');
+    expect(reason('paygFallback')).toBe('models.modelGroups.why.paygFallback');
   });
 
   it('preserves route fastMode, parses sourceRoutes + expandedRoutes, and parses binding / switchOffer', async () => {
