@@ -548,6 +548,18 @@ describe('SubscriptionAccountsSection for plugin engines', () => {
     }],
   });
 
+  it('requests a status probe for the plugin account whose Retry button was clicked', async () => {
+    const view = pluginView([]);
+    view.accounts[0].status = 'unavailable';
+    const command = vi.fn(async () => view);
+    (window.electronAPI.subscriptionAccounts as { command: unknown }).command = command;
+    render(<SubscriptionAccountsSection providerId={providerId} />);
+    const row = await screen.findByTestId('subscription-account');
+    expect(command).toHaveBeenCalledWith({ action: 'read', providerId });
+    fireEvent.click(within(row).getByRole('button', { name: 'commonUi.retry' }));
+    await waitFor(() => expect(command).toHaveBeenCalledWith({ action: 'read', providerId, retryStatusAccountId: 'default' }));
+  });
+
   it('shows the identity, plan and usage the plugin reports, and adds an account with its sign-in method', async () => {
     const command = vi.fn(async () => pluginView([{ id: 'zai', label: 'Z.ai', kind: 'browser' }]));
     (window.electronAPI.subscriptionAccounts as { command: unknown }).command = command;

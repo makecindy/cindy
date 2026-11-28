@@ -231,13 +231,14 @@ export function SubscriptionAccountsSection({
   const engines = usePluginEngines(plugin);
   const pluginSignIn = usePluginEngineSignIn();
   const epoch = useRef(0);
-  const refresh = useCallback(async () => {
+  const refresh = useCallback(async (retryStatusAccountId?: string) => {
     const current = ++epoch.current;
     setRefreshing(true);
     try {
       const next = await window.electronAPI.subscriptionAccounts.command({
         action: 'read',
         providerId,
+        ...(retryStatusAccountId ? { retryStatusAccountId } : {}),
       });
       if (current === epoch.current) {
         cache?.set(providerId, next);
@@ -679,7 +680,7 @@ export function SubscriptionAccountsSection({
                             )}
                             {account.status === 'unavailable' && !account.apiKey && (
                               <Button data-settings-search-action="Retry reading this unavailable subscription account" variant="secondary" tone="quiet" size="sm"
-                                disabled={refreshing || busy} onClick={() => void refresh()}>
+                                disabled={refreshing || busy} onClick={() => void refresh(plugin ? account.id : undefined)}>
                                 {t('commonUi.retry')}
                               </Button>
                             )}

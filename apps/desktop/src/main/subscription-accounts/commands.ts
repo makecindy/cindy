@@ -95,12 +95,14 @@ export function parseSubscriptionAccountCommand(raw: unknown): SubscriptionAccou
   const loginKey = value.loginKey;
   const accountId = value.accountId;
   const validLoginKey = typeof loginKey === 'string' && /^[A-Za-z0-9_-]{1,100}$/.test(loginKey);
-  if (value.action === 'read' && value.taskId !== undefined) {
-    if (typeof value.taskId !== 'string' || !/^[A-Za-z0-9_-]{1,256}$/.test(value.taskId))
+  if (value.action === 'read') {
+    const { taskId, retryStatusAccountId } = value;
+    if (taskId !== undefined && (typeof taskId !== 'string' || !/^[A-Za-z0-9_-]{1,256}$/.test(taskId)))
       throwIpcError('INVALID_PARAMS', 'Invalid task');
-    return { action: 'read', providerId, taskId: value.taskId };
+    if (retryStatusAccountId !== undefined && (!isPluginEngineProviderIdShape(providerId) || !accountIdValid(retryStatusAccountId)))
+      throwIpcError('INVALID_PARAMS', 'Invalid account');
+    return { action: 'read', providerId, ...(taskId ? { taskId } : {}), ...(retryStatusAccountId ? { retryStatusAccountId } : {}) };
   }
-  if (value.action === 'read') return { action: 'read', providerId };
   if (value.action === 'preview' && isSubscriptionProvider(providerId)) return { action: 'preview', providerId };
   if (
     value.action === 'connect' &&
