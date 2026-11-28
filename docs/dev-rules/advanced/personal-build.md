@@ -1070,8 +1070,21 @@ node scripts/personal-build.mjs manual-check --config FILE --report BUILD_REPORT
 默认只接受冻结 main 的迁移树。开发者本地显式例外可用
 `--approve-unmerged-migration-pr NUMBER` 绑定冻结 PR 的完整迁移树；还必须提供已提交的
 `scripts/personal-migration-allowlist.json`，计划固定其 SHA-256，并通过候选真实启动策略。
-仓库自带的启动策略仍拒绝未合入 SQL；此参数不会改写策略，也不提供个人批准清单。
+默认启动策略仍拒绝未合入 SQL；此参数不会改写策略，也不提供个人批准清单。
 本地例外的策略及清单不得混入通用分发，下一轮不得沿用不同迁移树的批准。
+
+已部署的个人版若使用经审核的独立迁移历史，可在启动用的 Git 仓库本地记录一次审核结果。
+先独立核对已部署的个人版和当时主线的迁移树、SQL、伴随脚本与日志，确认两者截至同一序号，
+再用两个提交的完整对象 ID（依次为个人版、主线）登记：
+
+```sh
+git config --local --replace-all cindy.reviewedMigrationPrefix "$reviewed_personal_commit $reviewed_upstream_commit"
+```
+
+登记适用于共享这份本地配置的工作树。显式 `--shared` 启动时，个人版须继承已审提交且迁移树完全相同；
+主线须继承已审基线，保留原迁移历史，只可连续追加日志条目和相应的 SQL、快照、伴随脚本。
+个人版迁移有工作区改动仍会被拒绝。此检查用于重新启动已部署版本；新迁移仍走上面的独立升级流程。
+两次提交的审核记录只存本地。要恢复默认策略，执行 `git config --local --unset-all cindy.reviewedMigrationPrefix`。
 
 `automatic/activation-events.jsonl` 保留迁移和启动阶段及原始失败。启动前失败只有在
 未尝试数据库升级时才能沿用安全恢复；迁移完成后，若首次启动未就绪且失败进程及其启动器已经退出，可重试同一候选一次。
