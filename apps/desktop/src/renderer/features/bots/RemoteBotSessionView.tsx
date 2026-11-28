@@ -186,7 +186,7 @@ function RemoteBotSessionGate() {
   const homeAwayLong = useDelayedFlag(homeAway && liveChat, CLOUD_HOME_GRACE_MS);
   const waitingForRoster = !requestedSessionId && !liveChat && !bot?.online
     && !recoveryHere && !recoveryHydrationPending && !controlOff && !homeOffline
-    && (homeConfirmedOnline || (!bot && !connecting));
+    && (homeConfirmedOnline || (!connecting && (!bot || bot.connectionKnown === false)));
   const [rosterTimedOut, setRosterTimedOut] = useState(false);
   useEffect(() => {
     setRosterTimedOut(false);
@@ -247,7 +247,7 @@ function RemoteBotSessionGate() {
           // already confirms the home online keeps main's preparation copy (#10758).
           : connecting && !bot?.online && !homeConfirmedOnline
             ? t('ccAgent.sidebar.machineSwitcher.connecting')
-            : bot && !bot.online && !homeConfirmedOnline
+            : bot && !bot.online && bot.connectionKnown !== false && !homeConfirmedOnline
               ? t('bots.remote.offlineDescription', { name: bot.name, device: bot.deviceName })
               : !bot?.online || !sessionId
                 ? t('bots.remote.preparing')
