@@ -64,7 +64,7 @@ import {
   botGroupQuoteAttachmentName, botGroupQuoteExcerpt, botGroupQuoteFromMessage, buildBotGroupQuoteCard, readBotGroupQuote, readBotGroupQuoteCard, type BotGroupQuoteView,
   readBotGroupTaskCard, readBotGroupLiveTaskCard, botGroupMessageSummaryText, botGroupProcessCard, readBotGroupProcessCard,
   readBotGroupCapabilityNotice, buildBotGroupCapabilityNotice, type BotGroupCapabilityNoticeCode,
-  BOT_GROUP_ASSISTANT_AVATAR, BOT_GROUP_ASSISTANT_NAME, botGroupAssistantClientId, botGroupCardTaskClientId, readBotGroupAssistantNotice, groupAssistantNoticeCode,
+  BOT_GROUP_ASSISTANT_AVATAR, BOT_GROUP_ASSISTANT_NAME, botGroupAssistantClientId, botGroupCardTaskClientId, readBotGroupAssistantNotice, groupAssistantNoticeCode, groupAssistantNoticeReason,
   isBotGroupAssistantNoticeHidden, isBotGroupAssistantWaitPrivate, isBotGroupAssistantDeviceWait, type BotGroupAssistantDeviceWait,
 } from '../../shared/botGroupChat.js';
 import type { BotGroupChatService, BotGroupChatServiceDeps, BotGroupLaneTerminal, BotGroupPreparedAttachments } from './botGroupChatService.js';
@@ -1844,17 +1844,23 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
    * What this account sees of a room's messages: the group Cindy's computer notices speak only to
    * their requester, who gets an unbound one as a card above the composer (bot-group-chat.md 第 9 节).
    */
-  function shownMessages<T extends Message>(messages: T[], members: readonly Member[]): T[] {
+  function shownMessages<T extends Message>(messages: T[], members: readonly Member[], assistantDeviceId?: string | null): T[] {
     return messages.filter(m => {
       const notice = assistantNoticeOf(m, members);
-      return !notice || !isBotGroupAssistantNoticeHidden(notice, selfId);
+      if (!notice) return true;
+      if (!isBotGroupAssistantNoticeHidden({ ...notice, reason: groupAssistantNoticeReason(notice, assistantDeviceId) }, selfId)) return true;
+      // A notice the server marked unbound is always the requester's card. A reason inferred from
+      // the room is only kept visible for its own requester, and only when this client cannot offer
+      // the choice: someone else's notice never enters this account's view, and a server that
+      // advertises the capability gets the composer card instead.
+      return notice.requesterId === selfId && notice.reason === undefined && !boundAssistantDevice;
     });
   }
   function shownSnapshot<T extends Snapshot>(s: T): T {
-    const messages = shownMessages(s.messages, s.members);
+    const messages = shownMessages(s.messages, s.members, s.room.assistant_device_id ?? null);
     return messages.length === s.messages.length ? s : { ...s, messages };
   }
-  function messageView(m: Message, members: Member[], ownerMembers: readonly Member[] = members): BotGroupMessageView {
+  function messageView(m: Message, members: Member[], ownerMembers: readonly Member[] = members, assistantDeviceId?: string | null): BotGroupMessageView {
     // Only the server-owned origin establishes a system event. A user-supplied
     // card with the same namespace must remain an ordinary chat message.
     if (m.origin === 'system') {
@@ -1877,12 +1883,14 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     const member = members.find(member => member.id === m.authorId);
     // The server's notice that the requester had no computer online for the group's Cindy.
     const assistantNotice = member && isAssistant(member) ? readBotGroupAssistantNotice(m) : null;
+    // An older server omits `reason`; the room's own binding says whether a choice is needed.
+    const noticeReason = assistantNotice ? groupAssistantNoticeReason(assistantNotice, assistantDeviceId) : undefined;
     const spokeFor = (actorId: string | null | undefined, fallback?: string) => {
       const person = actorId ? members.find(candidate => candidate.id === actorId) : undefined;
       return person ? memberName(person, ownerMembers) : fallback?.trim() || '';
     };
     // An unbound notice never reaches a view (shownMessages): its requester gets the composer card instead.
-    if (assistantNotice) return { id: m.id, sequence: Number(m.seq), serverSequence: m.seq, kind: 'notice', capabilityNoticeCode: groupAssistantNoticeCode(assistantNotice.reason),
+    if (assistantNotice) return { id: m.id, sequence: Number(m.seq), serverSequence: m.seq, kind: 'notice', capabilityNoticeCode: groupAssistantNoticeCode(noticeReason),
       authorKind: 'bot', isSelf: false, authorBotId: m.authorId,
       authorName: spokeFor(assistantNotice.requesterId ?? m.actingFor?.actorId, m.actingFor?.name),
       content: displayText(m), threadRootId: m.threadRootId, replyCount: m.replyCount ?? 0, reactions: m.reactions ?? [], mentions: { all: false, botIds: [] },
@@ -1963,7 +1971,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       const existing = knownById.get(m.id);
       if (!existing || (m.revision ?? 0) >= (existing.revision ?? 0)) knownById.set(m.id, m);
     }
-    const known = shownMessages([...knownById.values()], s.members);
+    const known = shownMessages([...knownById.values()], s.members, s.room.assistant_device_id ?? null);
     const rootIds = new Set<string>();
     const priorityRootIds = new Set<string>();
     const repliesByRoot = new Map<string, Map<string, Message>>();
@@ -2299,9 +2307,9 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     for (const view of views) if (view.isSelf && view.kind !== 'notice' && !view.deleted && view.serverSequence)
       view.readByOthers = isReadByOthers(view.serverSequence, view.threadRootId, positions);
   }
-  async function messageViews(roomId: string, messages: Message[], members: Member[], ownerMembers: readonly Member[] = members) {
+  async function messageViews(roomId: string, messages: Message[], members: Member[], ownerMembers: readonly Member[] = members, assistantDeviceId?: string | null) {
     return messages.map(message => {
-      const view = messageView(message, members, ownerMembers);
+      const view = messageView(message, members, ownerMembers, assistantDeviceId);
       for (const block of message.content) if (!message.deleted && block.type === 'media' && block.mediaId) {
         const name = attachmentName(block);
         const parsed = id.safeParse(block.mediaId);
@@ -2370,7 +2378,8 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     });
     if (!messages.length) return;
     const threadVersion = threads.version(roomId);
-    const views = await messageViews(roomId, messages, snapshot.members);
+    const assistantDeviceId = snapshot.room.assistant_device_id ?? null;
+    const views = await messageViews(roomId, shownMessages(messages, snapshot.members, assistantDeviceId), snapshot.members, snapshot.members, assistantDeviceId);
     // The check belongs to the message as it is pushed, not to a later full read of the room.
     markReadByOthers(views, readPositions(roomId, snapshot, messages));
     await decorateThreads(roomId, views, messages, [...known, ...snapshot.messages], snapshot.members, false);
@@ -2458,10 +2467,10 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       const page = await pageRead;
       const executionFailures = await failureSnapshot(i.groupId, members, [...(i.sourceMessageIds ?? []), root.id, ...page.map(m => m.id)]);
       const projection = await cache?.projection<Message>(i.groupId, i.sourceMessageIds ?? []);
-      const rootViews = await messageViews(i.groupId, [root], members);
+      const rootViews = await messageViews(i.groupId, [root], members, members, s.room.assistant_device_id ?? null);
       await decorateThreads(i.groupId, rootViews, [root], page, members, false);
-      const replies = await messageViews(i.groupId, shownMessages([...page].reverse(), members), members);
-      const messageUpdates = projection ? await messageViews(i.groupId, shownMessages(projection.messages.filter(m => m.threadRootId === i.rootId), members), members) : undefined;
+      const replies = await messageViews(i.groupId, shownMessages([...page].reverse(), members, s.room.assistant_device_id ?? null), members, members, s.room.assistant_device_id ?? null);
+      const messageUpdates = projection ? await messageViews(i.groupId, shownMessages(projection.messages.filter(m => m.threadRootId === i.rootId), members, s.room.assistant_device_id ?? null), members, members, s.room.assistant_device_id ?? null) : undefined;
       const positions = readPositions(i.groupId, s, [root, ...page, ...(projection?.messages ?? [])]);
       for (const views of [rootViews, replies, messageUpdates ?? []]) markReadByOthers(views, positions);
       const retry = () => {
@@ -2541,7 +2550,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     const savedPage = previous?.revision === revision && previous.page?.query === query.toString() ? previous.page : undefined;
     // The server's page, for its cursor and length; `page` is what this account sees of it.
     const fullPage = summaryOnly ? s.messages : savedPage?.messages ?? await (messagesRead ?? readMessages());
-    const page = shownMessages(fullPage, s.members);
+    const page = shownMessages(fullPage, s.members, s.room.assistant_device_id ?? null);
     // Start downloading authorized page media immediately instead of waiting for executions/plans/failures.
     if (!summaryOnly) prefetchMessageMedia(roomId, page);
     const ownerMembers = direct ? [] : s.members;
@@ -2639,9 +2648,9 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     const deciding = planning.get(roomId);
     if (deciding) speakers.push({ botId: deciding.botId, sessionId: null, activity: 'planning', isSelfRequested: true, sourceMessageId: deciding.sourceMessageId, threadRootId: null, timelineAt: deciding.timelineAt, ...speakerRequesterName(deciding.botId, selfId) });
     // Sidebar refresh must not download every attachment in every group's history.
-    const messages = summaryOnly ? [] : await messageViews(roomId, page, s.members, ownerMembers);
+    const messages = summaryOnly ? [] : await messageViews(roomId, page, s.members, ownerMembers, s.room.assistant_device_id ?? null);
     const projection = !summaryOnly ? await history()?.projection<Message>(roomId, o.sourceMessageIds ?? []) : undefined;
-    const messageUpdates = projection ? await messageViews(roomId, shownMessages(projection.messages, s.members), s.members, ownerMembers) : undefined;
+    const messageUpdates = projection ? await messageViews(roomId, shownMessages(projection.messages, s.members, s.room.assistant_device_id ?? null), s.members, ownerMembers, s.room.assistant_device_id ?? null) : undefined;
     // The messages on screen, not only the snapshot's newest 100, so a receipt for an older one still refreshes it.
     const positions = readPositions(roomId, s, [...page, ...(projection?.messages ?? [])]);
     for (const views of [messages, messageUpdates ?? []]) markReadByOthers(views, positions);
@@ -2668,11 +2677,15 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     // The sidebar never resolves shares: it names the sharer and never quotes the card's text.
     const lastIsShare = !!last && !!readBotGroupThreadShareCard(last);
     const mainRead = s.reads?.find(read => read.thread_key === 'main');
-    const assistantComputers = s.assistantComputers?.map(device =>
+    // The snapshot's list is server-authoritative, but a server that has the group's Cindy may still
+    // omit it (mixed replicas / staged rollout). That group still needs a computer: start from the
+    // server's list, or from this one, so the choice never becomes a dead end.
+    const listed = s.assistantComputers ?? ((assistantActorId || s.members.some(isAssistant)) ? [] : undefined);
+    const assistantComputers = listed?.map(device =>
       device.id === selfDeviceId && device.name === device.id ? { ...device, name: hostname() || device.name } : device);
     if (assistantComputers && selfDeviceId && !assistantComputers.some(device => device.id === selfDeviceId))
       assistantComputers.unshift({ id: selfDeviceId, name: hostname() || selfDeviceId });
-    return { ...(!direct && boundAssistantDevice && assistantComputers ? { assistantComputers, assistantDeviceId: s.room.assistant_device_id ?? null } : {}), conversationKind: direct ? 'direct' : 'group', serverBacked: true, supportsPersonalMentionHistory: !direct && supportsPersonalMentionHistory, reactionRevision: reactionRevisions.get(roomId)?.room ?? runtimeReactionRevision, reactionRevisions: { ...reactionRevisions.get(roomId)?.messages }, supportsGroupLeave: !direct, supportsDissolve: !direct && supportsDissolve, supportsListRemoval, supportsMemberAvatar: !direct && supportsMemberAvatar, ...(!direct && supportsMessageReaders ? { supportsMessageReaders: true } : {}), supportsNotificationSettings: !direct && supportsNotificationSettings, ...(!direct && supportsNotificationSettings && s.reads ? chatGroupNotificationPreference(s.room, mainRead) : {}), supportsMemberInvites: !direct && supportsMemberInvites, allowMemberInvites: !direct && s.room.allow_member_invites === true, supportsMemberMentionAll: !direct && supportsMemberMentionAll, allowMemberMentionAll: !direct && s.room.allow_member_mention_all === true, supportsMentionAudiences: !direct && supportsMentionAudiences, allowMentionAllBots: !direct && s.room.allow_mention_all_bots === true, dissolvedAt: s.room.dissolved_at ?? null, migrationPending: [...upgradeErrors.keys()].some(source => upgradedGroups.get(source) === roomId), archived: s.room.archived, selfActorId: selfId, topic: s.room.topic, description: s.room.description, revision: s.room.revision, canInvite: !direct && !s.room.archived && !s.room.dissolved_at && !!invitationActor(s), canStopAll: false, supportsOwnedStop: true, ...(!direct && independentReplies ? { independentReplies: true } : {}), ...(!direct && singleSpeaker ? { singleSpeaker: true, ...(!independentReplies ? { supportsDivision: true } : {}) } : {}), id: s.room.id, name: direct ? s.members.filter(m => m.state === 'joined' && m.id !== selfId).map(member => memberName(member, [])).join(', ') || s.room.name : s.room.name, ...(!direct && s.room.org_name ? { orgName: s.room.org_name } : {}), ...(!direct && s.room.external === true ? { external: true } : {}), replyMode: s.room.response_mode, speakingMode: s.room.speaking_mode,
+    return { ...(!direct && boundAssistantDevice && assistantComputers?.length ? { assistantComputers, assistantDeviceId: s.room.assistant_device_id ?? null } : {}), conversationKind: direct ? 'direct' : 'group', serverBacked: true, supportsPersonalMentionHistory: !direct && supportsPersonalMentionHistory, reactionRevision: reactionRevisions.get(roomId)?.room ?? runtimeReactionRevision, reactionRevisions: { ...reactionRevisions.get(roomId)?.messages }, supportsGroupLeave: !direct, supportsDissolve: !direct && supportsDissolve, supportsListRemoval, supportsMemberAvatar: !direct && supportsMemberAvatar, ...(!direct && supportsMessageReaders ? { supportsMessageReaders: true } : {}), supportsNotificationSettings: !direct && supportsNotificationSettings, ...(!direct && supportsNotificationSettings && s.reads ? chatGroupNotificationPreference(s.room, mainRead) : {}), supportsMemberInvites: !direct && supportsMemberInvites, allowMemberInvites: !direct && s.room.allow_member_invites === true, supportsMemberMentionAll: !direct && supportsMemberMentionAll, allowMemberMentionAll: !direct && s.room.allow_member_mention_all === true, supportsMentionAudiences: !direct && supportsMentionAudiences, allowMentionAllBots: !direct && s.room.allow_mention_all_bots === true, dissolvedAt: s.room.dissolved_at ?? null, migrationPending: [...upgradeErrors.keys()].some(source => upgradedGroups.get(source) === roomId), archived: s.room.archived, selfActorId: selfId, topic: s.room.topic, description: s.room.description, revision: s.room.revision, canInvite: !direct && !s.room.archived && !s.room.dissolved_at && !!invitationActor(s), canStopAll: false, supportsOwnedStop: true, ...(!direct && independentReplies ? { independentReplies: true } : {}), ...(!direct && singleSpeaker ? { singleSpeaker: true, ...(!independentReplies ? { supportsDivision: true } : {}) } : {}), id: s.room.id, name: direct ? s.members.filter(m => m.state === 'joined' && m.id !== selfId).map(member => memberName(member, [])).join(', ') || s.room.name : s.room.name, ...(!direct && s.room.org_name ? { orgName: s.room.org_name } : {}), ...(!direct && s.room.external === true ? { external: true } : {}), replyMode: s.room.response_mode, speakingMode: s.room.speaking_mode,
       // Another member's private wait is not this account's to answer; its own still asks for attention.
       teammateActivity: teammateChatActivity({ executions: executions.filter(e => !isBotGroupAssistantWaitPrivate(waitInput(e), selfId)), plans: serverPlans, planning: !!deciding,
         archived: s.room.archived, lastMessageAt: last ? Date.parse(last.createdAt) : 0 }),
@@ -4732,7 +4745,8 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
         return {};
       }
       if (action.type === 'assistantDevice') {
-        if (!boundAssistantDevice) throw new Error('CHAT_UNAVAILABLE');
+        // The server validates the binding and the account's device; a stale /me capability must
+        // not turn the one action that unblocks the request into a client-side refusal.
         await api(`/conversations/${target}/assistant-device`, 'POST', { operationId: randomUUID(), deviceId: action.deviceId });
         membershipChanged(target);
         return {};

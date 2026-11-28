@@ -3204,6 +3204,67 @@ describe('Chat Server result delivery and refresh', () => {
         ? [{ executionId: request(60).id, sourceMessageId: source.id, requestText: 'Sort out the weekly report' }] : undefined);
     });
 
+    // 测试价值
+    // - 生产入口与可观察结果：真实 getGroup / manage 经 HTTP 边界的群视图；未绑定时群设置里有可选电脑、
+    //   发起人拿到选择电脑的卡片、选择能写到 /assistant-device。
+    // - Bug／规则依据：2026-11-28「群 Cindy 执行电脑选择死路」——服务器要求按成员绑定执行电脑，但
+    //   快照没有 assistantComputers、旧卡片也没有 reason，客户端只剩服务端那句「请在群设置中选择
+    //   执行电脑」；bot-group-chat.md 第 9 节：谁问就在谁的电脑上跑。
+    // - 现有覆盖缺口：上面的用例都以完整电脑列表和 reason 为前提，未覆盖部署错位时的清单缺失。
+    // - 最小失败输入：/me 声明 groupAssistantDevice、快照无 assistantComputers、房间未绑定、
+    //   executor_unavailable 卡片无 reason；修复前没有电脑列表、没有卡片，写回被能力位拦住。
+    // - tier：unit（内存 HTTP fake，无真实网络）。
+    // - 实测耗时：本文件 vitest run 9.8s（589 条）。
+    it('offers this computer when the server omits the list and the notice has no reason', async () => {
+      const source = message(70, selfId, 'Sort out the weekly report');
+      const notice = message(71, cindyId, '', { origin: 'bot', threadRootId: source.id, content: [{ type: 'card', namespace: 'cindy.group-assistant',
+        schemaRevision: 1, fallback: 'notice', data: { type: 'executor_unavailable', requesterId: selfId, sourceMessageId: source.id } }] });
+      const previous = fixture.handle.getMockImplementation()!;
+      fixture.handle.mockImplementation((route, method, body) => {
+        if (route === '/me') return { body: { actor: { id: selfId }, deviceId: 'studio-device',
+          capabilities: { groupAssistant: 1, groupAssistantDevice: 1 }, groupAssistantActorId: cindyId } };
+        if (route.endsWith('/snapshot')) return { body: { room: room(roomId), members, messages: [source, notice], cursor: '1' } };
+        if (route === `/conversations/${roomId}/messages?limit=100`) return { body: [source, notice] };
+        if (route.startsWith(`/conversations/${roomId}/messages?threadRootId=`)) return { body: [notice] };
+        if (route === `/conversations/${roomId}/messages/${source.id}`) return { body: source };
+        if (route === `/conversations/${roomId}/executions`) return { body: [{ ...request(70), status: 'needs_input' }] };
+        if (route === `/conversations/${roomId}/assistant-device` && method === 'POST') return { body: { deviceId: body.deviceId } };
+        return previous(route, method, body);
+      });
+      const result = await service.getGroup(roomId);
+      if (!result.ok) throw new Error(result.errorCode);
+      // No binding and no reason means the requester's own computer wait, not a room-wide outage.
+      expect(result.group.messages.map(m => m.id)).toEqual([source.id]);
+      expect(result.group.assistantComputers).toEqual([{ id: 'studio-device', name: expect.any(String) }]);
+      expect(result.group.assistantDeviceWaits).toEqual([{ executionId: request(70).id, sourceMessageId: source.id, requestText: expect.any(String) }]);
+      // The topic path hides the same notice instead of reporting an outage there.
+      const thread = await service.chatServer!.thread({ groupId: roomId, rootId: source.id });
+      if (!thread.ok) throw new Error(thread.errorCode);
+      expect(thread.replies).toEqual([]);
+      expect(await service.chatServer!.manage({ groupId: roomId, action: { type: 'assistantDevice', deviceId: 'studio-device' } })).toMatchObject({ ok: true });
+      expect(fixture.handle.mock.calls.some(([route, method]) => route === `/conversations/${roomId}/assistant-device` && method === 'POST')).toBe(true);
+    });
+
+    // MagicLizi P1 (2026-11-29): the fallback that keeps this account's own no-reason notice visible
+    // must not also re-show someone else's when the client lacks the capability (bot-group-chat.md §9).
+    // Unit: the real getGroup against the HTTP boundary, capability absent, requester is another member.
+    it.each([null, 'studio-device'])('keeps another member’s no-reason notice out of this view (bound=%s)', async bound => {
+      const source = message(80, peerId, 'Weekly report');
+      const notice = message(81, cindyId, '', { origin: 'bot', content: [{ type: 'card', namespace: 'cindy.group-assistant',
+        schemaRevision: 1, fallback: 'notice', data: { type: 'executor_unavailable', requesterId: peerId, sourceMessageId: source.id } }] });
+      const previous = fixture.handle.getMockImplementation()!;
+      fixture.handle.mockImplementation((route, method, body) => {
+        if (route === '/me') return { body: { actor: { id: selfId }, deviceId: 'studio-device',
+          capabilities: { groupAssistant: 1 }, groupAssistantActorId: cindyId } };
+        if (route.endsWith('/snapshot')) return { body: { room: { ...room(roomId), assistant_device_id: bound }, members, messages: [source, notice], cursor: '1' } };
+        if (route === `/conversations/${roomId}/messages?limit=100`) return { body: [source, notice] };
+        return previous(route, method, body);
+      });
+      const result = await service.getGroup(roomId);
+      if (!result.ok) throw new Error(result.errorCode);
+      expect(result.group.messages.map(m => m.id)).toEqual([source.id]);
+    });
+
     // #13638: the existing notice test always has a visible source in the same page.
     // Unit: real group and thread reads return the pagination boundary for all-hidden pages.
     it.each(['group', 'thread'])('retains the boundary of an all-hidden %s page', async scope => {
