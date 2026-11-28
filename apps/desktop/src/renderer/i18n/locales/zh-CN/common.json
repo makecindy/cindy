@@ -15933,6 +15933,7 @@
     "imageMissing": {
       "title": "图片已丢失",
       "unavailable": "图片暂时无法显示",
+      "remote": "该图片在远程设备上，本端无法显示",
       "loading": "正在加载图片…"
     },
     "newMessageIndicator": {
@@ -16308,7 +16309,7 @@
       "fetching": "正在从远端获取文件…",
       "fetchFailed": "从远端获取文件失败",
       "notFound": "远端文件不存在",
-      "outsideWorkdir": "该文件在任务工作目录之外，远程任务暂不支持访问",
+      "outsideWorkdir": "该文件在任务工作目录之外，远程任务暂不支持访问；可将交付副本放入任务目录后再打开",
       "staleCopy": "远端连接不可用，已显示本地历史副本（可能不是最新版本）",
       "staleBadge": "历史副本",
       "downloadToLocal": "下载到本地",

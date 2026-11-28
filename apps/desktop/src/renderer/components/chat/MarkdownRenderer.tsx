@@ -100,7 +100,7 @@ import {
   isDeepLinkProtocol,
   isDeepLinkUrl,
 } from '../../../shared/deepLinkSchemes';
-import { rewriteToRemoteMediaOrigin, type RemoteMediaOrigin } from '../../../shared/remoteMediaUrl';
+import { rewriteToRemoteMediaOrigin, REMOTE_MEDIA_SCHEME, type RemoteMediaOrigin } from '../../../shared/remoteMediaUrl';
 import { useChatSessionFile } from './ChatSessionFileContext';
 import { toRemoteMediaOrigin } from '@/lib/sessionFileOrigin';
 import { toast } from '@/lib/toast';
@@ -909,6 +909,19 @@ export function markdownImageAddress(
 }
 
 /**
+ * 图片引用的兜底文件名(取路径末段;percent 编码解不开时按原样显示)。
+ * 占位卡与「远程取不到」占位共用同一口径。
+ */
+function imageFallbackName(src: string | undefined): string {
+  const name = src?.split(/[\\/]/).pop() ?? 'image';
+  try {
+    return decodeURIComponent(name);
+  } catch {
+    return name;
+  }
+}
+
+/**
  * LightboxImage — module-level component for react-markdown img renderer.
  * Tracks per-image load errors; broken images get no zoom-in cursor or click.
  */
@@ -933,6 +946,11 @@ function LightboxImage({
 }) {
   const { t } = useTranslation();
   const { status: imageStatus, onError, canRetry, retry } = useImageLoadFailure(src, streaming);
+  // 远程来源的图片:字节在另一台机器上(经 cindy-remote-media 中转取回)。取回失败时
+  // 说明「图片在远程设备上」,而不是笼统的「图片暂时无法显示」——否则用户只看到一
+  // 张坏图,既不知道为什么,也会以为文件损坏或链接写错。
+  // 仍在自动重试(loading)时不用这句:那时结论还没定,说了等于提前判失败。
+  const isRemoteSrc = typeof src === 'string' && src.startsWith(`${REMOTE_MEDIA_SCHEME}:`);
   // Right-click → custom popover menu. We track cursor pos so a 0×0 virtual
   // trigger can anchor the Radix DropdownMenu wherever the user clicked.
   const [menuPos, setMenuPos] = useState<{ x: number; y: number } | null>(null);
@@ -952,12 +970,12 @@ function LightboxImage({
   // xdt-image:// 404, etc.), swap to the friendly placeholder card. The
   // filename is best-effort: derive it from the URL's last segment.
   if (imageStatus) {
-    let fallbackName = src?.split(/[\\/]/).pop() ?? 'image';
-    try { fallbackName = decodeURIComponent(fallbackName); } catch { /* malformed link */ }
+    const fallbackName = imageFallbackName(src);
     return (
       <ImageMissingPlaceholder
         filename={alt || fallbackName}
         status={imageStatus}
+        message={isRemoteSrc && imageStatus !== 'loading' ? t('chat.imageMissing.remote') : undefined}
         onRetry={canRetry ? retry : undefined}
         onOpen={allowLocalFileOpen && src?.startsWith('xdt-file://')
           ? () => void openLocalImage(src)
@@ -1662,7 +1680,17 @@ function MarkdownTargetLink({
             absPath,
           });
           if (verdict === 'nonfile') {
-            toast.error(t('chat.markdownRenderer.fileUnavailable'));
+            // 远端工作目录之外的引用:SSH 的文件服务只覆盖任务工作目录,这类路径既取不到
+            // 也验不了,verdict 与「文件不存在」同样回 nonfile。给出「在工作目录之外」
+            // 的真实原因,而不是笼统的「文件不可用」——否则用户只知道自己打不开,
+            // 不知道文件在远端、更不知道该怎么拿到它。
+            const outsideWorkdir =
+              fileCtx.origin.kind === 'ssh' && !toWorkdirRel(workingDir, absPath);
+            toast.error(
+              outsideWorkdir
+                ? t('chat.remoteFile.outsideWorkdir')
+                : t('chat.markdownRenderer.fileUnavailable'),
+            );
             return;
           }
           // Unknown may mean offline: the existing preview can still serve a
@@ -2003,6 +2031,13 @@ const MarkdownRendererBase = memo(function MarkdownRendererBase({
   // 传入 remoteMediaOrigin prop。ssh 的 workdir 取 context 的 workingDir(与 props 的
   // workingDir 同源,聊天调用方都由 session 传入)。
   const sessionFileCtx = useChatSessionFile();
+  // 占位文案(远程取不到时说明原因)要在 components 闭包里取。
+  // 先在顶层算成字符串再进闭包:useTranslation 的 t 在每次渲染都可能是新引用
+  // (测试里就是这么替的),把 t 放进 components 的依赖会让 memo 每帧重建,
+  // 流式词淡入动画被重置、同名标题的节点被重建。字符串按值比较,依赖稳定。
+  const { t } = useTranslation();
+  const remoteOutsideWorkdirText = t('chat.remoteFile.outsideWorkdir');
+  const remoteDeviceImageText = t('chat.imageMissing.remote');
   const remoteMediaOrigin = useMemo(
     () =>
       remoteMediaOriginProp !== undefined
@@ -2149,6 +2184,23 @@ const MarkdownRendererBase = memo(function MarkdownRendererBase({
                     filename={markdownMediaFilename(normalized, alt)}
                     variant="tool-output"
                     sessionId={currentSessionId}
+                  />
+                );
+              }
+              // 远程来源、但本机取不到字节的图片(如 SSH 远端工作目录之外的图:字节在
+              // 远端 daemon 的数据目录里,file-service 取不到)。这类引用渲染期就没有
+              // 可用地址,继续往下走只会留下一个永远转圈的加载占位——用户既看不到图,
+              // 也拿不到任何原因说明。改成显式占位并说清「字节在远程设备上」。
+              if (mediaOrigin && !normalized) {
+                return (
+                  <ImageMissingPlaceholder
+                    filename={alt || imageFallbackName(localSrc)}
+                    status="unavailable"
+                    message={
+                      mediaOrigin.kind === 'ssh'
+                        ? remoteOutsideWorkdirText
+                        : remoteDeviceImageText
+                    }
                   />
                 );
               }
@@ -2321,6 +2373,8 @@ const MarkdownRendererBase = memo(function MarkdownRendererBase({
       clickedOccurrence,
       setLightboxSrc,
       sessionFileCtx.localConfirmed,
+      remoteOutsideWorkdirText,
+      remoteDeviceImageText,
     ],
   );
   const markdownRootRef = useRef<HTMLDivElement>(null);

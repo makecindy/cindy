@@ -15995,6 +15995,7 @@
     "imageMissing": {
       "title": "Image missing",
       "unavailable": "Image Unavailable",
+      "remote": "This image is on another device and can't be shown here",
       "loading": "Loading image…"
     },
     "newMessageIndicator": {
@@ -16374,7 +16375,7 @@
       "fetching": "Fetching file from remote…",
       "fetchFailed": "Failed to fetch file from remote",
       "notFound": "File not found on remote",
-      "outsideWorkdir": "This file is outside the session working directory and can't be accessed in remote sessions yet",
+      "outsideWorkdir": "This file is outside the session working directory and can't be accessed in remote sessions yet; copy it into the session working directory to open it",
       "staleCopy": "Remote connection unavailable — showing a local cached copy (may be outdated)",
       "staleBadge": "Cached copy",
       "downloadToLocal": "Download to this computer",

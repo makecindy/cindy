@@ -15924,6 +15924,7 @@
     "imageMissing": {
       "title": "圖已佚",
       "unavailable": "圖暫不可見",
+      "remote": "此圖在他器之上，本端不能顯示",
       "loading": "方載圖…"
     },
     "newMessageIndicator": {
@@ -16299,7 +16300,7 @@
       "fetching": "方自遠端取卷…",
       "fetchFailed": "自遠端取卷未成",
       "notFound": "遠端無此卷",
-      "outsideWorkdir": "此卷在差事工作目錄之外，遠端差事暫不能存取",
+      "outsideWorkdir": "此卷在差事工作目錄之外，遠端差事暫不能存取；可把交付副本置差事目錄而後開之",
       "staleCopy": "遠端連線不可用，已示此機舊存副本(或非最新)",
       "staleBadge": "舊存副本",
       "downloadToLocal": "取下至此機",

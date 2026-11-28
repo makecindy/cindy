@@ -27,6 +27,11 @@ interface ImageMissingPlaceholderProps {
   /** Remount a readable image after a transient display failure; never regenerate it. */
   onRetry?: () => void;
   onOpen?: () => void;
+  /**
+   * 已本地化的原因说明(例如「图片在远程设备上」)。给定时顶替默认标题,让用户知道
+   * 为什么看不到图,而不是只看到一个「图片暂时无法显示」。
+   */
+  message?: string;
 }
 
 export function ImageMissingPlaceholder({
@@ -36,6 +41,7 @@ export function ImageMissingPlaceholder({
   maxWidth = 280,
   onRetry,
   onOpen,
+  message,
 }: ImageMissingPlaceholderProps) {
   const { t } = useTranslation();
   return (
@@ -61,13 +67,14 @@ export function ImageMissingPlaceholder({
         <ImageOff className="h-8 w-8 text-[var(--text-tertiary)]" aria-hidden="true" />
       )}
       <span className="text-xs font-medium">
-        {t(
-          status === 'missing'
-            ? 'chat.imageMissing.title'
-            : status === 'loading'
-              ? 'chat.imageMissing.loading'
-              : 'chat.imageMissing.unavailable',
-        )}
+        {message ??
+          t(
+            status === 'missing'
+              ? 'chat.imageMissing.title'
+              : status === 'loading'
+                ? 'chat.imageMissing.loading'
+                : 'chat.imageMissing.unavailable',
+          )}
       </span>
       {/* v5: 原生 title 替换为 Radix Tooltip(mono) — 文件名走 mono 风格。 */}
       <Tooltip.Root>

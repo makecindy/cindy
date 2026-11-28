@@ -15932,6 +15932,7 @@
     "imageMissing": {
       "title": "圖片已丟失",
       "unavailable": "圖片暫時無法顯示",
+      "remote": "該圖片在遠端裝置上，本端無法顯示",
       "loading": "正在載入圖片…"
     },
     "newMessageIndicator": {
@@ -16307,7 +16308,7 @@
       "fetching": "正在從遠端取得檔案…",
       "fetchFailed": "從遠端取得檔案失敗",
       "notFound": "遠端檔案不存在",
-      "outsideWorkdir": "該檔案在任務工作目錄之外，遠端任務暫不支援存取",
+      "outsideWorkdir": "該檔案在任務工作目錄之外，遠端任務暫不支援存取；可將交付副本放入任務目錄後再開啟",
       "staleCopy": "遠端連線不可用，已顯示本機歷史副本（可能不是最新版本）",
       "staleBadge": "歷史副本",
       "downloadToLocal": "下載到本機",
