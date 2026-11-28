@@ -31,6 +31,7 @@ import {
   type RemoteSubscriptionInvoke,
 } from './runtime.js';
 import { taskPoolRouteAllowsModel, readTaskPoolAccount, type TaskPoolAccount } from './taskAccount.js';
+import { readModelGroupRoutedAccount } from '../model-groups/sessionBindings.js';
 
 export interface AccountFailoverSession {
   status: string;
@@ -125,6 +126,8 @@ export async function readSubscriptionAccountSwitch(
   const agent = row.agentKind === 'pi' ? 'pi' : 'codex';
   const reason = bound && readSubscriptionAccountBlockReason(bound.provider, bound.accountId, bound.model, agent);
   if (!bound || !reason) return null;
+  // Smart Routing moves its account-source tasks itself, only to sources the route allows (model-groups.md §3.5).
+  if (await readModelGroupRoutedAccount(sessionId, bound.providerId)) return null;
   if (!(await routeAdmits(bound))) return null;
   try {
     await acquireSubscriptionAccount(bound.providerId, bound.model, [], false, {
@@ -226,6 +229,8 @@ export async function prepareSubscriptionAccountFailover(
   const agent = row?.agentKind === 'pi' ? 'pi' : 'codex';
   const reason = readSubscriptionAccountBlockReason(bound.provider, bound.accountId, bound.model, agent);
   if (!reason) return false;
+  if (await readModelGroupRoutedAccount(sessionId, bound.providerId)) return false;
+  assertOwner();
   if (bound.previousProviderId && !deps.moveRoute) return false;
   if (!(await routeAdmits(bound))) return false;
   assertOwner();
