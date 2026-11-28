@@ -62,6 +62,7 @@ export interface RunModelGroupBeforeSendSessionRow {
   fastMode?: boolean | 'ultrafast' | null;
   agentDeviceId?: string | null;
   remoteHostId?: string | null;
+  sdkSessionId?: string | null;
   lastTurnEndedAt?: number | null;
   contextTokens?: number | null;
 }
@@ -162,6 +163,7 @@ export async function runModelGroupBeforeSend(
         effort: row.effort ?? null,
         fastMode: row.fastMode ?? false,
         remoteHostId: row.remoteHostId ?? null,
+        sdkSessionId: row.sdkSessionId ?? null,
         lastTurnEndedAt: row.lastTurnEndedAt ?? null,
         contextTokens: row.contextTokens ?? null,
       },

@@ -121,6 +121,7 @@ export function createHostModelGroups(ports: HostModelGroupsPorts) {
       fastMode: sessions.fastMode,
       agentDeviceId: sessions.agentDeviceId,
       remoteHostId: sessions.remoteHostId,
+      sdkSessionId: sessions.sdkSessionId,
       lastTurnEndedAt: sessions.lastTurnEndedAt,
       contextTokens: sessions.contextTokens,
       scheduledModelBaseline: sessions.scheduledModelBaseline,
@@ -135,6 +136,7 @@ export function createHostModelGroups(ports: HostModelGroupsPorts) {
       fastMode: row.fastMode === 'ultrafast' ? 'ultrafast' : row.fastMode === true,
       agentDeviceId: row.agentDeviceId,
       remoteHostId: row.remoteHostId,
+      sdkSessionId: row.sdkSessionId,
       lastTurnEndedAt: row.lastTurnEndedAt,
       contextTokens: row.contextTokens,
     };

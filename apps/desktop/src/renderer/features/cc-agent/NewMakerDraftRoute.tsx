@@ -25,7 +25,7 @@ import {
   type PluginEngineSource,
 } from '@/lib/pluginEngineSelection';
 import { bindModelGroupSession, buildModelGroupRouteNote, commitModelGroupDecision, modelGroupLocationNameFrom, useModelGroups, writeModelGroupRouteNote } from '../model-groups/modelGroupsClient';
-import { modelGroupOwnerDevice, resolveDraftModelGroup } from '../model-groups/draftModelGroupRouting';
+import { isExcludedDraftFallback, modelGroupOwnerDevice, resolveDraftModelGroup } from '../model-groups/draftModelGroupRouting';
 import { implicitSourceRouteSelection, userDefinedModelGroupRoutes } from '../model-groups/sourceRouteProviders';
 import { bindDeviceModelGroupSession, commitDeviceModelGroupDecision, useDeviceModelGroups, useDevicesModelGroups, writeDeviceModelGroupRouteNote } from '../model-groups/remoteModelGroups';
 import { findModelGroupRoute, MODEL_GROUPS_DEFAULTS, type ModelGroupResolvedRoute, type ModelGroupSelection } from '../../../shared/modelGroups';
@@ -3272,7 +3272,7 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
     : null;
   const localModelIssueText = localModelIssue ? t(`ccAgent.draft.savedModel.${localModelIssue}`) : null;
 
-  // ─── 未发送任务(见 provisionalDraftTask.ts):开始输入就先在本机建出任务并预热 Agent,
+  // ─── 未发送任务(见 provisionalDraftTask.ts):开始输入就先在本机建出任务；直连时预热 Agent，
   // 清空输入就删掉,发送时直接接着用。只覆盖本机普通项目 / 对话草稿。
   const provisionalDraftArgs = useMemo<ProvisionalDraftCreateArgs | null>(() => {
     if (isDeviceLinkDraft || usesDeviceCatalog || localModelIssue) return null;
@@ -3320,6 +3320,8 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
   ]);
   const provisionalDraftArgsRef = useRef(provisionalDraftArgs);
   provisionalDraftArgsRef.current = provisionalDraftArgs;
+  const provisionalDraftRoutingRef = useRef({ draft: savedDraft, awaitingRoute: !!effectiveDisplayModelGroup });
+  provisionalDraftRoutingRef.current = { draft: savedDraft, awaitingRoute: !!effectiveDisplayModelGroup };
   const provisionalTitleLabelsRef = useRef({ image: '', file: '' });
   provisionalTitleLabelsRef.current = {
     image: t('ccAgent.autoTitle.image'),
@@ -3358,7 +3360,11 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
           sessionProviderId: args.providerId ?? null,
         });
       }
-      if (session.workingDir) {
+      // 路由尚未选号时只保留本地草稿。创建可能跨过用户改选，须在调用预热前复核当前选择，
+      // 包括草稿 store 已更新但组件还没重新渲染的间隙。
+      const routing = provisionalDraftRoutingRef.current;
+      if (session.workingDir && args === provisionalDraftArgsRef.current
+        && !routing.awaitingRoute && getDraft() === routing.draft) {
         makerChatStore.prewarmSession(
           session.id,
           args.model,
@@ -5982,6 +5988,11 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
           const routedTo: GhostModelRoute | ModelGroupResolvedRoute | null = pluginRoute?.outcome === 'routed'
             ? pluginRoute.route
             : modelGroupRoute?.outcome === 'routed' ? modelGroupRoute.route : keptPluginRoute;
+          if (modelGroupAtSend && !routedTo && !modelGroupOwner && !catalogDeviceId && !effectiveRemoteHostId
+            && isExcludedDraftFallback(providers, sendBaseRoute, modelGroupRoute)) {
+            toast.error(t('newChat.modelSelector.source.emptyTitle'));
+            return;
+          }
           // 输入框见到选着模型组或插件模型就不按原模型挡发送(ChatInput sendRoutesOwnModel)；这里没选出来源、
           // 沿用原模型时补上那道检查：原模型所在那台的目录要就绪，也要有已连接的来源。
           if ((activeModelGroup || activePluginModel) && !routedTo) {
@@ -7378,6 +7389,10 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
           ? pluginRoute.route
           : modelGroupRoute?.outcome === 'routed' ? modelGroupRoute.route : null;
         if (goalModelGroup && !routedTo) assertDraftCatalogReady();
+        if (goalModelGroup && !routedTo && !goalModelGroupOwner && !catalogDeviceId && !effectiveRemoteHostId
+          && isExcludedDraftFallback(providers, goalBaseRoute, modelGroupRoute)) {
+          throw new Error(t('newChat.modelSelector.source.emptyTitle'));
+        }
         // 同 handleSend：选了模型组或插件模型却沿用原模型时，原模型要有已连接的来源，
         // 否则不建目标任务、提示先连接来源(输入框这时不按原模型挡，见 ChatInput sendRoutesOwnModel)。
         if ((activeModelGroup || activePluginModel) && !routedTo) {

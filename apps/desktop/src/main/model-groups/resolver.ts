@@ -37,6 +37,7 @@ import { autoUsageSourceKey, type AutoUsageProfileSnapshot } from './autoUsagePr
 import {
   pickModelGroupCandidate,
   type ModelGroupCandidateFacts,
+  type ModelGroupCandidateFactsOptions,
   type ModelGroupInnerQuota,
 } from './pick.js';
 import { modelGroupRouteFor } from './routeFor.js';
@@ -298,6 +299,7 @@ export function createModelGroupResolver(deps: ModelGroupResolverDeps) {
     remoteInvocableOnly = false,
     sshHostId?: string,
     dryRun = false,
+    continuingSourceKey?: string,
   ): Promise<ModelGroupCandidateFacts[]> {
     const agents = deps.agents();
     // 供应商路由展开出来的路由在选择器里是普通模型行：思考深度与 Fast 用用户在那里选的；路由自己设了思考深度时以它为准。
@@ -396,6 +398,10 @@ export function createModelGroupResolver(deps: ModelGroupResolverDeps) {
           ? { views: sshCodex ?? [], agents: ['codex'] }
           : { views, agents };
       const view = catalog.views.find((item) => item.id === candidate.providerId);
+      // 本机归并旧入口不参加新选路（也不能作为发前接手来源）；仅允许原线程继续用当前旧入口。
+      // 远程授权目录仍沿用既有判据，归并标记不能覆盖已开放的旧入口。
+      const mergedAlias = !agentDeviceId && !sshHostId && !remoteInvocableOnly
+        && view?.subscriptionPoolAlias === true && modelGroupCandidateKey(candidate) !== continuingSourceKey;
       const model = view?.models[agent]?.find((item) => item.id === candidate.model);
       const modelName = model?.name ?? candidate.model;
       const accountFact = !agentDeviceId && candidate.accountId && deps.localAccount
@@ -407,7 +413,7 @@ export function createModelGroupResolver(deps: ModelGroupResolverDeps) {
         .map(({ usedPercent, resetAtMs, windowMs }) => ({ usedPercent, resetAtMs, windowMs }));
       const exact = { agentKind: candidate.agentKind, providerId: candidate.providerId, model: candidate.model, effort: '', fastMode: false as const };
       // 拆平后的单账号候选与供应商路由（route.parent）不再套第二层内层自动选路。
-      const inner = !agentDeviceId && !sshHostId && !candidate.accountId && !route.parent && deps.innerQuota
+      const inner = !mergedAlias && !agentDeviceId && !sshHostId && !candidate.accountId && !route.parent && deps.innerQuota
         ? await deps.innerQuota({ providerId: candidate.providerId, model: candidate.model, agentKind: candidate.agentKind }).catch(() => null)
         : null;
       const sshAllowed = !sshHostId
@@ -427,7 +433,7 @@ export function createModelGroupResolver(deps: ModelGroupResolverDeps) {
           // SSH 原生 Codex 以远端 SSH 主机目录与远端就绪态为准，不要求本机登录 openai 或安装本机 codex。
           ? !!sshCodex && isPluginModelPickerRouteAvailable(exact, sshCodex, ['codex'])
           : installed.get(agent) === true && isPluginModelPickerRouteAvailable(exact, views, agents));
-      const available = baseAvailable && (!candidate.accountId || !deps.localAccount || accountFact?.available === true);
+      const available = !mergedAlias && baseAvailable && (!candidate.accountId || !deps.localAccount || accountFact?.available === true);
       const baseSourceName = view?.name ?? candidate.providerId;
       const sourceName = accountFact?.label && accountFact.label !== baseSourceName
         ? `${baseSourceName} · ${accountFact.label}`
@@ -533,9 +539,9 @@ export function createModelGroupResolver(deps: ModelGroupResolverDeps) {
   async function candidateFacts(
     route: ModelGroupRoute,
     context?: ModelGroupResolveRequest['context'],
-    options?: { sshHostId?: string; cachedQuota?: boolean },
+    options?: ModelGroupCandidateFactsOptions,
   ): Promise<ModelGroupCandidateFacts[]> {
-    return inspect(route, await deps.views(), context, options?.cachedQuota === true, false, options?.sshHostId);
+    return inspect(route, await deps.views(), context, options?.cachedQuota === true, false, options?.sshHostId, false, options?.continuingSourceKey);
   }
 
   function dispose(): void {

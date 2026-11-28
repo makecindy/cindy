@@ -18819,6 +18819,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
               fastMode: sessions.fastMode,
               agentDeviceId: sessions.agentDeviceId,
               remoteHostId: sessions.remoteHostId,
+              sdkSessionId: sessions.sdkSessionId,
               lastTurnEndedAt: sessions.lastTurnEndedAt,
               contextTokens: sessions.contextTokens,
               scheduledModelBaseline: sessions.scheduledModelBaseline,
@@ -18836,12 +18837,17 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             fastMode: row.fastMode === 'ultrafast' ? 'ultrafast' : row.fastMode === true,
             agentDeviceId: row.agentDeviceId,
             remoteHostId: row.remoteHostId,
+            sdkSessionId: row.sdkSessionId,
             lastTurnEndedAt: row.lastTurnEndedAt,
             contextTokens: row.contextTokens,
           };
         },
         readBotProfileModelGroup: readBotProfileModelGroupSelection,
-        evaluateTurnRouting: (sid, current, turn) => evaluateDesktopModelGroupBeforeSend(sid, current, turn),
+        evaluateTurnRouting: (sid, current, turn) => evaluateDesktopModelGroupBeforeSend(sid, current, {
+          ...turn,
+          currentRemoteSourceAdmitted: readDeviceLinkModelSelectionOrigin() === 'owner'
+            && isRemoteProviderInvocationAllowed(current.providerId),
+        }),
         applySameEngineRoute: ({ sessionId: sid, model, providerId, effort, fastMode, cause }) =>
           applySessionRuntimeSelection(
             sid,

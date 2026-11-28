@@ -51,7 +51,7 @@ import {
 } from '@/lib/pluginEngineSelection';
 import { checkDraftBranchBeforeStart } from '../newMakerDraftBranchCheck';
 import { applyAlternateDraftModel } from '../alternateDraftModel';
-import { modelGroupOwnerDevice } from '../../model-groups/draftModelGroupRouting';
+import { isExcludedDraftFallback, modelGroupOwnerDevice } from '../../model-groups/draftModelGroupRouting';
 import { implicitSourceRouteSelection } from '../../model-groups/sourceRouteProviders';
 
 vi.mock('@/lib/makerTransport', () => ({ makerApiFor: vi.fn() }));
@@ -90,7 +90,7 @@ function visit(node: ts.Node) {
   }
   if (ts.isVariableDeclaration(node) && node.initializer && ts.isCallExpression(node.initializer)) {
     const name = ts.isIdentifier(node.name) ? node.name.text : '';
-    if (['createSession', 'sendWithPluginEngine', 'handleSend', 'handleCreateGoal', 'localDraftEffort', 'draftSeedSelection', 'draftInitialEffort', 'targetSelectableProviders'].includes(name)) {
+    if (['createSession', 'openProvisionalDraftTask', 'sendWithPluginEngine', 'handleSend', 'handleCreateGoal', 'localDraftEffort', 'draftSeedSelection', 'draftInitialEffort', 'targetSelectableProviders'].includes(name)) {
       callbacks[name] = node.initializer.arguments[0];
     }
   }
@@ -130,6 +130,39 @@ function executable(name: string) {
   executableCache.set(name, code);
   return code;
 }
+
+// 补足首页输入阶段：真实 typing callback 建本地临时任务，但尚未选路时不能调用预热。
+it.each(['direct', 'saved route', 'implicit route', 'changed during create'] as const)(
+  'respects the current routing selection before provisional prewarm (%s)', async (kind) => {
+    const args = { id: 'draft', agentKind: 'codex', model: 'gpt', effort: '', permissionMode: 'default', providerId: 'old-b' };
+    const renderedDraft = { modelGroup: null as null | { type: 'route'; id: string } };
+    let currentDraft = renderedDraft;
+    const provisionalDraftRoutingRef = { current: { draft: renderedDraft, awaitingRoute: kind === 'saved route' || kind === 'implicit route' } };
+    let finishCreate!: (row: { id: string; workingDir: string }) => void;
+    const created = new Promise<{ id: string; workingDir: string }>(resolve => { finishCreate = resolve; });
+    const ensureProvisionalDraftTask = vi.fn(() => created);
+    const prewarmSession = vi.fn();
+    const setSessionRuntime = vi.fn();
+    const open = runInNewContext(executable('openProvisionalDraftTask'), {
+      provisionalDraftArgsRef: { current: args }, provisionalDraftRoutingRef,
+      getDraft: () => currentDraft,
+      canOpenProvisionalDraftTask: () => true,
+      ensureProvisionalDraftTask, provisionalDraftTaskId: () => args.id,
+      provisionalDraftTaskGeneration: () => 1, provisionalSeededKeyRef: { current: null },
+      makerChatStore: { setSessionRuntime, prewarmSession }, dbToMakerAgentKind,
+      refreshProvisionalTitle: vi.fn(), getComposerDraftPresence: () => true,
+      armProvisionalEmptyCheck: vi.fn(), NEW_MAKER_DRAFT_KEY: 'draft',
+    });
+    open();
+    if (kind === 'changed during create') currentDraft = { modelGroup: { type: 'route', id: 'new-choice' } };
+    finishCreate({ id: args.id, workingDir: '/virtual/project' });
+    await created;
+    expect(ensureProvisionalDraftTask).toHaveBeenCalledWith(args);
+    expect(setSessionRuntime).toHaveBeenCalledOnce();
+    expect(prewarmSession.mock.calls).toEqual(kind === 'direct'
+      ? [[args.id, args.model, args.effort, args.permissionMode, '/virtual/project']] : []);
+  },
+);
 
 // #7395: execute the actual route wrapper with its real recovery controller.
 // Other cases inject createSession, so they cannot observe this error handoff.
@@ -379,7 +412,7 @@ async function submit(options: {
     modelGroupsConfig: options.sourceRoutes ?? { routes: [] },
     implicitSourceRouteSelection,
     // 远程控制草稿由被控那台选；这里直接给出那台(或本机)的选路结果。
-    modelGroupOwnerDevice, resolveDraftModelGroup: vi.fn(async () => options.modelGroupRoute ?? null), writeModelGroupRouteNote: noop,
+    isExcludedDraftFallback, modelGroupOwnerDevice, resolveDraftModelGroup: vi.fn(async () => options.modelGroupRoute ?? null), writeModelGroupRouteNote: noop,
     bindModelGroupSession: vi.fn(), commitModelGroupDecision: vi.fn(), modelGroupLocationName: () => '', keptModelNameForGroupNote: () => '', i18n: { language: 'en' },
     bindDeviceModelGroupSession: vi.fn(async () => undefined), commitDeviceModelGroupDecision: vi.fn(),
     writeDeviceModelGroupRouteNote: vi.fn(), buildModelGroupRouteNote: vi.fn(() => ({ pluginName: 'g', outcome: 'routed', modelName: 'm', source: 'model-group' })),
@@ -1231,6 +1264,32 @@ describe('homepage submission to Main admission and first-message handoff', () =
     if (entry === 'send') expect(kept.toastError).toHaveBeenCalledWith('newChat.modelSelector.remoteLoadFailed');
     else expect(String(kept.errors.at(-1))).toContain('newChat.modelSelector.remoteLoadFailed');
   });
+  // 旧草稿记着并入前的账号，或记着已逐账号停用的池。同模型还有连接时首发曾绕过选路。
+  // 经真实发送和新建目标入口验证，在创建任务前保留输入；其它独立的原模型仍可兜底。
+  describe.each(['send', 'goal'] as const)('%s with no eligible route accounts', entry => {
+    const providers: ProviderView[] = [
+      provider(), { ...provider('old-b'), subscriptionPoolAlias: true, subscriptionPoolTarget: providerId }, provider('independent'),
+    ];
+    const modelGroupRoute: ModelGroupResolveResult = {
+      outcome: 'unavailable', groupName: 'Saved', trace: [{
+        agentKind: 'pi', providerId, accountId: 'b', model: modelId,
+        modelName: modelId, sourceName: 'B', state: 'skipped', why: 'off', quota: null,
+      }],
+    };
+    it.each(['old-b', providerId])('rejects fallback to %s and retains the draft', async fallbackId => {
+      const result = await submit({ entry, providerId: fallbackId, providers, modelGroupRoute });
+      expect(result.ipcCreate).not.toHaveBeenCalled();
+      expect(result.clearDraft).not.toHaveBeenCalled();
+      expect(result.sendMessage).not.toHaveBeenCalled();
+      if (entry === 'send') expect(result.toastError).toHaveBeenCalledWith('newChat.modelSelector.source.emptyTitle');
+      else expect(String(result.errors.at(-1))).toContain('newChat.modelSelector.source.emptyTitle');
+    });
+    it('retains the original independent provider when it can run the model', async () => {
+      const result = await submit({ entry, providerId: 'independent', providers, modelGroupRoute });
+      expect(result.ipcCreate).toHaveBeenCalledOnce();
+    });
+  });
+
   // #10084 / unit：输入框为模型组、插件模型让出了「原模型没有已连接来源」的检查；选路沿用原模型时，
   // 发送与新建目标都要补上它：不建任务、提示先连接，输入保留。选路选到别处时不受原模型来源影响。
   // PR #10193 review：新建目标一开始漏了这道检查。Tier: unit。
