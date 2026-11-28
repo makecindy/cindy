@@ -29,7 +29,7 @@ import { buildLocalProviderRoutingContext } from '../../desktop/src/main/maker-i
 import { configureProvisionalSessions, isProvisionalSession, forgetProvisionalSession, sweepLeftoverProvisionalSessions } from '../../desktop/src/main/localDb/provisionalSessions.js';
 import { commitProvisionalSession, discardProvisionalSessionRow } from '../../desktop/src/main/localDb/sessionDraftLifecycle.js';
 import { activeOwnerScopeKey, beginAppSessionBoundary, commitVolatileAppSession, getActiveAppSession, getActiveDataOwnerPushStamp, isAppSessionBoundaryPending } from '../../desktop/src/main/appSessionState.js';
-import { statWorkingDirectory, workdirProbeHostClient } from '../../desktop/src/main/workdir-probe-host/index.js';
+import { disposeWorkdirProbes, statWorkingDirectory } from '../../desktop/src/main/workdir-probe-host/index.js';
 import { mapMembershipToAuthUser, type User as AccountUser } from '../../desktop/src/shared/authUser.js';
 import { resolveSessionDevice, canRegisterHostDevice } from './auth/device-identity.mjs';
 import { AUTH_SESSION_KEY } from '../../desktop/src/main/authCredentialKeys.js';
@@ -2635,7 +2635,7 @@ const stop = () => {
         commitVolatileAppSession('signed-out', null, true);
         releaseOwnerBoundary();
         hostModelGroups.dispose();
-        workdirProbeHostClient.dispose();
+        disposeWorkdirProbes();
         runtimeLease?.release();
         releaseService();
       } finally { process.removeListener('exit', releaseService); }

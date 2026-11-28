@@ -12,6 +12,10 @@ const scheduledDetectCwd = createCwdProbeScheduler(detectCwdOnce);
 type DetectCwdOptions = Pick<GitExecOpts, 'repairSafeDirectory'>;
 // Read-only callers must never borrow a pending probe that can change global trust.
 const scheduledReadOnlyDetectCwd = createCwdProbeScheduler((cwd) => detectCwdOnce(cwd, { repairSafeDirectory: false }));
+// Background callers already resolved the directory in their own probe pool.
+export const detectAutomationWorktree = createCwdProbeScheduler(
+  (cwd) => detectCwdOnce(cwd, { repairSafeDirectory: false }, true),
+);
 export function detectCwd(cwd: string, opts?: DetectCwdOptions): Promise<DetectCwdResp> {
   // Automatic snapshots own cancellation. Never lend their abortable probe to
   // an unrelated UI request (or borrow an unabortable pending UI probe).
@@ -23,7 +27,7 @@ export function detectCwd(cwd: string, opts?: DetectCwdOptions): Promise<DetectC
 // 3s process-tree cleanup still leaves response headroom under Mobile's 15s wait.
 const CWD_PROBE_TIMEOUT_MS = 10_000;
 
-async function detectCwdOnce(cwd: string, opts?: DetectCwdOptions): Promise<DetectCwdResp> {
+async function detectCwdOnce(cwd: string, opts?: DetectCwdOptions, alreadyResolved = false): Promise<DetectCwdResp> {
   const deadline = performance.now() + CWD_PROBE_TIMEOUT_MS;
   const probeGit = async (args: readonly string[], dir?: string) => {
     currentOperationBudget()?.check();
@@ -38,13 +42,15 @@ async function detectCwdOnce(cwd: string, opts?: DetectCwdOptions): Promise<Dete
   // Git resolves relative metadata paths from the physical process cwd. A
   // symlink spelling can otherwise make an ordinary repo look like a linked
   // worktree.
-  const physicalCwd = await realpathWorkingDirectory(cwd).catch((err) => {
-    // Keep timeout/pool exhaustion unknown; falling back to a symlink spelling
-    // could recreate the false linked-worktree result we are trying to avoid.
-    if (err?.code === 'WORKDIR_PROBE_TIMEOUT' || err?.code === 'WORKDIR_PROBE_UNAVAILABLE') throw err;
-    if (err?.code === 'ENOENT') return null;
-    return cwd;
-  });
+  const physicalCwd = alreadyResolved
+    ? cwd
+    : await realpathWorkingDirectory(cwd).catch((err) => {
+      // Keep timeout/pool exhaustion unknown; falling back to a symlink spelling
+      // could recreate the false linked-worktree result we are trying to avoid.
+      if (err?.code === 'WORKDIR_PROBE_TIMEOUT' || err?.code === 'WORKDIR_PROBE_UNAVAILABLE') throw err;
+      if (err?.code === 'ENOENT') return null;
+      return cwd;
+    });
   if (physicalCwd !== null) {
     cwd = physicalCwd;
     // One Git process returns the same snapshot that previously needed five.

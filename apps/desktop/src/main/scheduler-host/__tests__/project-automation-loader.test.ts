@@ -13,8 +13,77 @@ import {
 } from '../project-automation-loader';
 import { scheduleCreateToRow, schedulePatchToRow, scheduleToCamel } from '../../localDb/mapper';
 import { PROJECT_AUTOMATION_REL_SEGMENTS } from '../../../shared/projectAutomationPaths';
+import { projectAutomationConsents, recentWorkdirs, schedules, sessions } from '../../localDb/schema';
+import * as workdirProbe from '../../workdir-probe-host';
+import { MainProcessWorkdirProbeError } from '../../workdir-probe-host/MainProcessWorkdirProbeClient';
+import * as worktreeDetection from '../../worktree/detectCwd';
 
 const workingDir = 'C:\\project';
+
+// #11839 / unit: the loader's public discovery gives the renderer its list.
+// Existing tests exercise explicit reconcile only. A session-only linked
+// checkout and a stalled registration probe are enough to expose the gap.
+it('preserves direct registrations and retries deferred aliases on the next discovery', async () => {
+  const root = await fs.mkdtemp(path.join(tmpdir(), 'cindy-project-discovery-'));
+  const review = path.join(root, 'review');
+  const registered = path.join(root, 'registered');
+  const saved = path.join(root, 'saved');
+  const unknown = path.join(root, 'unknown');
+  const unknownGit = path.join(root, 'unknown-git');
+  const direct = path.join(root, 'direct');
+  const stalled = path.join(root, 'stalled-registration');
+  const registeredAlias = path.join(root, 'registered-alias');
+  const savedAlias = path.join(root, 'saved-alias');
+  const dirs = [review, registered, saved, unknown, unknownGit, direct];
+  let aliasBlocked = true;
+  const timeout = Object.assign(new Error('synthetic probe timeout'), { code: 'WORKDIR_PROBE_TIMEOUT' });
+  const realpath = vi.spyOn(workdirProbe, 'realpathAutomationDirectory').mockImplementation(async (dir) => {
+    if (dir === stalled || dir === unknown) throw timeout;
+    if (dir === registeredAlias && aliasBlocked) {
+      throw new MainProcessWorkdirProbeError('WORKDIR_PROBE_TIMEOUT', 'synthetic queued probe timeout', true);
+    }
+    if (dir === registeredAlias) return registered;
+    if (dir === savedAlias) return saved;
+    return dir;
+  });
+  const detect = vi.spyOn(worktreeDetection, 'detectAutomationWorktree').mockImplementation(async (dir) => {
+    if (dir === unknownGit) throw timeout;
+    return { isGitRepo: true, isInsideWorktree: true, gitInstalled: true };
+  });
+  try {
+    for (const dir of dirs) {
+      const file = path.join(dir, ...PROJECT_AUTOMATION_REL_SEGMENTS);
+      await fs.mkdir(path.dirname(file), { recursive: true });
+      await fs.writeFile(file, JSON.stringify({ version: 1, schedules: [projectConfig()] }));
+    }
+    const loader = new ProjectAutomationLoader({
+      scheduler: {} as Scheduler,
+      storage: { list: async () => [] } as unknown as ConstructorParameters<typeof ProjectAutomationLoader>[0]['storage'],
+      getDb: () => ({
+        select: () => ({
+          from: (table: unknown) => {
+            if (table === sessions) return { where: async () => dirs.map(dir => ({ workingDir: dir })) };
+            if (table === schedules) return { where: async () => [{ workingDir: savedAlias }] };
+            if (table === recentWorkdirs) return { orderBy: async () => [stalled, registeredAlias, direct].map(dir => ({ path: dir })) };
+            if (table === projectAutomationConsents) return { where: () => ({ limit: async () => [] }) };
+            throw new Error('Unexpected discovery table');
+          },
+        }),
+      }) as unknown as ReturnType<ConstructorParameters<typeof ProjectAutomationLoader>[0]['getDb']>,
+      logger: {},
+    });
+    expect((await loader.listPendingImports()).map(item => item.workingDir)).toEqual([direct]);
+    aliasBlocked = false;
+    realpath.mockClear();
+    expect((await loader.listPendingImports()).map(item => item.workingDir)).toEqual([registered, saved, direct]);
+    const probed = realpath.mock.calls.map(([dir]) => dir);
+    expect(probed.indexOf(registeredAlias)).toBeLessThan(probed.indexOf(stalled));
+  } finally {
+    detect.mockRestore();
+    realpath.mockRestore();
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
 
 // #11134 / unit: real loader + Scheduler updates + database mapper round trips.
 // Existing coverage never changed a project definition after its first persistent

@@ -70,10 +70,10 @@ describe('MainProcessWorkdirProbeClient', () => {
     const second = client.probe('/slow/b', '/slow/b', 100).catch((error) => error);
 
     await vi.advanceTimersByTimeAsync(20);
-    await expect(first).resolves.toMatchObject({ code: 'WORKDIR_PROBE_TIMEOUT' });
+    await expect(first).resolves.toMatchObject({ code: 'WORKDIR_PROBE_TIMEOUT', waitingForSlot: false });
     expect(maxActive).toBe(1);
     await vi.advanceTimersByTimeAsync(80);
-    await expect(second).resolves.toMatchObject({ code: 'WORKDIR_PROBE_TIMEOUT' });
+    await expect(second).resolves.toMatchObject({ code: 'WORKDIR_PROBE_TIMEOUT', waitingForSlot: true });
 
     resolveSlow({ isDirectory: () => true });
     await vi.runAllTimersAsync();
