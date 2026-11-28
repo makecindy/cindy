@@ -283,6 +283,42 @@ export interface SubscriptionSessionAccountQuery {
   /** Actual task source, resolved on the executing computer; echoed before a new controller acts. */
   routeProviderId?: string;
 }
+/**
+ * Read-only (2026-11-28): whether a remote same-account plugin engine task's bound account can
+ * take its model right now, or whether the executing computer can hand it to another account on
+ * the next fresh start. Sent on the existing owner-only account channel; older hosts reject
+ * plugin engine provider ids with INVALID_PARAMS and callers keep the previous no-handoff path.
+ */
+export interface PluginEngineSessionAccountQuery {
+  action: 'session';
+  providerId: string;
+  /** The task id on the executing computer (absent on another computer). */
+  sessionId?: string;
+  /** The task's native ACP session id. */
+  nativeSessionId?: string;
+  /** The task model; when absent, account-wide blocks and engine-default quota still apply. */
+  model?: string;
+}
+export interface PluginEngineSessionAccount {
+  isDefault: boolean;
+  /** 1-based pool position within the account's current provider; never carries identity or paths. */
+  number: number;
+  paused: boolean;
+  status: SubscriptionAccountView['status'];
+  /** The bound account cannot take the task model now (cooling, exhausted quota, or signed out). */
+  blocked?: true;
+  /** Whether the executing computer can select another account for this route and model right now. */
+  switchAvailable?: boolean;
+}
+export type PluginEngineSessionAccountView =
+  | { providerId: string; state: 'legacy' | 'unassigned' }
+  | {
+      providerId: string;
+      state: 'unavailable';
+      /** Present only when the bound account was removed from an active pool; reports replacement admission. */
+      switchAvailable?: boolean;
+    }
+  | { providerId: string; state: 'bound'; account: PluginEngineSessionAccount };
 export interface SubscriptionSessionAccount {
   /** Member bound by the OpenAI pool. Older hosts omit this field. */
   kind?: OpenAiGroupAccount['kind'];
@@ -386,6 +422,46 @@ export function parseSubscriptionSessionAccountView(
         ? { switchAvailable: account.switchAvailable } : {}),
       ...(isSubscriptionPoolProviderIdShape(account.ownerProviderId) && account.ownerProviderId !== providerId
         ? { ownerProviderId: account.ownerProviderId } : {}),
+    },
+  };
+}
+
+/** Validates an executing host's plugin engine task-account reply; null when unrecognized. */
+export function parsePluginEngineSessionAccountView(
+  raw: unknown,
+  providerId: string,
+): PluginEngineSessionAccountView | null {
+  if (!isPluginEngineProviderIdShape(providerId)) return null;
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const view = raw as Record<string, unknown>;
+  if (view.providerId !== providerId) return null;
+  if (view.state === 'legacy' || view.state === 'unassigned') return { providerId, state: view.state };
+  if (view.state === 'unavailable') {
+    return {
+      providerId,
+      state: 'unavailable',
+      ...(typeof view.switchAvailable === 'boolean' ? { switchAvailable: view.switchAvailable } : {}),
+    };
+  }
+  if (view.state !== 'bound') return null;
+  const account = view.account as Record<string, unknown> | null | undefined;
+  if (!account || typeof account !== 'object' || Array.isArray(account)) return null;
+  if (typeof account.isDefault !== 'boolean' || !Number.isSafeInteger(account.number) || (account.number as number) < 1)
+    return null;
+  if (!SESSION_ACCOUNT_STATUSES.has(account.status)) return null;
+  const paused = account.paused === true;
+  const blocked = account.blocked === true && !paused;
+  return {
+    providerId,
+    state: 'bound',
+    account: {
+      isDefault: account.isDefault,
+      number: account.number as number,
+      paused,
+      status: account.status as SubscriptionAccountView['status'],
+      ...(blocked ? { blocked: true as const } : {}),
+      ...((blocked || paused) && typeof account.switchAvailable === 'boolean'
+        ? { switchAvailable: account.switchAvailable } : {}),
     },
   };
 }

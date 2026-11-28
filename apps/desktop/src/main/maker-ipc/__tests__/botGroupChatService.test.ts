@@ -37,7 +37,11 @@ import {
   type PlanDecision,
   type PlanDecisionInput,
 } from '../botGroupDivision.js';
-import type { BotGroupAttachment, BotGroupDetail } from '../../../shared/botGroupChat.js';
+import type {
+  BotGroupAttachment,
+  BotGroupChangedPayload,
+  BotGroupDetail,
+} from '../../../shared/botGroupChat.js';
 import type { InteractionDecision, InteractionRequest } from '@cindy/maker-core';
 import { installDesktopInteractionHandler, installInteractionLifecycleObserver, requestHostInteraction } from '../interactionRouter.js';
 import { GhostSetupInteractionBridge, type GhostSetupInteractionSnapshot } from '../../cindy-brain/ghostSetupInteractionBridge.js';
@@ -145,7 +149,7 @@ interface Harness {
   dispatches: Array<{ botId: string; clientId: string; prompt: string; sessionId: string; attachments: string[] }>;
   lanes: Array<Parameters<BotGroupChatServiceDeps['ensureLane']>[0]>;
   abortLane: ReturnType<typeof vi.fn>;
-  events: Array<{ groupId: string; change: string }>;
+  events: BotGroupChangedPayload[];
 }
 
 /** `script` returns the Bot's reply; null leaves the turn pending. `delays` orders parallel replies. */
@@ -600,6 +604,29 @@ describe('botGroupChatService', () => {
       ['notice', 'member-unavailable'],
     ]);
     expect(harness.dispatches).toEqual([]);
+  });
+
+  it('message pushes carry the appended row and the detail revision so the view can merge', async () => {
+    const replies = ['咪咪的看法'];
+    const harness = createHarness((botId) => (botId === 'mimi' ? replies.shift() ?? 'NO_REPLY' : 'NO_REPLY'));
+    const groupId = await createGroup(harness);
+    await harness.service.sendMessage({ groupId, text: '讨论下', mentions: { all: false, botIds: [] }, clientId: 'c-1' });
+    const group = await waitForIdle(harness, groupId);
+    // User send, the Bot reply and the round end each push their own committed row.
+    const pushed = harness.events.filter((event) => event.change === 'messages' && event.messages?.length);
+    expect(pushed.map((event) => event.messages!.map((m) => [m.kind, m.authorKind, m.content]))).toEqual([
+      [['message', 'user', '讨论下']],
+      [['message', 'bot', '咪咪的看法']],
+      [['round-end', 'system', '']],
+    ]);
+    // Same revision as the full read: the open view merges deltas under it; a service
+    // restart re-reads instead (revision is minted per service instance).
+    expect(new Set(pushed.map((event) => event.historyRevision))).toEqual(new Set([group.historyRevision]));
+    expect(pushed.map((event) => event.messages![0]!.sequence)).toEqual(group.messages.map((m) => m.sequence));
+    // A clientId retry re-inserts nothing and its push must not carry a synthesized row.
+    harness.events.length = 0;
+    await harness.service.sendMessage({ groupId, text: '讨论下', mentions: { all: false, botIds: [] }, clientId: 'c-1' });
+    expect(harness.events.every((event) => !event.messages?.length)).toBe(true);
   });
 
   it('membership changes and deletion archive the affected group lanes', async () => {

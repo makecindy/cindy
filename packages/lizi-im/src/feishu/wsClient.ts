@@ -878,7 +878,7 @@ async function processClaimedMessage(
     }
     // 非 owner @bot → 礼貌回应(per-user 冷却), 不起 turn; 对外开放的实例
     // (伙伴自有连接)放行, 带非主人标记进业务层。
-    if (!ownerGuard.check(senderOpenId) && !getScope().guests) {
+    if (!ownerGuard.check(senderOpenId) && !getScope().guestsFor(chatId)) {
       const last = S().strangerNoticeAt.get(senderOpenId) ?? 0;
       if (Date.now() - last >= STRANGER_NOTICE_COOLDOWN_MS) {
         S().strangerNoticeAt.set(senderOpenId, Date.now());

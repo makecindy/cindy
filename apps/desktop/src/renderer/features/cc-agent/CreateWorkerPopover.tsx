@@ -1443,15 +1443,20 @@ export function CreateWorkerPopover({
               </Dialog.Description>
             ) : null}
           </div>
-          <button
-            type="button"
-            aria-label={t('orca.createWorker.closeAria')}
-            className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-lg text-[var(--text-tertiary)] hover:text-[var(--text-primary)]"
-            disabled={isSubmitting}
-            onClick={handleClose}
-          >
-            <X size={15} />
-          </button>
+          {/* 28px 方形图标按钮;-m-0.5 让它在排版里仍只占原来的 24px,图标中心和标题行高度不变。 */}
+          <Tip text={t('orca.createWorker.closeAria')}>
+            <Button
+              size="sm"
+              variant="secondary"
+              tone="quiet"
+              aria-label={t('orca.createWorker.closeAria')}
+              className="-m-0.5 w-7 px-0"
+              disabled={isSubmitting}
+              onClick={handleClose}
+            >
+              <X size={15} aria-hidden />
+            </Button>
+          </Tip>
         </div>
 
         {/* 角色:先选让 Worker 做哪类事,选中即带回这个角色上次用的任务文字、模型和权限;内置的检查类
@@ -1677,8 +1682,7 @@ export function CreateWorkerPopover({
           </div>
         </div>
         <FieldVoiceInputNotice
-          error={taskVoice.lastError}
-          speakerFiltered={taskVoice.speakerFiltered}
+          {...taskVoice.noticeProps}
           className="-mt-2 mb-4"
         />
         {activePluginEngine || modelGroup ? null : noAvailableLocalModels ? (
@@ -1792,6 +1796,8 @@ export function CreateWorkerPopover({
 
 const FIELD_LABEL_CLASS =
   'mb-2 text-12 font-medium uppercase tracking-[0.5px] text-[var(--text-tertiary)]';
+/** 标签里带用户起的名字(如设备名)时不转大写,和「让 Worker 做什么」同理:专有名词保持原样。 */
+const NAMED_FIELD_LABEL_CLASS = 'mb-2 text-12 font-medium text-[var(--text-tertiary)]';
 
 /** 弹窗内的单选胶囊(预设、其他电脑上的目录方式)。 */
 function choiceChipClass(checked: boolean): string {
@@ -1859,7 +1865,7 @@ function ExecutionDeviceField({
       </div>
       {selected ? (
         <div>
-          <div className={FIELD_LABEL_CLASS}>
+          <div className={NAMED_FIELD_LABEL_CLASS}>
             {t('orca.createWorker.remoteDirLabel', { device: selected.name })}
           </div>
           <div

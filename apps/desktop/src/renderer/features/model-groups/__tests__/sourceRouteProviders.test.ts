@@ -277,6 +277,42 @@ describe('provider routes in the model picker', () => {
     expect(managedPrefixed.shownModelId('byok-1', 'byok/gpt-6-luna', null)).toBe('gpt-6-luna');
   });
 
+  // 2026-11-28 Auto 展示层按本机用量优先级上浮高频模型；非 Auto（如按顺序）保持原有目录顺序。
+  it('floats higher-priority models to the top under Auto (expiring) merged routes only', () => {
+    const multiProviders = [
+      provider('openai', ['gpt-5-mini', 'gpt-6-astra', 'gpt-6-sol']),
+      provider('byok-1', ['byok/gpt-5-mini', 'byok/gpt-6-astra', 'byok/gpt-6-sol']),
+    ];
+    const makeCfg = (strategy: 'expiring' | 'order'): ModelGroupsConfig => ({
+      autoModelPriorities: { 'gpt-6-sol': 1, 'gpt-6-astra': 0.5 },
+      sourceRoutes: [{
+        id: 'auto:openai',
+        name: 'OpenAI',
+        strategy,
+        auto: true,
+        sources: [{ providerId: 'openai' }, { providerId: 'byok-1' }],
+      }],
+      routes: [
+        {
+          id: 'src:mini', name: 'GPT-5-mini', strategy, parent: { id: 'auto:openai', name: 'OpenAI' },
+          candidates: [{ agentKind: 'codex', providerId: 'openai', model: 'gpt-5-mini' }],
+        },
+        {
+          id: 'src:astra', name: 'GPT-6-Astra', strategy, parent: { id: 'auto:openai', name: 'OpenAI' },
+          candidates: [{ agentKind: 'codex', providerId: 'openai', model: 'gpt-6-astra' }],
+        },
+        {
+          id: 'src:sol', name: 'GPT-6-Sol', strategy, parent: { id: 'auto:openai', name: 'OpenAI' },
+          candidates: [{ agentKind: 'codex', providerId: 'openai', model: 'gpt-6-sol' }],
+        },
+      ],
+    });
+    const autoListed = withSourceRouteProviders(multiProviders, makeCfg('expiring'));
+    expect(autoListed.providers[0]?.models.codex?.map((m) => m.id)).toEqual(['gpt-6-sol', 'gpt-6-astra', 'gpt-5-mini']);
+    const orderListed = withSourceRouteProviders(multiProviders, makeCfg('order'));
+    expect(orderListed.providers[0]?.models.codex?.map((m) => m.id)).toEqual(['gpt-5-mini', 'gpt-6-astra', 'gpt-6-sol']);
+  });
+
   // 测试价值
   // - 生产入口与可观察结果：withSourceRouteProviders / isModelVisible / withSourceRoutePluginEngines(keepMember)。
   // - Bug／规则依据：2026-11-28 排查合并路由在首成员隐藏/停用时整体消失、sroute: 模型忽略真实成员可见性覆盖、

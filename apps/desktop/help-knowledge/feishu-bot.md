@@ -1,14 +1,15 @@
 ---
 id: feishu-bot
 title: Setting up the Feishu / Lark bot
-summary: Connect your own Feishu or Lark bot (App ID / App Secret) under Settings > IM bots > Personal to chat with Cindy, get session DMs, and use it in group chats.
+summary: Connect your own Feishu or Lark bot (App ID / App Secret) under Settings > IM bots > Feishu / Lark to chat with Cindy or a buddy, get session DMs, and use it in group chats.
 tab: im-bot
 ---
 Cindy can take requests and send you DMs through a Feishu or Lark bot that you create yourself. (This is unrelated to signing into Cindy — Feishu is not a sign-in method.)
 
 **Setting up the bot:**
 
-- Open **Settings > IM bots**. In the **Personal** section, expand **Feishu / Lark Bot**.
+- Open **Settings > IM bots** and click **Feishu / Lark**. Each chat app has its own page; **Back** returns to the list.
+- If the page offers both the Cindy official bot and your own bot, find **Your own bot** and click **Set up**.
 - Under **Service**, choose **Feishu** or **Lark**.
 - Don't have a bot yet? Click **Create on Feishu Open Platform ↗** (or **Lark Open Platform**) to create one, then come back with its credentials.
 - Paste the bot's **App ID** and **App Secret**, then click **Bind**.
@@ -18,11 +19,13 @@ Cindy can take requests and send you DMs through a Feishu or Lark bot that you c
 
 - After it connects, send the bot any private message once. The first person to DM the bot becomes its **Owner**; until then the card shows "Waiting for first private-message bind".
 - DMs from anyone other than the owner are silently ignored.
-- The bound card shows the service, App ID, and owner, with **Reconnect Bot** and **Unbind**. Unbinding disconnects the bot and removes the saved App ID / App Secret / owner from this computer.
+- The connection row shows the service, the end of the App ID, and the status, with a reconnect button; **Unbind this bot** is below it. Unbinding disconnects the bot and removes the saved App ID / App Secret / owner from this computer.
 
-**New conversation settings:**
+**Who replies, project and model:**
 
-- **New Conversation Configuration** in the same card picks the Agent and model for new Feishu conversations (or **Automatic**, which uses an available recommended model). Existing chats switch on their next message unless their model was changed manually.
+- **Who replies** picks **Cindy** or one of your buddies. When a buddy replies, its own model, permissions and memory apply, and the **Project** and **Model** rows are hidden; open **{buddy}’s settings** to change them. Switch once the bot has no queued messages or running task.
+- **Project** puts new tasks into one of your sidebar projects. They then use that project's model and permissions from **Projects and models** (on the IM bots list). Choose **Chat (no project)** to use the bot's own model instead. Groups can still have their own project under **Group settings**.
+- **Model** (shown when no project is chosen) picks the Agent and model for new Feishu conversations (or **Automatic**, which uses an available recommended model). Existing chats switch on their next message unless their model was changed manually.
 - **Permission mode for new group tasks** sets the permission mode for every session created in a group chat (@-ing the bot, `/new`, `/ctr`). It defaults to **Auto-review**. Group messages can come from other members, so choose **Full access** only for groups you trust. Use `/permission` in the group to change an existing one.
 
 **Notifications (shown after the bot is bound):**
@@ -49,6 +52,10 @@ Cindy can take requests and send you DMs through a Feishu or Lark bot that you c
 - @-ing the bot inside an existing thread uses that thread's own history as context.
 - These sessions appear in the sidebar's Chat group: thread sessions are titled like `[飞书·{group name}·{topic summary}] {id suffix}`, group sessions `[飞书·群] {group name}`, and DMs `[飞书·DM] {summary}`. Lark bots use "Lark" instead of "飞书".
 
+**Per-group settings:**
+
+- On the Feishu / Lark page, **Group chats** lists the groups the bot is in. Open one to set its own project, model and permissions, or tick **Members can ask too** so other members who @mention the bot get answers (at Auto review at most; paused after 10 questions in a row while you're away, until you @mention the bot or click **Resume**). Without it, other members get a short polite reply and no task.
+
 **Permissions for group features:**
 
 Group chat context needs extra app permissions that are not part of the default setup:
@@ -65,5 +72,5 @@ Without these permissions the bot still answers when @-ed, but without chat cont
 **Notes:**
 
 - **Used by another device** means this App ID is already connected on another device or Cindy instance (for example, running two Cindy builds at once). Unbind it on one side to clear the conflict.
-- A bot can live in only one place. You can also give a bot to a buddy from that buddy's **Messaging platforms** page. Choosing the bot already set up in Cindy moves it out of Settings > IM bots, and its chats continue with the buddy.
-- Settings > IM bots also has an **Official** section (Slack, Telegram, and X through Cindy's official bots, no credentials needed). The **Personal** section also has Personal WeChat, WeCom, DingTalk, Discord, and Telegram bots. See the integrations topic.
+- A bot can live in only one place. To let a buddy answer through it, set **Who replies** to that buddy; the bot stays in Settings > IM bots and the buddy's **Messaging platforms** page lists it. A buddy can also bring a separate bot of its own from that page.
+- Feishu / Lark also has the **Cindy official bot** (no credentials needed), and its **Who replies** can be a buddy too. Settings > IM bots also lists WeChat, WeCom, DingTalk, Telegram, Slack, Discord and X. See the integrations topic.

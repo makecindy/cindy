@@ -6,6 +6,11 @@ export const remoteSessionCreationSchema = z.object({
   projectDir: z.string().trim().min(1).max(4096).nullable().optional(),
   workingDir: z.string().trim().min(1).max(4096).optional(),
   useWorktree: z.boolean().optional(),
+  /**
+   * Explicit worktree baseline (branch, remote ref or commit); only meaningful with `useWorktree`.
+   * Sent only to hosts that advertise `ordinaryCreateBaseRef: 1`: older hosts reject unknown keys.
+   */
+  baseRef: z.string().trim().min(1).max(1024).optional(),
   agentKind: z.enum(['claude-code', 'codex', 'pi', 'acp']).optional(),
   model: z.string().min(1).max(512).optional(),
   /** Plugin engine provider id (`acp-plugin:...`) when `agentKind === 'acp'`. */
@@ -31,6 +36,12 @@ export interface RemoteSessionCreated {
   workspaceKind: 'project' | 'dialogue';
   workingDir: string;
   worktreePath: string | null;
+  /** Commit-ish the worktree was cut from. Absent without a worktree, and from older hosts. */
+  worktreeBaseRef?: string;
+  /** Set when that base could not be refreshed from its remote: it comes from the local copy. */
+  worktreeBaseStaleReason?: string;
+  /** Computer providing the task's model; null = the task computer itself. Absent from older hosts. */
+  agentDeviceId?: string | null;
   model: string;
   providerId: string | null;
   effort: RemoteSessionCreation['effort'] | null;

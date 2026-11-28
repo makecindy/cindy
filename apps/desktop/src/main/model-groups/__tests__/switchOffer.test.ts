@@ -45,7 +45,9 @@ import {
   modelGroupBindingMatchesTarget,
   projectModelGroupSessionBinding,
   readModelGroupSessionBinding,
+  readActiveModelGroupBindingForDispatch,
   readModelGroupBindingForDispatch,
+  readModelGroupRoutedAccount,
   unbindModelGroupSession,
 } from '../sessionBindings.js';
 import { createModelGroupHandlers } from '../handlersCore.js';
@@ -571,6 +573,46 @@ describe('model group session bindings', () => {
     expect(Boolean(readModelGroupSessionBinding(sessionId))).toBe(routed);
   });
 
+  // #13658 review (unit): the task row has only the base route, but recovery needs
+  // to recognize the binding and preserve the suffix when the provider has several accounts.
+  it('keeps the selected account when matching an ordinary task for recovery', async () => {
+    const pickedKey = modelGroupCandidateKey({ ...CANDIDATES[0]!, accountId: 'first' });
+    const selection = { type: 'route', id: 'r1' } as const;
+    bindModelGroupSession('ordinary', selection, pickedKey, 10);
+    expect(await readActiveModelGroupBindingForDispatch('ordinary', ROW)).toEqual({ selection, pickedKey, at: 10 });
+    expect(await readActiveModelGroupBindingForDispatch('ordinary', { ...ROW, agentDeviceId: 'other-device' })).toBeNull();
+    expect(await readActiveModelGroupBindingForDispatch('ordinary', { ...ROW, model: 'gpt-mini' })).toBeNull();
+  });
+
+  // #13658 review (unit): during pre-send account handoff, the production dispatch lookup
+  // must see the target account inside eager bootstrap, while a rejected switch keeps the old one.
+  it.each([false, true])('publishes the account at the pre-send switch commit (committed=%s)', async committed => {
+    const sessionId = 'presend-account';
+    const selection = { type: 'route', id: 'r1' } as const;
+    bindModelGroupSession(sessionId, selection, modelGroupCandidateKey({ ...CANDIDATES[0]!, accountId: 'first' }), 10);
+    const bootstrapAccount = vi.fn();
+    const result = await runModelGroupBeforeSend({
+      readSession: async () => ROW,
+      evaluateTurnRouting: async () => ({
+        action: 'switch', selection, groupName: 'OpenAI', cause: 'preflight-unavailable',
+        target: { ...CANDIDATES[0]!, accountId: 'second', agentDeviceId: null },
+        fromLabel: 'first', toLabel: 'second', crossEngine: false, crossLocation: false, crossAccount: true,
+      }),
+      applySameEngineRoute: vi.fn(async () => ({})),
+      performCrossSwitch: async ({ commitLocalRoute, skipBootstrap }) => {
+        expect(skipBootstrap).toBe(false);
+        if (committed) {
+          commitLocalRoute?.();
+          bootstrapAccount(await readModelGroupRoutedAccount(sessionId, ROW.providerId!));
+        }
+        return { switched: committed };
+      },
+    }, sessionId, { bootstrapAfterSwitch: true });
+    expect(result.switched).toBe(committed);
+    expect(bootstrapAccount.mock.calls).toEqual(committed ? [['second']] : []);
+    expect(await readModelGroupRoutedAccount(sessionId, ROW.providerId!)).toBe(committed ? 'second' : 'first');
+  });
+
   it('persists detached state for companion sessions so bot profile modelGroup does not re-manage them', async () => {
     // Companion session had no explicit session binding (implicitly managed by bot profile).
     expect(await isModelGroupSessionDetachedForDispatch('bot-s1')).toBe(false);
@@ -697,6 +739,42 @@ describe('evaluateModelGroupBeforeSend', () => {
       action: 'switch',
       cause: 'preflight-unavailable',
       target: { providerId: 'anthropic' },
+    });
+  });
+
+  // 2026-11-28 回归：本机多账号拆平后，账号 1 撞配额时能从 DB 会话行（无 accountId 列）匹配账号后缀绑定，
+  // 并直接提议/切换到同供应商下的账号 2，不再把同 providerId 的其余账号一并判成同一份已满配额。
+  it('fails over from an exhausted flat local account to the sibling account on the same provider', async () => {
+    const flatRoute: ModelGroupRoute = {
+      id: 'src:openai-gpt',
+      name: 'GPT-6.2',
+      strategy: 'order',
+      parent: { id: 'auto:openai', name: 'OpenAI' },
+      candidates: [
+        { agentKind: 'codex', providerId: 'openai', accountId: 'default', model: 'gpt-6.2' },
+        { agentKind: 'codex', providerId: 'openai', accountId: 'second', model: 'gpt-6.2' },
+      ],
+    };
+    const pickedAccount1 = modelGroupCandidateKey({
+      agentKind: 'codex', providerId: 'openai', accountId: 'default', model: 'gpt-6.2',
+    });
+    const offer = await computeModelGroupSwitchOffer({
+      readBinding: () => ({ selection: { type: 'route', id: 'src:openai-gpt' }, pickedKey: pickedAccount1, at: NOW }),
+      readSession: async () => ({ source: 'desktop', agentKind: 'codex', providerId: 'openai', model: 'gpt-6.2' }),
+      isShared: () => false,
+      hasGoal: async () => false,
+      config: () => ({ routes: [flatRoute] }),
+      candidateFacts: async () => [
+        { available: true, modelName: 'GPT-6.2', sourceName: 'OpenAI · first@example.com', windows: [{ usedPercent: 100, resetAtMs: NOW + 60_000, windowMs: 18_000_000 }] },
+        { available: true, modelName: 'GPT-6.2', sourceName: 'OpenAI · second@example.com', windows: [{ usedPercent: 15, resetAtMs: NOW + 60_000, windowMs: 18_000_000 }] },
+      ],
+      now: () => NOW,
+    }, 's-flat-1');
+    expect(offer).toMatchObject({
+      providerId: 'openai',
+      accountId: 'second',
+      sourceName: 'OpenAI · second@example.com',
+      crossEngine: false,
     });
   });
 });

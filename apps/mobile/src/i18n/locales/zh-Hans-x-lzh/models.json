@@ -144,7 +144,13 @@
       "exceptionImage": "讯中有图，唯于能观图之源中择",
       "exceptionImageFallback": "讯中有图，然无能观图之源，照常择之",
       "exceptionHours": "此时段改行「{{name}}」",
-      "separator": "；"
+      "separator": "；",
+      "usageHabit": "循平素所用之惯，先择此源",
+      "usageHabitQuota": "循平素所用之惯，先择此源（尚余 {{left}}%）",
+      "autoBalance": "他源限额偏紧或正繁忙，故先以此分担",
+      "autoBalanceQuota": "权衡余量与负载，先择此源（尚余 {{left}}%）",
+      "lessBusy": "他源方有事务在行，先用此闲源",
+      "paygFallback": "订阅与共享皆暂不可用，暂以按量之源兜底"
     },
     "picker": {
       "switched": "「{{name}}」已将此差事易为 {{model}}",

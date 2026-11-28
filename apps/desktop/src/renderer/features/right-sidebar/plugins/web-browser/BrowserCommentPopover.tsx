@@ -361,7 +361,7 @@ export function BrowserCommentPopover({
           <VoiceInputButton {...voice.buttonProps} testId="browser-comment-voice" tipSide="top" />
         </div>
       </div>
-      <FieldVoiceInputNotice error={voice.lastError} speakerFiltered={voice.speakerFiltered} />
+      <FieldVoiceInputNotice {...voice.noticeProps} />
 
       {/* 样式编辑区(Codex styling feedback):仅元素点选且基线可用时提供。 */}
       {designBaseline && showStyles && (

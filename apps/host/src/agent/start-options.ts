@@ -136,7 +136,7 @@ export function createHostStartOptions(ports: HostStartOptionsPorts) {
         : opts.effort ?? null);
     }
     if (opts.agentKind === 'codex' || opts.agentKind === 'pi') {
-      opts.resolveUsagePriceVariant = registerUsagePricing(sessionId);
+      opts.resolveUsagePriceVariant = registerUsagePricing(sessionId, true);
     }
     if (opts.agentKind === 'pi') {
       opts.getPriceVariant = () => (getSessionFastMode(sessionId) ? 'priority' : 'standard');

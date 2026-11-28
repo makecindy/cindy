@@ -7863,6 +7863,8 @@ export interface GhostSessionContextInjected {
   workdir: string | null;
   workdir_is_local: boolean;
   workdir_is_read_only: boolean;
+  /** 仅当宿主实证该会话当前存在活跃 /goal（active 或 usageLimited）时为 true；旧宿主或无活跃目标时省略。 */
+  goal_active?: boolean;
 }
 
 /**
@@ -7878,6 +7880,7 @@ export function deriveGhostSessionContext(
     workingDir: string | null;
     remoteHostId: string | null;
     workdirIsReadOnly: boolean;
+    goalActive?: boolean;
   } | null,
 ): GhostSessionContextInjected {
   if (!sessionId) {
@@ -7901,6 +7904,7 @@ export function deriveGhostSessionContext(
     workdir: snapshot.workingDir,
     workdir_is_local: snapshot.remoteHostId === null && snapshot.workingDir !== null,
     workdir_is_read_only: snapshot.workdirIsReadOnly,
+    ...(snapshot.goalActive === true ? { goal_active: true } : {}),
   };
 }
 
