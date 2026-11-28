@@ -89,7 +89,7 @@ export function loadSelfHostRegions(options = {}) {
  *    严格非空——漏填 TapDB 会静默发出无统计的正式包,必须在装载时拦下。
  *  - 'local'(本地 Xcode / Simulator 构建):叶子值允许留空。选中 region 缺身份字段由
  *    app.config.js 构建时按需报错;TapDB 留空 = 运行时统计 no-op(mobileTapdb.ts),
- *    global.google 留空 = 跳过 Google 登录,外部开发者无需这些账号即可本地构建。
+ *    global.google 留空 = 不配置原生 Google 登录,Global 改走系统浏览器 PKCE 登录,外部开发者无需这些账号即可本地构建。
  * 两种 mode 下 oss/signing 叶子值都允许空(--execute 用时再校验)。
  * @param {unknown} value
  * @param {{ source?: string, mode?: 'release' | 'local' }} [options]
@@ -148,7 +148,7 @@ export function validateSelfHostRegions(value, options = {}) {
       if (!google || typeof google !== 'object' || Array.isArray(google)) {
         throw new Error(`${source} 的 global.google 必须是 object`);
       }
-      // local 模式允许 google 整体留空(跳过 Google 登录);只要填了任意一个字段,
+      // local 模式允许 google 整体留空(不配置原生 Google 登录,Global 改走系统浏览器 PKCE);只要填了任意一个字段,
       // 三个字段与格式就全量强校验,防止部分填写被静默丢弃。
       const googleFilled = REQUIRED_GOOGLE_KEYS.some(
         (key) => typeof google[key] === 'string' && google[key].trim(),

@@ -68,6 +68,33 @@ describe('resolveMobileSocialLoginMode', () => {
     ).toBeNull();
   });
 
+  // Builds without Google client IDs (local / self-built) used to hide Google,
+  // leaving Google-only accounts unable to sign in on mobile.
+  it.each(['android', 'ios'])(
+    'falls back to browser PKCE for unconfigured Google on Global %s',
+    (platform) => {
+      expect(
+        resolveMobileSocialLoginMode({
+          provider: 'google',
+          region: 'global',
+          platform,
+          nativeSupported: false,
+        }),
+      ).toBe('browser');
+    },
+  );
+
+  it('keeps unconfigured Google hidden outside Global', () => {
+    expect(
+      resolveMobileSocialLoginMode({
+        provider: 'google',
+        region: 'cn',
+        platform: 'android',
+        nativeSupported: false,
+      }),
+    ).toBeNull();
+  });
+
   it('keeps other configured providers on their native path', () => {
     expect(
       resolveMobileSocialLoginMode({

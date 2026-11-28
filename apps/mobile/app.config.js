@@ -34,7 +34,7 @@ function loadRegionBuildConfig(region, { selfHosted = false } = {}) {
   let file = real;
   if (!fs.existsSync(real)) {
     // 自建发布线缺文件必须硬报错;本地构建缺文件不阻断——回落到空白模板并打警告,
-    // 身份字段由调用方回落内置 dev 身份,统计/Google 登录自动关闭。
+    // 身份字段由调用方回落内置 dev 身份,统计关闭;Google 不走原生登录,Global 改走系统浏览器登录。
     if (selfHosted) {
       throw new Error(
         `缺少地区构建配置: ${real}。请复制 ${example} 为 self-host-regions.json 并填值`,
@@ -42,7 +42,7 @@ function loadRegionBuildConfig(region, { selfHosted = false } = {}) {
     }
     console.warn(
       `[cindy] 缺少 ${real},本地构建回落空白模板 ${path.basename(example)}` +
-        '(app 身份用内置默认,统计/Google 登录关闭)。需自定义请复制该模板为 self-host-regions.json 填值。',
+        '(app 身份用内置默认,统计关闭;Global 的 Google 登录改走浏览器,CN 不提供 Google)。需自定义请复制该模板为 self-host-regions.json 填值。',
     );
     file = example;
   }
@@ -75,7 +75,7 @@ function loadRegionBuildConfig(region, { selfHosted = false } = {}) {
       `${path.basename(file)} 缺少 global.google.webClientId/iosClientId/iosUrlScheme`,
     );
   }
-  // 本地构建 google 可整体留空(跳过 Google 登录);只要填了任意字段就必须三个齐全,
+  // 本地构建 google 可整体留空(不走原生 Google 登录,Global 改走系统浏览器);只要填了任意字段就必须三个齐全,
   // 防止部分填写被静默丢弃。
   if (!hasGoogleConfig && googleFields.some((key) => google?.[key]?.trim())) {
     throw new Error(
