@@ -1187,15 +1187,16 @@ function handleSystem(
     // 第 1 次不透出：单次抖动 SDK 一次重试就过，提示只会闪一下徒增噪音（与
     // codex translator 持续重试透出的防噪口径一致）。
     //
-    // Reuse the existing network reconnect marker for gateway failures. Both
-    // Desktop and Mobile localize it as network retry progress; auto-retry is
-    // reserved for overload (Mobile otherwise labels a 5xx as capacity failure).
-    // Keep unclassified/statusless and rate-limit retries silent.
+    // Reuse the existing network reconnect marker for gateway and statusless
+    // connection/timeout failures. Both Desktop and Mobile localize it as
+    // network retry progress; auto-retry is reserved for overload (Mobile
+    // otherwise labels a 5xx or connection retry as capacity failure).
+    // Keep rate-limit retries silent.
     const overloadRetry = parseOverloadError(
       `${sdkError} ${statusLabel}`,
       msg.error_status ?? undefined,
     ) !== null;
-    const networkRetry = [500, 502, 503, 504].includes(msg.error_status ?? 0);
+    const networkRetry = msg.error_status == null || [500, 502, 503, 504].includes(msg.error_status);
     const hasRetryProgress =
       Number.isSafeInteger(msg.attempt) &&
       Number.isSafeInteger(msg.max_retries) &&
