@@ -20,7 +20,7 @@
 
 import { createHash } from 'node:crypto';
 import { spawn } from 'node:child_process';
-import { stat } from 'node:fs/promises';
+import { readFile, stat } from 'node:fs/promises';
 import { homedir, userInfo } from 'node:os';
 
 import { runCommand, type RunCommand } from './exec.js';
@@ -226,10 +226,33 @@ export interface CrontabAdapterDeps {
   exec?: RunCommand;
   /** 「立即运行」的本地复现；resolve 表示进程已真正被拉起。 */
   launch?: (execution: CronExecution) => Promise<void>;
+  /** crond 那套系统环境（PATH、LANG）的来源；默认读系统的环境文件。 */
+  readSystemEnv?: () => Promise<Record<string, string>>;
 }
 
-/** crond 起任务时的基础环境：不是 Cindy 自己的环境。 */
-const CRON_BASE_PATH = '/usr/bin:/bin';
+/**
+ * crond 起任务时的基础环境：不是 Cindy 自己的环境。
+ *
+ * 这套环境来自系统，不是继承谁：
+ * - Linux 上 cron 经 PAM(pam_env) 读 `/etc/environment`，PATH 就是那里的一行
+ *   （实测 Ubuntu 22.04：crond 给的 PATH 与该文件逐字一致）；
+ * - macOS/BSD 的 cron 同样经 pam_env 读 `/etc/environment`，也读；
+ * - 语言在 Linux 上来自 `/etc/default/locale`（实测 crond 给的 LANG 与该文件一致），
+ *   macOS 没有这个文件，就不注入语言 —— 那边 cron 给什么，本机没有设备可实测，
+ *   不拿 Cindy 进程的 locale 冒充；
+ * - 读不到时用各平台 cron 的文档默认 PATH。
+ */
+const CRON_BASE_PATH: Record<string, string> = {
+  linux: '/usr/bin:/bin',
+  // BSD/macOS 的 cron 默认 PATH 比 Linux 宽（crontab(5) 记的就是这四个目录）。
+  darwin: '/usr/bin:/bin:/usr/sbin:/sbin',
+};
+const CRON_ENVIRONMENT_FILE = '/etc/environment';
+const CRON_LOCALE_FILE = '/etc/default/locale';
+
+function cronBasePath(): string {
+  return CRON_BASE_PATH[process.platform] ?? '/usr/bin:/bin';
+}
 
 /** 起了之后留多久看退出码：立刻失败要如实报失败，长任务照旧只报「已启动」。 */
 const RUN_RESULT_WINDOW_MS = 1_500;
@@ -243,6 +266,44 @@ function currentUser(): string {
 }
 
 /**
+ * 解析系统环境文件（`KEY=value`，值可带引号）：crond 那套环境的来源。
+ */
+export function parseSystemEnvFile(text: string): Record<string, string> {
+  const result: Record<string, string> = {};
+  for (const line of text.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('#')) continue;
+    const eq = trimmed.indexOf('=');
+    if (eq <= 0) continue;
+    const key = trimmed.slice(0, eq).trim();
+    let value = trimmed.slice(eq + 1).trim();
+    if (value.length >= 2 && value.startsWith('"') && value.endsWith('"')) {
+      value = value.slice(1, -1);
+    }
+    if (key) result[key] = value;
+  }
+  return result;
+}
+
+let systemEnvPromise: Promise<Record<string, string>> | null = null;
+
+/** crond 那套系统环境的来源；读不到就是空（随后退回文档默认）。 */
+async function readSystemEnvironment(): Promise<Record<string, string>> {
+  systemEnvPromise ??= (async () => {
+    // /etc/environment 是 PAM(pam_env) 读的那份文件：Linux 与 macOS 的 cron 都从它拿 PATH。
+    const envFile = await readFile(CRON_ENVIRONMENT_FILE, 'utf8').catch(() => '');
+    // 语言在 Linux 上来自 /etc/default/locale（实测 crond 给的 LANG 与它一致）；
+    // macOS 没有这个文件，就不注入语言。
+    const localeFile =
+      process.platform === 'linux'
+        ? await readFile(CRON_LOCALE_FILE, 'utf8').catch(() => '')
+        : '';
+    return { ...parseSystemEnvFile(envFile), ...parseSystemEnvFile(localeFile) };
+  })();
+  return systemEnvPromise;
+}
+
+/**
  * 条目的环境赋值 + crond 的基础环境 → 一次本地复现该用的执行上下文。
  *
  * crond 起任务时给的是固定环境（HOME、LOGNAME、PATH、SHELL），不是继承谁的 shell；
@@ -250,13 +311,19 @@ function currentUser(): string {
  *
  * 基础环境按 crond 的实际行为定（Debian cron 3.0pl1 真机实测）：
  * - `SHELL` 默认 `/bin/sh`，不是用户的登录 shell；
- * - `PATH` 默认取系统 PATH（Cindy 进程继承的那份），crontab 里的 `PATH=` 覆盖它；
+ * - `PATH` 取系统环境文件里的那份（Linux），crontab 里的 `PATH=` 覆盖它；
  * - `HOME` 默认用户家目录，工作目录就是 `$HOME`；
  * - `LOGNAME` 由 crond 强制设成真实用户名，crontab 改不动；
  * - `USER` 在 Linux 上 crond 不设（BSD/macOS 才设），crontab 里写 `USER=` 只是
  *   一个普通变量，照传即可。
+ *
+ * `systemEnv` 是 crond 那套系统的环境（PATH、LANG 等），由调用方给，好让这段逻辑
+ * 不依赖本机有哪些文件。
  */
-export function resolveCronEnvironment(env: Record<string, string>): {
+export function resolveCronEnvironment(
+  env: Record<string, string>,
+  systemEnv: Record<string, string> = {},
+): {
   shell: string;
   env: Record<string, string>;
 } {
@@ -264,11 +331,12 @@ export function resolveCronEnvironment(env: Record<string, string>): {
   // 基础环境先建立，再让条目的赋值覆盖它；只有实测不可覆盖的变量才强制。
   const base: Record<string, string> = {
     HOME: homedir(),
-    PATH: process.env.PATH || CRON_BASE_PATH,
+    PATH: systemEnv.PATH || cronBasePath(),
     SHELL: '/bin/sh',
   };
-  if (process.env.LANG) base.LANG = process.env.LANG;
-  else if (process.env.LC_ALL) base.LC_ALL = process.env.LC_ALL;
+  // 语言同样取系统那一份：不继承 Cindy 进程的 locale（那是另一个进程的环境）。
+  if (systemEnv.LANG) base.LANG = systemEnv.LANG;
+  else if (systemEnv.LC_ALL) base.LC_ALL = systemEnv.LC_ALL;
   const merged: Record<string, string> = { ...base, ...env };
   // LOGNAME 由 crond 说了算，crontab 里的赋值覆盖不了它（实测：写 LOGNAME=zzz 无效）。
   merged.LOGNAME = user;
@@ -349,6 +417,7 @@ export async function defaultLaunch(execution: CronExecution): Promise<void> {
 export function createCrontabAdapter(deps: CrontabAdapterDeps = {}): HostDaemonAdapter {
   const exec = deps.exec ?? runCommand;
   const launch = deps.launch ?? defaultLaunch;
+  const readSystemEnv = deps.readSystemEnv ?? readSystemEnvironment;
 
   /**
    * 读失败要抛出：读失败 ≠ 空表 —— 空表会让上层数以「条目都删了」，顺手清掉它们的
@@ -435,7 +504,7 @@ export function createCrontabAdapter(deps: CrontabAdapterDeps = {}): HostDaemonA
       // 连同条目当时生效的环境赋值一起执行：用另一套环境跑，跑的就不是用户写的那件事。
       // 命令按 crond 的规则切开：`%` 之后那段走 stdin，不进命令行。
       const split = splitCronCommand(entry.command);
-      const context = resolveCronEnvironment(entry.env);
+      const context = resolveCronEnvironment(entry.env, await readSystemEnv());
       await launch({
         shell: context.shell,
         command: split.command,

@@ -89,7 +89,13 @@ export function parseLaunchctlList(stdout: string): Map<string, { running: boole
   return jobs;
 }
 
-function stateOf(plist: LaunchAgentPlist, jobs: Map<string, { running: boolean }>): HostDaemonState {
+function stateOf(
+  plist: LaunchAgentPlist,
+  jobs: Map<string, { running: boolean }> | null,
+): HostDaemonState {
+  // launchctl 不可用（宿主没有 GUI 上下文：SSH 拉起的 Electron、将来的 headless）
+  // 时不敢说它在跑，也不能说它没跑；但定义还在，要照常列出来。
+  if (!jobs) return 'unknown';
   const job = jobs.get(plist.label);
   // 没加载也是「定义还在、下次登录会被 launchd 捡起来」，所以按 ready 展示；
   // 只有已加载且真有进程时才敢说 running。
@@ -101,10 +107,16 @@ function guiDomain(): string {
   return `gui/${process.getuid?.() ?? 0}`;
 }
 
-async function scanJobs(exec: RunCommand): Promise<Map<string, { running: boolean }>> {
+/**
+ * 已加载的 job 列表；读不到时返回 null（= 状态未知），不抛。
+ *
+ * launchctl 需要 GUI 上下文：宿主被 SSH 拉起或将来 headless 运行时它会报
+ * not initialized。抛出去会把整个 LaunchAgents 来源挡掉，连 plist 文件都读不到；
+ * 读不到已加载的 job 不等于「一个都没加载」，那样运行中的条目会被显示成就绪。
+ */
+async function scanJobs(exec: RunCommand): Promise<Map<string, { running: boolean }> | null> {
   const { stdout, failed } = await exec('launchctl', ['list']);
-  // 读不到已加载的 job 不等于「一个都没加载」：那样运行中的条目会被显示成就绪。
-  if (failed) throw new Error('launchctl list failed');
+  if (failed) return null;
   return parseLaunchctlList(stdout);
 }
 

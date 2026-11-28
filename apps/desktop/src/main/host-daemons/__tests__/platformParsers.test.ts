@@ -282,11 +282,15 @@ describe('crontab', () => {
       expect(resolved.env.HOME).toBe(homedir());
       expect(await resolveCronCwd({})).toBe(homedir());
       expect(resolved.env.__CRON_ENV_LEAK__).toBeUndefined();
-      // 没有 crontab 赋值时是 crond 的默认 PATH 与默认 shell，不是 Cindy 进程的值。
+      // 没有 crontab 赋值时是 crond 的基础环境，不是 Cindy 进程的值。
       const bare = resolveCronEnvironment({});
       expect(bare.shell).toBe('/bin/sh');
-      // crond 的 PATH 来自系统（PAM 的 /etc/environment），会话里拿到的就是系统那一份。
-      expect(bare.env.PATH).toBe(process.env.PATH);
+      // PATH 来自 crond 那套系统环境（PAM 的 /etc/environment），不是 Cindy 进程的 PATH：
+      // 带着 Cindy 的完整 PATH 会掩盖「这条命令在 cron 环境下根本找不到」。
+      expect(bare.env.PATH).not.toBe(process.env.PATH);
+      expect(resolveCronEnvironment({}, { PATH: '/usr/local/bin:/usr/bin' }).env.PATH).toBe(
+        '/usr/local/bin:/usr/bin',
+      );
     } finally {
       delete process.env.__CRON_ENV_LEAK__;
     }
@@ -309,8 +313,9 @@ describe('crontab', () => {
     try {
       const resolved = resolveCronEnvironment({ LANG: 'zh_CN.UTF-8' });
       expect(resolved.env.LANG).toBe('zh_CN.UTF-8');
-      // 条目没写时，才用会话里的那一份（crond 的 PAM 环境近似）。
-      expect(resolveCronEnvironment({}).env.LANG).toBe('C.UTF-8');
+      // 条目没写时用系统那一份（crond 的 PAM 环境），不是 Cindy 会话里的 locale。
+      expect(resolveCronEnvironment({}, { LANG: 'C.UTF-8' }).env.LANG).toBe('C.UTF-8');
+      expect(resolveCronEnvironment({}).env.LANG).toBeUndefined();
     } finally {
       if (previous === undefined) delete process.env.LANG;
       else process.env.LANG = previous;
@@ -782,25 +787,27 @@ describe('来源适配器：读失败和空表分开报', () => {
     );
   });
 
-  it('launchd：运行状态读不到时不冒充「没有在运行的任务」', async () => {
+  it('launchd：运行状态读不到时如实报「未知」，且不挡住 plist 里的定义', async () => {
     const base = await mkdtemp(join(tmpdir(), 'host-daemons-jobs-'));
     const label = `com.cindy.unreadable.${process.pid}`;
-    await writeFile(
-      join(base, `${label}.plist`),
-      `<?xml version="1.0" encoding="UTF-8"?>
-      <plist version="1.0"><dict>
-        <key>Label</key><string>${label}</string>
-        <key>ProgramArguments</key><array><string>/bin/sleep</string><string>600</string></array>
-      </dict></plist>`,
-      'utf8',
-    );
+    await writeFile(join(base, `${label}.plist`), '<plist/>', 'utf8');
     try {
-      await expect(
-        createLaunchAgentsAdapter({
-          dir: base,
-          exec: async () => ({ stdout: '', failed: true }),
-        }).scan(),
-      ).rejects.toThrow('launchctl list failed');
+      // launchctl 需要 GUI 上下文：宿主被 SSH 拉起时它会 not initialized。
+      // 这种情况下清单不能整个不可用（连 plist 都读不到），也不能假装「没在运行」。
+      const entries = await createLaunchAgentsAdapter({
+        dir: base,
+        exec: async (command, args) => {
+          if (command === 'plutil') {
+            return {
+              stdout: JSON.stringify({ Label: label, Program: '/bin/sleep' }),
+              failed: false,
+            };
+          }
+          return { stdout: '', failed: true };
+        },
+      }).scan();
+      expect(entries.map((entry) => entry.id)).toContain(`launch-agent:${label}`);
+      expect(entries.find((entry) => entry.id === `launch-agent:${label}`)?.state).toBe('unknown');
     } finally {
       await rm(base, { recursive: true, force: true });
     }
