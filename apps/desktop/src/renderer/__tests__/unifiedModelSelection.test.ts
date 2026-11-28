@@ -289,6 +289,29 @@ describe('buildUnifiedListSections', () => {
     expect(modelRows.map((row) => row.entry.modelId)).toEqual(['claude-opus-5', 'gpt-5.5']);
   });
 
+  // PR #11565 评审:被隐藏的模型不进常规分组,但仍可调用。新增的「已隐藏」区允许给它点星,
+  // 而收藏 / 最近只从常规清单解析 —— 点星显示成功,切到收藏却找不到。规则:常规分组列什么
+  // 由 entries 决定,存下来的东西能不能解析回一行由 resolveEntries 决定。最小失败输入:
+  // 一条指向不在 entries 里的模型的收藏与最近。tier: unit(纯函数)。
+  it('收藏与最近按 resolveEntries 解析:被隐藏的模型不进常规分组,但存过的仍然在', () => {
+    const args = {
+      entries: [gpt],
+      resolveEntries: [gpt, opus],
+      favorites: [favoriteOf()],
+      recentModels: [recentOf()],
+      query: '',
+    };
+    const all = buildUnifiedListSections({ ...args, rail: { kind: 'all' } });
+    expect(all.map((section) => [section.kind, section.rows.map((row) => row.entry.modelId)])).toEqual([
+      ['favorites', ['claude-opus-5']],
+      ['group', ['gpt-5.5']],
+    ]);
+    expect(buildUnifiedListSections({ ...args, rail: { kind: 'recent' } })
+      .flatMap((section) => section.rows.map((row) => row.entry.modelId))).toEqual(['claude-opus-5']);
+    // 不传 resolveEntries = 旧口径:解析不到就不显示(不删条目)。
+    expect(buildUnifiedListSections({ ...args, resolveEntries: undefined, rail: { kind: 'favorites' } })).toEqual([]);
+  });
+
   it('分组按供应商:每家各自成组,组名 = providerLabel(2026-08-16 裁决,废除「授权登录」合并组)', () => {
     const xdModel = entryOf({
       providerId: 'xd',
@@ -1389,5 +1412,40 @@ describe('alias identity and saved preferences', () => {
     expect(config.wireModelId).toBe('flash-old');
     expect(config.effort).toBe('high');
     expect(JSON.stringify({ favorite, recent })).toBe(before);
+  });
+
+  // 2026-11-27 回归：本机供应商并入智能路由(sroute:)后，已存真实成员收藏与最近记录
+  // 经 resolveStoredProviderAlias 继续可见，锚点落到合并条目且选中态核对成立。
+  it.each(['favorites', 'recent'] as const)('keeps merged-member %s visible via resolveStoredProviderAlias', (kind) => {
+    const mergedEntry = entryOf({
+      providerId: 'sroute:auto:openai',
+      modelId: 'gpt-6-luna',
+      candidates: ['codex'],
+      recommended: 'codex',
+      capabilities: { codex: capability('codex', { wireModelId: 'gpt-6-luna' }) },
+    });
+    const favorite = favoriteOf({ providerId: 'openai', modelId: 'gpt-6-luna', agent: 'codex', effort: 'high' });
+    const recent = { ...favorite, usedAt: 1 };
+    const resolveStoredProviderAlias = (providerId: string, modelId: string) =>
+      providerId === 'openai' ? { providerId: 'sroute:auto:openai', modelId } : null;
+    const rows = buildUnifiedListSections({
+      entries: [mergedEntry],
+      favorites: [favorite],
+      recentModels: [recent],
+      resolveStoredProviderAlias,
+      query: '',
+      rail: { kind },
+    }).flatMap((section) => section.rows);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].entry).toBe(mergedEntry);
+    expect(rows[0].anchor.providerId).toBe('sroute:auto:openai');
+    expect(favoriteMatchesSelection({
+      entry: mergedEntry,
+      item: favorite,
+      selected: { providerId: 'sroute:auto:openai', modelId: 'gpt-6-luna' },
+      agent: 'codex',
+      effort: 'high',
+      fast: false,
+    })).toBe(true);
   });
 });

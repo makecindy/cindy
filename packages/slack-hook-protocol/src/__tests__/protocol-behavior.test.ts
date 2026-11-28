@@ -223,7 +223,7 @@ describe('provider.behavior(阶段 19)', () => {
     );
     const state = makeProviderBehaviorState(STATE_BOUND_DEFAULT);
     expectReject(
-      { ...state, payload: { ...STATE_BOUND_DEFAULT, provider: 'discord' } },
+      { ...state, payload: { ...STATE_BOUND_DEFAULT, provider: 'matrix' } },
       'provider.behavior.state.provider',
     );
   });

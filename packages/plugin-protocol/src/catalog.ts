@@ -3,7 +3,15 @@ import { isValidPluginNamespace, isValidPluginResourceId, parseListPluginsRespon
   type ListPluginsResponse, type VisiblePluginSummary, type PluginObjectUrlOptions } from './delivery.js';
 import { PluginProtocolError, isoDate, object, string } from './internal/parse.js';
 
-export interface PluginCatalogCounts { all: number; public: number; organization: number; personal: number }
+export interface PluginCatalogCounts {
+  all: number; public: number; organization: number; personal: number;
+  /** Subsets of public. Older catalog responses omit the publisher breakdown. */
+  official?: number; community?: number;
+}
+export function pluginCatalogPublisherGroup(scope: VisiblePluginSummary['scope'], kind: string | null | undefined) {
+  if (scope !== 'public') return null;
+  return kind === 'official' ? 'official' : kind === 'personal' ? 'community' : null;
+}
 export type PluginReadPage = Omit<ListPluginsResponse, 'removals'>;
 export interface PluginCatalogPage extends PluginReadPage { counts: PluginCatalogCounts | null }
 export interface PluginRecommendations {
@@ -37,13 +45,15 @@ export function parsePluginCatalogPage(value: unknown, options?: PluginObjectUrl
   if (raw.counts === null) return { ...page, counts: null };
   const counts = object(raw.counts, 'response.counts');
   const result = {} as PluginCatalogCounts;
-  for (const key of ['all', 'public', 'organization', 'personal'] as const) {
+  for (const key of ['all', 'public', 'organization', 'personal', 'official', 'community'] as const) {
     const count = counts[key];
+    if ((key === 'official' || key === 'community') && count === undefined) continue;
     if (typeof count !== 'number' || !Number.isSafeInteger(count) || count < 0)
       throw new PluginProtocolError(`response.counts.${key} 不合法`);
     result[key] = count;
   }
-  if (result.all !== result.public + result.organization + result.personal)
+  if (result.all !== result.public + result.organization + result.personal
+    || (result.official ?? 0) + (result.community ?? 0) > result.public)
     throw new PluginProtocolError('response.counts 总数不一致');
   return { ...page, counts: result };
 }

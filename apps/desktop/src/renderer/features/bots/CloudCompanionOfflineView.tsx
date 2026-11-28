@@ -9,12 +9,13 @@ import { useTranslation } from 'react-i18next';
 import { CHAT_BODY_CLASS } from '@/components/chat/chatChrome';
 import { MarkdownRenderer } from '@/components/chat/MarkdownRenderer';
 import { Button } from '@/components/ui/button';
+import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import { ErrorNotice } from '@/components/ui/error-notice';
 import { Spinner } from '@/components/ui/spinner';
 import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
 import { useDeviceLinkDeviceList } from '@/features/device-link/useDeviceLinkDeviceList';
 import { toast } from '@/lib/toast';
-import type { CompanionTranscriptMessage, CompanionTranscriptPage } from '../../../shared/companionCloud';
+import type { CompanionTakeOverOptions, CompanionTranscriptMessage, CompanionTranscriptPage } from '../../../shared/companionCloud';
 import type { BotGroupAttachment } from '../../../shared/botGroupChat';
 import type { BotProfileSourceFailure } from '../../../shared/botProfileSources';
 import { CompanionCindyConflictAction, useCompanionCindyConflictAction } from './CompanionCindyConflictAction';
@@ -22,7 +23,9 @@ import { BotAvatar } from './BotAvatar';
 import { BotGroupMessageAttachments } from './BotGroupMessageAttachments';
 import { BotSessionContentHeaderRegistration, type BotChatIdentity } from './BotSessionContentHeader';
 import { ensureBotProfilesLoaded } from './botStore';
-import { companionCloudApi, refreshCompanionCloud } from './companionCloudStore';
+import { companionCloudApi, refreshCompanionCloud, useCompanionCloud } from './companionCloudStore';
+import { localCompanionNeedsRecovery } from './companionCloudPresentation';
+import { CompanionShadowBanner } from './CompanionShadowBanner';
 import { CompanionProfileRepairDialog } from './CompanionProfileRepairDialog';
 
 export interface CloudCompanionOfflineViewProps {
@@ -57,6 +60,7 @@ function CloudCompanionOfflineContent({ botId, deviceId, name, avatar, avatarCol
   const navigate = useNavigate();
   const conflict = useCompanionCindyConflictAction();
   const devices = useDeviceLinkDeviceList();
+  const recoveryHere = localCompanionNeedsRecovery(useCompanionCloud(), botId);
   const device = deviceName.trim() || t('bots.cloud.unknownDevice');
   const identity = useMemo<BotChatIdentity>(() => ({ id: botId, deviceId, deviceName: device, name, avatar, avatarColor, sessionId: null }),
     [botId, deviceId, device, name, avatar, avatarColor]);
@@ -66,6 +70,7 @@ function CloudCompanionOfflineContent({ botId, deviceId, name, avatar, avatarCol
   const [loadFailed, setLoadFailed] = useState(false);
   const [state, setState] = useState<TakeOverState>({ kind: 'idle' });
   const [repairOpen, setRepairOpen] = useState(false);
+  const [missingProfileOpen, setMissingProfileOpen] = useState(false);
   const scroller = useRef<HTMLDivElement>(null);
   const anchor = useRef<{ height: number; top: number } | null>(null);
   const stickToBottom = useRef(true);
@@ -139,14 +144,15 @@ function CloudCompanionOfflineContent({ botId, deviceId, name, avatar, avatarCol
     }
   }, [messages]);
 
-  const takeOver = async () => {
+  const takeOver = async (options?: CompanionTakeOverOptions) => {
     const api = companionCloudApi();
     if (!api || state.kind === 'running') return;
     setState({ kind: 'running' });
+    setMissingProfileOpen(false);
     conflict.clear();
     const owner = getDataOwnerGeneration();
     try {
-      const result = await api.takeOverCompanion(botId);
+      const result = options ? await api.takeOverCompanion(botId, options) : await api.takeOverCompanion(botId);
       if (!isDataOwnerGenerationCurrent(owner)) return;
       if (result.ok) {
         await ensureBotProfilesLoaded(true).catch(() => undefined);
@@ -156,7 +162,10 @@ function CloudCompanionOfflineContent({ botId, deviceId, name, avatar, avatarCol
       }
       refreshCompanionCloud();
       conflict.report(result);
-      if (result.code === 'HOME_CONFLICT') {
+      if (result.code === 'PROFILE_SNAPSHOT_MISSING' && !options?.allowMissingProfile) {
+        setState({ kind: 'idle' });
+        setMissingProfileOpen(true);
+      } else if (result.code === 'HOME_CONFLICT') {
         const winner = devices?.find((candidate) => candidate.deviceId === result.homeDeviceId)?.name?.trim() || t('bots.cloud.unknownDevice');
         if (result.homeDeviceId && result.homeDeviceId !== deviceId) {
           // Another computer already continued: show the companion where it runs now.
@@ -166,8 +175,10 @@ function CloudCompanionOfflineContent({ botId, deviceId, name, avatar, avatarCol
         } else setState({ kind: 'conflict', device: winner });
       } else if (result.profileFailure) setState({ kind: 'profile', failure: result.profileFailure });
       else setState({ kind: 'error', key: result.code === 'OFFLINE' ? 'bots.cloud.takeOverOffline'
-        : result.code === 'NOT_ENABLED' ? 'bots.cloud.notEnabled' : result.code === 'LOCAL_CINDY_CONFLICT'
-          ? 'bots.cloud.localCindyConflict' : 'bots.cloud.takeOverFailed' });
+        : result.code === 'NOT_ENABLED' ? 'bots.cloud.notEnabled'
+        : result.code === 'LOCAL_CINDY_CONFLICT' ? 'bots.cloud.localCindyConflict'
+        : result.code === 'PROFILE_SNAPSHOT_MISSING' ? 'bots.cloud.missingProfileFailed'
+        : 'bots.cloud.takeOverFailed' });
     } catch {
       if (isDataOwnerGenerationCurrent(owner)) setState({ kind: 'error', key: 'bots.cloud.takeOverFailed' });
     }
@@ -178,6 +189,16 @@ function CloudCompanionOfflineContent({ botId, deviceId, name, avatar, avatarCol
     <main className="flex h-full min-h-0 flex-col bg-[var(--surface)]" data-testid="cloud-companion-offline">
       <BotSessionContentHeaderRegistration bot={identity} />
       <CompanionProfileRepairDialog botId={botId} open={repairOpen} onOpenChange={setRepairOpen} />
+      <ConfirmDialog
+        open={missingProfileOpen}
+        onOpenChange={(open) => { if (!open && state.kind !== 'running') setMissingProfileOpen(false); }}
+        title={t('bots.cloud.missingProfileTitle', { name })}
+        description={t('bots.cloud.missingProfileDescription', { name })}
+        confirmText={t('bots.cloud.missingProfileConfirm')}
+        cancelText={t('bots.cancel')}
+        loading={state.kind === 'running'}
+        onConfirm={() => void takeOver({ allowMissingProfile: true })}
+      />
       {sourceFailure ? <ErrorNotice
         role="alert"
         className="mx-4 mt-3"
@@ -190,7 +211,7 @@ function CloudCompanionOfflineContent({ botId, deviceId, name, avatar, avatarCol
         actions={<><CompanionCindyConflictAction action={conflict.action} />
           {typeof companionCloudApi()?.repairCompanionProfile === 'function' && <Button variant="primary" size="md" disabled={state.kind === 'running'} onClick={() => setRepairOpen(true)}>{t('bots.cloud.repair.action')}</Button>}
           <Button variant="secondary" size="md" loading={state.kind === 'running'} disabled={state.kind === 'running'} onClick={() => void takeOver()}>{t('bots.retry')}</Button></>}
-      /> : <section
+      /> : recoveryHere ? <CompanionShadowBanner botId={botId} name={name} /> : <section
         role="status"
         className="mx-4 mt-3 flex flex-wrap items-center gap-3 rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] px-4 py-3"
       >

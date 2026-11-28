@@ -14,13 +14,15 @@ export function buildUiAssignmentInitialTask(params: {
     params.initialTask,
     '',
     'Context handoff:',
-    'This Worker was created directly from the collaboration UI. The task may depend on work already in progress in the Lead session.',
     `Lead session id: ${JSON.stringify(params.leadSessionId)}`,
     ...(params.snapshotBeforeMs !== undefined
       ? [`snapshot_before_ms: ${params.snapshotBeforeMs}`]
       : []),
-    'Decide whether that context is needed before acting. If the task refers to current work, continuing work, this PR, or another relative scope, call orca_worker_bridge.read_lead_history with your worker_id. When snapshot_before_ms is present, pass it as from_ms. Page through next_cursor when has_more is true.',
-    'Use those tools only when needed. If the task is self-contained, proceed directly without reading the Lead history.',
-    "For code work, recover the intended repository, worktree, branch, and review range from the Lead's context and verify them on disk; do not assume the process cwd is the Lead's active worktree.",
+    'If the task is self-contained, proceed directly. If it refers to current work or another missing detail, use orca_worker_bridge.read_lead_history with your worker_id.',
+    params.snapshotBeforeMs === undefined
+      ? 'For current work, start with the latest messages (order="desc", limit=8).'
+      : 'Start at the assignment snapshot (from_ms=snapshot_before_ms, order="asc", limit=8).',
+    'Follow next_cursor in the same order only while the context you need is missing.',
+    "For code work, use the location and change range in the task. If either is unclear, verify it on disk; do not assume the process cwd is the Lead's active worktree.",
   ].join('\n');
 }

@@ -19,13 +19,18 @@ const h = vi.hoisted(() => ({
 }));
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
 vi.mock('@/lib/toast', () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
-vi.mock('@/features/device-link/remoteProjectsStore', () => ({
-  remoteProjectsStore: {
-    captureSessionRead: () => Object.assign(() => true, { mergeActivity: (row: unknown) => row }),
-    getDeviceName: () => 'Source Mac',
-    mergeDeviceSessions: h.merge,
-  },
-}));
+vi.mock('@/features/device-link/remoteProjectsStore', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/features/device-link/remoteProjectsStore')>();
+  return {
+    ...actual,
+    remoteProjectsStore: {
+      ...actual.remoteProjectsStore,
+      captureSessionRead: () => Object.assign(() => true, { mergeActivity: (row: unknown) => row }),
+      getDeviceName: () => 'Source Mac',
+      mergeDeviceSessions: h.merge,
+    },
+  };
+});
 const session = {
   id: 'task',
   title: 'Task',

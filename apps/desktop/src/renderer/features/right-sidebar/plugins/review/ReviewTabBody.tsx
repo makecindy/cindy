@@ -1,4 +1,6 @@
+import { Badge } from '@/components/ui/badge';
 import { ErrorNotice } from '@/components/ui/error-notice';
+import { SearchInput } from '@/components/ui/search-input';
 import { FileTypeIcon } from '@/components/ui/file-type-icon';
 import { SegmentedControl } from '@/components/ui/segmented-control';
 /**
@@ -42,7 +44,6 @@ import {
   MoreHorizontal,
   Plus,
   RefreshCw,
-  Search,
   SlidersHorizontal,
   SquareSplitHorizontal,
   Undo2,
@@ -52,6 +53,7 @@ import {
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
+import { Checkbox } from '@/components/ui/checkbox';
 import { cn, basename } from '@/lib/utils';
 import type {
   FileDiff,
@@ -72,11 +74,16 @@ import type {
 import { formatSidebarTime } from '@/features/cc-agent/lib/formatSidebarTime';
 
 import { gitReviewApiFor, isReviewRemoteOversizeError } from '@/lib/gitReviewTransport';
+import { getDraft, plainTextToTiptapDoc, saveDraft } from '@/lib/composerDraftStore';
+import {
+  buildBranchConflictResolvePrompt,
+  formatConflictFilesSummary,
+} from '@/lib/branchConflictPrompt';
+import { composerDraftKeyForRightSidebarSession } from '@/features/cc-agent/newMakerDraftRightSidebar';
 import { makerChatStore } from '@/lib/makerChatStore';
 import { extractIpcError } from '@/utils/ipcError';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
 import {
   COMPOSER_MENU_ROW,
   MenuHighlightLayer,
@@ -454,7 +461,7 @@ export function descriptorForReviewSource(
 
 export function ReviewTabBody({ state, ctx }: ReviewTabBodyProps) {
   const { t } = useTranslation();
-  const { confirm } = useConfirmDialog();
+  const { confirm, confirmThree } = useConfirmDialog();
   // device-link 远程会话:session 行在被控设备的 DB 里,只读查询经 gitReviewTransport
   // 隧道到被控端执行(被控端以它自己的 session 记录解析 workdir);写操作与本机
   // 文件打开在控制端禁用(readOnly 经 writeDisabledReasons 的 remote-device 档)。
@@ -502,13 +509,17 @@ export function ReviewTabBody({ state, ctx }: ReviewTabBodyProps) {
     workdir: ctx.workdir,
   });
   const data = sourceState.reviewData;
+  const svn = data?.scope.vcs === 'svn';
+  useEffect(() => {
+    if (svn && descriptor.kind !== 'unstaged') setSource('unstaged');
+  }, [descriptor.kind, setSource, svn]);
   const loading = sourceState.loading;
   const error = sourceState.error;
   const errorCode = sourceState.gitErrorCode;
   const refresh = sourceState.refreshGit;
   const setReviewData = sourceState.setReviewData;
   const commitsState = useReviewCommits(
-    capabilities.canSwitchSource ? sessionId : null,
+    !svn && capabilities.canSwitchSource ? sessionId : null,
     branchBaseRef,
     deviceLinkDeviceId,
     ctx.workdir,
@@ -638,8 +649,10 @@ export function ReviewTabBody({ state, ctx }: ReviewTabBodyProps) {
     [diffsExpanded, expansionDiffs],
   );
   const gitApplyAvailability = useMemo(
-    () => getGitApplyCopyAvailability(visibleDiffs, hideWhitespace, platform),
-    [hideWhitespace, platform, visibleDiffs],
+    (): ReturnType<typeof getGitApplyCopyAvailability> => svn
+      ? { canCopy: false, reason: 'empty' }
+      : getGitApplyCopyAvailability(visibleDiffs, hideWhitespace, platform),
+    [hideWhitespace, platform, svn, visibleDiffs],
   );
   /**
    * device-link 预览请求只发送被控端实际读取的轻量 diff 字段，裁剪 hunks / hunksPlain
@@ -733,7 +746,7 @@ export function ReviewTabBody({ state, ctx }: ReviewTabBodyProps) {
   );
   // device-link 与 SSH 工作区都没有可由控制端 shell 打开的本机文件。
   const openFileHandler =
-    capabilities.canOpenFile && shouldOfferReviewOpenFile(ctx.remoteHostId, deviceLinkDeviceId)
+    !svn && capabilities.canOpenFile && shouldOfferReviewOpenFile(ctx.remoteHostId, deviceLinkDeviceId)
       ? openReviewFile
       : undefined;
   // 次级视图(提交 / 分支 / 单文件)错误串的 OVERSIZE 标记 → 可读文案;其余原样。
@@ -770,7 +783,7 @@ export function ReviewTabBody({ state, ctx }: ReviewTabBodyProps) {
   const commitOrPushPending =
     pendingKey === 'commit' || pendingKey === 'commit-push' || pendingKey === 'push';
   const pushPending = pendingKey === 'push' || pendingKey === 'commit-push';
-  const writeDisabledReasonText = effectiveWriteDisabledReasons
+  const writeDisabledReasonText = svn ? '' : effectiveWriteDisabledReasons
     .map((reason) =>
       t(`rightSidebar.review.writeDisabledReasons.${reason}`, { defaultValue: reason }),
     )
@@ -984,31 +997,125 @@ export function ReviewTabBody({ state, ctx }: ReviewTabBodyProps) {
       return;
     }
 
-    const ok = await confirm({
-      title: t('rightSidebar.review.push.forceTitle'),
-      description: t('rightSidebar.review.push.forceDesc', {
-        count: result.behind,
-        remoteRef: result.remoteRef,
-      }),
-      confirmText: t('rightSidebar.review.push.forceConfirm'),
-      cancelText: t('rightSidebar.review.push.forceCancel'),
-    });
-    if (!ok) return;
+    const runForcePush = async (
+      needsForce: Extract<ReviewPushResult, { kind: 'needs-force' }>,
+    ) => {
+      const forceResult = applyPushResult(
+        await window.electronAPI.gitReview.push({
+          sessionId,
+          confirmForce: {
+            remoteRef: needsForce.remoteRef,
+            expectedOid: needsForce.remoteOid,
+          },
+        }),
+      );
+      if (forceResult.kind === 'needs-force') {
+        throw new Error(t('rightSidebar.review.push.forceStillRejected'));
+      }
+      toast.success(t('rightSidebar.review.push.successToast'));
+    };
 
-    const forceResult = applyPushResult(
-      await window.electronAPI.gitReview.push({
-        sessionId,
-        confirmForce: {
-          remoteRef: result.remoteRef,
-          expectedOid: result.remoteOid,
-        },
-      }),
-    );
-    if (forceResult.kind === 'needs-force') {
-      throw new Error(t('rightSidebar.review.push.forceStillRejected'));
+    const askAgentToResolve = (
+      needsForce: Extract<ReviewPushResult, { kind: 'needs-force' }>,
+    ) => {
+      const draftKey = composerDraftKeyForRightSidebarSession(sessionId);
+      const branchName =
+        needsForce.branch ??
+        needsForce.data.scope.branch ??
+        needsForce.remoteRef.replace(/^refs\/heads\//, '');
+      const remoteDisplay =
+        needsForce.upstream ??
+        `${needsForce.remote}/${needsForce.remoteRef.replace(/^refs\/heads\//, '')}`;
+      const prompt = buildBranchConflictResolvePrompt(t, {
+        branch: branchName,
+        remoteRef: remoteDisplay,
+        ahead: needsForce.ahead,
+        behind: needsForce.behind,
+        dirtyFiles: needsForce.dirty ? needsForce.data.summary.totalFiles : 0,
+        conflictFiles: needsForce.conflictFiles,
+        pushAfterSync: true,
+      });
+      const existing = getDraft(draftKey);
+      saveDraft(draftKey, {
+        ...existing,
+        text: plainTextToTiptapDoc(prompt),
+        attachments: existing?.attachments ?? [],
+      });
+      toast.info(t('rightSidebar.review.push.agentPromptFilled'));
+    };
+
+    const promptConflictOptions = async (
+      needsForce: Extract<ReviewPushResult, { kind: 'needs-force' }>,
+    ) => {
+      const remoteDisplay =
+        needsForce.upstream ??
+        `${needsForce.remote}/${needsForce.remoteRef.replace(/^refs\/heads\//, '')}`;
+      const description =
+        needsForce.conflictFiles && needsForce.conflictFiles.length > 0
+          ? t('rightSidebar.review.push.divergedConflictDesc', {
+              count: needsForce.behind,
+              remoteRef: remoteDisplay,
+              files: formatConflictFilesSummary(needsForce.conflictFiles),
+            })
+          : needsForce.dirty
+            ? t('rightSidebar.review.push.divergedDirtyDesc', {
+                count: needsForce.behind,
+                remoteRef: remoteDisplay,
+              })
+            : t('rightSidebar.review.push.divergedGeneralDesc', {
+                count: needsForce.behind,
+                remoteRef: remoteDisplay,
+              });
+      const choice = await confirmThree({
+        title: t('rightSidebar.review.push.divergedTitle'),
+        description,
+        confirmText: t('rightSidebar.review.push.askAgentSyncConfirm'),
+        tertiaryText: t('rightSidebar.review.push.forceConfirm'),
+        cancelText: t('rightSidebar.review.push.forceCancel'),
+        maxWidth: 440,
+        autoFocusConfirm: true,
+      });
+      if (choice === 'confirm') {
+        askAgentToResolve(needsForce);
+      } else if (choice === 'tertiary') {
+        await runForcePush(needsForce);
+      }
+    };
+
+    if (result.canSyncCleanly) {
+      const remoteDisplay =
+        result.upstream ?? `${result.remote}/${result.remoteRef.replace(/^refs\/heads\//, '')}`;
+      const choice = await confirmThree({
+        title: t('rightSidebar.review.push.divergedTitle'),
+        description: t('rightSidebar.review.push.syncCleanDesc', {
+          count: result.behind,
+          remoteRef: remoteDisplay,
+        }),
+        confirmText: t('rightSidebar.review.push.syncAndPushConfirm'),
+        tertiaryText: t('rightSidebar.review.push.forceConfirm'),
+        cancelText: t('rightSidebar.review.push.forceCancel'),
+        autoFocusConfirm: true,
+      });
+      if (choice === 'confirm') {
+        const syncedResult = applyPushResult(
+          await window.electronAPI.gitReview.push({
+            sessionId,
+            syncBeforePush: true,
+          }),
+        );
+        if (syncedResult.kind === 'needs-force') {
+          await promptConflictOptions(syncedResult);
+          return;
+        }
+        toast.success(t('rightSidebar.review.push.syncedAndPushedToast'));
+      } else if (choice === 'tertiary') {
+        await runForcePush(result);
+      }
+      return;
     }
-    toast.success(t('rightSidebar.review.push.successToast'));
-  }, [applyPushResult, confirm, sessionId, t]);
+
+    await promptConflictOptions(result);
+  }, [applyPushResult, confirmThree, sessionId, t]);
 
   const decoratePushError = useCallback(
     (message: string, err: unknown) => {
@@ -1071,7 +1178,7 @@ export function ReviewTabBody({ state, ctx }: ReviewTabBodyProps) {
 
   useEffect(() => {
     if (
-      shouldFallbackFromMissingSelectedCommit(
+      !svn && shouldFallbackFromMissingSelectedCommit(
         source,
         selectedCommitOid,
         commits,
@@ -1081,7 +1188,7 @@ export function ReviewTabBody({ state, ctx }: ReviewTabBodyProps) {
     ) {
       setSource('branch');
     }
-  }, [commits, commitsState.data, commitsState.loading, selectedCommitOid, setSource, source]);
+  }, [commits, commitsState.data, commitsState.loading, selectedCommitOid, setSource, source, svn]);
 
   const togglePath = useCallback(
     (id: string) => {
@@ -1290,7 +1397,7 @@ export function ReviewTabBody({ state, ctx }: ReviewTabBodyProps) {
     cappedFileDiffState.loading;
   const toolbarLayout = getReviewToolbarLayout(headerWidth);
   const toolbarMinimal = toolbarLayout === 'minimal';
-  const toolbarShowBranch = toolbarLayout === 'wide' && capabilities.showBranchInfo;
+  const toolbarShowBranch = !svn && toolbarLayout === 'wide' && capabilities.showBranchInfo;
   const toolbarShowSecondaryActions = toolbarLayout !== 'minimal';
   const toolbarFileTreeVisibility = getReviewFileTreeVisibility({
     userVisible: fileTreeVisible,
@@ -1318,7 +1425,7 @@ export function ReviewTabBody({ state, ctx }: ReviewTabBodyProps) {
         <div
           className={cn('flex min-h-8 min-w-0 items-center', toolbarMinimal ? 'gap-1' : 'gap-1.5')}
         >
-          <SourceDropdown
+          {svn ? <span className="shrink-0 text-12 font-medium">SVN</span> : <SourceDropdown
             source={source}
             messageSnapshotAvailable={messageSnapshot !== null}
             counts={{
@@ -1342,11 +1449,11 @@ export function ReviewTabBody({ state, ctx }: ReviewTabBodyProps) {
             onSelectMessageSnapshot={selectMessageSnapshot}
             onSelectCommit={selectCommitSource}
             onRefreshCommits={commitsState.refresh}
-          />
-          <span className="shrink-0 whitespace-nowrap font-mono text-11 tabular-nums">
+          />}
+          {!(svn && currentCapped) && <span className="shrink-0 whitespace-nowrap font-mono text-11 tabular-nums">
             <span className="text-[var(--diff-add-fg)]">+{totalAdd}</span>{' '}
             <span className="text-[var(--diff-del-fg)]">-{totalDel}</span>
-          </span>
+          </span>}
           {toolbarShowBranch && (
             <>
               <div className="mx-0.5 h-4 w-px shrink-0 bg-[var(--border-default)]" />
@@ -1393,7 +1500,7 @@ export function ReviewTabBody({ state, ctx }: ReviewTabBodyProps) {
                       onToggle: () => setFileTreeVisible(!fileTreeVisible),
                     }
               }
-              canCopyGitApply={descriptor.kind !== 'turn-set' && gitApplyAvailability.canCopy}
+              canCopyGitApply={svn ? undefined : descriptor.kind !== 'turn-set' && gitApplyAvailability.canCopy}
               copyGitApplyDisabledTooltip={copyGitApplyDisabledTooltip}
               onWordWrapChange={setWordWrap}
               onWordDiffChange={setWordDiff}
@@ -1414,7 +1521,7 @@ export function ReviewTabBody({ state, ctx }: ReviewTabBodyProps) {
                 />
               </>
             )}
-            <CommitOrPushDropdown
+            {!svn && <CommitOrPushDropdown
               branchLabel={branchLabel}
               totalAdd={totalAdd}
               totalDel={totalDel}
@@ -1436,11 +1543,11 @@ export function ReviewTabBody({ state, ctx }: ReviewTabBodyProps) {
               iconOnly={toolbarLayout !== 'wide'}
               platform={platform}
               onCommit={commitChanges}
-            />
+            />}
           </div>
         </div>
-        {effectiveWriteDisabledReasons.length > 0 && (
-          <div className="mt-2 flex items-start gap-2 rounded-[8px] border border-[var(--border-default)] bg-[var(--warning-bg-soft)] px-2.5 py-2 text-11 leading-relaxed text-[var(--text-secondary)]">
+        {!svn && effectiveWriteDisabledReasons.length > 0 && (
+          <div className="mt-2 flex items-start gap-2 rounded-lg border border-[var(--border-default)] bg-[var(--warning-bg-soft)] px-2.5 py-2 text-11 leading-relaxed text-[var(--text-secondary)]">
             <AlertTriangle size={13} className="mt-0.5 shrink-0 text-[var(--warning-fg)]" />
             <span>
               {t('rightSidebar.review.writeDisabledNotice', {
@@ -1508,6 +1615,7 @@ export function ReviewTabBody({ state, ctx }: ReviewTabBodyProps) {
         )
       ) : currentCapped ? (
         <CappedSourceView
+          lineCountsKnown={!svn}
           capped={currentCapped}
           summaryDiffs={cappedSummaryDiffs}
           selectedSummaryDiff={selectedCappedSummaryDiff}
@@ -1533,18 +1641,18 @@ export function ReviewTabBody({ state, ctx }: ReviewTabBodyProps) {
           }
           viewMode={diffViewMode}
           onViewModeChange={setDiffViewMode}
-          onRichMarkdownPreviewChange={setRichMarkdownPreview}
+          onRichMarkdownPreviewChange={svn ? undefined : setRichMarkdownPreview}
           wordWrap={wordWrap}
           wordDiff={wordDiff}
           expandedSet={expandedSet}
           onToggleDiff={togglePath}
           fileTreeVisible
-          loadImagePreview={loadImagePreview}
+          loadImagePreview={svn ? undefined : loadImagePreview}
           loadMarkdownPreview={loadMarkdownPreview}
-          richMarkdownPreview={capabilities.canRichPreview && richMarkdownPreview}
+          richMarkdownPreview={!svn && capabilities.canRichPreview && richMarkdownPreview}
           onOpenFile={openFileHandler}
           writeAction={
-            source === 'unstaged'
+            !svn && source === 'unstaged'
               ? {
                   canWrite,
                   pendingKey,
@@ -1688,7 +1796,9 @@ export function ReviewTabBody({ state, ctx }: ReviewTabBodyProps) {
         <CenteredState
           icon={<FileDiffIcon size={24} />}
           title={t('rightSidebar.review.emptyTitle')}
-          desc={t('rightSidebar.review.emptyDescGit')}
+          desc={svn ? t('rightSidebar.review.emptyDescSvn') : t('rightSidebar.review.emptyDescGit')}
+          actionLabel={svn ? t('rightSidebar.review.refresh') : undefined}
+          onAction={refreshAll}
         />
       ) : visibleDiffs.length === 0 ? (
         <CenteredState
@@ -1705,17 +1815,17 @@ export function ReviewTabBody({ state, ctx }: ReviewTabBodyProps) {
           refreshPending={reviewRefreshPending}
           viewMode={diffViewMode}
           onViewModeChange={setDiffViewMode}
-          onRichMarkdownPreviewChange={setRichMarkdownPreview}
+          onRichMarkdownPreviewChange={svn ? undefined : setRichMarkdownPreview}
           wordWrap={wordWrap}
           wordDiff={wordDiff}
           fileTreeVisible={fileTreeVisible}
           jumpRequest={resolvedJumpRequest}
-          loadImagePreview={loadImagePreview}
+          loadImagePreview={svn ? undefined : loadImagePreview}
           loadMarkdownPreview={loadMarkdownPreview}
-          richMarkdownPreview={capabilities.canRichPreview && richMarkdownPreview}
+          richMarkdownPreview={!svn && capabilities.canRichPreview && richMarkdownPreview}
           onOpenFile={openFileHandler}
           writeAction={
-            source === 'last-turn'
+            svn || source === 'last-turn'
               ? undefined
               : {
                   canWrite,
@@ -1770,12 +1880,9 @@ function AheadBehindPill({
   const label = t('rightSidebar.review.aheadBehindTooltip', { ahead, behind, upstream });
   return (
     <Tip text={label}>
-      <span
-        className="shrink-0 rounded-full bg-[var(--surface-chip)] px-1.5 py-0.5 font-mono text-10 text-[var(--text-secondary)]"
-        aria-label={label}
-      >
+      <Badge size="xs" mono aria-label={label}>
         ↑{ahead} ↓{behind}
-      </span>
+      </Badge>
     </Tip>
   );
 }
@@ -1982,7 +2089,7 @@ function CommitOrPushDropdown({
         onKeyDown={handleKeyDown}
         className="w-[min(22rem,calc(100vw-24px))] p-2"
       >
-        <div className="flex min-w-0 items-center gap-2 rounded-[8px] bg-[var(--surface-chip)] px-2.5 py-2 text-12">
+        <div className="flex min-w-0 items-center gap-2 rounded-lg bg-[var(--surface-chip)] px-2.5 py-2 text-12">
           <GitBranch size={13} className="shrink-0 text-[var(--text-tertiary)]" />
           <span className="min-w-0 flex-1 truncate font-medium text-[var(--text-primary)]">
             {branchLabel}
@@ -2003,7 +2110,7 @@ function CommitOrPushDropdown({
             }}
             rows={4}
             placeholder={t('rightSidebar.review.commit.placeholder')}
-            className="min-h-[92px] w-full resize-none rounded-[8px] border border-[var(--border-default)] bg-[var(--surface-elevated)] px-2.5 py-2 text-12 leading-relaxed text-[var(--text-primary)] placeholder:text-[var(--text-placeholder)] focus:outline-none focus:ring-2 focus:ring-[var(--focus-ring-soft)]"
+            className="min-h-[92px] w-full resize-none rounded-lg border border-[var(--border-default)] bg-[var(--surface-elevated)] px-2.5 py-2 text-12 leading-relaxed text-[var(--text-primary)] placeholder:text-[var(--text-placeholder)] focus:outline-none focus:ring-2 focus:ring-[var(--focus-ring-soft)]"
           />
         </div>
         <DropdownMenuItem
@@ -2013,9 +2120,8 @@ function CommitOrPushDropdown({
           }}
           className="mt-1 gap-2"
         >
-          <span className="flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-[3px] border border-[var(--border-default)] bg-[var(--surface-elevated)] text-[var(--text-primary)]">
-            {includeUnstaged && <Check size={10} />}
-          </span>
+          {/* 共享 Checkbox 只作显示，勾选由菜单项本身承担。 */}
+          <Checkbox checked={includeUnstaged} readOnly tabIndex={-1} aria-hidden className="pointer-events-none" />
           <span className="min-w-0 flex-1 truncate">
             {t('rightSidebar.review.commit.includeUnstaged')}
           </span>
@@ -2048,9 +2154,9 @@ function CommitOrPushDropdown({
           }}
         >
           {push.ahead > 0 && (
-            <span className="rounded-full bg-[var(--surface-chip)] px-1 font-mono text-10 text-[var(--text-secondary)]">
+            <Badge size="xs" mono>
               ↑{push.ahead}
-            </span>
+            </Badge>
           )}
         </CommitDropdownAction>
       </DropdownMenuContent>
@@ -2096,7 +2202,7 @@ function CommitDropdownAction({
       <span className="min-w-0 flex-1 truncate">{label}</span>
       {children}
       {shortcut && (
-        <span className="shrink-0 rounded bg-[var(--surface-chip)] px-1 py-0.5 font-mono text-10 text-[var(--text-tertiary)]">
+        <span className="shrink-0 rounded-[4px] bg-[var(--surface-chip)] px-1 py-0.5 font-mono text-10 text-[var(--text-tertiary)]">
           {shortcut}
         </span>
       )}
@@ -2211,23 +2317,17 @@ function FileJumpPopover({
           event.preventDefault();
           requestAnimationFrame(() => inputRef.current?.focus());
         }}
-        className="w-[280px] rounded-[12px] border border-[var(--cmd-palette-border)] bg-[var(--cmd-palette-bg)] p-2 shadow-[shadow:var(--shadow-menu)]"
+        className="w-[280px] rounded-xl border border-[var(--cmd-palette-border)] bg-[var(--cmd-palette-bg)] p-2 shadow-[shadow:var(--shadow-menu)]"
       >
         <div onKeyDown={handleKeyDown}>
-          <label className="relative block">
-            <Search
-              size={12}
-              className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 text-[var(--text-tertiary)]"
-            />
-            <input
-              ref={inputRef}
-              value={query}
-              onChange={(event) => setQuery(event.target.value)}
-              placeholder={t('rightSidebar.review.fileJump.placeholder')}
-              aria-label={t('rightSidebar.review.fileJump.placeholder')}
-              className="h-7 w-full rounded-full border border-[var(--border-default)] bg-[var(--surface-elevated)] pl-7 pr-2 text-12 text-[var(--text-primary)] placeholder:text-[var(--text-placeholder)] focus:outline-none focus:ring-2 focus:ring-[var(--focus-ring-soft)]"
-            />
-          </label>
+          <SearchInput
+            surface="panel"
+            inputRef={inputRef}
+            value={query}
+            onChange={setQuery}
+            placeholder={t('rightSidebar.review.fileJump.placeholder')}
+            aria-label={t('rightSidebar.review.fileJump.placeholder')}
+          />
           <div
             role="listbox"
             aria-label={t('rightSidebar.review.fileJump.tooltip')}
@@ -2247,7 +2347,7 @@ function FileJumpPopover({
                   onMouseEnter={() => setSelectedIndex(index)}
                   onClick={() => selectResult(result)}
                   className={cn(
-                    'flex h-9 w-full min-w-0 flex-col justify-center rounded-[8px] px-2 text-left hover:bg-[var(--cmd-palette-item-hover)]',
+                    'flex h-9 w-full min-w-0 flex-col justify-center rounded-lg px-2 text-left hover:bg-[var(--cmd-palette-item-hover)]',
                     index === selectedIndex && 'bg-[var(--cmd-palette-item-hover)]',
                   )}
                 >
@@ -2369,7 +2469,7 @@ export function ReviewMoreMenu({
   hideWhitespace: boolean;
   diffExpansionOverflow: DiffExpansionOverflowProps | null;
   fileTreeOverflow: FileTreeOverflowProps | null;
-  canCopyGitApply: boolean;
+  canCopyGitApply?: boolean;
   copyGitApplyDisabledTooltip?: string;
   onWordWrapChange: (wordWrap: boolean) => void;
   onWordDiffChange: (wordDiff: boolean) => void;
@@ -2488,7 +2588,7 @@ export function ReviewMoreMenu({
           </span>
         </DropdownMenuItem>
         <DropdownMenuSeparator />
-        {canCopyGitApply || !copyGitApplyDisabledTooltip ? (
+        {canCopyGitApply === undefined ? null : canCopyGitApply || !copyGitApplyDisabledTooltip ? (
           copyItem
         ) : (
           <Tip text={copyGitApplyDisabledTooltip}>
@@ -3005,12 +3105,12 @@ export function DiffList({
   topNotice?: ReactNode;
   viewMode: DiffViewMode;
   onViewModeChange: (mode: DiffViewMode) => void;
-  onRichMarkdownPreviewChange: (richMarkdownPreview: boolean) => void;
+  onRichMarkdownPreviewChange?: (richMarkdownPreview: boolean) => void;
   wordWrap: boolean;
   wordDiff: boolean;
   fileTreeVisible: boolean;
   jumpRequest: ReviewFileJumpRequest | null;
-  loadImagePreview: LoadImagePreview;
+  loadImagePreview?: LoadImagePreview;
   loadMarkdownPreview: LoadMarkdownPreview;
   richMarkdownPreview: boolean;
   richMarkdownPreviewDisabledReason?: string;
@@ -3434,19 +3534,12 @@ export function ReviewFileTreeSidebar({
       style={{ width: REVIEW_FILE_TREE_WIDTH_PX }}
     >
       <div className="shrink-0 border-b border-[var(--border-default)] p-2">
-        <label className="relative block">
-          <Search
-            size={12}
-            className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 text-[var(--text-tertiary)]"
-          />
-          <input
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-            placeholder={t('rightSidebar.review.fileTree.filterPlaceholder')}
-            aria-label={t('rightSidebar.review.fileTree.filterPlaceholder')}
-            className="h-7 w-full rounded-full border border-[var(--border-default)] bg-[var(--surface-elevated)] pl-7 pr-2 text-12 text-[var(--text-primary)] placeholder:text-[var(--text-placeholder)] focus:outline-none focus:ring-2 focus:ring-[var(--focus-ring-soft)]"
-          />
-        </label>
+        <SearchInput
+          value={query}
+          onChange={setQuery}
+          placeholder={t('rightSidebar.review.fileTree.filterPlaceholder')}
+          aria-label={t('rightSidebar.review.fileTree.filterPlaceholder')}
+        />
       </div>
       {flatNodes.length === 0 ? (
         <div className="px-3 py-4 text-11 leading-relaxed text-[var(--text-tertiary)]">
@@ -3561,7 +3654,7 @@ export function BatchActionPill({
   return (
     <div
       data-review-batch-action-pill="true"
-      className="pointer-events-none absolute bottom-3 left-1/2 z-30 flex -translate-x-1/2 items-center gap-1 overflow-hidden rounded-full border border-[var(--border-default)] bg-[color-mix(in_srgb,var(--surface-elevated)_92%,transparent)] p-1 shadow-[shadow:var(--shadow-menu)] backdrop-blur-sm"
+      className="pointer-events-none absolute bottom-3 left-1/2 z-page-overlay flex -translate-x-1/2 items-center gap-1 overflow-hidden rounded-full border border-[var(--border-default)] bg-[color-mix(in_srgb,var(--surface-elevated)_92%,transparent)] p-1 shadow-[shadow:var(--shadow-menu)] backdrop-blur-sm"
       style={{ maxWidth: 'calc(100% - 16px)' }}
     >
       {writeAction.sectionDiscardVisible && writeAction.onSectionDiscard && (
@@ -3621,7 +3714,7 @@ export function ReviewDiffListHeader({
   onViewModeChange: (mode: DiffViewMode) => void;
   richMarkdownPreview: boolean;
   richMarkdownPreviewDisabledReason?: string;
-  onRichMarkdownPreviewChange: (richMarkdownPreview: boolean) => void;
+  onRichMarkdownPreviewChange?: (richMarkdownPreview: boolean) => void;
 }) {
   const { t } = useTranslation();
   const [rowEl, setRowEl] = useState<HTMLDivElement | null>(null);
@@ -3677,11 +3770,11 @@ export function ReviewDiffListHeader({
         className="ml-auto flex shrink-0 items-center gap-1"
       >
         <ReviewRefreshButton pending={refreshPending} onRefresh={onRefresh} />
-        <RichMarkdownPreviewToggleButton
+        {onRichMarkdownPreviewChange && <RichMarkdownPreviewToggleButton
           enabled={richMarkdownPreview}
           disabledReason={richMarkdownPreviewDisabledReason}
           onToggle={() => onRichMarkdownPreviewChange(!richMarkdownPreview)}
-        />
+        />}
         <DiffViewModeToggle mode={viewMode} onChange={onViewModeChange} />
       </div>
     </div>
@@ -3766,8 +3859,7 @@ function DiffViewModeToggle({
       aria-label={t('rightSidebar.review.viewMode.aria')}
       value={mode}
       onValueChange={onChange}
-      height={24}
-      optionHeight={18}
+      density="xs"
       optionClassName="px-2 text-10"
       className="shrink-0"
       prefix={
@@ -3785,6 +3877,7 @@ function DiffViewModeToggle({
 export function CappedSourceView({
   capped,
   summaryDiffs,
+  lineCountsKnown = true,
   selectedSummaryDiff,
   loadedDiff,
   loading,
@@ -3810,6 +3903,7 @@ export function CappedSourceView({
 }: {
   capped: ReviewCappedDiffData;
   summaryDiffs: FileDiff[];
+  lineCountsKnown?: boolean;
   selectedSummaryDiff: FileDiff | null;
   loadedDiff: FileDiff | null;
   loading: boolean;
@@ -3821,13 +3915,13 @@ export function CappedSourceView({
   topNotice?: ReactNode;
   viewMode: DiffViewMode;
   onViewModeChange: (mode: DiffViewMode) => void;
-  onRichMarkdownPreviewChange: (richMarkdownPreview: boolean) => void;
+  onRichMarkdownPreviewChange?: (richMarkdownPreview: boolean) => void;
   wordWrap: boolean;
   wordDiff: boolean;
   expandedSet: Set<string>;
   onToggleDiff: (id: string) => void;
   fileTreeVisible: boolean;
-  loadImagePreview: LoadImagePreview;
+  loadImagePreview?: LoadImagePreview;
   loadMarkdownPreview: LoadMarkdownPreview;
   richMarkdownPreview: boolean;
   onOpenFile?: (diff: FileDiff) => void;
@@ -3864,10 +3958,10 @@ export function CappedSourceView({
     <div className="space-y-1">
       {topNotice && <div>{topNotice}</div>}
       <div>
-        {t('rightSidebar.review.capped.notice', {
+        {lineCountsKnown ? t('rightSidebar.review.capped.notice', {
           count: capped.stats.fileCount,
           lines: capped.stats.totalChangedLines,
-        })}
+        }) : t('rightSidebar.review.svnSelectFile')}
       </div>
     </div>
   );
@@ -3951,7 +4045,7 @@ export function CappedSourceView({
 
 function CappedFileState({ icon, title, desc }: { icon: ReactNode; title: string; desc: string }) {
   return (
-    <div className="m-3 rounded-[8px] border border-[var(--border-default)] bg-[var(--surface)] px-3 py-3 text-12 leading-relaxed text-[var(--text-secondary)]">
+    <div className="m-3 rounded-lg border border-[var(--border-default)] bg-[var(--surface)] px-3 py-3 text-12 leading-relaxed text-[var(--text-secondary)]">
       <div className="flex items-center gap-2 font-medium text-[var(--text-primary)]">
         <span className="text-[var(--text-tertiary)]">{icon}</span>
         <span>{title}</span>
@@ -3996,12 +4090,12 @@ function CommitSourceView({
   onToggleDiff: (id: string) => void;
   viewMode: DiffViewMode;
   onViewModeChange: (mode: DiffViewMode) => void;
-  onRichMarkdownPreviewChange: (richMarkdownPreview: boolean) => void;
+  onRichMarkdownPreviewChange?: (richMarkdownPreview: boolean) => void;
   wordWrap: boolean;
   wordDiff: boolean;
   fileTreeVisible: boolean;
   jumpRequest: ReviewFileJumpRequest | null;
-  loadImagePreview: LoadImagePreview;
+  loadImagePreview?: LoadImagePreview;
   loadMarkdownPreview: LoadMarkdownPreview;
   richMarkdownPreview: boolean;
   onOpenFile?: (diff: FileDiff) => void;
@@ -4111,12 +4205,12 @@ function BranchSourceView({
   onToggleDiff: (id: string) => void;
   viewMode: DiffViewMode;
   onViewModeChange: (mode: DiffViewMode) => void;
-  onRichMarkdownPreviewChange: (richMarkdownPreview: boolean) => void;
+  onRichMarkdownPreviewChange?: (richMarkdownPreview: boolean) => void;
   wordWrap: boolean;
   wordDiff: boolean;
   fileTreeVisible: boolean;
   jumpRequest: ReviewFileJumpRequest | null;
-  loadImagePreview: LoadImagePreview;
+  loadImagePreview?: LoadImagePreview;
   loadMarkdownPreview: LoadMarkdownPreview;
   richMarkdownPreview: boolean;
   onOpenFile?: (diff: FileDiff) => void;
@@ -4288,9 +4382,9 @@ export function BranchBaseDropdown({
           inputRef.current?.focus();
         }}
       >
-        <Input
+        <SearchInput
+          surface="panel"
           inputRef={inputRef}
-          size="sm"
           className="m-1 shrink-0"
           role="combobox"
           aria-expanded={open}
@@ -4543,12 +4637,12 @@ function StagedSourceView({
   onSectionAction: () => void;
   viewMode: DiffViewMode;
   onViewModeChange: (mode: DiffViewMode) => void;
-  onRichMarkdownPreviewChange: (richMarkdownPreview: boolean) => void;
+  onRichMarkdownPreviewChange?: (richMarkdownPreview: boolean) => void;
   wordWrap: boolean;
   wordDiff: boolean;
   fileTreeVisible: boolean;
   jumpRequest: ReviewFileJumpRequest | null;
-  loadImagePreview: LoadImagePreview;
+  loadImagePreview?: LoadImagePreview;
   loadMarkdownPreview: LoadMarkdownPreview;
   richMarkdownPreview: boolean;
   hunkActionsEnabled: boolean;
@@ -4627,7 +4721,7 @@ function FileRow({
   viewMode: DiffViewMode;
   wordWrap: boolean;
   wordDiff: boolean;
-  loadImagePreview: LoadImagePreview;
+  loadImagePreview?: LoadImagePreview;
   loadMarkdownPreview: LoadMarkdownPreview;
   richMarkdownPreview: boolean;
   onImagePreviewLoad: () => void;
@@ -4742,14 +4836,14 @@ function FileRow({
           </span>
         </button>
         {changeChip && (
-          <span className="shrink-0 rounded-full bg-[var(--surface-chip)] px-2 py-0.5 text-10 text-[var(--text-secondary)]">
+          <Badge size="xs">
             {changeChip}
-          </span>
+          </Badge>
         )}
         {diff.kind !== 'text' && (
-          <span className="shrink-0 rounded-full bg-[var(--surface-chip)] px-2 py-0.5 text-10 text-[var(--text-secondary)]">
+          <Badge size="xs">
             {t(`rightSidebar.review.status.${diff.kind}`, { defaultValue: diff.kind })}
-          </span>
+          </Badge>
         )}
         <span className="shrink-0 font-mono text-11 tabular-nums">
           <span className="text-[var(--diff-add-fg)]">+{diff.additions}</span>{' '}
@@ -4759,7 +4853,7 @@ function FileRow({
           <span
             data-review-action-reveal="file"
             className={cn(
-              'absolute right-3 top-1/2 z-10 flex -translate-y-1/2 items-center gap-1',
+              'absolute right-3 top-1/2 z-raised flex -translate-y-1/2 items-center gap-1',
               reviewActionRevealClass('file', fileActionsPending),
             )}
           >
@@ -4791,12 +4885,12 @@ function FileRow({
       {expanded && (
         <div className="min-w-0 px-3 pb-3">
           {showRenamePartialNotice && (
-            <div className="mb-2 rounded-[8px] border border-[var(--border-default)] bg-[var(--surface)] px-3 py-2 text-12 text-[var(--text-secondary)]">
+            <div className="mb-2 rounded-lg border border-[var(--border-default)] bg-[var(--surface)] px-3 py-2 text-12 text-[var(--text-secondary)]">
               {t('rightSidebar.review.renamePartialNotice')}
             </div>
           )}
           {showTypechangePartialNotice && (
-            <div className="mb-2 rounded-[8px] border border-[var(--border-default)] bg-[var(--surface)] px-3 py-2 text-12 text-[var(--text-secondary)]">
+            <div className="mb-2 rounded-lg border border-[var(--border-default)] bg-[var(--surface)] px-3 py-2 text-12 text-[var(--text-secondary)]">
               {t('rightSidebar.review.typechangePartialNotice')}
             </div>
           )}

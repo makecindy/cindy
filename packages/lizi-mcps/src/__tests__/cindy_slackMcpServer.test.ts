@@ -134,6 +134,9 @@ describe('cindy_slack MCP server', () => {
       'slack_list_tools',
       'slack_status',
     ]);
+    const schema = tools.find(tool => tool.name === 'slack_call_tool')!.inputSchema;
+    expect(schema.properties).toMatchObject({ args: { type: 'object' }, arguments: { type: 'object' } });
+    expect(schema.required).toEqual(['name']);
   });
 
   it('slack_status: 全绿时合并 server 侧 status 结果', async () => {
@@ -184,6 +187,43 @@ describe('cindy_slack MCP server', () => {
     const r = firstText(raw) as { errorCode: string; hint?: string };
     expect(r.errorCode).toBe('TOKEN_EXPIRED');
     expect(r.hint).toContain('重新完成一次授权');
+  });
+
+  // #8762: existing coverage only used the legacy `arguments` spelling. Drive
+  // tools/call through the real MCP schema so unknown-field stripping is exercised.
+  it.each([
+    { label: 'args object', input: { args: { channel_id: 'C1', limit: 10 } }, expected: { channel_id: 'C1', limit: 10 } },
+    { label: 'stringified args', input: { args: '{"channel_id":"C1","limit":10}' }, expected: { channel_id: 'C1', limit: 10 } },
+    { label: 'legacy arguments', input: { arguments: { channel_id: 'C1' } }, expected: { channel_id: 'C1' } },
+    { label: 'explicit empty args override the legacy alias', input: { args: {}, arguments: { channel_id: 'old' } }, expected: {} },
+    { label: 'omitted arguments', input: {}, expected: undefined },
+  ])('slack_call_tool forwards $label without losing parameters', async ({ input, expected }) => {
+    const { bridge, calls } = makeBridge({ onCall: (_tool, payload) => ({ ok: true, result: payload }) });
+    const client = await connectServer({ getBridge: () => bridge });
+    try {
+      const result = await client.callTool({ name: 'slack_call_tool', arguments: { name: 'slack_read_channel', ...input } });
+      const payload = { name: 'slack_read_channel', ...(expected !== undefined ? { arguments: expected } : {}) };
+      expect(calls).toEqual([{ tool: 'callTool', args: payload }]);
+      expect(firstText(result)).toEqual({ ok: true, data: payload });
+    } finally {
+      await client.close();
+    }
+  });
+
+  it('slack_call_tool rejects malformed args before the bridge instead of silently using the legacy alias', async () => {
+    const { bridge, calls } = makeBridge();
+    const client = await connectServer({ getBridge: () => bridge });
+    try {
+      const result = await client.callTool({
+        name: 'slack_call_tool',
+        arguments: { name: 'slack_read_channel', args: 'not JSON', arguments: { channel_id: 'old' } },
+      });
+      expect(result.isError).toBe(true);
+      expect(JSON.stringify(result.content)).toContain('args');
+      expect(calls).toEqual([]);
+    } finally {
+      await client.close();
+    }
   });
 
   it('大结果泄洪: >50k 自动落盘 workingDir 并返回相对路径', async () => {

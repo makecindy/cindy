@@ -180,10 +180,13 @@ describe('legacy → v1 refresh token migration window', () => {
   it('读侧:replacement-retry 走双来源读取,不再只认 v1', () => {
     const body = sliceBody(
       'const run = await runRefreshWithReplacementRetry(initialRefreshToken, {',
-      '});',
+      '\n  });',
     );
 
-    expect(body).toContain('readLatestStoredTokens: () => readStoredRefreshTokenCandidates(');
+    // Every source remains eligible; only known rejected generations are skipped.
+    expect(body).toContain('return readStoredRefreshTokenCandidates(opts.realm).filter(');
+    expect(body).toContain('!opts.rejectedRefreshTokens?.has(token)');
+    expect(body).toContain('vault.activeAccountKey !== expectedActiveVaultAccountKey');
     // 直接把 readPersistedRefreshToken 当唯一来源用就是本次事故的成因。
     expect(body).not.toContain('readLatestStoredToken: () => readPersistedRefreshToken(');
   });

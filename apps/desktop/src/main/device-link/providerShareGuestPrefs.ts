@@ -49,7 +49,7 @@ let pendingWrites = 0;
 let generation = 0;
 const pendingSettings = new Set<PendingSetting>();
 // 退出或权威名单清理立即撤权；不能等前面的磁盘写入结束才停止跳过确认。
-const revokedShares = new Map<string | null, Map<string, object>>();
+const revokedShares = new Map<string | null, Map<string, { generation: number }>>();
 
 /** 由本机接线在启动时提供文件位置(按当前账号解析)；传 null 回到只在内存里。 */
 export function configureProviderShareGuestPrefs(options: { resolvePath: (() => string) | null }): void {
@@ -183,10 +183,11 @@ export async function setProviderShareCredentialConsent(shareId: string, region:
 }
 
 /** 在内存中立即撤权，再在同一跨进程锁内删除磁盘记录；失败也不恢复信任。 */
-function removePrefs(file: string | null, matches: (shareId: string, region: Region) => boolean): Promise<void> {
-  const revoked = revokedShares.get(file) ?? new Map<string, object>();
+function removePrefs(file: string | null, matches: (shareId: string, region: Region) => boolean, retry?: ReadonlySet<string>): Promise<void> {
+  const revoked = revokedShares.get(file) ?? new Map();
   revokedShares.set(file, revoked);
-  const removal = {};
+  const removal = { generation };
+  for (const shareId of retry ?? []) revoked.set(shareId, removal);
   for (const setting of pendingSettings) {
     if (setting.file === file && matches(setting.shareId, setting.region)) {
       setting.cancelled = true;
@@ -228,8 +229,13 @@ export function forgetProviderShareGuestPrefs(shareId: string): Promise<void> {
 export function pruneProviderShareGuestPrefs(present: ReadonlySet<string>, confirmedRegions: readonly Region[]): Promise<void> | void {
   if (confirmedRegions.length === 0) return;
   const file = currentFile();
-  if (pendingWrites === 0 && ![...load(file)].some(([shareId, record]) => confirmedRegions.includes(record.region) && !present.has(shareId))) return;
-  return removePrefs(file, (shareId, region) => confirmedRegions.includes(region) && !present.has(shareId)).catch(() => undefined);
+  // With the write queue idle, any remaining revocation from this ownership
+  // generation failed to reach disk. The next confirmed refresh can retry it.
+  const retry = pendingWrites === 0 ? new Set([...revokedShares.get(file) ?? []]
+    .filter(([, removal]) => removal.generation === generation).map(([shareId]) => shareId)) : undefined;
+  const matches = (shareId: string, region: Region) => retry?.has(shareId) === true || (confirmedRegions.includes(region) && !present.has(shareId));
+  if (pendingWrites === 0 && !retry?.size && ![...load(file)].some(([shareId, record]) => matches(shareId, record.region))) return;
+  return removePrefs(file, matches, retry).catch(() => undefined);
 }
 
 /** 等最近一次写入落盘(测试与退出前用)。 */

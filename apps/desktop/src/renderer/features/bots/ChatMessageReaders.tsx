@@ -141,7 +141,7 @@ export function ChatReadReceipt({ groupId, messageId, read, members, interactive
           </button>
         </PopoverTrigger>
       </Tip>
-      <PopoverContent align="end" className="z-[80] max-h-[min(360px,var(--radix-popover-content-available-height))] w-fit min-w-40 max-w-64 overflow-y-auto p-1.5" aria-label={label}>
+      <PopoverContent align="end" className="max-h-[min(360px,var(--radix-popover-content-available-height))] w-fit min-w-40 max-w-64 overflow-y-auto p-1.5" aria-label={label}>
         <ReadersList state={state} members={members} />
       </PopoverContent>
     </Popover>

@@ -74,9 +74,9 @@ export function GiftCardSheet({ visible, code, invalidLink, onClose, onClosed, o
       : { label: t('giftCard.continue'), busy: step.kind === 'reading', disabled: !model.input.trim(), onPress: () => { Keyboard.dismiss(); model.submit(); } };
 
   const card = (value: GiftCard) => {
-    const printed = giftCardFaceShowsAmount(value.faceCode, value.amount, currency);
+    const printed = giftCardFaceShowsAmount(value.faceCode, value.amount, currency, value.face);
     return <View style={styles.hero}>
-      <GiftCardFace faceCode={value.faceCode} amount={value.amount} currency={currency}
+      <GiftCardFace faceCode={value.faceCode} face={value.face} amount={value.amount} currency={currency}
         label={t('giftCard.cardLabel', { amount: amountOf(value.amount) })} testID="giftCard.face" />
       <View style={styles.heroTexts}>
         {/* 金额印不上卡面时（本版本没有的字符）退回普通文字。 */}

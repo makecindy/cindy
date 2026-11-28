@@ -334,11 +334,12 @@ export function GiftCardRedeemDialog({
  */
 function GiftCardHero({ card, amount }: { card: BillingGiftCard; amount: string }) {
   const { t } = useTranslation();
-  const printed = giftCardFaceShowsAmount(card.faceCode, card.amount, BILLING_CURRENCY);
+  const printed = giftCardFaceShowsAmount(card.faceCode, card.amount, BILLING_CURRENCY, card.face);
   return (
     <div>
       <GiftCardFace
         faceCode={card.faceCode}
+        face={card.face}
         amount={card.amount}
         currency={BILLING_CURRENCY}
         label={t('billing.giftCard.cardLabel', { amount })}

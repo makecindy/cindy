@@ -94,22 +94,31 @@ export function recordMediaSpend(db: Database.Database, args: MediaSpendArgs) {
     }
     db.prepare(
       `UPDATE sessions SET
-      total_cost_amount = CASE WHEN total_cost_currency IS NULL OR total_cost_currency = ?
-        THEN total_cost_amount + ? ELSE ? END,
-      total_cost_is_approximate = CASE WHEN total_cost_currency IS NULL OR total_cost_currency = ?
-        THEN total_cost_is_approximate OR ? ELSE ? END,
-      total_cost_currency = ? WHERE id = ?`,
-    ).run(currency, amount, amount, currency, approximate ? 1 : 0, approximate ? 1 : 0, currency, sessionId);
+      total_cost_usd_is_approximate = total_cost_usd_is_approximate OR CASE
+        WHEN total_cost_currency = 'CNY' AND @currency = 'USD' THEN @approximate
+        WHEN total_cost_currency = 'USD' AND @currency = 'CNY' THEN total_cost_is_approximate ELSE 0 END,
+      total_cost_usd = total_cost_usd + CASE
+        WHEN total_cost_currency = 'CNY' AND @currency = 'USD' THEN @amount
+        WHEN total_cost_currency = 'USD' AND @currency = 'CNY' THEN total_cost_amount ELSE 0 END,
+      total_cost_amount = CASE
+        WHEN total_cost_currency = 'CNY' AND @currency = 'USD' THEN total_cost_amount
+        WHEN total_cost_currency = 'USD' AND @currency = 'CNY' THEN @amount ELSE total_cost_amount + @amount END,
+      total_cost_is_approximate = CASE
+        WHEN total_cost_currency = 'CNY' AND @currency = 'USD' THEN total_cost_is_approximate
+        WHEN total_cost_currency = 'USD' AND @currency = 'CNY' THEN @approximate ELSE total_cost_is_approximate OR @approximate END,
+      total_cost_currency = CASE WHEN total_cost_currency = 'CNY' THEN 'CNY' ELSE @currency END
+      WHERE id = @sessionId`).run({ currency, amount, approximate: Number(approximate), sessionId });
     return (
       (db
         .prepare(
-          `SELECT total_cost_usd AS legacyUsd, total_cost_amount AS amount,
+          `SELECT total_cost_usd AS legacyUsd, total_cost_usd_is_approximate AS usdApproximate, total_cost_amount AS amount,
       total_cost_currency AS currency, total_cost_is_approximate AS approximate
       FROM sessions WHERE id = ?`,
         )
         .get(sessionId) as
         | {
             legacyUsd: number;
+            usdApproximate: number;
             amount: number;
             currency: 'USD' | 'CNY';
             approximate: number;

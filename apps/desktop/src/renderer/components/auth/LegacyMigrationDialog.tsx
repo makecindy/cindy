@@ -104,8 +104,8 @@ export function LegacyMigrationDialog() {
       aria-labelledby="legacy-migration-title"
       aria-describedby="legacy-migration-desc"
       tabIndex={-1}
-      // z-[10000] = 本仓模态层约定(confirm-dialog 同层);低于 Toast(10100)。
-      className="fixed inset-0 z-[10000] flex items-center justify-center outline-none"
+      // z-modal = 本仓模态层约定(confirm-dialog 同层);低于 Toast(10100)。
+      className="fixed inset-0 z-modal flex items-center justify-center outline-none"
       style={{ background: 'var(--login-bg-base)' }}
       onKeyDown={onKeyDown}
       onClick={dismissFailed}
@@ -166,7 +166,7 @@ export function LegacyMigrationDialog() {
               minHeight: 58,
               // 设计稿 r40/h80 = 半高真 pill;用 9999 表达 pill 语义,长文案把
               // 按钮撑高时圆角跟随保持胶囊形(codex review P1)。
-              borderRadius: 9999,
+              borderRadius: 'var(--radius-full)',
               background: 'var(--login-callback-cta-bg)',
               border: '1px solid var(--login-callback-cta-border)',
               color: 'var(--login-callback-cta-text)',

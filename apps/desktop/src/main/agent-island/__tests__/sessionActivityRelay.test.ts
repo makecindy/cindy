@@ -25,6 +25,25 @@ function activity(
 }
 
 describe('SessionActivityRelay', () => {
+  // Unit: scoped replay must repair missing terminal history without clearing
+  // a live turn or exposing another task. Existing replay tests cover lists only.
+  it.each([
+    { phase: 'running' as const, attention: false },
+    { phase: 'needs-interaction' as const, attention: true },
+    { phase: 'completed' as const, attention: true },
+    { phase: 'error' as const, attention: true },
+  ])('replays the current scoped $phase state and clears absent tasks', patch => {
+    const relay = new SessionActivityRelay(vi.fn());
+    const emit = vi.fn();
+    const list = [activity('s1', 'Current', patch), activity('private', 'Private')];
+    relay.replay(list, emit, 's1');
+    expect(emit).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ sessionId: 's1', ...patch }));
+    emit.mockClear();
+    relay.replay(list, emit, 'absent');
+    expect(emit).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ sessionId: 'absent', phase: 'completed', attention: false }));
+    relay.dispose();
+  });
+
   beforeEach(() => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-01-01T00:00:00.000Z'));

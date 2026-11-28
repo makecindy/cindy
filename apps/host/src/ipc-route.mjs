@@ -46,7 +46,7 @@ const sameOwner = (a, b) => a.dataOwnerId === b.dataOwnerId && a.ownerGeneration
 /** Typed `[CODE] message` errors keep their contract; anything else is not serialised. */
 function handlerFailure(error) {
   const typed = parseTypedError(error);
-  if (typed) return reject(typedErrorStatus(typed.code) ?? 500, typed.code, typed.message);
+  if (typed) return { status: typedErrorStatus(typed.code) ?? 500, body: { ok: false, error: typed } };
   return reject(500, 'INTERNAL', 'Host handler failed');
 }
 

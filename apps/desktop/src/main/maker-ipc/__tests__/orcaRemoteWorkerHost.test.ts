@@ -3,6 +3,7 @@ import {
   ORCA_REMOTE_WORKER_CAPS_CHANNEL,
   ORCA_REMOTE_WORKER_MODELS_CHANNEL,
   ORCA_REMOTE_WORKER_OPEN_CHANNEL,
+  ORCA_REMOTE_WORKER_ARCHIVE_CHANNEL,
   ORCA_REMOTE_WORKER_RELEASE_CHANNEL,
   ORCA_REMOTE_WORKER_VERSION,
 } from '@cindy/device-link';
@@ -157,6 +158,39 @@ describe('orca remote worker host', () => {
     expect(deps.withSessionLock).toHaveBeenCalledWith('w_remote_1', expect.any(Function));
   });
 
+  it('replays the execution computer’s group route without resolving the group again', async () => {
+    const { deps, sessions } = setup();
+    const row = { id: request.sessionId, agentKind: 'pi', model: 'worker-model', providerId: 'worker-provider',
+      agentDeviceId: null, workingDir: '/worker/project', effort: 'low', fastMode: false };
+    const bootstrapSession = vi.fn();
+    const prepare = vi.fn(async () => ({
+      token: 'group-receipt',
+      route: { agentKind: 'pi' as const, model: row.model, providerId: row.providerId, agentDeviceId: null, effort: 'low' },
+    }));
+    const openSession = vi.fn(async (input, commit) => {
+      expect(input.body).toMatchObject({ agentKind: 'pi', model: row.model, providerId: row.providerId, effort: 'low' });
+      return { row, value: await commit({ ...row, orcaRemoteLead: input.body.orcaRemoteLead }, () => {}) };
+    });
+    const host = createOrcaRemoteWorkerHost({
+      ...deps,
+      supportsModelGroup: true,
+      openSession: createOrcaRemoteWorkerSessionOpener({
+        openSession: openSession as unknown as Parameters<typeof createOrcaRemoteWorkerSessionOpener>[0]['openSession'],
+        modelGroupStart: { prepare }, bootstrapSession, broadcastSessionCreated: vi.fn(),
+        insertSession: vi.fn(async (opened) => {
+          sessions.set(opened.id, { ...row, status: 'active', agentKind: 'pi', orcaRemoteLead: opened.orcaRemoteLead ?? null });
+        }),
+      }),
+    });
+
+    expect(host.caps()).toMatchObject({ modelGroup: true });
+    const first = await host.open({ ...request, model: 'fallback', modelGroup: 'coding' });
+    expect(first).toMatchObject({ agentKind: 'pi', model: row.model, providerId: row.providerId, agentDeviceId: null });
+    expect(bootstrapSession).toHaveBeenCalledWith(expect.objectContaining({ id: row.id }), expect.any(Function), 'group-receipt');
+    await expect(host.open({ ...request, modelGroup: 'coding' })).resolves.toEqual(first);
+    expect(prepare).toHaveBeenCalledOnce();
+  });
+
   it('is idempotent for the same caller and lead', async () => {
     const { host, deps } = setup();
     const first = await host.open(request);
@@ -220,6 +254,45 @@ describe('orca remote worker host', () => {
     await expect(host.open(request)).rejects.toThrow(/ALREADY_EXISTS/);
   });
 
+  it('retries a failed close, then replays its durable receipt without closing a later session', async () => {
+    const { deps, host, sessions } = setup();
+    await host.open(request);
+    deps.closeRuntime = vi.fn().mockRejectedValueOnce(new Error('process still running')).mockResolvedValue(undefined);
+    const raw = { sessionId: request.sessionId };
+    const foreign = createOrcaRemoteWorkerHost({ ...deps, getCaller: () => ({ controllerDeviceId: 'foreign' }) });
+    await expect(foreign.archive(raw)).rejects.toThrow(/NOT_FOUND/);
+    await expect(host.archive(raw)).rejects.toThrow('process still running');
+    expect(sessions.get(request.sessionId)?.orcaRemoteLead?.releasedAt).toBeUndefined();
+    await expect(host.archive(raw)).resolves.toEqual({ runtimeClosed: true });
+    // Lose this acknowledgement and recreate the host after a user resumes the ordinary task.
+    const closeLaterSession = vi.fn();
+    const restarted = createOrcaRemoteWorkerHost({ ...deps, liveAgentDeviceId: () => 'later-agent-pc', closeRuntime: closeLaterSession });
+    await expect(restarted.archive(raw)).resolves.toEqual({ runtimeClosed: true });
+    expect(closeLaterSession).not.toHaveBeenCalled();
+    expect(deps.closeRuntime).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([
+    { liveDevice: 'third-pc', savedDevice: null },
+    { liveDevice: undefined, savedDevice: 'third-pc' },
+  ])('preserves the Worker when the Agent runs on another device: $liveDevice / $savedDevice', async ({ liveDevice, savedDevice }) => {
+    const { deps, host, sessions } = setup();
+    await host.open(request);
+    const row = sessions.get(request.sessionId)!;
+    sessions.set(request.sessionId, { ...row, agentDeviceId: savedDevice });
+    deps.liveAgentDeviceId = () => liveDevice;
+    deps.closeRuntime = vi.fn(async () => undefined);
+    const raw = { sessionId: request.sessionId };
+    await expect(host.archive(raw)).rejects.toThrow(/UNSUPPORTED_CAPABILITY.*无法确认/);
+    expect(deps.closeRuntime).not.toHaveBeenCalled();
+    expect(deps.writeRemoteLead).not.toHaveBeenCalled();
+    expect(sessions.get(request.sessionId)?.orcaRemoteLead).toEqual(row.orcaRemoteLead);
+    // The live local handle is authoritative even if the stored selection still points elsewhere.
+    deps.liveAgentDeviceId = () => null;
+    await expect(host.archive(raw)).resolves.toEqual({ runtimeClosed: true });
+    expect(deps.closeRuntime).toHaveBeenCalledWith(request.sessionId);
+  });
+
   it('marks release once and keeps the task', async () => {
     const { host, deps, sessions } = setup();
     await host.open(request);
@@ -257,6 +330,7 @@ describe('orca remote worker host', () => {
         ORCA_REMOTE_WORKER_CAPS_CHANNEL,
         ORCA_REMOTE_WORKER_MODELS_CHANNEL,
         ORCA_REMOTE_WORKER_OPEN_CHANNEL,
+        ORCA_REMOTE_WORKER_ARCHIVE_CHANNEL,
         ORCA_REMOTE_WORKER_RELEASE_CHANNEL,
       ].sort(),
     );

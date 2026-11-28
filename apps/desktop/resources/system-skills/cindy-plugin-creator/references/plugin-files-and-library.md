@@ -243,6 +243,13 @@ await cindy.library({
 - Host 复用 owner-scoped safeStorage 的设备密钥和首次公钥固定机制，采用 X25519 / AES-GCM。
   Device Link relay 只搬运密文；离线没有云端存储，不承诺两台从不同时在线的电脑能够交换。
 
+**读取或指定自动化主机**。同时声明 `deviceSync: true` 和 `agent.schedule: true`，由宿主从登录账号、设备和已批准的插件身份确定归属。
+
+- `{ op: 'automationHost' }` 成功返回 `{ ok: true, revision, selected, isPrimary, deviceName, localSchedule }`。`selected` 表示账号是否选过主机，`isPrimary` 表示执行插件的这台电脑是否为主机。`deviceName` 可能为空。`localSchedule` 只描述本机绑定的任务，取值为 `active`、`paused`、`expired` 或 `none`。
+- 用户点击选主后调用 `{ op: 'selectAutomationHost', revision, useThisDevice: true }`，传入最近读取的版本。由当前主机清空归属时传 `false`。宿主会弹窗确认，成功返回同样的状态。`CANCELLED` 表示用户取消。`HOST_CHOICE_CHANGED` 表示选择冲突或仍有整理在运行，重新读取后让用户决定。
+- 旧宿主可能不识别操作，旧账号服务可能返回 `AUTOMATION_SERVICE_PENDING`。断网或暂时无法读取时保留本地资料，等待重新确认；不要自行指定主机。并发请求收到 `SYNC_BUSY` 时等待当前操作结束。所有持有旧整理任务的电脑均须更新后才会执行相同的主机校验。
+- 主机选择与建任务是两步。需要创建时从主机调用 [自动化草稿](./plugin-agent-tasks.md#只在用户指定的电脑执行)，由用户在该电脑保存。
+
 ### 4.10.3 对话里交给插件的文件（cindy_handoff_files）
 
 用户在对话里发 CSV、XLSX 等非媒体文件，页面要等用户点按钮才处理时使用。在工具参数表里

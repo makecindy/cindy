@@ -23,10 +23,14 @@ const log = createLogger('model-group-decisions');
 
 const FILE_NAME = 'model-group-decisions.json';
 const FIELD_MAX = 256;
-const WHY: readonly ModelGroupTraceWhy[] = [
-  'expiring', 'order', 'rotate', 'cheapest', 'cheapestFree', 'only', 'soonest', 'standby',
-  'off', 'unavailable', 'limited', 'tight', 'noVision',
-];
+/** 认识的原因；按类型列全，新增一种原因时这里漏写会编译失败，不会读盘时被悄悄丢掉。 */
+const WHY_KNOWN: Record<ModelGroupTraceWhy, true> = {
+  expiring: true, order: true, rotate: true, cheapest: true, cheapestFree: true, only: true, soonest: true,
+  drain: true, drainNext: true, headroom: true, weighted: true,
+  usageHabit: true, autoBalance: true, lessBusy: true, paygFallback: true,
+  standby: true, paygReserve: true, off: true, unavailable: true, limited: true, tight: true, noVision: true,
+};
+const WHY = Object.keys(WHY_KNOWN) as ModelGroupTraceWhy[];
 
 function filePath(): string | null {
   return activeDataOwnerId() ? ownerScopedPath(FILE_NAME) : null;
@@ -50,7 +54,7 @@ function quota(value: unknown): ModelGroupTraceQuota | null {
 }
 
 function agentKind(value: unknown): ModelGroupAgentKind | undefined {
-  return value === 'cc' || value === 'codex' || value === 'pi' ? value : undefined;
+  return value === 'cc' || value === 'codex' || value === 'pi' || value === 'acp' ? value : undefined;
 }
 
 /** 读盘与写盘的同一道归一：坏条目丢弃，其余照常显示。 */
@@ -68,7 +72,7 @@ function decision(value: unknown): ModelGroupDecision | null {
     const kind = agentKind(raw.agentKind);
     const why = WHY.find((item) => item === raw.why);
     if (kind) entry.agentKind = kind;
-    for (const key of ['providerId', 'model', 'agentDeviceId', 'modelName', 'sourceName'] as const) {
+    for (const key of ['providerId', 'model', 'agentDeviceId', 'accountId', 'modelName', 'sourceName'] as const) {
       const field = text(raw[key]);
       if (field) entry[key] = field;
     }
@@ -126,6 +130,7 @@ export function recordModelGroupDecision(
         providerId: result.route.providerId,
         model: result.route.model,
         agentDeviceId: result.route.agentDeviceId,
+        accountId: result.route.accountId,
         modelName: result.modelName,
         sourceName: result.sourceName,
         effort: result.route.effort,

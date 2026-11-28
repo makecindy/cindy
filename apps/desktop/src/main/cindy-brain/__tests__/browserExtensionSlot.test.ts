@@ -186,9 +186,9 @@ describe('browserExtensionSlot · 桥接随花名册启停', () => {
       extGhost({ id: 'plain', declare: false }),
       extGhost({ id: 'off', enabled: false }),
     ];
-    const { slot, bridges, natives, settle } = await makeSlot({}, ghosts);
+    const { slot, bridges, natives } = await makeSlot({}, ghosts);
     slot.reconcile(ghosts);
-    await settle();
+    expect(await slot.handleRequest('_root__my-browser', { kind: 'status' })).toMatchObject({ ok: true });
     expect(bridges).toHaveLength(1);
     expect(bridges[0].options).toMatchObject({
       ghostId: 'my-browser',
@@ -205,19 +205,19 @@ describe('browserExtensionSlot · 桥接随花名册启停', () => {
     });
     // 幂等:同一份花名册不重建。
     slot.reconcile(ghosts);
-    await settle();
     expect(bridges).toHaveLength(1);
     // 换版:关旧开新。
-    const upgraded = [extGhost({ version: '1.1.0' })];
-    slot.reconcile(upgraded);
-    await settle();
+    ghosts[0] = extGhost({ version: '1.1.0' });
+    slot.reconcile(ghosts);
+    expect(await slot.handleRequest('_root__my-browser', { kind: 'status' })).toMatchObject({ ok: true });
     expect(bridges[0].closed).toBe(true);
     expect(natives[0].close).toHaveBeenCalledOnce();
     expect(bridges).toHaveLength(2);
     expect(bridges[1].options.installedVersion).toBe('1.1.0');
     // 停用:关掉,不再提供页面控制。
-    slot.reconcile([extGhost({ version: '1.1.0', enabled: false })]);
-    await settle();
+    ghosts[0] = extGhost({ version: '1.1.0', enabled: false });
+    slot.reconcile(ghosts);
+    await vi.waitFor(() => expect(natives[1].close).toHaveBeenCalledOnce());
     expect(bridges[1].closed).toBe(true);
     expect(slot.getPageControl()).toBeNull();
   });
@@ -564,7 +564,9 @@ describe('browserExtensionSlot · 管子上行', () => {
         slot.reconcile(ghosts);
         await vi.waitFor(() => expect(install).toHaveBeenCalledOnce());
         await vi.advanceTimersByTimeAsync(3_600_000);
-        await slot.handleRequest('_root__my-browser', { kind: 'status' });
+        // #12633: plugins need the registration failure code to explain a blocked connection.
+        expect(await slot.handleRequest('_root__my-browser', { kind: 'status' }))
+          .toMatchObject({ ok: true, nativeBinding: 'unavailable', nativeBindingReason: reason });
         expect(install).toHaveBeenCalledOnce();
         state = 'ready';
         if (recovery === 'activation') {
@@ -575,8 +577,9 @@ describe('browserExtensionSlot · 管子上行', () => {
           slot.reconcile(ghosts);
           await vi.waitFor(() => expect(install).toHaveBeenCalledTimes(2));
         }
-        expect(await slot.handleRequest('_root__my-browser', { kind: 'status' }))
-          .toMatchObject({ ok: true, nativeBinding: 'ready' });
+        const restored = await slot.handleRequest('_root__my-browser', { kind: 'status' });
+        expect(restored).toMatchObject({ ok: true, nativeBinding: 'ready' });
+        expect(restored).not.toHaveProperty('nativeBindingReason');
         expect(install).toHaveBeenCalledTimes(2);
         await vi.advanceTimersByTimeAsync(600_000);
         expect(install).toHaveBeenCalledTimes(2);
@@ -677,7 +680,8 @@ describe('browserExtensionSlot · 管子上行', () => {
     await vi.waitFor(() => expect(installs).toBe(1));
     // A manually paired bridge remains usable while optional native registration is unavailable.
     expect(slot.getPageControl()).toMatchObject({ bridge: bridges[0], instanceId: '_root__my-browser' });
-    await slot.handleRequest('_root__my-browser', { kind: 'status' });
+    expect(await slot.handleRequest('_root__my-browser', { kind: 'status' }))
+      .toMatchObject({ ok: true, nativeBinding: 'unavailable', nativeBindingReason: 'EBUSY' });
     expect(installs).toBe(1);
     now += 5_000;
     await slot.handleRequest('_root__my-browser', { kind: 'status' });

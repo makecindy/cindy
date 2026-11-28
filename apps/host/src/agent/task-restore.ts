@@ -7,6 +7,7 @@ import { recordTaskArchiveRestores } from '../../../desktop/src/main/task-manage
 import { restoreArchivedTaskForSend } from '../../../desktop/src/main/localDb/archivedTaskRestore.ts';
 
 type Publish = (event: Record<string, unknown>) => void;
+type RestoreAdmission = { signal?: AbortSignal; assertAdmitted?: () => void };
 
 /**
  * Making an archived task active again, on the Host. The desktop restores through the active branch
@@ -36,7 +37,7 @@ export function bindTaskRestoreRetention(): () => void {
 export function createHostTaskRestore(deps: { getOwner(): unknown; publish: Publish; isHeldForDesktop?(): boolean }) {
   async function restoreTaskToActive(
     sessionId: string,
-    options: { signal?: AbortSignal; publish?: boolean } = {},
+    options: RestoreAdmission & { publish?: boolean } = {},
   ): Promise<void> {
     const owner = deps.getOwner();
     const database = getDbClient();
@@ -47,13 +48,15 @@ export function createHostTaskRestore(deps: { getOwner(): unknown; publish: Publ
       if (options.signal?.aborted) {
         throw Object.assign(new Error('Session send aborted'), { code: 'PRECONDITION_FAILED' });
       }
+      options.assertAdmitted?.();
     };
+    assertCurrent();
     await noteSessionsRestoring([sessionId], database.drizzle);
     assertCurrent();
     await database.tx('sessions.setStatus', { sessionIds: [sessionId], status: 'active' });
     if (options.publish !== false && deps.getOwner() === owner) {
       deps.publish({ type: 'session_changed', action: 'update', sessionId,
-        patch: { status: 'active', snoozedUntil: null, snoozedAt: null }, status: 'active' });
+        patch: { status: 'active', snoozedUntil: null, snoozedAt: null, archivedAt: null }, status: 'active' });
     }
   }
 
@@ -73,11 +76,11 @@ export function createHostTaskRestore(deps: { getOwner(): unknown; publish: Publ
      * (the Host installs the send lock as that bridge in main.ts, as the desktop's registerAll does),
      * re-entrantly when the send already holds it; context recovery's replay does not hold it.
      */
-    async restoreArchivedSessionForSend(sessionId: string) {
+    async restoreArchivedSessionForSend(sessionId: string, options: RestoreAdmission = {}) {
       if (requireActiveDuringHold(sessionId)) return;
-      await restoreArchivedTaskForSend(sessionId, {}, {
-        async patchSessionMetaInDb(id, _patch, options) {
-          if (!requireActiveDuringHold(id)) await restoreTaskToActive(id, { signal: options.signal });
+      await restoreArchivedTaskForSend(sessionId, { signal: options.signal }, {
+        async patchSessionMetaInDb(id) {
+          if (!requireActiveDuringHold(id)) await restoreTaskToActive(id, options);
         },
         captureOwnerScope: () => deps.getOwner(),
         isOwnerScopeCurrent: owner => owner === deps.getOwner(),

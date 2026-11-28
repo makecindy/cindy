@@ -31,7 +31,12 @@ import type {
   ModelAccessPromotionalGrantSource,
   ModelAccessPromotionalGrantUsage,
 } from '../../shared/modelAccess.js';
-import { formatGiftCardCode, normalizeGiftCardCode } from '@cindy/maker-shared/gift-card';
+import {
+  formatGiftCardCode,
+  normalizeGiftCardCode,
+  projectGiftCardFaceCatalog,
+  projectGiftCardFaceStyle,
+} from '@cindy/maker-shared/gift-card';
 import { BILLING_CURRENCY } from '../../shared/billingCurrency.js';
 
 import { isAllowedBillingRedirectUrl, isAllowedStripeBillingPortalUrl } from './paymentRedirect.js';
@@ -909,6 +914,8 @@ export function projectGiftCardPurchasePolicy(value: unknown): BillingGiftCardPu
     minFaceValue,
     maxFaceValue,
     faces: [...new Set(faces)],
+    // 旧服务端没有卡面详情：空数组，界面只用本版本内置的卡面。不合法的项只丢弃这一项。
+    faceCatalog: projectGiftCardFaceCatalog(value.faceCatalog, faces),
     maxSenderNameLength,
     maxMessageLength,
     // 旧服务端没有发信接口：null 表示不提供「发送到邮箱」。
@@ -970,6 +977,8 @@ function projectPurchasedGiftCard(value: unknown): BillingPurchasedGiftCard {
     cardId,
     orderId,
     faceCode,
+    // 卡面详情不合法只退回内置卡面，不影响这张卡与整个列表。
+    face: projectGiftCardFaceStyle(value.face, faceCode),
     amount,
     currency: cardCurrency,
     senderName,

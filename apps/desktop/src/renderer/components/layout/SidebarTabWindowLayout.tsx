@@ -379,7 +379,7 @@ export function SidebarTabWindowLayout() {
           />
         )}
         {(!windowVisible || !assignment || presentTabs.length === 0) && (
-          <div className="absolute inset-0 z-10 flex items-center justify-center bg-[var(--panel-bg)]">
+          <div className="absolute inset-0 z-raised flex items-center justify-center bg-[var(--panel-bg)]">
             <span className="text-13 text-[var(--text-tertiary)]">
               {assignment && contentReady && presentTabs.length === 0
                 ? t('rightSidebar.tabWindow.closed')

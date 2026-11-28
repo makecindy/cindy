@@ -8,8 +8,40 @@
 import { ed25519 } from '@noble/curves/ed25519';
 import { hmac } from '@noble/hashes/hmac';
 import { sha256 } from '@noble/hashes/sha256';
+import { bytesToHex } from '@noble/hashes/utils';
 import { getRandomBytes } from 'expo-crypto';
 import type { RelayAuthCrypto } from '@cindy/device-link';
+
+/**
+ * 验证通过过的签名(公钥、消息、签名三者的 SHA-256)。纯 JS 的 Ed25519 在 Hermes 上一次几十毫秒,而 Agent-Net
+ * 每收到一次设备目录(连上中转、任何一台设备上下线或忙闲变化)都把全部证书再核一遍:几十台设备时一次就占住
+ * JS 线程好几秒,换网重连的那几次目录让收发停了约 8 秒(2026-11-20 真机)。同样的三者核对结果永远一样,
+ * 所以只记通过的;证书有效期等随时间变化的检查在调用方,每次照做。
+ */
+const verifiedSignatures = new Map<string, true>();
+const VERIFIED_SIGNATURES_LIMIT = 512;
+function signatureKey(publicKey: Uint8Array, message: Uint8Array, signature: Uint8Array): string {
+  const all = new Uint8Array(publicKey.length + signature.length + message.length);
+  all.set(publicKey); all.set(signature, publicKey.length); all.set(message, publicKey.length + signature.length);
+  return bytesToHex(sha256(all));
+}
+function remember(key: string): void {
+  if (verifiedSignatures.size >= VERIFIED_SIGNATURES_LIMIT) verifiedSignatures.delete(verifiedSignatures.keys().next().value!);
+  verifiedSignatures.set(key, true);
+}
+/**
+ * Records a signature this device verified before as verified, without verifying it again. Only for what comes back from
+ * storage this device itself wrote after verifying and that proves intact with a key only this device holds (the Agent-Net
+ * roster cache, agentNetDirectoryCache.ts): the 24 certificates of one account took about 0.7 s of every cold start to
+ * verify again (2026-11-21, 28 ms each). Never for anything received from a peer or a server.
+ */
+export function rememberVerifiedSignature(publicKey: Uint8Array, message: Uint8Array, signature: Uint8Array): boolean {
+  if (publicKey.length !== 32 || signature.length !== 64) return false;
+  const key = signatureKey(publicKey, message, signature);
+  verifiedSignatures.delete(key);
+  remember(key);
+  return true;
+}
 
 export const mobileRelayAuthCrypto: RelayAuthCrypto = {
   sha256: (data) => sha256(data),
@@ -18,9 +50,13 @@ export const mobileRelayAuthCrypto: RelayAuthCrypto = {
   ed25519Sign: (seed, message) => ed25519.sign(message, seed),
   ed25519Verify(publicKey, message, signature) {
     if (publicKey.length !== 32 || signature.length !== 64) return false;
+    const key = signatureKey(publicKey, message, signature);
+    if (verifiedSignatures.delete(key)) { verifiedSignatures.set(key, true); return true; }
     try {
       // 严格按 RFC 8032 核对(与 node:crypto 一致),不接受 ZIP-215 放宽的写法。
-      return ed25519.verify(signature, message, publicKey, { zip215: false });
+      const valid = ed25519.verify(signature, message, publicKey, { zip215: false });
+      if (valid) remember(key);
+      return valid;
     } catch {
       return false;
     }

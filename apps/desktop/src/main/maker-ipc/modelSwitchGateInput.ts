@@ -79,3 +79,43 @@ export function resolveModelSwitchContextTokens(
     : (persistedContextTokens ?? 0);
   return { contextTokensKnown, contextTokens };
 }
+
+/**
+ * Which check made the destructive-rebuild window gate refuse a model change (a remote owner
+ * selection on a task that still holds native context), in the gate's own check order; null when
+ * the gate passes. Names only: provider/model ids and Pi's non-secret preview reason.
+ */
+export function describeModelWindowGateFailure(input: {
+  contextTokensKnown: boolean;
+  verifiedCurrentWindow: number | undefined;
+  targetContextWindow: number | undefined;
+  runtimeAgentKind: string | null | undefined;
+  model: string;
+  targetRouteProviderId: string | null | undefined;
+  rebuildLiveOrcaWorker: boolean;
+  piPreview: { action?: string; reason?: string } | null | undefined;
+}): { category: string; detail: string } | null {
+  // Claude can try the selected route with its existing native history. Missing
+  // catalog metadata is not evidence of overflow; the shared pressure planner
+  // and the existing overflow recovery handle an actual capacity problem.
+  if (input.runtimeAgentKind !== 'pi') return null;
+  const route = input.targetRouteProviderId ? `${input.targetRouteProviderId}/${input.model}` : input.model;
+  if (!input.contextTokensKnown) {
+    return { category: 'context-usage-unknown', detail: 'the task has no context usage reading' };
+  }
+  if (!input.verifiedCurrentWindow) {
+    return { category: 'current-window-unverified', detail: 'the current context window could not be verified' };
+  }
+  if (!input.targetContextWindow) {
+    return { category: 'target-window-unverified', detail: `target model ${route} has no verified context window` };
+  }
+  if (input.rebuildLiveOrcaWorker) {
+    return { category: 'orca-worker-rebuild', detail: 'a live Orca worker would have to be rebuilt' };
+  }
+  const { action, reason } = input.piPreview ?? {};
+  if (action === 'hot' || action === 'refresh') return null;
+  if (action !== 'rebuild' && action !== 'unavailable') {
+    return { category: 'pi-preview-missing', detail: `Pi reported neither a hot switch nor a refresh for ${route}` };
+  }
+  return { category: `pi-preview-${action}`, detail: reason ?? `Pi cannot switch to ${route}` };
+}

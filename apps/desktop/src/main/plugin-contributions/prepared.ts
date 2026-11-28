@@ -7,7 +7,7 @@ import type {
   PreparedPluginContribution,
   ContributionInstallationBinding,
 } from '../../shared/pluginContributions.js';
-import { ghostInstallApprovalToken } from '../../shared/ghost.js';
+import { ghostInstallApprovalToken, ghostPermissionItems } from '../../shared/ghost.js';
 import { findInstalledGhostByInstanceId, LOCAL_PLUGIN_NAMESPACE } from '../../shared/pluginIdentity.js';
 import { app } from 'electron';
 import {
@@ -166,6 +166,7 @@ async function prepare(
       description: manifest.description ?? '',
       version: manifest.version,
       releaseNotes: manifest.releaseNotes,
+      permissionLabels: [...new Set(ghostPermissionItems(manifest).map(item => item.labelKey))],
       sha256,
       sizeBytes: snapshot.bytes.byteLength,
       expiresAt: new Date(expiresAt).toISOString(),

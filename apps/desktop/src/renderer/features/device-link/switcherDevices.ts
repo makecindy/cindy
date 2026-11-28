@@ -39,6 +39,8 @@ export interface SwitcherDevice {
 export interface BuildSwitcherDevicesInput {
   /** 全量同账号设备(device-link:list-devices);null = 尚未加载。 */
   fullList: readonly DeviceLinkDeviceView[] | null;
+  /** 完整目录确认过的成员；首份完整目录到达之前仍可使用缓存。 */
+  registeredDeviceIds?: ReadonlySet<string> | null;
   /** 已同步或保留断线缓存的被控设备(remoteProjectsStore)。 */
   syncedDevices: readonly RemoteDeviceSummary[];
   /** 被对方撤销了本机访问权限的设备 id 集合(revokedDevicesStore)。 */
@@ -47,6 +49,7 @@ export interface BuildSwitcherDevicesInput {
 
 export function buildSwitcherDevices({
   fullList,
+  registeredDeviceIds = fullList && new Set(fullList.map(device => device.deviceId)),
   syncedDevices,
   revoked,
 }: BuildSwitcherDevicesInput): SwitcherDevice[] {
@@ -87,6 +90,12 @@ export function buildSwitcherDevices({
   const candidates = new Set<string>([...cached.keys(), ...revoked, ...onlineControllable]);
   for (const id of selfIds) candidates.delete(id);
   for (const id of controllerOnlyIds) candidates.delete(id);
+
+  if (registeredDeviceIds) {
+    for (const id of candidates) {
+      if (!registeredDeviceIds.has(id)) candidates.delete(id);
+    }
+  }
 
   const nameSources = [...candidates].map((deviceId) => ({ deviceId, name: nameById.get(deviceId) }));
   const devices: SwitcherDevice[] = [];

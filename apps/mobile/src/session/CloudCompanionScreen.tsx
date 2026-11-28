@@ -1,3 +1,4 @@
+import { WallpaperBackdrop } from '@/theme/WallpaperBackdrop';
 import type { ScrollViewInstance } from 'react-native';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Platform, ScrollView, StyleSheet, View, type NativeScrollEvent, type NativeSyntheticEvent } from 'react-native';
@@ -283,6 +284,7 @@ export function CloudCompanionScreen({ actorId, botId, deviceId, deviceName, tit
   const busy = loadingDevices || switching.phase === 'requesting';
   return <SafeAreaView style={[styles.screen, nativeHeader && { paddingTop: nativeHeaderHeight }]}
     edges={nativeHeader ? ['left', 'right', 'bottom'] : ['top', 'left', 'right', 'bottom']} testID="cloudCompanion.screen">
+      <WallpaperBackdrop />
     {nativeHeader ? null : <Stack.Screen options={{ headerShown: false }} />}
     <ChatIdentityHeader testIDPrefix="cloudCompanion" nativeHeader={nativeHeader}
       mark={avatar(CHAT_HEADER_MARK_SIZE)}

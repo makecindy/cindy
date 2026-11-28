@@ -12,6 +12,7 @@ import { explicitPorts } from './explicit-ports.ts';
 type Deps = AgentInputCoordinatorDeps;
 type LiveSession = {
   agentKind?: string;
+  capabilities?: { sameTurnSteer?: { supported: boolean } };
   isTurnRunning?(): boolean;
   getTurnGeneration?(): number | null;
   getObservedCurrentTurnTerminal?(): ReturnType<NonNullable<Deps['getObservedCurrentTurnTerminal']>>;
@@ -39,6 +40,11 @@ export interface HostCoordinatorQueueDeps {
    * touchSessionActivityInDb); main.ts gives the Host's write (session-activity.ts, release table 甲 10).
    */
   touchSessionActivity?: (sessionId: string, atMs?: number) => Promise<void>;
+  /** Resolves whether this task currently has active smart-routing auto-switch enabled for its queued createOpts. */
+  readModelGroupAutoSwitchMode?: (
+    sessionId: string,
+    createOpts: { agentKind?: string | null; providerId?: string | null; model?: string | null },
+  ) => Promise<'enabled' | 'disabled' | null>;
 }
 
 /** The turn executor (turn-executor.mjs) as the coordinator's ports read it. */
@@ -84,6 +90,8 @@ export interface HostCoordinatorContext {
   autoResume: HostAutoResume;
   /** This owner runtime's context recovery, if assembled; read when a port runs. */
   rollover(): { cancelRecovery(sessionId: string): void } | null | undefined;
+  /** Records smart-routing auto-switch mode onto the dispatched createOpts object for auto-resume hooks. */
+  markModelGroupInput?(createOpts: object, mode: 'enabled' | 'disabled' | null): void;
 }
 
 const makerKind = (kind: string | undefined) => kind === 'cc' ? 'claude-code' : kind;
@@ -111,6 +119,10 @@ export function hostCoordinatorDeps(ctx: HostCoordinatorContext): AgentInputCoor
         await runSchedulerQueuedPreparation(clientId, ctx.schedulePreparations,
           () => { ctx.scheduleDiscardWatchers.delete(clientId as string); ctx.acceptedCallbacks.discard(clientId as string); });
         ctx.assertCurrent();
+        if (deps.readModelGroupAutoSwitchMode && createOpts && typeof createOpts === 'object') {
+          const mode = await deps.readModelGroupAutoSwitchMode(id, createOpts as { agentKind?: string | null; providerId?: string | null; model?: string | null }).catch(() => null);
+          ctx.markModelGroupInput?.(createOpts, mode);
+        }
         const result = await executor.send(id, message, createOpts, sendOpts);
         await ctx.acceptedCallbacks.settle(id, sendOpts, result);
         return result;
@@ -134,6 +146,8 @@ export function hostCoordinatorDeps(ctx: HostCoordinatorContext): AgentInputCoor
     // window; it never reports the Host's own record as a running Session.
     isLiveTurnRunning: id => executor.isSettling(id) ? undefined : deps.getMaker()?.getSession(id)?.isTurnRunning?.(),
     isLiveSessionPresent: id => !!deps.getMaker()?.getSession(id),
+    // Read on every queue projection, which must not throw.
+    supportsSameTurnSteer: id => deps.getMaker()?.getSession(id)?.capabilities?.sameTurnSteer?.supported ?? null,
     getTurnGeneration: id => deps.getMaker()?.getSession(id)?.getTurnGeneration?.() ?? null,
     getTurnSessionIdentity: id => (deps.getMaker()?.getSession(id) as object | undefined) ?? null,
     getObservedCurrentTurnTerminal: id => deps.getMaker()?.getSession(id)?.getObservedCurrentTurnTerminal?.(),
@@ -207,6 +221,8 @@ export function hostCoordinatorDeps(ctx: HostCoordinatorContext): AgentInputCoor
       ctx.scheduleBridge().onPersistedSendRejected(id, message, item, recovering);
       executor.onPersistedSendRejected(id, message);
     },
+    // The Host does not capture supplier-sharing reconnect offers.
+    getSchedulerRunSignal: undefined,
     onAcceptedQueuedMessage: async (id, item) => {
       ctx.schedulePreparations.delete(item.clientId);
       ctx.scheduleDiscardWatchers.delete(item.clientId);
@@ -239,17 +255,18 @@ export function hostCoordinatorDeps(ctx: HostCoordinatorContext): AgentInputCoor
     // here; the Host has none of them.
     onRejectedUserTurn: ctx.autoResume.onRejectedUserTurn,
     onDispatchedUserTurn: (id, item, preVendorDispatchAt) => {
-      if (!item.autoResume) void deps.touchSessionActivity?.(id, preVendorDispatchAt);
+      if (!item.autoResume && item.origin?.kind !== 'scheduler') void deps.touchSessionActivity?.(id, preVendorDispatchAt);
       void settleTaskActionInput(item).catch(() => undefined);
       const attemptToken = ctx.autoResume.autoResumeAttemptToken(item);
       // The vendor accepted the resume: the held error is dropped, unless a newer attempt owns it.
       if (attemptToken !== null) ctx.autoResume.autoResumeBookkeeping.discardSuppressedError(id, attemptToken);
     },
     onSteerAccepted: (id, item) => {
-      if (!item.autoResume) void deps.touchSessionActivity?.(id);
+      if (!item.autoResume && item.origin?.kind !== 'scheduler') void deps.touchSessionActivity?.(id);
       void settleTaskActionInput(item).catch(() => undefined);
       // The desktop also releases the Orca accepted callback; Orca tasks are refused at Host admission.
     },
+    workerInputs: undefined, // Orca Worker recovery is owned by the desktop runtime.
     onUiRetry: (id, clientId, source, attemptToken) => {
       const bookkeeping = ctx.autoResume.autoResumeBookkeeping;
       bookkeeping.claimSuppressedErrorForRetry(id, clientId, source);
@@ -284,12 +301,16 @@ export function hostCoordinatorDeps(ctx: HostCoordinatorContext): AgentInputCoor
     // ── Not bound on the Host, and why ─────────────────────────────────────────────────────────
     // Orca tasks are refused at Host admission: no saved report is restored, so none is revalidated.
     canRestoreOrcaReport: undefined,
+    // Host sessions are not stamped with a reconciled send_to_session route, so no hint is projected.
+    sendToSessionHint: undefined,
     // The usage-limit resume arrives with the third batch (release table).
     onUsageLimitedTurnError: undefined,
     isScheduledQuotaInput: undefined,
     onUserAction: undefined,
     // Provider-group tasks are refused at Host admission.
     providerGroupSwitchCandidate: undefined,
+    // The Host also refuses Orca/mixed-pool assignments at admission.
+    isLocalMixedPoolWorkerInput: undefined,
     // The desktop's Orca assignment-history gate; Orca tasks are refused at Host admission.
     onUserMessageQueryable: undefined,
     // Orca queue notes; Orca tasks are refused at Host admission.

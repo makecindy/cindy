@@ -21,7 +21,9 @@ import {
 import { isAppSessionBoundaryPending } from '../appSessionState.js';
 import { getAuthState, getDeviceId } from '../authManager.js';
 import { createLogger } from '../logger.js';
+import { isPluginEngineOfferedToGuests } from '../maker-host/pluginEngineRemoteUse.js';
 import { isRemoteProviderInvocationAllowed } from '../maker-host/remote-provider-access-store.js';
+import { pluginEngineKeyFromProviderId } from '../../shared/pluginEngines.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
 import { providerShareApi, providerShareOwnerKey } from './providerShareApi.js';
 import { delegatedProviderShareGuestAccess, locallyProvenProviderShareDelegation } from './providerShareDelegatedAccess.js';
@@ -597,7 +599,24 @@ export type ProviderShareGuestDenial =
 
 type GuestAccessCheck = { access: ProviderShareGuestAccess } | { denied: ProviderShareGuestDenial };
 
+// A poll phase is synchronous: no permission result survives its next await.
+let guestAccessSnapshot: Map<string, GuestAccessCheck> | undefined;
+export function withProviderShareGuestAccessSnapshot<T>(read: () => T): T {
+  const previous = guestAccessSnapshot;
+  guestAccessSnapshot = new Map();
+  try { return read(); }
+  finally { guestAccessSnapshot = previous; }
+}
+
 function checkGuestAccess(controller: string): GuestAccessCheck {
+  const cached = guestAccessSnapshot?.get(controller);
+  if (cached) return cached;
+  const result = readGuestAccess(controller);
+  guestAccessSnapshot?.set(controller, result);
+  return result;
+}
+
+function readGuestAccess(controller: string): GuestAccessCheck {
   const rt = runtime;
   if (!rt || rt.stopped || runtime !== rt) return { denied: 'host-not-running' };
   if (!current(rt)) return { denied: 'host-scope-stale' };
@@ -615,8 +634,12 @@ function checkGuestAccess(controller: string): GuestAccessCheck {
     || rt.events.memberReady?.({ shareId: share.shareId, memberId: member.memberId, joinedAt: member.joinedAt }) === false) {
     return { denied: 'member-cleanup-pending' };
   }
-  if (!readDeviceLinkSettings().remoteControlEnabled) return { denied: 'remote-control-off' };
-  if (!isRemoteProviderInvocationAllowed(share.providerId)) return { denied: 'provider-not-remote' };
+  if (!readDeviceLinkSettings(false, 60_000).remoteControlEnabled) return { denied: 'remote-control-off' };
+  if (pluginEngineKeyFromProviderId(share.providerId)
+    ? !isPluginEngineOfferedToGuests(share.providerId)
+    : !isRemoteProviderInvocationAllowed(share.providerId)) {
+    return { denied: 'provider-not-remote' };
+  }
   return { access: { shareId: share.shareId, memberId: member.memberId, providerId: share.providerId } };
 }
 

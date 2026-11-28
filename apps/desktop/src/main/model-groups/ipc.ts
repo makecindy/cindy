@@ -1,88 +1,92 @@
-/** 模型组的 IPC：读写配置、解析选中的路线。只接受可信的主界面。 */
+/**
+ * 模型组的桌面 IPC 薄装配(业务主体在 handlersCore.ts，供 Desktop 与 Node Host 共用)。
+ */
+import { and, asc, eq } from 'drizzle-orm';
 import { ipcMain } from 'electron';
 
-import {
-  MODEL_GROUP_LIMITS,
-  MODEL_GROUPS_IPC,
-  modelGroupAgentDeviceId,
-  modelGroupCandidateKey,
-  normalizeModelGroupsConfig,
-  sanitizeModelGroupSelection,
-  type ModelGroupResolveRequest,
-} from '../../shared/modelGroups.js';
+import { MODEL_GROUPS_IPC } from '../../shared/modelGroups.js';
+import { isDeviceLinkInvoke, readDeviceLinkModelSelectionOrigin } from '../device-link/invoke-context.js';
+import { getDbClient } from '../localDb/client/current.js';
+import { createMessage } from '../localDb/ipc/messages.js';
+import { messages } from '../localDb/schema.js';
+import { getSessionRowSnapshot, getSessionRowSnapshotStrict } from '../localDb/sessionDispatchSnapshot.js';
+import { markProviderGroupReleased } from '../provider-group/bindings.desktop.js';
+import { readProviderGroup } from '../provider-group/store.js';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
-import { throwIpcError } from '../utils/ipcValidate.js';
-import { bindModelGroupSession } from './sessionBindings.js';
-import { readModelGroupsConfig, writeModelGroupsConfig } from './store.js';
-import { readModelGroupRecoveryOffer, resolver } from './desktopResolver.js';
+import { bindSessionSubscriptionAccount } from '../subscription-accounts/runtime.js';
+import { desktopModelGroupRuntime, warmDesktopAutoUsageProfile } from './desktopResolver.js';
+import { createModelGroupHandlers, type ModelGroupHandlersPorts } from './handlersCore.js';
+import type { ModelGroupRouteNotePorts } from './routeNote.js';
 
-function sessionIdOf(value: Record<string, unknown>): string {
-  const sessionId = value.sessionId;
-  if (typeof sessionId !== 'string' || !sessionId || sessionId.length > 256) {
-    throwIpcError('INVALID_PARAMS', 'sessionId is required');
-  }
-  return sessionId;
+let pendingSelectionPorts: Pick<ModelGroupHandlersPorts, 'readPendingSessionTarget' | 'markPendingModelGroupPick'> = {};
+
+export function registerModelGroupPendingSelection(ports: typeof pendingSelectionPorts): void {
+  pendingSelectionPorts = ports;
 }
 
+const routeNotePorts: ModelGroupRouteNotePorts = {
+  async sessionExists(sessionId) {
+    return !!(await getSessionRowSnapshotStrict(sessionId));
+  },
+  async firstUserMessageAt(sessionId) {
+    const [row] = await getDbClient().drizzle.select({ createdAt: messages.createdAt }).from(messages)
+      .where(and(eq(messages.sessionId, sessionId), eq(messages.role, 'user')))
+      .orderBy(asc(messages.createdAt)).limit(1);
+    const value = row?.createdAt as unknown;
+    const at = value instanceof Date ? value.getTime() : typeof value === 'number' ? value : typeof value === 'string' ? Date.parse(value) : Number.NaN;
+    return Number.isFinite(at) ? at : null;
+  },
+  async createNote(sessionId, row) {
+    await createMessage(sessionId, {
+      clientId: row.clientId,
+      role: 'assistant',
+      content: '',
+      agentMeta: { pluginModelRoute: row.note } as never,
+      ...(row.createdAt !== undefined ? { createdAt: row.createdAt } : {}),
+    });
+  },
+  sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+};
+
+export const desktopModelGroupHandlers = createModelGroupHandlers({
+  runtime: () => desktopModelGroupRuntime,
+  isDeviceLink: () => isDeviceLinkInvoke(),
+  deviceLinkOrigin: () => readDeviceLinkModelSelectionOrigin(),
+  readSessionTarget: (sessionId) => getSessionRowSnapshot(sessionId),
+  readPendingSessionTarget: (sessionId) => pendingSelectionPorts.readPendingSessionTarget?.(sessionId) ?? null,
+  markPendingModelGroupPick: (sessionId, pickedKey) => pendingSelectionPorts.markPendingModelGroupPick?.(sessionId, pickedKey),
+  pinLocalSource: async (sessionId, { providerId, accountId }) => {
+    if (accountId) {
+      await bindSessionSubscriptionAccount(sessionId, providerId, accountId).catch(() => undefined);
+    }
+    if (readProviderGroup(providerId)) {
+      await markProviderGroupReleased(sessionId, { providerId }).catch(() => undefined);
+    }
+  },
+  routeNotePorts,
+});
+
 export function registerModelGroupsIpc(): void {
-  ipcMain.handle(MODEL_GROUPS_IPC.GET, (event) => {
-    assertTrustedAppRendererEvent(event);
-    return readModelGroupsConfig();
-  });
-  ipcMain.handle(MODEL_GROUPS_IPC.SET, (event, raw: unknown) => {
-    assertTrustedAppRendererEvent(event);
-    if (!raw || typeof raw !== 'object') throwIpcError('INVALID_PARAMS', 'model groups config must be an object');
-    return writeModelGroupsConfig(normalizeModelGroupsConfig(raw));
-  });
-  ipcMain.handle(MODEL_GROUPS_IPC.RESOLVE, async (event, raw: unknown) => {
-    assertTrustedAppRendererEvent(event);
-    const value = raw && typeof raw === 'object' ? raw as Record<string, unknown> : {};
-    const selection = sanitizeModelGroupSelection(value.selection);
-    if (!selection) throwIpcError('INVALID_PARAMS', 'model group selection is required');
-    const context = value.context && typeof value.context === 'object' ? value.context as Record<string, unknown> : null;
-    const rawLocation = value.location && typeof value.location === 'object' ? value.location as Record<string, unknown> : null;
-    const locationId = rawLocation
-      ? rawLocation.agentDeviceId === null || rawLocation.agentDeviceId === undefined ? null : modelGroupAgentDeviceId(rawLocation.agentDeviceId)
-      : null;
-    if (rawLocation && rawLocation.agentDeviceId !== null && rawLocation.agentDeviceId !== undefined && !locationId) {
-      throwIpcError('INVALID_PARAMS', 'model group location is invalid');
-    }
-    const request: ModelGroupResolveRequest = {
-      selection,
-      dryRun: value.dryRun === true,
-      ...(context?.hasImages === true ? { context: { hasImages: true } } : {}),
-      ...(rawLocation ? { location: { agentDeviceId: locationId } } : {}),
-    };
-    return resolver.resolve(request);
-  });
-  ipcMain.handle(MODEL_GROUPS_IPC.COMMIT, (event, decisionId: unknown) => {
-    assertTrustedAppRendererEvent(event);
-    if (typeof decisionId !== 'string' || decisionId.length > 64) throwIpcError('INVALID_PARAMS', 'decisionId is required');
-    return resolver.commit(decisionId);
-  });
-  ipcMain.handle(MODEL_GROUPS_IPC.BIND_SESSION, (event, raw: unknown) => {
-    assertTrustedAppRendererEvent(event);
-    const value = raw && typeof raw === 'object' ? raw as Record<string, unknown> : {};
-    const sessionId = sessionIdOf(value);
-    const selection = sanitizeModelGroupSelection(value.selection);
-    const route = value.route && typeof value.route === 'object' ? value.route as Record<string, unknown> : {};
-    const agentKind = route.agentKind;
-    const providerId = route.providerId;
-    const model = route.model;
-    const agentDeviceId = route.agentDeviceId === undefined || route.agentDeviceId === null
-      ? undefined
-      : modelGroupAgentDeviceId(route.agentDeviceId);
-    if (!selection || (agentKind !== 'cc' && agentKind !== 'codex' && agentKind !== 'pi')
-      || typeof providerId !== 'string' || !providerId || providerId.length > MODEL_GROUP_LIMITS.field
-      || typeof model !== 'string' || !model || model.length > MODEL_GROUP_LIMITS.field
-      || agentDeviceId === null) {
-      throwIpcError('INVALID_PARAMS', 'model group selection and route are required');
-    }
-    bindModelGroupSession(sessionId, selection, modelGroupCandidateKey({ agentKind, providerId, model, agentDeviceId }));
-  });
-  ipcMain.handle(MODEL_GROUPS_IPC.SWITCH_OFFER, async (event, raw: unknown) => {
-    assertTrustedAppRendererEvent(event);
-    const value = raw && typeof raw === 'object' ? raw as Record<string, unknown> : {};
-    return readModelGroupRecoveryOffer(sessionIdOf(value));
-  });
+  // 启动后先读一次目录：重启前就在用供应商路由的任务，第一条消息之前就要认得它的路由。
+  void desktopModelGroupRuntime.refreshAutoModelGroupRoutes();
+  // 后台异步预热近 14 天本机用量画像，不阻塞启动和首次选模型。
+  setTimeout(() => warmDesktopAutoUsageProfile(), 1_500).unref();
+  ipcMain.handle(MODEL_GROUPS_IPC.GET, (event, rawOptions?: unknown) =>
+    desktopModelGroupHandlers.get(rawOptions, () => assertTrustedAppRendererEvent(event)));
+  ipcMain.handle(MODEL_GROUPS_IPC.SET, (event, raw: unknown) =>
+    desktopModelGroupHandlers.set(raw, () => assertTrustedAppRendererEvent(event)));
+  ipcMain.handle(MODEL_GROUPS_IPC.RESOLVE, (event, raw: unknown) =>
+    desktopModelGroupHandlers.resolve(raw, () => assertTrustedAppRendererEvent(event)));
+  ipcMain.handle(MODEL_GROUPS_IPC.COMMIT, (event, decisionId: unknown) =>
+    desktopModelGroupHandlers.commit(decisionId, () => assertTrustedAppRendererEvent(event)));
+  ipcMain.handle(MODEL_GROUPS_IPC.BIND_SESSION, (event, raw: unknown) =>
+    desktopModelGroupHandlers.bindSession(raw, () => assertTrustedAppRendererEvent(event)));
+  ipcMain.handle(MODEL_GROUPS_IPC.UNBIND_SESSION, (event, raw: unknown) =>
+    desktopModelGroupHandlers.unbindSession(raw, () => assertTrustedAppRendererEvent(event)));
+  ipcMain.handle(MODEL_GROUPS_IPC.GET_SESSION_BINDING, (event, raw: unknown) =>
+    desktopModelGroupHandlers.getSessionBinding(raw, () => assertTrustedAppRendererEvent(event)));
+  ipcMain.handle(MODEL_GROUPS_IPC.SWITCH_OFFER, (event, raw: unknown) =>
+    desktopModelGroupHandlers.switchOffer(raw, () => assertTrustedAppRendererEvent(event)));
+  ipcMain.handle(MODEL_GROUPS_IPC.ROUTE_NOTE, (event, raw: unknown) =>
+    desktopModelGroupHandlers.routeNote(raw, () => assertTrustedAppRendererEvent(event)));
 }

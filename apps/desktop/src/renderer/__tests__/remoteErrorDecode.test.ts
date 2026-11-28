@@ -68,7 +68,7 @@ describe('decodeRemoteErrorMessage', () => {
       'Control for this device is off; the message was not sent.',
     );
     expect(decodeRemoteErrorMessage('[DEVICE_LINK_MEDIA_TRANSFER_FAILED] upload failed')).toBe(
-      'Attachment transfer failed; the message was not sent. Please try again.',
+      'Attachment transfer failed; the message was not sent. Try again.',
     );
   });
 
@@ -184,6 +184,9 @@ describe('a send refused while a desktop app uses the Host data', () => {
       expect(i18n.t(key)).not.toBe(key);
       expect(decodeRemoteErrorMessage(raw)).toBe(i18n.t(key));
       expect(enqueue).toHaveBeenCalledOnce();
+      enqueue.mockResolvedValue({ sessionId: id, pendingQueue: [], queuePaused: false, error: null });
+      expect(await makerChatStore.sendMessage(id, 'retry', 'test-model', 'medium', 'auto', '/test')).toBe(true);
+      expect(makerChatStore.getSnapshot(id).error).toBeFalsy();
     } finally { vi.unstubAllGlobals(); }
   });
 

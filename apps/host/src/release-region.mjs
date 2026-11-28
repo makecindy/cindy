@@ -55,7 +55,7 @@ export function readWebRegions(webDir) {
  * carries another or more than one, is refused.
  *
  * @param {string} webDir
- * @param {'cn' | 'global'} region
+ * @param {'cn' | 'global' | 'dev'} region
  */
 export function assertWebRegion(webDir, region) {
   const regions = readWebRegions(webDir);
@@ -63,4 +63,15 @@ export function assertWebRegion(webDir, region) {
   throw new Error(regions.length === 0
     ? `Cannot read the region of the renderer build in ${webDir}; build it with VITE_CINDY_AUTH_REGION=${region}`
     : `The renderer build in ${webDir} is for ${regions.join(', ')}, not ${region}; build it with VITE_CINDY_AUTH_REGION=${region}`);
+}
+
+/** Reject production service origins before a development Host can receive an enterprise device grant. */
+export function validateDevelopmentEndpoints(dev, productionManifests) {
+  for (const key of ['authApiBaseUrl', 'deviceLinkApiBaseUrl', 'modelAccessApiBaseUrl', 'cdnBaseUrl']) {
+    const url = new URL(dev[key]);
+    if (url.protocol !== 'https:' || url.username || url.password ||
+        productionManifests.some(manifest => url.origin === new URL(manifest[key]).origin)) {
+      throw new Error(`Expected a separate HTTPS development endpoint for ${key}`);
+    }
+  }
 }

@@ -3,7 +3,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { RichAnswerStream, splitRichAnswer, richString } from '@cindy/maker-shared/rich-answer';
 import { BOT_GROUP_ATTACHMENTS_MAX } from '../../shared/botGroupChat.js';
-import { parseBlobUrl, resolveSafe } from '../cindy-media/blobStore.desktop.js';
+import { parseBlobUrl, readFile as readMedia, resolveSafe } from '../cindy-media/blobStore.desktop.js';
 import { sessionCanRead } from '../cindy-media/ledger.js';
 import { materializeTaskImageTextResult } from '../cindy-media/taskImageDelivery.js';
 import { sniffMediaMime } from '../cindy-media/sniffMediaMime.js';
@@ -14,7 +14,7 @@ import { isNetworkOrDevicePath } from './chatServerReplyAttachments.js';
 
 const imageLabel = (image: { alt: string }) => image.alt.replace(/[\\`*_{}[\]<>#!|]/g, '\\$&');
 
-type ReplyImageReference = { url: string; start: number; identifier?: string };
+type ReplyImageReference = { url: string; start: number; identifier?: string; video?: boolean };
 
 /** Normalize only local file URLs; the existing importer still owns file authority. */
 function componentImageSource(src: string): string {
@@ -42,13 +42,17 @@ function replyImageReferences(text: string): ReplyImageReference[] {
       ref.start >= part.key && ref.start < part.key + part.source.length);
     const doc = new RichAnswerStream().update(part.source, true);
     if (doc.issues) return [];
-    const images: Array<{ url: string; start: number }> = [];
+    const images: ReplyImageReference[] = [];
     const visit = (id: string) => {
       const node = doc.nodes.get(id);
       if (!node) return;
       if (node.kind === 'image') {
         const src = richString(node, 'src');
         if (src) images.push({ url: componentImageSource(src), start: part.key });
+      } else if (node.kind === 'video') {
+        const src = richString(node, 'src');
+        if (src?.startsWith('cindy-media://') && parseBlobUrl(src)?.ext === '.mp4')
+          images.push({ url: src, start: part.key, video: true });
       }
       node.children.forEach(visit);
     };
@@ -68,7 +72,8 @@ function imageReferenceMarkdown(refs: Array<{ url: string }>): string {
 export async function prepareChatReplyImages(text: string, sessionId: string, assertCurrent: () => void,
   authorizedFiles: ChatUploadAttachment[] = []) {
   assertCurrent();
-  const originalImages = replyImageReferences(text);
+  const media = replyImageReferences(text);
+  const originalImages = media.filter(ref => !ref.video);
   const localSources = new Map<string, string>();
   for (const ref of originalImages) {
     const local = localTaskImagePath(ref.url);
@@ -112,11 +117,9 @@ export async function prepareChatReplyImages(text: string, sessionId: string, as
     text = rewriteTaskImageReferences(text, imported.replacements);
     replacements = imported.replacements;
   }
-  const positions = new Map<string, number>();
   const sources = new Map<string, Set<string>>();
   for (const ref of originalImages) {
     const url = replacements.get(ref.url) ?? ref.url;
-    if (!positions.has(url)) positions.set(url, ref.start);
     const source = localSources.get(ref.url);
     if (source) {
       if (!sources.has(url)) sources.set(url, new Set());
@@ -125,18 +128,30 @@ export async function prepareChatReplyImages(text: string, sessionId: string, as
   }
   const attachments: ChatUploadAttachment[] = [];
   const delivered = new Map<string, string>();
-  for (const ref of refs) {
+  const imageRefs = new Map(refs.map(ref => [ref.url, ref]));
+  for (const source of media) {
+    const ref = source.video ? source : imageRefs.get(replacements.get(source.url) ?? source.url);
+    if (!ref) continue;
     if (!/^(cindy-media|xdt-image):\/\//.test(ref.url) || delivered.has(ref.url)) continue;
     const blob = parseBlobUrl(ref.url);
     if (!blob || attachments.length >= BOT_GROUP_ATTACHMENTS_MAX
       || !await sessionCanRead(blob.hash, sessionId, getDbClient().drizzle)) throw new Error('ATTACHMENT_UNAVAILABLE');
     assertCurrent();
     const image = resolveSafe(ref.url);
-    if (!image.mimeType.startsWith('image/')) throw new Error('ATTACHMENT_UNAVAILABLE');
+    if (source.video ? image.mimeType !== 'video/mp4' : !image.mimeType.startsWith('image/')) throw new Error('ATTACHMENT_UNAVAILABLE');
     const stat = await fs.stat(image.absPath);
     assertCurrent();
     if (!stat.isFile() || stat.size <= 0 || stat.size > 100 * 1024 * 1024) throw new Error('ATTACHMENT_UNAVAILABLE');
-    attachments.push({ id: ref.url, sourceOffset: positions.get(ref.url), name: path.basename(image.absPath), category: 'image',
+    attachments.push({ id: ref.url, sourceOffset: source.start, name: path.basename(image.absPath), category: source.video ? 'file' : 'image',
+      ...(source.video && { readBytes: async () => {
+        assertCurrent();
+        if (!await sessionCanRead(blob.hash, sessionId, getDbClient().drizzle)) throw new Error('ATTACHMENT_UNAVAILABLE');
+        assertCurrent();
+        const { buffer } = await readMedia(ref.url);
+        assertCurrent();
+        if (sniffMediaMime(buffer) !== 'video/mp4') throw new Error('ATTACHMENT_UNAVAILABLE');
+        return buffer;
+      } }),
       sourcePaths: [...sources.get(ref.url) ?? []],
       mimeType: image.mimeType, size: stat.size, url: ref.url, path: null });
     delivered.set(ref.url, ref.url);

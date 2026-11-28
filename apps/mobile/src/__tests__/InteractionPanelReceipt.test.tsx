@@ -19,6 +19,8 @@ import { i18n } from '@/i18n';
 import { AskCardAuthContext } from '@/session/askCardAuth';
 import { darkColors, lightColors } from '@/theme/tokens';
 
+vi.mock('@/platform/haptics', () => ({ playHaptic: vi.fn() }));
+
 // Markdown rendering/native media are exercised by the simulator; these tests cover decisions.
 vi.mock('@/session/MessageRenderer', () => ({ MarkdownBody: ({ text }: { text: string }) => <span>{text}</span> }));
 
@@ -1019,6 +1021,19 @@ it('keeps plugin update decisions outside the scrollable permission details', as
     expect(button).not.toBeNull();
     expect(details!.contains(button)).toBe(false);
   }
+});
+
+// #8706 unit: both actual confirmation layouts must use the safe quota translation.
+it.each([false, true])('shows quota guidance while retaining confirmation (companion=%s)', async companion => {
+  remoteSessionStore.setPendingInteractions('s1', [{ request: {
+    kind: 'permission', requestId: 'quota', toolName: 'Write', input: { path: '/tmp/card.txt' },
+    metadata: { autoReviewUnavailable: true, autoReviewUnavailableReason: 'quota_exhausted' },
+  } }]);
+  await act(async () => root.render(<Harness companion={companion} />));
+  expect(host.textContent).toContain('session.remoteError.AUTO_REVIEW_UNAVAILABLE_QUOTA');
+  expect(host.textContent).not.toContain('interaction.permission.autoReviewUnavailable');
+  expect(resolveInteraction).not.toHaveBeenCalled();
+  expect(host.querySelector('[data-testid="interaction.permission.allowOnceButton"]')).not.toBeNull();
 });
 
 it.each(['allowOnce', 'deny'])('companion permission preserves complete evidence and %s receipt', async (action) => {

@@ -1,4 +1,5 @@
-import type { ProviderAccountUsageResult } from '../../shared/providerAccountUsage.js';
+import { isAntigravityEngine } from '@cindy/maker-shared/branding';
+import { isZhipuCodingPlanRoute, type ProviderAccountUsageResult } from '../../shared/providerAccountUsage.js';
 import { formatClaudeSubscriptionPlanLabel, formatCodexPlanLabel } from '@cindy/maker-shared/subscription-usage';
 import { codexAccountDisplayKey } from '../maker-host/codex-auth-identity.js';
 import { kimiUsageWindowMinutes } from '../../shared/kimiCodingUsage.js';
@@ -11,6 +12,7 @@ import { opencodeGoUsageWindowMinutes } from '../../shared/opencodeGoUsage.js';
  * that fails only drops its own source; the rest of the panel still renders.
  */
 
+import type { GhostHarnessUsage } from '@cindy/plugin-protocol';
 import { actualSourceIdForModel, type ProviderView } from '@cindy/model-providers';
 import { CINDY_MAKE_ENABLED, isCindyMakeSource } from '@cindy/maker-shared/cindy-make-feature';
 import { matchCodexBucketForModel } from '@cindy/maker-shared/codex-usage-buckets';
@@ -23,12 +25,13 @@ import { isSessionActivityRunning, type SessionActivitySnapshot } from '@cindy/m
 
 import type { MenubarModelUsage, MenubarUsageScope, MenubarUsageScopeData } from '../../shared/menubarQuota.js';
 import { dbToMakerAgentKind } from '../../shared/agentKindConversion.js';
-import { providerWeeklyQuotaSource } from '../../shared/providerQuotaSource.js';
+import { isPluginEngineKind, type PluginEngineView } from '../../shared/pluginEngines.js';
+import { providerUsageReaderSource } from '../../shared/providerQuotaSource.js';
 import { isSubscriptionProvider, isUnusedDefaultAccount, type SubscriptionAccountUsage, type SubscriptionPoolView } from '../../shared/subscriptionAccounts.js';
 import { formatModelShort } from '../../shared/usageModelLabel.js';
 import type { CodexAccountUsagePayload, RateLimitSnapshot, RateLimitWindow } from '../usageBroadcaster.js';
 import type { UsageHistoryPayload } from '../usage/usageHistory.js';
-import { familyLogo, MENUBAR_CINDY_LOGO, providerLogo } from './logos.js';
+import { ANTIGRAVITY_LOGO, familyLogo, MENUBAR_CINDY_LOGO, monogramLogo, providerLogo } from './logos.js';
 import {
   topModels,
   type MenubarBalanceInput,
@@ -77,17 +80,23 @@ export interface MenubarSessionRow {
 }
 
 export interface MenubarCollectDeps {
+  now?: () => number;
   nowMs: number;
   listProviders(): Promise<ProviderView[]>;
   /** Null means the provider still uses the original single-account reader. */
   readSubscriptionPool?(providerId: string): Promise<SubscriptionPoolView | null>;
   readKimi?(providerId: string): Promise<ProviderAccountUsageResult>;
   readOpenCodeGo?(providerId: string): Promise<ProviderAccountUsageResult>;
+  readZhipu?(providerId: string): Promise<ProviderAccountUsageResult>;
   readCodex(providerId: string): Promise<CodexAccountUsagePayload | RateLimitSnapshot | null>;
   readClaude(providerId: string): Promise<ClaudeSubscriptionUsageSnapshot | null>;
   readXai(providerId: string): Promise<XaiSubscriptionUsageSnapshot | null>;
   /** Codex resets left on a local account; absent in tests that do not cover them. */
   readCodexResets?(providerId: string): Promise<MenubarResetCredits | null>;
+  /** Installed plugin engines on this computer; absent in tests that do not cover them. */
+  listPluginEngines?(): Promise<readonly PluginEngineView[]> | readonly PluginEngineView[];
+  /** Reads one plugin engine's current account usage; null when unreadable or empty. */
+  readPluginEngineUsage?(key: string): Promise<GhostHarnessUsage | null>;
   /** Subscriptions on the user's other computers, already read and mapped. */
   readRemoteSubscriptions?(): Promise<MenubarSubscriptionInput[]>;
   /** Null when the account has no Cindy balance (organization accounts, signed out). */
@@ -117,8 +126,9 @@ export async function collectMenubarInputs(deps: MenubarCollectDeps): Promise<Me
     }
   };
 
-  const [providers, balance, localUsage, allUsage, remote] = await Promise.all([
+  const [providers, pluginEngines, balance, localUsage, allUsage, remote] = await Promise.all([
     safe('providers', () => deps.listProviders(), [] as ProviderView[]),
+    safe('plugin-engines', async () => (await deps.listPluginEngines?.()) ?? [], [] as readonly PluginEngineView[]),
     safe('balance', () => deps.readBalance(), null),
     safe('usage:local', () => deps.readUsage('local'), null),
     safe('usage:all', () => deps.readUsage('all'), null),
@@ -150,7 +160,7 @@ export async function collectMenubarInputs(deps: MenubarCollectDeps): Promise<Me
         return accounts;
       }
     }
-    const kind = providerWeeklyQuotaSource(provider);
+    const kind = providerUsageReaderSource(provider);
     // A Codex account waiting to be reconnected stays in the list without numbers instead
     // of falling into the hidden pay-as-you-go group.
     if (!kind && needsCodexReconnect(provider)) return codexSource(provider, null, deps.nowMs);
@@ -177,9 +187,22 @@ export async function collectMenubarInputs(deps: MenubarCollectDeps): Promise<Me
       const snapshot = await safe(`xai:${provider.id}`, () => deps.readXai(provider.id), null);
       return xaiSource(provider, snapshot, deps.nowMs);
     }
+    if (deps.readZhipu && provider.auth?.method === 'apiKey'
+      && Object.values(provider.routing ?? {}).some(isZhipuCodingPlanRoute)) {
+      const result = await safe(`zhipu:${provider.id}`, () => deps.readZhipu!(provider.id), null);
+      return zhipuSource(provider, result);
+    }
     return paygSource(provider);
   });
-  for (const source of (await Promise.all(subscriptionReads)).flat()) {
+  const pluginEngineReads = deps.readPluginEngineUsage
+    ? pluginEngines.map(async (engine): Promise<MenubarSubscriptionInput | null> => {
+        if (engine.suspended || engine.availability.state === 'unavailable' || engine.reportsUsage !== true) return null;
+        const usage = await safe(`plugin:${engine.key}`, () => deps.readPluginEngineUsage!(engine.key), null);
+        if (!usage) return null;
+        return pluginEngineSource(engine, usage, deps.nowMs);
+      })
+    : [];
+  for (const source of [...(await Promise.all(subscriptionReads)).flat(), ...(await Promise.all(pluginEngineReads))]) {
     if (source) sources.push(source);
   }
 
@@ -193,13 +216,24 @@ export async function collectMenubarInputs(deps: MenubarCollectDeps): Promise<Me
     },
   };
 
-  const tasks = await collectTasks(deps, localUsage, today, safe);
-  const consuming = consumingSourceIds(tasks, providers);
+  const antigravityProviders = new Set(pluginEngines.filter(isAntigravityEngine).map(engine => engine.providerId));
+  const tasks = (await collectTasks(deps, localUsage, today, safe)).map(task =>
+    task.harness === 'acp' && task.providerId && antigravityProviders.has(task.providerId)
+      ? { ...task, logoSvg: ANTIGRAVITY_LOGO }
+      : task);
+  const consuming = consumingSourceIds(tasks, providers, pluginEngines);
+  const collectedAt = deps.now?.() ?? deps.nowMs;
+  const currentRemote = remote.map(source => source.family === 'zhipu'
+    ? currentZhipuQuota(source, collectedAt) : source);
   for (const source of sources) {
+    // A GLM window may have reset while another provider or task was still loading.
+    if (source.kind === 'subscription' && source.family === 'zhipu') {
+      Object.assign(source, currentZhipuQuota(source, collectedAt));
+    }
     if (consuming.has(source.id) && !(source.kind === 'subscription' && source.pooled)) source.consuming = true;
   }
   const distinct = distinctLocalSubscriptions(sources);
-  sources.splice(0, sources.length, ...distinct, ...distinctRemoteSubscriptions(distinct, remote));
+  sources.splice(0, sources.length, ...distinct, ...distinctRemoteSubscriptions(distinct, currentRemote));
 
   let updatedAtMs: number | null = null;
   for (const source of sources) {
@@ -321,7 +355,7 @@ export function distinctRemoteSubscriptions(
   );
   const added: MenubarSubscriptionInput[] = [];
   const ordered = [...remote]
-    .filter((source) => source.windows.length > 0)
+    .filter((source) => source.windows.length > 0 || (source.balances?.length ?? 0) > 0)
     .sort((a, b) => (b.updatedAtMs ?? 0) - (a.updatedAtMs ?? 0));
   for (const source of ordered) {
     if (kept.some((other) => sameSubscriptionAccount(source, other))) continue;
@@ -554,11 +588,19 @@ export function paygSource(provider: ProviderView): MenubarPaygInput | null {
  * implicit default route; it is resolved the way the running route is (`actualSourceIdForModel`),
  * so that tube ripples too.
  */
-export function consumingSourceIds(tasks: readonly MenubarTaskInput[], providers: readonly ProviderView[]): Set<string> {
+export function consumingSourceIds(
+  tasks: readonly MenubarTaskInput[],
+  providers: readonly ProviderView[],
+  pluginEngines: readonly Pick<PluginEngineView, 'providerId'>[] = [],
+): Set<string> {
   const ids = new Set<string>();
   for (const task of tasks) {
     if (!task.running) continue;
     const explicit = task.providerId?.trim() || null;
+    if (isPluginEngineKind(task.routeAgentKind)) {
+      if (explicit && pluginEngines.some((engine) => engine.providerId === explicit)) ids.add(explicit);
+      continue;
+    }
     let resolved: string | null = null;
     if (task.routeModel) {
       try {
@@ -578,7 +620,10 @@ export function consumingSourceIds(tasks: readonly MenubarTaskInput[], providers
     const sourceId = resolved ?? explicit;
     if (!sourceId) continue;
     const provider = providers.find((candidate) => candidate.id === sourceId);
-    if (!provider) continue;
+    if (!provider) {
+      if (pluginEngines.some((engine) => engine.providerId === sourceId)) ids.add(sourceId);
+      continue;
+    }
     const managed = provider.auth.method === 'managed' || provider.access?.kind === 'managed' || provider.id === 'xd';
     ids.add(managed ? MENUBAR_BALANCE_SOURCE_ID : provider.id);
   }
@@ -612,6 +657,7 @@ export function dayKeysEndingAt(todayKey: string, count: number): string[] {
 }
 
 function harnessOf(kind: string | null | undefined): MenubarHarness {
+  if (kind === 'acp') return kind;
   return HARNESSES.includes(kind as MenubarHarness) ? (kind as MenubarHarness) : 'claude-code';
 }
 
@@ -656,6 +702,7 @@ export function usageScope(
 ): MenubarUsageScopeInput {
   const label = (model: string) => modelNames.get(usageModelKey(model)) ?? formatModelShort(model);
   const scope = emptyScope(days, devices);
+  scope.currency = payload?.totals?.today?.currency;
   if (!payload) return scope;
   const indexOfDay = new Map(days.map((day, index) => [day, index]));
   const windows: Array<keyof MenubarUsageScopeData['models']> = ['7', '30', '90'];
@@ -669,11 +716,17 @@ export function usageScope(
       continue;
     }
     const harness = harnessOf(row.agentKind);
-    const slot = HARNESSES.indexOf(harness);
     const money = finite(row.money?.amount);
-    daily.money[slot] += money;
-    daily.tokens[slot] += finite(row.tokens);
-    daily.paid += finite(row.apiMoney?.amount);
+    if (harness === 'acp') {
+      // Keep the three built-in slots and the existing auxiliary slot stable for older clients.
+      daily.tokens[3] ??= 0;
+      daily.tokens[4] = (daily.tokens[4] ?? 0) + finite(row.tokens);
+    } else {
+      const slot = HARNESSES.indexOf(harness);
+      daily.money[slot] += money;
+      daily.tokens[slot] += finite(row.tokens);
+      daily.paid += finite(row.apiMoney?.amount);
+    }
     const age = days.length - 1 - index;
     for (const window of windows) {
       if (age < Number(window)) {
@@ -697,18 +750,19 @@ function modelSeries(
   label: (model: string) => string,
 ): MenubarModelSeries {
   type Entry = { harness: MenubarHarness | 'auxiliary'; money: number[]; tokens: number[]; recent: number };
-  const byModel = new Map<string, Entry>();
+  const byModel = new Map<string, Entry & { name: string }>();
   for (const row of payload.modelDaily) {
     const index = indexOfDay.get(row.day);
     if (index === undefined) continue;
     const name = label(row.model);
-    const entry = byModel.get(name)
-      ?? { harness: row.agentKind === 'auxiliary' ? 'auxiliary' : harnessOf(row.agentKind), money: new Array<number>(dayCount).fill(0), tokens: new Array<number>(dayCount).fill(0), recent: 0 };
+    const key = row.agentKind === 'acp' ? `acp\u0000${name}` : name;
+    const entry = byModel.get(key)
+      ?? { name, harness: row.agentKind === 'auxiliary' ? 'auxiliary' : harnessOf(row.agentKind), money: new Array<number>(dayCount).fill(0), tokens: new Array<number>(dayCount).fill(0), recent: 0 };
     const tokens = finite(row.tokens);
     entry.money[index] += finite(row.money?.amount);
     entry.tokens[index] += tokens;
     if (dayCount - 1 - index < SERIES_DAYS) entry.recent += tokens;
-    byModel.set(name, entry);
+    byModel.set(key, entry);
   }
   const ranked = [...byModel.entries()].filter(([, entry]) => entry.recent > 0).sort((a, b) => b[1].recent - a[1].recent);
   const top = ranked.slice(0, SERIES_MODELS).map(([, entry]) => entry);
@@ -718,7 +772,7 @@ function modelSeries(
     rest.reduce((sum, entry) => sum + pick(entry)[day], 0),
   ]);
   return {
-    models: ranked.slice(0, SERIES_MODELS).map(([name, entry]) => ({ name, harness: entry.harness })),
+    models: top.map(({ name, harness }) => ({ name, harness })),
     daily: split((entry) => entry.money),
     tokens: split((entry) => entry.tokens),
   };
@@ -767,7 +821,7 @@ async function collectTasks(
   const meta = new Map((usage?.tasks ?? []).filter((task) => task.deviceId === 'local').map((task) => [task.sessionId, task]));
   const rates = new Map<string, { money: number; tokens: number; harness: MenubarHarness }>();
   for (const row of usage?.modelDaily ?? []) {
-    if (row.agentKind === 'auxiliary') continue;
+    if (row.agentKind === 'auxiliary' || row.agentKind === 'acp') continue;
     if (row.day !== today) continue;
     const rate = rates.get(row.model) ?? { money: 0, tokens: 0, harness: harnessOf(row.agentKind) };
     rate.money += finite(row.money?.amount);
@@ -801,14 +855,15 @@ async function collectTasks(
         if (!title && !model) return null;
         const tokens = tokensBySession.get(sessionId) ?? 0;
         const rate = rates.get(model);
+        const harness = harnessOf(row?.agentKind ?? rate?.harness);
         const running = activity ? isSessionActivityRunning(activity) : false;
         return {
           sessionId,
           title,
-          harness: harnessOf(row?.agentKind ?? rate?.harness),
+          harness,
           model: model ? formatModelShort(model) : '',
           tokensToday: tokens,
-          valueToday: rate && rate.tokens > 0 ? ((conversationTokensBySession.get(sessionId) ?? 0) * rate.money) / rate.tokens : 0,
+          valueToday: harness !== 'acp' && rate && rate.tokens > 0 ? ((conversationTokensBySession.get(sessionId) ?? 0) * rate.money) / rate.tokens : 0,
           contextPercent: info && info.contextWindow > 0 ? clampPercent((info.contextTokens / info.contextWindow) * 100) : null,
           running,
           startedAtMs: running ? (activity?.startedAtMs ?? null) : null,
@@ -849,5 +904,79 @@ export function opencodeGoSource(provider: ProviderView, result: ProviderAccount
       windowMinutes: opencodeGoUsageWindowMinutes(w.id) ?? 0,
     })) ?? [],
     credits: null, creditsUnlimited: false, prepaidUsd: null, updatedAtMs: snapshot?.fetchedAt ?? null,
+  };
+}
+
+function currentZhipuQuota(source: MenubarSubscriptionInput, now: number): MenubarSubscriptionInput {
+  const windows = source.windows.filter(window => window.resetsAtMs === null || window.resetsAtMs > now);
+  return { ...source, windows, updatedAtMs: windows.length ? source.updatedAtMs : null };
+}
+
+export function zhipuSource(provider: ProviderView, result: ProviderAccountUsageResult | null): MenubarSubscriptionInput {
+  const snapshot = result?.status === 'ready' && !result.stale
+    && result.snapshot.kind === 'zhipu-coding-plan-quota' && !result.snapshot.noPlan ? result.snapshot : null;
+  const windows: MenubarWindowInput[] = [];
+  if (snapshot?.fiveHour) {
+    windows.push({
+      kind: 'session', usedPercent: snapshot.fiveHour.usedPercent,
+      resetsAtMs: snapshot.fiveHour.resetsAt, windowMinutes: FIVE_HOUR_MINUTES,
+    });
+  }
+  if (snapshot?.weekly) {
+    windows.push({
+      kind: 'week', usedPercent: snapshot.weekly.usedPercent,
+      resetsAtMs: snapshot.weekly.resetsAt, windowMinutes: WEEK_MINUTES,
+    });
+  }
+  return {
+    kind: 'subscription', id: provider.id, providerId: provider.id, family: 'zhipu',
+    logoSvg: providerLogo(provider.id, provider.name, provider.routing), brand: provider.name || 'GLM Coding Plan',
+    account: null, plan: snapshot?.level?.toUpperCase() || null,
+    windows, credits: null, creditsUnlimited: false, prepaidUsd: null,
+    updatedAtMs: windows.length > 0 ? snapshot?.fetchedAt ?? null : null,
+  };
+}
+
+/**
+ * Maps a plugin engine's on-demand `GhostHarnessUsage` snapshot into a menu bar source.
+ * `scopeKey` isolates each machine's engine identity so distinct plugins or computers never
+ * collapse into one tube when their percentages or reset times happen to match.
+ */
+export function pluginEngineSource(
+  engine: Pick<PluginEngineView, 'key' | 'providerId' | 'name'> & Partial<Pick<PluginEngineView, 'ghostId'>>,
+  usage: GhostHarnessUsage | null,
+  nowMs: number,
+  scopeKey = 'local',
+): MenubarSubscriptionInput {
+  const windows: MenubarWindowInput[] = (usage?.windows ?? [])
+    .filter((row) => row.resetsAt === undefined || row.resetsAt > nowMs)
+    .map((row) => ({
+      kind: 'custom',
+      label: row.label,
+      usedPercent: clampPercent(100 - row.remainingPercent),
+      resetsAtMs: row.resetsAt ?? null,
+      windowMinutes: 0,
+    }));
+  const balances = (usage?.balances ?? []).flatMap((row) => {
+    const amount = Number(row.amount);
+    return Number.isFinite(amount) ? [{ currency: row.currency, amount }] : [];
+  });
+  return {
+    kind: 'subscription',
+    id: engine.providerId,
+    providerId: engine.providerId,
+    family: 'plugin',
+    logoSvg: isAntigravityEngine(engine)
+      ? ANTIGRAVITY_LOGO : monogramLogo(engine.name),
+    brand: engine.name,
+    account: null,
+    plan: null,
+    windows,
+    ...(balances.length > 0 ? { balances } : {}),
+    credits: null,
+    creditsUnlimited: false,
+    prepaidUsd: null,
+    updatedAtMs: windows.length > 0 || balances.length > 0 ? usage?.updatedAt ?? null : null,
+    accountKeys: [`plugin:engine:${scopeKey}:${engine.key}`],
   };
 }

@@ -1,3 +1,4 @@
+import type { FastMode } from '@cindy/maker-shared';
 import { eq } from 'drizzle-orm';
 import { sessions } from './schema.js';
 import { getDbClient } from './client/current.js';
@@ -37,12 +38,23 @@ export interface SessionRowSnapshot {
   agentKind?: string | null;
   /** 会话来源(`bot` = 伙伴会话);限额自动继续据此排除伙伴。 */
   source?: string | null;
+  sideChatPromoted?: boolean;
   /** 会话当前模型;限额判定据此只看该模型的额度窗口。 */
   model?: string | null;
+  /** Stored reasoning effort preserved across cold resumes (`sendToSessionInternal`, etc.). */
+  effort?: string | null;
+  /** Stored speed setting preserved across cold resumes for built-in engines. */
+  fastMode?: FastMode | null;
   /** Native id used by the execution host to resolve the task's subscription account. */
   sdkSessionId?: string | null;
   /** Authoritative `/clear` visibility boundary (unix ms). */
   clearedAt?: number | null;
+  /** 上一轮结束时间(unix ms)，供智能路由持续托管判断供应商提示缓存是否已过期。 */
+  lastTurnEndedAt?: number | null;
+  /** 当前轮次开始时间(unix ms)。 */
+  activeTurnStartedAt?: number | null;
+  /** 已知最近上下文 token 数，供智能路由任务中间换源避开小窗口缩容。 */
+  contextTokens?: number | null;
 }
 
 async function selectSessionRowSnapshot(id: string): Promise<SessionRowSnapshot | null> {
@@ -67,8 +79,14 @@ async function selectSessionRowSnapshot(id: string): Promise<SessionRowSnapshot 
       orcaRemoteLead: sessions.orcaRemoteLead,
       agentKind: sessions.agentKind,
       source: sessions.source,
+      sideChatPromoted: sessions.sideChatPromoted,
       model: sessions.model,
+      effort: sessions.effort,
+      fastMode: sessions.fastMode,
       sdkSessionId: sessions.sdkSessionId,
+      lastTurnEndedAt: sessions.lastTurnEndedAt,
+      activeTurnStartedAt: sessions.activeTurnStartedAt,
+      contextTokens: sessions.contextTokens,
     })
     .from(sessions)
     .where(eq(sessions.id, id))

@@ -2088,6 +2088,16 @@ describe('networkSlot · GitHub CLI 优先凭证(source:gh-cli)', () => {
     });
   }
 
+  it('uses App authorization for approved GitHub requests without returning its token to the plugin', async () => {
+    const readApp = vi.fn(async () => 'synthetic-app-access');
+    const { slot, fetchImpl } = makeGithubSlot({ readGhCliToken: async () => null, readSecret: () => null, readGithubAppToken: readApp });
+    const result = await slot.handleFetchRequest('web-search', { url: GITHUB_URL });
+    expect(result.ok).toBe(true);
+    expect(fetchImpl.mock.calls[0][1].headers).toMatchObject({ Authorization: 'Bearer synthetic-app-access' });
+    expect(JSON.stringify(result)).not.toContain('synthetic-app-access');
+    expect(readApp).toHaveBeenCalledOnce();
+  });
+
   it('本机 gh token 优先于保险库 PAT，且令牌不回流沙箱', async () => {
     const readSecret = vi.fn(() => 'github_pat_fallback');
     const { slot, fetchImpl } = makeGithubSlot({
@@ -2847,6 +2857,71 @@ describe('networkSlot · 多连接(connections,动态白名单 + 按 host 注入
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.message).toContain('白名单');
     expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it('glab-cli 连接声明:阻断未批准实例;异步注入 Bearer 令牌并在重定向跳剥除 Authorization', async () => {
+    const glabNet: GhostNetworkNeeds = {
+      hosts: ['cdn.example.com'],
+      connections: [
+        { key: 'gitlab_conn', label: 'GitLab 实例', source: 'glab-cli', inject: { header: 'PRIVATE-TOKEN', format: '{value}' } },
+      ],
+    };
+    const asyncConns: NonNullable<NetworkSlotDeps['connections']> = {
+      hostsFor: async () => ['git.example.com'],
+      tokenFor: async (_id, host) =>
+        host === 'git.example.com'
+          ? { value: 'glab-oauth-tok', header: 'Authorization', format: 'Bearer {value}', hostManaged: true }
+          : null,
+    };
+    const unapproved = makeSlot({
+      getGhost: () => ({ ...fakeGhost({ network: glabNet }), approval: { state: 'invalid' as const } }),
+      connections: asyncConns,
+    });
+    const blocked = await unapproved.slot.handleFetchRequest('web-search', { url: 'https://git.example.com/api/v4/user' });
+    expect(blocked).toMatchObject({ ok: false, message: expect.stringContaining('glab-cli') });
+
+    const fetchImpl: ReturnType<typeof vi.fn> = vi.fn()
+      .mockImplementationOnce(async () => fakeResponse({ status: 302, headers: { location: 'https://cdn.example.com/asset' } }))
+      .mockImplementationOnce(async () => fakeResponse());
+    const { slot } = makeSlot({
+      getGhost: () => fakeGhost({ network: glabNet }),
+      fetchImpl: fetchImpl as unknown as NetworkSlotDeps['fetchImpl'],
+      connections: asyncConns,
+    });
+    const ok = await slot.handleFetchRequest('web-search', {
+      url: 'https://git.example.com/api/v4/projects',
+      headers: { Authorization: 'Bearer forged', 'PRIVATE-TOKEN': 'forged' },
+    });
+    expect(ok.ok).toBe(true);
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    const hop1 = fetchImpl.mock.calls[0][1].headers as Record<string, string>;
+    const hop2 = fetchImpl.mock.calls[1][1].headers as Record<string, string>;
+    expect(hop1['Authorization']).toBe('Bearer glab-oauth-tok');
+    expect(hop1['PRIVATE-TOKEN']).toBeUndefined();
+    expect(hop2['Authorization']).toBeUndefined();
+    expect(hop2['PRIVATE-TOKEN']).toBeUndefined();
+
+    // 若 hostsFor 异步探测 glab 期间插件实例更新或账号切换，必须在读取新凭证与发网前中止。
+    let releaseHosts!: (hosts: string[]) => void;
+    const pendingHosts = new Promise<string[]>((resolve) => { releaseHosts = resolve; });
+    const tokenFor = vi.fn(async () => ({
+      value: 'new-owner-token', header: 'Authorization', format: 'Bearer {value}', hostManaged: true,
+    }));
+    let revision = 'rev-1';
+    const raceSlot = makeSlot({
+      getGhost: () => fakeGhost({ network: glabNet }),
+      captureRequestGuard: () => {
+        const expected = revision;
+        return () => { if (revision !== expected) throw new Error('PLUGIN_REPLACED'); };
+      },
+      connections: { hostsFor: () => pendingHosts, tokenFor },
+    });
+    const inFlight = raceSlot.slot.handleFetchRequest('web-search', { url: 'https://git.example.com/api/v4/projects' });
+    revision = 'rev-2';
+    releaseHosts(['git.example.com']);
+    expect(await inFlight).toEqual({ ok: false, message: '请求失败:PLUGIN_REPLACED' });
+    expect(tokenFor).not.toHaveBeenCalled();
+    expect(raceSlot.fetchImpl).not.toHaveBeenCalled();
   });
 
   it('跨连接地址重定向:逐跳重验放行域,并换注目标地址自己的 token', async () => {

@@ -29,6 +29,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { managedSkillDigest } from '../managedSkillDigest';
 import { createRemoteAgentHost, hostSessionIdFor, type HostedStartInput } from '../host/runHost';
 import { TunnelLinkActivity } from '../host/linkActivity';
+import { installExecutionReporting } from '../../usage/companyTokenFacts';
 import * as runTunnel from '../host/tunnel';
 
 const RUN_1 = '11111111-1111-4111-8111-111111111111';
@@ -52,10 +53,12 @@ function makeHost(
   started: Started[],
   options: {
     nativeId?: string;
+    withPollAuthorizationSnapshot?: Parameters<typeof createRemoteAgentHost>[0]['withPollAuthorizationSnapshot'];
+    authorized?: () => boolean;
     directGuestExecution?: Parameters<typeof createRemoteAgentHost>[0]['directGuestExecution'];
     forkHosted?: Parameters<typeof createRemoteAgentHost>[0]['forkHosted'];
     purge?: (ids: readonly string[], nativeIds: readonly string[]) => Promise<void>;
-    events?: AgentEvent[];
+    events?: AgentEvent[] | (() => AsyncIterable<AgentEvent>);
     recordGuestUsage?: Parameters<typeof createRemoteAgentHost>[0]['recordGuestUsage'];
     recordOwnerUsage?: Parameters<typeof createRemoteAgentHost>[0]['recordOwnerUsage'];
     /** 任务开始时的账号是否仍是当前账号(缺省一直是)。 */
@@ -102,6 +105,7 @@ function makeHost(
         },
         // 先吐出预置事件，之后一直挂起：任务保持运行，直到测试结束它。
         events: () => {
+          if (typeof options.events === 'function') return options.events();
           const queued = [...(options.events ?? [])];
           return {
             [Symbol.asyncIterator]: (): AsyncIterator<AgentEvent> => ({
@@ -117,7 +121,8 @@ function makeHost(
       };
       return handle;
     },
-    isControllerAuthorized: () => true,
+    isControllerAuthorized: options.authorized ?? (() => true),
+    withPollAuthorizationSnapshot: options.withPollAuthorizationSnapshot,
     controllerTrust: (controller) => (controller === GUEST ? 'guest' : 'owner'),
     ...(options.providerAccess === false ? {} : {
       providerAccess: {
@@ -223,10 +228,13 @@ describe('shared image authorization and relay', () => {
       if (request.action === 'start') return { accepted: true };
       return { state: 'complete', data: png.toString('base64'), mimeType: image.mimeType, size: png.length };
     });
-    const plan = vi.fn(async () => ({
+    const member = {
       kind: 'member' as const, sameAccount: true, memberKey: 'member-key', agentDeviceId: 'remote',
       providerId: 'openai-independent', imageModelId: 'openai-independent/gpt-image-2',
-    }));
+    };
+    const plan = vi.fn(async () => member).mockResolvedValueOnce({
+      ...member, memberKey: 'older-builtin', providerId: 'openai', imageModelId: 'openai/gpt-image-2',
+    });
     const groupRelay: NonNullable<Parameters<typeof createRemoteAgentHost>[0]['groupRelay']> = {
       plan, connect: () => ({ invoke, poller: {} as never }), noteStartFailure: () => false,
       noteRunFailure: () => false, trackRun: () => ({ setRunning() {}, release() {} }), async forget() {},
@@ -237,6 +245,7 @@ describe('shared image authorization and relay', () => {
       await expect(host.handle(GUEST, start)).resolves.toEqual({ accepted: true });
       await vi.waitFor(async () => expect(await host.handle(GUEST, read)).toMatchObject({ state: 'complete' }));
       expect(plan).toHaveBeenCalledWith(expect.objectContaining({ capability: 'image.generate', reserve: true }));
+      expect(invoke).not.toHaveBeenCalledWith([expect.objectContaining({ action: 'start', providerId: 'openai' })]);
       expect(invoke).toHaveBeenCalledWith([expect.objectContaining({
         action: 'start', providerId: 'openai-independent', model: 'openai-independent/gpt-image-2',
       })]);
@@ -250,6 +259,41 @@ describe('shared image authorization and relay', () => {
 });
 
 describe('guest shadow workspace', () => {
+  // Unit: real Host.handle poll. Two sibling tasks used to multiply common file checks fourfold.
+  // Prior tests covered lease loss, not synchronous phase reuse; no network/real waits.
+  it('scopes common checks to each synchronous poll phase while checking each task after wait', async () => {
+    const common = vi.fn(() => true);
+    let cached: boolean | undefined;
+    let inPhase = false;
+    const leases = new Set(['first', 'second']);
+    const sessionAllowed = vi.fn((_controller: string, session: string) => leases.has(session));
+    const host = makeHost([], {
+      authorized: () => inPhase ? (cached ??= common()) : common(),
+      withPollAuthorizationSnapshot: read => { inPhase = true; cached = undefined; try { return read(); } finally { inPhase = false; cached = undefined; } },
+      directGuestExecution: {
+        ownerScope: () => 'fake-owner', sessionAllowed, sessionDelegated: () => true,
+        allocate: async () => null, status: () => {}, release: async () => {}, switch: async () => ({}),
+        usage: async () => {}, delegate: async () => true, forget: () => true,
+      },
+    });
+    try {
+      await host.handle(GUEST, { op: 'open', runId: RUN_1, agentKind: 'claude-code', payload: { json: openPayload('first') } });
+      await host.handle(GUEST, { op: 'open', runId: RUN_2, agentKind: 'claude-code', payload: { json: openPayload('second') } });
+      await waitForStarted(host, GUEST, RUN_1); await waitForStarted(host, GUEST, RUN_2);
+      const drain = await host.handle(GUEST, { op: 'poll', runs: [{ runId: RUN_1, cursor: 0 }, { runId: RUN_2, cursor: 0 }], waitMs: 0 }) as { runs: Array<{ runId: string; cursor: number }> };
+      common.mockClear(); sessionAllowed.mockClear();
+      vi.useFakeTimers();
+      const pending = host.handle(GUEST, { op: 'poll', runs: drain.runs.map(({ runId, cursor }) => ({ runId, cursor })), waitMs: 50 });
+      leases.delete('first');
+      await vi.advanceTimersByTimeAsync(50);
+      const result = await pending as { runs: Array<{ runId: string; data?: string }> };
+      expect(common.mock.calls.length).toBeLessThanOrEqual(3); // request gate + two phases, independent of run count
+      expect(Buffer.from(result.runs.find(r => r.runId === RUN_1)?.data ?? '', 'base64').toString()).toContain('access-revoked');
+      expect(result.runs.find(r => r.runId === RUN_2)?.data).toBeUndefined();
+      expect(sessionAllowed.mock.calls.some(([, id]) => id === 'second')).toBe(true);
+    } finally { vi.useRealTimers(); await host.dispose(); }
+  });
+
   it('admits each standby turn and releases its receipt after completion or revoked close', async () => {
     const started: Started[] = [];
     let authorized = true;
@@ -880,25 +924,28 @@ describe('guest provider access and usage', () => {
     const bind = vi.fn(async () => ({ routeToken: 'route-token', modelIds: ['claude-opus'], release }));
     const started: Started[] = [];
     const host = makeHost(started, { bindGuestProviderRoute: bind });
-    await host.handle(GUEST, { op: 'open', runId: RUN_1, agentKind: kind, payload: { json: openPayload('task-1') } });
-    await host.handle(OWNER, { op: 'open', runId: RUN_2, agentKind: kind, payload: { json: openPayload('task-2') } });
-    // Open acknowledges before filesystem preparation/startHosted finishes.
-    // Keep Linux's default; Windows already allows this suite 60s for async disk I/O.
-    await vi.waitFor(() => expect(started).toHaveLength(2), {
-      timeout: process.platform === 'win32' ? 10_000 : 1_000,
-    });
-    const guestRun = started.find((entry) => entry.input.guest)!;
-    const ownerRun = started.find((entry) => !entry.input.guest)!;
-    expect(bind).toHaveBeenCalledTimes(1);
-    expect(bind).toHaveBeenCalledWith(expect.objectContaining({ kind, hostSessionId: hostSessionIdFor(GUEST, 'task-1'), providerId: 'shared-provider' }));
-    expect(guestRun.input.guestProvider).toEqual({ providerId: 'shared-provider', modelIds: ['claude-opus'], routeToken: 'route-token' });
-    // 同账号任务不登记、不带供应商边界。
-    expect(ownerRun.input.guestProvider).toBeUndefined();
-    expect(release).not.toHaveBeenCalled();
-    await host.handle(GUEST, { op: 'close', runId: RUN_1, mode: 'close', reason: 'navigation' });
-    expect(release).toHaveBeenCalledTimes(1);
-    host.dispose();
-    await vi.waitFor(() => expect(fs.existsSync(sessionRoot(GUEST, 'task-1'))).toBe(false));
+    try {
+      await host.handle(GUEST, { op: 'open', runId: RUN_1, agentKind: kind, payload: { json: openPayload('task-1') } });
+      await host.handle(OWNER, { op: 'open', runId: RUN_2, agentKind: kind, payload: { json: openPayload('task-2') } });
+      // Open acknowledges before filesystem preparation/startHosted finishes.
+      // Keep Linux's default; Windows already allows this suite 60s for async disk I/O.
+      await vi.waitFor(() => expect(started).toHaveLength(2), {
+        timeout: process.platform === 'win32' ? 10_000 : 1_000,
+      });
+      const guestRun = started.find((entry) => entry.input.guest)!;
+      const ownerRun = started.find((entry) => !entry.input.guest)!;
+      expect(bind).toHaveBeenCalledTimes(1);
+      expect(bind).toHaveBeenCalledWith(expect.objectContaining({ kind, hostSessionId: hostSessionIdFor(GUEST, 'task-1'), providerId: 'shared-provider' }));
+      expect(guestRun.input.guestProvider).toEqual({ providerId: 'shared-provider', modelIds: ['claude-opus'], routeToken: 'route-token' });
+      // 同账号任务不登记、不带供应商边界。
+      expect(ownerRun.input.guestProvider).toBeUndefined();
+      expect(release).not.toHaveBeenCalled();
+      await host.handle(GUEST, { op: 'close', runId: RUN_1, mode: 'close', reason: 'navigation' });
+      expect(release).toHaveBeenCalledTimes(1);
+    } finally {
+      await host.dispose();
+    }
+    expect(fs.existsSync(sessionRoot(GUEST, 'task-1'))).toBe(false);
   });
 
   it('tells a slow route bind that the guest reopened the task, so the stale run never registers', async () => {
@@ -928,6 +975,89 @@ describe('guest provider access and usage', () => {
     expect(started[0]!.input.guestProvider?.routeToken).toBe('route-2');
     expect(releases).toEqual([]);
     host.dispose();
+  });
+
+  it('records only the authorized executor turn and projects away session, provider and cost', async () => {
+    const record = vi.fn();
+    const redeem = vi.fn(async () => ({ receipt: RUN_2, record }));
+    installExecutionReporting({ available: () => true, direct: () => true, issue: async () => null,
+      challenge: nonce => ({ nonce, recipient: 'a'.repeat(64) }), redeem });
+    const events = [
+      { type: 'status', source: 'claude-code', data: { isRunning: true, providerInitiatedTurn: true } },
+      { type: 'done', data: { modelUsageCumulativeStartsAtZero: true,
+        modelUsage: { 'claude-opus': { inputTokens: 12, outputTokens: 3, costUSD: 0.02 } } } },
+    ] as AgentEvent[];
+    const host = makeHost([], { events, recordGuestUsage: vi.fn() });
+    try {
+      await host.handle(GUEST, { op: 'company-reporting-challenge', runId: RUN_1 });
+      await host.handle(OWNER, { op: 'company-reporting-grant', runId: RUN_1, grant: 'test' });
+      expect(redeem).not.toHaveBeenCalled();
+      await host.handle(GUEST, { op: 'company-reporting-grant', runId: RUN_1, grant: 'test' });
+      for (const runId of [RUN_1, RUN_2]) {
+        await host.handle(GUEST, { op: 'open', runId, agentKind: 'claude-code', payload: { json: openPayload(runId) } });
+        await vi.waitFor(async () => {
+          const poll = await host.handle(GUEST, {op:'poll', runs:[{runId,cursor:0}], waitMs:0}) as {runs:{data?:string}[]};
+          expect(Buffer.from(poll.runs[0]?.data ?? '', 'base64').toString()).toContain('"type":"done"');
+        }, {timeout:10000});
+      }
+      expect(record.mock.calls).toEqual([[[{ model: 'claude-opus', input: 12, output: 3, cacheRead: 0, cacheWrite: 0 }]]]);
+    } finally {
+      host.dispose();
+      installExecutionReporting(undefined);
+    }
+  });
+
+  // #6777, unit: poll the real run log. A retry of the cursor and a second done for
+  // the same send must not recompute the guest estimate or publish it on an owner run.
+  it.each([[GUEST, false], [GUEST, true], [OWNER, false]] as const)(
+    'publishes one optional Codex estimate on the guest terminal (%s, stopped=%s)', async (controller, stopped) => {
+    const usage = { promptTokens: 10 };
+    const finalData = { usage, raw: { id: 'final-turn' } };
+    const preceding = { usage, raw: { id: 'pre-interaction' } };
+    const done: AgentEvent = { type: 'done', source: 'codex', data: { ...finalData, sharedTurnValue: { amount: 999, currency: 'USD' } } };
+    const estimateTurn = vi.fn(() => ({ amount: 0.12, currency: 'CNY' as const }));
+    let releaseDone!: () => void;
+    const doneGate = new Promise<void>(resolve => { releaseDone = resolve; });
+    const tunnel = vi.spyOn(runTunnel, 'createRunTunnel').mockResolvedValue({
+      url: 'http://127.0.0.1:1', token: 'invalid-fixture', sendWs() {}, closeWs() {},
+      linkActivity: () => new TunnelLinkActivity().snapshot(), async close() {},
+    });
+    const host = makeHost([], {
+      events: async function* () {
+        yield { type: 'text', source: 'codex', data: { text: 'ok' } };
+        const boundary = { ...done, turnContinuationId: 1, data: preceding };
+        yield boundary;
+        yield boundary;
+        await doneGate;
+        yield done;
+        yield done;
+        // The fixture models a persistent engine after the turn finishes.
+        await new Promise<void>(() => {});
+      },
+      bindGuestProviderRoute: async () => ({ routeToken: 'bound', modelIds: ['gpt'], release() {}, estimateTurn }),
+    });
+    try {
+      await host.handle(controller, { op: 'open', runId: RUN_1, agentKind: 'codex',
+        payload: { json: openPayload('value-test', { options: { model: 'gpt' } }) } });
+      await waitForStarted(host, controller, RUN_1);
+      if (stopped) {
+        await host.handle(controller, { op: 'call', runId: RUN_1, callId: CALL_1, method: 'abort', payload: { json: [] } });
+        await vi.waitFor(async () => {
+          const poll = await host.handle(controller, { op: 'poll', runs: [{ runId: RUN_1, cursor: 0 }], waitMs: 0 }) as { runs: { data?: string }[] };
+          expect(Buffer.from(poll.runs[0]?.data ?? '', 'base64').toString()).toContain(`"callId":"${CALL_1}","ok":true`);
+        });
+      }
+      releaseDone();
+      const read = async () => {
+        const poll = await host.handle(controller, { op: 'poll', runs: [{ runId: RUN_1, cursor: 0 }], waitMs: 0 }) as {runs: {data?: string}[]};
+        return Buffer.from(poll.runs[0]?.data ?? '', 'base64').toString('utf8').trim().split('\n').filter(Boolean)
+          .map(line => JSON.parse(line)).filter(item => item.t === 'event' && item.event.type === 'done').map(item => item.event.data);
+      };
+      await vi.waitFor(async () => expect(await read()).toHaveLength(4), { timeout: 10_000 });
+      const extra = controller === GUEST ? { sharedTurnValue: { amount: 0.12, currency: 'CNY' } } : {};
+      expect(await read()).toEqual([{ ...preceding, ...extra }, preceding, { ...finalData, ...extra }, finalData]);
+      expect(estimateTurn).toHaveBeenCalledTimes(controller === GUEST ? 2 : 0);
+    } finally { releaseDone(); host.dispose(); tunnel.mockRestore(); }
   });
 
   it('meters guest turns into the guest ledger and same-account turns into the owner ledger', async () => {
@@ -975,8 +1105,12 @@ describe('guest provider access and usage', () => {
     } as unknown as AgentEvent;
     const recordOwnerUsage = vi.fn();
     const started: Started[] = [];
-    const host = makeHost(started, { events: [done], recordOwnerUsage, ownerCurrent: () => false });
+    // Start under a valid owner, then switch before the asynchronous startup
+    // emits its late turn. Opening an already stale owner is now rejected.
+    let ownerCurrent = true;
+    const host = makeHost(started, { events: [done], recordOwnerUsage, ownerCurrent: () => ownerCurrent });
     await host.handle(OWNER, { op: 'open', runId: RUN_2, agentKind: 'claude-code', payload: { json: openPayload('task-2') } });
+    ownerCurrent = false;
     await vi.waitFor(async () => {
       const poll = await host.handle(OWNER, { op: 'poll', runs: [{ runId: RUN_2, cursor: 0 }], waitMs: 0 }) as { runs: Array<{ data?: string }> };
       expect(Buffer.from(poll.runs[0]?.data ?? '', 'base64').toString('utf8')).toContain('"t":"event","event":{"type":"done"');

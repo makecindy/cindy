@@ -8,6 +8,7 @@ import {
 import { HomeHeaderGlassButton } from "./HomeHeaderGlassButton";
 
 export interface HomeDisplayMenuProps {
+  testID?: string;
   actions: readonly NativePullDownAction[];
   children: ReactNode;
   accessibilityLabel: string;
@@ -20,7 +21,7 @@ export function HomeDisplayMenu(props: HomeDisplayMenuProps) {
     <HomeHeaderGlassButton
       accessibilityLabel={props.accessibilityLabel}
       onPress={() => undefined}
-      testID="home.displaySettingsButton"
+      testID={props.testID ?? "home.displaySettingsButton"}
     >
       {props.children}
     </HomeHeaderGlassButton>

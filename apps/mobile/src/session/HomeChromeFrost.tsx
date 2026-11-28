@@ -7,6 +7,7 @@ import type { ReactNode } from 'react';
 import { StyleSheet, View } from 'react-native';
 import { BlurBackdrop } from '@/session/BlurBackdrop';
 import { useTheme } from '@/theme';
+import { useWallpaper } from '@/theme/wallpaper';
 
 export function HomeChromeFrost({
   children,
@@ -18,6 +19,7 @@ export function HomeChromeFrost({
   visible: boolean;
 }) {
   const { colors } = useTheme();
+  const { selected } = useWallpaper();
 
   if (disabled) return children;
 
@@ -26,9 +28,9 @@ export function HomeChromeFrost({
       <View pointerEvents="none" style={StyleSheet.absoluteFill}>
         {visible ? (
           <BlurBackdrop intensity={50} overlayColor={colors.surfaceTranslucent} />
-        ) : (
+        ) : selected === 'none' ? (
           <View style={[StyleSheet.absoluteFill, { backgroundColor: colors.surface }]} />
-        )}
+        ) : null}
       </View>
       <View style={styles.body}>{children}</View>
     </View>

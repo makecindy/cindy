@@ -154,7 +154,7 @@ export function PurchasedGiftCardActions({
             {busy === 'code' ? <Spinner size={13} /> : <MoreHorizontal size={15} aria-hidden />}
           </Button>
         </DropdownMenuTrigger>
-        <DropdownMenuContent align="end" sideOffset={6} className="z-[10002] min-w-[168px] p-1">
+        <DropdownMenuContent align="end" sideOffset={6} className="min-w-[168px] p-1">
           {onSendEmail && (
             <DropdownMenuItem onSelect={() => onSendEmail(card)}>
               <Mail size={14} aria-hidden className="text-[var(--text-secondary)]" />
@@ -212,6 +212,7 @@ export function PurchasedGiftCardsCard({
               <div className={cn('w-[76px] shrink-0', card.status === 'REFUNDED' && 'opacity-50')}>
                 <GiftCardFace
                   faceCode={card.faceCode}
+                  face={card.face}
                   amount={card.amount}
                   currency={card.currency}
                   label={t('billing.giftCard.cardLabel', { amount })}

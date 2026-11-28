@@ -210,12 +210,12 @@ describe('detect — mcp', () => {
 });
 
 describe('detect — hooks', () => {
-  it('to-codex: claude has hooks dir + settings.json hooks → 1 hooks item', async () => {
+  it('to-codex: an empty event and an unreferenced script do not prompt', async () => {
     await fs.mkdir(path.join(tmpDir, '.claude', 'hooks'), { recursive: true });
     await fs.writeFile(path.join(tmpDir, '.claude', 'hooks', 'p.sh'), 'x');
     await fs.writeFile(path.join(tmpDir, '.claude', 'settings.json'), JSON.stringify({ hooks: { PreToolUse: [] } }));
     const r = await detect({ workingDir: tmpDir, agentKind: 'codex' });
-    expect(r.items.find((i) => i.kind === 'hooks')).toBeDefined();
+    expect(r.items.find((i) => i.kind === 'hooks')).toBeUndefined();
   });
 
   it('双端齐全 → 0 hooks item', async () => {
@@ -253,10 +253,11 @@ describe('detect — hooks', () => {
   });
 
   it('to-codex: target has legacy flat hooks.json → item so the wrapper upgrade can run', async () => {
+    const stop = [{ hooks: [{ type: 'command', command: 'true' }] }];
     await fs.mkdir(path.join(tmpDir, '.claude'), { recursive: true });
-    await fs.writeFile(path.join(tmpDir, '.claude', 'settings.json'), JSON.stringify({ hooks: { Stop: [] } }));
+    await fs.writeFile(path.join(tmpDir, '.claude', 'settings.json'), JSON.stringify({ hooks: { Stop: stop } }));
     await fs.mkdir(path.join(tmpDir, '.codex'), { recursive: true });
-    await fs.writeFile(path.join(tmpDir, '.codex', 'hooks.json'), JSON.stringify({ Stop: [] }));
+    await fs.writeFile(path.join(tmpDir, '.codex', 'hooks.json'), JSON.stringify({ Stop: stop }));
     const r = await detect({ workingDir: tmpDir, agentKind: 'codex' });
     expect(r.items.find((i) => i.kind === 'hooks')).toBeDefined();
   });

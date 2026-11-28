@@ -1,3 +1,4 @@
+import { sessionSwipeReturnsToSource } from '@/session/sessionDrawerNavigation';
 import { forwardNavigationLock } from '@/utils/navigationLock';
 import { SessionDrawerNavigationContext } from '@/session/SessionDrawerNavigationContext';
 // @vitest-environment jsdom
@@ -50,6 +51,7 @@ vi.mock('../session/remoteSessionStore', () => ({
       return () => { state.listeners.delete(listener); };
     },
   },
+  useRemoteSessionLinkTarget: () => null,
   useRemoteSessionDetail: () => ({ source: state.source }),
 }));
 vi.mock('../session/CindyMakeSessionGate', () => ({
@@ -242,7 +244,7 @@ describe('side chat task lifecycle', () => {
     } as unknown as RemoteSessionListItem;
     act(() => state.sidebar!.onSelectSession!(target));
     if (search) expect(state.replaceParams).toHaveBeenCalledExactlyOnceWith({
-      deviceId: 'host', deviceName: 'another computer', sessionId: 'child',
+      deviceId: 'host', deviceName: 'another computer', sessionId: 'child', sessionEntry: 'taskList',
     });
     else expect(state.replaceParams).not.toHaveBeenCalled();
   });
@@ -273,7 +275,7 @@ describe('side chat task lifecycle', () => {
       resourceCollectionId: 'teammates', resourceKind: 'bot', resourceId: 'bot', companionSettings: 'capabilities' };
     act(() => expect(dispatch!({ pathname: '/sessions/[sessionId]', params })).toBe(true));
     expect(order).toEqual(['discard', 'navigate']);
-    expect(state.replaceParams).toHaveBeenCalledExactlyOnceWith(params);
+    expect(state.replaceParams).toHaveBeenCalledExactlyOnceWith({ ...params, resourceHistorySessionId: undefined, sessionEntry: 'taskList' });
     state.route = params;
     act(() => root.render(<SessionTaskLayout>{() => <Probe />}</SessionTaskLayout>));
     expect(host.querySelector('[aria-label="Sidebar search"]')).toBe(sidebar);
@@ -300,8 +302,12 @@ describe('side chat task lifecycle', () => {
     act(() => state.sidebar!.onSelectSession!(target));
     expect(order).toEqual(['discard', 'navigate']);
     expect(state.replaceParams).toHaveBeenCalledExactlyOnceWith({
-      deviceId: 'canonical-host', deviceName: 'Mac', sessionId: 'next', focusClientId: 'message-42',
+      deviceId: 'canonical-host', deviceName: 'Mac', sessionId: 'next', focusClientId: 'message-42', sessionEntry: 'taskList',
     });
+    expect(sessionSwipeReturnsToSource({ routes: [
+      { key: 'source', name: 'sessions/[sessionId]' },
+      { key: 'selected', name: 'sessions/[sessionId]', params: state.replaceParams.mock.calls[0][0] },
+    ] }, 'selected')).toBe(false);
   });
 
   it.each([

@@ -439,7 +439,7 @@ async function prepareOnDemand(absPath: string, deps: HtmlPreviewDeps,
       } catch (error) {
         const aborted = closed || controller.signal.aborted;
         const message = error instanceof Error ? error.message : '';
-        const status = /NOT_FOUND|ENOENT/.test(message) ? 404 : 502;
+        const status = /NOT_FOUND|ENOENT|\[MEDIA_SOURCE_MISSING\]/.test(message) ? 404 : 502;
         mobileDebugLog(aborted ? 'debug' : 'warn', 'files', 'html resource failed', {
           request, ext, route, bytes,
           status: aborted ? 'aborted' : status,

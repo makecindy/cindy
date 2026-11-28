@@ -43,6 +43,7 @@ const runtime = vi.hoisted(() => ({
   insets: { top: 40, bottom: 20, left: 0, right: 0 },
   gesture: null as GestureNode | null,
   alerts: [] as Array<[string, string, Array<{ text: string; style?: string; onPress?: () => void }>]>,
+  savePreviewImage: vi.fn(),
   scrollToOffset: vi.fn(),
   renderPageIndex: 0,
 }));
@@ -59,6 +60,7 @@ vi.mock('@/platform/chrome', () => ({
   NativePullDownMenu: ({ children }: any) => children,
   usesNativePullDownMenu: () => false,
 }));
+vi.mock('@/session/savePreviewImage', () => ({ savePreviewImage: runtime.savePreviewImage }));
 vi.mock("@/session/SheetModal", () => ({
   SheetModal: ({ visible, children }: any) => (visible ? children : null),
 }));
@@ -77,6 +79,7 @@ vi.mock("react-native-safe-area-context", () => ({
   useSafeAreaInsets: () => runtime.insets,
 }));
 vi.mock("lucide-react-native", () => ({
+  Download: () => null,
   MessageSquarePlus: () => null,
   Pen: () => null,
   Share: () => null,
@@ -1730,6 +1733,15 @@ describe("image viewer actions", () => {
     );
     expect(props.onClose).not.toHaveBeenCalled();
     expect(runtime.nodes.get("Image").source.uri).toBe(props.initialUrl);
+  });
+
+  // Android regression: one decoded image must be exportable even without a host share action.
+  it("saves the original directly from the toolbar without a share handler", async () => {
+    const { props } = mount();
+    expect(runtime.nodes.get("message.imageLightboxSave").disabled).toBe(true);
+    act(() => runtime.nodes.get("Image").onLoad({ source: { width: 400, height: 800 } }));
+    await act(async () => { await runtime.nodes.get("message.imageLightboxSave").onPress(); });
+    expect(runtime.savePreviewImage).toHaveBeenCalledWith(props.initialUrl, undefined, "Image");
   });
 
   it("deduplicates sharing and restores its button after rejection", async () => {

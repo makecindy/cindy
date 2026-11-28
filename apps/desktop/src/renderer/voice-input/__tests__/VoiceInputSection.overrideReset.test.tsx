@@ -200,4 +200,22 @@ describe('VoiceInputSection credential recovery', () => {
     expect(screen.getByText('settings.voiceInput.serviceSource.credentialError.gatewayMissing')).toBeTruthy();
     expect(screen.getByRole('button', { name: 'settings.voiceInput.serviceSource.manageProviders' })).toBeTruthy();
   });
+
+  it.each([
+    ['local-asr-model-missing', 'localAsrModelMissing'],
+    ['local-asr-unsupported', 'localAsrUnsupported'],
+  ])('keeps %s recovery on the voice page', async (failureReason, message) => {
+    serviceModel.current = {
+      ready: true, asrProfiles: [],
+      selection: { serviceMode: 'byok', asrProvider: 'local-sherpa-onnx' },
+      readiness: { ok: false, provider: 'local-sherpa-onnx', failureReason },
+      localAsrStatus: { supported: failureReason !== 'local-asr-unsupported', ready: false },
+    };
+    await act(async () => { render(<MemoryRouter><VoiceInputSection /></MemoryRouter>); });
+    expect(screen.getByText(`settings.voiceInput.serviceSource.credentialError.${message}`)).toBeTruthy();
+    expect(screen.getByText('settings.voiceInput.serviceSource.localAsr.notice')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'settings.voiceInput.serviceSource.localAsr.chooseFolder' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'settings.voiceInput.serviceSource.manageProviders' })).toBeNull();
+  });
+
 });

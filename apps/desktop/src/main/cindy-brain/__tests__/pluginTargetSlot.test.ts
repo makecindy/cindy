@@ -349,6 +349,7 @@ describe('plugin target queries and delivery', () => {
   // Slot-only tests miss the outer error mapping; an invalid parent must not look retryable.
   it.each([
     ['INVALID_INVOCATION', 'INVALID_INVOCATION'],
+    ['UNSUPPORTED_CAPABILITY', 'UNSUPPORTED_CAPABILITY'],
     ['TASK_BUSY', 'TASK_BUSY'],
     ['private adapter failure', 'HOST_NOT_READY'],
   ])('preserves the public target error boundary for %s', async (cause, expected) => {

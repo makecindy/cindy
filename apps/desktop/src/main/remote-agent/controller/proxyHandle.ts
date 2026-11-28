@@ -12,14 +12,16 @@
 import fsp from 'node:fs/promises';
 import { markSessionSendTerminal, readSessionSendTerminalStatus, MAIN_OWNED_SEND_CONTEXT, TurnDispatchRejectedError } from '@cindy/maker-core';
 
-import type { RemoteAgentMethod, RemoteAgentReply, RemoteAgentReverseRequest, RemoteAgentTeardownReason } from '@cindy/device-link';
+import { DeviceLinkError, type RemoteAgentMethod, type RemoteAgentReply, type RemoteAgentReverseRequest, type RemoteAgentTeardownReason } from '@cindy/device-link';
 import type {
   AgentEvent,
   AgentKind,
   AgentSessionHandle,
   AgentSessionTeardownOptions,
   BackgroundTaskSnapshot,
+  Capabilities,
   Effort,
+  EngineKind,
   InteractionDecision,
   InteractionRequest,
   InteractionResolver,
@@ -31,9 +33,11 @@ import type {
 import type { ExecutorAction } from '../executor/gate';
 import type { ExecutorConfirmation } from '../executor/executor';
 import type { ExecutorWorkspace } from '../executor/workspace';
+import { resolveExecutorShell } from '../executor/shell';
+import { describePermissionAction } from '@cindy/maker-shared';
 import { isProviderShareCredentialSessionApproval } from '../../../shared/providerShareCredentialConsent';
 import { encodeSendOptions, encodeUserMessage } from '../wire';
-import { RemoteAgentRemoteError, type RemoteAgentRunClient } from './runClient';
+import { isRetryableLinkError, RemoteAgentRemoteError, type RemoteAgentRunClient } from './runClient';
 import { localPlanReview, RemoteEventProjection } from './eventProjection';
 import { RemoteTurnTerminalOwnership, startsRemoteProductTurn } from '../turnLifecycle';
 
@@ -42,7 +46,8 @@ const MAX_REMEMBERED_SEND_CALLBACKS = 64;
 /** 对方运行的会话描述(open 成功时返回)。 */
 export interface RemoteStartedInfo {
   id: string;
-  agentKind: AgentKind;
+  /** `acp` = a plugin engine of the computer that runs the agent. */
+  agentKind: EngineKind;
   model: string;
   shadowDir: string;
   /** Agent 主机上的虚拟镜像根。 */
@@ -62,7 +67,7 @@ export interface RemoteStartedInfo {
   codexProductPromptDelivery?: { threadId: string; historyHasProductPrompt: boolean };
 }
 
-export function parseStartedInfo(value: Record<string, unknown>, kind: AgentKind): RemoteStartedInfo {
+export function parseStartedInfo(value: Record<string, unknown>, kind: EngineKind): RemoteStartedInfo {
   const str = (v: unknown) => (typeof v === 'string' ? v : undefined);
   const id = str(value.id);
   if (!id) throw new Error('[REMOTE_AGENT_INVALID] the other computer returned an invalid session');
@@ -152,10 +157,34 @@ export function innerShellScript(command: string): string {
 export function approvalActionsFor(
   request: InteractionRequest,
   workspace: ExecutorWorkspace,
+  pluginEngine = false,
+  cwd = workspace.workingDir,
 ): ExecutorAction[] {
   if (request.kind !== 'permission') return [];
-  const name = request.toolName.replace(/^mcp__cindy_exec__/, '').toLowerCase();
   const input = request.input ?? {};
+  if (pluginEngine) {
+    // Only grant actions shown by the same formatter as the confirmation card.
+    const action = describePermissionAction(request.toolName, input);
+    const tool = request.toolName.toLowerCase();
+    if (tool === 'bash' && action.kind === 'command' && action.preview === input.command) {
+      return [{
+        kind: 'exec',
+        command: workspace.mapCommand(action.preview, resolveExecutorShell().dialect),
+        cwd,
+      }];
+    }
+    const reads = tool === 'read';
+    if (!reads && tool !== 'write' && tool !== 'edit' && tool !== 'notebookedit') return [];
+    const target = tool === 'notebookedit' ? input.notebook_path : input.file_path;
+    if (action.kind !== (reads ? 'file-read' : 'file-write') || action.preview !== target) return [];
+    try {
+      const path = workspace.resolve(action.preview, cwd);
+      return reads ? [{ kind: 'read', path, exactFileApproval: true }] : [{ kind: 'write', path }];
+    } catch {
+      return [];
+    }
+  }
+  const name = request.toolName.replace(/^mcp__cindy_exec__/, '').toLowerCase();
   const actions: ExecutorAction[] = [];
   if (EXEC_TOOLS.has(name)) {
     const raw = input.command;
@@ -181,7 +210,8 @@ export function approvalActionsFor(
     .find((value): value is string => typeof value === 'string' && value.length > 0);
   if (target && (WRITE_TOOLS.has(name) || READ_TOOLS.has(name))) {
     try {
-      actions.push({ kind: WRITE_TOOLS.has(name) ? 'write' : 'read', path: workspace.resolve(target) });
+      // 路径批准对读写同样有效(编辑先读后写)。
+      actions.push({ kind: READ_TOOLS.has(name) ? 'read' : 'write', path: workspace.resolve(target) });
     } catch {
       // 路径不合法时不登记。
     }
@@ -217,7 +247,14 @@ export function fixedRemoteAgentLink(client: RemoteAgentRunClient): RemoteAgentL
   };
 }
 
+export interface SharedReconnectSendEvidence {
+  handedToTransport: boolean;
+  failure?: { kind: 'preparation' | 'rejected' | 'not-written' | 'unconfirmed'; error: unknown };
+}
+
 export interface RemoteHandleDeps {
+  sharedReconnectSendEvidence?(): SharedReconnectSendEvidence | undefined;
+  getExecutorCwd?(): string;
   /** 缺省时用 `client` 作为固定连接。 */
   link?: RemoteAgentLink;
   client?: RemoteAgentRunClient;
@@ -263,8 +300,8 @@ export interface RemoteAgentHandleController {
   onState(state: Record<string, unknown>): void;
   onRequest(request: RemoteAgentReverseRequest): Promise<RemoteAgentReply> | null;
   onClosed(reason: string, message?: string, runId?: string): void;
-  /** Supplier process disappeared; keep the local executor and let host recovery own the next send. */
-  onInterrupted(onUnsettled?: () => void): void;
+  /** Supplier run disappeared; keep the local executor and let host recovery own the next send. */
+  onInterrupted(close: { reason: string; runId: string }, onUnsettled?: () => void): void;
   /** Decide idle reclaim only after the owning Session consumes queued events. */
   onIdleReclaimed(onDrained: (unfinished: boolean) => void): void;
   hasActiveTurn(): boolean;
@@ -293,7 +330,23 @@ export function createRemoteAgentHandle(deps: RemoteHandleDeps): RemoteAgentHand
   const queue = new EventQueue();
   const projection = new RemoteEventProjection(deps.workspace);
   let state: Record<string, unknown> = { ...started.state };
+  // 事件的 source 只标内置引擎；插件引擎的事件本来就不带(本机任务也一样)。
+  const eventSource: AgentKind | undefined = started.agentKind === 'acp' ? undefined : started.agentKind;
   let resolver: InteractionResolver | null = null;
+  const capabilityListeners = new Set<(capabilities: Capabilities) => void>();
+  const notifyCapabilitiesIfChanged = (previous: unknown, next: unknown, force = false) => {
+    if (!next || typeof next !== 'object' || Array.isArray(next)) return;
+    if (capabilityListeners.size === 0) return;
+    if (!force && JSON.stringify(previous) === JSON.stringify(next)) return;
+    const caps = next as Capabilities;
+    for (const listener of capabilityListeners) {
+      try {
+        listener(caps);
+      } catch {
+        // Isolate capability listener failures from remote state updates.
+      }
+    }
+  };
   let disposed = false;
   let teardownRequested = false;
   let disposal: Promise<void> | null = null;
@@ -302,7 +355,7 @@ export function createRemoteAgentHandle(deps: RemoteHandleDeps): RemoteAgentHand
     onInteractionStateChange?: (state: 'waiting' | 'resolved' | 'cancelled') => void;
   }>();
   const readImage = deps.readImage ?? ((file: string) => fsp.readFile(file));
-  const supported = new Set(started.methods);
+  let supported = new Set(started.methods);
   /** 连回后的新进程还没报过有内容的用量：先保留上一次的读数，界面不清零。 */
   let carriedUsage: unknown;
   /** 回到某条消息后、下一轮跑完前(Claude Code 要到下一次发送才在对方截断)：不能让出名额。 */
@@ -322,6 +375,7 @@ export function createRemoteAgentHandle(deps: RemoteHandleDeps): RemoteAgentHand
   const dispose = (finalEvent?: () => AgentEvent | undefined): Promise<void> => {
     if (disposal) return disposal;
     disposed = true;
+    capabilityListeners.clear();
     activeTurn = false;
     state = { ...state, turnRunning: false, preparing: false };
     for (const projected of projection.flush()) queue.push(projected);
@@ -408,7 +462,26 @@ export function createRemoteAgentHandle(deps: RemoteHandleDeps): RemoteAgentHand
         return block;
       });
     };
-    const client = await link.ensure();
+    const evidence = method === 'send' ? deps.sharedReconnectSendEvidence?.() : undefined;
+    let client: RemoteAgentRunClient;
+    try {
+      client = await link.ensure();
+    } catch (error) {
+      // A caps/open/restore RPC can be in flight without this input ever reaching
+      // callWithId below. Do not let Session fence/close this handle as though
+      // the send had an ambiguous tail. Only reclassify link failures: quota,
+      // auth and compatibility errors must reach their existing owners intact.
+      // Main's stopped-open offer is keyed by the exact startup error object.
+      // Goal already blocks preparation errors; its provider-rejection result
+      // instead schedules a continuation and would repeat the full handshake.
+      if (method !== 'send' || opts?.origin?.kind === 'goal' || !isRetryableLinkError(error)
+        || (error instanceof RemoteAgentRemoteError && error.phase === 'start')) throw error;
+      // Session converts this exception to a generic non-dispatch result. Keep
+      // the link error for the captured input's existing failure settlement.
+      if (evidence) evidence.failure = { kind: 'preparation', error };
+      deps.log?.warn('remote agent: connection preparation failed before turn dispatch', { error: String(error) });
+      throw new TurnDispatchRejectedError(error instanceof Error ? error.message : String(error), { cause: error });
+    }
     // Check the actual executor after reconnect, before either send or steer.
     // Older hosts silently drop this origin and would execute without its policy.
     const origins = [opts?.turnPermissionPolicy?.origin, opts?.[MAIN_OWNED_SEND_CONTEXT]?.origin];
@@ -444,24 +517,34 @@ export function createRemoteAgentHandle(deps: RemoteHandleDeps): RemoteAgentHand
       activeTurn = true;
     }
     try {
-      // Keep Session cancellation local; AbortSignal is never part of the wire payload.
-      await client.callWithId(callId, method, [wireMessage, encoded.wire], opts?.signal);
+      // Keep Session cancellation and delivery evidence local.
+      await client.callWithId(callId, method, [wireMessage, encoded.wire], opts?.signal,
+        evidence && (() => { evidence.handedToTransport = true; }));
       if (method === 'send') terminalOwnership.acceptSend(callId);
     } catch (error) {
+      const rejected = error instanceof RemoteAgentRemoteError && error.info.code === 'TURN_DISPATCH_REJECTED';
+      if (evidence?.handedToTransport) {
+        // A stream close can settle the handle before Session returns. Keep the
+        // actual call failure for the transaction, including its link error code.
+        const linkError = error instanceof Error ? error.cause : undefined;
+        // Only explicit Device Link evidence proves no write. Agent Net's
+        // pre-write failures remain unconfirmed at this boundary.
+        const notWritten = linkError instanceof DeviceLinkError && linkError.inFlight === false;
+        evidence.failure = { kind: rejected ? 'rejected' : notWritten ? 'not-written' : 'unconfirmed', error };
+      }
       // The ordered error/done below already settles this send. Do not race it with
       // a second send rejection that can replace the host-owned recovery receipt.
       if (method !== 'send' || beforeInterruption === interruption) {
         if (method === 'send') {
           if (sendOwnerOptions === opts && terminalOwnership.isDispatchCurrent(callId)
             && !disposed && !teardownRequested) {
-            const previous = error instanceof RemoteAgentRemoteError && error.info.code === 'TURN_DISPATCH_REJECTED'
-              ? terminalOwnership.rejectSend(callId) : undefined;
+            const previous = rejected ? terminalOwnership.rejectSend(callId) : undefined;
             abortRequested = abortRequested || previous?.aborted === true;
             activeTurn = !abortRequested && previous?.active === true;
             terminalEventDelivered = previous?.terminal === true;
             sendOwnerOptions = previousOwnerOptions;
           }
-          if (error instanceof RemoteAgentRemoteError && error.info.code === 'TURN_DISPATCH_REJECTED') {
+          if (rejected) {
             throw new TurnDispatchRejectedError(error.message, { cause: error });
           }
         }
@@ -479,8 +562,88 @@ export function createRemoteAgentHandle(deps: RemoteHandleDeps): RemoteAgentHand
     }
   }
 
-  const optional = <K extends keyof AgentSessionHandle>(method: RemoteAgentMethod, fn: AgentSessionHandle[K]) =>
-    (supported.has(method) ? { [method]: fn } : {}) as Partial<AgentSessionHandle>;
+  const optionalMethods: Partial<Record<Exclude<RemoteAgentMethod, 'send' | 'steer' | 'abort' | 'setVendorOptions'>, unknown>> = {
+    requestGracefulStop: async () => {
+      await callIfLive('requestGracefulStop');
+    },
+    setModel: async (model: string, opts?: { providerId?: string | null; effort?: Effort }) => {
+      if (!await callIfLive('setModel', model, opts)) {
+        state = { ...state, model, ...(opts?.effort ? { effort: opts.effort } : {}) };
+      }
+      deps.onModel?.(model, opts);
+    },
+    // 已让出名额时下一次连回本来就是带新模型的冷启动接回，不用另外重建。
+    requiresModelSwitchRebuild: async (model: string, opts?: { providerId?: string | null }) => {
+      const end = link.begin();
+      try {
+        const live = await link.live();
+        return live ? (await live.call('requiresModelSwitchRebuild', [model, opts])) === true : false;
+      } finally {
+        end();
+      }
+    },
+    previewModelSwitch: (async (model: string, opts?: { providerId?: string | null }) =>
+      call('previewModelSwitch', model, opts)) as AgentSessionHandle['previewModelSwitch'],
+    setPermissionMode: async (mode: string) => {
+      await callIfLive('setPermissionMode', mode);
+      deps.onPermissionMode?.(mode);
+    },
+    setEffort: async (effort: Effort) => {
+      if (!await callIfLive('setEffort', effort)) state = { ...state, effort };
+      deps.onEffort?.(effort);
+    },
+    setFastMode: async (enabled: boolean | 'ultrafast') => {
+      if (!await callIfLive('setFastMode', enabled)) state = { ...state, fastMode: enabled };
+      deps.onFastMode?.(enabled);
+    },
+    setPlanMode: async (enabled: boolean) => {
+      if (!await callIfLive('setPlanMode', enabled)) {
+        state = {
+          ...state,
+          planMode: enabled,
+          ...('executionPlanMode' in state ? { executionPlanMode: enabled } : {}),
+        };
+      }
+      deps.onPlanMode?.(enabled);
+    },
+    setThinkingEnabled: async (enabled: boolean) => {
+      await callIfLive('setThinkingEnabled', enabled);
+      deps.onThinkingEnabled?.(enabled);
+    },
+    setExtraDirs: async (dirs: string[], libraryRoot?: string | null) => {
+      deps.onExtraDirs?.(dirs, libraryRoot);
+      await callIfLive('setExtraDirs', deps.workspace.virtualizeDirs(dirs), libraryRoot ? deps.workspace.virtualizeDirs([libraryRoot])[0] : null);
+    },
+    setWritableDirs: async (dirs: string[]) => {
+      await callIfLive('setWritableDirs', deps.workspace.virtualizeDirs(dirs));
+      // 对方成功后才更新本机执行器的根目录：新建的可写目录在本机也能过 root 判定，
+      // 撤掉的不再被本机上限当可信根；失败时两边都保持原状。
+      deps.onWritableDirs?.(dirs);
+    },
+    // 已让出名额时对方进程里没有后台任务(有后台任务时不会让)。
+    stopBackgroundTask: async (taskId: string) => {
+      await callIfLive('stopBackgroundTask', taskId);
+    },
+    resumeBackgroundTask: async (taskId: string, message: string, childId?: string) => {
+      await call('resumeBackgroundTask', taskId, message, childId);
+    },
+    compactSession: (async (instructions?: string) =>
+      call('compactSession', instructions)) as AgentSessionHandle['compactSession'],
+    getContextUsage: (async () => call('getContextUsage')) as AgentSessionHandle['getContextUsage'],
+    getCodexContextWindowInfo: (async () =>
+      call('getCodexContextWindowInfo')) as AgentSessionHandle['getCodexContextWindowInfo'],
+    useCindyAutoReviewFallback: async () => {
+      await callIfLive('useCindyAutoReviewFallback');
+      deps.onAutoReviewFallback?.();
+    },
+    previewRewindFiles: (async (userUuid: string) =>
+      call('previewRewindFiles', userUuid)) as AgentSessionHandle['previewRewindFiles'],
+    commitRewindFiles: (async (userUuid: string, priorAssistantUuid: string, opts?: unknown) => {
+      const result = await call('commitRewindFiles', userUuid, priorAssistantUuid, opts ?? null);
+      rewindPending = true;
+      return result;
+    }) as AgentSessionHandle['commitRewindFiles'],
+  };
 
   const handle: AgentSessionHandle = {
     get id() {
@@ -490,6 +653,17 @@ export function createRemoteAgentHandle(deps: RemoteHandleDeps): RemoteAgentHand
       return typeof state.requestSessionId === 'string' ? state.requestSessionId : started.requestSessionId;
     },
     agentKind: started.agentKind,
+    // 插件引擎的模型、思考深度与权限档来自它在那台电脑上的握手结果，随状态一起带回(内置引擎不带，沿用本机的静态能力)。
+    get negotiatedCapabilities() {
+      const value = state.negotiatedCapabilities;
+      return value && typeof value === 'object' && !Array.isArray(value) ? value as Capabilities : undefined;
+    },
+    onCapabilitiesChange: (listener) => {
+      capabilityListeners.add(listener);
+      return () => {
+        capabilityListeners.delete(listener);
+      };
+    },
     get model() {
       return typeof state.model === 'string' ? state.model : started.model;
     },
@@ -532,91 +706,50 @@ export function createRemoteAgentHandle(deps: RemoteHandleDeps): RemoteAgentHand
     isPreparingUserTurn: () => state.preparing === true,
     getCurrentTurnId: () => (typeof state.currentTurnId === 'string' ? state.currentTurnId : null),
     getPlanMode: () => (typeof state.planMode === 'boolean' ? state.planMode : null),
-    getExecutionPlanMode: () => (typeof state.executionPlanMode === 'boolean' ? state.executionPlanMode : null),
+    // Remote ACP handles only implement getPlanMode(); an omitted executionPlanMode falls back to planMode,
+    // while an explicit executionPlanMode: null keeps the fail-closed unknown state.
+    getExecutionPlanMode: () => {
+      if ('executionPlanMode' in state) {
+        return typeof state.executionPlanMode === 'boolean' ? state.executionPlanMode : null;
+      }
+      return typeof state.planMode === 'boolean' ? state.planMode : null;
+    },
     getFastMode: () => state.fastMode === 'ultrafast' ? 'ultrafast' : state.fastMode === true,
     getEffort: () => (typeof state.effort === 'string' ? state.effort as Effort : null),
     listBackgroundTasks: () => (Array.isArray(state.backgroundTasks) ? state.backgroundTasks as BackgroundTaskSnapshot[] : []),
     countPendingWakeContinuations: () => (typeof state.pendingWake === 'number' ? state.pendingWake : 0),
-    ...optional('requestGracefulStop', async () => {
-      await callIfLive('requestGracefulStop');
-    }),
-    ...optional('setModel', async (model: string, opts?: { providerId?: string | null; effort?: Effort }) => {
-      if (!await callIfLive('setModel', model, opts)) {
-        state = { ...state, model, ...(opts?.effort ? { effort: opts.effort } : {}) };
+    requiresRuntimeRecycleForExtraDirs: () => {
+      if (typeof state.requiresRuntimeRecycleForExtraDirs === 'boolean') {
+        return state.requiresRuntimeRecycleForExtraDirs;
       }
-      deps.onModel?.(model, opts);
-    }),
-    // 已让出名额时下一次连回本来就是带新模型的冷启动接回，不用另外重建。
-    ...optional('requiresModelSwitchRebuild', async (model: string, opts?: { providerId?: string | null }) => {
-      const end = link.begin();
-      try {
-        const live = await link.live();
-        return live ? (await live.call('requiresModelSwitchRebuild', [model, opts])) === true : false;
-      } finally {
-        end();
-      }
-    }),
-    ...optional('previewModelSwitch', (async (model: string, opts?: { providerId?: string | null }) =>
-      call('previewModelSwitch', model, opts)) as AgentSessionHandle['previewModelSwitch']),
-    ...optional('setPermissionMode', async (mode: string) => {
-      await callIfLive('setPermissionMode', mode);
-      deps.onPermissionMode?.(mode);
-    }),
-    ...optional('setEffort', async (effort: Effort) => {
-      if (!await callIfLive('setEffort', effort)) state = { ...state, effort };
-      deps.onEffort?.(effort);
-    }),
-    ...optional('setFastMode', async (enabled: boolean | 'ultrafast') => {
-      if (!await callIfLive('setFastMode', enabled)) state = { ...state, fastMode: enabled };
-      deps.onFastMode?.(enabled);
-    }),
-    ...optional('setPlanMode', async (enabled: boolean) => {
-      if (!await callIfLive('setPlanMode', enabled)) state = { ...state, planMode: enabled };
-      deps.onPlanMode?.(enabled);
-    }),
-    ...optional('setThinkingEnabled', async (enabled: boolean) => {
-      await callIfLive('setThinkingEnabled', enabled);
-      deps.onThinkingEnabled?.(enabled);
-    }),
-    ...optional('setExtraDirs', async (dirs: string[], libraryRoot?: string | null) => {
-      deps.onExtraDirs?.(dirs, libraryRoot);
-      await callIfLive('setExtraDirs', deps.workspace.virtualizeDirs(dirs), libraryRoot ? deps.workspace.virtualizeDirs([libraryRoot])[0] : null);
-    }),
-    ...optional('setWritableDirs', async (dirs: string[]) => {
-      await callIfLive('setWritableDirs', deps.workspace.virtualizeDirs(dirs));
-      // 对方成功后才更新本机执行器的根目录：新建的可写目录在本机也能过 root 判定，
-      // 撤掉的不再被本机上限当可信根；失败时两边都保持原状。
-      deps.onWritableDirs?.(dirs);
-    }),
+      // Older remote hosts omit this boolean; preserve the pre-PR recycle rule
+      // for ACP sessions unless negotiatedCapabilities proves extraDirs unsupported.
+      return started.agentKind === 'acp'
+        && (handle.negotiatedCapabilities?.extraDirs?.supported ?? true);
+    },
     // 本机 MCP 身份(协同等工具)必须立即看到改动；对方不支持时也照样更新本机这一份。
     setVendorOptions: async (patch: Record<string, unknown>) => {
       deps.onVendorOptions?.(patch ?? {});
       if (supported.has('setVendorOptions')) await callIfLive('setVendorOptions', JSON.parse(JSON.stringify(patch ?? {})));
     },
-    // 已让出名额时对方进程里没有后台任务(有后台任务时不会让)。
-    ...optional('stopBackgroundTask', async (taskId: string) => {
-      await callIfLive('stopBackgroundTask', taskId);
-    }),
-    ...optional('resumeBackgroundTask', async (taskId: string, message: string, childId?: string) => {
-      await call('resumeBackgroundTask', taskId, message, childId);
-    }),
-    ...optional('compactSession', (async (instructions?: string) =>
-      call('compactSession', instructions)) as AgentSessionHandle['compactSession']),
-    ...optional('getContextUsage', (async () => call('getContextUsage')) as AgentSessionHandle['getContextUsage']),
-    ...optional('getCodexContextWindowInfo', (async () =>
-      call('getCodexContextWindowInfo')) as AgentSessionHandle['getCodexContextWindowInfo']),
-    ...optional('useCindyAutoReviewFallback', async () => {
-      await callIfLive('useCindyAutoReviewFallback');
-      deps.onAutoReviewFallback?.();
-    }),
-    ...optional('previewRewindFiles', (async (userUuid: string) =>
-      call('previewRewindFiles', userUuid)) as AgentSessionHandle['previewRewindFiles']),
-    ...optional('commitRewindFiles', (async (userUuid: string, priorAssistantUuid: string, opts?: unknown) => {
-      const result = await call('commitRewindFiles', userUuid, priorAssistantUuid, opts ?? null);
-      rewindPending = true;
-      return result;
-    }) as AgentSessionHandle['commitRewindFiles']),
   };
+
+  /**
+   * 同步远端当前支持的可选方法到 handle。执行电脑升级、降级或重连到不同版本对端后，
+   * `next.methods` 与 `negotiatedCapabilities` 必须保持一致，避免能力宣称支持而方法缺失。
+   */
+  const syncOptionalMethods = (methods: readonly string[]): boolean => {
+    const previous = supported;
+    const next = new Set(methods);
+    supported = next;
+    const mutable = handle as unknown as Record<string, unknown>;
+    for (const [method, impl] of Object.entries(optionalMethods)) {
+      if (next.has(method)) mutable[method] = impl;
+      else delete mutable[method];
+    }
+    return previous.size !== next.size || [...next].some((method) => !previous.has(method));
+  };
+  syncOptionalMethods(started.methods);
 
   async function answerInteraction(request: InteractionRequest): Promise<RemoteAgentReply> {
     if (!resolver) {
@@ -628,10 +761,28 @@ export function createRemoteAgentHandle(deps: RemoteHandleDeps): RemoteAgentHand
           : { kind: 'permission', behavior: 'deny', reason: 'interaction_unavailable' };
       return { type: 'interaction', result: decision };
     }
-    let decision = await resolver(localPlanReview(request, deps.workspace));
+    const pluginEngine = started.agentKind === 'acp';
+    const pluginApprovals = pluginEngine
+      ? approvalActionsFor(request, deps.workspace, true, deps.getExecutorCwd?.())
+      : [];
+    const action = pluginApprovals[0];
+    const presented = request.kind === 'permission' && action
+      ? {
+          ...request,
+          input: {
+            ...request.input,
+            ...(action.kind === 'exec' ? { command: action.command, cwd: action.cwd }
+              : action.kind === 'fetch' ? {} : { file_path: action.path }),
+          },
+        }
+      : request;
+    let decision = await resolver(localPlanReview(presented, deps.workspace));
     if (decision.kind === 'permission' && decision.behavior === 'allow') {
+      // ACP selects an option and does not forward edited arguments to the engine.
       const effective = decision.updatedInput ? { ...request, input: decision.updatedInput } : request;
-      for (const action of approvalActionsFor(effective, deps.workspace)) deps.recordApproval(action);
+      for (const approval of pluginEngine ? pluginApprovals : approvalActionsFor(effective, deps.workspace)) {
+        deps.recordApproval(approval);
+      }
     }
     // 用户改过的计划按本机路径展示，交回 Agent 前换回它那边的写法。
     if (decision.kind === 'plan_review') {
@@ -666,6 +817,7 @@ export function createRemoteAgentHandle(deps: RemoteHandleDeps): RemoteAgentHand
     },
     onState(next) {
       if (disposed) return;
+      const previousCapabilities = state.negotiatedCapabilities;
       state = { ...state, ...next };
       // An idle state can precede the terminal event; only that event settles the turn.
       // Abort ACK may still carry busy state; preserve the local cancellation boundary.
@@ -675,6 +827,7 @@ export function createRemoteAgentHandle(deps: RemoteHandleDeps): RemoteAgentHand
         if (state.turnRunning === true || !isEmptyUsage(state.usage)) carriedUsage = undefined;
         else state = { ...state, usage: carriedUsage };
       }
+      notifyCapabilitiesIfChanged(previousCapabilities, state.negotiatedCapabilities);
     },
     readState: () => state,
     isQuiet: () => !hasActiveProductTurn() && !rewindPending
@@ -685,12 +838,19 @@ export function createRemoteAgentHandle(deps: RemoteHandleDeps): RemoteAgentHand
     onReconnected(next) {
       terminalOwnership = new RemoteTurnTerminalOwnership();
       imessageSendContext = next.imessageSendContext === true;
+      const methodsChanged = syncOptionalMethods(next.methods);
       const previousUsage = state.usage;
-      state = { ...state, ...next.state };
+      const previousCapabilities = state.negotiatedCapabilities;
+      const nextState: Record<string, unknown> = { ...state, ...next.state };
+      if (!('requiresRuntimeRecycleForExtraDirs' in next.state)) {
+        delete nextState.requiresRuntimeRecycleForExtraDirs;
+      }
+      state = nextState;
       if (!isEmptyUsage(previousUsage) && isEmptyUsage(state.usage) && state.turnRunning !== true) {
         carriedUsage = previousUsage;
         state = { ...state, usage: previousUsage };
       }
+      notifyCapabilitiesIfChanged(previousCapabilities, state.negotiatedCapabilities, methodsChanged);
     },
     notifyResumeLost() {
       if (disposed) return;
@@ -700,7 +860,7 @@ export function createRemoteAgentHandle(deps: RemoteHandleDeps): RemoteAgentHand
           message: '[REMOTE_AGENT_RESUME_LOST] The earlier conversation on the other computer could not be resumed, so the agent continues without it.',
           isTerminal: false,
         },
-        source: started.agentKind,
+        source: eventSource,
       });
     },
     onRequest(request) {
@@ -747,7 +907,7 @@ export function createRemoteAgentHandle(deps: RemoteHandleDeps): RemoteAgentHand
         return [];
       });
     },
-    onInterrupted(onUnsettled) {
+    onInterrupted({ reason, runId }, onUnsettled) {
       if (disposed) return;
       const ownerOptions = sendOwnerOptions;
       const wasActive = activeTurn;
@@ -771,10 +931,15 @@ export function createRemoteAgentHandle(deps: RemoteHandleDeps): RemoteAgentHand
         onUnsettled?.();
         if (sendOwnerOptions === ownerOptions) terminalEventDelivered = true;
         // Keep the iterator/executor live: the coordinator owns continuation.
-        return [markSessionSendTerminal(ownerOptions, { type: 'error', source: started.agentKind, data: {
-          message: '[REMOTE_AGENT_UNAVAILABLE] The provider process stopped; reconnecting to the original conversation.',
+        return [markSessionSendTerminal(ownerOptions, { type: 'error', source: eventSource, data: {
+          // Close details must not select another recovery owner through message
+          // or sdkError classifiers. Run loss is not evidence of an OS process exit.
+          message: '[REMOTE_AGENT_UNAVAILABLE] The remote run is no longer available; reconnecting to the original conversation.',
           reason: 'remote_agent_restarted', isTerminal: true,
-        } }), { type: 'done', source: started.agentKind, data: { reason: 'remote_agent_restarted' } }];
+          remoteCloseReason: reason, remoteRunId: runId,
+          // The existing error persistence keeps sdkError alongside message/reason.
+          sdkError: `Remote agent stream closed (${reason}); runId: ${runId}`,
+        } }), { type: 'done', source: eventSource, data: { reason: 'remote_agent_restarted' } }];
       });
     },
     onClosed(reason, message, runId = deps.client?.runId) {
@@ -793,7 +958,7 @@ export function createRemoteAgentHandle(deps: RemoteHandleDeps): RemoteAgentHand
         const normalClose = reason === 'closed' || reason === 'detached' || reason === 'ended';
         // Replacement cancels the old product turn; EOF by itself never completes it.
         if (!teardownRequested && unfinished && !settled && reason === 'superseded') {
-          return markSessionSendTerminal(ownerOptions, { type: 'done', source: started.agentKind, data: { status: 'cancelled', reason,
+          return markSessionSendTerminal(ownerOptions, { type: 'done', source: eventSource, data: { status: 'cancelled', reason,
             remoteCloseReason: reason, ...(runId ? { remoteRunId: runId } : {}) } });
         } else if (!teardownRequested && !wasAborted && !abortRequested && !settled && reason !== 'superseded'
           && (unfinished || !normalClose)) {
@@ -812,7 +977,7 @@ export function createRemoteAgentHandle(deps: RemoteHandleDeps): RemoteAgentHand
               reason: reason === 'controller-disconnected' ? 'user-revoked'
                 : reason === 'unreachable' ? 'remote_agent_lost' : 'remote_agent_closed',
             },
-            source: started.agentKind,
+            source: eventSource,
           });
         }
         return undefined;

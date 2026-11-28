@@ -545,7 +545,7 @@ it("shows recent throughput only in the pinned card while live speed is unavaila
   expect(card()!.textContent).toContain("50");
 });
 
-it("uses paired generation samples, expires recent speed, and isolates a different task", async () => {
+it("uses paired generation samples, keeps the last reading past a minute, and isolates a different task", async () => {
   vi.useFakeTimers();
   vi.setSystemTime(1000);
   await render();
@@ -556,8 +556,10 @@ it("uses paired generation samples, expires recent speed, and isolates a differe
   expect(card()!.textContent).toContain("75 tok/s");
   expect(card()!.textContent).toContain("5.3k tok");
   expect(card()!.textContent).toContain("100 tok/s");
+  // The card describes the turn: its last reading stays after a minute (it used to turn into a dash).
   await act(async () => vi.advanceTimersByTime(60_000));
-  expect(card()!.textContent).toContain("—");
+  expect(card()!.textContent).toContain("50");
+  expect(card()!.textContent).not.toContain("—");
   await render({ key: "other", sessionKey: "account/device/other" });
   expect(card()).toBeNull();
   await gesture("onPressIn");

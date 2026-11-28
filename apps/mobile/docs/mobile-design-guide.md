@@ -2,7 +2,7 @@
 
 > 状态:权威设计规范。新增 / 修改任何 UI 前先读本文。
 > 定位:这是根规范 `docs/design-rules/DESIGN.md` 的**轻量移动版**——共享 Cindy 品牌与业务语义,但不照搬桌面的 ColorRegistry 重型架构。手机端用一套 light/dark 双色板 + 收敛阶梯 + RN 主题 hook。
-> 色值由移动端**独立决定**(2026-09-26 起为「象牙白」色板,见 `DESIGN.md §15.13`):语义与桌面一一对应,具体色阶、对比度与暖度不与桌面同步。
+> 色值由移动端**独立决定**(「象牙白」色板,见本文 §2):语义与桌面一一对应,具体色阶、对比度与暖度不与桌面同步。不要把桌面的色值搬进移动端,也不要把移动端的值同步回桌面。
 
 ---
 
@@ -31,14 +31,25 @@
 
 源:`src/theme/tokens.ts`(`lightColors` / `darkColors` / `palettes`)。
 
-浅色为象牙白(页面、卡片、描边带一点暖,正文中性),深色为纯中性近黑(2026-09-26 用户定稿)。下表是常用的底色 / 文字 / 描边;完整清单以 `tokens.ts` 为准,移动端专用层见 `DESIGN.md §15.13`。
+浅色为象牙白:页面比桌面更亮,暖度 B = R−3(桌面为 R−5),页面、卡片、描边带一点暖,正文中性。深色为纯中性近黑,不带暖。下表是常用的底色 / 文字 / 描边和移动端专用层;完整清单以 `tokens.ts` 为准。提案记录与前后对比在 Design Lab 的 `colors` 研究(iPhone / Android)。
 
 | token | light | dark | 用途 |
 |---|---|---|---|
 | `surface` | `#F9F9F6` | `#121212` | 页面背景 |
 | `surfaceElevated` | `#FFFFFC` | `#1E1E1E` | 抬一层:Card / 弹窗 / 输入框 |
 | `surfaceListRow` | `#FFFFFC` | `#1E1E1E` | 列表行 |
+| `surfaceListExpanded` | `#EAEAE6` | `#121212` | 展开的列表块 |
+| `activeGlyph` | `#DF0C27` | `#A61629` | 列表行首的活动标记 |
+| `chatCodeSurface` | `#F1F1EC`(沉下去) | `#1A1A1A` | 对话 / 任务里的代码卡 |
+| `chatCodeBorder` | `#CCCCC8` | `#383838` | 代码卡描边 |
 | `surfaceTranslucent` | rgba(249,249,246,.78) | rgba(18,18,18,.78) | 吸顶栏半透明 |
+| `edgeBlurShade` | `transparent` | rgba(0,0,0,.18) | 输入框单层边缘模糊上的压暗,空页面仍是 `surface` |
+| `edgeBlurShadeLayered` | `transparent` | rgba(0,0,0,.08) | 顶栏三层模糊每层上的同一压暗 |
+| `sheetSurface` | rgba(249,249,246,.96) | rgba(28,28,28,.96) | 底部面板根层 |
+| `sheetActionSurface` | `#FFFFFC` | `#262626` | 底部面板操作组 / 操作行 |
+| `sheetActionBorder` | `#CCCCC8` | `#383838` | 底部面板操作组 / 操作行描边 |
+| `sheetGrabber` | `#C2C2BE` | `#5C5C5C` | 底部面板与输入框的拖动条 |
+| `inputCaret` | `#417CDD` | `#417CDD` | 所有输入框的光标 |
 | `surfaceChip` | `#EAEAE6` | `#2A2A2A` | chip / pill / 选中行填充 |
 | `border` | `#CCCCC8` | `#383838` | 1px 分隔线 / 边框 |
 | `borderTranslucent` | rgba(204,204,200,.62) | rgba(56,56,56,.62) | 半透明边框 |
@@ -64,11 +75,12 @@
 
 **规则:**
 - **语义不变色**(`statusReady` / `statusAccent` / `betaChannelBadgeBackground` / `betaChannelBadgeForeground` / `botUnread`)跨 light / dark 一致——它们是状态语义,不随主题漂移。Beta 红色只用于设置页当前版本旁的渠道徽标,不得扩展为装饰色、错误色或 CTA。
-- **浅色卡片主要靠描边分层**:页面提亮到 `#F9F9F6` 后,近白卡片相对页面只剩 1.05 的色差(桌面 1.12)。新增浮起面(卡片 / 列表行 / 浮层 / 输入容器)**必须带 1px `border`**,不要只靠 `surfaceElevated` 的填充色差;需要“沉下去”的块(选中底、展开块、代码卡)用比页面更暗的档。
-- **文字三档由深到浅**:正文 → 二级 → 三级,在所在底色上都 ≥ 4.5:1(`themeTokens.test.ts` 守护)。占位字单独用 `textPlaceholder`,比三级更淡但 ≥ 3:1,只给输入框占位字用。新增文字不要拿 `textTertiary` 当“更弱的二级”以外的用途,也不要为了“更淡”自行调低透明度。
-- **CTA 在 dark 反相为近白**:`cta` 近白底 + `ctaText` 深字。注意别让近白 pill 看起来像 disabled——新增主操作 / 选中态后在 dark 下目检。
-- **显示模式由用户设置**:设置 → 外观 → 显示模式(跟随系统 / 浅色 / 深色,默认跟随系统)。组件只读 `useTheme()`,不要自己调 `useColorScheme()`。
+- **浅色卡片主要靠描边分层**:页面提亮到 `#F9F9F6` 后,近白卡片相对页面只剩 1.05 的色差(桌面和 iOS 分组背景都是 1.12)。新增浮起面(卡片 / 列表行 / 浮层 / 输入容器)**必须带 1px `border`**,不要只靠 `surfaceElevated` 的填充色差;需要“沉下去”的块(选中底、展开块、代码卡)用比页面更暗的档。
+- **文字三档由深到浅**:正文 → 二级 → 三级,在所在底色上(页面、卡片、chip、代码卡、底部面板操作组)都 ≥ 4.5:1,由 `themeTokens.test.ts` 和冻结快照 `theme-colors-snapshot.json` 守护。中性文字一共五档:正文、二级、三级、占位、反相(`ctaText`)。占位字单独用 `textPlaceholder`,比三级更淡但 ≥ 3:1,只给输入框占位字用。新增文字不要拿 `textTertiary` 当“更弱的二级”以外的用途,也不要为了“更淡”自行调低透明度。
+- **CTA 在 dark 反相为近白**:`cta` 近白底 + `ctaText` 深字(对比度 light 19.17:1、dark 16.00:1)。`textPrimary` / `cta` 填充上的文字一律用 `ctaText`,不要用 `surface`;底部面板操作文字用 `textPrimary`(旧的 `sheetActionText` 别名已删除);共享任务的危险按钮文字用 `#FFFFFF` / `#121212`。注意别让近白 pill 看起来像 disabled——新增主操作 / 选中态后在 dark 下目检。
+- **显示模式由用户设置**:设置 → 外观 → 显示模式(跟随系统 / 浅色 / 深色,默认跟随系统)。只有明确选了浅色或深色才会保存;所选模式同时作用于原生系统界面;首次启动的浅色登录关口(`DESIGN.md` §16.5)在登录阶段仍然生效。组件只读 `useTheme()`,不要自己调 `useColorScheme()`。
 - **Home 对话列表用 base token**:列表背景 / 分隔 / 文字使用 `surface` / `border` / `text*`,菜单选中用 `surfaceChip`,不另起暗色调色板;菜单 / FAB 只用 1px `border` 分层、零阴影,保持桌面「单一 flat Surface + 1px Board」哲学。
+- 登录皮肤(`DESIGN.md` §16)、品牌开屏、四个状态色、任务标签和语法高亮不属于这套色阶,各自保留登记的值;登录皮肤暂时保留自己的灰阶。
 - 不要在组件里硬编码 hex / rgba;找不到合适 token 时跟维护者确认是否新增,而不是写死。
 
 ---
@@ -106,7 +118,11 @@
 3. **字号只用 11 档阶梯**:11 / 12 / 13 / 15 / 16 / 17 / 18 / 20 / 24 / 30 / 40。成句的话至少 13。
 4. **每个文字样式都配行高**,按上表成对;单行输入框不设行高。
 
-**登记例外**(只有这些可以偏离上表,新增例外先改本节):MCP App 卡片的第三方来源、本地安装、来源未知标签按 2026-11-16 定稿使用 `warningFg`、caption 字号/行高与常规字重；只用于宿主安装事实的例外来源，不用于插件名或普通自定义 MCP 标签。群聊正文 `@点名` 按用户 2026-11-04 裁决与 PC 对齐，使用专用 `groupMentionText`（数值正本 `tokens.ts`，对应 CINDY `msg-link`），不加下划线、底色或额外字重，详见根规范 §14.5；话题内“New”分界标签使用 `threadUnreadDivider` 红色、13/18 常规字重(2026-10-29 用户指定,与 0.5pt 横线同色);首页列表与队友行的节奏行高(18/28、15/26、13/22);代码 / diff 的紧凑行高;对话 Markdown 标题与长文 24 行高;与相邻图标 / 按钮对齐的文字;行内强调(Markdown strong 700、搜索命中、价格折扣);登录品牌画布(见根规范 §3 豁免表)。
+**登记例外**(只有这些可以偏离上表,新增例外先改本节):MCP App 卡片的第三方来源、本地安装、来源未知标签按 2026-11-16 定稿使用 `warningFg`、caption 字号/行高与常规字重；只用于宿主安装事实的例外来源，不用于插件名或普通自定义 MCP 标签。群聊正文 `@点名` 按用户 2026-11-04 裁决与 PC 对齐，使用专用 `groupMentionText`（数值正本 `tokens.ts`，对应 CINDY `msg-link`），不加下划线、底色或额外字重，详见根规范 §14.5；群聊主时间线与话题的未读分割线沿用桌面样式。主时间线标签居中，两侧各一条细线；话题标签靠左，右侧接一条细线。标签字号 11、行高 16、中等字重，文字与细线使用 `botUnread`；首页列表与队友行的节奏行高(18/28、15/26、13/22);代码 / diff 的紧凑行高;对话 Markdown 标题与长文 24 行高;与相邻图标 / 按钮对齐的文字;行内强调(Markdown strong 700、搜索命中、价格折扣);登录品牌画布(见根规范 §3 豁免表)。
+
+PR 卡片的「已合并」状态文字（`PluginCardActions.statusMergedText`）使用 `prMerged`，与合并图标及桌面端同义（根规范 §2 PR Status Colors）；仅限 PR 合并状态，不扩展为普通蓝色文字。检查通过仍使用 `statusDone`。
+
+群聊「外部 / External」徽标（`BotGroupExternalBadge.label`，2026-11-25 用户确认）仅面向企业视角在外部群与外部成员上出现，复用 `groupMentionText` 前景与 14% 淡底、`radius.micro` 圆角与 `micro` 11/16 medium；C 端个人账号永不显示。同组织部门小标保持中性 `surfaceChip` + `textSecondary`。
 
 **机器会拦什么**:阶梯外字号 / 行高 / 字重与裸数字、缺行高、浅色字配粗字重(`typographyTokenDiscipline.test.ts`);文字用了五档中性字色与已登记语义色以外的 token、占位字没用 `textPlaceholder`(`textColorDiscipline.test.ts`,存量按次数登记、只许减少);字号阶梯本身、文字三档与占位字对比度、深浅双模式同键(`themeTokens.test.ts`)。**拦不住、靠 review 的**:角色选错(比如把说明文字放 12 号、把标题写成 500)、例外被滥用。评审时对照上表逐行看。
 
@@ -456,16 +472,16 @@ iOS 使用原生 Form 二级页:顶部是与真实气泡同款的预览,预设�
 
 兑换礼品卡的底部面板（`src/gift-card/GiftCardSheet.tsx`）在「确认」与「到账」两步展示卡面，与桌面端兑换弹窗是同一张卡，登记见根规范 §15.7「gift card face」。这是手机上唯一带品牌图稿的面板内容，不作为其他卡片、确认面板带插画的先例。
 
-- **卡面 = 成品图 + 印在上面的金额**。四张成品图在 `assets/gift-cards/{cindy,cat,bell,leap}.webp`（1200×757，不含金额），与桌面端、分享网页、Platform 后台是同一份文件；`faceCode` 由服务端下发，本版本不认识的卡面按默认卡面显示。金额（币种符号 + 数字，小数末尾的 0 不印）的字形轮廓、位置、字号与两种图稿色都在 `@cindy/maker-shared/gift-card-amount`，用 `react-native-svg` 画成矢量；它属于卡面图稿，不是界面文字，`GiftCardFace.tsx` 自己不写任何颜色，也不加载额外字体。
+- **卡面 = 底图 + 印在上面的金额**。底图（1200×757，不含金额）、金额印法与各语言名称由服务端随卡下发（`@cindy/maker-shared/gift-card` 的 `GiftCardFaceStyle`），新卡面不用发版就能显示。`assets/gift-cards/{cindy,cat,bell,leap}.webp` 四张内置图只作兜底：认识的卡面在服务端底图到之前先显示内置图，服务端没给卡面（旧服务端）、给得不合法或底图取不到时用内置图；兜底时图与金额印法都用内置的，不混用。仍不认识的卡面按默认卡面显示，新卡面的底图还没到时只留同比例的中性占位。金额（币种符号 + 数字，小数末尾的 0 不印）的字形轮廓与内置卡面的印法在 `@cindy/maker-shared/gift-card-amount`，用 `react-native-svg` 画成矢量；它属于卡面图稿，不是界面文字，`GiftCardFace.tsx` 自己不写任何颜色，也不加载额外字体。
 - **处理**：容器圆角（`radius.container`）+ 1px `border`，深浅两种面板上都能和背景分开；不倾斜、无阴影、无动效。卡面最宽 420pt，在平板与横屏下居中。
 - **卡面以外全部走本文 token**：来源与到账说明 13/18 `textSecondary` 居中，留言 15/20 `textPrimary` 居中，条款行沿用「行标题 16/22 500 `textPrimary` + 行右侧取值 16/22 400 `textSecondary`」，报错 13/18 `errorText`。金额不在卡面下方重复；只有金额印不上卡面时（本版本没有轮廓的字符）才退回 24/30 600 `textPrimary` 的普通文字。兑换码输入框是 50pt 胶囊，等宽 15 号、自动大写。
 - **容器**：复用 `CompanionSheet`（iOS 系统 sheet，Android 兼容外壳）；主操作撑满宽度，领取请求在途时面板不可关闭。入口是设置页「礼品卡」分组与 `cindy://gift/<code>`、`cindycn://gift/<code>` 链接，两者共用根级 `GiftCardHost`，同时只呈现一张卡。
 
 ### Mobile task home teammate section (owner-approved “A+B”, 2026-10-24)
 
-The task home opens with a “Teammates” section above shared tasks, Pinned and projects. Its header uses the project/Pinned header geometry (56pt, 22 chevron + 20 icon + 16/28 title + 13 count) and a trailing 20pt “+” whose 44pt target ends on the 16pt right edge. Expanded, it shows 78pt teammate rows (teammates and groups mixed by activity), previewing three; the “Show all N” / “Show less” row is 48pt, 15/20 secondary text aligned to the rows’ text column (72pt). Collapsed, it shows the existing avatar strip by default; disabling avatars keeps only the 56pt header and its small create action, with no empty body. The existing home display menu (···) has a “Teammates” submenu whose “Show avatars when collapsed” item controls the horizontally scrolling strip: 36pt avatars in 48pt touch cells, 8pt gap, 16pt side insets, 12/18 names (primary + medium when unread), one 10pt solid status dot in a 2pt surface ring anchored 1pt beyond the bottom-right edge, and a dashed 36pt create circle in the same 48pt touch cell last. Phones scroll instead of the Desktop +N. Desktop, iOS and Android use the same 36px/pt collapsed portrait and 44px/pt list portrait (owner correction, 2026-10-31). Keep collapsed touch targets at least 48px/pt: the portrait has 6px/pt space on each side for the bottom-right dot. Anchor the dot to the portrait, not the touch target; keep the selection plate independent of portrait sizing. The Desktop +N circle and Mobile create circle follow the collapsed portrait size; group portraits scale within the same 36px/pt frame (two-member portraits use 26px/pt images). Status-dot size and meaning are unchanged. A pending decision (cyan) takes priority over error/offline (red), running (orange), completed unread (green), and ordinary unread (blue); idle has no dot. The overflow entry aggregates the highest-priority hidden state. Completion requires a real result and a local unread receipt; selection alone never clears a pending decision. Roster avatars have no online dot or working ring; unread counts remain separate. Teammate selection uses the quiet theme surface with normal sidebar text (never the task sidebar’s inverse fill); Desktop collapsed selection is a 56px quiet-surface plate behind the avatar with the governed 12px container radius (the expanded selected row's fill and radius), not an outline, so stacked group avatars are not cut (owner decision, 2026-10-30; replaces the 1px tertiary circular outline). Selection does not replace or recolor the activity dot. Phones navigate to the full-screen chat and retain their native press feedback, without a persistent selected home row. The avatar preference is an explicit account-scoped override, default on for new and existing users without writing an override, preserving explicit off choices and independent of the remembered fold state; changing it while expanded takes effect on the next collapse. When avatars are hidden, existing attention and bot/group unread (including threads) appear as a small header dot with an accessible status and no fabricated count. New messages never expand the section or enable avatars; header taps only expand/collapse. Both states swap with the list’s 225ms disclosure; reduced motion switches instantly. Every language must fit the header and names without widening; long names truncate to one line within the cell.
+The task home opens with a “Teammates” section above shared tasks, Pinned and projects. Its header uses the project/Pinned header geometry (56pt, 22 chevron + 20 icon + 16/28 title + 13 count) and a trailing 20pt “+” whose 44pt target ends on the 16pt right edge. Expanded, it shows 78pt teammate rows (teammates and groups mixed by activity), previewing three; the “Show all N” / “Show less” row is 48pt, 15/20 secondary text aligned to the rows’ text column (72pt). Collapsed, it shows the existing avatar strip by default; disabling avatars keeps only the 56pt header and its small create action, with no empty body. The existing home display menu (···) has a “Teammates” submenu whose “Show avatars when collapsed” item controls the horizontally scrolling strip: 36pt avatars in 48pt touch cells, 8pt gap, 16pt side insets, 12/18 names (primary + medium when unread), one 10pt solid status dot in a 2pt surface ring anchored 1pt beyond the bottom-right edge, and a dashed 36pt create circle in the same 48pt touch cell last. Phones scroll instead of the Desktop +N. Desktop, iOS and Android use the same 36px/pt collapsed portrait and 44px/pt list portrait (owner correction, 2026-10-31). Keep collapsed touch targets at least 48px/pt: the portrait has 6px/pt space on each side for the bottom-right dot. Anchor the dot to the portrait, not the touch target; keep the selection plate independent of portrait sizing. The Desktop +N circle and Mobile create circle follow the collapsed portrait size; group portraits scale within the same 36px/pt frame (two-member portraits use 26px/pt images). Status-dot size and meaning are unchanged. A pending decision (cyan) takes priority over error/offline (red), running (orange), completed unread (green), and ordinary unread (blue); idle has no dot. The overflow entry aggregates the highest-priority hidden state. Completion requires a real result and a local unread receipt; selection alone never clears a pending decision. Roster avatars have no online dot or working ring; unread counts remain separate. Teammate selection uses the quiet theme surface with normal sidebar text (never the task sidebar’s inverse fill); Desktop collapsed selection is a 56px quiet-surface plate behind the avatar with the governed 12px container radius (the expanded selected row's fill and radius), not an outline, so stacked group avatars are not cut (owner decision, 2026-10-30; replaces the 1px tertiary circular outline). Selection does not replace or recolor the activity dot. Phones navigate to the full-screen chat and retain their native press feedback, without a persistent selected home row. The avatar preference is an explicit account-scoped override, default on for new and existing users without writing an override, preserving explicit off choices and independent of the remembered fold state; changing it while expanded takes effect on the next collapse. When collapsed, the header summarizes pending decisions, errors and unread (including group threads) with a single status dot, including for avatars beyond the visible strip. In the three-row preview, “Show all” carries the same dot for entries outside the preview. Both disclosures include the status in their accessible labels and keep the existing roster count. New messages never expand the section or enable avatars; header taps only expand/collapse. Both states swap with the list’s 225ms disclosure; reduced motion switches instantly. Every language must fit the header and names without widening; long names truncate to one line within the cell.
 
-There is one mobile home, as on Desktop (owner decision, 2026-10-24): no separate teammate home, no Tasks/Teammates switch in the drawer and no Teammates entry in the title scope menu. Home search keeps the section and lists every matching teammate and group as expanded rows, without the fold toggle or create entries; with no match the section is absent. Clearing search restores the saved display choice. Teammate unread shows on the section's rows, enabled strip cells, or compact header, not as a count on a mode switch. Implementation and regression coverage: `apps/mobile/src/session/HomeTeammatesSection.tsx`, `homeChromeMenus.ts`, and `src/__tests__/HomeTeammatesSection.test.tsx`.
+There is one mobile home, as on Desktop (owner decision, 2026-10-24): no separate teammate home, no Tasks/Teammates switch in the drawer and no Teammates entry in the title scope menu. Home search keeps the section and lists every matching teammate and group as expanded rows, without the fold toggle or create entries; with no match the section is absent. Clearing search restores the saved display choice. Teammate unread shows on the section's rows, enabled strip cells and the relevant disclosure. Implementation and regression coverage: `apps/mobile/src/session/HomeTeammatesSection.tsx`, `homeChromeMenus.ts`, and `src/__tests__/HomeTeammatesSection.test.tsx`.
 
 ### Mobile new-task morph
 

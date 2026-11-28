@@ -119,14 +119,14 @@ describe('SelectionMenuText', () => {
     bridge.attach.mockClear();
     bridge.detach.mockClear();
   });
-  function mount(ctx: React.ContextType<typeof SelectionQuoteContext>) {
+  function mount(ctx: React.ContextType<typeof SelectionQuoteContext>, selectable = true) {
     Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
     const container = document.createElement('div');
     document.body.append(container);
     const root = createRoot(container);
     roots.push(root);
     act(() => root.render(createElement(SelectionQuoteContext.Provider, { value: ctx },
-      createElement(SelectionMenuText, { selectable: true }, 'rendered message'))));
+      createElement(SelectionMenuText, { selectable }, 'rendered message'))));
     act(() => container.querySelector('span')!.click());
     return root;
   }
@@ -153,6 +153,36 @@ describe('SelectionMenuText', () => {
     mount(null);
     expect(bridge.attach).not.toHaveBeenCalled();
   });
+
+  // Production entry: SelectionMenuText must offer quote/side-chat once selection
+  // becomes available. Reported Android bug: completed assistant text kept only
+  // the system menu. Existing cases mount already-selectable text with a context.
+  // Minimal failure: first layout while streaming/read-only, then enable actions
+  // without another layout. Tier: unit (real component, mocked native bridge).
+  it.each(['streaming', 'read-only'] as const)(
+    'enables quote and side-chat after %s ends without another layout',
+    (initialState) => {
+      const commitQuote = vi.fn();
+      const askInSideChat = vi.fn();
+      const ctx = { commitQuote, askInSideChat };
+      const root = mount(initialState === 'read-only' ? null : ctx, initialState !== 'streaming');
+      expect(bridge.attach).not.toHaveBeenCalled();
+
+      // Same text and geometry: React Native need not emit onLayout again.
+      act(() => root.render(createElement(SelectionQuoteContext.Provider, { value: ctx },
+        createElement(SelectionMenuText, { selectable: true }, 'rendered message'))));
+
+      expect(bridge.attach).toHaveBeenCalledExactlyOnceWith(
+        42, expect.any(String), expect.any(String), expect.any(String),
+      );
+      const registration = (bridge.attach.mock.calls[0] as unknown as [number, string])[1];
+      for (const action of ['quote', 'side-chat']) {
+        bridge.listeners.forEach(listener => listener({ registration, action, text: 'selected words' }));
+      }
+      expect(commitQuote).toHaveBeenCalledExactlyOnceWith('selected words');
+      expect(askInSideChat).toHaveBeenCalledExactlyOnceWith('selected words');
+    },
+  );
 
   it('keeps an open menu usable when a same-task render replaces the side-chat callback', () => {
     // The native ActionMode retains the registration from menu creation. Replacing

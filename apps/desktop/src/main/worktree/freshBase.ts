@@ -155,6 +155,75 @@ export async function resolveFreshSourceBranch(
   return { sourceBranch: fallback, fetched: false, reason: 'remote-ref-missing' };
 }
 
+export interface ExplicitSourceResolution {
+  /** 建 worktree 用的 commit-ish。远端分支一律返回 `refs/remotes/<remote>/<分支>` 全名。 */
+  sourceBranch: string;
+  /**
+   * true = 远端分支且刚 fetch 成功;false = 远端分支但没能刷新(本地副本可能落后或不存在);
+   * 省略 = 不是远端分支(本地分支、tag、提交),没有可刷新的东西。
+   */
+  fetched?: boolean;
+  /** fetched=false 的原因:`not-on-remote`(远端明确没有这条分支)或 `fetch-failed`。 */
+  reason?: 'not-on-remote' | 'fetch-failed';
+}
+
+/**
+ * 调用方点名的基线(`send_to_session` / `create_task_worktree` 的 `base_ref`)。
+ *
+ * 点名远端分支(`origin/x`、`refs/remotes/origin/x`)的调用方要的是远端此刻的 x:另一台电脑
+ * 刚 push、本机还没 fetch 时,本地 tracking ref 要么不存在要么停在旧提交,从它切出的工作区
+ * 一开工就得再 pull 一遍(大仓会再触发一轮整树检出)。所以这里先在同一份网络预算内 fetch
+ * 这一条分支,失败时沿用本地已有 ref 并如实报告 fetched=false,由调用方转告。
+ *
+ * 只认「前缀是已配置 remote、且没有同名本地分支或 tag」的写法:本地分支与 tag 按 git 自身的
+ * 解析顺序优先,原样返回、不联网。`origin/x~2` 这类表达式不是分支名,同样原样返回、按本机现状
+ * 解析。引用是否存在不在这里判定——解析不了由 createWorktree 报错,不回退默认分支。
+ */
+export async function resolveExplicitSourceRef(
+  baseRepo: string,
+  ref: string,
+  /** 网络总预算覆盖(测试注入/调优用);≤0 表示不联网。 */
+  totalBudgetMs: number = NET_TOTAL_BUDGET_MS,
+): Promise<ExplicitSourceResolution> {
+  const deadline = Date.now() + totalBudgetMs;
+  const explicitRemote = ref.startsWith('refs/remotes/');
+  if (ref.startsWith('refs/') && !explicitRemote) return { sourceBranch: ref };
+  const short = explicitRemote ? ref.slice('refs/remotes/'.length) : ref;
+  // remote 名可以带 `/`:取能匹配上的最长一个。
+  const remote = ((await tryGit(['remote'], baseRepo)) ?? '')
+    .split('\n')
+    .map((name) => name.trim())
+    .filter((name) => name && short.startsWith(`${name}/`) && short.length > name.length + 1)
+    .sort((a, b) => b.length - a.length)[0];
+  if (!remote) return { sourceBranch: ref };
+  const branch = short.slice(remote.length + 1);
+  // `<remote>/HEAD` 是指向远端默认分支的符号引用,不是名叫 HEAD 的分支:原样交给 git 解析。
+  if (branch === 'HEAD') return { sourceBranch: ref };
+  if (!explicitRemote) {
+    const shadowing = ((await tryGit(
+      ['for-each-ref', '--format=%(refname)', `refs/heads/${short}`, `refs/tags/${short}`],
+      baseRepo,
+    )) ?? '').split('\n').map((line) => line.trim());
+    if (shadowing.includes(`refs/heads/${short}`) || shadowing.includes(`refs/tags/${short}`)) {
+      return { sourceBranch: ref };
+    }
+  }
+  // 分支名要进 refspec:含通配符或 `:` 的写法会改变 fetch 的范围,交给 git 自己判合法性。
+  if ((await tryGit(['check-ref-format', `refs/heads/${branch}`], baseRepo)) === null) {
+    return { sourceBranch: ref };
+  }
+  const sourceBranch = `refs/remotes/${remote}/${branch}`;
+  const outcome = await fetchRemoteBranch(
+    baseRepo,
+    remote,
+    branch,
+    deadline - Date.now() - KILL_CLEANUP_BUDGET_MS,
+  );
+  return outcome === 'fetched'
+    ? { sourceBranch, fetched: true }
+    : { sourceBranch, fetched: false, reason: outcome };
+}
+
 /** Shared bounded, fail-open fetch for automatic and explicitly selected default sources. */
 async function fetchRemoteDefaultBranch(
   baseRepo: string,
@@ -162,7 +231,16 @@ async function fetchRemoteDefaultBranch(
   defaultBranch: string,
   fetchBudgetMs: number,
 ): Promise<boolean> {
-  let fetched = false;
+  return (await fetchRemoteBranch(baseRepo, remote, defaultBranch, fetchBudgetMs)) === 'fetched';
+}
+
+async function fetchRemoteBranch(
+  baseRepo: string,
+  remote: string,
+  defaultBranch: string,
+  fetchBudgetMs: number,
+): Promise<'fetched' | 'not-on-remote' | 'fetch-failed'> {
+  let outcome: 'fetched' | 'not-on-remote' | 'fetch-failed' = 'fetch-failed';
   if (fetchBudgetMs > 0) {
     try {
       // 显式目标 refspec:--single-branch 或收窄 remote.<name>.fetch 的 clone 里,
@@ -177,11 +255,14 @@ async function fetchRemoteDefaultBranch(
           `+refs/heads/${defaultBranch}:refs/remotes/${remote}/${defaultBranch}`,
         ],
         baseRepo,
-        boundedNetworkGitOpts(fetchBudgetMs),
+        // LC_ALL=C:下面按 git 的英文报错识别「远端没有这条分支」。
+        { ...boundedNetworkGitOpts(fetchBudgetMs), extraEnv: { GIT_TERMINAL_PROMPT: '0', LC_ALL: 'C' } },
       );
-      fetched = true;
+      outcome = 'fetched';
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
+      // 远端可达但没有这条分支,与「没连上」是两回事:前者重试无益,调用方要换引用。
+      if (/couldn't find remote ref/i.test(msg)) outcome = 'not-on-remote';
       // 「cleanup unconfirmed」(超时且残留进程未确认退净,见 gitExec)也走同一
       // 回退——这是**刻意的 fail-open 决策**,不是漏消费:本模块的行为契约是
       // 新鲜基底解析的任何失败都回退旧行为,自动 worktree 创建不因此失败;改成
@@ -198,11 +279,10 @@ async function fetchRemoteDefaultBranch(
     );
   }
 
-  return fetched;
+  return outcome;
 }
 
-/** Desktop creation refreshes only the selected origin default; never redirects
- * an explicit choice to upstream or a newly renamed remote default. */
+/** Refresh a selected full origin default ref. Other refs are left to the caller. */
 export async function refreshSelectedDefaultSource(
   baseRepo: string,
   sourceBranch: string,
@@ -219,7 +299,6 @@ export async function refreshSelectedDefaultSource(
       deadline - Date.now() - KILL_CLEANUP_BUDGET_MS,
     );
   } catch {
-    // A failed local probe also retains the source already selected by the user.
     log.warn('[freshBase] 默认源分支探测失败，使用本地已有 ref');
   }
 }

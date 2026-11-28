@@ -65,7 +65,10 @@ thread 配置，同时设置窗口和 90% 自动压缩预算，保留原生 5% �
 同一 live 模型临时改变显式预算仍沿用 thread 冷恢复配置，切模型重载目录时撤掉这个覆盖。
 SSH 共享 daemon 保留既有逐 thread 配置，不能传入本机目录路径；原生决定压缩方式。
 缺少旧路由预算只影响先用旧模型压缩的优化，不会关闭原生按目标预算触发的采样前压缩。
-跨供应商同样不把旧来源的型号和预算搬到目标来源；不能保证目标凭证可以调用旧模型。
+本地冷恢复从原生线程元数据读取上次的模型 ID，按当前连接的精确型号列表核对。只有原生记录明确指向列表内的另一个型号，
+才让它用自己的预算先压缩。记录缺席、旧型号不在列表内或记录已经是目标型号时，这次恢复使用目标窗口和压缩阈值。
+上次尝试失败也可能已经把目标型号写进索引，原生历史里的上一轮仍属于旧型号。原生发现目录、带供应商前缀的同名型号
+和智能子代理专用路由都不能证明根线程可用旧模型。
 这些路径先让原生尝试目标模型压缩，明确失败后才走既有 Cindy 兜底；真实 CLI 回归见
 `apps/desktop/src/main/maker-host/__tests__/codexContextSwitch.native.test.ts`。
 显式设置可以超过原生目录默认最大值；它改变 CLI 预算，不改变供应商实际能接受的长度。
@@ -270,6 +273,22 @@ Fast 合入 discovery 层；仅适用于 `https://api.openai.com/v1` Responses �
 `packages/maker-core/src/agents/codex/api-capabilities.integration.test.ts`。
 Ultra 由 Codex 原生解释（含多 Agent 行为及普通 HTTP effort 映射），不能把字符串
 `ultra` 直接当成公共 Responses API 的 reasoning effort。
+
+在 [#13713](https://github.com/makecindy/cindy/issues/13713) 的本地对照中，以
+`codexTerraProxy.integration.test.ts` 的真实 Codex、Desktop 代理和回环 Responses
+上游模拟自定义连接。Codex CLI 0.167.2 的原生目录未列出精确型号
+`codex/gpt-6.2-astra`。普通任务的实测字段如下。
+
+| `turn/start.effort` | 代理入口 `reasoning.effort` | 回环上游收到的 `reasoning.effort` |
+| --- | --- | --- |
+| ultra | medium | medium |
+| high | high | high |
+| xhigh | xhigh | xhigh |
+| max | max | max |
+
+排查同类反馈时，在同一次请求上关联这三个位置，并检查 `x-openai-subagent`。
+本次以上样本均未带该请求头，Ultra 到普通 HTTP 档位的转换在进入 Desktop 代理前已经发生。
+此结果仅覆盖本地合成路由。真实 Magpie 的目录、转发、日志展示、模型计算量及子任务档位仍需各自的证据。
 
 ### 型号标准与 Gateway 控制（2026-09-07 用户裁决）
 

@@ -33,7 +33,7 @@ export function VoiceInputPointerHint({
   return createPortal(
     <div
       className={cn(
-        'pointer-events-none fixed z-[10000]',
+        'pointer-events-none fixed z-modal',
         'flex h-6 w-6 items-center justify-center rounded-full border',
         'border-[var(--chat-input-border)] bg-[var(--chat-input-bg)]',
         'text-[var(--model-trigger-text)]',

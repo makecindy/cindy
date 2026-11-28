@@ -165,6 +165,16 @@ var cindyMail = (function () {
             subject: "主题",
             body: "正文",
             quote: "引用内容",
+            quoteIncluded: "已附原文",
+            quoteOmitted: "未附原文",
+            addingQuote: "正在添加引用",
+            removingQuote: "正在移除引用",
+            addQuote: "未附原文 · 添加引用",
+            senderQuote: "已引用 {sender} 的原邮件",
+            quoteInBody: "请在正文中核对原文引用",
+            quoteUnavailable: "无法读取原邮件，请重新核对草稿。",
+            quoteEmpty: "原邮件没有可引用的正文。",
+            quoteMismatch: "邮箱保存的引用与草稿不一致，请核对后发送。",
             attachmentItems: "附件",
             send: "发送",
             delete: "删除草稿",
@@ -183,6 +193,10 @@ var cindyMail = (function () {
               adapter.draftStorage === "server"
                 ? "正在同步到 " + provider + "…"
                 : "正在保存本地草稿…",
+            preparingSend:
+              adapter.draftStorage === "server"
+                ? "正在同步草稿，随后发送…"
+                : "正在保存本地草稿，随后发送…",
             waiting: "修改已保留，等待同步",
             sent: "邮件已发送",
             busy: "正在处理…",
@@ -209,6 +223,16 @@ var cindyMail = (function () {
             subject: "Subject",
             body: "Message",
             quote: "Quoted message",
+            quoteIncluded: "Original message included",
+            quoteOmitted: "Original message not included",
+            addingQuote: "Adding quote",
+            removingQuote: "Removing quote",
+            addQuote: "Original message not included · Add quote",
+            senderQuote: "Original message from {sender} included",
+            quoteInBody: "Check the quoted history in the message body",
+            quoteUnavailable: "Could not read the original message. Check the draft again.",
+            quoteEmpty: "The original message has no quotable body.",
+            quoteMismatch: "The saved quote differs from the draft. Review it before sending.",
             attachmentItems: "Attachments",
             send: "Send",
             delete: "Delete draft",
@@ -227,6 +251,10 @@ var cindyMail = (function () {
               adapter.draftStorage === "server"
                 ? "Syncing to " + provider + "…"
                 : "Saving local draft…",
+            preparingSend:
+              adapter.draftStorage === "server"
+                ? "Syncing draft before sending…"
+                : "Saving local draft before sending…",
             waiting: "Changes retained, waiting to sync",
             sent: "Message sent",
             busy: "Working…",
@@ -274,13 +302,28 @@ var cindyMail = (function () {
         },
       );
     }
-    async function mailStatus(callId, text, action, working, sourceCallId, state, pendingSend) {
-      return cindy.send({ type: "mail-draft-update", callId,
-        ...(sourceCallId ? { sourceCallId } : {}),
-        statusOnly: { status: text, state: state || (working ? "sending" : "error"), pendingSend,
-          ...(action ? { continueLabel: action } : {}) } });
-    }
     const mailEdits = new Map();
+    function findEditByCallId(callId) {
+      for (const edit of mailEdits.values()) if (edit.callId === callId) return edit;
+    }
+    async function mailStatus(callId, text, action, working, sourceCallId, state, pendingSend, cancelLabel) {
+      const targetEdit = findEditByCallId(callId);
+      const resolvedState = state || (working ? "sending" : "error");
+      const preparingOwner =
+        resolvedState === "sending" && !pendingSend && cancelLabel
+          ? targetEdit?.pendingSend
+          : undefined;
+      const shown = await cindy.send({ type: "mail-draft-update", callId,
+        ...(sourceCallId ? { sourceCallId } : {}),
+        statusOnly: { status: text, state: resolvedState, pendingSend,
+          ...(cancelLabel ? { cancelLabel } : {}),
+          ...(action ? { continueLabel: action } : {}) } });
+      if (shown?.ok && targetEdit) targetEdit.preparingCard = preparingOwner;
+      return shown;
+    }
+    function isLiveDraft(key, edit) {
+      return mailEdits.get(key) === edit && !edit.sent && !edit.sending && !edit.deleting && !edit.pendingSend;
+    }
     function draftValues(readBack) {
       const values = Object.fromEntries(['to', 'cc', 'bcc', 'subject'].map(name => [name, readBack.headers[name] || '']));
       Object.assign(values, { body: readBack.editor.body || '', quote: readBack.editor.quote || '' });
@@ -290,6 +333,16 @@ var cindyMail = (function () {
         attachmentItems: JSON.stringify(readBack.attachments.map(a => ({ key: a.key, filename: a.filename, bytes: a.bytes, contentId: a.contentId || '', mimeType: a.mimeType, previewUrl: a.previewUrl }))),
       });
       return values;
+    }
+    function hasQuote(fields) {
+      return Boolean(fields?.quote?.trim() || fields?.quoteHtml?.trim());
+    }
+    function quoteParent(readBack) {
+      return readBack.headers['in-reply-to'] || '';
+    }
+    function validQuote(quote) {
+      return quote && typeof quote.quote === 'string' && quote.quote.length <= 16000 &&
+        (!adapter.richText || (typeof quote.quoteHtml === 'string' && quote.quoteHtml.length <= 64000)) && hasQuote(quote);
     }
     function comparable(name, value) {
       if (name !== 'attachmentItems') return (value || '').replace(/\r\n/g, '\n');
@@ -393,11 +446,25 @@ var cindyMail = (function () {
       edits,
       renderOnly,
       unconfirmed,
+      sendView,
+      canPublish,
     ) {
       var copy = await mailCopy();
+      if (canPublish && !canPublish()) return false;
       if (!readBack || readBack.status !== "read_back") return false;
       var editor = readBack.editor;
       const originalValues = editor ? draftValues(readBack) : {};
+      let quoteError;
+      // Only the creating operation can request a repair. Merely opening an
+      // existing unquoted reply must respect removals made in the mailbox.
+      if (!renderOnly && editor && readBack.replyQuoteExpected && !hasQuote(originalValues) &&
+          !editor.quoteInBody && quoteParent(readBack) && adapter.readReplyQuote) {
+        try {
+          const original = await adapter.readReplyQuote({ record: { account: account.accountId, draftId: readBack.draftId }, readBack });
+          if (original !== null && !validQuote(original)) throw new Error('Invalid reply quote');
+          if (original) edits = { ...originalValues, quote: original.quote, ...(adapter.richText ? { quoteHtml: original.quoteHtml } : {}) };
+        } catch (_) { quoteError = copy.quoteUnavailable; note = quoteError; }
+      }
       const formatted = editor && adapter.richText && !renderOnly ? formatMailFields(edits || originalValues, undefined, editor.format) : undefined;
       if (formatted) {
         edits = formatted.fields;
@@ -434,19 +501,35 @@ var cindyMail = (function () {
       // New messages have no quote section. Keep the complete value set internally
       // so hiding an empty quote never changes the draft sent to the worker.
       var values = Object.fromEntries(fields.map((f) => [f.name, f.value]));
-      fields = fields.filter(function (field) {
-        return field.name !== "quote" || field.value;
-      });
       var key = renderOnly ? settledKey : crypto.randomUUID();
       if (!editor || (!editor.editable && !adapter.richText) || fields.some(f => typeof f.value !== 'string' || f.value.length > (f.name.endsWith('Html') ? 64000 : 16000))) return false;
       const activeEdit = mailEdits.get(key);
+      const parent = quoteParent(readBack);
+      const displayed = hasQuote(values);
+      // Keep a reversible edit in memory on this draft only. An external
+      // retarget must never restore a previous parent's content.
+      if (activeEdit && hasQuote(originalValues)) activeEdit.lastQuote =
+        { parent, quote: originalValues.quote, quoteHtml: originalValues.quoteHtml };
+      const previousQuote = activeEdit?.lastQuote?.parent === parent && activeEdit.lastQuote;
+      const canAddQuote = !editor.quoteInBody && !displayed && !hasQuote(originalValues) && (previousQuote || (parent && typeof adapter.readReplyQuote === 'function'));
+      const quoteField = fields.find(f => f.name === 'quote');
+      if (displayed !== hasQuote(originalValues)) quoteField.label = displayed ? copy.addingQuote : copy.removingQuote;
+      else if (displayed) {
+        const sender = editor.quoteSender;
+        quoteField.label = typeof sender === 'string' && sender.length <= 80 && sender.trim() && !/[\r\n]/.test(sender)
+          ? copy.senderQuote.replace('{sender}', () => sender) : copy.quoteIncluded;
+      } else if (parent || previousQuote) quoteField.label = editor.quoteInBody ? copy.quoteInBody : copy.quoteOmitted;
+      else fields = fields.filter(f => f !== quoteField);
       var draft = { accountId: account.accountId, draftId: readBack.draftId, key,
         ...(activeEdit?.error?.stale && !activeEdit.conflictBase ? {} : { baseValues: activeEdit?.conflictBase || originalValues }),
         from: readBack.headers.from || account.accountEmail, fields,
         attachments: readBack.attachments.map(a => a.filename || a.mimeType || ""),
         ...(readBack.images ? { images: readBack.images } : {}),
-        state: unconfirmed ? "unconfirmed" : note === copy.syncing ? "syncing" : note && note !== copy.waiting ? "error" : "draft",
-        status: note || copy.saved, sendLabel: copy.send, fromLabel: copy.from,
+        state: sendView ? sendView.state : unconfirmed ? "unconfirmed" : note === copy.syncing ? "syncing" : note && note !== copy.waiting ? "error" : "draft",
+        status: sendView ? sendView.status : note || copy.saved, sendLabel: copy.send, fromLabel: copy.from,
+        ...(sendView?.cancelLabel ? { cancelLabel: sendView.cancelLabel } : {}),
+        ...(sendView?.pendingSend ? { pendingSend: sendView.pendingSend } : {}),
+        ...(canAddQuote ? { addQuoteLabel: copy.addQuote } : {}),
         ...(typeof adapter.deleteDraft === "function" ? { deleteLabel: copy.delete } : {}) };
       if (!renderOnly)
         await mailRecords(function (records) {
@@ -490,10 +573,18 @@ var cindyMail = (function () {
           savedRevision: 0,
           callId: message.callId,
           readBack: readBack,
+          ...(hasQuote(originalValues) ? { lastQuote: { parent, quote: originalValues.quote, quoteHtml: originalValues.quoteHtml } } : {}),
+          ...(quoteError ? { error: { ok: false, execution: 'not_executed', quote: true, message: quoteError } } : {}),
           ...(formatted?.issue ? { error: { ok: false, execution: 'not_executed', format: true, message: copy[formatted.issue] } } : {}),
         });
+      if (canPublish && !canPublish()) return false;
+      const preparingOwner =
+        renderOnly && sendView?.state === "sending" && !sendView.pendingSend && sendView.cancelLabel
+          ? activeEdit?.pendingSend
+          : undefined;
       const presented = await cindy.send({ type: "mail-draft-update", callId: message.callId,
         ...(message.sourceCallId ? { sourceCallId: message.sourceCallId } : {}), draft });
+      if (presented?.ok && renderOnly && activeEdit) activeEdit.preparingCard = preparingOwner;
       const created = !renderOnly && mailEdits.get(key);
       if (presented?.ok && created && !created.error && created.revision !== created.savedRevision)
         scheduleMailSave(key, message.callId, copy.failed);
@@ -542,10 +633,10 @@ var cindyMail = (function () {
       const edit = mailEdits.get(key);
       clearTimeout(edit.timer);
       const timer = setTimeout(() => runMailDraft(key, false, undefined, timer)
-        .catch(() => mailStatus(callId, failureMessage)), 2000);
+        .catch(() => (isLiveDraft(key, edit) ? mailStatus(callId, failureMessage) : undefined)), 2000);
       edit.timer = timer;
     }
-    async function runMailDraft(key, send, sourceCallId, autosaveTimer) {
+    async function runMailDraft(key, send, sourceCallId, autosaveTimer, pendingSend) {
       return navigator.locks.request("mail-compose:" + key, async function () {
         var record = (await mailRecords())[key];
         if (!record)
@@ -587,6 +678,8 @@ var cindyMail = (function () {
             execution: "not_executed",
             message: "请重新读取草稿后再操作。",
           };
+        if (pendingSend && edit.pendingSend !== pendingSend)
+          return { ok: false, execution: "not_executed", cancelled: true };
         // A timer may have waited behind another save while the user resumed
         // typing. Only the current debounce may start an automatic write.
         if (autosaveTimer !== undefined && edit.timer !== autosaveTimer)
@@ -596,14 +689,18 @@ var cindyMail = (function () {
         if (edit.error) return edit.error;
         var result;
         var rebased = false;
+        var quoteRepaired = false;
+        const canPublishActive = () => mailEdits.get(key) === edit && !edit.sent && !edit.deleting;
+        try {
         do {
           if (adapter.richText) {
             const formatted = formatMailFields(edit.fields, edit.additions, edit.readBack.editor.format);
             if (!sameFields(formatted.fields, edit.fields)) { edit.fields = formatted.fields; edit.revision++; }
             if (formatted.issue) {
-              edit.error = { ok: false, execution: 'not_executed', format: true, message: (await mailCopy())[formatted.issue] };
-              await showMailDraft({ callId: record.callId, sourceCallId }, selected, edit.readBack, edit.error.message, key, edit.fields, true);
-              return edit.error;
+              const err = { ok: false, execution: 'not_executed', format: true, message: (await mailCopy())[formatted.issue] };
+              edit.error = err;
+              await showMailDraft({ callId: record.callId, sourceCallId }, selected, edit.readBack, err.message, key, edit.fields, true, false, undefined, () => canPublishActive() && edit.error === err);
+              return err;
             }
           }
           var revision = edit.revision;
@@ -616,12 +713,13 @@ var cindyMail = (function () {
               data: { draftId: record.draftId, readBack: edit.readBack },
             };
           if (sending) edit.sending = true;
+          else edit.syncing = true;
           record.state = "pending";
           await mailRecords(function (records) {
             records[key] = record;
           });
           if (sending) {
-            await showMailDraft({ callId: record.callId, sourceCallId }, selected, edit.readBack, undefined, key, fields, true);
+            await showMailDraft({ callId: record.callId, sourceCallId }, selected, edit.readBack, undefined, key, fields, true, false, undefined, () => canPublishActive() && edit.sending);
             await mailStatus(
               record.callId,
               (await mailCopy()).busy,
@@ -630,8 +728,15 @@ var cindyMail = (function () {
               sourceCallId,
             );
           } else {
+            const copy = await mailCopy();
+            const preparingPending = edit.pendingSend?.phase === "preparing" ? edit.pendingSend : undefined;
+            const preparing = Boolean(preparingPending);
             await showMailDraft({ callId: record.callId, sourceCallId }, selected,
-              edit.readBack, (await mailCopy()).syncing, key, edit.fields, true);
+              edit.readBack, preparing ? undefined : copy.syncing, key, edit.fields, true, false,
+              preparing ? { state: "sending", status: copy.preparingSend, cancelLabel: copy.cancel } : undefined,
+              preparing
+                ? () => canPublishActive() && edit.pendingSend === preparingPending && preparingPending.phase === "preparing"
+                : () => isLiveDraft(key, edit) && edit.revision === revision);
           }
           var response = undefined;
           try {
@@ -646,6 +751,8 @@ var cindyMail = (function () {
             });
           } catch (_) {
             /* Unknown write: keep pending and never replay it. */
+          } finally {
+            if (!sending) edit.syncing = false;
           }
           result = response || {
             ok: false,
@@ -697,7 +804,7 @@ var cindyMail = (function () {
                   // Content learned after the countdown must be shown for a new
                   // full grace period; a metadata-only change can proceed.
                   if (sending && !sameFields(fields, merged.fields)) {
-                    await showMailDraft({ callId: record.callId, sourceCallId }, selected, latest, undefined, key, edit.fields, true);
+                    await showMailDraft({ callId: record.callId, sourceCallId }, selected, latest, undefined, key, edit.fields, true, false, undefined, canPublishActive);
                     return { ok: true, restartCountdown: true };
                   }
                   result = { ok: true, data: { draftId: record.draftId, readBack: latest } };
@@ -727,6 +834,9 @@ var cindyMail = (function () {
               key,
               edit.fields,
               true,
+              false,
+              undefined,
+              () => canPublishActive() && edit.error === result,
             );
             return result;
           }
@@ -751,8 +861,45 @@ var cindyMail = (function () {
               );
             return result;
           }
+          const previousParent = quoteParent(edit.readBack);
+          const clearingQuote = hasQuote(edit.readBack.editor) && !hasQuote(fields);
           edit.readBack = result.data.readBack;
           edit.conflictBase = undefined;
+          const sameParent = previousParent === quoteParent(edit.readBack);
+          // A provider may return a custom quote as part of the body. The
+          // completed write gives us its exact boundary when every byte matches.
+          if (sameParent && hasQuote(fields) && !hasQuote(edit.readBack.editor) &&
+              comparable('body', edit.readBack.editor.body) === comparable('body', fields.body + fields.quote) &&
+              (!adapter.richText || comparable('bodyHtml', edit.readBack.editor.bodyHtml) === comparable('bodyHtml', fields.bodyHtml + fields.quoteHtml))) {
+            edit.readBack = { ...edit.readBack, editor: { ...edit.readBack.editor, body: fields.body, quote: fields.quote,
+              ...(adapter.richText ? { bodyHtml: fields.bodyHtml, quoteHtml: fields.quoteHtml } : {}) } };
+          }
+          const observed = draftValues(edit.readBack);
+          // Competing user edits are handled by the revision loop. Repair only
+          // a confirmed save that dropped the quote from otherwise intact bodies.
+          const lostQuote = hasQuote(fields) && (!sameParent || (fields.quote && !observed.quote) || (fields.quoteHtml && !observed.quoteHtml));
+          if (lostQuote || (clearingQuote && hasQuote(observed))) {
+            record.fingerprint = edit.readBack.fingerprint;
+            record.locator = edit.readBack.locator;
+            record.state = 'draft';
+            await mailRecords(records => { records[key] = record; });
+            if (!quoteRepaired && sameParent && !edit.readBack.editor.quoteInBody && comparable('body', fields.body) === comparable('body', observed.body) &&
+                (!adapter.richText || comparable('bodyHtml', fields.bodyHtml) === comparable('bodyHtml', observed.bodyHtml))) {
+              quoteRepaired = true;
+              edit.additions = (edit.additions || []).filter(a => !additions.includes(a));
+              if (adapter.richText && edit.fields.attachmentItems === fields.attachmentItems) edit.fields.attachmentItems = observed.attachmentItems;
+              continue;
+            }
+            if (edit.revision === revision) {
+              if (lostQuote) edit.lastQuote = sameParent ? { parent: previousParent, quote: fields.quote, quoteHtml: fields.quoteHtml } : undefined;
+              edit.fields = observed;
+              edit.savedRevision = revision;
+            }
+            const err = { ok: false, execution: 'not_executed', quote: true, message: (await mailCopy()).quoteMismatch };
+            edit.error = err;
+            await showMailDraft({ callId: record.callId, sourceCallId }, selected, edit.readBack, err.message, key, observed, true, false, undefined, () => canPublishActive() && edit.error === err);
+            return err;
+          }
           if (adapter.richText) {
             edit.additions = (edit.additions || []).filter(a => !additions.includes(a));
             if (edit.fields.attachmentItems === fields.attachmentItems) edit.fields.attachmentItems = draftValues(edit.readBack).attachmentItems;
@@ -769,24 +916,35 @@ var cindyMail = (function () {
           if (adapter.richText) {
             const actual = draftValues(edit.readBack), verified = formatMailFields(actual, undefined, edit.readBack.editor.format);
             if (verified.issue || !sameFields(verified.fields, actual)) {
-              edit.error = { ok: false, execution: 'not_executed', format: true, message: (await mailCopy()).formatNotRetained };
-              await showMailDraft({ callId: record.callId, sourceCallId }, selected, edit.readBack, edit.error.message, key, edit.fields, true);
-              return edit.error;
+              const err = { ok: false, execution: 'not_executed', format: true, message: (await mailCopy()).formatNotRetained };
+              edit.error = err;
+              await showMailDraft({ callId: record.callId, sourceCallId }, selected, edit.readBack, err.message, key, edit.fields, true, false, undefined, () => canPublishActive() && edit.error === err);
+              return err;
             }
           }
           // Typing during an automatic save starts a fresh idle period. An
           // explicit read/send still flushes all edits through the existing loop.
           if (autosaveTimer !== undefined && edit.timer) break;
         } while (send || edit.savedRevision !== edit.revision);
-        await showMailDraft(
-          { callId: record.callId, sourceCallId: sourceCallId },
-          selected,
-          edit.readBack,
-          edit.savedRevision !== edit.revision ? (await mailCopy()).waiting : undefined,
-          key,
-          edit.fields,
-          true,
-        );
+        } finally {
+          edit.syncing = false;
+        }
+        if (isLiveDraft(key, edit)) {
+          const finishedRevision = edit.revision;
+          const finishedSavedRevision = edit.savedRevision;
+          await showMailDraft(
+            { callId: record.callId, sourceCallId: sourceCallId },
+            selected,
+            edit.readBack,
+            finishedSavedRevision !== finishedRevision ? (await mailCopy()).waiting : undefined,
+            key,
+            edit.fields,
+            true,
+            false,
+            undefined,
+            () => isLiveDraft(key, edit) && edit.revision === finishedRevision && edit.savedRevision === finishedSavedRevision,
+          );
+        }
         return result;
       });
     }
@@ -894,18 +1052,61 @@ var cindyMail = (function () {
         }
       };
       async function prepare() {
+        const canPublishPreparing = () =>
+          mailEdits.get(key) === edit &&
+          edit.pendingSend === pending &&
+          pending.phase === "preparing" &&
+          !edit.sent &&
+          !edit.deleting;
         try {
-          const saved = await runMailDraft(key, false, sourceCallId);
+          const needsSync = !edit.error && (edit.syncing || edit.revision !== edit.savedRevision);
+          if (needsSync) {
+            const copy = await mailCopy();
+            if (!canPublishPreparing()) return;
+            if (!edit.error) {
+              await mailStatus(edit.callId, copy.preparingSend, "", true, sourceCallId, "sending", undefined, copy.cancel);
+              if (!canPublishPreparing()) return;
+            }
+          }
+          const saved = await runMailDraft(key, false, sourceCallId, undefined, pending);
           if (edit.pendingSend !== pending) return;
-          if (!saved.ok || saved.data?.sent) { edit.pendingSend = undefined; resolve(saved); return; }
+          if (!saved.ok || saved.data?.sent) {
+            const wasPreparingCard = edit.preparingCard === pending;
+            edit.pendingSend = undefined;
+            if (wasPreparingCard) {
+              const copy = await mailCopy();
+              if (edit.preparingCard === pending && !edit.pendingSend && !edit.deleting) {
+                if (saved.data?.sent) {
+                  await mailStatus(edit.callId, copy.sent, "", false, sourceCallId, "sent");
+                } else if (!edit.sent) {
+                  const failedState = saved.execution === "unknown" ? "unconfirmed" : "error";
+                  await mailStatus(edit.callId, saved.message || copy.failed, "", false, sourceCallId, failedState);
+                }
+              }
+            }
+            resolve(saved);
+            return;
+          }
           // Restoration may adopt remote-only changes without any write. Show
           // that exact content before starting the grace period, including AI sends.
           const record = (await mailRecords())[key];
           const account = record && await adapter.selectAccount(record.account);
-          if (!account?.ok || !await showMailDraft({ callId: edit.callId, sourceCallId }, account,
-              edit.readBack, undefined, key, edit.fields, true)) throw new Error('Draft preview unavailable');
           const copy = await mailCopy();
           if (edit.pendingSend !== pending) return;
+          const previewed = account?.ok && await showMailDraft(
+            { callId: edit.callId, sourceCallId },
+            account,
+            edit.readBack,
+            undefined,
+            key,
+            edit.fields,
+            true,
+            false,
+            { state: "sending", status: needsSync ? copy.preparingSend : copy.busy, cancelLabel: copy.cancel },
+            canPublishPreparing,
+          );
+          if (edit.pendingSend !== pending) return;
+          if (!previewed) throw new Error('Draft preview unavailable');
           const deadline = Date.now() + 10000;
           const shown = await mailStatus(edit.callId, copy.countdown.replace("{seconds}", "10"), "", true,
             sourceCallId, "sending", { deadline, label: copy.countdown, cancelLabel: copy.cancel, sendNowLabel: copy.sendNow });
@@ -916,8 +1117,12 @@ var cindyMail = (function () {
           pending.timer = setTimeout(pending.finish, 10000);
         } catch (_) {
           if (edit.pendingSend === pending) {
+            const catchRevision = edit.revision;
             cancelMailSend(key, { ok: false, execution: "not_executed", message: "无法展示发送倒计时，邮件未发送。请重新读取草稿。" });
-            await mailStatus(edit.callId, (await mailCopy()).failed, "", false, sourceCallId, "error");
+            const copy = await mailCopy();
+            if (isLiveDraft(key, edit) && edit.revision === catchRevision) {
+              await mailStatus(edit.callId, copy.failed, "", false, sourceCallId, "error");
+            }
           }
         }
       }
@@ -925,20 +1130,20 @@ var cindyMail = (function () {
       return promise;
     }
     async function handleMailCard(message) {
-      var match = /^mail:(change|send|continue|cancel|now|attach|image|delete):([a-f0-9-]{36})$/.exec(
+      var match = /^mail:(change|send|continue|cancel|now|attach|image|delete|quote):([a-f0-9-]{36})$/.exec(
         message.actionId || "",
       );
       if (!match || (message.formChange === true) !== (match[1] === "change"))
         return;
       var key = match[2];
       var edit = mailEdits.get(key);
-      if (!edit && ['change', 'send', 'attach', 'image', 'cancel', 'now'].includes(match[1])) {
+      if (!edit && ['change', 'send', 'attach', 'image', 'quote', 'cancel', 'now'].includes(match[1])) {
         await restoreMailDraft(key, message.callId);
         edit = mailEdits.get(key);
       }
       if (edit?.deleting && match[1] !== "delete") return;
       if (
-        ["change", "send", "attach", "image"].includes(match[1]) &&
+        ["change", "send", "attach", "image", "quote"].includes(match[1]) &&
         edit &&
         edit.callId === message.callId &&
         (!message.formValues ||
@@ -947,12 +1152,14 @@ var cindyMail = (function () {
           ) ||
           (edit.fields.quote && typeof message.formValues.quote !== "string"))
       ) {
-        await mailStatus(message.callId, (await mailCopy()).unavailable);
+        const copy = await mailCopy();
+        if (isLiveDraft(key, edit)) await mailStatus(message.callId, copy.unavailable);
         return;
       }
       // Capture before the first await so a following model tool sees the keystroke.
+      let formChanged = false;
       if (
-        ["change", "send", "attach", "image"].includes(match[1]) &&
+        ["change", "send", "attach", "image", "quote"].includes(match[1]) &&
         edit &&
         edit.callId === message.callId &&
         !edit.sent &&
@@ -962,7 +1169,6 @@ var cindyMail = (function () {
           (name) => message.formValues[name] !== edit.fields[name],
         )
       ) {
-        cancelMailSend(key);
         const incoming = { ...edit.fields, ...message.formValues };
         const base = edit.error?.stale ? edit.conflictBase : edit.inputFields || edit.fields;
         const merged = mergeFields(base, incoming, edit.error?.stale ? draftValues(edit.readBack) : edit.fields);
@@ -973,11 +1179,20 @@ var cindyMail = (function () {
             ? '<div>' + merged.fields.quote.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\r\n?|\n/g, '<br>') + '</div>'
             : '';
         }
-        edit.conflictBase = merged.conflicts.length ? base : undefined;
-        edit.fields = merged.fields;
-        edit.inputFields = incoming;
-        edit.revision++;
-        if (!edit.error || edit.error.execution === 'not_executed') edit.error = await conflictError(merged.conflicts);
+        const current = adapter.richText ? formatMailFields(edit.fields, [], 'text').fields : edit.fields;
+        const changed = !sameFields(merged.fields, current) ||
+          Boolean(merged.conflicts.length) !== Boolean(edit.error?.stale);
+        if (changed) {
+          formChanged = true;
+          cancelMailSend(key);
+          edit.conflictBase = merged.conflicts.length ? base : undefined;
+          edit.fields = merged.fields;
+          edit.inputFields = incoming;
+          edit.revision++;
+          if (!edit.error?.quote || incoming.quote !== base?.quote) {
+            if (!edit.error || edit.error.execution === 'not_executed') edit.error = await conflictError(merged.conflicts);
+          }
+        }
       }
       if (['attach', 'image'].includes(match[1]) && adapter.richText && edit && !edit.sent && !edit.sending && message.mailAttachment) {
         cancelMailSend(key);
@@ -989,6 +1204,7 @@ var cindyMail = (function () {
         }
         edit.revision++;
       }
+      let actionRevision = edit?.revision;
       var record = (await mailRecords())[key];
       if (!record || record.callId !== message.callId) return;
       if (match[1] === "delete") { await deleteMailDraft(key); return; }
@@ -1002,9 +1218,10 @@ var cindyMail = (function () {
         await mailStatus(record.callId, copy.missing);
         return;
       }
-        if (edit.error?.stale) {
+      if (edit.error?.stale) {
+        const staleError = edit.error;
         const selected = await adapter.selectAccount(record.account);
-        if (selected.ok) await showMailDraft({ callId: record.callId }, selected, edit.readBack, edit.error.message, key, edit.fields, true);
+        if (selected.ok) await showMailDraft({ callId: record.callId }, selected, edit.readBack, staleError.message, key, edit.fields, true, false, undefined, () => isLiveDraft(key, edit) && edit.error === staleError);
         return;
       }
       if (
@@ -1013,21 +1230,85 @@ var cindyMail = (function () {
       )
         return;
       if (match[1] === "cancel" || match[1] === "now") {
-        if (record.state !== "draft" || edit.sent || edit.sending) return;
-        if (match[1] === "now" && edit.pendingSend) {
-          await edit.pendingSend.finish();
-        } else if (cancelMailSend(key) || !edit.pendingSend) {
+        if (edit.sent || edit.sending) return;
+        if (match[1] === "now") {
+          if (record.state !== "draft") return;
+          if (edit.pendingSend) {
+            await edit.pendingSend.finish();
+          } else {
+            const selected = await adapter.selectAccount(record.account);
+            if (selected.ok) await showMailDraft({ callId: record.callId },
+              selected, edit.readBack, undefined, key, edit.fields, true, false, undefined, () => isLiveDraft(key, edit) && edit.revision === actionRevision);
+          }
+          return;
+        }
+        // Cancelling a preparing send is valid while a draft save is in flight
+        // (record.state === 'pending' for the save, never for an unconfirmed send).
+        const cancellingPreparing = edit.pendingSend?.phase === "preparing";
+        if (!cancellingPreparing && record.state !== "draft") return;
+        if (cancelMailSend(key) || !edit.pendingSend) {
           // After restart the persisted countdown has no live send behind it.
           // Restore a draft; a new send request must start a fresh grace period.
           const selected = await adapter.selectAccount(record.account);
-          if (selected.ok) await showMailDraft({ callId: record.callId },
-            selected, edit.readBack, undefined, key, edit.fields, true);
+          if (!isLiveDraft(key, edit)) return;
+          const cancelSyncing = edit.syncing;
+          const cancelRevision = edit.revision;
+          const cancelSavedRevision = edit.savedRevision;
+          const cancelError = edit.error;
+          const note = cancelError ? cancelError.message : cancelSyncing ? copy.syncing : cancelSavedRevision !== cancelRevision ? copy.waiting : undefined;
+          if (selected.ok) {
+            await showMailDraft({ callId: record.callId },
+              selected, edit.readBack, note, key, edit.fields, true, false, undefined,
+              () => isLiveDraft(key, edit) && edit.syncing === cancelSyncing && edit.revision === cancelRevision && edit.savedRevision === cancelSavedRevision && edit.error === cancelError);
+          } else {
+            await mailStatus(record.callId, selected.message || copy.failed, "", false, undefined, "error");
+          }
+          if (isLiveDraft(key, edit) && !edit.syncing && edit.savedRevision !== edit.revision && !edit.timer && !edit.error)
+            scheduleMailSave(key, record.callId, copy.failed);
         }
         return;
       }
-      clearTimeout(edit.timer);
-      if (["change", "attach", "image"].includes(match[1])) {
+      if (match[1] === 'quote') {
+        if (record.state !== 'draft' || edit.sent || edit.sending || edit.deleting || hasQuote(edit.fields) || edit.readBack.editor.quoteInBody) return;
+        cancelMailSend(key);
+        let lookupNote;
+        await navigator.locks.request('mail-compose:' + key, async () => {
+          if (mailEdits.get(key) !== edit || edit.sent || edit.sending || edit.deleting || edit.error?.stale ||
+              (edit.error && !edit.error.quote) || hasQuote(edit.fields)) return;
+          const before = edit.readBack;
+          const parent = quoteParent(before);
+          try {
+            const original = edit.lastQuote?.parent === parent ? edit.lastQuote :
+              parent && await adapter.readReplyQuote?.({ record: { ...record }, readBack: before });
+            if (mailEdits.get(key) !== edit || edit.deleting || edit.readBack !== before || hasQuote(edit.fields)) return;
+            if (!validQuote(original)) throw new Error(original === null ? copy.quoteEmpty : copy.quoteUnavailable);
+            edit.fields.quote = original.quote;
+            if (adapter.richText) edit.fields.quoteHtml = original.quoteHtml;
+            // The new visible quote is the base for a subsequent explicit removal.
+            edit.inputFields = { ...edit.fields };
+            edit.error = undefined;
+            edit.revision++;
+            actionRevision = edit.revision;
+          } catch (error) {
+            lookupNote = error?.message === copy.quoteEmpty ? copy.quoteEmpty : copy.quoteUnavailable;
+          }
+        });
+        if (!isLiveDraft(key, edit)) return;
+        if (lookupNote || edit.error) {
+          // The optional fetch did not change the draft. Outstanding typing
+          // still autosaves; an earlier mandatory verification failure stays in force.
+          await mailStatus(record.callId, lookupNote || edit.error.message, '', false, undefined, edit.error ? 'error' : 'draft');
+          if (!edit.error && edit.savedRevision !== edit.revision) scheduleMailSave(key, record.callId, copy.failed);
+          return;
+        }
+      }
+      if (["change", "attach", "image", "quote"].includes(match[1])) {
+        if (match[1] === "change" && !formChanged && (edit.syncing || edit.savedRevision === edit.revision)) return;
+        const canPublishEdit = () => isLiveDraft(key, edit) && edit.revision === actionRevision;
+        if (!canPublishEdit()) return;
+        clearTimeout(edit.timer);
         var selected = await adapter.selectAccount(record.account);
+        if (!canPublishEdit()) return;
         if (selected.ok)
           await showMailDraft(
             { callId: record.callId },
@@ -1037,9 +1318,17 @@ var cindyMail = (function () {
             key,
             edit.fields,
             true,
+            false,
+            undefined,
+            canPublishEdit,
           );
+        if (!canPublishEdit()) return;
         scheduleMailSave(key, record.callId, copy.failed);
         return;
+      }
+      clearTimeout(edit.timer);
+      if (edit.error?.execution === 'not_executed' && !edit.error.stale && !edit.error.format && !edit.error.quote) {
+        edit.error = undefined;
       }
       var result = await requestMailSend(key);
       if (result.ok && result.data.sent && !result.data.alreadySent) {
@@ -1103,7 +1392,7 @@ var cindyMail = (function () {
       if (operation !== "send") cancelMailSend(key);
       // An explicit model update can resolve a conflict using the latest provider
       // version. Reads below expose both versions; automatic sends remain blocked.
-      if (operation === 'update' && (mailEdits.get(key)?.error?.stale || mailEdits.get(key)?.error?.format)) return null;
+      if (operation === 'update' && (mailEdits.get(key)?.error?.stale || mailEdits.get(key)?.error?.format || mailEdits.get(key)?.error?.quote)) return null;
       var result = operation === "send" ? await requestMailSend(key, sourceCallId) :
         operation === "get" &&
         mailEdits.get(key)?.error?.execution === "not_executed"

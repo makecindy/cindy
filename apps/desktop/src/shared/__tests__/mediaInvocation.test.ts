@@ -16,6 +16,28 @@ const operation = {
 const protocol = { schemaVersion: 1, guideId: 'opaque-server-id', revision: 'server-revision' };
 
 describe('媒体协议说明与本地执行绑定', () => {
+  // Unit: a shared GPT Image request failed when reloading its prepared Guide.
+  it('roundtrips a shared image generation binding through the persisted decoder', () => {
+    const providerId = 'share:6ddff7c1-bda2-4bb7-a350-c090c5f63747';
+    const snapshot = {
+      ...protocol, ...operation, modelId: 'openai/gpt-image-2',
+      capability: 'image.generate', officialDocs: 'https://example.com/images',
+      request: { ...operation.request, path: '/images/generations' },
+      response: { mode: 'sync', media: [{ path: ['data', '0', 'b64_json'], encoding: 'base64', kind: 'image' }] },
+      binding: { providerId, executor: 'provider-image' },
+    };
+    expect(parsePreparedMediaInvocationGuide(JSON.parse(JSON.stringify(snapshot)))).toEqual({ ok: true, value: snapshot });
+
+    for (const invalidProviderId of ['share:', 'share:bad/id', 'share:bad:id', `share:${'a'.repeat(123)}`]) {
+      expect(parsePreparedMediaInvocationGuide({ ...snapshot, binding: { ...snapshot.binding, providerId: invalidProviderId } }))
+        .toMatchObject({ ok: false });
+    }
+    expect(parsePreparedMediaInvocationGuide({ ...snapshot, binding: { providerId, executor: 'gateway' } }))
+      .toMatchObject({ ok: false });
+    expect(parsePreparedMediaInvocationGuide({ ...snapshot, capability: 'image.edit' }))
+      .toMatchObject({ ok: false });
+  });
+
   // Unit: the real persisted JSON decoder must retain the chosen runtime/source
   // across restart and must reject incomplete or credential-bearing bindings.
   it('roundtrips a custom HTTP binding independently of the Guide revision', () => {

@@ -121,6 +121,23 @@
     "status": {
       "running": "Wird ausgeführt",
       "done": "Abgeschlossen"
+    },
+    "collab": {
+      "wait": "Auf Subagent warten",
+      "waitCount_one": "Auf {{count}} Subagent warten",
+      "waitCount_other": "Auf {{count}} Subagents warten",
+      "sendInput": "Anweisungen an Subagent senden",
+      "sendInputCount_one": "Anweisungen an {{count}} Subagent senden",
+      "sendInputCount_other": "Anweisungen an {{count}} Subagents senden",
+      "resume": "Subagent fortsetzen",
+      "resumeCount_one": "{{count}} Subagent fortsetzen",
+      "resumeCount_other": "{{count}} Subagents fortsetzen",
+      "close": "Subagent schließen",
+      "closeCount_one": "{{count}} Subagent schließen",
+      "closeCount_other": "{{count}} Subagents schließen",
+      "spawn": "Subagent starten",
+      "spawnCount_one": "{{count}} Subagent starten",
+      "spawnCount_other": "{{count}} Subagents starten"
     }
   },
   "agentActions": {
@@ -190,9 +207,21 @@
       }
     }
   },
+  "geminiRateLimit": {
+    "retried": "Nach der Gemini-Wartezeit automatisch erneut versucht",
+    "title": "Das Eingabelimit pro Minute für Gemini ist erreicht.",
+    "exhausted": "Gemini ist nach einem erneuten Versuch weiterhin begrenzt. Versuche es später manuell.",
+    "retryIn": "Automatischer Versuch in {{seconds}} s"
+  },
   "subscriptionAccountError": {
-    "limited": "Das Abonnementkonto dieser Aufgabe hat sein Nutzungslimit erreicht. Warte auf die Zurücksetzung oder wähle eine andere Modellquelle. Das Konto wird nicht automatisch gewechselt.",
-    "limitedUntil": "Das Abonnementkonto dieser Aufgabe hat sein Nutzungslimit erreicht. Voraussichtliche Zurücksetzung: {{resetAt}}. Warte bis dahin oder wähle eine andere Modellquelle. Das Konto wird nicht automatisch gewechselt.",
+    "unreachable": "Der Codex-Kontodienst ist vorübergehend nicht erreichbar.",
+    "rechecking": "Der Codex-Kontodienst ist vorübergehend nicht erreichbar. Neuer Versuch um {{resetAt}}.",
+    "poolModelLimited": "Das Nutzungslimit des Abos für dieses Modell ist erreicht. Sie können das Modell wechseln.",
+    "poolRetryUntil": "Versuchen Sie es nach {{resetAt}} erneut.",
+    "poolOtherSignedOut": "Ein weiteres Abo-Konto ist abgemeldet. Melden Sie es auf dem Computer an, der die Aufgabe ausführt, und versuchen Sie es erneut.",
+    "poolUnavailable": "Für dieses Modell ist kein Abo-Konto verfügbar. Wechseln Sie das Modell oder prüfen Sie die Konten auf dem Computer, der die Aufgabe ausführt.",
+    "limited": "Das Abonnementkonto dieser Aufgabe hat sein Nutzungslimit erreicht. Warte auf die Zurücksetzung oder wähle eine andere Modellquelle.",
+    "limitedUntil": "Das Abonnementkonto dieser Aufgabe hat sein Nutzungslimit erreicht. Voraussichtliche Zurücksetzung: {{resetAt}}. Warte bis dahin oder wähle eine andere Modellquelle.",
     "loginRequired": "Das Abonnementkonto dieser Aufgabe erfordert eine erneute Anmeldung. Melde dich auf dem Computer, der die Aufgabe ausführt, erneut an und versuche es dann noch einmal.",
     "signingIn": "Die Anmeldung für das Abonnementkonto dieser Aufgabe läuft. Versuche es nach Abschluss der Anmeldung erneut.",
     "unavailable": "Das dieser Aufgabe zugewiesene Abonnementkonto kann für diese Anfrage nicht verwendet werden. Prüfe das Konto in den Modellanbieter-Einstellungen auf dem ausführenden Computer oder wähle eine andere Modellquelle.",

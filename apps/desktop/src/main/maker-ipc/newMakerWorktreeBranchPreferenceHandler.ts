@@ -18,11 +18,12 @@ const MAX_SOURCE_BRANCH_LENGTH = 1024;
 export interface NewMakerWorktreeBranchPreferenceHandlerDeps {
   isDeviceLinkInvoke(): boolean;
   assertTrustedCaller(event: unknown): void;
-  getPreference(baseRepo: string): NewMakerWorktreeBranchPreferenceSnapshot | null;
+  /** The Node Host keeps this file with asynchronous I/O; the desktop answers synchronously. */
+  getPreference(baseRepo: string): NewMakerWorktreeBranchPreferenceSnapshot | null | Promise<NewMakerWorktreeBranchPreferenceSnapshot | null>;
   applyPreference(input: {
     baseRepo: string;
     sourceBranch: string;
-  }): NewMakerWorktreeBranchPreferenceSnapshot;
+  }): NewMakerWorktreeBranchPreferenceSnapshot | Promise<NewMakerWorktreeBranchPreferenceSnapshot>;
   broadcast(
     channel: typeof MAKER_PUSH.NEW_MAKER_WORKTREE_BRANCH_CHANGED,
     payload: NewMakerWorktreeBranchPreferenceSnapshot,
@@ -79,10 +80,10 @@ export function registerNewMakerWorktreeBranchPreferenceHandler(
     return deps.getPreference(baseRepo);
   });
 
-  registry.handle(MAKER_INVOKE.APPLY_NEW_MAKER_WORKTREE_BRANCH_PREF, (event, request: unknown) => {
+  registry.handle(MAKER_INVOKE.APPLY_NEW_MAKER_WORKTREE_BRANCH_PREF, async (event, request: unknown) => {
     assertOrigin(event);
     const record = requireRequest(request);
-    const snapshot = deps.applyPreference({
+    const snapshot = await deps.applyPreference({
       baseRepo: requireBaseRepo(record.baseRepo),
       sourceBranch: requireSourceBranch(record.sourceBranch),
     });

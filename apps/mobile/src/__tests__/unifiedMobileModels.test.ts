@@ -1,7 +1,7 @@
 import { expect, it, vi } from 'vitest';
 import type { UnifiedModelEntry } from '@cindy/model-providers';
 import type { ProviderView } from '@cindy/model-providers/registry';
-import { addModelFavorite, matchesEntry, mobileUnifiedEntries, resolveMobileModelConfig, sameConfiguration } from '@/session/unifiedMobileModels';
+import { addModelFavorite, listedMobileEntries, matchesEntry, mobileUnifiedEntries, resolveMobileModelConfig, sameConfiguration } from '@/session/unifiedMobileModels';
 const cap = (agent: 'codex'|'claude-code') => ({agent,wireModelId:agent === 'codex' ? 'codex/model' : 'model',efforts:['low','medium','high'],defaultEffort:'medium',supportsFastMode:true,contextWindow:200000,defaultEffortSource:"catalog",contextWindowVerified:true});
 const entry = {providerId:'account-a',modelId:'model',displayName:'Model',candidates:['codex','claude-code'],recommended:'codex',nativeAgent:'codex',capabilities:{codex:cap('codex'),'claude-code':cap('claude-code')}} as unknown as UnifiedModelEntry;
 const fastCapable = () => true;
@@ -76,4 +76,20 @@ it('restores Ultrafast only while the selected account advertises that tier', ()
   const actual = resolveMobileModelConfig(available, { fastCapable, favorite });
   expect(actual.fast).toBe('ultrafast');
   expect(sameConfiguration(actual, { ...actual, fast: true })).toBe(false);
+});
+// PR #11565 review: a provider hidden from the model picker was dropped from the entries that
+// favorites and saved picks resolve against, so its favorites vanished and a saved pick looked
+// unavailable. Hiding is presentation only. Minimal input: one listed provider, one with
+// `hidden: true`. Tier: unit over the shared derivation the picker sheet uses.
+it('keeps a hidden provider resolvable and folds it only out of the regular list', () => {
+  const source = (id: string, extra: Partial<ProviderView> = {}) => ({ id, name: id, source: 'user', agents: ['codex'],
+    auth: { method: 'apiKey' }, routing: { codex: {} }, connected: true,
+    models: { codex: [{ id: `${id}-model`, name: id, contextWindow: 1000, efforts: [], defaultEffort: null }] }, ...extra }) as ProviderView;
+  const providers = [source('shown'), source('tucked', { hidden: true })];
+  const entries = mobileUnifiedEntries(providers, ['codex'], undefined, false);
+  expect(entries.map(item => item.providerId)).toEqual(['shown', 'tucked']);
+  expect(listedMobileEntries(entries, providers, null).map(item => item.providerId)).toEqual(['shown']);
+  // The model the task is using stays listed even though its provider is hidden.
+  expect(listedMobileEntries(entries, providers, { providerId: 'tucked', modelId: 'tucked-model' })
+    .map(item => item.providerId)).toEqual(['shown', 'tucked']);
 });

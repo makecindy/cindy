@@ -198,12 +198,14 @@ export function createHostPluginAuthorization(options: {
     resolveSavedCredential(id: string, key: string) {
       return savedCredentialManager().resolve(id, key);
     },
-    async cleanupSourceReferences(from: string) {
+    async cleanupSourceReferences(from: string, check?: () => void) {
       // Wait for existing source mutations, releasing that lock before taking
       // consumer locks. The manager's uninstall journal already blocks new work.
-      await withMutationLock(from, () => {});
+      await withMutationLock(from, () => check?.());
+      check?.();
       const targets = secret.listGhostAccountReferenceKeys(options.list().map(installedGhostStoragePart));
       await savedCredentialManager().relocateSourceReferences(from, null, targets);
+      check?.();
       await oauth.relocateSourceReferences(from, null, targets);
     },
     bindConnection(args: { ghostId: string; actionId: string; onCommitted(): void }) {

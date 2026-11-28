@@ -147,7 +147,7 @@ export function AccountSwitcherDialog({
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
       <Dialog.Portal>
         <Dialog.Overlay
-          className="modal-scrim fixed inset-0 z-[10000]"
+          className="modal-scrim fixed inset-0 z-modal"
           style={{ WebkitAppRegion: 'no-drag' } as CSSProperties}
         />
         <Dialog.Content
@@ -155,7 +155,7 @@ export function AccountSwitcherDialog({
           ref={contentRef}
           tabIndex={-1}
           className={cn(
-            'modal-panel fixed left-1/2 top-1/2 z-[10000] w-[420px] max-w-[calc(100vw-32px)] -translate-x-1/2 -translate-y-1/2',
+            'modal-panel fixed left-1/2 top-1/2 z-modal w-[420px] max-w-[calc(100vw-32px)] -translate-x-1/2 -translate-y-1/2',
             'select-none p-5',
           )}
           style={{ WebkitAppRegion: 'no-drag' } as CSSProperties}
@@ -178,7 +178,6 @@ export function AccountSwitcherDialog({
             <Tip
               text={t('sidebar.accountSwitcher.close')}
               side="bottom"
-              contentClassName="z-[10001]"
             >
               <button
                 type="button"

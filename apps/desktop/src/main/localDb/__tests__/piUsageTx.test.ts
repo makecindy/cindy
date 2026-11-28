@@ -1,8 +1,14 @@
 import { readFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import Database from 'better-sqlite3';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { tx } from '../worker/opHandlers/tx.js';
 import type { PiUsageWrite } from '../worker/opHandlers/piUsageTx.js';
+
+const require = createRequire(import.meta.url);
+const migrateHarness = require('../../../../drizzle/scripts/0167_token_usage_harness.ts') as {
+  run: (db: Database.Database) => void;
+};
 
 // #8887, db tier: unlike turn-only coverage, verifies durable duplicate receipts,
 // rollback and delayed pricing through the production named transaction.
@@ -12,6 +18,8 @@ describe('Pi request usage transaction', () => {
     db = new Database(':memory:');
     db.exec(readFileSync(new URL('../../../../drizzle/0154_daily_token_attribution.sql', import.meta.url), 'utf8'));
     db.exec(readFileSync(new URL('../../../../drizzle/0155_account_usage_first_day.sql', import.meta.url), 'utf8'));
+    db.exec(`CREATE TABLE auxiliary_usage_receipts(receipt_id TEXT PRIMARY KEY, provider_id TEXT, model TEXT, source TEXT, session_id TEXT, transport TEXT, day TEXT, recorded_at INTEGER, input_tokens INTEGER, output_tokens INTEGER, cache_read_tokens INTEGER, cache_create_tokens INTEGER)`);
+    migrateHarness.run(db);
     db.exec(`
       CREATE TABLE pi_usage_receipts(session_id TEXT, settlement_id TEXT, receipt_id TEXT,
         recorded_at INTEGER, priced INTEGER DEFAULT 0, pricing_payload TEXT, PRIMARY KEY(session_id, settlement_id, receipt_id));
@@ -24,7 +32,7 @@ describe('Pi request usage transaction', () => {
       CREATE TABLE daily_spend(day TEXT, cost_currency TEXT, cost_amount REAL DEFAULT 0,
         cost_is_approximate INTEGER DEFAULT 0, updated_at INTEGER, PRIMARY KEY(day, cost_currency));
       CREATE TABLE sessions(id TEXT PRIMARY KEY, total_token_usage INTEGER DEFAULT 0,
-        total_cost_amount REAL DEFAULT 0, total_cost_currency TEXT, total_cost_is_approximate INTEGER DEFAULT 0);
+        total_cost_usd REAL DEFAULT 0, total_cost_usd_is_approximate INTEGER DEFAULT 0, total_cost_amount REAL DEFAULT 0, total_cost_currency TEXT, total_cost_is_approximate INTEGER DEFAULT 0);
       INSERT INTO sessions(id) VALUES ('task');
     `);
   });
@@ -37,6 +45,18 @@ describe('Pi request usage transaction', () => {
   const write = (...rows: PiUsageWrite[]) => tx(db, { name: 'usage.recordPiUsage', args: rows });
   const total = () => db.prepare('SELECT total_token_usage AS tokens, total_cost_amount AS cost FROM sessions').get();
 
+  // DB tier: two native currencies on one session must survive an interleaved receipt replay.
+  it.each([true, false])('keeps both currencies when the approximate USD receipt arrives first: %s', approximateFirst => {
+    const first = receipt({ amount: 2.5, currency: 'USD', actualCost: true, approximate: approximateFirst });
+    const second = receipt({ receiptId: 'pi:2', amount: 7, currency: 'CNY', actualCost: true });
+    const third = receipt({ receiptId: 'pi:3', amount: 1, currency: 'USD', actualCost: true, approximate: !approximateFirst });
+    write(first, second, third, second);
+    expect(db.prepare('SELECT total_cost_usd,total_cost_usd_is_approximate,total_cost_is_approximate,total_cost_currency,total_cost_amount FROM sessions').get())
+      .toEqual({total_cost_usd: 3.5,total_cost_usd_is_approximate: 1,total_cost_is_approximate: 0,total_cost_currency: 'CNY',total_cost_amount: 7});
+    expect(db.prepare('SELECT cost_currency,cost_amount FROM daily_spend ORDER BY cost_currency').all())
+      .toEqual([{cost_currency: 'CNY',cost_amount: 7},{cost_currency: 'USD',cost_amount: 3.5}]);
+  });
+
   it('commits tokens before prices and ignores replayed live and terminal receipts', () => {
     write(receipt());
     expect(total()).toEqual({ tokens: 154, cost: 0 });
@@ -48,7 +68,7 @@ describe('Pi request usage transaction', () => {
     write(receipt(), priced); // New consumer after reconnect uses only durable receipts.
     expect(total()).toEqual({ tokens: 154, cost: 0.2 });
     expect(db.prepare('SELECT * FROM daily_token_attribution').all()).toEqual([{
-      day: '1970-01-01', provider: 'xd', billing_source: 'cindy-ai', model: 'model-a',
+      day: '1970-01-01', provider: 'xd', billing_source: 'cindy-ai', model: 'model-a', harness: 'pi',
       input_tokens: 100, output_tokens: 20, cache_read_tokens: 30, cache_create_tokens: 4,
     }]);
     expect(db.prepare('SELECT input_tokens, cost_amount FROM daily_model_usage').get())

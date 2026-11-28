@@ -11,7 +11,7 @@ import {
 const t = (key: string) => key;
 
 describe('realProfilePermissionGuide', () => {
-  it('names Full Disk Access in the first-enable confirm on macOS', () => {
+  it('uses the folder-access explanation in the first-enable confirm on macOS', () => {
     expect(realProfileEnableDescriptionKey('darwin')).toBe(
       'settings.computerUse.realProfile.confirmDescriptionMac',
     );
@@ -47,6 +47,7 @@ describe('realProfilePermissionGuide', () => {
         t,
         confirm,
         openExternal,
+        canReadSourceProfile: async () => false,
       }),
     ).resolves.toBe(true);
     expect(confirm).toHaveBeenNthCalledWith(
@@ -94,7 +95,7 @@ describe('realProfilePermissionGuide', () => {
         t,
         confirm,
         openExternal,
-        hasDiskAccess: async () => true,
+        canReadSourceProfile: async () => true,
       }),
     ).resolves.toBe(true);
     expect(confirm).toHaveBeenCalledTimes(1);
@@ -114,7 +115,7 @@ describe('realProfilePermissionGuide', () => {
       t,
       confirm,
       openExternal,
-      hasDiskAccess: async () => false,
+      canReadSourceProfile: async () => false,
     });
     expect(confirm).toHaveBeenCalledTimes(2);
     expect(confirm).toHaveBeenNthCalledWith(
@@ -126,7 +127,7 @@ describe('realProfilePermissionGuide', () => {
     expect(openExternal).toHaveBeenCalledWith(MAC_FULL_DISK_ACCESS_SETTINGS_URL);
   });
 
-  it('shows Full Disk Access when the probe throws', async () => {
+  it('does not send a user to Full Disk Access for an IPC failure', async () => {
     const openExternal = vi.fn().mockResolvedValue({ success: true });
     const confirm = vi.fn().mockResolvedValue(true);
     await confirmEnableRealProfile({
@@ -134,12 +135,12 @@ describe('realProfilePermissionGuide', () => {
       t,
       confirm,
       openExternal,
-      hasDiskAccess: async () => {
+      canReadSourceProfile: async () => {
         throw new Error('ipc down');
       },
     });
-    expect(confirm).toHaveBeenCalledTimes(2);
-    expect(openExternal).toHaveBeenCalledTimes(1);
+    expect(confirm).toHaveBeenCalledTimes(1);
+    expect(openExternal).not.toHaveBeenCalled();
   });
 
   it('does not open System Settings before the dedicated action', async () => {

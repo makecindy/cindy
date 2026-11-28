@@ -41,11 +41,16 @@ export function BotGroupMentionIdentity({ member, anchor, deviceId, onClose }: {
     : t(`groupChat.settings.roles.${member.role ?? 'member'}`) : null;
   const status = !member || member.status === 'active' ? null
     : t(`groupChat.memberStatus.${member.status === 'paused' ? 'paused' : 'unavailable'}`);
+  const orgDetail = member && member.actorKind === 'human'
+    ? (member.departmentPath || member.department || (member.nickname && member.orgName ? member.orgName : undefined))
+    : undefined;
   return <View ref={surface} collapsable={false} pointerEvents="box-none" style={StyleSheet.absoluteFill}>
     {member && anchor && position?.anchor === anchor ? <BotGroupMentionPopover
       position={position} width={position.width} onClose={onClose}
       name={botGroupMentionDisplayName(member)}
+      external={member.external === true}
       displayName={member.nickname && member.displayName && member.nickname !== member.displayName ? member.displayName : undefined}
+      orgDetail={orgDetail ?? undefined}
       caption={[role, status].filter(Boolean).join(' · ')}
       avatar={<BotGroupAvatar deviceId={deviceId} online identity={{ botId: member.botId, name: member.name,
         avatar: botGroupMemberAvatar(member), avatarUrl: member.avatarUrl }} size={BOT_GROUP_MENTION_AVATAR_SIZE} />} /> : null}

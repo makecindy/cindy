@@ -30,9 +30,23 @@ static struct zwlr_virtual_pointer_v1 *pointer;
 static struct xkb_keymap *keymap;
 static struct xkb_state *state;
 static bool keys[256], buttons[3];
-static bool use_x11;
+static bool use_x11, use_gnome;
 static volatile sig_atomic_t stopping;
 #include "x11.h"
+static uint32_t codepoint(const unsigned char **cursor);
+#ifdef CINDY_GNOME
+#include "gnome.h"
+#else
+/* Built without GIO headers: the GNOME backend reports itself unavailable. */
+static bool gnome_open(const char *connector) { (void)connector; return false; }
+static bool gnome_move(double x, double y) { (void)x; (void)y; return false; }
+static bool gnome_button(uint32_t code, bool down) { (void)code; (void)down; return false; }
+static bool gnome_key(uint32_t code, bool down) { (void)code; (void)down; return false; }
+static bool gnome_scroll(double dx, double dy) { (void)dx; (void)dy; return false; }
+static bool gnome_text(const char *text) { (void)text; return false; }
+static void gnome_close(void) {}
+static volatile int gnome_closed;
+#endif
 static const uint32_t button_codes[] = {BTN_LEFT, BTN_MIDDLE, BTN_RIGHT};
 static uint32_t now(void) {
   struct timespec t;
@@ -94,10 +108,16 @@ static void modifiers(void) {
       xkb_state_serialize_mods(state, XKB_STATE_MODS_LOCKED),
       xkb_state_serialize_layout(state, XKB_STATE_LAYOUT_EFFECTIVE));
 }
+static bool gnome_failed;
 static void key(uint32_t code, bool down) {
   if (keys[code] == down)
     return;
   keys[code] = down;
+  if (use_gnome) {
+    if (!gnome_key(code, down))
+      gnome_failed = true;
+    return;
+  }
   if (use_x11) {
     x11_key(code, down);
     return;
@@ -107,6 +127,13 @@ static void key(uint32_t code, bool down) {
   modifiers();
 }
 static void release_all(void) {
+  if (use_gnome) {
+    for (uint32_t i = 0; i < 256; i++)
+      if (keys[i]) key(i, false);
+    for (int i = 0; i < 3; i++)
+      if (buttons[i]) { gnome_button(button_codes[i], false); buttons[i] = false; }
+    return;
+  }
   if (use_x11) {
     for (uint32_t i = 0; i < 256; i++)
       if (keys[i]) key(i, false);
@@ -234,6 +261,7 @@ static bool text_input(const char *text) {
     return true;
   release_all(); // Text commits are not keyboard shortcuts; never leave
                  // modifiers held.
+  if (use_gnome) return gnome_text(text);
   if (use_x11) return x11_text(text);
   uint32_t syms[4096];
   size_t count = 0;
@@ -328,7 +356,16 @@ static bool event(json_object *object, bool apply) {
     if (click && (!number(object, "button", 0, 2, &button) ||
                   button != floor(button) || !boolean(object, "down", &down)))
       return false;
-    if (apply && use_x11) {
+    if (apply && use_gnome) {
+      // Absolute motion first, so a click targets its requested surface.
+      if (!gnome_move(x, y))
+        return false;
+      if (click) {
+        buttons[(int)button] = down;
+        if (!gnome_button(button_codes[(int)button], down))
+          return false;
+      }
+    } else if (apply && use_x11) {
       x11_move(x, y);
       if (click) {
         buttons[(int)button] = down;
@@ -356,7 +393,10 @@ static bool event(json_object *object, bool apply) {
     if (!number(object, "dx", -2000, 2000, &x) ||
         !number(object, "dy", -2000, 2000, &y))
       return false;
-    if (apply && use_x11) x11_scroll(x, y);
+    if (apply && use_gnome) {
+      if (!gnome_scroll(x, y))
+        return false;
+    } else if (apply && use_x11) x11_scroll(x, y);
     else if (apply) {
       zwlr_virtual_pointer_v1_axis_source(pointer,
                                           WL_POINTER_AXIS_SOURCE_CONTINUOUS);
@@ -379,9 +419,9 @@ static bool event(json_object *object, bool apply) {
       return false;
     if (apply)
       key((uint32_t)mapped, down);
-    return true;
+    return !gnome_failed;
   }
-  if (!strcmp(kind, "text")) {
+  if (!strcmp(kind, "text") || !strcmp(kind, "text-check")) {
     const char *text = string(object, "text");
     if (!text || strlen(text) > 16384)
       return false;
@@ -392,7 +432,13 @@ static bool event(json_object *object, bool apply) {
       if (++count > 4096)
         return false;
     }
-    return !apply || text_input(text);
+    if (!apply) return true;
+    if (!strcmp(kind, "text-check")) {
+      if (!use_x11) return false;
+      release_all();
+      return x11_text_check(text);
+    }
+    return text_input(text);
   }
   return false;
 }
@@ -413,6 +459,9 @@ static bool batch(const char *line, size_t size, bool apply) {
         ok = false;
         break;
       }
+  // A validated X11 command owns a fresh six-second execution budget; idle
+  // time since the previous heartbeat must not eat its two client-fence waits.
+  if (ok && apply && use_x11) alarm(6);
   if (ok && apply)
     for (size_t i = 0; i < json_object_array_length(array) && !stopping; i++)
       if (!event(json_object_array_get_idx(array, i), true)) {
@@ -428,9 +477,13 @@ int main(int argc, char **argv) {
   bool validate = argc == 2 && !strcmp(argv[1], "--validate");
   // X11 is explicit. Never inject through XWayland for a Wayland lease.
   use_x11 = argc >= 2 && !strcmp(argv[1], "--x11");
+  // GNOME (Mutter) is explicit too: --gnome --check | --gnome <connector>.
+  use_gnome = argc == 3 && !strcmp(argv[1], "--gnome");
   if (use_x11) {
     check = argc == 3 && !strcmp(argv[2], "--check");
     if (!check && argc != 6) return 2;
+  } else if (use_gnome) {
+    check = !strcmp(argv[2], "--check");
   } else if (argc > 1 && !check && !validate) return 2;
   signal(SIGTERM, interrupted);
   signal(SIGINT, interrupted);
@@ -438,7 +491,10 @@ int main(int argc, char **argv) {
   // Also bound Wayland roundtrips if the compositor or parent stalls.
   signal(SIGALRM, interrupted);
   alarm(6);
-  if (use_x11) {
+  if (use_gnome) {
+    if (!gnome_open(check ? NULL : argv[2])) { gnome_close(); return 2; }
+    if (check) { puts("ready"); gnome_close(); return 0; }
+  } else if (use_x11) {
     if (!x11_open(check ? NULL : argv + 2)) return 2;
     if (check) { puts("ready"); XCloseDisplay(xdisplay); return 0; }
   } else if (!validate) {
@@ -485,9 +541,19 @@ int main(int argc, char **argv) {
   while (!stopping) {
     struct pollfd fds[2] = {
         {STDIN_FILENO, POLLIN, 0},
-        {validate || use_x11 ? -1 : wl_display_get_fd(display), POLLIN, 0}};
-    int polled = poll(fds, 2, 6000);
-    if (polled <= 0)
+        {validate || use_x11 || use_gnome ? -1 : wl_display_get_fd(display), POLLIN, 0}};
+    // GNOME: a short tick services the session's Closed signal.
+    int polled = poll(fds, 2, use_gnome ? 100 : 6000);
+#ifdef CINDY_GNOME
+    if (use_gnome)
+      while (g_main_context_iteration(NULL, FALSE))
+        ;
+#endif
+    if (use_gnome && gnome_closed) {
+      ok = false;
+      break;
+    }
+    if (polled < 0 || (polled == 0 && !use_gnome))
       break;
     if (fds[1].revents && wl_display_dispatch(display) < 0)
       break;
@@ -507,7 +573,7 @@ int main(int argc, char **argv) {
         break;
       }
       if (use_x11) XSync(xdisplay, False);
-      if (!validate && !use_x11 && wl_display_roundtrip(display) < 0) {
+      if (!validate && !use_x11 && !use_gnome && wl_display_roundtrip(display) < 0) {
         ok = false;
         stopping = 1;
         break;
@@ -524,7 +590,10 @@ int main(int argc, char **argv) {
       break;
     }
   }
-  if (use_x11) {
+  if (use_gnome) {
+    if (!gnome_closed) release_all();
+    gnome_close();
+  } else if (use_x11) {
     release_all();
     XSync(xdisplay, False);
     XCloseDisplay(xdisplay);

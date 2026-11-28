@@ -495,6 +495,50 @@ describe('useCCAgentChat hidden chat snapshot freeze', () => {
     expect(screen.getByTestId('estimated-value').textContent).toBe('5.79');
   });
 
+  // PR #11725: removing the oldest loaded row used to leave its value in the
+  // total. The window-sync unit tests cannot distinguish the identical trim.
+  it('removes a committed deletion from the value even if a pending history read still includes it', async () => {
+    const sessionId = sid('deleted-estimate');
+    sessionIds.push(sessionId);
+    window.electronAPI = {} as typeof window.electronAPI;
+    let resolveHistory!: (value: EstimatedValueSnapshot) => void;
+    vi.mocked(messageService.estimatedSessionValue).mockReturnValueOnce(
+      new Promise((resolve) => { resolveHistory = resolve; }),
+    );
+
+    const oldest = assistantCostMessage('oldest', 9);
+    const latest = assistantCostMessage('latest', 1);
+    function Wrapper({ children }: { children: React.ReactNode }) {
+      return (
+        <ChatDisplaySnapshotProvider
+          value={displaySnapshot(sessionId, [oldest, latest], {
+            chatRealtime: true,
+            hasMoreMessages: true,
+          })}
+        >
+          {children}
+        </ChatDisplaySnapshotProvider>
+      );
+    }
+
+    const { result } = renderHook(() => useSessionEstimatedValue(sessionId, true), { wrapper: Wrapper });
+    expect(result.current?.amount).toBe(10);
+
+    act(() => makerChatStore.removeMessagesByClientIds(sessionId, ['oldest']));
+    expect(result.current?.amount).toBe(1);
+
+    await act(async () => resolveHistory({
+      totalValueUsd: 19,
+      entries: [
+        { clientId: 'paged-out', money: usdEstimate(10) },
+        { clientId: 'oldest', money: usdEstimate(9) },
+      ],
+    }));
+
+    expect(result.current?.amount).toBe(11);
+    expect(messageService.estimatedSessionValue).toHaveBeenCalledTimes(1);
+  });
+
   it('does not apply cleared or stale async estimated-value entries across display providers', async () => {
     const clearedSessionId = sid('cleared-provider');
     const staleSessionId = sid('stale-provider');

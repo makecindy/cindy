@@ -1,4 +1,4 @@
-import { readEffectiveBotModelChain } from '../../maker-host/bot-model-chain-settings-store.js';
+import { fillBotModelGroupRoutes, listBotModelGroupsForRemote, readEffectiveBotModelChain, writeBotModelChainSettings } from '../../maker-host/bot-model-chain-settings-store.js';
 import type { RemoteResourceHostContext } from '../../device-link/remoteResourceRegistry.js';
 import { botRemoteResourceFromSource } from './botRemoteResourceProjection.js';
 import { resolveAvailableTaskModels } from '../../maker-ipc/appDefaultModelControl.js';
@@ -52,6 +52,9 @@ const deps = {
     return updateBotProfile(input, version, validateBotCapabilityAdditions);
   },
   skills: listBotSkillsForBot,
+  // Model groups live on this computer; controllers pick one, this computer fills its current source (model-groups.md §6.2).
+  modelGroups: listBotModelGroupsForRemote,
+  fillModelGroups: fillBotModelGroupRoutes,
 };
 const settings = createBotRemoteSettingsResource({ ...deps,
   lifecycle: (botId, action, confirmName, guard) => runRegisteredBotLifecycleAction({ botId, action, confirmName, keepTaskHistory: true, worktreeDisposition: 'retain' }, guard),
@@ -191,6 +194,14 @@ const settingsHost = createBotRemoteSettingsHost({
     retryInvitation: botId => updateBotProfile({ id: botId, retryInvitation: true }),
     lifecycle: (request, guard) => runRegisteredBotLifecycleAction(request, guard),
     defaultModelChain: () => readEffectiveBotModelChain({}),
+    defaultModelGroups: listBotModelGroupsForRemote,
+    async setDefaultModelChain(chain, assertCurrent) {
+      // Same checks as a buddy's own model: a picked smart route gets its current source here, and the route must be usable here.
+      const filled = await fillBotModelGroupRoutes(chain);
+      await validateModelChain(filled);
+      assertCurrent();
+      return (await writeBotModelChainSettings(filled)).value.modelChain;
+    },
     memory: {
       list: (botId, query) => getBotMemoryService().list(botId, query),
       read: (botId, filename) => getBotMemoryService().read(botId, filename),

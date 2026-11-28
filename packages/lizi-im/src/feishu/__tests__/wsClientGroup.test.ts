@@ -456,6 +456,26 @@ describe('feishu group inbound gate', () => {
       }
     });
   });
+
+  // 2026-11-24「群成员也能提问」: 个人 bot 按群问宿主(函数形式的 guests)。允许的群放行成员并标成非主人,
+  // 不允许的群照旧礼貌回应、不起任务。最小失败输入: 两个群各一条非主人 @。
+  it('per-group guest access admits members only in the allowed group', async () => {
+    await runInScope(createFeishuScope({ host: null, guests: (chatId) => chatId === 'oc_open' }), async () => {
+      try {
+        await connect();
+        const events = collectEvents();
+        const open = groupMessage({ sender: STRANGER, messageId: 'om_open' });
+        open.message.chat_id = 'oc_open';
+        await mocks.eventHandlers['im.message.receive_v1']!(open);
+        await mocks.eventHandlers['im.message.receive_v1']!(groupMessage({ sender: STRANGER, messageId: 'om_closed' }));
+        expect(events.map((event) => [event.senderId, event.speaker?.isOwner])).toEqual([['g/oc_open', false]]);
+        expect(mocks.replyText).toHaveBeenCalledTimes(1);
+      } finally {
+        await wsClient.stop({ announceOffline: false, reason: 'test-cleanup' });
+        feishuEvents.removeAllListeners('message');
+      }
+    });
+  });
 });
 
 describe('private topic notification ancestry', () => {

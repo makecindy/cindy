@@ -64,7 +64,7 @@ export function ScreenshotEditorViewport({ image, tools, children, aiMenu, onMin
     return () => node.removeEventListener('wheel', wheel);
   });
   return <div className="flex h-screen flex-col bg-[var(--surface)] text-[var(--text-primary)]">
-    <div className="z-10 shrink-0 border-b border-[var(--border-default)] p-2">
+    <div className="z-raised shrink-0 border-b border-[var(--border-default)] p-2">
       <div className="flex flex-wrap items-center gap-1 pb-2 [-webkit-app-region:drag] [&_button]:[-webkit-app-region:no-drag]">
         <Button size="xs" variant="secondary" aria-label={t('remoteDesktop.zoomOut')} onClick={() => changeZoom(scale / 1.2)}>−</Button>
         <span className="w-12 text-center text-12 tabular-nums" aria-live="polite">{Math.round(scale * 100)}%</span>

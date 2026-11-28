@@ -28,7 +28,7 @@ import { botTaskResultKey, type BotCollaborationMeta } from '@cindy/maker-shared
  *   Stream 期间把 content 切成两段:
  *     - committedText  = 累积到最后一个 '\n' 为止的部分 (含换行)
  *     - pendingLine    = 最后一个 '\n' 之后的不完整行
- *   committedText 走完整 MarkdownRenderer (享受 100ms throttle),
+ *   committedText 走完整 MarkdownRenderer (由 useStreamingReveal 控制发布节奏),
  *   pendingLine 走 plain-text <span>。这样收效:
  *     - 已经完整的行实时格式化, 屏幕上 95% 的内容用户看到的是渲染后样式,
  *       不会看到一堆 raw `**` `##` 标记
@@ -51,9 +51,11 @@ import { botTaskResultKey, type BotCollaborationMeta } from '@cindy/maker-shared
 import { ChatBubble, CHAT_BUBBLE_COLUMN_CLASS } from './ChatBubble';
 import { memo, useCallback, useMemo, useState, useSyncExternalStore } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Loader2, TriangleAlert } from 'lucide-react';
+import { Loader2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import { formatModelShortLabel } from '@/lib/modelShortLabel';
+import { FailedSamplingNotice } from './FailedSamplingNotice';
+import { ModelMismatchNotice } from './ModelMismatchNotice';
+import type { ModelMismatchInfo } from '../../../shared/modelMismatch';
 import { stripGoalVerdictBlock } from '@cindy/maker-shared/goal-verdict';
 import { getGhostCardEntry, subscribeGhostCards } from '@/cindy-brain/ghostCardStore';
 import { GhostToolCard } from './GhostToolCard';
@@ -82,8 +84,9 @@ import {
 
 /**
  * Streaming 渲染策略开关 (代码级 / 编译期):
- *   - false (默认) = 原方案: 全程把累积 content 喂给 MarkdownRenderer,靠它内部
- *                    的 100ms throttle 节流。视觉零取舍, streaming 中所有 markdown
+ *   - false (默认) = 原方案: 全程把累积 content 喂给 MarkdownRenderer,由它内部
+ *                    的 useStreamingReveal 匀速放出并按渲染耗时退避(DESIGN.md §14.4
+ *                    Stream pacing)。视觉零取舍, streaming 中所有 markdown
  *                    即时格式化, 但主线程负载最高 (大答复 + 大 doc 共存时易卡)。
  *   - true         = 行级提交方案 (codex 风格): 切成 committedText + pendingLine,
  *                    committedText 走 MarkdownRenderer + memo 跳过, pendingLine
@@ -120,8 +123,8 @@ function splitAtLastNewline(text: string): { committedText: string; pendingLine:
  *     被 memo 包过, 拿到相同 string 引用就跳过整次 react-markdown 解析。结果就是
  *     "每次新 token 但还没换行" 时, markdown 子树完全不重渲染, 只有底下那个
  *     pending <span> 的 textContent 变, 浏览器开销几乎为 0。
- *   - MarkdownRenderer 仍然带 isStreaming=true → 100ms throttle 还在, 当多个
- *     新行短时间内连续到达时合并成一次 parse。
+ *   - MarkdownRenderer 仍然带 isStreaming=true → useStreamingReveal 按帧合并
+ *     发布, 多个新行短时间内连续到达时合并成一次 parse。
  *   - pendingLine 用 <span> 而不是 <div>, 接在 markdown 输出尾部不会换行 — 视觉
  *     上接续上一段最后那个块级元素的末尾, 和 codex 行级提交后那行 "正在打字"
  *     的观感一致。如果 markdown 最后一个块是 <p>, 浏览器会把 <span> 渲在该 <p>
@@ -169,6 +172,14 @@ const StreamingBody = memo(function StreamingBody({
     </>
   );
 });
+
+/**
+ * Text a completed reply shows. /goal 裁决 JSON 块与伙伴开场选项只在显示层剥离(原文仍保留在
+ * DB / transcript)。The task image gallery collects reply images from this same text.
+ */
+export function assistantDisplayContent(content: string, botStarterOptions?: readonly string[]): string {
+  return stripStarterOptionList(stripGoalVerdictBlock(content), botStarterOptions ?? []);
+}
 
 interface AssistantMessageProps {
   pluginUi: PluginUiMessageCandidates;
@@ -232,9 +243,9 @@ interface AssistantMessageProps {
   turnUsageDetails?: TurnUsageDetails;
   /** 同一用户轮跨多个 SDK segment 聚合后的 token/cache/model 明细。 */
   userTurnUsageDetails?: TurnUsageDetails;
-  /** 本轮模型降级标记(main turn 结束检测命中时挂到收尾 assistant 上),
-   *  正文下方渲染一条常显的降级提示行。 */
-  modelMismatch?: { selected: string; actual: string };
+  /** 本轮模型改派标记(main turn 结束检测命中时挂到收尾 assistant 上),
+   *  正文下方渲染一条常显提示行及成因说明入口。 */
+  modelMismatch?: ModelMismatchInfo;
   /** 出口钩子(will-assistant-message)后台处理中:回复已显示、意识还在跑那段
    *  (润色/自绘,最长 5 分钟)挂一条"意识处理中"轻指示;完成/超时由 main 清。 */
   ghostReplyPending?: boolean;
@@ -290,7 +301,8 @@ export const AssistantMessage = memo(function AssistantMessage({
   // 到新会话（语义在 main 侧 forkSessionAtMessage 按 role 分支）。capability /
   // remote gate 与 UserMessage 同款；assistant 分叉无可预填文本 → 不传 draftText。
   const makerKind: MakerAgentKind = agentKind === 'codex' || agentKind === 'pi' ? agentKind : 'claude-code';
-  // 插件引擎任务(agent_kind = 'acp')不支持分叉，也不读内置 Harness 的能力(docs/plans/acp-plugin-bridge.md)。
+  // 插件引擎任务(agent_kind = 'acp')不读内置 Harness 的能力；它的分叉由主进程从 Cindy 的记录交接
+  // (docs/plans/acp-plugin-bridge.md)，与引擎能否复制原生历史无关。
   const pluginEngineTask = isPluginEngineKind(agentKind);
   // device-link 远程会话:fork 能力按被控端读(本机会话 deviceId undefined,行为不变)。
   // deviceId 取自 ChatSessionFileContext(MessageStream 顶层订阅式构造,见该文件注释)。
@@ -302,7 +314,7 @@ export const AssistantMessage = memo(function AssistantMessage({
   const isRemote = Boolean(remoteHostId);
   const sharedGuest = isSharedTaskPeer(originDeviceId(sessionFileOrigin) ?? '');
   const forkSupported =
-    !isRemote && !pluginEngineTask && (!agentKind || (capabilities?.fork?.supported ?? true));
+    !isRemote && (pluginEngineTask || !agentKind || (capabilities?.fork?.supported ?? true));
   const handleFork = useForkAtMessage({
     sessionId: currentSessionId,
     messageClientId,
@@ -348,9 +360,7 @@ export const AssistantMessage = memo(function AssistantMessage({
     });
   }, [botQuote, content, currentSessionId, messageClientId, messageDeepLink]);
 
-  // /goal:隐藏助手输出末尾由 goal 协议要求模型吐出的裁决 JSON 块(仅显示层剥离,
-  // 原文仍保留在 DB / transcript)。pattern:末尾的 ```json {...goal_status...} ``` 围栏块。
-  const displayContent = stripStarterOptionList(stripGoalVerdictBlock(content), botStarterOptions ?? []);
+  const displayContent = assistantDisplayContent(content, botStarterOptions);
   const streamFadeKey = messageClientId
     ? `${currentSessionId ?? ''}\u0000${messageClientId}`
     : undefined;
@@ -414,13 +424,9 @@ export const AssistantMessage = memo(function AssistantMessage({
         {botBubble && botQuote && messageClientId ? (
           <BotChatReplyTarget message={{ clientId: messageClientId, replyToClientId }} context={botQuote} />
         ) : null}
-        {failedSamplingAttempt && (
-          <div className="mb-1 text-13 font-normal leading-[1.384615]" style={{ color: 'var(--text-secondary)' }}>
-            {t('chat.failedSamplingAttempt')}
-          </div>
-        )}
+        {failedSamplingAttempt && <FailedSamplingNotice />}
         <div data-selection-quote-body="" className="contents">
-          {renderPluginUiBody(pluginUi.messageBody ? { position: 'message.body', role: 'assistant', sessionId: currentSessionId,
+          {renderPluginUiBody(pluginUi.messageBody ? { position: 'message.body', role: 'assistant', sessionId: currentSessionId, clientId: messageClientId,
             disabled: !!ghostRenderCard || !!remoteHostId,
             context: () => ({ message: { clientId: messageClientId, role: 'assistant', content, isStreaming } }) } : undefined,
           ghostRenderCard && messageClientId && !showOriginal ? (
@@ -449,14 +455,15 @@ export const AssistantMessage = memo(function AssistantMessage({
             />
           ) : (
             // 默认分支 (USE_LINE_COMMIT_STREAMING=false) + 非 streaming 都走完整
-            // MarkdownRenderer。isStreaming 透传 — true 时 MarkdownRenderer 内部启用
-            // 100ms throttle, false 时无节流, 行为和该文件性能优化前完全一致。
+            // MarkdownRenderer。isStreaming 透传 — true 时 MarkdownRenderer 内部匀速
+            // 放出(useStreamingReveal), false 时直接渲染全文(积压在 ≤150ms 内收尾)。
             <MarkdownRenderer
               renderRichAnswers
               workingDir={workingDir}
               content={displayContent}
               isStreaming={isStreaming}
               streamFadeKey={streamFadeKey}
+              galleryMessageKey={messageClientId}
               localFileRefs={localFileRefs}
               currentSessionId={currentSessionId}
               currentSessionTitle={currentSessionTitle}
@@ -486,22 +493,12 @@ export const AssistantMessage = memo(function AssistantMessage({
             {t('chat.ghostHook.processing')}
           </div>
         )}
-        {/* 模型降级提示:所选模型本轮被上游静默替换(main turn 结束检测,详见
-            shared/modelMismatch.ts)。常显不随 hover —— 用户需要在不悬停的情况
-            下知道这轮不是自己选的模型回答的;icon 用 warning 语义色(token 豁免
-            簇),文字保持 tertiary 灰阶,不喧宾夺主。 */}
+        {/* 模型改派提示:所选模型本轮被模型供应商改派(main turn 结束检测,详见
+            shared/modelMismatch.ts)。常显不随 hover,并附带「了解原因」浮层。 */}
         {botBubble && botStartedTasks?.length ? (
           <BotStartedTasksFooter tasks={botStartedTasks} hostSessionId={currentSessionId} />
         ) : null}
-        {modelMismatch && (
-          <div className="mt-1 flex items-center gap-1.5 text-11" style={{ color: 'var(--text-tertiary)' }}>
-            <TriangleAlert size={11} style={{ color: 'var(--warning-fg)' }} aria-hidden />
-            {t('chat.modelMismatch.notice', {
-              actual: formatModelShortLabel(modelMismatch.actual) || modelMismatch.actual,
-              selected: formatModelShortLabel(modelMismatch.selected) || modelMismatch.selected,
-            })}
-          </div>
-        )}
+        {modelMismatch && <ModelMismatchNotice mismatch={modelMismatch} />}
       </ChatBubble>
       {botBubble && actionBar}
       {dmThread?.thread && !isStreaming ? (

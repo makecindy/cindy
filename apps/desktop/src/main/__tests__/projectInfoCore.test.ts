@@ -48,7 +48,12 @@ vi.mock('../projectDirectoryValidation.js', async (original) => ({
   validateProjectDirectories: h.validateDirectories,
 }));
 vi.mock('../projectDirectoryRoot.js', () => ({
-  validateLocalProjectDirectory: (workingDir: string) => ({ ok: true, workingDir }),
+  // Production normalizes separators before comparing project identity; the
+  // Windows allocator hands back native `C:\\` paths.
+  validateLocalProjectDirectory: (workingDir: string) => ({
+    ok: true,
+    workingDir: workingDir.replace(/\\/g, '/'),
+  }),
   validateExistingLocalProjectDirectory: h.validateRoot,
 }));
 vi.mock('../projectIconMedia.js', () => ({
@@ -343,6 +348,31 @@ it('allocates an automatic project and returns its real identity', async () => {
   });
   expect(result.createdProjectKey).toBe('local:/Projects/Created');
   expect(h.register).toHaveBeenCalled();
+});
+
+// Regression #11632: on Windows the allocator returns a native backslash path.
+// The recursive save normalizes `projectKey` but compared the raw
+// `authorizedCreation`, so a directory Main had just created for this request
+// re-entered picker authorization and was rejected. Tier 1, minimum input:
+// renderer-authorized automatic creation returning a `C:\\` path.
+it('keeps an auto-allocated Windows path authorized through the recursive save', async () => {
+  vi.mocked(prepareNewProject).mockResolvedValueOnce({
+    directory: 'C:\\Projects\\Demo',
+    cleanup: vi.fn(),
+  });
+  const result = await updateProjectInfo(
+    {
+      ...h.stamp,
+      create: true,
+      projectKey: 'local:',
+      field: 'profile',
+      value: { name: 'Demo', directories: [] },
+    },
+    projectRendererAuthorization(7, 'form', h.stamp, vi.fn(), () => {}),
+  );
+  expect(result.createdProjectKey).toBe('local:C:/Projects/Demo');
+  expect(h.register).toHaveBeenCalledTimes(1);
+  expect(h.register.mock.calls[0]![0]).toBe('C:/Projects/Demo');
 });
 
 // PR #11126: actual core writes previously trusted arbitrary Renderer paths.

@@ -47,8 +47,10 @@ describe('MarkdownRenderer — <a> renderer routes xdt-audio:// to <audio>', () 
     expect(linkComponentMatch).not.toBeNull();
     const branch = linkComponentMatch![0];
     expect(branch).toContain("target.kind === 'audio'");
-    // device-link 入方向:远程会话把 xdt-audio:// 改写到 cindy-remote-media://(本地会话 no-op)。
-    expect(branch).toContain('<InlineXdtAudioPlayer src={rewriteToRemoteMediaOrigin(target.href, remoteMediaOrigin)} />');
+    // The validated audio source still goes through the source-device rewrite.
+    // Pending/SSH rejection and recovery run through the real DOM regression
+    // in markdownVideoRenderer.test.tsx; this existing guard checks the wiring.
+    expect(branch).toContain('<InlineXdtAudioPlayer src={rewriteToRemoteMediaOrigin(normalized, remoteMediaOrigin)} />');
   });
 
   it('renders <audio controls> with preload="metadata" controlsList="nodownload" src={href}', () => {

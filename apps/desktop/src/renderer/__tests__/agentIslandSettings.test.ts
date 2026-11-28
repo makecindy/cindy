@@ -10,6 +10,7 @@ import {
 import {
   getAgentIslandDisplayTarget,
   getAgentIslandEnabled,
+  getAgentIslandMascotSkin,
   getAgentIslandSubtleReminders,
   setAgentIslandSubtleReminders,
   resetAgentIslandSubtleReminders,
@@ -171,6 +172,12 @@ describe('agent island settings', () => {
     expect(setSoundSettings.mock.invocationCallOrder[0]).toBeLessThan(setEnabled.mock.invocationCallOrder[0]);
     expect(setMascotSkin.mock.invocationCallOrder[0]).toBeLessThan(setEnabled.mock.invocationCallOrder[0]);
     expect(setDisplayTarget.mock.invocationCallOrder[0]).toBeLessThan(setEnabled.mock.invocationCallOrder[0]);
+  });
+
+  it('defaults the mascot to Cindy and keeps a saved choice', () => {
+    expect(getAgentIslandMascotSkin()).toBe('cindy');
+    localStorage.setItem('notifications.agentIslandMascotSkin', 'pululu');
+    expect(getAgentIslandMascotSkin()).toBe('pululu');
   });
 
   it('keeps built-in Agent Island sounds enabled by default', () => {

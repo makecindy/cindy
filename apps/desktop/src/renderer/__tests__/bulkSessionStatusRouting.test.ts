@@ -24,8 +24,8 @@ describe('bulk session status routing', () => {
     );
 
     expect(handler).toContain('sessionService.resolveStatusWriteTarget(session.id)');
-    expect(handler).toContain(
-      "sessionService.setStatus(session.id, 'deleted', statusWriteTarget)",
+    expect(handler).toMatch(
+      /sessionService\.setStatus\(session\.id, 'deleted', statusWriteTarget, undefined,\s*session\.sideChatPromoted \? 'task' : undefined\)/,
     );
     expect(handler).toContain("statusWriteTarget.kind === 'local'");
     expect(handler).not.toContain('sessionService.patchMeta(');

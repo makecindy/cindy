@@ -11,6 +11,7 @@ import ReactMarkdown, { defaultUrlTransform } from 'react-markdown';
 import { describe, expect, it } from 'vitest';
 
 import { normalizeMarkdownImageSrc } from '@/lib/localPathResolver';
+import remarkBareSpaceLocalImages from '../components/chat/remarkBareSpaceLocalImages';
 import remarkPreserveRawLocalDestinations, {
   RAW_LOCAL_IMAGE_SRC_PROP,
 } from '../components/chat/remarkPreserveRawLocalDestinations';
@@ -30,7 +31,7 @@ function normalizedImageSrc(markdown: string, workingDir = '/repo'): string | un
           return null;
         },
       },
-      remarkPlugins: [remarkPreserveRawLocalDestinations],
+      remarkPlugins: [remarkBareSpaceLocalImages, remarkPreserveRawLocalDestinations],
       urlTransform: defaultUrlTransform,
       children: markdown,
     }),
@@ -72,6 +73,8 @@ describe('Markdown local image path encoding', () => {
       'xdt-file://local/?path=%2Ftmp%2Falready-routed.png',
       'https://example.com/image%20name.png',
       'data:image/png;base64,AAAA',
+      'xdt-image://session-id/image%20name.png',
+      'xdt-image://generated/image.png',
     ]) {
       expect(normalizeMarkdownImageSrc(url, '/repo', true)).toBe(url);
     }
@@ -82,6 +85,61 @@ describe('Markdown local image path encoding', () => {
     expect(normalizeMarkdownImageSrc(`xdt-file:///${path}`, '/repo', true)).toBe(
       `xdt-file://local/?path=${encodeURIComponent(path)}`,
     );
+  });
+
+  // #8951: exercise Markdown serialization as well as the URL bridge. These
+  // URI paths have stable '/' separators on every host (unit tier).
+  it.each([
+    ['xdt-image:///C:/My Pictures/shot (100%).png', 'C:/My Pictures/shot (100%).png'],
+    ['xdt-image:///tmp/My Pictures/shot (100%).png', '/tmp/My Pictures/shot (100%).png'],
+    ['xdt-image:///C:/My%20Pictures/shot%20(100%25).png', 'C:/My Pictures/shot (100%).png'],
+    ['xdt-image:///tmp/report%2520final.png', '/tmp/report%20final.png'],
+    ['xdt-file:///tmp/My%20Pictures/100%.png', '/tmp/My%20Pictures/100%.png'],
+  ])('loads the original hostless Markdown destination: %s', (url, path) => {
+    expect(normalizedImageSrc(`![hostless](<${url}>)`)).toBe(
+      `xdt-file://local/?path=${encodeURIComponent(path)}`,
+    );
+  });
+
+  it('preserves the original destination for reference-style hostless images', () => {
+    const path = '/tmp/My%20Pictures/100%.png';
+    expect(normalizedImageSrc(`![hostless][p]\n\n[p]: <xdt-image://${path}>`)).toBe(
+      `xdt-file://local/?path=${encodeURIComponent(path)}`,
+    );
+  });
+
+  // #11607 review: the same normalization feeds Markdown images and rich
+  // audio/video. An SSH task must never route an outside path to this host.
+  it.each(['xdt-image', 'xdt-file'].flatMap(scheme =>
+    ['png', 'mp3', 'mp4'].map(extension => [scheme, extension])))('keeps hostless SSH %s %s media on its source host', (scheme, extension) => {
+    const origin = { kind: 'ssh' as const, remoteHostId: 'remote', workdir: '/repo' };
+    expect(normalizeMarkdownImageSrc(`${scheme}:///tmp/100%.${extension}`, '/repo', true, origin)).toBeUndefined();
+    expect(normalizeMarkdownImageSrc(`${scheme}:///repo/100%.${extension}`, '/repo', true, origin)).toBe(
+      `xdt-file://local/?path=${encodeURIComponent(`/repo/100%.${extension}`)}`,
+    );
+    // Local and device-backed tasks still resolve their own absolute paths.
+    expect(normalizeMarkdownImageSrc(`${scheme}:///tmp/100%.${extension}`, '/repo', true)).toContain('xdt-file://local/');
+    expect(normalizeMarkdownImageSrc(`${scheme}:///tmp/100%.${extension}`, '/repo', true,
+      { kind: 'device', deviceId: 'source-device' })).toContain('xdt-file://local/');
+  });
+
+  it('loads the reported bare-space hostless image without angle brackets', () => {
+    const path = 'C:/My Pictures/shot (100%).png';
+    expect(normalizedImageSrc(`![hostless](xdt-image:///${path})`)).toBe(
+      `xdt-file://local/?path=${encodeURIComponent(path)}`,
+    );
+  });
+
+  // Hostless compatibility must not turn a previously rejected cache URL into
+  // an automatic Windows SMB/WebDAV/device access via the local-file protocol.
+  it.each([
+    'xdt-image:////attacker/share/a.png',
+    'xdt-image:///%2Fattacker/share/a.png',
+    'xdt-image:///%5C%5Cattacker%5Cshare%5Ca.png',
+    'xdt-image:///%3F%3F/UNC/attacker/share/a.png',
+    'xdt-image:///%5C%5C%3F%5CC:%5Ca.png',
+  ])('rejects hostless network/device destinations before routing: %s', (url) => {
+    expect(normalizeMarkdownImageSrc(url, 'C:/repo', true)).toBeUndefined();
   });
 
   it('keeps legacy POSIX paths and cache-busting revisions intact', () => {
@@ -130,6 +188,7 @@ describe('Markdown local image path encoding', () => {
       'relative/private.png',
       'file:///tmp/private.png',
       'xdt-file://local/?path=%2Ftmp%2Fprivate.png',
+      'xdt-image:///tmp/private.png',
     ]) {
       expect(normalizeMarkdownImageSrc(src, '/repo', false)).toBeUndefined();
     }

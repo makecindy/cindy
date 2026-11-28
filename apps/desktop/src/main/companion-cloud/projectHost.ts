@@ -17,6 +17,7 @@ import {
   unlinkedTeammateProjectMemoryDir,
   teammateWorkspaceDir as teammateWorkspace,
 } from '../maker-ipc/botProjectMemory.js';
+import { isTeammateProjectIgnoreReady } from '../maker-ipc/botProjectGitignore.js';
 import { BOT_V2_CARRYOVER_FILE } from '../maker-ipc/botV2Carryover.js';
 import { readTeammateProjectMode } from '../maker-ipc/botWorkspaceRuntime.js';
 import type { ProjectScheduleConfig } from '../scheduler-host/project-automation-loader.js';
@@ -92,6 +93,8 @@ export function companionProjectIo(): CompanionProjectIo {
       .catch((error: unknown) => { if (missing(error)) return null; throw error; }),
     writeCarryover: (workingDir, content) => writeAtomic(path.join(workingDir, BOT_V2_CARRYOVER_FILE), content),
     snapshot: async (workingDir, label) => {
+      // Not before the project's .gitignore keeps credentials out; the rules go into a later version.
+      if (!await isTeammateProjectIgnoreReady(workingDir)) return;
       await createSnapshotDetailed(workingDir, { label, meta: { sessionId: 'bot-project', kind: 'manual' } });
     },
     automations: async (workingDir) => {

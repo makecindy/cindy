@@ -32,6 +32,10 @@ function pageCallback(name: string, bindings: Record<string, unknown>): (...args
       && node.initializer.expression.getText(source) === 'useCallback') {
       expression = node.initializer.arguments[0];
     }
+    if (ts.isCallExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === 'useEffect') {
+      const callback = node.arguments[0];
+      if (callback && ts.isFunctionExpression(callback) && callback.name?.text === name) expression = callback;
+    }
     ts.forEachChild(node, visit);
   };
   visit(source);
@@ -49,7 +53,7 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 
-function historyAvailable(status: string, presence: boolean | null): boolean {
+function historyAvailable(status: string, presence: boolean | null, sideChatPending = false): boolean {
   let expression: ts.Expression | undefined;
   const visit = (node: ts.Node) => {
     if (ts.isVariableDeclaration(node) && node.name.getText(source) === 'remoteHistoryAvailable') {
@@ -59,8 +63,8 @@ function historyAvailable(status: string, presence: boolean | null): boolean {
   };
   visit(source);
   if (!expression) throw new Error('Missing production history availability gate');
-  return new Function('status', 'getPresenceAvailability', 'deviceId',
-    `return ${expression.getText(source)};`)(status, () => presence, 'd1');
+  return new Function('status', 'getPresenceAvailability', 'deviceId', 'sideChatPending',
+    `return ${expression.getText(source)};`)(status, () => presence, 'd1', sideChatPending);
 }
 const tick = () => new Promise((done) => setTimeout(done, 0));
 afterEach(() => vi.useRealTimers());
@@ -164,6 +168,57 @@ function fixture(reopen = false, remoteHistoryAvailable = true) {
 }
 
 describe('production session recovery callbacks', () => {
+  // Unit: run the screen's creation transition on the same mounted session.
+  // Direct sync tests miss the case where a durable handoff fails and no reload is requested.
+  it.each([null, 'create-failed', 'enqueue-failed'] as const)(
+    'loads existing host history after running creation transitions to %s', async status => {
+      const f = fixture();
+      const reads: Promise<unknown>[] = [];
+      const bindings = {
+        prevCreationStatusRef: { current: 'running' }, creationTask: status ? { status } : null,
+        pendingHostCreationStatus: null,
+        sessionId: 's1', deviceId: 'd1', setError: f.setError,
+        load: () => reads.push(f.sync()),
+        getCurrentMobileOutboxRecords: () => [{ deviceId: 'd1', item: { sessionId: 's1' }, creation: {} }],
+        mobileDurableOutbox: { update: async () => {} }, getMobileAuthOwner: () => 'owner',
+        isMobileAuthOwnerCurrent: () => true, dismissNewSessionCreation: vi.fn(),
+      };
+      await pageCallback('syncAfterCreationTransition', bindings)();
+      await Promise.resolve();
+      await Promise.all(reads);
+      expect(f.state.rows).toEqual(status === 'create-failed' ? [] : page.messages);
+      expect(f.maker.getSession).toHaveBeenCalledTimes(status === 'create-failed' ? 0 : 1);
+    },
+  );
+
+  // Unit: releasing the live creation task on transient disconnect must
+  // not trigger load() while host creation is still pending or failed, and must load once created.
+  it('defers reload after transient task dismissal until pending host creation succeeds', async () => {
+    const f = fixture();
+    const reads: Promise<unknown>[] = [];
+    const prevCreationStatusRef = { current: 'running' as string | null };
+    const run = (pendingHostCreationStatus: 'running' | 'create-failed' | null) => pageCallback('syncAfterCreationTransition', {
+      prevCreationStatusRef, creationTask: null, pendingHostCreationStatus,
+      sessionId: 's1', deviceId: 'd1', setError: f.setError,
+      load: () => reads.push(f.sync()),
+      getCurrentMobileOutboxRecords: () => [],
+      mobileDurableOutbox: { update: async () => {} }, getMobileAuthOwner: () => 'owner',
+      isMobileAuthOwnerCurrent: () => true, dismissNewSessionCreation: vi.fn(),
+    })();
+    await run('running');
+    await Promise.all(reads);
+    expect(f.maker.getSession).not.toHaveBeenCalled();
+    await run('create-failed');
+    await Promise.all(reads);
+    expect(f.maker.getSession).not.toHaveBeenCalled();
+    // Returning to running (e.g. retried) and clearing after host creation triggers load once.
+    await run('running');
+    await run(null);
+    await Promise.all(reads);
+    expect(f.maker.getSession).toHaveBeenCalledTimes(1);
+    expect(f.state.rows).toEqual(page.messages);
+  });
+
   // Existing callback-execution guard: PR #6325 missed a focused reconnect where
   // only the new list topic is ACKed. Use the real waiter and ACK table here so
   // an old completed Promise cannot start the actual page's history read early.
@@ -200,6 +255,21 @@ describe('production session recovery callbacks', () => {
     expect(f.maker.listMessages).toHaveBeenCalledTimes(1);
     expect(f.state.rows).toEqual(page.messages);
     expect(f.state.readAck).not.toBeNull();
+  });
+
+  // Unit regression #12990: an online computer may not have committed the
+  // child yet. Run the page gate and callbacks to catch premature reads.
+  it('keeps remote history reads paused until side chat creation is confirmed', async () => {
+    const pending = fixture(false, historyAvailable('online', true, true));
+    await pending.sync();
+    await pending.earlier();
+    expect(pending.maker.getSession).not.toHaveBeenCalled();
+    expect(pending.maker.listMessages).not.toHaveBeenCalled();
+    expect(pending.maker.input.getProjection).not.toHaveBeenCalled();
+
+    const ready = fixture(false, historyAvailable('online', true, false));
+    await ready.sync();
+    expect(ready.maker.listMessages).toHaveBeenCalledOnce();
   });
 
   it.each([

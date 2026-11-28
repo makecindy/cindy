@@ -45,6 +45,26 @@ function makeStore(
 }
 
 describe('默认态与持久化', () => {
+  it('commits Host preferences together and preserves binding state, other accounts and future metadata', () => {
+    const store = makeStore();
+    store.setWorkspaces({ project: path.join(dir, 'project') });
+    store.setEnabled(true);
+    const before = JSON.parse(fs.readFileSync(filePath(), 'utf8'));
+    before.future = true;
+    before.accounts['account-test'].slack.future = 'preserve';
+    before.accounts['another-account'] = { future: 'untouched' };
+    fs.writeFileSync(filePath(), JSON.stringify(before));
+    const committed = store.commitPreferences!({ lifecycleAnnouncementOverride: true, telegramDefaultWorkspace: 'project' });
+    expect(committed).toMatchObject({ enabled: true, lifecycleAnnouncementOverride: true, telegramDefaultWorkspace: 'project' });
+    const after = JSON.parse(fs.readFileSync(filePath(), 'utf8'));
+    expect(after.future).toBe(true);
+    expect(after.accounts['another-account']).toEqual(before.accounts['another-account']);
+    expect(after.accounts['account-test'].slack).toMatchObject({ enabled: true, future: 'preserve' });
+    const bytes = fs.readFileSync(filePath(), 'utf8');
+    expect(() => store.commitPreferences!({ lifecycleAnnouncementOverride: false, xDefaultWorkspace: 'unknown' })).toThrow();
+    expect(fs.readFileSync(filePath(), 'utf8')).toBe(bytes);
+    expect(store.commitPreferences!({ lifecycleAnnouncementOverride: null, telegramDefaultWorkspace: null })).toMatchObject({ lifecycleAnnouncementOverride: null, telegramDefaultWorkspace: null, enabled: true });
+  });
   it('无文件: 关闭 + 空目录清单 + 内置默认地址 + 空绑定缓存', () => {
     const store = makeStore();
     expect(store.get()).toEqual({
@@ -52,7 +72,9 @@ describe('默认态与持久化', () => {
       telegramEnabled: false,
       xEnabled: false,
       feishuEnabled: false,
+      discordEnabled: false,
       xCompanionBotId: null,
+      companionBotIds: { slack: null, telegram: null, feishu: null, discord: null, x: null },
       urlOverride: null,
       workspaces: {},
       retiredWorkspaces: {},
@@ -62,9 +84,11 @@ describe('默认态与持久化', () => {
       telegramBindingCache: null,
       xBindingCache: null,
       feishuBindingCache: null,
+      discordBindingCache: null,
       xDefaultWorkspace: null,
       telegramDefaultWorkspace: null,
       feishuDefaultWorkspace: null,
+      discordDefaultWorkspace: null,
     });
     expect(store.effectiveUrl()).toBe(TEST_DEFAULT_URL);
   });
@@ -187,7 +211,9 @@ describe('旧多连接文件迁移', () => {
       telegramEnabled: false,
       xEnabled: false,
       feishuEnabled: false,
+      discordEnabled: false,
       xCompanionBotId: null,
+      companionBotIds: { slack: null, telegram: null, feishu: null, discord: null, x: null },
       urlOverride: null,
       workspaces: {},
       retiredWorkspaces: {},
@@ -197,9 +223,11 @@ describe('旧多连接文件迁移', () => {
       telegramBindingCache: null,
       xBindingCache: null,
       feishuBindingCache: null,
+      discordBindingCache: null,
       xDefaultWorkspace: null,
       telegramDefaultWorkspace: null,
       feishuDefaultWorkspace: null,
+      discordDefaultWorkspace: null,
     });
   });
 });
@@ -405,23 +433,27 @@ describe('provider 与 Cindy 账号隔离', () => {
     });
 
     // 规则: 默认项目所有官方机器人共用一个(不再每个机器人各选一个)。
-    // 生产入口: store 的读写。可观察结果: 从任一机器人的入口改, 三处读到同一个值, 清空也一起清。
+    // 生产入口: store 的读写。可观察结果: 从任一机器人的入口改, 各处读到同一个值, 清空也一起清;
+    // 官方 Discord 的 hello 默认项目也是这一个(否则 Discord 任务落在用户没选过的「对话」里)。
     // 最小失败输入: 先后从两个入口各写一次。tier: unit。
-    it('默认项目所有官方机器人共用一个: 任一入口写入或清空, 三处一起变', () => {
+    it('默认项目所有官方机器人共用一个: 任一入口写入或清空, 各处一起变', () => {
       const store = makeStore();
       store.setWorkspaces({ cindy: '/code/cindy', other: '/tmp/other' });
 
       store.setProviderDefaultWorkspace('telegram', 'cindy');
       expect(store.get()).toMatchObject({
         telegramDefaultWorkspace: 'cindy', xDefaultWorkspace: 'cindy', feishuDefaultWorkspace: 'cindy',
+        discordDefaultWorkspace: 'cindy',
       });
       store.setProviderDefaultWorkspace('x', 'other');
       expect(store.get()).toMatchObject({
         telegramDefaultWorkspace: 'other', xDefaultWorkspace: 'other', feishuDefaultWorkspace: 'other',
+        discordDefaultWorkspace: 'other',
       });
       store.setProviderDefaultWorkspace('feishu', null);
       expect(store.get()).toMatchObject({
         telegramDefaultWorkspace: null, xDefaultWorkspace: null, feishuDefaultWorkspace: null,
+        discordDefaultWorkspace: null,
       });
     });
 
@@ -552,4 +584,33 @@ it('persists store Feishu identities by Cindy account and preserves the legacy f
   account = 'account-a'; expect(store.get().feishuBindingsCache).toEqual(rows);
   store.setFeishuBindingsCache([rows[1]!]);
   expect(store.get().feishuBindingsCache).toEqual([rows[1]]);
+});
+
+// 设置 → IM 机器人 → 某平台「谁来回复」(2026-11-24): 每个官方渠道各自一份伙伴归属, 重启后仍在,
+// 按账号隔离, 改一个渠道不影响别的渠道; X 仍与旧字段 xCompanionBotId 同值(老文件照读)。
+it.each(['slack', 'telegram', 'feishu', 'discord'] as const)(
+  'persists the %s companion per account without touching other channels',
+  (provider) => {
+    let owner = 'owner-one';
+    const store = makeStore(undefined, () => owner);
+    store.setCompanionBotId(provider, 'bot-one');
+    const reloaded = makeStore(undefined, () => owner).get();
+    expect(reloaded.companionBotIds?.[provider]).toBe('bot-one');
+    expect(reloaded.xCompanionBotId).toBeNull();
+    for (const other of ['slack', 'telegram', 'feishu', 'discord'] as const) {
+      if (other !== provider) expect(reloaded.companionBotIds?.[other]).toBeNull();
+    }
+    owner = 'owner-two';
+    expect(store.get().companionBotIds?.[provider]).toBeNull();
+    owner = 'owner-one';
+    store.setCompanionBotId(provider, null);
+    expect(makeStore(undefined, () => owner).get().companionBotIds?.[provider]).toBeNull();
+  },
+);
+
+it('keeps X assignments made through either setter in one place', () => {
+  const store = makeStore(undefined, () => 'owner-one');
+  store.setCompanionBotId('x', 'bot-x');
+  expect(store.get().xCompanionBotId).toBe('bot-x');
+  expect(store.get().companionBotIds?.x).toBe('bot-x');
 });

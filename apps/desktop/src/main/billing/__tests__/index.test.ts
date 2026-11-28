@@ -756,6 +756,8 @@ describe('gift card IPC', () => {
     status: 'AVAILABLE',
     amount: '20',
     faceCode: 'cindy',
+    // 旧服务端不下发卡面：按 faceCode 用内置卡面。
+    face: null,
     senderName: 'Cindy Team',
     message: null,
     destination: 'PROMOTIONAL',

@@ -89,6 +89,8 @@ export class WecomTextInteractions {
   private consume(event: IMMessageEvent): boolean {
     const answer = findImQuestionReply(this.im, event);
     if (answer) { void answer().catch(() => undefined); return true; }
+    // 群里的确认 / 取消只认主人: 群成员也能提问时, 他们的「同意」不能替主人批准。
+    if (event.speaker && event.speaker.isOwner !== true) return false;
     const pending = this.pending.get(event.senderId);
     if (!pending) return false;
     if (isStopCommand(event.text)) {

@@ -20,27 +20,27 @@ vi.mock('react-i18next', () => ({
 }));
 afterEach(cleanup);
 
-it('expires the displayed rate without losing history, including after remount', () => {
+it('keeps the panel reading after it stops being live for the status bar, including after remount', () => {
   vi.useFakeTimers();
   try {
     clearRateHistoryCache();
     function Probe({ tokens }: { tokens: number }) {
       const history = useRunningTokenRateHistory({ sessionKey: 'freshness', startedAt: 1,
         outputTokens: tokens, generationDurationMs: tokens * 10, generationReliable: true });
-      return <div data-testid="rate">{history.latestRate ?? 'waiting'}:{history.samples.length}</div>;
+      return <div data-testid="rate">{history.latestRate ?? 'waiting'}:{history.samples.length}:{history.latestRateFresh ? 'live' : 'old'}</div>;
     }
     const view = render(<Probe tokens={0} />);
     view.rerender(<Probe tokens={100} />);
-    expect(screen.getByTestId('rate').textContent).toBe('100:1');
+    expect(screen.getByTestId('rate').textContent).toBe('100:1:live');
     act(() => vi.advanceTimersByTime(59_999));
-    expect(screen.getByTestId('rate').textContent).toBe('100:1');
+    expect(screen.getByTestId('rate').textContent).toBe('100:1:live');
     act(() => vi.advanceTimersByTime(1));
-    expect(screen.getByTestId('rate').textContent).toBe('waiting:1');
+    expect(screen.getByTestId('rate').textContent).toBe('100:1:old');
     view.unmount();
     const again = render(<Probe tokens={100} />);
-    expect(screen.getByTestId('rate').textContent).toBe('waiting:1');
+    expect(screen.getByTestId('rate').textContent).toBe('100:1:old');
     again.rerender(<Probe tokens={200} />);
-    expect(screen.getByTestId('rate').textContent).toBe('100:2');
+    expect(screen.getByTestId('rate').textContent).toBe('100:2:live');
     again.unmount();
   } finally { clearRateHistoryCache(); vi.useRealTimers(); }
 });
@@ -104,7 +104,18 @@ it('keeps pinned history while its trigger falls back to tokens or elapsed-only'
   expect(screen.getByRole('dialog')).toBe(dialog);
   expect(trigger.textContent).toContain('1.2k tok');
   expect(trigger.getAttribute('aria-label')).not.toContain('currentRate');
-  expect(screen.getByRole('img').querySelector('circle')).toBeTruthy();
+  // The retained sample is visible only when the user inspects the chart.
+  const image = screen.getByRole('img');
+  const chart = image.parentElement!;
+  const rect = vi.spyOn(chart, 'getBoundingClientRect').mockReturnValue(new DOMRect(0, 0, 120, 48));
+  try {
+    expect(image.querySelector('circle')).toBeNull();
+    fireEvent.pointerMove(chart, { clientX: 110, clientY: 12 });
+    expect(screen.getByTestId('trace-readout').textContent).toContain('0:01');
+    expect(image.querySelectorAll('circle')).toHaveLength(1);
+    fireEvent.pointerLeave(chart);
+    expect(image.querySelector('circle')).toBeNull();
+  } finally { rect.mockRestore(); }
   rerender(<RunningTokenRatePopover {...props} rateText={null} />);
   expect(trigger.textContent).toBe('10s');
   expect(screen.getByRole('dialog')).toBe(dialog);
@@ -230,20 +241,17 @@ it('keeps the pinned card across turns while awaiting a fresh rate', async () =>
   expect(screen.getByRole('button', { name: /speed/ })).toBe(trigger);
   expect(dialog.textContent).toContain('50');
   expect(screen.getByRole('img').querySelectorAll('path')).toHaveLength(3);
+  // The next turn keeps the pinned card but starts an empty chart: its figures are its own.
   rerender(<Harness startedAt={2} outputTokens={0} generationDurationMs={0} />);
   expect(screen.getByRole('dialog')).toBe(dialog);
-  const chart = screen.getByRole('img');
-  expect(chart.querySelectorAll('path')).toHaveLength(3);
+  expect(screen.getByRole('img').querySelectorAll('path')).toHaveLength(1);
   expect(screen.getByRole('dialog').textContent).toContain('—');
-  const previousLine = chart.querySelectorAll('path')[2].getAttribute('d');
   rerender(<Harness startedAt={2} outputTokens={20} generationDurationMs={500} />);
-  expect(chart.querySelectorAll('path')[2].getAttribute('d')).toBe(previousLine);
   expect(screen.getByRole('dialog').textContent).toContain('—');
   rerender(<Harness startedAt={2} outputTokens={40} generationDurationMs={1000} />);
+  expect(screen.getByRole('dialog')).toBe(dialog);
   expect(screen.getByRole('dialog').textContent).toContain('40');
-  const nextLine = screen.getByRole('img').querySelectorAll('path')[2].getAttribute('d');
-  expect(nextLine).not.toBe(previousLine);
-  expect(nextLine?.match(/[ML]/g)).toHaveLength(3);
+  expect(screen.getByRole('img').querySelectorAll('path').length).toBeLessThan(3);
 });
 
 it('keeps a clicked panel open through outside clicks and focus changes, and closes from the trigger', async () => {

@@ -21,9 +21,12 @@ afterEach(() => {
 
 describe('default working directory setting', () => {
   it('cancels without saving, then selects and clears a local directory', async () => {
+    let cancel!: () => void;
     const choose = vi
       .fn()
-      .mockResolvedValueOnce({ canceled: true })
+      .mockImplementationOnce(() => new Promise((resolve) => {
+        cancel = () => resolve({ canceled: true });
+      }))
       .mockResolvedValueOnce({ canceled: false, path: '/projects/cindy' });
     vi.stubGlobal('electronAPI', { showOpenDirectoryDialog: choose });
     render(<DefaultNewTaskWorkingDirSection ownerId="owner-a" />);
@@ -32,6 +35,17 @@ describe('default working directory setting', () => {
       screen.getByRole('button', { name: 'settings.defaultNewTaskWorkingDir.choose' }),
     );
     await waitFor(() => expect(choose).toHaveBeenCalledOnce());
+    // A canceled dialog must finish releasing busy state before the next click.
+    cancel();
+    await waitFor(() =>
+      expect(
+        screen
+          .getByRole('button', {
+            name: 'settings.defaultNewTaskWorkingDir.choose',
+          })
+          .hasAttribute('disabled'),
+      ).toBe(false),
+    );
     expect(getDefaultNewTaskWorkingDir('owner-a')).toBeNull();
 
     fireEvent.click(

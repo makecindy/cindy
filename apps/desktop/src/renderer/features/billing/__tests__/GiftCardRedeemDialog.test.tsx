@@ -23,6 +23,7 @@ const card: BillingGiftCard = {
   status: 'AVAILABLE',
   amount: '20',
   faceCode: 'cindy',
+  face: null,
   senderName: 'Cindy Team',
   message: 'Enjoy',
   destination: 'PROMOTIONAL',
@@ -187,6 +188,35 @@ describe('GiftCardRedeemDialog', () => {
 
     const face = await screen.findByRole('img', { name: /^billing\.giftCard\.cardLabel/ });
     expect(face.querySelectorAll('[data-gift-card-amount] path')).toHaveLength(3);
+  });
+
+  // 卡面由服务端下发：新卡面（本版本没有内置图）用服务端底图与印法画；底图到之前只留占位，
+  // 取不到时整张退回内置默认卡面（图与印法同一来源），不出现破图或服务端印法配内置图。
+  it('draws a card face the server added, and falls back whole when its image cannot load', async () => {
+    const snow = {
+      code: 'snow',
+      names: { en: 'Snow · Night' },
+      imageUrl: 'https://model-access.example.com/api/public/gift-cards/faces/snow.webp?v=0123456789ab',
+      amount: { x: 600, baseline: 300, size: 228, maxWidth: 480, color: '#112233' },
+    };
+    api.previewGiftCard.mockResolvedValue({ ok: true, card: { ...card, faceCode: 'snow', face: snow } });
+    open(CODE);
+
+    const face = await screen.findByRole('img', { name: /^billing\.giftCard\.cardLabel/ });
+    const remote = () => face.querySelector(`img[src="${snow.imageUrl}"]`);
+    const amount = () => face.querySelector('[data-gift-card-amount] g');
+    expect(face.querySelectorAll('img')).toHaveLength(1);
+    expect(amount()).toBeNull();
+
+    fireEvent.load(remote()!);
+    expect(amount()?.getAttribute('fill')).toBe('#112233');
+    expect(amount()?.getAttribute('transform')).toMatch(/^translate\(600 300\)/);
+
+    fireEvent.error(remote()!);
+    expect(remote()).toBeNull();
+    expect(face.querySelectorAll('img')).toHaveLength(1);
+    expect(amount()?.getAttribute('fill')).toBe('#F3EDE2');
+    expect(amount()?.getAttribute('transform')).toMatch(/^translate\(80 372\)/);
   });
 
   it('explains which edition a card belongs to and keeps the input for another try', async () => {

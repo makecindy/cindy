@@ -5,13 +5,27 @@ import type { DbClient } from '../localDb/client/DbClient.js';
 export type IdleClaudeSession = Pick<Session, 'id' | 'agentKind' | 'remoteHostId' | 'agentDeviceId' | 'sdkSessionId'
   | 'getStatus' | 'getTurnGeneration' | 'isTurnRunning' | 'listBackgroundTasks'
   | 'countPendingWakeContinuations' | 'manageAsyncUserQuestions' | 'onEvent' | 'closeIfIdle' | 'close'>
-  & Partial<Pick<Session, 'hasLiveBackgroundWork'>>;
+  & Partial<Pick<Session, 'hasLiveBackgroundWork' | 'canResumeAfterClose'>>;
 /** Codex mirrors the Pi and Claude 30-minute default; no separate setting. */
 export const DEFAULT_CODEX_IDLE_RELEASE_MINUTES = 30;
+/**
+ * Plugin engines (ACP) keep a longer idle window (90 minutes) because closing and
+ * resuming an engine process frequently busts provider-side prompt caches that
+ * remain warm across 30–60 minute pauses while the live process stays attached.
+ */
+export const DEFAULT_PLUGIN_ENGINE_IDLE_RELEASE_MINUTES = 90;
+/**
+ * Upper bound on recurring schedule intervals (1 hour) that keep a bound plugin
+ * engine task warm between ticks instead of releasing and cold-resuming each cycle.
+ */
+export const PLUGIN_ENGINE_KEEP_WARM_SCHEDULE_MAX_INTERVAL_MS = 60 * 60_000;
 /** Engines whose ordinary local tasks share this reclamation policy. */
-export type IdleReleaseAgentKind = 'claude-code' | 'codex';
+export type IdleReleaseAgentKind = 'claude-code' | 'codex' | 'acp';
 export interface ClaudeIdleReleaseDeps {
-  /** Defaults to Claude; Codex reuses the same gates plus its async background probe. */
+  /**
+   * Defaults to Claude; Codex and plugin engines reuse the same gates plus the async background
+   * probe. A runtime that cannot reopen its conversation (a plugin engine without resume) is kept.
+   */
   agentKind?: IdleReleaseAgentKind;
   listSessions(): IdleClaudeSession[];
   getSession(id: string): IdleClaudeSession | undefined;
@@ -26,19 +40,54 @@ export interface ClaudeIdleReleaseDeps {
   warn(message: string): void;
 }
 
-/** Scope query runs through the DB worker; source and ownership are host facts. */
-const ordinaryTaskSql = (dbAgentKind: 'cc' | 'codex') => `SELECT id FROM sessions s
-WHERE s.id = ? AND s.status = 'active' AND s.source = 'desktop'
-AND s.hidden_at IS NULL AND s.agent_device_id IS NULL
+/** Scope query runs through the DB worker; source and ownership are host facts.
+ *  `hostOwnedLanes` additionally admits archived tasks and hidden plugin-owned tasks:
+ *  their runtimes live in the host's shared runtime whether or not the sidebar lists
+ *  them (the Pi watcher's scope already does the same for pi). Ownership exclusions
+ *  below are unchanged — bots, Orca teams and workers, active Goals and remote or
+ *  device-owned tasks keep their own lifecycle in every scope. */
+const ordinaryTaskSql = (dbAgentKind: 'cc' | 'codex' | 'acp', hostOwnedLanes = false) => {
+  const status = hostOwnedLanes ? "s.status IN ('active', 'archived')" : "s.status = 'active'";
+  const source = hostOwnedLanes
+    ? "((s.source = 'desktop' AND s.hidden_at IS NULL) OR s.source = 'plugin')"
+    : "(s.source = 'desktop' AND s.hidden_at IS NULL)";
+  return `SELECT id FROM sessions s
+WHERE s.id = ? AND ${status} AND ${source}
+AND s.agent_device_id IS NULL
 AND s.sdk_session_id = ? AND s.sdk_session_id != '<pending>'
 AND s.agent_kind = '${dbAgentKind}' AND s.remote_host_id IS NULL AND s.orca_role IS NULL
 AND NOT EXISTS (SELECT 1 FROM bot_session_links b WHERE b.session_id = s.id)
 AND NOT EXISTS (SELECT 1 FROM orca_workers w WHERE w.session_id = s.id)
 AND NOT EXISTS (SELECT 1 FROM orca_teams t WHERE t.lead_session_id = s.id AND t.status = 'active')
 AND NOT EXISTS (SELECT 1 FROM session_goals g WHERE g.session_id = s.id AND g.status != 'complete')`;
+};
 export const ORDINARY_CLAUDE_TASK_SQL = ordinaryTaskSql('cc');
-/** Same ordinary-task scope for Codex: bots, Orca, Goals, remote and hidden tasks keep their own lifecycle. */
-export const ORDINARY_CODEX_TASK_SQL = ordinaryTaskSql('codex');
+/**
+ * Codex scope admits its host-owned lanes: a plugin-owned Codex task holds a thread in
+ * the shared app-server with no process owner of its own, and an archived task keeps its
+ * thread loaded with no visible owner — both would otherwise accumulate until restart.
+ * The next send (after unarchiving, or whenever the plugin speaks again) resumes the
+ * thread lazily. Bot lanes stay out: their lifecycle belongs to the bot runner.
+ */
+export const ORDINARY_CODEX_TASK_SQL = ordinaryTaskSql('codex', true);
+/**
+ * Plugin engine tasks keep the same ownership exclusions as built-in engines, and
+ * also stay warm while bound to an active automatic schedule that fires frequently
+ * (interval <= 60 min) or reacts to PR/webhook events (e.g., PR auto-follow), so
+ * idle reclamation does not recycle the process and wipe prompt cache mid-followup.
+ */
+export const ORDINARY_PLUGIN_ENGINE_TASK_SQL = `${ordinaryTaskSql('acp')}
+AND NOT EXISTS (
+  SELECT 1 FROM schedules sc
+  WHERE sc.target_session_id = s.id
+    AND sc.status = 'active'
+    AND sc.manual = 0
+    AND (
+      sc.pr_trigger IS NOT NULL
+      OR sc.webhook_trigger IS NOT NULL
+      OR (sc.interval_ms IS NOT NULL AND sc.interval_ms <= ${PLUGIN_ENGINE_KEEP_WARM_SCHEDULE_MAX_INTERVAL_MS})
+    )
+)`;
 
 /** Whether a task is in the ordinary scope, by the given SQL against the database the caller reads now. */
 export function createOrdinaryIdleReleaseTaskCheck(
@@ -64,7 +113,7 @@ export function createIdleReleaseRuntimeClose(
 /** Single-flight scans reuse the send lock and Session's atomic close-if-idle boundary. */
 export function createClaudeIdleReleaseWatcher(deps: ClaudeIdleReleaseDeps) {
   const agentKind = deps.agentKind ?? 'claude-code';
-  const label = agentKind === 'codex' ? 'Codex' : 'Claude';
+  const label = agentKind === 'codex' ? 'Codex' : agentKind === 'acp' ? 'Plugin engine' : 'Claude';
   const tracked = new Map<IdleClaudeSession, { since: number; generation: number; closeFailed: boolean; unsubscribe: () => void }>();
   let timer: ReturnType<typeof setInterval> | undefined;
   let epoch = 0;
@@ -76,7 +125,8 @@ export function createClaudeIdleReleaseWatcher(deps: ClaudeIdleReleaseDeps) {
   const busy = (session: IdleClaudeSession, retryFailedClose = false) =>
     (session.getStatus() !== 'active' && !(retryFailedClose && session.getStatus() === 'error'))
     || !session.sdkSessionId || session.sdkSessionId === '<pending>' || session.isTurnRunning() || session.listBackgroundTasks().length > 0
-    || session.countPendingWakeContinuations() > 0 || deps.isHostBusy(session.id);
+    || session.countPendingWakeContinuations() > 0 || session.canResumeAfterClose?.() === false
+    || deps.isHostBusy(session.id);
   // Session.close expires these cards. Unlike synchronous questions, async
   // questions deliberately do not hold a product turn or a host interaction lock.
   const hasQuestions = (session: IdleClaudeSession) => session.getStatus() === 'active'

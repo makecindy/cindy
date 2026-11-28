@@ -21,6 +21,7 @@ import { ChevronDown, RefreshCw } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
 import { Spinner } from '@/components/ui/spinner';
+import { SegmentedControl } from '@/components/ui/segmented-control';
 import { Tip } from '@/components/ui/tooltip';
 import {
   DAILY_SOFT_LIMIT_FACTOR,
@@ -36,6 +37,7 @@ import { UsageHeatmap } from './UsageHeatmap';
 import { USAGE_TOP_MODELS, usageModelKey } from './usagePalette';
 import {
   gatewayMoney,
+  type MoneyCurrency,
   type RegionalMoney,
   zeroUsageMoney,
 } from '../../../shared/regionalMoney';
@@ -170,7 +172,8 @@ export function HomeUsageDashboard(): React.JSX.Element {
     createEmptyUsageHistoryPayload(),
   );
   // 收起态暂停消费推送订阅 (展开瞬间 hook 自动补拉一次) — 收起用户零后台刷新成本
-  const { history, refreshing: usageRefreshing } = useUsageHistory({ paused: collapsed, userId: user?.id });
+  const [currency, setCurrency] = useState<MoneyCurrency>();
+  const { history, refreshing: usageRefreshing } = useUsageHistory({ currency, paused: collapsed, userId: user?.id });
   const layoutHistory = history ?? emptyLayoutHistory;
   const hasHistoryData = history !== null;
   // 月度预算与右下角 chip 同源 (XD gateway key 的 LiteLLM spend, 与 vendor 无关)
@@ -192,7 +195,8 @@ export function HomeUsageDashboard(): React.JSX.Element {
       : null;
   const hasAccountTodaySpend = accountTodayMoney !== null;
 
-  const displayTodaySpend = accountTodayMoney ?? layoutHistory.totals.today;
+  const showAccount = accountTodayMoney && (!hasHistoryData || accountTodayMoney.currency === layoutHistory.totals.today.currency);
+  const displayTodaySpend = showAccount ? accountTodayMoney : layoutHistory.totals.today;
   const hasSpendValue = hasHistoryData || hasAccountTodaySpend;
   const showLocalSpendAnomaly =
     layoutHistory.anomaly.isAnomalous &&
@@ -205,7 +209,7 @@ export function HomeUsageDashboard(): React.JSX.Element {
       : gatewayMoney(softDailyLimit, claudeQuota.currency);
   const todayValue = !hasSpendValue
     ? UNKNOWN_VALUE
-    : softDailyLimitMoney
+    : softDailyLimitMoney?.currency === displayTodaySpend.currency
       ? `${formatMoney(displayTodaySpend)} / ${formatCompactMoney(softDailyLimitMoney)}`
       : formatMoney(displayTodaySpend);
   const anomalyTip = showLocalSpendAnomaly
@@ -313,6 +317,10 @@ export function HomeUsageDashboard(): React.JSX.Element {
             </span>
           )}
         </span>
+        {!collapsed && history?.currencies && history.currencies.length > 1 && (
+          <SegmentedControl aria-label={t('menubar.ui.usageCurrency')} value={layoutHistory.totals.today.currency}
+            options={history.currencies.map(value => ({ value, label: value }))} onValueChange={setCurrency} />
+        )}
         {collapsed &&
           (showLocalSpendAnomaly && anomalyTip ? (
             <Tip text={anomalyTip}>{collapsedSummary}</Tip>

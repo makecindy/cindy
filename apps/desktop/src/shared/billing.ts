@@ -8,6 +8,7 @@
 import type {
   GiftCard,
   GiftCardCredit,
+  GiftCardFaceStyle,
   GiftCardFailure,
   GiftCardStatus,
 } from '@cindy/maker-shared/gift-card';
@@ -99,6 +100,7 @@ export type BillingGiftCard = GiftCard;
 export type BillingGiftCardCredit = GiftCardCredit;
 /** 服务端明确给出的不可领取原因；网络或服务故障走 IPC 错误，不在此列。 */
 export type BillingGiftCardFailure = GiftCardFailure;
+export type BillingGiftCardFaceStyle = GiftCardFaceStyle;
 
 export type BillingGiftCardPreviewResult =
   { ok: true; card: BillingGiftCard } | { ok: false; reason: BillingGiftCardFailure };
@@ -363,6 +365,11 @@ export type BillingGiftCardPurchasePolicy = {
   minFaceValue: string | null;
   maxFaceValue: string | null;
   faces: string[];
+  /**
+   * `faces` 里各卡面的底图、金额印法与名称（服务端下发，顺序同 `faces`）。旧服务端没有、或某一项
+   * 不合法时不含该项，界面对它只用本版本内置的卡面。
+   */
+  faceCatalog: BillingGiftCardFaceStyle[];
   maxSenderNameLength: number;
   maxMessageLength: number;
   /**
@@ -384,6 +391,8 @@ export type BillingPurchasedGiftCard = {
   cardId: string;
   orderId: string;
   faceCode: string;
+  /** 服务端下发的卡面；旧服务端没有或不合法时为 null，按 faceCode 用内置卡面。 */
+  face: BillingGiftCardFaceStyle | null;
   amount: string;
   currency: string;
   senderName: string;

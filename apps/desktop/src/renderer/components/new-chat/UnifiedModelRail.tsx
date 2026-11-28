@@ -1,11 +1,21 @@
-import type { ReactNode } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
+import { isDarkBackground } from '../../../shared/theme-import/color';
+import { themeService } from '@/themes/theme-service';
 import { isProviderShareAgentDeviceId } from '../../../shared/providerShare';
 import { useProviderShareWeeklyQuota } from '@/features/provider-share/useProviderShareWeeklyQuota';
-import { History, LayoutGrid, Share2, Star, Waypoints } from 'lucide-react';
+import { History, LayoutGrid, Share2, Sparkles, Star } from 'lucide-react';
 import { PluginEngineIcon } from '@/components/icons/PluginEngineIcon';
 import { useTranslation } from 'react-i18next';
+import type { GhostHarnessUsage } from '@cindy/plugin-protocol';
+import { pickPluginEngineQuotaPools, pickPluginEngineWeeklyQuota } from '@cindy/maker-shared/plugin-engine-quota';
+import { subscriptionQuotaOverview } from '@cindy/maker-shared/subscription-selection';
+import { useOptionalAuthDeviceId } from '@/contexts/AuthContext';
+import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
+import { readPluginEngineUsage } from '@/hooks/pluginEngineUsage';
 import { ModelPickerAccountBoundary, useModelPickerAccount } from './ModelPickerAccount';
 import { ModelPoolQuotaDetails, useModelPoolQuota, type ModelPoolQuota } from './ModelPoolQuota';
+import { useModelSourceNow } from './ModelSourceDetails';
+import { formatPluginUsageCardWindowTitle, pluginEngineUsageBalances } from '../status/pluginEngineUsageAccount';
 
 import type { ProviderView } from '@cindy/model-providers';
 
@@ -21,18 +31,23 @@ import {
   type ProviderGroupUsageOf,
   type ProviderUsageScope,
 } from './useProviderWeeklyQuota';
-import { formatQuotaResetCountdown } from '../status/usageCardModel';
+import { formatQuotaResetCountdown, formatQuotaResetDuration } from '../status/usageCardModel';
 import { agentOptionOf } from './agentOptions';
 import { ProviderRailMark } from './UnifiedFlyoutHost';
 import { RemoteSourceMark } from '@/components/icons/RemoteSourceMark';
 import {
   engineOfAgentKind,
+  railItemDeviceId,
   railItemKey,
+  type DeviceModelGroupsRailTab,
   type PluginEngineRailTab,
   type UnifiedRailFilter,
   type UnifiedRailItem,
 } from './unifiedModelSelection';
 import { QUOTA_FILL_COLOR_CLASSES, quotaSeverity } from '../status/QuotaBar';
+import { RouteSourceMark } from '@/components/icons/RouteSourceMark';
+import { isSourceRouteProviderId } from '@/features/model-groups/sourceRouteProviders';
+import { OWN_ROUTES_PROVIDER_ID } from '../../../shared/auxiliaryModelSettings';
 
 /**
  * UnifiedModelRail —— 统一面板左侧的视图筛选栏(model-selector-unified §1.2 / §1.6)。
@@ -54,9 +69,15 @@ export function UnifiedModelRail({
   providerGroupUsage,
   remoteSources,
   pluginEngineTabs,
+  modelGroupDeviceTabs,
+  routeUsageMember,
 }: {
-  /** 插件引擎格的名字与图标，按 providerId 对应 `plugin-engine` 格。 */
+  /** 合并整个供应商的路由那一格显示谁的额度；缺省时那一格不显示额度。 */
+  routeUsageMember?: (providerId: string) => { provider: ProviderView; agentDeviceId: string | null } | null;
+  /** 插件引擎格的名字与图标，按 providerId (与所在电脑)对应 `plugin-engine` 格。 */
   pluginEngineTabs?: readonly PluginEngineRailTab[];
+  /** 另一台电脑的「模型组」格的名字(悬停与读屏)。 */
+  modelGroupDeviceTabs?: readonly DeviceModelGroupsRailTab[];
   items: readonly UnifiedRailItem[];
   active: UnifiedRailFilter;
   onSelect: (item: UnifiedRailItem) => void;
@@ -99,10 +120,20 @@ export function UnifiedModelRail({
         // 设计稿 .rail-sep:「★/同引擎」与「全部/来源」两段之间的 22px 细线;
         // 远程供应商每台电脑一段,段首同样一条细线。
         const previous = index > 0 ? items[index - 1] : undefined;
+        // 另一台电脑上的插件引擎格与那台的供应商格同属一段。
+        const itemDeviceId = railItemDeviceId(item);
+        // 路由一组(「智能路由」那一格 + 合并了整个供应商的路由)与后面的普通供应商之间也画一条：
+        // 混在一排品牌图标里分不出哪些是路由(2026-11-25 用户反馈)。
+        const routeItem = (candidate: UnifiedRailItem | undefined) => !!candidate && (
+          (candidate.kind === 'model-groups' && !candidate.deviceId)
+          || (candidate.kind === 'provider' && isSourceRouteProviderId(candidate.providerId)));
         const separatorBefore =
           item.kind === 'all' ||
-          (item.kind === 'remote-provider' &&
-            (previous?.kind !== 'remote-provider' || previous.deviceId !== item.deviceId));
+          (itemDeviceId !== null && (!previous || railItemDeviceId(previous) !== itemDeviceId)) ||
+          (itemDeviceId === null && routeItem(previous) && !routeItem(item));
+        const engineTab = item.kind === 'plugin-engine'
+          ? pluginEngineTabs?.find((tab) => tab.providerId === item.providerId && (tab.deviceId ?? null) === (item.deviceId ?? null))
+          : undefined;
         const engineOption =
           item.kind === 'engine' ? agentOptionOf(engineOfAgentKind(item.agent)) : null;
         const railProviders =
@@ -117,9 +148,20 @@ export function UnifiedModelRail({
         const usageDeviceId =
           item.kind === 'remote-provider'
             ? item.deviceId
-            : remoteSources
-              ? (remoteSources.localUsageDeviceId ?? null)
-              : (providerUsage?.deviceId ?? null);
+            : item.kind === 'plugin-engine' && item.deviceId
+              ? item.deviceId
+              : remoteSources
+                ? (remoteSources.localUsageDeviceId ?? null)
+                : (providerUsage?.deviceId ?? null);
+        const pluginEngineQuotaTarget =
+          item.kind === 'plugin-engine' &&
+          !isSourceRouteProviderId(item.providerId) &&
+          providerUsage !== null &&
+          engineTab?.reportsUsage &&
+          engineTab.key &&
+          !isProviderShareAgentDeviceId(usageDeviceId)
+            ? { key: engineTab.key, deviceId: usageDeviceId }
+            : undefined;
         // 供应商组那一格代表组里的几台电脑：任务正经组在某台运行时读那台的账号(与输入框下方的用量
         // 一致)，还没分到电脑时不显示某一台的配额；悬停多写一句说明是哪台。
         const groupUsage =
@@ -146,6 +188,14 @@ export function UnifiedModelRail({
                   device: groupUsage.deviceName,
                 })
           : undefined;
+        // 合并整个供应商的路由：额度按排在最前、没停用的那个成员显示，悬停写明是谁的(它自己没有账号)。
+        const routeMember = item.kind === 'provider' && isSourceRouteProviderId(item.providerId)
+          ? routeUsageMember?.(item.providerId) ?? null : null;
+        const routeMemberShare = routeMember && isProviderShareAgentDeviceId(routeMember.agentDeviceId) ? routeMember.agentDeviceId : null;
+        const routeMemberName = routeMember
+          ? (routeMember.agentDeviceId ? remoteSources?.labelOf(routeMember.agentDeviceId, routeMember.provider.id) : undefined)
+            ?? routeMember.provider.name
+          : null;
         const label =
           item.kind === 'recent'
             ? t('newChat.modelSelector.unified.railRecent')
@@ -157,11 +207,14 @@ export function UnifiedModelRail({
                   })
                 : item.kind === 'all'
                   ? t('newChat.modelSelector.unified.railAll')
+                  : item.kind === 'model-groups' && item.deviceId
+                    ? t('modelGroups.picker.deviceTitle', {
+                        device: modelGroupDeviceTabs?.find((tab) => tab.deviceId === item.deviceId)?.name ?? '',
+                      })
                   : item.kind === 'model-groups'
                     ? t('modelGroups.title')
                   : item.kind === 'plugin-engine'
-                    ? (pluginEngineTabs?.find((tab) => tab.providerId === item.providerId)?.name
-                      ?? t('newChat.pluginEngines.genericName'))
+                    ? (engineTab?.name ?? t('newChat.pluginEngines.genericName'))
                   : item.kind === 'remote-provider'
                     ? (remoteSources?.labelOf(item.deviceId, item.providerId) ?? item.providerId)
                     : (remoteSources?.localProviderLabel ?? providerLabel)(item.providerId);
@@ -175,23 +228,31 @@ export function UnifiedModelRail({
             )}
             <RailButton
               shareDeviceId={
-                (item.kind === 'provider' || item.kind === 'remote-provider') &&
-                isProviderShareAgentDeviceId(usageDeviceId)
-                  ? usageDeviceId
-                  : null
+                routeMember
+                  ? routeMemberShare
+                  : (item.kind === 'provider' || item.kind === 'remote-provider') &&
+                      isProviderShareAgentDeviceId(usageDeviceId)
+                    ? usageDeviceId
+                    : null
               }
               label={label}
-              accountIdentity={accountIdentity}
-              {...(groupNote ? { groupNote } : {})}
+              accountIdentity={routeMember ? undefined : accountIdentity}
+              {...(routeMemberName
+                ? { groupNote: t('modelGroups.picker.quotaOf', { name: routeMemberName }) }
+                : groupNote ? { groupNote } : {})}
+              selectedUpload={isActive && !!provider?.customIcon}
               isActive={isActive}
               itemKey={key}
               onClick={() => onSelect(item)}
               disabled={interactionDisabled}
-              provider={providerUsage ? usageProvider : undefined}
+              provider={providerUsage ? (routeMember ? (routeMemberShare ? undefined : routeMember.provider) : usageProvider) : undefined}
+              pluginEngine={pluginEngineQuotaTarget}
               usageDeviceId={
-                groupUsage?.kind === 'running' && groupUsage.usage
-                  ? groupUsage.usage.scope.deviceId
-                  : usageDeviceId
+                routeMember
+                  ? routeMember.agentDeviceId ?? usageDeviceId
+                  : groupUsage?.kind === 'running' && groupUsage.usage
+                    ? groupUsage.usage.scope.deviceId
+                    : usageDeviceId
               }
             >
               {item.kind === 'recent' ? (
@@ -208,15 +269,38 @@ export function UnifiedModelRail({
                 <engineOption.Mark size={14} className="shrink-0" />
               ) : item.kind === 'all' ? (
                 <LayoutGrid size={16} />
+              ) : item.kind === 'model-groups' && item.deviceId ? (
+                // 另一台电脑的模式：与远程供应商格同一个信号波纹。
+                <RemoteSourceMark markSize={16}>
+                  <Sparkles size={16} />
+                </RemoteSourceMark>
               ) : item.kind === 'model-groups' ? (
-                <Waypoints size={16} />
+                <Sparkles size={16} />
+              ) : item.kind === 'plugin-engine' && item.deviceId ? (
+                // 另一台电脑上的引擎：与远程供应商格同一个信号波纹。
+                <RemoteSourceMark markSize={16}>
+                  <PluginEngineIcon size={16} iconDataUrl={engineTab?.iconDataUrl} className="" />
+                </RemoteSourceMark>
+              ) : item.kind === 'plugin-engine' && isSourceRouteProviderId(item.providerId) ? (
+                // 合并了插件执行引擎的供应商路由：插件图标 + 路由角标，与内置供应商路由一致。
+                <RouteSourceMark markSize={16}>
+                  <PluginEngineIcon size={16} iconDataUrl={engineTab?.iconDataUrl} className="" />
+                </RouteSourceMark>
               ) : item.kind === 'plugin-engine' ? (
                 // 和供应商格一样画来源自己的标：提供引擎的插件图标(没有时画通用拼图，跟随格的前景色)。
                 <PluginEngineIcon
                   size={16}
-                  iconDataUrl={pluginEngineTabs?.find((tab) => tab.providerId === item.providerId)?.iconDataUrl}
+                  iconDataUrl={engineTab?.iconDataUrl}
                   className=""
                 />
+              ) : item.kind === 'provider' && item.providerId === OWN_ROUTES_PROVIDER_ID ? (
+                // 自己排的路由合在一格(辅助模型)：与「智能路由」格同一个图形，不叠合并供应商的角标。
+                <Sparkles size={16} />
+              ) : item.kind === 'provider' && isSourceRouteProviderId(item.providerId) ? (
+                // 合并了整个供应商的路由：品牌图形 + 路由角标，不与普通供应商混淆。
+                <RouteSourceMark markSize={16}>
+                  <ProviderRailMark providerId={item.providerId} providers={railProviders} />
+                </RouteSourceMark>
               ) : item.kind === 'provider' ? (
                 <ProviderRailMark providerId={item.providerId} providers={railProviders} />
               ) : item.kind === 'remote-provider' ? (
@@ -239,11 +323,13 @@ interface RailButtonProps {
   accountIdentity?: string;
   /** 供应商组那一格:用量读的是哪台(或还没分到电脑),账号名跟在这一句后面。 */
   groupNote?: string;
+  selectedUpload: boolean;
   isActive: boolean;
   itemKey: string;
   onClick: () => void;
   disabled: boolean;
   provider?: ProviderView;
+  pluginEngine?: { key: string; deviceId: string | null };
   usageDeviceId: string | null;
   shareDeviceId?: string | null;
   children: ReactNode;
@@ -254,6 +340,9 @@ function RailButton(props: RailButtonProps) {
   // and must never borrow this desktop's account quota.
   if (props.shareDeviceId) {
     return <SharedProviderQuotaButton {...props} shareDeviceId={props.shareDeviceId} />;
+  }
+  if (props.pluginEngine) {
+    return <PluginEngineQuotaButton {...props} pluginEngine={props.pluginEngine} />;
   }
   // Groups already resolve an executing member. Keep that member's runtime
   // mirror, rather than previewing a new allocation on the same computer.
@@ -269,6 +358,87 @@ function RailButton(props: RailButtonProps) {
     </ModelPickerAccountBoundary>
   ) : (
     <RailButtonView {...props} />
+  );
+}
+
+function PluginEngineQuotaButton(props: RailButtonProps & { pluginEngine: { key: string; deviceId: string | null } }) {
+  const { t, i18n } = useTranslation();
+  const selfDeviceId = useOptionalAuthDeviceId();
+  // This computer's own id reads locally, not through a device link to itself.
+  const usageDeviceId = props.pluginEngine.deviceId && props.pluginEngine.deviceId === selfDeviceId
+    ? null
+    : props.pluginEngine.deviceId;
+  const targetKey = `${usageDeviceId ?? ''}:${props.pluginEngine.key}`;
+  const [reading, setReading] = useState<{ targetKey: string; usage: GhostHarnessUsage } | null>(null);
+  const contextNow = useModelSourceNow();
+  const now = contextNow || Date.now();
+  useEffect(() => {
+    const owner = getDataOwnerGeneration();
+    let active = true;
+    void readPluginEngineUsage(owner, usageDeviceId, props.pluginEngine.key).result.then((usage) => {
+      if (!active || !isDataOwnerGenerationCurrent(owner)) return;
+      setReading(usage ? { targetKey, usage } : null);
+    });
+    return () => { active = false; };
+  }, [usageDeviceId, props.pluginEngine.key, targetKey]);
+  const usage = reading?.targetKey === targetKey ? reading.usage : null;
+  // Engines with separate model pools (Antigravity: Gemini vs Claude & GPT) keep one rail bar for
+  // the tightest pool, but a warning names its pool and never claims the whole engine is exhausted.
+  const pools = pickPluginEngineQuotaPools(usage, now);
+  const worstPool = pools?.reduce((worst, pool) => {
+    const rank = (candidate: typeof pool) => (candidate.overview.limited ? 2 : candidate.overview.shortLow ? 1 : 0);
+    if (rank(pool) !== rank(worst)) return rank(pool) > rank(worst) ? pool : worst;
+    return pool.remaining < worst.remaining ? pool : worst;
+  }) ?? null;
+  const overview = worstPool ? worstPool.overview : pickPluginEngineWeeklyQuota(usage, now);
+  const poolPrefix = worstPool ? `${worstPool.label} · ` : '';
+  const balances = usage ? pluginEngineUsageBalances(usage, i18n.language, t) : [];
+  const primaryResetsAtSec =
+    overview.primary && typeof overview.primary.resetsAt === 'number' && overview.primary.resetsAt > 0
+      ? overview.primary.resetsAt / 1000
+      : null;
+  const quota = overview.primary
+    ? { usedPercent: 100 - overview.primary.remainingPercent, resetsAt: primaryResetsAtSec }
+    : null;
+  const weeklyRemaining = overview.primary ? Math.round(overview.primary.remainingPercent) : null;
+  const subOverview = weeklyRemaining !== null
+    ? subscriptionQuotaOverview([{ remaining: weeklyRemaining, resetsAt: primaryResetsAtSec }], now)
+    : null;
+  const recoverySec = overview.recoveryResetsAt !== null ? overview.recoveryResetsAt / 1000 : null;
+  const pluginWarning = overview.limited
+    ? {
+        kind: 'limited' as const,
+        label: poolPrefix + (recoverySec
+          ? t('subscriptionAccounts.quotaRecoverIn', { duration: formatQuotaResetDuration(recoverySec, now, t) })
+          : t('subscriptionAccounts.quotaExhausted')),
+      }
+    : overview.shortLow && overview.shortWindow
+      ? {
+          kind: 'low' as const,
+          label: poolPrefix + t('subscriptionAccounts.quotaFiveHourRemaining', { percent: Math.round(overview.shortWindow.remainingPercent) }),
+        }
+      : null;
+  const tooltipWindows = pools ? pools.flatMap((pool) => pool.overview.liveWindows) : overview.liveWindows;
+  const pluginTooltipLines = [
+    ...tooltipWindows.map((row) =>
+      [
+        formatPluginUsageCardWindowTitle(row, t),
+        t('quotaCard.remainingPercent', { percent: Math.round(row.remainingPercent) }),
+        row.resetsAt ? formatQuotaResetCountdown(row.resetsAt / 1000, now, t) : null,
+      ]
+        .filter(Boolean)
+        .join(' · '),
+    ),
+    ...balances,
+  ];
+  return (
+    <RailButtonView
+      {...props}
+      quota={quota}
+      pluginWarning={pluginWarning}
+      pluginResetSoon={!!subOverview?.resetSoonCount}
+      pluginTooltipLines={pluginTooltipLines.length > 0 ? pluginTooltipLines : undefined}
+    />
   );
 }
 
@@ -311,13 +481,59 @@ function RailButtonView({
   onClick,
   disabled,
   children,
+  selectedUpload,
   quota,
   pool,
+  pluginWarning,
+  pluginResetSoon = false,
+  pluginTooltipLines,
 }: RailButtonProps & {
   quota?: ReturnType<typeof useProviderWeeklyQuota>;
   pool?: ModelPoolQuota | null;
+  pluginWarning?: { kind: 'limited' | 'low'; label: string } | null;
+  pluginResetSoon?: boolean;
+  pluginTooltipLines?: string[];
 }) {
   const { t } = useTranslation();
+  const mark = useRef<HTMLSpanElement>(null);
+  useLayoutEffect(() => {
+    const el = mark.current;
+    if (!el || !selectedUpload) return;
+    const applyPalette = () => {
+      // Read the destination token, not an intermediate frame of the button transition.
+      // Chromium resolves CSS color expressions and composites translucent theme colors.
+      const canvas = document.createElement('canvas');
+      canvas.width = canvas.height = 1;
+      const ctx = canvas.getContext('2d', { willReadFrequently: true });
+      if (!ctx) return;
+      canvas.hidden = true;
+      canvas.style.backgroundColor = 'var(--accent-cta-bg)';
+      const button = el.parentElement!;
+      button.append(canvas);
+      const layers = [getComputedStyle(canvas).backgroundColor];
+      // A translucent button shows the rail and panel surfaces underneath.
+      for (let parent = button.parentElement; parent && !layers[0].startsWith('rgb('); parent = parent.parentElement) {
+        layers.unshift(getComputedStyle(parent).backgroundColor);
+      }
+      if (!layers[0].startsWith('rgb(')) {
+        canvas.style.backgroundColor = 'Canvas';
+        layers.unshift(getComputedStyle(canvas).backgroundColor);
+      }
+      canvas.remove();
+      for (const color of layers) {
+        ctx.fillStyle = color;
+        ctx.fillRect(0, 0, 1, 1);
+      }
+      const [r, g, b] = ctx.getImageData(0, 0, 1, 1).data;
+      el.style.colorScheme = isDarkBackground({ r, g, b }) ? 'dark' : 'light';
+    };
+    applyPalette();
+    const unsubscribe = themeService.onDidChangeTheme(applyPalette);
+    return () => {
+      unsubscribe();
+      el.style.removeProperty('color-scheme');
+    };
+  }, [selectedUpload]);
   const remaining = quota ? Math.round(100 - quota.usedPercent) : null;
   const quotaLabel = pool?.hasAccountDetails
     ? pool.label
@@ -342,13 +558,24 @@ function RailButtonView({
       .filter(Boolean)
       .join(' · '),
   ) : undefined;
-  const description = [note, quotaLabel, ...(!pool?.hasAccountDetails ? [pool?.warningLabel] : []), ...(accountLines ?? [])].filter(Boolean).join(' · ');
+  const warning = pool?.warning ?? pluginWarning ?? null;
+  const resetSoonCount = pool?.resetSoonCount ?? (pluginResetSoon ? 1 : 0);
+  const warningText = pool?.warningLabel ?? pluginWarning?.label ?? null;
+  const description = [note, quotaLabel, ...(!pool?.hasAccountDetails ? [warningText] : []), ...(accountLines ?? []), ...(pluginTooltipLines ?? [])].filter(Boolean).join(' · ');
   const tooltip = pool && (pool.hasAccountDetails || pool.warning) ? (
     <>
       <div>{displayLabel}</div>
       {/* 标题已含完整账号时明细不再重复；供应商组标题不带账号、生成名截断到 50 字时只有半个账号，照常列出。 */}
       <ModelPoolQuotaDetails pool={pool} accountInTitle={!groupNote && !!accountIdentity && displayLabel.includes(accountIdentity)} />
     </>
+  ) : pluginTooltipLines?.length ? (
+    <div className="space-y-1">
+      <div>{displayLabel}</div>
+      {pluginTooltipLines.map((line, index) => (
+        <div key={index}>{line}</div>
+      ))}
+      {pluginResetSoon && <div className="text-11">{t('subscriptionAccounts.quotaResetHint')}</div>}
+    </div>
   ) : quotaLabel || note ? (
     <>
       <div>{displayLabel}</div>
@@ -375,21 +602,21 @@ function RailButtonView({
         aria-pressed={isActive}
         data-rail-item={itemKey}
         className={cn(
-          'relative flex h-[38px] w-[34px] shrink-0 flex-col items-center justify-center rounded-[9px] transition-colors',
+          'relative flex h-[38px] w-[34px] shrink-0 flex-col items-center justify-center rounded-lg transition-colors',
           isActive
             ? 'bg-[var(--accent-cta-bg)] text-[var(--accent-pure-cta-fg)]'
             : 'text-[var(--text-tertiary)] hover:bg-[var(--model-item-hover)] hover:text-[var(--text-secondary)]',
           disabled && 'cursor-not-allowed opacity-50',
         )}
       >
-        <span className="flex h-[24px] items-center justify-center">{children}</span>
-        {(pool?.warning || !!pool?.resetSoonCount) && (
+        <span ref={mark} className="flex h-[24px] items-center justify-center">{children}</span>
+        {(warning || !!resetSoonCount) && (
           <span
             aria-hidden
-            data-pool-reset-soon={pool?.resetSoonCount ? '' : undefined}
-            data-quota-warning={pool?.warning?.kind}
+            data-pool-reset-soon={resetSoonCount ? '' : undefined}
+            data-quota-warning={warning?.kind}
             className={cn('pointer-events-none absolute right-0.5 top-0.5 h-1.5 w-1.5 rounded-full',
-              pool?.warning?.kind === 'limited' ? 'bg-[var(--quota-bar-crit)]' : 'bg-[var(--warning-fg)]')}
+              warning?.kind === 'limited' ? 'bg-[var(--quota-bar-crit)]' : 'bg-[var(--warning-fg)]')}
           />
         )}
         {quota && (

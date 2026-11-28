@@ -38,11 +38,12 @@ import type { RoutingDecision } from '@cindy/anthropic-compat-proxy';
 import { getActiveCatalog, getActiveCatalogWithCodexModels, setCustomProviders, setDiscoveredCodexModels } from '../active-catalog';
 import { createCodexGuestRoutingGuard, createModelRoutingTransform, registerComposed, registerReviewerRouteContext, unregister } from '../codex-proxy-host.desktop';
 import { CODEX_CUSTOM_PROVIDER_ROUTE_ROOT, deriveCodexCustomProviderRoutes } from '../codex-custom-provider-route';
-import { captureGuestRequestUsage, registerGuestProviderRoute, resetGuestProviderRoutesForTest, setGuestProviderModelCatalogReader } from '../guest-provider-route-store';
+import { captureGuestRequestUsage, guestProviderModelAllowed, registerGuestProviderRoute, resetGuestProviderRoutesForTest, setGuestProviderModelCatalogReader } from '../guest-provider-route-store';
 import { bindHostedSessionProvider, clearAllSessionProviders, setSessionProvider } from '../session-provider-store';
 import { setCustomProviderKeyReader } from '../provider-route';
 import { createUsagePricingObserver } from '../model-usage-pricing';
 import { decideProviderGroupFailure } from '../../provider-group/failurePolicy';
+import { bindPoolExecutionRoute, registerSessionSubscriptionAccount } from '../../subscription-accounts/session';
 
 function ctx(url: string, headers: Record<string, string> = {}, method = 'POST') {
   return { reqId: 1, method, url, headers } as never;
@@ -58,6 +59,27 @@ async function statusOf(input: RoutingDecision | null | undefined | Promise<Rout
 }
 
 describe('Codex proxy guard for shared-provider guests', () => {
+  // Unit: a pool member on a different connection still uses the original
+  // share's model grant. Single-provider guard tests cannot detect this crossing.
+  it('keeps a pooled connection within its original live grant', async () => {
+    let current = true;
+    const guest = registerGuestProviderRoute('pooled-guest', 'openai', model => model === 'fixture-model');
+    const release = bindPoolExecutionRoute('pooled-guest', { providerId: 'openai', connectionId: 'official-key',
+      captureTurnRejection: () => undefined,
+      assertCurrent() { if (!current) throw new Error('retired credential'); } });
+    const guard = createCodexGuestRoutingGuard('official-key', 'env-key', 'pooled-guest');
+    try {
+      expect(await guestProviderModelAllowed('official-key', 'fixture-model', 'pooled-guest')).toBe(true);
+      expect(await guestProviderModelAllowed('official-key', 'foreign-model', 'pooled-guest')).toBe(false);
+      expect(await statusOf(guard({ model: 'fixture-model' }, ctx('/v1/responses')))).toBe(403);
+      current = false;
+      expect(await guestProviderModelAllowed('official-key', 'fixture-model', 'pooled-guest')).toBe(false);
+    } finally {
+      release();
+      guest.release();
+    }
+  });
+
   // Unit: follow the real guest guard's HTTP refusal into the common group
   // policy. Earlier tests asserted only 403, missing the automatic relocation.
   it('keeps a rejected request outside the shared provider out of group failover', async () => {
@@ -158,6 +180,69 @@ describe('Codex proxy guard for shared-provider guests', () => {
   it('lets a guest request for a shared model continue to the session route', async () => {
     const guard = createCodexGuestRoutingGuard('shared-a', 'env-key');
     expect(await guard({ model: 'shared-model' }, ctx('/responses', { 'thread-id': 'guest-thread' }))).toBeUndefined();
+  });
+
+  // Unit, provider sharing §12. A registered split subscription and its native
+  // OpenAI transport used different IDs; built-in-only tests missed the first-turn 403.
+  it('dispatches only the exact leased share to ChatGPT and rejects a replaced lease', async () => {
+    const sharedProviderId = 'openai-sub-test';
+    const otherProviderId = 'openai-sub-other';
+    const model = 'gpt-6.2-astra';
+    const session = 'guest-session';
+    const registered = { 'thread-id': 'guest-thread' };
+    setGuestProviderModelCatalogReader(() => {
+      const catalog = getActiveCatalogWithCodexModels([{ id: model, name: model, contextWindow: 100_000,
+        efforts: [], defaultEffort: null }]);
+      const openai = catalog.providers.find(provider => provider.id === 'openai')!;
+      return { ...catalog, providers: [...catalog.providers, { ...openai, id: sharedProviderId }, { ...openai, id: otherProviderId }] };
+    });
+    let allowed = true;
+    const grant = registerGuestProviderRoute(session, sharedProviderId, () => allowed);
+    const lease = { id: 'lease', configDir: '/unused', assertCurrent: () => {},
+      readState: async () => ({ authenticated: true }), sharedProviderId };
+    const release = registerSessionSubscriptionAccount(session, lease);
+    const otherSession = 'other-guest-session';
+    const otherGrant = registerGuestProviderRoute(otherSession, otherProviderId);
+    registerComposed(otherSession, 'other-guest-thread', 'prompt');
+    const releaseOther = registerSessionSubscriptionAccount(otherSession, {
+      ...lease, id: 'other-lease', sharedProviderId: otherProviderId,
+    });
+    let releaseReplacement: (() => void) | undefined;
+    try {
+      const guard = createCodexGuestRoutingGuard(sharedProviderId, 'oauth-bearer', session);
+      const request = (headers: Record<string, string> = {}) => guard({ model }, ctx('/responses', headers));
+      const first = await request(registered);
+      for (const result of [first, await request()]) {
+        expect(result?.upstreamOverride).toBe('https://chatgpt.com/backend-api/codex');
+        expect(result?.headerOverride?.authorization).toBeUndefined();
+        expect(result?.dispatchGenerationValid?.()).toBe(true);
+      }
+      const otherThread = { 'thread-id': 'other-guest-thread' };
+      const otherGuard = createCodexGuestRoutingGuard(otherProviderId, 'oauth-bearer', otherSession);
+      const otherResult = await otherGuard({ model }, ctx('/responses', otherThread));
+      expect(otherResult?.upstreamOverride).toBe('https://chatgpt.com/backend-api/codex');
+      expect(await statusOf(request(otherThread))).toBe(403);
+      expect(await statusOf(otherGuard({ model }, ctx('/responses', registered)))).toBe(403);
+      expect(await statusOf(guard({ model: 'absent-from-catalog' }, ctx('/responses', registered)))).toBe(403);
+      allowed = false;
+      expect(await statusOf(request(registered))).toBe(403);
+      allowed = true;
+      releaseReplacement = registerSessionSubscriptionAccount(session, { ...lease, sharedProviderId: otherProviderId });
+      expect(first?.dispatchGenerationValid?.()).toBe(false);
+      expect(await statusOf(request())).toBe(403);
+      expect(await statusOf(request(registered))).toBe(403);
+      expect(otherResult?.dispatchGenerationValid?.()).toBe(true);
+      otherGrant.release();
+      expect(otherResult?.dispatchGenerationValid?.()).toBe(false);
+      expect(await statusOf(otherGuard({ model }, ctx('/responses', otherThread)))).toBe(403);
+    } finally {
+      otherGrant.release();
+      grant.release();
+      unregister(otherSession);
+      releaseOther();
+      releaseReplacement?.();
+      release();
+    }
   });
 
   // Unit regression: provider-group admission sees the account pool, but the

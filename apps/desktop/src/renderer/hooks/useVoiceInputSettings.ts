@@ -20,11 +20,17 @@ import {
   getNewAutomaticDictionaryEntries,
   getNewAutomaticDictionaryEntryTexts,
   mergeVoiceInputDictionaryCsvTerms,
+  mergeVoiceInputDictionaryImportItems,
   normalizeVoiceInputDictionaryEntryText,
   parseVoiceInputDictionaryCsv,
+  parseVoiceInputDictionaryImport,
+  serializeVoiceInputDictionaryCsv,
+  serializeVoiceInputDictionaryJson,
   type VoiceInputDataSnapshot,
+  type VoiceInputDictionaryCandidate,
   type VoiceInputDictionaryEntry,
   type VoiceInputDictionaryEntrySource,
+  type VoiceInputDictionaryImportItem,
   type VoiceInputDictionaryLearningEvidence,
   type VoiceInputLanguage,
   type VoiceInputSettings,
@@ -49,12 +55,18 @@ export {
   getNewAutomaticDictionaryEntries,
   getNewAutomaticDictionaryEntryTexts,
   mergeVoiceInputDictionaryCsvTerms,
+  mergeVoiceInputDictionaryImportItems,
   normalizeVoiceInputDictionaryEntryText,
   parseVoiceInputDictionaryCsv,
+  parseVoiceInputDictionaryImport,
+  serializeVoiceInputDictionaryCsv,
+  serializeVoiceInputDictionaryJson,
 };
 export type {
+  VoiceInputDictionaryCandidate,
   VoiceInputDictionaryEntry,
   VoiceInputDictionaryEntrySource,
+  VoiceInputDictionaryImportItem,
   VoiceInputDictionaryLearningEvidence,
   VoiceInputLanguage,
   VoiceInputSettings,
@@ -81,7 +93,11 @@ export function getVoiceInputSettings(): VoiceInputSettings {
   try {
     return window.electronAPI.voiceInput.getDataSnapshot().settings;
   } catch {
-    return getDefaultVoiceInputSettings(window.electronAPI?.platform);
+    try {
+      return getDefaultVoiceInputSettings(window.electronAPI?.platform);
+    } catch {
+      return getDefaultVoiceInputSettings();
+    }
   }
 }
 
@@ -137,7 +153,14 @@ export function subscribeVoiceInputSettings(
   // off-to-on transition is user intent; subscribing with an already-enabled
   // snapshot (or receiving history/language updates) must not renew the window.
   let fastActivationEnabled = getVoiceInputSettings().fastActivationEnabled;
-  return window.electronAPI.voiceInput.onDataChanged((snapshot: VoiceInputDataSnapshot) => {
+  let subscribe: typeof window.electronAPI.voiceInput.onDataChanged | undefined;
+  try {
+    subscribe = window.electronAPI?.voiceInput?.onDataChanged;
+  } catch {
+    return () => {};
+  }
+  if (!subscribe) return () => {};
+  return subscribe((snapshot: VoiceInputDataSnapshot) => {
     if (!fastActivationEnabled && snapshot.settings.fastActivationEnabled) noteVoiceInputUse();
     fastActivationEnabled = snapshot.settings.fastActivationEnabled;
     callback(snapshot.settings);
@@ -182,8 +205,17 @@ export async function syncVoiceInputGlobalShortcut(
   shortcut: VoiceInputShortcut | null,
   options?: { suspend?: true },
 ): Promise<{ ok: boolean; error?: string; errorCode?: VoiceInputGlobalErrorCode }> {
+  let setGlobalShortcut: typeof window.electronAPI.voiceInput.setGlobalShortcut | undefined;
   try {
-    const result = await window.electronAPI.voiceInput.setGlobalShortcut(shortcut, options);
+    setGlobalShortcut = window.electronAPI?.voiceInput?.setGlobalShortcut;
+  } catch {
+    return { ok: false, error: 'Voice input bridge unavailable' };
+  }
+  if (!setGlobalShortcut) {
+    return { ok: false, error: 'Voice input bridge unavailable' };
+  }
+  try {
+    const result = await setGlobalShortcut(shortcut, options);
     if (!result.ok) {
       log.warn('global voice input shortcut sync failed:', result.error);
     }
@@ -220,7 +252,10 @@ export function useVoiceInputSettings(): {
   resetSpeakerFilterStrictness: () => Promise<boolean>;
   /** 这几个返回持久化结果:成功才收口 UI(关对话框、清草稿、提示成功)。 */
   addDictionaryEntry: (text: string) => Promise<boolean>;
-  importDictionaryEntries: (texts: string[]) => Promise<boolean>;
+  importDictionaryEntries: (entries: Array<string | VoiceInputDictionaryImportItem>) => Promise<boolean>;
+  promoteDictionaryCandidate: (text: string) => Promise<boolean>;
+  deleteDictionaryCandidate: (text: string) => Promise<boolean>;
+  restoreSuppressedDictionaryTerm: (text: string, options?: { addToDictionary?: boolean }) => Promise<boolean>;
   renameDictionaryEntry: (entryId: string, text: string) => Promise<boolean>;
   editDictionaryEntry: (entryId: string, text: string, aliases: string[]) => Promise<boolean>;
   deleteDictionaryEntry: (entryId: string) => Promise<boolean>;
@@ -370,8 +405,28 @@ export function useVoiceInputSettings(): {
   );
 
   const importDictionaryEntries = useCallback(
-    (texts: string[]) =>
-      runDictionaryMutation(() => window.electronAPI.voiceInput.importDictionaryEntries(texts)),
+    (entries: Array<string | VoiceInputDictionaryImportItem>) =>
+      runDictionaryMutation(() => window.electronAPI.voiceInput.importDictionaryEntries(entries)),
+    [runDictionaryMutation],
+  );
+
+  const promoteDictionaryCandidate = useCallback(
+    (text: string) =>
+      runDictionaryMutation(() => window.electronAPI.voiceInput.promoteDictionaryCandidate(text)),
+    [runDictionaryMutation],
+  );
+
+  const deleteDictionaryCandidate = useCallback(
+    (text: string) =>
+      runDictionaryMutation(() => window.electronAPI.voiceInput.deleteDictionaryCandidate(text)),
+    [runDictionaryMutation],
+  );
+
+  const restoreSuppressedDictionaryTerm = useCallback(
+    (text: string, options?: { addToDictionary?: boolean }) =>
+      runDictionaryMutation(() =>
+        window.electronAPI.voiceInput.restoreSuppressedDictionaryTerm(text, options),
+      ),
     [runDictionaryMutation],
   );
 
@@ -461,6 +516,9 @@ export function useVoiceInputSettings(): {
     resetSpeakerFilterStrictness,
     addDictionaryEntry,
     importDictionaryEntries,
+    promoteDictionaryCandidate,
+    deleteDictionaryCandidate,
+    restoreSuppressedDictionaryTerm,
     renameDictionaryEntry,
     editDictionaryEntry,
     deleteDictionaryEntry,

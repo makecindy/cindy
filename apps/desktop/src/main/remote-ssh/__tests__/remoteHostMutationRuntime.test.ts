@@ -3,6 +3,8 @@ import { execSync } from 'node:child_process';
 import { mkdtempSync, mkdirSync, symlinkSync, rmSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import Database from 'better-sqlite3';
+import { drizzle } from 'drizzle-orm/better-sqlite3';
 
 import type {
   HostConfig,
@@ -23,6 +25,7 @@ const mocks = vi.hoisted(() => ({
   removeMcpPref: vi.fn(),
   invalidateMcpEndpoint: vi.fn(),
   dbLimit: vi.fn(),
+  getDbClient: vi.fn(),
   logWarn: vi.fn(),
   send: vi.fn(),
 }));
@@ -75,15 +78,7 @@ vi.mock('../../security/trustedAppRenderer.js', () => ({
 }));
 
 vi.mock('../../localDb/client/current.js', () => ({
-  getDbClient: () => ({
-    drizzle: {
-      select: () => ({
-        from: () => ({
-          where: () => ({ limit: mocks.dbLimit }),
-        }),
-      }),
-    },
-  }),
+  getDbClient: mocks.getDbClient,
 }));
 
 vi.mock('../ssh-host-prefs-store.js', async (importOriginal) => {
@@ -203,10 +198,13 @@ beforeEach(async () => {
   mocks.readSshConfigDetailed.mockReset();
   mocks.rollbackAdd.mockReset().mockResolvedValue(true);
   mocks.addManagedHostWithInclude.mockResolvedValue({ rollback: mocks.rollbackAdd });
-  mocks.updateManagedHostFields.mockResolvedValue(undefined);
-  mocks.removeManagedHost.mockResolvedValue(undefined);
+  mocks.updateManagedHostFields.mockReset().mockResolvedValue(undefined);
+  mocks.removeManagedHost.mockReset().mockResolvedValue(undefined);
   mocks.invalidateMcpEndpoint.mockReset();
   mocks.dbLimit.mockReset().mockResolvedValue([]);
+  mocks.getDbClient.mockReturnValue({
+    drizzle: { select: () => ({ from: () => ({ where: () => ({ limit: mocks.dbLimit }) }) }) },
+  });
   mocks.logWarn.mockReset();
   await getRemoteSshPool().hydrate([]);
   mocks.readSshConfigDetailed.mockImplementation(async () => successfulRead(
@@ -215,6 +213,44 @@ beforeEach(async () => {
 });
 
 describe('remote SSH mutation runtime semantics', () => {
+  // #13489: run the actual reference query against SQLite. A stubbed result cannot
+  // distinguish a deleted reference from a recoverable session after it.
+  describe.each(['UPDATE', 'REMOVE'] as const)('%s session references', (operation) => {
+    it.each(['deleted', 'active', 'archived'])('checks the target’s %s session', async (status) => {
+      const target = host('reference-target');
+      const updated = { ...target, hostname: '192.0.2.99' };
+      await getRemoteSshPool().hydrate([target]);
+      let diskHosts = [target];
+      mocks.readSshConfigDetailed.mockImplementation(async () => successfulRead(diskHosts));
+      mocks.updateManagedHostFields.mockImplementationOnce(async () => { diskHosts = [updated]; });
+      mocks.removeManagedHost.mockImplementationOnce(async () => { diskHosts = []; });
+      const db = new Database(':memory:');
+      try {
+        db.exec('CREATE TABLE sessions (id TEXT PRIMARY KEY, remote_host_id TEXT, status TEXT NOT NULL)');
+        const insert = db.prepare('INSERT INTO sessions VALUES (?, ?, ?)');
+        insert.run('earlier', target.id, 'deleted');
+        insert.run('unrelated', 'another-host', 'active');
+        insert.run('last', target.id, status);
+        mocks.getDbClient.mockReturnValue({ drizzle: drizzle(db) });
+        const result = operation === 'UPDATE'
+          ? handler(REMOTE_SSH_INVOKE.UPDATE)({}, { ...updated, displayName: target.id })
+          : handler(REMOTE_SSH_INVOKE.REMOVE)({}, { id: target.id });
+        const write = operation === 'UPDATE' ? mocks.updateManagedHostFields : mocks.removeManagedHost;
+        if (status === 'deleted') {
+          await result;
+          expect(write).toHaveBeenCalledOnce();
+        } else {
+          await expect(result).rejects.toMatchObject({
+            code: 'PRECONDITION_FAILED', message: expect.stringContaining('仍被远端会话引用'),
+          });
+          expect(write).not.toHaveBeenCalled();
+        }
+      } finally {
+        db.close();
+      }
+    });
+  });
+
   // Unit: AI rename previously had no native path. A key-backed external host
   // with existing sessions must remain usable without exposing/replacing the key.
   it('renames through the Agent patch path without rewriting a key-backed connection', async () => {
@@ -689,14 +725,69 @@ describe('remote SSH mutation runtime semantics', () => {
     expect(mocks.removeMcpPref).toHaveBeenCalledWith(target.id);
   });
 
+  // Async MCP persistence must be awaited before REMOVE reports success.
+  // Unit: previous synchronous cleanup coverage cannot expose a late rejection.
+  it('waits for asynchronous MCP cleanup and preserves removal on persistence failure', async () => {
+    const target = host('remove-async-cleanup');
+    await getRemoteSshPool().hydrate([target]);
+    mocks.readSshConfigDetailed
+      .mockResolvedValueOnce(successfulRead([target]))
+      .mockResolvedValue(successfulRead([]));
+    let rejectCleanup!: (error: Error) => void;
+    let entered!: () => void;
+    const started = new Promise<void>((resolve) => { entered = resolve; });
+    const cleanup = new Promise<void>((_, reject) => { rejectCleanup = reject; });
+    mocks.removeMcpPref.mockImplementationOnce(() => { entered(); return cleanup; });
+    let settled = false;
+    const removal = handler(REMOTE_SSH_INVOKE.REMOVE)({}, { id: target.id });
+    void removal.then(() => { settled = true; }, () => { settled = true; });
+    await Promise.race([started, removal]);
+    expect(settled).toBe(false);
+    rejectCleanup(new Error('synthetic prefs write failure'));
+    await expect(removal).resolves.toEqual({ ok: true });
+    expect(mocks.removeManagedHost.mock.calls[0]?.[0]).toBe(target.id);
+    expect(mocks.clearAgentProxy).toHaveBeenCalledWith(target.id);
+  });
+
+  // A slow prefs write must not postpone RemoteHost.disconnect's epoch fence:
+  // cindy_ssh/list_machines can use the old pool host outside the mutation queue.
+  // Unit: spy wraps the real disconnect; no SSH/socket or private epoch access.
+  it('fences the old endpoint before slow asynchronous MCP persistence finishes', async () => {
+    const target = host('slow-endpoint-prefs');
+    const other = host('unaffected-endpoint');
+    const updated = { ...target, hostname: '192.0.2.99' };
+    await getRemoteSshPool().hydrate([target, other]);
+    const oldHost = getRemoteSshPool().get(target.id)!;
+    const disconnect = vi.spyOn(oldHost, 'disconnect');
+    const otherDisconnect = vi.spyOn(getRemoteSshPool().get(other.id)!, 'disconnect');
+    let committed = false;
+    mocks.updateManagedHostFields.mockImplementationOnce(async () => { committed = true; });
+    mocks.readSshConfigDetailed.mockImplementation(async () => successfulRead(
+      committed ? [updated, other] : [target, other],
+    ));
+    let release!: () => void;
+    let entered!: () => void;
+    const started = new Promise<void>((resolve) => { entered = resolve; });
+    const pending = new Promise<void>((resolve) => { release = resolve; });
+    mocks.invalidateMcpEndpoint.mockImplementationOnce(() => { entered(); return pending; });
+    const update = handler(REMOTE_SSH_INVOKE.UPDATE)({}, { ...updated, displayName: target.id });
+    try {
+      await Promise.race([started, update]);
+      expect(disconnect).toHaveBeenCalledOnce();
+      expect(otherDisconnect).not.toHaveBeenCalled();
+    } finally {
+      release();
+      await update;
+    }
+    expect(getRemoteSshPool().get(target.id)?.config.hostname).toBe(updated.hostname);
+  });
+
   it('still disconnects the target when endpoint cleanup fails after UPDATE writes', async () => {
     const target = host('cleanup-failure');
     await getRemoteSshPool().hydrate([target]);
     const targetLive = getRemoteSshPool().get(target.id)!;
     const disconnect = vi.spyOn(targetLive, 'disconnect').mockResolvedValue();
-    mocks.invalidateMcpEndpoint.mockImplementationOnce(() => {
-      throw new Error('prefs disk unavailable');
-    });
+    mocks.invalidateMcpEndpoint.mockRejectedValueOnce(new Error('prefs disk unavailable'));
 
     await expect(handler(REMOTE_SSH_INVOKE.UPDATE)({}, {
       ...target,

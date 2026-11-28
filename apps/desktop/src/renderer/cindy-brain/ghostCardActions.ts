@@ -23,7 +23,7 @@ import {
 import { readGhostCardFormChange } from '@cindy/maker-shared/ghost-card-form';
 import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
 import type { GhostCardModelSelection } from '../../shared/ghost';
-import { getGhostCardEntry, refreshRemoteCard, type GhostRemoteCardSource } from './ghostCardStore';
+import { getGhostCardEntry, isUnloadedRemoteCard, refreshRemoteCard, type GhostRemoteCardSource } from './ghostCardStore';
 
 export interface GhostCardActionInput {
   prompt?: string;
@@ -46,6 +46,7 @@ export async function dispatchGhostCardAction(
     if (entry?.status === 'ready' && entry.remote) {
       return await dispatchRemote(callId, entry.ghostId, entry.html, entry.remote, actionId, input);
     }
+    if (isUnloadedRemoteCard(callId)) return { ok: false };
     // Local attachments use this computer's native picker inside the dispatcher.
     if (input.mailAttachment) return { ok: false };
     const api = window.electronAPI?.ghosts;

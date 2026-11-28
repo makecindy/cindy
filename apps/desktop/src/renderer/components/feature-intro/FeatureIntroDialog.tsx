@@ -23,14 +23,14 @@ export function FeatureIntroDialog({ open, onClose, actionLabel, ...cover }: Omi
   return (
     <Dialog.Root open={open} onOpenChange={(next) => { if (!next) onClose(); }}>
       <Dialog.Portal>
-        <Dialog.Overlay className="modal-scrim fixed inset-0 z-[10000]" style={WINDOW_DRAG_STYLE} />
+        <Dialog.Overlay className="modal-scrim fixed inset-0 z-modal" style={WINDOW_DRAG_STYLE} />
         <Dialog.Content
           aria-describedby={undefined}
           data-feature-intro=""
           // Shown once; a stray click beside it should not dismiss it unseen.
           onPointerDownOutside={(event) => event.preventDefault()}
           style={WINDOW_NO_DRAG_STYLE}
-          className="modal-panel fixed inset-0 z-[10000] m-auto flex h-fit max-h-[88vh] w-[min(640px,calc(100vw-32px))] flex-col overflow-hidden outline-none"
+          className="modal-panel fixed inset-0 z-modal m-auto flex h-fit max-h-[88vh] w-[min(640px,calc(100vw-32px))] flex-col overflow-hidden outline-none"
         >
           <GuideCover
             {...cover}

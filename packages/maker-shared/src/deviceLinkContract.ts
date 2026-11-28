@@ -1,5 +1,25 @@
 import { BRAND_NAME } from './branding.js';
 
+export type SessionDeleteTarget = 'side-chat' | 'task';
+
+/** A legacy host rejects this key before writing anything. A timeout is never equivalent. */
+export async function patchSessionWithDeleteTarget<T, P extends { status?: string }>(
+  patch: P,
+  target: SessionDeleteTarget | undefined,
+  invoke: (patch: P & { deleteTarget?: SessionDeleteTarget }) => Promise<T>,
+): Promise<T> {
+  if (patch.status !== 'deleted' || !target) return invoke(patch);
+  try {
+    return await invoke({ ...patch, deleteTarget: target });
+  } catch (err) {
+    if (target === 'side-chat' && err instanceof Error &&
+        /(?:^|: Error: )\[INVALID_PARAMS\] field not allowed in patch-meta: deleteTarget$/.test(err.message)) {
+      return invoke(patch);
+    }
+    throw err;
+  }
+}
+
 export const DEVICE_LINK_SUBSCRIBE_CHANNEL = 'device-link:subscribe';
 export const DEVICE_LINK_UNSUBSCRIBE_CHANNEL = 'device-link:unsubscribe';
 /** Marker passed as sessions:get arg[1] only by background list reconciliation probes. */
@@ -10,6 +30,8 @@ export const DEVICE_LINK_VOICE_TRANSCRIBE_CHANNEL = 'device-link:voice:transcrib
 export const DEVICE_LINK_VOICE_CREDENTIAL_SYNC_CHANNEL = 'device-link:voice:credential-sync';
 export const DEVICE_LINK_VOICE_DICTIONARY_LEARNING_CHANNEL = 'device-link:voice:dictionary-learning';
 export const DEVICE_LINK_VOICE_DICTIONARY_GET_CHANNEL = 'device-link:voice:dictionary:get';
+/** 手机端通过同账号在线桌面编辑语音词典（增/改/删，含别名），由桌面 CRDT 落盘并同步全端。 */
+export const DEVICE_LINK_VOICE_DICTIONARY_MUTATE_CHANNEL = 'device-link:voice:dictionary:mutate';
 /** 桌面主动推给手机的只读词典快照；push 不受 remoteControlEnabled 控制门禁。 */
 export const DEVICE_LINK_VOICE_DICTIONARY_SNAPSHOT_CHANNEL =
   'device-link:voice:dictionary:snapshot';
@@ -85,7 +107,7 @@ export interface MobileUsageWidgetSnapshot {
     days: string[];
     daily: MobileUsageWidgetDay[];
     /** Models with the most tokens in the window, in color order; absent from older desktops. */
-    models?: { name: string; harness: 'claude-code' | 'codex' | 'pi' | 'auxiliary' }[];
+    models?: { name: string; harness: 'claude-code' | 'codex' | 'pi' | 'auxiliary' | 'acp' }[];
   };
   /** Localized labels and templates from the desktop's menu bar strings. */
   strings: Record<string, string>;
@@ -179,6 +201,33 @@ export type MobileVoiceDictionarySnapshotResult =
        * 老版本被控端不带这个字段。
        */
       emittedAt?: number;
+    }
+  | {
+      ok: false;
+      error: string;
+    };
+
+export type MobileVoiceDictionaryMutateRequest =
+  | {
+      action: 'add';
+      text: string;
+      aliases?: string[];
+    }
+  | {
+      action: 'edit';
+      originalText: string;
+      text: string;
+      aliases: string[];
+    }
+  | {
+      action: 'delete';
+      text: string;
+    };
+
+export type MobileVoiceDictionaryMutateResult =
+  | {
+      ok: true;
+      snapshot: MobileVoiceDictionarySnapshotResult;
     }
   | {
       ok: false;
@@ -351,6 +400,8 @@ export interface MobileCodexRateLimitResetResult {
 
 /** 下一条消息发送时才会应用的跨 Agent 切换意图。 */
 export interface MobileSessionAgentSwitchIntent {
+  preparation?: 'preparing' | 'failed';
+  preparationError?: string;
   targetAgentKind: 'claude-code' | 'codex' | 'pi';
   model: string;
   providerId: string | null;
@@ -443,6 +494,7 @@ export const MOBILE_REMOTE_INVOKE_CHANNELS = [
   DEVICE_LINK_VOICE_TRANSCRIBE_CHANNEL,
   DEVICE_LINK_VOICE_DICTIONARY_LEARNING_CHANNEL,
   DEVICE_LINK_VOICE_DICTIONARY_GET_CHANNEL,
+  DEVICE_LINK_VOICE_DICTIONARY_MUTATE_CHANNEL,
   'maker:get-pending-interactions',
   'maker:resolve-interaction',
   'maker:get-context-usage',

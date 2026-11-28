@@ -1667,7 +1667,7 @@ private let muffinMascotFileName = "muffin.png"
 private let cindyMascotFileName = "cindy.png"
 private let blackcatMascotFileName = "blackcat.png"
 private let erikaMascotFileName = "erika.png"
-private let defaultAgentIslandMascotSkin = "pululu"
+private let defaultAgentIslandMascotSkin = "cindy"
 // Keep these mono Agent identity marks aligned with renderer ClaudeMark/CodexMark.
 // The native copies remain template images so Agent Island can apply status colors.
 private let agentIslandCodexMarkSVG = """

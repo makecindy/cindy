@@ -81,13 +81,17 @@ function probeAvatarImageSize(blob: Blob): Promise<AvatarImageSize> {
  * 全尺寸位图再缩出第二张,失败路径也没有需要额外释放的中间位图。
  */
 export async function loadAvatarSource(dataUrl: string): Promise<AvatarSource> {
-  const blob = dataUrlToBlob(dataUrl);
+  const bitmap = await decodeResizedImage(dataUrlToBlob(dataUrl), AVATAR_SOURCE_MAX_EDGE);
+  return { bitmap, size: { width: bitmap.width, height: bitmap.height } };
+}
+
+export async function decodeResizedImage(blob: Blob, maxEdge: number): Promise<ImageBitmap> {
   const natural = await probeAvatarImageSize(blob);
   if (natural.width === 0 || natural.height === 0) {
     throw new Error('avatar image has no pixels');
   }
-  const fitted = fitAvatarSourceSize(natural);
-  const bitmap = await createImageBitmap(
+  const fitted = fitAvatarSourceSize(natural, maxEdge);
+  return createImageBitmap(
     blob,
     fitted === natural
       ? { imageOrientation: 'from-image' }
@@ -98,7 +102,6 @@ export async function loadAvatarSource(dataUrl: string): Promise<AvatarSource> {
           resizeQuality: 'high',
         },
   );
-  return { bitmap, size: { width: bitmap.width, height: bitmap.height } };
 }
 
 /** 把取景画进一块 outSize × outSize 的目标区域。编辑后预览与导出共用。 */

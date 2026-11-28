@@ -20,6 +20,8 @@ export type CreateTaskWorktreeCallback = (params: {
       sourceBranch: string;
       /** False when the task already had a managed worktree; it is returned unchanged. */
       created: boolean;
+      /** Set when the remote default branch could not be refreshed, so the base may be out of date. */
+      staleBaseReason?: string;
     },
     string
   >
@@ -28,14 +30,18 @@ export type CreateTaskWorktreeCallback = (params: {
 const DESCRIPTION =
   `Create a ${BRAND_NAME}-managed git worktree for the current task and bind it to this task, ` +
   'without restarting or moving the task. It is created at <repo>/.cindy-worktrees/<name> on a new ' +
-  'cindy/<name> branch from the freshly fetched remote default branch (the current branch when ' +
-  `offline), shows as the task's worktree in ${BRAND_NAME}, and is removed when the task is archived ` +
+  'cindy/<name> branch from the freshly fetched remote default branch (when that fetch fails it uses ' +
+  "the newest local copy and returns base_fetched=false with a warning), shows as the task's worktree " +
+  `in ${BRAND_NAME}, and is removed when the task is archived ` +
   "or deleted. The task's working directory does not change: run commands and edit files inside the " +
   'returned worktree_path. If the task already has a worktree, that one is returned with created=false. ' +
   'Pass repo_dir when the task working directory is not itself the repository. Pass base_ref to branch ' +
   'from a specific branch or remote ref (e.g. "release/2.x" or "origin/release/2.x") instead of the ' +
-  'remote default branch; it is resolved against the repository as it currently exists locally, and a ' +
-  'ref that does not resolve fails instead of falling back to the default branch. Local tasks only.';
+  'remote default branch. A remote branch ("origin/...") is fetched first, so commits just pushed from ' +
+  'another computer are included (when that fetch fails the local copy is used and base_fetched=false ' +
+  'is returned with a warning); a local branch or commit is used as it currently exists locally. A ref ' +
+  'that does not resolve fails instead of falling back to the default branch. send_to_session accepts ' +
+  'the same base_ref for a new task\'s worktree. Local tasks only.';
 
 export function registerCreateTaskWorktreeTool(
   registry: XdtHelperToolRegistry,
@@ -64,6 +70,7 @@ export function registerCreateTaskWorktreeTool(
         .optional()
         .describe(
           'Branch or remote ref to branch the worktree from, e.g. "release/2.x" or "origin/release/2.x". ' +
+            'A remote branch is fetched first; a local branch or commit is used as it exists locally. ' +
             'Defaults to the freshly fetched remote default branch. A ref that does not resolve fails ' +
             'instead of falling back to the default branch.',
         ),
@@ -89,6 +96,16 @@ export function registerCreateTaskWorktreeTool(
         base_repo: result.baseRepo,
         source_branch: result.sourceBranch,
         created: result.created,
+        ...(result.staleBaseReason
+          ? {
+              base_fetched: false,
+              warning:
+                `Could not refresh ${base_ref ? 'base_ref' : 'the remote default branch'} from its remote ` +
+                `(${result.staleBaseReason}). This worktree ` +
+                `starts from ${result.sourceBranch} as it exists locally and may be behind the remote. ` +
+                `Tell the user, and fetch and merge the remote ${base_ref ? '' : 'default '}branch once the network is available.`,
+            }
+          : {}),
       });
     },
   });

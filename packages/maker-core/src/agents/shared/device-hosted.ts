@@ -234,6 +234,22 @@ export function deviceHostedClaudeNote(hosted: DeviceHostedSession, localWorking
 }
 
 /**
+ * 插件引擎(ACP Agent)版。它收不到 Cindy 的 system prompt，这段说明放在新会话第一条消息之前：
+ * 引擎自带的文件与命令工具已由插件关掉(项目不在这台电脑上)，文件与命令只能经 cindy_exec。
+ */
+export function deviceHostedPluginEngineNote(hosted: DeviceHostedSession, localWorkingDir: string): string {
+  return [
+    deviceHostedEnvironmentNote(hosted, localWorkingDir),
+    `The project is on another computer. Your own file and shell tools are turned off for this task; they could only reach this computer, not the project. Use the tools of the \`${DEVICE_HOSTED_EXEC_MCP_SERVER}\` MCP server for all file and command work: ${DEVICE_HOSTED_EXEC_TOOL_NAMES.join(', ')}. Search files with Bash (rg, find).`,
+  ].join('\n');
+}
+
+/** 插件引擎经隧道使用的 MCP 服务：任务所在电脑的 Cindy 工具，加上顶替文件与命令工具的 cindy_exec。 */
+export function deviceHostedPluginEngineMcpServers(hosted: DeviceHostedSession): string[] {
+  return [...new Set([DEVICE_HOSTED_EXEC_MCP_SERVER, ...hosted.mcpServers])];
+}
+
+/**
  * 子代理的工具限制(设备托管)。本机任务里 Claude Code 按子代理定义收窄自带工具；顶替成 Cindy
  * 工具后 SDK 不再按名字收窄(MCP 工具一律放行)，这里按同样的定义判一次：
  *  - 自带的只读子代理(Explore / Plan)不能写文件；

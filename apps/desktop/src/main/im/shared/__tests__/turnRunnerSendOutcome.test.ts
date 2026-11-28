@@ -147,8 +147,8 @@ vi.mock('../localMarkdownImages', () => ({
 
 vi.mock('../sessionRepo', () => ({
   touchUserSent: mocks.touchUserSent,
-  toCoreAgentKind: (kind: string) =>
-    kind === 'codex' ? 'codex' : kind === 'pi' ? 'pi' : 'claude-code',
+  toCoreEngineKind: (kind: string) =>
+    kind === 'acp' ? 'acp' : kind === 'codex' ? 'codex' : kind === 'pi' ? 'pi' : 'claude-code',
 }));
 
 vi.mock('../../messagePersistence', () => ({
@@ -901,6 +901,23 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
       expect(fakeAdapter.channel).toBe('feishu');
     } finally {
       delete fakeAdapter.messageSourceIm;
+    }
+  });
+
+  // A group member's input must wait for permission and route validation before it becomes task history.
+  it('defers persistence for a personal bot guest while keeping the owner fast path', async () => {
+    const h = setupSession(async () => ({ accepted: true }));
+    mocks.getMaker.mockReturnValue({ ...createMakerHarness(h.session), getSession: () => h.session });
+    mocks.persistUserMessage.mockResolvedValue({ clientId: 'early-client' });
+    const runner = createTurnRunner(fakeAdapter, fakeRepo, fakeCards, { personalGuests: { queueLimit: 5 } });
+    const input = { botContextId: 'cli_test_bot', userId: 'ou_user', text: 'group question' };
+    try {
+      expect(await runner.persistInboundUserMessageEarly!({ ...input, requesterIsOwner: false })).toBeNull();
+      expect(mocks.persistUserMessage).not.toHaveBeenCalled();
+      expect(await runner.persistInboundUserMessageEarly!({ ...input, requesterIsOwner: true }))
+        .toEqual({ sessionId: 'feishu-session', clientId: 'early-client' });
+    } finally {
+      runner.disposeAllSessions();
     }
   });
 
@@ -1810,6 +1827,57 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
       // 与策略配套的 turn lease 也不该挂。
       expect(h.session.acquireTurnLease).not.toHaveBeenCalled();
     } finally {
+      localRunner.disposeAllSessions();
+    }
+  });
+
+  // 2026-11-24「群成员也能提问」: 个人机器人的群成员轮次即使会话是完全访问、渠道声明策略可选, 也保留
+  // 策略(由共享 runner 临时降到 Auto); 渠道漏挂策略的成员轮次不按会话档位放行。
+  // 最小失败输入: 完全访问会话里一条 requesterIsOwner=false 的群轮次, 带策略 / 不带策略各一次。
+  it('keeps the turn policy for personal-bot group members and refuses a member turn without one', async () => {
+    mocks.peekSessionById.mockImplementation(async () => ({
+      permissionMode: 'bypassPermissions',
+    } as unknown as ImSessionRow));
+    const h = createSessionHarness(async () => ({ accepted: true }));
+    mocks.getMaker.mockReturnValue(createMakerHarness(h.session));
+    const localAdapter = {
+      ...fakeAdapter,
+      turnPolicyOptionalForMode: () => true,
+    } as unknown as ImChannelAdapter;
+    const localRunner = createTurnRunner(localAdapter, fakeRepo, fakeCards, { personalGuests: { queueLimit: 5 } });
+    const policy = {
+      origin: { kind: 'im' as const, channel: 'feishu' as const, taskId: 'msg-guest' },
+      autoReviewContext: { requesterAuthority: 'guest' as const, source: 'group' as const },
+      confirmationSurface: 'channel' as const,
+      forceConfirmToolCall: () => false,
+    };
+    try {
+      await localRunner.runAgentTurn({
+        botContextId: 'cli_test_bot',
+        userId: 'g/oc_group1',
+        userMessageId: 'msg-guest',
+        text: 'member question',
+        attachments: [],
+        requesterIsOwner: false,
+        turnPermissionPolicy: policy,
+      });
+      expect(h.session.send).toHaveBeenCalledTimes(1);
+      expect(h.session.send).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ turnPermissionPolicy: policy }),
+      );
+
+      await localRunner.runAgentTurn({
+        botContextId: 'cli_test_bot',
+        userId: 'g/oc_group1',
+        userMessageId: 'msg-guest-2',
+        text: 'member question without policy',
+        attachments: [],
+        requesterIsOwner: false,
+      });
+      expect(h.session.send).toHaveBeenCalledTimes(1);
+    } finally {
+      mocks.peekSessionById.mockReset();
       localRunner.disposeAllSessions();
     }
   });
@@ -3797,7 +3865,7 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
     expect(finalView).not.toContain('自动重试');
   });
 
-  it('still finalizes as failed on a terminal error', async () => {
+  it('localizes the nested overload reason in a personal IM terminal card', async () => {
     const handle = {
       messageId: 'stream-fatal',
       append: vi.fn(),
@@ -3811,12 +3879,21 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
 
     h.emit({ type: 'text', data: { text: 'partial', isFinal: false } });
     await flushMicrotasks(); // 等卡片 handle 建好, 收口才走 finalize 而非另发一条
-    h.emit({ type: 'error', data: { message: 'process exited with code 1', isTerminal: true } });
+    h.emit({
+      type: 'error',
+      data: {
+        message: 'stream disconnected before completion',
+        reason: 'UPSTREAM_OVERLOADED',
+        isTerminal: true,
+      },
+    });
     await waitForAssertion(() => {
       expect(onTurnComplete).toHaveBeenCalledTimes(1);
       expect(handle.finalize).toHaveBeenCalledTimes(1);
     });
-    expect(String(handle.finalize.mock.calls[0][0])).toContain('process exited with code 1');
+    const finalView = String(handle.finalize.mock.calls[0][0]);
+    expect(finalView).toContain('模型服务繁忙');
+    expect(finalView).not.toContain('stream disconnected before completion');
   });
 
   it('shows live tok/s while running but drops it from the frozen failure card', async () => {
@@ -5467,7 +5544,7 @@ describe('初始流式输出面创建失败的收口降级(#2164)', () => {
       },
     );
 
-    function createLivenessSetup(options: { onRebuild?: (previous: Session) => void | Promise<void> } = {}) {
+    function createLivenessSetup(options: { channel?: ImChannelAdapter['channel']; onRebuild?: (previous: Session) => void | Promise<void> } = {}) {
       const previous = createSessionHarness(async () => ({ accepted: true }), SESSION_ID);
       const replacement = createSessionHarness(async () => ({ accepted: true }), SESSION_ID);
       let live: Session | undefined = previous.session;
@@ -5499,7 +5576,7 @@ describe('初始流式输出面创建失败的收口降级(#2164)', () => {
         }),
       };
       mocks.getMaker.mockReturnValue(maker);
-      const localRunner = createTurnRunner(fakeAdapter, fakeRepo, fakeCards, {
+      const localRunner = createTurnRunner({ ...fakeAdapter, channel: options.channel ?? fakeAdapter.channel }, fakeRepo, fakeCards, {
         acquirePendingAgentSwitch: vi.fn(async () => () => {}),
       });
       const onTurnComplete = vi.fn();
@@ -5538,6 +5615,43 @@ describe('初始流式输出面创建失败的收口降级(#2164)', () => {
         '❌ 启动 Agent 失败：SESSION_CLOSING',
       ]);
       expect(h.send).toHaveBeenCalledTimes(1);
+    });
+
+    it('recovers a Telegram DM on the next message after subscription reauthorization', async () => {
+      let credential = 'fake-expired';
+      let replacementCredential = '';
+      const h = createLivenessSetup({ channel: 'telegram', onRebuild: () => { replacementCredential = credential; } });
+      const row = { ...(await mocks.findActiveSession()), providerId: 'openai', model: 'chatgpt/gpt-6-astra', agentKind: 'codex' };
+      const { setSessionProvider, clearSessionProvider } = await import('../../../maker-host/session-provider-store');
+      setSessionProvider(SESSION_ID, 'openai');
+      mocks.findActiveSession.mockResolvedValue(row);
+      mocks.desktopSessionRows.mockResolvedValue([{ ...row, status: 'active' }]);
+      mocks.listProviders.mockResolvedValue([{ id: 'openai', name: 'OpenAI', connected: true, source: 'builtin',
+        agents: ['codex'], models: { codex: [{ id: row.model }] }, routing: { codex: { authStrategy: 'oauth-passthrough' } } }]);
+      const send = (text: string) => h.localRunner.runAgentTurn({ botContextId: 'bot', userId: '1234',
+        userMessageId: text, text, attachments: [] });
+      try {
+        await send('first');
+        await send('queued');
+        h.previous.emit({ type: 'error', data: { message: 'HTTP 401 unauthorized_unknown: Could not parse your authentication token.', isTerminal: true } });
+        await waitForAssertion(() => expect(JSON.stringify(mocks.feishuIm.sendText.mock.calls)).toContain('OpenAI'));
+        expect(h.maker.closeSessionIfCurrent).toHaveBeenCalledWith(h.previous.session, 'runtime-refresh', { afterCurrentTurn: true });
+        expect(h.previous.send).toHaveBeenCalledTimes(1);
+        expect(h.replacement.send).not.toHaveBeenCalled();
+        credential = 'fake-reconnected';
+        await send('next');
+        await waitForAssertion(() => expect(h.replacement.send).toHaveBeenCalledTimes(1));
+        expect(replacementCredential).toBe(credential);
+        h.replacement.emit({ type: 'done', data: {} });
+        await waitForAssertion(() => expect(h.replacement.send).toHaveBeenCalledTimes(2));
+        expect(h.replacement.send.mock.calls.map(([message]) => message)).toEqual([
+          { type: 'user', content: 'queued' }, { type: 'user', content: 'next' },
+        ]);
+        expect(h.previous.send).toHaveBeenCalledTimes(1);
+      } finally {
+        await h.localRunner.disposeAllSessions();
+        clearSessionProvider(SESSION_ID);
+      }
     });
 
     it('rebuilds a runtime that already started closing instead of failing the message', async () => {
@@ -5884,6 +5998,273 @@ describe('初始流式输出面创建失败的收口降级(#2164)', () => {
         );
       } finally {
         localRunner.disposeAllSessions();
+      }
+    });
+  });
+
+  describe('personal IM upstream-overload auto-retry and account switch', () => {
+    const SESSION_ID = 'feishu-session';
+    const BOT_ID = 'bot-1';
+    const USER_ID = 'ou_user';
+
+    it('retries with account switch and continuation prompt after mid-turn upstream-overload', async () => {
+      vi.useFakeTimers();
+      try {
+        const handle = {
+          messageId: 'stream-overload-retry',
+          append: vi.fn(),
+          replace: vi.fn(),
+          finalize: vi.fn(),
+          close: vi.fn(),
+        };
+        mocks.feishuIm.startStreamingText.mockResolvedValue(handle);
+        const sentMessages: unknown[] = [];
+        const harness = createSessionHarness(async (msg) => {
+          sentMessages.push(msg);
+          return { accepted: true };
+        }, SESSION_ID);
+        mocks.getMaker.mockReturnValue(createMakerHarness(harness.session));
+        const canSwitchAccount = vi.fn(async () => true);
+        const prepareUnhealthySession = vi.fn(async () => undefined);
+        const localRunner = createTurnRunner(fakeAdapter, fakeRepo, fakeCards, {
+          canSwitchAccount,
+          prepareUnhealthySession,
+        });
+        const onTurnComplete = vi.fn();
+        await localRunner.runAgentTurn({
+          botContextId: BOT_ID,
+          userId: USER_ID,
+          text: '帮我分析问题',
+          attachments: [],
+          userMessageId: 'msg-ov-1',
+          onTurnComplete,
+        });
+        await vi.advanceTimersByTimeAsync(0);
+
+        // 本轮已有输出后遇到上游过载终态 error。
+        harness.emit({ type: 'text', data: { text: '初步检查中', isFinal: false } });
+        harness.emit({
+          type: 'error',
+          data: {
+            message: 'Selected model is at capacity. Please try a different model.',
+            reason: 'upstream-overload',
+            isTerminal: true,
+          },
+        });
+        await vi.advanceTimersByTimeAsync(0);
+        expect(onTurnComplete).not.toHaveBeenCalled();
+        expect(handle.finalize).not.toHaveBeenCalled();
+        expect(canSwitchAccount).toHaveBeenCalledWith(SESSION_ID);
+
+        // 切号重试延迟到期：触发 prepareUnhealthySession，发送隐藏续跑指令。
+        await vi.advanceTimersByTimeAsync(1_600);
+        expect(prepareUnhealthySession).toHaveBeenCalledTimes(2);
+        expect(sentMessages).toHaveLength(2);
+        expect(String((sentMessages[1] as { content: unknown }).content)).toContain('[UI_ACTION_TRIGGER]');
+        expect(handle.replace.mock.calls.some(([body]) => String(body).includes('模型服务繁忙，正在自动重试（1/4）'))).toBe(true);
+
+        // 切号后的第二轮正常收口。
+        harness.emit({ type: 'text', data: { text: '切号后已完成分析。', isFinal: true } });
+        harness.emit({ type: 'done', data: {} });
+        await vi.advanceTimersByTimeAsync(0);
+
+        expect(onTurnComplete).toHaveBeenCalledTimes(1);
+        expect(handle.finalize).toHaveBeenCalledTimes(1);
+        expect(String(handle.finalize.mock.calls[0][0])).toContain('切号后已完成分析。');
+        await localRunner.disposeAllSessions();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('cancels a pending overload retry immediately on !stop without re-dispatching', async () => {
+      vi.useFakeTimers();
+      try {
+        const handle = {
+          messageId: 'stream-overload-stop',
+          append: vi.fn(),
+          replace: vi.fn(),
+          finalize: vi.fn(),
+          close: vi.fn(),
+        };
+        mocks.feishuIm.startStreamingText.mockResolvedValue(handle);
+        const harness = createSessionHarness(async () => ({ accepted: true }), SESSION_ID);
+        mocks.getMaker.mockReturnValue(createMakerHarness(harness.session));
+        const localRunner = createTurnRunner(fakeAdapter, fakeRepo, fakeCards, {
+          canSwitchAccount: vi.fn(async () => true),
+        });
+        const onTurnComplete = vi.fn();
+        await localRunner.runAgentTurn({
+          botContextId: BOT_ID,
+          userId: USER_ID,
+          text: '帮我查一下',
+          attachments: [],
+          userMessageId: 'msg-ov-stop',
+          onTurnComplete,
+        });
+        await vi.advanceTimersByTimeAsync(0);
+
+        harness.emit({ type: 'text', data: { text: '部分输出', isFinal: false } });
+        harness.emit({
+          type: 'error',
+          data: {
+            message: 'Selected model is at capacity.',
+            reason: 'upstream-overload',
+            isTerminal: true,
+          },
+        });
+        await vi.advanceTimersByTimeAsync(0);
+        expect(harness.send).toHaveBeenCalledTimes(1);
+
+        // 用户在重试退避窗内发送 !stop：立即终止且不再补发第二次 send。
+        const stopRes = await localRunner.stopActiveTurn({ botContextId: BOT_ID, userId: USER_ID });
+        expect(stopRes.stopped).toBe(true);
+        await vi.advanceTimersByTimeAsync(10_000);
+        expect(harness.send).toHaveBeenCalledTimes(1);
+        expect(onTurnComplete).toHaveBeenCalledTimes(1);
+        await localRunner.disposeAllSessions();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('ignores trailing done emitted after a terminal overload error and completes via retry', async () => {
+      vi.useFakeTimers();
+      try {
+        const handle = {
+          messageId: 'stream-overload-trailing-done',
+          append: vi.fn(),
+          replace: vi.fn(),
+          finalize: vi.fn(),
+          close: vi.fn(),
+        };
+        mocks.feishuIm.startStreamingText.mockResolvedValue(handle);
+        const sentMessages: unknown[] = [];
+        const harness = createSessionHarness(async (msg) => {
+          sentMessages.push(msg);
+          return { accepted: true };
+        }, SESSION_ID);
+        mocks.getMaker.mockReturnValue(createMakerHarness(harness.session));
+        const localRunner = createTurnRunner(fakeAdapter, fakeRepo, fakeCards, {
+          canSwitchAccount: vi.fn(async () => true),
+          prepareUnhealthySession: vi.fn(async () => undefined),
+        });
+        const onTurnComplete = vi.fn();
+        await localRunner.runAgentTurn({
+          botContextId: BOT_ID,
+          userId: USER_ID,
+          text: '排查任务',
+          attachments: [],
+          userMessageId: 'msg-ov-trailing',
+          onTurnComplete,
+        });
+        await vi.advanceTimersByTimeAsync(0);
+
+        // Codex turn/completed(failed) 可能在终态过载 error 之后立即补发同代次 done。
+        harness.emit({ type: 'text', data: { text: '半截回答', isFinal: false } });
+        harness.emit({
+          type: 'error',
+          data: {
+            message: 'Selected model is at capacity.',
+            reason: 'upstream-overload',
+            isTerminal: true,
+          },
+        });
+        harness.emit({ type: 'done', data: {} });
+        await vi.advanceTimersByTimeAsync(0);
+
+        // 失败尾帧 done 绝不能提前把半截回答按成功收口或取消重试。
+        expect(onTurnComplete).not.toHaveBeenCalled();
+        expect(handle.finalize).not.toHaveBeenCalled();
+
+        await vi.advanceTimersByTimeAsync(1_600);
+        expect(sentMessages).toHaveLength(2);
+        expect(String((sentMessages[1] as { content: unknown }).content)).toContain('[UI_ACTION_TRIGGER]');
+
+        harness.emit({ type: 'text', data: { text: '重试完成完整回答', isFinal: true } });
+        harness.emit({ type: 'done', data: {} });
+        await vi.advanceTimersByTimeAsync(0);
+
+        expect(onTurnComplete).toHaveBeenCalledTimes(1);
+        expect(handle.finalize).toHaveBeenCalledTimes(1);
+        expect(String(handle.finalize.mock.calls[0][0])).toContain('重试完成完整回答');
+        await localRunner.disposeAllSessions();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('treats thinking-only output as hadOutput and preserves channelToolScope.inputClientId across retry', async () => {
+      vi.useFakeTimers();
+      try {
+        const handle = {
+          messageId: 'stream-overload-thinking',
+          append: vi.fn(),
+          replace: vi.fn(),
+          finalize: vi.fn(),
+          close: vi.fn(),
+        };
+        mocks.feishuIm.startStreamingText.mockResolvedValue(handle);
+        mocks.persistUserMessage
+          .mockResolvedValueOnce({ clientId: 'orig-client-id' })
+          .mockResolvedValueOnce({ clientId: 'resume-client-id' });
+        const sentMessages: unknown[] = [];
+        const harness = createSessionHarness(async (msg) => {
+          sentMessages.push(msg);
+          return { accepted: true };
+        }, SESSION_ID);
+        mocks.getMaker.mockReturnValue(createMakerHarness(harness.session));
+        const channelToolScope: ChannelToolScope = {
+          channel: 'discord',
+          botId: BOT_ID,
+          chatId: USER_ID,
+          laneUserId: USER_ID,
+          chatKind: 'group',
+          companion: true,
+          requesterIsOwner: true,
+        };
+        const localRunner = createTurnRunner(fakeAdapter, fakeRepo, fakeCards, {
+          canSwitchAccount: vi.fn(async () => true),
+          prepareUnhealthySession: vi.fn(async () => undefined),
+        });
+        const onTurnComplete = vi.fn();
+        await localRunner.runAgentTurn({
+          botContextId: BOT_ID,
+          userId: USER_ID,
+          text: '带思考的提问',
+          attachments: [],
+          userMessageId: 'msg-ov-thinking',
+          channelToolScope,
+          onTurnComplete,
+        });
+        await vi.advanceTimersByTimeAsync(0);
+        expect(channelToolScope.inputClientId).toBe('orig-client-id');
+
+        // 仅产生有效 thinking 后命中过载：仍视为已有产出，走隐藏续跑而非重发原提问。
+        harness.emit({ type: 'thinking', data: { blockId: 'b1', text: '正在分析依赖图', stage: 'delta' } });
+        harness.emit({
+          type: 'error',
+          data: {
+            message: 'Selected model is at capacity.',
+            reason: 'upstream-overload',
+            isTerminal: true,
+          },
+        });
+        await vi.advanceTimersByTimeAsync(1_600);
+
+        expect(sentMessages).toHaveLength(2);
+        expect(String((sentMessages[1] as { content: unknown }).content)).toContain('[UI_ACTION_TRIGGER]');
+        expect(String((sentMessages[1] as { content: unknown }).content)).not.toContain('带思考的提问');
+        // 重试 onAccepted 后仍保留与原入站消息的 inputClientId 关联。
+        expect(channelToolScope.inputClientId).toBe('orig-client-id');
+
+        harness.emit({ type: 'text', data: { text: '分析完成', isFinal: true } });
+        harness.emit({ type: 'done', data: {} });
+        await vi.advanceTimersByTimeAsync(0);
+        expect(onTurnComplete).toHaveBeenCalledTimes(1);
+        await localRunner.disposeAllSessions();
+      } finally {
+        vi.useRealTimers();
       }
     });
   });

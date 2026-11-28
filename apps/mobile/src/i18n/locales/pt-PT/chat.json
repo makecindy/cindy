@@ -122,6 +122,28 @@
     "status": {
       "running": "Em execução",
       "done": "Concluído"
+    },
+    "collab": {
+      "wait": "Aguardar pelo Subagent",
+      "waitCount_one": "Aguardar por {{count}} Subagent",
+      "waitCount_other": "Aguardar por {{count}} Subagents",
+      "waitCount_many": "Aguardar por {{count}} Subagents",
+      "sendInput": "Enviar instruções ao Subagent",
+      "sendInputCount_one": "Enviar instruções a {{count}} Subagent",
+      "sendInputCount_other": "Enviar instruções a {{count}} Subagents",
+      "sendInputCount_many": "Enviar instruções a {{count}} Subagents",
+      "resume": "Retomar Subagent",
+      "resumeCount_one": "Retomar {{count}} Subagent",
+      "resumeCount_other": "Retomar {{count}} Subagents",
+      "resumeCount_many": "Retomar {{count}} Subagents",
+      "close": "Fechar Subagent",
+      "closeCount_one": "Fechar {{count}} Subagent",
+      "closeCount_other": "Fechar {{count}} Subagents",
+      "closeCount_many": "Fechar {{count}} Subagents",
+      "spawn": "Iniciar Subagent",
+      "spawnCount_one": "Iniciar {{count}} Subagent",
+      "spawnCount_other": "Iniciar {{count}} Subagents",
+      "spawnCount_many": "Iniciar {{count}} Subagents"
     }
   },
   "agentActions": {
@@ -201,9 +223,21 @@
     },
     "failed_many": "{{count}} chamadas falharam"
   },
+  "geminiRateLimit": {
+    "retried": "Nova tentativa automática após a espera indicada pelo Gemini",
+    "title": "O limite de entrada por minuto do Gemini foi atingido.",
+    "exhausted": "O Gemini continua limitado após uma nova tentativa. Pode voltar a tentar manualmente.",
+    "retryIn": "Nova tentativa automática dentro de {{seconds}} s"
+  },
   "subscriptionAccountError": {
-    "limited": "A conta de subscrição desta tarefa atingiu o limite de utilização. Aguarda a reposição ou escolhe outra origem de modelos. A conta não muda automaticamente.",
-    "limitedUntil": "A conta de subscrição desta tarefa atingiu o limite de utilização. Reposição prevista: {{resetAt}}. Aguarda até lá ou escolhe outra origem de modelos. A conta não muda automaticamente.",
+    "unreachable": "O serviço de contas do Codex está temporariamente indisponível.",
+    "rechecking": "O serviço de contas do Codex está temporariamente indisponível. Nova tentativa às {{resetAt}}.",
+    "poolModelLimited": "Foi atingido o limite de utilização da subscrição para este modelo. Pode mudar de modelo.",
+    "poolRetryUntil": "Tente novamente após {{resetAt}}.",
+    "poolOtherSignedOut": "Outra conta de subscrição tem a sessão terminada. Inicie sessão no computador que executa a tarefa e tente novamente.",
+    "poolUnavailable": "Não há nenhuma conta de subscrição disponível para este modelo. Mude de modelo ou verifique as contas no computador que executa a tarefa.",
+    "limited": "A conta de subscrição desta tarefa atingiu o limite de utilização. Aguarda a reposição ou escolhe outra origem de modelos.",
+    "limitedUntil": "A conta de subscrição desta tarefa atingiu o limite de utilização. Reposição prevista: {{resetAt}}. Aguarda até lá ou escolhe outra origem de modelos.",
     "loginRequired": "A conta de subscrição desta tarefa requer um novo início de sessão. Inicia sessão no computador que executa a tarefa e tenta novamente.",
     "signingIn": "O início de sessão na conta de subscrição desta tarefa está em curso. Tenta novamente quando terminar.",
     "unavailable": "A conta de subscrição atribuída a esta tarefa não pode ser utilizada neste pedido. Verifica a conta nas definições do fornecedor de modelos no computador que executa a tarefa ou escolhe outra origem de modelos.",

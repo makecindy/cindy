@@ -1,17 +1,22 @@
+import { enqueueMessageUsageWrite } from './usage/messageUsageWrite.desktop.js';
+import { patchMessageAgentMetaWithResultRow } from './localDb/messageMutations.js';
+import { messageCostDatabase } from './usage/turnUsageAdmission.js';
 // The desktop's turnCostBroadcaster: its core (turnCostBroadcasterCore.ts, shared with the Node Host), with the desktop
 // functions it imported before bound to its ports (usageBroadcastPorts.ts), each resolved when called.
 // The core calls no port while its module loads (export * evaluates it before the binding below runs);
 // each port is resolved when it is called. This module's imports are the ones turnCostBroadcaster.ts had.
 import { BrowserWindow } from 'electron';
 import { patchMessageAgentMetaWithResult, readPriorUserRoundCost } from './localDb/ipc/messages.js';
-import { enqueueDurableWrite } from './messagePersistBroadcaster.desktop.js';
 import { bindUsageBroadcastPorts } from './usageBroadcastPorts.js';
 
 bindUsageBroadcastPorts({
   getAllWindows: () => BrowserWindow.getAllWindows(),
-  patchMessageAgentMetaWithResult: (...args) => patchMessageAgentMetaWithResult(...args),
-  readPriorUserRoundCost: (...args) => readPriorUserRoundCost(...args),
-  enqueueDurableWrite: (label, fn) => enqueueDurableWrite(label, fn),
+  patchMessageAgentMetaWithResult: (...args) => {
+    const client = messageCostDatabase.getStore();
+    return client ? patchMessageAgentMetaWithResultRow(client, ...args) : patchMessageAgentMetaWithResult(...args);
+  },
+  readPriorUserRoundCost: (...args) => readPriorUserRoundCost(...args, messageCostDatabase.getStore()),
+  enqueueDurableWrite: enqueueMessageUsageWrite,
 });
 
 export * from './turnCostBroadcasterCore.js';

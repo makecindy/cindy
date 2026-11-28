@@ -78,6 +78,30 @@ describe('desktop scheduler cross-device transport', () => {
     expect(s.invoke).toHaveBeenCalledTimes(1);
   });
 
+  // PR #13682: remote schedule_get bypasses the local runtime callback. A
+  // bound schedule must receive the target's transient deferral without a new
+  // channel; older peers still return the persisted schedule. tier: unit.
+  it('enriches a bound remote schedule with target deferral and tolerates older peers', async () => {
+    const s = setup();
+    const schedule = { id: 's1', targetSessionId: 'session-1' };
+    s.invoke.mockResolvedValueOnce({ ok: true, result: schedule });
+    s.invoke.mockResolvedValueOnce({ ok: true, result: { deferredSchedules: [
+      { scheduleId: 's1', count: 2, firstAt: 100, lastReason: 'session-running' },
+    ] } });
+    expect(await s.remote.invoke('mac', 'get', ['s1'])).toEqual({ ok: true, data: {
+      ...schedule, deferral: { count: 2, firstAt: 100, lastReason: 'session-running' },
+    } });
+    expect(s.invoke.mock.calls.map(([, channel]) => channel)).toEqual([
+      'maker:schedule:get', 'maker:schedule:get-runtime-state',
+    ]);
+    expect(s.invoke.mock.calls[1][3]?.preSend).toBe(s.invoke.mock.calls[0][3]?.preSend);
+
+    const old = setup();
+    old.invoke.mockResolvedValueOnce({ ok: true, result: schedule });
+    old.invoke.mockResolvedValueOnce({ ok: false, error: { code: 'CHANNEL_NOT_ALLOWED', message: 'unsupported' } });
+    expect(await old.remote.invoke('mac', 'get', ['s1'])).toEqual({ ok: true, data: schedule });
+  });
+
   it.each([
     { outcome: { ok: false, error: { code: 'CHANNEL_NOT_ALLOWED', message: 'unsupported' } } as InvokeResultPayload, code: 'REMOTE_UNSUPPORTED' },
     { outcome: new DeviceLinkError('INVOKE_TIMEOUT', 'slow'), code: 'REMOTE_TIMEOUT' },
@@ -134,6 +158,45 @@ describe('desktop scheduler cross-device transport', () => {
       ...(supported && trigger ? ['maker:schedule:webhook-receiver'] : []),
       ...(ok ? [`maker:schedule:${op}`] : []),
     ]);
+  });
+
+  // docs/product-rules/plugin-event-triggers.md, unit: plugin events need no account on the
+  // target, but a target that predates them would reject the unknown source after the write.
+  it.each([
+    { pluginEvents: true, ok: true },
+    { pluginEvents: false, ok: false },
+  ])('negotiates plugin event triggers without the receiver check: supported=$pluginEvents', async ({ pluginEvents, ok }) => {
+    const s = setup();
+    s.invoke.mockImplementation(async (_device, channel) => ({ ok: true, result:
+      channel === 'maker:get-capabilities' ? { supportsScheduleWebhookTrigger: true, supportsSchedulePluginEventTrigger: pluginEvents }
+      : channel === 'maker:schedule:webhook-receiver' ? 'signed-out' : { id: 's1' },
+    }));
+    const patch = { webhookTrigger: { source: { preset: 'plugin', sources: [{ plugin: 'public/chat' }] } } };
+    expect((await s.remote.invoke('mac', 'update', ['s1', patch])).ok).toBe(ok);
+    expect(s.invoke.mock.calls.map(([, channel]) => channel))
+      .toEqual(['maker:get-capabilities', ...(ok ? ['maker:schedule:update'] : [])]);
+  });
+
+  // PR #11881 review r4661510132: an older desktop drops the unknown modelGroup and still reports success, so the
+  // task silently runs the concrete model. Minimal input: create/update carrying a mode against a target with and
+  // without the capability; clearing the mode needs no capability.
+  it.each([
+    { op: 'create' as const, modelGroup: 'daily', supported: true, ok: true },
+    { op: 'create' as const, modelGroup: 'daily', supported: false, ok: false },
+    { op: 'update' as const, modelGroup: 'daily', supported: false, ok: false },
+    { op: 'update' as const, modelGroup: null, supported: false, ok: true },
+  ])('requires the target to store a model group: $op/$modelGroup/$supported', async ({ op, modelGroup, supported, ok }) => {
+    const s = setup();
+    s.invoke.mockImplementation(async (_device, channel) => ({ ok: true, result:
+      channel === 'maker:get-capabilities' ? { supportsRemoteScheduleDirectoryCheck: true, supportsScheduleModelGroup: supported } : { id: 's1' },
+    }));
+    const patch = { modelGroup };
+    const result = await s.remote.invoke('mac', op, op === 'create' ? [patch] : ['s1', patch]);
+    expect(result.ok).toBe(ok);
+    if (!ok) expect(result).toMatchObject({ code: 'REMOTE_UNSUPPORTED' });
+    const channels = s.invoke.mock.calls.map(([, channel]) => channel);
+    if (ok) expect(channels).toContain(`maker:schedule:${op}`);
+    else expect(channels).not.toContain(`maker:schedule:${op}`);
   });
 
   it('does not write after ownership changes during the webhook receiver check', async () => {

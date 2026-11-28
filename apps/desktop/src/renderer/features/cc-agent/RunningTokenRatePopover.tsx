@@ -62,12 +62,14 @@ export function useRunningTokenRateHistory(input: {
       Math.max(0, timestamp + RATE_SAMPLE_FRESH_MS - Date.now()));
     return () => clearTimeout(timer);
   }, [history.latestSampleAt, history.latestRate]);
-  const visibleHistory = history.latestSampleAt === undefined ||
-    Math.max(now, Date.now()) - history.latestSampleAt >= RATE_SAMPLE_FRESH_MS
-    ? { ...history, latestRate: null } : history;
-  return startedAt === null || history.startedAt === startedAt
-    ? visibleHistory
+  // The panel keeps the turn's last measured reading for as long as the turn is shown;
+  // only the status bar treats a reading as live, and only for a minute after it was taken.
+  const current = startedAt === null || history.startedAt === startedAt
+    ? history
     : { ...history, startedAt, baseline: null, latestRate: null };
+  const latestRateFresh = current.latestRate !== null && history.latestSampleAt !== undefined &&
+    Math.max(now, Date.now()) - history.latestSampleAt < RATE_SAMPLE_FRESH_MS;
+  return { ...current, latestRateFresh };
 }
 
 export function RunningTokenRatePopover({
@@ -134,7 +136,7 @@ export function RunningTokenRatePopover({
           width={120}
           speedHeight={44}
           strokeHeight={14}
-          liveDot
+          keepSpeedHeight
           fixedSize
           label={t('chat.runningStatus.rateHistory')}
           className="col-start-2 row-start-1 self-center justify-self-center"
@@ -205,7 +207,7 @@ export function RunningTokenRatePopover({
                   setMode((current) => (current === 'dismissed' ? 'idle' : current))
                 }
                 onBlur={() => setMode((current) => (current === 'dismissed' ? 'idle' : current))}
-                className="inline-flex min-h-6 min-w-6 items-center justify-center gap-[6px] whitespace-nowrap rounded-full px-1 text-13 font-medium tabular-nums text-[var(--status-bar-meta)] hover:bg-[var(--button-secondary-hover)] hover:text-[var(--text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--text-secondary)]"
+                className="inline-flex min-h-6 min-w-6 items-center justify-center gap-1.5 whitespace-nowrap rounded-full px-1 text-13 font-medium tabular-nums text-[var(--status-bar-meta)] hover:bg-[var(--button-secondary-hover)] hover:text-[var(--text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--text-secondary)]"
                 aria-label={
                   [elapsedText, rateText && (isTokenCount ? rateText : `${readingLabel}: ${rateText}`)]
                     .filter(Boolean).join(' · ') || readingLabel

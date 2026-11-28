@@ -381,6 +381,7 @@ function pickSettingsPatch(raw: Record<string, unknown>): MenubarSettingsPatch {
     if (typeof raw[key] === 'boolean') patch[key] = raw[key] as boolean;
   }
   if (MENUBAR_STATUS_TEXT_MODES.includes(raw.statusText as never)) patch.statusText = raw.statusText as MenubarSettingsPatch['statusText'];
+  if (raw.currency === 'USD' || raw.currency === 'CNY' || raw.currency === 'auto') patch.currency = raw.currency;
   if (MENUBAR_USAGE_SCOPES.includes(raw.scope as never)) patch.scope = raw.scope as MenubarSettingsPatch['scope'];
   return patch;
 }

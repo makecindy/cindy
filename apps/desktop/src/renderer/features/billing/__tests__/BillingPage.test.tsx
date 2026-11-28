@@ -1086,7 +1086,7 @@ describe('BillingPage remote catalog rendering', () => {
       updatedAt: '2026-11-19T08:00:00.000Z',
     };
     const purchased = (cardId: string, orderId: string, codeTail: string) => ({
-      cardId, orderId, faceCode: 'cat', amount: '100', currency: 'cny', senderName: '小鱼',
+      cardId, orderId, faceCode: 'cat', face: null, amount: '100', currency: 'cny', senderName: '小鱼',
       message: '生日快乐', codeTail, status: 'UNCLAIMED' as const, claimedAt: null,
       claimedByName: null, purchasedAt: '2026-11-19T08:01:00.000Z', email: null,
     });
@@ -1156,7 +1156,7 @@ describe('BillingPage remote catalog rendering', () => {
   // 也不说已退款。
   it('shows a card held by a pending refund or chargeback as processing, without actions', async () => {
     const held = {
-      cardId: 'card_held', orderId: 'order_gift', faceCode: 'cat', amount: '100', currency: 'cny',
+      cardId: 'card_held', orderId: 'order_gift', faceCode: 'cat', face: null, amount: '100', currency: 'cny',
       senderName: '小鱼', message: null, codeTail: '7KQ2', status: 'ON_HOLD' as const, claimedAt: null,
       claimedByName: null, purchasedAt: '2026-11-19T08:01:00.000Z', email: null,
     };
@@ -1180,7 +1180,7 @@ describe('BillingPage remote catalog rendering', () => {
     vi.useFakeTimers();
     try {
       const issued = {
-        cardId: 'card_new', orderId: 'order_gift', faceCode: 'cat', amount: '100', currency: 'cny',
+        cardId: 'card_new', orderId: 'order_gift', faceCode: 'cat', face: null, amount: '100', currency: 'cny',
         senderName: '小鱼', message: null, codeTail: '7KQ2', status: 'UNCLAIMED' as const, claimedAt: null,
         claimedByName: null, purchasedAt: '2026-11-19T08:01:00.000Z', email: null,
       };
@@ -1264,7 +1264,7 @@ describe('BillingPage remote catalog rendering', () => {
     }));
     const { result, unmount } = renderHook(() => usePurchasedGiftCards());
     const copied = result.current.copy({
-      cardId: 'card_1', orderId: 'order_gift', faceCode: 'cat', amount: '100', currency: 'cny',
+      cardId: 'card_1', orderId: 'order_gift', faceCode: 'cat', face: null, amount: '100', currency: 'cny',
       senderName: '小鱼', message: null, codeTail: '7KQ2', status: 'UNCLAIMED', claimedAt: null,
       claimedByName: null, purchasedAt: '2026-11-19T08:01:00.000Z', email: null,
     }, 'code');
@@ -1288,7 +1288,7 @@ describe('BillingPage remote catalog rendering', () => {
     });
     const later = (seconds: number) => new Date(Date.now() + seconds * 1000).toISOString();
     const card = (overrides: Partial<BillingPurchasedGiftCard> = {}): BillingPurchasedGiftCard => ({
-      cardId: 'card_mail', orderId: 'order_gift', faceCode: 'cat', amount: '100', currency: 'cny',
+      cardId: 'card_mail', orderId: 'order_gift', faceCode: 'cat', face: null, amount: '100', currency: 'cny',
       senderName: '小鱼', message: '生日快乐', codeTail: '7KQ2', status: 'UNCLAIMED', claimedAt: null,
       claimedByName: null, purchasedAt: '2026-11-19T08:01:00.000Z', email: null, ...overrides,
     });
@@ -1574,6 +1574,7 @@ describe('BillingPage remote catalog rendering', () => {
       status: 'AVAILABLE' as const,
       amount: '20',
       faceCode: 'cindy',
+      face: null,
       senderName: 'Cindy Team',
       message: null,
       destination: 'PROMOTIONAL' as const,

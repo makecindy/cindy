@@ -1,8 +1,24 @@
 import { parseOutputLimitDetails, isReasoningDominatedOutputLimit } from '@cindy/maker-shared';
-import { isRemoteAgentResumeRejectedError, isResponsesLiteParallelToolCallsError, localizeSubscriptionAccountError, parseAgentErrorCode, isRemoteCompactEncryptedContentError } from '@cindy/maker-shared/error-redaction';
+import {
+  isAccountUsageLimitReachedText,
+  isProviderSafetyRefusalError,
+  parseGeminiInputRateLimit,
+  isRemoteAgentResumeRejectedError,
+  isResponsesLiteParallelToolCallsError,
+  localizeSubscriptionAccountError,
+  parseAgentErrorCode,
+  isRemoteCompactEncryptedContentError,
+} from '@cindy/maker-shared/error-redaction';
 import { requiresAgentErrorConfigurationChange as requiresConfigurationChange } from '@cindy/maker-shared/error-redaction';
 import { i18n } from '@/i18n';
 import { describeAgentAuthError, isCodexSharedAuthLinkUnavailableError } from '@/device-link/remoteStatus';
+import {
+  isMobileOverloadError,
+  isMobileQuotaExhaustedError,
+  isMobileStreamInterruptedError,
+  parseMobileUpstreamStatus,
+  resolveMobileExternalProviderName,
+} from './chatErrorExplain';
 
 export function requiresAgentErrorConfigurationChange(message: string): boolean {
   return message.includes('[REMOTE_AGENT_MEMBER_BUDGET_PAUSED]') || requiresConfigurationChange(message);
@@ -77,17 +93,51 @@ export function localizeAgentError(
   toolLoop: MobileToolLoopErrorDetails | null,
   message = '',
   outputLimit?: unknown,
+  reconnectHandoff?: unknown,
+  providerCtx?: { providerId?: string | null; providerName?: string | null },
 ): string | null {
+  const provider = resolveMobileExternalProviderName(providerCtx ?? {});
+  const reasonStr = typeof reason === 'string' ? reason : undefined;
+  // 安全策略拦截优先于鉴权 / 过载 / 状态码等宽泛分支，避免被载荷里的状态码误导。
+  if (isProviderSafetyRefusalError(message, reasonStr)) {
+    return provider
+      ? i18n.t('session.tail.providerSafetyRefusalWithProvider', { provider })
+      : i18n.t('session.tail.providerSafetyRefusal');
+  }
   // 「共享凭证连不上」的引导文案走这里：它可恢复，不能占用「不可重试」那条路
   // （见 describeNonRetryableAgentError），但提示条仍要显示这段可执行的说明。
   if (isCodexSharedAuthLinkUnavailableError(message)) {
     return describeAgentAuthError(message);
   }
+  if (parseGeminiInputRateLimit(message) !== null) return i18n.t(reason === 'gemini-input-retry-exhausted'
+    ? 'chat.geminiRateLimit.exhausted' : 'chat.geminiRateLimit.title');
   const subscriptionGuidance = localizeSubscriptionAccountError(message, i18n.t, i18n.resolvedLanguage ?? i18n.language);
   if (subscriptionGuidance) return subscriptionGuidance;
   if (isRemoteCompactEncryptedContentError(message, reason)) return i18n.t('session.tail.remoteCompactEncryptedContent');
+  if (reason === 'user_model_access_denied') {
+    return provider
+      ? i18n.t('session.tail.modelAccessDeniedWithProvider', { provider })
+      : i18n.t('session.tail.modelAccessDenied');
+  }
+  if (reason === 'acp-usage-limit') {
+    return provider
+      ? i18n.t('session.tail.usageLimitReachedWithProvider', { provider })
+      : i18n.t('session.tail.usageLimitReached');
+  }
+  if (reason === 'acp-auth-required') return i18n.t('chat.subscriptionAccountError.loginRequired');
+  if (reason === 'UPSTREAM_OVERLOADED' || reason === 'acp-overloaded') {
+    return provider
+      ? i18n.t('session.tail.overloadBusyWithProvider', { provider })
+      : i18n.t('interaction.contextSheet.goalStatus.capacityLimited');
+  }
   if (reason === 'unexecuted-tool-markup') return i18n.t('session.tail.unexecutedToolMarkup');
   if (reason === 'yield-continuation-incomplete') return i18n.t('session.tail.executionResultUnavailable');
+  if (reason === 'codex_reconnect_stalled') {
+    const summary = i18n.t('session.tail.codexReconnectStalled');
+    if (reconnectHandoff === 'disabled') return `${summary} ${i18n.t('session.tail.reconnectAutoResumeDisabled')}`;
+    if (reconnectHandoff === 'exhausted') return `${summary} ${i18n.t('session.tail.reconnectAutoResumeExhausted')}`;
+    return summary;
+  }
   if (reason === 'silent-stop-exhausted') return i18n.t('session.tail.silentStopExhausted');
   if (reason === 'output-limit') {
     const details = parseOutputLimitDetails(outputLimit);
@@ -98,9 +148,40 @@ export function localizeAgentError(
       ? 'session.tail.outputLimitOutputUsage' : 'session.tail.outputLimitUsage', { ...details });
     return `${usage} ${guidance}`;
   }
-  if (reason !== 'tool_use_loop_detected') return null;
-  if (!toolLoop) return i18n.t('session.tail.toolUseLoopDetected');
-  return i18n.t(TOOL_LOOP_I18N_KEYS[toolLoop.kind], { count: toolLoop.count });
+  if (reason === 'tool_use_loop_detected') {
+    if (!toolLoop) return i18n.t('session.tail.toolUseLoopDetected');
+    return i18n.t(TOOL_LOOP_I18N_KEYS[toolLoop.kind], { count: toolLoop.count });
+  }
+  if (message.startsWith('provider-rejected-before-dispatch:')) return null;
+  if (isMobileStreamInterruptedError(message, reason)) {
+    return provider
+      ? i18n.t('session.tail.streamInterruptedWithProvider', { provider })
+      : i18n.t('session.tail.streamInterrupted');
+  }
+  if (isMobileOverloadError(message, reason)) {
+    return provider
+      ? i18n.t('session.tail.overloadBusyWithProvider', { provider })
+      : i18n.t('session.tail.overloadBusy');
+  }
+  const upstreamStatus = parseMobileUpstreamStatus(message);
+  if (upstreamStatus) {
+    return provider
+      ? i18n.t('session.tail.upstreamStatusErrorWithProvider', { provider, status: upstreamStatus })
+      : i18n.t('session.tail.upstreamStatusError', { status: upstreamStatus });
+  }
+  if (isAccountUsageLimitReachedText(message) && provider) {
+    return i18n.t('session.tail.usageLimitReachedWithProvider', { provider });
+  }
+  if (
+    !isAccountUsageLimitReachedText(message) &&
+    (providerCtx?.providerId?.trim() || null) !== 'xd' &&
+    isMobileQuotaExhaustedError(message)
+  ) {
+    return provider
+      ? i18n.t('session.tail.providerQuotaExhaustedWithProvider', { provider })
+      : i18n.t('session.tail.providerQuotaExhausted');
+  }
+  return null;
 }
 
 /**
@@ -125,8 +206,10 @@ export function unclassifiedAgentErrorI18nKey(message: string, sessionSource?: u
     : parsed?.code;
   const key = code ? `session.remoteError.${code}` : null;
   if (key && i18n.exists(key)) return key;
-  return isResponsesLiteParallelToolCallsError(message)
-    ? 'session.tail.requestFormatError'
+  if (isResponsesLiteParallelToolCallsError(message)) return 'session.tail.requestFormatError';
+  // The account ran out of its periodic allowance: say so instead of "reply failed".
+  return isAccountUsageLimitReachedText(message)
+    ? 'session.tail.usageLimitReached'
     : 'session.tail.replyFailed';
 }
 

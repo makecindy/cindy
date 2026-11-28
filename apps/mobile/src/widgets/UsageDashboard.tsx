@@ -146,7 +146,9 @@ export function DrawerUsage({ onOpen }: { onOpen(): void }) {
         <View style={s.spark}><HistoryBars snapshot={state.snapshot} small /></View>
       </View>
     </View> : null}
-    {!snapshot ? <Text style={s.meta}>{t('session.menu.usage.quotaUnavailable')}</Text> : null}
+    {!snapshot ? <Text style={s.meta}>
+      {t(state?.kind === 'update-desktop' ? 'devices.usageUpdateDesktop' : 'devices.usageWaiting')}
+    </Text> : null}
   </Pressable>;
 }
 

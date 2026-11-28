@@ -23,7 +23,7 @@ import {
   addGlobalPluginTab,
   findGlobalTabByInstance,
   resetPluginPlacement,
-  tabShowsMainView,
+  tabShowsPluginView,
   type PluginViewKind,
   type PluginViewTabState,
   isPluginWindowPlacement,
@@ -39,17 +39,17 @@ const log = createLogger('rightSidebar.pluginPlacement');
 
 export type PluginOpenTarget = 'page' | 'sidebar' | 'window';
 
-/** 实例当前的页签若承载的就是主视图(整页入口那一份),返回它;承载别的页面(停靠面板)返回 null。 */
-function existingMainViewTab(ghost: InstalledGhost) {
+/** 返回当前实例中承载目标页面的页签。 */
+function existingPluginViewTab(ghost: InstalledGhost, view: PluginViewKind = 'main') {
   const existing = findGlobalTabByInstance(installedGhostStoragePart(ghost));
   if (!existing) return null;
-  return tabShowsMainView(existing.state as PluginViewTabState, ghost) ? existing : null;
+  return tabShowsPluginView(existing.state as PluginViewTabState, ghost, view) ? existing : null;
 }
 
 /** 左侧栏入口点击时的打开目标(不含「已在侧边栏 / 窗口里」的聚焦分支)。 */
 export function resolvePluginOpenTarget(ghost: InstalledGhost): PluginOpenTarget {
   const instanceId = installedGhostStoragePart(ghost);
-  const existing = existingMainViewTab(ghost);
+  const existing = existingPluginViewTab(ghost);
   if (existing) return isTabPoppedOut(existing.id) ? 'window' : 'sidebar';
   if (isPluginWindowPlacement(instanceId)) return 'window';
   const open = ghost.manifest.mainView?.open;
@@ -129,9 +129,9 @@ export async function resetPluginPlacementAndReturn(ghost: InstalledGhost): Prom
   resetPluginPlacement(instanceId, ghost);
 }
 
-/** 已在侧边栏 / 窗口里、且承载的就是主视图的页签:聚焦它。返回 false = 没有(含页签承载别的页面)。 */
-export function focusExistingPluginTab(ghost: InstalledGhost): boolean {
-  const existing = existingMainViewTab(ghost);
+/** 已在侧边栏 / 窗口里、且承载指定页面的页签:聚焦它。返回 false = 没有(含页签承载别的页面)。 */
+export function focusExistingPluginTab(ghost: InstalledGhost, view: PluginViewKind = 'main'): boolean {
+  const existing = existingPluginViewTab(ghost, view);
   if (!existing) return false;
   if (isTabPoppedOut(existing.id)) {
     void window.electronAPI?.sidebarTabWindow?.focus(existing.id).catch(() => undefined);
@@ -170,7 +170,7 @@ export function useSingleInstanceViewGuard(ghost: InstalledGhost | null): void {
       (tab) =>
         (tab.state as PluginViewTabState | null)?.instanceId === instanceId &&
         ghost !== null &&
-        tabShowsMainView(tab.state as PluginViewTabState, ghost),
+        tabShowsPluginView(tab.state as PluginViewTabState, ghost),
     );
     if (settledRef.current !== instanceId) {
       // 刚进整页:页签在别处就收掉。

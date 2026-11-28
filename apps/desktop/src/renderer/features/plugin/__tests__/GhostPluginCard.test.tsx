@@ -7,14 +7,15 @@
  * @vitest-environment jsdom
  */
 
-import { act, fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
     t: (key: string, options?: { name?: string; value?: string }) =>
       (key === 'settings.ghosts.market.detailsAria' ||
-        key === 'settings.ghosts.market.replaceAria') &&
+        key === 'settings.ghosts.market.replaceAria' ||
+        key === 'settings.ghosts.reapproval.actionAria') &&
       options?.name
         ? `${key}:${options.name}`
         : options?.value !== undefined ? `${options.value} ${key}` : key,
@@ -48,6 +49,7 @@ import {
   failPluginInstallProgress,
 } from '../lib/pluginInstallProgress';
 import type { PluginMarketItem } from '../../../../shared/pluginMarket';
+import { PluginPublisherBadge } from '../PluginPublisherBadge';
 
 const {
   InstalledPluginDisclosure,
@@ -375,17 +377,86 @@ describe('GhostPluginCard', () => {
     expect(screen.queryByText(/upToDate/)).toBeNull();
   });
 
-  it('shows an expired OAuth status instead of the up-to-date status', () => {
-    render(
+  it('keeps the expired OAuth status and unread dot on the same row with a reconnect entry', () => {
+    const onManage = vi.fn();
+    const onPrimary = vi.fn();
+    __ingestGhostBadgeForTest(commandPlugin.id, { unread: true, at: 1 });
+    const { container } = render(
       <GhostPluginCard
         item={{ ...commandPlugin, oauthAuthorizationExpired: true }}
-        onPrimary={vi.fn()}
-        onManage={vi.fn()}
+        onPrimary={onPrimary}
+        onManage={onManage}
       />,
     );
 
     expect(screen.getByText('settings.ghosts.page.oauthAuthorizationExpired')).toBeTruthy();
+    expect(unreadDot(container)).toBeTruthy();
     expect(screen.queryByText(/upToDate/)).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'newChat.pluginSetup.account.reconnect' }));
+    expect(onManage).toHaveBeenCalledOnce();
+    expect(onPrimary).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { approvalState: 'invalid', enabled: false },
+    { approvalState: 'legacy-unapproved', enabled: true },
+  ] as const)('offers installation recovery for $approvalState', (approval) => {
+    const onManage = vi.fn();
+    const onReapprove = vi.fn();
+    render(
+      <GhostPluginCard
+        item={{ ...commandPlugin, ...approval }}
+        onManage={onManage}
+        onPrimary={vi.fn()}
+        onReapprove={onReapprove}
+        updateVersion="1.1.0"
+        onUpdate={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText('settings.ghosts.reapproval.badge')).toBeTruthy();
+    expect(screen.queryByText(/disabledTag|manageAction|chatAction|confirmUpdate/)).toBeNull();
+    const action = screen.getByRole('button', { name: 'settings.ghosts.reapproval.actionAria:Filo Google' });
+    expect(action.textContent).toBe('settings.ghosts.reapproval.action');
+    fireEvent.click(action);
+    expect(onReapprove).toHaveBeenCalledOnce();
+    expect(onManage).not.toHaveBeenCalled();
+  });
+
+  it('shows the installation recovery status for a built-in plugin without a reinstall action', () => {
+    render(
+      <GhostPluginCard
+        item={{ ...commandPlugin, builtin: true, approvalState: 'invalid', enabled: false }}
+        onManage={vi.fn()}
+        onPrimary={vi.fn()}
+        onReapprove={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText('settings.ghosts.reapproval.badge')).toBeTruthy();
+    expect(screen.queryByText(/reapproval\.action|disabledTag/)).toBeNull();
+  });
+
+  it('shows both installation recovery and expired authorization in row metadata while keeping reinstall', () => {
+    const onReapprove = vi.fn();
+    render(
+      <GhostPluginCard
+        item={{ ...commandPlugin, approvalState: 'invalid', enabled: false, oauthAuthorizationExpired: true }}
+        onManage={vi.fn()}
+        onPrimary={vi.fn()}
+        onReapprove={onReapprove}
+      />,
+    );
+
+    const row = screen.getByRole('button', { name: 'Filo Google' });
+    const metadata = document.getElementById(row.getAttribute('aria-describedby')!);
+    expect(metadata?.textContent).toMatch(
+      /settings\.ghosts\.reapproval\.badge\s*·\s*settings\.ghosts\.page\.oauthAuthorizationExpired/,
+    );
+    const reinstall = screen.getByRole('button', { name: 'settings.ghosts.reapproval.actionAria:Filo Google' });
+    expect(reinstall.textContent).toBe('settings.ghosts.reapproval.action');
+    fireEvent.click(reinstall);
+    expect(onReapprove).toHaveBeenCalledOnce();
   });
 
   it('blocks the update pill while a market operation is running', () => {
@@ -427,7 +498,8 @@ describe('GhostPluginCard', () => {
     });
     expect(update.getAttribute('aria-busy')).toBe('true');
     expect(update.querySelector('.animate-spinner')).toBeTruthy();
-    expect(update.querySelector('.opacity-0')?.textContent).toContain('settings.ghosts.page.updateTo');
+    expect(update.querySelector('.opacity-0')?.textContent).toBe('settings.ghosts.installConsent.confirmUpdate');
+    expect(update.getAttribute('title')).toBe(update.getAttribute('aria-label'));
     expect((update as HTMLButtonElement).disabled).toBe(true);
   });
 
@@ -500,7 +572,7 @@ describe('GhostPluginCard', () => {
     expect(onPrimary).not.toHaveBeenCalled();
   });
 
-  it('sends a disabled plugin to manage and shows no enable switch on the card', () => {
+  it('shows the disabled status and keeps row activation opening management', () => {
     const onPrimary = vi.fn();
     const onManage = vi.fn();
     render(
@@ -514,10 +586,14 @@ describe('GhostPluginCard', () => {
 
     // 启用开关收进详情页(设计定稿):卡片上不再有 switch。
     expect(screen.queryByRole('switch')).toBeNull();
-    fireEvent.click(screen.getByRole('button', { name: 'Filo Google' }));
+    const row = screen.getByRole('button', { name: 'Filo Google' });
+    expect(row.classList.contains('opacity-60')).toBe(false);
+    expect(screen.getByText('Filo Google').classList.contains('text-[var(--text-secondary)]')).toBe(true);
+    fireEvent.click(row);
     expect(onManage).toHaveBeenCalledTimes(1);
     expect(onPrimary).not.toHaveBeenCalled();
-    expect(screen.getByRole('button', { name: 'settings.ghosts.page.manageAction' })).toBeTruthy();
+    expect(screen.getByText('settings.ghosts.disabledTag')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'settings.ghosts.page.manageAria' })).toBeTruthy();
   });
 
   it('routes projected icon failures to market recovery', () => {
@@ -619,6 +695,26 @@ describe('GhostPluginCard', () => {
 });
 
 describe('MarketPluginCard', () => {
+  it.each([
+    ['public', 'official', 'settings.ghosts.market.publisherKind.official'],
+    ['public', 'personal', 'settings.ghosts.market.publisherKind.community'],
+    ['organization', undefined, 'settings.ghosts.page.origin.organization'],
+    ['custom', undefined, 'settings.ghosts.page.origin.custom'],
+    ['local', undefined, 'settings.ghosts.page.origin.local'],
+  ] as const)('keeps the %s/%s source badge without a hover tooltip', (origin, kind, label) => {
+    vi.useFakeTimers();
+    try {
+      render(<PluginPublisherBadge origin={origin} kind={kind} />);
+      const badge = screen.getByText(label);
+      expect(badge.closest('[title]')).toBeNull();
+      fireEvent.pointerMove(badge, { pointerType: 'mouse' });
+      act(() => vi.advanceTimersByTime(600));
+      expect(screen.queryByRole('tooltip')).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   // Unit: tooltips receive pointer events above the compact card's sibling hit
   // target. A click must still open detail exactly once, without installing.
   it.each([false, true])('opens detail from downloads with compact=%s and keeps installation separate', compact => {
@@ -692,8 +788,7 @@ describe('MarketPluginCard', () => {
       name: 'settings.ghosts.market.detailsAria:Google Calendar',
     });
     expect(details.textContent).toBe('');
-    expect(details.parentElement?.className).toContain('flex-col');
-    expect(details.parentElement?.className).toContain('items-end');
+    expect(details.closest('article')).toBe(screen.getByRole('button', { name: 'Google Calendar' }).closest('article'));
     expect(screen.queryByText('settings.ghosts.market.details')).toBeNull();
     expect(screen.getByRole('button', { name: 'Google Calendar' }).tagName).toBe('BUTTON');
     expect(
@@ -721,14 +816,27 @@ describe('MarketPluginCard', () => {
       name: 'settings.ghosts.market.detailsAria:Google Calendar',
     });
     const install = screen.getByRole('button', { name: 'settings.ghosts.page.installAria' });
-    expect(details.className).toContain('absolute');
-    expect(details.className).toContain('inset-0');
+    expect(details.closest('article')).toBe(install.closest('article'));
 
     fireEvent.click(details);
     expect(onSelect).toHaveBeenCalledTimes(1);
 
     fireEvent.click(install);
     expect(onInstall).toHaveBeenCalledTimes(1);
+    expect(onSelect).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(['installed', 'update-available'] as const)('shows a plain installed status for %s market rows', installState => {
+    const onSelect = vi.fn();
+    render(<MarketPluginCard item={{ ...marketPlugin, installState }} busy={false}
+      onSelect={onSelect} onInstall={vi.fn()} onIconLoadError={vi.fn()} />);
+
+    const row = screen.getByRole('button', { name: 'Google Calendar' });
+    const status = screen.getByText('settings.ghosts.page.installedSection');
+    expect(status.tagName).toBe('SPAN');
+    expect(row.getAttribute('aria-describedby')?.split(' ')).toContain(status.id);
+    expect(screen.getAllByRole('button')).toEqual([row]);
+    fireEvent.click(status);
     expect(onSelect).toHaveBeenCalledTimes(1);
   });
 
@@ -768,31 +876,61 @@ describe('MarketPluginCard', () => {
     ).toBeTruthy();
   });
 
-  it('shows scope, author and downloads without crowding the list with version or machine id', () => {
+  it.each([false, true])('shows one public source, author and downloads on each market card (compact=%s)', (compact) => {
     const { container } = render(
       <MarketPluginCard
+        compact={compact}
         item={{ ...marketPlugin, downloadStatistics: { requestCount: '12480' } }}
         busy={false}
         onSelect={vi.fn()}
         onIconLoadError={vi.fn()}
       />,
     );
-    const metadata = screen.getByText('settings.ghosts.page.origin.public').parentElement;
-    expect(metadata?.textContent).toBe('settings.ghosts.page.origin.public·Cindy·12.4k');
+    expect(screen.getByText('settings.ghosts.market.publisherKind.official')).toBeTruthy();
+    expect(screen.queryByText('settings.ghosts.page.origin.public')).toBeNull();
+    expect(screen.getByText('Cindy')).toBeTruthy();
+    expect(screen.getByRole('group', { name: /settings.ghosts.usage.downloadsValue/ }).textContent).toContain('12.4k');
     expect(screen.queryByText('v1.3.11')).toBeNull();
     expect(screen.queryByText('google-calendar')).toBeNull();
     expect(container.querySelector('button button')).toBeNull();
   });
 
+  // Unit: a sorted row uses the supplied display value even when legacy statistics exist.
+  it('uses server metric labels for sorted rows and hides missing or invalid values', async () => {
+    const item = { ...marketPlugin, downloadStatistics: { requestCount: '12480' }, sortValue: 286849 };
+    const props = { busy: false, onSelect: vi.fn(), onIconLoadError: vi.fn() };
+    const metric = { kind: 'count', label: '近期热度' } as const;
+    const view = render(<MarketPluginCard {...props} item={item} metric={metric} />);
+    const count = screen.getByRole('group', { name: '近期热度 286,849' });
+    expect(count.textContent).toBe('286.8k');
+    expect(screen.getByRole('button', { name: item.name }).getAttribute('aria-describedby')).toBeTruthy();
+    fireEvent.pointerMove(count, { pointerType: 'mouse' });
+    expect((await screen.findByRole('tooltip')).textContent).toBe('近期热度 286,849');
+
+    view.rerender(<MarketPluginCard {...props} item={item} metric={null} />);
+    expect(screen.queryByText('286.8k')).toBeNull();
+    expect(screen.queryByText('12.4k')).toBeNull();
+
+    view.rerender(<MarketPluginCard {...props} item={{ ...item, sortValue: -1 }} metric={metric} />);
+    expect(screen.queryByRole('group', { name: /近期热度/ })).toBeNull();
+    expect(screen.queryByText('12.4k')).toBeNull();
+
+    view.rerender(<MarketPluginCard {...props} item={item} />);
+    expect(screen.getByText('12.4k')).toBeTruthy();
+  });
+
   it('keeps shared downloads in installed cards alongside exceptional authorization status', () => {
-    render(<GhostPluginCard
+    const { container } = render(<GhostPluginCard
       item={{ ...commandPlugin, oauthAuthorizationExpired: true }}
       author="Cindy"
       sourceLabel="Public"
       marketItem={{ ...marketPlugin, downloadStatistics: { requestCount: '0' } }}
       onPrimary={vi.fn()} onManage={vi.fn()}
     />);
-    expect(screen.getByRole('group', { name: '0 settings.ghosts.usage.downloadsValue' }).textContent).toBe('0');
+    for (const selector of ['.plugin-installed-wide-metrics', '.plugin-installed-narrow-metrics']) {
+      const metrics = container.querySelector<HTMLElement>(selector)!;
+      expect(within(metrics).getByRole('group', { name: '0 settings.ghosts.usage.downloadsValue' }).textContent).toBe('0');
+    }
     expect(screen.getByText('settings.ghosts.page.oauthAuthorizationExpired')).toBeTruthy();
     expect(screen.queryByText('v1.0.0')).toBeNull();
   });

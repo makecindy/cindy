@@ -2,6 +2,7 @@
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { actualSourceIdForModel } from '@cindy/model-providers/registry';
 import {
   CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2,
   PROVIDER_SHARE_RECEIVED_CATALOGS_CHANNEL,
@@ -11,7 +12,8 @@ import { i18n } from '@/i18n';
 import { clearAllDeviceProviders } from '@/device-link/deviceProvidersCache';
 import { clearAllProviderShareCatalogs } from '@/device-link/providerShareCatalogCache';
 import type { RemoteAgentCatalog } from '@/session/remoteAgentCatalogs';
-import { useRemoteAgentCatalogs } from '@/session/useRemoteAgentCatalogs';
+import { useRemoteAgentCatalogsWithStatus } from '@/session/useRemoteAgentCatalogs';
+import { blockedSessionModelAtSend, taskModelCatalogRoutes } from '@/session/sessionModelAtSend';
 
 const provider = (id: string, name: string) => ({
   id,
@@ -29,6 +31,7 @@ const link = vi.hoisted(() => ({
   readDeviceList: vi.fn(),
   connectionEpoch: 1,
   rosterVersion: 0,
+  recoveringDeviceIds: new Set<string>(),
   providerShareCatalogVersions: {} as Record<string, number>,
   status: 'online' as const,
   presenceVersion: 1,
@@ -37,6 +40,7 @@ const link = vi.hoisted(() => ({
 
 vi.mock('@/device-link/DeviceLinkContext', () => ({ useDeviceLink: () => link }));
 vi.mock('@/auth/AuthContext', () => ({ useAuth: () => ({ accountGeneration: 1 }) }));
+vi.mock('react-native', () => ({ AppState: { currentState: 'active', addEventListener: () => ({ remove() {} }) } }));
 
 const device = (deviceId: string, name: string) => ({
   deviceId,
@@ -65,13 +69,18 @@ const receivedShare = {
 let root: Root;
 let host: HTMLDivElement;
 let latest: RemoteAgentCatalog[] = [];
+let retainedCatalog: ReturnType<typeof useRemoteAgentCatalogsWithStatus>['retainedCatalog'];
+let pendingCatalog: ReturnType<typeof useRemoteAgentCatalogsWithStatus>['pendingCatalog'];
 
-function Probe(props: Parameters<typeof useRemoteAgentCatalogs>[0]) {
-  latest = useRemoteAgentCatalogs(props);
+function Probe(props: Parameters<typeof useRemoteAgentCatalogsWithStatus>[0]) {
+  const result = useRemoteAgentCatalogsWithStatus(props);
+  latest = result.catalogs;
+  retainedCatalog = result.retainedCatalog;
+  pendingCatalog = result.pendingCatalog;
   return null;
 }
 
-async function render(props: Parameters<typeof useRemoteAgentCatalogs>[0]) {
+async function render(props: Parameters<typeof useRemoteAgentCatalogsWithStatus>[0]) {
   await act(async () => {
     root.render(<Probe {...props} />);
   });
@@ -85,8 +94,11 @@ beforeEach(async () => {
   clearAllDeviceProviders();
   clearAllProviderShareCatalogs();
   latest = [];
+  retainedCatalog = undefined;
+  pendingCatalog = undefined;
   link.presenceVersion = 1;
   link.rosterVersion = 0;
+  link.recoveringDeviceIds.clear();
   link.providerShareCatalogVersions = {};
   link.getPresenceAvailability.mockImplementation(() => null);
   link.readDeviceList.mockResolvedValue({ devices: [device('controlled', 'Home Mac'), device('studio', 'Studio Mac')] });
@@ -109,6 +121,71 @@ afterEach(async () => {
 });
 
 describe('remote Agent catalogs with provider shares', () => {
+  // #11693: the stored model can belong to a different execution computer. The controlled
+  // computer's recovery must never suppress or restart that model's read (unit, real hook).
+  it('resumes the retained model on the execution computer while the controlled computer is recovering', async () => {
+    const route = { agent: 'claude-code' as const, providerId: 'off', modelId: 'off-model' };
+    const props = { enabled: true, controlledDeviceId: 'controlled', keepDeviceIds: ['studio'], keepOnly: true,
+      retainedModel: { deviceId: 'studio', route } };
+    link.recoveringDeviceIds.add('studio');
+    link.invoke.mockResolvedValueOnce({ providers: [], deferredProviderIds: ['off'] })
+      .mockResolvedValueOnce({ providers: [{ ...provider('off', 'Bound source'), suspended: true }] });
+    await render(props);
+    expect(latest[0].status).toBe('loading');
+    expect(link.invoke).toHaveBeenCalledTimes(1);
+    link.recoveringDeviceIds.delete('studio');
+    link.recoveringDeviceIds.add('controlled');
+    await render(props);
+    expect(link.invoke).toHaveBeenNthCalledWith(2, 'studio', 'maker:provider:list', [expect.objectContaining({ retainedModel: route })]);
+    expect(latest[0]).toMatchObject({ deviceId: 'studio', status: 'ready',
+      providers: [{ id: 'off', models: { 'claude-code': [{ id: 'off-model' }] } }] });
+  });
+
+  // #11693, unit: the raw catalog can offer the saved model via OpenAI even when the
+  // execution computer does not share it. Exercise both the picker and the pre-send check.
+  it.each([
+    { enabled: false, ids: ['saved'], expected: 'off' },
+    { enabled: true, ids: ['other'], expected: 'off' },
+    { enabled: true, ids: ['saved'], expected: 'openai' },
+  ])('restores an implicit remote source with OpenAI sharing $enabled and models $ids', async ({ enabled, ids, expected }) => {
+    const session = { agentKind: 'codex' as const, model: 'saved', providerId: null, agentDeviceId: 'studio' };
+    const { running } = taskModelCatalogRoutes(session, 'controlled');
+    const source = (id: string) => ({ ...provider(id, id), agents: ['codex'],
+      models: { codex: [{ id: 'saved', name: 'Saved', contextWindow: 200_000, efforts: [] }] }, routing: { codex: {} } });
+    let finish!: (reply: unknown) => void;
+    link.invoke.mockImplementation(async (_device, _channel, args) => {
+      if (args[0]?.retainedModel) return new Promise(resolve => { finish = resolve; });
+      return { providers: [{ ...source('openai'), remoteInvocationEnabled: enabled, remoteModelIds: ids }], deferredProviderIds: ['off'] };
+    });
+    await render({ enabled: true, controlledDeviceId: 'controlled', keepOnly: true, keepDeviceIds: ['studio'], retainedModel: running });
+    expect(link.invoke).toHaveBeenCalledTimes(expected === 'off' ? 2 : 1);
+    if (expected === 'off') {
+      expect(link.invoke).toHaveBeenLastCalledWith('studio', 'maker:provider:list', [expect.objectContaining({ retainedModel: running!.route })]);
+      expect(blockedSessionModelAtSend(session, 'controlled')?.reason).toBe('checking');
+      await act(async () => finish({ providers: [{ ...source('off'), suspended: true }] }));
+    }
+    expect(latest[0].status).toBe('ready');
+    expect(actualSourceIdForModel(latest[0].providers, null, 'saved', 'codex')).toBe(expected);
+    expect(blockedSessionModelAtSend(session, 'controlled', retainedCatalog)).toBeUndefined();
+  });
+
+  it('reads the pending switch on its execution computer and keeps the hidden result with that route', async () => {
+    const session = { agentKind: 'pi' as const, model: 'running', providerId: 'local',
+      agentSwitchIntent: { targetAgentKind: 'claude-code' as const, model: 'next', providerId: 'off', agentDeviceId: 'studio' } };
+    const { pending } = taskModelCatalogRoutes(session, 'controlled');
+    let finish!: (value: unknown) => void;
+    link.invoke.mockResolvedValueOnce({ providers: [], deferredProviderIds: ['off'] })
+      .mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    await render({ controlledDeviceId: 'controlled', enabled: true, keepOnly: true, keepDeviceIds: ['studio'], pendingModel: pending });
+    expect(link.invoke).toHaveBeenCalledTimes(2);
+    expect(link.invoke).toHaveBeenNthCalledWith(2, 'studio', 'maker:provider:list', [expect.objectContaining({ retainedModel: pending!.route })]);
+    expect(blockedSessionModelAtSend(session, 'controlled', pendingCatalog)?.reason).toBe('checking');
+    await act(async () => finish({ providers: [], modelVisibilityOverrides: { 'claude-code:off:next': false } }));
+    expect(latest[0].status).toBe('ready');
+    expect(blockedSessionModelAtSend(session, 'controlled', pendingCatalog)).toEqual({ ...pending!.route, reason: 'hidden' });
+    expect(blockedSessionModelAtSend({ ...session, agentSwitchIntent: null }, 'controlled', pendingCatalog)).toBeUndefined();
+  });
+
   it('clears same-account device rows on a roster invalidation but keeps share catalogs', async () => {
     const props = { enabled: true, controlledDeviceId: 'controlled', keepDeviceIds: [] };
     await render(props);
@@ -170,6 +247,50 @@ describe('remote Agent catalogs with provider shares', () => {
     expect(link.invoke.mock.calls.filter(([deviceId, channel]) =>
       deviceId === 'controlled' && channel === PROVIDER_SHARE_RECEIVED_CATALOGS_CHANNEL).length)
       .toBeGreaterThan(before);
+    expect(latest.map((catalog) => catalog.deviceId)).not.toContain('share:share-1');
+    expect(latest.map((catalog) => catalog.deviceId)).toContain('studio');
+  });
+
+  /**
+   * 测试价值
+   * - 生产入口与可观察结果：useRemoteAgentCatalogs 收到受控 host 的分享清单变化 push 后，模型选择器里的分享行。
+   * - Bug/规则依据：Android 实测(2026-11-23)分享者电脑上线/离线时，push 先清空显示、约 2 秒后重读才回来，
+   *   分享一会儿有一会儿无；用户裁决「保留并标注」。
+   * - 现有覆盖缺口：上一条只看重读完成后的结果，不看重读期间与重读失败时显示什么。
+   * - 最小失败输入：version 0→1 且重读未返回 → 分享行仍在；重读返回离线 → 标「暂时离线」；再次 push 且重读失败 → 不再留旧行。
+   * - tier：unit（jsdom + mock DeviceLinkContext）。
+   */
+  it('keeps the shown share through a change push until the re-read answers, and drops it if that read fails', async () => {
+    const props = { enabled: true, controlledDeviceId: 'controlled', keepDeviceIds: [] };
+    await render(props);
+    expect(latest.map((catalog) => catalog.deviceId)).toContain('share:share-1');
+
+    let answer: (value: unknown) => void = () => undefined;
+    link.invoke.mockImplementation(async (deviceId: string, channel: string) => {
+      if (channel === 'maker:provider:list' && deviceId === 'studio') {
+        return { providers: [provider('studio-provider', 'Studio Provider')] };
+      }
+      if (channel === PROVIDER_SHARE_RECEIVED_CATALOGS_CHANNEL && deviceId === 'controlled') {
+        return new Promise((resolve) => { answer = resolve; });
+      }
+      throw new Error(`unexpected ${deviceId} ${channel}`);
+    });
+    link.providerShareCatalogVersions = { controlled: 1 };
+    await render(props);
+    expect(latest.map((catalog) => catalog.deviceId)).toContain('share:share-1');
+
+    await act(async () => answer({ shares: [{ ...receivedShare, hostOnline: false, catalog: null }] }));
+    for (let i = 0; i < 5; i++) await act(async () => { await Promise.resolve(); });
+    expect(latest.find((catalog) => catalog.deviceId === 'share:share-1')?.name).toBe('来自 Magi 的分享 · 暂时离线');
+
+    link.invoke.mockImplementation(async (deviceId: string, channel: string) => {
+      if (channel === 'maker:provider:list' && deviceId === 'studio') {
+        return { providers: [provider('studio-provider', 'Studio Provider')] };
+      }
+      throw new Error('DEVICE_LINK_TIMEOUT');
+    });
+    link.providerShareCatalogVersions = { controlled: 2 };
+    await render(props);
     expect(latest.map((catalog) => catalog.deviceId)).not.toContain('share:share-1');
     expect(latest.map((catalog) => catalog.deviceId)).toContain('studio');
   });

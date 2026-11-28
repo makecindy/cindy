@@ -33,6 +33,31 @@ it.each([
 // Unit: new optional locator contract and the same bounded history reader used by
 // Desktop and Mobile group/Thread disclosures. Verify observable content boundaries.
 describe('group process record', () => {
+  // #8635 unit: both clients read raw DB history without renderer-derived flags.
+  // Existing pagination/privacy cases had no hidden user between stage notes.
+  // Minimal failure: one unflagged hidden user followed by a commentary note.
+  it.each([
+    '[UI_ACTION_TRIGGER] Continue.',
+    JSON.stringify({ text: '[UI_ACTION_TRIGGER] Continue.', images: [], files: [] }),
+    { text: '[UI_ACTION_TRIGGER] Continue.', images: [], files: [] },
+  ])('keeps process notes across an unflagged hidden user: %j', async content => {
+    const source = row(ref.clientId, 'user', 'Request');
+    const hidden = row('hidden', 'user', content);
+    const rows = [source, progress('first', 'Checking'), hidden, progress('after', 'Found the cause'),
+      row('next', 'user', JSON.stringify({ text: 'Next request', files: [] })), progress('other', 'Other turn')];
+    expect(await readBotGroupProcessNotes(ref, async () => rows, () => false))
+      .toEqual([{ id: 'first', text: 'Checking' }, { id: 'after', text: 'Found the cause' }]);
+  });
+  it('keeps metadata-only triggers but preserves the completed-turn boundary and failed-attempt filtering', async () => {
+    const source = row(ref.clientId, 'user', 'Request');
+    const hidden = row('hidden', 'user', '', { isSyntheticTrigger: true });
+    const rows = [source, hidden, progress('first', 'Checking'),
+      row('failed', 'assistant', 'Failed attempt', { failedSamplingAttempt: true, turnCompleted: true }),
+      progress('after', 'Recovered'), row('final', 'assistant', 'Answer', { turnCompleted: true }),
+      row('late-hidden', 'user', '[UI_ACTION_TRIGGER] Continue.'), progress('other', 'Another turn')];
+    expect(await readBotGroupProcessNotes(ref, async () => rows, () => false))
+      .toEqual([{ id: 'first', text: 'Checking' }, { id: 'after', text: 'Recovered' }]);
+  });
   it('posts a locator only; unsupported revisions are left to existing card fallback', () => {
     const card = botGroupProcessCard(ref);
     expect(readBotGroupProcessCard(card)).toEqual(ref);

@@ -24,8 +24,8 @@ describe('TodoListCard flyout interaction', () => {
     render(<TodoListCard todos={TODOS} animated={false} />);
 
     const trigger = screen.getByRole('button', { name: 'Step 1 / 2' });
-    expect(trigger.classList.contains('py-[6px]')).toBe(true);
-    expect(trigger.classList.contains('py-[8px]')).toBe(false);
+    expect(trigger.classList.contains('py-1.5')).toBe(true);
+    expect(trigger.classList.contains('py-2')).toBe(false);
   });
 
   it('shrinks to the plan pill width when it shares the centered row', () => {

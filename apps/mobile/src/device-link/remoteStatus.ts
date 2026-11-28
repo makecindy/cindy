@@ -1,3 +1,4 @@
+import { remoteInputRefusal } from '@cindy/device-link';
 import {
   formatRemoteError as formatRemoteErrorShared,
   isDeviceUnresponsiveRemoteError,
@@ -7,6 +8,7 @@ import type { DeviceLinkConnectionIssue, DeviceLinkConnectionIssueKind, DeviceLi
 import type { LocalNetworkStatus } from '@/device-link/localNetworkStatus';
 import { getActiveSelfHostedRelay } from '@/device-link/selfHostedRelayRouting';
 import { i18n } from '@/i18n';
+import { isExpoAndroidDnsFailure } from '@/api/expoAndroidDnsFailure';
 import { parseAgentErrorCode } from '@cindy/maker-shared/error-redaction';
 
 export {
@@ -180,6 +182,16 @@ export function humanizeRemoteError(error: unknown): string {
 }
 
 /**
+ * Refusals emitted before input acceptance. Keep transport failures and
+ * post-handler authorization failures in receipt reconciliation.
+ */
+export function describeOutboxEnqueueRefusal(error: unknown): string | undefined {
+  const reason = remoteInputRefusal(formatRemoteErrorShared(error));
+  if (reason === 'other') return humanizeRemoteError(error);
+  return reason ? i18n.t(`session.outbox.${reason}`) : undefined;
+}
+
+/**
  * 连接恢复中的错误不会转成用户手动处理的失败态。
  *
  * DEVICE_UNRESPONSIVE 在通用 retry helper 里故意归为 permanent（避免熔断 open
@@ -229,6 +241,8 @@ export function describeRemoteError(error: string | null): string | null {
 }
 
 function localizedStableRemoteError(error: string): string | null {
+  const binaryNotReady = describeAgentBinaryNotReadyError(error);
+  if (binaryNotReady) return binaryNotReady;
   const simpleMarkers: Array<[string, string]> = [
     ['MODEL_VISIBILITY_NOT_READY', 'transient'],
     ['REMOTE_DISABLED', 'remoteDisabled'],
@@ -249,12 +263,30 @@ function localizedStableRemoteError(error: string): string | null {
     if (error.includes('OFFER_EXPIRED')) return i18n.t('deviceLink.remoteError.offerExpired');
     return i18n.t('deviceLink.remoteError.preconditionFailed');
   }
-  if (isTransientRemoteError(error)) return i18n.t('deviceLink.remoteError.transient');
+  if (isExpoAndroidDnsFailure(error) || isTransientRemoteError(error)) {
+    return i18n.t('deviceLink.remoteError.transient');
+  }
   if (/(^|\[|\s)NOT_FOUND(\]|\s|:|$)/.test(error)) return i18n.t('deviceLink.remoteError.notFound');
   if (error.includes('BAD_REQUEST') || error.includes('INTERNAL')) {
     return i18n.t('deviceLink.remoteError.callFailed', { error });
   }
   return null;
+}
+
+function describeAgentBinaryNotReadyError(error: string): string | null {
+  return /^(?:\[IPC_ERROR\]\s*)?\[PRECONDITION_FAILED\]\s*binary_not_ready:/.test(error)
+    ? i18n.t('deviceLink.agentAuth.engineMissing')
+    : null;
+}
+
+export type NewSessionError = string | { creationError: string };
+
+/** Render both immediate and recovered task creation failures in the current language. */
+export function describeNewSessionError(error: NewSessionError): string {
+  const recovered = typeof error !== 'string';
+  const raw = recovered ? error.creationError : error;
+  const message = describeAgentAuthError(raw) ?? describeAgentBinaryNotReadyError(raw) ?? raw;
+  return recovered ? i18n.t('session.screen.createFailedNotice', { message }) : message;
 }
 
 /**

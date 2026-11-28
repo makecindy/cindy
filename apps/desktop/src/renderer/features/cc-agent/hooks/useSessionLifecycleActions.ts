@@ -45,8 +45,17 @@ import {
   isRemoteSessionActivityActive,
 } from '@/features/device-link/remoteSessionActivityStore';
 import { createLogger } from '@/lib/logger';
+import {
+  deleteBoundSchedules,
+  type ActiveBoundSchedule,
+} from '@/features/scheduler/lib/archiveScheduleWarning';
+import {
+  normalizeTaskArchiveConfirmation,
+  type TaskArchiveConfirmation,
+} from './useConfirmTaskArchive';
 import type { ListStatusFilter } from '@/lib/sessionService';
 import type { Session, SessionStatus } from '@/lib/ccAgent.types';
+import type { SessionDeleteTarget } from '@cindy/maker-shared/device-link-contract';
 
 const log = createLogger('useSessionLifecycleActions');
 
@@ -63,10 +72,13 @@ function setStatusInOrder(
   status: SessionStatus,
   target: Awaited<ReturnType<typeof sessionService.resolveStatusWriteTarget>>,
   discardWorktreeChanges?: true,
+  deleteTarget?: SessionDeleteTarget,
 ): Promise<Session> {
-  const write = () => discardWorktreeChanges
-    ? sessionService.setStatus(sessionId, status, target, true)
-    : sessionService.setStatus(sessionId, status, target);
+  const write = () => deleteTarget
+    ? sessionService.setStatus(sessionId, status, target, undefined, deleteTarget)
+    : discardWorktreeChanges
+      ? sessionService.setStatus(sessionId, status, target, true)
+      : sessionService.setStatus(sessionId, status, target);
   if (target.kind !== 'device-link') return write();
   const previous = remoteStatusWrites.get(sessionId);
   const next = previous ? previous.then(write, write) : write();
@@ -80,7 +92,7 @@ function setStatusInOrder(
 
 export interface RunSessionActionOptions {
   /** 归档预检与确认。远程任务先乐观换桶，未获确认不写入、不清理或跳离详情。 */
-  prepareArchive?: (isCurrent: () => boolean) => Promise<boolean | 'discard'>;
+  prepareArchive?: (isCurrent: () => boolean) => Promise<TaskArchiveConfirmation>;
   /** 当前活跃会话 id —— 决定 archive / delete 后是否需要跳走。 */
   activeSessionId: string | null | undefined;
   /**
@@ -88,6 +100,7 @@ export interface RunSessionActionOptions {
    * "下一条 / 上一条 / 新建"；没有列表上下文的入口继续回落到 /cc-agent。
    */
   deleteRedirectRoute?: string | null;
+  deleteTarget?: SessionDeleteTarget;
 }
 
 export function useSessionLifecycleActions(options?: { includeArchived?: ListStatusFilter }) {
@@ -145,7 +158,7 @@ export function useSessionLifecycleActions(options?: { includeArchived?: ListSta
     async (
       sessionId: string,
       action: 'delete' | 'archive',
-      { activeSessionId, deleteRedirectRoute, prepareArchive }: RunSessionActionOptions,
+      { activeSessionId, deleteRedirectRoute, prepareArchive, deleteTarget }: RunSessionActionOptions,
     ) => {
       const actionStartedAt = performance.now();
       const targetStatus: SessionStatus = action === 'delete' ? 'deleted' : 'archived';
@@ -160,20 +173,24 @@ export function useSessionLifecycleActions(options?: { includeArchived?: ListSta
       // sessions:patched 回流。
       let remoteStatus: RemotePendingStatusToken | null = null;
       let discardWorktreeChanges: true | undefined;
+      let schedulesToDelete: readonly ActiveBoundSchedule[] = [];
 
       if (action === 'archive' && prepareArchive) {
         if (isDeviceLinkSession) {
           remoteStatus = beginRemoteArchive(sessionId, statusWriteTarget.deviceId, null);
         }
         try {
-          const confirmed = await prepareArchive(
-            () => !remoteStatus || remoteProjectsStore.isPendingStatusCurrent(remoteStatus),
+          const confirmation = normalizeTaskArchiveConfirmation(
+            await prepareArchive(
+              () => !remoteStatus || remoteProjectsStore.isPendingStatusCurrent(remoteStatus),
+            ),
           );
-          if (!confirmed || archiveBlockedByRunning(sessionId, deviceId)) {
+          if (!confirmation.confirmed || archiveBlockedByRunning(sessionId, deviceId)) {
             if (remoteStatus) remoteProjectsStore.rollbackPendingStatus(remoteStatus);
             return;
           }
-          if (confirmed === 'discard') discardWorktreeChanges = true;
+          if (confirmation.discardWorktreeChanges) discardWorktreeChanges = true;
+          schedulesToDelete = confirmation.deleteSchedules;
           // 恢复、删除或设备移除已经取代了本次意图时，迟到预检不能再发归档。
           if (remoteStatus && !remoteProjectsStore.isPendingStatusCurrent(remoteStatus)) return;
         } catch (err) {
@@ -225,6 +242,7 @@ export function useSessionLifecycleActions(options?: { includeArchived?: ListSta
           {
             status: 'archived',
             pinnedAt: null,
+            archivedAt: new Date().toISOString(),
           },
           (begin) => {
             // A previous local status write can keep us waiting after the check above.
@@ -253,7 +271,7 @@ export function useSessionLifecycleActions(options?: { includeArchived?: ListSta
       try {
         // setStatus 按来源路由(远程走隧道 set-status,本机走原 update);archive 时
         // handler 内部一并 unpin —— 归档列表里不该再保留 pin 标记。
-        persisted = await setStatusInOrder(sessionId, targetStatus, statusWriteTarget, discardWorktreeChanges);
+        persisted = await setStatusInOrder(sessionId, targetStatus, statusWriteTarget, discardWorktreeChanges, deleteTarget);
         statusWriteFinishedAt = performance.now();
         if (statusTransition) {
           sessionsStore.completeStatusTransition(statusTransition, persisted);
@@ -305,6 +323,19 @@ export function useSessionLifecycleActions(options?: { includeArchived?: ListSta
         // localStorage,删 session 时一起清掉,避免僵尸数据堆积。
         cleanupSessionLayoutPrefs(sessionId);
       }
+      if (action === 'archive' && schedulesToDelete.length > 0) {
+        // 仅在归档写库确认成功后才删除关联自动化，避免归档被拦截或失败时误删自动化。
+        const { failed } = await deleteBoundSchedules(schedulesToDelete);
+        if (failed.length > 0) {
+          log.warn('[session archive] failed to delete linked automations', {
+            sessionId,
+            failedIds: failed.map((item) => item.id),
+          });
+          toast.error(
+            t('ccAgent.sidebar.confirmArchive.deleteScheduleFailed', { count: failed.length }),
+          );
+        }
+      }
       if (action === 'archive') {
         const finishedAt = performance.now();
         log.info('archive timing', {
@@ -355,7 +386,7 @@ export function useSessionLifecycleActions(options?: { includeArchived?: ListSta
       const isDeviceLinkSession = statusWriteTarget.kind === 'device-link';
       const statusTransition = isDeviceLinkSession
         ? null
-        : await sessionsStore.beginStatusTransitionWhenReady(sessionId, { status: 'active' });
+        : await sessionsStore.beginStatusTransitionWhenReady(sessionId, { status: 'active', archivedAt: null });
       if (!isDeviceLinkSession && !statusTransition) return;
       const remoteStatus = isDeviceLinkSession
         ? remoteProjectsStore.beginPendingStatus(statusWriteTarget.deviceId, sessionId, 'active')

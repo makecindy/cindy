@@ -117,6 +117,8 @@ export interface MailCardData {
   fromLabel: string;
   continueLabel?: string;
   deleteLabel?: string;
+  addQuoteLabel?: string;
+  cancelLabel?: string;
   supersededBy?: string;
   pendingSend?: { deadline: number; label: string; cancelLabel: string; sendNowLabel: string };
 }
@@ -136,6 +138,7 @@ export function parseMailCard(value: unknown): MailCardData | null {
       !Array.isArray(p.attachments) || p.attachments.length > 100 ||
       p.attachments.some(a => typeof a !== 'string' || a.length > 1024) ||
       (p.continueLabel !== undefined && (typeof p.continueLabel !== 'string' || p.continueLabel.length > 128)) ||
+      (p.addQuoteLabel !== undefined && (typeof p.addQuoteLabel !== 'string' || p.addQuoteLabel.length > 128)) ||
       (p.deleteLabel !== undefined && (typeof p.deleteLabel !== 'string' || p.deleteLabel.length > 128)) ||
       (p.supersededBy !== undefined && (typeof p.supersededBy !== 'string' || p.supersededBy.length > 128))) return null;
   const pending = p.pendingSend as MailCardData['pendingSend'];
@@ -144,13 +147,17 @@ export function parseMailCard(value: unknown): MailCardData | null {
   if (pending !== undefined && (!pending || p.state !== 'sending' ||
       !Number.isSafeInteger(pending.deadline) || pending.deadline <= 0 ||
       [pending.label, pending.cancelLabel, pending.sendNowLabel].some(v => typeof v !== 'string' || !v || v.length > 128))) return null;
+  if (p.cancelLabel !== undefined && (p.state !== 'sending' || pending !== undefined ||
+      typeof p.cancelLabel !== 'string' || !p.cancelLabel || p.cancelLabel.length > 128)) return null;
   return { accountId: p.accountId as string, draftId: p.draftId as string, key: p.key as string,
     from: p.from as string, fields, attachments: p.attachments as string[], state: p.state as MailCardData['state'],
     ...(baseValues ? { baseValues } : {}),
     status: p.status as string, sendLabel: p.sendLabel as string, fromLabel: p.fromLabel as string,
     ...(images ? { images: images.map(i => ({ cid: i.cid, url: i.url })) } : {}),
     ...(p.continueLabel ? { continueLabel: p.continueLabel as string } : {}),
+    ...(p.addQuoteLabel ? { addQuoteLabel: p.addQuoteLabel as string } : {}),
     ...(p.deleteLabel ? { deleteLabel: p.deleteLabel as string } : {}),
+    ...(p.cancelLabel ? { cancelLabel: p.cancelLabel as string } : {}),
     ...(pending ? { pendingSend: { deadline: pending.deadline, label: pending.label, cancelLabel: pending.cancelLabel, sendNowLabel: pending.sendNowLabel } } : {}),
     ...(p.supersededBy ? { supersededBy: p.supersededBy as string } : {}) };
 }
@@ -225,13 +232,17 @@ export function releaseGhostCardFormDelivery(scope: string, key: string): void {
 }
 export function pendingGhostCardFormDelivery(
   scope: string,
+  excludeKey?: string,
 ): Promise<boolean> | undefined {
   const entries = deliveries.get(scope);
   if (!entries?.size) return undefined;
-  const snapshot = [...entries.values()];
+  const snapshot = excludeKey
+    ? [...entries].filter(([key]) => key !== excludeKey).map(([, delivery]) => delivery)
+    : [...entries.values()];
+  if (!snapshot.length) return undefined;
   return Promise.all(snapshot).then(async (results) => {
     if (results.some((ok) => !ok)) return false;
-    return (await pendingGhostCardFormDelivery(scope)) ?? true;
+    return (await pendingGhostCardFormDelivery(scope, excludeKey)) ?? true;
   });
 }
 export function parseGhostCardForm(

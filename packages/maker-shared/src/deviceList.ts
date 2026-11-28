@@ -275,3 +275,24 @@ function formatLastSeen(iso: string | null, now: number, localizer?: Presentatio
   const date = presentationDate(localizer, new Date(ts));
   return presentationText(localizer, 'devices.presentation.deviceList.lastSeen.onDate', `上次在线 ${date}`, { date });
 }
+
+/** The authenticated Model Access response supplies the public Console origin for this realm. */
+export function cloudComputerEntry(value: unknown, membershipId: string, organizationId: string) {
+  if (!value || typeof value !== 'object') return null;
+  const row = value as Record<string, unknown>;
+  if (row.enabled !== true || row.membershipId !== membershipId || row.organizationId !== organizationId || typeof row.url !== 'string') return null;
+  let url: URL;
+  try { url = new URL(row.url); } catch { return null; }
+  if (url.protocol !== 'https:' || url.username || url.password || url.search || url.hash ||
+      !url.pathname.endsWith('/console/orgs/' + encodeURIComponent(organizationId) + '/personal/cloud')) return null;
+  if (row.computer === null) return {url:url.href, action:'addCloud' as const};
+  if (!row.computer || typeof row.computer !== 'object' || !('status' in row.computer)) return null;
+  const add = row.canAdd === true ? {canAdd:true as const} : {};
+  switch (row.computer.status) {
+    case 'awaiting_delivery': case 'queued': case 'creating': case 'awaiting_device':
+      return {...add,url:url.href, action:'preparingCloud' as const};
+    case 'blocked': case 'linked': case 'deleting': case 'reinstalling':
+      return {...add,url:url.href, action:'manageCloud' as const};
+    default: return null;
+  }
+}

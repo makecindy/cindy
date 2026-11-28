@@ -1,7 +1,16 @@
 // @vitest-environment jsdom
 import { beforeEach, describe, expect, it } from 'vitest';
 
-import { readCollapsedTeammateAvatars, writeCollapsedTeammateAvatars, readTeammatesViewMode, writeTeammatesViewMode, readTeammatesSectionCollapsed, writeTeammatesSectionCollapsed } from '../teammatesSectionPrefs';
+import {
+  readCollapsedTeammateAvatars,
+  readHiddenRemoteBotKeys,
+  readTeammatesSectionCollapsed,
+  readTeammatesViewMode,
+  writeCollapsedTeammateAvatars,
+  writeHiddenRemoteBotKeys,
+  writeTeammatesSectionCollapsed,
+  writeTeammatesViewMode,
+} from '../teammatesSectionPrefs';
 
 beforeEach(() => localStorage.clear());
 
@@ -53,4 +62,21 @@ it('defaults collapsed avatars off and stores the explicit choice independently 
   expect(readCollapsedTeammateAvatars('owner-a')).toBe(false);
   writeCollapsedTeammateAvatars(null, true);
   expect(readCollapsedTeammateAvatars(null)).toBe(false);
+});
+
+// Issue #13461 (unit): hidden remote companion keys must persist per account, deduplicate,
+// ignore null owners, and recover from malformed stored JSON.
+it('stores hidden remote companion keys per account and tolerates malformed storage', () => {
+  expect(readHiddenRemoteBotKeys('owner-a')).toEqual([]);
+  writeHiddenRemoteBotKeys('owner-a', ['mac-1:bot-a', 'mac-1:bot-a', '', 'mac-2:bot-b']);
+  expect(readHiddenRemoteBotKeys('owner-a')).toEqual(['mac-1:bot-a', 'mac-2:bot-b']);
+  expect(readHiddenRemoteBotKeys('owner-b')).toEqual([]);
+
+  writeHiddenRemoteBotKeys(null, ['mac-1:bot-a']);
+  expect(readHiddenRemoteBotKeys(null)).toEqual([]);
+
+  localStorage.setItem('sidebar.hiddenRemoteBots.v1.owner.owner-b', '{bad json');
+  expect(readHiddenRemoteBotKeys('owner-b')).toEqual([]);
+  localStorage.setItem('sidebar.hiddenRemoteBots.v1.owner.owner-b', JSON.stringify({ not: 'array' }));
+  expect(readHiddenRemoteBotKeys('owner-b')).toEqual([]);
 });

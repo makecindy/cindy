@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import type { AgentKind, CatalogModel, ProviderView } from '@cindy/model-providers';
 
-import { resolveNewMakerDefaultTuple, isKnownProductDefaultTupleIdentity } from '@/lib/newMakerDefaultTuple';
+import { resolveNewMakerDefaultTuple, isKnownProductDefaultTupleIdentity, resolveSilentSwitchDraftTuple } from '@/lib/newMakerDefaultTuple';
 
 function model(
   id: string,
@@ -288,6 +288,41 @@ describe('resolveNewMakerDefaultTuple', () => {
       },
     });
     expect(resolve([gateway])).toBeNull();
+  });
+
+  // docs/dev-rules/protocol-compatibility/model-access-silent-switch.md: a catalog entry marked
+  // silentSwitch names the only engine for Auto (XD pilot members: Codex). Before this rule the
+  // case above returned null and new tasks had no default. Only the Cindy AI catalog's flagged
+  // entry may move the default; the engine must be installed here.
+  it('Cindy Auto 被目录静默指定给 Codex 时直接用 Codex，模型仍是 auto', () => {
+    const silentAuto = { ...model('auto', 'high', undefined, ['text', 'image']), silentSwitch: true as const };
+    const gateway = provider({ id: 'xd', access: 'managed', models: { codex: [silentAuto] } });
+    expect(resolve([gateway])).toBeNull(); // Codex runtime not enabled on this source.
+    gateway.routing = { codex: { upstream: 'https://provider.invalid', authStrategy: 'none' } };
+    expect(resolve([gateway])).toEqual({ vendor: 'codex', providerId: 'xd', model: 'auto', effort: 'high' });
+    expect(resolve([gateway], new Set(['cc', 'pi']))).toBeNull();
+    // Subscriptions keep their priority; another catalog's flag does not move the default.
+    const openai = provider({ id: 'openai', access: 'subscription', models: { codex: [model('gpt-6.2-sol')] } });
+    expect(resolve([gateway, openai])).toMatchObject({ providerId: 'openai', model: 'gpt-6.2-sol' });
+    const pool = { ...provider({ id: 'org-pool', access: 'managed', models: { codex: [{ ...silentAuto, id: 'auto/group-1' }] } }),
+      source: 'organization' as const, routing: gateway.routing };
+    expect(resolve([pool])).toBeNull();
+  });
+
+  it('草稿记着 Pi + auto 时按目录的静默指定换到 Codex；没有标记或 Codex 不可用时不换', () => {
+    const silentAuto = { ...model('auto', 'medium'), silentSwitch: true as const };
+    const gateway = provider({ id: 'xd', access: 'managed', models: { pi: [], codex: [silentAuto] } });
+    const route = { upstream: 'https://provider.invalid', authStrategy: 'none' } as const;
+    gateway.routing = { pi: route, codex: route };
+    const draft = (providers: ProviderView[], availableAgents: ReadonlySet<'cc' | 'codex' | 'pi'> = allAgents) =>
+      resolveSilentSwitchDraftTuple({ providers, providersLoading: false, availableAgents, availableAgentsLoaded: true,
+        vendor: 'pi', model: 'auto', providerId: 'xd' });
+    expect(draft([gateway])).toEqual({ vendor: 'codex', providerId: 'xd', model: 'auto', effort: 'medium' });
+    expect(draft([gateway], new Set(['pi']))).toBeNull();
+    const unflagged = { ...gateway, models: { pi: [], codex: [model('auto', 'medium')] } };
+    expect(draft([unflagged])).toBeNull();
+    // The flagged engine's route must still be usable (here: its runtime is turned off).
+    expect(draft([{ ...gateway, routing: { ...gateway.routing, codex: { ...gateway.routing.codex!, disabled: true } } }])).toBeNull();
   });
 
   it('Cindy Auto 沿用实际下发的输入能力，不靠图片字段决定默认身份', () => {
