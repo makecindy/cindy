@@ -41,7 +41,11 @@ struct UsageProvider<Configuration: UsageWidgetConfiguration>: AppIntentTimeline
 
 private func openAppURL() -> URL? {
   guard let scheme = Bundle.main.object(forInfoDictionaryKey: "CindyURLScheme") as? String else { return nil }
+  #if os(iOS)
+  return URL(string: "\(scheme)://usage")
+  #else
   return URL(string: "\(scheme)://")
+  #endif
 }
 
 /// The Mac desktop has no lock screen accessories.
