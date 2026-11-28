@@ -23821,7 +23821,15 @@
       "exceptionImage": "訊中有圖，唯於能觀圖之源中擇",
       "exceptionImageFallback": "訊中有圖，然無能觀圖之源，照常擇之",
       "exceptionHours": "此時段改行「{{name}}」",
-      "separator": "；"
+      "separator": "；",
+      "usageHabit": "循平素所用之慣，先擇此源",
+      "usageHabitQuota": "循平素所用之慣，先擇此源（尚餘 {{left}}%）",
+      "autoBalance": "他源限額偏緊或正繁忙，故先以此分擔",
+      "autoBalanceQuota": "權衡餘量與負載，先擇此源（尚餘 {{left}}%）",
+      "lessBusy": "他源方有事務在行，先用此閒源",
+      "paygFallback": "訂閱與共享皆暫不可用，暫以按量之源兜底",
+      "paygReserve": "按量計費之源，待他源皆不可用再啟",
+      "standbyQuotaNeutral": "限額尚餘 {{left}}%，{{reset}} 重設，今次未輪及"
     },
     "settings": {
       "autoSwitch": {

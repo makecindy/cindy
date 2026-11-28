@@ -23821,7 +23821,15 @@
       "exceptionImage": "メッセージに画像があるため、画像を扱えるソースの中から選択",
       "exceptionImageFallback": "メッセージに画像がありますが、画像を扱えるソースがないため通常どおり選択",
       "exceptionHours": "この時間帯は「{{name}}」を使用",
-      "separator": "、"
+      "separator": "、",
+      "usageHabit": "普段の利用傾向から優先して選択",
+      "usageHabitQuota": "普段の利用傾向から優先して選択（残り {{left}}%）",
+      "autoBalance": "他のソースの余裕が少ないため負荷分散で選択",
+      "autoBalanceQuota": "クォータの余裕と負荷を考慮して優先（残り {{left}}%）",
+      "lessBusy": "他のソースが実行中のため空いているこちらを先に使用",
+      "paygFallback": "サブスクリプションや共有ソースが使えないため従量課金へフォールバック",
+      "paygReserve": "従量課金ソース（他のソースが使えないときの予備）",
+      "standbyQuotaNeutral": "残り {{left}}%、{{reset}} にリセット予定（今回は見送り）"
     },
     "settings": {
       "autoSwitch": {
