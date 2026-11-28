@@ -84,6 +84,7 @@ describe('/cindy-make-doctor command', () => {
       name: 'cindy-make-doctor',
       kind: 'desktop',
       description: 'Check local tools',
+      meta: 'Cindy',
     });
     const result = await registry.execute('cindy-make-doctor', {
       senderWebContentsId: 1,

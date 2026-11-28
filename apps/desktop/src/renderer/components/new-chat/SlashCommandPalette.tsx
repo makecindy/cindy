@@ -73,7 +73,7 @@ interface SlashCommandPaletteProps {
 }
 
 /** 右侧小标签文案 —— skill 显示 source(user/skill), agent-builtin 显示 'agent-cmd'
- * (避免和"agent 本身"混淆), desktop 不打标签(内置默认)。 */
+ * (避免和"agent 本身"混淆), desktop 保留注册表的 Cindy 或插件自己的来源。 */
 function metaLabel(cmd: UnifiedCommand): string | null {
   if (cmd.kind === 'agent-skill') return cmd.source; // 'user' | 'skill'
   if (cmd.kind === 'agent-builtin') return 'agent-cmd';
