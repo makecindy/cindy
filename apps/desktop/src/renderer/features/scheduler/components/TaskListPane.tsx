@@ -18,6 +18,7 @@ import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { normalizeWorkingDir } from '@/features/cc-agent/lib/projectGrouping';
 import { useProjectLabel } from '../hooks/useProjectLabel';
+import type { ScheduleSidebarIndexRun } from '../lib/scheduleSidebarIndexRuns';
 import type { Schedule, SchedulerRuntimeSnapshot } from '@cindy/maker-scheduler';
 
 import { TaskListCell } from './TaskListCell';
@@ -31,6 +32,7 @@ interface Props {
   schedules: Schedule[];
   selectedId: string | null;
   unreadRunCounts: ReadonlyMap<string, number>;
+  unrecoveredFailures: ReadonlyMap<string, ScheduleSidebarIndexRun>;
   onSelect: (s: Schedule) => void;
   /** 当前 status 筛选值；默认 'active'。 */
   statusFilter: StatusFilter;
@@ -76,6 +78,7 @@ export function TaskListPane({
   schedules,
   selectedId,
   unreadRunCounts,
+  unrecoveredFailures,
   onSelect,
   statusFilter,
   onStatusFilterChange,
@@ -291,6 +294,7 @@ export function TaskListPane({
                         schedule={s}
                         selected={s.id === selectedId}
                         unreadCount={unreadRunCounts.get(s.id) ?? 0}
+                        failureStatus={unrecoveredFailures.get(s.id)?.status}
                         onSelect={onSelect}
                         onTogglePause={onTogglePause}
                         onDelete={s.source === 'project' ? undefined : onDelete}

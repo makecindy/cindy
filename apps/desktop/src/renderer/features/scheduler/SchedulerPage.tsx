@@ -50,7 +50,7 @@ import { useHorizontalResize } from '@/hooks/useHorizontalResize';
 
 import { useSchedules } from './hooks/useSchedules';
 import { useDeleteScheduleWithSessions } from './hooks/useDeleteScheduleWithSessions';
-import { useScheduleUnreadRunCounts } from './hooks/useScheduleUnreadRunCounts';
+import { useScheduleRunSummary } from './hooks/useScheduleRunSummary';
 import { useRunNowBusyGuard } from './hooks/useRunNowBusyGuard';
 import { ScheduleFormDialog } from './components/ScheduleFormDialog';
 import { TemplateGallery } from './components/TemplateGallery';
@@ -299,7 +299,7 @@ export function SchedulerPage() {
     () => sorted.find((s) => s.id === selectedId) ?? null,
     [sorted, selectedId],
   );
-  const unreadRunCounts = useScheduleUnreadRunCounts(sorted);
+  const { unreadRunCounts, unrecoveredFailures } = useScheduleRunSummary(sorted);
 
   // 仅用户在 TaskListFilterPopover 主动切换时持久化;focus 同步 / 新建任务的
   // 程序性 setStatusFilter 不写入,避免覆盖用户偏好(详见 statusFilterStorage)。
@@ -727,6 +727,7 @@ export function SchedulerPage() {
               schedules={sorted}
               selectedId={selectedId}
               unreadRunCounts={unreadRunCounts}
+              unrecoveredFailures={unrecoveredFailures}
               onSelect={(s) => setSelectedId(s.id)}
               statusFilter={statusFilter}
               onStatusFilterChange={handleStatusFilterChange}

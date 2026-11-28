@@ -749,6 +749,96 @@ describe('DrizzleScheduleStorage (in-memory)', () => {
     }
   });
 
+  // #10941, DB tier: route rejection can precede session creation. The list
+  // still needs the most recent unresolved failure once the user reads it.
+  it('keeps a read sessionless failure in the index until the automation succeeds', async () => {
+    const harness = createStorageHarness();
+    const scheduleId = 'sch-sessionless-failure';
+    try {
+      await harness.storage.insert(baseSchedule({ id: scheduleId, source: 'project' }));
+      await harness.storage.insertRun({
+        id: 'old-failure', scheduleId, status: 'failed', firedAt: 10, readAt: 11,
+      });
+      await harness.storage.insertRun({
+        id: 'latest-failure', scheduleId, status: 'failed', firedAt: 20, readAt: 21,
+        errorMsg: 'schedule route unavailable (explicit-source-unavailable)',
+      });
+      await harness.storage.insertRun({
+        id: 'skipped', scheduleId, status: 'skipped', firedAt: 30,
+      });
+      expect(await harness.storage.listSidebarIndexRuns()).toEqual([
+        expect.objectContaining({ runId: 'latest-failure', readAt: 21, failureRecovered: false }),
+      ]);
+
+      await harness.storage.insertRun({
+        id: 'recovered', scheduleId, status: 'success', firedAt: 40, readAt: 41,
+      });
+      expect(await harness.storage.listSidebarIndexRuns()).toEqual([]);
+    } finally {
+      harness.close();
+    }
+  });
+
+  // #10941 follow-up, DB tier: the per-session sidebar map is insufficient when
+  // two enabled automations share a session and neither failure is unread.
+  it('retains read failures for both enabled automations sharing a session', async () => {
+    const harness = createStorageHarness();
+    try {
+      harness.db.run(sql`INSERT INTO sessions (id, title) VALUES ('shared-session', 'Shared')`);
+      for (const [id, firedAt] of [['automation-a', 10], ['automation-b', 20]] as const) {
+        await harness.storage.insert(baseSchedule({ id, targetSessionId: 'shared-session' }));
+        await harness.storage.insertRun({
+          id: `${id}-failure`, scheduleId: id, sessionId: 'shared-session',
+          status: 'failed', firedAt, readAt: 30,
+        });
+      }
+      const runs = await harness.storage.listSidebarIndexRuns();
+      expect(runs).toEqual([
+        expect.objectContaining({ runId: 'automation-a-failure', sessionId: undefined }),
+        expect.objectContaining({ runId: 'automation-b-failure', sessionId: 'shared-session' }),
+      ]);
+    } finally {
+      harness.close();
+    }
+  });
+
+  // #10941 follow-up, DB tier: after a successful skip the index can reject
+  // precheck failures in one pass. Count real JSON evaluations, not wall time.
+  it('does not rescan recovered precheck history for each read failure', async () => {
+    const harness = createStorageHarness();
+    const nativeJson = new Database(':memory:');
+    try {
+      const scheduleId = 'read-precheck-history';
+      await harness.storage.insert(baseSchedule({ id: scheduleId }));
+      const insert = harness.sqlite.prepare(`INSERT INTO schedule_runs
+        (id, schedule_id, fired_at, status, read_at, pre_run_hook_result) VALUES (?, ?, ?, ?, ?, ?)`);
+      const count = 128;
+      harness.sqlite.transaction(() => {
+        for (let i = 1; i <= count; i += 1) {
+          insert.run(`failed-${i}`, scheduleId, i, 'failed', i, '{"decision":"block"}');
+        }
+        insert.run('passed-skip', scheduleId, count + 1, 'skipped', count + 1, '{"checkSucceeded":true}');
+      })();
+      const jsonValid = nativeJson.prepare<[string | null], { valid: number }>('SELECT json_valid(?) AS valid');
+      let evaluations = 0;
+      harness.sqlite.function('json_valid', { deterministic: true }, (value: string | null) => {
+        evaluations += 1;
+        return jsonValid.get(value)!.valid;
+      });
+      expect(await harness.storage.listSidebarIndexRuns()).toEqual([]);
+      expect(evaluations).toBeLessThan(count * 4);
+      await harness.storage.insertRun({
+        id: 'execution-failure', scheduleId, status: 'failed', firedAt: 0, readAt: count + 2,
+      });
+      expect(await harness.storage.listSidebarIndexRuns()).toEqual([
+        expect.objectContaining({ runId: 'execution-failure', failureKind: 'execution' }),
+      ]);
+    } finally {
+      nativeJson.close();
+      harness.close();
+    }
+  });
+
   it('caps unread terminal runs so the sidebar index stays bounded', async () => {
     const harness = createStorageHarness();
     try {
@@ -2378,6 +2468,10 @@ it('excludes internal routine rows in SQLite before materializing the public sid
     for (let i = 0; i < 128; i++) {
       await harness.storage.insertRun({ id: `routine-unread-${i}`, scheduleId: 'routine-owned', sessionId: 'routine-owned', firedAt: i + 4, status: 'success' });
     }
+    await harness.storage.insertRun({
+      id: 'routine-sessionless-failed', scheduleId: 'routine-owned', firedAt: 132,
+      status: 'failed', readAt: 133,
+    });
     queries.length = 0;
     const runs = await harness.storage.listSidebarIndexRuns();
     expect(new Set(runs.map((run) => run.scheduleId))).toEqual(new Set(['public', 'legacy']));
@@ -2386,12 +2480,12 @@ it('excludes internal routine rows in SQLite before materializing the public sid
     const indexQueries = queries.filter(({ query }) =>
       query.startsWith('select "schedule_runs"."id", "schedules"."id",'),
     );
-    expect(indexQueries).toHaveLength(4);
+    expect(indexQueries).toHaveLength(5);
     for (const { query, params } of indexQueries) {
       const rows = harness.sqlite.prepare(query).all(...params) as { source: string | null }[];
       expect(rows.every((row) => row.source !== 'bot')).toBe(true);
     }
-    expect(await harness.storage.listRuns('routine-owned', 131)).toHaveLength(131);
+    expect(await harness.storage.listRuns('routine-owned', 132)).toHaveLength(132);
   } finally {
     harness.close();
   }

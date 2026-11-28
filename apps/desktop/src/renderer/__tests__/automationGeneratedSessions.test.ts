@@ -1148,7 +1148,7 @@ describe('automation-generated sessions', () => {
       new URL('../features/scheduler/components/RunHistoryCard.tsx', import.meta.url),
       'utf8',
     );
-    expect(schedulerPageSource).toContain('useScheduleUnreadRunCounts(sorted)');
+    expect(schedulerPageSource).toContain('useScheduleRunSummary(sorted)');
     expect(taskListPaneSource).toContain('unreadRunCounts.get(s.id) ?? 0');
     expect(taskListCellSource).toContain('<AttentionDot');
     expect(schedulerPageSource).not.toContain('markScheduleRunsRead(selectedId)');
@@ -1162,7 +1162,7 @@ describe('automation-generated sessions', () => {
       'utf8',
     );
     const unreadCountsHookSource = readTextLf(
-      new URL('../features/scheduler/hooks/useScheduleUnreadRunCounts.ts', import.meta.url),
+      new URL('../features/scheduler/hooks/useScheduleRunSummary.ts', import.meta.url),
       'utf8',
     );
     const storageSource = readTextLf(
