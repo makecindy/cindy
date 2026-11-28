@@ -186,6 +186,8 @@ export type MobileModelPickerSource = { remote: UnifiedMobileRemoteOptions | und
 export type UnifiedMobilePickerOptions = UnifiedMobilePickerBaseOptions & MobileModelPickerSource;
 
 export interface UnifiedMobilePickerBaseOptions {
+  /** Keep local candidate effort in this opening until the companion route is selected. */
+  draftCandidateEffort?: boolean;
   /** Request-owned edits, including favorites, never change persisted preferences. */
   preferenceScope?: 'request';
   /** Editing a selected row can update a draft without submitting the selection. */
@@ -413,6 +415,9 @@ export function UnifiedModelPickerSheet(
   const [remoteConfigs, setRemoteConfigs] = useState<
     ReadonlyMap<string, MobileModelConfiguration>
   >(new Map());
+  const [candidateEfforts, setCandidateEfforts] = useState<
+    ReadonlyMap<string, Pick<MobileModelConfiguration, 'agent' | 'effort'>>
+  >(new Map());
   // 打开时 Agent 在另一台电脑:目录读到后停在那台电脑的当前供应商上(用户先手动换过就不再跳)。
   const initialRemoteFilter = useRef(false);
   // 用户这次打开后自己点过来源:归组的任务读回来得晚,也不再把列表挪到组那一项。
@@ -478,6 +483,7 @@ export function UnifiedModelPickerSheet(
     setPluginTarget(null);
     setPluginEfforts(new Map());
     setRemoteConfigs(new Map());
+    setCandidateEfforts(new Map());
     setFavoriteEdit(null);
     setPluginFavoriteEdit(null);
     setNotice(null);
@@ -827,18 +833,30 @@ export function UnifiedModelPickerSheet(
   ): UnifiedMobileRow => {
     const provider = displayProviders.find((item) => item.id === entry.providerId);
     const routed = isMobileSourceRouteProviderId(entry.providerId);
-    const selected =
+    const selectedModel =
       entry.providerId === sourceId && matchesEntry(entry, p.activeModelId);
-    const config = resolveMobileModelConfig(entry, {
+    const selected = !favorite && selectedModel && !otherChoiceActive;
+    const modelIdentity = modelKey(entry.providerId, entry.modelId);
+    const draft = !favorite && !selected ? candidateEfforts.get(modelIdentity) : undefined;
+    const draftAgent = draft && caps[draft.agent] && entry.capabilities[draft.agent]
+      ? draft.agent
+      : undefined;
+    const resolved = resolveMobileModelConfig(entry, {
       favorite,
-      live: !favorite && selected ? selection : undefined,
+      live: !favorite && selectedModel && (!draftAgent || draftAgent === selection.agent)
+        ? selection
+        : undefined,
       pinned: p.existingSessionRoute ? p.agentKind : undefined,
-      override: prefs.value.engines[modelKey(entry.providerId, entry.modelId)],
+      override: draftAgent ?? prefs.value.engines[modelIdentity],
       memory: p.modelMemory,
       fastCapable,
     });
+    const config = draft && draftAgent === resolved.agent &&
+      entry.capabilities[resolved.agent]?.efforts.some(effort => effort === draft.effort)
+      ? { ...resolved, effort: draft.effort }
+      : resolved;
     return {
-      key: favorite?.uid ?? modelKey(entry.providerId, entry.modelId),
+      key: favorite?.uid ?? modelIdentity,
       entry,
       config,
       favorite,
@@ -850,7 +868,7 @@ export function UnifiedModelPickerSheet(
         customIcon: provider?.customIcon,
         ...(routed ? { routed: true } : {}),
       },
-      selected: !favorite && selected && !otherChoiceActive,
+      selected,
       disabled:
         !caps[config.agent] ||
         budgetRowDisabled(
@@ -1678,6 +1696,29 @@ export function UnifiedModelPickerSheet(
       return;
     }
     const remoteDevice = row.remoteDevice;
+    const previousConfig =
+      row.favorite && sameConfiguration(row.config, live)
+        ? live
+        : row.selected
+          ? selection
+          : undefined;
+    if (
+      !reset && p.unified.draftCandidateEffort && !remoteDevice && !previousConfig &&
+      sameConfiguration(row.config, { ...config, effort: row.config.effort })
+    ) {
+      if (lock.current || p.disabled || !prefs.ready) return;
+      const key = modelKey(row.entry.providerId, row.entry.modelId);
+      setCandidateEfforts(current => {
+        const next = new Map(current);
+        next.set(key, { agent: config.agent, effort: config.effort });
+        return next;
+      });
+      if (target?.config) {
+        setTarget({ ...target, config });
+        setNotice(t(favoriteToRemove ? "models.unified.originalFavoriteKept" : "models.unified.parametersSaved"));
+      }
+      return;
+    }
     if (remoteDevice) {
       // 正在用的那行直接生效。effort / Fast 记在这台远程电脑自己的记忆里,
       // 不写被控电脑的引擎偏好或本机模型记忆。引擎调整仍只留在这次打开期间。
@@ -1742,12 +1783,6 @@ export function UnifiedModelPickerSheet(
       return routed ? configure(...routed) : configure(next);
     };
     void transact(async (isCurrent) => {
-      const previousConfig =
-        row.favorite && sameConfiguration(row.config, live)
-          ? live
-          : row.selected
-            ? selection
-            : undefined;
       if (previousConfig && !(await apply(config))) return;
       // Selection can await remote work or a confirmation. Do not begin another
       // write for a panel that closed or changed its binding while waiting.
@@ -1797,6 +1832,13 @@ export function UnifiedModelPickerSheet(
           );
         }
         if (!isCurrent()) return;
+        if ((reset || config.agent !== row.config.agent) && candidateEfforts.has(key)) {
+          setCandidateEfforts(current => {
+            const next = new Map(current);
+            next.delete(key);
+            return next;
+          });
+        }
         if (target?.config) setTarget({ ...target, config });
         setNotice(
           t(
