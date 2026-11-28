@@ -2187,6 +2187,7 @@ describe('AcpAgent (the acp engine)', () => {
             servers: [
               { name: 'cindy', url: 'http://127.0.0.1:1/mcp/cindy' },
               { name: 'cindy_helper', url: 'http://127.0.0.1:1/mcp/cindy_helper' },
+              { name: 'cindy_orca', url: 'http://127.0.0.1:1/mcp/cindy_orca' },
             ],
           },
           takeMcpToolResult: (query) => bucket.take(query),
@@ -2267,6 +2268,30 @@ describe('AcpAgent (the acp engine)', () => {
       isError: false,
     });
 
+    // The existing prefixed cases don't cover droid's unprefixed model name:
+    // a friendly title plus cindy___ghost_call must yield both the card identity
+    // and the matching Host receipt when ACP omits output (ACP harness §4).
+    agent.update({
+      sessionUpdate: 'tool_call',
+      toolCallId: 'call-triple',
+      name: 'cindy___ghost_call',
+      title: 'Open a Factory card',
+      rawInput: { ghost_id: 'fixture', tool: 'card' },
+    });
+    agent.update({ sessionUpdate: 'tool_call', toolCallId: 'call-unmounted', name: 'foo___bar', title: 'Run another tool' });
+    agent.update({ sessionUpdate: 'tool_call', toolCallId: 'call-orca', name: 'cindy_orca___start_team', title: 'Start a team' });
+    const tripleJson = '{"ok":true,"xdt_card_id":"triple-card"}';
+    bucket.record({
+      serverName: 'cindy',
+      toolName: 'ghost_call',
+      input: { ghost_id: 'fixture', tool: 'card' },
+      fullText: tripleJson,
+      isError: false,
+    });
+    for (const toolCallId of ['call-triple', 'call-unmounted', 'call-orca']) {
+      agent.update({ sessionUpdate: 'tool_call_update', toolCallId, status: 'completed' });
+    }
+
     // Finish search before pr_card, both with empty ACP content/rawOutput.
     agent.update({ sessionUpdate: 'tool_call_update', toolCallId: 'call-search', status: 'completed' });
     agent.update({ sessionUpdate: 'tool_call_update', toolCallId: 'call-pr', status: 'completed' });
@@ -2293,10 +2318,17 @@ describe('AcpAgent (the acp engine)', () => {
     );
 
     // Simultaneous mounted-gateway cards are matched by machine identity, not the friendly title.
-    expect(events.filter((e) => e.type === 'tool_use').map((e) => e.data)).toEqual(expect.arrayContaining([
+    const toolUses = events.filter((e) => e.type === 'tool_use').map((e) => e.data as AcpRecord);
+    expect(toolUses).toEqual(expect.arrayContaining([
+      expect.objectContaining({ toolUseId: 'call-triple', mcpToolName: 'mcp:cindy:ghost_call', toolName: 'Open a Factory card' }),
+      expect.objectContaining({ toolUseId: 'call-orca', mcpToolName: 'mcp:cindy_orca:start_team', toolName: 'Start a team' }),
       expect.objectContaining({ toolUseId: 'call-pr', mcpToolName: 'mcp:cindy:ghost_call', toolName: 'Open pull request' }),
       expect.objectContaining({ toolUseId: 'call-search', mcpToolName: 'mcp:cindy:ghost_call', toolName: 'Search documents' }),
     ]));
+    const unmounted = toolUses.find((event) => event.toolUseId === 'call-unmounted');
+    expect(unmounted).toMatchObject({ toolName: 'Run another tool' });
+    expect(unmounted).not.toHaveProperty('mcpToolName');
+    expect(fullById.get('call-triple')).toEqual({ toolUseId: 'call-triple', fullText: tripleJson, isError: false });
     expect(fullById.get('call-pr')).toEqual({ toolUseId: 'call-pr', fullText: prCardJson, isError: false });
     expect(fullById.get('call-search')).toEqual({ toolUseId: 'call-search', fullText: searchJson, isError: false });
     expect(fullById.get('call-err')).toEqual({ toolUseId: 'call-err', fullText: errJson, isError: true });
@@ -2370,6 +2402,12 @@ describe('AcpAgent (the acp engine)', () => {
       serverName: 'cindy_helper',
       toolName: 'call_tool',
     });
+
+    expect(parseAcpMcpToolName('cindy___orca___start_team', ['cindy', 'cindy___orca'])).toEqual({
+      serverName: 'cindy___orca',
+      toolName: 'start_team',
+    });
+    expect(parseAcpMcpToolName('cindy___ghost_call')).toBeNull();
 
     const bucket = createMcpToolResultBucket();
     const cardText = '{"ok":true,"xdt_card_id":"remote-card-1"}';
