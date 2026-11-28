@@ -21,10 +21,11 @@ export default {
     assert.equal(await page.getByText('PRIVATE_AUTHOR', { exact: true }).count(), 0);
     if (ui.case.startsWith('detail-loading')) {
       await page.getByRole('heading', { level: 1, name: 'ntfy' }).waitFor();
-      assert.equal(await page.locator('.plugin-detail-primary-action').isDisabled(), true);
+      assert.equal(await page.locator('.plugin-detail-identity-actions > button').isDisabled(), true);
     } else if (ui.case === 'market-detail') {
       await page.getByText(await ui.t('settings.ghosts.market.communityDisclaimer'), { exact: true }).waitFor();
     } else if (ui.case === 'local-detail') {
+      await page.getByText(await ui.t('settings.ghosts.detail.infoTitle'), { exact: true }).click();
       await page.getByText(await ui.t('settings.ghosts.market.publisherDescription.local'), { exact: true }).waitFor();
     } else {
       const recommendations = page.locator('main > section').first();

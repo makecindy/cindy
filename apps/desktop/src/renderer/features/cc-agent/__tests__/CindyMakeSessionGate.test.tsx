@@ -5,12 +5,18 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { CindyMakeSessionGate } from '../CindyMakeSessionGate';
 import { SessionRouteOriginGate } from '../SessionRouteOriginGate';
 import { sideChatTaskRoute } from '../../right-sidebar/plugins/side-chat/state';
+import { __resetStickySessionOriginForTest } from '../../device-link/stickySessionOrigin';
 import { StrictMode, useEffect } from 'react';
 
+vi.mock('@/lib/sessionService', async (original) => ({
+  ...await original<typeof import('@/lib/sessionService')>(),
+  resolveReferences: async ([sessionId]: string[]) => [{ sessionId, state: 'missing' }],
+}));
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
 
 const state = vi.hoisted(() => ({
   remote: [] as Array<{ id: string; source: string; model?: string; workingDir?: string }>,
+  localPreviewId: null as string | null,
   localSource: undefined as string | null | undefined,
   getSession: vi.fn(),
   previewId: null as string | null,
@@ -27,7 +33,7 @@ vi.mock('@/features/device-link/remoteProjectsStore', () => ({
   pinSessionOrigin: (device: string, id: string) => { state.origins.set(id, device); },
   getDeviceSessions: () => state.remote,
   getDeviceName: () => 'Host',
-  mergeDeviceSessions: (_device: string, _name: string, rows: typeof state.remote) => { state.remote = rows; },
+  addSessionDetail: (_device: string, row: (typeof state.remote)[number]) => { state.remote = [row]; },
   captureSessionRead: () => Object.assign(() => state.readCurrent, { mergeActivity: (value: unknown) => value }),
 } }));
 vi.mock('@/lib/sessionsStore', () => ({ sessionsStore: {
@@ -35,16 +41,19 @@ vi.mock('@/lib/sessionsStore', () => ({ sessionsStore: {
     state.localListeners.add(listener);
     return () => { state.localListeners.delete(listener); };
   },
+  getCreationPreview: (id: string) => id === state.localPreviewId ? {} : undefined,
   findById: () => state.localSource !== undefined ? { source: state.localSource } : null,
 } }));
-vi.mock('@/lib/makerTransport', () => ({ getSessionFor: state.getSession }));
+vi.mock('@/lib/makerTransport', () => ({ getSessionFor: state.getSession, getSessionOnDevice: state.getSession }));
 afterEach(cleanup);
 beforeEach(() => {
   state.remote = [];
   state.previewId = null;
+  state.localPreviewId = null;
   state.localSource = undefined;
   state.getSession.mockReset().mockResolvedValue(null);
   state.origins.clear();
+  __resetStickySessionOriginForTest();
   state.readCurrent = true;
 });
 
@@ -52,6 +61,23 @@ it('opens a legacy cached task with null source instead of waiting forever', () 
   state.localSource = null;
   render(<MemoryRouter><CindyMakeSessionGate sessionId="legacy"><div>Legacy task</div></CindyMakeSessionGate></MemoryRouter>);
   expect(screen.getByText('Legacy task')).toBeTruthy();
+  expect(state.getSession).not.toHaveBeenCalled();
+});
+
+// Unit, #12799: neither the provisional id nor the hidden child is listed.
+// Losing the composer on either transition would interrupt active input.
+it('keeps the same composer from the side-chat preview through snapshot retirement', () => {
+  const view = (id: string, snapshotId?: string) => <MemoryRouter>
+    <CindyMakeSessionGate sessionId={id} sessionSnapshot={snapshotId ? { id: snapshotId, source: 'side-chat' } : null}>
+      <input aria-label="Side chat composer" />
+    </CindyMakeSessionGate>
+  </MemoryRouter>;
+  const ui = render(view('side-chat-pending:1', 'side-chat-pending:1'));
+  const composer = screen.getByRole('textbox', { name: 'Side chat composer' });
+  ui.rerender(view('child', 'child'));
+  expect(screen.getByRole('textbox')).toBe(composer);
+  ui.rerender(view('child'));
+  expect(screen.getByRole('textbox')).toBe(composer);
   expect(state.getSession).not.toHaveBeenCalled();
 });
 
@@ -74,8 +100,9 @@ describe('remote task route origin', () => {
 
   // Unit: the pending task's host row doesn't exist yet. Rendering the real
   // route must show its composer without an existence lookup or an error.
-  it('opens an optimistic new task before its host row arrives', async () => {
-    state.previewId = 'child';
+  it.each(['local', 'remote'])('opens a %s new task before its host row arrives', async origin => {
+    if (origin === 'local') state.localPreviewId = 'child';
+    else state.previewId = 'child';
     await act(async () => { mountRoute('/cc-agent/child'); });
     expect(screen.getByText('Remote composer')).toBeTruthy();
     expect(state.getSession).not.toHaveBeenCalled();
@@ -91,8 +118,8 @@ describe('remote task route origin', () => {
 
   it('recovers a hidden task from only the URL after losing all renderer origins', async () => {
     const route = sideChatTaskRoute('child', 'host/encoded');
-    state.getSession.mockImplementation(async (id: string) => {
-      if (state.origins.get(id) !== 'host/encoded') throw new Error('Local task not found');
+    state.getSession.mockImplementation(async (id: string, device: string) => {
+      if (device !== 'host/encoded' || state.origins.has(id)) throw new Error('Local task not found');
       return { id, source: 'side-chat', model: 'model', workingDir: '/host/work' };
     });
     // Remount with the original URL and fresh memory, without a disk/list row.
@@ -102,7 +129,7 @@ describe('remote task route origin', () => {
       const ui = mountRoute(route);
       await act(async () => {});
       expect(screen.getByText('Remote composer')).toBeTruthy();
-      expect(state.getSession).toHaveBeenCalledWith('child');
+      expect(state.getSession).toHaveBeenCalledWith('child', 'host/encoded');
       expect(state.remote).toEqual([{ id: 'child', source: 'side-chat', model: 'model', workingDir: '/host/work' }]);
       ui.unmount();
     }
@@ -115,6 +142,7 @@ describe('remote task route origin', () => {
     });
     await act(async () => { mountRoute(sideChatTaskRoute('child', 'host')); });
     expect(screen.getByRole('alert')).toBeTruthy();
+    expect(state.origins.has('child')).toBe(false);
     fireEvent.click(screen.getByText('ccAgent.sessionEntry.back'));
     expect(screen.getByText('Task list')).toBeTruthy();
     expect(screen.queryByText('Remote composer')).toBeNull();

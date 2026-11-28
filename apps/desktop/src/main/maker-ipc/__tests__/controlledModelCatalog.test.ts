@@ -3,7 +3,7 @@ import { CONTROLLED_SOURCE_READ_TIMEOUT_MS, createControlledModelCatalogReader, 
 import { isDeviceUnresponsiveRemoteError, isTransientRemoteError } from '@cindy/maker-shared/device-link-contract';
 import { REMOTE_AGENT_INVOKE_TIMEOUT_MS } from '@cindy/device-link';
 import { invokeModelCatalog } from '../../../renderer/lib/invokeModelCatalog';
-import { modelCatalogKey } from '../../../shared/controlledModelCatalog';
+import { CONTROLLED_MODEL_CATALOG_RETRY_SHARE, modelCatalogKey } from '../../../shared/controlledModelCatalog';
 import { extractIpcError } from '../../../shared/ipcError';
 
 // #8010, unit: real reader must use B's sources (including A and B-only shares),
@@ -17,14 +17,38 @@ function fixture() {
   const invoke = vi.fn<ControlledModelCatalogDeps['invoke']>().mockResolvedValue({ ok: true, result: { providers: [{ id: 'a-provider' }] } });
   const assertOwner = vi.fn();
   const assertCaller = vi.fn();
-  return { locations, invoke, assertOwner, assertCaller,
-    read: createControlledModelCatalogReader({ locations, invoke, assertCaller, captureOwner: () => assertOwner }) };
+  const retryShareDirectory = vi.fn<ControlledModelCatalogDeps['retryShareDirectory']>(async () => ({ receivedChangeSequence: 4 }));
+  return { locations, invoke, assertOwner, assertCaller, retryShareDirectory,
+    read: createControlledModelCatalogReader({ locations, invoke, retryShareDirectory, assertCaller, captureOwner: () => assertOwner }) };
 }
 const request = (agentDeviceId = 'device-a') => ({
   op: 'read', agentDeviceId, channel: 'maker:provider:list', args: [],
 });
 
 describe('controlled model catalogs', () => {
+  // Unit: recovery must work even when the task host's failed discovery currently
+  // omits the source. Keep the same caller and owner fences as catalog reads.
+  it('recovers a task-host share before ordinary discovery without forwarding extra calls', async () => {
+    const f = fixture();
+    f.locations.mockResolvedValue({ status: 'degraded', locations: [] });
+    const retry = { op: CONTROLLED_MODEL_CATALOG_RETRY_SHARE, agentDeviceId: 'share:b-only' };
+    await expect(f.read({ ...retry, agentDeviceId: 'device-a' })).rejects.toThrow('INVALID_PARAMS');
+    f.assertCaller.mockImplementationOnce(() => { throw new Error('guest denied'); });
+    await expect(f.read(retry)).rejects.toThrow('guest denied');
+    expect(f.retryShareDirectory).not.toHaveBeenCalled();
+
+    await expect(f.read(retry)).resolves.toEqual({ ok: true, receivedChangeSequence: 4 });
+    expect(f.retryShareDirectory).toHaveBeenCalledExactlyOnceWith('share:b-only');
+    expect(f.locations).not.toHaveBeenCalled();
+    expect(f.invoke).not.toHaveBeenCalled();
+
+    f.retryShareDirectory.mockImplementationOnce(async () => {
+      f.assertOwner.mockImplementation(() => { throw new Error('account changed'); });
+      return {};
+    });
+    await expect(f.read(retry)).rejects.toThrow('account changed');
+  });
+
   // #8010 review / unit: missing devices in a failed directory lookup are unknown,
   // not revoked. Exercise both admission and the post-read authorization recheck.
   it.each(['before read', 'after read'] as const)('keeps a degraded directory retryable %s', async phase => {

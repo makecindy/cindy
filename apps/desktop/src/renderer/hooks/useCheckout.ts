@@ -7,12 +7,20 @@ import {
   subscribeRemoteSessionActivity,
 } from '@/features/device-link/remoteSessionActivityStore';
 import { toast, type ToastAction } from '@/lib/toast';
+import { extractIpcError } from '@/utils/ipcError';
 import type {
   CheckoutRequest,
   CheckoutReply,
   CheckoutStatus,
   CheckoutReceipt,
 } from '../../shared/worktreeCheckout';
+
+function resolveCheckoutErrorCode(error: unknown): 'timeout' | 'changed' | 'git' {
+  const ipc = extractIpcError(error);
+  if (ipc?.code === 'DEVICE_LINK_TIMEOUT' || ipc?.message === 'checkout:timeout') return 'timeout';
+  if (ipc?.message === 'checkout:changed') return 'changed';
+  return 'git';
+}
 
 export function formatCheckoutError(
   t: TFunction,
@@ -126,10 +134,10 @@ export function useCheckout(
           update({ status: reply.status, error: undefined });
           return reply.status;
         }
-      } catch {
+      } catch (error) {
         if (request === serial.current) {
           update({ status: undefined });
-          reportError('git');
+          reportError(resolveCheckoutErrorCode(error));
         }
       }
     },
@@ -290,8 +298,8 @@ export function useCheckout(
                 : undefined,
           );
         return reply;
-      } catch {
-        reportError('git');
+      } catch (error) {
+        reportError(resolveCheckoutErrorCode(error));
         // A lost reply is not permission to repeat checkout. Only re-read facts.
         if (isCurrent()) {
           try {

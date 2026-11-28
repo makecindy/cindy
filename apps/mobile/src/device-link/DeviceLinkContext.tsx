@@ -3,7 +3,7 @@ import { DirectLinkTransport } from './DirectLinkTransport';
 import { tryMobilePeerInvoke, resetMobilePeer } from './peerFileRegistry';
 import { isHistoryViewUnavailable, type HistoryWorkPatch } from '@cindy/maker-shared/message-window';
 import { findRemoteHistoryView } from '@/session/remoteHistoryView';
-import { createBackgroundConnection } from './backgroundConnection';
+import { BACKGROUND_STOP_GRACE_MS, createBackgroundConnection } from './backgroundConnection';
 import { invokeWithHistoryViewCapability } from './historyViewCapability';
 import { createRecoveryDiagnostics, settleMeasuredSnapshot, type RecoveryPhase } from './recoveryDiagnostics';
 import { confirmTrackedSubscription, releaseTrackedSubscription, SubscriptionAcknowledgements } from './subscriptionAcknowledgements';
@@ -73,7 +73,7 @@ import { getMobileAgentNetPreferences, useMobileAgentNetPreferences, waitForMobi
   mobileAgentNetAllowsLegacy, mobileAgentNetRequiresEncryption } from './agentNetPreferences';
 import { isMobileAgentNetActive, openMobileAgentNetSocket, mobileAgentNetShouldUseLegacyPeer,
   mobileAgentNetShouldProbeLegacyPeer, mobileAgentNetPrefersPrimary, verifyMobileAgentNetTransportProof,
-  connectMobileAgentNetSessionPeer, mobileAgentNetPeerConnectedAt, mobileAgentNetPeerRoute, mobileAgentNetPeerState,
+  connectMobileAgentNetSessionPeer, mobileAgentNetPeerConnectedAt, mobileAgentNetPeerRoute, mobileAgentNetPeerState, mobileAgentNetRelayStalled,
   mobileAgentNetSession, notifyMobileAgentNetNetworkChanged, useMobileAgentNetSessions,
   clearMobileAgentNetIdentityRefusal } from './agentNetRuntime';
 import { AgentNetSessionLinks, agentNetSessionLane, outboundOnSession, routeSessionPeers, type PeerLinks } from '@cindy/agent-net/portable';
@@ -232,6 +232,14 @@ export interface DeviceLinkConnectionState {
   connectionIssue: DeviceLinkConnectionIssue | null;
 }
 
+export interface DeviceLinkInvokeOptions {
+  preSend?: () => void;
+  noResultCache?: boolean;
+  background?: boolean;
+  /** Only for the outbox's one legacy page read after an exact-ID refusal. */
+  legacyHistoryConfirmation?: true;
+}
+
 export interface DeviceLinkContextValue {
   status: DeviceLinkStatus;
   signalingStatus?: DeviceLinkStatus;
@@ -286,7 +294,7 @@ export interface DeviceLinkContextValue {
     deviceId: string,
     channel: string,
     args?: unknown[],
-    opts?: { preSend?: () => void; noResultCache?: boolean; background?: boolean },
+    opts?: DeviceLinkInvokeOptions,
   ): Promise<T>;
   // `owner` is a stable id for the mounted consumer (e.g. `session:<id>`, `device:<id>`),
   // so repeated subscribes from resync/retry are idempotent and a topic is only released
@@ -426,7 +434,6 @@ function subscribeRemoteResourceChanged(
  * 退后台断开连接前的宽限:几秒内切回前台的快速 App 切换不触发整套
  * 断连 → 重连 → 补齐,弱网下这套循环的代价远高于让 socket 多活两秒。
  */
-const BACKGROUND_STOP_GRACE_MS = 2_500;
 /** 断开前最多等最后一轮 heavy unsubscribe 应答;超时仍停止,避免后台 socket 久留。 */
 const BACKGROUND_FINAL_UNSUBSCRIBE_WAIT_MS = 1_000;
 /**
@@ -1251,10 +1258,11 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
   }, [runPeerRecovery]);
 
   // 「重新加入」 for this phone after it was removed on the official network (deviceRejoin.ts): one tap runs one attempt.
+  // Turning the Agent-Net switch on runs it too (`agentNet`), when the service says this phone's identity was revoked.
   useEffect(() => {
     if (!auth.isAuthenticated || !auth.deviceId) return;
     const deviceId = auth.deviceId, getAccessToken = auth.getAccessToken, apiFetch = auth.apiFetch;
-    return registerMobileDeviceRejoin(() => {
+    return registerMobileDeviceRejoin((options) => {
       const owner = getMobileAuthOwner();
       const assertCurrent = () => {
         if (!isMobileAuthOwnerCurrent(owner) || getActiveSelfHostedRelay()) throw new Error('DEVICE_REJOIN_SCOPE_CHANGED');
@@ -1266,7 +1274,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
             timeoutMs: 15_000, cache: 'no-store', assertCurrent });
         },
         agentNetInvolved: async () => MobileAgentNetEngine.available() && !!getOfficialAgentNetApiBaseUrl()
-          && (getMobileAgentNetPreferences().enabled || await hasStoredMobileOfficialAgentNetIdentity()),
+          && (options?.agentNet === true || getMobileAgentNetPreferences().enabled || await hasStoredMobileOfficialAgentNetIdentity()),
         agentNetRequired: mobileAgentNetRequiresEncryption,
         rejoinAgentNet: async () => {
           assertCurrent();
@@ -1486,6 +1494,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
       selfDeviceId: () => routed.getSelfDeviceId(),
       transferCodec: connectionOptions.transferCodec,
       path: (deviceId) => mobileAgentNetPeerRoute(deviceId).path,
+      onRelayStall: mobileAgentNetRelayStalled,
       rttMs: (deviceId) => mobileAgentNetPeerRoute(deviceId).rttMs,
       connectedAt: mobileAgentNetPeerConnectedAt,
       // The link to it broke with its previous session and a new one is here: recover it as after a Device Link transport reset.
@@ -2290,7 +2299,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
     deviceId: string,
     channel: string,
     args: unknown[] = [],
-    opts?: { preSend?: () => void; noResultCache?: boolean; background?: boolean },
+    opts?: DeviceLinkInvokeOptions,
   ) => {
     const preSend = () => {
       if (presenceAvailableByDeviceRef.current.get(deviceId) === false) {
@@ -2334,6 +2343,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
         }
         return sendInvokeWithAccessHandling<T>(client, deviceId, channel, args, { preSend, background: opts?.background, noResultCache: opts?.noResultCache });
       },
+      opts?.legacyHistoryConfirmation,
     );
     const result = isLowPriorityRead(channel)
       // A caller's own preSend can cancel only its own read, so it must not share one.

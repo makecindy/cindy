@@ -1,4 +1,5 @@
 import type { UsageAttribution } from './worker/opHandlers/modelUsageTx.js';
+import type { EngineKind } from '@cindy/maker-core';
 import { sql } from 'drizzle-orm';
 
 import {
@@ -16,7 +17,7 @@ import { currentLedgerCurrency } from '../usage/ledgerCurrency.js';
 
 export interface DailyModelUsageDelta {
   attribution?: UsageAttribution;
-  agentKind: 'claude-code' | 'codex' | 'pi';
+  agentKind: EngineKind;
   model: string;
   money?: RegionalMoney | null;
   inputTokensDelta: number;
@@ -60,6 +61,7 @@ export async function incrementDailyModelUsage(
   const cacheReadTokens = sanitizeTokens(delta.cacheReadTokensDelta);
   const cacheCreateTokens = sanitizeTokens(delta.cacheCreateTokensDelta);
   if (
+    delta.agentKind !== 'acp' &&
     !money?.amount &&
     inputTokens === 0 &&
     outputTokens === 0 &&

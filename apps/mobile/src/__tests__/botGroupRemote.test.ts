@@ -49,6 +49,12 @@ function chatData(overrides: Record<string, unknown> = {}) {
   };
 }
 
+it('preserves the exact main read sequence received from the computer', () => {
+  expect(parseBotGroupChatData(chatData({ readSequence: '9007199254740993' }))?.readSequence).toBe('9007199254740993');
+  expect(parseBotGroupChatData(chatData({ readSequence: '0' }))?.readSequence).toBe('0');
+  expect(parseBotGroupChatData(chatData({ readSequence: 'invalid' }))?.readSequence).toBeUndefined();
+});
+
 describe('parseBotGroupChatData', () => {
   // Unit regression: exercise the real wire parser and stop predicate. Existing member
   // fixtures omitted public Cindy; losing assistant hid the requester's valid stop control.
@@ -431,6 +437,10 @@ describe('actions', () => {
 it('retains notification capability and confirmed mode from a computer', () => {
   expect(parseBotGroupChatData(chatData({ supportsNotificationSettings: true, notificationMode: 'mentions' })))
     .toMatchObject({ supportsNotificationSettings: true, notificationMode: 'mentions' });
+  expect(parseBotGroupChatData(chatData({ notificationMode: 'mentions', notificationModeInherited: true })))
+    .toMatchObject({ notificationMode: 'mentions', notificationModeInherited: true });
+  expect(parseBotGroupChatData(chatData({ notificationMode: 'unknown', notificationModeInherited: true })))
+    .not.toHaveProperty('notificationModeInherited');
   expect(parseBotGroupChatData(chatData({ notificationMode: 'unknown' }))?.notificationMode).toBeUndefined();
 });
 
@@ -440,6 +450,13 @@ it('retains the invitation setting from a computer without enabling it on old ho
     .toMatchObject({ supportsMemberInvites: true, allowMemberInvites: true });
   expect(parseBotGroupChatData(chatData()))
     .toMatchObject({ supportsMemberInvites: false, allowMemberInvites: false });
+});
+
+it('retains the @everyone member permission from a computer and defaults to false when omitted', () => {
+  expect(parseBotGroupChatData(chatData({ supportsMemberMentionAll: true, allowMemberMentionAll: true })))
+    .toMatchObject({ supportsMemberMentionAll: true, allowMemberMentionAll: true });
+  expect(parseBotGroupChatData(chatData()))
+    .toMatchObject({ supportsMemberMentionAll: false, allowMemberMentionAll: false });
 });
 
 // Unit / #10345: remote-host parsing must retain the stable anchor, never confuse it with elapsed work.
@@ -469,4 +486,25 @@ it('preserves topic ownership and unresolved sources across the computer bridge'
     { botId: 'abu', sessionId: 's3', activity: 'reply', sourceMessageId: 'unknown' },
   ] };
   expect(parseBotGroupChatData({ ...chatData(), round })?.round.speakers).toEqual(round.speakers);
+});
+
+// Wire / bot-group-chat.md §5: preserve enterprise org, department, and external badge flags
+// from upgraded hosts while leaving legacy hosts untouched (unit tier).
+it('retains enterprise org identity and external flags through remote parsing without inventing them', () => {
+  const parsed = parseBotGroupChatData(chatData({
+    orgName: '星辰科技',
+    external: true,
+    members: [
+      { botId: 'h1', actorId: 'h1', actorKind: 'human', name: '林知行', orgName: '星辰科技', department: '客户端组', departmentPath: '研发中心 / 客户端组', avatar: '', avatarColor: '', status: 'active' },
+      { botId: 'h2', actorId: 'h2', actorKind: 'human', name: 'Alex Chen', orgName: 'BetaCorp', external: true, showOrgName: true, avatar: '', avatarColor: '', status: 'active' },
+    ],
+  }))!;
+  expect(parsed).toMatchObject({ orgName: '星辰科技', external: true });
+  expect(parsed.members[0]).toMatchObject({ orgName: '星辰科技', department: '客户端组', departmentPath: '研发中心 / 客户端组' });
+  expect(parsed.members[0]?.external).toBeUndefined();
+  expect(parsed.members[1]).toMatchObject({ orgName: 'BetaCorp', external: true, showOrgName: true });
+  expect(parsed.members[1]?.department).toBeUndefined();
+  const legacy = parseBotGroupChatData(chatData())!;
+  expect(legacy.external).toBeUndefined();
+  expect(legacy.orgName).toBeUndefined();
 });

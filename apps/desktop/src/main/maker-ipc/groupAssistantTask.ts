@@ -19,6 +19,8 @@ export interface GroupAssistantTask {
   topicName?: { initialTitle?: string; topic: GroupTaskTopic };
   /** The group's newest message already delivered into the task, per conversation (`main` or a Thread's root ID). */
   delivered: Record<string, string>;
+  /** The task was just opened on this computer's model instead of the selected one; the reply says so once. */
+  modelFallback?: { name?: string };
 }
 
 /** Keep the legacy room key for the main group. Threads never inherit its mixed history. */
@@ -32,7 +34,7 @@ export function createGroupAssistantTasks(deps: {
   folders: Pick<GroupProjectFolders, 'forWork' | 'registered'>;
   /** The given task when it is still usable, else a new ordinary task in `projectDir` (null: under 「对话」). */
   ensureSession?: (input: { sessionId?: string; title: string; projectDir: string | null }) =>
-    Promise<{ ok: true; sessionId: string; created?: boolean } | { ok: false; errorCode: string; message: string }>;
+    Promise<{ ok: true; sessionId: string; created?: boolean; modelFallback?: GroupAssistantTask['modelFallback'] } | { ok: false; errorCode: string; message: string }>;
 }) {
   // One lookup per conversation at a time, so two requests arriving together share the same task.
   const lookups = new Map<string, Promise<GroupAssistantTask>>();
@@ -56,6 +58,7 @@ export function createGroupAssistantTasks(deps: {
     all[key] = record;
     deps.store().save(all);
     return { sessionId: record.sessionId, delivered: record.deliveredSeq ?? {},
+      ...(ensured.created && ensured.modelFallback ? { modelFallback: ensured.modelFallback } : {}),
       ...(name.topic ? { topicName: { initialTitle: ensured.created ? name.title : undefined, topic: name.topic } } : {}) };
   }
 

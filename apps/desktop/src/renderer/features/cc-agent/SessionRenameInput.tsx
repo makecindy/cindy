@@ -251,7 +251,7 @@ export function SessionRenameInput({
           void handleAiRename();
         }}
         className={cn(
-          'absolute right-[3px] flex h-5 w-5 shrink-0 items-center justify-center rounded',
+          'absolute right-[3px] flex h-5 w-5 shrink-0 items-center justify-center rounded-full',
           'transition-colors',
           activeForeground
             ? 'text-sidebar-item-active-foreground hover:text-sidebar-item-active-foreground hover:bg-[color-mix(in_srgb,var(--sidebar-item-active-foreground)_14%,transparent)]'

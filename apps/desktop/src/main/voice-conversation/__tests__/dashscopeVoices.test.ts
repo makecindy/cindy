@@ -40,7 +40,7 @@ it.each([
   ['cosyvoice-v3-flash', 88, 32],
   ['cosyvoice-v3-plus', 2, 2],
   ['cosyvoice-v2', 106, 0],
-  ['qwen-audio-3.1-tts-flash', 68, 19],
+  ['qwen-audio-3.1-tts-flash', 139, 70],
   ['qwen-audio-3.0-tts-plus', 2, 2],
   ['qwen-audio-3.0-tts-flash', 12, 12],
   ['cosyvoice-v3.5-plus', 0, 0],
@@ -54,6 +54,16 @@ it.each([
   );
   expect(result.voices).toHaveLength(sg);
   expect(new Set(result.voices.map((voice) => voice.id)).size).toBe(sg);
+});
+
+it('returns only verified private voices for the exact realtime model', async () => {
+  const id = 'qwen-audio-3.1-realtime-plus';
+  const fetcher = vi.fn<typeof fetch>().mockResolvedValueOnce(list([
+    { voice_id: 'voice-a', status: 'OK', target_model: id },
+    { voice_id: 'voice-b', status: 'OK', target_model: 'qwen-audio-3.1-realtime-flash' },
+    { voice_id: 'voice-c', status: 'PENDING', target_model: id },
+  ]));
+  expect(await loadSpeechVoices({ ...connection, protocol: 'qwen-audio-realtime' }, id, fetcher, () => {})).toMatchObject({ source: 'provider', voices: [{ id: 'voice-a', name: 'voice-a' }] });
 });
 
 it('merges only ready custom voices bound to the exact model, querying missing metadata', async () => {

@@ -25,10 +25,13 @@ export function AppCrashScreen({
   message,
   stack,
   variant = 'fullscreen',
+  onDiagnose,
 }: {
   message: string;
   stack?: string;
   variant?: 'fullscreen' | 'section';
+  /** 与任务错误卡同一入口：展开详情后提供「诊断」。只有路由仍可用的调用方才传。 */
+  onDiagnose?: () => void;
 }) {
   const { t } = useTranslation();
 
@@ -60,6 +63,7 @@ export function AppCrashScreen({
         message={t('appError.title')}
         description={t('appError.description')}
         details={stack ?? message}
+        onDiagnose={onDiagnose}
         actions={
           <>
             <Button size="sm" compact onClick={handleReload}>

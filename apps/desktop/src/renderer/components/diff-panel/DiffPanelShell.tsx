@@ -279,7 +279,7 @@ export function DiffPanelShell({
                 'flex h-7 w-7 shrink-0 items-center justify-center focus-visible:outline-none',
                 isFloating
                   ? 'rounded-full text-[var(--text-secondary)] hover:bg-[var(--surface-chip)]'
-                  : 'rounded hover:bg-titlebar-button-hover',
+                  : 'rounded-lg hover:bg-titlebar-button-hover',
               )}
             >
               <X size={16} />

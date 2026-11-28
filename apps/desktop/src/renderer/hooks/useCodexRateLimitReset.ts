@@ -13,6 +13,8 @@ export function useCodexRateLimitReset(
   snapshot: MobileCodexRateLimitsResult | null,
   refresh: () => void,
   providerId = 'openai',
+  /** Another device's reset (the cloud instance settings page). */
+  consume?: Window['electronAPI']['maker']['usage']['consumeCodexRateLimitReset'],
 ) {
   const { t, i18n } = useTranslation();
   const { confirm } = useConfirmDialog();
@@ -72,7 +74,9 @@ export function useCodexRateLimitReset(
         toast.error(t('codexResets.offerExpired'));
         return;
       }
-      const result = await window.electronAPI.maker.usage.consumeCodexRateLimitReset(key, providerId);
+      const result = consume
+        ? await consume(key, providerId)
+        : await window.electronAPI.maker.usage.consumeCodexRateLimitReset(key, providerId);
       // Refresh may replace the offer mid-consume; gate the result by account identity.
       if (!mounted.current || !isDataOwnerGenerationCurrent(owner)
         || current.current.providerId !== providerId

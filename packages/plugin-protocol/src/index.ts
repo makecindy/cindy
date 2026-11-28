@@ -2,6 +2,7 @@ export * from './manifest.js';
 export * from './routineEvents.js';
 export * from './pluginModels.js';
 export * from './pluginHarnesses.js';
+export * from './pluginFileOpener.js';
 export * from './pluginHarnessUsageReader.js';
 export * from './runtimeContext.js';
 export * from './recommendations.js';

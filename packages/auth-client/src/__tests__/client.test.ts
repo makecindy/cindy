@@ -13,6 +13,9 @@ import {
   soleLoginMethod,
   ssoOrgDiscoveryToMethods,
   serializeAuthSessionRecord,
+  decodeQrLoginUrl,
+  encodeQrLoginUrl,
+  SIGNUP_CONFIRMATION_CAPABILITY,
   type AuthFetch,
   type AuthFetchResponse,
 } from "../index.js";
@@ -492,6 +495,106 @@ describe("CindyAuthClient", () => {
     });
   });
 
+  /*
+   * 测试价值（注册确认 / 扫码登录 wire 契约）
+   * - 生产入口与可观察结果：CindyAuthClient 请求体与 URL、loginOutcomeSchema / qrLoginPollSchema 解析、
+   *   reduceAuthFlow 投影、二维码链接编解码；对应 auth-server signup_confirmation_v1 与 /api/auth/qr-login。
+   * - 规则依据：docs/dev-rules/protocol-compatibility.md §1（服务端先上线，老调用方不得收到新状态）。
+   * - 现有覆盖缺口：既有用例只覆盖四种登录结果，未覆盖能力声明与新结果。
+   * - 最小失败输入：未声明能力的 client 发出 capabilities；signup_required 被当成 INVALID_RESPONSE；
+   *   二维码篡改区域仍被接受。
+   * - tier：unit（纯内存 fetch fake）。
+   */
+  it("declares signup confirmation only when the host opts in (legacy request shape unchanged)", async () => {
+    const bodies: Array<Record<string, unknown>> = [];
+    const fetch: AuthFetch = vi.fn(async (_url, init) => {
+      bodies.push(JSON.parse(init?.body ?? "{}"));
+      return response(200, { status: "binding_required", bindType: "phone", bindTicket: "b" });
+    });
+    const legacy = client(fetch);
+    const opted = new CindyAuthClient({
+      baseUrl: "https://auth.example.com", region: "global", deviceId: "device-1", clientType: "mobile",
+      fetch, capabilities: [SIGNUP_CONFIRMATION_CAPABILITY],
+    });
+    await legacy.verifyCode("email", "a@example.com", "123456");
+    await opted.verifyCode("email", "a@example.com", "123456");
+    await opted.exchangeNativeSocial("google", { idToken: "id" });
+    expect(bodies[0]).not.toHaveProperty("capabilities");
+    expect(bodies[1]?.capabilities).toEqual([SIGNUP_CONFIRMATION_CAPABILITY]);
+    expect(bodies[2]?.capabilities).toEqual([SIGNUP_CONFIRMATION_CAPABILITY]);
+
+    const authorize = (instance: CindyAuthClient, kind: "social" | "sso") => new URL(instance.buildAuthorizeUrl({
+      kind, providerOrConnectionId: "google", redirectUri: "http://127.0.0.1/cb", codeChallenge: "c", state: "s",
+    }));
+    expect(authorize(opted, "social").searchParams.get("capabilities")).toBe(SIGNUP_CONFIRMATION_CAPABILITY);
+    expect(authorize(opted, "sso").searchParams.has("capabilities")).toBe(false);
+    expect(authorize(legacy, "social").searchParams.has("capabilities")).toBe(false);
+  });
+
+  it("projects signup_required into a confirmation step and confirms with the ticket", async () => {
+    const requests: Array<{ url: string; body: unknown }> = [];
+    const results = [
+      { status: "signup_required", signupTicket: "signup-1", channel: "email", targetMasked: "a***@example.com" },
+      { status: "binding_required", bindType: "phone", bindTicket: "bind-2" },
+    ];
+    const fetch: AuthFetch = vi.fn(async (url, init) => {
+      requests.push({ url, body: JSON.parse(init?.body ?? "{}") });
+      return response(200, results.shift());
+    });
+    const outcome = await client(fetch).verifyCode("email", "a@example.com", "123456");
+    expect(reduceAuthFlow(null, { type: "outcome", outcome })).toEqual({
+      step: "signup-confirmation", channel: "email", targetMasked: "a***@example.com",
+    });
+    await expect(client(fetch).signup("signup-1")).resolves.toMatchObject({ status: "binding_required" });
+    expect(requests[1]).toEqual({
+      url: "https://auth.example.com/api/auth/signup",
+      body: { signupTicket: "signup-1", deviceId: "device-1" },
+    });
+  });
+
+  it("parses handoff poll results, including the nested login outcome", async () => {
+    const results = [
+      { status: "denied" },
+      {
+        status: "approved",
+        outcome: {
+          status: "ok", accessToken: "access", refreshToken: "refresh",
+          membership: { id: "m1", kind: "personal", role: "owner", displayName: "Cindy", email: null, orgId: null, orgName: null },
+        },
+      },
+      { status: "approved", outcome: { status: "mystery" } },
+    ];
+    const fetch: AuthFetch = vi.fn(async () => response(200, results.shift()));
+    await expect(client(fetch).pollQrHandoff("h1", "secret")).resolves.toEqual({ status: "denied" });
+    await expect(client(fetch).pollQrHandoff("h1", "secret")).resolves.toMatchObject({
+      status: "approved", outcome: { status: "ok" },
+    });
+    await expect(client(fetch).pollQrHandoff("h1", "secret")).rejects.toMatchObject({ code: "INVALID_RESPONSE" });
+  });
+
+  it("round-trips QR login links and rejects foreign or tampered codes", () => {
+    const id = "A".repeat(22);
+    const scanToken = "b".repeat(32);
+    const link = encodeQrLoginUrl("https://cindy.cn/download/", {
+      kind: "handoff", region: "cn", id, scanToken,
+      deviceName: "林的 MacBook Pro", platform: "darwin",
+    });
+    expect(link.startsWith("https://cindy.cn/download/?cindy_login=")).toBe(true);
+    expect(decodeQrLoginUrl(link)).toEqual({
+      kind: "handoff", region: "cn", id, scanToken,
+      deviceName: "林的 MacBook Pro", platform: "darwin",
+    });
+    expect(decodeQrLoginUrl(encodeQrLoginUrl("https://cindy.app/download/", {
+      kind: "handoff", region: "global", id, scanToken,
+    }))).toEqual({ kind: "handoff", region: "global", id, scanToken });
+
+    const tampered = new URL(link);
+    tampered.searchParams.set("cindy_login", "eyJ2IjoxLCJrIjoicyIsInIiOiJtYXJzIn0");
+    expect(decodeQrLoginUrl(tampered.toString())).toBeNull();
+    expect(decodeQrLoginUrl("https://cindy.app/download/")).toBeNull();
+    expect(decodeQrLoginUrl("WIFI:S:home;T:WPA;P:secret;;")).toBeNull();
+  });
+
   it("parses all auth-server outcome states", async () => {
     const outcomes = [
       { status: "binding_required", bindType: "phone", bindTicket: "bind-1" },
@@ -638,6 +741,71 @@ describe("CindyAuthClient", () => {
     expect(fetch.mock.calls[3]?.[1]?.headers).not.toHaveProperty(
       "Authorization",
     );
+  });
+
+  // 换绑联系方式的 wire 契约:四步都带 account token,请求体只带票据类型对应的字段;
+  // 旧服务端缺 id/changeable 时列表仍可解析(部署先后顺序不让设置页报错)。
+  it("sends contact-change steps with the account token and parses legacy contact lists", async () => {
+    const fetch = vi
+      .fn()
+      .mockResolvedValueOnce(
+        response(200, {
+          social: [],
+          contacts: [
+            { id: "cp-1", type: "phone", value: "+8613****55", verifiedAt: "2026-11-01T00:00:00.000Z", changeable: true },
+            { type: "email", value: "a***@example.com", verifiedAt: "2026-11-01T00:00:00.000Z" },
+          ],
+        }),
+      )
+      .mockResolvedValueOnce(response(202, { status: "sent", channel: "sms", maskedTarget: "+8613****55" }))
+      .mockResolvedValueOnce(
+        response(200, { changeTicket: "ticket-1", type: "phone", expiresAt: "2026-11-01T00:10:00.000Z" }),
+      )
+      .mockResolvedValueOnce(response(202, { status: "sent" }))
+      .mockResolvedValueOnce(
+        response(200, {
+          status: "ok",
+          contact: { id: "cp-1", type: "phone", value: "+8613****66", verifiedAt: "2026-11-01T00:05:00.000Z" },
+        }),
+      );
+    const auth = client(fetch);
+
+    const contacts = await auth.getAccountContacts("account-token");
+    expect(contacts[1]).toEqual({
+      type: "email",
+      value: "a***@example.com",
+      verifiedAt: "2026-11-01T00:00:00.000Z",
+    });
+    await auth.requestCurrentContactChangeCode("account-token", "cp-1");
+    const ticket = await auth.verifyCurrentContactChange("account-token", "cp-1", "123456");
+    const target = { type: "phone" as const, phone: "13700006666" };
+    await auth.requestNewContactChangeCode("account-token", ticket.changeTicket, target);
+    await expect(
+      auth.confirmContactChange("account-token", ticket.changeTicket, target, "654321"),
+    ).resolves.toMatchObject({ id: "cp-1", value: "+8613****66" });
+
+    const calls = fetch.mock.calls as Array<[string, { headers: Record<string, string>; body?: string }]>;
+    expect(calls.map(([url]) => url.replace("https://auth.example.com", ""))).toEqual([
+      "/api/me/identities",
+      "/api/me/contact/change/current/request-code",
+      "/api/me/contact/change/current/verify",
+      "/api/me/contact/change/request-code",
+      "/api/me/contact/change/confirm",
+    ]);
+    for (const [, init] of calls) {
+      expect(init.headers).toMatchObject({ Authorization: "Bearer account-token" });
+    }
+    expect(JSON.parse(calls[1]![1].body!)).toEqual({ contactId: "cp-1", locale: "zh-CN" });
+    expect(JSON.parse(calls[3]![1].body!)).toEqual({
+      changeTicket: "ticket-1",
+      phone: "13700006666",
+      locale: "zh-CN",
+    });
+    expect(JSON.parse(calls[4]![1].body!)).toEqual({
+      changeTicket: "ticket-1",
+      phone: "13700006666",
+      code: "654321",
+    });
   });
 
   it("uses account tokens only for account control and exchanges a resource token", async () => {
@@ -938,7 +1106,11 @@ describe("discoverSsoOrgRealm", () => {
       });
       await expect(discoverSsoOrgRealm("corp", clients, {
         allowPartialSuccess: true,
-      })).resolves.toEqual({ region, discovery: discovery(region) });
+      })).resolves.toEqual({
+        region,
+        discovery: discovery(region),
+        unconfirmedRegion: region === "cn" ? "global" : "cn",
+      });
     },
   );
 
@@ -966,7 +1138,11 @@ describe("discoverSsoOrgRealm", () => {
         await vi.advanceTimersByTimeAsync(1);
         await outcome;
         expect(failed).not.toHaveBeenCalled();
-        expect(settled).toHaveBeenCalledExactlyOnceWith({ region, discovery: discovery(region) });
+        expect(settled).toHaveBeenCalledExactlyOnceWith({
+          region,
+          discovery: discovery(region),
+          unconfirmedRegion: region === "cn" ? "global" : "cn",
+        });
       } finally {
         vi.useRealTimers();
       }
@@ -991,9 +1167,9 @@ describe("discoverSsoOrgRealm", () => {
     async (region, cn, global) => {
       await expect(
         discoverSsoOrgRealm("corp", { cn, global }),
-      ).resolves.toMatchObject({
+      ).resolves.toEqual({
         region,
-        discovery: { region },
+        discovery: discovery(region),
       });
     },
   );
@@ -1022,7 +1198,11 @@ describe("discoverSsoOrgRealm", () => {
   ] as const)("accepts a single valid hit with an unavailable peer when opted in", async (cn, global, region) => {
     await expect(discoverSsoOrgRealm("corp", { cn, global }, {
       allowPartialSuccess: true,
-    })).resolves.toEqual({ region, discovery: discovery(region) });
+    })).resolves.toEqual({
+      region,
+      discovery: discovery(region),
+      unconfirmedRegion: region === "cn" ? "global" : "cn",
+    });
   });
 
   it.each([

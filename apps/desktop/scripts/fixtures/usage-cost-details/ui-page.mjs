@@ -42,6 +42,18 @@ export default {
     if (!ui.data.legacy) {
       await panel.getByText('seedance-2.0', { exact: true }).waitFor();
       assert.equal(await panel.getByText('gpt-6.1', { exact: true }).count(), 2);
+      // Subscription estimates and usage charges can share a currency, but
+      // the conversation subtotal must show what each amount represents.
+      const charged = await ui.t('usageCost.charged');
+      const estimate = await ui.t('usageCost.estimate');
+      for (const subtotal of [
+        `${charged} $0.42`,
+        `${estimate} $1.11`,
+        `${charged} $3.34`,
+        ...(ui.data.mixed ? [`${charged} ¥2.00`] : []),
+      ]) {
+        assert.equal(await panel.getByText(subtotal, { exact: true }).count(), 1, subtotal);
+      }
     } else await panel.getByText(await ui.t('usageCost.unavailable'), { exact: true }).waitFor();
     await trigger.click();
     await page.mouse.move(1, 1);

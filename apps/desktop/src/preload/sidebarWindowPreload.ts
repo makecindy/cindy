@@ -18,6 +18,7 @@ import { SELECTION_CONTEXT_MENU_ADD_TO_CHAT_CHANNEL } from '../shared/selectionC
  */
 
 import { contextBridge, ipcRenderer, webUtils } from 'electron';
+import { createRemoteReadBridge } from './remoteReadBridge';
 
 import { createAppearanceSnapshotBridge } from './appearanceSnapshot';
 import { PROVIDER_SHARE_IPC, type ProviderShareCommand } from '../shared/providerShare';
@@ -176,8 +177,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   deviceLink: {
     getState: (): Promise<unknown> => ipcRenderer.invoke(DEVICE_LINK_INVOKE.GET_STATE),
     listDevices: (): Promise<unknown> => ipcRenderer.invoke(DEVICE_LINK_INVOKE.LIST_DEVICES),
-    invoke: (deviceId: string, channel: string, args: unknown[], scheduling?: { background?: boolean }): Promise<unknown> =>
-      ipcRenderer.invoke(DEVICE_LINK_INVOKE.INVOKE, { deviceId, channel, args, ...(scheduling ? { scheduling } : {}) }),
+    invoke: createRemoteReadBridge(ipcRenderer).invoke,
     subscribe: (deviceId: string, topics: string[]): Promise<{ ok: true }> =>
       ipcRenderer.invoke(DEVICE_LINK_INVOKE.SUBSCRIBE, { deviceId, topics }),
     unsubscribe: (deviceId: string, topics: string[]): Promise<{ ok: true }> =>
@@ -241,6 +241,18 @@ contextBridge.exposeInMainWorld('electronAPI', {
         }),
       clear: (deviceId: string): Promise<{ ok: true }> =>
         ipcRenderer.invoke(DEVICE_LINK_INVOKE.MIRROR_CACHE_CLEAR, { deviceId }),
+    },
+    offlineInboxIntents: {
+      list: (): Promise<unknown> =>
+        ipcRenderer.invoke(DEVICE_LINK_INVOKE.OFFLINE_INBOX_INTENTS_LIST),
+      upsert: (intent: unknown): Promise<unknown> =>
+        ipcRenderer.invoke(DEVICE_LINK_INVOKE.OFFLINE_INBOX_INTENTS_UPSERT, { intent }),
+      remove: (deviceId: string, sessionId: string): Promise<unknown> =>
+        ipcRenderer.invoke(DEVICE_LINK_INVOKE.OFFLINE_INBOX_INTENTS_REMOVE, { deviceId, sessionId }),
+      clearDevice: (deviceId: string): Promise<unknown> =>
+        ipcRenderer.invoke(DEVICE_LINK_INVOKE.OFFLINE_INBOX_INTENTS_CLEAR_DEVICE, { deviceId }),
+      onChanged: (cb: (payload: unknown) => void): (() => void) =>
+        onPayload(DEVICE_LINK_PUSH.OFFLINE_INBOX_INTENTS_CHANGED, cb),
     },
   },
 
@@ -717,7 +729,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Only read operations required by the model selector; sharing/group management stays in the main UI.
   providerShare: {
     command: (command: ProviderShareCommand) => {
-      if (!['received', 'received-snapshot', 'quota-account'].includes(command.action) &&
+      if (!['received', 'received-snapshot', 'retry-model-catalog', 'quota-account'].includes(command.action) &&
           !(command.action === 'insights' && command.includeUsage === false))
         return Promise.reject(new Error('Unsupported model catalog operation'));
       return ipcRenderer.invoke(PROVIDER_SHARE_IPC.COMMAND, command);

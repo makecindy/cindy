@@ -25,3 +25,32 @@ export async function isLinuxDesktopUnlocked(): Promise<boolean> {
     return false;
   }
 }
+
+/** Verify a systemd-logind graphical session is owned by this user and unlocked.
+ * Seated sessions also require Active=yes to catch VT-switching lockers such as
+ * light-locker. Fails closed on missing, invalid or unreadable session state. */
+export async function isLogindSessionUnlocked(
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<boolean> {
+  const session = env.XDG_SESSION_ID ?? '';
+  if (!/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/.test(session)) return false;
+  try {
+    const { stdout } = await exec(
+      '/usr/bin/loginctl',
+      ['show-session', session, '-p', 'User', '-p', 'Seat', '-p', 'Active', '-p', 'LockedHint'],
+      { timeout: 1000, maxBuffer: 4096 },
+    );
+    const props = new Map<string, string>();
+    for (const line of stdout.split(/\r?\n/)) {
+      const separator = line.indexOf('=');
+      if (separator > 0) props.set(line.slice(0, separator), line.slice(separator + 1));
+    }
+    const uid = typeof process.getuid === 'function' ? String(process.getuid()) : null;
+    if (uid !== null && props.get('User') !== uid) return false;
+    if (props.get('LockedHint') !== 'no') return false;
+    if (props.get('Seat') && props.get('Active') !== 'yes') return false;
+    return true;
+  } catch {
+    return false;
+  }
+}

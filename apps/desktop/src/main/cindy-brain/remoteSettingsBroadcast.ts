@@ -6,14 +6,32 @@ function bridge(endpoint: string) {
     return response.json();
   };
   const channels = new Map<string, Set<RemoteChannel>>();
-  let ready = Promise.resolve(),
-    after = 0,
-    polling = false;
+  const subscribed = new Set<string>();
+  let ready = Promise.resolve();
+  let after = 0;
+  let polling = false;
+  const enqueue = (operation: () => Promise<void>) => {
+    const result = ready.then(operation);
+    ready = result.catch(() => {});
+    return result;
+  };
+  const subscribe = async (name: string) => {
+    if (subscribed.has(name)) return;
+    await call({ kind: 'subscribe', channels: [name] });
+    subscribed.add(name);
+  };
+  const subscribeOpenChannel = (name: string) => enqueue(async () => {
+    if (channels.has(name)) await subscribe(name);
+  }).catch(() => {
+    for (const channel of channels.get(name) ?? []) channel.deliverError();
+  });
   async function poll() {
     if (polling) return;
     polling = true;
     try {
-      await ready;
+      const missing = [...channels.keys()].filter((name) => !subscribed.has(name));
+      await Promise.all(missing.map(subscribeOpenChannel));
+      if (!subscribed.size) return;
       const result = await call({ kind: 'poll', after });
       for (const event of result.events) {
         for (const channel of channels.get(event.channel) ?? []) channel.deliver(event.data);
@@ -38,16 +56,16 @@ function bridge(endpoint: string) {
       this.onmessage = null;
       this.onmessageerror = null;
       this.closed = false;
-      const members = channels.get(this.name) ?? new Set();
-      members.add(this);
-      channels.set(this.name, members);
-      ready = ready.then(() => call({ kind: 'subscribe', channels: [this.name] }));
-      void poll();
+      const members = channels.get(this.name);
+      if (members) members.add(this);
+      else channels.set(this.name, new Set([this]));
+      if (polling && !members) void subscribeOpenChannel(this.name);
+      else void poll();
     }
     postMessage(data: unknown) {
       if (this.closed) throw new DOMException('Channel closed', 'InvalidStateError');
       const copy = structuredClone(data);
-      void ready
+      void enqueue(() => subscribe(this.name))
         .then(() => call({ kind: 'post', channel: this.name, data: copy }))
         .catch(() => this.deliverError());
     }
@@ -58,8 +76,11 @@ function bridge(endpoint: string) {
       members?.delete(this);
       if (!members?.size) {
         channels.delete(this.name);
-        ready = ready.then(() => call({ kind: 'unsubscribe', channel: this.name }));
-        void ready.catch(() => {});
+        void enqueue(async () => {
+          // An uncertain unsubscribe must not prevent a later subscription.
+          subscribed.delete(this.name);
+          await call({ kind: 'unsubscribe', channel: this.name });
+        }).catch(() => {});
       }
     }
     deliver(data: unknown) {

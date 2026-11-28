@@ -1,3 +1,4 @@
+import { CLOUD_CLIENT_ERRORS, type CloudClientErrorCode } from './cloudSettingsErrors';
 import { CONTRIBUTION_ERROR_CODES } from './pluginContributionContract';
 import { WRITABLE_DIRECTORY_GRANT_ERROR_CODES, type WritableDirectoryGrantErrorCode } from './writableDirectoryGrantError';
 import type { BrowserOpenForLoginErrorCode } from './browserBackend';
@@ -79,7 +80,14 @@ export type IpcErrorCode =
   | 'SUBSCRIPTION_CODEX_PROVIDER_AUTH'
   | 'SUBSCRIPTION_CLAUDE_ACCOUNT_MISMATCH'
   | 'SUBSCRIPTION_CLAUDE_IDENTITY_UNKNOWN'
+  /** 2026-11-24 long-lived Claude token: the account needs its ordinary sign-in first. */
+  | 'SUBSCRIPTION_CLAUDE_TOKEN_NEEDS_LOGIN'
+  /** An organization policy forbids subscription tokens. */
+  | 'SUBSCRIPTION_CLAUDE_TOKEN_NOT_PERMITTED'
+  /** This account or computer cannot be moved onto a long-lived token. */
+  | 'SUBSCRIPTION_CLAUDE_TOKEN_UNSUPPORTED'
   | WritableDirectoryGrantErrorCode
+  | CloudClientErrorCode
   | (typeof CONTRIBUTION_ERROR_CODES)[number]
   | (typeof COMPANION_IMPORT_ERROR_CODES)[number]
   // 通用错误
@@ -372,8 +380,12 @@ const IPC_ERROR_CODES: ReadonlySet<IpcErrorCode> = new Set<IpcErrorCode>([
   'SUBSCRIPTION_CODEX_PROVIDER_AUTH',
   'SUBSCRIPTION_CLAUDE_ACCOUNT_MISMATCH',
   'SUBSCRIPTION_CLAUDE_IDENTITY_UNKNOWN',
+  'SUBSCRIPTION_CLAUDE_TOKEN_NEEDS_LOGIN',
+  'SUBSCRIPTION_CLAUDE_TOKEN_NOT_PERMITTED',
+  'SUBSCRIPTION_CLAUDE_TOKEN_UNSUPPORTED',
   ...WRITABLE_DIRECTORY_GRANT_ERROR_CODES,
   ...COMPANION_IMPORT_ERROR_CODES,
+  ...CLOUD_CLIENT_ERRORS,
   ...CONTRIBUTION_ERROR_CODES,
   'INVALID_PARAMS',
   'NOT_FOUND',
