@@ -1,3 +1,4 @@
+import { brotliCompressSync, deflateSync, gzipSync, zstdCompressSync } from 'node:zlib';
 import { afterEach, expect, it } from 'vitest';
 import { captureUsagePricing, clearUsagePricing, createUsagePricingObserver, registerUsagePricing } from '../model-usage-pricing.js';
 
@@ -81,4 +82,64 @@ it('carries the served response model only for an unambiguous usage receipt', ()
   expect(resolve(key)?.model).toBeUndefined();
   expect(resolve(key)?.model).toBeUndefined();
   clearUsagePricing('routed');
+});
+
+it('captures model without overriding priceVariant when non-xAI routes pass undefined priceVariant', () => {
+  const resolve = registerUsagePricing('codex-gateway', true);
+  const capture = captureUsagePricing('codex-gateway', undefined, 'thread-gw');
+  capture({
+    type: 'response.completed',
+    response: {
+      model: 'gpt-5.4',
+      usage: { input_tokens: 120, output_tokens: 45, cache_read_input_tokens: 80 },
+    },
+  });
+  expect(resolve({ threadId: 'thread-gw', inputTokens: 120, outputTokens: 45, cacheReadTokens: 80 })).toEqual({
+    model: 'gpt-5.4',
+  });
+  clearUsagePricing('codex-gateway');
+});
+
+it.each([
+  ['gzip', (buf: Buffer) => gzipSync(buf)],
+  ['deflate', (buf: Buffer) => deflateSync(buf)],
+  ['br', (buf: Buffer) => brotliCompressSync(buf)],
+  ['zstd', (buf: Buffer) => zstdCompressSync(buf)],
+] as const)('decompresses %s encoded JSON and SSE responses without throwing on corrupt payloads', async (encoding, compress) => {
+  const resolve = registerUsagePricing('compressed', true);
+  const jsonPayload = JSON.stringify({
+    model: 'gpt-5.4-codex',
+    usage: { input_tokens: 30, output_tokens: 5, prompt_cache_hit_tokens: 10 },
+  });
+  const jsonSink = createUsagePricingObserver(
+    'application/json',
+    captureUsagePricing('compressed', undefined, 'thread-json'),
+    encoding,
+  );
+  jsonSink.onData?.(compress(Buffer.from(jsonPayload)));
+  jsonSink.onEnd?.();
+  expect(resolve({ ...usage, threadId: 'thread-json' })).toEqual({ model: 'gpt-5.4-codex' });
+
+  const ssePayload = `data: ${JSON.stringify({ type: 'response.completed', response: { ...response, model: 'gpt-5.4-sse' } })}\n\n`;
+  const sseSink = createUsagePricingObserver(
+    'text/event-stream',
+    captureUsagePricing('compressed', undefined, 'thread-sse'),
+    encoding,
+  );
+  const compressedSse = compress(Buffer.from(ssePayload));
+  sseSink.onData?.(compressedSse.subarray(0, Math.floor(compressedSse.length / 2)));
+  sseSink.onData?.(compressedSse.subarray(Math.floor(compressedSse.length / 2)));
+  sseSink.onEnd?.();
+  await new Promise(resolveWait => setTimeout(resolveWait, 30));
+  expect(resolve({ ...usage, threadId: 'thread-sse' })).toEqual({ model: 'gpt-5.4-sse' });
+
+  const corruptSink = createUsagePricingObserver(
+    'application/json',
+    captureUsagePricing('compressed', undefined, 'thread-corrupt'),
+    encoding,
+  );
+  corruptSink.onData?.(Buffer.from('not-actually-compressed'));
+  corruptSink.onEnd?.();
+  expect(resolve({ ...usage, threadId: 'thread-corrupt' })).toBeUndefined();
+  clearUsagePricing('compressed');
 });
