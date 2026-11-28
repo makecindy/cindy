@@ -3,6 +3,8 @@
  * DataTransfer. Electron associates the native filesystem path with the
  * original File object; rebuilding it can drop that metadata on Windows.
  */
+import { COMPOSER_MENTION_MIME } from './composerMentionDrag';
+
 export interface DroppedFileItems {
   files: File[];
   directories: File[];
@@ -87,6 +89,10 @@ function dedupePaths(paths: readonly string[]): string[] {
  * from VS Code must keep its existing text/link drop behaviour.
  */
 export function getDroppedExternalFilePaths(dataTransfer: DataTransfer): string[] {
+  // Cindy's own file tree already carries a typed mention payload. Its
+  // text/plain fallback must not also become an attachment: the internal
+  // mention path owns files, directories and remote paths.
+  if (safeGetData(dataTransfer, COMPOSER_MENTION_MIME)) return [];
   // Native file drags already carry File objects with Electron path metadata;
   // do not attach the same file again through the text fallback.
   if ((dataTransfer.files?.length ?? 0) > 0) return [];

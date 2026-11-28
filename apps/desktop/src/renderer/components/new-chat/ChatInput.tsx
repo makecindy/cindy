@@ -2801,6 +2801,12 @@ export function ChatInput({
           event.preventDefault();
           return true;
         }
+        // VS Code path drops are consumed by the outer composer handler. Stop
+        // ProseMirror from inserting the raw text/plain path list as text.
+        if (getDroppedExternalFilePaths(event.dataTransfer).length > 0) {
+          event.preventDefault();
+          return true;
+        }
         const payload = decodeComposerMentionPayload(
           event.dataTransfer?.getData(COMPOSER_MENTION_MIME) ?? '',
         );

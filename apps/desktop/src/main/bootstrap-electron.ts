@@ -8459,11 +8459,13 @@ const registerIpcHandlers = () => {
     },
   );
 
-  // Read a local file's raw bytes for in-app rendering (currently PDF preview).
+  // Read a local file's raw bytes for in-app rendering (PDF preview) and
+  // attachment plugins. Defaults to 30MB for preview callers; an explicit
+  // maxSize may go up to the 64MB attachment-plugin ceiling.
   // Returns a Uint8Array over structured clone instead of base64: pdf.js
   // getDocument({ data }) wants bytes, and skipping base64 avoids a large
   // transient string plus a main-thread atob/charCodeAt decode loop in the
-  // renderer. Same 30MB cap as read-file-for-attachment.
+  // renderer.
   //
   // Path policy is the SENSITIVE-MEDIA blocklist, not the system one used by the
   // attachment IPCs: this channel replaces the xdt-file:// protocol as the byte

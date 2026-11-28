@@ -40,7 +40,13 @@ function readPreference(): { value: boolean; customized: boolean } {
 
 /** 同步读取，供拖拽处理链路在进入 React 渲染前判断。 */
 export function getLocalPathDropConfirmEnabled(): boolean {
-  return readPreference().value;
+  // Read storage on every drag: the setting can be changed in another window
+  // while this window has no mounted settings row listening for storage events.
+  try {
+    return parseStored(localStorage.getItem(STORAGE_KEY)).value;
+  } catch {
+    return DEFAULT_ENABLED;
+  }
 }
 
 const listeners = new Set<() => void>();

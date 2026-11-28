@@ -122,6 +122,13 @@ afterEach(() => {
 });
 
 describe('useAttachments inline rejections', () => {
+  it('reads the confirmation setting from storage without a mounted settings row', () => {
+    localStorage.setItem('composer.localPathDropConfirm.enabled', 'true');
+    expect(getLocalPathDropConfirmEnabled()).toBe(true);
+    localStorage.setItem('composer.localPathDropConfirm.enabled', 'false');
+    expect(getLocalPathDropConfirmEnabled()).toBe(false);
+  });
+
   it('attaches a path-only drop coming from VS Code', async () => {
     const peekFileHeader = vi.fn(async () => ({
       success: true,
@@ -246,7 +253,10 @@ describe('useAttachments inline rejections', () => {
       await result.current.addFilePaths(['/tmp/input.pdf']);
     });
 
-    expect(readFileBytes).toHaveBeenCalledWith({ filePath: '/tmp/input.pdf' });
+    expect(readFileBytes).toHaveBeenCalledWith({
+      filePath: '/tmp/input.pdf',
+      maxSize: 64 * 1024 * 1024,
+    });
     await vi.waitFor(() => {
       expect(plugins.call).toHaveBeenCalledWith(null, expect.objectContaining({
         op: 'plugin-action',

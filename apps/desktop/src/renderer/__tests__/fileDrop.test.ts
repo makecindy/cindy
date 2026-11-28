@@ -4,6 +4,7 @@ import {
   getDroppedExternalFilePaths,
   getDroppedFileItems,
 } from '@/lib/fileDrop';
+import { COMPOSER_MENTION_MIME } from '@/lib/composerMentionDrag';
 
 function transfer(
   items: Array<{
@@ -155,6 +156,21 @@ describe('getDroppedExternalFilePaths', () => {
     expect(
       getDroppedExternalFilePaths(
         textTransfer({ 'text/plain': 'C:\\work\\report.txt' }, [file]),
+      ),
+    ).toEqual([]);
+  });
+
+  it('leaves internal composer mention drags to the mention pipeline', () => {
+    expect(
+      getDroppedExternalFilePaths(
+        textTransfer({
+          [COMPOSER_MENTION_MIME]: JSON.stringify({
+            type: 'file',
+            relPath: 'C:\\work\\README.md',
+            name: 'README.md',
+          }),
+          'text/plain': 'C:\\work\\README.md',
+        }),
       ),
     ).toEqual([]);
   });

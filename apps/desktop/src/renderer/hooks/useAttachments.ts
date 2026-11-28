@@ -28,6 +28,7 @@ import {
   getLocalPathDropConfirmEnabled,
   setLocalPathDropConfirmEnabled,
 } from '@/hooks/useLocalPathDropConfirmPreference';
+import { GHOST_HANDOFF_MAX_BYTES_PER_FILE } from '../../shared/ghost';
 import { insertComposerDocumentForRestore, plainTextToComposerDocument } from '@/lib/composerListDocument';
 
 const log = createLogger('UseAttachments');
@@ -908,7 +909,10 @@ export function useAttachments(sessionId?: string, draftKey?: string): UseAttach
 
       const pathSourceLoader = readPluginUiEntries('composer.attachment').length > 0
         ? async (file: AttachedFile) => {
-          const result = await window.electronAPI.readFileBytes({ filePath: file.path });
+          const result = await window.electronAPI.readFileBytes({
+            filePath: file.path,
+            maxSize: GHOST_HANDOFF_MAX_BYTES_PER_FILE,
+          });
           return result.bytes;
         }
         : undefined;

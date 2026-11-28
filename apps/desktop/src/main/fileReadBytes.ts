@@ -30,8 +30,10 @@ import * as nodePath from 'node:path';
 
 import { throwIpcError } from './utils/ipcValidate.js';
 
-/** Hard ceiling regardless of the caller-requested maxSize. */
-export const READ_FILE_BYTES_CAP = 30 * 1024 * 1024;
+/** Default ceiling when the caller does not request a size. */
+export const READ_FILE_BYTES_DEFAULT_MAX = 30 * 1024 * 1024;
+/** Hard ceiling regardless of the caller-requested maxSize (plugin attachments allow 64 MiB). */
+export const READ_FILE_BYTES_CAP = 64 * 1024 * 1024;
 
 /**
  * The stat fields this module needs. `dev`/`ino`/`size` are bigint because the
@@ -98,7 +100,7 @@ export async function readFileBytesForPreview(
   const maxSize =
     Number.isFinite(requested) && requested > 0
       ? Math.min(requested, READ_FILE_BYTES_CAP)
-      : READ_FILE_BYTES_CAP;
+      : READ_FILE_BYTES_DEFAULT_MAX;
 
   if (typeof filePath !== 'string' || !nodePath.isAbsolute(filePath)) {
     throwIpcError('INVALID_PARAMS', 'filePath must be an absolute path');
