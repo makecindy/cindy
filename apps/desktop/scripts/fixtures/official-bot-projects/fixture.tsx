@@ -174,7 +174,9 @@ function hookView(scenario: Scenario, defaultProject: string | null): SlackHookV
     bindings: [],
     pendingBind: null,
     serverMultiTeam: false,
-    telegram: scenario.telegram ? lane('telegram', defaultProject) : { ...disabledLane, url: 'ws://127.0.0.1:8794' },
+    telegram: scenario.telegram
+      ? { ...lane('telegram', defaultProject), behaviorAvailable: scenario.expand === 'telegram' }
+      : { ...disabledLane, url: 'ws://127.0.0.1:8794' },
     x: scenario.x ? lane('x', defaultProject) : { ...disabledLane, url: 'ws://127.0.0.1:8794' },
     feishu: scenario.feishu ? lane('feishu', defaultProject) : { ...disabledLane, url: 'ws://127.0.0.1:8794' },
   } as SlackHookView;
@@ -215,6 +217,11 @@ void mountPage({
       hookControl: {
         get: async () => ({ hook: hookView(scenario, defaultProject) }),
         onStatusChanged: subscription('hook-status'),
+        getTelegramBehavior: async () => ({
+          behavior: { bindingId: 'telegram-binding', bound: true, emojiReactions: 'minimal',
+            replyQuoteDm: 'off', replyQuoteGroup: 'first', groupActivation: { '-1001': 'always' } },
+        }),
+        onTelegramBehaviorChanged: subscription('telegram-behavior'),
         setProviderDefaultWorkspace: async (_provider: string, alias: string | null) => {
           defaultProject = alias;
           return { hook: hookView(scenario, defaultProject) };
@@ -269,12 +276,14 @@ void mountPage({
   render: (ctx) => {
     const layout = ctx.case.startsWith('model-layout');
     const scenario = SCENARIOS[String(ctx.data.kind)] ?? SCENARIOS['all-bots']!;
+    // data.show: 设置 → IM 机器人新结构里的单个聊天软件子页('feishu' 等)或「项目与模型」页('projects')。
+    const show = typeof ctx.data.show === 'string' ? ctx.data.show as 'feishu' | 'projects' : undefined;
     const section = scenario.plugin ? (
       <div className="flex flex-col gap-6">
         <ImPluginEntrancesCard plugins={[IM_PLUGIN]} />
         <HookConnectionsSection />
       </div>
-    ) : <HookConnectionsSection />;
+    ) : <HookConnectionsSection show={show} />;
     return (
       <div className={layout ? 'mx-auto min-h-screen max-w-[720px] bg-[var(--surface)] px-6 py-5 pb-[800px] text-[var(--text-primary)]' : 'min-h-screen bg-[var(--surface)] p-4 text-[var(--text-primary)]'}>
         {scenario.expand ? (

@@ -386,9 +386,10 @@ export class IlinkApiClient {
     );
     if (typeof response.ret === "number" && response.ret !== 0) {
       throw new WechatIlinkError(
-        "PROTOCOL_ERROR",
+        "SEND_REJECTED",
         "iLink rejected the message.",
         true,
+        { ret: response.ret },
       );
     }
   }
@@ -488,9 +489,10 @@ export class IlinkApiClient {
     );
     if (typeof response.ret === "number" && response.ret !== 0) {
       throw new WechatIlinkError(
-        "PROTOCOL_ERROR",
+        "SEND_REJECTED",
         "iLink rejected the media message.",
         true,
+        { ret: response.ret },
       );
     }
   }

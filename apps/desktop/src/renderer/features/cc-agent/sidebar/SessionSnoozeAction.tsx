@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { ChevronRight, Clock } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
+import { isSharedTaskPeer } from '@cindy/device-link';
 import { INDEFINITE_SNOOZE_UNTIL, taskSnoozeUntil, type TaskInboxState } from '@cindy/maker-shared/live-task-priority';
 import {
   DropdownMenu,
@@ -17,6 +18,9 @@ import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
 import * as sessionService from '@/lib/sessionService';
 import type { Session } from '@/lib/ccAgent.types';
+import { isRemoteSessionWriteBlocked } from '../lib/remoteSessionWriteGuard';
+import { queueOfflineInboxSnooze } from '@/features/device-link/offlineInboxIntentsStore';
+import { remoteProjectsStore } from '@/features/device-link/remoteProjectsStore';
 import { MENU_ITEM_CLASS, MENU_ROW_CLASS } from './menuStyles';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import { FormField } from '@/components/ui/form-field';
@@ -37,6 +41,19 @@ export function useSessionSnooze(session: Session) {
     pending.current = true;
     setSaving(true);
     try {
+      const remoteDeviceId = session.deviceLinkDeviceId;
+      if (
+        remoteDeviceId &&
+        !isSharedTaskPeer(remoteDeviceId) &&
+        isRemoteSessionWriteBlocked(session)
+      ) {
+        const rawHostSession =
+          remoteProjectsStore
+            .getDeviceSessions(remoteDeviceId)
+            .find((row) => row.id === session.id) ?? session;
+        await queueOfflineInboxSnooze(remoteDeviceId, session.id, rawHostSession, until);
+        return;
+      }
       const updated = await sessionService.patchMeta(session.id, { snoozedUntil: until });
       if (updated.snoozedUntil !== until) throw new Error('UNSUPPORTED_CAPABILITY');
     } catch {
@@ -46,7 +63,8 @@ export function useSessionSnooze(session: Session) {
       setSaving(false);
     }
   };
-  return session.pinnedAt == null ? { snooze, saving } : undefined;
+  // Pinned tasks snooze like any other; the patch carries only the snooze, so the pin stays.
+  return { snooze, saving };
 }
 
 export type SnoozeAction = NonNullable<ReturnType<typeof useSessionSnooze>>;

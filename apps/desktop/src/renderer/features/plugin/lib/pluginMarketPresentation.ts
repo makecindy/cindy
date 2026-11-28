@@ -14,6 +14,7 @@ import {
   installedGhostStoragePart,
 } from '../../../../shared/pluginIdentity';
 import type { PluginMarketItem } from '../../../../shared/pluginMarket';
+import { isLegacySimulatorListing, isSimulatorMigrationTarget, LEGACY_SIMULATOR_ID, SIMULATOR_ID } from '../../../../shared/simulatorIdentityMigration';
 
 export type PluginPresentationOrigin = 'public' | 'organization' | 'local' | 'custom';
 export type PublicPublisherFilter = 'official' | 'community';
@@ -133,6 +134,14 @@ export function marketItemMatchesInstalledGhost(
   }
   if (hasDeliveryNamespace(item) && item.namespace !== null) return false;
   return installedGhostStoragePart(ghost) === item.ghostId;
+}
+
+/** An official public simulator listing may represent the install under its previous ID. */
+export function simulatorMigrationCounterpart(item: Pick<PluginMarketItem, 'sourceType' | 'ghostId' | 'namespace' | 'scope'>): string | undefined {
+  if (item.sourceType !== 'server') return undefined;
+  if (isSimulatorMigrationTarget(item)) return LEGACY_SIMULATOR_ID;
+  if (isLegacySimulatorListing(item)) return SIMULATOR_ID;
+  return undefined;
 }
 
 export function marketItemForInstalledGhost(

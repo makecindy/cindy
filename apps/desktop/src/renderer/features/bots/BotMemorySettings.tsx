@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type MutableRefObject } from 'react';
-import { Check, PenLine, Search } from 'lucide-react';
+import { Check, PenLine } from 'lucide-react';
 
 import { MarkdownRenderer } from '@/components/chat/MarkdownRenderer';
 import { Button } from '@/components/ui/button';
+import { SearchInput } from '@/components/ui/search-input';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { Input, Textarea } from '@/components/ui/input';
 import { Spinner } from '@/components/ui/spinner';
@@ -11,10 +12,10 @@ import { toast } from '@/components/ui/toast';
 import { cn } from '@/lib/utils';
 import { extractIpcError } from '@/utils/ipcError';
 import {
-  BOT_MEMORY_BODY_MAX_BYTES,
   BOT_MEMORY_CHANGED,
   BOT_MEMORY_TITLE_MAX,
   BOT_MEMORY_TYPES,
+  BOT_PROJECT_MEMORY_BODY_MAX_BYTES,
   type BotMemoryDetail,
   type BotMemorySummary,
 } from '../../../shared/botMemory';
@@ -48,7 +49,7 @@ const isConflict = (error: unknown) => {
 };
 const normalizeTitle = (title: string) => title.replace(/\s+/g, ' ').trim();
 const bodyTooLong = (body: string) =>
-  new TextEncoder().encode(body.trim()).length > BOT_MEMORY_BODY_MAX_BYTES;
+  new TextEncoder().encode(body.trim()).length > BOT_PROJECT_MEMORY_BODY_MAX_BYTES;
 
 function useDateLabels() {
   const { t, i18n } = useBotTranslation();
@@ -269,21 +270,12 @@ function MemoryList({
         </p>
       ) : (
         <div className={cn('flex flex-col gap-4', !memoryEnabled && 'opacity-60')}>
-          <div className="relative">
-            <Search
-              size={14}
-              aria-hidden="true"
-              className="pointer-events-none absolute left-3 top-1/2 z-raised -translate-y-1/2 text-[var(--text-tertiary)]"
-            />
-            <Input
-              size="md"
-              value={query}
-              onChange={setQuery}
-              ariaLabel={t('bots.memory.search')}
-              placeholder={t('bots.memory.search')}
-              inputClassName="pl-8"
-            />
-          </div>
+          <SearchInput
+            value={query}
+            onChange={setQuery}
+            ariaLabel={t('bots.memory.search')}
+            placeholder={t('bots.memory.search')}
+          />
           {groups.length ? (
             groups.map((group) => (
               <section key={group.type} aria-label={t(`bots.memory.types.${group.type}`)}>

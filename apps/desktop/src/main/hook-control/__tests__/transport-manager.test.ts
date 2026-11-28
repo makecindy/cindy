@@ -164,6 +164,12 @@ function memoryStore(initial: Partial<SlackHookConfigState> & { url: string }): 
       state = { ...state, xCompanionBotId: botId };
       return state;
     },
+    setCompanionBotId(provider, botId) {
+      state = provider === 'x'
+        ? { ...state, xCompanionBotId: botId }
+        : { ...state, companionBotIds: { ...state.companionBotIds, [provider]: botId } };
+      return state;
+    },
     setProviderDefaultWorkspace(provider: 'telegram' | 'x' | 'feishu' | 'discord', alias: string | null) {
       state =
         provider === 'x'

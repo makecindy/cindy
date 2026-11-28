@@ -1,0 +1,10 @@
+[Desktop Entry]
+Version=1.0
+Icon=/opt/google/chrome/product_logo_128.png
+Type=X-XFCE-Helper
+Name=Google Chrome
+StartupNotify=true
+X-XFCE-Binaries=cindy-dock-chrome;
+X-XFCE-Category=WebBrowser
+X-XFCE-Commands=%B;
+X-XFCE-CommandsWithParameter=%B "%s";

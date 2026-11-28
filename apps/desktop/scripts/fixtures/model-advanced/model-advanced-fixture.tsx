@@ -4,6 +4,7 @@ import { buildUnionRows } from '../../../src/renderer/components/settings/Unifie
 import { BUNDLED_CATALOG, resolveModelMetadata, type CatalogModel, type ProviderView } from '@cindy/model-providers';
 import { setDataOwnerGeneration } from '../../../src/renderer/contexts/dataOwnerGeneration';
 import type { ModelPriceOverrideDesiredQuote, ModelPriceOverrideTarget } from '../../../src/shared/modelPriceOverride';
+import { thirdPartySpeedProvider } from './third-party-speed-provider';
 
 let priceOverride: ModelPriceOverrideDesiredQuote | null = null;
 const priceView = (target: ModelPriceOverrideTarget) => {
@@ -69,6 +70,12 @@ void mountPage({
     } };
   },
   render: ctx => {
+    if (ctx.case === 'third-party-speed') {
+      const provider = thirdPartySpeedProvider();
+      return <ModelAdvancedDrawer provider={provider} row={buildUnionRows(provider)[0]}
+        open onOpenChange={()=>{}} pricePresentationOf={()=>null} onDisable={()=>{}}
+        disabled={false} paymentRequired={false}/>;
+    }
     const id = ctx.case === 'sol' ? 'gpt-6.1-sol' : ctx.case === 'legacy-sol' ? 'gpt-6-sol' : 'gpt-6-astra';
     const models = Object.fromEntries((['codex', 'claude-code', 'pi'] as const).map(agent => {
       const meta = resolveModelMetadata(BUNDLED_CATALOG.modelRegistry, 'openai', id, undefined, undefined, agent);

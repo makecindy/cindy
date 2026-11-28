@@ -19,6 +19,26 @@ desktop、mobile 及共享 packages；服务端位于独立仓库，不在本仓
 - 公开版本只锁定公开的协议 submodule commit；插件通过 SkillHub 或手动安装。
   不要把任何凭证写入 Git 配置或仓库文件。
 
+## 给反馈者署名
+
+在 GitHub Issue、X 或 Discord 提出问题或建议的人，都可以在原讨论里确认公开署名。昵称即可上墙。希望作为 Git 共同作者的人可以提供名字和用于公开提交的邮箱（包括自己的 GitHub noreply 地址）。匿名或未确认时不建记录。
+
+维护者在实现 PR（可先开草稿）中添加 `.github/feedback-credits/<本 PR 编号>.json`。仅填本人确认公开的信息。可选的 `replyTo` 表示已约定发版后回复这条公开讨论，支持本仓 Issue、X 帖子和 Discord 公开消息的永久链接。私聊和非公开频道省略此项。
+
+```json
+{
+  "change": "修复手机切回前台后消息消失的问题",
+  "contributors": ["小雨", "River <river@example.invalid>"],
+  "replyTo": "https://github.com/makecindy/cindy/issues/123"
+}
+```
+
+把记录和实现一起暂存，运行 `node scripts/feedback-credits.mjs commit "fix: 修复手机消息恢复"`。命令提交当前暂存区，自动生成共同作者行，并以提交者本人的身份签 DCO。普通 Git 工具也可以提交同样的 trailers。PR 检查核对记录与共同作者；合并时保留提交正文。
+
+公开发布 GitHub Release（含 beta）后，工作流按发布时间和标签实际包含的记录生成[贡献墙](CONTRIBUTORS.md)及官网 JSON，并回告指定的原讨论。每天也会补扫一次。后续 PR 可以修正名字或删除记录，下一次刷新会反映在墙上。Git 历史保留原提交。
+
+回告使用 GitHub Actions 自带的 token。X 需配置具有发帖权限的用户授权 `FEEDBACK_X_USER_TOKEN`；Discord 需配置在目标频道有读取历史和发送权限的 `FEEDBACK_DISCORD_TOKEN`。这些值只放 Actions secrets。工作流先发布贡献墙，再记录每次发送的回执。发送结果不确定时，该 PR 会在运行日志中标出；查原讨论后，在 `community-credits` 分支的 `deliveries.json` 将对应记录改为 `{"status":"sent","id":"消息 ID"}`，或在确认没有发出时移除该记录，再运行 Feedback credits。
+
 ## 获取代码与安装
 
 按照[开发环境与依赖准备](docs/dev-rules/environment-setup.md)完成克隆、公开 submodule、

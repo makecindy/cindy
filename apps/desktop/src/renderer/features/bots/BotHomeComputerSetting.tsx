@@ -47,6 +47,8 @@ const SWITCH_ERROR_KEYS: Record<CompanionCloudFailureCode, string> = {
   HOME_OUTDATED: 'bots.cloud.homeOutdated',
   PAUSED: 'bots.cloud.resumeToMove',
   TARGET_OUTDATED: 'bots.cloud.targetOutdated',
+  SKILL_TARGET_OUTDATED: 'bots.cloud.skillTargetOutdated',
+  PROFILE_SNAPSHOT_MISSING: 'bots.cloud.missingProfileFailed',
 };
 
 /** How long a companion moved here from its online home may take to be built on this computer. */
@@ -94,6 +96,8 @@ export function useCompanionHomeSwitch(bot: CompanionHomeBot, failures: 'inline'
   const [pending, setPending] = useState<CompanionTransferTarget | null>(null);
   /** The companion was still working when asked to move there: wait for it, or stop it. */
   const [busyTarget, setBusyTarget] = useState<CompanionTransferTarget | null>(null);
+  /** Another computer never uploaded a profile snapshot: ask before starting fresh here. */
+  const [missingProfileTarget, setMissingProfileTarget] = useState<CompanionTransferTarget | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [repairOpen, setRepairOpen] = useState(false);
@@ -141,15 +145,22 @@ export function useCompanionHomeSwitch(bot: CompanionHomeBot, failures: 'inline'
       if (!current()) return;
       setPending(null);
       setBusyTarget(null);
+      setMissingProfileTarget(null);
       // Still working and nothing chosen yet: offer to wait for the turn or stop it.
       if (!result.ok && result.code === 'BUSY' && !options?.whenBusy) {
         setBusyTarget(target);
         return;
       }
+      if (!result.ok && result.code === 'PROFILE_SNAPSHOT_MISSING' && !options?.allowMissingProfile) {
+        setMissingProfileTarget(target);
+        return;
+      }
       if (!result.ok) {
         setRepairAvailable(!!result.profileFailure);
         report(result.profileFailure ? t(result.profileFailure.field === 'identitySource' ? 'bots.cloud.profileIdentityTooLong' : 'bots.cloud.profileUserTooLong', { limit: result.profileFailure.maxLength })
-          : t(SWITCH_ERROR_KEYS[result.code] ?? 'bots.cloud.switchFailed', { name: bot.name, device }),
+          : t(SWITCH_ERROR_KEYS[result.code] ?? 'bots.cloud.switchFailed', {
+            name: bot.name, device, context: result.oversizedSkill ? 'skill' : undefined, ...result.oversizedSkill,
+          }),
           result.profileFailure ? { label: t('bots.cloud.repair.action'), onClick: () => setRepairOpen(true) } : conflict.report(result));
         refreshCompanionCloud();
         return;
@@ -183,6 +194,7 @@ export function useCompanionHomeSwitch(bot: CompanionHomeBot, failures: 'inline'
       if (!current()) return;
       setPending(null);
       setBusyTarget(null);
+      setMissingProfileTarget(null);
       report(t('bots.cloud.switchFailed', { name: bot.name, device }));
     } finally {
       inFlight.current = false;
@@ -193,7 +205,8 @@ export function useCompanionHomeSwitch(bot: CompanionHomeBot, failures: 'inline'
   const homeName = homeHere
     ? t('bots.cloud.thisComputer')
     : actor?.homeDevice?.name?.trim() || t('bots.cloud.unknownDevice');
-  return { actor, home, homeHere, homeName, movable, choices, choicesFailed, pending, setPending, busyTarget, setBusyTarget, busy,
+  return { actor, home, homeHere, homeName, movable, choices, choicesFailed, pending, setPending, busyTarget, setBusyTarget,
+    missingProfileTarget, setMissingProfileTarget, busy,
     error, setError, inFlight, load, confirm, targetName, conflictAction: conflict.action, repairOpen, setRepairOpen, repairAvailable };
 }
 
@@ -252,6 +265,16 @@ export function HomeSwitchConfirm({ bot, state }: { bot: CompanionHomeBot; state
       loading={state.busy}
       onConfirm={() => void state.confirm(state.busyTarget, { whenBusy: 'wait' })}
       onTertiary={() => void state.confirm(state.busyTarget, { whenBusy: 'stop' })}
+    />
+    <ConfirmDialog
+      open={state.missingProfileTarget !== null}
+      onOpenChange={(open) => { if (!open && !state.inFlight.current) state.setMissingProfileTarget(null); }}
+      title={t('bots.cloud.missingProfileTitle', { name: bot.name })}
+      description={t('bots.cloud.missingProfileDescription', { name: bot.name })}
+      confirmText={t('bots.cloud.missingProfileConfirm')}
+      cancelText={t('bots.cancel')}
+      loading={state.busy}
+      onConfirm={() => void state.confirm(state.missingProfileTarget, { allowMissingProfile: true })}
     />
     <ConfirmDialog
       open={state.pending !== null}

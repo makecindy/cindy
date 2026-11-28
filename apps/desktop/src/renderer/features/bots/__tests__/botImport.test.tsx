@@ -8,7 +8,7 @@ const portraits = vi.hoisted(() => ({ load: vi.fn(async (index: number) => `data
 
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string, options?: Record<string, string>) => options ? `${key} ${Object.values(options).join(' ')}` : key }) }));
 vi.mock('../botStore', () => ({ useBotProfiles: () => [] }));
-vi.mock('../BotPortraitPicker', () => ({ BOT_PORTRAIT_COUNT: 17, galleryPortrait: portraits.load, BotPortraitPicker: ({ onChange, disabled }: { onChange(value: string): void; disabled: boolean }) => <button disabled={disabled} onClick={() => onChange('data:image/png;base64,chosen')}>existing-portrait-picker</button> }));
+vi.mock('../BotPortraitPicker', () => ({ BOT_PORTRAIT_COUNT: 26, galleryPortrait: portraits.load, BotPortraitPicker: ({ onChange, disabled }: { onChange(value: string): void; disabled: boolean }) => <button disabled={disabled} onClick={() => onChange('data:image/png;base64,chosen')}>existing-portrait-picker</button> }));
 beforeEach(() => portraits.load.mockClear());
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
@@ -31,7 +31,7 @@ it('draws from the existing full gallery once per form and retains the choice th
   render(<BotImportForm {...props} />);
   fireEvent.click(await screen.findByRole('button', { name: /Ada.*Hermes/ }));
   await screen.findByRole('button', { name: 'existing-portrait-picker' });
-  expect(portraits.load).toHaveBeenLastCalledWith(16);
+  expect(portraits.load).toHaveBeenLastCalledWith(25);
 });
 
 it('preserves an imported portrait instead of replacing it with a gallery default', async () => {
@@ -189,7 +189,7 @@ it('shows 142 selected skills in a flat searchable paginated list and opens chat
   expect(container.querySelector('details')).toBeNull();
   fireEvent.click(screen.getByRole('button', { name: 'bots.import.next' }));
   expect(screen.getByLabelText('Skill 20')).toBeDefined();
-  fireEvent.change(screen.getByRole('searchbox'), { target: { value: 'Skill 141' } });
+  fireEvent.change(screen.getByRole('textbox', { name: 'bots.import.search' }), { target: { value: 'Skill 141' } });
   expect((screen.getByLabelText('Skill 141') as HTMLInputElement).checked).toBe(true);
   fireEvent.click(screen.getByRole('button', { name: 'bots.import.back' }));
   fireEvent.click(screen.getByRole('button', { name: 'bots.import.submit' }));
@@ -238,7 +238,7 @@ it('shows messaging bots as their own row with the source handover note, owner a
   fireEvent.click(await screen.findByRole('button', { name: /Ada.*Hermes/ }));
   fireEvent.click(await screen.findByRole('button', { name: /bots\.import\.bots.*bots\.import\.botsNote Hermes/ }));
   // A short list needs no search box.
-  expect(screen.queryByRole('searchbox')).toBeNull();
+  expect(screen.queryByRole('textbox', { name: 'bots.import.search' })).toBeNull();
   expect(screen.getByText('bots.import.botOwner 1111')).toBeTruthy();
   expect(screen.queryByText('bots.import.botOwner ou_fixture')).toBeNull();
   expect(screen.getByText('bots.import.sourceDisabled')).toBeTruthy();

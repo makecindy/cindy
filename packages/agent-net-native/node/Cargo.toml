@@ -1,0 +1,29 @@
+[package]
+name = "cindy-agent-net-node"
+version = "0.0.0"
+edition = "2024"
+license = "Apache-2.0"
+publish = false
+description = "Node-API binding of the native Agent-Net engine for the Desktop's Agent-Net worker."
+
+[lib]
+crate-type = ["cdylib"]
+
+# Outside agent-net-core's dependency-free workspace, like the engine it binds.
+[workspace]
+members = ["."]
+
+[build-dependencies]
+napi-build = "=2.1.3"
+
+[dependencies]
+cindy-agent-net-native = { path = ".." }
+napi = { version = "2", default-features = false, features = ["napi6"] }
+napi-derive = "2"
+serde_json = "1"
+
+[profile.release]
+lto = "thin"
+strip = true
+# Engine panics are caught and poison the engine (lib.rs), as in the C ABI.
+panic = "unwind"

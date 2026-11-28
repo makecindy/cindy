@@ -40,7 +40,7 @@ Auto still reviews the actual invocation; Full Access retains its normal behavio
 
 The creation UI reuses the existing teammate dialog/sheet and portrait picker.
 Without source artwork, Desktop import follows normal creation: one random pick
-from the existing 17 portraits per form, with subsequent user choices preserved.
+from the 26 bundled gallery portraits per form, with subsequent user choices preserved.
 After creation, personality, memory, skills and model management use the existing
 teammate screens; imported jobs are managed as the teammate project's automations.
 Mobile can select automations during import and request host-owned takeover.

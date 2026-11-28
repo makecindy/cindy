@@ -12,6 +12,7 @@ import { detectChatgptBridgeAuthInvalidationReason } from './chatgpt-bridge-auth
 import { buildChatgptBridgeHeaders } from './chatgpt-bridge-headers.js';
 import {
   authenticatePiProxySession,
+  getPiProxyHostedModelAccess,
   getPiProxySessionProvider,
   getPiProxySessionSignal,
   getPiProxySubscriptionAccount,
@@ -43,9 +44,10 @@ function authenticatedRoute({ url, headers }: Context): { sessionId: string; pro
   if (!sessionId || !token || !isOpenAiSubscriptionProviderId(providerId)
     || !authenticatePiProxySession(sessionId, token)
     || getPiProxySessionProvider(sessionId, token) !== providerId) return null;
-  // These routes require a live per-model grant check for every request body.
-  // A transparent socket tunnel cannot enforce that contract.
-  if (guestProviderRouteForSession(sessionId) || hasHostedSessionModelAccess(sessionId)) return null;
+  // Only HTTP enforces the hosted per-model grant. The token retains its
+  // hosted scope even when the binding is removed before the token closes.
+  if (getPiProxyHostedModelAccess(sessionId, token)
+    || guestProviderRouteForSession(sessionId) || hasHostedSessionModelAccess(sessionId)) return null;
   const selectedProvider = getSessionProvider(sessionId);
   if (!isPiProxySubagentRoute(sessionId, token) && selectedProvider !== null && selectedProvider !== providerId) return null;
   const signal = getPiProxySessionSignal(sessionId, token);

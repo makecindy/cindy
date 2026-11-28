@@ -1,9 +1,9 @@
 import { PROVIDER_SHARE_GROUP_STATUS_REQUEST, scrubSharedProviderCatalog, type InvokeResultPayload } from '@cindy/device-link';
-import { MODEL_CATALOG_READ_CHANNELS, type ControlledModelLocation } from '../../shared/controlledModelCatalog.js';
+import { CONTROLLED_MODEL_CATALOG_RETRY_SHARE, MODEL_CATALOG_READ_CHANNELS, type ControlledModelLocation } from '../../shared/controlledModelCatalog.js';
 import { extractIpcError } from '../../shared/ipcError.js';
 import type { IpcErrorCode } from '../../shared/ipc-errors.js';
 import { PLUGIN_ENGINES_INVOKE, parseOfferedPluginEngines, pluginEngineKeyFromProviderId } from '../../shared/pluginEngines.js';
-import { isProviderShareAgentDeviceId } from '../../shared/providerShare.js';
+import { isProviderShareAgentDeviceId, providerShareIdOfAgentDeviceId } from '../../shared/providerShare.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
 
 /**
@@ -44,6 +44,7 @@ function temporarySourceFailure(code: unknown, message: unknown): IpcErrorCode |
 export interface ControlledModelCatalogDeps {
   assertCaller(): void;
   captureOwner(): () => void;
+  retryShareDirectory(agentDeviceId: string): Promise<{ receivedChangeSequence?: number }>;
   locations(): Promise<{ status: 'complete' | 'degraded'; locations: ControlledModelLocation[] }>;
   invoke(deviceId: string, channel: string, args: unknown[], assertOwner: () => void): Promise<InvokeResultPayload>;
 }
@@ -62,6 +63,16 @@ export function createControlledModelCatalogReader(deps: ControlledModelCatalogD
       const snapshot = await deps.locations();
       assertOwner();
       return snapshot;
+    }
+    if (request.op === CONTROLLED_MODEL_CATALOG_RETRY_SHARE) {
+      const deviceId = request.agentDeviceId;
+      if (typeof deviceId !== 'string' || !providerShareIdOfAgentDeviceId(deviceId)
+        || Object.keys(request).some(key => key !== 'op' && key !== 'agentDeviceId')) {
+        throwIpcError('INVALID_PARAMS', 'Invalid shared model directory retry');
+      }
+      const result = await deps.retryShareDirectory(deviceId);
+      assertOwner();
+      return { ok: true, ...result };
     }
     const pluginEngineRead = request.channel === PLUGIN_ENGINE_LIST;
     if (request.op !== 'read'

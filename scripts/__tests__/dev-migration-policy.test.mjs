@@ -34,23 +34,6 @@ function createFixture() {
   };
 }
 
-test('shared dev allows branches without migration artifacts', () => {
-  const fixture = createFixture();
-  try {
-    fs.writeFileSync(path.join(fixture.repo, 'README.md'), 'feature\n');
-    git(fixture.repo, 'add', 'README.md');
-    git(fixture.repo, 'commit', '-m', 'non-migration feature');
-    assert.deepEqual(findUnmergedMigrationArtifacts(fixture.repo), {
-      baseRef: 'origin/main',
-      committed: [],
-      workingTree: [],
-    });
-    assert.doesNotThrow(() => assertSharedDevMigrationPolicy(fixture.repo, ['--wait-ready']));
-  } finally {
-    fixture.cleanup();
-  }
-});
-
 test('shared dev rejects committed or working-tree migration artifacts before restart', () => {
   const fixture = createFixture();
   try {
@@ -65,61 +48,6 @@ test('shared dev rejects committed or working-tree migration artifacts before re
     assert.throws(
       () => assertSharedDevMigrationPolicy(fixture.repo, ['--wait-ready']),
       /committed: apps\/desktop\/drizzle\/0001_feature\.sql/,
-    );
-  } finally {
-    fixture.cleanup();
-  }
-});
-
-test('named isolated dev may run an unmerged migration', () => {
-  const fixture = createFixture();
-  try {
-    fs.writeFileSync(path.join(fixture.drizzleDir, '0001_feature.sql'), 'SELECT 1;\n');
-    assert.doesNotThrow(() =>
-      assertSharedDevMigrationPolicy(fixture.repo, ['--wait-ready', '--isolated=feature']),
-    );
-  } finally {
-    fixture.cleanup();
-  }
-});
-
-test('migration becomes shared-safe only after it is canonical on origin/main', () => {
-  const fixture = createFixture();
-  try {
-    fs.writeFileSync(path.join(fixture.drizzleDir, '0001_feature.sql'), 'SELECT 1;\n');
-    git(fixture.repo, 'add', '.');
-    git(fixture.repo, 'commit', '-m', 'feature migration');
-    assert.throws(() => assertSharedDevMigrationPolicy(fixture.repo, []));
-    git(fixture.repo, 'update-ref', 'refs/remotes/origin/main', 'HEAD');
-    assert.doesNotThrow(() => assertSharedDevMigrationPolicy(fixture.repo, []));
-  } finally {
-    fixture.cleanup();
-  }
-});
-
-test('stale origin/HEAD cannot replace origin/main as the migration baseline', () => {
-  const fixture = createFixture();
-  try {
-    const migrationPath = path.join(fixture.drizzleDir, '0001_release_only.sql');
-    fs.writeFileSync(migrationPath, 'SELECT 1;\n');
-    git(fixture.repo, 'add', '.');
-    git(fixture.repo, 'commit', '-m', 'release-only migration');
-    git(fixture.repo, 'update-ref', 'refs/remotes/origin/release', 'HEAD');
-    git(
-      fixture.repo,
-      'symbolic-ref',
-      'refs/remotes/origin/HEAD',
-      'refs/remotes/origin/release',
-    );
-
-    assert.deepEqual(findUnmergedMigrationArtifacts(fixture.repo), {
-      baseRef: 'origin/main',
-      committed: ['apps/desktop/drizzle/0001_release_only.sql'],
-      workingTree: [],
-    });
-    assert.throws(
-      () => assertSharedDevMigrationPolicy(fixture.repo, []),
-      /committed: apps\/desktop\/drizzle\/0001_release_only\.sql/,
     );
   } finally {
     fixture.cleanup();

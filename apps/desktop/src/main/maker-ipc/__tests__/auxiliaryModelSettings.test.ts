@@ -170,6 +170,27 @@ describe('auxiliary model settings IPC helpers', () => {
     }
   });
 
+  // Unit: a settings save based on an earlier read is checked before the write and again inside
+  // the store lock, so a chain the settings window saved in the meantime is kept.
+  it('checks a settings save against its read where the chain is written', async () => {
+    const write = vi.mocked(writeAuxiliaryModelSettingsPatch);
+    const store = vi.mocked(readAuxiliaryModelSettings);
+    store.mockReturnValue({ models: [] });
+    try {
+      const stale = { assertUnchanged: () => { throw new Error('CONFLICT'); } };
+      await expect(saveAuxiliaryModelSettings({ models: [] }, new Set(), new Set(), undefined, stale)).rejects.toThrow('CONFLICT');
+      expect(write).not.toHaveBeenCalled();
+      const current = { assertUnchanged: vi.fn() };
+      await saveAuxiliaryModelSettings({ models: [] }, new Set(), new Set(), undefined, current);
+      const inLock = write.mock.calls[0]![1]!;
+      current.assertUnchanged.mockImplementation(() => { throw new Error('CONFLICT'); });
+      expect(() => inLock()).toThrow('CONFLICT');
+    } finally {
+      write.mockReset();
+      store.mockReset();
+    }
+  });
+
   // Unit: retain experimental remote settings for removal, but reject new selections.
   // Existing persisted-route cases do not distinguish execution computers.
   it('keeps a remote selection unavailable even when the local route is usable', () => {

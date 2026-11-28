@@ -65,6 +65,11 @@ vi.mock('@/components/settings/ProfileEditDialog', () => ({
     open ? <div data-testid="profile-edit-dialog" /> : null,
 }));
 
+// 换绑入口有独立测试(ContactChangeAction.test.tsx);这里只确认它挂在 ID 行里。
+vi.mock('@/components/settings/ContactChangeAction', () => ({
+  ContactChangeAction: () => <span data-testid="contact-change-action" />,
+}));
+
 import { UserProfileCard } from '@/components/settings/UserProfileCard';
 
 function renderCard() {
@@ -122,6 +127,8 @@ describe('UserProfileCard copy user ID', () => {
     });
     expect(email.parentElement).toBe(idButton.parentElement);
     expect(email.nextElementSibling).toBe(idButton);
+    // 换绑入口紧跟在 ID 后、同一行,不再单独占一个设置分组。
+    expect(idButton.nextElementSibling).toBe(screen.getByTestId('contact-change-action'));
     expect(email.className).not.toContain('flex-1');
     expect(idButton.className).toContain('cursor-pointer');
     expect(idButton.className).toContain('hover:bg-[var(--settings-profile-avatar-bg)]');

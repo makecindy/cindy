@@ -2,9 +2,13 @@ import { beforeEach, expect, it, vi } from 'vitest';
 import type { RemoteClipboardContent } from '@cindy/device-link';
 const h = vi.hoisted(() => ({
   content: {} as RemoteClipboardContent,
+  x11: false,
+  gnome: false,
   write: vi.fn(),
   version: vi.fn(),
 }));
+vi.mock('../linuxX11Clipboard', () => ({ isX11Clipboard: () => h.x11 }));
+vi.mock('../linuxGnomeClipboard', () => ({ gnomeClipboardReady: () => h.gnome }));
 vi.mock('electron', () => ({
   clipboard: {},
   nativeImage: { createEmpty: () => ({ isEmpty: () => true }) },
@@ -23,6 +27,8 @@ vi.mock('../linuxClipboardNative', () => ({
 }));
 import { transferDesktopClipboardContent } from '../clipboard';
 beforeEach(() => {
+  h.x11 = false;
+  h.gnome = false;
   h.content = { text: 'hello', html: '<b>hello</b>' };
   h.version.mockReset().mockResolvedValue('version');
   h.write.mockReset().mockImplementation(async (value) => {
@@ -55,3 +61,25 @@ it('does not inject paste after revocation while native writing completes', asyn
   ).rejects.toThrow('DESKTOP_LEASE_EXPIRED');
   expect(input).toHaveBeenCalledExactlyOnceWith([{ kind: 'release' }]);
 });
+
+it.each(['x11', 'gnome'] as const)(
+  'uses Shift+Insert paste shortcut on %s for terminals and browsers, but never while syncing',
+  async (backend) => {
+    h.x11 = backend === 'x11';
+    h.gnome = backend === 'gnome';
+    const input = vi.fn();
+    await transferDesktopClipboardContent('paste', { text: '中文 😀' }, () => true, input);
+    expect(input.mock.calls.at(-1)?.[0]).toEqual([
+      { kind: 'release' },
+      { kind: 'key', code: 'ShiftLeft', down: true },
+      { kind: 'key', code: 'Insert', down: true },
+      { kind: 'key', code: 'Insert', down: false },
+      { kind: 'key', code: 'ShiftLeft', down: false },
+    ]);
+    input.mockClear();
+    await transferDesktopClipboardContent('paste', { text: '同步' }, () => true, input, {
+      sync: true,
+    });
+    expect(input).not.toHaveBeenCalled();
+  },
+);

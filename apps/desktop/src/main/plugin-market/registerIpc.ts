@@ -190,9 +190,9 @@ export function registerPluginMarketIpc(): void {
     return invokePluginMarket(() => service().officialModelPlugins(cursor, () =>
       !sender.isDestroyed() && activeProviderPages.get(sender) === page));
   });
-  ipcMain.handle('plugin-market:recommendations', (event) => {
+  ipcMain.handle('plugin-market:recommendations', (event, pluginIds?: unknown) => {
     assertTrustedAppRendererEvent(event);
-    return invokePluginMarket(() => service().recommendations());
+    return invokePluginMarket(() => service().recommendations(pluginIds));
   });
   ipcMain.handle('plugin-market:lookup', (event, ghostIds: unknown) => {
     assertTrustedAppRendererEvent(event);
@@ -203,10 +203,13 @@ export function registerPluginMarketIpc(): void {
     assertTrustedAppRendererEvent(event);
     return invokePluginMarket(async () => service().consumeRemovalNotice());
   });
-  ipcMain.handle('plugin-market:detail', (event, pluginId: unknown) => {
+  ipcMain.handle('plugin-market:detail', (event, pluginId: unknown, options?: { includeReadme?: boolean; includeUpdates?: boolean }) => {
     assertTrustedAppRendererEvent(event);
     return invokePluginMarket(() =>
-      service().detail(requireString(pluginId, 'pluginId'), { includeReadme: true }),
+      service().detail(requireString(pluginId, 'pluginId'), {
+        includeReadme: options?.includeReadme !== false,
+        includeUpdates: options?.includeUpdates === true,
+      }),
     );
   });
   ipcMain.handle('plugin-market:prepare-share', (event, pluginId: unknown, options: unknown) => {

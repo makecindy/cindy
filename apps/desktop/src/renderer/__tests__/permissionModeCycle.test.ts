@@ -36,4 +36,11 @@ describe('getNextPermissionMode', () => {
     expect(getNextPermissionMode('acceptEdits', two)).toBe('plan');
     expect(getNextPermissionMode('plan', two)).toBe('acceptEdits');
   });
+
+  // Unit: cross-harness equivalence (ask <-> default) so Shift+Tab advances from index 0 instead of sticking.
+  it('recognizes ask and default as equivalent when advancing to the next mode', () => {
+    const agyModes = descriptors(['default', 'acceptEdits', 'auto', 'plan', 'bypassPermissions']);
+    expect(getNextPermissionMode('ask', agyModes)).toBe('acceptEdits');
+    expect(getNextPermissionMode('default', CC_MODES)).toBe('acceptEdits');
+  });
 });

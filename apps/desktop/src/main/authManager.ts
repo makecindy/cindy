@@ -20,6 +20,11 @@ import { resolveRuntimeDeviceIdentity, writeReplacementDeviceId } from './device
  */
 
 import { BrowserWindow, net, safeStorage, app, shell, powerMonitor } from 'electron';
+import { getInstanceConfig, instanceRefreshDelay } from './instance-runtime/config.js';
+import { managedAuthRetryEpoch } from './instance-runtime/authRetryEpoch.js';
+import { acknowledgeInstanceLogin, assertInstanceAuthMutationAllowed, getInstanceSession, instanceAuthReady } from './instance-runtime/host.js';
+import type { InstanceRecoveryOptions } from './instance-runtime/session.js';
+import { projectCommittedAuthIdentity, type CommittedAuthIdentity } from './authCommittedIdentity.js';
 import crypto from 'node:crypto';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
@@ -27,7 +32,7 @@ import path from 'node:path';
 import fs from 'node:fs';
 import { machineIdSync } from 'node-machine-id';
 import { writeDeviceLinkSetting } from './device-link/settings-store.desktop';
-import {readCloudGuest,cloudGuestSaved,cloudGuestAuthorization,markCloudGuestSaved,confirmCloudGuestWhenOnline} from '@cindy/auth-client/linux-cloud';
+import {readCloudGuest,cloudGuestSaved,cloudGuestAuthorization,cloudGuestFailureReason,markCloudGuestSaved,confirmCloudGuestWhenOnline} from '@cindy/auth-client/linux-cloud';
 import { enrollTestCloudDesktop } from './cloudDesktopTestEnrollment';
 import {
   AuthApiError,
@@ -36,12 +41,14 @@ import {
   discoverEmailLogin,
   discoverPersonalLoginOrganization,
   discoverSsoOrgRealm,
+  encodeQrLoginUrl,
   parseAccountDeletionReceiptRecord,
   parseAuthSessionRecord,
   reduceAuthFlow,
   serializeAccountDeletionReceiptRecord,
   ssoOrgDiscoveryToMethods,
   serializeAuthSessionRecord,
+  SIGNUP_CONFIRMATION_CAPABILITY,
   type AuthFlowState,
   type AuthMembership,
   type AuthRegion,
@@ -52,6 +59,7 @@ import {
   type LoginMethod,
   type LoginOutcome,
   type ProviderConfig,
+  type QrRequesterInfo,
   type SocialProvider,
 } from '@cindy/auth-client';
 import { readReloginFlag, clearReloginFlag, enableUncustomizedBetaChannel } from './updateService';
@@ -107,6 +115,7 @@ import {
   type AuthLoopbackDevBridge,
 } from './authLoopbackCallback';
 import { createDesktopPollCredentials, runHostedCallbackPolling } from './authHostedCallback';
+import { deviceName as localDeviceName } from './device-link/deviceName';
 import { launchAuthBrowser } from './authBrowserLaunch';
 import { reconcileSavedAccountMetadata, type StoredAccountMetadata } from './authAccountMetadata';
 import {
@@ -162,6 +171,9 @@ import {
   type DesktopLoginAction,
   type DesktopLoginActionResult,
   type DesktopLoginState,
+  type DesktopQrHandoffDecisionResult,
+  type DesktopQrHandoffResult,
+  type DesktopQrHandoffStateResult,
 } from '../shared/authIpc';
 import { LOGIN_CAPTCHA_PAGE_PATH } from '../shared/webviewPartition';
 import {
@@ -193,7 +205,17 @@ import {
   reserveCommittedLocalProfileDataOwnerDetailed,
   reserveLocalProfileDataOwnerDetailed,
 } from './localProfileDataMigration.js';
-import { buildSafeStorageIssueMeta } from './safeStorageIssueLog.js';
+import {
+  buildSafeStorageIssueMeta,
+  type SafeStorageIssueExtra,
+} from './safeStorageIssueLog.js';
+import {
+  evaluateExplicitLoginVaultRecovery,
+  probeSafeStorageRoundTrip,
+  readAtomicSafeRecord,
+  type AtomicSafeReadResult,
+  type SafeStorageProbeResult,
+} from './authSafeStorageHealth.js';
 import { createCredentialStoreHealth } from './authCredentialStoreHealth';
 import { withCrossProcessLock } from './device-link/crossProcessLock';
 import {
@@ -404,6 +426,8 @@ let pendingAccountMemberships: AuthMembership[] = [];
 let pendingLoginTicket: string | null = null;
 let pendingBindTicket: string | null = null;
 let pendingSsoVerificationTicket: string | null = null;
+// 「创建新账号」确认票据：只在本进程内存，确认或放弃后清空。
+let pendingSignupTicket: string | null = null;
 let loginActionPromise: Promise<DesktopLoginActionResult> | null = null;
 let loginActionPromiseEpoch: number | null = null;
 // Separate from authStateEpoch: closing an add-account surface must invalidate
@@ -452,6 +476,8 @@ function createAuthClient(
     deviceId,
     clientType: 'desktop',
     locale: getResolvedMainLocale(),
+    // 桌面登录页能处理「创建新账号」确认；cindy-host CLI 等其它调用方不声明。
+    capabilities: [SIGNUP_CONFIRMATION_CAPABILITY],
     fetch: withProviderResponseDiagnostics(
       scenarioFetch ?? desktopAuthFetch,
       (diagnostic) => log.warn('login providers non-JSON response', diagnostic),
@@ -559,13 +585,19 @@ const SAFE_STORAGE_DIR = () => path.join(app.getPath('userData'), 'safe-storage'
 // message 携带 userData 绝对路径,不该进保留 30 天的日志;密文/明文更不落。
 const safeStorageIssueLogged = new Set<string>();
 let credentialEncryptionUnavailable = false;
+let credentialBackendProbeFailed = false;
 let credentialEncryptionFailureLogged = false;
+
+function noteCredentialBackendOperational(): void {
+  credentialBackendProbeFailed = false;
+  if (app.isReady()) credentialEncryptionUnavailable = false;
+}
 
 function isCredentialEncryptionAvailable(): boolean {
   const available = safeStorage.isEncryptionAvailable();
   // Only consume a real credential operation after Electron is ready. Filesystem
   // contention and an individual bad ciphertext do not require a process restart.
-  if (app.isReady()) credentialEncryptionUnavailable = !available;
+  if (app.isReady()) credentialEncryptionUnavailable = !available || credentialBackendProbeFailed;
   if (!available && !credentialEncryptionFailureLogged) {
     credentialEncryptionFailureLogged = true;
     let screenState = 'unknown';
@@ -617,6 +649,31 @@ function isCredentialEncryptionAvailable(): boolean {
   return available;
 }
 
+/**
+ * In-memory round-trip check invoked only on explicit user login actions (never
+ * on startup). On macOS, `safeStorage.isEncryptionAvailable()` can stay true
+ * even after OSCrypt fails to read the Keychain; this probe catches that before
+ * requesting codes or committing a login, and surfaces the failure to single-shot
+ * process recovery without deleting saved credentials.
+ */
+function probeCredentialEncryptionBackend(): SafeStorageProbeResult {
+  if (!isCredentialEncryptionAvailable()) {
+    return { ok: false, reason: 'unavailable' };
+  }
+  const probe = probeSafeStorageRoundTrip(safeStorage);
+  if (probe.ok) {
+    noteCredentialBackendOperational();
+    return probe;
+  }
+  credentialBackendProbeFailed = true;
+  if (app.isReady()) credentialEncryptionUnavailable = true;
+  logSafeStorageIssueOnce('encryption probe failed', AUTH_ACCOUNT_VAULT_KEY, probe.error, {
+    stage: 'backend',
+    probeOk: false,
+  });
+  return probe;
+}
+
 /** Main-process recovery signal; never expose credentials or probe the keychain. */
 export function needsCredentialProcessRecovery(): boolean {
   return (
@@ -632,25 +689,42 @@ export function isAuthFlowBusy(): boolean {
   return loginActionPromise !== null || loginFlowState?.step === 'browser-redirect';
 }
 
-function logSafeStorageIssueOnce(reason: string, key: string, err?: unknown): void {
-  const issueKey = `${reason}:${key}`;
+function logSafeStorageIssueOnce(
+  reason: string,
+  key: string,
+  err?: unknown,
+  extra?: SafeStorageIssueExtra,
+): void {
+  const issueKey = `${reason}:${key}:${extra?.stage ?? ''}`;
   if (safeStorageIssueLogged.has(issueKey)) return;
   safeStorageIssueLogged.add(issueKey);
-  log.warn(`safeStorage ${reason}`, buildSafeStorageIssueMeta(key, err));
+  log.warn(`safeStorage ${reason}`, buildSafeStorageIssueMeta(key, err, extra));
 }
 
 function readSafe(key: string): string | null {
+  if (!isCredentialEncryptionAvailable()) {
+    logSafeStorageIssueOnce('encryption unavailable (read)', key, undefined, {
+      stage: 'backend',
+      probeOk: false,
+    });
+    return null;
+  }
+  const filepath = path.join(SAFE_STORAGE_DIR(), `${key}.enc`);
+  let content: string;
   try {
-    if (!isCredentialEncryptionAvailable()) {
-      logSafeStorageIssueOnce('encryption unavailable (read)', key);
-      return null;
-    }
-    const filepath = path.join(SAFE_STORAGE_DIR(), `${key}.enc`);
     if (!fs.existsSync(filepath)) return null;
-    const content = fs.readFileSync(filepath, 'utf-8');
-    return safeStorage.decryptString(Buffer.from(content, 'base64'));
+    content = fs.readFileSync(filepath, 'utf-8');
   } catch (err) {
-    logSafeStorageIssueOnce('decrypt failed', key, err);
+    if ((err as NodeJS.ErrnoException)?.code === 'ENOENT') return null;
+    logSafeStorageIssueOnce('read io failed', key, err, { stage: 'io' });
+    return null;
+  }
+  try {
+    const decrypted = safeStorage.decryptString(Buffer.from(content, 'base64'));
+    noteCredentialBackendOperational();
+    return decrypted;
+  } catch (err) {
+    logSafeStorageIssueOnce('decrypt failed', key, err, { stage: 'decrypt' });
     return null;
   }
 }
@@ -694,21 +768,30 @@ function isPersistedSecretAbsent(key: string): boolean {
 }
 
 function writeSafe(key: string, value: string): boolean {
+  if (!isCredentialEncryptionAvailable()) {
+    logSafeStorageIssueOnce('encryption unavailable (write)', key, undefined, {
+      stage: 'backend',
+      probeOk: false,
+    });
+    return false;
+  }
+  let encoded: string;
   try {
-    if (!isCredentialEncryptionAvailable()) {
-      logSafeStorageIssueOnce('encryption unavailable (write)', key);
-      return false;
-    }
+    encoded = safeStorage.encryptString(value).toString('base64');
+    noteCredentialBackendOperational();
+  } catch (err) {
+    credentialBackendProbeFailed = true;
+    if (app.isReady()) credentialEncryptionUnavailable = true;
+    logSafeStorageIssueOnce('encrypt failed', key, err, { stage: 'backend', probeOk: false });
+    return false;
+  }
+  try {
     const dir = SAFE_STORAGE_DIR();
     fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(
-      path.join(dir, `${key}.enc`),
-      safeStorage.encryptString(value).toString('base64'),
-      'utf-8',
-    );
+    fs.writeFileSync(path.join(dir, `${key}.enc`), encoded, 'utf-8');
     return true;
   } catch (err) {
-    logSafeStorageIssueOnce('encrypt/persist failed', key, err);
+    logSafeStorageIssueOnce('persist failed', key, err, { stage: 'io' });
     return false;
   }
 }
@@ -719,26 +802,33 @@ function writeSafe(key: string, value: string): boolean {
  * During the Windows backup-swap fallback, readers use the old backup rather
  * than trying to restore it while the writer still owns the vault lock.
  */
-function readAtomicSafe(key: string): string | null {
-  try {
-    if (!isCredentialEncryptionAvailable()) {
-      logSafeStorageIssueOnce('encryption unavailable (atomic read)', key);
-      return null;
-    }
-    const filepath = path.join(SAFE_STORAGE_DIR(), `${key}.enc`);
-    let content: string;
-    try {
-      content = fs.readFileSync(filepath, 'utf-8');
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException)?.code !== 'ENOENT') throw error;
-      content = fs.readFileSync(`${filepath}.bak`, 'utf-8');
-    }
-    return safeStorage.decryptString(Buffer.from(content, 'base64'));
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException)?.code === 'ENOENT') return null;
-    logSafeStorageIssueOnce('atomic decrypt failed', key, err);
-    return null;
+function readAtomicSafeDetailed(key: string, recoverFromBackup = false): AtomicSafeReadResult {
+  const result = readAtomicSafeRecord({
+    recoverFromBackup,
+    isEncryptionAvailable: () => isCredentialEncryptionAvailable(),
+    readFileUtf8: (filepath) => fs.readFileSync(filepath, 'utf-8'),
+    decryptBase64: (base64Ciphertext) =>
+      safeStorage.decryptString(Buffer.from(base64Ciphertext, 'base64')),
+    filepath: path.join(SAFE_STORAGE_DIR(), `${key}.enc`),
+  });
+  if (result.status === 'ok') {
+    noteCredentialBackendOperational();
+  } else if (result.status === 'backend-unavailable') {
+    logSafeStorageIssueOnce('encryption unavailable (atomic read)', key, undefined, {
+      stage: 'backend',
+      probeOk: false,
+    });
+  } else if (result.status === 'io-error') {
+    logSafeStorageIssueOnce('atomic read io failed', key, result.error, { stage: 'io' });
+  } else if (result.status === 'decrypt-failed') {
+    logSafeStorageIssueOnce('atomic decrypt failed', key, result.error, { stage: 'decrypt' });
   }
+  return result;
+}
+
+function readAtomicSafe(key: string): string | null {
+  const result = readAtomicSafeDetailed(key);
+  return result.status === 'ok' ? result.value : null;
 }
 
 /**
@@ -796,19 +886,38 @@ function logUnreadableEncryptedRecord(
   log.warn(absentAndUnavailable ? absentMessage : presentMessage);
 }
 
-function writeAtomicSafe(key: string, value: string): boolean {
+function writeAtomicSafe(
+  key: string,
+  value: string,
+  preserveExistingBackup = false,
+): boolean {
+  if (!isCredentialEncryptionAvailable()) {
+    logSafeStorageIssueOnce('encryption unavailable (atomic write)', key, undefined, {
+      stage: 'backend',
+      probeOk: false,
+    });
+    return false;
+  }
+  let encoded: string;
   try {
-    if (!isCredentialEncryptionAvailable()) {
-      logSafeStorageIssueOnce('encryption unavailable (atomic write)', key);
-      return false;
-    }
-    atomicWriteFileSync(
-      path.join(SAFE_STORAGE_DIR(), `${key}.enc`),
-      safeStorage.encryptString(value).toString('base64'),
-    );
+    encoded = safeStorage.encryptString(value).toString('base64');
+    noteCredentialBackendOperational();
+  } catch (err) {
+    credentialBackendProbeFailed = true;
+    if (app.isReady()) credentialEncryptionUnavailable = true;
+    logSafeStorageIssueOnce('atomic encrypt failed', key, err, {
+      stage: 'backend',
+      probeOk: false,
+    });
+    return false;
+  }
+  try {
+    atomicWriteFileSync(path.join(SAFE_STORAGE_DIR(), `${key}.enc`), encoded, {
+      preserveExistingBackup,
+    });
     return true;
   } catch (err) {
-    logSafeStorageIssueOnce('atomic encrypt/persist failed', key, err);
+    logSafeStorageIssueOnce('atomic persist failed', key, err, { stage: 'io' });
     return false;
   }
 }
@@ -1012,6 +1121,8 @@ function readAuthAccountVault(
   options: {
     allowUnreadable?: boolean;
     recoverInvalid?: boolean;
+    previousRead?: AtomicSafeReadResult;
+    allowUndecryptableReplacement?: boolean;
     allowUnreadableLogoutTombstones?: boolean;
   } = {},
 ): AuthAccountVault {
@@ -1031,9 +1142,18 @@ function readAuthAccountVault(
       throw error;
     }
   }
-  const raw = readAtomicSafe(AUTH_ACCOUNT_VAULT_KEY);
+  const read = options.previousRead;
+  const raw = read ? (read.status === 'ok' ? read.value : null) : readAtomicSafe(AUTH_ACCOUNT_VAULT_KEY);
   if (raw === null) {
-    if (isAtomicPersistedSecretAbsent(AUTH_ACCOUNT_VAULT_KEY)) {
+    if (
+      read?.status === 'absent' ||
+      ((!read || read.status === 'backend-unavailable') && isAtomicPersistedSecretAbsent(AUTH_ACCOUNT_VAULT_KEY))
+    ) {
+      return persistedLogoutKeys.length > 0
+        ? { ...emptyAuthAccountVault(), loggedOutAccountKeys: persistedLogoutKeys }
+        : emptyAuthAccountVault();
+    }
+    if (options.recoverInvalid && options.allowUndecryptableReplacement) {
       return persistedLogoutKeys.length > 0
         ? { ...emptyAuthAccountVault(), loggedOutAccountKeys: persistedLogoutKeys }
         : emptyAuthAccountVault();
@@ -1159,7 +1279,7 @@ function readAuthAccountVault(
 
 function writeAuthAccountVault(
   vault: AuthAccountVault,
-  options: { replaceUnreadableLogoutTombstones?: boolean } = {},
+  options: { replaceUnreadableLogoutTombstones?: boolean; preserveExistingBackup?: boolean } = {},
 ): boolean {
   const previousLogoutRaw = readAtomicSafe(AUTH_ACCOUNT_LOGOUT_TOMBSTONES_KEY);
   const previousLogoutWasAbsent =
@@ -1183,7 +1303,13 @@ function writeAuthAccountVault(
   // accounts. New clients continue to read the optional logout tombstones,
   // while logout removes the signed-out membership from the stored Passport
   // projection so older clients cannot enumerate it from local data.
-  if (writeAtomicSafe(AUTH_ACCOUNT_VAULT_KEY, JSON.stringify({ ...vault, version: 1 }))) {
+  if (
+    writeAtomicSafe(
+      AUTH_ACCOUNT_VAULT_KEY,
+      JSON.stringify({ ...vault, version: 1 }),
+      options.preserveExistingBackup,
+    )
+  ) {
     return true;
   }
   try {
@@ -1209,7 +1335,7 @@ function writeAuthAccountVault(
 
 function writeAuthAccountVaultOrThrow(
   vault: AuthAccountVault,
-  options: { replaceUnreadableLogoutTombstones?: boolean } = {},
+  options: { replaceUnreadableLogoutTombstones?: boolean; preserveExistingBackup?: boolean } = {},
 ): void {
   if (writeAuthAccountVault(vault, options)) return;
   throw new AuthApiError(
@@ -1260,9 +1386,29 @@ async function transactAuthAccountVault<T>(
           }
           throw accountVaultLockError(status.reason);
         }
-        const previousRaw = readAtomicSafe(AUTH_ACCOUNT_VAULT_KEY);
-        const previousWasAbsent =
-          previousRaw === null && isAtomicPersistedSecretAbsent(AUTH_ACCOUNT_VAULT_KEY);
+        const previousVaultRead = readAtomicSafeDetailed(AUTH_ACCOUNT_VAULT_KEY, options.recoverInvalidForExplicitLogin);
+        const previousRaw = previousVaultRead.status === 'ok' ? previousVaultRead.value : null;
+        const previousWasAbsent = previousVaultRead.status === 'absent';
+        const undecryptableVaultRecovery =
+          options.recoverInvalidForExplicitLogin &&
+          previousVaultRead.status === 'decrypt-failed'
+            ? evaluateExplicitLoginVaultRecovery(
+                previousVaultRead,
+                probeCredentialEncryptionBackend,
+              )
+            : null;
+        if (previousVaultRead.status === 'decrypt-failed' && undecryptableVaultRecovery?.recover) {
+          log.warn(
+            'replacing permanently undecryptable auth account vault during explicit login',
+            buildSafeStorageIssueMeta(AUTH_ACCOUNT_VAULT_KEY, previousVaultRead.error, {
+              stage: undecryptableVaultRecovery.stage,
+              probeOk: undecryptableVaultRecovery.probeOk,
+            }),
+          );
+        }
+        const previousVaultCiphertext = undecryptableVaultRecovery?.recover
+          ? undecryptableVaultRecovery.previousCiphertext
+          : null;
         const previousLogoutRaw = readAtomicSafe(AUTH_ACCOUNT_LOGOUT_TOMBSTONES_KEY);
         const previousLogoutWasAbsent =
           previousLogoutRaw === null &&
@@ -1272,11 +1418,15 @@ async function transactAuthAccountVault<T>(
           ? readAtomicSafeCiphertext(AUTH_ACCOUNT_LOGOUT_TOMBSTONES_KEY)
           : null;
         const vault = readAuthAccountVault({
+          previousRead: previousVaultRead,
           recoverInvalid: options.recoverInvalidForExplicitLogin,
+          allowUndecryptableReplacement: undecryptableVaultRecovery?.recover === true,
           allowUnreadableLogoutTombstones: options.allowUnreadableLogoutTombstones,
         });
         const result = await operation(vault);
         writeAuthAccountVaultOrThrow(vault, {
+          preserveExistingBackup:
+            previousVaultRead.status === 'ok' && previousVaultRead.recoveredFromBackup === true,
           replaceUnreadableLogoutTombstones:
             options.replaceUnreadableLogoutTombstones || options.recoverInvalidForExplicitLogin,
         });
@@ -1298,6 +1448,15 @@ async function transactAuthAccountVault<T>(
               'CREDENTIAL_STORE_UNAVAILABLE',
               503,
               'Could not restore saved account credentials after a failed account switch',
+            );
+          } else if (
+            previousVaultCiphertext !== null &&
+            !writeAtomicSafeCiphertext(AUTH_ACCOUNT_VAULT_KEY, previousVaultCiphertext)
+          ) {
+            throw new AuthApiError(
+              'CREDENTIAL_STORE_UNAVAILABLE',
+              503,
+              'Could not restore unreadable account credentials after a failed account switch',
             );
           }
           if (previousLogoutWasAbsent) {
@@ -1540,6 +1699,7 @@ async function commitDesktopLoginSessions(
     passportId?: string;
     accountRefreshToken?: string | null;
     memberships: readonly (AuthMembership | AccountMembership | StoredAccountMetadata)[];
+    recoverInvalidForExplicitLogin?: boolean;
     restoreLoggedOutAccount?: boolean;
     accountToLogOut?: LoggedOutAccountIdentity;
     onLoggedOutPassportRemoved?: (session: StoredPassportSession) => void;
@@ -1598,7 +1758,7 @@ async function commitDesktopLoginSessions(
       }
     },
     {
-      recoverInvalidForExplicitLogin: true,
+      recoverInvalidForExplicitLogin: input.recoverInvalidForExplicitLogin,
       waitWhileBusyAfterRotation: true,
     },
   );
@@ -2443,6 +2603,7 @@ function mergeMembershipWithExisting(
 
 /** Serialize a verified cloud owner commit with the shared Ghost projection. */
 async function withCloudOwnerCommit<T>(opts: {
+  explicitLogin?: boolean;
   previousOwnerId: string | null;
   nextOwnerId: string;
   prepareTransition: () => Promise<void>;
@@ -2489,7 +2650,7 @@ async function withCloudOwnerCommit<T>(opts: {
         }
       },
       prepareCommit: async () => {
-        rollbackReservation = reserveCloudOwnerData(opts.nextOwnerId, opts.previousOwnerId);
+        rollbackReservation = reserveCloudOwnerData(opts.nextOwnerId, opts.previousOwnerId, opts.explicitLogin);
         await opts.prepareCommit?.();
       },
       commit: async () => {
@@ -2748,17 +2909,18 @@ function recoverCloudOwnerDataReservations(
   return profileRecovery !== 'failed' && nativeRecovery !== 'failed';
 }
 
-function resolveProfileReservationOwnerId(ownerId: string): string {
+function resolveProfileReservationOwnerId(ownerId: string): { id: string; firstOwner: boolean } {
   const nativeOwner = readLegacyNativeProviderAuthOwner();
   if (nativeOwner.status === 'failed') {
     throw new Error('native provider ownership could not be read before profile reservation');
   }
-  return nativeOwner.status === 'owned' ? nativeOwner.ownerId : ownerId;
+  return { id: nativeOwner.status === 'owned' ? nativeOwner.ownerId : ownerId, firstOwner: nativeOwner.status === 'none' };
 }
 
 function reserveCloudOwnerData(
   ownerId: string,
   previousOwnerId: string | null,
+  explicitLogin = false,
 ): CloudOwnerDataReservation {
   const rollbackActions: Array<() => void> = [];
   try {
@@ -2769,11 +2931,12 @@ function reserveCloudOwnerData(
     // Preserve that first owner when introducing the profile marker: a
     // different currently persisted account may authenticate, but must not
     // reinterpret the still-shared local database as its own.
-    const profileReservationOwnerId = resolveProfileReservationOwnerId(ownerId);
+    const profileOwner = resolveProfileReservationOwnerId(ownerId);
     const profileReservation = reserveLocalProfileDataOwnerDetailed(
-      profileReservationOwnerId,
+      profileOwner.id,
       app.getPath('userData'),
       BRAND_IDENTITY.dbFilePrefix,
+      explicitLogin && (previousOwnerId === null || previousOwnerId === LOCAL_DATA_OWNER_ID) && profileOwner.firstOwner,
     );
     if (profileReservation.status === 'failed') {
       throw new Error('local profile data reservation failed before cloud owner commit');
@@ -2781,7 +2944,7 @@ function reserveCloudOwnerData(
     if (profileReservation.status === 'claimed' && profileReservation.claimToken) {
       rollbackActions.push(() => {
         releaseLocalProfileDataOwner(
-          profileReservationOwnerId,
+          profileOwner.id,
           app.getPath('userData'),
           BRAND_IDENTITY.dbFilePrefix,
           profileReservation.claimToken!,
@@ -2851,9 +3014,9 @@ function repairStableCloudOwnerDataReservationsWhileLocked(ownerId: string): boo
     return false;
   }
   try {
-    const profileReservationOwnerId = resolveProfileReservationOwnerId(ownerId);
+    const profileOwner = resolveProfileReservationOwnerId(ownerId);
     profileReservation = reserveCommittedLocalProfileDataOwnerDetailed(
-      profileReservationOwnerId,
+      profileOwner.id,
       app.getPath('userData'),
       BRAND_IDENTITY.dbFilePrefix,
     );
@@ -3203,6 +3366,10 @@ function scheduleRefresh(token: string): void {
   if (refreshTimer !== null) {
     clearTimeout(refreshTimer);
     refreshTimer = null;
+  }
+  if (getInstanceConfig()) {
+    refreshTimer = setTimeout(() => { void refresh(); }, instanceRefreshDelay(token));
+    return;
   }
   // 续期节奏对 passive 实例不设闸门。本 PR 的契约是「passive 不写/不删共享的
   // auth 持久状态」;「谁负责续期」是正交问题,不在这里解决。让 passive 停止续期
@@ -4027,6 +4194,7 @@ function resetLoginFlowState(): void {
   pendingLoginTicket = null;
   pendingBindTicket = null;
   pendingSsoVerificationTicket = null;
+  pendingSignupTicket = null;
   pendingAuthRealm = null;
   pendingAccountDeletionRestored = false;
 }
@@ -4268,6 +4436,7 @@ async function expireRuntimeAuth(
  * racing teardown and local credential deletion.
  */
 export function invalidateSession(reason: string): Promise<void> {
+  if (getInstanceConfig() && reason !== 'instance-grant-invalid') return Promise.resolve();
   if (sessionInvalidationPromise) return sessionInvalidationPromise;
   if (authRefreshOverride !== null) {
     // A UI-only client holds no resource credential. Its incidental 401 cannot
@@ -4342,6 +4511,7 @@ export async function waitForSessionInvalidation(): Promise<void> {
 // ── Public API ──────────────────────────────────────────────────────────────
 
 export function getAccessToken(): string | null {
+  if (getInstanceConfig() && !instanceAuthReady(accessToken)) return null;
   return accessToken;
 }
 
@@ -4362,6 +4532,11 @@ export function getLoginCaptchaChallengeUrl(): string {
 /** SkillHub v0.2.1: 返回当前登录用户 id（cuid），未登录时返回 null */
 export function getCurrentUserId(): string | null {
   return currentUser?.id ?? null;
+}
+
+/** 只投影现有内存身份；不初始化鉴权、不读凭据，也不返回令牌或用户资料。 */
+export function peekCommittedAuthIdentity(): CommittedAuthIdentity | null {
+  return projectCommittedAuthIdentity(currentUser, accessToken);
 }
 
 /**
@@ -4493,6 +4668,7 @@ export async function switchSavedAccount(
     validateBeforeCommit?: (loginEpoch: number) => void;
   } = {},
 ): Promise<void> {
+  assertInstanceAuthMutationAllowed();
   const switchLoginFlowEpoch = loginFlowEpoch;
   const parsedKey = parseDesktopAccountKey(rawAccountKey);
   if (!parsedKey) throw new AuthApiError('INVALID_AUTH_ACTION', 400, 'Invalid account key');
@@ -4598,6 +4774,7 @@ export async function switchSavedAccount(
 }
 
 export async function beginAddAccountLogin(): Promise<DesktopLoginActionResult> {
+  assertInstanceAuthMutationAllowed();
   if (isPassiveSharedUserDataInstance()) {
     throw new AuthApiError(
       'PASSIVE_AUTH_MUTATION_BLOCKED',
@@ -4657,6 +4834,7 @@ export function hasNoPersistedAuthCredentials(): boolean {
 /** Enter the account-free local session through the shared projection boundary. */
 export async function enterLocalMode(): Promise<AuthState> {
   if (hostNotStartedInClientMode()) throw createIpcError('PRECONDITION_FAILED', HOST_NOT_STARTED);
+  assertInstanceAuthMutationAllowed();
   stopColdStartRecovery();
   browserAuthorizationSlot.cancelActive();
   // Local mode has a different data owner. Drop process-local generic OAuth
@@ -4714,19 +4892,114 @@ function commitAccountDeletionConfirmation(
   return status;
 }
 
-/** Run an authenticated auth-client request through the terminal auth boundary. */
-async function runProtectedAuthRequest<T>(request: () => Promise<T>): Promise<T> {
+/**
+ * Run an authenticated auth-client request through the terminal auth boundary.
+ * `ownsCurrentSession` is checked when the rejection arrives: a request that
+ * started under another sign-in must not tear down the account that is current now.
+ */
+async function runProtectedAuthRequest<T>(
+  request: () => Promise<T>,
+  ownsCurrentSession: () => boolean = () => true,
+): Promise<T> {
   try {
     return await request();
   } catch (error) {
     if (
       error instanceof AuthApiError &&
       error.statusCode === 401 &&
-      error.code === 'ACCOUNT_UNAVAILABLE'
+      error.code === 'ACCOUNT_UNAVAILABLE' &&
+      ownsCurrentSession()
     ) {
       void invalidateSession('account-unavailable');
     }
     throw error;
+  }
+}
+
+// ── 扫码登录：本机已登录，为另一台设备出码（「远程控制 Cindy」弹窗）─────────────
+
+function qrHandoffFailureCode(error: unknown): string {
+  return error instanceof AuthApiError ? error.code : 'AUTH_REQUEST_FAILED';
+}
+
+/**
+ * 记下请求发起时的登录态：弹窗轮询期间用户可能已换号，旧请求迟到的 401 只能让
+ * 发起它的那个登录态失效，不能登出之后切换到的账号。
+ */
+function captureQrHandoffSession(): () => boolean {
+  const epoch = authStateEpoch;
+  const realm = activeAuthRealm;
+  const userId = currentUser?.id;
+  return () => authStateEpoch === epoch && activeAuthRealm === realm && currentUser?.id === userId;
+}
+
+/** 生成一次性出码；二维码同时是本版本官网下载页链接。凭据只在 main 与 auth-server 之间。 */
+export async function createQrLoginHandoff(): Promise<DesktopQrHandoffResult> {
+  try {
+    if (!accessToken || !currentUser) throw new AuthApiError('UNAUTHENTICATED', 401, 'QR handoff requires login');
+    const token = accessToken;
+    const realm = activeAuthRealm;
+    const created = await runProtectedAuthRequest(
+      () => createAuthClient(realm).createQrHandoff(token),
+      captureQrHandoffSession(),
+    );
+    const name = localDeviceName().trim().slice(0, 64);
+    const payload = encodeQrLoginUrl(qrLoginDownloadPageUrl(), {
+      kind: 'handoff',
+      region: created.region,
+      id: created.handoffId,
+      scanToken: created.scanToken,
+      ...(name ? { deviceName: name } : {}),
+      platform: process.platform,
+    });
+    return { success: true, handoffId: created.handoffId, payload, expiresAt: created.expiresAt };
+  } catch (error) {
+    const code = qrHandoffFailureCode(error);
+    log.warn(`qr handoff create failed code=${code}`);
+    return { success: false, code };
+  }
+}
+
+/** 弹窗打开期间轮询；到期即停，由用户手动刷新。 */
+export async function getQrLoginHandoffState(handoffId: string): Promise<DesktopQrHandoffStateResult> {
+  try {
+    if (!accessToken) throw new AuthApiError('UNAUTHENTICATED', 401, 'QR handoff requires login');
+    const token = accessToken;
+    const state = await runProtectedAuthRequest(
+      () => createAuthClient(activeAuthRealm).qrHandoffState(token, handoffId),
+      captureQrHandoffSession(),
+    );
+    if (state.status === 'expired') return { success: true, status: 'expired' };
+    const requester: QrRequesterInfo | undefined = state.requester;
+    return {
+      success: true,
+      status: state.status,
+      expiresAt: state.expiresAt,
+      ...(requester ? { requester } : {}),
+    };
+  } catch (error) {
+    const retryAt = error instanceof AuthApiError ? error.retryAt : undefined;
+    return { success: false, code: qrHandoffFailureCode(error), ...(retryAt !== undefined ? { retryAt } : {}) };
+  }
+}
+
+export async function decideQrLoginHandoff(
+  handoffId: string,
+  approve: boolean,
+): Promise<DesktopQrHandoffDecisionResult> {
+  try {
+    if (!accessToken) throw new AuthApiError('UNAUTHENTICATED', 401, 'QR handoff requires login');
+    const token = accessToken;
+    await runProtectedAuthRequest(
+      () => createAuthClient(activeAuthRealm).decideQrHandoff(token, handoffId, approve),
+      captureQrHandoffSession(),
+    );
+    log.info(`qr handoff decided approve=${approve}`);
+    return { success: true };
+  } catch (error) {
+    const code = qrHandoffFailureCode(error);
+    log.warn(`qr handoff decision failed code=${code}`);
+    return { success: false, code };
   }
 }
 
@@ -5004,8 +5277,132 @@ export async function updateServerProfile(
   };
 }
 
+// ── 换绑登录联系方式(流程见 accountContactChange.ts) ──
+
+/**
+ * 当前可换绑联系方式的 Passport 会话。换绑走 Passport 级 account 凭据:企业 SSO 会话
+ * 没有 account 凭据,被动共享实例不能轮换保存的凭据,二者都返回 null。只读本地状态,
+ * 不发网络请求。
+ */
+export function getContactChangeSession(): { realm: AuthRegion; passportId: string; epoch: number } | null {
+  if (!accessToken || !currentUser?.passportId || isPassiveSharedUserDataInstance()) return null;
+  const vault = readAuthAccountVault({ allowUnreadable: true });
+  if (!vault.passports[passportVaultKey(activeAuthRealm, currentUser.passportId)]) return null;
+  return { realm: activeAuthRealm, passportId: currentUser.passportId, epoch: authStateEpoch };
+}
+
+/**
+ * 流程进行中的轻量校验:仍是发起换绑时的那个登录态(未登出、未换 Passport)。
+ * 只比较内存状态,不读加密 vault,供每一步之间调用。
+ */
+export function isContactChangeSessionCurrent(session: {
+  realm: AuthRegion;
+  passportId: string;
+  epoch: number;
+}): boolean {
+  return (
+    accessToken !== null &&
+    currentUser?.passportId === session.passportId &&
+    activeAuthRealm === session.realm &&
+    authStateEpoch === session.epoch
+  );
+}
+
+/** 用保存的 Passport 会话换取 account access token(refresh token 轮换后立即持久化)。 */
+export async function issuePassportAccountToken(realm: AuthRegion, passportId: string): Promise<string> {
+  const pair = await refreshPassportSessionSingleFlight(createAuthClient(realm), realm, passportId);
+  return pair.accountToken;
+}
+
+export function createContactChangeAuthClient(realm: AuthRegion): CindyAuthClient {
+  return createAuthClient(realm);
+}
+
+/**
+ * 受鉴权边界保护的换绑请求:账号已不可用时让本地会话失效。只在发起请求的登录态仍是
+ * 当前登录态时才失效——旧账号的迟到 401 不能登出用户之后切换到的账号。
+ */
+export function runProtectedAccountRequest<T>(
+  session: { realm: AuthRegion; passportId: string; epoch: number },
+  request: () => Promise<T>,
+): Promise<T> {
+  return runProtectedAuthRequest(request, () => isContactChangeSessionCurrent(session));
+}
+
+/**
+ * 换绑邮箱后从 /api/me 重读当前身份,更新展示邮箱。个人身份的邮箱随换绑更新,
+ * 企业身份的邮箱来自企业断言、不变;请求期间登出或换号则不回写。
+ */
+export async function reloadCurrentMembershipProfile(): Promise<void> {
+  if (!accessToken || !currentUser) return;
+  const token = accessToken;
+  const epochAtStart = authStateEpoch;
+  const realm = activeAuthRealm;
+  const me = await runProtectedAuthRequest(() => createAuthClient(realm).getMe(token));
+  const membership = me.membership;
+  if (
+    authStateEpoch !== epochAtStart ||
+    currentUser === null ||
+    currentUser.id !== membership.id ||
+    currentUser.email === membership.email
+  ) {
+    return;
+  }
+  currentUser = {
+    ...currentUser,
+    email: membership.email,
+    name: currentUser.membershipDisplayName || membership.email || currentUser.name,
+  };
+  await rememberUpdatedMembershipMetadata(membership, realm, currentUser.passportId);
+  notifyRenderer();
+  notifyAuthListeners();
+}
+
 let enterpriseGuestSignIn: Promise<AuthState> | null = null;
 let cloudDesktopTestEnrollment: Promise<void> | null = null;
+let managedAuthFlight: Promise<void> | null = null;
+
+/** Only the Pod-local CIS control calls this; never exposed through account IPC. */
+export async function recoverManagedInstanceLogin(
+  requestId: string,
+  refreshToken: string,
+  options: InstanceRecoveryOptions = {},
+): Promise<void> {
+  if (!getInstanceConfig()) throw new Error('INSTANCE_NOT_CONFIGURED');
+  if (managedAuthFlight) await managedAuthFlight.catch(() => undefined);
+  if (managedAuthFlight) throw new Error('INSTANCE_RECOVERY_BUSY');
+  managedAuthFlight = (async () => {
+    const managed = getInstanceSession(authServerUrl(AUTH_REGION), AUTH_REGION, hasNoPersistedAuthCredentials);
+    const pair = await managed.recover(requestId, refreshToken, options);
+    await completeLogin({ status: 'ok', ...pair });
+  })().finally(() => { managedAuthFlight = null; });
+  return managedAuthFlight;
+}
+
+function authenticateManagedInstance(): Promise<void> {
+  if (managedAuthFlight) return managedAuthFlight;
+  managedAuthFlight = (async () => {
+    // Transient retries belong to the auth state that started this attempt.
+    const epoch = authStateEpoch;
+    let beforeCommit: number | null = null;
+    try {
+      const managed = getInstanceSession(authServerUrl(AUTH_REGION), AUTH_REGION, hasNoPersistedAuthCredentials);
+      const pair = await managed.rotate();
+      beforeCommit = authStateEpoch;
+      await completeLogin({ status: 'ok', ...pair });
+    } catch (error) {
+      if (error instanceof AuthApiError && [401, 403].includes(error.statusCode)) {
+        await invalidateSession('instance-grant-invalid');
+      } else {
+        scheduleRefreshRetryAfterTransientFailure(managedAuthRetryEpoch(epoch, beforeCommit, authStateEpoch));
+      }
+      const code = error instanceof Error && /^INSTANCE_[A-Z_]+$/.test(error.message) ? error.message : 'INSTANCE_AUTH_DEPENDENCY_FAILED';
+      log.warn('instance authentication not ready', { code });
+      throw new Error('INSTANCE_AUTH_NOT_READY');
+    }
+  })().finally(() => { managedAuthFlight = null; });
+  return managedAuthFlight;
+}
 
 export async function initialize(options: AuthInitializeOptions = {}): Promise<AuthState> {
   if (authRefreshOverride) {
@@ -5020,6 +5417,14 @@ export async function initialize(options: AuthInitializeOptions = {}): Promise<A
   if (isOwnerChangeShellPending()) {
     return snapshotLoggedOutAuthState(true);
   }
+  if (getInstanceConfig()) {
+    if (!instanceAuthReady(accessToken)) await authenticateManagedInstance();
+    return snapshotAuthState();
+  }
+  // A renderer can mount after the boundary-pending broadcast. Keep startup
+  // fail-closed until the serialized owner transition settles instead of
+  // restoring the outgoing owner's credentials and turns from disk.
+
   // Local mode is a committed account-free session. It must win before any
   // persisted cloud refresh token is inspected or any auth network call runs.
   if (getActiveAppSession().mode === 'local') {
@@ -5196,7 +5601,13 @@ export async function initialize(options: AuthInitializeOptions = {}): Promise<A
               });
             },
           };
-          const grant = await cloudGuestAuthorization(guest, deviceId, authServerUrl(AUTH_REGION), store, desktopAuthFetch);
+          // Keep trying while this guest stays signed out: after the first-boot window only a restart used to retry.
+          const grant = await cloudGuestAuthorization(guest, deviceId, authServerUrl(AUTH_REGION), store, desktopAuthFetch,
+            {
+              persistent: true,
+              stopped: () => Boolean(superseded()),
+              onRetrying: (reason) => log.warn('Cloud guest sign-in still retrying', reason),
+            });
           if (superseded()) return snapshotAuthState();
           const client = createAuthClient(AUTH_REGION);
           const pair = await client.exchangeAuthorizationCode(grant.code, grant.verifier);
@@ -5215,8 +5626,8 @@ export async function initialize(options: AuthInitializeOptions = {}): Promise<A
             () => getClientEndpointForRealm(AUTH_REGION, 'modelAccessApiBaseUrl'), getAccessToken, desktopAuthFetch,
           );
           return snapshotAuthState();
-        })().catch(() => {
-          log.warn('Cloud guest sign-in did not complete');
+        })().catch((error: unknown) => {
+          log.warn('Cloud guest sign-in did not complete', cloudGuestFailureReason(error));
           return snapshotAuthState();
         }).finally(() => { enterpriseGuestSignIn = null; });
         const completion = enterpriseGuestSignIn;
@@ -5704,6 +6115,7 @@ async function loadLoginProviders(expectedLoginFlowEpoch = loginFlowEpoch): Prom
   pendingLoginTicket = null;
   pendingBindTicket = null;
   pendingSsoVerificationTicket = null;
+  pendingSignupTicket = null;
   pendingAccountDeletionRestored = false;
   pendingAuthRealm = null;
   // 与冷启动 splash 同一把闸:限时等待,超时先以 AUTH_SERVICE_UNAVAILABLE 解锁
@@ -5802,12 +6214,14 @@ async function completeLogin(
   outcome: Extract<LoginOutcome, { status: 'ok' }>,
   expectedLoginFlowEpoch = loginFlowEpoch,
   options: {
+    recoverInvalidForExplicitLogin?: boolean;
     restoreLoggedOutAccount?: boolean;
     accountToLogOut?: LoggedOutAccountIdentity;
     onLoggedOutPassportRemoved?: (session: StoredPassportSession) => void;
     validateBeforeCommit?: (loginEpoch: number) => void;
   } = {},
 ): Promise<AuthFlowState> {
+  assertInstanceAuthMutationAllowed(outcome);
   assertLoginFlowCurrent(expectedLoginFlowEpoch);
   const loginEpoch = ++authStateEpoch;
   const deletionWasRestored =
@@ -5833,6 +6247,7 @@ async function completeLogin(
     let activeSessionWritten = false;
     await commitDesktopLoginSessions(
       {
+        recoverInvalidForExplicitLogin: options.recoverInvalidForExplicitLogin,
         pair: outcome,
         realm: committedRealm,
         passportId: nextUser.passportId || undefined,
@@ -5860,6 +6275,7 @@ async function completeLogin(
           activeSessionWritten = true;
           assertTransitionCurrent();
           await withCloudOwnerCommit({
+            explicitLogin: true,
             previousOwnerId: previousSession.dataOwnerId,
             nextOwnerId: nextUser.id,
             prepareTransition: async () => {
@@ -5904,6 +6320,7 @@ async function completeLogin(
                 foreignDeviceLocalSignOut = false;
                 currentUser = nextUser;
                 credentialStoreHealth.noteRecovered();
+                acknowledgeInstanceLogin(outcome);
                 if (!isPassiveSharedUserDataInstance()) {
                   canaryFlagStore.clear();
                 }
@@ -5937,6 +6354,7 @@ async function completeLogin(
     pendingLoginTicket = null;
     pendingBindTicket = null;
     pendingSsoVerificationTicket = null;
+    pendingSignupTicket = null;
     pendingPersonalLogin = null;
     handledLoginEmail = null;
     loginFlowState = reduceAuthFlow(loginFlowState, { type: 'outcome', outcome });
@@ -5973,6 +6391,7 @@ async function acceptLoginOutcome(
         : [];
 
   if (outcome.status === 'ok') return finishFreshLogin(outcome, expectedLoginFlowEpoch);
+  pendingSignupTicket = null;
   if (outcome.status === 'select_account') {
     pendingLoginTicket = outcome.loginTicket;
     pendingBindTicket = null;
@@ -5980,6 +6399,12 @@ async function acceptLoginOutcome(
   } else if (outcome.status === 'binding_required') {
     pendingBindTicket = outcome.bindTicket;
     pendingLoginTicket = null;
+    pendingSsoVerificationTicket = null;
+  } else if (outcome.status === 'signup_required') {
+    // 只有本机声明了注册确认才会收到；票据留在 main，renderer 只看到脱敏展示值。
+    pendingSignupTicket = outcome.signupTicket;
+    pendingLoginTicket = null;
+    pendingBindTicket = null;
     pendingSsoVerificationTicket = null;
   } else {
     pendingSsoVerificationTicket = outcome.verificationTicket;
@@ -6013,7 +6438,12 @@ async function finishFreshLogin(
     });
     return loginFlowState;
   }
-  return completeLogin(outcome, expectedLoginFlowEpoch);
+  return completeLogin(outcome, expectedLoginFlowEpoch, { recoverInvalidForExplicitLogin: true });
+}
+
+/** 扫码登录二维码落到本机所属版本的官网下载页：系统相机扫码即可下载对应版本。 */
+function qrLoginDownloadPageUrl(): string {
+  return new URL('/download/', getClientEndpoint('websiteUrl')).toString();
 }
 
 async function runLoginAction(
@@ -6030,9 +6460,11 @@ async function runLoginAction(
   const client = createAuthClient(loginRealm);
   const stateBeforeAction = loginFlowState?.step === 'error' ? null : loginFlowState;
   // User-triggered check of the already selected backend. Empty desktop identity
-  // is not itself a reason to refuse a code request or browser login.
+  // is not itself a reason to refuse a code request or browser login, but a
+  // broken or denied Keychain must fail fast before sending codes or launching
+  // browser OAuth.
   const assertLoginCredentialStoreReady = (): void => {
-    if (isCredentialEncryptionAvailable()) return;
+    if (probeCredentialEncryptionBackend().ok) return;
     throw new AuthApiError(
       'CREDENTIAL_STORE_UNAVAILABLE',
       503,
@@ -6130,7 +6562,7 @@ async function runLoginAction(
         if (!personal)
           throw new AuthApiError('INVALID_AUTH_ACTION', 400, 'Personal login unavailable');
         pendingAuthRealm = personal.realm;
-        const state = await completeLogin(personal.outcome, actionLoginFlowEpoch);
+        const state = await completeLogin(personal.outcome, actionLoginFlowEpoch, { recoverInvalidForExplicitLogin: true });
         pendingPersonalLogin = null;
         return { success: true, state };
       }
@@ -6312,6 +6744,19 @@ async function runLoginAction(
       }
     }
 
+    if (action.type === 'confirm-signup') {
+      assertLoginCredentialStoreReady();
+      const signupTicket = pendingSignupTicket;
+      if (!signupTicket || loginFlowState?.step !== 'signup-confirmation') {
+        throw new AuthApiError('INVALID_SIGNUP_TICKET', 401, 'Missing signup ticket');
+      }
+      // 个人登录与注册确认始终在构建区域完成（与 startsBuildRealmFlow 同口径）。
+      const outcome = await createAuthClient(AUTH_REGION).signup(signupTicket);
+      assertLoginFlowCurrent(actionLoginFlowEpoch);
+      pendingSignupTicket = null;
+      return { success: true, state: await acceptLoginOutcome(outcome, actionLoginFlowEpoch) };
+    }
+
     if (action.type === 'select-account') {
       const accountToken = pendingAccountToken;
       if (accountToken) {
@@ -6420,6 +6865,7 @@ async function runLoginAction(
       'INVALID_LOGIN_TICKET',
       'INVALID_BIND_TICKET',
       'INVALID_SSO_VERIFICATION_TICKET',
+      'INVALID_SIGNUP_TICKET',
       'INVALID_AUTH_CODE',
       'INVALID_TOKEN',
       'TOKEN_EXPIRED',
@@ -6432,6 +6878,7 @@ async function runLoginAction(
       pendingLoginTicket = null;
       pendingBindTicket = null;
       pendingSsoVerificationTicket = null;
+      pendingSignupTicket = null;
       pendingAuthRealm = null;
     }
     // Storage failures need recovery guidance, not another verification-code
@@ -6457,6 +6904,7 @@ async function runLoginAction(
 
 export async function dispatchLoginAction(action: unknown): Promise<DesktopLoginActionResult> {
   if (hostNotStartedInClientMode()) return { success: false, code: HOST_NOT_STARTED, state: loginFlowState };
+  assertInstanceAuthMutationAllowed();
   const dispatchLoginFlowEpoch = loginFlowEpoch;
   // Terminal logout clears credentials synchronously, then tears down the old
   // account boundary in the background so the rejecting request can unwind.
@@ -6519,6 +6967,14 @@ export async function refresh(options?: { serverRejectedToken?: boolean }): Prom
   if (authRefreshOverride !== null) {
     receiveHostAuthState(await authRefreshOverride(options));
     return delegatedAuthState!.isAuthenticated;
+  }
+  if (getInstanceConfig()) {
+    try {
+      await authenticateManagedInstance();
+      return true;
+    } catch {
+      return false;
+    }
   }
   if (getActiveAppSession().mode === 'local') {
     log.debug('runtime refresh skipped in local mode');
@@ -6896,6 +7352,7 @@ function revokeLoggedOutAccountBestEffort(input: {
 }
 
 export async function logout(): Promise<void> {
+  assertInstanceAuthMutationAllowed();
   if (isPassiveSharedUserDataInstance()) {
     throw new AuthApiError(
       'PASSIVE_AUTH_MUTATION_BLOCKED',

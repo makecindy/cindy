@@ -28,6 +28,7 @@ interface FakeWindow {
   emitWebContents: (event: string, ...args: unknown[]) => void;
   emitWindow: (event: string) => void;
   setFullscreenState: (fullscreen: boolean) => void;
+  setAppHidden: (hidden: boolean) => void;
 }
 
 function fakeWindow(id: number, minimized = false): FakeWindow {
@@ -36,6 +37,7 @@ function fakeWindow(id: number, minimized = false): FakeWindow {
   let destroyed = false;
   let visible = false;
   let fullscreen = false;
+  let appHidden = false;
   const send = vi.fn();
   const webContents = {
     id,
@@ -86,7 +88,7 @@ function fakeWindow(id: number, minimized = false): FakeWindow {
     setTitle: vi.fn(),
     isMinimized: () => minimized,
     isFullScreen: () => fullscreen,
-    isVisible: () => visible,
+    isVisible: () => visible && !appHidden,
     isDestroyed: () => destroyed,
     webContents,
     send,
@@ -99,6 +101,9 @@ function fakeWindow(id: number, minimized = false): FakeWindow {
     emitWindow: (event) => listeners.get(event)?.(),
     setFullscreenState: (nextFullscreen) => {
       fullscreen = nextFullscreen;
+    },
+    setAppHidden: (hidden) => {
+      appHidden = hidden;
     },
   };
   return win;
@@ -401,6 +406,28 @@ describe('ResourceUsageWindowController', () => {
     expect(windows[0]?.hide).toHaveBeenCalledOnce();
     expect(owner.show).not.toHaveBeenCalled();
     expect(owner.focus).not.toHaveBeenCalled();
+  });
+
+  // Unit: native macOS reproduction—login completes while app.hide() makes
+  // isVisible false, then app.show() resurrects the cleared window. Existing
+  // hide tests only cover per-window visibility, not application-level hiding.
+  it('keeps an explicitly closed window hidden when the whole app returns', () => {
+    const { controller, windows, mainSender } = makeHarness(5000, 10_000, 30_000, 'darwin');
+    controller.prewarm();
+    const win = windows[0]!;
+    markPrewarmed(controller, win);
+    controller.open(mainSender);
+    win.setAppHidden(true);
+    expect(win.isVisible()).toBe(false);
+    win.focus.mockClear();
+    controller.hideWithOwner();
+    win.setAppHidden(false);
+    expect(win.isVisible()).toBe(false);
+    expect(win.focus).not.toHaveBeenCalled();
+    expect(controller.allowsProcessMonitorSampling(win.webContents)).toBe(false);
+    controller.open(mainSender);
+    expect(win.isVisible()).toBe(true);
+    expect(windows).toHaveLength(1);
   });
 
   it('tracks a pending macOS fullscreen entry without hiding the resource window', () => {
