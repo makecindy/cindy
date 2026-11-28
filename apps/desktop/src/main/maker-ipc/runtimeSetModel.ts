@@ -241,6 +241,7 @@ export async function applyRuntimeSetModelChange(
         : currentProviderId;
   const credentialModeRequiresRebuild = sess
     ? shouldCloseSessionForCredentialSwitch({
+        sessionId,
         agentKind: sess.agentKind,
         remoteHostId: sess.remoteHostId,
         currentProviderId,

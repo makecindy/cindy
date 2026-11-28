@@ -1,4 +1,10 @@
-import { TASK_ACTIVITY_SNAPSHOT, type DeviceView, type ForegroundHostTaskActivity } from '@cindy/device-link';
+import {
+  HOST_TASK_ACTIVITY_COMPANION_JPEG_MAX,
+  TASK_ACTIVITY_SNAPSHOT,
+  type DeviceView,
+  type ForegroundHostTaskActivity,
+  type HostTaskActivityCompanion,
+} from '@cindy/device-link';
 import type { AgentActivityState } from './agentActivity';
 
 type Status = AgentActivityState['status'];
@@ -23,6 +29,19 @@ function parseReport(value: unknown): ForegroundHostTaskActivity | null {
     || !Object.hasOwn(rank, selected.status)
     || rank[selected.status] !== (waitingCount ? 0 : unreadCount ? 1 : 2)) return null;
   return report;
+}
+
+/** An optional, display-only field: a malformed companion falls back to the mascot
+ * instead of discarding an otherwise valid host summary. */
+function parseCompanion(value: unknown, status: Status): HostTaskActivityCompanion | undefined {
+  if (status === 'running' || !value || typeof value !== 'object') return undefined;
+  const { hue, glyph, glyphIsInitial, imageJpeg } = value as Record<string, unknown>;
+  if (typeof hue !== 'string' || !/^[a-z]{1,16}$/.test(hue)
+    || typeof glyph !== 'string' || !glyph || glyph.length > 32
+    || typeof glyphIsInitial !== 'boolean') return undefined;
+  const image = typeof imageJpeg === 'string' && imageJpeg.length <= HOST_TASK_ACTIVITY_COMPANION_JPEG_MAX
+    && /^[A-Za-z0-9+/]+={0,2}$/.test(imageJpeg) ? imageJpeg : undefined;
+  return { hue, glyph, glyphIsInitial, ...(image ? { imageJpeg: image } : {}) };
 }
 
 export interface ForegroundActivitySource {
@@ -76,10 +95,12 @@ export function startForegroundTaskActivity(source: ForegroundActivitySource, op
     }
     // An offline computer could still own the last task. Let the server decide when to end.
     if (!selected && devices.some(device => !peers.has(device.deviceId))) return;
+    const companion = selected ? parseCompanion(selected.companion, selected.status) : undefined;
     const state: AgentActivityState | null = selected ? {
       status: selected.status, title: selected.title, detail: options.labels[selected.status],
       count, runningCount, attentionCount, staleDetail: options.staleDetail,
       url: options.url(selected.device, selected.sessionId),
+      ...(companion ? { companion } : {}),
     } : null;
     const key = JSON.stringify(state);
     if (key === previous) return;

@@ -7,6 +7,7 @@
 | 文档 | 类型 | 状态 | 治理/相关代码 | owner |
 |---|---|---|---|---|
 | [README.md](./README.md) | 索引 | — | `docs/` 文档目录 | — |
+| [native-plugins-troubleshooting.md](./native-plugins-troubleshooting.md) | 排障说明 | 参考 | Desktop 原生插件、Skill 与 Cindy 插件的加载核对 | — |
 | [product-rules/README.md](./product-rules/README.md) | 产品规则索引 | authoritative | Cindy 产品行为、体验与边界 | — |
 | [core-product-principles.md](./product-rules/core-product-principles.md) | 产品原则 | authoritative | Cindy Core、Agent、Skill、插件与多端产品边界 | — |
 | [im-message-presentation.md](./product-rules/im-message-presentation.md) | 产品契约 | authoritative | IM 入站上下文、快照计数与 App 完成提醒 | — |

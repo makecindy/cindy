@@ -3,6 +3,7 @@ import { act, createElement, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SwipeableProjectHeader } from "@/session/SwipeableProjectHeader";
+import { SwipeableSectionHeader } from "@/session/SwipeableSectionHeader";
 import { createSwipeRowRegistry } from "@/session/swipeRowRegistry";
 import { PaneEdgeInsetProvider } from "@/session/SessionPaneDivider";
 
@@ -53,22 +54,27 @@ vi.mock("@/platform/gestureHandler", async () => {
       return el(
         Fragment,
         null,
-        el(
-          "div",
-          { "data-side": "left" },
-          props.renderLeftActions({}, native.offset),
-        ),
-        el(
-          "div",
-          { "data-side": "right" },
-          props.renderRightActions({}, native.offset),
-        ),
+        props.renderLeftActions
+          ? el(
+              "div",
+              { "data-side": "left" },
+              props.renderLeftActions({}, native.offset),
+            )
+          : null,
+        props.renderRightActions
+          ? el(
+              "div",
+              { "data-side": "right" },
+              props.renderRightActions({}, native.offset),
+            )
+          : null,
         props.children,
       );
     }),
   };
 });
 vi.mock("lucide-react-native", () => ({
+  Ellipsis: () => null,
   List: () => null,
   Search: () => null,
   Settings: () => null,
@@ -218,5 +224,72 @@ describe("project header navigation and swipe lifecycle", () => {
     act(() => native.props.onSwipeableOpenStartDrag());
     expect(registry.closeOpenRow()).toBe(true);
     expect(native.close).toHaveBeenCalledOnce();
+  });
+});
+
+// Unit: SwipeableSectionHeader reveals the options button on left swipe for
+// pinned, teammates, and device headers and shares the home swipe registry.
+describe("section header swipe lifecycle", () => {
+  function renderSection(
+    onOptions: () => void,
+    options: { rowKey?: string; edgeInset?: number; enabled?: boolean; withRegistry?: boolean } = {},
+  ) {
+    const { rowKey = "pinned:header", edgeInset = 0, enabled = true, withRegistry = true } = options;
+    act(() =>
+      root.render(
+        createElement(
+          PaneEdgeInsetProvider,
+          { value: edgeInset },
+          createElement(SwipeableSectionHeader, {
+            rowKey,
+            registry: withRegistry ? registry : undefined,
+            enabled,
+            onOptions,
+            testID: "home.section.swipe",
+            actionTestID: "home.section.options",
+            children: "Section",
+          }),
+        ),
+      ),
+    );
+  }
+
+  it("reveals only the trailing options action, closes before opening options, and respects pane edge hitSlop", () => {
+    const onOptions = vi.fn();
+    renderSection(onOptions, { rowKey: "teammates:header", edgeInset: 24 });
+    expect(native.props.renderLeftActions).toBeUndefined();
+    expect(native.props.overshootRight).toBe(false);
+    expect(native.props.hitSlop).toEqual({ left: -24, right: -24 });
+
+    const closeOther = vi.fn();
+    registry.onRowOpen("task-a", closeOther);
+    act(() => native.props.onSwipeableOpenStartDrag());
+    expect(closeOther).toHaveBeenCalledOnce();
+
+    act(() =>
+      host
+        .querySelector<HTMLButtonElement>(
+          '[data-side="right"] [aria-label="session.row.moreOptions"]',
+        )!
+        .click(),
+    );
+    expect(onOptions).toHaveBeenCalledOnce();
+    expect(native.close).toHaveBeenCalledOnce();
+    expect(registry.closeOpenRow()).toBe(false);
+  });
+
+  it("resets when recycled to a different section key and renders plain children when disabled", () => {
+    const onOptions = vi.fn();
+    renderSection(onOptions, { rowKey: "device:mac-1" });
+    act(() => native.props.onSwipeableOpenStartDrag());
+    native.reset.mockClear();
+    renderSection(onOptions, { rowKey: "device:mac-2" });
+    expect(native.reset).toHaveBeenCalledOnce();
+    expect(registry.closeOpenRow()).toBe(false);
+
+    native.props = null;
+    renderSection(onOptions, { rowKey: "teammates:header", enabled: false });
+    expect(native.props).toBeNull();
+    expect(host.textContent).toBe("Section");
   });
 });
