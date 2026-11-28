@@ -85,6 +85,7 @@ import { useOwnTopNavScrollableRows, useSidebarCollapsedState } from '../feature
 import { SidebarRailNavigation, SidebarTopNav } from '@/components/sidebar/SidebarTopNav';
 import { SidebarFilterPopover, type SidebarPluginHarness } from './sidebar/SidebarFilterPopover';
 import { MainListScopeHeader } from './sidebar/MainListScopeHeader';
+import { useEnvironmentHealthAlerts } from './sidebar/useEnvironmentHealthAlerts';
 import { SharedTasksSection } from '@/features/device-link/SharedTasksSection';
 import { TeammatesSection } from '@/features/bots/TeammatesSection';
 import { TeammateSearchResults, useTeammateSearchMatches } from '@/features/bots/TeammateSearchResults';
@@ -278,7 +279,6 @@ import {
 } from './sidebar/railPanelStore';
 import { SessionEntryList } from './sidebar/SessionEntryList';
 import { useInboxUnread } from './sidebar/useInboxUnread';
-import { useTeammateInboxEntries } from '@/features/bots/useTeammateInboxEntries';
 import { AttentionDot } from '@/components/sidebar/AttentionDot';
 import {
   getDialogueCollapseLimit,
@@ -468,8 +468,6 @@ function sameStringSet(a: ReadonlySet<string>, b: ReadonlySet<string>): boolean 
 }
 
 /* ============================== Root ============================== */
-
-const EMPTY_INBOX_TEAMMATES: readonly never[] = [];
 
 export function CCAgentSidebarUpper() {
   const { t } = useTranslation();
@@ -2310,11 +2308,13 @@ function ExpandedView({
   }, [inboxGroups, teammatesElsewhere, hiddenProjectKeys, localPlatform,
     inboxFilter]);
 
-  const teammateEntries = useTeammateInboxEntries();
-  const inboxTeammates = sidebarContentFilterCount(inboxFilter) ? EMPTY_INBOX_TEAMMATES : teammateEntries;
   const { now: inboxNow, hasUnread } = useInboxUnread(
-    inboxSessions, inboxTeammates, projectPriorityProjection.base, isInboxTeammateTask,
+    inboxSessions, projectPriorityProjection.base, isInboxTeammateTask,
   );
+  const inboxEnvironmentHealth = useEnvironmentHealthAlerts({
+    enabled: taskListMode === 'inbox',
+    localSessions: inboxSessions,
+  });
   const reportUnread = useContext(InboxUnreadReporter);
   useLayoutEffect(() => {
     reportUnread?.(hasUnread);
@@ -3376,8 +3376,7 @@ function ExpandedView({
         const queue = [...order, ...remaining.filter(id => !original.has(id))];
         const key = pickSessionIdAfterRemoval(queue, removed, anchor) ?? remaining[0];
         const next = key ? available.get(key) : undefined;
-        if (next && 'route' in next) navigate(next.route);
-        else if (next) void handleSessionClick(next.sessionId);
+        if (next) void handleSessionClick(next.sessionId);
         else navigate('/cc-agent/new', { state: { workspacePrompt: 'generic' } });
       };
       if (action === 'complete' && canHandleOfflineInbox && offlineDeviceId && session) {
@@ -4134,8 +4133,10 @@ function ExpandedView({
                 <ProjectsSection
                   inboxSessions={inboxSessions}
                   inboxNow={inboxNow}
-                  inboxTeammates={inboxTeammates}
                   isInboxTeammateTask={isInboxTeammateTask}
+                  inboxHealthAlerts={inboxEnvironmentHealth.alerts}
+                  onInboxHealthAlertAction={inboxEnvironmentHealth.onAction}
+                  onDismissInboxHealthAlert={inboxEnvironmentHealth.onDismiss}
                   unclassified={visibleUnclassified}
                   projects={visibleProjectsWithVendor}
                   dialogues={visibleDialogues}
@@ -4201,6 +4202,7 @@ function ExpandedView({
         }}
       />
 
+      {inboxEnvironmentHealth.githubSetupDialog}
       {newProjectSessionId && (
         <NewProjectFromTaskDialog
           sessionId={newProjectSessionId}

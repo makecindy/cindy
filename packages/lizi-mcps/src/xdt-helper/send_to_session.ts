@@ -2,7 +2,7 @@ import { BRAND_NAME } from "@cindy/maker-shared/branding";
 import { z } from "zod";
 
 import type { XdtHelperToolRegistry } from "../lizi_xdtHelperToolRegistry.js";
-import { toHostAgentDeviceId } from "./create_worker.js";
+import { LOCAL_AGENT_DEVICE, toHostAgentDeviceId } from "./create_worker.js";
 import type {
   ControlResult,
   ControlWorkerAgent,
@@ -29,6 +29,8 @@ export type SendToSessionCallback = (params: {
   title?: string;
   /** create 模式可选:true = 为新 session 预建独立 git worktree 并以其为 workingDir(jump 忽略)。 */
   useWorktree?: boolean;
+  /** create + useWorktree 可选:worktree 的显式基线(分支、远端引用或提交);jump 不传。 */
+  baseRef?: string;
   /** create 模式可选:新 session 的工作目录覆盖(绝对路径,须已存在;jump 忽略)。#811 */
   workingDir?: string;
   /** Omitted inherits source membership; null explicitly creates a projectless task. */
@@ -59,6 +61,14 @@ export type SendToSessionCallback = (params: {
       queuedMessageId?: string;
       /** create + useWorktree 成功时为新 session 的 worktree 绝对路径;其余情况 host 可省略。 */
       worktreePath?: string | null;
+      /** create + useWorktree:worktree 实际切出的基线;旧版本的目标电脑不回报。 */
+      worktreeBaseRef?: string;
+      /** 基线没能从远端刷新的原因:取自任务所在电脑上已有的副本,可能落后远端。 */
+      worktreeBaseStaleReason?: string;
+      /** create:模型由哪台电脑提供;null = 任务所在电脑自己。省略 = 未知(旧版本目标电脑)或不适用(SSH)。 */
+      providerDeviceId?: string | null;
+      /** create:供应电脑继承自来源任务,不是调用方点名的。 */
+      providerDeviceInherited?: true;
       projectDir?: string | null;
       /** The project was chosen because the requested execution directory is inside it. */
       projectFromWorkingDir?: true;
@@ -157,17 +167,19 @@ const describeSendToSession = (supportsRemote: boolean, supportsShared: boolean)
   ...(supportsRemote ? [
     "- 目标在另一台电脑:target_session_id 传 deviceId::sessionId(history 类目 list_sessions 用 device 参数查到的 id 就是这个形式),消息经远程控制通道发给那台电脑上的既有任务,对方显示来自本任务。要求对方电脑在线并已开启远程控制。",
   ] : []),
-  "- 不传 target_session_id → create:新建任务并发送首条消息，可用 title 指定简短标题。本机 Agent / model / effort / Fast 缺省继承当前任务；device 指向另一台电脑时采用那台电脑的新任务默认。返回 wake_kind=created、target_session_id、project_path 与实际 working_dir；后续消息用返回的 id。",
+  "- 不传 target_session_id → create:新建任务并发送首条消息，可用 title 指定简短标题。本机 Agent / model / effort / Fast 缺省继承当前任务；device 指向另一台电脑时采用那台电脑的新任务默认。返回 wake_kind=created、target_session_id、project_path、实际 working_dir，以及 provider_device_id(模型实际由哪台电脑提供；local = 任务所在电脑自己)；后续消息用返回的 id。",
   "【项目】本机省略 project_path 时继承来源任务的项目。远程创建不继承来源电脑的路径；省略项目时按目标 working_dir 匹配已有项目，否则创建不绑项目的任务。list_projects(device) 查询目标电脑项目。来源本来不绑项目时：working_dir 在某个已登记且可见的项目里，就归到最近的那个项目（回执 project_note 会说明）；否则新任务也不绑项目。无法可靠确定来源归属时明确失败。也可显式复用 get_current_session_id.project_path；跨项目用 control/list_projects 选择已有项目。传 project_path:null 明确创建不绑项目的任务。临时目录、仓库子目录、worktree 都不会变成新项目。确需新增或恢复项目时，单独调用 create_project。",
   "",
   "【执行配置(仅 create 模式)】agent_kind 可选 claude-code / codex / pi / acp；model 使用宿主模型目录返回的精确 id；effort / fast 按目标模型能力校验。只改内置 Agent 却留下不属于目标 Agent 的继承模型会返 INVALID_ARGS，不会自动挑列表第一项。跨 Agent/model 时模型来源交给 host 既有默认路由解析。acp = 插件提供的执行引擎(取 list_available_models 的 plugin_engines)：provider_id 传该项 provider_id(形如 acp-plugin:…；来源本身已是插件引擎且未换引擎时可省)，model 传其 models[].id(省略或 default = 由引擎自选；有模型关闭或受限时须明确传模型 id)，effort 按该模型的 efforts 校验，不支持 fast。本机完全不传这些字段时保持原有 dispatcher 继承行为；远程创建按目标电脑默认配置。jump 模式忽略这些字段，不修改既有 session。",
   "",
   "【provider_device_id(旧名 agent_device_id，仅 create 模式)】新任务的 Agent 使用哪台电脑的远程供应商：取 list_available_models 的 locations[].provider_device_id；\"local\" 或本机设备 id 表示本机。本机缺省继承当前任务的位置；远程创建缺省使用目标电脑本机供应商，local 也相对目标电脑。本机创建时位置与当前任务不同且没传 model 时沿用当前任务的模型 id，按那台电脑的供应商重新解析来源；那台没有这个模型、离线、未开启远程控制或分享不可用 → PROVIDER_ROUTE_UNAVAILABLE；格式不对，或当前任务是 SSH 任务 → INVALID_ARGS。失败时不创建任务、不自动换电脑，由调用方决定换哪一台重试。jump 模式忽略。",
+  "回执的 provider_device_id 是创建后实际生效的位置，创建后请核对：不是 local 时，模型用的是另一台电脑的供应商和账号额度，provider_note 说明它是继承来的还是点名的。目标电脑版本较旧时不回报该字段，provider_note 会说明位置未知，不能当作目标电脑自己的供应商。",
   "",
   "【远程新建】device 选择任务与文件所在电脑；先 list_machines、list_projects(device)、list_available_models(device)。旧版本不支持时不发出；DELIVERY_UNKNOWN / CREATED_NOT_DELIVERED 返回恢复用 target_session_id，先读该任务记录和队列，不能重复 create。不会建立 Worker、父子编排或自动回传；需要回信时用普通 send_to_session。",
   "【working_dir(仅 create 模式)】可选执行目录，缺省为选中或继承的项目目录；不绑项目时分配独立的托管目录。可以指定已有仓库、子目录或临时 worktree；必须为存在的绝对目录。它不改变已指定或继承的项目归属，也不登记项目。不绑项目且 use_worktree=true 时必须显式指定 working_dir 作为 Git 仓库。jump 模式忽略。",
   "",
   "【use_worktree(仅 create 模式)】use_worktree=true 时,host 会先从**新 session 的 workingDir**(即 working_dir 覆盖后的目录;未覆盖时为选中或继承的项目目录)解析出 base git 仓库,为新 session 预建一个正规 session worktree(<baseRepo>/.cindy-worktrees/<自动名> + cindy/<自动名> 分支,UI 有徽标,session 关闭时自动 stash 未提交改动后回收),新 session 的 workingDir 即该 worktree 路径,返回里带 worktree_path，项目归属保持不变，包括不绑项目的任务。历史 xdt/<自动名> 分支仍可恢复与回收。适用:新 session 要改代码 / checkout 分支,不能污染当前工作树时(如 PR 修复跟进)。workingDir 不是 git 仓库 / git 未装 / worktree 创建失败 → 返 WORKTREE_UNAVAILABLE(不静默降级);调用方可视情况去掉该参数重试(新 session 将直接使用 working_dir 或默认执行目录)。jump 模式忽略此参数。",
+  "【base_ref(仅 create + use_worktree=true)】worktree 从哪里切出。省略时:本机创建且当前任务自己在 worktree 里、没换 working_dir → 跟随它当前检出的分支；其余情况(含在另一台电脑上创建) → 刚拉取的远端默认分支。项目的工作分支不是默认分支时(例如长期在 release/2.x 上开发)要显式传 base_ref，否则新任务从默认分支起步、还得自己再切一次分支。写法与 create_task_worktree 的 base_ref 相同:远端分支写 \"origin/release/2.x\"(创建前先向远端拉取这一条分支，另一台电脑刚 push 的提交也能拿到)，本地分支写 \"release/2.x\"(按任务所在电脑上现有的状态，不联网)，也可以是提交 SHA。引用解析不了 → WORKTREE_UNAVAILABLE，不回退默认分支；没传 use_worktree=true → INVALID_ARGS；远程创建时目标电脑版本不支持 → REMOTE_UNSUPPORTED；三种情况都不创建任务。回执的 worktree_base_ref 是实际切出的基线；远端分支没能拉取时仍用任务所在电脑上已有的副本创建，并返回 worktree_base_fetched=false 与 worktree_warning，要转告用户。jump 模式忽略此参数。",
   "当前 dispatcher session 不会被本工具关闭或改写,消息投递成功后立即返回。",
   "",
   "【典型场景】首次处理外部业务对象时，选择已有项目并传 project_path 新建任务，保存返回的 id；再次处理时传 target_session_id 回到原任务。",
@@ -179,14 +191,14 @@ const describeSendToSession = (supportsRemote: boolean, supportsShared: boolean)
   "- ARCHIVED: 目标 session 已归档。已有恢复授权时，可先用 control/unarchive_sessions（支持 deviceId::sessionId）恢复，再发送新消息；不能自行推翻用户归档意图。",
   "- DELETED: 目标 session 已删除。skill 应清绑定并回退。",
   "- BUSY: 仅 create 模式的罕见兜底(新建 session 意外已有 turn 在跑)。jump 模式撞忙不再返 BUSY,而是入队并成功返回 wake_kind=queued。",
-  "- WORKTREE_UNAVAILABLE: 仅 create + use_worktree=true:无法创建 worktree(非 git 仓库 / git 未装 / git worktree add 失败,message 带具体原因)。skill 决定是去掉 use_worktree 重试还是放弃。",
+  "- WORKTREE_UNAVAILABLE: 仅 create + use_worktree=true:无法创建 worktree(非 git 仓库 / git 未装 / base_ref 解析不了 / git worktree add 失败,message 带具体原因)。skill 决定是改 base_ref、去掉 use_worktree 重试还是放弃。",
   "- AGENT_NOT_READY: 目标 session 恢复或投递时 agent 未能启动。skill 应告知用户稍后重试。",
   "- UNSUPPORTED_CAPABILITY: 目标 session 不接受跨任务投递（例如 host 管理的隔离 Review）。skill 不应重试或改走其它输入入口。",
   "- HOST_NOT_READY: 主进程服务尚未就绪。skill 应告知用户稍等几秒后重试。",
   "- PROVIDER_ROUTE_UNAVAILABLE: 仅 create:目标位置(agent_device_id 或继承的位置)没有提供所需模型的已连接供应商，或指定的电脑读不到供应商(离线 / 未开启远程控制 / 分享不可用)。没有创建任务；可换一台电脑或换模型重试。",
   "- INVALID_ARGS: 参数不合法(含 agent_device_id 格式不对、SSH 任务指定 agent_device_id)。没有创建任务。",
   "- REMOTE_DEVICE_OFFLINE / REMOTE_DISABLED / REMOTE_UNAVAILABLE: 目标电脑离线、未开启远程控制或暂时连不上,消息没有发出。",
-  "- REMOTE_UNSUPPORTED: 目标电脑的版本不支持接收其它电脑的任务消息,消息没有发出;需要对方升级。",
+  "- REMOTE_UNSUPPORTED: 目标电脑的版本不支持接收其它电脑的任务消息，或不支持本次用到的创建参数(如 base_ref)；消息没有发出、任务没有创建，需要对方升级。",
   "- DELIVERY_UNKNOWN: 请求已发往目标电脑但没有收到可信回执(含对方 Agent 没能启动),可能已送达。重发前先用 get_chat_history(deviceId::sessionId) 确认,避免重复。",
   "",
   "【重要】这不是 chat 对话工具,而是 session 间 handoff 的控制层入口。不要拿它替代普通的 user→agent 对话。",
@@ -220,6 +232,54 @@ export function projectMembershipNote(input: {
     return { project_note: "This task is not in any project: the source task has none, and working_dir (if given) is not inside a visible registered project. To place a task in a project, pass project_path from list_projects." };
   }
   return {};
+}
+
+/**
+ * 新建任务回执里的供应电脑。调用方省略 provider_device_id 时位置由宿主决定(本机继承来源任务、
+ * 远程用目标电脑自己的)，不回报就看不出新任务用的是哪台电脑的账号额度。不是任务所在电脑时
+ * 附一句说明；目标电脑版本较旧没回报时如实说未知，不猜成 local。
+ */
+export function providerLocationReceipt(input: {
+  providerDeviceId: string | null | undefined;
+  inherited: boolean;
+  remoteDestination: boolean;
+}): { provider_device_id?: string; provider_note?: string } {
+  if (input.providerDeviceId === undefined) {
+    return input.remoteDestination
+      ? { provider_note: "The destination computer runs an older version that does not report which computer provides this task's model. Do not assume it is the destination's own provider; update the destination to see it." }
+      : {};
+  }
+  if (input.providerDeviceId === null) return { provider_device_id: LOCAL_AGENT_DEVICE };
+  return {
+    provider_device_id: input.providerDeviceId,
+    provider_note:
+      `This task's model is provided by another computer (${input.providerDeviceId}), not by the computer that holds the task, ` +
+      (input.inherited
+        ? "because the source task uses that provider and provider_device_id was omitted. "
+        : "as requested by provider_device_id. ") +
+      'Its usage counts against that computer\'s accounts. To use the task computer\'s own provider, create the task with provider_device_id="local".',
+  };
+}
+
+/**
+ * 新建任务回执里的 worktree 基线:实际切出的引用，以及没能从远端刷新时的提示。
+ * 文案与 create_task_worktree 的 base_fetched / warning 同义。
+ */
+export function worktreeBaseReceipt(input: {
+  baseRef: string | undefined;
+  staleReason: string | undefined;
+  requested: boolean;
+}): { worktree_base_ref?: string; worktree_base_fetched?: false; worktree_warning?: string } {
+  if (!input.baseRef) return {};
+  if (!input.staleReason) return { worktree_base_ref: input.baseRef };
+  return {
+    worktree_base_ref: input.baseRef,
+    worktree_base_fetched: false,
+    worktree_warning:
+      `Could not refresh ${input.requested ? 'base_ref' : 'the remote default branch'} from its remote (${input.staleReason}). ` +
+      `The worktree starts from ${input.baseRef} as it exists on the task's computer and may be behind the remote. ` +
+      'Tell the user, and have the new task fetch and merge the remote branch once the network is available.',
+  };
 }
 
 /**
@@ -278,6 +338,15 @@ export function registerSendToSessionTool(
         .describe(
           "仅 create 模式可选:true = 为新 session 预建独立 git worktree(自动从新 session 的 workingDir 解析 base 仓库)并以其为 workingDir,返回带 worktree_path;失败返 WORKTREE_UNAVAILABLE 不静默降级。新 session 要改代码 / checkout 分支时建议开。jump 模式忽略。",
         ),
+      base_ref: z
+        .string()
+        .trim()
+        .min(1)
+        .max(1024)
+        .optional()
+        .describe(
+          '仅 create + use_worktree=true 可选:worktree 的基线，写法同 create_task_worktree 的 base_ref。远端分支如 "origin/release/2.x"(创建前先拉取这一条分支)，本地分支如 "release/2.x"(按任务所在电脑现状，不联网)，或提交 SHA。省略 = 本机创建时跟随当前任务所在 worktree 的分支，否则为刚拉取的远端默认分支。解析不了返 WORKTREE_UNAVAILABLE，不回退默认分支；未开 use_worktree 返 INVALID_ARGS。jump 模式忽略。',
+        ),
       working_dir: z
         .string()
         .optional()
@@ -331,6 +400,7 @@ export function registerSendToSessionTool(
       message,
       title,
       use_worktree,
+      base_ref,
       working_dir,
       project_path,
       agent_kind,
@@ -341,6 +411,9 @@ export function registerSendToSessionTool(
     }) => {
       if (target_session_id && device !== undefined)
         return errorPayload("INVALID_ARGS", "已有目标请只传 target_session_id；device 仅用于新建任务。");
+      // 基线只对新建的 worktree 有意义。悄悄忽略会让调用方以为新任务在点名的分支上。
+      if (!target_session_id && base_ref !== undefined && use_worktree !== true)
+        return errorPayload("INVALID_ARGS", "base_ref 只在 use_worktree=true 时有效；请同时传 use_worktree=true，或去掉 base_ref。");
       if (!target_session_id && provider_device_id !== undefined && agent_device_id !== undefined
         && provider_device_id !== agent_device_id)
         return errorPayload("INVALID_ARGS", "provider_device_id 与旧名 agent_device_id 指向不同位置，请只选一个供应商位置。");
@@ -392,6 +465,8 @@ export function registerSendToSessionTool(
         dispatcherSessionId: ctx.sessionId,
         title,
         useWorktree: use_worktree,
+        // jump 不建 worktree：只在 create 时传。
+        ...(localTargetId === undefined && base_ref !== undefined ? { baseRef: base_ref } : {}),
         workingDir: working_dir,
         ...(project_path !== undefined ? { projectDir: project_path } : {}),
         ...(agent_kind !== undefined ? { agentKind: agent_kind } : {}),
@@ -426,6 +501,20 @@ export function registerSendToSessionTool(
         target_last_user_send_at: result.targetLastUserSendAt,
         ...(result.queuedMessageId ? { queued_message_id: result.queuedMessageId } : {}),
         worktree_path: result.worktreePath ?? null,
+        ...(result.wakeKind === "created"
+          ? {
+              ...worktreeBaseReceipt({
+                baseRef: result.worktreeBaseRef,
+                staleReason: result.worktreeBaseStaleReason,
+                requested: base_ref !== undefined,
+              }),
+              ...providerLocationReceipt({
+                providerDeviceId: result.providerDeviceId,
+                inherited: result.providerDeviceInherited === true,
+                remoteDestination: !!result.targetDeviceId,
+              }),
+            }
+          : {}),
         ...(result.projectDir !== undefined ? { project_path: result.projectDir } : {}),
         ...(result.wakeKind === "created"
           ? projectMembershipNote({

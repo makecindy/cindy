@@ -14,6 +14,18 @@ export type MobileVoiceDictionaryLearningTracker = {
     uiLanguage?: string;
     sourceLanguage?: string;
   }): void;
+  /**
+   * Called when the user explicitly undoes refinement back to raw ASR text.
+   * Clears any pending dictionary learning for the refined->raw transition and
+   * re-anchors the watch on the restored raw text so subsequent manual edits
+   * are still learned cleanly.
+   */
+  noteRefinementUndone(input: {
+    draft: string;
+    start: number;
+    end: number;
+    rawTranscriptText: string;
+  }): void;
   inspectDraft(nextDraft: string): void;
   flush(): void;
   dispose(): void;
@@ -84,6 +96,30 @@ export function createMobileVoiceDictionaryLearningTracker(
         end: input.end,
         uiLanguage: normalizeOptionalText(input.uiLanguage),
         sourceLanguage: normalizeOptionalText(input.sourceLanguage),
+      };
+    },
+
+    noteRefinementUndone(input) {
+      clearTimer();
+      const rawTranscriptText = normalizeText(input.rawTranscriptText);
+      if (
+        !rawTranscriptText
+        || input.start < 0
+        || input.end < input.start
+        || input.end > input.draft.length
+        || normalizeText(input.draft.slice(input.start, input.end)) !== rawTranscriptText
+      ) {
+        watch = null;
+        return;
+      }
+      watch = {
+        baselineDraft: input.draft,
+        rawTranscriptText,
+        baselineText: rawTranscriptText,
+        start: input.start,
+        end: input.end,
+        uiLanguage: watch?.uiLanguage,
+        sourceLanguage: watch?.sourceLanguage,
       };
     },
 

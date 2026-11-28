@@ -6,7 +6,7 @@ import { newSessionAttachment, newSessionDraft } from './fixtures/newSession';
 import { beforeEach, expect, it, vi } from 'vitest';
 import { getMobileAuthOwner, setMobileAuthOwner } from '../auth/authOwnerGeneration';
 import type { MobileMakerTransport, MobileWorktreeCreateResult } from '../device-link/mobileMakerTransport';
-import type { DurableOutboxRecord } from '../session/durableOutbox';
+import { needsHostCreation, type DurableOutboxRecord } from '../session/durableOutbox';
 import type { MobileLocalAttachmentUploadCandidate } from '../session/mobileLocalAttachmentUpload';
 import { retainOutboxFile, durableOutboxUploadUri, removeRetainedOutboxFiles } from '../session/durableOutboxFiles';
 import { cancelledCreationDraft, outboxCreationRetryIdentity } from '../session/cancelledCreationDraft';
@@ -50,7 +50,14 @@ vi.mock('../session/durableOutboxFiles', () => {
 });
 vi.mock('../session/mobileAttachmentUpload', () => ({ discardMobileUploadedAttachment: vi.fn() }));
 vi.mock('expo-crypto', () => ({ getRandomBytes: (n: number) => new Uint8Array(n).fill(7) }));
-import { getCurrentMobileOutboxRecords, mobileDurableOutbox, persistCancelledCreationDraft } from '../session/mobileDurableOutbox';
+import {
+  getCurrentMobileOutboxRecords,
+  isDurableOutboxCreationHeld,
+  mobileDurableOutbox,
+  persistCancelledCreationDraft,
+  retractSubmittedDialogueCreation,
+} from '../session/mobileDurableOutbox';
+import { createOutboxMessageLeases, createOutboxSessionAccess } from '../session/mobileOutboxSessionAdapter';
 import { completeNewSessionDurableEdit, getNewSessionCreationTask, hasLiveNewSessionCreation, holdNewSessionCreationDraft, prepareNewSessionCreationForEdit, restoreNewSessionDurableEdit, startNewSessionCreation } from '../session/newSessionCreation';
 import { remoteSessionStore } from '../session/remoteSessionStore';
 import { listPendingPrecreatedWorktrees, recoverPendingPrecreatedWorktrees, registerPendingPrecreatedWorktree } from '../session/precreatedWorktreeRecovery';
@@ -124,6 +131,261 @@ function harness(previous: DurableOutboxRecord | null = null) {
   };
   return { bindings, run };
 }
+
+// Unit: only a submitted plain dialogue may create its missing host task after
+// restart. Earlier tests persist worktree drafts before submission.
+it('persists the validated dialogue and its original IDs before the live creation starts', async () => {
+  const { bindings } = harness();
+  const releases: Array<() => void> = [];
+  try {
+    const prepared = await prepareNewSessionCreation({
+      ...bindings, effectiveDraft: { ...bindings.effectiveDraft, workspaceKind: 'dialogue' },
+      creatingWorktree: false, allowDialogueRecovery: true, sendAttachments: [],
+      worktreeIntent: { ...bindings.worktreeIntent, applicable: false },
+      onHoldDurableCreation: release => releases.push(release), onHoldPrecreatedRegistration: vi.fn(),
+    }, { ...newSessionCreationPreparationServices, ...bindings });
+    expect(getCurrentMobileOutboxRecords()).toHaveLength(0);
+    const draft = { ...prepared!.effectiveDraft, model: 'checked-model' };
+    expect(await prepared!.persistSubmittedDialogue!(draft)).toBe(true);
+    await mobileDurableOutbox.activate('');
+    await mobileDurableOutbox.activate(getMobileAuthOwner().accountKey);
+    expect(getCurrentMobileOutboxRecords()).toEqual([expect.objectContaining({
+      creation: expect.objectContaining({ needsHostCreation: true, draft }),
+      item: expect.objectContaining({ sessionId: prepared!.sessionId, clientId: prepared!.firstMessageClientId, text: draft.firstMessage }),
+    })]);
+    expect(getCurrentMobileOutboxRecords()[0]?.clearBoundaryMs).toBeUndefined();
+  } finally {
+    for (const release of releases) release();
+  }
+});
+
+// Unit: switching target device during dialogue persistence must retract
+// the unhanded-off needsHostCreation record so MobileOutboxBridge never launches it.
+it('retracts a persisted needsHostCreation record when the target device changes before handoff', async () => {
+  const { bindings } = harness();
+  let deviceChecks = 0;
+  bindings.ensureDeviceAlive = () => ++deviceChecks <= 1;
+  const releases: Array<() => void> = [];
+  try {
+    const prepared = await prepareNewSessionCreation({
+      ...bindings, effectiveDraft: { ...bindings.effectiveDraft, workspaceKind: 'dialogue' },
+      creatingWorktree: false, allowDialogueRecovery: true, sendAttachments: [],
+      worktreeIntent: { ...bindings.worktreeIntent, applicable: false },
+      onHoldDurableCreation: release => releases.push(release), onHoldPrecreatedRegistration: vi.fn(),
+    }, { ...newSessionCreationPreparationServices, ...bindings });
+    expect(await prepared!.persistSubmittedDialogue!(prepared!.effectiveDraft)).toBe(false);
+    expect(getCurrentMobileOutboxRecords()).toHaveLength(0);
+    expect(bindings.outboxRecoveryRef.current).toBeNull();
+  } finally {
+    for (const release of releases) release();
+  }
+});
+
+// Unit regression (PR #13654 Greptile P1): when physical removal fails during retraction,
+// fall back to durably settling the record as cancelled so neither live delivery nor
+// cold-restart recovery can create or send the cancelled dialogue.
+it('durably settles a retracted needsHostCreation record as cancelled when removeItem fails', async () => {
+  const { bindings } = harness();
+  let deviceChecks = 0;
+  bindings.ensureDeviceAlive = () => ++deviceChecks <= 1;
+  const releases: Array<() => void> = [];
+  let sessionId = '';
+  try {
+    const prepared = await prepareNewSessionCreation({
+      ...bindings, effectiveDraft: { ...bindings.effectiveDraft, workspaceKind: 'dialogue' },
+      creatingWorktree: false, allowDialogueRecovery: true, sendAttachments: [],
+      worktreeIntent: { ...bindings.worktreeIntent, applicable: false },
+      onHoldDurableCreation: release => releases.push(release), onHoldPrecreatedRegistration: vi.fn(),
+    }, { ...newSessionCreationPreparationServices, ...bindings });
+    sessionId = prepared!.sessionId;
+    disk.failRemove = true;
+    expect(await prepared!.persistSubmittedDialogue!(prepared!.effectiveDraft)).toBe(false);
+    expect(getCurrentMobileOutboxRecords()).toEqual([]);
+    expect(mobileDurableOutbox.getSnapshot()).toHaveLength(1);
+    expect(mobileDurableOutbox.getSnapshot()[0]).toMatchObject({
+      suspended: true,
+      state: 'host-owned',
+      cleanupOutcome: 'cancelled',
+      cancelRequested: true,
+      creation: { cancelled: true },
+    });
+    expect(needsHostCreation(mobileDurableOutbox.getSnapshot()[0]!)).toBe(false);
+  } finally {
+    for (const release of releases) release();
+  }
+  expect(isDurableOutboxCreationHeld(sessionId)).toBe(false);
+
+  // Survives cold reload and only runs cleanup/removal once removeItem recovers.
+  await mobileDurableOutbox.activate('');
+  await mobileDurableOutbox.activate(getMobileAuthOwner().accountKey);
+  expect(getCurrentMobileOutboxRecords()).toEqual([]);
+  expect(mobileDurableOutbox.getSnapshot()[0]?.cleanupOutcome).toBe('cancelled');
+  disk.failRemove = false;
+  const createMissingDialogue = vi.fn(async () => true);
+  const enqueue = vi.fn(async (): Promise<InputProjection> => {
+    throw new Error('unexpected enqueue');
+  });
+  const cleanup = vi.fn(async () => {});
+  await createDurableOutboxDelivery({
+    store: mobileDurableOutbox,
+    isCurrent: () => true,
+    canRun: () => true,
+    createMissingDialogue,
+    projection: async (): Promise<InputProjection> => {
+      throw new Error('unexpected projection');
+    },
+    bindProjection: () => () => {},
+    session: async () => null,
+    prepare: async (): Promise<QueuedRemoteMessage> => { throw new Error('unexpected prepare'); },
+    upload: async () => { throw new Error('unexpected upload'); },
+    enqueue,
+    cancel: async () => true,
+    history: async () => false,
+    cleanup,
+    discardUploads: () => {},
+    retryable: () => false,
+    describe: String,
+    confirmationMessage: 'unconfirmed',
+    clearedMessage: 'cleared',
+  }).run();
+  expect(createMissingDialogue).not.toHaveBeenCalled();
+  expect(enqueue).not.toHaveBeenCalled();
+  expect(cleanup).toHaveBeenCalledOnce();
+  expect(mobileDurableOutbox.getSnapshot()).toEqual([]);
+});
+
+// Unit regression (PR #13654 Greptile P1): when both removeItem and setItem fail during
+// retraction (in prepareNewSessionCreation or new.tsx finally), keep the creation hold
+// active even after the caller releases its lease, blocking MobileOutboxBridge delivery
+// and lease hydration, and retry until storage recovers.
+it.each(['prepare', 'finally'] as const)(
+  'keeps creation held and retries retraction when storage fails completely (%s)',
+  async (stage) => {
+    vi.useFakeTimers();
+    try {
+      const { bindings } = harness();
+      let deviceChecks = 0;
+      if (stage === 'prepare') {
+        bindings.ensureDeviceAlive = () => ++deviceChecks <= 1;
+      }
+      const releases: Array<() => void> = [];
+      const prepared = await prepareNewSessionCreation({
+        ...bindings, effectiveDraft: { ...bindings.effectiveDraft, workspaceKind: 'dialogue' },
+        creatingWorktree: false, allowDialogueRecovery: true, sendAttachments: [],
+        worktreeIntent: { ...bindings.worktreeIntent, applicable: false },
+        onHoldDurableCreation: release => releases.push(release), onHoldPrecreatedRegistration: vi.fn(),
+      }, { ...newSessionCreationPreparationServices, ...bindings });
+      const sessionId = prepared!.sessionId;
+
+      if (stage === 'prepare') {
+        // Persist succeeds first, then storage fails before the post-save retraction runs.
+        const origSetItem = disk.data.set.bind(disk.data);
+        const setSpy = vi.spyOn(disk.data, 'set').mockImplementation((k, v) => {
+          const out = origSetItem(k, v);
+          disk.fail = true;
+          disk.failRemove = true;
+          return out;
+        });
+        try {
+          expect(await prepared!.persistSubmittedDialogue!(prepared!.effectiveDraft)).toBe(false);
+        } finally {
+          setSpy.mockRestore();
+        }
+      } else {
+        expect(await prepared!.persistSubmittedDialogue!(prepared!.effectiveDraft)).toBe(true);
+        disk.fail = true;
+        disk.failRemove = true;
+        expect(await retractSubmittedDialogueCreation({
+          accountId: getMobileAuthOwner().accountKey,
+          deviceId: bindings.selectedDeviceId,
+          sessionId,
+          clientId: prepared!.firstMessageClientId,
+        })).toBe(false);
+      }
+
+      // Caller releases its own creation lease in finally; hold must stay active.
+      for (const release of releases) release();
+      expect(isDurableOutboxCreationHeld(sessionId)).toBe(true);
+      const pending = getCurrentMobileOutboxRecords()[0]!;
+      expect(needsHostCreation(pending)).toBe(true);
+
+      const access = createOutboxSessionAccess({
+        getSessions: () => remoteSessionStore.getSessions(),
+        getRecords: () => mobileDurableOutbox.getSnapshot(),
+        isCurrent: () => true,
+        guard: () => {},
+        invoke: vi.fn(),
+        readSession: vi.fn(),
+        isForeground: () => true,
+        canConnect: () => true,
+        isCreationHeld: isDurableOutboxCreationHeld,
+        hasCreationTask: () => false,
+        needsReconciliation: () => true,
+      });
+      expect(access.canRun(pending)).toBe(false);
+
+      const leaseManager = createOutboxMessageLeases({
+        isCurrent: () => true,
+        getRecords: () => mobileDurableOutbox.getSnapshot(),
+        hidden: () => false,
+        isCreationHeld: isDurableOutboxCreationHeld,
+        needsReconciliation: () => true,
+        restoreEditable: () => false,
+        dismissCancelled: () => {},
+        store: remoteSessionStore,
+      });
+      leaseManager.refresh();
+      expect(remoteSessionStore.getSessions()).toEqual([]);
+      leaseManager.dispose();
+
+      // Once storage recovers, the scheduled retry removes the record and releases the hold.
+      disk.fail = false;
+      disk.failRemove = false;
+      await vi.advanceTimersByTimeAsync(500);
+      expect(getCurrentMobileOutboxRecords()).toEqual([]);
+      expect(mobileDurableOutbox.getSnapshot()).toEqual([]);
+      expect(disk.data.size).toBe(0);
+      expect(isDurableOutboxCreationHeld(sessionId)).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  },
+);
+
+// Unit regression: if logout races submission/retraction, keep the hold across account
+// switch and retract the aborted record as soon as the original account reactivates.
+it('holds and retracts an aborted dialogue after the original account logs back in', async () => {
+  const { bindings } = harness();
+  const releases: Array<() => void> = [];
+  const prepared = await prepareNewSessionCreation({
+    ...bindings, effectiveDraft: { ...bindings.effectiveDraft, workspaceKind: 'dialogue' },
+    creatingWorktree: false, allowDialogueRecovery: true, sendAttachments: [],
+    worktreeIntent: { ...bindings.worktreeIntent, applicable: false },
+    onHoldDurableCreation: release => releases.push(release), onHoldPrecreatedRegistration: vi.fn(),
+  }, { ...newSessionCreationPreparationServices, ...bindings });
+  const sessionId = prepared!.sessionId;
+  const aliceKey = getMobileAuthOwner().accountKey;
+  expect(await prepared!.persistSubmittedDialogue!(prepared!.effectiveDraft)).toBe(true);
+
+  // Switch away before retraction can touch Alice's ledger.
+  setMobileAuthOwner('bob', 'global');
+  await mobileDurableOutbox.activate(getMobileAuthOwner().accountKey);
+  expect(await retractSubmittedDialogueCreation({
+    accountId: aliceKey,
+    deviceId: bindings.selectedDeviceId,
+    sessionId,
+    clientId: prepared!.firstMessageClientId,
+  })).toBe(false);
+  for (const release of releases) release();
+  expect(isDurableOutboxCreationHeld(sessionId)).toBe(true);
+
+  // Switching back to Alice triggers automatic retraction once her ledger finishes loading.
+  setMobileAuthOwner('alice', 'global');
+  await mobileDurableOutbox.activate(aliceKey);
+  await vi.waitFor(() => expect(isDurableOutboxCreationHeld(sessionId)).toBe(false));
+  expect(getCurrentMobileOutboxRecords()).toEqual([]);
+  expect(disk.data.size).toBe(0);
+});
 
 it.each(['reservation-fails', 'create-rejected', 'reply-lost', 'leaves-during-create'] as const)(
   'keeps the latest restored draft reachable when resubmission stops before handoff: %s', async scenario => {

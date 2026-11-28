@@ -547,13 +547,14 @@ describe('maker:event hot path ordering', () => {
     );
   });
 
-  it('recycles extraDirs runtime only when the session declares native handshake recycling', () => {
+  it('recycles extraDirs runtime only when the session declares native handshake recycling and skips library-slot-only sync', () => {
     const start = source.indexOf('export function applyDirectoryGrants(');
     const end = source.indexOf('export async function applyLibraryReadonlyExtraDir(', start);
     expect(start).toBeGreaterThan(-1);
     expect(end).toBeGreaterThan(start);
     const grantBlock = source.slice(start, end);
     expect(grantBlock).toContain("result.changed && axis === 'extraDirs' && sess?.requiresRuntimeRecycleForExtraDirs?.()");
+    expect(grantBlock).toContain('if (!options.replaceLibrarySlot)');
     expect(grantBlock).not.toContain("result.changed && axis === 'extraDirs' && sess?.agentKind === 'acp'");
   });
 

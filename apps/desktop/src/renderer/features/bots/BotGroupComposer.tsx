@@ -210,6 +210,7 @@ export function BotGroupComposer({
   onSent,
   onSending,
   footerStart,
+  aboveCard,
 }: {
   groupId: string;
   conversationKind?: 'direct';
@@ -249,6 +250,8 @@ export function BotGroupComposer({
   /** Main-group send was queued; keep the timeline at the bottom. */
   onSending?: () => void;
   footerStart?: (sending: boolean) => ReactNode;
+  /** A request waiting on this person, docked above the input like a permission request. */
+  aboveCard?: ReactNode;
 }) {
   const { t } = useTranslation();
   const { preference: sendShortcutPreference } = useComposerSendShortcutPreference();
@@ -772,8 +775,7 @@ export function BotGroupComposer({
       <div className={cn(BOT_GROUP_COMPOSER_COLUMN, thread && 'max-w-none')}>
         {error ? <p role="alert" className="mb-2 text-13 text-[var(--error-fg)]">{error}</p> : null}
         <FieldVoiceInputNotice
-          error={voice.lastError}
-          speakerFiltered={Boolean(voice.speakerFiltered)}
+          {...voice.noticeProps}
           className="mb-2"
         />
         {/* Same floating slot above the card as a task's composer: files that did not attach. */}
@@ -785,6 +787,7 @@ export function BotGroupComposer({
             />
           </div>
         ) : null}
+        {aboveCard}
         {mention.list}
         <ComposerCard className={cn(COMPOSER_CONTENT_CLASS, 'gap-2')}>
           {dragOver ? (

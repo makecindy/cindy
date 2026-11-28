@@ -16,6 +16,7 @@ import {
 import { useTranslation } from "react-i18next";
 import type { MobileProviderMarkProps } from "./MobileProviderMark";
 import type { AgentKind } from "@cindy/model-providers/types";
+import { isModelVisible } from "@cindy/model-providers/sections";
 import { listedSourceFolds, resolveStoredModelEntry, sameRunLocationProvider, type ProviderView, type UnifiedModelEntry } from "@cindy/model-providers";
 import type { MobileAgentCapabilities } from "./agentCapabilities";
 import type { ModelPickerSheetProps } from "./ModelPickerSheet";
@@ -230,6 +231,7 @@ export interface UnifiedMobileModelGroupManagedMeta {
 }
 
 export interface UnifiedMobileModelGroupOptions {
+  unsupported?: boolean;
   rows: readonly UnifiedMobileModelGroupRow[];
   /** 返回 false = 没有应用(选择器留在原地)。 */
   onSelect(id: string): Promise<boolean> | boolean;
@@ -324,6 +326,7 @@ export interface UnifiedMobilePickerViewProps {
   /** 模型组(列在插件引擎与 groups 之前)；搜索时只列命中的。 */
   modelGroups?: {
     title: string;
+    unsupportedNotice?: string;
     rows: readonly UnifiedMobileModelGroupRow[];
     onSelect(id: string): void;
     managedMeta?: UnifiedMobileModelGroupManagedMeta;
@@ -597,6 +600,11 @@ export function UnifiedModelPickerSheet(
       boundGroup ? { ...keepModel, providerId: boundGroup.providerId } : undefined,
     [boundGroup, keepModel],
   );
+  const remoteVisibilityByDevice = useMemo(() => {
+    const map = new Map<string, Record<string, boolean> | undefined>();
+    for (const catalog of remoteCatalogs) map.set(catalog.deviceId, catalog.modelVisibilityOverrides);
+    return map;
+  }, [remoteCatalogs]);
   const entries = useMemo(
     () =>
       mobileUnifiedEntries(
@@ -609,6 +617,14 @@ export function UnifiedModelPickerSheet(
           : selectedDeviceId === null || shownMergedSourceId !== null
             ? keepModel
             : undefined,
+        (providerId, model, agent) =>
+          sourceRoutes.isModelVisible(providerId, model.id, agent, (member) => {
+            const visibility = member.agentDeviceId
+              ? remoteVisibilityByDevice.get(member.agentDeviceId)
+              : p.modelVisibilityOverrides;
+            return visibility === undefined
+              || isModelVisible(visibility[`${member.agent}:${member.providerId}:${member.model.id}`], member.model.defaultEnabled);
+          }),
       ),
     [
       displayProviders,
@@ -620,6 +636,8 @@ export function UnifiedModelPickerSheet(
       boundGroup,
       selectedDeviceId,
       shownMergedSourceId,
+      sourceRoutes,
+      remoteVisibilityByDevice,
     ],
   );
   /** Agent 下一条消息时所在的那台电脑上正在用的来源(那台在组里被收起时照样算出来,用来停在组那一项)。 */
@@ -2047,11 +2065,14 @@ export function UnifiedModelPickerSheet(
         ...remotePluginFilters,
       ]}
       groups={groups}
-      {...(modelGroupRows.length || modelGroupOptions?.managedMeta
+      {...(modelGroupRows.length || modelGroupOptions?.managedMeta || modelGroupOptions?.unsupported
         ? {
             modelGroups: {
               title: t("models.modelGroups.title"),
               rows: modelGroupRows,
+              ...(modelGroupOptions?.unsupported ? {
+                unsupportedNotice: t("deviceLink.remoteError.capabilityUnavailable"),
+              } : {}),
               onSelect: selectModelGroup,
               ...(modelGroupOptions?.managedMeta ? { managedMeta: modelGroupOptions.managedMeta } : {}),
               ...(detachModelGroup ? { onDetach: detachModelGroup } : {}),

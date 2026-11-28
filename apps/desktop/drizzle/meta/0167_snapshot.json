@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "b24ccee8-d115-45c5-a0b6-a412c7335431",
+  "id": "012cc573-1d29-40b4-b994-229473254669",
   "prevId": "f5943513-2c8a-4f32-b7bb-4ab194fb4b0c",
   "tables": {
     "account_usage_snapshots": {
@@ -208,6 +208,14 @@
           "primaryKey": false,
           "notNull": true,
           "autoincrement": false
+        },
+        "harness": {
+          "name": "harness",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "'unknown'"
         },
         "session_id": {
           "name": "session_id",
@@ -1585,7 +1593,7 @@
           "primaryKey": false,
           "notNull": true,
           "autoincrement": false,
-          "default": "'\ud83e\udd16'"
+          "default": "'🤖'"
         },
         "avatar_color": {
           "name": "avatar_color",
@@ -2102,13 +2110,6 @@
           "autoincrement": false,
           "default": "'{}'"
         },
-        "stdio": {
-          "name": "stdio",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
         "sort_order": {
           "name": "sort_order",
           "type": "integer",
@@ -2469,6 +2470,14 @@
           "notNull": true,
           "autoincrement": false
         },
+        "harness": {
+          "name": "harness",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "'unknown'"
+        },
         "input_tokens": {
           "name": "input_tokens",
           "type": "integer",
@@ -2501,14 +2510,15 @@
       "indexes": {},
       "foreignKeys": {},
       "compositePrimaryKeys": {
-        "daily_token_attribution_day_provider_billing_source_model_pk": {
+        "daily_token_attribution_day_provider_billing_source_model_harness_pk": {
           "columns": [
             "day",
             "provider",
             "billing_source",
-            "model"
+            "model",
+            "harness"
           ],
-          "name": "daily_token_attribution_day_provider_billing_source_model_pk"
+          "name": "daily_token_attribution_day_provider_billing_source_model_harness_pk"
         }
       },
       "uniqueConstraints": {},
@@ -7447,6 +7457,14 @@
           "notNull": true,
           "autoincrement": false
         },
+        "harness": {
+          "name": "harness",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "'unknown'"
+        },
         "generation": {
           "name": "generation",
           "type": "text",
@@ -7486,13 +7504,14 @@
       "indexes": {},
       "foreignKeys": {},
       "compositePrimaryKeys": {
-        "token_reporting_first_day_provider_billing_model_pk": {
+        "token_reporting_first_day_provider_billing_model_harness_pk": {
           "columns": [
             "provider",
             "billing",
-            "model"
+            "model",
+            "harness"
           ],
-          "name": "token_reporting_first_day_provider_billing_model_pk"
+          "name": "token_reporting_first_day_provider_billing_model_harness_pk"
         }
       },
       "uniqueConstraints": {},

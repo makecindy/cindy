@@ -13,7 +13,6 @@ import {
   homeRowBefore,
   mergeAutomationItems,
   withMergedAutomationPriority,
-  type InboxTeammateEntry,
 } from '@/session/homeSections';
 import type { MobileHomePresentation, MobileHomeProjectGroup } from '@/session/mobileHome';
 import type { RemoteSessionListItem } from '@/session/sessionList';
@@ -661,35 +660,6 @@ it('leaves idle teammate conversations out of the inbox until they need the user
   expect(ids('inbox-working')).toEqual(['opened']);
 });
 
-// 2026-11-20 user decision: a teammate's main conversation is one inbox row placed by whose turn
-// it is. Unit, through the real section builder; existing cases only cover teammate *tasks*.
-// Smallest failing input: an idle read teammate listed at all, or a snooze outliving new input.
-it('places teammate conversations by whose turn it is, ahead of tasks, and leaves idle ones out', () => {
-  const now = Date.parse('2026-11-20T08:00:00Z');
-  const iso = (ms: number) => new Date(ms).toISOString();
-  const home = presentation({ chats: [listItem('task', iso(now))] });
-  const signals = { runningSessionIds: new Set<string>(), waitingSessionIds: new Set<string>(), unreadSessionIds: new Set<string>() };
-  const snooze = { snoozedUntil: iso(now + 3_600_000), snoozedAt: iso(now), userSendAt: null };
-  const teammates: InboxTeammateEntry[] = [
-    { key: 'idle', status: 'idle', snooze: null, activityAt: 9 },
-    { key: 'asks', status: 'awaiting', snooze: null, activityAt: 1 },
-    { key: 'replied', status: 'unread', snooze: null, activityAt: 2 },
-    { key: 'busy', status: 'running', snooze: null, activityAt: 3 },
-    { key: 'later', status: 'awaiting', snooze, activityAt: 4 },
-  ];
-  const rows = (at: number, list = teammates) => Object.fromEntries(buildInboxHomeSections(home, new Set(['inbox-working']), signals, at, list)
-    .map(section => [section.key, { count: section.count, keys: section.data.map(row => row.kind === 'teammate' ? row.teammate.key : row.key),
-      labels: section.data.flatMap(row => row.kind === 'teammate' && row.sourceLabel ? [row.sourceLabel] : []) }]));
-  const listed = rows(now);
-  expect(listed['inbox-inbox']).toMatchObject({ count: 3, keys: ['replied', 'asks', 'inbox::task'] });
-  // A collapsed section still counts its teammate.
-  expect(listed['inbox-working']).toMatchObject({ count: 1, keys: [] });
-  expect(listed['inbox-snoozed']).toMatchObject({ count: 1, keys: ['later'], labels: [new Date(now + 3_600_000).toLocaleString('zh-CN')] });
-  // The wake time passes, or the teammate's conversation receives new input first.
-  expect(rows(now + 3_600_000)['inbox-inbox'].keys).toContain('later');
-  expect(rows(now + 1, [{ ...teammates[4], snooze: { ...snooze, userSendAt: iso(now + 1) } }])['inbox-inbox'].keys).toContain('later');
-});
-
 it('puts a quiet followed task in working and returns it to inbox for results, waiting or pause', () => {
   const item = listItem('followed', '2026-11-13T08:00:00Z');
   item.scheduleInfo = { scheduleId: 'schedule', scheduleName: 'Follow', hasActiveFollowUp: true,
@@ -786,12 +756,12 @@ it('places a quiet Orca Lead in working when its Worker holds an active automati
   const idle = { runningSessionIds: new Set<string>(), waitingSessionIds: new Set<string>(), unreadSessionIds: new Set<string>() };
   const followingKeys = new Set([orcaLeadSessionKey('lead-1', 'mac-mini')]);
 
-  const quietSections = buildInboxHomeSections(home, new Set(), idle, Date.now(), [], followingKeys);
+  const quietSections = buildInboxHomeSections(home, new Set(), idle, Date.now(), followingKeys);
   expect(quietSections.find(s => s.key === 'inbox-working')?.count).toBe(1);
   expect(quietSections.find(s => s.key === 'inbox-inbox')?.count).toBe(0);
 
   lead.liveActivity = { attention: true, phase: 'completed' } as RemoteSessionListItem['liveActivity'];
-  const unreadSections = buildInboxHomeSections(home, new Set(), idle, Date.now(), [], followingKeys);
+  const unreadSections = buildInboxHomeSections(home, new Set(), idle, Date.now(), followingKeys);
   expect(unreadSections.find(s => s.key === 'inbox-inbox')?.count).toBe(1);
   expect(unreadSections.find(s => s.key === 'inbox-working')?.count).toBe(0);
 });

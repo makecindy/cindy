@@ -51,8 +51,6 @@ export interface ModelGroupsPickerProps {
   onManage?(): void;
   /** 另一台电脑自己的模式，每台一格；只列有模式的电脑。选中的 selection 带上那台的 deviceId。 */
   devices?: readonly ModelGroupsPickerDevice[];
-  /** 选择器打开时读一次各台电脑的模式(15 秒内复用上次的答案)。 */
-  readDevices?(): void;
 }
 
 export interface ModelGroupsPickerDevice {

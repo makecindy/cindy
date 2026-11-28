@@ -168,7 +168,10 @@ vi.mock('../../../security/trustedAppRenderer.js', () => ({
   isTrustedAppRendererWindow: (w: { trusted?: boolean; isDestroyed: () => boolean }) =>
     !w.isDestroyed() && w.trusted !== false,
 }));
-vi.mock('../../agentIslandSessionPatch', () => ({ notifyAgentIslandSessionPatch: vi.fn() }));
+vi.mock('../../agentIslandSessionPatch', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../../agentIslandSessionPatch')>(),
+  notifyAgentIslandSessionPatch: vi.fn(),
+}));
 vi.mock('../../../messagePersistBroadcaster.desktop', () => ({ noteSessionClearBoundary: vi.fn() }));
 vi.mock('../../toolResultCompaction.js', () => ({
   compactSessionToolResultsBestEffort: h.compactSessionToolResultsBestEffort,
@@ -237,6 +240,9 @@ import { createRemoteSessionsStatusSetter } from '../../../mcp-integrations/sess
 import * as sessionQueries from '../../sessionQueries';
 import { getDbClient } from '../../client/current';
 import { sessionToCamel, setSessionRuntimeProjector } from '../../mapper';
+import { readSessionInboxFacts } from '../../sessionInboxFacts';
+import { keepInboxCountedTasks, projectHostTaskActivity } from '../../../device-link/taskActivity';
+import type { AgentIslandSessionSnapshot } from '../../../../shared/agentIsland';
 
 function createDb(): void {
   const sqlite = new Database(':memory:');
@@ -2872,6 +2878,32 @@ describe('a budget-only change through updateSessionInDb and through persistSess
       error: null, rowUnchanged: true, budget: 300_000, customized: true,
       log: [patched('missing-task', 300_000), ['apply', 'missing-task', { previous: null, next: 300_000 }]],
     });
+  });
+});
+
+// DB tier: a main conversation in its teammate's workspace stays in the
+// phone summary while unread, unlike a channel in that same workspace. The real
+// DB reader and summary projection cover the link role, not a preclassified mock.
+it('counts an unread teammate main conversation without counting its channel result', async () => {
+  const dir = '/cindy-test/owners/owner/bots/teammate/workspace';
+  const insert = h.sqlite!.prepare(
+    "INSERT INTO sessions (id, source, working_dir, created_at, updated_at) VALUES (?, 'bot', ?, 1, 1)",
+  );
+  insert.run('main-chat', dir);
+  insert.run('channel-chat', dir);
+  const link = h.sqlite!.prepare("INSERT INTO bot_session_links (session_id, bot_id, role) VALUES (?, 'teammate', ?)");
+  link.run('main-chat', 'canonical');
+  link.run('channel-chat', 'channel');
+  const rows = ['main-chat', 'channel-chat'].map((sessionId) => ({
+    sessionId, title: sessionId, phase: 'completed', attention: true,
+  }) as AgentIslandSessionSnapshot);
+  const facts = new Map(await Promise.all(rows.map(async ({ sessionId }) =>
+    [sessionId, await readSessionInboxFacts(sessionId)] as const)));
+  const summary = (candidates: AgentIslandSessionSnapshot[]) =>
+    projectHostTaskActivity(keepInboxCountedTasks(candidates, (id) => facts.get(id), 10));
+  expect(summary(rows)).toMatchObject({ unreadCount: 1, selected: { sessionId: 'main-chat' } });
+  expect(summary([{ ...rows[0]!, attention: false }, rows[1]!])).toMatchObject({
+    unreadCount: 0, selected: null,
   });
 });
 

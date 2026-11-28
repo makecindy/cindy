@@ -26,11 +26,12 @@ export function notifyAgentIslandSessionPatch(
       if (patch.notificationsMuted !== undefined) {
         service.handleNotificationMuteChanged();
       }
-      if (
-        patch.status === 'archived' ||
-        patch.status === 'deleted' ||
-        (patch.hiddenAt !== undefined && patch.hiddenAt !== null)
-      ) {
+      const { status } = patch;
+      if (status === 'active' || status === 'archived' || status === 'deleted') {
+        service.handleSessionStatusChanged(sessionId, status);
+        if (status !== 'active') return;
+      }
+      if (patch.hiddenAt !== undefined && patch.hiddenAt !== null) {
         service.handleSessionClosed(sessionId);
         return;
       }
@@ -62,6 +63,8 @@ function toNullableString(value: unknown): string | null | undefined {
 export interface AgentIslandCompanionChangeSink {
   companionChanged: (botId: string) => void;
   groupChanged: (groupId: string) => void;
+  /** 稍后处理、取回或新发送改变了任务在收件箱里的分区，手机计数需要重读。 */
+  inboxFactsChanged: (sessionId: string) => void;
 }
 
 let companionChangeSink: AgentIslandCompanionChangeSink | null = null;
@@ -73,6 +76,11 @@ export function setAgentIslandCompanionChangeSink(sink: AgentIslandCompanionChan
 /** 伙伴群改名或解散后，让灵动岛重读以该群群专线说话的任务。 */
 export function notifyAgentIslandBotGroupChanged(groupId: string): void {
   companionChangeSink?.groupChanged(groupId);
+}
+
+/** 任务的稍后处理 / 发送时间变了：灵动岛重读它的收件箱分区。 */
+export function notifyAgentIslandInboxFactsChanged(sessionId: string): void {
+  companionChangeSink?.inboxFactsChanged(sessionId);
 }
 
 /** 伙伴改名或换头像后，让灵动岛重画以它身份说话的任务。 */
