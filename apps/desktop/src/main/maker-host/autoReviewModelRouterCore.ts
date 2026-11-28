@@ -115,13 +115,22 @@ function safeFailureReason(result: UtilityTextResult): string {
   return failed?.reason ?? result.attempts[0]?.reason ?? result.reason;
 }
 
-function reviewFailure(result: UtilityTextResult): AutoReviewTextFailure['failure'] {
+function reviewFailure(
+  result: UtilityTextResult,
+  candidate?: DedicatedAutoReviewCandidate,
+): AutoReviewTextFailure['failure'] {
   if (result.ok) return result.text.trim() ? 'malformed' : 'empty_response';
   const failed = result.attempts.find((attempt) => attempt.status === 'failed');
   if (failed?.reason === 'http_error') return 'http_error';
   if (failed?.reason === 'timeout' || result.reason === 'timeout') return 'timeout';
   if (failed?.reason === 'empty_response' || result.reason === 'empty_response') return 'empty_response';
   if (failed || result.attempts.some((attempt) => attempt.reason === 'auth_probe_failed')) return 'request_failed';
+  // The dedicated gateway candidate already passed the account capability check.
+  // Its key and endpoint arrive together from model access, so either missing
+  // means the connection is unready even though the review route is eligible.
+  if (candidate?.id === 'cindy-gateway' && result.attempts.some(
+    (attempt) => attempt.reason === 'api_key_missing' || attempt.reason === 'endpoint_missing',
+  )) return 'configuration_unavailable';
   // An empty attempt list can also mean a captured account/configuration changed.
   // Only positive local availability evidence can claim that there is no model.
   return result.reason === 'no_candidate' && result.attempts.length > 0
@@ -160,12 +169,12 @@ export function createAutoReviewModelRouter(
     let failure: AutoReviewTextFailure['failure'] = 'no_available_model';
     const reviewCandidates: UtilityTextAttempt[] = [];
     let quotaExhausted = false;
-    const recordFailure = (result: UtilityTextResult) => {
+    const recordFailure = (result: UtilityTextResult, candidate?: DedicatedAutoReviewCandidate) => {
       if (!result.ok) {
         reviewCandidates.push(...result.attempts);
         quotaExhausted ||= result.attempts.some((attempt) => attempt.reason === 'http_error' && attempt.quotaExhausted === true);
       }
-      const next = reviewFailure(result);
+      const next = reviewFailure(result, candidate);
       // Later skipped candidates must not erase an actual request/output failure.
       if (next !== 'no_available_model' || failure === 'no_available_model') failure = next;
     };
@@ -248,7 +257,7 @@ export function createAutoReviewModelRouter(
           });
           continue;
         }
-        recordFailure(result);
+        recordFailure(result, candidate);
 
         // Queued work keeps its order: a retry may only jump ahead when the budget still covers
         // one full timeout for every pending attempt, including earlier deferred retries.
