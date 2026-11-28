@@ -208,6 +208,21 @@ describe('direct group plans', () => {
     expect(chatGroupView(page, id(10)).round.speakers[0]).not.toHaveProperty('requesterName');
   });
 
+  // Unit regression (owner report 2026-11-27): in a direct group the group's own Cindy showed a grey
+  // initial among same-name personal Cindys. Desktop always uses Cindy's artwork; companions keep theirs.
+  it('shows the group Cindy with Cindy artwork whatever avatar the server sends', () => {
+    const base = snapshot();
+    const human = base.members[0]!;
+    const members = chatGroupView({ snapshot: { ...base, members: [human,
+      { ...human, id: id(12), kind: 'bot', name: 'Cindy', ownerActorId: '', assistant: true, avatar: null },
+      { ...human, id: id(13), kind: 'bot', name: 'Cindy', ownerActorId: '', assistant: true, groupAvatar: 'https://images.example.invalid/a.png' },
+      { ...human, id: id(14), kind: 'bot', name: 'Cindy', avatar: 'https://images.example.invalid/b.png' },
+    ] }, messages: [], before: null }, id(10)).members;
+    expect(members.filter(member => member.assistant).map(member => [member.avatar, member.avatarUrl]))
+      .toEqual([['cindy://avatar/preset/cindy', null], ['cindy://avatar/preset/cindy', null]]);
+    expect(members.find(member => member.botId === id(14))).toMatchObject({ avatar: '', avatarUrl: 'https://images.example.invalid/b.png' });
+  });
+
   it('projects the exact queued attempt and sends it with the displayed revision', async () => {
     const { client, state, request } = fixture();
     Object.assign(state.plan, { kind: 'talk', status: 'running', current_step: 0,
@@ -1253,12 +1268,13 @@ describe('personal mask transport', () => {
     const client = createChatServerClient(request as never);
     expect(await client.mask(id(2))).toBeNull();
     expect(await client.maskMentions(id(2))).toEqual({ mentions: [], hasMore: false });
+    await expect(client.maskMentions(id(2), undefined, undefined, undefined, true)).rejects.toThrow('UNSUPPORTED_OPERATION');
     expect(request.mock.calls.every(call => call[0] === '/me')).toBe(true);
   });
   it('pairs the original mention with its reply and acknowledges only the selected message', async () => {
     const companion = { id: id(3), name: 'Cindy', avatarUrl: null };
     const request = vi.fn(async (path: string, method?: string, body?: unknown) => {
-      if (path === '/me') return { actor: { id: id(1), kind: 'human' }, capabilities: { personalMask: 1 } };
+      if (path === '/me') return { actor: { id: id(1), kind: 'human' }, capabilities: { personalMask: 1, personalMentionHistory: 1 } };
       if (path.endsWith('/read')) return {};
       return { messages: [{ ...message(20), reply: { content: [{ type: 'text', text: 'Recorded' }], maskAttribution: { companion } } }], hasMore: false };
     });
@@ -1266,8 +1282,18 @@ describe('personal mask transport', () => {
     await expect(client.mask(id(2), { type: 'resume' })).rejects.toThrow('UNSUPPORTED_OPERATION');
     expect((await client.maskMentions(id(2))).mentions[0]).toMatchObject({ messageId: id(20), text: '20', reply: { companion, text: 'Recorded' } });
     expect(request.mock.calls.some(([, method]) => method === 'POST')).toBe(false);
+    await client.maskMentions(id(2), '20', undefined, undefined, true);
+    expect(request.mock.calls.map(([path]) => path)).toContain(`/conversations/${id(2)}/mentions?limit=100&scope=personal-history&before=20`);
     await client.maskMentions(id(2), undefined, [id(20)], 'read-one');
     expect(request.mock.calls.filter(([, method]) => method === 'POST')).toEqual([[`/conversations/${id(2)}/mentions/read`, 'POST', { operationId: 'read-one', messageIds: [id(20)] }]]);
+  });
+  // Unit: the old history row should read a single group message, never traverse pages
+  // or move the read watermark. A retracted source must not retain its body.
+  it('fetches the current original by ID without paging or acknowledging', async () => {
+    const request = vi.fn(async (_path: string) => ({ ...message(20), deleted: true }));
+    const original = await createChatServerClient(request as never).mentionOriginal(id(2), id(20));
+    expect(original).toMatchObject({ messageId: id(20), text: '', deleted: true });
+    expect(request.mock.calls).toEqual([[`/conversations/${id(2)}/messages/${id(20)}`]]);
   });
   it('keeps the human author and stand-in attribution in the actual mobile timeline', () => {
     const attribution = { self: { id: id(10), name: 'Chris', avatarUrl: null }, companion: { id: id(3), name: 'Cindy', avatarUrl: null }, sourceMessageId: id(19) };

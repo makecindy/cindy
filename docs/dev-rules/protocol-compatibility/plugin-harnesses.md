@@ -20,7 +20,7 @@ Host receipt 追加可选 `approvedHarnesses?: string[]`：只来自安装／更
 插件同源端点（本机 Electron 插件页与远程设置页的同一 fetch 白名单，非 device-link）：`PUT /harnesses` 正文
 `{ harnesses: [{ id, available: boolean, reason?: slug, message?: ≤200, version?: ≤64, models?: [{ id: ≤256, name: ≤200, description?: ≤200, group?: ≤200, efforts?: [level] ≤16, defaultEffort?: level }] ≤200, modes?: [mode] ≤16, defaultMode?: mode }] }`，
 整体覆盖，内容不变不写盘不通知，成功返回规范化后的列表；`GET /harnesses` 读回（按当前清单过滤）。未声明 `harnesses` 403，未安装 404，
-格式错误、未声明的 id 或模型 id 重复 400 且不改原状态，其它方法 405；额外字段丢弃。旧 Host 与 Node Host 返回 404，插件按不支持处理；
+格式错误、未声明的 id 或模型 id 重复 400 且不改原状态，其它方法 405；额外字段丢弃。旧 Host 返回 404，插件按不支持处理（Node Host 同步支持 `/harnesses`）；
 不认识 `models` 的旧 Host 丢弃该字段，新 Host 读到没有 `models` 的旧记录按「插件不列模型」处理。
 `efforts` / `defaultEffort`（2026-11-19）是 Cindy 思考深度 id（`minimal`、`low`、`medium`、`high`、`xhigh`、`max`，与 maker-core 从
 ACP `thought_level` 取值映射的集合相同）：非数组、非字符串或有 `defaultEffort` 无 `efforts` 400；本版不认识的 id 跳过、不拒整份
@@ -97,7 +97,8 @@ renderer `scheduleFormLogic.test.ts`「plugin engine selection」。
   控制端记为不支持、只列 B 自己的引擎(与此前相同)；B 没有来源名单(更早的版本)时同样只列 B 自己的引擎。手机端同样复用同一条
   `maker:model-catalog:read` 路径读取同账号其他电脑与已收到插件引擎分享，支持在模型选择器来源页筛选、收藏（沿用 `PLUGIN_ENGINE_FAVORITE_WIRE_AGENT = 'cc'` 既有槽位）、新建任务、会话内切换、伙伴模型链与插件自动化草稿中选择，并在不支持的旧被控端上静默降级为只列 B 本机引擎。
   来源名单或链接状态变化时丢弃该任务电脑的引擎目录与在途读取。重新发现来源后，只为已打开任务回读仍可用的来源。
-- **暂未开放**：插件引擎加入供应商组（电脑组）或备用机委托、转分享(`relayKey`)、协同 Worker 跨机运行插件引擎。这些入口保持明确拒绝。（注：本机插件引擎任务的分叉与回退已于 2026-11-27 #13001 支持；Agent 在另一台电脑上运行时的冷恢复回退仍受 `session-regressions.md` 同口径约束。）
+- **暂未开放**：插件引擎加入供应商组（电脑组）或备用机委托、转分享(`relayKey`)、协同 Worker 跨机运行插件引擎。这些入口保持明确拒绝。（注：本机插件引擎任务的分叉与回退已于 2026-11-27 #13001 支持；Agent 在另一台电脑上运行时的冷恢复回退仍受 `session-regressions.md` 同口径约束。） 跨电脑或直连分享插件引擎的分叉与侧边追问于 2026-11-27 开放：沿用从 Cindy 记录交接的新会话路径(`sdk_session_id = null`)，子任务首轮启动时仍由执行端完整复核准入。
+
 
 实现见 `maker-host/pluginEngineRemoteUse.ts`、`device-link/providerShareHost.ts`、`device-link/providerShareRuntime.ts`、`device-link/dispatch.ts`、`remote-agent/host/service.ts`、`remote-agent/host/runHost.ts`、`remote-agent/controller/service.ts`、maker-core `agents/acp/acp-agent.ts`；远程控制下的来源与代读见 `maker-ipc/controlledModelCatalog.ts`、renderer `lib/pluginEngineSelection.ts`(`controlledPluginEngineSources`)与 `hooks/usePluginEngines.ts`；回归见 `roundtrip.test.ts`、`providerShareDispatch.test.ts`、`pluginHarnesses.test.ts`、`nodeRuntimeBroker.test.ts`、`pluginEngineSessionAdmission.test.ts`、`PluginEnginesSection.test.tsx`、`PluginEngineRemoteUse.test.tsx`、`controlledModelCatalog.test.ts` 与 `newMakerDraftSubmission.test.ts`。
 
@@ -256,7 +257,7 @@ remote-agent `host/runHost.ts`、`controller/proxyHandle.ts`；回归见 `acp-se
 `/<skill>` 用的 Skill 清单（`AcpAgent.listAgentSkills`，与首轮 Skill 清单同源），返回既有 `AgentSkillCommand` 形状，
 `runtimeCommandName` / `runtimeStatus` / `origin` 不出现。这是既有字段的新取值，channel 早已在 allowlist：新控制端对旧被控端
 发出时旧端以 INVALID_PARAMS 拒绝，菜单按读取失败不列 Skill（旧被控端的引擎也不展开 `/<skill>`，不会列出点了没用的项）；
-旧控制端从不发出。Node Host（`/api/agent-skills`）不运行插件引擎，对 `acp` 回「未注册」，不按 Claude 列清单。
+旧控制端从不发出。Node Host（`/api/agent-skills`）装配了插件引擎，在 `acp` 已注册时与桌面同样经 `maker.listAgentSkills` 返回该引擎的 Skill 清单（未注册时回「未注册」，不按 Claude 列清单）。
 不新增 channel、中转帧或字段，自建中转原样转发，无需同步修改。
 实现见 desktop `maker-ipc/register.ts`、maker-core `agents/acp/acp-agent.ts`、host `agent/agent-skills.ts`；回归见
 `acp-session.test.ts`「lists for the `/` menu」、renderer `slashCommands.test.ts`「plugin engine Skills」与 host `boundary.test.mjs`「25b L1」。
@@ -301,6 +302,13 @@ main `sessionsUpdate.test.ts`「plugin engine runs on another computer」、`orc
 - **实现与回归**：`apps/desktop/src/main/cindy-brain/runtime/{ghostEngineSettingsEndpoint,ghostPageHandler}.ts`、
   `apps/desktop/src/main/deepLink.ts`、`apps/desktop/src/renderer/components/settings/ProvidersSection.tsx`；
   `ghostEngineSettingsEndpoint.test.ts`、`deepLink.test.ts`、`providersSectionDeepLink.test.tsx`。
+
+## 插件模型选择、插件任务与搜索筛选（2026-11-27）
+
+- **插件模型选择与插件任务**：`PluginModelSelection`、`PluginTaskPreferences.config`、`PluginTaskRoute`、`tasks-request`（`taskSlot` / `pluginTargetSlot` / `pluginTargetReview`）与 `MobileTaskSettings` 的 `agentKind` 新增取值 `acp`（此时 `providerId` 必为 `acp-plugin:<插件>:<引擎>` 且 `fastMode === false`）。本机与远程位置分别按对应电脑的插件引擎目录实时复核；插件「模型与任务」设置页在选了插件引擎时，快问快答（`cindy.text.oneshot`）与远程模型同口径回落到声明／系统辅助模型链，不借本机内置供应商。未升级的旧控制端不会发出 `acp`；新控制端发给旧被控端时旧端以 `INVALID_PARAMS` / `PLUGIN_SETTINGS_INVALID` 明确拒绝，不会静默切到内置引擎。
+- **搜索、筛选与历史读取**：会话搜索（`ConversationSearchAgentKind`、`local-db:conversations:search`）、侧栏与手机首页 Harness 筛选、`cindy_helper` 历史工具（`list_sessions` / `get_chat_history` / `search_chat_history`）及 `local-db:history:messages` 的 `agentKind` 新增取值 `acp`，且会话搜索返回行保留 `agentKind: 'acp'` 而不再压成 `'cc'`。旧被控端收到显式 `acp` 过滤时以 `INVALID_PARAMS` 拒绝，`all` 与既有内置取值不变。
+- **远程灵动岛**：`applyDeviceSessionMeta` 保留远程任务 `agentKind = 'acp'`（插件引擎的 `/review` 只读审查沙盒已由下方「附加目录、只读 `/review` 与共享任务」支持）。
+- 均属既有字段的新取值，不新增 channel、allowlist 或中转帧，官方与自建中转无需修改。
 
 ## 每轮权限闸（2026-11-25）
 
@@ -408,3 +416,45 @@ IM 轮次只有已知的读和搜索操作可以经上述条件直接放行，�
    - `packages/device-link/src/orcaRemoteWorker.ts` 的 `ORCA_REMOTE_WORKER_AGENT_KINDS` 新增 `'acp'`，`parseOrcaRemoteWorkerOpenRequest` 在 `agentKind === 'acp'` 且非模型组时校验 `providerId` 为 `acp-plugin:…`；旧版运行设备收到 `'acp'` 时以 `[INVALID_PARAMS] invalid agentKind` fail-closed 拒绝，不创建错误引擎的 Worker。
    - 代理任务行（`OrcaRemoteWorkerProxySessionSeed`）追加可选 `providerId` 落库，`orcaRemoteWorkerBridge` 放开 `'acp'` Worker 向 Lead 回报（MCP 上下文 `agentKind` 与 `acp-agent.ts` 同口径映射为 `'pi'`）。
    - 不新增 channel、allowlist 项或中转帧，官方与自建中转按既有 invoke 帧透明转发，无需改动。
+
+## 插件工具卡片识别
+
+任务消息的 `tool_use.content` 新增可选字符串 `mcpToolName`。新版桌面只在识别插件卡片和媒体锚点时
+优先使用它，普通工具行继续显示 `toolName`。据对 Factory droid 1.23.0 打包代码的静态阅读（未实测），
+droid 在 `tool_call.name` 中以 `server___tool` 报 MCP 机器名。新版仅按本会话挂载的服务器解析此格式；
+同一解析也用于已有的空工具结果回填（#12891）。不识别截断加哈希的长名字。旧桌面忽略新字段，
+不识别此机器名格式时降级为普通工具行；手机仍只读取已有字段。不改变权限判定、真实 MCP 参数、
+消息通道或中转帧；自建中转原样转发。
+
+## 用户自定义提示词（ACP `systemPrompt`，2026-11-28）
+
+Cindy 自己的系统提示词仍不交给插件引擎；「个性化 → 自定义提示词」按 ACP v1 标准字段交出（#13098、#13515）：
+
+- **协商**：只在对端 `initialize` 声明 `agentCapabilities.sessionCapabilities.systemPrompt` 时，在 `session/new`、`session/load`、
+  `session/resume` 带 `systemPrompt: { mode: 'append', content: [{ type: 'text', text }] }`；只用 `append`，未声明的引擎与旧版 Cindy 一律不发，
+  存量插件零迁移。对端收到却无法应用时按 ACP 要求以 `-32602` 拒绝建会话。
+- **取值**：`Maker.createSession` 对插件引擎一律只取发起时冻结的个性化正文（`hostStartupPreferences.userPrompt`），丢弃之后拼进
+  `userPrompt` 的项目知识与协同角色说明（后者也会经 `prepareStartOptions` 拼入，包括目标模式恢复这类不经 bootstrap 的入口）；
+  没有冻结值的入口不发。隔离伙伴与只读 `/review` 不带，由发起端 Maker 判定（伙伴档案与审查标记不过线，执行端无法排除；审查隔离只清 `userPrompt`，`AcpAgent` 也按 `reviewMode` 再排除一次）。引擎在另一台电脑上时，发起端按同一规则取值后经连接发出。
+  替另一台电脑运行的任务（同账号远程供应商 `--cindy-remote-workspace` 与分享受邀者 `--cindy-guest-workspace`）用任务所在电脑经既有
+  remote-agent 启动参数 `RemoteAgentWireStartOptions.userPrompt` 发来的正文，不新增 wire 字段，也从不换成执行端自己保存的个性化：
+  托管启动走 `Maker.startHostedAgentSession`，不经过执行端的 `prepareStartOptions`。受邀者任务带的是受邀者的指令。
+- **新旧组合**：新执行端遇到旧发起端时，`userPrompt` 是旧发起端发给内置引擎的那份，可能在个性化正文后附有项目知识入口或协同角色说明，
+  与内置引擎从旧发起端收到的内容一致；旧发起端也可能为隔离伙伴带上主人的个性化。双方都升级后只剩个性化正文。旧执行端不给托管任务发 `systemPrompt`，行为同前。中转与 relay 无改动。
+- **插件侧**：受邀者的正文对分享者电脑是不受信的文字，插件不得让其触发读取本机文件（官方 Antigravity 插件在远程与分享模式下
+  把它写进本次启动私有的 Agent 定义并转义 `@[label](path)` 引用，makecindy/cindy-official-plugins#427）。
+
+实现见 maker-core `agents/acp/{acp-agent,protocol,session}.ts` 与 `maker.ts`；回归见 maker-core `acp-session.test.ts`
+（本机、隔离伙伴、同账号托管、受邀者托管四种输入）、`maker.test.ts`（只取冻结正文，`prepareStartOptions` 拼入的协同说明不外发）
+与 Desktop `remote-agent/__tests__/mirror.test.ts`（发起端 `userPrompt` 到达执行端）。
+
+## 同账号远程任务的 Lead 角色说明
+
+同账号远程任务仍通过既有 `setVendorOptions` 发送角色说明字符串，不新增协议或重连投递机制。
+与本机重建时从宿主进程内交接待发说明不同，远程设置缓存随同账号代理存活：
+
+1. **代理保留、团队未撤销**：远端执行进程让位后重连，代理会把缓存中待交付的说明交给新进程；
+   已交付的说明也可能再进入一次提示。与 `main` 一致。
+2. **整个代理重建**：原代理的设置缓存不会随之恢复，待交付的说明会丢失。与 `main` 一致。
+3. **团队已撤销**：即使代理把旧说明和撤销字段一起重放，旧说明也不会再进入提示。
+   这是本次改进；`main` 在这种情况下仍会注入旧说明。

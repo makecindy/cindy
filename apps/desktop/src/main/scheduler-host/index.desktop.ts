@@ -24,6 +24,7 @@ import {
   applyPiImModelSelectionUnderLock,
   acquirePendingAgentSwitchForDirectSend,
   prepareScheduledModelPreferencesUnderLock,
+  resolveScheduledBillingFallback,
   recordDispatchedModel,
   broadcastSessionCreated,
   bootstrapScheduledSession,
@@ -60,7 +61,7 @@ import { ownTeammateProjectPrimaryModel, ownTeammateProjectState } from './ownTe
 import { readEffectiveBotModelChain } from '../maker-host/bot-model-chain-settings-store.js';
 import { resolveTeammateScheduleModel } from './teammateScheduleModel.js';
 import { withQuietRunArchive } from './quietRunArchive.js';
-import { archiveQuietScheduledTarget, readScheduledTargetStatus } from './quietRunArchive.desktop.js';
+import { archiveQuietScheduledTarget, readScheduledTargetArchivedAt, readScheduledTargetStatus } from './quietRunArchive.desktop.js';
 import { createLogger } from '../logger';
 import type { ScheduleRunner } from '@cindy/maker-scheduler';
 import { pluginAutomationAccount } from '../device-link/pluginAutomationHost.desktop.js';
@@ -113,6 +114,7 @@ const desktop = createSchedulerHost<StartSchedulerDeps>({
         isOwnProject: async dir => (await ownTeammateProjectState(dir)) !== null,
         primaryModel: dir => ownTeammateProjectPrimaryModel(dir, readEffectiveBotModelChain),
       }),
+      resolveBillingFallback: resolveScheduledBillingFallback,
       findUsageLimitWait: findSchedulerUsageLimitWait,
       acquirePendingAgentSwitch: acquirePendingAgentSwitchForDirectSend,
       prepareModelPreferences: prepareScheduledModelPreferencesUnderLock,
@@ -189,6 +191,7 @@ const desktop = createSchedulerHost<StartSchedulerDeps>({
     withTeammateHomeGuard(runner, () => companionHomes.snapshot().demotedBotIds, ownTeammateProjectState),
     {
       targetStatus: readScheduledTargetStatus,
+      targetArchivedAt: readScheduledTargetArchivedAt,
       isRunSilenced: (runId): boolean => getSchedulerIfInitialized()?.isRunSilenced(runId) ?? false,
       isRunQuietFailure: (runId): boolean => getSchedulerIfInitialized()?.isRunQuietFailure(runId) ?? false,
       archiveIfUntouched: archiveQuietScheduledTarget,

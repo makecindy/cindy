@@ -221,13 +221,20 @@ export function filterPersistentLocalProjectsByLastActivity(
   return [];
 }
 
+/**
+ * `matchesKind` receives each agent kind the registered project has been used with; a project
+ * with no known kind matches every Harness filter.
+ */
 export function persistentProjectMatchesVendor(
   project: Pick<ProjectNode, 'isPersistentLocal' | 'persistentLocalKnownAgentKinds'>,
-  vendor: string,
+  vendor: string | ((session: { agentKind: string }) => boolean),
 ): boolean {
   if (!project.isPersistentLocal) return false;
   const knownKinds = project.persistentLocalKnownAgentKinds ?? [];
-  return knownKinds.length === 0 || knownKinds.includes(vendor);
+  if (knownKinds.length === 0) return true;
+  return typeof vendor === 'string'
+    ? knownKinds.includes(vendor)
+    : knownKinds.some((agentKind) => vendor({ agentKind }));
 }
 
 export function projectIdentityKeyForSession(

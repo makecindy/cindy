@@ -253,6 +253,68 @@ import { classifyShellCommand } from '../shared/auto-review.js';
 
 type ClaudeSdkEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 
+/**
+ * 识别 Claude Code CLI 在 `--resume` 启动期偶发吐出的空零轮 success result
+ * （`num_turns === 0`、`stop_reason === null`、`duration_api_ms === 0`、无文本/无 usage/无费用）。
+ * 这类消息出现在真实模型轮次开始之前，不能当成业务 turn 终态发给上层。
+ */
+function isEmptyZeroTurnSuccessResult(rawMsg: unknown): boolean {
+  if (!rawMsg || typeof rawMsg !== 'object') return false;
+  const msg = rawMsg as {
+    type?: unknown;
+    subtype?: unknown;
+    is_error?: unknown;
+    num_turns?: unknown;
+    stop_reason?: unknown;
+    terminal_reason?: unknown;
+    duration_api_ms?: unknown;
+    result?: unknown;
+    total_cost_usd?: unknown;
+    usage?: {
+      input_tokens?: unknown;
+      output_tokens?: unknown;
+      cache_read_input_tokens?: unknown;
+      cache_creation_input_tokens?: unknown;
+    } | null;
+  };
+  if (msg.type !== 'result') return false;
+  if (msg.is_error === true) return false;
+  if (msg.subtype !== undefined && msg.subtype !== 'success') return false;
+  if (msg.num_turns !== 0) return false;
+  if (msg.stop_reason !== undefined && msg.stop_reason !== null) return false;
+  if (msg.terminal_reason !== undefined && msg.terminal_reason !== null) return false;
+  if (typeof msg.duration_api_ms === 'number' && msg.duration_api_ms > 0) return false;
+  if (typeof msg.result === 'string' && msg.result.trim().length > 0) return false;
+  if (typeof msg.total_cost_usd === 'number' && msg.total_cost_usd > 0) return false;
+  if (msg.usage && typeof msg.usage === 'object') {
+    const { usage } = msg;
+    if (
+      (typeof usage.input_tokens === 'number' && usage.input_tokens > 0) ||
+      (typeof usage.output_tokens === 'number' && usage.output_tokens > 0) ||
+      (typeof usage.cache_read_input_tokens === 'number' && usage.cache_read_input_tokens > 0) ||
+      (typeof usage.cache_creation_input_tokens === 'number' && usage.cache_creation_input_tokens > 0)
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function isSlashCommandUserContent(content: string | ClaudeSdkContentBlock[] | undefined): boolean {
+  if (typeof content === 'string') return content.trimStart().startsWith('/');
+  if (Array.isArray(content)) {
+    for (const block of content) {
+      if (block && typeof block === 'object' && 'type' in block && block.type === 'text' && 'text' in block) {
+        const text = block.text;
+        if (typeof text === 'string' && text.trim().length > 0) {
+          return text.trimStart().startsWith('/');
+        }
+      }
+    }
+  }
+  return false;
+}
+
 export function buildClaudeSystemPromptAppend(parts: {
   makerMemoryRules?: string;
   ghostRosterPrompt?: string;
@@ -3502,6 +3564,10 @@ export class ClaudeCodeAgent extends BaseAgent {
     // resumed queries may include prior transcript usage and must establish a
     // baseline unless request segments prove the delta independently.
     const modelUsageStartsAtZeroQueries = new WeakSet<Query>();
+    // Claude Code CLI 在 `--resume` 启动期偶发先吐一条空的零轮 success result，
+    // 再处理紧随其后的首条用户消息。按 Query 追踪一次性启动窗口，避免误把该空终态
+    // 当成本轮结束；见到任何真实模型活动或消耗一次后即移除。
+    const resumedStartupQueries = new WeakSet<Query>();
     function restoreBridgeAutoCompactSnapshot(reason: string): void {
       const snapshot = bridgeCompactUsageSnapshot;
       bridgeCompactUsageSnapshot = null;
@@ -4446,6 +4512,7 @@ export class ClaudeCodeAgent extends BaseAgent {
 
         if (finalRemotePermissionMode === 'auto') nativeAutoQueries.add(remoteQuery);
         if (modelUsageCumulativeStartsAtZero) modelUsageStartsAtZeroQueries.add(remoteQuery);
+        if (resumeSdkSid) resumedStartupQueries.add(remoteQuery);
         return remoteQuery;
       }
 
@@ -4840,6 +4907,7 @@ export class ClaudeCodeAgent extends BaseAgent {
       queryLongLivedTokenVersions.set(query, localQueryTokenRef);
       if (sdkStartPermissionMode === 'auto') nativeAutoQueries.add(query);
       if (modelUsageCumulativeStartsAtZero) modelUsageStartsAtZeroQueries.add(query);
+      if (resumeSdkSid) resumedStartupQueries.add(query);
       if (nativeCliAuth && typeof query.applyFlagSettings === 'function') {
         // 切模型 / effort / fast 走 applyFlagSettings,CLI 会借机全量重读设置(不经 ConfigChange):
         // 先复查工作区,命中就结束会话而不是把设置应用进去。
@@ -6188,6 +6256,48 @@ export class ClaudeCodeAgent extends BaseAgent {
             )?.parent_tool_use_id;
             const isTopLevelProviderActivity =
               typeof rawParentToolUseId !== 'string' || rawParentToolUseId.length === 0;
+            if (
+              isTopLevelProviderActivity &&
+              (rawType === 'assistant' || rawType === 'stream_event')
+            ) {
+              resumedStartupQueries.delete(currentQ);
+            }
+            const noTurnProgress =
+              turnState.apiCalls === 0 &&
+              turnState.toolUses === 0 &&
+              !turnState.sawCompactBoundary &&
+              !turnState.hasEmittedText &&
+              turnState.text.length === 0;
+            const noExpectedContinuation =
+              activeContinuationClaim()?.state !== 'awaiting' &&
+              !hasPendingBashContinuation() &&
+              !bashContinuationInFlight;
+            if (
+              rawType === 'result' &&
+              !turnState.interruptRequested &&
+              queuedBridgeTurns === 0 &&
+              !hostAutoCompactInFlight &&
+              noTurnProgress &&
+              noExpectedContinuation &&
+              isEmptyZeroTurnSuccessResult(rawMsg)
+            ) {
+              const isResumedStartupFlush =
+                resumedStartupQueries.has(currentQ) &&
+                (sendInAcceptPhase || !isSlashCommandUserContent(replayableUserInput?.message.content));
+              if (!turnInFlight || isResumedStartupFlush) {
+                resumedStartupQueries.delete(currentQ);
+                log.debug('ignoring unsolicited empty zero-turn result from Claude SDK', {
+                  turnInFlight,
+                  sendInAcceptPhase,
+                  resumedStartupFlush: isResumedStartupFlush,
+                  sdkSessionId,
+                });
+                continue;
+              }
+            }
+            if (rawType === 'result') {
+              resumedStartupQueries.delete(currentQ);
+            }
             if (
               !turnInFlight &&
               !turnState.interruptRequested &&

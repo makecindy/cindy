@@ -149,6 +149,8 @@ PR #101 之后，Orca 的 main 侧业务由独立 service 承接，`register.ts`
   （同一台电脑的另一个目录）／`other_computer`（运行设备），后三类附一句 `handoff_hint`。按创建参数与
   实际落点判定，不读 Lead 目录。
 
+跨电脑创建时，Lead 按首条任务的 clientId 查询运行设备的投递回执。运行设备仅在引擎已接手该输入时返回 `dispatchedInput`；消息已落库、查询失败或旧运行设备缺少回执字段时，创建结果保守显示 `queued`，由现有回报通道继续核对。
+
 实现见 `create_worker.ts` 的 `initialTaskState` / `workerHandoffPayload`，回归见
 `createWorkersTool.test.ts`。任务正文要自包含写在这两个工具与 `send_to_worker` 的工具说明里，不进系统提示词。
 
@@ -890,9 +892,9 @@ Worker turn 被 vendor 报终止型 error，但 interrupted-turn auto-resume 仍
    - **跟 Lead 就是跟 Lead 的组**：Lead 有组绑定、Worker 选的位置就是 Lead 现在所在且来源没另选（或选的就是 Lead 现在的来源 / 组那一项）、同一种 Agent 时，Worker 改用组那一项（本机的组：任务所在电脑 + 组的供应商；另一台电脑上的组：那台 + 组的供应商），再由组按策略选电脑；组那一项不提供该模型或读不到时照旧跟 Lead 所在那台。`list_available_models` 不指定位置时同口径。实现：`OrcaLeadSessionSnapshot.providerGroupEntry`、`leadProviderGroupFollowCandidate`。
    - **换位置的入口**：Lead 与本机 Worker 显式改变 `agentDeviceId` 与普通任务一样走 `performSessionAgentSwitch`（2026-10-16 起，见第 11 条）。点的是别处的供应商组、组在发送时又选回当前位置且引擎不变时，协同任务按交接重建，不走原地换模型：原地换模型要点选时核对过的窗口，而换位置点选不做这项核对，换到更小窗口的模型会一直卡在发送前；用户点选时已确认过按交接重新开始。运行设备 Worker（`orcaRemoteLead`）的任务在它所在的电脑上，2026-11-12 起（用户裁决：新建任务和创建 Worker 时运行设备都能选远程供应商，建好后的协同任务没道理不行）显式 `agentDeviceId` 同样走 `performSessionAgentSwitch` 登记意图、发送边界交接；重建时 `synthesizeOrcaVendorOptionsFromDb` 从 `orca_remote_lead` 恢复远端 Worker 身份，意图未落地时统一发送事务拒绝发到旧 Agent。控制端按那台的 `supportsOrcaRemoteWorkerAgentRelocation` 开放（协议见 `protocol-compatibility/remote-agent.md`「运行设备 Worker 换 Agent 位置」）。Lead 所在电脑的代理行仍只记录创建时的位置，换位置后 Lead 侧 Worker 列表的远程标识可能滞后。
    - **Lead 离开不可达的远程电脑**：Lead 的 Agent 在另一台电脑时，切换前要先关闭旧远程会话。关闭请求若因链路失败而没送到对方（`DeviceLinkError.code` 为 `DEVICE_OFFLINE`、`INVOKE_TIMEOUT`、`DEVICE_UNRESPONSIVE`、`NOT_CONNECTED`、`LINK_NOT_OPEN`、`PEER_RESET`、`BACKPRESSURE`，或消息里带对应的 `[DEVICE_LINK_*]` 前缀），`performSessionAgentSwitch` 记一条 warn 后仍提交新位置；权限、版本、业务类错误（如 `REMOTE_DISABLED`、`CHANNEL_NOT_ALLOWED`、`ACCESS_REVOKED`、`VERSION_MISMATCH`、无 code 的 `REMOTE_AGENT_UNAVAILABLE`）照旧中止，不写库。只对 Lead 生效，Worker 与普通任务的关闭失败语义不变。名单对应 `apps/desktop/src/main/device-link/ipc.ts` 的 `DEVICE_LINK_CODE_MAP`，改一处要看另一处。旧会话在本机已 finish，对方没收到 close 时由其 host 在 `REMOTE_AGENT_HOST_IDLE_MS`（3 分钟无 poll）后按 `controller-gone` 回收。未验证：未做实机 Orca 协同回归（Lead 离开不可达电脑后 team／Worker 回报链路）。
-   - **换电脑资格与等额度恢复分开**：组的 `isFailoverEligible` 用 `isProviderGroupFailoverEligible`（Worker 可换），额度恢复后自动继续仍用 `isUsageLimitAutoResumeEligible`（Worker 不等，失败交给 Lead）。
+   - **换电脑资格与等额度恢复分开**：组的 `isFailoverEligible` 用 `isProviderGroupFailoverEligible`（Worker 可换），额度恢复后自动继续仍用 `isUsageLimitAutoResumeEligible`（Worker 不等，失败交给 Lead）。本机混合 OpenAI 账号池的 Key 与订阅实际运行租约均可接管明确的撞限终态；只在原供应商内核实同模型其他成员的准入，不为 Worker 等重置。已有文本、工具或交互产出时只发继续指令，证据丢失也不重放原文。重建之后、派发前复核任务绑定确实已改为另一成员；候选失效则按原终态收尾。
    - **换过去仍是成员**：`bootstrapSwitchedSession` 对协同任务调 `synthesizeOrcaVendorOptionsFromDb`，新会话带着协同身份、提示词与 `cindy_orca` / `orca_worker_bridge`，不靠下一次发送二次重启。
-   - **Worker 终态按换电脑那次登记结算**（与 5a 同一原则）：输入协调器登记「先不呈现」期间，Worker 的终态不调 `handleWorkerTerminalTurn`，而是按登记 id 暂存（`provider-group/heldWorkerTerminals.ts`；error 事件随 error 行一起暂存，只以 done 收尾的失败在 terminal 末尾暂存）。换成了（续跑已发出）丢掉，auto-bridge pending 保留到续跑那一轮的产品终态再回报；没换成、迟迟没有结局或有人接手时恰好一次回报这次异常终止，账号已切换则不回报。迟到的旧结算只认自己那次登记。
+   - **Worker 终态按换电脑那次登记结算**（与 5a 同一原则）：输入协调器登记「先不呈现」期间，Worker 的终态不调 `handleWorkerTerminalTurn`，而是按登记 id 暂存（`provider-group/heldWorkerTerminals.ts`；error 事件随 error 行一起暂存，只以 done 收尾的失败在 terminal 末尾暂存）。换成了（续跑已发出）丢掉，auto-bridge pending 保留到续跑那一轮的产品终态再回报；没换成、迟迟没有结局或有人接手时恰好一次回报这次异常终止，账号已切换则不回报。迟到的旧结算只认自己那次登记。续跑派发前失败并成功恢复原输入的精确 recovery 时，暂存终态的运行时围栏改为此刻的运行时（也可能已关闭），保留原派活标识；避免 Lead 已收到回报但 Worker 还停在 running，也不覆盖后来的派活或直接输入。
    - **唤醒与换电脑互斥**：`resumeOrcaWorkerSessionIfMissing` 在会话发送锁内复查 live session 再启动，不会在「关闭 → 写库 → 启动」的空档里按旧记录在原来那台拉起 Worker。
    - **远端 Worker 回报**：`orcaRemoteWorkerRuntime.ts` 按历史收尾时跳过自动续跑的隐藏用户消息（`agentMeta.autoResume`），续跑之后的回复照常作为派活结果。
    - 换电脑途中 Lead 发给 Worker 的消息、到达 Lead 的 Worker 回报都按亲自接手处理（停下这一趟换电脑，那条消息开始新的一轮），不做插队或延后。
@@ -956,7 +958,9 @@ Desktop 和 Mobile 均隐藏协同入口，保留 `releasedAt` 的历史来源�
 Mobile 的入口读取和残留表单提交都检查该身份，元数据补齐标记后返回主面板；
 回归见 `apps/mobile/src/__tests__/orcaTeam.test.ts` 与 `useOrcaWorkerForm.test.tsx`。
 
-当前停止补偿的已知限制：`maker:abort-session` 只接受任务 ID，没有目标轮次与持久请求
+显式归档单个跨设备 Worker 使用同账号专用通道 `maker:orca:remote-worker:archive`。运行设备在发送锁内核对来源、关闭会话并在原任务来源标记中保存关闭回执。重复请求只读回执；工作目录和任务记录保留。Lead 收到明确回执才归档代理，设备离线或旧端拒绝新通道时可在恢复连接或更新后重试。旧 Lead 继续使用原有通道。若 Worker 的 Agent 又运行在另一台电脑，通用 Remote Agent 关闭暂不能证明进程已停，运行设备在关闭前返回原因并保留协同归属。已有可信回执仍可重放。
+
+团队结束和创建回滚的旧停止补偿仍有已知限制：`maker:abort-session` 只接受任务 ID，没有目标轮次与持久请求
 身份；若运行设备已停止但回执丢失，后续补偿可能停止用户新发起的轮次。现有传输去重
 不能覆盖新的请求或运行设备重启。不能把超时当成功、取消所有补偿，或用先查空闲再停止
 代替解决；后续应在 Orca 专用边界设计持久幂等停止、目标轮次条件与旧端能力协商，覆盖

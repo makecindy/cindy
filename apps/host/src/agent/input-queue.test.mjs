@@ -4124,18 +4124,100 @@ test('model change at send: the context rollover resumes a released Pi task to r
     'the released runtime is resumed to read its window');
 });
 
-// Production entry: the Host's switchAgent handler leaves the task and its pending choice unchanged.
-// Basis: #11629, Host has no ACP runtime. The desktop's tests only reject with the admission port bound.
-// Minimal input (unit): a local Claude task and a valid plugin engine route, using the real Host handler.
-test('switching to a plugin engine is unsupported on the Host', async t => {
+// Production entry: Host switchAgent admits local plugin engines using the live harness registry
+// and switches tasks to and from `acp`, rejecting unavailable/missing plugin engines cleanly.
+// Minimal input (unit): a local Claude task with the shared plugin harness registry configured.
+test('switching to and from a plugin engine follows live plugin engine admission on the Host', async t => {
+  const { configurePluginHarnessRegistry, reconcilePluginHarnesses } = await import('../../../desktop/src/main/cindy-brain/pluginHarnesses.ts');
+  const { validateGhostManifest } = await import('../../../desktop/src/shared/ghost.ts');
+  const { installedGhostStoragePart } = await import('../../../desktop/src/shared/pluginIdentity.ts');
   const r = await modelChangeRuntime(t);
   await r.createTask('switch-to-acp');
+  let listedGhosts = [];
+  let availability = {};
+  configurePluginHarnessRegistry({
+    listGhosts: () => listedGhosts,
+    isAvailable: () => true,
+    readAvailability: (id) => availability[id] ?? {},
+    uiLocale: () => 'en',
+    spawn: async () => { throw new Error('unused in switch admission test'); },
+  });
+  reconcilePluginHarnesses([]);
+  t.after(() => {
+    listedGhosts = [];
+    availability = {};
+    reconcilePluginHarnesses([]);
+  });
+
+  // Publish an approved, enabled harness descriptor first so we share the canonical providerId.
+  const parsed = validateGhostManifest({
+    schemaVersion: 3, minCindyVersion: '0.1.61', id: 'dsh-acp', name: 'DeepSeek ACP', version: '1.0.0', entry: 'main.js',
+    node: { entry: 'worker.js', protocol: 'json-rpc-stdio', entries: ['acp.js'] },
+    harnesses: [{ id: 'dsh', name: 'DeepSeek Harness', protocol: 'acp', entry: 'acp.js' }],
+  });
+  if (!parsed.ok) throw new Error(parsed.reason);
+  const ghost = {
+    manifest: parsed.manifest,
+    dir: path.join(os.tmpdir(), 'fixture-dsh-acp'),
+    enabled: true,
+    approval: { state: 'approved', revision: '00000000-0000-4000-8000-000000000001' },
+    approvedHarnesses: ['dsh'],
+    approvedNode: true,
+  };
+  const ghostKey = installedGhostStoragePart(ghost);
+  const acpProviderId = `acp-plugin:${ghostKey}:dsh`;
+
+  // Unlisted engine is refused and leaves the task untouched.
   await assert.rejects(r.selection.switchAgent({
     sessionId: 'switch-to-acp', targetAgentKind: 'acp', model: 'deepseek-v4',
-    providerId: 'acp-plugin:_ns__local__dsh-acp:dsh',
-  }), { code: 'UNSUPPORTED_CAPABILITY', message: '[UNSUPPORTED_CAPABILITY] plugin engines are not available here' });
+    providerId: acpProviderId,
+  }), /停用或卸载/);
   assert.equal(r.row('switch-to-acp').agent_kind, 'cc');
   assert.equal(r.selection.projectIntent('switch-to-acp') ?? null, null);
+
+  // Publish the approved, enabled harness and verify switching to ACP and back to Claude.
+  listedGhosts = [ghost];
+  availability = {
+    [ghostKey]: {
+      harnesses: [{
+        id: 'dsh', available: true, version: '0.3.0',
+        models: [{ id: 'deepseek-v4', name: 'DeepSeek V4', efforts: ['low', 'high'], defaultEffort: 'high' }],
+      }],
+    },
+  };
+  reconcilePluginHarnesses(listedGhosts);
+
+  const pickedAcp = await r.selection.switchAgent({
+    sessionId: 'switch-to-acp', targetAgentKind: 'acp', model: 'deepseek-v4',
+    providerId: acpProviderId, effort: 'low',
+  });
+  assert.equal(pickedAcp.deferred, true, 'switch to ACP stages a pending intent until next send');
+  assert.equal(r.selection.projectIntent('switch-to-acp')?.targetAgentKind, 'acp');
+  assert.equal(r.selection.projectIntent('switch-to-acp')?.providerId, acpProviderId);
+
+  // Next send lands the switch onto `acp`.
+  await r.h.queue.enqueue('switch-to-acp', { clientId: 'acp-1', text: 'hello acp' });
+  await waitFor(() => r.h.maker.sessions.get('switch-to-acp')?.sent.length === 1);
+  const acpSession = r.h.maker.sessions.get('switch-to-acp');
+  assert.equal(acpSession.agentKind, 'acp');
+  assert.equal(acpSession.options.providerId, acpProviderId);
+  assert.equal(acpSession.options.model, 'deepseek-v4');
+  assert.equal(r.row('switch-to-acp').agent_kind, 'acp');
+  acpSession.emit({ type: 'done', data: {}, sessionTurnGeneration: acpSession.generation, sessionInstanceId: acpSession.instanceId });
+  await waitFor(() => !r.h.queue.projection('switch-to-acp').active);
+
+  // Switch back from `acp` to built-in `claude-code`.
+  const pickedClaude = await r.selection.switchAgent({
+    sessionId: 'switch-to-acp', targetAgentKind: 'claude-code', model: 'big', providerId: 'prov-a',
+  });
+  assert.equal(pickedClaude.deferred, true);
+  await r.h.queue.enqueue('switch-to-acp', { clientId: 'cc-back-1', text: 'back to claude' });
+  await waitFor(() => {
+    const next = r.h.maker.sessions.get('switch-to-acp');
+    return next && next !== acpSession && next.sent.length === 1;
+  });
+  assert.equal(r.h.maker.sessions.get('switch-to-acp').agentKind, 'claude-code');
+  assert.equal(r.row('switch-to-acp').agent_kind, 'cc');
 });
 
 // Rule (sessionAgentSwitchHandler.ts applyPendingAgentSwitchIfIdle: a user's engine pick that fails
@@ -4146,7 +4228,8 @@ test('switching to a plugin engine is unsupported on the Host', async t => {
 test('model change at send: an engine pick that cannot land lets the send go on, and lands on a later send', { timeout: 30_000 }, async t => {
   const r = await modelChangeRuntime(t);
   await r.createTask('cross');
-  const picked = await r.selection.switchAgent({ sessionId: 'cross', targetAgentKind: 'codex', model: 'gpt-x', providerId: 'prov-a' });
+  r.views.current = [...r.views.current, { ...switchViews('codex')[0], id: 'prov-b', models: { codex: [switchModel('gpt-x')] } }];
+  const picked = await r.selection.switchAgent({ sessionId: 'cross', targetAgentKind: 'codex', model: 'gpt-x', providerId: 'prov-b' });
   assert.equal(picked.deferred, true, 'an engine pick waits for the send');
   const views = r.views.current;
   // The picked route is unusable when the send lands the pick: its copy is disabled. The task's current
@@ -4161,6 +4244,19 @@ test('model change at send: an engine pick that cannot land lets the send go on,
   assert.equal(r.row('cross').agent_kind, 'cc');
   assert.equal(r.h.queue.projection('cross').error ?? null, null, 'no error for the send');
   assert.equal(r.selection.projectIntent('cross')?.targetAgentKind, 'codex', 'the pick stays for the next send');
+  // PR #13360, DB tier: the existing send-time fixture reaches the real Host
+  // assembly. Previously it proved fallback delivery, but not what history tells
+  // either client about that delivery. One failed pick followed by success is
+  // enough to expose missing assembly and attribution rewritten by later picks.
+  const routes = () => r.db.db.prepare("SELECT agent_meta FROM messages WHERE session_id = ? AND role = 'user' ORDER BY rowid")
+    .all('cross').map(row => JSON.parse(row.agent_meta ?? '{}').dispatchRoute);
+  const firstRoute = routes()[0];
+  assert.deepEqual(firstRoute && { ...firstRoute, switchError: undefined }, {
+    agentKind: 'claude-code', model: 'big', providerId: 'prov-a', agentDeviceId: null,
+    selected: { agentKind: 'codex', model: 'gpt-x', providerId: 'prov-b', agentDeviceId: null },
+    switchError: undefined,
+  });
+  assert.ok(firstRoute.switchError, 'the failed preparation reason stays with this input');
   first.emit({ type: 'done', data: {}, sessionTurnGeneration: first.generation, sessionInstanceId: first.instanceId });
   await waitFor(() => !r.h.queue.projection('cross').active);
   r.views.current = views;
@@ -4169,9 +4265,12 @@ test('model change at send: an engine pick that cannot land lets the send go on,
   const next = r.h.maker.sessions.get('cross');
   assert.equal(next.agentKind, 'codex', 'the next send lands the engine pick');
   assert.equal(next.options.model, 'gpt-x');
+  assert.equal(next.options.providerId, 'prov-b');
   assert.equal(r.row('cross').agent_kind, 'codex');
   assert.equal(r.selection.projectIntent('cross') ?? null, null);
   assert.equal(r.userRows('cross').length, 2);
+  assert.deepEqual(routes()[0], firstRoute, 'later successful selection does not change the first input');
+  assert.deepEqual(routes()[1], { agentKind: 'codex', model: 'gpt-x', providerId: 'prov-b', agentDeviceId: null });
 });
 
 // The runtime start admission (register.ts bootstrapSession's admitLocalRoute, shared as
@@ -5495,7 +5594,7 @@ test('idle release: watchers scan once started and stop when the owner runtime i
   h.queue.startIdleRelease();
   t.mock.timers.tick(60_000);
   await new Promise(resolve => setImmediate(resolve));
-  assert.equal(scans, 2, 'the Claude and Codex watchers scan each minute');
+  assert.equal(scans, 3, 'the Claude, Codex and ACP watchers scan each minute');
   await h.queue.dispose();
   scans = 0;
   t.mock.timers.tick(120_000);
