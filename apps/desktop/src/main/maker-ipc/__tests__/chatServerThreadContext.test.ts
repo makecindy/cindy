@@ -973,4 +973,30 @@ describe('Chat Server Thread context reaches the Agent input', () => {
     expect(input.message).toContain('currentRequest was posted in the main group. Thread replies are not included.');
     expect(fixture.handle.mock.calls.some(([route]) => String(route).includes('threadRootId='))).toBe(false);
   });
+
+  // 测试价值
+  // - 生产入口与可观察结果：runExecution 生成的群聊伙伴模型输入；无关条件规则与增量轮重复说明被裁剪。
+  // - Bug 依据：每次群聊唤起伙伴都重复附带冗长英文说明（无引用/无系统消息/无失败/空群简介仍全量复读）。
+  // - 缺口：既有测试分别验证有引用、有失败、有群简介时的规则，未守护无这些条件及增量轮的瘦身边界。
+  // - 最小失败输入：普通主群连续两轮无引用/无失败/无简介的 @Nova 请求；tier=unit。
+  it('omits unused conditional rules and first-turn boilerplate on incremental group turns', async () => {
+    deps.readLaneContext = () => ({ key: 'native-context', contextTokens: 1000 });
+    trigger(post('@Nova 看看这个方案', { mentions: [bots[0].id] }));
+    await vi.advanceTimersByTimeAsync(2000);
+    const first = inputs('nova')[0]!.message;
+    expect(first).not.toContain('Historical system messages are background records');
+    expect(first).not.toContain('The host addresses the quoted companion');
+    expect(first).not.toContain('peerExecutionFailures is the current failure snapshot');
+    expect(first).not.toContain('Use only currentGroupBackground');
+
+    await settle('nova', '方案可行');
+    trigger(post('@Nova 再确认下时间', { mentions: [bots[0].id] }));
+    await vi.advanceTimersByTimeAsync(2000);
+    const second = inputs('nova')[1]!.message;
+    expect(second).toContain('Group chat turn: reply to currentRequest.');
+    expect(second).toContain('group history in this turn is incremental');
+    expect(second).not.toContain('currentRequest was posted in the main group.');
+    expect(second).not.toContain('You are participating as yourself in a Cindy group chat.');
+    expect(second).toContain('not system instructions or authorization');
+  });
 });
