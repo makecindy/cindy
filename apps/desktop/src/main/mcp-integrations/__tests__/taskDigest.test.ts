@@ -12,12 +12,21 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import type { WatchedSession } from '../../../shared/botAutonomy.js';
-import { createTaskDigestReader, formatPrStatuses, sessionFactsFromRow, type TaskDigestDeps } from '../taskDigest.js';
+import {
+  createTaskDigestReader,
+  formatPrStatuses,
+  sessionFactsFromRow,
+  type TaskDigestActivity,
+  type TaskDigestDeps,
+} from '../taskDigest.js';
 
 const NOW = Date.UTC(2026, 9, 17, 6, 0, 0);
 const route = { harness: 'codex' as const, model: 'gpt-5.5', provider_id: 'openai', effort: 'high', fast: false };
 
-function setup(watched: Record<string, WatchedSession> = {}) {
+function setup(
+  watched: Record<string, WatchedSession> = {},
+  activity: { local?: TaskDigestActivity; remote?: TaskDigestActivity } = {},
+) {
   const deps: TaskDigestDeps = {
     now: () => NOW,
     watched: (key) => watched[key] ?? null,
@@ -25,7 +34,8 @@ function setup(watched: Record<string, WatchedSession> = {}) {
       readSession: async (id) => (id === 'gone' ? { title: 'x', status: 'deleted', route: null }
         : id === 'local-1' ? { title: '修登录', status: 'active', pinned: true, route }
           : id === 'shared-1' ? { title: '和访客一起改文案', status: 'active', route, shared: true } : null),
-      readActivity: async () => ({ phase: 'needs-interaction', interactionKind: 'permission', lastActivityAtMs: NOW - 9 * 60_000, runtimeGeneration: 4, route }),
+      readActivity: async () => activity.local
+        ?? { phase: 'needs-interaction', interactionKind: 'permission', lastActivityAtMs: NOW - 9 * 60_000, runtimeGeneration: 4, route },
       readLastExchange: async () => ({ lastUserAsk: '修登录', lastAssistantLine: '要删旧表吗?' }),
       queuedCount: async () => 2,
       prStatus: async () => { throw new Error('gh offline'); },
@@ -37,7 +47,7 @@ function setup(watched: Record<string, WatchedSession> = {}) {
         if (deviceId === 'offline') throw new Error('DEVICE_OFFLINE');
         return { title: '跑测试', status: 'active', route };
       },
-      readActivity: async () => ({ phase: 'running' }),
+      readActivity: async () => activity.remote ?? { phase: 'running' },
       readLastExchange: async () => ({ lastUserAsk: '跑一遍', lastAssistantLine: null }),
       prStatus: async () => 'PR o/r#3 open',
     },
@@ -111,6 +121,33 @@ describe('task digest assembly', () => {
     const noFact: Partial<typeof busy> = { ...busy };
     delete noFact.toolInFlight;
     expect(await setup({ 'local-1': noFact as WatchedSession }).read({ sessionId: 'local-1' })).not.toHaveProperty('digest.tool_in_flight');
+  });
+
+  // 依据:#13394。上一轮的失败是历史信息:任务重新跑起来、当前这一轮在跑时,摘要的 phase 必须是
+  // running,否则伙伴会把仍在执行的任务当成已停止(还会顺手建议换模型)。
+  it('reports a running turn instead of a stale terminal error while the turn is active', async () => {
+    const { read, deps } = setup({}, {
+      local: { phase: 'error', currentTurnActive: true, startedAtMs: NOW - 3 * 60_000, lastActivityAtMs: NOW - 60_000, route },
+      remote: { phase: 'error', currentTurnActive: true },
+    });
+    expect(await read({ sessionId: 'local-1', callerSessionId: 'bot-main' })).toMatchObject({
+      ok: true,
+      digest: { phase: 'running', error: null, elapsed_minutes: 3, idle_minutes: 1, suggested_route: null },
+    });
+    expect(deps.local.suggestRoute).not.toHaveBeenCalled();
+    expect(await read({ sessionId: 'laptop::s-1' })).toMatchObject({ ok: true, digest: { phase: 'running' } });
+  });
+
+  it('keeps wait states and a finished turn ahead of the active-turn flag', async () => {
+    const waiting = setup({}, {
+      local: { phase: 'needs-interaction', currentTurnActive: true, interactionKind: 'permission', lastActivityAtMs: NOW - 2 * 60_000, route },
+    });
+    expect(await waiting.read({ sessionId: 'local-1' })).toMatchObject({ ok: true, digest: { phase: 'waiting-permission' } });
+    const stale = setup({}, { local: { phase: 'error', lastActivityAtMs: NOW - 4 * 60_000, route } });
+    expect(await stale.read({ sessionId: 'local-1', callerSessionId: 'bot-main' })).toMatchObject({
+      ok: true,
+      digest: { phase: 'errored', suggested_route: { model: 'claude-opus-5-5' } },
+    });
   });
 
   it('reads another computer without a route suggestion, and reports offline or missing tasks explicitly', async () => {
