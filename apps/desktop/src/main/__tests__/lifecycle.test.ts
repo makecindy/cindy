@@ -118,6 +118,7 @@ async function freshLifecycle() {
 type ProcessEventName =
   | 'SIGINT'
   | 'SIGTERM'
+  | 'SIGBREAK'
   | 'exit'
   | 'uncaughtException'
   | 'unhandledRejection';
@@ -163,7 +164,7 @@ describe('runQuitDisposers', () => {
     vi.useFakeTimers();
     const { onQuit, runQuitDisposers, SHUTDOWN_HARD_KILL_GRACE_SECONDS } = await freshLifecycle();
     const source = readFileSync(join(__dirname, '../bootstrap-electron.ts'), 'utf8');
-    const budget = Number(source.match(/installQuitHandler\((\d+)\);/)?.[1]);
+    const budget = Number(source.match(/installQuitHandler\((\d+)(?:,|\);)/)?.[1]);
     expect(budget).toBeLessThan(SHUTDOWN_HARD_KILL_GRACE_SECONDS * 1000);
     const events: string[] = [];
     onQuit('remote-desktop-restore', async () => {
@@ -621,15 +622,24 @@ describe('installQuitHandler render-process-gone', () => {
   ) => void;
 
   /** 装好 handler 后把 app.on 捕到的 render-process-gone 回调挖出来。 */
-  async function installAndGrabHandler() {
+  async function installAndGrabHandler(mainContents?: object) {
     const snapshot = snapshotProcessListeners([
       'SIGINT',
       'SIGTERM',
+      'SIGBREAK',
       'exit',
       'uncaughtException',
       'unhandledRejection',
     ]);
-    const { installQuitHandler } = await freshLifecycle();
+    const { installQuitHandler, trackMainWindow, onFatalShutdown } = await freshLifecycle();
+    const fatal = vi.fn();
+    onFatalShutdown(fatal);
+    function openWindow(contents: object, isQuitting = () => false) {
+      const window = Object.assign(new EventEmitter(), { webContents: contents });
+      trackMainWindow(window as unknown as Electron.BrowserWindow, isQuitting);
+      return window;
+    }
+    if (mainContents) openWindow(mainContents);
     installQuitHandler(50);
     const { app } = await import('electron');
     const onMock = vi.mocked(app.on);
@@ -639,11 +649,79 @@ describe('installQuitHandler render-process-gone', () => {
     );
     expect(call).toBeDefined();
     return {
+      openWindow, fatal,
       handler: call![1] as unknown as RenderGoneHandler,
       app,
       restore: () => snapshot.restore(),
     };
   }
+
+  // #12758: the window may finish cleanup before Electron delivers the global event.
+  it.each(['cleanup first', 'crash first'])('preserves the main crash reason with %s', async (order) => {
+    const { openWindow, handler, fatal, app, restore } = await installAndGrabHandler();
+    try {
+      const contents = { id: 42, isDestroyed: () => true, getType: () => 'window' };
+      const window = openWindow(contents);
+      window.emit('close'); // No committed quit: a close request may only hide the window.
+      if (order === 'cleanup first') window.emit('closed');
+      handler(undefined, contents, { reason: 'oom', exitCode: 9 });
+      if (order === 'crash first') window.emit('closed');
+      await vi.waitFor(() => expect(app.exit).toHaveBeenCalledWith(1));
+      expect(fatal.mock.calls).toEqual([['render-process-gone:oom']]);
+    } finally {
+      restore();
+    }
+  });
+
+  it.each(['replaced', 'expected close'])('isolates late events from a %s main window', async (reason) => {
+    const { openWindow, handler, fatal, app, restore } = await installAndGrabHandler();
+    try {
+      const old = { id: 42, isDestroyed: () => false, getType: () => 'window' };
+      const window = openWindow(old, () => reason === 'expected close');
+      if (reason === 'expected close') window.emit('close');
+      const replacement = { ...old, id: 43 };
+      if (reason === 'replaced') openWindow(replacement);
+      window.emit('closed');
+      handler(undefined, old, { reason: 'crashed', exitCode: 5 });
+      expect(fatal).not.toHaveBeenCalled();
+      expect(mocks.spawn).not.toHaveBeenCalled();
+      expect(app.exit).not.toHaveBeenCalled();
+      if (reason === 'replaced') {
+        handler(undefined, replacement, { reason: 'oom', exitCode: 9 });
+        await vi.waitFor(() => expect(app.exit).toHaveBeenCalledWith(1));
+        expect(fatal.mock.calls).toEqual([['render-process-gone:oom']]);
+      }
+    } finally {
+      restore();
+    }
+  });
+
+  // Unit regression for #12758: Electron can deliver the global event after
+  // native accessors stop working. Only the current main renderer is fatal.
+  it.each(['unknown', 'destroyed', 'main'] as const)('handles inaccessible %s contents', async (role) => {
+    const contents = {
+      id: 42,
+      isDestroyed: () => role === 'destroyed',
+      getType(): never { throw new TypeError('Object has been destroyed'); },
+    };
+    const { handler, app, restore } = await installAndGrabHandler(role === 'main' ? contents : undefined);
+    try {
+      const { onFatalShutdown } = await import('../lifecycle');
+      const fatal = vi.fn();
+      onFatalShutdown(fatal);
+      handler(undefined, contents, { reason: 'oom', exitCode: 9 });
+      if (role === 'main') {
+        await vi.waitFor(() => expect(app.exit).toHaveBeenCalledWith(1));
+        expect(fatal).toHaveBeenCalledWith('render-process-gone:oom');
+      } else {
+        expect(mocks.spawn).not.toHaveBeenCalled();
+        expect(fatal).not.toHaveBeenCalled();
+        expect(app.exit).not.toHaveBeenCalled();
+      }
+    } finally {
+      restore();
+    }
+  });
 
   it('ignores a late renderer exit notification after its window has closed (#12758)', async () => {
     const { handler, app, restore } = await installAndGrabHandler();

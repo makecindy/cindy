@@ -89,7 +89,7 @@
     "submitAnswerAccessibility": "Enviar respuesta",
     "next": "Siguiente",
     "answerRequired": "Selecciona o introduce una respuesta para continuar.",
-    "submit": "Enviar",
+    "submit": "Enviar respuesta",
     "sendAndContinue": "Enviar y continuar",
     "closeAnswer": "Cerrar",
     "planReviewTitle": "Revisar el plan de Claude",
@@ -274,6 +274,7 @@
     "inlineFormActionGeneric": "Ingresa una configuración en tu computadora"
   },
   "inputHandoff": {
+    "refreshVerification": "Actualizar código QR",
     "originWarning": {
       "insecure": "Esta página no utiliza una conexión segura. Lo que introduzcas podrá ser leído por otros.",
       "ip-address": "Esta página utiliza una dirección IP en lugar de un dominio. Asegúrate de que sea el sitio que esperas.",

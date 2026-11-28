@@ -29,6 +29,9 @@ describe('provider share local handles', () => {
     expect(scrubSharedProviderCatalog({ providers: [enterprise, ordinary] }).providers).toEqual([
       { id: enterprise.id, source: enterprise.source, name: enterprise.name }, ordinary,
     ]);
+    const personal = { id: 'zhipu-home', name: 'GLM', source: 'user' };
+    expect(scrubSharedProviderCatalog({ providers: [{ ...personal, logoKind: 'personal' }] }).providers).toEqual([personal]);
+    expect(scrubSharedProviderCatalog({ providers: [{ ...personal, logoKind: 'mark-deepseek' }] }).providers).toEqual([personal]);
     expect(enterprise.logoKind).toBe('openai-spectrum');
   });
   it('round-trips host and guest keys and never collides with shared-task keys or device ids', () => {

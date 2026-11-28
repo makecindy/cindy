@@ -538,7 +538,7 @@ describe('cross-region provider share', () => {
   function remoteGroup(response?: Promise<unknown>) {
     const member = { key: 'share:share-x:openai', kind: 'share', agentDeviceId: 'share:share-x',
       providerId: 'openai', limit: 4, weight: 1, paused: false };
-    const view = { providerId: 'openai', config: { strategy: 'least', autoSwitch: true, members: [member] },
+    const view = { providerId: 'openai', config: { strategy: 'expiring', autoSwitch: true, members: [member] },
       members: [{ ...member, label: 'Ann', state: 'available', running: 0 }] };
     const client = createProviderGroupRemoteClient(async (_device, _channel, args) => ({
       ok: true,

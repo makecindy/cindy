@@ -48,10 +48,12 @@ export const sendToSessionLocks = new Map<string, Promise<unknown>>();
 const restarts = new Map<string, { token: symbol; acquired: boolean }>();
 const lockWaiters = new Map<string, Set<(error: Error) => void>>();
 
+export class SessionRestartInProgressError extends Error {}
+
 export function assertSessionNotRestarting(sessionId: string, token?: symbol): void {
   const restart = restarts.get(sessionId);
   if (restart && restart.token !== token) {
-    throw new Error(
+    throw new SessionRestartInProgressError(
       'Session restart is still in progress; retry after the previous runtime closes',
     );
   }
@@ -93,7 +95,7 @@ export async function withSessionRestartLock<T>(
   const restart = { token: Symbol(sessionId), acquired: false };
   restarts.set(sessionId, restart);
   for (const reject of lockWaiters.get(sessionId) ?? []) {
-    reject(new Error('Session restart is in progress'));
+    reject(new SessionRestartInProgressError('Session restart is in progress'));
   }
   let release: (() => void) | undefined;
   try {

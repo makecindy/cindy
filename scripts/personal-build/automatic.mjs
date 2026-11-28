@@ -15,7 +15,7 @@ import {installFixedRuntime, preflightFixedRuntime} from './fixed-install.mjs';
 import { nativeIdentity, verifyDeveloperSignature, designatedRequirement } from './native-capabilities.mjs';
 import { checkCheckout } from './checkout-guard.mjs';
 import { RecoveryJournal, durableWrite, compatibility } from './recovery.mjs';
-import {appRegistry,registeredApps,reconcileRegistrations} from './app-registry.mjs';
+import {appExtensions,appRegistry,registeredApps,registeredExtensions,reconcileRegistrations} from './app-registry.mjs';
 import {interfaceDigest, verifyInterface} from './interface-assets.mjs';
 import {treeIdentity} from './runtime-store.mjs';
 import {publishSupervisorControl, shouldYieldSupervisor, requestSupervisorRelease} from './supervisor-handoff.mjs';
@@ -155,6 +155,44 @@ function assertFixedAppStopped(app) {
   check(pids.length === 0, `Personal app is still running (PID ${pids.join(', ')}); no replacement`);
   return false;
 }
+function extensionsMatch(actual, expected) {
+  return expected.length === 0
+    ? actual.length === 0
+    : actual.length === expected.length && expected.every(ext => actual.includes(ext));
+}
+function ensureFixedExtensionRegistration(c, app) {
+  if (process.platform !== 'darwin' || !app || !fs.existsSync(app + '.personal-install.json')) return;
+  try {
+    const installed = read(app + '.personal-install.json'), id = installed.inputs?.bundleId;
+    if (!/^app\.cindy\.personal\.[a-f0-9]{16}$/.test(id)) return;
+    const extId = `${id}.agent-activity`, expected = appExtensions(app), current = registeredExtensions(extId);
+    if (extensionsMatch(current, expected)) return;
+    const stateRoot = fs.realpathSync(c.runtime.stateDir), appParent = fs.realpathSync(path.dirname(app));
+    const retiredPrefix = '.' + path.basename(app) + '.previous-';
+    const result = reconcileRegistrations(app, {
+      paths: [],
+      extensionPaths: current,
+      managed: copy => copy.startsWith(stateRoot + path.sep) || (path.dirname(copy) === appParent && path.basename(copy).startsWith(retiredPrefix)),
+      verify: copy => verifyDeveloperSignature(copy, installed.signingIdentity),
+      isRunning: copy => { try { return assertFixedAppStopped(copy); } catch { return true; } },
+      sameBundle: copy => {
+        const p = spawnSync('/usr/libexec/PlistBuddy', ['-c', 'Print :CFBundleIdentifier', path.join(copy, 'Contents/Info.plist')], { encoding: 'utf8' });
+        return p.status === 0 && p.stdout.trim() === id;
+      },
+    });
+    const remaining = registeredExtensions(extId);
+    if (!result.ok || !extensionsMatch(remaining, expected)) {
+      const errors = [result.registrationError, ...result.results.filter(r => r.state !== 'unregistered').map(r => `${r.path}: ${r.reason}`)].filter(Boolean);
+      if (!errors.length) errors.push('PlugInKit extension registration still has stale or missing entries');
+      durableWrite(app + '.personal-install.json', { ...installed, registrationPending: { app, errors, at: Date.now() } });
+    }
+  } catch (error) {
+    try {
+      const installed = read(app + '.personal-install.json');
+      durableWrite(app + '.personal-install.json', { ...installed, registrationPending: { app, errors: [error.message], at: Date.now() } });
+    } catch { /* Non-fatal OS indexing repair. */ }
+  }
+}
 function start(c, release, { mock = false, beforeSpawn = () => {} } = {}) {
   check(process.stdin.isTTY, 'Run the personal developer launcher in Terminal; a live TTY is required for the repository startup wrapper');
   verifyRelease(release);
@@ -185,6 +223,7 @@ function start(c, release, { mock = false, beforeSpawn = () => {} } = {}) {
     assetDigest = interfaceDigest(release.directory);
   } else if (assetDigest) verifyInterface(release.directory, assetDigest);
   const fixedApp = runtime && !mock && destination ? installFixedRuntime(runtime, destination, {verifySignature:verifyDeveloperSignature, isRunning:assertFixedAppStopped, registry:appRegistry()}) : null;
+  if (fixedApp) ensureFixedExtensionRegistration(c, fixedApp);
   const generation = randomUUID(), dir = path.join(root(c), 'launches', generation);
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 }); fs.chmodSync(dir, 0o700);
   const env = runtimeEnv(c, cli);
@@ -753,7 +792,9 @@ export async function automaticCommand(command, options) {
     check(treeIdentity(app)===installed.digest,'Installed app changed; inspect before registry repair');
     const stateRoot=fs.realpathSync(c.runtime.stateDir), appParent=fs.realpathSync(path.dirname(app));
     const retiredPrefix='.'+path.basename(app)+'.previous-';
+    const extId=`${id}.agent-activity`, expectedExtensions=appExtensions(app);
     const result=reconcileRegistrations(app,{paths:registeredApps(id),
+      extensionPaths:registeredExtensions(extId),
       managed:copy=>copy.startsWith(stateRoot+path.sep) || (path.dirname(copy)===appParent && path.basename(copy).startsWith(retiredPrefix)),
       verify:copy=>verifyDeveloperSignature(copy,installed.signingIdentity),
       isRunning:copy=>{try{return assertFixedAppStopped(copy);}catch{return true;}},
@@ -761,9 +802,11 @@ export async function automaticCommand(command, options) {
         const p=spawnSync('/usr/libexec/PlistBuddy',['-c','Print :CFBundleIdentifier',path.join(copy,'Contents/Info.plist')],{encoding:'utf8'});
         return p.status===0&&p.stdout.trim()===id;
       }});
-    try { result.remaining=registeredApps(id); }
-    catch(error) { result.remaining=[];result.verificationError=error.message;result.ok=false; }
-    result.ok=result.ok&&result.remaining.length===1&&result.remaining[0]===app;
+    try {
+      result.remaining=registeredApps(id);
+      result.remainingExtensions=registeredExtensions(extId);
+    } catch(error) { result.remaining=[];result.remainingExtensions=[];result.verificationError=error.message;result.ok=false; }
+    result.ok=result.ok&&result.remaining.length===1&&result.remaining[0]===app&&extensionsMatch(result.remainingExtensions,expectedExtensions);
     if(result.ok && installed.registrationPending) { delete installed.registrationPending; durableWrite(app+'.personal-install.json',installed); }
     console.log(JSON.stringify(result,null,2));if(!result.ok)process.exitCode=1;return;
   }

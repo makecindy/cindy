@@ -115,7 +115,7 @@ function safeDecision(
   reason: string,
 ): InteractionDecision {
   if (request.kind === 'ask_user_question') {
-    return { kind: 'ask_user_question', answers: {} };
+    return { kind: 'ask_user_question', answers: {}, dismissed: true };
   }
   if (request.kind === 'plan_review') {
     return {

@@ -531,7 +531,8 @@ export async function hydrateBotProfileRuntime(
   if (!row || !['canonical', 'delegation', 'group', 'channel', 'thread', 'routine'].includes(row.role)) return null;
   // A private-chat topic is the owner's own conversation, so it carries the main
   // Chat's owner-private abilities (cindy-bots-runtime.md「私聊话题」).
-  const ownerChat = row.role === 'canonical' || row.role === 'thread' || row.role === 'routine';
+  const privateChat = row.role === 'canonical' || row.role === 'thread';
+  const ownerChat = privateChat || row.role === 'routine';
   const [profile] = await db
     .select()
     .from(botProfiles)
@@ -1094,6 +1095,11 @@ export async function hydrateBotProfileRuntime(
           // Same local canonical boundary as isBotAuthorizationSession; remote Pi still has plugins.
           pluginAuthorizationCardsEnabled: opts.remoteHostId == null })]
         : []),
+      ...(privateChat ? [
+        'From this private chat you cannot post to a Cindy group or @mention its members there. '
+        + 'If asked, explain that nothing was sent and provide text the user can paste in the target group, '
+        + 'where they can select the member to mention.',
+      ] : []),
     ],
   };
   opts.botProfileContextPrompt = [

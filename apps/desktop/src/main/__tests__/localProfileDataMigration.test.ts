@@ -2,6 +2,12 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import originalFs from 'original-fs';
+import { app, safeStorage } from 'electron';
+import * as sessionState from '../appSessionState.js';
+import { readCustomProviderKey, storeCustomProviderKey } from '../secrets/providerSecretStore.js';
+import syncFs from 'node:fs';
+import { dataOwnerStorageKey } from '../dataOwnerPath.js';
+import { customProviderSecretStorageKey } from '../../shared/providerSecrets.js';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
@@ -55,6 +61,113 @@ afterEach(async () => {
 });
 
 describe('adoptLocalProfileDatabase', () => {
+  // #12399: the DB alone could be adopted while the three runtime keys stayed local.
+  // Unit tier, isolated SQLite snapshot and synthetic ciphertext, no OS keychain.
+  it.each(['link', 'exclusive-copy'])('adopts proven runtime keys and recovers source and staging faults (%s)', async (publication) => {
+    const { root, deps } = await fixture();
+    if (publication === 'exclusive-copy') {
+      deps.fs.link = async () => { throw Object.assign(new Error(), { code: 'ENOTSUP' }); };
+    }
+    const source = path.join(root, 'cindy-local-v1.db');
+    const dir = path.join(root, 'safe-storage');
+    await fs.mkdir(dir);
+    const key = (owner: string, id: string, runtime: string) => path.join(dir,
+      `owner_${dataOwnerStorageKey(owner)}_${customProviderSecretStorageKey(id, runtime)}.enc`);
+    const db = createBetterSqliteDatabase(source);
+    try {
+      db.exec('CREATE TABLE custom_providers (id TEXT, runtimes TEXT, auth TEXT, created_at INTEGER, updated_at INTEGER)');
+      const insert = db.prepare('INSERT INTO custom_providers VALUES (?, ?, NULL, 1, 1)');
+      const config = { baseUrl: 'https://fixture.invalid/v1', models: [{ id: 'fixture', name: 'Fixture' }] };
+      insert.run('example', JSON.stringify({ pi: config, codex: config, 'claude-code': config }));
+      for (const id of ['conflict', 'edited', 'rekeyed', 'deferred', 'no-key']) insert.run(id, JSON.stringify({ pi: config }));
+      db.prepare('UPDATE custom_providers SET auth = ? WHERE id = ?').run(JSON.stringify({ method: 'none' }), 'no-key');
+    } finally { db.close(); }
+    const runtimes = ['pi', 'codex', 'claude-code'];
+    vi.spyOn(app, 'getPath').mockReturnValue(root);
+    vi.spyOn(safeStorage, 'isEncryptionAvailable').mockReturnValue(true);
+    const session = vi.spyOn(sessionState, 'getActiveAppSession');
+    session.mockReturnValue({ mode: 'local', dataOwnerId: 'local-v1', generation: 0 });
+    for (const runtime of runtimes) expect(storeCustomProviderKey('example', runtime, 'fixture-' + runtime)).toBe(true);
+    for (const id of ['conflict', 'edited', 'rekeyed', 'deferred', 'no-key']) await fs.writeFile(key('local-v1', id, 'pi'), 'fixture-local');
+    await fs.writeFile(key('owner-a', 'conflict', 'pi'), 'fixture-cloud');
+    await fs.writeFile(key('local-v1', 'orphan', 'pi'), 'fixture-orphan');
+    expect(reserveLocalProfileDataOwnerDetailed('owner-a', root, 'cindy', true).status).toBe('claimed');
+    expect(recoverPendingLocalProfileDataOwner('owner-a', root, 'cindy')).toBe('finalized');
+    // Force the source-read fallback for Pi and the frozen-digest fallback for rekeyed.
+    // Keep its ciphertext write unavailable for the entire first login.
+    let sourceFaults = 0;
+    let stagingFaults = 0;
+    const open = syncFs.openSync;
+    const readFault = vi.spyOn(syncFs, 'openSync').mockImplementation((file, flags, mode) => {
+      if (file === key('local-v1', 'example', 'pi')) {
+        sourceFaults++;
+        throw Object.assign(new Error(), { code: 'EBUSY' });
+      }
+      return open(file, flags, mode);
+    });
+    const write = syncFs.writeFileSync;
+    const stageFault = vi.spyOn(syncFs, 'writeFileSync').mockImplementation((file, value, options) => {
+      if (/provider_key_(rekeyed|deferred)_pi\.tmp$/.test(String(file))) {
+        stagingFaults++;
+        throw Object.assign(new Error(), { code: 'EBUSY' });
+      }
+      return write(file, value, options);
+    });
+    const link = syncFs.linkSync;
+    const transient = vi.spyOn(syncFs, 'linkSync').mockImplementation((from, to) => {
+      if ([key('owner-a', 'example', 'codex'), key('owner-a', 'edited', 'pi'), key('owner-a', 'rekeyed', 'pi')].includes(String(to))) {
+        throw Object.assign(new Error(), { code: 'EBUSY' });
+      }
+      return link(from, to);
+    });
+    if (publication === 'exclusive-copy') {
+      const publish = deps.fs.copyNoReplace;
+      deps.fs.copyNoReplace = async () => { throw Object.assign(new Error(), { code: 'EBUSY' }); };
+      expect((await adoptLocalProfileDatabase('owner-a', deps)).status).toBe('failed');
+      deps.fs.copyNoReplace = publish;
+      await fs.writeFile(key('local-v1', 'example', 'codex'), 'fixture-after-failed-db-publication');
+    }
+    expect((await adoptLocalProfileDatabase('owner-a', deps)).status).toBe('adopted');
+    expect(sourceFaults).toBeGreaterThan(0);
+    expect(stagingFaults).toBeGreaterThan(0);
+    await expect(fs.access(key('owner-a', 'deferred', 'pi'))).rejects.toThrow();
+    transient.mockRestore();
+    readFault.mockRestore();
+    stageFault.mockRestore();
+    session.mockReturnValue({ mode: 'cloud', dataOwnerId: 'owner-a', generation: 1 });
+    expect(readCustomProviderKey('example', 'pi')).toBe('fixture-pi');
+    await expect(fs.access(key('owner-a', 'example', 'codex'))).rejects.toThrow();
+    expect(await fs.readFile(key('local-v1', 'conflict', 'pi'), 'utf8')).toBe('fixture-local');
+    expect(await fs.readFile(key('owner-a', 'conflict', 'pi'), 'utf8')).toBe('fixture-cloud');
+    await fs.unlink(key('owner-a', 'conflict', 'pi'));
+    await fs.writeFile(key('local-v1', 'example', 'codex'), 'fixture-different-after-login');
+    const cloud = createBetterSqliteDatabase(path.join(root, 'cindy-owner-a.db'));
+    try { cloud.prepare("UPDATE custom_providers SET updated_at = 2 WHERE id = 'edited'").run(); }
+    finally { cloud.close(); }
+    await fs.writeFile(key('local-v1', 'rekeyed', 'pi'), 'fixture-later');
+    expect((await adoptLocalProfileDatabase('owner-a', deps)).status).toBe('target-exists');
+    for (const runtime of runtimes) {
+      expect(readCustomProviderKey('example', runtime)).toBe('fixture-' + runtime);
+    }
+    await expect(fs.access(key('owner-a', 'conflict', 'pi'))).rejects.toThrow();
+    expect(await fs.readFile(key('owner-a', 'deferred', 'pi'), 'utf8')).toBe('fixture-local');
+    for (const id of ['orphan', 'edited', 'rekeyed', 'no-key']) {
+      await expect(fs.access(key('owner-a', id, 'pi'))).rejects.toThrow();
+    }
+    expect(storeCustomProviderKey('example', 'pi', 'fixture-cloud-edit')).toBe(true);
+    session.mockReturnValue({ mode: 'signed-out', dataOwnerId: null, generation: 2 });
+    expect(readCustomProviderKey('example', 'pi')).toBeNull();
+    session.mockReturnValue({ mode: 'local', dataOwnerId: 'local-v1', generation: 3 });
+    expect((await adoptLocalProfileDatabase('local-v1', deps)).status).toBe('no-local-db');
+    expect(readCustomProviderKey('example', 'pi')).toBe('fixture-pi');
+    expect((await adoptLocalProfileDatabase('owner-b', deps)).status).toBe('claimed-by-other-owner');
+    session.mockReturnValue({ mode: 'cloud', dataOwnerId: 'owner-b', generation: 4 });
+    expect(readCustomProviderKey('example', 'pi')).toBeNull();
+    await fs.unlink(key('owner-a', 'example', 'pi'));
+    expect((await adoptLocalProfileDatabase('owner-a', deps)).status).toBe('target-exists');
+    await expect(fs.access(key('owner-a', 'example', 'pi'))).rejects.toThrow();
+  });
+
   it('retries receipt publication failure without losing the local database', async () => {
     const { root, deps } = await fixture();
     const source = path.join(root, 'cindy-local-v1.db');

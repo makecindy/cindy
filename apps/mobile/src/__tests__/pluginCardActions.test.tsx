@@ -644,6 +644,30 @@ describe("native plugin card deliberate actions", () => {
     expect(dispatch).toHaveBeenCalledWith(expect.objectContaining({ actionId: id }));
     expect(dispatch.mock.calls[0][0]).not.toHaveProperty('input.formValues');
   });
+  // User regression (unit): Mobile must allow cancelling a queued send while
+  // the host is still syncing the draft (state === 'sending' with cancelLabel).
+  it('allows cancel while syncing before sending without unlocking inputs or resubmitting fields', async () => {
+    const dispatch = vi.fn(async (_input: unknown) => ({ effects: [] }));
+    h.invoke.mockImplementation(async (_device: string, _channel: string, args: any[]) => {
+      if (args[0].collectionId === 'plugin-results') return dispatch(args[0]);
+      if (args[0].actionId === 'open-interaction') return { result: { pageId: 'page' } };
+      return { result: { confirms: [] } };
+    });
+    const container = document.createElement('div'), root = createRoot(container);
+    unmount = () => act(() => root.unmount());
+    const key = '12345678-1234-1234-1234-123456789abc';
+    const fields = ['to', 'cc', 'bcc', 'subject', 'body'].map(name => ({ name, label: name, value: name }));
+    const id = `mail:cancel:${key}`;
+    await act(async () => root.render(createElement(PluginCardActions, { deviceId: 'device', sessionId: 's', callId: 'preparing', data: {
+      pluginId: 'mail', revision: '1', form: fields, items: [{ id, label: 'Undo', disabled: false }],
+      mail: { accountId: 'a', draftId: 'd', key, from: 'a@example.test', fields, state: 'sending', status: 'Syncing draft before sending…',
+        sendLabel: 'Send', fromLabel: 'From', cancelLabel: 'Undo', attachments: [] },
+    } })));
+    expect([...container.querySelectorAll('textarea')].every(el => el.disabled)).toBe(true);
+    await act(async () => [...container.querySelectorAll('button')].find(b => b.textContent === 'Undo')!.click());
+    expect(dispatch).toHaveBeenCalledWith(expect.objectContaining({ actionId: id }));
+    expect(dispatch.mock.calls[0][0]).not.toHaveProperty('input.formValues');
+  });
   it("publishes edits without a click and keeps newer typing through an autosave card update", async () => {
     const dispatch = vi.fn(async (_input: unknown) => ({ effects: [] }));
     h.invoke.mockImplementation(

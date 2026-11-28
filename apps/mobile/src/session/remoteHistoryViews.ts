@@ -1,4 +1,4 @@
-import { HistoryViewController, isHistoryViewUnavailable } from '@cindy/maker-shared/message-window';
+import { HistoryViewController, isHistoryViewUnavailable, type HistoryViewSnapshot } from '@cindy/maker-shared/message-window';
 import type { MobileMakerTransport } from '@/device-link/mobileMakerTransport';
 import type { RemoteMessage } from './types';
 import { clearHistoryDisk, historyDiskAuthority, readHistoryDisk, writeHistoryDisk } from './remoteHistoryDiskCache';
@@ -38,10 +38,24 @@ export function detachedRemoteHistorySnapshot(deviceId: string, sessionId: strin
   return entry && !entry.consumers && entry.view.getSnapshot().ready ? entry.view.getSnapshot() : null;
 }
 
-/** After a read ahead reaches disk, the next mount restores it instead of the older retained view. */
-export function dropDetachedRemoteHistoryView(deviceId: string, sessionId: string): void {
+/**
+ * After a read ahead reaches disk, update the retained detached controller in place so
+ * reopening stays synchronously ready instead of dropping back to an empty view and
+ * flashing a truncated raw fallback while waiting for disk IO.
+ */
+export function updateDetachedRemoteHistoryView(
+  deviceId: string,
+  sessionId: string,
+  snapshot: HistoryViewSnapshot<RemoteMessage>,
+): void {
   const key = keyFor(deviceId, sessionId);
-  if (!views.get(key)?.consumers) views.delete(key);
+  const entry = views.get(key);
+  if (!entry || entry.consumers) return;
+  if (isHistoryViewUnavailable(entry.view.getSnapshot().error)) {
+    views.delete(key);
+    return;
+  }
+  entry.view.applyPrefetchedSnapshot(snapshot);
 }
 
 export function getRemoteHistoryView(deviceId: string, sessionId: string, reader: Reader): Entry {
@@ -57,11 +71,19 @@ export function getRemoteHistoryView(deviceId: string, sessionId: string, reader
       diagnostic: (event) => mobileDebugLog('debug', 'recovery', 'history view changed', {
         hostRef: deviceId.slice(0, 8), sessionRef: sessionId.slice(0, 8), ...event,
       }),
+      expansionLoop: (event) => mobileDebugLog('warn', 'recovery', 'history expansion loop stopped', {
+        hostRef: deviceId.slice(0, 8), sessionRef: sessionId.slice(0, 8), ...event,
+      }),
     }) };
   return entry;
 }
 
-export function mountRemoteHistoryView(entry: Entry, reader: Reader, active: boolean) {
+export function mountRemoteHistoryView(
+  entry: Entry,
+  reader: Reader,
+  active: boolean,
+  onCacheSettled?: () => void,
+) {
   // Register only after React commits. An abandoned render must not retain a
   // controller or replace the transport used by the currently visible page.
   views.set(keyFor(entry.deviceId, entry.sessionId), entry);
@@ -100,7 +122,7 @@ export function mountRemoteHistoryView(entry: Entry, reader: Reader, active: boo
   onSnapshot();
   if (isHistoryViewUnavailable(entry.view.getSnapshot().error)) entry.view.reset();
   entry.view.setActive(active);
-  void entry.view.restoreCachedView(() => readHistoryDisk(authority));
+  void entry.view.restoreCachedView(() => readHistoryDisk(authority)).finally(() => onCacheSettled?.());
   return () => {
     unsubscribe();
     persist();

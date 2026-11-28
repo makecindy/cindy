@@ -53,7 +53,7 @@ function applyDirectoryRow(deviceId: string, remoteControlEnabled: boolean, plat
 function fixture() {
   const clock = { wall: 0, mono: 0, current: true, ownerReachable: true };
   let grantSequence = 0;
-  const config = normalizeProviderGroupConfig({ strategy: 'least', autoSwitch: true, allowFast: false,
+  const config = normalizeProviderGroupConfig({ strategy: 'expiring', autoSwitch: true, allowFast: false,
     members: [{ kind: 'device', agentDeviceId: 'M', providerId: 'openai' }] }, 'openai')!;
   const member = config.members.find(candidate => candidate.kind === 'device')!;
   const inspect = vi.fn(async () => ({ running: 0, fastPolicyRequired: false }));

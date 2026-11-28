@@ -1,3 +1,4 @@
+import type { ReconnectHandoff } from '../../../shared/agentInputQueue';
 import { localizeOutputLimit } from './outputLimitI18n';
 import { type OutputLimitDetails } from '@cindy/maker-shared';
 import { isMemberBudgetPaused } from '../../../shared/providerShareBudget';
@@ -68,9 +69,10 @@ import {
   isStreamInterruptedErrorMessage,
 } from '@/utils/streamInterruptError';
 import { isQuotaExhaustedErrorMessage } from '@/utils/quotaError';
+import { parseUpstreamStatusError } from '@/utils/upstreamStatusError';
 import { parseTerminalRateLimitRetryProgress } from '@/utils/rateLimitRetry';
 import type { UsageLimitRecoveryHint } from '@/lib/usageLimitRecovery';
-import { errorReasonI18nKey as resolveErrorReasonI18nKey } from './errorReasonI18n';
+import { errorReasonI18nKey as resolveErrorReasonI18nKey, localizeReconnectStall } from './errorReasonI18n';
 import { isCodexSharedAuthLinkUnavailableError } from '../../../shared/codexAuthReason';
 import { getToolLoopI18nKey } from './toolLoopI18n';
 import {
@@ -87,6 +89,7 @@ interface ErrorBannerProps {
   /** terminal error 的稳定 reason key。'silent-stop-exhausted'(silent-stop 自动
    *  续跑额度耗尽)时隐藏 Retry、改显「继续」按钮(onSilentStopContinue)。 */
   errorReason?: string | null;
+  reconnectHandoff?: ReconnectHandoff;
   /** Structured details for a tool-loop terminal error (optional for legacy rows). */
   toolLoop?: ToolLoopErrorDetails | null;
   outputLimit?: OutputLimitDetails | null;
@@ -113,7 +116,7 @@ interface ErrorBannerProps {
   usageLimitRecovery?: UsageLimitRecoveryHint | null;
   /** 当前 session 的 agent kind。codex 的 401 / Missing bearer 必须 hide Retry,
    *  否则 retry 撞同一个 in-memory auth retry-loop 产生重复失败 turn。 */
-  agentKind?: 'cc' | 'codex' | 'pi';
+  agentKind?: 'cc' | 'codex' | 'pi' | 'acp';
   agentDeviceId?: string | null;
   /** 当前 session 的远端 host id;非空 + agentKind='codex' 时显「同步登录态」按钮。
    *  本机认证失败通过对应连接的设置恢复，不提供远端同步入口。 */
@@ -173,6 +176,7 @@ export function ErrorBanner({
   onChooseComputer,
   error,
   errorReason,
+  reconnectHandoff,
   toolLoop,
   outputLimit,
   retryText,
@@ -428,8 +432,20 @@ export function ErrorBanner({
     !isProviderSafetyRefusal && isOverloadErrorMessage(error, undefined, errorReason);
   const isStreamInterrupted =
     !isProviderSafetyRefusal && isStreamInterruptedErrorMessage(error, errorReason);
+  // 上游 5xx 但没带错误正文:兜底文案只会说「回复未完成」,看不出是上游拒了。
+  const upstreamStatusError = !isProviderSafetyRefusal ? parseUpstreamStatusError(error) : null;
   const overloadRetryProgress = parseOverloadRetryProgress(error);
   const errorReasonI18nKey = resolveErrorReasonI18nKey(errorReason, error);
+  // #12970 review: a history read the provider refused means the message was
+  // never accepted. That fact outranks every status word in the message —
+  // `(status 502)` and friends would otherwise land in the network/overload
+  // branches and tell the user the service was unreachable, hiding that nothing
+  // was ever sent. Both bounded diagnostics share the same priority.
+  const piRetryHistoryKey =
+    errorReasonI18nKey === 'chat.errorBanner.piRetryHistoryUnavailable'
+    || errorReasonI18nKey === 'chat.errorBanner.piRetryHistoryTooLarge'
+      ? errorReasonI18nKey
+      : undefined;
   const toolLoopI18nKey =
     errorReason === 'tool_use_loop_detected' ? getToolLoopI18nKey(toolLoop) : undefined;
   const localizedReasonError =
@@ -482,9 +498,11 @@ export function ErrorBanner({
       sameDay ? { timeStyle: 'short' } : { dateStyle: 'medium', timeStyle: 'short' },
     ).format(resumeDate);
   })();
-  const isAccountUsageLimitText =
-    !isProviderSafetyRefusal && isAccountUsageLimitReachedText(error);
+  const isAccountUsageLimit =
+    !isProviderSafetyRefusal &&
+    (errorReason === 'acp-usage-limit' || isAccountUsageLimitReachedText(error));
   // 原始恢复记录优先；自动任务收口后可手动续跑。按钮与指引共用同一判定。
+  const isReconnectStalled = errorReason === 'codex_reconnect_stalled';
   const isSilentStopExhausted = errorReason === 'silent-stop-exhausted';
   const isClaudeGatewayOpusPlanMismatch = errorReason === CLAUDE_GATEWAY_OPUS_PLAN_MISMATCH_REASON;
   const isClaudeSubscriptionOpusPlanMismatch =
@@ -577,6 +595,11 @@ export function ErrorBanner({
   } else if (isProviderSafetyRefusal) {
     displayError = t('chat.errorBanner.providerSafetyRefusal');
     hasSpecialGuidance = false;
+  } else if (piRetryHistoryKey) {
+    // 「本次消息未发送」优先于网络/过载/上游状态等宽泛分支:历史读取被拒时上游
+    // 返回什么状态都与「这条消息根本没发出去」无关,用户先要知道的是这件事。
+    displayError = t(piRetryHistoryKey);
+    hasSpecialGuidance = false;
   } else if (geminiLimit !== null) {
     displayError = t(errorReason === 'gemini-input-retry-exhausted' ? 'chat.geminiRateLimit.exhausted' : 'chat.geminiRateLimit.title');
   } else if (subscriptionGuidance) {
@@ -660,13 +683,15 @@ export function ErrorBanner({
     // 被控端已确认是账号用量上限并排好了自动继续：直接说发生了什么，
     // 「将于 X 自动继续」在操作区，原始报错留在可展开的详情里。
     displayError = t('chat.errorBanner.usageLimitReached');
-  } else if (isQuotaExhausted) {
-    displayError = t('providerError.QUOTA_EXCEEDED');
-  } else if (isAccountUsageLimitText) {
-    // 没有排自动继续（已取消、共享中、拿不到可靠时刻等）但原文明说到了用量上限。
+  } else if (isAccountUsageLimit) {
+    // 没有排自动继续（已取消、共享中、拿不到可靠时刻等）但插件或原文明说到了周期用量上限。
+    // 放在通用余额不足（isQuotaExhausted）之前，避免把带“usage limit / quota reached”的
+    // 周期限额错归成需要充值的通用配额不足（网关余额耗尽已在更前面的 isGatewayQuotaExhausted 处理）。
     displayError = usageLimitResetAt
       ? t('chat.errorBanner.usageLimitReachedWithReset', { resetAt: usageLimitResetAt })
       : t('chat.errorBanner.usageLimitReachedNoReset');
+  } else if (isQuotaExhausted) {
+    displayError = t('providerError.QUOTA_EXCEEDED');
   } else if (terminalRateLimitRetryProgress) {
     // daemon 已耗尽内部 retry budget 的终态 429，由 maker-core 做受限外层重投。
     // 它不是模型容量过载，也不是用户网络异常；独立文案避免误导用户切模型或查网络。
@@ -683,6 +708,8 @@ export function ErrorBanner({
   } else if (agentKind === 'pi' && /bundled node not installed/.test(error)) {
     // 引导:需先装 claude-code 或 codex 连带 node。
     displayError = t('chat.errorBanner.piBundledNodeMissing');
+  } else if (isReconnectStalled) {
+    displayError = localizeReconnectStall(t, reconnectHandoff);
   } else if (isOverloadError) {
     // 服务过载:上游模型没有可用容量。原始英文("Selected model is at capacity")
     // 对用户没有行动价值,换成友好文案 + 明确的下一步;原始错误折叠可查。
@@ -723,6 +750,11 @@ export function ErrorBanner({
             ? 'chat.errorBanner.networkUnreachable'
             : 'chat.errorBanner.networkUnreachableNoRetry',
         );
+  } else if (upstreamStatusError) {
+    // 上游 5xx(无正文):标题直接点名状态,原始报错折叠可查。
+    // 放在网络分支之后 —— 502/503/504 仍走「服务暂时不可达」那套更贴近恢复动作的文案。
+    displayError = t('chat.errorBanner.upstreamStatusError', { status: upstreamStatusError.status });
+    hasSpecialGuidance = false;
   } else {
     // Keep the raw message available to every specialized gate above. Only
     // the final fallback uses the stable reason map, so auth/network/overload
@@ -743,6 +775,7 @@ export function ErrorBanner({
     displayError = t(`sharedTaskRecovery.reason.${sharedRecoveryReason}`);
   }
   const canShowErrorDetails =
+    isReconnectStalled ||
     piCloudContextRecovery ||
     isNetworkishError ||
     isOverloadError ||
@@ -750,7 +783,7 @@ export function ErrorBanner({
     showUnwrappedRaw ||
     isCodexUsageLimitError ||
     Boolean(usageLimitResumeAt) ||
-    isAccountUsageLimitText ||
+    isAccountUsageLimit ||
     terminalRateLimitRetryProgress ||
     isClaudeGatewayOpusPlanMismatch ||
     isClaudeSubscriptionOpusPlanMismatch ||
@@ -1088,10 +1121,10 @@ export function ErrorBanner({
               disabled={forkStripEncryptedRunning}
               loading={retrying}
               onClick={() => void handleRetry()}
-              title={t('chat.errorBanner.retryTitle')}
+              title={t(isReconnectStalled ? 'chat.errorBanner.silentStopContinueTitle' : 'chat.errorBanner.retryTitle')}
             >
-              <RotateCcw size={12} />
-              {t('chat.errorBanner.retry')}
+              {isReconnectStalled ? <Play size={12} /> : <RotateCcw size={12} />}
+              {t(isReconnectStalled ? 'chat.errorBanner.silentStopContinueTitle' : 'chat.errorBanner.retry')}
             </Button>
           )}
           {(showHistoryRecovery || showInvalidEncryptedContentRecovery) && onForkStripEncrypted && (

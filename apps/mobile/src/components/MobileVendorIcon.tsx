@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react';
+import { ANTIGRAVITY_MARK_DATA_URL } from '@cindy/maker-shared/branding';
 import { Animated, Easing } from 'react-native';
 import { useLoopingAnimation } from '@/hooks/useLoopingAnimation';
 import { RemoteSourceMark } from '@/session/RemoteSourceMark';
@@ -88,12 +89,14 @@ export function MobileVendorIcon({
 
   const agentKind: AgentMarkKind = vendor === 'codex' || vendor === 'pi' ? vendor : 'claude-code';
   const pluginEngineTask = vendor === 'acp';
+  const pluginIcon = pluginEngine?.iconDataUrl;
+  const keepArtworkColor = running && pluginIcon && pluginIcon !== ANTIGRAVITY_MARK_DATA_URL;
   const mark = pluginEngineTask
     ? (
       <PluginEngineMark
-        iconDataUrl={pluginEngine?.iconDataUrl}
+        iconDataUrl={pluginIcon}
         size={size}
-        tint={running && pluginEngine?.iconDataUrl ? undefined : color}
+        tint={keepArtworkColor ? undefined : color}
       />
     )
     : <MobileAgentMark agentKind={agentKind} color={color} size={size} />;

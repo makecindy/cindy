@@ -69,7 +69,9 @@ import {
   richVector,
   RichAnswerStream,
   RichSubmissionController,
-  richSendText,
+  richSendPreview,
+  RICH_EXPRESSION_ARGUMENT_LIMIT,
+  type RichSendIssue,
   RichInteractionMemory,
   richAction,
   richChart,
@@ -142,8 +144,8 @@ export function snapshotRichAnswerValues(
 
 const submissions = new RichSubmissionController(memory);
 
-function RichSendAction({ node, text, receiptKey, ready, style, buttonTextStyle }: {
-  node: RichNode; text: string | undefined; receiptKey: string; ready: boolean;
+function RichSendAction({ node, text, issue, receiptKey, ready, style, buttonTextStyle }: {
+  node: RichNode; text?: string; issue?: RichSendIssue; receiptKey: string; ready: boolean;
   style?: StyleProp<ViewStyle>; buttonTextStyle: TextStyle;
 }) {
   const { t } = useTranslation();
@@ -158,6 +160,9 @@ function RichSendAction({ node, text, receiptKey, ready, style, buttonTextStyle 
       onPress={() => { if (!disabled) void submissions.submit(receiptKey, text, sender); }}>
       <Text style={buttonTextStyle}>{status === 'sending' ? t('message.richAnswer.sending') : status === 'sent' ? t('message.richAnswer.sent') : richString(node, 'label', richString(node, 'text')) || t('message.richAnswer.send')}</Text>
     </Pressable>
+    {ready && sender && issue ? <Text style={styles.caption} accessibilityLiveRegion="polite">
+      {t(`message.richAnswer.${issue}`, { limit: RICH_EXPRESSION_ARGUMENT_LIMIT })}
+    </Text> : null}
     {status === 'failed' ? <Text accessibilityRole="alert" style={styles.caption}>{t('message.richAnswer.sendFailed')}</Text> : null}
   </View>;
 }
@@ -455,11 +460,11 @@ function RichDocumentView({
         );
       case "button":
         if (Object.prototype.hasOwnProperty.call(node.props, 'send'))
-          return <RichSendAction node={node} text={richSendText(node, values)} receiptKey={`${stateKey}:sent:${id}`} ready={complete && !doc.issues} buttonTextStyle={styles.buttonText} />;
+          return <RichSendAction node={node} {...richSendPreview(node, values)} receiptKey={`${stateKey}:sent:${id}`} ready={complete && !doc.issues} buttonTextStyle={styles.buttonText} />;
         return button(label || richString(node, "text"), () => apply(node));
       case "form":
         if (Object.prototype.hasOwnProperty.call(node.props, 'send'))
-          return <View style={styles.stack}>{children}<RichSendAction node={node} text={richSendText(node, values)} receiptKey={`${stateKey}:sent:${id}`} ready={complete && !doc.issues} buttonTextStyle={styles.buttonText} /></View>;
+          return <View style={styles.stack}>{children}<RichSendAction node={node} {...richSendPreview(node, values)} receiptKey={`${stateKey}:sent:${id}`} ready={complete && !doc.issues} buttonTextStyle={styles.buttonText} /></View>;
         return (
           <View style={styles.stack}>
             {children}

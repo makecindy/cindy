@@ -79,7 +79,8 @@ export async function requestHostStop(profile) {
 export async function requestHostRemote(profile, action, deviceId) {
   const endpoint = readHostEndpoint(profile);
   if (!endpoint?.instanceId) throw new Error('Start Cindy Host first using the same data directory');
-  // 「重新加入」 waits on two service requests (Device Link, then Agent-Net enrollment, up to 10 s each).
+  // 「重新加入」 waits on two service requests (Device Link, then Agent-Net enrollment, up to 10 s each); `agent-net-on` asks the
+  // service once more (up to 3 s) and may rejoin first when this Host was removed from the account.
   return controlRequest(profile, endpoint, '/control/remote', { instanceId: endpoint.instanceId, action, deviceId },
-    action === 'rejoin' ? 30_000 : undefined);
+    action === 'rejoin' ? 30_000 : action === 'agent-net-on' ? 35_000 : undefined);
 }

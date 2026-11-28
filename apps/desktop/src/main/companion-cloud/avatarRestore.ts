@@ -44,7 +44,11 @@ export function avatarDownloadMaySucceedLater(error: unknown, signal?: AbortSign
   return walkDownloadErrors(error, (nested) => nested instanceof Error && transportMaySucceedLater(nested));
 }
 
-export async function restoreCloudAvatar(avatar: string | null, signal?: AbortSignal): Promise<RestoredCloudAvatar> {
+export async function restoreCloudAvatar(
+  avatar: string | null,
+  signal?: AbortSignal,
+  options: { fallbackOnTransient?: boolean } = {},
+): Promise<RestoredCloudAvatar> {
   if (!avatar?.startsWith('https://')) {
     const portable = portableBotAvatarOrFallback(avatar);
     return portable === avatar ? { portable } : { portable, fallback: true };
@@ -54,7 +58,9 @@ export async function restoreCloudAvatar(avatar: string | null, signal?: AbortSi
     validateBotAvatarBuffer(Buffer.from(buffer));
     return { imageBase64: Buffer.from(buffer).toString('base64') };
   } catch (error) {
-    if (avatarDownloadMaySucceedLater(error, signal)) throw new Error('AVATAR_UNAVAILABLE');
+    if (error instanceof Error && error.message === 'OWNER_CHANGED') throw error;
+    if (signal?.aborted) throw new Error('AVATAR_UNAVAILABLE');
+    if (avatarDownloadMaySucceedLater(error, signal) && !options.fallbackOnTransient) throw new Error('AVATAR_UNAVAILABLE');
     return { portable: portableBotAvatarOrFallback(null), fallback: true };
   }
 }

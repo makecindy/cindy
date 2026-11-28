@@ -34,10 +34,10 @@ export default {
       return;
     }
     if (ui.case === 'authoring') {
-      const local = page.getByRole('region', { name: await ui.t('settings.ghosts.contribution.localVersion'), exact: true });
-      await local.getByRole('combobox').click();
+      const versions = page.getByRole('navigation', { name: await ui.t('settings.ghosts.contribution.history'), exact: true });
+      await versions.getByRole('combobox', { name: await ui.t('settings.ghosts.contribution.localVersion'), exact: true }).click();
       await page.getByRole('option', { name: `1.1.0 · ${await ui.t('settings.ghosts.page.origin.local')}`, exact: true }).click();
-      const button = local.getByRole('button', { name: await ui.t('settings.ghosts.contribution.submitVersion', { version: '1.1.0' }), exact: true });
+      const button = page.getByRole('button', { name: await ui.t('settings.ghosts.contribution.submitVersion', { version: '1.1.0' }), exact: true });
       await button.waitFor();
       await ui.capture('local-selected');
       await button.click();
@@ -51,7 +51,10 @@ export default {
       return;
     }
 
-    assert.ok((await page.locator('main').innerText()).includes(await ui.t('settings.ghosts.detail.localDevelopment')));
+    const details = page.getByText(await ui.t('settings.ghosts.detail.infoTitle'), { exact: true });
+    await details.click();
+    await page.getByText(await ui.t('settings.ghosts.detail.localDevelopment'), { exact: true }).waitFor();
+    await details.click();
     const button = page.getByRole('button', { name: await ui.t('settings.ghosts.detail.browserUse'), exact: true });
     await button.click();
     await page.getByRole('status').filter({ hasText: await ui.t('settings.ghosts.detail.browserActivated') }).waitFor();

@@ -42,6 +42,20 @@ mountPage({
       });
       if (ctx.case === 'crowded') sources.unshift({ kind: 'balance', id: 'cindy', logoSvg: MENUBAR_CINDY_LOGO, available: 90.2,
         fullAmount: 100, burnPerDay: 3, observedAtMs: now, currency: 'CNY', quota: null });
+      // detail-fit: a plugin engine reporting four windows, as Antigravity does; its detail page has
+      // the longest legend and reset sentence (a Windows recording, 2026-11-26: the page jumped up
+      // and down nonstop on Antigravity and Grok, never on OpenAI).
+      if (ctx.case === 'detail-fit') sources.unshift({
+        kind: 'subscription', id: 'antigravity', providerId: 'acp-plugin:agy:agy', family: 'plugin',
+        logoSvg: familyLogo('plugin'), brand: 'Antigravity', account: null, plan: 'Google AI Pro',
+        windows: [
+          { kind: 'custom', label: 'Gemini Models · weekly', usedPercent: 5, resetsAtMs: now + 5 * 86400000, windowMinutes: 10080 },
+          { kind: 'custom', label: 'Gemini Models · 5h', usedPercent: 6, resetsAtMs: now + 3 * 3600000, windowMinutes: 300 },
+          { kind: 'custom', label: 'Claude and GPT models · weekly', usedPercent: 2, resetsAtMs: now + 6 * 86400000, windowMinutes: 10080 },
+          { kind: 'custom', label: 'Claude and GPT models · 5h', usedPercent: 4, resetsAtMs: now + 2 * 3600000, windowMinutes: 300 },
+        ],
+        credits: null, creditsUnlimited: false, prepaidUsd: null, updatedAtMs: now,
+      });
       const view = buildMenubarView({
         nowMs: now, locale: ctx.locale, moneySymbol: '¥', settings, sources, tasks: [],
         usage: { days, scopes: { all: scope, local: scope } }, updatedAtMs: now,

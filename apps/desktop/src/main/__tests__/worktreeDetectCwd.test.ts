@@ -38,7 +38,7 @@ beforeEach(() => {
   // Synchronous Git fixtures consume no work budget; fake-timer cases replace this clock.
   vi.spyOn(performance, 'now').mockReturnValue(0);
   // Synthetic paths need no filesystem I/O, including fake-timer timeout tests.
-  realpathMock.mockReset().mockRejectedValue(Object.assign(new Error('missing directory'), { code: 'ENOENT' }));
+  realpathMock.mockReset().mockImplementation(async (cwd: string) => cwd);
 });
 
 afterEach(() => {
@@ -203,18 +203,31 @@ describe('detectCwd → isInsideWorktree (I-1 fix)', () => {
     }
   });
 
-  // #6409: a failed physical-cwd lookup must preserve Git's partial/error result.
+  // #13175, unit tier: realpath ENOENT used to launch Git in the missing cwd
+  // despite returning the correct status. Only the installation check can succeed.
   it.each([true, false])('preserves missing-directory results when gitInstalled=%s', async (gitInstalled) => {
+    realpathMock.mockRejectedValueOnce(Object.assign(new Error('missing directory'), { code: 'ENOENT' }));
     gitExecMock.mockImplementation(async (args: readonly string[]) => {
       if (gitInstalled && args[0] === '--version') return { stdout: 'git version 2.45.0\n', stderr: '' };
       throw new GitExecError({ args, exitCode: null, stderr: '', stdout: '',
         cause: Object.assign(new Error('not found'), { code: 'ENOENT' }) });
     });
-    expect(await detectCwd('/missing')).toMatchObject({
+    expect(await detectCwd('/missing')).toEqual({
       isGitRepo: false,
       isInsideWorktree: false,
       gitInstalled,
+      supportsRecoveryKeyDiscard: true,
+      supportsCheckout: true,
     });
+    expect(gitExecMock.mock.calls.map(([args, cwd]) => [args, cwd])).toEqual([[['--version'], undefined]]);
+  });
+
+  it('uses the supplied directory when realpath fails with a permission error', async () => {
+    const cwd = path.resolve('/repo');
+    realpathMock.mockRejectedValueOnce(Object.assign(new Error('permission denied'), { code: 'EACCES' }));
+    gitExecMock.mockResolvedValue({ stdout: `${cwd}\nmain\n.git\n.git\n` });
+    expect(await detectCwd(cwd)).toMatchObject({ isGitRepo: true, repoRoot: cwd });
+    expect(gitExecMock.mock.calls[0][1]).toBe(cwd);
   });
 
   it('releases all four hung probes after Git timeout and allows queued work and same-path retries', async () => {
