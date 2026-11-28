@@ -40,6 +40,7 @@
     --motion-enter: 250ms;
     --motion-exit: 150ms;
     --motion-spinner-cycle: 1000ms;
+    --motion-stream-word: 500ms;
     --motion-sidebar-title-marquee-per-viewport: 2400ms;
     --motion-ease-out: cubic-bezier(0.16, 1, 0.3, 1);
     --motion-ease-in: cubic-bezier(0.4, 0, 1, 1);

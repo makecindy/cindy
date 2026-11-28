@@ -9,6 +9,7 @@ export function DefaultOverrideControls({
   disabled,
   alwaysVisible = false,
   showCustomizedBadge = isCustomized,
+  label,
   onReset,
 }: {
   isCustomized: boolean;
@@ -17,6 +18,8 @@ export function DefaultOverrideControls({
   alwaysVisible?: boolean;
   /** Draft-only settings can keep the reset action without claiming a saved override. */
   showCustomizedBadge?: boolean;
+  /** 同屏有多个还原入口时给出可区分的无障碍名。 */
+  label?: string;
   onReset: () => void;
 }) {
   const { t } = useTranslation();
@@ -34,6 +37,7 @@ export function DefaultOverrideControls({
       {/* Per-setting reset (CONTROLS decision 3): shared 28px quiet icon button. */}
       <RestoreDefaultButton
         data-settings-search-action="Restore this setting to its default value"
+        label={label}
         onClick={onReset}
         disabled={resetDisabled}
       />

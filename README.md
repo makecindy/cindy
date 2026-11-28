@@ -107,6 +107,27 @@ billing still apply; the free client does not mean unlimited model usage.
 Linux users: see the [Ubuntu, Arch Linux and Omarchy installation guide](docs/linux.md)
 for installation, updates, keyring setup and migration from a manual install.
 
+<details>
+<summary>Can I set up a buddy offline, before any model inference?</summary>
+
+**Skip Sign-In** opens the desktop interface offline without a Cindy account.
+Cindy account-backed services require sign-in; connected third-party API models can still be used.
+
+- **Creating a named buddy needs an available model.** Choose one in **Buddies → + → New buddy**.
+  Preparation automatically starts its first hello, before you send a message.
+  It is marked ready when the runtime accepts that turn, not when the full reply appears.
+- **The built-in Cindy can be listed while waiting for a model.** During pending or failed initial
+  preparation, name, self-introduction, personality and **What you know about me** remain read-only.
+  Model settings stay available: use **Change Model** or retry preparation for the same buddy.
+- **There is no supported hand-authored declaration / zero-inference setup route**, including in
+  Linux Global **0.1.143**, to create a named buddy, edit its profile, personality and preferences,
+  save, and verify them after restart before any inference.
+- **Import is not a general declaration-text format.** Hermes / OpenClaw import can save recognized
+  source application data before setup finishes; native packages are limited to the bundled, validated catalog.
+- **Compatible, available local models still infer**, including the ordinary first hello: offline is not zero-inference setup.
+
+</details>
+
 <h3 align="center">A few people noticed.</h3>
 
 <p align="center">

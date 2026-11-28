@@ -1,5 +1,52 @@
 ## 4.6.2 控制节点:在 Cindy 的流程关键点先问你(subscribe.hooks)
 
+### 无模型增量检查（开发中，尚未发布）
+
+先检测 `cindy.checks`，再调用 `list()`；缺少 API 或返回 `PERMISSION_DENIED` 时保留原功能。
+调用方须声明 `agent.checks: true`，且用户单独批准该能力。
+自带检查处理器的来源插件也须批准该能力，并声明 `agent.checkSources: ["mail"]`（最多 16 个小写短名称）。
+旧安装记录缺少 `checksCapabilityApproved` 不会因宿主升级自动获权。
+
+已安装、已批准的 root Gmail / Google Calendar 可直接复用原来的 accounts/run 只读工具，
+不修改来源插件，也不要求它们新声明检查能力。兼容桥固定命令和参数，最多每邮箱一条索引、
+每日历一条事件，账号列表前后复核；分页未读完、账号过多、结果形状未知一律 unknown。
+仅 Host 读取工具结果，调用方只得到三态。调用没有会话、路径、写权限或发布卡片窗口；
+不是通用跨插件工具调用入口。其它未接入来源继续走原增量读取，不伪报完整覆盖。
+
+```js
+const available = await cindy.checks.list();
+// {ok:true, providers:[{providerId, name, sources:["mail"]}]}
+const result = await cindy.checks.probe([{providerId, source:"mail", from, to}]);
+// {ok:true, results:[{providerId,source,from,to,state:"changed"|"unchanged"|"unknown"}]}
+```
+
+`providerId` 必须原样取自 list，不按名称拼接。最多 16 项，时间为 ISO、范围不超过 31 天；
+同一插件每 30 秒最多一批，重复项合并。每项包括唤醒最多 20 秒。`unchanged` 只在该范围内
+全部账号和路径成功检查后返回；断线、缺权限、分页未完成、超时一律 `unknown`。宿主只转发
+三态，不转发任何来源正文、消息 id、账号或凭证。来源网络仍受自己的白名单和授权约束，
+不能伪造 Agent callId，也不能调用其它插件工具来绕过授权。
+
+来源处理器：
+```js
+cindy.onHostMessage(async msg => {
+  if (msg.type !== 'change-check') return;
+  let state = 'unknown';
+  try { state = await checkOwnAccounts(msg.source, msg.from, msg.to); } catch {}
+  cindy.send({type:'change-check-result', requestId:msg.requestId, state});
+});
+```
+
+宿主内置 `@cindy/local-history` / `cindy` 只检查当前账号本机可见的用户及助手消息是否新增，
+不读取正文；排除删除、回退和调度器产生的自动化轮次，同一会话中的真人新回复仍计入。
+它不代表其它电脑历史、飞书或 Slack。来源绑定必须明确覆盖全部已配置路径，否则保留
+Agent 增量读取。`unknown` 不能推进进度。检查与进度提交之间若配置、账号或来源变化，
+丢弃结果。前置节点总时限仍为 30 秒，提交与回裁决须留余量。
+
+新自动化可在 `cindy.agent.requestSchedule` 追加 `preRunCheck:true`，前提是 `control-points`
+报告该插件 `will-schedule-run.active:true`。宿主只把本插件、`onFailure:'allow'` 预填到
+原生创建表单，用户仍须保存且可关闭。不改模型、执行电脑或既有任务，不按名称认领旧任务。
+已有自动化由用户在原任务的前置检查中选择插件，不另建重复任务。
+
 控制节点是 Cindy 预先埋在流程关键点的 `will-` 拦截点。用户在某个自动化的
 「前置检查」里选了你的插件,或在新任务的模型选择器里选了你发布的模型(§4.6.3),到了节点主机就停下来
 问你,**不经过 Agent、不花模型回合**。插件不会自动管所有任务:只问选了它的那些任务。你可以在插件里调自己的规则、外部决策

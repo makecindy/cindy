@@ -216,7 +216,7 @@ describe('feishu group settings service', () => {
     ]);
     expect(list.groups[0]!.project?.config?.route?.model).toBe('claude-opus-5-5');
     expect(resolveProject).toHaveBeenCalledTimes(1);
-    expect(resolveProject).toHaveBeenCalledWith('project-a', []);
+    expect(resolveProject).toHaveBeenCalledWith('project-a', [], { dryRun: true });
     expect(syncProjectWorkspaces).toHaveBeenCalled();
 
     // 打开飞书卡片时的概要(2026-11-23 用户反馈收起时的群数与头像要展开一次才出现): 仍认得这个群

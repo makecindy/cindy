@@ -553,6 +553,183 @@ describe('independent V2 relay', () => {
     else expect(rows.body.shares[0].status).toBe('paused');
     await expect(f.client.request('POST', '/grants', { delegation })).rejects.toMatchObject({ code: 'GRANT_INVALID' });
   });
+  // 2026-11-26 linked Device Link provider shares (agent-net-linked-provider-shares.md). Real HTTP/store/restart:
+  // the end-to-end lease is covered in packages/agent-net socket.integration; these are the service's own fences.
+  // Minimal failing inputs: linking an ID that is already a native V2 share (would let a link bypass its member book);
+  // a restart dropping the link; the private book exposing it; a 65th waiting guest device flooding one host; a lease
+  // signed before the link was removed coming back with a new registration; a guest stuck on the previous host's request ID.
+  it('fences linked Device Link provider shares: native IDs, other accounts, the private book, restarts and waiting guests', async () => {
+    const actor = (token: string) => token === 'Bearer unit-owner' ? { accountId: 'owner-account', deviceId: 'owner' }
+      : token === 'Bearer other-owner' ? { accountId: 'other-account', deviceId: 'owner' }
+      : token === 'Bearer impostor' ? { accountId: 'impostor-account', deviceId: 'guest-device-0' }
+      : token === 'Bearer second-host' ? { accountId: 'owner-account', deviceId: 'second' }
+      : /^Bearer guest-\d+$/.test(token) ? { accountId: 'guest-account', deviceId: 'guest-device-' + token.slice(13) } : null;
+    // A clock the case holds still: removing and linking again within one millisecond must not reuse a generation.
+    const clock = Date.now();
+    const f = await fixture({ now: () => clock, sharing: {
+      async authenticate(req) { const found = actor(String(req.headers.authorization));
+        if (!found) throw new AppError('UNAUTHORIZED', 401, 'Unit auth rejected'); return { ...found, networkId: f.certificate.networkId }; },
+      providers: { hostCapability: 'provider-share-v1', identityCards: {
+        async verify() { return { displayName: 'Unit verified person', avatarUrl: null, region: 'global' as const }; },
+        async inspect() { throw new Error('No cross-region fixture'); },
+      } },
+    } });
+    const guests = new Map<string, Identity>();
+    const call = async (target: string, method: string, input: unknown, token = 'Bearer unit-owner',
+      proof: boolean | AgentNetClient = token === 'Bearer unit-owner', applicant?: Identity) => {
+      const resource = API + target, body = input === undefined ? '' : JSON.stringify(input);
+      const signer = proof === true ? f.client : proof || null;
+      const response = await fetch(f.relay.url + resource, { method, headers: { authorization: token, ...(body ? { 'content-type': 'application/json' } : {}),
+        ...(signer ? { 'x-agent-net-authorization': signer.header(method, resource, body) } : {}),
+        ...(applicant ? { 'x-agent-net-applicant': Buffer.from(JSON.stringify(createRequestProof(applicant, method, resource, body))).toString('base64url') } : {}),
+      }, ...(body ? { body } : {}) });
+      return { status: response.status, body: await response.json() as any };
+    };
+    const ask = (n: number, resourceId = 'v1-share', fresh = false) => {
+      const identity = !fresh && guests.get(String(n)) || generateIdentity('guest-device-' + n); guests.set(String(n), identity);
+      return call('/sharing/transport', 'POST', { kind: 'provider-share', resourceId, memberId: 'v1-member-' + n,
+        signingKey: identity.signingKey, transportKey: identity.transportKey }, 'Bearer guest-' + n, false, identity);
+    };
+    expect((await call('/info', 'GET', undefined)).body.features).toContain('linked-provider-shares-v1');
+    expect((await call('/sharing/provider-shares/linked', 'POST', { shareId: 'v1-share' }, 'Bearer unit-owner', false)).status).toBe(401);
+    expect((await call('/sharing/provider-shares/linked', 'POST', { shareId: 'v1-share' })).body).toEqual({ shareId: 'v1-share', linked: true });
+    // A native V2 share keeps its own member book: it can never be linked.
+    const native = await call('/sharing/provider-shares/links', 'POST', { providerId: 'unit-provider', providerLabel: 'Provider',
+      deviceName: 'Host', identityCard: 'unit-verified-card' });
+    expect(native.status).toBe(200);
+    expect(await call('/sharing/provider-shares/linked', 'POST', { shareId: native.body.shareId }))
+      .toMatchObject({ status: 409, body: { error: { code: 'PROVIDER_SHARE_LINK_CONFLICT' } } });
+    // Another account cannot take over or remove the link, even from a certified device of this network
+    // (refused as a foreign identity, or as a link owned by another account); the link keeps working below.
+    expect([403, 409]).toContain((await call('/sharing/provider-shares/linked', 'POST', { shareId: 'v1-share' }, 'Bearer other-owner', true)).status);
+    const foreignRemove = await call('/sharing/provider-shares/linked/v1-share/remove', 'POST', {}, 'Bearer other-owner', true);
+    expect(foreignRemove.status === 403 || foreignRemove.body.removed === false).toBe(true);
+    // The private (local key) book never accepts links.
+    const privateTarget = API + '/private-sharing/provider-shares/linked', privateBody = JSON.stringify({ shareId: 'v1-share' });
+    expect((await fetch(f.relay.url + privateTarget, { method: 'POST', headers: { 'content-type': 'application/json',
+      'x-agent-net-authorization': f.client.header('POST', privateTarget, privateBody) }, body: privateBody })).status).toBe(404);
+    await f.restart();
+    const first = await ask(0);
+    expect(first.body).toMatchObject({ status: 'pending' });
+    const directory = await f.client.request<{ delegationRequests: import('@cindy/agent-net-protocol').DelegationRequest[] }>('GET', '/directory');
+    expect(directory.delegationRequests).toEqual([expect.objectContaining({ kind: 'provider-share', resourceId: 'v1-share', hostDeviceId: 'owner',
+      guestDeviceId: 'guest-device-0', scope: { memberId: 'v1-member-0', guestSubject: 'guest-account', memberVersion: expect.any(Number) } })]);
+    expect((await ask(0)).body.id).toBe(first.body.id);
+    // The host signs device 0; a signed guest holds none of the 64 places for guests still waiting.
+    const delegation = await f.client.acceptDelegationRequest(directory.delegationRequests[0], () => undefined);
+    const signed = new AgentNetClient(f.relay.url, guests.get('0')!, f.certificate, f.rootPublicKey, delegation);
+    await expect(signed.directory()).resolves.toBeDefined();
+    // Another account claiming the same device ID is a separate (unsigned) guest: it neither replaces nor disconnects this one.
+    const impostor = generateIdentity('guest-device-0');
+    expect((await call('/sharing/transport', 'POST', { kind: 'provider-share', resourceId: 'v1-share', memberId: 'v1-member-0',
+      signingKey: impostor.signingKey, transportKey: impostor.transportKey }, 'Bearer impostor', false, impostor)).body).toMatchObject({ status: 'pending' });
+    await expect(signed.directory()).resolves.toBeDefined();
+    // The impostor is one waiting guest; 62 more leave exactly one place.
+    for (let n = 1; n < 63; n++) expect((await ask(n)).status).toBe(200);
+    // Two new guests racing for the last place: the write rechecks it, so exactly one gets in.
+    const raced = await Promise.all([ask(64), ask(65)]);
+    expect(raced.map(response => response.status).sort()).toEqual([200, 429]);
+    expect(raced.find(response => response.status === 429)?.body).toMatchObject({ error: { code: 'TOO_MANY_REQUESTS' } });
+    expect((await ask(66)).status).toBe(429);
+    // The signed device renews with its keys (no new place) but cannot add a new unsigned request with fresh keys.
+    expect((await ask(0)).status).toBe(200);
+    expect((await ask(0, 'v1-share', true)).status).toBe(429);
+    // A guest already waiting may still renew; removing the link withdraws the signed lease at once.
+    expect((await ask(3)).status).toBe(200);
+    expect((await call('/sharing/provider-shares/linked/v1-share/remove', 'POST', {})).body).toEqual({ removed: true });
+    await expect(signed.directory()).rejects.toMatchObject({ code: 'GRANT_INVALID' });
+    expect((await ask(0)).status).toBe(404);
+    // Linking again is a new generation: the old lease stays dead and the guest gets a new request.
+    expect((await call('/sharing/provider-shares/linked', 'POST', { shareId: 'v1-share' })).status).toBe(200);
+    await expect(signed.directory()).rejects.toMatchObject({ code: 'GRANT_INVALID' });
+    const again = await ask(0);
+    expect(again.body.id).not.toBe(first.body.id);
+    // Requests left from the earlier registration can never be signed and no longer hold places.
+    expect((await ask(70)).status).toBe(200);
+    // Another computer of the account takes the share over: the guest's request moves to it under a new ID it can sign.
+    const second = await f.join('second');
+    expect((await call('/sharing/provider-shares/linked', 'POST', { shareId: 'v1-share' }, 'Bearer second-host', second.client)).status).toBe(200);
+    const moved = await ask(0);
+    expect(moved.body.id).not.toBe(again.body.id);
+    const handed = (await second.client.request<{ delegationRequests: import('@cindy/agent-net-protocol').DelegationRequest[] }>('GET', '/directory'))
+      .delegationRequests.find(request => request.id === moved.body.id)!;
+    expect(handed).toMatchObject({ hostDeviceId: 'second', guestDeviceId: 'guest-device-0' });
+    await expect(second.client.acceptDelegationRequest(handed, () => undefined)).resolves.toMatchObject({ hostDeviceId: 'second' });
+  });
+  // 2026-11-27 linked V1 shares are keyed per (networkId, shareId) (agent-net-linked-provider-shares.md, cindy-server PR #1696 P1):
+  // a V1 guest who knows the share ID and links it first in its own network must not block the real host from migrating the share.
+  // Minimal failing input: guest links `shareId` on `account:guest` before host links `shareId` on `account:host`.
+  it('isolates linked Device Link provider shares per network so a guest squatting a share ID cannot block the real host', async () => {
+    const root = generateKeyPairSync('ed25519').privateKey, rootPublicKey = publicBytes(root);
+    const guestHostId = generateIdentity('guest-pc'), realHostId = generateIdentity('host-pc');
+    const guestCert = issueCertificate(root, { networkId: 'account:guest', subject: 'guest-account', identity: guestHostId, role: 'owner' });
+    const hostCert = issueCertificate(root, { networkId: 'account:host', subject: 'host-account', identity: realHostId, role: 'owner' });
+    const actors: Record<string, { accountId: string; deviceId: string; networkId: string }> = {
+      'Bearer squatter': { accountId: 'guest-account', deviceId: 'guest-pc', networkId: 'account:guest' },
+      'Bearer squatter-on-host': { accountId: 'guest-account', deviceId: 'guest-pc', networkId: 'account:host' },
+      'Bearer real-host': { accountId: 'host-account', deviceId: 'host-pc', networkId: 'account:host' },
+      'Bearer approved-guest': { accountId: 'guest-account', deviceId: 'guest-laptop', networkId: 'account:host' },
+    };
+    const f = await fixture({ mode: 'official', bootstrap: undefined, enroll: async (req) => {
+      const c = req.headers['x-test-device'] === 'host-pc' ? hostCert : guestCert;
+      return { certificate: c, rootPublicKey, networkId: c.networkId, name: 'Account network', deviceName: c.deviceId };
+    }, sharing: {
+      async authenticate(req) {
+        const found = actors[String(req.headers.authorization)];
+        if (!found) throw new AppError('UNAUTHORIZED', 401, 'Unit auth rejected');
+        return found;
+      },
+      providers: { hostCapability: 'provider-share-v1', identityCards: {
+        async verify() { return { displayName: 'Unit verified person', avatarUrl: null, region: 'global' as const }; },
+        async inspect() { throw new Error('No cross-region fixture'); },
+      } },
+    } });
+    for (const device of ['guest-pc', 'host-pc']) {
+      expect((await fetch(f.relay.url + API + '/enroll', { method: 'POST', headers: { 'x-test-device': device }, body: '{}' })).status).toBe(200);
+    }
+    const squatterClient = new AgentNetClient(f.relay.url, guestHostId, guestCert, rootPublicKey);
+    const hostClient = new AgentNetClient(f.relay.url, realHostId, hostCert, rootPublicKey);
+    const call = async (target: string, method: string, input: unknown, token: string, signer?: AgentNetClient, applicant?: Identity) => {
+      const resource = API + target, body = input === undefined ? '' : JSON.stringify(input);
+      const response = await fetch(f.relay.url + resource, { method, headers: {
+        authorization: token, ...(body ? { 'content-type': 'application/json' } : {}),
+        ...(signer ? { 'x-agent-net-authorization': signer.header(method, resource, body) } : {}),
+        ...(applicant ? { 'x-agent-net-applicant': Buffer.from(JSON.stringify(createRequestProof(applicant, method, resource, body))).toString('base64url') } : {}),
+      }, ...(body ? { body } : {}) });
+      return { status: response.status, body: await response.json() as any };
+    };
+    // 1. V1 guest squats the known shareId in its own network first.
+    expect(await call('/sharing/provider-shares/linked', 'POST', { shareId: 'v1-shared' }, 'Bearer squatter', squatterClient))
+      .toEqual({ status: 200, body: { shareId: 'v1-shared', linked: true } });
+    // 2. Real host links the same shareId in its own network without conflict.
+    expect(await call('/sharing/provider-shares/linked', 'POST', { shareId: 'v1-shared' }, 'Bearer real-host', hostClient))
+      .toEqual({ status: 200, body: { shareId: 'v1-shared', linked: true } });
+    // 3. Approved guest requests transport against the real host's network; only the real host sees and signs it.
+    const visitor = generateIdentity('guest-laptop');
+    expect((await call('/sharing/transport', 'POST', { kind: 'provider-share', resourceId: 'v1-shared', memberId: 'v1-member-1',
+      signingKey: visitor.signingKey, transportKey: visitor.transportKey }, 'Bearer approved-guest', undefined, visitor)).body)
+      .toMatchObject({ status: 'pending', networkId: 'account:host' });
+    const squatterDir = await squatterClient.request<{ delegationRequests: import('@cindy/agent-net-protocol').DelegationRequest[] }>('GET', '/directory');
+    expect(squatterDir.delegationRequests).toEqual([]);
+    const hostDir = await hostClient.request<{ delegationRequests: import('@cindy/agent-net-protocol').DelegationRequest[] }>('GET', '/directory');
+    expect(hostDir.delegationRequests).toEqual([expect.objectContaining({ resourceId: 'v1-shared', networkId: 'account:host', hostDeviceId: 'host-pc' })]);
+    const delegation = await hostClient.acceptDelegationRequest(hostDir.delegationRequests[0], () => undefined);
+    const signed = new AgentNetClient(f.relay.url, visitor, hostCert, rootPublicKey, delegation);
+    await expect(signed.directory()).resolves.toBeDefined();
+    // 4. Restart preserves both registrations; squatter unlinking its own network (or probing host's) never affects host's lease.
+    await f.restart();
+    const signedAfterRestart = new AgentNetClient(f.relay.url, visitor, hostCert, rootPublicKey, delegation);
+    await expect(signedAfterRestart.directory()).resolves.toBeDefined();
+    expect((await call('/sharing/provider-shares/linked/v1-shared/remove', 'POST', {}, 'Bearer squatter', squatterClient)).body)
+      .toEqual({ removed: true });
+    expect((await call('/sharing/provider-shares/linked/v1-shared/remove', 'POST', {}, 'Bearer squatter-on-host', squatterClient)).status)
+      .toBe(403);
+    await expect(signedAfterRestart.directory()).resolves.toBeDefined();
+    // 5. Real host unlinking withdraws the guest lease immediately.
+    expect((await call('/sharing/provider-shares/linked/v1-shared/remove', 'POST', {}, 'Bearer real-host', hostClient)).body)
+      .toEqual({ removed: true });
+    await expect(signedAfterRestart.directory()).rejects.toMatchObject({ code: 'GRANT_INVALID' });
+  });
   it('drops in-flight datagrams for a removed member without disconnecting healthy peers on the same uplink', async () => {
     const f = await fixture(), removed = await f.join('removed'), healthy = await f.join('healthy');
     const a = await f.client.connect(), c = await healthy.client.connect(); f.uplinks.push(a, c);
@@ -698,7 +875,12 @@ describe('independent V2 relay', () => {
     // Tenants survive a restart; state written before tenants existed infers the owner's network.
     const file = path.join(f.dataDir, 'agent-net-state.json');
     await f.relay.close();
-    const saved = JSON.parse(await readFile(file, 'utf8')); delete saved.primaryNetworkId; await writeFile(file, JSON.stringify(saved));
+    const saved = JSON.parse(await readFile(file, 'utf8')); delete saved.primaryNetworkId;
+    // A linked Device Link share on each network (written as the account sharing service would).
+    const linkedRow = (shareId: string, network: string) => ({ shareId, networkId: network, hostDeviceId: 'host', ownerAccountId: 'account', linkedAt: 1, generation: 1 });
+    saved.sharing = { version: 1, tasks: [], invitations: [], shares: [], links: [], requests: [], credentials: [], bindings: [],
+      ...saved.sharing, linkedShares: [linkedRow('tenant-share', networkId), linkedRow('owner-share', f.certificate.networkId)] };
+    await writeFile(file, JSON.stringify(saved));
     await f.restart();
     expect((await f.client.request<{ tenants: unknown[] }>('GET', '/tenants')).tenants).toEqual([
       expect.objectContaining({ networkId, accountName: 'Bob', devices: 2 })]);
@@ -723,6 +905,7 @@ describe('independent V2 relay', () => {
     expect(JSON.parse(await readFile(file, 'utf8')).privateSharing).toMatchObject({
       tasks: [{ sharedTaskId: retainedTask }], bindings: [{ networkId: f.certificate.networkId }],
     });
+    expect(JSON.parse(await readFile(file, 'utf8')).sharing.linkedShares).toEqual([expect.objectContaining({ shareId: 'owner-share' })]);
     await expect(revived.directory()).rejects.toMatchObject({ code: 'NETWORK_UNKNOWN' });
     expect((await f.client.request<{ tenants: unknown[] }>('GET', '/tenants')).tenants).toEqual([]);
     await expect(f.client.request('DELETE', '/tenants/' + encodeURIComponent(f.certificate.networkId))).rejects.toMatchObject({ code: 'NOT_FOUND' });

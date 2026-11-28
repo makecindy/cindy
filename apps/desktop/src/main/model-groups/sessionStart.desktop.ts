@@ -11,9 +11,14 @@ import { createLogger } from '../logger.js';
 import { getDbClient } from '../localDb/client/current.js';
 import { createMessage } from '../localDb/ipc/messages.js';
 import { messages } from '../localDb/schema.js';
-import { resolver } from './desktopResolver.js';
+import { isSubscriptionProvider } from '../../shared/subscriptionAccounts.js';
+import { readProviderGroupBinding } from '../provider-group/bindings.desktop.js';
+import { readProviderGroup } from '../provider-group/store.js';
+import { readSubscriptionSessionAccount } from '../subscription-accounts/runtime.js';
+import { localProviderView, refreshAutoModelGroupRoutes, resolver } from './desktopResolver.js';
 import { bindModelGroupSession } from './sessionBindings.js';
 import { createModelGroupSessionStart } from './sessionStart.js';
+import { registerModelGroupStartBridge } from './startBridge.js';
 
 const log = createLogger('model-groups:session-start');
 
@@ -55,4 +60,26 @@ export const modelGroupSessionStart = createModelGroupSessionStart({
   locationName: () => t('bots.cloud.unknownDevice' as never) as string,
   now: () => Date.now(),
   createToken: () => randomUUID(),
+  innerChoice: async (sessionId, route) => {
+    // 电脑组：这个任务分到组里哪一台。别的电脑写电脑名，分享来的写组里记下的那个分享的名字；分到本机再看账号。
+    const binding = readProviderGroup(route.providerId) ? readProviderGroupBinding(sessionId) : null;
+    const member = binding ? readProviderGroup(route.providerId)?.members.find((item) => item.key === binding.memberKey) : undefined;
+    if (member && member.kind !== 'local') return member.label || null;
+    // 几个账号的连接：这个任务绑定的那个账号。只有一个账号时不写，免得每条说明都带上账号名。
+    const view = localProviderView(route.providerId);
+    if ((view?.subscriptionAccountKeys?.length ?? 0) < 2) return null;
+    const pool = isSubscriptionProvider(route.providerId) ? route.providerId : view?.subscriptionAccountPool ?? view?.subscriptionPool;
+    if (!isSubscriptionProvider(pool)) return null;
+    const account = await readSubscriptionSessionAccount(pool, { sessionId, model: route.model, routeProviderId: route.providerId });
+    if (account.state !== 'bound') return null;
+    return account.account.identity || (t('providerGroup.member.accountFallback' as never, { index: account.account.number } as never) as string);
+  },
+});
+
+registerModelGroupStartBridge({
+  resolve: (request) => resolver.resolve(request),
+  refresh: () => refreshAutoModelGroupRoutes(),
+  prepare: modelGroupSessionStart.prepare,
+  attach: modelGroupSessionStart.attach,
+  dispatched: modelGroupSessionStart.dispatched,
 });

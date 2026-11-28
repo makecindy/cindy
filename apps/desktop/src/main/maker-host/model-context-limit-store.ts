@@ -35,6 +35,8 @@ import path from 'node:path';
 import type { AgentKind, Catalog } from '@cindy/model-providers';
 import {
   DEFAULT_MODEL_COMPACTION_PCT,
+  MAX_MODEL_COMPACTION_PCT,
+  MIN_MODEL_COMPACTION_PCT,
   modelCompactionTarget,
 } from '../../shared/modelContextLimit.js';
 
@@ -112,7 +114,13 @@ function normalize(raw: unknown): ModelContextLimitPrefs {
   const input = raw as ModelContextLimitPrefs;
   const compactionPcts = Object.fromEntries(
     Object.entries(input.compactionPcts ?? {})
-      .filter(([key, value]) => key && Number.isInteger(value) && value >= 50 && value <= 90)
+      .filter(
+        ([key, value]) =>
+          key &&
+          Number.isInteger(value) &&
+          value >= MIN_MODEL_COMPACTION_PCT &&
+          value <= MAX_MODEL_COMPACTION_PCT,
+      )
       .slice(0, MAX_ENTRIES),
   );
   return {
@@ -157,7 +165,9 @@ export function readModelContextLimits(): Record<string, number> {
 }
 
 export function readModelCompactionPct(providerId: string, modelId: string): number | null {
-  return readPrefs().compactionPcts?.[JSON.stringify([providerId, modelId])] ?? null;
+  const pct = readPrefs().compactionPcts?.[JSON.stringify([providerId, modelId])] ?? null;
+  // 等于默认值的覆盖不是覆盖：与「恢复默认」同义，不该把用户标成已自定义。
+  return pct === DEFAULT_MODEL_COMPACTION_PCT ? null : pct;
 }
 
 /**
@@ -224,16 +234,23 @@ export async function writeModelCompactionWithRefresh(
   refresh: () => Promise<void>,
   refreshAfterRollback: () => Promise<void>,
 ): Promise<void> {
-  if (pct !== null && (!Number.isInteger(pct) || pct < 50 || pct > 90))
+  if (
+    pct !== null &&
+    (!Number.isInteger(pct) ||
+      pct < MIN_MODEL_COMPACTION_PCT ||
+      pct > MAX_MODEL_COMPACTION_PCT)
+  )
     throw new Error('invalid compaction percentage');
   const filePath = ownerScopedUserDataPath('model-context-limit-prefs.json');
+  // 默认值不算覆盖：写 90 等同恢复默认（删条目），不落一份冗余的“已自定义”。
+  const desired = pct === DEFAULT_MODEL_COMPACTION_PCT ? null : pct;
   const previous = { ...readPrefs().compactionPcts };
   const next = { ...previous };
   for (const target of targets) {
     if (!target.providerId || !target.modelId) throw new Error('invalid compaction target');
     const key = JSON.stringify([target.providerId, target.modelId]);
-    if (pct === null) delete next[key];
-    else next[key] = pct;
+    if (desired === null) delete next[key];
+    else next[key] = desired;
   }
   if (Object.keys(next).length > MAX_ENTRIES)
     throw new Error('compaction preference capacity exceeded');
@@ -245,7 +262,7 @@ export async function writeModelCompactionWithRefresh(
     const restored = { ...originalStore.read().compactionPcts };
     for (const target of targets) {
       const key = JSON.stringify([target.providerId, target.modelId]);
-      if ((restored[key] ?? null) !== pct) continue;
+      if ((restored[key] ?? null) !== desired) continue;
       if (previous[key] === undefined) delete restored[key];
       else restored[key] = previous[key];
     }
@@ -374,6 +391,9 @@ export const __testing = {
   MAX_ENTRIES,
   invalidate(): void {
     store.invalidateIfChanged();
+    // mtime 守卫会漏掉同一刻的直接改写（Windows CI 上文件系统 mtime 粒度更粗），
+    // 测试里直接改文件后必须真读盘，不能吃缓存里的旧值。
+    dropCachedStore();
   },
 };
 

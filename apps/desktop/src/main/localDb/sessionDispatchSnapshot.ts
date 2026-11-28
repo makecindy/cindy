@@ -44,6 +44,12 @@ export interface SessionRowSnapshot {
   sdkSessionId?: string | null;
   /** Authoritative `/clear` visibility boundary (unix ms). */
   clearedAt?: number | null;
+  /** 上一轮结束时间(unix ms)，供智能路由持续托管判断供应商提示缓存是否已过期。 */
+  lastTurnEndedAt?: number | null;
+  /** 当前轮次开始时间(unix ms)。 */
+  activeTurnStartedAt?: number | null;
+  /** 已知最近上下文 token 数，供智能路由任务中间换源避开小窗口缩容。 */
+  contextTokens?: number | null;
 }
 
 async function selectSessionRowSnapshot(id: string): Promise<SessionRowSnapshot | null> {
@@ -71,6 +77,9 @@ async function selectSessionRowSnapshot(id: string): Promise<SessionRowSnapshot 
       sideChatPromoted: sessions.sideChatPromoted,
       model: sessions.model,
       sdkSessionId: sessions.sdkSessionId,
+      lastTurnEndedAt: sessions.lastTurnEndedAt,
+      activeTurnStartedAt: sessions.activeTurnStartedAt,
+      contextTokens: sessions.contextTokens,
     })
     .from(sessions)
     .where(eq(sessions.id, id))
