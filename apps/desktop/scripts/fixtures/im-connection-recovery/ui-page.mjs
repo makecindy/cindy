@@ -80,7 +80,8 @@ export default {
       if (!ui.data.retry) return;
       await connect.click();
       await alert.waitFor({ state: 'hidden' });
-      await page.getByText(await ui.t('settings.telegramBot.status.connected'), { exact: true }).first().waitFor();
+      // 连上后状态与用户 ID 同在一行(「已连接 · 我的用户 ID …」)。
+      await page.getByText(await ui.t('settings.telegramBot.status.connected')).first().waitFor();
       await ui.capture('connected');
       return;
     }

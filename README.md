@@ -233,6 +233,8 @@ the legacy field when the new endpoint is absent.
 
 ## Contributing
 
+The [contributor wall](CONTRIBUTORS.md) credits people whose bug reports and suggestions helped shape a release.
+
 Contributions go through pull requests into `main`. Read
 [`CONTRIBUTING.en.md`](CONTRIBUTING.en.md) first, then use
 [`.github/PULL_REQUEST_TEMPLATE.md`](.github/PULL_REQUEST_TEMPLATE.md).

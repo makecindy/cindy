@@ -374,8 +374,6 @@ function GuildRows(props: {
             value={state.mode}
             options={props.modeOptions}
             onValueChange={props.onMode}
-            height={34}
-            optionHeight={28}
             optionClassName="text-12"
           />
           {state.mode === 'all' ? (

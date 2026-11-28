@@ -19,6 +19,7 @@ export function resolveLinuxInputBinary(): Promise<string> {
     for (const name of [
       'main.c',
       'x11.h',
+      'x11-text.h',
       'gnome.h',
       'build.mjs',
       'virtual-keyboard-unstable-v1.xml',

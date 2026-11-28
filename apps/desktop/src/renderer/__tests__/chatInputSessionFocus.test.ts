@@ -4,6 +4,7 @@ import { runInNewContext } from 'node:vm';
 import ts from 'typescript';
 import { describe, expect, it, vi } from 'vitest';
 import { WORKLOUDER_CREATOR_LIT_TASK_KEY_COUNT } from '../../shared/workLouderCodex';
+import { createSidebarTaskPublisher } from '../features/cc-agent/lib/sidebarTaskPublication';
 
 const chatInputSource = readFileSync(
   resolve(__dirname, '..', 'components', 'new-chat', 'ChatInput.tsx'),
@@ -490,7 +491,9 @@ it.each([
               : visible.map((row) => row.id),
         isSecondaryWindow: () => false,
         useCallback: (publish: () => void) => publish,
-        publishedTaskKeyRef: { current: '' },
+        // 发布器用真实的实现，这样载荷的截断与去重都在沙箱里同样生效。
+        taskPublisherRef: { current: null },
+        createSidebarTaskPublisher,
         WORKLOUDER_CREATOR_LIT_TASK_KEY_COUNT,
         window: { electronAPI: { workLouderCodex: { publishTasks } } },
       },

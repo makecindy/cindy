@@ -64,6 +64,23 @@ describe('remote companion scheduled quota wait', () => {
   });
 });
 
+// Unit: an execution-device Worker stores its Lead in orcaRemoteLead, not
+// orcaRole. A genuine quota terminal still cannot hold a Lead assignment until reset.
+it.each(['local', 'execution-device'] as const)('does not schedule a quota reset wait for a %s Orca Worker', async kind => {
+  const eligibility = createAutomaticContinueEligibility({
+    ownerEpoch: () => 'owner', isPaused: () => false,
+    readSession: async () => kind === 'local' ? { orcaRole: 'worker' } : {
+      orcaRemoteLead: JSON.stringify({ leadSessionId: 'lead', leadDeviceId: 'device', workerLabel: 'worker' }),
+    },
+    isShared: () => false, goalOwnsRecovery: async () => false, readCompanion: async () => null,
+    ownsCompanionInput: () => false,
+  });
+  const h = harness({ isEligible: eligibility.usageLimit });
+  expect(await h.guard.onTurnError('worker', LIMIT)).toBe(false);
+  expect(h.timers).toHaveLength(0);
+  expect(await eligibility.providerGroup('worker', { kind: 'failure', token: 1 })).toBe(true);
+});
+
 function harness(overrides: Partial<UsageLimitAutoResumeDeps> = {}) {
   const timers: Array<{ fn: () => void; delayMs: number; cleared: boolean }> = [];
   let tokenSeq = 0;
@@ -115,6 +132,8 @@ describe('isAccountUsageLimitError', () => {
   it('accepts account limits and rejects overload or unrelated errors', () => {
     expect(isAccountUsageLimitError(LIMIT)).toBe(true);
     expect(isAccountUsageLimitError({ codexErrorInfo: 'usageLimitExceeded', message: 'x' })).toBe(true);
+    expect(isAccountUsageLimitError({ reason: 'acp-usage-limit', message: 'Individual quota reached.' })).toBe(true);
+    expect(isAccountUsageLimitError({ reason: 'acp-overloaded', message: 'The plugin engine service is temporarily busy.' })).toBe(false);
     expect(isAccountUsageLimitError({ errorStatus: 529, message: 'overloaded_error' })).toBe(false);
     expect(isAccountUsageLimitError({ sdkError: 'billing_error', message: 'credit balance too low' })).toBe(false);
     expect(isAccountUsageLimitError({ sdkError: 'billing_error', message: 'quota exceeded' })).toBe(false);

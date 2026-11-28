@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
-import { createRef } from 'react';
+import { createRef, useState } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('react-i18next', () => ({
@@ -11,6 +11,7 @@ vi.mock('react-i18next', () => ({
 }));
 
 import { Input, Textarea } from '../input';
+import { Popover, PopoverContent, PopoverTrigger } from '../popover';
 import { SearchInput } from '../search-input';
 
 function inputClass(): string {
@@ -198,5 +199,101 @@ describe('SearchInput', () => {
     expect(document.activeElement).toBe(box);
     const icon = container.querySelector('svg');
     expect(icon?.closest('[aria-hidden="true"]')).not.toBeNull();
+  });
+});
+
+/*
+ * 测试价值
+ * - 生产入口与可观察结果：SearchInput 组件内置的清空按钮；读屏能否找到「commonUi.clearSearch」
+ *   按钮、点击后调用方收到的 onChange('') / onClear、焦点落点，以及按下与点击对外层的影响。
+ * - 规则依据：主人裁决 2026-11-27「清空 X 要有，所有搜索框都要有」；DESIGN.md §4 Search fields
+ *   （有内容时右侧清空是标配，disabled / readOnly 不显示，不改 Esc，不关所在浮层）。
+ * - 现有覆盖缺口：之前只有设置搜索和文件筛选各自手写清空按钮，组件层没有这项行为。
+ * - 最小失败输入：value="ab" 时找不到清空按钮；点击后焦点不回输入框；按下没有 preventDefault
+ *   （输入框失焦，靠失焦收起的面板会被关掉）；点击冒泡到外层 onClick；Popover 被点关。
+ * - tier：unit（jsdom 渲染真实组件与真实 Radix Popover）。
+ */
+describe('SearchInput clear button', () => {
+  afterEach(cleanup);
+
+  function Controlled({
+    initial,
+    onClear,
+    disabled,
+    readOnly,
+  }: { initial: string; onClear?: () => void; disabled?: boolean; readOnly?: boolean }) {
+    const [value, setValue] = useState(initial);
+    return (
+      <SearchInput value={value} onChange={setValue} onClear={onClear} disabled={disabled}
+        readOnly={readOnly} aria-label="Find" />
+    );
+  }
+
+  const clearButton = () => screen.queryByRole('button', { name: 'commonUi.clearSearch' });
+
+  it('appears only while there is text, and clicking it empties the field and refocuses it', () => {
+    const onClear = vi.fn();
+    render(<Controlled initial="" onClear={onClear} />);
+    const box = screen.getByRole('textbox', { name: 'Find' }) as HTMLInputElement;
+    expect(clearButton()).toBeNull();
+
+    fireEvent.change(box, { target: { value: 'ab' } });
+    const button = clearButton()!;
+    expect(button).not.toBeNull();
+    expect(button.getAttribute('type')).toBe('button');
+
+    // 按下时阻止默认行为：输入框不失焦。
+    expect(fireEvent.mouseDown(button)).toBe(false);
+    fireEvent.click(button);
+    expect(box.value).toBe('');
+    expect(onClear).toHaveBeenCalledTimes(1);
+    expect(document.activeElement).toBe(box);
+    expect(clearButton()).toBeNull();
+  });
+
+  it('is not offered on a disabled or read-only field', () => {
+    render(<Controlled initial="ab" disabled />);
+    expect(clearButton()).toBeNull();
+    cleanup();
+    render(<Controlled initial="ab" readOnly />);
+    expect(clearButton()).toBeNull();
+  });
+
+  it('keeps a surrounding popover open and does not reach outer click handlers', () => {
+    const outerClick = vi.fn();
+    function InPopover() {
+      const [value, setValue] = useState('ab');
+      const [open, setOpen] = useState(true);
+      return (
+        <Popover open={open} onOpenChange={setOpen}>
+          <PopoverTrigger>open</PopoverTrigger>
+          <PopoverContent>
+            <div role="presentation" onClick={outerClick}>
+              <SearchInput surface="panel" autoFocus value={value} onChange={setValue} aria-label="Find" />
+            </div>
+          </PopoverContent>
+        </Popover>
+      );
+    }
+    render(<InPopover />);
+    const button = clearButton()!;
+    fireEvent.pointerDown(button);
+    fireEvent.mouseDown(button);
+    fireEvent.pointerUp(button);
+    fireEvent.mouseUp(button);
+    fireEvent.click(button);
+    const box = screen.getByRole('textbox', { name: 'Find' }) as HTMLInputElement;
+    expect(box.value).toBe('');
+    expect(document.activeElement).toBe(box);
+    expect(outerClick).not.toHaveBeenCalled();
+  });
+
+  it('sits beside caller trailing content instead of replacing it', () => {
+    render(
+      <SearchInput value="ab" onChange={() => {}} aria-label="Find"
+        trailing={<button type="button">Aa</button>} />,
+    );
+    expect(clearButton()).not.toBeNull();
+    expect(screen.getByRole('button', { name: 'Aa' })).not.toBeNull();
   });
 });

@@ -1,4 +1,4 @@
-import type { IMMessageEvent } from '@cindy/im';
+import type { IMAttachment, IMMessageEvent } from '@cindy/im';
 import {
   projectAutoReviewUserReferences,
   type AutoReviewQuotedMessage,
@@ -10,12 +10,20 @@ import type { TaskSource } from '@cindy/slack-hook-protocol';
  * Auto-review references for a personal IM message: only what the user pointed at
  * with this message — its delivered attachments (adapters merge the quoted message's
  * media in) and the message it replies to, both taken from the channel adapter's
- * event. Group background and `contextAttachments` are not pointed at and stay out.
+ * event. Group background stays out of `<referenced_content>` counts/quotes; exact
+ * Host-managed file paths from `attachments` and `contextAttachments` are projected
+ * strictly as read-only attachment files for this turn.
  */
 export function imAutoReviewReferences(
-  event: Pick<IMMessageEvent, 'attachments' | 'replyContext'>,
+  event: Pick<IMMessageEvent, 'attachments' | 'replyContext'> & {
+    contextAttachments?: readonly (Pick<IMAttachment, 'absPath'> & Partial<IMAttachment>)[];
+  },
 ): AutoReviewUserReferences | undefined {
   const reply = event.replyContext;
+  const readOnlyAttachmentPaths = [
+    ...event.attachments.map((attachment) => attachment.absPath),
+    ...(event.contextAttachments ?? []).map((attachment) => attachment.absPath),
+  ];
   return projectAutoReviewUserReferences({
     attachments: countAttachments(event.attachments),
     quotedMessages: reply
@@ -28,6 +36,7 @@ export function imAutoReviewReferences(
           },
         ]
       : [],
+    ...(readOnlyAttachmentPaths.length > 0 ? { readOnlyAttachmentPaths } : {}),
   });
 }
 
@@ -64,10 +73,12 @@ export function hookReplyTarget(
 export function hookAutoReviewReferences(
   replyTarget: AutoReviewQuotedMessage | undefined,
   delivered: { images: number; files: number },
+  readOnlyAttachmentPaths?: readonly string[],
 ): AutoReviewUserReferences | undefined {
   return projectAutoReviewUserReferences({
     attachments: delivered,
     quotedMessages: replyTarget ? [replyTarget] : [],
+    ...(readOnlyAttachmentPaths?.length ? { readOnlyAttachmentPaths } : {}),
   });
 }
 

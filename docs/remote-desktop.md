@@ -823,11 +823,35 @@ rather than guessed. Changed monitor geometry releases control before further
 input. Keys follow the Linux Xorg evdev keycode layout. Mouse buttons and both
 wheel axes are supported, with accumulated small wheel deltas.
 
-Unicode text uses an unused, unpressed X keycode with a temporary symbol mapping;
-the exact mapping is restored before acknowledgement. It does not overwrite the
-clipboard. Text batches contain at most 64 code points to bound the paced native
-input within the heartbeat deadline. This sends input to the focused X client;
-application/IME handling is separate from native event delivery. EOF, SIGTERM
+Text first uses stable keys from the current XKB layout, comparing legacy and
+Unicode keysyms by their Unicode value. Shift and the layout's actual
+ISO_Level3_Shift selector cover third/fourth levels (not a Ctrl+Alt shortcut
+approximation), with paired modifier release and Caps/Num Lock handling.
+Ordinary exact symbols across all supported selector states take precedence over
+Unicode-equivalent aliases, with keypad aliases considered last; terminal
+application-keypad control sequences must not replace available punctuation.
+Characters absent from that layout use
+an unused, unpressed keycode with a temporary symbol mapping. This requires a
+focused application advertising the ordered EWMH `_NET_WM_PING` protocol: its
+reply fences each remapped key before the helper reuses or restores the mapping.
+An X server roundtrip or fixed delay alone is not a client-consumption fence.
+Clients without this protocol still accept text present in their layout. The
+host sends a whole-text `text-check` over the existing private helper pipe and
+waits for its ACK before sending per-character commands. It uses the same native
+planner without posting keys or changing the mapping; unsupported text (including
+an otherwise supported prefix) is refused before any character is injected.
+This is not a device-link wire change. Preflight is not a transaction against
+later focus/layout changes or application failure; a later failure may be partial.
+Missing replies time out as an input failure, never a successful text ACK. Window
+disappearance, cancellation and timeout also restore the original mapping.
+
+Text does not overwrite the clipboard. X11 commands contain one code point per
+native ACK, allowing two two-second client fences within a fresh six-second
+execution budget and the parent's ten-second ACK deadline. The framing queue is
+bounded at 256 KiB so a valid 4096-code-point paste fits even with per-character
+JSON overhead. The existing heartbeat still bounds a stalled parent; a logical
+paste can span many ACKs and last longer than six seconds without being cut off.
+Application/IME handling remains separate from native event translation. EOF, SIGTERM
 and the six-second heartbeat deadline release held keys and buttons. X11 capture,
 lock-screen support and other optional features are not broadened by this backend.
 
@@ -837,15 +861,23 @@ Wire operations and payloads are unchanged: official and self-hosted relays keep
 forwarding the same opaque input requests. Older viewers can use the X11 host
 without a new capability field; only the host needs the native backend update.
 
-Explicit native integration (requires `Xvfb` and the built input helper):
+Explicit native integration (requires `Xvfb`, `setxkbmap`, `xkbcomp` and the built input helper):
 `python3 apps/desktop/native/remote-desktop/linux-input/x11-test.py <helper>`.
 It creates its own authenticated X server and tests pointer coordinates, mouse
-buttons, wheel, Unicode symbols, mapping restoration, malformed-batch atomicity,
+buttons, wheel, delayed Unicode consumption, legacy current-layout text,
+unsupported-text rejection, mapping restoration, malformed-batch atomicity,
 and key/button release on EOF, SIGTERM and heartbeat loss. It never injects into
 the user's desktop. `linux-capture/x11-test.py <capture-helper>` does the same for
 cursor-free X11 capture. Host/unit tests separately cover geometry, opt-in, ownership,
 and the unsupported-input message. Full Air-to-GX102 UI validation remains a
 separate acceptance step after installing a build containing this change.
+
+The same production text entry also has a display-free native regression in
+`linux-input/x11-text-test.c`, run by
+`node --test --test-name-pattern='X11 text' apps/desktop/native/remote-desktop/linux-input/test.mjs`.
+It requires a C compiler and Xlib/XKB headers, but no X server or real waits. Its
+in-memory delayed receiver covers mapping lifetime, stale/wrong ping replies,
+timeouts, cancellation, destroyed clients, and preservation of layout/lock state.
 
 ## Managed X11 desktop (cloud instance)
 
@@ -1740,6 +1772,48 @@ backends under ASan/UBSan. Checked on Ubuntu 24.04 (GNOME 46): both tests pass
 with gdk-pixbuf and libturbojpeg. Frame-rate cost on real desktops, a real
 monitor, a running Cindy build and a phone/Mac viewer remain for manual
 validation.
+
+## Linux remote clipboard: X11 and GNOME Wayland (2026-11-27)
+
+Ordinary Linux X11 desktops (Ubuntu Xorg, XFCE cloud desktops and managed Xvfb
+containers) and GNOME Wayland sessions now advertise `clipboardText`,
+`clipboardContent`, `clipboardSync` and `clipboardInline` alongside Hyprland,
+using the existing device-link clipboard wire contract and Desktop size limits
+(24 million pixels, 16 MiB PNG, 512,000 text characters, no file-only transfers
+or clipboard logging).
+
+- **X11** (`linuxX11Clipboard.ts`): enables for any local X11 Unix display
+  socket (`DISPLAY=:N[.M]`) without `WAYLAND_DISPLAY`, `XDG_SESSION_TYPE=wayland`
+  or `HYPRLAND_INSTANCE_SIGNATURE`, without requiring `--cloud-instance` or
+  `/usr/bin/xdotool`. The display socket is pinned by `ino`/`dev`/`ctimeMs` and
+  rechecked before and after every read and write. Local OS login sessions
+  (`XDG_SESSION_ID` set) require `/usr/bin/loginctl` and verify
+  `LockedHint=no` (plus `Active=yes` on seated sessions and matching UID) before
+  and after every operation; `powerMonitor.getSystemIdleState(1) === 'locked'`
+  also blocks access on all X11 sessions. Headless Xvfb cloud desktops without
+  an OS login session keep working with socket pinning alone.
+- **GNOME Wayland** (`linuxGnomeClipboard.ts` + `native/remote-desktop/linux-gnome-clipboard.py`):
+  probes `org.gnome.Mutter.RemoteDesktop` and `org.gnome.ScreenSaver` via
+  `--check` without creating a session or showing GNOME's sharing indicator.
+  During an active control session, a lazy isolated Python GIO helper opens one
+  `org.gnome.Mutter.RemoteDesktop.Session` with `EnableClipboard`, tracks
+  `SelectionOwnerChanged` (including GNOME 46's `(as)` tuple form) as an O(1)
+  generation counter, reads external owners via non-blocking `SelectionRead`
+  pipes, serves offered formats via non-blocking `SelectionWrite` transfers, and
+  gates every operation on `org.gnome.ScreenSaver.GetActive() === false`,
+  Mutter's `Closed` signal, and logind lock state when `XDG_SESSION_ID` is set.
+  The helper retires on sync stop, lease end, lock-screen transition, quit or
+  15 s idle so GNOME's remote-control indicator is never left active.
+  Mutter exposes `CLIPBOARD` only (no `PRIMARY` selection), so manual copy
+  verifies the lock state and falls back to `CLIPBOARD`.
+- **Shortcuts**: manual remote paste sends `Shift+Insert` on X11 and GNOME
+  Wayland (matching Chrome/GTK/Qt and avoiding literal `^V` in terminals);
+  automatic clipboard sync never injects keystrokes. Local in-app share-link
+  copy keeps the Hyprland `wlr-data-control` workaround scoped to Hyprland so
+  GNOME Wayland never starts a Mutter remote session for local copies.
+  Verification on macOS covers Desktop Vitest suites and Python unit tests
+  (`linux-gnome-clipboard.test.py`); live GNOME 46 and Ubuntu/XFCE desktop
+  transfers remain for Linux verification.
 
 ## Clipboard and connection handoff
 

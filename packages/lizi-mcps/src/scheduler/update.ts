@@ -12,6 +12,7 @@ import { assertCronAndTimezoneValid, buildJsonResult, withScheduler } from './_s
 import { isLocalDevice, runOnDevice, writeDeviceShape } from './_devices.js';
 import { schedulePrTriggerSchema, assertWebhookReceiverAvailable, webhookSourceSchema } from './_webhook.js';
 import { LOCAL_SCHEDULE_AGENT_DEVICE } from './listModels.js';
+import { attachMultiPrSessionWarning, attachRemoteMultiPrSessionWarning } from './_prSessionGuard.js';
 import type { LiziMcpSessionContext, SchedulerMcpDeps } from '../types.js';
 import type { SchedulerToolRegistry } from '../cindy_schedulerToolRegistry.js';
 import { stabilizePreRunHookForUpdate, type UpdateScheduleInput } from '@cindy/maker-scheduler';
@@ -224,6 +225,7 @@ export function registerScheduleUpdateTool(
         return runOnDevice(deps, device, async () => undefined, {
           op: 'update',
           args: expected ? [id, remotePatch, expected] : [id, remotePatch],
+          map: (data) => attachRemoteMultiPrSessionWarning(deps, device!, data),
         });
       }
       return withScheduler(deps, async (scheduler) => {
@@ -278,7 +280,7 @@ export function registerScheduleUpdateTool(
           }
           input = { ...input, targetSessionId: sessionId };
         }
-        return scheduler.updateFromCurrent(id, async (existing) => {
+        const updated = await scheduler.updateFromCurrent(id, async (existing) => {
           // worktree 模式以 workingDir 为基仓(workdir-resolver 会拒绝无目录的 worktree
           // 任务,每次 fire 都失败)。清目录时若任务仍开着 useWorktree 且本次没关,
           // 明确拒绝而不是写出一条跑不动的任务(codex review)。
@@ -326,6 +328,7 @@ export function registerScheduleUpdateTool(
             stabilizeCommand: deps.hookScript.stabilizeCommand,
           });
         }, expected);
+        return attachMultiPrSessionWarning(scheduler, updated);
       });
     },
   });

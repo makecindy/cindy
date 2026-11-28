@@ -1,5 +1,7 @@
 import { DownloadImageMenuItem } from '@/components/chat/DownloadImageMenuItem';
 import { parseSettingsNavigationUrl } from '@cindy/maker-shared/settings-navigation';
+import { describeExternalLink, externalLinkLabel } from '@cindy/maker-shared/external-link';
+import { GITHUB_LINK_CHIP_CLASS, GithubLinkChipBody, type GithubLinkInfo } from './GithubLinkChip';
 import { SettingsLinkChip } from './SettingsLinkChip';
 import '@/styles/chatContentDirection.css';
 import { VideoSitePreview } from './VideoSitePreview';
@@ -137,6 +139,8 @@ import { ChatVideoView } from './ChatVideoView';
 import { isManagedMarkdownVideoUrl, markdownMediaFilename } from './markdownMedia';
 import { MarkdownDiffBlock } from './MarkdownDiffBlock';
 import { MarkdownMermaidBlock } from './MarkdownMermaidBlock';
+import { MarkdownCarouselBlock } from './MarkdownCarouselBlock';
+import { isCarouselFenceLanguage } from '@cindy/maker-shared/markdown-carousel';
 import { TextLightbox } from './lazyPreviewLightboxes';
 import { ModelLightbox } from './ModelLightbox';
 import { useFileChipContextMenu } from './useFileChipContextMenu';
@@ -195,6 +199,18 @@ function isMermaidCodeChild(child: ReactNode): boolean {
   if (!isValidElement(child)) return false;
   const className = (child.props as { className?: string })?.className ?? '';
   return /\b(language-)?mermaid\b/.test(className);
+}
+
+function isCarouselCodeChild(child: ReactNode): boolean {
+  if (!isValidElement(child)) return false;
+  const className = (child.props as { className?: string })?.className ?? '';
+  for (const token of className.split(/\s+/)) {
+    if (token.startsWith('language-') && isCarouselFenceLanguage(token.slice('language-'.length))) {
+      return true;
+    }
+    if (isCarouselFenceLanguage(token)) return true;
+  }
+  return false;
 }
 
 // Module-level constants — defined once, never recreated across renders.
@@ -428,6 +444,12 @@ interface MarkdownRendererProps {
    */
   resolveImageSrc?: (src: string) => string | null;
   /**
+   * 群聊正文：裸写的 http(s) 链接（链接文字就是地址本身）改显示短标签——GitHub 用
+   * `owner/repo#12` 等官方短写法，其它站点显示站点加缩短后的路径；悬停 title 给完整地址。
+   * 作者手写的 `[文字](地址)` 不受影响。只从地址推导，不发任何请求。
+   */
+  readableBareLinks?: boolean;
+  /**
    * doc 模式专用 opt-in: 在每个 block 元素根上写入 `data-source-line="<N>"`,
    * N = 该节点在源码里的 1-based 起始行号 (取自 mdast `node.position.start.line`)。
    * 用于 doc 模式下 preview ↔ edit 切换时锚定 viewport 位置 —— FileBodyView 在切
@@ -439,6 +461,18 @@ interface MarkdownRendererProps {
    * 方案 A 的安全前提)。
    */
   emitSourceLines?: boolean;
+  /**
+   * Explicit remote-media origin for document previews (e.g. TextLightbox) that
+   * render files from a remote device/SSH session without acting as a chat reply.
+   */
+  remoteMediaOrigin?: RemoteMediaOrigin;
+  /**
+   * Enable gallery navigation (`←`/`→`) when clicking embedded images inside a
+   * standalone Markdown document preview wrapped with ImageGalleryContext.
+   */
+  enableDocumentGallery?: boolean;
+  /** Internal recursion guard: carousel slides render nested carousels as plain code. */
+  insideCarousel?: boolean;
   /** Notifies host cards when an in-app image, text or 3D preview lightbox opens or closes. */
   onPreviewOpenChange?: (open: boolean) => void;
 }
@@ -884,6 +918,8 @@ function LightboxImage({
   onZoom,
   streaming = false,
   allowLocalFileOpen = false,
+  documentPreview = false,
+  insideCarousel = false,
   ...props
 }: {
   src?: string;
@@ -891,6 +927,8 @@ function LightboxImage({
   onZoom: (src: string) => void;
   streaming?: boolean;
   allowLocalFileOpen?: boolean;
+  documentPreview?: boolean;
+  insideCarousel?: boolean;
   [key: string]: unknown;
 }) {
   const { t } = useTranslation();
@@ -948,7 +986,7 @@ function LightboxImage({
         aria-label={zoomLabel}
         title={t('chat.media.clickToZoom')}
         disabled={!src}
-        style={{ cursor: src ? 'pointer' : undefined, marginTop: 18, marginBottom: 18, padding: 0, border: 0, background: 'transparent', lineHeight: 0 }}
+        style={{ cursor: src ? 'pointer' : undefined, marginTop: insideCarousel ? 0 : 18, marginBottom: insideCarousel ? 0 : 18, padding: 0, border: 0, background: 'transparent', lineHeight: 0 }}
         onClick={() => {
           if (src) onZoom(src);
         }}
@@ -962,7 +1000,11 @@ function LightboxImage({
         <ChatLoadingImage
           src={src}
           alt={alt ?? ''}
-          style={{ maxWidth: 'min(100%, 50vw, 480px)', maxHeight: 'min(40vh, 420px)', height: 'auto' }}
+          style={{
+            maxWidth: documentPreview ? '100%' : 'min(100%, 50vw, 480px)',
+            maxHeight: documentPreview ? '65vh' : 'min(40vh, 420px)',
+            height: 'auto',
+          }}
           onError={onError}
           {...props}
         />
@@ -1525,6 +1567,18 @@ export function QuestionReferenceText({ text, onPreviewOpenChange }: { text: str
   </>;
 }
 
+/**
+ * An autolinked URL whose text is the address itself: GitHub objects become an inline chip,
+ * other sites a short label. null keeps the author's own text.
+ */
+function readableBareLink(href: string, children: ReactNode): { label: string; github: GithubLinkInfo | null } | null {
+  const text = nodeToText(children).trim();
+  if (text !== href && `http://${text}` !== href && `https://${text}` !== href) return null;
+  const info = describeExternalLink(href);
+  if (!info) return null;
+  return { label: externalLinkLabel(info), github: info.kind === 'github' ? info : null };
+}
+
 function MarkdownTargetLink({
   href,
   children,
@@ -1540,6 +1594,7 @@ function MarkdownTargetLink({
   remoteMediaOrigin,
   sessionId,
   showFileIcon,
+  githubChip,
 }: {
   href?: string;
   children: ReactNode;
@@ -1563,6 +1618,8 @@ function MarkdownTargetLink({
   remoteMediaOrigin?: RemoteMediaOrigin;
   /** 当前会话 id;就位时外链 / html 文件左键弹"打开方式"菜单。 */
   sessionId?: string;
+  /** Bare GitHub URL rendered as an inline chip (readableBareLinks); the anchor keeps every action. */
+  githubChip?: GithubLinkInfo | null;
 }) {
   const { t } = useTranslation();
   const openWith = useOpenWithMenu({ sessionId });
@@ -1724,10 +1781,11 @@ function MarkdownTargetLink({
   const prLink =
     allowPrivilegedLinks && target.kind === 'external' ? parsePrLinkUrl(target.href) : null;
   const effectiveSessionId = sessionId ?? fileCtx.sessionId;
+  const chip = githubChip && target.kind === 'external' ? githubChip : null;
   const renderAnchor = (prHoverProps?: PrLinkHoverTriggerProps) => (
     <a
       href={target.href}
-      className={MARKDOWN_LINK_CLASS}
+      className={chip ? GITHUB_LINK_CHIP_CLASS : MARKDOWN_LINK_CLASS}
       onKeyDown={activateInlineLinkFromKeyboard}
       onClick={(event) => {
         prHoverProps?.onDismiss();
@@ -1745,6 +1803,8 @@ function MarkdownTargetLink({
         else inlineMenu.onContextMenu(e);
       }}
       {...anchorProps}
+      // The PR hover popover already shows the details; a native tooltip would stack on it.
+      title={prLink ? undefined : (anchorProps.title as string | undefined)}
       onPointerEnter={(event) => {
         (anchorProps.onPointerEnter as ((e: React.PointerEvent<HTMLAnchorElement>) => void) | undefined)?.(event);
         prHoverProps?.onPointerEnter(event);
@@ -1758,7 +1818,7 @@ function MarkdownTargetLink({
         prHoverProps?.onPointerDown(event);
       }}
     >
-      {children}
+      {chip ? <GithubLinkChipBody link={chip} sessionId={effectiveSessionId} /> : children}
     </a>
   );
 
@@ -1856,7 +1916,11 @@ const MarkdownRendererBase = memo(function MarkdownRendererBase({
   currentSessionTitle,
   allowPrivilegedLinks = true,
   resolveImageSrc,
+  readableBareLinks = false,
   emitSourceLines = false,
+  remoteMediaOrigin: remoteMediaOriginProp,
+  enableDocumentGallery = false,
+  insideCarousel = false,
   gallerySection,
   onPreviewOpenChange,
 }: MarkdownRendererProps) {
@@ -1913,12 +1977,20 @@ const MarkdownRendererBase = memo(function MarkdownRendererBase({
   const setLightboxSrc = useCallback((src: string | null) => setLightbox(src ? { src } : null), []);
   // Which repeat of an image was clicked, in the reply section the gallery lists it
   // under. Read at click time: positions refer to the rendered text.
-  const occurrenceSourceRef = useRef({ section: gallerySection, rendered: repairedContent });
-  occurrenceSourceRef.current = { section: gallerySection, rendered: repairedContent };
+  const occurrenceSourceRef = useRef({
+    section: gallerySection,
+    rendered: repairedContent,
+    preserveLineCount: emitSourceLines,
+  });
+  occurrenceSourceRef.current = {
+    section: gallerySection,
+    rendered: repairedContent,
+    preserveLineCount: emitSourceLines,
+  };
   const clickedOccurrence = useCallback((target: string, offset: number | undefined) => {
-    const { section, rendered } = occurrenceSourceRef.current;
+    const { section, rendered, preserveLineCount } = occurrenceSourceRef.current;
     if (offset === undefined || section === undefined) return undefined;
-    const index = markdownImageOccurrence(rendered, target, offset);
+    const index = markdownImageOccurrence(rendered, target, offset, preserveLineCount);
     return index === undefined ? undefined : { section, index };
   }, []);
   // 远程入方向:远程会话里 markdown 的图片/音频 URL 指向远端机器,按来源改写到
@@ -1926,17 +1998,19 @@ const MarkdownRendererBase = memo(function MarkdownRendererBase({
   // 会话 → undefined,改写为 no-op。origin 从 ChatSessionFileContext 取(provider
   // 在 MessageStream 顶层统一订阅 remoteProjectsStore,origin-injection race 在那里
   // 处理;context 更新穿透 MessageItem/AssistantMessage 的 memo,deviceId 一就位本
-  // 气泡即重渲)。门控 currentSessionId:TextLightbox 等挂在聊天树内、但渲染的是
-  // "文件内容"而非会话消息的调用方不传 currentSessionId,此时不做远程改写,与引入
-  // context 前行为一致。ssh 的 workdir 取 context 的 workingDir(与 props 的
+  // 气泡即重渲)。门控 currentSessionId:TextLightbox 等渲染"文件内容"的调用方不传
+  // currentSessionId(避免触发聊天专属的 workspace BFS 与深链),如需远程媒体改写则显式
+  // 传入 remoteMediaOrigin prop。ssh 的 workdir 取 context 的 workingDir(与 props 的
   // workingDir 同源,聊天调用方都由 session 传入)。
   const sessionFileCtx = useChatSessionFile();
   const remoteMediaOrigin = useMemo(
     () =>
-      currentSessionId
-        ? toRemoteMediaOrigin(sessionFileCtx.origin, sessionFileCtx.workingDir)
-        : undefined,
-    [currentSessionId, sessionFileCtx],
+      remoteMediaOriginProp !== undefined
+        ? remoteMediaOriginProp
+        : currentSessionId
+          ? toRemoteMediaOrigin(sessionFileCtx.origin, sessionFileCtx.workingDir)
+          : undefined,
+    [remoteMediaOriginProp, currentSessionId, sessionFileCtx],
   );
   // 本机会话消息里的相对媒体路径，直接拼接找不到时按任务目录搜索（见 useWorkspaceMediaPath）。
   // 不传 currentSessionId 的调用方渲染的是文件内容而非会话消息，保持原拼接行为。
@@ -1967,22 +2041,88 @@ const MarkdownRendererBase = memo(function MarkdownRendererBase({
       // renderer 整体替换成带 data-source-line 注入的版本。chat 调用方不传 prop
       // → 默认 false → 整段是 falsy 短路, components 对象与之前完全一致。
       ...(emitSourceLines ? makeSourceLineWrappers() : {}),
+      pre: ({ children, node, ...props }) => {
+        const lineAttr = emitSourceLines ? lineAttrFor(node) : {};
+        const firstChild = Array.isArray(children) ? children[0] : children;
+        if (!insideCarousel && isCarouselCodeChild(firstChild)) {
+          const codeChildren = (firstChild as { props: { children?: ReactNode } }).props.children;
+          const raw = nodeToText(codeChildren);
+          const carouselOffset = node?.position?.start.offset ?? 0;
+          const fallback = (
+            <CodeBlockPre {...props} {...lineAttr}>
+              {children}
+            </CodeBlockPre>
+          );
+          return (
+            <MarkdownCarouselBlock
+              raw={raw}
+              sourceLine={lineAttr['data-source-line']}
+              fallback={fallback}
+              renderSlide={(slideMarkdown, slideIndex) => (
+                <MarkdownRendererBase
+                  workingDir={workingDir}
+                  content={slideMarkdown}
+                  isStreaming={false}
+                  mediaStreaming={embeddedMediaStreaming}
+                  localFileRefs={localFileRefs}
+                  currentSessionId={currentSessionId}
+                  currentSessionTitle={currentSessionTitle}
+                  allowPrivilegedLinks={allowPrivilegedLinks}
+                  resolveImageSrc={resolveImageSrc}
+                  remoteMediaOrigin={remoteMediaOriginProp}
+                  enableDocumentGallery={enableDocumentGallery}
+                  gallerySection={
+                    gallerySection !== undefined
+                      ? `${gallerySection}\u0000carousel:${carouselOffset}:${slideIndex}`
+                      : undefined
+                  }
+                  insideCarousel
+                  onPreviewOpenChange={onPreviewOpenChange}
+                />
+              )}
+            />
+          );
+        }
+        const basePre = baseComponents.pre;
+        return basePre
+          ? (basePre as unknown as (p: Record<string, unknown>) => ReactNode)({
+              node,
+              children,
+              ...props,
+              ...lineAttr,
+            })
+          : (
+              <CodeBlockPre {...props} {...lineAttr}>
+                {children}
+              </CodeBlockPre>
+            );
+      },
       img: ({ src, alt, node, ...props }) => {
         const rawLocalSrc = node?.properties?.[RAW_LOCAL_IMAGE_SRC_PROP];
         const rawTarget = node?.properties?.[RAW_IMAGE_TARGET_PROP];
         const imageProps = { ...props };
         delete (imageProps as Record<string, unknown>)[RAW_LOCAL_IMAGE_SRC_PROP];
         delete (imageProps as Record<string, unknown>)[RAW_IMAGE_TARGET_PROP];
-        // Task reply images browse the task's image gallery, identified by the
-        // destination as written (`src` arrives re-encoded for URLs). File
-        // previews (no task id) keep the single-image viewer.
+        // Task reply images and document previews (enableDocumentGallery) browse
+        // their surface's image gallery, identified by the destination as written
+        // (`src` arrives re-encoded for URLs). Other callers keep single-image zoom.
         const galleryTarget =
-          currentSessionId && typeof rawTarget === 'string' && rawTarget ? rawTarget : undefined;
+          (currentSessionId || enableDocumentGallery) && typeof rawTarget === 'string' && rawTarget
+            ? rawTarget
+            : undefined;
         const sourceOffset = node?.position?.start.offset;
         if (resolveImageSrc) {
           const resolved = typeof src === 'string' && src ? resolveImageSrc(src) : null;
           return resolved ? (
-            <LightboxImage streaming={false} src={resolved} alt={alt} onZoom={setLightboxSrc} {...imageProps} />
+            <LightboxImage
+              streaming={false}
+              src={resolved}
+              alt={alt}
+              onZoom={setLightboxSrc}
+              documentPreview={enableDocumentGallery}
+              insideCarousel={insideCarousel}
+              {...imageProps}
+            />
           ) : null;
         }
         const writtenSrc = typeof rawLocalSrc === 'string' ? rawLocalSrc : src;
@@ -2023,6 +2163,8 @@ const MarkdownRendererBase = memo(function MarkdownRendererBase({
                       galleryTarget,
                       galleryOccurrence: galleryTarget ? clickedOccurrence(galleryTarget, sourceOffset) : undefined,
                     })}
+                  documentPreview={enableDocumentGallery}
+                  insideCarousel={insideCarousel}
                   {...imageProps}
                   allowLocalFileOpen={resolveMediaInWorkspace && !mediaOrigin}
                 />
@@ -2136,6 +2278,7 @@ const MarkdownRendererBase = memo(function MarkdownRendererBase({
             />
           );
         }
+        const bare = readableBareLinks && href ? readableBareLink(href, children) : null;
         return (
           <MarkdownTargetLink
             href={targetHref}
@@ -2145,13 +2288,14 @@ const MarkdownRendererBase = memo(function MarkdownRendererBase({
             setLightboxSrc={setLightboxSrc}
             setTextLightboxFile={setTextLightboxFile}
             setModelLightboxPath={setModelLightboxPath}
-            anchorProps={safeProps}
+            anchorProps={bare ? { ...safeProps, title: href } : safeProps}
+            githubChip={bare?.github}
             allowPrivilegedLinks={allowPrivilegedLinks}
             fromBarePath={fromBarePath}
             remoteMediaOrigin={remoteMediaOrigin}
             sessionId={currentSessionId}
           >
-            {children}
+            {bare ? bare.label : children}
           </MarkdownTargetLink>
         );
       },
@@ -2165,9 +2309,18 @@ const MarkdownRendererBase = memo(function MarkdownRendererBase({
       currentSessionTitle,
       allowPrivilegedLinks,
       resolveImageSrc,
+      readableBareLinks,
       remoteMediaOrigin,
+      remoteMediaOriginProp,
       resolveMediaInWorkspace,
       embeddedMediaStreaming,
+      enableDocumentGallery,
+      gallerySection,
+      insideCarousel,
+      onPreviewOpenChange,
+      clickedOccurrence,
+      setLightboxSrc,
+      sessionFileCtx.localConfirmed,
     ],
   );
   const markdownRootRef = useRef<HTMLDivElement>(null);

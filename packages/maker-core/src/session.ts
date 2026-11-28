@@ -218,7 +218,7 @@ export type SessionStartupPreferences = Readonly<Pick<StartSessionOptions,
   'userPrompt' | 'makerMemoryEnabled' | 'displayReasoning'>>;
 
 export interface SessionOptions {
-  beforeTurn?: (session: Session) => Promise<void>;
+  beforeTurn?: (session: Session, signal?: AbortSignal) => Promise<void>;
   hostStartupPreferences?: SessionStartupPreferences;
   id: string;
   /** 与 Agent MCP context 同源的本次内存实例代号；省略时由 Session 自铸。 */
@@ -513,6 +513,50 @@ function createSendReservation(generation: number): SendReservation {
   };
 }
 
+/**
+ * Align declared capabilities with the methods actually exposed by a remote
+ * device handle (`agentDeviceId`). A peer may run an older or newer Cindy build
+ * (including after a reconnect), so never advertise a capability whose backing
+ * handle method is absent on this computer.
+ */
+function capabilitiesForRemoteHandle(base: Capabilities, handle: AgentSessionHandle): Capabilities {
+  const overrides: Partial<Capabilities> = {};
+  let changed = false;
+  if (base?.rewind?.supported && typeof handle.commitRewindFiles !== 'function') {
+    overrides.rewind = {
+      supported: false,
+      reason: 'platform-limited',
+      message: 'Update Cindy on the computer running the agent to rewind this task',
+    };
+    changed = true;
+  }
+  if (base?.extraDirs?.supported && typeof handle.setExtraDirs !== 'function') {
+    overrides.extraDirs = {
+      supported: false,
+      reason: 'platform-limited',
+      message: 'Update Cindy on the computer running the agent to change extra directories',
+    };
+    changed = true;
+  }
+  if (base?.writableDirs?.supported && typeof handle.setWritableDirs !== 'function') {
+    overrides.writableDirs = {
+      supported: false,
+      reason: 'platform-limited',
+      message: 'Update Cindy on the computer running the agent to change writable directories',
+    };
+    changed = true;
+  }
+  if (base?.manualCompact?.supported && typeof handle.compactSession !== 'function') {
+    overrides.manualCompact = {
+      supported: false,
+      reason: 'platform-limited',
+      message: 'Update Cindy on the computer running the agent to compact this task',
+    };
+    changed = true;
+  }
+  return changed ? { ...base, ...overrides } : base;
+}
+
 export class Session {
   /** Caller preferences before generated context; memory-only recovery input. */
   readonly hostStartupPreferences?: SessionStartupPreferences;
@@ -527,9 +571,10 @@ export class Session {
   readonly workDir: string;
   private readonly initialCapabilities: Capabilities;
   get capabilities(): Capabilities {
-    return this.agentKind === 'acp'
+    const base = this.agentKind === 'acp'
       ? this.handle.negotiatedCapabilities ?? this.initialCapabilities
       : this.initialCapabilities;
+    return this.agentDeviceId ? capabilitiesForRemoteHandle(base, this.handle) : base;
   }
 
   /** ACP-only command names used when sanitizing host-added wire notes. */
@@ -707,7 +752,7 @@ export class Session {
   private turnControlState: TurnControlState | null = null;
   private readonly asyncUserQuestions: AsyncUserQuestions;
 
-  private readonly beforeTurn?: (session: Session) => Promise<void>;
+  private readonly beforeTurn?: (session: Session, signal?: AbortSignal) => Promise<void>;
 
   constructor(opts: SessionOptions) {
     this.beforeTurn = opts.beforeTurn;
@@ -770,7 +815,7 @@ export class Session {
         if (!this.interactionListener) {
           this.logger.warn('interaction request received but no listener attached, denying', { kind: req.kind, requestId: req.requestId });
           if (req.kind === 'ask_user_question') {
-            return { kind: 'ask_user_question', answers: {} };
+            return { kind: 'ask_user_question', answers: {}, dismissed: true };
           }
           if (req.kind === 'plan_review') {
             return { kind: 'plan_review', behavior: 'deny', reason: 'no_listener_attached', dismissed: true };
@@ -1141,7 +1186,15 @@ export class Session {
       const cancelledBeforePreparation = finishCancelledBeforeDispatch();
       if (cancelledBeforePreparation !== null) return cancelledBeforePreparation;
       if (afterTurnReserved) await afterTurnReserved();
-      await this.beforeTurn?.(this);
+      if (this.beforeTurn) {
+        try {
+          await this.beforeTurn(this, reservation.abortController.signal);
+        } catch (error) {
+          const cancelled = finishCancelledBeforeDispatch();
+          if (cancelled !== null) return cancelled;
+          throw error;
+        }
+      }
       const cancelledAfterReservation = finishCancelledBeforeDispatch();
       if (cancelledAfterReservation !== null) return cancelledAfterReservation;
       this.handle.validateSendOptions?.(handleOpts);
@@ -2053,7 +2106,9 @@ export class Session {
 
   /** Subscribe to per-session negotiated capability changes (plugin ACP engines). */
   onCapabilitiesChange(listener: (capabilities: Capabilities) => void): () => void {
-    return this.handle.onCapabilitiesChange?.(listener) ?? (() => undefined);
+    return this.handle.onCapabilitiesChange?.((next) => {
+      listener(this.agentDeviceId ? capabilitiesForRemoteHandle(next, this.handle) : next);
+    }) ?? (() => undefined);
   }
 
   async getContextUsage(): Promise<ContextUsageData> {
@@ -2526,6 +2581,14 @@ export class Session {
       throw new NotSupportedError('extraDirs', { supported: false, reason: 'not-implemented' });
     }
     await this.handle.setExtraDirs(dirs, libraryRoot, remote);
+  }
+
+  /**
+   * 附加只读目录变更后是否需要回收并重建运行时；仅对真正把 `extraDirs` 冻结在
+   * 建连握手期的适配器返回 true，避免无谓重启靠 prompt 注入热更新的会话。
+   */
+  requiresRuntimeRecycleForExtraDirs(): boolean {
+    return this.handle.requiresRuntimeRecycleForExtraDirs?.() === true;
   }
 
   /**
@@ -3039,6 +3102,21 @@ export class Session {
       }
       return generation;
     };
+    if (this.isPreDispatchReservation()) {
+      // handle.send() has not started for this reservation yet, so no provider
+      // event can belong to this.turnGeneration (including across subsequent
+      // event-loop iterations while onAccepted / beforeProviderStart awaits).
+      const priorGeneration = Math.max(0, this.turnGeneration - 1);
+      if (this.pendingPriorGeneration === priorGeneration) {
+        if (event.type === 'done' || isTerminalAgentErrorEvent(event)) {
+          this.pendingPriorGeneration = null;
+          this.staleTerminalQueuedGeneration = null;
+        } else if (this.isIdleStatusEvent(event)) {
+          this.staleTerminalQueuedGeneration = priorGeneration;
+        }
+      }
+      return attributed(priorGeneration);
+    }
     const inFlightGeneration =
       this.sendReservation?.generation ??
       (this.isUnacceptedCurrentSend() ? this.unacceptedSendGeneration : null);
@@ -3196,6 +3274,11 @@ export class Session {
     if (event.sessionInstanceId === undefined) {
       event.sessionInstanceId = this.instanceId;
     }
+    const preDispatchReservation = this.isPreDispatchReservation();
+    const unsettledPriorDuringPreDispatch =
+      preDispatchReservation &&
+      this.pendingPriorGeneration !== null &&
+      this.pendingPriorGeneration === this.turnGeneration - 1;
     this.lastResolvedInFlightSend = false;
     if (event.sessionTurnGeneration === undefined) {
       event.sessionTurnGeneration = this.resolveSessionTurnGeneration(
@@ -3205,11 +3288,16 @@ export class Session {
       );
     }
     const resolvedGeneration = event.sessionTurnGeneration ?? observedGeneration;
+    const settlesUnsettledPriorDuringPreDispatch =
+      unsettledPriorDuringPreDispatch &&
+      resolvedGeneration === this.turnGeneration - 1;
     // Both the source stamp and the dequeued wait must name this turn.
     // A leftover tail can be stamped N while next() recaptures N+1, or the
     // reverse when an in-flight start-failure adopts the new generation from
-    // an older wait. Current-turn cleanup requires agreement.
+    // an older wait. Current-turn cleanup requires agreement, and a reservation
+    // still awaiting pre-dispatch hooks can never own a provider event.
     const isCurrentGeneration =
+      !preDispatchReservation &&
       resolvedGeneration === this.turnGeneration &&
       observedGeneration === this.turnGeneration;
     // leftover / 旧 generation 的产品事件不能把当前 turn 的 stall 日志时钟往前拨。
@@ -3260,7 +3348,6 @@ export class Session {
     // to it: Codex can enqueue the previous turn's terminal error after flipping
     // its handle idle. Only runEventLoop's generation adoption may transfer
     // ownership to the new attempt.
-    const preDispatchReservation = this.isPreDispatchReservation();
     const sameGenerationError =
       this.terminalEventObservedGeneration === this.turnGeneration &&
       this.terminalEventObservedKind === 'error';
@@ -3276,6 +3363,7 @@ export class Session {
     const reservationWindowLeftover =
       isTerminal &&
       !isBackgroundEvent &&
+      !settlesUnsettledPriorDuringPreDispatch &&
       this.isUnacceptedCurrentSend() &&
       resolvedGeneration !== this.turnGeneration &&
       (
@@ -3367,10 +3455,17 @@ export class Session {
       this.unsolicitedTurnGeneration = null;
       this.clearTurnControl(resolvedGeneration);
     }
+    // A prior turn whose own terminal had not arrived before the next send was
+    // reserved (`phase === 'accepting'`) must still finish settling (usage,
+    // leases, listeners) on its prior generation while the next send has not
+    // yet crossed into `dispatching`. Unsolicited pre-first-turn terminals
+    // (`pendingPriorGeneration === null`) and duplicate tails remain fenced.
     const isLeftoverProductTerminal =
       !isBackgroundEvent &&
+      !settlesUnsettledPriorDuringPreDispatch &&
       (
         resolvedGeneration < this.turnGeneration ||
+        preDispatchReservation ||
         lateErrorAfterDoneSnapshot ||
         reservationWindowLeftover
       ) &&
@@ -3916,10 +4011,20 @@ export class Session {
     try {
       const iterator = this.handle.events()[Symbol.asyncIterator]();
       while (true) {
-        const awaitingGeneration = this.turnGeneration;
+        // While a send reservation is still in pre-dispatch (`accepting`),
+        // `this.turnGeneration` has been reserved ahead of `handle.send()`.
+        // Anchor `awaitingGeneration` to the prior generation across multi-event
+        // bursts so follow-up events cannot adopt `turnGeneration` early. Once
+        // the prior turn has settled (`pendingPriorGeneration === null`), the
+        // parked wait may adopt `turnGeneration` as soon as dispatch begins.
+        const preDispatch = this.isPreDispatchReservation();
+        const awaitingGeneration = preDispatch
+          ? Math.max(0, this.turnGeneration - 1)
+          : this.turnGeneration;
         const awaitingCanAdoptNextGeneration =
           awaitingGeneration === 0 ||
-          this.terminalEventObservedGeneration === awaitingGeneration;
+          this.terminalEventObservedGeneration === awaitingGeneration ||
+          (preDispatch && this.pendingPriorGeneration === null);
         this.eventLoopAwaiting = true;
         let result: IteratorResult<AgentEvent>;
         try {
@@ -4093,9 +4198,17 @@ export class Session {
   ): boolean {
     // Only a wait that already saw N's terminal can mis-adopt leftover done as N+1.
     if (awaitingGeneration <= 0) return false;
-    if (this.lastObservedTerminalGeneration !== awaitingGeneration) return false;
     // Only an error-then-paired-done leftover can look like N+1 success.
-    if (this.lastObservedTerminalKind !== 'error') return false;
+    const priorObservedError =
+      (
+        this.lastObservedTerminalGeneration === awaitingGeneration &&
+        this.lastObservedTerminalKind === 'error'
+      ) ||
+      (
+        this.terminalObservedDuringReservation?.kind === 'error' &&
+        awaitingGeneration === this.turnGeneration - 1
+      );
+    if (!priorObservedError) return false;
     if (this.isNewTurnProgressEvent(event) || this.isForegroundRunningStatus(event)) {
       return false;
     }

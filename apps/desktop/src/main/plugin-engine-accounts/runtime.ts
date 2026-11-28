@@ -315,7 +315,11 @@ async function readUsage(
     let usage: GhostHarnessUsage | null = null;
     try {
       const dir = dirOf(ref, accountId);
-      usage = await (dir === undefined ? readPluginHarnessUsage(ref.engineKey) : readPluginHarnessUsage(ref.engineKey, dir));
+      usage = await (force
+        ? readPluginHarnessUsage(ref.engineKey, dir, { force: true })
+        : dir === undefined
+          ? readPluginHarnessUsage(ref.engineKey)
+          : readPluginHarnessUsage(ref.engineKey, dir));
     } catch {
       usage = cached?.usage ?? null;
     }
@@ -767,6 +771,64 @@ export async function readPluginEngineTaskUsage(
   const usage = await readUsage(state, ref, binding.accountId);
   assertOwner(state);
   return usage;
+}
+
+/**
+ * Assignable signed-in account usage snapshots for a plugin engine provider (the engine itself or a
+ * taken-out account provider), for owner-enabled quota sharing. Returns `undefined` when
+ * `providerId` is not a plugin engine, `'unsupported'` when the live engine does not declare
+ * `reportsUsage`, and an empty list when unavailable or no serving account is admissible.
+ * Never returns account identities or credential paths.
+ */
+export async function readPluginEnginePoolAccountUsages(
+  providerId: string,
+): Promise<'unsupported' | Array<{ usage: GhostHarnessUsage | null }> | undefined> {
+  if (!parsePluginEngineProviderId(providerId)) return undefined;
+  const ref = resolvePluginEngineProvider(providerId);
+  if (!ref) return [];
+  const engine = liveEngine(ref.engineKey);
+  if (!engine || engine.availability.state === 'unavailable') return [];
+  if (!engine.reportsUsage) return 'unsupported';
+  if (!engine.accounts?.methods.length) {
+    const owner = activeOwnerScopeKey();
+    const usage = await readPluginHarnessUsage(ref.engineKey).catch(() => null);
+    if (activeOwnerScopeKey() !== owner || isAppSessionBoundaryPending()) {
+      throw new Error('Subscription account owner changed');
+    }
+    const latest = liveEngine(ref.engineKey);
+    if (!latest || latest.availability.state === 'unavailable') return [];
+    if (!latest.reportsUsage) return 'unsupported';
+    return [{ usage }];
+  }
+  const state = currentRuntime();
+  const pool = effectivePluginEnginePool(ref.engineKey);
+  const accounts = providerAccounts(pool, ref.suffix).filter((account) => !account.paused);
+  if (accounts.length === 0) return [];
+  const reads = await Promise.all(
+    accounts.map(async (account) => {
+      const [status, usage] = await Promise.all([
+        readStatus(state, ref, account.id).catch(() => undefined),
+        readUsage(state, ref, account.id).catch(() => null),
+      ]);
+      return { account, status, usage };
+    }),
+  );
+  assertOwner(state);
+  const latestRef = resolvePluginEngineProvider(providerId);
+  const latestEngine = latestRef && liveEngine(latestRef.engineKey);
+  if (!latestRef || !latestEngine || latestEngine.availability.state === 'unavailable') return [];
+  if (!latestEngine.reportsUsage) return 'unsupported';
+  const latestServing = new Map(
+    providerAccounts(effectivePluginEnginePool(latestRef.engineKey), latestRef.suffix)
+      .filter((account) => !account.paused)
+      .map((account) => [account.id, account]),
+  );
+  return reads
+    .filter((entry) => {
+      const latestAccount = latestServing.get(entry.account.id);
+      return latestAccount !== undefined && admissibleFor(entry.status, latestAccount);
+    })
+    .map((entry) => ({ usage: entry.usage }));
 }
 
 /* ── Views ─────────────────────────────────────────────────────────────── */
