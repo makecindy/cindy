@@ -238,6 +238,7 @@ export interface CcMeta {
    * readMessageSourceDevice（宽容解析）。
    */
   sourceDevice?: MessageSourceDevice;
+  dispatchRoute?: import('@cindy/maker-shared/message-source').MessageDispatchRoute;
   /** 插件任务派发的消息（readMessageSourcePlugin 读取）。 */
   sourcePlugin?: MessageSourcePlugin;
   /** Group source of an explicitly sent private assistant message. */

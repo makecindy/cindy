@@ -198,8 +198,8 @@ describe('远程机器切换入口并入 SidebarTopNav(置顶段上方,固定不
 
     // 本轮确认的菜单统一带图标，分组入口直接表达侧栏组标题与缩进任务行。
     expect(filterSource).toContain('Icon={SidebarGroupsIcon}');
+    // 2026-11-28:项目排序并进「排序」子菜单,不再有自己的一级行与行首图标。
     expect(filterSource).toContain('Icon={ArrowDownWideNarrow}');
-    expect(filterSource).toContain('Icon={ListOrdered}');
   });
 
   // 2026-08-12 用户裁决:置顶段头的显示样式按钮显示**当前选中**的模式图标,
@@ -297,7 +297,7 @@ describe('远程机器切换入口并入 SidebarTopNav(置顶段上方,固定不
     );
     expect(selectItem).toMatch(/event\.preventDefault\(\);\s*onSelect\(\);/);
     expect(selectItem).not.toContain('keepOpen');
-    expect(filterSource).toContain('checked={groupDevice}');
+    expect(filterSource).toContain('checked: groupDevice');
     expect(filterSource).not.toContain("disabled={sortBy === 'manual'}");
   });
 
@@ -306,9 +306,10 @@ describe('远程机器切换入口并入 SidebarTopNav(置顶段上方,固定不
     const filterSource = read('features', 'cc-agent', 'sidebar', 'SidebarFilterPopover.tsx');
     // 说明挂在选项表上(与 labelKey / Icon 同源),不在渲染处硬编码文案。
     expect(filterSource).toMatch(
-      /value: 'priority',\s*\n\s*labelKey: 'ccAgent\.sidebar\.filterSortBy\.priority',\s*\n\s*tipKey: 'ccAgent\.sidebar\.filterSortByTip\.priority',/,
+      /value: 'priority',\s*\n\s*labelKey: 'ccAgent\.sidebar\.filterSortBy\.priority',\s*\n\s*hintKey: 'ccAgent\.sidebar\.filterSortByHint\.priority',\s*\n\s*tipKey: 'ccAgent\.sidebar\.filterSortByTip\.priority',/,
     );
-    // recency / manual 名字自解释,不配说明——菜单不该变成说明书。
+    // recency / manual 名字自解释,不配悬停说明——菜单不该变成说明书。
+    // (2026-11-28 起每个排序选项行尾另有一句灰字 hintKey,悬停说明仍只给优先级。)
     expect(filterSource).not.toMatch(/filterSortBy\.recency',\s*\n?\s*tipKey/);
     expect(filterSource).not.toMatch(/filterSortBy\.manual',\s*\n?\s*tipKey/);
     // side="right":菜单贴侧栏右缘,提示往上下会压住相邻选项。
@@ -357,7 +358,7 @@ describe('远程机器切换入口并入 SidebarTopNav(置顶段上方,固定不
     expect(filterSource).toContain('Icon={ListChecks}');
     expect(filterSource).toContain('Icon={Folder}');
     expect(filterSource).toContain('Icon={Bot}');
-    expect(filterSource).toContain('Icon={CalendarClock}');
+    // 2026-11-28:最近活跃改为小标题 + 一排分段按钮,不再是带图标的子菜单行。
     expect(filterSource).toContain('Icon={Info}');
   });
 

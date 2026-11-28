@@ -1180,6 +1180,10 @@ function buildRemoteDesktopInput(platform: ForgePlatform, arch: ForgeArch): void
         path.join(__dirname, 'native', 'remote-desktop', 'linux-viewer-display.py'),
         path.join(destDir, 'linux-viewer-display.py'),
       );
+      fs.copyFileSync(
+        path.join(__dirname, 'native', 'remote-desktop', 'linux-gnome-clipboard.py'),
+        path.join(destDir, 'linux-gnome-clipboard.py'),
+      );
       // Optional, ABI-pinned compositor integration. Other Linux distributions
       // still package normally and report privacy unavailable.
       // A skipped optional build must not ship an earlier checkout's plugin.
