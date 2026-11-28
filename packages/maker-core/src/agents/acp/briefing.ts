@@ -4,7 +4,9 @@
  * Plugin engines get no Cindy system prompt (docs/plans/acp-plugin-bridge.md), so without this
  * they cannot know which plugins and Skills the user installed: the built-in engines learn the
  * plugin roster from their system prompt and the Skills from their native Skill loading. The
- * user chose (2026-11-24) to send only these two lists, nothing else from the system prompt.
+ * user chose (2026-11-24) to send these two capability lists, not the Cindy system prompt.
+ * On 2026-11-27 the user also approved the shared Orca discovery note for eligible new local
+ * ordinary tasks with cindy_orca, in place of (not alongside) role-specific instructions.
  */
 
 /** The Cindy MCP server that carries the installed-plugin gateway (ghost_list / ghost_info / ghost_call). */

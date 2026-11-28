@@ -103,7 +103,8 @@ describe('group owner speaker', () => {
     ).toBe('[渠道说明] 系统追加，不是用户消息。本条来自飞书群 (chat_id: oc_x)，发言人 (user_id: ou_o)，是主人。');
     expect(
       buildImChannelNote('feishu', { chatKind: 'group', chatId: 'oc_x', senderId: 'ou_m', senderIsOwner: false }),
-    ).toBe('[渠道说明] 系统追加，不是用户消息。本条来自飞书群 (chat_id: oc_x)，发言人 (user_id: ou_m)。');
+    // 2026-11-24「群成员也能提问」: 群里非主人的发言同样写明不是主人, 不让模型把成员的请求当成主人的授权。
+    ).toBe('[渠道说明] 系统追加，不是用户消息。本条来自飞书群 (chat_id: oc_x)，发言人 (user_id: ou_m)，不是主人。');
     expect(
       imChannelNoteSourceFromEvent({ chatId: 'c1', speaker: { id: 'u2', name: 'Ann', isOwner: false } }),
     ).toEqual({ chatKind: 'group', chatId: 'c1', senderId: 'u2', senderName: 'Ann' });

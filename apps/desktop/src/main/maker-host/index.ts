@@ -122,7 +122,7 @@ import { setAgentAppUpdateSessionHost } from '../agent-app-update/index.js';
 import { isAppUpdateOwnerTurn } from '../agent-app-update/callerAuthority.js';
 import { markKnownOrcaWorkerSession } from '../maker-ipc/orcaManualInterrupt.js';
 import { markOrcaMcpHydratedIfNeeded } from '../maker-ipc/orcaMcpHydrationCache.js';
-import { appendOrcaDiscoveryPrompt, preparePersistedOrcaSessionStart } from '../maker-ipc/orcaSessionStartOptions.js';
+import { acpOrcaDiscoveryHandoff, appendOrcaDiscoveryPrompt, isLocalAcpOrcaDiscoveryStartup, preparePersistedOrcaSessionStart } from '../maker-ipc/orcaSessionStartOptions.js';
 import {
   hydrateBotProfileRuntime,
   markBotProfileRuntimeApplied,
@@ -290,6 +290,7 @@ import {
 import { ensureCurrentAccountProviderReadiness } from './account-provider-readiness-ensure.js';
 import { ACCOUNT_PROVIDER_NOT_READY_CODE } from '../../shared/accountProviderReadiness.js';
 import { listBotImConnectionsForBot } from '../im/shared/botImConnectionStore.js';
+import { listPersonalChannelsForCompanion } from '../im/shared/personalChannelStore.js';
 import {
   getRejectedCodexDownshiftModel,
   getObservedCodexUpstreamCapacity,
@@ -2504,8 +2505,13 @@ export function getMaker(): Maker {
         agentKind: companionToolAgentKind(input.agentKind),
       }),
       // 伙伴绑了哪些平台的机器人(不含凭证): 主任务据此挂渠道原生 API 工具(见 hydrate 内注释)。
-      listBotImChannels: ({ botId }) =>
-        [...new Set(listBotImConnectionsForBot(botId).map((connection) => connection.channel))],
+      // 同时覆盖伙伴自有连接(bot-im-connections)与设置里通过「谁来回复」交给这位伙伴的个人机器人。
+      listBotImChannels: ({ botId }) => [
+        ...new Set([
+          ...listBotImConnectionsForBot(botId).map((connection) => connection.channel),
+          ...listPersonalChannelsForCompanion(botId),
+        ]),
+      ],
       listToolsets: async ({ botId, agentKind, workingDir, remoteHostId }) => {
         const registry = getPluginRegistry();
         return Promise.all(
@@ -2700,15 +2706,21 @@ export function getMaker(): Maker {
             opts.vendorOptions = { ...opts.vendorOptions };
             delete opts.vendorOptions[STARTUP_GHOST_TOOLS_OWNER_KEY];
           }
-          if (['claude-code', 'codex', 'pi'].includes(opts.agentKind) && !opts.reviewMode && !opts.vendorOptions?.orcaRole) {
+          const builtinDiscovery = ['claude-code', 'codex', 'pi'].includes(opts.agentKind) && !opts.reviewMode && !opts.vendorOptions?.orcaRole;
+          if (opts.agentKind === 'acp' && !opts.agentDeviceId && !opts.deviceHosted && opts.vendorOptions?.orcaRole) {
+            acpOrcaDiscoveryHandoff.consume(sessionId);
+          }
+          const localAcpDiscovery = isLocalAcpOrcaDiscoveryStartup(opts) &&
+            (!opts.resumeSessionId || acpOrcaDiscoveryHandoff.hasPending(sessionId));
+          if (builtinDiscovery || localAcpDiscovery) {
             const owner = activeOwnerScopeKey();
             const row = await getSessionRowSnapshotStrict(sessionId).catch(error => {
               desktopMakerLogger.warn('Session startup source lookup failed', { sessionId, error: String(error) });
               return undefined;
             });
             if (owner === activeOwnerScopeKey() && !isAppSessionBoundaryPending()) {
-              appendOrcaDiscoveryPrompt(opts, row, (id, dir) => getPluginRegistry().isEnabled(id, dir), isManagedDialogueWorkspace);
-              if (!opts.remoteHostId && !opts.agentDeviceId && row?.source === 'desktop') {
+              appendOrcaDiscoveryPrompt(opts, row, (id, dir) => getPluginRegistry().isEnabled(id, dir), isManagedDialogueWorkspace, sessionId);
+              if (builtinDiscovery && !opts.remoteHostId && !opts.agentDeviceId && row?.source === 'desktop') {
                 opts.vendorOptions = { ...opts.vendorOptions, [STARTUP_GHOST_TOOLS_OWNER_KEY]: owner };
               }
             }

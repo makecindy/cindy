@@ -3,7 +3,9 @@ import { describe, expect, it, vi } from 'vitest';
 import { RECOMMENDED_PAGE_CONTROL_EXTENSION_STORE_URL } from '../../../../shared/browserBackend.js';
 import { RealProfileError } from '../../browser-real-profile/types.js';
 import {
+  classifyChromiumProcessEntries,
   classifyChromiumProcesses,
+  inspectUserBrowserProcesses,
   isUserBrowserRunning,
   openExtensionStoreInUserBrowser,
   startUserBrowser,
@@ -170,19 +172,107 @@ describe('startUserBrowser', () => {
     ]);
   });
 
-  it('skips launching when the normal-profile browser is already running', async () => {
+  it('skips launching when the normal-profile browser is already running with a window or unknown window state', async () => {
     const launch = vi.fn(async () => undefined);
+    const resolveBrowser = () => ({
+      kind: 'chrome' as const,
+      executablePath: '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+      userDataDir: '/Users/alice/Library/Application Support/Google/Chrome',
+    });
+    for (const hasWindow of [undefined, true] as const) {
+      await startUserBrowser({
+        platform: 'darwin',
+        launch,
+        inspectProcesses: async () => ({ normalRunning: true, customProfileRunning: false, hasWindow }),
+        resolveBrowser,
+      });
+    }
+    expect(launch).not.toHaveBeenCalled();
+  });
+
+  // Regression: macOS keeps Chrome alive in the Dock at 0 windows while Chromium's
+  // DestroyProfileOnBrowserClose unloads the Profile & all extensions. Reopening with
+  // `open -g -a` (without `-n`) wakes the Profile safely without a ProcessSingleton collision.
+  it('wakes a macOS 0-window normal browser with open -g -a and never passes -n', async () => {
+    const launch = vi.fn(async () => undefined);
+    const resolveBrowser = () => ({
+      kind: 'chrome' as const,
+      executablePath: '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+      userDataDir: '/Users/alice/Library/Application Support/Google/Chrome',
+    });
     await startUserBrowser({
       platform: 'darwin',
       launch,
-      inspectProcesses: async () => ({ normalRunning: true, customProfileRunning: false }),
+      inspectProcesses: async () => ({
+        normalRunning: true,
+        customProfileRunning: true,
+        normalPids: [1672],
+        hasWindow: false,
+      }),
+      resolveBrowser,
+    });
+    expect(launch).toHaveBeenCalledWith('/usr/bin/open', [
+      '-g',
+      '-a',
+      '/Applications/Google Chrome.app',
+    ]);
+  });
+
+  it('extracts normal browser PIDs and probes macOS window state via inspectUserBrowserProcesses', async () => {
+    const browser = {
+      kind: 'chrome' as const,
+      executablePath: '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+      userDataDir: '/Users/alice/Library/Application Support/Google/Chrome',
+    };
+    expect(
+      classifyChromiumProcessEntries(
+        [
+          { pid: 1672, commandLine: '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome' },
+          { pid: 1673, commandLine: '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome --type=renderer' },
+          {
+            pid: 2001,
+            commandLine:
+              '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome --user-data-dir=/Users/alice/Library/Application Support/Cindy/browser-runtime/Cindy',
+          },
+        ],
+        browser,
+        'darwin',
+      ),
+    ).toEqual({ normalRunning: true, customProfileRunning: true, normalPids: [1672] });
+
+    const hasBrowserWindow = vi.fn(async () => false);
+    const macState = await inspectUserBrowserProcesses({
+      platform: 'darwin',
+      resolveBrowser: () => browser,
+      listProcesses: async () => [
+        { pid: 1672, commandLine: '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome' },
+      ],
+      hasBrowserWindow,
+    });
+    expect(hasBrowserWindow).toHaveBeenCalledWith([1672], browser, 'darwin');
+    expect(macState).toEqual({
+      normalRunning: true,
+      customProfileRunning: false,
+      normalPids: [1672],
+      hasWindow: false,
+    });
+
+    // On non-macOS platforms, window probing is skipped and hasWindow stays undefined.
+    const winProbe = vi.fn(async () => false);
+    const winState = await inspectUserBrowserProcesses({
+      platform: 'win32',
       resolveBrowser: () => ({
         kind: 'chrome',
-        executablePath: '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
-        userDataDir: '/Users/alice/Library/Application Support/Google/Chrome',
+        executablePath: 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
+        userDataDir: 'C:\\Users\\Alice\\AppData\\Local\\Google\\Chrome\\User Data',
       }),
+      listProcesses: async () => [
+        { pid: 4000, commandLine: '"C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"' },
+      ],
+      hasBrowserWindow: winProbe,
     });
-    expect(launch).not.toHaveBeenCalled();
+    expect(winProbe).not.toHaveBeenCalled();
+    expect(winState.hasWindow).toBeUndefined();
   });
 
   it('reports running state via isUserBrowserRunning without throwing when no browser is installed', async () => {
