@@ -4,7 +4,9 @@
  * 不触发真实 symlink 或 osascript(那些路径需 packaged + 用户授权,见模块头注释,
  * 端到端只能打包验证)。
  */
-import { readFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -170,8 +172,21 @@ describe('随包分发的启动器脚本 resources/cli/cindy', () => {
     expect(script).toContain('exit 2');
   });
 
-  it('把单个参数解析为绝对路径(支持 cindy .)', () => {
-    expect(script).toContain('abs=$(cd "$arg" >/dev/null 2>&1 && pwd)');
-    expect(script).toContain('arg="$1"');
+  it.skipIf(process.platform === 'win32')('把名为 - 的相对目录交给系统打开', () => {
+    const workdir = realpathSync(mkdtempSync(path.join(tmpdir(), 'cindy-cli-')));
+    try {
+      const directory = path.join(workdir, '-');
+      mkdirSync(directory);
+      // 记录启动器交给 macOS open 的路径，避免测试启动桌面应用。
+      writeFileSync(path.join(workdir, 'open'), '#!/bin/sh\nprintf "%s\\n" "$4"\n', { mode: 0o755 });
+      const openedPath = execFileSync('/bin/sh', [scriptPath, '-'], {
+        cwd: workdir,
+        env: { ...process.env, PATH: `${workdir}:/usr/bin:/bin`, OLDPWD: workdir },
+        encoding: 'utf8',
+      });
+      expect(openedPath).toBe(`${directory}\n`);
+    } finally {
+      rmSync(workdir, { recursive: true });
+    }
   });
 });
