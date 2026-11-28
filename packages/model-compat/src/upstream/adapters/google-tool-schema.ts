@@ -208,10 +208,11 @@ function sanitizeSchema(
     if (items !== BUDGET_EXHAUSTED) out.items = items;
   }
 
-  if (state.remainingNodes <= 0) return out;
-  if (node.anyOf !== undefined) {
+  if (state.remainingNodes > 0 && node.anyOf !== undefined) {
     Object.assign(out, normalizeAnyOf(node.anyOf, defs, depth, refDepth, state));
   }
+  // Composition can replace the type after the container fields were copied.
+  if (out.type !== "array") delete out.items;
   return out;
 }
 
@@ -229,6 +230,7 @@ export function sanitizeGeminiToolParameters(parameters: unknown): Record<string
     // Function arguments are always an object. Claude additionally rejects root composition and a
     // missing root type even when those forms are valid general-purpose JSON Schema.
     root.type = "object";
+    delete root.items;
     if (!isRecord(root.properties)) root.properties = {};
     return root;
   } catch {
