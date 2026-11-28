@@ -7,6 +7,7 @@ import {
   type MobileMessageRenderItem,
 } from '@/session/messageRenderModel';
 import { reconcileMobileMessageRenderItems } from '@/session/messageRenderReconcile';
+import { insertMobileTurnChanges, parseMobileTurnChanges } from '@/session/mobileTurnChanges';
 import { buildAgentTaskCardModel, type AgentTaskUpdate } from '@cindy/maker-shared/agent-task';
 import { CONTINUE_AFTER_ERROR_PROMPT } from '@cindy/maker-shared/synthetic-trigger';
 import type { RemoteMessage, RemoteMessageRole } from '@/session/types';
@@ -39,6 +40,39 @@ function toolUse(id: string, toolName: string, input: unknown, seconds: number):
 }
 
 describe('messageRenderModel', () => {
+  // Unit regression for #4751: the existing render-model tests have no TurnChangeSet.
+  // A completed turn followed by another prompt must keep its card with its answer,
+  // even when a steer is rendered between the original prompt and that answer.
+  it('places the read-only file summary after its own answer without exposing paths', () => {
+    const items = buildMobileMessageRenderItems([
+      message({ id: 'u1', role: 'user', content: 'Edit', createdAt: at(1) }),
+      message({ id: 'steer', role: 'user', content: 'Also rename the heading', createdAt: at(2),
+        agentMeta: { delivery: 'steer' } }),
+      message({ id: 'a1', role: 'assistant', content: 'Done', createdAt: at(3) }),
+      message({ id: 'u2', role: 'user', content: 'Continue', createdAt: at(4) }),
+    ]);
+    const wire = {
+      id: 'summary', sessionId: 's1', anchorClientId: 'u1', fileCount: 2,
+      additions: 4, deletions: 1, state: 'partial', cwd: '/private/repo',
+      files: [{ path: 'subdir/file.ts' }, { path: 'C:\\private\\other.ts' }],
+      unknownField: { patch: 'omit' },
+    };
+    const summary = parseMobileTurnChanges(wire, 's1')!;
+    const result = insertMobileTurnChanges(items, [summary]);
+    const answer = result.findIndex((item) => item.key === 'message-a1');
+    expect(result[answer + 1]).toEqual({
+      type: 'turn_changes', key: 'turnchanges-summary', summary: {
+        id: 'summary', anchorClientId: 'u1', fileCount: 2, additions: 4, deletions: 1,
+        fileNames: ['file.ts', 'other.ts'], partial: true,
+      },
+    });
+    expect(result[answer + 2]?.key).toBe('message-u2');
+    expect(parseMobileTurnChanges(wire, 'other-session')).toBeNull();
+    expect(parseMobileTurnChanges({ ...wire, fileCount: 0, files: [] }, 's1')).toBeNull();
+    expect(parseMobileTurnChanges(undefined, 's1')).toBeNull();
+    expect(insertMobileTurnChanges(items, [{ ...summary, anchorClientId: 'off-page' }])).toBe(items);
+  });
+
   // #6351: remote JSON must reach the actual work fold, not only normalization.
   // Two completed items from failed samples must not look like accepted replies.
   it('folds remote failed samples before success and retains their original records', () => {

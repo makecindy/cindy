@@ -389,6 +389,11 @@ export function subscribeRemoteOrcaWorkerChanged(
   remoteOrcaWorkerChangedListeners.add(listener);
   return () => { remoteOrcaWorkerChangedListeners.delete(listener); };
 }
+const remoteTurnChangesUpdatedListeners = new Set<(deviceId: string, payload: unknown) => void>();
+export function subscribeRemoteTurnChangesUpdated(listener: (deviceId: string, payload: unknown) => void): () => void {
+  remoteTurnChangesUpdatedListeners.add(listener);
+  return () => { remoteTurnChangesUpdatedListeners.delete(listener); };
+}
 const remoteBotChangedListeners = new Set<(deviceId: string, channel: string, payload: unknown) => void>();
 export function subscribeRemoteBotChanges(listener: (deviceId: string, channel: string, payload: unknown) => void): () => void {
   remoteBotChangedListeners.add(listener);
@@ -2537,6 +2542,12 @@ export function routeFrame(env: Envelope, handlers: RouteFrameHandlers = {}): vo
   if (env.kind !== 'push' || !env.src) return;
   const rawPush = env.payload as PushPayload;
   const push = { ...rawPush, payload: decodeModelSpeedPayload(rawPush.channel, rawPush.payload) };
+  if (push.channel === 'maker:turn-change-set:updated') {
+    if (!isScopedPeer(env.src)) {
+      for (const listener of remoteTurnChangesUpdatedListeners) listener(env.src, push.payload);
+    }
+    return;
+  }
   if (push.channel === TASK_ACTIVITY_SNAPSHOT) {
     if (!isScopedPeer(env.src)) receiveHostTaskActivity(env.src, push.payload);
     return;

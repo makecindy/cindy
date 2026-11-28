@@ -204,6 +204,8 @@ import { useSideChatCount } from '@/session/useSideChatCount';
 import { SessionTaskLayout, type SessionTaskChrome } from '@/session/SessionTaskLayout';
 import { buildMobileSessionRenderWindow, mobileSessionHistoryBoundary } from '@/session/mobileHistoryRender';
 import { createMobileMakerTransport } from '@/device-link/mobileMakerTransport';
+import { insertMobileTurnChanges } from '@/session/mobileTurnChanges';
+import { useMobileTurnChanges } from '@/session/useMobileTurnChanges';
 import { startFocusedTopicSubscription } from '@/device-link/focusedTopicSubscription';
 import { InteractionPanel, type MobilePlanViewerState } from '@/session/InteractionPanel';
 import {
@@ -694,7 +696,7 @@ import {
   findHistoryWindowGap,
   historyWindowGapKey,
 } from '@/session/historyWindowGap';
-import type { MobileMessageRenderItem } from '@/session/messageRenderModel';
+import { dropSyntheticTriggerItems, type MobileMessageRenderItem } from '@/session/messageRenderModel';
 import {
   commitMobileStreamingPrefixItems,
   type MobileStreamingRenderPrefixCache,
@@ -5168,6 +5170,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
           options: {
             autoResumePending: inputProjection.autoResumePending,
             preserveSourceOrder: optimisticUsers.length > 0,
+            retainSyntheticTriggers: true,
             isSessionStreaming: isMessageListStreaming,
             renderOrphanTaskUpdates: makerTurnRunning,
             sessionId,
@@ -5180,21 +5183,23 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
         history: {
           view: historyView.view, snapshot: historyView.snapshot, messages: projectedMessages,
           streaming: isMessageListStreaming, sessionId, sessionSource: currentSession?.source, taskUpdates, pendingQuestionIds,
-          pendingHandoff: handoff.pending, staleTail: handoff.tail, localUserClientIds,
+          pendingHandoff: handoff.pending, staleTail: handoff.tail, localUserClientIds, retainSyntheticTriggers: true,
         },
         forkOrigin, errorTailClientId, activeErrorClientId, previousRenderState: previousRenderItemsRef.current,
       });
     },
     [pendingQuestionIds, optimisticUsers, currentSession?.source, localUserClientIds, renderMessageStructureToken, historyView.snapshot, historyView.view, handoff.pending, handoff.tail, errorTailClientId, activeErrorClientId, forkOrigin, i18nInstance.language, inputProjection.autoResumePending, isMessageListStreaming, makerTurnRunning, messageStructureToken, projectedMessages, projectedMessageStructureChangedIndexes, sessionId, taskUpdates],
   );
+  // Keep hidden recovery boundaries in the render cache for exact summary placement.
+  const visibleRenderItems = useMemo(() => dropSyntheticTriggerItems(renderWindow.items), [renderWindow.items]);
   // Search, media and sharing only see durable user rows. Local user boundaries
   // still participate in grouping and in the message list below.
-  const renderItems = useMemo(() => optimisticClientIds.size === 0 ? renderWindow.items : renderWindow.items.filter((item) =>
+  const renderItems = useMemo(() => optimisticClientIds.size === 0 ? visibleRenderItems : visibleRenderItems.filter((item) =>
     !(item.type === 'message' && optimisticClientIds.has(item.message.source.clientId))),
-  [renderWindow.items, optimisticClientIds]);
+  [visibleRenderItems, optimisticClientIds]);
   const timelineItems = useMemo(
-    () => companionChat ? companionProcessItems(renderWindow.items, isMessageListStreaming) : renderWindow.items,
-    [companionChat, isMessageListStreaming, renderWindow.items],
+    () => companionChat ? companionProcessItems(visibleRenderItems, isMessageListStreaming) : visibleRenderItems,
+    [companionChat, isMessageListStreaming, visibleRenderItems],
   );
   const renderItemsStructureKey = useMemo(
     () => ({}),
@@ -6620,9 +6625,18 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       settlingItemsForRender,
     ],
   );
+  const turnChanges = useMobileTurnChanges({
+    deviceId, sessionId, owner: outboxOwner, syncKey: contentRecoveryKey, invoke,
+    enabled: appStateActive && remoteHistoryAvailable && !!currentSession && !companionChat
+      && !isDeviceAccessRevoked && !isScopedPeer(listedSession?.deviceLinkDeviceId),
+  });
+  const timelineWithTurnChanges = useMemo(
+    () => turnChanges.length ? insertMobileTurnChanges(renderWindow.items, turnChanges) : timelineItems,
+    [renderWindow.items, timelineItems, turnChanges],
+  );
   const messageListItems = useMemo(
-    () => mergePendingSendItems(timelineItems, pendingSendItems, optimisticClientIds),
-    [timelineItems, pendingSendItems, optimisticClientIds],
+    () => mergePendingSendItems(timelineWithTurnChanges, pendingSendItems, optimisticClientIds),
+    [timelineWithTurnChanges, pendingSendItems, optimisticClientIds],
   );
   const canLoadEarlierHistory = (historyView.snapshot.ready ? historyView.snapshot.hasMore : hasOlderMessages && messages.length > 0)
     && !isScheduleDetail;
@@ -6719,7 +6733,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
   const companionItemsStructureKey = companionChat ? messageListItems.map((item) => item.key).join('\u0000') : null;
   const messageListStructureKey = useMemo(
     () => ({}),
-    [pendingSendItems, renderItemsStructureKey, optimisticClientIds, companionItemsStructureKey],
+    [pendingSendItems, renderItemsStructureKey, optimisticClientIds, companionItemsStructureKey, turnChanges],
   );
   const shareExpandableBlockIds = useMemo(
     () =>

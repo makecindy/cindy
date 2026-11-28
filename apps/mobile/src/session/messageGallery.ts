@@ -195,6 +195,8 @@ export function collectMobileMessageGalleryImages(
       case 'fork_origin':
         // fork 来源标记只含导航 UI,no-op。
         break;
+      case 'turn_changes':
+        break;
       case 'pending_send':
         item.thumbs.forEach((thumb, slot) => {
           const image = pendingSendGalleryImage(thumb, undefined, slot);
