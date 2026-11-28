@@ -763,7 +763,7 @@ export function createOrcaRemoteWorkers(deps: OrcaRemoteWorkersDeps) {
           : base.hasPendingWorkerInput(sessionId),
       archiveWorkerSession: async (sessionId, beforeMutation) => {
         if (!(await isRemoteWorker(sessionId))) return base.archiveWorkerSession(sessionId, beforeMutation);
-        await archive(sessionId, beforeMutation);
+        await base.withSessionSendLock(sessionId, () => archive(sessionId, beforeMutation));
       },
       dispatchWorkerMessage: async (params) => {
         if (!(await isRemoteWorker(params.targetSessionId))) return base.dispatchWorkerMessage(params);

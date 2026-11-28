@@ -1279,17 +1279,32 @@ describe('wrapTeamDeps', () => {
     }
   });
 
-  it('keeps remote routing when archive persistence or authorization fails', async () => {
-    const { workers } = await trackedWorker();
-    store.getRemoteWorkerByProxySession.mockResolvedValueOnce(restoredRow as never);
+  it('refuses dispatch from a closed proxy while the local archive is retried', async () => {
+    let releasedAt: number | undefined;
+    const { workers, remoteInvoke } = await trackedWorker({ handle: (_device, channel) => {
+      if (channel === 'maker:orca:remote-worker:archive') {
+        releasedAt = 123;
+        return ok({ runtimeClosed: true });
+      }
+      if (channel === 'local-db:sessions:get') {
+        return ok({ status: 'active', orcaRemoteLead: { releasedAt } });
+      }
+      return undefined;
+    } });
+    store.getRemoteWorkerByProxySession.mockResolvedValueOnce(restoredRow as never).mockResolvedValueOnce(restoredRow as never);
     store.archiveSingleWorkerSession.mockRejectedValueOnce(new Error('permission revoked'));
     const base = baseDeps();
     const wrapped = workers.wrapTeamDeps(base);
-    await expect(wrapped.archiveWorkerSession('proxy-1')).rejects.toThrow('permission revoked');
-    expect(workers.runtime.isRemote('proxy-1')).toBe(true);
-    await wrapped.dispatchWorkerMessage({ targetSessionId: 'proxy-1', message: 'task', dispatchMeta: { source: 'mcp' } } as never);
-    expect(base.dispatchWorkerMessage).not.toHaveBeenCalled();
-    workers.stop();
+    try {
+      await expect(wrapped.archiveWorkerSession('proxy-1')).rejects.toThrow('permission revoked');
+      expect(workers.runtime.isRemote('proxy-1')).toBe(true);
+      await expect(wrapped.dispatchWorkerMessage({ targetSessionId: 'proxy-1', message: 'task',
+        dispatchMeta: { source: 'mcp' } } as never)).resolves.toMatchObject({ ok: false });
+      expect(remoteInvoke.mock.calls.some(([, channel]) => channel === 'maker:input:enqueue')).toBe(false);
+      expect(base.dispatchWorkerMessage).not.toHaveBeenCalled();
+      await wrapped.archiveWorkerSession('proxy-1');
+      expect(workers.runtime.isRemote('proxy-1')).toBe(false);
+    } finally { workers.stop(); }
   });
 
   it('retries a Lead refusal until its captured report identity is settled', async () => {

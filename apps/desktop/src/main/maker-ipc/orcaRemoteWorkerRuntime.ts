@@ -191,6 +191,7 @@ function agentKindOf(value: unknown): AgentInputCreateOpts['agentKind'] {
 }
 
 interface RemoteSessionRow {
+  orcaRemoteLead?: { releasedAt?: number } | null;
   agentKind?: unknown;
   workingDir?: unknown;
   model?: unknown;
@@ -899,7 +900,7 @@ export function createOrcaRemoteWorkerRuntime(deps: OrcaRemoteWorkerRuntimeDeps)
         ])) as (RemoteSessionRow & { status?: unknown }) | null;
         if (typeof row?.workingDir === 'string' && row.workingDir)
           state.workingDir = row.workingDir;
-        if (!row || (row.status !== undefined && row.status !== 'active')) {
+        if (!row || row.orcaRemoteLead?.releasedAt !== undefined || (row.status !== undefined && row.status !== 'active')) {
           return {
             ok: false,
             code: 'SESSION_NOT_FOUND',
