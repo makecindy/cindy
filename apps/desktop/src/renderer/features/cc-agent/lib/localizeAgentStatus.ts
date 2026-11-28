@@ -42,6 +42,20 @@ function normalizeStaticStatus(status: string): string {
     .toLowerCase();
 }
 
+/**
+ * 「这一轮在等远端」的适用范围。
+ *
+ * device-link 会话带 agentDeviceId;SSH 远端会话没有(agent 跑在远端机上),
+ * 但同样要等远端回音 —— 主机侧每轮发消息前都要先跑一次预检,这几秒里状态栏
+ * 不能空着(#11720)。
+ */
+export function remoteWaitingScope(
+  agentDeviceId: string | null | undefined,
+  remoteHostId: string | null | undefined,
+): boolean {
+  return Boolean(agentDeviceId || remoteHostId);
+}
+
 /** A queued location switch applies to preparation; a live turn keeps its current location. */
 export function statusAgentLocation(
   current: string | null | undefined,
