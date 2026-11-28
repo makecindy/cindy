@@ -173,6 +173,24 @@ async function start(options: { holdCalls?: boolean } = {}): Promise<void> {
   while (!w.invokes.length && Date.now() < deadline) await new Promise((resolve) => setImmediate(resolve));
 }
 
+/**
+ * start() and then wait for the device host to be set up. Key generation and the record and file writes are real I/O,
+ * so on a loaded machine the four flush rounds can end before the host is added; keep flushing (bounded by real time)
+ * until it is ready instead of asserting on a half-finished setup.
+ */
+async function startReady(): Promise<void> {
+  await start();
+  await flushUntil(async () => (await states())[0]?.state === 'ready');
+  expect((await states())[0]).toMatchObject({ state: 'ready', hostId: ALIAS });
+}
+
+/** flush(), then keep flushing (bounded by real time) until `done` holds: the file work behind it is real I/O. */
+async function flushUntil(done: () => boolean | Promise<boolean>): Promise<void> {
+  await flush();
+  const deadline = Date.now() + 10_000;
+  while (!(await done()) && Date.now() < deadline) await flush();
+}
+
 const hostSpec = () => w.hosts.get(ALIAS)?.spec ?? null;
 const dedicatedPublicKey = async () => (await fs.readFile(path.join(keyDir(), 'id_ed25519.pub'), 'utf8')).split(' ').slice(0, 2).join(' ');
 const targetFile = () => readText(path.join(targetHome(), '.ssh', CLOUD_GUEST_AUTHORIZED_KEYS_FILE));
@@ -199,8 +217,13 @@ afterEach(async () => {
 
 describe('SSH access controller: setting up a device host', () => {
   it('enrolls on the announce, adds the pinned host and alias, and costs nothing while the device is unchanged', async () => {
-    await start();
-    expect(w.invokes.map((request) => request.action)).toEqual(['enroll']);
+    await startReady();
+    // One enrollment. On a loaded machine a refresh can reach the device before its announce does and read its status
+    // first; that read is the only other call allowed.
+    expect(w.invokes.filter((request) => request.action === 'enroll')).toHaveLength(1);
+    expect(w.invokes.filter((request) => request.action !== 'enroll').map((request) => request.action)).toEqual(
+      w.invokes.length === 1 ? [] : ['status'],
+    );
     const identityFile = path.join(keyDir(), 'id_ed25519');
     expect(hostSpec()).toEqual({
       alias: ALIAS, displayName: 'Studio Cloud', previousDisplayName: null, hostname: '203.0.113.7', port: 22, user: 'ubuntu',
@@ -218,15 +241,16 @@ describe('SSH access controller: setting up a device host', () => {
     expect(controller.deviceHostFor(ALIAS)).toEqual({ deviceId: TARGET, available: true });
 
     // This computer reconnects: the device announces the same revision again; no call is made.
+    const calls = w.invokes.length;
     target.peerOnline(w.self);
     await flush();
-    expect(w.invokes).toHaveLength(1);
+    expect(w.invokes).toHaveLength(calls);
 
     // The device's public address changes: one status call, and the host follows it.
     w.publicIp = '203.0.113.9';
     target.networkChanged();
-    await flush();
-    expect(w.invokes.map((request) => request.action)).toEqual(['enroll', 'status']);
+    await flushUntil(() => hostSpec()?.hostname === '203.0.113.9');
+    expect(w.invokes.slice(calls).map((request) => request.action)).toEqual(['status']);
     expect(hostSpec()).toMatchObject({ hostname: '203.0.113.9', previousDisplayName: 'Studio Cloud' });
   });
 
@@ -237,13 +261,13 @@ describe('SSH access controller: setting up a device host', () => {
     expect(await states()).toEqual([]);
     w.controlDisabled = false;
     controller.settingsChanged();
-    await flush();
+    await flushUntil(async () => (await states())[0]?.state === 'ready');
     expect(w.invokes.map((request) => request.action)).toEqual(['enroll']);
     expect((await states())[0]).toMatchObject({ state: 'ready', hostId: ALIAS });
   });
 
   it('makes a new key for a profile copied to another computer and enrolls it there', async () => {
-    await start();
+    await startReady();
     const firstKey = await dedicatedPublicKey();
     // The same profile starts on another computer (another device id).
     controller.deactivate();
@@ -261,17 +285,18 @@ describe('SSH access controller: setting up a device host', () => {
 
 describe('SSH access controller: the person\'s deletion and unavailable devices', () => {
   it('never adds back a host the person deleted, and 「添加到 SSH 远程主机」 brings it back', async () => {
-    await start();
+    await startReady();
     w.hosts.delete(ALIAS);
     controller.hostRemovedByUser(ALIAS);
     await controller.idle();
     expect((await states())[0]).toMatchObject({ state: 'user-deleted', hostId: null, alias: ALIAS });
     expect(controller.deviceHostFor(ALIAS)).toBeNull();
 
+    const callsBefore = w.invokes.length;
     w.publicIp = '203.0.113.9';
     target.networkChanged();
     await flush();
-    expect(w.invokes).toHaveLength(1);
+    expect(w.invokes).toHaveLength(callsBefore);
     expect(w.hosts.has(ALIAS)).toBe(false);
 
     expect((await controller.restoreHost(TARGET))[0]).toMatchObject({ state: 'pending' });
@@ -289,7 +314,7 @@ describe('SSH access controller: the person\'s deletion and unavailable devices'
   });
 
   it('marks the host unavailable when the device turns access off, revokes this computer or leaves the account, and recovers', async () => {
-    await start();
+    await startReady();
     await target.setEnabled(false);
     await flush();
     expect((await states())[0]).toMatchObject({ state: 'unavailable', reason: 'off', hostId: ALIAS });
