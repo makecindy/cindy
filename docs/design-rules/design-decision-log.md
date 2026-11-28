@@ -1454,3 +1454,12 @@ DESIGN.md 瘦身 4a 把下列历史说明从正文移到这里，原文逐字保
 
 搬动时从正文移出的来源说明：标题 `(owner-requested simplification, 2026-11-10; layout pending sign-off)`；Roles `owner request, 2026-11-10:`；Remove role `(owner decisions, 2026-11-10)`、`(owner request)`；First task `(owner decision, 2026-11-10)`；Mobile `(owner request, 2026-11-10)`。
 
+## 2026-11-29 · DESIGN.md 瘦身 4c：段落级功能规格搬到专题文件时移出的来源说明
+
+下列括号里的来源与日期说明，在夹在例外登记里的功能规格段落搬到专题文件时从正文移出，原文逐字记在这里。规则本身没有改。
+
+- **§2 Remote connection V2 状态色**（现在在 [remote-connection-v2.md](./remote-connection-v2.md)）：`(owner request 2026-11-18)`
+- **§2 Gradient：Windows 托盘额度卡**（现在在 [macos-menu-bar-quota.md](./macos-menu-bar-quota.md)）：`(owner decision, 2026-11-18, PR #11277)`
+- **§14.4 macOS 菜单栏额度填充动效**（现在在 [macos-menu-bar-quota.md](./macos-menu-bar-quota.md)）：`(owner request, 2026-10-16)`；`(registered 2026-11-11, maintainer ruling D-16)`；`(owner request, 2026-11-19)`
+- **§14.4 开始引导入场动效**（现在在 [first-run-guide.md](./first-run-guide.md)）：`(2026-11-11)`
+- **§14.4 Composer 通话 / 发送 / 停止动效**（现在在 [composer.md](./composer.md)）：`(owner-approved prototype, 2026-10-22)`；`(owner correction, 2026-10-29)`
