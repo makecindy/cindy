@@ -77,7 +77,7 @@ export async function createPluginDraftSession(params: {
    */
   defaults?: {
     permissionMode?: GhostErrandPermissionMode;
-    agentKind?: 'cc' | 'codex' | 'pi';
+    agentKind?: 'cc' | 'codex' | 'pi' | 'acp';
     model?: string;
     effort?: string;
     fastMode?: boolean | 'ultrafast';
@@ -146,7 +146,7 @@ export async function createPluginTaskSession(params: {
   onPersistenceStarted?: () => void;
   shouldContinue?: () => boolean;
   title: string | null;
-  agentKind?: 'cc' | 'codex' | 'pi';
+  agentKind?: 'cc' | 'codex' | 'pi' | 'acp';
   model?: string;
   effort?: string;
   fastMode?: boolean | 'ultrafast';

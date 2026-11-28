@@ -16,6 +16,7 @@ import {
 } from 'lucide-react';
 import type { ScheduleTemplate, TemplateCapability } from '@cindy/maker-scheduler';
 
+import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
 import { cronToHuman } from '../../../../shared/scheduleCronLabel';
 
@@ -73,25 +74,16 @@ export function TemplateCard({ template, selected = false, onSelect }: TemplateC
 
       <span className="mt-auto flex max-w-full flex-wrap items-center gap-1.5">
         {scheduleText && (
-          <span className="inline-flex h-5 max-w-full items-center gap-1 rounded-full bg-[var(--chat-input-chip-bg)] px-2 text-11 leading-none text-[var(--settings-section-desc)]">
-            <Timer size={10} strokeWidth={1.8} className="shrink-0 text-[var(--cmd-palette-item-meta)]" />
+          <Badge className="max-w-full" icon={<Timer size={10} strokeWidth={1.8} />}>
             <span className="truncate">{scheduleText}</span>
-          </span>
+          </Badge>
         )}
         {capabilities.map((capability) => {
           const CapabilityIcon = CAPABILITY_ICONS[capability];
           return (
-            <span
-              key={capability}
-              className="inline-flex h-5 items-center gap-1 rounded-full bg-[var(--chat-input-chip-bg)] px-2 text-11 leading-none text-[var(--settings-section-desc)]"
-            >
-              <CapabilityIcon
-                size={10}
-                strokeWidth={1.8}
-                className="shrink-0 text-[var(--cmd-palette-item-meta)]"
-              />
+            <Badge key={capability} icon={<CapabilityIcon size={10} strokeWidth={1.8} />}>
               <span className="truncate">{t(`scheduler.template.capability.${capability}`)}</span>
-            </span>
+            </Badge>
           );
         })}
       </span>

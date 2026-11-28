@@ -1591,7 +1591,9 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
           (action) => action !== 'select_device' || selectionReady) },
       // store 侧已保证读出来的别名仍然有效(目录删掉即归零), 这里直投。
       defaultWorkspace: defaultWorkspaceOf(store.get(), lane.config.provider),
-      ...(lane.config.provider === 'x' ? { companionBotId: store.get().xCompanionBotId ?? null } : {}),
+      companionBotId: lane.config.provider === 'x'
+        ? store.get().xCompanionBotId ?? null
+        : store.get().companionBotIds?.[lane.config.provider as 'telegram' | 'feishu' | 'discord'] ?? null,
     };
   }
 
@@ -1599,6 +1601,7 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
     const config = store.get();
     return {
       enabled: config.enabled,
+      companionBotId: config.companionBotIds?.slack ?? null,
       lifecycleAnnouncement:
         config.lifecycleAnnouncementOverride ?? DEFAULT_SLACK_LIFECYCLE_ANNOUNCEMENT,
       url: store.effectiveUrl(),

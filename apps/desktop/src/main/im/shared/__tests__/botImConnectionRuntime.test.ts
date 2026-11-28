@@ -113,9 +113,11 @@ import { blueBubblesStateStorage } from '../../imessage/storage';
 import { __testing as laneTesting } from '../botImLaneRuntime';
 import { withBotProfileLocks } from '../../../maker-ipc/botProfileLock';
 import { readWechatChannelSettings, writeWechatCompanionBinding, writeWechatWorkingDir } from '../../wechat/channelSettings';
+import { readPersonalChannelChoice, writePersonalChannelChoice } from '../personalChannelStore';
 import {
   adoptPersonalBot,
   configureBotImPersonalAdoption,
+  switchPersonalBotReplyTarget,
   __testing as adoptionTesting,
   type PersonalBotTransport,
 } from '../botImPersonalAdoption';
@@ -1158,6 +1160,102 @@ describe('bot im connection runtime', () => {
       const result = await adoptPersonalBot({ botId: 'bot-mia', channel: 'wecom' });
       expect(h.secrets.get(`${secretKeyPrefixFor(result.connection.id)}wecom-owner-user-id`)).toBe('zhangsan');
       expect([...h.secrets.keys()].filter((key) => key.startsWith('wecom-'))).toEqual([]);
+    });
+
+    it('allows direct WeChat companion reassignment from Settings while preserving companion-page conflict guard', async () => {
+      const apply = vi.fn(async (commit: () => void) => { commit(); });
+      h.botStatus = 'active';
+      writeWechatCompanionBinding('bot-mia');
+      await expect(setWechatCompanionBinding('bot-other', apply)).rejects.toThrow('WECHAT_COMPANION_IN_USE');
+      await setWechatCompanionBinding('bot-other', apply, { allowReassign: true });
+      expect(readWechatChannelSettings().companionBotId).toBe('bot-other');
+    });
+
+    it('clears stale personal channel project/companion state after adopting a personal bot', async () => {
+      personalTransports();
+      h.secrets.set('wecom-bot-id', 'wb-2');
+      h.secrets.set('wecom-bot-secret', 's3cret');
+      writePersonalChannelChoice('wecom', { projectDir: h.root, companionBotId: 'bot-mia' });
+      await adoptPersonalBot({ botId: 'bot-mia', channel: 'wecom' });
+      expect(readPersonalChannelChoice('wecom')).toEqual({ projectDir: null, companionBotId: null });
+    });
+
+    it('resolves handed-over personal Feishu transport for the assigned companion and enforces owner match', () => {
+      const personalFeishu = {
+        getStatus: () => ({ kind: 'connected' }),
+        getOwnerOpenId: () => 'ou_owner_1',
+      } as unknown as import('@cindy/im').FeishuIM;
+      configureBotImConnectionRuntime({
+        removeWechatCompanionBinding: async (update) => { update(); },
+        create: () => { throw new Error('unused'); },
+        settingsIdentity: () => ({
+          telegramToken: null, feishuAppId: null, wecomBotId: null, dingtalkAppKey: null, discordToken: null,
+        }),
+        listKnownGroups: async () => [],
+        personalFeishuIm: () => personalFeishu,
+      });
+      writePersonalChannelChoice('feishu', { companionBotId: 'bot-mia' });
+      expect(getBotFeishuTransport('bot-mia')).toBe(personalFeishu);
+      expect(getBotFeishuTransport('bot-mia', 'ou_owner_1')).toBe(personalFeishu);
+      expect(getBotFeishuTransport('bot-mia', 'ou_other')).toBeNull();
+      expect(getBotFeishuTransport('bot-other')).toBeNull();
+    });
+
+    // Reconnecting after a suspended stop must never write or restart against the next account.
+    it('cancels a personal reply-target switch when the account changes during stop', async () => {
+      const start = vi.fn(async () => undefined);
+      configureBotImPersonalAdoption({
+        isReady: () => true,
+        telegramGroupActivation: () => undefined,
+        personal: {
+          feishu: {
+            identity: () => 'cli_1',
+            stop: async () => { h.ownerKey = 'owner-b'; },
+            start,
+            clear: vi.fn(async () => undefined),
+          },
+        },
+      });
+      h.secrets.set('feishu_bot_app_id', 'cli_1');
+      h.secrets.set('feishu_bot_app_secret', 'sec_1');
+      const apply = vi.fn();
+
+      await expect(switchPersonalBotReplyTarget('feishu', apply)).rejects.toThrow(/OWNER_SCOPE_CHANGED/);
+      expect(apply).not.toHaveBeenCalled();
+      expect(start).not.toHaveBeenCalled();
+    });
+
+    it('blocks reply-target switching while a personal bot has active or queued work unless allowWhileBusy is set', async () => {
+      let busy = true;
+      const stop = vi.fn(async () => undefined);
+      const start = vi.fn(async () => undefined);
+      configureBotImPersonalAdoption({
+        isReady: () => true,
+        telegramGroupActivation: () => undefined,
+        personal: {
+          feishu: { identity: () => 'cli_1', isBusy: () => busy, stop, start, clear: vi.fn(async () => undefined) },
+        },
+      });
+      h.secrets.set('feishu_bot_app_id', 'cli_1');
+      h.secrets.set('feishu_bot_app_secret', 'sec_1');
+      const apply = vi.fn();
+
+      await expect(switchPersonalBotReplyTarget('feishu', apply)).rejects.toThrow(/PERSONAL_BOT_BUSY/);
+      expect(stop).not.toHaveBeenCalled();
+      expect(apply).not.toHaveBeenCalled();
+
+      // Deletion cleanup can force-clear even while busy.
+      await switchPersonalBotReplyTarget('feishu', apply, { allowWhileBusy: true });
+      expect(stop).toHaveBeenCalledTimes(1);
+      expect(apply).toHaveBeenCalledTimes(1);
+      expect(start).toHaveBeenCalledTimes(1);
+
+      // Idle channel switches normally.
+      busy = false;
+      await switchPersonalBotReplyTarget('feishu', apply);
+      expect(stop).toHaveBeenCalledTimes(2);
+      expect(apply).toHaveBeenCalledTimes(2);
+      expect(start).toHaveBeenCalledTimes(2);
     });
   });
 });

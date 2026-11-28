@@ -7,7 +7,9 @@
  * 时期的合同,已装扩展不需要更新即可连到宿主:
  *
  *   GET  /health                 握手:身份、版本、挑战/证明、会话
- *   GET  /poll                   长轮询取作业(20 秒)
+ *   GET  /poll[?nowait=1]        长轮询取作业(20 秒;nowait=1 供 WS 唤醒后立即拉取)
+ *   POST /ws/ticket              为已认证会话签发一次性 WebSocket 握手票据
+ *   WS   /ws                     长连接保活(15 秒宿主驱动 ping/pong)与即时作业唤醒
  *   POST /ack /authorize /result 作业生命周期(已送达 → 已确认 → 已授权 → 结果)
  *   GET  /learning/challenge     转交请求的一次性挑战
  *   POST /learning/start|result|cancel  扩展发起、查询、取消转交请求
@@ -15,6 +17,7 @@
  *
  * 安全不变量(与插件时期逐条相同):
  * - 只有扩展 origin 能连:自定义头 + 无 CORS,网页、预检、改绑 Host 一律 403;
+ *   WebSocket 升级同样校验 Host、扩展 Origin 及 /ws/ticket 签发的一次性票据;
  * - 官方扩展 id 首次出现必须经 native host 绑定公钥,HTTP 调用方不能自称官方;
  * - 作业一次送达绝不重投;已确认未完成的作业只能是 unknown,不能按成功或未执行报告;
  * - 不设站点名单(2026-10-30 决定):安全交给任务的权限档位与自动审核;旧扩展与旧插件仍收发
@@ -25,6 +28,8 @@
 
 import http from 'node:http';
 import crypto from 'node:crypto';
+import type { Duplex } from 'node:stream';
+import { WebSocket, WebSocketServer } from 'ws';
 
 import {
   checkBrowserExtensionTarget,
@@ -141,6 +146,12 @@ export interface BrowserExtensionBridgeOptions {
   pollTimeout?: number;
   connectWait?: number;
   jobTimeout?: number;
+  /** Interval for host-driven WebSocket keepalive pings (default 15s, < Chrome MV3 30s SW idle). */
+  wsPingIntervalMs?: number;
+  /** Drop a WebSocket that has not responded with pong within this window (default 35s). */
+  wsPongTimeoutMs?: number;
+  /** Maximum time allowed for the first WebSocket auth message after HTTP upgrade (default 5s). */
+  wsAuthTimeoutMs?: number;
   /**
    * 作业到期的调度器:到点调用 `expire`,返回取消函数。缺省是真实定时器;
    * 测试注入手动调度器,把「作业何时过期」从墙钟里拿出来。
@@ -227,12 +238,36 @@ const ENTRY_STRING_MAX = 8192;
 const RELAY_RESULT_MAX_CHARS = 8_000_000;
 const TEXT_RESULT_MAX = 400_000;
 
+interface WsTicket {
+  ticket: string;
+  clientId: string;
+  origin: string;
+  session: string;
+  expiresAt: number;
+}
+
+interface ClientSocket {
+  ws: WebSocket;
+  clientId: string;
+  session: string;
+  lastPongAt: number;
+  replaced: boolean;
+}
+
+const WS_TICKET_TTL_MS = 15_000;
+const WS_TICKET_MAX = 64;
+const WS_CLIENT_MAX = 32;
+const WS_PING_INTERVAL_DEFAULT_MS = 15_000;
+const WS_PONG_TIMEOUT_DEFAULT_MS = 35_000;
+const WS_AUTH_TIMEOUT_DEFAULT_MS = 5_000;
+
 export class BrowserExtensionBridge {
   /** Wire compatibility only: extensions and plugins of the site-list era still read it. */
   private readonly policy: BrowserExtensionPolicy = defaultBrowserExtensionPolicy();
   private pins: BrowserExtensionTrustedClient[] = [];
   private readonly nativeBindings = new Map<string, string>();
   private server: http.Server | null = null;
+  private wss: WebSocketServer | null = null;
   private starting: Promise<void> | null = null;
   private port = 0;
   private readonly jobs = new Map<string, Job>();
@@ -240,6 +275,9 @@ export class BrowserExtensionBridge {
   private readonly connectionStates = new Map<string, string>();
   private hadConnectedClient = false;
   private readonly waiting = new Map<string, () => void>();
+  private readonly sockets = new Map<string, ClientSocket>();
+  private readonly wsTickets = new Map<string, WsTicket>();
+  private wsPingTimer: ReturnType<typeof setInterval> | null = null;
   private readonly relays = new Map<string, RelayItem>();
   private readonly relayChallenges = new Map<string, { clientId: string; expiresAt: number }>();
   private readonly knownIds: Set<string>;
@@ -638,6 +676,7 @@ export class BrowserExtensionBridge {
           this.now() - c.seen > 180000 &&
           ![...this.jobs.values()].some((j) => j.clientId === key)
         ) {
+          this.closeClientSocket(key, 4409, 'SESSION_EXPIRED');
           this.observeConnection(c);
           this.clients.delete(key);
           this.connectionStates.delete(key);
@@ -683,12 +722,16 @@ export class BrowserExtensionBridge {
       if (typeof boot === 'string' && /^[0-9a-f-]{36}$/i.test(boot)) {
         // The browser restarted: tab ids start over, so jobs aimed at the old tabs must not reach
         // whatever tab now has the same number.
-        if (client.boot && client.boot !== boot) this.endJobsOf(client.id);
+        if (client.boot && client.boot !== boot) {
+          this.closeClientSocket(client.id, 4409, 'BROWSER_RESTARTED');
+          this.endJobsOf(client.id);
+        }
         client.boot = boot;
       }
       client.installedVersion = installedVersion;
       client.seen = this.now();
       if (keyHeader !== undefined && publicKey !== client.publicKey) {
+        this.closeClientSocket(client.id, 4409, 'SESSION_CHANGED');
         client.publicKey = publicKey;
         client.authenticated = false;
         client.challenge = null;
@@ -728,7 +771,7 @@ export class BrowserExtensionBridge {
         pairing_required: !sessionAllowed,
         native_binding_required: nativeRequired,
         auth_required: authRequired,
-        capabilities: sessionAllowed && authRequired ? ['learning-v1', 'learning-auth-v2'] : [],
+        capabilities: sessionAllowed && authRequired ? ['learning-v1', 'learning-auth-v2', 'ws-v1'] : [],
         ...(client.challenge ? { challenge: client.challenge.value } : {}),
         ...(sessionAllowed ? { session: client.session } : {}),
       });
@@ -750,6 +793,25 @@ export class BrowserExtensionBridge {
     }
     client.seen = this.now();
     this.observeConnection(client);
+    if (req.url === '/ws/ticket' && req.method === 'POST') {
+      const now = this.now();
+      for (const [key, item] of this.wsTickets) {
+        if (item.expiresAt <= now) this.wsTickets.delete(key);
+      }
+      if (this.wsTickets.size >= WS_TICKET_MAX) {
+        const oldest = this.wsTickets.keys().next().value;
+        if (oldest !== undefined) this.wsTickets.delete(oldest);
+      }
+      const ticket = crypto.randomBytes(32).toString('base64url');
+      this.wsTickets.set(ticket, {
+        ticket,
+        clientId,
+        origin: client.origin,
+        session: client.session,
+        expiresAt: now + WS_TICKET_TTL_MS,
+      });
+      return this.send(res, { ok: true, ticket });
+    }
     if (req.url === '/learning/challenge' && req.method === 'GET') {
       if (!this.authenticatedCredential(client))
         return this.send(
@@ -909,9 +971,9 @@ export class BrowserExtensionBridge {
           : { ok: true, done: false, progress: item.progress },
       );
     }
-    if (req.method === 'GET' && req.url === '/poll') {
+    if (req.method === 'GET' && (req.url === '/poll' || req.url === '/poll?nowait=1')) {
       const job = this.take(clientId);
-      if (job) return this.send(res, { job });
+      if (job || req.url === '/poll?nowait=1') return this.send(res, { job });
       if (this.waiting.has(clientId))
         return this.send(res, failure('BUSY', 'This profile is already polling.'), 429);
       const cleanup = () => {
@@ -1016,6 +1078,278 @@ export class BrowserExtensionBridge {
     return this.send(res, { ok: true });
   }
 
+  // ── WebSocket 长连接保活与即时唤醒 ──────────────────────────────────────
+
+  private sendWsJson(ws: WebSocket, value: Record<string, unknown>): void {
+    if (ws.readyState !== WebSocket.OPEN) return;
+    try {
+      ws.send(JSON.stringify(value));
+    } catch {
+      // Ignore concurrent socket close races; close handler cleans up.
+    }
+  }
+
+  private hasQueuedJob(clientId: string): boolean {
+    for (const job of this.jobs.values()) {
+      if (job.state === 'queued' && job.clientId === clientId) return true;
+    }
+    return false;
+  }
+
+  private notifyJobAvailable(clientId: string): void {
+    const entry = this.sockets.get(clientId);
+    if (!entry || entry.ws.readyState !== WebSocket.OPEN) return;
+    this.sendWsJson(entry.ws, { type: 'job_available' });
+  }
+
+  private closeClientSocket(clientId: string, code: number, reason: string): void {
+    const entry = this.sockets.get(clientId);
+    if (!entry) return;
+    entry.replaced = true;
+    this.sockets.delete(clientId);
+    if (this.sockets.size === 0) this.stopWsPingTimer();
+    try {
+      entry.ws.close(code, reason);
+    } catch {
+      try {
+        entry.ws.terminate();
+      } catch {
+        // Already closed.
+      }
+    }
+  }
+
+  private stopWsPingTimer(): void {
+    if (!this.wsPingTimer) return;
+    clearInterval(this.wsPingTimer);
+    this.wsPingTimer = null;
+  }
+
+  private ensureWsPingTimer(): void {
+    if (this.wsPingTimer || this.closed) return;
+    const intervalMs = this.options.wsPingIntervalMs ?? WS_PING_INTERVAL_DEFAULT_MS;
+    const pongTimeoutMs = this.options.wsPongTimeoutMs ?? WS_PONG_TIMEOUT_DEFAULT_MS;
+    if (intervalMs <= 0) return;
+    this.wsPingTimer = setInterval(() => {
+      if (this.sockets.size === 0 || this.closed) {
+        this.stopWsPingTimer();
+        return;
+      }
+      const now = this.now();
+      for (const [clientId, entry] of [...this.sockets]) {
+        const client = this.clients.get(clientId);
+        if (
+          !client ||
+          !this.sessionReady(client) ||
+          client.session !== entry.session ||
+          !this.compatible(client.version)
+        ) {
+          this.closeClientSocket(clientId, 4409, 'SESSION_CHANGED');
+          continue;
+        }
+        if (entry.ws.readyState !== WebSocket.OPEN || now - entry.lastPongAt > pongTimeoutMs) {
+          try {
+            entry.ws.terminate();
+          } catch {
+            // Ignore termination errors.
+          }
+          continue;
+        }
+        // Host-driven JSON ping resets Chrome MV3's 30s service-worker idle timer even when
+        // Chrome throttles extension JS timers in the background.
+        this.sendWsJson(entry.ws, { type: 'ping', ts: now });
+      }
+    }, intervalMs);
+    this.wsPingTimer.unref?.();
+  }
+
+  private consumeWsTicket(
+    suppliedTicket: string,
+    clientId: string,
+    session: string,
+    origin: string,
+  ): boolean {
+    const now = this.now();
+    const suppliedBuf = Buffer.from(suppliedTicket);
+    let matchedKey: string | null = null;
+    for (const [key, item] of this.wsTickets) {
+      if (item.expiresAt <= now) {
+        this.wsTickets.delete(key);
+        continue;
+      }
+      const expectedBuf = Buffer.from(item.ticket);
+      if (
+        expectedBuf.length === suppliedBuf.length &&
+        crypto.timingSafeEqual(expectedBuf, suppliedBuf)
+      ) {
+        matchedKey = key;
+      }
+    }
+    if (!matchedKey) return false;
+    const item = this.wsTickets.get(matchedKey);
+    this.wsTickets.delete(matchedKey);
+    return (
+      !!item &&
+      item.expiresAt > now &&
+      item.clientId === clientId &&
+      item.session === session &&
+      item.origin === origin
+    );
+  }
+
+  private hasActiveWsTicketForOrigin(origin: string): boolean {
+    const now = this.now();
+    for (const [key, item] of this.wsTickets) {
+      if (item.expiresAt <= now) {
+        this.wsTickets.delete(key);
+        continue;
+      }
+      if (item.origin === origin) return true;
+    }
+    return false;
+  }
+
+  private rejectUpgrade(socket: Duplex, status = '403 Forbidden'): void {
+    try {
+      socket.write(`HTTP/1.1 ${status}\r\nConnection: close\r\n\r\n`);
+    } catch {
+      // Ignore write errors on closing sockets.
+    }
+    socket.destroy();
+  }
+
+  private handleWsUpgrade(req: http.IncomingMessage, socket: Duplex, head: Buffer): void {
+    const wss = this.wss;
+    if (this.closed || !wss) return this.rejectUpgrade(socket, '503 Service Unavailable');
+    if (req.url !== '/ws' || req.headers.host !== '127.0.0.1:' + this.port) {
+      return this.rejectUpgrade(socket);
+    }
+    const upgradeOrigin = this.header(req, 'origin');
+    const isExtensionOrigin =
+      typeof upgradeOrigin === 'string' &&
+      (/^chrome-extension:\/\/[a-zA-Z0-9._-]{1,200}$/.test(upgradeOrigin) ||
+        /^safari-web-extension:\/\/[a-zA-Z0-9.-]+$/.test(upgradeOrigin));
+    if (!isExtensionOrigin || !this.hasActiveWsTicketForOrigin(upgradeOrigin)) {
+      return this.rejectUpgrade(socket);
+    }
+    if (wss.clients.size >= WS_CLIENT_MAX) {
+      return this.rejectUpgrade(socket, '429 Too Many Requests');
+    }
+    wss.handleUpgrade(req, socket, head, (ws) => {
+      let authedEntry: ClientSocket | null = null;
+      const authTimeoutMs = this.options.wsAuthTimeoutMs ?? WS_AUTH_TIMEOUT_DEFAULT_MS;
+      const authTimer = setTimeout(() => {
+        if (!authedEntry) {
+          try {
+            ws.close(4403, 'AUTH_TIMEOUT');
+          } catch {
+            ws.terminate();
+          }
+        }
+      }, authTimeoutMs);
+      authTimer.unref?.();
+
+      const cleanupSocket = () => {
+        clearTimeout(authTimer);
+        if (!authedEntry) return;
+        const entry = authedEntry;
+        authedEntry = null;
+        if (this.sockets.get(entry.clientId) !== entry) return;
+        this.sockets.delete(entry.clientId);
+        if (this.sockets.size === 0) this.stopWsPingTimer();
+        if (entry.replaced || this.closed) return;
+        const client = this.clients.get(entry.clientId);
+        if (!client) return;
+        const hasInFlightJob = [...this.jobs.values()].some((j) => j.clientId === entry.clientId);
+        // If no job is in flight and no HTTP /poll is waiting, mark heartbeat expired immediately so
+        // an unloaded macOS 0-window Chrome Profile is detected right away instead of hanging 35s.
+        if (!hasInFlightJob && !this.waiting.has(entry.clientId)) {
+          client.seen = Math.min(client.seen, this.now() - 35_001);
+          this.observeConnection(client);
+        }
+      };
+
+      ws.on('close', cleanupSocket);
+      ws.on('error', () => {
+        cleanupSocket();
+      });
+
+      ws.on('message', (raw) => {
+        let msg: Record<string, unknown>;
+        try {
+          const text = typeof raw === 'string' ? raw : raw.toString('utf8');
+          const parsed = JSON.parse(text) as unknown;
+          if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return;
+          msg = parsed as Record<string, unknown>;
+        } catch {
+          if (!authedEntry) ws.close(4400, 'INVALID_FRAME');
+          return;
+        }
+
+        if (!authedEntry) {
+          clearTimeout(authTimer);
+          const cid = typeof msg.clientId === 'string' ? msg.clientId : '';
+          const sess = typeof msg.session === 'string' ? msg.session : '';
+          const ticket = typeof msg.ticket === 'string' ? msg.ticket : '';
+          const client = this.clients.get(cid);
+          const valid =
+            msg.type === 'auth' &&
+            !!client &&
+            client.origin === upgradeOrigin &&
+            this.sessionReady(client) &&
+            client.session === sess &&
+            this.compatible(client.version) &&
+            this.consumeWsTicket(ticket, cid, sess, upgradeOrigin);
+          if (!valid || !client) {
+            ws.close(4403, 'FORBIDDEN');
+            return;
+          }
+          const existing = this.sockets.get(cid);
+          if (existing) {
+            existing.replaced = true;
+            this.sockets.delete(cid);
+            try {
+              existing.ws.close(4000, 'REPLACED');
+            } catch {
+              existing.ws.terminate();
+            }
+          }
+          const now = this.now();
+          authedEntry = { ws, clientId: cid, session: sess, lastPongAt: now, replaced: false };
+          this.sockets.set(cid, authedEntry);
+          client.seen = now;
+          this.observeConnection(client);
+          this.ensureWsPingTimer();
+          this.sendWsJson(ws, { type: 'auth_ok' });
+          if (this.hasQueuedJob(cid)) {
+            this.sendWsJson(ws, { type: 'job_available' });
+          }
+          return;
+        }
+
+        const client = this.clients.get(authedEntry.clientId);
+        if (
+          !client ||
+          !this.sessionReady(client) ||
+          client.session !== authedEntry.session ||
+          !this.compatible(client.version)
+        ) {
+          ws.close(4409, 'SESSION_CHANGED');
+          return;
+        }
+        if (msg.type === 'pong' || msg.type === 'ping') {
+          const now = this.now();
+          authedEntry.lastPongAt = now;
+          client.seen = now;
+          this.observeConnection(client);
+          if (msg.type === 'ping') {
+            this.sendWsJson(ws, { type: 'pong', ts: typeof msg.ts === 'number' ? msg.ts : now });
+          }
+        }
+      });
+    });
+  }
+
   // ── 生命周期 ────────────────────────────────────────────────────────────
 
   async start(): Promise<void> {
@@ -1034,6 +1368,9 @@ export class BrowserExtensionBridge {
         });
         srv.requestTimeout = 30000;
         srv.headersTimeout = 10000;
+        srv.on('upgrade', (req, socket, head) => {
+          this.handleWsUpgrade(req, socket, head);
+        });
         try {
           await new Promise<void>((resolve, reject) => {
             srv.once('error', reject);
@@ -1046,6 +1383,7 @@ export class BrowserExtensionBridge {
             throw new Error('BRIDGE_STOPPED');
           }
           this.server = srv;
+          this.wss = new WebSocketServer({ noServer: true, maxPayload: 64 * 1024 });
           const address = srv.address();
           this.port = typeof address === 'object' && address ? address.port : candidate;
           this.options.log?.info('browser extension bridge listening', {
@@ -1108,7 +1446,10 @@ export class BrowserExtensionBridge {
         (!(c as BrowserExtensionTrustedClient).origin.startsWith('chrome-extension://') ||
           this.knownIds.has((c as BrowserExtensionTrustedClient).extensionId)),
     );
-    for (const c of this.clients.values()) c.trusted = this.approved(c);
+    for (const c of this.clients.values()) {
+      c.trusted = this.approved(c);
+      if (!this.sessionReady(c)) this.closeClientSocket(c.id, 4403, 'UNTRUSTED');
+    }
     return { ok: true };
   }
 
@@ -1307,6 +1648,7 @@ export class BrowserExtensionBridge {
       );
       this.jobs.set(job.id, job);
       this.waiting.get(client.id)?.();
+      this.notifyJobAvailable(client.id);
     });
   }
 
@@ -1315,6 +1657,11 @@ export class BrowserExtensionBridge {
       port: this.port, clients: this.clients.size,
     });
     this.closed = true;
+    this.stopWsPingTimer();
+    this.wsTickets.clear();
+    for (const clientId of [...this.sockets.keys()]) {
+      this.closeClientSocket(clientId, 1001, 'BRIDGE_STOPPED');
+    }
     this.relays.clear();
     for (const job of [...this.jobs.values()])
       this.finish(
@@ -1326,6 +1673,18 @@ export class BrowserExtensionBridge {
         ),
       );
     for (const waiter of [...this.waiting.values()]) waiter();
+    if (this.wss) {
+      const w = this.wss;
+      this.wss = null;
+      for (const client of w.clients) {
+        try {
+          client.terminate();
+        } catch {
+          // Ignore already-closed clients.
+        }
+      }
+      w.close();
+    }
     if (this.server) {
       const s = this.server;
       this.server = null;

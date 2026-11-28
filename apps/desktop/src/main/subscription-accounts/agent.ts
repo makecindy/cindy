@@ -1,5 +1,7 @@
 import {
   NATIVE_SUBSCRIPTION_ACCOUNT,
+  LOCAL_AGENT_CLIENT,
+  isolatedBotProfile,
   AgentStartupStoppedError,
   AgentStartupCleanupPendingError,
   AgentNotAuthenticatedError,
@@ -36,10 +38,15 @@ import {
   pinnedOwnAccount,
   resolveSubscriptionPoolProvider as resolveSubscriptionPoolProviderRef,
 } from './placement.js';
-import { bindPoolExecutionRoute, getSessionSubscriptionAccount, poolFailuresAfterOutput, registerSessionSubscriptionAccount } from './session.js';
+import {
+  bindNativePoolSessionExecution, bindPoolExecutionRoute,
+  isPoolSessionExecutionCurrent, poolFailuresAfterOutput, readPoolSessionExecution,
+  readSessionSubscriptionAccountBinding, registerSessionSubscriptionAccount,
+} from './session.js';
 import { captureOpenAiGroupApiResponse, settleOpenAiGroupAccountHealth } from '../provider-group/localOpenAiAccounts.js';
 import { PROVIDER_GROUP_FAILURE_COOLDOWN_MS } from '../provider-group/cooling.js';
-import { readProviderBillingCode } from '@cindy/maker-shared/error-redaction';
+import { classifyTurnOverload } from '../goal-host/usageLimit.js';
+import { readProviderAccountLimitCode } from '@cindy/maker-shared/error-redaction';
 import type { OpenAiGroupProbeResult } from '../../shared/openAiAccountGroup.js';
 import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../appSessionState.js';
 
@@ -92,18 +99,32 @@ async function providerFor(
     : null;
 }
 
+function isLegacyAliasOfBuiltInCodexPool(
+  ref: NonNullable<ReturnType<typeof resolveSubscriptionPoolProviderRef>>, accountId: string,
+): boolean {
+  return ref.kind === 'openai' && ref.providerId !== ref.kind && !ref.created && !ref.apiKey
+    && ref.ownAccount === accountId && accountProviderId(ref.kind, accountId) === ref.kind
+    && pinnedOwnAccount(ref) === accountId;
+}
+
 /**
  * Below this wrapper the engines know only the built-in subscription routes. A start routed
  * through another provider's accounts runs on its kind's built-in route with the selected account,
- * so the engine uses that account's directory. A legacy Codex connection running its own account
- * keeps its id (its directory is the connection's own), as before 2026-11-13.
+ * so the engine uses that account's directory. A standalone legacy Codex connection running
+ * its own account keeps its id. Once the connection is only an alias for the built-in pool, local
+ * Codex uses the same execution route as the pool; the lease retains the imported account's home.
  */
-function engineProviderId(providerId: string | null | undefined, accountId: string): string | null | undefined {
+function engineProviderId(
+  providerId: string | null | undefined, accountId: string, alignLocalCodexAlias = false,
+): string | null | undefined {
   const api = apiKeyPoolMember(accountId);
   if (api) return api.connectionId;
   const ref = resolveSubscriptionPoolProviderRef(providerId);
   if (!ref || ref.providerId === ref.kind) return providerId;
-  if (!ref.created && ref.ownAccount === accountId) return providerId;
+  if (!ref.created && ref.ownAccount === accountId) {
+    if (alignLocalCodexAlias && isLegacyAliasOfBuiltInCodexPool(ref, accountId)) return ref.kind;
+    return providerId;
+  }
   return ref.kind;
 }
 
@@ -112,14 +133,14 @@ function engineProviderId(providerId: string | null | undefined, accountId: stri
  * with exactly the same model allowlist, route token and selected account capability.
  */
 function engineOptions<T extends Pick<StartSessionOptions, 'providerId' | 'deviceHosted'>>(
-  options: T, lease: SubscriptionAccountLease, kind: BaseAgent['kind'],
+  options: T, lease: SubscriptionAccountLease, kind: BaseAgent['kind'], alignLocalCodexAlias = false,
 ): T & { [NATIVE_SUBSCRIPTION_ACCOUNT]?: NativeSubscriptionAccount } {
   const requested = options.providerId?.trim();
   if (!requested) return { ...options, [NATIVE_SUBSCRIPTION_ACCOUNT]: lease.account };
   const guest = options.deviceHosted?.guest ? options.deviceHosted.guestProvider : undefined;
   if (guest && guest.providerId !== requested)
     throw new AgentStartupStoppedError(new Error('[REMOTE_AGENT_PROVIDER_NOT_ALLOWED] this provider is not allowed for remote use on this computer'));
-  const providerId = engineProviderId(requested, lease.accountId)!;
+  const providerId = engineProviderId(requested, lease.accountId, alignLocalCodexAlias)!;
   // Codex runs on its native route, but its per-session proxy must check the
   // original grant. Carry that identity on the host-issued account capability.
   const account = lease.account && guest && kind === 'codex' && providerId === 'openai' && requested !== providerId
@@ -234,6 +255,7 @@ function wrapHandle(
       if (property === 'send')
         return async (...args: Parameters<AgentSessionHandle['send']>) => {
           if (cleanupPending) throw new Error('Subscription account runtime is closing');
+          if (lease.verifyLinkedLogin) await lease.verifyLinkedLogin();
           lease.assertDispatchable();
           if (poolTurn) poolTurn.current = { delivered: false };
           if (lease.apiConnectionId && (agent === 'codex' || agent === 'pi'))
@@ -290,12 +312,22 @@ function wrapHandle(
             if (event.type === 'error' && isTerminalTurnEvent(event)) {
               lease.observeFailure(event.data, model, 'run');
               if (observe && event.turnScope !== 'background') {
-                const error = event.data as { message?: string; errorStatus?: number };
-                const billingCode = readProviderBillingCode(error.errorStatus, error.message ?? '');
+                const error = event.data as { message?: string; errorStatus?: number; codexErrorInfo?: string };
+                const limitCode = readProviderAccountLimitCode(error.errorStatus, error.message ?? '');
+                // Codex can collapse the official Responses API's billing rejection into
+                // this terminal message without an HTTP status or structured billing code.
+                // Only trust it for the API member of this dispatched turn, not for
+                // subscription windows, generic usage limits or ordinary rate limiting.
+                const codexBillingRefusal = turn && !turn.rejection && agent === 'codex' && event.source === 'codex'
+                  && error.codexErrorInfo === 'usageLimitExceeded'
+                  && (error.errorStatus === undefined || error.errorStatus === 429)
+                  && /^Quota exceeded\. Check your plan and billing details\.$/i.test(error.message?.trim() ?? '');
+                const billingCode = limitCode === 'rate_limit_exceeded' ? undefined
+                  : limitCode ?? (codexBillingRefusal ? 'credit_balance_exhausted' as const : undefined);
                 if (billingCode) await observe({ ok: false, code: 'QUOTA_EXCEEDED', billingCode }).catch(() => {});
                 else if (error.errorStatus === 401) await observe({ ok: false, code: 'AUTH_INVALID' }).catch(() => {});
                 else if (error.errorStatus === 429) await observe({ ok: false, code: 'RATE_LIMITED' }).catch(() => {});
-                else if (error.errorStatus === 529) await observe({ ok: false, code: 'RATE_LIMITED' },
+                else if (error.errorStatus === 529 || classifyTurnOverload(event.data)) await observe({ ok: false, code: 'RATE_LIMITED' },
                   undefined, PROVIDER_GROUP_FAILURE_COOLDOWN_MS).catch(() => {});
                 if (turn && !turn.rejection && (billingCode || error.errorStatus === 401)) {
                   turn.rejection = billingCode ? { ok: false, code: 'QUOTA_EXCEEDED', billingCode } : { ok: false, code: 'AUTH_INVALID' };
@@ -518,6 +550,7 @@ export function withSubscriptionAccounts<T extends BaseAgent>(agent: T, auth?: S
             let lease: SubscriptionAccountLease | null = null;
             let startOptions: StartSessionOptions;
             let unregister = () => {};
+            let mixedOpenAiPool = false;
             const poolTurn: { current?: { delivered: boolean; rejection?: OpenAiGroupProbeResult } } = {};
             try {
               lease = await acquireSubscriptionAccount(poolProvider, options.model, keys, false, {
@@ -525,14 +558,38 @@ export function withSubscriptionAccounts<T extends BaseAgent>(agent: T, auth?: S
                 accountId: imported, resuming: !!options.resumeSessionId, includeApiKeys: true,
                 ...(target.kind === 'codex' || target.kind === 'pi' || target.kind === 'claude-code' ? { agent: target.kind } : {}),
                 ...(tried.size ? { exclude: tried } : {}),
+                // Mirrors the Claude adapter's settingSources: these sessions start without user settings.
+                ...(target.kind === 'claude-code' && (options.reviewMode || options.deviceHosted
+                  || isolatedBotProfile(options.botRuntimeProfile) || options[LOCAL_AGENT_CLIENT]?.hostToolsOnly)
+                  ? { userSettingsLoaded: false } : {}),
               });
               if (!lease) {
                 if (lastFailure !== undefined) throw lastFailure;
                 return startLegacy();
               }
-              const routed = engineOptions(options, lease, target.kind);
-              if (routed[NATIVE_SUBSCRIPTION_ACCOUNT]) unregister = registerSessionSubscriptionAccount(options.sessionId, routed[NATIVE_SUBSCRIPTION_ACCOUNT]);
-              else if (lease.apiConnectionId) unregister = bindPoolExecutionRoute(options.sessionId, {
+              const routed = engineOptions(options, lease, target.kind, target.kind === 'codex' && !options.deviceHosted);
+              mixedOpenAiPool = kindOf(poolProvider) === 'openai'
+                && apiKeyPoolMembers(accountProviderId('openai', lease.accountId)).length > 0;
+              const account = routed[NATIVE_SUBSCRIPTION_ACCOUNT];
+              if (account) {
+                const providerId = options.providerId?.trim();
+                const unregisterAccount = registerSessionSubscriptionAccount(options.sessionId, account, lease.accountId, {
+                  mixedOpenAiPool,
+                  deviceHosted: !!options.deviceHosted,
+                });
+                unregister = unregisterAccount;
+                // Created and legacy pool owners can also select a native member that runs
+                // on a different engine route. Record what actually started, not the pool kind.
+                if (target.kind === 'codex' && providerId && routed.providerId && routed.providerId !== providerId) {
+                  const unbindExecution = bindNativePoolSessionExecution(options.sessionId, {
+                    providerId,
+                    connectionId: routed.providerId,
+                    assertCurrent: lease.assertDispatchable,
+                    account,
+                  });
+                  unregister = () => { unbindExecution(); unregisterAccount(); };
+                }
+              } else if (lease.apiConnectionId) unregister = bindPoolExecutionRoute(options.sessionId, {
                 providerId: options.providerId?.trim() || poolProvider,
                 connectionId: lease.apiConnectionId,
                 assertCurrent: lease.assertDispatchable,
@@ -548,6 +605,7 @@ export function withSubscriptionAccounts<T extends BaseAgent>(agent: T, auth?: S
               startOptions = lease.apiConnectionId && options.model
                 ? { ...routed, model: apiKeyEngineModel(options.model, target.kind) } : routed;
             } catch (error) {
+              unregister();
               lease?.release();
               if (lastFailure !== undefined) throw lastFailure;
               // No underlying runtime has been started; Maker may release its worktree lease.
@@ -557,14 +615,15 @@ export function withSubscriptionAccounts<T extends BaseAgent>(agent: T, auth?: S
             let handle: AgentSessionHandle | undefined;
             try {
               const sessionProvider = options.providerId?.trim() || poolProvider;
-              const engineId = engineProviderId(sessionProvider, current.accountId);
+              const engineId = startOptions.providerId ?? engineProviderId(
+                sessionProvider, current.accountId, target.kind === 'codex' && !options.deviceHosted,
+              );
               handle = await target.startSession(startOptions);
               await current.bind([...keys, `native:${handle.id}`]);
               // Startup owns its slot until the first turn completes or the runtime closes.
               return guardAccountSwitch(wrapHandle(handle, current, unregister, options.model,
                 target.kind === 'codex' || target.kind === 'pi' || target.kind === 'claude-code' ? target.kind : undefined,
-                current.apiConnectionId || (kindOf(poolProvider) === 'openai'
-                  && apiKeyPoolMembers(accountProviderId('openai', current.accountId)).length) ? poolTurn : undefined), target, {
+                current.apiConnectionId || mixedOpenAiPool ? poolTurn : undefined), target, {
                 ...options,
                 // Keep the effective native source for later switch checks even if
                 // the user's implicit default changes while this runtime is alive.
@@ -602,20 +661,52 @@ export function withSubscriptionAccounts<T extends BaseAgent>(agent: T, auth?: S
         };
       if (property === 'requiresCodexThreadHostTransfer')
         return async (options: Parameters<BaseAgent['requiresCodexThreadHostTransfer']>[0]) => {
+          const execution = options.remoteHostId ? undefined : readPoolSessionExecution(options.sessionId);
+          if (execution) {
+            const targetProvider = options.providerId?.trim();
+            const matchesTarget = () => {
+              if (isPoolSessionExecutionCurrent(options.sessionId, execution, targetProvider, options.model))
+                return true;
+              // A verified local legacy alias can already be running on this built-in pool.
+              // Keep the normal logical-route check for mixed/API routes and hosted sessions.
+              if (targetProvider !== 'openai' || execution.connectionId !== targetProvider || !('account' in execution)
+                || !isPoolSessionExecutionCurrent(options.sessionId, execution, execution.providerId, options.model))
+                return false;
+              try {
+                const binding = readSessionSubscriptionAccountBinding(options.sessionId);
+                const ref = resolveSubscriptionPoolProviderRef(execution.providerId);
+                return !!binding && !binding.deviceHosted && binding.account === execution.account
+                  && !!ref && isLegacyAliasOfBuiltInCodexPool(ref, binding.poolAccountId);
+              } catch { return false; }
+            };
+            if (!matchesTarget()) return target.requiresCodexThreadHostTransfer(options);
+            const result = await target.requiresCodexThreadHostTransfer({
+              ...options,
+              providerId: execution.connectionId,
+              ...('account' in execution ? { [NATIVE_SUBSCRIPTION_ACCOUNT]: execution.account } : {}),
+            });
+            // A paused/moved account or replaced runtime cannot suppress a real writer transfer.
+            return matchesTarget() ? result : target.requiresCodexThreadHostTransfer(options);
+          }
           // The live session's host carries the subscription account it runs on. When the target
           // route stays on that account, compare against that same host instead of mistaking it for
           // another writer of the thread (which closed and relinked unchanged sessions).
           // A running account that was since removed or disconnected cannot be the target's writer;
           // check the target as before instead of failing a switch to another working source.
-          let account: ReturnType<typeof getSessionSubscriptionAccount>;
-          try { account = getSessionSubscriptionAccount(options.sessionId); } catch { account = undefined; }
+          let binding: ReturnType<typeof readSessionSubscriptionAccountBinding>;
+          try { binding = readSessionSubscriptionAccountBinding(options.sessionId); } catch { binding = undefined; }
           const ref = resolveSubscriptionPoolProviderRef(options.providerId?.trim());
           // A provider can hold several accounts; its first (`ownAccount`) is only one of them. The
           // route stays on the running account when that account belongs to the target provider.
-          const sameAccount = account && ref
-            && (accountProviderId(ref.kind, account.id) === ref.providerId || ref.ownAccount === account.id);
-          return target.requiresCodexThreadHostTransfer(sameAccount
-            ? { ...options, [NATIVE_SUBSCRIPTION_ACCOUNT]: account } : options);
+          if (!binding || !ref || (binding.poolAccountId !== ref.ownAccount
+            && accountProviderId(ref.kind, binding.poolAccountId) !== ref.providerId))
+            return target.requiresCodexThreadHostTransfer(options);
+          return target.requiresCodexThreadHostTransfer({
+            ...options,
+            providerId: binding.deviceHosted
+              ? options.providerId : engineProviderId(options.providerId, binding.poolAccountId, target.kind === 'codex'),
+            [NATIVE_SUBSCRIPTION_ACCOUNT]: binding.account,
+          });
         };
       if (property === 'forkSdkSession')
         return async (options: ForkSdkSessionOptions) => {

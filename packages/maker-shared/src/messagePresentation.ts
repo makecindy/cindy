@@ -10,6 +10,7 @@ import {
 } from './messageRender';
 import {
   describeToolUse,
+  formatCollabTargetsSummary,
   truncateToolText,
   type ToolUseDescriptor,
 } from './toolUseDescriptor';
@@ -309,6 +310,8 @@ const INTENT_VERB_ZH: Record<CommandIntentAction, string> = {
 /** 行级动词槽位(TOOL_ROW_VERB_ZH 的 key 空间,供措辞注入方实现)。 */
 export type ToolRowVerbKey = keyof typeof TOOL_ROW_VERB_ZH;
 
+export type CollabToolUseDescriptor = Extract<ToolUseDescriptor, { kind: 'collab' }>;
+
 /**
  * 工具行措辞注入点——默认是本文件的中文硬编码表(mobile / IM 卡片继续走默认,
  * 字节级不变);desktop main(灵动岛)注入经 i18n 解析的本地化实现。做成函数式
@@ -323,6 +326,36 @@ export interface ToolRowWording {
   updateFilesLabel(count: number): string;
   /** Compact activity fallback when no reliable action description is available. */
   toolCallLabel?(): string;
+  /** Localized label for Codex multi-agent collaboration control calls (`collab:*`). */
+  collabLabel?(descriptor: CollabToolUseDescriptor): string;
+}
+
+function defaultCollabLabel(descriptor: CollabToolUseDescriptor): string {
+  const targetSummary = formatCollabTargetsSummary(descriptor.targets, descriptor.targetCount);
+  const count = descriptor.targetCount && descriptor.targetCount > 0 ? descriptor.targetCount : undefined;
+  switch (descriptor.action) {
+    case 'wait':
+      if (targetSummary) return `等待 Subagent ${targetSummary}`;
+      if (count) return `等待 ${count} 个 Subagent`;
+      return '等待 Subagent';
+    case 'sendInput':
+      if (targetSummary) return `向 Subagent 发送指令 ${targetSummary}`;
+      if (count) return `向 ${count} 个 Subagent 发送指令`;
+      return '向 Subagent 发送指令';
+    case 'resume':
+      if (targetSummary) return `恢复 Subagent ${targetSummary}`;
+      if (count) return `恢复 ${count} 个 Subagent`;
+      return '恢复 Subagent';
+    case 'close':
+      if (targetSummary) return `关闭 Subagent ${targetSummary}`;
+      if (count) return `关闭 ${count} 个 Subagent`;
+      return '关闭 Subagent';
+    case 'spawn':
+      if (targetSummary) return `启动 Subagent ${targetSummary}`;
+      return '启动 Subagent';
+    default:
+      return joinVerb(TOOL_ROW_VERB_ZH.use, descriptor.toolLabel);
+  }
 }
 
 export const DEFAULT_TOOL_ROW_WORDING = {
@@ -330,6 +363,7 @@ export const DEFAULT_TOOL_ROW_WORDING = {
   intentVerb: (action) => INTENT_VERB_ZH[action],
   updateFilesLabel: (count) => `${TOOL_ROW_VERB_ZH.update} ${count} 个文件`,
   toolCallLabel: () => '正在调用工具…',
+  collabLabel: defaultCollabLabel,
 } satisfies ToolRowWording;
 
 const TOOL_ROW_TEXT_MAX_CHARS = 60;
@@ -582,11 +616,16 @@ export function formatToolRowText(
         ),
         ...(descriptor.detail ? { detail: descriptor.detail } : {}),
       };
-    case 'collab':
+    case 'collab': {
+      const label = (wording.collabLabel ?? DEFAULT_TOOL_ROW_WORDING.collabLabel)(descriptor);
+      const detail = descriptor.prompt
+        ? truncateToolText(descriptor.prompt, TOOL_ROW_TEXT_MAX_CHARS)
+        : undefined;
       return {
-        label: joinVerb(wording.verb('use'), descriptor.toolLabel),
-        ...(descriptor.detail ? { detail: descriptor.detail } : {}),
+        label,
+        ...(detail ? { detail } : {}),
       };
+    }
     default:
       return {
         label: joinVerb(wording.verb('use'), descriptor.toolName),

@@ -38,7 +38,10 @@ vi.mock('@/lib/makerChatStore', () => ({
     getRunningSnapshot: () => liveRunning,
   },
 }));
-vi.mock('@/lib/sessionsBus', () => ({ emitRefresh: vi.fn() }));
+vi.mock('@/lib/sessionsBus', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/sessionsBus')>()),
+  emitRefresh: vi.fn(),
+}));
 vi.mock('@/lib/toast', () => ({ toast: { warning: vi.fn(), success: vi.fn(), error: vi.fn() } }));
 
 const worktreeRemovalPreview = vi.fn();

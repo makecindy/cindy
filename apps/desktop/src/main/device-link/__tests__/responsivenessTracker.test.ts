@@ -272,6 +272,8 @@ describe('responsivenessTracker', () => {
       'maker:get-capabilities',
       'maker:provider:list',
       'maker:git-safety:get',
+      'maker:list-agent-skills',
+      'maker:scan-at-resources',
     ];
     const timeoutBatch = async (): Promise<void> => {
       const results = await Promise.allSettled(
