@@ -215,6 +215,14 @@ function sharingNetworks(change: RelayStoreChange, sharing: SharingState, reques
       const encoded = JSON.stringify(b);
       if (changed.has(b.resourceId) || !oldBindings.has(encoded) || !nextBindings.has(encoded)) affected.add(b.networkId);
     }
+    const activeLinked = (state: SharingState | undefined) => new Map(
+      (state?.linkedShares ?? []).filter(l => l.removedAt === undefined)
+        .map(l => [l.networkId + '\0' + l.shareId, l.hostDeviceId + '\0' + l.ownerAccountId + '\0' + l.generation] as const),
+    );
+    const oldLinked = activeLinked(before), nextLinked = activeLinked(sharing);
+    for (const key of new Set([...oldLinked.keys(), ...nextLinked.keys()])) {
+      if (oldLinked.get(key) !== nextLinked.get(key)) affected.add(key.slice(0, key.indexOf('\0')));
+    }
   }
   return affected;
 }

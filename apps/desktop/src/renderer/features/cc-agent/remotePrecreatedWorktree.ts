@@ -1,15 +1,23 @@
 import {
   parseLegacyPendingRemotePrecreatedWorktreeLedger,
+  parsePrecreatedWorktreePreserveReasonFromMessage,
   type PendingRemotePrecreatedWorktree,
   type PendingRemotePrecreatedWorktreeTarget,
+  type PrecreatedWorktreePreserveReason,
+  type RemotePrecreatedWorktreeFailureKind,
   type RemotePrecreatedWorktreeLedgerSnapshot,
 } from '../../../shared/remotePrecreatedWorktreeLedger';
 import type {
   WorktreeError,
   WorktreeMeta,
 } from '@/lib/worktree.types';
+import { extractIpcError } from '@/utils/ipcError';
 
-export type { PendingRemotePrecreatedWorktree } from '../../../shared/remotePrecreatedWorktreeLedger';
+export type {
+  PendingRemotePrecreatedWorktree,
+  PrecreatedWorktreePreserveReason,
+  RemotePrecreatedWorktreeFailureKind,
+} from '../../../shared/remotePrecreatedWorktreeLedger';
 
 export type RemoteWorktreeInvoke = (
   channel: string,
@@ -18,6 +26,7 @@ export type RemoteWorktreeInvoke = (
 
 export interface CreateRemoteSessionWithPrecreatedWorktreeInput {
   deviceId: string;
+  deviceName?: string;
   sessionId: string;
   path: string;
   recoveryKey: string;
@@ -42,6 +51,19 @@ export interface RecoverPendingRemotePrecreatedWorktreesResult {
   recovered: number;
   retained: number;
   storageReadable: boolean;
+  failureKind?: RemotePrecreatedWorktreeFailureKind;
+  preserveReason?: PrecreatedWorktreePreserveReason;
+}
+
+export interface RecoverSinglePendingRemotePrecreatedWorktreeResult {
+  recovered: boolean;
+  failureKind?: RemotePrecreatedWorktreeFailureKind;
+  preserveReason?: PrecreatedWorktreePreserveReason;
+}
+
+export interface RemoteWorktreeDiscardFailure {
+  kind: RemotePrecreatedWorktreeFailureKind;
+  preserveReason?: PrecreatedWorktreePreserveReason;
 }
 
 export interface RemoteWorktreeCreateRequest {
@@ -89,14 +111,142 @@ function abandonedSessionCreateKey(deviceId: string, sessionId: string): string 
   return `${deviceId}\u0000${sessionId}`;
 }
 
+const OFFLINE_IPC_CODES = new Set<string>([
+  'DEVICE_LINK_TIMEOUT',
+  'DEVICE_LINK_DEVICE_OFFLINE',
+  'DEVICE_LINK_NOT_CONNECTED',
+  'DEVICE_LINK_UNAVAILABLE',
+  'DEVICE_LINK_DEVICE_UNRESPONSIVE',
+  'DEVICE_LINK_BUSY',
+  'DEVICE_LINK_STANDBY',
+  'DEVICE_LINK_REMOTE_DISABLED',
+  'DEVICE_LINK_ACCESS_REVOKED',
+  'DEVICE_LINK_CONTROL_DISABLED',
+]);
+
+const UNSUPPORTED_IPC_CODES = new Set<string>([
+  'DEVICE_LINK_CHANNEL_NOT_ALLOWED',
+  'DEVICE_LINK_VERSION_MISMATCH',
+  'UNSUPPORTED_CAPABILITY',
+]);
+
+const LEGACY_CHANNEL_NOT_ALLOWED_RE =
+  /(?:^|: Error: )\[CHANNEL_NOT_ALLOWED\](?:\s|$)/;
+
 /** 标记旧预创建目录尚未安全回收，调用方据此展示本地化提示并阻止重复创建。 */
 export class RemotePrecreatedWorktreeCleanupPendingError extends Error {
   readonly code = CLEANUP_PENDING_CODE;
+  readonly failureKind?: RemotePrecreatedWorktreeFailureKind;
+  readonly preserveReason?: PrecreatedWorktreePreserveReason;
+  readonly deviceId?: string;
 
-  constructor(options?: { cause?: unknown }) {
-    super(CLEANUP_PENDING_CODE, options);
+  constructor(options?: {
+    cause?: unknown;
+    failureKind?: RemotePrecreatedWorktreeFailureKind;
+    preserveReason?: PrecreatedWorktreePreserveReason;
+    deviceId?: string;
+  }) {
+    super(
+      CLEANUP_PENDING_CODE,
+      options?.cause !== undefined ? { cause: options.cause } : undefined,
+    );
     this.name = 'RemotePrecreatedWorktreeCleanupPendingError';
+    this.failureKind = options?.failureKind;
+    this.preserveReason = options?.preserveReason;
+    this.deviceId = options?.deviceId;
   }
+}
+
+export function classifyRemoteWorktreeDiscardFailure(
+  error: unknown,
+): RemoteWorktreeDiscardFailure {
+  if (isRemotePrecreatedWorktreeCleanupPendingError(error) && error.failureKind) {
+    return {
+      kind: error.failureKind,
+      ...(error.preserveReason ? { preserveReason: error.preserveReason } : {}),
+    };
+  }
+  const ipc = extractIpcError(error);
+  if (ipc) {
+    if (ipc.code === 'PRECONDITION_FAILED') {
+      const preserveReason = parsePrecreatedWorktreePreserveReasonFromMessage(ipc.message);
+      if (preserveReason === 'in-progress') {
+        return { kind: 'in-progress', preserveReason };
+      }
+      return {
+        kind: 'preserved',
+        ...(preserveReason ? { preserveReason } : {}),
+      };
+    }
+    if (ipc.code === 'PERMISSION_DENIED') {
+      return { kind: 'mismatch' };
+    }
+    if (UNSUPPORTED_IPC_CODES.has(ipc.code)) {
+      return { kind: 'unsupported' };
+    }
+    if (
+      ipc.code === 'NOT_FOUND'
+      && /no local IPC handler|Unknown channel/i.test(ipc.message)
+    ) {
+      return { kind: 'unsupported' };
+    }
+    if (OFFLINE_IPC_CODES.has(ipc.code)) {
+      return { kind: 'offline' };
+    }
+    return { kind: 'unknown' };
+  }
+  if (error instanceof Error && LEGACY_CHANNEL_NOT_ALLOWED_RE.test(error.message)) {
+    return { kind: 'unsupported' };
+  }
+  return { kind: 'offline' };
+}
+
+export function getRemoteWorktreeCleanupPendingMessage(
+  failure: {
+    failureKind?: RemotePrecreatedWorktreeFailureKind;
+    preserveReason?: PrecreatedWorktreePreserveReason;
+  },
+  t: (key: string) => string,
+): string {
+  const { failureKind, preserveReason } = failure;
+  if (failureKind === 'in-progress' || preserveReason === 'in-progress') {
+    return t('ccAgent.draft.remoteWorktreeCleanup.inProgress');
+  }
+  if (failureKind === 'preserved') {
+    switch (preserveReason) {
+      case 'dirty':
+        return t('ccAgent.draft.remoteWorktreeCleanup.preservedDirty');
+      case 'keep-sentinel':
+        return t('ccAgent.draft.remoteWorktreeCleanup.preservedKeepSentinel');
+      case 'live-reference':
+        return t('ccAgent.draft.remoteWorktreeCleanup.preservedLiveReference');
+      case 'branch-mismatch':
+        return t('ccAgent.draft.remoteWorktreeCleanup.preservedBranchMismatch');
+      case 'include-files-changed':
+        return t('ccAgent.draft.remoteWorktreeCleanup.preservedIncludeFilesChanged');
+      case 'ignored-files':
+        return t('ccAgent.draft.remoteWorktreeCleanup.preservedIgnoredFiles');
+      case 'remove-failed':
+      case 'quarantine-failed':
+      case 'invalid-quarantine':
+        return t('ccAgent.draft.remoteWorktreeCleanup.preservedRemoveFailed');
+      default:
+        return t('ccAgent.draft.remoteWorktreeCleanup.preserved');
+    }
+  }
+  if (failureKind === 'mismatch') {
+    return t('ccAgent.draft.remoteWorktreeCleanup.mismatch');
+  }
+  if (failureKind === 'unsupported') {
+    return t('ccAgent.draft.remoteWorktreeCleanup.unsupported');
+  }
+  if (failureKind === 'create-started') {
+    return t('ccAgent.draft.remoteWorktreeCleanup.createStarted');
+  }
+  if (failureKind === 'storage') {
+    return t('ccAgent.draft.remoteWorktreeCleanup.storage');
+  }
+  return t('ccAgent.draft.remoteWorktreeCleanupPending');
 }
 
 export function isRemotePrecreatedWorktreeCleanupPendingError(
@@ -413,6 +563,7 @@ async function probeClaimedSession(
     if (!isRecord(value) || value.id !== sessionId) {
       throw new RemotePrecreatedWorktreeCleanupPendingError({
         cause: new Error('Invalid remote session ownership response'),
+        failureKind: 'unknown',
       });
     }
     return value;
@@ -420,7 +571,12 @@ async function probeClaimedSession(
     if (isRemotePrecreatedWorktreeOwnerChangedError(error)) throw error;
     if (isRemotePrecreatedWorktreeCleanupPendingError(error)) throw error;
     if (isExplicitRemoteNotFoundError(error)) return null;
-    throw new RemotePrecreatedWorktreeCleanupPendingError({ cause: error });
+    const classified = classifyRemoteWorktreeDiscardFailure(error);
+    throw new RemotePrecreatedWorktreeCleanupPendingError({
+      cause: error,
+      failureKind: classified.kind,
+      preserveReason: classified.preserveReason,
+    });
   }
 }
 
@@ -463,20 +619,63 @@ async function settleClaimedRecord(
   return forgetPendingRemotePrecreatedWorktree(record, isCurrent);
 }
 
+type DiscardPendingOutcome =
+  | { recovered: true }
+  | {
+      recovered: false;
+      failureKind: RemotePrecreatedWorktreeFailureKind;
+      preserveReason?: PrecreatedWorktreePreserveReason;
+    };
+
+async function recordFailureDiagnostic(
+  record: PendingRemotePrecreatedWorktree,
+  failure: RemoteWorktreeDiscardFailure,
+  isCurrent?: () => boolean,
+): Promise<void> {
+  const { lastFailureReason: _prevReason, ...rest } = record;
+  const updated: PendingRemotePrecreatedWorktree = {
+    ...rest,
+    lastFailureKind: failure.kind,
+    ...(failure.preserveReason ? { lastFailureReason: failure.preserveReason } : {}),
+    lastFailureAt: Date.now(),
+  };
+  await registerPendingRemotePrecreatedWorktree(updated, isCurrent);
+}
+
 async function discardPendingRecord(
   record: PendingRemotePrecreatedWorktree,
   invoke: RemoteWorktreeInvoke,
   isCurrent?: () => boolean,
-): Promise<boolean> {
+  persistDiagnostics = false,
+): Promise<DiscardPendingOutcome> {
+  const retain = async (
+    failure: RemoteWorktreeDiscardFailure,
+  ): Promise<DiscardPendingOutcome> => {
+    if (persistDiagnostics) {
+      await recordFailureDiagnostic(record, failure, isCurrent);
+    }
+    return {
+      recovered: false,
+      failureKind: failure.kind,
+      ...(failure.preserveReason ? { preserveReason: failure.preserveReason } : {}),
+    };
+  };
+
   assertCurrent(isCurrent);
   try {
     const session = await probeClaimedSession(invoke, record.sessionId, isCurrent);
-    if (session) return settleClaimedRecord(record, session, invoke, isCurrent);
+    if (session) {
+      return (await settleClaimedRecord(record, session, invoke, isCurrent))
+        ? { recovered: true }
+        : { recovered: false, failureKind: 'storage' };
+    }
   } catch (error) {
     if (isRemotePrecreatedWorktreeOwnerChangedError(error)) throw error;
-    return false;
+    return retain(classifyRemoteWorktreeDiscardFailure(error));
   }
-  if (record.phase !== 'reserved' && record.phase !== 'precreated') return false;
+  if (record.phase !== 'reserved' && record.phase !== 'precreated') {
+    return retain({ kind: 'create-started' });
+  }
   try {
     const locator = typeof record.recoveryKey === 'string'
       ? { sessionId: record.sessionId, recoveryKey: record.recoveryKey }
@@ -484,20 +683,49 @@ async function discardPendingRecord(
     assertCurrent(isCurrent);
     const discardResult = await invoke('worktree:discard-precreated', [locator]);
     assertCurrent(isCurrent);
-    if (!parseRemoteDiscardPrecreatedAck(discardResult)) return false;
-    return forgetPendingRemotePrecreatedWorktree(record, isCurrent);
+    if (!parseRemoteDiscardPrecreatedAck(discardResult)) {
+      return retain({ kind: 'unknown' });
+    }
+    return (await forgetPendingRemotePrecreatedWorktree(record, isCurrent))
+      ? { recovered: true }
+      : { recovered: false, failureKind: 'storage' };
   } catch (error) {
     if (isRemotePrecreatedWorktreeOwnerChangedError(error)) throw error;
     // discard 与 create 共用被控端 session 锁。若拒绝来自一次已成功但丢回包的
     // create，权威 session 行会存在；dirty/keep 等其它拒绝则继续留账。
     try {
       const session = await probeClaimedSession(invoke, record.sessionId, isCurrent);
-      if (session) return await settleClaimedRecord(record, session, invoke, isCurrent);
+      if (session) {
+        return (await settleClaimedRecord(record, session, invoke, isCurrent))
+          ? { recovered: true }
+          : { recovered: false, failureKind: 'storage' };
+      }
     } catch (probeError) {
       if (isRemotePrecreatedWorktreeOwnerChangedError(probeError)) throw probeError;
     }
-    return false;
+    return retain(classifyRemoteWorktreeDiscardFailure(error));
   }
+}
+
+export async function recoverSinglePendingRemotePrecreatedWorktree(input: {
+  record: PendingRemotePrecreatedWorktree;
+  invoke: RemoteWorktreeInvoke;
+  isCurrent?: () => boolean;
+}): Promise<RecoverSinglePendingRemotePrecreatedWorktreeResult> {
+  const outcome = await discardPendingRecord(
+    input.record,
+    input.invoke,
+    input.isCurrent,
+    true,
+  );
+  if (outcome.recovered) {
+    return { recovered: true };
+  }
+  return {
+    recovered: false,
+    failureKind: outcome.failureKind,
+    ...(outcome.preserveReason ? { preserveReason: outcome.preserveReason } : {}),
+  };
 }
 
 /**
@@ -540,10 +768,22 @@ export async function recoverPendingRemotePrecreatedWorktrees(
   for (const record of records) {
     assertCurrent(input.isCurrent);
     result.attempted += 1;
-    if (await discardPendingRecord(record, input.invoke, input.isCurrent)) {
+    const outcome = await discardPendingRecord(
+      record,
+      input.invoke,
+      input.isCurrent,
+      ledger.storageReadable,
+    );
+    if (outcome.recovered) {
       result.recovered += 1;
     } else {
       result.retained += 1;
+      if (!result.failureKind) {
+        result.failureKind = outcome.failureKind;
+        if (outcome.preserveReason) {
+          result.preserveReason = outcome.preserveReason;
+        }
+      }
     }
   }
   return result;
@@ -560,8 +800,10 @@ export async function createRemoteSessionWithPrecreatedWorktree(
   input: CreateRemoteSessionWithPrecreatedWorktreeInput,
 ): Promise<string> {
   assertCurrent(input.isCurrent);
+  const deviceName = input.deviceName?.trim() || undefined;
   const pending: PendingRemotePrecreatedWorktree = {
     deviceId: input.deviceId,
+    ...(deviceName ? { deviceName } : {}),
     sessionId: input.sessionId,
     path: input.path,
     recoveryKey: input.recoveryKey,
@@ -575,7 +817,10 @@ export async function createRemoteSessionWithPrecreatedWorktree(
   assertCurrent(input.isCurrent);
   const started = { ...pending, phase: 'session-create-started' as const };
   if (!(await registerPendingRemotePrecreatedWorktree(started, input.isCurrent))) {
-    throw new RemotePrecreatedWorktreeCleanupPendingError();
+    throw new RemotePrecreatedWorktreeCleanupPendingError({
+      failureKind: 'storage',
+      deviceId: input.deviceId,
+    });
   }
   assertCurrent(input.isCurrent);
 
@@ -589,8 +834,11 @@ export async function createRemoteSessionWithPrecreatedWorktree(
       await forgetPendingRemotePrecreatedWorktree(pending, input.isCurrent);
       return sessionId;
     }
+    await recordFailureDiagnostic(started, { kind: 'create-started' }, input.isCurrent);
     throw new RemotePrecreatedWorktreeCleanupPendingError({
       cause: new Error('Remote session creation returned no matching session id'),
+      failureKind: 'create-started',
+      deviceId: input.deviceId,
     });
   } catch (err) {
     if (isRemotePrecreatedWorktreeOwnerChangedError(err)) throw err;
@@ -609,11 +857,20 @@ export async function createRemoteSessionWithPrecreatedWorktree(
     }
   } catch (probeFailure) {
     if (isRemotePrecreatedWorktreeOwnerChangedError(probeFailure)) throw probeFailure;
+    const classified = classifyRemoteWorktreeDiscardFailure(probeFailure);
+    await recordFailureDiagnostic(started, classified, input.isCurrent);
     throw new RemotePrecreatedWorktreeCleanupPendingError({
       cause: probeFailure,
+      failureKind: classified.kind,
+      preserveReason: classified.preserveReason,
+      deviceId: input.deviceId,
     });
   }
-  throw new RemotePrecreatedWorktreeCleanupPendingError();
+  await recordFailureDiagnostic(started, { kind: 'create-started' }, input.isCurrent);
+  throw new RemotePrecreatedWorktreeCleanupPendingError({
+    failureKind: 'create-started',
+    deviceId: input.deviceId,
+  });
 }
 
 export const __testing = {
@@ -627,6 +884,7 @@ export const __testing = {
 
 export interface PrecreateRemoteDraftWorktreeInput {
   deviceId: string;
+  deviceName?: string;
   /** Preset id shared by worktree:create and maker:create-session (close-session reclaims by it). */
   sessionId: string;
   /** Owner captured at send; the cleanup ledger is bound to it. */
@@ -661,27 +919,38 @@ export async function precreateRemoteDraftWorktree(
   input: PrecreateRemoteDraftWorktreeInput,
 ): Promise<PrecreateRemoteDraftWorktreeResult> {
   const { deviceId, dataOwnerId, invoke, isCurrent } = input;
+  const deviceName = input.deviceName?.trim() || undefined;
   // 账本必须绑定发起时的账号/本地数据 owner；没有 owner 无法承担清理义务。
-  if (!dataOwnerId) throw new RemotePrecreatedWorktreeCleanupPendingError();
+  if (!dataOwnerId) {
+    throw new RemotePrecreatedWorktreeCleanupPendingError({
+      failureKind: 'storage',
+      deviceId,
+    });
+  }
   // 上次两步创建若断线失败，本地账本仍承担 cleanup obligation：新建下一份前先恢复，
   // 无法确认回收/认领时硬挡本次 worktree:create，避免每次重试生成一个新的受管目录。
   const recovery = await recoverPendingRemotePrecreatedWorktrees({ deviceId, dataOwnerId, invoke, isCurrent });
   assertCurrent(isCurrent);
   // 账本不可读时磁盘上是否还有旧 obligation 未知，同样 fail closed。
   if (!recovery.storageReadable || recovery.retained > 0) {
-    throw new RemotePrecreatedWorktreeCleanupPendingError();
+    throw new RemotePrecreatedWorktreeCleanupPendingError({
+      failureKind: recovery.storageReadable ? recovery.failureKind : 'storage',
+      preserveReason: recovery.preserveReason,
+      deviceId,
+    });
   }
   let name = input.name.trim();
   if (!name) name = `auto-${Date.now().toString(36).slice(-6)}`;
   const recoveryKey = input.makeRecoveryKey();
   const createdAt = Date.now();
-  const reservation = {
+  const reservation: PendingRemotePrecreatedWorktree = {
     deviceId,
+    ...(deviceName ? { deviceName } : {}),
     sessionId: input.sessionId,
     dataOwnerId,
     recoveryKey,
     createdAt,
-    phase: 'reserved' as const,
+    phase: 'reserved',
   };
   // 远端副作用之前先持久化 reservation。首次写盘失败时绝不调用 worktree:create。
   assertCurrent(isCurrent);
@@ -689,7 +958,10 @@ export async function precreateRemoteDraftWorktree(
   assertCurrent(isCurrent);
   if (!reservationRecorded) {
     await forgetPendingRemotePrecreatedWorktree(reservation, isCurrent);
-    throw new RemotePrecreatedWorktreeCleanupPendingError();
+    throw new RemotePrecreatedWorktreeCleanupPendingError({
+      failureKind: 'storage',
+      deviceId,
+    });
   }
   input.progress.start(name);
   try {
@@ -704,7 +976,13 @@ export async function precreateRemoteDraftWorktree(
       recoveryKey,
     };
     const resp = parseRemoteWorktreeCreateResult(await invoke('worktree:create', [createRequest]), createRequest);
-    if (!resp) throw new RemotePrecreatedWorktreeCleanupPendingError();
+    if (!resp) {
+      await recordFailureDiagnostic(reservation, { kind: 'unknown' }, isCurrent);
+      throw new RemotePrecreatedWorktreeCleanupPendingError({
+        failureKind: 'unknown',
+        deviceId,
+      });
+    }
     if (!resp.ok) {
       assertCurrent(isCurrent);
       await forgetPendingRemotePrecreatedWorktree(reservation, isCurrent);
@@ -724,7 +1002,14 @@ export async function precreateRemoteDraftWorktree(
     if (isRemotePrecreatedWorktreeCleanupPendingError(err)) throw err;
     // invoke 抛错时无法判断被控端是否已完成创建：保留 reservation，交给重连/重启恢复，
     // 不能把「不知道」展示成普通创建失败后允许重试。
-    throw new RemotePrecreatedWorktreeCleanupPendingError({ cause: err });
+    const classified = classifyRemoteWorktreeDiscardFailure(err);
+    await recordFailureDiagnostic(reservation, classified, isCurrent);
+    throw new RemotePrecreatedWorktreeCleanupPendingError({
+      cause: err,
+      failureKind: classified.kind,
+      preserveReason: classified.preserveReason,
+      deviceId,
+    });
   } finally {
     input.progress.end();
   }

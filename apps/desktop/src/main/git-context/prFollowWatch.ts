@@ -164,6 +164,8 @@ export class PrFollowWatch {
   /** Keep one doorbell per schedule, so retrying a busy follower cannot rerun its siblings. */
   private readonly pending = new Map<string, () => Promise<void>>();
   private retryTimer: ReturnType<typeof setTimeout> | undefined;
+  private drainingPending = false;
+  private retryPendingAgain = false;
   private readonly now: () => number;
 
   constructor(private readonly deps: PrFollowWatchDeps) {
@@ -178,6 +180,8 @@ export class PrFollowWatch {
     this.pending.clear();
     if (this.retryTimer) clearTimeout(this.retryTimer);
     this.retryTimer = undefined;
+    this.drainingPending = false;
+    this.retryPendingAgain = false;
     this.generation++;
   }
 
@@ -197,6 +201,17 @@ export class PrFollowWatch {
     if (this.signatures.size > MAX_TRACKED) this.signatures.delete(this.signatures.keys().next().value!);
     const changes = changesBetween(previous, signature, query.provider);
     if (!changes.length) {
+      // Seed reconciledUpdatedAt on the initial baseline read so later overflow sweeps
+      // do not emit redundant `reconcile` triggers for PRs whose updated_at never moved.
+      if (
+        previous === undefined &&
+        this.deps.autoRunAllowed() &&
+        result.ok &&
+        typeof result.metadata?.updated_at === 'string' &&
+        result.metadata.updated_at
+      ) {
+        this.markCommentReconciled(query, result.metadata.updated_at);
+      }
       this.retryPending();
       if (previous === undefined && result.ok && (result.status === 'merged' || (query.provider === 'gitlab' && result.status === 'closed'))) {
         const mergedAt = Date.parse(String((result.status === 'merged' ? result.metadata?.merged_at : result.metadata?.closed_at) ?? ''));
@@ -276,23 +291,55 @@ export class PrFollowWatch {
     await this.trigger(url, [change], isCurrent);
   }
 
-  private retryPending(): void {
-    if (this.retryTimer) clearTimeout(this.retryTimer);
-    this.retryTimer = undefined;
-    for (const [id, retry] of Array.from(this.pending)) {
-      this.pending.delete(id);
-      void retry().catch(() => undefined);
-    }
-  }
-
-  private defer(id: string, retry: () => Promise<void>): void {
-    this.pending.set(id, retry);
+  private scheduleRetryTimer(): void {
     // This only checks local scheduler capacity; it makes no GitHub API requests.
     // A comment must not depend on another status change to be noticed after a busy run.
     if (!this.retryTimer) {
       this.retryTimer = setTimeout(() => this.retryPending(), 5_000);
       this.retryTimer.unref?.();
     }
+  }
+
+  private retryPending(): void {
+    if (this.retryTimer) clearTimeout(this.retryTimer);
+    this.retryTimer = undefined;
+    if (this.drainingPending) {
+      this.retryPendingAgain = true;
+      return;
+    }
+    if (this.pending.size === 0) return;
+    this.drainingPending = true;
+    const generation = this.generation;
+    // Drain sequentially and re-check capacity before each schedule so a backlog
+    // cannot burst past maxConcurrentRuns in a single microtask wave.
+    void (async () => {
+      try {
+        do {
+          this.retryPendingAgain = false;
+          for (const [id, retry] of Array.from(this.pending)) {
+            if (generation !== this.generation) return;
+            if (!this.deps.hasCapacity()) {
+              this.scheduleRetryTimer();
+              return;
+            }
+            this.pending.delete(id);
+            await retry().catch(() => undefined);
+          }
+        } while (this.retryPendingAgain && this.pending.size > 0 && generation === this.generation);
+      } finally {
+        if (generation === this.generation) {
+          this.drainingPending = false;
+          if (this.pending.size > 0 && !this.retryTimer) {
+            this.scheduleRetryTimer();
+          }
+        }
+      }
+    })();
+  }
+
+  private defer(id: string, retry: () => Promise<void>): void {
+    this.pending.set(id, retry);
+    this.scheduleRetryTimer();
   }
 
   private async trigger(url: string, changes: readonly WatchChange[], isCurrent: () => boolean = () => true, onlyScheduleId?: string, mergedAt?: number, mrRecovery?: MrRecovery): Promise<void> {

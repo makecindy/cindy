@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { BROWSER_BACKEND_KINDS } from './browserBackend.js';
 import { SETTINGS_DISPLAY_LOCALES, SETTINGS_READ_SHORTCUT_IDS, SETTINGS_READ_KEY_CODES } from './settingsReadCatalog.js';
 
 /** Display languages every Host accepts. A cloud page offers only these unless the Host lists more. */
@@ -28,7 +29,7 @@ export type ImSettingsDomain = typeof IM_SETTINGS_DOMAINS[number];
 export function isImSettingsDomain(domain: string): domain is ImSettingsDomain { return IM_SETTINGS_DOMAINS.includes(domain as ImSettingsDomain); }
 const permission = z.enum(['ask', 'default', 'acceptEdits', 'plan', 'auto', 'bypassPermissions']);
 const imRoute = backend.extend({ modelId: z.union([z.literal(''), routeId]), providerId: routeId.nullable(), effort: z.enum(['minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra']) }).refine(route => route.modelId !== '' || route.providerId === null, 'automatic routes have no fixed provider');
-const imSettings = z.strictObject({ agentKind: z.enum(['claude-code', 'codex', 'pi']), permissionMode: permission, claudeCode: imRoute, codex: imRoute, pi: imRoute });
+const imSettings = z.strictObject({ agentKind: z.enum(['claude-code', 'codex', 'pi']), permissionMode: permission, claudeCode: imRoute, codex: imRoute, pi: imRoute, modelGroup: routeId.nullable().optional() });
 export const MODEL_PREFERENCE_DOMAINS = ['modelVisibility', 'modelEngines', 'modelFavorites', 'modelContext', 'modelAccess', 'providerNames', 'modelPrices'] as const;
 export type ModelPreferenceDomain = typeof MODEL_PREFERENCE_DOMAINS[number];
 export function isModelPreferenceDomain(domain: string): domain is ModelPreferenceDomain { return MODEL_PREFERENCE_DOMAINS.includes(domain as ModelPreferenceDomain); }
@@ -68,7 +69,7 @@ export const additionalSettingsSchemas = {
   contacts: z.strictObject({ enabled: bool }),
   shortcuts: z.strictObject({ entries: z.array(z.strictObject({ id: z.enum(SETTINGS_READ_SHORTCUT_IDS), code: z.enum(SETTINGS_READ_KEY_CODES).nullable(), meta: bool, ctrl: bool, alt: bool, shift: bool })).max(27) }),
   contactsSync: z.strictObject({ deviceSyncEnabled: bool }),
-  browserBackend: z.strictObject({ kind: z.enum(['external', 'rsb-webview']) }),
+  browserBackend: z.strictObject({ kind: z.enum(BROWSER_BACKEND_KINDS) }),
   computerTools: z.strictObject({ computer: bool }),
   androidTools: z.strictObject({ android: bool }),
   telegramPersona: z.strictObject({ botName: z.string().trim().max(64), soul: z.string().max(4000) }),

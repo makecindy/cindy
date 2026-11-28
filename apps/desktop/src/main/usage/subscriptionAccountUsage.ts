@@ -1,3 +1,4 @@
+import { captureScheduledBillingRecovery } from '../scheduler-host/billingHolds.js';
 import { addProviderSecretsClearedListener } from '../secrets/providerSecretStore.js';
 import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../appSessionState.js';
 import { subscriptionAccountKind } from '../maker-host/subscription-account-auth.js';
@@ -44,6 +45,7 @@ function createReader(providerId: string) {
     onRefreshError: () => {},
   };
   return createXaiSubscriptionUsageReader({
+    captureBillingRecovery: () => captureScheduledBillingRecovery(providerId),
     ...common,
     readCredentials: async () => {
       if (!current() || !hasGrokOAuthLogin(providerId)) return null;

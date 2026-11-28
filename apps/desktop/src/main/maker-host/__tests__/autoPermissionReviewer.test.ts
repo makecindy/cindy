@@ -167,6 +167,42 @@ describe('buildAutoPermissionReviewPrompt', () => {
       }));
       expect(viaChannel).toBe(plain);
       expect(plain).not.toContain('referenced_content');
+      expect(plain).not.toContain('readOnlyAttachmentFiles');
+    });
+
+    it('exposes exact managed attachment files in review_input without polluting referenced_content and drops them next turn', () => {
+      const videoBlob = '/Users/alice/Library/Application Support/Cindy/cindy-media/blobs/deadbeef1234.mp4';
+      const userIntent = appendAutoReviewUserIntent('', '这是什么动物', {
+        [MAIN]: {
+          origin: telegram,
+          rawChannelText: '这是什么动物',
+          autoReviewReferences: {
+            readOnlyAttachmentPaths: [videoBlob],
+          },
+        },
+      });
+      const prompt = buildAutoPermissionReviewPrompt(request({
+        userIntent,
+        action: {
+          kind: 'exec',
+          command: `ffmpeg -i "${videoBlob}" -frames:v 1 /tmp/frame.jpg`,
+        },
+      }));
+      const payload = reviewPayload(prompt);
+      expect(payload.readOnlyAttachmentFiles).toEqual([videoBlob]);
+      expect(prompt).not.toContain('<referenced_content>');
+      expect(prompt).toContain('readOnlyAttachmentFiles are exact Host-delivered attachment files for this turn (NOT directory roots)');
+      expect(prompt).toContain('READING, inspecting, decoding, or extracting frames/audio from these exact files');
+      expect(prompt).toContain('READING other files in their parent directories');
+
+      // Next user turn drops current-turn attachment paths automatically.
+      const nextIntent = appendAutoReviewUserIntent(userIntent, '继续');
+      const nextPrompt = buildAutoPermissionReviewPrompt(request({
+        userIntent: nextIntent,
+        action: { kind: 'exec', command: `cat "${videoBlob}"` },
+      }));
+      expect(reviewPayload(nextPrompt).readOnlyAttachmentFiles).toBeUndefined();
+      expect(nextPrompt).not.toContain('readOnlyAttachmentFiles');
     });
   });
 

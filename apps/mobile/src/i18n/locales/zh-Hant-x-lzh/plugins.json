@@ -108,6 +108,7 @@
   "selectFolder": "擇此卷匣",
   "automationDraft": "增自運",
   "automationDraftHint": "確內容、時辰與模型後存之，自運方立。",
+  "automationCheck": "令{{name}}先察，再用模型",
   "automationName": "名",
   "automationPrompt": "所行之事",
   "automationInterval": "間（分鐘）",

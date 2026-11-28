@@ -11,6 +11,7 @@ import { discoverImportSkills } from './skills.js';
 import { indexAutomationDependencies, normalizeAutomation } from './sourceAutomations.js';
 import { memoryFileContent } from './memoryFiles.js';
 import { CompanionImportError, object, string, type ImportItem, type ImportSnapshot, type ImportSource } from './types.js';
+import { isLooseBase64Chars, parseBase64DataUrl } from '@cindy/maker-shared';
 import type { CompanionImportBotPlatform } from '@cindy/maker-shared/companion-import';
 
 export interface SourceReaderDeps {
@@ -652,7 +653,10 @@ export async function inspectImportSource(source: ImportSource, deps: SourceRead
   const identity = items.find(item => item.view.name === 'IDENTITY.md')?.text ?? '';
   const avatar = string(object(row.identity).avatar) || string(row.avatar) || /^\s*[-*]?\s*\*{0,2}Avatar\*{0,2}:\s*(.+)$/im.exec(identity)?.[1]?.trim() || '';
   let avatarImageBase64: string | undefined;
-  if (/^data:image\/(png|jpeg|webp);base64,[a-zA-Z0-9+/=]+$/.test(avatar) && avatar.length < 2_000_000) avatarImageBase64 = avatar.split(',')[1];
+  const avatarDataUrl = avatar.length < 2_000_000
+    ? parseBase64DataUrl(avatar, /^data:image\/(png|jpeg|webp);base64$/)
+    : null;
+  if (avatarDataUrl && isLooseBase64Chars(avatarDataUrl.payload)) avatarImageBase64 = avatarDataUrl.payload;
   else if (avatar && !/^[a-z][a-z0-9+.-]*:/i.test(avatar)) {
     const file = sourcePath(deps.home, avatar, workspace);
     try {

@@ -156,8 +156,10 @@ describe('buildTopology:状态五档', () => {
   });
 
   // 2026-11-19 用户要求：每台电脑之间的链接也显示实际底层传输协议（UDP / WS / WebRTC）。
+  // 经中转的设备线写对方上报的传输方式（peerRelayVia）。旧节点没有上报时仅显示往返。
   // 生产入口:buildTopology → TopologyNode.transport。覆盖缺口:此前只给中转站写 transport,对端节点没有传输协议字段。
-  // 最小失败输入:混合 Agent-Net 直连/经中转(UDP/WS/未上报) 与 Device Link 直连/经中转(主连接为 Agent-Net UDP 时旧版中转仍须是 WS)及未建链/离线。tier: unit。
+  // 最小失败输入:本机 WS、对方说 UDP 的经中转 Agent-Net 链路(旧逻辑得 websocket);另混合 Agent-Net 直连、Device Link
+  // 直连/经中转(主连接为 Agent-Net UDP 时旧版中转仍须是 WS)及未建链/离线。tier: unit。
   it('按实际链路协议与路径推导对端底层传输协议,不猜测未知状态', () => {
     const devices = [
       device({ deviceId: 'an-direct' }),
@@ -176,12 +178,14 @@ describe('buildTopology:状态五档', () => {
       { ...link('dl-relay', 'relay', 52), encrypted: false },
       link('unknown-host', 'direct', 5),
     ];
-    const agentNetRoutes = [
+    const routes = (peerRelayVia?: 'udp' | 'websocket') => [
+      { deviceId: 'an-relay', path: 'relay' as const, rttMs: 24, ...(peerRelayVia ? { peerRelayVia } : {}) },
       { deviceId: 'an-route-direct', path: 'direct' as const, rttMs: 4 },
       { deviceId: 'connecting', path: 'connecting' as const, rttMs: null },
     ];
-    const udpRelay = buildTopology({ ...base, devices, links, agentNetRoutes, relayProtocol: 'agent-net', relayTransport: 'udp' });
-    expect(Object.fromEntries(udpRelay.nodes.map((n) => [n.id, n.transport]))).toEqual({
+    // 本机到中转走 WS，对方到中转走 UDP。
+    const peerUdp = buildTopology({ ...base, devices, links, agentNetRoutes: routes('udp'), relayProtocol: 'agent-net', relayTransport: 'websocket' });
+    expect(Object.fromEntries(peerUdp.nodes.map((n) => [n.id, n.transport]))).toEqual({
       'an-direct': 'udp',
       'an-relay': 'udp',
       'an-route-direct': 'udp',
@@ -191,14 +195,17 @@ describe('buildTopology:状态五档', () => {
       connecting: null,
       offline: null,
     });
+    expect(peerUdp.relay.transport).toBe('websocket');
 
-    const wsRelay = buildTopology({ ...base, devices, links, agentNetRoutes, relayProtocol: 'agent-net', relayTransport: 'websocket' });
-    expect(wsRelay.byId.get('an-relay')?.transport).toBe('websocket');
-    expect(wsRelay.byId.get('an-direct')?.transport).toBe('udp');
+    // 反过来，本机 UDP、对方 WS。
+    const peerWs = buildTopology({ ...base, devices, links, agentNetRoutes: routes('websocket'), relayProtocol: 'agent-net', relayTransport: 'udp' });
+    expect(peerWs.byId.get('an-relay')?.transport).toBe('websocket');
+    expect(peerWs.relay.transport).toBe('udp');
 
-    const unknownRelay = buildTopology({ ...base, devices, links, relayProtocol: 'agent-net' });
-    expect(unknownRelay.byId.get('an-relay')?.transport).toBeNull();
-    expect(unknownRelay.byId.get('dl-relay')?.transport).toBe('websocket');
+    // 对方是旧版、没说：不拿本机那段冒充。
+    const peerSilent = buildTopology({ ...base, devices, links, agentNetRoutes: routes(), relayProtocol: 'agent-net', relayTransport: 'udp' });
+    expect(peerSilent.byId.get('an-relay')?.transport).toBeNull();
+    expect(peerSilent.byId.get('dl-relay')?.transport).toBe('websocket');
   });
 
   // 用户反馈(2026-11-06):按延迟排,延迟一刷新图块就换位置。组内只按名字排(数字按数值)。
@@ -284,6 +291,35 @@ describe('layoutTopology / groupLines', () => {
     const narrow = layoutTopology([], 300, false).m;
     expect(narrow.tile).toBe(Math.round(wide.tile * 0.6));
     expect(narrow.bend).toBe(Math.round(wide.bend * 0.6));
+  });
+
+  // 2026-11-27 用户要求：本机到中转那段的走法写在「这台电脑 → 中转站」的线上。原来那段线只有约 44px,77px 的
+  // 「UDP · 199 ms」压到细环和中转点上。生产入口:layoutTopology 的 trunkLabelW → trunkLabel 与挪过的中转点、设备列。
+  // 最小失败输入:设置页常见宽度 902、有经中转组、标签 77px;窄到 720 时设备名放不下，必须退回中转点上方且布局不动。tier: unit。
+  it('这台电脑到中转站那段线放得下标签时挪开中转点，放不下或没有中转组时布局不变', () => {
+    const model = buildTopology({
+      ...base,
+      devices: [device({ deviceId: 'a' }), device({ deviceId: 'b' }), device({ deviceId: 'c' })],
+      links: [link('a', 'direct', 1), link('b', 'relay', 1), link('c', 'relay', 2)],
+    });
+    const trunkLabelW = 77;
+    const plain = layoutTopology(model.groups, 902, false);
+    const pushed = layoutTopology(model.groups, 902, false, { trunkLabelW });
+    expect(plain.trunkLabel).toBe(false);
+    expect(pushed.trunkLabel).toBe(true);
+    const { m } = pushed;
+    // 细环边到中转点边之间放得下标签，两头还各露一点线。
+    expect(m.relay - (m.relayR + 3) - m.ring).toBeGreaterThanOrEqual(trunkLabelW + 16);
+    // 设备列跟着往外挪，名字那一列仍留够 100px;扇出的线最多让出 15px。
+    expect(902 / 2 - (m.tile + m.half + 12) - 8).toBeGreaterThanOrEqual(100);
+    expect((m.tile - m.relay) - (plain.m.tile - plain.m.relay)).toBeGreaterThanOrEqual(-15);
+
+    const narrow = layoutTopology(model.groups, 720, false, { trunkLabelW });
+    expect(narrow.trunkLabel).toBe(false);
+    expect(narrow.m).toEqual(layoutTopology(model.groups, 720, false).m);
+
+    const directOnly = buildTopology({ ...base, devices: [device({ deviceId: 'a' })], links: [link('a', 'direct', 1)] });
+    expect(layoutTopology(directOnly.groups, 902, false, { trunkLabelW }).trunkLabel).toBe(false);
   });
 });
 

@@ -366,7 +366,11 @@
       "close": "닫기",
       "cancelRename": "이름 변경 취소",
       "createdBy": "{{name}}이(가) 생성",
-      "ownedBy": "{{name}} 소속"
+      "ownedBy": "{{name}} 소속",
+      "orcaRemoteLead": "{{device}}에서 온 협업",
+      "createdByTask": "다른 작업에서 생성됨",
+      "createdByTaskNamed": "「{{title}}」 작업에서 생성됨",
+      "unknownDevice": "다른 컴퓨터"
     },
     "accounts": {
       "title": "계정 전환",
@@ -389,6 +393,7 @@
       "sortHeading": "작업 정렬",
       "projectOrderHeading": "프로젝트 정렬",
       "projectOrderManualTip": "프로젝트 행을 길게 누른 뒤 드래그하면 순서를 바꿀 수 있습니다. 그룹 안 작업은 위 정렬을 따릅니다.",
+      "pinnedOrderManualTip": "고정된 작업을 길게 누른 뒤 드래그하면 순서를 바꿀 수 있습니다.",
       "statusHeading": "작업 상태",
       "showDeviceTasks": "작업 보기",
       "openDevice": "열기",
@@ -520,7 +525,8 @@
           "all": "전체",
           "cc": "Claude Code",
           "codex": "Codex",
-          "pi": "Pi"
+          "pi": "Pi",
+          "acp": "플러그인 엔진"
         },
         "lastActivity": {
           "1d": "1일",

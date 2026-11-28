@@ -1,8 +1,9 @@
 # 桌面伙伴语音模式
 
-## BYOK 原生实时语音（2026-11-17）
+## 原生实时语音（2026-11-17；Cindy AI Gateway 接入 2026-11-28）
 
-- 本机伙伴一对一通话增加 `mode=realtime`：OpenAI 的 GPT-Realtime 双向语音模型与百炼 Qwen-Audio Realtime 3.0/3.1 Plus、Flash。百炼普通 API 与 Token Plan 使用各自连接及密钥；Token Plan 仅列出已核对的 3.0 Plus。Codex 订阅 OAuth、Coding Plan、Cindy Gateway、远程麦克风、Mobile 与群聊不进入本批范围。
+- 本机伙伴一对一通话增加 `mode=realtime`：支持有权限的 Cindy AI Gateway 实时模型，以及 BYOK 的 OpenAI GPT-Realtime 双向语音模型与百炼 Qwen-Audio Realtime 3.0/3.1 Plus、Flash。百炼普通 API 与 Token Plan 使用各自连接及密钥；Token Plan 仅列出已核对的 3.0 Plus。Codex 订阅 OAuth、Coding Plan、远程麦克风、Mobile 与群聊不进入本批范围。
+- **Cindy AI Gateway 实时模型合同**：客户端在 `/api/model-access/models?schemaVersion=5` 的 `X-Cindy-Model-Capabilities` 头中声明 `realtime` 能力，由服务端按账号/组织权限下发 `mode: 'realtime'` 独立能力条目（`agents: []`）。客户端仅在 `gatewayAllowed` 为真、网关凭证齐全、条目 `availability === 'available'` 且未禁用时放行；显式声明其他 `nativeApi` 或 `null` 的型号以及非双向对话实时模型（如 `qwen3-asr-flash-realtime`、`fun-asr-realtime-*`、`volc.seedasr.sauc.duration`、`gpt-realtime-whisper`、`gpt-realtime-translate` 或缺少音频输入/输出模态的型号）均不进入伙伴实时通话选择器，只放行已知 OpenAI 双向对话 Realtime 型号或显式声明 `nativeApi: 'openai-realtime'` 的网关路由。执行合同固定为 `openai-realtime`（`protocolLocked: true`，`providerId: 'xd'` 无 `agent`），仅在本地 Gateway Realtime 连接中补齐末尾 `/v1` 并连接到 `<ws base>/v1/realtime?model=<id>`（`Authorization: Bearer <gatewayKey>`），不回写聊天或其他媒体共用的 endpoint，也不开放第三方自定义音色查询。
 - 添加「智谱 GLM（中国大陆）」普通 API Key 预设或刷新已保存连接时，各运行时照常拉取聊天模型，同一把 Key 在本次操作中共用一次对官方实时端点的探测。智谱确认 `glm-realtime-flash` 后，添加向导显示「实时语音」分区，保存的型号可供伙伴选择。探测不开麦、不生成回复。专用 Coding Plan 预设不参与补探。超时保留同一连接上次验证的结果，明确拒绝时取消其可用状态；普通列表照常返回。按官方普通 API 路由锁定 GLM 协议，默认音色为 `tongtong`。试听发送示例文本，通话使用服务端 VAD 和客户端显式请求回复。工具回执缺少调用 ID 时，只交接能对应单次工具请求和用户原话的工作；同一回复内出现无法区分的多个工具请求时结束本次通话。协议参考见[智谱实时通话指南](https://docs.bigmodel.cn/cn/guide/models/sound-and-video/glm-realtime)。
 - 添加供应商和已有连接的模型管理沿用 `audio_speech` 的入口与追加规则，实时模型单独分组。列表按当前连接实际发现或用户显式添加的型号生成。公共 Registry 按精确 ID 或别名补充缺失的类型和输入输出能力，不添加连接成员；发现目录的明确类型优先，未知兼容路由需声明音频输入、音频输出和协议。凭证始终由 Main 从原连接读取，不跨 origin 借用。
 - 伙伴语音设置单独保存实时模型和音色；启用后下一次通话直接使用原生音频输入/输出，不再串接 ASR、文字聊天和 TTS。未启用时继续原语音链路，消息朗读与已有 TTS 偏好独立。所选模型失效时显示设置入口，不静默换模型或退回另一种计费路径。
