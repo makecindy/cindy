@@ -1,0 +1,1 @@
+插件作者手册补充 schedule_delete_run 与 schedule_mark_run_read：插件可删除单条运行记录、把一条已结束的记录标为已读。
