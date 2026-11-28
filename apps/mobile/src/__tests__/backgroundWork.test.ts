@@ -6,75 +6,96 @@ import { beginOutboxBackgroundSend, endOutboxBackgroundSend } from '@/session/ou
 
 type HeadlessTaskFactory = () => (data: { id: number }) => Promise<void>;
 
-interface MockNativeModule {
+const moduleFixtures = vi.hoisted(() => ({
+  native: {
+    begin: vi.fn(async () => ({ id: 4, remainingMs: 20_000 })),
+    end: vi.fn(async (_id: number): Promise<void> => {}),
+    waitUntilEnded: vi.fn(async (_id: number): Promise<void> => {}),
+  },
+  registeredKey: null as string | null,
+  registeredTask: null as HeadlessTaskFactory | null,
+}));
+
+vi.mock('expo-modules-core', () => ({
+  requireOptionalNativeModule: vi.fn(() => moduleFixtures.native),
+}));
+vi.mock('react-native', () => ({
+  Platform: { OS: 'android' },
+  AppRegistry: {
+    registerHeadlessTask: vi.fn((key: string, task: HeadlessTaskFactory) => {
+      moduleFixtures.registeredKey = key;
+      moduleFixtures.registeredTask = task;
+    }),
+  },
+}));
+
+import {
+  beginBackgroundWork,
+  createBackgroundWorkAdapter,
+  type NativeBackgroundWork,
+} from '@/notifications/backgroundWork';
+
+interface MockNativeModule extends NativeBackgroundWork {
   begin: ReturnType<typeof vi.fn<() => Promise<{ id: number; remainingMs: number }>>>;
   end: ReturnType<typeof vi.fn<(id: number) => Promise<void>>>;
   waitUntilEnded?: ReturnType<typeof vi.fn<(id: number) => Promise<void>>>;
 }
 
-async function loadBackgroundWork(options: {
-  os: 'android' | 'ios';
-  nativeModule: MockNativeModule | null;
+function createTestAdapter(options: {
+  platform: 'android' | 'ios';
+  native: MockNativeModule | null;
 }) {
-  // reset-modules: backgroundWork.ts binds Platform.OS, requireOptionalNativeModule, and AppRegistry.registerHeadlessTask at module load
-  vi.resetModules();
   let registeredKey: string | null = null;
   let registeredTask: HeadlessTaskFactory | null = null;
   const registerHeadlessTask = vi.fn((key: string, task: HeadlessTaskFactory) => {
     registeredKey = key;
     registeredTask = task;
   });
-  const requireOptionalNativeModule = vi.fn(() => options.nativeModule);
-
-  vi.doMock('expo-modules-core', () => ({ requireOptionalNativeModule }));
-  vi.doMock('react-native', () => ({
-    Platform: { OS: options.os },
-    AppRegistry: { registerHeadlessTask },
-  }));
-
-  const mod = await import('@/notifications/backgroundWork');
-  return {
-    beginBackgroundWork: mod.beginBackgroundWork,
+  const adapter = createBackgroundWorkAdapter({
+    platform: options.platform,
+    native: options.native,
     registerHeadlessTask,
-    requireOptionalNativeModule,
+  });
+  return {
+    beginBackgroundWork: adapter.beginBackgroundWork,
+    registerHeadlessTask,
     getRegisteredHeadlessTask: () => ({ key: registeredKey, task: registeredTask }),
   };
 }
 
 afterEach(() => {
-  vi.doUnmock('expo-modules-core');
-  vi.doUnmock('react-native');
+  moduleFixtures.native.begin.mockReset().mockResolvedValue({ id: 4, remainingMs: 20_000 });
+  moduleFixtures.native.end.mockReset().mockResolvedValue(undefined);
+  moduleFixtures.native.waitUntilEnded.mockReset().mockResolvedValue(undefined);
   vi.useRealTimers();
 });
 
 describe('backgroundWork native adapter', () => {
-  it('registers the Android headless task and keeps it pending until native release', async () => {
-    let finish!: () => void;
-    const waitUntilEnded = vi.fn(() => new Promise<void>((resolve) => { finish = resolve; }));
-    const nativeModule: MockNativeModule = {
-      begin: vi.fn(async () => ({ id: 4, remainingMs: 20_000 })),
-      end: vi.fn(async () => undefined),
-      waitUntilEnded,
-    };
+  it('registers the Android headless task on module load and keeps it pending until native release', async () => {
+    expect(moduleFixtures.registeredKey).toBe('CindyBackgroundWork');
+    expect(moduleFixtures.registeredTask).toBeTypeOf('function');
 
-    const { getRegisteredHeadlessTask } = await loadBackgroundWork({ os: 'android', nativeModule });
-    const registered = getRegisteredHeadlessTask();
-    expect(registered.key).toBe('CindyBackgroundWork');
-    expect(registered.task).toBeTypeOf('function');
+    let finish!: () => void;
+    moduleFixtures.native.waitUntilEnded.mockReturnValueOnce(new Promise<void>((resolve) => { finish = resolve; }));
 
     const settled = vi.fn();
-    const run = registered.task!()({ id: 4 }).then(settled);
+    const run = moduleFixtures.registeredTask!()({ id: 4 }).then(settled);
     await Promise.resolve();
     expect(settled).not.toHaveBeenCalled();
-    expect(waitUntilEnded).toHaveBeenCalledExactlyOnceWith(4);
+    expect(moduleFixtures.native.waitUntilEnded).toHaveBeenCalledExactlyOnceWith(4);
 
     finish();
     await run;
     expect(settled).toHaveBeenCalledOnce();
+
+    const work = await beginBackgroundWork(20_000);
+    expect(work.budgetMs).toBe(20_000);
+    work.end();
+    expect(moduleFixtures.native.end).toHaveBeenCalledExactlyOnceWith(4);
   });
 
   it('uses the full Android native lease up to maxMs and ends overlapping leases independently', async () => {
-    const nativeModule: MockNativeModule = {
+    const native: MockNativeModule = {
       begin: vi.fn<() => Promise<{ id: number; remainingMs: number }>>()
         .mockResolvedValueOnce({ id: 1, remainingMs: 20_000 })
         .mockResolvedValueOnce({ id: 2, remainingMs: 20_000 }),
@@ -82,18 +103,18 @@ describe('backgroundWork native adapter', () => {
       waitUntilEnded: vi.fn(async () => undefined),
     };
 
-    const { beginBackgroundWork } = await loadBackgroundWork({ os: 'android', nativeModule });
-    const first = await beginBackgroundWork(20_000);
-    const second = await beginBackgroundWork(8_000);
+    const adapter = createTestAdapter({ platform: 'android', native });
+    const first = await adapter.beginBackgroundWork(20_000);
+    const second = await adapter.beginBackgroundWork(8_000);
     expect(first.budgetMs).toBe(20_000);
     expect(second.budgetMs).toBe(8_000);
 
     first.end();
     first.end();
-    expect(nativeModule.end).toHaveBeenCalledExactlyOnceWith(1);
+    expect(native.end).toHaveBeenCalledExactlyOnceWith(1);
 
     second.end();
-    expect(nativeModule.end.mock.calls).toEqual([[1], [2]]);
+    expect(native.end.mock.calls).toEqual([[1], [2]]);
   });
 
   it.each([
@@ -108,57 +129,51 @@ describe('backgroundWork native adapter', () => {
       end: vi.fn(async () => undefined),
       waitUntilEnded: vi.fn(async () => undefined),
     }],
-  ] as const)('falls back cleanly to the short ungranted budget on Android when %s', async (_label, nativeModule) => {
-    const { beginBackgroundWork, registerHeadlessTask } = await loadBackgroundWork({
-      os: 'android',
-      nativeModule,
-    });
-    if (!nativeModule) {
-      expect(registerHeadlessTask).not.toHaveBeenCalled();
+  ] as const)('falls back cleanly to the short ungranted budget on Android when %s', async (_label, native) => {
+    const adapter = createTestAdapter({ platform: 'android', native });
+    if (!native) {
+      expect(adapter.registerHeadlessTask).not.toHaveBeenCalled();
     }
 
-    const work = await beginBackgroundWork(20_000);
+    const work = await adapter.beginBackgroundWork(20_000);
     expect(work.budgetMs).toBe(8_000);
     work.end();
-    if (nativeModule) {
-      expect(nativeModule.end).not.toHaveBeenCalled();
+    if (native) {
+      expect(native.end).not.toHaveBeenCalled();
     }
   });
 
   it('preserves iOS safety margin and skips Android headless task registration on iOS', async () => {
-    const nativeModule: MockNativeModule = {
+    const native: MockNativeModule = {
       begin: vi.fn<() => Promise<{ id: number; remainingMs: number }>>()
         .mockResolvedValueOnce({ id: 9, remainingMs: 20_000 })
         .mockResolvedValueOnce({ id: 10, remainingMs: -1 }),
       end: vi.fn(async () => undefined),
     };
 
-    const { beginBackgroundWork, registerHeadlessTask } = await loadBackgroundWork({
-      os: 'ios',
-      nativeModule,
-    });
-    expect(registerHeadlessTask).not.toHaveBeenCalled();
+    const adapter = createTestAdapter({ platform: 'ios', native });
+    expect(adapter.registerHeadlessTask).not.toHaveBeenCalled();
 
-    const bounded = await beginBackgroundWork(25_000);
+    const bounded = await adapter.beginBackgroundWork(25_000);
     expect(bounded.budgetMs).toBe(17_000);
     bounded.end();
 
-    const foreground = await beginBackgroundWork(25_000);
+    const foreground = await adapter.beginBackgroundWork(25_000);
     expect(foreground.budgetMs).toBe(25_000);
     foreground.end();
-    expect(nativeModule.end.mock.calls).toEqual([[9], [10]]);
+    expect(native.end.mock.calls).toEqual([[9], [10]]);
   });
 
   it('releases a late Android native grant when outbox background send already finished', async () => {
     vi.useFakeTimers();
     let grant!: (value: { id: number; remainingMs: number }) => void;
-    const nativeModule: MockNativeModule = {
+    const native: MockNativeModule = {
       begin: vi.fn(() => new Promise<{ id: number; remainingMs: number }>((resolve) => { grant = resolve; })),
       end: vi.fn(async () => undefined),
       waitUntilEnded: vi.fn(async () => undefined),
     };
 
-    const { beginBackgroundWork } = await loadBackgroundWork({ os: 'android', nativeModule });
+    const adapter = createTestAdapter({ platform: 'android', native });
     const release = vi.fn();
     const record = {
       accountId: 'alice:cn',
@@ -168,12 +183,12 @@ describe('backgroundWork native adapter', () => {
       item: { sessionId: 'session-1', clientId: 'client-1', attachmentSlots: [] },
     } as unknown as DurableOutboxRecord;
 
-    beginOutboxBackgroundSend(record, () => release, beginBackgroundWork);
+    beginOutboxBackgroundSend(record, () => release, adapter.beginBackgroundWork);
     endOutboxBackgroundSend(record);
     expect(release).toHaveBeenCalledOnce();
 
     grant({ id: 11, remainingMs: 20_000 });
     await vi.advanceTimersByTimeAsync(0);
-    expect(nativeModule.end).toHaveBeenCalledExactlyOnceWith(11);
+    expect(native.end).toHaveBeenCalledExactlyOnceWith(11);
   });
 });
