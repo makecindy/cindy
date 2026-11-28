@@ -81,7 +81,7 @@ export function parseSubscriptionSessionAccountQuery(
   };
 }
 
-export function parseSubscriptionAccountCommand(raw: unknown): SubscriptionAccountCommand {
+export function parseSubscriptionAccountCommand(raw: unknown, localSettings = false): SubscriptionAccountCommand {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw))
     throwIpcError('INVALID_PARAMS', 'Invalid account command');
   const value = raw as Record<string, unknown>;
@@ -100,7 +100,13 @@ export function parseSubscriptionAccountCommand(raw: unknown): SubscriptionAccou
       throwIpcError('INVALID_PARAMS', 'Invalid task');
     return { action: 'read', providerId, taskId: value.taskId };
   }
-  if (value.action === 'read') return { action: 'read', providerId };
+  if (value.action === 'read') {
+    if (localSettings && isPluginEngineProviderIdShape(providerId)
+      && (value.retryStatus === true || accountIdValid(value.retryStatus))) {
+      return { action: 'read', providerId, retryStatus: value.retryStatus };
+    }
+    return { action: 'read', providerId };
+  }
   if (value.action === 'preview' && isSubscriptionProvider(providerId)) return { action: 'preview', providerId };
   if (
     value.action === 'connect' &&

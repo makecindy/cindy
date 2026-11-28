@@ -123,6 +123,17 @@ beforeEach(async () => {
 });
 
 describe('plugin engine account pool', () => {
+  // #13766 (unit): an immediate retry of an identity-only engine must see recovery inside the failure TTL.
+  it('rechecks the original account on explicit retry while passive reads reuse the failure', async () => {
+    h.harnesses[0]!.accounts = { methods: [] };
+    h.status.delete('default');
+    const read = { action: 'read', providerId: PROVIDER } as const;
+    expect((await runPluginEngineAccountCommand(read)).accounts[0]?.status).toBe('unavailable');
+    h.status.set('default', { state: 'signed-in' });
+    expect((await runPluginEngineAccountCommand(read)).accounts[0]?.status).toBe('unavailable');
+    expect((await runPluginEngineAccountCommand({ ...read, retryStatus: 'default' })).accounts[0]?.status).toBe('ready');
+  });
+
   it('spreads new tasks over signed-in accounts, keeps a bound task on its account and stops at the limit', async () => {
     const first = await acquirePluginEngineAccount(PROVIDER, undefined, ['task:t1']);
     const second = await acquirePluginEngineAccount(PROVIDER, undefined, ['task:t2']);

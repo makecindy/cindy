@@ -231,25 +231,45 @@ export function SubscriptionAccountsSection({
   const engines = usePluginEngines(plugin);
   const pluginSignIn = usePluginEngineSignIn();
   const epoch = useRef(0);
-  const refresh = useCallback(async () => {
+  const retrying = useRef<true | string | undefined>(undefined);
+  const refresh = useCallback(async (retryStatus?: true | string, onError?: (key: string) => void) => {
+    if (retrying.current) return;
+    retrying.current = retryStatus;
     const current = ++epoch.current;
     setRefreshing(true);
     try {
       const next = await window.electronAPI.subscriptionAccounts.command({
         action: 'read',
         providerId,
+        ...(plugin && retryStatus ? { retryStatus } : {}),
       });
       if (current === epoch.current) {
         cache?.set(providerId, next);
         setView(next);
         setFailed(false);
+        if (retryStatus && next.accounts.some(account =>
+          (retryStatus === true || retryStatus === account.id) && account.status === 'unavailable')) {
+          onError?.('subscriptionAccounts.unavailable');
+        }
       }
-    } catch {
-      if (current === epoch.current) setFailed(true);
+    } catch (error) {
+      if (current === epoch.current) {
+        setFailed(true);
+        const key = retryStatus && subscriptionAccountErrorKey(error);
+        if (key) onError?.(key);
+      }
     } finally {
-      if (current === epoch.current) setRefreshing(false);
+      if (current === epoch.current) {
+        retrying.current = undefined;
+        setRefreshing(false);
+      }
     }
-  }, [providerId, cache]);
+  }, [providerId, cache, plugin]);
+  const retryNotice = useRef<string | null>(null);
+  const retry = (target: true | string) => {
+    if (retryNotice.current) toast.dismiss(retryNotice.current);
+    return refresh(target, key => { retryNotice.current = toast.error(t(key)); });
+  };
   useEffect(() => {
     void refresh();
     // Change notifications name the account pool (kind), shared by every provider of that kind.
@@ -265,6 +285,7 @@ export function SubscriptionAccountsSection({
     const timer = window.setInterval(focus, 60_000);
     return () => {
       ++epoch.current;
+      retrying.current = undefined;
       unsubscribe();
       window.removeEventListener('focus', focus);
       window.clearInterval(timer);
@@ -466,7 +487,7 @@ export function SubscriptionAccountsSection({
           <p role="alert" className="text-12 text-[var(--text-danger)]">
             {t('subscriptionAccounts.failed')}
           </p>
-          <Button data-settings-search-action="Retry reading local subscription accounts" variant="secondary" size="sm" disabled={refreshing || busy} onClick={() => void refresh()}>
+          <Button data-settings-search-action="Retry reading local subscription accounts" variant="secondary" size="sm" loading={refreshing && retrying.current === true} disabled={refreshing || busy} onClick={() => void retry(true)}>
             {t('commonUi.retry')}
           </Button>
         </div>
@@ -679,7 +700,7 @@ export function SubscriptionAccountsSection({
                             )}
                             {account.status === 'unavailable' && !account.apiKey && (
                               <Button data-settings-search-action="Retry reading this unavailable subscription account" variant="secondary" tone="quiet" size="sm"
-                                disabled={refreshing || busy} onClick={() => void refresh()}>
+                                loading={refreshing && retrying.current === account.id} disabled={refreshing || busy} onClick={() => void retry(account.id)}>
                                 {t('commonUi.retry')}
                               </Button>
                             )}
