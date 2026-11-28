@@ -124,8 +124,9 @@ flowchart LR
 
 ## 登录流程（阶段 2）
 
-- `cindy-host login [--region=cn|global] [--method=<google|apple>]`：读取与 Desktop 相同的 `config/endpoint*.json`，构造 `CindyAuthClient`（`client_type=desktop`、本机 deviceId、全局 fetch），生成 PKCE 与 `client_state`，走托管回调轮询（无 `authDesktopCallbackUrl` 时回退本机 loopback 服务），成功后把 session 记录写回同一 `safeStorage` 文件。
-- 只支持浏览器社交登录；email/phone 验证码流程未实现，遇明确报错，不静默降级。
+- `cindy-host login [--org=<企业标识>] [--region=cn|global] [--method=<登录方式>]`：读取与 Desktop 相同的 `config/endpoint*.json`，构造 `CindyAuthClient`（`client_type=desktop`、本机 deviceId），生成 PKCE 与 `client_state`，走托管回调轮询（无 `authDesktopCallbackUrl` 时回退本机 loopback 服务），成功后把 session 记录写回同一 `safeStorage` 文件。
+- 企业 SSO 未指定 `--region` 时，一次并行探测国内和国际区。唯一有效结果决定 SSO、回调和凭据的区域。一侧命中、另一侧请求失败或超时时，CLI 在打开登录页前说明无法确认的区域、本次使用的区域和如何指定区域重试。另一侧明确未找到企业 SSO 时直接继续。两区都命中时，命令报错并提示用 `--region=cn` 或 `--region=global` 重试。显式指定后只查询该区。这里选择的是登录区域，安装包区域和资料目录保持原样。
+- 个人账号沿用浏览器社交登录，email/phone 验证码流程未实现。
 - 未验证：真实浏览器完成授权后的 code 兑换与落盘、重启免登录、与 Desktop 交替运行。
 - 实现：`apps/host/src/auth/{endpoints,login}.mjs`、`apps/host/src/login-cli.mjs`；测试 `login.test.mjs`（3 例）。
 

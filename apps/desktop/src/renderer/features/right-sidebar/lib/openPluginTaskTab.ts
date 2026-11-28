@@ -14,13 +14,16 @@ import { requestRightSidebarVisibility } from './sidebarCommands';
 export async function openPluginTaskTab(
   sessionId: string,
   instanceId: string,
-  options: { userInitiated?: boolean; resourceViewId?: string; resourceInput?: Record<string, unknown> } = {},
+  options: { userInitiated?: boolean; resourceViewId?: string; resourceInput?: Record<string, unknown>; resourceWorkingDir?: string } = {},
 ): Promise<void> {
   const userInitiated = options.userInitiated !== false;
+  const resource = {
+    ...(options.resourceViewId ? { resourceViewId: options.resourceViewId } : {}),
+    ...(options.resourceInput ? { resourceInput: options.resourceInput } : {}),
+    ...(options.resourceWorkingDir ? { resourceWorkingDir: options.resourceWorkingDir } : {}),
+  };
   const route = await routeSidebarCommand(
-    { type: 'open-plugin-task', sessionId, instanceId,
-      ...(options.resourceViewId ? { resourceViewId: options.resourceViewId } : {}),
-      ...(options.resourceInput ? { resourceInput: options.resourceInput } : {}) },
+    { type: 'open-plugin-task', sessionId, instanceId, ...resource },
     { userInitiated },
   );
   if (route === 'attached') {
@@ -35,13 +38,11 @@ export async function openPluginTaskTab(
     let tabId = existing?.id;
     if (existing) {
       if (options.resourceViewId || options.resourceInput) {
-        await patchTabState(sessionId, existing.id, state => ({ ...(state as PluginTaskTabState), resourceInput: options.resourceInput ?? {} }));
+        await patchTabState(sessionId, existing.id, state => ({ ...(state as PluginTaskTabState), resourceInput: options.resourceInput ?? {}, resourceWorkingDir: options.resourceWorkingDir }));
       }
       await setActiveTab(sessionId, existing.id, { userInitiated });
     } else {
-      tabId = (await addTab(sessionId, 'plugin-task', { instanceId,
-        ...(options.resourceViewId ? { resourceViewId: options.resourceViewId } : {}),
-        ...(options.resourceInput ? { resourceInput: options.resourceInput } : {}) } satisfies PluginTaskTabState))
+      tabId = (await addTab(sessionId, 'plugin-task', { instanceId, ...resource } satisfies PluginTaskTabState))
         .id;
     }
     if (tabId) {

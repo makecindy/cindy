@@ -23,7 +23,7 @@ function setup(watched: Record<string, WatchedSession> = {}) {
     watched: (key) => watched[key] ?? null,
     local: {
       readSession: async (id) => (id === 'gone' ? { title: 'x', status: 'deleted', route: null }
-        : id === 'local-1' ? { title: '修登录', status: 'active', route }
+        : id === 'local-1' ? { title: '修登录', status: 'active', pinned: true, route }
           : id === 'shared-1' ? { title: '和访客一起改文案', status: 'active', route, shared: true } : null),
       readActivity: async () => ({ phase: 'needs-interaction', interactionKind: 'permission', lastActivityAtMs: NOW - 9 * 60_000, runtimeGeneration: 4, route }),
       readLastExchange: async () => ({ lastUserAsk: '修登录', lastAssistantLine: '要删旧表吗?' }),
@@ -62,7 +62,7 @@ describe('task digest assembly', () => {
     expect(result).toEqual({
       ok: true,
       digest: {
-        session_id: 'local-1', device: null, title: '修登录', phase: 'waiting-permission', elapsed_minutes: 9, idle_minutes: 9,
+        session_id: 'local-1', device: null, title: '修登录', pinned: true, phase: 'waiting-permission', elapsed_minutes: 9, idle_minutes: 9,
         last_user_ask: '修登录', last_assistant_line: '要删旧表吗?', pending_question: null, error: null,
         current_route: route, runtime_generation: 4,
         // 等权限不是换模型能解决的:不给建议。
@@ -130,6 +130,7 @@ describe('task digest assembly', () => {
       sessionFactsFromRow({
         title: 't',
         status: 'active',
+        pinnedAt: 1,
         agentKind: 'cc',
         model: 'claude-opus-5-5',
         providerId: null,
@@ -137,6 +138,7 @@ describe('task digest assembly', () => {
         fastMode: true,
       }),
     ).toEqual({
+      pinned: true,
       title: 't',
       status: 'active',
       route: {

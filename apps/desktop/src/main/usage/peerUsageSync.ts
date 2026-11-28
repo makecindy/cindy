@@ -30,6 +30,7 @@ import {
   isUnixMs,
   sanitizeUsageDeviceRows,
   type UsageDeviceRows,
+  type UsageTaskDelta,
 } from './usageDeviceRows.js';
 
 const log = createLogger('peerUsageSync');
@@ -69,6 +70,8 @@ interface CachedPeer {
   syncedAt: number;
   /** 对方读取时的本地 todayKey,作为下一次增量的锚点。 */
   todayKey: string;
+  /** 对方最近一次任务元数据快照标识,下一次增量同步据此只拉变更与已移除任务。 */
+  tasksToken?: string;
   rows: UsageDeviceRows;
 }
 
@@ -119,18 +122,36 @@ function dayBefore(dayKey: string): string {
 
 /**
  * 用增量结果替换缓存中 sinceDay(含)之后的行;sinceDay 为 null 时整体替换。
- * 任务元数据不分区间:被控端每次都返回全部任务的当前元数据,整体覆盖缓存;不在其中的
- * 任务(已删除 / 不对远端可见)连同区间外的旧行一起丢弃。
+ * 未协商到 tasksDelta(旧被控端或基准未命中)时,incoming.tasks 是完整集合,整体覆盖缓存;
+ * 带 tasksDelta 时,在缓存元数据上应用新增/变更与 removedTaskIds,再按最终可见任务集合裁剪 sessionRows。
  */
 export function mergeIncrementalRows(
   cached: UsageDeviceRows | null,
   sinceDay: string | null,
   incoming: UsageDeviceRows,
+  tasksDelta?: UsageTaskDelta,
 ): UsageDeviceRows {
-  const taskIds = new Set(incoming.tasks.map((task) => task.sessionId));
+  let tasks = incoming.tasks;
+  if (cached && sinceDay !== null && tasksDelta) {
+    const removed = new Set(tasksDelta.removedTaskIds);
+    const upserted = new Map(incoming.tasks.map((task) => [task.sessionId, task]));
+    const seen = new Set<string>();
+    tasks = [];
+    for (const existing of cached.tasks) {
+      if (removed.has(existing.sessionId)) continue;
+      seen.add(existing.sessionId);
+      tasks.push(upserted.get(existing.sessionId) ?? existing);
+    }
+    for (const added of incoming.tasks) {
+      if (removed.has(added.sessionId) || seen.has(added.sessionId)) continue;
+      seen.add(added.sessionId);
+      tasks.push(added);
+    }
+  }
+  const taskIds = new Set(tasks.map((task) => task.sessionId));
   const merged =
     !cached || sinceDay === null
-      ? incoming
+      ? { ...incoming, tasks }
       : {
           spendDays: [
             ...cached.spendDays.filter((row) => row.day < sinceDay),
@@ -144,7 +165,7 @@ export function mergeIncrementalRows(
             ...cached.sessionRows.filter((row) => row.day < sinceDay),
             ...incoming.sessionRows,
           ],
-          tasks: incoming.tasks,
+          tasks,
         };
   return {
     ...merged,
@@ -170,6 +191,9 @@ function parseCacheFile(raw: string | null): Record<string, CachedPeer> {
         platform: typeof peer.platform === 'string' ? peer.platform : null,
         syncedAt: peer.syncedAt,
         todayKey: peer.todayKey,
+        ...(typeof peer.tasksToken === 'string' && peer.tasksToken.length > 0 && peer.tasksToken.length <= 128
+          ? { tasksToken: peer.tasksToken }
+          : {}),
         rows,
       };
     }
@@ -329,7 +353,9 @@ export function createPeerUsageSync(deps: PeerUsageSyncDeps): PeerUsageSync {
     setStatus('syncing');
     try {
       const response = await deps.invoke(device.deviceId, USAGE_DEVICE_ROWS_CHANNEL, [
-        sinceDay ? { sinceDay } : {},
+        sinceDay
+          ? { sinceDay, ...(cached?.tasksToken ? { tasksBase: cached.tasksToken } : {}) }
+          : {},
       ]);
       if (!response.ok) {
         markFailed(errorCodeOf(response.error));
@@ -344,13 +370,19 @@ export function createPeerUsageSync(deps: PeerUsageSyncDeps): PeerUsageSync {
       if (!isCurrent()) return;
       // 对方回的区间与请求不一致(旧实现忽略参数等)时按全量处理,不能拼出重复行。
       const effectiveSince = decoded.sinceDay === sinceDay ? sinceDay : null;
-      const rows = mergeIncrementalRows(cached?.rows ?? null, effectiveSince, decoded.rows);
+      const rows = mergeIncrementalRows(
+        cached?.rows ?? null,
+        effectiveSince,
+        decoded.rows,
+        effectiveSince ? decoded.tasksDelta : undefined,
+      );
       const rowsChanged = !sameRows(cached?.rows, rows);
       peers[device.deviceId] = {
         name: device.name,
         platform: device.platform,
         syncedAt: deps.now(),
         todayKey: decoded.todayKey,
+        ...(decoded.tasksToken ? { tasksToken: decoded.tasksToken } : {}),
         rows,
       };
       if (rowsChanged) bumpRows();

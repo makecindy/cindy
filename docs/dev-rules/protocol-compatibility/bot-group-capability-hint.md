@@ -7,3 +7,6 @@
 Desktop 和 Mobile 共用 shared parser，仅认可未删除的伙伴作者消息、单个完整 card、已知版本及白名单类别；普通人或未知／混合内容继续普通消息展示。Desktop 发往手机的既有消息视图可选追加 `capabilityNoticeCode`，手机 Remote Resource 解析仅保留未删除的伙伴 notice 上的白名单类别，content 保留 fallback，旧手机忽略新字段仍可读；手机直连自行投影，新手机连旧电脑仍用旧内容。旧桌面／手机直连把未知卡片显示为伙伴消息的 fallback，不丢失提示。
 
 不改服务端接口、权限档、原生配置、schema 或数据库 migration。提示只有原因，没有原始工具参数、路径或错误正文。回滚客户端后沿用 fallback，不修改已有历史。
+
+附件未送达的新提示按下载失败、数量上限、两者同时发生分别使用 `ATTACHMENTS_DOWNLOAD_FAILED`、
+`ATTACHMENTS_LIMIT_REACHED`、`ATTACHMENTS_DOWNLOAD_FAILED_AND_LIMIT_REACHED`。旧消息的 `ATTACHMENTS_UNAVAILABLE` 继续可读；旧客户端按原卡片 fallback 显示原因。卡片不携带附件名、地址和下载错误。

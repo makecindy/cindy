@@ -18,6 +18,8 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
+import { inspectSettingsJson, isSettingsRecord, type SettingsJsonInspection } from '../maker-host/inspect-settings-json.js';
+import { validateOptionalSettingsFields } from '../maker-host/settings-inspection.js';
 
 import { HOOK_CHAT_WORKSPACE_ALIAS, HOOK_WORKSPACE_ALIAS_RE } from '../../shared/hookControlIpc.js';
 
@@ -61,6 +63,12 @@ export interface SlackHookConfigState {
   discordEnabled: boolean;
   /** Explicit companion assignment; absent preserves ordinary X tasks. */
   xCompanionBotId?: string | null;
+  /**
+   * 各官方渠道交给哪位伙伴(设置 → IM 机器人 → 某平台 →「谁来回复」); 缺省 / null = 普通任务。
+   * 官方机器人只把已绑定主人本人的消息派到这台电脑, 所以交给伙伴的都是主人的轮次。X 仍由
+   * xCompanionBotId 承载(同一个值)。
+   */
+  companionBotIds?: Partial<Record<OfficialCompanionProvider, string | null>>;
   /** 服务器地址覆写(高级/调试用, 无 UI 入口); null = 跟随内置默认。 */
   urlOverride: string | null;
   /** 项目名称 -> 本地绝对路径; 由侧栏项目列表投影而来(projectWorkspaces.ts)。 */
@@ -197,7 +205,19 @@ export function validateWorkspaces(input: Record<string, string>): Record<string
 }
 
 /** Slack Hook 配置仓库(写操作同步落盘, 返回写后最新状态)。 */
+export type OfficialHookInspection = SettingsJsonInspection<Pick<SlackHookConfigState,
+  'enabled' | 'telegramEnabled' | 'xEnabled' | 'lifecycleAnnouncementOverride' |
+  'telegramDefaultWorkspace' | 'xDefaultWorkspace' | 'urlOverride'>> |
+  { status: 'unavailable' | 'migrationPending' };
+
+/** No manager construction, authentication reads, migration or endpoint lookup. */
+export function inspectOfficialHookSettings(filePath: string, fingerprint: string | null, legacyFilePath?: string): OfficialHookInspection {
+  return createSlackHookStore({ filePath, legacyFilePath, defaultUrl: () => '', log: { info() {}, warn() {} } }).inspect(fingerprint);
+}
+
 export interface SlackHookStore {
+  /** One native mutation for the editable preferences; never changes binding/authentication. */
+  commitPreferences?(patch: Partial<Pick<SlackHookConfigState, 'lifecycleAnnouncementOverride' | 'telegramDefaultWorkspace' | 'xDefaultWorkspace'>>): SlackHookConfigState;
   get(): SlackHookConfigState;
   /** 实际生效的服务器地址(覆写优先, 否则内置默认)。 */
   effectiveUrl(): string;
@@ -237,9 +257,14 @@ export interface SlackHookStore {
     alias: string | null,
   ): SlackHookConfigState;
   setXCompanionBotId(botId: string | null): SlackHookConfigState;
+  setCompanionBotId(provider: OfficialCompanionProvider, botId: string | null): SlackHookConfigState;
 }
 
-export function createSlackHookStore(deps: SlackHookStoreDeps): SlackHookStore {
+/** 能交给伙伴的官方渠道。 */
+export const OFFICIAL_COMPANION_PROVIDERS = ['slack', 'telegram', 'feishu', 'discord', 'x'] as const;
+export type OfficialCompanionProvider = (typeof OFFICIAL_COMPANION_PROVIDERS)[number];
+
+export function createSlackHookStore(deps: SlackHookStoreDeps): SlackHookStore & { inspect(fingerprint: string | null): OfficialHookInspection } {
   const { filePath, legacyFilePath, cleanupLegacySecrets, log } = deps;
 
   interface AccountState {
@@ -247,9 +272,11 @@ export function createSlackHookStore(deps: SlackHookStoreDeps): SlackHookStore {
       enabled: boolean;
       bindingsCache: HookBindingCacheEntry[];
       lifecycleAnnouncementOverride: boolean | null;
+      companionBotId?: string | null;
     };
     telegram: {
       enabled: boolean;
+      companionBotId?: string | null;
       bindingCache: ProviderBindingCacheEntry | null;
       defaultWorkspace: string | null;
     };
@@ -262,6 +289,7 @@ export function createSlackHookStore(deps: SlackHookStoreDeps): SlackHookStore {
     /** 官方飞书 / Lark; 旧配置文件没有这个键, 解析为全默认(关闭、无缓存)。 */
     feishu: {
       enabled: boolean;
+      companionBotId?: string | null;
       bindingCache: ProviderBindingCacheEntry | null;
       bindingsCache?: ProviderBindingCacheEntry[];
       defaultWorkspace: string | null;
@@ -269,6 +297,7 @@ export function createSlackHookStore(deps: SlackHookStoreDeps): SlackHookStore {
     /** 官方 Discord; 旧配置文件没有这个键, 解析为全默认(关闭、无缓存)。 */
     discord: {
       enabled: boolean;
+      companionBotId?: string | null;
       bindingCache: ProviderBindingCacheEntry | null;
       defaultWorkspace: string | null;
     };
@@ -434,9 +463,11 @@ export function createSlackHookStore(deps: SlackHookStoreDeps): SlackHookStore {
           typeof slack.lifecycleAnnouncementOverride === 'boolean'
             ? slack.lifecycleAnnouncementOverride
             : null,
+        companionBotId: typeof slack.companionBotId === 'string' && slack.companionBotId.length <= 200 ? slack.companionBotId : null,
       },
       telegram: {
         enabled: telegram.enabled === true,
+        companionBotId: typeof telegram.companionBotId === 'string' && telegram.companionBotId.length <= 200 ? telegram.companionBotId : null,
         bindingCache: parseProviderBindingCache(telegram.bindingCache),
         // 同 x: 成员关系留给 viewOf 复核(这里 workspaces 还没读进来)。
         // 旧配置文件没有这个键 —— 读成 null 即"没设过", 不需要迁移动作。
@@ -454,6 +485,7 @@ export function createSlackHookStore(deps: SlackHookStoreDeps): SlackHookStore {
       },
       feishu: {
         enabled: feishu.enabled === true,
+        companionBotId: typeof feishu.companionBotId === 'string' && feishu.companionBotId.length <= 200 ? feishu.companionBotId : null,
         bindingCache: parseProviderBindingCache(feishu.bindingCache),
         ...(Array.isArray(feishu.bindingsCache) ? { bindingsCache: feishu.bindingsCache.map(parseProviderBindingCache)
           .filter((row): row is ProviderBindingCacheEntry => row !== null) } : {}),
@@ -463,6 +495,7 @@ export function createSlackHookStore(deps: SlackHookStoreDeps): SlackHookStore {
       },
       discord: {
         enabled: discord.enabled === true,
+        companionBotId: typeof discord.companionBotId === 'string' && discord.companionBotId.length <= 200 ? discord.companionBotId : null,
         bindingCache: parseProviderBindingCache(discord.bindingCache),
         // 同 x: 成员关系留给 viewOf 复核。
         defaultWorkspace:
@@ -659,6 +692,13 @@ export function createSlackHookStore(deps: SlackHookStoreDeps): SlackHookStore {
       feishuEnabled: account.feishu.enabled,
       discordEnabled: account.discord.enabled,
       xCompanionBotId: account.x.companionBotId ?? null,
+      companionBotIds: {
+        slack: account.slack.companionBotId ?? null,
+        telegram: account.telegram.companionBotId ?? null,
+        feishu: account.feishu.companionBotId ?? null,
+        discord: account.discord.companionBotId ?? null,
+        x: account.x.companionBotId ?? null,
+      },
       urlOverride: document.urlOverride,
       workspaces: { ...document.workspaces },
       retiredWorkspaces: { ...(document.retiredAliases ?? {}) },
@@ -699,8 +739,73 @@ export function createSlackHookStore(deps: SlackHookStoreDeps): SlackHookStore {
     writeDocument(current.document);
     return viewOf(current.document, current.fingerprint);
   }
+  function setCompanionBotId(provider: OfficialCompanionProvider, botId: string | null): SlackHookConfigState {
+    if (!(OFFICIAL_COMPANION_PROVIDERS as readonly string[]).includes(provider)) {
+      throw new HookConnectionValidationError('invalid companion provider');
+    }
+    if (botId !== null && (typeof botId !== 'string' || !botId.trim() || botId.length > 200)) {
+      throw new HookConnectionValidationError('invalid companion id');
+    }
+    return mutateAccount((account) => {
+      account[provider].companionBotId = botId;
+    });
+  }
+
 
   return {
+    commitPreferences(patch) {
+      const current = read();
+      const fingerprint = parseAccountFingerprint(deps.getAccountFingerprint?.());
+      if (!fingerprint) throw new HookConnectionValidationError('account is not available');
+      for (const key of ['telegramDefaultWorkspace', 'xDefaultWorkspace'] as const) {
+        const alias = patch[key];
+        if (alias !== undefined && alias !== null && !Object.hasOwn(current.workspaces, alias)) throw new HookConnectionValidationError('workspace is not configured');
+      }
+      const inspected = inspectSettingsJson(filePath, raw => raw);
+      if (inspected.status !== 'ready' || !inspected.missing && inspected.raw.version !== 2) throw new HookConnectionValidationError('configuration is not readable');
+      const document = structuredClone(inspected.missing ? { version: 2, workspaces: {}, accounts: {} } : inspected.raw);
+      const accounts = (document.accounts ??= {}) as Record<string, Record<string, unknown>>;
+      const account = accounts[fingerprint] ??= {};
+      if (patch.lifecycleAnnouncementOverride !== undefined) ((account.slack ??= {}) as Record<string, unknown>).lifecycleAnnouncementOverride = patch.lifecycleAnnouncementOverride;
+      if (patch.telegramDefaultWorkspace !== undefined) ((account.telegram ??= {}) as Record<string, unknown>).defaultWorkspace = patch.telegramDefaultWorkspace;
+      if (patch.xDefaultWorkspace !== undefined) ((account.x ??= {}) as Record<string, unknown>).defaultWorkspace = patch.xDefaultWorkspace;
+      writeDocument(document as unknown as StoredDocument);
+      return { ...current, ...patch };
+    },
+    inspect(fingerprint) {
+      if (!parseAccountFingerprint(fingerprint)) return { status: 'unavailable' };
+      const inspection = inspectSettingsJson(filePath, (raw) => raw);
+      if (inspection.status !== 'ready') return inspection;
+      if (inspection.missing && legacyFilePath) {
+        try { fs.lstatSync(legacyFilePath); return { status: 'migrationPending' }; }
+        catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return { status: 'unreadable' }; }
+      }
+      const raw = inspection.raw;
+      if (raw.version !== undefined && raw.version !== 1 && raw.version !== 2) return { status: 'unreadable' };
+      if (!inspection.missing && (raw.version !== 2 || raw.legacyAccount !== undefined)) return { status: 'migrationPending' };
+      if (raw.accounts !== undefined && !isSettingsRecord(raw.accounts)) return { status: 'unreadable' };
+      const accountRaw = isSettingsRecord(raw.accounts) ? raw.accounts[fingerprint!] : undefined;
+      if (accountRaw !== undefined && !isSettingsRecord(accountRaw)) return { status: 'unreadable' };
+      try {
+        validateOptionalSettingsFields(raw, { workspaces: isSettingsRecord, urlOverride: value => value === null || (typeof value === 'string' && /^wss?:\/\/.+/.test(value)) });
+        if (isSettingsRecord(accountRaw)) for (const provider of ['slack', 'telegram', 'x']) {
+          const value = accountRaw[provider];
+          if (value === undefined) continue;
+          if (!isSettingsRecord(value)) return { status: 'unreadable' };
+          validateOptionalSettingsFields(value, { enabled: value => typeof value === 'boolean', lifecycleAnnouncementOverride: value => value === null || typeof value === 'boolean', defaultWorkspace: value => value === null || typeof value === 'string' });
+        }
+      } catch { return { status: 'unreadable' }; }
+      const document: StoredDocument = {
+        version: 2, urlOverride: typeof raw.urlOverride === 'string' && /^wss?:\/\/.+/.test(raw.urlOverride) ? raw.urlOverride : null,
+        workspaces: parseWorkspaces(raw.workspaces), accounts: { [fingerprint!]: parseAccount(accountRaw) },
+      };
+      const view = viewOf(document, fingerprint);
+      return { ...inspection, raw: { account: accountRaw ?? {}, ...(raw.urlOverride !== undefined ? { urlOverride: raw.urlOverride } : {}) }, value: {
+        enabled: view.enabled, telegramEnabled: view.telegramEnabled, xEnabled: view.xEnabled,
+        lifecycleAnnouncementOverride: view.lifecycleAnnouncementOverride,
+        telegramDefaultWorkspace: view.telegramDefaultWorkspace, xDefaultWorkspace: view.xDefaultWorkspace, urlOverride: view.urlOverride,
+      } };
+    },
     get: () => read(),
     effectiveUrl() {
       return read().urlOverride ?? deps.defaultUrl();
@@ -805,12 +910,8 @@ export function createSlackHookStore(deps: SlackHookStoreDeps): SlackHookStore {
       });
     },
     setXCompanionBotId(botId) {
-      if (botId !== null && (typeof botId !== 'string' || !botId.trim() || botId.length > 200)) {
-        throw new HookConnectionValidationError('invalid companion id');
-      }
-      return mutateAccount((account) => {
-        account.x.companionBotId = botId;
-      });
+      return setCompanionBotId('x', botId);
     },
+    setCompanionBotId,
   };
 }

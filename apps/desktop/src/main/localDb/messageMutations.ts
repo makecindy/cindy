@@ -1,7 +1,7 @@
 import { and, desc, eq, exists, gt, inArray, isNull, or, sql } from 'drizzle-orm';
 import type { DbClient } from './client/DbClient.js';
 import { messages, sessions } from './schema.js';
-import { safeStringify } from './mapper.js';
+import { safeStringify, serializePersistedAgentMeta } from './mapper.js';
 
 /** Owner is captured by the caller. Do not reacquire a database after an await. */
 export async function writeMessageContentRow(
@@ -155,7 +155,7 @@ export async function patchMessageAgentMetaWithResultRow(
   // Keep the read and write on the same owner even if login changes across await.
   await db
     .update(messages)
-    .set({ agentMeta: JSON.stringify(next) })
+    .set({ agentMeta: serializePersistedAgentMeta(next) })
     .where(and(eq(messages.sessionId, sessionId), eq(messages.clientId, clientId)));
   return { previous, next };
 }

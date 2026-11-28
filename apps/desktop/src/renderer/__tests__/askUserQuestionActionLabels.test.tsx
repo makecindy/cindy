@@ -205,8 +205,8 @@ describe('AskUserQuestionPrompt action labels', () => {
     fireEvent.change(view.getByPlaceholderText('Type your answer…'), {
       target: { value: 'Updated answer' },
     });
-    expect(view.getAllByRole('button', { name: 'Submit' })).toHaveLength(1);
-    fireEvent.click(view.getByRole('button', { name: 'Submit' }));
+    expect(view.getAllByRole('button', { name: 'Send answer' })).toHaveLength(1);
+    fireEvent.click(view.getByRole('button', { name: 'Send answer' }));
 
     expect(onAnswer).toHaveBeenCalledWith('req-submit', {
       'Final question': 'Updated answer',
@@ -219,7 +219,7 @@ describe('AskUserQuestionPrompt action labels', () => {
       questions: [{ question: 'Final question', options: [{ label: 'A' }] }],
     });
 
-    expect(view.queryByRole('button', { name: 'Submit' })).toBeNull();
+    expect(view.queryByRole('button', { name: 'Send answer' })).toBeNull();
   });
 
   it('keeps the footer Submit for a final multi-select question', () => {
@@ -238,7 +238,7 @@ describe('AskUserQuestionPrompt action labels', () => {
       onAnswer,
     );
 
-    const submit = view.getByRole('button', { name: 'Submit' }) as HTMLButtonElement;
+    const submit = view.getByRole('button', { name: 'Send answer' }) as HTMLButtonElement;
     expect(submit.disabled).toBe(true);
 
     fireEvent.click(view.getByText('A'));
@@ -252,11 +252,11 @@ describe('AskUserQuestionPrompt action labels', () => {
 
   it('provides localized prompt copy in every supported locale', async () => {
     const expected = {
-      en: ['Next', 'Submit'],
-      'zh-CN': ['下一题', '提交'],
-      'zh-TW': ['下一題', '提交'],
-      ja: ['次へ', '送信'],
-      ko: ['다음', '제출'],
+      en: ['Next', 'Send answer'],
+      'zh-CN': ['下一题', '发送答复'],
+      'zh-TW': ['下一題', '傳送答覆'],
+      ja: ['次へ', '回答を送信'],
+      ko: ['다음', '답변 보내기'],
     } as const;
     // 非英文语言包按需加载；t(key, { lng }) 只读已加载的语言。
     await i18n.loadLanguages(Object.keys(expected));

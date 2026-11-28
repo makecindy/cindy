@@ -1,4 +1,4 @@
-import { groupTeammateProcess, isSteerUserRow } from '@cindy/maker-shared/message-render';
+import { collapseLegacyIdleGapCards, groupTeammateProcess, isSteerUserRow } from '@cindy/maker-shared/message-render';
 import { isContinuationMessage } from '@cindy/maker-shared/synthetic-trigger';
 import { hasRichAnswer } from '@cindy/maker-shared/rich-answer';
 import { botTaskResultKey, readBotCollaborationMeta } from '@cindy/maker-shared/botCollaboration';
@@ -27,6 +27,34 @@ export function botTurnContinuations(items: readonly RenderItem[]): ReadonlySet<
     start: renderItemStartMs(item),
     end: renderItemEndMs(item),
   }));
+}
+
+/** Project the existing five-minute group starts onto the visible rows. */
+export function botTimeGroupRows(
+  items: readonly RenderItem[],
+  groups: ReadonlyMap<string, number>,
+  continuations: ReadonlySet<string>,
+): ReadonlyMap<string, number> {
+  const timestamps = new Map<string, number>();
+  if (groups.size === 0) return timestamps;
+  let processKey: string | null = null;
+  for (const item of items) {
+    if (item.type === 'work_group') {
+      if (!processKey || !continuations.has(item.key)) processKey = item.key;
+      continue;
+    }
+    if (item.type !== 'message') continue;
+    const { role } = item.message;
+    const reply = isProse(item);
+    const timestamp = groups.get(item.message.clientId);
+    if (timestamp !== undefined) {
+      const key = reply && continuations.has(item.key) ? processKey ?? item.key : item.key;
+      timestamps.set(key, timestamp);
+    }
+    // A later clock must never jump over another clock or an earlier reply.
+    if (timestamp !== undefined || reply || role === 'user') processKey = null;
+  }
+  return timestamps;
 }
 
 /** NEW marks the whole portrait's reply, not the seam between its process and prose.
@@ -155,7 +183,8 @@ export function botProcessItems(
     streaming: item => item.type === 'work_group' ? item.isStreaming === true
       : liveItems.has(item),
     create: (children, key, streaming, start, end) => ({ type: 'work_group', teammateJournal: true, key,
-      children: children as WorkGroupChildItem[], isStreaming: streaming,
+      children: collapseLegacyIdleGapCards(children as WorkGroupChildItem[],
+        child => child.type === 'message' ? child.message : undefined), isStreaming: streaming,
       ...(start !== null ? { startedAtMs: start } : {}),
       ...(start !== null && end !== null ? { durationMs: Math.max(0, end - start) } : {}) }),
   });

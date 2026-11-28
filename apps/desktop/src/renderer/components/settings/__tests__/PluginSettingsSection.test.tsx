@@ -30,7 +30,7 @@ it('edits declared fields, preserves invalid input locally and restores defaults
   expect(screen.getByRole('button', { name: 'pluginUi.save' }).hasAttribute('disabled')).toBe(true);
   expect(invoke).toHaveBeenCalledTimes(1);
   fireEvent.change(size, { target: { value: '18' } });
-  fireEvent.click(screen.getByRole('switch', { name: 'Enabled' }));
+  fireEvent.click(screen.getByRole('checkbox', { name: 'Enabled' }));
   fireEvent.click(screen.getByRole('button', { name: 'pluginUi.save' }));
   await waitFor(() => expect(invoke).toHaveBeenCalledWith(null, { op: 'plugin-settings', instanceId: 'local__demo', operation: 'update', patch: { size: 18, enabled: false } }));
   await waitFor(() => expect(screen.getByRole('button', { name: 'settings.defaults.restore' }).hasAttribute('disabled')).toBe(false));

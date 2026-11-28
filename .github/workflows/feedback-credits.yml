@@ -1,0 +1,62 @@
+name: Feedback credits
+on:
+  pull_request:
+    paths:
+      - '.github/feedback-credits/**'
+      - '.github/workflows/feedback-credits.yml'
+      - 'scripts/*feedback-credits.mjs'
+      - 'scripts/__tests__/feedback-credits.test.mjs'
+  release:
+    types: [published]
+  workflow_dispatch:
+  # Also catch releases created with GITHUB_TOKEN, which do not trigger workflows.
+  schedule:
+    - cron: '17 4 * * *'
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          sparse-checkout: |
+            scripts
+            .github/feedback-credits
+          persist-credentials: false
+      - run: node --test scripts/__tests__/feedback-credits.test.mjs
+      - name: Check attribution for this PR
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+          PR: ${{ github.event.pull_request.number }}
+        run: node scripts/feedback-credits.mjs check "$BASE" "$HEAD" "$PR"
+
+  publish:
+    if: github.repository == 'makecindy/cindy' && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      issues: write
+    concurrency:
+      group: community-credits-publication
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          fetch-depth: 0
+          sparse-checkout: |
+            scripts
+            .github/feedback-credits
+      - name: Publish the wall and deliver requested release replies
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FEEDBACK_X_USER_TOKEN: ${{ secrets.FEEDBACK_X_USER_TOKEN }}
+          FEEDBACK_DISCORD_TOKEN: ${{ secrets.FEEDBACK_DISCORD_TOKEN }}
+        run: node scripts/publish-feedback-credits.mjs

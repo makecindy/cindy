@@ -19,7 +19,50 @@ import type { RemoteHost } from '../RemoteHost.js';
 
 describe('remote agent installer', () => {
   let bash: string;
-  beforeAll(() => {
+
+  /**
+   * One readiness scenario on a throwaway POSIX-style remote home: build the
+   * layout, then run the real probe + install path through Git Bash with every
+   * download stubbed, so an upgrade request cannot reach the network.
+   */
+  const runReadinessScenario = async (complete: boolean, version: string) => {
+    const root = mkdtempSync(path.join(os.tmpdir(), 'cindy-codex-readiness-'));
+    try {
+      const installDir = path.join(root, '.xdt-server', 'v1');
+      const current = path.join(installDir, 'codex-home', 'packages', 'standalone', 'current');
+      const files = complete
+        ? ['codex', 'bin/codex', 'bin/codex-code-mode-host', 'codex-path/rg', 'codex-resources/bwrap', 'codex-package.json']
+        : ['codex'];
+      for (const file of files) {
+        const target = path.join(current, file);
+        mkdirSync(path.dirname(target), { recursive: true });
+        writeFileSync(target, '#!/bin/sh\nprintf "codex-cli ' + version + '\\n"\n');
+        chmodSync(target, 0o755);
+      }
+      writeFileSync(path.join(installDir, '.installed-codex'), '');
+      const outputs: string[] = [];
+      const host = {
+        exec: async (command: string, opts: { input?: string }) => {
+          const args = [...command.matchAll(/'([^']*)'/g)].map((match) => match[1]);
+          expect(args).toContain(PINNED_CODEX_RELEASE_VERSION);
+          const result = spawnSync(bash, ['-s', '--', ...args], {
+            cwd: root, encoding: 'utf8',
+            input: 'export HOME="$PWD"\ncurl() { return 1; }\nwget() { return 1; }\n' + opts.input,
+          });
+          expect(result.error).toBeUndefined();
+          outputs.push(result.stdout);
+          return { exitCode: result.status, stdout: result.stdout, stderr: result.stderr };
+        },
+      } as Pick<RemoteHost, 'exec'> as RemoteHost;
+      const probe = await probeRemoteAgent(host, 'codex');
+      const install = await installRemoteAgent(host, 'codex');
+      return { probe, install, outputs };
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  };
+
+  beforeAll(async () => {
     const shell = resolvePosixShell('bash');
     if (!shell) throw new Error('Git Bash is required for the remote bootstrap tests');
     bash = shell;
@@ -31,7 +74,15 @@ describe('remote agent installer', () => {
     });
     expect(result.error).toBeUndefined();
     expect(result.status, result.stderr).toBe(0);
-  });
+    // A shared Windows runner pays a one-off cost the first time the bootstrap
+    // script really runs: the awk/sha256sum helpers it shells out to are
+    // scanned on first use (~5s). That used to land inside the first case
+    // (observed 6692ms vs ~1s for the two following cases) and blow the 5s
+    // budget. Warm the same path once on a throwaway fixture so the cost
+    // belongs to setup, not to an assertion: every readiness case then stays
+    // inside the default test budget and no timeout has to be widened.
+    await runReadinessScenario(false, PINNED_CODEX_RELEASE_VERSION);
+  }, 60_000);
 
   it('passes the pinned Codex release to the remote bootstrap script', async () => {
     const calls: Array<{ command: string; input: string }> = [];
@@ -146,43 +197,11 @@ describe('remote agent installer', () => {
     { name: 'old full package', complete: true, version: '0.0.1', ready: false },
     { name: 'current full package', complete: true, version: PINNED_CODEX_RELEASE_VERSION, ready: true },
   ])('probe and bootstrap agree on $name readiness', async ({ complete, version, ready }) => {
-    const root = mkdtempSync(path.join(os.tmpdir(), 'cindy-codex-readiness-'));
-    try {
-      // Simulate the POSIX remote home, never the developer home. All downloads
-      // are stubbed so an upgrade request cannot reach the network in this test.
-      const install = path.join(root, '.xdt-server', 'v1');
-      const current = path.join(install, 'codex-home', 'packages', 'standalone', 'current');
-      const files = complete
-        ? ['codex', 'bin/codex', 'bin/codex-code-mode-host', 'codex-path/rg', 'codex-resources/bwrap', 'codex-package.json']
-        : ['codex'];
-      for (const file of files) {
-        const target = path.join(current, file);
-        mkdirSync(path.dirname(target), { recursive: true });
-        writeFileSync(target, '#!/bin/sh\nprintf "codex-cli ' + version + '\\n"\n');
-        chmodSync(target, 0o755);
-      }
-      writeFileSync(path.join(install, '.installed-codex'), '');
-      const outputs: string[] = [];
-      const host = {
-        exec: async (command: string, opts: { input?: string }) => {
-          const args = [...command.matchAll(/'([^']*)'/g)].map((match) => match[1]);
-          expect(args).toContain(PINNED_CODEX_RELEASE_VERSION);
-          const result = spawnSync(bash, ['-s', '--', ...args], {
-            cwd: root, encoding: 'utf8',
-            input: 'export HOME="$PWD"\ncurl() { return 1; }\nwget() { return 1; }\n' + opts.input,
-          });
-          expect(result.error).toBeUndefined();
-          outputs.push(result.stdout);
-          return { exitCode: result.status, stdout: result.stdout, stderr: result.stderr };
-        },
-      } as Pick<RemoteHost, 'exec'> as RemoteHost;
-      expect((await probeRemoteAgent(host, 'codex')).installed).toBe(ready);
-      expect((await installRemoteAgent(host, 'codex')).ready).toBe(ready);
-      if (!ready) expect(outputs[1]).toContain('INSTALL_START codex-package');
-      else expect(outputs[1]).not.toContain('INSTALL_START');
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
+    const { probe, install, outputs } = await runReadinessScenario(complete, version);
+    expect(probe.installed).toBe(ready);
+    expect(install.ready).toBe(ready);
+    if (!ready) expect(outputs[1]).toContain('INSTALL_START codex-package');
+    else expect(outputs[1]).not.toContain('INSTALL_START');
   });
 
   it('probes pi binary presence + version match', async () => {

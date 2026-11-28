@@ -2,6 +2,7 @@ import { appearanceSettings, UI_FONT_PRESETS, CODE_FONT_PRESETS, TERMINAL_FONT_P
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
+import { Badge } from '@/components/ui/badge';
 import { Select } from '@/components/ui/select';
 
 import { SegmentedControl } from '@/components/ui/segmented-control';
@@ -37,6 +38,7 @@ import { Tip } from '@/components/ui/tooltip';
 import { Slider } from '@/components/ui/slider';
 import { extractIpcError } from '@/utils/ipcError';
 import { DefaultOverrideControls } from './DefaultOverrideControls';
+import { ChatLayoutSettings } from './ChatLayoutSettings';
 import { DockIconPicker } from './DockIconPicker';
 import { SettingsTextInput } from './SettingsTextInput';
 import { FontFamilyPicker } from './FontFamilyPicker';
@@ -279,9 +281,9 @@ function singleVariantType(family: ThemeFamily): 'light' | 'dark' | null {
 function VariantBadge({ text }: { text: string | null }) {
   if (!text) return null;
   return (
-    <span className="shrink-0 whitespace-nowrap rounded-full bg-[var(--surface-chip)] px-2 py-1 text-11 font-medium leading-none text-[var(--text-secondary)]">
+    <Badge>
       {text}
-    </span>
+    </Badge>
   );
 }
 
@@ -913,6 +915,7 @@ export function AppearanceSection() {
             />
 
             <LayoutResetControl />
+            <ChatLayoutSettings />
           </SettingsCard>
         </SettingsSection>
       </div>

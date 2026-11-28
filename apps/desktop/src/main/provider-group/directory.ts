@@ -23,7 +23,7 @@ import {
 } from '../../shared/providerGroup.js';
 import type { DeviceLinkDeviceView } from '../../shared/deviceLinkIpc.js';
 import type { ClaudeSubscriptionUsageSnapshot } from '../../shared/claudeSubscriptionUsage.js';
-import { providerWeeklyQuotaSource } from '../../shared/providerQuotaSource.js';
+import { providerUsageReaderSource } from '../../shared/providerQuotaSource.js';
 import { isSameProvider } from './matching.js';
 import type { ProviderGroupCodexUsageSnapshot, ProviderGroupShareQuotaSnapshot, ProviderGroupUsageInvalidation } from './usage.js';
 
@@ -106,6 +106,8 @@ export interface ResolvedProviderGroupMember {
 }
 
 export interface ResolveMembersOptions {
+  /** Read base availability before fetching optional quota for the settings row. */
+  skipUsage?: boolean;
   /**
    * 最多等多久：到点已经有一台 `enough` 的电脑就不再等其余的(没读完的标 `pending`)；一台都还没有时照旧等全部读完。
    * 不给 = 等全部读完。
@@ -395,7 +397,7 @@ export function createProviderGroupDirectory(deps: ProviderGroupDirectoryDeps): 
       if (settled[index]) return settled[index];
       const value = partial[index];
       if (value?.state === 'ok' && member.kind !== 'share' && value.view
-        && providerWeeklyQuotaSource(value.view) === 'codex' && deps.peekCodexUsage) {
+        && providerUsageReaderSource(value.view) === 'codex' && deps.peekCodexUsage) {
         return { ...value, codexUsage: deps.peekCodexUsage(member) };
       }
       return value ?? pendingMember(member);
@@ -425,6 +427,7 @@ export function createProviderGroupDirectory(deps: ProviderGroupDirectoryDeps): 
         if (member.kind === 'share') return resolveShare(member);
         return deviceListPromise.then((deviceList) => resolveDevice(member, deviceList));
       });
+      if (options?.skipUsage) return Promise.all(partialReads);
       const reads = partialReads.map(async (read, index) => {
         const member = config.members[index]!;
         const resolved = await read;
@@ -433,7 +436,7 @@ export function createProviderGroupDirectory(deps: ProviderGroupDirectoryDeps): 
             ? { ...resolved, shareQuota: await deps.readShareQuota(member).catch(() => null) } : resolved;
         }
         if (resolved.state !== 'ok' || !resolved.view?.auth) return resolved;
-        const source = providerWeeklyQuotaSource(resolved.view);
+        const source = providerUsageReaderSource(resolved.view);
         if (source === 'codex' && deps.readCodexUsage) {
           return { ...resolved, codexUsage: await deps.readCodexUsage(member).catch(() => null) };
         }

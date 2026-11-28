@@ -106,6 +106,55 @@ describe('mobile TapDB analytics', () => {
     expect(clearNativeTapdbUser).toHaveBeenCalled();
   });
 
+  it('coalesces rapid successful payment registrations while preserving visits and retries', async () => {
+    vi.stubEnv('EXPO_PUBLIC_TAPTAP_CLIENT_ID', 'client-id');
+    vi.stubEnv('EXPO_PUBLIC_TAPTAP_CLIENT_TOKEN', 'client-token');
+    const tapdb = await importMobileTapdb();
+    const charge = 'pay1_' + '1'.repeat(48);
+    const usage = 'use1_' + '2'.repeat(48);
+    const now = vi.spyOn(performance, 'now').mockReturnValue(0);
+    try {
+      setTapdbUserId.mockRejectedValueOnce(new Error('registration unavailable'));
+      await tapdb.setTapdbUser(charge, usage);
+      await tapdb.setTapdbUser(charge, usage);
+      await tapdb.setTapdbUser(charge, usage);
+      expect(setTapdbUserId.mock.calls).toEqual([[charge], [usage], [charge], [usage], [usage]]);
+
+      now.mockReturnValue(60_000);
+      setTapdbUserId.mockClear();
+      await tapdb.setTapdbUser(charge, usage);
+      await tapdb.stopMobileTapdbReporting();
+      await tapdb.setTapdbUser(charge, usage);
+      expect(setTapdbUserId.mock.calls).toEqual([[charge], [usage], [charge], [usage]]);
+    } finally {
+      now.mockRestore();
+    }
+  });
+
+  it.each([false, true])('handles an overlapping bind with an intervening clear: %s', async (clearBetweenBinds) => {
+    vi.stubEnv('EXPO_PUBLIC_TAPTAP_CLIENT_ID', 'client-id');
+    vi.stubEnv('EXPO_PUBLIC_TAPTAP_CLIENT_TOKEN', 'client-token');
+    const tapdb = await importMobileTapdb();
+    const charge = 'pay1_' + '1'.repeat(48);
+    const usage = 'use1_' + '2'.repeat(48);
+    let finish!: () => void;
+    const started = new Promise<void>(resolve => {
+      setTapdbUserId.mockImplementationOnce(() => new Promise<void>(complete => {
+        finish = complete;
+        resolve();
+      }));
+    });
+
+    const first = tapdb.setTapdbUser(charge, usage);
+    await started;
+    const clear = clearBetweenBinds ? tapdb.clearTapdbUser() : undefined;
+    const second = tapdb.setTapdbUser(charge, usage);
+    finish();
+    await Promise.all([first, clear, second]);
+
+    expect(setTapdbUserId.mock.calls).toEqual(clearBetweenBinds ? [[charge], [charge], [usage]] : [[charge], [usage]]);
+  });
+
   // Standard tier: a delayed native write can overlap an account switch.
   // A login tested in isolation cannot detect binding the old retention alias after the switch.
   it('only binds the current retention alias when switching accounts during payment registration', async () => {

@@ -6,6 +6,7 @@ import { createRoot } from 'react-dom/client';
 import ts from 'typescript';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { i18n } from '@/i18n';
+import { applyRemoteScheduleTimingsToIndex } from '@/scheduler/remoteScheduleEvents';
 import {
   buildOrcaDispatchCard,
   classifyOrcaDispatchTool,
@@ -351,7 +352,7 @@ describe('selectVisibleDeviceSessions', () => {
 
   it('feeds the derived rows into the device/project list sections', () => {
     const detail = ts.createSourceFile('device.tsx', readFileSync(resolve(process.cwd(), 'app/devices/[deviceId].tsx'), 'utf8'), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
-    const names = new Set(['sessions', 'filterCounts', 'sections']);
+    const names = new Set(['sessions', 'filterCounts', 'effectiveScheduleIndex', 'sections']);
     const declarations: string[] = [];
     // Only the component's derived rows feed its sections. A nested sync read
     // also calls its response `sessions`; it must not enter this lexical scope.
@@ -379,6 +380,7 @@ describe('selectVisibleDeviceSessions', () => {
         // The real detail sections now also consume alias metadata; worker filtering remains unchanged.
         visibleWorkerIds: new Set(), projectAliases: new Map(), allSessions, deviceId: 'dev-a', projectWorkingDir: '/repo/cindy',
         messagePreviewIndex: new Map(), pendingInteractionIndex: new Map(), scheduleIndex: new Map(),
+        applyRemoteScheduleTimingsToIndex, scheduleEventSnapshot: { scheduleTimings: new Map() },
         searchQuery: '', statusFilter: 'all', automationScopeKey: null,
         i18nInstance: i18n, t: i18n.t.bind(i18n),
       });

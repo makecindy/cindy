@@ -383,7 +383,7 @@
       "passages": {
         "p1": "This morning I will go over the plan for the week, and in the afternoon I will list the questions we need to discuss and send them out so everyone can read them first.",
         "p2": "If the weather is nice tomorrow, we can leave a little earlier, pick up some fruit and snacks on the way, and have lunch in the park.",
-        "p3": "Please make this text more concise, keep the key numbers and conclusions, and then sum up the main points in three to five sentences."
+        "p3": "Make this text more concise, keep the key numbers and conclusions, and then sum up the main points in three to five sentences."
       },
       "errors": {
         "too_short": "Too little speech was detected in passage {{index}}. Record it again.",
@@ -549,5 +549,14 @@
   },
   "navigation": {
     "unavailable": "Could not open settings on the target computer. Check that it is online and allows remote control; update Cindy if it is an older version."
+  },
+  "qrLogin": {
+    "scanTitle": "Scan to sign in",
+    "hintLogin": "Scan the code shown by Cindy on your computer",
+    "hintLoginDetail": "On your computer: phone icon next to your avatar → Control Cindy Remotely",
+    "cameraNeeded": "Cindy needs the camera to scan",
+    "grantCamera": "Allow camera",
+    "openSettings": "Open Settings",
+    "wrongCode": "This isn't a Cindy sign-in code"
   }
 }

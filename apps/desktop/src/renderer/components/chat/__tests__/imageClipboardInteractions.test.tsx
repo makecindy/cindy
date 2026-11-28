@@ -263,6 +263,32 @@ describe('shared production image interactions', () => {
       expect(toast.success).not.toHaveBeenCalled();
     },
   );
+  it.each([true, false])(
+    'offers system open after a Markdown image error only for confirmed local sessions (%s)',
+    (localConfirmed) => {
+      render(
+        <Tooltip.Provider>
+          <ChatSessionFileProvider
+            value={{ sessionId: 's1', workingDir: '/fixture', origin: { kind: 'local' }, localConfirmed }}
+          >
+            <MarkdownRenderer workingDir="/fixture" currentSessionId="s1" content={`![preview](${localFile})`} />
+          </ChatSessionFileProvider>
+        </Tooltip.Provider>,
+      );
+      fireEvent.error(screen.getByAltText('preview'));
+      expect(screen.getByText(label('chat.imageMissing.unavailable'))).toBeTruthy();
+      const action = screen.queryByRole('button', { name: `${label('chat.media.openWithApp')}: preview` });
+      if (localConfirmed) {
+        expect(action).not.toBeNull();
+        fireEvent.click(action!);
+        expect(open).toHaveBeenCalledExactlyOnceWith({ url: localFile });
+      } else {
+        expect(action).toBeNull();
+        expect(open).not.toHaveBeenCalled();
+      }
+    },
+  );
+
   it('keeps remote Markdown ownership in the inline menu', async () => {
     render(
       <ChatSessionFileProvider

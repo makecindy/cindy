@@ -17,14 +17,16 @@ const execFileAsync = promisify(execFile);
 // symlink-platform-skip: Windows cannot enforce POSIX directory search permissions or run the target host's native bash/stat filesystem semantics.
 describe.skipIf(process.platform === 'win32')('remote Pi context filesystem errors (real shell)', () => {
   let root: string;
+  let remotePath: string | undefined;
   let ops: ReturnType<typeof createRemotePiFileOps>;
   beforeEach(async () => {
     root = await fs.mkdtemp(path.join(tmpdir(), 'pi-remote-stat-'));
+    remotePath = undefined;
     const host = {
       exec: async (command: string) => {
         try {
-          const result = await execFileAsync('bash', ['-c', command], {
-            env: { ...process.env, HOME: root }, timeout: 10_000,
+          const result = await execFileAsync('/bin/bash', ['-c', command], {
+            env: { ...process.env, HOME: root, PATH: remotePath ?? process.env.PATH }, timeout: 10_000,
           });
           return { ...result, exitCode: 0 };
         } catch (error) {
@@ -51,8 +53,30 @@ describe.skipIf(process.platform === 'win32')('remote Pi context filesystem erro
     await expect(readPiGlobalContext('$HOME', ops)).resolves.toEqual([{ name: 'AGENTS.md', content: 'rules' }]);
     await fs.unlink(path.join(root, name));
     await expect(ops.stat('$HOME/AGENTS.md')).resolves.toBeNull();
+    await expect(ops.lstat!('$HOME/AGENTS.md')).resolves.toEqual({ isSymbolicLink: true });
     await fs.symlink(path.join(root, 'loop'), path.join(root, 'loop'));
-    await expect(ops.stat('$HOME/loop')).rejects.toThrow('remote stat failed');
+    await expect(ops.stat('$HOME/loop')).rejects.toThrow('ELOOP');
+  });
+
+  it('reports which context file could not be checked when a parent is a file', async () => {
+    await fs.writeFile(path.join(root, 'private-parent'), 'not a directory');
+    await expect(readPiGlobalContext('$HOME/private-parent', ops)).rejects.toThrow(
+      /^remote stat failed \(exit 1\): ENOTDIR \(a path component is not a directory\) while checking AGENTS\.override\.md$/,
+    );
+    await expect(ops.lstat!('$HOME/private-parent/project')).rejects.toThrow('ENOTDIR');
+  });
+
+  it.each([
+    ['missing', 'STAT_NOT_FOUND'],
+    ['incompatible', 'STAT_PROBE_FAILED'],
+  ])('diagnoses a %s stat command', async (fixture, code) => {
+    remotePath = path.join(root, 'bin');
+    await fs.mkdir(remotePath);
+    await fs.symlink('/bin/bash', path.join(remotePath, 'bash'));
+    if (fixture === 'incompatible') {
+      await fs.writeFile(path.join(remotePath, 'stat'), '#!/bin/bash\nexit 1\n', { mode: 0o700 });
+    }
+    await expect(ops.stat('$HOME/AGENTS.md')).rejects.toThrow(code);
   });
 
   it('reads a bounded native history tail on the remote filesystem with literal paths', async () => {

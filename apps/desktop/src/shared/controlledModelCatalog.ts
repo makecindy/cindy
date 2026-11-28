@@ -1,6 +1,14 @@
 /** Same-account, read-only model discovery from the task computer's perspective. */
 export const CONTROLLED_MODEL_CATALOG_CHANNEL = 'maker:model-catalog:read';
 export const CONTROLLED_MODEL_CATALOG_CHANGED = 'maker:model-catalog:changed';
+export const CONTROLLED_MODEL_CATALOG_RETRY_SHARE = 'retry-share-directory';
+export function readReceivedCatalogChangeSequence(payload: unknown): number | undefined {
+  if (!payload || typeof payload !== 'object') return undefined;
+  const { receivedChangeSequence } = payload as { receivedChangeSequence?: unknown };
+  return typeof receivedChangeSequence === 'number' && Number.isSafeInteger(receivedChangeSequence)
+    && receivedChangeSequence > 0 ? receivedChangeSequence : undefined;
+}
+
 export function isModelCatalogSourceChange(channel: string): boolean {
   return channel === 'maker:provider:changed' || channel === 'maker:agents:changed';
 }

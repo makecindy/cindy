@@ -22,6 +22,7 @@ import { Tip } from '@/components/ui/tooltip';
 import { toast } from '@/lib/toast';
 import { createLogger } from '@/lib/logger';
 import { extractIpcError } from '@/utils/ipcError';
+import { Checkbox } from '@/components/ui/checkbox';
 
 const log = createLogger('SessionShareExportDialog');
 
@@ -160,12 +161,11 @@ export function SessionShareExportDialog({
           )}
 
           <label className="mt-4 flex items-start gap-2 cursor-pointer">
-            <input
-              type="checkbox"
+            <Checkbox
               checked={encrypt}
               onChange={(e) => setEncrypt(e.target.checked)}
               disabled={exporting}
-              className="mt-0.5 accent-[var(--confirm-btn-primary-bg)]"
+              className="mt-0.5"
             />
             <span className="text-sm text-[var(--confirm-title)]">
               {t('sessionShare.export.encryptLabel')}
@@ -182,7 +182,7 @@ export function SessionShareExportDialog({
                   placeholder={t('sessionShare.export.passwordPlaceholder')}
                   disabled={exporting}
                   autoFocus
-                  className="h-8 w-full rounded-md border bg-transparent px-2 pr-8 text-sm outline-none"
+                  className="h-8 w-full rounded-full border bg-transparent px-2 pr-8 text-sm outline-none"
                   style={{
                     borderColor: 'var(--border-default)',
                     color: 'var(--confirm-title)',
@@ -216,7 +216,7 @@ export function SessionShareExportDialog({
                 onChange={(e) => setPassConfirm(e.target.value)}
                 placeholder={t('sessionShare.export.passwordConfirmPlaceholder')}
                 disabled={exporting}
-                className="h-8 w-full rounded-md border bg-transparent px-2 text-sm outline-none"
+                className="h-8 w-full rounded-full border bg-transparent px-2 text-sm outline-none"
                 style={{
                   borderColor: mismatch ? 'var(--error-border)' : 'var(--border-default)',
                   color: 'var(--confirm-title)',

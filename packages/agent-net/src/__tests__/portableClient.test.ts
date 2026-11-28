@@ -344,6 +344,8 @@ it('keeps media on the relay when the client cannot bind chunks with MD5', async
  * - 最小失败输入：一条已握手的 PortableUplink、两次相隔 1.1 秒的发包，以及 20 秒排空恢复／45 秒未排空关闭两分支。
  * - tier：unit，真实签名握手与二进制封装，内存 BinarySocket + 假计时器；约 10 毫秒。 */
 it.each([
+  ['verifies a stalled request against a silent relay', 'probe-silent'],
+  ['keeps the relay after a probe reply', 'probe-answered'],
   ['closes the half-open socket after 45 s', 'dead'],
   ['recovers once bufferedAmount drains', 'drains'],
   ['keeps sending when bufferedAmount is undefined (React Native)', 'undefined'],
@@ -374,11 +376,22 @@ it.each([
     const connected = api.connect();
     await listening;
     ws.onmessage!({ data: JSON.stringify({ type: 'hello', deviceId: identity.deviceId, protocolVersion: 2,
+      relayProbe: mode.startsWith('probe-'),
       devices: [{ certificate: bootstrap.ownerCertificate, name: 'Phone', online: true, remoteControlEnabled: false, capabilities: [] }], delegations: [] }) });
     const uplink = await connected;
     const closed = vi.fn(() => uplink.once('close', closed));
     uplink.once('close', closed);
     try {
+      uplink.probeRelay?.();
+      uplink.probeRelay?.();
+      if (mode === 'probe-silent' || mode === 'probe-answered') {
+        expect(send).toHaveBeenCalledExactlyOnceWith('{"type":"relay-probe"}');
+        if (mode === 'probe-answered') ws.onmessage!({ data: '{"type":"relay-pong"}' });
+        await vi.advanceTimersByTimeAsync(15_000);
+        expect(closed).toHaveBeenCalledTimes(mode === 'probe-silent' ? 1 : 0);
+        return;
+      }
+      expect(send).not.toHaveBeenCalled(); // Earlier relays only accept presence frames.
       uplink.send('peer-a', Uint8Array.of(1, 2, 3));
       await vi.advanceTimersByTimeAsync(0);
       expect(send).toHaveBeenCalledTimes(1);

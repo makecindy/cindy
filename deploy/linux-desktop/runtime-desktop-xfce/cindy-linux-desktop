@@ -1,0 +1,111 @@
+#!/bin/bash
+set -euo pipefail
+umask 077
+unset ELECTRON_DISABLE_SANDBOX WAYLAND_DISPLAY GNOME_KEYRING_CONTROL DBUS_SESSION_BUS_ADDRESS
+if ! unshare --propagation=unchanged -Urmpfn true >/dev/null 2>&1; then
+  echo 'INSTANCE_SANDBOX_UNAVAILABLE' >&2
+  exit 1
+fi
+export XDG_RUNTIME_DIR
+XDG_RUNTIME_DIR=$(mktemp -d /tmp/cindy-runtime-XXXXXXXX)
+# Stop one child: TERM, wait up to $2 tenths of a second, then KILL.
+stop_process() {
+  local pid=${1:-} ticks=$2 i
+  [ -n "$pid" ] || return 0
+  kill -TERM "$pid" 2>/dev/null || return 0
+  for ((i = 0; i < ticks; i++)); do
+    kill -0 "$pid" 2>/dev/null || break
+    sleep 0.1
+  done
+  kill -KILL "$pid" 2>/dev/null || true
+  wait "$pid" 2>/dev/null || true
+}
+# Orderly stop. The application goes first and gets up to 45 s to run its own
+# quit chain while its display, session bus and keyring are still alive; only
+# then are the dependencies stopped. Give the container a 60 s stop grace period.
+cleanup() {
+  trap '' TERM INT
+  stop_process "${application:-}" 450
+  stop_process "${window_manager:-}" 50
+  stop_process "${xvfb:-}" 50
+  stop_process "${keyring:-}" 50
+  stop_process "${bus:-}" 50
+  kill $(jobs -pr) 2>/dev/null || true
+  wait || true
+  rm -rf -- "$XDG_RUNTIME_DIR"
+}
+trap cleanup EXIT
+trap 'exit 0' TERM INT
+export DBUS_SESSION_BUS_ADDRESS="unix:path=$XDG_RUNTIME_DIR/bus"
+dbus-daemon --session --nofork --address="$DBUS_SESSION_BUS_ADDRESS" &
+bus=$!
+for attempt in {1..50}; do
+  kill -0 "$bus"
+  if [ -S "$XDG_RUNTIME_DIR/bus" ]; then break; fi
+  sleep 0.1
+done
+test -S "$XDG_RUNTIME_DIR/bus"
+managed=0
+if [ -n "${CINDY_POD_DEVICE_ID:-}${CINDY_POD_MEMBERSHIP_ID:-}${CINDY_POD_KEYRING_PASSWORD_FILE:-}" ]; then
+  managed=1
+  node /usr/local/lib/cindy/keyring-check.mjs
+  gnome-keyring-daemon --foreground --unlock --components=secrets \
+    --control-directory="$XDG_RUNTIME_DIR/keyring" \
+    < "$CINDY_POD_KEYRING_PASSWORD_FILE" >/dev/null 2>&1 &
+  keyring=$!
+  unlocked=0
+  for attempt in {1..50}; do
+    kill -0 "$keyring"
+    owner=$(timeout 1s gdbus call --session --dest org.freedesktop.DBus \
+      --object-path /org/freedesktop/DBus --method org.freedesktop.DBus.GetNameOwner \
+      org.freedesktop.secrets 2>/dev/null) || owner=''
+    owner=${owner#*\'}
+    owner=${owner%%\'*}
+    if [[ "$owner" =~ ^:[0-9]+\.[0-9]+$ ]] && \
+      timeout 1s gdbus call --session --dest "$owner" \
+      --object-path /org/freedesktop/secrets/collection/login \
+      --method org.freedesktop.DBus.Properties.Get org.freedesktop.Secret.Collection Locked \
+      2>/dev/null | grep -q 'false'; then
+      unlocked=1
+      break
+    fi
+    sleep 0.1
+  done
+  if [ "$unlocked" != 1 ]; then
+    echo 'INSTANCE_KEYRING_UNLOCK_FAILED' >&2
+    exit 1
+  fi
+  set -- "$@" --cloud-instance --password-store=gnome-libsecret
+fi
+Xvfb -displayfd 3 -screen 0 1280x800x24 -nolisten tcp \
+  3>"$XDG_RUNTIME_DIR/display-number" &
+xvfb=$!
+for attempt in {1..50}; do
+  kill -0 "$xvfb"
+  if [ -s "$XDG_RUNTIME_DIR/display-number" ]; then break; fi
+  sleep 0.1
+done
+read -r display_number < "$XDG_RUNTIME_DIR/display-number"
+[[ "$display_number" =~ ^[0-9]+$ ]]
+export DISPLAY=":$display_number"
+xdpyinfo >/dev/null
+/usr/local/lib/cindy/xfce-session >/dev/null 2>&1 &
+window_manager=$!
+for attempt in {1..150}; do
+  kill -0 "$window_manager" 2>/dev/null || { echo INSTANCE_DESKTOP_START_FAILED >&2; exit 1; }
+  if [ -f "$XDG_RUNTIME_DIR/desktop-ready" ]; then break; fi
+  sleep 0.1
+done
+test -f "$XDG_RUNTIME_DIR/desktop-ready" || { echo INSTANCE_DESKTOP_START_TIMEOUT >&2; exit 1; }
+"$@" &
+application=$!
+exit_code=0
+finished=''
+pids=("$application" "$xvfb" "$bus" "$window_manager")
+if [ "$managed" = 1 ]; then pids+=("$keyring"); fi
+wait -n -p finished "${pids[@]}" || exit_code=$?
+if [ "${finished:-}" != "$application" ]; then
+  echo 'INSTANCE_RUNTIME_DEPENDENCY_EXITED' >&2
+  exit 1
+fi
+exit "$exit_code"

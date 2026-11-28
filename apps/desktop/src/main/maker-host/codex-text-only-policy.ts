@@ -156,6 +156,7 @@ export function codexTextOnlyWebSocketTransforms(
   disabled: () => boolean,
   requiresSerial = false,
   transformRequest: (message: Buffer, signal: AbortSignal) => Buffer | Promise<Buffer> = message => message,
+  observeInbound?: (message: Buffer) => void,
 ) {
   // Frozen at each request, never relaxed by a subsequent UI send or teardown.
   let restricted = false;
@@ -169,6 +170,9 @@ export function codexTextOnlyWebSocketTransforms(
       return transformRequest(restricted ? restrictCodexRequest(message, { serial: requiresSerial }) : message, signal);
     }),
     inbound: createWebSocketMessageTransform(false, message => {
+      if (observeInbound) {
+        try { observeInbound(message); } catch { /* Best-effort telemetry; never break WS delivery. */ }
+      }
       if (restricted) {
         const event = parseResponse(message.toString('utf8'));
         validateCodexTextOnlyResponse(event);

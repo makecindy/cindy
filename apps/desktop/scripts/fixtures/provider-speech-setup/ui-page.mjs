@@ -7,6 +7,8 @@ export default {
   notCovered:
     'Live credentials, manual refresh orchestration (covered by ProvidersSection unit tests), provider network calls, OS safe storage, Settings owner changes, OAuth login and actual synthesis; host catalog/save responses are scenario data',
   cases: {
+    'realtime-bailian': { about: 'Add native realtime to an existing workspace without replacing its chat model' },
+    'realtime-token-plan': { about: 'Token Plan includes its discovered realtime model only' },
     default: { about: 'Existing API-key connection adds speech without replacing its chat model' },
     empty: { about: 'An empty API-key connection keeps manual speech addition in Management' },
     minimax: {
@@ -30,6 +32,21 @@ export default {
     await page.getByTestId('provider-model-toolbar').waitFor();
   },
   async check(page, ui) {
+    if (ui.case.startsWith('realtime-')) {
+      await page.getByRole('button', { name: await ui.t('settings.providers.models.manage.menu'), exact: true }).click();
+      await page.getByRole('menuitem', { name: await ui.t('bots.voiceMode.realtime.add'), exact: true }).click();
+      const model = page.getByRole('checkbox', { name: /qwen-audio-3.0-realtime-plus/ });
+      await model.waitFor();
+      assert.equal(await model.isChecked(), false);
+      await model.click();
+      if (ui.case === 'realtime-token-plan') assert.equal(await page.getByRole('checkbox', { name: /qwen-audio-3.1/ }).count(), 0);
+      await ui.capture('realtime-models');
+      await page.getByRole('button', { name: await ui.t('settings.providers.wizard.addManualModel'), exact: true }).click();
+      await page.getByTestId('saved').waitFor();
+      const saved = await page.getByTestId('saved').textContent();
+      assert.ok(saved.includes('qwen-plus') && saved.includes('qwen-audio-3.0-realtime-plus'));
+      return;
+    }
     if (ui.case === 'speech-visibility') {
       const toggle = page.getByRole('switch', { name: 'MiniMax Speech 2.8 HD', exact: true });
       await toggle.waitFor();
@@ -96,7 +113,7 @@ export default {
             : 'speech-2.8-turbo';
     const recommended = page.getByRole('checkbox', { name: new RegExp(recommendedId) });
     await recommended.waitFor();
-    assert.equal(await recommended.getAttribute('aria-checked'), 'true');
+    assert.equal(await recommended.isChecked(), true);
     if (ui.case.startsWith('token-plan'))
       assert.equal(await page.getByRole('checkbox', { name: /cosyvoice/ }).count(), 0);
     if (ui.case === 'bailian') {

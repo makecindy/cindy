@@ -44,7 +44,9 @@ export function useDeleteDeviceDialog(remove: DeviceLinkSettings['remove']) {
         if (!open && !deletePending.current) setDeleteTarget(null);
       }}
       title={t('settings.devices.deleteTitle', { name: deleteTarget?.name ?? '' })}
-      description={t('settings.devices.deleteMessage')}
+      // A cloud Cindy can't rejoin by itself after removal; say what it costs (cloud copy).
+      description={t(deleteTarget?.deviceId.startsWith('cloud-device-')
+        ? 'settings.devices.deleteCloudMessage' : 'settings.devices.deleteMessage')}
       confirmText={t('settings.devices.delete')}
       confirmVariant="destructive"
       restoreFocusTarget={() => returnFocus.current?.() ?? null}

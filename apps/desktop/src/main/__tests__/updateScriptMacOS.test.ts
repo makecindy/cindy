@@ -20,7 +20,7 @@
  * by another user) logs FATAL and leaves the old bundle intact.
  */
 import { describe, expect, it } from 'vitest';
-import { execFileSync, execFile, spawn } from 'node:child_process';
+import { execFileSync, execFile, spawn, type ChildProcess } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -134,33 +134,37 @@ describe('buildMacOSUpdateScript structure', () => {
 // ── Behavioral: run the real artifact against real processes ──────────────
 
 interface Sandbox {
-  root: string;
   appPath: string;
   logPath: string;
   binDir: string;
   params: MacUpdateScriptParams;
+  launchRequest: string;
+  children: { child: ChildProcess; closed: Promise<void> }[];
 }
 
 function shellScript(body: string): string {
   return `#!/bin/bash\n${body}\n`;
 }
 
+// Preserve the bundle path in argv for the updater's process checks. Using
+// exec keeps each fake app/helper within the one child the fixture owns.
+const fakeApp = shellScript('exec -a "$0" /bin/sleep 30');
+
 /**
  * Builds: an installed fake .app (with Frameworks helper), a zip containing
- * the new fake .app (whose main binary writes a marker + sleeps), and a PATH
+ * the new fake .app (whose main binary sleeps), and a PATH
  * stub for `open` so nothing GUI-launches. `openBehavior`:
- *   'launch'  — stub open execs the new app main binary detached (success path)
+ *   'launch'  — stub open asks the fixture to spawn the new app (success path)
  *   'noop'    — stub open does nothing (verification-failure path)
  */
-function makeSandbox(openBehavior: 'launch' | 'noop', includeNewApp = true): Sandbox {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'xdt-upd-test-'));
+function makeSandbox(root: string, openBehavior: 'launch' | 'noop', includeNewApp: boolean): Sandbox {
   const appPath = path.join(root, 'Installed', 'fake (2).app');
   const helperDir = path.join(appPath, 'Contents', 'Frameworks', 'fake Helper (Renderer).app', 'Contents', 'MacOS');
   const mainDir = path.join(appPath, 'Contents', 'MacOS');
   fs.mkdirSync(helperDir, { recursive: true });
   fs.mkdirSync(mainDir, { recursive: true });
-  fs.writeFileSync(path.join(mainDir, 'fakemain'), shellScript('sleep 300'), { mode: 0o755 });
-  fs.writeFileSync(path.join(helperDir, 'fakehelper'), shellScript('sleep 300'), { mode: 0o755 });
+  fs.writeFileSync(path.join(mainDir, 'fakemain'), fakeApp, { mode: 0o755 });
+  fs.writeFileSync(path.join(helperDir, 'fakehelper'), fakeApp, { mode: 0o755 });
   fs.writeFileSync(path.join(appPath, 'Contents', 'version.txt'), 'old');
 
   // New bundle → zip (ditto -c -k, same tool the real flow unpacks with).
@@ -170,7 +174,7 @@ function makeSandbox(openBehavior: 'launch' | 'noop', includeNewApp = true): San
     fs.mkdirSync(path.join(newApp, 'Contents', 'MacOS'), { recursive: true });
     fs.writeFileSync(
       path.join(newApp, 'Contents', 'MacOS', 'fakemain'),
-      shellScript('sleep 300'),
+      fakeApp,
       { mode: 0o755 },
     );
     fs.writeFileSync(path.join(newApp, 'Contents', 'version.txt'), 'new');
@@ -184,8 +188,10 @@ function makeSandbox(openBehavior: 'launch' | 'noop', includeNewApp = true): San
   // PATH stub for `open`.
   const binDir = path.join(root, 'bin');
   fs.mkdirSync(binDir);
+  const launchRequest = path.join(binDir, 'launch-request');
+  fs.writeFileSync(launchRequest, '');
   const openBody = openBehavior === 'launch'
-    ? `nohup "$1/Contents/MacOS/fakemain" >/dev/null 2>&1 &\nexit 0`
+    ? 'echo "$1" >> "${0%/*}/launch-request"'
     : 'exit 0';
   fs.writeFileSync(path.join(binDir, 'open'), shellScript(openBody), { mode: 0o755 });
 
@@ -205,52 +211,99 @@ function makeSandbox(openBehavior: 'launch' | 'noop', includeNewApp = true): San
       verifyRetryAtSeconds: 2,
     },
   });
-  return { root, appPath, logPath, binDir, params };
+  return { appPath, logPath, binDir, params, launchRequest, children: [] };
 }
 
-function runScript(sb: Sandbox): Promise<void> {
-  const script = buildMacOSUpdateScript(sb.params);
-  fs.writeFileSync(sb.params.scriptPath, script, { mode: 0o755 });
-  return new Promise((resolve, reject) => {
-    execFile('/bin/bash', [sb.params.scriptPath], {
-      env: { ...process.env, PATH: `${sb.binDir}:${process.env.PATH}` },
-      timeout: 60_000,
-    }, (err) => (err && err.killed ? reject(err) : resolve()));
-  });
+function trackChild(sb: Sandbox, child: ChildProcess): ChildProcess {
+  const closed = new Promise<void>((resolve) => child.once('close', () => resolve()));
+  sb.children.push({ child, closed });
+  return child;
 }
 
-function spawnDetached(cmd: string, args: string[] = []): number {
-  const child = spawn(cmd, args, { detached: true, stdio: 'ignore' });
-  child.unref();
-  if (child.pid === undefined) throw new Error('spawn failed');
+function startFakeProcess(sb: Sandbox, cmd: string, args: string[] = []): ChildProcess {
+  return trackChild(sb, spawn(cmd, args, { stdio: 'ignore' }));
+}
+
+function requirePid(child: ChildProcess): number {
+  if (child.pid === undefined) {
+    // Node reports spawn errors asynchronously, including when no PID was assigned.
+    child.once('error', () => {});
+    throw new Error('fixture process failed to spawn');
+  }
   return child.pid;
 }
 
-function pidAlive(pid: number): boolean {
-  try { process.kill(pid, 0); return true; } catch { return false; }
+async function withSandbox(
+  openBehavior: 'launch' | 'noop',
+  run: (sb: Sandbox) => Promise<void>,
+  includeNewApp = true,
+): Promise<void> {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'xdt-upd-test-'));
+  try {
+    const sb = makeSandbox(root, openBehavior, includeNewApp);
+    try {
+      await run(sb);
+    } finally {
+      for (const { child } of sb.children) {
+        if (child.pid !== undefined && child.exitCode === null && child.signalCode === null) {
+          child.kill('SIGKILL');
+        }
+      }
+      await Promise.all(sb.children.map(({ closed }) => closed));
+    }
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}
+
+async function runScript(sb: Sandbox): Promise<void> {
+  const script = buildMacOSUpdateScript(sb.params);
+  fs.writeFileSync(sb.params.scriptPath, script, { mode: 0o755 });
+  const watcher = fs.watch(sb.launchRequest);
+  try {
+    await new Promise<void>((resolve, reject) => {
+      watcher.once('error', reject);
+      watcher.once('change', () => {
+        watcher.close();
+        try {
+          expect(fs.readFileSync(sb.launchRequest, 'utf8')).toBe(`${sb.appPath}\n`);
+          startFakeProcess(sb, path.join(sb.appPath, 'Contents', 'MacOS', 'fakemain')).once('error', reject);
+        } catch (err) {
+          reject(err);
+        }
+      });
+      trackChild(sb, execFile('/bin/bash', [sb.params.scriptPath], {
+        env: { ...process.env, PATH: `${sb.binDir}:${process.env.PATH}` },
+        timeout: 60_000,
+      }, (err) => (err && err.killed ? reject(err) : resolve())));
+    });
+  } finally {
+    watcher.close();
+  }
 }
 
 describe.runIf(isDarwin)('generated script behavior (darwin)', () => {
   it('SIGKILLs a hung app PID, clears a surviving Frameworks helper, swaps and verifies', async () => {
-    const sb = makeSandbox('launch');
-    try {
+    await withSandbox('launch', async (sb) => {
       // Hung "app": ignores nothing, just never exits on its own — the
       // script must escalate to SIGKILL at exitKillAfterSeconds.
-      const hungPid = spawnDetached('/bin/sleep', ['300']);
+      const hung = startFakeProcess(sb, '/bin/sleep', ['30']);
       // Helper still running from the old bundle (outlives the main PID).
-      const helperPid = spawnDetached(
+      const helper = startFakeProcess(
+        sb,
         path.join(sb.appPath, 'Contents', 'Frameworks', 'fake Helper (Renderer).app', 'Contents', 'MacOS', 'fakehelper'),
       );
-      sb.params.pid = hungPid;
+      sb.params.pid = requirePid(hung);
+      requirePid(helper);
 
       await runScript(sb);
       const log = fs.readFileSync(sb.logPath, 'utf8');
 
       expect(log).toContain('exit appears hung, sending SIGKILL');
-      expect(pidAlive(hungPid)).toBe(false);
+      expect(hung.signalCode).toBe('SIGKILL');
       // Helper was cleared before the swap...
       expect(log).toMatch(/terminating before swap|SIGKILL stragglers just before swap/);
-      expect(pidAlive(helperPid)).toBe(false);
+      expect(helper.signalCode).not.toBeNull();
       // ...and the clear-out happened before "Removing old app" in the log.
       expect(log.indexOf('terminating before swap')).toBeLessThan(log.indexOf('Removing old app'));
       // Swap really happened: new bundle content in place.
@@ -260,17 +313,12 @@ describe.runIf(isDarwin)('generated script behavior (darwin)', () => {
       // Lock + temp artifacts cleaned up.
       expect(fs.existsSync(sb.params.lockFilePath)).toBe(false);
       expect(fs.existsSync(sb.params.zipPath)).toBe(false);
-    } finally {
-      try { execFileSync('/usr/bin/pkill', ['-9', '-f', sb.root], { stdio: 'ignore' }); } catch { /* no strays left */ }
-      fs.rmSync(sb.root, { recursive: true, force: true });
-    }
+    });
   }, 60_000);
 
   it('logs PROCESS START FAILED when the relaunched app never comes up', async () => {
-    const sb = makeSandbox('noop');
-    try {
-      const oldPid = spawnDetached('/bin/sleep', ['1']); // exits on its own
-      sb.params.pid = oldPid;
+    await withSandbox('noop', async (sb) => {
+      sb.params.pid = requirePid(startFakeProcess(sb, '/bin/sleep', ['1'])); // exits on its own
 
       await runScript(sb);
       const log = fs.readFileSync(sb.logPath, 'utf8');
@@ -279,16 +327,12 @@ describe.runIf(isDarwin)('generated script behavior (darwin)', () => {
       expect(log).not.toContain('PROCESS VERIFIED');
       // Swap itself still succeeded — failure is about launch, not install.
       expect(fs.readFileSync(path.join(sb.appPath, 'Contents', 'version.txt'), 'utf8')).toBe('new');
-    } finally {
-      fs.rmSync(sb.root, { recursive: true, force: true });
-    }
+    });
   }, 60_000);
 
   it('keeps the old bundle and releases the lock when the archive has no app bundle', async () => {
-    const sb = makeSandbox('noop', false);
-    try {
-      const oldPid = spawnDetached('/bin/sleep', ['1']);
-      sb.params.pid = oldPid;
+    await withSandbox('noop', async (sb) => {
+      sb.params.pid = requirePid(startFakeProcess(sb, '/bin/sleep', ['1']));
 
       await runScript(sb);
       const log = fs.readFileSync(sb.logPath, 'utf8');
@@ -297,8 +341,6 @@ describe.runIf(isDarwin)('generated script behavior (darwin)', () => {
       expect(log).not.toContain('Removing old app');
       expect(fs.readFileSync(path.join(sb.appPath, 'Contents', 'version.txt'), 'utf8')).toBe('old');
       expect(fs.existsSync(sb.params.lockFilePath)).toBe(false);
-    } finally {
-      fs.rmSync(sb.root, { recursive: true, force: true });
-    }
+    }, false);
   }, 60_000);
 });

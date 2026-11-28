@@ -50,14 +50,14 @@ describe('shared teammate portrait gallery', () => {
     expect(document.querySelector('img')?.getAttribute('src')).toBe('existing.png');
     fireEvent.click(screen.getByRole('button', { name: 'bots.profile.changeAvatar' }));
     const buttons = within(screen.getByRole('dialog')).getAllByRole('button');
-    expect(buttons).toHaveLength(18);
+    expect(buttons).toHaveLength(27);
     expect(buttons[0].getAttribute('aria-label')).toBe('Cindy');
-    expect(buttons.slice(1, 17).map((button) => button.getAttribute('aria-label'))).toEqual(
-      Array.from({ length: 16 }, (_, i) => `bots.guided.portrait-${i + 1}`),
+    expect(buttons.slice(1, 26).map((button) => button.getAttribute('aria-label'))).toEqual(
+      Array.from({ length: 25 }, (_, i) => `bots.guided.portrait-${i + 1}`),
     );
-    expect(buttons[17].getAttribute('aria-label')).toBe('bots.guided.upload');
+    expect(buttons[26].getAttribute('aria-label')).toBe('bots.guided.upload');
     expect(onChange).not.toHaveBeenCalled();
-    fireEvent.click(buttons[17]);
+    fireEvent.click(buttons[26]);
     expect(chooseAvatar).toHaveBeenCalledOnce();
     expect(onChange).not.toHaveBeenCalled();
   });
@@ -74,15 +74,16 @@ describe('shared teammate portrait gallery', () => {
     expect(drawImage.mock.calls[0].slice(1)).toEqual([0, 0, 1024, 1024, 0, 0, 256, 256]);
   });
 
-  it.each([1, 4, 5, 16])('keeps the old sheet coordinates for gallery choice %i', async (index) => {
+  it.each([1, 4, 5, 16, 25])('slices the 5×5 sheet at equal cell boundaries for gallery choice %i', async (index) => {
     await galleryPortrait(index);
     const cell = index - 1;
     expect(drawImage.mock.calls[0][0].src).toContain('teammate-portrait-gallery.png');
+    const cellSize = 1024 / 5;
     expect(drawImage.mock.calls[0].slice(1)).toEqual([
-      (cell % 4) * 256,
-      Math.floor(cell / 4) * 256,
-      256,
-      256,
+      ((cell % 5) * 1024) / 5,
+      (Math.floor(cell / 5) * 1024) / 5,
+      cellSize,
+      cellSize,
       0,
       0,
       256,

@@ -67,6 +67,8 @@ export interface NativeWindowList {
     pid: number;
     app: string;
     bundleId: string;
+    /** macOS refused to read AXWindows for this app. Older helpers omit this. */
+    controlDenied?: boolean;
     windows: Array<NativeWindowRef & { frame: number[]; focused: boolean; minimized: boolean }>;
   }>;
 }
