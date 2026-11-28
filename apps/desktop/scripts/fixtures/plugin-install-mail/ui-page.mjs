@@ -9,8 +9,10 @@ export default {
   notCovered:
     'Mailbox tools, installer writes, account credentials, live mail content, native mobile rendering and external network connections',
   stubs: {
-    'src/renderer/features/right-sidebar/lib/mailPreview':
-      'export async function openMailPreview(){} export async function readMailPreview(){ const c=window.__uiPage.ctx.case; if(c==="no-reader")return {supported:false}; if(c==="not-ready")return {supported:true,error:"MAIL_PROVIDER_NOT_READY"}; if(c==="read-failed")return {supported:true,error:"MAIL_READ_FAILED"}; return {providers:[{id:"root",name:"Mail",namespace:null},{id:"team",name:"Mail for a very long organization name",namespace:"long-organization-identity-example"}]}; }',
+    'src/renderer/features/right-sidebar/lib/mailPreview': {
+      partial:
+        'export async function openMailPreview(){} export async function readMailPreview(){ const c=window.__uiPage.ctx.case; if(c==="no-reader")return {supported:false}; if(c==="not-ready")return {supported:true,error:"MAIL_PROVIDER_NOT_READY"}; if(c==="read-failed")return {supported:true,error:"MAIL_READ_FAILED"}; return {providers:[{id:"root",name:"Mail",namespace:null},{id:"team",name:"Mail for a very long organization name",namespace:"long-organization-identity-example"}]}; }',
+    },
     'src/renderer/features/right-sidebar/registry': 'export function registerTabKind(){} export function getTabKind(){return undefined;}',
     'src/renderer/features/right-sidebar/plugins/mail-preview/MailCardBody':
       'export function MailCardBody(){return null;}',

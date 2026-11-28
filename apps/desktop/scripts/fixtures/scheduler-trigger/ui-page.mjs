@@ -152,9 +152,12 @@ export default {
         const sample = () => {
           const box = document.querySelector('[role="dialog"]').getBoundingClientRect();
           const trigger = [...document.querySelectorAll('[role="radiogroup"]')]
-            .find(el => el.getAttribute('aria-label') === triggerLabel).getBoundingClientRect();
+            .find(el => el.getAttribute('aria-label') === triggerLabel);
+          // Timed controls are taller than the segmented control and center it
+          // within the row. Measure the row to detect scroll movement.
+          const triggerRow = trigger.parentElement.getBoundingClientRect();
           const prompt = promptElement.getBoundingClientRect();
-          frames.push({y: box.y, height: box.height, triggerY: trigger.y, triggerX: trigger.x, promptY: prompt.y});
+          frames.push({y: box.y, height: box.height, triggerY: triggerRow.y, triggerX: trigger.getBoundingClientRect().x, promptY: prompt.y});
         };
         sample();
         element.addEventListener('click', () => {
