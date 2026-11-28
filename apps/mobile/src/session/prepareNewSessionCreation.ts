@@ -3,7 +3,7 @@ import type { MobileAuthOwnerGeneration } from "@/auth/authOwnerGeneration";
 import type { MobileMakerTransport } from "@/device-link/mobileMakerTransport";
 import { formatRemoteError } from "@/device-link/remoteStatus";
 import type { MobileSessionRuntimeOptions } from "./agentCapabilities";
-import type { DurableOutboxRecord } from "./durableOutbox";
+import { needsHostCreation, type DurableOutboxRecord } from "./durableOutbox";
 import type { MobileLocalAttachmentUploadCandidate } from "./mobileLocalAttachmentUpload";
 import {
   getCurrentMobileOutboxRecords,
@@ -65,6 +65,7 @@ export interface NewSessionCreationPreparationInput {
   authOwnerAtCreate: MobileAuthOwnerGeneration;
   worktreeAccountId: string;
   creatingWorktree: boolean;
+  allowDialogueRecovery?: boolean;
   worktreeIntent: WorktreeCreateIntentSnapshot;
   isCurrentOwner: () => boolean;
   ensureDeviceAlive: () => boolean;
@@ -225,6 +226,7 @@ export async function prepareNewSessionCreation(
   const useDurableCreation = legacyPlanRestore === null;
   if (recovering && !useDurableCreation)
     throw new Error(t("session.outbox.legacyPlanRecovery"));
+  let persistSubmittedDialogue: ((draft: NewSessionDraft) => Promise<boolean>) | undefined;
   if (useDurableCreation) {
     const firstRecord: DurableOutboxRecord = {
       version: 1,
@@ -237,7 +239,6 @@ export async function prepareNewSessionCreation(
       state: recovering ? "failed" : "queued",
       suspended: !!recovering || creatingWorktree,
       uploads: [],
-      clearBoundaryMs: null,
       creation: {
         draft: effectiveDraft,
         deviceName: selectedDeviceName,
@@ -266,16 +267,40 @@ export async function prepareNewSessionCreation(
         claimedUploads: [],
       }),
     };
-    const saved = await persistNewSessionCreationDraft({
-      record: firstRecord,
-      recovering,
-      getUploadedSource,
-      isCurrent: () => isCurrentOwner() && ensureDeviceAlive(),
-    });
-    if (!saved) return;
-    outboxRecoveryRef.current = saved;
-    if (!isCurrentOwner() || !ensureDeviceAlive()) return;
-    releaseUploadedSources(sendAttachments.map((a) => a.id));
+    const save = async (record: DurableOutboxRecord) => {
+      const saved = await persistNewSessionCreationDraft({
+        record,
+        recovering,
+        getUploadedSource,
+        isCurrent: () => isCurrentOwner() && ensureDeviceAlive(),
+      });
+      if (!saved) return false;
+      if (!isCurrentOwner() || !ensureDeviceAlive()) {
+        // An aborted submission must not leave an unhanded-off host-creation intent behind.
+        if (isCurrentOwner() && needsHostCreation(saved)) {
+          await mobileDurableOutbox.remove(saved).catch(() => undefined);
+        }
+        return false;
+      }
+      outboxRecoveryRef.current = saved;
+      releaseUploadedSources(sendAttachments.map((a) => a.id));
+      return true;
+    };
+    if (
+      input.allowDialogueRecovery &&
+      !recovering &&
+      !creatingWorktree &&
+      effectiveDraft.workspaceKind === "dialogue" &&
+      !effectiveDraft.agentDeviceId &&
+      !effectiveDraft.pluginEngine &&
+      sendAttachments.length === 0
+    ) {
+      persistSubmittedDialogue = (draft) =>
+        save({
+          ...firstRecord,
+          creation: { ...firstRecord.creation!, draft, needsHostCreation: true },
+        });
+    } else if (!(await save(firstRecord))) return;
   }
   let precreatedWorktree:
     | {
@@ -460,6 +485,7 @@ export async function prepareNewSessionCreation(
     firstMessageClientId,
     legacyPlanRestore,
     useDurableCreation,
+    persistSubmittedDialogue,
     precreatedWorktree,
     abortIfDeviceSwitched,
   };
