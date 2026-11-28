@@ -52,7 +52,7 @@ const group = {
   replyMode: data.assistant ? 'all' : 'mentioned', speakingMode: 'auto', singleSpeaker: !!data.assistant, members,
   ...(data.assistant ? { supportsGroupAssistant: true, assistantEnabled: data.assistant === 'on', supportsGroupProject: true,
     project: { kind: 'github', repo: 'makecindy/cindy' } } : {}),
-  ...(data.computers ? { assistantDeviceId: 'mac', assistantComputers: [{ id: 'mac', name: 'MacBook Pro' }, { id: 'windows', name: 'Windows' }] } : {}),
+  ...(data.computers ? { assistantDeviceId: null, assistantComputers: [{ id: 'mac', name: 'QA-Mac.local' }, { id: 'windows', name: 'Windows' }, { id: 'a'.repeat(64), name: 'a'.repeat(64) }] } : {}),
   organizerBotId: data.alone ? null : 'aster', projectDir: data.role === 'member' ? null : '/Users/nana/Projects/cindy', autoContinue: false,
   supportsMentionAudiences: true, allowMentionAllBots: true,
   supportsMemberMentionAll: true, allowMemberMentionAll: false,

@@ -15,7 +15,7 @@ import { AtSign, Check, Ellipsis, Plus, Reply, SlidersHorizontal, UserPlus } fro
 import { useTranslation } from 'react-i18next';
 import { resolveRemoteText } from '@cindy/device-link';
 import { BOT_GROUP_NAME_MAX_CHARS, type BotGroupMemberView, type BotGroupRemoteActionId, type BotGroupRemoteChatData } from '@cindy/maker-shared/botGroupChat';
-import { chatGroupHumanDisplayName, chatGroupMembership, isActiveBotGroupMember } from '@cindy/maker-shared/botGroupPresentation';
+import { groupAssistantComputerOptions, chatGroupHumanDisplayName, chatGroupMembership, isActiveBotGroupMember } from '@cindy/maker-shared/botGroupPresentation';
 import { BotGroupExternalBadge } from './BotGroupExternalBadge';
 import { botGroupMentionDisplayName } from './botGroupMentions';
 import { useAuth } from '@/auth/AuthContext';
@@ -34,6 +34,7 @@ import type { BotGroupIdentityLookup } from './BotGroupPlan';
 import { BotGroupMenu } from './BotGroupMenu';
 import { botGroupActionErrorText } from './botGroupCopy';
 import { BOT_GROUP_TEAMMATES_COLLECTION_ID, botGroupMemberAvatar } from './botGroupRemote';
+import { useRemoteDeviceIdentity } from './remoteSessionStore';
 import { CompanionSheet } from './CompanionSheet';
 import { FileBrowserSegmentedControl } from './FileBrowserSegmentedControl';
 import { GroupMaskAvatar } from './GroupMaskControls';
@@ -81,6 +82,8 @@ export function ChatGroupSettingsSheet({ visible, group, host, identityFor, onli
   const { user, accountGeneration } = useAuth();
   const chat = useChatClient();
   const navigation = useTeammateNavigation();
+  const directory = useRemoteDeviceIdentity();
+  const computers = useMemo(() => groupAssistantComputerOptions(group.assistantComputers, directory, t('devices.cloudCompanion.unknownDevice')), [group.assistantComputers, directory, t]);
   const direct = !!management;
   const membership = chatGroupMembership(group);
   const me = membership.self;
@@ -301,12 +304,12 @@ export function ChatGroupSettingsSheet({ visible, group, host, identityFor, onli
           {!dissolved && me?.actorId && (direct || maskRow || onMentionHistory || group.assistantComputers) ? <SettingsGroup title={k('me')} footer={maskRow ? k('maskHint') : null} testID="botGroup.settings.me">
             {direct ? <ActionInfoRow key="profile" lead={avatar(identityOf(me))} label={k('myProfile')} value={me.name} accessibilityLabel={k('myProfile')}
               onPress={() => { setNickname(me.nickname ?? ''); setPage({ kind: 'profile' }); }} testID="botGroup.settings.profile" /> : null}
-            {group.assistantComputers ? <BotGroupMenu testID="botGroup.settings.assistantComputer" title={k('assistantComputer')} accessibilityLabel={k('assistantComputer')}
-              disabled={!online || archived || busy || (direct && !management?.ready) || !group.assistantComputers.length}
-              sections={[{ id: 'computer', options: group.assistantComputers.map(device => ({ id: device.id, title: device.name, selected: device.id === group.assistantDeviceId })) }]}
+            {computers ? <BotGroupMenu testID="botGroup.settings.assistantComputer" title={k('assistantComputer')} accessibilityLabel={k('assistantComputer')}
+              disabled={!online || archived || busy || (direct && !management?.ready) || !computers.length}
+              sections={[{ id: 'computer', options: computers.map(device => ({ id: device.id, title: device.name, selected: device.id === group.assistantDeviceId })) }]}
               onSelect={deviceId => { if (deviceId !== group.assistantDeviceId) void settings('assistantDevice', { deviceId }); }}>
               {open => <ActionInfoRow label={k('assistantComputer')} accessibilityLabel={k('assistantComputer')}
-                value={group.assistantComputers?.find(device => device.id === group.assistantDeviceId)?.name ?? k('chooseComputer')} onPress={open} />}
+                value={computers.find(device => device.id === group.assistantDeviceId)?.name ?? k('chooseComputer')} onPress={open} />}
             </BotGroupMenu> : null}
             {onMentionHistory ? <ActionInfoRow testID="botGroup.settings.mentions" lead={<RowIcon><AtSign size={iconSize.md} color={colors.textSecondary} /></RowIcon>}
               label={t('groupChat.mask.catchup.title')} accessibilityLabel={t('groupChat.mask.catchup.title')} onPress={onMentionHistory} /> : null}
