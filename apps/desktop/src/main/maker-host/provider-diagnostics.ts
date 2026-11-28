@@ -480,7 +480,7 @@ async function runProviderProbeUnlogged(
       detail: 'native SDK probe requires a user credential or a matching saved preset endpoint' };
   }
   const api = requestedApi;
-  if (api && (['google-generative-ai', 'google-vertex', 'azure-openai-responses',
+  if (api && (['google-generative-ai', 'google-interactions', 'google-vertex', 'azure-openai-responses',
     'bedrock-converse-stream', 'mistral-conversations'].includes(api) || requiresNativeProviderAuth(row))) {
     const model = row ?? invocationModelRecord({ id: spec.modelId, name: spec.modelId,
       group: 'custom', contextWindow: 4096, maxOutput: 16, efforts: [], defaultEffort: null, api: api as PiModelApi }, spec.baseUrl)!;
@@ -659,7 +659,7 @@ export async function resolveSavedProbeSpec(providerId: string, agent: AgentKind
   // Pi's HTTP-only route helper intentionally excludes SDK transports. A native
   // probe must keep the SDK route instead of treating that exclusion as failure.
   const modelApi = model.api ?? model.piApi;
-  const modelRouting = agent === 'pi' && modelApi && ['google-generative-ai', 'google-vertex',
+  const modelRouting = agent === 'pi' && modelApi && ['google-generative-ai', 'google-interactions', 'google-vertex',
     'azure-openai-responses', 'bedrock-converse-stream', 'mistral-conversations'].includes(modelApi)
     ? { ...routing, upstream: model.route?.baseUrl ?? routing.upstream,
       wireProtocol: model.route?.wireProtocol ?? routing.wireProtocol }

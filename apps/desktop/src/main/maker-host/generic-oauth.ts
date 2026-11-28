@@ -1,4 +1,16 @@
 import { copilotModelsRequest, resolveCopilotAccountUrl } from './copilot-account-url.js';
+import {
+  createGoogleAiPlanDpopKey,
+  exchangeGoogleAiPlanCode,
+  generateGoogleAiPlanNonce,
+  GOOGLE_AI_PLAN_CALLBACK_PATH,
+  GOOGLE_AI_PLAN_LOGIN_TIMEOUT_MS,
+  GOOGLE_AI_PLAN_REFRESH_MARGIN_MS,
+  parseGoogleAiPlanDpopKey,
+  refreshGoogleAiPlanToken,
+  resolveGoogleAiPlanOAuthClient,
+  type GoogleAiPlanDpopKey,
+} from './google-ai-plan-oauth.js';
 import { issueModelSourceSnapshot, modelSourceRequestSignature } from './model-source-snapshots.js';
 import { collectModelDiscoveryPages } from './model-discovery-pages.js';
 import { openManagementAuthorization, presentManagementDeviceCode, attachManagementAuthorization, assertManagementAuthorizationCurrent } from '../host-settings/managementAuthorization.js';
@@ -62,20 +74,28 @@ interface GenericOAuthIo {
 
 // ── 凭证 blob ───────────────────────────────────────────────────────────────────
 interface OAuthTokenBlob {
+  identity?: string;
   access_token: string;
   refresh_token?: string;
   /** epoch ms。 */
   expires_at?: number;
   obtained_at?: number;
   scope?: string;
+  /** Google AI Ultra DPoP P-256 private JWK (bound to refresh_token inside safeStorage). */
+  dpopKey?: GoogleAiPlanDpopKey;
+  /** Latest DPoP-Nonce returned by Google's refresh endpoint. */
+  dpopNonce?: string;
 }
 
 interface TokenResponse {
+  identity?: string;
   access_token: string;
   refresh_token?: string;
   expires_in?: number;
   scope?: string;
   expires_at?: number;
+  dpopKey?: GoogleAiPlanDpopKey;
+  dpopNonce?: string;
 }
 
 export interface GenericOAuthLoginResult {
@@ -166,12 +186,18 @@ const genState = (): string => base64URLEncode(randomBytes(16));
 
 function blobFromTokenResponse(t: TokenResponse, prev?: OAuthTokenBlob | null): OAuthTokenBlob {
   const now = io.now();
+  const dpopKey = t.dpopKey ?? prev?.dpopKey;
+  const dpopNonce = t.dpopNonce ?? prev?.dpopNonce;
+  const identity = t.identity ?? prev?.identity;
   return {
+    ...(identity ? { identity } : {}),
     access_token: t.access_token,
     refresh_token: t.refresh_token ?? prev?.refresh_token,
     expires_at: t.expires_at ?? (now + (t.expires_in ? t.expires_in * 1000 : DEFAULT_TOKEN_TTL_MS)),
     obtained_at: now,
     scope: t.scope ?? prev?.scope,
+    ...(dpopKey ? { dpopKey } : {}),
+    ...(dpopNonce ? { dpopNonce } : {}),
   };
 }
 
@@ -275,9 +301,13 @@ function resetGenericOAuthMemoryCache(): void {
   loginGenerations.clear();
 }
 
-function isExpiringSoon(b: OAuthTokenBlob): boolean {
+function isExpiringSoon(b: OAuthTokenBlob, oauth?: OAuthProviderDescriptor): boolean {
   if (!b.expires_at) return false; // 无 expiry 信息 → 不主动刷，靠 401 暴露
-  return io.now() >= b.expires_at - REFRESH_MARGIN_MS;
+  const margin =
+    oauth && providerOAuthContract(oauth) === 'google-ai-plan'
+      ? GOOGLE_AI_PLAN_REFRESH_MARGIN_MS
+      : REFRESH_MARGIN_MS;
+  return io.now() >= b.expires_at - margin;
 }
 
 // ── 刷新（同 provider、同登录共享一个在途请求）───────────────────────────────────
@@ -311,13 +341,59 @@ async function copilotToken(githubToken: string, signal: AbortSignal): Promise<T
 
 async function doRefresh(providerId: string, oauth: OAuthProviderDescriptor): Promise<void> {
   const fresh = readBlob(providerId);
-  if (fresh === null || !isExpiringSoon(fresh) || !fresh.refresh_token) return;
+  if (fresh === null || !isExpiringSoon(fresh, oauth) || !fresh.refresh_token) return;
   const refreshToken = fresh.refresh_token;
   let res: Response;
   try {
     if (providerOAuthContract(oauth) === 'copilot') {
       const tok = await copilotToken(refreshToken, AbortSignal.timeout(REFRESH_FETCH_TIMEOUT_MS));
       if (readBlob(providerId) === fresh) writeBlob(providerId, blobFromTokenResponse(tok, fresh));
+      return;
+    }
+    if (providerOAuthContract(oauth) === 'google-ai-plan') {
+      const dpopKey = parseGoogleAiPlanDpopKey(fresh.dpopKey);
+      if (!dpopKey) {
+        log.warn('google-ai-plan 缺少 DPoP 私钥，需重新登录', { providerId });
+        return;
+      }
+      const client = resolveGoogleAiPlanOAuthClient();
+      const refreshed = await refreshGoogleAiPlanToken({
+        tokenUrl: oauth.tokenUrl,
+        client,
+        refreshToken,
+        dpopKey,
+        dpopNonce: fresh.dpopNonce,
+        fetchImpl: io.fetchImpl,
+        signal: AbortSignal.timeout(REFRESH_FETCH_TIMEOUT_MS),
+        now: io.now,
+      });
+      if (!refreshed.ok) {
+        log.warn('google-ai-plan DPoP token 刷新失败', {
+          providerId,
+          status: refreshed.status,
+          terminal: refreshed.terminal,
+        });
+        return;
+      }
+      if (readBlob(providerId) !== fresh) return;
+      if (
+        !writeBlob(
+          providerId,
+          blobFromTokenResponse(
+            {
+              access_token: refreshed.access_token,
+              refresh_token: refreshed.refresh_token,
+              expires_in: refreshed.expires_in,
+              scope: refreshed.scope,
+              dpopKey,
+              dpopNonce: refreshed.dpopNonce,
+            },
+            fresh,
+          ),
+        )
+      ) {
+        log.warn('google-ai-plan 刷新凭证落盘失败,仅内存态生效', { providerId });
+      }
       return;
     }
     const nous = providerOAuthContract(oauth) === 'nous';
@@ -384,7 +460,7 @@ async function readGenericOAuthAccessToken(
   const generation = getGenericOAuthLoginGeneration(providerId);
   const blob = readBlob(providerId);
   if (!blob) return null;
-  if (oauth && isExpiringSoon(blob) && blob.refresh_token) {
+  if (oauth && isExpiringSoon(blob, oauth) && blob.refresh_token) {
     await refreshGenericOAuthIfNeeded(providerId, oauth);
   }
   if (getGenericOAuthLoginGeneration(providerId) !== generation) {
@@ -417,7 +493,10 @@ class CallbackListener {
   private reject: ((err: Error) => void) | null = null;
   port = 0;
 
-  constructor(private readonly providerName: string) {
+  constructor(
+    private readonly providerName: string,
+    private readonly callbackPath = '/callback',
+  ) {
     this.server = createServer();
   }
 
@@ -451,7 +530,7 @@ class CallbackListener {
 
   private onRequest(req: IncomingMessage, res: ServerResponse): void {
     const parsed = new URL(req.url || '', `http://127.0.0.1:${this.port}`);
-    if (parsed.pathname !== '/callback') {
+    if (parsed.pathname !== this.callbackPath) {
       res.writeHead(404);
       res.end();
       return;
@@ -738,7 +817,10 @@ async function runGenericOAuthLogin(
 ): Promise<GenericOAuthLoginResult> {
   cancelGenericOAuthLogin(provider.id);
 
-  const listener = oauth.flow === 'device-code' ? null : new CallbackListener(provider.name);
+  const googleAiPlan = providerOAuthContract(oauth) === 'google-ai-plan';
+  const callbackPath = googleAiPlan ? GOOGLE_AI_PLAN_CALLBACK_PATH : '/callback';
+  const listener =
+    oauth.flow === 'device-code' ? null : new CallbackListener(provider.name, callbackPath);
   const abort = new AbortController();
   attachManagementAuthorization(() => { abort.abort(); listener?.close(); });
   activeLogins.set(provider.id, {
@@ -753,12 +835,15 @@ async function runGenericOAuthLogin(
       tok = normalizeProviderToken(await runDeviceCodeGrant(provider.id, oauth, abort, options), oauth);
       if (providerOAuthContract(oauth) === 'copilot') tok = await copilotToken(tok.access_token, AbortSignal.any([abort.signal, AbortSignal.timeout(TOKEN_EXCHANGE_TIMEOUT_MS)]));
     } else {
+      const googleClient = googleAiPlan ? resolveGoogleAiPlanOAuthClient() : null;
       const verifier = genVerifier();
       const challenge = genChallenge(verifier);
       const state = genState();
+      const nonce = googleAiPlan ? generateGoogleAiPlanNonce() : null;
+      const dpopKey = googleAiPlan ? await createGoogleAiPlanDpopKey() : null;
       await listener!.start(oauth.redirectPort);
       if (abort.signal.aborted) throw new Error('login_cancelled');
-      const redirectUri = `http://127.0.0.1:${listener!.port}/callback`;
+      const redirectUri = `http://127.0.0.1:${listener!.port}${callbackPath}`;
 
       const openrouter = providerOAuthContract(oauth) === 'openrouter';
       const authUrl = new URL(oauth.authorizeUrl);
@@ -770,22 +855,28 @@ async function runGenericOAuthLogin(
         callback.searchParams.set('state', state);
         authUrl.searchParams.set('callback_url', callback.toString());
       } else {
-      authUrl.searchParams.set('response_type', 'code');
-      authUrl.searchParams.set('client_id', oauth.clientId);
-      authUrl.searchParams.set('redirect_uri', redirectUri);
-      if (oauth.scopes) authUrl.searchParams.set('scope', oauth.scopes);
+        authUrl.searchParams.set('response_type', 'code');
+        authUrl.searchParams.set('client_id', googleClient?.clientId ?? oauth.clientId);
+        authUrl.searchParams.set('redirect_uri', redirectUri);
+        if (oauth.scopes) authUrl.searchParams.set('scope', oauth.scopes);
       }
       authUrl.searchParams.set('code_challenge', challenge);
       authUrl.searchParams.set('code_challenge_method', 'S256');
       authUrl.searchParams.set('state', state);
+      if (googleAiPlan) {
+        authUrl.searchParams.set('access_type', 'offline');
+        authUrl.searchParams.set('prompt', 'consent');
+      }
+      if (nonce) authUrl.searchParams.set('nonce', nonce);
 
       // 先注册 code 等待再开浏览器（已授权的浏览器可能在 openExternal 返回前就完成重定向）。
+      const loginTimeoutMs = googleAiPlan ? GOOGLE_AI_PLAN_LOGIN_TIMEOUT_MS : LOGIN_TIMEOUT_MS;
       const codePromise = new Promise<string>((resolve, reject) => {
         if (abort.signal.aborted) {
           reject(new Error('login_cancelled'));
           return;
         }
-        timer = setTimeout(() => reject(new Error('timeout')), LOGIN_TIMEOUT_MS);
+        timer = setTimeout(() => reject(new Error('timeout')), loginTimeoutMs);
         abort.signal.addEventListener('abort', () => reject(new Error('login_cancelled')), {
           once: true,
         });
@@ -802,21 +893,44 @@ async function runGenericOAuthLogin(
       await openManagementAuthorization(authUrl.toString(), io.openExternal);
       const code = await codePromise;
 
-      const response = await io.fetchImpl(oauth.tokenUrl, {
-        method: 'POST',
-        headers: { 'content-type': openrouter ? 'application/json' : 'application/x-www-form-urlencoded', accept: 'application/json' },
-        body: openrouter
-          ? JSON.stringify({ code, code_verifier: verifier, code_challenge_method: 'S256' })
-          : new URLSearchParams({ grant_type: 'authorization_code', client_id: oauth.clientId,
-              code, redirect_uri: redirectUri, code_verifier: verifier }).toString(),
-        signal: AbortSignal.any([abort.signal, AbortSignal.timeout(TOKEN_EXCHANGE_TIMEOUT_MS)]),
-      });
-      if (!response.ok) {
-        const body = await response.text().catch(() => '');
-        throw new Error(`Token exchange failed (${response.status}): ${body.slice(0, 200)}`);
+      if (googleAiPlan && googleClient && nonce && dpopKey) {
+        const exchanged = await exchangeGoogleAiPlanCode({
+          tokenUrl: oauth.tokenUrl,
+          client: googleClient,
+          code,
+          verifier,
+          redirectUri,
+          expectedNonce: nonce,
+          dpopKey,
+          fetchImpl: io.fetchImpl,
+          signal: AbortSignal.any([abort.signal, AbortSignal.timeout(TOKEN_EXCHANGE_TIMEOUT_MS)]),
+          now: io.now,
+        });
+        tok = {
+          identity: exchanged.identity,
+          access_token: exchanged.access_token,
+          refresh_token: exchanged.refresh_token,
+          expires_in: exchanged.expires_in,
+          scope: exchanged.scope,
+          dpopKey: exchanged.dpopKey,
+        };
+      } else {
+        const response = await io.fetchImpl(oauth.tokenUrl, {
+          method: 'POST',
+          headers: { 'content-type': openrouter ? 'application/json' : 'application/x-www-form-urlencoded', accept: 'application/json' },
+          body: openrouter
+            ? JSON.stringify({ code, code_verifier: verifier, code_challenge_method: 'S256' })
+            : new URLSearchParams({ grant_type: 'authorization_code', client_id: oauth.clientId,
+                code, redirect_uri: redirectUri, code_verifier: verifier }).toString(),
+          signal: AbortSignal.any([abort.signal, AbortSignal.timeout(TOKEN_EXCHANGE_TIMEOUT_MS)]),
+        });
+        if (!response.ok) {
+          const body = await response.text().catch(() => '');
+          throw new Error(`Token exchange failed (${response.status}): ${body.slice(0, 200)}`);
+        }
+        const payload = await response.json();
+        tok = openrouter ? { access_token: payload.key, expires_at: Number.MAX_SAFE_INTEGER } : payload as TokenResponse;
       }
-      const payload = await response.json();
-      tok = openrouter ? { access_token: payload.key, expires_at: Number.MAX_SAFE_INTEGER } : payload as TokenResponse;
       if (typeof tok.access_token !== 'string' || !tok.access_token.trim()) throw new Error('token 响应缺 access_token');
     }
 

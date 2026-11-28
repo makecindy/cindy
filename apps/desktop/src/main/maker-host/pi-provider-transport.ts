@@ -16,6 +16,7 @@ import * as googleVertex from '@earendil-works/pi-ai/api/google-vertex';
 import * as azureOpenaiResponses from '@earendil-works/pi-ai/api/azure-openai-responses';
 import * as bedrockConverseStream from '@earendil-works/pi-ai/api/bedrock-converse-stream';
 import * as mistralConversations from '@earendil-works/pi-ai/api/mistral-conversations';
+import * as googleInteractions from './google-interactions.js';
 import { PI_REASONING_EFFORTS, PROVIDER_MODEL_CATALOG, providerEndpointBindings, providerModelRecord, providerModelGenerationRecord, providerModelAdapterId, providerPresetModelRecord, type CatalogModel, type ProviderModelRecord, type PiModelApi } from '@cindy/model-providers';
 
 export function invocationModelRecord(model: CatalogModel, upstream: string, api?: PiModelApi): ProviderModelRecord | undefined {
@@ -76,6 +77,7 @@ const adapters: Record<string, ProviderStreams> = {
   'openai-responses': openaiResponses,
   'anthropic-messages': anthropicMessages,
   'google-generative-ai': googleGenerativeAi,
+  'google-interactions': googleInteractions,
   'google-vertex': googleVertex,
   'azure-openai-responses': azureOpenaiResponses,
   'bedrock-converse-stream': bedrockConverseStream,

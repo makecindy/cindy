@@ -567,9 +567,10 @@ export function buildPiSubscriptionNativeProviders(
         const officialModel = sourceProviderId === 'openai'
           ? officialOpenAiById.get(wireId)
           : sourceProviderId === 'xai' ? officialXaiById.get(wireId) : undefined;
-        const api = sourceProviderId === 'openai'
+        const candidateApi = sourceProviderId === 'openai'
           ? 'openai-codex-responses' as const
           : model.piApi ?? bundledModel?.api ?? officialModel?.api;
+        const api = toPiNativeApi(candidateApi);
         const template = [bundledModel, contextProfileTemplate, officialModel]
           .find((candidate) => candidate?.api === api);
         const correction = sourceProviderId === 'xai'
@@ -869,7 +870,11 @@ export function mergePiNativeProviderResults(
 }
 
 
-function isPiGatewayModelApi(api: PiBundledModelInfo['api']): api is PiModelApi {
+function toPiNativeApi(api: PiModelApi | PiNativeApi | null | undefined): PiNativeApi | undefined {
+  return api && PI_NATIVE_APIS.has(api as PiNativeApi) ? (api as PiNativeApi) : undefined;
+}
+
+function isPiGatewayModelApi(api: PiBundledModelInfo['api']): api is PiNativeApi {
   return (
     api === 'anthropic-messages' ||
     api === 'openai-responses' ||
@@ -904,19 +909,22 @@ export function resolvePiCindyGatewayModelApi(
   _selectedProviderId: string | null | undefined,
   modelId: string,
   context?: { remote: boolean; runtimeBinaryPath?: string },
-): PiModelApi | null | undefined {
+): PiNativeApi | null | undefined {
   // Gateway membership remains the account-availability gate, but its protocol is the last hint.
-  const gatewayApi = resolveXdPiGatewayHintApi(modelId);
-  if (gatewayApi === undefined) return undefined;
+  const gatewayHintApi = resolveXdPiGatewayHintApi(modelId);
+  if (gatewayHintApi === undefined) return undefined;
+  const gatewayApi = toPiNativeApi(gatewayHintApi) ?? null;
   const serverApi = resolveXdPiGatewayServerApi(modelId);
-  if (serverApi !== undefined) return serverApi;
+  if (serverApi !== undefined) return serverApi === null ? null : (toPiNativeApi(serverApi) ?? null);
   // The Desktop binary is not evidence about a different Pi executable on an SSH host. Remote
   // sessions skip that probe but still use this client version's explicit static configuration
   // before the last-priority Gateway hint.
-  if (context?.remote) return resolveBundledPiGatewayModelProfile(modelId)?.api ?? gatewayApi;
+  const bundledApi = resolveBundledPiGatewayModelProfile(modelId)?.api;
+  const resolvedFallbackApi = bundledApi !== undefined ? (toPiNativeApi(bundledApi) ?? null) : gatewayApi;
+  if (context?.remote) return resolvedFallbackApi;
   const probed = resolveProbedPiGatewayModel(modelId, context?.runtimeBinaryPath);
   if (probed) return isPiGatewayModelApi(probed.api) ? probed.api : null;
-  return resolveBundledPiGatewayModelProfile(modelId)?.api ?? gatewayApi;
+  return resolvedFallbackApi;
 }
 
 // #7296: these exact CindyAI Chat routes accept an empty reasoning_content fallback.

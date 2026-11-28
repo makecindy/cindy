@@ -35,6 +35,7 @@ const links: Record<string, ProviderSetupLink> = {
   minimax: key('https://platform.minimax.io/user-center/basic-information/interface-key'),
   'minimax-cn': key('https://platform.minimaxi.com/user-center/basic-information/interface-key'),
   google: key('https://aistudio.google.com/apikey'),
+  'google-ai-plan': account('https://one.google.com/ai'),
   'aliyun-bailian-coding': key('https://bailian.console.aliyun.com/cn-beijing/?tab=plan#/efm/subscription/coding-plan'),
   'qwen-token-plan-cn': key('https://bailian.console.aliyun.com/cn-beijing?tab=plan#/efm/subscription/token-plan/personal'),
   'aliyun-bailian-token-plan-team-cn': key('https://bailian.console.aliyun.com/cn-beijing?tab=plan#/efm/subscription/token-plan/enterprise'),

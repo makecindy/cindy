@@ -49,6 +49,7 @@ export const PI_MODEL_APIS = [
   "openai-responses",
   "openai-completions",
   "google-generative-ai",
+  "google-interactions",
   "bedrock-converse-stream",
   "azure-openai-responses",
   "google-vertex",

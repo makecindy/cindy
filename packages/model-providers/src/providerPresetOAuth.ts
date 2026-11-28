@@ -1,6 +1,9 @@
 import type { OAuthProviderDescriptor, ProviderPreset } from './types.js';
 import { sourceProviderForPreset } from './providerPresetIdentity.js';
 
+export const GOOGLE_AI_PLAN_QUOTA_SCOPE = 'https://www.googleapis.com/auth/generative-language.peruserquota';
+export const GOOGLE_AI_PLAN_CLIENT_PLACEHOLDER_ID = 'cindy-google-ai-plan';
+
 // Public-client contracts from Pi 0.85.1 and Nous Hermes auth_constants/auth_device_flow.
 // Empty scopes mean the provider chooses its defaults; do not invent permissions.
 export function providerPresetOAuth(id: string): OAuthProviderDescriptor | undefined {
@@ -28,13 +31,27 @@ export function providerPresetOAuth(id: string): OAuthProviderDescriptor | undef
       flow: 'device-code', deviceAuthorizationUrl: 'https://auth.kimi.com/api/oauth/device_authorization',
       tokenUrl: 'https://auth.kimi.com/api/oauth/token', clientId: '17e5f671-d194-4dfb-9706-5516cb48c098', scopes: '',
     };
+    case 'google-ai-plan': return {
+      authorizeUrl: 'https://accounts.google.com/o/oauth2/v2/auth',
+      tokenUrl: 'https://oauth2.googleapis.com/token',
+      // Placeholder identity; host resolves Cindy's dedicated Google Desktop OAuth
+      // clientId + clientSecret at runtime (env override or approved build config).
+      clientId: GOOGLE_AI_PLAN_CLIENT_PLACEHOLDER_ID,
+      scopes: `openid email profile ${GOOGLE_AI_PLAN_QUOTA_SCOPE}`,
+    };
     default: return undefined;
   }
 }
 
-export function providerOAuthContract(oauth: OAuthProviderDescriptor): 'openrouter' | 'copilot' | 'nous' | 'minimax' | undefined {
+export function providerOAuthContract(
+  oauth: OAuthProviderDescriptor,
+): 'openrouter' | 'copilot' | 'nous' | 'minimax' | 'google-ai-plan' | undefined {
   if (oauth.flow !== 'device-code' && oauth.authorizeUrl === 'https://openrouter.ai/auth'
     && oauth.tokenUrl === 'https://openrouter.ai/api/v1/auth/keys') return 'openrouter';
+  if (oauth.flow !== 'device-code'
+    && oauth.authorizeUrl === 'https://accounts.google.com/o/oauth2/v2/auth'
+    && oauth.tokenUrl === 'https://oauth2.googleapis.com/token'
+    && oauth.scopes.split(/\s+/).includes(GOOGLE_AI_PLAN_QUOTA_SCOPE)) return 'google-ai-plan';
   if (oauth.flow === 'device-code' && oauth.deviceAuthorizationUrl === 'https://github.com/login/device/code'
     && oauth.tokenUrl === 'https://github.com/login/oauth/access_token') return 'copilot';
   if (oauth.flow === 'device-code' && oauth.deviceAuthorizationUrl === 'https://portal.nousresearch.com/api/oauth/device/code'

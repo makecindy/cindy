@@ -366,7 +366,16 @@ export function buildPiNativeProvidersFromConfigs(
       );
       continue;
     }
-    const providerApi = runtimeApi ?? modelApis[0];
+    const hasGoogleInteractions = modelApis.some((api) => api === 'google-interactions');
+    if (hasGoogleInteractions && authMethod !== 'oauth') {
+      onSkip?.(cfg.id, 'google-interactions requires oauth proxy for pi native');
+      continue;
+    }
+    const piWireApi = (api: PiModelApi | PiNativeApi): PiNativeApi =>
+      api === 'google-interactions' ? 'anthropic-messages' : (api as PiNativeApi);
+    const providerApi = modelApis.length > 0 && modelApis.every((api) => api === 'google-interactions')
+      ? 'anthropic-messages'
+      : runtimeApi ?? (modelApis[0] ? piWireApi(modelApis[0]) : undefined);
     if (!providerApi) {
       onSkip?.(cfg.id, 'pi protocol not configured for provider default');
       continue;
@@ -452,7 +461,7 @@ export function buildPiNativeProvidersFromConfigs(
             (PI_REASONING_EFFORTS as readonly string[]).includes(effort)),
         } : configuredModel;
         const supportedEfforts = new Set(m.reasoningEfforts ?? []);
-        const modelApi = modelApis[index]!;
+        const modelApi = piWireApi(modelApis[index]!);
         const bundledModel = metadataModels[index];
         const explicitRoute = resolvePiModelRoute(m, {
           baseUrl: rt.baseUrl,

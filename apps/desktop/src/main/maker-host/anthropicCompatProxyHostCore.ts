@@ -175,19 +175,27 @@ const requestSizeProviders = new WeakMap<Readonly<Record<string, string>>, strin
 // 复刻 codex-proxy-host.ts 的 setCodexProxyGatewayKeyReader 套路。
 let _readGatewayKey: () => string | null = () => null;
 
-function attachClaudeProviderBridge(route: RoutingDecision, providerId: string, wireModel: string, sessionId?: string): RoutingDecision {
+function attachClaudeProviderBridge(
+  route: RoutingDecision,
+  providerId: string,
+  wireModel: string,
+  sessionId?: string,
+  agent: 'claude-code' | 'pi' = 'claude-code',
+): RoutingDecision {
   if (route.localHandler) return route;
   const provider = getActiveCatalog().providers.find(p => p.id === providerId);
   const lookupModel = routeLookupModelId(provider, wireModel);
-  const catalogModel = provider?.models['claude-code']?.find(m => m.id === lookupModel);
-  const routing = provider ? (sessionId ? sessionProviderRoutingForModel(sessionId, provider, 'claude-code', lookupModel) : providerRoutingForModel(provider, 'claude-code', lookupModel)) : null;
+  const catalogModel = provider?.models[agent]?.find(m => m.id === lookupModel);
+  const routing = provider ? (sessionId ? sessionProviderRoutingForModel(sessionId, provider, agent, lookupModel) : providerRoutingForModel(provider, agent, lookupModel)) : null;
   const model = catalogModel && modelWithInterface(catalogModel, routing?.modelInterface);
   // Adapter identity belongs to the declared route. An OAuth account can select
   // another host without becoming a different provider (e.g. Copilot Business).
   const nativeRow = model && routing && model.api ? invocationModelRecord(model, routing.upstream) : undefined;
   const requiresNativeAuth = requiresNativeProviderAuth(nativeRow);
-  if (provider?.source === 'user' && model && routing &&
-      (requiresNativeAuth || routing.wireProtocol === 'openai-chat' || routing.wireProtocol === 'openai-responses' || (model.api && model.api !== 'anthropic-messages'))) {
+  const needsBridge = agent === 'pi'
+    ? model?.api === 'google-interactions'
+    : (requiresNativeAuth || routing?.wireProtocol === 'openai-chat' || routing?.wireProtocol === 'openai-responses' || (model?.api && model.api !== 'anthropic-messages'));
+  if (provider?.source === 'user' && model && routing && needsBridge) {
     const base = route.upstreamOverride ?? routing.upstream;
     const protocol = routing.wireProtocol === 'openai-responses' ? 'openai-responses' : 'openai-chat';
     const requestPath = routing.requestPath ?? (protocol === 'openai-chat' ? '/chat/completions' : '/responses');
@@ -978,8 +986,11 @@ function createModelRoutingTransform(): RoutingTransform {
         .then((resolved) => {
           if (authorizeHostedChild && !childRequestModels.every(authorizeHostedChild))
             return refuseGuestProviderRoute(403, 'remote_model_not_allowed', 'This model is not available for this remote task.');
+          const bridged = resolved?.decision && wireModel
+            ? attachClaudeProviderBridge(resolved.decision, piProviderId, wireModel, sessionId ?? undefined, 'pi')
+            : resolved?.decision ?? null;
           return withCopilotForwardHeaders(
-          resolved?.decision ?? null, !!wireModel && resolved?.routing.authStrategy === 'oauth-token'
+            bridged, !!wireModel && resolved?.routing.authStrategy === 'oauth-token'
             && /\/responses\/?$/.test(ctx.url.split('?', 1)[0]), ctx,
           ) ?? unavailablePiProviderRoute(piProviderId);
         })
@@ -1028,6 +1039,10 @@ function createModelRoutingTransform(): RoutingTransform {
           return attachClaudeProviderBridge(route, selectedProviderId, wireModel, sessionId);
         }
         if (requestAgent === 'pi' && wireModel) {
+          const effectivePiProviderId = piProviderId ?? selectedProviderId;
+          if (route && effectivePiProviderId) {
+            route = attachClaudeProviderBridge(route, effectivePiProviderId, wireModel, sessionId, 'pi');
+          }
           const routing = getSessionRoutingDescriptor(sessionId, 'pi', wireModel);
           route = withCopilotForwardHeaders(route,
             routing?.authStrategy === 'oauth-token' && /\/responses\/?$/.test(ctx.url.split('?', 1)[0]), ctx);

@@ -105,6 +105,7 @@ export const DESKTOP_MODULE_SETTERS: Readonly<Record<string, DesktopModuleSetter
   'apps/desktop/src/main/maker-host/codex-custom-provider-route.ts#registerCodexScopedCustomProviderRoutes': { status: 'internal', reason: 'Called by maker-host/codexSpawnConfigCore.ts when a Codex process starts' },
   'apps/desktop/src/main/maker-host/codex-custom-provider-route.ts#setCodexAppliedCustomProviderRoutes': { status: 'bound', where: 'apps/host/src/agent/codex-runtime.ts' },
   'apps/desktop/src/main/maker-host/codex-text-only-policy.ts#registerCodexTextOnlyPolicy': { status: 'bound', where: 'apps/host/src/agent/codex-runtime.ts' },
+  'apps/desktop/src/main/maker-host/google-interactions.ts#setGoogleInteractionsAppVersion': { status: 'bound', where: 'apps/host/src/main.ts' },
   'apps/desktop/src/main/maker-host/guest-provider-route-store.ts#registerGuestProviderRoute': { status: 'pending', reason: 'Provider sharing is M3 (release table 乙 6); share guests get ACCESS_REVOKED on the Host (device-link.test.mjs)' },
   'apps/desktop/src/main/maker-host/guest-provider-route-store.ts#setGuestProviderModelCatalogReader': { status: 'bound', where: 'apps/host/src/agent/model-context.ts', reason: 'The Host reader applies the account filter, the desktop one does not (release table section 二, item 托管推理的模型目录（账号过滤）)' },
   'apps/desktop/src/main/maker-host/mcp-tool-approval-policy.ts#setGhostToolApprovalResolver': { status: 'bound', where: 'apps/host/src/main.ts' },
