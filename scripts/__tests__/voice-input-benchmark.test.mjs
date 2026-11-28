@@ -13,10 +13,13 @@ import {
   buildVolcengineCorpusContextFromHints,
   compareCoreEvalReports,
   computeCer,
+  evalFeatureGuards,
   evaluateTermHits,
   percentile,
+  scoreTextRetention,
 } from '../shared/voice-input-core-benchmark.mjs';
 import {
+  asrHintsFixturePath,
   buildOpenAiTranscriptionSessionUpdate,
   buildQwenSessionUpdate,
   buildVolcengineFullClientRequestPayload,
@@ -115,6 +118,41 @@ test('ASR hints wire payloads include provider-specific corpus/prompt fields and
 
   const openAiWithHistory = buildOpenAiPromptFromHints(hints, { includeRecentContext: true });
   assert.ok(openAiWithHistory.includes('昨天把'));
+
+  const longHints = { hotwords: ['OpenClaw', 'Claude Code', 'TipTap', 'ProseMirror', 'Kubernetes', 'PostgreSQL'], recentHistory: ['上一轮谈到 OpenClaw。'] };
+  const longUpdate = buildOpenAiTranscriptionSessionUpdate('gpt-4o-transcribe', 'zh', 24_000, longHints);
+  assert.ok(longUpdate.session.audio.input.transcription.prompt.length > 50);
+  assert.ok(longUpdate.session.audio.input.transcription.prompt.includes('PostgreSQL'));
+  assert.ok(buildOpenAiTranscriptionSessionUpdate('gpt-4o-transcribe', 'zh', 24_000, longHints, { includeRecentContext: true }).session.audio.input.transcription.prompt.includes('上一轮谈到'));
+});
+
+test('fixture cache key changes with spoken text or voice', () => {
+  const testCase = { id: 'case', spokenText: '第一段', voice: 'Tingting' };
+  const first = asrHintsFixturePath(testCase, '/tmp/voice-fixtures');
+  assert.notEqual(first, asrHintsFixturePath({ ...testCase, spokenText: '第二段' }, '/tmp/voice-fixtures'));
+  assert.notEqual(first, asrHintsFixturePath({ ...testCase, voice: 'Eddy' }, '/tmp/voice-fixtures'));
+});
+
+test('retention scoring detects equal-length missing and repeated text', () => {
+  assert.deepEqual(scoreTextRetention('甲乙丙丁', '甲乙甲乙'), {
+    retainedChars: 2,
+    missingChars: 2,
+    extraChars: 2,
+    charRetention: 0.5,
+  });
+});
+
+test('failed-audio guard rejects equal-length corrupted replay', async () => {
+  class Accumulator {
+    constructor() { this.chunks = []; }
+    append(chunk) { this.chunks.push(chunk); }
+    snapshot() { return { chunks: this.chunks }; }
+  }
+  const result = await evalFeatureGuards({
+    FailedVoiceAudioAccumulator: Accumulator,
+    sliceRetainedAudioForReplay: (snapshot) => snapshot.chunks.map((chunk) => ({ pcm: new ArrayBuffer(chunk.byteLength) })),
+  });
+  assert.equal(result.failedAudioRetention.byteExactRecovery, false);
 });
 
 test('compareCoreEvalReports computes signed before/after deltas cleanly', () => {

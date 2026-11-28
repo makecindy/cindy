@@ -171,6 +171,28 @@ export function computeCer(reference, hypothesis) {
   return Number((editDistance(ref, hyp) / ref.length).toFixed(4));
 }
 
+export function scoreTextRetention(expectedText, deliveredText) {
+  const expected = Array.from(String(expectedText ?? ''));
+  const delivered = Array.from(String(deliveredText ?? ''));
+  const previous = new Uint32Array(delivered.length + 1);
+  const current = new Uint32Array(delivered.length + 1);
+  for (const char of expected) {
+    for (let j = 1; j <= delivered.length; j += 1) {
+      current[j] = char === delivered[j - 1]
+        ? previous[j - 1] + 1
+        : Math.max(previous[j], current[j - 1]);
+    }
+    previous.set(current);
+  }
+  const retainedChars = previous[delivered.length];
+  return {
+    retainedChars,
+    missingChars: expected.length - retainedChars,
+    extraChars: delivered.length - retainedChars,
+    charRetention: expected.length > 0 ? Number((retainedChars / expected.length).toFixed(4)) : 1,
+  };
+}
+
 export function evaluateTermHits(transcript, targetTerms) {
   const compactTranscript = String(transcript ?? '').toLowerCase().replace(/[\s\-_.]/g, '');
   const matched = [];
@@ -1067,10 +1089,11 @@ async function evalLongSpeechAndRotation(coreModule) {
       await stopPromise;
 
       const deliveredText = finalRefinedText || finalSubmittedText;
-      const expectedRefinedLength = Array.from(
+      const expectedRefinedText = Array.from(
         { length: spec.utterances },
         (_, i) => sampleSentences[i % sampleSentences.length].replace(/嗯那个/g, ''),
-      ).join('').length;
+      ).join('');
+      const retention = scoreTextRetention(expectedRefinedText, deliveredText);
 
       return {
         scenario: spec.id,
@@ -1084,8 +1107,8 @@ async function evalLongSpeechAndRotation(coreModule) {
         refineTruncations,
         finalRefinedApplied: Boolean(finalRefinedText),
         deliveredChars: deliveredText.length,
-        expectedChars: expectedRefinedLength,
-        charRetention: Math.min(1, Number((deliveredText.length / Math.max(1, expectedRefinedLength)).toFixed(4))),
+        expectedChars: Array.from(expectedRefinedText).length,
+        ...retention,
       };
     } finally {
       restoreClock();
@@ -1106,7 +1129,7 @@ async function evalLongSpeechAndRotation(coreModule) {
   };
 }
 
-async function evalFeatureGuards(coreModule) {
+export async function evalFeatureGuards(coreModule) {
   // Failed audio retention
   let failedAudioRetention = { supported: false };
   if (typeof coreModule.FailedVoiceAudioAccumulator === 'function') {
@@ -1116,13 +1139,13 @@ async function evalFeatureGuards(coreModule) {
     for (const ch of slicePcmChunks(speechBuf, 16000, 40)) acc.append(ch);
     const snap = acc.snapshot('bench-1', 1000);
     const replayed = snap ? coreModule.sliceRetainedAudioForReplay(snap) : [];
-    const replayedBytes = replayed.reduce((s, c) => s + c.pcm.byteLength, 0);
+    const replayedPcm = Buffer.concat(replayed.map((chunk) => Buffer.from(chunk.pcm)));
 
     const accSilent = new coreModule.FailedVoiceAudioAccumulator({ sampleRate: 16000 });
     for (const ch of slicePcmChunks(silentBuf, 16000, 40)) accSilent.append(ch);
     failedAudioRetention = {
       supported: true,
-      byteExactRecovery: snap !== null && replayedBytes === speechBuf.byteLength,
+      byteExactRecovery: snap !== null && replayedPcm.equals(Buffer.from(speechBuf)),
       silentRejected: accSilent.snapshot('bench-silent', 1000) === null,
     };
   }

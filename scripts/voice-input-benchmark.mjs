@@ -628,7 +628,6 @@ async function openRealtimeSession(opts, marks) {
 async function waitFor(predicate, timeoutMs, registerRejecter) {
   const started = performance.now();
   await new Promise((resolve, reject) => {
-    registerRejecter?.(reject);
     const timer = setInterval(() => {
       if (predicate()) {
         clearInterval(timer);
@@ -638,6 +637,31 @@ async function waitFor(predicate, timeoutMs, registerRejecter) {
         reject(new Error(`Timed out after ${timeoutMs}ms`));
       }
     }, 10);
+    registerRejecter?.((error) => {
+      clearInterval(timer);
+      reject(error);
+    });
+  });
+}
+
+async function waitForWebSocketOpen(ws, timeoutMs) {
+  await new Promise((resolve, reject) => {
+    const cleanup = () => {
+      clearTimeout(timer);
+      ws.off('open', onOpen);
+      ws.off('error', onError);
+      ws.off('close', onClose);
+    };
+    const onOpen = () => { cleanup(); resolve(); };
+    const onError = (error) => { cleanup(); reject(error); };
+    const onClose = () => { cleanup(); reject(new Error('WebSocket closed before opening')); };
+    const timer = setTimeout(() => {
+      cleanup();
+      reject(new Error('WebSocket open timed out'));
+    }, timeoutMs);
+    ws.once('open', onOpen);
+    ws.once('error', onError);
+    ws.once('close', onClose);
   });
 }
 
@@ -866,151 +890,145 @@ async function runOpenAiCompatibleAsrIteration(spec, audio, opts, apiKey, iterat
       ...spec.headers,
     },
   });
+  ws.on('error', (error) => rejectWaiters(error));
+  ws.on('close', () => rejectWaiters(new Error('ASR WebSocket closed before completion')));
 
-  ws.on('message', (data) => {
-    let event;
-    try {
-      event = JSON.parse(data.toString());
-    } catch {
-      return;
-    }
-    events.push({
-      type: event.type,
-      at: performance.now(),
-      chars: typeof event.transcript === 'string'
-        ? event.transcript.length
-        : typeof event.text === 'string'
-          ? event.text.length
-          : typeof event.delta === 'string'
-            ? event.delta.length
-            : undefined,
+  try {
+    ws.on('message', (data) => {
+      let event;
+      try {
+        event = JSON.parse(data.toString());
+      } catch {
+        return;
+      }
+      events.push({
+        type: event.type,
+        at: performance.now(),
+        chars: typeof event.transcript === 'string'
+          ? event.transcript.length
+          : typeof event.text === 'string'
+            ? event.text.length
+            : typeof event.delta === 'string'
+              ? event.delta.length
+              : undefined,
+      });
+      if (opts.debugEvents) {
+        console.error('[asr-debug]', spec.id, event.type, JSON.stringify({
+          item_id: event.item_id,
+          text: previewString(event.text),
+          transcript: previewString(event.transcript),
+          delta: previewString(event.delta),
+          stash: previewString(event.stash),
+          error: event.error?.message ?? event.message,
+        }));
+      }
+      if (event.type === 'session.updated') {
+        sessionUpdatedAt = performance.now();
+        return;
+      }
+      const itemId = typeof event.item_id === 'string' ? event.item_id : '__default__';
+      const registerItem = () => {
+        if (!itemOrder.includes(itemId)) itemOrder.push(itemId);
+      };
+      const aggregateTranscript = () => itemOrder
+        .map((id) => finalsByItem.get(id) ?? partialsByItem.get(id) ?? '')
+        .filter(Boolean)
+        .join(' ')
+        .trim();
+      if (event.type === 'conversation.item.input_audio_transcription.delta') {
+        if (firstPartialAt === undefined) firstPartialAt = performance.now();
+        registerItem();
+        partialsByItem.set(itemId, `${partialsByItem.get(itemId) ?? ''}${typeof event.delta === 'string' ? event.delta : ''}`);
+        return;
+      }
+      if (event.type === 'conversation.item.input_audio_transcription.text') {
+        if (firstPartialAt === undefined) firstPartialAt = performance.now();
+        registerItem();
+        partialsByItem.set(itemId, `${typeof event.text === 'string' ? event.text : ''}${typeof event.stash === 'string' ? event.stash : ''}`);
+        return;
+      }
+      if (event.type === 'conversation.item.input_audio_transcription.completed') {
+        completedAt = performance.now();
+        registerItem();
+        const finalTranscript = typeof event.transcript === 'string'
+          ? event.transcript
+          : typeof event.text === 'string'
+            ? event.text
+            : partialsByItem.get(itemId) ?? '';
+        finalsByItem.set(itemId, finalTranscript);
+        partialsByItem.delete(itemId);
+        return;
+      }
+      if (event.type === 'session.finished') {
+        sessionFinishedAt = performance.now();
+        if (completedAt === undefined && aggregateTranscript()) completedAt = sessionFinishedAt;
+        return;
+      }
+      if (event.type === 'error') {
+        rejectWaiters(new Error(event.error?.message ?? event.message ?? 'Realtime ASR error'));
+      }
     });
-    if (opts.debugEvents) {
-      console.error('[asr-debug]', spec.id, event.type, JSON.stringify({
-        item_id: event.item_id,
-        text: previewString(event.text),
-        transcript: previewString(event.transcript),
-        delta: previewString(event.delta),
-        stash: previewString(event.stash),
-        error: event.error?.message ?? event.message,
+
+    await waitForWebSocketOpen(ws, opts.timeoutMs);
+    marks.wsOpen = performance.now();
+
+    ws.send(JSON.stringify(
+      spec.protocol === 'qwen-realtime'
+        ? buildQwenSessionUpdate(opts.sourceLanguage, spec.pcmSampleRate, recognitionHints)
+        : buildOpenAiTranscriptionSessionUpdate(
+            spec.model,
+            opts.sourceLanguage,
+            spec.pcmSampleRate,
+            recognitionHints,
+            { includeRecentContext: opts.includeHistoryInPrompt },
+          ),
+    ));
+    marks.sessionUpdateSent = performance.now();
+    await waitFor(() => sessionUpdatedAt !== undefined, opts.timeoutMs, (reject) => {
+      rejectWaiters = reject;
+    });
+    marks.sessionUpdated = sessionUpdatedAt;
+
+    const pcm = pcmForSampleRate(audio, spec.pcmSampleRate);
+    const sendAudioChunk = (chunk) => {
+      ws.send(JSON.stringify({
+        ...(spec.protocol === 'qwen-realtime' ? { event_id: `append_${Date.now()}_${Math.random().toString(16).slice(2)}` } : {}),
+        type: 'input_audio_buffer.append',
+        audio: chunk.toString('base64'),
       }));
-    }
-    if (event.type === 'session.updated') {
-      sessionUpdatedAt = performance.now();
-      return;
-    }
-    const itemId = typeof event.item_id === 'string' ? event.item_id : '__default__';
-    const registerItem = () => {
-      if (!itemOrder.includes(itemId)) itemOrder.push(itemId);
     };
+    marks.audioStart = performance.now();
+    await streamPcmAudio(pcm, spec.pcmSampleRate, opts.chunkMs, sendAudioChunk, true);
+    marks.audioFinished = performance.now();
+    await streamTailSilence(spec.pcmSampleRate, opts, sendAudioChunk);
+    marks.tailSilenceFinished = performance.now();
+
+    if (spec.protocol === 'qwen-realtime') {
+      ws.send(JSON.stringify({
+        event_id: `finish_${Date.now()}_${Math.random().toString(16).slice(2)}`,
+        type: 'session.finish',
+      }));
+    } else {
+      ws.send(JSON.stringify({ type: 'input_audio_buffer.commit' }));
+    }
+    marks.finishSent = performance.now();
+
     const aggregateTranscript = () => itemOrder
       .map((id) => finalsByItem.get(id) ?? partialsByItem.get(id) ?? '')
       .filter(Boolean)
       .join(' ')
       .trim();
-    if (event.type === 'conversation.item.input_audio_transcription.delta') {
-      if (firstPartialAt === undefined) firstPartialAt = performance.now();
-      registerItem();
-      partialsByItem.set(itemId, `${partialsByItem.get(itemId) ?? ''}${typeof event.delta === 'string' ? event.delta : ''}`);
-      return;
-    }
-    if (event.type === 'conversation.item.input_audio_transcription.text') {
-      if (firstPartialAt === undefined) firstPartialAt = performance.now();
-      registerItem();
-      partialsByItem.set(itemId, `${typeof event.text === 'string' ? event.text : ''}${typeof event.stash === 'string' ? event.stash : ''}`);
-      return;
-    }
-    if (event.type === 'conversation.item.input_audio_transcription.completed') {
-      completedAt = performance.now();
-      registerItem();
-      const finalTranscript = typeof event.transcript === 'string'
-        ? event.transcript
-        : typeof event.text === 'string'
-          ? event.text
-          : partialsByItem.get(itemId) ?? '';
-      finalsByItem.set(itemId, finalTranscript);
-      partialsByItem.delete(itemId);
-      return;
-    }
-    if (event.type === 'session.finished') {
-      sessionFinishedAt = performance.now();
-      if (completedAt === undefined && aggregateTranscript()) completedAt = sessionFinishedAt;
-      return;
-    }
-    if (event.type === 'error') {
-      rejectWaiters(new Error(event.error?.message ?? event.message ?? 'Realtime ASR error'));
-    }
-  });
-
-  await new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error('WebSocket open timed out')), opts.timeoutMs);
-    ws.once('open', () => {
-      clearTimeout(timer);
-      marks.wsOpen = performance.now();
-      resolve();
+    await waitFor(() => {
+      if (spec.protocol === 'qwen-realtime') return sessionFinishedAt !== undefined && aggregateTranscript();
+      return completedAt !== undefined;
+    }, opts.timeoutMs, (reject) => {
+      rejectWaiters = reject;
     });
-    ws.once('error', reject);
-  });
-
-  ws.send(JSON.stringify(
-    spec.protocol === 'qwen-realtime'
-      ? buildQwenSessionUpdate(opts.sourceLanguage, spec.pcmSampleRate, recognitionHints)
-      : buildOpenAiTranscriptionSessionUpdate(
-          spec.model,
-          opts.sourceLanguage,
-          spec.pcmSampleRate,
-          recognitionHints,
-          { includeRecentContext: opts.includeHistoryInPrompt },
-        ),
-  ));
-  marks.sessionUpdateSent = performance.now();
-  await waitFor(() => sessionUpdatedAt !== undefined, opts.timeoutMs, (reject) => {
-    rejectWaiters = reject;
-  });
-  marks.sessionUpdated = sessionUpdatedAt;
-
-  const pcm = pcmForSampleRate(audio, spec.pcmSampleRate);
-  const sendAudioChunk = (chunk) => {
-    ws.send(JSON.stringify({
-      ...(spec.protocol === 'qwen-realtime' ? { event_id: `append_${Date.now()}_${Math.random().toString(16).slice(2)}` } : {}),
-      type: 'input_audio_buffer.append',
-      audio: chunk.toString('base64'),
-    }));
-  };
-  marks.audioStart = performance.now();
-  await streamPcmAudio(pcm, spec.pcmSampleRate, opts.chunkMs, sendAudioChunk, true);
-  marks.audioFinished = performance.now();
-  await streamTailSilence(spec.pcmSampleRate, opts, sendAudioChunk);
-  marks.tailSilenceFinished = performance.now();
-
-  if (spec.protocol === 'qwen-realtime') {
-    ws.send(JSON.stringify({
-      event_id: `finish_${Date.now()}_${Math.random().toString(16).slice(2)}`,
-      type: 'session.finish',
-    }));
-  } else {
-    ws.send(JSON.stringify({ type: 'input_audio_buffer.commit' }));
+    marks.completed = spec.protocol === 'qwen-realtime' ? sessionFinishedAt : completedAt;
+    return buildAsrRunResult(spec, opts, audio, iteration, marks, firstPartialAt, events, aggregateTranscript());
+  } finally {
+    ws.terminate();
   }
-  marks.finishSent = performance.now();
-
-  const aggregateTranscript = () => itemOrder
-    .map((id) => finalsByItem.get(id) ?? partialsByItem.get(id) ?? '')
-    .filter(Boolean)
-    .join(' ')
-    .trim();
-  await waitFor(() => {
-    if (spec.protocol === 'qwen-realtime') return sessionFinishedAt !== undefined && aggregateTranscript();
-    return completedAt !== undefined;
-  }, opts.timeoutMs, (reject) => {
-    rejectWaiters = reject;
-  });
-  marks.completed = spec.protocol === 'qwen-realtime' ? sessionFinishedAt : completedAt;
-  try {
-    ws.close();
-  } catch {
-    // ignore
-  }
-  return buildAsrRunResult(spec, opts, audio, iteration, marks, firstPartialAt, events, aggregateTranscript());
 }
 
 async function runVolcengineSaucAsrIteration(spec, audio, opts, apiKey, iteration, recognitionHints) {
@@ -1029,103 +1047,97 @@ async function runVolcengineSaucAsrIteration(spec, audio, opts, apiKey, iteratio
       'X-Api-Connect-Id': `xdt-benchmark-${Date.now()}-${Math.random().toString(16).slice(2)}`,
     },
   });
+  ws.on('error', (error) => rejectWaiters(error));
+  ws.on('close', () => rejectWaiters(new Error('ASR WebSocket closed before completion')));
 
-  ws.on('message', (data) => {
-    let message;
-    try {
-      message = decodeVolcengineBenchmarkMessage(rawDataToBuffer(data));
-    } catch (error) {
-      rejectWaiters(error instanceof Error ? error : new Error(String(error)));
-      return;
-    }
-    events.push({
-      type: volcengineMessageTypeName(message.messageType),
-      at: performance.now(),
-      sequence: message.sequence,
-      chars: extractBenchmarkTranscript(message.payload).length || undefined,
-    });
-    if (opts.debugEvents) {
-      console.error('[asr-debug]', spec.id, volcengineMessageTypeName(message.messageType), JSON.stringify({
-        flags: message.flags,
-        sequence: message.sequence,
-        transcript: previewString(extractBenchmarkTranscript(message.payload)),
-        error: previewString(extractBenchmarkErrorMessage(message.payload) ?? message.payloadText),
-        payloadKeys: isPlainRecord(message.payload) ? Object.keys(message.payload).slice(0, 12) : undefined,
-        payload: previewJson(message.payload),
-      }));
-    }
-    if (message.messageType === 0xf) {
-      fatalError = new Error(extractBenchmarkErrorMessage(message.payload) ?? message.payloadText ?? 'Volcengine SAUC ASR error');
-      rejectWaiters(fatalError);
-      return;
-    }
-    const nextTranscript = extractBenchmarkTranscript(message.payload);
-    if (nextTranscript) {
-      transcript = nextTranscript;
-      if (firstPartialAt === undefined) firstPartialAt = performance.now();
-    }
-    if (
-      finalRequested
-      && message.messageType === VOLC_MESSAGE_TYPE_FULL_SERVER_RESPONSE
-      && message.flags === VOLC_FLAG_NEGATIVE_SEQUENCE
-    ) {
-      completedAt = performance.now();
-    }
-  });
-
-  await new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error('WebSocket open timed out')), opts.timeoutMs);
-    ws.once('open', () => {
-      clearTimeout(timer);
-      marks.wsOpen = performance.now();
-      resolve();
-    });
-    ws.once('error', reject);
-  });
-
-  ws.send(encodeVolcengineBenchmarkFullClientRequest(
-    buildVolcengineFullClientRequestPayload(opts.sourceLanguage, spec.pcmSampleRate, recognitionHints),
-  ));
-  marks.sessionUpdateSent = performance.now();
-  marks.sessionUpdated = marks.wsOpen;
-
-  const pcm = pcmForSampleRate(audio, spec.pcmSampleRate);
-  // The initial full client request is auto-assigned sequence 1 by
-  // Volcengine SAUC, so audio-only requests begin at 2.
-  let sequence = 1;
-  const sendAudioChunk = (chunk) => {
-    if (fatalError) return;
-    sequence += 1;
-    ws.send(encodeVolcengineBenchmarkAudioOnlyRequest(chunk, sequence));
-  };
-  marks.audioStart = performance.now();
-  await streamPcmAudio(pcm, spec.pcmSampleRate, opts.chunkMs, sendAudioChunk, true);
-  if (fatalError) throw fatalError;
-  marks.audioFinished = performance.now();
-  await streamTailSilence(spec.pcmSampleRate, opts, sendAudioChunk);
-  if (fatalError) throw fatalError;
-  marks.tailSilenceFinished = performance.now();
-  finalRequested = true;
-  // Match production VolcengineSaucAsrProvider: the last real audio chunk is
-  // sent normally, then a short silence packet carries the negative final
-  // sequence so the final marker does not cut off the spoken tail.
-  sequence += 1;
-  ws.send(encodeVolcengineBenchmarkAudioOnlyRequest(
-    silencePcmForDuration(spec.pcmSampleRate, VOLCENGINE_SAUC_NONSTREAM_END_WINDOW_MS),
-    -sequence,
-  ));
-  marks.finishSent = performance.now();
-
-  await waitFor(() => completedAt !== undefined, opts.timeoutMs, (reject) => {
-    rejectWaiters = reject;
-  });
-  marks.completed = completedAt;
   try {
-    ws.close();
-  } catch {
-    // ignore
+    ws.on('message', (data) => {
+      let message;
+      try {
+        message = decodeVolcengineBenchmarkMessage(rawDataToBuffer(data));
+      } catch (error) {
+        rejectWaiters(error instanceof Error ? error : new Error(String(error)));
+        return;
+      }
+      events.push({
+        type: volcengineMessageTypeName(message.messageType),
+        at: performance.now(),
+        sequence: message.sequence,
+        chars: extractBenchmarkTranscript(message.payload).length || undefined,
+      });
+      if (opts.debugEvents) {
+        console.error('[asr-debug]', spec.id, volcengineMessageTypeName(message.messageType), JSON.stringify({
+          flags: message.flags,
+          sequence: message.sequence,
+          transcript: previewString(extractBenchmarkTranscript(message.payload)),
+          error: previewString(extractBenchmarkErrorMessage(message.payload) ?? message.payloadText),
+          payloadKeys: isPlainRecord(message.payload) ? Object.keys(message.payload).slice(0, 12) : undefined,
+          payload: previewJson(message.payload),
+        }));
+      }
+      if (message.messageType === 0xf) {
+        fatalError = new Error(extractBenchmarkErrorMessage(message.payload) ?? message.payloadText ?? 'Volcengine SAUC ASR error');
+        rejectWaiters(fatalError);
+        return;
+      }
+      const nextTranscript = extractBenchmarkTranscript(message.payload);
+      if (nextTranscript) {
+        transcript = nextTranscript;
+        if (firstPartialAt === undefined) firstPartialAt = performance.now();
+      }
+      if (
+        finalRequested
+        && message.messageType === VOLC_MESSAGE_TYPE_FULL_SERVER_RESPONSE
+        && message.flags === VOLC_FLAG_NEGATIVE_SEQUENCE
+      ) {
+        completedAt = performance.now();
+      }
+    });
+
+    await waitForWebSocketOpen(ws, opts.timeoutMs);
+    marks.wsOpen = performance.now();
+
+    ws.send(encodeVolcengineBenchmarkFullClientRequest(
+      buildVolcengineFullClientRequestPayload(opts.sourceLanguage, spec.pcmSampleRate, recognitionHints),
+    ));
+    marks.sessionUpdateSent = performance.now();
+    marks.sessionUpdated = marks.wsOpen;
+
+    const pcm = pcmForSampleRate(audio, spec.pcmSampleRate);
+    // The initial full client request is auto-assigned sequence 1 by
+    // Volcengine SAUC, so audio-only requests begin at 2.
+    let sequence = 1;
+    const sendAudioChunk = (chunk) => {
+      if (fatalError) return;
+      sequence += 1;
+      ws.send(encodeVolcengineBenchmarkAudioOnlyRequest(chunk, sequence));
+    };
+    marks.audioStart = performance.now();
+    await streamPcmAudio(pcm, spec.pcmSampleRate, opts.chunkMs, sendAudioChunk, true);
+    if (fatalError) throw fatalError;
+    marks.audioFinished = performance.now();
+    await streamTailSilence(spec.pcmSampleRate, opts, sendAudioChunk);
+    if (fatalError) throw fatalError;
+    marks.tailSilenceFinished = performance.now();
+    finalRequested = true;
+    // Match production VolcengineSaucAsrProvider: the last real audio chunk is
+    // sent normally, then a short silence packet carries the negative final
+    // sequence so the final marker does not cut off the spoken tail.
+    sequence += 1;
+    ws.send(encodeVolcengineBenchmarkAudioOnlyRequest(
+      silencePcmForDuration(spec.pcmSampleRate, VOLCENGINE_SAUC_NONSTREAM_END_WINDOW_MS),
+      -sequence,
+    ));
+    marks.finishSent = performance.now();
+
+    await waitFor(() => completedAt !== undefined, opts.timeoutMs, (reject) => {
+      rejectWaiters = reject;
+    });
+    marks.completed = completedAt;
+    return buildAsrRunResult(spec, opts, audio, iteration, marks, firstPartialAt, events, transcript.trim());
+  } finally {
+    ws.terminate();
   }
-  return buildAsrRunResult(spec, opts, audio, iteration, marks, firstPartialAt, events, transcript.trim());
 }
 
 function buildAsrRunResult(spec, opts, audio, iteration, marks, firstPartialAt, events, transcript) {
@@ -2673,17 +2685,36 @@ function printCoreEvalReport(report) {
   }
 }
 
+export function asrHintsFixturePath(testCase, audioDir) {
+  const voice = testCase.voice || 'Tingting (中文（中国大陆）)';
+  const fixtureKey = createHash('sha256').update(JSON.stringify({
+    spokenText: testCase.spokenText,
+    voice,
+    format: 'WAVE',
+    codec: 'LEI16@16000',
+    channels: 1,
+  })).digest('hex').slice(0, 16);
+  return path.join(audioDir, `${String(testCase.id).replace(/[^a-z0-9_-]/gi, '_')}-${fixtureKey}.wav`);
+}
+
 async function synthesizeAsrHintsFixture(testCase, audioDir) {
   await fsp.mkdir(audioDir, { recursive: true });
-  const wavPath = path.join(audioDir, `${testCase.id}.wav`);
+  const wavPath = asrHintsFixturePath(testCase, audioDir);
   if (fs.existsSync(wavPath) && fs.statSync(wavPath).size > 1000) return wavPath;
   if (process.platform !== 'darwin') {
     throw new Error(`Missing WAV fixture ${wavPath}. Pre-generate WAVs in --audio-dir on non-macOS.`);
   }
   const aiffPath = `${wavPath}.aiff`;
-  await execFile('/usr/bin/say', ['-v', testCase.voice || 'Tingting (中文（中国大陆）)', '-o', aiffPath, testCase.spokenText]);
-  await execFile('/usr/bin/afconvert', ['-f', 'WAVE', '-d', 'LEI16@16000', '-c', '1', aiffPath, wavPath]);
-  await fsp.rm(aiffPath, { force: true });
+  const pendingWavPath = `${wavPath}.${process.pid}.pending`;
+  const voice = testCase.voice || 'Tingting (中文（中国大陆）)';
+  try {
+    await execFile('/usr/bin/say', ['-v', voice, '-o', aiffPath, testCase.spokenText]);
+    await execFile('/usr/bin/afconvert', ['-f', 'WAVE', '-d', 'LEI16@16000', '-c', '1', aiffPath, pendingWavPath]);
+    await fsp.rename(pendingWavPath, wavPath);
+  } finally {
+    await fsp.rm(aiffPath, { force: true });
+    await fsp.rm(pendingWavPath, { force: true });
+  }
   return wavPath;
 }
 
@@ -2718,7 +2749,7 @@ async function runOpenAiBatchTranscriptionOnce(token, wavPath, model, language, 
   }
 }
 
-async function runOpenAiRealtimeTranscriptionOnce(token, wavPath, model, language, prompt, timeoutMs) {
+async function runOpenAiRealtimeTranscriptionOnce(token, wavPath, model, language, hints, timeoutMs, includeRecentContext = false) {
   const audio = readWavPcm16Mono(wavPath);
   const started = performance.now();
   return new Promise((resolve) => {
@@ -2738,14 +2769,9 @@ async function runOpenAiRealtimeTranscriptionOnce(token, wavPath, model, languag
     const timer = setTimeout(() => done({ ok: false, text: transcript, elapsedMs: Math.round(performance.now() - started), error: 'timeout' }), timeoutMs);
     ws.on('error', (err) => done({ ok: false, text: '', elapsedMs: Math.round(performance.now() - started), error: err.message }));
     ws.on('open', () => {
-      ws.send(JSON.stringify(
-        buildOpenAiTranscriptionSessionUpdate(
-          model,
-          language,
-          PCM_TARGET_RATE,
-          prompt ? { hotwords: [prompt] } : undefined,
-        ),
-      ));
+      ws.send(JSON.stringify(buildOpenAiTranscriptionSessionUpdate(
+        model, language, PCM_TARGET_RATE, hints, { includeRecentContext },
+      )));
     });
     ws.on('message', async (raw) => {
       let event;
@@ -2854,14 +2880,13 @@ async function runAsrHintsBenchmark(opts) {
     for (let idx = 0; idx < cases.length; idx += 1) {
       const tc = cases[idx];
       const wavPath = audioByCaseId.get(tc.id);
-      const prompt = buildOpenAiPromptFromHints(tc, { includeRecentContext: opts.includeHistoryInPrompt });
       let baseline;
       let withHints;
       if (idx % 2 === 0) {
         baseline = await runOpenAiRealtimeTranscriptionOnce(token, wavPath, model, tc.language ?? 'zh', undefined, opts.timeoutMs);
-        withHints = await runOpenAiRealtimeTranscriptionOnce(token, wavPath, model, tc.language ?? 'zh', prompt, opts.timeoutMs);
+        withHints = await runOpenAiRealtimeTranscriptionOnce(token, wavPath, model, tc.language ?? 'zh', tc, opts.timeoutMs, opts.includeHistoryInPrompt);
       } else {
-        withHints = await runOpenAiRealtimeTranscriptionOnce(token, wavPath, model, tc.language ?? 'zh', prompt, opts.timeoutMs);
+        withHints = await runOpenAiRealtimeTranscriptionOnce(token, wavPath, model, tc.language ?? 'zh', tc, opts.timeoutMs, opts.includeHistoryInPrompt);
         baseline = await runOpenAiRealtimeTranscriptionOnce(token, wavPath, model, tc.language ?? 'zh', undefined, opts.timeoutMs);
       }
       realtimeResults.push({
