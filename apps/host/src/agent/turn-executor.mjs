@@ -1204,8 +1204,9 @@ export function createTurnExecutor(deps) {
   // As the desktop's sendToAgentAccepted (register.ts), every send of a task runs under that
   // task's send lock, shared with the entries that change its runtime or route
   // (session-route-lock.mjs) and with context recovery. Held until the send is accepted or refused.
-  function send(sessionId, message, createOpts, sendOpts) {
-    return withSendToSessionLock(sessionId, () => sendUnlocked(sessionId, message, createOpts, sendOpts));
+  function send(sessionId, message, createOpts, sendOpts, lockSignal) {
+    return withSendToSessionLock(sessionId, () => sendUnlocked(sessionId, message, createOpts, sendOpts),
+      undefined, lockSignal);
   }
 
   async function sendUnlocked(sessionId, message, createOpts, sendOpts) {

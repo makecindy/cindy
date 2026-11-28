@@ -1,6 +1,7 @@
 import { WebSocketServer, type WebSocket } from 'ws';
 import { describe, expect, it } from 'vitest';
 
+import { resolveVoiceInputProviderKindAlias, voiceInputProviderModel } from '../../../shared/voiceInputAsrProfiles.js';
 import {
   buildElevenLabsScribeRealtimeUrl,
   composeScribeTranscript,
@@ -36,6 +37,38 @@ describe('ElevenLabsScribeProvider helpers', () => {
     }));
 
     expect(url.searchParams.getAll('keyterms')).toEqual(['PostgreSQL', 'LiteLLM']);
+  });
+
+  it.each([
+    ['scribe', 'scribe_v2_realtime'],
+    ['scribe_v3_live', 'scribe_v3_live'],
+  ])('sends the selected %s model on the realtime socket', async (selection, expectedModel) => {
+    const kind = resolveVoiceInputProviderKindAlias(selection);
+    if (!kind) throw new Error(`Unknown ASR provider: ${selection}`);
+
+    const server = new WebSocketServer({ host: '127.0.0.1', port: 0 });
+    let requestUrl: string | undefined;
+    server.on('connection', (socket, request) => {
+      requestUrl = request.url;
+      socket.send(JSON.stringify({ message_type: 'session_started' }));
+    });
+
+    let provider: ElevenLabsScribeProvider | undefined;
+    try {
+      await waitFor(() => server.address() !== null);
+      const address = server.address();
+      if (!address || typeof address === 'string') throw new Error('Expected local test server address.');
+      const baseUrl = `http://127.0.0.1:${address.port}`;
+      provider = new ElevenLabsScribeProvider({ baseUrl, apiKey: 'test-key', model: voiceInputProviderModel(kind) });
+      await provider.start();
+      const url = new URL(requestUrl!, baseUrl);
+      expect(url.pathname).toBe('/v1/speech-to-text/realtime');
+      expect(url.searchParams.get('model_id')).toBe(expectedModel);
+    } finally {
+      await provider?.stop();
+      for (const socket of server.clients) socket.terminate();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
   });
 
   it('composes committed text and mutable partial snapshots into one draft', () => {

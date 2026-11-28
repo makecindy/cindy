@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { HistoryViewController, projectHistoryView, type HistoryViewPage } from '@cindy/maker-shared/message-window';
 import { setMobileAuthOwner } from '@/auth/authOwnerGeneration';
-import { cacheOutboxHistory } from '@/session/outboxHistoryCache';
+import { cacheOutboxHistory, hasObservedOutboxHistory } from '@/session/outboxHistoryCache';
 import { clearHistoryDisk, historyDiskAuthority, readHistoryDisk } from '@/session/remoteHistoryDiskCache';
 import { cacheSessionMessagesIfCurrent, captureSessionMessageCacheWriteAuthority, getCachedSessionMessages } from '@/session/mobileSessionMessageCache';
 import { remoteSessionStore, useSessionMessages } from '@/session/remoteSessionStore';
@@ -109,6 +109,14 @@ afterEach(async () => {
 });
 
 describe('outbox to offline history handoff', () => {
+  it('recognizes only the original user ID in the matching device and task history', async () => {
+    state.rows = [];
+    await opened([row('sent', 2)]);
+    expect(hasObservedOutboxHistory('d', 's', 'sent')).toBe(true);
+    expect(hasObservedOutboxHistory('another-device', 's', 'sent')).toBe(false);
+    expect(hasObservedOutboxHistory('d', 'another-task', 'sent')).toBe(false);
+    expect(hasObservedOutboxHistory('d', 's', 'another-id')).toBe(false);
+  });
   // Regression: reopened old tasks retain host-owned bubbles even though history
   // already cached their user rows. Existing cases always populated the raw store.
   // Unit: a cached user row, empty raw window, and no network response must suffice.

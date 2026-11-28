@@ -286,6 +286,7 @@
     "pendingDelivery": "待達",
     "pendingDeliveryHint": "此訊已存於機，正候電腦確認。",
     "waitingForComputer": "候機歸來，即遣之",
+    "waitingForPrevious": "俟前訊",
     "waitingForNetwork": "待網路重通，即遣之",
     "queued": "方候",
     "retryImage": "重呈此圖",

@@ -303,6 +303,7 @@
   },
   "screen": {
     "thinking": "Thinking…",
+    "replyStreaming": "Generating…",
     "tokenCount": "{{tokens}} tok",
     "tokenCountFull": "{{tokens}} tokens",
     "tokenRate": "{{rate}} tok/s",
@@ -699,9 +700,15 @@
   "outbox": {
     "deleteConfirmTitle": "Delete this message?",
     "deleteConfirmBody": "This message wasn't sent. Deleting it can't be undone.",
+    "deleteUnconfirmedBody": "The computer may have received this message. Deleting it only removes the pending message from this device. If the computer received it, it will still appear in the conversation history.",
     "legacyPlanRecovery": "This computer cannot restore saved messages in Plan mode. Turn off Plan mode or update Cindy on the computer, then retry.",
     "creationRecoveryRequired": "Retry creating this task before deleting its first message. That message keeps the recovery details for your later messages.",
     "confirmationRequired": "This computer cannot confirm whether the message was received. Check its history or update Cindy before retrying.",
+    "profileInUseByDesktop": "This data is in use by the Cindy desktop app running on its own. Quit it, then send again.",
+    "taskInactive": "This task cannot receive messages right now.",
+    "inputNotSupported": "This computer does not support sending this type of message to the task.",
+    "invalidInput": "The computer rejected the message because its contents are invalid.",
+    "taskClearedBeforeSend": "The task was cleared or is being cleared. The message is still saved on this device.",
     "taskCleared": "This task was cleared after you sent the message. The saved message has been kept for you to review.",
     "restoreFailed": "Saved messages could not be restored. They have not been deleted. Restart the app and try again.",
     "recoveryTarget": "Keep the original computer while recovering this task. Its later messages are still saved.",

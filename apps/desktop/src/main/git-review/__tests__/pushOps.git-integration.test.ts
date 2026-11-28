@@ -328,4 +328,104 @@ describe('git-review pushOps', () => {
     await expect(fs.readFile(path.join(repoPath, 'hook-failed'), 'utf8')).resolves.toBe('failed');
     await expect(revParse(remotePath, 'refs/heads/main')).resolves.not.toBe(localHead);
   });
+
+  it('preflights clean diverged branches via merge-tree and syncs cleanly before pushing', async () => {
+    const { repoPath, remotePath } = await initRepoWithUpstream();
+    const clonePath = await cloneRemote(remotePath);
+    await fs.writeFile(path.join(clonePath, 'remote-only.txt'), 'remote\n');
+    await runGit(['add', 'remote-only.txt'], { cwd: clonePath });
+    await runGit(['commit', '-m', 'remote only file'], { cwd: clonePath });
+    await runGit(['push'], { cwd: clonePath });
+
+    await fs.writeFile(path.join(repoPath, 'local-only.txt'), 'local\n');
+    await runGit(['add', 'local-only.txt'], { cwd: repoPath });
+    await runGit(['commit', '-m', 'local only file'], { cwd: repoPath });
+    await runGit(['fetch', 'origin'], { cwd: repoPath });
+
+    const before = await status(repoPath);
+    const first = await pushBranch(before.scope, before);
+    expect(first).toMatchObject({
+      kind: 'needs-force',
+      canSyncCleanly: true,
+      dirty: false,
+      branch: 'main',
+    });
+
+    const synced = await pushBranch(before.scope, before, undefined, { syncBeforePush: true });
+    expect(synced).toMatchObject({
+      kind: 'pushed',
+      syncedBeforePush: true,
+    });
+    const localHead = await revParse(repoPath, 'refs/heads/main');
+    await expect(revParse(remotePath, 'refs/heads/main')).resolves.toBe(localHead);
+  });
+
+  it('reports conflicting files on diverged branches and never leaves a rebase in progress', async () => {
+    const { repoPath, remotePath } = await initRepoWithUpstream();
+    const clonePath = await cloneRemote(remotePath);
+    await commitFile(clonePath, 'remote-conflict\n', 'remote conflict');
+    await runGit(['push'], { cwd: clonePath });
+    const localBefore = await commitFile(repoPath, 'local-conflict\n', 'local conflict');
+    await runGit(['fetch', 'origin'], { cwd: repoPath });
+
+    const before = await status(repoPath);
+    const first = await pushBranch(before.scope, before);
+    expect(first).toMatchObject({
+      kind: 'needs-force',
+      canSyncCleanly: false,
+      conflictFiles: ['file.txt'],
+    });
+
+    const attempted = await pushBranch(before.scope, before, undefined, { syncBeforePush: true });
+    expect(attempted).toMatchObject({
+      kind: 'needs-force',
+      canSyncCleanly: false,
+      conflictFiles: ['file.txt'],
+    });
+    await expect(revParse(repoPath, 'HEAD')).resolves.toBe(localBefore);
+    const after = await status(repoPath);
+    expect(after.inProgress).toEqual([]);
+  });
+
+  it('does not sync and push across an ignored local file that the remote now tracks', async () => {
+    const { repoPath, remotePath } = await initRepoWithUpstream();
+    const clonePath = await cloneRemote(remotePath);
+    await fs.writeFile(path.join(repoPath, '.gitignore'), 'remote-only.txt\n');
+    await runGit(['add', '.gitignore'], { cwd: repoPath });
+    await runGit(['commit', '-m', 'ignore local config'], { cwd: repoPath });
+    await fs.writeFile(path.join(repoPath, 'remote-only.txt'), 'private bytes');
+    await fs.writeFile(path.join(clonePath, 'remote-only.txt'), 'remote bytes');
+    await runGit(['add', 'remote-only.txt'], { cwd: clonePath });
+    await runGit(['commit', '-m', 'track remote config'], { cwd: clonePath });
+    await runGit(['push'], { cwd: clonePath });
+    await runGit(['fetch', 'origin'], { cwd: repoPath });
+    const localBefore = await revParse(repoPath, 'HEAD');
+    const before = await status(repoPath);
+    expect(await pushBranch(before.scope, before)).toMatchObject({ kind: 'needs-force', canSyncCleanly: false });
+    expect(await pushBranch(before.scope, before, undefined, { syncBeforePush: true })).toMatchObject({ kind: 'needs-force', canSyncCleanly: false });
+    expect(await revParse(repoPath, 'HEAD')).toBe(localBefore);
+    expect(await fs.readFile(path.join(repoPath, 'remote-only.txt'), 'utf8')).toBe('private bytes');
+    await expect(revParse(remotePath, 'refs/heads/main')).resolves.not.toBe(localBefore);
+  });
+
+  it('does not flatten local merge commits while syncing a diverged push', async () => {
+    const { repoPath, remotePath } = await initRepoWithUpstream();
+    const clonePath = await cloneRemote(remotePath);
+    await runGit(['checkout', '-b', 'side'], { cwd: repoPath });
+    await fs.writeFile(path.join(repoPath, 'side-only.txt'), 'side');
+    await runGit(['add', 'side-only.txt'], { cwd: repoPath });
+    await runGit(['commit', '-m', 'side'], { cwd: repoPath });
+    await runGit(['checkout', 'main'], { cwd: repoPath });
+    await runGit(['merge', '--no-ff', 'side', '-m', 'merge side'], { cwd: repoPath });
+    await fs.writeFile(path.join(clonePath, 'remote-only.txt'), 'remote');
+    await runGit(['add', 'remote-only.txt'], { cwd: clonePath });
+    await runGit(['commit', '-m', 'remote'], { cwd: clonePath });
+    await runGit(['push'], { cwd: clonePath });
+    await runGit(['fetch', 'origin'], { cwd: repoPath });
+    const localBefore = await revParse(repoPath, 'HEAD');
+    const before = await status(repoPath);
+    expect(await pushBranch(before.scope, before)).toMatchObject({ kind: 'needs-force', canSyncCleanly: false });
+    expect(await pushBranch(before.scope, before, undefined, { syncBeforePush: true })).toMatchObject({ kind: 'needs-force', canSyncCleanly: false });
+    expect(await revParse(repoPath, 'HEAD')).toBe(localBefore);
+  });
 });

@@ -6383,7 +6383,10 @@ function CCAgentSessionContent({
       steeringClientIds={steeringQueueClientIds} editLocks={queueEditLocks} interactionLocks={queueInteractionLocks}
       readOnly={readOnly || queueAbortPending}
       simplifiedBotConversation={Boolean(botChatIdentity)} localSend={isLocalUserSend(entry.clientId)} onEdit={beginQueueComposerEdit}
-      onSteer={steerUnsupported ? undefined : steerQueuedMessage} onRemove={removeFromQueue} onMove={moveQueueItem} /> : null;
+      onSteer={steerUnsupported ? undefined : steerQueuedMessage} onRemove={removeFromQueue} onMove={moveQueueItem}
+      onRetryDelivery={(clientId) => { if (sessionId) void makerChatStore.retryRemotePendingMessage(sessionId, clientId); }}
+      onDiscardDelivery={(clientId, delivery) => { if (sessionId) makerChatStore.discardRemotePendingMessage(sessionId, clientId, delivery); }}
+    /> : null;
   };
   const showErrorTailBanner = !readOnly && !!errorTailMsg && !errorTailBannerHidden
     && !syntheticContinuationPending && !error && !credentialSwitchWait

@@ -395,10 +395,10 @@ export interface BuildPendingSendItemsInput {
    * 本地待发条目为什么暂时发不出去:手机没网,或电脑离线 / 无响应。只在真正断开时给,
    * 同步中、自动恢复中这类几秒内就过去的状态不算,避免一闪而过的「等待」。
    */
-  outboxWaitingFor?: MobilePendingSendWaitingFor | null;
+  outboxWaitingFor?: Exclude<MobilePendingSendWaitingFor, 'previous'> | null;
 }
 
-export type MobilePendingSendWaitingFor = 'network' | 'computer';
+export type MobilePendingSendWaitingFor = 'network' | 'computer' | 'previous';
 
 /**
  * 组装消息流末尾的待发送气泡项。
@@ -473,7 +473,9 @@ export function buildPendingSendItems(input: BuildPendingSendItemsInput): Mobile
     const uploadsPending = item.attachmentCount > 0 && item.uploadedCount < item.attachmentCount;
     // 断开时整条投递(含附件上传)都停着:附件没传完也写「等连上」,图片不再转圈。
     // 已交给电脑的条目不是在等着发,保持原有的交接 / 对账状态。
-    const waitingFor = !item.failed && !item.dispatching ? input.outboxWaitingFor ?? null : null;
+    const waitingFor = !item.failed && !item.dispatching
+      ? item.waitingForPrevious ? 'previous' : input.outboxWaitingFor ?? null
+      : null;
     items.push({
       type: 'pending_send',
       key: pendingSendItemKey(item.clientId),
