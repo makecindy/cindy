@@ -65,7 +65,7 @@ describe('mobile session header desktop-first surface', () => {
     expect(source).toContain('const goBackOneLevel = useGuardedBack();');
     expect(source).toContain('const goBackToHome = companionChat && !companionEntry.threadRootSessionId ? backToTaskList : goBackOneLevel;');
     expect(source).toContain("import { useGuardedBack } from '@/utils/useGuardedBack';");
-    expect(source).toContain('onBack={sessionListDrawerOverlayMounted ? closeSessionListDrawer : goBackToHome}');
+    expect(source).toContain('onBack={sessionListDrawerOverlayMounted ? closeSessionListDrawer : deferredGoBackToHome}');
     expect(source).toContain('<Icon color={color} size={iconSize.action} strokeWidth={iconStroke.regular} />');
     expect(source).toContain('testID="session.controlsToggle"');
     expect(source).toContain('const insets = adaptiveWindow.insets;');
@@ -131,7 +131,7 @@ describe('mobile session header desktop-first surface', () => {
     expect(source).toContain('iosPad: Platform.OS === \'ios\' && Platform.isPad,');
     expect(source).toContain('platform: Platform.OS,');
     expect(source).toContain('{systemBack || listOnly ? null : nativeHeader ? (');
-    expect(source).toContain('onBack={sessionListDrawerOverlayMounted ? closeSessionListDrawer : goBackToHome}');
+    expect(source).toContain('onBack={sessionListDrawerOverlayMounted ? closeSessionListDrawer : deferredGoBackToHome}');
     // 抽屉切任务只替换当前 route params：不压栈，也不派发会创建新 route key 的
     // NativeStack REPLACE（后者正是 Android crash / 白屏仍存的生命周期入口）。
     expect(source).toContain('const handleDrawerSelectSession = useCallback((item: RemoteSessionListItem) => {');
@@ -159,7 +159,7 @@ describe('mobile session header desktop-first surface', () => {
     expect(source).toContain('const action = pendingDrawerNavigationRef.current;\n    sessionListDrawerClosingRef.current = false;\n    setSessionListDrawerOpen(false);\n    setSessionListDrawerPulling(false);\n    setSessionListDrawerOverlayMounted(false);');
     expect(source).toContain('pendingDrawerNavigationRef.current = null;\n    action();');
     expect(source).toContain('queueDrawerNavigation(() => {\n      // 必须早于 replaceParams');
-    expect(source).toContain('queueDrawerNavigation(() => {\n      guardedPush({');
+    expect(source).toMatch(/queueDrawerNavigation\(\(\) => \{\s+guardedPush\(\{ pathname: '\/sessions\/new'/);
     expect(source).not.toContain('handleDrawerGoHome');
     // 旋转 / 分屏收窄回窄屏时抽屉必须自动收起(没有入口的悬空 overlay)。
     expect(source).toContain('if (!enabled && sessionListDrawerOverlayMounted) closeSessionListDrawer();');

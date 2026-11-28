@@ -179,6 +179,52 @@ describe('offerMobileSessionRebalance', () => {
     expect(decisions(invoke)).toEqual([{ action: 'rebalance-decision', sessionId: 's1', clientId: 'message-a', memberKey: MINI, remember: false }]);
   });
 
+  // PR #13772 Greptile P1, unit: release send navigation guard before either an auto
+  // rebalance RPC or an interactive prompt, and skip the RPC if the caller already left.
+  it('calls beforeWait before auto rebalance RPC and aborts without sending a decision when it returns false', async () => {
+    const order: string[] = [];
+    const invoke = vi.fn(async (_deviceId: string, _channel: string, args?: unknown[]) => {
+      const action = (args?.[0] as { action?: string } | undefined)?.action;
+      if (action === 'rebalance-suggestion') return reply('auto');
+      order.push(`rpc:${action}`);
+      return { ok: true };
+    });
+    await prefetchMobileSessionRebalance(invoke, 'pc', 'auto-guard');
+    await offerMobileSessionRebalance({
+      invoke,
+      hostDeviceId: 'pc',
+      sessionId: 'auto-guard',
+      clientId: 'message-a',
+      beforeWait: () => { order.push('beforeWait'); return true; },
+      ask: askMobileSessionRebalance,
+    });
+    expect(order).toEqual(['beforeWait', 'rpc:rebalance-decision']);
+
+    await prefetchMobileSessionRebalance(invoke, 'pc', 'auto-abort');
+    const beforeWaitAbort = vi.fn(() => false);
+    await offerMobileSessionRebalance({
+      invoke,
+      hostDeviceId: 'pc',
+      sessionId: 'auto-abort',
+      clientId: 'message-b',
+      beforeWait: beforeWaitAbort,
+      ask: askMobileSessionRebalance,
+    });
+    expect(beforeWaitAbort).toHaveBeenCalledOnce();
+    expect(decisions(invoke)).toHaveLength(1);
+
+    const beforeWaitNoSuggestion = vi.fn(() => true);
+    await offerMobileSessionRebalance({
+      invoke,
+      hostDeviceId: 'pc',
+      sessionId: 'no-suggestion',
+      clientId: 'message-c',
+      beforeWait: beforeWaitNoSuggestion,
+      ask: askMobileSessionRebalance,
+    });
+    expect(beforeWaitNoSuggestion).not.toHaveBeenCalled();
+  });
+
   // Unit/protocol: combining two valid names used to silently discard the complete suggestion.
   it('offers a combined computer and account name at the protocol limit', async () => {
     const label = `${'D'.repeat(128)} · ${'A'.repeat(128)}`;

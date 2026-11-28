@@ -179,10 +179,14 @@ export async function offerMobileSessionRebalance(input: {
   sessionId: string;
   clientId: string;
   ask(suggestion: MobileRebalanceSuggestion): Promise<MobileRebalanceChoice>;
+  /** Called synchronously when a prefetched suggestion is present, before any dialog or remote RPC.
+   * Return false to abort the offer without sending a decision. */
+  beforeWait?: () => boolean;
 }): Promise<void> {
   const { invoke, hostDeviceId, sessionId } = input;
   const suggestion = takePrefetched(hostDeviceId, sessionId);
   if (!suggestion) return;
+  if (input.beforeWait?.() === false) return;
   const choice = suggestion.kind === 'auto' ? 'switch' : await input.ask(suggestion);
   if (choice === 'cancel') return;
   if (choice === 'disable') {

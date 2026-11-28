@@ -25,6 +25,7 @@ import { resolveSessionLinkDeviceId } from './sessionLinks';
 
 export interface SessionTaskChrome {
   beforeSessionSwitchRef: RefObject<(() => void) | null>;
+  deferSendNavigationRef: RefObject<((leave: () => void) => boolean) | null>;
   newSessionActionRef: RefObject<(() => void) | null>;
 }
 
@@ -67,15 +68,22 @@ export function SessionTaskLayout({ children }: {
     && (adaptiveWindow.barEdge !== 'none' || adaptiveWindow.regions.some(region => region.kind === 'occlusion'));
   const { t } = useTranslation();
   const beforeSessionSwitchRef = useRef<(() => void) | null>(null);
+  const deferSendNavigationRef = useRef<((leave: () => void) => boolean) | null>(null);
   const newSessionActionRef = useRef<(() => void) | null>(null);
+  const runSidebarNavigation = useCallback((action: () => void) => {
+    if (!deferSendNavigationRef.current?.(action)) action();
+  }, []);
   const switchConversation = useCallback((href: Href) => {
     const target = drawerConversationTarget(href);
     if (!target) return false;
     if (target.deviceId === deviceId && target.sessionId === sessionId
       && (target.resourceId ?? null) === readRouteParam(params.resourceId)
       && !target.focusClientId && !target.companionSettings) return true;
-    beforeSessionSwitchRef.current?.();
-    switchDrawerSessionInPlace(navigation, target);
+    const performSwitch = () => {
+      beforeSessionSwitchRef.current?.();
+      switchDrawerSessionInPlace(navigation, target);
+    };
+    if (!deferSendNavigationRef.current?.(performSwitch)) performSwitch();
     return true;
   }, [navigation, deviceId, sessionId, params.resourceId]);
   // In-place navigation has no native transitionEnd. Release after the new identity commits.
@@ -97,8 +105,11 @@ export function SessionTaskLayout({ children }: {
       Alert.alert(t('devices.list.error.sessionDeviceNotFound'));
       return;
     }
-    beforeSessionSwitchRef.current?.();
-    switchDrawerSessionInPlace(navigation, destination);
+    const performSwitch = () => {
+      beforeSessionSwitchRef.current?.();
+      switchDrawerSessionInPlace(navigation, destination);
+    };
+    if (!deferSendNavigationRef.current?.(performSwitch)) performSwitch();
   }, [navigation, sessionId, t]);
   if (legacyHistory && deviceId) return null;
   return <SessionDrawerNavigationContext.Provider value={switchConversation}><View style={styles.root}>
@@ -111,7 +122,7 @@ export function SessionTaskLayout({ children }: {
           newSessionInSystemBar={Platform.OS === 'ios' && adaptiveWindow.barEdge !== 'none'}
           onClose={ignoreClose}
           onSelectSession={selectSession}
-          runNavigation={runNavigation}
+          runNavigation={runSidebarNavigation}
           persistent={paneLayout.persistent}
           open={paneLayout.persistent}
           width={paneLayout.sidebarWidth}
@@ -120,7 +131,7 @@ export function SessionTaskLayout({ children }: {
       <SideChatTaskBoundary key={JSON.stringify([deviceId, sessionId])} deviceId={deviceId}
         sessionId={sessionId} enabled={session?.source === 'side-chat'}>
         <CindyMakeSessionGate sessionId={sessionId} deviceId={deviceId || undefined} ownsSessionSubscription>
-          {children({ beforeSessionSwitchRef, newSessionActionRef })}
+          {children({ beforeSessionSwitchRef, deferSendNavigationRef, newSessionActionRef })}
         </CindyMakeSessionGate>
       </SideChatTaskBoundary>
     </SessionTaskDrawerProvider>
@@ -128,7 +139,6 @@ export function SessionTaskLayout({ children }: {
 }
 
 const ignoreClose = () => undefined;
-const runNavigation = (action: () => void) => action();
 const styles = StyleSheet.create({ root: { flex: 1 } });
 
 function readRouteParam(value: unknown): string | null {
