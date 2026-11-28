@@ -2282,4 +2282,73 @@ describe("Host per-turn settings refresh", () => {
       await session.close();
     }
   });
+
+  // Regression: a resumed/fresh Session (turnGeneration 0 -> 1) awaiting onAccepted
+  // must fence unsolicited idle/done/error terminals (including multi-event bursts
+  // across event-loop iterations) instead of promoting waitStartGeneration 0 to 1.
+  // Unit tier: in-memory controllable handle, no real SDK or timers.
+  it("fences unsolicited startup terminals arriving while the first send awaits onAccepted", async () => {
+    const h = createControllableHandle();
+    const session = makeSession(h.handle, "claude-code");
+    const seen: AgentEvent[] = [];
+    const terminals: number[] = [];
+    session.onEvent((event) => seen.push({ ...event }));
+    session.setTurnLifecycleObserver({
+      beforeProviderStart() {},
+      onUndispatched() {},
+      onTerminal({ turnGeneration }) {
+        terminals.push(turnGeneration);
+      },
+    });
+    let releaseAccepted!: () => void;
+    const acceptedGate = new Promise<void>((resolve) => {
+      releaseAccepted = resolve;
+    });
+
+    try {
+      const sending = session.send("scheduled prompt", {
+        origin: SCHED_ORIGIN,
+        onAccepted: () => acceptedGate,
+      });
+      await vi.waitFor(() => expect(session.getTurnGeneration()).toBe(1));
+
+      // Emit session_id + idle status + done while onAccepted is still blocked,
+      // exercising both the initial wait (generation 0) and subsequent loop iterations.
+      await h.emit({ type: "session_id", data: "sdk-resumed-1", source: "claude-code" });
+      await h.emit({ type: "status", data: { status: "Done", isRunning: false }, source: "claude-code" });
+      await h.emit({ type: "done", data: {}, source: "claude-code" });
+
+      expect(seen.some((event) => event.type === "done")).toBe(false);
+      expect(
+        seen.some(
+          (event) =>
+            event.type === "status" &&
+            (event.data as { isRunning?: unknown } | undefined)?.isRunning === false,
+        ),
+      ).toBe(false);
+      const sidEvent = seen.find((event) => event.type === "session_id");
+      expect(sidEvent?.sessionTurnGeneration).toBe(0);
+      expect(sidEvent?.turnOrigin).toBeUndefined();
+      expect(terminals).toEqual([]);
+      expect(session.getObservedCurrentTurnTerminal()).toEqual({ kind: "none" });
+
+      releaseAccepted();
+      await expect(sending).resolves.toEqual({ accepted: true });
+
+      // Real turn after handle.send() completes with generation 1 and its origin intact.
+      await h.emit({ type: "text", data: { text: "real reply", isFinal: false }, source: "claude-code" });
+      await h.emit({ type: "done", data: {}, source: "claude-code" });
+
+      const reply = seen.find((event) => event.type === "text");
+      const done = seen.find((event) => event.type === "done");
+      expect(reply?.sessionTurnGeneration).toBe(1);
+      expect(reply?.turnOrigin).toEqual(SCHED_ORIGIN);
+      expect(done?.sessionTurnGeneration).toBe(1);
+      expect(done?.turnOrigin).toEqual(SCHED_ORIGIN);
+      expect(terminals).toEqual([1]);
+      expect(session.getObservedCurrentTurnTerminal()).toMatchObject({ kind: "done", generation: 1 });
+    } finally {
+      await session.close();
+    }
+  });
 });

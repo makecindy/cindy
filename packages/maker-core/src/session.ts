@@ -3053,6 +3053,21 @@ export class Session {
       }
       return generation;
     };
+    if (this.isPreDispatchReservation()) {
+      // handle.send() has not started for this reservation yet, so no provider
+      // event can belong to this.turnGeneration (including across subsequent
+      // event-loop iterations while onAccepted / beforeProviderStart awaits).
+      const priorGeneration = Math.max(0, this.turnGeneration - 1);
+      if (this.pendingPriorGeneration === priorGeneration) {
+        if (event.type === 'done' || isTerminalAgentErrorEvent(event)) {
+          this.pendingPriorGeneration = null;
+          this.staleTerminalQueuedGeneration = null;
+        } else if (this.isIdleStatusEvent(event)) {
+          this.staleTerminalQueuedGeneration = priorGeneration;
+        }
+      }
+      return attributed(priorGeneration);
+    }
     const inFlightGeneration =
       this.sendReservation?.generation ??
       (this.isUnacceptedCurrentSend() ? this.unacceptedSendGeneration : null);
@@ -3222,8 +3237,11 @@ export class Session {
     // Both the source stamp and the dequeued wait must name this turn.
     // A leftover tail can be stamped N while next() recaptures N+1, or the
     // reverse when an in-flight start-failure adopts the new generation from
-    // an older wait. Current-turn cleanup requires agreement.
+    // an older wait. Current-turn cleanup requires agreement, and a reservation
+    // still awaiting pre-dispatch hooks can never own a provider event.
+    const preDispatchReservation = this.isPreDispatchReservation();
     const isCurrentGeneration =
+      !preDispatchReservation &&
       resolvedGeneration === this.turnGeneration &&
       observedGeneration === this.turnGeneration;
     // leftover / 旧 generation 的产品事件不能把当前 turn 的 stall 日志时钟往前拨。
@@ -3274,7 +3292,6 @@ export class Session {
     // to it: Codex can enqueue the previous turn's terminal error after flipping
     // its handle idle. Only runEventLoop's generation adoption may transfer
     // ownership to the new attempt.
-    const preDispatchReservation = this.isPreDispatchReservation();
     const sameGenerationError =
       this.terminalEventObservedGeneration === this.turnGeneration &&
       this.terminalEventObservedKind === 'error';
@@ -3385,6 +3402,7 @@ export class Session {
       !isBackgroundEvent &&
       (
         resolvedGeneration < this.turnGeneration ||
+        preDispatchReservation ||
         lateErrorAfterDoneSnapshot ||
         reservationWindowLeftover
       ) &&

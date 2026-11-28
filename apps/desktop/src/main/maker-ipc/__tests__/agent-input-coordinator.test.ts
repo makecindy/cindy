@@ -7401,6 +7401,93 @@ describe('AgentInputCoordinator send transaction', () => {
     expect(h.sendToAgent.mock.calls[1]?.[1]).toEqual({ type: 'user', content: 'second' });
   });
 
+  // Regression: after user-message persistence, beforeDispatchUserTurn / onAcceptedQueuedMessage
+  // still run before vendor handle.send() (`dispatchLifecycle === 'awaiting-dispatch-hooks'`).
+  // A stray done or terminal error landing in this window must NOT wipe activeTurn and cancel
+  // the pending dispatch, while a legitimate fast done after onPersisted ('sending') still settles.
+  it.each(['done', 'error'] as const)(
+    'ignores a stray %s while a persisted turn awaits pre-dispatch hooks',
+    async (strayType) => {
+      const h = createHarness();
+      const sid = `send-stray-${strayType}-awaiting-hooks`;
+      const beforeDispatchGate = deferred<void>();
+      const scheduled = makeItem('sched-1', 'scheduled heartbeat', {
+        origin: {
+          kind: 'scheduler',
+          scheduleId: 'sched-id-1',
+          scheduleName: 'scheduled-check',
+          runId: 'run-id-1',
+        },
+      });
+      const followUp = makeItem('q-2', 'follow-up');
+      h.beforeDispatchUserTurn.mockImplementationOnce(() => beforeDispatchGate.promise);
+
+      h.coordinator.enqueue(sid, scheduled);
+      await flush();
+
+      expect(mocks.createMessage).toHaveBeenCalledTimes(1);
+      expect(h.beforeDispatchUserTurn).toHaveBeenCalledTimes(1);
+      expect(h.onAcceptedQueuedMessage).not.toHaveBeenCalled();
+
+      if (strayType === 'done') {
+        h.coordinator.onTurnEvent(sid, 'done');
+      } else {
+        h.coordinator.onTurnEvent(sid, 'error', 'stray startup error');
+      }
+      await flush();
+
+      expect(h.coordinator.getProjection(sid).error).toBeNull();
+      expect(h.coordinator.getProjection(sid).recovery).toBeNull();
+
+      beforeDispatchGate.resolve();
+      await flush();
+
+      expect(h.onAcceptedQueuedMessage).toHaveBeenCalledTimes(1);
+      expect(h.onAcceptedQueuedMessage).toHaveBeenCalledWith(
+        sid,
+        expect.objectContaining({ clientId: 'sched-1' }),
+      );
+      expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+
+      // activeTurn must remain owned until the real turn finishes.
+      h.coordinator.enqueue(sid, followUp);
+      await flush();
+      expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+
+      h.setRunning(false);
+      h.coordinator.onTurnEvent(sid, 'done');
+      await flush();
+      expect(h.sendToAgent).toHaveBeenCalledTimes(2);
+      expect(h.sendToAgent.mock.calls[1]?.[1]).toEqual({ type: 'user', content: 'follow-up' });
+    },
+  );
+
+  it('still settles a fast done emitted during vendor handle.send after dispatch hooks finish', async () => {
+    const h = createHarness();
+    const sid = 'send-fast-done-during-vendor-send';
+    const first = makeItem('q-1', 'fast turn');
+    const second = makeItem('q-2', 'queued next');
+    const vendorGate = deferred<void>();
+    h.sendToAgent.mockImplementationOnce(async (sessionId, _message, _createOpts, sendOpts) => {
+      await persistQueuedUserMessage(sessionId, sendOpts);
+      // onPersisted has returned -> dispatchLifecycle is now 'sending' (inside vendor send).
+      h.coordinator.onTurnEvent(sessionId, 'done');
+      await vendorGate.promise;
+      return sendSuccess();
+    });
+
+    h.coordinator.enqueue(sid, first);
+    await flush();
+    expect(h.onAcceptedQueuedMessage).toHaveBeenCalledTimes(1);
+
+    h.coordinator.enqueue(sid, second);
+    vendorGate.resolve();
+    await flush();
+
+    expect(h.sendToAgent).toHaveBeenCalledTimes(2);
+    expect(h.sendToAgent.mock.calls[1]?.[1]).toEqual({ type: 'user', content: 'queued next' });
+  });
+
   it('drains FIFO only after the accepted turn reaches a done boundary', async () => {
     const h = createHarness();
     const sid = 'send-fifo';
