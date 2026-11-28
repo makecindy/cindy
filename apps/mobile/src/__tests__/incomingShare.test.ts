@@ -483,3 +483,56 @@ it('keeps identical text from separate system shares separate from an already ch
   expect(consumeIncomingShareBatch('share-two')).toBe(false);
   __resetIncomingShareForTest();
 });
+
+// File-manager shares must preserve PNG bytes, unlike photo-picker optimization.
+it('uploads Android file shares as original files without image preprocessing', () => {
+  const original = { ...payload({ value: 'file:///cache/a.png', contentUri: 'file:///cache/a.png',
+    originalName: 'a.png', mimeType: 'image/png', contentMimeType: 'image/png' }), preserveOriginal: true };
+  expect(selectIncomingShareUploadCandidates([original]).candidates[0]).toMatchObject({
+    kind: 'file', uri: 'file:///cache/a.png', name: 'a.png',
+  });
+});
+
+// Cold Android inboxes are account-bound before any payload can be staged.
+it('binds the authenticated account before reading a persisted native batch', async () => {
+  __resetIncomingShareForTest(); authOwnerTesting.reset(); setMobileAuthOwner('android-account');
+  const order: string[] = [];
+  const native = {
+    bindSharedPayloadAccount: (key: string) => { expect(key).toBe(getMobileAuthOwner().accountKey); order.push('bind'); },
+    getSharedPayloads: () => [],
+    getSharedPayloadsAsync: async () => { order.push('read'); return []; },
+    clearSharedPayloads: vi.fn(),
+  };
+  await receiveIncomingShare(native);
+  expect(order).toEqual(['bind', 'read']);
+  __resetIncomingShareForTest();
+});
+
+// Android clear emits onChange before returning: the next head must survive
+// synchronous re-entry and repeated notifications (core behavioral regression).
+it('retains the next native batch when clearing the head synchronously emits change', () => {
+  __resetIncomingShareForTest(); authOwnerTesting.reset(); setMobileAuthOwner('account-a');
+  const one = [{ shareType: 'text' as const, value: 'first' }];
+  const two = [{ shareType: 'text' as const, value: 'second' }];
+  const queue = [one, two];
+  const native = {
+    getSharedPayloads: () => queue[0] ?? [],
+    getSharedPayloadId: (raw: unknown) => raw === one ? 'head-one' : 'head-two',
+    clearSharedPayloads: vi.fn((expected: unknown) => {
+      expect(queue[0]).toBe(expected);
+      queue.shift();
+      receiveIncomingShare(native);
+      receiveIncomingShare(native);
+    }),
+  };
+  receiveIncomingShare(native);
+  expect(selectIncomingShareDestination('head-one', 'role-exact-a')).toBe(true);
+  expect(consumeIncomingShareBatch('head-one')).toBe(true);
+  expect(consumeIncomingShareBatch('head-one')).toBe(false);
+  expect(selectIncomingShareDestination('head-two', 'role-exact-b')).toBe(true);
+  expect(consumeIncomingShareBatch('head-two')).toBe(true);
+  expect(consumeIncomingShareBatch('head-two')).toBe(false);
+  expect(queue).toEqual([]);
+  expect(native.clearSharedPayloads).toHaveBeenCalledTimes(2);
+  __resetIncomingShareForTest();
+});

@@ -9,9 +9,10 @@ const fs = vi.hoisted(() => {
     }
     info() { return { creationTime: this.created }; }
   }
-  return { Directory, roots: {} as Record<string, { list: () => unknown[] }>, delete: vi.fn() };
+  return { platform: 'ios', cache: { list: vi.fn(() => [] as unknown[]) }, Directory, roots: {} as Record<string, { list: () => unknown[] }>, delete: vi.fn() };
 });
-vi.mock('expo-file-system', () => ({ Directory: fs.Directory, Paths: { appleSharedContainers: fs.roots } }));
+vi.mock('react-native', () => ({ Platform: { get OS() { return fs.platform; } } }));
+vi.mock('expo-file-system', () => ({ Directory: fs.Directory, Paths: { appleSharedContainers: fs.roots, cache: fs.cache } }));
 vi.mock('expo-file-system/legacy', () => ({ deleteAsync: fs.delete }));
 
 const week = 7 * 24 * 60 * 60 * 1000;
@@ -21,6 +22,7 @@ const name = 'cindy-share-12345678-1234-1234-1234-123456789abc';
 describe('incoming share copy expiry', () => {
   beforeEach(() => {
     for (const key of Object.keys(fs.roots)) delete fs.roots[key];
+    fs.platform = 'ios'; fs.cache.list.mockReset().mockReturnValue([]);
     fs.delete.mockReset().mockResolvedValue(undefined);
   });
 
@@ -58,4 +60,13 @@ describe('incoming share copy expiry', () => {
     await cleanupExpiredIncomingShares(now);
     expect(fs.delete).toHaveBeenCalledTimes(4);
   });
+});
+
+it('expires only owned Android copies in the private cache, not external sources', async () => {
+  fs.delete.mockReset().mockResolvedValue(undefined);
+  fs.platform = 'android';
+  const expired = new fs.Directory(name, 1);
+  fs.cache.list.mockReturnValue([expired, new fs.Directory('originals', 1)]);
+  await cleanupExpiredIncomingShares(now);
+  expect(fs.delete).toHaveBeenCalledExactlyOnceWith(expired.uri, { idempotent: true });
 });

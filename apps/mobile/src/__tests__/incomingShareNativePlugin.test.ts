@@ -171,3 +171,39 @@ it("preserves original exports ahead of previews and copies temporary URLs withi
   expect(result.stdout).toContain("PASS: temporary file URL copied inside provider callback");
   expect(result.stdout).toContain("PASS: durable exact-snapshot rejection, retry and replacement");
 }, 180_000);
+
+// Android previously had no receiving filters. Exercise the locked Expo renderer
+// and Cindy's production manifest transform, not app.json string assertions.
+describe('Android incoming share manifest', () => {
+  const { routeIncomingShares } = require('../../plugins/with-android-incoming-share.js');
+  const renderFilters = require('expo-sharing/plugin/build/android/withAndroidIntentFilters.js').default;
+  const { parseIntentFilters } = require('expo-sharing/plugin/build/android/parseIntentFilters.js');
+  const shareFilters = () => renderFilters([
+    parseIntentFilters(['*/*'], 'single'), parseIntentFilters(['*/*'], 'multiple'),
+  ]);
+  const launcher = { action: [{ $: { 'android:name': 'android.intent.action.MAIN' } }],
+    category: [{ $: { 'android:name': 'android.intent.category.LAUNCHER' } }] };
+  const manifest = () => ({ manifest: { application: [{ $: { 'android:name': '.MainApplication' }, activity: [
+    { $: { 'android:name': '.MainActivity' }, 'intent-filter': [launcher, ...shareFilters()] },
+  ] }] } });
+  it('registers single and mixed multiple files only on the owned-copy receiver', () => {
+    const output = routeIncomingShares(manifest());
+    const activities = output.manifest.application[0].activity;
+    expect(activities[0]['intent-filter']).toEqual([launcher]);
+    expect(activities[1].$['android:exported']).toBe('true');
+    expect(activities[1]['intent-filter'].map((filter: any) => filter.action[0].$['android:name']))
+      .toEqual(['android.intent.action.SEND', 'android.intent.action.SEND_MULTIPLE']);
+    for (const filter of activities[1]['intent-filter']) {
+      expect(filter.data).toEqual([{ $: { 'android:mimeType': '*/*' } }]);
+    }
+  });
+  it('does not duplicate the receiver on incremental prebuild', () => {
+    const first = routeIncomingShares(manifest());
+    first.manifest.application[0].activity[0]['intent-filter'].push(...shareFilters());
+    expect(routeIncomingShares(first).manifest.application[0].activity).toHaveLength(2);
+  });
+  it('fails visibly if upstream no longer supplies both receiving actions', () => {
+    const input = manifest(); input.manifest.application[0].activity[0]['intent-filter'].pop();
+    expect(() => routeIncomingShares(input)).toThrow('Expected Expo SEND and SEND_MULTIPLE filters');
+  });
+});

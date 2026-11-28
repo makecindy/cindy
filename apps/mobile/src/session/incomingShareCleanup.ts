@@ -1,3 +1,4 @@
+import { Platform } from 'react-native';
 import { Directory, Paths } from 'expo-file-system';
 import { deleteAsync } from 'expo-file-system/legacy';
 
@@ -11,7 +12,7 @@ const SHARE_DIRECTORY = /^cindy-share-[\da-f]{8}-[\da-f]{4}-[\da-f]{4}-[\da-f]{4
  */
 export async function cleanupExpiredIncomingShares(now = Date.now()): Promise<void> {
   try {
-    for (const root of Object.values(Paths.appleSharedContainers)) {
+    for (const root of (Platform.OS === 'android' ? [Paths.cache] : Object.values(Paths.appleSharedContainers))) {
       let entries;
       try { entries = root.list(); } catch { continue; }
       for (const entry of entries) {
