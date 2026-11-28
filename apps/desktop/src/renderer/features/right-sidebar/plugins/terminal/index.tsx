@@ -2,15 +2,13 @@
  * terminal plugin —— RSB 内嵌终端（PTY 后端 + xterm.js）。
  *
  * State 设计（最小化）：
- *   - `created`：PTY 是否已在 main 端起来。从 hydrate 拿到 true 时也不立即重建,
- *     用户切回 tab 时若 PTY 已死 main 会回 TERMINAL_NOT_FOUND,renderer 会触发 restart。
- *     最简实现:hydrate 后强制设 false,确保切回来重新 create PTY(因为 main 进程重启后
- *     肯定没存 PTY)。
+ *   - `created`：本 renderer 已创建或接管 PTY。宿主每次渲染都会 hydrate,
+ *     所以只在 rendererInstanceId 不匹配时复位,不能抹掉运行中的 patch。
  *   - `exited`：PTY 退出快照。null = 仍在运行。
  *   - `title` / `shellId` / `shellDisplayName`：UI 显示用。
  *
  * 持久化语义：PTY 进程跟 main 生命周期绑定,app 重启就死,因此 `created` / `exited`
- * 都不持久化(hydrate 强制 reset)；title / shellId 持久化让用户重启后 tab pill 不闪。
+ * 在新 renderer 里复位；title / shellId 持久化让用户重启后 tab pill 不闪。
  *
  * 注册：模块顶层 import-side-effect。plugins/index.ts 把它 import 进来。
  */
@@ -19,15 +17,23 @@ import { lazy } from 'react';
 import { Terminal as TerminalIcon } from 'lucide-react';
 import type { TFunction } from 'i18next';
 
+import { getSessionDeviceId } from '@/features/device-link/remoteProjectsStore';
+import { i18n } from '@/i18n';
+import { toast } from '@/lib/toast';
 import { registerTabKind } from '../../registry';
 import type { TabKindPlugin } from '../../types';
+import { finishClosing, markClosing } from '../../lib/tabClosingSignal';
 
 const TerminalTabBody = lazy(() =>
   import('./TerminalTabBody').then((module) => ({ default: module.TerminalTabBody })),
 );
 
+/** Renderer-local identity distinguishes live patches from a persisted snapshot. */
+export const TERMINAL_RENDERER_INSTANCE_ID = crypto.randomUUID();
+
 export interface TerminalState {
-  /** PTY 是否已在 main 端 spawn。每次 app 启动后 hydrate 强制设 false（PTY 死了） */
+  rendererInstanceId?: string;
+  /** PTY 是否已在 main 端 spawn / attach。新 renderer 必须重新 create / attach。 */
   created: boolean;
   /** PTY 退出快照，null = 仍在运行 */
   exited: { code: number | null; signal: string | null } | null;
@@ -40,6 +46,7 @@ export interface TerminalState {
 }
 
 const DEFAULT_STATE: TerminalState = {
+  rendererInstanceId: TERMINAL_RENDERER_INSTANCE_ID,
   created: false,
   exited: null,
   title: '',
@@ -73,10 +80,15 @@ const plugin: TabKindPlugin<TerminalState> = {
   hydrateState: (raw): TerminalState => {
     if (!raw || typeof raw !== 'object') return { ...DEFAULT_STATE };
     const obj = raw as Record<string, unknown>;
+    const currentRenderer = obj.rendererInstanceId === TERMINAL_RENDERER_INSTANCE_ID;
+    const exit = obj.exited as Partial<NonNullable<TerminalState['exited']>> | undefined;
     return {
-      // PTY 进程跟 main 生命周期绑定:app 重启后旧 PTY 已死,强制 created=false 重新创建
-      created: false,
-      exited: null,
+      rendererInstanceId: currentRenderer ? TERMINAL_RENDERER_INSTANCE_ID : undefined,
+      created: currentRenderer && obj.created === true,
+      exited: currentRenderer && exit &&
+        (exit.code === null || (typeof exit.code === 'number' && Number.isFinite(exit.code))) &&
+        (exit.signal === null || typeof exit.signal === 'string')
+        ? { code: exit.code, signal: exit.signal } : null,
       title: typeof obj.title === 'string' ? obj.title : DEFAULT_STATE.title,
       shellId: typeof obj.shellId === 'string' ? obj.shellId : DEFAULT_STATE.shellId,
       shellDisplayName:
@@ -85,15 +97,32 @@ const plugin: TabKindPlugin<TerminalState> = {
           : DEFAULT_STATE.shellDisplayName,
     };
   },
-  /** 关 tab 时(store.closeTab 调)：先让 main 端 dispose PTY,再清渲染端 xterm。 */
+  /** Release the PTY first; the store owns renderer cleanup after committed removal. */
   onBeforeClose: async (_state, ctx) => {
+    markClosing(ctx.tabId);
     try {
-      await window.electronAPI.terminal.dispose(ctx.tabId);
+      const { getXterm } = await import('./lib/xtermPool');
+      const original = getXterm(ctx.tabId);
+      const retainedContext = original?.remoteContext;
+      const deviceId = getSessionDeviceId(ctx.sessionId);
+      // Prefer the retained origin; otherwise send the tab's task identity for
+      // main to match against its saved PTY. Missing device metadata cannot grant
+      // another window authority over a PTY whose saved identity includes a device.
+      const context = retainedContext ?? (deviceId ? { sessionId: ctx.sessionId, deviceId } : { sessionId: ctx.sessionId });
+      await window.electronAPI.terminal.dispose(ctx.tabId, context);
+      // Snapshot restoration transfers close-listener ownership to the live
+      // entry. A removed/replaced lifetime must not consume this late release.
+      const retained = getXterm(ctx.tabId);
+      if (original && retained?.closing && retained.closeCancelledListeners === original.closeCancelledListeners) {
+        retained.ptyAttached = false;
+      }
     } catch {
-      /* 已经 disposed / not found 都静默 */
+      // store.closeTab ignores thrown errors; only false preserves the tab.
+      // The store does not finishClosing when the hook vetoes.
+      finishClosing(ctx.tabId);
+      toast.error(i18n.t('rightSidebar.terminal.closeFailed'));
+      return false;
     }
-    const { disposeXterm } = await import('./lib/xtermPool');
-    disposeXterm(ctx.tabId);
   },
 };
 

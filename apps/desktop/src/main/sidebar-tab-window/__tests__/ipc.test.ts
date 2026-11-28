@@ -171,6 +171,23 @@ describe('sidebar-tab-window IPC', () => {
     await expect(call(open, { sender: mainSender }, validRequest)).rejects.toThrow(/INTERNAL/);
   });
 
+  // PR8881 / unit: persisted SSH handoffs carry form metadata, never DB state
+  // or authority. Existing browser-only snapshots did not exercise this boundary.
+  it('passes only non-secret terminal draft fields through persisted popup and return handoffs', async () => {
+    const controller = makeController();
+    controller.slotForSender.mockReturnValue({ assignment: { tabs: [{ tabId: 'tab-a' }] } });
+    register(controller);
+    const terminalDraft = { contextKey: 'context', submitted: false, connection: { host: 'edited-host', hostRef: 'opaque-reference' } };
+    const tab = { id: 'tab-a', kind: 'terminal', state: null, terminalDraft: { ...terminalDraft, ticket: 'not-a-real-ticket', connection: { ...terminalDraft.connection, privateKeyPath: '/not-a-real-key' } } };
+    const open = handlers().get(MAKER_INVOKE.SIDEBAR_TAB_WINDOW_OPEN)!;
+    await call(open, { sender: mainSender }, { ...validRequest, handoff: { sessionId: 's1', tabs: [tab], activeTabId: null, persistable: true } });
+    expect(controller.open).toHaveBeenLastCalledWith(expect.objectContaining({ handoff: { sessionId: 's1', tabs: [{ ...tab, terminalDraft }], activeTabId: null, persistable: true } }));
+    const merge = handlers().get(SIDEBAR_TAB_WINDOW_MERGE_BACK_CHANNEL)!;
+    await call(merge, { sender: otherSender }, { tabId: 'tab-a', snapshot: { sessionId: 's1', tab, persistable: true } });
+    expect(controller.mergeBack).toHaveBeenLastCalledWith(otherSender, 'tab-a', { sessionId: 's1', tab: { ...tab, terminalDraft }, persistable: true });
+    await expect(call(open, { sender: mainSender }, { ...validRequest, handoff: { sessionId: 's1', tabs: [{ ...tab, state: { created: true } }], activeTabId: null, persistable: true } })).rejects.toThrow(/INVALID_PARAMS/);
+  });
+
   it('lets the main window or the owning tab window close a window for a closed tab, nobody else', async () => {
     const controller = makeController();
     controller.slotForSender.mockImplementation((sender: unknown) =>

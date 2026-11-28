@@ -635,6 +635,13 @@ describe('right-sidebar-window IPC', () => {
 
     setDetached({ sender: mainWebContents }, true, handoff);
     expect(controller.setDetached).toHaveBeenCalledWith(true, handoff);
+    // PR8881 / unit: allow runtime drafts for SQLite tasks without accepting
+    // renderer tab state as a replacement for persisted state.
+    const terminalDraft = { contextKey: 'context', submitted: false, connection: { host: 'edited-host' } };
+    const runtime = { snapshots: [{ sessionId: 's1', tabs: [{ id: 't1', kind: 'terminal', state: null, terminalDraft }], activeTabId: null, persistable: true }] };
+    setDetached({ sender: mainWebContents }, true, runtime);
+    expect(controller.setDetached).toHaveBeenLastCalledWith(true, runtime);
+    expect(() => setDetached({ sender: mainWebContents }, true, { snapshots: [{ ...runtime.snapshots[0], tabs: [{ ...runtime.snapshots[0].tabs[0], state: { created: true } }] }] })).toThrow(/runtime metadata/);
     expect(() => setDetached({ sender: sidebarWebContents }, true, handoff)).toThrow(/main window/);
   });
 

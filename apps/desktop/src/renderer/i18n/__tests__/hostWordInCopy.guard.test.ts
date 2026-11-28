@@ -36,6 +36,10 @@ const OTHER_MEANINGS: ReadonlyArray<{ meaning: string; entries: Readonly<Record<
         'newChat.addRemoteProject.hint',
         'newChat.addRemoteProject.host',
         'projectSettings.sshHost',
+        'rightSidebar.terminal.remote.host',
+        'rightSidebar.terminal.remote.hostInvalid',
+        'rightSidebar.terminal.remote.selectAgain',
+        'rightSidebar.terminal.remote.setupDescription',
         'settings.remote.add.agentProxyUrlHint',
         'settings.remote.button.autoConnectTip',
         'settings.remote.button.manageKeysTip',
@@ -55,6 +59,7 @@ const OTHER_MEANINGS: ReadonlyArray<{ meaning: string; entries: Readonly<Record<
       ],
       'en': [
         'ipcError.SSH_HOST_KEY_MISMATCH',
+        'rightSidebar.terminal.remote.host',
         'settings.remote.detail.agentProxyWaiting',
         'settings.remote.hostKey.review',
         'settings.remote.hostKey.title',
@@ -62,11 +67,13 @@ const OTHER_MEANINGS: ReadonlyArray<{ meaning: string; entries: Readonly<Record<
       'es': [
         'newChat.addRemoteProject.host',
         'projectSettings.sshHost',
+        'rightSidebar.terminal.remote.host',
         'settings.remote.detail.agentProxyWaiting',
       ],
       'pt-BR': [
         'newChat.addRemoteProject.host',
         'projectSettings.sshHost',
+        'rightSidebar.terminal.remote.host',
         'settings.remote.detail.agentProxyWaiting',
       ],
     },

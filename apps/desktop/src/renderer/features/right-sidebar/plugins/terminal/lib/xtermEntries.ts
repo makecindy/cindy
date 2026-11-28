@@ -6,8 +6,10 @@
  * 终端页签的懒加载就失效了。实例的创建与销毁仍在 xtermPool。
  */
 
+import { copyRemoteTerminalDraft } from '../../../../../../shared/rightSidebarWindow';
 import type { Terminal } from '@xterm/xterm';
 import type { FitAddon } from '@xterm/addon-fit';
+import type { RemoteTerminalConnection, RemoteTerminalContext } from '../../../../../../shared/terminal-bridge';
 
 export interface XtermEntry {
   terminal: Terminal;
@@ -22,6 +24,16 @@ export interface XtermEntry {
    * 否则 PTY 输出仍推给旧窗口。见 TerminalTabBody effect #2。
    */
   ptyAttached: boolean;
+  /** Closing entries reject late asynchronous work until disposal. */
+  closing: boolean;
+  /** Resume suspended preparation when a close is rolled back. */
+  closeCancelledListeners: Set<() => void>;
+  /** Original create/attach origin; retained across transient device-index gaps. */
+  remoteContext?: RemoteTerminalContext;
+  /** SSH form values and submission intent live only as long as this pooled tab. */
+  remoteDraft?: { contextKey: string; connection?: RemoteTerminalConnection; submitted: boolean };
+  /** Keep entry identity until in-flight attach/restart/edit IPC has settled. */
+  pendingTransitions?: number;
   /** Finish ANSI replay at its original grid before fitting to a new pane size. */
   restored?: Promise<void>;
 }
@@ -30,12 +42,33 @@ export interface XtermEntry {
 export const xtermEntries = new Map<string, XtermEntry>();
 
 /** Compact output for an exited hidden tab; no xterm runtime import here. */
-export const xtermSnapshots = new Map<string, {
+export const xtermSnapshots = new Map<string, Pick<XtermEntry, 'remoteContext' | 'remoteDraft' | 'closing' | 'closeCancelledListeners'> & {
   data: Uint8Array;
   lastSize: XtermEntry['lastSize'];
   ptyAttached: boolean;
   viewportY: number;
 }>();
+
+/** Add only non-secret form data to the existing memory-only window handoff. */
+export function exportTerminalDraft(tabId: string) {
+  const entry = xtermEntries.get(tabId) ?? xtermSnapshots.get(tabId);
+  return copyRemoteTerminalDraft(entry?.remoteDraft);
+}
+
+/** Consume handoff-only data before tab state can be reused or persisted. */
+export function importTerminalDraft(tabId: string, raw: unknown): void {
+  const remoteDraft = copyRemoteTerminalDraft(raw) ?? undefined;
+  const entry = xtermEntries.get(tabId) ?? xtermSnapshots.get(tabId);
+  if (entry) {
+    // The returning host owns the latest intent, including a cleared draft.
+    entry.remoteDraft = remoteDraft;
+  } else if (remoteDraft) {
+    xtermSnapshots.set(tabId, {
+      remoteDraft, data: new Uint8Array(), lastSize: { cols: 80, rows: 24 },
+      ptyAttached: false, viewportY: 0, closing: false, closeCancelledListeners: new Set(),
+    });
+  }
+}
 
 /**
  * 侧边栏宿主在"内嵌 ↔ 独立子窗口"间迁移时调用(MainLayout detach/attach 转换清理,

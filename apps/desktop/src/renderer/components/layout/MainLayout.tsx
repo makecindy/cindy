@@ -1395,8 +1395,9 @@ export function MainLayout() {
         return;
       }
       markPtyDetached(tabId);
-      const refreshed = snapshot
-        ? Promise.resolve(importReturnedTabState(snapshot))
+      if (snapshot) importReturnedTabState(snapshot);
+      const refreshed = snapshot && !snapshot.persistable
+        ? Promise.resolve()
         : refreshSessionFromDb(sessionId, { forceTabIds: [tabId] });
       void refreshed
         .catch((err) => {
