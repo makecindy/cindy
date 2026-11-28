@@ -6,7 +6,7 @@
  * device's host keys pinned for both (~/.ssh/cindy_known_hosts and Cindy's own host-key store). Desktop only; the
  * device link, the SSH host list and the key generator arrive through ports (assembly: sshAccessController.desktop.ts).
  *
- * - Triggers: the device's announce push, the person's 「添加到 SSH 远程主机」, and bounded retries. No polling: the
+ * - Triggers: the device's announce push, the person's 「添加到 SSH 远程主机」, and bounded retries. No relay polling: the
  *   steady state costs nothing on the relay. An announce whose revision equals the one the host was last brought up
  *   to date with (and whose `authorized` matches this computer's current key) needs no call at all.
  * - One operation per device at a time; a newer trigger waits and runs once afterwards. Busy, backpressure and
@@ -94,6 +94,8 @@ export interface SshAccessControllerPorts {
   controlDisabled(deviceId: string): boolean;
   /** `device-link:ssh-access:v1` in the background; the invoke result, or a thrown transport error. */
   invoke(deviceId: string, request: SshAccessRequest): Promise<InvokeResult>;
+  /** Bounded local SSH banner probe; no relay request. Host keys are still verified when connecting. */
+  probeAddress(host: string, port: number): Promise<boolean>;
   /**
    * Every alias in the SSH host list (any file), for picking a free one, with the HostKeyAlias of hosts Cindy
    * pins in its own file (null for the others).
@@ -372,7 +374,6 @@ export function createSshAccessController(ports: SshAccessControllerPorts) {
       await handleFailure(captured, deviceId, 'refused');
       return null;
     }
-    resetRetries(deviceId);
     return status;
   }
 
@@ -386,9 +387,13 @@ export function createSshAccessController(ports: SshAccessControllerPorts) {
     const endpoint = status.endpoint!;
     const hostKeyAlias = deviceHostKeyAlias(deviceId);
     const hostKey = pinnedHostKey(endpoint.hostKeys);
-    const hostname = endpoint.addresses[0]?.host;
+    const reachable = await Promise.all(endpoint.addresses.map(async (address) =>
+      (await ports.probeAddress(address.host, endpoint.port)) ? address.host : null));
+    assertCurrent(captured);
+    const hostname = reachable.find((host): host is string => host !== null);
     if (!hostKey || !hostname) {
       await patchTarget(captured, deviceId, () => ({ status: 'blocked', blocked: 'UNKNOWN', revision: null, enrolledFingerprint: key.fingerprint }));
+      if (hostKey && !hostname) scheduleRetry(deviceId);
       return;
     }
     const facts = { user: endpoint.user, port: endpoint.port, hostname, hostKeys: [...endpoint.hostKeys] };
@@ -489,16 +494,21 @@ export function createSshAccessController(ports: SshAccessControllerPorts) {
     }
     const confirmed = enrolled && status.authorized ? { enrolledFingerprint: key.fingerprint } : {};
     if (!status.enabled) {
+      resetRetries(deviceId);
       await patchTarget(captured, deviceId, () => ({ status: 'off', blocked: null, revision: null }));
     } else if (status.blocked) {
+      resetRetries(deviceId);
       await patchTarget(captured, deviceId, () => ({ status: 'blocked', blocked: status!.blocked, revision: null, ...confirmed }));
     } else if (!status.authorized) {
+      resetRetries(deviceId);
       // The device keeps the key and announces once its authorized-keys file holds it.
       await patchTarget(captured, deviceId, () => ({ status: 'pending', revision: null }));
     } else if (!status.endpoint) {
+      resetRetries(deviceId);
       await patchTarget(captured, deviceId, () => ({ status: 'blocked', blocked: 'UNKNOWN', revision: null, ...confirmed }));
     } else {
       await placeHost(captured, deviceId, status, key);
+      if (record?.targets[deviceId]?.status === 'ready') resetRetries(deviceId);
     }
   }
 

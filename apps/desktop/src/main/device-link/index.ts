@@ -2502,6 +2502,9 @@ export async function restoreController(deviceId: string): Promise<void> {
   // The revoke bump already fenced every context from before it; advancing the
   // generation here would also retire a fresh grant prepared after the restore.
   noteControllerAccessAllowed(deviceId);
+  // The controller may still be online. Presence alone does not make its SSH controller re-enroll a key removed by
+  // revocation, so announce the restored target state to that peer explicitly.
+  sshAccessTarget?.peerOnline(deviceId);
   client?.sendPresence({ remoteControlEnabled });
   // 末尾再 poll 一次(而非仅刷新基线):写锁释放到这里之间,别的实例可能已插入
   // 新授权变更,仅刷新基线会把它静默记为已生效、永不 enforce;poll 是幂等的,

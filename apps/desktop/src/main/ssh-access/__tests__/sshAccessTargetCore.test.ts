@@ -43,6 +43,7 @@ interface Harness {
   owner: string | null;
   settings: SshAccessSettings;
   cloudGuest: boolean;
+  sshdReachable: boolean;
   peers: string[];
   directory: string[] | null;
   directoryReads: number;
@@ -61,7 +62,7 @@ beforeEach(async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-ssh-target-'));
   h = {
     home: path.join(root, 'home'), userData: path.join(root, 'profile'), owner: 'owner-a',
-    settings: { remoteControlEnabled: true, revokedControllers: [] }, cloudGuest: false, peers: ['laptop', 'studio'],
+    settings: { remoteControlEnabled: true, revokedControllers: [] }, cloudGuest: false, sshdReachable: true, peers: ['laptop', 'studio'],
     directory: ['laptop', 'studio', 'phone'], directoryReads: 0, announces: [], terminated: [], revoked: [], endsKeySessions: true,
   };
 });
@@ -93,7 +94,7 @@ function makeTarget(platform = 'linux'): SshAccessTarget {
       h.settings = { ...h.settings, revokedControllers: [...h.settings.revokedControllers, deviceId] };
     },
     readDeviceDirectory: async () => { h.directoryReads += 1; return h.directory; },
-    probeSshd: async () => true,
+    probeSshd: async () => h.sshdReachable,
     readEndpointFacts: async () => ({ user: 'ubuntu', port: 22, lanAddresses: [{ kind: 'lan', host: '10.0.0.5' }], mdnsName: null, hostKeys: [KEY_C] }),
     readPublicIpv4: async () => '203.0.113.7',
     terminator: {
@@ -294,9 +295,51 @@ describe('SSH access target: cloud guest boot', () => {
     expect(content).toContain(KEY_A);
     expect(content).not.toContain(KEY_B);
   });
+
+  it('keeps cloud device keys held when the first directory read fails, then releases only listed devices', async () => {
+    h.cloudGuest = true;
+    h.directory = null;
+    await fs.mkdir(path.dirname(recordFile()), { recursive: true });
+    await fs.mkdir(path.dirname(cloudFile()), { recursive: true });
+    await fs.writeFile(recordFile(), JSON.stringify({ version: 1, manualKeys: [], devices: {
+      laptop: { publicKey: KEY_A, fingerprint: FP_A, enrolledAt: 1 },
+      studio: { publicKey: KEY_B, fingerprint: FP_B, enrolledAt: 2 },
+    } }));
+    await fs.writeFile(`${cloudFile()}.held`, `${CLOUD_GUEST_FILE_MARKER}\n${KEY_A} cindy-device:laptop\n${KEY_B} cindy-device:studio\n`);
+    const target = makeTarget();
+    const starting = target.activate();
+    await vi.advanceTimersByTimeAsync(10_000);
+    await starting;
+    expect(await readText(cloudFile())).not.toContain(KEY_A);
+    expect(await readText(cloudFile())).not.toContain(KEY_B);
+    expect(await readText(`${cloudFile()}.held`)).not.toBeNull();
+
+    h.directory = ['laptop'];
+    target.noteDeviceList(h.directory, Date.now());
+    await settle(target);
+    expect(await readText(cloudFile())).toContain(KEY_A);
+    expect(await readText(cloudFile())).not.toContain(KEY_B);
+    expect(await readText(`${cloudFile()}.held`)).toBeNull();
+  });
 });
 
 describe('SSH access target: announce', () => {
+  it('announces when local sshd becomes reachable without a settings or network change', async () => {
+    h.settings.sshAccessEnabled = true;
+    h.sshdReachable = false;
+    const target = makeTarget();
+    await target.activate();
+    expect((await target.readLocal()).blocked).toBe('SSHD_UNREACHABLE');
+    await vi.advanceTimersByTimeAsync(1_000);
+    h.announces.length = 0;
+    h.sshdReachable = true;
+    await vi.advanceTimersByTimeAsync(30_000);
+    await target.readLocal();
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(h.announces.some(([, payload]) => payload.enabled && payload.authorized === false)).toBe(true);
+    expect((await target.readLocal()).blocked).toBeNull();
+  });
+
   it('sends nothing while off to peers without a key, then one push per peer for each change', async () => {
     const target = makeTarget();
     await target.activate();

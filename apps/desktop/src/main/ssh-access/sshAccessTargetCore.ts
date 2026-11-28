@@ -59,6 +59,8 @@ import {
 
 /** Re-probe sshd and re-hash the public state at most this often for status reads. */
 const STATUS_TTL_MS = 30_000;
+/** A blocked local sshd is probed again without making a server request. */
+const SSHD_REPROBE_MS = 30_000;
 /** Addresses and host keys are re-read after this long (and on a network change). */
 const ENDPOINT_TTL_MS = 5 * 60_000;
 /** Bursts (a settings write plus a status refresh) become one push per peer. */
@@ -180,8 +182,11 @@ export function createSshAccessTarget(ports: SshAccessTargetPorts) {
   let announceTargets: Set<string> | 'all' | null = null;
   let announceTimer: ReturnType<typeof setTimeout> | null = null;
   let retryTimer: ReturnType<typeof setTimeout> | null = null;
+  let sshdProbeTimer: ReturnType<typeof setTimeout> | null = null;
   let retryIndex = 0;
   let membershipPrimed = false;
+  /** The cloud image's held file stays held until its first device directory check succeeds. */
+  let cloudBootGatePending = false;
   let settingsKey: string | null = null;
   let lastCleanup: SshAccessSessionCleanup | null = null;
   let queue: Promise<unknown> = Promise.resolve();
@@ -224,6 +229,7 @@ export function createSshAccessTarget(ports: SshAccessTargetPorts) {
 
   function deviceAllowed(deviceId: string, settings: SshAccessSettings): boolean {
     if (settings.revokedControllers.includes(deviceId)) return false;
+    if (cloudGuest && !membership.hasDeviceList()) return false;
     const rule = membership.rule();
     return !rule.refused.includes(deviceId) && (rule.allowed === null || rule.allowed.includes(deviceId));
   }
@@ -394,6 +400,21 @@ export function createSshAccessTarget(ports: SshAccessTargetPorts) {
     }
     const previous = publicState?.revision;
     publicState = { enabled, blocked, endpoint, revision: revisionOf({ enabled, blocked, endpoint }), at: now() };
+    if (blocked === 'SSHD_UNREACHABLE' || blocked === 'REMOTE_LOGIN_OFF') {
+      if (!sshdProbeTimer && active) {
+        const captured = scope;
+        sshdProbeTimer = setTimeout(() => {
+          sshdProbeTimer = null;
+          if (active && captured !== null && scope === captured && ports.ownerScope() === captured) {
+            void serial(() => refreshPublic(true)).catch(() => undefined);
+          }
+        }, SSHD_REPROBE_MS);
+        (sshdProbeTimer as { unref?: () => void }).unref?.();
+      }
+    } else if (sshdProbeTimer) {
+      clearTimeout(sshdProbeTimer);
+      sshdProbeTimer = null;
+    }
     if (previous !== publicState.revision) {
       scheduleAnnounce('all');
       changed();
@@ -506,7 +527,11 @@ export function createSshAccessTarget(ports: SshAccessTargetPorts) {
       await refreshPublic(true);
       return { lost: [] };
     }
-    const stale = Object.keys(record.devices).filter((deviceId) => !deviceAllowed(deviceId, ports.readSettings()));
+    // An unavailable directory is not evidence that these devices left the account. Keep their record entries so a
+    // later successful read can restore only those still listed; the derived cloud file remains fail closed meanwhile.
+    const stale = Object.keys(record.devices).filter((deviceId) =>
+      ports.readSettings().revokedControllers.includes(deviceId)
+      || (membership.hasDeviceList() && !deviceAllowed(deviceId, ports.readSettings())));
     if (stale.length) {
       record = await updateSshAccessRecord(file, (current) => {
         const devices = { ...current.devices };
@@ -516,9 +541,9 @@ export function createSshAccessTarget(ports: SshAccessTargetPorts) {
       ports.log.info(`ssh-access dropped ${stale.length} key(s) of revoked or removed devices`);
     }
     const outcome = await writeDerived(captured, options.exempt);
-    if (options.startup && cloudGuest && !fileBlocked) {
+    if (cloudBootGatePending && (!membershipNeeded() || membership.hasDeviceList()) && !fileBlocked) {
       await removeHeldCloudGuestFile(ports.homeDir())
-        .then((removed) => { if (removed) ports.log.info('ssh-access released the cloud boot gate'); })
+        .then((removed) => { if (removed) ports.log.info('ssh-access released the cloud boot gate'); cloudBootGatePending = false; })
         .catch((error: unknown) => ports.log.warn(`ssh-access could not remove the held authorized keys file: ${String(error)}`));
     }
     ensureMembership();
@@ -662,8 +687,9 @@ export function createSshAccessTarget(ports: SshAccessTargetPorts) {
         return { ...current, devices: { ...current.devices, [controller]: { publicKey, fingerprint, enrolledAt: now() } } };
       });
       // Replacing one's own key is not losing access.
-      await writeDerived(captured, new Set(replaced ? [replaced] : []));
       ensureMembership();
+      if (cloudGuest && !membership.hasDeviceList()) await membership.prime();
+      await writeDerived(captured, new Set(replaced ? [replaced] : []));
     }
     const status = await statusFor(controller);
     noteReplied(controller, status);
@@ -676,6 +702,7 @@ export function createSshAccessTarget(ports: SshAccessTargetPorts) {
     async activate(): Promise<void> {
       active = true;
       await detectCloudGuest();
+      cloudBootGatePending = cloudGuest === true;
       await reconcile('activate', { startup: true }).catch(() => undefined);
       scheduleAnnounce('all');
     },
@@ -684,6 +711,7 @@ export function createSshAccessTarget(ports: SshAccessTargetPorts) {
       active = false;
       if (announceTimer) { clearTimeout(announceTimer); announceTimer = null; }
       if (retryTimer) { clearTimeout(retryTimer); retryTimer = null; }
+      if (sshdProbeTimer) { clearTimeout(sshdProbeTimer); sshdProbeTimer = null; }
       announceTargets = null;
       sent.clear();
       membership.reset();

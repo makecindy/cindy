@@ -52,11 +52,15 @@ announce 仍以签名 push 送达，`device-link:ssh-access:v1` 的请求与回�
 - 云电脑：sshd 只读 `~/.ssh/cindy-owner-authorized-keys`，首行必须正好是
   `# Managed by Cindy SSH access; manual edits are overwritten.`（镜像的开机闸门只暂扣以它开头的文件）。没有这行的文件视为
   手工维护：访问关闭时不动它；打开时先把其中合法的 ed25519 行导入为手动公钥（标签 `imported`）再接管；含无法导入的行
-  （其它类型、带选项）时不接管，回 `AUTHORIZED_KEYS_UNSUPPORTED`。启动时先读一次设备列表（最多等 10 秒）再重写文件，
-  然后删除以标记行开头的 `~/.ssh/cindy-owner-authorized-keys.held`。
+  （其它类型、带选项）时不接管，回 `AUTHORIZED_KEYS_UNSUPPORTED`。启动时最多等 10 秒读取设备列表；若未成功读到，
+  设备公钥暂不写回，已暂扣的文件继续保留。后续首次成功读到列表时只恢复仍在账号内的设备公钥，写入成功后才删除
+  以标记行开头的 `~/.ssh/cindy-owner-authorized-keys.held`。手动公钥不受设备列表约束。
 - 其它电脑：`~/.ssh/authorized_keys` 顶部的标记段，用户自己的字节（含缺失的末尾换行）原样保留；冲突检查的原子写、0600，
   `~/.ssh` 缺失时以 0700 创建；符号链接、非普通文件或损坏的标记段不改写，回 `AUTHORIZED_KEYS_UNSUPPORTED`。
 - 每个 Cindy profile 各写自己的标记段（`# >>> Cindy SSH access <profileKey> >>>`），同机的正式版与开发版、桌面与 Host 互不覆盖。
+- 共享的 `authorized_keys` 与 `cindy_known_hosts` 写入使用现有跨进程锁保护比较和原子替换；锁忙时不绕过冲突检查。
+- SSH 服务暂时未启动时，被控端每 30 秒仅在本机重探；可用后广播变化。控制端从回包的多个地址并行探测 SSH banner，
+  按回包顺序选首个可达地址，仍按固定主机密钥验证真正连接；暂时都不可达时按现有有界重试处理。
 - 设置只存用户的选择：`device-link-settings.json` 的可选 `sshAccessEnabled`，恢复默认即删除；默认值云电脑开、其它关。
   主开关关闭时整个能力关闭、授权文件清空，记录保留。登出清空本 profile 的标记段。
 - 公钥离开授权文件时（撤销、从账号移除、换账号、关闭）结束用这把公钥登录的同用户 SSH 会话（Linux；优先 `SSH_USER_AUTH`，

@@ -85,6 +85,16 @@ describe('~/.ssh/cindy_known_hosts', () => {
     );
   });
 
+  it('retains both device pins when two registrations write the same file together', async () => {
+    await Promise.all([
+      updateCindyKnownHosts(home, [{ hostKeyAlias: 'cindy-device-a1', hostKeys: [KEY_1] }]),
+      updateCindyKnownHosts(home, [{ hostKeyAlias: 'cindy-device-b2', hostKeys: [KEY_2] }]),
+    ]);
+    const content = await fs.readFile(file(), 'utf8');
+    expect(content).toContain(`cindy-device-a1 ${KEY_1}`);
+    expect(content).toContain(`cindy-device-b2 ${KEY_2}`);
+  });
+
   it('refuses a symlink or a malformed entry instead of writing', async ({ skip }) => {
     await expect(updateCindyKnownHosts(home, [{ hostKeyAlias: 'evil\nHost *', hostKeys: [KEY_1] }])).rejects.toThrow('invalid');
     await expect(updateCindyKnownHosts(home, [{ hostKeyAlias: 'cindy-device-a1', hostKeys: [`${KEY_1}\nHost *`] }])).rejects.toThrow('invalid');

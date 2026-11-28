@@ -13,6 +13,7 @@ import { randomBytes } from 'node:crypto';
 import { constants as fsConstants } from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { withCrossProcessLock } from '../device-link/crossProcessLock.js';
 import { isDeviceHostKeyAlias } from './deviceHostNames.js';
 
 export const CINDY_KNOWN_HOSTS_FILE = 'cindy_known_hosts';
@@ -109,25 +110,28 @@ export function renderCindyKnownHosts(content: string | null, entries: readonly 
 export async function updateCindyKnownHosts(homeDir: string, entries: readonly DeviceHostKeys[]): Promise<boolean> {
   const filePath = cindyKnownHostsPath(homeDir);
   const sshDir = path.dirname(filePath);
-  for (let attempt = 0; attempt < WRITE_ATTEMPTS; attempt += 1) {
-    const content = await readExact(filePath);
-    const next = renderCindyKnownHosts(content, entries);
-    if (next === null) return false;
-    await fs.mkdir(sshDir, { recursive: true, mode: 0o700 });
-    const temp = path.join(sshDir, `.${CINDY_KNOWN_HOSTS_FILE}.cindy-${process.pid}-${randomBytes(6).toString('hex')}`);
-    try {
-      await fs.writeFile(temp, Buffer.from(next, 'latin1'), { flag: 'wx', mode: 0o600 });
-      await fs.chmod(temp, 0o600);
-      if (await readExact(filePath) !== content) {
+  await fs.mkdir(sshDir, { recursive: true, mode: 0o700 });
+  return withCrossProcessLock(`${filePath}.lock`, { label: 'cindy-known-hosts', waitMs: 12_000 }, async (lock) => {
+    if (!lock.held) throw new KnownHostsFileError('CONFLICT', 'cindy_known_hosts is busy in another process');
+    for (let attempt = 0; attempt < WRITE_ATTEMPTS; attempt += 1) {
+      const content = await readExact(filePath);
+      const next = renderCindyKnownHosts(content, entries);
+      if (next === null) return false;
+      const temp = path.join(sshDir, `.${CINDY_KNOWN_HOSTS_FILE}.cindy-${process.pid}-${randomBytes(6).toString('hex')}`);
+      try {
+        await fs.writeFile(temp, Buffer.from(next, 'latin1'), { flag: 'wx', mode: 0o600 });
+        await fs.chmod(temp, 0o600);
+        if (await readExact(filePath) !== content) {
+          await fs.unlink(temp).catch(() => undefined);
+          continue;
+        }
+        await fs.rename(temp, filePath);
+        return true;
+      } catch (error) {
         await fs.unlink(temp).catch(() => undefined);
-        continue;
+        throw error;
       }
-      await fs.rename(temp, filePath);
-      return true;
-    } catch (error) {
-      await fs.unlink(temp).catch(() => undefined);
-      throw error;
     }
-  }
-  throw new KnownHostsFileError('CONFLICT', 'cindy_known_hosts kept changing while Cindy was updating it');
+    throw new KnownHostsFileError('CONFLICT', 'cindy_known_hosts kept changing while Cindy was updating it');
+  });
 }

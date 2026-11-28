@@ -3,7 +3,7 @@
  * keys and the addresses another device can try. Read-only, no root, no sudo, never changes system settings (macOS
  * Remote Login is only detected, the person turns it on). Shared by the desktop and the Node Host.
  *
- * The banner probe connects to 127.0.0.1 only and reads at most one line; it is the single network use of this module.
+ * The banner probe reads at most one line. The target checks loopback; a controller may check a peer's reported addresses.
  */
 import fs from 'node:fs/promises';
 import net from 'node:net';
@@ -17,12 +17,12 @@ const MAX_CONFIG_BYTES = 256 * 1024;
 const HOST_KEY_TYPES = ['ed25519', 'ecdsa', 'rsa'] as const;
 const HOST_KEY_LINE = /^(ssh-ed25519|ecdsa-sha2-nistp(?:256|384|521)|ssh-rsa) ([A-Za-z0-9+/]{16,1400}={0,2})(?:\s.*)?$/;
 
-/** True when something on loopback `port` greets with an SSH identification line (`SSH-2.0-…`). */
-export function probeSshBanner(port: number, options: { timeoutMs?: number } = {}): Promise<boolean> {
+/** True when the given host and port greet with an SSH identification line (`SSH-2.0-…`). */
+export function probeSshBanner(port: number, options: { timeoutMs?: number; host?: string } = {}): Promise<boolean> {
   return new Promise((resolve) => {
     let received = '';
     let settled = false;
-    const socket = net.connect({ host: '127.0.0.1', port });
+    const socket = net.connect({ host: options.host ?? '127.0.0.1', port });
     const finish = (value: boolean) => {
       if (settled) return;
       settled = true;

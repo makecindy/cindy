@@ -21,6 +21,7 @@ import {
 } from '../remote-ssh/index.js';
 import { getUserDataDir } from '../userDataPath.js';
 import { bindSshDeviceHostsController } from './ipc.desktop.js';
+import { probeSshBanner } from './sshdProbe.js';
 import { createSshAccessController, type SshAccessController, type SshAccessControllerPeer } from './sshAccessController.js';
 
 /** Bursts of record changes (one device's operation writes two or three times) reach the windows as one notice. */
@@ -66,6 +67,7 @@ export function createDesktopSshAccessController(link: DesktopSshAccessControlle
     peer: (deviceId) => link.peer(deviceId),
     controlDisabled: (deviceId) => readDeviceLinkSettings().disabledControlDeviceIds.includes(deviceId),
     invoke: (deviceId, request: SshAccessRequest) => link.backgroundInvoke(deviceId, SSH_ACCESS_CHANNEL, [request]),
+    probeAddress: (host, port) => probeSshBanner(port, { host }),
     hostAliases: () => listRemoteSshHostAliases(),
     upsertHost: (spec, options) => upsertPinnedDeviceHost(spec, options),
     generateKeyPair: (comment) => generateOpenSshEd25519KeyPair(comment),

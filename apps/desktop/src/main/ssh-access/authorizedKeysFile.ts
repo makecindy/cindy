@@ -25,6 +25,7 @@ import { constants as fsConstants } from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { parseSshEd25519PublicKey } from '@cindy/device-link';
+import { withCrossProcessLock } from '../device-link/crossProcessLock.js';
 
 export const CLOUD_GUEST_AUTHORIZED_KEYS_FILE = 'cindy-owner-authorized-keys';
 /** The first line of the cloud guest's derived file, exactly (boot gate contract with the cloud image). */
@@ -210,18 +211,21 @@ export function renderAuthorizedKeys(
 export async function writeAuthorizedKeys(snapshot: AuthorizedKeysSnapshot, next: string): Promise<void> {
   const { target } = snapshot;
   await fs.mkdir(target.sshDir, { recursive: true, mode: 0o700 });
-  const temp = path.join(target.sshDir, `.${path.basename(target.filePath)}.cindy-${process.pid}-${randomBytes(6).toString('hex')}`);
-  try {
-    await fs.writeFile(temp, Buffer.from(next, 'latin1'), { flag: 'wx', mode: 0o600 });
-    await fs.chmod(temp, 0o600);
-    if (await readExact(target.filePath) !== snapshot.content) {
-      throw new AuthorizedKeysError('CONFLICT', 'authorized keys file changed while Cindy was updating it');
+  await withCrossProcessLock(`${target.filePath}.cindy.lock`, { label: 'ssh-authorized-keys', waitMs: 12_000 }, async (lock) => {
+    if (!lock.held) throw new AuthorizedKeysError('CONFLICT', 'authorized keys file is busy in another process');
+    const temp = path.join(target.sshDir, `.${path.basename(target.filePath)}.cindy-${process.pid}-${randomBytes(6).toString('hex')}`);
+    try {
+      await fs.writeFile(temp, Buffer.from(next, 'latin1'), { flag: 'wx', mode: 0o600 });
+      await fs.chmod(temp, 0o600);
+      if (await readExact(target.filePath) !== snapshot.content) {
+        throw new AuthorizedKeysError('CONFLICT', 'authorized keys file changed while Cindy was updating it');
+      }
+      await fs.rename(temp, target.filePath);
+    } catch (error) {
+      await fs.unlink(temp).catch(() => undefined);
+      throw error;
     }
-    await fs.rename(temp, target.filePath);
-  } catch (error) {
-    await fs.unlink(temp).catch(() => undefined);
-    throw error;
-  }
+  });
 }
 
 /**

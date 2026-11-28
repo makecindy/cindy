@@ -43,6 +43,7 @@ interface World {
   /** The device answers like a Cindy without SSH access (CHANNEL_NOT_ALLOWED). */
   targetOld: boolean;
   publicIp: string;
+  reachableHosts: string[] | null;
   controlDisabled: boolean;
   /** Calls that fail with BACKPRESSURE before reaching the device. */
   busy: number;
@@ -132,6 +133,7 @@ function makeController(): SshAccessController {
     peer: (deviceId) => (deviceId === TARGET ? { desktop: true, name: 'Studio Cloud' } : null),
     controlDisabled: () => w.controlDisabled,
     invoke,
+    probeAddress: async (host) => w.reachableHosts?.includes(host) ?? true,
     hostAliases: async () => new Map([...w.hosts].map(([alias, host]) => [alias, host.managed ? host.spec?.hostKeyAlias ?? null : null])),
     // The SSH host list's main-only upsert (remote-ssh/index.ts upsertPinnedDeviceHost), in memory.
     upsertHost: async (spec, { expectPresent }) => {
@@ -200,7 +202,8 @@ beforeEach(async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-ssh-controller-'));
   w = {
     root, owner: 'owner-a', self: 'laptop-fedcba9876543210', targetSettings: { remoteControlEnabled: true, revokedControllers: [] },
-    targetOnline: true, targetOld: false, publicIp: '203.0.113.7', controlDisabled: false, busy: 0, hold: null, invokes: [], hosts: new Map(),
+    targetOnline: true, targetOld: false, publicIp: '203.0.113.7', reachableHosts: null,
+    controlDisabled: false, busy: 0, hold: null, invokes: [], hosts: new Map(),
   };
   await fs.mkdir(path.join(controllerHome(), '.ssh'), { recursive: true });
   await fs.writeFile(path.join(controllerHome(), '.ssh', 'known_hosts'), OWN_KNOWN_HOSTS);
@@ -216,6 +219,12 @@ afterEach(async () => {
 });
 
 describe('SSH access controller: setting up a device host', () => {
+  it('uses a reachable LAN address when the earlier public address cannot answer SSH', async () => {
+    w.reachableHosts = ['10.0.0.5'];
+    await startReady();
+    expect(hostSpec()?.hostname).toBe('10.0.0.5');
+  });
+
   it('enrolls on the announce, adds the pinned host and alias, and costs nothing while the device is unchanged', async () => {
     await startReady();
     // One enrollment. On a loaded machine a refresh can reach the device before its announce does and read its status
