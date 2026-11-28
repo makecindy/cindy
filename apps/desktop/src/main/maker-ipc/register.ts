@@ -13843,9 +13843,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       }
 
       lockStage = 'lazy-resume-bootstrap';
+      const storedEffort = dbRow.effort ?? meta.effort;
+      const storedFastMode = dbRow.fastMode ?? meta.fastMode;
       try {
-        const storedEffort = dbRow.effort ?? meta.effort;
-        const storedFastMode = dbRow.fastMode ?? meta.fastMode;
         const createOpts = buildCreateOptsWithStderr({
           id: targetSessionId,
           agentKind: targetAgentKind,
