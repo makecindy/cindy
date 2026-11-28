@@ -38,6 +38,7 @@ import {
 } from '../store';
 import { requestRightSidebarVisibility } from './sidebarCommands';
 import { isPopupSpawnedTab } from './popupTabs';
+import { findNativePopupSurfaceForTab } from './nativePopupTabs';
 
 const log = createLogger('rightSidebar.rsbBrowserBridge');
 
@@ -476,9 +477,7 @@ async function handleTabOpRequest(
       // <webview> DOM node inside the off-screen parking container (already
       // attached to document.body — see browserWebviewPool.ensureContainer),
       // which is enough for Electron to create the guest webContents.
-      // Setting `src` kicks off navigation. did-attach / dom-ready attempt
-      // to report the guest id; completion also has an 8s timeout. Reports
-      // are best-effort, so completion does not guarantee a registry entry.
+      // Wait for attachment and registration before acknowledging.
       //
       // When the user later switches into this session, BrowserTabBody
       // mounts and useBrowserWebview may reuse the same pool DOM entry.
@@ -487,10 +486,24 @@ async function handleTabOpRequest(
       // and reports the current id. Retaining already-mounted hosts avoids
       // reparenting on task switches; it does not cover this first mount
       // of an eager-spawned background tab or promise its guest survives.
-      await eagerSpawnAndReport(req.sessionId, newTab.id, initialState.url);
+      try {
+        await eagerSpawnAndReport(req.sessionId, newTab.id, initialState.url);
+      } catch (error) {
+        // Roll back only this request's tab. closeTab serializes persistence
+        // and releases its pool entry. Never rehydrate a previous host.
+        if (!getBucket(req.sessionId).hydrated) {
+          throw new Error(`browser tab ${newTab.id} moved to another host; retry using this tabId`);
+        }
+        try {
+          await storeCloseTab(req.sessionId, newTab.id, { skipBeforeClose: true });
+        } catch {
+          throw new Error(`browser tab ${newTab.id} registration failed and cleanup failed; retry using this tabId`);
+        }
+        throw error;
+      }
       // Visibility command runs AFTER the eager-spawn so that by the time
       // MainLayout reads the new collapsed-state archive, the initial
-      // materialization attempt has finished (possibly via timeout).
+      // guest registration has completed.
       // userInitiated:false —— agent 自动化开的标签,不是用户点的:侧边栏该展开
       // 就展开,但 detached 子窗口不得抢走用户当前前台应用的焦点。
       requestRightSidebarVisibility('open', { sessionId: req.sessionId, userInitiated: false });
@@ -522,7 +535,7 @@ async function handleTabOpRequest(
       const tab = req.tabId
         ? bucket.tabs.find((t) => t.id === req.tabId)
         : pickDefaultBrowserTab(bucket);
-      if (!tab || tab.kind !== 'web-browser') {
+      if (!tab || tab.kind !== 'web-browser' || hasNativePopupSurface(tab)) {
         result = {
           reqId,
           ok: false,
@@ -580,14 +593,22 @@ function pickDefaultBrowserTab(
   return undefined;
 }
 
+/** Native surfaces own their exact WebContents; never replay auth URLs in a second guest. */
+function hasNativePopupSurface(tab: ReturnType<typeof getBucket>['tabs'][number]): boolean {
+  return Boolean(
+    findNativePopupSurfaceForTab(tab.id)?.surfaceId
+    ?? (tab.state as { nativePopupSurfaceId?: string } | null)?.nativePopupSurfaceId,
+  );
+}
+
 /**
- * open / ensure 共用的 webview 物化：acquire pool entry，已 attach 时尝试重报；
- * 否则 setAttribute('src')，在 did-attach / dom-ready 尝试 report 给 main。
+ * open / ensure 共用的 webview 物化:acquire pool entry → setAttribute('src')
+ * → 等 did-attach(或 dom-ready 兜底) → 等 report IPC 完成后应答。
  *
- * 为什么要 eager：store 中新建的后台 tab 不一定已有 BrowserTabBody，需先
- * 在停车区物化，避免自动化动作直接遇到 "tab not found"。上报是 best-effort，
- * 等待也有超时；返回不保证 main 已登记。随后首次附着到 body slot 可能重建
- * guest，不能把停车区的 DOM 复用当作页面状态保留；该路径未由常驻宿主策略覆盖。
+ * store 中新建的后台 tab 不一定已有 BrowserTabBody，先在停车区物化并等待
+ * 注册，避免自动化动作直接遇到 "tab not found"；超过截止时间则失败。
+ * 随后首次附着到 body slot 仍可能重建 guest，不能把 DOM 复用当作页面状态
+ * 保留；该路径未由常驻宿主策略覆盖。
  *
  * 已 attach 过的 entry(getWebContentsId 可取)走幂等 re-report 快路径,
  * 不再动 src(避免把用户正在看的页面重新导航)。
@@ -598,67 +619,54 @@ export async function eagerSpawnAndReport(
   url: string,
 ): Promise<void> {
   const entry = browserWebviewPool.acquire(tabId);
-  try {
-    const webContentsId = entry.webview.getWebContentsId();
-    // Fire-and-forget:report 失败不致命 —— agent 下一个动作会得到清晰的
-    // "tab not found"。
-    void reportRsbBrowserTab({ sessionId, tabId, webContentsId });
-    return;
-  } catch {
-    /* 尚未 attach —— 走下面的首次 spawn 路径 */
-  }
-  await new Promise<void>((resolve) => {
+  await new Promise<void>((resolve, reject) => {
     let settled = false;
-    const finish = () => {
+    let reporting = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const finish = (error?: Error) => {
       if (settled) return;
       settled = true;
-      entry.webview.removeEventListener('did-attach', onAttach);
-      entry.webview.removeEventListener('dom-ready', onReady);
-      resolve();
+      clearTimeout(timer);
+      entry.webview.removeEventListener('did-attach', onAttached);
+      entry.webview.removeEventListener('dom-ready', onAttached);
+      if (error) reject(error);
+      else resolve();
     };
-    // 早期上报:did-attach 在导航提交前就触发,此时 getWebContentsId 已可取。
-    // 只等 dom-ready 会留一个竞态窗口 —— 页面 head 里的同步脚本能在 dom-ready
-    // 之前 window.open(),那时 registry 还没有本 tab 的记录,popup 的 opener
-    // 反查落空、归属丢失。这里提早把映射送进 main,把窗口压缩到"IPC 在途"的
-    // 毫秒级(guest 脚本要跑起来至少要等导航提交,晚于 did-attach)。
-    // report 幂等(同 tabId 重报只是替换记录),与下面 dom-ready 的兜底上报共存。
-    const onAttach = () => {
+    // Registration, not network-bound dom-ready, makes a guest controllable.
+    // Both events can fire; await one report and finish before the 5s main
+    // bridge timeout. A missing attach is a real failure, never a success ack.
+    const onAttached = () => {
+      if (reporting || settled) return;
+      let webContentsId: number;
       try {
-        const webContentsId = entry.webview.getWebContentsId();
-        void reportRsbBrowserTab({ sessionId, tabId, webContentsId });
+        webContentsId = entry.webview.getWebContentsId();
       } catch {
-        /* attach 尚未完成到可取 id —— dom-ready 兜底。 */
+        return; // dom-ready can retry if did-attach ran too early.
       }
-    };
-    const onReady = () => {
-      try {
-        const webContentsId = entry.webview.getWebContentsId();
-        // Fire-and-forget: report failures are non-fatal — the agent's
-        // next call will surface "tab not found" cleanly if it really
-        // didn't land.
-        void reportRsbBrowserTab({ sessionId, tabId, webContentsId });
-      } catch {
-        // Race: getWebContentsId throws if attach hasn't completed yet.
-        // dom-ready firing usually means attach is done, but defend
-        // anyway — useBrowserWebview will retry on its own dom-ready
-        // when the user eventually mounts the tab.
+      reporting = true;
+      const api = ipc();
+      if (!api) {
+        finish(new Error('browser bridge unavailable'));
+        return;
       }
-      finish();
+      // Unlike ordinary UI reports, an automation acknowledgement must not
+      // silently swallow a failed registration. Track the id for stale-safe release.
+      lastReportedWebContentsId.set(tabId, webContentsId);
+      void api.report({ sessionId, tabId, webContentsId }).then(
+        () => finish(),
+        (error: unknown) => finish(error instanceof Error ? error : new Error(String(error))),
+      );
     };
-    entry.webview.addEventListener('did-attach', onAttach);
-    entry.webview.addEventListener('dom-ready', onReady);
-    // 8s fallback so a broken site / network failure doesn't make the
-    // backend op hang forever. Tab persists in the bucket; user switching
-    // to the session — or agent retry — recovers.
-    setTimeout(finish, 8000);
-    // Kick off the load. `<webview>` is attached to the off-screen
-    // container, so setAttribute('src') triggers Electron's attach +
-    // navigate pathway. (loadURL needs an already-created webContents;
-    // setAttribute('src') is the safer "first navigation" form.)
+    entry.webview.addEventListener('did-attach', onAttached);
+    entry.webview.addEventListener('dom-ready', onAttached);
+    timer = setTimeout(() => finish(new Error('browser guest registration timed out')), 4000);
+    // An attached guest only needs re-registration; keep its current URL.
+    onAttached();
+    if (reporting || settled) return;
     try {
       entry.webview.setAttribute('src', url);
-    } catch {
-      finish();
+    } catch (err) {
+      finish(err instanceof Error ? err : new Error(String(err)));
     }
   });
 }
