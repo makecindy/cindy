@@ -282,6 +282,8 @@ type VoiceInputDictionaryLearningAction =
 type VoiceInputSettingsData = import('../shared/voiceInputData').VoiceInputSettings;
 type VoiceSpeakerFilterStatusData = import('../shared/voiceSpeakerFilter').VoiceSpeakerFilterStatus;
 type VoiceSpeakerEnrollResultData = import('../shared/voiceSpeakerFilter').VoiceSpeakerEnrollResult;
+type VoiceLocalAsrStatusData = import('../shared/voiceLocalAsr').VoiceLocalAsrStatus;
+type VoiceLocalAsrChooseDirResultData = import('../shared/voiceLocalAsr').VoiceLocalAsrChooseDirResult;
 type VoiceInputSettingsPatchData = import('../shared/voiceInputData').VoiceInputSettingsPatch;
 type VoiceInputHistoryEntryData = import('../shared/voiceInputData').VoiceInputHistoryEntry;
 type VoiceInputDataSnapshot = import('../shared/voiceInputData').VoiceInputDataSnapshot;
@@ -315,7 +317,7 @@ type VoiceInputModelSelectionResultData = {
     id: VoiceInputProviderKindData;
     model: string;
     mode: VoiceInputAsrModeData;
-    auth: 'api-key' | 'codex';
+    auth: 'api-key' | 'codex' | 'local';
   }>;
   refinerProfiles: Array<{
     id: VoiceInputRefinerProviderKindData;
@@ -327,11 +329,15 @@ type VoiceInputModelSelectionResultData = {
     ok: boolean;
     provider: VoiceInputProviderKindData;
     providerModel: string;
-    auth: 'api-key' | 'codex';
+    auth: 'api-key' | 'codex' | 'local';
     settingsTab: 'api-keys' | 'connections' | 'providers';
     error?: string;
     failureReason?:
-      'custom-asr-config-missing' | 'custom-asr-key-missing' | 'codex-realtime-unsupported';
+      | 'custom-asr-config-missing'
+      | 'custom-asr-key-missing'
+      | 'codex-realtime-unsupported'
+      | 'local-asr-model-missing'
+      | 'local-asr-unsupported';
   };
   customAsrApiKeyConfigured: boolean;
 };
@@ -1945,14 +1951,19 @@ interface ElectronAPI {
         | 'litellm-gpt-realtime-whisper'
         | 'litellm-qwen3-asr-flash-realtime'
         | 'litellm-volcengine-sauc-asr'
-        | 'litellm-batch';
+        | 'litellm-batch'
+        | 'local-sherpa-onnx';
       providerModel: string;
-      auth: 'api-key' | 'codex';
+      auth: 'api-key' | 'codex' | 'local';
       settingsTab: 'api-keys' | 'connections' | 'providers';
       error?: string;
       authErrorReason?: string;
       failureReason?:
-        'custom-asr-config-missing' | 'custom-asr-key-missing' | 'codex-realtime-unsupported';
+        | 'custom-asr-config-missing'
+        | 'custom-asr-key-missing'
+        | 'codex-realtime-unsupported'
+        | 'local-asr-model-missing'
+        | 'local-asr-unsupported';
     }>;
     getReadinessCached: () => {
       ok: boolean;
@@ -1964,14 +1975,19 @@ interface ElectronAPI {
         | 'litellm-gpt-realtime-whisper'
         | 'litellm-qwen3-asr-flash-realtime'
         | 'litellm-volcengine-sauc-asr'
-        | 'litellm-batch';
+        | 'litellm-batch'
+        | 'local-sherpa-onnx';
       providerModel: string;
-      auth: 'api-key' | 'codex';
+      auth: 'api-key' | 'codex' | 'local';
       settingsTab: 'api-keys' | 'connections' | 'providers';
       error?: string;
       authErrorReason?: string;
       failureReason?:
-        'custom-asr-config-missing' | 'custom-asr-key-missing' | 'codex-realtime-unsupported';
+        | 'custom-asr-config-missing'
+        | 'custom-asr-key-missing'
+        | 'codex-realtime-unsupported'
+        | 'local-asr-model-missing'
+        | 'local-asr-unsupported';
     } | null;
     getModelSelection: () => Promise<VoiceInputModelSelectionResultData>;
     setModelSelection: (patch: {
@@ -1992,6 +2008,7 @@ interface ElectronAPI {
     openSettings: (tab: 'voice-input' | 'providers') => Promise<{ ok: true }>;
     start: (params?: {
       recordingId?: string;
+      mode?: 'dictation' | 'rewrite';
       sourceLanguage?: string;
       refinementEnabled?: boolean;
       refinementCacheScope?: string;
@@ -2019,7 +2036,15 @@ interface ElectronAPI {
     >;
     deleteDictionaryEntries: (entryIds: string[]) => Promise<VoiceInputSettingsData>;
     addDictionaryEntry: (text: string) => Promise<VoiceInputSettingsData>;
-    importDictionaryEntries: (texts: string[]) => Promise<VoiceInputSettingsData>;
+    importDictionaryEntries: (
+      entries: Array<string | { text: string; aliases?: string[] }>,
+    ) => Promise<VoiceInputSettingsData>;
+    promoteDictionaryCandidate: (text: string) => Promise<VoiceInputSettingsData>;
+    deleteDictionaryCandidate: (text: string) => Promise<VoiceInputSettingsData>;
+    restoreSuppressedDictionaryTerm: (
+      text: string,
+      options?: { addToDictionary?: boolean },
+    ) => Promise<VoiceInputSettingsData>;
     renameDictionaryEntry: (entryId: string, text: string) => Promise<VoiceInputSettingsData>;
     editDictionaryEntry: (
       entryId: string,
@@ -2033,7 +2058,7 @@ interface ElectronAPI {
     getHistory: (limit?: number) => VoiceInputHistoryEntryData[];
     getHistoryForRefinement: () => VoiceInputHistoryEntryData[];
     recordHistory: (text: string) => string | null;
-    updateHistoryEntry: (id: string, text: string) => void;
+    updateHistoryEntry: (id: string, text: string, rawText?: string) => void;
     deleteHistoryEntry: (id: string) => void;
     onDataChanged: (callback: (payload: VoiceInputDataSnapshot) => void) => () => void;
     /** 「识别我的声音」:模型与声纹都留在本机,Renderer 只拿到状态。 */
@@ -2045,6 +2070,13 @@ interface ElectronAPI {
       enroll: (clips: ArrayBuffer[]) => Promise<VoiceSpeakerEnrollResultData>;
       deleteProfile: () => Promise<VoiceSpeakerFilterStatusData>;
       onStatusChanged: (callback: (status: VoiceSpeakerFilterStatusData) => void) => () => void;
+    };
+    /** 本地离线语音识别（sherpa-onnx）：纯端侧推理，无需云账号与 API Key。 */
+    localAsr: {
+      getStatus: () => Promise<VoiceLocalAsrStatusData>;
+      chooseModelDir: () => Promise<VoiceLocalAsrChooseDirResultData>;
+      clearModelDir: () => Promise<VoiceLocalAsrStatusData>;
+      onStatusChanged: (callback: (status: VoiceLocalAsrStatusData) => void) => () => void;
     };
     /** options.suspend = 录制期挂起（故意与存盘不同）；不带它的请求会被 main 按存盘校验。 */
     setGlobalShortcut: (

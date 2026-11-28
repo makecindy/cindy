@@ -66,6 +66,11 @@ import {
   type VoiceSpeakerEnrollResult,
   type VoiceSpeakerFilterStatus,
 } from '../shared/voiceSpeakerFilter';
+import {
+  VOICE_LOCAL_ASR_CHANNELS,
+  type VoiceLocalAsrChooseDirResult,
+  type VoiceLocalAsrStatus,
+} from '../shared/voiceLocalAsr';
 import type { MobileCodexRateLimitsResult, MobileCodexRateLimitResetResult } from '@cindy/maker-shared/device-link-contract';
 import type { AppearanceSettings } from '../shared/appearanceSettings';
 import type { DialogueWorkspaceSettingsState } from '../shared/dialogueWorkspaceSettings';
@@ -439,12 +444,16 @@ type VoiceInputReadinessWire = {
   serviceMode: 'cindy' | 'byok';
   provider: VoiceInputProviderKind;
   providerModel: string;
-  auth: 'api-key' | 'codex';
+  auth: 'api-key' | 'codex' | 'local';
   settingsTab: 'api-keys' | 'connections' | 'providers';
   error?: string;
   authErrorReason?: string;
   failureReason?:
-    'custom-asr-config-missing' | 'custom-asr-key-missing' | 'codex-realtime-unsupported';
+    | 'custom-asr-config-missing'
+    | 'custom-asr-key-missing'
+    | 'codex-realtime-unsupported'
+    | 'local-asr-model-missing'
+    | 'local-asr-unsupported';
 };
 type VoiceInputModelSelectionWire = {
   serviceMode: 'cindy' | 'byok';
@@ -469,7 +478,7 @@ type VoiceInputModelSelectionResultWire = {
     id: VoiceInputProviderKind;
     model: string;
     mode: VoiceInputAsrMode;
-    auth: 'api-key' | 'codex';
+    auth: 'api-key' | 'codex' | 'local';
   }>;
   refinerProfiles: Array<{
     id: VoiceInputRefinerProviderKind;
@@ -796,6 +805,7 @@ const fanOutVoiceInputDictionaryLearningEvidence = createIpcFanOut(
 );
 const fanOutVoiceInputDataChanged = createIpcFanOut('voice-input:data-changed');
 const fanOutVoiceSpeakerStatusChanged = createIpcFanOut(VOICE_SPEAKER_FILTER_CHANNELS.statusChanged);
+const fanOutVoiceLocalAsrStatusChanged = createIpcFanOut(VOICE_LOCAL_ASR_CHANNELS.statusChanged);
 // 挂起/锁屏 → renderer 释放 fast activation 的保活麦克风(见 shared/voiceInputPowerIpc)。
 const fanOutVoiceInputPowerStateChange = createIpcFanOut(VOICE_INPUT_POWER_STATE_CHANNEL);
 // 应用级快捷键 override 变化广播 (设置页改绑 / reset 后 main 推全量 overrides,
@@ -2111,6 +2121,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('voice-input:open-settings', tab),
     start: (params?: {
       recordingId?: string;
+      mode?: 'dictation' | 'rewrite';
       sourceLanguage?: string;
       refinementEnabled?: boolean;
       refinementCacheScope?: string;
@@ -2156,8 +2167,20 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('voice-input:dictionary:delete-entries', entryIds),
     addDictionaryEntry: (text: string): Promise<unknown> =>
       ipcRenderer.invoke('voice-input:dictionary:add-entry', text),
-    importDictionaryEntries: (texts: string[]): Promise<unknown> =>
-      ipcRenderer.invoke('voice-input:dictionary:import-entries', texts),
+    importDictionaryEntries: (entries: Array<string | { text: string; aliases?: string[] }>): Promise<unknown> =>
+      ipcRenderer.invoke('voice-input:dictionary:import-entries', entries),
+    promoteDictionaryCandidate: (text: string): Promise<unknown> =>
+      ipcRenderer.invoke('voice-input:dictionary:promote-candidate', text),
+    deleteDictionaryCandidate: (text: string): Promise<unknown> =>
+      ipcRenderer.invoke('voice-input:dictionary:delete-candidate', text),
+    restoreSuppressedDictionaryTerm: (
+      text: string,
+      options?: { addToDictionary?: boolean },
+    ): Promise<unknown> =>
+      ipcRenderer.invoke('voice-input:dictionary:restore-suppressed', {
+        text,
+        addToDictionary: options?.addToDictionary === true,
+      }),
     renameDictionaryEntry: (entryId: string, text: string): Promise<unknown> =>
       ipcRenderer.invoke('voice-input:dictionary:rename-entry', { entryId, text }),
     editDictionaryEntry: (entryId: string, text: string, aliases: string[]): Promise<unknown> =>
@@ -2179,8 +2202,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
       throwVoiceInputSyncError(result);
       return result as string | null;
     },
-    updateHistoryEntry: (id: string, text: string): void => {
-      const result = ipcRenderer.sendSync('voice-input:history:update', { id, text });
+    updateHistoryEntry: (id: string, text: string, rawText?: string): void => {
+      const result = ipcRenderer.sendSync('voice-input:history:update', { id, text, rawText });
       throwVoiceInputSyncError(result);
     },
     deleteHistoryEntry: (id: string): void => {
@@ -2200,6 +2223,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
       deleteProfile: (): Promise<VoiceSpeakerFilterStatus> =>
         ipcRenderer.invoke(VOICE_SPEAKER_FILTER_CHANNELS.deleteProfile),
       onStatusChanged: fanOutVoiceSpeakerStatusChanged,
+    },
+    localAsr: {
+      getStatus: (): Promise<VoiceLocalAsrStatus> =>
+        ipcRenderer.invoke(VOICE_LOCAL_ASR_CHANNELS.getStatus),
+      chooseModelDir: (): Promise<VoiceLocalAsrChooseDirResult> =>
+        ipcRenderer.invoke(VOICE_LOCAL_ASR_CHANNELS.chooseModelDir),
+      clearModelDir: (): Promise<VoiceLocalAsrStatus> =>
+        ipcRenderer.invoke(VOICE_LOCAL_ASR_CHANNELS.clearModelDir),
+      onStatusChanged: fanOutVoiceLocalAsrStatusChanged,
     },
     // options.suspend 表示「录制期挂起」这个意图。main 侧会丢掉与存盘不一致的同步请求
     // (过时的广播回声),而挂起传的 null 恰恰故意与存盘不同,必须能区分开。

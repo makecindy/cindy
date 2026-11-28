@@ -3154,7 +3154,8 @@
           "gatewayKey": "需要 AI 閘道器支援所選即時 ASR 路由",
           "codexLogin": "使用 Codex 登入",
           "elevenlabsKey": "使用 ElevenLabs Key（環境變數）",
-          "codexRealtimeUnsupported": "不可用：Codex 登入不是 OpenAI API Realtime 憑證"
+          "codexRealtimeUnsupported": "不可用：Codex 登入不是 OpenAI API Realtime 憑證",
+          "localOffline": "本機離線執行（無需帳號或 API Key）"
         },
         "credentialError": {
           "gatewayMissing": "未找到可用的 AI 閘道器 Key，當前模型無法使用。",
@@ -3162,10 +3163,24 @@
           "elevenlabsMissing": "未配置 ElevenLabs Key（環境變數），當前模型無法使用。",
           "customAsrConfigMissing": "請先完整填寫並儲存即時 ASR 服務配置，再開始語音輸入。",
           "customAsrKeyMissing": "請為自訂即時 ASR 服務填寫並儲存 API Key。",
-          "codexRealtimeUnsupported": "Codex 登入不能用於即時語音識別，請選擇受支援的 ASR 服務。"
+          "codexRealtimeUnsupported": "Codex 登入不能用於即時語音識別，請選擇受支援的 ASR 服務。",
+          "localAsrModelMissing": "請先選擇本機 sherpa-onnx 語音辨識模型目錄，再開始離線語音輸入。",
+          "localAsrUnsupported": "目前電腦平台暫不支援本機離線語音辨識。"
         },
         "manageProviders": "前往模型供應商",
-        "reset": "恢復預設"
+        "reset": "恢復預設",
+        "localAsr": {
+          "optionLabel": "本機離線辨識（sherpa-onnx）",
+          "optionDescription": "本機 ONNX 離線轉寫，無需雲端帳號與 API Key",
+          "notice": "請選擇本機 sherpa-onnx 離線模型目錄（支援 SenseVoice、Paraformer、Whisper 或 Transducer，需包含 tokens.txt 與 .onnx 權重）。音訊全程留在本機。",
+          "modelDirLabel": "本機模型目錄",
+          "readyStatus": "已就緒 · {{kind}}（{{folder}}）",
+          "unsupportedStatus": "目前平台暫不支援",
+          "notConfiguredStatus": "尚未選擇模型目錄",
+          "clearFolder": "清除",
+          "chooseFolder": "選擇模型目錄",
+          "invalidFolder": "所選目錄未找到受支援的 sherpa-onnx 模型檔案（需包含 tokens.txt 與 .onnx）。"
+        }
       },
       "historyToggle": {
         "show": "展開近期歷史",
@@ -3313,7 +3328,9 @@
           "filters": {
             "all": "所有",
             "automatic": "自動新增",
-            "manual": "手動新增"
+            "manual": "手動新增",
+            "candidates": "候選詞",
+            "suppressed": "已抑制"
           },
           "sources": {
             "automatic": "自動",
@@ -3326,6 +3343,28 @@
             "automaticAddedMultiple": "已自動加入詞典：{{term}} 等 {{count}} 個詞",
             "delete": "刪除",
             "deleteAriaLabel": "刪除自動加入的詞：{{term}}"
+          },
+          "export": {
+            "csv": "匯出 CSV",
+            "json": "匯出 JSON",
+            "successCsv": "已匯出 CSV 詞典檔案",
+            "successJson": "已匯出 JSON 詞典檔案"
+          },
+          "candidates": {
+            "hint": "自動學習從你的手動修正中觀察到的候選詞，尚未達到自動轉正門檻。可一鍵加入詞典或刪除。",
+            "evidenceCount": "已觀察 {{count}} 次",
+            "promote": "轉正加入",
+            "promoteTooltip": "一鍵將該候選詞加入個人詞典",
+            "promotedToast": "已將「{{term}}」加入詞典",
+            "empty": "暫無自動學習候選詞。"
+          },
+          "suppressed": {
+            "hint": "你曾刪除的自動學習詞會被抑制，避免再次自動加入。可恢復自動學習資格，或直接重新加入詞典。",
+            "restore": "恢復自動學習",
+            "addToDictionary": "重新加入詞典",
+            "restoredToast": "已恢復「{{term}}」的自動學習資格",
+            "addedToast": "已將「{{term}}」重新加入詞典",
+            "empty": "暫無已抑制詞條。"
           }
         }
       },
@@ -3370,7 +3409,15 @@
         "toast": {
           "copied": "已複製",
           "copyFailed": "複製失敗"
-        }
+        },
+        "searchAriaLabel": "搜尋語音歷史記錄",
+        "searchPlaceholder": "搜尋轉寫或原始辨識內容…",
+        "showRawComparison": "對比原始辨識",
+        "hideRawComparison": "收起對比",
+        "rawLabel": "原始辨識",
+        "refinedLabel": "潤飾後",
+        "loadMore": "載入更多（剩餘 {{count}} 筆）",
+        "noSearchResults": "沒有相符的語音歷史記錄。"
       },
       "speakerFilter": {
         "label": "辨識我的聲音",
@@ -15207,7 +15254,11 @@
           "description": "請開啟麥克風權限，再點選語音輸入",
           "confirm": "去授權",
           "cancel": "取消"
-        }
+        },
+        "rewriteSelected": "語音改寫",
+        "rewriteSelectedTooltip": "口述指令改寫選取文字（如翻譯、精簡、換語氣；失敗時保留原文）",
+        "rewriteSelectedAria": "語音改寫選取文字",
+        "rewriteFailed": "語音改寫未完成，已保留選取的原文。"
       },
       "remoteSwitchFailed": "遠端設定切換失敗，未生效",
       "switchFailed": "設定切換失敗，未生效",

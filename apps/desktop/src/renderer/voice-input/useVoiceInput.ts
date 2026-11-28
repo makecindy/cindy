@@ -146,8 +146,11 @@ export type VoiceInputRefinementSnapshot = {
   refinedText: string;
 };
 
+export type VoiceInputMode = 'dictation' | 'rewrite';
+
 export type UseVoiceInputResult = {
   state: VoiceInputState;
+  activeMode: VoiceInputMode;
   draftText: string;
   draftSource: VoiceInputDraftSource | null;
   draftRange: EditorTextRange | null;
@@ -171,6 +174,7 @@ export type UseVoiceInputResult = {
 
 export type VoiceInputStartOptions = {
   startedAt?: number;
+  mode?: VoiceInputMode;
   beforeStart?: () => boolean | Promise<boolean>;
   /** Audible start feedback. Runs once the microphone is open, or after a short cap. */
   onStartFeedback?: () => void | Promise<void>;
@@ -223,11 +227,15 @@ export function useVoiceInput(
   options?: UseVoiceInputOptions,
 ): UseVoiceInputResult {
   const [state, setState] = useState<VoiceInputState>('idle');
+  const [activeMode, setActiveMode] = useState<VoiceInputMode>('dictation');
   const [captureReady, setCaptureReady] = useState(false);
   const startupTimelineRef = useRef<VoiceInputStartupTimeline | null>(null);
   const [draftText, setDraftText] = useState('');
   const [draftSource, setDraftSource] = useState<VoiceInputDraftSource | null>(null);
   const [lastError, setLastError] = useState<string | null>(null);
+  const activeModeRef = useRef<VoiceInputMode>('dictation');
+  const rewriteTargetRef = useRef<{ start: number; end: number; originalText: string } | null>(null);
+  const rewriteAppliedRef = useRef(false);
   const {
     visible: speakerFiltered,
     show: showSpeakerFiltered,
@@ -951,7 +959,7 @@ export function useVoiceInput(
       const replaced = target.replace({ from: range.start, to: range.end }, event.text);
       if (!replaced) return false;
       submittedRangesRef.current.set(segmentId, { ...range, ...replaced, submittedText: event.text });
-      if (range.historyEntryId) updateVoiceInputHistoryEntry(range.historyEntryId, event.text);
+      if (range.historyEntryId) updateVoiceInputHistoryEntry(range.historyEntryId, event.text, basedOnText);
       return true;
     }
     const current = editorRef.current;
@@ -1017,17 +1025,21 @@ export function useVoiceInput(
       end: range.start + event.text.length,
       submittedText: event.text,
     });
-    upsertDictionaryLearningWatch({
-      segmentId,
-      rawTranscriptText: basedOnText,
-      baselineText: event.text,
-      start: range.start,
-      end: range.start + event.text.length,
-      createdAt: Date.now(),
-      lastActivityAt: Date.now(),
-    });
+    if (activeModeRef.current === 'rewrite') {
+      rewriteAppliedRef.current = true;
+    } else {
+      upsertDictionaryLearningWatch({
+        segmentId,
+        rawTranscriptText: basedOnText,
+        baselineText: event.text,
+        start: range.start,
+        end: range.start + event.text.length,
+        createdAt: Date.now(),
+        lastActivityAt: Date.now(),
+      });
+    }
     if (range.historyEntryId) {
-      updateVoiceInputHistoryEntry(range.historyEntryId, event.text);
+      updateVoiceInputHistoryEntry(range.historyEntryId, event.text, basedOnText);
     }
     return true;
   }, [upsertDictionaryLearningWatch]);
@@ -1055,6 +1067,20 @@ export function useVoiceInput(
             resolveStopCompletion('raw');
           }
           if (event.state === 'done' || event.state === 'error') {
+            if (
+              event.state === 'done' &&
+              activeModeRef.current === 'rewrite' &&
+              !rewriteAppliedRef.current &&
+              hasRecordingContentRef.current &&
+              terminalOutcomeRef.current !== 'cancelled' &&
+              terminalOutcomeRef.current !== 'no_speech'
+            ) {
+              toast.warning(t('newChat.chatInput.voiceInput.rewriteFailed'));
+            }
+            activeModeRef.current = 'dictation';
+            setActiveMode('dictation');
+            rewriteTargetRef.current = null;
+            rewriteAppliedRef.current = false;
             commitUsageStats();
             setDraftText('');
             setDraftSource(null);
@@ -1085,6 +1111,26 @@ export function useVoiceInput(
         case 'submitted':
           if (event.text.trim()) hasRecordingContentRef.current = true;
           if (event.text.trim()) startupTimelineRef.current?.mark('first_transcript');
+          if (activeModeRef.current === 'rewrite') {
+            // Explicit voice rewrite mode: never overwrite the selected text with the
+            // spoken instruction. Keep the original selection intact until the rewritten
+            // result arrives on `refined`, so failures or cancellation never destroy text.
+            lastSubmittedTextRef.current = event.text;
+            const rewriteTarget = rewriteTargetRef.current;
+            if (rewriteTarget) {
+              submittedRangesRef.current.set(event.segment.id, {
+                segmentId: event.segment.id,
+                start: rewriteTarget.start,
+                end: rewriteTarget.end,
+                submittedText: rewriteTarget.originalText,
+                rawTranscriptText: event.text,
+                historyEntryId: null,
+              });
+            }
+            setDraftText(event.text);
+            setDraftSource('stable');
+            break;
+          }
           {
             lastSubmittedTextRef.current = event.text;
             const range = insertSubmittedText(event.text);
@@ -1394,14 +1440,42 @@ export function useVoiceInput(
     ) {
       return false;
     }
+    const requestedMode: VoiceInputMode = startOptions?.mode === 'rewrite' ? 'rewrite' : 'dictation';
+    const initialRange = readEditorSelectionRange();
+    if (requestedMode === 'rewrite') {
+      if (!initialRange || initialRange.to <= initialRange.from) return false;
+      const target = optionsRef.current?.textTarget;
+      let originalText = '';
+      if (target) {
+        originalText = target.getText().slice(initialRange.from, initialRange.to);
+      } else {
+        const current = editorRef.current;
+        if (!current || current.isDestroyed) return false;
+        const clamped = clampEditorTextRange(initialRange, current.state.doc);
+        if (clamped.to <= clamped.from) return false;
+        originalText = current.state.doc.textBetween(clamped.from, clamped.to, '');
+        initialRange.from = clamped.from;
+        initialRange.to = clamped.to;
+      }
+      if (!originalText.trim()) return false;
+      activeModeRef.current = 'rewrite';
+      setActiveMode('rewrite');
+      rewriteTargetRef.current = { start: initialRange.from, end: initialRange.to, originalText };
+      rewriteAppliedRef.current = false;
+    } else {
+      activeModeRef.current = 'dictation';
+      setActiveMode('dictation');
+      rewriteTargetRef.current = null;
+      rewriteAppliedRef.current = false;
+    }
     const timeline = createVoiceInputStartupTimeline('inline', startOptions?.startedAt);
     startupTimelineRef.current = timeline;
     setCaptureReady(false);
     dismissInlineError();
     clearSpeakerFiltered();
     shouldRestoreEditorFocusRef.current = true;
-    insertionRangeRef.current = readEditorSelectionRange();
-    draftDisplayRangeRef.current = insertionRangeRef.current;
+    insertionRangeRef.current = initialRange;
+    draftDisplayRangeRef.current = initialRange;
     setDraftText('');
     setDraftSource(null);
     setVoiceState('listening');
@@ -1558,6 +1632,12 @@ export function useVoiceInput(
         case 'codex-realtime-unsupported':
           readinessError = t('settings.voiceInput.serviceSource.credentialError.codexRealtimeUnsupported');
           break;
+        case 'local-asr-model-missing':
+          readinessError = t('settings.voiceInput.serviceSource.credentialError.localAsrModelMissing');
+          break;
+        case 'local-asr-unsupported':
+          readinessError = t('settings.voiceInput.serviceSource.credentialError.localAsrUnsupported');
+          break;
       }
       const authErrorReason = guards.readiness.authErrorReason;
       if (guards.readiness.auth === 'codex' && authErrorReason && isCodexSessionExpiredError(authErrorReason)) {
@@ -1575,9 +1655,12 @@ export function useVoiceInput(
 
     const startPayload = {
       recordingId,
+      mode: requestedMode,
       sourceLanguage: voiceInputSettings.language,
-      refinementEnabled: voiceInputSettings.refinementEnabled,
-      refinementContext: voiceInputSettings.refinementEnabled ? buildRefinementContext() : undefined,
+      refinementEnabled: requestedMode === 'rewrite' ? true : voiceInputSettings.refinementEnabled,
+      refinementContext: requestedMode === 'rewrite' || voiceInputSettings.refinementEnabled
+        ? buildRefinementContext()
+        : undefined,
       refinementCacheScope: VOICE_INPUT_REFINEMENT_CACHE_SCOPE,
     };
     const startResultPromise: Promise<StartVoiceInputResult> = window.electronAPI.voiceInput
@@ -1708,6 +1791,7 @@ export function useVoiceInput(
   }, [
     appendAudioChunk,
     buildRefinementContext,
+    clampEditorTextRange,
     createStartReadyState,
     disabled,
     failActiveRecording,
@@ -1809,6 +1893,10 @@ export function useVoiceInput(
     ownedRunIdRef.current = null;
     insertionRangeRef.current = null;
     submittedRangesRef.current.clear();
+    activeModeRef.current = 'dictation';
+    setActiveMode('dictation');
+    rewriteTargetRef.current = null;
+    rewriteAppliedRef.current = false;
     setVoiceState('done');
     restoreEditorFocusAfterVoiceInput();
   }, [commitUsageStats, invalidateStartAttempt, resolveStopCompletion, restoreEditorFocusAfterVoiceInput, restoreSystemAudioForRecording, setVoiceState, stopEngine]);
@@ -1975,6 +2063,7 @@ export function useVoiceInput(
 
   return {
     state,
+    activeMode,
     draftText,
     draftSource,
     draftRange: draftDisplayRangeRef.current ?? insertionRangeRef.current,
