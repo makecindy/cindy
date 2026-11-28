@@ -857,7 +857,7 @@ function sameDirectories(left: readonly string[], right: readonly string[]): boo
 }
 
 /**
- * Keep revocations for one session ordered by the last runtime-accepted grant set.
+ * Order writable directory edits by the last runtime-accepted grant set, including re-additions.
  * ChatInput reports the removed path (rather than another render-time array snapshot),
  * so two quick removals from [A, B] become [B] then [] instead of [B] and stale [A].
  */
@@ -883,29 +883,38 @@ export function createWritableDirRemovalQueue() {
     return lane;
   };
 
+  const update = (
+    sessionId: string,
+    observed: string[],
+    apply: (previous: string[]) => Promise<string[]>,
+  ) => {
+    const lane = getLane(sessionId, observed);
+    lane.pending += 1;
+    const operation = lane.tail.then(async () => {
+      const accepted = await apply([...lane.accepted]);
+      lane.accepted = [...accepted];
+      return accepted;
+    });
+    lane.tail = operation.then(
+      () => undefined,
+      () => undefined,
+    );
+    return operation.finally(() => {
+      lane.pending -= 1;
+    });
+  };
+
   return {
+    update,
     remove(input: {
       sessionId: string;
       path: string;
       observed: string[];
       apply: (next: string[], previous: string[]) => Promise<string[]>;
     }): Promise<string[]> {
-      const lane = getLane(input.sessionId, input.observed);
-      lane.pending += 1;
-      const operation = lane.tail.then(async () => {
-        const previous = [...lane.accepted];
+      return update(input.sessionId, input.observed, (previous) => {
         const next = previous.filter((dir) => dir !== input.path);
-        if (sameDirectories(previous, next)) return previous;
-        const accepted = await input.apply(next, previous);
-        lane.accepted = [...accepted];
-        return accepted;
-      });
-      lane.tail = operation.then(
-        () => undefined,
-        () => undefined,
-      );
-      return operation.finally(() => {
-        lane.pending -= 1;
+        return sameDirectories(previous, next) ? Promise.resolve(previous) : input.apply(next, previous);
       });
     },
   };
@@ -4201,30 +4210,32 @@ function CCAgentSessionContent({
     [sessionId, session?.extraDirs, refreshServerSession, t],
   );
 
+  const writableDirRemovalQueueRef = useRef<ReturnType<
+    typeof createWritableDirRemovalQueue
+  > | null>(null);
+  const writableDirRemovalQueue = (writableDirRemovalQueueRef.current ??=
+    createWritableDirRemovalQueue());
   const handleWritableDirsChange = useCallback(
     async (next: string[]) => {
       if (!sessionId) return;
       try {
-        await applyDirectoryGrantUpdate({
-          next,
-          previous: session?.writableDirs ?? [],
-          activate: (dirs) => makerApiFor(sessionId).setWritableDirs(sessionId, dirs),
-          refresh: refreshServerSession,
-        });
+        await writableDirRemovalQueue.update(sessionId, session?.writableDirs ?? [], (previous) =>
+          applyDirectoryGrantUpdate({
+            next,
+            previous,
+            activate: (dirs) => makerApiFor(sessionId).setWritableDirs(sessionId, dirs),
+            refresh: refreshServerSession,
+          }),
+        );
       } catch (err) {
         log.warn('writableDirs update failed', err);
         toast.error(t('ccAgent.layout.extraDirsSaveFailed'));
         return;
       }
     },
-    [sessionId, session?.writableDirs, refreshServerSession, t],
+    [sessionId, session?.writableDirs, refreshServerSession, t, writableDirRemovalQueue],
   );
 
-  const writableDirRemovalQueueRef = useRef<ReturnType<
-    typeof createWritableDirRemovalQueue
-  > | null>(null);
-  const writableDirRemovalQueue = (writableDirRemovalQueueRef.current ??=
-    createWritableDirRemovalQueue());
   const handleWritableDirRemove = useCallback(
     async (path: string) => {
       if (!sessionId) return;
