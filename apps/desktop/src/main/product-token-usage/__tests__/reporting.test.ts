@@ -6,7 +6,7 @@ import { createRequire } from 'node:module';
 import type { ApiFetchOptions } from '../../serverApiClient.js';
 
 const require = createRequire(import.meta.url);
-const migrateHarness = require('../../../../drizzle/scripts/0165_token_usage_harness.ts') as {
+const migrateHarness = require('../../../../drizzle/scripts/0167_token_usage_harness.ts') as {
   run: (db: Database.Database) => void;
 };
 
